@@ -1102,6 +1102,26 @@ KiFindIdealProcessor(
     _In_ UCHAR OriginalIdealProcessor);
 #endif // CONFIG_SMP
 
+/* Shared by KeSetTimer2 and ExSetTimer: extended-timer periods are expressed
+ * in 100-ns units, while KeSetTimerEx wants milliseconds. Preserve a
+ * sub-millisecond period as the minimum tick. */
+FORCEINLINE
+LONG
+KiExtTimerPeriodToMilliseconds(
+    _In_ LONGLONG Period)
+{
+    LONG PeriodMs = 0;
+
+    if (Period != 0)
+    {
+        PeriodMs = (LONG)(Period / 10000);
+        if (PeriodMs == 0)
+            PeriodMs = 1;
+    }
+
+    return PeriodMs;
+}
+
 #ifdef __cplusplus
 } // extern "C"
 

@@ -18,6 +18,7 @@ extern FAST_MUTEX ExpEnvironmentLock;
 extern ERESOURCE ExpFirmwareTableResource;
 extern ERESOURCE ExpTimeRefreshLock;
 extern LIST_ENTRY ExpFirmwareTableProviderListHead;
+extern FIRMWARE_TYPE ExpFirmwareType;
 extern BOOLEAN ExpIsWinPEMode;
 extern ULONG ExpResourceTimeoutCount;
 extern LIST_ENTRY ExpSystemResourcesList;
@@ -74,6 +75,20 @@ VOID
 NTAPI
 ExpDebuggerWorker(
     _In_ PVOID Context);
+
+/*
+ * Firmware table provider signatures (shared by sysinfo.c and efi.c)
+ */
+#define SIG_ACPI 0x41435049
+#define SIG_FIRM 0x4649524D
+#define SIG_RSMB 0x52534D42
+
+NTSTATUS
+NTAPI
+ExpGetRawSMBiosTable(
+    _Out_opt_ PVOID Buffer,
+    _Out_ ULONG *OutSize,
+    _In_ ULONG BufferSize);
 
 #ifdef _WIN64
 #define HANDLE_LOW_BITS     (PAGE_SHIFT - 4)

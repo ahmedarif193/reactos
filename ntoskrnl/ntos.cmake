@@ -86,6 +86,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/locale.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/lookas.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/mutant.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/pool2.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/profile.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/pushlock.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/resource.c
@@ -97,6 +98,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/timer.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/uuid.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/win32k.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/wnf.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/work.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/xipdisp.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/zone.c
@@ -193,6 +195,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ipi.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/krnlinit.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/mutex.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/procgrp.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/processor.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/procobj.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/profobj.c

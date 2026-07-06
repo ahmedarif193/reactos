@@ -1,0 +1,569 @@
+/*
+ * PROJECT:     ReactOS Kernel
+ * LICENSE:     MIT (https://spdx.org/licenses/MIT)
+ * PURPOSE:     Processor group, CPU set, node and hetero-policy topology routines
+ * COPYRIGHT:   Copyright 2026 ReactOS Portable Systems Group
+ */
+
+/* INCLUDES ******************************************************************/
+
+#include <ntoskrnl.h>
+#define NDEBUG
+#include <debug.h>
+
+/* PRIVATE TYPES *************************************************************/
+
+/* Homogeneous scheduling policy. Public headers only forward-declare the type
+ * on the platforms that expose it; on a non-heterogeneous system only the
+ * "all classes" policy is meaningful. */
+typedef enum _KHETERO_CPU_POLICY
+{
+    KHeteroCpuPolicyAll = 0,
+    KHeteroCpuPolicyLarge,
+    KHeteroCpuPolicyLargeOrIdle,
+    KHeteroCpuPolicySmall,
+    KHeteroCpuPolicySmallOrIdle,
+    KHeteroCpuPolicyDynamic,
+    KHeteroCpuPolicyStaticMax,
+    KHeteroCpuPolicyBiasedSmall,
+    KHeteroCpuPolicyBiasedLarge,
+    KHeteroCpuPolicyDefault,
+    KHeteroCpuPolicyMax
+} KHETERO_CPU_POLICY;
+
+/* Completes the opaque PKAFFINITY_EX declared by the DDK. A single processor
+ * group only ever needs one bitmap entry, but the array is sized for the
+ * Win11 group maximum so the layout matches the reference ABI (the ARM64
+ * KPRCB carries the embedded copy as PackageProcessorSet[33]: an 8-byte
+ * header plus 32 group bitmaps, see sdk/include/ndk/arm64/ketypes.h). */
+#define KI_MAXIMUM_GROUPS 32
+struct _KAFFINITY_EX
+{
+    USHORT Count;
+    USHORT Size;
+    ULONG Reserved;
+    KAFFINITY Bitmap[KI_MAXIMUM_GROUPS];
+};
+
+/* KeSetTimer2 and friends are internal exports not declared by the DDK. */
+NTKERNELAPI USHORT NTAPI KeQueryNodeActiveProcessorCount(_In_ USHORT NodeNumber);
+NTKERNELAPI PKPRCB NTAPI KeQueryPrcbAddress(_In_ ULONG Number);
+NTKERNELAPI ULONG NTAPI KeQueryActiveProcessorAffinity(_Out_ PKAFFINITY_EX Affinity);
+NTKERNELAPI NTSTATUS NTAPI KeQueryActiveProcessorAffinity2(_Out_ PGROUP_AFFINITY GroupAffinities, _Inout_ PUSHORT Count);
+NTKERNELAPI KAFFINITY NTAPI KeQueryGroupAffinityEx(_In_ PKAFFINITY_EX Affinity, _In_ USHORT GroupNumber);
+NTKERNELAPI NTSTATUS NTAPI KeQueryNodeActiveAffinity2(_In_ USHORT NodeNumber, _Out_opt_ PGROUP_AFFINITY GroupAffinities, _Inout_ PUSHORT Count);
+NTKERNELAPI NTSTATUS NTAPI KeSetSelectedCpuSetsThread(_Inout_ PKTHREAD Thread, _In_ ULONG CpuSetCount, _In_reads_(CpuSetCount) PULONG64 CpuSetMasks);
+NTKERNELAPI KHETERO_CPU_POLICY NTAPI KeQueryHeteroCpuPolicyThread(_In_ PKTHREAD Thread, _In_ LOGICAL UserPolicy);
+NTKERNELAPI KHETERO_CPU_POLICY NTAPI KeSetHeteroCpuPolicyThread(_Inout_ PKTHREAD Thread, _In_ KHETERO_CPU_POLICY Policy, _In_ LOGICAL Reset);
+NTKERNELAPI BOOLEAN NTAPI KeSetTimer2(_Inout_ PKTIMER Timer, _In_ LARGE_INTEGER DueTime, _In_ LONGLONG Period, _In_opt_ PEXT_SET_PARAMETERS Parameters);
+NTKERNELAPI ULONG64 NTAPI KeQueryUnbiasedInterruptTimePrecise(_Out_ PULONG64 QpcTimeStamp);
+NTKERNELAPI NTSTATUS NTAPI KeQueryAuxiliaryCounterFrequency(_Out_opt_ PULONG64 AuxiliaryCounterFrequency);
+
+/* FUNCTIONS *****************************************************************/
+
+/*
+ * @implemented
+ */
+USHORT
+NTAPI
+KeQueryActiveGroupCount(VOID)
+{
+    /* ReactOS models a single processor group. */
+    return 1;
+}
+
+/*
+ * @implemented
+ */
+USHORT
+NTAPI
+KeQueryMaximumGroupCount(VOID)
+{
+    return 1;
+}
+
+/*
+ * @implemented
+ */
+KAFFINITY
+NTAPI
+KeQueryGroupAffinity(
+    _In_ USHORT GroupNumber)
+{
+    if (GroupNumber != 0)
+        return 0;
+
+    return KeActiveProcessors;
+}
+
+/*
+ * @implemented
+ */
+ULONG
+NTAPI
+KeQueryActiveProcessorAffinity(
+    _Out_ PKAFFINITY_EX Affinity)
+{
+    Affinity->Count = 1;
+    Affinity->Size = KI_MAXIMUM_GROUPS;
+    Affinity->Reserved = 0;
+    RtlZeroMemory(Affinity->Bitmap, sizeof(Affinity->Bitmap));
+    Affinity->Bitmap[0] = KeActiveProcessors;
+
+    return KeQueryActiveProcessorCount(NULL);
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+KeQueryActiveProcessorAffinity2(
+    _Out_ PGROUP_AFFINITY GroupAffinities,
+    _Inout_ PUSHORT Count)
+{
+    if (Count == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    if ((GroupAffinities == NULL) || (*Count < 1))
+    {
+        *Count = 1;
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    RtlZeroMemory(&GroupAffinities[0], sizeof(GROUP_AFFINITY));
+    GroupAffinities[0].Mask = KeActiveProcessors;
+    GroupAffinities[0].Group = 0;
+    *Count = 1;
+
+    return STATUS_SUCCESS;
+}
+
+/*
+ * @implemented
+ */
+KAFFINITY
+NTAPI
+KeQueryGroupAffinityEx(
+    _In_ PKAFFINITY_EX Affinity,
+    _In_ USHORT GroupNumber)
+{
+    if (GroupNumber >= Affinity->Count)
+        return 0;
+
+    return Affinity->Bitmap[GroupNumber];
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
+KeQueryNodeActiveAffinity(
+    _In_ USHORT NodeNumber,
+    _Out_opt_ PGROUP_AFFINITY Affinity,
+    _Out_opt_ PUSHORT Count)
+{
+    /* Node 0 owns every active processor; other nodes are empty. */
+    if (Affinity != NULL)
+    {
+        RtlZeroMemory(Affinity, sizeof(*Affinity));
+        if (NodeNumber == 0)
+        {
+            Affinity->Mask = KeActiveProcessors;
+            Affinity->Group = 0;
+        }
+    }
+
+    if (Count != NULL)
+        *Count = (NodeNumber == 0) ? (USHORT)KeQueryActiveProcessorCount(NULL) : 0;
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+KeQueryNodeActiveAffinity2(
+    _In_ USHORT NodeNumber,
+    _Out_opt_ PGROUP_AFFINITY GroupAffinities,
+    _Inout_ PUSHORT Count)
+{
+    if (Count == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    if (NodeNumber != 0)
+    {
+        *Count = 0;
+        return STATUS_SUCCESS;
+    }
+
+    /* Node 0 owns every active processor, i.e. the system affinity */
+    return KeQueryActiveProcessorAffinity2(GroupAffinities, Count);
+}
+
+/*
+ * @implemented
+ */
+USHORT
+NTAPI
+KeQueryNodeActiveProcessorCount(
+    _In_ USHORT NodeNumber)
+{
+    if (NodeNumber != 0)
+        return 0;
+
+    return (USHORT)KeQueryActiveProcessorCount(NULL);
+}
+
+/*
+ * @implemented
+ */
+USHORT
+NTAPI
+KeQueryNodeMaximumProcessorCount(
+    _In_ USHORT NodeNumber)
+{
+    if (NodeNumber != 0)
+        return 0;
+
+    return (USHORT)KeQueryMaximumProcessorCount();
+}
+
+/*
+ * @implemented
+ */
+PKPRCB
+NTAPI
+KeQueryPrcbAddress(
+    _In_ ULONG Number)
+{
+    if (Number >= (ULONG)KeNumberProcessors)
+        return NULL;
+
+    return KiProcessorBlock[Number];
+}
+
+/*
+ * @implemented
+ *
+ * Builds the SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX records describing the
+ * single-group / single-node topology, honoring the length-probe protocol.
+ */
+NTSTATUS
+NTAPI
+KeQueryLogicalProcessorRelationship(
+    _In_opt_ PPROCESSOR_NUMBER ProcessorNumber,
+    _In_ LOGICAL_PROCESSOR_RELATIONSHIP RelationshipType,
+    _Out_writes_bytes_opt_(*Length) PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX Information,
+    _Inout_ PULONG Length)
+{
+    const ULONG CoreSize = FIELD_OFFSET(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Processor.GroupMask) + sizeof(GROUP_AFFINITY);
+    const ULONG NumaSize = FIELD_OFFSET(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, NumaNode) + sizeof(NUMA_NODE_RELATIONSHIP);
+    const ULONG GroupSize = FIELD_OFFSET(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Group.GroupInfo) + sizeof(PROCESSOR_GROUP_INFO);
+    KAFFINITY ActiveMask = KeActiveProcessors;
+    ULONG ActiveCount = KeQueryActiveProcessorCount(NULL);
+    ULONG MaximumCount = KeQueryMaximumProcessorCount();
+    KAFFINITY CoreMask = ActiveMask;
+    ULONG CoreCount = ActiveCount;
+    ULONG RequiredLength = 0;
+    ULONG Offset = 0;
+    PUCHAR Buffer = (PUCHAR)Information;
+    PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX Record;
+    ULONG Index;
+
+    if (Length == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    /* An explicit processor restricts the enumerated cores to that processor. */
+    if (ProcessorNumber != NULL)
+    {
+        if ((ProcessorNumber->Group != 0) ||
+            (ProcessorNumber->Number >= (8 * sizeof(KAFFINITY))) ||
+            !((ActiveMask >> ProcessorNumber->Number) & 1))
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        CoreMask = (KAFFINITY)1 << ProcessorNumber->Number;
+        CoreCount = 1;
+    }
+
+    /* Compute the required byte count for the requested relationship(s). */
+    if ((RelationshipType == RelationProcessorCore) || (RelationshipType == RelationAll))
+        RequiredLength += CoreSize * CoreCount;
+    if ((RelationshipType == RelationProcessorPackage) || (RelationshipType == RelationAll))
+        RequiredLength += CoreSize;
+    if ((RelationshipType == RelationNumaNode) || (RelationshipType == RelationAll))
+        RequiredLength += NumaSize;
+    if ((RelationshipType == RelationGroup) || (RelationshipType == RelationAll))
+        RequiredLength += GroupSize;
+
+    if ((Information == NULL) || (*Length < RequiredLength))
+    {
+        *Length = RequiredLength;
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+
+    /* Processor cores: one record per active core in the enumerated set. */
+    if ((RelationshipType == RelationProcessorCore) || (RelationshipType == RelationAll))
+    {
+        for (Index = 0; Index < (8 * sizeof(KAFFINITY)); Index++)
+        {
+            if (!((CoreMask >> Index) & 1))
+                continue;
+
+            Record = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)(Buffer + Offset);
+            RtlZeroMemory(Record, CoreSize);
+            Record->Relationship = RelationProcessorCore;
+            Record->Size = CoreSize;
+            Record->Processor.Flags = 0;
+            Record->Processor.EfficiencyClass = 0;
+            Record->Processor.GroupCount = 1;
+            Record->Processor.GroupMask[0].Mask = (KAFFINITY)1 << Index;
+            Record->Processor.GroupMask[0].Group = 0;
+            Offset += CoreSize;
+        }
+    }
+
+    /* Single physical package spanning all active processors. */
+    if ((RelationshipType == RelationProcessorPackage) || (RelationshipType == RelationAll))
+    {
+        Record = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)(Buffer + Offset);
+        RtlZeroMemory(Record, CoreSize);
+        Record->Relationship = RelationProcessorPackage;
+        Record->Size = CoreSize;
+        Record->Processor.Flags = 0;
+        Record->Processor.EfficiencyClass = 0;
+        Record->Processor.GroupCount = 1;
+        Record->Processor.GroupMask[0].Mask = ActiveMask;
+        Record->Processor.GroupMask[0].Group = 0;
+        Offset += CoreSize;
+    }
+
+    /* Single NUMA node (node 0). */
+    if ((RelationshipType == RelationNumaNode) || (RelationshipType == RelationAll))
+    {
+        Record = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)(Buffer + Offset);
+        RtlZeroMemory(Record, NumaSize);
+        Record->Relationship = RelationNumaNode;
+        Record->Size = NumaSize;
+        Record->NumaNode.NodeNumber = 0;
+        Record->NumaNode.GroupMask.Mask = ActiveMask;
+        Record->NumaNode.GroupMask.Group = 0;
+        Offset += NumaSize;
+    }
+
+    /* Single processor group (group 0). */
+    if ((RelationshipType == RelationGroup) || (RelationshipType == RelationAll))
+    {
+        Record = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)(Buffer + Offset);
+        RtlZeroMemory(Record, GroupSize);
+        Record->Relationship = RelationGroup;
+        Record->Size = GroupSize;
+        Record->Group.MaximumGroupCount = 1;
+        Record->Group.ActiveGroupCount = 1;
+        Record->Group.GroupInfo[0].MaximumProcessorCount = (UCHAR)MaximumCount;
+        Record->Group.GroupInfo[0].ActiveProcessorCount = (UCHAR)ActiveCount;
+        Record->Group.GroupInfo[0].ActiveProcessorMask = ActiveMask;
+        Offset += GroupSize;
+    }
+
+    *Length = Offset;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
+KeSetSystemGroupAffinityThread(
+    _In_ PGROUP_AFFINITY Affinity,
+    _Out_opt_ PGROUP_AFFINITY PreviousAffinity)
+{
+    KAFFINITY OldAffinity;
+
+    /* Only group 0 exists; apply the mask via the existing affinity path. */
+    OldAffinity = KeSetSystemAffinityThreadEx(Affinity->Mask);
+
+    if (PreviousAffinity != NULL)
+    {
+        RtlZeroMemory(PreviousAffinity, sizeof(*PreviousAffinity));
+        PreviousAffinity->Mask = OldAffinity;
+        PreviousAffinity->Group = 0;
+    }
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
+KeRevertToUserGroupAffinityThread(
+    _In_ PGROUP_AFFINITY PreviousAffinity)
+{
+    KeRevertToUserAffinityThreadEx(PreviousAffinity->Mask);
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+KeSetSelectedCpuSetsThread(
+    _Inout_ PKTHREAD Thread,
+    _In_ ULONG CpuSetCount,
+    _In_reads_(CpuSetCount) PULONG64 CpuSetMasks)
+{
+    KAFFINITY Active = KeActiveProcessors;
+    ULONG i;
+
+    if (Thread == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    /* An empty selection clears any restriction, which is the honest default. */
+    if (CpuSetCount == 0)
+        return STATUS_SUCCESS;
+
+    if (CpuSetMasks == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    /* Only group 0 exists, so no other group may carry a selection. */
+    for (i = 1; i < CpuSetCount; i++)
+    {
+        if (CpuSetMasks[i] != 0)
+            return STATUS_NOT_SUPPORTED;
+    }
+
+    /* A selection covering every active processor imposes no real restriction.
+     * A proper subset would require per-thread CPU-set state that cannot be
+     * stored without changing the KTHREAD layout, so it is honestly rejected. */
+    if ((CpuSetMasks[0] & Active) == Active)
+        return STATUS_SUCCESS;
+
+    return STATUS_NOT_SUPPORTED;
+}
+
+/*
+ * @implemented
+ */
+KHETERO_CPU_POLICY
+NTAPI
+KeQueryHeteroCpuPolicyThread(
+    _In_ PKTHREAD Thread,
+    _In_ LOGICAL UserPolicy)
+{
+    UNREFERENCED_PARAMETER(Thread);
+    UNREFERENCED_PARAMETER(UserPolicy);
+
+    /* Homogeneous hardware: only the "all classes" policy is meaningful. */
+    return KHeteroCpuPolicyAll;
+}
+
+/*
+ * @implemented
+ */
+KHETERO_CPU_POLICY
+NTAPI
+KeSetHeteroCpuPolicyThread(
+    _Inout_ PKTHREAD Thread,
+    _In_ KHETERO_CPU_POLICY Policy,
+    _In_ LOGICAL Reset)
+{
+    UNREFERENCED_PARAMETER(Thread);
+    UNREFERENCED_PARAMETER(Policy);
+    UNREFERENCED_PARAMETER(Reset);
+
+    /* No scheduling classes to bias; report the effective policy. */
+    return KHeteroCpuPolicyAll;
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+KeSetTargetProcessorDpcEx(
+    _Inout_ PKDPC Dpc,
+    _In_ PPROCESSOR_NUMBER ProcNumber)
+{
+    if ((ProcNumber->Group != 0) ||
+        (ProcNumber->Number >= (UCHAR)KeNumberProcessors))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    KeSetTargetProcessorDpc(Dpc, (CCHAR)ProcNumber->Number);
+    return STATUS_SUCCESS;
+}
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+KeSetTimer2(
+    _Inout_ PKTIMER Timer,
+    _In_ LARGE_INTEGER DueTime,
+    _In_ LONGLONG Period,
+    _In_opt_ PEXT_SET_PARAMETERS Parameters)
+{
+    /* Coalescing tolerance / no-wake hints are advisory and ignored here. */
+    UNREFERENCED_PARAMETER(Parameters);
+
+    return KeSetTimerEx(Timer, DueTime, KiExtTimerPeriodToMilliseconds(Period), NULL);
+}
+
+/*
+ * @implemented
+ */
+ULONG64
+NTAPI
+KeQueryTotalCycleTimeThread(
+    _Inout_ PKTHREAD Thread,
+    _Out_ PULONG64 CycleTimeStamp)
+{
+    if (CycleTimeStamp != NULL)
+        *CycleTimeStamp = (ULONG64)KeQueryPerformanceCounter(NULL).QuadPart;
+
+    return Thread->CycleTime;
+}
+
+/*
+ * @implemented
+ */
+ULONGLONG
+NTAPI
+KeQueryUnbiasedInterruptTime(VOID)
+{
+    /* Without connected-standby bias tracking, unbiased == interrupt time. */
+    return KeQueryInterruptTime();
+}
+
+/*
+ * @implemented
+ */
+ULONG64
+NTAPI
+KeQueryUnbiasedInterruptTimePrecise(
+    _Out_ PULONG64 QpcTimeStamp)
+{
+    *QpcTimeStamp = (ULONG64)KeQueryPerformanceCounter(NULL).QuadPart;
+    return KeQueryInterruptTime();
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+KeQueryAuxiliaryCounterFrequency(
+    _Out_opt_ PULONG64 AuxiliaryCounterFrequency)
+{
+    /* No dedicated auxiliary counter for cross-timestamping is exposed. */
+    if (AuxiliaryCounterFrequency != NULL)
+        *AuxiliaryCounterFrequency = 0;
+
+    return STATUS_NOT_SUPPORTED;
+}

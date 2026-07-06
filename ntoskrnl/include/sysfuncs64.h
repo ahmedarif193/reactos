@@ -245,7 +245,7 @@ SVC_(CreateWaitCompletionPacket, 0) // FIXME
 #endif
 SVC_(CreateWaitablePort, 5)
 #if (NTDDI_VERSION >= NTDDI_WIN8)
-SVC_(CreateWnfStateName, 0) // FIXME
+SVC_(CreateWnfStateName, 7)
 #endif
 #if (NTDDI_VERSION >= NTDDI_VISTA)
 SVC_(CreateWorkerFactory, 10)
@@ -265,8 +265,8 @@ SVC_(DeletePrivateNamespace, 1)
 #endif
 SVC_(DeleteValueKey, 2)
 #if (NTDDI_VERSION >= NTDDI_WIN8)
-SVC_(DeleteWnfStateData, 0) // FIXME
-SVC_(DeleteWnfStateName, 0) // FIXME
+SVC_(DeleteWnfStateData, 2)
+SVC_(DeleteWnfStateName, 1)
 #endif
 #if (NTDDI_VERSION >= NTDDI_WIN7)
 SVC_(DisableLastKnownGood, 0)
@@ -463,8 +463,8 @@ SVC_(QuerySystemInformationEx, 6)
 #endif
 SVC_(QueryTimerResolution, 3)
 #if (NTDDI_VERSION >= NTDDI_WIN8)
-SVC_(QueryWnfStateData, 0) // FIXME
-SVC_(QueryWnfStateNameInformation, 0) // FIXME
+SVC_(QueryWnfStateData, 6)
+SVC_(QueryWnfStateNameInformation, 5)
 #endif
 #if (NTDDI_VERSION >= NTDDI_WIN7)
 SVC_(QueueApcThreadEx, 6)
@@ -601,7 +601,7 @@ SVC2_(xHalGetInterruptTranslator, 0) // FIXME
 #endif
 SVC_(StopProfile, 1)
 #if (NTDDI_VERSION >= NTDDI_WIN8)
-SVC_(SubscribeWnfStateChange, 0) // FIXME
+SVC_(SubscribeWnfStateChange, 4)
 #endif
 SVC_(SuspendProcess, 1)
 SVC_(SuspendThread, 2)
@@ -625,8 +625,8 @@ SVC_(UnlockFile, 5)
 SVC_(UnlockVirtualMemory, 4)
 #if (NTDDI_VERSION >= NTDDI_WIN8)
 SVC_(UnmapViewOfSectionEx, 0) // FIXME
-SVC_(UnsubscribeWnfStateChange, 0) // FIXME
-SVC_(UpdateWnfStateData, 0) // FIXME
+SVC_(UnsubscribeWnfStateChange, 1)
+SVC_(UpdateWnfStateData, 7)
 SVC_(WaitForAlertByThreadId, 0) // FIXME
 #endif
 SVC_(VdmControl, 2)
