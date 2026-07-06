@@ -543,6 +543,92 @@ FallBackToLine:
     }
 }
 
+/* CONNECT_LINE_BASED — the caller only names its PDO; the kernel locates
+ * the device's single line-based interrupt in the translated resources
+ * that PnP assigned at IRP_MN_START_DEVICE time and connects it. */
+NTSTATUS
+IopConnectInterruptExLineBased(
+    _Inout_ PIO_CONNECT_INTERRUPT_PARAMETERS Parameters)
+{
+    PIO_CONNECT_INTERRUPT_LINE_BASED_PARAMETERS p = &Parameters->LineBased;
+    PDEVICE_NODE DeviceNode;
+    PCM_PARTIAL_RESOURCE_LIST Partial;
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR LineDesc = NULL;
+    KIRQL Irql, SynchronizeIrql;
+    ULONG i;
+
+    PAGED_CODE();
+
+    if (p->PhysicalDeviceObject == NULL ||
+        p->ServiceRoutine == NULL ||
+        p->InterruptObject == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    DeviceNode = IopGetDeviceNode(p->PhysicalDeviceObject);
+    if (DeviceNode == NULL ||
+        DeviceNode->ResourceListTranslated == NULL ||
+        DeviceNode->ResourceListTranslated->Count == 0)
+    {
+        DPRINT1("IoConnectInterruptEx(LINE): no translated resources on PDO %p\n",
+                p->PhysicalDeviceObject);
+        return STATUS_NOT_FOUND;
+    }
+
+    /* Find the device's line-based interrupt. CONNECT_LINE_BASED is only
+     * valid for devices with exactly one line-based interrupt, so a second
+     * match makes the request ambiguous. */
+    Partial = &DeviceNode->ResourceListTranslated->List[0].PartialResourceList;
+    for (i = 0; i < Partial->Count; i++)
+    {
+        PCM_PARTIAL_RESOURCE_DESCRIPTOR d = &Partial->PartialDescriptors[i];
+
+        if (d->Type != CmResourceTypeInterrupt ||
+            (d->Flags & CM_RESOURCE_INTERRUPT_MESSAGE))
+            continue;
+
+        if (LineDesc != NULL)
+        {
+            DPRINT1("IoConnectInterruptEx(LINE): PDO %p has more than one line-based interrupt\n",
+                    p->PhysicalDeviceObject);
+            return STATUS_INVALID_DEVICE_REQUEST;
+        }
+
+        LineDesc = d;
+    }
+
+    if (LineDesc == NULL)
+    {
+        DPRINT1("IoConnectInterruptEx(LINE): no line-based interrupt on PDO %p\n",
+                p->PhysicalDeviceObject);
+        return STATUS_NOT_FOUND;
+    }
+
+    /* SynchronizeIrql is optional; when omitted the interrupt's own IRQL
+     * is used, and when given it must not be below that IRQL. */
+    Irql = (KIRQL)LineDesc->u.Interrupt.Level;
+    SynchronizeIrql = p->SynchronizeIrql ? p->SynchronizeIrql : Irql;
+    if (SynchronizeIrql < Irql)
+        return STATUS_INVALID_PARAMETER;
+
+    /* Everything else about the connection comes from the resource
+     * descriptor; on success the caller's *InterruptObject receives the
+     * new PKINTERRUPT. */
+    return IoConnectInterrupt(p->InterruptObject,
+                              p->ServiceRoutine,
+                              p->ServiceContext,
+                              p->SpinLock,
+                              LineDesc->u.Interrupt.Vector,
+                              Irql,
+                              SynchronizeIrql,
+                              (LineDesc->Flags & CM_RESOURCE_INTERRUPT_LATCHED)
+                                  ? Latched : LevelSensitive,
+                              LineDesc->ShareDisposition == CmResourceShareShared,
+                              LineDesc->u.Interrupt.Affinity,
+                              p->FloatingSave);
+}
+
 NTSTATUS
 NTAPI
 IoConnectInterruptEx(
@@ -555,16 +641,22 @@ IoConnectInterruptEx(
         case CONNECT_FULLY_SPECIFIED:
             return IopConnectInterruptExFullySpecific(Parameters);
         case CONNECT_FULLY_SPECIFIED_GROUP:
-            //TODO: We don't do anything for the group type
+            /* Single-group kernel: only group 0 exists, and within it the
+             * ProcessorEnableMask means the same thing as in the non-group
+             * path (a flat KAFFINITY consumed by IoConnectInterrupt). */
+            if (Parameters->FullySpecified.Group != 0)
+                return STATUS_INVALID_PARAMETER;
             return IopConnectInterruptExFullySpecific(Parameters);
         case CONNECT_MESSAGE_BASED:
             return IopConnectInterruptExMessageBased(Parameters);
         case CONNECT_LINE_BASED:
-            DPRINT1("FIXME: Line based interrupts are UNIMPLEMENTED\n");
-            break;
+            return IopConnectInterruptExLineBased(Parameters);
+        default:
+            /* Version is _Inout_: report the maximum connection type this
+             * kernel supports so callers can downgrade and retry. */
+            Parameters->Version = CONNECT_CURRENT_VERSION;
+            return STATUS_NOT_SUPPORTED;
     }
-
-    return STATUS_SUCCESS;
 }
 
 VOID
@@ -574,9 +666,51 @@ IoDisconnectInterruptEx(
 {
     PAGED_CODE();
 
-    //FIXME: This eventually will need to handle more cases
-    if (Parameters->ConnectionContext.InterruptObject)
-        IoDisconnectInterrupt(Parameters->ConnectionContext.InterruptObject);
+    /* Version must match the connection type returned by the matching
+     * IoConnectInterruptEx call, and selects which ConnectionContext
+     * union member is valid. */
+    switch (Parameters->Version)
+    {
+        case CONNECT_FULLY_SPECIFIED:
+        case CONNECT_FULLY_SPECIFIED_GROUP:
+        case CONNECT_LINE_BASED:
+            /* These connection types hand back a plain PKINTERRUPT. */
+            if (Parameters->ConnectionContext.InterruptObject)
+                IoDisconnectInterrupt(Parameters->ConnectionContext.InterruptObject);
+            break;
+
+        case CONNECT_MESSAGE_BASED:
+        {
+            PIO_INTERRUPT_MESSAGE_INFO Table =
+                Parameters->ConnectionContext.InterruptMessageTable;
+            ULONG i;
+
+            if (Table == NULL)
+                break;
+
+            for (i = 0; i < Table->MessageCount; i++)
+            {
+                PKINTERRUPT Intr = Table->MessageInfo[i].InterruptObject;
+                PIOP_MSI_DISPATCH_ENTRY DispEntry;
+                PIO_INTERRUPT IoInterrupt;
+
+                if (Intr == NULL)
+                    continue;
+
+                /* The ServiceContext the kernel holds is our per-vector
+                 * dispatch shim — free it AFTER disconnect so the ISR
+                 * can't fire on freed memory. */
+                IoInterrupt = CONTAINING_RECORD(Intr, IO_INTERRUPT, FirstInterrupt);
+                DispEntry = (PIOP_MSI_DISPATCH_ENTRY)IoInterrupt->FirstInterrupt.ServiceContext;
+                IoDisconnectInterrupt(Intr);
+                if (DispEntry != NULL)
+                    ExFreePoolWithTag(DispEntry, 'EsMI');
+            }
+
+            ExFreePoolWithTag(Table, 'IsMI');
+            break;
+        }
+    }
 }
 
 /* EOF */

@@ -549,7 +549,12 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
     IQS_NONE,
 
     /* ThreadCycleTime */
-    IQS_NONE,
+    IQS_SAME
+    (
+        THREAD_CYCLE_TIME_INFORMATION,
+        ULONG,
+        ICIF_QUERY
+    ),
 
     /* ThreadPagePriority */
     IQS_NONE,
@@ -569,13 +574,23 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
     /* ThreadWow64Context */
     IQS_NONE,
     /* ThreadGroupInformation */
-    IQS_NONE,
+    IQS_SAME
+    (
+        GROUP_AFFINITY,
+        ULONG,
+        ICIF_QUERY
+    ),
     /* ThreadUmsInformation */
     IQS_NONE,
     /* ThreadCounterProfiling */
     IQS_NONE,
     /* ThreadIdealProcessorEx */
-    IQS_NONE,
+    IQS_SAME
+    (
+        PROCESSOR_NUMBER,
+        ULONG,
+        ICIF_QUERY | ICIF_SET
+    ),
 
     // Windows 8
     /* ThreadCpuAccountingInformation */
@@ -583,7 +598,12 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
 
     // Windows 8.1
     /* ThreadSuspendCount */
-    IQS_NONE,
+    IQS_SAME
+    (
+        ULONG,
+        ULONG,
+        ICIF_QUERY
+    ),
 
     // Windows 10
     /* ThreadHeterogeneousCpuPolicy */
@@ -598,7 +618,12 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
     /* ThreadSystemThreadInformation */
     IQS_NONE,
     /* ThreadActualGroupAffinity */
-    IQS_NONE,
+    IQS_SAME
+    (
+        GROUP_AFFINITY,
+        ULONG,
+        ICIF_QUERY
+    ),
 
     /* ThreadDynamicCodePolicyInfo */
     IQS_NONE,
