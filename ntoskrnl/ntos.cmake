@@ -227,6 +227,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/ARM3/mdlsup.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/ARM3/mmdbg.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/ARM3/mminit.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/ARM3/mmnt10.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/ARM3/mmsup.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/ARM3/ncache.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/ARM3/pagfault.c

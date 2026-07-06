@@ -1237,4 +1237,22 @@ KeSignalCallDpcSynchronize(IN PVOID SystemArgument2)
     return First;
 }
 
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+KeQueryDpcWatchdogInformation(
+    _Out_ PKDPC_WATCHDOG_INFORMATION WatchdogInformation)
+{
+    /* Windows rejects callers below DISPATCH_LEVEL */
+    if (KeGetCurrentIrql() < DISPATCH_LEVEL)
+        return STATUS_UNSUCCESSFUL;
+
+    /* No DPC watchdog runs on this system: zeroed time and watchdog limits
+     * report the watchdog as disabled */
+    RtlZeroMemory(WatchdogInformation, sizeof(*WatchdogInformation));
+    return STATUS_SUCCESS;
+}
+
 /* EOF */
