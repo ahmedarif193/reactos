@@ -227,6 +227,65 @@ KeAlertThread(IN PKTHREAD Thread,
     return PreviousState;
 }
 
+BOOLEAN
+NTAPI
+KeAlertThreadByThreadId(IN PKTHREAD Thread)
+{
+    BOOLEAN PreviousState;
+    KLOCK_QUEUE_HANDLE ApcLock;
+    ASSERT_THREAD(Thread);
+    ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
+
+    /*
+     * Deliver a Win8+ alert-by-thread-id to the target thread. This is the
+     * counterpart of KeWaitForAlertByThreadId. Unlike KeAlertThread it uses the
+     * dedicated KTHREAD.AlertedByThreadId flag and the WrAlertByThreadId wait
+     * reason, so it neither disturbs nor is disturbed by the classic alert
+     * (Alerted[]) mechanism.
+     */
+
+    /* Lock the APC queue and the thread */
+    KiAcquireApcLockRaiseToSynch(Thread, &ApcLock);
+    KiAcquireThreadLock(Thread);
+
+    /* Read the current pending-alert state. Bit 4 of ThreadFlags is only ever
+     * set here and cleared by KeWaitForAlertByThreadId, both under this thread
+     * lock, so it is stable for the duration of this critical section. */
+    PreviousState = (BOOLEAN)((Thread->ThreadFlags >>
+                              KTHREAD_ALERTED_BY_THREAD_ID_BIT) & 1);
+
+    /* Act only if an alert wasn't already pending */
+    if (!PreviousState)
+    {
+        /* Check if the thread is committed in an alert-by-id wait. Both this
+         * decision and the waiter's commit run under the thread lock, so we
+         * either observe State == Waiting and wake it, or the waiter later
+         * observes (and consumes) the pending flag we set below. No lost wakeup. */
+        if ((Thread->State == Waiting) &&
+            (Thread->WaitReason == WrAlertByThreadId))
+        {
+            /* It is blocked in the alert wait: wake it with STATUS_ALERTED
+             * without leaving a pending alert behind. */
+            KiUnwaitThread(Thread, STATUS_ALERTED, THREAD_ALERT_INCREMENT);
+        }
+        else
+        {
+            /* Not (yet) in an alert wait: remember the alert so its next
+             * KeWaitForAlertByThreadId returns STATUS_ALERTED immediately. */
+            InterlockedBitTestAndSet(&Thread->ThreadFlags,
+                                     KTHREAD_ALERTED_BY_THREAD_ID_BIT);
+        }
+    }
+
+    /* Release the locks */
+    KiReleaseThreadLock(Thread);
+    KiReleaseApcLockFromSynchLevel(&ApcLock);
+    KiExitDispatcher(ApcLock.OldIrql);
+
+    /* Return the old pending state */
+    return PreviousState;
+}
+
 VOID
 NTAPI
 KeBoostPriorityThread(IN PKTHREAD Thread,
