@@ -641,7 +641,7 @@ DriverEntry(
     Chars.Header.Revision = NDIS_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_2;
     Chars.Header.Size = sizeof(NDIS_MINIPORT_DRIVER_CHARACTERISTICS);
     Chars.MajorNdisVersion = 6;
-    Chars.MinorNdisVersion = 20;
+    Chars.MinorNdisVersion = 30;
     Chars.MajorDriverVersion = 1;
     Chars.MinorDriverVersion = 0;
 
