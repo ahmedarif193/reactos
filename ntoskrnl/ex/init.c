@@ -710,6 +710,16 @@ ExpInitSystemPhase0(VOID)
     ExInitializeResourceLite(&ExpFirmwareTableResource);
     ExInitializeResourceLite(&ExpTimeRefreshLock);
 
+    /* Capture the firmware type from the loader block before it is freed */
+    if (KeLoaderBlock->FirmwareInformation.FirmwareTypeEfi)
+    {
+        ExpFirmwareType = FirmwareTypeUefi;
+    }
+    else
+    {
+        ExpFirmwareType = FirmwareTypeBios;
+    }
+
     /* Set the suite mask to maximum and return */
     ExSuiteMask = 0xFFFFFFFF;
     return TRUE;
@@ -784,6 +794,13 @@ ExpInitSystemPhase1(VOID)
     if (ExpInitializeKeyedEventImplementation() == FALSE)
     {
         DPRINT1("Executive: Keyed event initialization failed\n");
+        return FALSE;
+    }
+
+    /* Initialize WNF */
+    if (ExpWnfInitialization() == FALSE)
+    {
+        DPRINT1("Executive: WNF initialization failed\n");
         return FALSE;
     }
 

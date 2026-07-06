@@ -306,6 +306,23 @@ ExSetTimerResolution(IN ULONG DesiredTime,
     return CurrentIncrement;
 }
 
+/*
+ * @implemented
+ *
+ * Returns the real clock resolution, in 100-ns units: the coarsest interval,
+ * the finest interval the platform supports, and the interval in effect now.
+ */
+VOID
+NTAPI
+ExQueryTimerResolution(OUT PULONG MaximumTime,
+                       OUT PULONG MinimumTime,
+                       OUT PULONG CurrentTime)
+{
+    *MaximumTime = KeMaximumIncrement;
+    *MinimumTime = KeMinimumIncrement;
+    *CurrentTime = KeTimeIncrement;
+}
+
 VOID
 NTAPI
 ExUpdateSystemTimeFromCmos(IN BOOLEAN UpdateInterruptTime,

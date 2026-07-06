@@ -325,6 +325,55 @@ ExInitializePagedLookasideList(IN PPAGED_LOOKASIDE_LIST Lookaside,
                                 &ExpPagedLookasideListLock);
 }
 
+/*
+ * @implemented
+ *
+ * Exported non-inline body for ExAllocateFromNPagedLookasideList. The public
+ * header ships a static-inline version, so the exported symbol is aliased to
+ * this Exi* name in ntoskrnl.spec, mirroring ExiAllocateFromPagedLookasideList.
+ */
+PVOID
+NTAPI
+ExiAllocateFromNPagedLookasideList(IN PNPAGED_LOOKASIDE_LIST Lookaside)
+{
+    PVOID Entry;
+
+    Lookaside->L.TotalAllocates++;
+    Entry = InterlockedPopEntrySList(&Lookaside->L.ListHead);
+    if (!Entry)
+    {
+        Lookaside->L.AllocateMisses++;
+        Entry = (Lookaside->L.Allocate)(Lookaside->L.Type,
+                                        Lookaside->L.Size,
+                                        Lookaside->L.Tag);
+    }
+    return Entry;
+}
+
+/*
+ * @implemented
+ *
+ * Exported non-inline body for ExAllocateFromLookasideListEx (see above).
+ */
+PVOID
+NTAPI
+ExiAllocateFromLookasideListEx(IN PLOOKASIDE_LIST_EX Lookaside)
+{
+    PVOID Entry;
+
+    Lookaside->L.TotalAllocates++;
+    Entry = InterlockedPopEntrySList(&Lookaside->L.ListHead);
+    if (!Entry)
+    {
+        Lookaside->L.AllocateMisses++;
+        Entry = (Lookaside->L.AllocateEx)(Lookaside->L.Type,
+                                          Lookaside->L.Size,
+                                          Lookaside->L.Tag,
+                                          Lookaside);
+    }
+    return Entry;
+}
+
 static
 PVOID
 NTAPI

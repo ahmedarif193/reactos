@@ -761,3 +761,161 @@ NtSetTimer(IN HANDLE TimerHandle,
     /* Return to Caller */
     return Status;
 }
+
+/* EX_TIMER OBJECT FAMILY ****************************************************/
+
+#define TAG_EX_TIMER 'RmiT'
+
+typedef struct _EX_TIMER
+{
+    KTIMER KeTimer;
+    KDPC TimerDpc;
+    PEXT_CALLBACK Callback;
+    PVOID CallbackContext;
+    ULONG Attributes;
+} EX_TIMER;
+
+_Function_class_(KDEFERRED_ROUTINE)
+static
+VOID
+NTAPI
+ExpExtTimerDpcRoutine(IN PKDPC Dpc,
+                      IN PVOID DeferredContext,
+                      IN PVOID SystemArgument1,
+                      IN PVOID SystemArgument2)
+{
+    PEX_TIMER Timer = DeferredContext;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    /* Invoke the client callback at DISPATCH_LEVEL */
+    if (Timer->Callback) Timer->Callback(Timer, Timer->CallbackContext);
+}
+
+/*
+ * @implemented
+ */
+PEX_TIMER
+NTAPI
+ExAllocateTimer(IN PEXT_CALLBACK Callback OPTIONAL,
+                IN PVOID CallbackContext OPTIONAL,
+                IN ULONG Attributes)
+{
+    PEX_TIMER Timer;
+    TIMER_TYPE TimerType;
+
+    /* Reject unknown attribute bits */
+    if (Attributes & ~(EX_TIMER_HIGH_RESOLUTION |
+                       EX_TIMER_NO_WAKE |
+                       EX_TIMER_NOTIFICATION))
+    {
+        return NULL;
+    }
+
+    /* High-resolution and no-wake are mutually exclusive */
+    if ((Attributes & EX_TIMER_HIGH_RESOLUTION) &&
+        (Attributes & EX_TIMER_NO_WAKE))
+    {
+        return NULL;
+    }
+
+    /* Timer runs its DPC, so it must live in non-paged pool */
+    Timer = ExAllocatePoolWithTag(NonPagedPool, sizeof(EX_TIMER), TAG_EX_TIMER);
+    if (!Timer) return NULL;
+
+    Timer->Callback = Callback;
+    Timer->CallbackContext = CallbackContext;
+    Timer->Attributes = Attributes;
+
+    TimerType = (Attributes & EX_TIMER_NOTIFICATION) ? NotificationTimer
+                                                     : SynchronizationTimer;
+    KeInitializeTimerEx(&Timer->KeTimer, TimerType);
+
+    /* A DPC is only needed when a callback was supplied */
+    if (Callback)
+    {
+        KeInitializeDpc(&Timer->TimerDpc, ExpExtTimerDpcRoutine, Timer);
+    }
+
+    return Timer;
+}
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+ExSetTimer(IN PEX_TIMER Timer,
+           IN LONGLONG DueTime,
+           IN LONGLONG Period,
+           IN PEXT_SET_PARAMETERS Parameters OPTIONAL)
+{
+    LARGE_INTEGER TimerDueTime;
+
+    /* NoWakeTolerance-style coalescing is ignored on a single-node system */
+    UNREFERENCED_PARAMETER(Parameters);
+
+    TimerDueTime.QuadPart = DueTime;
+
+    return KeSetTimerEx(&Timer->KeTimer,
+                        TimerDueTime,
+                        KiExtTimerPeriodToMilliseconds(Period),
+                        Timer->Callback ? &Timer->TimerDpc : NULL);
+}
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+ExCancelTimer(IN OUT PEX_TIMER Timer,
+              IN PEXT_CANCEL_PARAMETERS Parameters OPTIONAL)
+{
+    BOOLEAN Cancelled;
+
+    UNREFERENCED_PARAMETER(Parameters);
+
+    /* Pull it out of the timer queue and drop any DPC still queued for it */
+    Cancelled = KeCancelTimer(&Timer->KeTimer);
+    if (Timer->Callback) KeRemoveQueueDpc(&Timer->TimerDpc);
+
+    return Cancelled;
+}
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+ExDeleteTimer(IN PEX_TIMER Timer,
+              IN BOOLEAN Cancel,
+              IN BOOLEAN Wait,
+              IN PEXT_DELETE_PARAMETERS Parameters OPTIONAL)
+{
+    UNREFERENCED_PARAMETER(Cancel);
+    UNREFERENCED_PARAMETER(Wait);
+
+    /* Always cancel before freeing so a pending expiry can't fire afterwards */
+    KeCancelTimer(&Timer->KeTimer);
+
+    /* Drain any in-flight DPC so the callback can't touch freed memory; a
+     * callback-less timer never had a DPC, so it skips the system-wide flush */
+    if (Timer->Callback)
+    {
+        KeRemoveQueueDpc(&Timer->TimerDpc);
+        KeFlushQueuedDpcs();
+    }
+
+    /* Run the optional deletion callback now that the timer is quiescent */
+    if ((Parameters != NULL) && (Parameters->DeleteCallback != NULL))
+    {
+        Parameters->DeleteCallback(Parameters->DeleteContext);
+    }
+
+    ExFreePoolWithTag(Timer, TAG_EX_TIMER);
+    return TRUE;
+}
+
+/* EOF */
