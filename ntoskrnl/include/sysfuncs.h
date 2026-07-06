@@ -310,3 +310,6 @@
     SVC_(UnsubscribeWnfStateChange, 1)
     SVC_(UpdateWnfStateData, 7)
 #endif
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    SVC_(QuerySystemInformationEx, 6)
+#endif

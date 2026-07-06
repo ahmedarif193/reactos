@@ -12,6 +12,9 @@
 #define NDEBUG
 #include <debug.h>
 
+/* KeQueryTypeEvent is an internal export not declared by the DDK. */
+NTKERNELAPI LONG NTAPI KeQueryTypeEvent(_In_ PKEVENT Event);
+
 /* FUNCTIONS *****************************************************************/
 
 /*
@@ -116,6 +119,21 @@ KeReadStateEvent(IN PKEVENT Event)
 
     /* Return the Signal State */
     return Event->Header.SignalState;
+}
+
+/*
+ * @implemented
+ */
+LONG
+NTAPI
+KeQueryTypeEvent(
+    _In_ PKEVENT Event)
+{
+    ASSERT_EVENT(Event);
+
+    /* Return the dispatcher object type:
+     * EventNotificationObject or EventSynchronizationObject */
+    return Event->Header.Type & KOBJECT_TYPE_MASK;
 }
 
 /*

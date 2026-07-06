@@ -3161,6 +3161,88 @@ NtQuerySystemInformation(
     return Status;
 }
 
+/*
+ * @implemented
+ */
+__kernel_entry
+NTSTATUS
+NTAPI
+NtQuerySystemInformationEx(
+    _In_ SYSTEM_INFORMATION_CLASS SystemInformationClass,
+    _In_reads_bytes_(InputBufferLength) PVOID InputBuffer,
+    _In_ ULONG InputBufferLength,
+    _Out_writes_bytes_opt_(SystemInformationLength) PVOID SystemInformation,
+    _In_ ULONG SystemInformationLength,
+    _Out_opt_ PULONG ReturnLength)
+{
+    NTSTATUS Status = STATUS_NOT_IMPLEMENTED;
+    ULONG CapturedResultLength = 0;
+    KPROCESSOR_MODE PreviousMode;
+
+    PAGED_CODE();
+
+    /* The extended query always takes an input buffer qualifying the request */
+    if ((InputBuffer == NULL) || (InputBufferLength == 0))
+        return STATUS_INVALID_PARAMETER;
+
+    PreviousMode = ExGetPreviousMode();
+
+    _SEH2_TRY
+    {
+        if (PreviousMode != KernelMode)
+        {
+            ProbeForRead(InputBuffer, InputBufferLength, TYPE_ALIGNMENT(ULONG));
+            ProbeForWrite(SystemInformation, SystemInformationLength, TYPE_ALIGNMENT(ULONG));
+            if (ReturnLength != NULL)
+                ProbeForWriteUlong(ReturnLength);
+        }
+
+        if (ReturnLength)
+            *ReturnLength = 0;
+
+        switch (SystemInformationClass)
+        {
+            case SystemLogicalProcessorAndGroupInformation:
+            {
+                LOGICAL_PROCESSOR_RELATIONSHIP RelationshipType;
+
+                /* The input buffer is the relationship filter */
+                if (InputBufferLength != sizeof(LOGICAL_PROCESSOR_RELATIONSHIP))
+                    _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
+
+                RelationshipType = *(volatile LOGICAL_PROCESSOR_RELATIONSHIP *)InputBuffer;
+
+                /* Ke honors the length-probe protocol: on a too-small buffer it
+                   returns STATUS_INFO_LENGTH_MISMATCH with the required size */
+                CapturedResultLength = SystemInformationLength;
+                Status = KeQueryLogicalProcessorRelationship(NULL,
+                                                             RelationshipType,
+                                                             SystemInformation,
+                                                             &CapturedResultLength);
+
+                if (ReturnLength)
+                    *ReturnLength = CapturedResultLength;
+                break;
+            }
+
+            default:
+            {
+                DPRINT1("NtQuerySystemInformationEx - Class %d not implemented\n",
+                        SystemInformationClass);
+                Status = STATUS_NOT_IMPLEMENTED;
+                break;
+            }
+        }
+    }
+    _SEH2_EXCEPT(ExSystemExceptionFilter())
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    return Status;
+}
+
 __kernel_entry
 NTSTATUS
 NTAPI
