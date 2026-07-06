@@ -302,3 +302,13 @@
     SVC_(GetCurrentProcessorNumberEx, 1)
     SVC_(CreateUserProcess, 11)
 #endif
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+    SVC_(CreateWnfStateName, 7)
+    SVC_(DeleteWnfStateData, 2)
+    SVC_(DeleteWnfStateName, 1)
+    SVC_(QueryWnfStateData, 6)
+    SVC_(QueryWnfStateNameInformation, 5)
+    SVC_(SubscribeWnfStateChange, 4)
+    SVC_(UnsubscribeWnfStateChange, 1)
+    SVC_(UpdateWnfStateData, 7)
+#endif

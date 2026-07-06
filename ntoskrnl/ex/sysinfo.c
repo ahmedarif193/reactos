@@ -19,10 +19,6 @@
 /* The maximum size of an environment value (in bytes) */
 #define MAX_ENVVAL_SIZE 1024
 
-#define SIG_ACPI 0x41435049
-#define SIG_FIRM 0x4649524D
-#define SIG_RSMB 0x52534D42
-
 extern LIST_ENTRY HandleTableListHead;
 extern EX_PUSH_LOCK HandleTableListLock;
 
