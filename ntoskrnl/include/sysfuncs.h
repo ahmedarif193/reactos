@@ -315,3 +315,9 @@
     SVC_(UnsubscribeWnfStateChange, 1)
     SVC_(UpdateWnfStateData, 7)
 #endif
+#if (NTDDI_VERSION >= NTDDI_WIN10_RS2)
+    SVC_(QueryInformationByName, 5)
+#endif
+#if (NTDDI_VERSION >= NTDDI_WIN10_RS3)
+    SVC_(QueryDirectoryFileEx, 10)
+#endif
