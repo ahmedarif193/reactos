@@ -2701,9 +2701,9 @@
 @ stub -arch=arm64 NtPrepareEnlistment
 @ stub -arch=arm64 NtPropagationComplete
 @ stub -arch=arm64 NtPropagationFailed
-@ stub -arch=arm64 NtQueryDirectoryFileEx
+@ stdcall -arch=arm64 NtQueryDirectoryFileEx(ptr ptr ptr ptr ptr ptr long long long ptr)
 @ stub -arch=arm64 NtQueryEnvironmentVariableInfoEx
-@ stub -arch=arm64 NtQueryInformationByName
+@ stdcall -arch=arm64 NtQueryInformationByName(ptr ptr ptr long long)
 @ stub -arch=arm64 NtQueryInformationEnlistment
 @ stub -arch=arm64 NtQueryInformationResourceManager
 @ stub -arch=arm64 NtQueryInformationTransaction
@@ -3371,8 +3371,8 @@
 @ stub -arch=arm64 ZwPrepareEnlistment
 @ stub -arch=arm64 ZwPropagationComplete
 @ stub -arch=arm64 ZwPropagationFailed
-@ stub -arch=arm64 ZwQueryDirectoryFileEx
-@ stub -arch=arm64 ZwQueryInformationByName
+@ stdcall -arch=arm64 ZwQueryDirectoryFileEx(ptr ptr ptr ptr ptr ptr long long long ptr)
+@ stdcall -arch=arm64 ZwQueryInformationByName(ptr ptr ptr long long)
 @ stub -arch=arm64 ZwQueryInformationCpuPartition
 @ stub -arch=arm64 ZwQueryInformationEnlistment
 @ stub -arch=arm64 ZwQueryInformationResourceManager

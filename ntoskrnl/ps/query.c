@@ -2967,6 +2967,89 @@ NtSetInformationThread(
         }
 #endif /* (NTDDI_VERSION >= NTDDI_WIN10_RS1) || defined(__REACTOS__) */
 
+        case ThreadIdealProcessorEx:
+        {
+            PROCESSOR_NUMBER ProcessorNumber;
+            UCHAR PreviousIdealProcessor;
+
+            /* Check buffer length */
+            if (ThreadInformationLength != sizeof(PROCESSOR_NUMBER))
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            /* Use SEH for capture */
+            _SEH2_TRY
+            {
+                /* Get the processor number */
+                ProcessorNumber = *(PPROCESSOR_NUMBER)ThreadInformation;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                /* Get the exception code */
+                Status = _SEH2_GetExceptionCode();
+                _SEH2_YIELD(break);
+            }
+            _SEH2_END;
+
+            /* Validate it. ReactOS supports a single processor group, and
+             * Windows fails a nonzero Reserved field with the same status. */
+            if ((ProcessorNumber.Group != 0) ||
+                (ProcessorNumber.Number >= (UCHAR)KeNumberProcessors) ||
+                (ProcessorNumber.Reserved != 0))
+            {
+                /* Fail */
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            /* Reference the thread */
+            Status = ObReferenceObjectByHandle(ThreadHandle,
+                                               THREAD_SET_INFORMATION,
+                                               PsThreadType,
+                                               PreviousMode,
+                                               (PVOID*)&Thread,
+                                               NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            /* Set the ideal processor and remember the previous one */
+            PreviousIdealProcessor = KeSetIdealProcessorThread(&Thread->Tcb,
+                                                               ProcessorNumber.Number);
+
+            /* Get the TEB and protect the thread */
+            Teb = Thread->Tcb.Teb;
+            if (Teb && ExAcquireRundownProtection(&Thread->RundownProtect))
+            {
+                /* Save the ideal processor */
+                Teb->IdealProcessor = Thread->Tcb.IdealProcessor;
+
+                /* Release rundown protection */
+                ExReleaseRundownProtection(&Thread->RundownProtect);
+            }
+
+            /* On success Windows returns the previous ideal processor
+             * through the same buffer */
+            _SEH2_TRY
+            {
+                PPROCESSOR_NUMBER Previous = (PPROCESSOR_NUMBER)ThreadInformation;
+                Previous->Group = 0;
+                Previous->Number = PreviousIdealProcessor;
+                Previous->Reserved = 0;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                /* Get the exception code */
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+
+            /* Dereference the thread */
+            ObDereferenceObject(Thread);
+            break;
+        }
+
         /* Anything else */
         default:
             /* Not yet implemented */
@@ -3542,6 +3625,204 @@ NtQueryInformationThread(
             break;
         }
 #endif /* (NTDDI_VERSION >= NTDDI_WIN10_RS1) || defined(__REACTOS__) */
+
+        case ThreadCycleTime:
+        {
+            PTHREAD_CYCLE_TIME_INFORMATION CycleTimeInfo =
+                (PTHREAD_CYCLE_TIME_INFORMATION)ThreadInformation;
+            ULONG64 AccumulatedCycles, CycleTimeStamp;
+
+            /* Set the return length */
+            Length = sizeof(THREAD_CYCLE_TIME_INFORMATION);
+
+            if (ThreadInformationLength != Length)
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            /* Reference the thread */
+            Status = ObReferenceObjectByHandle(ThreadHandle,
+            // FIXME: Use THREAD_QUERY_LIMITED_INFORMATION when implemented
+                                               Access,
+                                               PsThreadType,
+                                               PreviousMode,
+                                               (PVOID*)&Thread,
+                                               NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            /* Get the accumulated cycles and the current cycle counter */
+            AccumulatedCycles = KeQueryTotalCycleTimeThread(&Thread->Tcb,
+                                                            &CycleTimeStamp);
+
+            /* Protect writes with SEH */
+            _SEH2_TRY
+            {
+                CycleTimeInfo->AccumulatedCycles = AccumulatedCycles;
+                CycleTimeInfo->CurrentCycleCount = CycleTimeStamp;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                /* Get exception code */
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+
+            /* Dereference the thread */
+            ObDereferenceObject(Thread);
+            break;
+        }
+
+        case ThreadGroupInformation:
+        case ThreadActualGroupAffinity:
+        {
+            PGROUP_AFFINITY GroupAffinity = (PGROUP_AFFINITY)ThreadInformation;
+            KAFFINITY AffinityMask;
+
+            /* Set the return length */
+            Length = sizeof(GROUP_AFFINITY);
+
+            if (ThreadInformationLength != Length)
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            /* Reference the thread */
+            Status = ObReferenceObjectByHandle(ThreadHandle,
+            // FIXME: Use THREAD_QUERY_LIMITED_INFORMATION when implemented
+                                               Access,
+                                               PsThreadType,
+                                               PreviousMode,
+                                               (PVOID*)&Thread,
+                                               NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            /* ThreadGroupInformation reports the user-requested affinity,
+             * ThreadActualGroupAffinity the affinity the scheduler actually
+             * uses. ReactOS supports a single processor group (group 0). */
+            if (ThreadInformationClass == ThreadGroupInformation)
+                AffinityMask = KiThreadUserAffinityMask(&Thread->Tcb);
+            else
+                AffinityMask = KiThreadAffinityMask(&Thread->Tcb);
+
+            /* Protect writes with SEH */
+            _SEH2_TRY
+            {
+                RtlZeroMemory(GroupAffinity, sizeof(GROUP_AFFINITY));
+                GroupAffinity->Mask = AffinityMask;
+                GroupAffinity->Group = 0;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                /* Get exception code */
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+
+            /* Dereference the thread */
+            ObDereferenceObject(Thread);
+            break;
+        }
+
+        case ThreadIdealProcessorEx:
+        {
+            PPROCESSOR_NUMBER ProcessorNumber =
+                (PPROCESSOR_NUMBER)ThreadInformation;
+            ULONG IdealProcessor;
+
+            /* Set the return length */
+            Length = sizeof(PROCESSOR_NUMBER);
+
+            if (ThreadInformationLength != Length)
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            /* Reference the thread */
+            Status = ObReferenceObjectByHandle(ThreadHandle,
+            // FIXME: Use THREAD_QUERY_LIMITED_INFORMATION when implemented
+                                               Access,
+                                               PsThreadType,
+                                               PreviousMode,
+                                               (PVOID*)&Thread,
+                                               NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            /* Self-queries report the current ideal processor, queries on
+             * other threads the user-visible one, as on Windows */
+            if (Thread == PsGetCurrentThread())
+                IdealProcessor = Thread->Tcb.IdealProcessor;
+            else
+                IdealProcessor = Thread->Tcb.UserIdealProcessor;
+
+            /* Protect writes with SEH */
+            _SEH2_TRY
+            {
+                ProcessorNumber->Group = 0;
+                ProcessorNumber->Number = (UCHAR)IdealProcessor;
+                ProcessorNumber->Reserved = 0;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                /* Get exception code */
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+
+            /* Dereference the thread */
+            ObDereferenceObject(Thread);
+            break;
+        }
+
+        case ThreadSuspendCount:
+        {
+            ULONG SuspendCount;
+
+            /* Set the return length */
+            Length = sizeof(ULONG);
+
+            if (ThreadInformationLength != Length)
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            /* Reference the thread */
+            Status = ObReferenceObjectByHandle(ThreadHandle,
+            // FIXME: Use THREAD_QUERY_LIMITED_INFORMATION when implemented
+                                               Access,
+                                               PsThreadType,
+                                               PreviousMode,
+                                               (PVOID*)&Thread,
+                                               NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            /* Windows counts pending freezes on top of the suspend count */
+            SuspendCount = (ULONG)Thread->Tcb.SuspendCount +
+                           (ULONG)Thread->Tcb.FreezeCount;
+
+            /* Protect write with SEH */
+            _SEH2_TRY
+            {
+                *(PULONG)ThreadInformation = SuspendCount;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                /* Get exception code */
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+
+            /* Dereference the thread */
+            ObDereferenceObject(Thread);
+            break;
+        }
 
         /* Anything else */
         default:
