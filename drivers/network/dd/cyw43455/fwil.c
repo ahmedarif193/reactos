@@ -298,6 +298,7 @@ CywBcdcXfer(
         Dcmd = (PCYW_BCDC_DCMD)Msg;
         if (Dcmd->Flags & BCDC_DCMD_ERROR)
         {
+            DPRINT1("CYW: BCDC cmd %lu firmware error %ld\n", (ULONG)Cmd, (LONG)Dcmd->Status);
             Status = STATUS_UNSUCCESSFUL;
         }
         else if (!Set && Data != NULL)

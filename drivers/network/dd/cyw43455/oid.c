@@ -613,8 +613,6 @@ CywSetKey(
         KeyData.Flags = CYW_WSEC_PRIMARY_KEY;
     }
 
-    DPRINT1("CYW: set %s key index %lu len %lu\n",
-            Pairwise ? "pairwise" : "group", KeyIndex, KeyLen);
     return CywFilIovarSet(Adapter, "wsec_key", &KeyData, sizeof(KeyData));
 }
 
@@ -735,7 +733,6 @@ CywOidSet(
                               Value->usKeyLength, Value->uKeyIndex);
                     CywFilCmdSet(Adapter, BRCMF_C_SET_SCB_AUTHORIZE,
                                  Adapter->ConnectedBssid, CYW_ADDRESS_LENGTH);
-                    DPRINT1("CYW: SCB_AUTHORIZE bssid sent\n");
                 }
             }
             Request->DATA.SET_INFORMATION.BytesRead = Length;
