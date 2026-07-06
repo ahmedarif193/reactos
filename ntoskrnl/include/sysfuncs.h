@@ -321,3 +321,7 @@
 #if (NTDDI_VERSION >= NTDDI_WIN10_RS3)
     SVC_(QueryDirectoryFileEx, 10)
 #endif
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+    SVC_(AlertThreadByThreadId, 1)
+    SVC_(WaitForAlertByThreadId, 2)
+#endif

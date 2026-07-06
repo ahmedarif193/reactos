@@ -2675,6 +2675,7 @@
 @ stub -arch=arm64 MmSetGraphicsPtes
 @ stub -arch=arm64 MmSetPermanentCacheAttribute
 @ stub -arch=arm64 MmUnlockPreChargedPagedPool
+@ stdcall -arch=arm64 NtAlertThreadByThreadId(ptr)
 @ stub -arch=arm64 NtCommitComplete
 @ stub -arch=arm64 NtCommitEnlistment
 @ stub -arch=arm64 NtCommitTransaction
@@ -2724,6 +2725,7 @@
 @ stub -arch=arm64 NtSetInformationVirtualMemory
 @ stub -arch=arm64 NtThawTransactions
 @ stub -arch=arm64 NtTraceControl
+@ stdcall -arch=arm64 NtWaitForAlertByThreadId(ptr ptr)
 @ stub -arch=arm64 ObCreateObjectTypeEx
 @ stub -arch=arm64 ObDereferenceObjectDeferDeleteWithTag
 @ stub -arch=arm64 ObGetFilterVersion
@@ -3301,6 +3303,7 @@
 @ stub -arch=arm64 WheaTerminateProcess
 @ stub -arch=arm64 WheaUnconfigureErrorSource
 @ stub -arch=arm64 WheaUnregisterErrorSourceOverride
+@ stdcall -arch=arm64 ZwAlertThreadByThreadId(ptr)
 @ stub -arch=arm64 ZwAllocateReserveObject
 @ stub -arch=arm64 ZwAllocateVirtualMemoryEx
 @ stub -arch=arm64 ZwAlpcAcceptConnectPort
@@ -3403,6 +3406,7 @@
 @ stub -arch=arm64 ZwSetTimerEx
 @ stub -arch=arm64 ZwTraceControl
 @ stdcall -version=0x602+ -arch=arm64 ZwUpdateWnfStateData(ptr ptr long ptr ptr long long)
+@ stdcall -arch=arm64 ZwWaitForAlertByThreadId(ptr ptr)
 @ stub -arch=arm64 _makepath_s
 @ cdecl _snprintf_s()
 @ stub -arch=arm64 _snscanf_s
