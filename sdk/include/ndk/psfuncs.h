@@ -386,6 +386,21 @@ NtAlertThread(
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
+NtAlertThreadByThreadId(
+    _In_ HANDLE ThreadId
+);
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtWaitForAlertByThreadId(
+    _In_ PVOID Address,
+    _In_opt_ PLARGE_INTEGER Timeout
+);
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
 NtAssignProcessToJobObject(
     _In_ HANDLE JobHandle,
     _In_ HANDLE ProcessHandle

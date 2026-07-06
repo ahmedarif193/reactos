@@ -203,6 +203,12 @@ extern VOID __cdecl KiInterruptTemplate(VOID);
 /* One of the Reserved Wait Blocks, this one is for the Thread's Timer */
 #define TIMER_WAIT_BLOCK 0x3L
 
+/* Bit index of KTHREAD.AlertedByThreadId within the ThreadFlags word (0x70).
+ * The pending flag for the Win8+ alert-by-thread-id primitive. It shares its
+ * word with other ThreadFlags bits that are updated via interlocked bit ops
+ * (e.g. KeSetDisableBoostThread), so it must be manipulated the same way. */
+#define KTHREAD_ALERTED_BY_THREAD_ID_BIT 4
+
 /* INTERNAL KERNEL FUNCTIONS ************************************************/
 
 /* Finds a new thread to run */
@@ -530,6 +536,19 @@ NTAPI
 KeAlertThread(
     IN PKTHREAD Thread,
     IN KPROCESSOR_MODE AlertMode
+);
+
+BOOLEAN
+NTAPI
+KeAlertThreadByThreadId(
+    IN PKTHREAD Thread
+);
+
+NTSTATUS
+NTAPI
+KeWaitForAlertByThreadId(
+    IN PVOID Address,
+    IN PLARGE_INTEGER Timeout OPTIONAL
 );
 
 ULONG

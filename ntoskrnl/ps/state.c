@@ -221,6 +221,83 @@ NtAlertThread(IN HANDLE ThreadHandle)
     return Status;
 }
 
+/*
+ * @implemented
+ *
+ * Win8+ thread-alert-by-id. Delivers an alert to the thread whose thread id is
+ * ThreadId, waking a matching NtWaitForAlertByThreadId waiter (or leaving the
+ * alert pending for its next such wait). Only threads of the current process
+ * may be targeted; Windows rejects cross-process alerts with STATUS_ACCESS_DENIED
+ * and an unknown thread id with STATUS_INVALID_CID.
+ */
+NTSTATUS
+NTAPI
+NtAlertThreadByThreadId(IN HANDLE ThreadId)
+{
+    PETHREAD Thread;
+    NTSTATUS Status;
+
+    /* Look the thread up by its thread id in the CID table (references it) */
+    Status = PsLookupThreadByThreadId(ThreadId, &Thread);
+    if (!NT_SUCCESS(Status))
+    {
+        /* Windows maps a missing/invalid thread id to STATUS_INVALID_CID here */
+        return STATUS_INVALID_CID;
+    }
+
+    /* Only a thread of the current process may be alerted this way. Compare the
+     * target's owning process (KTHREAD.Process) against ours, exactly as Windows
+     * does; a cross-process target is rejected with STATUS_ACCESS_DENIED. */
+    if (Thread->Tcb.Process != KeGetCurrentThread()->Process)
+    {
+        ObDereferenceObject(Thread);
+        return STATUS_ACCESS_DENIED;
+    }
+
+    /* Deliver the alert to the target thread */
+    KeAlertThreadByThreadId(&Thread->Tcb);
+
+    /* Drop our reference and report success */
+    ObDereferenceObject(Thread);
+    return STATUS_SUCCESS;
+}
+
+/*
+ * @implemented
+ *
+ * Win8+ wait-for-alert-by-id. Blocks the current thread until it is alerted via
+ * NtAlertThreadByThreadId (returning STATUS_ALERTED) or the optional Timeout
+ * elapses (returning STATUS_TIMEOUT). Address is an opaque user-mode cookie that
+ * Windows records only for tracing; it does not participate in the wake decision.
+ */
+NTSTATUS
+NTAPI
+NtWaitForAlertByThreadId(IN PVOID Address,
+                         IN PLARGE_INTEGER Timeout OPTIONAL)
+{
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    LARGE_INTEGER SafeTimeout;
+
+    /* Probe and capture the timeout if one was supplied from user mode */
+    if ((Timeout) && (PreviousMode != KernelMode))
+    {
+        _SEH2_TRY
+        {
+            SafeTimeout = ProbeForReadLargeInteger(Timeout);
+            Timeout = &SafeTimeout;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            /* Return the exception code */
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+    }
+
+    /* Block until alerted by thread id or until the timeout elapses */
+    return KeWaitForAlertByThreadId(Address, Timeout);
+}
+
 NTSTATUS
 NTAPI
 NtAlertResumeThread(IN HANDLE ThreadHandle,
