@@ -7,6 +7,7 @@ Class       = Net
 ClassGUID   = {4d36e972-e325-11ce-bfc1-08002be10318}
 Provider    = %ReactOS%
 DriverVer   = 06/25/2026,1.0.0.0
+CatalogFile = cyw43455.cat
 
 [DestinationDirs]
 DefaultDestDir = 12
