@@ -313,3 +313,9 @@
 #if (NTDDI_VERSION >= NTDDI_WIN7)
     SVC_(QuerySystemInformationEx, 6)
 #endif
+#if (NTDDI_VERSION >= NTDDI_WIN10_RS2)
+    SVC_(QueryInformationByName, 5)
+#endif
+#if (NTDDI_VERSION >= NTDDI_WIN10_RS3)
+    SVC_(QueryDirectoryFileEx, 10)
+#endif

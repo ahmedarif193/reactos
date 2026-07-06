@@ -17,6 +17,16 @@
 #include <debug.h>
 #include "internal/io_i.h"
 
+/* Directory query SL_ flags not yet present in this tree's DDK headers
+   (values match the Windows 10 RS3 WDK, where SL_QUERY_DIRECTORY_MASK is
+   the set of flags valid for NtQueryDirectoryFileEx) */
+#ifndef SL_RETURN_ON_DISK_ENTRIES_ONLY
+#define SL_RETURN_ON_DISK_ENTRIES_ONLY  0x08
+#endif
+#ifndef SL_QUERY_DIRECTORY_MASK
+#define SL_QUERY_DIRECTORY_MASK         0x0b
+#endif
+
 volatile LONG IoPageReadIrpAllocationFailure = 0;
 volatile LONG IoPageReadNonPagefileIrpAllocationFailure = 0;
 
@@ -1987,21 +1997,22 @@ NtLockFile(IN HANDLE FileHandle,
 }
 
 /*
- * @implemented
+ * Common worker for NtQueryDirectoryFile and NtQueryDirectoryFileEx.
+ * QueryFlags takes the SL_* directory query flags, which are passed on
+ * to the FSD through the IRP stack location.
  */
+static
 NTSTATUS
-NTAPI
-NtQueryDirectoryFile(IN HANDLE FileHandle,
-                     IN HANDLE EventHandle OPTIONAL,
-                     IN PIO_APC_ROUTINE ApcRoutine OPTIONAL,
-                     IN PVOID ApcContext OPTIONAL,
-                     OUT PIO_STATUS_BLOCK IoStatusBlock,
-                     OUT PVOID FileInformation,
-                     IN ULONG Length,
-                     IN FILE_INFORMATION_CLASS FileInformationClass,
-                     IN BOOLEAN ReturnSingleEntry,
-                     IN PUNICODE_STRING FileName OPTIONAL,
-                     IN BOOLEAN RestartScan)
+IopQueryDirectoryFile(IN HANDLE FileHandle,
+                      IN HANDLE EventHandle OPTIONAL,
+                      IN PIO_APC_ROUTINE ApcRoutine OPTIONAL,
+                      IN PVOID ApcContext OPTIONAL,
+                      OUT PIO_STATUS_BLOCK IoStatusBlock,
+                      OUT PVOID FileInformation,
+                      IN ULONG Length,
+                      IN FILE_INFORMATION_CLASS FileInformationClass,
+                      IN ULONG QueryFlags,
+                      IN PUNICODE_STRING FileName OPTIONAL)
 {
     PIRP Irp;
     PDEVICE_OBJECT DeviceObject;
@@ -2235,9 +2246,7 @@ NtQueryDirectoryFile(IN HANDLE FileHandle,
     StackPtr->Parameters.QueryDirectory.FileName = AuxBuffer;
     StackPtr->Parameters.QueryDirectory.FileIndex = 0;
     StackPtr->Parameters.QueryDirectory.Length = Length;
-    StackPtr->Flags = 0;
-    if (RestartScan) StackPtr->Flags = SL_RESTART_SCAN;
-    if (ReturnSingleEntry) StackPtr->Flags |= SL_RETURN_SINGLE_ENTRY;
+    StackPtr->Flags = (UCHAR)QueryFlags;
 
     /* Set deferred I/O */
     Irp->Flags |= IRP_DEFER_IO_COMPLETION;
@@ -2250,6 +2259,79 @@ NtQueryDirectoryFile(IN HANDLE FileHandle,
                                         PreviousMode,
                                         LockedForSynch,
                                         IopOtherTransfer);
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+NtQueryDirectoryFile(IN HANDLE FileHandle,
+                     IN HANDLE EventHandle OPTIONAL,
+                     IN PIO_APC_ROUTINE ApcRoutine OPTIONAL,
+                     IN PVOID ApcContext OPTIONAL,
+                     OUT PIO_STATUS_BLOCK IoStatusBlock,
+                     OUT PVOID FileInformation,
+                     IN ULONG Length,
+                     IN FILE_INFORMATION_CLASS FileInformationClass,
+                     IN BOOLEAN ReturnSingleEntry,
+                     IN PUNICODE_STRING FileName OPTIONAL,
+                     IN BOOLEAN RestartScan)
+{
+    ULONG QueryFlags = 0;
+
+    /* Map the legacy BOOLEAN parameters onto the SL_* query flags */
+    if (RestartScan) QueryFlags |= SL_RESTART_SCAN;
+    if (ReturnSingleEntry) QueryFlags |= SL_RETURN_SINGLE_ENTRY;
+
+    /* Call the common worker */
+    return IopQueryDirectoryFile(FileHandle,
+                                 EventHandle,
+                                 ApcRoutine,
+                                 ApcContext,
+                                 IoStatusBlock,
+                                 FileInformation,
+                                 Length,
+                                 FileInformationClass,
+                                 QueryFlags,
+                                 FileName);
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+NtQueryDirectoryFileEx(IN HANDLE FileHandle,
+                       IN HANDLE EventHandle OPTIONAL,
+                       IN PIO_APC_ROUTINE ApcRoutine OPTIONAL,
+                       IN PVOID ApcContext OPTIONAL,
+                       OUT PIO_STATUS_BLOCK IoStatusBlock,
+                       OUT PVOID FileInformation,
+                       IN ULONG Length,
+                       IN FILE_INFORMATION_CLASS FileInformationClass,
+                       IN ULONG QueryFlags,
+                       IN PUNICODE_STRING FileName OPTIONAL)
+{
+    /* Only the SL_QUERY_DIRECTORY_MASK flags are valid for this API. This
+       also rejects SL_INDEX_SPECIFIED, which cannot be honored because the
+       API carries no file index parameter */
+    if (QueryFlags & ~SL_QUERY_DIRECTORY_MASK) return STATUS_INVALID_PARAMETER;
+
+    /* Call the common worker. SL_RESTART_SCAN and SL_RETURN_SINGLE_ENTRY
+       are consumed by the FSD; SL_RETURN_ON_DISK_ENTRIES_ONLY is a
+       pass-through instruction for filters that virtualize directories,
+       so forwarding it in the stack location is all that is needed */
+    return IopQueryDirectoryFile(FileHandle,
+                                 EventHandle,
+                                 ApcRoutine,
+                                 ApcContext,
+                                 IoStatusBlock,
+                                 FileInformation,
+                                 Length,
+                                 FileInformationClass,
+                                 QueryFlags,
+                                 FileName);
 }
 
 /*
@@ -2675,6 +2757,155 @@ NtQueryInformationFile(IN HANDLE FileHandle,
     }
 
     /* Return the Status */
+    return Status;
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+NtQueryInformationByName(IN POBJECT_ATTRIBUTES ObjectAttributes,
+                         OUT PIO_STATUS_BLOCK IoStatusBlock,
+                         OUT PVOID FileInformation,
+                         IN ULONG Length,
+                         IN FILE_INFORMATION_CLASS FileInformationClass)
+{
+    NTSTATUS Status;
+    HANDLE Handle = NULL;
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    OPEN_PACKET OpenPacket;
+    PAGED_CODE();
+    IOTRACE(IO_API_DEBUG, "Class: %lx\n", FileInformationClass);
+
+    /* Validate the information class */
+    if ((FileInformationClass < 0) ||
+        (FileInformationClass >= FileMaximumInformation) ||
+        !(IopQueryOperationLength[FileInformationClass]))
+    {
+        /* Invalid class */
+        return STATUS_INVALID_INFO_CLASS;
+    }
+
+    /* Validate the length */
+    if (Length < IopQueryOperationLength[FileInformationClass])
+    {
+        /* Invalid length */
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+
+    /* Check if we're called from user mode */
+    if (PreviousMode != KernelMode)
+    {
+        /* Enter SEH for probing */
+        _SEH2_TRY
+        {
+            /* Probe the I/O Status block */
+            ProbeForWriteIoStatusBlock(IoStatusBlock);
+
+            /* Probe the information */
+            ProbeForWrite(FileInformation, Length, sizeof(ULONG));
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            /* Return the exception code */
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+    }
+
+    /* Setup the Open Packet: a plain attribute-read open with maximum
+       sharing that follows reparse points */
+    RtlZeroMemory(&OpenPacket, sizeof(OPEN_PACKET));
+    OpenPacket.Type = IO_TYPE_OPEN_PACKET;
+    OpenPacket.Size = sizeof(OPEN_PACKET);
+    OpenPacket.ShareAccess = FILE_SHARE_READ |
+                             FILE_SHARE_WRITE |
+                             FILE_SHARE_DELETE;
+    OpenPacket.Disposition = FILE_OPEN;
+
+    /* Update the operation count */
+    IopUpdateOperationCount(IopOtherTransfer);
+
+    /*
+     * Attempt opening the file. This will call the I/O Parse Routine for
+     * the File Object (IopParseDevice) which will create the object and
+     * send the IRP to its device object. The object name capture, the
+     * root directory handle resolution and the access check all happen
+     * at the caller's mode. Note that we have two statuses to worry
+     * about: the Object Manager's status (in Status) and the I/O status,
+     * which is in the Open Packet's Final Status, and determined by the
+     * Parse Check member.
+     */
+    Status = ObOpenObjectByName(ObjectAttributes,
+                                NULL,
+                                PreviousMode,
+                                NULL,
+                                FILE_READ_ATTRIBUTES,
+                                &OpenPacket,
+                                &Handle);
+
+    /* Now check for Ob or Io failure */
+    if (!(NT_SUCCESS(Status)) || (OpenPacket.ParseCheck == FALSE))
+    {
+        /* Check if Ob thinks well went well */
+        if (NT_SUCCESS(Status))
+        {
+            /*
+             * Tell it otherwise. Because we didn't use an ObjectType,
+             * it incorrectly returned us a handle to God knows what.
+             */
+            ZwClose(Handle);
+            Status = STATUS_OBJECT_TYPE_MISMATCH;
+        }
+
+        /* Now check the Io status */
+        if (!NT_SUCCESS(OpenPacket.FinalStatus))
+        {
+            /* Use this status instead of Ob's */
+            Status = OpenPacket.FinalStatus;
+        }
+        else if ((OpenPacket.FileObject) && (OpenPacket.ParseCheck == FALSE))
+        {
+            /*
+             * This can happen in the very bizarre case where the parse
+             * routine actually executed more then once (due to a reparse)
+             * and ended up failing after already having created the File
+             * Object.
+             */
+            if (OpenPacket.FileObject->FileName.Length)
+            {
+                /* It had a name, free it */
+                ExFreePoolWithTag(OpenPacket.FileObject->FileName.Buffer,
+                                  TAG_IO_NAME);
+            }
+
+            /* Clear the device object to invalidate the FO, and dereference */
+            OpenPacket.FileObject->DeviceObject = NULL;
+            ObDereferenceObject(OpenPacket.FileObject);
+        }
+
+        /* Return the failure */
+        return Status;
+    }
+
+    /* We reached success and have a valid file handle */
+    OpenPacket.FileObject->Flags |= FO_HANDLE_CREATED;
+    ASSERT(OpenPacket.FileObject->Type == IO_TYPE_FILE);
+
+    /* Drop the reference the parse routine gave us */
+    ObDereferenceObject(OpenPacket.FileObject);
+
+    /* Reuse the query path with the caller's buffers. Previous mode is
+       unchanged, so probing and writeback happen at the caller's mode */
+    Status = NtQueryInformationFile(Handle,
+                                    IoStatusBlock,
+                                    FileInformation,
+                                    Length,
+                                    FileInformationClass);
+
+    /* Close the handle and return the query status */
+    ObCloseHandle(Handle, PreviousMode);
     return Status;
 }
 
