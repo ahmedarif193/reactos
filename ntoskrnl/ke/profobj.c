@@ -371,3 +371,38 @@ KeSetProfileIrql(IN KIRQL ProfileIrql)
     /* Set the IRQL at which Profiling will run */
     KiProfileIrql = ProfileIrql;
 }
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+KeQueryHardwareCounterConfiguration(
+    _Out_writes_to_(MaximumCount, *Count) PHARDWARE_COUNTER CounterArray,
+    _In_ ULONG MaximumCount,
+    _Out_ PULONG Count)
+{
+    UNREFERENCED_PARAMETER(CounterArray);
+    UNREFERENCED_PARAMETER(MaximumCount);
+
+    /* No hardware counters are configured for thread profiling;
+     * STATUS_NOT_SUPPORTED is the documented return for this case */
+    *Count = 0;
+    return STATUS_NOT_SUPPORTED;
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+KeSetHardwareCounterConfiguration(
+    _In_reads_(Count) PHARDWARE_COUNTER CounterArray,
+    _In_ ULONG Count)
+{
+    UNREFERENCED_PARAMETER(CounterArray);
+    UNREFERENCED_PARAMETER(Count);
+
+    /* Hardware counter multiplexing for thread profiling is not supported */
+    return STATUS_NOT_SUPPORTED;
+}

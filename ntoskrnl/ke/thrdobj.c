@@ -15,6 +15,10 @@
 extern EX_WORK_QUEUE ExWorkerQueue[MaximumWorkQueue];
 extern LIST_ENTRY PspReaperListHead;
 
+/* Internal exports not declared by the DDK. */
+NTKERNELAPI KPRIORITY NTAPI KeQueryEffectivePriorityThread(_In_ PKTHREAD Thread);
+NTKERNELAPI KPRIORITY NTAPI KeSetActualBasePriorityThread(_Inout_ PKTHREAD Thread, _In_ KPRIORITY Priority);
+
 /* FUNCTIONS *****************************************************************/
 
 UCHAR
@@ -1063,6 +1067,21 @@ KeQueryPriorityThread(IN PKTHREAD Thread)
 /*
  * @implemented
  */
+KPRIORITY
+NTAPI
+KeQueryEffectivePriorityThread(
+    _In_ PKTHREAD Thread)
+{
+    ASSERT_THREAD(Thread);
+
+    /* Without AutoBoost priority donation, the effective priority is the
+     * scheduler's current one */
+    return Thread->Priority;
+}
+
+/*
+ * @implemented
+ */
 VOID
 NTAPI
 KeRevertToUserAffinityThread(VOID)
@@ -1347,6 +1366,82 @@ KeSetBasePriorityThread(IN PKTHREAD Thread,
     /* Release the dispatcher database and return old increment */
     KiExitDispatcher(OldIrql);
     return OldIncrement;
+}
+
+/*
+ * @implemented
+ */
+KPRIORITY
+NTAPI
+KeSetActualBasePriorityThread(
+    _Inout_ PKTHREAD Thread,
+    _In_ KPRIORITY Priority)
+{
+    KIRQL OldIrql;
+    KPRIORITY OldBasePriority, NewPriority, BasePriority;
+    ASSERT_THREAD(Thread);
+    ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
+
+    /* Normalize the requested base priority into the legal range */
+    BasePriority = Priority;
+    if (BasePriority > HIGH_PRIORITY) BasePriority = HIGH_PRIORITY;
+    if (BasePriority <= LOW_PRIORITY) BasePriority = 1;
+
+    /* Lock the Dispatcher Database */
+    OldIrql = KeRaiseIrqlToSynchLevel();
+
+    /* Lock the thread */
+    KiAcquireThreadLock(Thread);
+
+    /* Save the old base priority */
+    OldBasePriority = Thread->BasePriority;
+
+    /* Unlike KeSetBasePriorityThread, the exact base priority is applied,
+     * so any prior saturation increment state is discarded */
+    Thread->Saturation = 0;
+
+    if (BasePriority >= LOW_REALTIME_PRIORITY)
+    {
+        /* Real-time threads run exactly at their base priority */
+        NewPriority = BasePriority;
+    }
+    else
+    {
+        /* Rebase the dynamic priority by the base priority change */
+        NewPriority = KiComputeNewPriority(Thread, 0);
+        NewPriority += (BasePriority - OldBasePriority);
+
+        /* Check if it entered the real-time range */
+        if (NewPriority >= LOW_REALTIME_PRIORITY)
+        {
+            /* Normalize it down to the highest dynamic priority */
+            NewPriority = LOW_REALTIME_PRIORITY - 1;
+        }
+        else if (NewPriority <= LOW_PRIORITY)
+        {
+            /* It went too low, normalize it */
+            NewPriority = 1;
+        }
+    }
+
+    /* Set the new base priority and reset the decrements */
+    Thread->BasePriority = (SCHAR)BasePriority;
+    Thread->PriorityDecrement = 0;
+
+    /* Check if we're changing priority after all */
+    if (NewPriority != Thread->Priority)
+    {
+        /* Reset the quantum and do the actual priority modification */
+        Thread->Quantum = Thread->QuantumReset;
+        KiSetPriorityThread(Thread, NewPriority);
+    }
+
+    /* Release thread lock */
+    KiReleaseThreadLock(Thread);
+
+    /* Release the dispatcher database and return the old base priority */
+    KiExitDispatcher(OldIrql);
+    return OldBasePriority;
 }
 
 /*
