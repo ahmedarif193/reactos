@@ -27,6 +27,32 @@
 #define SL_QUERY_DIRECTORY_MASK         0x0b
 #endif
 
+/* Directory notify Ex minor code and NtFlushBuffersFileEx flush flags not
+   yet present in this tree's DDK headers, plus the flush minor codes the
+   DDK headers gate behind NTDDI levels older targets do not reach (values
+   match the Windows 10 RS3 WDK) */
+#ifndef IRP_MN_NOTIFY_CHANGE_DIRECTORY_EX
+#define IRP_MN_NOTIFY_CHANGE_DIRECTORY_EX 0x03
+#endif
+#ifndef IRP_MN_FLUSH_DATA_ONLY
+#define IRP_MN_FLUSH_DATA_ONLY          0x02
+#endif
+#ifndef IRP_MN_FLUSH_NO_SYNC
+#define IRP_MN_FLUSH_NO_SYNC            0x03
+#endif
+#ifndef IRP_MN_FLUSH_DATA_SYNC_ONLY
+#define IRP_MN_FLUSH_DATA_SYNC_ONLY     0x04
+#endif
+#ifndef FLUSH_FLAGS_FILE_DATA_ONLY
+#define FLUSH_FLAGS_FILE_DATA_ONLY      0x00000001
+#endif
+#ifndef FLUSH_FLAGS_NO_SYNC
+#define FLUSH_FLAGS_NO_SYNC             0x00000002
+#endif
+#ifndef FLUSH_FLAGS_FILE_DATA_SYNC_ONLY
+#define FLUSH_FLAGS_FILE_DATA_SYNC_ONLY 0x00000004
+#endif
+
 volatile LONG IoPageReadIrpAllocationFailure = 0;
 volatile LONG IoPageReadNonPagefileIrpAllocationFailure = 0;
 
@@ -1492,10 +1518,20 @@ NtFsControlFile(IN HANDLE DeviceHandle,
                                 FALSE);
 }
 
+/*
+ * Common worker for NtFlushBuffersFile and NtFlushBuffersFileEx.
+ * FlushFlags takes the FLUSH_FLAGS_* values, each of which selects a
+ * distinct minor function code for the IRP_MJ_FLUSH_BUFFERS request so
+ * that FSDs which understand the codes can reduce the scope of the flush.
+ * Parameters and ParametersSize are reserved and must be zero.
+ */
+static
 NTSTATUS
-NTAPI
-NtFlushBuffersFile(IN HANDLE FileHandle,
-                   OUT PIO_STATUS_BLOCK IoStatusBlock)
+IopFlushBuffersFile(IN HANDLE FileHandle,
+                    IN ULONG FlushFlags,
+                    IN PVOID Parameters,
+                    IN ULONG ParametersSize,
+                    OUT PIO_STATUS_BLOCK IoStatusBlock)
 {
     PFILE_OBJECT FileObject;
     PIRP Irp;
@@ -1507,6 +1543,7 @@ NtFlushBuffersFile(IN HANDLE FileHandle,
     OBJECT_HANDLE_INFORMATION ObjectHandleInfo;
     KPROCESSOR_MODE PreviousMode = KeGetPreviousMode();
     IO_STATUS_BLOCK KernelIosb;
+    UCHAR MinorFunction;
     PAGED_CODE();
     IOTRACE(IO_API_DEBUG, "FileHandle: %p\n", FileHandle);
 
@@ -1534,6 +1571,15 @@ NtFlushBuffersFile(IN HANDLE FileHandle,
                                        (PVOID*)&FileObject,
                                        &ObjectHandleInfo);
     if (!NT_SUCCESS(Status)) return Status;
+
+    /* The extended parameter block is reserved: no caller may pass one yet.
+       Windows validates this after the handle so that an invalid handle
+       still takes precedence */
+    if ((Parameters != NULL) || (ParametersSize != 0))
+    {
+        ObDereferenceObject(FileObject);
+        return STATUS_INVALID_PARAMETER;
+    }
 
     /*
      * Check if the handle has either FILE_WRITE_DATA or FILE_APPEND_DATA was
@@ -1594,9 +1640,29 @@ NtFlushBuffersFile(IN HANDLE FileHandle,
     Irp->Tail.Overlay.OriginalFileObject = FileObject;
     Irp->Overlay.AsynchronousParameters.UserApcRoutine = NULL;
 
+    /* Each flush flag maps to its own minor code, checked in this priority
+       order; unknown bits are ignored, matching the Windows I/O manager */
+    if (FlushFlags & FLUSH_FLAGS_FILE_DATA_ONLY)
+    {
+        MinorFunction = IRP_MN_FLUSH_DATA_ONLY;
+    }
+    else if (FlushFlags & FLUSH_FLAGS_NO_SYNC)
+    {
+        MinorFunction = IRP_MN_FLUSH_NO_SYNC;
+    }
+    else if (FlushFlags & FLUSH_FLAGS_FILE_DATA_SYNC_ONLY)
+    {
+        MinorFunction = IRP_MN_FLUSH_DATA_SYNC_ONLY;
+    }
+    else
+    {
+        MinorFunction = 0;
+    }
+
     /* Set up Stack Data */
     StackPtr = IoGetNextIrpStackLocation(Irp);
     StackPtr->MajorFunction = IRP_MJ_FLUSH_BUFFERS;
+    StackPtr->MinorFunction = MinorFunction;
     StackPtr->FileObject = FileObject;
 
     /* Call the Driver */
@@ -1629,15 +1695,55 @@ NtFlushBuffersFile(IN HANDLE FileHandle,
  */
 NTSTATUS
 NTAPI
-NtNotifyChangeDirectoryFile(IN HANDLE FileHandle,
-                            IN HANDLE EventHandle OPTIONAL,
-                            IN PIO_APC_ROUTINE ApcRoutine OPTIONAL,
-                            IN PVOID ApcContext OPTIONAL,
-                            OUT PIO_STATUS_BLOCK IoStatusBlock,
-                            OUT PVOID Buffer,
-                            IN ULONG BufferSize,
-                            IN ULONG CompletionFilter,
-                            IN BOOLEAN WatchTree)
+NtFlushBuffersFile(IN HANDLE FileHandle,
+                   OUT PIO_STATUS_BLOCK IoStatusBlock)
+{
+    /* Call the common worker for a full data, metadata and device flush */
+    return IopFlushBuffersFile(FileHandle, 0, NULL, 0, IoStatusBlock);
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+NtFlushBuffersFileEx(IN HANDLE FileHandle,
+                     IN ULONG Flags,
+                     IN PVOID Parameters,
+                     IN ULONG ParametersSize,
+                     OUT PIO_STATUS_BLOCK IoStatusBlock)
+{
+    /* Call the common worker. The FLUSH_FLAGS_* values are advisory
+       reductions of the flush scope: FSDs which do not understand the
+       corresponding minor codes perform a full flush instead */
+    return IopFlushBuffersFile(FileHandle,
+                               Flags,
+                               Parameters,
+                               ParametersSize,
+                               IoStatusBlock);
+}
+
+/*
+ * Common worker for NtNotifyChangeDirectoryFile and
+ * NtNotifyChangeDirectoryFileEx. DirectoryNotifyInformation requests
+ * become the classic IRP_MN_NOTIFY_CHANGE_DIRECTORY; any other
+ * information class becomes IRP_MN_NOTIFY_CHANGE_DIRECTORY_EX with the
+ * class carried in Parameters.NotifyDirectoryEx. The I/O manager performs
+ * no validation of the class value: an FSD which cannot service the Ex
+ * minor code fails the request instead (this mirrors Windows).
+ */
+static
+NTSTATUS
+IopNotifyChangeDirectoryFile(IN HANDLE FileHandle,
+                             IN HANDLE EventHandle OPTIONAL,
+                             IN PIO_APC_ROUTINE ApcRoutine OPTIONAL,
+                             IN PVOID ApcContext OPTIONAL,
+                             OUT PIO_STATUS_BLOCK IoStatusBlock,
+                             OUT PVOID Buffer,
+                             IN ULONG BufferSize,
+                             IN ULONG CompletionFilter,
+                             IN BOOLEAN WatchTree,
+                             IN DIRECTORY_NOTIFY_INFORMATION_CLASS DirectoryNotifyInformationClass)
 {
     PIRP Irp;
     PKEVENT Event = NULL;
@@ -1748,12 +1854,23 @@ NtNotifyChangeDirectoryFile(IN HANDLE FileHandle,
     /* Set up Stack Data */
     IoStack = IoGetNextIrpStackLocation(Irp);
     IoStack->MajorFunction = IRP_MJ_DIRECTORY_CONTROL;
-    IoStack->MinorFunction = IRP_MN_NOTIFY_CHANGE_DIRECTORY;
     IoStack->FileObject = FileObject;
 
-    /* Set parameters */
-    IoStack->Parameters.NotifyDirectory.CompletionFilter = CompletionFilter;
-    IoStack->Parameters.NotifyDirectory.Length = BufferSize;
+    /* Set parameters. NotifyDirectoryEx shares the Length and
+       CompletionFilter layout with NotifyDirectory, so both minor codes
+       are served by the same stores */
+    IoStack->Parameters.NotifyDirectoryEx.CompletionFilter = CompletionFilter;
+    IoStack->Parameters.NotifyDirectoryEx.Length = BufferSize;
+    if (DirectoryNotifyInformationClass == DirectoryNotifyInformation)
+    {
+        IoStack->MinorFunction = IRP_MN_NOTIFY_CHANGE_DIRECTORY;
+    }
+    else
+    {
+        IoStack->MinorFunction = IRP_MN_NOTIFY_CHANGE_DIRECTORY_EX;
+        IoStack->Parameters.NotifyDirectoryEx.DirectoryNotifyInformationClass =
+            DirectoryNotifyInformationClass;
+    }
     if (WatchTree) IoStack->Flags = SL_WATCH_TREE;
 
     /* Perform the call */
@@ -1764,6 +1881,64 @@ NtNotifyChangeDirectoryFile(IN HANDLE FileHandle,
                                         PreviousMode,
                                         LockedForSync,
                                         IopOtherTransfer);
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+NtNotifyChangeDirectoryFile(IN HANDLE FileHandle,
+                            IN HANDLE EventHandle OPTIONAL,
+                            IN PIO_APC_ROUTINE ApcRoutine OPTIONAL,
+                            IN PVOID ApcContext OPTIONAL,
+                            OUT PIO_STATUS_BLOCK IoStatusBlock,
+                            OUT PVOID Buffer,
+                            IN ULONG BufferSize,
+                            IN ULONG CompletionFilter,
+                            IN BOOLEAN WatchTree)
+{
+    /* Call the common worker for the classic FILE_NOTIFY_INFORMATION
+       output format */
+    return IopNotifyChangeDirectoryFile(FileHandle,
+                                        EventHandle,
+                                        ApcRoutine,
+                                        ApcContext,
+                                        IoStatusBlock,
+                                        Buffer,
+                                        BufferSize,
+                                        CompletionFilter,
+                                        WatchTree,
+                                        DirectoryNotifyInformation);
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+NtNotifyChangeDirectoryFileEx(IN HANDLE FileHandle,
+                              IN HANDLE EventHandle OPTIONAL,
+                              IN PIO_APC_ROUTINE ApcRoutine OPTIONAL,
+                              IN PVOID ApcContext OPTIONAL,
+                              OUT PIO_STATUS_BLOCK IoStatusBlock,
+                              OUT PVOID Buffer,
+                              IN ULONG BufferSize,
+                              IN ULONG CompletionFilter,
+                              IN BOOLEAN WatchTree,
+                              IN DIRECTORY_NOTIFY_INFORMATION_CLASS DirectoryNotifyInformationClass)
+{
+    /* Call the common worker */
+    return IopNotifyChangeDirectoryFile(FileHandle,
+                                        EventHandle,
+                                        ApcRoutine,
+                                        ApcContext,
+                                        IoStatusBlock,
+                                        Buffer,
+                                        BufferSize,
+                                        CompletionFilter,
+                                        WatchTree,
+                                        DirectoryNotifyInformationClass);
 }
 
 /*
