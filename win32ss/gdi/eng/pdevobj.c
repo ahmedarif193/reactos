@@ -825,8 +825,8 @@ EngpGetPDEV(
     /* Acquire PDEV lock */
     EngAcquireSemaphoreShared(ghsemPDEV);
 
-    /* Did the caller pass a device name? */
-    if (pustrDeviceName)
+    /* Did the caller pass a device name after mode devices were initialized? */
+    if (pustrDeviceName && gpmdev)
     {
         /* Loop all present PDEVs */
         for (i = 0; i < gpmdev->cDev; i++)
