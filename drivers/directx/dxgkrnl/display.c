@@ -38,54 +38,8 @@
 #include "d3dkmt.h"
 #include <ntddvdeo.h>
 #include <ntstrsafe.h>
-
-/*
- * Custom ReactOS video IOCTLs used by framebuf.dll / win32ss to probe
- * for extended miniport capabilities.  These are NOT standard ntddvdeo.h
- * IOCTLs; they are ReactOS-specific extensions.
- *
- * We define them locally to avoid pulling in win32ss headers from dxgkrnl.
- *
- * IOCTL_VIDEO_UEFIFB_QUERY_CAPS  (0x232440): framebuf probes for UEFI FB caps
- * IOCTL_VIDEO_VMWARE_QUERY_CAPS  (0x232400): win32ss probes for VMware SVGA
- */
-#ifndef IOCTL_VIDEO_UEFIFB_QUERY_CAPS
-#define IOCTL_VIDEO_UEFIFB_QUERY_CAPS \
-    CTL_CODE(FILE_DEVICE_VIDEO, 0x910, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#endif
-
-#ifndef IOCTL_VIDEO_VMWARE_QUERY_CAPS
-#define IOCTL_VIDEO_VMWARE_QUERY_CAPS \
-    CTL_CODE(FILE_DEVICE_VIDEO, 0x900, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#endif
-
-#ifndef IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT
-#define IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT \
-    CTL_CODE(FILE_DEVICE_VIDEO, 0x920, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#endif
-
-/* DWM signals composition begin/end so the present worker can avoid
- * copying a partially-drawn shadow framebuffer mid-BitBlt.            */
-#define IOCTL_VIDEO_DXGK_COMPOSITION_BEGIN \
-    CTL_CODE(FILE_DEVICE_VIDEO, 0x921, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_VIDEO_DXGK_COMPOSITION_END \
-    CTL_CODE(FILE_DEVICE_VIDEO, 0x922, METHOD_BUFFERED, FILE_ANY_ACCESS)
-
-/*
- * UEFIFB capability structure -- matches win32ss/include/uefifb/uefifb_ioctl.h.
- * We define a local copy to avoid a cross-subsystem dependency.
- */
-#define DXGK_UEFIFB_CAPS_VERSION       2
-#define DXGK_UEFIFB_CAP_LINEAR_ONLY    0x00000001
-
-typedef struct _DXGK_UEFIFB_CAPS
-{
-    ULONG     Version;
-    ULONG     Caps;
-    ULONG     OutputCount;
-    ULONG     PrimaryChild;
-    ULONGLONG FrameBufferLength;
-} DXGK_UEFIFB_CAPS, *PDXGK_UEFIFB_CAPS;
+/* IOCTL_VIDEO_DXGK_* present-path contract, shared with cdd/win32k. */
+#include <reactos/dwmframe.h>
 
 /* TAG_DXGK_DISPLAY is now in dxgkrnl_private.h */
 
@@ -126,22 +80,18 @@ DxgkpSelectDisplayDriver(
 {
     /*
      * cdd.dll (ReactOS Canonical Display Driver, win32ss/drivers/displays/cdd)
-     * is the WDDM GDI display driver: it stands up the primary surface and
-     * presents through the WDDM path (currently dxgkrnl's IOCTL_VIDEO_* shadow
-     * framebuffer + present timer -> firmware GOP), delegating all drawing to
-     * the GDI engine, and exposes the DWM composition escape contract. Full
-     * WDDM adapters bind to cdd; if cdd ever fails to load, win32k falls back
-     * along the InstalledDisplayDrivers list (framebuf remains on the media as
-     * the display-only fallback).
+     * is the WDDM GDI display driver for EVERY WDDM adapter, exactly as on
+     * Windows — including display-only (DOD) miniports such as viogpudo. It
+     * stands up the primary surface, lets the GDI engine draw into it, and
+     * presents through the WDDM path (dxgkrnl's shadow framebuffer + present
+     * timer -> firmware GOP for Option A; a dxgkrnl-owned D3DKMT primary for
+     * Option B), and exposes the DWM composition escape contract. framebuf is
+     * written after cdd in the InstalledDisplayDrivers multi-sz as the
+     * load/enable fallback (see DxgkpRegWriteDisplayDrivers), so a cdd failure
+     * still boots the desktop.
      */
-    if (Adapter != NULL &&
-        Adapter->MiniportContext != NULL &&
-        !Adapter->MiniportContext->IsDisplayOnlyDriver)
-    {
-        return L"cdd";
-    }
-
-    return L"framebuf";
+    UNREFERENCED_PARAMETER(Adapter);
+    return L"cdd";
 }
 
 /*
@@ -255,36 +205,41 @@ DxgkpRegWriteString(
 }
 
 /* ========================================================================
- * Registry helper -- write a REG_MULTI_SZ value (single string)
+ * Write InstalledDisplayDrivers as the ordered list {Primary, "framebuf"}.
+ * win32k tries the entries in order, so cdd is loaded first and framebuf is
+ * the load/enable fallback that keeps the desktop coming up if cdd fails.
  * ====================================================================== */
 static NTSTATUS
-DxgkpRegWriteMultiString(
+DxgkpRegWriteDisplayDrivers(
     _In_ HANDLE  KeyHandle,
-    _In_ PCWSTR  ValueName,
-    _In_ PCWSTR  Value)
+    _In_ PCWSTR  Primary)
 {
     UNICODE_STRING Name;
-    /* REG_MULTI_SZ: string + NUL + extra NUL terminator */
-    ULONG Len = (ULONG)((wcslen(Value) + 2) * sizeof(WCHAR));
-    PWCHAR Buffer;
+    static const WCHAR Fallback[] = L"framebuf";
+    SIZE_T PrimCch = wcslen(Primary);
+    SIZE_T FbCch = (wcscmp(Primary, Fallback) != 0) ? wcslen(Fallback) : 0;
+    /* REG_MULTI_SZ: Primary '\0' [Fallback '\0'] final '\0' */
+    ULONG Len = (ULONG)((PrimCch + 1 + (FbCch ? FbCch + 1 : 0) + 1) * sizeof(WCHAR));
+    PWCHAR Buffer, p;
+    NTSTATUS Status;
 
-    RtlInitUnicodeString(&Name, ValueName);
+    RtlInitUnicodeString(&Name, L"InstalledDisplayDrivers");
 
     Buffer = ExAllocatePoolWithTag(PagedPool, Len, TAG_DXGK_DISPLAY);
     if (!Buffer)
         return STATUS_INSUFFICIENT_RESOURCES;
 
     RtlZeroMemory(Buffer, Len);
-    wcscpy(Buffer, Value);
-    /* Buffer[wcslen(Value)] is already NUL from RtlZeroMemory */
-    /* Buffer[wcslen(Value)+1] is the double-NUL terminator */
+    p = Buffer;
+    wcscpy(p, Primary);
+    p += PrimCch + 1;
+    if (FbCch)
+        wcscpy(p, Fallback);
+    /* trailing double-NUL already zeroed by RtlZeroMemory */
 
-    {
-        NTSTATUS Status = ZwSetValueKey(KeyHandle, &Name, 0, REG_MULTI_SZ,
-                                        Buffer, Len);
-        ExFreePoolWithTag(Buffer, TAG_DXGK_DISPLAY);
-        return Status;
-    }
+    Status = ZwSetValueKey(KeyHandle, &Name, 0, REG_MULTI_SZ, Buffer, Len);
+    ExFreePoolWithTag(Buffer, TAG_DXGK_DISPLAY);
+    return Status;
 }
 
 static VOID
@@ -915,24 +870,6 @@ DxgkpBlitShadowToGop(
     if (Src == NULL || Dst == NULL || SrcPitch <= 0 || DstPitch <= 0 || GopSize == 0)
         return STATUS_NOT_SUPPORTED;
 
-    /* One-time geometry diagnostic (always-on, single line) to pin the black-
-     * region cause: shows whether committed mode / shadow pitch / GOP pitch /
-     * GOP extent all agree. Remove once the present path is confirmed. */
-    {
-        static LONG s_BlitDiag = 0;
-        if (InterlockedCompareExchange(&s_BlitDiag, 1, 0) == 0)
-        {
-            DXGKRNL_ERR("BLITDIAG: committed=%lux%lu srcPitch=%ld dstPitch=%ld "
-                        "gopSize=%Iu gopRows=%ld rect=(%ld,%ld)-(%ld,%ld) "
-                        "shadow=%p gop=%p\n",
-                        Adapter->CommittedWidth, Adapter->CommittedHeight,
-                        SrcPitch, DstPitch, GopSize,
-                        (LONG)(GopSize / (SIZE_T)DstPitch),
-                        Rect->left, Rect->top, Rect->right, Rect->bottom,
-                        Src, Dst);
-        }
-    }
-
     Left = Rect->left; Top = Rect->top; Right = Rect->right; Bottom = Rect->bottom;
     if (Left < 0) Left = 0;
     if (Top < 0) Top = 0;
@@ -1256,6 +1193,28 @@ DxgkpHasPendingDirtyRect(
  * and eliminates the work item leak that was exhausting nonpaged pool. */
 static PIO_WORKITEM g_PresentWorkItem = NULL;
 
+/*
+ * Serializes every scan-out copy (sync IOCTL presents, the worker fallback)
+ * against each other AND lets COMPOSITION_BEGIN drain an in-flight worker
+ * copy before the compositor starts rewriting the shadow framebuffer — the
+ * copy takes milliseconds into a write-combined scan-out on real hardware,
+ * so an undrained overlap scans out a half-composed frame (visible as other
+ * windows flickering during a drag on rpi5vc4; QEMU copies are too fast to
+ * catch it).
+ */
+static KMUTEX g_PresentMutex;
+static LONG g_PresentMutexInited = 0; /* 0 = no, -1 = initializing, 1 = ready */
+
+static VOID
+DxgkpEnsurePresentMutex(VOID)
+{
+    if (InterlockedCompareExchange(&g_PresentMutexInited, -1, 0) == 0)
+    {
+        KeInitializeMutex(&g_PresentMutex, 0);
+        InterlockedExchange(&g_PresentMutexInited, 1);
+    }
+}
+
 static VOID
 NTAPI
 DxgkpPresentWorkItemRoutineEx(
@@ -1280,6 +1239,80 @@ DxgkpQueuePresentWorkItem(
     return TRUE;
 }
 
+/*
+ * Claim the single present-dispatch slot and queue the present worker,
+ * rolling the claim back if the work item cannot be queued.  Returns TRUE
+ * when the worker was queued (it owns releasing the slot).
+ */
+static BOOLEAN
+DxgkpTryDispatchPresentWork(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    if (InterlockedCompareExchange(&g_PresentDispatchBusy, 1, 0) != 0)
+        return FALSE;
+
+    if (!DxgkpQueuePresentWorkItem(Adapter))
+    {
+        InterlockedExchange(&g_PresentDispatchBusy, 0);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+/*
+ * DxgkpPresentSyncNow
+ *
+ * Present the accumulated dirty rect NOW, in the caller's context, under the
+ * present mutex. The caller is cdd's draw/escape path, which already holds the
+ * win32k device lock — so the scan-out copy can never interleave a GDI write
+ * to the shadow framebuffer. Falls back to the worker when not at PASSIVE.
+ */
+static VOID
+DxgkpPresentSyncNow(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    RECTL DirtyRect;
+
+    if (Adapter == NULL || Adapter->ShadowFb == NULL || !Adapter->VidPnCommitted)
+        return;
+
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL ||
+        InterlockedCompareExchange(&g_PresentMutexInited, 0, 0) != 1)
+    {
+        DxgkpTryDispatchPresentWork(Adapter);
+        return;
+    }
+
+    /*
+     * TRY-acquire only (zero timeout). The caller is win32k's escape path
+     * holding the USER lock; blocking on the present mutex (held by the worker
+     * across a potentially-long miniport present) would pin the USER lock and
+     * freeze the GUI on SMP. If a present is in-flight, leave the dirty rect
+     * pending — COMPOSITION_END has already cleared the composition flag, so
+     * the periodic worker presents it on the next tick.
+     */
+    {
+        LARGE_INTEGER NoWait;
+        NoWait.QuadPart = 0;
+        if (KeWaitForSingleObject(&g_PresentMutex, Executive, KernelMode,
+                                  FALSE, &NoWait) != STATUS_SUCCESS)
+        {
+            /* A present is in-flight; the dirty rect stays pending. Kick the
+             * async worker so it is still presented even when the periodic
+             * present timer is not running (otherwise the newly-dirtied region
+             * could stay unpainted). */
+            DxgkpTryDispatchPresentWork(Adapter);
+            return;
+        }
+    }
+
+    if (DxgkpConsumeDirtyRect(Adapter, &DirtyRect))
+        DxgkpPresentShadowFbInternal(Adapter, (const RECT *)&DirtyRect, "sync");
+
+    KeReleaseMutex(&g_PresentMutex, FALSE);
+}
+
 /* ========================================================================
  * DxgkpPresentTimerDpc
  *
@@ -1302,27 +1335,25 @@ DxgkpPresentWorkItemRoutineEx(
 
     if (Adapter != NULL && Adapter->ShadowFb != NULL && Adapter->VidPnCommitted)
     {
+        DxgkpEnsurePresentMutex();
+        KeWaitForSingleObject(&g_PresentMutex, Executive, KernelMode, FALSE, NULL);
+
         /*
-         * If DWM is mid-composition BitBlt, skip this present to avoid
-         * copying a partially-drawn frame.  The dirty rect stays pending
-         * and will be picked up on the next timer tick or re-check below.
+         * Composition check UNDER the mutex: a COMPOSITION_BEGIN racing in
+         * after an early flag check but before the mutex wait would see the
+         * mutex unlocked, skip the drain, and start rewriting the shadow
+         * while this worker presents. Checked here, the drain is airtight.
+         * Stale-BEGIN recovery (compositing thread died mid-frame) as before.
          */
         if (InterlockedCompareExchange(&Adapter->DwmCompositionInProgress, 0, 0) != 0)
         {
-            /*
-             * A composition BitBlt is in progress — normally skip so we don't
-             * present a partially-drawn frame.  But if COMPOSITION_END was never
-             * delivered (compositing thread died mid-frame), the flag sticks and
-             * every present is skipped, freezing the display.  Recover: if the
-             * BEGIN is older than the stale threshold, treat it as abandoned,
-             * clear the flag and present anyway.
-             */
             ULONGLONG NowC   = (ULONGLONG)DxgkpDisplayTraceNow100ns();
             ULONGLONG BeginC = (ULONGLONG)InterlockedCompareExchange64(
                                    &g_DwmCompositionBegin100ns, 0, 0);
             if (BeginC == 0 || NowC <= BeginC ||
                 (NowC - BeginC) < DXGK_DWM_COMPOSITION_STALE_100NS)
             {
+                KeReleaseMutex(&g_PresentMutex, FALSE);
                 InterlockedExchange(&g_PresentDispatchBusy, 0);
                 return;
             }
@@ -1339,9 +1370,30 @@ DxgkpPresentWorkItemRoutineEx(
 
         HasDirty = DxgkpConsumeDirtyRect(Adapter, &DirtyRect);
         if (HasDirty)
+        {
             DxgkpPresentShadowFbInternal(Adapter, (const RECT *)&DirtyRect, "dirty");
+        }
         else
-            DxgkpPresentShadowFb(Adapter);
+        {
+            /*
+             * No dirty rect left (the sync path consumed it): full-screen
+             * refresh ONLY when the display has been quiet — a GDI writer may
+             * be mid-draw on the shadow FB and the worker holds no devlock,
+             * so presenting here during activity is the last tear window.
+             */
+            ULONGLONG NowW = DxgkpDisplayTraceNow100ns();
+            ULONGLONG LastDirtyW = (ULONGLONG)InterlockedCompareExchange64(&g_LastDirtyNotify100ns, 0, 0);
+            ULONGLONG LastPresentW = (ULONGLONG)InterlockedCompareExchange64(&g_LastPresentSubmit100ns, 0, 0);
+            BOOLEAN RecentActivity =
+                (LastDirtyW != 0 && NowW > LastDirtyW &&
+                 (NowW - LastDirtyW) < (250ULL * 10000ULL)) ||
+                (LastPresentW != 0 && NowW > LastPresentW &&
+                 (NowW - LastPresentW) < (250ULL * 10000ULL));
+
+            if (!RecentActivity)
+                DxgkpPresentShadowFb(Adapter);
+        }
+        KeReleaseMutex(&g_PresentMutex, FALSE);
     }
 
     /* The periodic present timer owns dispatch pacing. */
@@ -1351,15 +1403,16 @@ DxgkpPresentWorkItemRoutineEx(
      * Re-check: a new dirty rect may have arrived while we were busy
      * presenting the previous one.  Re-queue immediately so we don't
      * wait for the next 15 ms timer tick — this eliminates dropped
-     * frames during heavy GUI activity.
+     * frames during heavy GUI activity.  Skip while dwm owns the frame:
+     * it re-presents on its own vblank tick, so only the non-composited
+     * direct-draw path chains dirty rects here (no self-sustaining async
+     * present racing dwm's shadow write).
      */
-    if (Adapter != NULL && DxgkpHasPendingDirtyRect(Adapter))
+    if (Adapter != NULL && Adapter->PresentTimerActive &&
+        ReadPointerNoFence((PVOID volatile *)&Adapter->DwmVblankEvent) == NULL &&
+        DxgkpHasPendingDirtyRect(Adapter))
     {
-        if (InterlockedCompareExchange(&g_PresentDispatchBusy, 1, 0) == 0)
-        {
-            if (!DxgkpQueuePresentWorkItem(Adapter))
-                InterlockedExchange(&g_PresentDispatchBusy, 0);
-        }
+        DxgkpTryDispatchPresentWork(Adapter);
     }
 }
 
@@ -1381,8 +1434,27 @@ DxgkpPresentTimerDpc(
     UNREFERENCED_PARAMETER(SystemArgument2);
 
     if (Adapter == NULL || Adapter->ShadowFb == NULL ||
+        !Adapter->PresentTimerActive ||
         !Adapter->VidPnCommitted || Adapter->FunctionalDeviceObject == NULL)
         return;
+
+    /* Scanout heartbeat for dwm: this timer IS the display path's refresh. */
+    {
+        PKEVENT Vblank = (PKEVENT)ReadPointerNoFence((PVOID volatile *)&Adapter->DwmVblankEvent);
+        if (Vblank != NULL)
+        {
+            /*
+             * WDDM/DWM parity: while dwm.exe owns the frame it presents every
+             * composed frame itself via the COMPOSITION_END sync present. A
+             * periodic scanout copy racing dwm's shadow write is the tearing
+             * source, so this timer only PACES dwm (signals vblank) and never
+             * presents. The direct-draw fallback resumes when dwm detaches and
+             * the vblank event is cleared.
+             */
+            KeSetEvent(Vblank, IO_NO_INCREMENT, FALSE);
+            return;
+        }
+    }
 
     TimerSeq = InterlockedIncrement(&g_PresentTimerTraceCount);
     Now100ns = DxgkpDisplayTraceNow100ns();
@@ -1390,16 +1462,13 @@ DxgkpPresentTimerDpc(
 
     if (HasDirty)
     {
-        if (InterlockedCompareExchange(&g_PresentDispatchBusy, 1, 0) == 0)
+        if (DxgkpTryDispatchPresentWork(Adapter))
         {
             if (TimerSeq <= DXGK_PRESENT_TRACE_LOG_LIMIT)
             {
                 DXGKRNL_TRACE("DxgkpPresentTimerDpc: seq=%ld queueing dirty present work item\n",
                               TimerSeq);
             }
-
-            if (!DxgkpQueuePresentWorkItem(Adapter))
-                InterlockedExchange(&g_PresentDispatchBusy, 0);
         }
         else if (TimerSeq <= DXGK_PRESENT_TRACE_LOG_LIMIT)
         {
@@ -1429,8 +1498,11 @@ DxgkpPresentTimerDpc(
     {
         ULONGLONG LastPresent100ns = (ULONGLONG)InterlockedCompareExchange64(&g_LastPresentSubmit100ns, 0, 0);
 
+        /* Pure safety net: draws now present synchronously, so an idle
+         * desktop needs no periodic full-screen scan-out copy (a constant
+         * ~500 MB/s of write-combined traffic on rpi5vc4). */
         if (Now100ns > LastPresent100ns &&
-            (Now100ns - LastPresent100ns) < (30ULL * 10000ULL))
+            (Now100ns - LastPresent100ns) < (250ULL * 10000ULL))
         {
             if (TimerSeq <= DXGK_PRESENT_TRACE_LOG_LIMIT)
             {
@@ -1441,17 +1513,12 @@ DxgkpPresentTimerDpc(
         }
     }
 
-    if (InterlockedCompareExchange(&g_PresentDispatchBusy, 1, 0) == 0)
+    if (DxgkpTryDispatchPresentWork(Adapter))
     {
         if (TimerSeq <= DXGK_PRESENT_TRACE_LOG_LIMIT)
         {
             DXGKRNL_TRACE("DxgkpPresentTimerDpc: seq=%ld queueing work item "
                           "(periodic present active)\n", TimerSeq);
-        }
-
-        if (!DxgkpQueuePresentWorkItem(Adapter))
-        {
-            InterlockedExchange(&g_PresentDispatchBusy, 0);
         }
     }
     else if (TimerSeq <= DXGK_PRESENT_TRACE_LOG_LIMIT)
@@ -1479,6 +1546,7 @@ DxgkpStartPresentTimer(
     if (Adapter->PresentTimerActive)
         return;
 
+    DxgkpEnsurePresentMutex();
     KeInitializeSpinLock(&Adapter->PresentLock);
     g_PresentDirtyRectValid = FALSE;
     InterlockedExchange64(&g_LastDirtyNotify100ns, 0);
@@ -1509,14 +1577,219 @@ DxgkpStopPresentTimer(
 {
     if (Adapter->PresentTimerActive)
     {
-        KeCancelTimer(&Adapter->PresentTimer);
+        /* Clear the active flag first: it gates the worker's self-requeue and
+         * the DPC, so no new present work starts while we tear down. */
         Adapter->PresentTimerActive = FALSE;
+        KeCancelTimer(&Adapter->PresentTimer);
+
+        /*
+         * A DPC may already be in flight and a present worker may be mid-
+         * PresentDisplayOnly on ShadowFb. Flush the DPC queues, then wait for
+         * the dispatch slot to clear — callers free or swap ShadowFb right
+         * after this returns, so returning with a live worker would hand the
+         * miniport a dangling source buffer.
+         */
+        KeFlushQueuedDpcs();
+        DxgkpWaitForFlagClear(&g_PresentDispatchBusy);
+
         g_PresentDirtyRectValid = FALSE;
         InterlockedExchange64(&g_LastDirtyNotify100ns, 0);
         InterlockedExchange64(&g_LastPresentSubmit100ns, 0);
-        InterlockedExchange(&g_PresentDispatchBusy, 0);
         DXGKRNL_TRACE("DxgkpStopPresentTimer: stopped\n");
     }
+}
+
+/* ========================================================================
+ * DxgkDisplayVsyncFlush
+ *
+ * Called from the adapter DPC when the miniport delivered a CRTC_VSYNC
+ * notification (enabled via DxgkDdiControlInterrupt at adapter start).
+ * Flushes any dirty rects accumulated since the last vblank so presents
+ * pace to the scanout instead of waiting for the fallback present timer.
+ * The free-running timer stays armed as a safety net for adapters whose
+ * vsync source stalls.
+ *
+ * IRQL: DISPATCH_LEVEL (adapter DPC)
+ * ====================================================================== */
+VOID
+DxgkDisplayVsyncFlush(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    if (Adapter == NULL || Adapter != g_DisplayAdapter)
+        return;
+
+    if (Adapter->PresentTimerActive &&
+        DxgkpHasPendingDirtyRect(Adapter) &&
+        InterlockedCompareExchange(&Adapter->DwmCompositionInProgress, 0, 0) == 0)
+    {
+        DxgkpTryDispatchPresentWork(Adapter);
+    }
+}
+
+/* ========================================================================
+ * Hardware-pointer bridge
+ *
+ * The display driver (cdd) drives the cursor with the XPDM pointer IOCTLs
+ * (QUERY_POINTER_CAPABILITIES / SET_POINTER_ATTR / SET_POINTER_POSITION /
+ * ENABLE / DISABLE).  A WDDM miniport exposes its cursor through
+ * DxgkDdiSetPointerShape/Position instead, so translate the IOCTLs onto
+ * those DDIs.  Capabilities come from the miniport's
+ * DxgkDdiQueryAdapterInfo(DXGKQAITYPE_DRIVERCAPS) (queried once): a
+ * color-pointer cap plus both pointer DDIs enables the bridge.  Otherwise
+ * the IOCTLs keep failing and cdd falls back to the GDI software cursor.
+ * ====================================================================== */
+
+static BOOLEAN
+DxgkpPointerBridgeSupported(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    UCHAR CapsBuffer[DXGKP_DRIVERCAPS_QUERY_SIZE];
+    PDXGK_DRIVERCAPS Caps = (PDXGK_DRIVERCAPS)CapsBuffer;
+    NTSTATUS Status;
+
+    if (Adapter == NULL || Adapter->MiniportContext == NULL)
+        return FALSE;
+
+    if (Adapter->PointerCapsQueried)
+        return Adapter->PointerHwSupported;
+
+    Adapter->PointerCapsQueried = TRUE;
+    Adapter->PointerHwSupported = FALSE;
+
+    if (DXGK_CB(Adapter, DxgkDdiSetPointerShape) == NULL ||
+        DXGK_CB(Adapter, DxgkDdiSetPointerPosition) == NULL)
+    {
+        return FALSE;
+    }
+
+    Status = DxgkpQueryDriverCaps(Adapter, Caps);
+
+    if (!NT_SUCCESS(Status) ||
+        !Caps->PointerCaps.Color ||
+        Caps->MaxPointerWidth == 0 ||
+        Caps->MaxPointerHeight == 0)
+    {
+        DXGKRNL_TRACE("DxgkpPointerBridgeSupported: no hardware pointer "
+                      "(status=0x%08lX color=%u %ux%u)\n",
+                      Status, Caps->PointerCaps.Color,
+                      Caps->MaxPointerWidth, Caps->MaxPointerHeight);
+        return FALSE;
+    }
+
+    Adapter->PointerMaxWidth = Caps->MaxPointerWidth;
+    Adapter->PointerMaxHeight = Caps->MaxPointerHeight;
+    Adapter->PointerHwSupported = TRUE;
+
+    DXGKRNL_TRACE("DxgkpPointerBridgeSupported: hardware pointer %lux%lu\n",
+                  Adapter->PointerMaxWidth, Adapter->PointerMaxHeight);
+    return TRUE;
+}
+
+/* Push the tracked pointer position/visibility to the miniport. */
+static NTSTATUS
+DxgkpPointerBridgeSetPosition(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PDXGKDDI_SET_POINTER_POSITION PfnSetPosition;
+    DXGKARG_SETPOINTERPOSITION PositionArgs;
+    NTSTATUS Status;
+
+    PfnSetPosition = DXGK_CB(Adapter, DxgkDdiSetPointerPosition);
+    if (PfnSetPosition == NULL)
+        return STATUS_NOT_SUPPORTED;
+
+    RtlZeroMemory(&PositionArgs, sizeof(PositionArgs));
+    PositionArgs.VidPnSourceId = 0;
+    PositionArgs.X = Adapter->PointerX;
+    PositionArgs.Y = Adapter->PointerY;
+    PositionArgs.Flags.Visible = (Adapter->PointerVisible &&
+                                  Adapter->PointerShapeValid) ? 1 : 0;
+
+    _SEH2_TRY
+    {
+        Status = PfnSetPosition(Adapter->MiniportDeviceContext, &PositionArgs);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    return Status;
+}
+
+/* Translate VIDEO_POINTER_ATTRIBUTES (32bpp ARGB) to DxgkDdiSetPointerShape. */
+static NTSTATUS
+DxgkpPointerBridgeSetShape(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_reads_bytes_(AttributesSize) PVIDEO_POINTER_ATTRIBUTES Attributes,
+    _In_ ULONG AttributesSize)
+{
+    PDXGKDDI_SET_POINTER_SHAPE PfnSetShape;
+    DXGKARG_SETPOINTERSHAPE ShapeArgs;
+    ULONG RequiredSize;
+    NTSTATUS Status;
+
+    PfnSetShape = DXGK_CB(Adapter, DxgkDdiSetPointerShape);
+    if (PfnSetShape == NULL)
+        return STATUS_NOT_SUPPORTED;
+
+    if (AttributesSize < FIELD_OFFSET(VIDEO_POINTER_ATTRIBUTES, Pixels) ||
+        !(Attributes->Flags & VIDEO_MODE_COLOR_POINTER) ||
+        Attributes->Width == 0 ||
+        Attributes->Height == 0 ||
+        Attributes->Width > Adapter->PointerMaxWidth ||
+        Attributes->Height > Adapter->PointerMaxHeight ||
+        Attributes->WidthInBytes < Attributes->Width * sizeof(ULONG))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (Attributes->Height >
+        (MAXULONG - FIELD_OFFSET(VIDEO_POINTER_ATTRIBUTES, Pixels)) /
+        Attributes->WidthInBytes)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    RequiredSize = FIELD_OFFSET(VIDEO_POINTER_ATTRIBUTES, Pixels) +
+                   Attributes->WidthInBytes * Attributes->Height;
+    if (AttributesSize < RequiredSize)
+        return STATUS_BUFFER_TOO_SMALL;
+
+    RtlZeroMemory(&ShapeArgs, sizeof(ShapeArgs));
+    ShapeArgs.Flags.Color = 1;
+    ShapeArgs.Width = Attributes->Width;
+    ShapeArgs.Height = Attributes->Height;
+    ShapeArgs.Pitch = Attributes->WidthInBytes;
+    ShapeArgs.VidPnSourceId = 0;
+    ShapeArgs.pPixels = Attributes->Pixels;
+    /* The display driver already offset Column/Row by the hot spot. */
+    ShapeArgs.XHot = 0;
+    ShapeArgs.YHot = 0;
+
+    _SEH2_TRY
+    {
+        Status = PfnSetShape(Adapter->MiniportDeviceContext, &ShapeArgs);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    if (!NT_SUCCESS(Status))
+    {
+        Adapter->PointerShapeValid = FALSE;
+        return Status;
+    }
+
+    Adapter->PointerShapeValid = TRUE;
+    Adapter->PointerX = Attributes->Column;
+    Adapter->PointerY = Attributes->Row;
+    Adapter->PointerVisible = (Attributes->Enable != 0);
+
+    return DxgkpPointerBridgeSetPosition(Adapter);
 }
 
 /* ========================================================================
@@ -1862,12 +2135,28 @@ DxgkpDisplayDispatch(
             if (g_DisplayAdapter != NULL)
             {
                 DxgkpStopPresentTimer(g_DisplayAdapter);
-                if (g_DisplayAdapter->ShadowFb != NULL)
+
+                /*
+                 * Shared-primary configuration (DOD + cdd): ShadowFb is the
+                 * WDDM primary allocation's CPU mapping — owned by VidMm
+                 * (TAG_VIDMM_ALLOC) and still the committed scan-out surface.
+                 * Freeing it here would be a wrong-tag pool free and a
+                 * use-after-free under GPU DMA (the mirror of the MAP-side
+                 * guard above). Keep the pointer so the next MAP hands the
+                 * same primary back out; only a private buffer this handler
+                 * itself pool-allocated may be freed.
+                 */
+                if (!(g_DisplayAdapter->MiniportContext != NULL &&
+                      g_DisplayAdapter->MiniportContext->IsDisplayOnlyDriver &&
+                      g_DisplayAdapter->SharedPrimaryAllocationHandle != NULL))
                 {
-                    ExFreePoolWithTag(g_DisplayAdapter->ShadowFb, TAG_DXGK_DISPLAY);
-                    g_DisplayAdapter->ShadowFb = NULL;
-                    g_DisplayAdapter->ShadowFbPitch = 0;
-                    g_DisplayAdapter->ShadowFbSize = 0;
+                    if (g_DisplayAdapter->ShadowFb != NULL)
+                    {
+                        ExFreePoolWithTag(g_DisplayAdapter->ShadowFb, TAG_DXGK_DISPLAY);
+                        g_DisplayAdapter->ShadowFb = NULL;
+                        g_DisplayAdapter->ShadowFbPitch = 0;
+                        g_DisplayAdapter->ShadowFbSize = 0;
+                    }
                 }
             }
             Status = STATUS_SUCCESS;
@@ -1906,6 +2195,43 @@ DxgkpDisplayDispatch(
 
             DxgkpRecordDirtyRect(g_DisplayAdapter, DirtyRect);
             InterlockedExchange64(&g_LastDirtyNotify100ns, (LONGLONG)DxgkpDisplayTraceNow100ns());
+
+            /*
+             * Drive the present NOW, synchronously in the caller's context —
+             * this IOCTL comes from cdd's draw hooks with the win32k device
+             * lock held, so the scan-out copy is serialized against every GDI
+             * write to the shadow framebuffer (the async worker used to race
+             * them: on rpi5vc4 a copy takes milliseconds into write-combined
+             * memory, and mid-draw states reached the panel as flicker).
+             * Mid-composition rects only accumulate; COMPOSITION_END flushes.
+             */
+            if (InterlockedCompareExchange(&g_DisplayAdapter->DwmCompositionInProgress, 0, 0) == 0)
+                DxgkpPresentSyncNow(g_DisplayAdapter);
+
+            Status = STATUS_SUCCESS;
+            break;
+        }
+
+        case IOCTL_VIDEO_DXGK_REGISTER_VBLANK:
+        {
+            PULONGLONG pValue = (PULONGLONG)Irp->AssociatedIrp.SystemBuffer;
+
+            if (pValue == NULL ||
+                Stack->Parameters.DeviceIoControl.InputBufferLength < sizeof(ULONGLONG))
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+            if (g_DisplayAdapter == NULL)
+            {
+                Status = STATUS_DEVICE_NOT_READY;
+                break;
+            }
+
+            /* Kernel-internal contract (win32k -> cdd -> here): the payload
+             * is a referenced PKEVENT owned by win32k, or 0 to unregister. */
+            InterlockedExchangePointer((PVOID volatile *)&g_DisplayAdapter->DwmVblankEvent,
+                                       (PVOID)(ULONG_PTR)*pValue);
             Status = STATUS_SUCCESS;
             break;
         }
@@ -1917,6 +2243,31 @@ DxgkpDisplayDispatch(
                 InterlockedExchange64(&g_DwmCompositionBegin100ns,
                                       (LONGLONG)DxgkpDisplayTraceNow100ns());
                 InterlockedExchange(&g_DisplayAdapter->DwmCompositionInProgress, 1);
+
+                /*
+                 * Drain any in-flight worker copy BEFORE the compositor starts
+                 * rewriting the shadow framebuffer: the flag only stops future
+                 * presents, not one already scanning the surface out.
+                 *
+                 * TRY-acquire only (zero timeout). This escape runs under the
+                 * win32k USER lock (dwm's per-frame DWMPRESENTSYNC). A blocking
+                 * wait lets a present in-flight on another core pin the global
+                 * USER lock and freeze the whole GUI on SMP (cursor, input, all
+                 * windows). If a present is mid-flight, skip the drain: the flag
+                 * set above already blocks the worker's NEXT present, so the
+                 * worst case is a single torn frame, never a hang.
+                 */
+                if (KeGetCurrentIrql() == PASSIVE_LEVEL &&
+                    InterlockedCompareExchange(&g_PresentMutexInited, 0, 0) == 1)
+                {
+                    LARGE_INTEGER NoWait;
+                    NoWait.QuadPart = 0;
+                    if (KeWaitForSingleObject(&g_PresentMutex, Executive, KernelMode,
+                                              FALSE, &NoWait) == STATUS_SUCCESS)
+                    {
+                        KeReleaseMutex(&g_PresentMutex, FALSE);
+                    }
+                }
             }
             Status = STATUS_SUCCESS;
             break;
@@ -1925,7 +2276,12 @@ DxgkpDisplayDispatch(
         case IOCTL_VIDEO_DXGK_COMPOSITION_END:
         {
             if (g_DisplayAdapter != NULL)
+            {
                 InterlockedExchange(&g_DisplayAdapter->DwmCompositionInProgress, 0);
+                /* Flush the dirty rects the composition accumulated —
+                 * synchronously, still under the caller's device lock. */
+                DxgkpPresentSyncNow(g_DisplayAdapter);
+            }
             Status = STATUS_SUCCESS;
             break;
         }
@@ -1947,105 +2303,145 @@ DxgkpDisplayDispatch(
         /*
          * Pointer/cursor IOCTLs.
          *
-         * DOD (Display Only Driver) miniports do not support hardware cursors.
-         * win32ss will fall back to software cursor rendering if we return
-         * STATUS_SUCCESS for ENABLE_POINTER and STATUS_NOT_SUPPORTED for
-         * SET_POINTER_ATTR (indicating no hardware pointer capability).
-         *
-         * DISABLE_POINTER and SET_POINTER_POSITION are also handled as no-ops.
+         * Bridged to the miniport's DxgkDdiSetPointerShape/Position when it
+         * advertises a color hardware pointer (see DxgkpPointerBridge* above).
+         * Otherwise QUERY_POINTER_CAPABILITIES / SET_POINTER_ATTR fail and
+         * win32ss falls back to GDI software cursor rendering.
          */
         case IOCTL_VIDEO_ENABLE_POINTER:
         {
-            DXGKRNL_TRACE("DxgkpDisplayDispatch: IOCTL_VIDEO_ENABLE_POINTER (stub)\n");
+            DXGKRNL_TRACE("DxgkpDisplayDispatch: IOCTL_VIDEO_ENABLE_POINTER\n");
             Status = STATUS_SUCCESS;
+            if (g_DisplayAdapter != NULL &&
+                DxgkpPointerBridgeSupported(g_DisplayAdapter) &&
+                g_DisplayAdapter->PointerShapeValid)
+            {
+                g_DisplayAdapter->PointerVisible = TRUE;
+                Status = DxgkpPointerBridgeSetPosition(g_DisplayAdapter);
+            }
             break;
         }
 
         case IOCTL_VIDEO_DISABLE_POINTER:
         {
-            DXGKRNL_TRACE("DxgkpDisplayDispatch: IOCTL_VIDEO_DISABLE_POINTER (stub)\n");
+            DXGKRNL_TRACE("DxgkpDisplayDispatch: IOCTL_VIDEO_DISABLE_POINTER\n");
             Status = STATUS_SUCCESS;
+            if (g_DisplayAdapter != NULL &&
+                DxgkpPointerBridgeSupported(g_DisplayAdapter) &&
+                g_DisplayAdapter->PointerVisible)
+            {
+                g_DisplayAdapter->PointerVisible = FALSE;
+                Status = DxgkpPointerBridgeSetPosition(g_DisplayAdapter);
+            }
             break;
         }
 
         case IOCTL_VIDEO_SET_POINTER_ATTR:
         {
-            DXGKRNL_TRACE("DxgkpDisplayDispatch: IOCTL_VIDEO_SET_POINTER_ATTR (not supported)\n");
-            Status = STATUS_NOT_SUPPORTED;
+            PVIDEO_POINTER_ATTRIBUTES Attributes =
+                (PVIDEO_POINTER_ATTRIBUTES)Irp->AssociatedIrp.SystemBuffer;
+            ULONG InputLength =
+                Stack->Parameters.DeviceIoControl.InputBufferLength;
+
+            if (g_DisplayAdapter == NULL ||
+                !DxgkpPointerBridgeSupported(g_DisplayAdapter))
+            {
+                Status = STATUS_NOT_SUPPORTED;
+                break;
+            }
+
+            if (Attributes == NULL ||
+                InputLength < FIELD_OFFSET(VIDEO_POINTER_ATTRIBUTES, Pixels))
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+
+            Status = DxgkpPointerBridgeSetShape(g_DisplayAdapter,
+                                                Attributes,
+                                                InputLength);
             break;
         }
 
         case IOCTL_VIDEO_SET_POINTER_POSITION:
         {
-            DXGKRNL_TRACE("DxgkpDisplayDispatch: IOCTL_VIDEO_SET_POINTER_POSITION (stub)\n");
-            Status = STATUS_SUCCESS;
+            PVIDEO_POINTER_POSITION Position =
+                (PVIDEO_POINTER_POSITION)Irp->AssociatedIrp.SystemBuffer;
+
+            if (g_DisplayAdapter == NULL ||
+                !DxgkpPointerBridgeSupported(g_DisplayAdapter))
+            {
+                Status = STATUS_SUCCESS;
+                break;
+            }
+
+            if (Position == NULL ||
+                Stack->Parameters.DeviceIoControl.InputBufferLength <
+                    sizeof(VIDEO_POINTER_POSITION))
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+
+            g_DisplayAdapter->PointerX = Position->Column;
+            g_DisplayAdapter->PointerY = Position->Row;
+            Status = DxgkpPointerBridgeSetPosition(g_DisplayAdapter);
             break;
         }
 
         case IOCTL_VIDEO_QUERY_POINTER_POSITION:
         {
-            DXGKRNL_TRACE("DxgkpDisplayDispatch: IOCTL_VIDEO_QUERY_POINTER_POSITION (stub)\n");
-            Status = STATUS_NOT_SUPPORTED;
+            PVIDEO_POINTER_POSITION Position =
+                (PVIDEO_POINTER_POSITION)Irp->AssociatedIrp.SystemBuffer;
+
+            if (g_DisplayAdapter == NULL ||
+                !DxgkpPointerBridgeSupported(g_DisplayAdapter) ||
+                Position == NULL ||
+                Stack->Parameters.DeviceIoControl.OutputBufferLength <
+                    sizeof(VIDEO_POINTER_POSITION))
+            {
+                Status = STATUS_NOT_SUPPORTED;
+                break;
+            }
+
+            Position->Column = (SHORT)g_DisplayAdapter->PointerX;
+            Position->Row = (SHORT)g_DisplayAdapter->PointerY;
+            BytesReturned = sizeof(VIDEO_POINTER_POSITION);
+            Status = STATUS_SUCCESS;
             break;
         }
 
         case IOCTL_VIDEO_QUERY_POINTER_CAPABILITIES:
         {
-            DXGKRNL_TRACE("DxgkpDisplayDispatch: IOCTL_VIDEO_QUERY_POINTER_CAPABILITIES (stub)\n");
-            Status = STATUS_NOT_SUPPORTED;
-            break;
-        }
+            PVIDEO_POINTER_CAPABILITIES Caps =
+                (PVIDEO_POINTER_CAPABILITIES)Irp->AssociatedIrp.SystemBuffer;
 
-        /*
-         * UEFI framebuffer capability query.
-         *
-         * framebuf.dll sends this to discover if the miniport is a UEFI
-         * framebuffer driver with extended capabilities (multi-output,
-         * large FB, linear-only mode, etc.).  For WDDM DOD adapters we
-         * return a minimal UEFIFB_CAPS with no special capabilities.
-         * This avoids the "unhandled IOCTL" warning and tells framebuf
-         * to use the standard mode query path.
-         */
-        case IOCTL_VIDEO_UEFIFB_QUERY_CAPS:
-        {
-            PDXGK_UEFIFB_CAPS pCaps =
-                (PDXGK_UEFIFB_CAPS)Irp->AssociatedIrp.SystemBuffer;
-
-            DXGKRNL_TRACE("DxgkpDisplayDispatch: IOCTL_VIDEO_UEFIFB_QUERY_CAPS\n");
-
-            if (pCaps != NULL &&
-                Stack->Parameters.DeviceIoControl.OutputBufferLength >=
-                    sizeof(DXGK_UEFIFB_CAPS))
+            if (g_DisplayAdapter == NULL ||
+                !DxgkpPointerBridgeSupported(g_DisplayAdapter))
             {
-                RtlZeroMemory(pCaps, sizeof(DXGK_UEFIFB_CAPS));
-                pCaps->Version      = DXGK_UEFIFB_CAPS_VERSION;
-                pCaps->Caps         = DXGK_UEFIFB_CAP_LINEAR_ONLY;
-                pCaps->OutputCount  = 1;
-                pCaps->PrimaryChild = 0;
-                pCaps->FrameBufferLength =
-                    (g_DisplayAdapter && g_DisplayAdapter->ShadowFbSize) ?
-                    g_DisplayAdapter->ShadowFbSize : (16ULL * 1024 * 1024);
-                BytesReturned = sizeof(DXGK_UEFIFB_CAPS);
-                Status = STATUS_SUCCESS;
+                DXGKRNL_TRACE("DxgkpDisplayDispatch: "
+                              "IOCTL_VIDEO_QUERY_POINTER_CAPABILITIES: "
+                              "no hardware pointer\n");
+                Status = STATUS_NOT_SUPPORTED;
+                break;
             }
-            else
+
+            if (Caps == NULL ||
+                Stack->Parameters.DeviceIoControl.OutputBufferLength <
+                    sizeof(VIDEO_POINTER_CAPABILITIES))
             {
                 Status = STATUS_BUFFER_TOO_SMALL;
+                break;
             }
-            break;
-        }
 
-        /*
-         * VMware SVGA capability query.
-         *
-         * win32ss probes for VMware SVGA FIFO features.  Since we are
-         * a WDDM adapter (not a VMware miniport), return NOT_SUPPORTED
-         * so the caller falls back to the standard GDI path.
-         */
-        case IOCTL_VIDEO_VMWARE_QUERY_CAPS:
-        {
-            DXGKRNL_TRACE("DxgkpDisplayDispatch: IOCTL_VIDEO_VMWARE_QUERY_CAPS (not supported)\n");
-            Status = STATUS_NOT_SUPPORTED;
+            RtlZeroMemory(Caps, sizeof(*Caps));
+            Caps->Flags = VIDEO_MODE_ASYNC_POINTER | VIDEO_MODE_COLOR_POINTER;
+            Caps->MaxWidth = g_DisplayAdapter->PointerMaxWidth;
+            Caps->MaxHeight = g_DisplayAdapter->PointerMaxHeight;
+            Caps->HWPtrBitmapStart = (ULONG)-1;
+            Caps->HWPtrBitmapEnd = (ULONG)-1;
+            BytesReturned = sizeof(VIDEO_POINTER_CAPABILITIES);
+            Status = STATUS_SUCCESS;
             break;
         }
 
@@ -2199,6 +2595,8 @@ DxgkDisplayRegister(
     PAGED_CODE();
 
     DXGKRNL_TRACE("DxgkDisplayRegister: Adapter=%p\n", Adapter);
+
+    DxgkpEnsurePresentMutex();
 
     /*
      * Anchor the POST display resolution to the real firmware GOP before we
@@ -2372,9 +2770,9 @@ DxgkDisplayRegister(
 
         DisplayDriverName = DxgkpSelectDisplayDriver(Adapter);
 
-        /* Full WDDM adapters bind to cdd; DOD/base-video stays on framebuf. */
-        DxgkpRegWriteMultiString(hDriverKey, L"InstalledDisplayDrivers",
-                                 DisplayDriverName);
+        /* cdd is the canonical GDI driver for every WDDM adapter; framebuf is
+         * appended as the load/enable fallback so a cdd failure still boots. */
+        DxgkpRegWriteDisplayDrivers(hDriverKey, DisplayDriverName);
 
         /* Write Device Description */
         DxgkpRegWriteString(hDriverKey, L"Device Description",

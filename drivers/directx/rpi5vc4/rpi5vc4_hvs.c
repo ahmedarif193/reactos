@@ -174,10 +174,109 @@ Rpi5HvsBuildPlane(
     return RPI5_HVS_PLANE_DWORDS;
 }
 
+/* Bring-up diagnostics removed; retained as a no-op so the call sites and the
+ * real error prints around them stay intact. */
+#define RPI5_HVS_DIAG(Dev, ...) ((void)(Dev))
+
+/*
+ * Select the live display-list head.  The C-step vs D-step LPTRS register
+ * guess (D nonzero/non-FF) proved too naive for silicon: validate BOTH
+ * candidates against the list itself (CTL0.VALID at the head, in-range
+ * head index) and prefer the head whose plane actually scans one of our
+ * expected framebuffers.  Prints every raw value on the first calls so a
+ * serial log pinpoints the real hardware state.
+ */
+static BOOLEAN
+Rpi5HvsSelectHead(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ PVOID HvsBase,
+    _Out_ PULONG LptrsRegOut,
+    _Out_ PULONG LptrsValOut,
+    _Out_ PULONG HeadOut,
+    _In_ ULONG ExpectPtr1A,
+    _In_ ULONG ExpectPtr1B)
+{
+    volatile ULONG *Dlist =
+        (volatile ULONG *)((PUCHAR)HvsBase + RPI5_HVS_DLIST_OFFSET);
+    ULONG Regs[2] = { RPI5_HVS_LPTRS_D, RPI5_HVS_LPTRS_C };
+    ULONG Control;
+    ULONG BestReg = 0, BestVal = 0, BestHead = 0;
+    BOOLEAN BestMatches = FALSE, HaveValid = FALSE;
+    ULONG i;
+
+    Control = READ_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + RPI5_HVS_REG_CONTROL));
+    if (!(Control & RPI5_HVS_CONTROL_HVS_EN))
+    {
+        RPI5_HVS_DIAG(DeviceExtension,
+                      "RPI5VC4: HVS disabled (CTRL=%08lx)\n", Control);
+        return FALSE;
+    }
+
+    for (i = 0; i < 2; i++)
+    {
+        ULONG Val, Head;
+        ULONG Ctl0, Ptr1;
+        BOOLEAN Valid, Matches;
+
+        /* A channel that reads all-ones long enough is not populated on
+         * this stepping; stop probing it every frame. */
+        if (DeviceExtension->HvsLptrsDead[i] >= 8)
+            continue;
+
+        Val = READ_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + Regs[i]));
+        Head = Val & RPI5_HVS_LPTRS_HEAD_MASK;
+
+        if (Val == 0xffffffff || Head == 0 ||
+            Head + RPI5_HVS_PLANE_DWORDS >= RPI5_HVS_DLIST_DWORDS)
+        {
+            if (Val == 0xffffffff &&
+                DeviceExtension->HvsLptrsDead[i] < 8)
+                DeviceExtension->HvsLptrsDead[i]++;
+            RPI5_HVS_DIAG(DeviceExtension,
+                          "RPI5VC4: LPTRS@0x%03lx=%08lx head=%lu (skip)\n",
+                          Regs[i], Val, Head);
+            continue;
+        }
+        DeviceExtension->HvsLptrsDead[i] = 0;
+
+        Ctl0 = READ_REGISTER_ULONG((PULONG)&Dlist[Head + 0]);
+        Ptr1 = READ_REGISTER_ULONG((PULONG)&Dlist[Head + 6]);
+        Valid = (Ctl0 & RPI5_HVS_CTL0_VALID) != 0;
+        Matches = Valid && (Ptr1 == ExpectPtr1A || Ptr1 == ExpectPtr1B);
+
+        RPI5_HVS_DIAG(DeviceExtension,
+                      "RPI5VC4: LPTRS@0x%03lx=%08lx head=%lu ctl0=%08lx "
+                      "ptr1=%08lx valid=%u match=%u\n",
+                      Regs[i], Val, Head, Ctl0, Ptr1, Valid, Matches);
+
+        if (Matches && !BestMatches)
+        {
+            BestReg = Regs[i]; BestVal = Val; BestHead = Head;
+            BestMatches = TRUE; HaveValid = TRUE;
+        }
+        else if (Valid && !HaveValid)
+        {
+            BestReg = Regs[i]; BestVal = Val; BestHead = Head;
+            HaveValid = TRUE;
+        }
+    }
+
+    if (!HaveValid)
+        return FALSE;
+
+    *LptrsRegOut = BestReg;
+    *LptrsValOut = BestVal;
+    *HeadOut = BestHead;
+    return TRUE;
+}
+
 VOID
 Rpi5HvsInstallScanout(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
 {
+    if (DeviceExtension->Headless)
+        return;
+
     volatile ULONG *Dlist;
     PVOID HvsBase;
     ULONG LptrsC, LptrsD, LptrsReg, LptrsVal, Head, Control;
@@ -205,28 +304,15 @@ Rpi5HvsInstallScanout(
     }
     Dlist = (volatile ULONG *)((PUCHAR)HvsBase + RPI5_HVS_DLIST_OFFSET);
 
-    /* Read the global control and both possible LIST_PTR registers. */
-    Control = READ_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + RPI5_HVS_REG_CONTROL));
-    LptrsC = READ_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + RPI5_HVS_LPTRS_C));
-    LptrsD = READ_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + RPI5_HVS_LPTRS_D));
-    if (LptrsD != 0xffffffff && LptrsD != 0)
+    if (!Rpi5HvsSelectHead(DeviceExtension, HvsBase,
+                           &LptrsReg, &LptrsVal, &Head,
+                           (ULONG)(Phys & 0xffffffff),
+                           (ULONG)(DeviceExtension->FirmwareFrameBufferPhysical.QuadPart & 0xffffffff)))
     {
-        LptrsReg = RPI5_HVS_LPTRS_D;
-        LptrsVal = LptrsD;
-    }
-    else
-    {
-        LptrsReg = RPI5_HVS_LPTRS_C;
-        LptrsVal = LptrsC;
-    }
-    Head = LptrsVal & RPI5_HVS_LPTRS_HEAD_MASK;
-
-    if (!(Control & RPI5_HVS_CONTROL_HVS_EN) || Head == 0)
-    {
-        DbgPrint("RPI5VC4: HVS not ready (ctrl=0x%08lx head=%lu) - skip\n",
-                 Control, Head);
+        DbgPrint("RPI5VC4: InstallScanout: no usable HVS head - skip\n");
         return;
     }
+    (VOID)LptrsC; (VOID)LptrsD; (VOID)Control;
 
     /*
      * Only take over a head that is currently a VALID plane scanning out our
@@ -253,7 +339,9 @@ Rpi5HvsInstallScanout(
             (CurPtr1 != FbLow &&
              CurPtr1 != FirmwareFbLow))
         {
-            DbgPrint("RPI5VC4: HVS head does not match our planes - not taking over\n");
+            DbgPrint("RPI5VC4: takeover refused: head=%lu ctl0=%08lx "
+                     "ptr1=%08lx (want %08lx or %08lx)\n",
+                     Head, CurCtl0, CurPtr1, FbLow, FirmwareFbLow);
             return;
         }
     }
@@ -304,8 +392,26 @@ Rpi5HvsInstallScanout(
     /* List terminator. */
     Plane[Count++] = RPI5_HVS_CTL0_END;
 
-    for (i = StartIndex; i < Count; i++)
-        WRITE_REGISTER_ULONG((PULONG)&Dlist[Head + i], Plane[i]);
+    /*
+     * Rewriting a live in-place cursor element: keep the HVS-owned context
+     * word (word 4) — resetting it mid-scan corrupts the overlay for that
+     * frame, the same mechanism as the scanout icon-change flicker above.
+     */
+    if (StartIndex == RPI5_HVS_PLANE_DWORDS &&
+        Count > StartIndex + RPI5_HVS_PLANE_DWORDS &&
+        READ_REGISTER_ULONG((PULONG)&Dlist[Head + StartIndex]) == Plane[StartIndex] &&
+        READ_REGISTER_ULONG((PULONG)&Dlist[Head + StartIndex + 6]) == Plane[StartIndex + 6])
+    {
+        Plane[StartIndex + 4] =
+            READ_REGISTER_ULONG((PULONG)&Dlist[Head + StartIndex + 4]);
+    }
+
+    /*
+     * Descending order: an element's CTL0 VALID bit is its lowest word and
+     * lands last, so a mid-frame list walk never sees a half-written element.
+     */
+    for (i = Count; i > StartIndex; i--)
+        WRITE_REGISTER_ULONG((PULONG)&Dlist[Head + i - 1], Plane[i - 1]);
 
 #if defined(_M_ARM64)
     __dsb(_ARM64_BARRIER_SY);
@@ -313,6 +419,13 @@ Rpi5HvsInstallScanout(
     KeMemoryBarrier();
 
     WRITE_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + LptrsReg), LptrsVal);
+
+    RPI5_HVS_DIAG(DeviceExtension,
+                  "RPI5VC4: takeover OK reg=0x%03lx head=%lu fb=%02lx:%08lx "
+                  "cursor=%u start=%lu count=%lu\n",
+                  LptrsReg, Head,
+                  (ULONG)((Phys >> 32) & 0xff), (ULONG)(Phys & 0xffffffff),
+                  HasCursor, StartIndex, Count);
 
     /* Cache the cursor-plane location so moves can skip re-validation reads. */
     if (Count == 2 * RPI5_HVS_PLANE_DWORDS + 1)
@@ -328,6 +441,9 @@ BOOLEAN
 Rpi5HvsMoveCursor(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
 {
+    if (DeviceExtension->Headless)
+        return TRUE;
+
     volatile ULONG *Dlist;
     PVOID HvsBase;
     ULONG LptrsVal;
@@ -382,29 +498,32 @@ Rpi5HvsMoveCursor(
 }
 
 BOOLEAN
-Rpi5HvsFlipScanout(
+Rpi5HvsInstallPlaneList(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
-    _In_ PHYSICAL_ADDRESS FrameBufferPhysical)
+    _In_reads_(Count) CONST RPI5VC4_HVS_PLANE *Planes,
+    _In_ ULONG Count)
 {
-    volatile ULONG *Dlist;
-    PVOID HvsBase;
-    ULONG LptrsD, LptrsReg, LptrsVal, Head, Control, Ctl0, Ptr0, Ptr1;
-    ULONGLONG Phys = (ULONGLONG)FrameBufferPhysical.QuadPart;
-    ULONGLONG CurrentPhys = (ULONGLONG)DeviceExtension->FrameBufferPhysical.QuadPart;
-
-    if (Phys == 0)
-        return FALSE;
-
-    if (Phys == CurrentPhys)
+    if (DeviceExtension->Headless)
         return TRUE;
 
-    Rpi5CrtcWaitForVBlank(DeviceExtension);
+    volatile ULONG *Dlist;
+    PVOID HvsBase;
+    ULONG List[RPI5_HVS_PRIVATE_SLOT_DWORDS];
+    ULONG Used = 0;
+    ULONG LptrsD, LptrsReg, LptrsVal, Control, Slot;
+    ULONG CursorAt = 0;
+    ULONG i;
+
+    if (Count == 0 || Count > RPI5_HVS_MPO_MAX_PLANES)
+        return FALSE;
+
+    DeviceExtension->HvsCursorFastValid = FALSE;
 
     HvsBase = (PVOID)Rpi5HvsMap(DeviceExtension);
     if (HvsBase == NULL)
         return FALSE;
-
     Dlist = (volatile ULONG *)((PUCHAR)HvsBase + RPI5_HVS_DLIST_OFFSET);
+
     Control = READ_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + RPI5_HVS_REG_CONTROL));
     LptrsD = READ_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + RPI5_HVS_LPTRS_D));
     if (LptrsD != 0xffffffff && LptrsD != 0)
@@ -418,19 +537,186 @@ Rpi5HvsFlipScanout(
         LptrsVal = READ_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + RPI5_HVS_LPTRS_C));
     }
 
-    Head = LptrsVal & RPI5_HVS_LPTRS_HEAD_MASK;
-    if (!(Control & RPI5_HVS_CONTROL_HVS_EN) || Head == 0)
+    if (!(Control & RPI5_HVS_CONTROL_HVS_EN) ||
+        (LptrsVal & RPI5_HVS_LPTRS_HEAD_MASK) == 0)
+    {
         return FALSE;
+    }
+
+    /* Linux vc6_hvs_hw_init parity (it-30/31): the firmware handover
+     * leaves the HVS AXI request cap and arbiter priority unprogrammed;
+     * an uncapped HVS scanning the slab starves the V3D PTB final flush
+     * (the slab-region wedge).  Cap to Linux's values once. */
+    {
+        ULONG NewControl = Control;
+
+        NewControl &= ~(RPI5_HVS_CONTROL_PF_LINES_MASK |
+                        RPI5_HVS_CONTROL_MAX_REQS_MASK);
+        NewControl |= (8u << RPI5_HVS_CONTROL_PF_LINES_SHIFT) |
+                      (15u << RPI5_HVS_CONTROL_MAX_REQS_SHIFT);
+        if (NewControl != Control)
+        {
+            WRITE_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + RPI5_HVS_REG_CONTROL),
+                                 NewControl);
+        }
+        /* it-32: LOW HVS arbiter priority (Linux maxes it to protect
+         * scanout; on this arbiter that starves the V3D PTB — the
+         * remaining big-job wedge).  MAX_REQS cap stays. */
+        if (LptrsReg == RPI5_HVS_LPTRS_D)
+        {
+            WRITE_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + RPI5_HVS_PRI_MAP0_D), 0);
+            WRITE_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + RPI5_HVS_PRI_MAP1_D), 0);
+        }
+        else
+        {
+            WRITE_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + RPI5_HVS_PRI_MAP0_C), 0);
+            WRITE_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + RPI5_HVS_PRI_MAP1_C), 0);
+        }
+    }
+
+    /* Build bottom-up: layer 0 first, cursor overlay on top. */
+    for (i = 0; i < Count; i++)
+    {
+        if (Planes[i].Phys == 0 ||
+            Planes[i].Width == 0 || Planes[i].Height == 0 ||
+            Planes[i].PitchBytes == 0)
+        {
+            return FALSE;
+        }
+
+        Used += Rpi5HvsBuildPlane(&List[Used],
+                                  Planes[i].Opaque,
+                                  Planes[i].Phys,
+                                  Planes[i].X, Planes[i].Y,
+                                  Planes[i].Width, Planes[i].Height,
+                                  Planes[i].PitchBytes,
+                                  RPI5_HVS_PIXEL_FORMAT_RGBA8888,
+                                  RPI5_HVS_PIXEL_ORDER_BGRA);
+    }
+
+    {
+        ULONG CursorX, CursorY, CursorWidth, CursorHeight;
+        ULONGLONG CursorPhys;
+
+        if (Rpi5HvsClipCursor(DeviceExtension,
+                              &CursorX, &CursorY,
+                              &CursorWidth, &CursorHeight,
+                              &CursorPhys))
+        {
+            CursorAt = Used;
+            Used += Rpi5HvsBuildPlane(&List[Used], FALSE,
+                                      CursorPhys,
+                                      CursorX, CursorY,
+                                      CursorWidth, CursorHeight,
+                                      RPI5VC4_CURSOR_WIDTH * sizeof(ULONG),
+                                      RPI5_HVS_PIXEL_FORMAT_RGBA8888,
+                                      RPI5_HVS_PIXEL_ORDER_BGRA);
+        }
+    }
+
+    List[Used++] = RPI5_HVS_CTL0_END;
+
+    /* Double-buffer between the two private slots, then re-point the head. */
+    Slot = (DeviceExtension->HvsActivePrivateSlot == RPI5_HVS_PRIVATE_SLOT_A)
+               ? RPI5_HVS_PRIVATE_SLOT_B : RPI5_HVS_PRIVATE_SLOT_A;
+
+    for (i = 0; i < Used; i++)
+        WRITE_REGISTER_ULONG((PULONG)&Dlist[Slot + i], List[i]);
+
+#if defined(_M_ARM64)
+    __dsb(_ARM64_BARRIER_SY);
+#endif
+    KeMemoryBarrier();
+
+    LptrsVal = (LptrsVal & ~RPI5_HVS_LPTRS_HEAD_MASK) | Slot;
+    WRITE_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + LptrsReg), LptrsVal);
+    DeviceExtension->HvsActivePrivateSlot = Slot;
+
+    /* Keep the cursor-move fast path alive on the private list. */
+    if (CursorAt != 0)
+    {
+        DeviceExtension->HvsLptrsReg = LptrsReg;
+        DeviceExtension->HvsLptrsVal = LptrsVal;
+        DeviceExtension->HvsCursorHead = Slot + CursorAt;
+        DeviceExtension->HvsCursorFastValid = TRUE;
+    }
+
+    return TRUE;
+}
+
+BOOLEAN
+Rpi5HvsFlipScanoutEx(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ PHYSICAL_ADDRESS FrameBufferPhysical,
+    _In_ BOOLEAN WaitVBlank)
+{
+    if (DeviceExtension->Headless)
+        return TRUE;
+
+    volatile ULONG *Dlist;
+    PVOID HvsBase;
+    ULONG LptrsD, LptrsReg, LptrsVal, Head, Control, Ctl0, Ptr0, Ptr1;
+    ULONGLONG Phys = (ULONGLONG)FrameBufferPhysical.QuadPart;
+    ULONGLONG CurrentPhys = (ULONGLONG)DeviceExtension->FrameBufferPhysical.QuadPart;
+
+    if (Phys == 0)
+        return FALSE;
+
+    if (Phys == CurrentPhys)
+        return TRUE;
+
+    /* Latched off after repeated silicon failures: fail FAST so the
+     * present path doesn't burn a vblank wait per frame (this is what
+     * swamped the delayed work queue on the first hardware run). */
+    if (DeviceExtension->HvsFlipBroken)
+        return FALSE;
+
+    /* The pointer words are latched at frame start, so a flip within one
+     * 4GB window (single PTR1 write) is atomic without any wait — the
+     * triple-buffered present path relies on that. Callers replacing the
+     * buffer wholesale (park, MPO base) still serialize on the vblank. */
+    if (WaitVBlank)
+        Rpi5CrtcWaitForVBlank(DeviceExtension);
+
+    HvsBase = (PVOID)Rpi5HvsMap(DeviceExtension);
+    if (HvsBase == NULL)
+        return FALSE;
+
+    Dlist = (volatile ULONG *)((PUCHAR)HvsBase + RPI5_HVS_DLIST_OFFSET);
+    (VOID)Control; (VOID)LptrsD;
+
+    if (!Rpi5HvsSelectHead(DeviceExtension, HvsBase,
+                           &LptrsReg, &LptrsVal, &Head,
+                           (ULONG)(CurrentPhys & 0xffffffff),
+                           (ULONG)(Phys & 0xffffffff)))
+    {
+        goto FlipFailed;
+    }
 
     Ctl0 = READ_REGISTER_ULONG((PULONG)&Dlist[Head + 0]);
     if (!(Ctl0 & RPI5_HVS_CTL0_VALID))
-        return FALSE;
+    {
+        RPI5_HVS_DIAG(DeviceExtension,
+                      "RPI5VC4: flip: head %lu CTL0=%08lx not VALID\n",
+                      Head, Ctl0);
+        goto FlipFailed;
+    }
 
     Ptr0 = READ_REGISTER_ULONG((PULONG)&Dlist[Head + 5]);
     Ptr1 = READ_REGISTER_ULONG((PULONG)&Dlist[Head + 6]);
     if (((Ptr0 & 0xff) != (ULONG)((CurrentPhys >> 32) & 0xff)) ||
         Ptr1 != (ULONG)(CurrentPhys & 0xffffffff))
-        return FALSE;
+    {
+        RPI5_HVS_DIAG(DeviceExtension,
+                      "RPI5VC4: flip: head %lu scans %02lx:%08lx, expected "
+                      "%02lx:%08lx (target %02lx:%08lx)\n",
+                      Head, Ptr0 & 0xff, Ptr1,
+                      (ULONG)((CurrentPhys >> 32) & 0xff),
+                      (ULONG)(CurrentPhys & 0xffffffff),
+                      (ULONG)((Phys >> 32) & 0xff),
+                      (ULONG)(Phys & 0xffffffff));
+        goto FlipFailed;
+    }
 
     Ptr0 = (Ptr0 & ~0xffu) | (ULONG)((Phys >> 32) & 0xff);
     WRITE_REGISTER_ULONG((PULONG)&Dlist[Head + 5], Ptr0);
@@ -443,5 +729,31 @@ Rpi5HvsFlipScanout(
 
     WRITE_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + LptrsReg), LptrsVal);
     DeviceExtension->FrameBufferPhysical = FrameBufferPhysical;
+
+    if (DeviceExtension->HvsFlipFailCount != 0)
+        DeviceExtension->HvsFlipFailCount = 0;
+    RPI5_HVS_DIAG(DeviceExtension,
+                  "RPI5VC4: flip OK head=%lu -> %02lx:%08lx\n",
+                  Head, (ULONG)((Phys >> 32) & 0xff),
+                  (ULONG)(Phys & 0xffffffff));
     return TRUE;
+
+FlipFailed:
+    if (++DeviceExtension->HvsFlipFailCount >= 16 &&
+        !DeviceExtension->HvsFlipBroken)
+    {
+        DeviceExtension->HvsFlipBroken = TRUE;
+        DbgPrint("RPI5VC4: 16 consecutive flip failures — latching the "
+                 "flip path OFF (desktop stays on the takeover buffer; "
+                 "see serial diagnostics above for the hardware state)\n");
+    }
+    return FALSE;
+}
+
+BOOLEAN
+Rpi5HvsFlipScanout(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ PHYSICAL_ADDRESS FrameBufferPhysical)
+{
+    return Rpi5HvsFlipScanoutEx(DeviceExtension, FrameBufferPhysical, TRUE);
 }

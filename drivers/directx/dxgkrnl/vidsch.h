@@ -68,6 +68,12 @@ typedef enum _VIDSCH_ENGINE_STATE
  * Represents a single DMA command buffer submission waiting in an
  * engine's run queue.  Allocated from NonPagedPool with TAG_VIDSCH.
  * ====================================================================== */
+
+/* Inline (deep-copied) list capacities; submissions with larger lists are
+ * rejected with STATUS_NOT_SUPPORTED and take the caller's fallback path. */
+#define VIDSCH_INLINE_ALLOCATIONS   2
+#define VIDSCH_INLINE_PATCHES       8
+
 typedef struct _VIDSCH_DMA_PACKET
 {
     /* Linkage in VIDSCH_ENGINE->RunQueueHead. */
@@ -102,6 +108,38 @@ typedef struct _VIDSCH_DMA_PACKET
 
     /* TRUE if this packet represents a present/flip operation. */
     BOOLEAN                     IsPresent;
+
+    /*
+     * Deep-copied allocation list (stack lifetime at the submit site; the
+     * packet may be kicked later from the completion DPC).  Tracked
+     * (fence-at-kick) submissions store KERNEL-side DXGK_ALLOCATIONLIST
+     * entries: SegmentId + PhysicalAddress must survive to the kick-time
+     * DxgkDdiPatch — a D3DDDI-typed copy truncates PhysicalAddress and
+     * the miniport patches garbage.  The untracked present path stores
+     * its packed D3DDDI_ALLOCATIONLIST entries in the same storage.
+     */
+    DXGK_ALLOCATIONLIST         InlineAllocationList[VIDSCH_INLINE_ALLOCATIONS];
+    ULONG                       InlineAllocationCount;
+    ULONG                       VidPnSourceId;
+    ULONG                       SubmitFlags;
+
+    /*
+     * Tracked mode: the DMA buffer is patched and handed to the
+     * DMA-buffer tracker at KICK time.  Fences are minted at SUBMIT from
+     * the one adapter-wide counter, so fence order == queue order ==
+     * kick order; retirement never crosses un-executed work.
+     */
+    LONG                        Priority;
+    BOOLEAN                     TrackOnKick;
+    BOOLEAN                     Kicked;
+    ULONG                       TrackTag;
+    PVOID                       TrackDevice;        /* PDXGKRNL_DEVICE */
+    PHANDLE                     TrackOpenHandles;   /* pool copy, freed after track */
+    UINT                        TrackOpenHandleCount;
+    D3DKMT_HANDLE               SignalSyncObject;   /* fired at retire */
+    ULONG64                     SignalFenceValue;
+    D3DDDI_PATCHLOCATIONLIST    InlinePatchList[VIDSCH_INLINE_PATCHES];
+    ULONG                       InlinePatchCount;
 
 } VIDSCH_DMA_PACKET, *PVIDSCH_DMA_PACKET;
 
@@ -299,9 +337,12 @@ VidSchDestroy(
  * VidSchSubmitCommand
  *
  * Queues a DMA command buffer for execution on the specified engine.
- * Assigns a fence ID, enqueues the packet, and kicks the engine if idle.
+ * Enqueues the packet and kicks the engine if idle.
  *
- * Returns the assigned SubmissionFenceId in *OutFenceId.
+ * SubmissionFenceId: pass the adapter-wide fence (DxgkAllocateSubmission-
+ * FenceId) so vidsch completion tracking and the adapter-wide DMA-buffer
+ * retirement observe the same fence space; 0 mints a per-engine fence
+ * (legacy/internal callers only).  The used fence returns in *OutFenceId.
  *
  * IRQL: PASSIVE_LEVEL
  */
@@ -309,17 +350,53 @@ NTSTATUS
 VidSchSubmitCommand(
     _In_  struct _DXGKRNL_ADAPTER *Adapter,
     _In_  ULONG                    EngineOrdinal,
+    _In_  ULONG                    SubmissionFenceId,
     _In_  PVOID                    DmaBufferVa,
     _In_  ULONG                    DmaBufferSize,
     _In_opt_ PVOID                 DriverPrivateData,
     _In_  ULONG                    DriverPrivateDataSize,
-    _In_opt_ PVOID                 AllocationList,
-    _In_  ULONG                    AllocationListSize,
+    _In_reads_opt_(AllocationListCount) CONST D3DDDI_ALLOCATIONLIST *AllocationList,
+    _In_  ULONG                    AllocationListCount,
     _In_opt_ PVOID                 PatchLocationList,
     _In_  ULONG                    PatchLocationListSize,
     _In_opt_ PVOID                 Context,
     _In_  BOOLEAN                  IsPresent,
+    _In_  ULONG                    SubmitFlags,
+    _In_  ULONG                    VidPnSourceId,
     _Out_ ULONG                   *OutFenceId);
+
+/*
+ * VidSchSubmitCommandTracked
+ *
+ * Fence-at-kick submission: queues the DMA buffer WITHOUT a fence; the
+ * kick path mints the adapter-wide fence, runs DxgkDdiPatch over the
+ * deep-copied lists and hands the buffer to the DMA-buffer tracker
+ * immediately before DxgkDdiSubmitCommand.  Buffer ownership transfers
+ * to vidsch/the tracker on STATUS_SUCCESS.  Packets queued this way are
+ * priority-ordered among themselves (higher Priority runs first, FIFO
+ * within a priority, never overtaking fence-assigned packets or the
+ * queue head).
+ *
+ * IRQL: PASSIVE_LEVEL
+ */
+NTSTATUS
+VidSchSubmitCommandTracked(
+    _In_  struct _DXGKRNL_ADAPTER *Adapter,
+    _In_  ULONG                    EngineOrdinal,
+    _In_  PVOID                    DmaBufferVa,
+    _In_  ULONG                    DmaBufferSize,
+    _In_reads_opt_(AllocationListCount) CONST DXGK_ALLOCATIONLIST *AllocationList,
+    _In_  ULONG                    AllocationListCount,
+    _In_reads_opt_(PatchLocationListCount) CONST D3DDDI_PATCHLOCATIONLIST *PatchLocationList,
+    _In_  ULONG                    PatchLocationListCount,
+    _In_opt_ PVOID                 Context,
+    _In_  LONG                     Priority,
+    _In_  ULONG                    TrackTag,
+    _In_opt_ PVOID                 TrackDevice,
+    _In_reads_opt_(OpenHandleCount) CONST HANDLE *OpenHandles,
+    _In_  UINT                     OpenHandleCount,
+    _In_  D3DKMT_HANDLE            SignalSyncObject,
+    _In_  ULONG64                  SignalFenceValue);
 
 /*
  * VidSchNotifyInterrupt

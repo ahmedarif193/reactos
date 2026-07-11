@@ -81,6 +81,57 @@ DxgkpReferenceSyncObjectByHandle(
     return Found;
 }
 
+/*
+ * Release a monitored fence's CPU-mapped value page.  The user mapping was
+ * made in the creating process; unmapping must run in that context, so
+ * attach when freed from elsewhere (e.g. another process's cleanup).
+ */
+static VOID
+DxgkpSyncReleaseMonitoredPage(
+    _In_ PDXGKRNL_SYNC_OBJECT SyncObj)
+{
+    if (SyncObj->MonitoredValueUserVa != NULL &&
+        SyncObj->MonitoredValueMdl != NULL &&
+        SyncObj->MonitoredValueProcess != NULL)
+    {
+        KAPC_STATE ApcState;
+        BOOLEAN Attached = FALSE;
+
+        if (PsGetCurrentProcess() != SyncObj->MonitoredValueProcess)
+        {
+            KeStackAttachProcess((PKPROCESS)SyncObj->MonitoredValueProcess,
+                                 &ApcState);
+            Attached = TRUE;
+        }
+
+        MmUnmapLockedPages(SyncObj->MonitoredValueUserVa,
+                           SyncObj->MonitoredValueMdl);
+
+        if (Attached)
+            KeUnstackDetachProcess(&ApcState);
+
+        SyncObj->MonitoredValueUserVa = NULL;
+    }
+
+    if (SyncObj->MonitoredValueMdl != NULL)
+    {
+        IoFreeMdl(SyncObj->MonitoredValueMdl);
+        SyncObj->MonitoredValueMdl = NULL;
+    }
+
+    if (SyncObj->MonitoredValueKernelVa != NULL)
+    {
+        ExFreePoolWithTag(SyncObj->MonitoredValueKernelVa, TAG_DXGK_SYNC);
+        SyncObj->MonitoredValueKernelVa = NULL;
+    }
+
+    if (SyncObj->MonitoredValueProcess != NULL)
+    {
+        ObDereferenceObject(SyncObj->MonitoredValueProcess);
+        SyncObj->MonitoredValueProcess = NULL;
+    }
+}
+
 static VOID
 DxgkpDereferenceSyncObject(
     _In_ PDXGKRNL_SYNC_OBJECT SyncObj)
@@ -88,8 +139,95 @@ DxgkpDereferenceSyncObject(
     if (SyncObj != NULL &&
         InterlockedDecrement(&SyncObj->RefCount) == 0)
     {
+        DxgkpSyncReleaseMonitoredPage(SyncObj);
         ExFreePoolWithTag(SyncObj, TAG_DXGK_SYNC);
     }
+}
+
+/*
+ * DxgkSyncObjectAttachMonitoredPage
+ *
+ * Backs a monitored fence with a nonpaged value page and maps it read-only
+ * into the current (creating) process.  Returns the user VA of the 64-bit
+ * fence value; the kernel-side signal paths keep the page current
+ * (documented D3DDDI_SYNCHRONIZATIONOBJECTINFO2 MonitoredFence contract).
+ */
+NTSTATUS
+NTAPI
+DxgkSyncObjectAttachMonitoredPage(
+    _In_ D3DKMT_HANDLE hSyncObject,
+    _In_ UINT64 InitialFenceValue,
+    _Out_ PVOID *UserVa)
+{
+    PDXGKRNL_SYNC_OBJECT SyncObj;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (UserVa == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *UserVa = NULL;
+
+    SyncObj = DxgkpReferenceSyncObjectByHandle(hSyncObject);
+    if (SyncObj == NULL)
+        return STATUS_INVALID_HANDLE;
+
+    /* Pool allocations of PAGE_SIZE are page-aligned. */
+    SyncObj->MonitoredValueKernelVa =
+        ExAllocatePoolWithTag(NonPagedPool, PAGE_SIZE, TAG_DXGK_SYNC);
+    if (SyncObj->MonitoredValueKernelVa == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Fail;
+    }
+
+    RtlZeroMemory(SyncObj->MonitoredValueKernelVa, PAGE_SIZE);
+    *(volatile UINT64 *)SyncObj->MonitoredValueKernelVa = InitialFenceValue;
+    InterlockedExchange64(&SyncObj->FenceValue, (LONG64)InitialFenceValue);
+
+    SyncObj->MonitoredValueMdl = IoAllocateMdl(
+        SyncObj->MonitoredValueKernelVa, PAGE_SIZE, FALSE, FALSE, NULL);
+    if (SyncObj->MonitoredValueMdl == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Fail;
+    }
+
+    MmBuildMdlForNonPagedPool(SyncObj->MonitoredValueMdl);
+
+    _SEH2_TRY
+    {
+        SyncObj->MonitoredValueUserVa = MmMapLockedPagesSpecifyCache(
+            SyncObj->MonitoredValueMdl,
+            UserMode,
+            MmCached,
+            NULL,
+            FALSE,
+            NormalPagePriority);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        SyncObj->MonitoredValueUserVa = NULL;
+    }
+    _SEH2_END;
+
+    if (SyncObj->MonitoredValueUserVa == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Fail;
+    }
+
+    SyncObj->MonitoredValueProcess = PsGetCurrentProcess();
+    ObReferenceObject(SyncObj->MonitoredValueProcess);
+
+    *UserVa = SyncObj->MonitoredValueUserVa;
+    DxgkpDereferenceSyncObject(SyncObj);
+    return STATUS_SUCCESS;
+
+Fail:
+    DxgkpSyncReleaseMonitoredPage(SyncObj);
+    DxgkpDereferenceSyncObject(SyncObj);
+    return Status;
 }
 
 static PDXGKRNL_SYNC_OBJECT
@@ -436,6 +574,21 @@ CleanupReferences:
  *
  * IRQL: PASSIVE_LEVEL
  */
+/* Publish the current fence value to the CPU-visible page and wake waiters. */
+static VOID
+DxgkpSyncPublishFenceValue(
+    _In_ PDXGKRNL_SYNC_OBJECT SyncObj)
+{
+    if (SyncObj->MonitoredValueKernelVa != NULL)
+    {
+        *(volatile UINT64 *)SyncObj->MonitoredValueKernelVa =
+            (UINT64)SyncObj->FenceValue;
+        KeMemoryBarrier();
+    }
+
+    KeSetEvent(&SyncObj->CpuEvent, IO_NO_INCREMENT, FALSE);
+}
+
 NTSTATUS
 NTAPI
 DxgkSyncObjectCpuSignal(
@@ -458,7 +611,48 @@ DxgkSyncObjectCpuSignal(
     }
 
     InterlockedExchange64(&SyncObj->FenceValue, (LONG64)FenceValue);
-    KeSetEvent(&SyncObj->CpuEvent, IO_NO_INCREMENT, FALSE);
+
+    DxgkpSyncPublishFenceValue(SyncObj);
+    DxgkpDereferenceSyncObject(SyncObj);
+    return STATUS_SUCCESS;
+}
+
+/*
+ * DxgkSyncObjectGpuRetireSignal
+ *
+ * GPU-retire flavour of DxgkSyncObjectCpuSignal: monotonic (max) — tracked
+ * submissions on independent nodes may retire out of global fence order and
+ * must never rewind the monitored fence's CPU-visible value.
+ */
+NTSTATUS
+NTAPI
+DxgkSyncObjectGpuRetireSignal(
+    _In_ D3DKMT_HANDLE hSyncObject,
+    _In_ UINT64 FenceValue)
+{
+    PDXGKRNL_SYNC_OBJECT SyncObj;
+    LONG64 Current;
+
+    PAGED_CODE();
+
+    SyncObj = DxgkpReferenceSyncObjectByHandle(hSyncObject);
+    if (SyncObj == NULL)
+        return STATUS_INVALID_HANDLE;
+
+    for (;;)
+    {
+        Current = SyncObj->FenceValue;
+        if ((UINT64)Current >= FenceValue)
+            break;
+        if (InterlockedCompareExchange64(&SyncObj->FenceValue,
+                                         (LONG64)FenceValue,
+                                         Current) == Current)
+        {
+            break;
+        }
+    }
+
+    DxgkpSyncPublishFenceValue(SyncObj);
     DxgkpDereferenceSyncObject(SyncObj);
     return STATUS_SUCCESS;
 }
@@ -485,10 +679,21 @@ DxgkSyncObjectCpuWait(
         return STATUS_INVALID_HANDLE;
     }
 
-    if ((UINT64)SyncObj->FenceValue < FenceValue && !NonBlocking)
+    if (NonBlocking)
+    {
+        BOOLEAN Reached = ((UINT64)SyncObj->FenceValue >= FenceValue);
+
+        DxgkpDereferenceSyncObject(SyncObj);
+        return Reached ? STATUS_SUCCESS : STATUS_TIMEOUT;
+    }
+
+    /* Block until the monitored fence actually reaches the value.  The
+     * 100ms bound only re-checks after a lost wake; TDR guarantees the
+     * fence always advances, so this cannot hang past a dead GPU. */
+    while ((UINT64)SyncObj->FenceValue < FenceValue)
     {
         LARGE_INTEGER Timeout;
-        Timeout.QuadPart = -10LL * 1000LL * 100LL; /* 100ms bound */
+        Timeout.QuadPart = -10LL * 1000LL * 100LL;
         KeWaitForSingleObject(&SyncObj->CpuEvent, Executive, KernelMode,
                               FALSE, &Timeout);
     }

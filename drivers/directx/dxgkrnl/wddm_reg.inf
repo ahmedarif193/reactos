@@ -32,7 +32,14 @@ HKLM,"SYSTEM\CurrentControlSet\Services\dxgkrnl","Start",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\dxgkrnl","Type",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\dxgkrnl","Tag",0x00010001,0x00000002
 
-; --- softgpu (WDDM software miniport, PnP) ---
+; --- softgpu (WDDM software miniport) — Win11-style Basic Display fallback ---
+; softgpu is Root-enumerated and started at boot, but SoftGpuDdiStartDevice
+; only proceeds when DxgkCbAcquirePostDisplayOwnership hands it a usable boot
+; framebuffer.  dxgkrnl returns an empty descriptor when none exists (e.g.
+; virtio-gpu machines) or when a real miniport (for example rpi5vc4) already
+; owns the boot display, so the fallback declines; conversely, a real
+; miniport's later acquire stops an already-running softgpu (the MSBDD
+; handover in dxgkrnl/adapter.c) — no two-adapter mode conflicts either way.
 HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","ErrorControl",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","Group",0x00000000,"Video"
 HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","ImagePath",0x00020000,"system32\drivers\softgpu.sys"
@@ -40,7 +47,6 @@ HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","Start",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","Type",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","Tag",0x00010001,0x00000003
 HKLM,"SYSTEM\CurrentControlSet\Services\softgpu\Video","Service",0x00000000,"softgpu"
-
 HKLM,"SYSTEM\CurrentControlSet\Services\softgpu\Device0","InstalledDisplayDrivers",0x00010000,"framebuf"
 HKLM,"SYSTEM\CurrentControlSet\Services\softgpu\Device0","DefaultSettings.VRefresh",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\softgpu\Device0","DefaultSettings.BitsPerPel",0x00010001,0x00000020
@@ -48,14 +54,7 @@ HKLM,"SYSTEM\CurrentControlSet\Services\softgpu\Device0","DefaultSettings.XResol
 HKLM,"SYSTEM\CurrentControlSet\Services\softgpu\Device0","DefaultSettings.YResolution",0x00010001,0x00000300
 HKLM,"SYSTEM\CurrentControlSet\Services\softgpu\Device0","Device Description",0x00000000,"ReactOS WDDM Software GPU"
 HKLM,"SYSTEM\CurrentControlSet\Services\softgpu\Device0","VgaCompatible",0x00010001,0x00000000
-
-; --- Root-enumerated PnP device instance for softgpu ---
-; softgpu is a PnP WDDM miniport (DxgkInitialize installs an AddDevice handler),
-; so it needs a PDO to bind to. Preregister a root device so the PnP root bus
-; (ntoskrnl pnproot.c enumerates SYSTEM\CurrentControlSet\Enum\Root) creates the
-; PDO and, because Service+ClassGUID are already set, starts softgpu at boot ->
-; AddDevice -> DxgkAdapterStart -> DxgkDisplayRegister (\Device\Video0 +
-; HARDWARE\DEVICEMAP\VIDEO) before win32k's display init runs.
+; Root-enumerated PnP device instance (Service+ClassGUID set -> started at boot)
 HKLM,"SYSTEM\CurrentControlSet\Enum\Root\SOFTGPU\0000","DeviceDesc",0x00000000,"ReactOS WDDM Software GPU"
 HKLM,"SYSTEM\CurrentControlSet\Enum\Root\SOFTGPU\0000","HardwareID",0x00010000,"ROOT\SOFTGPU"
 HKLM,"SYSTEM\CurrentControlSet\Enum\Root\SOFTGPU\0000","Service",0x00000000,"softgpu"

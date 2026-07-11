@@ -1,4 +1,4 @@
-; Raspberry Pi 5 framebuffer miniport
+; Raspberry Pi 5 WDDM display-only miniport
 
 [Version]
 Signature="$Windows NT$"
@@ -6,30 +6,25 @@ LayoutFile=layout.inf
 Class=Display
 ClassGUID={4D36E968-E325-11CE-BFC1-08002BE10318}
 Provider=%ReactOS%
-DriverVer=06/01/2026,1.0.0.0
+DriverVer=07/02/2026,2.0.0.0
 
 [DestinationDirs]
 DefaultDestDir=12
 Rpi5Vc4.Miniport_CopyFiles=12
-Rpi5Vc4.Display_CopyFiles=11
 
 [Manufacturer]
 %ReactOS%=ReactOS,NTarm64
 
 [ReactOS.NTarm64]
-%Rpi5Vc4.DeviceDesc%=Rpi5Vc4_Install,ROOT\RPI5VC4
-%Rpi5Vc4.DeviceDesc%=Rpi5Vc4_Install,DETECTEDInternal\rpi5vc4
-%Rpi5Vc4.DeviceDesc%=Rpi5Vc4_Install,DETECTED\rpi5vc4
+%Rpi5Vc4.DeviceDesc%=Rpi5Vc4_Install,ACPI\BCM2712
+%Rpi5Vc4.DeviceDesc%=Rpi5Vc4_Install,ACPI\BCM2850
 
 [Rpi5Vc4_Install]
-CopyFiles=Rpi5Vc4.Miniport_CopyFiles,Rpi5Vc4.Display_CopyFiles
+CopyFiles=Rpi5Vc4.Miniport_CopyFiles
 AddReg=Rpi5Vc4_SoftwareSettings
 
 [Rpi5Vc4.Miniport_CopyFiles]
 rpi5vc4.sys
-
-[Rpi5Vc4.Display_CopyFiles]
-framebuf.dll
 
 [Rpi5Vc4_SoftwareSettings]
 HKR,,InstalledDisplayDrivers,%REG_MULTI_SZ%,framebuf
@@ -46,15 +41,15 @@ AddService=rpi5vc4,0x00000002,Rpi5Vc4_Service
 [Rpi5Vc4_Service]
 DisplayName=%Rpi5Vc4.ServiceDesc%
 ServiceType=1
-StartType=1
+StartType=3
 ErrorControl=0
 ServiceBinary=%12%\rpi5vc4.sys
-LoadOrderGroup=Video Save
+LoadOrderGroup=Video
 
 [Strings]
 ReactOS="ReactOS"
-Rpi5Vc4.DeviceDesc="Raspberry Pi 5 VC4 Display"
-Rpi5Vc4.ServiceDesc="ReactOS Raspberry Pi 5 VC4 Display Miniport"
+Rpi5Vc4.DeviceDesc="Raspberry Pi 5 VC4 Display (WDDM)"
+Rpi5Vc4.ServiceDesc="ReactOS Raspberry Pi 5 VC4 WDDM Display Only Driver"
 REG_MULTI_SZ=0x00010000
 REG_DWORD=0x00010001
 REG_SZ=0x00000000
