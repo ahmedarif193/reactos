@@ -163,8 +163,33 @@ InitVideo(VOID)
     if (gbBaseVideo)
         ERR("VGA mode requested.\n");
 
-    /* Initialize all display devices */
-    Status = EngpUpdateGraphicsDeviceList();
+    /*
+     * Initialize all display devices.
+     *
+     * The display miniport (dxgkrnl for a WDDM display-only driver such as the
+     * virtio-gpu viogpudo, or videoprt) creates the HARDWARE\DEVICEMAP\VIDEO
+     * registry map asynchronously while its adapter starts.  On a fast boot
+     * win32k can reach here before the driver has registered, so
+     * EngpUpdateGraphicsDeviceList() returns STATUS_OBJECT_NAME_NOT_FOUND and
+     * our caller bugchecks VIDEO_DRIVER_INIT_FAILURE (0xB4) — an intermittent
+     * boot-order race that makes desktop init flaky.  Wait (bounded) for the
+     * display driver to publish its DEVICEMAP\VIDEO entry before giving up.
+     */
+    {
+        LARGE_INTEGER Interval;
+        ULONG Attempt;
+
+        Interval.QuadPart = -(100LL * 10000LL); /* 100 ms, relative */
+        for (Attempt = 0; ; Attempt++)
+        {
+            Status = EngpUpdateGraphicsDeviceList();
+            if (Status != STATUS_OBJECT_NAME_NOT_FOUND || Attempt >= 150)
+                break;
+
+            /* Not ready yet — wait for the display driver to register. */
+            KeDelayExecutionThread(KernelMode, FALSE, &Interval);
+        }
+    }
     if (!NT_SUCCESS(Status))
         return Status;
 
