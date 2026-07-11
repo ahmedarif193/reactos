@@ -103,12 +103,12 @@ typedef struct _D3DKMT_SEGMENTSIZEINFO
 /* ========================================================================
  * D3DKMT IOCTL code definitions
  *
- * Device type 0x23 (FILE_DEVICE_VIDEO) matches the dxgkrnl convention.
+ * DXGKRNL_DEVICE_TYPE (0x23) comes from reactos/rddm/rxgkinterface.h.
  * Function codes start at 0x100 to avoid collision with IOCTL_VIDEO_*.
  * All use METHOD_BUFFERED for safe user/kernel data transfer.
  * ====================================================================== */
 
-#define DXGKRNL_DEVICE_TYPE     0x23
+#include <reactos/rddm/rxgkinterface.h>
 
 #define IOCTL_D3DKMT_ENUMADAPTERS \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x100, METHOD_BUFFERED, FILE_ANY_ACCESS)
@@ -335,30 +335,8 @@ typedef struct _D3DKMT_SEGMENTSIZEINFO
 #define IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x18A, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
-/*
- * Private kernel-to-kernel interface exchange IOCTL.
- *
- * Sent by win32k during initialization to request the
- * REACTOS_WIN32K_DXGKRNL_INTERFACE callback table from dxgkrnl.
- * Uses IRP_MJ_INTERNAL_DEVICE_CONTROL (kernel-only).
- *
- * Input:  DXGKRNL_INTERFACE_EXCHANGE_IN  (version handshake)
- * Output: REACTOS_WIN32K_DXGKRNL_INTERFACE (filled callback table)
- */
-#define IOCTL_DXGKRNL_EXCHANGE_INTERFACE \
-    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x200, METHOD_BUFFERED, FILE_ANY_ACCESS)
-
-/*
- * Interface exchange handshake structure.
- * win32k passes its version; dxgkrnl validates and returns the callback table.
- */
-#define DXGKRNL_INTERFACE_VERSION_1  1
-
-typedef struct _DXGKRNL_INTERFACE_EXCHANGE_IN
-{
-    ULONG Version;      /* Must be DXGKRNL_INTERFACE_VERSION_1 */
-    ULONG Size;         /* sizeof(REACTOS_WIN32K_DXGKRNL_INTERFACE) */
-} DXGKRNL_INTERFACE_EXCHANGE_IN, *PDXGKRNL_INTERFACE_EXCHANGE_IN;
+/* IOCTL_DXGKRNL_EXCHANGE_INTERFACE and its handshake structure live in
+ * reactos/rddm/rxgkinterface.h (shared with win32k's wddm_bridge). */
 
 typedef struct _DXGKMT_GETSHADOWSURFACE
 {
