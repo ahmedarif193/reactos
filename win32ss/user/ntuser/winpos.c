@@ -1814,6 +1814,7 @@ co_WinPosSetWindowPos(
    RECTL CopyRect;
    PWND Ancestor;
    BOOL bPointerInWindow, PosChanged = FALSE;
+   BOOL bComposited = FALSE;
    PTHREADINFO pti = PsGetCurrentThreadWin32Thread();
 
    ASSERT_REFS_CO(Window);
@@ -2013,6 +2014,12 @@ co_WinPosSetWindowPos(
                      NewWindowRect.top - OldWindowRect.top);
    }
 
+   /* Resize the composition backing to the new window rect and schedule a
+    * recompose (covers pure moves and Z-order changes too). Must precede
+    * DceResetActiveDCEs so live redirected DCs rebind to the new backing. */
+   IntCompositionOnWindowResize(Window);
+   bComposited = (IntCompositionGetRedirectSurface(Window) != NULL);
+
    DceResetActiveDCEs(Window); // For WS_VISIBLE changes.
 
    // Change or update, set send non-client paint flag.
@@ -2044,7 +2051,24 @@ co_WinPosSetWindowPos(
               PREGION RgnUpdate = REGION_LockRgn(Window->hrgnUpdate);
               if (RgnUpdate)
               {
-                  RgnType = IntGdiCombineRgn(RgnUpdate, RgnUpdate, VisAfter, RGN_AND);
+                  if (bComposited)
+                  {
+                      /* Composited: keep off-screen parts — paints land in the
+                       * position-independent backing and the pure-move path
+                       * never re-invalidates reveals, so dropping them leaves
+                       * erased-but-unpainted holes. Clip to the window extent
+                       * only, not the screen-limited VisAfter. */
+                      PREGION RgnExtent = IntSysCreateRectpRgnIndirect(&Window->rcWindow);
+                      if (RgnExtent)
+                      {
+                          RgnType = IntGdiCombineRgn(RgnUpdate, RgnUpdate, RgnExtent, RGN_AND);
+                          REGION_Delete(RgnExtent);
+                      }
+                  }
+                  else
+                  {
+                      RgnType = IntGdiCombineRgn(RgnUpdate, RgnUpdate, VisAfter, RGN_AND);
+                  }
                   REGION_UnlockRgn(RgnUpdate);
               }
           }
@@ -2106,6 +2130,26 @@ co_WinPosSetWindowPos(
             REGION_Delete(CopyRgn);
             CopyRgn = NULL;
          }
+         else if (bComposited)
+         {
+            /* Composited top-level: backing is position-independent, no
+             * old->new self-blit. Pure move: extend CopyRgn to the whole
+             * window extent (not the screen-limited VisAfter — off-screen
+             * parts are just as valid in the backing) so no DirtyRgn
+             * invalidation (per-step NCPAINT/erase) fires; the compose
+             * re-asserts the window. */
+            IntValidateParent(Window, CopyRgn);
+            if ((OldWindowRect.right - OldWindowRect.left ==
+                 NewWindowRect.right - NewWindowRect.left) &&
+                (OldWindowRect.bottom - OldWindowRect.top ==
+                 NewWindowRect.bottom - NewWindowRect.top) &&
+                !(WinPos.flags & SWP_FRAMECHANGED))
+            {
+               REGION_SetRectRgn(CopyRgn, 0, 0,
+                                 NewWindowRect.right - NewWindowRect.left,
+                                 NewWindowRect.bottom - NewWindowRect.top);
+            }
+         }
          else if ( OldWindowRect.left != NewWindowRect.left ||
                    OldWindowRect.top != NewWindowRect.top ||
                   (WinPos.flags & SWP_FRAMECHANGED) )
@@ -2155,14 +2199,34 @@ co_WinPosSetWindowPos(
          PREGION DirtyRgn = IntSysCreateRectpRgn(0, 0, 0, 0);
          if (DirtyRgn)
          {
+             /* Composited: dirty against the whole window extent, not the
+              * screen/occlusion-limited VisAfter — the backing must hold
+              * valid content for off-screen and occluded areas too, or a
+              * later reveal exposes stale pixels the pure-move path never
+              * repaints. */
+             PREGION SrcRgn = VisAfter;
+             PREGION ExtentRgn = NULL;
+
+             if (bComposited)
+             {
+                ExtentRgn = IntSysCreateRectpRgn(0, 0,
+                               NewWindowRect.right - NewWindowRect.left,
+                               NewWindowRect.bottom - NewWindowRect.top);
+                if (ExtentRgn)
+                   SrcRgn = ExtentRgn;
+             }
+
              if (CopyRgn != NULL)
              {
-                RgnType = IntGdiCombineRgn(DirtyRgn, VisAfter, CopyRgn, RGN_DIFF);
+                RgnType = IntGdiCombineRgn(DirtyRgn, SrcRgn, CopyRgn, RGN_DIFF);
              }
              else
              {
-                RgnType = IntGdiCombineRgn(DirtyRgn, VisAfter, 0, RGN_COPY);
+                RgnType = IntGdiCombineRgn(DirtyRgn, SrcRgn, 0, RGN_COPY);
              }
+
+             if (ExtentRgn != NULL)
+                REGION_Delete(ExtentRgn);
 
              if (RgnType != ERROR && RgnType != NULLREGION) // Regions moved.
              {
@@ -2854,6 +2918,11 @@ co_WinPosShowWindow(PWND Wnd, INT Cmd)
    if ( EventMsg ) IntNotifyWinEvent(EventMsg, Wnd, OBJID_WINDOW, CHILDID_SELF, WEF_SETBYWNDPTI);
 
    if ( ShowOwned ) IntShowOwnedPopups(Wnd, TRUE );
+
+   /* A window created hidden and shown here has just become visible — give the
+    * compositor its backing surface now (no-op when composition is off, the
+    * window isn't compositable, or it is already redirected). */
+   IntCompositionOnWindowCreate(Wnd);
 
    if ((Cmd == SW_HIDE) || (Cmd == SW_MINIMIZE))
    {
