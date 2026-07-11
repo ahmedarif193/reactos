@@ -26,52 +26,35 @@ RcddPresent(
    PRCDD_PDEV ppdev,
    const RECTL *prcl)
 {
-   LONG Left = 0, Top = 0;
-   LONG Right = ppdev->ScreenWidth;
-   LONG Bottom = ppdev->ScreenHeight;
-   ULONG BytesPerPixel = (ppdev->BitsPerPixel + 7) / 8;
-   ULONG Delta = ppdev->ScreenDelta;
-   ULONG ByteLeft, ByteRight;
-   PUCHAR Source, Destination;
-   ULONG Bytes;
-   LONG y;
+   RECTL Dirty;
+   ULONG Ret;
 
-   if (!ppdev->ShadowActive)
+   /* GDI's engine drew straight into the mapped DOD primary (ppdev->ScreenPtr),
+    * so there is nothing to copy — we only tell dxgkrnl which rectangle changed.
+    * dxgkrnl scans it out through the miniport's DxgkDdiPresentDisplayOnly (the
+    * WDDM display-only present path), driven by cdd rather than the fallback
+    * present timer. */
+   if (ppdev->ScreenPtr == NULL)
       return;
+
+   Dirty.left   = 0;
+   Dirty.top    = 0;
+   Dirty.right  = ppdev->ScreenWidth;
+   Dirty.bottom = ppdev->ScreenHeight;
 
    if (prcl != NULL)
    {
-      Left = max(prcl->left, Left);
-      Top = max(prcl->top, Top);
-      Right = min(prcl->right, Right);
-      Bottom = min(prcl->bottom, Bottom);
+      Dirty.left   = max(Dirty.left, prcl->left);
+      Dirty.top    = max(Dirty.top, prcl->top);
+      Dirty.right  = min(Dirty.right, prcl->right);
+      Dirty.bottom = min(Dirty.bottom, prcl->bottom);
    }
 
-   if (Left >= Right || Top >= Bottom)
+   if (Dirty.left >= Dirty.right || Dirty.top >= Dirty.bottom)
       return;
 
-   ByteLeft = ((ULONG)Left * BytesPerPixel) & ~63UL;
-   ByteRight = ((ULONG)Right * BytesPerPixel + 63) & ~63UL;
-   if (ByteRight > Delta)
-      ByteRight = Delta;
-
-   if (ByteLeft == 0 && ByteRight == Delta)
-   {
-      /* Full-width spans are contiguous in both surfaces. */
-      memcpy((PUCHAR)ppdev->ScreenPtr + Top * Delta, ppdev->ShadowPtr + Top * Delta, (Bottom - Top) * Delta);
-      return;
-   }
-
-   Source = ppdev->ShadowPtr + Top * Delta + ByteLeft;
-   Destination = (PUCHAR)ppdev->ScreenPtr + Top * Delta + ByteLeft;
-   Bytes = ByteRight - ByteLeft;
-
-   for (y = Top; y < Bottom; y++)
-   {
-      memcpy(Destination, Source, Bytes);
-      Source += Delta;
-      Destination += Delta;
-   }
+   EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT,
+                      &Dirty, sizeof(Dirty), NULL, 0, &Ret);
 }
 
 /* Present the target rectangle, narrowed by the clip bounding box if any. */
@@ -88,8 +71,23 @@ RcddPresentTarget(
       return;
 
    ppdev = (PRCDD_PDEV)psoTrg->dhpdev;
-   if (!ppdev->ShadowActive || psoTrg->pvScan0 != ppdev->ShadowPtr)
+   if (psoTrg->pvScan0 != ppdev->ScreenPtr)
       return;
+
+   if (prclTrg == NULL)
+   {
+      /* No target bounds — fall back to the clip bounds; failing that,
+       * present the whole screen. */
+      if (pco != NULL && pco->iDComplexity != DC_TRIVIAL)
+      {
+         prclTrg = &pco->rclBounds;
+      }
+      else
+      {
+         RcddPresent(ppdev, NULL);
+         return;
+      }
+   }
 
    rcl = *prclTrg;
    if (rcl.right < rcl.left)
@@ -180,8 +178,259 @@ RcddSynchronizeSurface(
    if (!(fl & DSS_FLUSH_EVENT) || pso == NULL || pso->dhpdev == NULL)
       return;
 
-   if (pso->pvScan0 != ((PRCDD_PDEV)pso->dhpdev)->ShadowPtr)
+   if (pso->pvScan0 != ((PRCDD_PDEV)pso->dhpdev)->ScreenPtr)
       return;
 
    RcddPresent((PRCDD_PDEV)pso->dhpdev, prcl);
+}
+
+/* Bounding box of a path in pixels (PATHOBJ bounds are 28.4 fixed point);
+ * padded a pixel for pen width rounding. */
+static VOID
+RcddPathBounds(
+   PATHOBJ *ppo,
+   RECTL *prcl)
+{
+   RECTFX rcfx;
+
+   PATHOBJ_vGetBounds(ppo, &rcfx);
+   prcl->left   = (rcfx.xLeft >> 4) - 1;
+   prcl->top    = (rcfx.yTop >> 4) - 1;
+   prcl->right  = ((rcfx.xRight + 15) >> 4) + 1;
+   prcl->bottom = ((rcfx.yBottom + 15) >> 4) + 1;
+}
+
+/*
+ * The remaining draw DDIs. cdd implements no raster ops: every hook punts to
+ * the GDI engine and then presents the touched rectangle. They are hooked
+ * ONLY so no drawing primitive can reach the primary without an explicit
+ * dirty-rect present — otherwise text/line/path/gradient output would sit
+ * unpresented until the fallback timer, which is suppressed for tens of
+ * milliseconds after any other dirty/present activity.
+ */
+BOOL APIENTRY
+RcddTextOut(
+   IN SURFOBJ *pso,
+   IN STROBJ *pstro,
+   IN FONTOBJ *pfo,
+   IN CLIPOBJ *pco,
+   IN RECTL *prclExtra,
+   IN RECTL *prclOpaque,
+   IN BRUSHOBJ *pboFore,
+   IN BRUSHOBJ *pboOpaque,
+   IN POINTL *pptlOrg,
+   IN MIX mix)
+{
+   BOOL Result;
+
+   Result = EngTextOut(pso, pstro, pfo, pco, prclExtra, prclOpaque,
+                       pboFore, pboOpaque, pptlOrg, mix);
+   if (Result)
+   {
+      RECTL rcl;
+      const RECTL *prcl = NULL;
+
+      if (pstro != NULL)
+      {
+         rcl = pstro->rclBkGround;
+         if (prclOpaque != NULL)
+         {
+            rcl.left   = min(rcl.left, prclOpaque->left);
+            rcl.top    = min(rcl.top, prclOpaque->top);
+            rcl.right  = max(rcl.right, prclOpaque->right);
+            rcl.bottom = max(rcl.bottom, prclOpaque->bottom);
+         }
+         prcl = &rcl;
+      }
+      else if (prclOpaque != NULL)
+      {
+         prcl = prclOpaque;
+      }
+
+      RcddPresentTarget(pso, prcl, pco);
+   }
+
+   return Result;
+}
+
+BOOL APIENTRY
+RcddLineTo(
+   IN SURFOBJ *pso,
+   IN CLIPOBJ *pco,
+   IN BRUSHOBJ *pbo,
+   IN LONG x1,
+   IN LONG y1,
+   IN LONG x2,
+   IN LONG y2,
+   IN RECTL *prclBounds,
+   IN MIX mix)
+{
+   BOOL Result;
+
+   Result = EngLineTo(pso, pco, pbo, x1, y1, x2, y2, prclBounds, mix);
+   if (Result)
+      RcddPresentTarget(pso, prclBounds, pco);
+
+   return Result;
+}
+
+BOOL APIENTRY
+RcddStrokePath(
+   IN SURFOBJ *pso,
+   IN PATHOBJ *ppo,
+   IN CLIPOBJ *pco,
+   IN XFORMOBJ *pxo,
+   IN BRUSHOBJ *pbo,
+   IN POINTL *pptlBrushOrg,
+   IN LINEATTRS *plineattrs,
+   IN MIX mix)
+{
+   BOOL Result;
+
+   Result = EngStrokePath(pso, ppo, pco, pxo, pbo, pptlBrushOrg, plineattrs, mix);
+   if (Result)
+   {
+      RECTL rcl;
+      RcddPathBounds(ppo, &rcl);
+      RcddPresentTarget(pso, &rcl, pco);
+   }
+
+   return Result;
+}
+
+BOOL APIENTRY
+RcddFillPath(
+   IN SURFOBJ *pso,
+   IN PATHOBJ *ppo,
+   IN CLIPOBJ *pco,
+   IN BRUSHOBJ *pbo,
+   IN POINTL *pptlBrushOrg,
+   IN MIX mix,
+   IN FLONG flOptions)
+{
+   BOOL Result;
+
+   Result = EngFillPath(pso, ppo, pco, pbo, pptlBrushOrg, mix, flOptions);
+   if (Result)
+   {
+      RECTL rcl;
+      RcddPathBounds(ppo, &rcl);
+      RcddPresentTarget(pso, &rcl, pco);
+   }
+
+   return Result;
+}
+
+BOOL APIENTRY
+RcddStrokeAndFillPath(
+   IN SURFOBJ *pso,
+   IN PATHOBJ *ppo,
+   IN CLIPOBJ *pco,
+   IN XFORMOBJ *pxo,
+   IN BRUSHOBJ *pboStroke,
+   IN LINEATTRS *plineattrs,
+   IN BRUSHOBJ *pboFill,
+   IN POINTL *pptlBrushOrg,
+   IN MIX mixFill,
+   IN FLONG flOptions)
+{
+   BOOL Result;
+
+   Result = EngStrokeAndFillPath(pso, ppo, pco, pxo, pboStroke, plineattrs,
+                                 pboFill, pptlBrushOrg, mixFill, flOptions);
+   if (Result)
+   {
+      RECTL rcl;
+      RcddPathBounds(ppo, &rcl);
+      RcddPresentTarget(pso, &rcl, pco);
+   }
+
+   return Result;
+}
+
+BOOL APIENTRY
+RcddStretchBlt(
+   IN SURFOBJ *psoDest,
+   IN SURFOBJ *psoSrc,
+   IN SURFOBJ *psoMask,
+   IN CLIPOBJ *pco,
+   IN XLATEOBJ *pxlo,
+   IN COLORADJUSTMENT *pca,
+   IN POINTL *pptlHTOrg,
+   IN RECTL *prclDest,
+   IN RECTL *prclSrc,
+   IN POINTL *pptlMask,
+   IN ULONG iMode)
+{
+   BOOL Result;
+
+   Result = EngStretchBlt(psoDest, psoSrc, psoMask, pco, pxlo, pca, pptlHTOrg,
+                          prclDest, prclSrc, pptlMask, iMode);
+   if (Result)
+      RcddPresentTarget(psoDest, prclDest, pco);
+
+   return Result;
+}
+
+BOOL APIENTRY
+RcddAlphaBlend(
+   IN SURFOBJ *psoDest,
+   IN SURFOBJ *psoSrc,
+   IN CLIPOBJ *pco,
+   IN XLATEOBJ *pxlo,
+   IN RECTL *prclDest,
+   IN RECTL *prclSrc,
+   IN BLENDOBJ *pBlendObj)
+{
+   BOOL Result;
+
+   Result = EngAlphaBlend(psoDest, psoSrc, pco, pxlo, prclDest, prclSrc, pBlendObj);
+   if (Result)
+      RcddPresentTarget(psoDest, prclDest, pco);
+
+   return Result;
+}
+
+BOOL APIENTRY
+RcddTransparentBlt(
+   IN SURFOBJ *psoDst,
+   IN SURFOBJ *psoSrc,
+   IN CLIPOBJ *pco,
+   IN XLATEOBJ *pxlo,
+   IN RECTL *prclDst,
+   IN RECTL *prclSrc,
+   IN ULONG iTransColor,
+   IN ULONG ulReserved)
+{
+   BOOL Result;
+
+   Result = EngTransparentBlt(psoDst, psoSrc, pco, pxlo, prclDst, prclSrc,
+                              iTransColor, ulReserved);
+   if (Result)
+      RcddPresentTarget(psoDst, prclDst, pco);
+
+   return Result;
+}
+
+BOOL APIENTRY
+RcddGradientFill(
+   IN SURFOBJ *psoDest,
+   IN CLIPOBJ *pco,
+   IN XLATEOBJ *pxlo,
+   IN TRIVERTEX *pVertex,
+   IN ULONG nVertex,
+   IN PVOID pMesh,
+   IN ULONG nMesh,
+   IN RECTL *prclExtents,
+   IN POINTL *pptlDitherOrg,
+   IN ULONG ulMode)
+{
+   BOOL Result;
+
+   Result = EngGradientFill(psoDest, pco, pxlo, pVertex, nVertex, pMesh, nMesh,
+                            prclExtents, pptlDitherOrg, ulMode);
+   if (Result)
+      RcddPresentTarget(psoDest, prclExtents, pco);
+
+   return Result;
 }

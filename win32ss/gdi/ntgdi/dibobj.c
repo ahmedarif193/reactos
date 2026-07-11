@@ -1344,8 +1344,13 @@ NtGdiStretchDIBitsInternal(
         pvBits = NULL;
     }
 
-    /* Here we select between the dwRop with SRCCOPY or not. */
-    if (dwRop == SRCCOPY)
+    /* Here we select between the dwRop with SRCCOPY or not. A 1:1 SRCCOPY
+     * (no scaling) skips the compatible-bitmap intermediate below — that path
+     * allocates a DC+bitmap and copies the pixels TWICE per call (DIB->bitmap
+     * then bitmap->screen), which dominates the GL SwapBuffers hot path. It
+     * falls through to the direct DIB->surface blit, which takes the fast
+     * BitBlt path for an equal-size copy. */
+    if (dwRop == SRCCOPY && (cxSrc != cxDst || cySrc != cyDst))
     {
         hdcMem = NtGdiCreateCompatibleDC(hdc);
         if (hdcMem == NULL)
@@ -1481,19 +1486,44 @@ NtGdiStretchDIBitsInternal(
                               pdc->pdcattr->crBackgroundClr,
                               pdc->pdcattr->crForegroundClr);
 
-        /* Perform the stretch operation */
-        IntEngStretchBlt(&psurfDst->SurfObj,
+        /* An equal-extent, non-flipped copy uses the fast BitBlt path: the
+         * generic stretch DDA loop is ~10x slower for a 1:1 blit, and this is
+         * the StretchDIBits(SRCCOPY) / GL SwapBuffers hot path. */
+        if ((rcDst.right - rcDst.left) == (rcSrc.right - rcSrc.left) &&
+            (rcDst.bottom - rcDst.top) == (rcSrc.bottom - rcSrc.top) &&
+            rcDst.right > rcDst.left && rcDst.bottom > rcDst.top)
+        {
+            POINTL ptlSrc;
+
+            ptlSrc.x = rcSrc.left;
+            ptlSrc.y = rcSrc.top;
+            IntEngBitBlt(&psurfDst->SurfObj,
                          &psurfTmp->SurfObj,
                          NULL,
                          (CLIPOBJ *)&pdc->co,
                          &exlo.xlo,
-                         &pdc->dclevel.ca,
                          &rcDst,
-                         &rcSrc,
+                         &ptlSrc,
                          NULL,
                          &pdc->eboFill.BrushObject,
                          NULL,
                          WIN32_ROP3_TO_ENG_ROP4(dwRop));
+        }
+        else
+        {
+            IntEngStretchBlt(&psurfDst->SurfObj,
+                             &psurfTmp->SurfObj,
+                             NULL,
+                             (CLIPOBJ *)&pdc->co,
+                             &exlo.xlo,
+                             &pdc->dclevel.ca,
+                             &rcDst,
+                             &rcSrc,
+                             NULL,
+                             &pdc->eboFill.BrushObject,
+                             NULL,
+                             WIN32_ROP3_TO_ENG_ROP4(dwRop));
+        }
 
         /* Cleanup */
         DC_vFinishBlit(pdc, NULL);

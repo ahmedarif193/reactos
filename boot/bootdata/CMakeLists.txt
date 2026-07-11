@@ -29,6 +29,23 @@ endif()
 # Regtest
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/bootcdregtest/regtest.cmd DESTINATION reactos/bin FOR all)
 
+# gears (glxgears WGL demo) is built from source at base/applications/gears
+# and packaged there; auto-run at logon via the hivedef.inf Run key.
+
+# Jazz² Resurrection — native pure-ARM64 port (Jazz2.exe + Content tree),
+# auto-run at logon via the hivedef.inf Run key. LiveCD only (each Content
+# subdir would otherwise need a dir_to_num entry for the bootcd .cab).
+file(GLOB_RECURSE _jazz2_files CONFIGURE_DEPENDS
+    RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}/jazz2 ${CMAKE_CURRENT_SOURCE_DIR}/jazz2/*)
+foreach(_jf ${_jazz2_files})
+    get_filename_component(_jdir ${_jf} DIRECTORY)
+    if(_jdir)
+        add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/jazz2/${_jf} DESTINATION reactos/bin/jazz2/${_jdir} FOR livecd preinstall)
+    else()
+        add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/jazz2/${_jf} DESTINATION reactos/bin/jazz2 FOR livecd preinstall)
+    endif()
+endforeach()
+
 # autorun.inf
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/autorun.inf DESTINATION root NO_CAB FOR bootcd livecd)
 

@@ -1,0 +1,1691 @@
+
+  1.67 RPi: BOOTSYS release VERSION:2226a853 DATE: 2025/12/08 TIME: 19:29:54
+  1.67 BOOTMODE: 0x06 partition 0 build-ts BUILD_TIMESTAMP=1765222194 serial 09a00d1d boardrev d04171 stc 1675547
+  1.68 AON_RESET: 00000003 PM_RSTS 00001000
+  1.68 POWER_OFF_ON_HALT: 0 WAIT_FOR_POWER_BUTTON 0 power-on-reset 1
+  1.69 RP1_BOOT chip ID: 0x20001927
+  1.70 PCIEx1: PWR 0 DET_WAKE 0
+  1.70 part 00000000 reset_info 00000000
+  1.70 PMIC reset-event 00000000 rtc 00000001 alarm 00000000 enabled 0
+  1.71 uSD voltage 3.3V
+  1.71 SDRAM_CONFIG: 14
+  1.71 Initialising SDRAM rank 2 total-size: 64 Gbit 4267 (0x14 0x14)
+  1.72 DDR 4267 1 0 64 152 BL:1
+  2.43 RP1 FW: load 0
+  2.45 RP1_BOOT chip ID: 0x20001927
+  3.67 RP1 FW: load 1
+  4.09 OTP boardrev d04171 bootrom a a
+  4.09 Customer key hash 0000000000000000000000000000000000000000000000000000000000000000
+  4.10 VC-JTAG unlocked
+  4.12 RP1_BOOT chip ID: 0x20001927
+
+  4.76 PCI2 init
+  4.76 PCI2 reset
+  4.80 PCIe scan 00001de4:00000001
+  4.80 RP1_CHIP_INFO 20001927
+
+  4.81 RPi: BOOTLOADER release VERSION:2226a853 DATE: 2025/12/08 TIME: 19:29:54
+  4.81 BOOTMODE: 0x06 partition 0 build-ts BUILD_TIMESTAMP=1765222194 serial 09a00d1d boardrev d04171 stc 4817922
+  4.82 PCIEx1: PWR 0 DET_WAKE 0
+  4.30 M.2 PCIe HAT not detected.
+  4.85 usb_pd_init status 1
+  4.85 XHCI-STOP
+  4.85 xHC0 ver: 272 HCS: 03000440 140000f1 07ff000a HCC: 0240fe6d
+  4.86 USBSTS 11
+  4.86 xHC0 ver: 272 HCS: 03000440 140000f1 07ff000a HCC: 0240fe6d
+  4.87 xHC0 ports 3 slots 64 intrs 4
+  4.88 XHCI-STOP
+  4.88 xHC1 ver: 272 HCS: 03000440 140000f1 07ff000a HCC: 0240fe6d
+  4.88 USBSTS 1
+  4.89 xHC1 ver: 272 HCS: 03000440 140000f1 07ff000a HCC: 0240fe6d
+  4.89 xHC1 ports 3 slots 64 intrs 4
+  4.94 SD_OC: 0
+  4.42 Boot mode: USB-MSD (04) order f1
+  4.45 USB2[2] 00020ae1 connected
+  4.98 USB2[2] 00200a03 connected enabled
+  4.99 USB2 root HUB port 2 init
+  5.01 DEV [01:00] 2.00 000000:02 class 0 VID 413c PID 301a
+  5.47 USB3[3] 00021203 connected enabled
+  5.48 USB3 root HUB port 3 init
+  5.05 DEV [02:00] 3.32 000000:03 class 0 VID 0781 PID 5581
+  5.05 MSD device [02:00] 3.32 000000:03 conf 0 iface 0 ep 81#1024 02#1024
+  5.63 MSD [02:00] 3.32 000000:03 register MSD
+  5.82 USB3[3] 00021203 connected enabled
+  5.83 USB3 root HUB port 3 init
+  5.28 DEV [01:00] 3.32 000000:03 class 0 VID 0781 PID 5591
+  5.29 MSD device [01:00] 3.32 000000:03 conf 0 iface 0 ep 81#1024 02#1024
+  5.98 MSD [01:00] 3.32 000000:03 register MSD
+  5.46 XHCI-STOP
+  5.46 xHC0 ver: 272 HCS: 03000440 140000f1 07ff000a HCC: 0240fe6d
+  5.46 USBSTS 18
+  5.47 XHCI-STOP
+  5.47 xHC1 ver: 272 HCS: 03000440 140000f1 07ff000a HCC: 0240fe6d
+  5.47 USBSTS 18
+  5.48 XHCI-STOP
+  5.48 xHC0 ver: 272 HCS: 03000440 140000f1 07ff000a HCC: 0240fe6d
+  5.48 USBSTS 19
+  5.49 xHC0 ver: 272 HCS: 03000440 140000f1 07ff000a HCC: 0240fe6d
+  5.49 xHC0 ports 3 slots 64 intrs 4
+  5.50 XHCI-STOP
+  5.50 xHC1 ver: 272 HCS: 03000440 140000f1 07ff000a HCC: 0240fe6d
+  5.51 USBSTS 19
+  5.51 xHC1 ver: 272 HCS: 03000440 140000f1 07ff000a HCC: 0240fe6d
+  5.51 xHC1 ports 3 slots 64 intrs 4
+  5.27 USB2[2] 00020ae1 connected
+  5.77 USB2[2] 00200a03 connected enabled
+  5.78 USB2 root HUB port 2 init
+  5.59 DEV [01:00] 2.00 000000:02 class 0 VID 413c PID 301a
+  5.05 USB3[3] 002a1203 connected enabled
+  5.06 USB3 root HUB port 3 init
+  5.61 DEV [02:00] 3.32 000000:03 class 0 VID 0781 PID 5581
+  5.61 MSD device [02:00] 3.32 000000:03 conf 0 iface 0 ep 81#1024 02#1024
+  5.21 MSD [02:00] 3.32 000000:03 register MSD
+  5.25 MSD [02:00] 3.32 000000:03 LUN 0
+  5.29 USB3[3] 002a1203 connected enabled
+  5.33 USB3 root HUB port 3 init
+  5.36 MSD READ_CAPACITY [02:00] 3.32 000000:03 lun 0 block-count 121024512 block-size 512
+  5.64 DEV [01:00] 3.32 000000:03 class 0 VID 0781 PID 5591
+  5.64 MSD device [01:00] 3.32 000000:03 conf 0 iface 0 ep 81#1024 02#1024
+  5.65 MBR: 0x00000800, 1570816 type: 0xef
+  5.65 MBR: 0x00000000,       0 type: 0x00
+  5.66 MBR: 0x00000000,       0 type: 0x00
+  5.66 MBR: 0x00000000,       0 type: 0x00
+  5.71 MSD [01:00] 3.32 000000:03 register MSD
+  5.75 Trying partition: 0
+  5.80 type: 32 lba: 2048 'mkfs.fat' ' NO NAME    ' clusters 195964 (8)
+  5.68 rsc 32 fat-sectors 1536 root dir cluster 2 sectors 0 entries 0
+  5.69 FAT32 clusters 195964
+  5.69 [MSD [02:00] 3.32 000000:03] autoboot.txt not found
+  5.69 Select partition rsts 0 C(boot_partition) 0 EEPROM config 0 result 1
+  5.06 Trying partition: 1
+  5.09 type: 32 lba: 2048 'mkfs.fat' ' NO NAME    ' clusters 195959 (8)
+  5.71 rsc 32 fat-sectors 1536 root dir cluster 2 sectors 0 entries 0
+  5.72 FAT32 clusters 195959
+  5.26 Read config.txt bytes      976 hnd 0xd04
+  5.72 [MSD [02:00] 3.32 000000:03] pieeprom.upd not found
+  5.33 usb_max_current_enable forced to 1
+  5.74 MESS:00:00:05.749006:0: *** Restart logging
+  5.51 Read /config.txt bytes      976 hnd 0xd04
+  6.80 PCI1 reset
+  6.81 PCI2 reset
+  6.82 set_reboot_order 0
+  6.82 set_reboot_arg1 0
+  6.82 USB-OTG disconnect
+  6.87 MESS:00:00:06.875085:0: Starting OS 6875 ms
+  6.88 MESS:00:00:06.880608:0: 00000040: -> 00000480
+  6.88 MESS:00:00:06.882459:0: 00000030: -> 00100080
+  6.88 MESS:00:00:06.887172:0: 00000034: -> 00100080
+  6.89 MESS:00:00:06.891885:0: 00000038: -> 00100080
+  6.89 MESS:00:00:06.896598:0: 0000003c: -> 00100080
+
+NOTICE:  BL31: v2.13.0(release):v2.13.0-304-g000fe221b
+NOTICE:  BL31: Built : 19:45:01, Jul 17 2025
+UEFI firmware (version EDK2-DEV built at 20:07:13 on Jun 21 2026)
+[2J[004D[=3h[2J[009DESC (setup), F1 (shell), ENTER (boot)
+[*] Boot menu prompt detected; sending enter
+......[EUART] init: override=0x0000000000000000 override-interface=unknown
+[EUART] detect: begin
+[EUART] SPCR: search
+[EUART] SPCR: not found
+[EUART] DBG2: search
+[EUART] DBG2: rev=0x00 len=0x00000061 oem=RPIFDN table=RPI5 oemrev=0x00000200 creator=EDK2 creatorrev=0x00000300
+[EUART] DBG2: count=1 offset=0x0000002C length=0x00000061
+[EUART] DBG2: entry 0 type=0x8000 subtype=0x0003 regs=1 baroff=0x0016 name=\_SB.SOCB.URT0 oemdata-len=0x0000
+[EUART] DBG2: GAS space=0x00 addr=0x000000107D001000
+[EUART] DBG2: interface=pl011
+[EUART] detect: base=0x000000107D001000 interface=pl011 ready=0
+[EUART] init: done base=0x000000107D001000 interface=pl011 ready=1
+[EUART] init: already initialized base=0x000000107D001000 interface=pl011 ready=1
+(\boot\freeldr\freeldr\arch\uefi\uefimem.c:273) trace: UefiMemGetMemoryMap: Gather memory map
+(\boot\freeldr\freeldr\arch\uefi\uefimem.c:285) trace: Value of MapKey: 6681
+(\boot\freeldr\freeldr\arch\uefi\uefimem.c:286) trace: Value of MapSize: 4608
+(\boot\freeldr\freeldr\arch\uefi\uefimem.c:287) trace: Value of DescriptorSize: 48
+(\boot\freeldr\freeldr\arch\uefi\uefimem.c:288) trace: Value of DescriptorVersion: 1
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1058) trace: Found boot handle at index 1
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1071) trace: Boot handle: LogicalPartition=TRUE, RemovableMedia=TRUE, BlockSize=512
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1129) trace: Found root block device at index 0: BlockSize=512, LastBlock=121024511
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1151) trace: Calling GetHarddiskInformation for drive 128 (BlockDeviceIndex=0)
+(\boot\freeldr\freeldr\disk\disk.c:102) trace: DiskInitialize(0x80, 'multi(0)disk(0)rdisk(0)', Type: 25)
+(\boot\freeldr\freeldr\disk\disk.c:130) trace: Signature: 0
+(\boot\freeldr\freeldr\disk\disk.c:139) trace: Checksum: 4d3b9ec2
+(\boot\freeldr\freeldr\disk\disk.c:142) trace: IsPartitionValid: TRUE
+(\boot\freeldr\freeldr\lib\fs\fs.c:673) trace: FsRegisterDevice(multi(0)disk(0)rdisk(0)partition(0))
+(\boot\freeldr\freeldr\disk\partition.c:82) trace: Drive 0x80 partition type MBR
+(\boot\freeldr\freeldr\lib\fs\fs.c:673) trace: FsRegisterDevice(multi(0)disk(0)rdisk(0)partition(1))
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:976) trace: Identifier: 4d3b9ec2-00000000-A
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1123) trace: Skipping logical partition handle 1
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1129) trace: Found root block device at index 2: BlockSize=512, LastBlock=240353279
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1151) trace: Calling GetHarddiskInformation for drive 129 (BlockDeviceIndex=1)
+(\boot\freeldr\freeldr\disk\disk.c:102) trace: DiskInitialize(0x81, 'multi(0)disk(0)rdisk(1)', Type: 25)
+(\boot\freeldr\freeldr\disk\disk.c:130) trace: Signature: 0
+(\boot\freeldr\freeldr\disk\disk.c:139) trace: Checksum: 55bbc18b
+(\boot\freeldr\freeldr\disk\disk.c:142) trace: IsPartitionValid: TRUE
+(\boot\freeldr\freeldr\disk\disk.c:163) trace: Disk 0x81 is GPT, DiskGuid: {9df3f58f-f8ad-4f63-9de5-0e0a91c4e2a0}
+(\boot\freeldr\freeldr\lib\fs\fs.c:673) trace: FsRegisterDevice(multi(0)disk(0)rdisk(1)partition(0))
+(\boot\freeldr\freeldr\disk\partition.c:82) trace: Drive 0x81 partition type GPT
+(\boot\freeldr\freeldr\lib\fs\fs.c:673) trace: FsRegisterDevice(multi(0)disk(0)rdisk(1)partition(1))
+(\boot\freeldr\freeldr\lib\fs\fs.c:673) trace: FsRegisterDevice(multi(0)disk(0)rdisk(1)partition(2))
+(\boot\freeldr\freeldr\lib\fs\fs.c:673) trace: FsRegisterDevice(multi(0)disk(0)rdisk(1)partition(3))
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:976) trace: Identifier: 55bbc18b-00000000-A
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1123) trace: Skipping logical partition handle 3
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1123) trace: Skipping logical partition handle 4
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1123) trace: Skipping logical partition handle 5
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1173) trace: Boot handle is a logical partition, searching for parent root device
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1176) trace: Boot partition: BlockSize=512, RemovableMedia=TRUE
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1212) trace: Found boot parent device by device path at ARC drive index 0
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1266) trace: Found 2 root block devices
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1279) trace: UefiSetBootpath: Setting up boot path
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1362) trace: Boot handle is logical partition, using partition 1
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1377) trace: Boot path set to hard disk: multi(0)disk(0)rdisk(0)partition(1)
+(\boot\freeldr\freeldr\arch\uefi\uefildr.c:88) trace: ExecuteLoaderCleanly Entry
+(\boot\freeldr\freeldr\lib\fs\iso.c:595) trace: Enter IsoMount(0)
+(\boot\freeldr\freeldr\lib\fs\iso.c:609) warn: Unrecognized CD-ROM format
+(\boot\freeldr\freeldr\lib\fs\fat.c:1592) trace: Enter FatMount(0)
+(\boot\freeldr\freeldr\lib\fs\fat.c:168) trace: FatOpenVolume() DeviceId = 0
+(\boot\freeldr\freeldr\lib\fs\fat.c:181) trace: Dumping boot sector:
+(\boot\freeldr\freeldr\lib\fs\fat.c:199) trace: sizeof(FAT32_BOOTSECTOR) = 0x200.
+(\boot\freeldr\freeldr\lib\fs\fat.c:201) trace: JumpBoot: 0xeb 0xfe 0x90
+(\boot\freeldr\freeldr\lib\fs\fat.c:202) trace: OemName: mkfs.fat
+(\boot\freeldr\freeldr\lib\fs\fat.c:203) trace: BytesPerSector: 512
+(\boot\freeldr\freeldr\lib\fs\fat.c:204) trace: SectorsPerCluster: 8
+(\boot\freeldr\freeldr\lib\fs\fat.c:205) trace: ReservedSectors: 32
+(\boot\freeldr\freeldr\lib\fs\fat.c:206) trace: NumberOfFats: 2
+(\boot\freeldr\freeldr\lib\fs\fat.c:207) trace: RootDirEntries: 0
+(\boot\freeldr\freeldr\lib\fs\fat.c:208) trace: TotalSectors: 0
+(\boot\freeldr\freeldr\lib\fs\fat.c:209) trace: MediaDescriptor: 0xf8
+(\boot\freeldr\freeldr\lib\fs\fat.c:210) trace: SectorsPerFat: 0
+(\boot\freeldr\freeldr\lib\fs\fat.c:211) trace: SectorsPerTrack: 63
+(\boot\freeldr\freeldr\lib\fs\fat.c:212) trace: NumberOfHeads: 32
+(\boot\freeldr\freeldr\lib\fs\fat.c:213) trace: HiddenSectors: 2048
+(\boot\freeldr\freeldr\lib\fs\fat.c:214) trace: TotalSectorsBig: 1570779
+(\boot\freeldr\freeldr\lib\fs\fat.c:215) trace: SectorsPerFatBig: 1536
+(\boot\freeldr\freeldr\lib\fs\fat.c:216) trace: ExtendedFlags: 0x0
+(\boot\freeldr\freeldr\lib\fs\fat.c:217) trace: FileSystemVersion: 0x0
+(\boot\freeldr\freeldr\lib\fs\fat.c:218) trace: RootDirStartCluster: 2
+(\boot\freeldr\freeldr\lib\fs\fat.c:219) trace: FsInfo: 1
+(\boot\freeldr\freeldr\lib\fs\fat.c:220) trace: BackupBootSector: 6
+(\boot\freeldr\freeldr\lib\fs\fat.c:221) trace: Reserved: 0x2533b34
+(\boot\freeldr\freeldr\lib\fs\fat.c:222) trace: DriveNumber: 0xff
+(\boot\freeldr\freeldr\lib\fs\fat.c:223) trace: Reserved1: 0x0
+(\boot\freeldr\freeldr\lib\fs\fat.c:224) trace: BootSignature: 0x29
+(\boot\freeldr\freeldr\lib\fs\fat.c:225) trace: VolumeSerialNumber: 0x22e8e2e
+(\boot\freeldr\freeldr\lib\fs\fat.c:226) trace: VolumeLabel: NO NAME    
+(\boot\freeldr\freeldr\lib\fs\fat.c:227) trace: FileSystemType: FAT32   
+(\boot\freeldr\freeldr\lib\fs\fat.c:228) trace: BootSectorMagic: 0xaa55
+(\boot\freeldr\freeldr\lib\fs\fat.c:361) trace: FAT cache is 512 sectors, 262144 bytes
+(\boot\freeldr\freeldr\lib\fs\fat.c:1665) trace: FatMount(0) success
+(\boot\freeldr\freeldr\lib\fs\fat.c:1426) trace: FatGetFileInformation(1) -> FileSize = 1293, FilePointer = 0x0
+(\boot\freeldr\freeldr\bootmgr.c:282) trace: Argv[0]: '(null)'
+(\boot\freeldr\freeldr\bootmgr.c:282) trace: Argv[1]: 'SystemPartition=multi(0)disk(0)rdisk(0)partition(1)'
+(\boot\freeldr\freeldr\bootmgr.c:282) trace: Argv[2]: 'LoadIdentifier=ReactOS (Debug, SMP)'
+(\boot\freeldr\freeldr\bootmgr.c:282) trace: Argv[3]: 'BootType=Windows2003'
+(\boot\freeldr\freeldr\bootmgr.c:282) trace: Argv[4]: 'SystemPath=\ReactOS'
+(\boot\freeldr\freeldr\bootmgr.c:282) trace: Argv[5]: 'Options=/HAL=hal.dll /KERNEL=ntkrnlmp.exe /DEBUG /DEBUGPORT=COM1 /BAUDRATE=115200 /SOS /FASTDETECT'
+(\boot\freeldr\freeldr\lib\fs\fat.c:965) trace: FAT cache miss: read sector 0x239 from disk
+(\boot\freeldr\freeldr\lib\fs\fat.c:965) trace: FAT cache miss: read sector 0x325 from disk
+(\boot\freeldr\freeldr\lib\fs\fat.c:965) trace: FAT cache miss: read sector 0x36f from disk
+(\boot\freeldr\freeldr\lib\fs\fat.c:965) trace: FAT cache miss: read sector 0x414 from disk
+(\boot\freeldr\freeldr\lib\fs\fat.c:1426) trace: FatGetFileInformation(1) -> FileSize = 233472, FilePointer = 0x0
+(\boot\freeldr\freeldr\lib\fs\fat.c:1426) trace: FatGetFileInformation(1) -> FileSize = 66082, FilePointer = 0x0
+(\boot\freeldr\freeldr\lib\fs\fat.c:1426) trace: FatGetFileInformation(2) -> FileSize = 66594, FilePointer = 0x0
+(\boot\freeldr\freeldr\lib\fs\fat.c:1426) trace: FatGetFileInformation(3) -> FileSize = 4870, FilePointer = 0x0
+(\boot\freeldr\freeldr\lib\fs\fat.c:965) trace: FAT cache miss: read sector 0x240 from disk
+(\boot\freeldr\freeldr\lib\fs\fat.c:965) trace: FAT cache miss: read sector 0x349 from disk
+(\boot\freeldr\freeldr\lib\fs\fat.c:965) trace: FAT cache miss: read sector 0x34d from disk
+(\boot\freeldr\freeldr\lib\fs\fat.c:965) trace: FAT cache miss: read sector 0x223 from disk
+(\boot\freeldr\freeldr\arch\uefi\uefimem.c:273) trace: UefiMemGetMemoryMap: Gather memory map
+(\boot\freeldr\freeldr\arch\uefi\uefimem.c:285) trace: Value of MapKey: 18299
+(\boot\freeldr\freeldr\arch\uefi\uefimem.c:286) trace: Value of MapSize: 4800
+(\boot\freeldr\freeldr\arch\uefi\uefimem.c:287) trace: Value of DescriptorSize: 48
+(\boot\freeldr\freeldr\arch\uefi\uefimem.c:288) trace: Value of DescriptorVersion: 1
+(\boot\freeldr\freeldr\arch\uefi\uefimem.c:420) trace: Attempting to exit bootsevices
+(\boot\freeldr\freeldr\arch\uefi\uefimem.c:486) trace: Exited bootservices
+(\boot\freeldr\freeldr\arch\arm64\mmu_v2.c:1124) trace: ARM64: Forcing va_bits from 36 to 47 for NT ARM64 page tables
+[   14.262482] (\ntoskrnl\kd64\kdinit.c:94) -----------------------------------------------------
+[   14.268208] (\ntoskrnl\kd64\kdinit.c:95) ReactOS 0.4.17-arm64-dev (Build 20260705-nt10.0-003-26-gfe90dcf) (Commit fe90dcff5ed47ffe266a87289933a34977d8b52f)
+[   14.282089] (\ntoskrnl\kd64\kdinit.c:96) 1 System Processor [8166 MB Memory]
+[   14.289117] (\ntoskrnl\kd64\kdinit.c:100) Command Line: HAL=HAL.DLL KERNEL=NTKRNLMP.EXE DEBUG DEBUGPORT=COM1 BAUDRATE=115200 SOS FASTDETECT
+[   14.301611] (\ntoskrnl\kd64\kdinit.c:103) ARC Paths: multi(0)disk(0)rdisk(0)partition(1) \ multi(0)disk(0)rdisk(0)partition(1) \ReactOS\
+[   14.313896] HAL: About to lookup FADT (signature=50434146)
+[   14.319312] HAL: HalAcpiGetTable(FADT) returned FFFFFC000040B010
+[   14.325304] (\hal\halarm64\acpi\rsdt.c:331) ACPI: XSDT 000000003dad4f18 00005c (v01 RPIFDN RPI5     00000200      01000013)
+[   14.336407] (\hal\halarm64\acpi\rsdt.c:423) ACPI: FACP 000000003dad4b98 000114 (v06 RPIFDN RPI5     00000200 EDK2 00000300)
+[   14.347511] (\hal\halarm64\acpi\rsdt.c:461) ACPI: DSDT 000000003ce8f018 0015ea (v02 RPIFDN RPI5     00000002 INTL 20260408)
+[   14.358617] (\hal\halarm64\acpi\rsdt.c:581) ACPI: BGRT 000000003dad4b18 000038 (v01 INTEL  EDK2     00000002      01000013)
+[   14.369722] (\hal\halarm64\acpi\rsdt.c:581) ACPI: DBG2 000000003dad4e18 000061 (v00 RPIFDN RPI5     00000200 EDK2 00000300)
+[   14.380826] (\hal\halarm64\acpi\rsdt.c:581) ACPI: GTDT 000000003dad4d18 000068 (v03 RPIFDN RPI5     00000200 EDK2 00000300)
+[   14.391932] (\hal\halarm64\acpi\rsdt.c:581) ACPI: APIC 000000003dad4098 000184 (v05 RPIFDN RPI5     00000200 EDK2 00000300)
+[   14.403038] (\hal\halarm64\acpi\rsdt.c:581) ACPI: [   14.407636] (\hal\halarm64\acpi\rsdt.c:581) ACPI: PPTT 000000003dad4318 000130 (v02 RPIFDN RPI5     00000200 EDK2 00000300)
+[   14.418743] (\hal\halarm64\acpi\halacpi.c:2611) ACPI Timer resource unavailable (EXT: 0)
+[   14.426814] (\hal\halarm64\acpi\halacpi.c:3065) ACPI v6.3-6.3_A detected. Tables: [XSDT] [FACP] [BGRT] [DBG2] [GTDT] [APIC] [ [PPTT]
+[   14.438699] (\hal\halarm64\gic\gic_init.c:926) [arm64][GIC] GIC probe: PFR0.GIC=0 SRE=0 PIDR2=0x0000002b ARCHREV=2
+[   14.449022] (\hal\halarm64\gic\gic_init.c:928) [arm64][GIC] Using GICv2 legacy (GICC) CPU interface
+[   14.458045] (\hal\halarm64\gic\gic_init.c:538) [arm64][GIC] Initializing distributor (version=2, sysregs=0)
+[   14.467763] (\hal\halarm64\gic\gic_init.c:551) [arm64][GIC] GICD typer=0x0000fc69 lines=320 nregs=10
+[   14.476878] (\hal\halarm64\gic\gicv2.c:309) [arm64][GICv2] SPI targets set to CPU0
+[   14.484423] (\hal\halarm64\gic\gicv2.c:119) [arm64][GICv2] Saved PPI enables: 0x0800ffff
+[   14.492491] (\hal\halarm64\gic\gicv2.c:155) [arm64][GICv2] Restored PPI enables: 0x0800ffff
+[   14.500820] (\hal\halarm64\gic\gicv2.c:159) [arm64][GICv2] SGI/PPI bank configured with preserved enables
+[   14.510364] (\hal\halarm64\gic\gic_init.c:633) [arm64][GIC] Distributor initialized and enabled
+[   14.519041] (\hal\halarm64\gic\gicv2.c:89) [arm64][GICv2] CPU interface initialized (PMR=0xFF, CTLR=0x3)
+[   14.528497] (\hal\halarm64\gic\gic_init.c:822) [arm64][GIC] Version detection complete:
+[   14.536479] (\hal\halarm64\gic\gic_init.c:823) [arm64][GIC]   Architecture: GICv2
+[   14.543941] (\hal\halarm64\gic\gic_init.c:825) [arm64][GIC]   Interrupt lines: 320 (max SPI INTID: 319)
+[   14.766500] (\ntoskrnl\mm\ARM3\largepag.c:37) MiInitializeLargePageSupport: PAE/x64 Not Implemented
+[   14.773706] (\ntoskrnl\mm\ARM3\mminit.c:2235) Paged pool: 398 MB at FFFFBD95AD200000
+[   14.783103] (\sdk\include\reactos\drivers\bootvid\framebuf.c:512) Display: loader UEFI GOP framebuffer 0x3F400000 size=8294400 1920x1080 stride=1920 bpp=32
+[   14.794267] (\sdk\include\reactos\drivers\bootvid\framebuf.c:674) 
+[   14.800424] Boot Display found on Interface 0, Bus 0
+[   14.805372]     VideoRamAddress   : 0x3F400000
+[   14.809795]     VideoRamSize      : 8294400
+[   14.813960]     Version           : 1.3
+[   14.817778]     VideoClock        : 0
+[   14.821421] Framebuffer format:
+[   14.824545]     BaseAddress       : 0x3F400000
+[   14.828971]     ScreenWidth       : 1920
+[   14.832874]     ScreenHeight      : 1080
+[   14.836778]     PixelsPerScanLine : 1920
+[   14.840684]     BitsPerPixel      : 32
+[   14.844414]     ARGB masks:       : ff000000/00ff0000/0000ff00/000000ff
+[   14.852441] (\drivers\base\bootvid\framebuf\bootvid.c:297) Scaling X = 2, Y = 2
+[   14.858297] (\drivers\base\bootvid\framebuf\bootvid.c:304) Borders X = 320, Y = 60
+[   14.885970] (\ntoskrnl\ke\arm64\stubs.c:653) [arm64] KeStartAllProcessors: Max=64 (numproc=0 bootproc=0)
+[   14.892597] (\ntoskrnl\ke\arm64\stubs.c:738) [arm64] KeStartAllProcessors: Attempting to start CPU 1
+[   14.901685] (\hal\halarm64\smp.c:315) [arm64][HAL] Identity-map page table: L0[0]→L1[0]→L2[2] block=0x400000 (trampoline PA=0x420000)
+[   14.914000] (\hal\halarm64\smp.c:415) [arm64][HAL] AP trampoline initialized at PA=0x420000 VA=FFFFFC0000420000 size=448 idmap_ttbr0=0x500000
+[   14.926662] (\hal\halarm64\smp.c:592) [arm64][HAL] Discovered 4 CPUs, parking protocol not available
+[   14.935817] (\ntoskrnl\ke\arm64\stubs.c:771) [arm64] KeStartAllProcessors: CPU 1 started successfully
+[   14.944993] (\ntoskrnl\ke\arm64\stubs.c:738) [arm64] KeStartAllProcessors: Attempting to start CPU 2
+[   14.954113] (\ntoskrnl\ke\arm64\stubs.c:771) [arm64] KeStartAllProcessors: CPU 2 started successfully
+[   14.963300] (\ntoskrnl\ke\arm64\stubs.c:738) [arm64] KeStartAllProcessors: Attempting to start CPU 3
+[   14.972419] (\ntoskrnl\ke\arm64\stubs.c:771) [arm64] KeStartAllProcessors: CPU 3 started successfully
+[   14.981606] (\ntoskrnl\ke\arm64\stubs.c:738) [arm64] KeStartAllProcessors: Attempting to start CPU 4
+[   14.990691] (\hal\halarm64\halarm64.c:5909) [arm64][HAL] HalStartNextProcessor: no more processors (started=4, available=4)
+[   15.001797] (\ntoskrnl\ke\arm64\stubs.c:744) [arm64] KeStartAllProcessors: HalStartNextProcessor failed for CPU 4
+[   15.012051] (\ntoskrnl\ke\arm64\stubs.c:789) [arm64] KeStartAllProcessors: Successfully started 3 APs
+[   15.021234] (\ntoskrnl\ke\arm64\stubs.c:824) [arm64] KeStartAllProcessors: Updating process affinities to 0xf
+[   15.031123] (\ntoskrnl\ke\arm64\stubs.c:859) [arm64] KeStartAllProcessors: System process affinity 0x1 -> 0xf
+[   15.041347] (\ntoskrnl\mm\mminit.c:224)           0xFFFFF80000000000 - 0xFFFFF80200000000	Boot Loaded Image
+[   15.050730] (\ntoskrnl\mm\mminit.c:235)           0xFFFFCC1013000000 - 0xFFFFCC101C001000	PFN Database
+[   15.060015] (\ntoskrnl\mm\mminit.c:239)           0xFFFF96108AE00000 - 0xFFFF96108BE20000	ARM3 Non Paged Pool
+[   15.069905] (\ntoskrnl\mm\mminit.c:243)           0xFFFFF97FBA000000 - 0xFFFFF97FDA000000	System View Space
+[   15.079623] (\ntoskrnl\mm\mminit.c:247)           0xFFFFF97FDA000000 - 0xFFFFF98000000000	Session Space
+[   15.088994] (\ntoskrnl\mm\mminit.c:250)           0xFFFFE48000000000 - 0xFFFFE4FFFFFFFFFF	Page Tables
+[   15.098193] (\ntoskrnl\mm\mminit.c:253)           0xFFFFE4F240000000 - 0xFFFFE4F27FFFFFFF	Page Directories
+[   15.107821] (\ntoskrnl\mm\mminit.c:256)           0xFFFFF70000000000 - 0xFFFFF77FFFFFFFFF	Hyperspace
+[   15.116935] (\ntoskrnl\mm\mminit.c:259)           0xFFFFF98000000000 - 0xFFFFFB7FFFFFFFFF	System Cache
+[   15.126215] (\ntoskrnl\mm\mminit.c:263)           0xFFFFBD95AD200000 - 0xFFFFBD95C6200000	ARM3 Paged Pool
+[   15.135761] (\ntoskrnl\mm\mminit.c:269)           0xFFFFE544F1400000 - 0xFFFFE544FD751000	System PTE Space
+[   15.145390] (\ntoskrnl\mm\mminit.c:273)           0xFFFF96108BE20000 - 0xFFFF961097570000	Non Paged Pool Expansion PTE Space
+[   15.160423] (\hal\halarm64\acpi\halacpi.c:3482) HAL: ARM64 PCI stubs initialized (ECAM-only mode)
+[   15.166405] 
+====== PCI BUS HARDWARE DETECTION (ACPI HAL) =======
+
+[   15.172742] HAL: ARM64 PCI ECAM path not exercised.
+[   15.177597] 
+====== END PCI BUS DETECTION =======
+
+[   15.182544] ACPI ARM64-based System initialized
+[   15.187275] WARNING:  ArbBuildAssignmentOrdering at \sdk\lib\drivers\arbiter\arbiter.c:275 is UNIMPLEMENTED!
+[   15.196865] WARNING:  ArbBuildAssignmentOrdering at \sdk\lib\drivers\arbiter\arbiter.c:275 is UNIMPLEMENTED!
+[   15.206672] WARNING:  ArbBuildAssignmentOrdering at \sdk\lib\drivers\arbiter\arbiter.c:275 is UNIMPLEMENTED!
+[   15.216473] WARNING:  ArbBuildAssignmentOrdering at \sdk\lib\drivers\arbiter\arbiter.c:275 is UNIMPLEMENTED!
+[   15.226281] WARNING:  ArbBuildAssignmentOrdering at \sdk\lib\drivers\arbiter\arbiter.c:275 is UNIMPLEMENTED!
+[   15.236646] (\ntoskrnl\io\pnpmgr\pnproot.c:518) Failed to read the LogConf key for Root\RPI5VC4\0000
+[   15.245258] (\ntoskrnl\io\pnpmgr\pnproot.c:518) Failed to read the LogConf key for Root\SOFTGPU\0000
+[   15.256171] (\ntoskrnl\io\pnpmgr\pnpmap.c:656) ZwQueryValueKey(\Registry\Machine\SYSTEM\CURRENTCONTROLSET\Control\PnpDisableFirmwareMapper) failed with status 0xc0000034
+[   15.276156] (\hal\halarm64\acpi\halacpi.c:4622) Resource count: 0
+[   15.279365] (\hal\halarm64\acpi\halacpi.c:4627) Resource list size: 40
+[   15.285880] (\hal\halarm64\acpi\halacpi.c:4622) Resource count: 0
+[   15.291944] (\hal\halarm64\acpi\halacpi.c:4627) Resource list size: 40
+[   15.298963] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{4D36E97D-E325-11CE-BFC1-08002BE10318}\0000' for critical device (0x00000000)
+[   15.317573] (\drivers\bus\sd\sdbus.c:276) SD Bus Driver: DriverEntry
+[   15.321189] (\drivers\storage\port\sdport\sdport.c:69) SdPortInitialize(FFFF96108BC674F0 \REGISTRY\MACHINE\SYSTEM\CONTROLSET001\SERVICES\SDHC FFFFE544FD298A78)
+[   15.335421] (\drivers\storage\port\sdport\sdport.c:173) SDPORT DriverEntry: DriverObject=FFFF96108BCA3070 RegistryPath=\REGISTRY\MACHINE\SYSTEM\CONTROLSET001\SERVICES\SDPORT
+[   15.355183] (\drivers\storage\port\storport\storport.c:961) StorPortInitialize(FFFF96108BCA3C70 FFFFE544FD298BA0 FFFFE544FD298A80 0000000000000000)
+[   15.365507] (\drivers\storage\port\storport\storport.c:963) HwInitializationDataSize: 136
+[   15.373660] (\drivers\storage\port\storport\storport.c:964) AdapterInterfaceType: 5
+[   15.381297] (\drivers\storage\port\storport\storport.c:965) HwInitialize: FFFFE544FD46BB48
+[   15.389537] (\drivers\storage\port\storport\storport.c:966) HwStartIo: FFFFE544FD46C27C
+[   15.397521] (\drivers\storage\port\storport\storport.c:967) HwInterrupt: FFFFE544FD46C168
+[   15.405675] (\drivers\storage\port\storport\storport.c:968) HwFindAdapter: FFFFE544FD46D3D4
+[   15.414006] (\drivers\storage\port\storport\storport.c:969) HwResetBus: FFFFE544FD46D308
+[   15.422073] (\drivers\storage\port\storport\storport.c:970) HwDmaStarted: 0000000000000000
+[   15.430318] (\drivers\storage\port\storport\storport.c:971) HwAdapterState: 0000000000000000
+[   15.438732] (\drivers\storage\port\storport\storport.c:972) DeviceExtensionSize: 146520
+[   15.446716] (\drivers\storage\port\storport\storport.c:973) SpecificLuExtensionSize: 0
+[   15.454609] (\drivers\storage\port\storport\storport.c:974) SrbExtensionSize: 1592
+[   15.462160] (\drivers\storage\port\storport\storport.c:975) NumberOfAccessRanges: 6
+[   15.469793] (\drivers\storage\port\storport\storport.c:1001) No driver object extension!
+[   15.477865] (\drivers\storage\port\storport\storport.c:1013) Driver object extension created!
+[   15.486365] (\drivers\storage\port\storport\storport.c:31) PortAddDriverInitData()
+[   15.493915] (\drivers\storage\port\storport\storport.c:1044) StorPortInitialize() done (Status 0x00000000)
+[   15.504491] (\drivers\storage\port\storport\storport.c:461) DriverEntry(FFFF96108BCA3A70 FFFFE544FD298BA0)
+[   15.517115] WDFTrace: new WDFKEY object open failed, !STATUS!
+[   15.523886] (\drivers\ksfilter\swenum\swenum.c:428) SWENUM loaded
+[   15.528037] (\drivers\storage\class\ramdisk\ramdisk.c:5836) RAMDISK DriverEntry: DriverObject=FFFF96108BC66750 RegistryPath=\REGISTRY\MACHINE\SYSTEM\CONTROLSET001\SERVICES\RAMDISK
+[   15.544048] (\ntoskrnl\io\iomgr\driver.c:1442) BOOT DRIVERS LOADED
+[   15.549716] (\hal\halarm64\acpi\halpnpdd.c:1720) Start device received
+[   15.555858] (\drivers\bus\acpi\pnp.c:338) ACPI: Registered PCI interface: \??\ACPI_HAL#PNP0C08#0#{a7e9db84-db4c-4289-876b-e2c3e63b5f4f}
+[   15.567870] (\drivers\bus\acpi\pnp.c:353) Bus_StartFdo: Calling AcpiInitializeSubsystem
+[   15.575873] (\drivers\bus\acpi\pnp.c:364) Bus_StartFdo: Calling AcpiInitializeTables
+[   15.590873] (\drivers\bus\acpi\pnp.c:373) Bus_StartFdo: Calling AcpiLoadTables
+[   15.597122] (\drivers\bus\acpi\busmgr\utils.c:575) AcpiGetTable() for FACS failed (Status 0x00000005)
+[   15.604415] (\drivers\bus\acpi\pnp.c:385) Unable to create ACPI tables in registry (0xc0000001)
+[   15.613083] (\drivers\bus\acpi\pnp.c:389) Bus_StartFdo: Calling acpi_init
+[   15.620905] (\drivers\bus\acpi\busmgr\bus.c:1693) ACPI: _PIC method not present; firmware assumed APIC-ready
+[   15.633370] (\hal\halarm64\halarm64.c:1715) [arm64][PCI] Registered PCI routing query provider at FFFFE544FD5C1440
+[   15.640831] (\drivers\bus\acpi\busmgr\acpi_pci_routing.c:430) ACPI: PCI routing provider registered (4 entries available)
+[   15.651762] (\drivers\bus\acpi\busmgr\pci_root.c:978) ACPI: Enumerating PCI root bridges (ACPI 1.0/2.0+/PCIe)
+[   15.662148] (\drivers\bus\acpi\busmgr\pci_root.c:320) ACPI: _OSC calling with Support=0x19 Control=0x10
+[   15.671162] (\drivers\bus\acpi\busmgr\pci_root.c:423) ACPI: _OSC success - granted control 0x10 (status 0x0)
+[   15.680829] (\drivers\bus\acpi\busmgr\pci_root.c:847) ACPI: PCI Root 1: HID=PNP0A08 UID=1 SEG=1 BUS=0
+[   15.690022] (\drivers\bus\acpi\busmgr\pci_root.c:853)     Bus range  : [0 - 255]
+[   15.697403] (\drivers\bus\acpi\busmgr\pci_root.c:872)     Memory window: [c0000000 - 1affffffff]
+[   15.706160] (\drivers\bus\acpi\busmgr\pci_root.c:876)       translation: +0
+[   15.713104] (\drivers\bus\acpi\busmgr\pci_root.c:897)     _OSC status 0x0 request 0x10 grant 0x10
+[   15.721953] (\hal\halarm64\halarm64.c:1651) [arm64][PCI] ACPI PCI Root Bridge: Segment=1 Bus=0 BusRange=[0-255]
+[   15.732018] (\hal\halarm64\halarm64.c:1660) [arm64][PCI]   No MCFG or _CBA config-space base published for this root bridge.
+[   15.743211] (\hal\halarm64\halarm64.c:1674) [arm64][PCI]   Memory Window: [0xc0000000 - 0x1affffffff]
+[   15.752405] (\hal\halarm64\halarm64.c:1690) [arm64][PCI]   _OSC: Status=0x0 Control=0x10 Grant=0x10 (OK)
+[   15.762554] (\drivers\bus\acpi\busmgr\pci_root.c:835) ACPI: PCI root HID=PNP0A08 UID=1 already processed (Seg 1 Bus 0-255), skipping duplicate handle FFFF96108BD39FD0
+[   15.776897] (\drivers\bus\acpi\pnp.c:399) Bus_StartFdo: Calling ACPIEnumerateDevices
+[   15.784607] (\drivers\bus\acpi\acpienum.c:159) ACPI-PCIROOT: Enumerating PCI root candidate HID=PNP0A08 UID=1 ADR=0xffffffffffffffff handle=FFFF96108BD39FD0
+[   15.798389] (\drivers\bus\acpi\acpienum.c:169) ACPI-PCIROOT:   |_ CID[0]=PNP0A03
+[   15.805904] (\drivers\bus\acpi\acpienum.c:549) ACPI-PCIROOT:   |_ _CRS Bus 0x0-0xff (len=0x100)
+[   15.814441] (\drivers\bus\acpi\acpienum.c:549) ACPI-PCIROOT:   |_ _CRS Mem64 0xc0000000-0xc04fffff (len=0x500000)
+[   15.824679] (\drivers\bus\acpi\acpienum.c:549) ACPI-PCIROOT:   |_ _CRS Mem64 0x1800000000-0x1affffffff (len=0x300000000)
+[   15.835606] (\drivers\bus\acpi\pnp.c:401) Bus_StartFdo: ACPIEnumerateDevices done (Status 0x0)
+[   15.847518] (\drivers\bus\acpi\buspdo.c:237) ACPI: Using _BBN for PCI root ACPI\PNP0A08 bus=0
+[   15.853152] (\drivers\bus\acpi\buspdo.c:283) ACPI: Cached PCI root ACPI\PNP0A08 bus number 0
+[   15.862391] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{4D36E97D-E325-11CE-BFC1-08002BE10318}\0001' for critical device (0x00000000)
+[   15.874596] (\drivers\bus\acpi\buspdo.c:237) ACPI: Using _BBN for PCI root ACPI\PNP0A08 bus=0
+[   15.882825] (\drivers\bus\acpi\buspdo.c:283) ACPI: Cached PCI root ACPI\PNP0A08 bus number 0
+[   15.891572] (\drivers\bus\pci\fdo.c:474) PCI: FdoStartDevice called
+[   15.897488] (\drivers\bus\pci\arb.c:666) PCI: Creating arbiters for bus 0
+[   15.904261] (\drivers\bus\pci\arb.c:709) PCI: Created 3 arbiters for bus 0
+[   15.911223] (\drivers\bus\pci\fdo.c:274) PCI: FdoQueryBusRelations called
+[   15.917883] (\hal\halarm64\acpi\halacpi.c:139) HAL: PCI Express MMCONFIG unavailable because the ACPI MCFG table is missing or empty.
+[   15.929854] (\drivers\bus\pci\fdo.c:133) PCI: Bus 0 slot 0 empty (Size=64 VendorID=0xffff), but scanning root bus anyway
+[   15.940702] (\drivers\bus\pci\fdo.c:290) PCI: FdoQueryBusRelations enumerated 0 devices
+[   15.952492] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{36FC9E60-C465-11CF-8056-444553540000}\0000' for critical device (0x00000000)
+[   15.964067] (\drivers\bus\acpi\interface.c:823) Invalid GUID
+[   15.968025] (\drivers\usb\usbport\pnp.c:1615) USBPORT_StartDevice: no PCI config space (ACPI-enumerated controller), continuing
+[   15.979477] (\drivers\bus\acpi\interface.c:823) Invalid GUID
+[   15.987594] (\drivers\usb\usbxhci\usbxhci.c:9233) usbxhci: no PCI config space (ACPI-enumerated controller), skipping bus-master enable
+[   15.998751] (\drivers\usb\usbxhci\osc.c:447) usbxhci: _OSC: Using IOCTL to evaluate _OSC method
+[   16.005934] (\drivers\usb\usbxhci\osc.c:480) usbxhci: _OSC Query phase - asking what controls are available
+[   16.015687] (\drivers\usb\usbxhci\osc.c:234) usbxhci: ACPI _OSC IOCTL failed: 0xC0000034
+[   16.023722] (\drivers\usb\usbxhci\osc.c:497) usbxhci: _OSC not available (Status=0xC0000034) - using legacy defaults
+[   16.034221] (\drivers\usb\usbxhci\osc.c:401) usbxhci: _OSC: Set legacy defaults (full OS control)
+[   16.066936] (\drivers\usb\usbxhci\usbxhci.c:4211) usbxhci: bounce pool ready slots=32 size=65536
+[   16.073982] (\drivers\usb\usbport\pnp.c:2537) USBPORT_CreatePdo: HubPdo=FFFF96108BD96C90 DevExt=FFFF96108BD96DE0
+[   16.084133] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{36FC9E60-C465-11CF-8056-444553540000}\0001' for critical device (0x00000000)
+[   16.096052] (\drivers\usb\usbhub\usbhub.c:957) USBH_SyncGetRootHubPdo: Target=FFFF96108BD96C90 Driver=\Driver\usbxhci StackSize=2
+[   16.107370] (\drivers\usb\usbhub\usbhub.c:985) USBH_SyncGetRootHubPdo: Irp=FFFF96108BCA2CF0 Major=0f IoCtl=0022000f Arg1=FFFF96108BC301E0 Arg2=FFFF96108BC301E8
+[   16.121598] (\drivers\usb\usbport\ioctl.c:661) USBPORT_PdoInternalDeviceControl: IOCTL_INTERNAL_USB_GET_ROOTHUB_PDO Pdo=FFFF96108BD96C90 Arg1=FFFF96108BC301E0 Arg2=FFFF96108BC301E8
+[   16.138283] (\drivers\usb\usbhub\usbhub.c:1267) USBH_GetConfigurationDescriptor: NTSTATUS=0x00000000 wTotalLength=25 FirstBytes=09 02 19 00 01 01
+[   16.150669] (\drivers\bus\acpi\main.c:374) Unsupported IOCTL: 32c020
+[   16.157494] (\drivers\usb\usbhub\pnp.c:344) USBH_OpenConfiguration: using interface 0 alt 0 Pipes=1 MaxPacket0=8
+[   16.167178] (\drivers\usb\usbhub\pnp.c:372) USBH_OpenConfiguration: SelectConfig succeeded (PipeHandle=FFFF96108BC30C60 wTotalLength=25)
+[   16.199463] (\drivers\usb\usbhub\usbhub.c:3689) USBD_RegisterRootHubCallBack: HubExtension - FFFF96108BC301C0
+[   16.206488] (\drivers\usb\usbport\iface.c:1283) USBHI_RootHubInitNotification: stored callback FFFFE544FD5415A4 ctx=FFFF96108BC301C0 seq=1 caller=FFFFE544FD54168C
+[   16.220977] (\drivers\usb\usbhub\usbhub.c:3705) USBD_RegisterRootHubCallBack: RootHubInitNotification -> 0x00000000
+[   16.220979] (\drivers\usb\usbhub\usbhub.c:3137) USBH_SubmitStatusChangeTransfer: HubExtension - FFFF96108BC301C0, SCEIrp - FFFF96108BC60C80
+[   16.231435] (\drivers\usb\usbhub\pnp.c:1190) USBH_FdoQueryBusRelations: NumberPorts - 3
+[   16.243905] (\drivers\usb\usbhub\usbhub.c:2544) USBH_ChangeIndicationWorker: HubExt=FFFF96108BC301C0 WorkItem=FFFF96108BD99390
+[   16.263231] (\drivers\usb\usbhub\usbhub.c:2792) USBH_ChangeIndicationWorker: Port 2 Status=0x0301 Change=0x0001
+[   16.273310] (\drivers\usb\usbhub\usbhub.c:2311) USBH_ProcessPortStateChange: Port 2 connect -> enumerate
+[   16.282766] (\drivers\usb\usbhub\usbhub.c:2792) USBH_ChangeIndicationWorker: Port 3 Status=0x1103 Change=0x0031
+[   16.292828] (\drivers\usb\usbhub\usbhub.c:2311) USBH_ProcessPortStateChange: Port 3 connect -> enumerate
+[   16.302296] (\drivers\usb\usbhub\usbhub.c:3137) USBH_SubmitStatusChangeTransfer: HubExtension - FFFF96108BC301C0, SCEIrp - FFFF96108BC60C80
+[   16.454017] (\drivers\usb\usbhub\usbhub.c:3137) USBH_SubmitStatusChangeTransfer: HubExtension - FFFF96108BC301C0, SCEIrp - FFFF96108BC60C80
+[   16.473917] (\drivers\usb\usbhub\usbhub.c:5701) USBH_CreateDevice: Port - 2, UsbPortStatus - 0x0303
+[   16.480084] (\drivers\usb\usbhub\usbhub.c:5737) USBH_CreateDevice: PortDevice - FFFF96108BC9A820, <\Device\USBPDO-1>
+[   16.490570] (\drivers\usb\usbhub\usbhub.c:5739) USBH_CreateDevice: PortExtension - FFFF96108BC9A970
+[   16.587496] (\drivers\usb\usbhub\usbhub.c:3137) USBH_SubmitStatusChangeTransfer: HubExtension - FFFF96108BC301C0, SCEIrp - FFFF96108BC60C80
+[   16.613955] (\drivers\usb\usbxhci\usbxhci.c:5018) usbxhci: ResetDeviceOnPort: RESET_DEV succeeded for slot 1 on port 2, now in Default state
+[   16.651410] (\drivers\usb\usbhub\usbhub.c:5611) USBH: announcing usb 1-2 port 2 (VID=413C PID=301A)
+[   16.657564] (\drivers\usb\usbhub\usbhub.c:5634) usb 1-2: new low-speed USB device on port 2
+[   16.665893] (\drivers\usb\usbhub\usbhub.c:5642) usb 1-2: New USB device found, idVendor=413C, idProduct=301A, bcdDevice=01.00
+[   16.677173] (\drivers\usb\usbhub\usbhub.c:5649) usb 1-2: New USB device strings: Mfr=1, Product=2, SerialNumber=0
+[   16.712381] (\drivers\usb\usbhub\usbhub.c:5655) usb 1-2: Product: Dell MS116 USB Optical Mouse
+[   16.718104] (\drivers\usb\usbhub\usbhub.c:5660) usb 1-2: Manufacturer: PixArt
+[   16.731394] (\drivers\usb\usbhub\usbhub.c:1267) USBH_GetConfigurationDescriptor: NTSTATUS=0x00000000 wTotalLength=34 FirstBytes=09 02 22 00 01 01
+[   16.741546] (\drivers\usb\usbhub\pnp.c:1261) USBH_FdoQueryBusRelations: cached connect (no PDO) port 3 (ConnStatus=1)
+[   16.752128] (\drivers\usb\usbhub\pnp.c:1302) USBH_FdoQueryBusRelations: forcing PDO creation from cached state on port 3
+[   17.019944] (\drivers\usb\usbhub\usbhub.c:3137) USBH_SubmitStatusChangeTransfer: HubExtension - FFFF96108BC301C0, SCEIrp - FFFF96108BC60C80
+[   17.043969] (\drivers\usb\usbhub\usbhub.c:5701) USBH_CreateDevice: Port - 3, UsbPortStatus - 0x1103
+[   17.050140] (\drivers\usb\usbhub\usbhub.c:5737) USBH_CreateDevice: PortDevice - FFFF96108BD32070, <\Device\USBPDO-2>
+[   17.060622] (\drivers\usb\usbhub\usbhub.c:5739) USBH_CreateDevice: PortExtension - FFFF96108BD321C0
+[   17.209754] (\drivers\usb\usbhub\usbhub.c:3137) USBH_SubmitStatusChangeTransfer: HubExtension - FFFF96108BC301C0, SCEIrp - FFFF96108BC60C80
+[   17.233998] (\drivers\usb\usbxhci\usbxhci.c:5018) usbxhci: ResetDeviceOnPort: RESET_DEV succeeded for slot 2 on port 3, now in Default state
+[   17.257845] (\drivers\usb\usbhub\usbhub.c:5611) USBH: announcing usb 1-3 port 3 (VID=0781 PID=5581)
+[   17.264000] (\drivers\usb\usbhub\usbhub.c:5634) usb 1-3: new super-speed USB device on port 3
+[   17.272502] (\drivers\usb\usbhub\usbhub.c:5642) usb 1-3: New USB device found, idVendor=0781, idProduct=5581, bcdDevice=01.00
+[   17.283782] (\drivers\usb\usbhub\usbhub.c:5649) usb 1-3: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+[   17.295972] (\drivers\usb\usbhub\usbhub.c:5655) usb 1-3: Product:  SanDisk 3.2Gen1
+[   17.301567] (\drivers\usb\usbhub\usbhub.c:5660) usb 1-3: Manufacturer:  USB
+[   17.308511] (\drivers\usb\usbhub\usbhub.c:5675) usb 1-3: SerialNumber: 0901da96cc5f2a6e98145c166ee0bf8579199debc6f1126c17dcbe55724e3388e11a00000000000000000000897c8cadff082920815581076e327e7a
+[   17.325973] (\drivers\usb\usbhub\usbhub.c:1267) USBH_GetConfigurationDescriptor: NTSTATUS=0x00000000 wTotalLength=44 FirstBytes=09 02 2c 00 01 01
+[   17.339995] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{745a17a0-74d3-11d0-b6fe-00a0c90f57da}\0000' for critical device (0x00000000)
+[   17.352585] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{36FC9E60-C465-11CF-8056-444553540000}\0002' for critical device (0x00000000)
+[   17.408759] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{4D36E967-E325-11CE-BFC1-08002BE10318}\0000' for critical device (0x00000000)
+[   17.419113] (\drivers\usb\usbstor\disk.c:143) SRB_FUNCTION_CLAIM_DEVICE
+[   17.751926] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{36FC9E60-C465-11CF-8056-444553540000}\0003' for critical device (0x00000000)
+[   17.763552] (\drivers\bus\acpi\interface.c:823) Invalid GUID
+[   17.767463] (\drivers\usb\usbport\pnp.c:1615) USBPORT_StartDevice: no PCI config space (ACPI-enumerated controller), continuing
+[   17.778911] (\drivers\bus\acpi\interface.c:823) Invalid GUID
+[   17.786985] (\drivers\usb\usbxhci\usbxhci.c:9233) usbxhci: no PCI config space (ACPI-enumerated controller), skipping bus-master enable
+[   17.798130] (\drivers\usb\usbxhci\osc.c:447) usbxhci: _OSC: Using IOCTL to evaluate _OSC method
+[   17.805370] (\drivers\usb\usbxhci\osc.c:480) usbxhci: _OSC Query phase - asking what controls are available
+[   17.815122] (\drivers\usb\usbxhci\osc.c:234) usbxhci: ACPI _OSC IOCTL failed: 0xC0000034
+[   17.823157] (\drivers\usb\usbxhci\osc.c:497) usbxhci: _OSC not available (Status=0xC0000034) - using legacy defaults
+[   17.833657] (\drivers\usb\usbxhci\osc.c:401) usbxhci: _OSC: Set legacy defaults (full OS control)
+[   17.866751] (\drivers\usb\usbxhci\usbxhci.c:4211) usbxhci: bounce pool ready slots=32 size=65536
+[   17.873767] (\drivers\usb\usbport\pnp.c:2537) USBPORT_CreatePdo: HubPdo=FFFF96108BD2FC10 DevExt=FFFF96108BD2FD60
+[   17.884103] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{36FC9E60-C465-11CF-8056-444553540000}\0004' for critical device (0x00000000)
+[   17.895882] (\drivers\usb\usbhub\usbhub.c:957) USBH_SyncGetRootHubPdo: Target=FFFF96108BD2FC10 Driver=\Driver\usbxhci StackSize=2
+[   17.907185] (\drivers\usb\usbhub\usbhub.c:985) USBH_SyncGetRootHubPdo: Irp=FFFF96108BCA29D0 Major=0f IoCtl=0022000f Arg1=FFFF96108BD301E0 Arg2=FFFF96108BD301E8
+[   17.921413] (\drivers\usb\usbport\ioctl.c:661) USBPORT_PdoInternalDeviceControl: IOCTL_INTERNAL_USB_GET_ROOTHUB_PDO Pdo=FFFF96108BD2FC10 Arg1=FFFF96108BD301E0 Arg2=FFFF96108BD301E8
+[   17.938089] (\drivers\usb\usbhub\usbhub.c:1267) USBH_GetConfigurationDescriptor: NTSTATUS=0x00000000 wTotalLength=25 FirstBytes=09 02 19 00 01 01
+[   17.950479] (\drivers\bus\acpi\main.c:374) Unsupported IOCTL: 32c020
+[   17.957033] (\drivers\usb\usbhub\pnp.c:344) USBH_OpenConfiguration: using interface 0 alt 0 Pipes=1 MaxPacket0=8
+[   17.966976] (\drivers\usb\usbhub\pnp.c:372) USBH_OpenConfiguration: SelectConfig succeeded (PipeHandle=FFFF96108BD30CA0 wTotalLength=25)
+[   17.999237] (\drivers\usb\usbhub\usbhub.c:3689) USBD_RegisterRootHubCallBack: HubExtension - FFFF96108BD301C0
+[   18.006261] (\drivers\usb\usbport\iface.c:1283) USBHI_RootHubInitNotification: stored callback FFFFE544FD5415A4 ctx=FFFF96108BD301C0 seq=1 caller=FFFFE544FD54168C
+[   18.020750] (\drivers\usb\usbhub\usbhub.c:3705) USBD_RegisterRootHubCallBack: RootHubInitNotification -> 0x00000000
+[   18.020752] (\drivers\usb\usbhub\usbhub.c:3137) USBH_SubmitStatusChangeTransfer: HubExtension - FFFF96108BD301C0, SCEIrp - FFFF96108BC9A010
+[   18.031211] (\drivers\usb\usbhub\pnp.c:1190) USBH_FdoQueryBusRelations: NumberPorts - 3
+[   18.043684] (\drivers\usb\usbhub\usbhub.c:3137) USBH_SubmitStatusChangeTransfer: HubExtension - FFFF96108BD301C0, SCEIrp - FFFF96108BC9A010
+[   18.329517] (\drivers\usb\usbhub\usbhub.c:3137) USBH_SubmitStatusChangeTransfer: HubExtension - FFFF96108BD301C0, SCEIrp - FFFF96108BC9A010
+[   18.354193] (\drivers\usb\usbhub\usbhub.c:5701) USBH_CreateDevice: Port - 3, UsbPortStatus - 0x1103
+[   18.360370] (\drivers\usb\usbhub\usbhub.c:5737) USBH_CreateDevice: PortDevice - FFFF96108BD93070, <\Device\USBPDO-4>
+[   18.370847] (\drivers\usb\usbhub\usbhub.c:5739) USBH_CreateDevice: PortExtension - FFFF96108BD931C0
+[   18.520327] (\drivers\usb\usbhub\usbhub.c:3137) USBH_SubmitStatusChangeTransfer: HubExtension - FFFF96108BD301C0, SCEIrp - FFFF96108BC9A010
+[   18.544219] (\drivers\usb\usbxhci\usbxhci.c:5018) usbxhci: ResetDeviceOnPort: RESET_DEV succeeded for slot 1 on port 3, now in Default state
+[   18.588131] (\drivers\usb\usbhub\usbhub.c:5611) USBH: announcing usb 2-3 port 3 (VID=0781 PID=5591)
+[   18.594286] (\drivers\usb\usbhub\usbhub.c:5634) usb 2-3: new super-speed USB device on port 3
+[   18.602788] (\drivers\usb\usbhub\usbhub.c:5642) usb 2-3: New USB device found, idVendor=0781, idProduct=5591, bcdDevice=01.00
+[   18.614068] (\drivers\usb\usbhub\usbhub.c:5649) usb 2-3: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+[   18.626256] (\drivers\usb\usbhub\usbhub.c:5655) usb 2-3: Product:  SanDisk 3.2Gen1
+[   18.631853] (\drivers\usb\usbhub\usbhub.c:5660) usb 2-3: Manufacturer:  USB
+[   18.638796] (\drivers\usb\usbhub\usbhub.c:5675) usb 2-3: SerialNumber: 01016e01ffd6f47ad7a9a904dc54438de8ee4ed362c463e23b37a4d9b83f12b6b3e3000000000000000000004ca60268000d5400915581077b32dc12
+[   18.656132] (\drivers\usb\usbhub\usbhub.c:1267) USBH_GetConfigurationDescriptor: NTSTATUS=0x00000000 wTotalLength=44 FirstBytes=09 02 2c 00 01 01
+[   18.669984] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{36FC9E60-C465-11CF-8056-444553540000}\0005' for critical device (0x00000000)
+[   18.748233] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{4D36E967-E325-11CE-BFC1-08002BE10318}\0001' for critical device (0x00000000)
+[   18.758600] (\drivers\usb\usbstor\disk.c:143) SRB_FUNCTION_CLAIM_DEVICE
+[   18.848224] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{a0a588a4-c46f-4b37-b7ea-c82fe89870c6}\0000' for critical device (0x00000000)
+[   18.858395] (\drivers\bus\sd\sdbus.c:57) SdBusAddDevice: PhysicalDeviceObject FFFF96108BC9D870
+[   18.866712] (\drivers\bus\sd\sdbus.c:133) SdBusAddDevice: FDO FFFF96108BC91040 attached to FFFF96108BC9D870
+[   18.877027] (\drivers\bus\sd\fdo.c:630) SDHCI: Memory resource at 0x1000fff000 length 0x260
+[   18.884749] (\drivers\bus\sd\fdo.c:646) SDHCI: Interrupt vector 305 level 6
+[   18.892390] (\drivers\bus\sd\fdo.c:283) SdBusInitializeController: RegisterBase FFFFE544FC055000
+[   18.900455] (\drivers\bus\sd\fdo.c:303) SDHCI: Version 1.02, Caps 0x15e2c832, Caps2 0x8000a577, BaseClock 200000 kHz
+[   18.918910] (\drivers\bus\sd\fdo.c:537) SDHCI: SDMA buffer at VA=FFFFE544FC015000 PA=0x00d5c000 (262144 bytes)
+[   18.927303] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{a0a588a4-c46f-4b37-b7ea-c82fe89870c6}\0001' for critical device (0x00000000)
+[   18.939053] (\drivers\bus\sd\sdbus.c:57) SdBusAddDevice: PhysicalDeviceObject FFFF96108BD35070
+[   18.947378] (\drivers\bus\sd\sdbus.c:133) SdBusAddDevice: FDO FFFF96108BBCFBA0 attached to FFFF96108BD35070
+[   18.957719] (\drivers\bus\sd\fdo.c:630) SDHCI: Memory resource at 0x1001100000 length 0x260
+[   18.965415] (\drivers\bus\sd\fdo.c:646) SDHCI: Interrupt vector 306 level 7
+[   18.973051] (\drivers\bus\sd\fdo.c:283) SdBusInitializeController: RegisterBase FFFFE544FC00B000
+[   18.981121] (\drivers\bus\sd\fdo.c:303) SDHCI: Version 1.02, Caps 0x55e6c832, Caps2 0x8000a527, BaseClock 200000 kHz
+[   19.002387] (\drivers\bus\sd\fdo.c:537) SDHCI: SDMA buffer at VA=FFFFE544FBFCB000 PA=0x00da5000 (262144 bytes)
+[   19.021627] (\drivers\bus\sd\enum.c:945) SdBusEnumerateCard: CMD8 not supported (SD v1.x, MMC, or SDIO)
+[   19.028415] (\drivers\bus\sd\enum.c:966) SdBusEnumerateCard: CMD5 detected SDIO funcs=3 memory=0 OCR=0x30ffff00
+[   19.038483] (\drivers\bus\sd\enum.c:1005) SdBusEnumerateCard: SDIO card ready, OCR=0xb0ffff00 funcs=3
+[   19.047669] (\drivers\bus\sd\enum.c:1291) SdBusEnumerateCard: RCA = 0x0001
+[   19.056890] (\drivers\bus\sd\sdio.c:525) SdBusSdioEnumerateFunctions: CCCR rev=0x43 spec=0x03 cap=0x02 bus_if=0x40 uhs=0x07 CIS=0x0010AC NumFuncs=3
+[   19.071022] (\drivers\bus\sd\sdio.c:532) SdBusSdioEnumerateFunctions: Common CIS VID=0x02D0 DID=0x4345 class=0x0C
+[   19.078665] (\drivers\bus\sd\sdio.c:556) SdBusSdioEnumerateFunctions: SDIO 4-bit bus enabled
+[   19.087376] (\drivers\bus\sd\sdio.c:568) SdBusSdioEnumerateFunctions: SDIO high-speed enabled
+[   19.100412] (\drivers\bus\sd\sdio.c:632) SdBusSdioEnumerateFunctions: func 1 std=0x00 ext=0x00 class=0x0C CIS=0x001000 VID=0x02D0 DID=0x4345
+[   19.110134] (\drivers\bus\sd\sdio.c:468) SdBusCreateSdioFunctionPdo: func=1 VID=02D0 DID=4345 class=12 PDO=FFFF96108BBCE070
+[   19.126330] (\drivers\bus\sd\sdio.c:632) SdBusSdioEnumerateFunctions: func 2 std=0x00 ext=0x00 class=0x0C CIS=0x001038 VID=0x02D0 DID=0x4345
+[   19.136049] (\drivers\bus\sd\sdio.c:468) SdBusCreateSdioFunctionPdo: func=2 VID=02D0 DID=4345 class=12 PDO=FFFF96108BBCEAF0
+[   19.152854] (\drivers\bus\sd\sdio.c:632) SdBusSdioEnumerateFunctions: func 3 std=0x02 ext=0x00 class=0x02 CIS=0x001070 VID=0x02D0 DID=0x4345
+[   19.162573] (\drivers\bus\sd\sdio.c:468) SdBusCreateSdioFunctionPdo: func=3 VID=02D0 DID=4345 class=2 PDO=FFFF96108BD26070
+[   19.173587] (\drivers\bus\sd\enum.c:1569) SdBusEnumerateCard: Enumeration complete, CardType=5, HighCapacity=0, TotalSectors=0
+[   19.184954] (\drivers\bus\sd\enum.c:1604) SdBusProgramClock: Setting transfer clock to 50000 kHz
+[   19.761140] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\rpi5vc4.sys at FFFFE544FBFAE000 with 14 pages
+[   19.910368] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\dxgkrnl.sys at FFFFE544FBF7C000 with 32 pages
+[   20.171149] (\drivers\directx\dxgkrnl\adapter.c:3376) DXGKRNL: ERROR: DxgkAdapterStart: NO translated resources! (PDO=FFFF96108BD9F900 DOD=0)
+[   20.205976] RPI5VC4: HVS IOMMU CTRL=00000000 (enable=0 bypass=0) PT=00000000 MISC=80003ffc DBG=20804774
+[   20.212486] RPI5VC4: HVS IOMMU ADDR_CAP=00000fff (disabled, cap=1048320 MB) BYPASS=[00000000..00000fff] ILLEGAL=00000000
+[   20.225683] (\drivers\directx\rpi5vc4\rpi5vc4.c:447) RPI5VC4: VideoCore firmware revision 0x69372732
+[   20.237098] (\drivers\directx\rpi5vc4\rpi5vc4.c:460) RPI5VC4: V3D clock at 960 MHz
+[   20.248099] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:390) RPI5VC4: timer resolution granted 10000
+[   20.254001] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:394) RPI5VC4: init ERR_STAT after clear=00001000
+[   20.263111] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:404) RPI5VC4: V3D 7.1 online — hub 0x42554856/0x00081117 core 0x07443356, slab GPU VA 0x01000000 (65536 KB)
+[   20.277516] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 282
+[   20.284107] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   20.290700] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:583) RPI5VC4: V3D interrupt connected (INTID 282)
+[   20.302694] RPI5VC4: LPTRS@0x110=000002a0 head=672 ctl0=600cc007 ptr1=3f400000 valid=1 match=1
+[   20.308488] RPI5VC4: LPTRS@0x03c=ffffffff head=4095 (skip)
+[   20.313967] RPI5VC4: takeover OK reg=0x110 head=672 fb=00:3f400000 cursor=0 start=0 count=10
+[   20.322892] RPI5VC4: LPTRS@0x110=000002a0 head=672 ctl0=490cc007 ptr1=3f400000 valid=1 match=1
+[   20.330959] RPI5VC4: LPTRS@0x03c=ffffffff head=4095 (skip)
+[   20.336424] RPI5VC4: takeover OK reg=0x110 head=672 fb=00:3f400000 cursor=0 start=9 count=10
+[   20.344842] RPI5VC4: LPTRS@0x110=000002a0 head=672 ctl0=490cc007 ptr1=3f400000 valid=1 match=1
+[   20.353427] RPI5VC4: LPTRS@0x03c=ffffffff head=4095 (skip)
+[   20.358896] RPI5VC4: takeover OK reg=0x110 head=672 fb=00:3f400000 cursor=0 start=9 count=10
+[   20.446929] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\softgpu.sys at FFFFE544F6375000 with 8 pages
+[   20.579955] (\drivers\directx\dxgkrnl\adapter.c:3376) DXGKRNL: ERROR: DxgkAdapterStart: NO translated resources! (PDO=FFFF96108BD9F6E0 DOD=0)
+[   20.589867] (\drivers\directx\softgpu\softgpu.c:370) SOFTGPU: no acquirable boot framebuffer -- declining (none exists, or a real GPU miniport owns the display)
+[   20.604076] (\drivers\directx\dxgkrnl\adapter.c:3613) DXGKRNL: ERROR: DxgkAdapterStart: DxgkDdiStartDevice failed 0xC0000182 (IRQs fired during start=0, vec=0 msgbased=0)
+[   20.619266] (\ntoskrnl\io\pnpmgr\pnproot.c:1373) IRP_MJ_PNP / Unknown minor function 0x1
+[   20.627332] (\ntoskrnl\io\pnpmgr\devaction.c:1936) Removal vetoed by Root\SOFTGPU\0000
+[   20.635224] (\ntoskrnl\io\pnpmgr\devaction.c:2057) Removal vetoed by failing the query remove request
+[   20.644419] (\ntoskrnl\io\pnpmgr\pnproot.c:1373) IRP_MJ_PNP / Unknown minor function 0x3
+[   20.701393] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\hidusb.sys at FFFFE544F536C000 with 9 pages
+[   20.746301] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\hidclass.sys at FFFFE544F535E000 with e pages
+[   20.884801] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\hidparse.sys at FFFFE544F5352000 with c pages
+[   21.300658] (\drivers\hid\hidusb\hidusb.c:1957) Status 0
+[   21.314031] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{4D36E96F-E325-11CE-BFC1-08002BE10318}\0000' for critical device (0x00000000)
+[   21.398639] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\mouhid.sys at FFFFE544F5342000 with 8 pages
+[   21.618007] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\mouclass.sys at FFFFE544F5338000 with a pages
+[   21.881118] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\fs_rec.sys at FFFFE544F532E000 with a pages
+[   22.019564] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\null.sys at FFFFE544F5326000 with 8 pages
+[   22.281556] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\beep.sys at FFFFE544F531F000 with 7 pages
+[   22.428183] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\i8042prt.sys at FFFFE544F530E000 with 11 pages
+[   22.671125] (\ntoskrnl\wmi\smbios.c:172) Could not find the SMBIOS entry point
+[   22.675463] (\ntoskrnl\wmi\smbios.c:233) WmipGetRawSMBiosTableData failed: 0xc0000225
+[   22.683274] (\drivers\input\i8042prt\hwhacks.c:208) IoWMIOpenBlock failed: 0xc0000225
+[   22.701177] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\kbdclass.sys at FFFFE544F5303000 with b pages
+[   23.054950] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\dxgmms1.sys at FFFFE544F52F1000 with 12 pages
+[   23.306806] (\drivers\directx\dxgmms1\dxgmms1.c:62) DXGMMS1: DriverEntry: DirectX GPU Memory Manager and Scheduler loading
+[   23.314960] (\drivers\directx\dxgmms1\dxgmms1.c:69) DXGMMS1: DriverEntry: dxgmms1 loaded successfully
+[   23.447231] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\blue.sys at FFFFE544F52E7000 with a pages
+[   23.701156] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\viogpudo.sys at FFFFE544F52C9000 with 1e pages
+[   23.968023] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\msfs.sys at FFFFE544F52C2000 with 7 pages
+[   24.113632] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\npfs.sys at FFFFE544F52AD000 with 15 pages
+[   24.369295] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\nwifi.sys at FFFFE544F529C000 with 11 pages
+[   24.521295] (\drivers\network\nwifi\nwifi.c:197) NWIFI: DriverEntry
+[   24.524696] (\drivers\network\nwifi\control.c:633) NWIFI: control device \Device\Nwifi created
+[   24.533263] (\drivers\network\nwifi\nwifi.c:239) NWIFI: DriverEntry succeeded
+[   24.553702] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\afd.sys at FFFFE544F5282000 with 1a pages
+[   24.796812] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\netio.sys at FFFFE544F5274000 with e pages
+[   24.942436] (\ntoskrnl\io\pnpmgr\pnproot.c:1373) IRP_MJ_PNP / Unknown minor function 0x1
+[   24.947650] (\ntoskrnl\io\pnpmgr\devaction.c:1936) Removal vetoed by Root\SOFTGPU\0000
+[   24.955536] (\ntoskrnl\io\pnpmgr\devaction.c:2057) Removal vetoed by failing the query remove request
+[   24.964733] (\ntoskrnl\io\pnpmgr\pnproot.c:1373) IRP_MJ_PNP / Unknown minor function 0x3
+KDB: Executing KDBinit file...
+KDB: KDBinit executed
+[   24.982585] (\ntoskrnl\io\iomgr\driver.c:309) Deleting driver object '\Driver\KdDriver'
+[   25.149148] WARNING:  RtlCreateTagHeap at \sdk\lib\rtl\heap.c:4043 is UNIMPLEMENTED!
+[   25.863617] (\base\system\smss\pagefile.c:969) SMSS:PFILE: Volume `\??\C:\' (121) cannot store a paging file
+[   26.008014] (\base\system\smss\pagefile.c:969) SMSS:PFILE: Volume `\??\D:\' (121) cannot store a paging file
+[   26.130116] (\base\system\smss\pagefile.c:930) SMSS:PFILE: Open volume `\??\E:\' failed with status C000014F
+[   26.252226] (\base\system\smss\pagefile.c:930) SMSS:PFILE: Open volume `\??\F:\' failed with status C000014F
+[   26.259164] (\base\system\smss\pagefile.c:1048) SMSS:PFILE: No paging-file-capable volumes found
+[   26.267929] (\ntoskrnl\config\cmsysini.c:1214) CmpGetRegistryPath: ConfigPath = '\SystemRoot\System32\Config\'
+[   26.277921] (\ntoskrnl\config\cmsysini.c:1214) CmpGetRegistryPath: ConfigPath = '\SystemRoot\System32\Config\'
+[   26.277935] (\ntoskrnl\config\cmsysini.c:1214) CmpGetRegistryPath: ConfigPath = '\SystemRoot\System32\Config\'
+[   26.277950] (\ntoskrnl\config\cmsysini.c:1214) CmpGetRegistryPath: ConfigPath = '\SystemRoot\System32\Config\'
+[   26.277990] (\ntoskrnl\config\cmsysini.c:1214) CmpGetRegistryPath: ConfigPath = '\SystemRoot\System32\Config\'
+[   26.298006] (\ntoskrnl\config\cmsysini.c:1214) CmpGetRegistryPath: ConfigPath = '\SystemRoot\System32\Config\'
+[   26.287886] (\ntoskrnl\config\cmsysini.c:1214) CmpGetRegistryPath: ConfigPath = '\SystemRoot\System32\Config\'
+[   26.971780] (\ntoskrnl\mm\ARM3\session.c:846) Session 0 is ready to go: 0xFFFFF97FFF010000 0xFFFFE544F5221000, 2220 0x0000000000000000
+[   27.116451] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\System32\win32k.sys at FFFFE544F5097000 with 17a pages
+[   27.286705] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\System32\ftfd.dll at FFFFE544F4FF5000 with a2 pages
+[   27.978938] (\win32ss\gdi\ntgdi\d3dkmt.c:183) DxStartupDxgkInt: Entry
+[   27.982535] (\win32ss\reactx\ntddraw\ddraw.c:57) Warning: trying loading xp/2003/windows7/reactos dxg.sys
+[   28.120982] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\System32\drivers\dxg.sys at FFFFE544F4FD7000 with b pages
+[   28.268247] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\System32\drivers\dxgthk.sys at FFFFE544F521C000 with 5 pages
+[   28.603879] (\win32ss\reactx\ntddraw\ddraw.c:112) DirectX interface is activated
+[   29.123325] (\win32ss\user\ntuser\winsta.c:243) err: Invalid window station handle
+[   29.128101] (\win32ss\user\ntuser\clipboard.c:31) err: Cannot open winsta
+[   29.344123] (\win32ss\user\ntuser\class.c:2396) err: SYSTEMCUR(ARROW) == NULL, should not happen!!
+[   29.344130] (\win32ss\user\ntuser\keyboard.c:221) err: NtDeviceIoControlFile() failed, ignored
+[   29.350211] (\win32ss\user\ntuser\class.c:2396) err: SYSTEMCUR(ARROW) == NULL, should not happen!!
+[   29.367731] (\win32ss\user\ntuser\class.c:2396) err: SYSTEMCUR(ARROW) == NULL, should not happen!!
+[   29.376665] (\win32ss\user\ntuser\class.c:2396) err: SYSTEMCUR(ARROW) == NULL, should not happen!!
+[   29.385605] (\win32ss\user\ntuser\class.c:2396) err: SYSTEMCUR(ARROW) == NULL, should not happen!!
+[   29.394538] (\win32ss\user\ntuser\class.c:2396) err: SYSTEMCUR(ARROW) == NULL, should not happen!!
+[   29.407063] (\win32ss\user\ntuser\desktop.c:3395) err: The process 0xFFFF96108BA10B30 'winlogon.exe' didn't have an assigned startup desktop before, assigning it now!
+[   29.419093] (\win32ss\user\ntuser\desktop.c:3333) err: Attempted to change thread desktop although the thread has windows!
+[   29.430216] (\win32ss\user\winsrv\usersrv\init.c:171) We are logged off
+[   29.702943] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\System32\kbdus.dll at FFFFE544F4F99000 with 5 pages
+[   30.136707] (\base\system\services\services.c:64) CheckSetup()
+[   30.139794] (\base\system\services\services.c:108) Running on LiveCD
+[   30.146001] (\base\system\services\services.c:130) ReactOS Setup currently in progress!
+[   30.190104] WARNING:  HvHiveWillShrink at \sdk\lib\cmlib\hivewrt.c:584 is UNIMPLEMENTED!
+[   30.486850] (\win32ss\gdi\eng\mouse.c:811) Failed to lock the DC.
+[   30.513130] fixme:(\dll\win32\rpcrt4\rpc_server.c:1736) (0x1000): stub
+[   30.532957] (\base\system\services\services.c:185) ScmLogEvent: RegisterEventSourceW failed 1722
+[   30.540226] WARNING:  getMacAddress at \base\services\dcomlaunch\network.c:32 is UNIMPLEMENTED!
+[   30.547541] (\base\services\dcomlaunch\network.c:136) Failed finding a proper MAC address, will generate seed
+[   30.562104] (\base\system\services\services.c:185) ScmLogEvent: RegisterEventSourceW failed 1722
+[   30.608961] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\System32\cdd.dll at FFFFE544F4E93000 with 9 pages
+[   30.655124] WARNING:  LDEVOBJ_bUnloadImage at \win32ss\gdi\eng\ldevobj.c:291 is UNIMPLEMENTED!
+[   30.670697] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\System32\framebuf.dll at FFFFE544F4E8A000 with 9 pages
+[   30.679457] (\base\system\services\services.c:185) ScmLogEvent: RegisterEventSourceW failed 1722
+[   30.713327] WARNING:  LDEVOBJ_bUnloadImage at \win32ss\gdi\eng\ldevobj.c:291 is UNIMPLEMENTED!
+[   30.720965] (\win32ss\reactx\ntddraw\dxeng.c:286) ReactX Calling : DxEngGetHdevData, Type: 12
+[   30.727558] (\win32ss\reactx\ntddraw\dxeng.c:289) hDev: FFFFBD95AD4DB900
+[   30.734241] (\win32ss\reactx\ntddraw\dxeng.c:343) requested DxEGShDevData_display
+[   30.741701] (\win32ss\reactx\ntddraw\dxeng.c:376) retVal: 00000001
+[   30.747862] (\win32ss\reactx\ntddraw\dxeng.c:286) ReactX Calling : DxEngGetHdevData, Type: 7
+[   30.756276] (\win32ss\reactx\ntddraw\dxeng.c:289) hDev: FFFFBD95AD4DB900
+[   30.762959] (\win32ss\reactx\ntddraw\dxeng.c:323) requested DxEGShDevData_eddg
+[   30.770158] (\win32ss\reactx\ntddraw\dxeng.c:376) retVal: ffffbd95ad4dc010
+[   30.777014] (\win32ss\reactx\ntddraw\dxeng.c:286) ReactX Calling : DxEngGetHdevData, Type: 6
+[   30.785428] (\win32ss\reactx\ntddraw\dxeng.c:289) hDev: FFFFBD95AD4DB900
+[   30.792111] (\win32ss\reactx\ntddraw\dxeng.c:319) requested DxEGShDevData_dhpdev
+[   30.799484] (\win32ss\reactx\ntddraw\dxeng.c:376) retVal: ffffbd95ad4d8520
+[   30.806340] (\win32ss\reactx\ntddraw\dxeng.c:534) ReactX Calling : DxEngLockHdev
+[   30.813713] (\win32ss\reactx\ntddraw\dxeng.c:536) hDev: FFFFBD95AD4DB900
+[   30.820396] (\win32ss\reactx\ntddraw\dxeng.c:286) ReactX Calling : DxEngGetHdevData, Type: 5
+[   30.820619] RPI5VC4: present #1 moves=0 dirty=1 flip=0 idx=0 scan=3f400000
+[   30.828809] (\win32ss\reactx\ntddraw\dxeng.c:289) hDev: FFFFBD95AD4DB900
+[   30.842347] (\win32ss\reactx\ntddraw\dxeng.c:315) requested DxEGShDevData_DrvFuncs
+[   30.849893] (\win32ss\reactx\ntddraw\dxeng.c:376) retVal: ffffbd95ad4dbc68
+[   30.856750] (\win32ss\reactx\ntddraw\dxeng.c:571) ReactX Calling : DxEngUnlockHdev
+[   30.860546] RPI5VC4: flip ring: 3 x 8100 KB at 00:4b371000
+[   30.875220] RPI5VC4: LPTRS@0x110=000002a0 head=672 ctl0=490cc007 ptr1=3f400000 valid=1 match=1
+[   30.880947] RPI5VC4: LPTRS@0x03c=ffffffff head=4095 (skip)
+[   30.886412] RPI5VC4: flip OK head=672 -> 00:4b371000
+[   30.891347] err:(\win32ss\user\user32\windows\cursoricon.c:274) Loading System Cursors
+[   31.151024] RPI5VC4: present #2 moves=0 dirty=1 flip=3 idx=0 scan=4b371000
+[   31.151770] fixme:(\dll\win32\rpcrt4\rpc_server.c:1736) (0x1000): stub
+[   31.159118] RPI5VC4: LPTRS@0x110=000002a0 head=672 ctl0=490cc007 ptr1=4b371000 valid=1 match=1
+[   31.170135] RPI5VC4: LPTRS@0x03c=ffffffff head=4095 (skip)
+[   31.172305] err:(\dll\win32\lsasrv\lsarpc.c:1452) LsapOpenDbObject(Accounts/S-1-5-6) failed (Status 0xc0000034)
+[   31.175602] RPI5VC4: flip OK head=672 -> 00:4bb5a000
+[   31.408896] err:(\win32ss\user\user32\misc\dllmain.c:668) hIconSmWindows 0000000000020070 hIconWindows 000000000002006E 
+[   31.416896] (\win32ss\user\ntuser\callback.c:1149) err: hIconSmWindows 0000000000020070 hIconWindows 000000000002006E 
+[   31.428061] (\win32ss\user\ntuser\desktop.c:3333) err: Attempted to change thread desktop although the thread has windows!
+[   31.440912] RPI5VC4: present #3 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   31.450652] RPI5VC4: LPTRS@0x110=000002a0 head=672 ctl0=490cc007 ptr1=4bb5a000 valid=1 match=1
+[   31.456377] RPI5VC4: LPTRS@0x03c=ffffffff head=4095 (skip)
+[   31.461846] RPI5VC4: flip OK head=672 -> 00:4c343000
+[   31.466804] RPI5VC4: present #4 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   31.478247] RPI5VC4: LPTRS@0x110=000002a0 head=672 ctl0=490cc007 ptr1=4c343000 valid=1 match=1
+[   31.483975] RPI5VC4: LPTRS@0x03c=ffffffff head=4095 (skip)
+[   31.489439] RPI5VC4: flip OK head=672 -> 00:4b371000
+[   31.725685] RPI5VC4: present #64 moves=0 dirty=1 flip=3 idx=0 scan=4b371000
+[   31.730675] RPI5VC4: LPTRS@0x110=000002a0 head=672 ctl0=490cc007 ptr1=4b371000 valid=1 match=1
+[   31.738357] RPI5VC4: LPTRS@0x03c=ffffffff head=4095 (skip)
+[   31.743822] RPI5VC4: takeover OK reg=0x110 head=672 fb=00:4b371000 cursor=1 start=9 count=19
+[   31.896928] err:(\win32ss\user\user32\windows\window.c:496) CreateWindowExW RegisterSystemControls
+[   31.981562] RPI5VC4: present #128 moves=0 dirty=1 flip=3 idx=0 scan=4b371000
+[   31.999376] RPI5VC4: LPTRS@0x110=000002a0 head=672 ctl0=490cc007 ptr1=4b371000 valid=1 match=1
+[   32.005102] RPI5VC4: flip OK head=672 -> 00:4bb5a000
+[   32.079022] (\win32ss\user\ntuser\desktop.c:1370) err: ptiLastInput is CLEARED!!
+[   32.079233] (\ntoskrnl\config\cmcontrl.c:269) CmpSaveBootControlSet(1)
+[   32.083840] (\win32ss\user\ntuser\desktop.c:3333) err: Attempted to change thread desktop although the thread has windows!
+[   32.114810] RPI5VC4: LPTRS@0x110=000002a0 head=672 ctl0=490cc007 ptr1=4bb5a000 valid=1 match=1
+[   32.120561] RPI5VC4: flip OK head=672 -> 00:4c343000
+[   32.133708] RPI5VC4: present #192 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   32.139494] RPI5VC4: LPTRS@0x110=000002a0 head=672 ctl0=490cc007 ptr1=4c343000 valid=1 match=1
+[   32.146466] RPI5VC4: takeover OK reg=0x110 head=672 fb=00:4c343000 cursor=0 start=9 count=10
+[   32.154921] RPI5VC4: LPTRS@0x110=000002a0 head=672 ctl0=490cc007 ptr1=4c343000 valid=1 match=1
+[   32.163470] RPI5VC4: takeover OK reg=0x110 head=672 fb=00:4c343000 cursor=1 start=9 count=19
+[   32.630271] V3DSMOKE: rpi5vc4 V3dReady=1 ver=71 slab=64MB gpuva=0x01000000
+[   32.634285] (\drivers\directx\dxgkrnl\d3dkmt.c:3488) D3DKMT CREATEALLOC #1 enter
+[   32.641656] (\drivers\directx\dxgkrnl\d3dkmt.c:3491) D3DKMT CREATEALLOC #1 exit 0x00000000
+[   32.649930] (\drivers\directx\dxgkrnl\d3dkmt.c:3524) D3DKMT LOCK #1 enter hAlloc=0x4d4d414d
+[   32.658689] (\drivers\directx\dxgkrnl\vidmm.c:3077) VidMm usermap #1 h=0x4D4D414D va=0000000040520000 resident=1 seg=1 pa=401db000 cache=2
+[   32.670624] (\drivers\directx\dxgkrnl\d3dkmt.c:3570) D3DKMT LOCK #1 exit va=0000000040520000
+[   32.679101] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #1 fence=1 node=0 size=64
+[   32.687193] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=1 node=0 bcl=00000000..00000000
+[   32.697955] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:276) RPI5VC4: V3D job fence=1 EMPTY ranges bcl=00000000..00000000 rcl=01000000..01000000 qts=00000000 — completing without kick
+[   32.714180] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #1 fence=1 node=0
+[   32.722504] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #1 done=1 state=0 pending=0
+[   32.730939] V3DSMOKE: alloc-relative submit status=0x00000000
+[   32.736580] (\drivers\directx\dxgkrnl\d3dkmt.c:3488) D3DKMT CREATEALLOC #2 enter
+[   32.737384] err:(\base\services\wkssvc\wkssvc.c:82) ServiceInit()
+[   32.744314] (\drivers\directx\dxgkrnl\d3dkmt.c:3491) D3DKMT CREATEALLOC #2 exit 0x00000000
+[   32.758158] (\dll\win32\syssetup\wizard.c:1482) Applying visual theme '(Classic)'
+[   32.773661] fixme:(\win32ss\printing\providers\localspl\monitors.c:265) InitializePrintMonitor2 loaded.
+[   32.777174] (\base\system\services\database.c:1836) Service V3dProbe exited without connecting the control pipe
+[   32.780177] fixme:(\win32ss\printing\providers\localspl\monitors.c:304) InitializePrintMonitorList Handle 00000000401368E0
+[   32.790238] (\base\system\services\database.c:2107) Connecting control pipe failed! (Error 1053)
+[   32.810024] (\base\system\services\database.c:753) ScmRemoveServiceImage() called
+[   32.818274] err:(\base\services\wkssvc\rpcserver.c:61) RpcServerListen() failed (Status 6b1)
+[   32.919350] RPI5VC4: present #256 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   33.205647] fixme:(\base\services\browser\browser.c:144) ServiceMain(1 0000000040129C50)
+[   33.206683] fixme:(\win32ss\printing\providers\localspl\forms.c:234) InitializeFormList
+[   33.219575] fixme:(\win32ss\printing\providers\localspl\printerdrivers.c:788) LocalGetPrinterDriverDirectory((null), Windows ARM64, 1, 00000000419FF168, 520, 00000000419FF164)
+[   33.779620] err:(\base\services\browser\rpcserver.c:42) RpcServerListen() failed (Status 6b1)
+[   33.850838] fixme:(\win32ss\printing\providers\localspl\printerdrivers.c:832) => L"C:\\ReactOS\\System32\\spool\\drivers\\arm64"
+[   33.859521] fixme:(\win32ss\printing\providers\localspl\printerdrivers.c:114) DriverPath : C:\ReactOS\System32\spool\drivers\arm64\3\UniDrv.dll
+[   33.874261] err:(\base\services\srvsvc\rpcserver.c:64) RpcServerListen() failed (Status 6b1)
+[   33.900158] (\base\services\wuauserv\wuauserv.c:44) WU UpdateServiceStatus(4) called
+[   33.924173] (\win32ss\user\ntuser\winpos.c:796) err: FIXME: Parent is Desktop, Min off screen!
+[   33.930602] err:(\dll\win32\combase\combase.c:1796) class {56fdf344-fd6d-11d0-958a-006097c9a090} not registered
+[   33.939993] err:(\dll\win32\combase\combase.c:1874) no class object {56fdf344-fd6d-11d0-958a-006097c9a090} could be created for context 0x1
+[   34.548987] RPI5VC4: present #320 moves=0 dirty=1 flip=3 idx=0 scan=4b371000
+[   34.553373] RPI5VC4: present #384 moves=0 dirty=1 flip=3 idx=0 scan=4b371000
+[   34.569097] RPI5VC4: present #448 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   34.581603] RPI5VC4: present #512 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   34.585985] RPI5VC4: present #576 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   35.143115] (\base\services\umpnpmgr\event.c:103) Removal pending: Root\SOFTGPU\0000
+[   35.143400] (\base\services\umpnpmgr\install.c:931) Boot device install: 38 candidate(s), 36 need install
+[   35.147976] (\base\services\umpnpmgr\event.c:99) Removal vetoed: Root\SOFTGPU\0000
+[   35.157537] (\base\services\umpnpmgr\install.c:392) Installing: batch[36 devices]
+[   35.165187] (\base\services\umpnpmgr\event.c:103) Removal pending: Root\SOFTGPU\0000
+[   35.180253] (\base\services\umpnpmgr\event.c:99) Removal vetoed: Root\SOFTGPU\0000
+[   35.274687] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\ACPI0004\0
+[   35.274944] RPI5VC4: present #640 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   35.279138] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\ACPI0004\1
+[   35.293445] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\ACPI0007\0
+[   35.300729] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\ACPI0007\1
+[   35.308017] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\ACPI0007\2
+[   35.315305] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\ACPI0007\3
+[   35.322593] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\AMZN0001\1
+[   35.329879] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\ARMH0011\0
+[   35.337172] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\BRCM5D12\0
+[   35.344456] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\BRCM5D12\1
+[   35.351747] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\FixedButton\2&ccb86d17&FFB0
+[   35.360508] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\PNP0A08\1
+[   35.367711] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\PNP0D10\0
+[   35.374910] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\PNP0D10\1
+[   35.382112] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\PRP0001\0
+[   35.389312] (\base\services\umpnpmgr\install.c:526) Installing: ACPI_HAL\PNP0C08\0
+[   35.396864] (\base\services\umpnpmgr\install.c:526) Installing: DISPLAY\Default_Monitor\4&00000000&0&00
+[   35.406232] (\base\services\umpnpmgr\install.c:526) Installing: DISPLAY\Default_Monitor\4&00000001&0&01
+[   35.415604] (\base\services\umpnpmgr\install.c:526) Installing: HID\Vid_413c&Pid_301a\5&68ef529e&2&Col0001
+[   35.425232] (\base\services\umpnpmgr\install.c:526) Installing: HTREE\ROOT\0
+[   35.432266] (\base\services\umpnpmgr\install.c:526) Installing: Root\ACPI_HAL\0000
+[   35.439810] (\base\services\umpnpmgr\install.c:526) Installing: SD\VID_0003&PID_FF00\00000000_00000000_B0FEFF00
+[   35.449876] (\base\services\umpnpmgr\install.c:526) Installing: SDIO\VEN_02D0&DEV_4345&FUNC_1\00000000_00000000_02D0_4345_FUNC_1
+[   35.461416] (\base\services\umpnpmgr\install.c:526) Installing: SDIO\VEN_02D0&DEV_4345&FUNC_2\00000000_00000000_02D0_4345_FUNC_2
+[   35.472955] (\base\services\umpnpmgr\install.c:526) Installing: SDIO\VEN_02D0&DEV_4345&FUNC_3\00000000_00000000_02D0_4345_FUNC_3
+[   35.484496] (\base\services\umpnpmgr\install.c:526) Installing: STORAGE\Partition\6&3c4bbb55&S00000000_O100000_L2ff00000
+[   35.495341] (\base\services\umpnpmgr\install.c:526) Installing: STORAGE\Partition\6&87aea797&S9df3f58f-f8ad-4f63-9de5-0e0a91c4e2a0S_O100000_L10400000
+[   35.508703] (\base\services\umpnpmgr\install.c:526) Installing: STORAGE\Partition\6&87aea797&S9df3f58f-f8ad-4f63-9de5-0e0a91c4e2a0S_O10500000_L1000000
+[   35.522153] (\base\services\umpnpmgr\install.c:526) Installing: STORAGE\Partition\6&87aea797&S9df3f58f-f8ad-4f63-9de5-0e0a91c4e2a0S_O11500000_L7c0000000
+[   35.535771] (\base\services\umpnpmgr\install.c:526) Installing: USB\ROOT_HUB\3&cc8c31f5
+[   35.543751] (\base\services\umpnpmgr\install.c:526) Installing: USB\ROOT_HUB\3&d59700b4
+[   35.548041] (\base\services\umpnpmgr\rpcserver.c:3673) PNP_SetDeviceProblem(0000000040135D20 ACPI\ACPI0004\0 28 0x00000001)
+[   35.551740] (\base\services\umpnpmgr\install.c:526) Installing: USB\Vid_0781&Pid_5581\0901da96cc5f2a6e98145c166ee0bf8579199debc6f1126c17dcbe55724e3388e11a00000000000000000000897c8cadff082920815581076e327e7a
+[   35.562880] (\base\services\umpnpmgr\rpcserver.c:277) SetDeviceStatus(ACPI\ACPI0004\0 0x400 0x1c)
+[   35.581153] (\base\services\umpnpmgr\install.c:526) Installing: USB\Vid_0781&Pid_5591\01016e01ffd6f47ad7a9a904dc54438de8ee4ed362c463e23b37a4d9b83f12b6b3e3000000000000000000004ca60268000d5400915581077b32dc12
+[   35.590008] (\ntoskrnl\io\pnpmgr\plugplay.c:983) Set status data is NOT SUPPORTED
+[   35.608308] (\base\services\umpnpmgr\install.c:526) Installing: USB\Vid_413c&Pid_301a\4&83bb0d7e&2
+[   35.618831] (\base\services\umpnpmgr\rpcserver.c:3673) PNP_SetDeviceProblem(0000000040135D20 ACPI\ACPI0004\1 28 0x00000001)
+[   35.624709] (\base\services\umpnpmgr\install.c:526) Installing: USBSTOR\Disk&Ven__USB____&Prod__SanDisk_3.2Gen1&Rev_1.00\5&955e2bc9&01016e01ffd6f47ad7a9a904dc54438de8ee4ed362c463e23b37a4d9b83f12b6b3e3000000000000000000004ca60268000d5400915581077b32dc12&0
+[   35.635828] (\base\services\umpnpmgr\rpcserver.c:277) SetDeviceStatus(ACPI\ACPI0004\1 0x400 0x1c)
+[   35.658284] (\base\services\umpnpmgr\install.c:526) Installing: USBSTOR\Disk&Ven__USB____&Prod__SanDisk_3.2Gen1&Rev_1.00\5&bb7f1351&0901da96cc5f2a6e98145c166ee0bf8579199debc6f1126c17dcbe55724e3388e11a00000000000000000000897c8cadff082920815581076e327e7a&0
+[   35.667138] (\ntoskrnl\io\pnpmgr\plugplay.c:983) Set status data is NOT SUPPORTED
+[   36.280506] (\base\services\umpnpmgr\rpcserver.c:3673) PNP_SetDeviceProblem(0000000040135D20 ACPI\BRCM5D12\0 28 0x00000001)
+[   36.288775] (\base\services\umpnpmgr\rpcserver.c:277) SetDeviceStatus(ACPI\BRCM5D12\0 0x400 0x1c)
+[   36.297610] (\ntoskrnl\io\pnpmgr\plugplay.c:983) Set status data is NOT SUPPORTED
+[   36.306237] (\base\services\umpnpmgr\rpcserver.c:3673) PNP_SetDeviceProblem(0000000040135D20 ACPI\BRCM5D12\1 28 0x00000001)
+[   36.316202] (\base\services\umpnpmgr\rpcserver.c:277) SetDeviceStatus(ACPI\BRCM5D12\1 0x400 0x1c)
+[   36.325043] (\ntoskrnl\io\pnpmgr\plugplay.c:983) Set status data is NOT SUPPORTED
+[   36.612520] (\ntoskrnl\io\pnpmgr\devaction.c:2657) NOTE: attempt to start an already started/uninitialized device ACPI\PNP0A08\1
+[   36.758556] (\ntoskrnl\io\pnpmgr\devaction.c:2657) NOTE: attempt to start an already started/uninitialized device ACPI\PNP0D10\0
+[   36.903300] (\ntoskrnl\io\pnpmgr\devaction.c:2657) NOTE: attempt to start an already started/uninitialized device ACPI\PNP0D10\1
+[   37.076356] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\System32\drivers\rp1gem.sys at FFFFE544F3457000 with c pages
+[   37.099084] NDIS6-INIT: NdisAllocateBufferPool -> 0x00000000, handle=0000000000000000
+[   37.104029] NDIS6-INIT: NdisAllocatePacketPool -> 0x00000000, handle=FFFF96108AF10000
+[   37.112494] NDIS6: InitializeEx → driver (adapter=FFFF96108AF151C0 pdo=FFFF96108BC9DC70 fdo=FFFF96108AF15070 next=FFFF96108BC9DC70)
+[   37.129990] NDIS6: NdisMRegisterInterruptEx vec=261 irql=12 affinity=0x1 mode=Level share=1
+[   37.135477] NDIS6: IoConnectInterrupt -> 0x00000000, KINTERRUPT=FFFF96108BF48010
+[   37.142977] NDIS6: adapter FFFF96108AF151C0 MAC 2c:cf:67:dd:90:9a connect=2
+[   37.149929] NDIS6: InitializeEx returned 0x00000000 (ctx=FFFF96108AF0B000)
+[   37.156647] (\drivers\network\nwifi\protocol.c:248) NWIFI: BindAdapterEx '\Device\{25af1529-ea16-4ec0-ac43-677cfdf8b49f}'
+[   37.167574] (\drivers\network\nwifi\protocol.c:253) NWIFI: skipping non-dot11 medium 0
+[   37.312423] (\ntoskrnl\io\pnpmgr\devaction.c:2657) NOTE: attempt to start an already started/uninitialized device ACPI_HAL\PNP0C08\0
+[   37.473280] (\ntoskrnl\io\pnpmgr\devaction.c:2657) NOTE: attempt to start an already started/uninitialized device HID\Vid_413c&Pid_301a\5&68ef529e&2&Col0001
+[   37.620580] (\ntoskrnl\io\pnpmgr\devaction.c:2657) NOTE: attempt to start an already started/uninitialized device Root\ACPI_HAL\0000
+[   37.687188] (\base\services\umpnpmgr\rpcserver.c:3673) PNP_SetDeviceProblem(0000000040135D20 SD\VID_0003&PID_FF00\00000000_00000000_B0FEFF00 28 0x00000001)
+[   37.698225] (\base\services\umpnpmgr\rpcserver.c:277) SetDeviceStatus(SD\VID_0003&PID_FF00\00000000_00000000_B0FEFF00 0x400 0x1c)
+[   37.709841] (\ntoskrnl\io\pnpmgr\plugplay.c:983) Set status data is NOT SUPPORTED
+[   37.849245] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\System32\drivers\cyw43455.sys at FFFFE544F3449000 with e pages
+[   37.872338] NDIS6-INIT: NdisAllocateBufferPool -> 0x00000000, handle=0000000000000000
+[   37.877292] NDIS6-INIT: NdisAllocatePacketPool -> 0x00000000, handle=FFFF96108BF9D000
+[   37.885126] NDIS6: InitializeEx → driver (adapter=FFFF96108BF9C1C0 pdo=FFFF96108BBCE070 fdo=FFFF96108BF9C070 next=FFFF96108BBCE070)
+[   37.990836] RPI5VC4: present #704 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   38.117041] NDIS6: adapter FFFF96108BF9C1C0 MAC b8:27:eb:74:f2:6c connect=2
+[   38.121183] NDIS6: InitializeEx returned 0x00000000 (ctx=FFFF96108BFA2000)
+[   38.128004] (\drivers\network\nwifi\protocol.c:248) NWIFI: BindAdapterEx '\Device\{38bb2064-0e54-4119-b999-a8d6371a7be8}'
+[   38.139327] NDIS6: seeded TCPIP registry for \Device\{B1D2C3E4-5F6A-4B8C-9D0E-02524F535731}
+[   38.147260] NDIS6: InitializeEx → driver (adapter=FFFF96108C2051C0 pdo=FFFF96108C205070 fdo=FFFF96108C205070 next=0000000000000000)
+[   38.159229] (\drivers\network\nwifi\miniport.c:117) NWIFI: MiniportInitializeEx interface 0
+[   38.167563] NDIS6: adapter FFFF96108C2051C0 MAC b8:27:eb:74:f2:6c connect=2
+[   38.174497] NDIS6: InitializeEx returned 0x00000000 (ctx=FFFF96108C032CF0)
+[   38.181355] NDIS6: Restart → driver
+[   38.184992] (\drivers\network\nwifi\miniport.c:210) NWIFI: MiniportRestartEx interface 0
+[   38.193063] NDIS6: LINK_STATE adapter=FFFF96108C2051C0 connect=2 rx=18446744073709551615 tx=18446744073709551615
+[   38.203216] NDIS6: RestartHandler returned 0x00000000
+[   38.208247] (\drivers\network\nwifi\protocol.c:248) NWIFI: BindAdapterEx '\Device\{B1D2C3E4-5F6A-4B8C-9D0E-02524F535731}'
+[   38.219180] (\drivers\network\nwifi\protocol.c:253) NWIFI: skipping non-dot11 medium 0
+[   38.227075] (\drivers\network\nwifi\protocol.c:383) NWIFI: bound interface 0 MAC b8:27:eb:74:f2:6c
+[   38.369911] (\base\services\umpnpmgr\rpcserver.c:3673) PNP_SetDeviceProblem(0000000040135D20 SDIO\VEN_02D0&DEV_4345&FUNC_2\00000000_00000000_02D0_4345_FUNC_2 28 0x00000001)
+[   38.382456] (\base\services\umpnpmgr\rpcserver.c:277) SetDeviceStatus(SDIO\VEN_02D0&DEV_4345&FUNC_2\00000000_00000000_02D0_4345_FUNC_2 0x400 0x1c)
+[   38.395537] (\ntoskrnl\io\pnpmgr\plugplay.c:983) Set status data is NOT SUPPORTED
+[   38.535515] (\base\services\umpnpmgr\rpcserver.c:3673) PNP_SetDeviceProblem(0000000040135D20 SDIO\VEN_02D0&DEV_4345&FUNC_3\00000000_00000000_02D0_4345_FUNC_3 28 0x00000001)
+[   38.548058] (\base\services\umpnpmgr\rpcserver.c:277) SetDeviceStatus(SDIO\VEN_02D0&DEV_4345&FUNC_3\00000000_00000000_02D0_4345_FUNC_3 0x400 0x1c)
+[   38.561141] (\ntoskrnl\io\pnpmgr\plugplay.c:983) Set status data is NOT SUPPORTED
+[   38.846665] (\ntoskrnl\io\pnpmgr\devaction.c:2657) NOTE: attempt to start an already started/uninitialized device USB\ROOT_HUB\3&cc8c31f5
+[   38.995879] (\ntoskrnl\io\pnpmgr\devaction.c:2657) NOTE: attempt to start an already started/uninitialized device USB\ROOT_HUB\3&d59700b4
+[   39.142224] (\ntoskrnl\io\pnpmgr\devaction.c:2657) NOTE: attempt to start an already started/uninitialized device USB\Vid_0781&Pid_5581\0901da96cc5f2a6e98145c166ee0bf8579199debc6f1126c17dcbe55724e3388e11a00000000000000000000897c8cadff082920815581076e327e7a
+[   39.298963] (\ntoskrnl\io\pnpmgr\devaction.c:2657) NOTE: attempt to start an already started/uninitialized device USB\Vid_0781&Pid_5591\01016e01ffd6f47ad7a9a904dc54438de8ee4ed362c463e23b37a4d9b83f12b6b3e3000000000000000000004ca60268000d5400915581077b32dc12
+[   39.456491] (\ntoskrnl\io\pnpmgr\devaction.c:2657) NOTE: attempt to start an already started/uninitialized device USB\Vid_413c&Pid_301a\4&83bb0d7e&2
+[   39.619490] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(23 00000000401335F0 0000000040136780)
+[   39.625948] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(24 00000000401335F0 0000000040136780)
+[   39.635002] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(28 00000000401335F0 0000000040136780)
+[   39.644134] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(29 00000000401335F0 0000000040136780)
+[   39.653222] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(21 00000000401335F0 0000000040136780)
+[   39.662753] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(34 00000000401335F0 0000000040136780)
+[   39.671838] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(32 00000000401335F0 0000000040136780)
+[   39.681375] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(2 00000000401335F0 0000000040136780)
+[   39.692921] (\ntoskrnl\io\pnpmgr\devaction.c:2657) NOTE: attempt to start an already started/uninitialized device USBSTOR\Disk&Ven__USB____&Prod__SanDisk_3.2Gen1&Rev_1.00\5&955e2bc9&01016e01ffd6f47ad7a9a904dc54438de8ee4ed362c463e23b37a4d9b83f12b6b3e3000000000000000000004ca60268000d5400915581077b32dc12&0
+[   39.717645] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(30 00000000401335F0 0000000040136780)
+[   39.726066] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(12 00000000401335F0 0000000040136780)
+[   39.738469] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(23 00000000401335F0 0000000040136780)
+[   39.744858] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(24 00000000401335F0 0000000040136780)
+[   39.753967] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(28 00000000401335F0 0000000040136780)
+[   39.763087] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(29 00000000401335F0 0000000040136780)
+[   39.772187] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(21 00000000401335F0 0000000040136780)
+[   39.781692] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(34 00000000401335F0 0000000040136780)
+[   39.790782] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(32 00000000401335F0 0000000040136780)
+[   39.800243] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(2 00000000401335F0 0000000040136780)
+[   39.811826] (\ntoskrnl\io\pnpmgr\devaction.c:2657) NOTE: attempt to start an already started/uninitialized device USBSTOR\Disk&Ven__USB____&Prod__SanDisk_3.2Gen1&Rev_1.00\5&bb7f1351&0901da96cc5f2a6e98145c166ee0bf8579199debc6f1126c17dcbe55724e3388e11a00000000000000000000897c8cadff082920815581076e327e7a&0
+[   39.836547] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(30 00000000401335F0 0000000040136780)
+[   39.844968] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(12 00000000401335F0 0000000040136780)
+[   39.877887] (\win32ss\user\ntuser\desktop.c:1370) err: ptiLastInput is CLEARED!!
+[   39.950195] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\System32\drivers\tcpip.sys at FFFFE544F3400000 with 40 pages
+[   39.978861] NDIS6: Restart → driver
+[   39.979637] NDIS6: RestartHandler returned 0x00000000
+[   39.984773] NDIS6: Restart → driver
+[   39.988313] NDIS6: RestartHandler returned 0x00000000
+[   40.003070] (\base\services\dhcpcsvc\dhcp\api.c:58) RpcServerListen() failed (Status 6b1)
+[   40.017575] fixme:(\dll\win32\rpcrt4\rpc_server.c:1736) (0x1000): stub
+[   40.034946] (\dll\win32\syssetup\install.c:1177) LIVECD: RegistrationPhase2 begin
+[   40.208636] (\win32ss\user\winsrv\usersrv\init.c:152) GetThreadConsoleDesktop(488) failed with Status 0xc0000008
+[   40.324620] fixme:(\dll\win32\shdocvw\shdocvw_main.c:222) (TRUE, (null)): stub!
+[   41.118462] fixme:(\dll\win32\shell32\shell32.cpp:512) TRUE (null): stub
+[   41.324057] (\dll\win32\syssetup\install.c:1186) LIVECD: TypeLibraries begin
+[   41.374170] NDIS6: LINK_STATE adapter=FFFF96108AF151C0 connect=1 rx=1000000000 tx=1000000000
+[   41.465417] (\dll\win32\syssetup\install.c:1188) LIVECD: registration done
+[   41.470448] (\dll\win32\syssetup\install.c:1127) LIVECD: deferred registration begin
+[   41.596950] RPI5VC4: present #768 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   41.601611] RPI5VC4: present #832 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   41.625020] RPI5VC4: present #896 moves=0 dirty=1 flip=3 idx=0 scan=4b371000
+[   41.629678] RPI5VC4: present #960 moves=0 dirty=1 flip=3 idx=0 scan=4b371000
+[   41.655084] RPI5VC4: present #1024 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   41.659907] RPI5VC4: present #1088 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   41.690529] RPI5VC4: present #1152 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   41.695362] RPI5VC4: present #1216 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   41.718415] RPI5VC4: present #1280 moves=0 dirty=1 flip=3 idx=0 scan=4b371000
+[   41.730255] RPI5VC4: present #1344 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   41.750266] RPI5VC4: present #1408 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   41.755081] RPI5VC4: present #1472 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   41.789677] RPI5VC4: present #1536 moves=0 dirty=1 flip=3 idx=0 scan=4b371000
+[   41.794490] RPI5VC4: present #1600 moves=0 dirty=1 flip=3 idx=0 scan=4b371000
+[   41.818165] RPI5VC4: present #1664 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   41.822918] RPI5VC4: present #1728 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   41.855617] RPI5VC4: present #1792 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   41.860375] RPI5VC4: present #1856 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   41.884758] RPI5VC4: present #1920 moves=0 dirty=1 flip=3 idx=0 scan=4b371000
+[   41.889533] RPI5VC4: present #1984 moves=0 dirty=1 flip=3 idx=0 scan=4b371000
+[   41.923292] RPI5VC4: present #2048 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   41.928058] RPI5VC4: present #2112 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   41.952207] RPI5VC4: present #2176 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   41.956965] RPI5VC4: present #2240 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   41.980973] RPI5VC4: present #2304 moves=0 dirty=1 flip=3 idx=0 scan=4b371000
+[   42.002661] RPI5VC4: present #2368 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   42.007430] RPI5VC4: present #2432 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   42.031447] RPI5VC4: present #2496 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   42.036213] RPI5VC4: present #2560 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   42.060153] RPI5VC4: present #2624 moves=0 dirty=1 flip=3 idx=0 scan=4b371000
+[   42.064923] RPI5VC4: present #2688 moves=0 dirty=1 flip=3 idx=0 scan=4b371000
+[   42.088919] RPI5VC4: present #2752 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   42.093683] RPI5VC4: present #2816 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   42.122886] RPI5VC4: present #2880 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   42.127647] RPI5VC4: present #2944 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   42.151589] RPI5VC4: present #3008 moves=0 dirty=1 flip=3 idx=0 scan=4b371000
+[   42.156375] RPI5VC4: present #3072 moves=0 dirty=1 flip=3 idx=0 scan=4b371000
+[   42.189421] RPI5VC4: present #3136 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   42.194209] RPI5VC4: present #3200 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   42.217968] RPI5VC4: present #3264 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   42.222752] RPI5VC4: present #3328 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   42.256106] RPI5VC4: present #3392 moves=0 dirty=1 flip=3 idx=0 scan=4b371000
+[   42.260851] RPI5VC4: present #3456 moves=0 dirty=1 flip=3 idx=0 scan=4b371000
+[   42.284636] RPI5VC4: present #3520 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   42.296589] RPI5VC4: present #3584 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   42.318377] RPI5VC4: present #3648 moves=0 dirty=1 flip=3 idx=0 scan=4b371000
+[   42.323143] RPI5VC4: present #3712 moves=0 dirty=1 flip=3 idx=0 scan=4b371000
+[   42.347106] RPI5VC4: present #3776 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   42.351855] RPI5VC4: present #3840 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   42.375738] RPI5VC4: present #3904 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   42.380485] RPI5VC4: present #3968 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   42.404416] RPI5VC4: present #4032 moves=0 dirty=1 flip=3 idx=0 scan=4b371000
+[   42.412966] RPI5VC4: present #4096 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   42.435210] RPI5VC4: present #4160 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   42.440014] RPI5VC4: present #4224 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   42.472931] RPI5VC4: present #4288 moves=0 dirty=1 flip=3 idx=0 scan=4b371000
+[   42.477699] RPI5VC4: present #4352 moves=0 dirty=1 flip=3 idx=0 scan=4b371000
+[   42.501475] RPI5VC4: present #4416 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   42.523368] RPI5VC4: present #4480 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   42.528176] RPI5VC4: present #4544 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   42.551928] RPI5VC4: present #4608 moves=0 dirty=1 flip=3 idx=0 scan=4b371000
+[   42.556693] RPI5VC4: present #4672 moves=0 dirty=1 flip=3 idx=0 scan=4b371000
+[   42.586059] (\dll\ntdll\ldr\ldrinit.c:2244) WARN: Accepting different LOAD_CONFIG size!
+[   42.762786] fixme:(\dll\win32\shdocvw\winlist.cpp:81) ()
+[   42.815850] fixme:(\dll\win32\comctl32\toolbar.c:403) [00000000000200C4] TBSTYLE_REGISTERDROP not implemented
+[   42.947263] (\win32ss\user\ntuser\desktop.c:1551) err: UMWP calling IDWP
+[   42.951084] (\win32ss\user\ntuser\desktop.c:1551) err: UMWP calling IDWP
+[   42.947388] WARNING:  NtNotifyChangeMultipleKeys at \ntoskrnl\config\ntapi.c:1470 is UNIMPLEMENTED!
+[   42.967089] err:(\dll\win32\mmdevapi\devenum.c:1309) RegNotifyChangeKeyValue failed: 1
+[   43.090961] fixme:(\dll\win32\wintrust\register.c:1227) stub
+[   43.109788] (\base\services\dhcpcsvc\dhcp\adapter.c:170) There is no active configuration!
+[   43.115194] DHCPCSVC: Adapter Name: [{25af1529-ea16-4ec0-ac43-677cfdf8b49f}] (dynamic)
+[   43.126240] TCPIP-UDP: UDPReceive #1 dst=0x67dfa8c0:68 src=0x01dfa8c0:67 len=300
+[   43.126928] fixme:(\dll\win32\shell32\shlexec.cpp:2350) flags ignored: 0x00000100
+[   43.130757] TCPIP-UDP: matched AddrFile=FFFF96108C4059A0 — delivering
+[   43.144816] AFD-RX: PacketSocketRecvComplete #1 FCB=FFFF96108C404A50 Status=0x00000000 Info=300
+[   43.203637] fixme:(\dll\win32\setupapi\install.c:1494) default path of the installation not changed
+[   43.441474] err:(\dll\win32\setupapi\queue.c:1215) Unsupported style(s) 0x104
+[   43.807816] fixme:(\dll\win32\advpack\reg.c:197) SYS_MOD_PATH needs more work
+[   43.932311] RPI5VC4: present #4736 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   44.169334] TCPIP-UDP: UDPReceive #2 dst=0x67dfa8c0:68 src=0x01dfa8c0:67 len=300
+[   44.173849] TCPIP-UDP: matched AddrFile=FFFF96108C4059A0 — delivering
+[   44.180447] AFD-RX: PacketSocketRecvComplete #2 FCB=FFFF96108C404A50 Status=0x00000000 Info=300
+[   44.345536] RPI5VC4: present #4800 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   44.353137] RPI5VC4: present #4864 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   44.396809] (\win32ss\user\ntuser\winpos.c:1449) err: Window is HWND_BOTTOM hwnd 0000000000000001
+[   45.009674] (\dll\ntdll\ldr\ldrinit.c:2244) WARN: Accepting different LOAD_CONFIG size!
+[   45.113954] (\dll\ntdll\rtl\libsupp.c:1173) ApiSetResolveToHost redirected api-ms-win-crt-private-l1-1-0.dll to C:\ReactOS\System32\ucrtbase.dll
+[   45.145319] (\dll\ntdll\rtl\libsupp.c:1173) ApiSetResolveToHost redirected api-ms-win-crt-stdio-l1-1-0.dll to C:\ReactOS\System32\ucrtbase.dll
+[   45.155262] (\dll\ntdll\rtl\libsupp.c:1173) ApiSetResolveToHost redirected api-ms-win-crt-string-l1-1-0.dll to C:\ReactOS\System32\ucrtbase.dll
+[   45.168155] (\dll\ntdll\rtl\libsupp.c:1173) ApiSetResolveToHost redirected api-ms-win-crt-runtime-l1-1-0.dll to C:\ReactOS\System32\ucrtbase.dll
+[   45.181076] (\dll\ntdll\rtl\libsupp.c:1173) ApiSetResolveToHost redirected api-ms-win-crt-locale-l1-1-0.dll to C:\ReactOS\System32\ucrtbase.dll
+[   45.193906] (\dll\ntdll\rtl\libsupp.c:1173) ApiSetResolveToHost redirected api-ms-win-crt-math-l1-1-0.dll to C:\ReactOS\System32\ucrtbase.dll
+[   45.206592] (\dll\ntdll\rtl\libsupp.c:1173) ApiSetResolveToHost redirected api-ms-win-crt-heap-l1-1-0.dll to C:\ReactOS\System32\ucrtbase.dll
+[   45.219201] (\dll\ntdll\rtl\libsupp.c:1173) ApiSetResolveToHost redirected api-ms-win-crt-convert-l1-1-0.dll to C:\ReactOS\System32\ucrtbase.dll
+[   45.232217] (\dll\ntdll\rtl\libsupp.c:1173) ApiSetResolveToHost redirected api-ms-win-crt-environment-l1-1-0.dll to C:\ReactOS\System32\ucrtbase.dll
+[   45.306010] (\dll\ntdll\rtl\libsupp.c:1173) ApiSetResolveToHost redirected api-ms-win-core-localization-l1-2-1 to C:\ReactOS\System32\kernel32.dll
+[   45.348596] (\win32ss\gdi\ntgdi\gdidbg.c:399) Number of all entries incorrect: RESERVE_ENTRIES_COUNT = 10, nDeleted = 14, nFree = 65139, nUsed = 374
+[   45.390827] Could not load wine-gecko. HTML rendering will be disabled.
+[   45.394683] fixme:(\dll\win32\mshtml\main.c:363) stub 1 (null): returning S_OK
+[   45.400728] err:(\dll\opengl\opengl32\icdload.c:122) Overriding the default OGL ICD with MesaV3D
+[   45.505357] (\dll\ntdll\rtl\libsupp.c:1173) ApiSetResolveToHost redirected api-ms-win-core-synch-l1-2-0.dll to C:\ReactOS\System32\kernel32.dll
+[   45.515840] (\dll\ntdll\rtl\libsupp.c:1173) ApiSetResolveToHost redirected api-ms-win-crt-utility-l1-1-0.dll to C:\ReactOS\System32\ucrtbase.dll
+[   45.528339] (\dll\ntdll\rtl\libsupp.c:1173) ApiSetResolveToHost redirected api-ms-win-crt-filesystem-l1-1-0.dll to C:\ReactOS\System32\ucrtbase.dll
+[   45.612136] MESA: error: WGL: trying gallium driver [0] 'v3d'
+[   45.615179] (\drivers\directx\dxgkrnl\d3dkmt.c:3028) DxgkCreatePagingQueue: RETURN hPagingQueue=0x51474151
+[   45.751750] MESA: error: v3dv-reactos: rpi5vc4 adapter open pq=0x51474151, V3D 7.1 ready=1 slab=64MB
+[   45.774831] v3dwgl: v3d screen created, wrapper installed
+[   45.799193] MESA: error: WGL: gallium driver 'v3d' screen created
+[   45.853891] MESA: error: STW: screen 'V3D 7.1.10.2' ready, pixelformats=360
+[   45.858038] OPENGL32: ICD MesaV3D formats=360 for hdc 000000008B01013C
+[   45.866057] OPENGL32: C:\ReactOS\bin\gears.exe renders with the HARDWARE ICD
+[   45.879903] (\drivers\directx\dxgkrnl\d3dkmt.c:3488) D3DKMT CREATEALLOC #3 enter
+[   45.884430] (\drivers\directx\dxgkrnl\d3dkmt.c:3491) D3DKMT CREATEALLOC #3 exit 0x00000000
+[   45.892676] (\drivers\directx\dxgkrnl\d3dkmt.c:3878) D3DKMT MAP: ioctl reached hAlloc=0x4d4d414f pages=2 ctx=0000000000000000
+[   45.900920] fixme:(\dll\win32\olepro32\olepro32stubs.c:47) stub
+[   45.903938] (\drivers\directx\dxgkrnl\d3dkmt.c:3921) D3DKMT MAP exit hAlloc=0x4d4d414f va=401e0000
+[   45.918817] (\drivers\directx\dxgkrnl\d3dkmt.c:3524) D3DKMT LOCK #2 enter hAlloc=0x4d4d414f
+[   45.924119] fixme:(\dll\win32\pstorec\pstorec.c:377) 
+[   45.927479] (\drivers\directx\dxgkrnl\vidmm.c:3077) VidMm usermap #2 h=0x4D4D414F va=0000000042CF0000 resident=1 seg=1 pa=401e0000 cache=2
+[   45.944548] (\drivers\directx\dxgkrnl\d3dkmt.c:3570) D3DKMT LOCK #2 exit va=0000000042CF0000
+[   46.022641] (\drivers\directx\dxgkrnl\d3dkmt.c:3488) D3DKMT CREATEALLOC #4 enter
+[   46.027170] (\drivers\directx\dxgkrnl\d3dkmt.c:3491) D3DKMT CREATEALLOC #4 exit 0x00000000
+[   46.035409] (\drivers\directx\dxgkrnl\d3dkmt.c:3878) D3DKMT MAP: ioctl reached hAlloc=0x4d4d4148 pages=96 ctx=0000000000000000
+[   46.046775] (\drivers\directx\dxgkrnl\d3dkmt.c:3921) D3DKMT MAP exit hAlloc=0x4d4d4148 va=401e2000
+[   46.055866] (\drivers\directx\dxgkrnl\d3dkmt.c:3488) D3DKMT CREATEALLOC #5 enter
+[   46.063082] (\drivers\directx\dxgkrnl\d3dkmt.c:3491) D3DKMT CREATEALLOC #5 exit 0x00000000
+[   46.071326] (\drivers\directx\dxgkrnl\d3dkmt.c:3878) D3DKMT MAP: ioctl reached hAlloc=0x4d4d4149 pages=48 ctx=0000000000000000
+[   46.082684] (\drivers\directx\dxgkrnl\d3dkmt.c:3921) D3DKMT MAP exit hAlloc=0x4d4d4149 va=40242000
+[   46.166707] GL_RENDERER   = V3D 7.1.10.2
+[   46.167891] GL_VERSION    = 3.1 Mesa 26.2.0-devel (git-3bbd7a1d03)
+[   46.176824] GL_VENDOR     = Broadcom
+[   46.181577] GL_EXTENSIONS = GL_ARB_multisample GL_EXT_abgr GL_EXT_bgra GL_EXT_blend_color GL_EXT_blend_minmax GL_EXT_blend_subtract GL_EXT_copy_texture GL_EXT_subtexture GL_EXT_texture_object GL_EXT_vertex_array GL_EXT_compiled_vertex_array GL_EXT_texture GL_EXT_texture3D GL_IBM_rasterpos_clip GL_ARB_point_parameters GL_EXT_draw_range_elements GL_EXT_packed_pixels GL_EXT_point_parameters GL_EXT_rescale_normal GL_EXT_separate_specular_color GL_EXT_texture_edge_clamp GL_SGIS_generate_mipmap GL_SGIS_texture[   46.223173]  GL_SGIS_texture_edge_clamp GL_SGIS_texture_lod GL_ARB_framebuffer_sRGB GL_ARB_multitexture GL_EXT_framebuffer_sRGB GL_IBM_multimode_draw_arrays GL_IBM_texture_mirrored_repeat GL_ARB_texture_cube_map GL_ARB_texture_env_add GL_ARB_transpose_matrix GL_EXT_blend_func_separate GL_EXT_fog_coord GL_EXT_multi_draw_arrays GL_EXT_secondary_color GL_EXT_texture_env_add GL_EXT_texture_filter_anisotropic GL_EXT_texture_lod_bias GL_INGR_blend_func_separate GL_NV_blend_square GL_NV_light_max_exponent GL_NV[   46.267574] ction GL_NV_texture_env_combine4 GL_S3_s3tc GL_SUN_multi_draw_arrays GL_ARB_texture_border_clamp GL_ARB_texture_compression GL_EXT_framebuffer_object GL_EXT_texture_compression_s3tc GL_EXT_texture_env_combine GL_EXT_texture_env_dot3 GL_MESA_window_pos GL_NV_packed_depth_stencil GL_NV_texture_rectangle GL_ARB_depth_texture GL_ARB_occlusion_query GL_ARB_shadow GL_ARB_texture_env_combine GL_ARB_texture_env_crossbar GL_ARB_texture_env_dot3 GL_ARB_texture_mirrored_repeat GL_ARB_window_pos GL_ATI_f[   46.312008] r GL_EXT_stencil_two_side GL_EXT_texture_cube_map GL_NV_depth_clamp GL_NV_fog_distance GL_NV_half_float GL_APPLE_packed_pixels GL_ARB_draw_buffers GL_ARB_fragment_program GL_ARB_fragment_shader GL_ARB_shader_objects GL_ARB_vertex_program GL_ARB_vertex_shader GL_ATI_draw_buffers GL_ATI_texture_env_combine3 GL_ATI_texture_float GL_EXT_shadow_funcs GL_EXT_stencil_wrap GL_MESA_pack_invert GL_NV_primitive_restart GL_ARB_depth_clamp GL_ARB_fragment_program_shadow GL_ARB_half_float_pixel GL_ARB_occl[   46.340508] fixme:(\dll\win32\urlmon\urlmon_main.c:243) (TRUE, (null)): stub
+[   46.356412] GL_ARB_[   46.377118] (\drivers\directx\dxgkrnl\d3dkmt.c:3488) D3DKMT CREATEALLOC #6 enter
+[   46.381643] (\drivers\directx\dxgkrnl\d3dkmt.c:3491) D3DKMT CREATEALLOC #6 exit 0x00000000
+[   46.389890] (\drivers\directx\dxgkrnl\d3dkmt.c:3878) D3DKMT MAP: ioctl reached hAlloc=0x4d4d414a pages=257 ctx=0000000000000000
+[   46.401052] RPI5VC4: present #4928 moves=0 dirty=1 flip=3 idx=2 scan=4c343000
+[   46.401425] (\drivers\directx\dxgkrnl\d3dkmt.c:3921) D3DKMT MAP exit hAlloc=0x4d4d414a va=40272000
+[   46.411381] (\base\services\w32time\register.c:54) RegisterService()
+[   46.417462] (\drivers\directx\dxgkrnl\d3dkmt.c:3524) D3DKMT LOCK #3 enter hAlloc=0x4d4d414a
+[   46.427518] fixme:(\dll\win32\wininet\internet.c:350) (1 (null)): stub
+[   46.433051] (\drivers\directx\dxgkrnl\vidmm.c:3077) VidMm usermap #3 h=0x4D4D414A va=0000000042FE0000 resident=1 seg=1 pa=40272000 cache=2
+[   46.450957] (\drivers\directx\dxgkrnl\d3dkmt.c:3570) D3DKMT LOCK #3 exit va=0000000042FE0000
+[   46.472351] (\drivers\directx\dxgkrnl\d3dkmt.c:3488) D3DKMT CREATEALLOC #7 enter
+[   46.476872] (\drivers\directx\dxgkrnl\d3dkmt.c:3491) D3DKMT CREATEALLOC #7 exit 0x00000000
+[   46.485119] (\drivers\directx\dxgkrnl\d3dkmt.c:3878) D3DKMT MAP: ioctl reached hAlloc=0x4d4d414b pages=1 ctx=0000000000000000
+[   46.496397] (\drivers\directx\dxgkrnl\d3dkmt.c:3921) D3DKMT MAP exit hAlloc=0x4d4d414b va=40373000
+[   46.505598] (\drivers\directx\dxgkrnl\d3dkmt.c:3524) D3DKMT LOCK #4 enter hAlloc=0x4d4d414b
+[   46.514025] (\drivers\directx\dxgkrnl\vidmm.c:3077) VidMm usermap #4 h=0x4D4D414B va=00000000430F0000 resident=1 seg=1 pa=40373000 cache=2
+[   46.526060] (\drivers\directx\dxgkrnl\d3dkmt.c:3570) D3DKMT LOCK #4 exit va=00000000430F0000
+[   46.534566] (\sdk\lib\rtl\heap.c:2995) Realloc in place failed, but it was the only option
+[   46.542736] (\sdk\lib\rtl\heap.c:2995) Realloc in place failed, but it was the only option
+[   46.552291] (\drivers\directx\dxgkrnl\d3dkmt.c:3488) D3DKMT CREATEALLOC #8 enter
+[   46.558356] (\drivers\directx\dxgkrnl\d3dkmt.c:3491) D3DKMT CREATEALLOC #8 exit 0x00000000
+[   46.566595] (\drivers\directx\dxgkrnl\d3dkmt.c:3878) D3DKMT MAP: ioctl reached hAlloc=0x4d4d4144 pages=129 ctx=0000000000000000
+[   46.578029] (\drivers\directx\dxgkrnl\d3dkmt.c:3921) D3DKMT MAP exit hAlloc=0x4d4d4144 va=40374000
+[   46.586980] (\drivers\directx\dxgkrnl\d3dkmt.c:3524) D3DKMT LOCK #5 enter hAlloc=0x4d4d4144
+[   46.595792] (\drivers\directx\dxgkrnl\vidmm.c:3077) VidMm usermap #5 h=0x4D4D4144 va=0000000043100000 resident=1 seg=1 pa=40374000 cache=2
+[   46.600319] (\dll\ntdll\rtl\libsupp.c:1173) ApiSetResolveToHost redirected api-ms-win-core-synch-l1-2-0 to C:\ReactOS\System32\kernel32.dll
+[   46.607703] (\drivers\directx\dxgkrnl\d3dkmt.c:3570) D3DKMT LOCK #5 exit va=0000000043100000
+[   46.620497] (\dll\ntdll\rtl\libsupp.c:1173) ApiSetResolveToHost redirected api-ms-win-core-localization-l1-2-1 to C:\ReactOS\System32\kernel32.dll
+[   46.669864] (\dll\win32\syssetup\install.c:1135) LIVECD: deferred registration done
+[   46.676086] (\sdk\lib\rtl\heap.c:2995) Realloc in place failed, but it was the only option
+[   46.680911] (\win32ss\user\ntuser\msgqueue.c:2248) err: Thread Cleanup Post Messages FFFFBD95AD49A330
+[   46.683178] (\sdk\lib\rtl\heap.c:2995) Realloc in place failed, but it was the only option
+[   46.744322] (\drivers\directx\dxgkrnl\d3dkmt.c:3878) D3DKMT MAP: ioctl reached hAlloc=0x4d4d4145 pages=1 ctx=0000000000000000
+[   46.752743] (\drivers\directx\dxgkrnl\d3dkmt.c:3921) D3DKMT MAP exit hAlloc=0x4d4d4145 va=403f5000
+[   46.761688] (\drivers\directx\dxgkrnl\d3dkmt.c:3524) D3DKMT LOCK #6 enter hAlloc=0x4d4d4145
+[   46.770373] (\drivers\directx\dxgkrnl\vidmm.c:3077) VidMm usermap #6 h=0x4D4D4145 va=00000000431A0000 resident=1 seg=1 pa=403f5000 cache=2
+[   46.782415] (\drivers\directx\dxgkrnl\d3dkmt.c:3570) D3DKMT LOCK #6 exit va=00000000431A0000
+[   46.791401] (\sdk\lib\rtl\heap.c:2995) Realloc in place failed, but it was the only option
+[   46.799099] (\sdk\lib\rtl\heap.c:2995) Realloc in place failed, but it was the only option
+[   46.817198] (\drivers\directx\dxgkrnl\d3dkmt.c:3878) D3DKMT MAP: ioctl reached hAlloc=0x4d4d4146 pages=2 ctx=0000000000000000
+[   46.825618] (\drivers\directx\dxgkrnl\d3dkmt.c:3921) D3DKMT MAP exit hAlloc=0x4d4d4146 va=403f6000
+[   46.834561] (\drivers\directx\dxgkrnl\d3dkmt.c:3524) D3DKMT LOCK #7 enter hAlloc=0x4d4d4146
+[   46.843262] (\drivers\directx\dxgkrnl\vidmm.c:3077) VidMm usermap #7 h=0x4D4D4146 va=00000000433B0000 resident=1 seg=1 pa=403f6000 cache=2
+[   46.855290] (\drivers\directx\dxgkrnl\d3dkmt.c:3570) D3DKMT LOCK #7 exit va=00000000433B0000
+[   46.863841] (\drivers\directx\dxgkrnl\d3dkmt.c:3921) D3DKMT MAP exit hAlloc=0x4d4d4147 va=403f8000
+[   46.872667] (\drivers\directx\dxgkrnl\d3dkmt.c:3921) D3DKMT MAP exit hAlloc=0x4d4d4140 va=40400000
+[   46.881599] (\drivers\directx\dxgkrnl\d3dkmt.c:3921) D3DKMT MAP exit hAlloc=0x4d4d4141 va=40402000
+[   46.890523] (\drivers\directx\dxgkrnl\d3dkmt.c:3524) D3DKMT LOCK #8 enter hAlloc=0x4d4d4141
+[   46.899218] (\drivers\directx\dxgkrnl\vidmm.c:3077) VidMm usermap #8 h=0x4D4D4141 va=00000000433C0000 resident=1 seg=1 pa=40402000 cache=2
+[   46.911251] (\drivers\directx\dxgkrnl\d3dkmt.c:3570) D3DKMT LOCK #8 exit va=00000000433C0000
+[   46.919765] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #2 fence=2 node=0 size=64
+[   46.927823] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=2 node=0 bcl=01198000..011981c0
+[   46.938587] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=2 bcl=01198000..011981c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   46.953318] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:337) RPI5VC4: kick fence=2 ERR_STAT=00001000
+[   46.953377] (\drivers\directx\dxgkrnl\d3dkmt.c:3921) D3DKMT MAP exit hAlloc=0x4d4d4142 va=40403000
+[   46.971226] (\drivers\directx\dxgkrnl\vidsch.c:293) VidSch nokick #1 state=1
+[   46.978467] (\drivers\directx\dxgkrnl\vidmm.c:3077) VidMm usermap #9 h=0x4D4D4148 va=00000000433D0000 resident=1 seg=1 pa=401e2000 cache=2
+[   46.999578] (\drivers\directx\dxgkrnl\vidsch.c:293) VidSch nokick #2 state=1
+[   47.004489] (\drivers\directx\dxgkrnl\vidmm.c:3077) VidMm usermap #10 h=0x4D4D4142 va=0000000043430000 resident=1 seg=1 pa=40403000 cache=2
+[   47.019720] (\drivers\directx\dxgkrnl\vidsch.c:293) VidSch nokick #3 state=1
+[   47.026558] (\drivers\directx\dxgkrnl\vidsch.c:293) VidSch nokick #4 state=1
+[   47.034268] (\drivers\directx\dxgkrnl\vidsch.c:293) VidSch nokick #5 state=1
+[   47.041072] (\drivers\directx\dxgkrnl\vidsch.c:293) VidSch nokick #6 state=1
+[   47.048038] (\drivers\directx\dxgkrnl\vidsch.c:293) VidSch nokick #7 state=1
+[   47.055835] (\drivers\directx\dxgkrnl\vidsch.c:293) VidSch nokick #8 state=1
+[   47.062110] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:393) RPI5VC4: render rekick #1 fence=2 ct1ca=01227001
+[   47.062696] (\drivers\directx\dxgkrnl\vidsch.c:293) VidSch nokick #9 state=1
+[   47.080003] (\drivers\directx\dxgkrnl\vidsch.c:293) VidSch nokick #10 state=1
+[   47.086887] (\drivers\directx\dxgkrnl\vidsch.c:293) VidSch nokick #11 state=1
+[   47.094702] (\drivers\directx\dxgkrnl\vidsch.c:293) VidSch nokick #12 state=1
+[   47.101596] (\drivers\directx\dxgkrnl\vidsch.c:293) VidSch nokick #13 state=1
+[   47.108657] (\drivers\directx\dxgkrnl\vidsch.c:293) VidSch nokick #14 state=1
+[   47.116545] (\drivers\directx\dxgkrnl\vidsch.c:293) VidSch nokick #15 state=1
+[   47.123441] (\drivers\directx\dxgkrnl\vidsch.c:293) VidSch nokick #16 state=1
+[   47.207480] MESA: error: v3d: 512 draws: shaders=25821us total=121645us
+[   47.339299] MESA: error: v3d: 512 draws: shaders=28052us total=138813us
+[   47.368964] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=2 timed out — completing (TDR)
+[   47.376358] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:443) RPI5VC4: TDR CT0CS=00000000 CT0CA=011981c0 CT0EA=011981c0 CT1CS=00000050 CT1CA=01227001 INT_STS=00000000
+[   47.390842] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:455) RPI5VC4: TDR isr=1 MMU_CTL=04090801 VIO_ADDR=00000000 bin=1/1 rend=1 bcl=01198000..011981c0
+[   47.404204] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:480) RPI5VC4: TDR L2TCACTL=00000000 PCS=00000000 BFC=00000001 RFC=00000000 CT0SYNC=00000000 CT1SYNC=00000000
+[   47.418606] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:497) RPI5VC4: TDR QMA bytes 38 42 47 44 40 62 b1 21 01 53 00 56 00 00 00 00
+[   47.430146] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:507) RPI5VC4: TDR CT1CFG=00000000 TILECT=00000000 PTCT=00000000 RA0=00000000/00000000 BPCA=01220000 BPCS=00005000
+[   47.444982] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:520) RPI5VC4: TDR CT1CA bytes 00 2c 01 2c 01 00 b1 01 79 02 00 7c 40 00 00 00
+[   47.456695] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:536) RPI5VC4: TDR RCL head 79 00 2c 01 2c 01 00 b1 01 79 02 00 7c 40 00 00
+[   47.468147] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+0c0 00 00 00 3f 00 00 00 00 01 00 00 00 02 00 00 00
+[   47.479513] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+0d0 03 00 00 00 00 00 00 00 01 00 00 00 02 00 00 00
+[   47.490881] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+0e0 63 58 47 44 40 a1 a7 21 01 2c 00 70 09 01 00 10
+[   47.502245] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+0f0 10 00 20 84 b4 00 00 00 c0 33 00 00 47 44 40 21
+[   47.513610] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+100 03 00 00 00 00 00 20 40 19 91 bd bf f5 35 76 bf
+[   47.524976] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+110 0b 55 50 bf 99 d8 4f c1 ac 64 3f c1 60 06 0e 42
+[   47.536342] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+120 17 19 1d 42 00 00 16 46 00 00 16 c6 00 00 00 00
+[   47.547708] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:570) RPI5VC4: TDR BCL head 00 00 00 00 00 00 00 00 00 00 00 00 00 00 80 3f
+[   47.559161] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:576) RPI5VC4: TDR BCL tail 01 00 10 10 00 20 84 3c 00 00 00 40 62 00 00 04
+[   47.570614] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:585) RPI5VC4: TDR ERR_STAT=00001000 dpcIsr=1 isr=1 msk=ffff0038 hubmsk=000000fd
+[   47.582500] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:622) RPI5VC4: TDR SMS TEE_CS=00000250 REE_CS=00000200
+[   47.593087] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   47.601326] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   47.609846] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #2 fence=2 node=0
+[   47.618167] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #3 fence=3 node=0 size=64
+[   47.626316] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=3 node=0 bcl=0121a000..0121a1c0
+[   47.637079] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=3 bcl=0121a000..0121a1c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   47.651650] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #2 done=2 state=1 pending=126
+[   47.685587] MESA: error: v3d: 512 draws: shaders=30158us total=153473us
+[   47.819708] MESA: error: v3d: 512 draws: shaders=32372us total=362405us
+[   47.958481] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=3 timed out — completing (TDR)
+[   47.964267] MESA: error: v3d: 512 draws: shaders=34588us total=377175us
+[   47.965876] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:443) RPI5VC4: TDR CT0CS=00000010 CT0CA=0121a001 CT0EA=0121a1c0 CT1CS=00000000 CT1CA=00000000 INT_STS=00000000
+[   47.986946] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:455) RPI5VC4: TDR isr=1 MMU_CTL=04090801 VIO_ADDR=00000000 bin=1/0 rend=0 bcl=0121a000..0121a1c0
+[   48.000307] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:480) RPI5VC4: TDR L2TCACTL=00000000 PCS=00000000 BFC=00000000 RFC=00000000 CT0SYNC=00000000 CT1SYNC=00000000
+[   48.014710] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:497) RPI5VC4: TDR QMA bytes 38 42 47 44 40 62 b1 21 01 53 00 56 00 00 00 00
+[   48.026249] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:507) RPI5VC4: TDR CT1CFG=00000000 TILECT=00000000 PTCT=00000000 RA0=00000000/00000000 BPCA=00000000 BPCS=00000000
+[   48.041086] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:536) RPI5VC4: TDR RCL head 79 00 2c 01 2c 01 00 b1 01 79 02 00 7c 40 00 00
+[   48.052537] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+0c0 00 00 00 3f 00 00 00 00 01 00 00 00 02 00 00 00
+[   48.063903] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+0d0 03 00 00 00 00 00 00 00 01 00 00 00 02 00 00 00
+[   48.075270] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+0e0 ce 02 81 bf 35 da 8b 40 ca b8 05 bf 6b 4c e2 be
+[   48.086635] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+0f0 10 00 20 84 b4 00 00 00 c0 33 00 00 47 44 40 21
+[   48.098001] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+100 89 19 01 2c 00 70 09 01 00 10 10 00 20 84 b4 00
+[   48.109367] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+110 00 00 00 39 00 00 47 44 40 a2 8a 19 01 2c 00 70
+[   48.120533] MESA: error: v3d: 512 draws: shaders=36646us total=411461us
+[   48.120733] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+120 09 01 00 10 10 00 20 84 f0 00 00 00 80 43 00 00
+[   48.138693] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:570) RPI5VC4: TDR BCL head 00 00 00 00 00 00 00 00 00 00 00 00 00 00 80 3f
+[   48.150146] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:576) RPI5VC4: TDR BCL tail 00 00 80 3f 00 00 00 00 02 00 00 00 0b d7 23 3e
+[   48.161598] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:585) RPI5VC4: TDR ERR_STAT=00001000 dpcIsr=1 isr=1 msk=ffff0038 hubmsk=000000ff
+[   48.173484] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:622) RPI5VC4: TDR SMS TEE_CS=00000250 REE_CS=00000200
+[   48.184072] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   48.192311] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   48.200824] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #3 fence=3 node=0
+[   48.209152] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #4 fence=4 node=0 size=64
+[   48.217301] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=4 node=0 bcl=01198000..011981c0
+[   48.228063] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=4 bcl=01198000..011981c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   48.242634] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #3 done=3 state=1 pending=278
+[   48.277644] RPI5VC4: present #4992 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   48.314997] MESA: error: v3d: 512 draws: shaders=38760us total=424850us
+[   48.453310] MESA: error: v3d: 512 draws: shaders=40964us total=442197us
+[   48.549463] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=4 timed out — completing (TDR)
+[   48.556846] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:443) RPI5VC4: TDR CT0CS=00000010 CT0CA=01198045 CT0EA=011981c0 CT1CS=00000000 CT1CA=00000000 INT_STS=00000000
+[   48.571331] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:455) RPI5VC4: TDR isr=1 MMU_CTL=04090801 VIO_ADDR=00000000 bin=1/0 rend=0 bcl=01198000..011981c0
+[   48.584696] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:480) RPI5VC4: TDR L2TCACTL=00000000 PCS=00000001 BFC=00000000 RFC=00000000 CT0SYNC=00000000 CT1SYNC=00000000
+[   48.599096] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:497) RPI5VC4: TDR QMA bytes 38 42 47 44 40 62 b1 21 01 53 00 56 00 00 00 00
+[   48.610636] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:507) RPI5VC4: TDR CT1CFG=00000000 TILECT=00000000 PTCT=00000000 RA0=00000000/00000000 BPCA=01220000 BPCS=00005000
+[   48.625472] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:536) RPI5VC4: TDR RCL head 79 00 2c 01 2c 01 00 b1 01 79 02 00 7c 40 00 00
+[   48.636924] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+0c0 00 00 00 3f 00 00 00 00 01 00 00 00 02 00 00 00
+[   48.648290] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+0d0 03 00 00 00 00 00 00 00 01 00 00 00 02 00 00 00
+[   48.659656] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+0e0 84 5c 61 c0 5a 80 02 40 6b d1 2f bf e5 c4 14 bf
+[   48.671022] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+0f0 7b 48 21 c0 8c 30 8a c0 14 a4 b5 3b 39 b2 99 3b
+[   48.682388] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+100 a9 21 01 2c 00 70 09 01 00 10 10 00 20 84 b4 00
+[   48.693754] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+110 00 00 00 39 00 00 47 44 40 a2 aa 21 01 2c 00 70
+[   48.705119] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+120 09 01 00 10 10 00 20 84 f0 00 00 00 80 43 00 00
+[   48.716485] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:570) RPI5VC4: TDR BCL head 77 00 78 04 1b 00 00 2b 01 2b 01 13 5c 00 00 00
+[   48.727938] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:576) RPI5VC4: TDR BCL tail 00 00 80 3f 00 00 00 00 02 00 00 00 0b d7 23 3e
+[   48.739390] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:585) RPI5VC4: TDR ERR_STAT=00001000 dpcIsr=1 isr=1 msk=ffff0038 hubmsk=000000ff
+[   48.751276] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:622) RPI5VC4: TDR SMS TEE_CS=00000250 REE_CS=00000200
+[   48.761863] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   48.770103] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   48.778614] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #4 fence=4 node=0
+[   48.786942] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #5 fence=5 node=0 size=64
+[   48.795093] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=5 node=0 bcl=0121a000..0121a1c0
+[   48.805856] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=5 bcl=0121a000..0121a1c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   48.820427] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #4 done=4 state=1 pending=380
+[   48.847701] MESA: error: v3d: 512 draws: shaders=43155us total=457134us
+[   48.986662] MESA: error: v3d: 512 draws: shaders=45385us total=731926us
+[   49.127261] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=5 timed out — completing (TDR)
+[   49.134643] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:443) RPI5VC4: TDR CT0CS=00000010 CT0CA=0121a001 CT0EA=0121a1c0 CT1CS=00000000 CT1CA=00000000 INT_STS=00000000
+[   49.149129] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:455) RPI5VC4: TDR isr=1 MMU_CTL=04090801 VIO_ADDR=00000000 bin=1/0 rend=0 bcl=0121a000..0121a1c0
+[   49.162491] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:480) RPI5VC4: TDR L2TCACTL=00000000 PCS=00000000 BFC=00000000 RFC=00000000 CT0SYNC=00000000 CT1SYNC=00000000
+[   49.176893] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:497) RPI5VC4: TDR QMA bytes 38 42 47 44 40 62 b1 21 01 53 00 56 00 00 00 00
+[   49.188433] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:507) RPI5VC4: TDR CT1CFG=00000000 TILECT=00000000 PTCT=00000000 RA0=00000000/00000000 BPCA=00000000 BPCS=00000000
+[   49.203269] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:536) RPI5VC4: TDR RCL head 79 00 2c 01 2c 01 00 b1 01 79 02 00 7c 40 00 00
+[   49.214722] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+0c0 00 00 00 3f 00 00 00 00 01 00 00 00 02 00 00 00
+[   49.226087] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+0d0 03 00 00 00 00 00 00 00 01 00 00 00 02 00 00 00
+[   49.237452] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+0e0 5d e0 89 c0 64 be a8 bf fc 25 03 bf 83 f1 dd be
+[   49.248819] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+0f0 ca 98 dc 3e d7 e1 92 c0 e4 36 ea 3e 73 2e c6 3e
+[   49.260184] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+100 03 00 00 00 00 00 20 40 19 91 bd bf f5 35 76 bf
+[   49.271551] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+110 0b 55 50 bf 99 d8 4f c1 ac 64 3f c1 60 06 0e 42
+[   49.282916] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+120 17 19 1d 42 00 00 16 46 00 00 16 c6 00 00 00 00
+[   49.294283] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:570) RPI5VC4: TDR BCL head 77 00 78 04 1b 00 00 2b 01 2b 01 13 5c 00 00 00
+[   49.305735] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:576) RPI5VC4: TDR BCL tail 00 00 80 3f 00 00 00 00 02 00 00 00 0b d7 23 3e
+[   49.317188] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:585) RPI5VC4: TDR ERR_STAT=00001000 dpcIsr=1 isr=1 msk=ffff0038 hubmsk=000000ff
+[   49.329074] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:622) RPI5VC4: TDR SMS TEE_CS=00000250 REE_CS=00000200
+[   49.339661] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   49.347901] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   49.356411] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #5 fence=5 node=0
+[   49.364740] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #6 fence=6 node=0 size=64
+[   49.372890] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=6 node=0 bcl=01198000..011981c0
+[   49.383653] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=6 bcl=01198000..011981c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   49.398224] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #5 done=5 state=1 pending=465
+[   49.412690] MESA: error: v3d: 512 draws: shaders=47620us total=746903us
+[   49.546000] MESA: error: v3d: 512 draws: shaders=49835us total=1049678us
+[   49.646049] RPI5VC4: present #5056 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   49.686888] MESA: error: v3d: 512 draws: shaders=52052us total=1067141us
+[   49.705052] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=6 timed out — completing (TDR)
+[   49.712435] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:443) RPI5VC4: TDR CT0CS=00000010 CT0CA=01198001 CT0EA=011981c0 CT1CS=00000000 CT1CA=00000000 INT_STS=00000000
+[   49.726920] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:455) RPI5VC4: TDR isr=1 MMU_CTL=04090801 VIO_ADDR=00000000 bin=1/0 rend=0 bcl=01198000..011981c0
+[   49.740282] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:480) RPI5VC4: TDR L2TCACTL=00000000 PCS=00000000 BFC=00000000 RFC=00000000 CT0SYNC=00000000 CT1SYNC=00000000
+[   49.754685] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:497) RPI5VC4: TDR QMA bytes 38 42 47 44 40 62 b1 21 01 53 00 56 00 00 00 00
+[   49.766225] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:507) RPI5VC4: TDR CT1CFG=00000000 TILECT=00000000 PTCT=00000000 RA0=00000000/00000000 BPCA=00000000 BPCS=00000000
+[   49.781060] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:536) RPI5VC4: TDR RCL head 79 00 2c 01 2c 01 00 b1 01 79 02 00 7c 40 00 00
+[   49.792513] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+0c0 58 47 44 40 02 a6 21 01 2c 00 70 09 01 00 10 10
+[   49.803879] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+0d0 00 20 84 78 00 00 00 70 2f 00 00 62 40 0f 00 00
+[   49.815244] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+0e0 63 58 47 44 40 a1 a7 21 01 2c 00 70 09 01 00 10
+[   49.826610] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+0f0 10 00 20 84 b4 00 00 00 c0 33 00 00 47 44 40 21
+[   49.834346] MESA: error: v3d: 512 draws: shaders=54149us total=1081751us
+[   49.837976] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+100 03 00 00 00 00 00 20 40 19 91 bd bf f5 35 76 bf
+[   49.856023] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+110 0b 55 50 bf 99 d8 4f c1 ac 64 3f c1 60 06 0e 42
+[   49.867389] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+120 09 01 00 10 10 00 20 84 f0 00 00 00 80 43 00 00
+[   49.878755] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:570) RPI5VC4: TDR BCL head 77 00 78 04 1b 00 00 2b 01 2b 01 13 5c 00 00 00
+[   49.890208] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:576) RPI5VC4: TDR BCL tail 00 00 80 3f 00 00 00 00 02 00 00 00 0b d7 23 3e
+[   49.901660] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:585) RPI5VC4: TDR ERR_STAT=00001000 dpcIsr=1 isr=1 msk=ffff0038 hubmsk=000000ff
+[   49.913546] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:622) RPI5VC4: TDR SMS TEE_CS=00000250 REE_CS=00000200
+[   49.924133] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   49.932374] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   49.940886] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #6 fence=6 node=0
+[   49.949212] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #7 fence=7 node=0 size=64
+[   49.957363] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=7 node=0 bcl=0121a000..0121a1c0
+[   49.968126] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=7 bcl=0121a000..0121a1c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   49.982696] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #6 done=6 state=1 pending=624
+[   50.031151] MESA: error: v3d: 512 draws: shaders=56242us total=1098683us
+[   50.162925] MESA: error: v3d: 512 draws: shaders=58457us total=1116168us
+[   50.289541] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=7 timed out — completing (TDR)
+[   50.294658] MESA: error: v3d: 512 draws: shaders=60690us total=1133893us
+[   50.296929] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:443) RPI5VC4: TDR CT0CS=00000010 CT0CA=0121a001 CT0EA=0121a1c0 CT1CS=00000000 CT1CA=00000000 INT_STS=00000000
+[   50.318090] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:455) RPI5VC4: TDR isr=1 MMU_CTL=04090801 VIO_ADDR=00000000 bin=1/0 rend=0 bcl=0121a000..0121a1c0
+[   50.331451] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:480) RPI5VC4: TDR L2TCACTL=00000000 PCS=00000000 BFC=00000000 RFC=00000000 CT0SYNC=00000000 CT1SYNC=00000000
+[   50.345854] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:497) RPI5VC4: TDR QMA bytes 38 42 47 44 40 62 b1 21 01 53 00 56 00 00 00 00
+[   50.357394] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:507) RPI5VC4: TDR CT1CFG=00000000 TILECT=00000000 PTCT=00000000 RA0=00000000/00000000 BPCA=00000000 BPCS=00000000
+[   50.372230] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:536) RPI5VC4: TDR RCL head 79 00 2c 01 2c 01 00 b1 01 79 02 00 7c 40 00 00
+[   50.383682] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+0c0 58 47 44 40 02 86 19 01 2c 00 70 09 01 00 10 10
+[   50.395047] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+0d0 00 20 84 78 00 00 00 70 2f 00 00 62 40 0f 00 00
+[   50.406413] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+0e0 63 58 47 44 40 a1 87 19 01 2c 00 70 09 01 00 10
+[   50.417779] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+0f0 10 00 20 84 b4 00 00 00 c0 33 00 00 47 44 40 21
+[   50.429146] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+100 89 19 01 2c 00 70 09 01 00 10 10 00 20 84 b4 00
+[   50.440511] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+110 00 00 00 39 00 00 47 44 40 a2 8a 19 01 2c 00 70
+[   50.447227] MESA: error: v3d: 512 draws: shaders=62765us total=1153959us
+[   50.451877] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:562) RPI5VC4: TDR BCL+120 09 01 00 10 10 00 20 84 f0 00 00 00 80 43 00 00
+[   50.469925] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:570) RPI5VC4: TDR BCL head 00 00 00 00 00 00 00 00 00 00 00 00 00 00 80 3f
+[   50.476365] (\win32ss\drivers\wddm\wddm_bridge.c:417) WddmBridgeSendIoctl: IOCTL 0x002305C0 failed with 0x80000011
+[   50.481377] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:576) RPI5VC4: TDR BCL tail 00 00 80 3f 00 00 00 00 02 00 00 00 0b d7 23 3e
+[   50.503154] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:585) RPI5VC4: TDR ERR_STAT=00001000 dpcIsr=1 isr=1 msk=ffff0038 hubmsk=000000ff
+[   50.515040] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:622) RPI5VC4: TDR SMS TEE_CS=00000250 REE_CS=00000200
+[   50.525626] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   50.533866] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   50.542382] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #7 fence=7 node=0
+[   50.550705] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #8 fence=8 node=0 size=64
+[   50.558856] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=8 node=0 bcl=01198000..011981c0
+[   50.569620] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=8 bcl=01198000..011981c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   50.584187] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   50.590786] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #7 done=7 state=1 pending=766
+[   50.599379] (\win32ss\drivers\wddm\wddm_bridge.c:417) WddmBridgeSendIoctl: IOCTL 0x002305C0 failed with 0x80000011
+[   50.600294] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:337) RPI5VC4: kick fence=8 ERR_STAT=00001000
+[   50.618509] (\win32ss\drivers\wddm\wddm_bridge.c:417) WddmBridgeSendIoctl: IOCTL 0x002305C0 failed with 0x80000011
+[   50.628814] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #8 fence=8 node=0
+[   50.637125] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #9 fence=9 node=0 size=64
+[   50.645271] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=9 node=0 bcl=0121a000..0121a1c0
+[   50.656036] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=9 bcl=0121a000..0121a1c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   50.670605] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #8 done=8 state=1 pending=765
+[   50.628784] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   50.686725] (\win32ss\drivers\wddm\wddm_bridge.c:417) WddmBridgeSendIoctl: IOCTL 0x002305C0 failed with 0x80000011
+[   50.696728] (\win32ss\drivers\wddm\wddm_bridge.c:417) WddmBridgeSendIoctl: IOCTL 0x002305C0 failed with 0x80000011
+[   50.706737] (\win32ss\drivers\wddm\wddm_bridge.c:417) WddmBridgeSendIoctl: IOCTL 0x002305C0 failed with 0x80000011
+[   50.716766] (\win32ss\drivers\wddm\wddm_bridge.c:417) WddmBridgeSendIoctl: IOCTL 0x002305C0 failed with 0x80000011
+[   50.727758] (\win32ss\drivers\wddm\wddm_bridge.c:417) WddmBridgeSendIoctl: IOCTL 0x002305C0 failed with 0x80000011
+[   50.982997] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=9 timed out — completing (TDR)
+[   50.993883] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   51.000211] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   51.008718] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #9 fence=9 node=0
+[   51.017045] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #10 fence=10 node=0 size=64
+[   51.025373] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=10 node=0 bcl=01198000..011981c0
+[   51.036221] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=10 bcl=01198000..011981c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   51.050879] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   51.057476] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #9 done=9 state=1 pending=764
+[   51.066980] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:337) RPI5VC4: kick fence=10 ERR_STAT=00001000
+[   51.075142] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #10 fence=10 node=0
+[   51.083418] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #11 fence=11 node=0 size=64
+[   51.091746] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=11 node=0 bcl=0121a000..0121a1c0
+[   51.102600] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=11 bcl=0121a000..0121a1c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   51.117257] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #10 done=10 state=1 pending=763
+[   51.424219] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=11 timed out — completing (TDR)
+[   51.433537] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   51.440876] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   51.449391] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #11 fence=11 node=0
+[   51.457886] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #12 fence=12 node=0 size=64
+[   51.466212] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=12 node=0 bcl=01198000..011981c0
+[   51.477063] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=12 bcl=01198000..011981c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   51.491717] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   51.498316] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #11 done=11 state=1 pending=762
+[   51.507996] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:337) RPI5VC4: kick fence=12 ERR_STAT=00001000
+[   51.516084] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #12 fence=12 node=0
+[   51.524433] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #13 fence=13 node=0 size=64
+[   51.532759] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=13 node=0 bcl=0121a000..0121a1c0
+[   51.543610] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=13 bcl=0121a000..0121a1c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   51.558267] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #12 done=12 state=1 pending=761
+[   51.865170] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=13 timed out — completing (TDR)
+[   51.874484] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   51.881825] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   51.890340] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #13 fence=13 node=0
+[   51.898834] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #14 fence=14 node=0 size=64
+[   51.907161] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=14 node=0 bcl=01198000..011981c0
+[   51.918012] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=14 bcl=01198000..011981c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   51.932666] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   51.939265] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #13 done=13 state=1 pending=760
+[   51.948944] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:337) RPI5VC4: kick fence=14 ERR_STAT=00001000
+[   51.957034] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #14 fence=14 node=0
+[   51.965381] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #15 fence=15 node=0 size=64
+[   51.973708] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=15 node=0 bcl=0121a000..0121a1c0
+[   51.984559] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=15 bcl=0121a000..0121a1c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   51.999216] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #14 done=14 state=1 pending=759
+[   52.170067] (\win32ss\drivers\wddm\wddm_bridge.c:408) WddmBridgeSendIoctl: IOCTL 0x002305C0 failed with 0x80000011 (x1024)
+[   52.306136] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=15 timed out — completing (TDR)
+[   52.317106] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   52.323434] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   52.331942] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #15 fence=15 node=0
+[   52.340441] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #16 fence=16 node=0 size=64
+[   52.348769] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=16 node=0 bcl=01198000..011981c0
+[   52.359618] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=16 bcl=01198000..011981c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   52.374276] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   52.380872] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #15 done=15 state=1 pending=758
+[   52.390550] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:337) RPI5VC4: kick fence=16 ERR_STAT=00001000
+[   52.398567] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #16 fence=16 node=0
+[   52.406988] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #17 fence=17 node=0 size=64
+[   52.415316] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=17 node=0 bcl=0121a000..0121a1c0
+[   52.426170] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=17 bcl=0121a000..0121a1c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   52.440827] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #16 done=16 state=1 pending=757
+[   52.747753] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=17 timed out — completing (TDR)
+[   52.756774] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   52.764410] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   52.772925] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #17 fence=17 node=0
+[   52.781421] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #18 fence=18 node=0 size=64
+[   52.789746] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=18 node=0 bcl=01198000..011981c0
+[   52.800597] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=18 bcl=01198000..011981c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   52.815252] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   52.821850] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #17 done=17 state=1 pending=756
+[   52.831530] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:337) RPI5VC4: kick fence=18 ERR_STAT=00001000
+[   52.839619] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #18 fence=18 node=0
+[   52.847967] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #19 fence=19 node=0 size=64
+[   52.856293] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=19 node=0 bcl=0121a000..0121a1c0
+[   52.867145] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=19 bcl=0121a000..0121a1c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   52.881802] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #18 done=18 state=1 pending=755
+[   53.188714] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=19 timed out — completing (TDR)
+[   53.198029] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   53.205369] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   53.213884] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #19 fence=19 node=0
+[   53.222378] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #20 fence=20 node=0 size=64
+[   53.230705] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=20 node=0 bcl=01198000..011981c0
+[   53.241556] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=20 bcl=01198000..011981c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   53.256210] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   53.262809] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #19 done=19 state=1 pending=754
+[   53.272488] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:337) RPI5VC4: kick fence=20 ERR_STAT=00001000
+[   53.280578] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #20 fence=20 node=0
+[   53.288926] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #21 fence=21 node=0 size=64
+[   53.297252] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=21 node=0 bcl=0121a000..0121a1c0
+[   53.308103] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=21 bcl=0121a000..0121a1c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   53.322761] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #20 done=20 state=1 pending=753
+[   53.619756] (\win32ss\drivers\wddm\wddm_bridge.c:408) WddmBridgeSendIoctl: IOCTL 0x002305C0 failed with 0x80000011 (x2048)
+[   53.629743] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=21 timed out — completing (TDR)
+[   53.639196] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   53.647433] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   53.655947] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #21 fence=21 node=0
+[   53.664444] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #22 fence=22 node=0 size=64
+[   53.672770] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=22 node=0 bcl=01198000..011981c0
+[   53.683620] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=22 bcl=01198000..011981c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   53.698274] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   53.704873] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #21 done=21 state=1 pending=752
+[   53.714708] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #22 fence=22 node=0
+[   53.722053] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #23 fence=23 node=0 size=64
+[   53.730379] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=23 node=0 bcl=0121a000..0121a1c0
+[   53.741230] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=23 bcl=0121a000..0121a1c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   53.755888] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #22 done=22 state=1 pending=751
+[   54.062810] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=23 timed out — completing (TDR)
+[   54.071230] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   54.079467] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   54.088002] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #23 fence=23 node=0
+[   54.096477] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #24 fence=24 node=0 size=64
+[   54.104803] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=24 node=0 bcl=01198000..011981c0
+[   54.115653] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=24 bcl=01198000..011981c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   54.130308] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   54.136906] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #23 done=23 state=1 pending=750
+[   54.146741] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #24 fence=24 node=0
+[   54.154087] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #25 fence=25 node=0 size=64
+[   54.162413] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=25 node=0 bcl=0121a000..0121a1c0
+[   54.173264] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=25 bcl=0121a000..0121a1c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   54.187921] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #24 done=24 state=1 pending=749
+[   54.494834] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=25 timed out — completing (TDR)
+[   54.503260] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   54.511492] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   54.520088] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #25 fence=25 node=0
+[   54.528578] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #26 fence=26 node=0 size=64
+[   54.536834] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=26 node=0 bcl=01198000..011981c0
+[   54.547678] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=26 bcl=01198000..011981c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   54.562332] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   54.568932] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #25 done=25 state=1 pending=748
+[   54.578767] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #26 fence=26 node=0
+[   54.586189] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #27 fence=27 node=0 size=64
+[   54.594444] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=27 node=0 bcl=0121a000..0121a1c0
+[   54.605288] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=27 bcl=0121a000..0121a1c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   54.619946] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #26 done=26 state=1 pending=747
+[   54.646713] (\drivers\directx\dxgkrnl\adapter.c:249) DXGKRNL: ERROR: DxgkpTdrWorker: GPU timeout — fence 519 stuck on adapter FFFF96108BBC8B60
+[   54.656783] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #27 done=26 state=4 pending=747
+[   54.764809] (\drivers\directx\dxgkrnl\adapter.c:270) DXGKRNL: ERROR: DxgkpTdrWorker: preemption recovered adapter FFFF96108BBC8B60 (fence 519 -> 26), skipping reset
+[   54.926904] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=27 timed out — completing (TDR)
+[   54.936220] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   54.943560] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   54.952086] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #27 fence=27 node=0
+[   54.960570] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #28 fence=28 node=0 size=64
+[   54.968897] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=28 node=0 bcl=01198000..011981c0
+[   54.979747] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=28 bcl=01198000..011981c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   54.994401] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   55.001000] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #28 done=27 state=1 pending=746
+[   55.010835] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #28 fence=28 node=0
+[   55.018181] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #29 fence=29 node=0 size=64
+[   55.026506] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=29 node=0 bcl=0121a000..0121a1c0
+[   55.037357] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=29 bcl=0121a000..0121a1c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   55.052015] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #29 done=28 state=1 pending=745
+[   55.176790] (\win32ss\drivers\wddm\wddm_bridge.c:408) WddmBridgeSendIoctl: IOCTL 0x002305C0 failed with 0x80000011 (x3072)
+[   55.358942] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=29 timed out — completing (TDR)
+[   55.369912] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   55.376240] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   55.384748] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #29 fence=29 node=0
+[   55.393248] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #30 fence=30 node=0 size=64
+[   55.401576] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=30 node=0 bcl=01198000..011981c0
+[   55.412424] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=30 bcl=01198000..011981c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   55.427082] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   55.433678] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #30 done=29 state=1 pending=744
+[   55.443438] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #30 fence=30 node=0
+[   55.450858] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #31 fence=31 node=0 size=64
+[   55.459186] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=31 node=0 bcl=0121a000..0121a1c0
+[   55.470034] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=31 bcl=0121a000..0121a1c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   55.484697] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #31 done=30 state=1 pending=743
+[   55.791625] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=31 timed out — completing (TDR)
+[   55.800043] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   55.808281] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   55.816798] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #31 fence=31 node=0
+[   55.825291] (\drivers\directx\dxgkrnl\vidsch.c:385) VidSch kick #32 fence=32 node=0 size=64
+[   55.833617] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:1913) RPI5VC4: submit queued fence=32 node=0 bcl=01198000..011981c0
+[   55.844468] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:295) RPI5VC4: CL kick fence=32 bcl=01198000..011981c0 rcl=01227000..012270a8 qma=0121d000 qms=8000 qts=01225000
+[   55.859122] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   55.865721] (\drivers\directx\dxgkrnl\vidsch.c:213) VidSch comp #32 done=31 state=1 pending=742
+[   55.875556] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:748) RPI5VC4: report #32 fence=32 node=0
+[   56.183146] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=33 timed out — completing (TDR)
+[   56.191564] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   56.199802] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   56.370247] MESA: error: Draw call returned Invalid argument.  Expect corruption.
+[   56.471969] (\win32ss\drivers\wddm\wddm_bridge.c:408) WddmBridgeSendIoctl: IOCTL 0x002305C0 failed with 0x80000011 (x4096)
+[   56.514002] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=35 timed out — completing (TDR)
+[   56.522424] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   56.530660] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   56.839453] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=36 timed out — completing (TDR)
+[   56.848768] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   56.856108] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   56.864649] (\hal\halarm64\gic\gic_common.c:756) [GIC] DISABLE INTID 281
+[   56.871300] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   57.179126] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=38 timed out — completing (TDR)
+[   57.188441] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   57.195781] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   57.204316] (\hal\halarm64\gic\gic_common.c:756) [GIC] DISABLE INTID 281
+[   57.210971] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   57.518816] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=40 timed out — completing (TDR)
+[   57.527585] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   57.535472] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   57.544008] (\hal\halarm64\gic\gic_common.c:756) [GIC] DISABLE INTID 281
+[   57.550659] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   57.638369] (\win32ss\drivers\wddm\wddm_bridge.c:408) WddmBridgeSendIoctl: IOCTL 0x002305C0 failed with 0x80000011 (x5120)
+[   57.858502] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=42 timed out — completing (TDR)
+[   57.869471] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   57.875799] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   58.185509] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=44 timed out — completing (TDR)
+[   58.193928] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   58.202166] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   58.371789] RPI5VC4: present #5120 moves=0 dirty=1 flip=3 idx=1 scan=4bb5a000
+[   58.511921] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=46 timed out — completing (TDR)
+[   58.520343] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   58.528580] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   58.744253] (\win32ss\drivers\wddm\wddm_bridge.c:408) WddmBridgeSendIoctl: IOCTL 0x002305C0 failed with 0x80000011 (x6144)
+[   58.838338] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=48 timed out — completing (TDR)
+[   58.849307] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   58.855635] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   59.165401] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=50 timed out — completing (TDR)
+[   59.174715] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   59.182056] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   59.491815] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=52 timed out — completing (TDR)
+[   59.501886] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   59.508471] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   59.517007] (\hal\halarm64\gic\gic_common.c:756) [GIC] DISABLE INTID 281
+[   59.523658] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   59.831509] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=54 timed out — completing (TDR)
+[   59.839929] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   59.848167] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   59.856704] (\hal\halarm64\gic\gic_common.c:756) [GIC] DISABLE INTID 281
+[   59.863353] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   59.898994] (\win32ss\drivers\wddm\wddm_bridge.c:408) WddmBridgeSendIoctl: IOCTL 0x002305C0 failed with 0x80000011 (x7168)
+[   60.171235] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=56 timed out — completing (TDR)
+[   60.180548] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   60.187889] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   60.196424] (\hal\halarm64\gic\gic_common.c:756) [GIC] DISABLE INTID 281
+[   60.203076] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   60.510898] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=58 timed out — completing (TDR)
+[   60.521214] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   60.527553] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   60.803946] 774 frames in 9.9 seconds = 78.064 FPS
+[   60.837370] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=60 timed out — completing (TDR)
+[   60.845793] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   60.854030] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   61.021713] (\win32ss\drivers\wddm\wddm_bridge.c:408) WddmBridgeSendIoctl: IOCTL 0x002305C0 failed with 0x80000011 (x8192)
+[   61.162838] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=61 timed out — completing (TDR)
+[   61.173809] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   61.180136] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   61.188664] (\hal\halarm64\gic\gic_common.c:756) [GIC] DISABLE INTID 281
+[   61.195322] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   61.503129] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=63 timed out — completing (TDR)
+[   61.514101] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   61.520429] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   61.830190] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=65 timed out — completing (TDR)
+[   61.839505] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   61.846845] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   62.141592] (\win32ss\drivers\wddm\wddm_bridge.c:408) WddmBridgeSendIoctl: IOCTL 0x002305C0 failed with 0x80000011 (x9216)
+[   62.156598] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=67 timed out — completing (TDR)
+[   62.167568] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   62.173896] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   62.483604] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=69 timed out — completing (TDR)
+[   62.492021] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   62.500260] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   62.810018] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=71 timed out — completing (TDR)
+[   62.818436] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   62.826675] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   62.835208] (\hal\halarm64\gic\gic_common.c:756) [GIC] DISABLE INTID 281
+[   62.841859] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   63.149711] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=73 timed out — completing (TDR)
+[   63.160682] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   63.167010] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   63.175531] (\hal\halarm64\gic\gic_common.c:756) [GIC] DISABLE INTID 281
+[   63.182194] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   63.297876] (\win32ss\drivers\wddm\wddm_bridge.c:408) WddmBridgeSendIoctl: IOCTL 0x002305C0 failed with 0x80000011 (x10240)
+[   63.490043] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=75 timed out — completing (TDR)
+[   63.499357] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   63.506698] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   63.816501] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=77 timed out — completing (TDR)
+[   63.825815] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   63.833156] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   64.142912] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=79 timed out — completing (TDR)
+[   64.151332] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   64.159570] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   64.405288] (\win32ss\drivers\wddm\wddm_bridge.c:408) WddmBridgeSendIoctl: IOCTL 0x002305C0 failed with 0x80000011 (x11264)
+[   64.469324] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=81 timed out — completing (TDR)
+[   64.477741] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   64.485980] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   64.494517] (\hal\halarm64\gic\gic_common.c:756) [GIC] DISABLE INTID 281
+[   64.501170] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   64.809015] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=83 timed out — completing (TDR)
+[   64.819984] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   64.826311] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   64.834832] (\hal\halarm64\gic\gic_common.c:756) [GIC] DISABLE INTID 281
+[   64.841496] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   65.149362] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=85 timed out — completing (TDR)
+[   65.157783] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   65.166020] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   65.475826] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=87 timed out — completing (TDR)
+[   65.485144] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   65.492485] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   65.566091] (\win32ss\drivers\wddm\wddm_bridge.c:408) WddmBridgeSendIoctl: IOCTL 0x002305C0 failed with 0x80000011 (x12288)
+[   65.801234] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=88 timed out — completing (TDR)
+[   65.809652] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   65.817891] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   65.826429] (\hal\halarm64\gic\gic_common.c:756) [GIC] DISABLE INTID 281
+[   65.833082] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   66.140922] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=90 timed out — completing (TDR)
+[   66.150592] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   66.157578] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   66.166112] (\hal\halarm64\gic\gic_common.c:756) [GIC] DISABLE INTID 281
+[   66.172763] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   66.480663] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=92 timed out — completing (TDR)
+[   66.491633] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   66.497961] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   66.697626] (\win32ss\drivers\wddm\wddm_bridge.c:408) WddmBridgeSendIoctl: IOCTL 0x002305C0 failed with 0x80000011 (x13312)
+[   66.807725] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=94 timed out — completing (TDR)
+[   66.816144] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   66.824382] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   66.832918] (\hal\halarm64\gic\gic_common.c:756) [GIC] DISABLE INTID 281
+[   66.839572] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   67.147384] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=96 timed out — completing (TDR)
+[   67.156698] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   67.164039] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   67.172572] (\hal\halarm64\gic\gic_common.c:756) [GIC] DISABLE INTID 281
+[   67.179223] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   67.487119] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=98 timed out — completing (TDR)
+[   67.495541] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   67.503777] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   67.813527] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=100 timed out — completing (TDR)
+[   67.824582] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   67.830909] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   67.853426] (\win32ss\drivers\wddm\wddm_bridge.c:408) WddmBridgeSendIoctl: IOCTL 0x002305C0 failed with 0x80000011 (x14336)
+[   68.140617] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=102 timed out — completing (TDR)
+[   68.151672] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   68.157999] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   68.467751] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=104 timed out — completing (TDR)
+[   68.477152] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   68.484492] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   68.794238] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=106 timed out — completing (TDR)
+[   68.804642] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   68.810981] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   68.819516] (\hal\halarm64\gic\gic_common.c:756) [GIC] DISABLE INTID 281
+[   68.826165] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   68.972918] (\win32ss\drivers\wddm\wddm_bridge.c:408) WddmBridgeSendIoctl: IOCTL 0x002305C0 failed with 0x80000011 (x15360)
+[   69.134052] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=108 timed out — completing (TDR)
+[   69.143453] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   69.150794] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   69.460556] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=110 timed out — completing (TDR)
+[   69.469063] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   69.477300] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   69.672181] 2 frames in 8.9 seconds =  0.225 FPS
+[   69.787065] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=112 timed out — completing (TDR)
+[   69.795577] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   69.803814] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   70.085550] (\win32ss\drivers\wddm\wddm_bridge.c:408) WddmBridgeSendIoctl: IOCTL 0x002305C0 failed with 0x80000011 (x16384)
+[   70.112561] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=113 timed out — completing (TDR)
+[   70.121065] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   70.129304] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   70.137842] (\hal\halarm64\gic\gic_common.c:756) [GIC] DISABLE INTID 281
+[   70.144488] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   70.452340] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=115 timed out — completing (TDR)
+[   70.463394] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   70.469722] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   70.779430] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=117 timed out — completing (TDR)
+[   70.788336] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   70.796173] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   70.804709] (\hal\halarm64\gic\gic_common.c:756) [GIC] DISABLE INTID 281
+[   70.811360] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   71.119210] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=119 timed out — completing (TDR)
+[   71.127716] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   71.135954] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   71.241558] (\win32ss\drivers\wddm\wddm_bridge.c:408) WddmBridgeSendIoctl: IOCTL 0x002305C0 failed with 0x80000011 (x17408)
+[   71.445709] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=121 timed out — completing (TDR)
+[   71.454214] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   71.462452] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   71.470986] (\hal\halarm64\gic\gic_common.c:756) [GIC] DISABLE INTID 281
+[   71.477637] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   71.785474] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=123 timed out — completing (TDR)
+[   71.794083] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   71.802220] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   71.810755] (\hal\halarm64\gic\gic_common.c:756) [GIC] DISABLE INTID 281
+[   71.817404] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   71.927977] RPI5VC4: present #5184 moves=0 dirty=1 flip=3 idx=0 scan=4b371000
+[   72.129389] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=125 timed out — completing (TDR)
+[   72.138647] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   72.146133] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   72.154668] (\hal\halarm64\gic\gic_common.c:756) [GIC] DISABLE INTID 281
+[   72.161320] (\hal\halarm64\gic\gic_common.c:688) [GIC] enable INTID 281
+[   72.390107] (\win32ss\drivers\wddm\wddm_bridge.c:408) WddmBridgeSendIoctl: IOCTL 0x002305C0 failed with 0x80000011 (x18432)
+[   72.469152] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=127 timed out — completing (TDR)
+[   72.477656] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   72.485895] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[   72.795648] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:433) RPI5VC4: V3D job fence=129 timed out — completing (TDR)
+[   72.804152] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:294) RPI5VC4: reset ERR_STAT after clear=00001000
+[   72.812391] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:626) RPI5VC4: TDR resetting V3D core: ok
+[

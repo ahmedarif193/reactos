@@ -2100,6 +2100,78 @@ KiArm64HandleSynchronousException(
                     (PVOID)EThread->Win32StartAddress);
 
                 /*
+                 * Resolve ELR and the fault VA against the process's loader
+                 * list so the serial log names module+offset directly (the
+                 * raw-address dumps have been un-attributable post-mortem).
+                 * User memory — guarded, capped walk.
+                 */
+                {
+                    PPEB Peb = CurrentProcess->Peb;
+                    ULONG64 Targets[2];
+                    static const char *TargetTag[2] = { "ELR", "VA" };
+                    ULONG t;
+
+                    Targets[0] = Context->State.Elr;
+                    Targets[1] = Context->State.FaultAddress;
+
+                    for (t = 0; Peb != NULL && t < 2; t++)
+                    {
+                        _SEH2_TRY
+                        {
+                            PPEB_LDR_DATA Ldr = Peb->Ldr;
+                            PLIST_ENTRY Head, Link;
+                            ULONG Guard = 0;
+
+                            if (Ldr == NULL)
+                                _SEH2_LEAVE;
+
+                            Head = &Ldr->InLoadOrderModuleList;
+                            for (Link = Head->Flink;
+                                 Link != Head && Guard < 96;
+                                 Link = Link->Flink, Guard++)
+                            {
+                                PLDR_DATA_TABLE_ENTRY Entry =
+                                    CONTAINING_RECORD(Link,
+                                                      LDR_DATA_TABLE_ENTRY,
+                                                      InLoadOrderLinks);
+                                ULONG64 Base = (ULONG64)(ULONG_PTR)Entry->DllBase;
+                                ULONG64 Size = Entry->SizeOfImage;
+                                WCHAR NameBuf[40];
+                                ULONG NameChars;
+                                ULONG c;
+
+                                if (Base == 0 || Size == 0 ||
+                                    Targets[t] < Base ||
+                                    Targets[t] >= Base + Size)
+                                {
+                                    continue;
+                                }
+
+                                NameChars = Entry->BaseDllName.Length / sizeof(WCHAR);
+                                if (NameChars >= RTL_NUMBER_OF(NameBuf))
+                                    NameChars = RTL_NUMBER_OF(NameBuf) - 1;
+                                for (c = 0; c < NameChars; c++)
+                                    NameBuf[c] = Entry->BaseDllName.Buffer[c];
+                                NameBuf[NameChars] = 0;
+
+                                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                                    "[DABORT-USER] %s in %S+0x%I64x (base=%p)\n",
+                                    TargetTag[t], NameBuf,
+                                    Targets[t] - Base, (PVOID)(ULONG_PTR)Base);
+                                break;
+                            }
+                        }
+                        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                        {
+                            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                                "[DABORT-USER] %s module walk faulted\n",
+                                TargetTag[t]);
+                        }
+                        _SEH2_END;
+                    }
+                }
+
+                /*
                  * One-shot diagnostic: walk TTBR0 page table to dump PTEs for
                  * the faulting PC page and the faulting data page. This tells us
                  * which physical pages are backing the code and data at crash time.

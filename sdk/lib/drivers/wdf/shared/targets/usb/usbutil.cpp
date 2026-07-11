@@ -341,12 +341,12 @@ FxUsbParseConfigurationDescriptor(
         if (usbInterface != NULL) {
             found = usbInterface;
 
-            if (InterfaceNumber != (UCHAR)-1 &&
+            if (InterfaceNumber != -1 &&
                 usbInterface->bInterfaceNumber != InterfaceNumber) {
                 found = NULL;
             }
 
-            if (AlternateSetting != (UCHAR)-1 &&
+            if (AlternateSetting != -1 &&
                 usbInterface->bAlternateSetting != AlternateSetting) {
                 found = NULL;
             }

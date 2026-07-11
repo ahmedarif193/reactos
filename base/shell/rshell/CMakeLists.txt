@@ -11,6 +11,11 @@ add_library(rshell MODULE ${SOURCE})
 
 set_module_type(rshell win32dll UNICODE)
 
+# rshell.dll must ship on the boot media next to explorer.exe (DESTINATION
+# reactos): explorer does LoadLibraryW(L"rshell.dll") at shell startup, and
+# without it on the image the load fails (c0000135), destabilizing desktop init.
+add_cd_file(TARGET rshell DESTINATION reactos FOR all)
+
 target_link_libraries(rshell
     shellbars
     shellmenu

@@ -574,7 +574,44 @@ IoDisconnectInterruptEx(
 {
     PAGED_CODE();
 
-    //FIXME: This eventually will need to handle more cases
+    if (Parameters->Version == CONNECT_MESSAGE_BASED)
+    {
+        /* ConnectionContext holds the IO_INTERRUPT_MESSAGE_INFO table the
+         * message-based connect returned (also used for its line-based
+         * fallback), NOT a PKINTERRUPT: disconnect every message vector,
+         * free its dispatch wrapper, then the table. Treating it as an
+         * interrupt object freed the 'IsMI' table with TAG_IO_INTERRUPT —
+         * bugcheck 0xC2 on any teardown after a message-based connect. */
+        PIO_INTERRUPT_MESSAGE_INFO Table =
+            Parameters->ConnectionContext.InterruptMessageTable;
+        ULONG i;
+
+        if (Table == NULL)
+            return;
+
+        for (i = 0; i < Table->MessageCount; i++)
+        {
+            PKINTERRUPT Intr = Table->MessageInfo[i].InterruptObject;
+            PIOP_MSI_DISPATCH_ENTRY DispEntry;
+            PIO_INTERRUPT IoInterrupt;
+
+            if (Intr == NULL)
+                continue;
+
+            /* The ServiceContext the kernel holds is our dispatch entry —
+             * free it AFTER disconnect so the ISR can't fire on freed
+             * memory (same recovery as the connect failure path). */
+            IoInterrupt = CONTAINING_RECORD(Intr, IO_INTERRUPT, FirstInterrupt);
+            DispEntry = (PIOP_MSI_DISPATCH_ENTRY)IoInterrupt->FirstInterrupt.ServiceContext;
+            IoDisconnectInterrupt(Intr);
+            if (DispEntry != NULL)
+                ExFreePoolWithTag(DispEntry, 'EsMI');
+        }
+
+        ExFreePoolWithTag(Table, 'IsMI');
+        return;
+    }
+
     if (Parameters->ConnectionContext.InterruptObject)
         IoDisconnectInterrupt(Parameters->ConnectionContext.InterruptObject);
 }

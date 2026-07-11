@@ -1236,6 +1236,10 @@ co_IntGetPeekMessage( PMSG pMsg,
     NTSTATUS Status;
     LONG_PTR ExtraInfo = 0;
 
+    /* Compositor liveness watchdog: a silent dwm tears composition down so
+     * the desktop reverts to direct drawing instead of freezing. */
+    IntCompositionWatchdog();
+
     if ( hWnd == HWND_TOPMOST || hWnd == HWND_BROADCAST )
         hWnd = HWND_BOTTOM;
 

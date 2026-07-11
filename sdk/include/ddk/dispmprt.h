@@ -1545,7 +1545,7 @@ typedef struct _DRIVER_INITIALIZATION_DATA
     PDXGKDDI_CANCEL_COMMAND                     DxgkDdiCancelCommand;
     PVOID                                       DxgkDdiGetChildContainerId;
     PVOID                                       DxgkDdiPowerRuntimeControlRequest;
-    PVOID                                       DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay;
+    PDXGKDDI_SETVIDPNSOURCEADDRESSWITHMULTIPLANEOVERLAY DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay;
     PVOID                                       DxgkDdiNotifySurpriseRemoval;
     PVOID                                       DxgkDdiPresentDisplayOnly;
 #endif
@@ -1555,7 +1555,7 @@ typedef struct _DRIVER_INITIALIZATION_DATA
     PDXGKDDI_GET_NODE_METADATA                  DxgkDdiGetNodeMetadata;
     PVOID                                       DxgkDdiSetPowerPState;           /* reserved, set to zero */
     PVOID                                       DxgkDdiControlInterrupt2;
-    PVOID                                       DxgkDdiCheckMultiPlaneOverlaySupport;
+    PDXGKDDI_CHECKMULTIPLANEOVERLAYSUPPORT      DxgkDdiCheckMultiPlaneOverlaySupport;
     PVOID                                       DxgkDdiCalibrateGpuClock;
     PVOID                                       DxgkDdiFormatHistoryBuffer;
 #endif

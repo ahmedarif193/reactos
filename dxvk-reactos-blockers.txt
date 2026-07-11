@@ -1,0 +1,24 @@
+DXVK ReactOS ARM64 staging blocker
+==================================
+
+Checked release: https://github.com/doitsujin/dxvk/releases/download/v3.0/dxvk-3.0.tar.gz
+
+The release archive only contains:
+
+- dxvk-3.0/x32/d3d11.dll
+- dxvk-3.0/x32/dxgi.dll
+- dxvk-3.0/x64/d3d11.dll
+- dxvk-3.0/x64/dxgi.dll
+
+`llvm-readobj --file-headers` reports the x32 DLLs as IMAGE_FILE_MACHINE_I386
+and the x64 DLLs as IMAGE_FILE_MACHINE_AMD64. There are no ARM64 Windows PE
+DLLs in the release payload, so these binaries cannot replace ReactOS ARM64
+`d3d11.dll`/`dxgi.dll` in system32.
+
+Current action: keep the ReactOS-built d3d11/dxgi stubs in load order and let
+`dxgi_apitest.exe d3d11_render_probe` report the unsupported backend path.
+
+To replace the stubs later, build DXVK from source for Windows ARM64 with the
+same clang/llvm-mingw runtime used for the SwiftShader artifact, then stage the
+resulting ARM64 PE d3d11.dll and dxgi.dll in a dedicated dll/directx/dxvk
+integration directory.

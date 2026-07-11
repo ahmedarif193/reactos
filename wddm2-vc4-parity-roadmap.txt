@@ -1,0 +1,539 @@
+================================================================================
+ SESSION DELTA 2026-07-02c — POOL/PNP/VSYNC FIXES + TODO (read this first)
+================================================================================
+ LANDED (all in livecd 22:27, QEMU-verified to desktop/gears via ramfb GOP):
+ 1) KERNEL: 64-bit paged pool now RAM-scaled INSIDE MiBuildPagedPool
+    (2x nonpaged max, region-capped; boots print "Paged pool: 398 MB");
+    the earlier MiSize64BitPagedPool-only change ran a phase too late
+    (pool bitmap/LastPte already built for 32MB) — root cause of the
+    persisting SURFACE_AllocSurface storm on the Pi.
+ 2) GDI: SURFACE_AllocSurface now puts bits >= 64KB in a kernel section
+    (BMF_KMSECTION/EngAllocSectionMem; view holds its own segment ref) —
+    pixel buffers no longer consume ONE contiguous paged-pool block each
+    (Windows-honest; kills fragmentation class).
+ 3) KERNEL: IoDisconnectInterruptEx implemented for CONNECT_MESSAGE_BASED —
+    it treated the message TABLE as a PKINTERRUPT: bugcheck 0xC2
+    (Ioin != IMsI) on ANY teardown after message-based connect + leaked
+    every vector/dispatch entry.
+ 4) DXGKRNL: VBE DISPI fallback gated off ARM64 (port I/O 0x1CE = NULL-page
+    DABORT -> 0x7E when no GOP).
+ 5) RPI5VC4: race-the-beam presents — updates >= 1/4 screen wait for VFP
+    start (PvVBlankBroken-latched) so the top-down WC copy outruns the
+    raster: fixes visible tear/vsync artifacts on window drags.
+ 6) Explorer "so slow" on Pi root-caused: pool starvation made every GetDC
+    retry 2 x 4.5MB pool allocations (storm) + windows fell out of
+    composition (mixed direct/composited = the z-order in/out flicker over
+    tabs). Fixed by 1+2 (+2s alloc backoff already landed in 02b).
+ TODO (next):
+ [ ] Pi5 flash of 22:27 image: verify no pool failures, no z-flicker,
+     tear-free drags, tab pages painted, explorer speed.
+ [ ] If drags still tear: lower the beam-race threshold (1/4 -> 1/8) or
+     vblank-wait all composed presents (COMPOSITION_END only).
+ [ ] PnP-proper vc4 binding (ACPI/DT hardware ID) — blocked: Pi5 UEFI
+     ACPI tables do not expose VideoCore; root-enum + probe-decline is the
+     MSBDD-model interim (softgpu identical).
+ [ ] Optional: unload/park declined miniports quietly (rpi5vc4 on QEMU
+     noise; PnP remove currently vetoed by Root\SOFTGPU\0000).
+ [ ] Session-space views for BMF_KMSECTION under real sessions (ROS maps
+     system space today — fine single-session).
+
+ 3D STACK PROGRESS (2026-07-03, Claude+codex, all Claude-verified):
+   DONE: vulkan-1.dll thin ICD loader (Claude fixed 4 bugs); dxgi/d3d10*/d3d11
+     honest stub DLLs (backend-unavailable, load-tracked on attach); vc4kmt
+     winsys over D3DKMT (open/BO/submit-CL/TFU/CSD/fence, caps-gated, framing
+     byte-equal to v3dsmoke — compile+review verified, unexecuted till Pi);
+     vulkan1+dxgi apitests; per-boot proof lines (OPENGL32 SW/ICD, VULKAN-1
+     load, dxgi/d3d11 load+backend) confirmed in QEMU serial.
+   *** MAJOR: SwiftShader cross-built to ARM64 PE — submodules/swiftshader/
+     build-reactos-arm64-pe/libvk_swiftshader.dll = real 42MB PE32+ Aarch64
+     DLL exporting vk_icdGetInstanceProcAddr; imports all ROS-resolvable
+     (needs libc++.dll/libunwind.dll staged). First working Vulkan ICD =
+     the generic WARP-equivalent. Codex patched llvm-10 mingw POSIX gaps
+     (::write, Atomic.cpp); patches logged in swiftshader-reactos-patches.txt.
+   NEXT (in flight): stage ICD+runtimes+json+registry -> vulkan-1 loads it ->
+     import DXVK d3d11/dxgi over vulkan-1 -> prove D3D11CreateDevice succeeds
+     through SwiftShader in QEMU (software proof of the full DX11->VK->ICD
+     path; de-risks v3dv). HARD-GPU (goal) still requires v3dv-on-vc4kmt on
+     the Pi — SwiftShader proves the path is CPU, not V3D.
+
+ GPU-ACCELERATION PLAN OF RECORD (gears is SW Mesa; UMD layer is the gap):
+   ONE UMD, EVERYTHING ELSE STACKS ON IT:
+   1. Port Mesa v3dv (Vulkan UMD for V3D 7.1, QPU compiler INCLUDED) onto
+      D3DKMT: DRM-shim = BO->CreateAllocation+slab GPU-VA, submit->escape
+      CL transport (+patch reloc), syncobj->monitored fences/CPU page.
+      (= vc4-umd-design.txt Stage 3; Phase A/B smokes already prove the
+      transport.)
+   2. Mesa PE cross-build ARM64 (meson/mingw vs ucrtbase; NIR compiler, no
+      LLVM) — biggest grind.
+   3. WSI: vk swapchain -> D3DKMT present -> rpi5vc4 flip/TFU.
+   4. vulkan-1 loader, then: Zink = opengl32 ICD (gears on GPU),
+      DXVK = d3d9/10/11+dxgi, vkd3d(-proton) = d3d12.
+   NOTES: plain Wine sync gives NO acceleration (wined3d lands on SW GL);
+   Wine sync matters only for the DLL surface (dxgi/d3d12core wiring).
+   The Win11-exact D3DKMT kernel contract is the invariant common path —
+   any future d3dumddi UMD sits on the same syscalls.
+================================================================================
+
+================================================================================
+ SESSION DELTA 2026-07-02b — DESKTOP RENDERING FIXES (read this first)
+================================================================================
+ Silicon run #1 reached a live desktop; two user-visible defects fixed:
+ 1) WINDOW-DRAG FLICKER (vc4 only, not softgpu/QEMU): presents were an async
+    15ms dxgkrnl worker copying the shadow FB while GDI threads kept drawing
+    into it (devlock does not cover the worker); on Pi5 the WC scan-out copy
+    takes 4-8ms so torn mid-compose frames reached the panel.  FIX
+    [dxgkrnl/display.c]: presents now run SYNCHRONOUSLY in the CDD IOCTL
+    caller's context (devlock held -> serialized against every GDI write)
+    under a new g_PresentMutex; COMPOSITION_BEGIN drains any in-flight
+    worker copy; COMPOSITION_END flushes synchronously; the 15ms worker is
+    now a pure safety net (idle full-screen fallback 30ms->250ms, kills the
+    constant ~500MB/s WC traffic on Pi5).
+ 2) EMPTY TAB PAGES (sysdm General page blank except timer-updated uptime,
+    taskmgr tabs filled only by 1s-timer repaints): redirected DCs got a
+    bare-rect vis region — DCX_CLIPSIBLINGS/CLIPCHILDREN/PARENTCLIP and
+    visibility were IGNORED, so the tab control's erase (painted after the
+    page in top-first order) wiped the page's pixels inside the shared
+    backing.  FIX [win32k/composition.c]: IntCompositionVisRgnBounded()
+    mirrors VIS_ComputeVisibleRegion exactly but stops the parent walk at
+    the top-level ancestor (occlusion by other top-levels must NOT clip a
+    redirected paint); DCX_PARENTCLIP translated like DceUpdateVisRgn.
+ 3) Perf: pure-activation SetWindowPos no longer forces a full-frame
+    recompose [winpos.c gate]; paint-batch composes throttled through the
+    tick (pre-wait flush presents the tail) [composition.c]; vc4
+    PresentDisplayOnly spans rounded to 64-byte lines for WC bursts
+    [rpi5vc4_present.c].
+ Adversarially reviewed (single-verifier source audit): both fixes confirmed
+ sound; two residuals found and CLOSED: (a) worker's no-dirty full-screen
+ copy raced GDI when it lost the consume race -> now a pure idle refresh
+ (skipped within 250ms of any dirty/present activity); (b) mutex-init flag
+ published before KeInitializeMutex -> 3-state init (0/-1/1, readers require 1).
+ 4) SILICON RUN #2: takeover diag proves LPTRS_D(0x110) head=672 valid+match
+    (head selection fix WORKS; desktop reached).  NEW Pi5-only defect: opening
+    a window -> endless "FAILED to allocate 4544832 bytes from paged pool" +
+    SURFACE_AllocSurface storm.  ROOT CAUSE (kernel, not compositor): ARM64
+    paged pool was HARD-CAPPED AT 32MB — mminit.c's RAM-scaled sizing
+    (2x nonpaged max) is #ifdef _M_IX86 only; arm64 init leaves
+    MI_MIN_INIT_PAGED_POOLSIZE.  Every DDB's pixel buffer is ONE contiguous
+    paged-pool block (SURFACE_AllocSurface inline-bits layout), ~9MB/window
+    pair at 1080p (QEMU 1024x768 stays under the cap — why Pi-only).
+    FIX [mm/mminit.c MiSize64BitPagedPool, generic AMD64+ARM64]: scale to
+    2x MmMaximumNonPagedPoolInBytes when unconfigured, clamp min 32MB, cap to
+    the 128GB AssignedRegionPagedPool VA region -> ~408MB on Pi5/QEMU (VA
+    reserved, pages fault in on demand; expansion path is ARM64-ready via
+    MiEnsureSessionPageTablesBacked).  Plus [composition.c] 2s backoff after
+    backing-alloc failure (a failure used to retry 2 x multi-MB pool allocs on
+    EVERY GetDC = the log storm; window draws direct meanwhile).
+    Follow-up candidate (not landed): auto-promote big NULL-bits bitmaps to
+    BMF_KMSECTION (EngAllocSectionMem path exists but is unexercised on ARM64).
+ All compile clean; livecd rebuilt.  HVS flip diagnostics from delta 2026-07-02a
+ remain in the image (flip path still latches off after 16 failures).
+================================================================================
+
+================================================================================
+ SESSION DELTA 2026-07-02 (read this first)
+================================================================================
+ EVERYTHING software-implementable without silicon, a QPU shader binary,
+ a maintainer decision, or the win32k multi-display project has been
+ IMPLEMENTED and compiles clean in the full livecd (0 errors).  Landed:
+   - 8 exact-WDK ABI repairs (DRIVERCAPS, PATCH, SEGMENT3/4, QAI enum,
+     COLLECTDBGINFO, MPO struct set, PagingBufferSize, escape framing)
+   - Full dxgkrnl contract surface: Render->Patch->Submit, TDR
+     (preempt -> CollectDbgInfo -> reset), VidMm content paging, vsync,
+     QUERYSEGMENT 1/3/4, EDID both sides, monitored fences (CPU page +
+     GPU-completion signalling), MPO caller, bugcheck display, MSBDD
+     fallback handover, pointer bridge, per-device budgets
+   - Scheduler end-to-end: DRIVERCAPS node discovery (was never wired —
+     vidsch had been dead code), per-node engines + parallel hardware
+     rings in rpi5vc4 (3D/TFU/CSD), fence-at-kick with UAF-safe priority
+     reordering, per-node retirement, preemption
+   - rpi5vc4 complete: HVS N-plane composition (private dlist slots),
+     cursor, vsync, mailbox+V3D clock, SPI interrupt w/ poll backstop,
+     synthesized EDID, dual connectors, all four engine queues, real
+     Patch relocation, TFU A/B present harness
+   - UMD track: design doc (vc4-umd-design.txt), Stage 0 encoders
+     (mesa-XML-transcribed, byte-golden tested), Stage 1 v3dsmoke
+     (Phase A relocation chain + Phase B mesa clear job w/ readback
+     armed for silicon), Stage 2 A/B TFU present wiring,
+     MapGpuVirtualAddress allocation binding
+   - 5 test suites runnable in your QEMU cycle (pipeline liveness,
+     sync2 monitored-fence contract, cle byte-goldens, v3dsmoke, + the
+     pre-existing suites they extend)
+ REMAINING GATES (each line below names its gate):
+   [HW] = one Raspberry Pi 5 boot; UMD = compiled-shader/UMD stages;
+   MAINT = maintainer architecture decision; WIN32K = multi-display
+   project.  Nothing else remains.
+================================================================================
+
+================================================================================
+ WDDM2 + VC4 (rpi5vc4) — WIN11 PARITY ROADMAP
+ Branch: main-nt10-wddm-experiment          Updated: 2026-07-02 (tranches 1-2 landed; T1 QEMU-verified, T2 compile-verified)
+================================================================================
+
+Goal: fill all gaps of the WDDM2 kernel graphics stack (dxgkrnl) and the
+Raspberry Pi 5 vc4 driver (rpi5vc4) to parity with Win11 behavior, and give
+the compositor real VC4 hardware support.
+
+Legend: [DONE] shipped and QEMU-verified   [WIP] being implemented now
+        [TODO] not started                 [HW] blocked on real RPi5 validation
+        [BIG] multi-week project-sized
+
+--------------------------------------------------------------------------------
+ 0. ALREADY DONE (this branch)
+--------------------------------------------------------------------------------
+[DONE] rpi5vc4 rewritten as full WDDM2 miniport (drivers/directx/rpi5vc4),
+       DxgkInitialize + DRIVER_INITIALIZATION_DATA 0x5023, documented DDIs only
+       (Win11-portable; no invented fields).
+[DONE] 2D: POST framebuffer acquire, HVS display-list takeover, 64MB WC VRAM
+       slab as CPU-visible local segment, real HVS page flips via
+       DxgkDdiSetVidPnSourceAddress, PresentDisplayOnly tracks current scanout.
+[DONE] Hardware cursor: HVS per-pixel-alpha overlay plane
+       (SetPointerShape/Position, hotspot handling).
+[DONE] DMA/fence pipeline: private packet stream (Render validates/copies,
+       Present emits packets), in-order pending ring, DMA_COMPLETED +
+       NotifyDpc contract, QueryCurrentFence, preempt, 2s self-TDR flush.
+[DONE] V3D 7.1 kernel plumbing: SMS power-up, hub/core ident, full-4GB GPU MMU
+       page table (slab at GPU VA 0x01000000), CLE CT0/CT1 job submission,
+       poll-based completion, Escape info query (idents + slab GPU VA).
+       Register facts verified against Linux v3d + in-repo RPi5 DTB.
+[DONE] dxgkrnl: XPDM pointer IOCTL -> KMDOD SetPointerShape/Position bridge
+       (caps via QueryAdapterInfo DRIVERCAPS; falls back to software cursor).
+[DONE] dxgkrnl: MSBDD-style POST display ownership handover — softgpu is a
+       true acquire-gated fallback (yields to real drivers, is stopped when a
+       real driver acquires later; softgpu no longer reads Inbv directly).
+[DONE] dxgkrnl: loader PixelFormat quirk fixed (ARM64 freeldr stores BPP,
+       not the EFI GOP enum) in DxgkCbAcquirePostDisplayOwnership.
+[DONE] XPDM rpi5vc4 miniport deleted; registry/inf wiring for ROOT\RPI5VC4.
+[DONE] QEMU regression: boot to desktop, cdd composition, gears rendering.
+
+--------------------------------------------------------------------------------
+ 0b. TRANCHE 1 NOTES (landed 2026-07-02, QEMU boot + gears verified)
+--------------------------------------------------------------------------------
+[DONE] Genuine WDK headers pulled for parity (source: /Users/mac/working_dir/
+       winsdk-10/Include/10.0.16299.0): DXGK_DRIVERCAPS made offset-exact
+       through WDDM2.1 (incl. deprecated _ADVSCH_ blobs, D3DKMDT_PREEMPTION_
+       CAPS, BOOLEAN flags), DXGKARG_PATCH replaced with the real layout
+       (DXGK_ALLOCATIONLIST + DXGK_PATCHFLAGS + submission offsets).
+       ONGOING MECHANISM: diff remaining structs against winsdk-10 headers
+       whenever a DDI is touched; never reconstruct from memory.
+[DONE] Patch: DxgkVidMmFillAllocationListEntry fills SegmentId/PhysicalAddress;
+       Patch called Render->Patch->Submit and Present->Patch->Submit.
+[DONE] TDR: 1 Hz per-adapter watchdog over tracked submissions ->
+       ResetFromTimeout/RestartFromTimeout work item (3 s stuck threshold).
+[DONE] VidMm: evict downloads segment->backing, MakeResident uploads via
+       BuildPagingBuffer(TRANSFER) with WC CPU-copy fallback.
+[DONE] Vsync: ControlInterrupt(CRTC_VSYNC) enabled at adapter start;
+       NotifyInterrupt(CRTC_VSYNC) -> adapter DPC -> DxgkDisplayVsyncFlush
+       (vblank-paced dirty flush; fallback timer retained). rpi5vc4 samples
+       the PixelValve VFP latch from a 60 Hz timer.
+[DONE] Pointer bridge retries DRIVERCAPS with a 512-byte buffer (Win11-built
+       miniports); V3D got per-job L2T/SLC invalidate + binner overflow pool
+       (CT0QMA/QMS); present move-rects blit from pSource (no WC reads).
+
+--------------------------------------------------------------------------------
+ 1. DXGKRNL / WDDM2 CONTRACT GAPS
+--------------------------------------------------------------------------------
+[DONE] 1.1 DxgkDdiPatch never called. Fill D3DDDI_ALLOCATIONLIST physical
+       addresses from vidmm and call Patch before SubmitCommand in both
+       submit paths (d3dkmt.c render escape, present.c full present).
+       Miniports must be able to learn allocation placement the documented way.
+[DONE] 1.2 TDR watchdog + documented CollectDbgInfo call before reset
+       (DXGKARG_COLLECTDBGINFO was ABI-wrong: UINT BufferSize + bogus tail;
+       now genuine WDK layout with the _EXT extension struct).  Original:
+       No TDR watchdog: nothing detects stuck fences and calls
+       DxgkDdiResetFromTimeout/RestartFromTimeout. Add per-adapter watchdog
+       over the tracked submitted-DMA list.
+[DONE] 1.3 VidMm content integrity: DxgkVidMmEvict must copy segment content
+       to the system backing before releasing placement; MakeResident must
+       issue BuildPagingBuffer(TRANSFER) so the miniport uploads content into
+       the segment (documented paging contract, currently never exercised).
+[DONE] 1.4 No vsync: accept DXGK_INTERRUPT_TYPE_CRTC_VSYNC notifications,
+       enable via DxgkDdiControlInterrupt(CRTC_VSYNC) at adapter start, and
+       flush pending dirty rects on vblank (vblank-paced presents; the
+       free-running fallback timer remains as safety net).
+[DONE] 1.5 Pointer bridge: retry DRIVERCAPS with a WDK-sized buffer so
+       Win11-built miniports (viogpudo) with a larger DXGK_DRIVERCAPS get
+       their hardware cursor engaged.
+[PART] 1.6 GPU scheduler — INTEGRATION STARTED: the render-escape submit
+       path now runs through the VidSch engine-0 run queue (queued packets,
+       engine state machine, ISR->DPC fence retirement, re-kick), with the
+       ADAPTER-WIDE fence passed into VidSchSubmitCommand so the scheduler
+       and the DMA-buffer tracker share one fence space (vidsch previously
+       minted per-engine fences nobody completed); transient SUBMITTING/
+       COMPLETING states now queue instead of bouncing STATUS_DEVICE_BUSY;
+       direct-submit fallback kept for early boot.  PRESENT PATH ALSO ROUTED: full-WDDM presents now submit through the
+       same engine-0 run queue (VIDSCH_DMA_PACKET deep-copies the
+       stack-lifetime allocation list; VidPnSourceId + raw
+       DXGK_SUBMITCOMMANDFLAGS carried per packet; direct-submit
+       fallback kept) — renders and presents are now fence-ordered in
+       ONE scheduler queue.  PREEMPTION-ON-TIMEOUT ALSO LANDED: VidSchPreemptEngine implemented
+       (RUNNING->PREEMPTING->PREEMPTED state flow, DxgkDdiPreemptCommand
+       with a fresh adapter fence, SEH-guarded, PREEMPTED->IDLE recovery +
+       re-kick in the completion DPC); the TDR worker now follows the
+       documented escalation — preempt first, 100 ms recovery window,
+       reset only if the fence stays stuck.  MULTI-NODE ALSO LANDED: Adapter->NodeCount was never assigned (the
+       scheduler silently never engaged — VidSchContext stayed NULL);
+       DxgkAdapterStart now queries DRIVERCAPS (512-byte WDK-size buffer)
+       and sizes the engine array from GpuEngineTopology.  rpi5vc4 reports
+       3 nodes (0=CLE 3D, 1=TFU, 2=CSD), accepts NodeOrdinal 0-2 in
+       CreateContext/Submit/Preempt, tracks fences per node, and reports
+       one DMA_COMPLETED per node in ascending fence order (the shared
+       ring keeps the adapter-wide fence monotonic).  PER-NODE DMA-BUFFER RETIREMENT ALSO LANDED: tracked buffers carry
+       their NodeOrdinal, the adapter keeps NodeLastCompletedFenceId[8]
+       (updated from each DMA_COMPLETED), and the retire pass walks the
+       whole list retiring each entry against ITS node's fence — the
+       correctness prerequisite for out-of-global-order completion.
+       PER-NODE HARDWARE RINGS ALSO LANDED: rpi5vc4 now runs one in-order
+       queue per GPU node (3D/TFU/CSD) advancing independently — CLE
+       phased bin/render on node 0, TFU and CSD single-phase on their own
+       queues; jobs route by packet type (authoritative over the caller's
+       NodeOrdinal); drain/reset flush all queues with per-node fences.
+       All three engines can now be in flight simultaneously.
+       FENCE-AT-KICK + PRIORITIES LANDED: VidSchSubmitCommandTracked
+       queues DMA buffers WITHOUT a fence; the kick mints the adapter
+       fence (fence order == kick order, the safety invariant), runs
+       DxgkDdiPatch over deep-copied allocation/patch lists and hands the
+       buffer to the tracker before DxgkDdiSubmitCommand (one-shot on
+       retry; never-kicked fence-0 packets are guarded from the retire
+       walk).  Priority insertion reorders ONLY unkicked fence-at-kick
+       packets — never past fence-assigned packets or the queue head, so
+       threshold retirement stays sound.  The render escape uses the
+       tracked path (<=2 allocations; graceful fallback), presents stay
+       on the proven fence-assigned FIFO path.  Priority input is wired
+       (param, FIFO within priority); policy sources (per-context
+       SetContextSchedulingPriority ioctl, per-process budgets) arrive
+       with UMD contexts.  Audit: submit sites run at PASSIVE; kick-time
+       Patch/track at DISPATCH under QueueLock matches the WDDM contract.
+       RESOLVED: the priority-source ioctls already existed
+       (DxgkSet/GetContextSchedulingPriority storing on
+       Context->SchedulingPriority; Set now validates the documented
+       -7..7 range).  Feeding context priority into submission requires
+       the context-scoped D3DKMT SubmitCommand path, which arrives with
+       UMD contexts.  PER-DEVICE BUDGET LANDED (first budget slice): each device's
+       un-retired submissions are counted (increment at track, decrement
+       at retire) and capped at DXGK_DEVICE_MAX_INFLIGHT=256 — a single
+       flooding client gets STATUS_DEVICE_BUSY instead of exhausting the
+       scheduler queue/pool.  PER-PROCESS AGGREGATION ALSO LANDED: devices record their creating
+       process (DXGKRNL_DEVICE.OwnerProcess); the submit path aggregates
+       in-flight submissions across all of the process's devices on the
+       adapter under AdapterMutex and caps at
+       DXGK_PROCESS_MAX_INFLIGHT=512.  1.6 budgets: COMPLETE at the
+       admission level.  Remaining refinement: priority-WEIGHTED shares
+       (scheduler-level fairness — meaningful once multiple competing
+       UMD workloads exist to measure against).
+       PIPELINE TEST LANDED (d3dkmt_pipeline apitest): drives the render
+       escape end-to-end (Render -> vidsch queue -> fence-at-kick ->
+       SubmitCommand -> per-node completion -> retire) with a universally
+       safe payload (NOP + empty V3D job, CPU-completes everywhere); 80
+       submissions > the 64-entry ring proves fences retire (a stalled
+       pipeline surfaces as DEVICE_BUSY).  Success asserted only on
+       positively-identified rpi5vc4; skips on softgpu/viogpudo/Win11.
+       ALSO FIXED: the command-escape framing passed the 8-byte transport
+       header to DxgkDdiRender (no consumer ever worked — DOD drivers
+       can't reach the path); Render now receives the payload only.
+[PART] 1.7 Hardware blit — ENCODINGS VERIFIED AND LANDED: the TFU
+       raster-to-raster copy register image is now buildable from
+       mesa-verified constants (v3d_tfu.h MIT + meta_emit_tfu_job v71
+       paths; v71 CAN write raster destinations) via
+       Vc4CleTfuRasterCopyV71, unit-tested in the 'cle' apitest.  The
+       kernel TFU queue (2.12) executes these images.  Still TODO:
+       route present blits through TFU jobs when src+dst are slab
+       allocations (UMD-track Stage 2), silicon validation.
+[TODO] 1.8 Multi-source/multi-target VidPN: source 0/target 0 hardcoded in
+       CommitVidPn/presents/pointer bridge; vidpn.c multi-path structures
+       exist but nothing drives them. Multi-monitor + clone/extend. [BIG]
+[PART] 1.9 Runtime mode switching: EDID is now queried at child-PDO creation
+       (DxgkDdiQueryDeviceDescriptor -> ChildExt->Edid/EdidValid), and
+       rpi5vc4 synthesizes a valid EDID 1.3 base block from the live
+       PixelValve raster timings (fixed-panel driver practice) so the
+       capture carries a real payload.  Still TODO: consume the
+       EDID for monitor/target mode sets, D3DKMTInvalidateActiveVidPn flow,
+       RecommendFunctionalVidPn invocation, runtime mode-change path.
+[PART] 1.10 Multi-adapter — AUDIT RESULT: enumeration is ALREADY
+       complete (DxgkEnumAdapters2 snapshots the global adapter list,
+       per-adapter LUIDs, correct count-query/too-small contract;
+       multiple adapters coexist structurally — softgpu/rpi5vc4/viogpudo
+       + the POST-ownership handover IS multi-adapter policy).
+       Remaining: cross-adapter shared allocations (UMD-era).
+[TODO] 1.11 GPU-VA (WDDM2 gpuva) path completeness beyond what softgpu +
+       apitests exercise (root page tables per process, Map/UnmapCpuHostAperture
+       against a real MMU).
+[DONE] 1.12a QUERYSEGMENT3 native: genuine WDK DXGK_SEGMENTDESCRIPTOR3/
+       DXGK_QUERYSEGMENTOUT3 layouts (old aliases were ABI-WRONG: Flags-first
+       + extra fields; QUERYSEGMENTOUT.PagingBufferSize was SIZE_T vs UINT);
+       vidmm queries type-correctly with fallback; softgpu + rpi5vc4 answer
+       QUERYSEGMENT3 natively.
+[DONE] 1.12b QUERYSEGMENT4 native: genuine WDK DXGK_QUERYSEGMENTIN4/OUT4/
+       SEGMENTDESCRIPTOR4 (stride-addressed) + DXGK_CPUHOSTAPERTURE; vidmm
+       tries 4 -> 3 -> legacy with type-correct buffers; both miniports
+       answer natively.  ALSO FIXED: the DXGKQAITYPE enum values were
+       hand-authored and WRONG vs the WDK (QUERYSEGMENT3 was 8, real value
+       5 = a real driver would have seen PREFERREDGPUNODE) — the whole enum
+       now matches winsdk-10 verbatim (0-20).
+[HW-CRITICAL DISCOVERY, was 1.12c] The BCM2712 HVS SITS BEHIND A
+       SYSTEM IOMMU: DTB hvs node has iommus = <iommu@5200>
+       ("brcm,bcm2712-iommu", reg 0x10_00005200, its own instance —
+       distinct from iommu@5280 used by CSI/DSI/DPI/VEC; V3D has NO
+       system IOMMU, only its private MMU which we already program).
+       CONSEQUENCE: on silicon, the addresses rpi5vc4 writes into HVS
+       display lists (slab "physical" addresses) are IOVAs translated by
+       firmware-programmed IOMMU state we have not characterised — slab
+       scanout/flips/N-plane composition may fault or scan garbage even
+       though the firmware-FB takeover works.  The related iommu@5280
+       carries dma-iova-offset = 0x10_0000_0000, hinting at offset-style
+       mappings.  BRING-UP PLAN (before trusting any slab scanout):
+       (1) transcribe Linux drivers/iommu/bcm2712-iommu.c register
+       layout; (2) on first boot DUMP the HVS IOMMU config before
+       takeover; (3) either map the slab into it during takeover or
+       apply the discovered IOVA offset to every address the driver
+       writes into display lists (one helper: Rpi5HvsDmaAddress()).
+       GPUMMUCAPS/PAGETABLELEVELDESC answers remain no-consumer [TODO].
+[DONE] 1.13 Bugcheck-time display: dxgkrnl registers KeRegisterBugCheckCallback
+       -> calls the POST owner's DxgkDdiSystemDisplayEnable at panic time;
+       rpi5vc4's SystemDisplayEnable re-points the HVS at the firmware FB so
+       the Inbv-drawn bugcheck screen is visible.  (Untested: needs a real
+       bugcheck on hardware.)
+[PART] 1.14 Power: rpi5vc4 SetPowerState now implements D-states (D3 parks
+       scanout on the firmware FB + blanks; D0 re-asserts timing + rebuilds
+       the display list; slab content survives as ordinary DRAM).  Still
+       TODO: hibernate segment preservation flags, runtime power
+       (SetPowerComponentFState), PixelValve/PHY power-down.
+       DISPOSITION (verified 2026-07-02): hibernate/sleep segment
+       preservation has NO OS CONSUMER — ReactOS's power manager sleep
+       hooks return STATUS_NOT_IMPLEMENTED (ntoskrnl/po/power.c:535,551)
+       and halarm64 has no S-state support.  Gated on kernel-wide
+       S3/S4 support, not a graphics gap.  (Runtime D0/D3 IS handled:
+       rpi5vc4 parks on the firmware FB at D3 and re-asserts at D0.)
+[PART] 1.15 Monitored fences: the documented CPU side now works — 
+       CreateSynchronizationObject2(MONITORED_FENCE) returns a read-only
+       CPU-mapped 64-bit value page (FenceValueCPUVirtualAddress) kept
+       current by the signal paths; value-based FromCpu wait/signal existed.
+       GPU-COMPLETION SIGNALLING LANDED: escape PacketType 2 carries a
+       DXGK_VIRTGPU_SIGNAL_BLOCK {hSyncObject, FenceValue}; the tracked
+       DMA buffer stores it and the retire path fires
+       DxgkSyncObjectCpuSignal when the GPU fence completes — the WDDM
+       monitored-fence completion model for hardware without
+       GPU-writable fences (v3dsmoke Phase B now waits via
+       WaitForSynchronizationObjectFromCpu and checks the mapped value:
+       runtime-verified in QEMU, arms fully on silicon).  Still TODO:
+       GPU-written fence values (needs CL-embeddable stores; revisit
+       with the UMD), shared cross-process sync objects.
+       VERIFICATION LANDED: d3dkmt_sync2 Test_MonitoredFence_CpuValuePage
+       asserts the documented contract (CPU VA non-NULL, *VA ==
+       InitialFenceValue, CPU signal updates the mapped page, satisfied
+       wait completes) — identical assertions hold on Win11.
+[PART] 1.16 MPO — steps (a)-(c) + N-PLANE HVS BUILDER LANDED: genuine WDK MPO struct set
+       extracted verbatim (scratchpad mpo_structs.txt; source d3dkmddi.h
+       10.0.16299 lines 300-440 attributes/plane/check structs, 4683+
+       DXGKARG_SETVIDPNSOURCEADDRESSWITHMULTIPLANEOVERLAY).  Completed:
+       (a) structs added to sdk/include/ddk/d3dkmddi.h (needs
+       D3DDDI_ROTATION + D3DDDI_MAX_BROADCAST_CONTEXT availability check),
+       (b) DDI slots typed at WDK offsets (Win8/1.3 sections) to DRIVER_INITIALIZATION_DATA WDDM1_3
+       section at WDK offsets, (c) rpi5vc4 implements CheckMultiPlaneOverlaySupport
+       (identity-rotation, premult/opaque blend, <= 3 planes) and
+       SetVidPnSourceAddressWithMultiPlaneOverlay mapping planes onto HVS
+       display-list planes via Rpi5HvsBuildPlane (plane builder already
+       supports per-plane position/size/alpha), LANDED: Rpi5HvsInstallPlaneList — up to 3 MPO planes + cursor composed
+       through private double-buffered dlist slots near the top of SCALER6
+       dlist RAM (0x5800 dwords) with a LIST_PTR head re-point; single
+       base-plane keeps the boot-validated flip path; cursor fast path
+       follows the private list.  CAVEATS for hardware validation: slot
+       region bounds unverified on silicon; overlay pitch approximated as
+       Width*4 until allocation-pitch plumbing exists; SrcRect offsets
+       ignored (full-source planes only).
+       LANDED: dxgkrnl MPO caller — MPO-capable miniports now receive
+       shared-primary flips as one-plane MPO configurations
+       (DxgkpProgramScanoutViaMpo, SEH-guarded, legacy SetVidPnSourceAddress
+       fallback) — the documented Windows flow for MPO drivers.
+       REMAINING:
+       compositor surface-to-plane assignment (the [BIG] remainder).
+       Also absent end to end:
+       (CheckMultiPlaneOverlaySupport/SetVidPnSourceAddressWithMultiPlaneOverlay).
+       Prerequisite for HVS plane composition (see 3.2). [BIG]
+
+--------------------------------------------------------------------------------
+ 2. RPI5VC4 / VC4 DRIVER GAPS
+--------------------------------------------------------------------------------
+[HW]   2.1 Hardware validation on a real Pi 5: HVS flips into the slab,
+       D-cache alias clean, SMS power-up, V3D ident/MMU/job execution, and
+       whether firmware leaves the V3D clock (firmware clock 5) running.
+       EVERYTHING below 2.x is theory until this is done.
+[DONE] 2.2 V3D job hygiene: per-job L2T clean/invalidate around submissions;
+       binner overflow memory (CT0QMA/QMS) programmed from a reserved BO.
+[DONE] 2.3 MoveRect reads from write-combined memory (uncached reads, very
+       slow) — use a bounce buffer.
+[DONE] 2.4 Vsync source: ControlInterrupt(CRTC_VSYNC) arms a refresh-rate
+       timer that polls the PixelValve VFP-start latch and raises CRTC_VSYNC
+       (root devnode has no IRQ resource; see 2.6 for the real interrupt).
+[DONE] 2.5 V3D phased pipeline: bin runs on CT0, render kicks on CT1 only
+       after FLDONE (was: simultaneous queueing racing the binner), FLDONE
+       attributed to the oldest in-flight bin, and bin(N+1) overlaps
+       render(N) exactly like Linux v3d.  Per-phase 2 s timeouts.
+[PART] 2.6 Real interrupts: V3D SPI 250 (INTID 282, DTB-verified) is now
+       connected fully-specified via IoConnectInterruptEx with an ISR that
+       accelerates the completion DPC; interrupts unmasked only when the
+       connect succeeds, and the 1 ms poll timer stays armed as backstop
+       (the ARM64 root IRQ arbiter is stubbed and may refuse/misroute the
+       SPI — see arm64-msix-multivector-arbiter memory).  Still TODO: HAL
+       SPI arbiter proper, hub SPI 249, PixelValve vsync as an interrupt,
+       ACPI enumeration with real resources.
+[DONE] 2.7 Firmware mailbox property interface (rpi5vc4_mbox.c): polled
+       bcm2835-mbox channel-8 property exchanges at DTB-verified
+       0x107C013880; StartDevice logs the firmware revision, enables the
+       V3D clock (id 5) and logs its rate before the SMS power-up — closes
+       the "firmware may leave the V3D clock off" bring-up risk.  Still
+       TODO within this area: power domains, throttle/temperature tags.
+[TODO] 2.8 Mode-set: driver is locked to the firmware GOP mode. Needs HDMI
+       PHY/PLL programming or firmware mailbox mode-set, EDID read, dynamic
+       source/target mode lists. [BIG]
+[TODO] 2.9 Second output: PV1 / second HVS channel (dual HDMI) — pairs with
+       dxgkrnl 1.8. [BIG]
+[TODO] 2.10 GMP fault handling, MMU violation reporting (currently aborts
+       only), OUTOMEM interrupt-driven overflow chaining.
+[TODO] 2.11 Per-job / per-allocation GPU MMU mappings (currently one static
+       slab window); needed for isolation and for allocations outside the slab.
+[PART] 2.12 TFU queue LANDED: RPI5VC4_DMA_OP_TFU_JOB packets carry a
+       UMD-encoded v7 TFU register image ([Icfg Iia Ica Iis Iua Ioc Ioa
+       Ios Coef0-3], regs verbatim from Linux v3d_regs.h); the fence
+       pipeline kicks them (ICFG|IOC), busy-guards on TFU_CS, completes on
+       the hub TFUC latch with the standard timeout.  CSD compute queue
+       ALSO LANDED: RPI5VC4_DMA_OP_CSD_JOB packets carry QUEUED_CFG0..7
+       (v7 core block 0x930+, genuine Linux kick order CFG1..7-then-CFG0,
+       per-job cache invalidate, CSDDONE completion incl. ISR unmask).
+       2.12 COMPLETE at the queue level; payload encoding is UMD work.
+[TODO] 2.13 User-mode driver (UMD): nothing generates control lists — 3D
+       stops at the kernel boundary. Mesa-v3dv-class UMD or D3D9 UMD, plus
+       per-allocation GPU-VA reporting to user mode (needs 1.1 Patch or
+       allocation private-data design). THE biggest single item. [BIG]
+[TODO] 2.14 Cursor: >64x64 shapes, monochrome path, plane scaling.
+
+--------------------------------------------------------------------------------
+ 3. COMPOSITOR SUPPORT ON VC4
+--------------------------------------------------------------------------------
+Today: the in-kernel compositor composes windows on the CPU into the shadow/
+primary; rpi5vc4 shows the result via PresentDisplayOnly blits + shared-
+primary HVS flips. Functional, but the HVS contributes only scanout + cursor.
+
+[DONE] 3.1 Tear-free pacing: vblank-locked present flushes (1.4 + 2.4).
+[TODO] 3.2 HVS plane-backed composition: map top-level compositor surfaces
+       to HVS display-list planes (per-plane alpha/position/z-order/scaling)
+       for zero-copy composition of common cases (few windows, video,
+       cursor). Requires MPO DDIs (1.16) + compositor surface-to-plane
+       assignment logic in win32ss composition. [BIG]
+[TODO] 3.3 GPU-accelerated composition: compositor blends as V3D jobs —
+       gated on the UMD (2.13). [BIG]
+[TODO] 3.4 HVS writeback/scaled planes for magnifier/rotation effects.
+
+--------------------------------------------------------------------------------
+ 4. RECOMMENDED ORDER
+--------------------------------------------------------------------------------
+ 1. [DONE] Tranche 1 (1.1-1.5, 2.2-2.4, 3.1) + QEMU regression pass.
+ 2. RPi5 hardware validation pass (2.1) — flips, cursor, alias clean, V3D
+    ident/self-test. Fix what reality disagrees with.
+ 3. Real interrupts on the Pi (2.6) + firmware mailbox (2.7).
+ 4. HVS multi-plane composition (1.16 + 3.2) — biggest visible win, no UMD
+    needed.
+ 5. Mode-set + EDID + dual output (2.8, 2.9, 1.8, 1.9).
+ 6. Scheduler parity (1.6, 1.7) and VidMm completeness (1.11, 1.12).
+ 7. UMD (2.13) and GPU composition (3.3).
+ 8. Long tail: 1.10, 1.13-1.15, 2.10-2.12, 2.14, 3.4.
+================================================================================

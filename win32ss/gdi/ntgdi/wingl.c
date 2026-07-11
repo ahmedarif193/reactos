@@ -146,16 +146,39 @@ NtGdiSetPixelFormat(
     if (!pdc->ipfdDevMax)
         IntGetipfdDevMax(pdc);
 
+    /* The USER lock may not be acquired while a GDI exclusive lock is held
+     * (ASSERT_NOGDILOCKS in UserEnterExclusive) — drop the DC around the
+     * window work and re-lock it afterwards. */
+    DC_UnlockDc(pdc);
+
+    UserEnterExclusive();
+    hWnd = UserGethWnd(hdc, &pWndObj);
+    if (hWnd != NULL)
+    {
+        /* This window uses OpenGL — tell the compositor. Must happen BEFORE
+         * the native-format validation: with a custom ICD (Mesa) the format
+         * index belongs to the ICD, not the display driver, and a KMDOD
+         * display exposes no native GDI formats at all (ipfdDevMax == 0) —
+         * yet the ICD still creates a real GL context on this window. */
+        PWND pWnd = UserGetWindowObject(hWnd);
+        if (pWnd != NULL)
+            IntCompositionMarkOpenGL(pWnd);
+    }
+    UserLeave();
+
+    pdc = DC_LockDc(hdc);
+    if (!pdc)
+    {
+        EngSetLastError(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
+
     if ( ipfd < 1 ||
         ipfd > pdc->ipfdDevMax )
     {
         EngSetLastError(ERROR_INVALID_PARAMETER);
         goto Exit;
     }
-
-    UserEnterExclusive();
-    hWnd = UserGethWnd(hdc, &pWndObj);
-    UserLeave();
 
     if (!hWnd)
     {

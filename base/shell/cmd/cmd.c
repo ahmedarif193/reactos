@@ -1186,7 +1186,7 @@ GetEnhancedVar(
         {
             static const struct {
                 TCHAR Character;
-                DWORD Value;
+                WORD  Value;
             } *Attrib, Table[] = {
                 { _T('d'), FILE_ATTRIBUTE_DIRECTORY },
                 { _T('r'), FILE_ATTRIBUTE_READONLY },

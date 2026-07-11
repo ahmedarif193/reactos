@@ -595,6 +595,10 @@ LRESULT co_UserFreeWindow(PWND Window,
    Window->style &= ~WS_VISIBLE;
    Window->head.pti->cVisWindows--;
 
+   /* Release the compositor's backing surface for this window (no-op when
+    * composition is off / the window was never redirected). */
+   IntCompositionOnWindowDestroy(Window);
+
    /* remove the window already at this point from the thread window list so we
       don't get into trouble when destroying the thread windows while we're still
       in co_UserFreeWindow() */
@@ -724,6 +728,9 @@ LRESULT co_UserFreeWindow(PWND Window,
    }
 
    DceFreeWindowDCE(Window);    /* Always do this to catch orphaned DCs */
+
+   if (gspwndLockUpdate == Window)
+      gspwndLockUpdate = NULL;
 
    IntUnlinkWindow(Window);
 
@@ -1017,13 +1024,18 @@ VOID FASTCALL IntLinkHwnd(PWND Wnd, HWND hWndPrev)
     else if (hWndPrev == HWND_TOP)
     {
         /* Link it after the last topmost window */
-        PWND WndInsertBefore;
+        PWND WndInsertBefore, WndLastTopmost = NULL;
 
         WndInsertBefore = Wnd->spwndParent->spwndChild;
 
         if (!(Wnd->ExStyle & WS_EX_TOPMOST))  /* put it above the first non-topmost window */
         {
-            while (WndInsertBefore != NULL && WndInsertBefore->spwndNext != NULL)
+            /* Walk the WHOLE topmost band: stopping at the last sibling
+             * regardless of its style linked a normal window at the HEAD
+             * when everything above was topmost (e.g. only the taskbar) —
+             * normal windows then piled ABOVE the topmost band and fought
+             * the tray's HWND_TOPMOST reasserts forever. */
+            while (WndInsertBefore != NULL)
             {
                 if (!(WndInsertBefore->ExStyle & WS_EX_TOPMOST))
                     break;
@@ -1033,11 +1045,12 @@ VOID FASTCALL IntLinkHwnd(PWND Wnd, HWND hWndPrev)
                     Wnd->ExStyle |= WS_EX_TOPMOST;
                     break;
                 }
+                WndLastTopmost = WndInsertBefore;
                 WndInsertBefore = WndInsertBefore->spwndNext;
             }
         }
 
-        IntLinkWindow(Wnd, WndInsertBefore ? WndInsertBefore->spwndPrev : NULL);
+        IntLinkWindow(Wnd, WndInsertBefore ? WndInsertBefore->spwndPrev : WndLastTopmost);
     }
     else
     {
@@ -2588,6 +2601,10 @@ co_UserCreateWindowEx(CREATESTRUCTW* Cs,
 
    TRACE("co_UserCreateWindowEx(%wZ): Created window %p\n", ClassName, hWnd);
    ret = Window;
+
+   /* Give the compositor a backing (redirection) surface for this window when
+    * composition is enabled (no-op otherwise). */
+   IntCompositionOnWindowCreate(Window);
 
 cleanup:
    if (!ret)

@@ -1467,12 +1467,15 @@ HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows NT x86","Direc
 HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows NT x86\Print Processors",,0x00000010
 HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows NT x86\Print Processors\winprint","Driver",,"winprint.dll"
 
-[AddReg.NTamd64]
+; mkhive only processes the literal [AddReg] section, so every print
+; environment is registered unconditionally (genuine Windows also carries
+; multiple architecture environments side by side).
 HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows x64","Directory",,"x64"
 HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows x64\Print Processors",,0x00000010
 HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows x64\Print Processors\winprint","Driver",,"winprint.dll"
-
-[AddReg]
+HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows ARM64","Directory",,"ARM64"
+HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows ARM64\Print Processors",,0x00000010
+HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows ARM64\Print Processors\winprint","Driver",,"winprint.dll"
 
 HKLM,"SYSTEM\CurrentControlSet\Control\Print\Monitors",,0x00000010
 HKLM,"SYSTEM\CurrentControlSet\Control\Print\Monitors\Local Port","Driver",,"localmon.dll"
@@ -1613,6 +1616,10 @@ HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\DOS Devices","PRN",0x0000
 HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","ComSpec",0x00020002,"%SystemRoot%\system32\cmd.exe"
 HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","Path",0x00020002,"%SystemRoot%\bin;%SystemRoot%\System32;%SystemRoot%;%SystemRoot%\System32\Wbem"
 HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","PATHEXT",0x00000002,".COM;.EXE;.BAT;.CMD"
+; v3dv (Pi 5 V3D) is now the system hardware Vulkan ICD, so LIBGL_ALWAYS_SOFTWARE
+; is REMOVED (per the note that used to live here): with it set, zink demanded a
+; CPU-type Vulkan device and rejected the V3D GPU ("CPU device requested but none
+; pick zink, which now binds the hardware v3dv device.
 HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","TEMP",0x00020002,"%SystemRoot%\TEMP"
 HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","TMP",0x00020002,"%SystemRoot%\TEMP"
 HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","windir",0x00020002,"%SystemRoot%"
@@ -1673,6 +1680,42 @@ HKLM,"SYSTEM\CurrentControlSet\Services\swenum","ErrorControl",0x00010001,0x0000
 HKLM,"SYSTEM\CurrentControlSet\Services\swenum","ImagePath",0x00020000,"system32\drivers\swenum.sys"
 HKLM,"SYSTEM\CurrentControlSet\Services\swenum","Start",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\swenum","Type",0x00010001,0x00000001
+
+; VulkanProbe: run the SwiftShader-loading vulkan1 test as a Session-0 auto-start
+; service so the heap-heavy SwiftShader init runs at boot even with no display
+; (needed to exercise the ARM64 heap path on real Pi5 hardware, where win32k
+; has no boot framebuffer and the logon-autostart never runs). ErrorControl=0
+; so a failed/exiting probe never blocks boot.
+HKLM,"SYSTEM\CurrentControlSet\Services\VulkanProbe","ErrorControl",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\VulkanProbe","ImagePath",0x00020000,"%SystemRoot%\bin\vulkan1_apitest.exe swiftshader_icd"
+HKLM,"SYSTEM\CurrentControlSet\Services\VulkanProbe","ObjectName",0x00000000,"LocalSystem"
+; Re-enabled (0x2) with the async-fence vc4kmt shim: submits signal a real
+; monitored fence, vc4kmt_wait blocks on the CPU value page, and the kernel
+; sync-escape busy-wait path is gone.  If the v3dv 2nd-BO INVALID_HANDLE
+; reappears on silicon, g_vc4kmt_bo_stage in the shim log names the stage.
+HKLM,"SYSTEM\CurrentControlSet\Services\VulkanProbe","Start",0x00010001,0x00000004
+HKLM,"SYSTEM\CurrentControlSet\Services\VulkanProbe","Type",0x00010001,0x00000010
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","V3DV_MAX_BO_CACHE_SIZE",0x00020000,"0"
+; GALLIUM_DRIVER / LIBGL_ALWAYS_SOFTWARE intentionally NOT set: the "Mesa"
+; cascade ICD (hivesft.inf OpenGLDrivers\Mesa) runs stock Mesa AUTO order
+; (d3d12 -> zink -> llvmpipe -> softpipe), which binds any vendor's hardware
+; Vulkan device via zink and falls back to llvmpipe software GL 4.5 otherwise
+; -- the same behavior Mesa has on Windows 11. Both variables remain honored
+; as per-machine overrides.
+; wgl_swap_interval intentionally NOT set: a system-wide value blocks the app's
+; own wglSwapIntervalEXT (the ICD reads the override, not the app's request), so
+; a vsync-off GL app gets pinned to the refresh rate. Win11 leaves the interval
+; entirely app-controlled.
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","mesa_glthread",0x00020000,"false"
+
+; V3dProbe: run the rpi5vc4 V3D smoke (clear job + pixel readback) as a
+; Session-0 auto-start probe.  Skips harmlessly everywhere except real Pi5
+; silicon with V3dReady; verdicts reach serial as V3DSMOKE: proof lines.
+HKLM,"SYSTEM\CurrentControlSet\Services\V3dProbe","ErrorControl",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\V3dProbe","ImagePath",0x00020000,"%SystemRoot%\bin\d3dkmt_apitest.exe v3dsmoke"
+HKLM,"SYSTEM\CurrentControlSet\Services\V3dProbe","ObjectName",0x00000000,"LocalSystem"
+HKLM,"SYSTEM\CurrentControlSet\Services\V3dProbe","Start",0x00010001,0x00000002
+HKLM,"SYSTEM\CurrentControlSet\Services\V3dProbe","Type",0x00010001,0x00000010
 
 ; Base Filtering Engine (BFE) — stub, dev-nt6-1 branch
 HKLM,"SYSTEM\CurrentControlSet\Services\BFE","DisplayName",0x00000000,"Base Filtering Engine"

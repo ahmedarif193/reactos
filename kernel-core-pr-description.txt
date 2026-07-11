@@ -1,0 +1,18 @@
+Title:
+[NTOS] Fix filesystem exception filtering and cached write-back completion
+
+Summary:
+This PR contains three focused ntoskrnl fixes:
+
+- Fix FsRtlIsNtstatusExpected so filesystem exception filters handle normal filesystem status codes while hardware-fault-class exceptions continue to propagate.
+- Publish FileObject->FinalStatus before signaling synchronous file object events, avoiding stale completion status observations on weakly ordered CPUs.
+- Propagate MmFlushSegment write-back failures through the return status and IO status block instead of reporting a failed flush as success.
+
+Validation:
+- FsRtlIsNtstatusExpected behavior was proven with kmtests.
+- The ntoskrnl diffs pass git diff --check.
+
+Commits:
+- [NTOS:FSRTL] Fix FsRtlIsNtstatusExpected semantics
+- [NTOS:IO] Publish final status before signaling file events
+- [NTOS:MM] Propagate segment flush write failures

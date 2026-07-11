@@ -50,6 +50,11 @@ WmipOpenGuidObjectByName(
     _Out_ PHANDLE OutGuidObjectHandle,
     _Outptr_ PVOID *OutGuidObject);
 
+VOID
+NTAPI
+WmipCaptureSMBiosFromLoader(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock);
+
 NTSTATUS
 NTAPI
 WmipQueryRawSMBiosTables(

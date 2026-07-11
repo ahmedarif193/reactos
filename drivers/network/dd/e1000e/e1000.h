@@ -551,7 +551,7 @@ typedef struct _E1000_ADAPTER
     /* ========== Power Management ========== */
 
     E1000_POWER_STATE       CurrentPowerState;
-    NDIS_DEVICE_POWER_STATE NdisPowerState;
+    DEVICE_POWER_STATE      NdisPowerState;
     BOOLEAN                 WakeOnMagicPacket;
     BOOLEAN                 WakeOnPattern;
     BOOLEAN                 WakeOnLinkChange;

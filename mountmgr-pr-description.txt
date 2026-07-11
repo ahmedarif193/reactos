@@ -1,0 +1,13 @@
+Title:
+[MOUNTMGR] Allow same-thread QUERY_POINTS re-entry
+
+Summary:
+Track the thread that owns DeviceLock and allow same-thread
+IOCTL_MOUNTMGR_QUERY_POINTS re-entry while the lock is already held.
+
+This avoids a self-deadlock during synchronous volume arrival paths that query
+the volume GUID through mountmgr while DeviceLock is held.
+
+Validation:
+- Reviewed all DeviceLock acquire/release sites in mountmgr.
+- git diff --check is clean for the changed mountmgr files.

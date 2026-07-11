@@ -1,0 +1,1015 @@
+
+  1.67 RPi: BOOTSYS release VERSION:2226a853 DATE: 2025/12/08 TIME: 19:29:54
+  1.67 BOOTMODE: 0x06 partition 0 build-ts BUILD_TIMESTAMP=1765222194 serial 09a00d1d boardrev d04171 stc 1675547
+  1.68 AON_RESET: 00000003 PM_RSTS 00001000
+  1.68 POWER_OFF_ON_HALT: 0 WAIT_FOR_POWER_BUTTON 0 power-on-reset 1
+  1.69 RP1_BOOT chip ID: 0x20001927
+  1.70 PCIEx1: PWR 0 DET_WAKE 0
+  1.70 part 00000000 reset_info 00000000
+  1.70 PMIC reset-event 00000000 rtc 00000001 alarm 00000000 enabled 0
+  1.71 uSD voltage 3.3V
+  1.71 SDRAM_CONFIG: 14
+  1.71 Initialising SDRAM rank 2 total-size: 64 Gbit 4267 (0x14 0x14)
+  1.72 DDR 4267 1 0 64 152 BL:1
+  2.44 RP1 FW: load 0
+  2.46 RP1_BOOT chip ID: 0x20001927
+  3.69 RP1 FW: load 1
+  4.12 OTP boardrev d04171 bootrom a a
+  4.12 Customer key hash 0000000000000000000000000000000000000000000000000000000000000000
+  4.13 VC-JTAG unlocked
+  4.15 RP1_BOOT chip ID: 0x20001927
+
+  4.78 PCI2 init
+  4.78 PCI2 reset
+  4.83 PCIe scan 00001de4:00000001
+  4.83 RP1_CHIP_INFO 20001927
+
+  4.83 RPi: BOOTLOADER release VERSION:2226a853 DATE: 2025/12/08 TIME: 19:29:54
+  4.84 BOOTMODE: 0x06 partition 0 build-ts BUILD_TIMESTAMP=1765222194 serial 09a00d1d boardrev d04171 stc 4844356
+  4.85 PCIEx1: PWR 0 DET_WAKE 0
+  4.57 M.2 PCIe HAT not detected.
+  4.88 usb_pd_init status 1
+  4.88 XHCI-STOP
+  4.88 xHC0 ver: 272 HCS: 03000440 140000f1 07ff000a HCC: 0240fe6d
+  4.89 USBSTS 11
+  4.89 xHC0 ver: 272 HCS: 03000440 140000f1 07ff000a HCC: 0240fe6d
+  4.89 xHC0 ports 3 slots 64 intrs 4
+  4.90 XHCI-STOP
+  4.90 xHC1 ver: 272 HCS: 03000440 140000f1 07ff000a HCC: 0240fe6d
+  4.91 USBSTS 1
+  4.91 xHC1 ver: 272 HCS: 03000440 140000f1 07ff000a HCC: 0240fe6d
+  4.92 xHC1 ports 3 slots 64 intrs 4
+  4.96 SD_OC: 0
+  4.69 Boot mode: USB-MSD (04) order f1
+  4.71 USB2[2] 00020ae1 connected
+  5.24 USB2[2] 00200a03 connected enabled
+  5.25 USB2 root HUB port 2 init
+  5.04 DEV [01:00] 2.00 000000:02 class 0 VID 413c PID 301a
+  5.73 USB3[3] 00021203 connected enabled
+  5.74 USB3 root HUB port 3 init
+  5.07 DEV [02:00] 3.32 000000:03 class 0 VID 0781 PID 5581
+  5.08 MSD device [02:00] 3.32 000000:03 conf 0 iface 0 ep 81#1024 02#1024
+  5.89 MSD [02:00] 3.32 000000:03 register MSD
+  5.24 USB3[3] 00021203 connected enabled
+  5.25 USB3 root HUB port 3 init
+  5.32 DEV [01:00] 3.32 000000:03 class 0 VID 0781 PID 5591
+  5.33 MSD device [01:00] 3.32 000000:03 conf 0 iface 0 ep 81#1024 02#1024
+  5.40 MSD [01:00] 3.32 000000:03 register MSD
+  5.48 XHCI-STOP
+  5.48 xHC0 ver: 272 HCS: 03000440 140000f1 07ff000a HCC: 0240fe6d
+  5.49 USBSTS 18
+  5.49 XHCI-STOP
+  5.49 xHC1 ver: 272 HCS: 03000440 140000f1 07ff000a HCC: 0240fe6d
+  5.50 USBSTS 18
+  5.51 XHCI-STOP
+  5.51 xHC0 ver: 272 HCS: 03000440 140000f1 07ff000a HCC: 0240fe6d
+  5.51 USBSTS 19
+  5.51 xHC0 ver: 272 HCS: 03000440 140000f1 07ff000a HCC: 0240fe6d
+  5.52 xHC0 ports 3 slots 64 intrs 4
+  5.53 XHCI-STOP
+  5.53 xHC1 ver: 272 HCS: 03000440 140000f1 07ff000a HCC: 0240fe6d
+  5.53 USBSTS 19
+  5.54 xHC1 ver: 272 HCS: 03000440 140000f1 07ff000a HCC: 0240fe6d
+  5.54 xHC1 ports 3 slots 64 intrs 4
+  5.54 USB2[2] 00020ae1 connected
+  5.04 USB2[2] 00200a03 connected enabled
+  5.05 USB2 root HUB port 2 init
+  5.62 DEV [01:00] 2.00 000000:02 class 0 VID 413c PID 301a
+  5.32 USB3[3] 002a1203 connected enabled
+  5.33 USB3 root HUB port 3 init
+  5.63 DEV [02:00] 3.32 000000:03 class 0 VID 0781 PID 5581
+  5.64 MSD device [02:00] 3.32 000000:03 conf 0 iface 0 ep 81#1024 02#1024
+  5.48 MSD [02:00] 3.32 000000:03 register MSD
+  5.52 MSD [02:00] 3.32 000000:03 LUN 0
+  5.56 USB3[3] 002a1203 connected enabled
+  5.59 USB3 root HUB port 3 init
+  5.63 MSD READ_CAPACITY [02:00] 3.32 000000:03 lun 0 block-count 121024512 block-size 512
+  5.67 DEV [01:00] 3.32 000000:03 class 0 VID 0781 PID 5591
+  5.67 MSD device [01:00] 3.32 000000:03 conf 0 iface 0 ep 81#1024 02#1024
+  5.68 MBR: 0x00000800, 1570816 type: 0xef
+  5.68 MBR: 0x00000000,       0 type: 0x00
+  5.69 MBR: 0x00000000,       0 type: 0x00
+  5.69 MBR: 0x00000000,       0 type: 0x00
+  5.97 MSD [01:00] 3.32 000000:03 register MSD
+  5.02 Trying partition: 0
+  5.04 type: 32 lba: 2048 'mkfs.fat' ' NO NAME    ' clusters 195964 (8)
+  5.71 rsc 32 fat-sectors 1536 root dir cluster 2 sectors 0 entries 0
+  5.71 FAT32 clusters 195964
+  5.72 [MSD [02:00] 3.32 000000:03] autoboot.txt not found
+  5.72 Select partition rsts 0 C(boot_partition) 0 EEPROM config 0 result 1
+  5.32 Trying partition: 1
+  5.35 type: 32 lba: 2048 'mkfs.fat' ' NO NAME    ' clusters 195959 (8)
+  5.74 rsc 32 fat-sectors 1536 root dir cluster 2 sectors 0 entries 0
+  5.74 FAT32 clusters 195959
+  5.53 Read config.txt bytes      976 hnd 0xd04
+  5.75 [MSD [02:00] 3.32 000000:03] pieeprom.upd not found
+  5.60 usb_max_current_enable forced to 1
+  5.77 MESS:00:00:05.775661:0: *** Restart logging
+  5.77 Read /config.txt bytes      976 hnd 0xd04
+  6.83 PCI1 reset
+  6.84 PCI2 reset
+  6.85 set_reboot_order 0
+  6.85 set_reboot_arg1 0
+  6.85 USB-OTG disconnect
+  6.90 MESS:00:00:06.901551:0: Starting OS 6901 ms
+  6.90 MESS:00:00:06.907075:0: 00000040: -> 00000480
+  6.90 MESS:00:00:06.908925:0: 00000030: -> 00100080
+  6.91 MESS:00:00:06.913638:0: 00000034: -> 00100080
+  6.91 MESS:00:00:06.918351:0: 00000038: -> 00100080
+  6.92 MESS:00:00:06.923064:0: 0000003c: -> 00100080
+
+NOTICE:  BL31: v2.13.0(release):v2.13.0-304-g000fe221b
+NOTICE:  BL31: Built : 19:45:01, Jul 17 2025
+UEFI firmware (version EDK2-DEV built at 20:07:13 on Jun 21 2026)
+[2J[004D[=3h[2J[009DESC (setup), F1 (shell), ENTER (boot)
+[*] Boot menu prompt detected; sending enter
+......[EUART] init: override=0x0000000000000000 override-interface=unknown
+[EUART] detect: begin
+[EUART] SPCR: search
+[EUART] SPCR: not found
+[EUART] DBG2: search
+[EUART] DBG2: rev=0x00 len=0x00000061 oem=RPIFDN table=RPI5 oemrev=0x00000200 creator=EDK2 creatorrev=0x00000300
+[EUART] DBG2: count=1 offset=0x0000002C length=0x00000061
+[EUART] DBG2: entry 0 type=0x8000 subtype=0x0003 regs=1 baroff=0x0016 name=\_SB.SOCB.URT0 oemdata-len=0x0000
+[EUART] DBG2: GAS space=0x00 addr=0x000000107D001000
+[EUART] DBG2: interface=pl011
+[EUART] detect: base=0x000000107D001000 interface=pl011 ready=0
+[EUART] init: done base=0x000000107D001000 interface=pl011 ready=1
+[EUART] init: already initialized base=0x000000107D001000 interface=pl011 ready=1
+(\boot\freeldr\freeldr\arch\uefi\uefimem.c:273) trace: UefiMemGetMemoryMap: Gather memory map
+(\boot\freeldr\freeldr\arch\uefi\uefimem.c:285) trace: Value of MapKey: 5700
+(\boot\freeldr\freeldr\arch\uefi\uefimem.c:286) trace: Value of MapSize: 4560
+(\boot\freeldr\freeldr\arch\uefi\uefimem.c:287) trace: Value of DescriptorSize: 48
+(\boot\freeldr\freeldr\arch\uefi\uefimem.c:288) trace: Value of DescriptorVersion: 1
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1058) trace: Found boot handle at index 1
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1071) trace: Boot handle: LogicalPartition=TRUE, RemovableMedia=TRUE, BlockSize=512
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1129) trace: Found root block device at index 0: BlockSize=512, LastBlock=121024511
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1151) trace: Calling GetHarddiskInformation for drive 128 (BlockDeviceIndex=0)
+(\boot\freeldr\freeldr\disk\disk.c:102) trace: DiskInitialize(0x80, 'multi(0)disk(0)rdisk(0)', Type: 25)
+(\boot\freeldr\freeldr\disk\disk.c:130) trace: Signature: 0
+(\boot\freeldr\freeldr\disk\disk.c:139) trace: Checksum: 4d3b9ec2
+(\boot\freeldr\freeldr\disk\disk.c:142) trace: IsPartitionValid: TRUE
+(\boot\freeldr\freeldr\lib\fs\fs.c:673) trace: FsRegisterDevice(multi(0)disk(0)rdisk(0)partition(0))
+(\boot\freeldr\freeldr\disk\partition.c:82) trace: Drive 0x80 partition type MBR
+(\boot\freeldr\freeldr\lib\fs\fs.c:673) trace: FsRegisterDevice(multi(0)disk(0)rdisk(0)partition(1))
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:976) trace: Identifier: 4d3b9ec2-00000000-A
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1123) trace: Skipping logical partition handle 1
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1129) trace: Found root block device at index 2: BlockSize=512, LastBlock=240353279
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1151) trace: Calling GetHarddiskInformation for drive 129 (BlockDeviceIndex=1)
+(\boot\freeldr\freeldr\disk\disk.c:102) trace: DiskInitialize(0x81, 'multi(0)disk(0)rdisk(1)', Type: 25)
+(\boot\freeldr\freeldr\disk\disk.c:130) trace: Signature: 0
+(\boot\freeldr\freeldr\disk\disk.c:139) trace: Checksum: 55bbc18b
+(\boot\freeldr\freeldr\disk\disk.c:142) trace: IsPartitionValid: TRUE
+(\boot\freeldr\freeldr\disk\disk.c:163) trace: Disk 0x81 is GPT, DiskGuid: {9df3f58f-f8ad-4f63-9de5-0e0a91c4e2a0}
+(\boot\freeldr\freeldr\lib\fs\fs.c:673) trace: FsRegisterDevice(multi(0)disk(0)rdisk(1)partition(0))
+(\boot\freeldr\freeldr\disk\partition.c:82) trace: Drive 0x81 partition type GPT
+(\boot\freeldr\freeldr\lib\fs\fs.c:673) trace: FsRegisterDevice(multi(0)disk(0)rdisk(1)partition(1))
+(\boot\freeldr\freeldr\lib\fs\fs.c:673) trace: FsRegisterDevice(multi(0)disk(0)rdisk(1)partition(2))
+(\boot\freeldr\freeldr\lib\fs\fs.c:673) trace: FsRegisterDevice(multi(0)disk(0)rdisk(1)partition(3))
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:976) trace: Identifier: 55bbc18b-00000000-A
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1123) trace: Skipping logical partition handle 3
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1123) trace: Skipping logical partition handle 4
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1123) trace: Skipping logical partition handle 5
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1173) trace: Boot handle is a logical partition, searching for parent root device
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1176) trace: Boot partition: BlockSize=512, RemovableMedia=TRUE
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1212) trace: Found boot parent device by device path at ARC drive index 0
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1266) trace: Found 2 root block devices
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1279) trace: UefiSetBootpath: Setting up boot path
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1362) trace: Boot handle is logical partition, using partition 1
+(\boot\freeldr\freeldr\arch\uefi\uefidisk.c:1377) trace: Boot path set to hard disk: multi(0)disk(0)rdisk(0)partition(1)
+(\boot\freeldr\freeldr\arch\uefi\uefildr.c:88) trace: ExecuteLoaderCleanly Entry
+(\boot\freeldr\freeldr\lib\fs\iso.c:595) trace: Enter IsoMount(0)
+(\boot\freeldr\freeldr\lib\fs\iso.c:609) warn: Unrecognized CD-ROM format
+(\boot\freeldr\freeldr\lib\fs\fat.c:1592) trace: Enter FatMount(0)
+(\boot\freeldr\freeldr\lib\fs\fat.c:168) trace: FatOpenVolume() DeviceId = 0
+(\boot\freeldr\freeldr\lib\fs\fat.c:181) trace: Dumping boot sector:
+(\boot\freeldr\freeldr\lib\fs\fat.c:199) trace: sizeof(FAT32_BOOTSECTOR) = 0x200.
+(\boot\freeldr\freeldr\lib\fs\fat.c:201) trace: JumpBoot: 0xeb 0xfe 0x90
+(\boot\freeldr\freeldr\lib\fs\fat.c:202) trace: OemName: mkfs.fat
+(\boot\freeldr\freeldr\lib\fs\fat.c:203) trace: BytesPerSector: 512
+(\boot\freeldr\freeldr\lib\fs\fat.c:204) trace: SectorsPerCluster: 8
+(\boot\freeldr\freeldr\lib\fs\fat.c:205) trace: ReservedSectors: 32
+(\boot\freeldr\freeldr\lib\fs\fat.c:206) trace: NumberOfFats: 2
+(\boot\freeldr\freeldr\lib\fs\fat.c:207) trace: RootDirEntries: 0
+(\boot\freeldr\freeldr\lib\fs\fat.c:208) trace: TotalSectors: 0
+(\boot\freeldr\freeldr\lib\fs\fat.c:209) trace: MediaDescriptor: 0xf8
+(\boot\freeldr\freeldr\lib\fs\fat.c:210) trace: SectorsPerFat: 0
+(\boot\freeldr\freeldr\lib\fs\fat.c:211) trace: SectorsPerTrack: 63
+(\boot\freeldr\freeldr\lib\fs\fat.c:212) trace: NumberOfHeads: 32
+(\boot\freeldr\freeldr\lib\fs\fat.c:213) trace: HiddenSectors: 2048
+(\boot\freeldr\freeldr\lib\fs\fat.c:214) trace: TotalSectorsBig: 1570779
+(\boot\freeldr\freeldr\lib\fs\fat.c:215) trace: SectorsPerFatBig: 1536
+(\boot\freeldr\freeldr\lib\fs\fat.c:216) trace: ExtendedFlags: 0x0
+(\boot\freeldr\freeldr\lib\fs\fat.c:217) trace: FileSystemVersion: 0x0
+(\boot\freeldr\freeldr\lib\fs\fat.c:218) trace: RootDirStartCluster: 2
+(\boot\freeldr\freeldr\lib\fs\fat.c:219) trace: FsInfo: 1
+(\boot\freeldr\freeldr\lib\fs\fat.c:220) trace: BackupBootSector: 6
+(\boot\freeldr\freeldr\lib\fs\fat.c:221) trace: Reserved: 0x2533b34
+(\boot\freeldr\freeldr\lib\fs\fat.c:222) trace: DriveNumber: 0xff
+(\boot\freeldr\freeldr\lib\fs\fat.c:223) trace: Reserved1: 0x0
+(\boot\freeldr\freeldr\lib\fs\fat.c:224) trace: BootSignature: 0x29
+(\boot\freeldr\freeldr\lib\fs\fat.c:225) trace: VolumeSerialNumber: 0x170b6801
+(\boot\freeldr\freeldr\lib\fs\fat.c:226) trace: VolumeLabel: NO NAME    
+(\boot\freeldr\freeldr\lib\fs\fat.c:227) trace: FileSystemType: FAT32   
+(\boot\freeldr\freeldr\lib\fs\fat.c:228) trace: BootSectorMagic: 0xaa55
+(\boot\freeldr\freeldr\lib\fs\fat.c:361) trace: FAT cache is 512 sectors, 262144 bytes
+(\boot\freeldr\freeldr\lib\fs\fat.c:1665) trace: FatMount(0) success
+(\boot\freeldr\freeldr\lib\fs\fat.c:1426) trace: FatGetFileInformation(1) -> FileSize = 1242, FilePointer = 0x0
+(\boot\freeldr\freeldr\bootmgr.c:282) trace: Argv[0]: '(null)'
+(\boot\freeldr\freeldr\bootmgr.c:282) trace: Argv[1]: 'SystemPartition=multi(0)disk(0)rdisk(0)partition(1)'
+(\boot\freeldr\freeldr\bootmgr.c:282) trace: Argv[2]: 'LoadIdentifier=ReactOS (Debug, SMP)'
+(\boot\freeldr\freeldr\bootmgr.c:282) trace: Argv[3]: 'BootType=Windows2003'
+(\boot\freeldr\freeldr\bootmgr.c:282) trace: Argv[4]: 'SystemPath=\ReactOS'
+(\boot\freeldr\freeldr\bootmgr.c:282) trace: Argv[5]: 'Options=/HAL=hal.dll /KERNEL=ntkrnlmp.exe /DEBUG /DEBUGPORT=COM1 /BAUDRATE=115200 /SOS /FASTDETECT'
+(\boot\freeldr\freeldr\lib\fs\fat.c:965) trace: FAT cache miss: read sector 0x239 from disk
+(\boot\freeldr\freeldr\lib\fs\fat.c:965) trace: FAT cache miss: read sector 0x326 from disk
+(\boot\freeldr\freeldr\lib\fs\fat.c:965) trace: FAT cache miss: read sector 0x36f from disk
+(\boot\freeldr\freeldr\lib\fs\fat.c:965) trace: FAT cache miss: read sector 0x414 from disk
+(\boot\freeldr\freeldr\lib\fs\fat.c:965) trace: FAT cache miss: read sector 0x129 from disk
+(\boot\freeldr\freeldr\lib\fs\fat.c:1426) trace: FatGetFileInformation(1) -> FileSize = 233472, FilePointer = 0x0
+(\boot\freeldr\freeldr\lib\fs\fat.c:1426) trace: FatGetFileInformation(1) -> FileSize = 66082, FilePointer = 0x0
+(\boot\freeldr\freeldr\lib\fs\fat.c:1426) trace: FatGetFileInformation(2) -> FileSize = 66594, FilePointer = 0x0
+(\boot\freeldr\freeldr\lib\fs\fat.c:1426) trace: FatGetFileInformation(3) -> FileSize = 4870, FilePointer = 0x0
+(\boot\freeldr\freeldr\lib\fs\fat.c:965) trace: FAT cache miss: read sector 0x240 from disk
+(\boot\freeldr\freeldr\lib\fs\fat.c:965) trace: FAT cache miss: read sector 0x349 from disk
+(\boot\freeldr\freeldr\lib\fs\fat.c:965) trace: FAT cache miss: read sector 0x34d from disk
+(\boot\freeldr\freeldr\lib\fs\fat.c:965) trace: FAT cache miss: read sector 0x223 from disk
+(\boot\freeldr\freeldr\arch\uefi\uefimem.c:273) trace: UefiMemGetMemoryMap: Gather memory map
+(\boot\freeldr\freeldr\arch\uefi\uefimem.c:285) trace: Value of MapKey: 17340
+(\boot\freeldr\freeldr\arch\uefi\uefimem.c:286) trace: Value of MapSize: 4752
+(\boot\freeldr\freeldr\arch\uefi\uefimem.c:287) trace: Value of DescriptorSize: 48
+(\boot\freeldr\freeldr\arch\uefi\uefimem.c:288) trace: Value of DescriptorVersion: 1
+(\boot\freeldr\freeldr\arch\uefi\uefimem.c:420) trace: Attempting to exit bootsevices
+(\boot\freeldr\freeldr\arch\uefi\uefimem.c:486) trace: Exited bootservices
+(\boot\freeldr\freeldr\arch\arm64\mmu_v2.c:1124) trace: ARM64: Forcing va_bits from 36 to 47 for NT ARM64 page tables
+[   13.849613] (\ntoskrnl\kd64\kdinit.c:94) -----------------------------------------------------
+[   13.855339] (\ntoskrnl\kd64\kdinit.c:95) ReactOS 0.4.17-arm64-dev (Build 20260705-nt10.0-003-26-gfe90dcf) (Commit fe90dcff5ed47ffe266a87289933a34977d8b52f)
+[   13.869220] (\ntoskrnl\kd64\kdinit.c:96) 1 System Processor [8166 MB Memory]
+[   13.876248] (\ntoskrnl\kd64\kdinit.c:100) Command Line: HAL=HAL.DLL KERNEL=NTKRNLMP.EXE DEBUG DEBUGPORT=COM1 BAUDRATE=115200 SOS FASTDETECT
+[   13.888741] (\ntoskrnl\kd64\kdinit.c:103) ARC Paths: multi(0)disk(0)rdisk(0)partition(1) \ multi(0)disk(0)rdisk(0)partition(1) \ReactOS\
+[   13.901024] HAL: About to lookup FADT (signature=50434146)
+[   13.906442] HAL: HalAcpiGetTable(FADT) returned FFFFFC000040B010
+[   13.912434] (\hal\halarm64\acpi\rsdt.c:331) ACPI: XSDT 000000003dad4f18 00005c (v01 RPIFDN RPI5     00000200      01000013)
+[   13.923537] (\hal\halarm64\acpi\rsdt.c:423) ACPI: FACP 000000003dad4b98 000114 (v06 RPIFDN RPI5     00000200 EDK2 00000300)
+[   13.934642] (\hal\halarm64\acpi\rsdt.c:461) ACPI: DSDT 000000003ce90018 0015ea (v02 RPIFDN RPI5     00000002 INTL 20260408)
+[   13.945746] (\hal\halarm64\acpi\rsdt.c:581) ACPI: BGRT 000000003dad4b18 000038 (v01 INTEL  EDK2     00000002      01000013)
+[   13.956851] (\hal\halarm64\acpi\rsdt.c:581) ACPI: DBG2 000000003dad4e18 000061 (v00 RPIFDN RPI5     00000200 EDK2 00000300)
+[   13.967957] (\hal\halarm64\acpi\rsdt.c:581) ACPI: GTDT 000000003dad4d18 000068 (v03 RPIFDN RPI5     00000200 EDK2 00000300)
+[   13.979062] (\hal\halarm64\acpi\rsdt.c:581) ACPI: APIC 000000003dad4098 000184 (v05 RPIFDN RPI5     00000200 EDK2 00000300)
+[   13.990168] (\hal\halarm64\acpi\rsdt.c:581) ACPI: [   13.994766] (\hal\halarm64\acpi\rsdt.c:581) ACPI: PPTT 000000003dad4318 000130 (v02 RPIFDN RPI5     00000200 EDK2 00000300)
+[   14.005874] (\hal\halarm64\acpi\halacpi.c:2611) ACPI Timer resource unavailable (EXT: 0)
+[   14.013944] (\hal\halarm64\acpi\halacpi.c:3065) ACPI v6.3-6.3_A detected. Tables: [XSDT] [FACP] [BGRT] [DBG2] [GTDT] [APIC] [ [PPTT]
+[   14.025829] (\hal\halarm64\gic\gic_init.c:926) [arm64][GIC] GIC probe: PFR0.GIC=0 SRE=0 PIDR2=0x0000002b ARCHREV=2
+[   14.036152] (\hal\halarm64\gic\gic_init.c:928) [arm64][GIC] Using GICv2 legacy (GICC) CPU interface
+[   14.045177] (\hal\halarm64\gic\gic_init.c:538) [arm64][GIC] Initializing distributor (version=2, sysregs=0)
+[   14.054894] (\hal\halarm64\gic\gic_init.c:551) [arm64][GIC] GICD typer=0x0000fc69 lines=320 nregs=10
+[   14.064009] (\hal\halarm64\gic\gicv2.c:309) [arm64][GICv2] SPI targets set to CPU0
+[   14.071552] (\hal\halarm64\gic\gicv2.c:119) [arm64][GICv2] Saved PPI enables: 0x0800ffff
+[   14.079621] (\hal\halarm64\gic\gicv2.c:155) [arm64][GICv2] Restored PPI enables: 0x0800ffff
+[   14.087950] (\hal\halarm64\gic\gicv2.c:159) [arm64][GICv2] SGI/PPI bank configured with preserved enables
+[   14.097494] (\hal\halarm64\gic\gic_init.c:633) [arm64][GIC] Distributor initialized and enabled
+[   14.106171] (\hal\halarm64\gic\gicv2.c:89) [arm64][GICv2] CPU interface initialized (PMR=0xFF, CTLR=0x3)
+[   14.115628] (\hal\halarm64\gic\gic_init.c:822) [arm64][GIC] Version detection complete:
+[   14.123610] (\hal\halarm64\gic\gic_init.c:823) [arm64][GIC]   Architecture: GICv2
+[   14.131072] (\hal\halarm64\gic\gic_init.c:825) [arm64][GIC]   Interrupt lines: 320 (max SPI INTID: 319)
+[   14.354071] (\ntoskrnl\mm\ARM3\largepag.c:37) MiInitializeLargePageSupport: PAE/x64 Not Implemented
+[   14.361660] (\ntoskrnl\mm\ARM3\mminit.c:2235) Paged pool: 398 MB at FFFFAC4B8DC00000
+[   14.370701] (\sdk\include\reactos\drivers\bootvid\framebuf.c:512) Display: loader UEFI GOP framebuffer 0x3F400000 size=8294400 1920x1080 stride=1920 bpp=32
+[   14.381838] (\sdk\include\reactos\drivers\bootvid\framebuf.c:674) 
+[   14.387996] Boot Display found on Interface 0, Bus 0
+[   14.392943]     VideoRamAddress   : 0x3F400000
+[   14.397366]     VideoRamSize      : 8294400
+[   14.401531]     Version           : 1.3
+[   14.405349]     VideoClock        : 0
+[   14.408992] Framebuffer format:
+[   14.412116]     BaseAddress       : 0x3F400000
+[   14.416542]     ScreenWidth       : 1920
+[   14.420445]     ScreenHeight      : 1080
+[   14.424349]     PixelsPerScanLine : 1920
+[   14.428255]     BitsPerPixel      : 32
+[   14.431985]     ARGB masks:       : ff000000/00ff0000/0000ff00/000000ff
+[   14.440702] (\drivers\base\bootvid\framebuf\bootvid.c:297) Scaling X = 2, Y = 2
+[   14.445868] (\drivers\base\bootvid\framebuf\bootvid.c:304) Borders X = 320, Y = 60
+[   14.473513] (\ntoskrnl\ke\arm64\stubs.c:653) [arm64] KeStartAllProcessors: Max=64 (numproc=0 bootproc=0)
+[   14.480143] (\ntoskrnl\ke\arm64\stubs.c:738) [arm64] KeStartAllProcessors: Attempting to start CPU 1
+[   14.489228] (\hal\halarm64\smp.c:315) [arm64][HAL] Identity-map page table: L0[0]→L1[0]→L2[2] block=0x400000 (trampoline PA=0x420000)
+[   14.501542] (\hal\halarm64\smp.c:415) [arm64][HAL] AP trampoline initialized at PA=0x420000 VA=FFFFFC0000420000 size=448 idmap_ttbr0=0x500000
+[   14.514205] (\hal\halarm64\smp.c:592) [arm64][HAL] Discovered 4 CPUs, parking protocol not available
+[   14.523360] (\ntoskrnl\ke\arm64\stubs.c:771) [arm64] KeStartAllProcessors: CPU 1 started successfully
+[   14.532539] (\ntoskrnl\ke\arm64\stubs.c:738) [arm64] KeStartAllProcessors: Attempting to start CPU 2
+[   14.541656] (\ntoskrnl\ke\arm64\stubs.c:771) [arm64] KeStartAllProcessors: CPU 2 started successfully
+[   14.550846] (\ntoskrnl\ke\arm64\stubs.c:738) [arm64] KeStartAllProcessors: Attempting to start CPU 3
+[   14.559943] (\ntoskrnl\ke\arm64\stubs.c:771) [arm64] KeStartAllProcessors: CPU 3 started successfully
+[   14.569138] (\ntoskrnl\ke\arm64\stubs.c:738) [arm64] KeStartAllProcessors: Attempting to start CPU 4
+[   14.578233] (\hal\halarm64\halarm64.c:5909) [arm64][HAL] HalStartNextProcessor: no more processors (started=4, available=4)
+[   14.589339] (\ntoskrnl\ke\arm64\stubs.c:744) [arm64] KeStartAllProcessors: HalStartNextProcessor failed for CPU 4
+[   14.599594] (\ntoskrnl\ke\arm64\stubs.c:789) [arm64] KeStartAllProcessors: Successfully started 3 APs
+[   14.608776] (\ntoskrnl\ke\arm64\stubs.c:824) [arm64] KeStartAllProcessors: Updating process affinities to 0xf
+[   14.618666] (\ntoskrnl\ke\arm64\stubs.c:859) [arm64] KeStartAllProcessors: System process affinity 0x1 -> 0xf
+[   14.628896] (\ntoskrnl\mm\mminit.c:224)           0xFFFFF80000000000 - 0xFFFFF80200000000	Boot Loaded Image
+[   14.638273] (\ntoskrnl\mm\mminit.c:235)           0xFFFF86FACC000000 - 0xFFFF86FAD5001000	PFN Database
+[   14.647557] (\ntoskrnl\mm\mminit.c:239)           0xFFFFFB38AD200000 - 0xFFFFFB38AE220000	ARM3 Non Paged Pool
+[   14.657449] (\ntoskrnl\mm\mminit.c:243)           0xFFFFF97FBA000000 - 0xFFFFF97FDA000000	System View Space
+[   14.667168] (\ntoskrnl\mm\mminit.c:247)           0xFFFFF97FDA000000 - 0xFFFFF98000000000	Session Space
+[   14.676536] (\ntoskrnl\mm\mminit.c:250)           0xFFFFE48000000000 - 0xFFFFE4FFFFFFFFFF	Page Tables
+[   14.685735] (\ntoskrnl\mm\mminit.c:253)           0xFFFFE4F240000000 - 0xFFFFE4F27FFFFFFF	Page Directories
+[   14.695364] (\ntoskrnl\mm\mminit.c:256)           0xFFFFF70000000000 - 0xFFFFF77FFFFFFFFF	Hyperspace
+[   14.704478] (\ntoskrnl\mm\mminit.c:259)           0xFFFFE78000000000 - 0xFFFFE97FFFFFFFFF	System Cache
+[   14.713758] (\ntoskrnl\mm\mminit.c:263)           0xFFFFAC4B8DC00000 - 0xFFFFAC4BA6C00000	ARM3 Paged Pool
+[   14.723304] (\ntoskrnl\mm\mminit.c:269)           0xFFFFCC1A87E00000 - 0xFFFFCC1A94151000	System PTE Space
+[   14.732933] (\ntoskrnl\mm\mminit.c:273)           0xFFFFFB38AE220000 - 0xFFFFFB38B9970000	Non Paged Pool Expansion PTE Space
+[   14.748073] (\hal\halarm64\acpi\halacpi.c:3482) HAL: ARM64 PCI stubs initialized (ECAM-only mode)
+[   14.754058] 
+====== PCI BUS HARDWARE DETECTION (ACPI HAL) =======
+
+[   14.760391] HAL: ARM64 PCI ECAM path not exercised.
+[   14.765250] 
+====== END PCI BUS DETECTION =======
+
+[   14.770195] ACPI ARM64-based System initialized
+[   14.774926] WARNING:  ArbBuildAssignmentOrdering at \sdk\lib\drivers\arbiter\arbiter.c:275 is UNIMPLEMENTED!
+[   14.784520] WARNING:  ArbBuildAssignmentOrdering at \sdk\lib\drivers\arbiter\arbiter.c:275 is UNIMPLEMENTED!
+[   14.794321] WARNING:  ArbBuildAssignmentOrdering at \sdk\lib\drivers\arbiter\arbiter.c:275 is UNIMPLEMENTED!
+[   14.804127] WARNING:  ArbBuildAssignmentOrdering at \sdk\lib\drivers\arbiter\arbiter.c:275 is UNIMPLEMENTED!
+[   14.813931] WARNING:  ArbBuildAssignmentOrdering at \sdk\lib\drivers\arbiter\arbiter.c:275 is UNIMPLEMENTED!
+[   14.824274] (\ntoskrnl\io\pnpmgr\pnproot.c:518) Failed to read the LogConf key for Root\RPI5VC4\0000
+[   14.832923] (\ntoskrnl\io\pnpmgr\pnproot.c:518) Failed to read the LogConf key for Root\SOFTGPU\0000
+[   14.843772] (\ntoskrnl\io\pnpmgr\pnpmap.c:656) ZwQueryValueKey(\Registry\Machine\SYSTEM\CURRENTCONTROLSET\Control\PnpDisableFirmwareMapper) failed with status 0xc0000034
+[   14.863786] (\hal\halarm64\acpi\halacpi.c:4622) Resource count: 0
+[   14.866994] (\hal\halarm64\acpi\halacpi.c:4627) Resource list size: 40
+[   14.873513] (\hal\halarm64\acpi\halacpi.c:4622) Resource count: 0
+[   14.879574] (\hal\halarm64\acpi\halacpi.c:4627) Resource list size: 40
+[   14.886616] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{4D36E97D-E325-11CE-BFC1-08002BE10318}\0000' for critical device (0x00000000)
+[   14.905237] (\drivers\bus\sd\sdbus.c:276) SD Bus Driver: DriverEntry
+[   14.908849] (\drivers\storage\port\sdport\sdport.c:69) SdPortInitialize(FFFFFB38AE0A3C70 \REGISTRY\MACHINE\SYSTEM\CONTROLSET001\SERVICES\SDHC FFFFCC1A93C98A78)
+[   14.923079] (\drivers\storage\port\sdport\sdport.c:173) SDPORT DriverEntry: DriverObject=FFFFFB38AE0A3A70 RegistryPath=\REGISTRY\MACHINE\SYSTEM\CONTROLSET001\SERVICES\SDPORT
+[   14.942836] (\drivers\storage\port\storport\storport.c:961) StorPortInitialize(FFFFFB38AE0A3670 FFFFCC1A93C98BA0 FFFFCC1A93C98A80 0000000000000000)
+[   14.953159] (\drivers\storage\port\storport\storport.c:963) HwInitializationDataSize: 136
+[   14.961312] (\drivers\storage\port\storport\storport.c:964) AdapterInterfaceType: 5
+[   14.968949] (\drivers\storage\port\storport\storport.c:965) HwInitialize: FFFFCC1A93E6BB48
+[   14.977190] (\drivers\storage\port\storport\storport.c:966) HwStartIo: FFFFCC1A93E6C27C
+[   14.985174] (\drivers\storage\port\storport\storport.c:967) HwInterrupt: FFFFCC1A93E6C168
+[   14.993328] (\drivers\storage\port\storport\storport.c:968) HwFindAdapter: FFFFCC1A93E6D3D4
+[   15.001659] (\drivers\storage\port\storport\storport.c:969) HwResetBus: FFFFCC1A93E6D308
+[   15.009726] (\drivers\storage\port\storport\storport.c:970) HwDmaStarted: 0000000000000000
+[   15.017970] (\drivers\storage\port\storport\storport.c:971) HwAdapterState: 0000000000000000
+[   15.026385] (\drivers\storage\port\storport\storport.c:972) DeviceExtensionSize: 146520
+[   15.034369] (\drivers\storage\port\storport\storport.c:973) SpecificLuExtensionSize: 0
+[   15.042262] (\drivers\storage\port\storport\storport.c:974) SrbExtensionSize: 1592
+[   15.049814] (\drivers\storage\port\storport\storport.c:975) NumberOfAccessRanges: 6
+[   15.057446] (\drivers\storage\port\storport\storport.c:1001) No driver object extension!
+[   15.065515] (\drivers\storage\port\storport\storport.c:1013) Driver object extension created!
+[   15.074016] (\drivers\storage\port\storport\storport.c:31) PortAddDriverInitData()
+[   15.081566] (\drivers\storage\port\storport\storport.c:1044) StorPortInitialize() done (Status 0x00000000)
+[   15.092141] (\drivers\storage\port\storport\storport.c:461) DriverEntry(FFFFFB38AE0A3470 FFFFCC1A93C98BA0)
+[   15.104805] WDFTrace: new WDFKEY object open failed, !STATUS!
+[   15.111594] (\drivers\ksfilter\swenum\swenum.c:428) SWENUM loaded
+[   15.115741] (\drivers\storage\class\ramdisk\ramdisk.c:5836) RAMDISK DriverEntry: DriverObject=FFFFFB38AE0669D0 RegistryPath=\REGISTRY\MACHINE\SYSTEM\CONTROLSET001\SERVICES\RAMDISK
+[   15.131747] (\ntoskrnl\io\iomgr\driver.c:1442) BOOT DRIVERS LOADED
+[   15.137370] (\hal\halarm64\acpi\halpnpdd.c:1720) Start device received
+[   15.143559] (\drivers\bus\acpi\pnp.c:338) ACPI: Registered PCI interface: \??\ACPI_HAL#PNP0C08#0#{a7e9db84-db4c-4289-876b-e2c3e63b5f4f}
+[   15.155577] (\drivers\bus\acpi\pnp.c:353) Bus_StartFdo: Calling AcpiInitializeSubsystem
+[   15.163606] (\drivers\bus\acpi\pnp.c:364) Bus_StartFdo: Calling AcpiInitializeTables
+[   15.188569] (\drivers\bus\acpi\pnp.c:373) Bus_StartFdo: Calling AcpiLoadTables
+[   15.194832] (\drivers\bus\acpi\busmgr\utils.c:575) AcpiGetTable() for FACS failed (Status 0x00000005)
+[   15.202114] (\drivers\bus\acpi\pnp.c:385) Unable to create ACPI tables in registry (0xc0000001)
+[   15.210781] (\drivers\bus\acpi\pnp.c:389) Bus_StartFdo: Calling acpi_init
+[   15.218590] (\drivers\bus\acpi\busmgr\bus.c:1693) ACPI: _PIC method not present; firmware assumed APIC-ready
+[   15.231208] (\hal\halarm64\halarm64.c:1715) [arm64][PCI] Registered PCI routing query provider at FFFFCC1A93FC1440
+[   15.238668] (\drivers\bus\acpi\busmgr\acpi_pci_routing.c:430) ACPI: PCI routing provider registered (4 entries available)
+[   15.249600] (\drivers\bus\acpi\busmgr\pci_root.c:978) ACPI: Enumerating PCI root bridges (ACPI 1.0/2.0+/PCIe)
+[   15.260026] (\drivers\bus\acpi\busmgr\pci_root.c:320) ACPI: _OSC calling with Support=0x19 Control=0x10
+[   15.269002] (\drivers\bus\acpi\busmgr\pci_root.c:423) ACPI: _OSC success - granted control 0x10 (status 0x0)
+[   15.278667] (\drivers\bus\acpi\busmgr\pci_root.c:847) ACPI: PCI Root 1: HID=PNP0A08 UID=1 SEG=1 BUS=0
+[   15.287860] (\drivers\bus\acpi\busmgr\pci_root.c:853)     Bus range  : [0 - 255]
+[   15.295241] (\drivers\bus\acpi\busmgr\pci_root.c:872)     Memory window: [c0000000 - 1affffffff]
+[   15.303998] (\drivers\bus\acpi\busmgr\pci_root.c:876)       translation: +0
+[   15.310941] (\drivers\bus\acpi\busmgr\pci_root.c:897)     _OSC status 0x0 request 0x10 grant 0x10
+[   15.319790] (\hal\halarm64\halarm64.c:1651) [arm64][PCI] ACPI PCI Root Bridge: Segment=1 Bus=0 BusRange=[0-255]
+[   15.329856] (\hal\halarm64\halarm64.c:1660) [arm64][PCI]   No MCFG or _CBA config-space base published for this root bridge.
+[   15.341048] (\hal\halarm64\halarm64.c:1674) [arm64][PCI]   Memory Window: [0xc0000000 - 0x1affffffff]
+[   15.350243] (\hal\halarm64\halarm64.c:1690) [arm64][PCI]   _OSC: Status=0x0 Control=0x10 Grant=0x10 (OK)
+[   15.360576] (\drivers\bus\acpi\busmgr\pci_root.c:835) ACPI: PCI root HID=PNP0A08 UID=1 already processed (Seg 1 Bus 0-255), skipping duplicate handle FFFFFB38AE0A1360
+[   15.374650] (\drivers\bus\acpi\pnp.c:399) Bus_StartFdo: Calling ACPIEnumerateDevices
+[   15.382341] (\drivers\bus\acpi\acpienum.c:159) ACPI-PCIROOT: Enumerating PCI root candidate HID=PNP0A08 UID=1 ADR=0xffffffffffffffff handle=FFFFFB38AE0A1360
+[   15.396226] (\drivers\bus\acpi\acpienum.c:169) ACPI-PCIROOT:   |_ CID[0]=PNP0A03
+[   15.403712] (\drivers\bus\acpi\acpienum.c:549) ACPI-PCIROOT:   |_ _CRS Bus 0x0-0xff (len=0x100)
+[   15.412278] (\drivers\bus\acpi\acpienum.c:549) ACPI-PCIROOT:   |_ _CRS Mem64 0xc0000000-0xc04fffff (len=0x500000)
+[   15.422516] (\drivers\bus\acpi\acpienum.c:549) ACPI-PCIROOT:   |_ _CRS Mem64 0x1800000000-0x1affffffff (len=0x300000000)
+[   15.433445] (\drivers\bus\acpi\pnp.c:401) Bus_StartFdo: ACPIEnumerateDevices done (Status 0x0)
+[   15.445477] (\drivers\bus\acpi\buspdo.c:237) ACPI: Using _BBN for PCI root ACPI\PNP0A08 bus=0
+[   15.451110] (\drivers\bus\acpi\buspdo.c:283) ACPI: Cached PCI root ACPI\PNP0A08 bus number 0
+[   15.460247] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{4D36E97D-E325-11CE-BFC1-08002BE10318}\0001' for critical device (0x00000000)
+[   15.472980] (\drivers\bus\acpi\buspdo.c:237) ACPI: Using _BBN for PCI root ACPI\PNP0A08 bus=0
+[   15.480785] (\drivers\bus\acpi\buspdo.c:283) ACPI: Cached PCI root ACPI\PNP0A08 bus number 0
+[   15.490039] (\drivers\bus\pci\fdo.c:474) PCI: FdoStartDevice called
+[   15.495447] (\drivers\bus\pci\arb.c:666) PCI: Creating arbiters for bus 0
+[   15.502220] (\drivers\bus\pci\arb.c:709) PCI: Created 3 arbiters for bus 0
+[   15.509190] (\drivers\bus\pci\fdo.c:274) PCI: FdoQueryBusRelations called
+[   15.515841] (\hal\halarm64\acpi\halacpi.c:139) HAL: PCI Express MMCONFIG unavailable because the ACPI MCFG table is missing or empty.
+[   15.527813] (\drivers\bus\pci\fdo.c:133) PCI: Bus 0 slot 0 empty (Size=64 VendorID=0xffff), but scanning root bus anyway
+[   15.538660] (\drivers\bus\pci\fdo.c:290) PCI: FdoQueryBusRelations enumerated 0 devices
+[   15.550745] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{36FC9E60-C465-11CF-8056-444553540000}\0000' for critical device (0x00000000)
+[   15.562422] (\drivers\bus\acpi\interface.c:823) Invalid GUID
+[   15.566277] (\drivers\usb\usbport\pnp.c:1615) USBPORT_StartDevice: no PCI config space (ACPI-enumerated controller), continuing
+[   15.577730] (\drivers\bus\acpi\interface.c:823) Invalid GUID
+[   15.585954] (\drivers\usb\usbxhci\usbxhci.c:9233) usbxhci: no PCI config space (ACPI-enumerated controller), skipping bus-master enable
+[   15.597056] (\drivers\usb\usbxhci\osc.c:447) usbxhci: _OSC: Using IOCTL to evaluate _OSC method
+[   15.604188] (\drivers\usb\usbxhci\osc.c:480) usbxhci: _OSC Query phase - asking what controls are available
+[   15.613942] (\drivers\usb\usbxhci\osc.c:234) usbxhci: ACPI _OSC IOCTL failed: 0xC0000034
+[   15.621976] (\drivers\usb\usbxhci\osc.c:497) usbxhci: _OSC not available (Status=0xC0000034) - using legacy defaults
+[   15.632474] (\drivers\usb\usbxhci\osc.c:401) usbxhci: _OSC: Set legacy defaults (full OS control)
+[   15.665434] (\drivers\usb\usbxhci\usbxhci.c:4211) usbxhci: bounce pool ready slots=32 size=65536
+[   15.672496] (\drivers\usb\usbport\pnp.c:2537) USBPORT_CreatePdo: HubPdo=FFFFFB38AE196C90 DevExt=FFFFFB38AE196DE0
+[   15.682647] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{36FC9E60-C465-11CF-8056-444553540000}\0001' for critical device (0x00000000)
+[   15.694557] (\drivers\usb\usbhub\usbhub.c:957) USBH_SyncGetRootHubPdo: Target=FFFFFB38AE196C90 Driver=\Driver\usbxhci StackSize=2
+[   15.705870] (\drivers\usb\usbhub\usbhub.c:985) USBH_SyncGetRootHubPdo: Irp=FFFFFB38AE030010 Major=0f IoCtl=0022000f Arg1=FFFFFB38AE1966F0 Arg2=FFFFFB38AE1966F8
+[   15.720096] (\drivers\usb\usbport\ioctl.c:661) USBPORT_PdoInternalDeviceControl: IOCTL_INTERNAL_USB_GET_ROOTHUB_PDO Pdo=FFFFFB38AE196C90 Arg1=FFFFFB38AE1966F0 Arg2=FFFFFB38AE1966F8
+[   15.736787] (\drivers\usb\usbhub\usbhub.c:1267) USBH_GetConfigurationDescriptor: NTSTATUS=0x00000000 wTotalLength=25 FirstBytes=09 02 19 00 01 01
+[   15.749166] (\drivers\bus\acpi\main.c:374) Unsupported IOCTL: 32c020
+[   15.756014] (\drivers\usb\usbhub\pnp.c:344) USBH_OpenConfiguration: using interface 0 alt 0 Pipes=1 MaxPacket0=8
+[   15.765675] (\drivers\usb\usbhub\pnp.c:372) USBH_OpenConfiguration: SelectConfig succeeded (PipeHandle=FFFFFB38AE030A70 wTotalLength=25)
+[   15.797962] (\drivers\usb\usbhub\usbhub.c:3689) USBD_RegisterRootHubCallBack: HubExtension - FFFFFB38AE1966D0
+[   15.804990] (\drivers\usb\usbport\iface.c:1283) USBHI_RootHubInitNotification: stored callback FFFFCC1A93F415A4 ctx=FFFFFB38AE1966D0 seq=1 caller=FFFFCC1A93F4168C
+[   15.819479] (\drivers\usb\usbhub\usbhub.c:3705) USBD_RegisterRootHubCallBack: RootHubInitNotification -> 0x00000000
+[   15.819484] (\drivers\usb\usbhub\usbhub.c:3137) USBH_SubmitStatusChangeTransfer: HubExtension - FFFFFB38AE1966D0, SCEIrp - FFFFFB38AE0A2A50
+[   15.830012] (\drivers\usb\usbhub\pnp.c:1190) USBH_FdoQueryBusRelations: NumberPorts - 3
+[   15.842420] (\drivers\usb\usbhub\usbhub.c:2544) USBH_ChangeIndicationWorker: HubExt=FFFFFB38AE1966D0 WorkItem=FFFFFB38AE063440
+[   15.861733] (\drivers\usb\usbhub\usbhub.c:2792) USBH_ChangeIndicationWorker: Port 2 Status=0x0301 Change=0x0001
+[   15.871825] (\drivers\usb\usbhub\usbhub.c:2311) USBH_ProcessPortStateChange: Port 2 connect -> enumerate
+[   15.881280] (\drivers\usb\usbhub\usbhub.c:2792) USBH_ChangeIndicationWorker: Port 3 Status=0x1103 Change=0x0031
+[   15.891340] (\drivers\usb\usbhub\usbhub.c:2311) USBH_ProcessPortStateChange: Port 3 connect -> enumerate
+[   15.900819] (\drivers\usb\usbhub\usbhub.c:3137) USBH_SubmitStatusChangeTransfer: HubExtension - FFFFFB38AE1966D0, SCEIrp - FFFFFB38AE0A2A50
+[   16.052488] (\drivers\usb\usbhub\usbhub.c:3137) USBH_SubmitStatusChangeTransfer: HubExtension - FFFFFB38AE1966D0, SCEIrp - FFFFFB38AE0A2A50
+[   16.072420] (\drivers\usb\usbhub\usbhub.c:5701) USBH_CreateDevice: Port - 2, UsbPortStatus - 0x0303
+[   16.078606] (\drivers\usb\usbhub\usbhub.c:5737) USBH_CreateDevice: PortDevice - FFFFFB38AE09AA00, <\Device\USBPDO-1>
+[   16.089075] (\drivers\usb\usbhub\usbhub.c:5739) USBH_CreateDevice: PortExtension - FFFFFB38AE09AB50
+[   16.185974] (\drivers\usb\usbhub\usbhub.c:3137) USBH_SubmitStatusChangeTransfer: HubExtension - FFFFFB38AE1966D0, SCEIrp - FFFFFB38AE0A2A50
+[   16.212445] (\drivers\usb\usbxhci\usbxhci.c:5018) usbxhci: ResetDeviceOnPort: RESET_DEV succeeded for slot 1 on port 2, now in Default state
+[   16.249907] (\drivers\usb\usbhub\usbhub.c:5611) USBH: announcing usb 1-2 port 2 (VID=413C PID=301A)
+[   16.256062] (\drivers\usb\usbhub\usbhub.c:5634) usb 1-2: new low-speed USB device on port 2
+[   16.264391] (\drivers\usb\usbhub\usbhub.c:5642) usb 1-2: New USB device found, idVendor=413C, idProduct=301A, bcdDevice=01.00
+[   16.275671] (\drivers\usb\usbhub\usbhub.c:5649) usb 1-2: New USB device strings: Mfr=1, Product=2, SerialNumber=0
+[   16.310892] (\drivers\usb\usbhub\usbhub.c:5655) usb 1-2: Product: Dell MS116 USB Optical Mouse
+[   16.316616] (\drivers\usb\usbhub\usbhub.c:5660) usb 1-2: Manufacturer: PixArt
+[   16.329892] (\drivers\usb\usbhub\usbhub.c:1267) USBH_GetConfigurationDescriptor: NTSTATUS=0x00000000 wTotalLength=34 FirstBytes=09 02 22 00 01 01
+[   16.340044] (\drivers\usb\usbhub\pnp.c:1261) USBH_FdoQueryBusRelations: cached connect (no PDO) port 3 (ConnStatus=1)
+[   16.350626] (\drivers\usb\usbhub\pnp.c:1302) USBH_FdoQueryBusRelations: forcing PDO creation from cached state on port 3
+[   16.618421] (\drivers\usb\usbhub\usbhub.c:3137) USBH_SubmitStatusChangeTransfer: HubExtension - FFFFFB38AE1966D0, SCEIrp - FFFFFB38AE0A2A50
+[   16.642470] (\drivers\usb\usbhub\usbhub.c:5701) USBH_CreateDevice: Port - 3, UsbPortStatus - 0x1103
+[   16.648638] (\drivers\usb\usbhub\usbhub.c:5737) USBH_CreateDevice: PortDevice - FFFFFB38AE132070, <\Device\USBPDO-2>
+[   16.659123] (\drivers\usb\usbhub\usbhub.c:5739) USBH_CreateDevice: PortExtension - FFFFFB38AE1321C0
+[   16.808234] (\drivers\usb\usbhub\usbhub.c:3137) USBH_SubmitStatusChangeTransfer: HubExtension - FFFFFB38AE1966D0, SCEIrp - FFFFFB38AE0A2A50
+[   16.832499] (\drivers\usb\usbxhci\usbxhci.c:5018) usbxhci: ResetDeviceOnPort: RESET_DEV succeeded for slot 2 on port 3, now in Default state
+[   16.856343] (\drivers\usb\usbhub\usbhub.c:5611) USBH: announcing usb 1-3 port 3 (VID=0781 PID=5581)
+[   16.862498] (\drivers\usb\usbhub\usbhub.c:5634) usb 1-3: new super-speed USB device on port 3
+[   16.871000] (\drivers\usb\usbhub\usbhub.c:5642) usb 1-3: New USB device found, idVendor=0781, idProduct=5581, bcdDevice=01.00
+[   16.882280] (\drivers\usb\usbhub\usbhub.c:5649) usb 1-3: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+[   16.894470] (\drivers\usb\usbhub\usbhub.c:5655) usb 1-3: Product:  SanDisk 3.2Gen1
+[   16.900067] (\drivers\usb\usbhub\usbhub.c:5660) usb 1-3: Manufacturer:  USB
+[   16.907013] (\drivers\usb\usbhub\usbhub.c:5675) usb 1-3: SerialNumber: 0901da96cc5f2a6e98145c166ee0bf8579199debc6f1126c17dcbe55724e3388e11a00000000000000000000897c8cadff082920815581076e327e7a
+[   16.924484] (\drivers\usb\usbhub\usbhub.c:1267) USBH_GetConfigurationDescriptor: NTSTATUS=0x00000000 wTotalLength=44 FirstBytes=09 02 2c 00 01 01
+[   16.938646] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{745a17a0-74d3-11d0-b6fe-00a0c90f57da}\0000' for critical device (0x00000000)
+[   16.951347] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{36FC9E60-C465-11CF-8056-444553540000}\0002' for critical device (0x00000000)
+[   17.006935] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{4D36E967-E325-11CE-BFC1-08002BE10318}\0000' for critical device (0x00000000)
+[   17.017296] (\drivers\usb\usbstor\disk.c:143) SRB_FUNCTION_CLAIM_DEVICE
+[   17.341060] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{36FC9E60-C465-11CF-8056-444553540000}\0003' for critical device (0x00000000)
+[   17.352789] (\drivers\bus\acpi\interface.c:823) Invalid GUID
+[   17.356592] (\drivers\usb\usbport\pnp.c:1615) USBPORT_StartDevice: no PCI config space (ACPI-enumerated controller), continuing
+[   17.368045] (\drivers\bus\acpi\interface.c:823) Invalid GUID
+[   17.376207] (\drivers\usb\usbxhci\usbxhci.c:9233) usbxhci: no PCI config space (ACPI-enumerated controller), skipping bus-master enable
+[   17.387291] (\drivers\usb\usbxhci\osc.c:447) usbxhci: _OSC: Using IOCTL to evaluate _OSC method
+[   17.394503] (\drivers\usb\usbxhci\osc.c:480) usbxhci: _OSC Query phase - asking what controls are available
+[   17.404256] (\drivers\usb\usbxhci\osc.c:234) usbxhci: ACPI _OSC IOCTL failed: 0xC0000034
+[   17.412290] (\drivers\usb\usbxhci\osc.c:497) usbxhci: _OSC not available (Status=0xC0000034) - using legacy defaults
+[   17.422789] (\drivers\usb\usbxhci\osc.c:401) usbxhci: _OSC: Set legacy defaults (full OS control)
+[   17.456103] (\drivers\usb\usbxhci\usbxhci.c:4211) usbxhci: bounce pool ready slots=32 size=65536
+[   17.463138] (\drivers\usb\usbport\pnp.c:2537) USBPORT_CreatePdo: HubPdo=FFFFFB38AE193C90 DevExt=FFFFFB38AE193DE0
+[   17.473343] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{36FC9E60-C465-11CF-8056-444553540000}\0004' for critical device (0x00000000)
+[   17.485216] (\drivers\usb\usbhub\usbhub.c:957) USBH_SyncGetRootHubPdo: Target=FFFFFB38AE193C90 Driver=\Driver\usbxhci StackSize=2
+[   17.496536] (\drivers\usb\usbhub\usbhub.c:985) USBH_SyncGetRootHubPdo: Irp=FFFFFB38AE030010 Major=0f IoCtl=0022000f Arg1=FFFFFB38AE0171E0 Arg2=FFFFFB38AE0171E8
+[   17.510764] (\drivers\usb\usbport\ioctl.c:661) USBPORT_PdoInternalDeviceControl: IOCTL_INTERNAL_USB_GET_ROOTHUB_PDO Pdo=FFFFFB38AE193C90 Arg1=FFFFFB38AE0171E0 Arg2=FFFFFB38AE0171E8
+[   17.527428] (\drivers\usb\usbhub\usbhub.c:1267) USBH_GetConfigurationDescriptor: NTSTATUS=0x00000000 wTotalLength=25 FirstBytes=09 02 19 00 01 01
+[   17.539836] (\drivers\bus\acpi\main.c:374) Unsupported IOCTL: 32c020
+[   17.546666] (\drivers\usb\usbhub\pnp.c:344) USBH_OpenConfiguration: using interface 0 alt 0 Pipes=1 MaxPacket0=8
+[   17.556341] (\drivers\usb\usbhub\pnp.c:372) USBH_OpenConfiguration: SelectConfig succeeded (PipeHandle=FFFFFB38AE017E70 wTotalLength=25)
+[   17.586900] (\drivers\usb\usbhub\usbhub.c:3689) USBD_RegisterRootHubCallBack: HubExtension - FFFFFB38AE0171C0
+[   17.593927] (\drivers\usb\usbport\iface.c:1283) USBHI_RootHubInitNotification: stored callback FFFFCC1A93F415A4 ctx=FFFFFB38AE0171C0 seq=1 caller=FFFFCC1A93F4168C
+[   17.608418] (\drivers\usb\usbhub\usbhub.c:3705) USBD_RegisterRootHubCallBack: RootHubInitNotification -> 0x00000000
+[   17.608423] (\drivers\usb\usbhub\usbhub.c:3137) USBH_SubmitStatusChangeTransfer: HubExtension - FFFFFB38AE0171C0, SCEIrp - FFFFFB38AE194BF0
+[   17.618874] (\drivers\usb\usbhub\pnp.c:1190) USBH_FdoQueryBusRelations: NumberPorts - 3
+[   17.631350] (\drivers\usb\usbhub\usbhub.c:3137) USBH_SubmitStatusChangeTransfer: HubExtension - FFFFFB38AE0171C0, SCEIrp - FFFFFB38AE194BF0
+[   17.917866] (\drivers\usb\usbhub\usbhub.c:3137) USBH_SubmitStatusChangeTransfer: HubExtension - FFFFFB38AE0171C0, SCEIrp - FFFFFB38AE194BF0
+[   17.941858] (\drivers\usb\usbhub\usbhub.c:5701) USBH_CreateDevice: Port - 3, UsbPortStatus - 0x1103
+[   17.948061] (\drivers\usb\usbhub\usbhub.c:5737) USBH_CreateDevice: PortDevice - FFFFFB38AE190CC0, <\Device\USBPDO-4>
+[   17.958514] (\drivers\usb\usbhub\usbhub.c:5739) USBH_CreateDevice: PortExtension - FFFFFB38AE190E10
+[   18.107652] (\drivers\usb\usbhub\usbhub.c:3137) USBH_SubmitStatusChangeTransfer: HubExtension - FFFFFB38AE0171C0, SCEIrp - FFFFFB38AE194BF0
+[   18.131877] (\drivers\usb\usbxhci\usbxhci.c:5018) usbxhci: ResetDeviceOnPort: RESET_DEV succeeded for slot 1 on port 3, now in Default state
+[   18.175747] (\drivers\usb\usbhub\usbhub.c:5611) USBH: announcing usb 2-3 port 3 (VID=0781 PID=5591)
+[   18.181904] (\drivers\usb\usbhub\usbhub.c:5634) usb 2-3: new super-speed USB device on port 3
+[   18.190406] (\drivers\usb\usbhub\usbhub.c:5642) usb 2-3: New USB device found, idVendor=0781, idProduct=5591, bcdDevice=01.00
+[   18.201687] (\drivers\usb\usbhub\usbhub.c:5649) usb 2-3: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+[   18.213872] (\drivers\usb\usbhub\usbhub.c:5655) usb 2-3: Product:  SanDisk 3.2Gen1
+[   18.219471] (\drivers\usb\usbhub\usbhub.c:5660) usb 2-3: Manufacturer:  USB
+[   18.226413] (\drivers\usb\usbhub\usbhub.c:5675) usb 2-3: SerialNumber: 01016e01ffd6f47ad7a9a904dc54438de8ee4ed362c463e23b37a4d9b83f12b6b3e3000000000000000000004ca60268000d5400915581077b32dc12
+[   18.243858] (\drivers\usb\usbhub\usbhub.c:1267) USBH_GetConfigurationDescriptor: NTSTATUS=0x00000000 wTotalLength=44 FirstBytes=09 02 2c 00 01 01
+[   18.256937] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{36FC9E60-C465-11CF-8056-444553540000}\0005' for critical device (0x00000000)
+[   18.314555] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{4D36E967-E325-11CE-BFC1-08002BE10318}\0001' for critical device (0x00000000)
+[   18.324644] (\drivers\usb\usbstor\disk.c:143) SRB_FUNCTION_CLAIM_DEVICE
+[   18.412228] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{a0a588a4-c46f-4b37-b7ea-c82fe89870c6}\0000' for critical device (0x00000000)
+[   18.422401] (\drivers\bus\sd\sdbus.c:57) SdBusAddDevice: PhysicalDeviceObject FFFFFB38AE09DC70
+[   18.430715] (\drivers\bus\sd\sdbus.c:133) SdBusAddDevice: FDO FFFFFB38AE092040 attached to FFFFFB38AE09DC70
+[   18.441033] (\drivers\bus\sd\fdo.c:630) SDHCI: Memory resource at 0x1000fff000 length 0x260
+[   18.448752] (\drivers\bus\sd\fdo.c:646) SDHCI: Interrupt vector 305 level 6
+[   18.456397] (\drivers\bus\sd\fdo.c:283) SdBusInitializeController: RegisterBase FFFFCC1A92A55000
+[   18.464458] (\drivers\bus\sd\fdo.c:303) SDHCI: Version 1.02, Caps 0x15e2c832, Caps2 0x8000a577, BaseClock 200000 kHz
+[   18.482664] (\drivers\bus\sd\fdo.c:537) SDHCI: SDMA buffer at VA=FFFFCC1A92A15000 PA=0x00d5c000 (262144 bytes)
+[   18.491064] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{a0a588a4-c46f-4b37-b7ea-c82fe89870c6}\0001' for critical device (0x00000000)
+[   18.502800] (\drivers\bus\sd\sdbus.c:57) SdBusAddDevice: PhysicalDeviceObject FFFFFB38AE09D870
+[   18.511131] (\drivers\bus\sd\sdbus.c:133) SdBusAddDevice: FDO FFFFFB38AE091BA0 attached to FFFFFB38AE09D870
+[   18.521466] (\drivers\bus\sd\fdo.c:630) SDHCI: Memory resource at 0x1001100000 length 0x260
+[   18.529169] (\drivers\bus\sd\fdo.c:646) SDHCI: Interrupt vector 306 level 7
+[   18.536805] (\drivers\bus\sd\fdo.c:283) SdBusInitializeController: RegisterBase FFFFCC1A92A0B000
+[   18.544875] (\drivers\bus\sd\fdo.c:303) SDHCI: Version 1.02, Caps 0x55e6c832, Caps2 0x8000a527, BaseClock 200000 kHz
+[   18.562674] (\drivers\bus\sd\fdo.c:537) SDHCI: SDMA buffer at VA=FFFFCC1A929CB000 PA=0x00da5000 (262144 bytes)
+[   18.581893] (\drivers\bus\sd\enum.c:945) SdBusEnumerateCard: CMD8 not supported (SD v1.x, MMC, or SDIO)
+[   18.588682] (\drivers\bus\sd\enum.c:966) SdBusEnumerateCard: CMD5 detected SDIO funcs=3 memory=0 OCR=0x30ffff00
+[   18.598749] (\drivers\bus\sd\enum.c:1005) SdBusEnumerateCard: SDIO card ready, OCR=0xb0ffff00 funcs=3
+[   18.607935] (\drivers\bus\sd\enum.c:1291) SdBusEnumerateCard: RCA = 0x0001
+[   18.617156] (\drivers\bus\sd\sdio.c:525) SdBusSdioEnumerateFunctions: CCCR rev=0x43 spec=0x03 cap=0x02 bus_if=0x40 uhs=0x07 CIS=0x0010AC NumFuncs=3
+[   18.631289] (\drivers\bus\sd\sdio.c:532) SdBusSdioEnumerateFunctions: Common CIS VID=0x02D0 DID=0x4345 class=0x0C
+[   18.638931] (\drivers\bus\sd\sdio.c:556) SdBusSdioEnumerateFunctions: SDIO 4-bit bus enabled
+[   18.647642] (\drivers\bus\sd\sdio.c:568) SdBusSdioEnumerateFunctions: SDIO high-speed enabled
+[   18.660678] (\drivers\bus\sd\sdio.c:632) SdBusSdioEnumerateFunctions: func 1 std=0x00 ext=0x00 class=0x0C CIS=0x001000 VID=0x02D0 DID=0x4345
+[   18.670399] (\drivers\bus\sd\sdio.c:468) SdBusCreateSdioFunctionPdo: func=1 VID=02D0 DID=4345 class=12 PDO=FFFFFB38ADFCA070
+[   18.686597] (\drivers\bus\sd\sdio.c:632) SdBusSdioEnumerateFunctions: func 2 std=0x00 ext=0x00 class=0x0C CIS=0x001038 VID=0x02D0 DID=0x4345
+[   18.696315] (\drivers\bus\sd\sdio.c:468) SdBusCreateSdioFunctionPdo: func=2 VID=02D0 DID=4345 class=12 PDO=FFFFFB38ADFCAAF0
+[   18.713121] (\drivers\bus\sd\sdio.c:632) SdBusSdioEnumerateFunctions: func 3 std=0x02 ext=0x00 class=0x02 CIS=0x001070 VID=0x02D0 DID=0x4345
+[   18.722840] (\drivers\bus\sd\sdio.c:468) SdBusCreateSdioFunctionPdo: func=3 VID=02D0 DID=4345 class=2 PDO=FFFFFB38AE12A070
+[   18.733854] (\drivers\bus\sd\enum.c:1569) SdBusEnumerateCard: Enumeration complete, CardType=5, HighCapacity=0, TotalSectors=0
+[   18.745220] (\drivers\bus\sd\enum.c:1604) SdBusProgramClock: Setting transfer clock to 50000 kHz
+[   19.310156] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\rpi5vc4.sys at FFFFCC1A929AE000 with 14 pages
+[   19.459501] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\dxgkrnl.sys at FFFFCC1A9297C000 with 32 pages
+[   19.598610] (\drivers\directx\dxgkrnl\adapter.c:3376) DXGKRNL: ERROR: DxgkAdapterStart: NO translated resources! (PDO=FFFFFB38AE19F900 DOD=0)
+[   19.640369] RPI5VC4: HVS IOMMU CTRL=00000000 (enable=0 bypass=0) PT=00000000 MISC=80003ffc DBG=20804774
+[   19.646877] RPI5VC4: HVS IOMMU ADDR_CAP=00000fff (disabled, cap=1048320 MB) BYPASS=[00000000..00000fff] ILLEGAL=00000000
+[   19.660875] (\drivers\directx\rpi5vc4\rpi5vc4.c:447) RPI5VC4: VideoCore firmware revision 0x69372732
+[   19.678690] (\drivers\directx\rpi5vc4\rpi5vc4.c:460) RPI5VC4: V3D clock at 960 MHz
+[   19.690739] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:419) RPI5VC4: timer resolution granted 10000
+[   19.696641] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:423) RPI5VC4: init ERR_STAT after clear=00001000
+[   19.705752] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:433) RPI5VC4: V3D 7.1 online — hub 0x42554856/0x00081117 core 0x07443356, slab GPU VA 0x01000000 (65536 KB)
+[   19.720160] (\drivers\directx\rpi5vc4\rpi5vc4_v3d.c:628) RPI5VC4: V3D interrupt connected (core=1/INTID282 hub=1/INTID281)
+[   19.733985] RPI5VC4: LPTRS@0x110=000002a0 head=672 ctl0=600cc007 ptr1=3f400000 valid=1 match=1
+[   19.739763] RPI5VC4: LPTRS@0x03c=ffffffff head=4095 (skip)
+[   19.745230] RPI5VC4: takeover OK reg=0x110 head=672 fb=00:3f400000 cursor=0 start=0 count=10
+[   19.754160] RPI5VC4: LPTRS@0x110=000002a0 head=672 ctl0=490cc007 ptr1=3f400000 valid=1 match=1
+[   19.762233] RPI5VC4: LPTRS@0x03c=ffffffff head=4095 (skip)
+[   19.767698] RPI5VC4: takeover OK reg=0x110 head=672 fb=00:3f400000 cursor=0 start=9 count=10
+[   19.776116] RPI5VC4: LPTRS@0x110=000002a0 head=672 ctl0=490cc007 ptr1=3f400000 valid=1 match=1
+[   19.784702] RPI5VC4: LPTRS@0x03c=ffffffff head=4095 (skip)
+[   19.790171] RPI5VC4: takeover OK reg=0x110 head=672 fb=00:3f400000 cursor=0 start=9 count=10
+[   19.873527] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\softgpu.sys at FFFFCC1A8CD75000 with 8 pages
+[   20.004415] (\drivers\directx\dxgkrnl\adapter.c:3376) DXGKRNL: ERROR: DxgkAdapterStart: NO translated resources! (PDO=FFFFFB38AE19F6E0 DOD=0)
+[   20.014260] (\drivers\directx\softgpu\softgpu.c:370) SOFTGPU: no acquirable boot framebuffer -- declining (none exists, or a real GPU miniport owns the display)
+[   20.028531] (\drivers\directx\dxgkrnl\adapter.c:3613) DXGKRNL: ERROR: DxgkAdapterStart: DxgkDdiStartDevice failed 0xC0000182 (IRQs fired during start=0, vec=0 msgbased=0)
+[   20.043717] (\ntoskrnl\io\pnpmgr\pnproot.c:1373) IRP_MJ_PNP / Unknown minor function 0x1
+[   20.051785] (\ntoskrnl\io\pnpmgr\devaction.c:1936) Removal vetoed by Root\SOFTGPU\0000
+[   20.059679] (\ntoskrnl\io\pnpmgr\devaction.c:2057) Removal vetoed by failing the query remove request
+[   20.068874] (\ntoskrnl\io\pnpmgr\pnproot.c:1373) IRP_MJ_PNP / Unknown minor function 0x3
+[   20.144840] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\hidusb.sys at FFFFCC1A8BD6C000 with 9 pages
+[   20.290360] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\hidclass.sys at FFFFCC1A8BD5E000 with e pages
+[   20.420699] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\hidparse.sys at FFFFCC1A8BD52000 with c pages
+[   20.899157] (\drivers\hid\hidusb\hidusb.c:1957) Status 0
+[   20.912459] (\ntoskrnl\io\pnpmgr\pnpmgr.c:164) CDDB: set Driver='{4D36E96F-E325-11CE-BFC1-08002BE10318}\0000' for critical device (0x00000000)
+[   20.963540] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\mouhid.sys at FFFFCC1A8BD42000 with 8 pages
+[   21.026258] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\mouclass.sys at FFFFCC1A8BD38000 with a pages
+[   21.291345] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\fs_rec.sys at FFFFCC1A8BD2E000 with a pages
+[   21.556296] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\null.sys at FFFFCC1A8BD26000 with 8 pages
+[   21.772389] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\beep.sys at FFFFCC1A8BD1F000 with 7 pages
+[   22.038284] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\i8042prt.sys at FFFFCC1A8BD0E000 with 11 pages
+[   22.180689] (\ntoskrnl\wmi\smbios.c:172) Could not find the SMBIOS entry point
+[   22.185028] (\ntoskrnl\wmi\smbios.c:233) WmipGetRawSMBiosTableData failed: 0xc0000225
+[   22.192839] (\drivers\input\i8042prt\hwhacks.c:208) IoWMIOpenBlock failed: 0xc0000225
+[   22.313949] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\kbdclass.sys at FFFFCC1A8BD03000 with b pages
+[   22.555916] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\dxgmms1.sys at FFFFCC1A8BCF1000 with 12 pages
+[   22.707256] (\drivers\directx\dxgmms1\dxgmms1.c:62) DXGMMS1: DriverEntry: DirectX GPU Memory Manager and Scheduler loading
+[   22.715410] (\drivers\directx\dxgmms1\dxgmms1.c:69) DXGMMS1: DriverEntry: dxgmms1 loaded successfully
+[   22.749518] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\blue.sys at FFFFCC1A8BCE7000 with a pages
+[   22.955627] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\viogpudo.sys at FFFFCC1A8BCC9000 with 1e pages
+[   23.215592] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\msfs.sys at FFFFCC1A8BCC2000 with 7 pages
+[   23.480258] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\npfs.sys at FFFFCC1A8BCAD000 with 15 pages
+[   23.631250] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\nwifi.sys at FFFFCC1A8BC9C000 with 11 pages
+[   23.890946] (\drivers\network\nwifi\nwifi.c:197) NWIFI: DriverEntry
+[   23.894376] (\drivers\network\nwifi\control.c:633) NWIFI: control device \Device\Nwifi created
+[   23.902917] (\drivers\network\nwifi\nwifi.c:239) NWIFI: DriverEntry succeeded
+[   24.007669] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\afd.sys at FFFFCC1A8BC82000 with 1a pages
+[   24.277354] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\system32\drivers\netio.sys at FFFFCC1A8BC74000 with e pages
+[   24.433422] (\ntoskrnl\io\pnpmgr\pnproot.c:1373) IRP_MJ_PNP / Unknown minor function 0x1
+[   24.438683] (\ntoskrnl\io\pnpmgr\devaction.c:1936) Removal vetoed by Root\SOFTGPU\0000
+[   24.446549] (\ntoskrnl\io\pnpmgr\devaction.c:2057) Removal vetoed by failing the query remove request
+[   24.455826] (\ntoskrnl\io\pnpmgr\pnproot.c:1373) IRP_MJ_PNP / Unknown minor function 0x3
+KDB: Executing KDBinit file...
+KDB: KDBinit executed
+[   24.584337] (\ntoskrnl\io\iomgr\driver.c:309) Deleting driver object '\Driver\KdDriver'
+[   24.646059] WARNING:  RtlCreateTagHeap at \sdk\lib\rtl\heap.c:4043 is UNIMPLEMENTED!
+[   25.172702] (\base\system\smss\pagefile.c:969) SMSS:PFILE: Volume `\??\C:\' (121) cannot store a paging file
+[   25.317097] (\base\system\smss\pagefile.c:969) SMSS:PFILE: Volume `\??\D:\' (121) cannot store a paging file
+[   25.439215] (\base\system\smss\pagefile.c:930) SMSS:PFILE: Open volume `\??\E:\' failed with status C000014F
+[   25.561326] (\base\system\smss\pagefile.c:930) SMSS:PFILE: Open volume `\??\F:\' failed with status C000014F
+[   25.568268] (\base\system\smss\pagefile.c:1048) SMSS:PFILE: No paging-file-capable volumes found
+[   25.577034] (\ntoskrnl\config\cmsysini.c:1214) CmpGetRegistryPath: ConfigPath = '\SystemRoot\System32\Config\'
+[   25.587045] (\ntoskrnl\config\cmsysini.c:1214) CmpGetRegistryPath: ConfigPath = '\SystemRoot\System32\Config\'
+[   25.587192] (\ntoskrnl\config\cmsysini.c:1214) CmpGetRegistryPath: ConfigPath = '\SystemRoot\System32\Config\'
+[   25.587073] (\ntoskrnl\config\cmsysini.c:1214) CmpGetRegistryPath: ConfigPath = '\SystemRoot\System32\Config\'
+[   25.587103] (\ntoskrnl\config\cmsysini.c:1214) CmpGetRegistryPath: ConfigPath = '\SystemRoot\System32\Config\'
+[   25.596994] (\ntoskrnl\config\cmsysini.c:1214) CmpGetRegistryPath: ConfigPath = '\SystemRoot\System32\Config\'
+[   25.617086] (\ntoskrnl\config\cmsysini.c:1214) CmpGetRegistryPath: ConfigPath = '\SystemRoot\System32\Config\'
+[   25.775332] (\ntoskrnl\mm\ARM3\session.c:846) Session 0 is ready to go: 0xFFFFF97FFF010000 0xFFFFCC1A8BC21000, 2220 0x0000000000000000
+[   25.918024] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\System32\win32k.sys at FFFFCC1A8BA97000 with 17a pages
+[   26.185565] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\System32\ftfd.dll at FFFFCC1A8B9F5000 with a2 pages
+[   27.019638] (\win32ss\gdi\ntgdi\d3dkmt.c:183) DxStartupDxgkInt: Entry
+[   27.023237] (\win32ss\reactx\ntddraw\ddraw.c:57) Warning: trying loading xp/2003/windows7/reactos dxg.sys
+[   27.162656] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\System32\drivers\dxg.sys at FFFFCC1A8B9D7000 with b pages
+[   27.502610] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\System32\drivers\dxgthk.sys at FFFFCC1A8BC1C000 with 5 pages
+[   27.857714] (\win32ss\reactx\ntddraw\ddraw.c:112) DirectX interface is activated
+[   28.342883] (\win32ss\user\ntuser\winsta.c:243) err: Invalid window station handle
+[   28.347634] (\win32ss\user\ntuser\clipboard.c:31) err: Cannot open winsta
+[   28.749772] (\win32ss\user\ntuser\keyboard.c:221) err: NtDeviceIoControlFile() failed, ignored
+[   28.749784] (\win32ss\user\ntuser\class.c:2396) err: SYSTEMCUR(ARROW) == NULL, should not happen!!
+[   28.764453] (\win32ss\user\ntuser\class.c:2396) err: SYSTEMCUR(ARROW) == NULL, should not happen!!
+[   28.773381] (\win32ss\user\ntuser\class.c:2396) err: SYSTEMCUR(ARROW) == NULL, should not happen!!
+[   28.782319] (\win32ss\user\ntuser\class.c:2396) err: SYSTEMCUR(ARROW) == NULL, should not happen!!
+[   28.791255] (\win32ss\user\ntuser\class.c:2396) err: SYSTEMCUR(ARROW) == NULL, should not happen!!
+[   28.800191] (\win32ss\user\ntuser\class.c:2396) err: SYSTEMCUR(ARROW) == NULL, should not happen!!
+[   28.812693] (\win32ss\user\ntuser\desktop.c:3395) err: The process 0xFFFFFB38ADE10B30 'winlogon.exe' didn't have an assigned startup desktop before, assigning it now!
+[   28.824707] (\win32ss\user\ntuser\desktop.c:3333) err: Attempted to change thread desktop although the thread has windows!
+[   28.835851] (\win32ss\user\winsrv\usersrv\init.c:171) We are logged off
+[   28.927353] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\System32\kbdus.dll at FFFFCC1A8B999000 with 5 pages
+[   29.296857] (\base\system\services\services.c:64) CheckSetup()
+[   29.299960] (\base\system\services\services.c:108) Running on LiveCD
+[   29.306151] (\base\system\services\services.c:130) ReactOS Setup currently in progress!
+[   29.586435] WARNING:  HvHiveWillShrink at \sdk\lib\cmlib\hivewrt.c:584 is UNIMPLEMENTED!
+[   29.983266] (\win32ss\gdi\eng\mouse.c:811) Failed to lock the DC.
+[   30.008569] fixme:(\dll\win32\rpcrt4\rpc_server.c:1736) (0x1000): stub
+[   30.028447] (\base\system\services\services.c:185) ScmLogEvent: RegisterEventSourceW failed 1722
+[   30.034626] WARNING:  getMacAddress at \base\services\dcomlaunch\network.c:32 is UNIMPLEMENTED!
+[   30.043031] (\base\services\dcomlaunch\network.c:136) Failed finding a proper MAC address, will generate seed
+[   30.056356] (\base\system\services\services.c:185) ScmLogEvent: RegisterEventSourceW failed 1722
+[   30.108127] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\System32\cdd.dll at FFFFCC1A8B889000 with 9 pages
+[   30.152804] WARNING:  LDEVOBJ_bUnloadImage at \win32ss\gdi\eng\ldevobj.c:291 is UNIMPLEMENTED!
+[   30.172814] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\System32\framebuf.dll at FFFFCC1A8B880000 with 9 pages
+[   30.227808] WARNING:  LDEVOBJ_bUnloadImage at \win32ss\gdi\eng\ldevobj.c:291 is UNIMPLEMENTED!
+[   30.236691] (\win32ss\reactx\ntddraw\dxeng.c:286) ReactX Calling : DxEngGetHdevData, Type: 12
+[   30.242329] (\win32ss\reactx\ntddraw\dxeng.c:289) hDev: FFFFAC4B8DED9510
+[   30.249012] (\win32ss\reactx\ntddraw\dxeng.c:343) requested DxEGShDevData_display
+[   30.256471] (\win32ss\reactx\ntddraw\dxeng.c:376) retVal: 00000001
+[   30.262633] (\win32ss\reactx\ntddraw\dxeng.c:286) ReactX Calling : DxEngGetHdevData, Type: 7
+[   30.271047] (\win32ss\reactx\ntddraw\dxeng.c:289) hDev: FFFFAC4B8DED9510
+[   30.277729] (\win32ss\reactx\ntddraw\dxeng.c:323) requested DxEGShDevData_eddg
+[   30.284929] (\win32ss\reactx\ntddraw\dxeng.c:376) retVal: ffffac4b8dedb010
+[   30.291785] (\win32ss\reactx\ntddraw\dxeng.c:286) ReactX Calling : DxEngGetHdevData, Type: 6
+[   30.300199] (\win32ss\reactx\ntddraw\dxeng.c:289) hDev: FFFFAC4B8DED9510
+[   30.306882] (\win32ss\reactx\ntddraw\dxeng.c:319) requested DxEGShDevData_dhpdev
+[   30.314255] (\win32ss\reactx\ntddraw\dxeng.c:376) retVal: ffffac4b8dedbf50
+[   30.321111] (\win32ss\reactx\ntddraw\dxeng.c:534) ReactX Calling : DxEngLockHdev
+[   30.328484] (\win32ss\reactx\ntddraw\dxeng.c:536) hDev: FFFFAC4B8DED9510
+[   30.335167] (\win32ss\reactx\ntddraw\dxeng.c:286) ReactX Calling : DxEngGetHdevData, Type: 5
+[   30.336062] RPI5VC4: present #1 moves=0 dirty=1 flip=0 idx=0 scan=3f400000
+[   30.343581] (\win32ss\reactx\ntddraw\dxeng.c:289) hDev: FFFFAC4B8DED9510
+[   30.357118] (\win32ss\reactx\ntddraw\dxeng.c:315) requested DxEGShDevData_DrvFuncs
+[   30.364664] (\win32ss\reactx\ntddraw\dxeng.c:376) retVal: ffffac4b8ded9878
+[   30.371521] (\win32ss\reactx\ntddraw\dxeng.c:571) ReactX Calling : DxEngUnlockHdev
+[   30.376694] RPI5VC4: flip ring: 3 x 8100 KB at 00:4bc5c000
+[   30.389669] RPI5VC4: LPTRS@0x110=000002a0 head=672 ctl0=490cc007 ptr1=3f400000 valid=1 match=1
+[   30.395396] RPI5VC4: LPTRS@0x03c=ffffffff head=4095 (skip)
+[   30.399494] err:(\win32ss\user\user32\windows\cursoricon.c:274) Loading System Cursors
+[   30.400861] RPI5VC4: flip OK head=672 -> 00:4bc5c000
+[   30.666485] RPI5VC4: present #2 moves=0 dirty=1 flip=3 idx=0 scan=4bc5c000
+[   30.674144] RPI5VC4: LPTRS@0x110=000002a0 head=672 ctl0=490cc007 ptr1=4bc5c000 valid=1 match=1
+[   30.678584] err:(\dll\win32\lsasrv\lsarpc.c:1452) LsapOpenDbObject(Accounts/S-1-5-6) failed (Status 0xc0000034)
+[   30.677089] fixme:(\dll\win32\rpcrt4\rpc_server.c:1736) (0x1000): stub
+[   30.679874] RPI5VC4: LPTRS@0x03c=ffffffff head=4095 (skip)
+[   30.701910] RPI5VC4: flip OK head=672 -> 00:4c445000
+[   30.931091] err:(\win32ss\user\user32\misc\dllmain.c:668) hIconSmWindows 0000000000020070 hIconWindows 000000000002006E 
+[   30.939081] (\win32ss\user\ntuser\callback.c:1149) err: hIconSmWindows 0000000000020070 hIconWindows 000000000002006E 
+[   30.950255] (\win32ss\user\ntuser\desktop.c:3333) err: Attempted to change thread desktop although the thread has windows!
+[   30.965518] RPI5VC4: present #3 moves=0 dirty=1 flip=3 idx=1 scan=4c445000
+[   30.974367] RPI5VC4: LPTRS@0x110=000002a0 head=672 ctl0=490cc007 ptr1=4c445000 valid=1 match=1
+[   30.980093] RPI5VC4: LPTRS@0x03c=ffffffff head=4095 (skip)
+[   30.985563] RPI5VC4: flip OK head=672 -> 00:4cc2e000
+[   31.087791] RPI5VC4: present #4 moves=0 dirty=1 flip=3 idx=2 scan=4cc2e000
+[   31.092637] RPI5VC4: present #64 moves=0 dirty=1 flip=3 idx=2 scan=4cc2e000
+[   31.099524] RPI5VC4: LPTRS@0x110=000002a0 head=672 ctl0=490cc007 ptr1=4cc2e000 valid=1 match=1
+[   31.107313] RPI5VC4: LPTRS@0x03c=ffffffff head=4095 (skip)
+[   31.112783] RPI5VC4: takeover OK reg=0x110 head=672 fb=00:4cc2e000 cursor=1 start=9 count=19
+[   31.266528] err:(\win32ss\user\user32\windows\window.c:496) CreateWindowExW RegisterSystemControls
+[   31.362047] RPI5VC4: LPTRS@0x110=000002a0 head=672 ctl0=490cc007 ptr1=4cc2e000 valid=1 match=1
+[   31.367779] RPI5VC4: LPTRS@0x03c=ffffffff head=4095 (skip)
+[   31.373241] RPI5VC4: flip OK head=672 -> 00:4bc5c000
+[   31.627596] RPI5VC4: present #128 moves=0 dirty=1 flip=3 idx=0 scan=4bc5c000
+[   31.648475] RPI5VC4: LPTRS@0x110=000002a0 head=672 ctl0=490cc007 ptr1=4bc5c000 valid=1 match=1
+[   31.654203] RPI5VC4: flip OK head=672 -> 00:4c445000
+[   31.686831] (\win32ss\user\ntuser\desktop.c:1370) err: ptiLastInput is CLEARED!!
+[   31.700358] (\ntoskrnl\config\cmcontrl.c:269) CmpSaveBootControlSet(1)
+[   31.700771] (\win32ss\user\ntuser\msgqueue.c:842) err: Remove Window Messages FFFFAC4B8DF60C60 From Sent Queue
+[   31.714031] (\win32ss\user\ntuser\desktop.c:3333) err: Attempted to change thread desktop although the thread has windows!
+[   31.725305] RPI5VC4: LPTRS@0x110=000002a0 head=672 ctl0=490cc007 ptr1=4c445000 valid=1 match=1
+[   31.733726] RPI5VC4: takeover OK reg=0x110 head=672 fb=00:4c445000 cursor=0 start=9 count=10
+[   31.742264] (\win32ss\user\ntuser\msgqueue.c:2265) err: Thread Cleanup Sent Messages FFFFAC4B8DF60C60
+[   31.751265] RPI5VC4: LPTRS@0x110=000002a0 head=672 ctl0=490cc007 ptr1=4c445000 valid=1 match=1
+[   31.759810] RPI5VC4: takeover OK reg=0x110 head=672 fb=00:4c445000 cursor=1 start=9 count=19
+[   31.777420] RPI5VC4: LPTRS@0x110=000002a0 head=672 ctl0=490cc007 ptr1=4c445000 valid=1 match=1
+[   31.783147] RPI5VC4: flip OK head=672 -> 00:4cc2e000
+[   31.796687] RPI5VC4: present #192 moves=0 dirty=1 flip=3 idx=2 scan=4cc2e000
+[   31.999711] err:(\base\services\schedsvc\rpcserver.c:62) RpcServerListen() failed (Status 6b1)
+[   32.202521] V3DSMOKE: rpi5vc4 V3dReady=1 ver=71 slab=64MB gpuva=0x01000000
+[   32.206534] (\drivers\directx\dxgkrnl\d3dkmt.c:3488) D3DKMT CREATEALLOC #1 enter
+[   32.213900] (\drivers\directx\dxgkrnl\d3dkmt.c:3491) D3DKMT CREATEALLOC #1 exit 0x00000000
+[   32.222181] (\drivers\directx\dxgkrnl\d3dkmt.c:3524) D3DKMT LOCK #1 enter hAlloc=0x4d4d414d
+[   32.231056] (\drivers\directx\dxgkrnl\vidmm.c:3077) VidMm usermap #1 h=0x4D4D414D va=0000000040520000 resident=1 seg=1 pa=401db000 cache=2
+[   32.242872] (\drivers\directx\dxgkrnl\d3dkmt.c:3570) D3DKMT LOCK #1 exit va=0000000040520000
+[   32.251349] (\drivers\directx\rpi5vc4\rpi5vc4_wddm.c:276) RPI5VC4: V3D job fence=1 EMPTY ranges bcl=00000000..00000000 rcl=01000000..01000000 qts=00000000 — completing without kick
+[   32.267589] V3DSMOKE: alloc-relative submit status=0x00000000
+[   32.273261] (\drivers\directx\dxgkrnl\d3dkmt.c:3488) D3DKMT CREATEALLOC #2 enter
+[   32.280620] (\drivers\directx\dxgkrnl\d3dkmt.c:3491) D3DKMT CREATEALLOC #2 exit 0x00000000
+[   32.298126] err:(\base\services\wkssvc\wkssvc.c:82) ServiceInit()
+[   32.301786] (\dll\win32\syssetup\wizard.c:1482) Applying visual theme '(Classic)'
+[   32.306913] (\base\system\services\database.c:1836) Service V3dProbe exited without connecting the control pipe
+[   32.318878] (\base\system\services\database.c:2107) Connecting control pipe failed! (Error 1053)
+[   32.327633] (\base\system\services\database.c:753) ScmRemoveServiceImage() called
+[   32.571207] RPI5VC4: present #256 moves=0 dirty=1 flip=3 idx=1 scan=4c445000
+[   32.715289] fixme:(\win32ss\printing\providers\localspl\monitors.c:265) InitializePrintMonitor2 loaded.
+[   32.720718] err:(\base\services\wkssvc\rpcserver.c:61) RpcServerListen() failed (Status 6b1)
+[   32.721806] fixme:(\win32ss\printing\providers\localspl\monitors.c:304) InitializePrintMonitorList Handle 00000000401368E0
+[   33.108970] fixme:(\base\services\browser\browser.c:144) ServiceMain(1 0000000040127A90)
+[   33.128781] fixme:(\win32ss\printing\providers\localspl\forms.c:234) InitializeFormList
+[   33.135118] fixme:(\win32ss\printing\providers\localspl\printerdrivers.c:788) LocalGetPrinterDriverDirectory((null), Windows ARM64, 1, 00000000419FF168, 520, 00000000419FF164)
+[   33.160246] err:(\base\services\srvsvc\rpcserver.c:64) RpcServerListen() failed (Status 6b1)
+[   33.165905] err:(\base\services\browser\rpcserver.c:42) RpcServerListen() failed (Status 6b1)
+[   33.786110] fixme:(\win32ss\printing\providers\localspl\printerdrivers.c:832) => L"C:\\ReactOS\\System32\\spool\\drivers\\arm64"
+[   33.794795] fixme:(\win32ss\printing\providers\localspl\printerdrivers.c:114) DriverPath : C:\ReactOS\System32\spool\drivers\arm64\3\UniDrv.dll
+[   33.818194] (\base\services\wuauserv\wuauserv.c:44) WU UpdateServiceStatus(4) called
+[   33.838052] (\win32ss\user\ntuser\winpos.c:796) err: FIXME: Parent is Desktop, Min off screen!
+[   33.844467] err:(\dll\win32\combase\combase.c:1796) class {56fdf344-fd6d-11d0-958a-006097c9a090} not registered
+[   33.853850] err:(\dll\win32\combase\combase.c:1874) no class object {56fdf344-fd6d-11d0-958a-006097c9a090} could be created for context 0x1
+[   34.625807] RPI5VC4: present #320 moves=0 dirty=1 flip=3 idx=1 scan=4c445000
+[   34.630482] RPI5VC4: present #384 moves=0 dirty=1 flip=3 idx=1 scan=4c445000
+[   34.655061] RPI5VC4: present #448 moves=0 dirty=1 flip=3 idx=2 scan=4cc2e000
+[   34.666501] RPI5VC4: present #512 moves=0 dirty=1 flip=3 idx=2 scan=4cc2e000
+[   34.680804] RPI5VC4: present #576 moves=0 dirty=1 flip=3 idx=0 scan=4bc5c000
+[   35.118723] (\base\services\umpnpmgr\event.c:103) Removal pending: Root\SOFTGPU\0000
+[   35.119643] (\base\services\umpnpmgr\install.c:931) Boot device install: 38 candidate(s), 36 need install
+[   35.123593] (\base\services\umpnpmgr\event.c:99) Removal vetoed: Root\SOFTGPU\0000
+[   35.133130] (\base\services\umpnpmgr\install.c:392) Installing: batch[36 devices]
+[   35.140920] (\base\services\umpnpmgr\event.c:103) Removal pending: Root\SOFTGPU\0000
+[   35.155872] (\base\services\umpnpmgr\event.c:99) Removal vetoed: Root\SOFTGPU\0000
+[   35.235463] RPI5VC4: present #640 moves=0 dirty=1 flip=3 idx=1 scan=4c445000
+[   35.255720] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\ACPI0004\0
+[   35.260165] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\ACPI0004\1
+[   35.267446] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\ACPI0007\0
+[   35.274731] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\ACPI0007\1
+[   35.282023] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\ACPI0007\2
+[   35.289308] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\ACPI0007\3
+[   35.296597] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\AMZN0001\1
+[   35.303883] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\ARMH0011\0
+[   35.311175] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\BRCM5D12\0
+[   35.318460] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\BRCM5D12\1
+[   35.325752] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\FixedButton\2&ccb86d17&FFB0
+[   35.334511] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\PNP0A08\1
+[   35.341715] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\PNP0D10\0
+[   35.348914] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\PNP0D10\1
+[   35.356118] (\base\services\umpnpmgr\install.c:526) Installing: ACPI\PRP0001\0
+[   35.363318] (\base\services\umpnpmgr\install.c:526) Installing: ACPI_HAL\PNP0C08\0
+[   35.370867] (\base\services\umpnpmgr\install.c:526) Installing: DISPLAY\Default_Monitor\4&00000000&0&00
+[   35.380236] (\base\services\umpnpmgr\install.c:526) Installing: DISPLAY\Default_Monitor\4&00000001&0&01
+[   35.389608] (\base\services\umpnpmgr\install.c:526) Installing: HID\Vid_413c&Pid_301a\5&68ef529e&2&Col0001
+[   35.399239] (\base\services\umpnpmgr\install.c:526) Installing: HTREE\ROOT\0
+[   35.406266] (\base\services\umpnpmgr\install.c:526) Installing: Root\ACPI_HAL\0000
+[   35.413814] (\base\services\umpnpmgr\install.c:526) Installing: SD\VID_0003&PID_FF00\00000000_00000000_B0FEFF00
+[   35.423883] (\base\services\umpnpmgr\install.c:526) Installing: SDIO\VEN_02D0&DEV_4345&FUNC_1\00000000_00000000_02D0_4345_FUNC_1
+[   35.435420] (\base\services\umpnpmgr\install.c:526) Installing: SDIO\VEN_02D0&DEV_4345&FUNC_2\00000000_00000000_02D0_4345_FUNC_2
+[   35.446960] (\base\services\umpnpmgr\install.c:526) Installing: SDIO\VEN_02D0&DEV_4345&FUNC_3\00000000_00000000_02D0_4345_FUNC_3
+[   35.458499] (\base\services\umpnpmgr\install.c:526) Installing: STORAGE\Partition\6&3c4bbb55&S00000000_O100000_L2ff00000
+[   35.469345] (\base\services\umpnpmgr\install.c:526) Installing: STORAGE\Partition\6&87aea797&S9df3f58f-f8ad-4f63-9de5-0e0a91c4e2a0S_O100000_L10400000
+[   35.482708] (\base\services\umpnpmgr\install.c:526) Installing: STORAGE\Partition\6&87aea797&S9df3f58f-f8ad-4f63-9de5-0e0a91c4e2a0S_O10500000_L1000000
+[   35.496155] (\base\services\umpnpmgr\install.c:526) Installing: STORAGE\Partition\6&87aea797&S9df3f58f-f8ad-4f63-9de5-0e0a91c4e2a0S_O11500000_L7c0000000
+[   35.509775] (\base\services\umpnpmgr\install.c:526) Installing: USB\ROOT_HUB\3&cc8c31f5
+[   35.517755] (\base\services\umpnpmgr\install.c:526) Installing: USB\ROOT_HUB\3&d59700b4
+[   35.521060] (\base\services\umpnpmgr\rpcserver.c:3673) PNP_SetDeviceProblem(0000000040135D60 ACPI\ACPI0004\0 28 0x00000001)
+[   35.525743] (\base\services\umpnpmgr\install.c:526) Installing: USB\Vid_0781&Pid_5581\0901da96cc5f2a6e98145c166ee0bf8579199debc6f1126c17dcbe55724e3388e11a00000000000000000000897c8cadff082920815581076e327e7a
+[   35.536883] (\base\services\umpnpmgr\rpcserver.c:277) SetDeviceStatus(ACPI\ACPI0004\0 0x400 0x1c)
+[   35.555155] (\base\services\umpnpmgr\install.c:526) Installing: USB\Vid_0781&Pid_5591\01016e01ffd6f47ad7a9a904dc54438de8ee4ed362c463e23b37a4d9b83f12b6b3e3000000000000000000004ca60268000d5400915581077b32dc12
+[   35.564010] (\ntoskrnl\io\pnpmgr\plugplay.c:983) Set status data is NOT SUPPORTED
+[   35.582309] (\base\services\umpnpmgr\install.c:526) Installing: USB\Vid_413c&Pid_301a\4&83bb0d7e&2
+[   35.592834] (\base\services\umpnpmgr\rpcserver.c:3673) PNP_SetDeviceProblem(0000000040135D60 ACPI\ACPI0004\1 28 0x00000001)
+[   35.598714] (\base\services\umpnpmgr\install.c:526) Installing: USBSTOR\Disk&Ven__USB____&Prod__SanDisk_3.2Gen1&Rev_1.00\5&955e2bc9&01016e01ffd6f47ad7a9a904dc54438de8ee4ed362c463e23b37a4d9b83f12b6b3e3000000000000000000004ca60268000d5400915581077b32dc12&0
+[   35.609830] (\base\services\umpnpmgr\rpcserver.c:277) SetDeviceStatus(ACPI\ACPI0004\1 0x400 0x1c)
+[   35.632289] (\base\services\umpnpmgr\install.c:526) Installing: USBSTOR\Disk&Ven__USB____&Prod__SanDisk_3.2Gen1&Rev_1.00\5&bb7f1351&0901da96cc5f2a6e98145c166ee0bf8579199debc6f1126c17dcbe55724e3388e11a00000000000000000000897c8cadff082920815581076e327e7a&0
+[   35.641143] (\ntoskrnl\io\pnpmgr\plugplay.c:983) Set status data is NOT SUPPORTED
+[   36.254113] (\base\services\umpnpmgr\rpcserver.c:3673) PNP_SetDeviceProblem(0000000040135D60 ACPI\BRCM5D12\0 28 0x00000001)
+[   36.262398] (\base\services\umpnpmgr\rpcserver.c:277) SetDeviceStatus(ACPI\BRCM5D12\0 0x400 0x1c)
+[   36.271230] (\ntoskrnl\io\pnpmgr\plugplay.c:983) Set status data is NOT SUPPORTED
+[   36.279851] (\base\services\umpnpmgr\rpcserver.c:3673) PNP_SetDeviceProblem(0000000040135D60 ACPI\BRCM5D12\1 28 0x00000001)
+[   36.289804] (\base\services\umpnpmgr\rpcserver.c:277) SetDeviceStatus(ACPI\BRCM5D12\1 0x400 0x1c)
+[   36.298650] (\ntoskrnl\io\pnpmgr\plugplay.c:983) Set status data is NOT SUPPORTED
+[   36.585909] (\ntoskrnl\io\pnpmgr\devaction.c:2657) NOTE: attempt to start an already started/uninitialized device ACPI\PNP0A08\1
+[   36.731884] (\ntoskrnl\io\pnpmgr\devaction.c:2657) NOTE: attempt to start an already started/uninitialized device ACPI\PNP0D10\0
+[   36.809895] (\ntoskrnl\io\pnpmgr\devaction.c:2657) NOTE: attempt to start an already started/uninitialized device ACPI\PNP0D10\1
+[   36.928704] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\System32\drivers\rp1gem.sys at FFFFCC1A89E5E000 with c pages
+[   36.952593] NDIS6-INIT: NdisAllocateBufferPool -> 0x00000000, handle=0000000000000000
+[   36.957540] NDIS6-INIT: NdisAllocatePacketPool -> 0x00000000, handle=FFFFFB38AD310000
+[   36.965957] NDIS6: InitializeEx → driver (adapter=FFFFFB38AD3151C0 pdo=FFFFFB38AE09D070 fdo=FFFFFB38AD315070 next=FFFFFB38AE09D070)
+[   36.983439] NDIS6: NdisMRegisterInterruptEx vec=261 irql=12 affinity=0x1 mode=Level share=1
+[   36.988911] NDIS6: IoConnectInterrupt -> 0x00000000, KINTERRUPT=FFFFFB38AE348010
+[   36.996409] NDIS6: adapter FFFFFB38AD3151C0 MAC 2c:cf:67:dd:90:9a connect=2
+[   37.003358] NDIS6: InitializeEx returned 0x00000000 (ctx=FFFFFB38AD30B000)
+[   37.010079] (\drivers\network\nwifi\protocol.c:248) NWIFI: BindAdapterEx '\Device\{31da9343-73b4-487b-b49f-79fce37575b9}'
+[   37.021009] (\drivers\network\nwifi\protocol.c:253) NWIFI: skipping non-dot11 medium 0
+[   37.165469] (\ntoskrnl\io\pnpmgr\devaction.c:2657) NOTE: attempt to start an already started/uninitialized device ACPI_HAL\PNP0C08\0
+[   37.461364] (\ntoskrnl\io\pnpmgr\devaction.c:2657) NOTE: attempt to start an already started/uninitialized device HID\Vid_413c&Pid_301a\5&68ef529e&2&Col0001
+[   37.608506] (\ntoskrnl\io\pnpmgr\devaction.c:2657) NOTE: attempt to start an already started/uninitialized device Root\ACPI_HAL\0000
+[   37.752233] (\base\services\umpnpmgr\rpcserver.c:3673) PNP_SetDeviceProblem(0000000040135D60 SD\VID_0003&PID_FF00\00000000_00000000_B0FEFF00 28 0x00000001)
+[   37.763297] (\base\services\umpnpmgr\rpcserver.c:277) SetDeviceStatus(SD\VID_0003&PID_FF00\00000000_00000000_B0FEFF00 0x400 0x1c)
+[   37.774903] (\ntoskrnl\io\pnpmgr\plugplay.c:983) Set status data is NOT SUPPORTED
+[   37.926892] RPI5VC4: present #704 moves=0 dirty=1 flip=3 idx=1 scan=4c445000
+[   37.932934] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\System32\drivers\cyw43455.sys at FFFFCC1A89E50000 with e pages
+[   37.957311] NDIS6-INIT: NdisAllocateBufferPool -> 0x00000000, handle=0000000000000000
+[   37.962263] NDIS6-INIT: NdisAllocatePacketPool -> 0x00000000, handle=FFFFFB38AE39E000
+[   37.970095] NDIS6: InitializeEx → driver (adapter=FFFFFB38AE39D1C0 pdo=FFFFFB38ADFCA070 fdo=FFFFFB38AE39D070 next=FFFFFB38ADFCA070)
+[   38.201508] NDIS6: adapter FFFFFB38AE39D1C0 MAC b8:27:eb:74:f2:6c connect=2
+[   38.205629] NDIS6: InitializeEx returned 0x00000000 (ctx=FFFFFB38AE3A3000)
+[   38.212446] (\drivers\network\nwifi\protocol.c:248) NWIFI: BindAdapterEx '\Device\{190e547b-d981-4b77-813d-677cfd9e9dab}'
+[   38.223760] NDIS6: seeded TCPIP registry for \Device\{B1D2C3E4-5F6A-4B8C-9D0E-02524F535731}
+[   38.231703] NDIS6: InitializeEx → driver (adapter=FFFFFB38AE6051C0 pdo=FFFFFB38AE605070 fdo=FFFFFB38AE605070 next=0000000000000000)
+[   38.243678] (\drivers\network\nwifi\miniport.c:117) NWIFI: MiniportInitializeEx interface 0
+[   38.252005] NDIS6: adapter FFFFFB38AE6051C0 MAC b8:27:eb:74:f2:6c connect=2
+[   38.258946] NDIS6: InitializeEx returned 0x00000000 (ctx=FFFFFB38AE431970)
+[   38.265798] NDIS6: Restart → driver
+[   38.269445] (\drivers\network\nwifi\miniport.c:210) NWIFI: MiniportRestartEx interface 0
+[   38.277514] NDIS6: LINK_STATE adapter=FFFFFB38AE6051C0 connect=2 rx=18446744073709551615 tx=18446744073709551615
+[   38.287665] NDIS6: RestartHandler returned 0x00000000
+[   38.292698] (\drivers\network\nwifi\protocol.c:248) NWIFI: BindAdapterEx '\Device\{B1D2C3E4-5F6A-4B8C-9D0E-02524F535731}'
+[   38.303630] (\drivers\network\nwifi\protocol.c:253) NWIFI: skipping non-dot11 medium 0
+[   38.311524] (\drivers\network\nwifi\protocol.c:383) NWIFI: bound interface 0 MAC b8:27:eb:74:f2:6c
+[   38.454258] (\base\services\umpnpmgr\rpcserver.c:3673) PNP_SetDeviceProblem(0000000040135D60 SDIO\VEN_02D0&DEV_4345&FUNC_2\00000000_00000000_02D0_4345_FUNC_2 28 0x00000001)
+[   38.466805] (\base\services\umpnpmgr\rpcserver.c:277) SetDeviceStatus(SDIO\VEN_02D0&DEV_4345&FUNC_2\00000000_00000000_02D0_4345_FUNC_2 0x400 0x1c)
+[   38.479886] (\ntoskrnl\io\pnpmgr\plugplay.c:983) Set status data is NOT SUPPORTED
+[   38.544521] (\base\services\umpnpmgr\rpcserver.c:3673) PNP_SetDeviceProblem(0000000040135D60 SDIO\VEN_02D0&DEV_4345&FUNC_3\00000000_00000000_02D0_4345_FUNC_3 28 0x00000001)
+[   38.557036] (\base\services\umpnpmgr\rpcserver.c:277) SetDeviceStatus(SDIO\VEN_02D0&DEV_4345&FUNC_3\00000000_00000000_02D0_4345_FUNC_3 0x400 0x1c)
+[   38.570127] (\ntoskrnl\io\pnpmgr\plugplay.c:983) Set status data is NOT SUPPORTED
+[   38.850627] (\ntoskrnl\io\pnpmgr\devaction.c:2657) NOTE: attempt to start an already started/uninitialized device USB\ROOT_HUB\3&cc8c31f5
+[   38.997628] (\ntoskrnl\io\pnpmgr\devaction.c:2657) NOTE: attempt to start an already started/uninitialized device USB\ROOT_HUB\3&d59700b4
+[   39.143335] (\ntoskrnl\io\pnpmgr\devaction.c:2657) NOTE: attempt to start an already started/uninitialized device USB\Vid_0781&Pid_5581\0901da96cc5f2a6e98145c166ee0bf8579199debc6f1126c17dcbe55724e3388e11a00000000000000000000897c8cadff082920815581076e327e7a
+[   39.299613] (\ntoskrnl\io\pnpmgr\devaction.c:2657) NOTE: attempt to start an already started/uninitialized device USB\Vid_0781&Pid_5591\01016e01ffd6f47ad7a9a904dc54438de8ee4ed362c463e23b37a4d9b83f12b6b3e3000000000000000000004ca60268000d5400915581077b32dc12
+[   39.456885] (\ntoskrnl\io\pnpmgr\devaction.c:2657) NOTE: attempt to start an already started/uninitialized device USB\Vid_413c&Pid_301a\4&83bb0d7e&2
+[   39.619550] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(23 00000000401335F0 0000000040136780)
+[   39.626022] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(24 00000000401335F0 0000000040136780)
+[   39.635096] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(28 00000000401335F0 0000000040136780)
+[   39.644189] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(29 00000000401335F0 0000000040136780)
+[   39.653294] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(21 00000000401335F0 0000000040136780)
+[   39.662836] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(34 00000000401335F0 0000000040136780)
+[   39.671912] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(32 00000000401335F0 0000000040136780)
+[   39.681434] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(2 00000000401335F0 0000000040136780)
+[   39.693053] (\ntoskrnl\io\pnpmgr\devaction.c:2657) NOTE: attempt to start an already started/uninitialized device USBSTOR\Disk&Ven__USB____&Prod__SanDisk_3.2Gen1&Rev_1.00\5&955e2bc9&01016e01ffd6f47ad7a9a904dc54438de8ee4ed362c463e23b37a4d9b83f12b6b3e3000000000000000000004ca60268000d5400915581077b32dc12&0
+[   39.717869] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(30 00000000401335F0 0000000040136780)
+[   39.726185] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(12 00000000401335F0 0000000040136780)
+[   39.738609] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(23 00000000401335F0 0000000040136780)
+[   39.744999] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(24 00000000401335F0 0000000040136780)
+[   39.754121] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(28 00000000401335F0 0000000040136780)
+[   39.763212] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(29 00000000401335F0 0000000040136780)
+[   39.772323] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(21 00000000401335F0 0000000040136780)
+[   39.781835] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(34 00000000401335F0 0000000040136780)
+[   39.790922] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(32 00000000401335F0 0000000040136780)
+[   39.800362] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(2 00000000401335F0 0000000040136780)
+[   39.811949] (\ntoskrnl\io\pnpmgr\devaction.c:2657) NOTE: attempt to start an already started/uninitialized device USBSTOR\Disk&Ven__USB____&Prod__SanDisk_3.2Gen1&Rev_1.00\5&bb7f1351&0901da96cc5f2a6e98145c166ee0bf8579199debc6f1126c17dcbe55724e3388e11a00000000000000000000897c8cadff082920815581076e327e7a&0
+[   39.836708] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(30 00000000401335F0 0000000040136780)
+[   39.845082] (\dll\win32\storprop\disk.c:63) DiskClassInstaller(12 00000000401335F0 0000000040136780)
+[   39.877450] (\win32ss\user\ntuser\desktop.c:1370) err: ptiLastInput is CLEARED!!
+[   39.950344] (\ntoskrnl\mm\ARM3\sysldr.c:170) Loading: \SystemRoot\System32\drivers\tcpip.sys at FFFFCC1A89E07000 with 40 pages
+[   39.977262] NDIS6: Restart → driver
+[   39.978041] NDIS6: RestartHandler returned 0x00000000
+[   39.983338] NDIS6: Restart → driver
+[   39.986717] NDIS6: RestartHandler returned 0x00000000
+[   40.017553] (\base\services\dhcpcsvc\dhcp\api.c:58) RpcServerListen() failed (Status 6b1)
+[   40.040063] fixme:(\dll\win32\rpcrt4\rpc_server.c:1736) (0x1000): stub
+[   41.032777] fixme:(\dll\win32\wintrust\register.c:1227) stub
+[   41.049522] (\win32ss\user\winsrv\usersrv\init.c:152) GetThreadConsoleDesktop(480) failed with Status 0xc0000008
+[   41.099612] NDIS6: LINK_STATE adapter=FFFFFB38AD3151C0 connect=1 rx=1000000000 tx=1000000000
+[   43.054754] (\base\services\dhcpcsvc\dhcp\adapter.c:170) There is no active configuration!
+[   43.060177] DHCPCSVC: Adapter Name: [{31da9343-73b4-487b-b49f-79fce37575b9}] (dynamic)
+[   43.073787] TCPIP-UDP: UDPReceive #1 dst=0x67dfa8c0:68 src=0x01dfa8c0:67 len=300
+[   43.078302] TCPIP-UDP: matched AddrFile=FFFFFB38AE697DB0 — delivering
+[   43.084895] AFD-RX: PacketSocketRecvComplete #1 FCB=FFFFFB38AE696CA0 Status=0x00000000 Info=300
+[   43.105987] Could not load wine-gecko. HTML rendering will be disabled.
+[   43.110047] fixme:(\dll\win32\mshtml\main.c:363) stub 1 (null): returning S_OK
+[   43.627419] fixme:(\dll\win32\olepro32\olepro32stubs.c:47) stub
+[   43.643115] fixme:(\dll\win32\pstorec\pstorec.c:377) 
+[   43.828359] fixme:(\dll\win32\shdocvw\shdocvw_main.c:222) (TRUE, (null)): stub!
+[   44.114314] TCPIP-UDP: UDPReceive #2 dst=0x67dfa8c0:68 src=0x01dfa8c0:67 len=300
+[   44.118830] TCPIP-UDP: matched AddrFile=FFFFFB38AE697DB0 — delivering
+[   44.125427] AFD-RX: PacketSocketRecvComplete #2 FCB=FFFFFB38AE696CA0 Status=0x00000000 Info=300
+[   44.245196] RPI5VC4: present #768 moves=0 dirty=1 flip=3 idx=2 scan=4cc2e000
+[   44.653407] fixme:(\dll\win32\shell32\shell32.cpp:512) TRUE (null): stub
+[   44.918854] fixme:(\dll\win32\urlmon\urlmon_main.c:243) (TRUE, (null)): stub
+[   44.963177] (\base\services\w32time\register.c:54) RegisterService()
+[   45.099489] fixme:(\dll\win32\wininet\internet.c:350) (1 (null)): stub
+[   45.288634] (\dll\ntdll\rtl\libsupp.c:1173) ApiSetResolveToHost redirected api-ms-win-core-synch-l1-2-0 to C:\ReactOS\System32\kernel32.dll
+[   45.306294] (\dll\ntdll\rtl\libsupp.c:1173) ApiSetResolveToHost redirected api-ms-win-core-localization-l1-2-1 to C:\ReactOS\System32\kernel32.dll
+[   45.514304] (\win32ss\user\ntuser\msgqueue.c:2248) err: Thread Cleanup Post Messages FFFFAC4B8DE99300
+[   45.589008] RPI5VC4: present #832 moves=0 dirty=1 flip=3 idx=0 scan=4bc5c000
+[   45.593795] RPI5VC4: present #896 moves=0 dirty=1 flip=3 idx=0 scan=4bc5c000
+[   45.616820] RPI5VC4: present #960 moves=0 dirty=1 flip=3 idx=1 scan=4c445000
+[   45.637114] RPI5VC4: present #1024 moves=0 dirty=1 flip=3 idx=2 scan=4cc2e000
+[   45.641972] RPI5VC4: present #1088 moves=0 dirty=1 flip=3 idx=2 scan=4cc2e000
+[   45.664446] RPI5VC4: present #1152 moves=0 dirty=1 flip=3 idx=0 scan=4bc5c000
+[   45.669298] RPI5VC4: present #1216 moves=0 dirty=1 flip=3 idx=0 scan=4bc5c000
+[   45.691847] RPI5VC4: present #1280 moves=0 dirty=1 flip=3 idx=1 scan=4c445000
+[   45.696693] RPI5VC4: present #1344 moves=0 dirty=1 flip=3 idx=1 scan=4c445000
+[   45.719226] RPI5VC4: present #1408 moves=0 dirty=1 flip=3 idx=2 scan=4cc2e000
+[   45.724062] RPI5VC4: present #1472 moves=0 dirty=1 flip=3 idx=2 scan=4cc2e000
+[   45.746487] RPI5VC4: present #1536 moves=0 dirty=1 flip=3 idx=0 scan=4bc5c000
+[   45.751334] RPI5VC4: present #1600 moves=0 dirty=1 flip=3 idx=0 scan=4bc5c000
+[   45.773911] RPI5VC4: present #1664 moves=0 dirty=1 flip=3 idx=1 scan=4c445000
+[   45.778785] RPI5VC4: present #1728 moves=0 dirty=1 flip=3 idx=1 scan=4c445000
+[   45.801268] RPI5VC4: present #1792 moves=0 dirty=1 flip=3 idx=2 scan=4cc2e000
+[   45.806125] RPI5VC4: present #1856 moves=0 dirty=1 flip=3 idx=2 scan=4cc2e000
+[   45.838543] RPI5VC4: present #1920 moves=0 dirty=1 flip=3 idx=0 scan=4bc5c000
+[   45.843438] RPI5VC4: present #1984 moves=0 dirty=1 flip=3 idx=0 scan=4bc5c000
+[   45.865874] RPI5VC4: present #2048 moves=0 dirty=1 flip=3 idx=1 scan=4c445000
+[   45.870699] RPI5VC4: present #2112 moves=0 dirty=1 flip=3 idx=1 scan=4c445000
+[   45.893218] RPI5VC4: present #2176 moves=0 dirty=1 flip=3 idx=2 scan=4cc2e000
+[   45.898047] RPI5VC4: present #2240 moves=0 dirty=1 flip=3 idx=2 scan=4cc2e000
+[   45.920436] RPI5VC4: present #2304 moves=0 dirty=1 flip=3 idx=0 scan=4bc5c000
+[   45.925261] RPI5VC4: present #2368 moves=0 dirty=1 flip=3 idx=0 scan=4bc5c000
+[   45.947728] RPI5VC4: present #2432 moves=0 dirty=1 flip=3 idx=1 scan=4c445000
+[   45.952551] RPI5VC4: present #2496 moves=0 dirty=1 flip=3 idx=1 scan=4c445000
+[   45.975035] RPI5VC4: present #2560 moves=0 dirty=1 flip=3 idx=2 scan=4cc2e000
+[   45.979867] RPI5VC4: present #2624 moves=0 dirty=1 flip=3 idx=2 scan=4cc2e000
+[   46.002338] RPI5VC4: present #2688 moves=0 dirty=1 flip=3 idx=0 scan=4bc5c000
+[   46.007176] RPI5VC4: present #2752 moves=0 dirty=1 flip=3 idx=0 scan=4bc5c000
+[   46.029576] RPI5VC4: present #2816 moves=0 dirty=1 flip=3 idx=1 scan=4c445000
+[   46.034409] RPI5VC4: present #2880 moves=0 dirty=1 flip=3 idx=1 scan=4c445000
+[   46.056854] RPI5VC4: present #2944 moves=0 dirty=1 flip=3 idx=2 scan=4cc2e000
+[   46.076935] RPI5VC4: present #3008 moves=0 dirty=1 flip=3 idx=0 scan=4bc5c000
+[   46.081791] RPI5VC4: present #3072 moves=0 dirty=1 flip=3 idx=0 scan=4bc5c000
+[   46.104193] RPI5VC4: present #3136 moves=0 dirty=1 flip=3 idx=1 scan=4c445000
+[   46.109153] RPI5VC4: present #3200 moves=0 dirty=1 flip=3 idx=1 scan=4c445000
+[   46.138016] RPI5VC4: present #3264 moves=0 dirty=1 flip=3 idx=2 scan=4cc2e000
+[   46.142861] RPI5VC4: present #3328 moves=0 dirty=1 flip=3 idx=2 scan=4cc2e000
+[   46.165048] RPI5VC4: present #3392 moves=0 dirty=1 flip=3 idx=0 scan=4bc5c000
+[   46.169894] RPI5VC4: present #3456 moves=0 dirty=1 flip=3 idx=0 scan=4bc5c000
+[   46.204747] RPI5VC4: present #3520 moves=0 dirty=1 flip=3 idx=1 scan=4c445000
+[   46.209594] RPI5VC4: present #3584 moves=0 dirty=1 flip=3 idx=1 scan=4c445000
+[   46.232004] RPI5VC4: present #3648 moves=0 dirty=1 flip=3 idx=2 scan=4cc2e000
+[   46.236869] RPI5VC4: present #3712 moves=0 dirty=1 flip=3 idx=2 scan=4cc2e000
+[   46.259104] RPI5VC4: present #3776 moves=0 dirty=1 flip=3 idx=0 scan=4bc5c000
+[   46.263964] RPI5VC4: present #3840 moves=0 dirty=1 flip=3 idx=0 scan=4bc5c000
+[   46.286356] RPI5VC4: present #3904 moves=0 dirty=1 flip=3 idx=1 scan=4c445000
+[   46.291218] RPI5VC4: present #3968 moves=0 dirty=1 flip=3 idx=1 scan=4c445000
+[   46.313558] RPI5VC4: present #4032 moves=0 dirty=1 flip=3 idx=2 scan=4cc2e000
+[   46.318386] RPI5VC4: present #4096 moves=0 dirty=1 flip=3 idx=2 scan=4cc2e000
+[   46.340803] RPI5VC4: present #4160 moves=0 dirty=1 flip=3 idx=0 scan=4bc5c000
+[   46.345626] RPI5VC4: present #4224 moves=0 dirty=1 flip=3 idx=0 scan=4bc5c000
+[   46.368102] RPI5VC4: present #4288 moves=0 dirty=1 flip=3 idx=1 scan=4c445000
+[   46.372924] RPI5VC4: present #4352 moves=0 dirty=1 flip=3 idx=1 scan=4c445000
+[   46.395310] RPI5VC4: present #4416 moves=0 dirty=1 flip=3 idx=2 scan=4cc2e000
+[   46.400136] RPI5VC4: present #4480 moves=0 dirty=1 flip=3 idx=2 scan=4cc2e000
+[   46.422613] RPI5VC4: present #4544 moves=0 dirty=1 flip=3 idx=0 scan=4bc5c000
+[   46.427449] RPI5VC4: present #4608 moves=0 dirty=1 flip=3 idx=0 scan=4bc5c000
+[   46.450068] RPI5VC4: present #4672 moves=0 dirty=1 flip=3 idx=1 scan=4c445000
+[   46.454905] RPI5VC4: present #4736 moves=0 dirty=1 flip=3 idx=1 scan=4c445000
+[   46.474626] (\dll\ntdll\ldr\ldrinit.c:2244) WARN: Accepting different LOAD_CONFIG size!
+[   46.583555] fixme:(\dll\win32\shdocvw\winlist.cpp:81) ()
+[   46.602287] (\win32ss\gdi\ntgdi\dibobj.c:1335) GEARSDIB: dst=21x233 src=21x233 biWH=21x233 rop=00cc0020 surf=21x233 org=0,0
+[   46.635977] fixme:(\dll\win32\comctl32\toolbar.c:403) [00000000000200B2] TBSTYLE_REGISTERDROP not implemented
+[   46.727429] WARNING:  NtNotifyChangeMultipleKeys at \ntoskrnl\config\ntapi.c:1470 is UNIMPLEMENTED!
+[   46.727525] (\win32ss\user\ntuser\desktop.c:1551) err: UMWP calling IDWP
+[   46.733638] err:(\dll\win32\mmdevapi\devenum.c:1309) RegNotifyChangeKeyValue failed: 1
+[   46.740276] (\win32ss\user\ntuser\desktop.c:1551) err: UMWP calling IDWP
+[   46.901222] fixme:(\dll\win32\shell32\shlexec.cpp:2350) flags ignored: 0x00000100
+[   46.949032] fixme:(\dll\win32\setupapi\install.c:1494) default path of the installation not changed
+[   47.047194] err:(\dll\win32\setupapi\queue.c:1215) Unsupported style(s) 0x104
+[   47.171400] fixme:(\dll\win32\advpack\reg.c:197) SYS_MOD_PATH needs more work
+[   47.582591] RPI5VC4: present #4800 moves=0 dirty=1 flip=3 idx=2 scan=4cc2e000
+[   47.587321] RPI5VC4: present #4864 moves=0 dirty=1 flip=3 idx=2 scan=4cc2e000
+[   47.623030] (\win32ss\user\ntuser\winpos.c:1449) err: Window is HWND_BOTTOM hwnd 0000000000000001
+[   47.642028] 
+*** Assertion failed: PointerPte->u.Long == 0
+***   Source File: \ntoskrnl\mm\ARM3\section.c, line 447
+
+Break repeatedly, break Once, Ignore, terminate Process or terminate Thread (boipt)? 
+kdb:> Break repeatedly, break 
+[*] KDBG prompt detected (serial debugger prompt); dumping state
+
+[*] KDBG << regs
+
+[*] KDBG << bt
+Once, Ignore, terminate Process or terminate Thread (boipt)? 
+kdb:> Break repeatedly, break Once, Ignore, terminate Process or terminate Thread (boipt)? 
+kdb:> Break repeatedly, break Once, Ignore, terminate Process or terminate Thread (boipt)? 
+kdb:> Break repeatedly, break Once, Ignore, terminate Process or terminate Thread (boipt)? 
+kdb:> Break repeatedly, break Once, Ignore, terminate Process or terminate Thread (boipt)? 
+kdb:> Break repeatedly, break Once, Ignore, terminate Process or terminate Thread (boipt)? 
+kdb:> Break repeatedly, break Once, Ignore, terminate Process or terminate Thread (boipt)? 
+kdb:> Break repeatedly, break Once, Ignore, terminate Process or terminate Thread (boipt)? 
+kdb:> 

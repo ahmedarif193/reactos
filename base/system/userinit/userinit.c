@@ -720,6 +720,48 @@ Restart:
                      GetLastError());
             }
             Success = StartShell(pEnvironment);
+            if (Success)
+            {
+                HKEY hAutoKey;
+
+                if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                                  L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+                                  0, KEY_QUERY_VALUE, &hAutoKey) == ERROR_SUCCESS)
+                {
+                    WCHAR AutoApp[MAX_PATH];
+                    WCHAR AutoExp[MAX_PATH];
+                    DWORD AutoSize = sizeof(AutoApp) - sizeof(UNICODE_NULL);
+                    DWORD AutoType;
+
+                    if (RegQueryValueExW(hAutoKey, L"UserinitRun", NULL, &AutoType,
+                                         (LPBYTE)AutoApp, &AutoSize) == ERROR_SUCCESS &&
+                        (AutoType == REG_SZ || AutoType == REG_EXPAND_SZ))
+                    {
+                        STARTUPINFOW asi;
+                        PROCESS_INFORMATION api;
+
+                        AutoApp[MAX_PATH - 1] = UNICODE_NULL;
+                        ExpandEnvironmentStringsW(AutoApp, AutoExp, _countof(AutoExp));
+                        ZeroMemory(&asi, sizeof(asi));
+                        asi.cb = sizeof(asi);
+                        if (CreateProcessW(NULL, AutoExp, NULL, NULL, FALSE,
+                                           NORMAL_PRIORITY_CLASS |
+                                           CREATE_UNICODE_ENVIRONMENT,
+                                           pEnvironment, NULL, &asi, &api))
+                        {
+                            ERR("UserinitRun spawned '%S'\n", AutoExp);
+                            CloseHandle(api.hProcess);
+                            CloseHandle(api.hThread);
+                        }
+                        else
+                        {
+                            ERR("UserinitRun '%S' failed %lu\n",
+                                AutoExp, GetLastError());
+                        }
+                    }
+                    RegCloseKey(hAutoKey);
+                }
+            }
             if (pEnvironment)
                 DestroyEnvironmentBlock(pEnvironment);
             if (Success)

@@ -1,0 +1,99 @@
+diff --git a/ntoskrnl/fsrtl/filter.c b/ntoskrnl/fsrtl/filter.c
+index 793f73cbf5f..a72a1794cff 100644
+--- a/ntoskrnl/fsrtl/filter.c
++++ b/ntoskrnl/fsrtl/filter.c
+@@ -60,10 +60,18 @@ BOOLEAN
+ NTAPI
+ FsRtlIsNtstatusExpected(IN NTSTATUS NtStatus)
+ {
++    /*
++     * "Expected" means a normal filesystem error that FS code can handle in an
++     * exception filter; the four hardware-fault-class codes below are NOT
++     * expected (they indicate a real bug and must propagate to a bugcheck).
++     * This matches Windows semantics and the universal caller idiom
++     * FsRtlIsNtstatusExpected(code) ? EXCEPTION_EXECUTE_HANDLER
++     *                               : EXCEPTION_CONTINUE_SEARCH.
++     */
+     return((STATUS_DATATYPE_MISALIGNMENT == NtStatus) ||
+            (STATUS_ACCESS_VIOLATION == NtStatus) ||
+            (STATUS_ILLEGAL_INSTRUCTION == NtStatus) ||
+-           (STATUS_INSTRUCTION_MISALIGNMENT == NtStatus)) ? TRUE : FALSE;
++           (STATUS_INSTRUCTION_MISALIGNMENT == NtStatus)) ? FALSE : TRUE;
+ }
+ 
+ /*++
+diff --git a/ntoskrnl/io/iomgr/irp.c b/ntoskrnl/io/iomgr/irp.c
+index fb739de7106..051a9eade0d 100644
+--- a/ntoskrnl/io/iomgr/irp.c
++++ b/ntoskrnl/io/iomgr/irp.c
+@@ -380,9 +380,17 @@ IopCompleteRequest(IN PKAPC Apc,
+                 if ((FileObject->Flags & FO_SYNCHRONOUS_IO) &&
+                     !(Irp->Flags & IRP_OB_QUERY_NAME))
+                 {
+-                    /* Signal the file object and set the status */
+-                    KeSetEvent(&FileObject->Event, 0, FALSE);
++                    /*
++                     * Store the final status BEFORE signaling the event: a
++                     * synchronous waiter in IopPerformSynchronousRequest reads
++                     * FileObject->FinalStatus immediately after its wait on
++                     * FileObject->Event returns, so the status store must be
++                     * ordered before (and published by) KeSetEvent's release.
++                     * On weakly-ordered CPUs the reverse order races and the
++                     * waiter can observe a stale FinalStatus (e.g. PENDING).
++                     */
+                     FileObject->FinalStatus = Irp->IoStatus.Status;
++                    KeSetEvent(&FileObject->Event, 0, FALSE);
+                 }
+ 
+                 /*
+@@ -399,9 +407,9 @@ IopCompleteRequest(IN PKAPC Apc,
+         }
+         else if (FileObject)
+         {
+-            /* Signal the file object and set the status */
+-            KeSetEvent(&FileObject->Event, 0, FALSE);
++            /* Store the final status before signaling (see ordering note above) */
+             FileObject->FinalStatus = Irp->IoStatus.Status;
++            KeSetEvent(&FileObject->Event, 0, FALSE);
+ 
+             /*
+             * This could also be a create operation, in which case we want
+diff --git a/ntoskrnl/mm/section.c b/ntoskrnl/mm/section.c
+index 7531b8f800a..2b20f3e1f51 100644
+--- a/ntoskrnl/mm/section.c
++++ b/ntoskrnl/mm/section.c
+@@ -5420,6 +5420,7 @@ MmFlushSegment(
+ {
+     LARGE_INTEGER FlushStart, FlushEnd;
+     NTSTATUS Status;
++    NTSTATUS FlushStatus = STATUS_SUCCESS;
+ 
+     if (Offset)
+     {
+@@ -5498,6 +5499,8 @@ MmFlushSegment(
+             MmUnlockSectionSegment(Segment);
+             WriteStatus = MiWritePageRun(Segment, RunStart.QuadPart, Pages, RunPages);
+             MmLockSectionSegment(Segment);
++            if (!NT_SUCCESS(WriteStatus))
++                FlushStatus = WriteStatus;
+ 
+             for (ULONG i = 0; i < RunPages; i++)
+             {
+@@ -5529,11 +5532,14 @@ MmFlushSegment(
+     MmDereferenceSegment(Segment);
+ 
+ Quit:
+-    /* FIXME: Handle failures */
++    /* Propagate any write-back failure so the cache manager (CcRosFlushVacb)
++     * re-marks the VACB dirty and the lazy writer retries, instead of silently
++     * dropping a failed write. On a healthy volume every run succeeds, so this
++     * stays STATUS_SUCCESS and behaviour is unchanged. */
+     if (Iosb)
+-        Iosb->Status = STATUS_SUCCESS;
++        Iosb->Status = FlushStatus;
+ 
+-    return STATUS_SUCCESS;
++    return FlushStatus;
+ }
+ 
+ _Requires_exclusive_lock_held_(Segment->Lock)

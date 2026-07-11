@@ -218,7 +218,7 @@ xHalRegisterBusHandler(IN INTERFACE_TYPE InterfaceType,
 VOID
 NTAPI
 xHalSetWakeAlarm(IN ULONGLONG AlartTime,
-                 IN ULONGLONG DcWakeTime)
+                 IN PTIME_FIELDS TimeFields)
 {
     /* Nothing */
     return;

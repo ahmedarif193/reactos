@@ -587,6 +587,32 @@ HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",,0x00000012
 ; Empty App Compat Layers
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers","",0x00000000,""
 
+; Mesa zink (GL-on-Vulkan) OpenGL ICD — selected via the ReactOS custom-ICD
+; override key seeded in hivedef.inf (HKCU\SOFTWARE\ReactOS\OpenGL).
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\MesaZink","Dll",0x00000002,"libgallium_wgl.dll"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\MesaZink","Version",0x00010001,0x00000002
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\MesaV3D","Dll",0x00000002,"libgallium_wgl_v3d.dll"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\MesaV3D","Version",0x00010001,0x00000002
+; Mesa: full gallium cascade ICD (stock Mesa Windows AUTO order d3d12 -> zink ->
+; llvmpipe -> softpipe). One binary, Win11 behavior on any machine: zink binds
+; whatever hardware Vulkan device the vulkan-1 loader presents (any vendor);
+; with no hardware Vulkan, llvmpipe provides software GL 4.5. No env switches.
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\Mesa","Dll",0x00000002,"libgallium_wgl26.dll"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\Mesa","Version",0x00010001,0x00000002
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\Mesa","DriverVersion",0x00010001,0x00000001
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\Mesa","Flags",0x00010001,0x00000000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\MesaZink","DriverVersion",0x00010001,0x00000001
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\MesaZink","Flags",0x00010001,0x00000000
+
+; Vulkan ICD discovery for the thin vulkan-1 loader, vendor-neutral like the
+; Windows loader: the loader keeps whichever ICD actually enumerates a physical
+; device (IcdExposesPhysicalDevice). Primary = v3dv (Pi 5 V3D hardware, or swap
+; for any GPU vendor's ICD); fallback = lavapipe (Mesa LLVMpipe CPU Vulkan, a
+; fully-featured software ICD with nullDescriptor). On RPi5 silicon v3dv wins;
+; under QEMU-generic v3dv exposes no device so lavapipe is promoted automatically.
+HKLM,"SOFTWARE\Khronos\Vulkan\Drivers","DriverName",0x00000002,"C:\ReactOS\System32\libvulkan_broadcom.dll"
+HKLM,"SOFTWARE\Khronos\Vulkan\Drivers","DriverNameFallback",0x00000002,"C:\ReactOS\System32\vulkan_lvp.dll"
+
 ; Version Information
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion","InstallDate",0x00010003,0
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion","ProductName",2,"ReactOS"
@@ -1742,6 +1768,9 @@ HKLM,"SOFTWARE\ReactOS\ReactOS\CurrentVersion\IFS","BtrFS",0x00000000,"ubtrfs.dl
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","ConsoleShell",0x00020000,"%SystemRoot%\system32\cmd.exe"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","Shell",0x00020000,"%SystemRoot%\explorer.exe"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","Userinit",0x00020000,"%SystemRoot%\system32\userinit.exe"
+; Post-winlogon gears auto-run (userinit.c UserinitRun hook): launches after the
+; shell starts, on the interactive desktop — never before winlogon.
+;HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","UserinitRun",0x00020000,"%SystemRoot%\system32\cmd.exe /c %SystemRoot%\bin\gears.exe -info"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","AutoAdminLogon",0x00000000,"1"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","LogonType",0x00010001,0
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","DefaultDomainName",0x00000000,""

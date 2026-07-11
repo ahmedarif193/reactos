@@ -146,7 +146,10 @@ VidSchpCompletionDpcRoutine(
         Link = Engine->RunQueueHead.Flink;
         Packet = CONTAINING_RECORD(Link, VIDSCH_DMA_PACKET, RunQueueEntry);
 
-        if (!VidSchpFenceReached(Completed, (LONG)Packet->SubmissionFenceId))
+        /* Never retire un-kicked work: its DMA has not executed, whatever
+         * the fence threshold says. */
+        if (!Packet->Kicked ||
+            !VidSchpFenceReached(Completed, (LONG)Packet->SubmissionFenceId))
             break;
 
         RemoveEntryList(Link);
@@ -159,6 +162,12 @@ VidSchpCompletionDpcRoutine(
      * was RUNNING, move to COMPLETING then IDLE.  If packets remain, the
      * engine stays RUNNING.
      */
+    /* A preempted engine returns to IDLE here; queued work re-kicks. */
+    VidSchpTryTransition(&Engine->State,
+                         (LONG)VidSchEnginePreempted,
+                         (LONG)VidSchEngineIdle,
+                         NULL);
+
     if (IsListEmpty(&Engine->RunQueueHead))
     {
         /* Try RUNNING -> COMPLETING -> IDLE */
@@ -172,10 +181,29 @@ VidSchpCompletionDpcRoutine(
     }
     else
     {
+        /*
+         * Packets remain.  If everything submitted so far has retired
+         * (head is an unkicked packet), the engine is no longer
+         * executing anything: force RUNNING -> IDLE so the kick below can
+         * take the IDLE -> SUBMITTING transition.  Without this the
+         * engine wedges in RUNNING forever once a completion retires the
+         * last in-flight packet while unkicked work sits queued.
+         */
+        PVIDSCH_DMA_PACKET HeadPkt =
+            CONTAINING_RECORD(Engine->RunQueueHead.Flink,
+                              VIDSCH_DMA_PACKET, RunQueueEntry);
+
+        if (!HeadPkt->Kicked)
+        {
+            VidSchpTryTransition(&Engine->State,
+                                 (LONG)VidSchEngineRunning,
+                                 (LONG)VidSchEngineIdle,
+                                 NULL);
+        }
+
         /* More packets remain — kick the engine to submit the next one. */
         VidSchpKickEngine(Engine);
     }
-
     KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
 
     /* Signal completion event so VidSchWaitForIdle can wake up. */
@@ -189,6 +217,8 @@ VidSchpCompletionDpcRoutine(
         Link = RemoveHeadList(&RetireList);
         Packet = CONTAINING_RECORD(Link, VIDSCH_DMA_PACKET, RunQueueEntry);
 
+        if (Packet->TrackOpenHandles != NULL)
+            ExFreePoolWithTag(Packet->TrackOpenHandles, TAG_VIDSCH);
         ExFreePoolWithTag(Packet, TAG_VIDSCH);
     }
 }
@@ -248,12 +278,94 @@ VidSchpKickEngine(
                               (LONG)VidSchEngineSubmitting,
                               &ActualState))
     {
+        static LONG NoKickTrace = 0;
+        LONG nk = InterlockedIncrement(&NoKickTrace);
+        if (nk <= 16)
+            DPRINT1("VidSch nokick #%ld state=%ld\n", nk, ActualState);
         return;
     }
 
     /* Peek the head packet (don't dequeue — it stays until completion). */
     Link = Engine->RunQueueHead.Flink;
     Packet = CONTAINING_RECORD(Link, VIDSCH_DMA_PACKET, RunQueueEntry);
+
+    /*
+     * Patch and hand the buffer to the DMA-buffer tracker before the
+     * hardware sees it.  One-shot: a kick retry after a miniport failure
+     * must not re-patch or double-track.
+     */
+    if (Packet->SubmissionFenceId == 0)
+        Packet->SubmissionFenceId = DxgkAllocateSubmissionFenceId(Adapter);
+    Packet->Kicked = TRUE;
+
+    if (Packet->TrackOnKick)
+    {
+        Packet->TrackOnKick = FALSE;
+
+        if ((Packet->InlinePatchCount != 0 ||
+             Packet->InlineAllocationCount != 0) &&
+            DXGK_CB_FULL(Adapter, DxgkDdiPatch) != NULL)
+        {
+            DXGKARG_PATCH PatchArgs;
+            NTSTATUS PatchStatus;
+
+            RtlZeroMemory(&PatchArgs, sizeof(PatchArgs));
+            PatchArgs.hDevice = (HANDLE)Packet->Context;
+            PatchArgs.pDmaBuffer = Packet->DmaBufferVa;
+            PatchArgs.DmaBufferSize = Packet->DmaBufferSize;
+            PatchArgs.DmaBufferSubmissionStartOffset = 0;
+            PatchArgs.DmaBufferSubmissionEndOffset = Packet->DmaBufferSize;
+            PatchArgs.pAllocationList = Packet->InlineAllocationList;
+            PatchArgs.AllocationListSize = Packet->InlineAllocationCount;
+            PatchArgs.pPatchLocationList = Packet->InlinePatchList;
+            PatchArgs.PatchLocationListSize = Packet->InlinePatchCount;
+            PatchArgs.PatchLocationListSubmissionStart = 0;
+            PatchArgs.PatchLocationListSubmissionLength = Packet->InlinePatchCount;
+            PatchArgs.SubmissionFenceId = Packet->SubmissionFenceId;
+
+            _SEH2_TRY
+            {
+                PatchStatus = DXGK_CB_FULL(Adapter, DxgkDdiPatch)(
+                                  Adapter->MiniportDeviceContext,
+                                  &PatchArgs);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                PatchStatus = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+
+            if (!NT_SUCCESS(PatchStatus))
+            {
+                DXGKRNL_WARN("VidSch: kick-time Patch failed 0x%08lX "
+                             "fence=%lu (continuing)\n",
+                             PatchStatus, Packet->SubmissionFenceId);
+            }
+        }
+
+        (VOID)DxgkTrackSubmittedDmaBuffer(Adapter,
+                                          Packet->SubmissionFenceId,
+                                          Packet->NodeOrdinal,
+                                          Packet->SignalSyncObject,
+                                          Packet->SignalFenceValue,
+                                          0,
+                                          Packet->DmaBufferVa,
+                                          Packet->TrackTag,
+                                          (PDXGKRNL_DEVICE)Packet->TrackDevice,
+                                          NULL,
+                                          NULL,
+                                          0,
+                                          NULL,
+                                          Packet->TrackOpenHandles,
+                                          Packet->TrackOpenHandleCount);
+
+        if (Packet->TrackOpenHandles != NULL)
+        {
+            ExFreePoolWithTag(Packet->TrackOpenHandles, TAG_VIDSCH);
+            Packet->TrackOpenHandles = NULL;
+            Packet->TrackOpenHandleCount = 0;
+        }
+    }
 
     Engine->LastSubmittedFence = (LONG)Packet->SubmissionFenceId;
 
@@ -271,10 +383,13 @@ VidSchpKickEngine(
     SubmitArgs.pAllocationList               = (CONST D3DDDI_ALLOCATIONLIST *)Packet->AllocationList;
     SubmitArgs.AllocationListSize             = Packet->AllocationListSize;
     SubmitArgs.SubmissionFenceId             = Packet->SubmissionFenceId;
+    SubmitArgs.VidPnSourceId                 = Packet->VidPnSourceId;
     SubmitArgs.NodeOrdinal                   = Packet->NodeOrdinal;
     SubmitArgs.EngineOrdinal                 = Packet->EngineOrdinal;
     SubmitArgs.hContext                      = (HANDLE)Packet->Context;
-    SubmitArgs.Flags                         = Packet->IsPresent ? 1 : 0;
+    SubmitArgs.Flags                         = (Packet->SubmitFlags != 0)
+                                                   ? Packet->SubmitFlags
+                                                   : (Packet->IsPresent ? 1u : 0u);
 
     /*
      * Call the miniport's DxgkDdiSubmitCommand.
@@ -452,16 +567,19 @@ NTSTATUS
 VidSchSubmitCommand(
     _In_  PDXGKRNL_ADAPTER Adapter,
     _In_  ULONG            EngineOrdinal,
+    _In_  ULONG            SubmissionFenceId,
     _In_  PVOID            DmaBufferVa,
     _In_  ULONG            DmaBufferSize,
     _In_opt_ PVOID         DriverPrivateData,
     _In_  ULONG            DriverPrivateDataSize,
-    _In_opt_ PVOID         AllocationList,
-    _In_  ULONG            AllocationListSize,
+    _In_reads_opt_(AllocationListCount) CONST D3DDDI_ALLOCATIONLIST *AllocationList,
+    _In_  ULONG            AllocationListCount,
     _In_opt_ PVOID         PatchLocationList,
     _In_  ULONG            PatchLocationListSize,
     _In_opt_ PVOID         Context,
     _In_  BOOLEAN          IsPresent,
+    _In_  ULONG            SubmitFlags,
+    _In_  ULONG            VidPnSourceId,
     _Out_ ULONG           *OutFenceId)
 {
     PVIDSCH_CONTEXT Ctx;
@@ -484,12 +602,23 @@ VidSchSubmitCommand(
     if (EngineOrdinal >= Ctx->EngineCount)
         return STATUS_INVALID_PARAMETER;
 
+    /* Larger lists would need a pool copy; nothing submits them yet. */
+    if (AllocationListCount > RTL_NUMBER_OF(((PVIDSCH_DMA_PACKET)0)->InlineAllocationList))
+        return STATUS_NOT_SUPPORTED;
+
     Engine = &Ctx->Engines[EngineOrdinal];
 
-    /* Validate engine state — only IDLE or RUNNING can accept new work. */
+    /*
+     * Validate engine state.  IDLE/RUNNING accept and may kick;
+     * SUBMITTING/COMPLETING are transient windows of the kick/retire
+     * paths — queueing is safe there (the completion DPC re-kicks), and
+     * rejecting them would surface spurious STATUS_DEVICE_BUSY races.
+     */
     CurrentState = VidSchpReadState(Engine);
     if (CurrentState != VidSchEngineIdle &&
-        CurrentState != VidSchEngineRunning)
+        CurrentState != VidSchEngineRunning &&
+        CurrentState != VidSchEngineSubmitting &&
+        CurrentState != VidSchEngineCompleting)
     {
         DXGKRNL_WARN("VidSch: submit rejected — engine %lu in state %d\n",
                      EngineOrdinal, (int)CurrentState);
@@ -505,20 +634,36 @@ VidSchSubmitCommand(
 
     RtlZeroMemory(Packet, sizeof(*Packet));
 
-    /* Assign a monotonically increasing fence ID for this engine. */
-    Packet->SubmissionFenceId    = (ULONG)InterlockedIncrement(&Engine->NextFenceId);
+    /* One adapter-wide fence space, minted in submit order: queue order
+     * == fence order == kick order, the invariant threshold retirement
+     * and the DMA tracker depend on.  A second counter (or minting at
+     * kick) aliases fence numbers across paths and signals UMD waits for
+     * work that never executed. */
+    if (SubmissionFenceId != 0)
+        Packet->SubmissionFenceId = SubmissionFenceId;
+    else
+        Packet->SubmissionFenceId = DxgkAllocateSubmissionFenceId(Adapter);
     Packet->EngineOrdinal        = EngineOrdinal;
     Packet->NodeOrdinal          = EngineOrdinal; /* 1:1 for now */
     Packet->DmaBufferVa          = DmaBufferVa;
     Packet->DmaBufferSize        = DmaBufferSize;
     Packet->DriverPrivateData    = DriverPrivateData;
     Packet->DriverPrivateDataSize = DriverPrivateDataSize;
-    Packet->AllocationList       = AllocationList;
-    Packet->AllocationListSize   = AllocationListSize;
+    if (AllocationList != NULL && AllocationListCount != 0)
+    {
+        RtlCopyMemory(Packet->InlineAllocationList,
+                      AllocationList,
+                      AllocationListCount * sizeof(D3DDDI_ALLOCATIONLIST));
+        Packet->InlineAllocationCount = AllocationListCount;
+        Packet->AllocationList        = Packet->InlineAllocationList;
+        Packet->AllocationListSize    = AllocationListCount;
+    }
     Packet->PatchLocationList    = PatchLocationList;
     Packet->PatchLocationListSize = PatchLocationListSize;
     Packet->Context              = Context;
     Packet->IsPresent            = IsPresent;
+    Packet->SubmitFlags          = SubmitFlags;
+    Packet->VidPnSourceId        = VidPnSourceId;
 
     *OutFenceId = Packet->SubmissionFenceId;
 
@@ -529,6 +674,147 @@ VidSchSubmitCommand(
     Engine->PendingPacketCount++;
 
     /* If the engine is idle, kick it to start processing. */
+    VidSchpKickEngine(Engine);
+
+    KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+VidSchSubmitCommandTracked(
+    _In_  PDXGKRNL_ADAPTER Adapter,
+    _In_  ULONG            EngineOrdinal,
+    _In_  PVOID            DmaBufferVa,
+    _In_  ULONG            DmaBufferSize,
+    _In_reads_opt_(AllocationListCount) CONST DXGK_ALLOCATIONLIST *AllocationList,
+    _In_  ULONG            AllocationListCount,
+    _In_reads_opt_(PatchLocationListCount) CONST D3DDDI_PATCHLOCATIONLIST *PatchLocationList,
+    _In_  ULONG            PatchLocationListCount,
+    _In_opt_ PVOID         Context,
+    _In_  LONG             Priority,
+    _In_  ULONG            TrackTag,
+    _In_opt_ PVOID         TrackDevice,
+    _In_reads_opt_(OpenHandleCount) CONST HANDLE *OpenHandles,
+    _In_  UINT             OpenHandleCount,
+    _In_  D3DKMT_HANDLE    SignalSyncObject,
+    _In_  ULONG64          SignalFenceValue)
+{
+    PVIDSCH_CONTEXT Ctx;
+    PVIDSCH_ENGINE Engine;
+    PVIDSCH_DMA_PACKET Packet;
+    KIRQL OldIrql;
+    VIDSCH_ENGINE_STATE CurrentState;
+
+    PAGED_CODE();
+
+    if (Adapter == NULL || DmaBufferVa == NULL || DmaBufferSize == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    Ctx = (PVIDSCH_CONTEXT)Adapter->VidSchContext;
+    if (Ctx == NULL || !Ctx->Initialized)
+        return STATUS_DEVICE_NOT_READY;
+    if (EngineOrdinal >= Ctx->EngineCount)
+        return STATUS_INVALID_PARAMETER;
+    if (AllocationListCount > RTL_NUMBER_OF(((PVIDSCH_DMA_PACKET)0)->InlineAllocationList) ||
+        PatchLocationListCount > RTL_NUMBER_OF(((PVIDSCH_DMA_PACKET)0)->InlinePatchList))
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    Engine = &Ctx->Engines[EngineOrdinal];
+
+    CurrentState = VidSchpReadState(Engine);
+    if (CurrentState != VidSchEngineIdle &&
+        CurrentState != VidSchEngineRunning &&
+        CurrentState != VidSchEngineSubmitting &&
+        CurrentState != VidSchEngineCompleting)
+    {
+        return STATUS_DEVICE_BUSY;
+    }
+
+    /* Flood guard: a wedged engine must not grow the run queue without
+     * bound (observed 1200+ packets pooled behind a stuck head). */
+    if (Engine->PendingPacketCount > 512)
+        return STATUS_DEVICE_BUSY;
+
+    Packet = ExAllocatePoolWithTag(NonPagedPool,
+                                   sizeof(VIDSCH_DMA_PACKET),
+                                   TAG_VIDSCH);
+    if (Packet == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    RtlZeroMemory(Packet, sizeof(*Packet));
+    Packet->SubmissionFenceId = DxgkAllocateSubmissionFenceId(Adapter);
+    Packet->EngineOrdinal     = EngineOrdinal;
+    Packet->NodeOrdinal       = EngineOrdinal;
+    Packet->DmaBufferVa       = DmaBufferVa;
+    Packet->DmaBufferSize     = DmaBufferSize;
+    Packet->Context           = Context;
+    Packet->Priority          = Priority;
+    Packet->TrackOnKick       = TRUE;
+    Packet->TrackTag          = TrackTag;
+    Packet->TrackDevice       = TrackDevice;
+    Packet->SignalSyncObject  = SignalSyncObject;
+    Packet->SignalFenceValue  = SignalFenceValue;
+
+    if (AllocationList != NULL && AllocationListCount != 0)
+    {
+        RtlCopyMemory(Packet->InlineAllocationList, AllocationList,
+                      AllocationListCount * sizeof(DXGK_ALLOCATIONLIST));
+        Packet->InlineAllocationCount = AllocationListCount;
+        Packet->AllocationList = Packet->InlineAllocationList;
+        Packet->AllocationListSize = AllocationListCount;
+    }
+    if (PatchLocationList != NULL && PatchLocationListCount != 0)
+    {
+        RtlCopyMemory(Packet->InlinePatchList, PatchLocationList,
+                      PatchLocationListCount * sizeof(D3DDDI_PATCHLOCATIONLIST));
+        Packet->InlinePatchCount = PatchLocationListCount;
+    }
+    if (OpenHandles != NULL && OpenHandleCount != 0)
+    {
+        Packet->TrackOpenHandles = ExAllocatePoolWithTag(
+            NonPagedPool, OpenHandleCount * sizeof(HANDLE), TAG_VIDSCH);
+        if (Packet->TrackOpenHandles == NULL)
+        {
+            ExFreePoolWithTag(Packet, TAG_VIDSCH);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        RtlCopyMemory(Packet->TrackOpenHandles, OpenHandles,
+                      OpenHandleCount * sizeof(HANDLE));
+        Packet->TrackOpenHandleCount = OpenHandleCount;
+    }
+
+    KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
+
+    /*
+     * Priority insertion among reorderable packets only: walk back from
+     * the tail past unkicked TrackOnKick packets of LOWER priority.
+     * Never pass a fence-assigned packet (retirement is threshold-based;
+     * overtaking one would retire its buffer early = use-after-free) and
+     * never displace the queue head (it may be in flight).
+     */
+    {
+        PLIST_ENTRY InsertAfter = Engine->RunQueueHead.Blink;
+
+        while (InsertAfter != &Engine->RunQueueHead &&
+               InsertAfter != Engine->RunQueueHead.Flink)
+        {
+            PVIDSCH_DMA_PACKET Prev =
+                CONTAINING_RECORD(InsertAfter, VIDSCH_DMA_PACKET,
+                                  RunQueueEntry);
+
+            if (!Prev->TrackOnKick || Prev->Priority >= Priority)
+                break;
+
+            InsertAfter = InsertAfter->Blink;
+        }
+
+        InsertHeadList(InsertAfter, &Packet->RunQueueEntry);
+    }
+    Engine->PendingPacketCount++;
+
     VidSchpKickEngine(Engine);
 
     KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
@@ -579,8 +865,17 @@ VidSchNotifyInterrupt(
 
     Engine = &Ctx->Engines[EngineOrdinal];
 
-    /* Update the completed fence — atomic, safe at DIRQL. */
-    InterlockedExchange(&Engine->LastCompletedFence, (LONG)FenceId);
+    /* Update the completed fence — monotonic max, safe at DIRQL. */
+    for (;;)
+    {
+        LONG Current = Engine->LastCompletedFence;
+
+        if (VidSchpFenceReached(Current, (LONG)FenceId))
+            break;
+        if (InterlockedCompareExchange(&Engine->LastCompletedFence,
+                                       (LONG)FenceId, Current) == Current)
+            break;
+    }
 
     /* Queue the completion DPC for deferred processing. */
     KeInsertQueueDpc(&Engine->CompletionDpc, NULL, NULL);
@@ -766,6 +1061,7 @@ VidSchFlipPresent(
         Status = VidSchSubmitCommand(
                      Adapter,
                      EngineOrdinal,
+                     0,             /* mint a per-engine fence */
                      NULL,          /* No DMA buffer — flip is a control op */
                      0,
                      NULL,          /* No private data */
@@ -776,6 +1072,8 @@ VidSchFlipPresent(
                      0,
                      Context,
                      TRUE,          /* IsPresent */
+                     0,
+                     VidPnSourceId,
                      OutFenceId);
 
         return Status;
@@ -789,7 +1087,7 @@ VidSchFlipPresent(
      * For Phase 1 we assign a fence ID for tracking but let the present
      * queue handle the actual VSync synchronization and miniport call.
      */
-    *OutFenceId = (ULONG)InterlockedIncrement(&Engine->NextFenceId);
+    *OutFenceId = DxgkAllocateSubmissionFenceId(Adapter);
 
     DXGKRNL_TRACE("VidSch: FlipPresent queued — engine=%lu vidpn=%lu "
                   "interval=%d fence=%lu\n",
@@ -948,9 +1246,71 @@ VidSchPreemptEngine(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ ULONG            EngineOrdinal)
 {
-    UNREFERENCED_PARAMETER(Adapter);
-    UNREFERENCED_PARAMETER(EngineOrdinal);
-    return STATUS_NOT_IMPLEMENTED;
+    PVIDSCH_CONTEXT Ctx;
+    PVIDSCH_ENGINE Engine;
+    DXGKARG_PREEMPTCOMMAND PreemptArgs;
+    NTSTATUS Status;
+
+    if (Adapter == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Ctx = (PVIDSCH_CONTEXT)Adapter->VidSchContext;
+    if (Ctx == NULL || !Ctx->Initialized)
+        return STATUS_DEVICE_NOT_READY;
+    if (EngineOrdinal >= Ctx->EngineCount)
+        return STATUS_INVALID_PARAMETER;
+    if (DXGK_CB_FULL(Adapter, DxgkDdiPreemptCommand) == NULL)
+        return STATUS_NOT_SUPPORTED;
+
+    Engine = &Ctx->Engines[EngineOrdinal];
+
+    /* Nothing running: nothing to preempt. */
+    if (!VidSchpTryTransition(&Engine->State,
+                              (LONG)VidSchEngineRunning,
+                              (LONG)VidSchEnginePreempting,
+                              NULL))
+    {
+        return STATUS_SUCCESS;
+    }
+
+    RtlZeroMemory(&PreemptArgs, sizeof(PreemptArgs));
+    PreemptArgs.PreemptionFenceId = DxgkAllocateSubmissionFenceId(Adapter);
+    PreemptArgs.NodeOrdinal = EngineOrdinal;
+    PreemptArgs.EngineOrdinal = EngineOrdinal;
+
+    _SEH2_TRY
+    {
+        Status = DXGK_CB_FULL(Adapter, DxgkDdiPreemptCommand)(
+                     Adapter->MiniportDeviceContext,
+                     &PreemptArgs);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    if (NT_SUCCESS(Status))
+    {
+        /* The miniport reports DMA_PREEMPTED; the completion DPC retires
+         * finished packets and returns the engine to IDLE (re-kicking any
+         * remaining queued work). */
+        VidSchpTryTransition(&Engine->State,
+                             (LONG)VidSchEnginePreempting,
+                             (LONG)VidSchEnginePreempted,
+                             NULL);
+    }
+    else
+    {
+        VidSchpTryTransition(&Engine->State,
+                             (LONG)VidSchEnginePreempting,
+                             (LONG)VidSchEngineRunning,
+                             NULL);
+        DXGKRNL_WARN("VidSch: PreemptCommand failed 0x%08lX engine=%lu\n",
+                     Status, EngineOrdinal);
+    }
+
+    return Status;
 }
 
 NTSTATUS

@@ -30,6 +30,10 @@ list(APPEND SOURCE
     d3dkmt_displayext.c
     d3dkmt_presentext.c
     d3dkmt_misc.c
+    d3dkmt_pipeline.c
+    d3dkmt_cle.c
+    d3dkmt_v3dsmoke.c
+    d3dkmt_vc4kmt_smoke.c
     d3dkmt_parity.c
     vidmm_test.c
     present_test.c
@@ -43,7 +47,7 @@ add_executable(d3dkmt_apitest
     ${SOURCE}
     ${PCH_SKIP_SOURCE})
 
-target_link_libraries(d3dkmt_apitest wine ${PSEH_LIB})
+target_link_libraries(d3dkmt_apitest wine ${PSEH_LIB} vc4kmt)
 set_module_type(d3dkmt_apitest win32cui)
 add_importlibs(d3dkmt_apitest gdi32 user32 msvcrt kernel32 ntdll)
 add_pch(d3dkmt_apitest precomp.h "${PCH_SKIP_SOURCE}")

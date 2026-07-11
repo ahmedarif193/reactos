@@ -1880,6 +1880,8 @@ HKCU,"SOFTWARE\Microsoft\DirectX","InstallMDX",0x00010001,0x00000001
 HKCU,"SOFTWARE\Microsoft\DirectX","RC",0x00010001,0x00000000
 HKCU,"SOFTWARE\Microsoft\DirectX","Version",0x00000000,"5.03.2600.2180"
 
+; SwiftShader ICD path for the thin vulkan-1 loader validation image.
+
 ; Open With settings
 HKCU,"SOFTWARE\Classes",,0x00000012
 HKCU,"SOFTWARE\Classes\Applications",,0x00000012
@@ -1887,6 +1889,23 @@ HKCU,"SOFTWARE\Classes\Applications",,0x00000012
 ; Current user shell folder settings
 HKCU,"SOFTWARE\Microsoft\Windows",,0x00000012
 HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion",,0x00000012
+; Auto-run a native OpenGL app at logon to validate the WDDM/GL display path.
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Run",,0x00000012
+; Jazz² Resurrection — native pure-ARM64 port (nCine engine, GLFW+desktop GL).
+; Needs a GL 3.x ICD: the OpenGL ICD in [Strings] below is set to MesaZink for it.
+; The engine self-sets CWD to its own exe dir, so bin\jazz2\Content is found.
+;HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Run","Jazz2",0x00020000,"%SystemRoot%\bin\jazz2\Jazz2.exe"
+; gears (glxgears GL2 smoke) — swap back in place of Jazz2 for the benchmark:
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Run","Gears",0x00020000,"%SystemRoot%\bin\gears.exe"
+; Modern 3D stack probes: their DLL-load + result lines in the serial log prove
+; per-boot whether vulkan-1/dxgi/d3d11 load and which backend answers.
+; TEMPORARILY DISABLED for the gears benchmark: on the single-core (-smp) boot
+; these three all init v3dv/dxgi concurrently and starve gears' own init so it
+; can't finish (and print GL_RENDERER/FPS) within the capture window. Re-enable
+; once the canonical gears GPU numbers are captured.
+;HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Run","VulkanProbe",0x00020000,"%SystemRoot%\bin\vulkan1_apitest.exe swiftshader_icd"
+;HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Run","DxgiProbe",0x00020000,"%SystemRoot%\bin\dxgi_apitest.exe stub_surface"
+;HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Run","D3D11Probe",0x00020000,"%SystemRoot%\bin\dxgi_apitest.exe d3d11_render_probe"
 HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer",,0x00000012
 HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer","SearchHidden",0x00010001,0x00000000
 HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer","SelectExtOnRename",0x00010001,0x00000000
@@ -2152,6 +2171,13 @@ HKCU,"AppEvents\EventLabels\WindowsLogon","",0x00000000,"%EVENT_LABEL_27%"
 HKCU,"AppEvents\EventLabels\WindowsLogon","DispFileName",0x00000000,"@mmsys.cpl,-5853"
 
 ;-------------------------------- STRINGS -------------------------------
+
+; Default OpenGL ICD = Mesa (full gallium cascade, Win11 behavior on any
+; machine): d3d12 -> zink (binds any vendor's hardware Vulkan device via the
+; vulkan-1 loader) -> llvmpipe (software GL 4.5). No per-platform switches.
+; Alternatives for experiments: "MesaZink" (zink-only), "MesaV3D" (Pi 5 v3d
+; gallium direct), "ReactOS Software Implementation" (swimpl GL 1.1).
+HKCU,"SOFTWARE\ReactOS\OpenGL","",0x00000002,"Mesa"
 
 [Strings]
 EVENT_LABEL_0 = "Default Beep"
@@ -4261,3 +4287,4 @@ DESKTOP_SCHEME_SIZE_0="預設大小"
 TEMP_DIR="%USERPROFILE%\Local Settings\Temp"
 
 ; EOF
+

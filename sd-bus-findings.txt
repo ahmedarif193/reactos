@@ -1,0 +1,50 @@
+SD bus checkpoint findings
+==========================
+
+Observed failure
+----------------
+- Initial RPi5 runs stopped after the second SDHCI controller printed:
+  - memory resource 0x1001100000 length 0x260
+  - interrupt vector 306 level 7
+  - SDHCI version/caps/base clock
+- No GUI, RPI5VC4, win32k, explorer, or gears output appeared in that stalled
+  run, so compositor/taskbar changes were not being exercised.
+
+Narrow probe result
+-------------------
+- Temporary SDHCI breadcrumbs showed both controllers completed reset, clock,
+  power, interrupt setup, SDMA allocation, and controller init.
+- The second controller had CARD_INSERTION latched in INT_STATUS immediately
+  after signal enable.
+- With probe timing, the boot continued through SDIO enumeration, RPI5VC4 load,
+  win32k/session startup, gears, and arm64 kmtests.
+
+Implemented SD change
+---------------------
+- Removed the temporary SDHCI breadcrumbs.
+- Deferred SDHCI card-detect and SDIO interrupt signal delivery out of
+  SdBusInitializeController().
+- Initial inserted-card handling remains synchronous in SdBusFdoStartDevice().
+- After that startup scan, latched insertion/removal status is cleared and only
+  hotplug insertion/removal signals are enabled for removable controllers.
+- Rationale: do not assert a level-triggered card-detect interrupt while the
+  FDO is still in SdBusDeviceStateStopped, because the ISR rejects stopped FDOs
+  and startup enumeration already handles initial card presence.
+
+Validation
+----------
+- Built sdbus.sys successfully.
+- Built livecd and reactosimg successfully.
+- RPi5 hardware run with fresh flashed image completed:
+  - both SDHCI controllers allocated SDMA buffers
+  - RPI5VC4 V3D 7.1 came online at 960 MHz
+  - gears started and reported 236-346 FPS during boot tests
+  - BOOT_TESTS_DONE was reached
+  - runner reported boot result: success
+
+Remaining notes
+---------------
+- SDIO function 2/3 CIS reads still sometimes fail and are marked problem 28 by
+  user-mode PnP install, but function 1 binds and cyw43455/nwifi initialize.
+- This file is a checkpoint handoff; the next priority is the GPU acceleration
+  plan of record in wddm2-vc4-parity-roadmap.txt.

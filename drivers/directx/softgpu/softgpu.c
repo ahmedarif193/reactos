@@ -69,7 +69,6 @@ static const DXGK_DRIVERCAPS SOFTGPU_DRIVER_CAPS =
     /* PointerCaps.Value = 0: no hardware cursor */
     .MaxAllocationListSlotId    = 255,
     .ApertureSegmentCommitLimit = SOFTGPU_FB_SIZE,
-    .MaxInterruptPriority       = 0,
     /* PresentationCaps.Value = 0 */
     .MaxOverlays                = 0,
     .GammaRampCaps              = 0,
@@ -345,6 +344,37 @@ SoftGpuDdiStartDevice(
         return STATUS_INVALID_PARAMETER;
     }
 
+    /*
+     * Basic-Display fallback gate.  softgpu presents to the firmware boot
+     * framebuffer, so it only starts when it can acquire POST display
+     * ownership through the documented WDDM 1.2+ callback.  dxgkrnl returns
+     * an empty descriptor when there is no usable boot framebuffer OR when a
+     * real GPU miniport (viogpudo, rpi5vc4) already owns the boot display —
+     * in both cases decline so softgpu never becomes a competing second
+     * display adapter.  Conversely, when softgpu started first, a real
+     * miniport's later acquire makes dxgkrnl stop this adapter (the MSBDD
+     * handover), so the fallback also yields after the fact.
+     */
+    {
+        DXGK_DISPLAY_INFORMATION PostDisplayInfo;
+
+        RtlZeroMemory(&PostDisplayInfo, sizeof(PostDisplayInfo));
+        if (DxgkInterface->DxgkCbAcquirePostDisplayOwnership == NULL ||
+            !NT_SUCCESS(DxgkInterface->DxgkCbAcquirePostDisplayOwnership(
+                            DxgkInterface->DeviceHandle, &PostDisplayInfo)) ||
+            PostDisplayInfo.Width == 0 ||
+            PostDisplayInfo.Height == 0 ||
+            PostDisplayInfo.PhysicAddress.QuadPart == 0)
+        {
+            DPRINT1("SOFTGPU: no acquirable boot framebuffer -- declining "
+                    "(none exists, or a real GPU miniport owns the display)\n");
+            return STATUS_DEVICE_CONFIGURATION_ERROR;
+        }
+
+        Device->Width  = PostDisplayInfo.Width;
+        Device->Height = PostDisplayInfo.Height;
+    }
+
     /* Save the dxgkrnl callback vtable for later use by the DPC. */
     RtlCopyMemory(&Device->DxgkInterface, DxgkInterface, sizeof(DXGK_INTERFACE));
 
@@ -576,6 +606,89 @@ SoftGpuDdiQueryAdapterInfo(
         pDesc->Flags.Aperture                = 1;
         pDesc->Flags.CpuVisible              = 1;
         pDesc->Flags.PopulatedFromSystemMemory = 1;
+
+        return STATUS_SUCCESS;
+    }
+
+    case DXGKQAITYPE_QUERYSEGMENT4:
+    {
+        /* WDDM 2.0 flavour: stride-addressed descriptor array. */
+        PDXGK_QUERYSEGMENTOUT4 pSegOut4;
+        PDXGK_SEGMENTDESCRIPTOR4 pDesc4;
+
+        if (pQueryAdapterInfo->pOutputData == NULL)
+            return STATUS_INVALID_PARAMETER;
+
+        if (pQueryAdapterInfo->OutputDataSize < sizeof(DXGK_QUERYSEGMENTOUT4))
+            return STATUS_BUFFER_TOO_SMALL;
+
+        pSegOut4 = (PDXGK_QUERYSEGMENTOUT4)pQueryAdapterInfo->pOutputData;
+
+        if (pSegOut4->pSegmentDescriptor == NULL)
+        {
+            pSegOut4->NbSegment             = 1;
+            pSegOut4->PagingBufferSegmentId = SOFTGPU_SEGMENT_ID;
+            pSegOut4->PagingBufferSize      = 64 * 1024;
+            pSegOut4->PagingBufferPrivateDataSize = 0;
+            return STATUS_SUCCESS;
+        }
+
+        if (pSegOut4->NbSegment < 1 ||
+            pSegOut4->SegmentDescriptorStride < sizeof(DXGK_SEGMENTDESCRIPTOR4))
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        pDesc4 = (PDXGK_SEGMENTDESCRIPTOR4)pSegOut4->pSegmentDescriptor;
+        RtlZeroMemory(pDesc4, sizeof(*pDesc4));
+
+        pDesc4->Flags.Aperture                = 1;
+        pDesc4->Flags.CpuVisible              = 1;
+        pDesc4->Flags.PopulatedFromSystemMemory = 1;
+        pDesc4->BaseAddress.QuadPart          = Device->FrameBufferPhys.QuadPart;
+        pDesc4->CpuTranslatedAddress.QuadPart = Device->FrameBufferPhys.QuadPart;
+        pDesc4->Size                          = Device->FrameBufferSize;
+        pDesc4->CommitLimit                   = Device->FrameBufferSize;
+
+        return STATUS_SUCCESS;
+    }
+
+    case DXGKQAITYPE_QUERYSEGMENT3:
+    {
+        /* WDDM 2.x flavour of QUERYSEGMENT (distinct descriptor layout). */
+        PDXGK_QUERYSEGMENTOUT3 pSegOut3;
+        PDXGK_SEGMENTDESCRIPTOR3 pDesc3;
+
+        if (pQueryAdapterInfo->pOutputData == NULL)
+            return STATUS_INVALID_PARAMETER;
+
+        if (pQueryAdapterInfo->OutputDataSize < sizeof(DXGK_QUERYSEGMENTOUT3))
+            return STATUS_BUFFER_TOO_SMALL;
+
+        pSegOut3 = (PDXGK_QUERYSEGMENTOUT3)pQueryAdapterInfo->pOutputData;
+
+        if (pSegOut3->pSegmentDescriptor == NULL)
+        {
+            pSegOut3->NbSegment             = 1;
+            pSegOut3->PagingBufferSegmentId = SOFTGPU_SEGMENT_ID;
+            pSegOut3->PagingBufferSize      = 64 * 1024;
+            pSegOut3->PagingBufferPrivateDataSize = 0;
+            return STATUS_SUCCESS;
+        }
+
+        if (pSegOut3->NbSegment < 1)
+            return STATUS_INVALID_PARAMETER;
+
+        pDesc3 = &pSegOut3->pSegmentDescriptor[0];
+        RtlZeroMemory(pDesc3, sizeof(*pDesc3));
+
+        pDesc3->Flags.Aperture                = 1;
+        pDesc3->Flags.CpuVisible              = 1;
+        pDesc3->Flags.PopulatedFromSystemMemory = 1;
+        pDesc3->BaseAddress.QuadPart          = Device->FrameBufferPhys.QuadPart;
+        pDesc3->CpuTranslatedAddress.QuadPart = Device->FrameBufferPhys.QuadPart;
+        pDesc3->Size                          = Device->FrameBufferSize;
+        pDesc3->CommitLimit                   = Device->FrameBufferSize;
 
         return STATUS_SUCCESS;
     }

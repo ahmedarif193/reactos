@@ -1,0 +1,426 @@
+================================================================================
+ VC4/V3D USER-MODE DRIVER (UMD) — DESIGN & MILESTONE PLAN
+ Companion to wddm2-vc4-parity-roadmap.txt (gates: 3.2/3.3, 1.6 feed/budgets,
+ 1.7 blit formats, 1.15 GPU fences, 2.11, 2.13)
+================================================================================
+
+GOAL
+  A user-mode driver stack that turns the kernel foundation built in the
+  parity push (rpi5vc4 full-WDDM miniport, 4 engine queues, fence-at-kick
+  scheduler, MPO planes) into real accelerated graphics: first raw V3D
+  jobs, then GDI/DDraw-level 2D, then a D3D path.
+
+NON-NEGOTIABLE CONSTRAINTS (from the session's verified findings)
+  C1. Scanout memory must be physically contiguous in the HVS 40-bit DMA
+      view => every flip/plane surface must be a WDDM allocation in the
+      VRAM slab (segment 1).  Pageable memory can be a SOURCE for copies
+      only.
+  C2. The kernel executes only UMD-encoded work: CL jobs (BCL/RCL GPU
+      VAs), TFU register images, CSD CFG0..7 images (DMA packet ops 2/3/4,
+      magic 'DV5R').  The kernel never encodes GPU commands.
+  C3. GPU VAs: slab base is mapped at GPU VA 0x01000000 (escape op 0
+      returns SlabGpuVa + SlabPhysical + SlabSize).  UMD computes GPU VA =
+      SlabGpuVa + (alloc offset in slab).  vidmm returns per-allocation
+      segment offsets via the allocation list at Patch time; user mode
+      learns placement via D3DKMTQueryAllocationResidency / private
+      driver data at CreateAllocation.
+  C4. Transport today = the render-command escape (framing: USHORT
+      PacketType/PayloadBytes + UINT CommandType/PayloadBytes + payload;
+      payload-only reaches DxgkDdiRender).  Proper D3DKMTRender/Present
+      with per-context DMA buffers is the target once contexts carry
+      priority (1.6 feed).
+  C5. Encoding source of truth: mesa broadcom/cle genxml (v3d 7.1
+      packets) — never hand-derived opcodes.  Vendor the generated
+      packet pack/unpack headers (MIT-licensed) under a
+      sdk/lib/vc4cle/ static library.
+
+STAGE 0 — CL ENCODER LIBRARY (pure user-mode, testable on Win11)
+  STATUS: STARTED 2026-07-02 — sdk/include/reactos/vc4cle.h implements
+  the v71 minimal subset (Flush/StartTileBinning/end_render/end_loads/
+  end_tile, TileBinningModeCfg, TRM Common/ZSClear/RTPart1, Multicore
+  SupertileCfg, Tile/Supertile coords, StoreTileBufferGeneral incl.
+  clear-being-stored), each transcribed field-for-field from
+  v3d_packet.xml (min_ver=71 variants; XML archived in the session
+  scratchpad + re-fetchable from mesa main).  Unit-tested by the
+  d3dkmt apitest 'cle' target with byte expectations hand-computed from
+  the XML independently of the encoder.  TRIANGLE-PATH + FLOW PACKETS ALSO LANDED: Branch,
+  generic_tile_list, branch_implicit_tile, tile_list_base (addr>>6
+  packing), Tile List Initial Block Size, gl_shader (record addr>>5),
+  Vertex Array Prims, Prim List Format, Cfg Bits v71, Clip Window —
+  all unit-tested (branch/vertex/gl_shader/tile_list_base/cfg-bits byte
+  goldens).  REMAINING in stage 0: the GL shader RECORD layout (a
+  separate genxml struct, not a packet) + attribute records, and mesa
+  golden captures for cross-validation.  Then Stage 1 Job 2 (triangle)
+  needs a compiled fragment shader binary (QPU) — obtain from a mesa
+  capture or vc4 shader assembler; Job 1 (clear) needs NO shaders and
+  is fully encodable with what exists NOW.
+  - Vendor mesa v3d_packet_v71 pack headers (or a minimal hand-audited
+    subset: TILE_BINNING_MODE_CFG, START_TILE_BINNING, FLUSH,
+    TILE_RENDERING_MODE_CFG_COMMON/COLOR, TILE_COORDINATES,
+    STORE_TILE_BUFFER_GENERAL/CLEAR, END_OF_RENDERING, NV_SHADER_STATE,
+    VERTEX_ARRAY_PRIMS).
+  - Deliverable: libvc4cle + host-side unit test comparing encoded bytes
+    against known-good mesa captures (goldens checked in).
+  VERIFICATION: byte-exact goldens; no hardware needed.
+
+STAGE 1 — BRING-UP EXERCISER ("v3dsmoke", ships with [HW] pass)
+  PHASE A LANDED (d3dkmt_v3dsmoke apitest): the first UMD-shaped
+  program — CreateAllocation in the slab, Lock for the CPU mapping,
+  write a genuine RCL fragment via the Stage-0 encoders, submit an
+  ALLOCATION-RELATIVE V3D job (RclAllocIndexPlusOne=1, empty range) so
+  the kernel runs the full relocation chain (Render patch emission ->
+  fence-at-kick -> Patch slab validation/rewrite -> per-node queue ->
+  retire).  Hardware-safe by construction (empty range never kicks the
+  CLE); asserts only on identified rpi5vc4, skips elsewhere.  PHASE B
+  (mesa clear job + CPU readback): in-CL GPU-VA discovery DECIDED AND
+  LANDED — D3DKMTMapGpuVirtualAddress with hAllocation now performs the
+  documented bind: dxgkrnl ensures the allocation's segment placement
+  and returns its segment-logical address (+ OffsetInPages); the UMD
+  translates to the V3D window via the escape's SlabPhysical/SlabGpuVa
+  pair (GPU VA = SlabGpuVa + (returned - SlabPhysical)).  No private
+  side-channel; matches WDK semantics.  PHASE B IMPLEMENTED (SmokePhaseB in d3dkmt_v3dsmoke.c): creates
+  dst/tile-alloc/CL slab allocations, maps each via
+  D3DKMTMapGpuVirtualAddress (validating in-slab placement), encodes
+  the full mesa-transcribed clear RCL with real GPU VAs (prologue, RT
+  Part1 clear color, GFXH-1742 double store/clear, per-tile sub-list
+  storing RT0 to the destination, generic-tile-list branch, supertile
+  coords, end-of-rendering), submits an absolute-VA job and — on
+  V3dReady silicon — polls the Locked destination for the clear color:
+  "first V3D render on this stack".  In QEMU everything up to
+  submission runs (job range emptied when !V3dReady so the CLE is
+  never referenced); readback skips.  Tile-geometry values (log2 tile
+  size, RT Part1 stride/base) flagged for mesa-golden confirmation.
+  JOB 1 EXACT RCL SEQUENCE (transcribed from mesa v3dvx_meta_common.c
+  emit_rcl_prologue + emit_frame_setup, V3D_VERSION 71 paths — every
+  packet already encodable via vc4cle.h):
+    TILE_RENDERING_MODE_CFG_COMMON        (Vc4CleTrmCfgCommonV71)
+    TILE_RENDERING_MODE_CFG_RT_PART1      (clear color low + type/bpp)
+    TILE_RENDERING_MODE_CFG_ZS_CLEAR      (Vc4CleTrmCfgZsClearV71)
+    TILE_LIST_INITIAL_BLOCK_SIZE          (Vc4CleTileListInitialBlockSize)
+    MULTICORE_RENDERING_TILE_LIST_SET_BASE(Vc4CleTileListBase -> tile-
+                                           alloc scratch in the slab)
+    MULTICORE_RENDERING_SUPERTILE_CFG     (Vc4CleMulticoreSupertileCfg)
+    2x { TILE_COORDS(0,0); END_OF_LOADS;
+         STORE_TILE_BUFFER_GENERAL(buffer=NONE=8);
+         [i==0] CLEAR_RENDER_TARGETS;      (v71, zero payload)
+         END_OF_TILE_MARKER }              (GFXH-1742 workaround loop)
+    FLUSH_VCD_CACHE
+    -- per-tile generic list (in a sub-buffer):
+       TILE_COORDS(implicit); END_OF_LOADS;
+       STORE_TILE_BUFFER_GENERAL(RT0, raster, fmt, stride, dst GPU VA);
+       END_OF_TILE_MARKER; RETURN_FROM_SUB_LIST
+    START_ADDRESS_OF_GENERIC_TILE_LIST(start,end)  (Vc4CleGenericTileList)
+    SUPERTILE_COORDINATES for each supertile
+    END_OF_RENDERING
+  OPEN ITEMS RESOLVED: CPU writes via D3DKMTLock (user-mode mapping
+  path exists: DxgkVidMmMapAllocationUser); GPU VAs via the standard
+  allocation-list + patch-location path — Rpi5Vc4DdiPatch now performs
+  real relocation (slab-physical -> GPU VA with validation), so the UMD
+  submits packets with placeholder addresses + patch entries and never
+  needs an offset side-channel.  Remaining check: BUFFER_NONE=8 mesa
+  golden.  v3dsmoke is now implementable end-to-end.
+  FULL RELOCATION CHAIN LANDED: RPI5VC4_DMA_PACKET V3dJob gained
+  Bcl/RclAllocIndexPlusOne (0 = absolute-VA compatibility); Render
+  emits D3DDDI_PATCHLOCATIONLIST entries for allocation-relative jobs
+  (AllocationOffset = offset-within-allocation from the packet); the
+  command escape gives Render an 8-entry patch-out buffer and threads
+  the results through VidSchSubmitCommandTracked (kick-time Patch) and
+  the direct fallback alike.  A UMD therefore: Lock -> write CL bytes
+  into a slab allocation -> submit packet with allocation-relative
+  BCL/RCL + the allocation handle in the resource list -> kernel
+  resolves GPU VAs at kick.  No side-channels anywhere.
+  - D3DKMT direct (no D3D runtime): OpenAdapterFromGdiDisplayName,
+    CreateDevice, escape op 0 (V3dReady gate), CreateAllocation in the
+    slab (framebuffer-sized + CL buffer), write CLs via the CPU mapping
+    (D3DKMTLock or CPU VA from private data), submit op-2 packets, fence
+    liveness via repeated submissions (pipeline apitest pattern).
+  - Job 1: RCL-only solid clear of an offscreen slab surface; readback
+    via CPU mapping and assert pixel values.  THE first real 3D-engine
+    verification on silicon.
+  - Job 2: single NV-shader-state triangle (mesa's minimal example).
+  - Job 3: TFU raster copy (ICFG formats from mesa v3d_tfu.h) => unlocks
+    1.7 hardware blits with verified format words.
+  VERIFICATION: requires the Pi 5 ([HW]); QEMU runs skip on !V3dReady.
+
+STAGE 2 — 2D ACCELERATION PATH
+  ENCODING PREREQUISITE LANDED: Vc4CleTfuRasterCopyV71 builds the
+  kernel TFU packet register image from mesa-verified constants
+  (ICFG IFORMAT@23/OTYPE@16, IOC FORMAT@12/STRIDE@16, IOS h<<16|w,
+  strides in pixels; TEXFMT_RGBA8=4).  Unit-tested; ready for a Phase C
+  smoke job (TFU copy + readback on silicon) and the Stage-2 blit
+  backend.
+  STAGE-2 A/B WIRING LANDED: Rpi5Vc4DdiPresent now emits a TFU
+  raster-copy job alongside the descriptive packet for equal-size
+  32bpp blits (allocation-relative via 2 patch locations against
+  DXGK_PRESENT_SOURCE/DESTINATION_INDEX; strides = screen pitch;
+  rect offsets in AllocationOffset).  Gated on V3dReady (QEMU
+  behaviour unchanged); the CPU present still moves the pixels so
+  correctness is never at risk, while silicon runs the same copy on
+  the TFU under real desktop load — fence completion + no TDR = the
+  engine validation.  The executor skips TFU jobs whose IIA/IOA were
+  not patched into the slab window (unpatched jobs complete
+  harmlessly).  Stage-2 COMPLETION (skip the CPU copy once the TFU is
+  proven) is a one-line policy flip after the silicon pass.
+  - cdd/composition currently copy via CPU.  Add an optional blit
+    backend: when source+dest are slab allocations, emit TFU copy jobs
+    (Stage 1 Job 3 encodings) instead of memcpy — kernel side already
+    executes TFU queues.  GDI SURFOBJ sources remain CPU copies (C1).
+  - Exit criteria: present-path CPU time drops measurably on the Pi.
+
+SOFTWARE VULKAN ICD FALLBACK — SWIFTSHADER AS WARP-EQUIVALENT
+  PURPOSE: provide a hardware-independent Vulkan ICD for ReactOS ARM64 so
+  the new vulkan-1 loader, ICD manifest/registry path, and future Zink/WSI
+  plumbing can be validated before the V3D/v3dv UMD is ready.  This is a
+  CPU renderer only: it is NOT evidence of V3D acceleration, will not heat
+  the V3D/QPU ceiling, and must not be used as the GL gears performance
+  target.
+
+  UPSTREAM FACTS CHECKED 2026-07-03:
+  - SwiftShader is a CPU implementation of Vulkan 1.3 intended for hardware
+    independence.  Upstream README documents Windows/Linux/macOS builds via
+    CMake, and the Visual Studio path builds the vk_swiftshader target.
+  - src/Vulkan/CMakeLists.txt builds add_library(vk_swiftshader SHARED ...)
+    and, on WIN32, copies that ICD beside a drop-in vulkan-1.dll name for
+    direct testing.
+  - The upstream ICD manifest template is vk_swiftshader_icd.json.tmpl with
+    "library_path": "${ICD_LIBRARY_PATH}"; CMake sets the Windows path to
+    ".\\libvk_swiftshader.dll" and writes vk_swiftshader_icd.json.
+
+  REACTOS INTEGRATION PLAN:
+  1. Bring in a pinned SwiftShader source snapshot outside the ReactOS tree
+     first (no vendoring until the cross-build/import surface is proven).
+     Build only target vk_swiftshader with the ARM64 MinGW/Clang toolchain:
+       -DCMAKE_SYSTEM_NAME=Windows
+       -DCMAKE_SYSTEM_PROCESSOR=ARM64
+       -DCMAKE_C_COMPILER=aarch64-w64-mingw32-clang
+       -DCMAKE_CXX_COMPILER=aarch64-w64-mingw32-clang++
+       -DSWIFTSHADER_BUILD_TESTS=FALSE
+       -DSWIFTSHADER_WARNINGS_AS_ERRORS=FALSE
+  2. Required build artifacts: libvk_swiftshader.dll (PE/COFF ARM64) and
+     vk_swiftshader_icd.json.  The JSON must name ".\\libvk_swiftshader.dll"
+     so it remains relocatable next to the ICD in system32.
+  3. Package both files into reactos/system32.  Register the manifest under
+     HKLM\SOFTWARE\Khronos\Vulkan\Drivers as a REG_DWORD value whose name is
+     %SystemRoot%\System32\vk_swiftshader_icd.json and whose data is 0
+     (enabled).  The current vulkan-1 loader also supports DriverName REG_SZ,
+     but the manifest path is the standard path and keeps api_version data.
+  4. Add a tiny Vulkan smoke once the ICD exists: vkEnumerateInstanceVersion,
+     vkCreateInstance, vkEnumeratePhysicalDevices, and optional
+     VK_KHR_win32_surface creation/destruction against a hidden HWND.  This
+     proves loader + ICD + registry + basic WSI without requiring V3D.
+  5. Only after that, use SwiftShader as the software reference for Zink or
+     Vulkan samples.  Keep all benchmark/thermal claims on the Mesa v3dv/V3D
+     path, not on SwiftShader.
+
+  LOCAL EVALUATION 2026-07-03:
+  - Network was available:
+    git ls-remote https://github.com/google/swiftshader.git HEAD returned
+    7868bf37d5b22345a6039fe03803243a8cff77e9.
+  - A shallow checkout was created at submodules/swiftshader.  The ARM64 PE
+    configure step succeeded with Ninja, llvm-mingw aarch64-w64-mingw32
+    clang/clang++, SWIFTSHADER_BUILD_TESTS=OFF,
+    SWIFTSHADER_BUILD_BENCHMARKS=OFF, SWIFTSHADER_BUILD_PVR=OFF,
+    SWIFTSHADER_ENABLE_ASTC=OFF, SWIFTSHADER_WARNINGS_AS_ERRORS=OFF, and
+    Python3_EXECUTABLE=/usr/bin/python3.  /opt/homebrew/bin/python3 3.14 is
+    unusable on this host because its pyexpat module fails to load; the
+    system Python 3.9 path works for SPIR-V registry generation.
+  - ninja vk_swiftshader reached vendored LLVM compilation, then failed in
+    third_party/llvm-10.0/llvm/lib/Support/ErrorHandling.cpp because the
+    Windows/llvm-mingw build sees no global POSIX ::write:
+      error: no member named 'write' in the global namespace
+      ssize_t written = ::write(2, MessageStr.data(), MessageStr.size());
+    The next SwiftShader task is a minimal Windows-compatible LLVM support
+    patch or configure fix that routes this path through _write/fwrite or the
+    intended LLVM Windows support branch before retrying the link/import
+    audit.
+
+  VENDORING REQUIREMENTS ONCE THE CROSS-BUILD LINKS:
+  - Pin the SwiftShader source to the tested commit above, or a later commit
+    with the same ARM64 PE blocker resolved.
+  - Vendor only the source plus required third_party dependencies used by the
+    vk_swiftshader target; keep tests, benchmarks, samples, and generated
+    build output out of the ReactOS tree.
+  - Preserve the CMake flags listed in the local evaluation and force the
+    known-good Python path or a hermetic Python.  Package the resulting
+    libvk_swiftshader.dll and vk_swiftshader_icd.json beside vulkan-1.dll.
+
+  BLOCKERS / RISKS:
+  - Upstream Windows docs assume a normal Windows/Visual Studio environment.
+    ARM64 PE via llvm-mingw is plausible but unproven for this tree; CMake may
+    need a small toolchain file and patches for Win32 feature detection.
+  - SwiftShader is C++ heavy and pulls Reactor, marl, Subzero/LLVM-derived
+    code, SPIR-V tooling, and platform threading/TLS paths.  ReactOS must
+    satisfy the resulting C++ runtime, static initializer, exception, TLS, and
+    synchronization imports, or the DLL must be built with compatible static
+    runtime choices.
+  - Audit the produced DLL with llvm-objdump/llvm-readobj before packaging:
+    every imported DLL/API must exist on the ReactOS ARM64 image.  Expected
+    imports should stay in kernel32/advapi32/user32/gdi32/msvcrt/ntdll-class
+    territory; UCRT/VCRUNTIME or unsupported Win10-only imports are blockers.
+  - WSI is still a risk even if instance/device enumeration works.  The first
+    ReactOS pass can accept headless/offscreen Vulkan; swapchain/present must
+    be validated separately through HWND surface creation and Present.
+
+STAGE 3 — MESA V3DV D3DKMT SHIM (PLAN OF RECORD FOR ACCELERATED GL)
+  PURPOSE: port Mesa's Broadcom Vulkan UMD (v3dv for V3D 7.1, including
+  the NIR/QPU compiler path) onto the ReactOS/Win32 D3DKMT contract.  This
+  is the acceleration path for Zink/opengl32, DXVK, and eventually
+  vkd3d.  Plain Wine DLL syncs only provide the API surface; they do not
+  make gears use V3D.
+
+  UPSTREAM FACTS CHECKED 2026-07-03:
+  - Mesa documents V3D/V3DV as the Raspberry Pi 4/5 3D stack; current V3D
+    development targets V3D 7.1 for Raspberry Pi 5.
+  - v3dv today is a Linux DRM driver: device init queries V3D params with
+    DRM_IOCTL_V3D_GET_PARAM, queue submission emits DRM_IOCTL_V3D_SUBMIT_*
+    jobs, synchronization is based on DRM syncobjs/multisync, and WSI uses
+    the DRM/KMS helper path.
+  - Therefore the ReactOS port must replace the DRM winsys boundary, not
+    rewrite the compiler, command encoders, or Vulkan state tracker.
+
+  SHIM SHAPE:
+  - Add a v3dv_d3dkmt_winsys layer beside the existing DRM-facing code.
+    Keep Mesa broadcom compiler, CL packet generation, and Vulkan object
+    logic intact; isolate ReactOS-specific code to adapter/device, BO,
+    submit, sync, and WSI glue.
+  - The shared payload header is sdk/include/reactos/rpi5vc4_umd.h because
+    this tree builds both sides.  Treat it as a VC4 driver-package private
+    KMD/UMD contract carried through D3DKMT_ESCAPE_DRIVERPRIVATE, not as a
+    Windows public ABI; Win11 parity stays on the standard D3DKMT/WDDM2
+    syscall and DDI surface.
+  - Device discovery opens the rpi5vc4 adapter through D3DKMT
+    (OpenAdapterFromGdiDisplayName or the LUID path once stable), verifies
+    KMTQAITYPE_ADAPTERTYPE.RenderSupported, creates a D3DKMT device, then
+    uses private escape op 0 to read V3dReady, SlabGpuVa, SlabPhysical,
+    SlabSize, V3D version, and feature bits.
+  - Map Mesa's DRM feature queries to the same private capability block:
+    TFU, CSD, cache flush support, multisync/timeline capability, CPU queue
+    handling, and any V3D 7.1 devinfo values needed by v3dv_device.c.
+
+  BO LAYER:
+  - v3dv_bo_alloc -> D3DKMTCreateAllocation in the slab segment for
+    GPU-visible CL, tile, render-target, texture, and swapchain BOs.  Store
+    hAllocation, byte size, CPU VA, segment-logical address, GPU VA, and
+    slab offset in the Mesa BO wrapper.
+  - v3dv_bo_map -> D3DKMTLock; unmap -> D3DKMTUnlock; destroy ->
+    D3DKMTDestroyAllocation.  First pass has no GEM handles, no dma-buf,
+    no PRIME import/export, and no DRM format modifiers.
+  - GPU VA comes from D3DKMTMapGpuVirtualAddress.  The already landed
+    v3dsmoke rule applies: the returned segment-logical address must be in
+    [SlabPhysical, SlabPhysical + SlabSize), and UMD computes V3D VA as
+    SlabGpuVa + (SegmentLogical - SlabPhysical).
+  - Prefer allocation-relative CL/RCL addresses plus patch locations when
+    submitting through the existing Render path.  Absolute slab VAs remain
+    a bring-up fallback only.
+
+  SUBMIT PATH:
+  - Translate v3dv CL jobs into RPI5VC4_DMA_PACKET op 2 with BCL/RCL
+    allocation indexes, offsets, and resource-list handles.  The Phase A/B
+    smoke path already proves CreateAllocation + Lock + MapGpuVA + patch
+    relocation + kick.
+  - Initial transport is the current command escape because it is proven on
+    QEMU/silicon and already reaches DxgkDdiRender.  Promote to
+    D3DKMTRender once per-context DMA buffers, priority, budgets, and
+    context scheduling are ready.
+  - TFU jobs map to op 3; CSD jobs map to op 4.  CPU-queue work used by
+    v3dv for query/timestamp helpers should be CPU-emulated at first, then
+    moved behind a small private CPU packet only if Mesa needs ordering
+    against GPU work.
+  - The kernel remains a command executor only.  All CL, shader, TFU, and
+    CSD register images stay Mesa/UMD-authored.
+
+  SYNC MODEL:
+  - Replace DRM syncobj handles with D3DDDI_MONITORED_FENCE objects created
+    by D3DKMTCreateSynchronizationObject2.  Mesa's visible fence value maps
+    to the WDDM CPU value page returned in
+    FenceValueCPUVirtualAddress.
+  - drmSyncobjWait/Signal/timeline operations map to
+    D3DKMTWaitForSynchronizationObjectFromCpu,
+    D3DKMTSignalSynchronizationObjectFromCpu, and the GPU wait/signal
+    variants once submit packets carry wait/signal arrays.
+  - v3dv's per-queue last-job syncs become one monitored fence per queue
+    domain (CL, CSD, TFU, CPU).  Each submit increments that queue's fence
+    value and records it as the queue tail.
+  - DRM multisync becomes D3DKMT wait-fence/value arrays on the escape or
+    Render packet.  Until kernel-side multiwait is complete, serialize with
+    CPU waits before submit; that is correct but not final-performance.
+
+  V3DV KERNEL-INTERFACE MAP TO VC4KMT:
+
+  | Mesa/v3dv boundary | vc4kmt / D3DKMT equivalent | Current gap |
+  | --- | --- | --- |
+  | v3dv_bo_alloc(size, flags) | vc4kmt_bo_create -> D3DKMTCreateAllocation + D3DKMTMapGpuVirtualAddress in the slab segment | BO flags, cache domains, imported handles, and explicit memory heaps are not modeled yet. |
+  | v3dv_bo_map / unmap | vc4kmt_bo_map -> D3DKMTLock; destroy path unlocks via D3DKMTUnlock | No standalone vc4kmt_bo_unmap helper yet. |
+  | v3dv_bo_free | vc4kmt_bo_destroy -> D3DKMTDestroyAllocation | No shared/imported ownership rules yet. |
+  | BO GPU address lookup | vc4kmt_bo_gpuva | Only slab-local 32-bit V3D VA is exposed. |
+  | drmSyncobjCreate | vc4kmt_submit_cl/tfu/csd creates D3DDDI_MONITORED_FENCE for each out-fence | No persistent explicit syncobj wrapper yet. |
+  | drmSyncobjWait | vc4kmt_wait -> CPU fence-value page fast path, then D3DKMTWaitForSynchronizationObjectFromCpu for infinite waits | Bounded wait without a CPU page still needs the hAsyncEvent fallback. |
+  | drmSyncobjSignal | Future vc4kmt CPU/GPU signal helper over D3DKMTSignalSynchronizationObjectFromCpu / submit signal packets | Not exposed yet. |
+  | drmSyncobjDestroy | vc4kmt_fence_destroy | Fence import/export and timeline reuse are not exposed yet. |
+  | DRM_IOCTL_V3D_SUBMIT_CL bcl_start/end | VC4KMT_CL_SUBMIT.BclStart/BclEnd in RPI5VC4_DMA_PACKET op 2 | First helper handles one BCL BO index. |
+  | DRM_IOCTL_V3D_SUBMIT_CL rcl_start/end | VC4KMT_CL_SUBMIT.RclStart/RclEnd in op 2 | First helper handles one RCL BO index. |
+  | DRM_IOCTL_V3D_SUBMIT_CL qma/qms/qts | Use vc4kmt_bo_gpuva and encode tile-allocation BO addresses/state in the Mesa-authored CL | No separate KMT submit fields; v3dv must own the CL encoding. |
+  | DRM_IOCTL_V3D_SUBMIT_CL BO handle array | vc4kmt_submit_cl resource list, allocation-index relocation, and Bcl/RclAllocIndexPlusOne fields | General relocation arrays beyond BCL/RCL packet dwords are not exposed yet. |
+  | DRM_IOCTL_V3D_SUBMIT_CL in-syncs | CPU-side vc4kmt_wait before submit | No GPU wait array in the escape packet yet. |
+  | DRM_IOCTL_V3D_SUBMIT_CL out-sync | VC4KMT_FENCE returned from vc4kmt_submit_cl | One out-fence per submit today. |
+  | DRM_IOCTL_V3D_SUBMIT_TFU | vc4kmt_submit_tfu -> RPI5VC4_DMA_PACKET op 3 with the 12-register TFU image and PacketType-2 signal | Resource/BO relocation for TFU IIA/IOA is not generalized yet. |
+  | DRM_IOCTL_V3D_SUBMIT_CSD | vc4kmt_submit_csd -> RPI5VC4_DMA_PACKET op 4 with QUEUED_CFG0..CFG7 and PacketType-2 signal | Resource/BO relocation and CSD indirect BO tracking are not generalized yet. |
+
+  WSI / PRESENT:
+  - Replace wsi_common_drm usage with a Win32-surface backend:
+    VK_KHR_win32_surface stores the HWND, swapchain images are D3DKMT
+    allocations in the slab with linear scanout-compatible layout, and
+    vkQueuePresentKHR calls D3DKMTPresent/rpi5vc4 present.
+  - First pass supports linear images and the formats already accepted by
+    rpi5vc4 present/TFU.  Modifier, dma-buf, and KMS fd comparisons are
+    disabled or translated out of the advertised extension set.
+  - Zero-copy present is the target.  If a renderable image cannot also be
+    scanned out, the UMD schedules a TFU copy into a presentable slab
+    allocation and presents that allocation.
+
+  BUILD PLAN:
+  - Pin an external Mesa snapshot first.  Cross-build only the Broadcom
+    Vulkan driver and its Mesa common dependencies with Meson/MinGW ARM64;
+    do not pull LLVM into the first pass.
+  - Add the ReactOS platform as a narrow winsys port, not a fork of v3dv.
+    Expected local files are in a small d3dkmt/ or win32/ winsys directory
+    plus build-system glue.
+  - The resulting ICD is packaged beside its JSON manifest and loaded by
+    the new vulkan-1 loader.  SwiftShader remains the software reference;
+    v3dv is the performance/thermal target.
+
+  VALIDATION LADDER:
+  1. Host compile of the winsys against ReactOS psdk/d3dkmthk.h.
+  2. On ReactOS: vkEnumerateInstanceVersion, vkCreateInstance,
+     vkEnumeratePhysicalDevices, and feature dump showing V3D 7.1.
+  3. Headless offscreen clear using the Stage-1 RCL/relocation path, then
+     CPU readback.
+  4. TFU copy and CSD smoke through the same fence model.
+  5. VK_KHR_win32_surface swapchain present to an HWND through D3DKMTPresent.
+  6. Zink opengl32 gears on V3D, then DXVK d3d9/d3d11 smoke.
+
+  BLOCKERS / RISKS:
+  - Mesa source pin and ARM64 PE cross-build are not done.
+  - The rpi5vc4 private capability query must expose enough V3D 7.1 devinfo
+    to satisfy v3dv_device.c without lying about unsupported features.
+  - GPU signal-on-submit and multiwait need to mature from smoke coverage to
+    production monitored-fence semantics.
+  - Cache coherency and CPU mappings must be audited for every BO usage:
+    shader/CL uploads, texture uploads, render readback, and presentable
+    images may need explicit cache clean/invalidate policy.
+  - WSI must reconcile Vulkan image usage/layout rules with the current
+    rpi5vc4 linear scanout/TFU constraints.
+  - Query pools, timestamp/perfmon, CPU queue jobs, external-memory, and DRM
+    modifier extensions must be disabled until backed by real D3DKMT paths.
+
+  D3D RUNTIME NOTE:
+  - WDDM D3D9 UMD DDI remains the best Windows-parity design for native D3D9.
+    It is not the active acceleration path for gears.  The current default is
+    v3dv over D3DKMT first, then stack Zink/DXVK/vkd3d on Vulkan.
+
+DEPENDENCIES UNLOCKED PER STAGE
+  Stage 1 => [HW] validation content for V3D/TFU/CSD; 1.7 formats.
+  Stage 2 => compositor GPU composition (3.3) becomes incremental.
+  Stage 3 => 1.6 priority feed/budgets (real contexts), 1.15 GPU fences
+             (signal-on-submit in CLs), 3.2 zero-copy swapchains.
+================================================================================

@@ -1,0 +1,39 @@
+SwiftShader ReactOS ARM64 PE patch log
+=====================================
+
+All entries are minimal local patches needed to cross-build SwiftShader's
+vk_swiftshader target as an ARM64 PE DLL with llvm-mingw.  Keep this file in
+sync with local edits under submodules/swiftshader so vendoring can replay or
+drop each patch explicitly.
+
+2026-07-03
+----------
+
+1. third_party/llvm-10.0/llvm/lib/Support/ErrorHandling.cpp
+   Problem: llvm-mingw Windows headers do not expose POSIX ::write, causing
+   vendored LLVM Support to fail compiling the fatal-error stderr path.
+   Patch: include <io.h> under _WIN32 and call ::_write for the two direct
+   stderr writes, leaving the existing ::write path for non-Windows builds.
+
+2. third_party/marl/src/scheduler.cpp
+   Problem: marl's Windows nop helper assumes the MSVC __nop intrinsic, but
+   llvm-mingw/clang does not provide it.
+   Patch: keep __nop for _MSC_VER only and let llvm-mingw use the existing
+   inline assembly nop path.
+
+3. src/System/Timer.cpp
+   Problem: the Windows ARM64 timer path uses ARM64_PMCCNTR_EL0, which the
+   Microsoft SDK defines as ARM64_SYSREG(3,3,9,13,0) but llvm-mingw's
+   <intrin.h> does not define.  llvm-mingw also does not declare
+   _ReadStatusReg for this ARM64 user-mode compile.
+   Patch: define ARM64_PMCCNTR_EL0 as the encoded 0xDCE8 value only for
+   _WIN32 ARM64 builds when the header has not already provided it, keep the
+   PMCCNTR_EL0 read for MSVC, and use QueryPerformanceCounter through
+   counter() for llvm-mingw ARM64 ticks().
+
+4. third_party/llvm-10.0/CMakeLists.txt
+   Problem: SwiftShader's flattened LLVM source list omitted
+   llvm/lib/Support/Atomic.cpp, leaving llvm::sys::CompareAndSwap and
+   llvm::sys::MemoryFence undefined at the vk_swiftshader DLL link.
+   Patch: add Support/Atomic.cpp to the vendored LLVM static library source
+   list.  The file already has a clang/GCC __sync_* implementation.

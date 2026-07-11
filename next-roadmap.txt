@@ -1,0 +1,530 @@
+# GPU/WDDM next roadmap — Pi5 rpi5vc4/dxgkrnl stack
+# Rev 2: after mining the BLACK-GEARS boot (flash_test.log Jul 5 00:05). The
+# milestone boot's "gears at 38 FPS" was largely FAKE — sync stack collapse let
+# everything free-run. Root causes found + fixed in tree (unflashed, untested).
+
+================================================================================
+P0 — CORRECTNESS
+================================================================================
+1. FENCE-SPACE COLLAPSE  [ROOT CAUSE FOUND — FIXED IN TREE, NEEDS SILICON PASS]
+   Three fence-mint sites in two counters sharing one numeric space:
+     - tracked submits minted at KICK from adapter counter (vidsch.c:762 old)
+     - untracked/ioctl submits minted at SUBMIT (d3dkmt.c:1852, adapter ctr)
+     - untracked-with-0 + flip path minted from Engine->NextFenceId (2nd ctr!)
+   Evidence (black boot): VidSch kick fences 2,3,4,5,6,125,126,131,132,388...
+   while pending 98->885 never mass-drops: no packets lost — the counter was
+   pumped ~118x between kicks by at-submit mints, so a kicked packet completes
+   with a HIGHER fence than every UMD value handed out meanwhile -> threshold
+   (miniport monotonic-max + vidsch retire + DMA-tracker signal) signals ALL of
+   them -> UMD waits pass for work never executed. Cascade: gears free-runs,
+   presents blit unrendered buffers (wsi mid-px=00000000 -> BLACK WINDOW),
+   vidsch floods (885 pending), TDR ghost cycle every 2.28s, "38 FPS" fake.
+   FIX (in tree): single adapter-wide counter minted at SUBMIT everywhere;
+   explicit Packet->Kicked flag — retire/force-IDLE key on Kicked, never
+   fence==0; NotifyInterrupt threshold now monotonic-max (no rewind).
+2. CPU FENCE WAIT WAS A 100ms NAP  [FIXED IN TREE]
+   DxgkSyncObjectCpuWait did ONE bounded 100ms KeWait and returned SUCCESS
+   regardless of fence value (sync.c:681 old). Every "infinite" UMD wait
+   (shim syncobj-wait tmo=INT64_MAX) degraded to <=100ms -> paced the fake
+   33-38 FPS. FIX: loop until value reached (100ms re-check bound only for
+   lost wakes; TDR guarantees advance). NonBlocking now returns STATUS_TIMEOUT
+   when unreached.
+   User-reported lines (added per request; all explained by this item +
+   item 1, kernel fixes landed):
+     shim: syncobj-wait #25 n=1 h0=7 flags=0x3 tmo=0
+     shim: syncobj-wait #25 slot h=7 sig=0 fence=1
+     shim: syncobj-wait #26 n=1 h0=8 flags=0x3 tmo=9223372036854775807
+     shim: syncobj-wait #26 slot h=8 sig=0 fence=1
+     shim: syncobj-wait #27 n=1 h0=9 flags=0x2 tmo=0
+     shim: syncobj-wait #27 slot h=9 sig=0 fence=1
+   Decode: "fence=1" prints HAS_FENCE (not the value); tmo=0 entries are
+   vkGetFenceStatus polls returning ETIME (benign by design); the INFINITE
+   (#26-style) waits returning early were the real bug — caused by the
+   100ms-nap CpuWait (item 2) + fence-space aliasing (item 1), both fixed
+   and verified on silicon (kick #N == fence N; waits now block).
+3. V3D STALLS — NARROWED ON SILICON (batch-4 boot): 11 consecutive clean
+   frames, real 35.6 FPS animation, 4 TDRs total of which the ONLY organic
+   one is a DETERMINISTIC PT_INVALID MMU fault: VIO_ADDR=01704030 every
+   boot, binner halted at BCL+0x10b (GL_SHADER_STATE region). VIO is
+   <<8-scaled (Linux semantics) => fault VA 0x1_7040_3000 = a legit slab
+   byte-address 0x01704030 read through a PACKED addr[39:8] field, i.e.
+   v3dv wrote a full byte address where the hw wants addr>>8 (or the
+   record misalignment equivalent). The other TDRs are aftershocks: first
+   render after a core reset loses completion (reset_control parity gap).
+   Forensics in tree: BCL+0x100..0x130 dump + 32B @VIO target dump on
+   fault TDRs. Fix the packed field -> plausibly ZERO-TDR boots.
+   (Also landed earlier: render-side invalidate before every CT1 kick,
+   Linux parity; writer+kick DSBs.)
+   With sync now honest this becomes THE visible blocker again (2.2s TDR per
+   stall). Refined evidence (black boot dumps): CT1CS=0x10 (CTRUN) with CT1CA
+   parked at RCL+0x01 / +0x4c / +0x86, PCS=0 or 4, CT0 fully consumed
+   (CA==EA), MMU clean, isr=0, BFC advances (bin ran) RFC frozen; post-reset
+   renders DO sometimes complete for real (RFC=1, TFU out shows red gears at
+   fence 125/126/388+). Park offsets suggest CLE stalled in early RCL packets
+   (config 0x79 blob / wait-on-semaphore 0x08) — decode TDR RCL byte dumps
+   against v3d_packet.xml. Also compare Rpi5V3dResetCore vs linux v3d_reset
+   (we SMS-pulse only; linux adds reset_control + full init_hw_state).
+4. V3D IRQ dead: bcm2712.dtsi shows v3d has TWO lines <GIC_SPI 250>,<GIC_SPI
+   249> (core+hub pair) and the 2712 GIC is a GIC-400 (v2). We only connected
+   INTID 282 (SPI 250) — likely the wrong half of the pair. [IN TREE batch-7:
+   both lines connected, same ISR; isr counter identifies the live one.]
+   Timer res forced to 1ms (ExSetTimerResolution) since batch-6.
+   Debate rematch verdict on the render park (item 3): H-A invalidate-discard
+   and H-B missing-init-reg REFUTED at source (Linux does the identical
+   FLM_FLUSH before render; v71 init = only L2TFLSTA/END which we write);
+   survivor = bin->render handoff timing race (Linux inherits scheduler
+   latency between bin fence and render kick; our same-DPC-pass kick races a
+   residual post-FLDONE binner writeback window). CT1CFG=0 at park proves the
+   CLE never applied the render config — CA at +0x4c/+0x82 is prefetch
+   run-ahead, execution parked at RCL start. [IN TREE batch-7: one-tick kick
+   slack + PCS.BMACTIVE gate + QMA-bytes capture at kick and TDR = the
+   decisive experiment.] Do NOT revert the render-side invalidate.
+5. Poll/TDR-scrub vs SubmitRender race — AUDITED CLEAN: poll DPC, submit,
+   escape, preempt, TDR scrub and FenceDpc all run under the single DmaLock.
+
+================================================================================
+P1 — PERF (target: honest 1600+ FPS gears)
+================================================================================
+6. Serial print load: DdiRender flood print (4649 lines/boot) is already gone
+   from the tree (flashed build only). d3dkmt CREATEALLOC/LOCK budgets 64->8,
+   MAP print budgeted 8 [DONE in tree]. TDR forensics: gate to first-N after
+   P0.3 lands.
+7. Present path = 3 copies (TFU tiled->linear + cpu_map memcpy + StretchBlt)
+   + compositor overpresent (~2.5x, dirty=1 full-frame). For 1600 FPS: flip
+   or direct-scanout the TFU output, dirty-rect coalescing, decouple present
+   rate from render rate (mailbox).
+8. Overlap bin(N+1)/render(N) still disabled (if(FALSE)) — re-enable after
+   P0.3; required for GPU pipelining at high FPS.
+9. msvcrt ARM64 fenv stubs (fegetenv/fesetenv/feholdexcept/fegetround 26x
+   + _fpreset) — implement on FPCR/FPSR; noise + FP-rounding risk in mesa.
+
+================================================================================
+P2 — ROBUSTNESS / CLEANUP
+================================================================================
+10. softgpu decline leaves PnP zombie (QUERY_REMOVE minor 0x1/0x3 unhandled ->
+    "Removal vetoed by Root\SOFTGPU\0000"); demote the 2x "NO translated
+    resources!" ERROR prints on the by-design decline path.
+11. fence=1 "EMPTY ranges" — RECLASSIFIED BENIGN: it is a signal-only
+    vkQueueSubmit (0 cbufs) from v3dv device init; completing it in order
+    without a kick is the correct handling.
+12. gears autostart race — [DONE in tree] Run entry now delays ~5s via
+    cmd /c ping -n 6 before gears.exe (hivedef.inf).
+12b. gears first-CL latency: 26s from vulkan-1 load (t=29.6) to SUBMIT_CL #1
+    (t=55.8) in the black boot — v3dv shader-compile cold path; needs a
+    disk shader cache or compile-perf pass (cycle 2).
+13. wsi present #1 blits before first render completes (one black frame) —
+    with honest waits, re-check; if still there it's a swapchain initial-sync
+    gap in the shim wsi glue.
+14. LDEVOBJ_bUnloadImage UNIMPLEMENTED x2 (win32k) — display driver image
+    unload leak. [FIXED: enabled the real ZwSetSystemInformation(SystemUnloadGdiDriver) path —
+    modern sysldr MmUnloadSystemImage unlinks+frees the module entry so reload
+    is clean; the #if 0 guarded a long-fixed bug. QEMU regression-checked]
+15. apiset api-ms-win-appmodel-runtime-l1-1-2 load fails c0000135 during
+    DX/UMD chain — add the apiset (NT10 parity). [FIXED: added to
+    apisets.table.c between -1-1 and -1-3, kernel32 host]
+16. HVS LPTRS dead-channel probe every frame (@0x03c=ffffffff head=4095) —
+    skip disabled channels permanently. [FIXED: sticky HvsLptrsDead[2] mask,
+    8 consecutive all-ones reads retires the channel]
+
+================================================================================
+>1s SERIAL-GAP CENSUS (batch-5 boot, user-requested watch list)
+================================================================================
+G1. GPU TDR cycle gaps t=58-72 (1.2-2.0s each) — the render-loss stall class,
+    tracked as P0.3; goes away with it.
+G2. SMSS pagefile volume probe 1.04s — CLOSED BY-DESIGN: livecd.inf already
+    clears PagingFiles; our boots use the preinstall profile which keeps
+    paging on purpose (preinstall.inf comment) and the rig media just has
+    no pagefile-capable volume. Cost exists only on this test profile.
+G3. Service-init churn (rpcrt4/wintrust 1.25s, wine-gecko probe 1.73s,
+    logon image loads 1.89s) — CLOSED ACCEPTED: one-time single-core boot
+    work; gecko probe is upstream wine behavior with install already
+    __REACTOS__-gated out; not hangs.
+NEW from same boot:
+20. [FIXED by the vc4kmt 4000x1ms busy-retry (batch-6); recent GL logs show
+    zero occurrences] UMD submit failure surfaces as "MESA: Draw call returned Invalid
+    argument" — when the per-device in-flight budget rejects a submit the
+    shim/v3dv drops the draw; must wait/retry (block on a fence) instead.
+21. DxgkpTdrWorker preempt-recovery WORKS — [RESOLVED: fence-space mixing
+    predates mint-at-submit unification; both print fields are the same
+    adapter fence space now]
+
+================================================================================
+NON-GPU (user-flagged, fix)
+================================================================================
+17. rundll32 c0000005 at t=5.4 — ROOT-CAUSED + FIXED IN TREE (not MM; MM was
+    right): ntdll loader kept the XP-era "no fixups for non-Dll" gate
+    (ldrutils.c LdrpMapDll) -> iexplore.exe loaded via LoadLibraryExW into
+    rundll32, rebased off 0x140000000, NEVER RELOCATED; its TLS
+    AddressOfIndex publish wrote through the preferred-base VA into
+    rundll32's read-only .rsrc. Fix: relocate non-DLL images like DLLs
+    (NT10 parity, verified vs Win7 ntdll). QEMU boot clean; Pi validation
+    rides the next cycle.
+18. wddm_bridge IOCTL_D3DKMT_ESCAPE (0x002305C0) failures: (a) CLOSED
+    BENIGN-PROBE — fires once when the vulkan/vc4kmt info escape probes
+    before a full adapter exists (QEMU: always, falls back to SW ICD as
+    designed; Pi: rpi5vc4 serves it after start). (b) DEVICE_BUSY drops:
+    UMD side fixed in tree via submit busy-retry (batch-6, silicon pending);
+    kernel-bridge compositor callers still drop — remaining sub-item.
+19. Minor noise same window (rank low): NtNotifyChangeMultipleKeys
+    UNIMPLEMENTED (-> mmdevapi RegNotifyChangeKeyValue failed 1); UMWP calling
+    IDWP err x2 (desktop.c:1551); wine fixmes (shdocvw winlist, comctl32
+    TBSTYLE_REGISTERDROP, shlexec flags 0x100, setupapi style 0x104/default
+    path, advpack SYS_MOD_PATH); shlwapi propbag Bags\AllFolders\Desktop
+    errs; winpos "Window is HWND_BOTTOM hwnd 1" err; ldrinit "Accepting
+    different LOAD_CONFIG size" WARN (NT10 images, benign).
+    Gears autostart delay trimmed 5s -> 2s (ping -n 3); the silent 5s log gap
+    at t=4.7-9.7 was that delay, by design not a hang.
+    QEMU-only: "miniport has no DxgkDdiEscape" + ESCAPE 0xC00000BB + "primary
+    ICD has no devices - fallback" = correct fallback (no V3D there); on Pi
+    the rpi5vc4 escape path serves it.
+
+================================================================================
+VERIFIED BENIGN (don't re-chase)
+================================================================================
+- VidSch nokick state=1 = engine busy at submit; completion DPC re-kicks.
+- "MESA: error: shim/v3dv-*" = our own mesa_loge traces, not errors.
+- ICD-override / dxgi / dcomp load prints = by design (keep).
+- No OUTOMEM, no MMU faults, no bugchecks in either boot.
+
+PARKED (non-GPU): viogpu QEMU 0xC000009A; msvcrt _close(wild fd); firmware
+DDR-init boot flake ~1/4; ArbBuildAssignmentOrdering UNIMPLEMENTED x5; usersrv
+GetThreadConsoleDesktop 0xc0000008.
+22. Boot-flake KDB drop (seen batch-6 boot 1): Assertion
+    PointerPte->u.Hard.Valid == 0, miarm.h:1138 at t=36.7 during umpnpmgr
+    "Installing: STORAGE\Partition\..."
+    [ANALYZED 07-05: assert = MI_WRITE_VALID_PTE over an already-valid PTE.
+    Prime suspect: SMP collided fault — two cores demand-zero-faulting the
+    same page; ARM3's collided-fault re-check under the PFN/WS lock may be
+    incomplete on this path (flake appeared with 4-core boots). NEXT: needs
+    the KDB bt from a repro to pick the exact caller before touching MM —
+    do NOT fix blind, boot-stability risk] — MI writing a valid PTE over a
+    valid one in the storage/PnP install path; pre-existing (no MM changes
+    in that batch); needs a KDB bt capture next occurrence.
+
+23. [RPI5-SILICON, NEW 07-05] Native-GL gears PARTIALLY DRAWS with VESA/
+    display errors on the Pi (user-observed on live screen; QEMU clean at
+    1900+ => defect is V3D/present-side only). Suspects in order:
+    (a) linear DISPLAY_TARGET framebuffer (v3d_resource.c change) vs TLB
+    raster stores — revert candidate #1; (b) deferred-present handing a
+    stale/in-flight resource (wgl.c v3d present branch); (c) WC readback
+    coherency on the linear fb (missing flush before SetDIBitsToDevice).
+    Plan: capture serial during a gears window on next approved roll,
+    then A/B: revert (a) first (tiled fb + detile map path is the proven
+    renderer), keep deferred-present; re-check.
+
+24. [RPI5-SILICON, NEW 07-05 second roll] UNCAPPED PIPELINE NEEDS
+    BACKPRESSURE: with stw's EOF wait removed, gears free-runs ~2500
+    draws/s (0.4ms/draw measured — draw path healthy!) for ~2.4s, then
+    hard-stalls: in-flight budget saturates (shim busy-retry blocks,
+    kernel TDRs the backlog, 16 TDRs, no FPS print). FIX (bounded, next
+    dll build): classic 2-frames-in-flight throttle in the wgl v3d
+    present branch — keep per-frame fence handles; at present, if
+    (submitted - retired) > 2, fence_finish(oldest). Keeps swap
+    non-blocking in steady state (waits only when GPU >2 frames behind)
+    => real HW-paced FPS = GPU frame time (~2-5ms) => 200-400 expected.
+    NOTE: this roll was the item-23 A-test (tiled fb restored): draws
+    healthy, submits flow — visual verdict needs user screen check, but
+    the stall preempts FPS/visual conclusions; fix 24 first.
+    [FIXED 07-05: 2-frames-in-flight fence throttle in wgl.c present
+    branch — first silicon roll: 133.6 FPS warmup window, no flood-stall.
+    Remaining: TDR tax (100/run) = render-side completion detection —
+    extend CA==EA fallback to CT1, next item.]
+
+25. [BOOT-PATH PROGRAM, user-directed 07-05] kernel->gears QEMU target
+    <=1s (user), measured 2.98s. FULLY DECOMPOSED (07-05):
+    A 3.5-4.55 (~1.0s): dense PnP/services init — usbhub enum + eventlog
+      source registrations (36 lines!) + SCM db + ACPI enum, all serial.
+      Lever: start-order parallelization, eventlog lazy registration.
+    B 4.55-5.45 (~0.9s): device installs ~0ms each (not the cost); real
+      eaters = QEMU tablet HID stack start 0.25s (hidusb config/transfer
+      path, event-driven, needs inside-look), PnP RPC round-trips
+      (0.12+0.14), service starts.
+    C 5.45-6.6 (~1.15s): livecd FIRST-BOOT SHELL SETUP redone every boot:
+      mshtml/wintrust RegInstall churn, mydocs profile-file creation,
+      VersionRegisterClass, explorer init. Lever: pre-seed these in the
+      default hives / skip self-registration on livecd.
+    MEASURE 07-05: -smp4 QEMU = 3.69s (TCG multicore SLOWER; QEMU cannot
+    show parallel wins — Pi's real cores get them free). QEMU<=1s is a
+    serial-CPU cut problem. Attribution (2.8-5.8s window, smp1):
+    devaction 0.56 (serialized device starts), fixme/wine-init 0.35,
+    ntuser desktop churn 0.25, usbhub residual 0.18, umpnpmgr+eventlog
+    RPC 0.26, crit-registration 0.11 (was 0.41). Next candidates in
+    order: desktop.c ptiLastInput churn (print-storm? cheap), wine-dll
+    init tail, devaction start-chain (deep, careful).
+    DONE 07-05 (fix #2): livecd COM registration SPLIT — syssetup.inf
+    [ShellCriticalDlls] (14 shell-needed) stays sync (0.41s -> 0.11s);
+    the 66-DLL tail runs on DeferredRegistrationThread in parallel with
+    shell bring-up (InstallLiveCD holds the host alive until the worker
+    finishes; first attempt died with the host process — lifetime fix).
+    QEMU-verified: tail completes 0.40s into shell startup, zero COM
+    errors. Critical-path saving ~0.3s QEMU, larger on Pi.
+    FINDINGS 07-05 (round 2): HID stack EXONERATED (both tablets full
+    descriptor+config in 17ms total, probes removed after verdict).
+    Install batch: 60-device listing prints in 18ms; real work 0.23s
+    (~3.8ms/device) — and NOTHING waits on it (only setupapi
+    CMP_WaitNoPendingInstallEvents opens the event; no boot-path caller
+    in tree) => the quiesce is -smp1 CPU serialization, not a gate.
+    NEXT LEVERS by size: C-phase livecd self-registration redone every
+    boot (mshtml/wintrust RegInstall + mydocs profile files, ~0.5-0.8s)
+    — trace WHO invokes RegInstall per boot, then pre-seed its registry
+    output in the default hives; then eventlog source-registration bulk
+    (36 lines in phase A); then install-pass trim.
+    DONE 07-05: usbhub USBH_PortDebounce short-circuit (connected +
+    no connect-change at first read = already stable; kills 100ms+ per
+    populated port; QEMU-verified, Pi benefit larger: ports x 143ms).
+    Gears launch reverted to HKCU Run (stock order) per user.
+
+26. [P0.3 ROOT CAUSE FOUND + FIXED 07-05, awaiting silicon]: the V3D
+    binner OUT_OF_MEMORY path was NEVER SERVICED — overflow memory was
+    allocated+mapped at init but BPOA/BPOS were never written on
+    V3D_INT_OUTOMEM (zero writes in tree; PollDone ignored the bit; the
+    ISR masked it as a "completion" source). Any bin whose tile lists
+    outgrow the QMA allocation stalls forever waiting for memory =
+    parked-RUNNING at the dispatch point, stochastic per-frame geometry,
+    workload-agnostic, spiral when every frame needs overflow. Explains
+    the entire P0.3 catalog + the TDR death spiral + the ESCAPE-BUSY
+    log storm (UMD retry loop during the spiral; 0x2305C0 =
+    IOCTL_D3DKMT_ESCAPE). FIX: PollDone now supplies BPOA/BPOS
+    (Linux v3d_irq.c OOM path) + clears OUTOMEM + budget-8 print.
+    CAVEAT: single static 8MB overflow region — a job that OOMs twice
+    reuses it (Linux allocs fresh per OOM); fine for current workloads,
+    note for heavy scenes. Bridge ESCAPE-fail print now rate-limited
+    (first 8 + every 64th with count) — logs kept per user.
+
+26b. OOM-THEORY VERDICT (silicon, 07-05): REFUTED as P0.3 cause — zero
+    "binner OOM" prints across a full gears run with 71 TDRs (the binner
+    never raises OUT_OF_MEMORY; the supply code stays as correct dormant
+    plumbing per Linux parity). NEW SIGNATURES from the verdict boot:
+    (a) isr=0 dpcIsr=0 ALL BOOT — V3D IRQ connected (INTID print) but
+    NEVER DELIVERED once; completions latch in INT_STS (dumps show
+    FLDONE/FRDONE-era bits) and everything rides the 1ms poll. IRQ
+    mortality varies per boot (earlier boots isr=31+). (b) TDR dump #3:
+    INT_STS=0x003F0000 — high-bit latch class (GMP violation/QPU bits
+    territory) during a start-stall park (CA=start+1, CTSUBS, not
+    running); other dumps STS=0. (c) two park flavors confirmed: bin
+    DONE-undetected (CA==EA, CT1 never kicked) vs start-stall.
+    NEXT INSTRUMENT (one cycle): TDR dump += INT_MSK_STS (current mask)
+    + decode 0x3F0000 bits vs v71 regs; plus log ISR entry-reject reasons
+    (spurious count) to split GIC-delivery vs core-INT_EN vs mask-stuck.
+
+27. [DEAD-IRQ ROOT CAUSE FOUND 07-05 via mask instrument]: TDR dumps show
+    msk=ffff0038 with isr=0 all boot — the completion-bit unmask in the
+    poll DPC was GATED on the V3dIsrMasked flag; two racing DPC runs
+    consume the flag once, the second skips the unmask, and completions
+    stay MASKED FOREVER => IRQ dead for the whole era, everything rides
+    the 1ms poll, every park costs full TDR. FIX (in tree): unmask
+    unconditionally at DPC end (idempotent MSK_CLR). Explains the
+    per-boot isr=0-vs-31 lottery across ALL earlier eras.
+28. [FROM SAME LOG] VidSch pending=744 during spiral: kernel-side
+    compositor presents flood the engine queue unbounded while the GPU
+    TDR-cycles (only the newest flip matters). FIX NEEDED: coalesce
+    flip packets per VidPn source in the present queue (drop stale
+    flips on enqueue). Bridge ESCAPE-retry print now every-1024th.
+
+29. [NEW CRASH 07-05, boot t=30.6, archived rig-logs/0705-unmask-c2crash]:
+    BAD_POOL_CALLER 0xC2/0xD during user32 RegisterSystemControls:
+    quota'd PAGED pool (type 9) 32-byte block, ProcessBilled overwritten
+    with ASCII 'IOBU' = middle of "RADIOBUTTON" — a control-class name
+    string overflows a 32B allocation into the neighbor's pool header
+    (chars-vs-WCHAR sizing shape). Hunt: win32k ntuser class registration
+    name copies (NtUserRegisterClassExWOW / class.c) + user32 builtin
+    control registration path. Stochastic (first sighting in ~100 boots);
+    expool.c:2814 "Object ... is not a process. Type 131" is the
+    quota-return tripping on the clobbered header. PRE-EXISTING (no
+    class-path code touched tonight). Unmask-fix verdict still pending
+    (this crash preempted gears).
+
+30. [STABILITY REGRESSION WATCH 07-05]: two consecutive boots, two
+    DIFFERENT stochastic MM corruptions pre-gears (0xC2 pool-header
+    'RADIOBUTTON' clobber t=30.6; Pfn1 assert freelist.c:507 t=41,
+    both archived in rig-logs/) after ~100 boots without either.
+    ACTION: usbhub debounce short-circuit REVERTED from the image (only
+    edit changing real-hardware timing; QEMU-only win, reintroduce
+    behind a config gate later). If crashes persist without it, the
+    unifying suspect is SD-DMA corruption under load-heavy boot windows
+    (crashes cluster t=30-45 = DLL-load era; QEMU never reproduces =
+    virtio path clean) — that becomes its own investigation (sdbus/
+    sdhost bounce/cache discipline audit).
+
+31. [C2/Pfn1 STOCHASTIC MM CORRUPTION — DIAGNOSED 07-05]: ~25% of boots
+    (3/12 archived) hit random MM corruption at t=30 (C2 BAD_POOL_CALLER
+    on a TAG_IOBUF NonPagedPool storage buffer, ProcessBilled clobbered;
+    or Pfn1 assert). Different structure each time = random corruption,
+    not a logic bug. alloc/free of quota pool is symmetric (expool.c:3165
+    reserves the ProcessBilled slot) so not an over/underrun in the pool
+    code. LEADING CAUSES: (a) the concurrent COM-registration thread I
+    added (item 25 fix#2) ran heavy registry/DLL I/O in the SAME t=30
+    window — REVERTED (boot-time isn't the current goal); (b) SD-card
+    degradation (heat/wear, matches "appeared after ~100 boots"). Next
+    clean-tree boot distinguishes: crashes gone => was the concurrency;
+    persist => SD card (swap it).
+32. [V3D isr=0 LOTTERY ROOT CAUSE + FIX 07-05]: GIC line healthy at 40s
+    (ena=1 act=0 pnd=0), core completion bits unmasked (msk=ffff0038),
+    yet isr=0 whole boot on some boots while poll-FPS works => core
+    completions never interrupt. Cause: connect made SPI250 fatal-primary
+    and SPI249 (the real core line for FLDONE/FRDONE) optional-secondary;
+    boots where the core line's connect didn't take lost every core IRQ
+    to the 1ms poll -> starves bin->render kick -> the "bin done, render
+    never kicked" park (CT0 CA==EA, CT1CA=0) in the TDR dumps. FIX:
+    connect BOTH lines non-fatally, IRQ-connected if EITHER takes, log
+    each (shared ServiceRoutine already reads both status regs). Reverts
+    this session: freeze-EOI HAL experiment (GIC evidence showed EOI
+    healthy) and deferred COM registration — both OUT, tree clean.
+
+33. [PARK MECHANISM — REGISTER-PROVEN 07-05, topology-fix log]:
+    isr STILL ~0 (=2) even with BOTH interrupt lines connected (core=1
+    hub=1) => isr=0 is NOT a connect failure; the V3D core barely
+    asserts the completion IRQ at all (separate secondary issue; poll
+    covers healthy path at ~77 FPS). THE PARK, register-proven from the
+    first TDR: CT0CS=0x10 (control thread STOPPED, CTSUBS) with
+    CT0CA==CT0EA (reached end), but PCS=0x1 (BMACTIVE=1, binner backend
+    STILL ACTIVE) and BFC=0 (bin flush NEVER completed). i.e. the binner
+    CONTROL LIST finishes issuing but the binner HARDWARE hangs and never
+    raises BFC. My CA==EA fallback correctly does NOT fire (PCS gate) —
+    the binner really is stuck active. Second flavor: CT0CA=afc60a40
+    (WILD address, far outside slab) + VIO_ADDR + MMU_CTL error = binner
+    subroutine-return corrupted -> MMU fault. Both = binner control-flow/
+    backend corruption after ~8 healthy frames. NOT OOM (INT_STS=0, no
+    OUTOMEM), NOT IRQ latency (real hang). Next: codex-debate / Linux
+    v3d differential on the bin-flush-hang; suspects = BCL subroutine
+    return-stack corruption, tile-state (QTS/BPO) recycle race, or a
+    CPU->GPU WC-drain gap letting the GPU read a half-written CL.
+    Bridge 0x80000011 backpressure print SILENCED (was the serial flood).
+
+34. [GEARS TRUNCATION — FIXED 07-05, user screenshot confirmed rendering
+    OK but clipped right/bottom]: the present blit used SetDIBitsToDevice
+    with a top-down (negative-biHeight) DIB + StartScan/cScanLines; that
+    combo transfers a truncated region on ReactOS GDI. FIX: wgl.c v3d
+    present now uses StretchDIBits (blits the full src rect, top-down
+    safe); wsi_win32 one-copy reverted to memcpy+StretchBlt (same bug on
+    the Vulkan path). Also bounded the wgl v3d backpressure fence_finish
+    to 500ms (was OS_TIMEOUT_INFINITE — a parked GPU would hang the
+    presenter forever). Built (build-gl-probe), deployed to
+    mesa-artifacts/libgallium_wgl_v3d.dll, livecd staged.
+    NOTE: screenshot proves the V3D GPU renders full lit gears — so the
+    park (item 33) is intermittent, not total; truncation was the primary
+    VISIBLE defect. VC4-black on park-spiral still = item 33 (binner hang
+    + non-recovering TDR reset; ResetCore may not fully re-init vs
+    Initialize — power-cycle recovery is the next lead there).
+
+35. [PARK SPIRAL RECOVERY — FIX ATTEMPT 07-05]: TDR reset didn't recover
+    (fence7+ die CT0CA=start+1, BPCA=0, some dumps wild-addr 0xafc6xxxx +
+    MMU fault) => translation corrupt + survives ResetCore's bare
+    MmuProgram (reuses same PTEs). FIX: ResetCore now calls MmuSetup
+    (rebuilds full PTE image into the same physical table) instead of
+    MmuProgram; MmuSetup made idempotent (alloc guarded by NULL so reset
+    reuses the buffers, no leak/addr change). If the page table was the
+    corruption vector, post-reset jobs now translate clean and the spiral
+    self-heals => gears keeps rendering instead of going black.
+
+36. [QEMU GEARS PATH — FIXED 07-05, verified via QMP screendump]: QEMU
+    gears used opengl32's OWN buggy software mesa, NOT gallium, because
+    wgl.c wgl_screen_create BREAKS instead of falling back when
+    GALLIUM_DRIVER is set (we set =v3d globally) and the forced driver
+    fails. So QEMU (no V3D) got no softpipe fallback -> opengl32 sw. FIX:
+    (a) wgl.c removed the "break on forced-driver-fail" so it falls
+    through to softpipe (VC4 unaffected: v3d succeeds at i==0, returns
+    first); (b) rebuilt build-gl-probe with -Dgallium-drivers=v3d,softpipe
+    (softpipe wasn't compiled in). VERIFIED: QEMU now logs "gallium driver
+    'softpipe' screen created" + renders via the gallium ICD path
+    (gdi_sw_display, geometrically correct present).
+    RESOLVED (not a bug): instrumented _mesa_Frustum -> gears.exe passes
+    l=-1 r=1 b=-1 t=1 n=5 f=60 = EXACTLY standard glxgears for a square
+    window. The projection is correct. The "oversized/clipped-left" look
+    is NORMAL glxgears: the red gear has outer_radius=4.0 at (-3,-2), its
+    left edge reaches view-x -7 => window x~19 in a 300px window (large
+    gear near the left edge BY DESIGN). QMP screendump of the clean
+    softpipe build shows standard glxgears (blue top-left, big red centre-
+    left, green right). So QEMU renders correctly once on the gallium
+    softpipe path. Any WORSE/growing truncation the user sees is the VC4
+    gallium-v3d present (item 34 deferred/fence path), not QEMU.
+    Also staged (VC4, unverified): wgl.c StretchDIBits present (top-down
+    truncation) + 500ms bounded fence; ResetCore MmuSetup rebuild (spiral
+    recovery). Instrumentation removed from swimpl.c + gdi_sw_winsys.c.
+
+37. [VC4 ROLL 07-05, present+reset fixes]: gears RENDER on V3D (HARDWARE
+    ICD t=34) at 122 FPS healthy window (up from 80 => StretchDIBits
+    present + 500ms bounded fence helped), BUT spiral persists (104 TDRs,
+    -> 0.22 FPS by t=58). So the ResetCore MmuSetup page-table REBUILD
+    (item 35) is REFUTED as the spiral fix — page table isn't the
+    corruption vector. Binner-backend hang (BMACTIVE=1/BFC=0, item 33)
+    survives full power-cycle + PTE rebuild. GearsSvc re-enabled (Start=2,
+    logon-independent) for reliable early launch on the slow Pi boot
+    (Run-key fired too late, boot window ended pre-gears). HDMI end-of-run
+    capture = card no-signal bars (harness relay-resets Pi at end) so
+    truncation-fix VISUAL needs a capture timed in the t=34-44 healthy
+    window, or user's eyes. STATUS: QEMU renders correct glxgears (item
+    36); VC4 gears render+spiral — the park (item 33) is the last blocker,
+    unfixed by page-table rebuild; needs the binner-flush-hang root cause
+    (codex-debate / Linux v3d differential).
+
+38. [SPIRAL — SOFT-RESET REFUTED 07-05]: made ResetCore do SMS soft reset
+    by default, power-cycle only every 8th reset. Spiral UNCHANGED (109->
+    37->0.22 FPS, 108 TDRs, 13 escalations). So the power-cycle-breaks-
+    clocks theory is REFUTED too. The binner-flush-hang (BMACTIVE=1/BFC=0,
+    control thread done at CA==EA) survives ALL reset methods tried:
+    domain power-cycle, SMS soft reset, MMU PTE rebuild. Eliminated:
+    OOM, IRQ-latency, page-table, clock-reset. Pattern: ~8 healthy frames
+    (109-122 FPS) then one binner hang -> every subsequent job hangs
+    regardless of reset -> spiral to black. => a PERSISTENT wedge no reset
+    clears + likely a per-frame accumulation over the first ~8 frames.
+    Next suspects (for codex-debate/Linux differential): (a) L2T/uniforms
+    cache not fully invalidated between jobs (binner reads stale CL/shader
+    -> wedge); (b) tile-state (QTS) or binner-pool recycle across frames;
+    (c) coordinate-shader QPU hang on accumulated state. gears DO render
+    ~10s each boot (present+fence fixes hold, 109-122 FPS) before the
+    spiral. Soft-reset-with-escalation kept (faster, harmless).
+
+39. [CODEX-DEBATE VERDICT 07-05 — spiral root cause CRACKED]: both sides
+    source-verified. (1) FPS is present-path, decoupled from 3D; 3D jobs
+    TDR from fence=1, BFC/RFC never exceed 1 => GPU wedges immediately,
+    recovery path amplifies to permanent spiral. (2) PRIMARY defect
+    (source-provable): recovery cascade — TDR re-arms ALL queued V3D jobs
+    (wddm.c:676-691) + ResetCore omits Linux's mandatory HARD CORE RESET
+    (GR_BRIDGE SW_INIT_1 for v71, gem.c). (3) TRIGGER (conjecture): 2nd
+    consecutive bin wedges because prior binner backend not idle
+    (PCS.BMACTIVE lingering) when re-kicked; Linux gets inter-job idle via
+    scheduler+FLDONE IRQ. FIX IMPLEMENTED: bounded PCS.BMACTIVE-idle wait
+    (2000x1us) before every bin kick in Rpi5V3dSubmitBin (rpi5vc4_v3d.c).
+    STILL TODO if BMACTIVE-wait insufficient: per-job TDR (don't re-arm
+    whole queue), GR_BRIDGE hard core reset, drop power-cycle. STAGED but
+    UNVERIFIED — rig thermal-throttled (~15 rolls today, boots slow to
+    t=63/stall, gears not rendering in window). Launch config cleaned to
+    HKCU Run (GearsSvc lost in edits; UserinitRun disabled). Needs rig
+    rest for a clean boot to test the BMACTIVE fix.
+
+40. [CASCADE FIX STAGED, RIG WALL 07-05]: BMACTIVE-idle-wait (item 39) did
+    NOT stop the wedge (cooled roll: BFC/RFC still never exceed 1, 65 TDRs,
+    spiral). So the trigger conjecture is refuted/insufficient. Implemented
+    the SOURCE-PROVABLE cascade fix instead: REMOVED the TDR re-arm-all
+    loop (wddm.c) so a wedged job TDRs ONCE and drains, instead of
+    re-kick->re-wedge->re-arm forever. STAGED + built, UNVERIFIED — the
+    rig is now producing unreliable boots after ~18 rolls today: boots
+    crawl (desktop t=63) or drop to KDB on stochastic MM asserts
+    (PointerPte->u.Long==0, PFN/PTE corruption = the SD-degradation crash
+    class, item 30/31). gears not rendering to test. RIG NEEDS REAL REST
+    or a FRESH SD CARD before the cascade fix (and the still-TODO GR_BRIDGE
+    hard core reset) can be verified. QEMU side settled by user: reverted
+    softpipe fallback -> opengl32 native swimpl renders full gears (~2000
+    fps), no truncation. Codex-debate verdict (item 39) is the roadmap for
+    the spiral: cascade fix (done, staged) + hard core reset (todo).
+
+41. [FINAL STAGED STATE 07-05]: reverted the BMACTIVE-idle wait (refuted +
+    added 2ms DISPATCH spin/bin when BMACTIVE stuck). Sole VC4 spiral fix
+    now staged = the source-provable CASCADE fix (TDR no longer re-arms the
+    whole queue; a wedged job TDRs once and drains). Image rebuilt coherent.
+    UNVERIFIED — rig degraded (SD: thermal-slow boots + PointerPte MM
+    asserts to KDB). BLOCKED ON: fresh SD card / real rig rest for a clean
+    boot. Then verify cascade fix; if spiral still (jobs TDR slowly but no
+    black), add the GR_BRIDGE hard core reset (Linux v3d_reset_v3d, the
+    still-missing step per codex-debate item 39). QEMU: DONE (opengl32
+    native full gears, user-confirmed no truncation).
+
+42. [RIG HARD-BLOCKED 07-05]: flash_test now fails at device discovery —
+    "storage unset: not visible yet" (the 0781:5581 /dev/disk4 SD/USB boot
+    medium dropped off the bus). Earlier rolls detected it; it is now gone.
+    CANNOT flash/verify the cascade fix — physical storage-device failure,
+    needs user to re-seat/replace the SD card + reader. All post-cascade-fix
+    verification is blocked here. Cascade fix (re-arm-all removal) + QEMU
+    (opengl32 native full gears) remain the staged/done state. STOP rolling
+    until the storage device is physically restored.

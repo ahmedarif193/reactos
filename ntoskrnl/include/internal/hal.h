@@ -178,7 +178,7 @@ VOID
 NTAPI
 xHalSetWakeAlarm(
     IN ULONGLONG AlartTime,
-    IN ULONGLONG DcWakeTime
+    IN PTIME_FIELDS TimeFields
 );
 
 BOOLEAN
