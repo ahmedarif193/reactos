@@ -65,9 +65,28 @@ static
 VOID
 MiSize64BitPagedPool(VOID)
 {
+    /*
+     * Not (meaningfully) configured through the registry: size it the way the
+     * x86 path does — twice the nonpaged pool maximum, which itself scales
+     * with physical memory. Leaving the 32MB floor here starved every GDI
+     * bitmap on large desktops (each DDB's pixel buffer is one contiguous
+     * paged pool allocation, ~8MB for a 1080p-sized window surface).
+     * The VA is reserved only; pages are faulted in on demand by the paged
+     * pool expansion path.
+     */
+    if (MmSizeOfPagedPoolInBytes <= MI_MIN_INIT_PAGED_POOLSIZE)
+    {
+        MmSizeOfPagedPoolInBytes = 2 * MmMaximumNonPagedPoolInBytes;
+    }
+
     if (MmSizeOfPagedPoolInBytes < MI_MIN_INIT_PAGED_POOLSIZE)
     {
         MmSizeOfPagedPoolInBytes = MI_MIN_INIT_PAGED_POOLSIZE;
+    }
+
+    if (MmSizeOfPagedPoolInBytes > MiSystemVaRegions[AssignedRegionPagedPool].NumberOfBytes)
+    {
+        MmSizeOfPagedPoolInBytes = MiSystemVaRegions[AssignedRegionPagedPool].NumberOfBytes;
     }
 
     MmSizeOfPagedPoolInBytes = ALIGN_UP_BY(MmSizeOfPagedPoolInBytes, PDE_MAPPED_VA);

@@ -41,6 +41,9 @@ WmiInitialize(
     UNICODE_STRING DriverName = RTL_CONSTANT_STRING(L"\\Driver\\WMIxWDM");
     NTSTATUS Status;
 
+    /* Capture the firmware SMBIOS entry point while the loader block lives */
+    WmipCaptureSMBiosFromLoader(KeLoaderBlock);
+
     /* Initialize the GUID object type */
     Status = WmipInitializeGuidObjectType();
     if (!NT_SUCCESS(Status))

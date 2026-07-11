@@ -726,8 +726,9 @@ PsLookupThreadByThreadId(IN HANDLE ThreadId,
         /* Get the Thread */
         FoundThread = CidEntry->Object;
 
-        /* Make sure it's really a thread */
-        if (FoundThread->Tcb.Header.Type == ThreadObject)
+        /* Make sure it's really a thread, and not mid-creation */
+        if ((FoundThread->Tcb.Header.Type == ThreadObject) &&
+            !(OBJECT_TO_OBJECT_HEADER(FoundThread)->Flags & OB_FLAG_CREATE_INFO))
         {
             /* Safe Reference and return it */
             if (ObReferenceObjectSafe(FoundThread))

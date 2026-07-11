@@ -945,6 +945,15 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
         Pcr->Prcb.MHz = (ULONG)((CounterFrequency + 500000ULL) / 1000000ULL);
     }
 
+    {
+        ULONG64 CntKctl;
+
+        /* Allow EL0 (user mode) to read CNTPCT/CNTVCT and CNTFRQ, as Windows does */
+        __asm__ __volatile__("mrs %0, cntkctl_el1" : "=r"(CntKctl));
+        CntKctl |= 0x3; /* EL0PCTEN | EL0VCTEN */
+        __asm__ __volatile__("msr cntkctl_el1, %0; isb" :: "r"(CntKctl) : "memory");
+    }
+
     Arm64Block = (KeLoaderBlock != NULL) ? &KeLoaderBlock->u.Arm64 : NULL;
 
     if (Arm64Block != NULL)

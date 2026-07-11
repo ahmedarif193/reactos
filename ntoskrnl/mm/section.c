@@ -171,12 +171,27 @@ VOID
 MmpDereferenceSegmentFileObjects(
     _Inout_ PMM_SECTION_SEGMENT Segment)
 {
+    LIST_ENTRY ToFree;
+
+    /* Detach under the segment lock: the insert path walks and links this
+     * list locked, and an unlocked drain races it on SMP — the stale
+     * InsertTailList partner-write then corrupts whatever reuses a freed
+     * ref block (observed as a 0xC2 billed-process scribble). */
+    InitializeListHead(&ToFree);
+
+    MmLockSectionSegment(Segment);
     while (!IsListEmpty(&Segment->FileObjectList))
+    {
+        InsertTailList(&ToFree, RemoveHeadList(&Segment->FileObjectList));
+    }
+    MmUnlockSectionSegment(Segment);
+
+    while (!IsListEmpty(&ToFree))
     {
         PLIST_ENTRY Entry;
         PMM_SECTION_FILE_OBJECT_REF FileObjectRef;
 
-        Entry = RemoveHeadList(&Segment->FileObjectList);
+        Entry = RemoveHeadList(&ToFree);
         FileObjectRef = CONTAINING_RECORD(Entry,
                                           MM_SECTION_FILE_OBJECT_REF,
                                           ListEntry);

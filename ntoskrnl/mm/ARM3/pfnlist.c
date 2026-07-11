@@ -121,6 +121,14 @@ VOID
 NTAPI
 MiZeroPhysicalPage(IN PFN_NUMBER PageFrameIndex)
 {
+#ifdef _M_ARM64
+    /* All of physical memory is permanently mapped through KSEG0 on ARM64:
+     * zero through the direct map. The hyperspace route costs a PTE install +
+     * TTBR1 sync walk + TLBI per page, which dominates the whole guest under
+     * demand-zero-heavy loads (each TLBI/barrier traps under virtualization). */
+    KeZeroPages((PVOID)MI_ARM64_PHYS_TO_VA((ULONG64)PageFrameIndex << PAGE_SHIFT),
+                PAGE_SIZE);
+#else
     KIRQL OldIrql;
     PVOID VirtualAddress;
     PEPROCESS Process = PsGetCurrentProcess();
@@ -130,6 +138,7 @@ MiZeroPhysicalPage(IN PFN_NUMBER PageFrameIndex)
     ASSERT(VirtualAddress);
     KeZeroPages(VirtualAddress, PAGE_SIZE);
     MiUnmapPageInHyperSpace(Process, VirtualAddress, OldIrql);
+#endif
 }
 
 VOID
