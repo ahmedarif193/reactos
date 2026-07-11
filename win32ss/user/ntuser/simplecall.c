@@ -319,6 +319,41 @@ NtUserCallOneParam(
             break;
         }
 
+        case ONEPARAM_ROUTINE_DWMATTACH:
+        {
+            /* dwm.exe attaches/detaches as the desktop compositor (Param
+             * points at a DWM_ATTACH). While attached, the kernel compose
+             * pass yields and dwm owns compose+present. Returns an NTSTATUS;
+             * the damage wake + vblank events come back in the struct. */
+            Result = (DWORD_PTR)IntCompositionDwmAttach((PVOID)Param);
+            break;
+        }
+
+        case ONEPARAM_ROUTINE_DWMGETFRAME:
+        {
+            /* dwm.exe pulls one frame (Z-ordered window backings) into its
+             * buffer at Param; see IntCompositionDwmGetFrame. Returns an
+             * NTSTATUS in Result. */
+            Result = (DWORD_PTR)IntCompositionDwmGetFrame((PVOID)Param);
+            break;
+        }
+
+        case ONEPARAM_ROUTINE_DWMPRESENTSYNC:
+        {
+            /* CDD present bracket around dwm's BitBlt (Param: 1 open, 0 close). */
+            IntCompositionDwmSync((LONG)Param);
+            Result = TRUE;
+            break;
+        }
+
+        case ONEPARAM_ROUTINE_DWMOPENSURFACE:
+        {
+            /* Open a window FRONT section into dwm's process; Param points at
+             * a DWM_OPEN_SURFACE. Returns an NTSTATUS in Result. */
+            Result = (DWORD_PTR)IntCompositionDwmOpenSurface((PVOID)Param);
+            break;
+        }
+
         case ONEPARAM_ROUTINE_GETINPUTEVENT:
             Result = (DWORD_PTR)IntMsqSetWakeMask(Param);
             break;
