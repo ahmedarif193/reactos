@@ -33,6 +33,7 @@
 #define RPI5_PV_VERTA                   0x14    /* VBP:31..16  VSYNC:15..0  */
 #define RPI5_PV_VERTB                   0x18    /* VFP:31..16  VACTIVE:15..0 */
 #define RPI5_PV_HACT_ACT                0x30
+#define RPI5_PV_INTEN                   0x24
 #define RPI5_PV_INTSTAT                 0x28
 #define RPI5_PV_STAT                    0x2c
 
@@ -61,6 +62,16 @@ Rpi5CrtcProgramCurrentTiming(
 
 BOOLEAN
 Rpi5CrtcWaitForVBlank(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension);
+
+/*
+ * Non-blocking: TRUE if a vertical-front-porch start has occurred since the
+ * last call (sticky INTSTAT flag, read-and-clear). Pending page flips are
+ * latched once this reports TRUE. Reports TRUE when the PV latch is broken
+ * (degrades to unguarded flips rather than stalling).
+ */
+BOOLEAN
+Rpi5CrtcVBlankSeen(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension);
 
 #endif /* _RPI5VC4_CRTC_H_ */

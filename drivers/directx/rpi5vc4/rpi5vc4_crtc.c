@@ -86,6 +86,9 @@ Rpi5CrtcReportTiming(
 {
     BOOLEAN Found;
 
+    if (DeviceExtension->Headless)
+        return FALSE;
+
     DeviceExtension->PixelValveValid = FALSE;
 
     Found  = Rpi5CrtcReportPv(DeviceExtension, RPI5_PV0_PHYS, 0);
@@ -100,6 +103,9 @@ Rpi5CrtcProgramCurrentTiming(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
 {
     PVOID Base;
+
+    if (DeviceExtension->Headless)
+        return FALSE;
     ULONG Control, VControl;
 
     Base = Rpi5CrtcMapPv(DeviceExtension);
@@ -155,6 +161,50 @@ Rpi5CrtcProgramCurrentTiming(
     return TRUE;
 }
 
+/*
+ * INTSTAT only latches interrupt sources enabled in INTEN (the GIC side of
+ * the PV line stays disabled — this is a pure status latch for polling, the
+ * same arming Linux vc4_crtc does before it reads VFP_START).
+ */
+static VOID
+Rpi5CrtcArmVfpLatch(
+    _In_ PVOID Base)
+{
+    ULONG IntEn = READ_REGISTER_ULONG((PULONG)((PUCHAR)Base + RPI5_PV_INTEN));
+
+    if (!(IntEn & RPI5_PV_INT_VFP_START))
+    {
+        WRITE_REGISTER_ULONG((PULONG)((PUCHAR)Base + RPI5_PV_INTEN),
+                             IntEn | RPI5_PV_INT_VFP_START);
+    }
+}
+
+BOOLEAN
+Rpi5CrtcVBlankSeen(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
+{
+    PVOID Base;
+
+    if (DeviceExtension->PvVBlankBroken)
+        return TRUE;
+
+    Base = Rpi5CrtcMapPv(DeviceExtension);
+    if (Base == NULL)
+        return TRUE;
+
+    Rpi5CrtcArmVfpLatch(Base);
+
+    if (READ_REGISTER_ULONG((PULONG)((PUCHAR)Base + RPI5_PV_INTSTAT)) &
+        RPI5_PV_INT_VFP_START)
+    {
+        WRITE_REGISTER_ULONG((PULONG)((PUCHAR)Base + RPI5_PV_INTSTAT),
+                             RPI5_PV_INT_VFP_START);
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
 BOOLEAN
 Rpi5CrtcWaitForVBlank(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
@@ -162,6 +212,9 @@ Rpi5CrtcWaitForVBlank(
     PVOID Base;
     ULONG Control, VControl;
     ULONG Tries;
+
+    if (DeviceExtension->PvVBlankBroken)
+        return FALSE;
 
     Base = Rpi5CrtcMapPv(DeviceExtension);
     if (Base == NULL)
@@ -174,6 +227,8 @@ Rpi5CrtcWaitForVBlank(
     {
         return FALSE;
     }
+
+    Rpi5CrtcArmVfpLatch(Base);
 
     WRITE_REGISTER_ULONG((PULONG)((PUCHAR)Base + RPI5_PV_INTSTAT),
                          RPI5_PV_INT_VFP_START);
@@ -188,8 +243,13 @@ Rpi5CrtcWaitForVBlank(
             return TRUE;
         }
 
-        VideoPortStallExecution(50);
+        KeStallExecutionProcessor(50);
     }
 
+    /* VFP latch never fired: latch the wait off so every future flip
+     * doesn't burn 20 ms (tear-avoidance only; flips still proceed). */
+    DeviceExtension->PvVBlankBroken = TRUE;
+    DbgPrint("RPI5VC4: PV vblank latch timeout (INTSTAT semantics differ "
+             "on silicon?) — disabling flip vblank waits\n");
     return FALSE;
 }

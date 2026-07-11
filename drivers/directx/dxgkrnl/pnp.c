@@ -184,6 +184,43 @@ DxgkpCreateChildPdo(
     }
 
     /*
+     * Query the monitor descriptor (EDID base block) for connected video
+     * outputs through the documented DxgkDdiQueryDeviceDescriptor DDI.
+     * STATUS_MONITOR_NO_DESCRIPTOR is a normal answer (fixed panels,
+     * firmware-negotiated links); anything else non-successful is logged.
+     */
+    if (ChildExt->Connected &&
+        Descriptor->ChildDeviceType == TypeVideoOutput &&
+        Adapter->MiniportContext->InitData.s.DxgkDdiQueryDeviceDescriptor != NULL)
+    {
+        DXGK_DEVICE_DESCRIPTOR DeviceDescriptor;
+
+        RtlZeroMemory(&DeviceDescriptor, sizeof(DeviceDescriptor));
+        DeviceDescriptor.DescriptorOffset = 0;
+        DeviceDescriptor.DescriptorLength = sizeof(ChildExt->Edid);
+        DeviceDescriptor.DescriptorBuffer = ChildExt->Edid;
+
+        Status = Adapter->MiniportContext->InitData.s.DxgkDdiQueryDeviceDescriptor(
+                     Adapter->MiniportDeviceContext,
+                     Descriptor->ChildUid,
+                     &DeviceDescriptor);
+
+        if (NT_SUCCESS(Status))
+        {
+            ChildExt->EdidValid = TRUE;
+            DXGKRNL_TRACE("DxgkpCreateChildPdo: EDID captured for "
+                          "ChildUid %lu\n", Descriptor->ChildUid);
+        }
+        else if (Status != STATUS_MONITOR_NO_DESCRIPTOR &&
+                 Status != STATUS_NOT_SUPPORTED)
+        {
+            DXGKRNL_WARN("DxgkpCreateChildPdo: QueryDeviceDescriptor "
+                         "failed 0x%08lX for ChildUid %lu\n",
+                         Status, Descriptor->ChildUid);
+        }
+    }
+
+    /*
      * Clear the DO_DEVICE_INITIALIZING bit so the PnP manager can
      * send IRPs to this PDO.
      */
@@ -560,13 +597,14 @@ DxgkpChildPdoQueryId(
 
         case BusQueryInstanceID:
             /*
-             * Instance ID must be unique among siblings.  Use the
-             * ChildUid from the descriptor to guarantee uniqueness.
+             * Sibling-unique only (ChildUid). Combined with UniqueID=FALSE
+             * in the capabilities, PnP prepends a parent-unique prefix that
+             * makes the full instance path globally unique — two adapters
+             * both exposing monitor UID 1 must not collide.
              */
             RtlStringCchPrintfW(Buffer,
                                 sizeof(Buffer) / sizeof(WCHAR),
-                                L"4&%08lX&0&%02lu",
-                                ChildExt->Descriptor.ChildUid,
+                                L"%02lu",
                                 ChildExt->Descriptor.ChildUid);
 
             Result = DxgkpChildCopyIdString(Buffer);
@@ -726,7 +764,9 @@ DxgkpChildPdoPnpDispatch(
                 DevCaps->EjectSupported  = FALSE;
                 DevCaps->Removable       = FALSE;
                 DevCaps->DockDevice      = FALSE;
-                DevCaps->UniqueID        = TRUE;
+                /* Instance ID is only sibling-unique: PnP must prepend the
+                 * parent prefix (two adapters both expose monitor UID 1). */
+                DevCaps->UniqueID        = FALSE;
                 DevCaps->SilentInstall   = TRUE;
                 DevCaps->RawDeviceOK     = FALSE;
                 DevCaps->SurpriseRemovalOK = FALSE;

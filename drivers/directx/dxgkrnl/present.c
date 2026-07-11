@@ -47,6 +47,7 @@
 
 #include "dxgkrnl_private.h"
 #include "vidmm.h"
+#include "vidsch.h"
 #include "present.h"
 
 #define DXGK_PRESENT_EXEC_LOG_LIMIT  32
@@ -255,6 +256,63 @@ DxgkpClosePresentAllocation(
         &CloseArgs);
 }
 
+/*
+ * Program the base-plane flip through the multi-plane overlay DDI when the
+ * miniport implements it (documented Windows behavior: MPO-capable drivers
+ * receive flips as one-plane MPO configurations).  Returns STATUS_NOT_-
+ * SUPPORTED to let the caller fall back to the legacy SetVidPnSourceAddress.
+ */
+static NTSTATUS
+DxgkpProgramScanoutViaMpo(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+    _In_ LARGE_INTEGER PrimaryAddress)
+{
+    DXGKARG_SETVIDPNSOURCEADDRESSWITHMULTIPLANEOVERLAY MpoArgs;
+    DXGK_MULTIPLANE_OVERLAY_PLANE Plane;
+    PDXGKDDI_SETVIDPNSOURCEADDRESSWITHMULTIPLANEOVERLAY PfnSetMpo;
+    NTSTATUS Status;
+
+    PfnSetMpo = DXGK_CB_FULL(Adapter,
+                             DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay);
+    if (PfnSetMpo == NULL ||
+        Adapter->CommittedWidth == 0 ||
+        Adapter->CommittedHeight == 0)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    RtlZeroMemory(&Plane, sizeof(Plane));
+    Plane.LayerIndex = 0;
+    Plane.Enabled = TRUE;
+    Plane.AllocationSegment = Allocation->SegmentId;
+    Plane.AllocationAddress.QuadPart = PrimaryAddress.QuadPart;
+    Plane.hAllocation = Allocation->MiniportHandle;
+    Plane.PlaneAttributes.SrcRect.right = (LONG)Adapter->CommittedWidth;
+    Plane.PlaneAttributes.SrcRect.bottom = (LONG)Adapter->CommittedHeight;
+    Plane.PlaneAttributes.DstRect = Plane.PlaneAttributes.SrcRect;
+    Plane.PlaneAttributes.ClipRect = Plane.PlaneAttributes.SrcRect;
+
+    RtlZeroMemory(&MpoArgs, sizeof(MpoArgs));
+    MpoArgs.VidPnSourceId = VidPnSourceId;
+    MpoArgs.PlaneCount = 1;
+    MpoArgs.pPlanes = &Plane;
+    MpoArgs.Flags.FlipImmediate = 1;
+
+    _SEH2_TRY
+    {
+        Status = PfnSetMpo(Adapter->MiniportDeviceContext, &MpoArgs);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    return Status;
+}
+
 static NTSTATUS
 DxgkpProgramSharedPrimaryScanout(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -288,6 +346,26 @@ DxgkpProgramSharedPrimaryScanout(
     }
 
     PrimaryAddress = DxgkVidMmGetAllocationPrimaryAddress(Allocation);
+
+    /* MPO-capable miniports get the flip as a one-plane configuration. */
+    Status = DxgkpProgramScanoutViaMpo(Adapter, Allocation, VidPnSourceId,
+                                       PrimaryAddress);
+    if (NT_SUCCESS(Status))
+    {
+        if (DXGK_CB(Adapter, DxgkDdiSetVidPnSourceVisibility) != NULL)
+        {
+            DXGKARG_SETVIDPNSOURCEVISIBILITY MpoVisibility;
+
+            RtlZeroMemory(&MpoVisibility, sizeof(MpoVisibility));
+            MpoVisibility.VidPnSourceId = VidPnSourceId;
+            MpoVisibility.Visible = TRUE;
+
+            DXGK_CB(Adapter, DxgkDdiSetVidPnSourceVisibility)(
+                Adapter->MiniportDeviceContext,
+                &MpoVisibility);
+        }
+        return STATUS_SUCCESS;
+    }
 
     RtlZeroMemory(&SetSourceAddress, sizeof(SetSourceAddress));
     SetSourceAddress.VidPnSourceId = VidPnSourceId;
@@ -892,6 +970,9 @@ DxgkpExecuteFullPresent(
 
         PresentAllocationList[DXGK_PRESENT_SOURCE_INDEX].hDeviceSpecificAllocation =
             SourceDeviceSpecificHandle;
+        DxgkVidMmFillAllocationListEntry(
+            Entry->hSource,
+            &PresentAllocationList[DXGK_PRESENT_SOURCE_INDEX]);
         SubmitAllocationList[DXGK_PRESENT_SOURCE_INDEX].hAllocation = Entry->hSource;
         SubmitAllocationList[DXGK_PRESENT_SOURCE_INDEX].hDeviceSpecificAllocation =
             (D3DKMT_HANDLE)(ULONG_PTR)SourceDeviceSpecificHandle;
@@ -927,6 +1008,9 @@ DxgkpExecuteFullPresent(
         PresentAllocationList[DXGK_PRESENT_DESTINATION_INDEX].hDeviceSpecificAllocation =
             DestinationDeviceSpecificHandle;
         PresentAllocationList[DXGK_PRESENT_DESTINATION_INDEX].WriteOperation = 1;
+        DxgkVidMmFillAllocationListEntry(
+            Entry->hDestination,
+            &PresentAllocationList[DXGK_PRESENT_DESTINATION_INDEX]);
 
         SubmitAllocationList[DXGK_PRESENT_DESTINATION_INDEX].hAllocation =
             Entry->hDestination;
@@ -1041,30 +1125,120 @@ DxgkpExecuteFullPresent(
         if (SubmissionFenceId == 0)
             SubmissionFenceId = 1;
 
+        /*
+         * Patch the DMA buffer before submission (documented WDDM order:
+         * Present -> Patch -> SubmitCommand).  The allocation list carries
+         * the current SegmentId/PhysicalAddress placement; the patch
+         * location list holds whatever entries the Present DDI emitted.
+         */
+        if (DXGK_CB_FULL(Adapter, DxgkDdiPatch) != NULL)
+        {
+            DXGKARG_PATCH PatchArgs;
+            UINT PatchEntries = 0;
+            NTSTATUS PatchStatus;
+
+            if (PresentArgs.pPatchLocationListOut != NULL &&
+                PresentArgs.pPatchLocationListOut >= PatchLocationList &&
+                (SIZE_T)(PresentArgs.pPatchLocationListOut - PatchLocationList) <=
+                    RTL_NUMBER_OF(PatchLocationList))
+            {
+                PatchEntries = (UINT)(PresentArgs.pPatchLocationListOut -
+                                      PatchLocationList);
+            }
+
+            RtlZeroMemory(&PatchArgs, sizeof(PatchArgs));
+            PatchArgs.hDevice = MiniportPresentContext;
+            PatchArgs.pDmaBuffer = DmaBuffer;
+            PatchArgs.DmaBufferSize = DXGK_PRESENT_IMMEDIATE_DMA_BYTES;
+            PatchArgs.DmaBufferSubmissionStartOffset = 0;
+            PatchArgs.DmaBufferSubmissionEndOffset = DmaBytesUsed;
+            PatchArgs.pDmaBufferPrivateData = &DmaBufferPrivateData;
+            PatchArgs.DmaBufferPrivateDataSize = sizeof(DmaBufferPrivateData);
+            PatchArgs.pAllocationList = PresentAllocationList;
+            PatchArgs.AllocationListSize = RTL_NUMBER_OF(PresentAllocationList);
+            PatchArgs.pPatchLocationList = PatchLocationList;
+            PatchArgs.PatchLocationListSize = PatchEntries;
+            PatchArgs.PatchLocationListSubmissionStart = 0;
+            PatchArgs.PatchLocationListSubmissionLength = PatchEntries;
+            PatchArgs.SubmissionFenceId = SubmissionFenceId;
+            PatchArgs.Flags.Present = 1;
+
+            _SEH2_TRY
+            {
+                PatchStatus = DXGK_CB_FULL(Adapter, DxgkDdiPatch)(
+                                  Adapter->MiniportDeviceContext,
+                                  &PatchArgs);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                PatchStatus = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+
+            if (!NT_SUCCESS(PatchStatus))
+            {
+                DXGKRNL_WARN("DxgkpExecuteFullPresent: DxgkDdiPatch failed "
+                             "0x%08lX (continuing)\n", PatchStatus);
+            }
+        }
+
         RtlZeroMemory(&SubmitArgs, sizeof(SubmitArgs));
         SubmitFlags.Value = 0;
         SubmitFlags.Present = 1;
         if (Entry->Type == DxgkPresentTypeFlip)
             SubmitFlags.Flip = 1;
 
-        SubmitArgs.pDmaBuffer = DmaBuffer;
-        SubmitArgs.DmaBufferSize = DXGK_PRESENT_IMMEDIATE_DMA_BYTES;
-        SubmitArgs.pDmaBufferPrivateData = &DmaBufferPrivateData;
-        SubmitArgs.DmaBufferPrivateDataSize = sizeof(DmaBufferPrivateData);
-        SubmitArgs.DmaBufferSubmissionStartOffset = 0;
-        SubmitArgs.DmaBufferSubmissionEndOffset = DmaBytesUsed;
-        SubmitArgs.pAllocationList = SubmitAllocationList;
-        SubmitArgs.AllocationListSize = RTL_NUMBER_OF(SubmitAllocationList);
-        SubmitArgs.SubmissionFenceId = SubmissionFenceId;
-        SubmitArgs.VidPnSourceId = Entry->VidPnSourceId;
-        SubmitArgs.NodeOrdinal = 0;
-        SubmitArgs.EngineOrdinal = 0;
-        SubmitArgs.hContext = MiniportPresentContext;
-        SubmitArgs.Flags = SubmitFlags.Value;
+        /*
+         * Presents are display control ops (flip/shared-primary refresh)
+         * with no V3D dependency — their data dependency was satisfied by
+         * the CPU blit before queueing.  Route them to the last node so
+         * vsync-released packets never serialize behind 3D work on engine
+         * 0 (sharing that FIFO quantized every 3D completion at ~16.7ms).
+         */
+        {
+            ULONG VidSchFence = 0;
+            ULONG PresentEngine = (Adapter->NodeCount > 1)
+                                      ? Adapter->NodeCount - 1 : 0;
 
-        Status = DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommand)(
-                     Adapter->MiniportDeviceContext,
-                     &SubmitArgs);
+            Status = VidSchSubmitCommand(Adapter,
+                                         PresentEngine,
+                                         SubmissionFenceId,
+                                         DmaBuffer,
+                                         DmaBytesUsed,
+                                         NULL,
+                                         0,
+                                         SubmitAllocationList,
+                                         RTL_NUMBER_OF(SubmitAllocationList),
+                                         NULL,
+                                         0,
+                                         MiniportPresentContext,
+                                         TRUE,
+                                         SubmitFlags.Value,
+                                         Entry->VidPnSourceId,
+                                         &VidSchFence);
+        }
+
+        if (Status == STATUS_DEVICE_NOT_READY || Status == STATUS_NOT_SUPPORTED)
+        {
+            SubmitArgs.pDmaBuffer = DmaBuffer;
+            SubmitArgs.DmaBufferSize = DXGK_PRESENT_IMMEDIATE_DMA_BYTES;
+            SubmitArgs.pDmaBufferPrivateData = &DmaBufferPrivateData;
+            SubmitArgs.DmaBufferPrivateDataSize = sizeof(DmaBufferPrivateData);
+            SubmitArgs.DmaBufferSubmissionStartOffset = 0;
+            SubmitArgs.DmaBufferSubmissionEndOffset = DmaBytesUsed;
+            SubmitArgs.pAllocationList = SubmitAllocationList;
+            SubmitArgs.AllocationListSize = RTL_NUMBER_OF(SubmitAllocationList);
+            SubmitArgs.SubmissionFenceId = SubmissionFenceId;
+            SubmitArgs.VidPnSourceId = Entry->VidPnSourceId;
+            SubmitArgs.NodeOrdinal = 0;
+            SubmitArgs.EngineOrdinal = 0;
+            SubmitArgs.hContext = MiniportPresentContext;
+            SubmitArgs.Flags = SubmitFlags.Value;
+
+            Status = DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommand)(
+                         Adapter->MiniportDeviceContext,
+                         &SubmitArgs);
+        }
 
         if (NT_SUCCESS(Status))
         {
@@ -1103,20 +1277,25 @@ DxgkpExecuteFullPresent(
                     DestinationDeviceSpecificHandle;
             }
 
-            TrackStatus = DxgkTrackSubmittedDmaBuffer(Adapter,
-                                                     SubmissionFenceId,
-                                                     Entry->PresentId,
-                                                     DmaBuffer,
-                                                     TAG_DXGK_PRESENT,
-                                                     Device,
-                                                     (HANDLE)(ULONG_PTR)Entry->hSource,
-                                                     RefreshSharedPrimaryOnRetire ?
-                                                         (HANDLE)(ULONG_PTR)Entry->hDestination :
-                                                         NULL,
-                                                     Entry->VidPnSourceId,
-                                                     &Entry->DstRect,
-                                                     TrackedOpenHandles,
-                                                     TrackedOpenHandleCount);
+            {
+                DXGKRNL_TRACK_DMA_ARGS TrackArgs;
+
+                RtlZeroMemory(&TrackArgs, sizeof(TrackArgs));
+                TrackArgs.SubmissionFenceId = SubmissionFenceId;
+                TrackArgs.PresentId = Entry->PresentId;
+                TrackArgs.Buffer = DmaBuffer;
+                TrackArgs.Tag = TAG_DXGK_PRESENT;
+                TrackArgs.Device = Device;
+                TrackArgs.SourceAllocationHandle = (HANDLE)(ULONG_PTR)Entry->hSource;
+                TrackArgs.RefreshAllocationHandle = RefreshSharedPrimaryOnRetire ?
+                    (HANDLE)(ULONG_PTR)Entry->hDestination : NULL;
+                TrackArgs.RefreshVidPnSourceId = Entry->VidPnSourceId;
+                TrackArgs.RefreshDstRect = &Entry->DstRect;
+                TrackArgs.OpenHandles = TrackedOpenHandles;
+                TrackArgs.OpenHandleCount = TrackedOpenHandleCount;
+
+                TrackStatus = DxgkTrackSubmittedDmaBuffer(Adapter, &TrackArgs);
+            }
             if (NT_SUCCESS(TrackStatus))
             {
                 DmaBuffer = NULL;
