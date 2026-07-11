@@ -901,8 +901,18 @@ SdBusFdoStartDevice(
     /* Device is Started and the ISR is live: enable card-detect signaling for hotplug. */
     if (!FdoExtension->NonRemovable)
     {
+        /*
+         * The synchronous startup scan consumed the initial card-present state.
+         * Drop that latched insertion/removal edge before enabling hotplug
+         * signals, otherwise level-triggered card-detect can fire during PnP
+         * start and race the startup path.
+         */
+        SdBusWriteReg32(FdoExtension,
+                        SDHCI_INT_STATUS,
+                        SDHCI_INT_CARD_INSERTION | SDHCI_INT_CARD_REMOVAL);
         SdBusUpdateInterruptSignalEnable(FdoExtension,
-                                         SDHCI_INT_CARD_INSERTION | SDHCI_INT_CARD_REMOVAL,
+                                         SDHCI_INT_CARD_INSERTION |
+                                         SDHCI_INT_CARD_REMOVAL,
                                          0);
     }
     SdBusRefreshCardInterrupt(FdoExtension);
