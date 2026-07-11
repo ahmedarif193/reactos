@@ -34,7 +34,7 @@ RcddGetAvailableModes(
       return 0;
    }
 
-   if (Modes.NumModes == 0)
+   if (Modes.NumModes == 0 || Modes.ModeInformationLength < sizeof(VIDEO_MODE_INFORMATION))
    {
       return 0;
    }
@@ -128,9 +128,12 @@ RcddInitScreenInfo(
          if (ModeInfoPtr->Length > 0 &&
              pDevMode->dmPelsWidth == ModeInfoPtr->VisScreenWidth &&
              pDevMode->dmPelsHeight == ModeInfoPtr->VisScreenHeight &&
-             pDevMode->dmBitsPerPel == (ModeInfoPtr->BitsPerPlane *
-                                        ModeInfoPtr->NumberOfPlanes) &&
-             pDevMode->dmDisplayFrequency == ModeInfoPtr->Frequency)
+             (pDevMode->dmBitsPerPel == 0 ||
+              pDevMode->dmBitsPerPel == (ModeInfoPtr->BitsPerPlane *
+                                         ModeInfoPtr->NumberOfPlanes)) &&
+             (pDevMode->dmDisplayFrequency == 0 ||
+              pDevMode->dmDisplayFrequency == 1 ||
+              pDevMode->dmDisplayFrequency == ModeInfoPtr->Frequency))
          {
             SelectedMode = ModeInfoPtr;
             break;

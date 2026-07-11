@@ -29,19 +29,29 @@
 #include <ntddvdeo.h>
 
 /*
- * DWM compositor private control channel (DrvEscape/ExtEscape).
- *
- * These two escape codes form the contract between a future ReactOS DWM and
- * the canonical display driver. The values are ours (they spell "DWM" in the
- * high bytes) and are matched by the d3dkmt dwm apitest:
- *   SUPPRESS_CURSOR  - the compositor draws the cursor itself, so cdd stops
- *                      drawing the hardware/software cursor while suppressed.
- *   COMPOSITION_SYNC - present/vblank acknowledge: cdd flushes the composed
- *                      frame to the WDDM scan-out and acks so the compositor
- *                      can pace frames.
+ * dxgkrnl explicit dirty-rectangle present (see win32ss/../dxgkrnl/display.c).
+ * cdd draws straight into the mapped DOD primary, then asks dxgkrnl to scan the
+ * dirty rectangle out through the miniport's DxgkDdiPresentDisplayOnly — the
+ * WDDM display-only present path, driven by the canonical display driver rather
+ * than dxgkrnl's fallback present timer. Input buffer is a single RECTL.
  */
-#define CDD_ESCAPE_SUPPRESS_CURSOR  0x44574D01
-#define CDD_ESCAPE_COMPOSITION_SYNC 0x44574D02
+#ifndef IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT
+#define IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x920, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#endif
+#ifndef IOCTL_VIDEO_DXGK_COMPOSITION_BEGIN
+#define IOCTL_VIDEO_DXGK_COMPOSITION_BEGIN \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x921, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_VIDEO_DXGK_COMPOSITION_END \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x922, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#endif
+#ifndef IOCTL_VIDEO_DXGK_REGISTER_VBLANK
+#define IOCTL_VIDEO_DXGK_REGISTER_VBLANK \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x923, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#endif
+
+/* DWM compositor control channel (CDD_ESCAPE_*): shared with win32k. */
+#include <reactos/dwmframe.h>
 
 typedef struct _RCDD_PDEV
 {
@@ -58,8 +68,6 @@ typedef struct _RCDD_PDEV
    ULONG BlueMask;
    BYTE PaletteShift;
    PVOID ScreenPtr;            /* Mapped WDDM scan-out (dxgkrnl shadow FB)    */
-   PUCHAR ShadowPtr;           /* Cached CPU-side draw buffer                 */
-   BOOL ShadowActive;
    HPALETTE DefaultPalette;
    PALETTEENTRY *PaletteEntries;
 
@@ -223,6 +231,113 @@ RcddSynchronizeSurface(
    IN SURFOBJ *pso,
    IN RECTL *prcl,
    IN FLONG fl);
+
+BOOL APIENTRY
+RcddTextOut(
+   IN SURFOBJ *pso,
+   IN STROBJ *pstro,
+   IN FONTOBJ *pfo,
+   IN CLIPOBJ *pco,
+   IN RECTL *prclExtra,
+   IN RECTL *prclOpaque,
+   IN BRUSHOBJ *pboFore,
+   IN BRUSHOBJ *pboOpaque,
+   IN POINTL *pptlOrg,
+   IN MIX mix);
+
+BOOL APIENTRY
+RcddLineTo(
+   IN SURFOBJ *pso,
+   IN CLIPOBJ *pco,
+   IN BRUSHOBJ *pbo,
+   IN LONG x1,
+   IN LONG y1,
+   IN LONG x2,
+   IN LONG y2,
+   IN RECTL *prclBounds,
+   IN MIX mix);
+
+BOOL APIENTRY
+RcddStrokePath(
+   IN SURFOBJ *pso,
+   IN PATHOBJ *ppo,
+   IN CLIPOBJ *pco,
+   IN XFORMOBJ *pxo,
+   IN BRUSHOBJ *pbo,
+   IN POINTL *pptlBrushOrg,
+   IN LINEATTRS *plineattrs,
+   IN MIX mix);
+
+BOOL APIENTRY
+RcddFillPath(
+   IN SURFOBJ *pso,
+   IN PATHOBJ *ppo,
+   IN CLIPOBJ *pco,
+   IN BRUSHOBJ *pbo,
+   IN POINTL *pptlBrushOrg,
+   IN MIX mix,
+   IN FLONG flOptions);
+
+BOOL APIENTRY
+RcddStrokeAndFillPath(
+   IN SURFOBJ *pso,
+   IN PATHOBJ *ppo,
+   IN CLIPOBJ *pco,
+   IN XFORMOBJ *pxo,
+   IN BRUSHOBJ *pboStroke,
+   IN LINEATTRS *plineattrs,
+   IN BRUSHOBJ *pboFill,
+   IN POINTL *pptlBrushOrg,
+   IN MIX mixFill,
+   IN FLONG flOptions);
+
+BOOL APIENTRY
+RcddStretchBlt(
+   IN SURFOBJ *psoDest,
+   IN SURFOBJ *psoSrc,
+   IN SURFOBJ *psoMask,
+   IN CLIPOBJ *pco,
+   IN XLATEOBJ *pxlo,
+   IN COLORADJUSTMENT *pca,
+   IN POINTL *pptlHTOrg,
+   IN RECTL *prclDest,
+   IN RECTL *prclSrc,
+   IN POINTL *pptlMask,
+   IN ULONG iMode);
+
+BOOL APIENTRY
+RcddAlphaBlend(
+   IN SURFOBJ *psoDest,
+   IN SURFOBJ *psoSrc,
+   IN CLIPOBJ *pco,
+   IN XLATEOBJ *pxlo,
+   IN RECTL *prclDest,
+   IN RECTL *prclSrc,
+   IN BLENDOBJ *pBlendObj);
+
+BOOL APIENTRY
+RcddTransparentBlt(
+   IN SURFOBJ *psoDst,
+   IN SURFOBJ *psoSrc,
+   IN CLIPOBJ *pco,
+   IN XLATEOBJ *pxlo,
+   IN RECTL *prclDst,
+   IN RECTL *prclSrc,
+   IN ULONG iTransColor,
+   IN ULONG ulReserved);
+
+BOOL APIENTRY
+RcddGradientFill(
+   IN SURFOBJ *psoDest,
+   IN CLIPOBJ *pco,
+   IN XLATEOBJ *pxlo,
+   IN TRIVERTEX *pVertex,
+   IN ULONG nVertex,
+   IN PVOID pMesh,
+   IN ULONG nMesh,
+   IN RECTL *prclExtents,
+   IN POINTL *pptlDitherOrg,
+   IN ULONG ulMode);
 
 /*
  * RcddPresent - explicit present seam.
