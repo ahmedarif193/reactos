@@ -517,8 +517,31 @@ WlxActivateUserShell(
         return FALSE;
     }
 
-    /* Start the Userinit application */
-    ret = WlxStartApplication(pWlxContext, pszDesktopName, pEnvironment, pszExpUserInitApp);
+    /* Userinit is a comma-separated command list. */
+    {
+        PWSTR Command = pszExpUserInitApp;
+        PWSTR Next;
+
+        ret = FALSE;
+        while (Command != NULL)
+        {
+            Next = wcschr(Command, L',');
+            if (Next != NULL)
+                *Next++ = UNICODE_NULL;
+
+            if (*Command != UNICODE_NULL &&
+                WlxStartApplication(pWlxContext,
+                                    pszDesktopName,
+                                    pEnvironment,
+                                    Command))
+            {
+                ret = TRUE;
+            }
+
+            Command = Next;
+        }
+    }
+
     if (!ret)
         return ret;
 
