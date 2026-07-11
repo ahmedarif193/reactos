@@ -1089,4 +1089,61 @@ SetFileValidData(
 	return TRUE;
 }
 
+/*
+ * The Win32 FILE_*_INFO layouts for these classes match the native
+ * FILE_*_INFORMATION layouts, so the buffer passes straight through to
+ * NtSetInformationFile with only the class translated.
+ *
+ * @implemented
+ */
+BOOL
+WINAPI
+SetFileInformationByHandle(IN HANDLE hFile,
+                           IN FILE_INFO_BY_HANDLE_CLASS FileInformationClass,
+                           IN LPVOID lpFileInformation,
+                           IN DWORD dwBufferSize)
+{
+    IO_STATUS_BLOCK IoStatusBlock;
+    FILE_INFORMATION_CLASS NativeClass;
+    NTSTATUS Status;
+
+    switch (FileInformationClass)
+    {
+        case FileBasicInfo:
+            NativeClass = FileBasicInformation;
+            break;
+        case FileRenameInfo:
+            NativeClass = FileRenameInformation;
+            break;
+        case FileDispositionInfo:
+            NativeClass = FileDispositionInformation;
+            break;
+        case FileAllocationInfo:
+            NativeClass = FileAllocationInformation;
+            break;
+        case FileEndOfFileInfo:
+            NativeClass = FileEndOfFileInformation;
+            break;
+        case FileIoPriorityHintInfo:
+            NativeClass = FileIoPriorityHintInformation;
+            break;
+        default:
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+    }
+
+    Status = NtSetInformationFile(hFile,
+                                  &IoStatusBlock,
+                                  lpFileInformation,
+                                  dwBufferSize,
+                                  NativeClass);
+    if (!NT_SUCCESS(Status))
+    {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
 /* EOF */

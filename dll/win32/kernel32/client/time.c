@@ -136,13 +136,22 @@ GetSystemTimeAsFileTime(OUT PFILETIME lpFileTime)
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 VOID
 WINAPI
 GetSystemTimePreciseAsFileTime(OUT PFILETIME lpFileTime)
 {
-    STUB;
+    LARGE_INTEGER SystemTime;
+
+    /* Without a kernel-maintained QPC/system-time baseline pair there is no
+     * safe sub-tick interpolation (a user-mode one can go non-monotonic
+     * against GetSystemTimeAsFileTime). Highest available precision here is
+     * the interrupt-time-updated shared system time. */
+    SystemTime = KiReadSystemTime(&SharedUserData->SystemTime);
+
+    lpFileTime->dwLowDateTime = SystemTime.LowPart;
+    lpFileTime->dwHighDateTime = SystemTime.HighPart;
 }
 
 /*
@@ -575,6 +584,26 @@ SetClientTimeZoneInformation(IN CONST TIME_ZONE_INFORMATION *lpTimeZoneInformati
 {
     STUB;
     return 0;
+}
+
+/*
+ * @implemented
+ */
+BOOL
+WINAPI
+QueryUnbiasedInterruptTime(OUT PULONGLONG UnbiasedTime)
+{
+    LARGE_INTEGER InterruptTime;
+
+    if (UnbiasedTime == NULL)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    InterruptTime = KiReadSystemTime(&SharedUserData->InterruptTime);
+    *UnbiasedTime = (ULONGLONG)InterruptTime.QuadPart - SharedUserData->InterruptTimeBias;
+    return TRUE;
 }
 
 /* EOF */
