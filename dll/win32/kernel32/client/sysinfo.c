@@ -228,6 +228,27 @@ GetNativeSystemInfo(IN LPSYSTEM_INFO lpSystemInfo)
 /*
  * @implemented
  */
+DWORD
+WINAPI
+GetActiveProcessorCount(IN WORD GroupNumber)
+{
+    SYSTEM_INFO SystemInfo;
+
+    /* ReactOS exposes a single processor group, so only group 0 (or the
+     * "all groups" sentinel) has any processors. */
+    if (GroupNumber != 0 && GroupNumber != ALL_PROCESSOR_GROUPS)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+
+    GetSystemInfo(&SystemInfo);
+    return SystemInfo.dwNumberOfProcessors;
+}
+
+/*
+ * @implemented
+ */
 BOOL
 WINAPI
 GetLogicalProcessorInformation(OUT PSYSTEM_LOGICAL_PROCESSOR_INFORMATION Buffer,
@@ -254,6 +275,153 @@ GetLogicalProcessorInformation(OUT PSYSTEM_LOGICAL_PROCESSOR_INFORMATION Buffer,
         return FALSE;
     }
 
+    return TRUE;
+}
+
+/*
+ * Synthesized from the active processor mask: one core per active CPU, a
+ * single package, NUMA node 0 and processor group 0 spanning them all.
+ * Cache relationships are not reported (callers treat them as optional).
+ *
+ * @implemented
+ */
+BOOL
+WINAPI
+GetLogicalProcessorInformationEx(IN LOGICAL_PROCESSOR_RELATIONSHIP RelationshipType,
+                                 OUT PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX Buffer,
+                                 IN OUT PDWORD ReturnedLength)
+{
+    SYSTEM_BASIC_INFORMATION BasicInfo;
+    NTSTATUS Status;
+    KAFFINITY ActiveMask;
+    ULONG CoreCount, i;
+    DWORD Required = 0;
+    DWORD CoreEntrySize, MaskEntrySize, GroupEntrySize;
+    PUCHAR Out;
+
+    if (ReturnedLength == NULL)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (RelationshipType != RelationProcessorCore &&
+        RelationshipType != RelationProcessorPackage &&
+        RelationshipType != RelationNumaNode &&
+        RelationshipType != RelationGroup &&
+        RelationshipType != RelationCache &&
+        RelationshipType != RelationAll)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    Status = NtQuerySystemInformation(SystemBasicInformation,
+                                      &BasicInfo,
+                                      sizeof(BasicInfo),
+                                      NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+
+    ActiveMask = (KAFFINITY)BasicInfo.ActiveProcessorsAffinityMask;
+    if (ActiveMask == 0)
+        ActiveMask = 1;
+    CoreCount = 0;
+    for (i = 0; i < sizeof(KAFFINITY) * 8; i++)
+    {
+        if (ActiveMask & ((KAFFINITY)1 << i))
+            CoreCount++;
+    }
+
+    /* One GROUP_AFFINITY per entry; sizes are 8-aligned by layout. */
+    CoreEntrySize = FIELD_OFFSET(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Processor) +
+                    FIELD_OFFSET(PROCESSOR_RELATIONSHIP, GroupMask) +
+                    sizeof(GROUP_AFFINITY);
+    MaskEntrySize = CoreEntrySize;
+    GroupEntrySize = FIELD_OFFSET(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Group) +
+                     FIELD_OFFSET(GROUP_RELATIONSHIP, GroupInfo) +
+                     sizeof(PROCESSOR_GROUP_INFO);
+
+    if (RelationshipType == RelationProcessorCore || RelationshipType == RelationAll)
+        Required += CoreCount * CoreEntrySize;
+    if (RelationshipType == RelationProcessorPackage || RelationshipType == RelationAll)
+        Required += MaskEntrySize;
+    if (RelationshipType == RelationNumaNode || RelationshipType == RelationAll)
+        Required += MaskEntrySize;
+    if (RelationshipType == RelationGroup || RelationshipType == RelationAll)
+        Required += GroupEntrySize;
+
+    if (Buffer == NULL || *ReturnedLength < Required)
+    {
+        *ReturnedLength = Required;
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+
+    Out = (PUCHAR)Buffer;
+    RtlZeroMemory(Out, Required);
+
+    if (RelationshipType == RelationProcessorCore || RelationshipType == RelationAll)
+    {
+        for (i = 0; i < sizeof(KAFFINITY) * 8; i++)
+        {
+            PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX Entry;
+
+            if (!(ActiveMask & ((KAFFINITY)1 << i)))
+                continue;
+
+            Entry = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)Out;
+            Entry->Relationship = RelationProcessorCore;
+            Entry->Size = CoreEntrySize;
+            Entry->Processor.GroupCount = 1;
+            Entry->Processor.GroupMask[0].Mask = (KAFFINITY)1 << i;
+            Entry->Processor.GroupMask[0].Group = 0;
+            Out += CoreEntrySize;
+        }
+    }
+
+    if (RelationshipType == RelationProcessorPackage || RelationshipType == RelationAll)
+    {
+        PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX Entry =
+            (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)Out;
+        Entry->Relationship = RelationProcessorPackage;
+        Entry->Size = MaskEntrySize;
+        Entry->Processor.GroupCount = 1;
+        Entry->Processor.GroupMask[0].Mask = ActiveMask;
+        Entry->Processor.GroupMask[0].Group = 0;
+        Out += MaskEntrySize;
+    }
+
+    if (RelationshipType == RelationNumaNode || RelationshipType == RelationAll)
+    {
+        PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX Entry =
+            (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)Out;
+        Entry->Relationship = RelationNumaNode;
+        Entry->Size = MaskEntrySize;
+        Entry->NumaNode.NodeNumber = 0;
+        Entry->NumaNode.GroupMask.Mask = ActiveMask;
+        Entry->NumaNode.GroupMask.Group = 0;
+        Out += MaskEntrySize;
+    }
+
+    if (RelationshipType == RelationGroup || RelationshipType == RelationAll)
+    {
+        PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX Entry =
+            (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)Out;
+        Entry->Relationship = RelationGroup;
+        Entry->Size = GroupEntrySize;
+        Entry->Group.MaximumGroupCount = 1;
+        Entry->Group.ActiveGroupCount = 1;
+        Entry->Group.GroupInfo[0].MaximumProcessorCount = (UCHAR)CoreCount;
+        Entry->Group.GroupInfo[0].ActiveProcessorCount = (UCHAR)CoreCount;
+        Entry->Group.GroupInfo[0].ActiveProcessorMask = ActiveMask;
+        Out += GroupEntrySize;
+    }
+
+    *ReturnedLength = Required;
     return TRUE;
 }
 

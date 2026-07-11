@@ -1743,11 +1743,11 @@
 #@ stdcall WaitForThreadpoolWorkCallbacks(ptr long) ntdll.TpWaitForWork
 # #@ stub WaitForUserPolicyForegroundProcessingInternal
 #@ stdcall WaitNamedPipeW(wstr long)
-#@ stdcall WaitOnAddress(ptr ptr long long)
-#@ stdcall WakeAllConditionVariable(ptr) ntdll.RtlWakeAllConditionVariable
-#@ stdcall WakeByAddressAll(ptr) ntdll.RtlWakeAddressAll
-#@ stdcall WakeByAddressSingle(ptr) ntdll.RtlWakeAddressSingle
-#@ stdcall WakeConditionVariable(ptr) ntdll.RtlWakeConditionVariable
+@ stdcall WaitOnAddress(ptr ptr long long) kernel32.WaitOnAddress
+@ stdcall WakeAllConditionVariable(ptr) ntdll.RtlWakeAllConditionVariable
+@ stdcall WakeByAddressAll(ptr) ntdll.RtlWakeAddressAll
+@ stdcall WakeByAddressSingle(ptr) ntdll.RtlWakeAddressSingle
+@ stdcall WakeConditionVariable(ptr) ntdll.RtlWakeConditionVariable
 #@ stdcall WerGetFlags(ptr ptr)
 #@ stdcall WerRegisterFile(wstr long long)
 #@ stdcall WerRegisterMemoryBlock(ptr long)

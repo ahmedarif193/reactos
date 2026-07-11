@@ -924,4 +924,76 @@ UnregisterWaitEx(IN HANDLE WaitHandle,
     return TRUE;
 }
 
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlWaitOnAddress(
+    _In_ const VOID *Address,
+    _In_ const VOID *CompareAddress,
+    _In_ SIZE_T AddressSize,
+    _In_opt_ const LARGE_INTEGER *Timeout);
+
+NTSYSAPI
+VOID
+NTAPI
+RtlWakeAddressSingle(_In_ const VOID *Address);
+
+NTSYSAPI
+VOID
+NTAPI
+RtlWakeAddressAll(_In_ const VOID *Address);
+
+/*
+ * @implemented
+ */
+BOOL
+WINAPI
+WaitOnAddress(IN volatile VOID *Address,
+              IN PVOID CompareAddress,
+              IN SIZE_T AddressSize,
+              IN DWORD dwMilliseconds)
+{
+    LARGE_INTEGER Timeout;
+    PLARGE_INTEGER TimeoutPtr = NULL;
+    NTSTATUS Status;
+
+    if (dwMilliseconds != INFINITE)
+    {
+        Timeout.QuadPart = (LONGLONG)dwMilliseconds * -10000;
+        TimeoutPtr = &Timeout;
+    }
+
+    Status = RtlWaitOnAddress((const VOID *)Address,
+                              CompareAddress,
+                              AddressSize,
+                              TimeoutPtr);
+    if (!NT_SUCCESS(Status) || Status == STATUS_TIMEOUT)
+    {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+/*
+ * @implemented
+ */
+VOID
+WINAPI
+WakeByAddressSingle(IN PVOID Address)
+{
+    RtlWakeAddressSingle(Address);
+}
+
+/*
+ * @implemented
+ */
+VOID
+WINAPI
+WakeByAddressAll(IN PVOID Address)
+{
+    RtlWakeAddressAll(Address);
+}
+
 /* EOF */
