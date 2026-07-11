@@ -11,6 +11,8 @@ add_library(rshell MODULE ${SOURCE})
 
 set_module_type(rshell win32dll UNICODE)
 
+add_cd_file(TARGET rshell DESTINATION reactos FOR all)
+
 target_link_libraries(rshell
     shellbars
     shellmenu
