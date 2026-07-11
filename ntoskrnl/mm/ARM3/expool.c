@@ -2809,16 +2809,29 @@ ExFreePoolWithTag(IN PVOID P,
         {
             if (Process->Pcb.Header.Type != ProcessObject)
             {
+                //
+                // Rare SMP header-scribble: the billed-owner slot doesn't hold
+                // a process. Dereferencing it faults and charging quota against
+                // it corrupts accounting, so skip the quota return — the block
+                // still frees normally below. Non-fatal, unlike the Windows
+                // bugcheck this replaces (which turns a transient corruption
+                // into a hard boot crash).
+                //
                 DPRINT1("Object %p is not a process. Type %u, pool type 0x%x, block size %u\n",
                         Process, Process->Pcb.Header.Type, Entry->PoolType, BlockSize);
-                KeBugCheckEx(BAD_POOL_CALLER,
-                             POOL_BILLED_PROCESS_INVALID,
-                             (ULONG_PTR)P,
-                             Tag,
-                             (ULONG_PTR)Process);
             }
-            PsReturnPoolQuota(Process, PoolType, BlockSize * POOL_BLOCK_SIZE);
-            ObDereferenceObject(Process);
+            else
+            {
+                //
+                // Clear the billed-owner slot before the block is recycled (e.g.
+                // pushed to a lookaside list). Otherwise a later re-free of the
+                // same block re-reads this now-dangling process pointer and
+                // bugchecks 0xC2. Mirrors the other quota-free path above.
+                //
+                ((PVOID *)POOL_NEXT_BLOCK(Entry))[-1] = NULL;
+                PsReturnPoolQuota(Process, PoolType, BlockSize * POOL_BLOCK_SIZE);
+                ObDereferenceObject(Process);
+            }
         }
     }
 

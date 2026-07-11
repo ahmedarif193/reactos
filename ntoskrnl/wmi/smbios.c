@@ -123,6 +123,54 @@ GetEntryPointData(
     return FALSE;
 }
 
+/* SMBIOS 3.0 entry point captured from the loader block at WMI init:
+ * UEFI systems have no 0xF0000 BIOS range to scan. */
+static SMBIOS3_TABLE_HEADER WmipSMBios3Eps;
+static BOOLEAN WmipSMBios3EpsValid = FALSE;
+
+VOID
+NTAPI
+WmipCaptureSMBiosFromLoader(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
+{
+    PHYSICAL_ADDRESS Phys;
+    PSMBIOS3_TABLE_HEADER Mapping;
+    UCHAR Checksum;
+    ULONG i;
+
+    if (LoaderBlock == NULL ||
+        LoaderBlock->Extension == NULL ||
+        LoaderBlock->Extension->SMBiosEPSHeader == NULL)
+    {
+        return;
+    }
+
+    /* The loader stores the identity-mapped physical address of the EPS. */
+    Phys.QuadPart = (ULONGLONG)(ULONG_PTR)LoaderBlock->Extension->SMBiosEPSHeader;
+    Mapping = MmMapIoSpace(Phys, sizeof(SMBIOS3_TABLE_HEADER), MmCached);
+    if (Mapping == NULL)
+        return;
+
+    if (RtlEqualMemory(Mapping->Signature, "_SM3_", 5) &&
+        Mapping->Length >= sizeof(SMBIOS3_TABLE_HEADER) &&
+        Mapping->Length <= 32 &&
+        Mapping->StructureTableAddress != 0)
+    {
+        Checksum = 0;
+        for (i = 0; i < Mapping->Length; i++)
+        {
+            Checksum += ((PUCHAR)Mapping)[i];
+        }
+        if (Checksum == 0)
+        {
+            RtlCopyMemory(&WmipSMBios3Eps, Mapping, sizeof(WmipSMBios3Eps));
+            WmipSMBios3EpsValid = TRUE;
+        }
+    }
+
+    MmUnmapIoSpace(Mapping, sizeof(SMBIOS3_TABLE_HEADER));
+}
+
 _At_(*OutTableData, __drv_allocatesMem(Mem))
 NTSTATUS
 NTAPI
@@ -139,6 +187,19 @@ WmipGetRawSMBiosTableData(
     ULONG Offset, TableSize;
     ULONG64 TableAddress = 0;
 
+    if (WmipSMBios3EpsValid)
+    {
+        /* Entry point handed over by the loader (UEFI firmware). */
+        TableAddress = WmipSMBios3Eps.StructureTableAddress;
+        TableSize = WmipSMBios3Eps.StructureTableMaximumSize;
+        BiosTablesHeader.Used20CallingMethod = 0;
+        BiosTablesHeader.SmbiosMajorVersion = WmipSMBios3Eps.MajorVersion;
+        BiosTablesHeader.SmbiosMinorVersion = WmipSMBios3Eps.MinorVersion;
+        BiosTablesHeader.DmiRevision = 3;
+        BiosTablesHeader.Size = TableSize;
+    }
+    else
+    {
     /* This is where the range for the entry point starts */
     PhysicalAddress.QuadPart = 0xF0000;
 
@@ -165,6 +226,7 @@ WmipGetRawSMBiosTableData(
 
     /* Unmap the entry point */
     MmUnmapIoSpace(EntryPointMapping, SearchSize);
+    }
 
     /* Did we find anything */
     if (TableAddress == 0)

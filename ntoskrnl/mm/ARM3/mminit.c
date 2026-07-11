@@ -2212,6 +2212,27 @@ MiBuildPagedPool(VOID)
         MmSizeOfPagedPoolInBytes = (ULONG_PTR)MmNonPagedPoolExpansionStart -
                                    (ULONG_PTR)MmPagedPoolStart;
     }
+#elif defined(_M_AMD64) || defined(_M_ARM64)
+    //
+    // Same sizing policy for 64-bit, where the arch init only seeded the
+    // 32MB floor: with GDI putting every DDB's pixel buffer in one
+    // contiguous paged pool block, a 32MB pool starves after a handful of
+    // windows on a 1080p desktop. The VA region reserved for paged pool is
+    // 128GB; pages are faulted in on demand by the expansion path, so a
+    // generous maximum costs only bitmap bookkeeping. This must happen HERE
+    // (before the allocation bitmap and LastPteForPagedPool are derived) —
+    // MiSize64BitPagedPool in MmInitSystem runs a whole phase later.
+    //
+    if (MmSizeOfPagedPoolInBytes <= MI_MIN_INIT_PAGED_POOLSIZE)
+    {
+        MmSizeOfPagedPoolInBytes = 2 * MmMaximumNonPagedPoolInBytes;
+        if (MmSizeOfPagedPoolInBytes > MiSystemVaRegions[AssignedRegionPagedPool].NumberOfBytes)
+        {
+            MmSizeOfPagedPoolInBytes = MiSystemVaRegions[AssignedRegionPagedPool].NumberOfBytes;
+        }
+    }
+    DPRINT1("Paged pool: %Iu MB at %p\n",
+            MmSizeOfPagedPoolInBytes / (1024 * 1024), MmPagedPoolStart);
 #endif // _M_IX86
 
     //
