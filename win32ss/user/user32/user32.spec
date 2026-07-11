@@ -206,6 +206,7 @@
 @ stdcall EditWndProc(long long long long) EditWndProcA
 @ stdcall EmptyClipboard() NtUserEmptyClipboard
 @ stdcall EnableMenuItem(long long long)
+@ stdcall -version=0xA00+ EnableNonClientDpiScaling(ptr)
 @ stdcall EnableScrollBar(long long long)
 @ stdcall EnableWindow(long long)
 @ stdcall EndDeferWindowPos(long)

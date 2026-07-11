@@ -566,6 +566,14 @@ sw_call_window_proc(
                 goto end;
             /* Propagate to mesa */
             gl_ResizeBuffersMESA(ctx->gl_ctx);
+            /* Keep the viewport in sync with the grown client area.  The
+             * initial viewport is only set once at first MakeCurrent (when it
+             * is still 0x0); an app that never re-issues glViewport (or whose
+             * WM_SIZE races the final window size) would otherwise render into
+             * a stale, smaller viewport and leave the rest of the buffer black
+             * (the wglgears "truncated to the top-left" symptom).  Span writes
+             * are clipped to fb->width/height, so a larger viewport is safe. */
+            gl_Viewport(ctx->gl_ctx, 0, 0, width, height);
         }
     }
 

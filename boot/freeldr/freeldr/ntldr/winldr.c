@@ -356,6 +356,13 @@ WinLdrInitializePhase1(
     }
 
 #ifdef UEFIBOOT
+    /* Hand the firmware SMBIOS 3.0 entry point to the kernel (WMI raw
+     * SMBIOS provider); the pointer is the identity-mapped physical EPS. */
+    {
+        extern PVOID UefiGetSmbiosEpsPointer(VOID);
+        Extension->SMBiosEPSHeader = UefiGetSmbiosEpsPointer();
+    }
+
     /*
      * Hand off the active UEFI framebuffer so ntoskrnl can keep using the
      * firmware-owned display for the GOP boot animation path.

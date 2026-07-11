@@ -182,7 +182,14 @@ ScmLogEvent(DWORD dwEventId,
                                 L"Service Control Manager");
     if (hLog == NULL)
     {
-        DPRINT1("ScmLogEvent: RegisterEventSourceW failed %lu\n", GetLastError());
+        /* The eventlog service comes up after the first SCM events; report
+         * the unavailability once instead of once per event. */
+        static BOOL bReported = FALSE;
+        if (!bReported)
+        {
+            bReported = TRUE;
+            DPRINT1("ScmLogEvent: RegisterEventSourceW failed %lu (eventlog not up yet)\n", GetLastError());
+        }
         return;
     }
 

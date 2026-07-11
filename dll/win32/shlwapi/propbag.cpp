@@ -86,10 +86,7 @@ public:
     }
 
 #if (_WIN32_WINNT < _WIN32_WINNT_VISTA) || defined(__REACTOS__)
-    // IPropertyBag2 interface (stubs).
-    // Keep the IPropertyBag Read/Write overloads in scope (the IPropertyBag2 ones below hide them).
-    using IPropertyBag::Read;
-    using IPropertyBag::Write;
+    // IPropertyBag2 interface (stubs)
     STDMETHODIMP Read(
         _In_ ULONG cProperties,
         _In_ PROPBAG2 *pPropBag,
@@ -149,10 +146,6 @@ protected:
 
 public:
     CMemPropertyBag(DWORD dwMode) : CBasePropertyBag(dwMode) { }
-
-    // Unhide the base IPropertyBag2 Read/Write overloads.
-    using CBasePropertyBag::Read;
-    using CBasePropertyBag::Write;
 
     STDMETHODIMP Read(_In_z_ LPCWSTR pszPropName, _Inout_ VARIANT *pvari,
                       _Inout_opt_ IErrorLog *pErrorLog) override;
@@ -304,10 +297,6 @@ public:
     }
 
     HRESULT Init(HKEY hKey, LPCWSTR lpSubKey);
-
-    // Unhide the base IPropertyBag2 Read/Write overloads.
-    using CBasePropertyBag::Read;
-    using CBasePropertyBag::Write;
 
     STDMETHODIMP Read(_In_z_ LPCWSTR pszPropName, _Inout_ VARIANT *pvari,
                       _Inout_opt_ IErrorLog *pErrorLog) override;
@@ -818,10 +807,6 @@ public:
 
     HRESULT Init(LPCWSTR pszIniFile, LPCWSTR pszSection);
 
-    // Unhide the base IPropertyBag2 Read/Write overloads.
-    using CBasePropertyBag::Read;
-    using CBasePropertyBag::Write;
-
     STDMETHODIMP Read(
         _In_z_ LPCWSTR pszPropName,
         _Inout_ VARIANT *pvari,
@@ -1046,10 +1031,6 @@ protected:
 
 public:
     CDesktopUpgradePropertyBag() : CBasePropertyBag(STGM_READ) { }
-
-    // Unhide the base IPropertyBag2 Read/Write overloads.
-    using CBasePropertyBag::Read;
-    using CBasePropertyBag::Write;
 
     STDMETHODIMP Read(
         _In_z_ LPCWSTR pszPropName,
@@ -1328,10 +1309,6 @@ public:
 
     HRESULT Init(_In_opt_ LPCITEMIDLIST pidl, _In_opt_ LPCWSTR pszPath, _In_ DWORD dwVspbFlags);
     BOOL IsSameBag(LPCITEMIDLIST pidl, LPCWSTR pszPath, DWORD dwVspbFlags) const;
-
-    // Unhide the base IPropertyBag2 Read/Write overloads.
-    using CBasePropertyBag::Read;
-    using CBasePropertyBag::Write;
 
     STDMETHODIMP Read(
         _In_z_ LPCWSTR pszPropName,

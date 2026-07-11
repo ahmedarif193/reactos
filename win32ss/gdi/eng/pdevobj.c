@@ -825,8 +825,10 @@ EngpGetPDEV(
     /* Acquire PDEV lock */
     EngAcquireSemaphoreShared(ghsemPDEV);
 
-    /* Did the caller pass a device name? */
-    if (pustrDeviceName)
+    /* Did the caller pass a device name? (gpmdev is NULL until the display
+     * subsystem has initialized the mode devices — an early caller such as
+     * winlogon's first OpenDC must fail gracefully, not dereference NULL) */
+    if (pustrDeviceName && gpmdev)
     {
         /* Loop all present PDEVs */
         for (i = 0; i < gpmdev->cDev; i++)

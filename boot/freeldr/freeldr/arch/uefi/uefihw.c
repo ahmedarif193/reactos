@@ -95,6 +95,35 @@ UefiSmbiosNextStructure(
     return (PSMBIOS_HEADER)(String + 2);
 }
 
+PVOID
+UefiGetSmbiosEpsPointer(VOID)
+{
+    EFI_GUID Smbios3Guid = SMBIOS3_TABLE_GUID;
+    UINTN Index;
+
+    if (!GlobalSystemTable)
+        return NULL;
+
+    for (Index = 0; Index < GlobalSystemTable->NumberOfTableEntries; ++Index)
+    {
+        EFI_CONFIGURATION_TABLE *Entry = &GlobalSystemTable->ConfigurationTable[Index];
+
+        if (!memcmp(&Entry->VendorGuid, &Smbios3Guid, sizeof(EFI_GUID)))
+        {
+            PSMBIOS3_ENTRY_POINT Entry3 = (PSMBIOS3_ENTRY_POINT)Entry->VendorTable;
+
+            if (Entry3 &&
+                (memcmp(Entry3->Anchor, "_SM3_", sizeof(Entry3->Anchor)) == 0) &&
+                (Entry3->TableAddress != 0))
+            {
+                return Entry->VendorTable;
+            }
+        }
+    }
+
+    return NULL;
+}
+
 static
 PSMBIOS_HEADER
 UefiGetSmbiosTable(VOID)

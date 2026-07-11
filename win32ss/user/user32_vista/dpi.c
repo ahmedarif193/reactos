@@ -833,3 +833,13 @@ LogicalToPhysicalPoint(
     /* ReactOS currently uses one physical coordinate space per desktop. */
     return TRUE;
 }
+
+BOOL
+WINAPI
+EnableNonClientDpiScaling(
+    _In_ HWND hWnd)
+{
+    /* Per-monitor non-client scaling is not implemented yet. */
+    UNREFERENCED_PARAMETER(hWnd);
+    return TRUE;
+}

@@ -51,6 +51,8 @@
 #include "shell32_main.h"
 #include "shresdef.h"
 
+#include <knownfolders.h>
+
 #undef _WIN32_WINNT
 #define _WIN32_WINNT _WIN32_WINNT_WS03
 
@@ -2724,6 +2726,88 @@ HRESULT WINAPI SHGetFolderPathW(
     if(HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND) == hr)
         hr = HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
     return hr;
+}
+
+/*************************************************************************
+ * SHGetKnownFolderPath           [SHELL32.@]
+ *
+ * Vista+ folder-ID front end over SHGetFolderPathW: the common IDs map to
+ * their CSIDL equivalents; the path comes back CoTaskMemAlloc'd.
+ */
+HRESULT WINAPI SHGetKnownFolderPath(REFKNOWNFOLDERID rfid, DWORD dwFlags, HANDLE hToken, PWSTR *ppszPath)
+{
+    static const struct { const KNOWNFOLDERID *fid; int csidl; } map[] =
+    {
+        { &FOLDERID_Desktop,          CSIDL_DESKTOP },
+        { &FOLDERID_Documents,        CSIDL_PERSONAL },
+        { &FOLDERID_LocalAppData,     CSIDL_LOCAL_APPDATA },
+        { &FOLDERID_RoamingAppData,   CSIDL_APPDATA },
+        { &FOLDERID_Profile,          CSIDL_PROFILE },
+        { &FOLDERID_ProgramData,      CSIDL_COMMON_APPDATA },
+        { &FOLDERID_ProgramFiles,     CSIDL_PROGRAM_FILES },
+        { &FOLDERID_System,           CSIDL_SYSTEM },
+        { &FOLDERID_Windows,          CSIDL_WINDOWS },
+        { &FOLDERID_Fonts,            CSIDL_FONTS },
+        { &FOLDERID_Pictures,         CSIDL_MYPICTURES },
+        { &FOLDERID_Music,            CSIDL_MYMUSIC },
+        { &FOLDERID_Videos,           CSIDL_MYVIDEO },
+        { &FOLDERID_Templates,        CSIDL_TEMPLATES },
+        { &FOLDERID_Startup,          CSIDL_STARTUP },
+        { &FOLDERID_SendTo,           CSIDL_SENDTO },
+        { &FOLDERID_Recent,           CSIDL_RECENT },
+        { &FOLDERID_Favorites,        CSIDL_FAVORITES },
+        { &FOLDERID_History,          CSIDL_HISTORY },
+        { &FOLDERID_Programs,         CSIDL_PROGRAMS },
+        { &FOLDERID_StartMenu,        CSIDL_STARTMENU },
+        { &FOLDERID_InternetCache,    CSIDL_INTERNET_CACHE },
+        { &FOLDERID_CommonPrograms,   CSIDL_COMMON_PROGRAMS },
+        { &FOLDERID_CommonStartMenu,  CSIDL_COMMON_STARTMENU },
+        { &FOLDERID_PublicDesktop,    CSIDL_COMMON_DESKTOPDIRECTORY },
+        { &FOLDERID_PublicDocuments,  CSIDL_COMMON_DOCUMENTS },
+    };
+    WCHAR path[MAX_PATH];
+    HRESULT hr;
+    UINT i;
+    int csidl = -1;
+
+    TRACE("%s, 0x%08x, %p, %p\n", debugstr_guid(rfid), dwFlags, hToken, ppszPath);
+
+    if (!ppszPath)
+        return E_INVALIDARG;
+    *ppszPath = NULL;
+
+    if (!rfid)
+        return E_INVALIDARG;
+
+    for (i = 0; i < ARRAY_SIZE(map); i++)
+    {
+        if (IsEqualGUID(map[i].fid, rfid))
+        {
+            csidl = map[i].csidl;
+            break;
+        }
+    }
+
+    if (csidl == -1)
+    {
+        FIXME("unsupported known folder %s\n", debugstr_guid(rfid));
+        return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+    }
+
+    if (dwFlags & KF_FLAG_CREATE)
+        csidl |= CSIDL_FLAG_CREATE;
+    if (dwFlags & KF_FLAG_DONT_VERIFY)
+        csidl |= CSIDL_FLAG_DONT_VERIFY;
+
+    hr = SHGetFolderPathW(NULL, csidl, hToken, SHGFP_TYPE_CURRENT, path);
+    if (FAILED(hr))
+        return hr;
+
+    *ppszPath = CoTaskMemAlloc((strlenW(path) + 1) * sizeof(WCHAR));
+    if (*ppszPath == NULL)
+        return E_OUTOFMEMORY;
+    strcpyW(*ppszPath, path);
+    return S_OK;
 }
 
 HRESULT WINAPI SHGetFolderPathAndSubDirA(
