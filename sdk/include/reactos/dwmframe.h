@@ -24,6 +24,13 @@
 #define DWM_FRAME_MAGIC   0x324d5744u   /* 'DWM2' (metadata-only frames) */
 #define DWM_MAX_WINDOWS    256
 
+/* NtUserCallOneParam routine numbers of the DWM entry points (must match
+ * win32ss/include/ntuser.h, which owns the routine numbering). */
+#define DWM_ROUTINE_ATTACH       0xfffe000f
+#define DWM_ROUTINE_GETFRAME     0xfffe0010
+#define DWM_ROUTINE_PRESENTSYNC  0xfffe0011
+#define DWM_ROUTINE_OPENSURFACE  0xfffe0012
+
 /*
  * DWM control channel to the canonical display driver (DrvEscape/ExtEscape).
  * The values are ours (they spell "DWM" in the high bytes) and are matched by
