@@ -157,6 +157,34 @@ CreateThread(IN LPSECURITY_ATTRIBUTES lpThreadAttributes,
  */
 HANDLE
 WINAPI
+CreateRemoteThreadEx(IN HANDLE hProcess,
+                     IN LPSECURITY_ATTRIBUTES lpThreadAttributes,
+                     IN SIZE_T dwStackSize,
+                     IN LPTHREAD_START_ROUTINE lpStartAddress,
+                     IN LPVOID lpParameter,
+                     IN DWORD dwCreationFlags,
+                     IN LPPROC_THREAD_ATTRIBUTE_LIST lpAttributeList,
+                     OUT LPDWORD lpThreadId)
+{
+    /* Thread attribute lists carry group-affinity/ideal-processor hints; the
+     * base thread creation path does not consume them yet. */
+    if (lpAttributeList != NULL)
+        DPRINT1("CreateRemoteThreadEx: attribute list %p ignored\n", lpAttributeList);
+
+    return CreateRemoteThread(hProcess,
+                              lpThreadAttributes,
+                              (DWORD)dwStackSize,
+                              lpStartAddress,
+                              lpParameter,
+                              dwCreationFlags,
+                              lpThreadId);
+}
+
+/*
+ * @implemented
+ */
+HANDLE
+WINAPI
 CreateRemoteThread(IN HANDLE hProcess,
                    IN LPSECURITY_ATTRIBUTES lpThreadAttributes,
                    IN DWORD dwStackSize,
@@ -699,6 +727,71 @@ SetThreadAffinityMask(IN HANDLE hThread,
 
 /*
  * @implemented
+ *
+ * ReactOS supports a single processor group (group 0), so thread group
+ * affinity maps directly onto the classic single-group affinity mask.
+ */
+BOOL
+WINAPI
+GetThreadGroupAffinity(IN HANDLE hThread,
+                       OUT PGROUP_AFFINITY GroupAffinity)
+{
+    THREAD_BASIC_INFORMATION ThreadBasic;
+    NTSTATUS Status;
+
+    if (!GroupAffinity)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    Status = NtQueryInformationThread(hThread,
+                                      ThreadBasicInformation,
+                                      &ThreadBasic,
+                                      sizeof(THREAD_BASIC_INFORMATION),
+                                      NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+
+    RtlZeroMemory(GroupAffinity, sizeof(*GroupAffinity));
+    GroupAffinity->Mask = ThreadBasic.AffinityMask;
+    GroupAffinity->Group = 0;
+    return TRUE;
+}
+
+/*
+ * @implemented
+ */
+BOOL
+WINAPI
+SetThreadGroupAffinity(IN HANDLE hThread,
+                       IN CONST GROUP_AFFINITY *GroupAffinity,
+                       OUT PGROUP_AFFINITY PreviousGroupAffinity OPTIONAL)
+{
+    if (!GroupAffinity || GroupAffinity->Group != 0)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (PreviousGroupAffinity &&
+        !GetThreadGroupAffinity(hThread, PreviousGroupAffinity))
+    {
+        return FALSE;
+    }
+
+    /* Single group: this is just a plain affinity-mask change */
+    if (SetThreadAffinityMask(hThread, (DWORD_PTR)GroupAffinity->Mask) == 0)
+        return FALSE;
+
+    return TRUE;
+}
+
+/*
+ * @implemented
  */
 BOOL
 WINAPI
@@ -935,25 +1028,20 @@ GetThreadId(IN HANDLE Thread)
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 LANGID
 WINAPI
 SetThreadUILanguage(IN LANGID LangId)
 {
-#if (NTDDI_VERSION < NTDDI_LONGHORN)
-    /* We only support LangId == 0, for selecting a language
-     * identifier that best supports the NT Console. */
-    if (LangId != 0)
-    {
-        BaseSetLastNTError(STATUS_NOT_SUPPORTED);
-        return 0;
-    }
-#endif
+    /* LangId == 0 selects a language best supporting the console; keep the
+     * thread's current UI language in that case, like modern Windows. */
+    if (LangId == 0)
+        return LANGIDFROMLCID(NtCurrentTeb()->CurrentLocale);
 
-    UNIMPLEMENTED;
-
-    return LANGIDFROMLCID(NtCurrentTeb()->CurrentLocale);
+    /* The thread UI language lives in the TEB. */
+    NtCurrentTeb()->CurrentLocale = MAKELCID(LangId, SORT_DEFAULT);
+    return LangId;
 }
 
 /*

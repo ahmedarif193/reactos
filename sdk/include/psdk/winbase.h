@@ -1901,6 +1901,23 @@ GetFileInformationByHandleEx(
   _In_ FILE_INFO_BY_HANDLE_CLASS FileInformationClass,
   _Out_writes_bytes_(dwBufferSize) LPVOID lpFileInformation,
   _In_ DWORD dwBufferSize);
+
+BOOL
+WINAPI
+SetFileInformationByHandle(
+  _In_ HANDLE hFile,
+  _In_ FILE_INFO_BY_HANDLE_CLASS FileInformationClass,
+  _In_reads_bytes_(dwBufferSize) LPVOID lpFileInformation,
+  _In_ DWORD dwBufferSize);
+#endif
+
+#if (_WIN32_WINNT >= 0x0601)
+BOOL
+WINAPI
+GetLogicalProcessorInformationEx(
+  _In_ LOGICAL_PROCESSOR_RELATIONSHIP RelationshipType,
+  _Out_writes_bytes_to_opt_(*ReturnedLength, *ReturnedLength) PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX Buffer,
+  _Inout_ PDWORD ReturnedLength);
 #endif
 
 BOOL

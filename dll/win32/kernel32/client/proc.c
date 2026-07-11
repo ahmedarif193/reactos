@@ -896,6 +896,35 @@ GetProcessAffinityMask(IN HANDLE hProcess,
 
 /*
  * @implemented
+ *
+ * ReactOS exposes a single processor group (group 0).
+ */
+BOOL
+WINAPI
+GetProcessGroupAffinity(IN HANDLE hProcess,
+                        IN OUT PUSHORT GroupCount,
+                        OUT PUSHORT GroupArray)
+{
+    if (!GroupCount)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (*GroupCount < 1)
+    {
+        *GroupCount = 1;
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+
+    *GroupCount = 1;
+    GroupArray[0] = 0;
+    return TRUE;
+}
+
+/*
+ * @implemented
  */
 BOOL
 WINAPI
