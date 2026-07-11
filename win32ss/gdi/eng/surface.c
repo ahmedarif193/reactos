@@ -192,6 +192,13 @@ SURFACE_AllocSurface(
         cjBits = cjBufSize;
     }
 
+    /* Keep large engine bitmaps out of contiguous paged-pool allocations. */
+    if ((iType == STYPE_BITMAP) && (pvBits == NULL) &&
+        (cjBits >= 16 * PAGE_SIZE) && !(fjBitmap & BMF_USERMEM))
+    {
+        fjBitmap |= BMF_KMSECTION;
+    }
+
     /* Check if we need an extra large object */
     if ((iType == STYPE_BITMAP) && (pvBits == NULL) &&
         !(fjBitmap & BMF_USERMEM) && !(fjBitmap & BMF_KMSECTION))
