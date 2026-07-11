@@ -1150,7 +1150,29 @@ LdrpApplyFileNameRedirection(
         RtlAppendUnicodeStringToString(ResultPath, &NtSystemRoot);
         RtlAppendUnicodeStringToString(ResultPath, &System32);
         RtlAppendUnicodeStringToString(ResultPath, &ApisetName);
-        DPRINT1("ApiSetResolveToHost redirected %wZ to %wZ\n", OriginalName, ResultPath);
+
+        /* Log each apiset->host mapping once per process — the resolves
+         * repeat for every import of every module and flood the serial
+         * log (seconds of boot time at 115200 baud). */
+        {
+            static LONG ApisetPrinted[64];
+            ULONG NameHash = 0;
+            USHORT ci;
+            ULONG Slot;
+
+            for (ci = 0; ci < OriginalName->Length / sizeof(WCHAR); ci++)
+                NameHash = NameHash * 65599 + RtlUpcaseUnicodeChar(OriginalName->Buffer[ci]);
+            if (NameHash == 0)
+                NameHash = 1;
+            Slot = NameHash % RTL_NUMBER_OF(ApisetPrinted);
+
+            if (InterlockedCompareExchange(&ApisetPrinted[Slot],
+                                           (LONG)NameHash, 0) == 0)
+            {
+                DPRINT1("ApiSetResolveToHost redirected %wZ to %wZ\n",
+                        OriginalName, ResultPath);
+            }
+        }
         *NewName = ResultPath;
     }
     else

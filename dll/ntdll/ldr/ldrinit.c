@@ -859,6 +859,15 @@ LdrpRunInitializeRoutines(IN PCONTEXT Context OPTIONAL)
         /* Get the Data Entry */
         LdrEntry = CONTAINING_RECORD(NextEntry, LDR_DATA_TABLE_ENTRY, InInitializationOrderLinks);
 
+        /* Register this module's TLS (and grow every live thread's vector
+         * for it) before any of its code can touch thread-locals — even on
+         * rounds that call no init routines (LdrRootEntry == NULL), because
+         * LDRP_ENTRY_PROCESSED is set below regardless */
+        if (!(LdrEntry->Flags & LDRP_ENTRY_PROCESSED))
+        {
+            LdrpHandleTlsData(LdrEntry);
+        }
+
         /* Check if we have a Root Entry */
         if (LdrRootEntry)
         {
@@ -1439,20 +1448,328 @@ LdrShutdownThread(VOID)
     return STATUS_SUCCESS;
 }
 
+/*
+ * Allocate and initialise one per-thread TLS block for a module: the
+ * initialised raw data plus the SizeOfZeroFill zero-initialised bytes that
+ * follow it (where the module's zero-initialised thread-locals live).
+ */
+static NTSTATUS
+LdrpAllocateTlsBlock(
+    IN PIMAGE_TLS_DIRECTORY TlsDirectory,
+    OUT PVOID *TlsBlock)
+{
+    SIZE_T RawDataSize;
+    PVOID Block;
+
+    RawDataSize = TlsDirectory->EndAddressOfRawData -
+                  TlsDirectory->StartAddressOfRawData;
+    Block = RtlAllocateHeap(RtlGetProcessHeap(),
+                            HEAP_ZERO_MEMORY,
+                            RawDataSize + TlsDirectory->SizeOfZeroFill);
+    if (!Block) return STATUS_NO_MEMORY;
+
+    RtlCopyMemory(Block,
+                  (PVOID)TlsDirectory->StartAddressOfRawData,
+                  RawDataSize);
+    *TlsBlock = Block;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * Grow one thread's TLS vector so a newly assigned index becomes addressable,
+ * installing a fresh block for the new module. The new vector is built aside
+ * and swapped in with a single pointer store; the old vector is deliberately
+ * NOT freed — its owning thread may be dereferencing it at this very moment,
+ * and both arrays stay valid for all previously assigned indices. The leak is
+ * one small array per live thread per dynamically-loaded TLS module.
+ */
+static NTSTATUS
+LdrpGrowThreadTlsVector(
+    IN PTEB Teb,
+    IN ULONG Index,
+    IN PIMAGE_TLS_DIRECTORY TlsDirectory)
+{
+    PVOID *OldVector, *NewVector;
+    SIZE_T OldBytes;
+    ULONG OldCount;
+    NTSTATUS Status;
+
+    /* Thread not through LdrpAllocateTls() yet: its vector will be sized
+     * for the already-bumped LdrpNumberOfTlsEntries when it gets there.
+     * Reading the foreign TEB field may fault if the thread just exited. */
+    OldVector = NULL;
+    _SEH2_TRY
+    {
+        OldVector = (PVOID *)Teb->ThreadLocalStoragePointer;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        OldVector = NULL;
+    }
+    _SEH2_END;
+    if (!OldVector)
+        return STATUS_SUCCESS;
+
+    NewVector = RtlAllocateHeap(RtlGetProcessHeap(),
+                                HEAP_ZERO_MEMORY,
+                                (Index + 1) * sizeof(PVOID));
+    if (!NewVector) return STATUS_NO_MEMORY;
+
+    /* Copy only as many entries as the old vector actually holds: a sibling
+     * skipped by a previous propagation (e.g. transient NtOpenThread failure)
+     * has a shorter vector, and copying Index entries would over-read it. The
+     * old array is process-heap memory that LdrpFreeTls cannot release while
+     * we hold the loader lock, so its size query and copy are safe. */
+    OldBytes = RtlSizeHeap(RtlGetProcessHeap(), 0, OldVector);
+    OldCount = (ULONG)(OldBytes / sizeof(PVOID));
+    if (OldCount > Index) OldCount = Index;
+    RtlCopyMemory(NewVector, OldVector, OldCount * sizeof(PVOID));
+
+    Status = LdrpAllocateTlsBlock(TlsDirectory, &NewVector[Index]);
+    if (!NT_SUCCESS(Status))
+    {
+        RtlFreeHeap(RtlGetProcessHeap(), 0, NewVector);
+        return Status;
+    }
+
+    /*
+     * Publish with a release barrier (InterlockedExchangePointer is a full
+     * fence on ARM64): a sibling core must observe the copied entries and the
+     * installed block BEFORE it can observe the new vector pointer, otherwise
+     * it could read a stale/zero TLS-block pointer under weak ordering.
+     *
+     * The store targets a FOREIGN TEB, which the kernel frees synchronously in
+     * PspExitThread(); the ExitStatus==PENDING check in the caller is a TOCTOU
+     * snapshot that cannot fully close that window, so guard the access and
+     * simply skip a thread that has since vanished rather than fault the
+     * process.  (The fully-correct design is lazy per-thread growth so no
+     * foreign TEB is ever written; that needs machinery ReactOS ntdll lacks.)
+     */
+    Status = STATUS_SUCCESS;
+    _SEH2_TRY
+    {
+        InterlockedExchangePointer((PVOID volatile *)&Teb->ThreadLocalStoragePointer,
+                                   NewVector);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        RtlFreeHeap(RtlGetProcessHeap(), 0, NewVector);
+        Status = STATUS_SUCCESS; /* thread gone: not our problem, keep going */
+    }
+    _SEH2_END;
+
+    return Status;
+}
+
+/*
+ * Make a newly assigned TLS index addressable on EVERY live thread of the
+ * process, not just the loading one. Runs under the loader lock, which
+ * serialises us against LdrpInitializeThread()/LdrShutdownThread() (both
+ * take it around LdrpAllocateTls()/LdrpFreeTls()), so no vector can be
+ * created or freed under our feet; threads that die via TerminateThread()
+ * never ran user-mode exit code and are filtered by the ExitStatus check.
+ */
+static VOID
+LdrpPropagateTlsToLiveThreads(
+    IN ULONG Index,
+    IN PIMAGE_TLS_DIRECTORY TlsDirectory)
+{
+    PSYSTEM_PROCESS_INFORMATION ProcessInfo;
+    PVOID Buffer = NULL;
+    ULONG BufferSize = 0x10000, ReturnLength;
+    HANDLE ProcessId = NtCurrentTeb()->ClientId.UniqueProcess;
+    HANDLE ThreadId = NtCurrentTeb()->ClientId.UniqueThread;
+    NTSTATUS Status;
+    ULONG i;
+
+    /* Snapshot the process list to learn our sibling thread IDs */
+    for (;;)
+    {
+        Buffer = RtlAllocateHeap(RtlGetProcessHeap(), 0, BufferSize);
+        if (!Buffer) return;
+
+        Status = NtQuerySystemInformation(SystemProcessInformation,
+                                          Buffer,
+                                          BufferSize,
+                                          &ReturnLength);
+        if (Status != STATUS_INFO_LENGTH_MISMATCH) break;
+
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
+        BufferSize = ReturnLength + 0x1000;
+    }
+    if (!NT_SUCCESS(Status))
+    {
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
+        return;
+    }
+
+    /* Find our own process entry */
+    ProcessInfo = (PSYSTEM_PROCESS_INFORMATION)Buffer;
+    for (;;)
+    {
+        if (ProcessInfo->UniqueProcessId == ProcessId) break;
+        if (!ProcessInfo->NextEntryOffset) { ProcessInfo = NULL; break; }
+        ProcessInfo = (PSYSTEM_PROCESS_INFORMATION)
+            ((PUCHAR)ProcessInfo + ProcessInfo->NextEntryOffset);
+    }
+
+    if (ProcessInfo)
+    {
+        PSYSTEM_THREAD_INFORMATION ThreadInfo =
+            (PSYSTEM_THREAD_INFORMATION)(ProcessInfo + 1);
+
+        for (i = 0; i < ProcessInfo->NumberOfThreads; i++)
+        {
+            OBJECT_ATTRIBUTES ObjectAttributes;
+            THREAD_BASIC_INFORMATION ThreadBasic;
+            HANDLE hThread;
+
+            /* The loading thread is handled by the caller */
+            if (ThreadInfo[i].ClientId.UniqueThread == ThreadId)
+                continue;
+
+            InitializeObjectAttributes(&ObjectAttributes, NULL, 0, NULL, NULL);
+            Status = NtOpenThread(&hThread,
+                                  THREAD_QUERY_INFORMATION,
+                                  &ObjectAttributes,
+                                  &ThreadInfo[i].ClientId);
+            if (!NT_SUCCESS(Status)) continue;
+
+            Status = NtQueryInformationThread(hThread,
+                                              ThreadBasicInformation,
+                                              &ThreadBasic,
+                                              sizeof(ThreadBasic),
+                                              NULL);
+            if (NT_SUCCESS(Status) &&
+                ThreadBasic.TebBaseAddress != NULL &&
+                ThreadBasic.ExitStatus == STATUS_PENDING)
+            {
+                LdrpGrowThreadTlsVector((PTEB)ThreadBasic.TebBaseAddress,
+                                        Index,
+                                        TlsDirectory);
+            }
+
+            NtClose(hThread);
+        }
+    }
+
+    RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
+}
+
+/*
+ * Register a single module's TLS directory and make its slot usable on every
+ * live thread of the process.
+ *
+ * LdrpInitializeTls() only walks the static import set that is present when the
+ * process starts, so a module brought in afterwards by LdrLoadDll() never had
+ * its TLS registered: its index stayed 0 and its thread-local accesses aliased
+ * the index-0 module's TLS block, overrunning it and corrupting the heap. This
+ * assigns the module a TLS index, grows the TLS vector of every thread that
+ * already has one, and only then publishes the index to the module. Threads
+ * created afterwards get a correctly sized vector from LdrpAllocateTls(). The
+ * call is idempotent: a module that already owns a slot is left untouched.
+ */
+NTSTATUS
+NTAPI
+LdrpHandleTlsData(IN PLDR_DATA_TABLE_ENTRY LdrEntry)
+{
+    PIMAGE_TLS_DIRECTORY TlsDirectory;
+    PLDRP_TLS_DATA TlsData;
+    PTEB Teb = NtCurrentTeb();
+    PVOID *TlsVector;
+    ULONG Index, Size;
+    NTSTATUS Status;
+
+    /* Nothing to do if this module is already registered */
+    if (LdrEntry->TlsIndex)
+        return STATUS_SUCCESS;
+
+    /* ...or if it has no TLS directory */
+    TlsDirectory = RtlImageDirectoryEntryToData(LdrEntry->DllBase,
+                                                TRUE,
+                                                IMAGE_DIRECTORY_ENTRY_TLS,
+                                                &Size);
+    if (!TlsDirectory)
+        return STATUS_SUCCESS;
+
+    /* Guard against registration racing ahead of LdrpInitializeTls() */
+    if (!LdrpTlsList.Flink)
+        InitializeListHead(&LdrpTlsList);
+
+    /* Remember that the process uses TLS */
+    if (!LdrpImageHasTls) LdrpImageHasTls = TRUE;
+
+    /* Show debug message */
+    if (ShowSnaps)
+    {
+        DPRINT1("LDR: Tls Found in %wZ at %p\n",
+                &LdrEntry->BaseDllName,
+                TlsDirectory);
+    }
+
+    /* Cache the directory and assign the module its TLS index */
+    TlsData = RtlAllocateHeap(RtlGetProcessHeap(), 0, sizeof(LDRP_TLS_DATA));
+    if (!TlsData) return STATUS_NO_MEMORY;
+
+    LdrEntry->LoadCount = -1;
+    LdrEntry->TlsIndex = -1;
+    TlsData->TlsDirectory = *TlsDirectory;
+    InsertTailList(&LdrpTlsList, &TlsData->TlsLinks);
+
+    Index = LdrpNumberOfTlsEntries++;
+    TlsData->TlsDirectory.Characteristics = Index;
+
+    /*
+     * During early process startup the calling thread has no TLS vector yet
+     * (and no siblings exist); LdrpAllocateTls() runs later and builds one
+     * that already covers this entry.
+     */
+    if (Teb->ThreadLocalStoragePointer)
+    {
+        /* Grow the loading thread's own vector in place (no other thread
+         * ever dereferences it, so a realloc is safe here) */
+        TlsVector = RtlReAllocateHeap(RtlGetProcessHeap(),
+                                      HEAP_ZERO_MEMORY,
+                                      Teb->ThreadLocalStoragePointer,
+                                      LdrpNumberOfTlsEntries * sizeof(PVOID));
+        if (!TlsVector) return STATUS_NO_MEMORY;
+        Teb->ThreadLocalStoragePointer = TlsVector;
+
+        Status = LdrpAllocateTlsBlock(&TlsData->TlsDirectory, &TlsVector[Index]);
+        if (!NT_SUCCESS(Status)) return Status;
+
+        /* ...and every sibling thread's vector aside-and-swap */
+        LdrpPropagateTlsToLiveThreads(Index, &TlsData->TlsDirectory);
+    }
+
+    /*
+     * Publish the index to the module LAST, with a full barrier: until this
+     * store the module's _tls_index reads 0, which addresses another module's
+     * TLS block.  The InterlockedExchange release-fences every prior vector
+     * grow so that a thread observing the new index is guaranteed to also
+     * observe its own already-grown vector (critical under ARM64 weak
+     * ordering) rather than indexing past its old, smaller vector.
+     */
+    InterlockedExchange((LONG volatile *)TlsData->TlsDirectory.AddressOfIndex,
+                        (LONG)Index);
+
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 NTAPI
 LdrpInitializeTls(VOID)
 {
     PLIST_ENTRY NextEntry, ListHead;
     PLDR_DATA_TABLE_ENTRY LdrEntry;
-    PIMAGE_TLS_DIRECTORY TlsDirectory;
-    PLDRP_TLS_DATA TlsData;
-    ULONG Size;
+    NTSTATUS Status;
 
-    /* Initialize the TLS List */
-    InitializeListHead(&LdrpTlsList);
+    /* Initialize the TLS List (unless a dynamic registration already did) */
+    if (!LdrpTlsList.Flink)
+        InitializeListHead(&LdrpTlsList);
 
-    /* Loop all the modules */
+    /* Register the TLS of every module already loaded (the static import set).
+     * Modules loaded later go through LdrpHandleTlsData() from the init path. */
     ListHead = &NtCurrentPeb()->Ldr->InLoadOrderModuleList;
     NextEntry = ListHead->Flink;
     while (ListHead != NextEntry)
@@ -1461,41 +1778,8 @@ LdrpInitializeTls(VOID)
         LdrEntry = CONTAINING_RECORD(NextEntry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
         NextEntry = NextEntry->Flink;
 
-        /* Get the TLS directory */
-        TlsDirectory = RtlImageDirectoryEntryToData(LdrEntry->DllBase,
-                                                    TRUE,
-                                                    IMAGE_DIRECTORY_ENTRY_TLS,
-                                                    &Size);
-
-        /* Check if we have a directory */
-        if (!TlsDirectory) continue;
-
-        /* Check if the image has TLS */
-        if (!LdrpImageHasTls) LdrpImageHasTls = TRUE;
-
-        /* Show debug message */
-        if (ShowSnaps)
-        {
-            DPRINT1("LDR: Tls Found in %wZ at %p\n",
-                    &LdrEntry->BaseDllName,
-                    TlsDirectory);
-        }
-
-        /* Allocate an entry */
-        TlsData = RtlAllocateHeap(RtlGetProcessHeap(), 0, sizeof(LDRP_TLS_DATA));
-        if (!TlsData) return STATUS_NO_MEMORY;
-
-        /* Lock the DLL and mark it for TLS Usage */
-        LdrEntry->LoadCount = -1;
-        LdrEntry->TlsIndex = -1;
-
-        /* Save the cached TLS data */
-        TlsData->TlsDirectory = *TlsDirectory;
-        InsertTailList(&LdrpTlsList, &TlsData->TlsLinks);
-
-        /* Update the index */
-        *(PLONG)TlsData->TlsDirectory.AddressOfIndex = LdrpNumberOfTlsEntries;
-        TlsData->TlsDirectory.Characteristics = LdrpNumberOfTlsEntries++;
+        Status = LdrpHandleTlsData(LdrEntry);
+        if (!NT_SUCCESS(Status)) return Status;
     }
 
     /* Done setting up TLS, allocate entries */
@@ -1532,11 +1816,17 @@ LdrpAllocateTls(VOID)
         TlsData = CONTAINING_RECORD(NextEntry, LDRP_TLS_DATA, TlsLinks);
         NextEntry = NextEntry->Flink;
 
-        /* Allocate this vector */
-        TlsDataSize = TlsData->TlsDirectory.EndAddressOfRawData -
-                      TlsData->TlsDirectory.StartAddressOfRawData;
+        /* Allocate a per-thread copy of this module's TLS block. Its size is the
+         * initialised raw data PLUS SizeOfZeroFill zero-initialised bytes that
+         * follow it - the module's thread-local variables live in that zero-fill
+         * region, so leaving it out makes the block too small and the module's
+         * own writes overrun it and corrupt the adjacent heap block. Allocate the
+         * full size zeroed and copy only the raw (initialised) part. */
+        TlsDataSize = (TlsData->TlsDirectory.EndAddressOfRawData -
+                       TlsData->TlsDirectory.StartAddressOfRawData) +
+                      TlsData->TlsDirectory.SizeOfZeroFill;
         TlsVector[TlsData->TlsDirectory.Characteristics] = RtlAllocateHeap(RtlGetProcessHeap(),
-                                                                           0,
+                                                                           HEAP_ZERO_MEMORY,
                                                                            TlsDataSize);
         if (!TlsVector[TlsData->TlsDirectory.Characteristics])
         {
@@ -1555,10 +1845,11 @@ LdrpAllocateTls(VOID)
                     TlsVector[TlsData->TlsDirectory.Characteristics]);
         }
 
-        /* Copy the data */
+        /* Copy the initialised raw data (the zero-fill tail stays zeroed) */
         RtlCopyMemory(TlsVector[TlsData->TlsDirectory.Characteristics],
                       (PVOID)TlsData->TlsDirectory.StartAddressOfRawData,
-                      TlsDataSize);
+                      TlsData->TlsDirectory.EndAddressOfRawData -
+                          TlsData->TlsDirectory.StartAddressOfRawData);
     }
 
     /* Done */
