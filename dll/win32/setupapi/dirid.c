@@ -102,6 +102,8 @@ static const WCHAR *create_system_dirid( int dirid )
         GetSystemDirectoryW( buffer, MAX_PATH );
         break;
     case DIRID_DRIVERS:
+    case 13: /* DIRID_DRIVER_STORE */
+        /* ReactOS stages driver packages directly in system32\drivers. */
         GetSystemDirectoryW( buffer, MAX_PATH );
         lstrcatW( buffer, L"\\drivers" );
         break;
