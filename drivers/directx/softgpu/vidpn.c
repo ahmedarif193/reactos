@@ -129,13 +129,151 @@ SoftGpuDdiRecommendFunctionalVidPn(
  * =========================================================================
  */
 
+/* Ensure the source mode set for SourceId holds the current mode (no-op when
+ * a mode is already pinned there). */
+static NTSTATUS
+SoftGpuUpdateSourceModeSet(
+    _In_ PSOFTGPU_DEVICE Device,
+    _In_ D3DKMDT_HVIDPN hVidPn,
+    _In_ CONST DXGK_VIDPN_INTERFACE *VidPnInterface,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID SourceId)
+{
+    D3DKMDT_HVIDPNSOURCEMODESET hModeSet = 0;
+    CONST DXGK_VIDPNSOURCEMODESET_INTERFACE *ModeSetInterface = NULL;
+    CONST D3DKMDT_VIDPN_SOURCE_MODE *PinnedMode = NULL;
+    D3DKMDT_VIDPN_SOURCE_MODE *NewMode = NULL;
+    NTSTATUS Status;
+
+    Status = VidPnInterface->pfnAcquireSourceModeSet(hVidPn, SourceId,
+                                                     &hModeSet,
+                                                     &ModeSetInterface);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = ModeSetInterface->pfnAcquirePinnedModeInfo(hModeSet, &PinnedMode);
+    if (NT_SUCCESS(Status) && PinnedMode != NULL)
+    {
+        ModeSetInterface->pfnReleaseModeInfo(hModeSet, PinnedMode);
+        VidPnInterface->pfnReleaseSourceModeSet(hVidPn, hModeSet);
+        return STATUS_SUCCESS;
+    }
+    VidPnInterface->pfnReleaseSourceModeSet(hVidPn, hModeSet);
+
+    Status = VidPnInterface->pfnCreateNewSourceModeSet(hVidPn, SourceId,
+                                                       &hModeSet,
+                                                       &ModeSetInterface);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = ModeSetInterface->pfnCreateNewModeInfo(hModeSet, &NewMode);
+    if (!NT_SUCCESS(Status))
+    {
+        VidPnInterface->pfnReleaseSourceModeSet(hVidPn, hModeSet);
+        return Status;
+    }
+
+    NewMode->Type = D3DKMDT_RMT_GRAPHICS;
+    NewMode->Format.Graphics.PrimSurfSize.cx = Device->Width;
+    NewMode->Format.Graphics.PrimSurfSize.cy = Device->Height;
+    NewMode->Format.Graphics.VisibleRegionSize.cx = Device->Width;
+    NewMode->Format.Graphics.VisibleRegionSize.cy = Device->Height;
+    NewMode->Format.Graphics.Stride = Device->Width * 4;
+    NewMode->Format.Graphics.PixelFormat = D3DDDIFMT_A8R8G8B8;
+    NewMode->Format.Graphics.ColorBasis = D3DKMDT_CB_SRGB;
+    NewMode->Format.Graphics.PixelValueAccessMode = D3DKMDT_PVAM_DIRECT;
+
+    Status = ModeSetInterface->pfnAddMode(hModeSet, NewMode);
+    if (!NT_SUCCESS(Status))
+    {
+        ModeSetInterface->pfnReleaseModeInfo(hModeSet, NewMode);
+        VidPnInterface->pfnReleaseSourceModeSet(hVidPn, hModeSet);
+        return Status;
+    }
+
+    Status = VidPnInterface->pfnAssignSourceModeSet(hVidPn, SourceId, hModeSet);
+    if (!NT_SUCCESS(Status))
+        VidPnInterface->pfnReleaseSourceModeSet(hVidPn, hModeSet);
+
+    return Status;
+}
+
+/* Ensure the target mode set for TargetId holds the current mode. */
+static NTSTATUS
+SoftGpuUpdateTargetModeSet(
+    _In_ PSOFTGPU_DEVICE Device,
+    _In_ D3DKMDT_HVIDPN hVidPn,
+    _In_ CONST DXGK_VIDPN_INTERFACE *VidPnInterface,
+    _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID TargetId)
+{
+    D3DKMDT_HVIDPNTARGETMODESET hModeSet = 0;
+    CONST DXGK_VIDPNTARGETMODESET_INTERFACE *ModeSetInterface = NULL;
+    CONST D3DKMDT_VIDPN_TARGET_MODE *PinnedMode = NULL;
+    D3DKMDT_VIDPN_TARGET_MODE *NewMode = NULL;
+    NTSTATUS Status;
+
+    Status = VidPnInterface->pfnAcquireTargetModeSet(hVidPn, TargetId,
+                                                     &hModeSet,
+                                                     &ModeSetInterface);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = ModeSetInterface->pfnAcquirePinnedModeInfo(hModeSet, &PinnedMode);
+    if (NT_SUCCESS(Status) && PinnedMode != NULL)
+    {
+        ModeSetInterface->pfnReleaseModeInfo(hModeSet, PinnedMode);
+        VidPnInterface->pfnReleaseTargetModeSet(hVidPn, hModeSet);
+        return STATUS_SUCCESS;
+    }
+    VidPnInterface->pfnReleaseTargetModeSet(hVidPn, hModeSet);
+
+    Status = VidPnInterface->pfnCreateNewTargetModeSet(hVidPn, TargetId,
+                                                       &hModeSet,
+                                                       &ModeSetInterface);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = ModeSetInterface->pfnCreateNewModeInfo(hModeSet, &NewMode);
+    if (!NT_SUCCESS(Status))
+    {
+        VidPnInterface->pfnReleaseTargetModeSet(hVidPn, hModeSet);
+        return Status;
+    }
+
+    NewMode->VideoSignalInfo.VideoStandard = D3DKMDT_VSS_OTHER;
+    NewMode->VideoSignalInfo.TotalSize.cx = Device->Width;
+    NewMode->VideoSignalInfo.TotalSize.cy = Device->Height;
+    NewMode->VideoSignalInfo.ActiveSize.cx = Device->Width;
+    NewMode->VideoSignalInfo.ActiveSize.cy = Device->Height;
+    NewMode->VideoSignalInfo.VSyncFreq.Numerator = 60;
+    NewMode->VideoSignalInfo.VSyncFreq.Denominator = 1;
+    NewMode->VideoSignalInfo.HSyncFreq.Numerator = 60 * Device->Height;
+    NewMode->VideoSignalInfo.HSyncFreq.Denominator = 1;
+    NewMode->VideoSignalInfo.PixelRate =
+        (SIZE_T)Device->Width * Device->Height * 60;
+    NewMode->VideoSignalInfo.ScanLineOrdering = D3DDDI_VSSLO_PROGRESSIVE;
+    NewMode->Preference = D3DKMDT_MP_PREFERRED;
+
+    Status = ModeSetInterface->pfnAddMode(hModeSet, NewMode);
+    if (!NT_SUCCESS(Status))
+    {
+        ModeSetInterface->pfnReleaseModeInfo(hModeSet, NewMode);
+        VidPnInterface->pfnReleaseTargetModeSet(hVidPn, hModeSet);
+        return Status;
+    }
+
+    Status = VidPnInterface->pfnAssignTargetModeSet(hVidPn, TargetId, hModeSet);
+    if (!NT_SUCCESS(Status))
+        VidPnInterface->pfnReleaseTargetModeSet(hVidPn, hModeSet);
+
+    return Status;
+}
+
 /*
  * SoftGpuDdiEnumVidPnCofuncModality
  *
- * Enumerate source modes compatible with the constraining VidPN.
- * Since the ReactOS VidPN mode-set interfaces are not yet implemented,
- * we simply return success.  dxgkrnl will use whatever modes were
- * previously pinned or fall back to its built-in defaults.
+ * Populate unpinned source/target mode sets on every path of the
+ * constraining VidPN with the current display mode (Basic Display model:
+ * a single mode, the boot framebuffer's).
  *
  * IRQL: PASSIVE_LEVEL
  */
@@ -146,6 +284,12 @@ SoftGpuDdiEnumVidPnCofuncModality(
     _In_ CONST DXGKARG_ENUMVIDPNCOFUNCMODALITY *EnumCofuncModality)
 {
     PSOFTGPU_DEVICE Device = (PSOFTGPU_DEVICE)MiniportDeviceContext;
+    CONST DXGK_VIDPN_INTERFACE *VidPnInterface = NULL;
+    D3DKMDT_HVIDPNTOPOLOGY hTopology = 0;
+    CONST DXGK_VIDPNTOPOLOGY_INTERFACE *TopologyInterface = NULL;
+    CONST D3DKMDT_VIDPN_PRESENT_PATH *Path = NULL;
+    CONST D3DKMDT_VIDPN_PRESENT_PATH *NextPath = NULL;
+    NTSTATUS Status;
 
     if (Device == NULL || Device->Magic != SOFTGPU_DEVICE_MAGIC ||
         EnumCofuncModality == NULL)
@@ -153,12 +297,68 @@ SoftGpuDdiEnumVidPnCofuncModality(
         return STATUS_INVALID_PARAMETER;
     }
 
-    DPRINT("SOFTGPU: EnumVidPnCofuncModality "
-           "hConstrainingVidPn=%p PivotType=%d\n",
-           (PVOID)EnumCofuncModality->hConstrainingVidPn,
-           (int)EnumCofuncModality->EnumPivotType);
+    if (Device->DxgkInterface.DxgkCbQueryVidPnInterface == NULL ||
+        Device->Width == 0 || Device->Height == 0)
+    {
+        return STATUS_SUCCESS;
+    }
 
-    return STATUS_GRAPHICS_VIDPN_MODALITY_NOT_SUPPORTED;
+    Status = Device->DxgkInterface.DxgkCbQueryVidPnInterface(
+                 EnumCofuncModality->hConstrainingVidPn,
+                 DXGK_VIDPN_INTERFACE_VERSION_V1,
+                 &VidPnInterface);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = VidPnInterface->pfnGetTopology(EnumCofuncModality->hConstrainingVidPn,
+                                            &hTopology,
+                                            &TopologyInterface);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = TopologyInterface->pfnAcquireFirstPathInfo(hTopology, &Path);
+    if (!NT_SUCCESS(Status) || Path == NULL)
+        return STATUS_SUCCESS;
+
+    while (Path != NULL)
+    {
+        if (!(EnumCofuncModality->EnumPivotType == D3DKMDT_EPT_VIDPNSOURCE &&
+              EnumCofuncModality->EnumPivot.VidPnSourceId == Path->VidPnSourceId))
+        {
+            Status = SoftGpuUpdateSourceModeSet(Device,
+                                                EnumCofuncModality->hConstrainingVidPn,
+                                                VidPnInterface,
+                                                Path->VidPnSourceId);
+            if (!NT_SUCCESS(Status))
+            {
+                TopologyInterface->pfnReleasePathInfo(hTopology, Path);
+                return Status;
+            }
+        }
+
+        if (!(EnumCofuncModality->EnumPivotType == D3DKMDT_EPT_VIDPNTARGET &&
+              EnumCofuncModality->EnumPivot.VidPnTargetId == Path->VidPnTargetId))
+        {
+            Status = SoftGpuUpdateTargetModeSet(Device,
+                                                EnumCofuncModality->hConstrainingVidPn,
+                                                VidPnInterface,
+                                                Path->VidPnTargetId);
+            if (!NT_SUCCESS(Status))
+            {
+                TopologyInterface->pfnReleasePathInfo(hTopology, Path);
+                return Status;
+            }
+        }
+
+        NextPath = NULL;
+        Status = TopologyInterface->pfnAcquireNextPathInfo(hTopology, Path, &NextPath);
+        TopologyInterface->pfnReleasePathInfo(hTopology, Path);
+        if (!NT_SUCCESS(Status))
+            break;
+        Path = NextPath;
+    }
+
+    return STATUS_SUCCESS;
 }
 
 

@@ -325,6 +325,14 @@ struct _DXGKRNL_MINIPORT_CONTEXT
      * DRIVER_INITIALIZATION_DATA layout is used (via DxgkInitialize). */
     BOOLEAN                     UseDodLayout;
 
+    /* TRUE for the in-box basic-display fallback miniport (softgpu) —
+     * the ReactOS equivalent of Windows' MSBDD.  The fallback only holds
+     * the boot display until a real miniport acquires POST display
+     * ownership, at which point dxgkrnl stops it (see
+     * DxgkCbAcquirePostDisplayOwnership).  OS-side policy knob only; no
+     * miniport-visible contract is attached to it. */
+    BOOLEAN                     IsBasicDisplayFallback;
+
     /*
      * Copy of the miniport's RegistryPath (NUL-terminated buffer
      * allocated from NonPagedPool with TAG_DXGK_REGISTRY).
@@ -357,7 +365,25 @@ typedef struct _DXGKRNL_SUBMIT_DMA_BUFFER
     BOOLEAN                     RefreshSharedPrimaryOnRetire;
     PHANDLE                     OpenHandleList;
     UINT                        OpenHandleCount;
+    ULONG                       NodeOrdinal;
+
+    /* Optional monitored-fence signal fired when this submission's
+     * GPU fence retires (WDDM signal-on-completion semantics for
+     * hardware without GPU-writable fence values). */
+    D3DKMT_HANDLE               hSignalSyncObject;
+    ULONG64                     SignalFenceValue;
 } DXGKRNL_SUBMIT_DMA_BUFFER, *PDXGKRNL_SUBMIT_DMA_BUFFER;
+
+/* Per-node completed-fence tracking cap (independent GPU engine queues
+ * can complete out of global fence order). */
+#define DXGK_MAX_TRACKED_NODES 8
+
+/* Per-device in-flight submission budget (1.6): a single device may not
+ * occupy the scheduler queue with more than this many un-retired
+ * submissions; excess submissions get STATUS_DEVICE_BUSY. */
+#define DXGK_DEVICE_MAX_INFLIGHT 256
+/* Aggregate cap across ALL devices a process owns on one adapter. */
+#define DXGK_PROCESS_MAX_INFLIGHT 512
 
 /* ========================================================================
  * DXGKRNL_ADAPTER
@@ -605,6 +631,60 @@ struct _DXGKRNL_ADAPTER
     volatile LONG               DwmCompositionInProgress;
 
     /*
+     * dwm's vblank pacing event, registered by win32k via
+     * IOCTL_VIDEO_DXGK_REGISTER_VBLANK (win32k owns the reference and
+     * unregisters before releasing it). The present timer DPC signals it
+     * every scanout period.
+     */
+    PKEVENT                     DwmVblankEvent;
+
+    /*
+     * Hardware-pointer bridge state: the display driver's XPDM pointer
+     * IOCTLs (IOCTL_VIDEO_SET_POINTER_ATTR/POSITION/ENABLE/DISABLE) are
+     * translated onto the miniport's DxgkDdiSetPointerShape/Position DDIs
+     * in display.c.  Capabilities come from the miniport's
+     * DxgkDdiQueryAdapterInfo(DXGKQAITYPE_DRIVERCAPS), queried once.
+     * All state is written from the display IOCTL dispatch at PASSIVE_LEVEL.
+     */
+    BOOLEAN                     PointerCapsQueried;
+    BOOLEAN                     PointerHwSupported;
+    ULONG                       PointerMaxWidth;
+    ULONG                       PointerMaxHeight;
+    LONG                        PointerX;
+    LONG                        PointerY;
+    BOOLEAN                     PointerVisible;
+    BOOLEAN                     PointerShapeValid;
+
+    /*
+     * Set when the miniport was already stopped through
+     * DxgkDdiStopDeviceAndReleasePostDisplayOwnership (boot display
+     * handover).  DxgkAdapterStop then skips the duplicate
+     * DxgkDdiStopDevice call.
+     */
+    BOOLEAN                     MiniportDeviceStopped;
+
+    /*
+     * TDR watchdog: a 1 Hz timer watches the oldest tracked submission;
+     * when it stops making progress for DXGKP_TDR_STUCK_TICKS ticks a
+     * work item drives DxgkDdiResetFromTimeout/RestartFromTimeout.
+     */
+    KTIMER                      TdrTimer;
+    KDPC                        TdrDpc;
+    WORK_QUEUE_ITEM             TdrWorkItem;
+    volatile LONG               TdrWorkQueued;
+    ULONG                       TdrLastObservedFence;
+    ULONG                       TdrStuckTicks;
+    BOOLEAN                     TdrTimerActive;
+
+    /*
+     * Vblank pacing: miniport CRTC_VSYNC notifications (enabled through
+     * DxgkDdiControlInterrupt at adapter start) set VsyncPending from the
+     * "ISR"; the adapter DPC turns each pulse into a pending-dirty-rect
+     * flush so presents pace to the scanout instead of the fallback timer.
+     */
+    volatile LONG               VsyncPending;
+
+    /*
      * Serializes shadow-fb dirty-rect state shared by the display-control
      * IOCTL path, present timer DPC, and present work item.
      */
@@ -621,6 +701,7 @@ struct _DXGKRNL_ADAPTER
     volatile LONG               SubmitDmaRetireWorkQueued;
     volatile LONG               NextSubmissionFenceId;
     volatile ULONG              LastCompletedSubmissionFenceId;
+    volatile ULONG              NodeLastCompletedFenceId[DXGK_MAX_TRACKED_NODES];
 
     /*
      * Per-VidPnSource present queues.
@@ -683,6 +764,14 @@ struct _DXGKRNL_DEVICE
 
     /* Creation flags (D3DKMT_CREATEDEVICEFLAGS). */
     D3DKMT_CREATEDEVICEFLAGS    Flags;
+
+    /* Per-device GPU budget: submissions in flight (tracked DMA buffers
+     * not yet retired).  Bounds one device's queue occupancy. */
+    volatile LONG               InFlightSubmissions;
+
+    /* Creating process (identity only, for per-process budget
+     * aggregation across this process's devices). */
+    PEPROCESS                   OwnerProcess;
 
     /*
      * Miniport-side device handle returned from DxgkDdiCreateDevice.
@@ -963,6 +1052,18 @@ typedef struct _DXGKRNL_SYNC_OBJECT
     KEVENT                      CpuEvent;
     LIST_ENTRY                  SyncObjListEntry;
     LIST_ENTRY                  DeviceSyncObjListEntry;
+
+    /*
+     * WDDM 2.0 monitored fence: a nonpaged page holding the 64-bit fence
+     * value, mapped read-only into the creating process so user mode can
+     * poll it without an ioctl (D3DDDI_SYNCHRONIZATIONOBJECTINFO2
+     * MonitoredFence.FenceValueCPUVirtualAddress).  Signal paths write the
+     * page through MonitoredValueKernelVa.
+     */
+    PVOID                       MonitoredValueKernelVa;
+    PMDL                        MonitoredValueMdl;
+    PVOID                       MonitoredValueUserVa;
+    PEPROCESS                   MonitoredValueProcess;
 } DXGKRNL_SYNC_OBJECT, *PDXGKRNL_SYNC_OBJECT;
 
 /* ========================================================================
@@ -1178,6 +1279,23 @@ DxgkAdapterStop(
 VOID
 DxgkAdapterRemove(
     _In_ PDXGKRNL_ADAPTER Adapter);
+
+/*
+ * DxgkpQueryDriverCaps
+ *
+ * DXGKQAITYPE_DRIVERCAPS query into a caller buffer of
+ * DXGKP_DRIVERCAPS_QUERY_SIZE bytes.  The generous size absorbs
+ * WDK-size DXGK_DRIVERCAPS writes from miniports built against newer
+ * headers (WDDM 2.x/3.x additions); only the head of the structure —
+ * stable since Vista and mirrored exactly by our DXGK_DRIVERCAPS — may
+ * be interpreted.
+ */
+#define DXGKP_DRIVERCAPS_QUERY_SIZE 512
+
+NTSTATUS
+DxgkpQueryDriverCaps(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Out_writes_bytes_(DXGKP_DRIVERCAPS_QUERY_SIZE) PDXGK_DRIVERCAPS Caps);
 
 /* ========================================================================
  * Function prototypes — pnp.c
@@ -1494,11 +1612,24 @@ DxgkSyncObjectCpuSignal(
 
 NTSTATUS
 NTAPI
+DxgkSyncObjectGpuRetireSignal(
+    _In_ D3DKMT_HANDLE hSyncObject,
+    _In_ UINT64 FenceValue);
+
+NTSTATUS
+NTAPI
 DxgkSyncObjectCpuWait(
     _In_ D3DKMT_HANDLE hDevice,
     _In_ D3DKMT_HANDLE hSyncObject,
     _In_ UINT64 FenceValue,
     _In_ BOOLEAN NonBlocking);
+
+NTSTATUS
+NTAPI
+DxgkSyncObjectAttachMonitoredPage(
+    _In_ D3DKMT_HANDLE hSyncObject,
+    _In_ UINT64 InitialFenceValue,
+    _Out_ PVOID *UserVa);
 
 VOID
 NTAPI
@@ -1600,6 +1731,17 @@ DxgkCheckVidPnExclusiveOwnership(
 /* ========================================================================
  * Function prototypes — display.c  (WDDM ↔ win32ss display bridge)
  * ====================================================================== */
+
+/*
+ * DxgkDisplayVsyncFlush
+ *
+ * Called from the adapter DPC when the miniport reported a CRTC_VSYNC
+ * pulse: flushes pending dirty rects so presents pace to the scanout.
+ * DISPATCH_LEVEL-safe.
+ */
+VOID
+DxgkDisplayVsyncFlush(
+    _In_ PDXGKRNL_ADAPTER Adapter);
 
 /*
  * DxgkDisplayRegister
@@ -1749,21 +1891,46 @@ NTAPI
 DxgkAllocateSubmissionFenceId(
     _In_ PDXGKRNL_ADAPTER Adapter);
 
+/* Teardown-path wait: sleep (1 ms) until a worker-busy flag clears.
+ * PASSIVE_LEVEL only. */
+FORCEINLINE
+VOID
+DxgkpWaitForFlagClear(
+    _In_ volatile LONG *Flag)
+{
+    while (InterlockedCompareExchange((volatile LONG *)Flag, 0, 0) != 0)
+    {
+        LARGE_INTEGER Delay;
+        Delay.QuadPart = -10000; /* 1 ms */
+        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+    }
+}
+
+/* DxgkTrackSubmittedDmaBuffer arguments: zero-init, then set what applies.
+ * SubmissionFenceId and Buffer are mandatory. */
+typedef struct _DXGKRNL_TRACK_DMA_ARGS
+{
+    ULONG                           SubmissionFenceId;
+    ULONG                           NodeOrdinal;
+    D3DKMT_HANDLE                   hSignalSyncObject;
+    ULONG64                         SignalFenceValue;
+    ULONG64                         PresentId;
+    PVOID                           Buffer;
+    ULONG                           Tag;
+    PDXGKRNL_DEVICE                 Device;
+    HANDLE                          SourceAllocationHandle;
+    HANDLE                          RefreshAllocationHandle;
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID  RefreshVidPnSourceId;
+    const RECT                     *RefreshDstRect;
+    CONST HANDLE                   *OpenHandles;
+    UINT                            OpenHandleCount;
+} DXGKRNL_TRACK_DMA_ARGS, *PDXGKRNL_TRACK_DMA_ARGS;
+
 NTSTATUS
 NTAPI
 DxgkTrackSubmittedDmaBuffer(
     _In_ PDXGKRNL_ADAPTER Adapter,
-    _In_ ULONG SubmissionFenceId,
-    _In_ ULONG64 PresentId,
-    _In_ PVOID Buffer,
-    _In_ ULONG Tag,
-    _In_opt_ PDXGKRNL_DEVICE Device,
-    _In_opt_ HANDLE SourceAllocationHandle,
-    _In_opt_ HANDLE RefreshAllocationHandle,
-    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID RefreshVidPnSourceId,
-    _In_opt_ const RECT *RefreshDstRect,
-    _In_reads_opt_(OpenHandleCount) CONST HANDLE *OpenHandles,
-    _In_ UINT OpenHandleCount);
+    _In_ const DXGKRNL_TRACK_DMA_ARGS *Args);
 
 VOID
 NTAPI

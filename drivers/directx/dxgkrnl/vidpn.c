@@ -2334,6 +2334,21 @@ DxgkpDestroySharedPrimary(
 
     if (Adapter->SharedPrimaryAllocationHandle != NULL)
     {
+        /*
+         * Display-only adapters point Adapter->ShadowFb at this allocation's
+         * CPU VA. Drain the present worker and clear it before the allocation
+         * (and its mapping) is freed, or delayed present work scans freed
+         * memory and the UNMAP handler keeps a dangling pointer.
+         */
+        if (Adapter->MiniportContext != NULL &&
+            Adapter->MiniportContext->IsDisplayOnlyDriver)
+        {
+            DxgkpStopPresentTimer(Adapter);
+            Adapter->ShadowFb = NULL;
+            Adapter->ShadowFbPitch = 0;
+            Adapter->ShadowFbSize = 0;
+        }
+
         DxgkVidMmDestroyAllocation(Adapter, Adapter->SharedPrimaryAllocationHandle);
         Adapter->SharedPrimaryAllocationHandle = NULL;
     }

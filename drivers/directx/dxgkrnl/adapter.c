@@ -85,6 +85,354 @@ VOID
 NTAPI
 InbvAcquireDisplayOwnership(VOID);
 
+/* ========================================================================
+ * POST (boot) display ownership
+ *
+ * Windows semantics: exactly one adapter owns the firmware boot display at
+ * a time.  The basic-display fallback (softgpu, the MSBDD equivalent) holds
+ * it only until a real miniport acquires it through
+ * DxgkCbAcquirePostDisplayOwnership, at which point dxgkrnl stops the
+ * fallback adapter (the MSBDD handover).  Conversely, when a real miniport
+ * already owns the boot display, an acquire from the fallback returns an
+ * empty descriptor so its StartDevice declines and the fallback devnode is
+ * torn down.
+ * ====================================================================== */
+static PDXGKRNL_ADAPTER g_PostDisplayOwnerAdapter = NULL;
+
+/*
+ * Stop the adapter currently holding the boot display so a new claimant can
+ * take over.  Uses the documented Win8 handover DDI
+ * (DxgkDdiStopDeviceAndReleasePostDisplayOwnership) when the owner
+ * implements it, then runs the generic adapter stop (which unregisters the
+ * \Device\VideoN display device so the claimant can register its own).
+ */
+static VOID
+DxgkpStopPostDisplayOwner(
+    _In_ PDXGKRNL_ADAPTER Owner)
+{
+    PDXGKDDI_STOP_DEVICE_AND_RELEASE_POST_DISPLAY_OWNERSHIP PfnRelease;
+    DXGK_DISPLAY_INFORMATION ReleasedInfo;
+    NTSTATUS Status;
+
+    DXGKRNL_WARN("DxgkpStopPostDisplayOwner: stopping %s adapter %p — "
+                 "a new miniport is acquiring the boot display\n",
+                 (Owner->MiniportContext != NULL &&
+                  Owner->MiniportContext->IsBasicDisplayFallback)
+                     ? "basic-display fallback" : "display",
+                 Owner);
+
+    if (Owner->State == DxgkAdapterStateStarted)
+    {
+        PfnRelease = DXGK_CB(Owner, DxgkDdiStopDeviceAndReleasePostDisplayOwnership);
+        if (PfnRelease != NULL)
+        {
+            RtlZeroMemory(&ReleasedInfo, sizeof(ReleasedInfo));
+            _SEH2_TRY
+            {
+                Status = PfnRelease(Owner->MiniportDeviceContext, 0, &ReleasedInfo);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+
+            if (NT_SUCCESS(Status))
+                Owner->MiniportDeviceStopped = TRUE;
+            else
+                DXGKRNL_WARN("DxgkpStopPostDisplayOwner: "
+                             "StopDeviceAndReleasePostDisplayOwnership "
+                             "failed 0x%08lX\n", Status);
+        }
+
+        DxgkAdapterStop(Owner);
+    }
+
+    if (g_PostDisplayOwnerAdapter == Owner)
+        g_PostDisplayOwnerAdapter = NULL;
+}
+
+/* Called from DxgkAdapterStop so a stopped adapter never stays the owner. */
+static VOID
+DxgkpClearPostDisplayOwner(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    if (g_PostDisplayOwnerAdapter == Adapter)
+        g_PostDisplayOwnerAdapter = NULL;
+}
+
+/* ========================================================================
+ * Bugcheck-time display
+ *
+ * Windows brings the panic screen up through the display owner's
+ * DxgkDdiSystemDisplayEnable.  The documented plumbing available to a
+ * driver is KeRegisterBugCheckCallback: at bugcheck time the callback
+ * tells the owning miniport to fall back to a kernel-writable linear
+ * frame buffer (rpi5vc4 re-points the HVS at the firmware framebuffer),
+ * after which the Inbv-driven bugcheck output is actually visible.
+ * ====================================================================== */
+
+static KBUGCHECK_CALLBACK_RECORD g_DxgkBugCheckRecord;
+
+static VOID
+NTAPI
+DxgkpBugCheckCallback(
+    _In_opt_ PVOID Buffer,
+    _In_ ULONG Length)
+{
+    PDXGKRNL_ADAPTER Owner = g_PostDisplayOwnerAdapter;
+    PDXGKDDI_SYSTEM_DISPLAY_ENABLE PfnEnable;
+    DXGKARG_SYSTEM_DISPLAY_ENABLE_FLAGS Flags;
+    UINT Width = 0;
+    UINT Height = 0;
+    D3DDDIFORMAT ColorFormat = D3DDDIFMT_UNKNOWN;
+
+    UNREFERENCED_PARAMETER(Buffer);
+    UNREFERENCED_PARAMETER(Length);
+
+    if (Owner == NULL ||
+        Owner->State != DxgkAdapterStateStarted ||
+        Owner->MiniportContext == NULL)
+    {
+        return;
+    }
+
+    PfnEnable = DXGK_CB(Owner, DxgkDdiSystemDisplayEnable);
+    if (PfnEnable == NULL)
+        return;
+
+    RtlZeroMemory(&Flags, sizeof(Flags));
+    (VOID)PfnEnable(Owner->MiniportDeviceContext,
+                    0,
+                    &Flags,
+                    &Width,
+                    &Height,
+                    &ColorFormat);
+}
+
+VOID
+DxgkpRegisterBugCheckCallback(VOID)
+{
+    KeInitializeCallbackRecord(&g_DxgkBugCheckRecord);
+    KeRegisterBugCheckCallback(&g_DxgkBugCheckRecord,
+                               DxgkpBugCheckCallback,
+                               NULL,
+                               0,
+                               (PUCHAR)"dxgkrnl");
+}
+
+/* ========================================================================
+ * TDR watchdog
+ *
+ * A 1 Hz per-adapter timer watches the oldest entry of the tracked
+ * submitted-DMA list.  If the same fence stays at the head for
+ * DXGKP_TDR_STUCK_TICKS consecutive ticks without the miniport reporting
+ * completion, a work item performs the documented timeout recovery:
+ * DxgkDdiResetFromTimeout -> DxgkDdiRestartFromTimeout -> retire.
+ * ====================================================================== */
+
+#define DXGKP_TDR_TICK_MS       1000
+#define DXGKP_TDR_STUCK_TICKS   3
+
+static VOID
+NTAPI
+DxgkpTdrWorker(
+    _In_ PVOID Context)
+{
+    PDXGKRNL_ADAPTER Adapter = (PDXGKRNL_ADAPTER)Context;
+    NTSTATUS Status;
+
+    if (Adapter == NULL)
+        return;
+
+    DXGKRNL_ERR("DxgkpTdrWorker: GPU timeout — fence %lu stuck on "
+                "adapter %p\n", Adapter->TdrLastObservedFence, Adapter);
+
+    /*
+     * Documented TDR escalation: attempt engine preemption first; a hung
+     * submission that preempts cleanly recovers without an adapter reset.
+     * Give the miniport a short window to report DMA_PREEMPTED progress.
+     */
+    if (NT_SUCCESS(VidSchPreemptEngine(Adapter, 0)))
+    {
+        LARGE_INTEGER Delay;
+
+        Delay.QuadPart = -(LONGLONG)(100 * 10 * 1000);  /* 100 ms */
+        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+
+        if (Adapter->LastCompletedSubmissionFenceId !=
+            Adapter->TdrLastObservedFence)
+        {
+            DXGKRNL_ERR("DxgkpTdrWorker: preemption recovered adapter %p "
+                        "(fence %lu -> %lu), skipping reset\n",
+                        Adapter,
+                        Adapter->TdrLastObservedFence,
+                        Adapter->LastCompletedSubmissionFenceId);
+            Adapter->TdrStuckTicks = 0;
+            return;
+        }
+    }
+
+    DXGKRNL_ERR("DxgkpTdrWorker: preemption did not recover — resetting "
+                "adapter %p\n", Adapter);
+
+    /*
+     * Documented TDR order: collect the driver's debug report before the
+     * reset (Windows feeds it into the OCA/watchdog dump).  A small
+     * scratch buffer suffices for the log side effects; content is
+     * currently discarded.
+     */
+    if (DXGK_CB(Adapter, DxgkDdiCollectDbgInfo) != NULL)
+    {
+        DXGKARG_COLLECTDBGINFO CollectArgs;
+        UCHAR DbgBuffer[256];
+
+        RtlZeroMemory(&CollectArgs, sizeof(CollectArgs));
+        RtlZeroMemory(DbgBuffer, sizeof(DbgBuffer));
+        CollectArgs.Reason = 0x117;     /* VIDEO_TDR_TIMEOUT_DETECTED */
+        CollectArgs.pBuffer = DbgBuffer;
+        CollectArgs.BufferSize = sizeof(DbgBuffer);
+
+        _SEH2_TRY
+        {
+            (VOID)DXGK_CB(Adapter, DxgkDdiCollectDbgInfo)(
+                      Adapter->MiniportDeviceContext,
+                      &CollectArgs);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+        _SEH2_END;
+    }
+
+    if (DXGK_CB_FULL(Adapter, DxgkDdiResetFromTimeout) != NULL)
+    {
+        _SEH2_TRY
+        {
+            Status = DXGK_CB_FULL(Adapter, DxgkDdiResetFromTimeout)(
+                         Adapter->MiniportDeviceContext);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+
+        if (!NT_SUCCESS(Status))
+        {
+            DXGKRNL_ERR("DxgkpTdrWorker: ResetFromTimeout failed 0x%08lX\n",
+                        Status);
+        }
+
+        if (DXGK_CB_FULL(Adapter, DxgkDdiRestartFromTimeout) != NULL)
+        {
+            _SEH2_TRY
+            {
+                (VOID)DXGK_CB_FULL(Adapter, DxgkDdiRestartFromTimeout)(
+                          Adapter->MiniportDeviceContext);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+            }
+            _SEH2_END;
+        }
+    }
+
+    /* The reset completed outstanding fences; retire their buffers. */
+    DxgkRetireCompletedDmaBuffers(Adapter);
+
+    InterlockedExchange(&Adapter->TdrWorkQueued, 0);
+}
+
+static VOID
+NTAPI
+DxgkpTdrDpcRoutine(
+    _In_ PKDPC Dpc,
+    _In_opt_ PVOID DeferredContext,
+    _In_opt_ PVOID SystemArgument1,
+    _In_opt_ PVOID SystemArgument2)
+{
+    PDXGKRNL_ADAPTER Adapter = (PDXGKRNL_ADAPTER)DeferredContext;
+    ULONG HeadFence = 0;
+    BOOLEAN Outstanding = FALSE;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    if (Adapter == NULL || !Adapter->TdrTimerActive)
+        return;
+
+    KeAcquireSpinLockAtDpcLevel(&Adapter->SubmitDmaLock);
+    if (!IsListEmpty(&Adapter->SubmitDmaListHead))
+    {
+        PDXGKRNL_SUBMIT_DMA_BUFFER Head =
+            CONTAINING_RECORD(Adapter->SubmitDmaListHead.Flink,
+                              DXGKRNL_SUBMIT_DMA_BUFFER,
+                              ListEntry);
+        HeadFence = Head->SubmissionFenceId;
+        Outstanding = TRUE;
+    }
+    KeReleaseSpinLockFromDpcLevel(&Adapter->SubmitDmaLock);
+
+    if (!Outstanding ||
+        (LONG)(Adapter->LastCompletedSubmissionFenceId - HeadFence) >= 0)
+    {
+        /* Idle, or completed but not yet retired: not stuck. */
+        Adapter->TdrStuckTicks = 0;
+        Adapter->TdrLastObservedFence = HeadFence;
+        return;
+    }
+
+    if (HeadFence != Adapter->TdrLastObservedFence)
+    {
+        Adapter->TdrLastObservedFence = HeadFence;
+        Adapter->TdrStuckTicks = 0;
+        return;
+    }
+
+    if (++Adapter->TdrStuckTicks >= DXGKP_TDR_STUCK_TICKS)
+    {
+        Adapter->TdrStuckTicks = 0;
+        if (InterlockedCompareExchange(&Adapter->TdrWorkQueued, 1, 0) == 0)
+            ExQueueWorkItem(&Adapter->TdrWorkItem, DelayedWorkQueue);
+    }
+}
+
+static VOID
+DxgkpStartTdrWatchdog(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    LARGE_INTEGER Due;
+
+    KeInitializeTimer(&Adapter->TdrTimer);
+    KeInitializeDpc(&Adapter->TdrDpc, DxgkpTdrDpcRoutine, Adapter);
+    ExInitializeWorkItem(&Adapter->TdrWorkItem, DxgkpTdrWorker, Adapter);
+    Adapter->TdrWorkQueued = 0;
+    Adapter->TdrLastObservedFence = 0;
+    Adapter->TdrStuckTicks = 0;
+    Adapter->TdrTimerActive = TRUE;
+
+    Due.QuadPart = -10000LL * DXGKP_TDR_TICK_MS;
+    KeSetTimerEx(&Adapter->TdrTimer, Due, DXGKP_TDR_TICK_MS, &Adapter->TdrDpc);
+}
+
+static VOID
+DxgkpStopTdrWatchdog(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    if (!Adapter->TdrTimerActive)
+        return;
+
+    Adapter->TdrTimerActive = FALSE;
+    KeCancelTimer(&Adapter->TdrTimer);
+    KeRemoveQueueDpc(&Adapter->TdrDpc);
+    KeFlushQueuedDpcs();
+
+    /* A TDR work item may be mid-reset against the miniport; wait it out. */
+    DxgkpWaitForFlagClear(&Adapter->TdrWorkQueued);
+}
+
 /*
  * DxgkpEnsurePostDisplayResolution
  *
@@ -282,23 +630,14 @@ NTSTATUS
 NTAPI
 DxgkTrackSubmittedDmaBuffer(
     _In_ PDXGKRNL_ADAPTER Adapter,
-    _In_ ULONG SubmissionFenceId,
-    _In_ ULONG64 PresentId,
-    _In_ PVOID Buffer,
-    _In_ ULONG Tag,
-    _In_opt_ PDXGKRNL_DEVICE Device,
-    _In_opt_ HANDLE SourceAllocationHandle,
-    _In_opt_ HANDLE RefreshAllocationHandle,
-    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID RefreshVidPnSourceId,
-    _In_opt_ const RECT *RefreshDstRect,
-    _In_reads_opt_(OpenHandleCount) CONST HANDLE *OpenHandles,
-    _In_ UINT OpenHandleCount)
+    _In_ const DXGKRNL_TRACK_DMA_ARGS *Args)
 {
     PDXGKRNL_SUBMIT_DMA_BUFFER Entry;
     KIRQL OldIrql;
     UINT Index;
 
-    if (Adapter == NULL || Buffer == NULL || SubmissionFenceId == 0)
+    if (Adapter == NULL || Args == NULL ||
+        Args->Buffer == NULL || Args->SubmissionFenceId == 0)
         return STATUS_INVALID_PARAMETER;
 
     Entry = ExAllocatePoolWithTag(NonPagedPool,
@@ -307,26 +646,31 @@ DxgkTrackSubmittedDmaBuffer(
     if (Entry == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
 
-    Entry->SubmissionFenceId = SubmissionFenceId;
-    Entry->RefreshPresentId = PresentId;
-    Entry->Buffer = Buffer;
-    Entry->Tag = Tag;
-    Entry->Device = Device;
-    Entry->SourceAllocationHandle = SourceAllocationHandle;
-    Entry->RefreshAllocationHandle = RefreshAllocationHandle;
-    Entry->RefreshVidPnSourceId = RefreshVidPnSourceId;
-    if (RefreshDstRect != NULL)
-        Entry->RefreshDstRect = *RefreshDstRect;
+    Entry->SubmissionFenceId = Args->SubmissionFenceId;
+    Entry->NodeOrdinal = Args->NodeOrdinal % DXGK_MAX_TRACKED_NODES;
+    Entry->hSignalSyncObject = Args->hSignalSyncObject;
+    Entry->SignalFenceValue = Args->SignalFenceValue;
+    Entry->RefreshPresentId = Args->PresentId;
+    if (Args->Device != NULL)
+        InterlockedIncrement(&Args->Device->InFlightSubmissions);
+    Entry->Buffer = Args->Buffer;
+    Entry->Tag = Args->Tag;
+    Entry->Device = Args->Device;
+    Entry->SourceAllocationHandle = Args->SourceAllocationHandle;
+    Entry->RefreshAllocationHandle = Args->RefreshAllocationHandle;
+    Entry->RefreshVidPnSourceId = Args->RefreshVidPnSourceId;
+    if (Args->RefreshDstRect != NULL)
+        Entry->RefreshDstRect = *Args->RefreshDstRect;
     else
         RtlZeroMemory(&Entry->RefreshDstRect, sizeof(Entry->RefreshDstRect));
-    Entry->RefreshSharedPrimaryOnRetire = (RefreshAllocationHandle != NULL);
-    Entry->OpenHandleCount = OpenHandleCount;
+    Entry->RefreshSharedPrimaryOnRetire = (Args->RefreshAllocationHandle != NULL);
+    Entry->OpenHandleCount = Args->OpenHandleCount;
     Entry->OpenHandleList = NULL;
 
-    if (OpenHandleCount != 0)
+    if (Args->OpenHandleCount != 0)
     {
         Entry->OpenHandleList = ExAllocatePoolWithTag(NonPagedPool,
-                                                      OpenHandleCount * sizeof(HANDLE),
+                                                      Args->OpenHandleCount * sizeof(HANDLE),
                                                       TAG_DXGK_SUBMITDMA);
         if (Entry->OpenHandleList == NULL)
         {
@@ -334,8 +678,8 @@ DxgkTrackSubmittedDmaBuffer(
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
-        for (Index = 0; Index < OpenHandleCount; ++Index)
-            Entry->OpenHandleList[Index] = OpenHandles[Index];
+        for (Index = 0; Index < Args->OpenHandleCount; ++Index)
+            Entry->OpenHandleList[Index] = Args->OpenHandles[Index];
     }
 
     KeAcquireSpinLock(&Adapter->SubmitDmaLock, &OldIrql);
@@ -633,6 +977,17 @@ DxgkpFreeTrackedDmaBufferEntry(
     if (Entry->RefreshSharedPrimaryOnRetire)
         DxgkpRefreshTrackedSharedPrimaryScanout(Adapter, Entry);
 
+    if (Entry->Device != NULL)
+        InterlockedDecrement(&Entry->Device->InFlightSubmissions);
+
+    /* GPU completion drives the monitored fence: update the CPU-visible
+     * value page (monotonic) and wake CPU waiters. */
+    if (Entry->hSignalSyncObject != 0)
+    {
+        (VOID)DxgkSyncObjectGpuRetireSignal(Entry->hSignalSyncObject,
+                                            Entry->SignalFenceValue);
+    }
+
     if (Entry->Device != NULL &&
         Entry->OpenHandleCount != 0 &&
         Entry->OpenHandleList != NULL &&
@@ -665,44 +1020,60 @@ DxgkpRetireSubmittedDmaBuffersWorker(
     LIST_ENTRY FreeList;
     KIRQL OldIrql;
 
+    ULONG Batch;
+
     if (Adapter == NULL)
         return;
 
-    for (;;)
+    /*
+     * Bounded batch: under sustained present load an unbounded drain
+     * loop monopolises a Delayed worker thread indefinitely (observed
+     * on RPi5 silicon as 1 Hz "Work Queue Deadlock detected" with 16
+     * dynamic threads spawned).  Free up to one batch, then re-queue
+     * ourselves and RETURN the thread to the pool.
+     */
+    InitializeListHead(&FreeList);
+
     {
-        InitializeListHead(&FreeList);
+    BOOLEAN MorePending = FALSE;
 
-        KeAcquireSpinLock(&Adapter->SubmitDmaLock, &OldIrql);
+    KeAcquireSpinLock(&Adapter->SubmitDmaLock, &OldIrql);
+    for (Batch = 0;
+         Batch < 64 && !IsListEmpty(&Adapter->SubmitDmaRetireListHead);
+         Batch++)
+    {
+        PLIST_ENTRY Link = RemoveHeadList(&Adapter->SubmitDmaRetireListHead);
+        InsertTailList(&FreeList, Link);
+    }
 
-        if (IsListEmpty(&Adapter->SubmitDmaRetireListHead))
-        {
-            InterlockedExchange(&Adapter->SubmitDmaRetireWorkQueued, 0);
-            if (IsListEmpty(&Adapter->SubmitDmaRetireListHead))
-            {
-                KeReleaseSpinLock(&Adapter->SubmitDmaLock, OldIrql);
-                break;
-            }
+    if (IsListEmpty(&Adapter->SubmitDmaRetireListHead))
+    {
+        InterlockedExchange(&Adapter->SubmitDmaRetireWorkQueued, 0);
+    }
+    else
+    {
+        /* More work pending: WE keep the flag set, so producers won't
+         * queue — the re-queue below is ours alone. Re-queueing based on
+         * the flag after a reset would race a producer that re-armed it
+         * and already queued this same WORK_QUEUE_ITEM. */
+        MorePending = TRUE;
+    }
+    KeReleaseSpinLock(&Adapter->SubmitDmaLock, OldIrql);
 
-            InterlockedExchange(&Adapter->SubmitDmaRetireWorkQueued, 1);
-        }
+    while (!IsListEmpty(&FreeList))
+    {
+        PDXGKRNL_SUBMIT_DMA_BUFFER Entry;
 
-        while (!IsListEmpty(&Adapter->SubmitDmaRetireListHead))
-        {
-            PLIST_ENTRY Link = RemoveHeadList(&Adapter->SubmitDmaRetireListHead);
-            InsertTailList(&FreeList, Link);
-        }
+        Entry = CONTAINING_RECORD(RemoveHeadList(&FreeList),
+                                  DXGKRNL_SUBMIT_DMA_BUFFER,
+                                  ListEntry);
+        DxgkpFreeTrackedDmaBufferEntry(Adapter, Entry);
+    }
 
-        KeReleaseSpinLock(&Adapter->SubmitDmaLock, OldIrql);
-
-        while (!IsListEmpty(&FreeList))
-        {
-            PDXGKRNL_SUBMIT_DMA_BUFFER Entry;
-
-            Entry = CONTAINING_RECORD(RemoveHeadList(&FreeList),
-                                      DXGKRNL_SUBMIT_DMA_BUFFER,
-                                      ListEntry);
-            DxgkpFreeTrackedDmaBufferEntry(Adapter, Entry);
-        }
+    if (MorePending)
+    {
+        ExQueueWorkItem(&Adapter->SubmitDmaRetireWorkItem, DelayedWorkQueue);
+    }
     }
 }
 
@@ -725,19 +1096,37 @@ DxgkRetireCompletedDmaBuffers(
 
     InitializeListHead(&RetireList);
 
+    /*
+     * Walk the whole list: independent GPU nodes complete out of global
+     * fence order, so an unreached entry no longer implies everything
+     * behind it is unreached.  Each entry retires against ITS node's
+     * completed fence (falling back to the global fence for node 0
+     * completions reported before per-node tracking existed).
+     */
     KeAcquireSpinLock(&Adapter->SubmitDmaLock, &OldIrql);
-    while (!IsListEmpty(&Adapter->SubmitDmaListHead))
     {
-        PDXGKRNL_SUBMIT_DMA_BUFFER Entry;
-        PLIST_ENTRY Link;
+        PLIST_ENTRY Link = Adapter->SubmitDmaListHead.Flink;
 
-        Link = Adapter->SubmitDmaListHead.Flink;
-        Entry = CONTAINING_RECORD(Link, DXGKRNL_SUBMIT_DMA_BUFFER, ListEntry);
-        if (!DxgkpFenceIdReached(CompletedFenceId, Entry->SubmissionFenceId))
-            break;
+        while (Link != &Adapter->SubmitDmaListHead)
+        {
+            PDXGKRNL_SUBMIT_DMA_BUFFER Entry =
+                CONTAINING_RECORD(Link, DXGKRNL_SUBMIT_DMA_BUFFER, ListEntry);
+            PLIST_ENTRY Next = Link->Flink;
+            ULONG NodeFence =
+                Adapter->NodeLastCompletedFenceId[Entry->NodeOrdinal];
 
-        RemoveEntryList(Link);
-        InsertTailList(&RetireList, Link);
+            if (NodeFence == 0 && Entry->NodeOrdinal == 0)
+                NodeFence = CompletedFenceId;
+
+            if (NodeFence != 0 &&
+                DxgkpFenceIdReached(NodeFence, Entry->SubmissionFenceId))
+            {
+                RemoveEntryList(Link);
+                InsertTailList(&RetireList, Link);
+            }
+
+            Link = Next;
+        }
     }
 
     while (!IsListEmpty(&RetireList))
@@ -849,6 +1238,9 @@ DxgkpFirstInit(VOID)
     /* Seed D3DKMT handle cookie. */
     DxgkContextInit();
 
+    /* Bring the panic screen up through the display owner (see above). */
+    DxgkpRegisterBugCheckCallback();
+
     DXGKRNL_TRACE("DxgkpFirstInit: one-time init complete\n");
 }
 
@@ -933,6 +1325,10 @@ DxgkpAdapterDpcRoutine(
         DXGKRNL_TRACE("DxgkpAdapterDpcRoutine: seq=%ld no miniport DPC routine\n",
                       Sequence);
     }
+
+    /* Turn a vblank pulse into a vsync-paced present flush. */
+    if (InterlockedExchange(&Adapter->VsyncPending, 0) != 0)
+        DxgkDisplayVsyncFlush(Adapter);
 
     DxgkRetireCompletedDmaBuffers(Adapter);
 }
@@ -1344,11 +1740,20 @@ DxgkCbNotifyInterrupt(
         {
             InterlockedExchange((volatile LONG *)&Adapter->LastCompletedSubmissionFenceId,
                                 (LONG)NotifyInterruptData->DmaCompleted.SubmissionFenceId);
+            InterlockedExchange((volatile LONG *)&Adapter->NodeLastCompletedFenceId[
+                                    NotifyInterruptData->DmaCompleted.NodeOrdinal %
+                                    DXGK_MAX_TRACKED_NODES],
+                                (LONG)NotifyInterruptData->DmaCompleted.SubmissionFenceId);
         }
         else if (NotifyInterruptData->InterruptType == DXGK_INTERRUPT_DMA_PREEMPTED)
         {
             InterlockedExchange((volatile LONG *)&Adapter->LastCompletedSubmissionFenceId,
                                 (LONG)NotifyInterruptData->DmaPreempted.LastCompletedFenceId);
+        }
+        else if (NotifyInterruptData->InterruptType == DXGK_INTERRUPT_CRTC_VSYNC)
+        {
+            /* Vblank pulse: the adapter DPC flushes pending dirty rects. */
+            InterlockedExchange(&Adapter->VsyncPending, 1);
         }
         if (c <= 10)
         {
@@ -1608,9 +2013,7 @@ DxgkCbMapMemory(
     PVOID Va;
     ULONGLONG TotalStart100ns;
     ULONGLONG MapStart100ns;
-    ULONGLONG ProbeStart100ns;
     ULONGLONG MapUs = 0;
-    ULONGLONG ProbeUs = 0;
     PCSTR     MapMethod = "mmmapiospace";
 
     PAGED_CODE();
@@ -1763,68 +2166,9 @@ DxgkCbMapMemory(
 
     *VirtualAddress = Va;
 
-    /*
-     * Force per-page TLB invalidation after MmMapIoSpace.
-     * MmMapIoSpace does KeFlushEntireTb which should suffice, but
-     * QEMU TCG can have stale TLB entries if the flush races with
-     * instruction fetch.  Explicit __invlpg per page ensures the
-     * CPU sees the new PTEs before the caller touches the VA.
-     */
-    {
-        ULONG_PTR PageVa;
-        ULONG_PTR EndVa = (ULONG_PTR)Va + Length;
-        for (PageVa = (ULONG_PTR)Va & ~(PAGE_SIZE - 1);
-             PageVa < EndVa;
-             PageVa += PAGE_SIZE)
-        {
-            __invlpg((PVOID)PageVa);
-        }
-        _mm_mfence();
-    }
-
-    /*
-     * Force per-page TLB invalidation and probe read for EVERY page.
-     * On ReactOS amd64, MmMapIoSpace can leave stale TLB entries for
-     * pages beyond the first.  QEMU TCG is particularly sensitive to this.
-     */
-    {
-        ULONG_PTR BaseVa = (ULONG_PTR)Va & ~(PAGE_SIZE - 1);
-        ULONG_PTR EndVa = (ULONG_PTR)Va + Length;
-        ULONG_PTR PageVa;
-
-        ProbeStart100ns = DxgkpTraceNow100ns();
-        for (PageVa = BaseVa; PageVa < EndVa; PageVa += PAGE_SIZE)
-        {
-            __invlpg((PVOID)PageVa);
-        }
-        _mm_mfence();
-
-        /* Probe read each page to trigger PTE fill before miniport access */
-        for (PageVa = BaseVa; PageVa < EndVa; PageVa += PAGE_SIZE)
-        {
-            volatile ULONG ProbeVal;
-            _SEH2_TRY
-            {
-                ProbeVal = *(volatile ULONG *)PageVa;
-                (void)ProbeVal;
-            }
-            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-            {
-                DXGKRNL_ERR("DxgkCbMapMemory: probe FAILED page VA=%p "
-                            "(base=%p PA=0x%I64X)\n",
-                            (PVOID)PageVa, Va, TranslatedAddress.QuadPart);
-                /* Don't crash — just warn.  The miniport may still work
-                 * if it doesn't touch this particular page. */
-            }
-            _SEH2_END;
-        }
-
-        ProbeUs = DxgkpTraceElapsedUs(ProbeStart100ns);
-    }
-
-    DXGKRNL_TRACE("DxgkCbMapMemory: PA=0x%I64X -> VA=%p Len=0x%lX IoSpace=%d UserMode=%d Cache=%d via=%s map=%I64u us probe=%I64u us total=%I64u us\n",
+    DXGKRNL_TRACE("DxgkCbMapMemory: PA=0x%I64X -> VA=%p Len=0x%lX IoSpace=%d UserMode=%d Cache=%d via=%s map=%I64u us total=%I64u us\n",
                   TranslatedAddress.QuadPart, Va, Length, InIoSpace, MapToUserMode, CacheType,
-                  MapMethod, MapUs, ProbeUs, DxgkpTraceElapsedUs(TotalStart100ns));
+                  MapMethod, MapUs, DxgkpTraceElapsedUs(TotalStart100ns));
 
     return STATUS_SUCCESS;
 }
@@ -2438,6 +2782,16 @@ DxgkpAcquireVbeDisplayOwnership(
     PHYSICAL_ADDRESS FbPhysAddr = {{0}};
     ULONG i;
 
+#if !defined(_M_IX86) && !defined(_M_AMD64)
+    /* Legacy port I/O: on ARM64 WRITE_PORT_USHORT((PUSHORT)0x1CE, ...) is a
+     * raw store to VA 0x1CE — a NULL-page fault, observed as a boot-killing
+     * DABORT when no GOP framebuffer exists. There is no I/O port space to
+     * probe; report no VBE device. */
+    UNREFERENCED_PARAMETER(Adapter);
+    UNREFERENCED_PARAMETER(DisplayInformation);
+    return FALSE;
+#endif
+
     /* Probe VBE DISPI ID register to detect bochs-display */
     DispiId = VbeDispiRead(VBE_DISPI_INDEX_ID);
     if (DispiId < VBE_DISPI_ID_MIN || DispiId > VBE_DISPI_ID_MAX)
@@ -2521,6 +2875,35 @@ DxgkCbAcquirePostDisplayOwnership(
     RtlZeroMemory(DisplayInformation, sizeof(*DisplayInformation));
 
     /*
+     * Boot display ownership policy (the MSBDD handover, see
+     * g_PostDisplayOwnerAdapter above):
+     *   - the basic-display fallback never takes the display away from a
+     *     real miniport: it gets an empty descriptor and declines start;
+     *   - a real miniport claiming the display stops the current owner
+     *     (typically the fallback) before acquiring.
+     */
+    {
+        PDXGKRNL_ADAPTER Claimant = (PDXGKRNL_ADAPTER)DeviceHandle;
+        PDXGKRNL_ADAPTER Owner = g_PostDisplayOwnerAdapter;
+
+        if (Claimant != NULL && Owner != NULL && Owner != Claimant)
+        {
+            if (Claimant->MiniportContext != NULL &&
+                Claimant->MiniportContext->IsBasicDisplayFallback &&
+                Owner->MiniportContext != NULL &&
+                !Owner->MiniportContext->IsBasicDisplayFallback)
+            {
+                DXGKRNL_TRACE("DxgkCbAcquirePostDisplayOwnership: boot display "
+                              "already owned by adapter %p — fallback yields\n",
+                              Owner);
+                return STATUS_SUCCESS;
+            }
+
+            DxgkpStopPostDisplayOwner(Owner);
+        }
+    }
+
+    /*
      * If no valid GOP framebuffer was saved by FreeLOADer / InbV the
      * miniport must initialise its pipeline from scratch.  Return a
      * zeroed structure with STATUS_SUCCESS.
@@ -2529,18 +2912,20 @@ DxgkCbAcquirePostDisplayOwnership(
     {
         PDXGKRNL_ADAPTER Adapter = (PDXGKRNL_ADAPTER)DeviceHandle;
 
-        DXGKRNL_ERR("DxgkCbAcquirePostDisplayOwnership: "
-                     "no GOP framebuffer, trying VBE DISPI fallback\n");
+        DXGKRNL_TRACE("DxgkCbAcquirePostDisplayOwnership: "
+                      "no GOP framebuffer, trying VBE DISPI fallback\n");
 
         if (DxgkpAcquireVbeDisplayOwnership(Adapter, DisplayInformation))
         {
-            DXGKRNL_ERR("DxgkCbAcquirePostDisplayOwnership: "
-                         "VBE fallback succeeded total=%I64u us\n",
-                         DxgkpTraceElapsedUs(TotalStart100ns));
+            DXGKRNL_TRACE("DxgkCbAcquirePostDisplayOwnership: "
+                          "VBE fallback succeeded total=%I64u us\n",
+                          DxgkpTraceElapsedUs(TotalStart100ns));
+            g_PostDisplayOwnerAdapter = Adapter;
             return STATUS_SUCCESS;
         }
 
-        DXGKRNL_ERR("DxgkCbAcquirePostDisplayOwnership: "
+        /* Expected on headless boots: the miniport cold-starts. */
+        DXGKRNL_WARN("DxgkCbAcquirePostDisplayOwnership: "
                      "no GOP and no VBE — miniport must cold-start\n");
         return STATUS_SUCCESS;
     }
@@ -2593,6 +2978,22 @@ DxgkCbAcquirePostDisplayOwnership(
                 ColorFormat   = D3DDDIFMT_X8R8G8B8;
                 BytesPerPixel = 4;
             }
+            break;
+
+        /*
+         * The ARM64 loader stores BITS PER PIXEL here rather than the EFI
+         * GOP enum (freeldr GOP detection; the former XPDM consumers
+         * computed BytesPerPixel = (PixelFormat + 7) / 8).  Accept the
+         * two linear formats that convention produces.
+         */
+        case 32:
+            ColorFormat   = D3DDDIFMT_X8R8G8B8;
+            BytesPerPixel = 4;
+            break;
+
+        case 16:
+            ColorFormat   = D3DDDIFMT_R5G6B5;
+            BytesPerPixel = 2;
             break;
 
         default: /* BltOnly or unknown — no usable linear framebuffer */
@@ -2693,6 +3094,8 @@ DxgkCbAcquirePostDisplayOwnership(
     InbvAcquireDisplayOwnership();
     OwnershipUs = DxgkpTraceElapsedUs(StepStart100ns);
 
+    g_PostDisplayOwnerAdapter = (PDXGKRNL_ADAPTER)DeviceHandle;
+
     DXGKRNL_TRACE("DxgkCbAcquirePostDisplayOwnership: gop=%I64u us ownership=%I64u us total=%I64u us\n",
                   GopQueryUs,
                   OwnershipUs,
@@ -2774,11 +3177,176 @@ DxgkpMessageIsrTrampoline(
     _In_ ULONG       MessageNumber)
 {
     PDXGKRNL_ADAPTER Adapter = (PDXGKRNL_ADAPTER)ServiceContext;
+    BOOLEAN Handled = FALSE;
+    ULONG m;
     UNREFERENCED_PARAMETER(Interrupt);
+
+    /*
+     * On ROS ARM64 the interrupt arbiter grants a single GIC vector even for a
+     * multi-message MSI-X device, and pci.sys replicates that vector across the
+     * device's whole MSI-X table (see PciPdoEnableMsix path).  So every queue's
+     * MSI arrives on this one vector with MessageNumber 0.  Poll every message
+     * the device exposes so the miniport checks all of its VirtIO queues and
+     * retires whichever completed — otherwise queue>0 completions are missed and
+     * the command queue stalls.
+     */
+    if (Adapter != NULL && Adapter->InterruptMessageCount > 1)
+    {
+        for (m = 0; m < Adapter->InterruptMessageCount; m++)
+            Handled |= DxgkpInvokeMiniportInterrupt(Adapter, m,
+                                                    "DxgkpMessageIsrTrampoline");
+        return Handled;
+    }
 
     return DxgkpInvokeMiniportInterrupt(Adapter,
                                         MessageNumber,
                                         "DxgkpMessageIsrTrampoline");
+}
+
+/*
+ * DxgkpIsMsixEnabled — read the device's live MSI-X Message Control Enable bit.
+ *
+ * On ROS ARM64 the interrupt resource descriptor handed to the FDO can lack
+ * CM_RESOURCE_INTERRUPT_MESSAGE even after pci.sys has allocated + enabled MSI-X
+ * on the device (the flag is lost in the PnP resource hand-off).  pci.sys enables
+ * MSI-X before the FDO connects its interrupt, so the live Enable bit in config
+ * space is the reliable signal for "connect message-based".
+ */
+static ULONG
+DxgkpIsMsixEnabled(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    ULONG BusNum = 0, SlotNum = 0, Dummy = 0;
+    PCI_SLOT_NUMBER Slot;
+    UCHAR CapPtr = 0, CapId = 0;
+    USHORT MsgCtrl = 0;
+    ULONG Guard = 0;
+
+    if (Adapter == NULL || Adapter->PhysicalDeviceObject == NULL)
+        return 0;
+
+    IoGetDeviceProperty(Adapter->PhysicalDeviceObject,
+                        DevicePropertyBusNumber, sizeof(BusNum), &BusNum, &Dummy);
+    IoGetDeviceProperty(Adapter->PhysicalDeviceObject,
+                        DevicePropertyAddress, sizeof(SlotNum), &SlotNum, &Dummy);
+
+    Slot.u.AsULONG = 0;
+    Slot.u.bits.DeviceNumber = (SlotNum >> 16) & 0x1F;
+    Slot.u.bits.FunctionNumber = SlotNum & 0x7;
+
+    if (HalGetBusDataByOffset(PCIConfiguration, BusNum, Slot.u.AsULONG,
+                              &CapPtr, 0x34 /* Cap ptr */, 1) == 0)
+        return 0;
+
+    while (CapPtr >= 0x40 && CapPtr != 0xFF && Guard++ < 48)
+    {
+        HalGetBusDataByOffset(PCIConfiguration, BusNum, Slot.u.AsULONG,
+                              &CapId, CapPtr, 1);
+        if (CapId == 0x11) /* PCI_CAPABILITY_ID_MSIX */
+        {
+            HalGetBusDataByOffset(PCIConfiguration, BusNum, Slot.u.AsULONG,
+                                  &MsgCtrl, CapPtr + 2, 2);
+            /* Enable = bit 15; low 11 bits = (table size - 1).  Return the MSI-X
+             * table size when enabled, 0 when MSI-X is not enabled. */
+            return (MsgCtrl & 0x8000) ? (((ULONG)(MsgCtrl & 0x07FF)) + 1) : 0;
+        }
+        HalGetBusDataByOffset(PCIConfiguration, BusNum, Slot.u.AsULONG,
+                              &CapPtr, CapPtr + 1 /* next cap */, 1);
+    }
+    return 0;
+}
+
+/*
+ * DxgkpMarkInterruptResourcesMessageBased — set CM_RESOURCE_INTERRUPT_MESSAGE on
+ * every interrupt descriptor in a CM resource list.
+ *
+ * The FDO's interrupt resource descriptor can arrive line-based on ROS ARM64 even
+ * when MSI-X is in use.  The miniport (viogpudo) reads these resources back via
+ * DxgkCbGetDeviceInformation and, if it sees a line-based interrupt, programs its
+ * VirtIO queues for polling (NO_VECTOR) instead of enabling per-queue MSI-X — so
+ * the device never raises a completion MSI.  Once we know we are message-based,
+ * mark the resources accordingly so the miniport enables queue MSI-X.
+ */
+static VOID
+DxgkpMarkInterruptResourcesMessageBased(
+    _In_opt_ PCM_RESOURCE_LIST ResourceList)
+{
+    ULONG li, di;
+
+    if (ResourceList == NULL)
+        return;
+
+    for (li = 0; li < ResourceList->Count; li++)
+    {
+        PCM_PARTIAL_RESOURCE_LIST Partial =
+            &ResourceList->List[li].PartialResourceList;
+        for (di = 0; di < Partial->Count; di++)
+        {
+            PCM_PARTIAL_RESOURCE_DESCRIPTOR Desc =
+                &Partial->PartialDescriptors[di];
+            if (Desc->Type == CmResourceTypeInterrupt)
+                Desc->Flags |= CM_RESOURCE_INTERRUPT_MESSAGE;
+        }
+    }
+}
+
+/*
+ * DxgkpQueryDriverCaps — DXGKQAITYPE_DRIVERCAPS into a caller buffer of
+ * DXGKP_DRIVERCAPS_QUERY_SIZE bytes (see dxgkrnl_private.h).
+ *
+ * First asks with our own sizeof; if the miniport was built against a
+ * newer WDK whose DXGK_DRIVERCAPS is bigger it fails the size check
+ * (STATUS_BUFFER_TOO_SMALL/INVALID_PARAMETER) — retry with the large
+ * zeroed buffer so callers can read the stable head fields.
+ */
+NTSTATUS
+DxgkpQueryDriverCaps(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Out_writes_bytes_(DXGKP_DRIVERCAPS_QUERY_SIZE) PDXGK_DRIVERCAPS Caps)
+{
+    PDXGKDDI_QUERY_ADAPTER_INFO PfnQueryAdapterInfo;
+    DXGKARG_QUERYADAPTERINFO QueryArgs;
+    ULONG Attempt;
+    NTSTATUS Status;
+
+    if (Caps == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    RtlZeroMemory(Caps, DXGKP_DRIVERCAPS_QUERY_SIZE);
+
+    if (Adapter == NULL || Adapter->MiniportContext == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    PfnQueryAdapterInfo = DXGK_CB(Adapter, DxgkDdiQueryAdapterInfo);
+    if (PfnQueryAdapterInfo == NULL)
+        return STATUS_NOT_SUPPORTED;
+
+    Status = STATUS_UNSUCCESSFUL;
+    for (Attempt = 0; Attempt < 2; Attempt++)
+    {
+        RtlZeroMemory(Caps, DXGKP_DRIVERCAPS_QUERY_SIZE);
+        RtlZeroMemory(&QueryArgs, sizeof(QueryArgs));
+        QueryArgs.Type = DXGKQAITYPE_DRIVERCAPS;
+        QueryArgs.pOutputData = Caps;
+        QueryArgs.OutputDataSize = (Attempt == 0) ? sizeof(DXGK_DRIVERCAPS)
+                                                  : DXGKP_DRIVERCAPS_QUERY_SIZE;
+
+        _SEH2_TRY
+        {
+            Status = PfnQueryAdapterInfo(Adapter->MiniportDeviceContext,
+                                         &QueryArgs);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+
+        if (NT_SUCCESS(Status))
+            break;
+    }
+
+    return Status;
 }
 
 /* ========================================================================
@@ -2806,7 +3374,6 @@ DxgkAdapterStart(
     ULONGLONG       AdapterStart100ns;
     ULONGLONG       StepStart100ns;
     ULONGLONG       InterruptConnectUs = 0;
-    ULONGLONG       MsixProgramUs = 0;
     ULONGLONG       MiniportStartUs = 0;
     ULONGLONG       VidMmUs = 0;
     ULONGLONG       VidPnUs = 0;
@@ -2845,9 +3412,11 @@ DxgkAdapterStart(
     }
     else
     {
-        DXGKRNL_ERR("DxgkAdapterStart: NO translated resources! (PDO=%p DOD=%d)\n",
-                    Adapter->PhysicalDeviceObject,
-                    Adapter->MiniportContext ? Adapter->MiniportContext->IsDisplayOnlyDriver : -1);
+        /* Normal for root-enumerated software adapters (softgpu); miniports
+         * that require hardware resources fail their own StartDevice. */
+        DXGKRNL_TRACE("DxgkAdapterStart: no translated resources (PDO=%p DOD=%d)\n",
+                      Adapter->PhysicalDeviceObject,
+                      Adapter->MiniportContext ? Adapter->MiniportContext->IsDisplayOnlyDriver : -1);
     }
 
     /* Save raw PCI resource lists for DxgkCbGetDeviceInformation. */
@@ -2873,14 +3442,13 @@ DxgkAdapterStart(
                 &RawPartialList->PartialDescriptors[ri] : NULL;
             if (Desc->Type == CmResourceTypeInterrupt)
             {
-                /* ROS ARM64's interrupt-resource translation drops the
-                 * CM_RESOURCE_INTERRUPT_MESSAGE flag from the TRANSLATED
-                 * descriptor even though PCI keeps MSI-X enabled (the RAW
-                 * descriptor retains the flag — that is what PciPdoEnableMsix
-                 * keys off).  Trust the RAW descriptor so an MSI-X device is
-                 * connected message-based (CONNECT_MESSAGE_BASED, which keys
-                 * off the PDO's MSI assignment) instead of as a masked line
-                 * interrupt that never fires — the viogpudo Code-10 root cause. */
+                /* A message-signalled (MSI/MSI-X) interrupt carries
+                 * CM_RESOURCE_INTERRUPT_MESSAGE.  On ROS ARM64 the TRANSLATED
+                 * descriptor can drop that flag, so also honour it from the RAW
+                 * descriptor; connect message-based (CONNECT_MESSAGE_BASED) if
+                 * either carries it.  (The .Translated vector/level/affinity of a
+                 * message interrupt overlays u.Interrupt, so it stays valid even
+                 * when the translated flag was dropped.) */
                 Adapter->InterruptMessageBased =
                     ((Desc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE) ||
                      (RawDesc != NULL &&
@@ -2979,6 +3547,24 @@ DxgkAdapterStart(
         IO_CONNECT_INTERRUPT_PARAMETERS ConnectParams;
         RtlZeroMemory(&ConnectParams, sizeof(ConnectParams));
 
+        /* If pci.sys enabled MSI-X on the device but the resource descriptor
+         * arrived line-based (the message flag is dropped in the PnP resource
+         * hand-off on ROS ARM64), connect message-based anyway — the device is
+         * in MSI-X mode and will never assert INTx. */
+        {
+            ULONG MsixSize = DxgkpIsMsixEnabled(Adapter);
+            if (!Adapter->InterruptMessageBased && MsixSize > 0)
+            {
+                DXGKRNL_WARN("DxgkAdapterStart: MSI-X enabled in config (table=%lu) but "
+                             "descriptor was line-based — connecting message-based\n", MsixSize);
+                Adapter->InterruptMessageBased = TRUE;
+                /* All MSI-X table entries share the single granted GIC vector, so
+                 * record the table size: the ISR trampoline polls every message
+                 * on this vector so the miniport checks all of its VirtIO queues. */
+                Adapter->InterruptMessageCount = MsixSize;
+            }
+        }
+
         if (Adapter->InterruptMessageBased)
         {
             ConnectParams.Version = CONNECT_MESSAGE_BASED;
@@ -3028,173 +3614,21 @@ DxgkAdapterStart(
                     Adapter->InterruptMessageTable->MessageInfo[0].InterruptObject;
             }
 
+            /* Tell the miniport (via DxgkCbGetDeviceInformation) that its
+             * interrupt is message-based so it enables per-queue MSI-X instead
+             * of polling; the FDO's descriptor arrived line-based. */
+            if (Adapter->InterruptMessageBased)
+            {
+                DxgkpMarkInterruptResourcesMessageBased(Adapter->AllocatedResources);
+                DxgkpMarkInterruptResourcesMessageBased(Adapter->TranslatedResources);
+            }
+
             DXGKRNL_TRACE("DxgkAdapterStart: Interrupt connected pre-start — "
                           "Vector=%lu MessageBased=%d Count=%lu\n",
                           Adapter->InterruptVector,
                           Adapter->InterruptMessageBased,
                           Adapter->InterruptMessageTable ?
                               Adapter->InterruptMessageTable->MessageCount : 1);
-
-            /*
-             * HACK: Program MSI-X table directly.
-             * ReactOS HAL doesn't program MSI-X table entries.
-             * We need to write the APIC address and vector to the device's
-             * MSI-X table so the hardware can actually deliver interrupts.
-             */
-            {
-                ULONG TableInfo = 0;
-                ULONG BusNum = 0, SlotNum = 0, Dummy = 0;
-                UCHAR CapPtr, CapId;
-
-                StepStart100ns = DxgkpTraceNow100ns();
-                IoGetDeviceProperty(Adapter->PhysicalDeviceObject,
-                                    DevicePropertyBusNumber, sizeof(BusNum), &BusNum, &Dummy);
-                IoGetDeviceProperty(Adapter->PhysicalDeviceObject,
-                                    DevicePropertyAddress, sizeof(SlotNum), &SlotNum, &Dummy);
-
-                /* Walk PCI capabilities to find MSI-X (ID=0x11) */
-                {
-                    PCI_SLOT_NUMBER Slot;
-                    Slot.u.bits.DeviceNumber = (SlotNum >> 16) & 0x1F;
-                    Slot.u.bits.FunctionNumber = SlotNum & 0x7;
-                    Slot.u.bits.Reserved = 0;
-
-                    HalGetBusDataByOffset(PCIConfiguration, BusNum, Slot.u.AsULONG,
-                                          &CapPtr, 0x34, 1); /* Capabilities pointer */
-                    while (CapPtr && CapPtr != 0xFF)
-                    {
-                        HalGetBusDataByOffset(PCIConfiguration, BusNum, Slot.u.AsULONG,
-                                              &CapId, CapPtr, 1);
-                        if (CapId == 0x11) /* MSI-X */
-                        {
-                            HalGetBusDataByOffset(PCIConfiguration, BusNum, Slot.u.AsULONG,
-                                                  &TableInfo, CapPtr + 4, 4);
-                            {
-                                ULONG TableBir = TableInfo & 0x7;
-                                ULONG TableOffset = TableInfo & ~0x7;
-                                PHYSICAL_ADDRESS BarAddr = {{0}};
-                                PVOID TableVa;
-                                PULONG TableEntry;
-                                USHORT MsixFlags;
-
-                                /* Get BAR address from PCI config (read BAR register directly)
-                                 * BAR4 is at PCI config offset 0x20 (0x10 + 4*4) */
-                                {
-                                    ULONG BarReg = 0;
-                                    HalGetBusDataByOffset(PCIConfiguration, BusNum, Slot.u.AsULONG,
-                                                          &BarReg, 0x10 + TableBir * 4, 4);
-                                    BarAddr.LowPart = BarReg & ~0xF; /* mask type bits */
-                                    BarAddr.HighPart = 0;
-                                    /* Check for 64-bit BAR */
-                                    if ((BarReg & 0x6) == 0x4)
-                                    {
-                                        HalGetBusDataByOffset(PCIConfiguration, BusNum, Slot.u.AsULONG,
-                                                              &BarAddr.HighPart, 0x14 + TableBir * 4, 4);
-                                    }
-                                }
-
-                                BarAddr.QuadPart += TableOffset;
-                                /* Map enough for all 3 entries (each 16 bytes) */
-                                TableVa = MmMapIoSpace(BarAddr, 48, MmNonCached);
-                                if (TableVa)
-                                {
-                                    ULONG entry;
-                                    ULONG EntryCount = Adapter->InterruptMessageTable ?
-                                        Adapter->InterruptMessageTable->MessageCount : 0;
-                                    BOOLEAN CollapseToSingleMessage =
-                                        (Adapter->InterruptMessageTable != NULL &&
-                                         EntryCount == 1);
-                                    TableEntry = (PULONG)TableVa;
-
-                                    /*
-                                     * When the miniport uses MSI-X, program each
-                                     * table entry with the kernel-assigned message
-                                     * address/data pair so config, display, and
-                                     * cursor interrupts keep distinct MessageIds.
-                                     */
-                                    if (CollapseToSingleMessage)
-                                    {
-                                        PIO_INTERRUPT_MESSAGE_INFO_ENTRY MsgInfo =
-                                            &Adapter->InterruptMessageTable->MessageInfo[0];
-
-                                        /*
-                                         * ReactOS currently connects only one
-                                         * interrupt message for this device in
-                                         * practice, even though virtio-gpu uses
-                                         * three MSI-X vectors. Route all entries
-                                         * to message 0 so init-time completions
-                                         * can still interrupt instead of waiting
-                                         * for a timeout fallback.
-                                         */
-                                        for (entry = 0; entry < 3; entry++)
-                                        {
-                                            TableEntry[entry*4 + 0] =
-                                                MsgInfo->MessageAddress.LowPart;
-                                            TableEntry[entry*4 + 1] =
-                                                MsgInfo->MessageAddress.HighPart;
-                                            TableEntry[entry*4 + 2] =
-                                                MsgInfo->MessageData;
-                                            TableEntry[entry*4 + 3] = 0;
-                                        }
-
-                                        DXGKRNL_WARN("DxgkAdapterStart: only one MSI message connected; routing all 3 MSI-X entries to message 0\n");
-                                    }
-                                    else
-                                    {
-                                        for (entry = 0; entry < 3; entry++)
-                                        {
-                                            if (Adapter->InterruptMessageTable != NULL &&
-                                                entry < EntryCount)
-                                            {
-                                                PIO_INTERRUPT_MESSAGE_INFO_ENTRY MsgInfo =
-                                                    &Adapter->InterruptMessageTable->MessageInfo[entry];
-                                                TableEntry[entry*4 + 0] =
-                                                    MsgInfo->MessageAddress.LowPart;
-                                                TableEntry[entry*4 + 1] =
-                                                    MsgInfo->MessageAddress.HighPart;
-                                                TableEntry[entry*4 + 2] =
-                                                    MsgInfo->MessageData;
-                                                TableEntry[entry*4 + 3] = 0;
-                                            }
-                                            else
-                                            {
-                                                TableEntry[entry*4 + 0] = 0xFEE00000;
-                                                TableEntry[entry*4 + 1] = 0;
-                                                TableEntry[entry*4 + 2] =
-                                                    Adapter->InterruptVector;
-                                                TableEntry[entry*4 + 3] =
-                                                    (entry == 0) ? 0 : 1;
-                                            }
-                                        }
-                                    }
-                                    MmUnmapIoSpace(TableVa, 48);
-
-                                    /* Enable MSI-X in PCI config */
-                                    HalGetBusDataByOffset(PCIConfiguration, BusNum, Slot.u.AsULONG,
-                                                          &MsixFlags, CapPtr + 2, 2);
-                                    MsixFlags |= 0x8000; /* MSI-X Enable */
-                                    MsixFlags &= ~0x4000; /* Clear Function Mask */
-                                    HalSetBusDataByOffset(PCIConfiguration, BusNum, Slot.u.AsULONG,
-                                                          &MsixFlags, CapPtr + 2, 2);
-
-                                    DXGKRNL_TRACE("DxgkAdapterStart: MSI-X table programmed — "
-                                                  "BAR%lu+0x%lX basevec=%lu count=%lu phys=0x%llX\n",
-                                                  TableBir,
-                                                  TableOffset,
-                                                  Adapter->InterruptVector,
-                                                  Adapter->InterruptMessageTable ?
-                                                      Adapter->InterruptMessageTable->MessageCount : 1,
-                                                  BarAddr.QuadPart);
-                                }
-                            }
-                            break;
-                        }
-                        HalGetBusDataByOffset(PCIConfiguration, BusNum, Slot.u.AsULONG,
-                                              &CapPtr, CapPtr + 1, 1);
-                    }
-                }
-                MsixProgramUs = DxgkpTraceElapsedUs(StepStart100ns);
-            }
         }
         else
             DXGKRNL_ERR("DxgkAdapterStart: IoConnectInterruptEx failed 0x%08lX\n", Status);
@@ -3239,9 +3673,8 @@ DxgkAdapterStart(
         }
         Adapter->AllocatedResources  = NULL;
         Adapter->TranslatedResources = NULL;
-        DXGKRNL_TRACE("DxgkAdapterStart: fail summary connect=%I64u us msix=%I64u us miniport=%I64u us total=%I64u us irq=%ld queue=%ld dpc=%ld\n",
+        DXGKRNL_TRACE("DxgkAdapterStart: fail summary connect=%I64u us miniport=%I64u us total=%I64u us irq=%ld queue=%ld dpc=%ld\n",
                       InterruptConnectUs,
-                      MsixProgramUs,
                       MiniportStartUs,
                       DxgkpTraceElapsedUs(AdapterStart100ns),
                       Adapter->InterruptCount,
@@ -3268,6 +3701,33 @@ DxgkAdapterStart(
         Adapter->AllocatedResources  = NULL;
         Adapter->TranslatedResources = NULL;
         return Status;
+    }
+
+    /*
+     * Discover the GPU node topology from DRIVERCAPS (full WDDM only) so
+     * the scheduler sizes its engine array from what the miniport
+     * reports.
+     */
+    Adapter->NodeCount = 0;
+    if (!Adapter->MiniportContext->IsDisplayOnlyDriver)
+    {
+        PDXGK_DRIVERCAPS Caps;
+
+        Caps = ExAllocatePoolWithTag(NonPagedPool,
+                                     DXGKP_DRIVERCAPS_QUERY_SIZE,
+                                     TAG_DXGK_ADAPTER);
+        if (Caps != NULL)
+        {
+            if (NT_SUCCESS(DxgkpQueryDriverCaps(Adapter, Caps)))
+            {
+                Adapter->NodeCount =
+                    Caps->GpuEngineTopology.NbAsymetricProcessingNodes;
+                DXGKRNL_TRACE("DxgkAdapterStart: %lu GPU node(s) reported\n",
+                              Adapter->NodeCount);
+            }
+
+            ExFreePoolWithTag(Caps, TAG_DXGK_ADAPTER);
+        }
     }
 
     /* Initialise the video scheduler for this adapter (full WDDM only). */
@@ -3341,6 +3801,34 @@ DxgkAdapterStart(
     }
 
     Adapter->State = DxgkAdapterStateStarted;
+
+    /* Watch for stuck submissions (documented TDR recovery). */
+    DxgkpStartTdrWatchdog(Adapter);
+
+    /*
+     * Ask the miniport to deliver vsync notifications; adapters that
+     * report them get vblank-paced present flushes (see display.c).
+     */
+    if (DXGK_CB(Adapter, DxgkDdiControlInterrupt) != NULL)
+    {
+        NTSTATUS VsyncStatus;
+
+        _SEH2_TRY
+        {
+            VsyncStatus = DXGK_CB(Adapter, DxgkDdiControlInterrupt)(
+                              Adapter->MiniportDeviceContext,
+                              DXGK_INTERRUPT_TYPE_CRTC_VSYNC,
+                              TRUE);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            VsyncStatus = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+
+        DXGKRNL_TRACE("DxgkAdapterStart: CRTC_VSYNC enable -> 0x%08lX\n",
+                      VsyncStatus);
+    }
 
     /* Enable the GUID_DISPLAY_DEVICE_ARRIVAL device interface.
      * User-mode components (DXGI, OpenGL ICD loader) and kernel PnP
@@ -3419,9 +3907,8 @@ DxgkAdapterStart(
         }
     }
 
-    DXGKRNL_TRACE("DxgkAdapterStart: summary connect=%I64u us msix=%I64u us miniport=%I64u us vidmm=%I64u us vidpn=%I64u us present=%I64u us display=%I64u us total=%I64u us irq=%ld queue=%ld dpc=%ld\n",
+    DXGKRNL_TRACE("DxgkAdapterStart: summary connect=%I64u us miniport=%I64u us vidmm=%I64u us vidpn=%I64u us present=%I64u us display=%I64u us total=%I64u us irq=%ld queue=%ld dpc=%ld\n",
                   InterruptConnectUs,
-                  MsixProgramUs,
                   MiniportStartUs,
                   VidMmUs,
                   VidPnUs,
@@ -3462,6 +3949,9 @@ DxgkAdapterStop(
         return STATUS_SUCCESS;
     }
 
+    /* Stop the TDR watchdog before the miniport goes away. */
+    DxgkpStopTdrWatchdog(Adapter);
+
     /* Tear down the present queues before the display device. */
     DxgkPresentTeardown(Adapter);
 
@@ -3484,14 +3974,24 @@ DxgkAdapterStop(
     /* Tear down the video memory manager. */
     DxgkVidMmTeardownAdapter(Adapter);
 
-    Status = Adapter->MiniportContext->InitData.s.DxgkDdiStopDevice(
-                 Adapter->MiniportDeviceContext);
-    if (!NT_SUCCESS(Status))
+    if (Adapter->MiniportDeviceStopped)
     {
-        DXGKRNL_ERR("DxgkAdapterStop: DxgkDdiStopDevice failed 0x%08lX\n",
-                    Status);
-        /* Continue with teardown even on failure. */
+        /* Already stopped via StopDeviceAndReleasePostDisplayOwnership. */
+        Adapter->MiniportDeviceStopped = FALSE;
     }
+    else
+    {
+        Status = Adapter->MiniportContext->InitData.s.DxgkDdiStopDevice(
+                     Adapter->MiniportDeviceContext);
+        if (!NT_SUCCESS(Status))
+        {
+            DXGKRNL_ERR("DxgkAdapterStop: DxgkDdiStopDevice failed 0x%08lX\n",
+                        Status);
+            /* Continue with teardown even on failure. */
+        }
+    }
+
+    DxgkpClearPostDisplayOwner(Adapter);
 
     Adapter->AllocatedResources  = NULL;
     Adapter->TranslatedResources = NULL;
@@ -4447,6 +4947,34 @@ DxgkInitializeEx(
     MpCtx->RegistryPath.Buffer        = RegBuf;
     MpCtx->RegistryPath.Length        = RegistryPath->Length;
     MpCtx->RegistryPath.MaximumLength = RegistryPath->Length + sizeof(WCHAR);
+
+    /*
+     * Recognize the in-box basic-display fallback (softgpu) by its service
+     * key name, the same way Windows dxgkrnl special-cases MSBDD.  The
+     * fallback yields the boot display to any real miniport that acquires
+     * POST display ownership.
+     */
+    {
+        UNICODE_STRING ServiceName;
+        ULONG CharIndex = RegistryPath->Length / sizeof(WCHAR);
+
+        while (CharIndex > 0 && RegBuf[CharIndex - 1] != L'\\')
+            CharIndex--;
+
+        RtlInitUnicodeString(&ServiceName, &RegBuf[CharIndex]);
+
+        if (ServiceName.Length > 0)
+        {
+            UNICODE_STRING FallbackName = RTL_CONSTANT_STRING(L"softgpu");
+
+            if (RtlEqualUnicodeString(&ServiceName, &FallbackName, TRUE))
+            {
+                MpCtx->IsBasicDisplayFallback = TRUE;
+                DXGKRNL_TRACE("DxgkInitializeEx: basic-display fallback "
+                              "miniport (%wZ)\n", &ServiceName);
+            }
+        }
+    }
 
     /* --- Hook the miniport DriverObject --------------------------------- */
 
