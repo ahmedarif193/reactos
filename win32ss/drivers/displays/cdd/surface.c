@@ -42,7 +42,6 @@ RcddEnableSurface(
    VIDEO_MEMORY VideoMemory;
    VIDEO_MEMORY_INFORMATION VideoMemoryInfo;
    ULONG ulTemp;
-   ULONG ShadowSize;
    FLONG flHooks = 0;
    PVOID SurfaceBits;
 
@@ -55,11 +54,36 @@ RcddEnableSurface(
    }
 
    /*
-    * Map the WDDM scan-out surface into our address space.
-    *
-    * Option-B upgrade point: replace this IOCTL_VIDEO_MAP_VIDEO_MEMORY with a
-    * D3DKMT CreateAllocation(primary) + lock/map so dxgkrnl owns the
-    * allocation and the scan-out directly.
+    * Re-query the mode dxgkrnl actually committed. RcddInitScreenInfo captured
+    * the geometry at EnablePDEV time, BEFORE CommitVidPn ran — if the committed
+    * native mode differs, drawing with the stale stride would shear the
+    * scan-out. Adopt the committed stride; refuse a width/height mismatch
+    * (GDI was already promised the EnablePDEV geometry).
+    */
+   {
+      VIDEO_MODE_INFORMATION CommittedMode;
+
+      if (!EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_QUERY_CURRENT_MODE,
+                              NULL, 0, &CommittedMode, sizeof(CommittedMode),
+                              &ulTemp))
+      {
+         if (CommittedMode.VisScreenWidth != (ULONG)ppdev->ScreenWidth ||
+             CommittedMode.VisScreenHeight != (ULONG)ppdev->ScreenHeight)
+         {
+            /* Committed native mode differs from what EnablePDEV promised
+             * GDI — a sheared scan-out is worse than no surface. */
+            return NULL;
+         }
+
+         if (CommittedMode.ScreenStride != 0)
+            ppdev->ScreenDelta = CommittedMode.ScreenStride;
+      }
+   }
+
+   /*
+    * Map the DOD primary (dxgkrnl's system-memory scan-out surface) into our
+    * address space. GDI draws straight into it and RcddPresent scans dirty
+    * rectangles out through the miniport's DxgkDdiPresentDisplayOnly.
     */
    VideoMemory.RequestedVirtualAddress = NULL;
    if (EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_MAP_VIDEO_MEMORY,
@@ -71,6 +95,8 @@ RcddEnableSurface(
    }
 
    ppdev->ScreenPtr = VideoMemoryInfo.FrameBufferBase;
+   if (ppdev->ScreenPtr == NULL)
+      return NULL;
 
    switch (ppdev->BitsPerPixel)
    {
@@ -99,22 +125,22 @@ RcddEnableSurface(
    ScreenSize.cy = ppdev->ScreenHeight;
 
    /*
-    * Draw GDI directly into the mapped scan-out. The buffer we map here
-    * (IOCTL_VIDEO_MAP_VIDEO_MEMORY) is dxgkrnl's NonPagedPool shadow framebuffer
-    * (cached system RAM, not slow write-combined MMIO), and dxgkrnl's present
-    * timer scans the WHOLE shadow to the GOP every frame. So a separate cached
-    * CPU shadow with selective dirty-rect presenting buys nothing AND is unsafe:
-    * only HOOK_BITBLT/COPYBITS ops would be presented, so un-hooked engine
-    * drawing (fills, text, alpha, gradients) would stay in the cache and never
-    * reach the screen — the cause of the black desktop region. Hand GDI a plain
-    * DIB straight over the mapping with no hooks (the framebuf model); every
-    * draw lands in the shadow and dxgkrnl presents it. (Option B will swap the
-    * mapping for a D3DKMT primary; the compositor seam is escape.c, not a cache.)
+    * Hand GDI a plain DIB straight over the mapped DOD primary: the GDI engine
+    * draws every operation (blits, text, fills, alpha) directly into the buffer
+    * dxgkrnl's DxgkDdiPresentDisplayOnly reads. There is no separate CPU shadow
+    * or cache, so nothing can be stranded unpresented. We hook
+    * BitBlt/CopyBits/Synchronize only to learn which rectangles changed and then
+    * drive an explicit WDDM dirty-rect present (RcddPresent ->
+    * IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT -> the miniport's PresentDisplayOnly).
+    * This is the display-only equivalent of the canonical driver's honest WDDM
+    * present — driven by cdd, not dxgkrnl's fallback present timer (which stays
+    * as a safety net). The compositor seam is escape.c.
     */
-   UNREFERENCED_PARAMETER(ShadowSize);
-   ppdev->ShadowActive = FALSE;
    SurfaceBits = ppdev->ScreenPtr;
-   flHooks = 0;
+   flHooks = HOOK_BITBLT | HOOK_COPYBITS | HOOK_SYNCHRONIZE |
+             HOOK_TEXTOUT | HOOK_LINETO | HOOK_STROKEPATH |
+             HOOK_FILLPATH | HOOK_STROKEANDFILLPATH | HOOK_STRETCHBLT |
+             HOOK_ALPHABLEND | HOOK_TRANSPARENTBLT | HOOK_GRADIENTFILL;
 
    /*
     * Hand GDI a plain DIB over the draw buffer. No raster ops are implemented
@@ -131,6 +157,10 @@ RcddEnableSurface(
    if (!EngAssociateSurface(hSurface, ppdev->hDevEng, flHooks))
    {
       EngDeleteSurface(hSurface);
+      VideoMemory.RequestedVirtualAddress = ppdev->ScreenPtr;
+      EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_UNMAP_VIDEO_MEMORY,
+                         &VideoMemory, sizeof(VIDEO_MEMORY), NULL, 0, &ulTemp);
+      ppdev->ScreenPtr = NULL;
       return NULL;
    }
 
@@ -153,19 +183,17 @@ RcddDisableSurface(
    VIDEO_MEMORY VideoMemory;
    PRCDD_PDEV ppdev = (PRCDD_PDEV)dhpdev;
 
-   EngDeleteSurface(ppdev->hSurfEng);
-   ppdev->hSurfEng = NULL;
-
-   ppdev->ShadowActive = FALSE;
-   if (ppdev->ShadowPtr != NULL)
+   if (ppdev->hSurfEng != NULL)
    {
-      EngFreeMem(ppdev->ShadowPtr);
-      ppdev->ShadowPtr = NULL;
+      EngDeleteSurface(ppdev->hSurfEng);
+      ppdev->hSurfEng = NULL;
    }
 
-   /* Unmap the scan-out (Option-B: D3DKMT DestroyAllocation instead). */
-   VideoMemory.RequestedVirtualAddress = ppdev->ScreenPtr;
-   EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_UNMAP_VIDEO_MEMORY,
-                      &VideoMemory, sizeof(VIDEO_MEMORY), NULL, 0, &ulTemp);
-   ppdev->ScreenPtr = NULL;
+   if (ppdev->ScreenPtr != NULL)
+   {
+      VideoMemory.RequestedVirtualAddress = ppdev->ScreenPtr;
+      EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_UNMAP_VIDEO_MEMORY,
+                         &VideoMemory, sizeof(VIDEO_MEMORY), NULL, 0, &ulTemp);
+      ppdev->ScreenPtr = NULL;
+   }
 }

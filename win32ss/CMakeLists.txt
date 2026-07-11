@@ -117,6 +117,7 @@ list(APPEND SOURCE
     user/ntuser/clipboard.c
     user/ntuser/console.c
     user/ntuser/csr.c
+    user/ntuser/composition.c
     user/ntuser/cursoricon.c
     user/ntuser/dde.c
     user/ntuser/defwnd.c
