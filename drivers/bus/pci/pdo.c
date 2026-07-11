@@ -407,13 +407,31 @@ PciPdoShouldUseDefaultMessageInterrupts(
         return TRUE;
     }
 
-    if (PciConfig->BaseClass != PCI_CLASS_MASS_STORAGE_CTLR)
-        return FALSE;
+    if ((PciConfig->BaseClass == PCI_CLASS_MASS_STORAGE_CTLR) &&
+        (((PciConfig->SubClass == PCI_SUBCLASS_MSC_AHCI_CTLR) &&
+          (PciConfig->ProgIf == 0x01)) ||
+         ((PciConfig->SubClass == PCI_SUBCLASS_MSC_NVM_CTLR) &&
+          (PciConfig->ProgIf == PCI_PROGRAMMING_INTERFACE_MSC_NVM_EXPRESS))))
+    {
+        return TRUE;
+    }
 
-    return (((PciConfig->SubClass == PCI_SUBCLASS_MSC_AHCI_CTLR) &&
-             (PciConfig->ProgIf == 0x01)) ||
-            ((PciConfig->SubClass == PCI_SUBCLASS_MSC_NVM_CTLR) &&
-             (PciConfig->ProgIf == PCI_PROGRAMMING_INTERFACE_MSC_NVM_EXPRESS)));
+    /*
+     * WDDM display controllers (e.g. the virtio-gpu bound via the
+     * CriticalDeviceDatabase, whose INF [DDInstall.HW] MSISupported policy
+     * therefore never runs) are message-signalled devices: their miniports
+     * service VirtIO/GPU command-queue completions from an MSI/MSI-X ISR.
+     * Default them to message interrupts when the controller exposes MSI-X,
+     * otherwise the PDO hands out a line-based (INTx) interrupt that is never
+     * delivered here and the GPU command queue stalls.
+     */
+    if (PciConfig->BaseClass == PCI_CLASS_DISPLAY_CTLR &&
+        DeviceExtension->PciDevice->MsixCapability != 0)
+    {
+        return TRUE;
+    }
+
+    return FALSE;
 }
 
 #define PCI_ADDRESS_MEMORY_ADDRESS_MASK_64     0xfffffffffffffff0ull
@@ -1083,11 +1101,19 @@ PciPdoDetermineInterruptPolicy(
         PciPdoCacheMsiInfo(DeviceExtension);
         if (PciPdoShouldUseDefaultMessageInterrupts(DeviceExtension))
         {
+            /* Display controllers (e.g. virtio-gpu) use several MSI-X vectors —
+             * config change + one per VirtIO queue (control, cursor).  Allocating
+             * only one leaves the miniport unable to assign its command queue a
+             * vector, so present completions never raise an MSI and the queue
+             * stalls.  Request the device's full table for them. */
+            BOOLEAN IsDisplay =
+                (DeviceExtension->PciDevice->PciConfig.BaseClass == PCI_CLASS_DISPLAY_CTLR);
+
             if (DeviceExtension->PciDevice->MsixCapability)
             {
                 UseMsix = TRUE;
                 UseMsi = FALSE;
-                MessageLimit = 1;
+                MessageLimit = IsDisplay ? 8 : 1;
             }
             else if (DeviceExtension->PciDevice->MsiCapability)
             {
@@ -2703,13 +2729,19 @@ PdoQueryResourceRequirements(
             }
             else
             {
+                ULONG MsgCount = (Options[OptionIndex] == PciRequirementMsix) ?
+                                 MsixMessageCount : MsiMessageCount;
+                if (MsgCount == 0)
+                    MsgCount = 1;
                 Dest->ShareDisposition = CmResourceShareDeviceExclusive;
                 Dest->Flags = CM_RESOURCE_INTERRUPT_LATCHED |
                               CM_RESOURCE_INTERRUPT_MESSAGE;
-                Dest->u.Interrupt.MinimumVector = 1;
-                Dest->u.Interrupt.MaximumVector =
-                    (Options[OptionIndex] == PciRequirementMsix) ?
-                        MsixMessageCount : MsiMessageCount;
+                /* Request the full message count as the minimum too: the arbiter
+                 * otherwise grants only the minimum (1), but multi-queue devices
+                 * (e.g. virtio-gpu: config + control + cursor) need one MSI-X
+                 * vector per queue or their queue completions never raise an MSI. */
+                Dest->u.Interrupt.MinimumVector = MsgCount;
+                Dest->u.Interrupt.MaximumVector = MsgCount;
             }
 
             Dest->u.Interrupt.AffinityPolicy = IrqPolicyMachineDefault;
@@ -3926,6 +3958,27 @@ PdoStartDevice(
                 HasIoResource = TRUE;
             }
         }
+    }
+
+    /*
+     * If the interrupt arbiter falls back to one shared message vector,
+     * multi-queue devices still assign each queue a distinct MSI-X table index.
+     * Replicate that route across the usable table entries so every queue can
+     * signal; the miniport demultiplexes the shared vector in its ISR.
+     */
+    if (UsingMsix && MsixMessages && MsixMessageCount > 0 &&
+        DeviceExtension->PciDevice->PciConfig.BaseClass == PCI_CLASS_DISPLAY_CTLR &&
+        MsixMessageCount < DeviceExtension->PciDevice->MsixTableSize)
+    {
+        ULONG fill;
+        ULONG target = DeviceExtension->PciDevice->MsixTableSize;
+        if (target > MsixMessageLimit)
+            target = MsixMessageLimit;
+        for (fill = MsixMessageCount; fill < target; fill++)
+            MsixMessages[fill] = MsixMessages[0];
+        DPRINT1("PCI PDO: display MSI-X — replicated route across %lu of %u table entries\n",
+                target, DeviceExtension->PciDevice->MsixTableSize);
+        MsixMessageCount = target;
     }
 
     DPRINT1("PCI PDO: MSI/X state UsingMsix=%d MsixMessageCount=%lu MsixMessages=%p UsingMsi=%d\n",
