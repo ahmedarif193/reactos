@@ -1382,8 +1382,6 @@ SkipCheck:
 
         DPRINT("Overlapping DLL: %wZ\n", &OverlapDll);
 
-        /* Are we dealing with a DLL? */
-        if (LdrEntry->Flags & LDRP_IMAGE_DLL)
         {
             /* Check if relocs were stripped */
             if (!(NtHeaders->FileHeader.Characteristics & IMAGE_FILE_RELOCS_STRIPPED))
@@ -1499,11 +1497,11 @@ FailRelocate:
                 DPRINT1("LDR: Fixups %successfully re-applied @ %p\n",
                         NT_SUCCESS(Status) ? "s" : "uns", ViewBase);
             }
-        }
-        else
-        {
+
+            goto RelocDone;
+
 NoRelocNeeded:
-            /* Not a DLL, or no relocation needed */
+            /* No relocation needed */
             Status = STATUS_SUCCESS;
 
             /* Stuff the image name in the TIB, for the debugger */
@@ -1528,8 +1526,9 @@ NoRelocNeeded:
             /* Show debug message */
             if (ShowSnaps)
             {
-                DPRINT1("LDR: Fixups won't be re-applied to non-Dll @ %p\n", ViewBase);
+                DPRINT1("LDR: Fixups not re-applied, no relocation data @ %p\n", ViewBase);
             }
+RelocDone:;
         }
     }
 
