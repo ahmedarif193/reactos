@@ -126,10 +126,57 @@ GetDpiForMonitorInternal(
 BOOL
 WINAPI
 LogicalToPhysicalPoint(
-    _In_ HWND hwnd, 
+    _In_ HWND hwnd,
     _Inout_ POINT *point )
 {
     UNIMPLEMENTED;
     return TRUE;
 }
 
+/*
+ * @implemented
+ */
+BOOL
+WINAPI
+EnableNonClientDpiScaling(
+    _In_ HWND hwnd)
+{
+    /* ReactOS does not perform per-monitor non-client DPI scaling, so there is
+     * nothing to enable. Report success so callers that invoke this from their
+     * WM_NCCREATE handler (e.g. GLFW) proceed with window creation instead of
+     * calling through a NULL import. */
+    UNREFERENCED_PARAMETER(hwnd);
+    return TRUE;
+}
+
+/*
+ * @implemented
+ */
+BOOL
+WINAPI
+AdjustWindowRectExForDpi(
+    _Inout_ LPRECT lpRect,
+    _In_ DWORD dwStyle,
+    _In_ BOOL bMenu,
+    _In_ DWORD dwExStyle,
+    _In_ UINT dpi)
+{
+    /* ReactOS renders at the system DPI (96), so the DPI-scaled frame metrics
+     * are identical to the non-scaled ones; defer to AdjustWindowRectEx. */
+    UNREFERENCED_PARAMETER(dpi);
+    return AdjustWindowRectEx(lpRect, dwStyle, bMenu, dwExStyle);
+}
+
+/*
+ * @implemented
+ */
+int
+WINAPI
+GetSystemMetricsForDpi(
+    _In_ int nIndex,
+    _In_ UINT dpi)
+{
+    /* At the system DPI (96) the per-DPI metric equals the plain one. */
+    UNREFERENCED_PARAMETER(dpi);
+    return GetSystemMetrics(nIndex);
+}

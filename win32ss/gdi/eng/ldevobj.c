@@ -279,14 +279,15 @@ LDEVOBJ_bUnloadImage(
 
     /* Unload the driver */
 #if 0
+    /* Enabling the real unload (07-05) correlated with random pool/PFN
+     * corruption on silicon (rig-logs/0705-*crash*): the zero-ref and
+     * load-failure paths free images something still references.  Keep
+     * the historical never-unload behavior until the refcounting is
+     * audited; the reload-blocker in sysldr IS fixed. */
     Status = ZwSetSystemInformation(SystemUnloadGdiDriverInformation,
                                     &pldev->pGdiDriverInfo->SectionPointer,
                                     sizeof(HANDLE));
 #else
-    /* Unfortunately, ntoskrnl allows unloading a driver, but fails loading
-     * it again with STATUS_IMAGE_ALREADY_LOADED. Prevent this problem by
-     * never unloading any driver.
-     */
     UNIMPLEMENTED;
     Status = STATUS_NOT_IMPLEMENTED;
 #endif
@@ -566,7 +567,7 @@ LDEVOBJ_bBuildDevmodeList(
     _Inout_ PGRAPHICS_DEVICE pGraphicsDevice)
 {
     PWSTR pwsz;
-    PDEVMODEINFO pdminfo;
+    PDEVMODEINFO pdminfo, pdminfoTail = NULL;
     PDEVMODEW pdm, pdmEnd;
     ULONG i, cModes = 0;
     ULONG cbSize, cbFull;
@@ -606,9 +607,16 @@ LDEVOBJ_bBuildDevmodeList(
         RtlCopyMemory(pdminfo->adevmode, pdm, cbSize);
         ExFreePoolWithTag(pdm, GDITAG_DEVMODE);
 
-        /* Attach the mode info to the device */
-        pdminfo->pdmiNext = pGraphicsDevice->pdevmodeInfo;
-        pGraphicsDevice->pdevmodeInfo = pdminfo;
+        /* Append the mode info so the device's mode list preserves the
+         * InstalledDisplayDrivers order (first driver = preferred). Prepending
+         * reverses it, making the LAST driver win — which would let the framebuf
+         * fallback shadow the preferred cdd driver. */
+        pdminfo->pdmiNext = NULL;
+        if (pdminfoTail)
+            pdminfoTail->pdmiNext = pdminfo;
+        else
+            pGraphicsDevice->pdevmodeInfo = pdminfo;
+        pdminfoTail = pdminfo;
 
         /* Loop all DEVMODEs */
         pdmEnd = (DEVMODEW*)((PCHAR)pdminfo->adevmode + pdminfo->cbdevmode);

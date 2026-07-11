@@ -83,6 +83,13 @@ static const WCHAR *create_system_dirid( int dirid )
         GetSystemDirectoryW( buffer, MAX_PATH );
         break;
     case DIRID_DRIVERS:
+    /* DIRID 13 is the modern Windows "driver store" / driver-package
+     * directory (Win10+ driver packages run in place from the DriverStore).
+     * ReactOS has no DriverStore and stages every driver file into
+     * system32\drivers, so resolve %13% there, exactly like DIRID_DRIVERS.
+     * Without this, %13%\foo.sys expands to system32\unknown\foo.sys and the
+     * service ImagePath points at a nonexistent file (device fails to start). */
+    case 13:
         GetSystemDirectoryW( buffer, MAX_PATH );
         strcatW( buffer, Drivers );
         break;

@@ -1965,10 +1965,13 @@ public:
 
         if (hwndRude)
         {
-            // Make the taskbar bottom
-            UINT uFlags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER;
-            HWND hwndTray = m_Tray->GetHWND();
-            ::SetWindowPos(hwndTray, HWND_BOTTOM, 0, 0, 0, 0, uFlags);
+            if (!g_TaskbarSettings.sr.AlwaysOnTop)
+            {
+                // Make the taskbar bottom
+                UINT uFlags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER;
+                HWND hwndTray = m_Tray->GetHWND();
+                ::SetWindowPos(hwndTray, HWND_BOTTOM, 0, 0, 0, 0, uFlags);
+            }
 
             // Switch to the rude app if necessary
             DWORD exstyle = (DWORD)::GetWindowLongPtrW(hwndRude, GWL_EXSTYLE);

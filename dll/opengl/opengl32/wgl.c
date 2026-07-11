@@ -11,6 +11,26 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(wgl);
 
+ULONG __cdecl DbgPrint(_In_z_ _Printf_format_string_ PCSTR Format, ...);
+
+/* Renderer-selection proof line: the serial log must show, per process,
+ * whether GL contexts render in software or through a hardware ICD. */
+static VOID
+IntLogRendererOnce(BOOL bIcd)
+{
+    static LONG s_Logged = 0;
+
+    if (InterlockedCompareExchange(&s_Logged, 1, 0) == 0)
+    {
+        WCHAR Exe[260];
+
+        Exe[0] = 0;
+        GetModuleFileNameW(NULL, Exe, 260);
+        DbgPrint("OPENGL32: %ws renders with %s\n", Exe,
+                 bIcd ? "the HARDWARE ICD" : "the SOFTWARE Mesa implementation (no ICD)");
+    }
+}
+
 static CRITICAL_SECTION dc_data_cs = {NULL, -1, 0, 0, 0, 0};
 static struct wgl_dc_data* dc_data_list = NULL;
 
@@ -404,12 +424,14 @@ HGLRC WINAPI wglCreateContext(HDC hdc)
 
     if(!dc_data->icd_data)
     {
+        IntLogRendererOnce(FALSE);
         TRACE("Calling SW implementation.\n");
         dhglrc = sw_CreateContext(dc_data);
         TRACE("done\n");
     }
     else
     {
+        IntLogRendererOnce(TRUE);
         TRACE("Calling ICD.\n");
         dhglrc = dc_data->icd_data->DrvCreateContext(hdc);
     }
@@ -474,10 +496,12 @@ HGLRC WINAPI wglCreateLayerContext(HDC hdc, int iLayerPlane)
             SetLastError(ERROR_INVALID_PIXEL_FORMAT);
             return NULL;
         }
+        IntLogRendererOnce(FALSE);
         dhglrc = sw_CreateContext(dc_data);
     }
     else
     {
+        IntLogRendererOnce(TRUE);
         dhglrc = dc_data->icd_data->DrvCreateLayerContext(hdc, iLayerPlane);
     }
 
@@ -845,8 +869,15 @@ BOOL WINAPI wglSetPixelFormat(HDC hdc, INT format, const PIXELFORMATDESCRIPTOR *
         ret = dc_data->icd_data->DrvSetPixelFormat(hdc, format);
         if(ret)
         {
+            extern BOOL WINAPI GdiSetPixelFormat(HDC, INT);
+
             TRACE("Success!\n");
             dc_data->pixelformat = format;
+            /* Record the format with win32k as Windows opengl32 does (the
+             * compositor's GL-window bookkeeping hangs off it). The native
+             * validation can fail on a KMDOD display that exposes no GDI
+             * formats -- the ICD owns this format, so the return is ignored. */
+            GdiSetPixelFormat(hdc, format);
         }
         return ret;
     }
