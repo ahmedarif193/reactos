@@ -53,3 +53,9 @@ void FASTCALL DceFreeWindowDCE(PWND);
 void FASTCALL DceFreeThreadDCE(PTHREADINFO);
 VOID FASTCALL DceUpdateVisRgn(DCE *Dce, PWND Window, ULONG Flags);
 DCE* FASTCALL DceGetDceFromDC(HDC hdc);
+
+/* LockWindowUpdate state (windc.c). */
+extern PWND gspwndLockUpdate;
+BOOL FASTCALL IntIsLockUpdateSuppressed(PWND Wnd, ULONG DcxFlags);
+VOID FASTCALL DceUnredirectAllDCs(VOID);
+VOID FASTCALL DceRedirectAllDCs(VOID);
