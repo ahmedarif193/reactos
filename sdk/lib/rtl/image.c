@@ -480,10 +480,11 @@ LdrRelocateImageWithBias(
     _In_ ULONG Invalid)
 {
     PIMAGE_NT_HEADERS NtHeaders;
-    PIMAGE_DATA_DIRECTORY RelocationDDir;
     PIMAGE_BASE_RELOCATION RelocationDir, RelocationEnd;
     ULONG Count;
+    ULONG RelocationSize;
     ULONG_PTR Address;
+    ULONGLONG PreferredBase;
     PUSHORT TypeOffset;
     LONGLONG Delta;
 
@@ -499,16 +500,27 @@ LdrRelocateImageWithBias(
         return Conflict;
     }
 
-    RelocationDDir = &NtHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
+    RelocationDir = RtlImageDirectoryEntryToData(BaseAddress,
+                                                 TRUE,
+                                                 IMAGE_DIRECTORY_ENTRY_BASERELOC,
+                                                 &RelocationSize);
 
-    if (SWAPD(RelocationDDir->VirtualAddress) == 0 || SWAPD(RelocationDDir->Size) == 0)
+    if (RelocationDir == NULL || RelocationSize == 0)
     {
         return Success;
     }
 
-    Delta = (ULONG_PTR)BaseAddress - SWAPD(NtHeaders->OptionalHeader.ImageBase) + AdditionalBias;
-    RelocationDir = (PIMAGE_BASE_RELOCATION)((ULONG_PTR)BaseAddress + SWAPD(RelocationDDir->VirtualAddress));
-    RelocationEnd = (PIMAGE_BASE_RELOCATION)((ULONG_PTR)RelocationDir + SWAPD(RelocationDDir->Size));
+    if (SWAPW(NtHeaders->OptionalHeader.Magic) == IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+    {
+        PreferredBase = SWAPQ(((PIMAGE_NT_HEADERS64)NtHeaders)->OptionalHeader.ImageBase);
+    }
+    else
+    {
+        PreferredBase = SWAPD(((PIMAGE_NT_HEADERS32)NtHeaders)->OptionalHeader.ImageBase);
+    }
+
+    Delta = (ULONG_PTR)BaseAddress - PreferredBase + AdditionalBias;
+    RelocationEnd = (PIMAGE_BASE_RELOCATION)((ULONG_PTR)RelocationDir + RelocationSize);
 
     while (RelocationDir < RelocationEnd &&
             SWAPW(RelocationDir->SizeOfBlock) > 0)
