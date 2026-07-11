@@ -45,7 +45,7 @@ RpcThreadRoutine(
     RPC_STATUS Status;
 
     Status = RpcServerUseProtseqEpW(L"ncacn_np", 20, L"\\pipe\\srvsvc", NULL);
-    if (Status != RPC_S_OK)
+    if (Status != RPC_S_OK && Status != RPC_S_ALREADY_LISTENING)
     {
         ERR("RpcServerUseProtseqEpW() failed (Status %lx)\n", Status);
         return 0;
