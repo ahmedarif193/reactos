@@ -41,6 +41,29 @@
 #define CDD_ESCAPE_COMPOSITION_SYNC 0x44574D02
 #define CDD_ESCAPE_REGISTER_VBLANK  0x44574D03
 
+/*
+ * cdd -> dxgkrnl present-path IOCTLs (kernel side of the same contract).
+ *   PRESENT_DIRTY_RECT - explicit dirty-rectangle present: cdd draws straight
+ *                        into the mapped DOD primary and asks dxgkrnl to scan
+ *                        the rectangle out through the miniport's
+ *                        DxgkDdiPresentDisplayOnly. Input: one RECTL.
+ *   COMPOSITION_BEGIN/END - present bracket around a composed-frame blit so
+ *                        the present worker never scans out a half-composed
+ *                        primary; END flushes the dirty rects accumulated
+ *                        during the composition.
+ *   REGISTER_VBLANK    - forwards the CDD_ESCAPE_REGISTER_VBLANK payload
+ *                        (ULONGLONG holding a referenced PKEVENT, 0 clears);
+ *                        the present timer signals it every scanout period.
+ */
+#define IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x920, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_VIDEO_DXGK_COMPOSITION_BEGIN \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x921, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_VIDEO_DXGK_COMPOSITION_END \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x922, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_VIDEO_DXGK_REGISTER_VBLANK \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x923, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
 #include <pshpack4.h>
 
 /* LayerFlags bits (match winuser LWA_*). */

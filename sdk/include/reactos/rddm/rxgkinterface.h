@@ -18,6 +18,25 @@
  * we don't match 1:1 yet. Or haven't bother attempting to do so.
  */
 
+/* \Device\DxgKrnl IOCTL device type (win32k <-> dxgkrnl). */
+#define DXGKRNL_DEVICE_TYPE     0x23
+
+/*
+ * Kernel-to-kernel interface exchange (IRP_MJ_INTERNAL_DEVICE_CONTROL): win32k
+ * sends its version at initialization, dxgkrnl validates it and returns the
+ * REACTOS_WIN32K_DXGKRNL_INTERFACE callback table.
+ */
+#define IOCTL_DXGKRNL_EXCHANGE_INTERFACE \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x200, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define DXGKRNL_INTERFACE_VERSION_1  1
+
+typedef struct _DXGKRNL_INTERFACE_EXCHANGE_IN
+{
+    ULONG Version;      /* Must be DXGKRNL_INTERFACE_VERSION_1 */
+    ULONG Size;         /* sizeof(REACTOS_WIN32K_DXGKRNL_INTERFACE) */
+} DXGKRNL_INTERFACE_EXCHANGE_IN, *PDXGKRNL_INTERFACE_EXCHANGE_IN;
+
 /* REACTOS_WIN32K_DXGKRNL_INTERFACE function Pointers: */
 
 typedef

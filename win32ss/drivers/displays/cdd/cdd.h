@@ -28,29 +28,8 @@
 #include <winioctl.h>
 #include <ntddvdeo.h>
 
-/*
- * dxgkrnl explicit dirty-rectangle present (see win32ss/../dxgkrnl/display.c).
- * cdd draws straight into the mapped DOD primary, then asks dxgkrnl to scan the
- * dirty rectangle out through the miniport's DxgkDdiPresentDisplayOnly — the
- * WDDM display-only present path, driven by the canonical display driver rather
- * than dxgkrnl's fallback present timer. Input buffer is a single RECTL.
- */
-#ifndef IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT
-#define IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT \
-    CTL_CODE(FILE_DEVICE_VIDEO, 0x920, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#endif
-#ifndef IOCTL_VIDEO_DXGK_COMPOSITION_BEGIN
-#define IOCTL_VIDEO_DXGK_COMPOSITION_BEGIN \
-    CTL_CODE(FILE_DEVICE_VIDEO, 0x921, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_VIDEO_DXGK_COMPOSITION_END \
-    CTL_CODE(FILE_DEVICE_VIDEO, 0x922, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#endif
-#ifndef IOCTL_VIDEO_DXGK_REGISTER_VBLANK
-#define IOCTL_VIDEO_DXGK_REGISTER_VBLANK \
-    CTL_CODE(FILE_DEVICE_VIDEO, 0x923, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#endif
-
-/* DWM compositor control channel (CDD_ESCAPE_*): shared with win32k. */
+/* DWM composition contract (CDD_ESCAPE_*, IOCTL_VIDEO_DXGK_*): shared with
+ * win32k and dxgkrnl. */
 #include <reactos/dwmframe.h>
 
 typedef struct _RCDD_PDEV
