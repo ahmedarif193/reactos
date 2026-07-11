@@ -1024,13 +1024,18 @@ VOID FASTCALL IntLinkHwnd(PWND Wnd, HWND hWndPrev)
     else if (hWndPrev == HWND_TOP)
     {
         /* Link it after the last topmost window */
-        PWND WndInsertBefore;
+        PWND WndInsertBefore, WndLastTopmost = NULL;
 
         WndInsertBefore = Wnd->spwndParent->spwndChild;
 
         if (!(Wnd->ExStyle & WS_EX_TOPMOST))  /* put it above the first non-topmost window */
         {
-            while (WndInsertBefore != NULL && WndInsertBefore->spwndNext != NULL)
+            /* Walk the WHOLE topmost band: stopping at the last sibling
+             * regardless of its style linked a normal window at the HEAD
+             * when everything above was topmost (e.g. only the taskbar) —
+             * normal windows then piled ABOVE the topmost band and fought
+             * the tray's HWND_TOPMOST reasserts forever. */
+            while (WndInsertBefore != NULL)
             {
                 if (!(WndInsertBefore->ExStyle & WS_EX_TOPMOST))
                     break;
@@ -1040,11 +1045,12 @@ VOID FASTCALL IntLinkHwnd(PWND Wnd, HWND hWndPrev)
                     Wnd->ExStyle |= WS_EX_TOPMOST;
                     break;
                 }
+                WndLastTopmost = WndInsertBefore;
                 WndInsertBefore = WndInsertBefore->spwndNext;
             }
         }
 
-        IntLinkWindow(Wnd, WndInsertBefore ? WndInsertBefore->spwndPrev : NULL);
+        IntLinkWindow(Wnd, WndInsertBefore ? WndInsertBefore->spwndPrev : WndLastTopmost);
     }
     else
     {

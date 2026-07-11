@@ -278,6 +278,12 @@ DefWndDoSizeMove(PWND pwnd, WORD wParam)
    // Show window contents while dragging the window, get flag from registry data.
    //
    UserSystemParametersInfo(SPI_GETDRAGFULLWINDOWS, 0, &DragFullWindows, 0);
+   /* Outline (XOR) drag cannot coexist with composition — a compose between
+    * the frame's draw and erase bakes the pattern into the primary. Composited
+    * desktops always drag full windows (DWM behavior), regardless of the
+    * user's registry preference. */
+   if (gbCompositionEnabled)
+      DragFullWindows = TRUE;
 
    pt.x = pti->ptLast.x;
    pt.y = pti->ptLast.y;
@@ -1208,12 +1214,15 @@ NC_DoNCPaint(PWND pWnd, HDC hDC, INT Flags)
 
       if (Active)
       {
-         if (pWnd->state & WNDS_ACTIVEFRAME)
-            Flags |= DC_ACTIVE;
-         else
-         {
-            ERR("Wnd is active and not set active!\n");
-         }
+         /* The window is on the foreground queue, so its caption must draw
+          * active. WNDS_ACTIVEFRAME is only a redraw-cache synced by
+          * IntSendNCPaint against the thread queue's spwndActive, which
+          * diverges for foreground-queue windows that are not that queue's
+          * active window (popups/menus, and the repeated NC repaints during
+          * a drag). Self-heal the flag here instead of drawing inactive. */
+         if (!(pWnd->state & WNDS_ACTIVEFRAME))
+            pWnd->state |= WNDS_ACTIVEFRAME;
+         Flags |= DC_ACTIVE;
       }
 
       TempRect = CurrentRect;
