@@ -3057,7 +3057,10 @@ RtlReAllocateHeap(HANDLE HeapPtr,
             /* Growing in place failed, so growing out of place */
             if (Flags & HEAP_REALLOC_IN_PLACE_ONLY)
             {
-                DPRINT1("Realloc in place failed, but it was the only option\n");
+                /* Expected fallback (caller handles NULL); keep off the
+                 * always-on channel — LLVM JIT hits this per shader and the
+                 * serial flood throttles the whole guest. */
+                DPRINT("Realloc in place failed, but it was the only option\n");
                 Ptr = NULL;
             }
             else

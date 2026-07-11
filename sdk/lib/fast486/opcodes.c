@@ -3839,7 +3839,7 @@ FAST486_OPCODE_HANDLER(Fast486OpcodeMovLoadSeg)
         return;
     }
 
-    if (!Fast486LoadSegment(State, (FAST486_SEG_REGS)ModRegRm.Register, Selector))
+    if (!Fast486LoadSegment(State, ModRegRm.Register, Selector))
     {
         /* Exception occurred */
         return;
