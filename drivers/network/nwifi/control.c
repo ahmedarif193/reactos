@@ -10,33 +10,6 @@
 #define NDEBUG
 #include <debug.h>
 
-/* NdisRegisterDeviceEx / NdisDeregisterDeviceEx are exported by the NDIS
- * library but not declared in the current ReactOS ndis.h; declare them here
- * with the Windows DDK layout. */
-#ifndef NDIS_DEVICE_OBJECT_ATTRIBUTES_REVISION_1
-#define NDIS_DEVICE_OBJECT_ATTRIBUTES_REVISION_1    1
-
-typedef struct _NDIS_DEVICE_OBJECT_ATTRIBUTES
-{
-    NDIS_OBJECT_HEADER Header;
-    PNDIS_STRING       DeviceName;
-    PNDIS_STRING       SymbolicName;
-    PDRIVER_DISPATCH  *MajorFunctions;
-    ULONG              ExtensionSize;
-    PUNICODE_STRING    DefaultSDDLString;
-    LPGUID             DeviceClassGuid;
-} NDIS_DEVICE_OBJECT_ATTRIBUTES, *PNDIS_DEVICE_OBJECT_ATTRIBUTES;
-
-NDIS_STATUS NTAPI NdisRegisterDeviceEx(
-    _In_  NDIS_HANDLE     NdisHandle,
-    _In_  PNDIS_DEVICE_OBJECT_ATTRIBUTES DeviceObjectAttributes,
-    _Out_ PDEVICE_OBJECT *pDeviceObject,
-    _Out_ PNDIS_HANDLE    NdisDeviceHandle);
-
-NDIS_STATUS NTAPI NdisDeregisterDeviceEx(
-    _In_ NDIS_HANDLE NdisDeviceHandle);
-#endif /* NDIS_DEVICE_OBJECT_ATTRIBUTES_REVISION_1 */
-
 /* Handle returned by NdisRegisterDeviceEx (for teardown). */
 static NDIS_HANDLE gNwifiControlDeviceHandle = NULL;
 
