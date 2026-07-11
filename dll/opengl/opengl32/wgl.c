@@ -11,6 +11,8 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(wgl);
 
+extern BOOL APIENTRY GdiSetPixelFormat(HDC hdc, INT ipfd);
+
 static CRITICAL_SECTION dc_data_cs = {NULL, -1, 0, 0, 0, 0};
 static struct wgl_dc_data* dc_data_list = NULL;
 
@@ -847,6 +849,8 @@ BOOL WINAPI wglSetPixelFormat(HDC hdc, INT format, const PIXELFORMATDESCRIPTOR *
         {
             TRACE("Success!\n");
             dc_data->pixelformat = format;
+            /* Keep win32k's window/DC bookkeeping in sync with the ICD. */
+            GdiSetPixelFormat(hdc, format);
         }
         return ret;
     }
