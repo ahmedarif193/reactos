@@ -187,13 +187,38 @@ DceDeleteClipRgn(DCE* Dce)
    IntGdiSetHookFlags(Dce->hDC, DCHF_INVALIDATEVISRGN);
 }
 
-VOID
-FASTCALL
+/* LockWindowUpdate: the single system-wide update-locked window. Drawing
+ * into it (or its children) gets an empty visible region unless the caller
+ * passes DCX_LOCKWINDOWUPDATE (the drag artists). */
+PWND gspwndLockUpdate = NULL;
+
+BOOL FASTCALL
+IntIsLockUpdateSuppressed(PWND Wnd, ULONG DcxFlags)
+{
+   if (gspwndLockUpdate == NULL || Wnd == NULL)
+      return FALSE;
+   if (DcxFlags & DCX_LOCKWINDOWUPDATE)
+      return FALSE;
+   return (Wnd == gspwndLockUpdate ||
+           IntIsChildWindow(gspwndLockUpdate, Wnd));
+}
+
+VOID FASTCALL
 DceUpdateVisRgn(DCE *Dce, PWND Window, ULONG Flags)
 {
    PREGION RgnVisible = NULL;
    ULONG DcxFlags;
    PWND DesktopWindow;
+
+   if (IntIsLockUpdateSuppressed(Window, Flags))
+   {
+      RgnVisible = IntSysCreateRectpRgn(0, 0, 0, 0);
+      Dce->DCXFlags &= ~DCX_DCEDIRTY;
+      GdiSelectVisRgn(Dce->hDC, RgnVisible);
+      if (RgnVisible != NULL)
+         REGION_Delete(RgnVisible);
+      return;
+   }
 
    if (Flags & DCX_PARENTCLIP)
    {
@@ -281,6 +306,18 @@ DceReleaseDC(DCE* dce, BOOL EndPaint)
    if (DCX_DCEBUSY != (dce->DCXFlags & (DCX_INDESTROY | DCX_DCEEMPTY | DCX_DCEBUSY)))
    {
       return 0;
+   }
+
+   /* Undo any compositor redirect before a CACHE DC is cleaned/cached, so the
+    * backing-surface ref is released and does not outlive the window. GL windows
+    * are the exception: they hold this DC handle (fb->Hdc) across frames and
+    * present via SetDIBitsToDevice on it, so keeping it redirected is what lands
+    * their SwapBuffers output in the backing. */
+   if (dce->DCXFlags & DCX_CACHE)
+   {
+      IntCompositionDcRelease(dce->pwndOrg);
+      if (!IntCompositionIsGLWindow(dce->pwndOrg))
+         IntCompositionUnredirectDC(dce->hDC);
    }
 
    /* Restore previous visible region */
@@ -600,6 +637,12 @@ UserGetDCEx(PWND Wnd OPTIONAL, HANDLE ClipRegion, ULONG Flags)
 
    if (bUpdateVisRgn) DceUpdateVisRgn(Dce, Wnd, Flags);
 
+   /* When composition is enabled, redirect this window DC into its top-level
+    * ancestor's backing surface (no-op otherwise). */
+   IntCompositionRedirectDC(Wnd, Dce->hDC, Dce->DCXFlags, Dce->hrgnClip, bUpdateVisRgn);
+   if (Dce->DCXFlags & DCX_CACHE)
+      IntCompositionDcAcquire(Wnd);
+
    if (Dce->DCXFlags & DCX_CACHE)
    {
       TRACE("ENTER!!!!!! DCX_CACHE!!!!!!   hDC-> %p\n", Dce->hDC);
@@ -702,6 +745,13 @@ DceFreeWindowDCE(PWND Window)
      if ( pDCE->hwndCurrent == UserHMGetHandle(Window) &&
           !(pDCE->DCXFlags & DCX_DCEEMPTY) )
      {
+        /* The window is going away: undo any compositor redirect now so the
+         * backing-surface reference cannot outlive it (non-busy cache DCEs
+         * below are emptied without a DceReleaseDC; GL windows skip the
+         * release-time unredirect). */
+        if (GreIsHandleValid(pDCE->hDC))
+           IntCompositionUnredirectDC(pDCE->hDC);
+
         if (!(pDCE->DCXFlags & DCX_CACHE)) /* Owned or Class DCE */
         {
            if (Window->pcls->style & CS_CLASSDC) /* Test Class first */
@@ -798,6 +848,49 @@ DceFreeThreadDCE(PTHREADINFO pti)
 }
 
 VOID FASTCALL
+DceUnredirectAllDCs(VOID)
+{
+   PDCE pDCE;
+   PLIST_ENTRY ListEntry;
+
+   ListEntry = LEDce.Flink;
+   while (ListEntry != &LEDce)
+   {
+      pDCE = CONTAINING_RECORD(ListEntry, DCE, List);
+      ListEntry = ListEntry->Flink;
+      if (GreIsHandleValid(pDCE->hDC))
+         IntCompositionUnredirectDC(pDCE->hDC);
+   }
+}
+
+/* Composition just turned on: retarget every live DC — including long-held
+ * ones (the SW OpenGL implementation keeps its window DC across frames) —
+ * into the owning window's backing surface. Inverse of DceUnredirectAllDCs. */
+VOID FASTCALL
+DceRedirectAllDCs(VOID)
+{
+   PDCE pDCE;
+   PWND pWnd;
+   PLIST_ENTRY ListEntry;
+
+   ListEntry = LEDce.Flink;
+   while (ListEntry != &LEDce)
+   {
+      pDCE = CONTAINING_RECORD(ListEntry, DCE, List);
+      ListEntry = ListEntry->Flink;
+      if (pDCE->DCXFlags & (DCX_DCEEMPTY | DCX_INDESTROY))
+         continue;
+      if (!pDCE->hwndCurrent || !GreIsHandleValid(pDCE->hDC))
+         continue;
+      pWnd = UserGetWindowObject(pDCE->hwndCurrent);
+      if (pWnd == NULL)
+         continue;
+      IntCompositionRedirectDC(pWnd, pDCE->hDC, pDCE->DCXFlags, pDCE->hrgnClip, TRUE);
+      IntGdiSetHookFlags(pDCE->hDC, DCHF_VALIDATEVISRGN);
+   }
+}
+
+VOID FASTCALL
 DceEmptyCache(VOID)
 {
    PDCE pDCE;
@@ -820,6 +913,7 @@ DceResetActiveDCEs(PWND Window)
    PWND CurrentWindow;
    INT DeltaX;
    INT DeltaY;
+   BOOL bRedirected;
    PLIST_ENTRY ListEntry;
 
    if (NULL == Window)
@@ -853,6 +947,18 @@ DceResetActiveDCEs(PWND Window)
          if (!GreIsHandleValid(pDCE->hDC) ||
              (dc = DC_LockDc(pDCE->hDC)) == NULL)
          {
+            continue;
+         }
+         bRedirected = !!(dc->fs & DC_REDIRECTION);
+         if (bRedirected)
+         {
+            /* Redirected DC: origin/VisRgn are backing-relative and stay valid
+             * across a pure move; never write screen-space values into it (a
+             * cross-thread draw would land smeared in the backing). Re-derive
+             * absolutely instead (covers resize → new backing). */
+            DC_UnlockDc(dc);
+            IntCompositionRedirectDC(CurrentWindow, pDCE->hDC, pDCE->DCXFlags, pDCE->hrgnClip, TRUE);
+            IntGdiSetHookFlags(pDCE->hDC, DCHF_VALIDATEVISRGN);
             continue;
          }
          if (Window == CurrentWindow || IntIsChildWindow(Window, CurrentWindow))
@@ -1041,6 +1147,57 @@ NtUserSelectPalette(HDC  hDC,
     oldPal = GdiSelectPalette( hDC, hpal, ForceBackground);
     UserLeave();
     return oldPal;
+}
+
+/*
+ * LockWindowUpdate: lock (hWnd != NULL) or unlock (hWnd == NULL) drawing to
+ * one window system-wide. While locked, DCs for the window and its children
+ * get an empty visible region (except DCX_LOCKWINDOWUPDATE callers — the
+ * drag artists); the unlock invalidates the window so suppressed drawing is
+ * repainted.
+ *
+ * @implemented
+ */
+BOOL APIENTRY
+NtUserLockWindowUpdate(HWND hWnd)
+{
+   PWND Wnd = NULL;
+   BOOL Ret = TRUE;
+
+   UserEnterExclusive();
+
+   if (hWnd != NULL)
+   {
+      Wnd = UserGetWindowObject(hWnd);
+      if (Wnd == NULL)
+      {
+         Ret = FALSE;
+         goto Exit;
+      }
+
+      /* Only one window can be update-locked at a time. */
+      if (gspwndLockUpdate != NULL)
+      {
+         Ret = (gspwndLockUpdate == Wnd);
+         goto Exit;
+      }
+
+      gspwndLockUpdate = Wnd;
+      DceResetActiveDCEs(Wnd);
+   }
+   else if (gspwndLockUpdate != NULL)
+   {
+      PWND Old = gspwndLockUpdate;
+
+      gspwndLockUpdate = NULL;
+      DceResetActiveDCEs(Old);
+      co_UserRedrawWindow(Old, NULL, NULL,
+                          RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
+   }
+
+Exit:
+   UserLeave();
+   return Ret;
 }
 
 /* EOF */

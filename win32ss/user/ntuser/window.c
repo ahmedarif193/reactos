@@ -595,6 +595,10 @@ LRESULT co_UserFreeWindow(PWND Window,
    Window->style &= ~WS_VISIBLE;
    Window->head.pti->cVisWindows--;
 
+   /* Release the compositor's backing surface for this window (no-op when
+    * composition is off / the window was never redirected). */
+   IntCompositionOnWindowDestroy(Window);
+
    /* remove the window already at this point from the thread window list so we
       don't get into trouble when destroying the thread windows while we're still
       in co_UserFreeWindow() */
@@ -724,6 +728,9 @@ LRESULT co_UserFreeWindow(PWND Window,
    }
 
    DceFreeWindowDCE(Window);    /* Always do this to catch orphaned DCs */
+
+   if (gspwndLockUpdate == Window)
+      gspwndLockUpdate = NULL;
 
    IntUnlinkWindow(Window);
 
@@ -2592,6 +2599,10 @@ co_UserCreateWindowEx(CREATESTRUCTW* Cs,
 
    TRACE("co_UserCreateWindowEx(%wZ): Created window %p\n", ClassName, hWnd);
    ret = Window;
+
+   /* Give the compositor a backing (redirection) surface for this window when
+    * composition is enabled (no-op otherwise). */
+   IntCompositionOnWindowCreate(Window);
 
 cleanup:
    if (!ret)

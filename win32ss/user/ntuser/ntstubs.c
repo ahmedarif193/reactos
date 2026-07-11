@@ -905,16 +905,6 @@ NtUserCtxDisplayIOCtl(
     return 0;
 }
 
-/*
- * @unimplemented
- */
-BOOL APIENTRY
-NtUserLockWindowUpdate(HWND hWnd)
-{
-    STUB;
-    return FALSE;
-}
-
 DWORD APIENTRY
 NtUserQuerySendMessage(DWORD Unknown0)
 {

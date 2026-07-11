@@ -10,10 +10,12 @@
 /*
  * The GDI display DDI table. win32k retrieves this from RcddEnableDriver and
  * calls each hook by INDEX_*, so the C symbol names are private (Rcdd*). cdd is
- * a non-accelerated driver: it deliberately does NOT hook DrvTextOut /
- * DrvStrokePath / DrvLineTo / DrvPaint - GDI's software rasterizer renders
- * those into the bitmap surface we hand it. We only hook BitBlt / CopyBits /
- * SynchronizeSurface so we can present (flush) the rectangles GDI touches.
+ * a non-accelerated driver: every draw hook punts straight to the GDI engine
+ * rasterizer. The hooks exist ONLY to learn which rectangles changed and drive
+ * an explicit WDDM dirty-rect present — every primitive that can touch the
+ * primary is hooked, so nothing reaches the screen without a present (the
+ * fallback timer is suppressed around dirty activity and must never be the
+ * sole carrier of a primitive's output).
  */
 static const DRVFN gaRcddDriverFunctions[] =
 {
@@ -30,6 +32,15 @@ static const DRVFN gaRcddDriverFunctions[] =
    {INDEX_DrvBitBlt, (PFN)RcddBitBlt},
    {INDEX_DrvCopyBits, (PFN)RcddCopyBits},
    {INDEX_DrvSynchronizeSurface, (PFN)RcddSynchronizeSurface},
+   {INDEX_DrvTextOut, (PFN)RcddTextOut},
+   {INDEX_DrvLineTo, (PFN)RcddLineTo},
+   {INDEX_DrvStrokePath, (PFN)RcddStrokePath},
+   {INDEX_DrvFillPath, (PFN)RcddFillPath},
+   {INDEX_DrvStrokeAndFillPath, (PFN)RcddStrokeAndFillPath},
+   {INDEX_DrvStretchBlt, (PFN)RcddStretchBlt},
+   {INDEX_DrvAlphaBlend, (PFN)RcddAlphaBlend},
+   {INDEX_DrvTransparentBlt, (PFN)RcddTransparentBlt},
+   {INDEX_DrvGradientFill, (PFN)RcddGradientFill},
    {INDEX_DrvEscape, (PFN)RcddEscape},
 };
 
@@ -151,11 +162,6 @@ RcddDisablePDEV(
    if (ppdev->PaletteEntries != NULL)
    {
       EngFreeMem(ppdev->PaletteEntries);
-   }
-
-   if (ppdev->ShadowPtr != NULL)
-   {
-      EngFreeMem(ppdev->ShadowPtr);
    }
 
    RcddDisableHardwarePointer(ppdev);

@@ -1344,8 +1344,13 @@ NtGdiStretchDIBitsInternal(
         pvBits = NULL;
     }
 
-    /* Here we select between the dwRop with SRCCOPY or not. */
-    if (dwRop == SRCCOPY)
+    /* Here we select between the dwRop with SRCCOPY or not. A 1:1 SRCCOPY
+     * (no scaling) skips the compatible-bitmap intermediate below — that path
+     * allocates a DC+bitmap and copies the pixels TWICE per call (DIB->bitmap
+     * then bitmap->screen), which dominates the GL SwapBuffers hot path. It
+     * falls through to the direct DIB->surface blit, which takes the fast
+     * BitBlt path for an equal-size copy. */
+    if (dwRop == SRCCOPY && (cxSrc != cxDst || cySrc != cyDst))
     {
         hdcMem = NtGdiCreateCompatibleDC(hdc);
         if (hdcMem == NULL)
@@ -1481,7 +1486,8 @@ NtGdiStretchDIBitsInternal(
                               pdc->pdcattr->crBackgroundClr,
                               pdc->pdcattr->crForegroundClr);
 
-        /* Perform the stretch operation */
+        /* Perform the stretch operation (equal extents delegate to the fast
+         * IntEngBitBlt path inside IntEngStretchBlt). */
         IntEngStretchBlt(&psurfDst->SurfObj,
                          &psurfTmp->SurfObj,
                          NULL,
