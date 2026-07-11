@@ -1791,16 +1791,23 @@ ScmWaitForServiceConnect(PSERVICE Service)
         dwError = GetLastError();
         if (dwError == ERROR_IO_PENDING)
         {
+            HANDLE WaitHandles[2];
+            DWORD WaitCount = 1;
+
             DPRINT("dwError: ERROR_IO_PENDING\n");
 
-            dwError = WaitForSingleObject(Service->lpImage->hControlPipe,
-                                          PipeTimeout);
-            DPRINT("WaitForSingleObject() returned %lu\n", dwError);
+            WaitHandles[0] = Service->lpImage->hControlPipe;
+            if (Service->lpImage->hProcess != NULL)
+                WaitHandles[WaitCount++] = Service->lpImage->hProcess;
 
-            if (dwError == WAIT_TIMEOUT)
+            dwError = WaitForMultipleObjects(WaitCount,
+                                             WaitHandles,
+                                             FALSE,
+                                             PipeTimeout);
+            DPRINT("WaitForMultipleObjects() returned %lu\n", dwError);
+
+            if (dwError == WAIT_TIMEOUT || dwError == WAIT_OBJECT_0 + 1)
             {
-                DPRINT("WaitForSingleObject() returned WAIT_TIMEOUT\n");
-
                 bResult = CancelIo(Service->lpImage->hControlPipe);
                 if (bResult == FALSE)
                 {
@@ -1817,7 +1824,15 @@ ScmWaitForServiceConnect(PSERVICE Service)
                             2,
                             lpLogStrings);
 #endif
-                DPRINT1("Log EVENT_CONNECTION_TIMEOUT by %S\n", Service->lpDisplayName);
+                if (dwError == WAIT_OBJECT_0 + 1)
+                {
+                    DPRINT1("Service %S exited without connecting the control pipe\n",
+                            Service->lpDisplayName);
+                }
+                else
+                {
+                    DPRINT1("Log EVENT_CONNECTION_TIMEOUT by %S\n", Service->lpDisplayName);
+                }
 
                 return ERROR_SERVICE_REQUEST_TIMEOUT;
             }
@@ -1860,14 +1875,21 @@ ScmWaitForServiceConnect(PSERVICE Service)
         dwError = GetLastError();
         if (dwError == ERROR_IO_PENDING)
         {
+            HANDLE WaitHandles[2];
+            DWORD WaitCount = 1;
+
             DPRINT("dwError: ERROR_IO_PENDING\n");
 
-            dwError = WaitForSingleObject(Service->lpImage->hControlPipe,
-                                          PipeTimeout);
-            if (dwError == WAIT_TIMEOUT)
-            {
-                DPRINT("WaitForSingleObject() returned WAIT_TIMEOUT\n");
+            WaitHandles[0] = Service->lpImage->hControlPipe;
+            if (Service->lpImage->hProcess != NULL)
+                WaitHandles[WaitCount++] = Service->lpImage->hProcess;
 
+            dwError = WaitForMultipleObjects(WaitCount,
+                                             WaitHandles,
+                                             FALSE,
+                                             PipeTimeout);
+            if (dwError == WAIT_TIMEOUT || dwError == WAIT_OBJECT_0 + 1)
+            {
                 bResult = CancelIo(Service->lpImage->hControlPipe);
                 if (bResult == FALSE)
                 {
@@ -2077,6 +2099,19 @@ ScmStartUserModeService(PSERVICE Service,
     if (dwError != ERROR_SUCCESS)
     {
         DPRINT1("Connecting control pipe failed! (Error %lu)\n", dwError);
+
+        /* A process that never connected cannot be controlled as a service. */
+        if (Service->lpImage->dwImageRunCount <= 1 &&
+            Service->lpImage->hProcess != NULL &&
+            !ScmIsSecurityService(Service->lpImage) &&
+            WaitForSingleObject(Service->lpImage->hProcess, 0) == WAIT_TIMEOUT)
+        {
+            DPRINT1("Terminating unresponsive service process '%S'\n",
+                    Service->lpServiceName);
+            TerminateProcess(Service->lpImage->hProcess,
+                             ERROR_SERVICE_REQUEST_TIMEOUT);
+        }
+
         Service->lpImage->dwProcessId = 0;
         return dwError;
     }
