@@ -49,6 +49,8 @@ static const WCHAR x64_envnameW[] = {'W','i','n','d','o','w','s',' ','x','6','4'
 static const WCHAR x64_subdirW[] = {'x','6','4',0};
 static const WCHAR x86_envnameW[] = {'W','i','n','d','o','w','s',' ','N','T',' ','x','8','6',0};
 static const WCHAR x86_subdirW[] = {'w','3','2','x','8','6',0};
+static const WCHAR arm64_envnameW[] = {'W','i','n','d','o','w','s',' ','A','R','M','6','4',0};
+static const WCHAR arm64_subdirW[] = {'a','r','m','6','4',0};
 static const WCHAR win40_envnameW[] = {'W','i','n','d','o','w','s',' ','4','.','0',0};
 static const WCHAR win40_subdirW[] = {'w','i','n','4','0',0};
 
@@ -58,9 +60,11 @@ static PRINTENV_T env_x86 =   {x86_envnameW, x86_subdirW, 3, version3_regpathW, 
 
 static PRINTENV_T env_x64 =   {x64_envnameW, x64_subdirW, 3, version3_regpathW, version3_subdirW};
 
+static PRINTENV_T env_arm64 = {arm64_envnameW, arm64_subdirW, 3, version3_regpathW, version3_subdirW};
+
 static PRINTENV_T env_win40 = {win40_envnameW, win40_subdirW, 0, version0_regpathW, version0_subdirW};
 
-static PPRINTENV_T all_printenv[] = {&env_x86, &env_x64, &env_ia64, &env_win40};
+static PPRINTENV_T all_printenv[] = {&env_x86, &env_x64, &env_arm64, &env_ia64, &env_win40};
 
 static const DWORD di_sizeof[] = {0, sizeof(DRIVER_INFO_1W), sizeof(DRIVER_INFO_2W),
                                      sizeof(DRIVER_INFO_3W), sizeof(DRIVER_INFO_4W),
