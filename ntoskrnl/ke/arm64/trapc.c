@@ -350,6 +350,26 @@ KiArm64DumpKernelWalk(
 }
 
 static
+BOOLEAN
+KiArm64ShouldTraceSystemDllAddress(
+    _In_opt_ PEPROCESS Process,
+    _In_ ULONG64 Va)
+{
+    ULONG_PTR Base;
+    ULONG_PTR Address;
+
+    if ((Process == NULL) || (PspSystemDllBase == NULL))
+        return FALSE;
+
+    Address = (ULONG_PTR)Va;
+    if (Address >= (ULONG_PTR)MmSystemRangeStart)
+        return FALSE;
+
+    Base = (ULONG_PTR)PspSystemDllBase;
+    return ((Address >= Base) && (Address < (Base + 0x200000)));
+}
+
+static
 VOID
 KiArm64DumpUserWalk(
     _In_z_ PCSTR Tag,
@@ -1696,6 +1716,9 @@ KiArm64HandleSynchronousException(
             {
                 PETHREAD EThread = PsGetCurrentThread();
                 PEPROCESS CurrentProcess = (PEPROCESS)EThread->Tcb.ApcState.Process;
+                ULONG64 TpidrEl0 = 0;
+
+                __asm__ __volatile__("mrs %0, tpidr_el0" : "=r"(TpidrEl0));
 
                 DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
                     "[DABORT-USER] FAIL VA=%p ELR=%p Status=0x%lx DFSC=0x%lx Write=%d Proc=%s TID=%p\n",
@@ -1705,6 +1728,300 @@ KiArm64HandleSynchronousException(
                     (int)WriteAccess,
                     (PCSTR)CurrentProcess->ImageFileName,
                     (PVOID)EThread->Cid.UniqueThread);
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[DABORT-USER] LR=%p SP=%p FP=%p X0=%p X1=%p\n",
+                    (PVOID)TrapFrame->Lr, (PVOID)TrapFrame->Sp,
+                    (PVOID)TrapFrame->Fp, (PVOID)TrapFrame->X0,
+                    (PVOID)TrapFrame->X1);
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[DABORT-USER] SPSR=0x%I64x TPIDR_EL0=0x%I64x X18=%p\n",
+                    (unsigned long long)TrapFrame->Spsr,
+                    (unsigned long long)TpidrEl0,
+                    (PVOID)TrapFrame->X[18]);
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[DABORT-USER] X2=%p X3=%p X4=%p X5=%p X6=%p X7=%p\n",
+                    (PVOID)TrapFrame->X[2], (PVOID)TrapFrame->X[3],
+                    (PVOID)TrapFrame->X[4], (PVOID)TrapFrame->X[5],
+                    (PVOID)TrapFrame->X[6], (PVOID)TrapFrame->X[7]);
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[DABORT-USER] X8=%p X9=%p X10=%p X11=%p X12=%p X13=%p\n",
+                    (PVOID)TrapFrame->X[8], (PVOID)TrapFrame->X[9],
+                    (PVOID)TrapFrame->X[10], (PVOID)TrapFrame->X[11],
+                    (PVOID)TrapFrame->X[12], (PVOID)TrapFrame->X[13]);
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[DABORT-USER] X14=%p X15=%p X16=%p X17=%p X19=%p X20=%p\n",
+                    (PVOID)TrapFrame->X[14], (PVOID)TrapFrame->X[15],
+                    (PVOID)TrapFrame->X[16], (PVOID)TrapFrame->X[17],
+                    (PVOID)Context->ExceptionFrame.X19,
+                    (PVOID)Context->ExceptionFrame.X20);
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[DABORT-USER] X21=%p X22=%p X23=%p X24=%p X25=%p X26=%p X27=%p X28=%p\n",
+                    (PVOID)Context->ExceptionFrame.X21,
+                    (PVOID)Context->ExceptionFrame.X22,
+                    (PVOID)Context->ExceptionFrame.X23,
+                    (PVOID)Context->ExceptionFrame.X24,
+                    (PVOID)Context->ExceptionFrame.X25,
+                    (PVOID)Context->ExceptionFrame.X26,
+                    (PVOID)Context->ExceptionFrame.X27,
+                    (PVOID)Context->ExceptionFrame.X28);
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[DABORT-USER] StartAddr=%p Win32StartAddr=%p\n",
+                    (PVOID)EThread->StartAddress,
+                    (PVOID)EThread->Win32StartAddress);
+
+                /*
+                 * Resolve ELR and the fault VA against the process's loader
+                 * list so the serial log names module+offset directly (the
+                 * raw-address dumps have been un-attributable post-mortem).
+                 * User memory — guarded, capped walk.
+                 */
+                {
+                    PPEB Peb = CurrentProcess->Peb;
+                    ULONG64 Targets[2];
+                    static const char *TargetTag[2] = { "ELR", "VA" };
+                    ULONG t;
+
+                    Targets[0] = Context->State.Elr;
+                    Targets[1] = Context->State.FaultAddress;
+
+                    for (t = 0; Peb != NULL && t < 2; t++)
+                    {
+                        _SEH2_TRY
+                        {
+                            PPEB_LDR_DATA Ldr = Peb->Ldr;
+                            PLIST_ENTRY Head, Link;
+                            ULONG Guard = 0;
+
+                            if (Ldr == NULL)
+                                _SEH2_LEAVE;
+
+                            Head = &Ldr->InLoadOrderModuleList;
+                            for (Link = Head->Flink;
+                                 Link != Head && Guard < 96;
+                                 Link = Link->Flink, Guard++)
+                            {
+                                PLDR_DATA_TABLE_ENTRY Entry =
+                                    CONTAINING_RECORD(Link,
+                                                      LDR_DATA_TABLE_ENTRY,
+                                                      InLoadOrderLinks);
+                                ULONG64 Base = (ULONG64)(ULONG_PTR)Entry->DllBase;
+                                ULONG64 Size = Entry->SizeOfImage;
+                                WCHAR NameBuf[40];
+                                ULONG NameChars;
+                                ULONG c;
+
+                                if (Base == 0 || Size == 0 ||
+                                    Targets[t] < Base ||
+                                    Targets[t] >= Base + Size)
+                                {
+                                    continue;
+                                }
+
+                                NameChars = Entry->BaseDllName.Length / sizeof(WCHAR);
+                                if (NameChars >= RTL_NUMBER_OF(NameBuf))
+                                    NameChars = RTL_NUMBER_OF(NameBuf) - 1;
+                                for (c = 0; c < NameChars; c++)
+                                    NameBuf[c] = Entry->BaseDllName.Buffer[c];
+                                NameBuf[NameChars] = 0;
+
+                                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                                    "[DABORT-USER] %s in %S+0x%I64x (base=%p)\n",
+                                    TargetTag[t], NameBuf,
+                                    Targets[t] - Base, (PVOID)(ULONG_PTR)Base);
+                                break;
+                            }
+                        }
+                        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                        {
+                            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                                "[DABORT-USER] %s module walk faulted\n",
+                                TargetTag[t]);
+                        }
+                        _SEH2_END;
+                    }
+                }
+
+                /*
+                 * One-shot diagnostic: walk TTBR0 page table to dump PTEs for
+                 * the faulting PC page and the faulting data page. This tells us
+                 * which physical pages are backing the code and data at crash time.
+                 * Also dump 8 bytes of page content via KSEG0 to verify data correctness.
+                 */
+                {
+                    static volatile LONG DabortDiagCount = 0;
+                    if (InterlockedIncrement(&DabortDiagCount) <= 3)
+                    {
+                        ULONG64 Ttbr0;
+                        ULONG64 Ttbr1;
+                        __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
+                        __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
+                        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                            "[DABORT-DIAG] TTBR0=0x%I64x TTBR1=0x%I64x\n",
+                            Ttbr0, Ttbr1);
+
+                        /*
+                         * Walk user page table for three VAs:
+                         *  - faulting PC
+                         *  - faulting data address (FAR)
+                         *  - user stack pointer at fault time (SP)
+                         */
+                        ULONG64 DiagVAs[3] = {
+                            Context->State.Elr,
+                            Context->State.FaultAddress,
+                            TrapFrame->Sp
+                        };
+                        const char *DiagNames[3] = { "PC", "FAR", "SP" };
+                        for (int dv = 0; dv < 3; dv++)
+                        {
+                            ULONG64 Va = DiagVAs[dv];
+                            ULONG64 Root = Ttbr0 & 0x0000FFFFFFFFF000ULL;
+                            volatile ULONG64 *L0 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Root);
+                            ULONG L0i = (Va >> 39) & 0x1FF;
+                            ULONG64 L0e = (L0i < 512) ? L0[L0i] : 0;
+                            ULONG64 L1e = 0, L2e = 0, L3e = 0;
+                            PFN_NUMBER DataPfn = 0;
+                            if ((L0e & 0x3) == 0x3) {
+                                volatile ULONG64 *L1 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L0e & 0x0000FFFFFFFFF000ULL);
+                                ULONG L1i = (Va >> 30) & 0x1FF;
+                                L1e = L1[L1i];
+                                if ((L1e & 0x3) == 0x3) {
+                                    volatile ULONG64 *L2 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L1e & 0x0000FFFFFFFFF000ULL);
+                                    ULONG L2i = (Va >> 21) & 0x1FF;
+                                    L2e = L2[L2i];
+                                    if ((L2e & 0x3) == 0x3) {
+                                        volatile ULONG64 *L3 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L2e & 0x0000FFFFFFFFF000ULL);
+                                        ULONG L3i = (Va >> 12) & 0x1FF;
+                                        L3e = L3[L3i];
+                                        if ((L3e & 0x3) == 0x3) {
+                                            DataPfn = (PFN_NUMBER)((L3e >> 12) & 0xFFFFFFFFFULL);
+                                        }
+                                    }
+                                }
+                            }
+                            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                                "[DABORT-DIAG] %s VA=%p L0[%u]=0x%I64x L1e=0x%I64x L2e=0x%I64x L3e=0x%I64x PFN=0x%lx\n",
+                                DiagNames[dv], (PVOID)Va, L0i, L0e, L1e, L2e, L3e, (ULONG)DataPfn);
+                            /* Dump 16 bytes from the page via KSEG0 at the page-offset of the VA */
+                            if (DataPfn != 0)
+                            {
+                                ULONG PageOff = (ULONG)(Va & 0xFFF);
+                                volatile ULONG64 *Kseg = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(((ULONG64)DataPfn << PAGE_SHIFT) | (PageOff & ~7ULL));
+                                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                                    "[DABORT-DIAG] %s KSEG0[%03x]=0x%016I64x %016I64x\n",
+                                    DiagNames[dv], PageOff & ~7U, Kseg[0], Kseg[1]);
+                            }
+                        }
+
+                        if ((Context->State.FaultAddress == 0) &&
+                            (KiArm64ShouldTraceSystemDllAddress(CurrentProcess, Context->State.Elr)))
+                        {
+                            ULONG64 X1 = TrapFrame->X[1];
+                            ULONG64 Fp = TrapFrame->Fp;
+                            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                                "[DABORT-DIAG] ntdll-null x1=%p fp=%p sp=%p lr=%p\n",
+                                (PVOID)X1,
+                                (PVOID)Fp,
+                                (PVOID)TrapFrame->Sp,
+                                (PVOID)TrapFrame->Lr);
+                            KiArm64DumpUserAliasQwords("ntdll-null-x1",
+                                                       X1,
+                                                       (ULONG)(X1 & (PAGE_SIZE - 1)),
+                                                       (ULONG)((X1 + 8) & (PAGE_SIZE - 1)),
+                                                       (ULONG)((X1 + 16) & (PAGE_SIZE - 1)));
+                            KiArm64DumpUserAliasQwords("ntdll-null-fp",
+                                                       Fp,
+                                                       (ULONG)(Fp & (PAGE_SIZE - 1)),
+                                                       (ULONG)((Fp + 8) & (PAGE_SIZE - 1)),
+                                                       (ULONG)((Fp + 16) & (PAGE_SIZE - 1)));
+                            KiArm64DumpUserAliasQwords("ntdll-null-sp-copy",
+                                                       TrapFrame->Sp,
+                                                       (ULONG)((TrapFrame->Sp + 64) & (PAGE_SIZE - 1)),
+                                                       (ULONG)((TrapFrame->Sp + 72) & (PAGE_SIZE - 1)),
+                                                       (ULONG)((TrapFrame->Sp + 80) & (PAGE_SIZE - 1)));
+                        }
+
+                        /*
+                         * kernel32 .rsrc corruption diagnostic: when FAR=0xFF2B4002,
+                         * probe several pages within kernel32's .rsrc section to find
+                         * which page has wrong content. Also dump the page at X0 - 0x1000
+                         * (the page the string walk was on just before the fault).
+                         * Expected values from on-disk PE file for comparison.
+                         */
+                        if (Context->State.FaultAddress == 0xFF2B4002ULL)
+                        {
+                            /* Probe specific VAs within kernel32 .rsrc to find corruption */
+                            static const ULONG64 ProbeVAs[] = {
+                                0xFF09E000ULL,  /* .rsrc start (RVA 0x9E000) */
+                                0xFF262000ULL,  /* locale strings area (RVA 0x262000) */
+                                0xFF2A9000ULL,  /* last full .rsrc page (RVA 0x2A9000) */
+                            };
+                            for (int pv = 0; pv < 3; pv++)
+                            {
+                                ULONG64 PVa = ProbeVAs[pv];
+                                ULONG64 PRoot = Ttbr0 & 0x0000FFFFFFFFF000ULL;
+                                volatile ULONG64 *PL0 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(PRoot);
+                                ULONG PL0i = (PVa >> 39) & 0x1FF;
+                                ULONG64 PL0e = PL0[PL0i];
+                                PFN_NUMBER PPfn = 0;
+                                if ((PL0e & 3) == 3) {
+                                    volatile ULONG64 *PL1 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(PL0e & 0x0000FFFFFFFFF000ULL);
+                                    ULONG64 PL1e = PL1[(PVa >> 30) & 0x1FF];
+                                    if ((PL1e & 3) == 3) {
+                                        volatile ULONG64 *PL2 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(PL1e & 0x0000FFFFFFFFF000ULL);
+                                        ULONG64 PL2e = PL2[(PVa >> 21) & 0x1FF];
+                                        if ((PL2e & 3) == 3) {
+                                            volatile ULONG64 *PL3 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(PL2e & 0x0000FFFFFFFFF000ULL);
+                                            ULONG64 PL3e = PL3[(PVa >> 12) & 0x1FF];
+                                            if ((PL3e & 3) == 3)
+                                                PPfn = (PFN_NUMBER)((PL3e >> 12) & 0xFFFFFFFFFULL);
+                                        }
+                                    }
+                                }
+                                if (PPfn != 0) {
+                                    volatile ULONG64 *PK = (volatile ULONG64 *)MI_ARM64_PFN_TO_VA(PPfn);
+                                    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                                        "[RSRC-DIAG] VA=%p PFN=0x%lx data[0..3]=0x%016I64x 0x%016I64x 0x%016I64x 0x%016I64x\n",
+                                        (PVOID)PVa, (ULONG)PPfn, PK[0], PK[1], PK[2], PK[3]);
+                                } else {
+                                    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                                        "[RSRC-DIAG] VA=%p UNMAPPED\n", (PVOID)PVa);
+                                }
+                            }
+
+                            /* Also probe 16 pages leading up to the fault to find which has bad data */
+                            for (ULONG64 ScanVa = 0xFF2A0000ULL; ScanVa < 0xFF2AC000ULL; ScanVa += 0x1000ULL)
+                            {
+                                ULONG64 SRoot = Ttbr0 & 0x0000FFFFFFFFF000ULL;
+                                volatile ULONG64 *SL0 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(SRoot);
+                                ULONG64 SL0e = SL0[(ScanVa >> 39) & 0x1FF];
+                                PFN_NUMBER SPfn = 0;
+                                if ((SL0e & 3) == 3) {
+                                    volatile ULONG64 *SL1 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(SL0e & 0x0000FFFFFFFFF000ULL);
+                                    ULONG64 SL1e = SL1[(ScanVa >> 30) & 0x1FF];
+                                    if ((SL1e & 3) == 3) {
+                                        volatile ULONG64 *SL2 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(SL1e & 0x0000FFFFFFFFF000ULL);
+                                        ULONG64 SL2e = SL2[(ScanVa >> 21) & 0x1FF];
+                                        if ((SL2e & 3) == 3) {
+                                            volatile ULONG64 *SL3 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(SL2e & 0x0000FFFFFFFFF000ULL);
+                                            ULONG64 SL3e = SL3[(ScanVa >> 12) & 0x1FF];
+                                            if ((SL3e & 3) == 3)
+                                                SPfn = (PFN_NUMBER)((SL3e >> 12) & 0xFFFFFFFFFULL);
+                                        }
+                                    }
+                                }
+                                if (SPfn != 0) {
+                                    volatile ULONG64 *SK = (volatile ULONG64 *)MI_ARM64_PFN_TO_VA(SPfn);
+                                    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                                        "[RSRC-SCAN] VA=%p PFN=0x%lx d[0]=0x%016I64x d[1]=0x%016I64x\n",
+                                        (PVOID)ScanVa, (ULONG)SPfn, SK[0], SK[1]);
+                                } else {
+                                    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                                        "[RSRC-SCAN] VA=%p UNMAPPED\n", (PVOID)ScanVa);
+                                }
+                            }
+                        }
+                    }
+                }
             }
 #ifdef KDBG
             /*

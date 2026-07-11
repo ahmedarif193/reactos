@@ -989,8 +989,9 @@ PsLookupProcessByProcessId(IN HANDLE ProcessId,
         /* Get the Process */
         FoundProcess = CidEntry->Object;
 
-        /* Make sure it's really a process */
-        if (FoundProcess->Pcb.Header.Type == ProcessObject)
+        /* Make sure it's really a process, and not mid-creation */
+        if ((FoundProcess->Pcb.Header.Type == ProcessObject) &&
+            !(OBJECT_TO_OBJECT_HEADER(FoundProcess)->Flags & OB_FLAG_CREATE_INFO))
         {
             /* Safe Reference and return it */
             if (ObReferenceObjectSafe(FoundProcess))
@@ -1032,9 +1033,10 @@ PsLookupProcessThreadByCid(IN PCLIENT_ID Cid,
         /* Get the Process */
         FoundThread = CidEntry->Object;
 
-        /* Make sure it's really a thread and this process' */
+        /* Make sure it's really a thread and this process', and not mid-creation */
         if ((FoundThread->Tcb.Header.Type == ThreadObject) &&
-            (FoundThread->Cid.UniqueProcess == Cid->UniqueProcess))
+            (FoundThread->Cid.UniqueProcess == Cid->UniqueProcess) &&
+            !(OBJECT_TO_OBJECT_HEADER(FoundThread)->Flags & OB_FLAG_CREATE_INFO))
         {
             /* Safe Reference and return it */
             if (ObReferenceObjectSafe(FoundThread))
