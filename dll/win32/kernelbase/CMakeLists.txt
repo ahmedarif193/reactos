@@ -22,6 +22,10 @@ target_link_libraries(kernelbase_ros psapi_static kernelbase_static wine chkstk)
 add_importlibs(kernelbase_ros msvcrt advapi32 advapi32_vista kernel32 kernel32_vista ntdll ntdll_vista)
 add_dependencies(kernelbase_ros psdk errcodes)
 add_cd_file(TARGET kernelbase_ros DESTINATION reactos/system32 FOR all)
+# Also ship the same binary under the canonical name so GetModuleHandle(L"KernelBase.dll")
+# resolves (Win8+ apps, e.g. nCine's WaitOnAddress init) and kernel32's WakeConditionVariable
+# forward can host-load it. Loaded early via that forward; exports the WaitOnAddress family.
+add_cd_file(TARGET kernelbase_ros DESTINATION reactos/system32 NAME_ON_CD kernelbase.dll FOR all)
 
 # Fake import library, so consumers can link against it without needing to know about the actual implementation in kernelbase_ros.dll
 add_library(libkernelbase INTERFACE)

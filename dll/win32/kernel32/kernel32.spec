@@ -158,6 +158,7 @@
 @ stdcall CreateProcessInternalW(ptr wstr wstr ptr ptr long long ptr wstr ptr ptr long)
 @ stdcall CreateProcessW(wstr wstr ptr ptr long long ptr wstr ptr ptr)
 @ stdcall CreateRemoteThread(long ptr long ptr long long ptr)
+@ stdcall CreateRemoteThreadEx(long ptr long ptr long long ptr ptr)
 @ stdcall CreateSemaphoreA(ptr long long str)
 @ stdcall -version=0x600+ CreateSemaphoreExA(ptr long long str long long)
 @ stdcall -version=0x600+ CreateSemaphoreExW(ptr long long wstr long long)
@@ -914,6 +915,7 @@
 @ stub -version=0x600+ QueryProcessAffinityUpdateMode
 @ stub -version=0x600+ QueryProcessCycleTime
 @ stub -version=0x600+ QueryThreadCycleTime
+@ stdcall -version=0x600+ QueryUnbiasedInterruptTime(ptr)
 @ stdcall QueueUserAPC(ptr long long)
 @ stdcall QueueUserWorkItem(ptr ptr long)
 @ stdcall -norelay RaiseException(long long long ptr)

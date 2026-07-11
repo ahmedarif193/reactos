@@ -157,6 +157,34 @@ CreateThread(IN LPSECURITY_ATTRIBUTES lpThreadAttributes,
  */
 HANDLE
 WINAPI
+CreateRemoteThreadEx(IN HANDLE hProcess,
+                     IN LPSECURITY_ATTRIBUTES lpThreadAttributes,
+                     IN SIZE_T dwStackSize,
+                     IN LPTHREAD_START_ROUTINE lpStartAddress,
+                     IN LPVOID lpParameter,
+                     IN DWORD dwCreationFlags,
+                     IN LPPROC_THREAD_ATTRIBUTE_LIST lpAttributeList,
+                     OUT LPDWORD lpThreadId)
+{
+    /* Thread attribute lists carry group-affinity/ideal-processor hints; the
+     * base thread creation path does not consume them yet. */
+    if (lpAttributeList != NULL)
+        DPRINT1("CreateRemoteThreadEx: attribute list %p ignored\n", lpAttributeList);
+
+    return CreateRemoteThread(hProcess,
+                              lpThreadAttributes,
+                              (DWORD)dwStackSize,
+                              lpStartAddress,
+                              lpParameter,
+                              dwCreationFlags,
+                              lpThreadId);
+}
+
+/*
+ * @implemented
+ */
+HANDLE
+WINAPI
 CreateRemoteThread(IN HANDLE hProcess,
                    IN LPSECURITY_ATTRIBUTES lpThreadAttributes,
                    IN DWORD dwStackSize,
@@ -935,25 +963,20 @@ GetThreadId(IN HANDLE Thread)
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 LANGID
 WINAPI
 SetThreadUILanguage(IN LANGID LangId)
 {
-#if (NTDDI_VERSION < NTDDI_LONGHORN)
-    /* We only support LangId == 0, for selecting a language
-     * identifier that best supports the NT Console. */
-    if (LangId != 0)
-    {
-        BaseSetLastNTError(STATUS_NOT_SUPPORTED);
-        return 0;
-    }
-#endif
+    /* LangId == 0 selects a language best supporting the console; keep the
+     * thread's current UI language in that case, like modern Windows. */
+    if (LangId == 0)
+        return LANGIDFROMLCID(NtCurrentTeb()->CurrentLocale);
 
-    UNIMPLEMENTED;
-
-    return LANGIDFROMLCID(NtCurrentTeb()->CurrentLocale);
+    /* The thread UI language lives in the TEB. */
+    NtCurrentTeb()->CurrentLocale = MAKELCID(LangId, SORT_DEFAULT);
+    return LangId;
 }
 
 /*
