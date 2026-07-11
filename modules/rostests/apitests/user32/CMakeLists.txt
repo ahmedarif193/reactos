@@ -59,6 +59,7 @@ list(APPEND SOURCE
     ShowWindow.c
     SwitchToThisWindow.c
     SystemMenu.c
+    TopmostBand.c
     SystemParametersInfo.c
     TrackMouseEvent.c
     TrackPopupMenuEx.c
