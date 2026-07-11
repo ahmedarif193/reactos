@@ -160,8 +160,8 @@ HalpAPEntry64:
     mov cr0, rax
 
     /* Load the real GDT/IDT (KDESCRIPTOR: +6 skips Pad[3] to reach Limit) */
-    lgdt [rcx + PsSpecialRegisters + SrGdtr + 6]
-    lidt [rcx + PsSpecialRegisters + SrIdtr + 6]
+    lgdt fword ptr [rcx + PsSpecialRegisters + SrGdtr + 6]
+    lidt fword ptr [rcx + PsSpecialRegisters + SrIdtr + 6]
 
     /* Reload the segment registers */
     mov ax, KGDT64_R0_DATA

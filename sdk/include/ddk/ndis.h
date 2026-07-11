@@ -6882,7 +6882,7 @@ NDIS_STATUS
 NTAPI
 NdisRegisterDeviceEx(
   _In_ NDIS_HANDLE NdisDriverHandle,
-  _In_ PVOID DeviceObjectAttributes,
+  _In_ PNDIS_DEVICE_OBJECT_ATTRIBUTES DeviceObjectAttributes,
   _Out_ PDEVICE_OBJECT *pDeviceObject,
   _Out_ PNDIS_HANDLE NdisDeviceHandle);
 
