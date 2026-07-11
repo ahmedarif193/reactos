@@ -250,7 +250,7 @@ VidInitialize(
         MappedSize += (ULONG)(TranslatedAddress.QuadPart - FrameBuffer.QuadPart); // BYTE_OFFSET()
         MappedSize = ROUND_TO_PAGES(MappedSize);
         /* Essentially MmMapVideoDisplay() */
-        FrameBufferBase = MmMapIoSpace(FrameBuffer, MappedSize, MmWriteCombined);
+        FrameBufferBase = MmMapIoSpace(FrameBuffer, MappedSize, MmFrameBufferCached);
         if (!FrameBufferBase)
             FrameBufferBase = MmMapIoSpace(FrameBuffer, MappedSize, MmNonCached);
         if (!FrameBufferBase)

@@ -327,12 +327,16 @@ static
 BOOLEAN
 IopFindInterruptResource(
     IN PIO_RESOURCE_DESCRIPTOR IoDesc,
-    OUT PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc)
+    OUT PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc,
+    OUT OPTIONAL PULONG MessageCountOut)
 {
     ULONG Vector;
 
     ASSERT(IoDesc->Type == CmDesc->Type);
     ASSERT(IoDesc->Type == CmResourceTypeInterrupt);
+
+    if (MessageCountOut)
+        *MessageCountOut = 1;
 
     DPRINT("IopFindInterruptResource flags=0x%x min=0x%x max=0x%x\n",
            IoDesc->Flags,
@@ -381,13 +385,49 @@ IopFindInterruptResource(
     {
         HAL_MESSAGE_ROUTING_INFO RoutingInfo;
         NTSTATUS RoutingStatus;
+        ULONG MessageCount;
+        ULONG AllocCount;
+
+        /*
+         * Message-interrupt requirements encode the requested message count
+         * as MinimumVector == MaximumVector == N (see the PCI PDO's
+         * PdoQueryResourceRequirements).  Grant the whole group: the HAL
+         * allocator hands out a naturally-aligned contiguous power-of-two
+         * block of GICv2m SPIs / ITS LPIs, and the caller emits one
+         * CM_RESOURCE_INTERRUPT_MESSAGE descriptor per message so
+         * IoConnectInterruptEx builds a real per-message ISR for each.
+         */
+        MessageCount = 1;
+        if (IoDesc->u.Interrupt.MinimumVector == IoDesc->u.Interrupt.MaximumVector &&
+            IoDesc->u.Interrupt.MaximumVector >= 1 &&
+            IoDesc->u.Interrupt.MaximumVector <= 512)
+        {
+            MessageCount = IoDesc->u.Interrupt.MaximumVector;
+        }
+
+        AllocCount = 1;
+        while (AllocCount < MessageCount)
+            AllocCount <<= 1;
 
         RtlZeroMemory(&RoutingInfo, sizeof(RoutingInfo));
         RoutingInfo.Version = HAL_MESSAGE_ROUTING_INFO_VERSION;
         RoutingInfo.Flags = HAL_MSI_ROUTING_ALLOCATE_VECTOR;
-        RoutingInfo.MessageCount = 1;
+        RoutingInfo.MessageCount = AllocCount;
 
         RoutingStatus = HalpGetMessageRoutingInfo(&RoutingInfo);
+        if (!NT_SUCCESS(RoutingStatus) && AllocCount > 1)
+        {
+            /* Pool exhausted/fragmented: one shared vector still delivers
+             * (ISR-side demux) — prefer that over failing the device. */
+            DPRINT1("MSI: ARM64 %lu-message block failed 0x%lx — retrying single\n",
+                    AllocCount, RoutingStatus);
+            MessageCount = 1;
+            RtlZeroMemory(&RoutingInfo, sizeof(RoutingInfo));
+            RoutingInfo.Version = HAL_MESSAGE_ROUTING_INFO_VERSION;
+            RoutingInfo.Flags = HAL_MSI_ROUTING_ALLOCATE_VECTOR;
+            RoutingInfo.MessageCount = 1;
+            RoutingStatus = HalpGetMessageRoutingInfo(&RoutingInfo);
+        }
         if (!NT_SUCCESS(RoutingStatus))
         {
             DPRINT1("MSI: ARM64 HalpGetMessageRoutingInfo failed 0x%lx\n",
@@ -400,8 +440,11 @@ IopFindInterruptResource(
         CmDesc->u.Interrupt.Level = RoutingInfo.Irql;
         CmDesc->u.Interrupt.Vector = RoutingInfo.Vector;
         CmDesc->u.Interrupt.Affinity = RoutingInfo.TargetProcessors;
-        DPRINT1("MSI: allocated ARM64 message vector 0x%lx at irql %u affinity 0x%Ix\n",
+        if (MessageCountOut)
+            *MessageCountOut = MessageCount;
+        DPRINT1("MSI: allocated ARM64 message block base 0x%lx count %lu at irql %u affinity 0x%Ix\n",
                 RoutingInfo.Vector,
+                MessageCount,
                 RoutingInfo.Irql,
                 RoutingInfo.TargetProcessors);
         return TRUE;
@@ -640,6 +683,8 @@ IopFixupResourceListWithRequirements(
                 CM_PARTIAL_RESOURCE_DESCRIPTOR NewDesc;
                 PCM_PARTIAL_RESOURCE_DESCRIPTOR DescPtr;
                 BOOLEAN FoundResource = TRUE;
+                ULONG MessageCount = 1;
+                ULONG Message;
 
                 /* Setup the new CM descriptor */
                 NewDesc.Type = IoDesc->Type;
@@ -651,7 +696,7 @@ IopFixupResourceListWithRequirements(
                 {
                     case CmResourceTypeInterrupt:
                         /* Find an available interrupt */
-                        if (!IopFindInterruptResource(IoDesc, &NewDesc))
+                        if (!IopFindInterruptResource(IoDesc, &NewDesc, &MessageCount))
                         {
                             DPRINT1("Failed to find an available interrupt resource (0x%x to 0x%x)\n",
                                     IoDesc->u.Interrupt.MinimumVector, IoDesc->u.Interrupt.MaximumVector);
@@ -732,50 +777,61 @@ IopFixupResourceListWithRequirements(
                     AlternateRequired = FALSE;
                 }
 
-                /* Figure out what we need */
-                if (PartialList == NULL)
+                /* Append one CM descriptor per granted message (legacy and
+                 * single-message grants append exactly one). */
+                for (Message = 0; Message < MessageCount; Message++)
                 {
-                    /* We need a new list */
-                    NewList = ExAllocatePool(PagedPool, sizeof(CM_RESOURCE_LIST));
-                    if (!NewList)
-                        return STATUS_NO_MEMORY;
+                    if (Message != 0)
+                    {
+                        NewDesc.u.Interrupt.Vector++;
+                        PartialList = &(*ResourceList)->List[0].PartialResourceList;
+                    }
 
-                    /* Set it up */
-                    NewList->Count = 1;
-                    NewList->List[0].InterfaceType = RequirementsList->InterfaceType;
-                    NewList->List[0].BusNumber = RequirementsList->BusNumber;
-                    NewList->List[0].PartialResourceList.Version = 1;
-                    NewList->List[0].PartialResourceList.Revision = 1;
-                    NewList->List[0].PartialResourceList.Count = 1;
+                    /* Figure out what we need */
+                    if (PartialList == NULL)
+                    {
+                        /* We need a new list */
+                        NewList = ExAllocatePool(PagedPool, sizeof(CM_RESOURCE_LIST));
+                        if (!NewList)
+                            return STATUS_NO_MEMORY;
 
-                    /* Set our pointer */
-                    DescPtr = &NewList->List[0].PartialResourceList.PartialDescriptors[0];
+                        /* Set it up */
+                        NewList->Count = 1;
+                        NewList->List[0].InterfaceType = RequirementsList->InterfaceType;
+                        NewList->List[0].BusNumber = RequirementsList->BusNumber;
+                        NewList->List[0].PartialResourceList.Version = 1;
+                        NewList->List[0].PartialResourceList.Revision = 1;
+                        NewList->List[0].PartialResourceList.Count = 1;
+
+                        /* Set our pointer */
+                        DescPtr = &NewList->List[0].PartialResourceList.PartialDescriptors[0];
+                    }
+                    else
+                    {
+                        /* Allocate the new larger list */
+                        NewList = ExAllocatePool(PagedPool, PnpDetermineResourceListSize(*ResourceList) + sizeof(CM_PARTIAL_RESOURCE_DESCRIPTOR));
+                        if (!NewList)
+                            return STATUS_NO_MEMORY;
+
+                        /* Copy the old stuff back */
+                        RtlCopyMemory(NewList, *ResourceList, PnpDetermineResourceListSize(*ResourceList));
+
+                        /* Set our pointer */
+                        DescPtr = &NewList->List[0].PartialResourceList.PartialDescriptors[NewList->List[0].PartialResourceList.Count];
+
+                        /* Increment the descriptor count */
+                        NewList->List[0].PartialResourceList.Count++;
+
+                        /* Free the old list */
+                        ExFreePool(*ResourceList);
+                    }
+
+                    /* Copy the descriptor in */
+                    *DescPtr = NewDesc;
+
+                    /* Store the new list */
+                    *ResourceList = NewList;
                 }
-                else
-                {
-                    /* Allocate the new larger list */
-                    NewList = ExAllocatePool(PagedPool, PnpDetermineResourceListSize(*ResourceList) + sizeof(CM_PARTIAL_RESOURCE_DESCRIPTOR));
-                    if (!NewList)
-                        return STATUS_NO_MEMORY;
-
-                    /* Copy the old stuff back */
-                    RtlCopyMemory(NewList, *ResourceList, PnpDetermineResourceListSize(*ResourceList));
-
-                    /* Set our pointer */
-                    DescPtr = &NewList->List[0].PartialResourceList.PartialDescriptors[NewList->List[0].PartialResourceList.Count];
-
-                    /* Increment the descriptor count */
-                    NewList->List[0].PartialResourceList.Count++;
-
-                    /* Free the old list */
-                    ExFreePool(*ResourceList);
-                }
-
-                /* Copy the descriptor in */
-                *DescPtr = NewDesc;
-
-                /* Store the new list */
-                *ResourceList = NewList;
             }
         }
 
