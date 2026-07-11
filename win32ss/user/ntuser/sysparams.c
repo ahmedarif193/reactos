@@ -406,6 +406,11 @@ SpiUpdatePerUserSystemParameters(VOID)
 
     /* Load desktop settings */
     gspv.bDragFullWindows = SpiLoadInt(KEY_DESKTOP, VAL_DRAG, 0);
+    /* Outline (XOR) drag cannot coexist with composition: a compose landing
+     * between the outline's draw and its erase bakes the pattern into the
+     * primary. Composited desktops always drag full windows (DWM behavior). */
+    if (gbCompositionEnabled)
+        gspv.bDragFullWindows = TRUE;
     gspv.iWheelScrollLines = SpiLoadInt(KEY_DESKTOP, VAL_SCRLLLINES, 3);
     gspv.dwMouseClickLockTime = SpiLoadDWord(KEY_DESKTOP, VAL_CLICKLOCKTIME, 1200);
     if (gpsi)
