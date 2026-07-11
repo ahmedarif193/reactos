@@ -35,20 +35,6 @@
 #define NDEBUG
 #include <debug.h>
 
-/* Import IOCTL and handshake definitions from dxgkrnl */
-#define DXGKRNL_DEVICE_TYPE     0x23
-
-#define IOCTL_DXGKRNL_EXCHANGE_INTERFACE \
-    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x200, METHOD_BUFFERED, FILE_ANY_ACCESS)
-
-#define DXGKRNL_INTERFACE_VERSION_1  1
-
-typedef struct _DXGKRNL_INTERFACE_EXCHANGE_IN
-{
-    ULONG Version;
-    ULONG Size;
-} DXGKRNL_INTERFACE_EXCHANGE_IN, *PDXGKRNL_INTERFACE_EXCHANGE_IN;
-
 /* ---- Global state -------------------------------------------------------- */
 
 /*
