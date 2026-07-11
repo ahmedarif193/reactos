@@ -55,7 +55,8 @@ RcddEscape(
 
       RequestedEscape = *(PULONG)pvIn;
       if (RequestedEscape == CDD_ESCAPE_SUPPRESS_CURSOR ||
-          RequestedEscape == CDD_ESCAPE_COMPOSITION_SYNC)
+          RequestedEscape == CDD_ESCAPE_COMPOSITION_SYNC ||
+          RequestedEscape == CDD_ESCAPE_REGISTER_VBLANK)
       {
          return 1;
       }
@@ -81,17 +82,34 @@ RcddEscape(
 
    if (iEsc == CDD_ESCAPE_COMPOSITION_SYNC)
    {
+      ULONG Ret;
+
       if (pvIn == NULL || cjIn < sizeof(LONG))
          return 0;
 
       value = *(const LONG *)pvIn;
       ppdev->CompositionActive = (value != 0);
 
-      /*
-       * Present/vblank acknowledge: push the composed frame to the WDDM
-       * scan-out so the compositor can pace the next frame.
-       */
-      RcddPresent(ppdev, NULL);
+      /* END flushes the dirty rects accumulated during the composition. */
+      EngDeviceIoControl(ppdev->hDriver,
+                         (value != 0) ? IOCTL_VIDEO_DXGK_COMPOSITION_BEGIN
+                                      : IOCTL_VIDEO_DXGK_COMPOSITION_END,
+                         NULL, 0, NULL, 0, &Ret);
+      return 1;
+   }
+
+   if (iEsc == CDD_ESCAPE_REGISTER_VBLANK)
+   {
+      ULONG Ret;
+
+      if (pvIn == NULL || cjIn < sizeof(ULONGLONG))
+         return 0;
+
+      /* Opaque kernel-side payload (win32k's referenced PKEVENT, 0 clears);
+       * forward to dxgkrnl, whose present timer paces the scanout. */
+      EngDeviceIoControl(ppdev->hDriver,
+                         IOCTL_VIDEO_DXGK_REGISTER_VBLANK,
+                         pvIn, sizeof(ULONGLONG), NULL, 0, &Ret);
       return 1;
    }
 

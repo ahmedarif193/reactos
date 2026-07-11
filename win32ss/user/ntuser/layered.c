@@ -42,6 +42,23 @@ SetLayeredStatus(PWND pWnd, BYTE set)
    return FALSE;
 }
 
+/* For the dwm compositor: a layered window's constant alpha / colorkey / flags
+ * (LWA_ALPHA / LWA_COLORKEY). Returns FALSE for a non-layered window. */
+BOOL FASTCALL
+IntCompositionGetLayered(PWND pWnd, BYTE *pAlpha, COLORREF *pKey, DWORD *pFlags)
+{
+   PLRD_PROP p;
+   if (!(pWnd->ExStyle & WS_EX_LAYERED))
+      return FALSE;
+   p = UserGetProp(pWnd, AtomLayer, TRUE);
+   if (!p || !p->is_Layered)
+      return FALSE;
+   *pAlpha = p->Alpha;
+   *pKey = p->Key;
+   *pFlags = p->Flags;
+   return TRUE;
+}
+
 BOOL FASTCALL
 IntSetLayeredWindowAttributes(PWND pWnd,
                               COLORREF crKey,

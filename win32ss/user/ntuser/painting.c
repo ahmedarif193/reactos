@@ -1492,6 +1492,11 @@ IntBeginPaint(PWND Window, PPAINTSTRUCT Ps)
       return NULL;
    }
 
+   /* Open the composition paint bracket (covers the WM_ERASEBKGND below and
+    * the whole WM_PAINT body): the compositor won't present this window's
+    * half-painted backing until the matching EndPaint. */
+   IntCompositionPaintBegin(Window);
+
    // If set, always clear flags out due to the conditions later on for sending the message.
    if (Window->state & WNDS_SENDERASEBACKGROUND)
    {
@@ -1557,6 +1562,9 @@ IntEndPaint(PWND Wnd, PPAINTSTRUCT Ps)
    Wnd->state2 &= ~(WNDS2_WMPAINTSENT|WNDS2_STARTPAINT);
 
    co_UserShowCaret(Wnd);
+
+   /* Close the composition paint bracket. */
+   IntCompositionPaintEnd(Wnd);
 
    return TRUE;
 }
