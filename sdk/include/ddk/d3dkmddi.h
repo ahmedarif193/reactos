@@ -279,20 +279,32 @@ typedef enum _DXGK_INTERRUPT_TYPE
  * should return.
  * =========================================================================
  */
+/* Values match the genuine WDK d3dkmddi.h (winsdk-10 10.0.16299) exactly —
+ * miniports built against the real WDK dispatch on these numbers (the old
+ * hand-authored values, e.g. QUERYSEGMENT3=8, collided with other types). */
 typedef enum _DXGK_QUERYADAPTERINFOTYPE
 {
-    DXGKQAITYPE_UMDRIVERPRIVATE             =  0,
-    DXGKQAITYPE_DRIVERCAPS                  =  1,
-    DXGKQAITYPE_QUERYSEGMENT                =  2,
-    DXGKQAITYPE_ALLOCATIONGROUP             =  3,
-    DXGKQAITYPE_QUERYSEGMENT3               =  8,   /* Win7+ */
-    DXGKQAITYPE_NUMMOTIONVECTORPRECISIONS   =  9,
-    DXGKQAITYPE_NODEMETADATA                = 12,   /* Win8+ */
-    DXGKQAITYPE_QUERYSEGMENT4               = 16,   /* WDDM2.0+ */
-    DXGKQAITYPE_PHYSICALADAPTERCOUNT        = 17,
-    DXGKQAITYPE_PHYSICALADAPTERCAPS         = 18,
-    DXGKQAITYPE_DISPLAY_DRIVERCAPS_EXTENSION = 19,
-    DXGKQAITYPE_DISPLAYID_DESCRIPTOR       = 20,
+    DXGKQAITYPE_UMDRIVERPRIVATE           = 0,
+    DXGKQAITYPE_DRIVERCAPS                = 1,
+    DXGKQAITYPE_QUERYSEGMENT              = 2,
+    DXGKQAITYPE_RESERVED                  = 3,
+    DXGKQAITYPE_QUERYSEGMENT2             = 4,
+    DXGKQAITYPE_QUERYSEGMENT3             = 5,
+    DXGKQAITYPE_NUMPOWERCOMPONENTS        = 6,
+    DXGKQAITYPE_POWERCOMPONENTINFO        = 7,
+    DXGKQAITYPE_PREFERREDGPUNODE          = 8,
+    DXGKQAITYPE_POWERCOMPONENTPSTATEINFO  = 9,
+    DXGKQAITYPE_HISTORYBUFFERPRECISION    = 10,
+    DXGKQAITYPE_QUERYSEGMENT4             = 11,
+    DXGKQAITYPE_SEGMENTMEMORYSTATE        = 12,
+    DXGKQAITYPE_GPUMMUCAPS                = 13,
+    DXGKQAITYPE_PAGETABLELEVELDESC        = 14,
+    DXGKQAITYPE_PHYSICALADAPTERCAPS       = 15,
+    DXGKQAITYPE_DISPLAY_DRIVERCAPS_EXTENSION  = 16,
+    DXGKQAITYPE_INTEGRATED_DISPLAY_DESCRIPTOR = 17,
+    DXGKQAITYPE_UEFIFRAMEBUFFERRANGES         = 18,
+    DXGKQAITYPE_QUERYCOLORIMETRYOVERRIDES     = 19,
+    DXGKQAITYPE_DISPLAYID_DESCRIPTOR          = 20,
 } DXGK_QUERYADAPTERINFOTYPE;
 
 
@@ -398,38 +410,117 @@ typedef union _DXGK_GPUENGINETOPOLOGY
 
 
 /* =========================================================================
- * DXGK_DRIVERCAPS
+ * DXGK_DRIVERCAPS (+ the deprecated _ADVSCH_ sub-structures it embeds)
  *
  * Capability record returned by
  * DxgkDdiQueryAdapterInfo(DXGKQAITYPE_DRIVERCAPS).
+ *
+ * Layout matches the genuine WDK d3dkmddi.h (winsdk-10 10.0.16299) exactly
+ * through the WDDM 2.1 fields, so the structure is ABI-compatible with
+ * miniports built against the real WDK (viogpudo): dxgkrnl reads pointer
+ * caps and support flags from foreign drivers.
  * =========================================================================
  */
+typedef struct _DXGK_VIRTUALADDRESSCAPS_DEPRECATED
+{
+    union
+    {
+        struct
+        {
+            UINT PrivilegedMemorySupported  : 1;
+            UINT ReadOnlyMemorySupported    : 1;
+            UINT Reserved                   : 30;
+        };
+        UINT        Value;
+    };
+    UINT VirtualAddressBitCount;
+    UINT PageTableCoverageBitCount;
+    UINT PageDirectoryEntrySize;
+    UINT PageDirectorySegment;
+    UINT PageTableSegment;
+    UINT IdealGPUPageSize;
+} DXGK_VIRTUALADDRESSCAPS_DEPRECATED;
+
+typedef struct _DXGK_DMABUFFERCAPS_DEPRECATED
+{
+    struct
+    {
+        UINT Size;
+        UINT PrivateDriverDataSize;
+        UINT SegmentId;
+        UINT Reserved1;
+        UINT Reserved[16];
+    } PresentDmaBuffer;
+
+    struct
+    {
+        UINT Size;
+        UINT PrivateDriverDataSize;
+        UINT SegmentId;
+        UINT Reserved1;
+        UINT Reserved[16];
+    } PagingDmaBuffer;
+} DXGK_DMABUFFERCAPS_DEPRECATED;
+
+typedef enum _DXGK_WDDMVERSION
+{
+     DXGKDDI_WDDMv1_ENUM   = 0x1000,
+     DXGKDDI_WDDMv1_2_ENUM = 0x1200,
+     DXGKDDI_WDDMv1_3_ENUM = 0x1300,
+     DXGKDDI_WDDMv2_ENUM   = 0x2000,
+     DXGKDDI_WDDMv2_1_ENUM = 0x2100,
+     DXGKDDI_WDDMv2_2_ENUM = 0x2200,
+     DXGKDDI_WDDMv2_3_ENUM = 0x2300,
+} DXGK_WDDMVERSION;
+
 typedef struct _DXGK_DRIVERCAPS
 {
     PHYSICAL_ADDRESS        HighestAcceptableAddress;
+    UINT                    MaxAllocationListSlotId;
+    SIZE_T                  ApertureSegmentCommitLimit;
     UINT                    MaxPointerWidth;
     UINT                    MaxPointerHeight;
     DXGK_POINTERFLAGS       PointerCaps;
-    UINT                    MaxAllocationListSlotId;
-    SIZE_T                  ApertureSegmentCommitLimit;
-    UINT                    MaxInterruptPriority;
     UINT                    InterruptMessageNumber;
-    DXGK_FLIPCAPS           FlipCaps;
-    UINT                    MaxQueuedFlipOnVSync;
-    DXGK_PRESENTCAPS        PresentationCaps;
+    UINT                    NumberOfSwizzlingRanges;
     UINT                    MaxOverlays;
     UINT                    GammaRampCaps;
+    DXGK_PRESENTCAPS        PresentationCaps;
+    UINT                    MaxQueuedFlipOnVSync;
+    DXGK_FLIPCAPS           FlipCaps;
     DXGK_SCHEDULINGCAPS     SchedulingCaps;
     DXGK_MEMORYMANAGEMENTCAPS MemoryManagementCaps;
     DXGK_GPUENGINETOPOLOGY  GpuEngineTopology;
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN7)
-    UINT                    WDDMVersion;
-    UINT                    PreemptionCaps;
-    UINT                    SupportNonVGA;
-    UINT                    SupportSmoothRotation;
-    UINT                    SupportPerEngineTDR;
-    UINT                    SupportDirectFlip;
-    UINT                    SupportMultiPlaneOverlay;
+    DXGK_WDDMVERSION        WDDMVersion;
+    DXGK_VIRTUALADDRESSCAPS_DEPRECATED Reserved;
+    DXGK_DMABUFFERCAPS_DEPRECATED      Reserved1;
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
+    D3DKMDT_PREEMPTION_CAPS PreemptionCaps;
+    BOOLEAN                 SupportNonVGA;
+    BOOLEAN                 SupportSmoothRotation;
+    BOOLEAN                 SupportPerEngineTDR;
+    BOOLEAN                 SupportDirectFlip;
+    BOOLEAN                 SupportMultiPlaneOverlay;
+    BOOLEAN                 SupportRuntimePowerManagement;
+    BOOLEAN                 SupportSurpriseRemovalInHibernation;
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM1_3)
+    BOOLEAN                 HybridDiscrete;
+    UINT                    MaxOverlayPlanes;
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+    BOOLEAN                 HybridIntegrated;
+    D3DGPU_VIRTUAL_ADDRESS  InternalGpuVirtualAddressRangeStart;
+    D3DGPU_VIRTUAL_ADDRESS  InternalGpuVirtualAddressRangeEnd;
+    BOOLEAN                 SupportSurpriseRemoval;
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_1)
+    BOOLEAN                 SupportMultiPlaneOverlayImmediateFlip;
+    BOOLEAN                 CursorScaledWithMultiPlaneOverlayPlane0;
+    BOOLEAN                 HybridAcpiChainingRequired;
+    UINT                    MaxQueuedMultiPlaneOverlayFlipVSync;
 #endif
 } DXGK_DRIVERCAPS, *PDXGK_DRIVERCAPS;
 
@@ -484,27 +575,91 @@ typedef struct _DXGK_SEGMENTDESCRIPTOR
     DXGK_SEGMENTFLAGS   Flags;
 } DXGK_SEGMENTDESCRIPTOR, *PDXGK_SEGMENTDESCRIPTOR;
 
-typedef DXGK_SEGMENTDESCRIPTOR DXGK_SEGMENTDESCRIPTOR3, *PDXGK_SEGMENTDESCRIPTOR3;
-
-
-/* =========================================================================
- * DXGK_QUERYSEGMENTOUT
+/*
+ * DXGK_SEGMENTDESCRIPTOR3 / DXGK_QUERYSEGMENTOUT / DXGK_QUERYSEGMENTOUT3
  *
- * Output structure for DXGKQAITYPE_QUERYSEGMENT.
- * On first call pSegmentDescriptor == NULL; miniport sets NbSegment.
- * On second call dxgkrnl provides the filled-in array.
- * =========================================================================
+ * Layouts match the genuine WDK d3dkmddi.h (winsdk-10 10.0.16299) exactly.
+ * Note DESCRIPTOR3 is NOT a field-reordered DESCRIPTOR: Flags moves to the
+ * front and two SIZE_T fields are appended.  QUERYSEGMENT[3] is a two-pass
+ * protocol: first call has pSegmentDescriptor == NULL and the miniport sets
+ * NbSegment; the second call provides the descriptor array to fill.
  */
+typedef struct _DXGK_SEGMENTDESCRIPTOR3
+{
+    DXGK_SEGMENTFLAGS       Flags;
+    PHYSICAL_ADDRESS        BaseAddress;
+    PHYSICAL_ADDRESS        CpuTranslatedAddress;
+    SIZE_T                  Size;
+    UINT                    NbOfBanks;
+    SIZE_T                 *pBankRangeTable;
+    SIZE_T                  CommitLimit;
+    SIZE_T                  SystemMemoryEndAddress;
+    SIZE_T                  Reserved;
+} DXGK_SEGMENTDESCRIPTOR3, *PDXGK_SEGMENTDESCRIPTOR3;
+
 typedef struct _DXGK_QUERYSEGMENTOUT
 {
     UINT                        NbSegment;
     DXGK_SEGMENTDESCRIPTOR     *pSegmentDescriptor;
     UINT                        PagingBufferSegmentId;
-    SIZE_T                      PagingBufferSize;
+    UINT                        PagingBufferSize;
     UINT                        PagingBufferPrivateDataSize;
 } DXGK_QUERYSEGMENTOUT, *PDXGK_QUERYSEGMENTOUT;
 
-typedef DXGK_QUERYSEGMENTOUT DXGK_QUERYSEGMENTOUT3, *PDXGK_QUERYSEGMENTOUT3;
+typedef struct _DXGK_QUERYSEGMENTOUT3
+{
+    UINT                        NbSegment;
+    DXGK_SEGMENTDESCRIPTOR3    *pSegmentDescriptor;
+    UINT                        PagingBufferSegmentId;
+    UINT                        PagingBufferSize;
+    UINT                        PagingBufferPrivateDataSize;
+} DXGK_QUERYSEGMENTOUT3, *PDXGK_QUERYSEGMENTOUT3;
+
+/*
+ * QUERYSEGMENT4 flavour (WDDM 2.0+), layouts verbatim from the genuine WDK.
+ * Same two-pass protocol, but descriptors return through a BYTE array whose
+ * element stride the miniport reports in SegmentDescriptorStride.
+ */
+typedef struct _DXGK_CPUHOSTAPERTURE
+{
+    UINT64  PhysicalAddress;
+    UINT32  SizeInPages;
+} DXGK_CPUHOSTAPERTURE;
+
+typedef struct _DXGK_QUERYSEGMENTIN4
+{
+    UINT                    PhysicalAdapterIndex;
+} DXGK_QUERYSEGMENTIN4;
+
+typedef struct _DXGK_SEGMENTDESCRIPTOR4
+{
+    DXGK_SEGMENTFLAGS        Flags;
+    PHYSICAL_ADDRESS         BaseAddress;
+    SIZE_T                   Size;
+    SIZE_T                   CommitLimit;
+    SIZE_T                   SystemMemoryEndAddress;
+    union
+    {
+        PHYSICAL_ADDRESS     CpuTranslatedAddress;
+        DXGK_CPUHOSTAPERTURE CpuHostAperture;
+    };
+    UINT                     NumInvalidMemoryRanges;
+    SIZE_T                   VprRangeStartOffset;
+    SIZE_T                   VprRangeSize;
+    UINT                     VprAlignment;
+    UINT                     NumVprSupported;
+    UINT                     VprReserveSize;
+} DXGK_SEGMENTDESCRIPTOR4, *PDXGK_SEGMENTDESCRIPTOR4;
+
+typedef struct _DXGK_QUERYSEGMENTOUT4
+{
+    UINT    NbSegment;
+    BYTE   *pSegmentDescriptor;
+    UINT    PagingBufferSegmentId;
+    UINT    PagingBufferSize;
+    UINT    PagingBufferPrivateDataSize;
+    SIZE_T  SegmentDescriptorStride;
+} DXGK_QUERYSEGMENTOUT4, *PDXGK_QUERYSEGMENTOUT4;
 
 
 /* =========================================================================
@@ -744,22 +899,50 @@ typedef struct _DXGKARG_CLOSEALLOCATION
  * DXGKARG_PATCH
  * =========================================================================
  */
+/* Layout matches the genuine WDK d3dkmddi.h (winsdk-10 10.0.16299). */
+typedef struct _DXGK_PATCHFLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT                    Paging              : 1;
+            UINT                    Present             : 1;
+            UINT                    RedirectedPresent   : 1;
+            UINT                    NullRendering       : 1;
+            UINT                    Reserved            :28;
+        };
+        UINT                        Value;
+    };
+} DXGK_PATCHFLAGS;
+
 typedef struct _DXGKARG_PATCH
 {
-    HANDLE                              hDevice;
-    HANDLE                              hDmaBuffer;
-    PVOID                               pDmaBuffer;
-    UINT                                DmaBufferSize;
-    PVOID                               pDmaBufferPrivateData;
-    UINT                                DmaBufferPrivateDataSize;
-    CONST D3DDDI_ALLOCATIONLIST        *pAllocationList;
-    UINT                                AllocationListSize;
-    CONST D3DDDI_PATCHLOCATIONLIST     *pPatchLocationList;
-    UINT                                PatchLocationListSize;
-    UINT                                PatchLocationListSubmissionStart;
-    UINT                                PatchLocationListSubmissionLength;
-    UINT                                SubmissionFenceId;
-    UINT                                Flags;
+    union
+    {
+        HANDLE                          hDevice;    /* non-MultiEngineAware */
+        HANDLE                          hContext;   /* MultiEngineAware     */
+    };
+    UINT                            DmaBufferSegmentId;
+    PHYSICAL_ADDRESS                DmaBufferPhysicalAddress;
+    PVOID                           pDmaBuffer;
+    UINT                            DmaBufferSize;
+    UINT                            DmaBufferSubmissionStartOffset;
+    UINT                            DmaBufferSubmissionEndOffset;
+    PVOID                           pDmaBufferPrivateData;
+    UINT                            DmaBufferPrivateDataSize;
+    UINT                            DmaBufferPrivateDataSubmissionStartOffset;
+    UINT                            DmaBufferPrivateDataSubmissionEndOffset;
+    CONST struct _DXGK_ALLOCATIONLIST *pAllocationList; /* DXGK_ALLOCATIONLIST,
+                                                            defined below */
+    UINT                            AllocationListSize;
+    CONST D3DDDI_PATCHLOCATIONLIST *pPatchLocationList;
+    UINT                            PatchLocationListSize;
+    UINT                            PatchLocationListSubmissionStart;
+    UINT                            PatchLocationListSubmissionLength;
+    UINT                            SubmissionFenceId;
+    DXGK_PATCHFLAGS                 Flags;
+    UINT                            EngineOrdinal;
 } DXGKARG_PATCH, *PDXGKARG_PATCH;
 
 
@@ -1057,13 +1240,25 @@ typedef struct _DXGKARG_ESCAPE
  * DXGKARG_COLLECTDBGINFO
  * =========================================================================
  */
+/* Layout matches the genuine WDK d3dkmddi.h (winsdk-10 10.0.16299). */
+typedef struct _DXGKARG_COLLECTDBGINFO_EXT
+{
+    UINT BucketingKey;
+    UINT CurrentDmaBufferOffset;
+    UINT Reserved2;
+    UINT Reserved3;
+    UINT Reserved4;
+    UINT Reserved5;
+    UINT Reserved6;
+    UINT Reserved7;
+} DXGKARG_COLLECTDBGINFO_EXT;
+
 typedef struct _DXGKARG_COLLECTDBGINFO
 {
-    UINT    Reason;
+    UINT    Reason;                          /* bugcheck code for the report */
     PVOID   pBuffer;
-    UINT    BufferSize;
-    UINT    NodeOrdinal;
-    UINT    EngineOrdinal;
+    SIZE_T  BufferSize;
+    DXGKARG_COLLECTDBGINFO_EXT *pExtension;
 } DXGKARG_COLLECTDBGINFO, *PDXGKARG_COLLECTDBGINFO;
 
 
@@ -1166,6 +1361,7 @@ typedef struct _DXGK_SETVIDPNSOURCEADDRESS_FLAGS
         UINT Value;
     };
 } DXGK_SETVIDPNSOURCEADDRESS_FLAGS, *PDXGK_SETVIDPNSOURCEADDRESS_FLAGS;
+
 
 typedef struct _DXGKARG_SETVIDPNSOURCEADDRESS
 {
@@ -1967,6 +2163,110 @@ typedef
         IN_CONST_PDXGKARG_UNMAPCPUHOSTAPERTURE   pArgs);
 
 /* --- DxgkDdiCheckMultiPlaneOverlaySupport2 ---------------------------- */
+
+/* =========================================================================
+ * Multi-plane overlay (MPO) — layouts match the genuine WDK d3dkmddi.h
+ * (winsdk-10 10.0.16299) verbatim for the WDDM1.3-era DDI set.
+ * ========================================================================= */
+typedef struct _DXGK_MULTIPLANE_OVERLAY_BLEND
+{
+    union
+    {
+        struct
+        {
+            UINT    AlphaBlend     : 1;
+            UINT    Reserved       :31;
+        };
+        UINT Value;
+    };
+} DXGK_MULTIPLANE_OVERLAY_BLEND;
+
+typedef struct _DXGK_MULTIPLANE_OVERLAY_YCbCr_FLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT    NominalRange   : 1;
+            UINT    Bt709          : 1;
+            UINT    xvYCC          : 1;
+            UINT    Reserved       : 29;
+        };
+        UINT Value;
+    };
+} DXGK_MULTIPLANE_OVERLAY_YCbCr_FLAGS;
+
+typedef enum _DXGK_MULTIPLANE_OVERLAY_VIDEO_FRAME_FORMAT
+{
+    DXGK_MULTIPLANE_OVERLAY_VIDEO_FRAME_FORMAT_PROGRESSIVE                   = 0,
+    DXGK_MULTIPLANE_OVERLAY_VIDEO_FRAME_FORMAT_INTERLACED_TOP_FIELD_FIRST    = 1,
+    DXGK_MULTIPLANE_OVERLAY_VIDEO_FRAME_FORMAT_INTERLACED_BOTTOM_FIELD_FIRST = 2,
+} DXGK_MULTIPLANE_OVERLAY_VIDEO_FRAME_FORMAT;
+
+typedef struct _DXGK_MULTIPLANE_OVERLAY_ATTRIBUTES
+{
+    DXGK_MULTIPLANE_OVERLAY_FLAGS                  Flags;
+    RECT                                           SrcRect;
+    RECT                                           DstRect;
+    RECT                                           ClipRect;
+    D3DDDI_ROTATION                                Rotation;
+    DXGK_MULTIPLANE_OVERLAY_BLEND                  Blend;
+    DXGK_MULTIPLANE_OVERLAY_VIDEO_FRAME_FORMAT     VideoFrameFormat;
+    DXGK_MULTIPLANE_OVERLAY_YCbCr_FLAGS            YCbCrFlags;
+    DXGK_MULTIPLANE_OVERLAY_STEREO_FORMAT          StereoFormat;
+    BOOL                                           StereoLeftViewFrame0;
+    BOOL                                           StereoBaseViewFrame0;
+    DXGK_MULTIPLANE_OVERLAY_STEREO_FLIP_MODE       StereoFlipMode;
+    DXGK_MULTIPLANE_OVERLAY_STRETCH_QUALITY        StretchQuality;
+} DXGK_MULTIPLANE_OVERLAY_ATTRIBUTES;
+
+typedef struct _DXGK_CHECK_MULTIPLANE_OVERLAY_SUPPORT_PLANE
+{
+    HANDLE                               hAllocation;
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID       VidPnSourceId;
+    DXGK_MULTIPLANE_OVERLAY_ATTRIBUTES   PlaneAttributes;
+} DXGK_CHECK_MULTIPLANE_OVERLAY_SUPPORT_PLANE;
+
+typedef struct _DXGK_MULTIPLANE_OVERLAY_PLANE
+{
+    UINT                                 LayerIndex;
+    BOOL                                 Enabled;
+    UINT                                 AllocationSegment;
+    PHYSICAL_ADDRESS                     AllocationAddress;
+    HANDLE                               hAllocation;
+    DXGK_MULTIPLANE_OVERLAY_ATTRIBUTES   PlaneAttributes;
+} DXGK_MULTIPLANE_OVERLAY_PLANE;
+
+typedef struct _DXGKARG_CHECKMULTIPLANEOVERLAYSUPPORT
+{
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID                     VidPnSourceId;
+    UINT                                               PlaneCount;
+    DXGK_CHECK_MULTIPLANE_OVERLAY_SUPPORT_PLANE       *pOverlayPlanes;
+    BOOLEAN                                            Supported;
+    DXGK_CHECK_MULTIPLANE_OVERLAY_SUPPORT_RETURN_INFO  ReturnInfo;
+} DXGKARG_CHECKMULTIPLANEOVERLAYSUPPORT, *PDXGKARG_CHECKMULTIPLANEOVERLAYSUPPORT;
+
+typedef struct _DXGKARG_SETVIDPNSOURCEADDRESSWITHMULTIPLANEOVERLAY
+{
+    UINT                             ContextCount;
+    HANDLE                           Context[1+D3DDDI_MAX_BROADCAST_CONTEXT];
+    DXGK_SETVIDPNSOURCEADDRESS_FLAGS Flags;
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID   VidPnSourceId;
+    UINT                             PlaneCount;
+    DXGK_MULTIPLANE_OVERLAY_PLANE   *pPlanes;
+    UINT                             Duration;
+} DXGKARG_SETVIDPNSOURCEADDRESSWITHMULTIPLANEOVERLAY,
+ *PDXGKARG_SETVIDPNSOURCEADDRESSWITHMULTIPLANEOVERLAY;
+
+typedef NTSTATUS
+(APIENTRY *PDXGKDDI_CHECKMULTIPLANEOVERLAYSUPPORT)(
+    _In_    PVOID                                   MiniportDeviceContext,
+    _Inout_ PDXGKARG_CHECKMULTIPLANEOVERLAYSUPPORT  CheckMultiPlaneOverlaySupport);
+
+typedef NTSTATUS
+(APIENTRY *PDXGKDDI_SETVIDPNSOURCEADDRESSWITHMULTIPLANEOVERLAY)(
+    _In_ PVOID                                                    MiniportDeviceContext,
+    _In_ CONST DXGKARG_SETVIDPNSOURCEADDRESSWITHMULTIPLANEOVERLAY *SetVidPnSourceAddressWithMpo);
 
 typedef struct _DXGK_MULTIPLANE_OVERLAY_ATTRIBUTES2
 {

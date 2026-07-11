@@ -534,6 +534,7 @@ DxgkCreateDevice(
     /* --- Initialise fields ----------------------------------------------- */
 
     Device->Adapter = Adapter;
+    Device->OwnerProcess = PsGetCurrentProcess();
     Device->Flags   = pCreateDevice->Flags;
 
     InitializeListHead(&Device->ContextListHead);

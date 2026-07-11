@@ -1,0 +1,25 @@
+; Raspberry Pi 5 WDDM display-only miniport (livecd preinstall)
+;
+; rpi5vc4 is a demand-started WDDM miniport bound to the real GPU hardware.
+; The Pi5 UEFI firmware exposes the VideoCore VII GPU + HVS/PixelValve pipeline
+; as ACPI device _HID "BCM2712" (_CID "BCM2850"); the CriticalDeviceDatabase
+; seed in hivesys_arm64.inf (ACPI#BCM2712 -> rpi5vc4, Display class) binds this
+; service to that devnode via dxgkrnl; no synthetic root devnode is created.
+; rpi5vc4.sys therefore loads only when Pi 5 firmware publishes the GPU node.
+
+[AddReg]
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","ErrorControl",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","Group",0x00000000,"Video"
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","ImagePath",0x00020000,"system32\drivers\rpi5vc4.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","Start",0x00010001,0x00000003
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","Type",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Video","Service",0x00000000,"rpi5vc4"
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Device0","InstalledDisplayDrivers",0x00010000,"framebuf"
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Device0","DefaultSettings.VRefresh",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Device0","DefaultSettings.BitsPerPel",0x00010001,0x00000020
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Device0","DefaultSettings.XResolution",0x00010001,0x00000400
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Device0","DefaultSettings.YResolution",0x00010001,0x00000300
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Device0","Device Description",0x00000000,"Raspberry Pi 5 VC4 Display (WDDM)"
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Device0","VgaCompatible",0x00010001,0x00000000
+; No synthetic Root devnode: PnP enumerates the real ACPI\BCM2712 GPU node and
+; the CriticalDeviceDatabase seed (hivesys_arm64.inf) binds it to this service.
