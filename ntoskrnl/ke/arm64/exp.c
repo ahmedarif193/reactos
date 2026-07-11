@@ -471,6 +471,13 @@ KiDispatchException(_In_ PEXCEPTION_RECORD ExceptionRecord,
                 ExceptionRecord->ExceptionCode,
                 ExceptionRecord->ExceptionAddress,
                 PsGetCurrentProcess()->SectionBaseAddress);
+        DPRINT1("[arm64][EXC] KILL PC=%p LR=%p FP=%p SP=%p Far=%p\n",
+                (PVOID)(ULONG_PTR)Context.Pc,
+                (PVOID)(ULONG_PTR)Context.Lr,
+                (PVOID)(ULONG_PTR)Context.Fp,
+                (PVOID)(ULONG_PTR)Context.Sp,
+                ExceptionRecord->NumberParameters >= 2 ?
+                    (PVOID)ExceptionRecord->ExceptionInformation[1] : NULL);
 
         ZwTerminateProcess(NtCurrentProcess(), ExceptionRecord->ExceptionCode);
 
