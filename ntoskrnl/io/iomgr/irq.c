@@ -21,6 +21,10 @@ HalpGetMessageRoutingInfo(
     _Inout_ PHAL_MESSAGE_ROUTING_INFO RoutingInfo);
 #endif
 
+/* Message-based (MSI/MSI-X) connect state. */
+#define TAG_IO_MSI_TABLE    'IsMI'  /* IO_INTERRUPT_MESSAGE_INFO table */
+#define TAG_IO_MSI_DISPATCH 'EsMI'  /* per-message dispatch entry      */
+
 /* FUNCTIONS *****************************************************************/
 
 /*
@@ -313,7 +317,7 @@ IopConnectInterruptExMessageBased(
         NonPagedPool,
         sizeof(IO_INTERRUPT_MESSAGE_INFO) +
             (MessageCount - 1) * sizeof(IO_INTERRUPT_MESSAGE_INFO_ENTRY),
-        'IsMI');
+        TAG_IO_MSI_TABLE);
     if (Table == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
 
@@ -337,7 +341,7 @@ IopConnectInterruptExMessageBased(
          * of the interrupt connection; freed in IoDisconnectInterruptEx. */
         DispEntry = ExAllocatePoolZero(NonPagedPool,
                                        sizeof(IOP_MSI_DISPATCH_ENTRY),
-                                       'EsMI');
+                                       TAG_IO_MSI_DISPATCH);
         if (DispEntry == NULL)
         {
             Status = STATUS_INSUFFICIENT_RESOURCES;
@@ -367,7 +371,7 @@ IopConnectInterruptExMessageBased(
         {
             DPRINT1("IoConnectInterruptEx: IoConnectInterrupt for msg %lu failed 0x%lx\n",
                     MessageIdx, Status);
-            ExFreePoolWithTag(DispEntry, 'EsMI');
+            ExFreePoolWithTag(DispEntry, TAG_IO_MSI_DISPATCH);
             goto FailureCleanup;
         }
 
@@ -432,10 +436,10 @@ FailureCleanup:
             DispEntry = (PIOP_MSI_DISPATCH_ENTRY)IoInterrupt->FirstInterrupt.ServiceContext;
             IoDisconnectInterrupt(Intr);
             if (DispEntry != NULL)
-                ExFreePoolWithTag(DispEntry, 'EsMI');
+                ExFreePoolWithTag(DispEntry, TAG_IO_MSI_DISPATCH);
         }
     }
-    ExFreePoolWithTag(Table, 'IsMI');
+    ExFreePoolWithTag(Table, TAG_IO_MSI_TABLE);
     return Status;
 
 FallBackToLine:
@@ -492,7 +496,7 @@ FallBackToLine:
 
         DispEntry = ExAllocatePoolZero(NonPagedPool,
                                        sizeof(IOP_MSI_DISPATCH_ENTRY),
-                                       'EsMI');
+                                       TAG_IO_MSI_DISPATCH);
         if (DispEntry == NULL)
             return STATUS_INSUFFICIENT_RESOURCES;
 
@@ -510,18 +514,18 @@ FallBackToLine:
                                     TRUE, Affinity, p->FloatingSave);
         if (!NT_SUCCESS(Status))
         {
-            ExFreePoolWithTag(DispEntry, 'EsMI');
+            ExFreePoolWithTag(DispEntry, TAG_IO_MSI_DISPATCH);
             return Status;
         }
 
         /* Allocate a 1-entry IO_INTERRUPT_MESSAGE_INFO so the caller's
          * MessageInfoTable interface stays consistent. */
         FallbackTable = (PIO_INTERRUPT_MESSAGE_INFO)ExAllocatePoolZero(
-            NonPagedPool, sizeof(IO_INTERRUPT_MESSAGE_INFO), 'IsMI');
+            NonPagedPool, sizeof(IO_INTERRUPT_MESSAGE_INFO), TAG_IO_MSI_TABLE);
         if (FallbackTable == NULL)
         {
             IoDisconnectInterrupt(LineInt);
-            ExFreePoolWithTag(DispEntry, 'EsMI');
+            ExFreePoolWithTag(DispEntry, TAG_IO_MSI_DISPATCH);
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
@@ -574,7 +578,44 @@ IoDisconnectInterruptEx(
 {
     PAGED_CODE();
 
-    //FIXME: This eventually will need to handle more cases
+    if (Parameters->Version == CONNECT_MESSAGE_BASED)
+    {
+        /* ConnectionContext holds the IO_INTERRUPT_MESSAGE_INFO table the
+         * message-based connect returned (also used for its line-based
+         * fallback), NOT a PKINTERRUPT: disconnect every message vector,
+         * free its dispatch wrapper, then the table. Treating it as an
+         * interrupt object freed the TAG_IO_MSI_TABLE table with TAG_IO_INTERRUPT —
+         * bugcheck 0xC2 on any teardown after a message-based connect. */
+        PIO_INTERRUPT_MESSAGE_INFO Table =
+            Parameters->ConnectionContext.InterruptMessageTable;
+        ULONG i;
+
+        if (Table == NULL)
+            return;
+
+        for (i = 0; i < Table->MessageCount; i++)
+        {
+            PKINTERRUPT Intr = Table->MessageInfo[i].InterruptObject;
+            PIOP_MSI_DISPATCH_ENTRY DispEntry;
+            PIO_INTERRUPT IoInterrupt;
+
+            if (Intr == NULL)
+                continue;
+
+            /* The ServiceContext the kernel holds is our dispatch entry —
+             * free it AFTER disconnect so the ISR can't fire on freed
+             * memory (same recovery as the connect failure path). */
+            IoInterrupt = CONTAINING_RECORD(Intr, IO_INTERRUPT, FirstInterrupt);
+            DispEntry = (PIOP_MSI_DISPATCH_ENTRY)IoInterrupt->FirstInterrupt.ServiceContext;
+            IoDisconnectInterrupt(Intr);
+            if (DispEntry != NULL)
+                ExFreePoolWithTag(DispEntry, TAG_IO_MSI_DISPATCH);
+        }
+
+        ExFreePoolWithTag(Table, TAG_IO_MSI_TABLE);
+        return;
+    }
+
     if (Parameters->ConnectionContext.InterruptObject)
         IoDisconnectInterrupt(Parameters->ConnectionContext.InterruptObject);
 }

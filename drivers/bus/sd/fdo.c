@@ -444,12 +444,12 @@ SdBusInitializeController(
                              SDHCI_INT_ERROR |
                              SDHCI_INT_CMD_ERROR_MASK |
                              SDHCI_INT_DATA_ERROR_MASK;
-        if (!FdoExtension->NonRemovable)
-        {
-            SignalEnable |= SDHCI_INT_CARD_INSERTION |
-                            SDHCI_INT_CARD_REMOVAL |
-                            SDHCI_INT_CARD_INTERRUPT;
-        }
+        /*
+         * Card-detect and SDIO interrupt signals are enabled after the FDO is
+         * started. Initial card presence is handled synchronously in
+         * SdBusFdoStartDevice; signalling it here can assert a level interrupt
+         * while the ISR still rejects this stopped FDO.
+         */
         SdBusWriteReg32(FdoExtension, SDHCI_INT_SIGNAL_ENABLE, SignalEnable);
     }
 
@@ -772,6 +772,23 @@ SdBusFdoStartDevice(
                         "(0x%08lx)\n", Status);
             }
         }
+    }
+
+    if (!FdoExtension->NonRemovable)
+    {
+        /*
+         * The synchronous startup scan consumed the initial card-present state.
+         * Drop that latched insertion/removal edge before enabling hotplug
+         * signals, otherwise level-triggered card-detect can fire during PnP
+         * start and race the startup path.
+         */
+        SdBusWriteReg32(FdoExtension,
+                        SDHCI_INT_STATUS,
+                        SDHCI_INT_CARD_INSERTION | SDHCI_INT_CARD_REMOVAL);
+        SdBusUpdateInterruptSignalEnable(FdoExtension,
+                                         SDHCI_INT_CARD_INSERTION |
+                                         SDHCI_INT_CARD_REMOVAL,
+                                         0);
     }
 
     Irp->IoStatus.Status = STATUS_SUCCESS;
