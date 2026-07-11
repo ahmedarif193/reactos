@@ -430,3 +430,23 @@ SHCreateShellItemArrayFromDataObject(_In_ IDataObject *pdo, _In_ REFIID riid, _O
 {
     return ShellObjectCreatorInit<CShellItemArray>(pdo, riid, ppv);
 }
+
+EXTERN_C HRESULT WINAPI
+SHCreateItemFromIDList(_In_ PCIDLIST_ABSOLUTE pidl, _In_ REFIID riid, _Out_ void **ppv)
+{
+    CComPtr<IShellItem> psi;
+    HRESULT hr;
+
+    TRACE("(%p,%s,%p)\n", pidl, debugstr_guid(&riid), ppv);
+
+    if (!ppv)
+        return E_INVALIDARG;
+
+    *ppv = NULL;
+
+    hr = SHCreateShellItem(NULL, NULL, pidl, &psi);
+    if (FAILED(hr))
+        return hr;
+
+    return psi->QueryInterface(riid, ppv);
+}

@@ -515,6 +515,24 @@ HRESULT to_boolean(jsval_t val, BOOL *ret)
     return E_FAIL;
 }
 
+#if defined(__REACTOS__) && defined(__clang__)
+static inline __attribute__((always_inline)) int hex_to_int(WCHAR c)
+#else
+static int hex_to_int(WCHAR c)
+#endif
+{
+    if('0' <= c && c <= '9')
+        return c-'0';
+
+    if('a' <= c && c <= 'f')
+        return c-'a'+10;
+
+    if('A' <= c && c <= 'F')
+        return c-'A'+10;
+
+    return -1;
+}
+
 /* ECMA-262 3rd Edition    9.3.1 */
 static HRESULT str_to_number(jsstr_t *str, double *ret)
 {

@@ -191,6 +191,17 @@ SURFACE_AllocSurface(
         cjBits = cjBufSize;
     }
 
+    /* Large bits go into a kernel-mode section, as on Windows: inline bits
+     * make the whole pixel buffer ONE contiguous paged-pool block, and a few
+     * window-sized 32bpp surfaces exhaust/fragment the pool (observed as
+     * SURFACE_AllocSurface failures on 1080p desktops). Pool keeps only the
+     * SURFACE header; the mapped view holds its own segment reference. */
+    if ((iType == STYPE_BITMAP) && (pvBits == NULL) &&
+        (cjBits >= 16 * PAGE_SIZE) && !(fjBitmap & BMF_USERMEM))
+    {
+        fjBitmap |= BMF_KMSECTION;
+    }
+
     /* Check if we need an extra large object */
     if ((iType == STYPE_BITMAP) && (pvBits == NULL) &&
         !(fjBitmap & BMF_USERMEM) && !(fjBitmap & BMF_KMSECTION))
