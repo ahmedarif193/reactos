@@ -107,6 +107,121 @@ cleanup:
     CloseAdapter(hAdapter);
 }
 
+/*
+ * The documented WDDM2 monitored-fence contract: creation returns a
+ * read-only CPU mapping of the 64-bit fence value seeded with
+ * InitialFenceValue, and CPU-side signals update it.  These assertions
+ * hold identically on Win11.
+ */
+static void Test_MonitoredFence_CpuValuePage(void)
+{
+    D3DKMT_CREATESYNCHRONIZATIONOBJECT2 cso;
+    D3DKMT_HANDLE hAdapter, hDevice;
+    NTSTATUS Status;
+    volatile const UINT64 *FenceVa;
+    PFND3DKMT_CREATESYNCHRONIZATIONOBJECT2 pCreate;
+    PFND3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU pSignal;
+    PFND3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU pWait;
+    PFND3DKMT_DESTROYSYNCHRONIZATIONOBJECT pDestroy;
+
+    pCreate = (PFND3DKMT_CREATESYNCHRONIZATIONOBJECT2)
+              LoadD3DKMTProc("D3DKMTCreateSynchronizationObject2");
+    pSignal = (PFND3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU)
+              LoadD3DKMTProc("D3DKMTSignalSynchronizationObjectFromCpu");
+    pWait   = (PFND3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU)
+              LoadD3DKMTProc("D3DKMTWaitForSynchronizationObjectFromCpu");
+    pDestroy = (PFND3DKMT_DESTROYSYNCHRONIZATIONOBJECT)
+               LoadD3DKMTProc("D3DKMTDestroySynchronizationObject");
+    if (!pCreate || !pSignal || !pWait || !pDestroy)
+    {
+        skip("monitored-fence entry points not exported\n");
+        return;
+    }
+
+    hAdapter = OpenAdapterFromDisplay1();
+    if (!hAdapter) { skip("No adapter on \\\\.\\DISPLAY1\n"); return; }
+    hDevice = CreateTestDevice(hAdapter);
+    if (!hDevice) { skip("CreateDevice failed\n"); CloseAdapter(hAdapter); return; }
+
+    memset(&cso, 0, sizeof(cso));
+    cso.hDevice = hDevice;
+    cso.Info.Type = D3DDDI_MONITORED_FENCE;
+    cso.Info.MonitoredFence.InitialFenceValue = 7;
+
+    Status = pCreate(&cso);
+    if (!NT_SUCCESS(Status))
+    {
+        skip("Monitored fence create not supported (0x%08lX)\n", (long)Status);
+        goto cleanup;
+    }
+
+    FenceVa = (volatile const UINT64 *)
+              cso.Info.MonitoredFence.FenceValueCPUVirtualAddress;
+    ok(FenceVa != NULL, "FenceValueCPUVirtualAddress should be non-NULL\n");
+
+    if (FenceVa != NULL)
+    {
+        ok(*FenceVa == 7,
+           "mapped fence value should equal InitialFenceValue (7), got %I64u\n",
+           *FenceVa);
+
+        {
+            D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU sig;
+            D3DKMT_HANDLE Handles[1];
+            UINT64 Values[1];
+
+            memset(&sig, 0, sizeof(sig));
+            Handles[0] = cso.hSyncObject;
+            Values[0] = 42;
+            sig.hDevice = hDevice;
+            sig.ObjectCount = 1;
+            sig.ObjectHandleArray = Handles;
+            sig.FenceValueArray = Values;
+
+            Status = pSignal(&sig);
+            ok(NT_SUCCESS(Status),
+               "SignalSynchronizationObjectFromCpu failed 0x%08lX\n",
+               (long)Status);
+
+            if (NT_SUCCESS(Status))
+            {
+                ok(*FenceVa == 42,
+                   "mapped fence value should be 42 after CPU signal, "
+                   "got %I64u\n", *FenceVa);
+            }
+
+            /* A satisfied wait must complete immediately. */
+            {
+                D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU wait;
+
+                memset(&wait, 0, sizeof(wait));
+                wait.hDevice = hDevice;
+                wait.ObjectCount = 1;
+                wait.ObjectHandleArray = Handles;
+                wait.FenceValueArray = Values;
+
+                Status = pWait(&wait);
+                ok(NT_SUCCESS(Status),
+                   "WaitForSynchronizationObjectFromCpu(42) failed "
+                   "0x%08lX\n", (long)Status);
+            }
+        }
+    }
+
+    {
+        D3DKMT_DESTROYSYNCHRONIZATIONOBJECT dso;
+        memset(&dso, 0, sizeof(dso));
+        dso.hSyncObject = cso.hSyncObject;
+        Status = pDestroy(&dso);
+        ok(NT_SUCCESS(Status),
+           "DestroySynchronizationObject failed 0x%08lX\n", (long)Status);
+    }
+
+cleanup:
+    DestroyTestDevice(hDevice);
+    CloseAdapter(hAdapter);
+}
+
 START_TEST(sync2)
 {
     Test_CreateSyncObject2_NullArg();
@@ -116,4 +231,5 @@ START_TEST(sync2)
     Test_SignalSyncObjectFromCpu_NullArg();
     Test_SignalSyncObjectFromGpu_NullArg();
     Test_MonitoredFence_Lifecycle();
+    Test_MonitoredFence_CpuValuePage();
 }

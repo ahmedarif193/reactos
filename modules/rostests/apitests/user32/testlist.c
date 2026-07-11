@@ -64,6 +64,7 @@ extern void func_SetWindowPlacement(void);
 extern void func_ShowWindow(void);
 extern void func_SwitchToThisWindow(void);
 extern void func_SystemParametersInfo(void);
+extern void func_TopmostBand(void);
 extern void func_SystemMenu(void);
 extern void func_TrackMouseEvent(void);
 extern void func_TrackPopupMenuEx(void);
@@ -136,6 +137,7 @@ const struct test winetest_testlist[] =
     { "SwitchToThisWindow", func_SwitchToThisWindow },
     { "SystemMenu", func_SystemMenu },
     { "SystemParametersInfo", func_SystemParametersInfo },
+    { "TopmostBand", func_TopmostBand },
     { "TrackMouseEvent", func_TrackMouseEvent },
     { "TrackPopupMenuEx", func_TrackPopupMenuEx },
     { "VirtualKey", func_VirtualKey },
