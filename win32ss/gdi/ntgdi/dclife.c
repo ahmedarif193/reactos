@@ -555,8 +555,10 @@ DC_vPrepareDCsForBlit(
     {
         EngAcquireSemaphore(pdcFirst->ppdev->hsemDevLock);
 
-        /* Update surface if needed */
-        if (pdcFirst->ppdev->pSurface != pdcFirst->dclevel.pSurface)
+        /* Update surface if needed — but never for a DC_REDIRECTION DC, whose
+         * surface is deliberately a composition backing, not the PDEV primary. */
+        if (pdcFirst->ppdev->pSurface != pdcFirst->dclevel.pSurface &&
+            !(pdcFirst->fs & DC_REDIRECTION))
         {
             DC_vUpdateDC(pdcFirst);
         }
@@ -586,8 +588,9 @@ DC_vPrepareDCsForBlit(
     {
         EngAcquireSemaphore(pdcSecond->ppdev->hsemDevLock);
 
-        /* Update surface if needed */
-        if (pdcSecond->ppdev->pSurface != pdcSecond->dclevel.pSurface)
+        /* Update surface if needed — but never for a DC_REDIRECTION DC. */
+        if (pdcSecond->ppdev->pSurface != pdcSecond->dclevel.pSurface &&
+            !(pdcSecond->fs & DC_REDIRECTION))
         {
             DC_vUpdateDC(pdcSecond);
         }
@@ -614,6 +617,18 @@ VOID
 FASTCALL
 DC_vFinishBlit(PDC pdc1, PDC pdc2)
 {
+    /* A blit touched a composition backing — or the primary directly (desktop
+     * paint, XOR drag/focus artists) — schedule a recompose so composited
+     * windows are re-asserted over direct draws. The compose itself runs on
+     * the throttled tick, under the USER lock; its own primary blits are
+     * excluded inside the damage calls. */
+    if (pdc1->fs & DC_REDIRECTION)
+        IntCompositionDamageBacking(pdc1->dclevel.pSurface);
+    else if (pdc2 != NULL && (pdc2->fs & DC_REDIRECTION))
+        IntCompositionDamageBacking(pdc2->dclevel.pSurface);
+    else if (pdc1->dctype == DCTYPE_DIRECT)
+        IntCompositionDamageFromGdi();
+
     if (pdc1->dctype == DCTYPE_DIRECT)
     {
         MouseSafetyOnDrawEnd(pdc1->ppdev);
