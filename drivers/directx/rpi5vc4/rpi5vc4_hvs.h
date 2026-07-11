@@ -24,6 +24,14 @@
 
 /* Global / per-channel registers (byte offsets into the register block). */
 #define RPI5_HVS_REG_CONTROL            0x20    /* SCALER6_CONTROL */
+#define RPI5_HVS_CONTROL_PF_LINES_SHIFT 18      /* field 22:18 */
+#define RPI5_HVS_CONTROL_PF_LINES_MASK  (0x1Fu << 18)
+#define RPI5_HVS_CONTROL_MAX_REQS_SHIFT 4       /* field 7:4 */
+#define RPI5_HVS_CONTROL_MAX_REQS_MASK  (0xFu << 4)
+#define RPI5_HVS_PRI_MAP0_C             0xB8    /* SCALER6_PRI_MAP0  (C-step) */
+#define RPI5_HVS_PRI_MAP1_C             0xBC
+#define RPI5_HVS_PRI_MAP0_D             0x38    /* SCALER6D0_PRI_MAP0 (D-step) */
+#define RPI5_HVS_PRI_MAP1_D             0x3C
 #define RPI5_HVS_CONTROL_HVS_EN         (1u << 31)
 #define RPI5_HVS_LPTRS_C                0x3c    /* SCALER6_DISP0_LPTRS  (C-step) */
 #define RPI5_HVS_LPTRS_D                0x110   /* SCALER6D_DISP0_LPTRS (D-step) */
@@ -84,6 +92,20 @@
 #define RPI5_HVS_CONTEXT_INIT           0xc0c0c0c0u
 
 /*
+ * Private display-list slots for multi-plane composition.  The SCALER6
+ * dlist RAM spans (RPI5_HVS_LENGTH - RPI5_HVS_DLIST_OFFSET) bytes =
+ * 0x5800 dwords; the firmware allocates from the bottom, so two
+ * double-buffered slots near the top stay clear of it.  Each slot holds
+ * RPI5_HVS_MPO_MAX_PLANES planes + the cursor overlay + a terminator.
+ * (Region bounds unverified on silicon — see parity roadmap 3.2.)
+ */
+#define RPI5_HVS_DLIST_DWORDS           ((RPI5_HVS_LENGTH - RPI5_HVS_DLIST_OFFSET) / 4)
+#define RPI5_HVS_MPO_MAX_PLANES         3
+#define RPI5_HVS_PRIVATE_SLOT_DWORDS    ((RPI5_HVS_MPO_MAX_PLANES + 1) * RPI5_HVS_PLANE_DWORDS + 1)
+#define RPI5_HVS_PRIVATE_SLOT_A         (RPI5_HVS_DLIST_DWORDS - 0x100)
+#define RPI5_HVS_PRIVATE_SLOT_B         (RPI5_HVS_DLIST_DWORDS - 0x200)
+
+/*
  * One SCALER6 plane element:
  *   CTL0 POS0 CTL2 POS2 CTX PTR0 PTR1 PTR2 END
  *
@@ -132,5 +154,36 @@ BOOLEAN
 Rpi5HvsFlipScanout(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
     _In_ PHYSICAL_ADDRESS FrameBufferPhysical);
+
+/* WaitVBlank=FALSE: atomic no-wait flip for the triple-buffered present
+ * ring (pointer words latch at frame start). */
+BOOLEAN
+Rpi5HvsFlipScanoutEx(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ PHYSICAL_ADDRESS FrameBufferPhysical,
+    _In_ BOOLEAN WaitVBlank);
+
+/* One plane of a multi-plane (MPO) composition, bottom-up layer order. */
+typedef struct _RPI5VC4_HVS_PLANE
+{
+    ULONGLONG Phys;
+    ULONG X;
+    ULONG Y;
+    ULONG Width;
+    ULONG Height;
+    ULONG PitchBytes;
+    BOOLEAN Opaque;                   /* FALSE = per-pixel premult alpha  */
+} RPI5VC4_HVS_PLANE, *PRPI5VC4_HVS_PLANE;
+
+/*
+ * Compose Count planes (plus the hardware cursor on top) through a
+ * private double-buffered display-list slot and re-point the live
+ * LIST_PTR head at it.  Count <= RPI5_HVS_MPO_MAX_PLANES.
+ */
+BOOLEAN
+Rpi5HvsInstallPlaneList(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_reads_(Count) CONST RPI5VC4_HVS_PLANE *Planes,
+    _In_ ULONG Count);
 
 #endif /* _RPI5VC4_HVS_H_ */

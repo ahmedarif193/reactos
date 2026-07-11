@@ -104,6 +104,13 @@ static volatile LONG DxgkVidMmNextGlobalShareHandle = 0;
 
 /* HELPERS ********************************************************************/
 
+/* Paging content transfer (defined after the CPU-mapping helpers). */
+static VOID
+DxgkpVidMmTransferAllocationContent(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ BOOLEAN ToSegment);
+
 /*
  * VidMmSegmentIsAperture
  * Returns TRUE if this is a GPU-visible system memory aperture segment.
@@ -618,7 +625,16 @@ DxgkVidMmInitializeAdapter(
     NTSTATUS                        Status;
     DXGKARG_QUERYADAPTERINFO        QueryInfo;
     DXGK_QUERYSEGMENTOUT            SegOut;
-    PDXGK_SEGMENTDESCRIPTOR         DescArray;
+    DXGK_QUERYSEGMENTOUT3           SegOut3;
+    DXGK_QUERYSEGMENTOUT4           SegOut4;
+    DXGK_QUERYSEGMENTIN4            QueryIn4;
+    PUCHAR                          DescBuffer;
+    SIZE_T                          DescStride;
+    SIZE_T                          Seg4Stride = sizeof(DXGK_SEGMENTDESCRIPTOR4);
+    BOOLEAN                         UsingSeg3;
+    BOOLEAN                         UsingSeg4;
+    ULONG                           PagingBufferSegmentId;
+    ULONG                           PagingBufferSize;
     PDXGKRNL_SEGMENT                Segments;
     ULONG                           SegmentCount;
     ULONG                           i;
@@ -655,61 +671,85 @@ DxgkVidMmInitializeAdapter(
     /* -----------------------------------------------------------------------
      * Step 1: Query segment count (NbSegment discovery pass).
      *
-     * DXGKQAITYPE_QUERYSEGMENT takes no input data; pInputData is NULL.
+     * WDDM 2.0+ drivers (version >= 0x4000) implement QUERYSEGMENT3 (with
+     * the distinct DXGK_QUERYSEGMENTOUT3/DXGK_SEGMENTDESCRIPTOR3 layouts);
+     * legacy drivers implement the original QUERYSEGMENT.  Try QUERYSEGMENT3
+     * first for modern drivers and fall back.  Neither takes input data;
      * pSegmentDescriptor == NULL tells the miniport to write only NbSegment.
      * ----------------------------------------------------------------------- */
+    UsingSeg4 = (Adapter->MiniportContext->InitData.s.Version >=
+                 DXGKDDI_INTERFACE_VERSION_WDDM2_0);
+    UsingSeg3 = (!UsingSeg4 &&
+                 Adapter->MiniportContext->InitData.s.Version >= 0x4000);
+
     RtlZeroMemory(&SegOut, sizeof(SegOut));
-    SegOut.pSegmentDescriptor = NULL;
-    SegOut.NbSegment          = 0;
+    RtlZeroMemory(&SegOut3, sizeof(SegOut3));
+    RtlZeroMemory(&SegOut4, sizeof(SegOut4));
+    RtlZeroMemory(&QueryIn4, sizeof(QueryIn4));
+    SegOut4.SegmentDescriptorStride = Seg4Stride;
 
-    RtlZeroMemory(&QueryInfo, sizeof(QueryInfo));
-    /*
-     * WDDM 2.0+ drivers (version >= 0x4000) implement QUERYSEGMENT3,
-     * not the original QUERYSEGMENT.  Try QUERYSEGMENT3 first for
-     * modern drivers, then fall back to QUERYSEGMENT for legacy ones.
-     */
-    QueryInfo.Type           = (Adapter->MiniportContext->InitData.s.Version >= 0x4000)
-                                ? DXGKQAITYPE_QUERYSEGMENT3
-                                : DXGKQAITYPE_QUERYSEGMENT;
-    QueryInfo.pInputData     = NULL;
-    QueryInfo.InputDataSize  = 0;
-    QueryInfo.pOutputData    = &SegOut;
-    QueryInfo.OutputDataSize = sizeof(SegOut);
-
-    DPRINT("DxgkVidMmInitializeAdapter: querying segments type=%d version=0x%X\n",
-           QueryInfo.Type, Adapter->MiniportContext->InitData.s.Version);
-
-    Status = Adapter->MiniportContext->InitData.s.DxgkDdiQueryAdapterInfo(
-                 Adapter->MiniportDeviceContext,
-                 &QueryInfo);
-
-    if (!NT_SUCCESS(Status))
+    for (;;)
     {
-        /* If QUERYSEGMENT3 failed, try QUERYSEGMENT as fallback */
-        if (QueryInfo.Type == DXGKQAITYPE_QUERYSEGMENT3)
+        RtlZeroMemory(&QueryInfo, sizeof(QueryInfo));
+        if (UsingSeg4)
         {
-            DPRINT("DxgkVidMmInitializeAdapter: QUERYSEGMENT3 failed 0x%08lX, "
-                   "trying QUERYSEGMENT\n", Status);
-            QueryInfo.Type = DXGKQAITYPE_QUERYSEGMENT;
-            Status = Adapter->MiniportContext->InitData.s.DxgkDdiQueryAdapterInfo(
-                         Adapter->MiniportDeviceContext,
-                         &QueryInfo);
+            QueryInfo.Type           = DXGKQAITYPE_QUERYSEGMENT4;
+            QueryInfo.pInputData     = &QueryIn4;
+            QueryInfo.InputDataSize  = sizeof(QueryIn4);
+            QueryInfo.pOutputData    = &SegOut4;
+            QueryInfo.OutputDataSize = sizeof(SegOut4);
+        }
+        else if (UsingSeg3)
+        {
+            QueryInfo.Type           = DXGKQAITYPE_QUERYSEGMENT3;
+            QueryInfo.pOutputData    = &SegOut3;
+            QueryInfo.OutputDataSize = sizeof(SegOut3);
+        }
+        else
+        {
+            QueryInfo.Type           = DXGKQAITYPE_QUERYSEGMENT;
+            QueryInfo.pOutputData    = &SegOut;
+            QueryInfo.OutputDataSize = sizeof(SegOut);
         }
 
-        if (!NT_SUCCESS(Status))
+        DPRINT("DxgkVidMmInitializeAdapter: querying segments type=%d "
+               "version=0x%X\n",
+               QueryInfo.Type, Adapter->MiniportContext->InitData.s.Version);
+
+        Status = Adapter->MiniportContext->InitData.s.DxgkDdiQueryAdapterInfo(
+                     Adapter->MiniportDeviceContext,
+                     &QueryInfo);
+        if (NT_SUCCESS(Status))
+            break;
+
+        /* Fall back through the query flavours: 4 -> 3 -> legacy. */
+        if (UsingSeg4)
         {
-            if (Status == STATUS_NOT_SUPPORTED)
-            {
-                DPRINT("DxgkVidMmInitializeAdapter: QUERYSEGMENT not supported\n");
-                return STATUS_NOT_SUPPORTED;
-            }
-            DPRINT1("DxgkVidMmInitializeAdapter: QUERYSEGMENT failed: 0x%08lx\n",
-                    Status);
-            return Status;
+            UsingSeg4 = FALSE;
+            UsingSeg3 = TRUE;
+            continue;
         }
+        if (UsingSeg3)
+        {
+            UsingSeg3 = FALSE;
+            continue;
+        }
+
+        if (Status == STATUS_NOT_SUPPORTED)
+        {
+            DPRINT("DxgkVidMmInitializeAdapter: QUERYSEGMENT not supported\n");
+            return STATUS_NOT_SUPPORTED;
+        }
+        DPRINT1("DxgkVidMmInitializeAdapter: QUERYSEGMENT failed: 0x%08lx\n",
+                Status);
+        return Status;
     }
 
-    SegmentCount = SegOut.NbSegment;
+    if (UsingSeg4 && SegOut4.SegmentDescriptorStride > Seg4Stride)
+        Seg4Stride = SegOut4.SegmentDescriptorStride;
+
+    SegmentCount = UsingSeg4 ? SegOut4.NbSegment
+                             : (UsingSeg3 ? SegOut3.NbSegment : SegOut.NbSegment);
 
     if (SegmentCount == 0 || SegmentCount > VIDMM_MAX_SEGMENTS)
     {
@@ -722,27 +762,44 @@ DxgkVidMmInitializeAdapter(
            SegmentCount);
 
     /* -----------------------------------------------------------------------
-     * Step 2: Allocate the miniport descriptor array for the fill pass.
+     * Step 2: Allocate the miniport descriptor array for the fill pass
+     *         (stride-matched to the query flavour in use).
      * ----------------------------------------------------------------------- */
-    DescArray = (PDXGK_SEGMENTDESCRIPTOR)ExAllocatePoolWithTag(
-                    NonPagedPool,
-                    SegmentCount * sizeof(DXGK_SEGMENTDESCRIPTOR),
-                    TAG_VIDMM_SEGMENT);
+    DescStride = UsingSeg4 ? Seg4Stride
+                           : (UsingSeg3 ? sizeof(DXGK_SEGMENTDESCRIPTOR3)
+                                        : sizeof(DXGK_SEGMENTDESCRIPTOR));
 
-    if (DescArray == NULL)
+    DescBuffer = (PUCHAR)ExAllocatePoolWithTag(NonPagedPool,
+                                               SegmentCount * DescStride,
+                                               TAG_VIDMM_SEGMENT);
+    if (DescBuffer == NULL)
     {
         DPRINT1("DxgkVidMmInitializeAdapter: cannot allocate descriptor "
                 "array for %lu segments\n", SegmentCount);
         return STATUS_NO_MEMORY;
     }
 
-    RtlZeroMemory(DescArray, SegmentCount * sizeof(DXGK_SEGMENTDESCRIPTOR));
+    RtlZeroMemory(DescBuffer, SegmentCount * DescStride);
 
     /* -----------------------------------------------------------------------
      * Step 3: Fill pass — miniport writes segment descriptors.
      * ----------------------------------------------------------------------- */
-    SegOut.NbSegment          = SegmentCount;
-    SegOut.pSegmentDescriptor = DescArray;
+    if (UsingSeg4)
+    {
+        SegOut4.NbSegment               = SegmentCount;
+        SegOut4.pSegmentDescriptor      = DescBuffer;
+        SegOut4.SegmentDescriptorStride = Seg4Stride;
+    }
+    else if (UsingSeg3)
+    {
+        SegOut3.NbSegment          = SegmentCount;
+        SegOut3.pSegmentDescriptor = (PDXGK_SEGMENTDESCRIPTOR3)DescBuffer;
+    }
+    else
+    {
+        SegOut.NbSegment          = SegmentCount;
+        SegOut.pSegmentDescriptor = (PDXGK_SEGMENTDESCRIPTOR)DescBuffer;
+    }
 
     Status = Adapter->MiniportContext->InitData.s.DxgkDdiQueryAdapterInfo(
                  Adapter->MiniportDeviceContext,
@@ -752,8 +809,24 @@ DxgkVidMmInitializeAdapter(
     {
         DPRINT1("DxgkVidMmInitializeAdapter: QUERYSEGMENT fill-pass "
                 "failed: 0x%08lx\n", Status);
-        ExFreePoolWithTag(DescArray, TAG_VIDMM_SEGMENT);
+        ExFreePoolWithTag(DescBuffer, TAG_VIDMM_SEGMENT);
         return Status;
+    }
+
+    if (UsingSeg4)
+    {
+        PagingBufferSegmentId = SegOut4.PagingBufferSegmentId;
+        PagingBufferSize      = SegOut4.PagingBufferSize;
+    }
+    else if (UsingSeg3)
+    {
+        PagingBufferSegmentId = SegOut3.PagingBufferSegmentId;
+        PagingBufferSize      = SegOut3.PagingBufferSize;
+    }
+    else
+    {
+        PagingBufferSegmentId = SegOut.PagingBufferSegmentId;
+        PagingBufferSize      = SegOut.PagingBufferSize;
     }
 
     /* -----------------------------------------------------------------------
@@ -768,27 +841,40 @@ DxgkVidMmInitializeAdapter(
     {
         DPRINT1("DxgkVidMmInitializeAdapter: cannot allocate segment "
                 "array (%lu entries)\n", SegmentCount);
-        ExFreePoolWithTag(DescArray, TAG_VIDMM_SEGMENT);
+        ExFreePoolWithTag(DescBuffer, TAG_VIDMM_SEGMENT);
         return STATUS_NO_MEMORY;
     }
 
     RtlZeroMemory(Segments, SegmentCount * sizeof(DXGKRNL_SEGMENT));
 
     /* -----------------------------------------------------------------------
-     * Step 5: Populate each DXGKRNL_SEGMENT from the miniport descriptor.
+     * Step 5: Populate each DXGKRNL_SEGMENT from the miniport descriptor
+     *         (the two descriptor flavours carry the same placement facts).
      * ----------------------------------------------------------------------- */
+/* The three descriptor flavours carry identical placement fields. */
+#define VIDMM_READ_SEGMENT_DESC(DescType)                                   \
+        do {                                                                \
+            DescType *Desc = (DescType *)(DescBuffer + i * DescStride);     \
+            Seg->Size        = (ULONGLONG)Desc->Size;                       \
+            Seg->BaseAddress = Desc->BaseAddress;                           \
+            Seg->Flags       = Desc->Flags;                                 \
+        } while (0)
+
     for (i = 0; i < SegmentCount; i++)
     {
         PDXGKRNL_SEGMENT        Seg  = &Segments[i];
-        PDXGK_SEGMENTDESCRIPTOR Desc = &DescArray[i];
 
         /* Segment IDs are 1-based per WDDM convention. */
         Seg->SegmentId    = i + 1;
-        Seg->Size         = (ULONGLONG)Desc->Size;
         Seg->UsedSize     = 0;
-        Seg->BaseAddress  = Desc->BaseAddress;
         Seg->CpuBase      = NULL;   /* mapped lazily on first CPU access */
-        Seg->Flags        = Desc->Flags;
+
+        if (UsingSeg4)
+            VIDMM_READ_SEGMENT_DESC(DXGK_SEGMENTDESCRIPTOR4);
+        else if (UsingSeg3)
+            VIDMM_READ_SEGMENT_DESC(DXGK_SEGMENTDESCRIPTOR3);
+        else
+            VIDMM_READ_SEGMENT_DESC(DXGK_SEGMENTDESCRIPTOR);
 
         InitializeListHead(&Seg->AllocationList);
         ExInitializeFastMutex(&Seg->Lock);
@@ -800,9 +886,9 @@ DxgkVidMmInitializeAdapter(
          */
         if (i == 0)
         {
-            Seg->PagingBufferSegmentId = SegOut.PagingBufferSegmentId;
-            Seg->PagingBufferSize      = (SegOut.PagingBufferSize != 0)
-                                         ? SegOut.PagingBufferSize
+            Seg->PagingBufferSegmentId = PagingBufferSegmentId;
+            Seg->PagingBufferSize      = (PagingBufferSize != 0)
+                                         ? PagingBufferSize
                                          : VIDMM_PAGING_BUFFER_SIZE_DEFAULT;
         }
 
@@ -814,6 +900,7 @@ DxgkVidMmInitializeAdapter(
                Seg->Flags,
                VidMmSegmentIsAperture(Seg) ? "APERTURE" : "VRAM");
     }
+#undef VIDMM_READ_SEGMENT_DESC
 
     /* -----------------------------------------------------------------------
      * Step 6: Publish the segment table to the adapter.
@@ -827,7 +914,7 @@ DxgkVidMmInitializeAdapter(
     Adapter->SegmentCount  = SegmentCount;
     KeMemoryBarrier();
 
-    ExFreePoolWithTag(DescArray, TAG_VIDMM_SEGMENT);
+    ExFreePoolWithTag(DescBuffer, TAG_VIDMM_SEGMENT);
 
     DPRINT("DxgkVidMmInitializeAdapter: %lu segments initialised for "
            "adapter %p\n", SegmentCount, Adapter);
@@ -1629,7 +1716,20 @@ DxgkCreateAllocation(
         if (!NT_SUCCESS(Status))
             break;
 
-        if (UseSystemAllocation)
+        /*
+         * The private-data-size heuristic above infers a size but must NOT force
+         * a pool-backed "system" allocation when the adapter has a real miniport:
+         * a VRAM-backed miniport (e.g. rpi5vc4) has to go through
+         * DxgkVidMmCreateAllocation so the allocation is placed in a device
+         * segment and gets a slab-relative physical address the GPU can reach
+         * (the parsed DxgkAllocInfo.Size is carried into DxgkDdiCreateAllocation).
+         * Pool RAM (MmGetPhysicalAddress) lies outside the slab window and is
+         * rejected by the UMD at D3DKMTMapGpuVirtualAddress time.  Only adapters
+         * with no CreateAllocation DDI fall back to the synthetic system path.
+         */
+        if (UseSystemAllocation &&
+            (Adapter->MiniportContext == NULL ||
+             Adapter->MiniportContext->InitData.s.DxgkDdiCreateAllocation == NULL))
         {
             DxgkAllocInfo.Flags.CpuVisible = 1;
             Status = DxgkpVidMmCreateSystemAllocation(Adapter,
@@ -1900,37 +2000,53 @@ DxgkVidMmTryPlaceInSegment(
         return STATUS_NO_MEMORY;
     }
 
+    /* Virgin-VA-first: place above the high-water mark while it lasts. */
+    {
+        ULONGLONG Bump = VidMmAlignUp(Segment->BumpOffset,
+                                      (ULONGLONG)Allocation->Alignment);
+
+        if (Bump + AlignedSize <= Segment->Size)
+        {
+            CandidateOffset = Bump;
+            Segment->BumpOffset = Bump + AlignedSize;
+            Found = TRUE;
+        }
+    }
+
     /*
      * First-fit search: advance CandidateOffset past each existing
      * allocation until a gap large enough for AlignedSize is found.
      */
-    for (Entry = Segment->AllocationList.Flink;
-         Entry != &Segment->AllocationList;
-         Entry = Entry->Flink)
+    if (!Found)
     {
-        PDXGKVMM_ALLOCATION Existing;
-        ULONGLONG           ExistStart;
-        ULONGLONG           AlignedCandidate;
-        ULONGLONG           NeededEnd;
-
-        Existing = CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, SegmentEntry);
-
-        ExistStart      = Existing->SegmentOffset;
-        AlignedCandidate = VidMmAlignUp(CandidateOffset,
-                                        (ULONGLONG)Allocation->Alignment);
-        NeededEnd        = AlignedCandidate + AlignedSize;
-
-        if (NeededEnd <= ExistStart)
+        for (Entry = Segment->AllocationList.Flink;
+             Entry != &Segment->AllocationList;
+             Entry = Entry->Flink)
         {
-            CandidateOffset = AlignedCandidate;
-            Found           = TRUE;
-            break;
-        }
+            PDXGKVMM_ALLOCATION Existing;
+            ULONGLONG           ExistStart;
+            ULONGLONG           AlignedCandidate;
+            ULONGLONG           NeededEnd;
 
-        /* Advance past this allocation. */
-        CandidateOffset = Existing->SegmentOffset
-                          + VidMmAlignUp((ULONGLONG)Existing->Size,
-                                         (ULONGLONG)Existing->Alignment);
+            Existing = CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, SegmentEntry);
+
+            ExistStart      = Existing->SegmentOffset;
+            AlignedCandidate = VidMmAlignUp(CandidateOffset,
+                                            (ULONGLONG)Allocation->Alignment);
+            NeededEnd        = AlignedCandidate + AlignedSize;
+
+            if (NeededEnd <= ExistStart)
+            {
+                CandidateOffset = AlignedCandidate;
+                Found           = TRUE;
+                break;
+            }
+
+            /* Advance past this allocation. */
+            CandidateOffset = Existing->SegmentOffset
+                              + VidMmAlignUp((ULONGLONG)Existing->Size,
+                                             (ULONGLONG)Existing->Alignment);
+        }
     }
 
     if (!Found)
@@ -2109,11 +2225,18 @@ DxgkVidMmEvict(
 
     Segment = &ADAPTER_SEGMENTS(Adapter)[Allocation->SegmentId - 1];
 
+    /* A user-mapped allocation cannot move: the UMD holds the pointer and
+     * keeps writing through it; unmapping here leaves it dangling and the
+     * GPU address it baked into command streams stale. */
+    if (Allocation->UserModeAddress != NULL)
+    {
+        DPRINT1("DxgkVidMmEvict: refusing user-mapped alloc %p (seg %lu off 0x%I64x)\n",
+                Allocation, Allocation->SegmentId, Allocation->SegmentOffset);
+        return STATUS_DEVICE_BUSY;
+    }
+
     if (VidMmSegmentIsAperture(Segment))
         DxgkpVidMmReleaseApertureMapping(Allocation);
-
-    if (Allocation->UserModeAddress != NULL)
-        DxgkVidMmUnmapAllocationUser(Allocation);
 
     /* Unmap CPU access first (before we invalidate the segment offset). */
     if (Allocation->CpuAddress != NULL &&
@@ -2143,6 +2266,13 @@ DxgkVidMmEvict(
 
         RtlZeroMemory(Allocation->SystemMemory, BackingSize);
     }
+
+    /*
+     * Preserve the allocation's content across the eviction (documented
+     * VidMm behavior): download segment content into the backing store
+     * while the placement is still valid.
+     */
+    DxgkpVidMmTransferAllocationContent(Adapter, Allocation, FALSE);
 
     /* Remove allocation from segment list and update accounting. */
     AlignedSize = VidMmAlignUp((ULONGLONG)Allocation->Size,
@@ -2267,7 +2397,11 @@ DxgkVidMmMakeResident(
     }
 
     if (Placed)
+    {
+        /* Upload the preserved content into the new placement. */
+        DxgkpVidMmTransferAllocationContent(Adapter, Allocation, TRUE);
         return STATUS_SUCCESS;
+    }
 
     /* Pass 2: evict lowest-priority resident and retry. */
     for (i = 0; i < Adapter->SegmentCount && !Placed; i++)
@@ -2325,6 +2459,9 @@ DxgkVidMmMakeResident(
                 "all segments full\n", Allocation);
         return STATUS_NO_MEMORY;
     }
+
+    /* Upload the preserved content into the new placement. */
+    DxgkpVidMmTransferAllocationContent(Adapter, Allocation, TRUE);
 
     return STATUS_SUCCESS;
 }
@@ -2526,6 +2663,141 @@ DxgkVidMmGetAllocationPrimaryAddress(
     return Address;
 }
 
+/*
+ * DxgkpVidMmTransferAllocationContent
+ *
+ * Moves an allocation's content between its system-memory backing store
+ * and its segment placement (ToSegment=TRUE uploads backing->segment on
+ * MakeResident; FALSE downloads segment->backing on Evict), so paging
+ * preserves content the way Windows VidMm does.  Prefers the miniport's
+ * documented BuildPagingBuffer(TRANSFER) operation and falls back to a
+ * CPU copy through the segment's write-combined mapping.
+ *
+ * Must be called while the allocation's SegmentId/SegmentOffset placement
+ * is still valid.
+ */
+static VOID
+DxgkpVidMmTransferAllocationContent(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ BOOLEAN ToSegment)
+{
+    PDXGKRNL_SEGMENT Segment;
+    DXGKARG_BUILDPAGINGBUFFER BuildArgs;
+    PMDL Mdl;
+    NTSTATUS Status = STATUS_NOT_SUPPORTED;
+
+    if (Adapter == NULL || Allocation == NULL ||
+        Allocation->SystemMemory == NULL ||
+        Allocation->Size == 0 ||
+        Adapter->Segments == NULL ||
+        Allocation->SegmentId < 1 ||
+        Allocation->SegmentId > Adapter->SegmentCount)
+    {
+        return;
+    }
+
+    Segment = &ADAPTER_SEGMENTS(Adapter)[Allocation->SegmentId - 1];
+    if (VidMmSegmentIsAperture(Segment))
+        return; /* aperture placements alias the backing store directly */
+
+    if (Adapter->MiniportContext != NULL &&
+        Adapter->MiniportContext->InitData.s.DxgkDdiBuildPagingBuffer != NULL)
+    {
+        Mdl = IoAllocateMdl(Allocation->SystemMemory,
+                            (ULONG)ALIGN_UP_BY(Allocation->Size, PAGE_SIZE),
+                            FALSE,
+                            FALSE,
+                            NULL);
+        if (Mdl != NULL)
+        {
+            MmBuildMdlForNonPagedPool(Mdl);
+
+            RtlZeroMemory(&BuildArgs, sizeof(BuildArgs));
+            BuildArgs.Operation = DXGK_OPERATION_TRANSFER;
+            BuildArgs.Transfer.TransferSize = Allocation->Size;
+
+            if (ToSegment)
+            {
+                BuildArgs.Transfer.Source.SegmentId = 0;
+                BuildArgs.Transfer.Source.pMdl = Mdl;
+                BuildArgs.Transfer.Destination.hAllocation =
+                    Allocation->MiniportHandle;
+                BuildArgs.Transfer.Destination.SegmentId =
+                    Allocation->SegmentId;
+                BuildArgs.Transfer.Destination.SegmentAddress.QuadPart =
+                    (LONGLONG)Allocation->SegmentOffset;
+            }
+            else
+            {
+                BuildArgs.Transfer.Source.hAllocation =
+                    Allocation->MiniportHandle;
+                BuildArgs.Transfer.Source.SegmentId = Allocation->SegmentId;
+                BuildArgs.Transfer.Source.SegmentAddress.QuadPart =
+                    (LONGLONG)Allocation->SegmentOffset;
+                BuildArgs.Transfer.Destination.SegmentId = 0;
+                BuildArgs.Transfer.Destination.pMdl = Mdl;
+            }
+
+            Status = Adapter->MiniportContext->InitData.s.DxgkDdiBuildPagingBuffer(
+                         Adapter->MiniportDeviceContext,
+                         &BuildArgs);
+
+            IoFreeMdl(Mdl);
+        }
+    }
+
+    if (!NT_SUCCESS(Status) && VidMmSegmentIsCpuVisible(Segment))
+    {
+        /* Fallback: CPU copy through the segment's WC mapping. */
+        if (NT_SUCCESS(VidMmMapSegmentCpu(Segment)) &&
+            Allocation->SegmentOffset + Allocation->Size <= Segment->Size)
+        {
+            PUCHAR SegmentVa = (PUCHAR)Segment->CpuBase +
+                               Allocation->SegmentOffset;
+
+            if (ToSegment)
+            {
+                RtlCopyMemory(SegmentVa, Allocation->SystemMemory,
+                              Allocation->Size);
+            }
+            else
+            {
+                RtlCopyMemory(Allocation->SystemMemory, SegmentVa,
+                              Allocation->Size);
+            }
+            Status = STATUS_SUCCESS;
+        }
+    }
+
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("DxgkpVidMmTransferAllocationContent: %s failed 0x%08lx "
+                "alloc=%p\n",
+                ToSegment ? "upload" : "download", Status, Allocation);
+    }
+}
+
+VOID
+DxgkVidMmFillAllocationListEntry(
+    _In_ D3DKMT_HANDLE AllocationHandle,
+    _Inout_ DXGK_ALLOCATIONLIST *ListEntry)
+{
+    PDXGKVMM_ALLOCATION Allocation;
+
+    if (ListEntry == NULL || AllocationHandle == 0)
+        return;
+
+    Allocation = DxgkVidMmHandleToAllocation((HANDLE)(ULONG_PTR)AllocationHandle);
+    if (Allocation == NULL)
+        return;
+
+    /* SegmentId is a 5-bit field in DXGK_ALLOCATIONLIST. */
+    ListEntry->SegmentId = (Allocation->SegmentId <= 31)
+                               ? Allocation->SegmentId : 0;
+    ListEntry->PhysicalAddress = Allocation->PhysicalAddress;
+}
+
 static NTSTATUS
 DxgkpVidMmBuildAllocationUserMdl(
     _In_  PDXGKVMM_ALLOCATION  Allocation,
@@ -2565,6 +2837,16 @@ DxgkpVidMmBuildAllocationUserMdl(
      * must establish MAP_APERTURE_SEGMENT first so the miniport can attach
      * that backing to the GPU resource before user mode starts accessing it.
      */
+    /* GPU-visible mappings must target the FINAL placement: a user map
+     * built over the pool backing goes permanently stale the moment the
+     * allocation is placed in a segment (the CPU then writes pages the
+     * GPU never reads).  Place first; pool mapping only if that fails. */
+    if (!Allocation->Resident && Allocation->Adapter != NULL &&
+        Allocation->Adapter->Segments != NULL)
+    {
+        (VOID)DxgkVidMmMakeResident(Allocation, Allocation->Adapter);
+    }
+
     if (!Allocation->Resident)
     {
         if (Allocation->SystemMemory != NULL)

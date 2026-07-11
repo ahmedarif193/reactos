@@ -56,6 +56,11 @@ typedef struct _DXGKRNL_SEGMENT
      */
     LONGLONG            UsedSize;
 
+    /* Monotone high-water placement cursor: virgin-VA-first allocation
+     * (GPU VA recycling wedges the V3D vertex pipe — see rpi5vc4 P0.3);
+     * first-fit is the fallback once the segment tail is exhausted. */
+    ULONGLONG           BumpOffset;
+
     /* Physical base address of the segment (VRAM or aperture window). */
     PHYSICAL_ADDRESS    BaseAddress;
 
@@ -330,6 +335,18 @@ DxgkVidMmProcessCleanup(
 PDXGKVMM_ALLOCATION
 DxgkVidMmHandleToAllocation(
     _In_opt_ HANDLE Handle);
+
+/*
+ * DxgkVidMmFillAllocationListEntry
+ *
+ * Fills a DXGK_ALLOCATIONLIST entry's SegmentId/PhysicalAddress from the
+ * allocation's current placement so DxgkDdiPatch can relocate DMA buffer
+ * references the documented way.
+ */
+VOID
+DxgkVidMmFillAllocationListEntry(
+    _In_ D3DKMT_HANDLE AllocationHandle,
+    _Inout_ DXGK_ALLOCATIONLIST *ListEntry);
 
 PDXGKVMM_RESOURCE
 DxgkVidMmHandleToResource(

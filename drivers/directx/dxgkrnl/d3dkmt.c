@@ -23,6 +23,7 @@
 
 #include "dxgkrnl_private.h"
 #include "vidmm.h"
+#include "vidsch.h"
 #include "d3dkmt.h"
 #include "vidpn.h"
 
@@ -1456,6 +1457,14 @@ typedef struct _DXGK_VIRTGPU_RESOURCE_LIST_HEADER
     UINT ResourceCount;
 } DXGK_VIRTGPU_RESOURCE_LIST_HEADER, *PDXGK_VIRTGPU_RESOURCE_LIST_HEADER;
 
+#include <pshpack1.h>
+typedef struct _DXGK_VIRTGPU_SIGNAL_BLOCK
+{
+    D3DKMT_HANDLE hSyncObject;
+    ULONG64 FenceValue;
+} DXGK_VIRTGPU_SIGNAL_BLOCK, *PDXGK_VIRTGPU_SIGNAL_BLOCK;
+#include <poppack.h>
+
 #define DXGK_VIRTGPU_RESOURCE_LIST_MAGIC 0x5652474cUL
 
 static BOOLEAN
@@ -1464,7 +1473,9 @@ DxgkpIsVirtGpuCommandEscape(
     _Outptr_result_bytebuffer_(*CommandBytes) CONST VOID **CommandBuffer,
     _Out_ UINT *CommandBytes,
     _Outptr_result_buffer_maybenull_(*ResourceHandleCount) CONST D3DKMT_HANDLE **ResourceHandles,
-    _Out_ UINT *ResourceHandleCount)
+    _Out_ UINT *ResourceHandleCount,
+    _Out_opt_ D3DKMT_HANDLE *SignalSyncObject,
+    _Out_opt_ ULONG64 *SignalFenceValue)
 {
     const DXGK_VIRTGPU_ESCAPE_PACKET_HEADER *PacketHeader;
     const DXGK_VIRTGPU_RESOURCE_LIST_HEADER *ResourceHeader;
@@ -1487,6 +1498,10 @@ DxgkpIsVirtGpuCommandEscape(
     *CommandBytes = 0;
     *ResourceHandles = NULL;
     *ResourceHandleCount = 0;
+    if (SignalSyncObject != NULL)
+        *SignalSyncObject = 0;
+    if (SignalFenceValue != NULL)
+        *SignalFenceValue = 0;
 
     HeaderBytes = sizeof(*PacketHeader) + sizeof(*CommandHeader);
     if (pEscape->pPrivateDriverData == NULL ||
@@ -1540,8 +1555,40 @@ DxgkpIsVirtGpuCommandEscape(
     if (TotalBytes != pEscape->PrivateDriverDataSize)
         return FALSE;
 
-    *CommandBuffer = CommandHeader;
-    *CommandBytes = sizeof(*CommandHeader) + CommandHeader->PayloadBytes;
+    /*
+     * Hand the miniport the command PAYLOAD only — the packet/command
+     * headers are transport framing, and the miniport's Render parses
+     * its own driver-private stream from offset 0.  (No consumer relied
+     * on header-included framing: DOD drivers never reach this path.)
+     *
+     * PacketType 2 = submit-with-signal: the payload begins with a
+     * DXGK_VIRTGPU_SIGNAL_BLOCK naming a sync object to signal (with the
+     * given monitored-fence value) when this submission's GPU fence
+     * retires.
+     */
+    if (CommandHeader->PayloadBytes == 0)
+        return FALSE;
+
+    if (PacketHeader->PacketType == 2)
+    {
+        const DXGK_VIRTGPU_SIGNAL_BLOCK *Signal;
+
+        if (CommandHeader->PayloadBytes < sizeof(*Signal) + 1)
+            return FALSE;
+
+        Signal = (const DXGK_VIRTGPU_SIGNAL_BLOCK *)(CommandHeader + 1);
+        if (SignalSyncObject != NULL)
+            *SignalSyncObject = Signal->hSyncObject;
+        if (SignalFenceValue != NULL)
+            *SignalFenceValue = Signal->FenceValue;
+
+        *CommandBuffer = Signal + 1;
+        *CommandBytes = CommandHeader->PayloadBytes - sizeof(*Signal);
+        return TRUE;
+    }
+
+    *CommandBuffer = CommandHeader + 1;
+    *CommandBytes = CommandHeader->PayloadBytes;
     return TRUE;
 }
 
@@ -1632,7 +1679,9 @@ DxgkpSubmitVirtGpuCommandEscape(
     _In_reads_bytes_(CommandBytes) CONST VOID *CommandBuffer,
     _In_ UINT CommandBytes,
     _In_reads_opt_(ResourceHandleCount) CONST D3DKMT_HANDLE *ResourceHandles,
-    _In_ UINT ResourceHandleCount)
+    _In_ UINT ResourceHandleCount,
+    _In_ D3DKMT_HANDLE SignalSyncObject,
+    _In_ ULONG64 SignalFenceValue)
 {
     DXGKARG_RENDER RenderArgs;
     DXGKARG_SUBMITCOMMAND SubmitArgs;
@@ -1642,6 +1691,8 @@ DxgkpSubmitVirtGpuCommandEscape(
     PVOID DmaBufferPrivateData = NULL;
     ULONG SubmissionFenceId;
     UINT DmaBytesUsed = 0;
+    D3DDDI_PATCHLOCATIONLIST EscapePatchList[VIDSCH_INLINE_PATCHES];
+    UINT EscapePatchCount = 0;
     UINT i;
     NTSTATUS Status;
 
@@ -1652,6 +1703,35 @@ DxgkpSubmitVirtGpuCommandEscape(
         DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommand) == NULL)
     {
         return STATUS_NOT_SUPPORTED;
+    }
+
+    /* Per-device budget: refuse when this device already fills the
+     * queue with un-retired submissions (1.6 flood protection). */
+    if (Device->InFlightSubmissions >= DXGK_DEVICE_MAX_INFLIGHT)
+        return STATUS_DEVICE_BUSY;
+
+    /* Per-process budget: aggregate in-flight submissions across every
+     * device this process owns on the adapter. */
+    {
+        LONG ProcessInFlight = 0;
+        PLIST_ENTRY Link;
+
+        /* DeviceListHead is protected by AdapterMutex (PASSIVE). */
+        ExAcquireFastMutex(&Adapter->AdapterMutex);
+        for (Link = Adapter->DeviceListHead.Flink;
+             Link != &Adapter->DeviceListHead;
+             Link = Link->Flink)
+        {
+            PDXGKRNL_DEVICE Dev =
+                CONTAINING_RECORD(Link, DXGKRNL_DEVICE, DeviceListEntry);
+
+            if (Dev->OwnerProcess == Device->OwnerProcess)
+                ProcessInFlight += Dev->InFlightSubmissions;
+        }
+        ExReleaseFastMutex(&Adapter->AdapterMutex);
+
+        if (ProcessInFlight >= DXGK_PROCESS_MAX_INFLIGHT)
+            return STATUS_DEVICE_BUSY;
     }
 
     DmaBuffer = ExAllocatePoolWithTag(NonPagedPool,
@@ -1688,6 +1768,8 @@ DxgkpSubmitVirtGpuCommandEscape(
 
             AllocationList[i].hDeviceSpecificAllocation = OpenHandleList[i];
             AllocationList[i].Value = 0;
+            DxgkVidMmFillAllocationListEntry(ResourceHandles[i],
+                                             &AllocationList[i]);
         }
     }
 
@@ -1700,11 +1782,22 @@ DxgkpSubmitVirtGpuCommandEscape(
     RenderArgs.DmaBufferPrivateDataSize = sizeof(DmaBufferPrivateData);
     RenderArgs.pAllocationList = AllocationList;
     RenderArgs.AllocationListSize = ResourceHandleCount;
+    RenderArgs.pPatchLocationListOut = EscapePatchList;
+    RenderArgs.PatchLocationListOutSize = RTL_NUMBER_OF(EscapePatchList);
 
     Status = DXGK_CB_FULL(Adapter, DxgkDdiRender)(Device->hMiniportDevice,
                                                   &RenderArgs);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
+
+    if (RenderArgs.pPatchLocationListOut != NULL &&
+        RenderArgs.pPatchLocationListOut >= EscapePatchList &&
+        (SIZE_T)(RenderArgs.pPatchLocationListOut - EscapePatchList) <=
+            RTL_NUMBER_OF(EscapePatchList))
+    {
+        EscapePatchCount = (UINT)(RenderArgs.pPatchLocationListOut -
+                                  EscapePatchList);
+    }
 
     if (RenderArgs.pDmaBuffer != NULL &&
         (PUCHAR)RenderArgs.pDmaBuffer >= (PUCHAR)DmaBuffer)
@@ -1714,43 +1807,165 @@ DxgkpSubmitVirtGpuCommandEscape(
     if (DmaBytesUsed == 0)
         DmaBytesUsed = CommandBytes;
 
+    /*
+     * Preferred: fence-at-kick tracked submission — vidsch mints the
+     * fence at kick time (keeping per-node fence order == kick order,
+     * the invariant that makes priority scheduling safe), runs Patch
+     * over its deep-copied lists and owns the DMA buffer through the
+     * tracker.  Falls back to the pre-assigned-fence flow when the
+     * scheduler is down or the lists exceed the inline copies.
+     */
+    if (ResourceHandleCount <= VIDSCH_INLINE_ALLOCATIONS)
+    {
+        Status = VidSchSubmitCommandTracked(Adapter,
+                                            0,
+                                            DmaBuffer,
+                                            DmaBytesUsed,
+                                            AllocationList,
+                                            ResourceHandleCount,
+                                            EscapePatchList,
+                                            EscapePatchCount,
+                                            Device->hMiniportDevice,
+                                            0,
+                                            TAG_DXGK_SUBMITDMA,
+                                            Device,
+                                            OpenHandleList,
+                                            ResourceHandleCount,
+                                            SignalSyncObject,
+                                            SignalFenceValue);
+        if (NT_SUCCESS(Status))
+        {
+            /* Buffer owned by vidsch/tracker; handles were deep-copied. */
+            DmaBuffer = NULL;
+            if (OpenHandleList != NULL)
+            {
+                ExFreePoolWithTag(OpenHandleList, TAG_DXGK_SUBMITDMA);
+                OpenHandleList = NULL;
+            }
+            goto Cleanup;
+        }
+        if (Status != STATUS_DEVICE_NOT_READY &&
+            Status != STATUS_NOT_SUPPORTED &&
+            Status != STATUS_DEVICE_BUSY)
+        {
+            goto Cleanup;
+        }
+    }
+
     SubmissionFenceId = DxgkAllocateSubmissionFenceId(Adapter);
     if (SubmissionFenceId == 0)
         SubmissionFenceId = 1;
 
-    RtlZeroMemory(&SubmitArgs, sizeof(SubmitArgs));
-    SubmitArgs.pDmaBuffer = DmaBuffer;
-    SubmitArgs.DmaBufferSize = CommandBytes;
-    SubmitArgs.pDmaBufferPrivateData = &DmaBufferPrivateData;
-    SubmitArgs.DmaBufferPrivateDataSize = sizeof(DmaBufferPrivateData);
-    SubmitArgs.DmaBufferSubmissionStartOffset = 0;
-    SubmitArgs.DmaBufferSubmissionEndOffset = DmaBytesUsed;
-    SubmitArgs.pAllocationList = NULL;
-    SubmitArgs.AllocationListSize = 0;
-    SubmitArgs.SubmissionFenceId = SubmissionFenceId;
-    SubmitArgs.VidPnSourceId = 0;
-    SubmitArgs.NodeOrdinal = 0;
-    SubmitArgs.EngineOrdinal = 0;
-    SubmitArgs.hContext = Device->hMiniportDevice;
-    SubmitArgs.Flags = 0;
+    /* Documented WDDM order: Render -> Patch -> SubmitCommand. */
+    if (DXGK_CB_FULL(Adapter, DxgkDdiPatch) != NULL)
+    {
+        DXGKARG_PATCH PatchArgs;
+        NTSTATUS PatchStatus;
 
-    Status = DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommand)(Adapter->MiniportDeviceContext,
-                                                         &SubmitArgs);
+        RtlZeroMemory(&PatchArgs, sizeof(PatchArgs));
+        PatchArgs.hDevice = Device->hMiniportDevice;
+        PatchArgs.pDmaBuffer = DmaBuffer;
+        PatchArgs.DmaBufferSize = CommandBytes;
+        PatchArgs.DmaBufferSubmissionStartOffset = 0;
+        PatchArgs.DmaBufferSubmissionEndOffset = DmaBytesUsed;
+        PatchArgs.pDmaBufferPrivateData = &DmaBufferPrivateData;
+        PatchArgs.DmaBufferPrivateDataSize = sizeof(DmaBufferPrivateData);
+        PatchArgs.pAllocationList = AllocationList;
+        PatchArgs.AllocationListSize = ResourceHandleCount;
+        PatchArgs.pPatchLocationList = EscapePatchList;
+        PatchArgs.PatchLocationListSize = EscapePatchCount;
+        PatchArgs.PatchLocationListSubmissionStart = 0;
+        PatchArgs.PatchLocationListSubmissionLength = EscapePatchCount;
+        PatchArgs.SubmissionFenceId = SubmissionFenceId;
+
+        _SEH2_TRY
+        {
+            PatchStatus = DXGK_CB_FULL(Adapter, DxgkDdiPatch)(
+                              Adapter->MiniportDeviceContext,
+                              &PatchArgs);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            PatchStatus = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+
+        if (!NT_SUCCESS(PatchStatus))
+        {
+            DXGKRNL_WARN("DxgkpSubmitVirtGpuCommandEscape: DxgkDdiPatch "
+                         "failed 0x%08lX (continuing)\n", PatchStatus);
+        }
+    }
+
+    /*
+     * Submit through the VidSch run queue (engine 0) so render work is
+     * fence-ordered behind in-flight submissions and retired by the
+     * scheduler's completion DPC — passing the adapter-wide fence keeps
+     * the DMA-buffer tracker and vidsch in one fence space.  Fall back
+     * to a direct miniport submit when the scheduler isn't up.
+     */
+    {
+        ULONG VidSchFence = 0;
+
+        Status = VidSchSubmitCommand(Adapter,
+                                     0,
+                                     SubmissionFenceId,
+                                     DmaBuffer,
+                                     DmaBytesUsed,
+                                     NULL,
+                                     0,
+                                     NULL,
+                                     0,
+                                     NULL,
+                                     0,
+                                     Device->hMiniportDevice,
+                                     FALSE,
+                                     0,
+                                     0,
+                                     &VidSchFence);
+    }
+
+    if (Status == STATUS_DEVICE_NOT_READY || Status == STATUS_NOT_SUPPORTED)
+    {
+        RtlZeroMemory(&SubmitArgs, sizeof(SubmitArgs));
+        SubmitArgs.pDmaBuffer = DmaBuffer;
+        SubmitArgs.DmaBufferSize = CommandBytes;
+        SubmitArgs.pDmaBufferPrivateData = &DmaBufferPrivateData;
+        SubmitArgs.DmaBufferPrivateDataSize = sizeof(DmaBufferPrivateData);
+        SubmitArgs.DmaBufferSubmissionStartOffset = 0;
+        SubmitArgs.DmaBufferSubmissionEndOffset = DmaBytesUsed;
+        SubmitArgs.pAllocationList = NULL;
+        SubmitArgs.AllocationListSize = 0;
+        SubmitArgs.SubmissionFenceId = SubmissionFenceId;
+        SubmitArgs.VidPnSourceId = 0;
+        SubmitArgs.NodeOrdinal = 0;
+        SubmitArgs.EngineOrdinal = 0;
+        SubmitArgs.hContext = Device->hMiniportDevice;
+        SubmitArgs.Flags = 0;
+
+        Status = DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommand)(
+                     Adapter->MiniportDeviceContext,
+                     &SubmitArgs);
+    }
+
     if (!NT_SUCCESS(Status))
         goto Cleanup;
 
-    Status = DxgkTrackSubmittedDmaBuffer(Adapter,
-                                         SubmissionFenceId,
-                                         0,
-                                         DmaBuffer,
-                                         TAG_DXGK_SUBMITDMA,
-                                         Device,
-                                         NULL,
-                                         NULL,
-                                         0,
-                                         NULL,
-                                         OpenHandleList,
-                                         ResourceHandleCount);
+    {
+        DXGKRNL_TRACK_DMA_ARGS TrackArgs;
+
+        RtlZeroMemory(&TrackArgs, sizeof(TrackArgs));
+        TrackArgs.SubmissionFenceId = SubmissionFenceId;
+        TrackArgs.hSignalSyncObject = SignalSyncObject;
+        TrackArgs.SignalFenceValue = SignalFenceValue;
+        TrackArgs.Buffer = DmaBuffer;
+        TrackArgs.Tag = TAG_DXGK_SUBMITDMA;
+        TrackArgs.Device = Device;
+        TrackArgs.OpenHandles = OpenHandleList;
+        TrackArgs.OpenHandleCount = ResourceHandleCount;
+
+        Status = DxgkTrackSubmittedDmaBuffer(Adapter, &TrackArgs);
+    }
     if (NT_SUCCESS(Status))
     {
         DmaBuffer = NULL;
@@ -1931,25 +2146,34 @@ DxgkEscape(
     if (pEscape->hDevice != 0)
         EscDevice = DxgkLookupDeviceByHandle(pEscape->hDevice, NULL);
 
-    if (DxgkpIsVirtGpuCommandEscape(pEscape,
-                                    &CommandBuffer,
-                                    &CommandBytes,
-                                    &ResourceHandles,
-                                    &ResourceHandleCount))
     {
-        if (EscDevice == NULL)
-        {
-            DXGKRNL_WARN("DxgkEscape: command packet without valid device 0x%X\n",
-                         pEscape->hDevice);
-            return STATUS_INVALID_HANDLE;
-        }
+        D3DKMT_HANDLE SignalSyncObject = 0;
+        ULONG64 SignalFenceValue = 0;
 
-        return DxgkpSubmitVirtGpuCommandEscape(Adapter,
-                                               EscDevice,
-                                               CommandBuffer,
-                                               CommandBytes,
-                                               ResourceHandles,
-                                               ResourceHandleCount);
+        if (DxgkpIsVirtGpuCommandEscape(pEscape,
+                                        &CommandBuffer,
+                                        &CommandBytes,
+                                        &ResourceHandles,
+                                        &ResourceHandleCount,
+                                        &SignalSyncObject,
+                                        &SignalFenceValue))
+        {
+            if (EscDevice == NULL)
+            {
+                DXGKRNL_WARN("DxgkEscape: command packet without valid device 0x%X\n",
+                             pEscape->hDevice);
+                return STATUS_INVALID_HANDLE;
+            }
+
+            return DxgkpSubmitVirtGpuCommandEscape(Adapter,
+                                                   EscDevice,
+                                                   CommandBuffer,
+                                                   CommandBytes,
+                                                   ResourceHandles,
+                                                   ResourceHandleCount,
+                                                   SignalSyncObject,
+                                                   SignalFenceValue);
+        }
     }
 
     if (pEscape->hDevice == 0)
@@ -2130,6 +2354,10 @@ DxgkSetContextSchedulingPriority(
     PDXGKRNL_CONTEXT Context;
 
     if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    /* Documented D3DKMT range: -7 (idle) .. 7 (realtime). */
+    if (pData->Priority < -7 || pData->Priority > 7)
         return STATUS_INVALID_PARAMETER;
 
     Context = DxgkLookupContextByHandle(pData->hContext, NULL, NULL);
@@ -2579,9 +2807,12 @@ DxgkCreateSynchronizationObject2(
             break;
         case DXGKP_D3DDDI_MONITORED_FENCE:
             /*
-             * WDDM 2.0 monitored fence: back it with a CPU-side fence object.
-             * The handle is what callers track; full GPU monitored-fence
-             * semantics require the dxgmms1 scheduler.
+             * WDDM 2.0 monitored fence: back it with a CPU-side fence
+             * object plus the documented CPU-visible value page (mapped
+             * read-only into the caller and returned through
+             * MonitoredFence.FenceValueCPUVirtualAddress).  GPU-side
+             * monitoring of the value awaits the dxgmms1 scheduler; the
+             * GPU VA is reported as 0 until then.
              */
             Create1.Info.Type = D3DDDI_FENCE;
             break;
@@ -2591,7 +2822,28 @@ DxgkCreateSynchronizationObject2(
 
     Status = DxgkCreateSynchronizationObject(&Create1);
     if (NT_SUCCESS(Status))
+    {
         pData->hSyncObject = Create1.hSyncObject;
+
+        if (pData->Info.Type == DXGKP_D3DDDI_MONITORED_FENCE)
+        {
+            PVOID UserVa = NULL;
+            NTSTATUS PageStatus;
+
+            PageStatus = DxgkSyncObjectAttachMonitoredPage(
+                             Create1.hSyncObject,
+                             pData->Info.MonitoredFence.InitialFenceValue,
+                             &UserVa);
+            if (!NT_SUCCESS(PageStatus))
+            {
+                DXGKRNL_WARN("DxgkCreateSynchronizationObject2: monitored "
+                             "value page failed 0x%08lX\n", PageStatus);
+            }
+
+            pData->Info.MonitoredFence.FenceValueCPUVirtualAddress = UserVa;
+            pData->Info.MonitoredFence.FenceValueGPUVirtualAddress = 0;
+        }
+    }
 
     return Status;
 }
@@ -3593,13 +3845,61 @@ DxgkpDispatchBufferedIoctl(
             if (InputLength < sizeof(D3DDDI_MAPGPUVIRTUALADDRESS_LOCAL) || SystemBuffer == NULL)
                 return STATUS_BUFFER_TOO_SMALL;
 
+            /*
+             * The file context is only needed to reserve a NEW per-process GPU
+             * VA range (the hAllocation==0 branch below).  Mapping an existing
+             * allocation returns its context-independent segment placement
+             * address, and the WDDM bridge routes these IOCTLs on a shared file
+             * object with no per-process context — so don't demand one here, or
+             * every allocation map wrongly fails STATUS_INVALID_HANDLE.
+             */
             Context = DxgkpGetFileContext(Irp);
-            if (Context == NULL)
-                return STATUS_INVALID_HANDLE;
 
             pMap = (D3DDDI_MAPGPUVIRTUALADDRESS_LOCAL *)SystemBuffer;
             if (pMap->SizeInPages == 0)
                 return STATUS_INVALID_PARAMETER;
+
+            /*
+             * Documented WDDM2 semantic: with hAllocation the call maps
+             * (binds) the allocation and returns its GPU virtual address.
+             * On the premapped-window model the binding already exists in
+             * the miniport's GPU page table; ensure the allocation has
+             * its segment placement and return the segment-logical
+             * address of the requested page offset.  (The value lives in
+             * the segment descriptor's BaseAddress space; rpi5vc4 UMDs
+             * translate to the V3D VA window using the slab bases the
+             * info escape publishes.)
+             */
+            if (pMap->hAllocation != 0)
+            {
+                PDXGKVMM_ALLOCATION MapAlloc;
+                LARGE_INTEGER MapAddress;
+
+                MapAlloc = DxgkVidMmHandleToAllocation(
+                               (HANDLE)(ULONG_PTR)pMap->hAllocation);
+                if (MapAlloc == NULL)
+                {
+                    DXGKRNL_WARN("D3DKMT MAP: invalid alloc 0x%X\n",
+                                 pMap->hAllocation);
+                    return STATUS_INVALID_HANDLE;
+                }
+
+                Status = DxgkVidMmEnsureAllocationApertureMapped(MapAlloc);
+                if (!NT_SUCCESS(Status))
+                    return Status;
+
+                MapAddress = DxgkVidMmGetAllocationPrimaryAddress(MapAlloc);
+                pMap->VirtualAddress = (D3DGPU_VIRTUAL_ADDRESS)
+                    (MapAddress.QuadPart +
+                     pMap->OffsetInPages * DXGKP_GPUVA_PAGE_SIZE);
+                pMap->PagingFenceValue = 0;
+                Irp->IoStatus.Information =
+                    sizeof(D3DDDI_MAPGPUVIRTUALADDRESS_LOCAL);
+                return STATUS_SUCCESS;
+            }
+
+            if (Context == NULL)
+                return STATUS_INVALID_HANDLE;
 
             Status = DxgkpGpuVaReserveRange(Context,
                                             pMap->BaseAddress,
