@@ -5254,6 +5254,74 @@ static void test_alpha_hdc(void)
     DeleteDC(hdc);
 }
 
+static void test_draw_path_smoothing_hdc(void)
+{
+    const GpPointF points[] = {{4.0, 5.0}, {27.0, 20.0}};
+    GpStatus status;
+    GpGraphics *graphics;
+    GpPath *path;
+    GpPen *pen;
+    BITMAPINFO bmi;
+    HDC hdc;
+    HBITMAP bitmap, old_bitmap;
+    DWORD *bits;
+    UINT aliased = 0, smoothed = 0;
+    INT i;
+
+    hdc = CreateCompatibleDC(NULL);
+    ok(hdc != NULL, "CreateCompatibleDC failed\n");
+
+    memset(&bmi, 0, sizeof(bmi));
+    bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
+    bmi.bmiHeader.biWidth = 32;
+    bmi.bmiHeader.biHeight = -32;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+    bitmap = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, (void **)&bits, NULL, 0);
+    ok(bitmap != NULL, "CreateDIBSection failed\n");
+    old_bitmap = SelectObject(hdc, bitmap);
+
+    status = GdipCreateFromHDC(hdc, &graphics);
+    expect(Ok, status);
+    status = GdipCreatePath(FillModeAlternate, &path);
+    expect(Ok, status);
+    status = GdipAddPathLine2(path, points, ARRAY_SIZE(points));
+    expect(Ok, status);
+    status = GdipCreatePen1(0xff000000, 1.5, UnitPixel, &pen);
+    expect(Ok, status);
+
+    memset(bits, 0xff, 32 * 32 * sizeof(*bits));
+    status = GdipSetSmoothingMode(graphics, SmoothingModeNone);
+    expect(Ok, status);
+    status = GdipDrawPath(graphics, pen, path);
+    expect(Ok, status);
+    GdiFlush();
+    for (i = 0; i < 32 * 32; i++)
+        if ((bits[i] & 0x00ffffff) != 0 && (bits[i] & 0x00ffffff) != 0x00ffffff)
+            aliased++;
+
+    memset(bits, 0xff, 32 * 32 * sizeof(*bits));
+    status = GdipSetSmoothingMode(graphics, SmoothingModeAntiAlias);
+    expect(Ok, status);
+    status = GdipDrawPath(graphics, pen, path);
+    expect(Ok, status);
+    GdiFlush();
+    for (i = 0; i < 32 * 32; i++)
+        if ((bits[i] & 0x00ffffff) != 0 && (bits[i] & 0x00ffffff) != 0x00ffffff)
+            smoothed++;
+
+    ok(!aliased, "SmoothingModeNone produced %u partially covered pixels\n", aliased);
+    ok(smoothed, "SmoothingModeAntiAlias produced no partially covered pixels\n");
+
+    GdipDeletePen(pen);
+    GdipDeletePath(path);
+    GdipDeleteGraphics(graphics);
+    SelectObject(hdc, old_bitmap);
+    DeleteObject(bitmap);
+    DeleteDC(hdc);
+}
+
 static void test_bitmapfromgraphics(void)
 {
     GpStatus stat;
@@ -7582,6 +7650,7 @@ START_TEST(graphics)
     test_get_set_textrenderinghint();
     test_getdc_scaled();
     test_alpha_hdc();
+    test_draw_path_smoothing_hdc();
     test_bitmapfromgraphics();
     test_GdipFillRectangles();
     test_GdipGetVisibleClipBounds_memoryDC();
