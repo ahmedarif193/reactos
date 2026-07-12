@@ -1200,9 +1200,11 @@ QSI_DEF(SystemProcessInformation)
                 SpiCurrent->QuotaPagedPoolUsage = Process->QuotaUsage[PsPagedPool];
                 SpiCurrent->QuotaPeakNonPagedPoolUsage = Process->QuotaPeak[PsNonPagedPool];
                 SpiCurrent->QuotaNonPagedPoolUsage = Process->QuotaUsage[PsNonPagedPool];
-                SpiCurrent->PagefileUsage = Process->QuotaUsage[PsPageFile];
-                SpiCurrent->PeakPagefileUsage = Process->QuotaPeak[PsPageFile];
-                SpiCurrent->PrivatePageCount = Process->CommitCharge;
+                /* Bytes on the wire; the page file quota and the commit
+                 * charge are tracked in pages (see ProcessVmCounters) */
+                SpiCurrent->PagefileUsage = Process->QuotaUsage[PsPageFile] << PAGE_SHIFT;
+                SpiCurrent->PeakPagefileUsage = Process->QuotaPeak[PsPageFile] << PAGE_SHIFT;
+                SpiCurrent->PrivatePageCount = Process->CommitCharge << PAGE_SHIFT;
                 ThreadInfo = (PSYSTEM_THREAD_INFORMATION)(SpiCurrent + 1);
 
                 CurrentEntry = Process->Pcb.ThreadListHead.Flink;
