@@ -1,0 +1,867 @@
+/*
+ * PROJECT:     ReactOS Task Manager
+ * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * PURPOSE:     Application frame: custom chrome, nav rail, header, pages
+ * COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
+ */
+
+#include "app.h"
+
+#define FRAME_CLASS L"TaskManager11Frame"
+#define TRAY_ID 1
+#define TIMER_TICK 1
+
+AppState g_app;
+
+static ULONG_PTR s_gdiplusToken;
+
+/* pages */
+static Page* s_pages[PG_COUNT];
+static BtnStrip s_strip;
+static HWND s_search;
+static HICON s_trayIcon;
+static BOOL s_trayAdded;
+
+/* chrome state (the frame itself is the standard system one) */
+static int  s_hotRail = -1;       /* index into rail items, 100 = hamburger */
+static BOOL s_tracking;
+
+/* nav rail items */
+struct RailItem { int page; int icon; const WCHAR* label; };
+static const RailItem s_rail[] =
+{
+    { PG_PROCESSES,   IC_PROCESSES, L"Processes" },
+    { PG_PERFORMANCE, IC_PERF,      L"Performance" },
+    { PG_APPHISTORY,  IC_HISTORY,   L"App history" },
+    { PG_STARTUP,     IC_STARTUP,   L"Startup apps" },
+    { PG_USERS,       IC_USERS,     L"Users" },
+    { PG_DETAILS,     IC_DETAILS,   L"Details" },
+    { PG_SERVICES,    IC_SERVICES,  L"Services" },
+};
+
+/* ------------------------------------------------------------------ */
+/*  Metrics                                                            */
+/* ------------------------------------------------------------------ */
+
+static int RailW(void)    { return g_app.st.navExpanded ? S(210) : S(48); }
+static int HeaderH(void)  { return S(54); }
+
+static void HamburgerRect(HWND hwnd, RECT* r)
+{
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    r->left = rc.left + S(6);
+    r->top = rc.top + S(4);
+    r->right = r->left + S(36);
+    r->bottom = r->top + S(36);
+}
+
+static void RailItemRect(HWND hwnd, int i, RECT* r)
+{
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    int y = rc.top + S(46);
+    if (i < (int)_countof(s_rail))
+    {
+        r->top = y + i * S(40);
+        r->bottom = r->top + S(36);
+    }
+    else
+    {
+        /* settings pinned to bottom */
+        r->bottom = rc.bottom - S(8);
+        r->top = r->bottom - S(36);
+    }
+    r->left = rc.left + S(6);
+    r->right = rc.left + RailW() - S(6);
+}
+
+static void HeaderRect(HWND hwnd, RECT* r)
+{
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    r->left = rc.left + RailW();
+    r->top = rc.top;
+    r->right = rc.right;
+    r->bottom = r->top + HeaderH();
+}
+
+static void PageRect(HWND hwnd, RECT* r)
+{
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    r->left = rc.left + RailW();
+    r->top = rc.top + HeaderH();
+    r->right = rc.right - S(4);
+    r->bottom = rc.bottom - S(4);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Settings                                                           */
+/* ------------------------------------------------------------------ */
+
+static const WCHAR* SETTINGS_KEY = L"Software\\ReactOS\\TaskMgr11";
+
+static DWORD RegReadDw(HKEY hk, const WCHAR* name, DWORD def)
+{
+    DWORD v = def, cb = sizeof(v);
+    if (RegQueryValueExW(hk, name, NULL, NULL, (LPBYTE)&v, &cb) != ERROR_SUCCESS)
+        return def;
+    return v;
+}
+
+void Settings_Load(void)
+{
+    Settings& st = g_app.st;
+    ZeroMemory(&st, sizeof(st));
+    st.theme = TM_SYSTEM;
+    st.startPage = PG_PROCESSES;
+    st.speed = SPD_NORMAL;
+    st.navExpanded = TRUE;
+
+    HKEY hk;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, SETTINGS_KEY, 0, KEY_QUERY_VALUE, &hk)
+        == ERROR_SUCCESS)
+    {
+        st.theme = RegReadDw(hk, L"Theme", st.theme);
+        st.startPage = RegReadDw(hk, L"StartPage", st.startPage);
+        st.speed = RegReadDw(hk, L"UpdateSpeed", st.speed);
+        st.onTop = RegReadDw(hk, L"AlwaysOnTop", 0);
+        st.minOnUse = RegReadDw(hk, L"MinimizeOnUse", 0);
+        st.hideWhenMin = RegReadDw(hk, L"HideWhenMinimized", 0);
+        st.navExpanded = RegReadDw(hk, L"NavExpanded", 1);
+        st.noEffPrompt = RegReadDw(hk, L"NoEfficiencyPrompt", 0);
+        st.fullAcctName = RegReadDw(hk, L"FullAccountName", 0);
+
+        DWORD cb = sizeof(st.wp);
+        if (RegQueryValueExW(hk, L"Placement", NULL, NULL, (LPBYTE)&st.wp, &cb)
+            != ERROR_SUCCESS || cb != sizeof(st.wp))
+            st.wp.length = 0;
+        RegCloseKey(hk);
+    }
+    if (st.theme > TM_DARK) st.theme = TM_SYSTEM;
+    if (st.startPage >= PG_SETTINGS) st.startPage = PG_PROCESSES;
+    if (st.speed > SPD_PAUSED) st.speed = SPD_NORMAL;
+}
+
+void Settings_Save(void)
+{
+    Settings& st = g_app.st;
+    HKEY hk;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, SETTINGS_KEY, 0, NULL, 0, KEY_SET_VALUE,
+                        NULL, &hk, NULL) != ERROR_SUCCESS)
+        return;
+#define WR(name, val) { DWORD v = (DWORD)(val); \
+    RegSetValueExW(hk, name, 0, REG_DWORD, (LPBYTE)&v, sizeof(v)); }
+    WR(L"Theme", st.theme);
+    WR(L"StartPage", st.startPage);
+    WR(L"UpdateSpeed", st.speed);
+    WR(L"AlwaysOnTop", st.onTop);
+    WR(L"MinimizeOnUse", st.minOnUse);
+    WR(L"HideWhenMinimized", st.hideWhenMin);
+    WR(L"NavExpanded", st.navExpanded);
+    WR(L"NoEfficiencyPrompt", st.noEffPrompt);
+    WR(L"FullAccountName", st.fullAcctName);
+#undef WR
+    if (g_app.hFrame)
+    {
+        WINDOWPLACEMENT wp;
+        wp.length = sizeof(wp);
+        if (GetWindowPlacement(g_app.hFrame, &wp))
+            RegSetValueExW(hk, L"Placement", 0, REG_BINARY, (LPBYTE)&wp, sizeof(wp));
+    }
+    RegCloseKey(hk);
+}
+
+UINT App_TimerMs(void)
+{
+    switch (g_app.st.speed)
+    {
+    case SPD_HIGH:   return 500;
+    case SPD_NORMAL: return 1000;
+    case SPD_LOW:    return 4000;
+    default:         return 0;
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Tray icon                                                          */
+/* ------------------------------------------------------------------ */
+
+static HICON MakeTrayIcon(int cpuPct)
+{
+    HDC scr = GetDC(NULL);
+    HDC dc = CreateCompatibleDC(scr);
+    HBITMAP color = CreateCompatibleBitmap(scr, 16, 16);
+    HBITMAP mask = CreateBitmap(16, 16, 1, 1, NULL);
+    HGDIOBJ old = SelectObject(dc, color);
+
+    RECT r = { 0, 0, 16, 16 };
+    FillRect32(dc, r, RGB(0x0A, 0x0A, 0x0A));
+    RECT frame = { 0, 0, 16, 16 };
+    FrameRect(dc, &frame, (HBRUSH)GetStockObject(DKGRAY_BRUSH));
+    int h = MulDiv(cpuPct, 12, 100);
+    if (h > 12) h = 12;
+    RECT bar = { 3, 14 - h, 13, 14 };
+    FillRect32(dc, bar, RGB(0x30, 0xC0, 0x40));
+
+    SelectObject(dc, mask);
+    RECT mr = { 0, 0, 16, 16 };
+    FillRect(dc, &mr, (HBRUSH)GetStockObject(BLACK_BRUSH));
+
+    SelectObject(dc, old);
+    ICONINFO ii = { TRUE, 0, 0, mask, color };
+    HICON icon = CreateIconIndirect(&ii);
+    DeleteObject(color);
+    DeleteObject(mask);
+    DeleteDC(dc);
+    ReleaseDC(NULL, scr);
+    return icon;
+}
+
+static void UpdateTray(HWND hwnd)
+{
+    NOTIFYICONDATAW nid;
+    ZeroMemory(&nid, sizeof(nid));
+    nid.cbSize = sizeof(nid);
+    nid.hWnd = hwnd;
+    nid.uID = TRAY_ID;
+    nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    nid.uCallbackMessage = WM_APP_TRAYICON;
+
+    HICON icon = MakeTrayIcon((int)Data::g.cpuTotalPct);
+    nid.hIcon = icon;
+    StringCchPrintfW(nid.szTip, _countof(nid.szTip), L"CPU Usage: %.0f%%",
+                     Data::g.cpuTotalPct);
+
+    if (!s_trayAdded)
+        s_trayAdded = Shell_NotifyIconW(NIM_ADD, &nid);
+    else
+        Shell_NotifyIconW(NIM_MODIFY, &nid);
+
+    if (s_trayIcon) DestroyIcon(s_trayIcon);
+    s_trayIcon = icon;
+}
+
+static void RemoveTray(HWND hwnd)
+{
+    if (s_trayAdded)
+    {
+        NOTIFYICONDATAW nid;
+        ZeroMemory(&nid, sizeof(nid));
+        nid.cbSize = sizeof(nid);
+        nid.hWnd = hwnd;
+        nid.uID = TRAY_ID;
+        Shell_NotifyIconW(NIM_DELETE, &nid);
+        s_trayAdded = FALSE;
+    }
+    if (s_trayIcon)
+    {
+        DestroyIcon(s_trayIcon);
+        s_trayIcon = NULL;
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Page plumbing                                                      */
+/* ------------------------------------------------------------------ */
+
+static Page* GetPage(int id)
+{
+    if (id < 0 || id >= PG_COUNT) return NULL;
+    if (!s_pages[id])
+    {
+        switch (id)
+        {
+        case PG_PROCESSES:   s_pages[id] = CreateProcessesPage(); break;
+        case PG_PERFORMANCE: s_pages[id] = CreatePerformancePage(); break;
+        case PG_APPHISTORY:  s_pages[id] = CreateAppHistoryPage(); break;
+        case PG_STARTUP:     s_pages[id] = CreateStartupPage(); break;
+        case PG_USERS:       s_pages[id] = CreateUsersPage(); break;
+        case PG_DETAILS:     s_pages[id] = CreateDetailsPage(); break;
+        case PG_SERVICES:    s_pages[id] = CreateServicesPage(); break;
+        case PG_SETTINGS:    s_pages[id] = CreateSettingsPage(); break;
+        }
+        if (s_pages[id])
+        {
+            s_pages[id]->Create(g_app.hFrame);
+            RECT pr;
+            PageRect(g_app.hFrame, &pr);
+            MoveWindow(s_pages[id]->hwnd, pr.left, pr.top,
+                       pr.right - pr.left, pr.bottom - pr.top, TRUE);
+        }
+    }
+    return s_pages[id];
+}
+
+void Frame_UpdateCommandStates(void)
+{
+    Page* pg = s_pages[g_app.page];
+    if (pg)
+        pg->UpdateCommands(s_strip);
+}
+
+static void LayoutChildren(HWND hwnd)
+{
+    RECT pr;
+    PageRect(hwnd, &pr);
+    for (int i = 0; i < PG_COUNT; i++)
+    {
+        if (s_pages[i] && s_pages[i]->hwnd)
+            MoveWindow(s_pages[i]->hwnd, pr.left, pr.top,
+                       pr.right - pr.left, pr.bottom - pr.top, TRUE);
+    }
+
+    /* search box centered in header */
+    Page* pg = s_pages[g_app.page];
+    if (s_search)
+    {
+        if (pg && pg->WantSearch())
+        {
+            RECT hr;
+            HeaderRect(hwnd, &hr);
+            int w = S(320);
+            int availL = hr.left + S(200);
+            int availR = hr.right - S(360);
+            int x = (hr.left + hr.right - w) / 2;
+            if (x < availL) x = availL;
+            if (x + w > availR) w = availR - x;
+            if (w > S(120))
+            {
+                MoveWindow(s_search, x, hr.top + S(11), w, S(32), TRUE);
+                ShowWindow(s_search, SW_SHOW);
+            }
+            else
+            {
+                ShowWindow(s_search, SW_HIDE);
+            }
+        }
+        else
+        {
+            ShowWindow(s_search, SW_HIDE);
+        }
+    }
+
+    /* command strip lives at header right */
+    RECT hr;
+    HeaderRect(hwnd, &hr);
+    RECT band = { hr.left, hr.top + S(6), hr.right - S(14), hr.top + S(6) + S(40) };
+    s_strip.LayoutRight(band, S(8));
+}
+
+void App_SetPage(int id)
+{
+    if (id < 0 || id >= PG_COUNT) return;
+
+    Page* old = s_pages[g_app.page];
+    Page* nw = GetPage(id);
+    if (!nw) return;
+
+    if (old && old->hwnd && old != nw)
+    {
+        old->OnShow(FALSE);
+        ShowWindow(old->hwnd, SW_HIDE);
+    }
+
+    g_app.page = id;
+
+    /* rebuild commands */
+    s_strip.Clear();
+    s_strip.hwnd = g_app.hFrame;
+    nw->BuildCommands(s_strip);
+    nw->UpdateCommands(s_strip);
+
+    /* search */
+    g_app.search[0] = 0;
+    if (s_search)
+    {
+        Search_Clear(s_search);
+        Search_SetPlaceholder(s_search, nw->SearchHint());
+    }
+
+    LayoutChildren(g_app.hFrame);
+    ShowWindow(nw->hwnd, SW_SHOW);
+    nw->OnShow(TRUE);
+    nw->OnTick();
+    InvalidateRect(g_app.hFrame, NULL, FALSE);
+}
+
+void Frame_SwitchToDetails(ULONG pid)
+{
+    GetPage(PG_DETAILS);            /* ensure created so select works */
+    App_SetPage(PG_DETAILS);
+    DetailsPage_SelectPid(pid);
+}
+
+void Frame_SwitchToServices(void)
+{
+    App_SetPage(PG_SERVICES);
+}
+
+static void DoTick(HWND hwnd)
+{
+    Data::Tick();
+    Page* pg = s_pages[g_app.page];
+    if (pg)
+        pg->OnTick();
+    Frame_UpdateCommandStates();
+    UpdateTray(hwnd);
+
+    /* header shows live heat totals on some pages; cheap repaint of header row */
+    RECT hr;
+    HeaderRect(hwnd, &hr);
+    InvalidateRect(hwnd, &hr, FALSE);
+}
+
+void App_UpdateNow(void)
+{
+    HWND hwnd = g_app.hFrame;
+    KillTimer(hwnd, TIMER_TICK);
+    DoTick(hwnd);
+    UINT ms = App_TimerMs();
+    if (ms)
+        SetTimer(hwnd, TIMER_TICK, ms, NULL);
+}
+
+void App_ApplyTheme(void)
+{
+    BOOL dark;
+    switch (g_app.st.theme)
+    {
+    case TM_LIGHT: dark = FALSE; break;
+    case TM_DARK:  dark = TRUE; break;
+    default:       dark = Theme_SystemPrefersDark(); break;
+    }
+    Theme_Apply(dark, g_app.dpi);
+
+    if (s_search)
+        SendMessageW(s_search, WM_APP_THEMECHG, 0, 0);
+    for (int i = 0; i < PG_COUNT; i++)
+    {
+        if (s_pages[i])
+        {
+            s_pages[i]->OnThemeChanged();
+            if (s_pages[i]->hwnd)
+                InvalidateRect(s_pages[i]->hwnd, NULL, TRUE);
+        }
+    }
+    if (g_app.hFrame)
+        InvalidateRect(g_app.hFrame, NULL, TRUE);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Frame painting                                                     */
+/* ------------------------------------------------------------------ */
+
+static void PaintFrame(HWND hwnd, HDC dc, const RECT& rcPaint)
+{
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    FillRect32(dc, rcPaint, g_t.winBg);
+
+    /* ---- nav rail ---- */
+    RECT ham;
+    HamburgerRect(hwnd, &ham);
+    if (s_hotRail == 100)
+        FillRoundRect(dc, ham, g_t.railHover, CLR_NONE, S(4));
+    RECT hg = { ham.left + S(9), ham.top + S(9), ham.right - S(9), ham.bottom - S(9) };
+    DrawGlyph(dc, hg, IC_HAMBURGER, g_t.textMain);
+
+    int nItems = (int)_countof(s_rail) + 1;   /* + settings */
+    for (int i = 0; i < nItems; i++)
+    {
+        RECT ir;
+        RailItemRect(hwnd, i, &ir);
+        BOOL isSettings = (i == (int)_countof(s_rail));
+        int page = isSettings ? PG_SETTINGS : s_rail[i].page;
+        int icon = isSettings ? IC_SETTINGS : s_rail[i].icon;
+        const WCHAR* label = isSettings ? L"Settings" : s_rail[i].label;
+        BOOL sel = (g_app.page == page);
+
+        if (sel)
+            FillRoundRect(dc, ir, g_t.railSel, CLR_NONE, S(4));
+        else if (s_hotRail == i)
+            FillRoundRect(dc, ir, g_t.railHover, CLR_NONE, S(4));
+
+        if (sel)
+        {
+            RECT bar = { ir.left, (ir.top + ir.bottom) / 2 - S(8),
+                         ir.left + S(3), (ir.top + ir.bottom) / 2 + S(8) };
+            FillRoundRect(dc, bar, g_t.accent, CLR_NONE, S(2));
+        }
+
+        RECT gi = { ir.left + S(11), (ir.top + ir.bottom) / 2 - S(8),
+                    ir.left + S(27), (ir.top + ir.bottom) / 2 + S(8) };
+        DrawGlyph(dc, gi, icon, sel ? g_t.textMain : g_t.textSec);
+
+        if (g_app.st.navExpanded)
+        {
+            RECT lr = { ir.left + S(38), ir.top, ir.right - S(6), ir.bottom };
+            DrawTextClip(dc, label, lr, sel ? g_t.fBodySemi : g_t.fBody,
+                         g_t.textMain, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        }
+    }
+
+    /* ---- header ---- */
+    RECT hr;
+    HeaderRect(hwnd, &hr);
+    Page* pg = s_pages[g_app.page];
+    if (pg)
+    {
+        RECT tr = { hr.left + S(16), hr.top, hr.left + S(300), hr.bottom };
+        DrawTextClip(dc, pg->Title(), tr, g_t.fTitle, g_t.textMain,
+                     DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+    }
+    s_strip.Paint(dc);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Frame window proc                                                  */
+/* ------------------------------------------------------------------ */
+
+static int RailHit(HWND hwnd, POINT pt)
+{
+    if (pt.x >= RailW()) return -1;
+    RECT ham;
+    HamburgerRect(hwnd, &ham);
+    if (PtInRect(&ham, pt)) return 100;
+    for (int i = 0; i <= (int)_countof(s_rail); i++)
+    {
+        RECT ir;
+        RailItemRect(hwnd, i, &ir);
+        if (PtInRect(&ir, pt)) return i;
+    }
+    return -1;
+}
+
+static LRESULT CALLBACK FrameProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg)
+    {
+    case WM_ERASEBKGND:
+        return 1;
+
+    case WM_PAINT:
+    {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        BufPaint bp;
+        HDC dc = bp.Begin(hdc, &ps.rcPaint);
+        PaintFrame(hwnd, dc, ps.rcPaint);
+        bp.End();
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+
+    case WM_SIZE:
+        if (wp == SIZE_MINIMIZED)
+        {
+            if (g_app.st.hideWhenMin)
+                ShowWindow(hwnd, SW_HIDE);
+            return 0;
+        }
+        g_app.maximized = (wp == SIZE_MAXIMIZED);
+        LayoutChildren(hwnd);
+        InvalidateRect(hwnd, NULL, FALSE);
+        return 0;
+
+    case WM_GETMINMAXINFO:
+    {
+        MINMAXINFO* mmi = (MINMAXINFO*)lp;
+        mmi->ptMinTrackSize.x = S(720);
+        mmi->ptMinTrackSize.y = S(480);
+        return 0;
+    }
+
+    case WM_ACTIVATE:
+        g_app.active = (LOWORD(wp) != WA_INACTIVE);
+        InvalidateRect(hwnd, NULL, FALSE);
+        return 0;
+
+    case WM_MOUSEMOVE:
+    {
+        POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        if (!s_tracking)
+        {
+            TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hwnd, 0 };
+            TrackMouseEvent(&tme);
+            s_tracking = TRUE;
+        }
+        int oldRail = s_hotRail;
+        s_hotRail = RailHit(hwnd, pt);
+        if (oldRail != s_hotRail)
+            InvalidateRect(hwnd, NULL, FALSE);
+        s_strip.OnMouse(msg, pt);
+        return 0;
+    }
+
+    case WM_MOUSELEAVE:
+        s_tracking = FALSE;
+        if (s_hotRail != -1)
+        {
+            s_hotRail = -1;
+            InvalidateRect(hwnd, NULL, FALSE);
+        }
+        s_strip.ClearHot();
+        return 0;
+
+    case WM_LBUTTONDOWN:
+    {
+        POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        int rail = RailHit(hwnd, pt);
+        if (rail >= 0)
+        {
+            if (rail == 100)
+            {
+                g_app.st.navExpanded = !g_app.st.navExpanded;
+                Settings_Save();
+                LayoutChildren(hwnd);
+                InvalidateRect(hwnd, NULL, TRUE);
+            }
+            else if (rail == (int)_countof(s_rail))
+            {
+                App_SetPage(PG_SETTINGS);
+            }
+            else
+            {
+                App_SetPage(s_rail[rail].page);
+            }
+            return 0;
+        }
+        s_strip.OnMouse(msg, pt);
+        return 0;
+    }
+
+    case WM_LBUTTONUP:
+    {
+        POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        int cmd = s_strip.OnMouse(msg, pt);
+        if (cmd)
+        {
+            Page* pg = s_pages[g_app.page];
+            if (pg) pg->OnCommand(cmd);
+
+            if (cmd == CMD_ENDTASK && g_app.st.minOnUse)
+                ShowWindow(hwnd, SW_MINIMIZE);
+        }
+        return 0;
+    }
+
+    case WM_TIMER:
+        if (wp == TIMER_TICK)
+            DoTick(hwnd);
+        return 0;
+
+    case WM_APP_SEARCH:
+    {
+        WCHAR text[128];
+        Search_GetText(s_search, text, _countof(text));
+        StringCchCopyW(g_app.search, _countof(g_app.search), text);
+        Page* pg = s_pages[g_app.page];
+        if (pg) pg->OnSearch();
+        return 0;
+    }
+
+    case WM_APP_SELCHANGED:
+        Frame_UpdateCommandStates();
+        return 0;
+
+    case WM_APP_TRAYICON:
+        if (lp == WM_LBUTTONDBLCLK)
+        {
+            ShowWindow(hwnd, SW_RESTORE);
+            SetForegroundWindow(hwnd);
+        }
+        else if (lp == WM_RBUTTONUP)
+        {
+            POINT pt;
+            GetCursorPos(&pt);
+            SetForegroundWindow(hwnd);
+            MItem items[] =
+            {
+                { 1, L"Restore", MIF_DEFAULT, NULL, 0 },
+                { 0, NULL, MIF_SEP, NULL, 0 },
+                { 2, L"Always on top", g_app.st.onTop ? MIF_CHECKED : 0u, NULL, 0 },
+                { 0, NULL, MIF_SEP, NULL, 0 },
+                { 3, L"Exit", 0, NULL, 0 },
+            };
+            UINT cmd = Menu_Show(hwnd, pt, items, _countof(items));
+            switch (cmd)
+            {
+            case 1:
+                ShowWindow(hwnd, SW_RESTORE);
+                SetForegroundWindow(hwnd);
+                break;
+            case 2:
+                g_app.st.onTop = !g_app.st.onTop;
+                SetWindowPos(hwnd, g_app.st.onTop ? HWND_TOPMOST : HWND_NOTOPMOST,
+                             0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+                Settings_Save();
+                break;
+            case 3:
+                PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                break;
+            }
+        }
+        return 0;
+
+    case WM_KEYDOWN:
+        if (wp == VK_F5)
+        {
+            App_UpdateNow();
+            return 0;
+        }
+        return 0;
+
+    case WM_SETTINGCHANGE:
+        if (g_app.st.theme == TM_SYSTEM)
+            App_ApplyTheme();
+        return 0;
+
+    case WM_CLOSE:
+        Settings_Save();
+        RemoveTray(hwnd);
+        DestroyWindow(hwnd);
+        return 0;
+
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Entry                                                              */
+/* ------------------------------------------------------------------ */
+
+typedef BOOL (WINAPI *PFN_SetProcessDPIAware)(void);
+
+int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPWSTR lpCmdLine, int nCmdShow)
+{
+    (void)hPrev; (void)lpCmdLine;
+
+    /* single instance */
+    HANDLE mutex = CreateMutexW(NULL, TRUE, L"Local\\ROS_TaskMgr11");
+    if (mutex && GetLastError() == ERROR_ALREADY_EXISTS)
+    {
+        HWND prev = FindWindowW(FRAME_CLASS, NULL);
+        if (prev)
+        {
+            ShowWindow(prev, SW_RESTORE);
+            SetForegroundWindow(prev);
+        }
+        return 0;
+    }
+
+    g_app.hInst = hInstance;
+
+    /* dpi awareness (dynamic; ancient user32 may lack it) */
+    {
+        PFN_SetProcessDPIAware pAware = (PFN_SetProcessDPIAware)
+            GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetProcessDPIAware");
+        if (pAware) pAware();
+        HDC dc = GetDC(NULL);
+        g_app.dpi = GetDeviceCaps(dc, LOGPIXELSX);
+        ReleaseDC(NULL, dc);
+        if (g_app.dpi < 96) g_app.dpi = 96;
+    }
+
+    CoInitialize(NULL);
+    INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_STANDARD_CLASSES };
+    InitCommonControlsEx(&icc);
+
+    Gdiplus::GdiplusStartupInput gsi;
+    Gdiplus::GdiplusStartup(&s_gdiplusToken, &gsi, NULL);
+
+    Settings_Load();
+    App_ApplyTheme();
+
+    g_app.hAppIcon = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_TASKMGR11),
+                                       IMAGE_ICON, 32, 32, LR_DEFAULTCOLOR);
+    g_app.hAppIconSm = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_TASKMGR11),
+                                         IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR);
+
+    Data::Init();
+
+    /* window classes */
+    WNDCLASSW wc;
+    ZeroMemory(&wc, sizeof(wc));
+    wc.style = CS_DBLCLKS;
+    wc.lpfnWndProc = FrameProc;
+    wc.hInstance = hInstance;
+    wc.hIcon = g_app.hAppIcon;
+    wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+    wc.lpszClassName = FRAME_CLASS;
+    RegisterClassW(&wc);
+    TL_Register();
+    Search_Register();
+
+    int w = S(1000), h = S(660);
+    int x = (GetSystemMetrics(SM_CXSCREEN) - w) / 2;
+    int y = (GetSystemMetrics(SM_CYSCREEN) - h) / 2;
+
+    g_app.hFrame = CreateWindowExW(
+        g_app.st.onTop ? WS_EX_TOPMOST : 0,
+        FRAME_CLASS, L"Task Manager",
+        WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+        x, y, w, h, NULL, NULL, hInstance, NULL);
+    if (!g_app.hFrame)
+        return 1;
+
+    s_search = Search_Create(g_app.hFrame, L"Type a name, publisher, or PID to search");
+
+    /* restore placement */
+    if (g_app.st.wp.length == sizeof(WINDOWPLACEMENT))
+    {
+        g_app.st.wp.showCmd = SW_HIDE;
+        SetWindowPlacement(g_app.hFrame, &g_app.st.wp);
+    }
+
+    g_app.page = -1;
+    int startPage = (int)g_app.st.startPage;
+    if (startPage < 0 || startPage >= PG_SETTINGS) startPage = PG_PROCESSES;
+    g_app.page = startPage;
+    GetPage(startPage);
+    App_SetPage(startPage);
+
+    ShowWindow(g_app.hFrame, (nCmdShow == SW_SHOWDEFAULT) ? SW_SHOW : nCmdShow);
+    UpdateWindow(g_app.hFrame);
+
+    DoTick(g_app.hFrame);
+    UINT ms = App_TimerMs();
+    if (ms)
+        SetTimer(g_app.hFrame, TIMER_TICK, ms, NULL);
+
+    MSG msg;
+    while (GetMessageW(&msg, NULL, 0, 0))
+    {
+        /* app-wide keys */
+        if (msg.message == WM_KEYDOWN)
+        {
+            if (msg.wParam == VK_F5)
+            {
+                App_UpdateNow();
+                continue;
+            }
+            if (msg.wParam == 'F' && (GetKeyState(VK_CONTROL) & 0x8000))
+            {
+                if (s_search && IsWindowVisible(s_search))
+                {
+                    Search_Focus(s_search);
+                    continue;
+                }
+            }
+        }
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+
+    RemoveTray(g_app.hFrame);
+    Data::Shutdown();
+    Theme_Free();
+    Gdiplus::GdiplusShutdown(s_gdiplusToken);
+    CoUninitialize();
+    if (mutex) CloseHandle(mutex);
+    return (int)msg.wParam;
+}
