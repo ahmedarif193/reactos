@@ -1592,6 +1592,73 @@ static void test_widen(void)
     GdipDeletePath(path);
 }
 
+static void test_widen_round_join(void)
+{
+    const GpPointF right_turn[] = {{10.0, 40.0}, {40.0, 40.0}, {40.0, 70.0}};
+    const GpPointF left_turn[] = {{70.0, 40.0}, {40.0, 40.0}, {40.0, 70.0}};
+    const GpPointF obtuse_turn[] = {{10.0, 50.0}, {50.0, 50.0}, {30.0, 70.0}};
+    GpStatus status;
+    GpPath *path;
+    GpPen *pen;
+    BOOL visible;
+
+    status = GdipCreatePath(FillModeAlternate, &path);
+    expect(Ok, status);
+    status = GdipCreatePen1(0xffffffff, 20.0, UnitPixel, &pen);
+    expect(Ok, status);
+    status = GdipSetPenLineJoin(pen, LineJoinRound);
+    expect(Ok, status);
+
+    status = GdipAddPathLine2(path, right_turn, ARRAY_SIZE(right_turn));
+    expect(Ok, status);
+    status = GdipWidenPath(path, pen, NULL, FlatnessDefault);
+    expect(Ok, status);
+
+    visible = FALSE;
+    status = GdipIsVisiblePathPoint(path, 46.0, 34.0, NULL, &visible);
+    expect(Ok, status);
+    expect(TRUE, visible);  /* outside a bevel, inside the round join */
+    visible = TRUE;
+    status = GdipIsVisiblePathPoint(path, 48.0, 32.0, NULL, &visible);
+    expect(Ok, status);
+    expect(FALSE, visible); /* inside a miter, outside the round join */
+
+    status = GdipResetPath(path);
+    expect(Ok, status);
+    status = GdipAddPathLine2(path, left_turn, ARRAY_SIZE(left_turn));
+    expect(Ok, status);
+    status = GdipWidenPath(path, pen, NULL, FlatnessDefault);
+    expect(Ok, status);
+
+    visible = FALSE;
+    status = GdipIsVisiblePathPoint(path, 34.0, 34.0, NULL, &visible);
+    expect(Ok, status);
+    expect(TRUE, visible);
+    visible = TRUE;
+    status = GdipIsVisiblePathPoint(path, 32.0, 32.0, NULL, &visible);
+    expect(Ok, status);
+    expect(FALSE, visible);
+
+    status = GdipResetPath(path);
+    expect(Ok, status);
+    status = GdipAddPathLine2(path, obtuse_turn, ARRAY_SIZE(obtuse_turn));
+    expect(Ok, status);
+    status = GdipWidenPath(path, pen, NULL, FlatnessDefault);
+    expect(Ok, status);
+
+    visible = FALSE;
+    status = GdipIsVisiblePathPoint(path, 57.0, 47.0, NULL, &visible);
+    expect(Ok, status);
+    expect(TRUE, visible);
+    visible = TRUE;
+    status = GdipIsVisiblePathPoint(path, 61.0, 45.0, NULL, &visible);
+    expect(Ok, status);
+    expect(FALSE, visible);
+
+    GdipDeletePen(pen);
+    GdipDeletePath(path);
+}
+
 static path_test_t widenline_capflat_path[] = {
     {5.0, 5.0,   PathPointTypeStart, 0, 0}, /*0*/
     {50.0, 5.0,  PathPointTypeLine,  0, 0}, /*1*/
@@ -2251,6 +2318,7 @@ START_TEST(graphicspath)
     test_addpie();
     test_flatten();
     test_widen();
+    test_widen_round_join();
     test_widen_cap();
     test_isvisible();
     test_is_outline_visible_path_point();
