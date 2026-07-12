@@ -11,7 +11,7 @@
 /*  BtnStrip                                                           */
 /* ------------------------------------------------------------------ */
 
-void BtnStrip::Add(int id, const WCHAR* text, int icon, UINT style, BOOL enabled)
+void BtnStrip::Add(int id, const WCHAR* text, IconId icon, UINT style, BOOL enabled)
 {
     UiBtn* btn = b.Add();
     if (!btn) return;
@@ -74,7 +74,7 @@ int BtnStrip::LayoutRight(const RECT& area, int gap)
         b[i].r.bottom = y + h;
         x -= gap;
     }
-    return area.right - x - gap;
+    return b.n ? area.right - x - gap : 0;
 }
 
 int BtnStrip::LayoutLeft(const RECT& area, int gap)

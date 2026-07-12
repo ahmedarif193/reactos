@@ -8,3 +8,4 @@
 #pragma once
 
 #define IDI_TASKMGR11    100
+#define IDR_LICENSE_LUCIDE 101

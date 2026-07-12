@@ -215,7 +215,7 @@ struct AppHistoryPage : Page, ITreeListOwner
         return NULL;
     }
 
-    int TLRowGlyph(LPARAM data)
+    IconId TLRowGlyph(LPARAM data)
     {
         (void)data;
         return IC_WINDOW;

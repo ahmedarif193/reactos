@@ -165,7 +165,7 @@ struct DetailsPage : Page, ITreeListOwner
         return (p && p->x) ? p->x->icon : NULL;
     }
 
-    int TLRowGlyph(LPARAM data)
+    IconId TLRowGlyph(LPARAM data)
     {
         (void)data;
         return IC_WINDOW;
