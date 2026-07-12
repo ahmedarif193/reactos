@@ -197,6 +197,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/mutex.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/procgrp.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/processor.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/procinfo.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/procobj.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/profobj.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/queue.c

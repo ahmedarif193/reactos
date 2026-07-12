@@ -302,6 +302,9 @@
     SVC_(GetCurrentProcessorNumberEx, 1)
     SVC_(CreateUserProcess, 11)
 #endif
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    SVC_(QuerySystemInformationEx, 6)
+#endif
 #if (NTDDI_VERSION >= NTDDI_WIN8)
     SVC_(CreateWnfStateName, 7)
     SVC_(DeleteWnfStateData, 2)

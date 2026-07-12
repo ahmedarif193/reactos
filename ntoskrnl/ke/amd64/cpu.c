@@ -16,6 +16,10 @@
 #define NDEBUG
 #include <debug.h>
 
+/* AMD VM_CR MSR (SVM control), not covered by the shared MSR headers */
+#define MSR_AMD_VM_CR        0xC0010114
+#define AMD_VM_CR_SVMDIS     (1ULL << 4)
+
 /* GLOBALS *******************************************************************/
 
 /* The Boot TSS */
@@ -171,6 +175,8 @@ KiGetFeatureBits(VOID)
     CPUID_SIGNATURE_REGS signature;
     CPUID_VERSION_INFO_REGS VersionInfo;
     CPUID_EXTENDED_FUNCTION_REGS extendedFunction;
+    CPUID_EXTENDED_CPU_SIG_REGS ExtSig;
+    BOOLEAN HaveExtSig = FALSE;
 
     /* Get the Vendor ID */
     Vendor = Prcb->CpuVendor;
@@ -287,8 +293,8 @@ KiGetFeatureBits(VOID)
         if (extendedFunction.MaxLeaf >= CPUID_EXTENDED_CPU_SIG)
         {
             /* Read CPUID_EXTENDED_CPU_SIG */
-            CPUID_EXTENDED_CPU_SIG_REGS ExtSig;
             __cpuid(ExtSig.AsInt32, CPUID_EXTENDED_CPU_SIG);
+            HaveExtSig = TRUE;
 
             /* Check if NX-bit is supported */
             if (ExtSig.Intel.Edx.Bits.NX) FeatureBits |= KF_NX_BIT;
@@ -325,6 +331,8 @@ KiGetFeatureBits(VOID)
         {
             /* Read PROCBASED ctls and check if secondary are allowed */
             MSR_IA32_VMX_PROCBASED_CTLS_REGISTER ProcBasedCtls;
+            MSR_IA32_FEATURE_CONTROL_REGISTER FeatureControl;
+
             ProcBasedCtls.Uint64 = __readmsr(MSR_IA32_VMX_PROCBASED_CTLS);
             if (ProcBasedCtls.Bits.Allowed1.ActivateSecondaryControls)
             {
@@ -333,6 +341,16 @@ KiGetFeatureBits(VOID)
                 ProcBasedCtls2.Uint64 = __readmsr(MSR_IA32_VMX_PROCBASED_CTLS2);
                 if (ProcBasedCtls2.Bits.Allowed1.EPT)
                     FeatureBits |= KF_SLAT;
+            }
+
+            /* VMX usable when IA32_FEATURE_CONTROL is still unlocked (the OS
+               may enable it) or locked with a VMXON enable bit set */
+            FeatureControl.Uint64 = __readmsr(MSR_IA32_FEATURE_CONTROL);
+            if (!FeatureControl.Bits.Lock ||
+                FeatureControl.Bits.EnableVmxInsideSmx ||
+                FeatureControl.Bits.EnableVmxOutsideSmx)
+            {
+                FeatureBits |= KF_VIRT_FIRMWARE_ENABLED;
             }
         }
     }
@@ -351,6 +369,14 @@ KiGetFeatureBits(VOID)
                 CPUID_AMD_SVM_FEATURES_REGS SvmFeatures;
                 __cpuid(SvmFeatures.AsInt32, CPUID_AMD_SVM_FEATURES);
                 if (SvmFeatures.Edx.Bits.NP) FeatureBits |= KF_SLAT;
+            }
+
+            /* If SVM is supported, it is firmware-enabled unless
+               VM_CR.SVMDIS is set */
+            if (HaveExtSig && ExtSig.Amd.Ecx.Bits.SVM)
+            {
+                if (!(__readmsr(MSR_AMD_VM_CR) & AMD_VM_CR_SVMDIS))
+                    FeatureBits |= KF_VIRT_FIRMWARE_ENABLED;
             }
         }
     }

@@ -21,6 +21,11 @@
 #define WIN32_NO_STATUS
 #include "windef.h"
 #include "winbase.h"
+#ifdef __REACTOS__
+#include "winnls.h"
+#include "winuser.h"
+#include "reason.h"
+#endif
 #include "wine/winternl.h"
 #include "wtsapi32.h"
 #include "wine/debug.h"
@@ -63,8 +68,15 @@ BOOL WINAPI WTSConnectSessionW(ULONG LogonId, ULONG TargetLogonId, PWSTR pPasswo
  */
 BOOL WINAPI WTSDisconnectSession(HANDLE hServer, DWORD SessionId, BOOL bWait)
 {
+#ifdef __REACTOS__
+    /* Sessions cannot be disconnected without a terminal services service */
+    WARN("%p 0x%08x %d: not supported\n", hServer, SessionId, bWait);
+    SetLastError(ERROR_NOT_SUPPORTED);
+    return FALSE;
+#else
     FIXME("Stub %p 0x%08x %d\n", hServer, SessionId, bWait);
     return TRUE;
+#endif
 }
 
 /************************************************************
@@ -247,6 +259,56 @@ BOOL WINAPI WTSEnumerateSessionsExA(HANDLE server, DWORD *level, DWORD filter, W
 BOOL WINAPI WTSEnumerateSessionsA(HANDLE hServer, DWORD Reserved, DWORD Version,
     PWTS_SESSION_INFOA* ppSessionInfo, DWORD* pCount)
 {
+#ifdef __REACTOS__
+    PWTS_SESSION_INFOW sessionsW;
+    WTS_SESSION_INFOA *sessions;
+    char *strings;
+    DWORD count, i;
+    SIZE_T size;
+
+    TRACE("%p 0x%08x 0x%08x %p %p\n", hServer, Reserved, Version,
+          ppSessionInfo, pCount);
+
+    if (!ppSessionInfo || !pCount)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    /* Delegate to the Unicode version and narrow the station names */
+    if (!WTSEnumerateSessionsW(hServer, Reserved, Version, &sessionsW, &count))
+        return FALSE;
+
+    size = count * sizeof(*sessions);
+    for (i = 0; i < count; i++)
+        size += WideCharToMultiByte(CP_ACP, 0, sessionsW[i].pWinStationName, -1,
+                                    NULL, 0, NULL, NULL);
+
+    sessions = heap_alloc(size);
+    if (!sessions)
+    {
+        WTSFreeMemory(sessionsW);
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return FALSE;
+    }
+
+    strings = (char *)(sessions + count);
+    for (i = 0; i < count; i++)
+    {
+        sessions[i].SessionId = sessionsW[i].SessionId;
+        sessions[i].State = sessionsW[i].State;
+        sessions[i].pWinStationName = strings;
+        strings += WideCharToMultiByte(CP_ACP, 0, sessionsW[i].pWinStationName, -1,
+                                       strings,
+                                       (int)(size - (strings - (char *)sessions)),
+                                       NULL, NULL);
+    }
+
+    WTSFreeMemory(sessionsW);
+    *ppSessionInfo = sessions;
+    *pCount = count;
+    return TRUE;
+#else
     static int once;
 
     if (!once++) FIXME("Stub %p 0x%08x 0x%08x %p %p\n", hServer, Reserved, Version,
@@ -258,6 +320,7 @@ BOOL WINAPI WTSEnumerateSessionsA(HANDLE hServer, DWORD Reserved, DWORD Version,
     *ppSessionInfo = NULL;
 
     return TRUE;
+#endif
 }
 
 /************************************************************
@@ -266,6 +329,74 @@ BOOL WINAPI WTSEnumerateSessionsA(HANDLE hServer, DWORD Reserved, DWORD Version,
 BOOL WINAPI WTSEnumerateSessionsW(HANDLE hServer, DWORD Reserved, DWORD Version,
     PWTS_SESSION_INFOW* ppSessionInfo, DWORD* pCount)
 {
+#ifdef __REACTOS__
+    static const WCHAR console_name[] = L"Console";
+    static const WCHAR services_name[] = L"Services";
+    WCHAR session_name[24];
+    WTS_SESSION_INFOW *sessions;
+    WCHAR *strings;
+    DWORD count, console_id, session_id;
+    SIZE_T size;
+
+    TRACE("%p 0x%08x 0x%08x %p %p\n", hServer, Reserved, Version,
+          ppSessionInfo, pCount);
+
+    if (hServer != WTS_CURRENT_SERVER_HANDLE)
+    {
+        SetLastError(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
+
+    if (Version != 1 || !ppSessionInfo || !pCount)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    /* There is no terminal services service, so the only sessions that can
+     * be reported truthfully are the console session and, if it happens to
+     * differ, the session the caller is running in. */
+    console_id = WTSGetActiveConsoleSessionId();
+    session_id = NtCurrentTeb()->Peb->SessionId;
+
+    count = 1;
+    size = sizeof(console_name);
+    if (session_id != console_id)
+    {
+        if (session_id == 0)
+            lstrcpyW(session_name, services_name);
+        else
+            wsprintfW(session_name, L"Session%u", session_id);
+        size += (lstrlenW(session_name) + 1) * sizeof(WCHAR);
+        count++;
+    }
+
+    sessions = heap_alloc(count * sizeof(*sessions) + size);
+    if (!sessions)
+    {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return FALSE;
+    }
+    strings = (WCHAR *)(sessions + count);
+
+    sessions[0].SessionId = console_id;
+    sessions[0].pWinStationName = strings;
+    sessions[0].State = WTSActive;
+    lstrcpyW(strings, console_name);
+    strings += lstrlenW(console_name) + 1;
+
+    if (count > 1)
+    {
+        sessions[1].SessionId = session_id;
+        sessions[1].pWinStationName = strings;
+        sessions[1].State = WTSConnected;
+        lstrcpyW(strings, session_name);
+    }
+
+    *ppSessionInfo = sessions;
+    *pCount = count;
+    return TRUE;
+#else
     FIXME("Stub %p 0x%08x 0x%08x %p %p\n", hServer, Reserved, Version,
           ppSessionInfo, pCount);
 
@@ -275,6 +406,7 @@ BOOL WINAPI WTSEnumerateSessionsW(HANDLE hServer, DWORD Reserved, DWORD Version,
     *ppSessionInfo = NULL;
 
     return TRUE;
+#endif
 }
 
 /************************************************************
@@ -311,9 +443,35 @@ BOOL WINAPI WTSFreeMemoryExW(WTS_TYPE_CLASS type, void *ptr, ULONG nmemb)
  */
 BOOL WINAPI WTSLogoffSession(HANDLE hserver, DWORD session_id, BOOL bwait)
 {
+#ifdef __REACTOS__
+    DWORD current_id;
+
+    TRACE("(%p, 0x%x, %d)\n", hserver, session_id, bwait);
+
+    if (hserver != WTS_CURRENT_SERVER_HANDLE)
+    {
+        SetLastError(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
+
+    current_id = NtCurrentTeb()->Peb->SessionId;
+    if (session_id == WTS_CURRENT_SESSION || session_id == current_id)
+    {
+        /* Without a terminal services service, ExitWindowsEx can only log
+         * off the caller's own session, and there is no way to wait for
+         * the logoff to complete, so bWait is ignored and the result of
+         * the logoff request is returned directly. */
+        return ExitWindowsEx(EWX_LOGOFF,
+                             SHTDN_REASON_MAJOR_OTHER | SHTDN_REASON_FLAG_PLANNED);
+    }
+
+    SetLastError(ERROR_NOT_SUPPORTED);
+    return FALSE;
+#else
     FIXME("(%p, 0x%x, %d): stub\n", hserver, session_id, bwait);
     SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
     return FALSE;
+#endif
 }
 
 
