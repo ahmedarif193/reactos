@@ -218,7 +218,11 @@ xHalRegisterBusHandler(IN INTERFACE_TYPE InterfaceType,
 VOID
 NTAPI
 xHalSetWakeAlarm(IN ULONGLONG AlartTime,
+#if (NTDDI_VERSION >= NTDDI_WIN8)
                  IN ULONGLONG DcWakeTime)
+#else
+                 IN PTIME_FIELDS TimeFields)
+#endif
 {
     /* Nothing */
     return;

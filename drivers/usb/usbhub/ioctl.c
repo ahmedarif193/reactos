@@ -328,13 +328,10 @@ NTAPI
 USBH_PdoIoctlSubmitUrb(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
                        IN PIRP Irp)
 {
-    PUSBHUB_FDO_EXTENSION HubExtension;
     PURB Urb;
     NTSTATUS Status;
 
     DPRINT_IOCTL("USBH_PdoIoctlSubmitUrb ... \n");
-
-    HubExtension = PortExtension->HubExtension;
 
     Urb = URB_FROM_IRP(Irp);
 

@@ -55,7 +55,9 @@ NTKERNELAPI NTSTATUS NTAPI KeQueryNodeActiveAffinity2(_In_ USHORT NodeNumber, _O
 NTKERNELAPI NTSTATUS NTAPI KeSetSelectedCpuSetsThread(_Inout_ PKTHREAD Thread, _In_ ULONG CpuSetCount, _In_reads_(CpuSetCount) PULONG64 CpuSetMasks);
 NTKERNELAPI KHETERO_CPU_POLICY NTAPI KeQueryHeteroCpuPolicyThread(_In_ PKTHREAD Thread, _In_ LOGICAL UserPolicy);
 NTKERNELAPI KHETERO_CPU_POLICY NTAPI KeSetHeteroCpuPolicyThread(_Inout_ PKTHREAD Thread, _In_ KHETERO_CPU_POLICY Policy, _In_ LOGICAL Reset);
+#if (NTDDI_VERSION >= NTDDI_WINBLUE)
 NTKERNELAPI BOOLEAN NTAPI KeSetTimer2(_Inout_ PKTIMER Timer, _In_ LARGE_INTEGER DueTime, _In_ LONGLONG Period, _In_opt_ PEXT_SET_PARAMETERS Parameters);
+#endif
 NTKERNELAPI ULONG64 NTAPI KeQueryUnbiasedInterruptTimePrecise(_Out_ PULONG64 QpcTimeStamp);
 NTKERNELAPI NTSTATUS NTAPI KeQueryAuxiliaryCounterFrequency(_Out_opt_ PULONG64 AuxiliaryCounterFrequency);
 
@@ -498,6 +500,8 @@ KeSetTargetProcessorDpcEx(
     return STATUS_SUCCESS;
 }
 
+#if (NTDDI_VERSION >= NTDDI_WINBLUE)
+
 /*
  * @implemented
  */
@@ -514,6 +518,8 @@ KeSetTimer2(
 
     return KeSetTimerEx(Timer, DueTime, KiExtTimerPeriodToMilliseconds(Period), NULL);
 }
+
+#endif /* NTDDI_VERSION >= NTDDI_WINBLUE */
 
 /*
  * @implemented

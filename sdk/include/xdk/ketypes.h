@@ -545,7 +545,10 @@ typedef struct _KWAIT_BLOCK {
 #if (NTDDI_VERSION >= NTDDI_WIN7)
   volatile UCHAR BlockState;
 #else
-  UCHAR SpareByte;
+  union {
+    UCHAR SpareByte;
+    volatile UCHAR BlockState;
+  };
 #endif
 #if defined(_WIN64)
   LONG SpareLong;
