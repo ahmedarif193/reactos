@@ -910,18 +910,24 @@ KiArm64SmtPackageId(_In_ ULONGLONG Mpidr)
     return Mpidr & KI_ARM64_MPIDR_PACKAGE;
 }
 
+/* Before the APs are up KeActiveProcessors can still be empty; treat the
+   boot processor as the only active one in that window */
+static
+KAFFINITY
+KiArm64ActiveProcessorMask(VOID)
+{
+    KAFFINITY ActiveMask = KeActiveProcessors;
+
+    return (ActiveMask != 0) ? ActiveMask : (KAFFINITY)1;
+}
+
 VOID
 NTAPI
 KiArm64FinalizeSmtTopology(VOID)
 {
-    KAFFINITY ActiveMask = KeActiveProcessors;
+    KAFFINITY ActiveMask = KiArm64ActiveProcessorMask();
     ULONG Cpu;
     ULONG Other;
-
-    if (ActiveMask == 0)
-    {
-        ActiveMask = (KAFFINITY)1;
-    }
 
     for (Cpu = 0; Cpu < MAXIMUM_PROCESSORS; Cpu++)
     {
@@ -1013,4 +1019,344 @@ KiArm64FinalizeSmtTopology(VOID)
 
     KeMemoryBarrier();
     KiArm64SmtFinalized = TRUE;
+}
+
+/*
+ * Processor cache and package providers for
+ * SystemLogicalProcessorInformation(Ex).
+ *
+ * Cache geometry is read from CLIDR_EL1/CCSIDR_EL1 on the calling processor
+ * and assumed homogeneous across the machine; refining per-cluster geometry
+ * on heterogeneous (big.LITTLE) parts from the ACPI PPTT is future work.
+ */
+
+#define KI_ARM64_MAX_CACHE_LEVELS     7
+#define KI_ARM64_MAX_CACHE_GEOMETRY   (2 * KI_ARM64_MAX_CACHE_LEVELS)
+
+typedef struct _KI_ARM64_CACHE_GEOMETRY
+{
+    CACHE_DESCRIPTOR Descriptor;
+    BOOLEAN PackageShared;
+} KI_ARM64_CACHE_GEOMETRY, *PKI_ARM64_CACHE_GEOMETRY;
+
+static
+VOID
+KiArm64ReadCacheLevelDescriptor(_In_ ULONG Level,
+                                _In_ PROCESSOR_CACHE_TYPE Type,
+                                _Out_ PCACHE_DESCRIPTOR Descriptor)
+{
+    ULONGLONG Size;
+    ULONG LineShift;
+    ULONG LineSize;
+    ULONG Ways;
+    ULONG Sets;
+
+    /* CSSELR.Level is 0-based, InD picks the instruction side */
+    KiArm64ReadCcsidr(Level - 1,
+                      (Type == CacheInstruction),
+                      &LineShift,
+                      &Ways,
+                      &Sets);
+    LineSize = 1UL << LineShift;
+
+    Descriptor->Level = (UCHAR)Level;
+    Descriptor->LineSize = (USHORT)LineSize;    /* 3-bit field + 4: max 2048 */
+    Descriptor->Type = Type;
+
+    /* 0xFF is reserved for fully associative caches (a single set); clamp
+       real way counts below it */
+    if (Sets == 1)
+    {
+        Descriptor->Associativity = CACHE_FULLY_ASSOCIATIVE;
+    }
+    else if (Ways >= CACHE_FULLY_ASSOCIATIVE)
+    {
+        Descriptor->Associativity = CACHE_FULLY_ASSOCIATIVE - 1;
+    }
+    else
+    {
+        Descriptor->Associativity = (UCHAR)Ways;
+    }
+
+    Size = (ULONGLONG)Sets * Ways * LineSize;
+    Descriptor->Size = (Size > MAXULONG) ? MAXULONG : (ULONG)Size;
+}
+
+static
+ULONG
+KiArm64CollectCacheGeometry(_Out_writes_(KI_ARM64_MAX_CACHE_GEOMETRY)
+                                PKI_ARM64_CACHE_GEOMETRY Geometry)
+{
+    KIRQL OldIrql;
+    ULONGLONG Clidr;
+    ULONG Count = 0;
+    ULONG DeepestLevel = 0;
+    ULONG SharedFloor;
+    ULONG Louis;
+    ULONG Level;
+    ULONG Index;
+
+    /* CSSELR_EL1/CCSIDR_EL1 form a per-PE indirection pair: block thread
+       migration so the whole walk reads a single processor's hierarchy */
+    KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
+
+    __asm__ __volatile__("mrs %0, clidr_el1" : "=r"(Clidr));
+
+    for (Level = 1; Level <= KI_ARM64_MAX_CACHE_LEVELS; Level++)
+    {
+        ULONG CacheType = (ULONG)((Clidr >> ((Level - 1) * 3)) & 0x7);
+
+        /* 0b000 terminates the hierarchy; treat reserved encodings the
+           same way */
+        if ((CacheType == 0) || (CacheType > 4))
+        {
+            break;
+        }
+
+        /* 0b001 instruction only, 0b011 separate instruction and data */
+        if ((CacheType == 1) || (CacheType == 3))
+        {
+            KiArm64ReadCacheLevelDescriptor(Level,
+                                            CacheInstruction,
+                                            &Geometry[Count].Descriptor);
+            Count++;
+        }
+
+        /* 0b010 data only, 0b011 separate instruction and data */
+        if ((CacheType == 2) || (CacheType == 3))
+        {
+            KiArm64ReadCacheLevelDescriptor(Level,
+                                            CacheData,
+                                            &Geometry[Count].Descriptor);
+            Count++;
+        }
+
+        /* 0b100 unified */
+        if (CacheType == 4)
+        {
+            KiArm64ReadCacheLevelDescriptor(Level,
+                                            CacheUnified,
+                                            &Geometry[Count].Descriptor);
+            Count++;
+        }
+
+        DeepestLevel = Level;
+    }
+
+    KeLowerIrql(OldIrql);
+
+    /*
+     * CLIDR_EL1.LoUIS names the last level that must be cleaned to reach
+     * the point of unification for the Inner Shareable domain: levels
+     * 1..LoUIS can hold data other cores do not observe (per-core private,
+     * e.g. Cortex-A53 reports LoUIS = 1 for its private L1), while deeper
+     * levels are unified (shared beyond the core). LoUIS == 0 means no
+     * cleaning is required at all (FEAT_IDC-style parts); fall back to
+     * treating only the deepest present level as shared.
+     */
+    Louis = (ULONG)((Clidr >> 21) & 0x7);
+    if (Louis != 0)
+    {
+        SharedFloor = Louis + 1;
+    }
+    else
+    {
+        SharedFloor = (DeepestLevel != 0) ? DeepestLevel : 1;
+    }
+
+    for (Index = 0; Index < Count; Index++)
+    {
+        Geometry[Index].PackageShared =
+            (Geometry[Index].Descriptor.Level >= SharedFloor);
+    }
+
+    return Count;
+}
+
+static
+ULONG
+KiArm64CollectPackageSets(_Out_writes_to_(MaxSets, return) PKAFFINITY Sets,
+                          _In_ ULONG MaxSets)
+{
+    KAFFINITY ActiveMask = KiArm64ActiveProcessorMask();
+    KAFFINITY Assigned = 0;
+    ULONG Count = 0;
+    ULONG Cpu;
+    ULONG Other;
+
+    for (Cpu = 0; (Cpu < MAXIMUM_PROCESSORS) && (Count < MaxSets); Cpu++)
+    {
+        KAFFINITY PackageSet;
+        BOOLEAN HasId;
+        ULONGLONG PackageId;
+
+        if ((ActiveMask & AFFINITY_MASK(Cpu)) == 0)
+        {
+            continue;
+        }
+
+        if (Assigned & AFFINITY_MASK(Cpu))
+        {
+            continue;
+        }
+
+        HasId = KiArm64CpuNumaTopology[Cpu].HasMpidr;
+        PackageId = HasId ?
+                    KiArm64SmtPackageId(KiArm64CpuNumaTopology[Cpu].Mpidr) : 0;
+        PackageSet = AFFINITY_MASK(Cpu);
+
+        for (Other = Cpu + 1; Other < MAXIMUM_PROCESSORS; Other++)
+        {
+            if ((ActiveMask & AFFINITY_MASK(Other)) == 0)
+            {
+                continue;
+            }
+
+            if (HasId)
+            {
+                if (!KiArm64CpuNumaTopology[Other].HasMpidr ||
+                    (KiArm64SmtPackageId(KiArm64CpuNumaTopology[Other].Mpidr) !=
+                     PackageId))
+                {
+                    continue;
+                }
+            }
+            else
+            {
+                /* Processors without MPIDR data fold into a single package */
+                if (KiArm64CpuNumaTopology[Other].HasMpidr)
+                {
+                    continue;
+                }
+            }
+
+            PackageSet |= AFFINITY_MASK(Other);
+        }
+
+        Assigned |= PackageSet;
+        Sets[Count++] = PackageSet;
+    }
+
+    return Count;
+}
+
+static
+ULONG
+KiArm64ExpandCacheRecords(
+    _In_reads_(PackageCount) const KAFFINITY *PackageSets,
+    _In_ ULONG PackageCount,
+    _Out_writes_to_(MaxRecords, return) PKI_CACHE_RECORD Records,
+    _In_ ULONG MaxRecords)
+{
+    KI_ARM64_CACHE_GEOMETRY Geometry[KI_ARM64_MAX_CACHE_GEOMETRY];
+    KAFFINITY ActiveMask = KiArm64ActiveProcessorMask();
+    ULONG GeometryCount;
+    ULONG Written = 0;
+    ULONG Index;
+    ULONG Package;
+    ULONG Cpu;
+
+    GeometryCount = KiArm64CollectCacheGeometry(Geometry);
+    if (GeometryCount == 0)
+    {
+        return 0;
+    }
+
+    for (Index = 0; Index < GeometryCount; Index++)
+    {
+        if (Geometry[Index].PackageShared)
+        {
+            /* One instance of a shared level per package */
+            for (Package = 0; Package < PackageCount; Package++)
+            {
+                if (Written >= MaxRecords)
+                {
+                    return Written;
+                }
+
+                Records[Written].Descriptor = Geometry[Index].Descriptor;
+                Records[Written].ProcessorSet = PackageSets[Package];
+                Written++;
+            }
+        }
+        else
+        {
+            /* One instance of a private level per core; SMT siblings share
+               their core's instance, so emit one record per sibling set */
+            KAFFINITY Covered = 0;
+
+            for (Cpu = 0; Cpu < MAXIMUM_PROCESSORS; Cpu++)
+            {
+                PKPRCB Prcb;
+                KAFFINITY CoreSet;
+
+                if ((ActiveMask & AFFINITY_MASK(Cpu)) == 0)
+                {
+                    continue;
+                }
+
+                if (Covered & AFFINITY_MASK(Cpu))
+                {
+                    continue;
+                }
+
+                Prcb = KiProcessorBlock[Cpu];
+                CoreSet = (Prcb != NULL) ? Prcb->MultiThreadProcessorSet : 0;
+                if (CoreSet == 0)
+                {
+                    CoreSet = AFFINITY_MASK(Cpu);
+                }
+
+                if (Written >= MaxRecords)
+                {
+                    return Written;
+                }
+
+                Records[Written].Descriptor = Geometry[Index].Descriptor;
+                Records[Written].ProcessorSet = CoreSet;
+                Written++;
+
+                Covered |= CoreSet | AFFINITY_MASK(Cpu);
+            }
+        }
+    }
+
+    return Written;
+}
+
+VOID
+NTAPI
+KiQueryProcessorTopology(
+    _Out_writes_to_opt_(MaxRecords, *RecordCount) PKI_CACHE_RECORD Records,
+    _In_ ULONG MaxRecords,
+    _Out_ PULONG RecordCount,
+    _Out_writes_to_opt_(MaxSets, *SetCount) PKAFFINITY Sets,
+    _In_ ULONG MaxSets,
+    _Out_ PULONG SetCount)
+{
+    KAFFINITY PackageSets[MAXIMUM_PROCESSORS];
+    ULONG PackageCount;
+
+    ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
+
+    *RecordCount = 0;
+    *SetCount = 0;
+
+    /* Both views group processors by physical package; compute the sets
+       once and share them */
+    PackageCount = KiArm64CollectPackageSets(PackageSets, MAXIMUM_PROCESSORS);
+
+    if ((Sets != NULL) && (MaxSets != 0))
+    {
+        *SetCount = min(PackageCount, MaxSets);
+        RtlCopyMemory(Sets, PackageSets, *SetCount * sizeof(KAFFINITY));
+    }
+
+    if ((Records != NULL) && (MaxRecords != 0))
+    {
+        *RecordCount = KiArm64ExpandCacheRecords(PackageSets,
+                                                 PackageCount,
+                                                 Records,
+                                                 MaxRecords);
+    }
 }
