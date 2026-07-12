@@ -42,6 +42,11 @@ list(APPEND FONT_FILES
     #sserifeg.fon # to be added (CORE-16165 and CORE-16166)
     #sserifer.fon # to be added (CORE-16165 and CORE-16166)
     #sserifet.fon # to be added (CORE-16165 and CORE-16166)
+    selawk.ttf
+    selawkb.ttf
+    selawkl.ttf
+    selawksb.ttf
+    selawksl.ttf
     symbol.ttf
     tahoma.ttf
     tahomabd.ttf

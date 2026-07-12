@@ -27,7 +27,8 @@ IntEngMaskBlt(
     _In_ RECTL *prclDest,
     _In_ POINTL *pptlMask,
     _In_ BRUSHOBJ *pbo,
-    _In_ POINTL *pptlBrushOrg);
+    _In_ POINTL *pptlBrushOrg,
+    _In_ BOOL bSubpixel);
 
 VOID
 FASTCALL
