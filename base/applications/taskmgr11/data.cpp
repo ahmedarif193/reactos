@@ -77,6 +77,30 @@ static Vec<SvcGroupCache> s_svcGroups;
 static Vec<UserRow> s_users;
 static Vec<StartupRow> s_startup;
 static Vec<AppHistRow> s_appHist;
+static FILETIME s_appHistSince;
+static BOOL s_appHistDirty;
+static DWORD s_appHistLastSave;
+static DWORD s_currentSession;
+static DWORD s_currentPid;
+
+struct AppHistDiskRow
+{
+    WCHAR image[64];
+    WCHAR displayName[128];
+    WCHAR path[MAX_PATH];
+    LONGLONG cpu100ns;
+    ULONGLONG netBytes;
+    ULONGLONG notificationBytes;
+};
+
+static const WCHAR* APP_HISTORY_KEY =
+    L"Software\\ReactOS\\TaskMgr11\\AppHistory";
+static const DWORD APP_HISTORY_VERSION = 1;
+static const DWORD APP_HISTORY_MAX_ROWS = 256;
+
+static void LoadAppHistory(void);
+static void SaveAppHistory(void);
+static void DestroyAppHistory(void);
 
 static LONGLONG s_lastQpc;
 static double   s_qpcFreq;
@@ -765,6 +789,10 @@ void Init(void)
     pIsWow64Process = (PFN_IsWow64Process)GetProcAddress(k32, "IsWow64Process");
     pIsHungAppWindow = (PFN_IsHungAppWindow)GetProcAddress(u32, "IsHungAppWindow");
 
+    s_currentPid = GetCurrentProcessId();
+    ProcessIdToSessionId(s_currentPid, &s_currentSession);
+    LoadAppHistory();
+
     LARGE_INTEGER f;
     QueryPerformanceFrequency(&f);
     s_qpcFreq = (double)f.QuadPart;
@@ -816,6 +844,8 @@ void Init(void)
 
 void Shutdown(void)
 {
+    SaveAppHistory();
+    DestroyAppHistory();
     for (int i = 0; i < s_extras.n; i++)
     {
         if (s_extras[i]->icon) DestroyIcon(s_extras[i]->icon);
@@ -1119,23 +1149,69 @@ const WCHAR* SvchostGroup(ULONG pid)
     return NULL;
 }
 
-static void AccumHistory(const WCHAR* image, LONGLONG cpuDelta)
+static AppHistRow* FindAppHistory(const ProcRow& process)
 {
-    if (cpuDelta <= 0) return;
+    const WCHAR* path = process.x ? process.x->path : NULL;
     for (int i = 0; i < s_appHist.n; i++)
     {
-        if (lstrcmpiW(s_appHist[i].image, image) == 0)
-        {
-            s_appHist[i].cpu100ns += cpuDelta;
-            return;
-        }
+        if (path && path[0] && s_appHist[i].path[0] &&
+            lstrcmpiW(s_appHist[i].path, path) == 0)
+            return &s_appHist[i];
+        if (lstrcmpiW(s_appHist[i].image, process.image) == 0)
+            return &s_appHist[i];
     }
-    AppHistRow* r = s_appHist.Add();
-    if (r)
+    return NULL;
+}
+
+static void SetAppHistoryDisplayName(AppHistRow* history,
+                                     const ProcRow& process)
+{
+    const WCHAR* name = process.image;
+    if (process.x && process.x->desc[0] &&
+        lstrcmpiW(process.x->desc, process.image) != 0)
     {
-        StringCchCopyW(r->image, _countof(r->image), image);
-        r->cpu100ns = cpuDelta;
+        name = process.x->desc;
     }
+    StringCchCopyW(history->displayName, _countof(history->displayName), name);
+
+    int length = lstrlenW(history->displayName);
+    if (length > 4 &&
+        lstrcmpiW(history->displayName + length - 4, L".exe") == 0)
+    {
+        history->displayName[length - 4] = 0;
+    }
+}
+
+static void AccumHistory(const ProcRow& process, LONGLONG cpuDelta)
+{
+    if (process.pid == s_currentPid || process.pid <= 4 ||
+        process.sessionId != s_currentSession)
+        return;
+
+    AppHistRow* history = FindAppHistory(process);
+    if (!history)
+    {
+        if (process.category != CAT_APP || !process.x || !process.x->resolved)
+            return;
+        if ((DWORD)s_appHist.n >= APP_HISTORY_MAX_ROWS)
+            return;
+        history = s_appHist.Add();
+        if (!history)
+            return;
+        StringCchCopyW(history->image, _countof(history->image), process.image);
+    }
+
+    SetAppHistoryDisplayName(history, process);
+    if (process.x)
+    {
+        if (process.x->path[0])
+            StringCchCopyW(history->path, _countof(history->path), process.x->path);
+        if (!history->icon && process.x->icon)
+            history->icon = CopyIcon(process.x->icon);
+    }
+    if (cpuDelta > 0)
+        history->cpu100ns += cpuDelta;
+    s_appHistDirty = TRUE;
 }
 
 void Tick(void)
@@ -1429,9 +1505,6 @@ void Tick(void)
             if (p->cpuPct < 0) p->cpuPct = 0;
             if (p->cpuPct > 100) p->cpuPct = 100;
 
-            if (p->pid != 0)
-                AccumHistory(p->image, cpuDelta);
-
             /* suspended? all threads in Wait/Suspended */
             if (spi->NumberOfThreads)
             {
@@ -1492,6 +1565,8 @@ void Tick(void)
             if (x) x->inUse = TRUE;
             p->x = x;
 
+            AccumHistory(*p, cpuDelta);
+
             if (p->pid != 0)
             {
                 g.procCount++;
@@ -1537,6 +1612,13 @@ void Tick(void)
         g.hDiskActive.Push((float)g.diskActivePct);
     g.hNetRecv.Push((float)g.netRecvBps);
     g.hNetSend.Push((float)g.netSendBps);
+
+    DWORD tick = GetTickCount();
+    if (s_appHistDirty && tick - s_appHistLastSave >= 60000)
+    {
+        SaveAppHistory();
+        s_appHistLastSave = tick;
+    }
 
     s_first = FALSE;
 }
@@ -2003,8 +2085,218 @@ BOOL SetStartupEnabled(const StartupRow& it, BOOL enable)
 /*  App history                                                        */
 /* ------------------------------------------------------------------ */
 
-Vec<AppHistRow>& AppHistory(void) { return s_appHist; }
-void ClearAppHistory(void) { s_appHist.Clear(); }
+static void SetAppHistorySinceNow(void)
+{
+    GetSystemTimeAsFileTime(&s_appHistSince);
+}
+
+static void ClearAppHistoryRows(void)
+{
+    for (int i = 0; i < s_appHist.n; i++)
+    {
+        if (s_appHist[i].icon)
+            DestroyIcon(s_appHist[i].icon);
+    }
+    s_appHist.Clear();
+}
+
+static void DestroyAppHistory(void)
+{
+    ClearAppHistoryRows();
+    s_appHist.Free();
+}
+
+static void LoadAppHistoryIcon(AppHistRow* history)
+{
+    if (!history->path[0])
+        return;
+
+    SHFILEINFOW fileInfo;
+    ZeroMemory(&fileInfo, sizeof(fileInfo));
+    if (SHGetFileInfoW(history->path, 0, &fileInfo, sizeof(fileInfo),
+                       SHGFI_ICON | SHGFI_SMALLICON))
+    {
+        history->icon = fileInfo.hIcon;
+    }
+}
+
+static void LoadAppHistory(void)
+{
+    ClearAppHistoryRows();
+    SetAppHistorySinceNow();
+    s_appHistDirty = FALSE;
+    s_appHistLastSave = GetTickCount();
+
+    HKEY key;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, APP_HISTORY_KEY, 0,
+                      KEY_QUERY_VALUE, &key) != ERROR_SUCCESS)
+        return;
+
+    DWORD version = 0, type = 0, size = sizeof(version);
+    if (RegQueryValueExW(key, L"Version", NULL, &type,
+                         (LPBYTE)&version, &size) != ERROR_SUCCESS ||
+        type != REG_DWORD || version != APP_HISTORY_VERSION)
+    {
+        RegCloseKey(key);
+        return;
+    }
+
+    FILETIME since;
+    size = sizeof(since);
+    if (RegQueryValueExW(key, L"Since", NULL, &type,
+                         (LPBYTE)&since, &size) == ERROR_SUCCESS &&
+        type == REG_BINARY && size == sizeof(since))
+    {
+        s_appHistSince = since;
+    }
+
+    size = 0;
+    if (RegQueryValueExW(key, L"Rows", NULL, &type, NULL, &size) == ERROR_SUCCESS &&
+        type == REG_BINARY && size &&
+        size <= APP_HISTORY_MAX_ROWS * sizeof(AppHistDiskRow) &&
+        size % sizeof(AppHistDiskRow) == 0)
+    {
+        AppHistDiskRow* rows =
+            (AppHistDiskRow*)HeapAlloc(GetProcessHeap(), 0, size);
+        if (rows && RegQueryValueExW(key, L"Rows", NULL, &type,
+                                     (LPBYTE)rows, &size) == ERROR_SUCCESS)
+        {
+            DWORD count = size / sizeof(AppHistDiskRow);
+            for (DWORD i = 0; i < count; i++)
+            {
+                rows[i].image[_countof(rows[i].image) - 1] = 0;
+                rows[i].displayName[_countof(rows[i].displayName) - 1] = 0;
+                rows[i].path[_countof(rows[i].path) - 1] = 0;
+                if (!rows[i].image[0])
+                    continue;
+
+                AppHistRow* history = s_appHist.Add();
+                if (!history)
+                    break;
+                StringCchCopyW(history->image, _countof(history->image),
+                               rows[i].image);
+                StringCchCopyW(history->displayName,
+                               _countof(history->displayName),
+                               rows[i].displayName[0] ? rows[i].displayName
+                                                     : rows[i].image);
+                StringCchCopyW(history->path, _countof(history->path),
+                               rows[i].path);
+                history->cpu100ns = rows[i].cpu100ns > 0 ?
+                                    rows[i].cpu100ns : 0;
+                history->netBytes = rows[i].netBytes;
+                history->notificationBytes = rows[i].notificationBytes;
+                LoadAppHistoryIcon(history);
+            }
+        }
+        if (rows)
+            HeapFree(GetProcessHeap(), 0, rows);
+    }
+
+    RegCloseKey(key);
+}
+
+static void SaveAppHistory(void)
+{
+    if (!s_appHistDirty)
+        return;
+
+    HKEY key;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, APP_HISTORY_KEY, 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &key, NULL) != ERROR_SUCCESS)
+        return;
+
+    DWORD version = APP_HISTORY_VERSION;
+    LONG result = RegSetValueExW(key, L"Version", 0, REG_DWORD,
+                                 (const BYTE*)&version, sizeof(version));
+    if (result == ERROR_SUCCESS)
+    {
+        result = RegSetValueExW(key, L"Since", 0, REG_BINARY,
+                               (const BYTE*)&s_appHistSince,
+                               sizeof(s_appHistSince));
+    }
+
+    Vec<AppHistDiskRow> rows;
+    for (int i = 0; result == ERROR_SUCCESS && i < s_appHist.n; i++)
+    {
+        AppHistDiskRow* row = rows.Add();
+        if (!row)
+        {
+            result = ERROR_NOT_ENOUGH_MEMORY;
+            break;
+        }
+        StringCchCopyW(row->image, _countof(row->image), s_appHist[i].image);
+        StringCchCopyW(row->displayName, _countof(row->displayName),
+                       s_appHist[i].displayName);
+        StringCchCopyW(row->path, _countof(row->path), s_appHist[i].path);
+        row->cpu100ns = s_appHist[i].cpu100ns;
+        row->netBytes = s_appHist[i].netBytes;
+        row->notificationBytes = s_appHist[i].notificationBytes;
+    }
+
+    if (result == ERROR_SUCCESS)
+    {
+        if (rows.n)
+        {
+            result = RegSetValueExW(key, L"Rows", 0, REG_BINARY,
+                                   (const BYTE*)rows.p,
+                                   rows.n * sizeof(AppHistDiskRow));
+        }
+        else
+        {
+            result = RegDeleteValueW(key, L"Rows");
+            if (result == ERROR_FILE_NOT_FOUND)
+                result = ERROR_SUCCESS;
+        }
+    }
+
+    RegCloseKey(key);
+    if (result == ERROR_SUCCESS)
+        s_appHistDirty = FALSE;
+}
+
+Vec<AppHistRow>& AppHistory(void)
+{
+    return s_appHist;
+}
+
+void ClearAppHistory(void)
+{
+    ClearAppHistoryRows();
+    SetAppHistorySinceNow();
+    s_appHistDirty = TRUE;
+    SaveAppHistory();
+    s_appHistLastSave = GetTickCount();
+}
+
+void GetAppHistorySince(FILETIME* since)
+{
+    if (since)
+        *since = s_appHistSince;
+}
+
+BOOL AppHistoryNetworkAvailable(void)
+{
+    /* ReactOS does not yet expose historical network bytes by process/app. */
+    return FALSE;
+}
+
+BOOL AppHistoryNotificationsAvailable(void)
+{
+    /* There is no notification broker usage-accounting backend yet. */
+    return FALSE;
+}
+
+BOOL OpenAppHistory(const AppHistRow& app)
+{
+    if (!app.path[0])
+        return FALSE;
+
+    WCHAR directory[MAX_PATH];
+    StringCchCopyW(directory, _countof(directory), app.path);
+    PathRemoveFileSpecW(directory);
+    return (UINT_PTR)ShellExecuteW(NULL, L"open", app.path, NULL,
+                                   directory, SW_SHOWNORMAL) > 32;
+}
 
 /* ------------------------------------------------------------------ */
 /*  Actions                                                            */

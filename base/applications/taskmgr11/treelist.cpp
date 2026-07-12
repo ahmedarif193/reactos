@@ -127,6 +127,20 @@ static int RowAtY(TreeList* t, int y)
     return idx;
 }
 
+/* invalidate a single row band; keeps hover repaints (and the software
+   cursor exclusion around each screen blit) off the rest of the control */
+static void InvalidateRow(TreeList* t, int idx)
+{
+    if (idx < 0 || idx >= t->rows.n) return;
+    RECT body;
+    VisRowsArea(t, &body);
+    RECT rr = { body.left,
+                body.top + idx * t->rowH - t->scrollY,
+                body.right,
+                body.top + (idx + 1) * t->rowH - t->scrollY };
+    InvalidateRect(t->hwnd, &rr, FALSE);
+}
+
 static int SelIdx(TreeList* t)
 {
     if (!t->selKey) return -1;
@@ -288,8 +302,9 @@ static void PaintRow(TreeList* t, HDC dc, int idx, int* xs, int* ws, const RECT&
         if (heat >= 0)
         {
             RECT fill = { cr.left + 1, rr.top, cr.right - 1, rr.bottom };
-            FillRect32(dc, fill, HeatBg(heat));
-            txtCol = HeatText(heat);
+            FillRect32(dc, fill,
+                       t->owner->TLCellHeatBackground(row.data, c.id, heat));
+            txtCol = t->owner->TLCellHeatText(row.data, c.id, heat);
         }
 
         if (i == 0)
@@ -563,6 +578,22 @@ static LRESULT CALLBACK TLProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     }
 
+    case WM_SETCURSOR:
+        /* Set the cursor here (not in WM_MOUSEMOVE) and claim the message,
+           so the parent's class cursor no longer alternates with ours on
+           every mouse message */
+        if (LOWORD(lp) == HTCLIENT)
+        {
+            POINT pt;
+            GetCursorPos(&pt);
+            ScreenToClient(hwnd, &pt);
+            BOOL sizing = (t->resizeCol >= 0) ||
+                          (HeaderSeparatorHit(t, pt.x, pt.y) >= 0);
+            SetCursor(LoadCursorW(NULL, sizing ? IDC_SIZEWE : IDC_ARROW));
+            return TRUE;
+        }
+        break;
+
     case WM_MOUSEMOVE:
     {
         int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
@@ -626,25 +657,35 @@ static LRESULT CALLBACK TLProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         }
 
-        /* hover updates */
+        /* hover updates: repaint only what changed, not the whole control */
         int oldHot = t->hotRow, oldHH = t->hotHeader;
         BOOL oldVHot = t->vHot, oldHHot = t->hHot;
 
-        RECT th;
-        t->vHot = VThumb(t, &th) && PtInRect(&th, POINT{ x, y });
-        t->hHot = HThumb(t, &th) && PtInRect(&th, POINT{ x, y });
-
-        if (HeaderSeparatorHit(t, x, y) >= 0)
-            SetCursor(LoadCursorW(NULL, IDC_SIZEWE));
-        else
-            SetCursor(LoadCursorW(NULL, IDC_ARROW));
+        RECT vth, hth;
+        BOOL hasV = VThumb(t, &vth);
+        BOOL hasH = HThumb(t, &hth);
+        t->vHot = hasV && PtInRect(&vth, POINT{ x, y });
+        t->hHot = hasH && PtInRect(&hth, POINT{ x, y });
 
         t->hotHeader = HeaderColHit(t, x, y);
         t->hotRow = (y >= t->headerH && !t->vHot && !t->hHot) ? RowAtY(t, y) : -1;
 
-        if (oldHot != t->hotRow || oldHH != t->hotHeader ||
-            oldVHot != t->vHot || oldHHot != t->hHot)
-            InvalidateRect(hwnd, NULL, FALSE);
+        if (oldHot != t->hotRow)
+        {
+            InvalidateRow(t, oldHot);
+            InvalidateRow(t, t->hotRow);
+        }
+        if (oldHH != t->hotHeader)
+        {
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            rc.bottom = rc.top + t->headerH;
+            InvalidateRect(hwnd, &rc, FALSE);
+        }
+        if ((oldVHot != t->vHot) && hasV)
+            InvalidateRect(hwnd, &vth, FALSE);
+        if ((oldHHot != t->hHot) && hasH)
+            InvalidateRect(hwnd, &hth, FALSE);
         return 0;
     }
 
