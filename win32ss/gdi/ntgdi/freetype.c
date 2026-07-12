@@ -21,6 +21,7 @@
 #include FT_SYNTHESIS_H
 #include FT_TRUETYPE_IDS_H
 #include FT_MODULE_H
+#include FT_LCD_FILTER_H
 #include <freetype/internal/ftcalc.h> // INT_TO_FIXED
 
 #include <gdi/eng/floatobj.h>
@@ -960,6 +961,12 @@ InitFontSupport(VOID)
     {
         DPRINT1("FT_Init_FreeType failed with error code 0x%x\n", ulError);
         return FALSE;
+    }
+
+    ulError = FT_Library_SetLcdFilter(g_FreeTypeLibrary, FT_LCD_FILTER_DEFAULT);
+    if (ulError)
+    {
+        DPRINT1("FT_Library_SetLcdFilter failed with error code 0x%x\n", ulError);
     }
 
     if (!IntLoadFontsInRegistry())
@@ -2587,20 +2594,43 @@ IntGetFontRenderMode(LOGFONTW *logfont)
 {
     switch (logfont->lfQuality)
     {
-    case ANTIALIASED_QUALITY:
-        break;
     case NONANTIALIASED_QUALITY:
         return FT_RENDER_MODE_MONO;
-    case DRAFT_QUALITY:
-        return FT_RENDER_MODE_LIGHT;
+    case ANTIALIASED_QUALITY:
+        return FT_RENDER_MODE_NORMAL;
     case CLEARTYPE_QUALITY:
-        if (!gspv.bFontSmoothing)
-            break;
-        if (!gspv.uiFontSmoothingType)
-            break;
+    case CLEARTYPE_NATURAL_QUALITY:
         return FT_RENDER_MODE_LCD;
+    default:
+        if (!gspv.bFontSmoothing)
+            return FT_RENDER_MODE_MONO;
+        if (gspv.uiFontSmoothingType == FE_FONTSMOOTHINGCLEARTYPE)
+            return FT_RENDER_MODE_LCD;
+        return FT_RENDER_MODE_NORMAL;
     }
-    return FT_RENDER_MODE_NORMAL;
+}
+
+/* pmat may be NULL when the transform is known to be identity */
+static FT_Render_Mode
+IntGetFontRenderModeForTransform(LOGFONTW *logfont, const FT_Matrix *pmat)
+{
+    FT_Render_Mode RenderMode;
+
+    if (!IntIsFontRenderingEnabled())
+        return FT_RENDER_MODE_MONO;
+
+    RenderMode = IntGetFontRenderMode(logfont);
+
+    /* FT_Matrix contains only the linear part, so identity also permits translation. */
+    if (pmat != NULL &&
+        RenderMode == FT_RENDER_MODE_LCD &&
+        (pmat->xx != identityMat.xx || pmat->xy != identityMat.xy ||
+         pmat->yx != identityMat.yx || pmat->yy != identityMat.yy))
+    {
+        RenderMode = FT_RENDER_MODE_NORMAL;
+    }
+
+    return RenderMode;
 }
 
 NTSTATUS FASTCALL
@@ -3734,6 +3764,10 @@ IntGetBitmapGlyphWithCache(
         FT_Done_Glyph((FT_Glyph)BitmapGlyph);
         return NULL;
     }
+
+    /* Preserve the LCD layout tag; embedded bitmap strikes can stay gray or mono. */
+    if (BitmapGlyph->bitmap.pixel_mode == FT_PIXEL_MODE_LCD)
+        AlignedBitmap.pixel_mode = FT_PIXEL_MODE_LCD;
 
     FT_Bitmap_Done(GlyphSlot->library, &BitmapGlyph->bitmap);
     BitmapGlyph->bitmap = AlignedBitmap;
@@ -5003,10 +5037,8 @@ TextIntGetTextExtentPoint(
     nTenthsOfDegrees = IntNormalizeAngle(plf->lfEscapement - plf->lfOrientation);
     bVerticalWriting = ((nTenthsOfDegrees == 90 * 10) || (nTenthsOfDegrees == 270 * 10));
 
-    if (IntIsFontRenderingEnabled())
-        Cache.Hashed.Aspect.RenderMode = (BYTE)IntGetFontRenderMode(plf);
-    else
-        Cache.Hashed.Aspect.RenderMode = (BYTE)FT_RENDER_MODE_MONO;
+    /* The transform stays identity below, so pass no matrix */
+    Cache.Hashed.Aspect.RenderMode = (BYTE)IntGetFontRenderModeForTransform(plf, NULL);
 
     // NOTE: GetTextExtentPoint32 simply ignores lfEscapement and XFORM.
     IntLockFreeType();
@@ -6691,7 +6723,7 @@ IntExtTextOutW(
     ULONG previous;
     RECTL DestRect, MaskRect;
     HBITMAP hbmGlyph;
-    SIZEL glyphSize;
+    SIZEL glyphSize, maskSize;
     FONTOBJ *FontObj;
     PFONTGDI FontGDI;
     PTEXTOBJ TextObj = NULL;
@@ -6703,7 +6735,7 @@ IntExtTextOutW(
     BOOL use_kerning, bResult, DoBreak;
     FONT_CACHE_ENTRY Cache;
     FT_Matrix mat;
-    BOOL bNoTransform;
+    BOOL bNoTransform, bSubpixel;
     DWORD ch0, ch1;
     const DWORD del = 0x7f, nbsp = 0xa0; // DEL is ASCII DELETE and nbsp is a non-breaking space
     FONTLINK_CHAIN Chain;
@@ -6811,11 +6843,6 @@ IntExtTextOutW(
     Cache.Hashed.Aspect.Emu.Bold = EMUBOLD_NEEDED(FontGDI->OriginalWeight, plf->lfWeight);
     Cache.Hashed.Aspect.Emu.Italic = (plf->lfItalic && !FontGDI->OriginalItalic);
 
-    if (IntIsFontRenderingEnabled())
-        Cache.Hashed.Aspect.RenderMode = (BYTE)IntGetFontRenderMode(plf);
-    else
-        Cache.Hashed.Aspect.RenderMode = (BYTE)FT_RENDER_MODE_MONO;
-
     if (!TextIntUpdateSize(TextObj, FontGDI, FALSE))
     {
         IntUnLockFreeType();
@@ -6835,6 +6862,9 @@ IntExtTextOutW(
     IntMatrixFromMx(&mat, pmxWorldToDevice);
     FT_Matrix_Multiply(&mat, &Cache.Hashed.matTransform);
     FT_Set_Transform(face, &Cache.Hashed.matTransform, NULL);
+
+    Cache.Hashed.Aspect.RenderMode =
+        (BYTE)IntGetFontRenderModeForTransform(plf, &Cache.Hashed.matTransform);
 
     /* Is there no transformation? */
     bNoTransform = ((mat.xy == 0) && (mat.yx == 0) &&
@@ -6969,8 +6999,13 @@ IntExtTextOutW(
         DPRINT("X64, Y64: %I64d, %I64d\n", X64, Y64);
         DPRINT("Advance: %d, %d\n", realglyph->root.advance.x, realglyph->root.advance.y);
 
-        glyphSize.cx = realglyph->bitmap.width;
-        glyphSize.cy = realglyph->bitmap.rows;
+        bSubpixel = (realglyph->bitmap.pixel_mode == FT_PIXEL_MODE_LCD);
+        ASSERT(!bSubpixel || (realglyph->bitmap.width % 3) == 0);
+
+        maskSize.cx = realglyph->bitmap.width;
+        maskSize.cy = realglyph->bitmap.rows;
+        glyphSize.cx = bSubpixel ? (maskSize.cx / 3) : maskSize.cx;
+        glyphSize.cy = maskSize.cy;
 
         /* Do chars > space & not DEL & not nbsp have a glyphSize.cx of zero? */
         if (ch0 > L' ' && ch0 != del && ch0 != nbsp && glyphSize.cx == 0)
@@ -7001,14 +7036,14 @@ IntExtTextOutW(
         DestRect.bottom = DestRect.top + glyphSize.cy;
 
         /* Check if the bitmap has any pixels */
-        if ((glyphSize.cx != 0) && (glyphSize.cy != 0))
+        if ((maskSize.cx != 0) && (maskSize.cy != 0))
         {
             /*
              * We should create the bitmap out of the loop at the biggest possible
              * glyph size. Then use memset with 0 to clear it and sourcerect to
              * limit the work of the transbitblt.
              */
-            hbmGlyph = EngCreateBitmap(glyphSize, realglyph->bitmap.pitch,
+            hbmGlyph = EngCreateBitmap(maskSize, realglyph->bitmap.pitch,
                                        BMF_8BPP, BMF_TOPDOWN,
                                        realglyph->bitmap.buffer);
             if (!hbmGlyph)
@@ -7056,7 +7091,8 @@ IntExtTextOutW(
                                &DestRect,
                                (PPOINTL)&MaskRect,
                                &dc->eboText.BrushObject,
-                               &g_PointZero))
+                               &g_PointZero,
+                               bSubpixel))
             {
                 DPRINT1("Failed to MaskBlt a glyph!\n");
             }
