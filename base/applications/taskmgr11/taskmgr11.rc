@@ -16,5 +16,6 @@
 
 LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
 IDI_TASKMGR11 ICON "res/taskmgr11.ico"
+IDR_LICENSE_LUCIDE RCDATA "res/LICENSE-lucide.txt"
 
 1 RT_MANIFEST "res/taskmgr11.exe.manifest"

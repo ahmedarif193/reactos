@@ -477,7 +477,7 @@ struct ProcessesPage : Page, ITreeListOwner
         return (p && p->x) ? p->x->icon : NULL;
     }
 
-    int TLRowGlyph(LPARAM data)
+    IconId TLRowGlyph(LPARAM data)
     {
         if (RowCat(data) >= 0) return IC_NONE;
         ProcRow* p = RowProc(data);
@@ -488,7 +488,7 @@ struct ProcessesPage : Page, ITreeListOwner
         return IC_WINDOW;
     }
 
-    int TLStatusGlyph(LPARAM data, int col, COLORREF* c)
+    IconId TLStatusGlyph(LPARAM data, int col, COLORREF* c)
     {
         if (col != PC_STATUS) return IC_NONE;
         ProcRow* p = RowProc(data);

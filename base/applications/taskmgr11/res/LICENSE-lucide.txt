@@ -1,12 +1,53 @@
-The in-application glyph outlines in icons.cpp (navigation, toolbar and row
-icons) are the corresponding icons from Lucide (https://lucide.dev,
-https://github.com/lucide-icons/lucide), embedded as pre-normalized path
-data and used under the licenses reproduced below.  The window caption
-glyphs (minimize/maximize/restore) are original drawings.
+The in-application icon outlines in icons.cpp are mechanically normalized
+from the following SVG files in the official Lucide release. No icon font,
+font code point, or proprietary platform glyph is used by this renderer.
+
+Project: https://github.com/lucide-icons/lucide
+Release: 1.16.0
+Commit:  2214caa407f4147449c81ac27e30d36edfb7b40f
+
+TaskMgr11 ID       Lucide source SVG
+-----------------  --------------------------
+IC_HAMBURGER       menu.svg
+IC_PROCESSES       gauge.svg
+IC_PERF            activity.svg
+IC_HISTORY         history.svg
+IC_STARTUP         rocket.svg
+IC_USERS           users.svg
+IC_DETAILS         list.svg
+IC_SERVICES        wrench.svg
+IC_SETTINGS        settings.svg
+IC_SEARCH          search.svg
+IC_RUNTASK         square-terminal.svg
+IC_ENDTASK         x.svg
+IC_LEAF            leaf.svg
+IC_PAUSE           pause.svg
+IC_CHEV_R          chevron-right.svg
+IC_CHEV_D          chevron-down.svg
+IC_CHEV_U          chevron-up.svg
+IC_MORE            ellipsis.svg
+IC_MIN             minus.svg
+IC_MAX             square.svg
+IC_RESTORE         copy.svg
+IC_CLOSE           x.svg
+IC_CHECK           check.svg
+IC_COPY            copy.svg
+IC_DISCONNECT      monitor-x.svg
+IC_SIGNOUT         log-out.svg
+IC_ENABLE          check.svg
+IC_DISABLE         ban.svg
+IC_REFRESH         refresh-cw.svg
+IC_OPENFOLDER      folder-open.svg
+IC_OPENAPP         external-link.svg
+IC_WINDOW          app-window.svg
 
 The application icon (taskmgr11.ico) is the classic ReactOS Task Manager
 icon (GPL-2.0-or-later, from base/applications/taskmgr) and does not
 derive from Lucide.
+
+----------------------------------------------------------------------------
+
+The Lucide 1.16.0 license follows verbatim.
 
 ----------------------------------------------------------------------------
 
@@ -26,11 +67,11 @@ WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-----------------------------------------------------------------------------
+---
 
-Some Lucide icons are derived from the Feather project.  Of the glyphs used
-here that applies to: check, chevron-down, chevron-right, chevron-up, copy,
-log-out, menu, plus, search, x.
+The following Lucide icons are derived from the Feather project:
+
+airplay, alert-circle, alert-octagon, alert-triangle, aperture, arrow-down-circle, arrow-down-left, arrow-down-right, arrow-down, arrow-left-circle, arrow-left, arrow-right-circle, arrow-right, arrow-up-circle, arrow-up-left, arrow-up-right, arrow-up, at-sign, calendar, cast, check, chevron-down, chevron-left, chevron-right, chevron-up, chevrons-down, chevrons-left, chevrons-right, chevrons-up, circle, clipboard, clock, code, columns, command, compass, corner-down-left, corner-down-right, corner-left-down, corner-left-up, corner-right-down, corner-right-up, corner-up-left, corner-up-right, crosshair, database, divide-circle, divide-square, dollar-sign, download, external-link, feather, frown, hash, headphones, help-circle, info, italic, key, layout, life-buoy, link-2, link, loader, lock, log-in, log-out, maximize, meh, minimize, minimize-2, minus-circle, minus-square, minus, monitor, moon, more-horizontal, more-vertical, move, music, navigation-2, navigation, octagon, pause-circle, percent, plus-circle, plus-square, plus, power, radio, rss, search, server, share, shopping-bag, sidebar, smartphone, smile, square, table-2, tablet, target, terminal, trash-2, trash, triangle, tv, type, upload, x-circle, x-octagon, x-square, x, zoom-in, zoom-out
 
 The MIT License (MIT) (for the icons listed above)
 
