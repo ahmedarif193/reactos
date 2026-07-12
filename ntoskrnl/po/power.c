@@ -1001,23 +1001,36 @@ NtPowerInformation(IN POWER_INFORMATION_LEVEL PowerInformationLevel,
         case ProcessorInformation:
         {
             PPROCESSOR_POWER_INFORMATION PowerInformation = (PPROCESSOR_POWER_INFORMATION)OutputBuffer;
+            ULONG ProcessorCount, i;
 
             if (InputBuffer != NULL)
                 return STATUS_INVALID_PARAMETER;
             if (OutputBufferLength < sizeof(PROCESSOR_POWER_INFORMATION))
                 return STATUS_BUFFER_TOO_SMALL;
 
-            /* FIXME: return structures for all processors */
+            /* Return an entry for each processor the output buffer can hold */
+            ProcessorCount = min((ULONG)KeNumberProcessors,
+                                 OutputBufferLength / sizeof(PROCESSOR_POWER_INFORMATION));
 
             _SEH2_TRY
             {
-                /* FIXME: some values are hardcoded */
-                PowerInformation->Number = 0;
-                PowerInformation->MaxMhz = 1000;
-                PowerInformation->CurrentMhz = KeGetCurrentPrcb()->MHz;
-                PowerInformation->MhzLimit = 1000;
-                PowerInformation->MaxIdleState = 0;
-                PowerInformation->CurrentIdleState = 0;
+                for (i = 0; i < ProcessorCount; i++)
+                {
+                    PKPRCB Prcb = KiProcessorBlock[i];
+
+                    PowerInformation[i].Number = i;
+
+                    /* There is no processor frequency scaling, so the
+                       frequency measured at boot is both the current
+                       and the maximum frequency */
+                    PowerInformation[i].MaxMhz = Prcb->MHz;
+                    PowerInformation[i].CurrentMhz = Prcb->MHz;
+                    PowerInformation[i].MhzLimit = Prcb->MHz;
+
+                    /* No processor idle states are implemented */
+                    PowerInformation[i].MaxIdleState = 0;
+                    PowerInformation[i].CurrentIdleState = 0;
+                }
 
                 Status = STATUS_SUCCESS;
             }

@@ -72,6 +72,18 @@ VOID
 NTAPI
 KiArm64FinalizeSmtTopology(VOID);
 
+/* Reads CCSIDR_EL1 geometry for the CSSELR-selected cache (LevelIndex is
+   0-based). The CSSELR/CCSIDR pair is per-PE state: the caller must keep
+   the walk on one processor. */
+VOID
+NTAPI
+KiArm64ReadCcsidr(
+    _In_ ULONG LevelIndex,
+    _In_ BOOLEAN InstructionSide,
+    _Out_ PULONG LineShift,
+    _Out_ PULONG Ways,
+    _Out_ PULONG Sets);
+
 #define SYNCH_LEVEL 12
 
 #define KD_BREAKPOINT_TYPE        ULONG
@@ -511,6 +523,7 @@ typedef struct _ARM64_CPU_FEATURES
     ULONG PanSupported:1;       /* ID_AA64MMFR1_EL1[23:20] PAN present          */
     ULONG SveSupported:1;       /* ID_AA64PFR0_EL1[35:32]  SVE present           */
     ULONG SmeSupported:1;       /* ID_AA64PFR1_EL1[27:24]  SME present           */
+    ULONG El2Implemented:1;     /* ID_AA64PFR0_EL1[11:8]   EL2 implemented       */
     ULONG AtomicSupported:4;    /* ID_AA64ISAR0_EL1[23:20] 2=FEAT_LSE           */
     ULONG NeonSupported:1;      /* ID_AA64PFR0_EL1[23:20]  FP/SIMD present       */
     ULONG AsidBits:5;           /* ID_AA64MMFR0_EL1[7:4] decoded as 8 or 16      */

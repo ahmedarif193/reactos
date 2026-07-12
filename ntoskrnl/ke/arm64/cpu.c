@@ -54,6 +54,29 @@ static ARM64_CACHE_SWEEP_LEVEL KiArm64DcacheSweepLevels[ARM64_MAX_CACHE_LEVELS];
 static ULONG KiArm64DcacheSweepLevelCount;
 static volatile LONG KiArm64DcacheSweepGeometryValid;
 
+VOID
+NTAPI
+KiArm64ReadCcsidr(
+    _In_ ULONG LevelIndex,
+    _In_ BOOLEAN InstructionSide,
+    _Out_ PULONG LineShift,
+    _Out_ PULONG Ways,
+    _Out_ PULONG Sets)
+{
+    ULONG64 Csselr = ((ULONG64)LevelIndex << 1) | (InstructionSide ? 1 : 0);
+    ULONG64 Ccsidr;
+
+    /* Select the cache; the ISB orders the CSSELR_EL1 write before the
+       CCSIDR_EL1 read */
+    __asm__ __volatile__("msr csselr_el1, %0" :: "r"(Csselr) : "memory");
+    __asm__ __volatile__("isb" ::: "memory");
+    __asm__ __volatile__("mrs %0, ccsidr_el1" : "=r"(Ccsidr));
+
+    *LineShift = (ULONG)(Ccsidr & 0x7) + 4;
+    *Ways = (ULONG)((Ccsidr >> 3) & 0x3FF) + 1;
+    *Sets = (ULONG)((Ccsidr >> 13) & 0x7FFF) + 1;
+}
+
 static
 VOID
 KiArm64EnsureDcacheSweepGeometry(VOID)
@@ -75,7 +98,6 @@ KiArm64EnsureDcacheSweepGeometry(VOID)
     for (Level = 0; Level < ARM64_MAX_CACHE_LEVELS; Level++)
     {
         ULONG CacheType = (Clidr >> (Level * 3)) & 0x7;
-        ULONG64 Ccsidr;
         ULONG LineShift;
         ULONG NumWays;
         ULONG NumSets;
@@ -85,13 +107,7 @@ KiArm64EnsureDcacheSweepGeometry(VOID)
             continue;
         }
 
-        __asm__ __volatile__("msr csselr_el1, %0" :: "r"((ULONG64)(Level << 1)) : "memory");
-        __asm__ __volatile__("isb" ::: "memory");
-        __asm__ __volatile__("mrs %0, ccsidr_el1" : "=r"(Ccsidr));
-
-        LineShift = (ULONG)(Ccsidr & 0x7) + 4;
-        NumWays = (ULONG)(((Ccsidr >> 3) & 0x3FF) + 1);
-        NumSets = (ULONG)(((Ccsidr >> 13) & 0x7FFF) + 1);
+        KiArm64ReadCcsidr(Level, FALSE, &LineShift, &NumWays, &NumSets);
 
         LocalLevels[LocalCount].Level = Level;
         LocalLevels[LocalCount].NumSets = NumSets;
