@@ -309,23 +309,23 @@ struct GraphStyle
 void DrawGraph(HDC dc, const RECT& r, const HistRing* h, const GraphStyle& gs);
 
 /* ------------------------------------------------------------------ */
-/*  Vector icon glyphs                                                 */
+/*  Lucide vector icons                                                */
 /* ------------------------------------------------------------------ */
 
 enum IconId
 {
     IC_NONE = 0,
     IC_HAMBURGER,
-    IC_PROCESSES,     /* speedometer     */
-    IC_PERF,          /* pulse graph     */
-    IC_HISTORY,       /* clock arrow     */
-    IC_STARTUP,       /* rocket / gauge  */
-    IC_USERS,         /* person          */
-    IC_DETAILS,       /* list lines      */
+    IC_PROCESSES,     /* gauge           */
+    IC_PERF,          /* activity        */
+    IC_HISTORY,       /* history         */
+    IC_STARTUP,       /* rocket          */
+    IC_USERS,         /* users           */
+    IC_DETAILS,       /* list            */
     IC_SERVICES,      /* wrench          */
     IC_SETTINGS,      /* gear            */
     IC_SEARCH,        /* magnifier       */
-    IC_RUNTASK,       /* window + play   */
+    IC_RUNTASK,       /* terminal window */
     IC_ENDTASK,       /* x               */
     IC_LEAF,          /* efficiency mode */
     IC_PAUSE,         /* suspended       */
@@ -341,16 +341,17 @@ enum IconId
     IC_COPY,
     IC_DISCONNECT,
     IC_SIGNOUT,
-    IC_ENABLE,        /* toggle-ish check  */
-    IC_DISABLE,       /* slash circle      */
+    IC_ENABLE,        /* check           */
+    IC_DISABLE,       /* ban             */
     IC_REFRESH,
     IC_OPENFOLDER,
     IC_OPENAPP,
     IC_WINDOW,        /* generic app       */
+    IC_COUNT
 };
 
-/* draws glyph centered in r, stroke color c; size derives from r */
-void DrawGlyph(HDC dc, const RECT& r, int icon, COLORREF c);
+/* draws icon centered in r, stroke color c; size derives from r */
+void DrawGlyph(HDC dc, const RECT& r, IconId icon, COLORREF c);
 
 /* ------------------------------------------------------------------ */
 /*  Data engine                                                        */
@@ -597,8 +598,8 @@ struct ITreeListOwner
     virtual COLORREF TLCellHeatText(LPARAM data, int col, double heat)
     { (void)data; (void)col; return HeatText(heat); }
     virtual HICON TLRowIcon(LPARAM data) { (void)data; return NULL; }
-    virtual int  TLRowGlyph(LPARAM data) { (void)data; return IC_NONE; }        /* fallback icon glyph */
-    virtual int  TLStatusGlyph(LPARAM data, int col, COLORREF* c) { (void)data; (void)col; (void)c; return IC_NONE; }
+    virtual IconId TLRowGlyph(LPARAM data) { (void)data; return IC_NONE; }        /* fallback icon glyph */
+    virtual IconId TLStatusGlyph(LPARAM data, int col, COLORREF* c) { (void)data; (void)col; (void)c; return IC_NONE; }
     virtual void TLHeaderValue(int col, WCHAR* buf, int cch) { (void)col; buf[0] = 0; (void)cch; }
     virtual double TLHeaderHeat(int col) { (void)col; return -1.0; }
     virtual void TLSecondaryText(LPARAM data, WCHAR* buf, int cch) { (void)data; buf[0] = 0; (void)cch; } /* dimmed suffix in name col */
@@ -659,7 +660,7 @@ struct UiBtn
 {
     int   id;
     WCHAR text[64];
-    int   icon;
+    IconId icon;
     UINT  style;
     BOOL  enabled;
     RECT  r;          /* set by layout */
@@ -673,7 +674,7 @@ struct BtnStrip
 
     BtnStrip() : hot(-1), pressed(-1), hwnd(NULL) {}
     void Clear() { b.Clear(); hot = -1; pressed = -1; }
-    void Add(int id, const WCHAR* text, int icon, UINT style, BOOL enabled = TRUE);
+    void Add(int id, const WCHAR* text, IconId icon, UINT style, BOOL enabled = TRUE);
     void SetEnabled(int id, BOOL en);
     BOOL GetEnabled(int id);
     int  LayoutRight(const RECT& area, int gap);  /* returns used width; right-aligned */

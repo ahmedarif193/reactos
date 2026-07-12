@@ -327,7 +327,7 @@ static void PaintRow(TreeList* t, HDC dc, int idx, int* xs, int* ws, const RECT&
             }
             else
             {
-                int glyph = t->owner ? t->owner->TLRowGlyph(row.data) : IC_NONE;
+                IconId glyph = t->owner ? t->owner->TLRowGlyph(row.data) : IC_NONE;
                 if (glyph != IC_NONE)
                 {
                     RECT gr = { x, icoY, x + S(16), icoY + S(16) };
@@ -360,7 +360,7 @@ static void PaintRow(TreeList* t, HDC dc, int idx, int* xs, int* ws, const RECT&
         {
             /* status glyph? */
             COLORREF gc = g_t.textSec;
-            int glyph = t->owner ? t->owner->TLStatusGlyph(row.data, c.id, &gc) : IC_NONE;
+            IconId glyph = t->owner ? t->owner->TLStatusGlyph(row.data, c.id, &gc) : IC_NONE;
             int tx = cr.left + S(10);
             if (glyph != IC_NONE)
             {

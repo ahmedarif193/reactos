@@ -94,7 +94,7 @@ struct StartupPage : Page, ITreeListOwner
         }
     }
 
-    int TLRowGlyph(LPARAM data)
+    IconId TLRowGlyph(LPARAM data)
     {
         (void)data;
         return IC_WINDOW;
