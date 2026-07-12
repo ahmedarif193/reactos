@@ -1942,11 +1942,81 @@ static void add_bevel_point(const GpPointF *endpoint, const GpPointF *nextpoint,
         endpoint->Y + bevel_dy, PathPointTypeLine);
 }
 
+static BOOL add_round_joint(const GpPointF *p1, const GpPointF *p2, const GpPointF *p3,
+    REAL pen_width, path_list_node_t **last_point)
+{
+    REAL dx1 = p1->X - p2->X, dy1 = p1->Y - p2->Y;
+    REAL dx2 = p3->X - p2->X, dy2 = p3->Y - p2->Y;
+    REAL length1 = hypotf(dx1, dy1), length2 = hypotf(dx2, dy2);
+    REAL distance = pen_width / 2.0;
+    REAL start_x, start_y, end_x, end_y;
+    REAL angle, step, sine, cosine, control;
+    int i, count;
+
+    if (length1 == 0.0 || length2 == 0.0)
+        return FALSE;
+
+    start_x = -dy1 / length1;
+    start_y = dx1 / length1;
+    end_x = dy2 / length2;
+    end_y = -dx2 / length2;
+    angle = atan2f(start_x * end_y - start_y * end_x,
+        start_x * end_x + start_y * end_y);
+    if (angle <= 0.0)
+        return FALSE;
+
+    count = angle > M_PI_2 ? 2 : 1;
+    step = angle / count;
+    sine = sinf(step);
+    cosine = cosf(step);
+    control = 4.0 / 3.0 * tanf(step / 4.0);
+
+    *last_point = add_path_list_node(*last_point, p2->X + distance * start_x,
+        p2->Y + distance * start_y, PathPointTypeLine);
+
+    for (i = 0; i < count; i++)
+    {
+        REAL next_x, next_y;
+
+        if (i == count - 1)
+        {
+            next_x = end_x;
+            next_y = end_y;
+        }
+        else
+        {
+            next_x = start_x * cosine - start_y * sine;
+            next_y = start_x * sine + start_y * cosine;
+        }
+
+        *last_point = add_path_list_node(*last_point,
+            p2->X + distance * (start_x - control * start_y),
+            p2->Y + distance * (start_y + control * start_x), PathPointTypeBezier);
+        *last_point = add_path_list_node(*last_point,
+            p2->X + distance * (next_x + control * next_y),
+            p2->Y + distance * (next_y - control * next_x), PathPointTypeBezier);
+        *last_point = add_path_list_node(*last_point, p2->X + distance * next_x,
+            p2->Y + distance * next_y, PathPointTypeBezier);
+
+        start_x = next_x;
+        start_y = next_y;
+    }
+
+    return TRUE;
+}
+
 static void widen_joint(const GpPointF *p1, const GpPointF *p2, const GpPointF *p3,
     GpPen* pen, REAL pen_width, path_list_node_t **last_point)
 {
     switch (pen->join)
     {
+    case LineJoinRound:
+        if ((p2->X - p1->X) * (p3->Y - p1->Y) > (p2->Y - p1->Y) * (p3->X - p1->X) &&
+            add_round_joint(p1, p2, p3, pen_width, last_point))
+            break;
+        add_bevel_point(p2, p1, pen_width, 1, last_point);
+        add_bevel_point(p2, p3, pen_width, 0, last_point);
+        break;
     case LineJoinMiter:
     case LineJoinMiterClipped:
         if ((p2->X - p1->X) * (p3->Y - p1->Y) > (p2->Y - p1->Y) * (p3->X - p1->X))
@@ -2617,9 +2687,6 @@ GpStatus WINGDIPAPI GdipWidenPath(GpPath *path, GpPen *pen, GpMatrix *matrix,
 
         if (pen->dashcap != DashCapFlat)
             FIXME("unimplemented dash cap %d\n", pen->dashcap);
-
-        if (pen->join == LineJoinRound)
-            FIXME("unimplemented line join %d\n", pen->join);
 
         if (pen->align != PenAlignmentCenter)
             FIXME("unimplemented pen alignment %d\n", pen->align);

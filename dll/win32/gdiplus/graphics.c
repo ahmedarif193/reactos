@@ -2319,6 +2319,239 @@ static GpStatus get_graphics_bounds(GpGraphics* graphics, GpRectF* rect)
     return stat;
 }
 
+/* SmoothingModeAntiAlias uses an 8-by-4 coverage filter. */
+#define ANTIALIAS_SCALE_X 8
+#define ANTIALIAS_SCALE_Y 4
+#define ANTIALIAS_SAMPLES (ANTIALIAS_SCALE_X * ANTIALIAS_SCALE_Y)
+
+static BOOL antialiasing_enabled(const GpGraphics *graphics)
+{
+    return graphics->smoothing == SmoothingModeHighQuality ||
+           graphics->smoothing == SmoothingModeAntiAlias;
+}
+
+static GpStatus antialias_fill_path(GpGraphics *graphics, GpBrush *brush, GpPath *path)
+{
+    GpPointF *points = NULL;
+    GpRectF device_bounds;
+    GpRect fill_area;
+    POINT *mask_points = NULL;
+    BYTE *types = NULL;
+    BYTE *mask_bits = NULL;
+    DWORD *output_bits = NULL;
+    struct
+    {
+        BITMAPINFOHEADER header;
+        RGBQUAD colors[2];
+    } bitmap_info;
+    HDC mask_dc = NULL;
+    HBITMAP mask_bitmap = NULL, old_bitmap = NULL;
+    HGDIOBJ old_brush = NULL, old_pen = NULL;
+    GpStatus status;
+    REAL min_x, min_y, max_x, max_y;
+    SIZE_T pixel_count, mask_size;
+    INT mask_width, mask_height, mask_stride;
+    INT i, x, y;
+    BOOL transform_acquired = FALSE;
+
+    if (!brush_can_fill_pixels(brush))
+        return NotImplemented;
+
+    points = malloc(path->pathdata.Count * sizeof(*points));
+    mask_points = malloc(path->pathdata.Count * sizeof(*mask_points));
+    types = malloc(path->pathdata.Count * sizeof(*types));
+    if (!points || !mask_points || !types)
+    {
+        status = OutOfMemory;
+        goto done;
+    }
+
+    /* Everything below works in GDI device space; neutralize the target DC
+     * transform so alpha_blend_pixels lands where the math says. */
+    status = gdi_transform_acquire(graphics);
+    if (status != Ok)
+        goto done;
+    transform_acquired = TRUE;
+
+    memcpy(points, path->pathdata.Points, path->pathdata.Count * sizeof(*points));
+    status = gdip_transform_points(graphics, WineCoordinateSpaceGdiDevice,
+        CoordinateSpaceWorld, points, path->pathdata.Count);
+    if (status != Ok)
+        goto done;
+
+    min_x = max_x = points[0].X;
+    min_y = max_y = points[0].Y;
+    for (i = 1; i < path->pathdata.Count; i++)
+    {
+        min_x = fminf(min_x, points[i].X);
+        min_y = fminf(min_y, points[i].Y);
+        max_x = fmaxf(max_x, points[i].X);
+        max_y = fmaxf(max_y, points[i].Y);
+    }
+
+    status = get_graphics_device_bounds(graphics, &device_bounds);
+    if (status != Ok)
+        goto done;
+
+    min_x = fmaxf(floorf(min_x), floorf(device_bounds.X));
+    min_y = fmaxf(floorf(min_y), floorf(device_bounds.Y));
+    max_x = fminf(ceilf(max_x), ceilf(device_bounds.X + device_bounds.Width));
+    max_y = fminf(ceilf(max_y), ceilf(device_bounds.Y + device_bounds.Height));
+    if (min_x >= max_x || min_y >= max_y)
+    {
+        status = Ok;
+        goto done;
+    }
+
+    fill_area.X = (INT)min_x;
+    fill_area.Y = (INT)min_y;
+    fill_area.Width = (INT)(max_x - min_x);
+    fill_area.Height = (INT)(max_y - min_y);
+    if (fill_area.Width > INT_MAX / ANTIALIAS_SCALE_X ||
+        fill_area.Height > INT_MAX / ANTIALIAS_SCALE_Y)
+    {
+        status = OutOfMemory;
+        goto done;
+    }
+
+    if ((SIZE_T)fill_area.Width > ~(SIZE_T)0 / fill_area.Height)
+    {
+        status = OutOfMemory;
+        goto done;
+    }
+    pixel_count = (SIZE_T)fill_area.Width * fill_area.Height;
+    if (pixel_count > ~(SIZE_T)0 / sizeof(*output_bits))
+    {
+        status = OutOfMemory;
+        goto done;
+    }
+
+    /* Resolve a high-resolution monochrome path mask into per-pixel alpha. */
+    mask_width = fill_area.Width * ANTIALIAS_SCALE_X;
+    mask_height = fill_area.Height * ANTIALIAS_SCALE_Y;
+    mask_stride = (((UINT)mask_width + 31) / 32) * 4;
+    if ((SIZE_T)mask_stride > ~(SIZE_T)0 / mask_height)
+    {
+        status = OutOfMemory;
+        goto done;
+    }
+    mask_size = (SIZE_T)mask_stride * mask_height;
+    memset(&bitmap_info, 0, sizeof(bitmap_info));
+    bitmap_info.header.biSize = sizeof(bitmap_info.header);
+    bitmap_info.header.biWidth = mask_width;
+    bitmap_info.header.biHeight = -mask_height;
+    bitmap_info.header.biPlanes = 1;
+    bitmap_info.header.biBitCount = 1;
+    bitmap_info.header.biCompression = BI_RGB;
+    bitmap_info.colors[1].rgbBlue = 0xff;
+    bitmap_info.colors[1].rgbGreen = 0xff;
+    bitmap_info.colors[1].rgbRed = 0xff;
+
+    mask_dc = CreateCompatibleDC(NULL);
+    if (!mask_dc)
+    {
+        status = OutOfMemory;
+        goto done;
+    }
+
+    mask_bitmap = CreateDIBSection(mask_dc, (BITMAPINFO *)&bitmap_info, DIB_RGB_COLORS,
+        (void **)&mask_bits, NULL, 0);
+    if (!mask_bitmap || !mask_bits)
+    {
+        status = OutOfMemory;
+        goto done;
+    }
+
+    memset(mask_bits, 0, mask_size);
+    for (i = 0; i < path->pathdata.Count; i++)
+    {
+        REAL scaled_x = (points[i].X - fill_area.X) * ANTIALIAS_SCALE_X;
+        REAL scaled_y = (points[i].Y - fill_area.Y) * ANTIALIAS_SCALE_Y;
+
+        if (scaled_x < INT_MIN || scaled_x > INT_MAX ||
+            scaled_y < INT_MIN || scaled_y > INT_MAX)
+        {
+            status = NotImplemented;
+            goto done;
+        }
+        mask_points[i].x = gdip_round(scaled_x);
+        mask_points[i].y = gdip_round(scaled_y);
+        types[i] = convert_path_point_type(path->pathdata.Types[i]);
+    }
+
+    old_bitmap = SelectObject(mask_dc, mask_bitmap);
+    old_brush = SelectObject(mask_dc, GetStockObject(WHITE_BRUSH));
+    old_pen = SelectObject(mask_dc, GetStockObject(NULL_PEN));
+    SetPolyFillMode(mask_dc, path->fill == FillModeAlternate ? ALTERNATE : WINDING);
+    BeginPath(mask_dc);
+    if (!PolyDraw(mask_dc, mask_points, types, path->pathdata.Count) ||
+        !EndPath(mask_dc) || !FillPath(mask_dc))
+    {
+        status = GenericError;
+        goto done;
+    }
+
+    output_bits = malloc(pixel_count * sizeof(*output_bits));
+    if (!output_bits)
+    {
+        status = OutOfMemory;
+        goto done;
+    }
+
+    status = brush_fill_pixels(graphics, brush, output_bits, &fill_area, fill_area.Width);
+    if (status != Ok)
+        goto done;
+
+    for (y = 0; y < fill_area.Height; y++)
+    {
+        for (x = 0; x < fill_area.Width; x++)
+        {
+            ARGB color = output_bits[x + y * fill_area.Width];
+            UINT coverage = 0, alpha;
+            INT sx, sy;
+
+            for (sy = 0; sy < ANTIALIAS_SCALE_Y; sy++)
+                for (sx = 0; sx < ANTIALIAS_SCALE_X; sx++)
+                {
+                    INT mask_x = x * ANTIALIAS_SCALE_X + sx;
+                    INT mask_y = y * ANTIALIAS_SCALE_Y + sy;
+
+                    if (mask_bits[mask_y * mask_stride + mask_x / 8] &
+                        (0x80 >> (mask_x % 8)))
+                        coverage++;
+                }
+
+            if (!coverage)
+            {
+                output_bits[x + y * fill_area.Width] = 0;
+                continue;
+            }
+
+            alpha = ((color >> 24) * coverage + ANTIALIAS_SAMPLES / 2) /
+                ANTIALIAS_SAMPLES;
+            output_bits[x + y * fill_area.Width] = (color & 0x00ffffff) | (alpha << 24);
+        }
+    }
+
+    status = alpha_blend_pixels(graphics, fill_area.X, fill_area.Y,
+        (BYTE *)output_bits, fill_area.Width, fill_area.Height,
+        fill_area.Width * sizeof(*output_bits), PixelFormat32bppARGB);
+
+done:
+    if (transform_acquired)
+        gdi_transform_release(graphics);
+    if (old_pen) SelectObject(mask_dc, old_pen);
+    if (old_brush) SelectObject(mask_dc, old_brush);
+    if (old_bitmap) SelectObject(mask_dc, old_bitmap);
+    if (mask_bitmap) DeleteObject(mask_bitmap);
+    if (mask_dc) DeleteDC(mask_dc);
+    free(output_bits);
+    free(types);
+    free(mask_points);
+    free(points);
+    return status;
+}
+
 /* on success, rgn will contain the region of the graphics object which
  * is visible after clipping has been applied */
 static GpStatus get_visible_clip_region(GpGraphics *graphics, GpRegion *rgn)
@@ -4125,7 +4358,7 @@ static GpStatus SOFTWARE_GdipDrawPath(GpGraphics *graphics, GpPen *pen, GpPath *
     REAL flatness=1.0;
 
     /* Check if the final pen thickness in pixels is too thin. */
-    if (pen->unit == UnitPixel)
+    if (!antialiasing_enabled(graphics) && pen->unit == UnitPixel)
     {
         if (pen->width < 1.415)
             return SOFTWARE_GdipDrawThinPath(graphics, pen, path);
@@ -4143,7 +4376,8 @@ static GpStatus SOFTWARE_GdipDrawPath(GpGraphics *graphics, GpPen *pen, GpPath *
         if (stat != Ok)
             return stat;
 
-        if (((points[1].X-points[0].X)*(points[1].X-points[0].X) +
+        if (!antialiasing_enabled(graphics) &&
+            ((points[1].X-points[0].X)*(points[1].X-points[0].X) +
              (points[1].Y-points[0].Y)*(points[1].Y-points[0].Y) < 2.0001) &&
             ((points[2].X-points[0].X)*(points[2].X-points[0].X) +
              (points[2].Y-points[0].Y)*(points[2].Y-points[0].Y) < 2.0001))
@@ -4221,7 +4455,8 @@ GpStatus WINGDIPAPI GdipDrawPath(GpGraphics *graphics, GpPen *pen, GpPath *path)
 
     if (is_metafile_graphics(graphics))
         retval = METAFILE_DrawPath((GpMetafile*)graphics->image, pen, path);
-    else if (!has_gdi_dc(graphics) || graphics->alpha_hdc || !brush_can_fill_path(pen->brush, FALSE))
+    else if (antialiasing_enabled(graphics) || !has_gdi_dc(graphics) ||
+             graphics->alpha_hdc || !brush_can_fill_path(pen->brush, FALSE))
         retval = SOFTWARE_GdipDrawPath(graphics, pen, path);
     else
         retval = GDI32_GdipDrawPath(graphics, pen, path);
@@ -4544,7 +4779,9 @@ GpStatus WINGDIPAPI GdipFillPath(GpGraphics *graphics, GpBrush *brush, GpPath *p
     if (is_metafile_graphics(graphics))
         return METAFILE_FillPath((GpMetafile*)graphics->image, brush, path);
 
-    if (!graphics->image && !graphics->alpha_hdc)
+    if (antialiasing_enabled(graphics))
+        stat = antialias_fill_path(graphics, brush, path);
+    else if (!graphics->image && !graphics->alpha_hdc)
         stat = GDI32_GdipFillPath(graphics, brush, path);
 
     if (stat == NotImplemented)
