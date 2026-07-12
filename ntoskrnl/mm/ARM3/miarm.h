@@ -2694,6 +2694,12 @@ MiDeleteVirtualAddresses(
 
 VOID
 NTAPI
+MiReturnRemainingProcessCommitment(
+    _In_ PEPROCESS Process
+);
+
+VOID
+NTAPI
 MiDeletePte(
     IN PMMPTE PointerPte,
     IN PVOID VirtualAddress,
