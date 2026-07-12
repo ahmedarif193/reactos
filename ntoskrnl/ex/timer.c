@@ -762,6 +762,8 @@ NtSetTimer(IN HANDLE TimerHandle,
     return Status;
 }
 
+#if (NTDDI_VERSION >= NTDDI_WINBLUE)
+
 /* EX_TIMER OBJECT FAMILY ****************************************************/
 
 #define TAG_EX_TIMER 'RmiT'
@@ -917,5 +919,7 @@ ExDeleteTimer(IN PEX_TIMER Timer,
     ExFreePoolWithTag(Timer, TAG_EX_TIMER);
     return TRUE;
 }
+
+#endif /* NTDDI_VERSION >= NTDDI_WINBLUE */
 
 /* EOF */

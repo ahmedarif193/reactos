@@ -66,4 +66,4 @@
 @ stdcall TrySubmitThreadpoolCallback(ptr ptr ptr)
 @ stdcall FreeLibraryWhenCallbackReturns(ptr ptr) ntdll_vista.TpCallbackUnloadDllOnCompletion
 @ stdcall GetProductInfo(long long long long ptr) ntdll_vista.RtlGetProductInfo
-@ stdcall GetLogicalProcessorInformationEx(long ptr ptr)
+@ stdcall -version=0x601+ GetLogicalProcessorInformationEx(long ptr ptr)

@@ -69,7 +69,7 @@ static RTL_BITMAP MiNonPagedPoolExpansionPteBitmap;
 // being released, which is then inserted in front of the recorded cluster.
 //
 
-FORCEINLINE
+static __inline
 PMMPTE
 MiSystemPteListFromOffset(IN MMSYSTEM_PTE_POOL_TYPE PoolType, IN ULONG Offset)
 {
@@ -83,7 +83,7 @@ MiSystemPteListFromOffset(IN MMSYSTEM_PTE_POOL_TYPE PoolType, IN ULONG Offset)
     return ListBase + Offset;
 }
 
-FORCEINLINE
+static __inline
 ULONG
 MiSystemPteListToOffset(IN MMSYSTEM_PTE_POOL_TYPE PoolType, IN PMMPTE ListPte)
 {

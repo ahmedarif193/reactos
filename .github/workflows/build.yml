@@ -41,11 +41,11 @@ jobs:
           - compiler: clang
             arch: arm64
             config: Debug
-            ntver: '0x601'
+            ntver: '0xA00'
           - compiler: clang
             arch: arm64
             config: Release
-            ntver: '0x601'
+            ntver: '0xA00'
       fail-fast: false
     runs-on: ubuntu-24.04
     steps:

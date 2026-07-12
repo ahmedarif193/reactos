@@ -376,17 +376,30 @@ KiAcquireWaitLock(IN PKPRCB Prcb)
 {
     ASSERT(KeGetCurrentIrql() >= DISPATCH_LEVEL);
 
+#if defined(_M_IX86)
+    /* The x86 KPRCB has no dedicated WaitLock, so serialize its wait list
+     * with the existing PRCB lock without changing the public layout. */
+    while (InterlockedExchange((PLONG)&Prcb->PrcbLock, 1) != 0)
+    {
+        while (*(volatile LONG*)&Prcb->PrcbLock != 0) YieldProcessor();
+    }
+#else
     while (InterlockedExchange64((PLONG64)&Prcb->WaitLock, 1) != 0)
     {
         while (*(volatile LONG64*)&Prcb->WaitLock != 0) YieldProcessor();
     }
+#endif
 }
 
 FORCEINLINE
 VOID
 KiReleaseWaitLock(IN PKPRCB Prcb)
 {
+#if defined(_M_IX86)
+    InterlockedAnd((PLONG)&Prcb->PrcbLock, 0);
+#else
     InterlockedExchange64((PLONG64)&Prcb->WaitLock, 0);
+#endif
 }
 
 FORCEINLINE

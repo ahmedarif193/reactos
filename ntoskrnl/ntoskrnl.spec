@@ -746,8 +746,10 @@
 @ stdcall KeSetProfileIrql(long)
 @ stdcall KeSetSystemAffinityThread(long)
 @ stdcall KeSetCoalescableTimer(ptr int64 long long ptr)
-@ stdcall KeRevertToUserAffinityThreadEx(int64)
-@ stdcall KeSetSystemAffinityThreadEx(int64)
+@ stdcall -arch=i386 KeRevertToUserAffinityThreadEx(long)
+@ stdcall -arch=x86_64,arm64 KeRevertToUserAffinityThreadEx(int64)
+@ stdcall -arch=i386 KeSetSystemAffinityThreadEx(long)
+@ stdcall -arch=x86_64,arm64 KeSetSystemAffinityThreadEx(int64)
 @ stdcall KeSetTargetProcessorDpc(ptr long)
 @ stdcall KeSetTimeIncrement(long long)
 @ stdcall KeSetTimer(ptr long long ptr)
@@ -2100,10 +2102,10 @@
 @ stdcall -arch=arm64 ExAllocateFromNPagedLookasideList(ptr) ExiAllocateFromNPagedLookasideList
 @ stdcall -arch=arm64 ExAllocatePool2(int64 long long)
 @ stdcall -arch=arm64 ExAllocatePool3(int64 long long ptr long)
-@ stdcall -arch=arm64 ExAllocateTimer(ptr ptr long)
+@ stdcall -version=0x603+ -arch=arm64 ExAllocateTimer(ptr ptr long)
 @ stub -arch=arm64 ExBlockOnAddressPushLock
 @ stub -arch=arm64 ExCancelDpcEventWait
-@ stdcall -arch=arm64 ExCancelTimer(ptr ptr)
+@ stdcall -version=0x603+ -arch=arm64 ExCancelTimer(ptr ptr)
 @ stub -arch=arm64 ExCleanupAutoExpandPushLock
 @ stub -arch=arm64 ExCleanupRundownProtectionCacheAware
 @ stub -arch=arm64 ExConvertFastResourceExclusiveToShared
@@ -2112,7 +2114,7 @@
 @ stub -arch=arm64 ExCreatePool
 @ stub -arch=arm64 ExDeleteDpcEvent
 @ stub -arch=arm64 ExDeleteFastResource
-@ stdcall -arch=arm64 ExDeleteTimer(ptr long long ptr)
+@ stdcall -version=0x603+ -arch=arm64 ExDeleteTimer(ptr long long ptr)
 @ stub -arch=arm64 ExDestroyPool
 @ stub -arch=arm64 ExDisownFastResource
 @ stub -arch=arm64 ExEnterPriorityRegionAndAcquireResourceExclusive
@@ -2177,7 +2179,7 @@
 @ stub -arch=arm64 ExSetFirmwareEnvironmentVariable
 @ stub -arch=arm64 ExSetLicenseTamperState
 @ stub -arch=arm64 ExSetResourceOwnerPointerEx
-@ stdcall -arch=arm64 ExSetTimer(ptr int64 int64 ptr)
+@ stdcall -version=0x603+ -arch=arm64 ExSetTimer(ptr int64 int64 ptr)
 @ stub -arch=arm64 ExShareAddressSpaceWithDevice
 @ stub -arch=arm64 ExShareSystemAddressSpaceWithDevice
 @ stub -arch=arm64 ExSizeOfAutoExpandPushLock
@@ -2596,7 +2598,7 @@
 @ stdcall -arch=arm64 KeSetSelectedCpuSetsThread(ptr long ptr)
 @ stdcall -arch=arm64 KeSetSystemGroupAffinityThread(ptr ptr)
 @ stdcall -arch=arm64 KeSetTargetProcessorDpcEx(ptr ptr)
-@ stdcall -arch=arm64 KeSetTimer2(ptr int64 int64 ptr)
+@ stdcall -version=0x603+ -arch=arm64 KeSetTimer2(ptr int64 int64 ptr)
 @ stub -arch=arm64 KeShouldYieldProcessor
 @ stub -arch=arm64 KeSizeOfAffinityEx
 @ stub -arch=arm64 KeSrcuAllocate
@@ -2707,7 +2709,7 @@
 @ stub -arch=arm64 NtQueryInformationTransaction
 @ stub -arch=arm64 NtQueryInformationTransactionManager
 @ stub -arch=arm64 NtQuerySecurityAttributesToken
-@ stub -arch=arm64 NtQuerySystemInformationEx
+@ stdcall -version=0x601+ -arch=arm64 NtQuerySystemInformationEx(long ptr long ptr long ptr)
 @ stub -arch=arm64 NtReadOnlyEnlistment
 @ stub -arch=arm64 NtRecoverEnlistment
 @ stub -arch=arm64 NtRecoverResourceManager
@@ -2946,7 +2948,7 @@
 @ stub -arch=arm64 RtlCompareAltitudes
 @ stub -arch=arm64 RtlCompareExchangePointerMapping
 @ stub -arch=arm64 RtlCompareExchangePropertyStore
-@ stdcall RtlCompareUnicodeStrings()
+@ stdcall RtlCompareUnicodeStrings(wstr long wstr long long)
 @ stub -arch=arm64 RtlConstructCrossVmEventPath
 @ stub -arch=arm64 RtlConstructCrossVmMutexPath
 @ stub -arch=arm64 RtlConvertHostPerfCounterToPerfCounter
@@ -2954,8 +2956,8 @@
 @ stub -arch=arm64 RtlCopyBitMapEx
 @ stub -arch=arm64 RtlCopyContext
 @ stub -arch=arm64 RtlCopyExtendedContext
-@ stdcall RtlCrc32()
-@ stdcall RtlCrc64()
+@ stdcall RtlCrc32(ptr long long)
+@ stdcall RtlCrc64(ptr long int64)
 @ stub -arch=arm64 RtlCreateAtomTableEx
 @ stub -arch=arm64 RtlCreateHashTableEx
 @ stub -arch=arm64 RtlDecompressBufferEx
@@ -2966,10 +2968,10 @@
 @ stub -arch=arm64 RtlDrainNonVolatileFlush
 @ stub -arch=arm64 RtlEndStrongEnumerationHashTable
 @ stub -arch=arm64 RtlEqualWnfChangeStamps
-@ stdcall RtlEthernetAddressToStringA()
-@ stdcall RtlEthernetAddressToStringW()
-@ stdcall RtlEthernetStringToAddressA()
-@ stdcall RtlEthernetStringToAddressW()
+@ stdcall RtlEthernetAddressToStringA(ptr ptr)
+@ stdcall RtlEthernetAddressToStringW(ptr ptr)
+@ stdcall RtlEthernetStringToAddressA(str ptr ptr)
+@ stdcall RtlEthernetStringToAddressW(wstr ptr ptr)
 @ stub -arch=arm64 RtlExtendCorrelationVector
 @ stub -arch=arm64 RtlExtractBitMap
 @ stub -arch=arm64 RtlExtractBitMapEx
@@ -3068,7 +3070,7 @@
 @ stub -arch=arm64 RtlNumberOfSetBitsEx
 @ stub -arch=arm64 RtlNumberOfSetBitsInRange
 @ stub -arch=arm64 RtlNumberOfSetBitsInRangeEx
-@ stdcall RtlNumberOfSetBitsUlongPtr()
+@ stdcall RtlNumberOfSetBitsUlongPtr(long)
 @ stub -arch=arm64 RtlOpenImageFileOptionsKey
 @ stub -arch=arm64 RtlOsDeploymentState
 @ stub -arch=arm64 RtlOwnerAcesPresent
@@ -3123,9 +3125,9 @@
 @ stub -arch=arm64 RtlShiftLeftBitMapEx
 @ stub -arch=arm64 RtlSidHashInitialize
 @ stub -arch=arm64 RtlSidHashLookup
-@ stdcall RtlStringFromGUIDEx()
+@ stdcall RtlStringFromGUIDEx(ptr ptr long)
 @ stub -arch=arm64 RtlStronglyEnumerateEntryHashTable
-@ stdcall RtlSuffixUnicodeString()
+@ stdcall RtlSuffixUnicodeString(ptr ptr long)
 @ stub -arch=arm64 RtlTestBitEx
 @ stub -arch=arm64 RtlUTF8StringToUnicodeString
 @ stub -arch=arm64 RtlUdiv128
@@ -3339,9 +3341,9 @@
 @ stub -arch=arm64 ZwCreateTransaction
 @ stub -arch=arm64 ZwCreateTransactionManager
 @ stub -arch=arm64 ZwCreateWaitCompletionPacket
-@ stdcall -arch=arm64 ZwCreateWnfStateName(ptr long long long ptr long ptr)
-@ stdcall -arch=arm64 ZwDeleteWnfStateData(ptr ptr)
-@ stdcall -arch=arm64 ZwDeleteWnfStateName(ptr)
+@ stdcall -version=0x602+ -arch=arm64 ZwCreateWnfStateName(ptr long long long ptr long ptr)
+@ stdcall -version=0x602+ -arch=arm64 ZwDeleteWnfStateData(ptr ptr)
+@ stdcall -version=0x602+ -arch=arm64 ZwDeleteWnfStateName(ptr)
 @ stub -arch=arm64 ZwEnumerateTransactionObject
 @ stub -arch=arm64 ZwFlushBuffersFileEx
 @ stub -arch=arm64 ZwGetCachedSigningLevel
@@ -3379,9 +3381,9 @@
 @ stub -arch=arm64 ZwQueryLicenseValue
 @ stub -arch=arm64 ZwQuerySecurityAttributesToken
 @ stub -arch=arm64 ZwQuerySecurityPolicy
-@ stub -arch=arm64 ZwQuerySystemInformationEx
-@ stdcall -arch=arm64 ZwQueryWnfStateData(ptr ptr ptr ptr ptr ptr)
-@ stdcall -arch=arm64 ZwQueryWnfStateNameInformation(ptr long ptr ptr long)
+@ stdcall -version=0x601+ -arch=arm64 ZwQuerySystemInformationEx(long ptr long ptr long ptr)
+@ stdcall -version=0x602+ -arch=arm64 ZwQueryWnfStateData(ptr ptr ptr ptr ptr ptr)
+@ stdcall -version=0x602+ -arch=arm64 ZwQueryWnfStateNameInformation(ptr long ptr ptr long)
 @ stub -arch=arm64 ZwReadOnlyEnlistment
 @ stub -arch=arm64 ZwRecoverEnlistment
 @ stub -arch=arm64 ZwRecoverResourceManager
@@ -3400,7 +3402,7 @@
 @ stub -arch=arm64 ZwSetIoCompletionEx
 @ stub -arch=arm64 ZwSetTimerEx
 @ stub -arch=arm64 ZwTraceControl
-@ stdcall -arch=arm64 ZwUpdateWnfStateData(ptr ptr long ptr ptr long long)
+@ stdcall -version=0x602+ -arch=arm64 ZwUpdateWnfStateData(ptr ptr long ptr ptr long long)
 @ stub -arch=arm64 _makepath_s
 @ cdecl _snprintf_s()
 @ stub -arch=arm64 _snscanf_s

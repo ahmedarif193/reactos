@@ -174,7 +174,9 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
 {
     PKPRCB Prcb;
     BOOLEAN Preempted;
+#ifdef CONFIG_SMP
     KAFFINITY IdleRequest;
+#endif
     ULONG Processor;
     KPRIORITY OldPriority;
     PKTHREAD NextThread;
@@ -330,7 +332,9 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
     /* Get the PRCB and lock it */
     Prcb = KiProcessorBlock[Processor];
     KiAcquirePrcbLock(Prcb);
+#ifdef CONFIG_SMP
     IdleRequest = 0;
+#endif
 
 #ifndef CONFIG_SMP
     /* Check if we have an idle summary */
