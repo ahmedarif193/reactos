@@ -1400,6 +1400,10 @@ MmCleanProcessAddressSpace(IN PEPROCESS Process)
 
     /* Release the address space */
     MmUnlockAddressSpace(&Process->Vm);
+
+    /* The VADs are gone; return the commit and page file quota the process
+       never freed explicitly, before its quota block is torn down */
+    MiReturnRemainingProcessCommitment(Process);
 }
 
 VOID
@@ -1428,7 +1432,9 @@ MmDeleteProcessAddressSpace(IN PEPROCESS Process)
     MiReleaseExpansionLock(OldIrql);
 #endif
 
-    //ASSERT(Process->CommitCharge == 0);
+    /* Backstop for processes whose address space was never cleaned */
+    MiReturnRemainingProcessCommitment(Process);
+    ASSERT(Process->CommitCharge == 0);
 
     /* Remove us from the list */
     OldIrql = MiAcquireExpansionLock();

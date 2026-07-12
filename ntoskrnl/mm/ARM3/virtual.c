@@ -90,6 +90,7 @@ MiChargeProcessCommitment(
 {
     SIZE_T OldTotalCommit, NewTotalCommit;
     SIZE_T OldProcessCommit, NewProcessCommit;
+    NTSTATUS Status;
 
     if (PageCount == 0)
         return STATUS_SUCCESS;
@@ -114,6 +115,15 @@ MiChargeProcessCommitment(
         OldTotalCommit = MiTotalCommitCharge;
     }
 
+    /* Charge the page file quota, tracked in pages like the commit
+       (ProcessVmCounters and friends convert to bytes on the way out) */
+    Status = PsChargeProcessPageFileQuota(Process, PageCount);
+    if (!NT_SUCCESS(Status))
+    {
+        InterlockedExchangeAddSizeT(&MiTotalCommitCharge, -(LONG_PTR)PageCount);
+        return Status;
+    }
+
     OldProcessCommit = InterlockedExchangeAddSizeT(&Process->CommitCharge, PageCount);
     NewProcessCommit = OldProcessCommit + PageCount;
     if (NewProcessCommit > Process->CommitChargePeak)
@@ -136,6 +146,18 @@ MiReturnProcessCommitment(
     ASSERT(Process->CommitCharge >= PageCount);
     InterlockedExchangeAddSizeT(&Process->CommitCharge, -(LONG_PTR)PageCount);
     InterlockedExchangeAddSizeT(&MiTotalCommitCharge, -(LONG_PTR)PageCount);
+    PsReturnProcessPageFileQuota(Process, PageCount);
+}
+
+/* Returns the commit (and its page file quota) an exiting process never
+   freed explicitly; the address space teardown paths call this so the
+   process reaches quota-block destruction with zero usage */
+VOID
+NTAPI
+MiReturnRemainingProcessCommitment(
+    _In_ PEPROCESS Process)
+{
+    MiReturnProcessCommitment(Process, Process->CommitCharge);
 }
 
 ULONG
