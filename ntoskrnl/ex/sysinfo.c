@@ -2850,6 +2850,67 @@ QSI_DEF(SystemObjectSecurityMode)
     return STATUS_SUCCESS;
 }
 
+/*
+ * Cache records and physical package sets shared by the class 73 and
+ * class 107 builders. The single pool allocation holds both arrays;
+ * free it with ExpFreeProcessorTopology.
+ */
+#define EXP_TOPOLOGY_TAG 'oTsQ'
+
+typedef struct _EXP_PROCESSOR_TOPOLOGY
+{
+    PKI_CACHE_RECORD CacheRecords;
+    PKAFFINITY PackageSets;
+    ULONG RecordCount;
+    ULONG SetCount;
+} EXP_PROCESSOR_TOPOLOGY, *PEXP_PROCESSOR_TOPOLOGY;
+
+static
+NTSTATUS
+ExpCollectProcessorTopology(
+    _In_ BOOLEAN WantCaches,
+    _In_ BOOLEAN WantPackages,
+    _Out_ PEXP_PROCESSOR_TOPOLOGY Topology)
+{
+    ULONG MaxRecords = WantCaches ? KI_MAX_CACHE_RECORDS : 0;
+    ULONG MaxSets = WantPackages ? MAXIMUM_PROCESSORS : 0;
+    PKI_CACHE_RECORD Pool;
+
+    Pool = ExAllocatePoolWithTag(PagedPool,
+                                 (MaxRecords * sizeof(KI_CACHE_RECORD)) +
+                                 (MaxSets * sizeof(KAFFINITY)),
+                                 EXP_TOPOLOGY_TAG);
+    if (Pool == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Topology->CacheRecords = Pool;
+    Topology->PackageSets = (PKAFFINITY)(Pool + MaxRecords);
+
+    KiQueryProcessorTopology(Topology->CacheRecords,
+                             MaxRecords,
+                             &Topology->RecordCount,
+                             Topology->PackageSets,
+                             MaxSets,
+                             &Topology->SetCount);
+
+    if (WantPackages && (Topology->SetCount == 0))
+    {
+        /* every running system has at least one package */
+        Topology->PackageSets[0] = KeActiveProcessors;
+        Topology->SetCount = 1;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+static
+VOID
+ExpFreeProcessorTopology(
+    _In_ PEXP_PROCESSOR_TOPOLOGY Topology)
+{
+    ExFreePoolWithTag(Topology->CacheRecords, EXP_TOPOLOGY_TAG);
+}
+
 /* Class 73 - Logical processor information */
 QSI_DEF(SystemLogicalProcessorInformation)
 {
@@ -2858,11 +2919,27 @@ QSI_DEF(SystemLogicalProcessorInformation)
     KAFFINITY CurrentProc;
     NTSTATUS Status = STATUS_SUCCESS;
     ULONG DataSize = 0, ProcessorFlags;
-    PSYSTEM_LOGICAL_PROCESSOR_INFORMATION CurrentInfo;
+    PSYSTEM_LOGICAL_PROCESSOR_INFORMATION CurrentInfo = Buffer;
+    PSYSTEM_LOGICAL_PROCESSOR_INFORMATION Info;
+    EXP_PROCESSOR_TOPOLOGY Topology;
+    ULONG r;
+
+/* Accounts for one record; Info is NULL when the buffer is too small */
+#define QSI_LPI_EMIT()                                                       \
+    DataSize += sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);                \
+    if (DataSize > Size)                                                     \
+    {                                                                        \
+        Status = STATUS_INFO_LENGTH_MISMATCH;                                \
+        Info = NULL;                                                         \
+    }                                                                        \
+    else                                                                     \
+    {                                                                        \
+        Info = CurrentInfo++;                                                \
+        RtlZeroMemory(Info, sizeof(*Info));                                  \
+    }
 
     /* First, browse active processors, thanks to the map */
     i = 0;
-    CurrentInfo = Buffer;
     CurrentProc = KeActiveProcessors;
     do
     {
@@ -2882,22 +2959,14 @@ QSI_DEF(SystemLogicalProcessorInformation)
                 ProcessorFlags = 0;
             }
 
-            /* Check we have enough room to return */
-            DataSize += sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
-            if (DataSize > Size)
+            QSI_LPI_EMIT();
+            if (Info != NULL)
             {
-                Status = STATUS_INFO_LENGTH_MISMATCH;
-            }
-            else
-            {
-                /* Zero output and return */
-                RtlZeroMemory(CurrentInfo, sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION));
-                CurrentInfo->ProcessorMask = Prcb->MultiThreadProcessorSet;
+                Info->ProcessorMask = Prcb->MultiThreadProcessorSet;
 
                 /* Processor core needs 1 if HT/MC is supported */
-                CurrentInfo->Relationship = RelationProcessorCore;
-                CurrentInfo->ProcessorCore.Flags = ProcessorFlags;
-                ++CurrentInfo;
+                Info->Relationship = RelationProcessorCore;
+                Info->ProcessorCore.Flags = ProcessorFlags;
             }
         }
 
@@ -2907,27 +2976,55 @@ QSI_DEF(SystemLogicalProcessorInformation)
     /* Loop while there's someone in the bitmask */
     } while (CurrentProc != 0);
 
+    /* Cache and package records from the per-architecture provider */
+    if (NT_SUCCESS(ExpCollectProcessorTopology(TRUE, TRUE, &Topology)))
+    {
+        /* the user buffer can fault mid-write; never leak the pool */
+        _SEH2_TRY
+        {
+            for (r = 0; r < Topology.RecordCount; r++)
+            {
+                QSI_LPI_EMIT();
+                if (Info != NULL)
+                {
+                    Info->ProcessorMask = Topology.CacheRecords[r].ProcessorSet;
+                    Info->Relationship = RelationCache;
+                    Info->Cache = Topology.CacheRecords[r].Descriptor;
+                }
+            }
+
+            for (r = 0; r < Topology.SetCount; r++)
+            {
+                QSI_LPI_EMIT();
+                if (Info != NULL)
+                {
+                    Info->ProcessorMask = Topology.PackageSets[r];
+                    Info->Relationship = RelationProcessorPackage;
+                }
+            }
+        }
+        _SEH2_FINALLY
+        {
+            ExpFreeProcessorTopology(&Topology);
+        }
+        _SEH2_END;
+    }
+
     /* Now, return the NUMA nodes */
     for (i = 0; i < KeNumberNodes; ++i)
     {
-        /* Check we have enough room to return */
-        DataSize += sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
-        if (DataSize > Size)
+        QSI_LPI_EMIT();
+        if (Info != NULL)
         {
-            Status = STATUS_INFO_LENGTH_MISMATCH;
-        }
-        else
-        {
-            /* Zero output and return */
-            RtlZeroMemory(CurrentInfo, sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION));
-            CurrentInfo->ProcessorMask = KeActiveProcessors;
+            Info->ProcessorMask = KeActiveProcessors;
 
             /* NUMA node needs its ID */
-            CurrentInfo->Relationship = RelationNumaNode;
-            CurrentInfo->NumaNode.NodeNumber = i;
-            ++CurrentInfo;
+            Info->Relationship = RelationNumaNode;
+            Info->NumaNode.NodeNumber = i;
         }
     }
+
+#undef QSI_LPI_EMIT
 
     *ReqSize = DataSize;
 
@@ -3250,6 +3347,281 @@ NtQuerySystemInformation(
             /* Save the result length to the caller */
             if (ReturnLength)
                 *ReturnLength = CapturedResultLength;
+        }
+    }
+    _SEH2_EXCEPT(ExSystemExceptionFilter())
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    return Status;
+}
+
+/*
+ * Builder for SystemLogicalProcessorAndGroupInformation (class 107):
+ * variable-size SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX records, single
+ * processor group (group 0), filtered by relationship.
+ */
+
+/* Fills a PROCESSOR_RELATIONSHIP record (cores and packages share the
+   shape); the record was zeroed by the emit macro, so EfficiencyClass
+   and GroupMask[0].Group keep their zero values */
+static
+VOID
+ExpFillProcessorRelationship(
+    _Inout_ PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX Info,
+    _In_ LOGICAL_PROCESSOR_RELATIONSHIP Relationship,
+    _In_ BYTE Flags,
+    _In_ KAFFINITY Mask)
+{
+    Info->Relationship = Relationship;
+    Info->Processor.Flags = Flags;
+    Info->Processor.GroupCount = 1;
+    Info->Processor.GroupMask[0].Mask = Mask;
+}
+
+static
+NTSTATUS
+ExpQueryLogicalProcessorInformationEx(
+    _In_ LOGICAL_PROCESSOR_RELATIONSHIP RelationshipType,
+    _Out_writes_bytes_opt_(Size) PVOID Buffer,
+    _In_ ULONG Size,
+    _Out_ PULONG ReqSize)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+    NTSTATUS CollectStatus;
+    PUCHAR Current = Buffer;
+    ULONG DataSize = 0;
+    ULONG EntrySize;
+    LONG i;
+    PKPRCB Prcb;
+    KAFFINITY CurrentProc;
+    EXP_PROCESSOR_TOPOLOGY Topology;
+    ULONG r;
+    BOOLEAN WantAll = (RelationshipType == RelationAll);
+    BOOLEAN WantCaches = WantAll || (RelationshipType == RelationCache);
+    BOOLEAN WantPackages = WantAll || (RelationshipType == RelationProcessorPackage);
+    PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX Info;
+
+#define EXP_LPI_EX_EMIT(RawSize)                                            \
+    EntrySize = ALIGN_UP_BY((RawSize), sizeof(ULONGLONG));                   \
+    DataSize += EntrySize;                                                   \
+    Info = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)Current;                \
+    if (DataSize > Size)                                                     \
+    {                                                                        \
+        Status = STATUS_INFO_LENGTH_MISMATCH;                                \
+        Info = NULL;                                                         \
+    }                                                                        \
+    else                                                                     \
+    {                                                                        \
+        RtlZeroMemory(Info, EntrySize);                                      \
+        Info->Size = EntrySize;                                              \
+        Current += EntrySize;                                                \
+    }
+
+/* size of a PROCESSOR_RELATIONSHIP record carrying a single group mask */
+#define EXP_LPI_EX_PROCESSOR_SIZE                                            \
+    (FIELD_OFFSET(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Processor) +      \
+     FIELD_OFFSET(PROCESSOR_RELATIONSHIP, GroupMask) +                       \
+     sizeof(GROUP_AFFINITY))
+
+    /* processor cores */
+    if (WantAll || (RelationshipType == RelationProcessorCore))
+    {
+        i = 0;
+        CurrentProc = KeActiveProcessors;
+        do
+        {
+            Prcb = KiProcessorBlock[i];
+            if ((CurrentProc & 1) && (Prcb == Prcb->MultiThreadSetMaster))
+            {
+                EXP_LPI_EX_EMIT(EXP_LPI_EX_PROCESSOR_SIZE);
+                if (Info != NULL)
+                {
+                    ExpFillProcessorRelationship(
+                        Info,
+                        RelationProcessorCore,
+                        (Prcb->SetMember != Prcb->MultiThreadProcessorSet)
+                            ? LTP_PC_SMT : 0,
+                        Prcb->MultiThreadProcessorSet);
+                }
+            }
+            CurrentProc >>= 1;
+            ++i;
+        } while (CurrentProc != 0);
+    }
+
+    /* caches and physical packages come from the per-arch provider */
+    if (WantCaches || WantPackages)
+    {
+        CollectStatus = ExpCollectProcessorTopology(WantCaches,
+                                                    WantPackages,
+                                                    &Topology);
+        if (!NT_SUCCESS(CollectStatus))
+            return CollectStatus;
+
+        /* the user buffer can fault mid-write; never leak the pool */
+        _SEH2_TRY
+        {
+            for (r = 0; r < Topology.RecordCount; r++)
+            {
+                EXP_LPI_EX_EMIT(
+                    FIELD_OFFSET(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Cache) +
+                    sizeof(CACHE_RELATIONSHIP));
+                if (Info != NULL)
+                {
+                    Info->Relationship = RelationCache;
+                    Info->Cache.Level = Topology.CacheRecords[r].Descriptor.Level;
+                    Info->Cache.Associativity = Topology.CacheRecords[r].Descriptor.Associativity;
+                    Info->Cache.LineSize = Topology.CacheRecords[r].Descriptor.LineSize;
+                    Info->Cache.CacheSize = Topology.CacheRecords[r].Descriptor.Size;
+                    Info->Cache.Type = Topology.CacheRecords[r].Descriptor.Type;
+                    Info->Cache.GroupMask.Group = 0;
+                    Info->Cache.GroupMask.Mask = Topology.CacheRecords[r].ProcessorSet;
+                }
+            }
+
+            for (r = 0; r < Topology.SetCount; r++)
+            {
+                EXP_LPI_EX_EMIT(EXP_LPI_EX_PROCESSOR_SIZE);
+                if (Info != NULL)
+                {
+                    ExpFillProcessorRelationship(Info,
+                                                 RelationProcessorPackage,
+                                                 0,
+                                                 Topology.PackageSets[r]);
+                }
+            }
+        }
+        _SEH2_FINALLY
+        {
+            ExpFreeProcessorTopology(&Topology);
+        }
+        _SEH2_END;
+    }
+
+    /* NUMA nodes */
+    if (WantAll || (RelationshipType == RelationNumaNode))
+    {
+        for (i = 0; i < KeNumberNodes; ++i)
+        {
+            KAFFINITY NodeMask = KeActiveProcessors;
+
+            if ((KeNodeBlock[i] != NULL) && (KeNodeBlock[i]->ProcessorMask != 0))
+                NodeMask = KeNodeBlock[i]->ProcessorMask;
+
+            EXP_LPI_EX_EMIT(
+                FIELD_OFFSET(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, NumaNode) +
+                sizeof(NUMA_NODE_RELATIONSHIP));
+            if (Info != NULL)
+            {
+                Info->Relationship = RelationNumaNode;
+                Info->NumaNode.NodeNumber = i;
+                Info->NumaNode.GroupMask.Group = 0;
+                Info->NumaNode.GroupMask.Mask = NodeMask;
+            }
+        }
+    }
+
+    /* the single processor group */
+    if (WantAll || (RelationshipType == RelationGroup))
+    {
+        EXP_LPI_EX_EMIT(
+            FIELD_OFFSET(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Group) +
+            FIELD_OFFSET(GROUP_RELATIONSHIP, GroupInfo) +
+            sizeof(PROCESSOR_GROUP_INFO));
+        if (Info != NULL)
+        {
+            Info->Relationship = RelationGroup;
+            Info->Group.MaximumGroupCount = 1;
+            Info->Group.ActiveGroupCount = 1;
+            Info->Group.GroupInfo[0].MaximumProcessorCount =
+                (UCHAR)KeNumberProcessors;
+            Info->Group.GroupInfo[0].ActiveProcessorCount =
+                (UCHAR)KeQueryActiveProcessorCount(NULL);
+            Info->Group.GroupInfo[0].ActiveProcessorMask = KeActiveProcessors;
+        }
+    }
+
+#undef EXP_LPI_EX_PROCESSOR_SIZE
+#undef EXP_LPI_EX_EMIT
+
+    *ReqSize = DataSize;
+    return Status;
+}
+
+__kernel_entry
+NTSTATUS
+NTAPI
+NtQuerySystemInformationEx(
+    _In_ SYSTEM_INFORMATION_CLASS SystemInformationClass,
+    _In_reads_bytes_(InputBufferLength) PVOID InputBuffer,
+    _In_ ULONG InputBufferLength,
+    _Out_writes_bytes_opt_(SystemInformationLength) PVOID SystemInformation,
+    _In_ ULONG SystemInformationLength,
+    _Out_opt_ PULONG ReturnLength)
+{
+    NTSTATUS Status = STATUS_INVALID_INFO_CLASS;
+    ULONG CapturedResultLength = 0;
+    LOGICAL_PROCESSOR_RELATIONSHIP Relationship;
+    KPROCESSOR_MODE PreviousMode;
+
+    PAGED_CODE();
+
+    PreviousMode = ExGetPreviousMode();
+
+    if (InputBuffer == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    _SEH2_TRY
+    {
+        if (PreviousMode != KernelMode)
+        {
+            ProbeForRead(InputBuffer, InputBufferLength, TYPE_ALIGNMENT(ULONG));
+            if (SystemInformation != NULL)
+            {
+                ProbeForWrite(SystemInformation,
+                              SystemInformationLength,
+                              TYPE_ALIGNMENT(ULONG));
+            }
+            if (ReturnLength != NULL)
+                ProbeForWriteUlong(ReturnLength);
+        }
+
+        if (ReturnLength)
+            *ReturnLength = 0;
+
+        switch (SystemInformationClass)
+        {
+            case SystemLogicalProcessorAndGroupInformation:
+            {
+                if (InputBufferLength != sizeof(LOGICAL_PROCESSOR_RELATIONSHIP))
+                    _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
+
+                Relationship = *(volatile LOGICAL_PROCESSOR_RELATIONSHIP*)InputBuffer;
+                if ((Relationship != RelationAll) &&
+                    (Relationship != RelationProcessorCore) &&
+                    (Relationship != RelationNumaNode) &&
+                    (Relationship != RelationCache) &&
+                    (Relationship != RelationProcessorPackage) &&
+                    (Relationship != RelationGroup))
+                {
+                    _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
+                }
+
+                Status = ExpQueryLogicalProcessorInformationEx(Relationship,
+                                                               SystemInformation,
+                                                               SystemInformationLength,
+                                                               &CapturedResultLength);
+                if (ReturnLength)
+                    *ReturnLength = CapturedResultLength;
+                break;
+            }
+
+            default:
+                /* Status stays STATUS_INVALID_INFO_CLASS */
+                break;
         }
     }
     _SEH2_EXCEPT(ExSystemExceptionFilter())

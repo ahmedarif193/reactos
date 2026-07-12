@@ -121,6 +121,33 @@ extern KNODE KiNode0;
 extern PKNODE KeNodeBlock[KI_MAX_NUMA_NODES];
 extern UCHAR KeNumberNodes;
 extern UCHAR KeProcessNodeSeed;
+
+//
+// Processor cache/package topology records reported by per-architecture
+// code (ke/procinfo.c, ke/arm64/topology.c) for
+// SystemLogicalProcessorInformation(Ex)
+//
+typedef struct _KI_CACHE_RECORD
+{
+    CACHE_DESCRIPTOR Descriptor;
+    KAFFINITY ProcessorSet;    /* logical processors sharing this instance */
+} KI_CACHE_RECORD, *PKI_CACHE_RECORD;
+
+#define KI_MAX_CACHE_RECORDS 256
+
+/* Discovers cache records and physical package sets in one pass over the
+   active processors; pass MaxRecords/MaxSets of 0 to skip either view
+   (a returned count of 0 = information unavailable). Callable at
+   PASSIVE_LEVEL only (may migrate between processors). */
+VOID
+NTAPI
+KiQueryProcessorTopology(
+    _Out_writes_to_opt_(MaxRecords, *RecordCount) PKI_CACHE_RECORD Records,
+    _In_ ULONG MaxRecords,
+    _Out_ PULONG RecordCount,
+    _Out_writes_to_opt_(MaxSets, *SetCount) PKAFFINITY Sets,
+    _In_ ULONG MaxSets,
+    _Out_ PULONG SetCount);
 extern ETHREAD KiInitialThread;
 extern EPROCESS KiInitialProcess;
 extern PULONG KiInterruptTemplateObject;

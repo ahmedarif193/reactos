@@ -55,6 +55,7 @@ KiArm64ReadCpuFeatures(VOID)
     Features.PanSupported = (((Mmfr1 >> 20) & 0xFULL) != 0);
     Features.SveSupported = (((Pfr0 >> 32) & 0xFULL) != 0);
     Features.SmeSupported = (((Pfr1 >> 24) & 0xFULL) != 0);
+    Features.El2Implemented = (((Pfr0 >> 8) & 0xFULL) != 0);
     Features.AtomicSupported = (ULONG)((Isar0 >> 20) & 0xFULL);
     Features.NeonSupported = (((Pfr0 >> 20) & 0xFULL) != 0xFULL);
     AsidField = (ULONG)((Mmfr0 >> 4) & 0xFULL);
@@ -471,6 +472,12 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
         /* ARM64 uses 16-byte SLIST headers and 128-bit CAS */
         RtlpUse16ByteSLists = TRUE;
         MmWriteableSharedUserData->ProcessorFeatures[PF_COMPARE_EXCHANGE128] = TRUE;
+
+        /* Report firmware virtualization support when EL2 is implemented */
+        if (Arm64CpuFeatures.El2Implemented)
+        {
+            MmWriteableSharedUserData->ProcessorFeatures[PF_VIRT_FIRMWARE_ENABLED] = TRUE;
+        }
 
         KeLowerIrql(APC_LEVEL);
 

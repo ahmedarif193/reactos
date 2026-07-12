@@ -13,6 +13,7 @@ list(APPEND SOURCE
     GetLocaleInfoEx.c
     GetFileInformationByHandleEx.c
     GetFinalPathNameByHandle.c
+    GetLogicalProcessorInformationEx.c
     GetNamedPipeClientProcessId.c
     GetTickCount64.c
     GetUserDefaultLocaleName.c
