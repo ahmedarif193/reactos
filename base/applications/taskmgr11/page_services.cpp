@@ -116,7 +116,7 @@ struct ServicesPage : Page, ITreeListOwner
         }
     }
 
-    int TLRowGlyph(LPARAM data)
+    IconId TLRowGlyph(LPARAM data)
     {
         (void)data;
         return IC_SERVICES;

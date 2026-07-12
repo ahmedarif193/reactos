@@ -27,7 +27,7 @@ static int  s_hotRail = -1;       /* index into rail items, 100 = hamburger */
 static BOOL s_tracking;
 
 /* nav rail items */
-struct RailItem { int page; int icon; const WCHAR* label; };
+struct RailItem { int page; IconId icon; const WCHAR* label; };
 static const RailItem s_rail[] =
 {
     { PG_PROCESSES,   IC_PROCESSES, L"Processes" },
@@ -45,6 +45,17 @@ static const RailItem s_rail[] =
 
 static int RailW(void)    { return g_app.st.navExpanded ? S(210) : S(48); }
 static int HeaderH(void)  { return S(54); }
+
+static int TextWidth(HWND hwnd, HFONT font, const WCHAR* text)
+{
+    SIZE size = { 0, 0 };
+    HDC dc = GetDC(hwnd);
+    HGDIOBJ old = SelectObject(dc, font);
+    GetTextExtentPoint32W(dc, text, lstrlenW(text), &size);
+    SelectObject(dc, old);
+    ReleaseDC(hwnd, dc);
+    return size.cx;
+}
 
 static void HamburgerRect(HWND hwnd, RECT* r)
 {
@@ -312,22 +323,31 @@ static void LayoutChildren(HWND hwnd)
                        pr.right - pr.left, pr.bottom - pr.top, TRUE);
     }
 
-    /* search box centered in header */
+    RECT hr;
+    HeaderRect(hwnd, &hr);
+
+    /* command strip lives at header right */
+    RECT band = { hr.left, hr.top + S(6), hr.right - S(14), hr.top + S(6) + S(40) };
+    int stripWidth = s_strip.LayoutRight(band, S(8));
+    int stripLeft = band.right - stripWidth;
+
+    /* fit the search box between the measured title and command strip */
     Page* pg = s_pages[g_app.page];
     if (s_search)
     {
         if (pg && pg->WantSearch())
         {
-            RECT hr;
-            HeaderRect(hwnd, &hr);
-            int w = S(320);
-            int availL = hr.left + S(200);
-            int availR = hr.right - S(360);
-            int x = (hr.left + hr.right - w) / 2;
-            if (x < availL) x = availL;
-            if (x + w > availR) w = availR - x;
-            if (w > S(120))
+            int titleLeft = hr.left + S(16);
+            int availL = titleLeft + TextWidth(hwnd, g_t.fTitle, pg->Title()) + S(24);
+            int availR = stripLeft - S(8);
+            int available = availR - availL;
+
+            if (available > S(120))
             {
+                int w = available < S(320) ? available : S(320);
+                int x = (hr.left + hr.right - w) / 2;
+                if (x < availL) x = availL;
+                if (x + w > availR) x = availR - w;
                 MoveWindow(s_search, x, hr.top + S(11), w, S(32), TRUE);
                 ShowWindow(s_search, SW_SHOW);
             }
@@ -341,12 +361,6 @@ static void LayoutChildren(HWND hwnd)
             ShowWindow(s_search, SW_HIDE);
         }
     }
-
-    /* command strip lives at header right */
-    RECT hr;
-    HeaderRect(hwnd, &hr);
-    RECT band = { hr.left, hr.top + S(6), hr.right - S(14), hr.top + S(6) + S(40) };
-    s_strip.LayoutRight(band, S(8));
 }
 
 void App_SetPage(int id)
@@ -474,7 +488,7 @@ static void PaintFrame(HWND hwnd, HDC dc, const RECT& rcPaint)
         RailItemRect(hwnd, i, &ir);
         BOOL isSettings = (i == (int)_countof(s_rail));
         int page = isSettings ? PG_SETTINGS : s_rail[i].page;
-        int icon = isSettings ? IC_SETTINGS : s_rail[i].icon;
+        IconId icon = isSettings ? IC_SETTINGS : s_rail[i].icon;
         const WCHAR* label = isSettings ? L"Settings" : s_rail[i].label;
         BOOL sel = (g_app.page == page);
 
@@ -508,9 +522,23 @@ static void PaintFrame(HWND hwnd, HDC dc, const RECT& rcPaint)
     Page* pg = s_pages[g_app.page];
     if (pg)
     {
-        RECT tr = { hr.left + S(16), hr.top, hr.left + S(300), hr.bottom };
-        DrawTextClip(dc, pg->Title(), tr, g_t.fTitle, g_t.textMain,
-                     DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        int right = hr.right - S(14);
+        for (int i = 0; i < s_strip.b.n; i++)
+            if (s_strip.b[i].r.left - S(12) < right)
+                right = s_strip.b[i].r.left - S(12);
+        if (s_search && IsWindowVisible(s_search))
+        {
+            RECT sr;
+            GetWindowRect(s_search, &sr);
+            MapWindowPoints(NULL, hwnd, (POINT*)&sr, 2);
+            if (sr.left - S(12) < right)
+                right = sr.left - S(12);
+        }
+
+        RECT tr = { hr.left + S(16), hr.top, right, hr.bottom };
+        if (tr.right > tr.left)
+            DrawTextClip(dc, pg->Title(), tr, g_t.fTitle, g_t.textMain,
+                         DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     }
     s_strip.Paint(dc);
 }
