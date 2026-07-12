@@ -84,7 +84,32 @@ typedef struct _FDO_EXTENSION
         };
     } DiskData;
     UNICODE_STRING DiskInterfaceName;
+
+    // IOCTL_DISK_PERFORMANCE counters; everything except the lookaside
+    // list is guarded by Lock. RemoveLock keeps the extension and the
+    // lookaside alive while a read/write with an armed completion routine
+    // is in flight below us.
+    struct {
+        IO_REMOVE_LOCK RemoveLock;
+        KSPIN_LOCK Lock;
+        NPAGED_LOOKASIDE_LIST ContextLookaside;
+        LONG ReferenceCount;
+        LONG OutstandingRequests;
+        ULONGLONG IdleStartTime;
+        LONGLONG IdleTime;
+        LONGLONG BytesRead;
+        LONGLONG BytesWritten;
+        LONGLONG ReadTime;
+        LONGLONG WriteTime;
+        ULONG ReadCount;
+        ULONG WriteCount;
+    } Perf;
 } FDO_EXTENSION, *PFDO_EXTENSION;
+
+typedef struct _PARTMGR_PERFORMANCE_CONTEXT
+{
+    ULONGLONG StartTime;
+} PARTMGR_PERFORMANCE_CONTEXT, *PPARTMGR_PERFORMANCE_CONTEXT;
 
 typedef struct _PARTITION_EXTENSION
 {

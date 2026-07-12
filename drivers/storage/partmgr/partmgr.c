@@ -940,6 +940,92 @@ FdoIoctlDiskDeleteDriveLayout(
     return status;
 }
 
+// NOT paged: manipulates the performance counters under a spin lock
+static
+NTSTATUS
+FdoIoctlDiskPerformance(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _In_ PIRP Irp)
+{
+    if (!VerifyIrpOutBufferSize(Irp, sizeof(DISK_PERFORMANCE)))
+        return STATUS_BUFFER_TOO_SMALL;
+
+    LARGE_INTEGER now;
+    KeQuerySystemTime(&now);
+
+    PDISK_PERFORMANCE performance = Irp->AssociatedIrp.SystemBuffer;
+    RtlZeroMemory(performance, sizeof(*performance));
+
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&FdoExtension->Perf.Lock, &oldIrql);
+
+    // Capture the time under the lock (see PartMgrReadWrite)
+    ULONGLONG interruptTime = KeQueryInterruptTime();
+
+    if (FdoExtension->Perf.ReferenceCount == MAXLONG)
+    {
+        KeReleaseSpinLock(&FdoExtension->Perf.Lock, oldIrql);
+        Irp->IoStatus.Information = 0;
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (FdoExtension->Perf.ReferenceCount == 0)
+        FdoExtension->Perf.IdleStartTime = interruptTime;
+    FdoExtension->Perf.ReferenceCount++;
+
+    performance->BytesRead.QuadPart = FdoExtension->Perf.BytesRead;
+    performance->BytesWritten.QuadPart = FdoExtension->Perf.BytesWritten;
+    performance->ReadTime.QuadPart = FdoExtension->Perf.ReadTime;
+    performance->WriteTime.QuadPart = FdoExtension->Perf.WriteTime;
+    performance->IdleTime.QuadPart = FdoExtension->Perf.IdleTime;
+    if (FdoExtension->Perf.OutstandingRequests == 0)
+    {
+        performance->IdleTime.QuadPart +=
+            interruptTime - FdoExtension->Perf.IdleStartTime;
+    }
+    performance->ReadCount = FdoExtension->Perf.ReadCount;
+    performance->WriteCount = FdoExtension->Perf.WriteCount;
+    performance->QueueDepth = FdoExtension->Perf.OutstandingRequests;
+    performance->QueryTime = now;
+    performance->StorageDeviceNumber = FdoExtension->DiskData.DeviceNumber;
+
+    KeReleaseSpinLock(&FdoExtension->Perf.Lock, oldIrql);
+
+    RtlCopyMemory(performance->StorageManagerName,
+                  L"PARTMGR ",
+                  sizeof(performance->StorageManagerName));
+    Irp->IoStatus.Information = sizeof(*performance);
+    return STATUS_SUCCESS;
+}
+
+// NOT paged: manipulates the performance counters under a spin lock
+static
+NTSTATUS
+FdoIoctlDiskPerformanceOff(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _In_ PIRP Irp)
+{
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&FdoExtension->Perf.Lock, &oldIrql);
+
+    // Capture the time under the lock (see PartMgrReadWrite)
+    ULONGLONG now = KeQueryInterruptTime();
+
+    if (FdoExtension->Perf.ReferenceCount > 0)
+    {
+        FdoExtension->Perf.ReferenceCount--;
+        if (FdoExtension->Perf.ReferenceCount == 0 &&
+            FdoExtension->Perf.OutstandingRequests == 0)
+        {
+            FdoExtension->Perf.IdleTime +=
+                now - FdoExtension->Perf.IdleStartTime;
+        }
+    }
+
+    KeReleaseSpinLock(&FdoExtension->Perf.Lock, oldIrql);
+    Irp->IoStatus.Information = 0;
+    return STATUS_SUCCESS;
+}
+
 static
 CODE_SEG("PAGE")
 NTSTATUS
@@ -1129,12 +1215,18 @@ FdoHandleRemoveDevice(
         RtlInitUnicodeString(&FdoExtension->DiskInterfaceName, NULL);
     }
 
+    // Block new perf-counted I/O and wait for in-flight requests whose
+    // completion routine still references this extension and its lookaside
+    IoAcquireRemoveLock(&FdoExtension->Perf.RemoveLock, Irp);
+    IoReleaseRemoveLockAndWait(&FdoExtension->Perf.RemoveLock, Irp);
+
     // Send the IRP down the stack
     IoSkipCurrentIrpStackLocation(Irp);
     Irp->IoStatus.Status = STATUS_SUCCESS;
     NTSTATUS status = IoCallDriver(FdoExtension->LowerDevice, Irp);
 
     IoDetachDevice(FdoExtension->LowerDevice);
+    ExDeleteNPagedLookasideList(&FdoExtension->Perf.ContextLookaside);
     IoDeleteDevice(FdoExtension->DeviceObject);
     return status;
 }
@@ -1216,6 +1308,15 @@ PartMgrAddDevice(
     }
     deviceExtension->PhysicalDiskDO = PhysicalDeviceObject;
     KeInitializeEvent(&deviceExtension->SyncEvent, SynchronizationEvent, TRUE);
+    IoInitializeRemoveLock(&deviceExtension->Perf.RemoveLock, TAG_PARTMGR, 0, 0);
+    KeInitializeSpinLock(&deviceExtension->Perf.Lock);
+    ExInitializeNPagedLookasideList(&deviceExtension->Perf.ContextLookaside,
+                                    NULL,
+                                    NULL,
+                                    0,
+                                    sizeof(PARTMGR_PERFORMANCE_CONTEXT),
+                                    TAG_PARTMGR,
+                                    0);
 
     // Update now the device type with the actual underlying device type
     deviceObject->DeviceType = deviceExtension->LowerDevice->DeviceType;
@@ -1251,6 +1352,14 @@ PartMgrDeviceControl(
 
     switch (ioStack->Parameters.DeviceIoControl.IoControlCode)
     {
+        case IOCTL_DISK_PERFORMANCE:
+            status = FdoIoctlDiskPerformance(fdoExtension, Irp);
+            break;
+
+        case IOCTL_DISK_PERFORMANCE_OFF:
+            status = FdoIoctlDiskPerformanceOff(fdoExtension, Irp);
+            break;
+
         case IOCTL_DISK_GET_DRIVE_GEOMETRY_EX:
             status = FdoIoctlDiskGetDriveGeometryEx(fdoExtension, Irp);
             break;
@@ -1375,6 +1484,56 @@ PartMgrPnp(
 static
 NTSTATUS
 NTAPI
+PartMgrReadWriteCompletion(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ PIRP Irp,
+    _In_ PVOID Context)
+{
+    PFDO_EXTENSION fdoExtension = DeviceObject->DeviceExtension;
+    PPARTMGR_PERFORMANCE_CONTEXT perfContext = Context;
+    // failed transfers leave no meaningful byte count behind
+    ULONGLONG transferred =
+        NT_SUCCESS(Irp->IoStatus.Status) ? Irp->IoStatus.Information : 0;
+
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&fdoExtension->Perf.Lock, &oldIrql);
+
+    // Capture the time under the lock (see PartMgrReadWrite)
+    ULONGLONG now = KeQueryInterruptTime();
+    LONGLONG elapsed = now - perfContext->StartTime;
+
+    if (IoGetCurrentIrpStackLocation(Irp)->MajorFunction == IRP_MJ_READ)
+    {
+        fdoExtension->Perf.BytesRead += transferred;
+        fdoExtension->Perf.ReadTime += elapsed;
+        fdoExtension->Perf.ReadCount++;
+    }
+    else
+    {
+        fdoExtension->Perf.BytesWritten += transferred;
+        fdoExtension->Perf.WriteTime += elapsed;
+        fdoExtension->Perf.WriteCount++;
+    }
+
+    ASSERT(fdoExtension->Perf.OutstandingRequests > 0);
+    fdoExtension->Perf.OutstandingRequests--;
+    if (fdoExtension->Perf.OutstandingRequests == 0)
+        fdoExtension->Perf.IdleStartTime = now;
+
+    KeReleaseSpinLock(&fdoExtension->Perf.Lock, oldIrql);
+
+    ExFreeToNPagedLookasideList(&fdoExtension->Perf.ContextLookaside,
+                                perfContext);
+    IoReleaseRemoveLock(&fdoExtension->Perf.RemoveLock, Irp);
+
+    if (Irp->PendingReturned)
+        IoMarkIrpPending(Irp);
+    return STATUS_CONTINUE_COMPLETION;
+}
+
+static
+NTSTATUS
+NTAPI
 PartMgrReadWrite(
     _In_ PDEVICE_OBJECT DeviceObject,
     _In_ PIRP Irp)
@@ -1390,14 +1549,64 @@ PartMgrReadWrite(
             IoCompleteRequest(Irp, IO_NO_INCREMENT);
             return STATUS_DEVICE_DOES_NOT_EXIST;
         }
-        else
-        {
-            ioStack->Parameters.Read.ByteOffset.QuadPart += partExt->StartingOffset;
-        }
+
+        ioStack->Parameters.Read.ByteOffset.QuadPart += partExt->StartingOffset;
+        return ForwardIrpAndForget(DeviceObject, Irp);
     }
 
-    IoSkipCurrentIrpStackLocation(Irp);
-    return IoCallDriver(partExt->LowerDevice, Irp);
+    PFDO_EXTENSION fdoExtension = (PFDO_EXTENSION)partExt;
+
+    // Counters are off until IOCTL_DISK_PERFORMANCE enables them; the
+    // unlocked read only gates the fast path (rechecked under the lock)
+    if (fdoExtension->Perf.ReferenceCount == 0)
+        return ForwardIrpAndForget(DeviceObject, Irp);
+
+    // The armed completion routine will touch the extension and the
+    // lookaside after this dispatch returns; hold the device alive
+    if (!NT_SUCCESS(IoAcquireRemoveLock(&fdoExtension->Perf.RemoveLock, Irp)))
+        return ForwardIrpAndForget(DeviceObject, Irp);
+
+    PPARTMGR_PERFORMANCE_CONTEXT perfContext =
+        ExAllocateFromNPagedLookasideList(&fdoExtension->Perf.ContextLookaside);
+    if (!perfContext)
+    {
+        IoReleaseRemoveLock(&fdoExtension->Perf.RemoveLock, Irp);
+        return ForwardIrpAndForget(DeviceObject, Irp);
+    }
+
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&fdoExtension->Perf.Lock, &oldIrql);
+
+    // Capture the time under the lock: IdleStartTime updates are
+    // lock-ordered, keeping every idle delta non-negative
+    ULONGLONG now = KeQueryInterruptTime();
+
+    if (fdoExtension->Perf.ReferenceCount == 0)
+    {
+        KeReleaseSpinLock(&fdoExtension->Perf.Lock, oldIrql);
+        ExFreeToNPagedLookasideList(&fdoExtension->Perf.ContextLookaside,
+                                    perfContext);
+        IoReleaseRemoveLock(&fdoExtension->Perf.RemoveLock, Irp);
+        return ForwardIrpAndForget(DeviceObject, Irp);
+    }
+    if (fdoExtension->Perf.OutstandingRequests == 0)
+    {
+        fdoExtension->Perf.IdleTime +=
+            now - fdoExtension->Perf.IdleStartTime;
+    }
+    fdoExtension->Perf.OutstandingRequests++;
+    KeReleaseSpinLock(&fdoExtension->Perf.Lock, oldIrql);
+
+    perfContext->StartTime = now;
+
+    IoCopyCurrentIrpStackLocationToNext(Irp);
+    IoSetCompletionRoutine(Irp,
+                           PartMgrReadWriteCompletion,
+                           perfContext,
+                           TRUE,
+                           TRUE,
+                           TRUE);
+    return IoCallDriver(fdoExtension->LowerDevice, Irp);
 }
 
 DRIVER_DISPATCH PartMgrPower;
