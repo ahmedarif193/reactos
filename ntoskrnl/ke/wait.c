@@ -126,6 +126,7 @@ VOID
 FASTCALL
 KiUnlinkWaitBlocks(IN PKTHREAD Thread)
 {
+#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
     PKWAIT_BLOCK WaitBlockArray = Thread->WaitBlockList;
     ULONG Count = Thread->WaitBlockCount;
     ULONG Index;
@@ -148,6 +149,32 @@ KiUnlinkWaitBlocks(IN PKTHREAD Thread)
         }
         KiReleaseDispatcherObject(Object);
     }
+#else
+    PKWAIT_BLOCK FirstWaitBlock, WaitBlock, NextWaitBlock;
+    PDISPATCHER_HEADER Object;
+
+    FirstWaitBlock = Thread->WaitBlockList;
+    WaitBlock = FirstWaitBlock;
+    do
+    {
+        NextWaitBlock = WaitBlock->NextWaitBlock;
+        Object = (PDISPATCHER_HEADER)WaitBlock->Object;
+
+        if ((Object != NULL) && (WaitBlock->WaitListEntry.Flink != NULL))
+        {
+            KiAcquireDispatcherObject(Object);
+            if (WaitBlock->WaitListEntry.Flink != NULL)
+            {
+                RemoveEntryList(&WaitBlock->WaitListEntry);
+                WaitBlock->WaitListEntry.Flink = NULL;
+                WaitBlock->BlockState = WaitBlockInactive;
+            }
+            KiReleaseDispatcherObject(Object);
+        }
+
+        WaitBlock = NextWaitBlock;
+    } while (WaitBlock != FirstWaitBlock);
+#endif
 }
 
 /* Must be called with the dispatcher lock held */
