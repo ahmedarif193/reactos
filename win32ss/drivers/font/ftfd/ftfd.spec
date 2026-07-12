@@ -62,6 +62,7 @@
   @ cdecl FT_Glyph_Transform ()
   @ cdecl FT_Has_PS_Glyph_Names ()
   @ cdecl FT_Init_FreeType ()
+  @ cdecl FT_Library_SetLcdFilter ()
   @ cdecl FT_Library_Version ()
   @ cdecl FT_List_Add ()
   @ cdecl FT_List_Finalize ()
