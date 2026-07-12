@@ -817,6 +817,213 @@ IntEngBitBlt(
 
 /**** REACTOS FONT RENDERING CODE *********************************************/
 
+#define TEXT_GAMMA_MIN          1000
+#define TEXT_GAMMA_MAX          2200
+#define TEXT_GAMMA_FIXED_SHIFT  20
+#define TEXT_GAMMA_FIXED_ONE    (1UL << TEXT_GAMMA_FIXED_SHIFT)
+
+static ULONG gulTextGammaContrast = MAXULONG;
+static USHORT gausTextLinear[256];
+static BYTE gajTextDelinear[1025];
+
+/* The only 8-bpp caller holds the FreeType lock, serializing table rebuilds. */
+
+static ULONG
+TextIntegerSquareRoot(ULONGLONG Value)
+{
+    ULONGLONG Bit = (ULONGLONG)1 << 62;
+    ULONGLONG Result = 0;
+
+    while (Bit > Value)
+        Bit >>= 2;
+
+    while (Bit != 0)
+    {
+        if (Value >= Result + Bit)
+        {
+            Value -= Result + Bit;
+            Result = (Result >> 1) + Bit;
+        }
+        else
+        {
+            Result >>= 1;
+        }
+        Bit >>= 2;
+    }
+
+    return (ULONG)Result;
+}
+
+static inline ULONG
+TextMultiplyFixed(ULONG First, ULONG Second)
+{
+    return (ULONG)(((ULONGLONG)First * Second + (TEXT_GAMMA_FIXED_ONE / 2)) >>
+                   TEXT_GAMMA_FIXED_SHIFT);
+}
+
+static ULONG
+TextPowerFixed(BYTE Value, ULONG Contrast)
+{
+    ULONG Base, Result, Extra, Fraction, Root, Bit;
+
+    if (Value == 0)
+        return 0;
+    if (Value == 0xFF)
+        return TEXT_GAMMA_FIXED_ONE;
+
+    Base = ((ULONG)Value * TEXT_GAMMA_FIXED_ONE + 127) / 255;
+    Result = Base;
+    Extra = Contrast - 1000;
+
+    if (Extra >= 1000)
+    {
+        Result = TextMultiplyFixed(Result, Base);
+        Extra -= 1000;
+    }
+
+    if (Extra == 0)
+        return Result;
+
+    /* Apply the fractional exponent as successive square roots of Base. */
+    Fraction = (Extra * 0x10000UL + 500) / 1000;
+    Root = Base;
+    for (Bit = 0x8000; Bit != 0; Bit >>= 1)
+    {
+        Root = TextIntegerSquareRoot((ULONGLONG)Root << TEXT_GAMMA_FIXED_SHIFT);
+        if (Fraction & Bit)
+            Result = TextMultiplyFixed(Result, Root);
+    }
+
+    return Result;
+}
+
+static VOID
+BuildTextGammaTables(ULONG Contrast)
+{
+    ULONG i, Encoded = 0;
+
+    for (i = 0; i < _countof(gausTextLinear); ++i)
+    {
+        ULONG Fixed = TextPowerFixed((BYTE)i, Contrast);
+        gausTextLinear[i] = (USHORT)(((ULONGLONG)Fixed * 65535 +
+                                      (TEXT_GAMMA_FIXED_ONE / 2)) >>
+                                     TEXT_GAMMA_FIXED_SHIFT);
+    }
+
+    for (i = 0; i < _countof(gajTextDelinear); ++i)
+    {
+        ULONG Target = min(i << 6, 65535UL);
+
+        while (Encoded < 255)
+        {
+            ULONG CurrentDistance, NextDistance;
+
+            CurrentDistance = (gausTextLinear[Encoded] > Target) ?
+                gausTextLinear[Encoded] - Target : Target - gausTextLinear[Encoded];
+            NextDistance = (gausTextLinear[Encoded + 1] > Target) ?
+                gausTextLinear[Encoded + 1] - Target : Target - gausTextLinear[Encoded + 1];
+            if (NextDistance > CurrentDistance)
+                break;
+            ++Encoded;
+        }
+        gajTextDelinear[i] = (BYTE)Encoded;
+    }
+
+    gulTextGammaContrast = Contrast;
+}
+
+static inline VOID
+EnsureTextGammaTables(VOID)
+{
+    ULONG Contrast = min(max(gspv.uiFontSmoothingContrast, TEXT_GAMMA_MIN), TEXT_GAMMA_MAX);
+
+    if (Contrast != gulTextGammaContrast)
+        BuildTextGammaTables(Contrast);
+}
+
+static inline BYTE
+TextDelinearize(ULONG Linear)
+{
+    ULONG Index = (Linear + 32) >> 6;
+
+    return gajTextDelinear[min(Index, 1024UL)];
+}
+
+static inline BYTE
+TextBlendChannel(BYTE Background, BYTE Foreground, USHORT LinearForeground, BYTE Alpha)
+{
+    LONG Difference, Linear;
+
+    if (Alpha == 0)
+        return Background;
+    if (Alpha == 0xFF)
+        return Foreground;
+
+    Difference = (LONG)LinearForeground - gausTextLinear[Background];
+    Linear = gausTextLinear[Background] + ((LONG)Alpha * Difference) / 255;
+    return TextDelinearize((ULONG)Linear);
+}
+
+/* Per-blt invariants of the text blend loops, hoisted out of the
+   per-pixel path */
+typedef struct _TEXT_BLEND_CONTEXT
+{
+    SURFOBJ *psoDest;
+    XLATEOBJ *pxloRGB2Dest;
+    XLATEOBJ *pxloBrush;
+    PFN_DIB_PutPixel pfnPutPixel;
+    ULONG ulSolidColor;                 /* brush in destination format */
+    BYTE FgRed, FgGreen, FgBlue;        /* brush channels in RGB */
+    USHORT LinFgRed, LinFgGreen, LinFgBlue;
+} TEXT_BLEND_CONTEXT, *PTEXT_BLEND_CONTEXT;
+
+static VOID
+TextBlendInit(
+    PTEXT_BLEND_CONTEXT Blend,
+    SURFOBJ *psoDest,
+    XLATEOBJ *pxloRGB2Dest,
+    XLATEOBJ *pxloBrush,
+    BRUSHOBJ *pbo)
+{
+    ULONG BrushColor;
+
+    Blend->psoDest = psoDest;
+    Blend->pxloRGB2Dest = pxloRGB2Dest;
+    Blend->pxloBrush = pxloBrush;
+    Blend->pfnPutPixel = DibFunctionsForBitmapFormat[psoDest->iBitmapFormat].DIB_PutPixel;
+    Blend->ulSolidColor = pbo ? pbo->iSolidColor : 0;
+
+    BrushColor = XLATEOBJ_iXlate(pxloBrush, Blend->ulSolidColor);
+    Blend->FgRed = GetRValue(BrushColor);
+    Blend->FgGreen = GetGValue(BrushColor);
+    Blend->FgBlue = GetBValue(BrushColor);
+    Blend->LinFgRed = gausTextLinear[Blend->FgRed];
+    Blend->LinFgGreen = gausTextLinear[Blend->FgGreen];
+    Blend->LinFgBlue = gausTextLinear[Blend->FgBlue];
+}
+
+static inline VOID
+TextBlendPixel(
+    const TEXT_BLEND_CONTEXT *Blend,
+    LONG x,
+    LONG y,
+    BYTE AlphaRed,
+    BYTE AlphaGreen,
+    BYTE AlphaBlue)
+{
+    ULONG Background, NewColor;
+
+    Background = DIB_GetSource(Blend->psoDest, x, y, Blend->pxloBrush);
+
+    NewColor =
+        RGB(TextBlendChannel(GetRValue(Background), Blend->FgRed, Blend->LinFgRed, AlphaRed),
+            TextBlendChannel(GetGValue(Background), Blend->FgGreen, Blend->LinFgGreen, AlphaGreen),
+            TextBlendChannel(GetBValue(Background), Blend->FgBlue, Blend->LinFgBlue, AlphaBlue));
+
+    Blend->pfnPutPixel(Blend->psoDest, x, y,
+                       XLATEOBJ_iXlate(Blend->pxloRGB2Dest, NewColor));
+}
+
 /* renders the alpha mask bitmap */
 static BOOLEAN APIENTRY
 AlphaBltMask(SURFOBJ* psoDest,
@@ -831,8 +1038,7 @@ AlphaBltMask(SURFOBJ* psoDest,
              POINTL* pptlBrush)
 {
     LONG i, j, dx, dy;
-    int r, g, b;
-    ULONG Background, BrushColor, NewColor;
+    TEXT_BLEND_CONTEXT Blend;
     BYTE *tMask, *lMask;
 
     ASSERT(psoSource == NULL);
@@ -841,52 +1047,109 @@ AlphaBltMask(SURFOBJ* psoDest,
     dx = prclDest->right  - prclDest->left;
     dy = prclDest->bottom - prclDest->top;
 
-    if (psoMask != NULL)
-    {
-        BrushColor = XLATEOBJ_iXlate(pxloBrush, pbo ? pbo->iSolidColor : 0);
-        r = (int)GetRValue(BrushColor);
-        g = (int)GetGValue(BrushColor);
-        b = (int)GetBValue(BrushColor);
-
-        tMask = (PBYTE)psoMask->pvScan0 + (pptlMask->y * psoMask->lDelta) + pptlMask->x;
-        for (j = 0; j < dy; j++)
-        {
-            lMask = tMask;
-            for (i = 0; i < dx; i++)
-            {
-                if (*lMask > 0)
-                {
-                    if (*lMask == 0xff)
-                    {
-                        DibFunctionsForBitmapFormat[psoDest->iBitmapFormat].DIB_PutPixel(
-                            psoDest, prclDest->left + i, prclDest->top + j, pbo ? pbo->iSolidColor : 0);
-                    }
-                    else
-                    {
-                        Background = DIB_GetSource(psoDest, prclDest->left + i, prclDest->top + j,
-                                                   pxloBrush);
-
-                        NewColor =
-                            RGB((*lMask * (r - GetRValue(Background)) >> 8) + GetRValue(Background),
-                                (*lMask * (g - GetGValue(Background)) >> 8) + GetGValue(Background),
-                                (*lMask * (b - GetBValue(Background)) >> 8) + GetBValue(Background));
-
-                        Background = XLATEOBJ_iXlate(pxloRGB2Dest, NewColor);
-                        DibFunctionsForBitmapFormat[psoDest->iBitmapFormat].DIB_PutPixel(
-                            psoDest, prclDest->left + i, prclDest->top + j, Background);
-                    }
-                }
-                lMask++;
-            }
-            tMask += psoMask->lDelta;
-        }
-        return TRUE;
-    }
-    else
-    {
+    if (psoMask == NULL)
         return FALSE;
+
+    TextBlendInit(&Blend, psoDest, pxloRGB2Dest, pxloBrush, pbo);
+    tMask = (PBYTE)psoMask->pvScan0 + (pptlMask->y * psoMask->lDelta) + pptlMask->x;
+
+    for (j = 0; j < dy; j++)
+    {
+        lMask = tMask;
+        for (i = 0; i < dx; i++)
+        {
+            if (*lMask > 0)
+            {
+                if (*lMask == 0xff)
+                {
+                    Blend.pfnPutPixel(psoDest, prclDest->left + i,
+                                      prclDest->top + j, Blend.ulSolidColor);
+                }
+                else
+                {
+                    TextBlendPixel(&Blend, prclDest->left + i, prclDest->top + j,
+                                   *lMask, *lMask, *lMask);
+                }
+            }
+            lMask++;
+        }
+        tMask += psoMask->lDelta;
     }
+
+    return TRUE;
 }
+
+/* renders an RGB horizontal subpixel alpha mask bitmap */
+static BOOLEAN APIENTRY
+LcdBltMask(SURFOBJ* psoDest,
+           SURFOBJ* psoSource, // unused
+           SURFOBJ* psoMask,
+           XLATEOBJ* pxloRGB2Dest,
+           XLATEOBJ* pxloBrush,
+           RECTL* prclDest,
+           POINTL* pptlSource, // unused
+           POINTL* pptlMask,
+           BRUSHOBJ* pbo,
+           POINTL* pptlBrush)
+{
+    LONG i, j, dx, dy;
+    TEXT_BLEND_CONTEXT Blend;
+    BYTE *tMask, *lMask;
+    BOOL bGrayscale;
+
+    ASSERT(psoSource == NULL);
+    ASSERT(pptlSource == NULL);
+
+    dx = prclDest->right - prclDest->left;
+    dy = prclDest->bottom - prclDest->top;
+
+    if (psoMask == NULL)
+        return FALSE;
+
+    TextBlendInit(&Blend, psoDest, pxloRGB2Dest, pxloBrush, pbo);
+    bGrayscale = (psoDest->iBitmapFormat <= BMF_8BPP);
+    tMask = (PBYTE)psoMask->pvScan0 + (pptlMask->y * psoMask->lDelta) + pptlMask->x;
+
+    for (j = 0; j < dy; ++j)
+    {
+        lMask = tMask;
+        for (i = 0; i < dx; ++i)
+        {
+            BYTE AlphaRed = lMask[0];
+            BYTE AlphaGreen = lMask[1];
+            BYTE AlphaBlue = lMask[2];
+
+            if (AlphaRed != 0 || AlphaGreen != 0 || AlphaBlue != 0)
+            {
+                if (AlphaRed == 0xFF && AlphaGreen == 0xFF && AlphaBlue == 0xFF)
+                {
+                    Blend.pfnPutPixel(psoDest, prclDest->left + i,
+                                      prclDest->top + j, Blend.ulSolidColor);
+                }
+                else
+                {
+                    if (bGrayscale)
+                    {
+                        BYTE Alpha = (BYTE)((AlphaRed + AlphaGreen + AlphaBlue + 1) / 3);
+                        AlphaRed = AlphaGreen = AlphaBlue = Alpha;
+                    }
+
+                    TextBlendPixel(&Blend, prclDest->left + i, prclDest->top + j,
+                                   AlphaRed, AlphaGreen, AlphaBlue);
+                }
+            }
+            lMask += 3;
+        }
+        tMask += psoMask->lDelta;
+    }
+
+    return TRUE;
+}
+
+/* Both 8-bpp text blitters deliberately share this signature */
+typedef BOOLEAN (APIENTRY *PFN_TextMaskBlt)(
+    SURFOBJ*, SURFOBJ*, SURFOBJ*, XLATEOBJ*, XLATEOBJ*,
+    RECTL*, POINTL*, POINTL*, BRUSHOBJ*, POINTL*);
 
 static
 BOOL APIENTRY
@@ -898,7 +1161,8 @@ EngMaskBitBlt(SURFOBJ *psoDest,
               RECTL *DestRect,
               POINTL *pptlMask,
               BRUSHOBJ *pbo,
-              POINTL *BrushOrigin)
+              POINTL *BrushOrigin,
+              BOOL bSubpixel)
 {
     BYTE               clippingType;
     RECTL              CombinedRect;
@@ -918,20 +1182,23 @@ EngMaskBitBlt(SURFOBJ *psoDest,
     POINTL             Pt;
     ULONG              Direction;
     POINTL             AdjustedBrushOrigin;
+    LONG               MaskXScale = bSubpixel ? 3 : 1;
+    PFN_TextMaskBlt    pfnTextMaskBlt = bSubpixel ? LcdBltMask : AlphaBltMask;
 
     ASSERT(psoMask);
 
     if (pptlMask)
     {
-        InputRect.left = pptlMask->x;
-        InputRect.right = pptlMask->x + (DestRect->right - DestRect->left);
+        InputRect.left = pptlMask->x * MaskXScale;
+        InputRect.right = InputRect.left +
+                          (DestRect->right - DestRect->left) * MaskXScale;
         InputRect.top = pptlMask->y;
         InputRect.bottom = pptlMask->y + (DestRect->bottom - DestRect->top);
     }
     else
     {
         InputRect.left = 0;
-        InputRect.right = DestRect->right - DestRect->left;
+        InputRect.right = (DestRect->right - DestRect->left) * MaskXScale;
         InputRect.top = 0;
         InputRect.bottom = DestRect->bottom - DestRect->top;
     }
@@ -941,12 +1208,12 @@ EngMaskBitBlt(SURFOBJ *psoDest,
     {
         if (OutputRect.left < ClipRegion->rclBounds.left)
         {
-            InputRect.left += ClipRegion->rclBounds.left - OutputRect.left;
+            InputRect.left += (ClipRegion->rclBounds.left - OutputRect.left) * MaskXScale;
             OutputRect.left = ClipRegion->rclBounds.left;
         }
         if (ClipRegion->rclBounds.right < OutputRect.right)
         {
-            InputRect.right -=  OutputRect.right - ClipRegion->rclBounds.right;
+            InputRect.right -= (OutputRect.right - ClipRegion->rclBounds.right) * MaskXScale;
             OutputRect.right = ClipRegion->rclBounds.right;
         }
         if (OutputRect.top < ClipRegion->rclBounds.top)
@@ -1008,8 +1275,9 @@ EngMaskBitBlt(SURFOBJ *psoDest,
     {
         case DC_TRIVIAL:
             if (psoMask->iBitmapFormat == BMF_8BPP)
-                Ret = AlphaBltMask(psoOutput, NULL , psoInput, DestColorTranslation, SourceColorTranslation,
-                                   &OutputRect, NULL, &InputPoint, pbo, &AdjustedBrushOrigin);
+                Ret = pfnTextMaskBlt(psoOutput, NULL, psoInput, DestColorTranslation,
+                                     SourceColorTranslation, &OutputRect, NULL, &InputPoint,
+                                     pbo, &AdjustedBrushOrigin);
             else
                 Ret = BltMask(psoOutput, NULL, psoInput, DestColorTranslation,
                               &OutputRect, NULL, &InputPoint, pbo, &AdjustedBrushOrigin,
@@ -1023,12 +1291,14 @@ EngMaskBitBlt(SURFOBJ *psoDest,
             ClipRect.bottom = ClipRegion->rclBounds.bottom + Translate.y;
             if (RECTL_bIntersectRect(&CombinedRect, &OutputRect, &ClipRect))
             {
-                Pt.x = InputPoint.x + CombinedRect.left - OutputRect.left;
+                Pt.x = InputPoint.x +
+                       (CombinedRect.left - OutputRect.left) * MaskXScale;
                 Pt.y = InputPoint.y + CombinedRect.top - OutputRect.top;
                 if (psoMask->iBitmapFormat == BMF_8BPP)
                 {
-                    Ret = AlphaBltMask(psoOutput, NULL, psoInput, DestColorTranslation, SourceColorTranslation,
-                                       &CombinedRect, NULL, &Pt, pbo, &AdjustedBrushOrigin);
+                    Ret = pfnTextMaskBlt(psoOutput, NULL, psoInput, DestColorTranslation,
+                                         SourceColorTranslation, &CombinedRect, NULL, &Pt,
+                                         pbo, &AdjustedBrushOrigin);
                 }
                 else
                 {
@@ -1067,15 +1337,16 @@ EngMaskBitBlt(SURFOBJ *psoDest,
                     ClipRect.bottom = RectEnum.arcl[i].bottom + Translate.y;
                     if (RECTL_bIntersectRect(&CombinedRect, &OutputRect, &ClipRect))
                     {
-                        Pt.x = InputPoint.x + CombinedRect.left - OutputRect.left;
+                        Pt.x = InputPoint.x +
+                               (CombinedRect.left - OutputRect.left) * MaskXScale;
                         Pt.y = InputPoint.y + CombinedRect.top - OutputRect.top;
                         if (psoMask->iBitmapFormat == BMF_8BPP)
                         {
-                            Ret = AlphaBltMask(psoOutput, NULL, psoInput,
-                                               DestColorTranslation,
-                                               SourceColorTranslation,
-                                               &CombinedRect, NULL, &Pt, pbo,
-                                               &AdjustedBrushOrigin) && Ret;
+                            Ret = pfnTextMaskBlt(psoOutput, NULL, psoInput,
+                                                 DestColorTranslation,
+                                                 SourceColorTranslation,
+                                                 &CombinedRect, NULL, &Pt, pbo,
+                                                 &AdjustedBrushOrigin) && Ret;
                         }
                         else
                         {
@@ -1109,7 +1380,8 @@ IntEngMaskBlt(
     _In_ RECTL *prclDest,
     _In_ POINTL *pptlMask,
     _In_ BRUSHOBJ *pbo,
-    _In_ POINTL *pptlBrushOrg)
+    _In_ POINTL *pptlBrushOrg,
+    _In_ BOOL bSubpixel)
 {
     BOOLEAN ret;
     RECTL rcDest;
@@ -1138,6 +1410,7 @@ IntEngMaskBlt(
     }
 
     ASSERT(psoMask->iBitmapFormat == BMF_8BPP);
+    EnsureTextGammaTables();
 
     if (pptlMask)
     {
@@ -1204,7 +1477,8 @@ IntEngMaskBlt(
                                 &rcTemp,
                                 &ptMask,
                                 pbo,
-                                pptlBrushOrg);
+                                pptlBrushOrg,
+                                bSubpixel);
         }
 
         if (ret)
@@ -1232,7 +1506,8 @@ IntEngMaskBlt(
                             &rcDest,
                             &ptMask,
                             pbo,
-                            pptlBrushOrg);
+                            pptlBrushOrg,
+                            bSubpixel);
     }
 
     return ret;
