@@ -345,6 +345,7 @@ enum IconId
     IC_DISABLE,       /* slash circle      */
     IC_REFRESH,
     IC_OPENFOLDER,
+    IC_OPENAPP,
     IC_WINDOW,        /* generic app       */
 };
 
@@ -434,8 +435,12 @@ struct StartupRow
 struct AppHistRow
 {
     WCHAR    image[64];
+    WCHAR    displayName[128];
+    WCHAR    path[MAX_PATH];
     LONGLONG cpu100ns;
     ULONGLONG netBytes;
+    ULONGLONG notificationBytes;
+    HICON     icon;             /* owned by the data engine; not persisted */
 };
 
 struct SysSnapshot
@@ -529,6 +534,10 @@ namespace Data
 
     Vec<AppHistRow>& AppHistory(void);
     void ClearAppHistory(void);
+    void GetAppHistorySince(FILETIME* since);
+    BOOL AppHistoryNetworkAvailable(void);
+    BOOL AppHistoryNotificationsAvailable(void);
+    BOOL OpenAppHistory(const AppHistRow& app);
 
     ProcRow* FindProc(ULONG pid);
 
@@ -583,6 +592,10 @@ struct ITreeListOwner
 {
     virtual void TLCellText(LPARAM data, int col, WCHAR* buf, int cch) = 0;
     virtual double TLCellHeat(LPARAM data, int col) { (void)data; (void)col; return -1.0; }
+    virtual COLORREF TLCellHeatBackground(LPARAM data, int col, double heat)
+    { (void)data; (void)col; return HeatBg(heat); }
+    virtual COLORREF TLCellHeatText(LPARAM data, int col, double heat)
+    { (void)data; (void)col; return HeatText(heat); }
     virtual HICON TLRowIcon(LPARAM data) { (void)data; return NULL; }
     virtual int  TLRowGlyph(LPARAM data) { (void)data; return IC_NONE; }        /* fallback icon glyph */
     virtual int  TLStatusGlyph(LPARAM data, int col, COLORREF* c) { (void)data; (void)col; (void)c; return IC_NONE; }
@@ -716,13 +729,13 @@ enum
     CMD_ENDTASK,
     CMD_EFFICIENCY,
     CMD_MORE,
-    CMD_DELHISTORY,
     CMD_STARTUP_ENABLE,
     CMD_STARTUP_DISABLE,
     CMD_USER_DISCONNECT,
     CMD_USER_LOGOFF,
     CMD_SVC_OPENMSC,
     CMD_COPY,
+    CMD_OPENAPP,
     CMD_EXPANDALL,
     CMD_COLLAPSEALL,
 };
