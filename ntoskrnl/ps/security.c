@@ -491,13 +491,23 @@ PsOpenTokenOfProcess(IN HANDLE ProcessHandle,
     PAGED_CODE();
     PSTRACE(PS_SECURITY_DEBUG, "Process: %p\n", ProcessHandle);
 
-    /* Get the Token */
+    /* Get the Token; since Vista the limited right suffices, but keep
+       accepting handles that only hold the full query right */
     Status = ObReferenceObjectByHandle(ProcessHandle,
-                                       PROCESS_QUERY_INFORMATION,
+                                       PROCESS_QUERY_LIMITED_INFORMATION,
                                        PsProcessType,
                                        ExGetPreviousMode(),
                                        (PVOID*)&Process,
                                        NULL);
+    if (Status == STATUS_ACCESS_DENIED)
+    {
+        Status = ObReferenceObjectByHandle(ProcessHandle,
+                                           PROCESS_QUERY_INFORMATION,
+                                           PsProcessType,
+                                           ExGetPreviousMode(),
+                                           (PVOID*)&Process,
+                                           NULL);
+    }
     if (NT_SUCCESS(Status))
     {
         /* Reference the token and dereference the process */
