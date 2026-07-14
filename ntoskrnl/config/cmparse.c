@@ -1613,7 +1613,7 @@ CmpLookInCache(
          * Before we change the KCB we must dereference the prior
          * KCB that we no longer need it.
          */
-        CmpDereferenceKeyControlBlock(*Kcb);
+        CmpDelayDerefKeyControlBlock(*Kcb);
         *Kcb = CurrentKcb;
 
         /* Reference the new KCB now */
