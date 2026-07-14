@@ -177,6 +177,21 @@ extern LIST_ENTRY KiProcessInSwapListHead, KiProcessOutSwapListHead;
 extern LIST_ENTRY KiStackInSwapListHead;
 extern KEVENT KiSwapEvent;
 extern KAFFINITY KiIdleSummary;
+
+/* Atomically update a shared affinity summary on both 32-bit and 64-bit
+   builds. */
+#ifdef _WIN64
+# define InterlockedOrSetMember(Destination, SetMember) \
+    InterlockedOr64((PLONG64)Destination, SetMember)
+# define InterlockedAndClearMember(Destination, ClearMember) \
+    InterlockedAnd64((PLONG64)Destination, ~(LONG64)(ClearMember))
+#else
+# define InterlockedOrSetMember(Destination, SetMember) \
+    InterlockedOr((PLONG)Destination, SetMember)
+# define InterlockedAndClearMember(Destination, ClearMember) \
+    InterlockedAnd((PLONG)Destination, ~(LONG)(ClearMember))
+#endif
+
 extern PVOID KeUserApcDispatcher;
 extern PVOID KeUserCallbackDispatcher;
 extern PVOID KeUserExceptionDispatcher;
