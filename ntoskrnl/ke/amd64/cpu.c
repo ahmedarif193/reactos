@@ -575,7 +575,15 @@ VOID
 NTAPI
 KeFlushCurrentTb(VOID)
 {
-    /* Flush the TLB by resetting CR3 */
+    ULONG64 Cr4 = __readcr4();
+
+    if (Cr4 & CR4_PGE)
+    {
+        __writecr4(Cr4 & ~CR4_PGE);
+        __writecr4(Cr4);
+        return;
+    }
+
     __writecr3(__readcr3());
 }
 
@@ -704,12 +712,22 @@ KeFlushEntireTb(IN BOOLEAN Invalid,
 {
     KIRQL OldIrql;
 
-    // FIXME: halfplemented
     /* Raise the IRQL for the TB Flush */
     OldIrql = KeRaiseIrqlToSynchLevel();
 
-    /* Flush the TB for the Current CPU, and update the flush stamp */
+    /* Flush the requested processor set. */
+#ifdef CONFIG_SMP
+    if (AllProcessors)
+    {
+        KiIpiSendTbFlush((KAFFINITY)KeActiveProcessors, NULL, 0);
+    }
+    else
+    {
+        KeFlushCurrentTb();
+    }
+#else
     KeFlushCurrentTb();
+#endif
 
     /* Update the flush stamp and return to original IRQL */
     InterlockedExchangeAdd(&KiTbFlushTimeStamp, 1);
