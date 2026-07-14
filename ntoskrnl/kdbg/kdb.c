@@ -1618,14 +1618,12 @@ EnterKdbg:;
                   FirstChance ? "first" : "last", ExceptionCode, ExceptionString);
 
         if (ExceptionCode == STATUS_ACCESS_VIOLATION &&
-            ExceptionRecord && ExceptionRecord->NumberParameters != 0)
+            ExceptionRecord && ExceptionRecord->NumberParameters > 1)
         {
-#if defined(_M_ARM64)
             ULONG_PTR TrapCr2 = ExceptionRecord->ExceptionInformation[1];
-#else
-            ULONG_PTR TrapCr2 = __readcr2();
-#endif
             KdbPrintf("Memory at 0x%p could not be accessed\n", TrapCr2);
+            KdbPrintf("Memory access type: %lu\n",
+                      (ULONG)ExceptionRecord->ExceptionInformation[0]);
         }
     }
 
