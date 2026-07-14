@@ -704,12 +704,22 @@ KeFlushEntireTb(IN BOOLEAN Invalid,
 {
     KIRQL OldIrql;
 
-    // FIXME: halfplemented
     /* Raise the IRQL for the TB Flush */
     OldIrql = KeRaiseIrqlToSynchLevel();
 
-    /* Flush the TB for the Current CPU, and update the flush stamp */
+    /* Flush the requested processor set. */
+#ifdef CONFIG_SMP
+    if (AllProcessors)
+    {
+        KiIpiSendTbFlush(NULL, TRUE);
+    }
+    else
+    {
+        KeFlushCurrentTb();
+    }
+#else
     KeFlushCurrentTb();
+#endif
 
     /* Update the flush stamp and return to original IRQL */
     InterlockedExchangeAdd(&KiTbFlushTimeStamp, 1);

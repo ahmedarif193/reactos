@@ -66,6 +66,115 @@ KiIpiClaimDpcRequest(VOID)
     return InterlockedExchange((PLONG)&KiIpiDpcRequest[Processor], 0) != 0;
 }
 
+/* TLB SHOOTDOWN *************************************************************/
+
+typedef struct DECLSPEC_CACHEALIGN _KI_TB_FLUSH_PACKET
+{
+    volatile LONG Active;
+    volatile KAFFINITY Pending;
+    volatile KAFFINITY Outstanding;
+    PVOID Address;
+    BOOLEAN FlushEntire;
+} KI_TB_FLUSH_PACKET, *PKI_TB_FLUSH_PACKET;
+
+static KI_TB_FLUSH_PACKET KiTbFlushPacket[MAXIMUM_PROCESSORS];
+
+FORCEINLINE
+VOID
+KiFlushLocalTb(
+    _In_opt_ PVOID Address,
+    _In_ BOOLEAN FlushEntire)
+{
+    if (FlushEntire)
+    {
+        KeFlushCurrentTb();
+    }
+    else
+    {
+        __invlpg(Address);
+    }
+}
+
+VOID
+NTAPI
+KiIpiSendTbFlush(
+    _In_opt_ PVOID Address,
+    _In_ BOOLEAN FlushEntire)
+{
+    KAFFINITY Targets;
+    BOOLEAN InterruptsEnabled;
+    KIRQL OldIrql;
+    PKPRCB Prcb;
+    PKI_TB_FLUSH_PACKET Packet;
+
+    InterruptsEnabled = (__readeflags() & EFLAGS_INTERRUPT_MASK) != 0;
+    OldIrql = KeRaiseIrqlToSynchLevel();
+
+    Prcb = KeGetCurrentPrcb();
+    ASSERT(Prcb->Number < MAXIMUM_PROCESSORS);
+
+    KiFlushLocalTb(Address, FlushEntire);
+
+    Targets = (KAFFINITY)KeActiveProcessors & ~Prcb->SetMember;
+    if (Targets == 0)
+    {
+        KeLowerIrql(OldIrql);
+        return;
+    }
+
+    Packet = &KiTbFlushPacket[Prcb->Number];
+    ASSERT(Packet->Active == 0);
+    ASSERT(Packet->Pending == 0);
+    ASSERT(Packet->Outstanding == 0);
+
+    Packet->Address = Address;
+    Packet->FlushEntire = FlushEntire;
+    Packet->Pending = Targets;
+    Packet->Outstanding = Targets;
+    KeMemoryBarrier();
+    InterlockedExchange((PLONG)&Packet->Active, 1);
+
+    HalRequestIpi(Targets);
+
+    while (Packet->Outstanding != 0)
+    {
+        if (!InterruptsEnabled)
+        {
+            KiIpiProcessTbFlush();
+        }
+
+        YieldProcessor();
+    }
+
+    ASSERT(Packet->Pending == 0);
+    InterlockedExchange((PLONG)&Packet->Active, 0);
+    KeLowerIrql(OldIrql);
+}
+
+VOID
+NTAPI
+KiIpiProcessTbFlush(VOID)
+{
+    PKPRCB Prcb = KeGetCurrentPrcb();
+    ULONG Cpu = Prcb->Number;
+    ULONG Source;
+
+    ASSERT(Cpu < MAXIMUM_PROCESSORS);
+
+    for (Source = 0; Source < (ULONG)KeNumberProcessors; Source++)
+    {
+        PKI_TB_FLUSH_PACKET Packet = &KiTbFlushPacket[Source];
+
+        if ((Packet->Active != 0) &&
+            InterlockedBitTestAndResetAffinity(&Packet->Pending, Cpu))
+        {
+            KiFlushLocalTb(Packet->Address, Packet->FlushEntire);
+            KeMemoryBarrier();
+            InterlockedBitTestAndResetAffinity(&Packet->Outstanding, Cpu);
+        }
+    }
+}
+
 ULONG_PTR
 NTAPI
 KeIpiGenericCall(

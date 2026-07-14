@@ -269,12 +269,26 @@ KeInvalidateTlbEntry(IN PVOID Address)
     __invlpg(Address);
 }
 
+VOID
+NTAPI
+KiIpiSendTbFlush(
+    _In_opt_ PVOID Address,
+    _In_ BOOLEAN FlushEntire);
+
+VOID
+NTAPI
+KiIpiProcessTbFlush(VOID);
+
 FORCEINLINE
 VOID
 KeFlushProcessTb(VOID)
 {
+#ifdef CONFIG_SMP
+    KiIpiSendTbFlush(NULL, TRUE);
+#else
     /* Flush the TLB by resetting CR3 */
     __writecr3(__readcr3());
+#endif
 }
 
 FORCEINLINE

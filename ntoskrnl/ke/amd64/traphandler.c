@@ -117,6 +117,10 @@ KiIpiInterruptHandler(VOID)
     KiSendEOI();
 
     DpcRequest = KiIpiClaimDpcRequest();
+
+    /* Complete any TLB request before returning to the interrupted context. */
+    KiIpiProcessTbFlush();
+
     if (DpcRequest)
     {
         HalRequestSoftwareInterrupt(DISPATCH_LEVEL);
