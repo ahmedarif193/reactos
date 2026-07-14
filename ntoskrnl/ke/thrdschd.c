@@ -117,13 +117,45 @@ KiTryClaimIdleProcessor(
 }
 
 static
+KPRIORITY
+KiGetProcessorDispatchPriority(
+    _In_ PKPRCB Prcb)
+{
+    PKTHREAD ScheduledThread;
+    KPRIORITY Priority;
+    ULONG ReadySummary, ReadyPriority;
+
+    /* Select and dereference the scheduled thread under the PRCB lock. */
+    KiAcquirePrcbLock(Prcb);
+
+    ScheduledThread = Prcb->NextThread;
+    if (ScheduledThread == NULL)
+        ScheduledThread = Prcb->CurrentThread;
+
+    Priority = ScheduledThread ? ScheduledThread->Priority : 0;
+    ReadySummary = Prcb->ReadySummary;
+    if (ReadySummary != 0)
+    {
+        BitScanReverse(&ReadyPriority, ReadySummary);
+        if ((KPRIORITY)ReadyPriority > Priority)
+            Priority = (KPRIORITY)ReadyPriority;
+    }
+
+    KiReleasePrcbLock(Prcb);
+
+    return Priority;
+}
+
+static
 ULONG
 KiSelectNextProcessor(
     _In_ PKTHREAD Thread,
     _Out_ PKAFFINITY IdleRequest)
 {
-    KAFFINITY PreferredSet, IdleSet, SetMember;
-    ULONG Processor;
+    KAFFINITY PreferredSet, IdleSet, ScanSet, SetMember;
+    ULONG Processor, BestProcessor;
+    KPRIORITY Priority, BestPriority;
+    PKPRCB Prcb;
 
     /* Start with the affinity */
     PreferredSet = KiThreadAffinityMask(Thread) & KeActiveProcessors;
@@ -179,17 +211,29 @@ KiSelectNextProcessor(
         }
     }
 
-    /* Check if we can use the ideal processor */
-    if (PreferredSet & AFFINITY_MASK(Thread->IdealProcessor))
+    /* Prefer the least-loaded processor, with the ideal CPU as a tie-break. */
+    BestProcessor = MAXULONG;
+    BestPriority = HIGH_PRIORITY + 1;
+    ScanSet = PreferredSet;
+    while (BitScanForwardAffinity(&Processor, ScanSet))
     {
-        return Thread->IdealProcessor;
+        ScanSet &= ~AFFINITY_MASK(Processor);
+        Prcb = KiProcessorBlock[Processor];
+        if (Prcb == NULL)
+            continue;
+
+        Priority = KiGetProcessorDispatchPriority(Prcb);
+        if ((Priority < BestPriority) ||
+            ((Priority == BestPriority) &&
+             (Processor == Thread->IdealProcessor)))
+        {
+            BestPriority = Priority;
+            BestProcessor = Processor;
+        }
     }
 
-    /* Return the first set bit */
-    NT_VERIFY(BitScanForwardAffinity(&Processor, PreferredSet) != FALSE);
-    ASSERT(Processor < KeNumberProcessors);
-
-    return Processor;
+    ASSERT(BestProcessor < (ULONG)KeNumberProcessors);
+    return BestProcessor;
 }
 #else
 #define KiSelectNextProcessor(Thread, IdleRequest) (*(IdleRequest) = 0, 0)
