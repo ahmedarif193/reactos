@@ -176,12 +176,18 @@ PUBLIC KiUserThreadStartupExit
     .allocstack (6 * 8)
     .endprolog
 
-    /* Wait for SwapBusy */
-.SwapBusySet:
+    /* Keep hardware IPIs enabled while another CPU finishes the handoff. */
     cmp byte ptr [r8 + ThSwapBusy], 0
     je .SwapBusyClear
+    pushfq
+    sti
+.SwapBusySet:
+    cmp byte ptr [r8 + ThSwapBusy], 0
+    je .SwapBusyWaited
     pause
     jmp .SwapBusySet
+.SwapBusyWaited:
+    popfq
 .SwapBusyClear:
 
     /* Save WaitIrql as KSWITCH_FRAME::ApcBypass */
