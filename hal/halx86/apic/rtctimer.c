@@ -30,6 +30,10 @@ static ULONG HalpRunningFraction;
 static BOOLEAN HalpSetClockRate;
 static UCHAR HalpNextClockRate;
 
+/* Accumulator that gates the per-AP clock IPI to whole system ticks. See the
+   broadcast site in HalpClockInterruptHandler. */
+static LONG HalpClockIpiTickOffset;
+
 /*!
     \brief Converts the CMOS RTC rate into the time increment in 0.1ns intervals.
 
@@ -186,8 +190,23 @@ HalpClockInterruptHandler(IN PKTRAP_FRAME TrapFrame)
         HalpSetClockRate = FALSE;
     }
 
-    /* Send the clock IPI to all other CPUs */
-    HalpBroadcastClockIpi(CLOCK_IPI_VECTOR);
+    /*
+     * Send the clock IPI to all other CPUs - but only on a whole system tick.
+     *
+     * The APs reach KeUpdateRunTime *only* through this IPI. Its legacy
+     * KernelTime/UserTime counters advance once per call, while the BSP calls it
+     * only on a full KeMaximumIncrement (~64 Hz) system tick. The raw RTC rate
+     * can rise to ~1024 Hz for a 1 ms timer resolution; broadcasting every raw
+     * interrupt would therefore inflate AP tick counters by up to 16x. Accumulate
+     * increments and broadcast only on a full system tick so every processor uses
+     * the same accounting cadence.
+     */
+    HalpClockIpiTickOffset += (LONG)LastIncrement;
+    if (HalpClockIpiTickOffset >= (LONG)HalpMaximumTimeIncrement)
+    {
+        HalpClockIpiTickOffset -= (LONG)HalpMaximumTimeIncrement;
+        HalpBroadcastClockIpi(CLOCK_IPI_VECTOR);
+    }
 
     /* Update the system time -- on x86 the kernel will exit this trap  */
     KeUpdateSystemTime(TrapFrame, LastIncrement, Irql);
