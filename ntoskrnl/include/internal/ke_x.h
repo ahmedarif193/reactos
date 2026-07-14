@@ -663,6 +663,23 @@ KiReleaseTimerLock(IN PKSPIN_LOCK_QUEUE LockQueue)
 
 FORCEINLINE
 VOID
+KiClearThreadSwapBusy(IN PKTHREAD Thread)
+{
+#if defined(CONFIG_SMP) && \
+    ((NTDDI_VERSION < NTDDI_WIN7) || defined(_M_ARM64))
+    KeMemoryBarrier();
+    Thread->SwapBusy = FALSE;
+#ifdef _M_ARM64
+    __asm__ __volatile__("dmb ishst" ::: "memory");
+    __asm__ __volatile__("sev" ::: "memory");
+#endif
+#else
+    UNREFERENCED_PARAMETER(Thread);
+#endif
+}
+
+FORCEINLINE
+VOID
 KiAcquireApcLockRaiseToSynch(IN PKTHREAD Thread,
                  IN PKLOCK_QUEUE_HANDLE Handle)
 {
@@ -1491,6 +1508,22 @@ KxUnwaitThreadForEvent(IN PKEVENT Event,
         /* Next entry */
         WaitEntry = WaitList->Flink;
     } while (WaitEntry != WaitList);
+}
+
+//
+// Consume a stale placement of the currently running thread. Call with the
+// PRCB lock held.
+//
+FORCEINLINE
+BOOLEAN
+KiConsumeSelfNextThread(IN PKPRCB Prcb,
+                        IN PKTHREAD Thread)
+{
+    if (Prcb->NextThread != Thread) return FALSE;
+
+    Prcb->NextThread = NULL;
+    if (Thread->State == Standby) Thread->State = Running;
+    return TRUE;
 }
 
 //
