@@ -527,6 +527,14 @@ KiQuantumEnd(VOID)
         return;
     }
 
+    /* Drop a stale self-placement. */
+    if (KiConsumeSelfNextThread(Prcb, Thread))
+    {
+        KiReleasePrcbLock(Prcb);
+        KeLowerIrql(DISPATCH_LEVEL);
+        return;
+    }
+
     /* Get the next thread now */
     NextThread = Prcb->NextThread;
 

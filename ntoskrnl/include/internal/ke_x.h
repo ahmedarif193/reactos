@@ -1540,8 +1540,6 @@ KxQueueReadyThread(IN PKTHREAD Thread,
 #ifdef CONFIG_SMP
     ASSERT(Prcb->PrcbLock != 0);
 #endif
-    ASSERT(Thread->State == Running);
-    ASSERT(Thread->NextProcessor == Prcb->Number);
 
     /* Idle threads are never inserted into dispatcher ready queues. */
     if (Thread == Prcb->IdleThread)
@@ -1549,6 +1547,9 @@ KxQueueReadyThread(IN PKTHREAD Thread,
         KiReleasePrcbLock(Prcb);
         return;
     }
+
+    ASSERT(Thread->State == Running);
+    ASSERT(Thread->NextProcessor == Prcb->Number);
 
     /* Check if this thread is allowed to run in this CPU */
 #ifdef CONFIG_SMP
