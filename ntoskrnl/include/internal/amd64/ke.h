@@ -269,6 +269,10 @@ KeInvalidateTlbEntry(IN PVOID Address)
     __invlpg(Address);
 }
 
+VOID
+NTAPI
+KiIpiProcessRequests(VOID);
+
 FORCEINLINE
 VOID
 KeFlushProcessTb(VOID)
