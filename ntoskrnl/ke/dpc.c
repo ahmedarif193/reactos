@@ -24,6 +24,7 @@
 /* GLOBALS *******************************************************************/
 
 ULONG KiMaximumDpcQueueDepth = 4;
+ULONG KiMaximumDpcsPerBatch = 32;
 ULONG KiMinimumDpcRate = 3;
 ULONG KiAdjustDpcThreshold = 20;
 ULONG KiIdealDpcRate = 20;
@@ -579,6 +580,8 @@ KiRetireDpcList(IN PKPRCB Prcb)
     PKDEFERRED_ROUTINE DeferredRoutine;
     PVOID DeferredContext, SystemArgument1, SystemArgument2;
     ULONG_PTR TimerHand;
+    ULONG DpcsRetired = 0;
+    BOOLEAN RequestInterrupt = FALSE;
 #ifdef CONFIG_SMP
     KIRQL OldIrql;
 #endif
@@ -677,6 +680,14 @@ KiRetireDpcList(IN PKPRCB Prcb)
 
                 /* Disable interrupts and keep looping */
                 _disable();
+
+                DpcsRetired++;
+                if ((DpcsRetired >= KiMaximumDpcsPerBatch) ||
+                    (Prcb->QuantumEnd != FALSE) ||
+                    (Prcb->NextThread != NULL))
+                {
+                    break;
+                }
             }
             else
             {
@@ -709,7 +720,25 @@ KiRetireDpcList(IN PKPRCB Prcb)
             _disable();
         }
 #endif
-    } while (DpcData->DpcQueueDepth != 0);
+    } while ((DpcData->DpcQueueDepth != 0) &&
+             (DpcsRetired < KiMaximumDpcsPerBatch) &&
+             (Prcb->QuantumEnd == FALSE) &&
+             (Prcb->NextThread == NULL));
+
+    if (DpcData->DpcQueueDepth != 0)
+    {
+        KeAcquireSpinLockAtDpcLevel(&DpcData->DpcLock);
+        if ((DpcData->DpcQueueDepth != 0) &&
+            (Prcb->DpcInterruptRequested == FALSE))
+        {
+            Prcb->DpcInterruptRequested = TRUE;
+            RequestInterrupt = TRUE;
+        }
+        KeReleaseSpinLockFromDpcLevel(&DpcData->DpcLock);
+
+        if (RequestInterrupt)
+            HalRequestSoftwareInterrupt(DISPATCH_LEVEL);
+    }
 }
 
 VOID
