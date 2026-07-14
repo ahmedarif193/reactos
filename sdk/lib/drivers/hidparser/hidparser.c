@@ -723,6 +723,9 @@ HidParser_TranslateUsageAndPagesToI8042ScanCodes(
 
     for(Index = 0; Index < UsageListLength; Index++)
     {
+        if (ChangedUsageList[Index].Usage == 0)
+            break;
+
         //
         // check current usage
         //
@@ -743,7 +746,7 @@ HidParser_TranslateUsageAndPagesToI8042ScanCodes(
         else
         {
             //
-            // invalid page / end of usage list page
+            // invalid page
             //
             return HIDP_STATUS_I8042_TRANS_UNKNOWN;
         }
