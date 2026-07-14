@@ -510,6 +510,14 @@ KiQuantumEnd(VOID)
     /* Release the thread lock */
     KiReleaseThreadLock(Thread);
 
+    /* A satisfied wait can leave this running thread selected on itself. */
+    if (KiConsumeSelfNextThread(Prcb, Thread))
+    {
+        KiReleasePrcbLock(Prcb);
+        KeLowerIrql(DISPATCH_LEVEL);
+        return;
+    }
+
     /* Check if there's no thread scheduled */
     if (!Prcb->NextThread)
     {

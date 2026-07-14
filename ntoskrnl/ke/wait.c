@@ -374,9 +374,16 @@ KiExitDispatcher(IN KIRQL OldIrql)
     /* Lock the PRCB */
     KiAcquirePrcbLock(Prcb);
 
-    /* Get the next and current threads now */
-    NextThread = Prcb->NextThread;
+    /* Drop a stale self-placement and keep the current thread running. */
     Thread = Prcb->CurrentThread;
+    if (KiConsumeSelfNextThread(Prcb, Thread))
+    {
+        KiReleasePrcbLock(Prcb);
+        goto Quickie;
+    }
+
+    /* Get the next thread now */
+    NextThread = Prcb->NextThread;
 
 #if defined(_M_ARM64)
     if ((Thread == Prcb->IdleThread) && (Thread->State == Initialized))
