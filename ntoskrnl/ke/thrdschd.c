@@ -12,14 +12,6 @@
 #define NDEBUG
 #include <debug.h>
 
-#ifdef _WIN64
-# define InterlockedOrSetMember(Destination, SetMember) \
-    InterlockedOr64((PLONG64)Destination, SetMember);
-#else
-# define InterlockedOrSetMember(Destination, SetMember) \
-    InterlockedOr((PLONG)Destination, SetMember);
-#endif
-
 /* GLOBALS *******************************************************************/
 
 KAFFINITY KiIdleSummary;
@@ -111,45 +103,73 @@ KiFindIdealProcessor(
 }
 
 static
+BOOLEAN
+KiTryClaimIdleProcessor(
+    _In_ ULONG Processor)
+{
+    return InterlockedBitTestAndResetAffinity(&KiIdleSummary, Processor);
+}
+
+static
 ULONG
 KiSelectNextProcessor(
-    _In_ PKTHREAD Thread)
+    _In_ PKTHREAD Thread,
+    _Out_ PKAFFINITY IdleRequest)
 {
     KAFFINITY PreferredSet, IdleSet;
     ULONG Processor;
 
     /* Start with the affinity */
-    PreferredSet = KiThreadAffinityMask(Thread);
+    PreferredSet = KiThreadAffinityMask(Thread) & KeActiveProcessors;
+    ASSERT(PreferredSet != 0);
+    *IdleRequest = 0;
 
-    /* If we have matching idle processors, use them */
-    IdleSet = PreferredSet & KiIdleSummary;
-#ifdef _M_ARM64
-    if (IdleSet != 0 &&
-        Thread->IdealProcessor < (ULONG)KeNumberProcessors &&
-        KiProcessorBlock[Thread->IdealProcessor] != NULL)
+    /* Claim an allowed idle processor atomically. */
+    for (;;)
     {
-        PKSCHEDULER_SUBNODE SubNode =
-            (PKSCHEDULER_SUBNODE)KiProcessorBlock[Thread->IdealProcessor]->SchedulerSubNode;
-        if (SubNode != NULL)
+        IdleSet = PreferredSet & KiIdleSummary;
+        if (IdleSet == 0)
+            break;
+
+#ifdef _M_ARM64
+        if (Thread->IdealProcessor < (ULONG)KeNumberProcessors &&
+            KiProcessorBlock[Thread->IdealProcessor] != NULL)
         {
-            KAFFINITY SubIdle = IdleSet & SubNode->IdleCpuSet;
-            if (SubIdle != 0)
+            PKSCHEDULER_SUBNODE SubNode =
+                (PKSCHEDULER_SUBNODE)KiProcessorBlock[Thread->IdealProcessor]->SchedulerSubNode;
+            if (SubNode != NULL)
             {
-                IdleSet = SubIdle;
-            }
-            {
-                KAFFINITY SmtIdle = IdleSet & SubNode->IdleCpuSet & SubNode->IdleSmtSet;
-                if (SmtIdle != 0)
+                KAFFINITY SubIdle = IdleSet & SubNode->IdleCpuSet;
+                if (SubIdle != 0)
                 {
-                    IdleSet = SmtIdle;
+                    IdleSet = SubIdle;
+                }
+                {
+                    KAFFINITY SmtIdle = IdleSet & SubNode->IdleCpuSet & SubNode->IdleSmtSet;
+                    if (SmtIdle != 0)
+                    {
+                        IdleSet = SmtIdle;
+                    }
                 }
             }
         }
-    }
 #endif
-    if (IdleSet != 0)
-    {
-        PreferredSet = IdleSet;
+
+        if ((Thread->IdealProcessor < (ULONG)KeNumberProcessors) &&
+            (IdleSet & AFFINITY_MASK(Thread->IdealProcessor)))
+        {
+            Processor = Thread->IdealProcessor;
+        }
+        else
+        {
+            NT_VERIFY(BitScanForwardAffinity(&Processor, IdleSet) != FALSE);
+        }
+
+        if (KiTryClaimIdleProcessor(Processor))
+        {
+            *IdleRequest = AFFINITY_MASK(Processor);
+            return Processor;
+        }
     }
 
     /* Check if we can use the ideal processor */
@@ -165,7 +185,7 @@ KiSelectNextProcessor(
     return Processor;
 }
 #else
-#define KiSelectNextProcessor(Thread) 0
+#define KiSelectNextProcessor(Thread, IdleRequest) (*(IdleRequest) = 0, 0)
 #endif
 
 VOID
@@ -174,9 +194,7 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
 {
     PKPRCB Prcb;
     BOOLEAN Preempted;
-#ifdef CONFIG_SMP
     KAFFINITY IdleRequest;
-#endif
     ULONG Processor;
     KPRIORITY OldPriority;
     PKTHREAD NextThread;
@@ -320,21 +338,21 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
         Thread->AdjustReason = AdjustNone;
     }
 
+    /* Serialize the final priority and affinity snapshot through publication. */
+    KiAcquireThreadLock(Thread);
+
     /* Clear thread preemption status and save current values */
     Preempted = Thread->Preempted;
     OldPriority = Thread->Priority;
     Thread->Preempted = FALSE;
 
     /* Select a processor to run on */
-    Processor = KiSelectNextProcessor(Thread);
+    Processor = KiSelectNextProcessor(Thread, &IdleRequest);
     Thread->NextProcessor = Processor;
 
     /* Get the PRCB and lock it */
     Prcb = KiProcessorBlock[Processor];
     KiAcquirePrcbLock(Prcb);
-#ifdef CONFIG_SMP
-    IdleRequest = 0;
-#endif
 
 #ifndef CONFIG_SMP
     /* Check if we have an idle summary */
@@ -347,6 +365,7 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
 
         /* Unlock the PRCB and return */
         KiReleasePrcbLock(Prcb);
+        KiReleaseThreadLock(Thread);
         return;
     }
 #endif // !CONFIG_SMP
@@ -372,6 +391,13 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
             NextThread->State = DeferredReady;
             NextThread->DeferredProcessor = Prcb->Number;
             KiReleasePrcbLock(Prcb);
+            KiReleaseThreadLock(Thread);
+
+#ifdef CONFIG_SMP
+            if (Prcb != KeGetCurrentPrcb())
+                KiIpiSend(Prcb->SetMember, IPI_DPC);
+#endif
+
             KiDeferredReadyThread(NextThread);
             return;
         }
@@ -391,6 +417,7 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
 
             /* Release the lock */
             KiReleasePrcbLock(Prcb);
+            KiReleaseThreadLock(Thread);
 
             /* Check if we're running on another CPU */
             if (KeGetCurrentProcessorNumber() != Thread->NextProcessor)
@@ -418,18 +445,12 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
     /* Update the ready summary */
     Prcb->ReadySummary |= PRIORITY_MASK(OldPriority);
 
-#ifdef CONFIG_SMP
-    if ((Prcb != KeGetCurrentPrcb()) && (Prcb->SetMember & KiIdleSummary))
-    {
-        IdleRequest = Prcb->SetMember;
-    }
-#endif
-
     /* Sanity check */
     ASSERT(OldPriority == Thread->Priority);
 
     /* Release the lock */
     KiReleasePrcbLock(Prcb);
+    KiReleaseThreadLock(Thread);
 
 #ifdef CONFIG_SMP
     if (IdleRequest != 0)
@@ -453,7 +474,7 @@ KiSelectNextThread(IN PKPRCB Prcb)
         Thread = Prcb->IdleThread;
 
         /* Enable idle scheduling */
-        InterlockedOrSetMember(&KiIdleSummary, Prcb->SetMember);
+        InterlockedBitTestAndSetAffinity(&KiIdleSummary, Prcb->Number);
         Prcb->IdleSchedule = TRUE;
 
         /* FIXME: SMT support */
@@ -507,7 +528,7 @@ KiSwapThread(IN PKTHREAD CurrentThread,
         else
         {
             /* Set the idle summary */
-            InterlockedOrSetMember(&KiIdleSummary, Prcb->SetMember);
+            InterlockedBitTestAndSetAffinity(&KiIdleSummary, Prcb->Number);
 
             /* Schedule the idle thread */
             NextThread = Prcb->IdleThread;
