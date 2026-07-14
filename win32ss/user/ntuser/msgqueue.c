@@ -438,7 +438,7 @@ MsqWakeQueue(PTHREADINFO pti, DWORD MessageBits, BOOL KeyEvent)
    if (MessageBits & QS_EVENT)       pti->nCntsQBits[QSRosEvent]++;
 
    if (KeyEvent)
-      KeSetEvent(pti->pEventQueueServer, IO_NO_INCREMENT, FALSE);
+      KeSetEvent(pti->pEventQueueServer, EVENT_INCREMENT, FALSE);
 }
 
 VOID FASTCALL
