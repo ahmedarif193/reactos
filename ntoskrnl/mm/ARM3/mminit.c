@@ -1542,10 +1542,11 @@ MmFreeLoaderBlock(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         }
     }
 
-    /* Release the PFN lock and flush the TLB */
+    /* Keep freed loader PFNs protected until all processors have invalidated
+       the mappings cleared above. */
     DPRINT("Loader pages freed: %lx\n", LoaderPages);
+    KeFlushEntireTb(TRUE, TRUE);
     MiReleasePfnLock(OldIrql);
-    KeFlushCurrentTb();
 
     /* Free our run structure */
     ExFreePoolWithTag(Buffer, 'lMmM');

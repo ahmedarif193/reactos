@@ -478,6 +478,12 @@ MiReleaseSystemPtes(IN PMMPTE StartingPte,
     // Zero PTEs
     //
     RtlZeroMemory(StartingPte, NumberOfPtes * sizeof(MMPTE));
+
+    //
+    // Publish the invalid mappings before these slots can be reused.
+    //
+    KeFlushEntireTb(TRUE, TRUE);
+
     MiReleaseSystemPtesToFreeList(StartingPte, NumberOfPtes, SystemPtePoolType);
 }
 

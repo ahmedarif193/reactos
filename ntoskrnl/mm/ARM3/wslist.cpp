@@ -87,14 +87,16 @@ static void FreeWsleIndex(PMMWSL WsList, ULONG Index)
                 ntoskrnl::MiPfnLockGuard PfnLock;
 
                 PMMPFN Pfn = MiGetPfnEntry(Page);
+                PointerPte->u.Long = 0;
+
+                /* Invalidate the mapping before either PFN can be placed on a
+                   reusable page list. */
+                MiFlushTbForAddress(Wsle + LastInitializedWsle - 1);
+
                 MI_SET_PFN_DELETED(Pfn);
                 MiDecrementShareCount(MiGetPfnEntry(Pfn->u4.PteFrame), Pfn->u4.PteFrame);
                 MiDecrementShareCount(Pfn, Page);
             }
-
-            PointerPte->u.Long = 0;
-
-            KeInvalidateTlbEntry(Wsle + LastInitializedWsle - 1);
             LastInitializedWsle -= PAGE_SIZE / sizeof(MMWSLE);
         }
         return;
@@ -234,8 +236,12 @@ TrimWsList(PMMWSL WsList)
         /* Only direct entries for now */
         ASSERT(Entry.u1.e1.Direct == 1);
 
+        /* FreeWsleIndex clears or re-links Entry, so retain its VA before
+           RemoveFromWsList mutates the working-set slot. */
+        PVOID VirtualAddress = Entry.u1.VirtualAddress;
+
         /* Check the PTE */
-        PMMPTE PointerPte = MiAddressToPte(Entry.u1.VirtualAddress);
+        PMMPTE PointerPte = MiAddressToPte(VirtualAddress);
 
         /* This must be valid */
         ASSERT(PointerPte->u.Hard.Valid);
@@ -245,7 +251,7 @@ TrimWsList(PMMWSL WsList)
         {
             Entry.u1.e1.Age = 0;
             PointerPte->u.Hard.Accessed = 0;
-            KeInvalidateTlbEntry(Entry.u1.VirtualAddress);
+            KeInvalidateTlbEntry(VirtualAddress);
             continue;
         }
 
@@ -263,7 +269,7 @@ TrimWsList(PMMWSL WsList)
         }
 
         /* FIXME: Invalidating PDEs breaks legacy MMs */
-        if (MI_IS_PAGE_TABLE_ADDRESS(Entry.u1.VirtualAddress))
+        if (MI_IS_PAGE_TABLE_ADDRESS(VirtualAddress))
             continue;
 
         /* Please put yourself aside and make place for the younger ones */
@@ -285,15 +291,16 @@ TrimWsList(PMMWSL WsList)
 
             /* We can remove it from the list. Save Protection first */
             ULONG Protection = Entry.u1.e1.Protection;
-            RemoveFromWsList(WsList, Entry.u1.VirtualAddress);
+            RemoveFromWsList(WsList, VirtualAddress);
 
             /* Dirtify the page, if needed */
             if (PointerPte->u.Hard.Dirty)
                 Pfn->u3.e1.Modified = 1;
 
-            /* Make this a transition PTE */
+            /* Make this a transition PTE and invalidate the old mapping before
+               the share-count drop can make the page reclaimable. */
             MI_MAKE_TRANSITION_PTE(PointerPte, Page, Protection);
-            KeInvalidateTlbEntry(MiAddressToPte(PointerPte));
+            MiFlushTbForAddress(VirtualAddress);
 
             /* Drop the share count. This will take care of putting it in the standby or modified list. */
             MiDecrementShareCount(Pfn, Page);

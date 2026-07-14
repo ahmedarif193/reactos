@@ -255,6 +255,9 @@ MmDeleteKernelStack(IN PVOID StackBase,
             PageTableFrameNumber = Pfn1->u4.PteFrame;
             Pfn2 = MiGetPfnEntry(PageTableFrameNumber);
 
+            /* Remove the stack mapping before its PFNs can be reused. */
+            MI_ERASE_PTE(PointerPte);
+
             /* Remove a shared reference, since the page is going away */
             MiDecrementShareCount(Pfn2, PageTableFrameNumber);
 
@@ -275,6 +278,10 @@ MmDeleteKernelStack(IN PVOID StackBase,
     // We should be at the guard page now
     //
     ASSERT(PointerPte->u.Hard.Valid == 0);
+
+    /* The PFN lock prevents reuse until every processor has invalidated the
+       old stack mappings. */
+    KeFlushEntireTb(TRUE, TRUE);
 
     /* Release the PFN lock */
     MiReleasePfnLock(OldIrql);
