@@ -15,8 +15,13 @@
 #include <trapamd64.inc>
 .code
 
-TRAP_ENTRY HalpClockInterrupt, TF_SEND_EOI
-TRAP_ENTRY HalpClockIpi, TF_SEND_EOI
+/* The clock handlers end their interrupt themselves (KiEndInterrupt ->
+   HalEndSystemInterrupt -> EOI). TF_SEND_EOI here would send a SECOND EOI,
+   which pops the next-highest in-service bit - stealing the EOI of whatever
+   device ISR the clock tick nested into. Profile has no such handler-side
+   EOI, so it keeps the stub EOI. */
+TRAP_ENTRY HalpClockInterrupt, 0
+TRAP_ENTRY HalpClockIpi, 0
 TRAP_ENTRY HalpProfileInterrupt, TF_SEND_EOI
 
 PUBLIC ApicSpuriousService
