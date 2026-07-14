@@ -21,6 +21,7 @@ EXTERN KiGeneralProtectionFaultHandler:PROC
 EXTERN KiXmmExceptionHandler:PROC
 EXTERN KiDeliverApc:PROC
 EXTERN KiDpcInterruptHandler:PROC
+EXTERN KiIpiInterruptHandler:PROC
 EXTERN PsConvertToGuiThread:PROC
 EXTERN MmCreateKernelStack:PROC
 EXTERN MmDeleteKernelStack:PROC
@@ -827,14 +828,8 @@ PUBLIC KiIpiInterrupt
    /* No error code */
     EnterTrap (TF_SAVE_ALL OR TF_IRQL)
 
-    /* Raise to IPI_LEVEL */
-    mov rax, IPI_LEVEL
-    mov cr8, rax
-
-    /* End the interrupt */
-    mov dword ptr [APIC_EOI], 0
-
-    int 3
+    /* Service the hardware IPI */
+    call KiIpiInterruptHandler
 
     /* Return */
     ExitTrap (TF_SAVE_ALL OR TF_IRQL)
