@@ -1497,6 +1497,27 @@ KiConsumeSelfNextThread(IN PKPRCB Prcb,
 }
 
 //
+// Wait until a thread's terminal context switch has left its kernel stack.
+//
+FORCEINLINE
+VOID
+KiWaitForThreadSwapOut(IN PKTHREAD Thread)
+{
+#if (NTDDI_VERSION < NTDDI_WIN7) || defined(_M_ARM64)
+    while (*(volatile BOOLEAN *)&Thread->SwapBusy)
+    {
+        YieldProcessor();
+    }
+#else
+    while (*(volatile BOOLEAN *)&Thread->Running)
+    {
+        YieldProcessor();
+    }
+#endif
+    KeMemoryBarrier();
+}
+
+//
 // This routine queues a thread that is ready on the PRCB's ready lists.
 // If this thread cannot currently run on this CPU, then the thread is
 // added to the deferred ready list instead.
