@@ -271,14 +271,29 @@ KeInvalidateTlbEntry(IN PVOID Address)
 
 VOID
 NTAPI
+KiIpiSendTbFlush(
+    _In_ KAFFINITY TargetSet,
+    _In_opt_ PVOID BaseAddress,
+    _In_ ULONG PageCount);
+
+VOID
+NTAPI
 KiIpiProcessRequests(VOID);
 
 FORCEINLINE
 VOID
 KeFlushProcessTb(VOID)
 {
+#ifdef CONFIG_SMP
+    PKPRCB Prcb = KeGetCurrentPrcb();
+    KAFFINITY TargetSet = KeGetCurrentThread()->ApcState.Process->ActiveProcessors |
+                          Prcb->SetMember;
+
+    KiIpiSendTbFlush(TargetSet, NULL, 0);
+#else
     /* Flush the TLB by resetting CR3 */
     __writecr3(__readcr3());
+#endif
 }
 
 FORCEINLINE

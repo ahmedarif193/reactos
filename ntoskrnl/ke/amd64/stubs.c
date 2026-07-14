@@ -211,9 +211,11 @@ KiSwapProcess(IN PKPROCESS NewProcess,
     PKIPCR Pcr = (PKIPCR)KeGetPcr();
 
 #ifdef CONFIG_SMP
-    /* Update active processor mask */
-    InterlockedXor64((PLONG64)&NewProcess->ActiveProcessors, Pcr->Prcb.SetMember);
-    InterlockedXor64((PLONG64)&OldProcess->ActiveProcessors, Pcr->Prcb.SetMember);
+    if (NewProcess != OldProcess)
+    {
+        InterlockedOr64((PLONG64)&NewProcess->ActiveProcessors,
+                        Pcr->Prcb.SetMember);
+    }
 #endif
 
     /* Update CR3 */
@@ -221,6 +223,14 @@ KiSwapProcess(IN PKPROCESS NewProcess,
     __writecr3(NewProcess->DirectoryTableBase);
 #else
     __writecr3(NewProcess->DirectoryTableBase[0]);
+#endif
+
+#ifdef CONFIG_SMP
+    if (NewProcess != OldProcess)
+    {
+        InterlockedAnd64((PLONG64)&OldProcess->ActiveProcessors,
+                         ~Pcr->Prcb.SetMember);
+    }
 #endif
 
     /* Update IOPM offset */
