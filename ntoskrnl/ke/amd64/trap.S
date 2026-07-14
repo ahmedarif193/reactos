@@ -13,6 +13,7 @@
 
 EXTERN KiDispatchException:PROC
 EXTERN KeBugCheckWithTf:PROC
+EXTERN KiRaiseSecurityCheckFailureHandler:PROC
 EXTERN MmAccessFault:PROC
 EXTERN KiSystemFatalException:PROC
 EXTERN KiNpxNotAvailableFaultHandler:PROC
@@ -33,6 +34,17 @@ EXTERN KeReleaseSpinLockFromDpcLevel:PROC
 MACRO(DispatchException, Status, Number, P1, P2, P3)
     mov eax, Status
     mov edx, Number
+    xor r8d, r8d
+    mov r9, P1
+    mov r10, P2
+    mov r11, P3
+    call InternalDispatchException
+ENDM
+
+MACRO(DispatchExceptionFlags, Status, Flags, Number, P1, P2, P3)
+    mov eax, Status
+    mov edx, Number
+    mov r8d, Flags
     mov r9, P1
     mov r10, P2
     mov r11, P3
@@ -100,8 +112,8 @@ FUNC InternalDispatchException
     /* Set up EXCEPTION_RECORD */
     lea rcx, [rsp + KEXCEPTION_FRAME_LENGTH]
     mov [rcx + EXCEPTION_RECORD_ExceptionCode], eax
+    mov [rcx + EXCEPTION_RECORD_ExceptionFlags], r8d
     xor rax, rax
-    mov [rcx + EXCEPTION_RECORD_ExceptionFlags], eax
     mov [rcx + EXCEPTION_RECORD_ExceptionRecord], rax
     mov rax, [rbp + KTRAP_FRAME_Rip]
     mov [rcx + EXCEPTION_RECORD_ExceptionAddress], rax
@@ -554,6 +566,7 @@ InPageException:
     mov r11d, eax // Param3 = Status
     mov eax, STATUS_IN_PAGE_ERROR // ExceptionCode
     mov edx, 3    // ParamCount
+    xor r8d, r8d  // ExceptionFlags
     call InternalDispatchException
     jmp PageFaultReturn
 
@@ -564,6 +577,7 @@ AccessViolation:
 SpecialCode:
     /* Setup a normal page fault exception */
     mov edx, 2   // ParamCount
+    xor r8d, r8d // ExceptionFlags
     call InternalDispatchException
 
 PageFaultReturn:
@@ -590,6 +604,39 @@ KernelStackOverflow:
 #else
 9:  jmp 9b
 #endif
+ENDFUNC
+
+
+PUBLIC KiRaiseSecurityCheckFailure
+FUNC KiRaiseSecurityCheckFailure
+    /* Push pseudo error code */
+    EnterTrap TF_SAVE_ALL
+
+    /* Point the trap frame at the INT 29 instruction. */
+    sub qword ptr [rbp + KTRAP_FRAME_Rip], 2
+
+    /* Kernel fast-fail is fatal and must preserve the original trap frame. */
+    test word ptr [rbp + KTRAP_FRAME_SegCs], 3
+    jnz KiRaiseSecurityCheckFailureUserMode
+
+    mov rcx, rbp
+    call KiRaiseSecurityCheckFailureHandler
+
+#ifdef _USE_ML
+    jmp $
+#else
+9:  jmp 9b
+#endif
+
+KiRaiseSecurityCheckFailureUserMode:
+    /* Dispatch a noncontinuable fast-fail exception to user mode. */
+    sti
+    mov r9, [rbp + KTRAP_FRAME_Rcx]
+    DispatchExceptionFlags STATUS_STACK_BUFFER_OVERRUN, \
+                           EXCEPTION_NONCONTINUABLE, 1, r9, 0, 0
+
+    /* Return */
+    ExitTrap TF_SAVE_ALL
 ENDFUNC
 
 

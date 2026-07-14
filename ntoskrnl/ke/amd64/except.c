@@ -40,6 +40,7 @@ KIDT_INIT KiInterruptInitTable[] =
     {0x12, 0x00, 0x02, KiMcheckAbort},
     {0x13, 0x00, 0x00, KiXmmException},
     {0x1F, 0x00, 0x00, KiApcInterrupt},
+    {0x29, 0x03, 0x00, KiRaiseSecurityCheckFailure},
     {0x2C, 0x03, 0x00, KiRaiseAssertion},
     {0x2D, 0x03, 0x00, KiDebugServiceTrap},
     {0x2F, 0x00, 0x00, KiDpcInterrupt},
@@ -90,6 +91,29 @@ KeInitExceptions(VOID)
 
     KeGetPcr()->IdtBase = KiIdt;
     __lidt(&KiIdtDescriptor.Limit);
+}
+
+DECLSPEC_NORETURN
+VOID
+NTAPI
+KiRaiseSecurityCheckFailureHandler(
+    _In_ PKTRAP_FRAME TrapFrame)
+{
+    EXCEPTION_RECORD ExceptionRecord;
+
+    ExceptionRecord.ExceptionCode = STATUS_STACK_BUFFER_OVERRUN;
+    ExceptionRecord.ExceptionFlags = EXCEPTION_NONCONTINUABLE;
+    ExceptionRecord.ExceptionRecord = NULL;
+    ExceptionRecord.ExceptionAddress = (PVOID)TrapFrame->Rip;
+    ExceptionRecord.NumberParameters = 1;
+    ExceptionRecord.ExceptionInformation[0] = TrapFrame->Rcx;
+
+    KeBugCheckWithTf(KERNEL_SECURITY_CHECK_FAILURE,
+                     TrapFrame->Rcx,
+                     (ULONG_PTR)TrapFrame,
+                     (ULONG_PTR)&ExceptionRecord,
+                     0,
+                     TrapFrame);
 }
 
 static
