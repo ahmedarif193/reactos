@@ -12,6 +12,7 @@
 #define VAX_DHRY_PER_SEC 1757
 #define FP_FLOPS_PER_ITER 11
 #define MAX_CPUS 64
+#define SMP_TARGET_SECONDS 10U
 
 static volatile long gDhrySink;
 static volatile double gFpSink;
@@ -281,19 +282,37 @@ static LONGLONG FpRun(unsigned long Iters)
 typedef struct {
     int Cpu;
     int Kind;
-    unsigned long Count;
+    unsigned long BatchCount;
+    ULONGLONG TotalCount;
     LONGLONG Ticks;
 } WORK;
 
 static DWORD WINAPI Worker(LPVOID Param)
 {
     WORK *W = (WORK *)Param;
+    ULONGLONG Remaining = W->TotalCount;
+
     SetThreadAffinityMask(GetCurrentThread(), (DWORD_PTR)1 << W->Cpu);
-    if (W->Kind == 0)
-        W->Ticks = DhryRun(W->Count);
-    else
-        W->Ticks = FpRun(W->Count);
+    W->Ticks = 0;
+    while (Remaining != 0)
+    {
+        unsigned long Count = (Remaining > W->BatchCount) ? W->BatchCount : (unsigned long)Remaining;
+
+        if (W->Kind == 0)
+            W->Ticks += DhryRun(Count);
+        else
+            W->Ticks += FpRun(Count);
+        Remaining -= Count;
+    }
     return 0;
+}
+
+static ULONGLONG RateFromTicks(ULONGLONG Count, unsigned long Unit, LONGLONG Freq, LONGLONG Ticks)
+{
+    if (Ticks <= 0)
+        return 0;
+
+    return (ULONGLONG)(((double)Count * (double)Unit * (double)Freq) / (double)Ticks);
 }
 
 static unsigned long Calibrate(int Kind, LONGLONG Freq)
@@ -323,6 +342,7 @@ static void RunBench(const char *Name, int Kind, unsigned long Unit, LONGLONG Fr
 {
     unsigned long Count = Calibrate(Kind, Freq);
     LONGLONG Ticks;
+    ULONGLONG SmpCount;
     ULONGLONG Single, AggWall, AggSum, ScalingX100, EffX100;
     WORK W[MAX_CPUS];
     HANDLE Th[MAX_CPUS];
@@ -332,7 +352,7 @@ static void RunBench(const char *Name, int Kind, unsigned long Unit, LONGLONG Fr
     SetThreadAffinityMask(GetCurrentThread(), (DWORD_PTR)1);
     Ticks = (Kind == 0) ? DhryRun(Count) : FpRun(Count);
     SetThreadAffinityMask(GetCurrentThread(), (DWORD_PTR)(((NumCpus >= 64) ? ~0ULL : ((1ULL << NumCpus) - 1))));
-    Single = (Ticks > 0) ? ((ULONGLONG)Count * (ULONGLONG)Unit * (ULONGLONG)Freq) / (ULONGLONG)Ticks : 0;
+    Single = RateFromTicks(Count, Unit, Freq, Ticks);
 
     emit("[cpubench] %s: cores=%u runs/core=%lu qpc=%I64u Hz\n", Name, NumCpus, Count, (ULONGLONG)Freq);
     if (Kind == 0)
@@ -347,11 +367,19 @@ static void RunBench(const char *Name, int Kind, unsigned long Unit, LONGLONG Fr
         return;
     }
 
+    SmpCount = (Ticks > 0) ?
+        (ULONGLONG)(((double)Count * (double)Freq * SMP_TARGET_SECONDS) / (double)Ticks) : Count;
+    if (SmpCount < Count)
+        SmpCount = Count;
+    emit("[cpubench] %s SMP target: %u seconds, runs/core=%I64u\n",
+         Name, SMP_TARGET_SECONDS, SmpCount);
+
     for (i = 0; i < NumCpus; ++i)
     {
         W[i].Cpu = i;
         W[i].Kind = Kind;
-        W[i].Count = Count;
+        W[i].BatchCount = Count;
+        W[i].TotalCount = SmpCount;
         W[i].Ticks = 0;
     }
     QueryPerformanceCounter(&WallA);
@@ -364,13 +392,13 @@ static void RunBench(const char *Name, int Kind, unsigned long Unit, LONGLONG Fr
     for (i = 0; i < NumCpus; ++i)
     {
         if (W[i].Ticks > 0)
-            AggSum += ((ULONGLONG)Count * (ULONGLONG)Unit * (ULONGLONG)Freq) / (ULONGLONG)W[i].Ticks;
+            AggSum += RateFromTicks(SmpCount, Unit, Freq, W[i].Ticks);
         if (Th[i])
             CloseHandle(Th[i]);
     }
     {
         LONGLONG WallTicks = WallB.QuadPart - WallA.QuadPart;
-        AggWall = (WallTicks > 0) ? ((ULONGLONG)Count * (ULONGLONG)NumCpus * (ULONGLONG)Unit * (ULONGLONG)Freq) / (ULONGLONG)WallTicks : 0;
+        AggWall = RateFromTicks(SmpCount * NumCpus, Unit, Freq, WallTicks);
     }
     ScalingX100 = (Single > 0) ? (AggWall * 100ULL) / Single : 0;
     EffX100 = ScalingX100 / NumCpus;
