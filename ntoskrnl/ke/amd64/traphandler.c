@@ -84,6 +84,21 @@ KiDpcInterruptHandler(VOID)
     KeLowerIrql(OldIrql);
 }
 
+_Requires_lock_not_held_(Prcb->PrcbLock)
+VOID
+NTAPI
+KiIpiInterruptHandler(VOID)
+{
+    KIRQL OldIrql;
+
+    OldIrql = KfRaiseIrql(IPI_LEVEL);
+    KiSendEOI();
+
+    KiIpiProcessRequests();
+
+    KeLowerIrql(OldIrql);
+}
+
 VOID
 KiNmiInterruptHandler(
     _In_ PKTRAP_FRAME TrapFrame,
