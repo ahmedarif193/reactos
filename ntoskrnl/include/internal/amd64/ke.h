@@ -413,6 +413,9 @@ VOID KiAlignmentFault(VOID);
 VOID KiMcheckAbort(VOID);
 VOID KiXmmException(VOID);
 VOID KiApcInterrupt(VOID);
+VOID KiRaiseSecurityCheckFailure(VOID);
+DECLSPEC_NORETURN VOID NTAPI
+KiRaiseSecurityCheckFailureHandler(IN PKTRAP_FRAME TrapFrame);
 VOID KiRaiseAssertion(VOID);
 VOID KiDebugServiceTrap(VOID);
 VOID KiDpcInterrupt(VOID);
