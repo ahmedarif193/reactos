@@ -23,7 +23,7 @@ struct PerformancePage : Page
     RECT rcPane;
 
     PerformancePage() : sel(RES_CPU), hotTile(-1),
-                        cpuGraphMode(CPU_GRAPH_OVERALL),
+                        cpuGraphMode(CPU_GRAPH_LOGICAL),
                         showKernelTimes(FALSE), trackingMouse(FALSE)
     {
         ZeroMemory(tiles, sizeof(tiles));
