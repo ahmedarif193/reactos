@@ -133,6 +133,7 @@ static void DrawGraphContent(HDC dc,
     if (w < 8 || ht < 8) return;
 
     Graphics g(dc);
+    g.SetClip(Rect(r.left, r.top, w, ht), CombineModeIntersect);
     g.SetSmoothingMode(SmoothingModeHighQuality);
     g.SetCompositingQuality(CompositingQualityHighQuality);
     g.SetPixelOffsetMode(PixelOffsetModeHalf);
@@ -230,51 +231,6 @@ static void DrawGraphContent(HDC dc,
     }
 }
 
-static HBITMAP CreateGraphDib(HDC dc, int width, int height, DWORD** bits)
-{
-    BITMAPINFO info;
-    ZeroMemory(&info, sizeof(info));
-    info.bmiHeader.biSize = sizeof(info.bmiHeader);
-    info.bmiHeader.biWidth = width;
-    info.bmiHeader.biHeight = -height;
-    info.bmiHeader.biPlanes = 1;
-    info.bmiHeader.biBitCount = 32;
-    info.bmiHeader.biCompression = BI_RGB;
-    return CreateDIBSection(dc, &info, DIB_RGB_COLORS, (void**)bits, NULL, 0);
-}
-
-static void DownsampleGraph(const DWORD* source,
-                            int sourceWidth,
-                            DWORD* destination,
-                            int width,
-                            int height,
-                            int scale)
-{
-    const unsigned int sampleCount = scale * scale;
-    for (int y = 0; y < height; y++)
-    {
-        for (int x = 0; x < width; x++)
-        {
-            unsigned int red = 0, green = 0, blue = 0;
-            for (int sy = 0; sy < scale; sy++)
-            {
-                const DWORD* row = source + (y * scale + sy) * sourceWidth + x * scale;
-                for (int sx = 0; sx < scale; sx++)
-                {
-                    DWORD pixel = row[sx];
-                    blue += pixel & 0xFF;
-                    green += (pixel >> 8) & 0xFF;
-                    red += (pixel >> 16) & 0xFF;
-                }
-            }
-            destination[y * width + x] =
-                ((red / sampleCount) << 16) |
-                ((green / sampleCount) << 8) |
-                (blue / sampleCount);
-        }
-    }
-}
-
 void DrawGraph(HDC dc, const RECT& r, const HistRing* h, const GraphStyle& gs)
 {
     int width = r.right - r.left;
@@ -282,49 +238,9 @@ void DrawGraph(HDC dc, const RECT& r, const HistRing* h, const GraphStyle& gs)
     if (width < 8 || height < 8)
         return;
 
-    ULONGLONG area = (ULONGLONG)width * height;
-    if (width > 4096 || height > 4096 || area > 4 * 1024 * 1024)
-    {
-        DrawGraphContent(dc, r, h, gs, 1.0f);
-        return;
-    }
-
-    const int scale = area < 4096 ? 2 : (area > 1024 * 1024 ? 2 : 3);
-    int highWidth = width * scale;
-    int highHeight = height * scale;
-    DWORD* highBits = NULL;
-    DWORD* finalBits = NULL;
-    HBITMAP highBitmap = CreateGraphDib(dc, highWidth, highHeight, &highBits);
-    HBITMAP finalBitmap = CreateGraphDib(dc, width, height, &finalBits);
-    HDC highDc = highBitmap ? CreateCompatibleDC(dc) : NULL;
-    HDC finalDc = finalBitmap ? CreateCompatibleDC(dc) : NULL;
-
-    if (!highBitmap || !finalBitmap || !highDc || !finalDc ||
-        !highBits || !finalBits)
-    {
-        if (highDc) DeleteDC(highDc);
-        if (finalDc) DeleteDC(finalDc);
-        if (highBitmap) DeleteObject(highBitmap);
-        if (finalBitmap) DeleteObject(finalBitmap);
-        DrawGraphContent(dc, r, h, gs, 1.0f);
-        return;
-    }
-
-    HGDIOBJ oldHigh = SelectObject(highDc, highBitmap);
-    HGDIOBJ oldFinal = SelectObject(finalDc, finalBitmap);
-    GraphStyle highStyle = gs;
-    highStyle.border = FALSE;
-    RECT highRect = { 0, 0, highWidth, highHeight };
-    DrawGraphContent(highDc, highRect, h, highStyle, (REAL)scale);
-    DownsampleGraph(highBits, highWidth, finalBits, width, height, scale);
-    BitBlt(dc, r.left, r.top, width, height, finalDc, 0, 0, SRCCOPY);
-
-    SelectObject(highDc, oldHigh);
-    SelectObject(finalDc, oldFinal);
-    DeleteDC(highDc);
-    DeleteDC(finalDc);
-    DeleteObject(highBitmap);
-    DeleteObject(finalBitmap);
+    GraphStyle directStyle = gs;
+    directStyle.border = FALSE;
+    DrawGraphContent(dc, r, h, directStyle, 1.0f);
 
     if (gs.border)
     {
