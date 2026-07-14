@@ -11,6 +11,10 @@
 #define NDEBUG
 #include <debug.h>
 
+/* A hardware IPI is shared by several reasons. Keep scheduler requests durable
+   until the target processor claims them. */
+static volatile LONG KiIpiDpcRequest[MAXIMUM_PROCESSORS];
+
 /* FUNCTIONS *****************************************************************/
 
 VOID
@@ -26,7 +30,20 @@ KiIpiSend(
     }
     else if (IpiRequest == IPI_DPC)
     {
-        HalSendSoftwareInterrupt(TargetSet, DISPATCH_LEVEL);
+        KAFFINITY Set = TargetSet;
+        ULONG Processor;
+
+        while (BitScanForwardAffinity(&Processor, Set))
+        {
+            ASSERT(Processor < MAXIMUM_PROCESSORS);
+            InterlockedExchange((PLONG)&KiIpiDpcRequest[Processor], 1);
+            Set &= ~AFFINITY_MASK(Processor);
+        }
+
+        KeMemoryBarrier();
+
+        /* A hardware IPI breaks an idle target out of HLT immediately. */
+        HalRequestIpi(TargetSet);
     }
     else if (IpiRequest == IPI_FREEZE)
     {
@@ -37,6 +54,16 @@ KiIpiSend(
     {
         ASSERT(FALSE);
     }
+}
+
+BOOLEAN
+NTAPI
+KiIpiClaimDpcRequest(VOID)
+{
+    ULONG Processor = KeGetCurrentProcessorNumber();
+
+    ASSERT(Processor < MAXIMUM_PROCESSORS);
+    return InterlockedExchange((PLONG)&KiIpiDpcRequest[Processor], 0) != 0;
 }
 
 ULONG_PTR

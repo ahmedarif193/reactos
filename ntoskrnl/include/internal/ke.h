@@ -390,6 +390,14 @@ KiIpiSend(
     ULONG IpiRequest
 );
 
+#ifdef _M_AMD64
+BOOLEAN
+NTAPI
+KiIpiClaimDpcRequest(
+    VOID
+);
+#endif
+
 VOID
 NTAPI
 KiIpiSendPacket(
