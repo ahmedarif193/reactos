@@ -30,6 +30,8 @@ static ULONG HalpRunningFraction;
 static BOOLEAN HalpSetClockRate;
 static UCHAR HalpNextClockRate;
 
+static LONG HalpClockIpiTickOffset;
+
 /*!
     \brief Converts the CMOS RTC rate into the time increment in 0.1ns intervals.
 
@@ -186,8 +188,13 @@ HalpClockInterruptHandler(IN PKTRAP_FRAME TrapFrame)
         HalpSetClockRate = FALSE;
     }
 
-    /* Send the clock IPI to all other CPUs */
-    HalpBroadcastClockIpi(CLOCK_IPI_VECTOR);
+    /* Update AP runtime counters at the same cadence as the boot CPU. */
+    HalpClockIpiTickOffset += (LONG)LastIncrement;
+    if (HalpClockIpiTickOffset >= (LONG)HalpMaximumTimeIncrement)
+    {
+        HalpClockIpiTickOffset -= (LONG)HalpMaximumTimeIncrement;
+        HalpBroadcastClockIpi(CLOCK_IPI_VECTOR);
+    }
 
     /* Update the system time -- on x86 the kernel will exit this trap  */
     KeUpdateSystemTime(TrapFrame, LastIncrement, Irql);
