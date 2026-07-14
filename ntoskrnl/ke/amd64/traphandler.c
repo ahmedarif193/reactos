@@ -55,28 +55,51 @@ KiDpcInterruptHandler(VOID)
         Prcb->QuantumEnd = FALSE;
         KiQuantumEnd();
     }
-    else if (Prcb->NextThread)
+    else if (Prcb->NextThread ||
+             ((Prcb->CurrentThread == Prcb->IdleThread) && Prcb->ReadySummary))
     {
         /* Acquire the PRCB lock */
         KiAcquirePrcbLock(Prcb);
 
         /* Capture current thread data */
         OldThread = Prcb->CurrentThread;
-        NewThread = Prcb->NextThread;
 
-        /* Set new thread data */
-        Prcb->NextThread = NULL;
-        Prcb->CurrentThread = NewThread;
+        /* Convert a ready-queued idle placement into standby state. */
+        if ((Prcb->NextThread == NULL) &&
+            (OldThread == Prcb->IdleThread) &&
+            (Prcb->ReadySummary != 0))
+        {
+            NewThread = KiSelectReadyThread(0, Prcb);
+            if (NewThread != NULL)
+            {
+                NewThread->State = Standby;
+                Prcb->NextThread = NewThread;
+            }
+        }
 
-        /* The thread is now running */
-        NewThread->State = Running;
-        OldThread->WaitReason = WrDispatchInt;
+        if (Prcb->NextThread == NULL)
+        {
+            KiReleasePrcbLock(Prcb);
+        }
+        else
+        {
+#ifdef CONFIG_SMP
+            KfRaiseIrql(SYNCH_LEVEL);
+#endif
 
-        /* Make the old thread ready */
-        KxQueueReadyThread(OldThread, Prcb);
+            NewThread = Prcb->NextThread;
+            Prcb->NextThread = NULL;
+#ifdef CONFIG_SMP
+            InterlockedBitTestAndResetAffinity(&KiIdleSummary, Prcb->Number);
+#endif
+            Prcb->CurrentThread = NewThread;
 
-        /* Swap to the new thread */
-        KiSwapContext(APC_LEVEL, OldThread);
+            NewThread->State = Running;
+            OldThread->WaitReason = WrDispatchInt;
+
+            KxQueueReadyThread(OldThread, Prcb);
+            KiSwapContext(APC_LEVEL, OldThread);
+        }
     }
 
     /* Disable interrupts and go back to old irql */
