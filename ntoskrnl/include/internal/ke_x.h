@@ -1481,6 +1481,22 @@ KxUnwaitThreadForEvent(IN PKEVENT Event,
 }
 
 //
+// Consume a stale placement of the currently running thread. Call with the
+// PRCB lock held.
+//
+FORCEINLINE
+BOOLEAN
+KiConsumeSelfNextThread(IN PKPRCB Prcb,
+                        IN PKTHREAD Thread)
+{
+    if (Prcb->NextThread != Thread) return FALSE;
+
+    Prcb->NextThread = NULL;
+    if (Thread->State == Standby) Thread->State = Running;
+    return TRUE;
+}
+
+//
 // This routine queues a thread that is ready on the PRCB's ready lists.
 // If this thread cannot currently run on this CPU, then the thread is
 // added to the deferred ready list instead.

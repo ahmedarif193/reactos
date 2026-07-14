@@ -501,6 +501,7 @@ KiSwapThread(IN PKTHREAD CurrentThread,
              IN BOOLEAN NormalWait)
 {
     BOOLEAN ApcState = FALSE;
+    BOOLEAN SelfPlaced = FALSE;
     KIRQL WaitIrql;
     LONG_PTR WaitStatus;
     PKTHREAD NextThread;
@@ -513,22 +514,51 @@ KiSwapThread(IN PKTHREAD CurrentThread,
     _disable();
 #endif
 
-    /* Get the next thread */
+    /* A waker can re-ready this thread before its wait switches it out. */
     NextThread = Prcb->NextThread;
     if (NextThread)
     {
-        /* Already got a thread, set it up */
         Prcb->NextThread = NULL;
-        Prcb->CurrentThread = NextThread;
-        NextThread->State = Running;
+        if (NextThread == CurrentThread)
+        {
+            SelfPlaced = TRUE;
+            NextThread = NULL;
+        }
+    }
+
+    if (!NextThread)
+    {
+        NextThread = KiSelectReadyThread(0, Prcb);
+        if (NextThread == CurrentThread)
+        {
+            SelfPlaced = TRUE;
+            NextThread = KiSelectReadyThread(0, Prcb);
+        }
+    }
+
+    ASSERT(CurrentThread != Prcb->IdleThread);
+
+    if (SelfPlaced && (CurrentThread->State != Terminated))
+    {
+        if (NextThread)
+        {
+            NextThread->State = Standby;
+            Prcb->NextThread = NextThread;
+        }
+
+        CurrentThread->State = Running;
+        ASSERT(Prcb->CurrentThread == CurrentThread);
+        KiReleasePrcbLock(Prcb);
+
+        WaitIrql = CurrentThread->WaitIrql;
+        ApcState = (CurrentThread->ApcState.KernelApcPending) &&
+                   !(CurrentThread->SpecialApcDisable) &&
+                   (WaitIrql == PASSIVE_LEVEL);
     }
     else
     {
-        /* Try to find a ready thread */
-        NextThread = KiSelectReadyThread(0, Prcb);
         if (NextThread)
         {
-            /* Switch to it */
             Prcb->CurrentThread = NextThread;
             NextThread->State = Running;
         }
@@ -542,17 +572,13 @@ KiSwapThread(IN PKTHREAD CurrentThread,
             Prcb->CurrentThread = NextThread;
             NextThread->State = Running;
         }
+
+        KiReleasePrcbLock(Prcb);
+
+        WaitIrql = CurrentThread->WaitIrql;
+
+        ApcState = KiSwapContext(WaitIrql, CurrentThread);
     }
-
-    /* Sanity check and release the PRCB */
-    ASSERT(CurrentThread != Prcb->IdleThread);
-    KiReleasePrcbLock(Prcb);
-
-    /* Save the wait IRQL */
-    WaitIrql = CurrentThread->WaitIrql;
-
-    /* Swap contexts */
-    ApcState = KiSwapContext(WaitIrql, CurrentThread);
 
     /* Get the wait status */
     WaitStatus = CurrentThread->WaitStatus;
@@ -1003,8 +1029,16 @@ NtYieldExecution(VOID)
             }
         }
 
-        /* Make sure we still have a next thread to schedule */
-        NextThread = Prcb->NextThread;
+        /* Consuming a stale self-placement means no yield occurred. */
+        if (KiConsumeSelfNextThread(Prcb, Thread))
+        {
+            NextThread = NULL;
+        }
+        else
+        {
+            NextThread = Prcb->NextThread;
+        }
+
         if (NextThread)
         {
             /* Reset quantum and recalculate priority */
