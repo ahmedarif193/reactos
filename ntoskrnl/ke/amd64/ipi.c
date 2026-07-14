@@ -11,6 +11,8 @@
 #define NDEBUG
 #include <debug.h>
 
+#define KI_IPI_TB_FLUSH 0x20
+
 /* FUNCTIONS *****************************************************************/
 
 static
@@ -75,6 +77,94 @@ KiIpiSend(
     }
 }
 
+/* TLB SHOOTDOWN *************************************************************/
+
+typedef struct DECLSPEC_CACHEALIGN _KI_TB_FLUSH_PACKET
+{
+    volatile KAFFINITY Outstanding;
+    PVOID BaseAddress;
+    ULONG PageCount;
+} KI_TB_FLUSH_PACKET, *PKI_TB_FLUSH_PACKET;
+
+static KI_TB_FLUSH_PACKET KiTbFlushPacket[MAXIMUM_PROCESSORS];
+
+FORCEINLINE
+VOID
+KiFlushLocalTb(
+    _In_opt_ PVOID BaseAddress,
+    _In_ ULONG PageCount)
+{
+    if ((PageCount == 0) || (PageCount > FLUSH_MULTIPLE_MAXIMUM))
+    {
+        KeFlushCurrentTb();
+        return;
+    }
+
+    ASSERT(BaseAddress != NULL);
+    while (PageCount-- != 0)
+    {
+        __invlpg(BaseAddress);
+        BaseAddress = Add2Ptr(BaseAddress, PAGE_SIZE);
+    }
+}
+
+VOID
+NTAPI
+KiIpiSendTbFlush(
+    _In_ KAFFINITY TargetSet,
+    _In_opt_ PVOID BaseAddress,
+    _In_ ULONG PageCount)
+{
+    KAFFINITY IpiTargets;
+    BOOLEAN InterruptsEnabled;
+    KIRQL OldIrql;
+    PKPRCB Prcb;
+    PKI_TB_FLUSH_PACKET Packet;
+
+    InterruptsEnabled = (__readeflags() & EFLAGS_INTERRUPT_MASK) != 0;
+    OldIrql = KeRaiseIrqlToSynchLevel();
+
+    Prcb = KeGetCurrentPrcb();
+    ASSERT(Prcb->Number < MAXIMUM_PROCESSORS);
+
+    TargetSet &= (KAFFINITY)KeActiveProcessors;
+    if (TargetSet & Prcb->SetMember)
+    {
+        KiFlushLocalTb(BaseAddress, PageCount);
+        TargetSet &= ~Prcb->SetMember;
+    }
+
+    if (TargetSet == 0)
+    {
+        KeLowerIrql(OldIrql);
+        return;
+    }
+
+    Packet = &KiTbFlushPacket[Prcb->Number];
+    ASSERT(Packet->Outstanding == 0);
+
+    Packet->BaseAddress = BaseAddress;
+    Packet->PageCount = PageCount;
+    Packet->Outstanding = TargetSet;
+    KeMemoryBarrier();
+
+    IpiTargets = KiIpiQueueRequest(TargetSet, KI_IPI_TB_FLUSH);
+    if (IpiTargets != 0)
+        HalRequestIpi(IpiTargets);
+
+    while (Packet->Outstanding != 0)
+    {
+        if (!InterruptsEnabled)
+        {
+            KiIpiProcessRequests();
+        }
+
+        YieldProcessor();
+    }
+
+    KeLowerIrql(OldIrql);
+}
+
 VOID
 NTAPI
 KiIpiProcessRequests(VOID)
@@ -91,16 +181,25 @@ KiIpiProcessRequests(VOID)
 
     while (BitScanForwardAffinity(&Source, Sources))
     {
+        PKI_TB_FLUSH_PACKET Packet = &KiTbFlushPacket[Source];
         ULONG64 Requests;
 
         Requests = (ULONG64)InterlockedExchange64(
             (PLONG64)&Prcb->RequestMailbox[Source].RequestSummary,
             0);
 
+        if (Requests & KI_IPI_TB_FLUSH)
+        {
+            ASSERT(Packet->Outstanding & Prcb->SetMember);
+            KiFlushLocalTb(Packet->BaseAddress, Packet->PageCount);
+            InterlockedBitTestAndResetAffinity(&Packet->Outstanding,
+                                               Prcb->Number);
+        }
+
         if (Requests & IPI_DPC)
             DpcRequest = TRUE;
 
-        ASSERT((Requests & ~IPI_DPC) == 0);
+        ASSERT((Requests & ~(KI_IPI_TB_FLUSH | IPI_DPC)) == 0);
         Sources &= ~AFFINITY_MASK(Source);
     }
 
