@@ -77,7 +77,8 @@ KiDpcInterruptHandler(VOID)
             }
         }
 
-        if (Prcb->NextThread == NULL)
+        if ((Prcb->NextThread == NULL) ||
+            KiConsumeSelfNextThread(Prcb, OldThread))
         {
             KiReleasePrcbLock(Prcb);
         }
