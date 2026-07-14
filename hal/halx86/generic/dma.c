@@ -1733,7 +1733,9 @@ IoFreeAdapterChannel(IN PADAPTER_OBJECT AdapterObject)
         AdapterObject->CurrentWcb = WaitContextBlock;
         AdapterObject->NumberOfMapRegisters = WaitContextBlock->NumberOfMapRegisters;
 
-        if ((WaitContextBlock->NumberOfMapRegisters) && (AdapterObject->MasterAdapter))
+        if ((WaitContextBlock->NumberOfMapRegisters) &&
+            (AdapterObject->NeedsMapRegisters) &&
+            (AdapterObject->MasterAdapter))
         {
             KeAcquireSpinLock(&MasterAdapter->SpinLock, &OldIrql);
 
