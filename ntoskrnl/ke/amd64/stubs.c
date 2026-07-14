@@ -98,6 +98,18 @@ KiSwitchKernelStack(PVOID StackBase, PVOID StackLimit)
     return OldStackBase;
 }
 
+static
+VOID
+KiIdleSwapContext(_In_ PKTHREAD OldThread)
+{
+#ifdef CONFIG_SMP
+    KiSwapContext(APC_LEVEL, OldThread);
+    KeLowerIrql(DISPATCH_LEVEL);
+#else
+    KiSwapContext(APC_LEVEL, OldThread);
+#endif
+}
+
 DECLSPEC_NORETURN
 VOID
 KiIdleLoop(VOID)
@@ -126,40 +138,67 @@ KiIdleLoop(VOID)
             KiRetireDpcList(Prcb);
         }
 
-        /* Check if a new thread is scheduled for execution */
-        if (Prcb->NextThread)
+        /* Consume scheduled and ready-queued threads under the PRCB lock. */
+        _disable();
+        KiAcquirePrcbLock(Prcb);
+
+        NewThread = Prcb->NextThread;
+        if (NewThread)
         {
-            /* Enable interrupts */
-            _enable();
-
-            /* Capture current thread data */
-            OldThread = Prcb->CurrentThread;
-            NewThread = Prcb->NextThread;
-
-            /* Set new thread data */
             Prcb->NextThread = NULL;
-            Prcb->CurrentThread = NewThread;
-
-            /* The thread is now running */
-            NewThread->State = Running;
-
+        }
 #ifdef CONFIG_SMP
-            /* Do the swap at SYNCH_LEVEL */
+        else if (Prcb->ReadySummary)
+        {
+            NewThread = KiSelectReadyThread(0, Prcb);
+        }
+#endif
+
+        if (NewThread)
+        {
+            OldThread = Prcb->CurrentThread;
+#ifdef CONFIG_SMP
             KfRaiseIrql(SYNCH_LEVEL);
-#endif
 
-            /* Switch away from the idle thread */
-            KiSwapContext(APC_LEVEL, OldThread);
-
-#ifdef CONFIG_SMP
-            /* Go back to DISPATCH_LEVEL */
-            KeLowerIrql(DISPATCH_LEVEL);
+            if (KiIdleSummary & Prcb->SetMember)
+            {
+                InterlockedBitTestAndResetAffinity(&KiIdleSummary,
+                                                   Prcb->Number);
+            }
 #endif
+            Prcb->CurrentThread = NewThread;
+            NewThread->State = Running;
+            KiReleasePrcbLock(Prcb);
+
+            _enable();
+            KiIdleSwapContext(OldThread);
         }
         else
         {
-            /* Continue staying idle. Note the HAL returns with interrupts on */
+#ifdef CONFIG_SMP
+            if (!(KiIdleSummary & Prcb->SetMember))
+            {
+                InterlockedBitTestAndSetAffinity(&KiIdleSummary,
+                                                 Prcb->Number);
+            }
+#endif
+            Prcb->Sleeping = TRUE;
+            KeMemoryBarrier();
+
+            if ((Prcb->DpcData[0].DpcQueueDepth != 0) ||
+                (Prcb->TimerRequest != 0) ||
+                (Prcb->DeferredReadyListHead.Next != NULL) ||
+                (Prcb->DpcInterruptRequested != FALSE))
+            {
+                Prcb->Sleeping = FALSE;
+                KiReleasePrcbLock(Prcb);
+                continue;
+            }
+
+            /* The HAL performs the atomic STI;HLT boundary. */
+            KiReleasePrcbLock(Prcb);
             Prcb->PowerState.IdleFunction(&Prcb->PowerState);
+            Prcb->Sleeping = FALSE;
         }
     }
 }
