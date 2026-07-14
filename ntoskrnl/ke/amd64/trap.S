@@ -539,8 +539,8 @@ PageFaultError:
     shr r9d, 1
     and r9d, 9
 
-    /* Set parameter 2 to faulting address */
-    mov r10, cr2  // Param2 = faulting address
+    /* Set parameter 2 to the faulting address saved on trap entry */
+    mov r10, [rbp + KTRAP_FRAME_FaultAddress]
 
     cmp eax, STATUS_ACCESS_VIOLATION
     je AccessViolation
