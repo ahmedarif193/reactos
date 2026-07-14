@@ -1388,6 +1388,12 @@ FUNC KeSwitchKernelStack
     .allocstack 40
     .endprolog
 
+    /* Keep the live stack stable through the RSP handoff. */
+    pushfq
+    pop rax
+    mov [rsp + 32], rax
+    cli
+
     /* Call the C handler, which returns the old stack in rax */
     call KiSwitchKernelStack
 
@@ -1397,6 +1403,11 @@ FUNC KeSwitchKernelStack
     /* Switch to new stack: RSP += (StackBase - OldStackBase) */
     sub rcx, rax
     add rsp, rcx
+
+    /* Restore the saved flags from the copied stack. */
+    mov rdx, [rsp + 32]
+    push rdx
+    popfq
 
     /* Deallocate the home frame */
     add rsp, 40

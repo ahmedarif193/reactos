@@ -41,16 +41,18 @@ KiSwitchKernelStack(PVOID StackBase, PVOID StackLimit)
 {
     PKTHREAD CurrentThread;
     PVOID OldStackBase;
+    ULONG_PTR OldStackLimit;
+    ULONG_PTR LinkedTrapFrame;
     LONG_PTR StackOffset;
     SIZE_T StackSize;
     PKIPCR Pcr;
-    ULONG Eflags;
 
     /* Get the current thread */
     CurrentThread = KeGetCurrentThread();
 
     /* Save the old stack base */
     OldStackBase = CurrentThread->StackBase;
+    OldStackLimit = CurrentThread->StackLimit;
 
     /* Get the size of the current stack */
     StackSize = (ULONG_PTR)CurrentThread->StackBase - CurrentThread->StackLimit;
@@ -58,19 +60,26 @@ KiSwitchKernelStack(PVOID StackBase, PVOID StackLimit)
 
     /* Copy the current stack contents to the new stack */
     RtlCopyMemory((PUCHAR)StackBase - StackSize,
-                  (PVOID)CurrentThread->StackLimit,
+                  (PVOID)OldStackLimit,
                   StackSize);
 
     /* Calculate the offset between the old and the new stack */
     StackOffset = (PUCHAR)StackBase - (PUCHAR)CurrentThread->StackBase;
 
-    /* Disable interrupts while messing with the stack */
-    Eflags = __readeflags();
-    _disable();
+    /* Relocate the current and linked trap frames. */
+    if (CurrentThread->TrapFrame != NULL)
+    {
+        CurrentThread->TrapFrame =
+            (PKTRAP_FRAME)Add2Ptr(CurrentThread->TrapFrame, StackOffset);
 
-    /* Set the new trap frame */
-    CurrentThread->TrapFrame = (PKTRAP_FRAME)Add2Ptr(CurrentThread->TrapFrame,
-                                                     StackOffset);
+        LinkedTrapFrame = CurrentThread->TrapFrame->TrapFrame;
+        if ((LinkedTrapFrame >= OldStackLimit) &&
+            (LinkedTrapFrame < (ULONG_PTR)OldStackBase))
+        {
+            CurrentThread->TrapFrame->TrapFrame =
+                (ULONG_PTR)Add2Ptr((PVOID)LinkedTrapFrame, StackOffset);
+        }
+    }
 
     /* Set the new initial stack */
     CurrentThread->InitialStack = Add2Ptr(CurrentThread->InitialStack,
@@ -91,9 +100,6 @@ KiSwitchKernelStack(PVOID StackBase, PVOID StackLimit)
 
     /* Adjust Rsp0 in the TSS */
     Pcr->TssBase->Rsp0 += StackOffset;
-
-    /* Restore interrupts */
-    __writeeflags(Eflags);
 
     return OldStackBase;
 }
