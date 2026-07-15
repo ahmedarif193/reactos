@@ -351,8 +351,7 @@ KeSetTimerEx(IN OUT PKTIMER Timer,
     {
         /* Insert the timer */
         Timer->Header.SignalState = FALSE;
-        KiReleaseDispatcherObject(&Timer->Header);
-        KxInsertTimerNoRelease(Timer, Hand);
+        KxInsertTimer(Timer, Hand);
     }
 
     /* Exit the dispatcher */
