@@ -40,17 +40,21 @@ NTAPI
 KiSwitchKernelStack(PVOID StackBase, PVOID StackLimit)
 {
     PKTHREAD CurrentThread;
+    PKTRAP_FRAME TrapFrame;
     PVOID OldStackBase;
+    ULONG_PTR OldStackLimit;
+    ULONG_PTR LinkedTrapFrame;
     LONG_PTR StackOffset;
     SIZE_T StackSize;
+    SIZE_T TrapFramesLeft;
     PKIPCR Pcr;
-    ULONG Eflags;
 
     /* Get the current thread */
     CurrentThread = KeGetCurrentThread();
 
     /* Save the old stack base */
     OldStackBase = CurrentThread->StackBase;
+    OldStackLimit = CurrentThread->StackLimit;
 
     /* Get the size of the current stack */
     StackSize = (ULONG_PTR)CurrentThread->StackBase - CurrentThread->StackLimit;
@@ -58,19 +62,40 @@ KiSwitchKernelStack(PVOID StackBase, PVOID StackLimit)
 
     /* Copy the current stack contents to the new stack */
     RtlCopyMemory((PUCHAR)StackBase - StackSize,
-                  (PVOID)CurrentThread->StackLimit,
+                  (PVOID)OldStackLimit,
                   StackSize);
 
     /* Calculate the offset between the old and the new stack */
     StackOffset = (PUCHAR)StackBase - (PUCHAR)CurrentThread->StackBase;
 
-    /* Disable interrupts while messing with the stack */
-    Eflags = __readeflags();
-    _disable();
+    /* Relocate the current and linked trap frames. */
+    TrapFrame = CurrentThread->TrapFrame;
+    if (TrapFrame != NULL)
+    {
+        ASSERT((ULONG_PTR)TrapFrame >= OldStackLimit);
+        ASSERT((ULONG_PTR)TrapFrame <=
+               (ULONG_PTR)OldStackBase - sizeof(KTRAP_FRAME));
 
-    /* Set the new trap frame */
-    CurrentThread->TrapFrame = (PKTRAP_FRAME)Add2Ptr(CurrentThread->TrapFrame,
-                                                     StackOffset);
+        TrapFrame = (PKTRAP_FRAME)Add2Ptr(TrapFrame, StackOffset);
+        CurrentThread->TrapFrame = TrapFrame;
+
+        TrapFramesLeft = StackSize / sizeof(KTRAP_FRAME);
+        while (TrapFramesLeft-- != 0)
+        {
+            LinkedTrapFrame = TrapFrame->TrapFrame;
+            if ((LinkedTrapFrame == 0) ||
+                (LinkedTrapFrame < OldStackLimit) ||
+                (LinkedTrapFrame >
+                 (ULONG_PTR)OldStackBase - sizeof(KTRAP_FRAME)))
+            {
+                break;
+            }
+
+            TrapFrame->TrapFrame =
+                (ULONG_PTR)Add2Ptr((PVOID)LinkedTrapFrame, StackOffset);
+            TrapFrame = (PKTRAP_FRAME)TrapFrame->TrapFrame;
+        }
+    }
 
     /* Set the new initial stack */
     CurrentThread->InitialStack = Add2Ptr(CurrentThread->InitialStack,
@@ -91,9 +116,6 @@ KiSwitchKernelStack(PVOID StackBase, PVOID StackLimit)
 
     /* Adjust Rsp0 in the TSS */
     Pcr->TssBase->Rsp0 += StackOffset;
-
-    /* Restore interrupts */
-    __writeeflags(Eflags);
 
     return OldStackBase;
 }
