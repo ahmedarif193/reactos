@@ -2283,6 +2283,71 @@ RtlAllocateHeap(IN PVOID HeapPtr,
  *
  * @implemented
  */
+static VOID
+RtlpReportInvalidFree(HANDLE HeapPtr, PVOID Ptr)
+{
+    DPRINT1("HEAP %p: Trying to free an invalid address %p!\n", HeapPtr, Ptr);
+
+#if DBG
+    /* The caller chain can only be resolved against a process module list */
+    if (RtlpGetMode() != UserMode)
+        return;
+
+    _SEH2_TRY
+    {
+        PVOID Callers[6] = { NULL };
+        ULONG CallerCount, Frame;
+        PPEB Peb = NtCurrentPeb();
+        UNICODE_STRING Unknown = RTL_CONSTANT_STRING(L"<unknown>");
+        PUNICODE_STRING ImageName = &Unknown;
+
+        if ((Peb->ProcessParameters) &&
+            (Peb->ProcessParameters->ImagePathName.Buffer))
+        {
+            ImageName = &Peb->ProcessParameters->ImagePathName;
+        }
+        DPRINT1("    process %p '%wZ'\n",
+                NtCurrentTeb()->ClientId.UniqueProcess, ImageName);
+
+        CallerCount = RtlWalkFrameChain(Callers, RTL_NUMBER_OF(Callers), 0);
+        for (Frame = 0; Frame < CallerCount; Frame++)
+        {
+            PLIST_ENTRY ListHead, Entry;
+            PUNICODE_STRING ModuleName = &Unknown;
+            ULONG_PTR Offset = 0;
+
+            ListHead = Peb->Ldr ? &Peb->Ldr->InMemoryOrderModuleList : NULL;
+            for (Entry = ListHead ? ListHead->Flink : NULL;
+                 Entry && (Entry != ListHead);
+                 Entry = Entry->Flink)
+            {
+                PLDR_DATA_TABLE_ENTRY LdrEntry =
+                    CONTAINING_RECORD(Entry,
+                                      LDR_DATA_TABLE_ENTRY,
+                                      InMemoryOrderLinks);
+
+                if (((ULONG_PTR)Callers[Frame] >= (ULONG_PTR)LdrEntry->DllBase) &&
+                    ((ULONG_PTR)Callers[Frame] <
+                     (ULONG_PTR)LdrEntry->DllBase + LdrEntry->SizeOfImage))
+                {
+                    ModuleName = &LdrEntry->BaseDllName;
+                    Offset = (ULONG_PTR)Callers[Frame] -
+                             (ULONG_PTR)LdrEntry->DllBase;
+                    break;
+                }
+            }
+            DPRINT1("    frame %lu: %p ('%wZ' + 0x%Ix)\n",
+                    Frame, Callers[Frame], ModuleName, Offset);
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        /* Never let diagnostics turn a bad free into a crash */
+    }
+    _SEH2_END;
+#endif /* DBG */
+}
+
 BOOLEAN NTAPI RtlFreeHeap(
    HANDLE HeapPtr, /* [in] Handle of heap */
    ULONG Flags,   /* [in] Heap freeing flags */
@@ -2320,7 +2385,7 @@ BOOLEAN NTAPI RtlFreeHeap(
             (HeapEntry->SegmentOffset >= HEAP_SEGMENTS))
         {
             /* This is an invalid block */
-            DPRINT1("HEAP: Trying to free an invalid address %p!\n", Ptr);
+            RtlpReportInvalidFree(HeapPtr, Ptr);
             RtlSetLastWin32ErrorAndNtStatusFromNtStatus(STATUS_INVALID_PARAMETER);
             _SEH2_YIELD(return FALSE);
         }
@@ -2328,7 +2393,7 @@ BOOLEAN NTAPI RtlFreeHeap(
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
         /* The pointer was invalid */
-        DPRINT1("HEAP: Trying to free an invalid address %p!\n", Ptr);
+        RtlpReportInvalidFree(HeapPtr, Ptr);
         RtlSetLastWin32ErrorAndNtStatusFromNtStatus(STATUS_INVALID_PARAMETER);
         _SEH2_YIELD(return FALSE);
     }
