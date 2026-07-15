@@ -79,7 +79,10 @@ CmpDoFlushNextHive(_In_  BOOLEAN ForceFlush,
                 /* Do the sync */
                 DPRINT("Flushing: %wZ\n", &CmHive->FileFullPath);
                 DPRINT("Handle: %p\n", CmHive->FileHandles[HFILE_TYPE_PRIMARY]);
-                Status = HvSyncHive(&CmHive->Hive);
+                CmpLockHiveFlusherExclusive(CmHive);
+                Status = HvSyncHive(&CmHive->Hive) ?
+                         STATUS_SUCCESS : STATUS_REGISTRY_IO_FAILED;
+                CmpUnlockHiveFlusher(CmHive);
                 if (!NT_SUCCESS(Status))
                 {
                     /* Let them know we failed */
