@@ -7,6 +7,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define VAX_DHRY_PER_SEC 1757
@@ -463,16 +464,34 @@ static void RunStringBench(LONGLONG Freq)
              LibBps / RefBps, ((LibBps % RefBps) * 100ULL) / RefBps);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     SYSTEM_INFO Si;
     LARGE_INTEGER Freq;
     unsigned NumCpus;
+    unsigned long RequestedCpus;
+    char *End;
 
     GetSystemInfo(&Si);
     NumCpus = Si.dwNumberOfProcessors;
     if (NumCpus > MAX_CPUS)
         NumCpus = MAX_CPUS;
+    if (argc > 2)
+    {
+        emit("Usage: cpubench [logical-processors]\n");
+        return 2;
+    }
+    if (argc == 2)
+    {
+        RequestedCpus = strtoul(argv[1], &End, 10);
+        if (argv[1][0] == '\0' || *End != '\0' || RequestedCpus == 0 || RequestedCpus > NumCpus)
+        {
+            emit("[cpubench] logical-processors must be between 1 and %u\n", NumCpus);
+            emit("Usage: cpubench [logical-processors]\n");
+            return 2;
+        }
+        NumCpus = (unsigned)RequestedCpus;
+    }
     if (!QueryPerformanceFrequency(&Freq) || Freq.QuadPart == 0)
     {
         emit("[cpubench] no QueryPerformanceFrequency -- abort\n");
