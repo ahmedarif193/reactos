@@ -402,7 +402,6 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
 
             /* Set it in deferred ready mode */
             NextThread->State = DeferredReady;
-            NextThread->DeferredProcessor = Prcb->Number;
             KiReleasePrcbLock(Prcb);
             KiReleaseThreadLock(Thread);
 
