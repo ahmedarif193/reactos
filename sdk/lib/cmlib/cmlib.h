@@ -503,6 +503,25 @@ HvMarkCellDirty(
    HCELL_INDEX CellOffset,
    BOOLEAN HoldingLock);
 
+#if !defined(CMLIB_HOST) && !defined(_BLDR_)
+VOID CMAPI
+HvLockHiveWriter(
+    PHHIVE RegistryHive);
+
+VOID CMAPI
+HvUnlockHiveWriter(
+    PHHIVE RegistryHive);
+
+BOOLEAN CMAPI
+HvLockHiveReader(
+    PHHIVE RegistryHive);
+
+VOID CMAPI
+HvUnlockHiveReader(
+    PHHIVE RegistryHive,
+    BOOLEAN LockAcquired);
+#endif
+
 BOOLEAN CMAPI
 HvIsCellDirty(
     IN PHHIVE Hive,
