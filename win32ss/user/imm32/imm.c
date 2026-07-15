@@ -959,7 +959,7 @@ ImmLockClientImc(_In_ HIMC hImc)
 
     TRACE("(%p)\n", hImc);
 
-    if (IS_NULL_UNEXPECTEDLY(hImc))
+    if (!hImc)
         return NULL;
 
     pIMC = ValidateHandle(hImc, TYPE_INPUTCONTEXT);
@@ -1048,6 +1048,10 @@ ImmGetSaveContext(
         hIMC = (HIMC)NtUserQueryWindow(hWnd, QUERY_WINDOW_DEFAULT_ICONTEXT);
 
 Quit:
+    /* A window can legally have no associated input context. */
+    if (!hIMC)
+        return NULL;
+
     pClientImc = ImmLockClientImc(hIMC);
     if (IS_NULL_UNEXPECTEDLY(pClientImc))
         return NULL;
