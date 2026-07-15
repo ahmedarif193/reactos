@@ -118,11 +118,12 @@ typedef struct _AFD_DEVICE_EXTENSION {
 typedef struct _AFD_ACTIVE_POLL {
     LIST_ENTRY ListEntry;
     PIRP Irp;
-    PAFD_DEVICE_EXTENSION DeviceExt;
     KDPC TimeoutDpc;
     KTIMER Timer;
     PKEVENT EventObject;
+    LONG References;
     BOOLEAN Exclusive;
+    BOOLEAN Active;
 } AFD_ACTIVE_POLL, *PAFD_ACTIVE_POLL;
 
 typedef struct _IRP_LIST {
@@ -340,9 +341,7 @@ VOID KillSelectsForFCB( PAFD_DEVICE_EXTENSION DeviceExt,
                         PFILE_OBJECT FileObject, BOOLEAN ExclusiveOnly );
 VOID ZeroEvents( PAFD_HANDLE HandleArray,
 		 UINT HandleCount );
-VOID SignalSocket(
-   PAFD_ACTIVE_POLL Poll OPTIONAL, PIRP _Irp OPTIONAL,
-   PAFD_POLL_INFO PollReq, NTSTATUS Status);
+BOOLEAN SignalSocket(PAFD_ACTIVE_POLL Poll OPTIONAL, PIRP _Irp OPTIONAL, PAFD_POLL_INFO PollReq OPTIONAL, NTSTATUS Status, BOOLEAN CancelOwner);
 
 /* write.c */
 
