@@ -45,6 +45,7 @@ typedef struct _TM_POWER_THROTTLING_STATE
 
 static PUCHAR s_procBuf;
 static ULONG  s_procBufSize;
+static int    s_procBufLowTicks;
 
 struct PrevProc
 {
@@ -52,6 +53,7 @@ struct PrevProc
     LONGLONG createTime;
     LONGLONG cpu100ns;
     ULONGLONG ioBytes;
+    ProcExtra* extra;
 };
 static Vec<PrevProc> s_prev;
 
@@ -64,9 +66,6 @@ struct WndEntry
 static Vec<WndEntry> s_wnds;
 
 static Vec<ProcExtra*> s_extras;
-
-struct EffMark { ULONG pid; LONGLONG create; };
-static Vec<EffMark> s_effSet;
 
 static Vec<SvcRow> s_services;
 struct SvcHostEntry { ULONG pid; WCHAR names[512]; WCHAR group[64]; };
@@ -119,6 +118,8 @@ static BOOL s_diskCountersEnabled;
 static DWORD s_netIfIndex = (DWORD)-1;
 static DWORD s_prevNetIn, s_prevNetOut;
 static int   s_netInfoAge = 999;
+static PMIB_IFTABLE s_netTable;
+static ULONG s_netTableSize;
 static BOOL  s_wsaStarted;
 
 static WCHAR s_winDir[MAX_PATH];
@@ -838,8 +839,7 @@ void Init(void)
     RefreshServices();
     RefreshStartup();
     RefreshUsers();
-    Tick();          /* prime deltas */
-    Tick();
+    Tick();          /* prime deltas; the frame collects the first live sample */
 }
 
 void Shutdown(void)
@@ -854,6 +854,9 @@ void Shutdown(void)
     s_extras.Clear();
     if (s_procBuf) HeapFree(GetProcessHeap(), 0, s_procBuf);
     s_procBuf = NULL;
+    if (s_netTable) HeapFree(GetProcessHeap(), 0, s_netTable);
+    s_netTable = NULL;
+    s_netTableSize = 0;
     if (s_diskHandle != INVALID_HANDLE_VALUE)
     {
         if (s_diskCountersEnabled)
@@ -918,14 +921,6 @@ static BOOL CALLBACK EnumWndProc(HWND hwnd, LPARAM lp)
 /* ------------------------------------------------------------------ */
 /*  Extra (slow) process info, resolved lazily                         */
 /* ------------------------------------------------------------------ */
-
-static ProcExtra* FindExtra(ULONG pid, LONGLONG createTime)
-{
-    for (int i = 0; i < s_extras.n; i++)
-        if (s_extras[i]->pid == pid && s_extras[i]->createTime == createTime)
-            return s_extras[i];
-    return NULL;
-}
 
 static void DevicePathToDos(WCHAR* path, int cch)
 {
@@ -1120,18 +1115,70 @@ static const WndEntry* FindWnd(ULONG pid)
     return NULL;
 }
 
+static int __cdecl ComparePrevProc(const void* first, const void* second)
+{
+    const PrevProc* a = (const PrevProc*)first;
+    const PrevProc* b = (const PrevProc*)second;
+    if (a->pid != b->pid)
+        return a->pid < b->pid ? -1 : 1;
+    if (a->createTime != b->createTime)
+        return a->createTime < b->createTime ? -1 : 1;
+    return 0;
+}
+
 static const PrevProc* FindPrev(ULONG pid, LONGLONG create)
 {
-    for (int i = 0; i < s_prev.n; i++)
-        if (s_prev[i].pid == pid && s_prev[i].createTime == create) return &s_prev[i];
+    int low = 0, high = s_prev.n;
+    while (low < high)
+    {
+        int middle = low + (high - low) / 2;
+        const PrevProc& previous = s_prev[middle];
+        if (previous.pid < pid ||
+            (previous.pid == pid && previous.createTime < create))
+            low = middle + 1;
+        else
+            high = middle;
+    }
+    if (low < s_prev.n && s_prev[low].pid == pid &&
+        s_prev[low].createTime == create)
+        return &s_prev[low];
     return NULL;
 }
 
-static BOOL IsEffMarked(ULONG pid, LONGLONG create)
+static PMIB_IFTABLE QueryNetworkTable(void)
 {
-    for (int i = 0; i < s_effSet.n; i++)
-        if (s_effSet[i].pid == pid && s_effSet[i].create == create) return TRUE;
-    return FALSE;
+    ULONG needed = s_netTableSize;
+    DWORD error;
+
+    if (s_netTable)
+    {
+        error = GetIfTable(s_netTable, &needed, FALSE);
+        if (error == NO_ERROR)
+            return s_netTable;
+        if (error != ERROR_INSUFFICIENT_BUFFER)
+            return NULL;
+    }
+    else
+    {
+        needed = 0;
+        error = GetIfTable(NULL, &needed, FALSE);
+        if (error != ERROR_INSUFFICIENT_BUFFER)
+            return NULL;
+    }
+
+    if (!needed || needed >= 1024 * 1024)
+        return NULL;
+
+    PMIB_IFTABLE table = s_netTable ?
+        (PMIB_IFTABLE)HeapReAlloc(GetProcessHeap(), 0, s_netTable, needed) :
+        (PMIB_IFTABLE)HeapAlloc(GetProcessHeap(), 0, needed);
+    if (!table)
+        return NULL;
+
+    s_netTable = table;
+    s_netTableSize = needed;
+    ULONG size = s_netTableSize;
+    return GetIfTable(s_netTable, &size, FALSE) == NO_ERROR ? s_netTable : NULL;
 }
 
 const WCHAR* SvchostServices(ULONG pid)
@@ -1152,18 +1199,35 @@ const WCHAR* SvchostGroup(ULONG pid)
 static AppHistRow* FindAppHistory(const ProcRow& process)
 {
     const WCHAR* path = process.x ? process.x->path : NULL;
+    if (process.x && process.x->appHistorySlot > 0 &&
+        process.x->appHistorySlot <= (DWORD)s_appHist.n)
+    {
+        AppHistRow* cached = &s_appHist[process.x->appHistorySlot - 1];
+        if ((path && path[0] && cached->path[0] &&
+             lstrcmpiW(cached->path, path) == 0) ||
+            lstrcmpiW(cached->image, process.image) == 0)
+            return cached;
+        process.x->appHistorySlot = 0;
+    }
+
     for (int i = 0; i < s_appHist.n; i++)
     {
         if (path && path[0] && s_appHist[i].path[0] &&
             lstrcmpiW(s_appHist[i].path, path) == 0)
+        {
+            if (process.x) process.x->appHistorySlot = i + 1;
             return &s_appHist[i];
+        }
         if (lstrcmpiW(s_appHist[i].image, process.image) == 0)
+        {
+            if (process.x) process.x->appHistorySlot = i + 1;
             return &s_appHist[i];
+        }
     }
     return NULL;
 }
 
-static void SetAppHistoryDisplayName(AppHistRow* history,
+static BOOL SetAppHistoryDisplayName(AppHistRow* history,
                                      const ProcRow& process)
 {
     const WCHAR* name = process.image;
@@ -1172,14 +1236,17 @@ static void SetAppHistoryDisplayName(AppHistRow* history,
     {
         name = process.x->desc;
     }
-    StringCchCopyW(history->displayName, _countof(history->displayName), name);
 
-    int length = lstrlenW(history->displayName);
-    if (length > 4 &&
-        lstrcmpiW(history->displayName + length - 4, L".exe") == 0)
-    {
-        history->displayName[length - 4] = 0;
-    }
+    WCHAR displayName[_countof(history->displayName)];
+    StringCchCopyW(displayName, _countof(displayName), name);
+    int length = lstrlenW(displayName);
+    if (length > 4 && lstrcmpiW(displayName + length - 4, L".exe") == 0)
+        displayName[length - 4] = 0;
+
+    if (lstrcmpW(history->displayName, displayName) == 0)
+        return FALSE;
+    StringCchCopyW(history->displayName, _countof(history->displayName), displayName);
+    return TRUE;
 }
 
 static void AccumHistory(const ProcRow& process, LONGLONG cpuDelta)
@@ -1189,6 +1256,7 @@ static void AccumHistory(const ProcRow& process, LONGLONG cpuDelta)
         return;
 
     AppHistRow* history = FindAppHistory(process);
+    BOOL changed = FALSE;
     if (!history)
     {
         if (process.category != CAT_APP || !process.x || !process.x->resolved)
@@ -1199,19 +1267,32 @@ static void AccumHistory(const ProcRow& process, LONGLONG cpuDelta)
         if (!history)
             return;
         StringCchCopyW(history->image, _countof(history->image), process.image);
+        if (process.x) process.x->appHistorySlot = s_appHist.n;
+        changed = TRUE;
     }
 
-    SetAppHistoryDisplayName(history, process);
+    if (SetAppHistoryDisplayName(history, process))
+        changed = TRUE;
     if (process.x)
     {
-        if (process.x->path[0])
+        if (process.x->path[0] &&
+            lstrcmpW(history->path, process.x->path) != 0)
+        {
             StringCchCopyW(history->path, _countof(history->path), process.x->path);
+            changed = TRUE;
+        }
         if (!history->icon && process.x->icon)
+        {
             history->icon = CopyIcon(process.x->icon);
+            if (history->icon) history->iconResolved = TRUE;
+        }
     }
     if (cpuDelta > 0)
+    {
         history->cpu100ns += cpuDelta;
-    s_appHistDirty = TRUE;
+        changed = TRUE;
+    }
+    if (changed) s_appHistDirty = TRUE;
 }
 
 void Tick(void)
@@ -1337,61 +1418,72 @@ void Tick(void)
 
     /* ---- network ---- */
     {
-        ULONG cb = 0;
         g.netPresent = FALSE;
         g.netConnected = FALSE;
-        DWORD tableError = GetIfTable(NULL, &cb, FALSE);
-        PMIB_IFTABLE table = NULL;
-        if (tableError == ERROR_INSUFFICIENT_BUFFER && cb && cb < 1024 * 1024)
-            table = (PMIB_IFTABLE)HeapAlloc(GetProcessHeap(), 0, cb);
-        if (table && GetIfTable(table, &cb, FALSE) == NO_ERROR)
-        {
-            MIB_IFROW* best = NULL;
-            for (DWORD i = 0; i < table->dwNumEntries; i++)
-            {
-                MIB_IFROW* r = &table->table[i];
-                if (r->dwType == MIB_IF_TYPE_LOOPBACK) continue;
-                BOOL connected = r->dwOperStatus >= IF_OPER_STATUS_CONNECTED;
-                BOOL bestConnected = best &&
-                    best->dwOperStatus >= IF_OPER_STATUS_CONNECTED;
-                if (s_netIfIndex == r->dwIndex && connected)
-                {
-                    best = r;
-                    break;
-                }
-                if (!best || (connected && !bestConnected) ||
-                    (connected == bestConnected &&
-                     (r->dwInOctets + r->dwOutOctets) >
-                     (best->dwInOctets + best->dwOutOctets)))
-                    best = r;
-            }
-            if (best)
-            {
-                if (s_netIfIndex != best->dwIndex)
-                {
-                    s_netIfIndex = best->dwIndex;
-                    s_prevNetIn = best->dwInOctets;
-                    s_prevNetOut = best->dwOutOctets;
-                    s_netInfoAge = 999;
-                }
-                DWORD dIn = best->dwInOctets - s_prevNetIn;    /* wraps ok (unsigned) */
-                DWORD dOut = best->dwOutOctets - s_prevNetOut;
-                g.netRecvBps = dIn / dt;
-                g.netSendBps = dOut / dt;
-                s_prevNetIn = best->dwInOctets;
-                s_prevNetOut = best->dwOutOctets;
-                g.netPresent = TRUE;
-                g.netConnected = best->dwOperStatus >= IF_OPER_STATUS_CONNECTED;
+        MIB_IFROW selected;
+        ZeroMemory(&selected, sizeof(selected));
+        MIB_IFROW* best = NULL;
 
-                if (++s_netInfoAge > 30)
+        /* Once selected, query only that interface. Re-enumerate when it is
+           unavailable or disconnected so another connected adapter can win. */
+        if (s_netIfIndex != (DWORD)-1)
+        {
+            selected.dwIndex = s_netIfIndex;
+            if (GetIfEntry(&selected) == NO_ERROR &&
+                selected.dwOperStatus >= IF_OPER_STATUS_CONNECTED)
+                best = &selected;
+        }
+
+        if (!best)
+        {
+            PMIB_IFTABLE table = QueryNetworkTable();
+            if (table)
+            {
+                for (DWORD i = 0; i < table->dwNumEntries; i++)
                 {
-                    s_netInfoAge = 0;
-                    RefreshNetworkMetadata(best);
+                    MIB_IFROW* row = &table->table[i];
+                    if (row->dwType == MIB_IF_TYPE_LOOPBACK) continue;
+                    BOOL connected = row->dwOperStatus >= IF_OPER_STATUS_CONNECTED;
+                    BOOL bestConnected = best &&
+                        best->dwOperStatus >= IF_OPER_STATUS_CONNECTED;
+                    if (s_netIfIndex == row->dwIndex && connected)
+                    {
+                        best = row;
+                        break;
+                    }
+                    if (!best || (connected && !bestConnected) ||
+                        (connected == bestConnected &&
+                         (row->dwInOctets + row->dwOutOctets) >
+                         (best->dwInOctets + best->dwOutOctets)))
+                        best = row;
                 }
             }
         }
-        if (table)
-            HeapFree(GetProcessHeap(), 0, table);
+
+        if (best)
+        {
+            if (s_netIfIndex != best->dwIndex)
+            {
+                s_netIfIndex = best->dwIndex;
+                s_prevNetIn = best->dwInOctets;
+                s_prevNetOut = best->dwOutOctets;
+                s_netInfoAge = 999;
+            }
+            DWORD dIn = best->dwInOctets - s_prevNetIn;    /* wraps ok (unsigned) */
+            DWORD dOut = best->dwOutOctets - s_prevNetOut;
+            g.netRecvBps = dIn / dt;
+            g.netSendBps = dOut / dt;
+            s_prevNetIn = best->dwInOctets;
+            s_prevNetOut = best->dwOutOctets;
+            g.netPresent = TRUE;
+            g.netConnected = best->dwOperStatus >= IF_OPER_STATUS_CONNECTED;
+
+            if (++s_netInfoAge > 30)
+            {
+                s_netInfoAge = 0;
+                RefreshNetworkMetadata(best);
+            }
+        }
         if (!g.netPresent)
         {
             g.netRecvBps = 0;
@@ -1406,17 +1498,23 @@ void Tick(void)
     /* ---- process list ---- */
     if (!s_procBuf)
     {
-        s_procBufSize = 256 * 1024;
+        s_procBufSize = 64 * 1024;
         s_procBuf = (PUCHAR)HeapAlloc(GetProcessHeap(), 0, s_procBufSize);
     }
-    NTSTATUS st;
+    NTSTATUS st = STATUS_NO_MEMORY;
     ULONG need = 0;
-    for (;;)
+    while (s_procBuf)
     {
         st = NtQuerySystemInformation(SystemProcessInformation,
                                       s_procBuf, s_procBufSize, &need);
         if (st != STATUS_INFO_LENGTH_MISMATCH) break;
-        ULONG newSize = need + 64 * 1024;
+        ULONG newSize;
+        if (need > s_procBufSize && need <= MAXULONG - 64 * 1024)
+            newSize = need + 64 * 1024;
+        else if (s_procBufSize <= MAXULONG / 2)
+            newSize = s_procBufSize * 2;
+        else
+            break;
         PUCHAR nb = (PUCHAR)HeapReAlloc(GetProcessHeap(), 0, s_procBuf, newSize);
         if (!nb) break;
         s_procBuf = nb;
@@ -1432,8 +1530,11 @@ void Tick(void)
         pp.createTime = g.procs[i].createTime;
         pp.cpu100ns = g.procs[i].cpu100ns;
         pp.ioBytes = g.procs[i].ioBytes;
+        pp.extra = g.procs[i].x;
         s_prev.Push(pp);
     }
+    if (s_prev.n > 1)
+        qsort(s_prev.p, s_prev.n, sizeof(PrevProc), ComparePrevProc);
 
     g.procs.Clear();
     g.procCount = 0;
@@ -1481,8 +1582,11 @@ void Tick(void)
                                p->pid == 0 ? L"System Idle Process" : L"System");
             }
 
-            /* private memory: prefer private working set when the kernel fills it */
+            /* Private working set is ideal. ReactOS currently leaves it zero,
+               but does provide the process commit charge in PrivatePageCount. */
             p->memBytes = (ULONGLONG)spi->WorkingSetPrivateSize.QuadPart;
+            if (!p->memBytes)
+                p->memBytes = (ULONGLONG)spi->PrivatePageCount;
             if (!p->memBytes)
                 p->memBytes = (ULONGLONG)spi->PagefileUsage;
 
@@ -1538,10 +1642,6 @@ void Tick(void)
                 p->flags |= PF_SVCHOST;
             if (NameInList(p->image, s_criticalProcs, _countof(s_criticalProcs)))
                 p->flags |= PF_CRITICAL;
-            /* leaf = explicitly set by us, or exactly idle base priority */
-            if (IsEffMarked(p->pid, p->createTime) || (p->basePri == 4 && p->pid > 4))
-                p->flags |= PF_EFFICIENCY;
-
             /* category */
             if ((p->flags & PF_HASWINDOW) && p->wndTitle[0])
                 p->category = CAT_APP;
@@ -1551,7 +1651,7 @@ void Tick(void)
                 p->category = CAT_BACKGROUND;
 
             /* extras cache */
-            ProcExtra* x = FindExtra(p->pid, p->createTime);
+            ProcExtra* x = pv ? pv->extra : NULL;
             if (!x)
             {
                 x = (ProcExtra*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(ProcExtra));
@@ -1564,6 +1664,10 @@ void Tick(void)
             }
             if (x) x->inUse = TRUE;
             p->x = x;
+
+            /* leaf = explicitly set by us, or exactly idle base priority */
+            if ((x && x->efficiencySet) || (p->basePri == 4 && p->pid > 4))
+                p->flags |= PF_EFFICIENCY;
 
             AccumHistory(*p, cpuDelta);
 
@@ -1601,6 +1705,38 @@ void Tick(void)
             HeapFree(GetProcessHeap(), 0, s_extras[i]);
             s_extras.RemoveAt(i);
         }
+    }
+
+    /* Release capacity retained after a short-lived process/thread storm,
+       with enough hysteresis and headroom to avoid resize oscillation. */
+    if (NT_SUCCESS(st) && need && s_procBufSize > 64 * 1024 &&
+        need <= s_procBufSize / 2 && need <= MAXULONG - 64 * 1024)
+    {
+        if (++s_procBufLowTicks >= 30)
+        {
+            ULONG target = (ULONG)(((ULONGLONG)need + 64 * 1024 +
+                                    64 * 1024 - 1) & ~((ULONGLONG)64 * 1024 - 1));
+            if (target < s_procBufSize)
+            {
+                PUCHAR smaller = (PUCHAR)HeapReAlloc(GetProcessHeap(), 0,
+                                                     s_procBuf, target);
+                if (smaller)
+                {
+                    s_procBuf = smaller;
+                    s_procBufSize = target;
+                }
+            }
+
+            int rowTarget = g.procs.n + g.procs.n / 2 + 16;
+            if (rowTarget < 64) rowTarget = 64;
+            if (g.procs.cap > rowTarget * 2) g.procs.Trim(rowTarget);
+            if (s_prev.cap > rowTarget * 2) s_prev.Trim(rowTarget);
+            s_procBufLowTicks = 0;
+        }
+    }
+    else
+    {
+        s_procBufLowTicks = 0;
     }
 
     /* history rings */
@@ -1865,7 +2001,12 @@ void RefreshUsers(void)
         }
     }
 
-    /* aggregate live usage per session */
+    UpdateUserUsage();
+}
+
+void UpdateUserUsage(void)
+{
+    /* Session discovery is relatively expensive; live process totals are not. */
     for (int u = 0; u < s_users.n; u++)
     {
         s_users[u].cpuPct = 0;
@@ -2097,6 +2238,8 @@ static void ClearAppHistoryRows(void)
         if (s_appHist[i].icon)
             DestroyIcon(s_appHist[i].icon);
     }
+    for (int i = 0; i < s_extras.n; i++)
+        s_extras[i]->appHistorySlot = 0;
     s_appHist.Clear();
 }
 
@@ -2108,6 +2251,7 @@ static void DestroyAppHistory(void)
 
 static void LoadAppHistoryIcon(AppHistRow* history)
 {
+    history->iconResolved = TRUE;
     if (!history->path[0])
         return;
 
@@ -2185,7 +2329,6 @@ static void LoadAppHistory(void)
                                     rows[i].cpu100ns : 0;
                 history->netBytes = rows[i].netBytes;
                 history->notificationBytes = rows[i].notificationBytes;
-                LoadAppHistoryIcon(history);
             }
         }
         if (rows)
@@ -2257,6 +2400,17 @@ static void SaveAppHistory(void)
 Vec<AppHistRow>& AppHistory(void)
 {
     return s_appHist;
+}
+
+void ResolveAppHistoryIcons(int budget)
+{
+    for (int i = 0; i < s_appHist.n && budget > 0; i++)
+    {
+        if (s_appHist[i].iconResolved)
+            continue;
+        LoadAppHistoryIcon(&s_appHist[i]);
+        budget--;
+    }
 }
 
 void ClearAppHistory(void)
@@ -2348,19 +2502,9 @@ BOOL SetEfficiency(ULONG pid, BOOL on)
     if (ok)
     {
         ProcRow* p = FindProc(pid);
-        LONGLONG create = p ? p->createTime : 0;
-        if (on)
-        {
-            EffMark m = { pid, create };
-            if (!IsEffMarked(pid, create)) s_effSet.Push(m);
-        }
-        else
-        {
-            for (int i = s_effSet.n - 1; i >= 0; i--)
-                if (s_effSet[i].pid == pid) s_effSet.RemoveAt(i);
-        }
         if (p)
         {
+            if (p->x) p->x->efficiencySet = on;
             if (on) p->flags |= PF_EFFICIENCY;
             else    p->flags &= ~PF_EFFICIENCY;
         }

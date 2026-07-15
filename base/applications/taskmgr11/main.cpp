@@ -21,10 +21,13 @@ static BtnStrip s_strip;
 static HWND s_search;
 static HICON s_trayIcon;
 static BOOL s_trayAdded;
+static int s_trayBar = -1;
+static int s_trayPct = -1;
 
 /* chrome state (the frame itself is the standard system one) */
 static int  s_hotRail = -1;       /* index into rail items, 100 = hamburger */
 static BOOL s_tracking;
+static BOOL s_wasMinimized;
 
 /* nav rail items */
 struct RailItem { int page; IconId icon; const WCHAR* label; };
@@ -195,25 +198,49 @@ UINT App_TimerMs(void)
     }
 }
 
+static UINT EffectiveTimerMs(HWND hwnd)
+{
+    UINT milliseconds = App_TimerMs();
+    if (milliseconds && (!IsWindowVisible(hwnd) || IsIconic(hwnd)) &&
+        milliseconds < 2000)
+        milliseconds = 2000;
+    return milliseconds;
+}
+
+static void RearmTimer(HWND hwnd)
+{
+    KillTimer(hwnd, TIMER_TICK);
+    UINT milliseconds = EffectiveTimerMs(hwnd);
+    if (milliseconds)
+        SetTimer(hwnd, TIMER_TICK, milliseconds, NULL);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Tray icon                                                          */
 /* ------------------------------------------------------------------ */
 
-static HICON MakeTrayIcon(int cpuPct)
+static HICON MakeTrayIcon(int barHeight)
 {
     HDC scr = GetDC(NULL);
+    if (!scr) return NULL;
     HDC dc = CreateCompatibleDC(scr);
     HBITMAP color = CreateCompatibleBitmap(scr, 16, 16);
     HBITMAP mask = CreateBitmap(16, 16, 1, 1, NULL);
+    if (!dc || !color || !mask)
+    {
+        if (color) DeleteObject(color);
+        if (mask) DeleteObject(mask);
+        if (dc) DeleteDC(dc);
+        ReleaseDC(NULL, scr);
+        return NULL;
+    }
     HGDIOBJ old = SelectObject(dc, color);
 
     RECT r = { 0, 0, 16, 16 };
     FillRect32(dc, r, RGB(0x0A, 0x0A, 0x0A));
     RECT frame = { 0, 0, 16, 16 };
     FrameRect(dc, &frame, (HBRUSH)GetStockObject(DKGRAY_BRUSH));
-    int h = MulDiv(cpuPct, 12, 100);
-    if (h > 12) h = 12;
-    RECT bar = { 3, 14 - h, 13, 14 };
+    RECT bar = { 3, 14 - barHeight, 13, 14 };
     FillRect32(dc, bar, RGB(0x30, 0xC0, 0x40));
 
     SelectObject(dc, mask);
@@ -232,26 +259,58 @@ static HICON MakeTrayIcon(int cpuPct)
 
 static void UpdateTray(HWND hwnd)
 {
+    int cpuPct = (int)(Data::g.cpuTotalPct + 0.5);
+    if (cpuPct < 0) cpuPct = 0;
+    if (cpuPct > 100) cpuPct = 100;
+    int barHeight = MulDiv(cpuPct, 12, 100);
+    BOOL updateIcon = !s_trayAdded || barHeight != s_trayBar;
+    BOOL updateTip = !s_trayAdded || cpuPct != s_trayPct;
+    if (!updateIcon && !updateTip)
+        return;
+
     NOTIFYICONDATAW nid;
     ZeroMemory(&nid, sizeof(nid));
     nid.cbSize = sizeof(nid);
     nid.hWnd = hwnd;
     nid.uID = TRAY_ID;
-    nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
-    nid.uCallbackMessage = WM_APP_TRAYICON;
-
-    HICON icon = MakeTrayIcon((int)Data::g.cpuTotalPct);
-    nid.hIcon = icon;
-    StringCchPrintfW(nid.szTip, _countof(nid.szTip), L"CPU Usage: %.0f%%",
-                     Data::g.cpuTotalPct);
-
     if (!s_trayAdded)
-        s_trayAdded = Shell_NotifyIconW(NIM_ADD, &nid);
+    {
+        nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+        nid.uCallbackMessage = WM_APP_TRAYICON;
+    }
     else
-        Shell_NotifyIconW(NIM_MODIFY, &nid);
+    {
+        if (updateIcon) nid.uFlags |= NIF_ICON;
+        if (updateTip) nid.uFlags |= NIF_TIP;
+    }
 
-    if (s_trayIcon) DestroyIcon(s_trayIcon);
-    s_trayIcon = icon;
+    HICON icon = NULL;
+    if (updateIcon)
+    {
+        icon = MakeTrayIcon(barHeight);
+        if (!icon) return;
+        nid.hIcon = icon;
+    }
+    if (updateTip)
+        StringCchPrintfW(nid.szTip, _countof(nid.szTip),
+                         L"CPU Usage: %d%%", cpuPct);
+
+    BOOL updated = Shell_NotifyIconW(s_trayAdded ? NIM_MODIFY : NIM_ADD, &nid);
+    if (!updated)
+    {
+        if (icon) DestroyIcon(icon);
+        return;
+    }
+
+    s_trayAdded = TRUE;
+    if (updateIcon)
+    {
+        if (s_trayIcon) DestroyIcon(s_trayIcon);
+        s_trayIcon = icon;
+        s_trayBar = barHeight;
+    }
+    if (updateTip)
+        s_trayPct = cpuPct;
 }
 
 static void RemoveTray(HWND hwnd)
@@ -271,6 +330,8 @@ static void RemoveTray(HWND hwnd)
         DestroyIcon(s_trayIcon);
         s_trayIcon = NULL;
     }
+    s_trayBar = -1;
+    s_trayPct = -1;
 }
 
 /* ------------------------------------------------------------------ */
@@ -415,16 +476,16 @@ void Frame_SwitchToServices(void)
 static void DoTick(HWND hwnd)
 {
     Data::Tick();
-    Page* pg = s_pages[g_app.page];
-    if (pg)
-        pg->OnTick();
-    Frame_UpdateCommandStates();
+    BOOL visible = IsWindowVisible(hwnd) && !IsIconic(hwnd);
+    if (visible)
+    {
+        Page* pg = s_pages[g_app.page];
+        if (pg)
+            pg->OnTick();
+        Frame_UpdateCommandStates();
+    }
     UpdateTray(hwnd);
 
-    /* header shows live heat totals on some pages; cheap repaint of header row */
-    RECT hr;
-    HeaderRect(hwnd, &hr);
-    InvalidateRect(hwnd, &hr, FALSE);
 }
 
 void App_UpdateNow(void)
@@ -432,9 +493,7 @@ void App_UpdateNow(void)
     HWND hwnd = g_app.hFrame;
     KillTimer(hwnd, TIMER_TICK);
     DoTick(hwnd);
-    UINT ms = App_TimerMs();
-    if (ms)
-        SetTimer(hwnd, TIMER_TICK, ms, NULL);
+    RearmTimer(hwnd);
 }
 
 void App_ApplyTheme(void)
@@ -474,73 +533,81 @@ static void PaintFrame(HWND hwnd, HDC dc, const RECT& rcPaint)
     FillRect32(dc, rcPaint, g_t.winBg);
 
     /* ---- nav rail ---- */
-    RECT ham;
-    HamburgerRect(hwnd, &ham);
-    if (s_hotRail == 100)
-        FillRoundRect(dc, ham, g_t.railHover, CLR_NONE, S(4));
-    RECT hg = { ham.left + S(9), ham.top + S(9), ham.right - S(9), ham.bottom - S(9) };
-    DrawGlyph(dc, hg, IC_HAMBURGER, g_t.textMain);
-
-    int nItems = (int)_countof(s_rail) + 1;   /* + settings */
-    for (int i = 0; i < nItems; i++)
+    RECT nav = { rc.left, rc.top, rc.left + RailW(), rc.bottom };
+    RECT dirty;
+    if (IntersectRect(&dirty, &nav, &rcPaint))
     {
-        RECT ir;
-        RailItemRect(hwnd, i, &ir);
-        BOOL isSettings = (i == (int)_countof(s_rail));
-        int page = isSettings ? PG_SETTINGS : s_rail[i].page;
-        IconId icon = isSettings ? IC_SETTINGS : s_rail[i].icon;
-        const WCHAR* label = isSettings ? L"Settings" : s_rail[i].label;
-        BOOL sel = (g_app.page == page);
+        RECT ham;
+        HamburgerRect(hwnd, &ham);
+        if (s_hotRail == 100)
+            FillRoundRect(dc, ham, g_t.railHover, CLR_NONE, S(4));
+        RECT hg = { ham.left + S(9), ham.top + S(9), ham.right - S(9), ham.bottom - S(9) };
+        DrawGlyph(dc, hg, IC_HAMBURGER, g_t.textMain);
 
-        if (sel)
-            FillRoundRect(dc, ir, g_t.railSel, CLR_NONE, S(4));
-        else if (s_hotRail == i)
-            FillRoundRect(dc, ir, g_t.railHover, CLR_NONE, S(4));
-
-        if (sel)
+        int nItems = (int)_countof(s_rail) + 1;   /* + settings */
+        for (int i = 0; i < nItems; i++)
         {
-            RECT bar = { ir.left, (ir.top + ir.bottom) / 2 - S(8),
-                         ir.left + S(3), (ir.top + ir.bottom) / 2 + S(8) };
-            FillRoundRect(dc, bar, g_t.accent, CLR_NONE, S(2));
-        }
+            RECT ir;
+            RailItemRect(hwnd, i, &ir);
+            BOOL isSettings = (i == (int)_countof(s_rail));
+            int page = isSettings ? PG_SETTINGS : s_rail[i].page;
+            IconId icon = isSettings ? IC_SETTINGS : s_rail[i].icon;
+            const WCHAR* label = isSettings ? L"Settings" : s_rail[i].label;
+            BOOL sel = (g_app.page == page);
 
-        RECT gi = { ir.left + S(11), (ir.top + ir.bottom) / 2 - S(8),
-                    ir.left + S(27), (ir.top + ir.bottom) / 2 + S(8) };
-        DrawGlyph(dc, gi, icon, sel ? g_t.textMain : g_t.textSec);
+            if (sel)
+                FillRoundRect(dc, ir, g_t.railSel, CLR_NONE, S(4));
+            else if (s_hotRail == i)
+                FillRoundRect(dc, ir, g_t.railHover, CLR_NONE, S(4));
 
-        if (g_app.st.navExpanded)
-        {
-            RECT lr = { ir.left + S(38), ir.top, ir.right - S(6), ir.bottom };
-            DrawTextClip(dc, label, lr, sel ? g_t.fBodySemi : g_t.fBody,
-                         g_t.textMain, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+            if (sel)
+            {
+                RECT bar = { ir.left, (ir.top + ir.bottom) / 2 - S(8),
+                             ir.left + S(3), (ir.top + ir.bottom) / 2 + S(8) };
+                FillRoundRect(dc, bar, g_t.accent, CLR_NONE, S(2));
+            }
+
+            RECT gi = { ir.left + S(11), (ir.top + ir.bottom) / 2 - S(8),
+                        ir.left + S(27), (ir.top + ir.bottom) / 2 + S(8) };
+            DrawGlyph(dc, gi, icon, sel ? g_t.textMain : g_t.textSec);
+
+            if (g_app.st.navExpanded)
+            {
+                RECT lr = { ir.left + S(38), ir.top, ir.right - S(6), ir.bottom };
+                DrawTextClip(dc, label, lr, sel ? g_t.fBodySemi : g_t.fBody,
+                             g_t.textMain, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+            }
         }
     }
 
     /* ---- header ---- */
     RECT hr;
     HeaderRect(hwnd, &hr);
-    Page* pg = s_pages[g_app.page];
-    if (pg)
+    if (IntersectRect(&dirty, &hr, &rcPaint))
     {
-        int right = hr.right - S(14);
-        for (int i = 0; i < s_strip.b.n; i++)
-            if (s_strip.b[i].r.left - S(12) < right)
-                right = s_strip.b[i].r.left - S(12);
-        if (s_search && IsWindowVisible(s_search))
+        Page* pg = s_pages[g_app.page];
+        if (pg)
         {
-            RECT sr;
-            GetWindowRect(s_search, &sr);
-            MapWindowPoints(NULL, hwnd, (POINT*)&sr, 2);
-            if (sr.left - S(12) < right)
-                right = sr.left - S(12);
-        }
+            int right = hr.right - S(14);
+            for (int i = 0; i < s_strip.b.n; i++)
+                if (s_strip.b[i].r.left - S(12) < right)
+                    right = s_strip.b[i].r.left - S(12);
+            if (s_search && IsWindowVisible(s_search))
+            {
+                RECT sr;
+                GetWindowRect(s_search, &sr);
+                MapWindowPoints(NULL, hwnd, (POINT*)&sr, 2);
+                if (sr.left - S(12) < right)
+                    right = sr.left - S(12);
+            }
 
-        RECT tr = { hr.left + S(16), hr.top, right, hr.bottom };
-        if (tr.right > tr.left)
-            DrawTextClip(dc, pg->Title(), tr, g_t.fTitle, g_t.textMain,
-                         DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+            RECT tr = { hr.left + S(16), hr.top, right, hr.bottom };
+            if (tr.right > tr.left)
+                DrawTextClip(dc, pg->Title(), tr, g_t.fTitle, g_t.textMain,
+                             DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        }
+        s_strip.Paint(dc);
     }
-    s_strip.Paint(dc);
 }
 
 /* ------------------------------------------------------------------ */
@@ -582,16 +649,29 @@ static LRESULT CALLBACK FrameProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     }
 
     case WM_SIZE:
+    {
         if (wp == SIZE_MINIMIZED)
         {
+            s_wasMinimized = TRUE;
+            RearmTimer(hwnd);
             if (g_app.st.hideWhenMin)
                 ShowWindow(hwnd, SW_HIDE);
             return 0;
         }
+        BOOL restored = s_wasMinimized;
+        s_wasMinimized = FALSE;
         g_app.maximized = (wp == SIZE_MAXIMIZED);
         LayoutChildren(hwnd);
+        if (restored)
+        {
+            Page* pg = s_pages[g_app.page];
+            if (pg) pg->OnTick();
+            Frame_UpdateCommandStates();
+            RearmTimer(hwnd);
+        }
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;
+    }
 
     case WM_GETMINMAXINFO:
     {
@@ -857,9 +937,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPWSTR lpCmdLine, int 
     UpdateWindow(g_app.hFrame);
 
     DoTick(g_app.hFrame);
-    UINT ms = App_TimerMs();
-    if (ms)
-        SetTimer(g_app.hFrame, TIMER_TICK, ms, NULL);
+    RearmTimer(g_app.hFrame);
 
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0))

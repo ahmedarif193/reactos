@@ -17,6 +17,7 @@ struct DetailsPage : Page, ITreeListOwner
     int  sortCol;
     BOOL sortDesc;
     Vec<TLRow> rows;
+    Vec<ProcRow*> list;
     ULONG pendingSelPid;
 
     DetailsPage() : tl(NULL), sortCol(DC_NAME), sortDesc(FALSE), pendingSelPid(0) {}
@@ -86,7 +87,7 @@ struct DetailsPage : Page, ITreeListOwner
     void Rebuild(void)
     {
         rows.Clear();
-        Vec<ProcRow*> list;
+        list.Clear();
         for (int i = 0; i < Data::g.procs.n; i++)
         {
             if (!MatchesSearch(Data::g.procs[i])) continue;

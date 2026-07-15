@@ -489,25 +489,28 @@ struct PerformancePage : Page
         DrawTextClip(dc, L"100%", axisRect, g_t.fSmall, g_t.textSec,
                      DT_RIGHT | DT_SINGLELINE);
 
-        for (int i = 0; i < processorCount; i++)
         {
-            int column = i % columns;
-            int row = i / columns;
-            RECT cell = {
-                graph.left + column * (cellWidth + gap),
-                graph.top + row * (cellHeight + gap),
-                graph.left + column * (cellWidth + gap) + cellWidth,
-                graph.top + row * (cellHeight + gap) + cellHeight
-            };
-            GraphStyle style;
-            ZeroMemory(&style, sizeof(style));
-            style.line = g_t.graph[RES_CPU];
-            style.secondLine = KernelLineColor();
-            style.grid = TRUE;
-            style.border = TRUE;
-            style.yMax = 100.0;
-            style.second = showKernelTimes ? &d.hCpuLogicalKernel[i] : NULL;
-            DrawGraph(dc, cell, &d.hCpuLogical[i], style);
+            GraphPaint paint(dc);
+            for (int i = 0; i < processorCount; i++)
+            {
+                int column = i % columns;
+                int row = i / columns;
+                RECT cell = {
+                    graph.left + column * (cellWidth + gap),
+                    graph.top + row * (cellHeight + gap),
+                    graph.left + column * (cellWidth + gap) + cellWidth,
+                    graph.top + row * (cellHeight + gap) + cellHeight
+                };
+                GraphStyle style;
+                ZeroMemory(&style, sizeof(style));
+                style.line = g_t.graph[RES_CPU];
+                style.secondLine = KernelLineColor();
+                style.grid = TRUE;
+                style.border = TRUE;
+                style.yMax = 100.0;
+                style.second = showKernelTimes ? &d.hCpuLogicalKernel[i] : NULL;
+                DrawGraph(paint, cell, &d.hCpuLogical[i], style);
+            }
         }
 
         RECT bottomRect = { graph.left, graph.bottom + S(2),

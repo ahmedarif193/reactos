@@ -95,12 +95,21 @@ void Action_ToggleEfficiency(HWND owner, ProcRow* p)
 
 struct ProcessesPage : Page, ITreeListOwner
 {
+    struct CollapsedProc
+    {
+        ULONG pid;
+        LONGLONG createTime;
+    };
+
     HWND tl;
     int  sortCol;
     BOOL sortDesc;
     BOOL catCollapsed[3];
-    Vec<ULONG> collapsedPids;    /* parents the user collapsed (default expanded) */
+    Vec<CollapsedProc> collapsedProcs; /* parents the user collapsed */
     Vec<TLRow> rows;
+    Vec<ProcRow*> byPid;
+    Vec<ProcRow*> children;
+    Vec<ProcRow*> top;
 
     ProcessesPage() : tl(NULL), sortCol(PC_NAME), sortDesc(FALSE)
     {
@@ -114,24 +123,31 @@ struct ProcessesPage : Page, ITreeListOwner
 
     static ProcRow* PR(LPARAM data) { return (ProcRow*)data; }
 
-    BOOL IsCollapsed(ULONG pid)
+    BOOL IsCollapsed(const ProcRow& process)
     {
-        for (int i = 0; i < collapsedPids.n; i++)
-            if (collapsedPids[i] == pid) return TRUE;
+        for (int i = 0; i < collapsedProcs.n; i++)
+            if (collapsedProcs[i].pid == process.pid &&
+                collapsedProcs[i].createTime == process.createTime)
+                return TRUE;
         return FALSE;
     }
 
-    void SetCollapsed(ULONG pid, BOOL c)
+    void SetCollapsed(const ProcRow& process, BOOL collapsed)
     {
-        for (int i = 0; i < collapsedPids.n; i++)
+        for (int i = 0; i < collapsedProcs.n; i++)
         {
-            if (collapsedPids[i] == pid)
+            if (collapsedProcs[i].pid == process.pid &&
+                collapsedProcs[i].createTime == process.createTime)
             {
-                if (!c) collapsedPids.RemoveAt(i);
+                if (!collapsed) collapsedProcs.RemoveAt(i);
                 return;
             }
         }
-        if (c) collapsedPids.Push(pid);
+        if (collapsed)
+        {
+            CollapsedProc item = { process.pid, process.createTime };
+            collapsedProcs.Push(item);
+        }
     }
 
     static void DisplayName(const ProcRow& p, WCHAR* buf, int cch)
@@ -213,6 +229,58 @@ struct ProcessesPage : Page, ITreeListOwner
         return s_sc.desc ? -r : r;
     }
 
+    static int __cdecl CmpPid(const void* a, const void* b)
+    {
+        const ProcRow* pa = *(const ProcRow* const*)a;
+        const ProcRow* pb = *(const ProcRow* const*)b;
+        if (pa->pid != pb->pid) return pa->pid < pb->pid ? -1 : 1;
+        if (pa->createTime != pb->createTime)
+            return pa->createTime < pb->createTime ? -1 : 1;
+        return 0;
+    }
+
+    static int __cdecl CmpChild(const void* a, const void* b)
+    {
+        const ProcRow* pa = *(const ProcRow* const*)a;
+        const ProcRow* pb = *(const ProcRow* const*)b;
+        if (pa->ppid != pb->ppid) return pa->ppid < pb->ppid ? -1 : 1;
+        return CmpProc(a, b);
+    }
+
+    ProcRow* FindPid(ULONG pid)
+    {
+        int low = 0, high = byPid.n;
+        while (low < high)
+        {
+            int middle = low + (high - low) / 2;
+            if (byPid[middle]->pid < pid)
+                low = middle + 1;
+            else
+                high = middle;
+        }
+        return (low < byPid.n && byPid[low]->pid == pid) ? byPid[low] : NULL;
+    }
+
+    int FirstChild(ULONG pid)
+    {
+        int low = 0, high = children.n;
+        while (low < high)
+        {
+            int middle = low + (high - low) / 2;
+            if (children[middle]->ppid < pid)
+                low = middle + 1;
+            else
+                high = middle;
+        }
+        return low;
+    }
+
+    BOOL IsNestedUnderApp(const ProcRow& process)
+    {
+        ProcRow* parent = FindPid(process.ppid);
+        return parent && parent->category == CAT_APP && IsChildOf(process, *parent);
+    }
+
     void AddProcRow(ProcRow* p, int depth)
     {
         TLRow* r = rows.Add();
@@ -223,30 +291,36 @@ struct ProcessesPage : Page, ITreeListOwner
         r->depth = (BYTE)depth;
 
         /* children: nested processes (apps only, like Win11) + svchost services */
-        Vec<ProcRow*> kids;
+        int firstChild = children.n;
+        int lastChild = children.n;
         if (depth == 0 && p->category == CAT_APP)
         {
-            for (int i = 0; i < Data::g.procs.n; i++)
-            {
-                ProcRow& c = Data::g.procs[i];
-                if (c.pid <= 4) continue;
-                if (IsChildOf(c, *p))
-                    kids.Push(&Data::g.procs[i]);
-            }
+            firstChild = FirstChild(p->pid);
+            lastChild = firstChild;
+            while (lastChild < children.n && children[lastChild]->ppid == p->pid)
+                lastChild++;
         }
         const WCHAR* svc = (p->flags & PF_SVCHOST) ? Data::SvchostServices(p->pid) : NULL;
 
-        BOOL hasKids = kids.n > 0 || (svc && svc[0]);
+        BOOL hasProcessChildren = FALSE;
+        for (int i = firstChild; i < lastChild; i++)
+        {
+            if (IsChildOf(*children[i], *p))
+            {
+                hasProcessChildren = TRUE;
+                break;
+            }
+        }
+        BOOL hasKids = hasProcessChildren || (svc && svc[0]);
         if (hasKids)
         {
             r->expandable = TRUE;
-            r->expanded = !IsCollapsed(p->pid);
+            r->expanded = !IsCollapsed(*p);
             if (r->expanded)
             {
-                if (kids.n > 1)
-                    qsort(kids.p, kids.n, sizeof(ProcRow*), CmpProc);
-                for (int i = 0; i < kids.n; i++)
-                    AddProcRow(kids[i], depth + 1);
+                for (int i = firstChild; i < lastChild; i++)
+                    if (IsChildOf(*children[i], *p))
+                        AddProcRow(children[i], depth + 1);
 
                 if (svc && svc[0])
                 {
@@ -274,11 +348,37 @@ struct ProcessesPage : Page, ITreeListOwner
     void Rebuild(void)
     {
         rows.Clear();
+        byPid.Clear();
+        children.Clear();
+
+        s_sc.col = sortCol;
+        s_sc.desc = sortDesc;
+        s_sc.pg = this;
+        for (int i = 0; i < Data::g.procs.n; i++)
+        {
+            ProcRow* process = &Data::g.procs[i];
+            byPid.Push(process);
+            if (process->pid > 4 && process->category != CAT_APP)
+                children.Push(process);
+        }
+        if (byPid.n > 1)
+            qsort(byPid.p, byPid.n, sizeof(ProcRow*), CmpPid);
+        if (children.n > 1)
+            qsort(children.p, children.n, sizeof(ProcRow*), CmpChild);
+
+        /* A process identity owns its collapsed state. Drop dead identities
+           so PID reuse cannot inherit UI state and the vector cannot grow. */
+        for (int i = collapsedProcs.n - 1; i >= 0; i--)
+        {
+            ProcRow* process = FindPid(collapsedProcs[i].pid);
+            if (!process || process->createTime != collapsedProcs[i].createTime)
+                collapsedProcs.RemoveAt(i);
+        }
 
         /* bucket top-level processes by category */
         for (int cat = 0; cat < 3; cat++)
         {
-            Vec<ProcRow*> top;
+            top.Clear();
             for (int i = 0; i < Data::g.procs.n; i++)
             {
                 ProcRow& p = Data::g.procs[i];
@@ -287,19 +387,8 @@ struct ProcessesPage : Page, ITreeListOwner
                 if (!MatchesSearch(p)) continue;
 
                 /* skip if it will be nested under an app parent */
-                BOOL nested = FALSE;
-                if (cat != CAT_APP && !g_app.search[0])
-                {
-                    for (int j = 0; j < Data::g.procs.n; j++)
-                    {
-                        ProcRow& par = Data::g.procs[j];
-                        if (par.category == CAT_APP && IsChildOf(p, par))
-                        {
-                            nested = TRUE;
-                            break;
-                        }
-                    }
-                }
+                BOOL nested = cat != CAT_APP && !g_app.search[0] &&
+                              IsNestedUnderApp(p);
                 if (!nested)
                     top.Push(&Data::g.procs[i]);
             }
@@ -320,9 +409,6 @@ struct ProcessesPage : Page, ITreeListOwner
 
             if (catCollapsed[cat]) continue;
 
-            s_sc.col = sortCol;
-            s_sc.desc = sortDesc;
-            s_sc.pg = this;
             if (top.n > 1)
                 qsort(top.p, top.n, sizeof(ProcRow*), CmpProc);
 
@@ -523,7 +609,7 @@ struct ProcessesPage : Page, ITreeListOwner
         else
         {
             ProcRow* p = RowProc(data);
-            if (p) SetCollapsed(p->pid, !expanded);
+            if (p) SetCollapsed(*p, !expanded);
         }
         Rebuild();
     }

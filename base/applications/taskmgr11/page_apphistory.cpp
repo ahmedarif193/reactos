@@ -17,6 +17,7 @@ struct AppHistoryPage : Page, ITreeListOwner
     int  sortCol;
     BOOL sortDesc;
     Vec<TLRow> rows;
+    Vec<AppHistRow*> list;
     int  infoH;
     ULONGLONG cpuMaximum;
     ULONGLONG networkMaximum;
@@ -76,7 +77,7 @@ struct AppHistoryPage : Page, ITreeListOwner
         rows.Clear();
         cpuMaximum = networkMaximum = notificationMaximum = 0;
         Vec<AppHistRow>& hist = Data::AppHistory();
-        Vec<AppHistRow*> list;
+        list.Clear();
         for (int i = 0; i < hist.n; i++)
         {
             list.Push(&hist[i]);
@@ -300,7 +301,18 @@ struct AppHistoryPage : Page, ITreeListOwner
             OpenHistoryApp(AH(TL_GetSelData(tl)));
     }
 
-    void OnTick() { Rebuild(); Frame_UpdateCommandStates(); }
+    void OnShow(BOOL shown)
+    {
+        if (shown)
+            Data::ResolveAppHistoryIcons(8);
+    }
+
+    void OnTick()
+    {
+        Data::ResolveAppHistoryIcons(8);
+        Rebuild();
+        Frame_UpdateCommandStates();
+    }
     void OnThemeChanged() { InvalidateRect(hwnd, NULL, TRUE); TL_Refresh(tl); }
 
     void PaintInfo(HDC dc, const RECT& rc)
