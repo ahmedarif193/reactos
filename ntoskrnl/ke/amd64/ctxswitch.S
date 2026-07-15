@@ -184,6 +184,28 @@ PUBLIC KiUserThreadStartupExit
     jmp .SwapBusySet
 .SwapBusyClear:
 
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    /* Charge execution time through the context-switch boundary. */
+    pushfq
+    cli
+    mov r9, rdx
+    rdtsc
+    shl rdx, 32
+    or rax, rdx
+    mov r10, gs:[PcStartCycles]
+    mov gs:[PcStartCycles], rax
+    test r10, r10
+    jz .CycleTimeSeeded
+    cmp rax, r10
+    jb .CycleTimeSeeded
+    sub rax, r10
+    add [r9 + ThCycleTime], rax
+    add gs:[PcCycleTime], rax
+.CycleTimeSeeded:
+    mov rdx, r9
+    popfq
+#endif
+
     /* Save WaitIrql as KSWITCH_FRAME::ApcBypass */
     mov [rsp + SwApcBypass], cl
 
