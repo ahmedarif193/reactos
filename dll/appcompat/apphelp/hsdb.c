@@ -540,7 +540,15 @@ BOOL WINAPI SdbGetMatchingExe(HSDB hsdb, LPCWSTR path, LPCWSTR module_name,
             /* Get information about executable required to match it with database entry */
             if (!attribs)
             {
-                if (!SdbGetFileAttributes(path, &attribs, &attr_count))
+                BOOL Success;
+
+                /* Temporarily restore the full DOS path: the Win32 APIs used
+                   by SdbGetFileAttributes cannot parse the NT path we got */
+                *(--file_name) = L'\\';
+                Success = SdbGetFileAttributes(DosApplicationName.String.Buffer,
+                                               &attribs, &attr_count);
+                *(file_name++) = UNICODE_NULL;
+                if (!Success)
                     goto Cleanup;
             }
 
