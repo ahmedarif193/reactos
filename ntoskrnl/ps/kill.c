@@ -184,6 +184,8 @@ PspReapRoutine(IN PVOID Context)
             /* Get the first Thread Entry */
             Thread = CONTAINING_RECORD(NextEntry, ETHREAD, ReaperLink);
 
+            KiWaitForThreadSwapOut(&Thread->Tcb);
+
             /* Delete this entry's kernel stack */
             MmDeleteKernelStack((PVOID)Thread->Tcb.StackBase,
                                 Thread->Tcb.LargeStack);

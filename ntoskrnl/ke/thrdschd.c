@@ -203,6 +203,19 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
     ASSERT(Thread->State == DeferredReady);
     ASSERT((Thread->Priority >= 0) && (Thread->Priority <= HIGH_PRIORITY));
 
+#if defined(CONFIG_SMP) && defined(_M_AMD64) && \
+    (NTDDI_VERSION >= NTDDI_WIN7)
+    /* Publish a migrating thread only after its old stack is detached. */
+    KiAcquireThreadLock(Thread);
+    if (Thread->Running)
+    {
+        Thread->ReadyTransition = TRUE;
+        KiReleaseThreadLock(Thread);
+        return;
+    }
+    KiReleaseThreadLock(Thread);
+#endif
+
     /* Check if we have any adjusts to do */
     if (Thread->AdjustReason == AdjustBoost)
     {
