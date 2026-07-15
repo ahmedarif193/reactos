@@ -2704,8 +2704,50 @@ MiDeletePte(
     IN PMMPTE PointerPte,
     IN PVOID VirtualAddress,
     IN PEPROCESS CurrentProcess,
-    IN PMMPTE PrototypePte
+    IN PMMPTE PrototypePte,
+    IN BOOLEAN FlushTb
 );
+
+FORCEINLINE
+VOID
+MiFlushSystemTbRange(
+    _In_opt_ PVOID BaseAddress,
+    _In_ ULONG PageCount)
+{
+#if defined(_M_AMD64)
+    KiIpiSendTbFlush((KAFFINITY)KeActiveProcessors,
+                     BaseAddress,
+                     PageCount);
+#else
+    UNREFERENCED_PARAMETER(BaseAddress);
+    UNREFERENCED_PARAMETER(PageCount);
+    KeFlushEntireTb(TRUE, TRUE);
+#endif
+}
+
+FORCEINLINE
+VOID
+MiFlushTbForAddress(
+    _In_ PVOID VirtualAddress)
+{
+#if defined(_M_AMD64)
+    KAFFINITY TargetSet;
+
+    if (VirtualAddress <= MmHighestUserAddress)
+    {
+        TargetSet = KeGetCurrentThread()->ApcState.Process->ActiveProcessors |
+                    KeGetCurrentPrcb()->SetMember;
+    }
+    else
+    {
+        TargetSet = (KAFFINITY)KeActiveProcessors;
+    }
+
+    KiIpiSendTbFlush(TargetSet, VirtualAddress, 1);
+#else
+    KeFlushEntireTb(TRUE, TRUE);
+#endif
+}
 
 ULONG
 NTAPI
@@ -2907,22 +2949,35 @@ FORCEINLINE
 VOID
 MiDeletePde(
     _In_ PMMPDE PointerPde,
-    _In_ PEPROCESS CurrentProcess)
+    _In_ PEPROCESS CurrentProcess,
+    _In_ BOOLEAN FlushTb)
 {
     /* Only for user-mode ones */
     ASSERT(MiIsUserPde(PointerPde));
 
     /* Kill this one as a PTE */
-    MiDeletePte((PMMPTE)PointerPde, MiPdeToPte(PointerPde), CurrentProcess, NULL);
+    MiDeletePte((PMMPTE)PointerPde,
+                MiPdeToPte(PointerPde),
+                CurrentProcess,
+                NULL,
+                FlushTb);
 #if _MI_PAGING_LEVELS >= 3
     /* Cascade down */
     if (MiDecrementPageTableReferences(MiPdeToPte(PointerPde)) == 0)
     {
-        MiDeletePte(MiPdeToPpe(PointerPde), PointerPde, CurrentProcess, NULL);
+        MiDeletePte(MiPdeToPpe(PointerPde),
+                    PointerPde,
+                    CurrentProcess,
+                    NULL,
+                    FlushTb);
 #if _MI_PAGING_LEVELS == 4
         if (MiDecrementPageTableReferences(PointerPde) == 0)
         {
-            MiDeletePte(MiPdeToPxe(PointerPde), MiPdeToPpe(PointerPde), CurrentProcess, NULL);
+            MiDeletePte(MiPdeToPxe(PointerPde),
+                        MiPdeToPpe(PointerPde),
+                        CurrentProcess,
+                        NULL,
+                        FlushTb);
         }
 #endif
     }

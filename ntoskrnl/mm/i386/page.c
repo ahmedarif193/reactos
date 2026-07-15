@@ -293,7 +293,9 @@ MmDeleteVirtualMappingEx(
         PointerPte = MiAddressToPte(Address);
         OldPte.u.Long = InterlockedExchangePte(PointerPte, 0);
 
-        KeInvalidateTlbEntry(Address);
+        /* Invalidate the removed mapping on every processor before the PFN
+           share count can make the page reusable. */
+        MiFlushTbForAddress(Address);
 
         if (OldPte.u.Long != 0)
         {
@@ -318,7 +320,7 @@ MmDeleteVirtualMappingEx(
             if (MiDecrementPageTableReferences(Address) == 0)
             {
                 KIRQL OldIrql = MiAcquirePfnLock();
-                MiDeletePde(MiAddressToPde(Address), Process);
+                MiDeletePde(MiAddressToPde(Address), Process, TRUE);
                 MiReleasePfnLock(OldIrql);
             }
         }
@@ -408,7 +410,7 @@ MmDeletePageFileMapping(
     {
         /* We can let it go */
         KIRQL OldIrql = MiAcquirePfnLock();
-        MiDeletePde(MiPteToPde(PointerPte), Process);
+        MiDeletePde(MiPteToPde(PointerPte), Process, TRUE);
         MiReleasePfnLock(OldIrql);
     }
 
