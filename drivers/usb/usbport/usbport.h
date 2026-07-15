@@ -482,6 +482,7 @@ typedef struct _USBPORT_DEVICE_EXTENSION {
   ULONG TimerFlags;
   KTIMER TimerObject;
   KDPC TimerDpc;
+  KEVENT TimerDpcEvent;
   KSPIN_LOCK TimerFlagsSpinLock;
   /* Worker Thread */
   PRKTHREAD WorkerThread;
