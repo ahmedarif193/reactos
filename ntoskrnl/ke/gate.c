@@ -193,9 +193,8 @@ KeSignalGateBoostPriority(IN PKGATE Gate)
             /* Clear wait status */
             WaitThread->WaitStatus = STATUS_SUCCESS;
 
-            /* Set state and CPU */
+            /* Set state */
             WaitThread->State = DeferredReady;
-            WaitThread->DeferredProcessor = KeGetCurrentPrcb()->Number;
 
             /* Release the gate lock */
             KiReleaseDispatcherObject(&Gate->Header);
