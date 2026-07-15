@@ -90,10 +90,9 @@ typedef HRESULT(WINAPI * PMERGEDFOLDER_CREATEINSTANCE)(REFIID riid, void **ppv);
 HRESULT CMergedFolder_CreateInstance(REFIID riid, void **ppv)
 {
 #if USE_CUSTOM_MERGEDFOLDER
+    /* Honor an already-loaded experimental module, but do not issue a
+       failing load for a library that is not shipped */
     HMODULE hRShell = GetModuleHandle(L"rshell.dll");
-    if (!hRShell)
-        hRShell = LoadLibrary(L"rshell.dll");
-
     if (hRShell)
     {
         PMERGEDFOLDER_CREATEINSTANCE pCMergedFolder_CreateInstance = (PMERGEDFOLDER_CREATEINSTANCE)
@@ -111,11 +110,9 @@ HRESULT CMergedFolder_CreateInstance(REFIID riid, void **ppv)
 HRESULT CMenuBand_CreateInstance(REFIID iid, LPVOID *ppv)
 {
 #if USE_CUSTOM_MENUBAND
+    /* Honor an already-loaded experimental module, but do not issue a
+       failing load for a library that is not shipped */
     HMODULE hRShell = GetModuleHandleW(L"rshell.dll");
-
-    if (!hRShell)
-        hRShell = LoadLibraryW(L"rshell.dll");
-
     if (hRShell)
     {
         PMENUBAND_CREATEINSTANCE func = (PMENUBAND_CREATEINSTANCE) GetProcAddress(hRShell, "CMenuBand_CreateInstance");
