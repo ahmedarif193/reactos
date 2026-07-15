@@ -141,8 +141,6 @@ CcPerformReadAhead(
     BOOLEAN Locked;
     BOOLEAN Success;
 
-    SharedCacheMap = FileObject->SectionObjectPointer->SharedCacheMap;
-
     /* Critical:
      * PrivateCacheMap might disappear in-between if the handle
      * to the file is closed (private is attached to the handle not to
@@ -166,6 +164,17 @@ CcPerformReadAhead(
         Length = PrivateCacheMap->ReadAheadLength[1];
         KeReleaseSpinLockFromDpcLevel(&PrivateCacheMap->ReadAheadSpinLock);
     }
+
+    /* Pin the shared map before releasing the master lock. */
+    SharedCacheMap = FileObject->SectionObjectPointer->SharedCacheMap;
+    if (SharedCacheMap == NULL)
+    {
+        KeReleaseQueuedSpinLock(LockQueueMasterLock, OldIrql);
+        ObDereferenceObject(FileObject);
+        return;
+    }
+    SharedCacheMap->OpenCount++;
+
     KeReleaseQueuedSpinLock(LockQueueMasterLock, OldIrql);
 
     /* Time to go! */
@@ -285,6 +294,9 @@ Clear:
     {
         SharedCacheMap->Callbacks->ReleaseFromReadAhead(SharedCacheMap->LazyWriteContext);
     }
+
+    /* Release the shared map after the read-ahead callback. */
+    CcRosDereferenceCache(FileObject);
 
     /* And drop our extra reference (See: CcScheduleReadAhead) */
     ObDereferenceObject(FileObject);
