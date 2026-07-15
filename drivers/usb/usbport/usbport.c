@@ -93,7 +93,17 @@ USBPORT_StopControllerTimer(IN PUSBPORT_DEVICE_EXTENSION FdoExtension)
 
     if (CancelTimer)
     {
-        KeCancelTimer(&FdoExtension->TimerObject);
+        /* A successful cancel proves that the timer cannot queue its DPC.
+         * Otherwise, remove a DPC which expired but has not started yet. */
+        if (KeCancelTimer(&FdoExtension->TimerObject) || KeRemoveQueueDpc(&FdoExtension->TimerDpc))
+        {
+            return;
+        }
+
+        /* The DPC was already dequeued and may be running. It observes the
+         * cleared flag under TimerFlagsSpinLock and signals after its final
+         * access to the embedded timer state. */
+        KeWaitForSingleObject(&FdoExtension->TimerDpcEvent, Executive, KernelMode, FALSE, NULL);
     }
 }
 
@@ -2237,6 +2247,7 @@ USBPORT_TimerDpc(IN PRKDPC Dpc,
     LARGE_INTEGER DueTime = {{0, 0}};
     ULONG TimerFlags;
     PTIMER_WORK_QUEUE_ITEM IdleQueueItem;
+    BOOLEAN TimerStopped = FALSE;
     KIRQL OldIrql;
     KIRQL TimerOldIrql;
 
@@ -2246,17 +2257,24 @@ USBPORT_TimerDpc(IN PRKDPC Dpc,
 
     FdoDevice = DeferredContext;
     FdoExtension = FdoDevice->DeviceExtension;
+
+    KeAcquireSpinLock(&FdoExtension->TimerFlagsSpinLock, &TimerOldIrql);
+
+    TimerFlags = FdoExtension->TimerFlags;
+
+    if (!(TimerFlags & USBPORT_TMFLAG_TIMER_QUEUED))
+    {
+        TimerStopped = TRUE;
+        goto Exit;
+    }
+
     Packet = &FdoExtension->MiniPortInterface->Packet;
 
     if (FdoExtension->Flags & USBPORT_FLAG_RH_STOPPED)
     {
         USBPORT_TIMER_TRACE("USBPORT_TimerDpc: root hub stopped, skipping DPC\n");
-        return;
+        goto Exit;
     }
-
-    KeAcquireSpinLock(&FdoExtension->TimerFlagsSpinLock, &TimerOldIrql);
-
-    TimerFlags = FdoExtension->TimerFlags;
 
     USBPORT_TIMER_TRACE("USBPORT_TimerDpc: Flags - %p, TimerFlags - %p\n",
                         FdoExtension->Flags,
@@ -2347,10 +2365,10 @@ USBPORT_TimerDpc(IN PRKDPC Dpc,
     }
 
 Exit:
-
-    KeReleaseSpinLock(&FdoExtension->TimerFlagsSpinLock, TimerOldIrql);
-
-    if (TimerFlags & USBPORT_TMFLAG_TIMER_QUEUED)
+    /* Rearm while holding the same lock used by StopControllerTimer. This
+     * makes the live flag, the timer state, and stop's cancel decision one
+     * ordered transition instead of rearming from a stale snapshot. */
+    if (FdoExtension->TimerFlags & USBPORT_TMFLAG_TIMER_QUEUED)
     {
         DueTime.QuadPart -= FdoExtension->TimerValue * 10000 +
                             (KeQueryTimeIncrement() - 1);
@@ -2358,6 +2376,17 @@ Exit:
         KeSetTimer(&FdoExtension->TimerObject,
                    DueTime,
                    &FdoExtension->TimerDpc);
+    }
+    else
+    {
+        TimerStopped = TRUE;
+    }
+
+    KeReleaseSpinLock(&FdoExtension->TimerFlagsSpinLock, TimerOldIrql);
+
+    if (TimerStopped)
+    {
+        KeSetEvent(&FdoExtension->TimerDpcEvent, IO_NO_INCREMENT, FALSE);
     }
 
     DPRINT_TIMER("USBPORT_TimerDpc: exit\n");
@@ -2372,6 +2401,7 @@ USBPORT_StartTimer(IN PDEVICE_OBJECT FdoDevice,
     LARGE_INTEGER DueTime = {{0, 0}};
     ULONG TimeIncrement;
     BOOLEAN Result;
+    KIRQL OldIrql;
 
     DPRINT_TIMER("USBPORT_StartTimer: FdoDevice - %p, Time - %x\n",
            FdoDevice,
@@ -2381,17 +2411,20 @@ USBPORT_StartTimer(IN PDEVICE_OBJECT FdoDevice,
 
     TimeIncrement = KeQueryTimeIncrement();
 
-    FdoExtension->TimerFlags |= USBPORT_TMFLAG_TIMER_QUEUED;
-    FdoExtension->TimerValue = Time;
-
     KeInitializeTimer(&FdoExtension->TimerObject);
     KeInitializeDpc(&FdoExtension->TimerDpc, USBPORT_TimerDpc, FdoDevice);
 
     DueTime.QuadPart -= 10000 * Time + (TimeIncrement - 1);
 
+    KeAcquireSpinLock(&FdoExtension->TimerFlagsSpinLock, &OldIrql);
+    FdoExtension->TimerFlags |= USBPORT_TMFLAG_TIMER_QUEUED;
+    FdoExtension->TimerValue = Time;
+    KeClearEvent(&FdoExtension->TimerDpcEvent);
+
     Result = KeSetTimer(&FdoExtension->TimerObject,
                         DueTime,
                         &FdoExtension->TimerDpc);
+    KeReleaseSpinLock(&FdoExtension->TimerFlagsSpinLock, OldIrql);
 
     return Result;
 }

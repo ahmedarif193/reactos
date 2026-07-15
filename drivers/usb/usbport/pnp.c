@@ -1692,6 +1692,7 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
     KeInitializeSpinLock(&FdoExtension->WorkerThreadEventSpinLock);
     KeInitializeSpinLock(&FdoExtension->MiniportSpinLock);
     KeInitializeSpinLock(&FdoExtension->TimerFlagsSpinLock);
+    KeInitializeEvent(&FdoExtension->TimerDpcEvent, NotificationEvent, TRUE);
     KeInitializeSpinLock(&FdoExtension->PowerWakeSpinLock);
     KeInitializeSpinLock(&FdoExtension->SetPowerD0SpinLock);
     KeInitializeSpinLock(&FdoExtension->RootHubCallbackSpinLock);
