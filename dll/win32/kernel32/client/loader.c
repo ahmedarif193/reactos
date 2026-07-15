@@ -383,7 +383,29 @@ done:
     /* Set last error in failure case */
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("LoadLibraryExW(%ls) failing with status %lx\n", lpLibFileName, Status);
+        PVOID Callers[4] = { NULL };
+        ULONG CallerCount, Frame;
+
+        DPRINT1("LoadLibraryExW(%ls, dwFlags 0x%lx) failing with status %lx\n",
+                lpLibFileName, dwFlags, Status);
+
+        /* Log the caller chain, so the log identifies who issued the load */
+        CallerCount = RtlWalkFrameChain(Callers, RTL_NUMBER_OF(Callers), 0);
+        for (Frame = 0; Frame < CallerCount; Frame++)
+        {
+            PLDR_DATA_TABLE_ENTRY LdrEntry;
+            UNICODE_STRING ModuleName = RTL_CONSTANT_STRING(L"<unknown>");
+            ULONG_PTR Offset = 0;
+
+            if (NT_SUCCESS(LdrFindEntryForAddress(Callers[Frame], &LdrEntry)))
+            {
+                ModuleName = LdrEntry->BaseDllName;
+                Offset = (ULONG_PTR)Callers[Frame] - (ULONG_PTR)LdrEntry->DllBase;
+            }
+            DPRINT1("    frame %lu: %p ('%wZ' + 0x%Ix)\n",
+                    Frame, Callers[Frame], &ModuleName, Offset);
+        }
+
         BaseSetLastNTError(Status);
         return NULL;
     }
