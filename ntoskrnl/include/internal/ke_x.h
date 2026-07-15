@@ -252,6 +252,14 @@ KiAcquireDispatcherObject(IN DISPATCHER_HEADER* Object)
     UNREFERENCED_PARAMETER(Object);
 }
 
+FORCEINLINE
+BOOLEAN
+KiTryAcquireDispatcherObject(IN DISPATCHER_HEADER* Object)
+{
+    UNREFERENCED_PARAMETER(Object);
+    return TRUE;
+}
+
 //
 // This routine protects against multiple CPU acquires, it's meaningless on UP.
 //
@@ -466,6 +474,20 @@ KiAcquireDispatcherObject(IN DISPATCHER_HEADER* Object)
     } while (InterlockedCompareExchange(&Object->Lock,
                                         OldValue | KOBJECT_LOCK_BIT,
                                         OldValue) != OldValue);
+}
+
+FORCEINLINE
+BOOLEAN
+KiTryAcquireDispatcherObject(IN DISPATCHER_HEADER* Object)
+{
+    LONG OldValue;
+
+    ASSERT(KeGetCurrentIrql() >= DISPATCH_LEVEL);
+
+    OldValue = Object->Lock;
+    if (OldValue & KOBJECT_LOCK_BIT) return FALSE;
+
+    return (InterlockedCompareExchange(&Object->Lock, OldValue | KOBJECT_LOCK_BIT, OldValue) == OldValue);
 }
 
 FORCEINLINE
