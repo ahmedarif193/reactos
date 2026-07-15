@@ -1471,7 +1471,7 @@ CmpLookInCache(
     LONG RemainingSubkeys;
     ULONG TotalLevels;
     BOOLEAN SubkeysMatch;
-    PCM_KEY_CONTROL_BLOCK CurrentKcb, ParentKcb;
+    PCM_KEY_CONTROL_BLOCK CurrentKcb, ParentKcb, OldKcb = NULL;
     PCM_KEY_HASH HashEntry = NULL;
     BOOLEAN KeyFoundInCache = FALSE;
     PULONG LockedKcbs = NULL;
@@ -1609,21 +1609,17 @@ CmpLookInCache(
     /* We have to update the KCB if the key was found in cache */
     if (KeyFoundInCache)
     {
-        /*
-         * Before we change the KCB we must dereference the prior
-         * KCB that we no longer need it.
-         */
-        CmpDereferenceKeyControlBlock(*Kcb);
-        *Kcb = CurrentKcb;
-
-        /* Reference the new KCB now */
-        if (!CmpReferenceKeyControlBlock(*Kcb))
+        if (!CmpReferenceKeyControlBlock(CurrentKcb))
         {
             /* This key is opened too many times, bail out */
             DPRINT1("Could not reference the KCB, too many references (KCB 0x%p)\n", Kcb);
             CmpUnLockKcbArray(LockedKcbs);
+            CmpDereferenceKeyControlBlock(*Kcb);
             return STATUS_UNSUCCESSFUL;
         }
+
+        OldKcb = *Kcb;
+        *Kcb = CurrentKcb;
 
         /* Update hive and cell data from current KCB */
         *Hive = CurrentKcb->KeyHive;
@@ -1632,6 +1628,10 @@ CmpLookInCache(
 
     /* Unlock the KCBs */
     CmpUnLockKcbArray(LockedKcbs);
+
+    if (OldKcb != NULL)
+        CmpDereferenceKeyControlBlock(OldKcb);
+
     return STATUS_SUCCESS;
 }
 
