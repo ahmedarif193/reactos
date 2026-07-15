@@ -1140,13 +1140,13 @@ KxInsertTimer(IN PKTIMER Timer,
     PKSPIN_LOCK_QUEUE LockQueue;
     ASSERT(KeGetCurrentIrql() >= SYNCH_LEVEL);
 
-    /* Acquire the lock and release the dispatcher lock */
+    /* The caller owns the timer object; acquire its table lock second */
     LockQueue = KiAcquireTimerLock(Hand);
-    KiReleaseDispatcherObject(&Timer->Header);
 
     if (!Timer->Header.Inserted)
     {
         KiReleaseTimerLock(LockQueue);
+        KiReleaseDispatcherObject(&Timer->Header);
         return;
     }
 
@@ -1158,8 +1158,9 @@ KxInsertTimer(IN PKTIMER Timer,
     }
     else
     {
-        /* Do nothing, just release the lock */
+        /* The timer is table-owned; release both locks */
         KiReleaseTimerLock(LockQueue);
+        KiReleaseDispatcherObject(&Timer->Header);
     }
 }
 
@@ -1171,11 +1172,14 @@ KxInsertTimerNoRelease(IN PKTIMER Timer,
     PKSPIN_LOCK_QUEUE LockQueue;
     ASSERT(KeGetCurrentIrql() >= SYNCH_LEVEL);
 
+    /* Establish the same object-to-table lock order as timer setters */
+    KiAcquireDispatcherObject(&Timer->Header);
     LockQueue = KiAcquireTimerLock(Hand);
 
     if (!Timer->Header.Inserted)
     {
         KiReleaseTimerLock(LockQueue);
+        KiReleaseDispatcherObject(&Timer->Header);
         return;
     }
 
@@ -1186,6 +1190,7 @@ KxInsertTimerNoRelease(IN PKTIMER Timer,
     else
     {
         KiReleaseTimerLock(LockQueue);
+        KiReleaseDispatcherObject(&Timer->Header);
     }
 }
 

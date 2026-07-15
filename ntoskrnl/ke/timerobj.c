@@ -158,46 +158,19 @@ KiSignalTimer(IN PKTIMER Timer)
     return RequestInterrupt;
 }
 
-#if defined(__GNUC__) && !defined(__clang__) && (__GNUC__ >= 12)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdangling-pointer"
-#endif
 VOID
 FASTCALL
 KiCompleteTimer(IN PKTIMER Timer,
                 IN PKSPIN_LOCK_QUEUE LockQueue)
 {
-    LIST_ENTRY ListHead;
     BOOLEAN RequestInterrupt = FALSE;
     DPRINT("KiCompleteTimer(): Timer %p, LockQueue: %p\n", Timer, LockQueue);
 
-    /* Remove it from the timer list */
+    /* Both the timer object and its table bucket are owned by the caller */
     KiRemoveEntryTimer(Timer);
-
-    /* Link the timer list to our stack */
-    InitializeListHead(&ListHead);
-    InsertHeadList(&ListHead, &Timer->TimerListEntry);
-
-    /* Release the timer lock */
+    Timer->Header.Inserted = FALSE;
     KiReleaseTimerLock(LockQueue);
-
-    /* Acquire the timer object lock */
-    KiAcquireDispatcherObject(&Timer->Header);
-
-    /* Signal the timer if it's still on our list */
-    if (!IsListEmpty(&ListHead)) RequestInterrupt = KiSignalTimer(Timer);
-
-    /*
-     * KiSignalTimer may leave a one-shot timer detached from the timer table
-     * with the temporary stack list still referenced from TimerListEntry.
-     * Clear that transient state before returning.
-     */
-    if ((Timer->TimerListEntry.Flink == &ListHead) &&
-        (Timer->TimerListEntry.Blink == &ListHead))
-    {
-        Timer->TimerListEntry.Flink = NULL;
-        Timer->TimerListEntry.Blink = NULL;
-    }
+    RequestInterrupt = KiSignalTimer(Timer);
 
     /* Release the timer object lock */
     KiReleaseDispatcherObject(&Timer->Header);
@@ -205,9 +178,6 @@ KiCompleteTimer(IN PKTIMER Timer,
     /* Request a DPC if needed */
     if (RequestInterrupt) HalRequestSoftwareInterrupt(DISPATCH_LEVEL);
 }
-#if defined(__GNUC__) && !defined(__clang__) && (__GNUC__ >= 12)
-#pragma GCC diagnostic pop
-#endif
 
 /* PUBLIC FUNCTIONS **********************************************************/
 
