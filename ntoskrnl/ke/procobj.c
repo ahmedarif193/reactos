@@ -196,7 +196,7 @@ KeInitializeProcess(IN OUT PKPROCESS Process,
     /* Find the matching affinity set to calculate the thread seed */
     Affinity &= Node->ProcessorMask;
     Process->ThreadSeed = KeFindNextRightSetAffinity(Node->Seed,
-                                                     (ULONG)Affinity);
+                                                     Affinity);
     Node->Seed = Process->ThreadSeed;
 #endif
 }
