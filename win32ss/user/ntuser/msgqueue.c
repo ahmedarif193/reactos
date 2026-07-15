@@ -11,6 +11,8 @@
 #include <win32k.h>
 DBG_DEFAULT_CHANNEL(UserMsgQ);
 
+#define MESSAGE_QUEUE_INCREMENT 2
+
 /* GLOBALS *******************************************************************/
 
 static PPAGED_LOOKASIDE_LIST pgMessageLookasideList;
@@ -378,7 +380,9 @@ IntMsqSetWakeMask(DWORD WakeMask)
            ( (dwFlags & MWMO_INPUTAVAILABLE) && (Win32Thread->pcti->fsWakeBits & LOWORD(WakeMask)) ) )
       {
          ERR("Chg 0x%x Wake 0x%x Mask 0x%x\n",Win32Thread->pcti->fsChangeBits, Win32Thread->pcti->fsWakeBits, WakeMask);
-         KeSetEvent(Win32Thread->pEventQueueServer, IO_NO_INCREMENT, FALSE); // Wake it up!
+         KeSetEvent(Win32Thread->pEventQueueServer,
+                    MESSAGE_QUEUE_INCREMENT,
+                    FALSE);
          return MessageEventHandle;
       }
    }
@@ -438,7 +442,7 @@ MsqWakeQueue(PTHREADINFO pti, DWORD MessageBits, BOOL KeyEvent)
    if (MessageBits & QS_EVENT)       pti->nCntsQBits[QSRosEvent]++;
 
    if (KeyEvent)
-      KeSetEvent(pti->pEventQueueServer, IO_NO_INCREMENT, FALSE);
+      KeSetEvent(pti->pEventQueueServer, MESSAGE_QUEUE_INCREMENT, FALSE);
 }
 
 VOID FASTCALL
@@ -991,7 +995,7 @@ co_MsqDispatchOneSentMessage(
    /* Notify the sender. */
    if (Message->pkCompletionEvent != NULL)
    {
-      KeSetEvent(Message->pkCompletionEvent, IO_NO_INCREMENT, FALSE);
+      KeSetEvent(Message->pkCompletionEvent, EVENT_INCREMENT, FALSE);
    }
 
    /* free the message */
@@ -2267,7 +2271,7 @@ MsqCleanupThreadMsgs(PTHREADINFO pti)
       /* wake the sender's thread */
       if (CurrentSentMessage->pkCompletionEvent != NULL)
       {
-         KeSetEvent(CurrentSentMessage->pkCompletionEvent, IO_NO_INCREMENT, FALSE);
+         KeSetEvent(CurrentSentMessage->pkCompletionEvent, EVENT_INCREMENT, FALSE);
       }
 
       if (CurrentSentMessage->HasPackedLParam)
