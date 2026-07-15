@@ -15,9 +15,112 @@
 /* GLOBALS *******************************************************************/
 
 #define THREAD_BOOST_PRIORITY (LOW_REALTIME_PRIORITY - 1)
+#define READY_SCAN_PROCESSORS 8
+#define READY_SCAN_CANDIDATES 16
+#define READY_SCAN_BOOSTS 8
+#define READY_SCAN_WAIT_TICKS 300
 ULONG KiReadyScanLast;
 
 /* PRIVATE FUNCTIONS *********************************************************/
+
+static
+VOID
+KiScanReadyQueuesOnPrcb(IN PKPRCB Prcb,
+                        IN ULONG TickNow,
+                        IN ULONG CandidateQuota,
+                        IN ULONG BoostQuota)
+{
+    ULONG Index;
+    ULONG Summary;
+    ULONG CandidatesScanned = 0;
+    ULONG ThreadsBoosted = 0;
+    PLIST_ENTRY ListHead, NextEntry;
+    PKTHREAD Thread;
+
+    KiAcquirePrcbLock(Prcb);
+    Index = Prcb->QueueIndex;
+
+    /* Check if there's any thread that need help */
+    Summary = Prcb->ReadySummary & ((1 << THREAD_BOOST_PRIORITY) - 2);
+    while (Summary &&
+           (CandidatesScanned < CandidateQuota) &&
+           (ThreadsBoosted < BoostQuota))
+    {
+        /* Normalize the index */
+        if (Index > (THREAD_BOOST_PRIORITY - 1)) Index = 1;
+
+        /* Loop for ready threads */
+        if (Summary & PRIORITY_MASK(Index))
+        {
+            ASSERT(!IsListEmpty(&Prcb->DispatcherReadyListHead[Index]));
+            ListHead = &Prcb->DispatcherReadyListHead[Index];
+            NextEntry = ListHead->Flink;
+
+            while ((NextEntry != ListHead) &&
+                   (CandidatesScanned < CandidateQuota) &&
+                   (ThreadsBoosted < BoostQuota))
+            {
+                Thread = CONTAINING_RECORD(NextEntry,
+                                           KTHREAD,
+                                           WaitListEntry);
+                NextEntry = NextEntry->Flink;
+                CandidatesScanned++;
+
+                /* Never wait on ThreadLock while holding the PRCB lock. */
+                if (KiTryThreadLock(Thread))
+                {
+                    continue;
+                }
+
+                if ((Thread->State != Ready) ||
+                    (Thread->NextProcessor != Prcb->Number) ||
+                    (Thread->Priority != Index))
+                {
+                    KiReleaseThreadLock(Thread);
+                    continue;
+                }
+
+                if ((ULONG)(TickNow - Thread->WaitTime) >=
+                    READY_SCAN_WAIT_TICKS)
+                {
+                    ASSERT(Prcb->ReadySummary & PRIORITY_MASK(Index));
+                    if (RemoveEntryList(&Thread->WaitListEntry))
+                    {
+                        Prcb->ReadySummary ^= PRIORITY_MASK(Index);
+                    }
+
+                    ASSERT((Thread->PriorityDecrement >= 0) &&
+                           (Thread->PriorityDecrement <= Thread->Priority));
+                    Thread->PriorityDecrement +=
+                        (THREAD_BOOST_PRIORITY - Thread->Priority);
+                    ASSERT((Thread->PriorityDecrement >= 0) &&
+                           (Thread->PriorityDecrement <=
+                            THREAD_BOOST_PRIORITY));
+
+                    Thread->Priority = THREAD_BOOST_PRIORITY;
+                    KiSetThreadQuantum(Thread, WAIT_QUANTUM_DECREMENT * 4);
+                    KiInsertDeferredReadyList(Thread);
+                    ThreadsBoosted++;
+                }
+
+                KiReleaseThreadLock(Thread);
+            }
+
+            if (NextEntry != ListHead)
+            {
+                Index++;
+                break;
+            }
+
+            Summary &= ~PRIORITY_MASK(Index);
+        }
+
+        Index++;
+    }
+
+    Prcb->QueueIndex = Summary ? Index : 1;
+    KiReleasePrcbLock(Prcb);
+}
 
 VOID
 NTAPI
@@ -28,108 +131,36 @@ KiScanReadyQueues(IN PKDPC Dpc,
 {
     PULONG ScanLast = DeferredContext;
     ULONG ScanIndex = *ScanLast;
-    ULONG Count = 10, Number = 16;
-    PKPRCB Prcb = KiProcessorBlock[ScanIndex];
-    ULONG Index = Prcb->QueueIndex;
-    ULONG WaitLimit = KeTickCount.LowPart - 300;
-    ULONG Summary;
+    ULONG ProcessorCount;
+    ULONG CandidateQuota, BoostQuota;
+    ULONG Processor;
+    ULONG TickNow = KeTickCount.LowPart;
     KIRQL OldIrql;
-    PLIST_ENTRY ListHead, NextEntry;
-    PKTHREAD Thread;
 
-    /* Raise IRQL and lock the PRCB */
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    ProcessorCount = min((ULONG)KeNumberProcessors,
+                         (ULONG)READY_SCAN_PROCESSORS);
+    ASSERT(ProcessorCount != 0);
+    CandidateQuota = READY_SCAN_CANDIDATES / ProcessorCount;
+    BoostQuota = READY_SCAN_BOOSTS / ProcessorCount;
     OldIrql = KeRaiseIrqlToSynchLevel();
-    KiAcquirePrcbLock(Prcb);
-    /* Check if there's any thread that need help */
-    Summary = Prcb->ReadySummary & ((1 << THREAD_BOOST_PRIORITY) - 2);
-    if (Summary)
+
+    for (Processor = 0; Processor < ProcessorCount; Processor++)
     {
-        /* Start scan loop */
-        do
-        {
-            /* Normalize the index */
-            if (Index > (THREAD_BOOST_PRIORITY - 1)) Index = 1;
+        KiScanReadyQueuesOnPrcb(KiProcessorBlock[ScanIndex],
+                                TickNow,
+                                CandidateQuota,
+                                BoostQuota);
 
-            /* Loop for ready threads */
-            if (Summary & PRIORITY_MASK(Index))
-            {
-                /* Sanity check */
-                ASSERT(!IsListEmpty(&Prcb->DispatcherReadyListHead[Index]));
-
-                /* Update summary and select list */
-                Summary ^= PRIORITY_MASK(Index);
-                ListHead = &Prcb->DispatcherReadyListHead[Index];
-                NextEntry = ListHead->Flink;
-                do
-                {
-                    /* Select a thread */
-                    Thread = CONTAINING_RECORD(NextEntry,
-                                               KTHREAD,
-                                               WaitListEntry);
-                    ASSERT(Thread->Priority == Index);
-
-                    /* Check if the thread has been waiting too long */
-                    if (WaitLimit >= Thread->WaitTime)
-                    {
-                        /* Remove the thread from the queue */
-                        NextEntry = NextEntry->Blink;
-                        ASSERT((Prcb->ReadySummary & PRIORITY_MASK(Index)));
-                        if (RemoveEntryList(NextEntry->Flink))
-                        {
-                            /* The list is empty now */
-                            Prcb->ReadySummary ^= PRIORITY_MASK(Index);
-                        }
-
-                        /* Verify priority decrement and set the new one */
-                        ASSERT((Thread->PriorityDecrement >= 0) &&
-                               (Thread->PriorityDecrement <=
-                                Thread->Priority));
-                        Thread->PriorityDecrement += (THREAD_BOOST_PRIORITY -
-                                                      Thread->Priority);
-                        ASSERT((Thread->PriorityDecrement >= 0) &&
-                               (Thread->PriorityDecrement <=
-                                THREAD_BOOST_PRIORITY));
-
-                        /* Update priority and insert into ready list */
-                        Thread->Priority = THREAD_BOOST_PRIORITY;
-                        KiSetThreadQuantum(Thread, WAIT_QUANTUM_DECREMENT * 4);
-                        KiInsertDeferredReadyList(Thread);
-                        Count --;
-                    }
-
-                    /* Go to the next entry */
-                    NextEntry = NextEntry->Flink;
-                    Number--;
-                } while((NextEntry != ListHead) && (Number) && (Count));
-            }
-
-            /* Increase index */
-            Index++;
-        } while ((Summary) && (Number) && (Count));
+        ScanIndex++;
+        if (ScanIndex == KeNumberProcessors) ScanIndex = 0;
     }
 
-    /* Release the PRCB lock and exit the dispatcher */
-    KiReleasePrcbLock(Prcb);
-    KiExitDispatcher(OldIrql);
-
-    /* Update the queue index for next time */
-    if ((Count) && (Number))
-    {
-        /* Reset the queue at index 1 */
-        Prcb->QueueIndex = 1;
-    }
-    else
-    {
-        /* Set the index we're in now */
-        Prcb->QueueIndex = Index;
-    }
-
-    /* Increment the CPU number for next time and normalize to CPU count */
-    ScanIndex++;
-    if (ScanIndex == KeNumberProcessors) ScanIndex = 0;
-
-    /* Return the index */
     *ScanLast = ScanIndex;
+    KiExitDispatcher(OldIrql);
 }
 
 VOID
