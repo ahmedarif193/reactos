@@ -14,6 +14,56 @@
 
 /* FUNCTIONS *****************************************************************/
 
+VOID
+CMAPI
+HvLockHiveWriter(
+    _In_ PHHIVE RegistryHive)
+{
+    PCMHIVE CmHive = CONTAINING_RECORD(RegistryHive, CMHIVE, Hive);
+
+    ExAcquirePushLockExclusive(&CmHive->WriterLock);
+    ASSERT(CmHive->WriterLockOwner == NULL);
+    CmHive->WriterLockOwner = KeGetCurrentThread();
+}
+
+VOID
+CMAPI
+HvUnlockHiveWriter(
+    _In_ PHHIVE RegistryHive)
+{
+    PCMHIVE CmHive = CONTAINING_RECORD(RegistryHive, CMHIVE, Hive);
+
+    ASSERT(CmHive->WriterLockOwner == KeGetCurrentThread());
+    CmHive->WriterLockOwner = NULL;
+    ExReleasePushLockExclusive(&CmHive->WriterLock);
+}
+
+BOOLEAN
+CMAPI
+HvLockHiveReader(
+    _In_ PHHIVE RegistryHive)
+{
+    PCMHIVE CmHive = CONTAINING_RECORD(RegistryHive, CMHIVE, Hive);
+
+    if (CmHive->WriterLockOwner == KeGetCurrentThread())
+        return FALSE;
+
+    ExAcquirePushLockShared(&CmHive->WriterLock);
+    return TRUE;
+}
+
+VOID
+CMAPI
+HvUnlockHiveReader(
+    _In_ PHHIVE RegistryHive,
+    _In_ BOOLEAN LockAcquired)
+{
+    PCMHIVE CmHive = CONTAINING_RECORD(RegistryHive, CMHIVE, Hive);
+
+    if (LockAcquired)
+        ExReleasePushLockShared(&CmHive->WriterLock);
+}
+
 NTSTATUS
 NTAPI
 CmpCreateEvent(IN EVENT_TYPE EventType,
