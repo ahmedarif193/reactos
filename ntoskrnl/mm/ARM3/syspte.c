@@ -138,6 +138,9 @@ MiReserveAlignedSystemPtes(IN ULONG NumberOfPtes,
     PMMPTE PreviousPte, NextPte, ReturnPte;
     PMMPTE ReturnListPte;
     ULONG ClusterSize, ClusterOffset, ReturnOffset;
+#if DBG && defined(_M_AMD64)
+    ULONG Index;
+#endif
 
     //
     // Sanity check
@@ -286,14 +289,12 @@ MiReserveAlignedSystemPtes(IN ULONG NumberOfPtes,
         return NULL;
     }
 
-    RtlZeroMemory(ReturnPte, NumberOfPtes * sizeof(MMPTE));
-
-    //
-    // Flush the TLB
-    //
-#if !defined(_M_ARM64)
-    KeFlushProcessTb();
+#if DBG && defined(_M_AMD64)
+    for (Index = 0; Index < NumberOfPtes; Index++)
+        ASSERT(ReturnPte[Index].u.Hard.Valid == 0);
 #endif
+
+    RtlZeroMemory(ReturnPte, NumberOfPtes * sizeof(MMPTE));
 
     //
     // Return the reserved PTEs
@@ -478,6 +479,12 @@ MiReleaseSystemPtes(IN PMMPTE StartingPte,
     // Zero PTEs
     //
     RtlZeroMemory(StartingPte, NumberOfPtes * sizeof(MMPTE));
+
+    //
+    // Publish the invalid mappings before these slots can be reused.
+    //
+    MiFlushSystemTbRange(MiPteToAddress(StartingPte), NumberOfPtes);
+
     MiReleaseSystemPtesToFreeList(StartingPte, NumberOfPtes, SystemPtePoolType);
 }
 
@@ -514,10 +521,6 @@ MiReserveNonPagedPoolExpansionPtes(IN ULONG NumberOfPtes)
         KeReleaseQueuedSpinLock(LockQueueSystemSpaceLock, OldIrql);
         return NULL;
     }
-
-#if !defined(_M_ARM64)
-    KeFlushProcessTb();
-#endif
 
     return StartingPte;
 }
