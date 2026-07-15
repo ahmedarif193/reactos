@@ -142,18 +142,37 @@ KiTimerExpiration(IN PKDPC Dpc,
 
         /* Get list pointers and loop the list */
         ListHead = &KiTimerTableListHead[Index].Entry;
-        while (ListHead != ListHead->Flink)
+        while (TRUE)
         {
             /* Lock the timer and go to the next entry */
             LockQueue = KiAcquireTimerLock(Index);
             NextEntry = ListHead->Flink;
 
+            /* Stop when the bucket is empty */
+            if (NextEntry == ListHead)
+            {
+                KiReleaseTimerLock(LockQueue);
+                break;
+            }
+
             /* Get the current timer and check its due time */
             Timers--;
             Timer = CONTAINING_RECORD(NextEntry, KTIMER, TimerListEntry);
-            if ((NextEntry != ListHead) &&
-                (Timer->DueTime.QuadPart <= InterruptTime.QuadPart))
+            if (Timer->DueTime.QuadPart <= InterruptTime.QuadPart)
             {
+                /*
+                 * Setters take the object lock before the timer-table lock.
+                 * Do not wait for the object while holding the table lock:
+                 * release and retry so its current owner can finish.
+                 */
+                if (!KiTryAcquireDispatcherObject(&Timer->Header))
+                {
+                    Timers++;
+                    KiReleaseTimerLock(LockQueue);
+                    YieldProcessor();
+                    continue;
+                }
+
                 /* It's expired, remove it */
                 ActiveTimers--;
                 KiRemoveEntryTimer(Timer);
@@ -162,18 +181,16 @@ KiTimerExpiration(IN PKDPC Dpc,
                 Timer->Header.Inserted = FALSE;
                 KiReleaseTimerLock(LockQueue);
 
-                /* Get the DPC and period */
+                /* Get the DPC and period while the timer is stable */
                 TimerDpc = Timer->Dpc;
                 Period = Timer->Period;
 
                 /* Signal it and wake waiters under the timer object lock */
-                KiAcquireDispatcherObject(&Timer->Header);
                 Timer->Header.SignalState = 1;
                 if (!IsListEmpty(&Timer->Header.WaitListHead))
                 {
                     KiWaitTest(Timer, IO_NO_INCREMENT);
                 }
-                KiReleaseDispatcherObject(&Timer->Header);
 
                 /* Check if we have a period */
                 if (Period)
@@ -182,6 +199,9 @@ KiTimerExpiration(IN PKDPC Dpc,
                     Interval.QuadPart = Int32x32To64(Period, -10000);
                     while (!KiInsertTreeTimer(Timer, Interval));
                 }
+
+                /* The expiration and any periodic rearm are now complete */
+                KiReleaseDispatcherObject(&Timer->Header);
 
                 /* Check if we have a DPC */
                 if (TimerDpc)
