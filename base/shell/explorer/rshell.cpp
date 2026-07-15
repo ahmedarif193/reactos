@@ -26,7 +26,9 @@ typedef HRESULT(WINAPI * PSTARTMENU_CREATEINSTANCE)(REFIID riid, void **ppv);
 
 VOID InitRSHELL(VOID)
 {
-    ghRShell = LoadLibraryW(L"rshell.dll");
+    /* The experimental module is only honored when something else loaded
+       it already; it is not shipped, so do not issue a failing load */
+    ghRShell = GetModuleHandleW(L"rshell.dll");
 }
 
 HRESULT WINAPI _CStartMenu_CreateInstance(REFIID riid, void **ppv)
