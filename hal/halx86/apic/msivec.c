@@ -107,8 +107,6 @@ HalpGetInterruptTargetInformation(
     TargetInformation->ProcessorNumber = ProcessorNumber;
     TargetInformation->TargetProcessors = ((KAFFINITY)1 << ProcessorNumber);
     TargetInformation->DestinationId = HalpProcessorIdentity[ProcessorNumber].LapicId;
-    if (TargetInformation->DestinationId == 0)
-        TargetInformation->DestinationId = ProcessorNumber;
 
     return STATUS_SUCCESS;
 }
