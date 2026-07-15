@@ -139,6 +139,10 @@ KeStartAllProcessors(VOID)
             KeMemoryBarrier();
             YieldProcessor();
         }
+
+        APInfo = NULL;
+        KernelStack = NULL;
+        DPCStack = NULL;
     }
 
     /* The last allocation belongs to a CPU that did not start */
