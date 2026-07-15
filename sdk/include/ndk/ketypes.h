@@ -2127,11 +2127,8 @@ typedef struct _KTHREAD
         struct
         {
             UCHAR WaitBlockFill11[3 * sizeof(KWAIT_BLOCK) + FIELD_OFFSET(KWAIT_BLOCK, Object)]; // 0xB0
-            union
-            {
-                ULONG64 Spare18;                         // 0x1F0
-                volatile ULONG DeferredProcessor;        // 0x1F0 [ReactOS]
-            };
+            /* This slot overlays WaitBlock[3].Object during timed waits. */
+            ULONG64 Spare18;                             // 0x1F0
             ULONG64 LastXStateSaveDebugInfo;             // 0x1F8
         };
     };
@@ -3287,9 +3284,9 @@ C_ASSERT(FIELD_OFFSET(KTHREAD, ResourceIndex) == 0x480);
 
 //
 // amd64 KTHREAD layout locks (Win11 26100 ntkrnlmp.pdb 10.0.26100.8036).
-// Genuine Windows fields are pinned to their PDB offsets; the three ReactOS-only
+// Genuine Windows fields are pinned to their PDB offsets; the ReactOS-only
 // fields live in the Win11 Padding[5] tail (ApcQueueLock/ApcStatePointer/CallbackStack)
-// plus Spare6 (LargeStack) and Spare18 (DeferredProcessor).
+// plus Spare6 (LargeStack). Spare18 overlays WaitBlock[3].Object and is not writable.
 //
 #if defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_WIN10) && !defined(__ASSEMBLER__)
 C_ASSERT(sizeof(KTHREAD) == 0x4C0);
@@ -3331,7 +3328,8 @@ C_ASSERT(FIELD_OFFSET(KTHREAD, XStateSave) == 0x198);
 C_ASSERT(FIELD_OFFSET(KTHREAD, Win32Thread) == 0x1C8);
 C_ASSERT(FIELD_OFFSET(KTHREAD, KernelApcDisable) == 0x1E4);
 C_ASSERT(FIELD_OFFSET(KTHREAD, CombinedApcDisable) == 0x1E4);
-C_ASSERT(FIELD_OFFSET(KTHREAD, DeferredProcessor) == 0x1F0);
+C_ASSERT(FIELD_OFFSET(KTHREAD, Spare18) == 0x1F0);
+C_ASSERT(FIELD_OFFSET(KTHREAD, Spare18) == FIELD_OFFSET(KTHREAD, WaitBlock[3]) + FIELD_OFFSET(KWAIT_BLOCK, Object));
 C_ASSERT(FIELD_OFFSET(KTHREAD, ThreadFlags2) == 0x200);
 C_ASSERT(FIELD_OFFSET(KTHREAD, QueueListEntry) == 0x208);
 C_ASSERT(FIELD_OFFSET(KTHREAD, NextProcessor) == 0x218);

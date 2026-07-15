@@ -316,9 +316,8 @@ FORCEINLINE
 VOID
 KiInsertDeferredReadyList(IN PKTHREAD Thread)
 {
-    /* Set the thread to deferred state and boot CPU */
+    /* Set the thread to deferred state */
     Thread->State = DeferredReady;
-    Thread->DeferredProcessor = 0;
 
     /* Make the thread ready immediately */
     KiDeferredReadyThread(Thread);
@@ -560,9 +559,8 @@ KiInsertDeferredReadyList(IN PKTHREAD Thread)
 {
     PKPRCB Prcb = KeGetCurrentPrcb();
 
-    /* Set the thread to deferred state and CPU */
+    /* The owning PRCB list identifies the deferred processor. */
     Thread->State = DeferredReady;
-    Thread->DeferredProcessor = Prcb->Number;
 
     /* Add it on the list */
     PushEntryList(&Prcb->DeferredReadyListHead, &Thread->SwapListEntry);
@@ -1728,7 +1726,6 @@ KxQueueReadyThread(IN PKTHREAD Thread,
     {
         /* Otherwise, prepare this thread to be deferred */
         Thread->State = DeferredReady;
-        Thread->DeferredProcessor = Prcb->Number;
 
         /* Release the lock and defer scheduling */
         KiReleasePrcbLock(Prcb);
