@@ -21,9 +21,36 @@ HDC BufPaint::Begin(HDC hdcTarget, const RECT* rcPaint)
     int h = rc.bottom - rc.top;
     if (w < 1) w = 1;
     if (h < 1) h = 1;
+
+    /* Bound transient paint storage. A full 4K 32-bpp compatible bitmap is
+       over 31 MiB; direct painting is preferable to that memory spike. */
+    if ((ULONGLONG)w * h > 4 * 1024 * 1024)
+    {
+        dc = target;
+        return dc;
+    }
+
     dc = CreateCompatibleDC(target);
-    bmp = CreateCompatibleBitmap(target, w, h);
+    if (dc)
+        bmp = CreateCompatibleBitmap(target, w, h);
+    if (!dc || !bmp)
+    {
+        if (bmp) DeleteObject(bmp);
+        if (dc) DeleteDC(dc);
+        bmp = NULL;
+        dc = target;
+        return dc;
+    }
     bmpOld = (HBITMAP)SelectObject(dc, bmp);
+    if (!bmpOld || bmpOld == (HBITMAP)HGDI_ERROR)
+    {
+        DeleteObject(bmp);
+        DeleteDC(dc);
+        bmp = NULL;
+        bmpOld = NULL;
+        dc = target;
+        return dc;
+    }
     SetViewportOrgEx(dc, -rc.left, -rc.top, NULL);
     return dc;
 }
@@ -31,6 +58,12 @@ HDC BufPaint::Begin(HDC hdcTarget, const RECT* rcPaint)
 void BufPaint::End(void)
 {
     if (!dc) return;
+    if (dc == target)
+    {
+        dc = NULL;
+        target = NULL;
+        return;
+    }
     SetViewportOrgEx(dc, 0, 0, NULL);
     BitBlt(target, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top,
            dc, 0, 0, SRCCOPY);
@@ -122,7 +155,14 @@ void DrawHLine(HDC dc, int y, int x0, int x1, COLORREF c)
 /*  Graph rendering (Win11 perf style: grid + line + soft fill)        */
 /* ------------------------------------------------------------------ */
 
-static void DrawGraphContent(HDC dc,
+GraphPaint::GraphPaint(HDC dc) : graphics(dc)
+{
+    graphics.SetSmoothingMode(SmoothingModeHighQuality);
+    graphics.SetCompositingQuality(CompositingQualityHighQuality);
+    graphics.SetPixelOffsetMode(PixelOffsetModeHalf);
+}
+
+static void DrawGraphContent(GraphPaint& paint,
                              const RECT& r,
                              const HistRing* h,
                              const GraphStyle& gs,
@@ -132,11 +172,8 @@ static void DrawGraphContent(HDC dc,
     int ht = r.bottom - r.top;
     if (w < 8 || ht < 8) return;
 
-    Graphics g(dc);
-    g.SetClip(Rect(r.left, r.top, w, ht), CombineModeIntersect);
-    g.SetSmoothingMode(SmoothingModeHighQuality);
-    g.SetCompositingQuality(CompositingQualityHighQuality);
-    g.SetPixelOffsetMode(PixelOffsetModeHalf);
+    Graphics& g = paint.graphics;
+    g.SetClip(Rect(r.left, r.top, w, ht), CombineModeReplace);
 
     COLORREF bg = g_t.dark ? Blend(g_t.listBg, RGB(0, 0, 0), 20)
                            : RGB(0xFF, 0xFF, 0xFF);
@@ -197,15 +234,10 @@ static void DrawGraphContent(HDC dc,
         if (s == 0)
         {
             /* soft fill under primary line */
-            GraphicsPath fillPath(FillModeAlternate);
-            PointF* fp = pts;
-            fillPath.AddLines(fp, n);
-            fillPath.AddLine(pts[n - 1], PointF((float)(r.right - 1), (float)(r.bottom - 1)));
-            fillPath.AddLine(PointF((float)(r.right - 1), (float)(r.bottom - 1)),
-                             PointF(pts[0].X, (float)(r.bottom - 1)));
-            fillPath.CloseFigure();
+            pts[n] = PointF((float)(r.right - 1), (float)(r.bottom - 1));
+            pts[n + 1] = PointF(pts[0].X, (float)(r.bottom - 1));
             SolidBrush fillBr(GP(gs.line, g_t.dark ? 60 : 40));
-            g.FillPath((Brush*)&fillBr, &fillPath);
+            g.FillPolygon((Brush*)&fillBr, pts, n + 2, FillModeAlternate);
 
             Pen pen(GP(gs.line), 1.6f * scale);
             /* The local GDI+ path widener implements this shape as bevel. */
@@ -226,33 +258,31 @@ static void DrawGraphContent(HDC dc,
 
     if (gs.border)
     {
-        Pen pen(GP(gs.line, g_t.dark ? 140 : 120), scale);
-        g.DrawRectangle(&pen, r.left, r.top, w - 1, ht - 1);
+        COLORREF border = Blend(bg, gs.line,
+                                (g_t.dark ? 140 : 120) * 100 / 255);
+        SolidBrush brush(GP(border));
+        g.FillRectangle((Brush*)&brush, r.left, r.top, w, 1);
+        g.FillRectangle((Brush*)&brush, r.left, r.bottom - 1, w, 1);
+        g.FillRectangle((Brush*)&brush, r.left, r.top, 1, ht);
+        g.FillRectangle((Brush*)&brush, r.right - 1, r.top, 1, ht);
     }
 }
 
-void DrawGraph(HDC dc, const RECT& r, const HistRing* h, const GraphStyle& gs)
+void DrawGraph(GraphPaint& paint, const RECT& r, const HistRing* h,
+               const GraphStyle& gs)
 {
     int width = r.right - r.left;
     int height = r.bottom - r.top;
     if (width < 8 || height < 8)
         return;
 
-    GraphStyle directStyle = gs;
-    directStyle.border = FALSE;
-    DrawGraphContent(dc, r, h, directStyle, 1.0f);
+    DrawGraphContent(paint, r, h, gs, 1.0f);
+}
 
-    if (gs.border)
-    {
-        COLORREF background = g_t.dark ? Blend(g_t.listBg, RGB(0, 0, 0), 20)
-                                       : RGB(0xFF, 0xFF, 0xFF);
-        int alpha = g_t.dark ? 140 : 120;
-        COLORREF border = Blend(background, gs.line, alpha * 100 / 255);
-        DrawHLine(dc, r.top, r.left, r.right, border);
-        DrawHLine(dc, r.bottom - 1, r.left, r.right, border);
-        DrawVLine(dc, r.left, r.top, r.bottom, border);
-        DrawVLine(dc, r.right - 1, r.top, r.bottom, border);
-    }
+void DrawGraph(HDC dc, const RECT& r, const HistRing* h, const GraphStyle& gs)
+{
+    GraphPaint paint(dc);
+    DrawGraph(paint, r, h, gs);
 }
 
 /* ------------------------------------------------------------------ */

@@ -77,6 +77,21 @@ struct Vec
         return TRUE;
     }
 
+    BOOL Trim(int keep)
+    {
+        if (keep < n) keep = n;
+        if (keep >= cap) return TRUE;
+        if (!keep)
+        {
+            Free();
+            return TRUE;
+        }
+        T* np = (T*)HeapReAlloc(GetProcessHeap(), 0, p, keep * sizeof(T));
+        if (!np) return FALSE;
+        p = np; cap = keep;
+        return TRUE;
+    }
+
     T* Add()
     {
         if (!Reserve(n + 1)) return NULL;
@@ -306,7 +321,20 @@ struct GraphStyle
     const HistRing* second; /* optional dotted series       */
 };
 
+struct GraphPaint
+{
+    Gdiplus::Graphics graphics;
+
+    explicit GraphPaint(HDC dc);
+
+private:
+    GraphPaint(const GraphPaint&);
+    GraphPaint& operator=(const GraphPaint&);
+};
+
 void DrawGraph(HDC dc, const RECT& r, const HistRing* h, const GraphStyle& gs);
+void DrawGraph(GraphPaint& paint, const RECT& r, const HistRing* h,
+               const GraphStyle& gs);
 
 /* ------------------------------------------------------------------ */
 /*  Lucide vector icons                                                */
@@ -378,6 +406,8 @@ struct ProcExtra
     WCHAR   desc[128];       /* version FileDescription          */
     WCHAR   user[96];
     WCHAR   arch[8];         /* x64 / x86                        */
+    DWORD   appHistorySlot;  /* cached one-based history index   */
+    BOOL    efficiencySet;   /* explicitly enabled by this app   */
     BOOL    inUse;           /* GC mark                          */
 };
 
@@ -442,6 +472,7 @@ struct AppHistRow
     ULONGLONG netBytes;
     ULONGLONG notificationBytes;
     HICON     icon;             /* owned by the data engine; not persisted */
+    BOOL      iconResolved;
 };
 
 struct SysSnapshot
@@ -528,12 +559,14 @@ namespace Data
 
     Vec<UserRow>& Users(void);
     void RefreshUsers(void);
+    void UpdateUserUsage(void);
 
     Vec<StartupRow>& StartupItems(void);
     void RefreshStartup(void);
     BOOL SetStartupEnabled(const StartupRow& it, BOOL enable);
 
     Vec<AppHistRow>& AppHistory(void);
+    void ResolveAppHistoryIcons(int budget);
     void ClearAppHistory(void);
     void GetAppHistorySince(FILETIME* since);
     BOOL AppHistoryNetworkAvailable(void);
