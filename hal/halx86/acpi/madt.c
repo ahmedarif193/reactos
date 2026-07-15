@@ -50,6 +50,41 @@ extern ULONG HalpPicVectorRedirect[16];
 
 /* FUNCTIONS ******************************************************************/
 
+static
+VOID
+HalpMadtRegisterProcessor(
+    _In_ ULONG ProcessorId,
+    _In_ ULONG ApicId)
+{
+    ULONG i;
+
+    if (ApicId >= 0xFF)
+    {
+        DPRINT01("  Ignored: APIC ID %lu requires x2APIC mode\n", ApicId);
+        return;
+    }
+
+    for (i = 0; i < HalpApicInfoTable.ProcessorCount; i++)
+    {
+        if ((HalpProcessorIdentity[i].ProcessorId == ProcessorId) ||
+            (HalpProcessorIdentity[i].LapicId == ApicId))
+        {
+            DPRINT01("  Ignored: duplicate processor identity\n");
+            return;
+        }
+    }
+
+    if (HalpApicInfoTable.ProcessorCount == _countof(HalpStaticProcessorIdentity))
+    {
+        DPRINT00("  Skipped: array is full\n");
+        return;
+    }
+
+    HalpProcessorIdentity[HalpApicInfoTable.ProcessorCount].ProcessorId = ProcessorId;
+    HalpProcessorIdentity[HalpApicInfoTable.ProcessorCount].LapicId = (UCHAR)ApicId;
+    HalpApicInfoTable.ProcessorCount++;
+}
+
 // Note: HalpParseApicTables() is called early, so its DPRINT*() do nothing.
 VOID
 HalpParseApicTables(
@@ -135,25 +170,39 @@ HalpParseApicTables(
                          HalpApicInfoTable.ProcessorCount,
                          LocalApic->ProcessorId, LocalApic->Id, LocalApic->LapicFlags);
 
-                if (!(LocalApic->LapicFlags & (LAPIC_FLAG_ONLINE_CAPABLE | LAPIC_FLAG_ENABLED)))
+                if (!(LocalApic->LapicFlags & LAPIC_FLAG_ENABLED))
                 {
                     DPRINT00("  Ignored: unusable\n");
                     break;
                 }
 
-                if (HalpApicInfoTable.ProcessorCount == _countof(HalpStaticProcessorIdentity))
+                HalpMadtRegisterProcessor(LocalApic->ProcessorId, LocalApic->Id);
+
+                break;
+            }
+            case ACPI_MADT_TYPE_LOCAL_X2APIC:
+            {
+                ACPI_MADT_LOCAL_X2APIC *LocalX2Apic = (ACPI_MADT_LOCAL_X2APIC *)AcpiHeader;
+
+                if (AcpiHeader->Length != sizeof(*LocalX2Apic))
                 {
-                    DPRINT00("  Skipped: array is full\n");
-                    // We assume ignoring this processor is acceptable, until proven otherwise.
+                    DPRINT01("Type/Length mismatch: %p, %u\n", AcpiHeader, AcpiHeader->Length);
+                    return;
+                }
+
+                DPRINT00(" Local x2Apic, Processor %lu: Uid %lu, Id %lu, LapicFlags %08X\n",
+                         HalpApicInfoTable.ProcessorCount,
+                         LocalX2Apic->Uid,
+                         LocalX2Apic->LocalApicId,
+                         LocalX2Apic->LapicFlags);
+
+                if (!(LocalX2Apic->LapicFlags & LAPIC_FLAG_ENABLED))
+                {
+                    DPRINT00("  Ignored: unusable\n");
                     break;
                 }
 
-                // Note: ProcessorId and Id are not validated in any way (yet).
-                HalpProcessorIdentity[HalpApicInfoTable.ProcessorCount].ProcessorId =
-                    LocalApic->ProcessorId;
-                HalpProcessorIdentity[HalpApicInfoTable.ProcessorCount].LapicId = LocalApic->Id;
-
-                HalpApicInfoTable.ProcessorCount++;
+                HalpMadtRegisterProcessor(LocalX2Apic->Uid, LocalX2Apic->LocalApicId);
 
                 break;
             }
@@ -250,7 +299,7 @@ HalpPrintApicTables(VOID)
     DPRINT1("Physical processor count: %lu\n", HalpApicInfoTable.ProcessorCount);
     for (i = 0; i < HalpApicInfoTable.ProcessorCount; i++)
     {
-        DPRINT1(" Processor %lu: ProcessorId %u, LapicId %u, ProcessorStarted %u, BSPCheck %u, ProcessorPrcb %p\n",
+        DPRINT1(" Processor %lu: ProcessorId %lu, LapicId %u, ProcessorStarted %u, BSPCheck %u, ProcessorPrcb %p\n",
                 i,
                 HalpProcessorIdentity[i].ProcessorId,
                 HalpProcessorIdentity[i].LapicId,

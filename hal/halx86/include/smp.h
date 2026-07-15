@@ -10,7 +10,7 @@
 /* This table is filled for each physical processor on system */
 typedef struct _PROCESSOR_IDENTITY
 {
-    UCHAR ProcessorId;
+    ULONG ProcessorId;
     UCHAR LapicId;
     BOOLEAN ProcessorStarted;
     BOOLEAN BSPCheck;

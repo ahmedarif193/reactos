@@ -17,7 +17,50 @@ VOID
 NTAPI
 ApicInitializeLocalApic(ULONG Cpu);
 
+extern PPROCESSOR_IDENTITY HalpProcessorIdentity;
+extern HALP_APIC_INFO_TABLE HalpApicInfoTable;
+
 /* FUNCTIONS ****************************************************************/
+
+static
+VOID
+HalpEnsureBootProcessorFirst(VOID)
+{
+    PROCESSOR_IDENTITY Identity;
+    ULONG BootApicId;
+    ULONG i;
+
+    BootApicId = ApicRead(APIC_ID) >> 24;
+    for (i = 0; i < HalpApicInfoTable.ProcessorCount; i++)
+    {
+        if (HalpProcessorIdentity[i].LapicId == BootApicId)
+        {
+            if (i != 0)
+            {
+                Identity = HalpProcessorIdentity[0];
+                HalpProcessorIdentity[0] = HalpProcessorIdentity[i];
+                HalpProcessorIdentity[i] = Identity;
+            }
+
+            HalpProcessorIdentity[0].BSPCheck = TRUE;
+            return;
+        }
+    }
+
+    i = min(HalpApicInfoTable.ProcessorCount, MAXIMUM_PROCESSORS - 1);
+    while (i != 0)
+    {
+        HalpProcessorIdentity[i] = HalpProcessorIdentity[i - 1];
+        i--;
+    }
+
+    RtlZeroMemory(&HalpProcessorIdentity[0], sizeof(HalpProcessorIdentity[0]));
+    HalpProcessorIdentity[0].ProcessorId = BootApicId;
+    HalpProcessorIdentity[0].LapicId = (UCHAR)BootApicId;
+    HalpProcessorIdentity[0].BSPCheck = TRUE;
+    if (HalpApicInfoTable.ProcessorCount < MAXIMUM_PROCESSORS)
+        HalpApicInfoTable.ProcessorCount++;
+}
 
 VOID
 NTAPI
@@ -30,10 +73,13 @@ HalpInitProcessor(
         HalpParseApicTables(LoaderBlock);
     }
 
-    HalpSetupProcessorsTable(ProcessorNumber);
-
     /* Initialize the local APIC for this cpu */
     ApicInitializeLocalApic(ProcessorNumber);
+
+    if (ProcessorNumber == 0)
+        HalpEnsureBootProcessorFirst();
+
+    HalpSetupProcessorsTable(ProcessorNumber);
 
     /* Initialize profiling data (but don't start it) */
     HalInitializeProfiling();
