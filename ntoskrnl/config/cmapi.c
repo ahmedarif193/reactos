@@ -115,7 +115,8 @@ CmpDoFlushAll(IN BOOLEAN ForceFlush)
             if (ForceFlush || !HvHiveWillShrink(&Hive->Hive))
             {
                 /* Do the sync */
-                Status = HvSyncHive(&Hive->Hive);
+                Status = HvSyncHive(&Hive->Hive) ?
+                         STATUS_SUCCESS : STATUS_REGISTRY_IO_FAILED;
 
                 /* If something failed - set the flag and continue looping */
                 if (!NT_SUCCESS(Status))
@@ -1966,14 +1967,14 @@ CmFlushKey(IN PCM_KEY_CONTROL_BLOCK Kcb,
     }
     else
     {
+        /* Don't touch the hive */
+        CmpLockHiveFlusherExclusive(CmHive);
+
 #if DBG
         /* Make sure the registry hive we're going to flush is OK */
         CheckStatus = CmCheckRegistry(CmHive, CM_CHECK_REGISTRY_DONT_PURGE_VOLATILES | CM_CHECK_REGISTRY_VALIDATE_HIVE);
         ASSERT(CM_CHECK_REGISTRY_SUCCESS(CheckStatus));
 #endif
-
-        /* Don't touch the hive */
-        CmpLockHiveFlusherExclusive(CmHive);
 
         ASSERT(CmHive->ViewLock);
         KeAcquireGuardedMutex(CmHive->ViewLock);
@@ -2692,8 +2693,10 @@ CmSaveKey(IN PCM_KEY_CONTROL_BLOCK Kcb,
 
 #if DBG
     /* Make sure this control block has a sane hive */
+    CmpLockHiveFlusherExclusive(HiveToValidate);
     CheckStatus = CmCheckRegistry(HiveToValidate, CM_CHECK_REGISTRY_DONT_PURGE_VOLATILES | CM_CHECK_REGISTRY_VALIDATE_HIVE);
     ASSERT(CM_CHECK_REGISTRY_SUCCESS(CheckStatus));
+    CmpUnlockHiveFlusher(HiveToValidate);
 #endif
 
     /* Create a new hive that will hold the key */
@@ -2733,8 +2736,10 @@ Cleanup:
     if (NT_SUCCESS(Status))
     {
         /* Before we say goodbye, make sure the hive is still OK */
+        CmpLockHiveFlusherExclusive(HiveToValidate);
         CheckStatus = CmCheckRegistry(HiveToValidate, CM_CHECK_REGISTRY_DONT_PURGE_VOLATILES | CM_CHECK_REGISTRY_VALIDATE_HIVE);
         ASSERT(CM_CHECK_REGISTRY_SUCCESS(CheckStatus));
+        CmpUnlockHiveFlusher(HiveToValidate);
     }
 #endif
 
@@ -2783,10 +2788,14 @@ CmSaveMergedKeys(IN PCM_KEY_CONTROL_BLOCK HighKcb,
 
 #if DBG
     /* Make sure that both the high and low precedence hives are OK */
+    CmpLockHiveFlusherExclusive(HighHiveToValidate);
     CheckStatus = CmCheckRegistry(HighHiveToValidate, CM_CHECK_REGISTRY_DONT_PURGE_VOLATILES | CM_CHECK_REGISTRY_VALIDATE_HIVE);
     ASSERT(CM_CHECK_REGISTRY_SUCCESS(CheckStatus));
+    CmpUnlockHiveFlusher(HighHiveToValidate);
+    CmpLockHiveFlusherExclusive(LowHiveToValidate);
     CheckStatus = CmCheckRegistry(LowHiveToValidate, CM_CHECK_REGISTRY_DONT_PURGE_VOLATILES | CM_CHECK_REGISTRY_VALIDATE_HIVE);
     ASSERT(CM_CHECK_REGISTRY_SUCCESS(CheckStatus));
+    CmpUnlockHiveFlusher(LowHiveToValidate);
 #endif
 
     /* Create a new hive that will hold the key */
@@ -2837,10 +2846,14 @@ done:
     if (NT_SUCCESS(Status))
     {
         /* Check those hives again before we say goodbye */
+        CmpLockHiveFlusherExclusive(HighHiveToValidate);
         CheckStatus = CmCheckRegistry(HighHiveToValidate, CM_CHECK_REGISTRY_DONT_PURGE_VOLATILES | CM_CHECK_REGISTRY_VALIDATE_HIVE);
         ASSERT(CM_CHECK_REGISTRY_SUCCESS(CheckStatus));
+        CmpUnlockHiveFlusher(HighHiveToValidate);
+        CmpLockHiveFlusherExclusive(LowHiveToValidate);
         CheckStatus = CmCheckRegistry(LowHiveToValidate, CM_CHECK_REGISTRY_DONT_PURGE_VOLATILES | CM_CHECK_REGISTRY_VALIDATE_HIVE);
         ASSERT(CM_CHECK_REGISTRY_SUCCESS(CheckStatus));
+        CmpUnlockHiveFlusher(LowHiveToValidate);
     }
 #endif
 
