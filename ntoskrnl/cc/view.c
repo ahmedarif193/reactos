@@ -305,6 +305,30 @@ CcRosDeleteFileCache (
     return STATUS_SUCCESS;
 }
 
+VOID
+CcRosDereferenceCache (
+    PFILE_OBJECT FileObject)
+/*
+ * FUNCTION: Releases an OpenCount reference on a shared cache map.
+ */
+{
+    PROS_SHARED_CACHE_MAP SharedCacheMap;
+    KIRQL OldIrql;
+
+    OldIrql = KeAcquireQueuedSpinLock(LockQueueMasterLock);
+
+    SharedCacheMap = FileObject->SectionObjectPointer->SharedCacheMap;
+    ASSERT(SharedCacheMap);
+    ASSERT(SharedCacheMap->OpenCount > 0);
+
+    if (--SharedCacheMap->OpenCount == 0)
+    {
+        CcRosDeleteFileCache(FileObject, SharedCacheMap, &OldIrql);
+    }
+
+    KeReleaseQueuedSpinLock(LockQueueMasterLock, OldIrql);
+}
+
 NTSTATUS
 CcRosFlushDirtyPages (
     ULONG Target,
