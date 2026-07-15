@@ -118,7 +118,7 @@ typedef enum _APIC_REGISTER
 #define MSR_APIC_BASE 0x0000001B
 #define IOAPIC_PHYS_BASE 0xFEC00000
 #define APIC_CLOCK_INDEX 8
-#define ApicLogicalId(Cpu) ((UCHAR)(1<< Cpu))
+#define ApicLogicalId(Cpu) ((UCHAR)(((Cpu) < 8) ? (1u << (Cpu)) : 0))
 
 /* The following definitions are based on AMD documentation.
    They differ slightly in Intel documentation. */
