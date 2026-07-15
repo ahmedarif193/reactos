@@ -1636,6 +1636,24 @@ KiConsumeSelfNextThread(IN PKPRCB Prcb,
     return TRUE;
 }
 
+FORCEINLINE
+VOID
+KiWaitForThreadSwapOut(IN PKTHREAD Thread)
+{
+#if defined(_M_ARM64) || \
+    (defined(_M_AMD64) && (NTDDI_VERSION < NTDDI_WIN7))
+    while (*(volatile BOOLEAN *)&Thread->SwapBusy)
+    {
+        YieldProcessor();
+    }
+#elif defined(_M_AMD64)
+    ASSERT(!Thread->Running);
+#else
+    UNREFERENCED_PARAMETER(Thread);
+#endif
+    KeMemoryBarrier();
+}
+
 //
 // This routine queues a thread that is ready on the PRCB's ready lists.
 // If this thread cannot currently run on this CPU, then the thread is
