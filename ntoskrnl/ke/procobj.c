@@ -372,11 +372,12 @@ KeSetPriorityAndQuantumProcess(IN PKPROCESS Process,
     ASSERT_PROCESS(Process);
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
 
-    /* Check if the process already has this priority */
-    if (Process->BasePriority == Priority) return Process->BasePriority;
-
     /* If the caller gave priority 0, normalize to 1 */
     if (!Priority) Priority = LOW_PRIORITY + 1;
+
+    /* A quantum-only update is still work even when priority is unchanged. */
+    if ((Process->BasePriority == Priority) && !Quantum)
+        return Process->BasePriority;
 
     /* Lock the process */
     KiAcquireProcessLockRaiseToSynch(Process, &ProcessLock);
@@ -407,11 +408,15 @@ KeSetPriorityAndQuantumProcess(IN PKPROCESS Process,
             /* Get the thread */
             Thread = CONTAINING_RECORD(NextEntry, KTHREAD, ThreadListEntry);
 
-            /* Update the quantum if we had one */
-            if (Quantum) Thread->QuantumReset = Quantum;
-
             /* Acquire the thread lock */
             KiAcquireThreadLock(Thread);
+
+            /* Update the quantum while its absolute target is protected. */
+            if (Quantum)
+            {
+                Thread->QuantumReset = Quantum;
+                KiSetThreadQuantum(Thread, Quantum);
+            }
 
             /* Calculate the new priority */
             NewPriority = Thread->BasePriority + Delta;
@@ -446,7 +451,7 @@ KeSetPriorityAndQuantumProcess(IN PKPROCESS Process,
 
                 /* Update priority and quantum */
                 Thread->BasePriority = (SCHAR)NewPriority;
-                Thread->Quantum = Thread->QuantumReset;
+                KiSetThreadQuantum(Thread, Thread->QuantumReset);
 
                 /* Disable decrements and update priority */
                 Thread->PriorityDecrement = 0;
@@ -468,11 +473,15 @@ KeSetPriorityAndQuantumProcess(IN PKPROCESS Process,
             /* Get the thread */
             Thread = CONTAINING_RECORD(NextEntry, KTHREAD, ThreadListEntry);
 
-            /* Update the quantum if we had one */
-            if (Quantum) Thread->QuantumReset = Quantum;
-
             /* Lock the thread */
             KiAcquireThreadLock(Thread);
+
+            /* Update the quantum while its absolute target is protected. */
+            if (Quantum)
+            {
+                Thread->QuantumReset = Quantum;
+                KiSetThreadQuantum(Thread, Quantum);
+            }
 
             /* Calculate the new priority */
             NewPriority = Thread->BasePriority + Delta;
@@ -508,7 +517,7 @@ KeSetPriorityAndQuantumProcess(IN PKPROCESS Process,
 
                 /* Update priority and quantum */
                 Thread->BasePriority = (SCHAR)NewPriority;
-                Thread->Quantum = Thread->QuantumReset;
+                KiSetThreadQuantum(Thread, Thread->QuantumReset);
 
                 /* Disable decrements and update priority */
                 Thread->PriorityDecrement = 0;

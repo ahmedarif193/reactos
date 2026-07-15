@@ -97,11 +97,12 @@
 /* ETHREAD.LpcReplyMessageId -> AlpcMessageId at Vista+ */
 /* (also defined in lpc.h for LPC subsystem files) */
 
-/* KTHREAD.Quantum -> ResourceIndex (same byte overlay) at Win7, Spare04 at Vista.
- * The quantum management changed to QuantumTarget at Vista+, but for skeleton
- * compatibility we redirect the field name to the same physical byte. */
+/* Quantum management changed to QuantumTarget at Vista+; ResourceIndex belongs
+ * to ERESOURCE. */
 #if defined(_M_ARM64)
 /* arm64 KTHREAD has a real Quantum member (hosted in the Win11 Spare13 slot) */
+#elif defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
+/* amd64 uses the QuantumTarget helpers in internal/ke_x.h */
 #elif (NTDDI_VERSION >= NTDDI_WIN7)
 #define Quantum         ResourceIndex
 #elif (NTDDI_VERSION >= NTDDI_LONGHORN)

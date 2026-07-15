@@ -20,6 +20,9 @@ volatile KSYSTEM_TIME KeTickCount = { 0, 0, 0 };
 ULONG KeMaximumIncrement;
 ULONG KeMinimumIncrement;
 ULONG KeTimeIncrement;
+#if defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
+ULONG KiCyclesPerClockQuantum = 1;
+#endif
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
@@ -251,12 +254,26 @@ NTAPI
 KeSetTimeIncrement(IN ULONG MaxIncrement,
                    IN ULONG MinIncrement)
 {
+#if defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
+    LARGE_INTEGER Frequency;
+    ULONGLONG CyclesPerQuantum;
+#endif
+
     /* Set some Internal Variables */
     KeMaximumIncrement = MaxIncrement;
     KeMinimumIncrement = max(MinIncrement, 10000);
     KeTimeAdjustment = MaxIncrement;
     KeTimeIncrement = MaxIncrement;
     KiTickOffset = MaxIncrement;
+
+#if defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
+    /* Convert clock quantum units to TSC cycles. */
+    KeQueryPerformanceCounter(&Frequency);
+    CyclesPerQuantum = ((ULONGLONG)Frequency.QuadPart * MaxIncrement) /
+                       (10000000ULL * CLOCK_QUANTUM_DECREMENT);
+    KiCyclesPerClockQuantum = CyclesPerQuantum ?
+                              (ULONG)min(CyclesPerQuantum, MAXULONG) : 1;
+#endif
 }
 
 /* EOF */

@@ -470,19 +470,19 @@ KiQuantumEnd(VOID)
     KiAcquirePrcbLock(Prcb);
 
     /* Check if Quantum expired */
-    if (Thread->Quantum <= 0)
+    if (KiIsThreadQuantumExpired(Thread))
     {
         /* Check if we're real-time and with quantums disabled */
         if ((Thread->Priority >= LOW_REALTIME_PRIORITY) &&
             (Thread->ApcState.Process->DisableQuantum))
         {
             /* Otherwise, set maximum quantum */
-            Thread->Quantum = MAX_QUANTUM;
+            KiSetThreadQuantum(Thread, MAX_QUANTUM);
         }
         else
         {
             /* Reset the new Quantum */
-            Thread->Quantum = Thread->QuantumReset;
+            KiSetThreadQuantum(Thread, Thread->QuantumReset);
 
             /* Calculate new priority */
             Thread->Priority = KiComputeNewPriority(Thread, 1);

@@ -20,6 +20,29 @@ BOOLEAN KiTimeAdjustmentEnabled = FALSE;
 
 /* FUNCTIONS ******************************************************************/
 
+#if defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
+FORCEINLINE
+VOID
+KiChargeThreadCycleTime(
+    _Inout_ PKPRCB Prcb,
+    _Inout_ PKTHREAD Thread)
+{
+    ULONGLONG CurrentCycles, StartCycles, Delta;
+
+    CurrentCycles = __rdtsc();
+    StartCycles = Prcb->StartCycles;
+    Prcb->StartCycles = CurrentCycles;
+
+    /* Reset the baseline after an uninitialized or backwards sample. */
+    if ((StartCycles == 0) || (CurrentCycles < StartCycles))
+        return;
+
+    Delta = CurrentCycles - StartCycles;
+    Thread->CycleTime += Delta;
+    Prcb->CycleTime += Delta;
+}
+#endif
+
 FORCEINLINE
 VOID
 KiCheckForTimerExpiration(
@@ -141,6 +164,11 @@ KeUpdateRunTime(IN PKTRAP_FRAME TrapFrame,
         return;
     }
 
+#if defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
+    /* Charge measured execution against the absolute quantum target. */
+    KiChargeThreadCycleTime(Prcb, Thread);
+#endif
+
     /* Increase interrupt count */
     Prcb->InterruptCount++;
 
@@ -229,11 +257,12 @@ KeUpdateRunTime(IN PKTRAP_FRAME TrapFrame,
         }
     }
 
-    /* Decrement the thread quantum */
-    Thread->Quantum -= CLOCK_QUANTUM_DECREMENT;
+#if !defined(_M_AMD64) || (NTDDI_VERSION < NTDDI_LONGHORN)
+    KiDecrementThreadQuantum(Thread, CLOCK_QUANTUM_DECREMENT);
+#endif
 
     /* Check if the time expired */
-    if ((Thread->Quantum <= 0) && (Thread != Prcb->IdleThread))
+    if (KiIsThreadQuantumExpired(Thread) && (Thread != Prcb->IdleThread))
     {
         /* Schedule a quantum end */
         Prcb->QuantumEnd = 1;
