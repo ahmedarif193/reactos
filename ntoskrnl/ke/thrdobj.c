@@ -803,6 +803,10 @@ KeInitThread(IN OUT PKTHREAD Thread,
 #endif
     Thread->KernelStackResident = TRUE;
     Thread->AdjustReason = AdjustNone;
+#if defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_WIN7)
+    Thread->Running = FALSE;
+    Thread->ReadyTransition = FALSE;
+#endif
 
     /* Initialize the lock */
     KeInitializeSpinLock(&Thread->ThreadLock);
@@ -1417,6 +1421,37 @@ KeSetPriorityThread(IN PKTHREAD Thread,
     return OldPriority;
 }
 
+VOID
+FASTCALL
+KiQueueThreadForReaping(IN PKTHREAD Thread)
+{
+    PLIST_ENTRY *ListHead;
+    PETHREAD Entry, SavedEntry;
+    PETHREAD *ThreadAddr;
+
+    Entry = (PETHREAD)PspReaperListHead.Flink;
+    ThreadAddr = &((PETHREAD)Thread)->ReaperLink;
+
+    do
+    {
+        ListHead = &PspReaperListHead.Flink;
+        *ThreadAddr = Entry;
+        SavedEntry = Entry;
+        Entry = InterlockedCompareExchangePointer((PVOID*)ListHead,
+                                                  ThreadAddr,
+                                                  Entry);
+    } while (Entry != SavedEntry);
+
+    if (!Entry)
+    {
+        KiAcquireDispatcherObject(&ExWorkerQueue[HyperCriticalWorkQueue].WorkerQueue.Header);
+        KiInsertQueue(&ExWorkerQueue[HyperCriticalWorkQueue].WorkerQueue,
+                      &PspReaperWorkItem.List,
+                      FALSE);
+        KiReleaseDispatcherObject(&ExWorkerQueue[HyperCriticalWorkQueue].WorkerQueue.Header);
+    }
+}
+
 /*
  * @implemented
  */
@@ -1424,9 +1459,6 @@ VOID
 NTAPI
 KeTerminateThread(IN KPRIORITY Increment)
 {
-    PLIST_ENTRY *ListHead;
-    PETHREAD Entry, SavedEntry;
-    PETHREAD *ThreadAddr;
     KLOCK_QUEUE_HANDLE LockHandle;
     PKTHREAD Thread = KeGetCurrentThread();
     PKPROCESS Process = Thread->ApcState.Process;
@@ -1442,38 +1474,9 @@ KeTerminateThread(IN KPRIORITY Increment)
     Process->KernelTime += Thread->KernelTime;
     Process->UserTime += Thread->UserTime;
 
-    /* Get the current entry and our Port */
-    Entry = (PETHREAD)PspReaperListHead.Flink;
-    ThreadAddr = &((PETHREAD)Thread)->ReaperLink;
-
-    /* Add it to the reaper's list */
-    do
-    {
-        /* Get the list head */
-        ListHead = &PspReaperListHead.Flink;
-
-        /* Link ourselves */
-        *ThreadAddr = Entry;
-        SavedEntry = Entry;
-
-        /* Now try to do the exchange */
-        Entry = InterlockedCompareExchangePointer((PVOID*)ListHead,
-                                                  ThreadAddr,
-                                                  Entry);
-
-        /* Break out if the change was succesful */
-    } while (Entry != SavedEntry);
-
-    /* Check if the reaper wasn't active */
-    if (!Entry)
-    {
-        /* Activate it as a work item, directly through its Queue */
-        KiAcquireDispatcherObject(&ExWorkerQueue[HyperCriticalWorkQueue].WorkerQueue.Header);
-        KiInsertQueue(&ExWorkerQueue[HyperCriticalWorkQueue].WorkerQueue,
-                      &PspReaperWorkItem.List,
-                      FALSE);
-        KiReleaseDispatcherObject(&ExWorkerQueue[HyperCriticalWorkQueue].WorkerQueue.Header);
-    }
+#if !defined(_M_AMD64) || (NTDDI_VERSION < NTDDI_WIN7)
+    KiQueueThreadForReaping(Thread);
+#endif
 
     /* Check the thread has an associated queue */
     if (Thread->Queue)
