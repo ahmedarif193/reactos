@@ -29,6 +29,116 @@ KeGetPreviousMode(VOID)
 #define KiThreadUserAffinityMask(Thread) ((Thread)->UserAffinity.Mask)
 #endif
 
+/* Convert legacy quantum units to amd64 execution-time deadlines. */
+#if defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
+extern ULONG KiCyclesPerClockQuantum;
+
+FORCEINLINE
+ULONGLONG
+KiQuantumUnitsToCycles(
+    _In_ ULONG Quantum)
+{
+    return (ULONGLONG)Quantum * KiCyclesPerClockQuantum;
+}
+
+FORCEINLINE
+BOOLEAN
+KiIsThreadQuantumExpired(
+    _In_ PKTHREAD Thread)
+{
+    return Thread->CycleTime >= Thread->QuantumTarget;
+}
+
+FORCEINLINE
+LONG
+KiGetThreadQuantum(
+    _In_ PKTHREAD Thread)
+{
+    ULONGLONG Remaining;
+
+    if (KiIsThreadQuantumExpired(Thread))
+        return 0;
+
+    Remaining = Thread->QuantumTarget - Thread->CycleTime;
+    Remaining = (Remaining / KiCyclesPerClockQuantum) +
+                ((Remaining % KiCyclesPerClockQuantum) != 0);
+    return (Remaining > MAXLONG) ? MAXLONG : (LONG)Remaining;
+}
+
+FORCEINLINE
+VOID
+KiSetThreadQuantum(
+    _Inout_ PKTHREAD Thread,
+    _In_ LONG Quantum)
+{
+    ULONGLONG Cycles;
+
+    Cycles = (Quantum > 0) ? KiQuantumUnitsToCycles((ULONG)Quantum) : 0;
+    if (Cycles > (MAXULONGLONG - Thread->CycleTime))
+        Thread->QuantumTarget = MAXULONGLONG;
+    else
+        Thread->QuantumTarget = Thread->CycleTime + Cycles;
+}
+
+FORCEINLINE
+BOOLEAN
+KiDecrementThreadQuantum(
+    _Inout_ PKTHREAD Thread,
+    _In_ ULONG Decrement)
+{
+    ULONGLONG Cycles, Remaining;
+
+    if (KiIsThreadQuantumExpired(Thread))
+        return TRUE;
+
+    Cycles = KiQuantumUnitsToCycles(Decrement);
+    Remaining = Thread->QuantumTarget - Thread->CycleTime;
+    if (Remaining <= Cycles)
+    {
+        Thread->QuantumTarget = Thread->CycleTime;
+        return TRUE;
+    }
+
+    Thread->QuantumTarget -= Cycles;
+    return FALSE;
+}
+#else
+FORCEINLINE
+BOOLEAN
+KiIsThreadQuantumExpired(
+    _In_ PKTHREAD Thread)
+{
+    return Thread->Quantum <= 0;
+}
+
+FORCEINLINE
+LONG
+KiGetThreadQuantum(
+    _In_ PKTHREAD Thread)
+{
+    return Thread->Quantum;
+}
+
+FORCEINLINE
+VOID
+KiSetThreadQuantum(
+    _Inout_ PKTHREAD Thread,
+    _In_ LONG Quantum)
+{
+    Thread->Quantum = (SCHAR)Quantum;
+}
+
+FORCEINLINE
+BOOLEAN
+KiDecrementThreadQuantum(
+    _Inout_ PKTHREAD Thread,
+    _In_ ULONG Decrement)
+{
+    Thread->Quantum -= (SCHAR)Decrement;
+    return Thread->Quantum <= 0;
+}
+#endif
+
 //
 // Enters a Guarded Region
 //
