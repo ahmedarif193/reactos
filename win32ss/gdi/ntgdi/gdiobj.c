@@ -352,12 +352,17 @@ IncrementGdiHandleCount(ULONG ulProcessId)
     NTSTATUS Status;
 
     Status = PsLookupProcessByProcessId(ULongToHandle(ulProcessId), &pep);
-    NT_ASSERT(NT_SUCCESS(Status));
-    __analysis_assume(NT_SUCCESS(Status));
+    if (!NT_SUCCESS(Status))
+    {
+        /* The process has already terminated (e.g. it died while still
+           owning a cached window DC), so there is no count to update */
+        DPRINT1("Failed to look up process %lu (0x%08lx)\n", ulProcessId, Status);
+        return;
+    }
 
     ppi = PsGetProcessWin32Process(pep);
     if (ppi) InterlockedIncrement((LONG*)&ppi->GDIHandleCount);
-    if (NT_SUCCESS(Status)) ObDereferenceObject(pep);
+    ObDereferenceObject(pep);
 }
 
 static inline
@@ -369,12 +374,17 @@ DecrementGdiHandleCount(ULONG ulProcessId)
     NTSTATUS Status;
 
     Status = PsLookupProcessByProcessId(ULongToHandle(ulProcessId), &pep);
-    NT_ASSERT(NT_SUCCESS(Status));
-    __analysis_assume(NT_SUCCESS(Status));
+    if (!NT_SUCCESS(Status))
+    {
+        /* The process has already terminated (e.g. it died while still
+           owning a cached window DC), so there is no count to update */
+        DPRINT1("Failed to look up process %lu (0x%08lx)\n", ulProcessId, Status);
+        return;
+    }
 
     ppi = PsGetProcessWin32Process(pep);
     if (ppi) InterlockedDecrement((LONG*)&ppi->GDIHandleCount);
-    if (NT_SUCCESS(Status)) ObDereferenceObject(pep);
+    ObDereferenceObject(pep);
 }
 
 static
