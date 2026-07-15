@@ -17,8 +17,12 @@ struct ServicesPage : Page, ITreeListOwner
     int  sortCol;
     BOOL sortDesc;
     Vec<TLRow> rows;
+    Vec<SvcRow*> list;
+    DWORD refreshTick;
+    BOOL refreshServices;
 
-    ServicesPage() : tl(NULL), sortCol(SC_NAME), sortDesc(FALSE) {}
+    ServicesPage() : tl(NULL), sortCol(SC_NAME), sortDesc(FALSE),
+                     refreshTick(0), refreshServices(TRUE) {}
 
     const WCHAR* Title() { return L"Services"; }
     BOOL WantSearch() { return TRUE; }
@@ -72,7 +76,7 @@ struct ServicesPage : Page, ITreeListOwner
     {
         rows.Clear();
         Vec<SvcRow>& svcs = Data::Services();
-        Vec<SvcRow*> list;
+        list.Clear();
         for (int i = 0; i < svcs.n; i++)
             if (MatchesSearch(svcs[i]))
                 list.Push(&svcs[i]);
@@ -164,6 +168,8 @@ struct ServicesPage : Page, ITreeListOwner
                 Dlg_Confirm(hwnd, o);
             }
             Data::RefreshServices();
+            refreshTick = GetTickCount();
+            refreshServices = FALSE;
             Rebuild();
             break;
         }
@@ -196,13 +202,19 @@ struct ServicesPage : Page, ITreeListOwner
             ShellExecuteW(NULL, L"open", L"servman.exe", NULL, NULL, SW_SHOWNORMAL);
     }
 
+    void OnShow(BOOL shown)
+    {
+        if (shown) refreshServices = TRUE;
+    }
+
     void OnTick()
     {
-        static int s_age = 0;
-        if (++s_age >= 4)
+        DWORD now = GetTickCount();
+        if (refreshServices || now - refreshTick >= 5000)
         {
-            s_age = 0;
             Data::RefreshServices();
+            refreshTick = now;
+            refreshServices = FALSE;
         }
         Rebuild();
     }

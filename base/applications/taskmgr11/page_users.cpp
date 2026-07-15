@@ -16,8 +16,10 @@ struct UsersPage : Page, ITreeListOwner
     HWND tl;
     Vec<TLRow> rows;
     Vec<DWORD> expanded;      /* session ids expanded */
+    DWORD sessionRefreshTick;
+    BOOL refreshSessions;
 
-    UsersPage() : tl(NULL) {}
+    UsersPage() : tl(NULL), sessionRefreshTick(0), refreshSessions(TRUE) {}
 
     const WCHAR* Title() { return L"Users"; }
 
@@ -279,9 +281,24 @@ struct UsersPage : Page, ITreeListOwner
         if (id == CMD_USER_LOGOFF) DoLogoff(u);
     }
 
+    void OnShow(BOOL shown)
+    {
+        if (shown) refreshSessions = TRUE;
+    }
+
     void OnTick()
     {
-        Data::RefreshUsers();
+        DWORD now = GetTickCount();
+        if (refreshSessions || now - sessionRefreshTick >= 5000)
+        {
+            Data::RefreshUsers();
+            sessionRefreshTick = now;
+            refreshSessions = FALSE;
+        }
+        else
+        {
+            Data::UpdateUserUsage();
+        }
         Rebuild();
     }
 

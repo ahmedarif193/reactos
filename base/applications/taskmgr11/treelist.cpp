@@ -343,8 +343,13 @@ static void PaintRow(TreeList* t, HDC dc, int idx, int* xs, int* ws, const RECT&
             HGDIOBJ oldF = SelectObject(dc, g_t.fBody);
             SetBkMode(dc, TRANSPARENT);
             SetTextColor(dc, txtCol);
-            RECT calc = tr;
-            DrawTextW(dc, txt, -1, &calc, DT_LEFT | DT_SINGLELINE | DT_CALCRECT | DT_NOPREFIX);
+            RECT calc = { 0, 0, 0, 0 };
+            if (sub[0])
+            {
+                calc = tr;
+                DrawTextW(dc, txt, -1, &calc,
+                          DT_LEFT | DT_SINGLELINE | DT_CALCRECT | DT_NOPREFIX);
+            }
             DrawTextW(dc, txt, -1, &tr, DT_LEFT | DT_SINGLELINE | DT_VCENTER |
                       DT_END_ELLIPSIS | DT_NOPREFIX);
             if (sub[0] && calc.right + S(8) < tr.right)
@@ -390,29 +395,35 @@ static void TLPaint(TreeList* t, HDC dc, const RECT& rcPaint)
     /* faint full-height column separators under rows */
     RECT body;
     VisRowsArea(t, &body);
+    RECT dirtyBody;
+    BOOL paintBody = IntersectRect(&dirtyBody, &body, &rcPaint);
 
     /* rows */
-    int first = t->scrollY / t->rowH;
-    int y = body.top - (t->scrollY % t->rowH);
-    for (int i = first; i < t->rows.n; i++)
+    if (paintBody)
     {
-        RECT rr = { rc.left, y, rc.right, y + t->rowH };
-        if (rr.top > rcPaint.bottom || rr.top >= body.bottom) break;
-        if (rr.bottom >= rcPaint.top)
-            PaintRow(t, dc, i, xs, ws, rr);
-        y += t->rowH;
-    }
+        int first = (t->scrollY + dirtyBody.top - body.top) / t->rowH;
+        int y = body.top + first * t->rowH - t->scrollY;
+        for (int i = first; i < t->rows.n; i++)
+        {
+            RECT rr = { rc.left, y, rc.right, y + t->rowH };
+            if (rr.top >= dirtyBody.bottom || rr.top >= body.bottom) break;
+            if (rr.bottom > dirtyBody.top)
+                PaintRow(t, dc, i, xs, ws, rr);
+            y += t->rowH;
+        }
 
-    /* column separators (over rows, subtle) */
-    for (int i = 0; i < t->cols.n; i++)
-    {
-        int x = xs[i] + ws[i] - 1;
-        if (x >= rc.left && x <= rc.right)
-            DrawVLine(dc, x, body.top, body.bottom, Blend(g_t.listBg, g_t.textSec, 10));
+        /* column separators (over rows, subtle) */
+        for (int i = 0; i < t->cols.n; i++)
+        {
+            int x = xs[i] + ws[i] - 1;
+            if (x >= dirtyBody.left && x <= dirtyBody.right)
+                DrawVLine(dc, x, dirtyBody.top, dirtyBody.bottom,
+                          Blend(g_t.listBg, g_t.textSec, 10));
+        }
     }
 
     /* empty text */
-    if (!t->rows.n && t->emptyText[0])
+    if (paintBody && !t->rows.n && t->emptyText[0])
     {
         RECT er = { rc.left, body.top + S(30), rc.right, body.top + S(70) };
         DrawTextClip(dc, t->emptyText, er, g_t.fBody, g_t.textSec,
@@ -420,14 +431,18 @@ static void TLPaint(TreeList* t, HDC dc, const RECT& rcPaint)
     }
 
     /* header (painted last, opaque) */
-    PaintHeader(t, dc, xs, ws, rc);
+    RECT header = { rc.left, rc.top, rc.right, rc.top + t->headerH };
+    RECT dirtyHeader;
+    if (IntersectRect(&dirtyHeader, &header, &rcPaint))
+        PaintHeader(t, dc, xs, ws, rc);
 
     /* scrollbars */
     RECT th;
-    if (VThumb(t, &th))
+    RECT dirtyThumb;
+    if (VThumb(t, &th) && IntersectRect(&dirtyThumb, &th, &rcPaint))
         FillRoundRect(dc, th, (t->vHot || t->vDrag) ? g_t.scrollThumbHot : g_t.scrollThumb,
                       CLR_NONE, S(3));
-    if (HThumb(t, &th))
+    if (HThumb(t, &th) && IntersectRect(&dirtyThumb, &th, &rcPaint))
         FillRoundRect(dc, th, (t->hHot || t->hDrag) ? g_t.scrollThumbHot : g_t.scrollThumb,
                       CLR_NONE, S(3));
 }
