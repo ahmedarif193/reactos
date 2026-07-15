@@ -380,9 +380,6 @@ CcRosFlushDirtyPages(
 VOID
 CcRosDereferenceCache(PFILE_OBJECT FileObject);
 
-VOID
-CcRosReferenceCache(PFILE_OBJECT FileObject);
-
 NTSTATUS
 CcRosReleaseVacb(
     PROS_SHARED_CACHE_MAP SharedCacheMap,
