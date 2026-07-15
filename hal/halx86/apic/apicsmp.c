@@ -86,7 +86,7 @@ ApicRequestGlobalInterrupt(
     Icr.MessageType = MessageType;
     Icr.DestinationMode = APIC_DM_Physical;
     Icr.DeliveryStatus = 0;
-    Icr.Level = 0;
+    Icr.Level = 1;
     Icr.TriggerMode = TriggerMode;
     Icr.RemoteReadStatus = 0;
     Icr.DestinationShortHand = DestinationShortHand;
@@ -95,6 +95,11 @@ ApicRequestGlobalInterrupt(
     /* Write the low dword last to send the interrupt */
     ApicWrite(APIC_ICR1, Icr.Long1);
     ApicWrite(APIC_ICR0, Icr.Long0);
+
+    do
+    {
+        Icr.Long0 = ApicRead(APIC_ICR0);
+    } while (Icr.DeliveryStatus);
 
     /* Finally, restore the original interrupt state */
     if (Flags & EFLAGS_INTERRUPT_MASK)
@@ -115,20 +120,22 @@ ApicStartApplicationProcessor(
     ASSERT((StartupLoc.QuadPart & 0xFFF) == 0);
     ASSERT((StartupLoc.QuadPart & 0xFFF00FFF) == 0);
 
-    /* Init IPI */
+    /* INIT IPI */
     ApicRequestGlobalInterrupt(HalpProcessorIdentity[NTProcessorNumber].LapicId, 0,
         APIC_MT_INIT, APIC_TGM_Edge, APIC_DSH_Destination);
 
-    /* De-Assert Init IPI */
-    ApicRequestGlobalInterrupt(HalpProcessorIdentity[NTProcessorNumber].LapicId, 0,
-        APIC_MT_INIT, APIC_TGM_Level, APIC_DSH_Destination);
-
-    /* Stall execution for a bit to give APIC time: MPS Spec - B.4 */
-    KeStallExecutionProcessor(200);
+    KeStallExecutionProcessor(10000);
 
     /* Startup IPI */
     ApicRequestGlobalInterrupt(HalpProcessorIdentity[NTProcessorNumber].LapicId, (StartupLoc.LowPart) >> 12,
         APIC_MT_Startup, APIC_TGM_Edge, APIC_DSH_Destination);
+
+    if (KeGetCurrentPrcb()->CpuVendor != CPU_AMD)
+    {
+        KeStallExecutionProcessor(200);
+        ApicRequestGlobalInterrupt(HalpProcessorIdentity[NTProcessorNumber].LapicId, (StartupLoc.LowPart) >> 12,
+            APIC_MT_Startup, APIC_TGM_Edge, APIC_DSH_Destination);
+    }
 }
 
 /* HAL IPI FUNCTIONS **********************************************************/
