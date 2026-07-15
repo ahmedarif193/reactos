@@ -1941,10 +1941,10 @@ MiFlushTbAndCapture(IN PMMVAD FoundVad,
     MI_UPDATE_VALID_PTE(PointerPte, TempPte);
 
     //
-    // Flush the TLB
+    // Flush this mapping on every processor before releasing the PFN lock.
     //
     ASSERT(PreviousPte.u.Hard.Valid == 1);
-    KeFlushCurrentTb();
+    MiFlushTbForAddress(MiPteToAddress(PointerPte));
     ASSERT(PreviousPte.u.Hard.Valid == 1);
 
     //
@@ -2024,6 +2024,11 @@ MiRemoveMappedPtes(IN PVOID BaseAddress,
 #endif
             }
 
+            /* Remove the mapping and invalidate it before the share count can
+               make either page reclaimable. */
+            PointerPte->u.Long = 0;
+            MiFlushTbForAddress(MiPteToAddress(PointerPte));
+
             /* Dereference the PDE and the PTE */
             Pfn2 = MiGetPfnEntry(PFN_FROM_PTE(PointerPde));
             MiDecrementShareCount(Pfn2, PFN_FROM_PTE(PointerPde));
@@ -2049,16 +2054,16 @@ MiRemoveMappedPtes(IN PVOID BaseAddress,
             }
         }
 
-        /* Make the PTE into a zero PTE */
-        PointerPte->u.Long = 0;
+        /* Invalid PTEs have no cached valid translation to shoot down. */
+        if (PteContents.u.Hard.Valid == 0)
+        {
+            PointerPte->u.Long = 0;
+        }
 
         /* Move to the next PTE */
         PointerPte++;
         NumberOfPtes--;
     }
-
-    /* Flush the TLB */
-    KeFlushCurrentTb();
 
     /* Acquire the PFN lock */
     OldIrql = MiAcquirePfnLock();
