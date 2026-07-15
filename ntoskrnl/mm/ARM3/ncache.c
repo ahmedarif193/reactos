@@ -198,15 +198,11 @@ MmFreeNonCachedMemory(IN PVOID BaseAddress,
     Mdl = *(PMDL*)(--PointerPte);
 
     //
-    // Kill the MDL (and underlying pages)
-    //
-    MmFreePagesFromMdl(Mdl);
-    ExFreePoolWithTag(Mdl, TAG_MDL);
-
-    //
-    // Now free the system PTEs for the underlying VA
+    // Stop every processor from using the mappings before freeing their pages.
     //
     MiReleaseSystemPtes(PointerPte, PageCount + 1, SystemPteSpace);
+    MmFreePagesFromMdl(Mdl);
+    ExFreePoolWithTag(Mdl, TAG_MDL);
 }
 
 /* EOF */

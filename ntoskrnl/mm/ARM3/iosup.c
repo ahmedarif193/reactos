@@ -199,7 +199,6 @@ NTAPI
 MmUnmapIoSpace(IN PVOID BaseAddress,
                IN SIZE_T NumberOfBytes)
 {
-    PFN_NUMBER Pfn;
     PFN_COUNT PageCount;
     PMMPTE PointerPte;
 
@@ -214,26 +213,9 @@ MmUnmapIoSpace(IN PVOID BaseAddress,
     PageCount = ADDRESS_AND_SIZE_TO_SPAN_PAGES(BaseAddress, NumberOfBytes);
 
     //
-    // Get the PTE and PFN
+    // Get the PTE
     //
     PointerPte = MiAddressToPte(BaseAddress);
-    Pfn = PFN_FROM_PTE(PointerPte);
-
-    //
-    // Is this an I/O mapping?
-    //
-    if (!MiGetPfnEntry(Pfn))
-    {
-        //
-        // Destroy the PTE
-        //
-        RtlZeroMemory(PointerPte, PageCount * sizeof(MMPTE));
-
-        //
-        // Blow the TLB
-        //
-        KeFlushEntireTb(TRUE, TRUE);
-    }
 
     //
     // Release the PTEs

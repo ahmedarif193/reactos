@@ -531,6 +531,11 @@ MiDeleteSystemPageableVm(IN PMMPTE PointerPte,
                 /* Lock the PFN database */
                 OldIrql = MiAcquirePfnLock();
 
+                /* Remove and invalidate the mapping before either PFN can be
+                   placed on a reusable page list. */
+                MI_ERASE_PTE(PointerPte);
+                MiFlushTbForAddress(MiPteToAddress(PointerPte));
+
                 /* Delete it the page */
                 MI_SET_PFN_DELETED(Pfn1);
                 MiDecrementShareCount(Pfn1, PageFrameIndex);
@@ -540,9 +545,6 @@ MiDeleteSystemPageableVm(IN PMMPTE PointerPte,
 
                 /* Release the PFN database */
                 MiReleasePfnLock(OldIrql);
-
-                /* Destroy the PTE */
-                MI_ERASE_PTE(PointerPte);
             }
             else
             {
@@ -575,9 +577,6 @@ MiDeleteSystemPageableVm(IN PMMPTE PointerPte,
     /* Release the working set */
     MiUnlockWorkingSet(CurrentThread, &MmSystemCacheWs);
 
-    /* Flush the entire TLB */
-    KeFlushEntireTb(TRUE, TRUE);
-
     /* Done */
     return ActualPages;
 }
@@ -587,7 +586,8 @@ NTAPI
 MiDeletePte(IN PMMPTE PointerPte,
             IN PVOID VirtualAddress,
             IN PEPROCESS CurrentProcess,
-            IN PMMPTE PrototypePte)
+            IN PMMPTE PrototypePte,
+            IN BOOLEAN FlushTb)
 {
     PMMPFN Pfn1;
     MMPTE TempPte;
@@ -739,8 +739,19 @@ MiDeletePte(IN PMMPTE PointerPte,
         //CurrentProcess->NumberOfPrivatePages--;
     }
 
-    /* Flush the TLB */
-    KeFlushCurrentTb();
+    if (FlushTb)
+    {
+        /* The PFN lock keeps the old page from being reused until the remote
+           single-address invalidation has completed. */
+        if (PointerPte <= MiHighestUserPte)
+        {
+            MiFlushTbForAddress(VirtualAddress);
+        }
+        else
+        {
+            KeFlushEntireTb(TRUE, TRUE);
+        }
+    }
 }
 
 VOID
@@ -762,6 +773,7 @@ MiDeleteVirtualAddresses(
     PEPROCESS CurrentProcess;
     KIRQL OldIrql;
     BOOLEAN AddressGap = FALSE;
+    BOOLEAN FlushTb;
     PSUBSECTION Subsection;
 
     /* We should never get RosMm memory areas here */
@@ -875,6 +887,7 @@ MiDeleteVirtualAddresses(
 
         /* Lock the PFN Database while we delete the PTEs */
         OldIrql = MiAcquirePfnLock();
+        FlushTb = FALSE;
         PointerPte = MiAddressToPte(Va);
         do
         {
@@ -921,7 +934,9 @@ MiDeleteVirtualAddresses(
                         MiDeletePte(PointerPte,
                                     (PVOID)Va,
                                     CurrentProcess,
-                                    PrototypePte);
+                                    PrototypePte,
+                                    FALSE);
+                        FlushTb = TRUE;
                     }
                 }
                 else
@@ -935,7 +950,8 @@ MiDeleteVirtualAddresses(
                     ASSERT(PointerPde->u.Long != 0);
 
                     /* Delete the PDE proper */
-                    MiDeletePde(PointerPde, CurrentProcess);
+                    MiDeletePde(PointerPde, CurrentProcess, FALSE);
+                    FlushTb = TRUE;
 
                     /* Continue with the next PDE */
                     Va = (ULONG_PTR)MiPdeToAddress(PointerPde + 1);
@@ -953,6 +969,13 @@ MiDeleteVirtualAddresses(
             PointerPte++;
             PrototypePte++;
         } while ((Va & (PDE_MAPPED_VA - 1)) && (Va <= EndingAddress));
+
+        /* Flush once for the whole PDE-sized batch while the PFN lock still
+           prevents deleted data and page-table frames from being reused. */
+        if (FlushTb)
+        {
+            KeFlushProcessTb();
+        }
 
         /* Release the lock */
         MiReleasePfnLock(OldIrql);
@@ -2680,11 +2703,9 @@ MiProtectVirtualMemory(IN PEPROCESS Process,
                     MiDecrementShareCount(Pfn1, PageFrameIndex);
                     // FIXME: remove the page from the WS
                     MI_WRITE_INVALID_PTE(PointerPte, PteContents);
-#ifdef CONFIG_SMP
-                    // FIXME: Should invalidate entry in every CPU TLB
-                    ASSERT(KeNumberProcessors == 1);
-#endif
-                    KeInvalidateTlbEntry(MiPteToAddress(PointerPte));
+                    /* Invalidate this mapping on every CPU before releasing the
+                       PFN lock and making the page available for reuse. */
+                    MiFlushTbForAddress(MiPteToAddress(PointerPte));
 
                     /* We are done for this PTE */
                     MiReleasePfnLock(OldIrql);
@@ -2874,10 +2895,9 @@ MiProcessValidPteList(IN PMMPTE *ValidPteList,
     }
 
     //
-    // All the PTEs have been dereferenced and made invalid, flush the TLB now
-    // and then release the PFN lock
+    // Flush before the PFN lock permits page reuse.
     //
-    KeFlushCurrentTb();
+    KeFlushProcessTb();
     MiReleasePfnLock(OldIrql);
 }
 
@@ -3070,7 +3090,11 @@ MiResetPrivatePages(
             ASSERT(TempPte.u.Long != 0);
 
             OldIrql = MiAcquirePfnLock();
-            MiDeletePte(PointerPte, (PVOID)CurrentAddress, Process, NULL);
+            MiDeletePte(PointerPte,
+                        (PVOID)CurrentAddress,
+                        Process,
+                        NULL,
+                        TRUE);
             MiReleasePfnLock(OldIrql);
 
             MiIncrementPageTableReferences((PVOID)CurrentAddress);
