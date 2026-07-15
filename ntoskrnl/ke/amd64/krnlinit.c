@@ -129,6 +129,9 @@ KiInitializeHandBuiltThread(
     Thread->IdealProcessor = Prcb->Number;
     Thread->Priority = HIGH_PRIORITY;
     Thread->State = Running;
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    Thread->Running = TRUE;
+#endif
 #if (NTDDI_VERSION >= NTDDI_WIN10)
     Thread->Affinity = (ULONG_PTR)1 << Prcb->Number;
 #elif (NTDDI_VERSION >= NTDDI_WIN7)
@@ -320,4 +323,3 @@ KiInitializeKernel(IN PKPROCESS InitProcess,
     if (!DpcStack) KeBugCheckEx(NO_PAGES_AVAILABLE, 1, 0, 0, 0);
     Prcb->DpcStack = DpcStack;
 }
-

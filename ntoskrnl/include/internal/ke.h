@@ -290,6 +290,10 @@ VOID
 FASTCALL
 KiDeferredReadyThread(IN PKTHREAD Thread);
 
+VOID
+FASTCALL
+KiQueueThreadForReaping(IN PKTHREAD Thread);
+
 PKTHREAD
 FASTCALL
 KiIdleSchedule(
