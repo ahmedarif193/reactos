@@ -11,7 +11,20 @@
 #define NDEBUG
 #include <debug.h>
 
-#define KI_IPI_TB_FLUSH 0x20
+#define KI_IPI_TB_FLUSH     0x20
+#define KI_IPI_GENERIC_CALL 0x40
+
+typedef struct DECLSPEC_CACHEALIGN _KI_GENERIC_CALL_PACKET
+{
+    PKIPI_BROADCAST_WORKER Function;
+    ULONG_PTR Argument;
+    volatile LONG TargetsRemaining;
+    volatile LONG Release;
+    volatile KAFFINITY OutstandingDone;
+} KI_GENERIC_CALL_PACKET;
+
+static KI_GENERIC_CALL_PACKET KiGenericCallPacket;
+static volatile LONG KiGenericCallOwner = -1;
 
 /* FUNCTIONS *****************************************************************/
 
@@ -165,6 +178,31 @@ KiIpiSendTbFlush(
     KeLowerIrql(OldIrql);
 }
 
+static
+VOID
+KiIpiParticipateInGenericCall(
+    _In_ PKPRCB Prcb)
+{
+    PKIPI_BROADCAST_WORKER Function = KiGenericCallPacket.Function;
+    ULONG_PTR Argument = KiGenericCallPacket.Argument;
+    KIRQL OldIrql;
+
+    ASSERT(KiGenericCallPacket.OutstandingDone & Prcb->SetMember);
+
+    InterlockedDecrement(&KiGenericCallPacket.TargetsRemaining);
+    while (!KiGenericCallPacket.Release)
+    {
+        YieldProcessor();
+    }
+
+    OldIrql = KfRaiseIrql(IPI_LEVEL);
+    Function(Argument);
+    KeLowerIrql(OldIrql);
+
+    InterlockedBitTestAndResetAffinity(&KiGenericCallPacket.OutstandingDone,
+                                       Prcb->Number);
+}
+
 VOID
 NTAPI
 KiIpiProcessRequests(VOID)
@@ -196,10 +234,15 @@ KiIpiProcessRequests(VOID)
                                                Prcb->Number);
         }
 
+        if (Requests & KI_IPI_GENERIC_CALL)
+            KiIpiParticipateInGenericCall(Prcb);
+
         if (Requests & IPI_DPC)
             DpcRequest = TRUE;
 
-        ASSERT((Requests & ~(KI_IPI_TB_FLUSH | IPI_DPC)) == 0);
+        ASSERT((Requests & ~(KI_IPI_TB_FLUSH |
+                             KI_IPI_GENERIC_CALL |
+                             IPI_DPC)) == 0);
         Sources &= ~AFFINITY_MASK(Source);
     }
 
@@ -213,6 +256,78 @@ KeIpiGenericCall(
     _In_ PKIPI_BROADCAST_WORKER Function,
     _In_ ULONG_PTR Argument)
 {
-    __debugbreak();
-    return 0;
+    PKPRCB Prcb;
+    KAFFINITY Targets, IpiTargets, RemainingSet;
+    BOOLEAN InterruptsEnabled;
+    KIRQL OldIrql, ExecuteIrql;
+    ULONG_PTR Status;
+    ULONG Processor;
+    LONG TargetCount;
+
+    InterruptsEnabled = (__readeflags() & EFLAGS_INTERRUPT_MASK) != 0;
+
+    OldIrql = KeGetCurrentIrql();
+    if (OldIrql < SYNCH_LEVEL)
+        KeRaiseIrql(SYNCH_LEVEL, &OldIrql);
+
+    Prcb = KeGetCurrentPrcb();
+
+    while (InterlockedCompareExchange(&KiGenericCallOwner,
+                                      (LONG)Prcb->Number,
+                                      -1) != -1)
+    {
+        KiIpiProcessRequests();
+        YieldProcessor();
+    }
+
+    Targets = (KAFFINITY)KeActiveProcessors & ~Prcb->SetMember;
+
+    if (Targets != 0)
+    {
+        TargetCount = 0;
+        RemainingSet = Targets;
+        while (BitScanForwardAffinity(&Processor, RemainingSet))
+        {
+            TargetCount++;
+            RemainingSet &= ~AFFINITY_MASK(Processor);
+        }
+
+        KiGenericCallPacket.Function = Function;
+        KiGenericCallPacket.Argument = Argument;
+        KiGenericCallPacket.Release = 0;
+        KiGenericCallPacket.OutstandingDone = Targets;
+        KiGenericCallPacket.TargetsRemaining = TargetCount;
+        KeMemoryBarrier();
+
+        IpiTargets = KiIpiQueueRequest(Targets, KI_IPI_GENERIC_CALL);
+        if (IpiTargets != 0)
+            HalRequestIpi(IpiTargets);
+
+        while (KiGenericCallPacket.TargetsRemaining != 0)
+        {
+            if (!InterruptsEnabled)
+                KiIpiProcessRequests();
+
+            YieldProcessor();
+        }
+    }
+
+    KeRaiseIrql(IPI_LEVEL, &ExecuteIrql);
+    if (Targets != 0)
+        KiGenericCallPacket.Release = 1;
+
+    Status = Function(Argument);
+
+    while (KiGenericCallPacket.OutstandingDone != 0)
+    {
+        if (!InterruptsEnabled)
+            KiIpiProcessRequests();
+
+        YieldProcessor();
+    }
+
+    KeLowerIrql(ExecuteIrql);
+    InterlockedExchange(&KiGenericCallOwner, -1);
+    KeLowerIrql(OldIrql);
+    return Status;
 }
