@@ -637,6 +637,7 @@ OFFSET(PcSkipTick, KIPCR, Prcb.SkipTick), // not Win 10
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
 OFFSET(PcVirtualApicAssist, KIPCR, Prcb.VirtualApicAssist),
 OFFSET(PcStartCycles, KIPCR, Prcb.StartCycles),
+OFFSET(PcCycleTime, KIPCR, Prcb.CycleTime),
 #endif
 //OFFSET(PcFeatureBits, KIPCR, Prcb.FeatureBits),
 //OFFSET(PcNmiActive, KIPCR, Prcb.NmiActive),
