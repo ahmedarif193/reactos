@@ -2539,7 +2539,6 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
     //
     // And return the pool allocation
     //
-    ExpCheckPoolBlocks(Entry);
     Entry->PoolTag = Tag;
     return POOL_FREE_BLOCK(Entry);
 }
