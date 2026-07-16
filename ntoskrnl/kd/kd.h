@@ -34,16 +34,18 @@ KdIoReadLine(
 
 /* INIT ROUTINES *************************************************************/
 
-KIRQL
+BOOLEAN
 NTAPI
 KdbpAcquireLock(
-    _In_ PKSPIN_LOCK SpinLock);
+    _In_ PKSPIN_LOCK SpinLock,
+    _Out_ PKIRQL OldIrql);
 
 VOID
 NTAPI
 KdbpReleaseLock(
     _In_ PKSPIN_LOCK SpinLock,
-    _In_ KIRQL OldIrql);
+    _In_ KIRQL OldIrql,
+    _In_ BOOLEAN LockAcquired);
 
 VOID
 KdpScreenAcquire(VOID);
