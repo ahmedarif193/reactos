@@ -2322,11 +2322,15 @@ REGION_vSyncRegion(
 
     NT_ASSERT(prgn != NULL);
     NT_ASSERT(prgn->prgnattr != NULL);
-    NT_ASSERT((prgn->prgnattr == &prgn->rgnattr) ||
-              (prgn->prgnattr->AttrFlags & ATTR_RGN_VALID));
 
     /* Get the region attribute and check if it's dirty (modified) */
     prgnattr = prgn->prgnattr;
+    /* User attributes are only mapped in their owning process. */
+    if ((prgnattr != &prgn->rgnattr) && (GreGetObjectOwner(prgn->BaseObject.hHmgr) != GDI_OBJ_HMGR_POWNED))
+        return;
+
+    NT_ASSERT((prgnattr == &prgn->rgnattr) || (prgnattr->AttrFlags & ATTR_RGN_VALID));
+
     if (prgnattr->AttrFlags & ATTR_RGN_DIRTY)
     {
         NT_ASSERT(GreGetObjectOwner(prgn->BaseObject.hHmgr) == GDI_OBJ_HMGR_POWNED);
@@ -2383,7 +2387,7 @@ REGION_UnlockRgn(
 
     /* Get the region attribute and check if it's user mode */
     prgnattr = prgn->prgnattr;
-    if (prgnattr != &prgn->rgnattr)
+    if ((prgnattr != &prgn->rgnattr) && (GreGetObjectOwner(prgn->BaseObject.hHmgr) == GDI_OBJ_HMGR_POWNED))
     {
         NT_ASSERT(GreGetObjectOwner(prgn->BaseObject.hHmgr) == GDI_OBJ_HMGR_POWNED);
         prgnattr->iComplexity = REGION_Complexity(prgn);
