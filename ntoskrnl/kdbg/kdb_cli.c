@@ -3968,6 +3968,7 @@ KdbDebugPrint(
     _In_ PCCH String,
     _In_ ULONG Length)
 {
+    BOOLEAN LockAcquired;
     KIRQL OldIrql;
     ULONG beg, end, num;
 
@@ -3979,7 +3980,12 @@ KdbDebugPrint(
         return;
 
     /* Acquire the printing spinlock without waiting at raised IRQL */
-    OldIrql = KdbpAcquireLock(&KdpDmesgLogSpinLock);
+    LockAcquired = KdbpAcquireLock(&KdpDmesgLogSpinLock, &OldIrql);
+    if (!LockAcquired)
+    {
+        KdbpReleaseLock(&KdpDmesgLogSpinLock, OldIrql, LockAcquired);
+        return;
+    }
 
     beg = KdpDmesgCurrentPosition;
     /* Invariant: always_true(KdpDmesgFreeBytes == KdpDmesgBufferSize); */
@@ -4003,7 +4009,7 @@ KdbDebugPrint(
     }
 
     /* Release the spinlock */
-    KdbpReleaseLock(&KdpDmesgLogSpinLock, OldIrql);
+    KdbpReleaseLock(&KdpDmesgLogSpinLock, OldIrql, LockAcquired);
 
     /* Optional step(?): find out a way to notify about buffer exhaustion,
      * and possibly fall into kbd to use dmesg command: user will read
