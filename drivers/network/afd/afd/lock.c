@@ -380,6 +380,21 @@ VOID SocketStateUnlock( PAFD_FCB FCB ) {
     KeReleaseMutex(&FCB->Mutex, FALSE);
 }
 
+VOID AfdSignalTdiRundown(PAFD_FCB FCB)
+{
+    if (FCB->SharedData.State != SOCKET_STATE_CLOSED) return;
+
+    if (FCB->TdiRundownEvent &&
+        !FCB->ListenIrp.InFlightRequest &&
+        !FCB->ReceiveIrp.InFlightRequest &&
+        !FCB->SendIrp.InFlightRequest &&
+        !FCB->ConnectIrp.InFlightRequest &&
+        !FCB->DisconnectIrp.InFlightRequest)
+    {
+        KeSetEvent(FCB->TdiRundownEvent, IO_NO_INCREMENT, FALSE);
+    }
+}
+
 NTSTATUS NTAPI UnlockAndMaybeComplete
 ( PAFD_FCB FCB, NTSTATUS Status, PIRP Irp,
   UINT Information ) {

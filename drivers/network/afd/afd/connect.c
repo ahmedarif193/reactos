@@ -359,6 +359,7 @@ StreamSocketConnectSendComplete(
         FCB->OnConnectSendBufferSize = 0;
     }
     
+    if (FCB->TdiRundownEvent) AfdSignalTdiRundown(FCB);
     SocketStateUnlock(FCB);
     
     return STATUS_SUCCESS;
@@ -411,6 +412,7 @@ StreamSocketConnectComplete(PDEVICE_OBJECT DeviceObject, PIRP Irp,
                (void)IoSetCancelRoutine(NextIrp, NULL);
                IoCompleteRequest(NextIrp, IO_NETWORK_INCREMENT);
         }
+        if (FCB->TdiRundownEvent) AfdSignalTdiRundown(FCB);
         SocketStateUnlock( FCB );
         return STATUS_FILE_CLOSED;
     }
@@ -478,8 +480,6 @@ StreamSocketConnectComplete(PDEVICE_OBJECT DeviceObject, PIRP Irp,
             PFILE_OBJECT object = FCB->Connection.Object;
             PVOID sendBuffer = FCB->OnConnectSendBuffer;
             UINT sendBufferLength = FCB->OnConnectSendBufferSize;
-            SocketStateUnlock(FCB);
-
             Status = TdiSend(&FCB->SendIrp.InFlightRequest,
                              object,
                              AFD_OVERLAPPED,
@@ -488,6 +488,8 @@ StreamSocketConnectComplete(PDEVICE_OBJECT DeviceObject, PIRP Irp,
                              StreamSocketConnectSendComplete,
                              FCB);
 
+            if (FCB->TdiRundownEvent) AfdSignalTdiRundown(FCB);
+            SocketStateUnlock(FCB);
             return Status == STATUS_PENDING ? STATUS_SUCCESS : Status;
         }
     }
@@ -506,6 +508,7 @@ end:
         (void)IoSetCancelRoutine(NextIrp, NULL);
         IoCompleteRequest(NextIrp, IO_NETWORK_INCREMENT);
     }
+    if (FCB->TdiRundownEvent) AfdSignalTdiRundown(FCB);
     SocketStateUnlock( FCB );
 
     AFD_DbgPrint(MID_TRACE,("Returning %x\n", Status));

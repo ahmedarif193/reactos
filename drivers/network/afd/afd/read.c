@@ -293,10 +293,12 @@ NTSTATUS NTAPI ReceiveComplete
             (void)IoSetCancelRoutine(NextIrp, NULL);
             IoCompleteRequest( NextIrp, IO_NETWORK_INCREMENT );
         }
+        if (FCB->TdiRundownEvent) AfdSignalTdiRundown(FCB);
         SocketStateUnlock( FCB );
         return STATUS_FILE_CLOSED;
     } else if( FCB->SharedData.State == SOCKET_STATE_LISTENING ) {
         AFD_DbgPrint(MIN_TRACE,("!!! LISTENER GOT A RECEIVE COMPLETE !!!\n"));
+        if (FCB->TdiRundownEvent) AfdSignalTdiRundown(FCB);
         SocketStateUnlock( FCB );
         return STATUS_INVALID_PARAMETER;
     }
@@ -305,6 +307,7 @@ NTSTATUS NTAPI ReceiveComplete
 
     ReceiveActivity( FCB, NULL );
 
+    if (FCB->TdiRundownEvent) AfdSignalTdiRundown(FCB);
     SocketStateUnlock( FCB );
 
     return STATUS_SUCCESS;
@@ -586,18 +589,21 @@ PacketSocketRecvComplete(
                ExFreePoolWithTag(DatagramRecv, TAG_AFD_STORED_DATAGRAM);
         }
 
+        if (FCB->TdiRundownEvent) AfdSignalTdiRundown(FCB);
         SocketStateUnlock( FCB );
         return STATUS_FILE_CLOSED;
     }
 
     if (Irp->IoStatus.Status != STATUS_SUCCESS)
     {
+        if (FCB->TdiRundownEvent) AfdSignalTdiRundown(FCB);
         SocketStateUnlock(FCB);
         return Irp->IoStatus.Status;
     }
 
     if (FCB->TdiReceiveClosed)
     {
+        if (FCB->TdiRundownEvent) AfdSignalTdiRundown(FCB);
         SocketStateUnlock(FCB);
         return STATUS_FILE_CLOSED;
     }
@@ -626,6 +632,7 @@ PacketSocketRecvComplete(
             ExFreePoolWithTag(DatagramRecv, TAG_AFD_STORED_DATAGRAM);
         }
 
+        if (FCB->TdiRundownEvent) AfdSignalTdiRundown(FCB);
         SocketStateUnlock( FCB );
         return Status;
     } else {
@@ -692,6 +699,7 @@ PacketSocketRecvComplete(
               FCB );
     }
 
+    if (FCB->TdiRundownEvent) AfdSignalTdiRundown(FCB);
     SocketStateUnlock( FCB );
 
     return STATUS_SUCCESS;
