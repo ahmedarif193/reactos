@@ -86,6 +86,7 @@ KiInitSystem(VOID)
 
     /* Initialize Profiling data */
     KeInitializeSpinLock(&KiProfileLock);
+    KeInitializeGuardedMutex(&KiProfileSourceMutex);
     InitializeListHead(&KiProfileListHead);
     InitializeListHead(&KiProfileSourceListHead);
 

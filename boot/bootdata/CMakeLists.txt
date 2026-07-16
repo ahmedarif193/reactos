@@ -209,6 +209,9 @@ add_livecd_shortcut("Task Manager"
 add_livecd_shortcut("Task Manager 11"
     "shell:system\\taskmgr11.exe" ICON_INDEX 0
     DESTINATION "${dir_allusers_desktop}" "${dir_startmenu_systemtools}")
+add_livecd_shortcut("Performance Analyzer"
+    "shell:system\\rosprofiler.exe" ICON_INDEX 0
+    DESTINATION "${dir_allusers_desktop}" "${dir_startmenu_systemtools}")
 add_livecd_shortcut("Calculator"
     "shell:system\\calc.exe" ICON_INDEX 0
     WORKDIR "${envvar_homedrive}${envvar_homepath}"

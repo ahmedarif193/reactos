@@ -7,6 +7,7 @@
  */
 
 #include <ntoskrnl.h>
+#include <internal/proftrace.h>
 #include <fpstate.h>
 #define NDEBUG
 #include <debug.h>
@@ -338,6 +339,8 @@ KiSwapContextResume(
 
     ASSERT(OldThread != NULL);
     ASSERT(NewThread != NULL);
+
+    KprofTraceSchedulerSwitch(OldThread, NewThread, OldThread->WaitReason);
 
     Prcb = KeGetCurrentPrcb();
 

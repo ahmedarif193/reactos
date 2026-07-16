@@ -9,6 +9,7 @@
 /* INCLUDES *******************************************************************/
 
 #include <ntoskrnl.h>
+#include <internal/proftrace.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -226,6 +227,7 @@ KiSwapContextExit(IN PKTHREAD OldThread,
 
     /* We are on the new thread stack now */
     NewThread = Pcr->Prcb.CurrentThread;
+    KprofTraceSchedulerSwitch(OldThread, NewThread, OldThread->WaitReason);
 
     /* Now we are the new thread. Check if it's in a new process */
     OldProcess = OldThread->ApcState.Process;

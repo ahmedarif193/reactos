@@ -1,0 +1,36 @@
+#include <windef.h>
+#include <winuser.h>
+#include "resource.h"
+
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+
+STRINGTABLE
+BEGIN
+    IDS_APP_TITLE "ReactOS Performance Analyzer"
+END
+
+/* Composition of Microsoft Fluent Emoji 3D artworks (MIT): desktop
+ * computer showing a rising chart under a magnifying scope; see
+ * res/rosprofiler.ico.LICENSE for the attribution. */
+IDI_ROSPROFILER ICON "res/rosprofiler.ico"
+
+IDD_LAUNCH DIALOGEX 0, 0, 330, 118
+STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Launch and Record"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT           "Application:", -1, 7, 9, 54, 10
+    EDITTEXT        IDC_LAUNCH_PATH, 64, 7, 216, 14, ES_AUTOHSCROLL
+    PUSHBUTTON      "Browse...", IDC_LAUNCH_BROWSE, 284, 6, 39, 16
+    LTEXT           "Arguments:", -1, 7, 34, 54, 10
+    EDITTEXT        IDC_LAUNCH_ARGUMENTS, 64, 32, 259, 14, ES_AUTOHSCROLL
+    LTEXT           "Working dir:", -1, 7, 58, 54, 10
+    EDITTEXT        IDC_LAUNCH_DIRECTORY, 64, 56, 259, 14, ES_AUTOHSCROLL
+    DEFPUSHBUTTON   "Launch", IDOK, 215, 94, 50, 17
+    PUSHBUTTON      "Cancel", IDCANCEL, 272, 94, 50, 17
+END
+
+#define REACTOS_STR_FILE_DESCRIPTION "ReactOS Performance Analyzer\0"
+#define REACTOS_STR_INTERNAL_NAME "rosprofiler\0"
+#define REACTOS_STR_ORIGINAL_FILENAME "rosprofiler.exe\0"
+#include <reactos/version.rc>

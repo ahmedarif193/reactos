@@ -9,6 +9,7 @@
 /* INCLUDES *******************************************************************/
 
 #include <ntoskrnl.h>
+#include <internal/proftrace.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -943,6 +944,10 @@ MiUnmapViewOfSection(IN PEPROCESS Process,
     if (!Flags) MmUnlockAddressSpace(&Process->Vm);
 
     /* Destroy the VAD and return success */
+    if (Vad->u.VadFlags.VadType == VadImageMap)
+    {
+        KprofTraceImageEvent(Process, (PVOID)(Vad->StartingVpn << PAGE_SHIFT), RegionSize, FALSE, FALSE, NULL);
+    }
     ExFreePool(Vad);
     Status = STATUS_SUCCESS;
 
@@ -3724,6 +3729,11 @@ NtMapViewOfSection(
     /* Return data only on success */
     if (NT_SUCCESS(Status))
     {
+        if (Section->u.Flags.Image)
+        {
+            KprofTraceImageEvent(Process, SafeBaseAddress, SafeViewSize, TRUE, FALSE, NULL);
+        }
+
         /* Check if this is an image for the current process */
         if ((Section->u.Flags.Image) &&
             (Process == PsGetCurrentProcess()) &&

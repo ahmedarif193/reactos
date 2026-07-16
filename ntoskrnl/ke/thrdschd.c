@@ -9,6 +9,7 @@
 /* INCLUDES ******************************************************************/
 
 #include <ntoskrnl.h>
+#include <internal/proftrace.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -362,6 +363,7 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
     /* Select a processor to run on */
     Processor = KiSelectNextProcessor(Thread, &IdleRequest);
     Thread->NextProcessor = Processor;
+    KprofTraceSchedulerReady(Thread, Processor);
 
     /* Get the PRCB and lock it */
     Prcb = KiProcessorBlock[Processor];

@@ -10,6 +10,7 @@
 /* INCLUDES ****************************************************************/
 
 #include <ntoskrnl.h>
+#include <internal/proftrace.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -545,6 +546,9 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     /* Initialize WMI */
     WmiInitialize();
+
+    /* Initialize the built-in profiling control and stream device. */
+    RosprofInitialize();
 
     /* Initialize HAL Root Bus Driver */
     HalInitPnpDriver();
