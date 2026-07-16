@@ -929,7 +929,7 @@ struct symt_ht* symt_find_nearest(struct module* module, DWORD_PTR addr)
     {
         symt_get_address(&module->addr_sorttab[high - 1]->symt, &ref_addr);
         symt_get_length(module, &module->addr_sorttab[high - 1]->symt, &ref_size);
-        if (addr >= ref_addr + ref_size) return NULL;
+        if (addr >= ref_addr && addr - ref_addr >= ref_size) return NULL;
     }
     
     while (high > low + 1)
