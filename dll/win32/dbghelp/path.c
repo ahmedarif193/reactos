@@ -658,12 +658,16 @@ BOOL path_find_symbol_file(const struct process* pcs, const struct module* modul
         /* return first fully matched file */
         if (do_searchW(filename, buffer, FALSE, module_find_cb, &mf)) return TRUE;
     }
-    /* if no fully matching file is found, return the best matching file if any */
-    if ((dbghelp_options & SYMOPT_LOAD_ANYTHING) && mf.matched)
+    /* Preserve the mismatch state even when policy rejects the candidate. */
+    if (mf.matched)
     {
-        lstrcpyW( buffer, mf.filename );
         *is_unmatched = TRUE;
-        return TRUE;
+        /* If requested, return the best matching file despite its identity. */
+        if (dbghelp_options & SYMOPT_LOAD_ANYTHING)
+        {
+            lstrcpyW( buffer, mf.filename );
+            return TRUE;
+        }
     }
     return FALSE;
 }
