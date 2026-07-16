@@ -23,7 +23,8 @@ RosSymCreateFromFile(PVOID FileContext, PROSSYM_INFO *RosSymInfo)
   PIMAGE_SECTION_HEADER SectionHeaders, SectionHeader;
   unsigned SectionIndex;
   char SectionName[IMAGE_SIZEOF_SHORT_NAME];
-  ROSSYM_HEADER RosSymHeader;
+  PVOID RawData;
+  BOOLEAN Result;
 
   /* Load DOS header */
   if (! RosSymReadFile(FileContext, &DosHeader, sizeof(IMAGE_DOS_HEADER)))
@@ -96,51 +97,41 @@ RosSymCreateFromFile(PVOID FileContext, PROSSYM_INFO *RosSymInfo)
       return FALSE;
     }
 
-  /* Load rossym header */
+  if (SectionHeader->SizeOfRawData < sizeof(ROSSYM_HEADER))
+    {
+      RosSymFreeMem(SectionHeaders);
+      DPRINT1("Invalid %s section\n", ROSSYM_SECTION_NAME);
+      return FALSE;
+    }
+
+  RawData = RosSymAllocMem(SectionHeader->SizeOfRawData);
+  if (RawData == NULL)
+    {
+      RosSymFreeMem(SectionHeaders);
+      DPRINT1("Failed to allocate memory for %s section\n", ROSSYM_SECTION_NAME);
+      return FALSE;
+    }
+
+  /* Load the raw section and use the common validated decoder. */
   if (! RosSymSeekFile(FileContext, SectionHeader->PointerToRawData))
     {
+      RosSymFreeMem(RawData);
       RosSymFreeMem(SectionHeaders);
       DPRINT1("Failed seeking to section data\n");
       return FALSE;
     }
+  if (! RosSymReadFile(FileContext, RawData, SectionHeader->SizeOfRawData))
+    {
+      RosSymFreeMem(RawData);
+      RosSymFreeMem(SectionHeaders);
+      DPRINT1("Failed to read %s section\n", ROSSYM_SECTION_NAME);
+      return FALSE;
+    }
+
+  Result = RosSymCreateFromRaw(RawData, SectionHeader->SizeOfRawData, RosSymInfo);
+  RosSymFreeMem(RawData);
   RosSymFreeMem(SectionHeaders);
-  if (! RosSymReadFile(FileContext, &RosSymHeader, sizeof(ROSSYM_HEADER)))
-    {
-      DPRINT1("Failed to read rossym header\n");
-      return FALSE;
-    }
-  if (RosSymHeader.SymbolsOffset < sizeof(ROSSYM_HEADER)
-      || RosSymHeader.StringsOffset < RosSymHeader.SymbolsOffset + RosSymHeader.SymbolsLength
-      || 0 != (RosSymHeader.SymbolsLength % sizeof(ROSSYM_ENTRY)))
-    {
-      DPRINT1("Invalid ROSSYM_HEADER\n");
-      return FALSE;
-    }
-
-  *RosSymInfo = RosSymAllocMem(sizeof(ROSSYM_INFO) - sizeof(ROSSYM_HEADER)
-                               + RosSymHeader.StringsOffset + RosSymHeader.StringsLength + 1);
-  if (NULL == *RosSymInfo)
-    {
-      DPRINT1("Failed to allocate memory for rossym\n");
-      return FALSE;
-    }
-  (*RosSymInfo)->Symbols = (PROSSYM_ENTRY)((char *) *RosSymInfo + sizeof(ROSSYM_INFO)
-                                           - sizeof(ROSSYM_HEADER) + RosSymHeader.SymbolsOffset);
-  (*RosSymInfo)->SymbolsCount = RosSymHeader.SymbolsLength / sizeof(ROSSYM_ENTRY);
-  (*RosSymInfo)->Strings = (PCHAR) *RosSymInfo + sizeof(ROSSYM_INFO) - sizeof(ROSSYM_HEADER)
-                           + RosSymHeader.StringsOffset;
-  (*RosSymInfo)->StringsLength = RosSymHeader.StringsLength;
-  if (! RosSymReadFile(FileContext, *RosSymInfo + 1,
-                       RosSymHeader.StringsOffset + RosSymHeader.StringsLength
-                       - sizeof(ROSSYM_HEADER)))
-    {
-      DPRINT1("Failed to read rossym headers\n");
-      return FALSE;
-    }
-  /* Make sure the last string is null terminated, we allocated an extra byte for that */
-  (*RosSymInfo)->Strings[(*RosSymInfo)->StringsLength] = '\0';
-
-  return TRUE;
+  return Result;
 }
 
 /* EOF */

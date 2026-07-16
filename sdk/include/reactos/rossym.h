@@ -16,19 +16,25 @@
 extern "C" {
 #endif
 
+#include <pshpack4.h>
+
 typedef struct _ROSSYM_HEADER {
-  unsigned long SymbolsOffset;
-  unsigned long SymbolsLength;
-  unsigned long StringsOffset;
-  unsigned long StringsLength;
+  ULONG SymbolsOffset;
+  ULONG SymbolsLength;
+  ULONG StringsOffset;
+  ULONG StringsLength;
 } ROSSYM_HEADER, *PROSSYM_HEADER;
 
+/* ROSSYM_ENTRY is the packed on-disk ABI. Address is an RVA, so the entry
+ * remains 16 bytes for both 32-bit and 64-bit PE images. */
 typedef struct _ROSSYM_ENTRY {
   ULONG Address; /* RVA */
   ULONG FunctionOffset;
   ULONG FileOffset;
   ULONG SourceLine;
 } ROSSYM_ENTRY, *PROSSYM_ENTRY;
+
+#include <poppack.h>
 
 enum _ROSSYM_REGNAME {
     ROSSYM_X86_EAX = 0,
@@ -164,4 +170,3 @@ VOID RosSymFreeAggregate(PROSSYM_AGGREGATE Aggregate);
 #endif /* REACTOS_ROSSYM_H_INCLUDED */
 
 /* EOF */
-
