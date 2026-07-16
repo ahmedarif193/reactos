@@ -60,12 +60,18 @@ PKDP_INIT_ROUTINE InitRoutines[KdMax] =
 
 /* LOCKING FUNCTIONS *********************************************************/
 
-KIRQL
+BOOLEAN
 NTAPI
 KdbpAcquireLock(
-    _In_ PKSPIN_LOCK SpinLock)
+    _In_ PKSPIN_LOCK SpinLock,
+    _Out_ PKIRQL OldIrql)
 {
-    KIRQL OldIrql;
+    /* A frozen processor may hold the lock, so the debugger must not wait. */
+    if (KdEnteredDebugger)
+    {
+        KeRaiseIrql(HIGH_LEVEL, OldIrql);
+        return KeTryToAcquireSpinLockAtDpcLevel(SpinLock);
+    }
 
     /* Acquire the spinlock without waiting at raised IRQL */
     while (TRUE)
@@ -74,28 +80,32 @@ KdbpAcquireLock(
         while (!KeTestSpinLock(SpinLock));
 
         /* Spinlock is free, raise IRQL to high level */
-        KeRaiseIrql(HIGH_LEVEL, &OldIrql);
+        KeRaiseIrql(HIGH_LEVEL, OldIrql);
 
         /* Try to get the spinlock */
         if (KeTryToAcquireSpinLockAtDpcLevel(SpinLock))
             break;
 
         /* Someone else got the spinlock, lower IRQL back */
-        KeLowerIrql(OldIrql);
+        KeLowerIrql(*OldIrql);
     }
 
-    return OldIrql;
+    return TRUE;
 }
 
 VOID
 NTAPI
 KdbpReleaseLock(
     _In_ PKSPIN_LOCK SpinLock,
-    _In_ KIRQL OldIrql)
+    _In_ KIRQL OldIrql,
+    _In_ BOOLEAN LockAcquired)
 {
-    /* Release the spinlock */
-    KiReleaseSpinLock(SpinLock);
-    // KeReleaseSpinLockFromDpcLevel(SpinLock);
+    /* Release the spinlock if it was acquired */
+    if (LockAcquired)
+    {
+        KiReleaseSpinLock(SpinLock);
+        // KeReleaseSpinLockFromDpcLevel(SpinLock);
+    }
 
     /* Restore the old IRQL */
     KeLowerIrql(OldIrql);
@@ -158,13 +168,19 @@ KdpPrintToLogFile(
     _In_ PCCH String,
     _In_ ULONG Length)
 {
+    BOOLEAN LockAcquired;
     KIRQL OldIrql;
     ULONG beg, end, num;
 
     if (KdpDebugBuffer == NULL) return;
 
     /* Acquire the printing spinlock without waiting at raised IRQL */
-    OldIrql = KdbpAcquireLock(&KdpDebugLogSpinLock);
+    LockAcquired = KdbpAcquireLock(&KdpDebugLogSpinLock, &OldIrql);
+    if (!LockAcquired)
+    {
+        KdbpReleaseLock(&KdpDebugLogSpinLock, OldIrql, LockAcquired);
+        return;
+    }
 
     beg = KdpCurrentPosition;
     num = min(Length, KdpFreeBytes);
@@ -186,7 +202,7 @@ KdpPrintToLogFile(
     }
 
     /* Release the spinlock */
-    KdbpReleaseLock(&KdpDebugLogSpinLock, OldIrql);
+    KdbpReleaseLock(&KdpDebugLogSpinLock, OldIrql, LockAcquired);
 
     /* Signal the logger thread */
     if (OldIrql <= DISPATCH_LEVEL && KdpLoggingEnabled)
@@ -367,13 +383,14 @@ KdpSerialPrint(
     _In_ PCCH String,
     _In_ ULONG Length)
 {
+    BOOLEAN LockAcquired;
     PCCH pch = String;
     KIRQL OldIrql;
 
     /* Acquire the printing spinlock without waiting at raised IRQL */
-    OldIrql = KdbpAcquireLock(&KdpSerialSpinLock);
+    LockAcquired = KdbpAcquireLock(&KdpSerialSpinLock, &OldIrql);
 
-    /* Output the string */
+    /* Output unlocked rather than deadlock if the lock is unavailable */
     while (pch < String + Length && *pch)
     {
         if (*pch == '\n')
@@ -385,7 +402,7 @@ KdpSerialPrint(
     }
 
     /* Release the spinlock */
-    KdbpReleaseLock(&KdpSerialSpinLock, OldIrql);
+    KdbpReleaseLock(&KdpSerialSpinLock, OldIrql, LockAcquired);
 }
 
 NTSTATUS
