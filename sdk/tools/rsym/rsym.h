@@ -157,10 +157,12 @@ typedef struct _COFF_SYMENT
 } COFF_SYMENT, *PCOFF_SYMENT;
 #pragma pack(pop)
 
-#ifdef TARGET_i386
+#if defined(TARGET_i386)
 typedef ULONG TARGET_ULONG_PTR;
-#else
+#elif defined(TARGET_amd64) || defined(TARGET_arm64)
 typedef ULONGLONG TARGET_ULONG_PTR;
+#else
+#error rsym supports only i386, amd64, and arm64 targets
 #endif
 
 typedef struct _ROSSYM_ENTRY {
@@ -171,6 +173,13 @@ typedef struct _ROSSYM_ENTRY {
 } ROSSYM_ENTRY, *PROSSYM_ENTRY;
 
 #pragma pack(pop)
+
+typedef char ROSSYM_HEADER_must_be_16_bytes[(sizeof(SYMBOLFILE_HEADER) == 16) ? 1 : -1];
+#if defined(TARGET_i386)
+typedef char ROSSYM_ENTRY_must_be_16_bytes[(sizeof(ROSSYM_ENTRY) == 16) ? 1 : -1];
+#else
+typedef char ROSSYM_ENTRY_must_be_20_bytes[(sizeof(ROSSYM_ENTRY) == 20) ? 1 : -1];
+#endif
 
 #define ROUND_UP(N, S) (((N) + (S) - 1) & ~((S) - 1))
 

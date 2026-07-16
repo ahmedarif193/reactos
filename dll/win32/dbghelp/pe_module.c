@@ -553,7 +553,7 @@ static BOOL pe_load_rsym(struct module* module)
         const char* rsym = image_map_section(&sect_rsym);
         if (rsym != IMAGE_NO_MAP)
         {
-            ret = rsym_parse(module, module->module.BaseOfImage,
+            ret = rsym_parse(module, module->module.BaseOfImage, fmap->addr_size,
                              rsym, image_get_map_size(&sect_rsym));
         }
         image_unmap_section(&sect_rsym);

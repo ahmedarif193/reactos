@@ -16,12 +16,34 @@
 extern "C" {
 #endif
 
+#include <pshpack4.h>
+
 typedef struct _ROSSYM_HEADER {
-  unsigned long SymbolsOffset;
-  unsigned long SymbolsLength;
-  unsigned long StringsOffset;
-  unsigned long StringsLength;
+  ULONG SymbolsOffset;
+  ULONG SymbolsLength;
+  ULONG StringsOffset;
+  ULONG StringsLength;
 } ROSSYM_HEADER, *PROSSYM_HEADER;
+
+/*
+ * These structures are the on-disk .rossym ABI.  Keep them packed to four
+ * bytes: existing 32-bit images use 16-byte entries and 64-bit images use
+ * 20-byte entries.  The explicit variants let cross-bitness readers select
+ * the layout from the containing PE image instead of guessing from length.
+ */
+typedef struct _ROSSYM_ENTRY32 {
+  ULONG Address;
+  ULONG FunctionOffset;
+  ULONG FileOffset;
+  ULONG SourceLine;
+} ROSSYM_ENTRY32, *PROSSYM_ENTRY32;
+
+typedef struct _ROSSYM_ENTRY64 {
+  ULONGLONG Address;
+  ULONG FunctionOffset;
+  ULONG FileOffset;
+  ULONG SourceLine;
+} ROSSYM_ENTRY64, *PROSSYM_ENTRY64;
 
 typedef struct _ROSSYM_ENTRY {
   ULONG_PTR Address;
@@ -29,6 +51,8 @@ typedef struct _ROSSYM_ENTRY {
   ULONG FileOffset;
   ULONG SourceLine;
 } ROSSYM_ENTRY, *PROSSYM_ENTRY;
+
+#include <poppack.h>
 
 enum _ROSSYM_REGNAME {
     ROSSYM_X86_EAX = 0,
@@ -164,4 +188,3 @@ VOID RosSymFreeAggregate(PROSSYM_AGGREGATE Aggregate);
 #endif /* REACTOS_ROSSYM_H_INCLUDED */
 
 /* EOF */
-
