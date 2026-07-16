@@ -16,10 +16,89 @@
 extern LARGE_INTEGER HalpCpuClockFrequency;
 
 /* HAL profiling variables */
-BOOLEAN HalIsProfiling = FALSE;
-ULONGLONG HalCurProfileInterval = 10000000;
+/* Read by every starting processor while another processor may be inside a
+ * start/stop/interval transition: the flag is published with interlocked
+ * stores and the 64-bit interval is read through an interlocked compare so
+ * 32-bit builds cannot tear it. */
+volatile LONG HalIsProfiling = FALSE;
+volatile LONG64 HalCurProfileInterval = 10000000;
+
+static
+ULONGLONG
+HalpReadProfileInterval(VOID)
+{
+    return (ULONGLONG)InterlockedCompareExchange64((volatile LONG64 *)&HalCurProfileInterval, 0, 0);
+}
 ULONGLONG HalMinProfileInterval = 1000;
 ULONGLONG HalMaxProfileInterval = 10000000;
+
+static
+ULONG
+HalpProfileIntervalToTicks(
+    IN ULONGLONG Interval100ns)
+{
+    ULONGLONG Frequency, Ticks;
+
+    Frequency = HalpCpuClockFrequency.QuadPart;
+    /* Split the quotient and remainder so the multiplication cannot wrap. */
+    Ticks = (Frequency / 10000000) * Interval100ns;
+    Ticks += ((Frequency % 10000000) * Interval100ns) / 10000000;
+    if (Ticks == 0) return 1;
+    if (Ticks > MAXULONG) return MAXULONG;
+    return (ULONG)Ticks;
+}
+
+static
+ULONG_PTR
+NTAPI
+HalpSetLocalProfileState(
+    IN ULONG_PTR Enable)
+{
+    LVT_REGISTER LvtEntry;
+
+    LvtEntry.Long = 0;
+    LvtEntry.TimerMode = 1;
+    LvtEntry.Vector = APIC_PROFILE_VECTOR;
+    LvtEntry.Mask = Enable ? 0 : 1;
+    if (Enable)
+    {
+        ApicWrite(APIC_TICR,
+                  KeGetPcr()->HalReserved[HAL_PROFILING_INTERVAL]);
+    }
+    ApicWrite(APIC_TMRLVTR, LvtEntry.Long);
+    return 0;
+}
+
+static
+ULONG_PTR
+NTAPI
+HalpSetLocalProfileInterval(
+    IN ULONG_PTR Interval)
+{
+    ULONG TimerInterval;
+
+    TimerInterval = HalpProfileIntervalToTicks((ULONGLONG)Interval);
+    KeGetPcr()->HalReserved[HAL_PROFILING_INTERVAL] = TimerInterval;
+    ApicWrite(APIC_TICR, TimerInterval);
+    return 0;
+}
+
+static
+VOID
+HalpBroadcastProfileOperation(
+    IN PKIPI_BROADCAST_WORKER Worker,
+    IN ULONG_PTR Argument)
+{
+    /* The rendezvous raises to IPI_LEVEL, so it is illegal at or above it
+       (boot phase 0 calls in here at HIGH_LEVEL to clear a stale timer,
+       running on the sole active processor); program the local APIC only */
+    if (KeGetCurrentIrql() >= DISPATCH_LEVEL)
+    {
+        Worker(Argument);
+        return;
+    }
+    KeIpiGenericCall(Worker, Argument);
+}
 
 /* TIMER FUNCTIONS ************************************************************/
 
@@ -75,31 +154,23 @@ VOID
 NTAPI
 HalInitializeProfiling(VOID)
 {
-    KeGetPcr()->HalReserved[HAL_PROFILING_INTERVAL] = HalCurProfileInterval;
+    KeGetPcr()->HalReserved[HAL_PROFILING_INTERVAL] =
+        HalpProfileIntervalToTicks(HalpReadProfileInterval());
     KeGetPcr()->HalReserved[HAL_PROFILING_MULTIPLIER] = 1; /* TODO: HACK */
+    if (InterlockedCompareExchange((volatile LONG *)&HalIsProfiling, 0, 0)) HalpSetLocalProfileState(TRUE);
 }
 
 VOID
 NTAPI
 HalStartProfileInterrupt(IN KPROFILE_SOURCE ProfileSource)
 {
-    LVT_REGISTER LvtEntry;
-
     /* Only handle ProfileTime */
     if (ProfileSource == ProfileTime)
     {
-        /* OK, we are profiling now */
-        HalIsProfiling = TRUE;
-
-        /* Set interrupt interval */
-        ApicWrite(APIC_TICR, KeGetPcr()->HalReserved[HAL_PROFILING_INTERVAL]);
-
-        /* Unmask it */
-        LvtEntry.Long = 0;
-        LvtEntry.TimerMode = 1;
-        LvtEntry.Vector = APIC_PROFILE_VECTOR;
-        LvtEntry.Mask = 0;
-        ApicWrite(APIC_TMRLVTR, LvtEntry.Long);
+        /* Publish the armed state before the broadcast: a processor starting
+         * up after the broadcast snapshot arms itself from the flag. */
+        InterlockedExchange((volatile LONG *)&HalIsProfiling, TRUE);
+        HalpBroadcastProfileOperation(HalpSetLocalProfileState, TRUE);
     }
 }
 
@@ -107,20 +178,14 @@ VOID
 NTAPI
 HalStopProfileInterrupt(IN KPROFILE_SOURCE ProfileSource)
 {
-    LVT_REGISTER LvtEntry;
-
     /* Only handle ProfileTime */
     if (ProfileSource == ProfileTime)
     {
-        /* We are not profiling */
-        HalIsProfiling = FALSE;
-
-        /* Mask interrupt */
-        LvtEntry.Long = 0;
-        LvtEntry.TimerMode = 1;
-        LvtEntry.Vector = APIC_PROFILE_VECTOR;
-        LvtEntry.Mask = 1;
-        ApicWrite(APIC_TMRLVTR, LvtEntry.Long);
+        /* Publish the stopped state before the broadcast: a processor that
+         * starts between the two must not arm itself from a stale flag and
+         * then be missed by the broadcast snapshot. */
+        InterlockedExchange((volatile LONG *)&HalIsProfiling, FALSE);
+        HalpBroadcastProfileOperation(HalpSetLocalProfileState, FALSE);
     }
 }
 
@@ -128,7 +193,6 @@ ULONG_PTR
 NTAPI
 HalSetProfileInterval(IN ULONG_PTR Interval)
 {
-    ULONGLONG TimerInterval;
     ULONGLONG FixedInterval;
 
     FixedInterval = (ULONGLONG)Interval;
@@ -144,16 +208,11 @@ HalSetProfileInterval(IN ULONG_PTR Interval)
     }
 
     /* Remember interval */
-    HalCurProfileInterval = FixedInterval;
+    InterlockedExchange64((volatile LONG64 *)&HalCurProfileInterval, (LONG64)FixedInterval);
 
-    /* Recalculate interval for APIC */
-    TimerInterval = FixedInterval * KeGetPcr()->HalReserved[HAL_PROFILING_MULTIPLIER] / HalMaxProfileInterval;
+    /* Recalculate and publish the interval on every local APIC. */
+    HalpBroadcastProfileOperation(HalpSetLocalProfileInterval,
+                                  (ULONG_PTR)FixedInterval);
 
-    /* Remember recalculated interval in PCR */
-    KeGetPcr()->HalReserved[HAL_PROFILING_INTERVAL] = (ULONG)TimerInterval;
-
-    /* And set it */
-    ApicWrite(APIC_TICR, (ULONG)TimerInterval);
-
-    return Interval;
+    return (ULONG_PTR)FixedInterval;
 }
