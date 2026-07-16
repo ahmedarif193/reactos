@@ -214,45 +214,45 @@ KeSetEventBoostPriority(IN PKEVENT Event,
     OldIrql = KeRaiseIrqlToSynchLevel();
     KiAcquireDispatcherObject(&Event->Header);
 
-    if (IsListEmpty(&Event->Header.WaitListHead))
+    for (;;)
     {
-        Event->Header.SignalState = 1;
-        KiReleaseDispatcherObject(&Event->Header);
-        KiExitDispatcher(OldIrql);
-        return;
-    }
+        if (IsListEmpty(&Event->Header.WaitListHead))
+        {
+            Event->Header.SignalState = 1;
+            break;
+        }
 
-    WaitBlock = CONTAINING_RECORD(Event->Header.WaitListHead.Flink,
-                                  KWAIT_BLOCK,
-                                  WaitListEntry);
+        WaitBlock = CONTAINING_RECORD(Event->Header.WaitListHead.Flink,
+                                      KWAIT_BLOCK,
+                                      WaitListEntry);
 
-    if (WaitBlock->WaitType == WaitAll)
-    {
-        Event->Header.SignalState = 1;
-        KiWaitTest(Event, EVENT_INCREMENT);
-    }
-    else
-    {
+        if (WaitBlock->WaitType == WaitAll)
+        {
+            Event->Header.SignalState = 1;
+            KiWaitTest(Event, EVENT_INCREMENT);
+            break;
+        }
+
         WaitThread = WaitBlock->Thread;
-        if (WaitingThread) *WaitingThread = WaitThread;
-
         RemoveEntryList(&WaitBlock->WaitListEntry);
         WaitBlock->WaitListEntry.Flink = NULL;
 
         KiAcquireThreadLock(WaitThread);
         if (WaitThread->State == Waiting)
         {
+            if (WaitingThread) *WaitingThread = WaitThread;
             Thread->Priority = KiComputeNewPriority(Thread, 0);
             WaitBlock->BlockState = WaitBlockInactive;
             KiUnlinkThread(WaitThread, STATUS_SUCCESS);
             WaitThread->AdjustIncrement = Thread->Priority;
             WaitThread->AdjustReason = AdjustBoost;
             KiReadyThread(WaitThread);
+            KiReleaseThreadLock(WaitThread);
+            break;
         }
-        else
-        {
-            WaitBlock->BlockState = WaitBlockInactive;
-        }
+
+        /* A timeout may have made this wait block stale. Try the next one. */
+        WaitBlock->BlockState = WaitBlockInactive;
         KiReleaseThreadLock(WaitThread);
     }
 
