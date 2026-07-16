@@ -2626,6 +2626,11 @@ static BOOL pdb_init(const struct pdb_lookup* pdb_lookup, struct pdb_file_info* 
 
         pdb_free(root);
     }
+    else
+    {
+        WARN("Unrecognized .PDB file header in %s\n", pdb_lookup->filename);
+        return FALSE;
+    }
 
     if (0) /* some tool to dump the internal files from a PDB file */
     {
@@ -2915,7 +2920,7 @@ BOOL pdb_fetch_file_info(const struct pdb_lookup* pdb_lookup, unsigned* matched)
     HANDLE              hFile, hMap = NULL;
     char*               image = NULL;
     BOOL                ret;
-    struct pdb_file_info pdb_file;
+    struct pdb_file_info pdb_file = {0};
 
     if ((hFile = CreateFileA(pdb_lookup->filename, GENERIC_READ, FILE_SHARE_READ, NULL,
                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)) == INVALID_HANDLE_VALUE ||

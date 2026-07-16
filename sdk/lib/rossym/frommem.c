@@ -68,15 +68,10 @@ RosSymCreateFromMem(PVOID ImageStart, ULONG_PTR ImageSize, PROSSYM_INFO *RosSymI
       return FALSE;
     }
 
-  /* Locate the section itself */
-  if (ImageSize < SectionHeader->PointerToRawData + SectionHeader->SizeOfRawData
-      || SectionHeader->SizeOfRawData < sizeof(ROSSYM_HEADER))
-    {
-      DPRINT("Invalid %s section\n", ROSSYM_SECTION_NAME);
-      return FALSE;
-    }
-
-  if (SectionHeader->VirtualAddress + SectionHeader->Misc.VirtualSize > ImageSize)
+  /* Locate the section in the loaded image, not in the file layout. */
+  if (SectionHeader->Misc.VirtualSize < sizeof(ROSSYM_HEADER)
+      || SectionHeader->VirtualAddress > ImageSize
+      || SectionHeader->Misc.VirtualSize > ImageSize - SectionHeader->VirtualAddress)
   {
       DPRINT("Bad %s section virtual size!\n", ROSSYM_SECTION_NAME);
       return FALSE;
@@ -84,7 +79,7 @@ RosSymCreateFromMem(PVOID ImageStart, ULONG_PTR ImageSize, PROSSYM_INFO *RosSymI
 
   /* Load it */
   return RosSymCreateFromRaw((char *) ImageStart + SectionHeader->VirtualAddress,
-                             SectionHeader->SizeOfRawData, RosSymInfo);
+                             SectionHeader->Misc.VirtualSize, RosSymInfo);
 }
 
 /* EOF */

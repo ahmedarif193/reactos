@@ -261,6 +261,33 @@ add_user_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "Profiles
 # Disk image size configuration (in MB)
 set(_preinstall_image_size_default 400)
 set(PREINSTALL_IMAGE_SIZE_MB ${_preinstall_image_size_default} CACHE STRING "Pre-installed disk image size in MB")
+set(_rosprofiler_package_pdbs_default OFF)
+if(MSVC AND (CMAKE_BUILD_TYPE MATCHES "^[Dd]ebug$" OR
+             CMAKE_CONFIGURATION_TYPES))
+    set(_rosprofiler_package_pdbs_default ON)
+endif()
+option(ROSPROFILER_PACKAGE_IMAGE_PDBS
+       "Package budgeted PDBs in Debug preinstalled images"
+       ${_rosprofiler_package_pdbs_default})
+set(ROSPROFILER_IMAGE_PDB_BUDGET_MB 160 CACHE STRING
+    "Maximum PDB payload in the preinstalled image")
+set(ROSPROFILER_IMAGE_FREE_RESERVE_MB 32 CACHE STRING
+    "Free-space reserve kept after adding profiler PDBs")
+set(ROSPROFILER_IMAGE_FS_OVERHEAD_MB 4 CACHE STRING
+    "Conservative FAT and directory overhead reserved for profiler symbols")
+set(_rosprofiler_image_symbol_dir
+    ${CMAKE_CURRENT_BINARY_DIR}/rosprofiler-image-symbols)
+set(_rosprofiler_embedded_rossym OFF)
+if(NOT MSVC AND NOT NO_ROSSYM)
+    set(_rosprofiler_embedded_rossym ON)
+endif()
+if(MSVC)
+    set(_rosprofiler_pdb_dir ${REACTOS_BINARY_DIR}/msvc_pdb)
+else()
+    set(_rosprofiler_pdb_dir ${REACTOS_BINARY_DIR}/symbols)
+endif()
+file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst
+     "reactos/symbols=${_rosprofiler_image_symbol_dir}\n")
 # Partition starts at sector 2048 (1MB alignment), rest is partition
 math(EXPR _preinstall_partition_sectors "(${PREINSTALL_IMAGE_SIZE_MB} - 1) * 2048")
 
@@ -282,6 +309,17 @@ endif()
 
 add_custom_target(preinstall_partition
     COMMAND ${CMAKE_COMMAND} -E rm -f ${_preinstall_partition_file}
+    COMMAND ${CMAKE_COMMAND}
+        -DOUTPUT_DIR=${_rosprofiler_image_symbol_dir}
+        -DPREINSTALL_LIST=${CMAKE_CURRENT_BINARY_DIR}/preinstall.$<CONFIG>.lst
+        -DIMAGE_SIZE_MB=${PREINSTALL_IMAGE_SIZE_MB}
+        -DRESERVE_MB=${ROSPROFILER_IMAGE_FREE_RESERVE_MB}
+        -DFS_OVERHEAD_MB=${ROSPROFILER_IMAGE_FS_OVERHEAD_MB}
+        -DMAX_SYMBOL_MB=${ROSPROFILER_IMAGE_PDB_BUDGET_MB}
+        -DPDB_DIR=${_rosprofiler_pdb_dir}
+        -DPACKAGE_PDBS=${ROSPROFILER_PACKAGE_IMAGE_PDBS}
+        -DEMBEDDED_ROSSYM=${_rosprofiler_embedded_rossym}
+        -P ${REACTOS_SOURCE_DIR}/boot/pack_rosprofiler_symbols.cmake
     COMMAND native-fatten ${_preinstall_partition_file}
         -format ${_preinstall_partition_sectors}
         ${_preinstall_partition_boot_args}

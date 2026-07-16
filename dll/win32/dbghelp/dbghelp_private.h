@@ -726,8 +726,8 @@ extern BOOL dwarf2_virtual_unwind(struct cpu_stack_walk *csw, DWORD_PTR ip,
     union ctx *ctx, DWORD64 *cfa) DECLSPEC_HIDDEN;
 
 /* rsym.c */
-extern BOOL         rsym_parse(struct module* module, unsigned long load_offset,
-                                const void* rsym, int rsymlen) DECLSPEC_HIDDEN;
+extern BOOL         rsym_parse(struct module* module, DWORD64 load_offset,
+                               const void* rsym, unsigned rsymlen) DECLSPEC_HIDDEN;
 
 
 

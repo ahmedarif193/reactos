@@ -30,6 +30,9 @@
 
 #include "rsym.h"
 
+/* dbghelp's host compatibility header lacks the 64-bit unload prototype. */
+BOOL WINAPI SymUnloadModule64(HANDLE hProcess, DWORD64 BaseOfDll);
+
 #define MAX_PATH 260
 #define MAX_SYM_NAME 2000
 
@@ -185,7 +188,9 @@ GetCoffInfo(void *FileData, PIMAGE_FILE_HEADER PEFileHeader,
     {
         /* No COFF symbol table */
         *CoffSymbolsLength = 0;
+        *CoffSymbolsBase = NULL;
         *CoffStringsLength = 0;
+        *CoffStringsBase = NULL;
     }
     else
     {
@@ -377,7 +382,7 @@ ConvertCoffs(ULONG *SymbolsCount, PROSSYM_ENTRY *SymbolsBase,
 {
     ULONG Count, i;
     PCOFF_SYMENT CoffEntry;
-    char FuncName[512], FileName[1024];
+    char *FuncName;
     char *p;
     PROSSYM_ENTRY Current;
     struct StringHashTable StringHash;
@@ -385,7 +390,14 @@ ConvertCoffs(ULONG *SymbolsCount, PROSSYM_ENTRY *SymbolsBase,
     CoffEntry = (PCOFF_SYMENT) CoffSymbolsBase;
     Count = CoffSymbolsLength / sizeof(COFF_SYMENT);
 
-    *SymbolsBase = malloc(Count * sizeof(ROSSYM_ENTRY));
+    if (Count > (size_t)-1 / sizeof(ROSSYM_ENTRY) - 1)
+    {
+        fprintf(stderr, "Too many COFF symbols\n");
+        return 1;
+    }
+
+    /* ConvertCoffs appends a zero sentinel after every emitted symbol. */
+    *SymbolsBase = calloc(Count + 1, sizeof(ROSSYM_ENTRY));
     if (*SymbolsBase == NULL)
     {
         fprintf(stderr, "Unable to allocate memory for converted COFF symbols\n");
@@ -398,8 +410,19 @@ ConvertCoffs(ULONG *SymbolsCount, PROSSYM_ENTRY *SymbolsBase,
 
     for (i = 0; i < Count; i++)
     {
+        if (CoffEntry[i].e_numaux >= Count - i)
+        {
+            free(*SymbolsBase);
+            StringHashTableFree(&StringHash);
+            fprintf(stderr, "Invalid auxiliary COFF symbol count\n");
+            return 1;
+        }
+
         if (ISFCN(CoffEntry[i].e_type) || C_EXT == CoffEntry[i].e_sclass)
         {
+            size_t NameLength;
+
+            FuncName = NULL;
             Current->Address = CoffEntry[i].e_value;
             if (CoffEntry[i].e_scnum > 0)
             {
@@ -417,19 +440,53 @@ ConvertCoffs(ULONG *SymbolsCount, PROSSYM_ENTRY *SymbolsBase,
             Current->FileOffset = 0;
             if (CoffEntry[i].e.e.e_zeroes == 0)
             {
-                if (sizeof(FuncName) <= strlen((char *) CoffStringsBase + CoffEntry[i].e.e.e_offset))
+                ULONG Offset = CoffEntry[i].e.e.e_offset;
+                char *String;
+                char *Terminator;
+
+                if (Offset >= CoffStringsLength)
                 {
                     free(*SymbolsBase);
-                    fprintf(stderr, "Function name too long\n");
+                    StringHashTableFree(&StringHash);
+                    fprintf(stderr, "Invalid COFF string offset\n");
+                    return 1;
+                }
+                String = (char *)CoffStringsBase + Offset;
+                Terminator = memchr(String, '\0', CoffStringsLength - Offset);
+                if (!Terminator)
+                {
+                    free(*SymbolsBase);
+                    fprintf(stderr, "Unterminated COFF symbol name\n");
                     StringHashTableFree(&StringHash);
                     return 1;
                 }
-                strcpy(FuncName, (char *) CoffStringsBase + CoffEntry[i].e.e.e_offset);
+                NameLength = Terminator - String;
+                FuncName = malloc(NameLength + 1);
+                if (FuncName != NULL)
+                    memcpy(FuncName, String, NameLength + 1);
             }
             else
             {
-                memcpy(FuncName, CoffEntry[i].e.e_name, E_SYMNMLEN);
-                FuncName[E_SYMNMLEN] = '\0';
+                NameLength = E_SYMNMLEN;
+                while (NameLength != 0 &&
+                       CoffEntry[i].e.e_name[NameLength - 1] == '\0')
+                {
+                    NameLength--;
+                }
+                FuncName = malloc(NameLength + 1);
+                if (FuncName != NULL)
+                {
+                    memcpy(FuncName, CoffEntry[i].e.e_name, NameLength);
+                    FuncName[NameLength] = '\0';
+                }
+            }
+
+            if (FuncName == NULL)
+            {
+                free(*SymbolsBase);
+                StringHashTableFree(&StringHash);
+                fprintf(stderr, "Unable to allocate memory for COFF symbol name\n");
+                return 1;
             }
 
             /* Name demangling: stdcall */
@@ -443,6 +500,7 @@ ConvertCoffs(ULONG *SymbolsCount, PROSSYM_ENTRY *SymbolsBase,
                                                       p,
                                                       StringsLength,
                                                       StringsBase);
+            free(FuncName);
             Current->SourceLine = 0;
             memset(++Current, 0, sizeof(*Current));
         }
@@ -459,7 +517,7 @@ ConvertCoffs(ULONG *SymbolsCount, PROSSYM_ENTRY *SymbolsBase,
 }
 
 struct DbgHelpLineEntry {
-  ULONG vma;
+  TARGET_ULONG_PTR vma;
   ULONG fileId;
   ULONG functionId;
   ULONG line;
@@ -472,7 +530,7 @@ struct DbgHelpStringTab {
   ULONG LineEntries, CurLineEntries;
   struct DbgHelpLineEntry *LineEntryData;
   void *process;
-  DWORD module_base;
+  DWORD64 module_base;
   char *PathChop;
   char *SourcePath;
   struct DbgHelpLineEntry *lastLineEntry;
@@ -547,7 +605,12 @@ DbgHelpGetString(struct DbgHelpStringTab *tab, int id)
 static char *
 StrDupShortenPath(char *PathChop, char *FilePath)
 {
-    int pclen = strlen(PathChop);
+    int pclen;
+
+    if (!PathChop)
+        return strdup(FilePath);
+
+    pclen = strlen(PathChop);
     if (!strncmp(FilePath, PathChop, pclen))
     {
         return strdup(FilePath+pclen);
@@ -562,6 +625,7 @@ static BOOL
 DbgHelpAddLineNumber(PSRCCODEINFO LineInfo, void *UserContext)
 {
     struct DbgHelpStringTab *tab = (struct DbgHelpStringTab *)UserContext;
+    DWORD64 relative_address;
     DWORD64 disp;
     int fileId, functionId;
     PSYMBOL_INFO pSymbol = malloc(FIELD_OFFSET(SYMBOL_INFO, Name[MAX_SYM_NAME]));
@@ -607,9 +671,26 @@ DbgHelpAddLineNumber(PSRCCODEINFO LineInfo, void *UserContext)
         }
     }
 
+    if (LineInfo->Address < LineInfo->ModBase)
+    {
+        free(pSymbol);
+        return TRUE;
+    }
+    relative_address = LineInfo->Address - LineInfo->ModBase;
+    if (relative_address > UINT32_MAX)
+    {
+        free(pSymbol);
+        return TRUE;
+    }
+
     fileId = DbgHelpAddStringToTable(tab,
                                      StrDupShortenPath(tab->PathChop,
                                                        LineInfo->FileName));
+    if (fileId < 0)
+    {
+        free(pSymbol);
+        return FALSE;
+    }
 
     pSymbol->SizeOfStruct = sizeof(SYMBOL_INFO);
     pSymbol->MaxNameLen = MAX_SYM_NAME;
@@ -622,12 +703,19 @@ DbgHelpAddLineNumber(PSRCCODEINFO LineInfo, void *UserContext)
     }
 
     functionId = DbgHelpAddStringToTable(tab, strdup(pSymbol->Name));
-
-    if (LineInfo->Address == 0)
-        fprintf(stderr, "Address is 0.\n");
+    if (functionId < 0)
+    {
+        free(pSymbol);
+        return FALSE;
+    }
 
     tab->lastLineEntry = DbgHelpAddLineEntry(tab);
-    tab->lastLineEntry->vma = LineInfo->Address - LineInfo->ModBase;
+    if (!tab->lastLineEntry)
+    {
+        free(pSymbol);
+        return FALSE;
+    }
+    tab->lastLineEntry->vma = relative_address;
     tab->lastLineEntry->functionId = functionId;
     tab->lastLineEntry->fileId = fileId;
     tab->lastLineEntry->line = LineInfo->LineNumber;
@@ -637,7 +725,7 @@ DbgHelpAddLineNumber(PSRCCODEINFO LineInfo, void *UserContext)
 }
 
 static int
-ConvertDbgHelp(void *process, DWORD module_base, char *SourcePath,
+ConvertDbgHelp(void *process, DWORD64 module_base, char *SourcePath,
                ULONG *SymbolsCount, PROSSYM_ENTRY *SymbolsBase,
                ULONG *StringsLength, void **StringsBase)
 {
@@ -704,6 +792,7 @@ ConvertDbgHelp(void *process, DWORD module_base, char *SourcePath,
         free(strtab.Table[i]);
     }
 
+    free(strtab.Table);
     free(strtab.LineEntryData);
     free(strtab.PathChop);
 
@@ -979,6 +1068,7 @@ CreateOutputFile(FILE *OutFile, void *InData,
 
     OutSectionHeaders = (PIMAGE_SECTION_HEADER)((char *) OutOptHeader + OutFileHeader->SizeOfOptionalHeader);
 
+    ProcessedRelocs = NULL;
     if (ProcessRelocations(&ProcessedRelocsLength,
                            &ProcessedRelocs,
                            InData,
@@ -986,6 +1076,8 @@ CreateOutputFile(FILE *OutFile, void *InData,
                            InFileHeader->NumberOfSections,
                            InSectionHeaders))
     {
+        free(ProcessedRelocs);
+        free(OutHeader);
         return 1;
     }
     if (InOptHeader->NumberOfRvaAndSizes < IMAGE_DIRECTORY_ENTRY_BASERELOC ||
@@ -1085,6 +1177,8 @@ CreateOutputFile(FILE *OutFile, void *InData,
             fprintf(stderr,
                     "Failed to allocate %u bytes for padded .rossym\n",
                     (unsigned int)RosSymFileLength);
+            free(ProcessedRelocs);
+            free(OutHeader);
             return 1;
         }
         memcpy(PaddedRosSym, RosSymSection, RosSymLength);
@@ -1148,6 +1242,16 @@ CreateOutputFile(FILE *OutFile, void *InData,
 
         PaddedStringTableLength = StringTableLength + PaddingSize;
         PaddedStringTable = malloc(PaddedStringTableLength);
+        if (PaddedStringTable == NULL)
+        {
+            fprintf(stderr,
+                    "Failed to allocate %u bytes for padded COFF strings\n",
+                    (unsigned)PaddedStringTableLength);
+            free(PaddedRosSym);
+            free(ProcessedRelocs);
+            free(OutHeader);
+            return 1;
+        }
         /* COFF string section is preceeded by a length */
         assert(sizeof(StringTableLength) == 4);
         memcpy(PaddedStringTable, &StringTableLength, sizeof(StringTableLength));
@@ -1176,6 +1280,9 @@ CreateOutputFile(FILE *OutFile, void *InData,
     if (fwrite(OutHeader, 1, StartOfRawData, OutFile) != StartOfRawData)
     {
         perror("Error writing output header\n");
+        free(PaddedStringTable);
+        free(PaddedRosSym);
+        free(ProcessedRelocs);
         free(OutHeader);
         return 1;
     }
@@ -1185,7 +1292,15 @@ CreateOutputFile(FILE *OutFile, void *InData,
         if (OutSectionHeaders[Section].SizeOfRawData != 0)
         {
             DWORD SizeOfRawData;
-            fseek(OutFile, OutSectionHeaders[Section].PointerToRawData, SEEK_SET);
+            if (fseek(OutFile, OutSectionHeaders[Section].PointerToRawData, SEEK_SET) != 0)
+            {
+                perror("Error seeking to output section");
+                free(PaddedStringTable);
+                free(PaddedRosSym);
+                free(ProcessedRelocs);
+                free(OutHeader);
+                return 1;
+            }
             if (OutRelocSection == OutSectionHeaders + Section)
             {
                 Data = (void *) ProcessedRelocs;
@@ -1204,7 +1319,9 @@ CreateOutputFile(FILE *OutFile, void *InData,
             if (fwrite(Data, 1, SizeOfRawData, OutFile) != SizeOfRawData)
             {
                 perror("Error writing section data\n");
+                free(PaddedStringTable);
                 free(PaddedRosSym);
+                free(ProcessedRelocs);
                 free(OutHeader);
                 return 1;
             }
@@ -1213,8 +1330,17 @@ CreateOutputFile(FILE *OutFile, void *InData,
 
     if (PaddedStringTable)
     {
-        fseek(OutFile, OutFileHeader->PointerToSymbolTable, SEEK_SET);
-        fwrite(PaddedStringTable, 1, PaddedStringTableLength, OutFile);
+        if (fseek(OutFile, OutFileHeader->PointerToSymbolTable, SEEK_SET) != 0 ||
+            fwrite(PaddedStringTable, 1, PaddedStringTableLength, OutFile) !=
+                PaddedStringTableLength)
+        {
+            perror("Error writing output COFF strings");
+            free(PaddedStringTable);
+            free(PaddedRosSym);
+            free(ProcessedRelocs);
+            free(OutHeader);
+            return 1;
+        }
         free(PaddedStringTable);
     }
 
@@ -1222,6 +1348,7 @@ CreateOutputFile(FILE *OutFile, void *InData,
     {
         free(PaddedRosSym);
     }
+    free(ProcessedRelocs);
     free(OutHeader);
 
     return 0;
@@ -1234,7 +1361,7 @@ int main(int argc, char* argv[])
     PIMAGE_FILE_HEADER PEFileHeader;
     PIMAGE_OPTIONAL_HEADER PEOptHeader;
     PIMAGE_SECTION_HEADER PESectionHeaders;
-    ULONG ImageBase;
+    TARGET_ULONG_PTR ImageBase;
     void *StabBase;
     ULONG StabsLength;
     void *StabStringBase;
@@ -1258,7 +1385,7 @@ int main(int argc, char* argv[])
     void *FileData;
     ULONG RosSymLength;
     void *RosSymSection;
-    DWORD module_base;
+    DWORD64 module_base;
     void *file;
     char elfhdr[4] = { '\177', 'E', 'L', 'F' };
     BOOLEAN UseDbgHelp = FALSE;
@@ -1311,7 +1438,23 @@ int main(int argc, char* argv[])
         exit(1);
     }
 
+    if (FileSize > UINT32_MAX)
+    {
+        fprintf(stderr, "Input image is too large\n");
+        free(FileData);
+        exit(1);
+    }
+
     file = fopen(path1, "rb");
+    if (file == NULL)
+    {
+        perror("Cannot open input file");
+        free(SourcePath);
+        free(path2);
+        free(path1);
+        free(FileData);
+        exit(1);
+    }
 
     /* Check if MZ header exists  */
     PEDosHeader = (PIMAGE_DOS_HEADER) FileData;
@@ -1358,9 +1501,22 @@ int main(int argc, char* argv[])
         // SYMOPT_LOAD_LINES
         SymSetOptions(0x10000 | 0x800000 | 0x40 | 0x10);
         SymSetExtendedOption(SYMOPT_EX_WINE_NATIVE_MODULES, TRUE);
-        SymInitialize(FileData, ".", 0);
+        if (!SymInitialize(FileData, ".", 0))
+        {
+            fprintf(stderr, "Failed to initialize dbghelp\n");
+            free(FileData);
+            exit(1);
+        }
 
-        module_base = SymLoadModule(FileData, file, path1, path1, 0, FileSize) & 0xffffffff;
+        module_base = SymLoadModuleEx(FileData, file, path1, path1, ImageBase,
+                                      (DWORD)FileSize, NULL, 0);
+        if (!module_base)
+        {
+            fprintf(stderr, "Failed to load symbols for '%s'\n", path1);
+            SymCleanup(FileData);
+            free(FileData);
+            exit(1);
+        }
 
         if (ConvertDbgHelp(FileData,
                            module_base,
@@ -1375,7 +1531,7 @@ int main(int argc, char* argv[])
         }
 
         UseDbgHelp = TRUE;
-        SymUnloadModule(FileData, module_base);
+        SymUnloadModule64(FileData, module_base);
         SymCleanup(FileData);
     }
 
@@ -1393,8 +1549,17 @@ int main(int argc, char* argv[])
 
     if (!UseDbgHelp)
     {
-        StringBase = malloc(1 + StringsLength + CoffStringsLength +
-                            (CoffsLength / sizeof(ROSSYM_ENTRY)) * (E_SYMNMLEN + 1));
+        size_t CoffSymbolsCount = CoffsLength / sizeof(COFF_SYMENT);
+        size_t StringCapacity = 1 + (size_t)CoffStringsLength +
+                                CoffSymbolsCount * (E_SYMNMLEN + 1);
+
+        if (StringCapacity > UINT32_MAX)
+        {
+            free(FileData);
+            fprintf(stderr, "Converted strings table is too large\n");
+            exit(1);
+        }
+        StringBase = malloc(StringCapacity);
         if (StringBase == NULL)
         {
             free(FileData);
@@ -1425,7 +1590,18 @@ int main(int argc, char* argv[])
     }
     else
     {
-        StringBase = realloc(StringBase, StringsLength + CoffStringsLength);
+        size_t CoffSymbolsCount = CoffsLength / sizeof(COFF_SYMENT);
+        size_t StringCapacity = (size_t)StringsLength + CoffStringsLength +
+                                CoffSymbolsCount * (E_SYMNMLEN + 1);
+
+        if (StringCapacity > UINT32_MAX)
+        {
+            free(StringBase);
+            free(FileData);
+            fprintf(stderr, "Converted strings table is too large\n");
+            exit(1);
+        }
+        StringBase = realloc(StringBase, StringCapacity);
         if (!StringBase)
         {
             free(FileData);
@@ -1557,6 +1733,11 @@ int main(int argc, char* argv[])
         free(RosSymSection);
     }
     free(FileData);
+    if (!UseDbgHelp)
+        fclose(file);
+    free(SourcePath);
+    free(path2);
+    free(path1);
 
     return 0;
 }

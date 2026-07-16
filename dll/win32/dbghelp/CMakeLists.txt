@@ -20,10 +20,19 @@ if(NOT CMAKE_CROSSCOMPILING)
 
     if(ARCH STREQUAL "i386")
         list(APPEND SOURCE cpu_i386.c)
+    elseif(ARCH STREQUAL "amd64")
+        list(APPEND SOURCE cpu_amd64_host.c)
+    elseif(ARCH STREQUAL "arm64")
+        list(APPEND SOURCE cpu_arm64_host.c)
     endif()
 
-    add_library(dbghelphost ${SOURCE})
+    # This helper is consumed only by rsym.  Architectures without an rsym
+    # target must not build an incomplete host CPU table as part of ALL.
+    add_library(dbghelphost EXCLUDE_FROM_ALL ${SOURCE})
     target_link_libraries(dbghelphost PRIVATE host_includes)
+    if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64")
+        target_compile_definitions(dbghelphost PRIVATE _TARGET_PE64)
+    endif()
 else()
     add_definitions(
         -D_WINE

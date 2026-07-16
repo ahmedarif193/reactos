@@ -162,12 +162,24 @@ extern struct cpu       cpu_i386, cpu_x86_64, cpu_arm, cpu_arm64;
 
 #ifndef DBGHELP_STATIC_LIB
 static struct cpu*      dbghelp_cpus[] = {&cpu_i386, &cpu_x86_64, &cpu_arm, &cpu_arm64, NULL};
-#else
+#elif defined(TARGET_i386)
 static struct cpu*      dbghelp_cpus[] = {&cpu_i386, NULL};
+#elif defined(TARGET_amd64)
+static struct cpu*      dbghelp_cpus[] = {&cpu_x86_64, NULL};
+#elif defined(TARGET_arm64)
+static struct cpu*      dbghelp_cpus[] = {&cpu_arm64, NULL};
+#else
+#error Unsupported host dbghelp target architecture
 #endif
 
 struct cpu*             dbghelp_current_cpu =
-#if defined(__i386__) || defined(DBGHELP_STATIC_LIB)
+#if defined(DBGHELP_STATIC_LIB) && defined(TARGET_i386)
+    &cpu_i386
+#elif defined(DBGHELP_STATIC_LIB) && defined(TARGET_amd64)
+    &cpu_x86_64
+#elif defined(DBGHELP_STATIC_LIB) && defined(TARGET_arm64)
+    &cpu_arm64
+#elif defined(__i386__)
     &cpu_i386
 #elif defined(__x86_64__)
     &cpu_x86_64

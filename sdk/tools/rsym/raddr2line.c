@@ -5,188 +5,277 @@
  * i.e. on Linux gcc and not mingw-gcc (cross-compiler).
  * Therefore we can't include SDK headers and we have to
  * duplicate some definitions here.
- * Also note that the internal functions are "old C-style",
- * returning an int, where a return of 0 means success and
- * non-zero is failure.
  */
 
+#include <errno.h>
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "rsym.h"
 
-/* Assume if an offset > ABS_TRESHOLD, then it must be absolute */
-#define ABS_TRESHOLD    0x00400000L
-
-size_t fixup_offset ( size_t ImageBase, size_t offset )
+static int
+range_is_valid(size_t FileSize, size_t Offset, size_t Length)
 {
-	if (offset > ABS_TRESHOLD)
-		offset -= ImageBase;
-
-	return offset;
+    return Offset <= FileSize && Length <= FileSize - Offset;
 }
 
-long
-my_atoi ( const char* a )
+static TARGET_ULONG_PTR
+fixup_offset(TARGET_ULONG_PTR ImageBase, TARGET_ULONG_PTR Offset)
 {
-	int i = 0;
-	const char* fmt = "%x";
+    if (ImageBase != 0 && Offset >= ImageBase)
+        Offset -= ImageBase;
 
-	if ( *a == '0' )
-	{
-		switch ( *++a )
-		{
-		case 'x':
-			fmt = "%x";
-			++a;
-			break;
-		case 'd':
-			fmt = "%d";
-			++a;
-			break;
-		default:
-			fmt = "%o";
-			break;
-		}
-	}
-	sscanf ( a, fmt, &i );
-	return i;
+    return Offset;
 }
 
-PIMAGE_SECTION_HEADER
-find_rossym_section ( PIMAGE_FILE_HEADER PEFileHeader,
-	PIMAGE_SECTION_HEADER PESectionHeaders )
+static int
+parse_offset(const char *Text, TARGET_ULONG_PTR *Offset)
 {
-	size_t i;
-	for ( i = 0; i < PEFileHeader->NumberOfSections; i++ )
-	{
-		if ( 0 == strcmp ( (char*)PESectionHeaders[i].Name, ".rossym" ) )
-			return &PESectionHeaders[i];
-	}
-	return NULL;
+    unsigned long long Value;
+    char *End;
+    int Base = 0;
+
+    if (Text[0] == '0' && (Text[1] == 'd' || Text[1] == 'D'))
+    {
+        Text += 2;
+        Base = 10;
+    }
+    if (*Text == '\0' || *Text == '-')
+        return 0;
+
+    errno = 0;
+    Value = strtoull(Text, &End, Base);
+    if (errno != 0 || *End != '\0' || Value > (TARGET_ULONG_PTR)-1)
+        return 0;
+
+    *Offset = (TARGET_ULONG_PTR)Value;
+    return 1;
+}
+
+static PIMAGE_SECTION_HEADER
+find_rossym_section(PIMAGE_FILE_HEADER FileHeader,
+                    PIMAGE_SECTION_HEADER SectionHeaders)
+{
+    unsigned Index;
+
+    for (Index = 0; Index < FileHeader->NumberOfSections; Index++)
+    {
+        if (memcmp(SectionHeaders[Index].Name, ".rossym", 7) == 0 &&
+            SectionHeaders[Index].Name[7] == '\0')
+        {
+            return &SectionHeaders[Index];
+        }
+    }
+    return NULL;
+}
+
+static void
+read_entry(const unsigned char *Entries, size_t Index, ROSSYM_ENTRY *Entry)
+{
+    memcpy(Entry, Entries + Index * sizeof(*Entry), sizeof(*Entry));
+}
+
+static const char *
+get_string(const char *Strings, ULONG StringsLength, ULONG Offset)
+{
+    if (Offset >= StringsLength ||
+        memchr(Strings + Offset, '\0', StringsLength - Offset) == NULL)
+    {
+        return NULL;
+    }
+    return Strings + Offset;
+}
+
+static int
+find_and_print_offset(const void *Data, size_t DataSize,
+                      TARGET_ULONG_PTR Offset)
+{
+    SYMBOLFILE_HEADER Header;
+    const unsigned char *Entries;
+    const char *Strings;
+    size_t SymbolsEnd, SymbolCount, Index, Low, High;
+    TARGET_ULONG_PTR PreviousAddress = 0;
+    ROSSYM_ENTRY Entry;
+
+    if (DataSize < sizeof(Header))
+        return 1;
+
+    memcpy(&Header, Data, sizeof(Header));
+    SymbolsEnd = (size_t)Header.SymbolsOffset + Header.SymbolsLength;
+    if (Header.SymbolsOffset < sizeof(Header) ||
+        !range_is_valid(DataSize, Header.SymbolsOffset, Header.SymbolsLength) ||
+        Header.StringsOffset < SymbolsEnd ||
+        !range_is_valid(DataSize, Header.StringsOffset, Header.StringsLength) ||
+        Header.SymbolsLength % sizeof(ROSSYM_ENTRY) != 0)
+    {
+        fprintf(stderr, "Invalid .rossym header\n");
+        return 1;
+    }
+
+    Entries = (const unsigned char *)Data + Header.SymbolsOffset;
+    Strings = (const char *)Data + Header.StringsOffset;
+    SymbolCount = Header.SymbolsLength / sizeof(ROSSYM_ENTRY);
+
+    for (Index = 0; Index < SymbolCount; Index++)
+    {
+        read_entry(Entries, Index, &Entry);
+        if ((Index != 0 && Entry.Address < PreviousAddress) ||
+            get_string(Strings, Header.StringsLength, Entry.FunctionOffset) == NULL ||
+            get_string(Strings, Header.StringsLength, Entry.FileOffset) == NULL)
+        {
+            fprintf(stderr, "Invalid .rossym entry\n");
+            return 1;
+        }
+        PreviousAddress = Entry.Address;
+    }
+
+    Low = 0;
+    High = SymbolCount;
+    while (Low < High)
+    {
+        size_t Middle = Low + (High - Low) / 2;
+
+        read_entry(Entries, Middle, &Entry);
+        if (Entry.Address <= Offset)
+            Low = Middle + 1;
+        else
+            High = Middle;
+    }
+
+    if (Low == 0)
+        return 1;
+
+    read_entry(Entries, Low - 1, &Entry);
+    printf("%s:%u (%s)\n",
+           get_string(Strings, Header.StringsLength, Entry.FileOffset),
+           (unsigned)Entry.SourceLine,
+           get_string(Strings, Header.StringsLength, Entry.FunctionOffset));
+    return 0;
+}
+
+static int
+process_data(const void *FileData, size_t FileSize, TARGET_ULONG_PTR Offset)
+{
+    const unsigned char *Bytes = FileData;
+    PIMAGE_DOS_HEADER DosHeader;
+    PIMAGE_FILE_HEADER FileHeader;
+    PIMAGE_OPTIONAL_HEADER OptionalHeader;
+    PIMAGE_SECTION_HEADER SectionHeaders, RosSymSection;
+    size_t NtOffset, OptionalOffset, SectionsOffset;
+    ULONG Signature;
+
+    if (FileSize < sizeof(IMAGE_DOS_HEADER))
+        goto InvalidPe;
+
+    DosHeader = (PIMAGE_DOS_HEADER)Bytes;
+    if (DosHeader->e_magic != IMAGE_DOS_MAGIC || DosHeader->e_lfanew <= 0)
+        goto InvalidPe;
+
+    NtOffset = (size_t)DosHeader->e_lfanew;
+    if (!range_is_valid(FileSize, NtOffset,
+                        sizeof(Signature) + sizeof(IMAGE_FILE_HEADER)))
+    {
+        goto InvalidPe;
+    }
+    memcpy(&Signature, Bytes + NtOffset, sizeof(Signature));
+    if (Signature != IMAGE_NT_SIGNATURE)
+        goto InvalidPe;
+
+    FileHeader = (PIMAGE_FILE_HEADER)(Bytes + NtOffset + sizeof(Signature));
+    OptionalOffset = NtOffset + sizeof(Signature) + sizeof(IMAGE_FILE_HEADER);
+    if (FileHeader->SizeOfOptionalHeader < sizeof(IMAGE_OPTIONAL_HEADER) ||
+        !range_is_valid(FileSize, OptionalOffset, FileHeader->SizeOfOptionalHeader))
+    {
+        goto InvalidPe;
+    }
+
+    OptionalHeader = (PIMAGE_OPTIONAL_HEADER)(Bytes + OptionalOffset);
+#ifdef _TARGET_PE64
+    if (OptionalHeader->Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+#else
+    if (OptionalHeader->Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC)
+#endif
+        goto InvalidPe;
+
+    SectionsOffset = OptionalOffset + FileHeader->SizeOfOptionalHeader;
+    if (SectionsOffset > FileSize ||
+        FileHeader->NumberOfSections >
+            (FileSize - SectionsOffset) / sizeof(IMAGE_SECTION_HEADER))
+    {
+        goto InvalidPe;
+    }
+
+    SectionHeaders = (PIMAGE_SECTION_HEADER)(Bytes + SectionsOffset);
+    RosSymSection = find_rossym_section(FileHeader, SectionHeaders);
+    if (RosSymSection == NULL)
+    {
+        fprintf(stderr, "Couldn't find .rossym section in executable\n");
+        return 1;
+    }
+    if (!range_is_valid(FileSize, RosSymSection->PointerToRawData,
+                        RosSymSection->SizeOfRawData))
+    {
+        fprintf(stderr, "Invalid .rossym section range\n");
+        return 1;
+    }
+
+    Offset = fixup_offset(OptionalHeader->ImageBase, Offset);
+    return find_and_print_offset(Bytes + RosSymSection->PointerToRawData,
+                                 RosSymSection->SizeOfRawData, Offset);
+
+InvalidPe:
+    fprintf(stderr, "Input file is not a valid target PE image\n");
+    return 1;
+}
+
+static int
+process_file(const char *FileName, TARGET_ULONG_PTR Offset)
+{
+    void *FileData;
+    size_t FileSize;
+    int Result;
+
+    FileData = load_file(FileName, &FileSize);
+    if (FileData == NULL)
+    {
+        fprintf(stderr, "An error occurred loading '%s'\n", FileName);
+        return 1;
+    }
+
+    Result = process_data(FileData, FileSize, Offset);
+    free(FileData);
+    return Result;
 }
 
 int
-find_and_print_offset (
-	void* data,
-	size_t offset )
+main(int argc, const char **argv)
 {
-	PSYMBOLFILE_HEADER RosSymHeader = (PSYMBOLFILE_HEADER)data;
-	PROSSYM_ENTRY Entries = (PROSSYM_ENTRY)((char*)data + RosSymHeader->SymbolsOffset);
-	char* Strings = (char*)data + RosSymHeader->StringsOffset;
-	size_t symbols = RosSymHeader->SymbolsLength / sizeof(ROSSYM_ENTRY);
-	size_t i;
+    TARGET_ULONG_PTR Offset;
+    char *Path;
+    int Result;
 
-	//if ( RosSymHeader->SymbolsOffset )
+    if (argc != 3)
+    {
+        fprintf(stderr, "Usage: raddr2line <exefile> <address-or-offset>\n");
+        return 1;
+    }
+    if (!parse_offset(argv[2], &Offset))
+    {
+        fprintf(stderr, "Invalid address or offset '%s'\n", argv[2]);
+        return 1;
+    }
 
-	for ( i = 0; i < symbols; i++ )
-	{
-		if ( Entries[i].Address > offset )
-		{
-			if ( !i-- )
-				return 1;
-			else
-			{
-				PROSSYM_ENTRY e = &Entries[i];
-				printf ( "%s:%u (%s)\n",
-					&Strings[e->FileOffset],
-					(unsigned int)e->SourceLine,
-					&Strings[e->FunctionOffset] );
-				return 0;
-			}
-		}
-	}
-	return 1;
-}
+    Path = convert_path(argv[1]);
+    if (Path == NULL)
+    {
+        fprintf(stderr, "Unable to convert input path\n");
+        return 1;
+    }
+    Result = process_file(Path, Offset);
+    free(Path);
 
-int
-process_data ( const void* FileData, size_t offset )
-{
-	PIMAGE_DOS_HEADER PEDosHeader;
-	PIMAGE_FILE_HEADER PEFileHeader;
-	PIMAGE_OPTIONAL_HEADER PEOptHeader;
-	PIMAGE_SECTION_HEADER PESectionHeaders;
-	PIMAGE_SECTION_HEADER PERosSymSectionHeader;
-	size_t ImageBase;
-	int res;
-
-	/* Check if MZ header exists  */
-	PEDosHeader = (PIMAGE_DOS_HEADER)FileData;
-	if (PEDosHeader->e_magic != IMAGE_DOS_MAGIC || PEDosHeader->e_lfanew == 0L)
-	{
-		perror("Input file is not a PE image.\n");
-		return 1;
-	}
-
-	/* Locate PE file header  */
-	/* sizeof(ULONG) = sizeof(MAGIC) */
-	PEFileHeader = (PIMAGE_FILE_HEADER)((char *)FileData + PEDosHeader->e_lfanew + sizeof(ULONG));
-
-	/* Locate optional header */
-	PEOptHeader = (PIMAGE_OPTIONAL_HEADER)(PEFileHeader + 1);
-	ImageBase = PEOptHeader->ImageBase;
-
-	/* Locate PE section headers  */
-	PESectionHeaders = (PIMAGE_SECTION_HEADER)((char *) PEOptHeader + PEFileHeader->SizeOfOptionalHeader);
-
-	/* make sure offset is what we want */
-	offset = fixup_offset ( ImageBase, offset );
-
-	/* find rossym section */
-	PERosSymSectionHeader = find_rossym_section (
-		PEFileHeader, PESectionHeaders );
-	if ( !PERosSymSectionHeader )
-	{
-		fprintf ( stderr, "Couldn't find rossym section in executable\n" );
-		return 1;
-	}
-	res = find_and_print_offset ( (char*)FileData + PERosSymSectionHeader->PointerToRawData,
-		offset );
-	if ( res )
-		printf ( "??:0\n" );
-	return res;
-}
-
-int
-process_file ( const char* file_name, size_t offset )
-{
-	void* FileData;
-	size_t FileSize;
-	int res = 1;
-
-	FileData = load_file ( file_name, &FileSize );
-	if ( !FileData )
-	{
-		fprintf ( stderr, "An error occured loading '%s'\n", file_name );
-	}
-	else
-	{
-		res = process_data ( FileData, offset );
-		free ( FileData );
-	}
-
-	return res;
-}
-
-int main ( int argc, const char** argv )
-{
-	char* path;
-	size_t offset;
-	int res;
-
-	if ( argc != 3 )
-	{
-		fprintf(stderr, "Usage: raddr2line <exefile> <offset>\n");
-		exit(1);
-	}
-
-	path = convert_path ( argv[1] );
-	offset = my_atoi ( argv[2] );
-
-	res = process_file ( path, offset );
-
-	free ( path );
-
-	return res;
+    if (Result != 0)
+        printf("??:0\n");
+    return Result;
 }
