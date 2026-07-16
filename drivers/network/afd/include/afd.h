@@ -180,6 +180,7 @@ typedef struct _AFD_FCB {
     AFD_IN_FLIGHT_REQUEST ConnectIrp, ListenIrp, ReceiveIrp, SendIrp, DisconnectIrp;
     AFD_DATA_WINDOW Send, Recv;
     KMUTEX Mutex;
+    PKEVENT TdiRundownEvent;
     PKEVENT EventSelect;
     DWORD EventSelectTriggers;
     DWORD EventSelectDisabled;
@@ -296,6 +297,7 @@ NTSTATUS NTAPI UnlockAndMaybeComplete
 ( PAFD_FCB FCB, NTSTATUS Status, PIRP Irp,
   UINT Information );
 VOID SocketStateUnlock( PAFD_FCB FCB );
+VOID AfdSignalTdiRundown(PAFD_FCB FCB);
 NTSTATUS LostSocket( PIRP Irp );
 PAFD_HANDLE LockHandles( PAFD_HANDLE HandleArray, UINT HandleCount );
 VOID UnlockHandles( PAFD_HANDLE HandleArray, UINT HandleCount );

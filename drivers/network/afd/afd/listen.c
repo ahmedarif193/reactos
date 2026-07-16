@@ -133,6 +133,7 @@ static NTSTATUS NTAPI ListenComplete( PDEVICE_OBJECT DeviceObject,
             FCB->ListenIrp.ConnectionCallInfo = NULL;
         }
 
+        if (FCB->TdiRundownEvent) AfdSignalTdiRundown(FCB);
         SocketStateUnlock( FCB );
         return STATUS_FILE_CLOSED;
     }
@@ -142,6 +143,7 @@ static NTSTATUS NTAPI ListenComplete( PDEVICE_OBJECT DeviceObject,
 
     if (Irp->IoStatus.Status != STATUS_SUCCESS)
     {
+        if (FCB->TdiRundownEvent) AfdSignalTdiRundown(FCB);
         SocketStateUnlock(FCB);
         return Irp->IoStatus.Status;
     }
@@ -217,6 +219,7 @@ static NTSTATUS NTAPI ListenComplete( PDEVICE_OBJECT DeviceObject,
     } else
         FCB->PollState &= ~AFD_EVENT_ACCEPT;
 
+    if (FCB->TdiRundownEvent) AfdSignalTdiRundown(FCB);
     SocketStateUnlock( FCB );
 
     return Status;
