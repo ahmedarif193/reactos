@@ -464,6 +464,8 @@ AfdCloseSocket(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     PAFD_FCB FCB = FileObject->FsContext;
     UINT i;
     PAFD_IN_FLIGHT_REQUEST InFlightRequest[IN_FLIGHT_REQUESTS];
+    BOOLEAN WaitForCompletion = FALSE;
+    KEVENT TdiRundownEvent;
     PAFD_TDI_OBJECT_QELT Qelt;
     PLIST_ENTRY QeltEntry;
 
@@ -481,11 +483,15 @@ AfdCloseSocket(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     InFlightRequest[3] = &FCB->ConnectIrp;
     InFlightRequest[4] = &FCB->DisconnectIrp;
 
+    KeInitializeEvent(&TdiRundownEvent, NotificationEvent, FALSE);
+    FCB->TdiRundownEvent = &TdiRundownEvent;
+
     /* Cancel our pending requests */
     for( i = 0; i < IN_FLIGHT_REQUESTS; i++ ) {
         if( InFlightRequest[i]->InFlightRequest ) {
             AFD_DbgPrint(MID_TRACE,("Cancelling in flight irp %u (%p)\n",
                                     i, InFlightRequest[i]->InFlightRequest));
+            WaitForCompletion = TRUE;
             IoCancelIrp(InFlightRequest[i]->InFlightRequest);
         }
     }
@@ -513,6 +519,13 @@ AfdCloseSocket(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     }
 
     SocketStateUnlock( FCB );
+
+    if (WaitForCompletion) KeWaitForSingleObject(&TdiRundownEvent, Executive, KernelMode, FALSE, NULL);
+
+    (void)SocketAcquireStateLock(FCB);
+    for (i = 0; i < IN_FLIGHT_REQUESTS; i++) ASSERT(InFlightRequest[i]->InFlightRequest == NULL);
+    FCB->TdiRundownEvent = NULL;
+    SocketStateUnlock(FCB);
 
     if( FCB->EventSelect )
         ObDereferenceObject( FCB->EventSelect );
@@ -662,6 +675,7 @@ DisconnectComplete(PDEVICE_OBJECT DeviceObject,
         PollReeval(FCB->DeviceExt, FCB->FileObject);
     }
 
+    if (FCB->TdiRundownEvent) AfdSignalTdiRundown(FCB);
     SocketStateUnlock(FCB);
 
     return Irp->IoStatus.Status;
@@ -707,6 +721,8 @@ VOID
 RetryDisconnectCompletion(PAFD_FCB FCB)
 {
     ASSERT(FCB->RemoteAddress);
+
+    if (FCB->SharedData.State == SOCKET_STATE_CLOSED) return;
 
     if (IsListEmpty(&FCB->PendingIrpList[FUNCTION_SEND]) && !FCB->SendIrp.InFlightRequest && FCB->DisconnectPending)
     {

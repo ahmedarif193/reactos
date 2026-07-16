@@ -65,6 +65,7 @@ static NTSTATUS NTAPI SendComplete
 
         RetryDisconnectCompletion(FCB);
 
+        if (FCB->TdiRundownEvent) AfdSignalTdiRundown(FCB);
         SocketStateUnlock( FCB );
         return STATUS_FILE_CLOSED;
     }
@@ -94,6 +95,7 @@ static NTSTATUS NTAPI SendComplete
 
         RetryDisconnectCompletion(FCB);
 
+        if (FCB->TdiRundownEvent) AfdSignalTdiRundown(FCB);
         SocketStateUnlock( FCB );
 
         return STATUS_SUCCESS;
@@ -252,6 +254,7 @@ static NTSTATUS NTAPI SendComplete
         RetryDisconnectCompletion(FCB);
     }
 
+    if (FCB->TdiRundownEvent) AfdSignalTdiRundown(FCB);
     SocketStateUnlock( FCB );
 
     return STATUS_SUCCESS;
@@ -293,6 +296,7 @@ static NTSTATUS NTAPI PacketSocketSendComplete
             UnlockRequest( NextIrp, IoGetCurrentIrpStackLocation( NextIrp ) );
             IoCompleteRequest( NextIrp, IO_NETWORK_INCREMENT );
         }
+        if (FCB->TdiRundownEvent) AfdSignalTdiRundown(FCB);
         SocketStateUnlock( FCB );
         return STATUS_FILE_CLOSED;
     }
@@ -320,6 +324,7 @@ static NTSTATUS NTAPI PacketSocketSendComplete
     FCB->PollStatus[FD_WRITE_BIT] = STATUS_SUCCESS;
     PollReeval(FCB->DeviceExt, FCB->FileObject);
 
+    if (FCB->TdiRundownEvent) AfdSignalTdiRundown(FCB);
     SocketStateUnlock(FCB);
 
     return STATUS_SUCCESS;
