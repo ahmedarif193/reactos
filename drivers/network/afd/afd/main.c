@@ -1203,20 +1203,21 @@ NTAPI
 AfdCancelHandler(PDEVICE_OBJECT DeviceObject,
                  PIRP Irp)
 {
+    KIRQL CancelIrql = Irp->CancelIrql;
     PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation(Irp);
     PFILE_OBJECT FileObject = IrpSp->FileObject;
     PAFD_FCB FCB = FileObject->FsContext;
     ULONG Function, IoctlCode;
     PIRP CurrentIrp;
     PLIST_ENTRY CurrentEntry;
-    PAFD_DEVICE_EXTENSION DeviceExt = DeviceObject->DeviceExtension;
+    PAFD_DEVICE_EXTENSION DeviceExt = FCB->DeviceExt;
     KIRQL OldIrql;
     PAFD_ACTIVE_POLL Poll;
 
-    IoReleaseCancelSpinLock(Irp->CancelIrql);
+    UNREFERENCED_PARAMETER(DeviceObject);
 
-    if (!SocketAcquireStateLock(FCB))
-        return;
+    /* Queue membership under the FCB lock selects the completion owner. */
+    ObReferenceObject(FileObject);
 
     switch (IrpSp->MajorFunction)
     {
@@ -1234,8 +1235,17 @@ AfdCancelHandler(PDEVICE_OBJECT DeviceObject,
 
         default:
             ASSERT(FALSE);
-            SocketStateUnlock(FCB);
+            IoReleaseCancelSpinLock(CancelIrql);
+            ObDereferenceObject(FileObject);
             return;
+    }
+
+    IoReleaseCancelSpinLock(CancelIrql);
+
+    if (!SocketAcquireStateLock(FCB))
+    {
+        ObDereferenceObject(FileObject);
+        return;
     }
 
     switch (IoctlCode)
@@ -1275,6 +1285,7 @@ AfdCancelHandler(PDEVICE_OBJECT DeviceObject,
                     CleanupPendingIrp(FCB, Irp, IrpSp, Poll);
                     KeReleaseSpinLock(&DeviceExt->Lock, OldIrql);
                     SocketStateUnlock(FCB);
+                    ObDereferenceObject(FileObject);
                     return;
                 }
                 else
@@ -1286,8 +1297,7 @@ AfdCancelHandler(PDEVICE_OBJECT DeviceObject,
             KeReleaseSpinLock(&DeviceExt->Lock, OldIrql);
 
             SocketStateUnlock(FCB);
-
-            DbgPrint("WARNING!!! IRP cancellation race could lead to a process hang! (IOCTL_AFD_SELECT)\n");
+            ObDereferenceObject(FileObject);
             return;
 
         case IOCTL_AFD_DISCONNECT:
@@ -1297,6 +1307,7 @@ AfdCancelHandler(PDEVICE_OBJECT DeviceObject,
         default:
             ASSERT(FALSE);
             UnlockAndMaybeComplete(FCB, STATUS_CANCELLED, Irp, 0);
+            ObDereferenceObject(FileObject);
             return;
     }
 
@@ -1310,6 +1321,7 @@ AfdCancelHandler(PDEVICE_OBJECT DeviceObject,
             RemoveEntryList(CurrentEntry);
             CleanupPendingIrp(FCB, Irp, IrpSp, NULL);
             UnlockAndMaybeComplete(FCB, STATUS_CANCELLED, Irp, 0);
+            ObDereferenceObject(FileObject);
             return;
         }
         else
@@ -1319,8 +1331,7 @@ AfdCancelHandler(PDEVICE_OBJECT DeviceObject,
     }
 
     SocketStateUnlock(FCB);
-
-    DbgPrint("WARNING!!! IRP cancellation race could lead to a process hang! (Function: %u)\n", Function);
+    ObDereferenceObject(FileObject);
 }
 
 static DRIVER_UNLOAD AfdUnload;
