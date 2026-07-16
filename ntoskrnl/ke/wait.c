@@ -1049,9 +1049,14 @@ KeWaitForMultipleObjects(IN ULONG Count,
                 KiReleaseDispatcherObject(&Thread->Queue->Header);
             }
 
+            /* Timer expiration holds the timer object while acquiring the
+             * waiter thread lock. Preserve that order during publication. */
+            if (Timeout) KiAcquireDispatcherObject(&Timer->Header);
+
             /* Serialize APC insertion with the final wait publication. */
             if (!KxTryBeginThreadWait(Thread))
             {
+                if (Timeout) KiReleaseDispatcherObject(&Timer->Header);
                 KiReleaseObjectLocks(Object, Count);
                 KiUndoActivateWaiterQueue(Thread);
                 KiExitDispatcher(Thread->WaitIrql);
@@ -1074,10 +1079,8 @@ KeWaitForMultipleObjects(IN ULONG Count,
             if (Timeout)
             {
                 TimerBlock->BlockState = WaitBlockActive;
-                KiAcquireDispatcherObject(&Timer->Header);
                 InsertTailList(&Timer->Header.WaitListHead,
                                &TimerBlock->WaitListEntry);
-                KiReleaseDispatcherObject(&Timer->Header);
             }
 #else
             WaitBlock = WaitBlockArray;
@@ -1097,6 +1100,7 @@ KeWaitForMultipleObjects(IN ULONG Count,
 
             /* Publish the wait and release the thread lock */
             KxCommitThreadWait(Thread, Swappable);
+            if (Timeout) KiReleaseDispatcherObject(&Timer->Header);
 
             /* Release the object locks */
             KiReleaseObjectLocks(Object, Count);
