@@ -493,8 +493,7 @@ KeDelayExecutionThread(IN KPROCESSOR_MODE WaitMode,
         Thread->Preempted = FALSE;
 
         /* Check if a kernel APC is pending and we're below APC_LEVEL */
-        if ((Thread->ApcState.KernelApcPending) && !(Thread->SpecialApcDisable) &&
-            (Thread->WaitIrql < APC_LEVEL))
+        if (KiIsKernelApcDeliverable(Thread, Thread->WaitIrql))
         {
             /* Unlock the dispatcher */
             KiReleaseDispatcherObject(&Timer->Header);
@@ -514,10 +513,9 @@ KeDelayExecutionThread(IN KPROCESSOR_MODE WaitMode,
                 goto NoWait;
             }
 
-            /* It didn't, so activate it */
+            /* It didn't, so prepare it */
             Timer->TimerListEntry.Flink = NULL;
             Timer->TimerListEntry.Blink = NULL;
-            Timer->Header.Inserted = TRUE;
 
             /* Handle Kernel Queues */
             if (Thread->Queue)
@@ -533,22 +531,23 @@ KeDelayExecutionThread(IN KPROCESSOR_MODE WaitMode,
                 KiReleaseDispatcherObject(&Thread->Queue->Header);
             }
 
+            /* Serialize APC insertion with the final wait publication. */
+            if (!KxTryBeginThreadWait(Thread))
+            {
+                KiReleaseDispatcherObject(&Timer->Header);
+                KiUndoActivateWaiterQueue(Thread);
+                KiExitDispatcher(Thread->WaitIrql);
+                goto WaitStart;
+            }
+
             /* Setup the wait information */
+            Timer->Header.Inserted = TRUE;
             TimerBlock->BlockState = WaitBlockActive;
 
-            /* Commit the wait under the thread lock: State, the PRCB wait-list
-             * insertion (publishing WaitPrcb), and SwapBusy must be serialized
-             * against the signaler's KiUnwaitThread/KiUnlinkThread. */
-            KiAcquireThreadLock(Thread);
-            Thread->State = Waiting;
-
-            /* Add the thread to the wait list */
-            KiAddThreadToWaitList(Thread, Swappable);
+            /* Publish the wait and release the thread lock */
+            KxCommitThreadWait(Thread, Swappable);
 
             /* Insert the timer and swap the thread */
-            ASSERT(Thread->WaitIrql <= DISPATCH_LEVEL);
-            KiSetThreadSwapBusy(Thread);
-            KiReleaseThreadLock(Thread);
             KiReleaseDispatcherObject(&Timer->Header);
             KxInsertTimerNoRelease(Timer, Hand);
             WaitStatus = (NTSTATUS)KiSwapThread(Thread, KeGetCurrentPrcb(), TRUE);
@@ -642,8 +641,7 @@ KeWaitForSingleObject(IN PVOID Object,
         Thread->Preempted = FALSE;
 
         /* Check if a kernel APC is pending and we're below APC_LEVEL */
-        if ((Thread->ApcState.KernelApcPending) && !(Thread->SpecialApcDisable) &&
-            (Thread->WaitIrql < APC_LEVEL))
+        if (KiIsKernelApcDeliverable(Thread, Thread->WaitIrql))
         {
             /* Unlock the dispatcher */
             KiReleaseDispatcherObject(&CurrentObject->Header);
@@ -703,17 +701,10 @@ KeWaitForSingleObject(IN PVOID Object,
                     goto DontWait;
                 }
 
-                /* It didn't, so activate it */
+                /* It didn't, so prepare it */
                 Timer->TimerListEntry.Flink = NULL;
                 Timer->TimerListEntry.Blink = NULL;
-                Timer->Header.Inserted = TRUE;
             }
-
-            /* Link the Object to this Wait Block */
-            WaitBlock->BlockState = WaitBlockActive;
-            if (Timeout) TimerBlock->BlockState = WaitBlockActive;
-            InsertTailList(&CurrentObject->Header.WaitListHead,
-                           &WaitBlock->WaitListEntry);
 
             /* Handle Kernel Queues */
             if (Thread->Queue)
@@ -729,19 +720,27 @@ KeWaitForSingleObject(IN PVOID Object,
                 KiReleaseDispatcherObject(&Thread->Queue->Header);
             }
 
-            /* Commit the wait under the thread lock: State, the PRCB wait-list
-             * insertion (publishing WaitPrcb), and SwapBusy must be serialized
-             * against the signaler's KiUnwaitThread/KiUnlinkThread. */
-            KiAcquireThreadLock(Thread);
-            Thread->State = Waiting;
+            /* Serialize APC insertion with the final wait publication. */
+            if (!KxTryBeginThreadWait(Thread))
+            {
+                KiReleaseDispatcherObject(&CurrentObject->Header);
+                KiUndoActivateWaiterQueue(Thread);
+                KiExitDispatcher(Thread->WaitIrql);
+                goto WaitStart;
+            }
 
-            /* Add the thread to the wait list */
-            KiAddThreadToWaitList(Thread, Swappable);
+            /* Arm the timer and link the Object to this Wait Block */
+            WaitBlock->BlockState = WaitBlockActive;
+            if (Timeout)
+            {
+                Timer->Header.Inserted = TRUE;
+                TimerBlock->BlockState = WaitBlockActive;
+            }
+            InsertTailList(&CurrentObject->Header.WaitListHead,
+                           &WaitBlock->WaitListEntry);
 
-            /* Activate thread swap */
-            ASSERT(Thread->WaitIrql <= DISPATCH_LEVEL);
-            KiSetThreadSwapBusy(Thread);
-            KiReleaseThreadLock(Thread);
+            /* Publish the wait and release the thread lock */
+            KxCommitThreadWait(Thread, Swappable);
 
             /* Release the object lock */
             KiReleaseDispatcherObject(&CurrentObject->Header);
@@ -886,8 +885,7 @@ KeWaitForMultipleObjects(IN ULONG Count,
         Thread->Preempted = FALSE;
 
         /* Check if a kernel APC is pending and we're below APC_LEVEL */
-        if ((Thread->ApcState.KernelApcPending) && !(Thread->SpecialApcDisable) &&
-            (Thread->WaitIrql < APC_LEVEL))
+        if (KiIsKernelApcDeliverable(Thread, Thread->WaitIrql))
         {
             /* Unlock the dispatcher */
             KiReleaseObjectLocks(Object, Count);
@@ -1027,16 +1025,42 @@ KeWaitForMultipleObjects(IN ULONG Count,
                     goto DontWait;
                 }
 
-                /* It didn't, so activate it */
+                /* It didn't, so prepare it */
                 Timer->TimerListEntry.Flink = NULL;
                 Timer->TimerListEntry.Blink = NULL;
-                Timer->Header.Inserted = TRUE;
 
                 /* Link the wait blocks */
 #if !((NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64))
                 WaitBlock->NextWaitBlock = TimerBlock;
 #endif
             }
+
+            /* Handle Kernel Queues */
+            if (Thread->Queue)
+            {
+                /* Wake a waiter on the thread's own queue UNDER THE QUEUE LOCK.
+                 * The caller holds a different object's lock, and
+                 * KiActivateWaiterQueue mutates the queue's wait list, so it must
+                 * hold Queue->Header (else it races KeInsertQueue and corrupts
+                 * the queue wait list). A thread never KeWaitForSingleObject's on
+                 * its own KQUEUE, so this is never the already-held object. */
+                KiAcquireDispatcherObject(&Thread->Queue->Header);
+                KiActivateWaiterQueue(Thread->Queue);
+                KiReleaseDispatcherObject(&Thread->Queue->Header);
+            }
+
+            /* Serialize APC insertion with the final wait publication. */
+            if (!KxTryBeginThreadWait(Thread))
+            {
+                KiReleaseObjectLocks(Object, Count);
+                KiUndoActivateWaiterQueue(Thread);
+                KiExitDispatcher(Thread->WaitIrql);
+                goto WaitStart;
+            }
+
+            /* Arm the timer for both linkage schemes below; the deferred
+             * KxInsertTimerNoRelease keys on Inserted */
+            if (Timeout) Timer->Header.Inserted = TRUE;
 
             /* Insert into Object's Wait List*/
 #if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
@@ -1071,33 +1095,8 @@ KeWaitForMultipleObjects(IN ULONG Count,
             } while (WaitBlock != WaitBlockArray);
 #endif
 
-            /* Handle Kernel Queues */
-            if (Thread->Queue)
-            {
-                /* Wake a waiter on the thread's own queue UNDER THE QUEUE LOCK.
-                 * The caller holds a different object's lock, and
-                 * KiActivateWaiterQueue mutates the queue's wait list, so it must
-                 * hold Queue->Header (else it races KeInsertQueue and corrupts
-                 * the queue wait list). A thread never KeWaitForSingleObject's on
-                 * its own KQUEUE, so this is never the already-held object. */
-                KiAcquireDispatcherObject(&Thread->Queue->Header);
-                KiActivateWaiterQueue(Thread->Queue);
-                KiReleaseDispatcherObject(&Thread->Queue->Header);
-            }
-
-            /* Commit the wait under the thread lock: State, the PRCB wait-list
-             * insertion (publishing WaitPrcb), and SwapBusy must be serialized
-             * against the signaler's KiUnwaitThread/KiUnlinkThread. */
-            KiAcquireThreadLock(Thread);
-            Thread->State = Waiting;
-
-            /* Add the thread to the wait list */
-            KiAddThreadToWaitList(Thread, Swappable);
-
-            /* Activate thread swap */
-            ASSERT(Thread->WaitIrql <= DISPATCH_LEVEL);
-            KiSetThreadSwapBusy(Thread);
-            KiReleaseThreadLock(Thread);
+            /* Publish the wait and release the thread lock */
+            KxCommitThreadWait(Thread, Swappable);
 
             /* Release the object locks */
             KiReleaseObjectLocks(Object, Count);
