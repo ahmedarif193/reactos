@@ -1336,6 +1336,77 @@ KxSetTimerForThreadWait(IN PKTIMER Timer,
 }
 
 //
+// Checks whether a kernel APC would be deliverable as soon as this wait
+// drops back below APC_LEVEL, in which case the wait must not be published.
+//
+FORCEINLINE
+BOOLEAN
+KiIsKernelApcDeliverable(IN PKTHREAD Thread,
+                         IN KIRQL WaitIrql)
+{
+    return ((Thread->ApcState.KernelApcPending) &&
+            !(Thread->SpecialApcDisable) &&
+            (WaitIrql < APC_LEVEL));
+}
+
+//
+// Undoes KiActivateWaiterQueue's active-count decrement when a wait on
+// another object is abandoned before being published, so the queue does
+// not over-admit workers.
+//
+FORCEINLINE
+VOID
+KiUndoActivateWaiterQueue(IN PKTHREAD Thread)
+{
+    PKQUEUE Queue = Thread->Queue;
+
+    if (Queue)
+    {
+        KiAcquireDispatcherObject(&Queue->Header);
+        Queue->CurrentCount++;
+        KiReleaseDispatcherObject(&Queue->Header);
+    }
+}
+
+//
+// Begins the wait publication: takes the thread lock and re-checks for a
+// late kernel APC, serializing APC insertion (KiInsertQueueApc) with the
+// final wait publication. Returns FALSE, with the thread lock released,
+// if the wait must be abandoned and re-armed.
+//
+FORCEINLINE
+BOOLEAN
+KxTryBeginThreadWait(IN PKTHREAD Thread)
+{
+    KiAcquireThreadLock(Thread);
+    if (KiIsKernelApcDeliverable(Thread, Thread->WaitIrql))
+    {
+        KiReleaseThreadLock(Thread);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+//
+// Publishes the wait under the thread lock taken by KxTryBeginThreadWait:
+// State, the PRCB wait-list insertion (publishing WaitPrcb), and SwapBusy
+// must be serialized against the signaler's KiUnwaitThread/KiUnlinkThread.
+// Releases the thread lock.
+//
+FORCEINLINE
+VOID
+KxCommitThreadWait(IN PKTHREAD Thread,
+                   IN BOOLEAN Swappable)
+{
+    Thread->State = Waiting;
+    KiAddThreadToWaitList(Thread, Swappable);
+    ASSERT(Thread->WaitIrql <= DISPATCH_LEVEL);
+    KiSetThreadSwapBusy(Thread);
+    KiReleaseThreadLock(Thread);
+}
+
+//
 // Wait block linkage helpers. The legacy (2k3) scheme builds a circular
 // NextWaitBlock chain; the Win8+ / arm64 KWAIT_BLOCK has no NextWaitBlock,
 // so there the participating blocks are tracked by WaitBlockCount plus the

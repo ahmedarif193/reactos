@@ -343,8 +343,7 @@ KeRemoveQueue(IN PKQUEUE Queue,
         else
         {
             /* Check if a kernel APC is pending and we're below APC_LEVEL */
-            if ((Thread->ApcState.KernelApcPending) &&
-                !(Thread->SpecialApcDisable) && (Thread->WaitIrql < APC_LEVEL))
+            if (KiIsKernelApcDeliverable(Thread, Thread->WaitIrql))
             {
                 /* Increment the count and unlock the queue */
                 Queue->CurrentCount++;
@@ -376,31 +375,34 @@ KeRemoveQueue(IN PKQUEUE Queue,
                         break;
                     }
 
-                    /* It didn't, so activate it */
+                    /* It didn't, so prepare it */
                     Timer->TimerListEntry.Flink = NULL;
                     Timer->TimerListEntry.Blink = NULL;
-                    Timer->Header.Inserted = TRUE;
+                }
+
+                /* Serialize APC insertion with the final wait publication. */
+                if (!KxTryBeginThreadWait(Thread))
+                {
+                    /* Not blocking after all: restore the active count and
+                     * retry, exactly like the pre-wait APC check above. */
+                    Queue->CurrentCount++;
+                    KiReleaseDispatcherObject(&Queue->Header);
+                    KiExitDispatcher(Thread->WaitIrql);
+                    goto WaitStart;
                 }
 
                 /* Insert the wait block in the list */
                 WaitBlock->BlockState = WaitBlockActive;
-                if (Timeout) TimerBlock->BlockState = WaitBlockActive;
+                if (Timeout)
+                {
+                    Timer->Header.Inserted = TRUE;
+                    TimerBlock->BlockState = WaitBlockActive;
+                }
                 InsertTailList(&Queue->Header.WaitListHead,
                                &WaitBlock->WaitListEntry);
 
-                /* Commit the wait under the thread lock: State, the PRCB
-                 * wait-list insertion (publishing WaitPrcb), and SwapBusy must
-                 * be serialized against the signaler's KiUnwaitThread. */
-                KiAcquireThreadLock(Thread);
-                Thread->State = Waiting;
-
-                /* Add the thread to the wait list */
-                KiAddThreadToWaitList(Thread, Swappable);
-
-                /* Activate thread swap */
-                ASSERT(Thread->WaitIrql <= DISPATCH_LEVEL);
-                KiSetThreadSwapBusy(Thread);
-                KiReleaseThreadLock(Thread);
+                /* Publish the wait and release the thread lock */
+                KxCommitThreadWait(Thread, Swappable);
 
                 /* Release the queue object */
                 KiReleaseDispatcherObject(&Queue->Header);
@@ -446,6 +448,7 @@ KeRemoveQueue(IN PKQUEUE Queue,
                 }
             }
 
+WaitStart:
             /* Start another wait */
             Thread->WaitIrql = KeRaiseIrqlToSynchLevel();
             KxQueueThreadWait();
