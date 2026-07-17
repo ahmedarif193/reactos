@@ -11,18 +11,8 @@
 #define NDEBUG
 #include <debug.h>
 
-#undef RUNTIME_FUNCTION
-#undef PRUNTIME_FUNCTION
-typedef struct _IMAGE_ARM64_RUNTIME_FUNCTION_ENTRY {
-    DWORD BeginAddress;
-    DWORD UnwindData;
-} RUNTIME_FUNCTION, *PRUNTIME_FUNCTION;
-
-#ifndef UNW_FLAG_EHANDLER
-#define UNW_FLAG_EHANDLER 0x1
-#define UNW_FLAG_UHANDLER 0x2
-#define UNW_FLAG_CHAININFO 0x4
-#endif
+/* RUNTIME_FUNCTION, the UNW_FLAG_* constants and the RtlLookupFunctionEntry/
+ * RtlVirtualUnwind prototypes come from the NDK (ndk/rtltypes.h, rtlfuncs.h). */
 
 #ifndef CONTEXT_UNWOUND_TO_CALL
 #define CONTEXT_UNWOUND_TO_CALL 0x20000000
@@ -51,13 +41,6 @@ NTAPI
 RtlPcToFileHeader(
     _In_ PVOID PcValue,
     _Out_ PVOID *BaseOfImage);
-
-PRUNTIME_FUNCTION
-NTAPI
-RtlLookupFunctionEntry(
-    _In_ DWORD64 ControlPc,
-    _Out_ PDWORD64 ImageBase,
-    _Inout_opt_ PVOID HistoryTable);
 
 VOID
 NTAPI
@@ -599,7 +582,7 @@ RtlVirtualUnwind(
     _Inout_ PCONTEXT Context,
     _Out_ PVOID *HandlerData,
     _Out_ PULONG64 EstablisherFrame,
-    _Inout_opt_ PVOID ContextPointers)
+    _Inout_opt_ PKNONVOLATILE_CONTEXT_POINTERS ContextPointers)
 {
     PARM64_RT_FUNCTION Func = (PARM64_RT_FUNCTION)FunctionEntry;
     PVOID Handler = NULL;
@@ -958,7 +941,7 @@ NTAPI
 RtlLookupFunctionEntry(
     _In_ DWORD64 ControlPc,
     _Out_ PDWORD64 ImageBase,
-    _Inout_opt_ PVOID HistoryTable)
+    _Inout_opt_ PUNWIND_HISTORY_TABLE HistoryTable)
 {
     PRUNTIME_FUNCTION FunctionTable, FunctionEntry;
     ULONG TableLength;

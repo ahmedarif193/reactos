@@ -102,4 +102,18 @@ KdPortPutByteEx(IN PCPPORT PortInformation,
     WRITE_REGISTER_ULONG((PULONG)UART_PL01x_DR, ByteToSend);
 }
 
+VOID
+NTAPI
+KdPortPutBufferEx(IN PCPPORT PortInformation,
+                  IN PCCH Buffer,
+                  IN ULONG Length)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < Length; Index++)
+    {
+        KdPortPutByteEx(PortInformation, (UCHAR)Buffer[Index]);
+    }
+}
+
 /* EOF */

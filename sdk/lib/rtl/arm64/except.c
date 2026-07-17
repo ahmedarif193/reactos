@@ -26,26 +26,7 @@
 #define UNW_FLAG_UHANDLER 0x2
 #endif
 
-NTSYSAPI
-PRUNTIME_FUNCTION
-NTAPI
-RtlLookupFunctionEntry(
-    _In_ ULONG_PTR ControlPc,
-    _Out_ PULONG_PTR ImageBase,
-    _Inout_opt_ struct _UNWIND_HISTORY_TABLE *HistoryTable);
-
-NTSYSAPI
-PEXCEPTION_ROUTINE
-NTAPI
-RtlVirtualUnwind(
-    _In_ ULONG HandlerType,
-    _In_ ULONG64 ImageBase,
-    _In_ ULONG64 ControlPc,
-    _In_ PRUNTIME_FUNCTION FunctionEntry,
-    _Inout_ PCONTEXT Context,
-    _Out_ PVOID *HandlerData,
-    _Out_ PULONG64 EstablisherFrame,
-    _Inout_opt_ PVOID ContextPointers);
+/* RtlLookupFunctionEntry/RtlVirtualUnwind prototypes come from the NDK */
 
 static
 BOOLEAN

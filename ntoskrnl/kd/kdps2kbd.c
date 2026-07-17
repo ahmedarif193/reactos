@@ -92,12 +92,22 @@ KbdSendCommandToMouse(UCHAR Command)
 
 VOID KbdEnableMouse(VOID)
 {
+#if defined(_M_ARM64)
+    /* No PS/2 controller on ARM64 platforms */
+    return;
+#else
     KbdSendCommandToMouse(MOU_ENAB);
+#endif
 }
 
 VOID KbdDisableMouse(VOID)
 {
+#if defined(_M_ARM64)
+    /* No PS/2 controller on ARM64 platforms */
+    return;
+#else
     KbdSendCommandToMouse(MOU_DISAB);
+#endif
 }
 
 CHAR

@@ -540,6 +540,33 @@ extern BOOLEAN KdpContextSent;
 extern KSPIN_LOCK KdpDebuggerLock;
 extern LARGE_INTEGER KdTimerStop, KdTimerStart, KdTimerDifference;
 
+//
+// Debugger-lock ownership test. On DBG builds KxAcquireSpinLock encodes the
+// owner as (KTHREAD | 1) in the lock word; on release builds no owner is
+// recorded, so the test can never match and compiles to FALSE.
+//
+FORCEINLINE
+BOOLEAN
+KdpDebuggerLockOwnedByCurrentThread(VOID)
+{
+#if DBG
+    return (((KSPIN_LOCK)KeGetCurrentThread() | 1) == KdpDebuggerLock);
+#else
+    return FALSE;
+#endif
+}
+
+//
+// Timestamp source for the debug-output prefix
+//
+#if defined(_M_ARM64)
+ULONGLONG
+NTAPI
+KdpQueryDebugTimestamp(VOID);
+#else
+#define KdpQueryDebugTimestamp() KeQueryInterruptTime()
+#endif
+
 extern CHAR KdpMessageBuffer[KDP_MSG_BUFFER_SIZE];
 extern CHAR KdpPathBuffer[KDP_MSG_BUFFER_SIZE];
 

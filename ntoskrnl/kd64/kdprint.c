@@ -14,53 +14,10 @@
 #include <debug.h>
 
 #define KD_PRINT_MAX_BYTES 512
-#define KD_TIMESTAMP_MAX_CHARS 32
 #define KD_100NS_PER_SECOND 10000000ULL
 #define KD_100NS_PER_MICROSECOND 10ULL
 
-#if defined(_M_ARM64)
-static
-BOOLEAN
-KdpArm64DebuggerLockOwnedByCurrentThread(VOID)
-{
-    PKTHREAD Thread = KeGetCurrentThread();
-    return (((KSPIN_LOCK)Thread | 1) == KdpDebuggerLock);
-}
-#else
-#define KdpArm64DebuggerLockOwnedByCurrentThread() FALSE
-#endif
-
 /* FUNCTIONS *****************************************************************/
-
-#if defined(_M_ARM64)
-static
-ULONGLONG
-KdpArm64QueryCounterTime(VOID)
-{
-    ULONGLONG Counter;
-    ULONGLONG Frequency;
-    ULONGLONG Seconds;
-    ULONGLONG Remainder;
-
-#if defined(__clang__) || defined(__GNUC__)
-    __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(Counter));
-    __asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(Frequency));
-#else
-    return 0;
-#endif
-
-    if ((Frequency == 0) || (Frequency > 10000000000ULL))
-    {
-        return 0;
-    }
-
-    Seconds = Counter / Frequency;
-    Remainder = Counter % Frequency;
-
-    return (Seconds * KD_100NS_PER_SECOND) +
-           ((Remainder * KD_100NS_PER_SECOND) / Frequency);
-}
-#endif
 
 static
 USHORT
@@ -77,32 +34,11 @@ KdpBuildTimestampPrefix(
     if (BufferSize == 0)
         return 0;
 
-    InterruptTime = KeQueryInterruptTime();
-#if defined(_M_ARM64)
-    {
-        ULONGLONG CounterTime = KdpArm64QueryCounterTime();
-
-        /*
-         * ARM64 keeps GIC Group 1 delivery masked during early MM bring-up, so
-         * SharedUserData->InterruptTime remains zero until the clock ISR can run.
-         * The architectural counter is already live and gives useful monotonic
-         * debug timestamps without enabling interrupts too early.
-         */
-        if (CounterTime > InterruptTime)
-        {
-            InterruptTime = CounterTime;
-        }
-    }
-#endif
+    InterruptTime = KdpQueryDebugTimestamp();
     Seconds = InterruptTime / KD_100NS_PER_SECOND;
-    Microseconds = (InterruptTime % KD_100NS_PER_SECOND) /
-                   KD_100NS_PER_MICROSECOND;
+    Microseconds = (InterruptTime % KD_100NS_PER_SECOND) / KD_100NS_PER_MICROSECOND;
 
-    Length = _snprintf(Buffer,
-                       BufferSize,
-                       "[%5I64u.%06I64u] ",
-                       Seconds,
-                       Microseconds);
+    Length = _snprintf(Buffer, BufferSize, "[%5I64u.%06I64u] ", Seconds, Microseconds);
     if (Length < 0)
     {
         /* Keep logging functional even if formatting fails. */
@@ -554,9 +490,8 @@ KdpPrint(
     _Out_ PBOOLEAN Handled)
 {
     NTSTATUS Status;
-    BOOLEAN Enable;
+    KIRQL PrintIrql;
     STRING OutputString;
-    CHAR TimestampPrefix[KD_TIMESTAMP_MAX_CHARS];
     CHAR OutputBuffer[KD_PRINT_MAX_BYTES];
     USHORT PrefixLength, OutputLength;
 
@@ -591,10 +526,8 @@ KdpPrint(
                                 Handled);
     }
 
-    /* Setup the output string */
-    PrefixLength = KdpBuildTimestampPrefix(TimestampPrefix,
-                                           sizeof(TimestampPrefix));
-    PrefixLength = (USHORT)min((SIZE_T)PrefixLength, sizeof(OutputBuffer));
+    /* Build the timestamp prefix directly into the output buffer */
+    PrefixLength = KdpBuildTimestampPrefix(OutputBuffer, sizeof(OutputBuffer));
 
     /* Keep the complete entry in the fixed-size KD print buffer. */
     OutputLength = Length;
@@ -603,14 +536,9 @@ KdpPrint(
         OutputLength = sizeof(OutputBuffer) - PrefixLength;
     }
 
-    if (PrefixLength != 0)
-    {
-        KdpMoveMemory(OutputBuffer, TimestampPrefix, PrefixLength);
-    }
-
     if (OutputLength != 0)
     {
-        KdpMoveMemory(OutputBuffer + PrefixLength, String, OutputLength);
+        RtlCopyMemory(OutputBuffer + PrefixLength, String, OutputLength);
     }
 
     OutputString.Buffer = OutputBuffer;
@@ -628,39 +556,19 @@ KdpPrint(
     }
 
 #if defined(_M_ARM64)
-    if (KdEnteredDebugger || KdpArm64DebuggerLockOwnedByCurrentThread())
+    if (KdEnteredDebugger || KdpDebuggerLockOwnedByCurrentThread())
     {
         *Handled = TRUE;
         return STATUS_SUCCESS;
     }
 #endif
 
-#if !defined(_MSC_VER)
-    {
-        KIRQL PrintIrql;
+    /* Send the string under the port lock only. Entering the debugger would
+     * freeze all CPUs for every print, and can deadlock against a frozen
+     * CPU that holds a KD lock; prints need mutual exclusion, not a freeze. */
+    PrintIrql = KdpAcquireLock(&KdpDebuggerLock);
+    KdSave(FALSE);
 
-        UNREFERENCED_PARAMETER(Enable);
-
-        PrintIrql = KdpAcquireLock(&KdpDebuggerLock);
-        KdSave(FALSE);
-
-        if (KdpPrintString(&OutputString))
-        {
-            Status = STATUS_BREAKPOINT;
-        }
-        else
-        {
-            Status = STATUS_SUCCESS;
-        }
-
-        KdRestore(FALSE);
-        KdpReleaseLock(&KdpDebuggerLock, PrintIrql);
-    }
-#else
-    /* Enter the debugger */
-    Enable = KdEnterDebugger(TrapFrame, ExceptionFrame);
-
-    /* Print the string */
     if (KdpPrintString(&OutputString))
     {
         /* User pressed CTRL-C, breakpoint on return */
@@ -672,9 +580,9 @@ KdpPrint(
         Status = STATUS_SUCCESS;
     }
 
-    /* Exit the debugger and return */
-    KdExitDebugger(Enable);
-#endif
+    KdRestore(FALSE);
+    KdpReleaseLock(&KdpDebuggerLock, PrintIrql);
+
     *Handled = TRUE;
     return Status;
 }
@@ -691,23 +599,13 @@ KdpDprintf(
     INT FormatLength;
     va_list ap;
     CHAR Buffer[512];
-    CHAR TimestampPrefix[KD_TIMESTAMP_MAX_CHARS];
 
-    PrefixLength = KdpBuildTimestampPrefix(TimestampPrefix,
-                                           sizeof(TimestampPrefix));
-    PrefixLength = (USHORT)min((SIZE_T)PrefixLength, sizeof(Buffer));
-
-    if (PrefixLength != 0)
-    {
-        KdpMoveMemory(Buffer, TimestampPrefix, PrefixLength);
-    }
+    /* Build the timestamp prefix directly into the output buffer */
+    PrefixLength = KdpBuildTimestampPrefix(Buffer, sizeof(Buffer));
 
     /* Format the string after the timestamp prefix */
     va_start(ap, Format);
-    FormatLength = _vsnprintf(Buffer + PrefixLength,
-                              sizeof(Buffer) - PrefixLength,
-                              Format,
-                              ap);
+    FormatLength = _vsnprintf(Buffer + PrefixLength, sizeof(Buffer) - PrefixLength, Format, ap);
     va_end(ap);
 
     if (FormatLength < 0)

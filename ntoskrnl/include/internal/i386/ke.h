@@ -16,11 +16,12 @@ extern "C"
 #define DR_REG_MASK                             0x4F
 
 //
-// INT3 is 1 byte long
+// INT3 is 1 byte long; assertion failures raise "int 2C" (2 bytes)
 //
 #define KD_BREAKPOINT_TYPE        UCHAR
 #define KD_BREAKPOINT_SIZE        sizeof(UCHAR)
 #define KD_BREAKPOINT_VALUE       0xCC
+#define KD_ASSERT_BREAKPOINT_SIZE 2
 
 /* CPUID 1 - ECX flags */
 #define X86_FEATURE_SSE3        0x00000001

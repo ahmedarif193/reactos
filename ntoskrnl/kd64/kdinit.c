@@ -360,9 +360,13 @@ KdInitSystem(
         EnableKd = TRUE;
     }
 
-    // TEMP: force-enable KD so DPRINT/DPRINT1 reach the serial port without /DEBUG
+#if defined(_M_ARM64)
+    // TEMP: ARM64 bring-up: force-enable KD so DPRINT/DPRINT1 reach the
+    // serial port without /DEBUG. Other architectures keep honoring the
+    // /DEBUG//NODEBUG load options (and their debugger-disabled fast paths).
     EnableKd = TRUE;
     KdPitchDebugger = FALSE;
+#endif
 
     /* Set the Kernel Base in the Data Block */
     KdDebuggerDataBlock.KernBase = (ULONG_PTR)KdVersionBlock.KernBase;

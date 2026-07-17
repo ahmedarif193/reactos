@@ -8,15 +8,7 @@
 #include <ntoskrnl.h>
 #include <ndk/rtltypes.h>
 
-/*
- * ARM64 .pdata entries are 8 bytes (2 x DWORD):
- *   DWORD BeginAddress;
- *   DWORD UnwindData;
- */
-typedef struct _IMAGE_ARM64_RUNTIME_FUNCTION_ENTRY {
-    DWORD BeginAddress;
-    DWORD UnwindData;
-} RUNTIME_FUNCTION, *PRUNTIME_FUNCTION;
+/* RUNTIME_FUNCTION (the 8-byte ARM64 .pdata entry) comes from the NDK */
 
 #define NDEBUG
 #include <debug.h>
@@ -258,17 +250,5 @@ RtlWalkFrameChain(OUT PVOID *Callers,
 /*
  * Stub implementations for RTL functions not yet available in arm64 RTL library.
  * These will be replaced when the full arm64 RTL unwind support is implemented.
+ * UNWIND_HISTORY_TABLE and KNONVOLATILE_CONTEXT_POINTERS come from the NDK.
  */
-
-typedef struct _UNWIND_HISTORY_TABLE {
-    ULONG Count;
-    UCHAR Search;
-    ULONG64 LowAddress;
-    ULONG64 HighAddress;
-} UNWIND_HISTORY_TABLE, *PUNWIND_HISTORY_TABLE;
-
-typedef struct _KNONVOLATILE_CONTEXT_POINTERS {
-    PULONG64 X19, X20, X21, X22, X23, X24, X25, X26, X27, X28;
-    PULONG64 Fp, Lr;
-    PULONG64 D8, D9, D10, D11, D12, D13, D14, D15;
-} KNONVOLATILE_CONTEXT_POINTERS, *PKNONVOLATILE_CONTEXT_POINTERS;

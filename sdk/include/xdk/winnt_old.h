@@ -2423,6 +2423,63 @@ typedef struct _KNONVOLATILE_CONTEXT_POINTERS {
 typedef struct _IMAGE_ARM64_RUNTIME_FUNCTION_ENTRY RUNTIME_FUNCTION, *PRUNTIME_FUNCTION;
 typedef SCOPE_TABLE_ARM64 SCOPE_TABLE, *PSCOPE_TABLE;
 
+#ifndef _APISETRTLSUPPORT_
+#define _APISETRTLSUPPORT_
+
+#define UNWIND_HISTORY_TABLE_SIZE 12
+
+typedef struct _UNWIND_HISTORY_TABLE_ENTRY
+{
+    DWORD64 ImageBase;
+    PRUNTIME_FUNCTION FunctionEntry;
+} UNWIND_HISTORY_TABLE_ENTRY, *PUNWIND_HISTORY_TABLE_ENTRY;
+
+typedef struct _UNWIND_HISTORY_TABLE
+{
+    DWORD Count;
+    BYTE  LocalHint;
+    BYTE  GlobalHint;
+    BYTE  Search;
+    BYTE  Once;
+    ULONG64 LowAddress;
+    ULONG64 HighAddress;
+    UNWIND_HISTORY_TABLE_ENTRY Entry[UNWIND_HISTORY_TABLE_SIZE];
+} UNWIND_HISTORY_TABLE, *PUNWIND_HISTORY_TABLE;
+
+#endif /* _APISETRTLSUPPORT_ */
+
+NTSYSAPI
+PRUNTIME_FUNCTION
+NTAPI
+RtlLookupFunctionEntry(
+    _In_ DWORD64 ControlPc,
+    _Out_ PDWORD64 ImageBase,
+    _Inout_opt_ PUNWIND_HISTORY_TABLE HistoryTable);
+
+NTSYSAPI
+PEXCEPTION_ROUTINE
+NTAPI
+RtlVirtualUnwind(
+    _In_ DWORD HandlerType,
+    _In_ DWORD64 ImageBase,
+    _In_ DWORD64 ControlPc,
+    _In_ PRUNTIME_FUNCTION FunctionEntry,
+    _Inout_ struct _CONTEXT *ContextRecord,
+    _Out_ PVOID *HandlerData,
+    _Out_ PDWORD64 EstablisherFrame,
+    _Inout_opt_ PKNONVOLATILE_CONTEXT_POINTERS ContextPointers);
+
+NTSYSAPI
+VOID
+NTAPI
+RtlUnwindEx(
+    _In_opt_ PVOID TargetFrame,
+    _In_opt_ PVOID TargetIp,
+    _In_opt_ struct _EXCEPTION_RECORD *ExceptionRecord,
+    _In_ PVOID ReturnValue,
+    _In_ struct _CONTEXT *ContextRecord,
+    _In_opt_ PUNWIND_HISTORY_TABLE HistoryTable);
+
 typedef struct _DISPATCHER_CONTEXT {
     ULONG_PTR ControlPc;
     ULONG_PTR ImageBase;

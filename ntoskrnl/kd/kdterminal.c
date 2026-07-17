@@ -50,8 +50,6 @@ static CHAR KdTermNextKey = ANSI_NULL; /* 1-character input queue buffer */
 BOOLEAN
 KdpInitTerminal(VOID)
 {
-    BOOLEAN QuerySerialTerminal;
-
     /* Determine whether the controlling terminal is a serial terminal:
      * serial output is enabled *and* KDSERIAL is set (i.e. user input
      * through serial). */
@@ -65,12 +63,11 @@ KdpInitTerminal(VOID)
     KdpDebugMode.Serial &&
     ((KdbDebugState & KD_DEBUG_KDSERIAL) || !KdpDebugMode.Screen);
 #endif
-    QuerySerialTerminal = ((KdbDebugState & KD_DEBUG_KDSERIAL) != 0);
 
     /* Flush the input buffer */
     KdpFlushTerminalInput();
 
-    if (KdTermSerial && QuerySerialTerminal)
+    if (KdTermSerial && (KdbDebugState & KD_DEBUG_KDSERIAL))
     {
         ULONG Length;
 
