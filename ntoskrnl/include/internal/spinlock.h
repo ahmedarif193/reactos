@@ -144,9 +144,11 @@ KxReleaseSpinLock(
 #endif
 
 #if defined(CONFIG_SMP) || DBG
-    /* The release store also clears the waiters' exclusive monitors. */
+    /* Publish the unlocked state with release ordering. */
 #ifdef _M_ARM64
     __asm__ __volatile__("stlr xzr, [%0]" :: "r"(SpinLock) : "memory");
+#elif defined(_M_AMD64)
+    WriteULongPtrRelease((PULONG_PTR)SpinLock, 0);
 #elif defined(_WIN64)
     InterlockedAnd64((PLONG64)SpinLock, 0);
 #else
