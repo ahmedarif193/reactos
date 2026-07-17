@@ -953,12 +953,21 @@ C_ASSERT(FIELD_OFFSET(DISPATCHER_HEADER, WaitListHead) == 0x08);
 C_ASSERT(sizeof(KQUEUE) == 0x40);
 #endif // !__ASSEMBLER__
 
+/* Literal KPCR offsets shared by inline assembly and .S files. */
 #define ARM64_KPCR_CURRENT_IRQL 0x038
 #define ARM64_KPCR_PRCB 0x980
 #define ARM64_KPCR_PRCB_CURRENT_THREAD 0x988
 #define ARM64_KPCR_PRCB_NUMBER 0x9A4
 #define ARM64_KPCR_STRINGIFY2(_x) #_x
 #define ARM64_KPCR_STRINGIFY(_x) ARM64_KPCR_STRINGIFY2(_x)
+
+#ifndef __ASSEMBLER__
+/* Keep the assembly literals synchronized with KIPCR. */
+C_ASSERT(ARM64_KPCR_CURRENT_IRQL == FIELD_OFFSET(KIPCR, CurrentIrql));
+C_ASSERT(ARM64_KPCR_PRCB == FIELD_OFFSET(KIPCR, Prcb));
+C_ASSERT(ARM64_KPCR_PRCB_CURRENT_THREAD == FIELD_OFFSET(KIPCR, Prcb.CurrentThread));
+C_ASSERT(ARM64_KPCR_PRCB_NUMBER == FIELD_OFFSET(KIPCR, Prcb.Number));
+#endif // !__ASSEMBLER__
 
 extern NTKERNELAPI PKIPCR KeArm64CurrentPcr;
 extern NTKERNELAPI PKTHREAD KeArm64CurrentThread;
