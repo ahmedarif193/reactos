@@ -58,8 +58,15 @@ HalpAPEntry16:
     /* Load the trampoline GDT (limit/base patched in by C) */
     data32 lgdt cs:[OFF_GDTR]
 
-    /* Enter protected mode */
+    /*
+     * INIT leaves the AP with caching disabled. Flush any firmware cache
+     * state, then clear CR0.NW/CD before executing the kernel trampoline.
+     */
     mov eax, cr0
+    and eax, HEX(DFFFFFFF)
+    mov cr0, eax
+    wbinvd
+    and eax, HEX(BFFFFFFF)
     or eax, 1
     mov cr0, eax
 
@@ -149,6 +156,8 @@ HalpAPEntry64:
     mov cr3, rax
     mov rax, [rcx + PsSpecialRegisters + SrCr4]
     mov cr4, rax
+    mov rax, [rcx + PsSpecialRegisters + SrCr0]
+    mov cr0, rax
 
     /* Load the real GDT/IDT (KDESCRIPTOR: +6 skips Pad[3] to reach Limit) */
     lgdt [rcx + PsSpecialRegisters + SrGdtr + 6]

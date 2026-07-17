@@ -802,6 +802,23 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Only do this once */
     if (HalpProcessedACPIPhase0) return STATUS_SUCCESS;
 
+    /* Claim the low AP stub before ACPI table copies consume low memory. */
+    if (!HalpLowStubPhysicalAddress.QuadPart)
+    {
+        HalpLowStubPhysicalAddress.QuadPart = HalpAllocPhysicalMemory(LoaderBlock,
+                                                                      0x100000,
+                                                                      HALP_LOW_STUB_SIZE_IN_PAGES,
+                                                                      FALSE);
+        if (HalpLowStubPhysicalAddress.QuadPart)
+        {
+            HalpLowStub = HalpMapPhysicalMemory64(HalpLowStubPhysicalAddress, HALP_LOW_STUB_SIZE_IN_PAGES);
+        }
+        else
+        {
+            DPRINT1("HAL: No low memory for AP startup stub, SMP unavailable\n");
+        }
+    }
+
     /* Setup the ACPI table cache */
     Status = HalpAcpiTableCacheInit(LoaderBlock);
     if (!NT_SUCCESS(Status)) return Status;
@@ -847,26 +864,6 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     /* Setup the ACPI timer */
     HaliAcpiTimerInit(0, 0);
-
-    /* Do we have a low stub address yet? */
-    if (!HalpLowStubPhysicalAddress.QuadPart)
-    {
-        /* Allocate it */
-        HalpLowStubPhysicalAddress.QuadPart = HalpAllocPhysicalMemory(LoaderBlock,
-                                                                      0x100000,
-                                                                      HALP_LOW_STUB_SIZE_IN_PAGES,
-                                                                      FALSE);
-        if (HalpLowStubPhysicalAddress.QuadPart)
-        {
-            /* Map it */
-            HalpLowStub = HalpMapPhysicalMemory64(HalpLowStubPhysicalAddress, HALP_LOW_STUB_SIZE_IN_PAGES);
-        }
-        else
-        {
-            /* No <1MB page for the AP stub (e.g. UEFI): SMP unavailable */
-            DPRINT1("HAL: No low memory for AP startup stub, SMP unavailable\n");
-        }
-    }
 
     /* Grab a page for flushes */
     PhysicalAddress.QuadPart = 0x100000;
