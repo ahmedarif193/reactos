@@ -62,29 +62,23 @@ ULONG
 KiArm64WalkPageTable(
     _In_ ULONG64 Root,
     _In_ ULONG64 Va,
-    _Out_writes_all_(4) ULONG64 *Entries,
-    _Out_writes_all_(4) volatile ULONG64 **Slots)
+    _Out_writes_to_(_MI_PAGING_LEVELS, return) ULONG64 *Entries,
+    _Out_writes_to_(_MI_PAGING_LEVELS, return) volatile ULONG64 **Slots)
 {
-    static const ULONG Shifts[4] = {39, 30, 21, 12};
+    static const ULONG Shifts[_MI_PAGING_LEVELS] = {PXI_SHIFT, PPI_SHIFT, PDI_SHIFT, PTI_SHIFT};
     volatile ULONG64 *Table;
     ULONG64 RootPa = Root & ARM64_PTE_ADDR_MASK;
     ULONG Level;
-
-    for (Level = 0; Level < 4; Level++)
-    {
-        Entries[Level] = 0;
-        Slots[Level] = NULL;
-    }
 
     if (RootPa == 0)
         return 0;
 
     Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(RootPa);
-    for (Level = 0; Level < 4; Level++)
+    for (Level = 0; Level < _MI_PAGING_LEVELS; Level++)
     {
         Slots[Level] = &Table[(Va >> Shifts[Level]) & 0x1FF];
         Entries[Level] = *Slots[Level];
-        if (Level == 3)
+        if (Level == _MI_PAGING_LEVELS - 1)
             break;
         if ((Entries[Level] & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
             break;
@@ -300,7 +294,7 @@ KiArm64DumpKernelWalk(
     _In_ ULONG64 Va)
 {
     ULONG64 Ttbr1 = 0;
-    ULONG64 Entries[4];
+    ULONG64 Entries[4] = {0};
     volatile ULONG64 *Slots[4];
     ULONG Depth;
     ULONG64 FinalEntry = 0;
@@ -366,10 +360,9 @@ KiArm64DumpUserWalk(
     PMMPTE PointerPte;
     MMPTE HwPte;
     ULONG64 Ttbr0 = 0;
-    ULONG64 Entries[4] = {0, 0, 0, 0};
+    ULONG64 Entries[4] = {0};
     volatile ULONG64 *Slots[4];
     ULONG Depth = 0;
-    ULONG Level;
 
     PointerPte = MiArm64UserPteKseg0ForPfn((PVOID)(ULONG_PTR)PAGE_ALIGN(Va), &PteFrame);
     if (PointerPte != NULL)
@@ -383,15 +376,11 @@ KiArm64DumpUserWalk(
 
     if ((ULONG_PTR)Va < (ULONG_PTR)MmSystemRangeStart)
     {
-        ULONG Read;
-
         __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-        Read = KiArm64WalkPageTable(Ttbr0, Va, Entries, Slots);
-        for (Level = 0; Level < Read; Level++)
+        Depth = KiArm64WalkPageTable(Ttbr0, Va, Entries, Slots);
+        if ((Depth != 0) && ((Entries[Depth - 1] & 1ULL) == 0))
         {
-            if ((Entries[Level] & 1ULL) == 0)
-                break;
-            Depth = Level + 1;
+            Depth--;
         }
     }
 
@@ -526,13 +515,10 @@ KiArm64FixupUserAccessFlagFault(
     if ((Entry & ARM64_PTE_TYPE_MASK) != RequiredType)
         return FALSE;
 
-    if ((Entry & (1ULL << 10)) == 0)
-        *Slots[TargetLevel] = (Entry | (1ULL << 10));
+    if ((Entry & PTE_ACCESSED) == 0)
+        *Slots[TargetLevel] = (Entry | PTE_ACCESSED);
 
-    __asm__ __volatile__("dsb ishst" ::: "memory");
-    __asm__ __volatile__("tlbi vaae1is, %0" :: "r"((ULONG_PTR)FaultAddress >> PAGE_SHIFT) : "memory");
-    __asm__ __volatile__("dsb ish" ::: "memory");
-    __asm__ __volatile__("isb" ::: "memory");
+    KeInvalidateTlbEntry(FaultAddress);
     return TRUE;
 }
 
@@ -628,8 +614,7 @@ KiSwapProcess(_Inout_ PKPROCESS NewProcess,
     ASSERT(NewProcess->DirectoryTableBase[0] != 0);
     ASSERT(NewProcess->Unused0 != 0);   /* hyperspace root (Win11 ARM64: 0x030 is the ASID field) */
 
-    KiArm64WriteUserTtbr(NewProcess->DirectoryTableBase[0] & KI_ARM64_TTBR_ADDR_MASK,
-                         NewKernelRoot);
+    KiArm64WriteUserTtbr(NewUserRoot, NewKernelRoot);
 }
 
 typedef struct _ARM64_EARLY_SYNC_CONTEXT
@@ -776,7 +761,7 @@ KiArm64InitializeTrapFrame(
  * one CPU), so plain volatile accesses suffice; the cache-line alignment
  * keeps the per-syscall/per-fault writes from bouncing a shared line.
  */
-typedef struct DECLSPEC_ALIGN(64) _KI_ARM64_TRAP_GUARD
+typedef struct DECLSPEC_CACHEALIGN _KI_ARM64_TRAP_GUARD
 {
     volatile LONG Active;
 } KI_ARM64_TRAP_GUARD;
@@ -1049,20 +1034,23 @@ KiArm64HandleSynchronousException(
      * at KiUserApcDispatcher after instruction abort resolution.
      */
     {
-        ULONG CpuIndex = KeGetCurrentProcessorNumber();
         KPROCESSOR_MODE FaultMode = KiArm64PreviousModeFromContext(
             Context->State.Spsr, Context->State.Elr);
 
         if ((EsrClass != ESR_EC_BRK) &&
-            (CpuIndex < MAXIMUM_PROCESSORS) &&
             (FaultMode == KernelMode))
         {
-            if (KiArm64TrapActive[CpuIndex].Active != 0)
+            ULONG CpuIndex = KeGetCurrentProcessorNumber();
+
+            if (CpuIndex < MAXIMUM_PROCESSORS)
             {
-                KiArm64BugCheckSynchronousException(Context);
-                return TRUE; /* not reached */
+                if (KiArm64TrapActive[CpuIndex].Active != 0)
+                {
+                    KiArm64BugCheckSynchronousException(Context);
+                    return TRUE; /* not reached */
+                }
+                KiArm64TrapActive[CpuIndex].Active = 1;
             }
-            KiArm64TrapActive[CpuIndex].Active = 1;
         }
     }
 

@@ -58,7 +58,7 @@ static PKTRAP_FRAME KiArm64CurrentInterruptTrapFrame[MAXIMUM_PROCESSORS];
  * interlocked ordering; the cache-line alignment stops the per-interrupt
  * increments from bouncing one shared line between all CPUs.
  */
-typedef struct DECLSPEC_ALIGN(64) _KI_ARM64_DISPATCH_EPOCH
+typedef struct DECLSPEC_CACHEALIGN _KI_ARM64_DISPATCH_EPOCH
 {
     volatile LONG Value;
 } KI_ARM64_DISPATCH_EPOCH;
