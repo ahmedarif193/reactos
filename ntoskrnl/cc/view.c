@@ -46,6 +46,8 @@ NPAGED_LOOKASIDE_LIST iBcbLookasideList;
 static NPAGED_LOOKASIDE_LIST SharedCacheMapLookasideList;
 static NPAGED_LOOKASIDE_LIST VacbLookasideList;
 
+#define VACB_LRU_TOUCH_INTERVAL 16
+
 /* Internal vars (MS):
  * - Threshold above which lazy writer will start action
  * - Amount of dirty pages
@@ -894,6 +896,7 @@ CcRosCreateVacb (
     current->MappedCount = 0;
     current->ReferenceCount = 0;
     current->NextInHash = NULL;
+    current->LruAccessCount = 0;
     InitializeListHead(&current->CacheMapVacbListEntry);
     InitializeListHead(&current->DirtyVacbListEntry);
     InitializeListHead(&current->VacbLruListEntry);
@@ -1079,13 +1082,17 @@ CcRosGetVacb (
 
     Refs = CcRosVacbGetRefCount(current);
 
-    OldIrql = KeAcquireQueuedSpinLock(LockQueueMasterLock);
+    if (((ULONG)InterlockedIncrement((PLONG)&current->LruAccessCount) &
+         (VACB_LRU_TOUCH_INTERVAL - 1)) == 0)
+    {
+        OldIrql = KeAcquireQueuedSpinLock(LockQueueMasterLock);
 
-    /* Move to the tail of the LRU list */
-    RemoveEntryList(&current->VacbLruListEntry);
-    InsertTailList(&VacbLruListHead, &current->VacbLruListEntry);
+        /* Approximate recency without serializing every VACB hit globally. */
+        RemoveEntryList(&current->VacbLruListEntry);
+        InsertTailList(&VacbLruListHead, &current->VacbLruListEntry);
 
-    KeReleaseQueuedSpinLock(LockQueueMasterLock, OldIrql);
+        KeReleaseQueuedSpinLock(LockQueueMasterLock, OldIrql);
+    }
 
     /*
      * Return the VACB to the caller.
