@@ -74,6 +74,9 @@ MiMapLockedPagesInUserSpace(
     PMMPFN Pfn1;
     PMMPFN Pfn2;
     BOOLEAN AddressSpaceLocked = FALSE;
+#if defined(_M_ARM64)
+    ULONG MappedPages = 0;
+#endif
 
     PAGED_CODE();
 
@@ -266,7 +269,12 @@ MiMapLockedPagesInUserSpace(
         }
 
         /* Make the page valid */
+#if defined(_M_ARM64)
+        MI_WRITE_VALID_PTE_NO_FLUSH(PointerPte, TempPte);
+        MappedPages++;
+#else
         MI_WRITE_VALID_PTE(PointerPte, TempPte);
+#endif
 
         /* Acquire a share count */
         Pfn1 = MI_PFN_ELEMENT(PointerPde->u.Hard.PageFrameNumber);
@@ -281,6 +289,10 @@ MiMapLockedPagesInUserSpace(
         NumberOfPages--;
         BaseAddress = (PVOID)((ULONG_PTR)BaseAddress + PAGE_SIZE);
     }
+
+#if defined(_M_ARM64)
+    MiFlushSystemTbRange((PVOID)StartingVa, MappedPages);
+#endif
 
     MiUnlockProcessWorkingSetUnsafe(Process, Thread);
     ASSERT(AddressSpaceLocked);
@@ -318,6 +330,10 @@ MiUnmapLockedPagesInUserSpace(
     ULONG NumberOfPages;
     PPFN_NUMBER MdlPages;
     PFN_NUMBER PageTablePage;
+#if defined(_M_ARM64)
+    PVOID FlushBase;
+    ULONG FlushPages = 0;
+#endif
 
     DPRINT("MiUnmapLockedPagesInUserSpace(%p, %p)\n", BaseAddress, Mdl);
 
@@ -348,6 +364,9 @@ MiUnmapLockedPagesInUserSpace(
     ASSERT(Process->VadRoot.NodeHint != Vad);
 
     PointerPte = MiAddressToPte(BaseAddress);
+#if defined(_M_ARM64)
+    FlushBase = BaseAddress;
+#endif
     OldIrql = MiAcquirePfnLock();
     while (NumberOfPages != 0 &&
            *MdlPages != LIST_HEAD)
@@ -357,6 +376,9 @@ MiUnmapLockedPagesInUserSpace(
 
         /* Invalidate it */
         MI_ERASE_PTE(PointerPte);
+#if defined(_M_ARM64)
+        FlushPages++;
+#endif
 
         /* We invalidated this PTE, so dereference the PDE */
         PointerPde = MiAddressToPde(BaseAddress);
@@ -376,7 +398,11 @@ MiUnmapLockedPagesInUserSpace(
         MdlPages++;
     }
 
+#if defined(_M_ARM64)
+    MiFlushSystemTbRange(FlushBase, FlushPages);
+#else
     KeFlushProcessTb();
+#endif
     MiReleasePfnLock(OldIrql);
     MiUnlockProcessWorkingSetUnsafe(Process, Thread);
     MmUnlockAddressSpace(&Process->Vm);
@@ -686,6 +712,9 @@ MmMapLockedPagesSpecifyCache(IN PMDL Mdl,
     MI_PFN_CACHE_ATTRIBUTE CacheAttribute;
     PMMPTE PointerPte;
     MMPTE TempPte;
+#if defined(_M_ARM64)
+    PMMPTE FirstPte;
+#endif
 
     //
     // Sanity check
@@ -745,6 +774,10 @@ MmMapLockedPagesSpecifyCache(IN PMDL Mdl,
             KeBugCheckEx(NO_MORE_SYSTEM_PTES, 0, PageCount, 0, 0);
         }
 
+#if defined(_M_ARM64)
+        FirstPte = PointerPte;
+#endif
+
         //
         // Get the mapped address
         //
@@ -795,8 +828,16 @@ MmMapLockedPagesSpecifyCache(IN PMDL Mdl,
             // Write the PTE
             //
             TempPte.u.Hard.PageFrameNumber = *MdlPages;
+#if defined(_M_ARM64)
+            MI_WRITE_VALID_PTE_NO_FLUSH(PointerPte++, TempPte);
+#else
             MI_WRITE_VALID_PTE(PointerPte++, TempPte);
+#endif
         } while (++MdlPages < LastPage);
+
+#if defined(_M_ARM64)
+        MiFlushSystemTbRange(MiPteToAddress(FirstPte), (ULONG)(PointerPte - FirstPte));
+#endif
 
         //
         // Mark it as mapped
@@ -1762,6 +1803,9 @@ MmMapLockedPagesWithReservedMapping(
     MI_PFN_CACHE_ATTRIBUTE CacheAttribute;
     PMMPTE PointerPte;
     MMPTE TempPte;
+#if defined(_M_ARM64)
+    PMMPTE FirstPte;
+#endif
 
     ASSERT(Mdl->ByteCount != 0);
 
@@ -1823,6 +1867,9 @@ MmMapLockedPagesWithReservedMapping(
     }
     // Skip our two helper PTEs
     PointerPte += 2;
+#if defined(_M_ARM64)
+    FirstPte = PointerPte;
+#endif
 
     // Get the template
     TempPte = ValidKernelPte;
@@ -1850,8 +1897,16 @@ MmMapLockedPagesWithReservedMapping(
     {
         // Write the PTE
         TempPte.u.Hard.PageFrameNumber = *MdlPages;
+#if defined(_M_ARM64)
+        MI_WRITE_VALID_PTE_NO_FLUSH(PointerPte++, TempPte);
+#else
         MI_WRITE_VALID_PTE(PointerPte++, TempPte);
+#endif
     }
+
+#if defined(_M_ARM64)
+    MiFlushSystemTbRange(MiPteToAddress(FirstPte), (ULONG)(PointerPte - FirstPte));
+#endif
 
     // Mark it as mapped
     ASSERT((Mdl->MdlFlags & MDL_MAPPED_TO_SYSTEM_VA) == 0);
@@ -1975,8 +2030,8 @@ MmUnmapReservedMapping(
     // Zero the PTEs
     RtlZeroMemory(PointerPte, PageCount * sizeof(MMPTE));
 
-    // Flush the TLB
-    KeFlushEntireTb(TRUE, TRUE);
+    // Publish and invalidate the released mapping as one range.
+    MiFlushSystemTbRange(BaseAddress, (ULONG)PageCount);
 
     // Remove flags
     Mdl->MdlFlags &= ~(MDL_MAPPED_TO_SYSTEM_VA |
@@ -2065,6 +2120,10 @@ MmProtectMdlSystemAddress(IN PMDL MemoryDescriptorList,
     PFN_NUMBER NumberOfPages, PageFrameIndex;
     ULONG ProtectionMask;
     BOOLEAN NoAccess;
+#if defined(_M_ARM64)
+    ULONG_PTR FlushBase;
+    PFN_NUMBER FlushPages;
+#endif
 
     //
     // The MDL must already own a system-space mapping (built by
@@ -2137,6 +2196,10 @@ MmProtectMdlSystemAddress(IN PMDL MemoryDescriptorList,
     NumberOfPages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(SystemAddress,
                                                    MemoryDescriptorList->ByteCount);
     PointerPte = MiAddressToPte(SystemAddress);
+#if defined(_M_ARM64)
+    FlushBase = Va;
+    FlushPages = 0;
+#endif
 
     while (NumberOfPages != 0)
     {
@@ -2206,7 +2269,11 @@ MmProtectMdlSystemAddress(IN PMDL MemoryDescriptorList,
             /* Only a previously-valid translation can be cached in the TLB */
             if (OldPte.u.Hard.Valid)
             {
+#if defined(_M_ARM64)
+                FlushPages++;
+#else
                 KeInvalidateTlbEntry((PVOID)Va);
+#endif
             }
         }
         else
@@ -2259,7 +2326,11 @@ MmProtectMdlSystemAddress(IN PMDL MemoryDescriptorList,
                 // valid-to-valid update needs an explicit TLB invalidation.
                 //
                 MI_UPDATE_VALID_PTE(PointerPte, TempPte);
+#if defined(_M_ARM64)
+                FlushPages++;
+#else
                 KeInvalidateTlbEntry((PVOID)Va);
+#endif
             }
             else
             {
@@ -2277,6 +2348,18 @@ MmProtectMdlSystemAddress(IN PMDL MemoryDescriptorList,
         Va += PAGE_SIZE;
         NumberOfPages--;
     }
+
+#if defined(_M_ARM64)
+    if (FlushPages != 0)
+    {
+        /* Pages remain locked by the MDL, so all permission updates can share
+           one broadcast completion boundary. The span may include unchanged
+           pages, which is harmless and avoids a temporary address list. */
+        MiFlushSystemTbRange((PVOID)FlushBase,
+                             ADDRESS_AND_SIZE_TO_SPAN_PAGES(SystemAddress,
+                                                            MemoryDescriptorList->ByteCount));
+    }
+#endif
 
     return STATUS_SUCCESS;
 }
