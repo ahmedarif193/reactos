@@ -4606,6 +4606,22 @@ RtlIpv6StringToAddressExW(
 //
 // Time Functions
 //
+#ifdef NTOS_MODE_USER
+_Success_(return != FALSE)
+NTSYSAPI
+BOOL
+NTAPI
+RtlQueryPerformanceCounter(
+    _Out_ PLARGE_INTEGER PerformanceCounter);
+
+_Success_(return != FALSE)
+NTSYSAPI
+BOOL
+NTAPI
+RtlQueryPerformanceFrequency(
+    _Out_ PLARGE_INTEGER PerformanceFrequency);
+#endif
+
 NTSYSAPI
 BOOLEAN
 NTAPI
