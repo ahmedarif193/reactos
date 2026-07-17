@@ -786,8 +786,8 @@ OFFSET(ThWaitTime, KTHREAD, WaitTime),
 OFFSET(ThCombinedApcDisable, KTHREAD, CombinedApcDisable),
 OFFSET(ThKernelApcDisable, KTHREAD, KernelApcDisable),
 OFFSET(ThSpecialApcDisable, KTHREAD, SpecialApcDisable),
-#if defined(_M_ARM)
-//OFFSET(ThVfpState, KTHREAD, VfpState),
+#if defined(_M_ARM64)
+OFFSET(ThVfpState, KTHREAD, VfpState),
 #endif
 OFFSET(ThNextProcessor, KTHREAD, NextProcessor),
 //OFFSET(ThProcess, KTHREAD, Process),

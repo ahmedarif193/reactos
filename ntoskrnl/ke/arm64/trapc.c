@@ -8,7 +8,6 @@
 
 #include <ntoskrnl.h>
 #include <arm64trap.h>
-#include <fpstate.h>
 #define NDEBUG
 #include <debug.h>
 #include <mm/ARM3/miarm.h>
@@ -617,13 +616,18 @@ KiSwapProcess(_Inout_ PKPROCESS NewProcess,
     KiArm64WriteUserTtbr(NewUserRoot, NewKernelRoot);
 }
 
+#define ARM64_EARLY_SYNC_CONTEXT_ALLOC_SIZE 0x590
+#define ARM64_EARLY_SYNC_VFP_OFFSET         0x370
+
 typedef struct _ARM64_EARLY_SYNC_CONTEXT
 {
     ARM64_EARLY_TRAP_STATE State;
     PKTRAP_FRAME TrapFramePointer;
     PKEXCEPTION_FRAME ExceptionFramePointer;
-    KTRAP_FRAME TrapFrame;
     KEXCEPTION_FRAME ExceptionFrame;
+    KTRAP_FRAME TrapFrame;
+    KARM64_VFP_STATE VfpState;
+    ULONG64 Reserved[2];
 } ARM64_EARLY_SYNC_CONTEXT, *PARM64_EARLY_SYNC_CONTEXT;
 
 C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, State.VectorId) == 0x0);
@@ -638,9 +642,13 @@ C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, State.Registers.Pstate) == 0x130
 C_ASSERT(sizeof(ARM64_EARLY_TRAP_STATE) == 0x138);  /* State should end at 0x138 */
 C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, TrapFramePointer) == 0x138);
 C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, ExceptionFramePointer) == 0x140);
-C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, TrapFrame) == 0x148);
-#define ARM64_EARLY_SYNC_CONTEXT_ALLOC_SIZE 0x590
-C_ASSERT(sizeof(ARM64_EARLY_SYNC_CONTEXT) <= ARM64_EARLY_SYNC_CONTEXT_ALLOC_SIZE);
+C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, ExceptionFrame) == 0x148);
+C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, TrapFrame) == 0x210);
+C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, VfpState) == ARM64_EARLY_SYNC_VFP_OFFSET);
+C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, VfpState.Fpcr) == 0x378);
+C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, VfpState.Fpsr) == 0x37C);
+C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, VfpState.V) == 0x380);
+C_ASSERT(sizeof(ARM64_EARLY_SYNC_CONTEXT) == ARM64_EARLY_SYNC_CONTEXT_ALLOC_SIZE);
 
 /*
  * KiArm64PreviousModeFromContext - Determine the true previous mode
@@ -701,8 +709,6 @@ KiArm64InitializeTrapFrame(
     _Inout_ PARM64_EARLY_SYNC_CONTEXT Context,
     _Out_ PKTRAP_FRAME TrapFrame)
 {
-    ULONG64 Fpcr = 0;
-    ULONG64 Fpsr = 0;
     PKEXCEPTION_FRAME ExceptionFrame = &Context->ExceptionFrame;
     KIRQL CurrentIrql;
 
@@ -719,6 +725,8 @@ KiArm64InitializeTrapFrame(
     TrapFrame->PreviousMode = (CHAR)KiArm64PreviousModeFromContext(Context->State.Spsr, Context->State.Elr);
     TrapFrame->PreviousIrql = (UCHAR)CurrentIrql;
     TrapFrame->TrapFrame = (ULONG64)(ULONG_PTR)TrapFrame;
+    Context->VfpState.Link = NULL;
+    TrapFrame->VfpState = &Context->VfpState;
     TrapFrame->FaultAddress = Context->State.FaultAddress;
     TrapFrame->Spsr = (ULONG)Context->State.Spsr;
     TrapFrame->Esr = (ULONG)Context->State.ExceptionSyndrome;
@@ -733,10 +741,8 @@ KiArm64InitializeTrapFrame(
 
     RtlZeroMemory(ExceptionFrame, sizeof(*ExceptionFrame));
     ExceptionFrame->TrapFrame = (ULONG64)(ULONG_PTR)TrapFrame;
-    __asm__ __volatile__("mrs %0, fpcr" : "=r"(Fpcr));
-    __asm__ __volatile__("mrs %0, fpsr" : "=r"(Fpsr));
-    ExceptionFrame->Fpcr = Fpcr;
-    ExceptionFrame->Fpsr = Fpsr;
+    ExceptionFrame->Fpcr = Context->VfpState.Fpcr;
+    ExceptionFrame->Fpsr = Context->VfpState.Fpsr;
     ExceptionFrame->X19 = Context->State.Registers.X[19];
     ExceptionFrame->X20 = Context->State.Registers.X[20];
     ExceptionFrame->X21 = Context->State.Registers.X[21];
@@ -822,6 +828,51 @@ KiArm64ClearTrapActive(VOID)
     {
         KiArm64TrapActive[ProcessorIndex].Active = 0;
     }
+}
+
+BOOLEAN
+KiArm64HandleSystemService(
+    _Inout_ PARM64_EARLY_SYNC_CONTEXT Context)
+{
+    PKTRAP_FRAME TrapFrame = &Context->TrapFrame;
+    PKEXCEPTION_FRAME ExceptionFrame = &Context->ExceptionFrame;
+    PKTHREAD Thread;
+    ULONG Instruction;
+
+    /* The fast vector path already populated architectural state directly. */
+    TrapFrame->PreviousMode = (CHAR)KiArm64PreviousModeFromContext(
+        Context->State.Spsr, Context->State.Elr);
+    TrapFrame->PreviousIrql = (UCHAR)KeGetCurrentIrql();
+    ExceptionFrame->TrapFrame = (ULONG64)(ULONG_PTR)TrapFrame;
+    Context->TrapFramePointer = TrapFrame;
+    Context->ExceptionFramePointer = ExceptionFrame;
+
+    Thread = KeGetCurrentThread();
+    KiArm64SavePreviousModeForTrap(Thread, TrapFrame);
+    TrapFrame->TrapFrame = (ULONG64)(ULONG_PTR)Thread->TrapFrame;
+    Thread->TrapFrame = TrapFrame;
+
+    Instruction = (ULONG)(TrapFrame->X[8] & 0x1FFF);
+
+    /* Zw entries may nest through SVC while the service dispatcher is active. */
+    KiArm64ClearTrapActive();
+    KiSystemService(Thread, TrapFrame, Instruction);
+
+    /* A first win32k call can relocate the entire kernel stack. */
+    TrapFrame = Thread->TrapFrame;
+    Context = CONTAINING_RECORD(TrapFrame,
+                                ARM64_EARLY_SYNC_CONTEXT,
+                                TrapFrame);
+    ExceptionFrame = &Context->ExceptionFrame;
+
+    KiArm64DeliverPendingUserApc(ExceptionFrame, TrapFrame);
+    KiArm64RestorePreviousModeFromTrap(Thread, TrapFrame);
+    Thread->TrapFrame = KiGetLinkedTrapFrame(TrapFrame);
+
+    Context->TrapFramePointer = TrapFrame;
+    Context->ExceptionFramePointer = ExceptionFrame;
+    KiArm64ClearTrapActive();
+    return TRUE;
 }
 
 #define KI_ARM64_ACCESS_READ    0
@@ -1056,165 +1107,41 @@ KiArm64HandleSynchronousException(
 
     switch (EsrClass)
     {
-                case ESR_EC_FP_TRAP:  /* FP/ASIMD access when trapped */
-                case ESR_EC_SVE_TRAP: /* SVE access when trapped */
-                case ESR_EC_SME_TRAP: /* SME access when trapped */
-                {
-                    TrapFrame = &Context->TrapFrame;
-                    KiArm64InitializeTrapFrame(Context, TrapFrame);
+        case ESR_EC_FP_TRAP:  /* FP/ASIMD access when trapped */
+        {
+            TrapFrame = &Context->TrapFrame;
+            KiArm64InitializeTrapFrame(Context, TrapFrame);
+            break;
+        }
 
-                    if (KiArm64HandleFpTrap(TrapFrame, Esr))
-                    {
-                        goto HandledExit;
-                    }
+        case ESR_EC_SVE_TRAP: /* SVE access when trapped */
+        case ESR_EC_SME_TRAP: /* SME access when trapped */
+        {
+            EXCEPTION_RECORD ExceptionRecord;
 
-                    break;
-                }
+            TrapFrame = &Context->TrapFrame;
+            KiArm64InitializeTrapFrame(Context, TrapFrame);
+            PreviousMode = KiArm64PreviousModeFromContext(Context->State.Spsr,
+                                                          Context->State.Elr);
+
+            RtlZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
+            ExceptionRecord.ExceptionCode = STATUS_ILLEGAL_INSTRUCTION;
+            ExceptionRecord.ExceptionAddress = (PVOID)(ULONG_PTR)Context->State.Elr;
+
+            KiDispatchException(&ExceptionRecord,
+                                Context->ExceptionFramePointer,
+                                TrapFrame,
+                                PreviousMode,
+                                TRUE);
+            goto HandledExit;
+        }
 
 	        case 0x11: /* SVC from lower EL */
 	        case 0x15: /* SVC from same EL */
 	        {
-	            ULONG Instruction;
-	            PKTHREAD Thread;
-
 	            TrapFrame = &Context->TrapFrame;
 	            KiArm64InitializeTrapFrame(Context, TrapFrame);
-
-            /*
-             * ARM64 FIX: Set up TrapFrame linked list for system calls.
-             *
-             * On x86-64, the assembly entry code (KiSystemCall64 in trap.S)
-             * saves the old Thread->TrapFrame into TrapFrame->TrapFrame and
-             * sets Thread->TrapFrame to the new SVC trap frame. On ARM64 we
-             * must do this in C since our entry is handled in trapc.c.
-             *
-             * This linked list is critical because:
-             * 1. NtContinue reads Thread->TrapFrame to find the current frame
-             * 2. KiGetLinkedTrapFrame reads TrapFrame->TrapFrame to get the
-             *    previous frame for unwinding
-             * 3. After the syscall, we restore Thread->TrapFrame to the
-             *    previous value (matching x86-64 assembly exit behavior)
-             *
-             * KiArm64InitializeTrapFrame sets TrapFrame->TrapFrame to a
-             * self-link; we override it here with the proper previous frame.
-             */
-            Thread = KeGetCurrentThread();
-            KiArm64SavePreviousModeForTrap(Thread, TrapFrame);
-            TrapFrame->TrapFrame = (ULONG64)(ULONG_PTR)Thread->TrapFrame;
-            Thread->TrapFrame = TrapFrame;
-
-            /*
-             * ARM64 System Call Number Encoding
-             *
-             * X8 carries the full service number including the table selector:
-             *   - Bits [11:0]  = service function index (SERVICE_NUMBER_MASK)
-             *   - Bit  [12]    = service table selector (0=NT, 1=Win32K)
-             *
-             * The user-mode stubs (STUB_U in syscalls.inc) set X8 to the full
-             * service ID (e.g., 0x0025 for NtOpenFile, 0x10FA for
-             * NtUserProcessConnect). SVC #0 is used for all calls.
-             *
-             * KiSystemService extracts the table index via:
-             *   TableIndex = (Instruction >> SERVICE_TABLE_SHIFT) & SERVICE_TABLE_MASK
-             * which maps bit 12 to the correct byte offset into the service
-             * descriptor table array.
-             */
-            Instruction = (ULONG)(TrapFrame->X[8] & 0x1FFF);
-
-            /*
-             * ARM64 FIX: Clear trap-active BEFORE calling KiSystemService.
-             *
-             * System calls can legitimately call nested system calls (e.g.,
-             * NtCreateSymbolicLinkObject calls ObInsertObject which calls
-             * other Nt* functions via Zw* wrappers). Each Zw* wrapper uses
-             * SVC #0 to enter the kernel, even when already in kernel mode.
-             *
-             * If we don't clear the trap flag before KiSystemService, the
-             * nested SVC will see KiArm64TrapActive as set and incorrectly
-             * treat it as a recursive exception, causing a spurious crash.
-             *
-             * This is safe because:
-             * 1. The trap frame is already initialized
-             * 2. KiSystemService handles its own exception safety
-             * 3. Any real fault during the syscall will set its own flag
-             */
-            KiArm64ClearTrapActive();
-
-            KiSystemService(Thread, TrapFrame, Instruction);
-
-            /*
-             * ARM64 FIX: Re-read TrapFrame BEFORE accessing it after
-             * KiSystemService returns. If PsConvertToGuiThread was called
-             * inside KiSystemService (first Win32k syscall), KeSwitchKernelStack
-             * copies the kernel stack to a new location and frees the old one.
-             * Our local TrapFrame pointer is stale and points to freed memory.
-             * Re-read from Thread->TrapFrame immediately.
-             */
-            TrapFrame = Thread->TrapFrame;
-
-            /*
-             * ARM64 FIX: Re-read TrapFrame and restore linked list after
-             * KiSystemService returns.
-             *
-             * KiSystemService does NOT restore Thread->TrapFrame at exit
-             * (unlike x86-64 where assembly does this). We do it here,
-             * mirroring the x86-64 assembly exit path.
-             *
-             * If PsConvertToGuiThread was called (first win32k system call),
-             * KeSwitchKernelStack copies the kernel stack to a new location
-             * and adjusts Thread->TrapFrame. Our local TrapFrame pointer is
-             * stale (points to freed old stack). Re-reading from
-             * Thread->TrapFrame gets the correct (possibly relocated) address.
-             *
-             * Then we restore Thread->TrapFrame to the previous value via
-             * the linked list (TrapFrame->TrapFrame).
-             */
-            TrapFrame = Thread->TrapFrame;
-            KiArm64DeliverPendingUserApc(&Context->ExceptionFrame,
-                                         TrapFrame);
-            KiArm64RestorePreviousModeFromTrap(Thread, TrapFrame);
-            Thread->TrapFrame = KiGetLinkedTrapFrame(TrapFrame);
-
-            /*
-             * ARM64 FIX: Recompute Context from TrapFrame after possible
-             * stack switch.
-             *
-             * If PsConvertToGuiThread called KeSwitchKernelStack, the entire
-             * kernel stack was copied to a new location. The local 'Context'
-             * pointer still holds the OLD stack address (it was set from x0/sp
-             * by the assembly caller before the stack switch). Writing to the
-             * old Context would go to freed memory, while the assembly code
-             * (trapvec.S) reads TrapFramePointer from the NEW sp-relative
-             * address.
-             *
-             * Since TrapFrame is embedded in Context at a fixed offset
-             * (Context->TrapFrame), we can recover the correct Context
-             * address from the (possibly relocated) TrapFrame pointer.
-             *
-             * For non-stack-switch syscalls, this computes the same Context
-             * as before, so it's a safe no-op.
-             */
-            Context = CONTAINING_RECORD(TrapFrame,
-                                        ARM64_EARLY_SYNC_CONTEXT,
-                                        TrapFrame);
-            if (TrapFrame->Pc < 0x10000)
-            {
-                DPRINT1("[arm64][SVC-RET] instr=0x%lx tf=%p ef=%p pc=%p lr=%p fp=%p sp=%p "
-                        "spsr=0x%lx x0=%p x8=%p linked=%p threadtf=%p\n",
-                        Instruction,
-                        TrapFrame,
-                        &Context->ExceptionFrame,
-                        (PVOID)(ULONG_PTR)TrapFrame->Pc,
-                        (PVOID)(ULONG_PTR)TrapFrame->Lr,
-                        (PVOID)(ULONG_PTR)TrapFrame->Fp,
-                        (PVOID)(ULONG_PTR)TrapFrame->Sp,
-                        TrapFrame->Spsr,
-                        (PVOID)(ULONG_PTR)TrapFrame->X0,
-                        (PVOID)(ULONG_PTR)TrapFrame->X8,
-                        (PVOID)(ULONG_PTR)TrapFrame->TrapFrame,
-                        Thread->TrapFrame);
-            }
-            goto HandledExit;
+            return KiArm64HandleSystemService(Context);
         }
 
 	        case 0x20: /* Instruction abort, lower EL */

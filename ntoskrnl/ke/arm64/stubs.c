@@ -14,6 +14,14 @@
 
 #define ARM64_STUB() UNIMPLEMENTED_DBGBREAK()
 
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+#define KiArm64CalloutInitialStack Spare1
+#define KiArm64CalloutCallbackStack Spare2
+#else
+#define KiArm64CalloutInitialStack InitialStack
+#define KiArm64CalloutCallbackStack CallbackStack
+#endif
+
 /* TODO(ARM64): Replace these stub implementations with real logic once the
  * debugger, user-mode callbacks, and memory manager are fully brought up. */
 
@@ -443,31 +451,154 @@ KeSwitchKernelStack(
         }
     }
 
-    /* Adjust thread trap frame pointer to new stack */
+    /* Relocate the persistent thread VFP image and its optional link. */
+    if (((ULONG_PTR)CurrentThread->VfpState >= OldStackLimit) &&
+        ((ULONG_PTR)CurrentThread->VfpState < (ULONG_PTR)OldStackBase))
+    {
+        PKARM64_VFP_STATE VfpState;
+        PKARM64_VFP_STATE VfpLink;
+        PKSTACK_CONTROL StackControl;
+        PVOID CalloutState;
+
+        CurrentThread->VfpState = (PVOID)((PUCHAR)CurrentThread->VfpState + StackOffset);
+        VfpState = (PKARM64_VFP_STATE)CurrentThread->VfpState;
+        VfpLink = VfpState->Link;
+        if (((ULONG_PTR)VfpLink >= OldStackLimit) &&
+            ((ULONG_PTR)VfpLink < (ULONG_PTR)OldStackBase))
+        {
+            VfpState->Link = (PKARM64_VFP_STATE)((PUCHAR)VfpLink + StackOffset);
+        }
+
+        StackControl = (PKSTACK_CONTROL)((PUCHAR)VfpState - sizeof(*StackControl));
+        CalloutState = StackControl->CalloutState;
+        if (((ULONG_PTR)CalloutState >= OldStackLimit) &&
+            ((ULONG_PTR)CalloutState < (ULONG_PTR)OldStackBase))
+        {
+            StackControl->CalloutState = (PVOID)((PUCHAR)CalloutState + StackOffset);
+        }
+
+#define RELOCATE_STACK_CONTROL_FIELD(Field)                                      \
+        if ((StackControl->Previous.Field >= OldStackLimit) &&                   \
+            (StackControl->Previous.Field < (ULONG_PTR)OldStackBase))            \
+        {                                                                         \
+            StackControl->Previous.Field += StackOffset;                          \
+        }
+        RELOCATE_STACK_CONTROL_FIELD(StackBase);
+        RELOCATE_STACK_CONTROL_FIELD(StackLimit);
+        RELOCATE_STACK_CONTROL_FIELD(KernelStack);
+        RELOCATE_STACK_CONTROL_FIELD(InitialStack);
+#undef RELOCATE_STACK_CONTROL_FIELD
+
+        StackControl->StackBase = (ULONG_PTR)StackBase;
+        StackControl->ActualLimit = (ULONG_PTR)StackLimit;
+    }
+
+    /* Relocate every in-stack trap frame and its trap-local VFP image. */
     if (CurrentThread->TrapFrame != NULL)
     {
-        CurrentThread->TrapFrame = (PKTRAP_FRAME)((PUCHAR)CurrentThread->TrapFrame +
-                                                   StackOffset);
+        PKTRAP_FRAME OldTrapFrame = CurrentThread->TrapFrame;
+        ULONG_PTR FramesLeft = (StackSize / sizeof(KTRAP_FRAME)) + 1;
 
-        /*
-         * ARM64 FIX: Also adjust the linked list pointer inside the trap frame.
-         *
-         * TrapFrame->TrapFrame points to the PREVIOUS trap frame (set up by
-         * the SVC handler in trapc.c before calling KiSystemService). The
-         * previous trap frame is also on the kernel stack (it's the thread-init
-         * trap frame from KiInitializeContextThread). Since we copied the entire
-         * stack, the previous trap frame exists at its old address + StackOffset,
-         * but the pointer stored in TrapFrame->TrapFrame still has the old address.
-         *
-         * We must adjust it so that KiGetLinkedTrapFrame returns the correct
-         * address on the new stack.
-         *
-         * Only adjust if the linked trap frame pointer is non-NULL (it can be
-         * NULL for the very first trap frame in the chain).
-         */
-        if (CurrentThread->TrapFrame->TrapFrame != 0)
+        if (((ULONG_PTR)OldTrapFrame >= OldStackLimit) &&
+            ((ULONG_PTR)OldTrapFrame < (ULONG_PTR)OldStackBase))
         {
-            CurrentThread->TrapFrame->TrapFrame += (ULONG64)StackOffset;
+            CurrentThread->TrapFrame = (PKTRAP_FRAME)((PUCHAR)OldTrapFrame + StackOffset);
+
+            while (FramesLeft-- != 0)
+            {
+                PKTRAP_FRAME NewTrapFrame;
+                PKTRAP_FRAME OldLinkedTrapFrame;
+                PKARM64_VFP_STATE OldVfpState;
+
+                NewTrapFrame = (PKTRAP_FRAME)((PUCHAR)OldTrapFrame + StackOffset);
+                OldLinkedTrapFrame = (PKTRAP_FRAME)(ULONG_PTR)NewTrapFrame->TrapFrame;
+                OldVfpState = NewTrapFrame->VfpState;
+
+                if (((ULONG_PTR)OldVfpState >= OldStackLimit) &&
+                    ((ULONG_PTR)OldVfpState < (ULONG_PTR)OldStackBase))
+                {
+                    PKARM64_VFP_STATE NewVfpState;
+                    PKARM64_VFP_STATE OldVfpLink;
+
+                    NewVfpState = (PKARM64_VFP_STATE)((PUCHAR)OldVfpState + StackOffset);
+                    NewTrapFrame->VfpState = NewVfpState;
+                    OldVfpLink = NewVfpState->Link;
+                    if (((ULONG_PTR)OldVfpLink >= OldStackLimit) &&
+                        ((ULONG_PTR)OldVfpLink < (ULONG_PTR)OldStackBase))
+                    {
+                        NewVfpState->Link =
+                            (PKARM64_VFP_STATE)((PUCHAR)OldVfpLink + StackOffset);
+                    }
+                }
+
+                if (OldLinkedTrapFrame == OldTrapFrame)
+                {
+                    NewTrapFrame->TrapFrame = (ULONG64)(ULONG_PTR)NewTrapFrame;
+                    break;
+                }
+
+                if (((ULONG_PTR)OldLinkedTrapFrame < OldStackLimit) ||
+                    ((ULONG_PTR)OldLinkedTrapFrame >= (ULONG_PTR)OldStackBase))
+                {
+                    break;
+                }
+
+                NewTrapFrame->TrapFrame =
+                    (ULONG64)((PUCHAR)OldLinkedTrapFrame + StackOffset);
+                OldTrapFrame = OldLinkedTrapFrame;
+            }
+        }
+    }
+
+    /* Relocate the ReactOS callback chain until KSTACK_CONTROL owns it. */
+    if (CurrentThread->CallbackStack != NULL)
+    {
+        PKCALLOUT_FRAME OldCalloutFrame = (PKCALLOUT_FRAME)CurrentThread->CallbackStack;
+        ULONG_PTR FramesLeft = (StackSize / sizeof(KCALLOUT_FRAME)) + 1;
+
+        if (((ULONG_PTR)OldCalloutFrame >= OldStackLimit) &&
+            ((ULONG_PTR)OldCalloutFrame < (ULONG_PTR)OldStackBase))
+        {
+            CurrentThread->CallbackStack = (PVOID)((PUCHAR)OldCalloutFrame + StackOffset);
+
+            while (FramesLeft-- != 0)
+            {
+                PKCALLOUT_FRAME NewCalloutFrame;
+                PKCALLOUT_FRAME OldLinkedCalloutFrame;
+
+                NewCalloutFrame = (PKCALLOUT_FRAME)((PUCHAR)OldCalloutFrame + StackOffset);
+
+#define RELOCATE_CALLOUT_FIELD(Field)                                            \
+                if ((NewCalloutFrame->Field >= OldStackLimit) &&                 \
+                    (NewCalloutFrame->Field < (ULONG_PTR)OldStackBase))          \
+                {                                                                 \
+                    NewCalloutFrame->Field += StackOffset;                        \
+                }
+                RELOCATE_CALLOUT_FIELD(TrapFrame);
+                RELOCATE_CALLOUT_FIELD(KiArm64CalloutInitialStack);
+                RELOCATE_CALLOUT_FIELD(OutputBuffer);
+                RELOCATE_CALLOUT_FIELD(OutputLength);
+#undef RELOCATE_CALLOUT_FIELD
+
+                OldLinkedCalloutFrame =
+                    (PKCALLOUT_FRAME)(ULONG_PTR)NewCalloutFrame->KiArm64CalloutCallbackStack;
+                if (OldLinkedCalloutFrame == OldCalloutFrame)
+                {
+                    NewCalloutFrame->KiArm64CalloutCallbackStack =
+                        (ULONG64)(ULONG_PTR)NewCalloutFrame;
+                    break;
+                }
+
+                if (((ULONG_PTR)OldLinkedCalloutFrame < OldStackLimit) ||
+                    ((ULONG_PTR)OldLinkedCalloutFrame >= (ULONG_PTR)OldStackBase))
+                {
+                    break;
+                }
+
+                NewCalloutFrame->KiArm64CalloutCallbackStack =
+                    (ULONG64)((PUCHAR)OldLinkedCalloutFrame + StackOffset);
+                OldCalloutFrame = OldLinkedCalloutFrame;
+            }
         }
     }
 

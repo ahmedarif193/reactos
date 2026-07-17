@@ -726,6 +726,7 @@ NtCallbackReturn(
     PKTHREAD CurrentThread;
     PKCALLOUT_FRAME CalloutFrame;
     PKTRAP_FRAME CallbackTrapFrame, TrapFrame;
+    PKARM64_VFP_STATE CallbackVfpState, TrapVfpState;
     PKIPCR Pcr;
 
     CurrentThread = KeGetCurrentThread();
@@ -748,7 +749,14 @@ NtCallbackReturn(
 
     if (CallbackStatus == STATUS_CALLBACK_POP_STACK)
     {
+        TrapVfpState = TrapFrame->VfpState;
+        CallbackVfpState = CallbackTrapFrame->VfpState;
         *TrapFrame = *CallbackTrapFrame;
+        if ((TrapVfpState != NULL) && (CallbackVfpState != NULL))
+        {
+            *TrapVfpState = *CallbackVfpState;
+        }
+        TrapFrame->VfpState = TrapVfpState;
     }
 
     if (Pcr != NULL)

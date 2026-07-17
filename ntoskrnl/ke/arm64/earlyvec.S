@@ -20,8 +20,41 @@
 .equ ARM64_EARLY_STATE_REG_PSTATE,    0x130
 .equ ARM64_EARLY_STATE_TRAP_PTR,      0x138
 .equ ARM64_EARLY_STATE_EXC_PTR,       0x140
-.equ ARM64_EARLY_STATE_TRAP_FRAME,    0x148
-.equ ARM64_EARLY_STATE_SIZE,          0x380
+.equ ARM64_EARLY_STATE_EXC_FRAME,     0x148
+.equ ARM64_EARLY_STATE_TRAP_FRAME,    0x210
+.equ ARM64_EARLY_STATE_VFP,           0x370
+.equ ARM64_EARLY_STATE_FPCR,          0x378
+.equ ARM64_EARLY_STATE_FPSR,          0x37C
+.equ ARM64_EARLY_STATE_NEON,          0x380
+.equ ARM64_EARLY_STATE_SIZE,          0x590
+
+/* Keep the Windows ARM64 16-byte red zone below the interrupted SP untouched. */
+.equ ARM64_EARLY_ENTRY_FRAME_SIZE,    0x20
+
+.macro ARM64_CAPTURE_EARLY_VFP
+    str xzr, [sp, #ARM64_EARLY_STATE_VFP]
+    mrs x9, fpcr
+    str w9, [sp, #ARM64_EARLY_STATE_FPCR]
+    mrs x9, fpsr
+    str w9, [sp, #ARM64_EARLY_STATE_FPSR]
+    add x9, sp, #ARM64_EARLY_STATE_NEON
+    stp q0, q1, [x9, #0x000]
+    stp q2, q3, [x9, #0x020]
+    stp q4, q5, [x9, #0x040]
+    stp q6, q7, [x9, #0x060]
+    stp q8, q9, [x9, #0x080]
+    stp q10, q11, [x9, #0x0A0]
+    stp q12, q13, [x9, #0x0C0]
+    stp q14, q15, [x9, #0x0E0]
+    stp q16, q17, [x9, #0x100]
+    stp q18, q19, [x9, #0x120]
+    stp q20, q21, [x9, #0x140]
+    stp q22, q23, [x9, #0x160]
+    stp q24, q25, [x9, #0x180]
+    stp q26, q27, [x9, #0x1A0]
+    stp q28, q29, [x9, #0x1C0]
+    stp q30, q31, [x9, #0x1E0]
+.endm
 
 /*
  * ============================================================================
@@ -35,8 +68,8 @@
     .global KiArm64VectorSyncSp0
     .seh_proc KiArm64VectorSyncSp0
 KiArm64VectorSyncSp0:
-    stp x29, x30, [sp, #-16]!
-    .seh_save_fplr_x 16
+    stp x29, x30, [sp, #-32]!
+    .seh_save_fplr_x 32
     mov x29, sp
     .seh_set_fp
     sub sp, sp, #ARM64_EARLY_STATE_SIZE
@@ -75,7 +108,7 @@ KiArm64VectorSyncSp0:
     str x9, [sp, #(ARM64_EARLY_STATE_REGS + 29 * 8)]
     ldr x10, [x29, #8]
     str x10, [sp, #(ARM64_EARLY_STATE_REGS + 30 * 8)]
-    add x11, x29, #16
+    add x11, x29, #ARM64_EARLY_ENTRY_FRAME_SIZE
     str x11, [sp, #ARM64_EARLY_STATE_REG_SP]
     mrs x12, elr_el1
     str x12, [sp, #ARM64_EARLY_STATE_ELR]
@@ -91,6 +124,7 @@ KiArm64VectorSyncSp0:
     str x16, [sp, #ARM64_EARLY_STATE_VECTORID]
     str xzr, [sp, #ARM64_EARLY_STATE_TRAP_PTR]
     str xzr, [sp, #ARM64_EARLY_STATE_EXC_PTR]
+    ARM64_CAPTURE_EARLY_VFP
     mov x0, sp
     mov x19, sp
     bl KiArm64HandleSynchronousException
@@ -98,7 +132,7 @@ KiArm64VectorSyncSp0:
     ldr x2, [sp, #ARM64_EARLY_STATE_TRAP_PTR]
     ldr x3, [sp, #ARM64_EARLY_STATE_EXC_PTR]
     add sp, sp, #ARM64_EARLY_STATE_SIZE
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
     mov x0, x2
     mov x1, x3
     bl KiTrapReturn
@@ -115,8 +149,8 @@ KiArm64VectorSyncSp0:
     .global KiArm64VectorSyncSpx
     .seh_proc KiArm64VectorSyncSpx
 KiArm64VectorSyncSpx:
-    stp x29, x30, [sp, #-16]!
-    .seh_save_fplr_x 16
+    stp x29, x30, [sp, #-32]!
+    .seh_save_fplr_x 32
     mov x29, sp
     .seh_set_fp
     sub sp, sp, #ARM64_EARLY_STATE_SIZE
@@ -155,7 +189,7 @@ KiArm64VectorSyncSpx:
     str x9, [sp, #(ARM64_EARLY_STATE_REGS + 29 * 8)]
     ldr x10, [x29, #8]
     str x10, [sp, #(ARM64_EARLY_STATE_REGS + 30 * 8)]
-    add x11, x29, #16
+    add x11, x29, #ARM64_EARLY_ENTRY_FRAME_SIZE
     str x11, [sp, #ARM64_EARLY_STATE_REG_SP]
     mrs x12, elr_el1
     str x12, [sp, #ARM64_EARLY_STATE_ELR]
@@ -171,6 +205,7 @@ KiArm64VectorSyncSpx:
     str x16, [sp, #ARM64_EARLY_STATE_VECTORID]
     str xzr, [sp, #ARM64_EARLY_STATE_TRAP_PTR]
     str xzr, [sp, #ARM64_EARLY_STATE_EXC_PTR]
+    ARM64_CAPTURE_EARLY_VFP
     mov x0, sp
     mov x19, sp
     bl KiArm64HandleSynchronousException
@@ -178,7 +213,7 @@ KiArm64VectorSyncSpx:
     ldr x2, [sp, #ARM64_EARLY_STATE_TRAP_PTR]
     ldr x3, [sp, #ARM64_EARLY_STATE_EXC_PTR]
     add sp, sp, #ARM64_EARLY_STATE_SIZE
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
     mov x0, x2
     mov x1, x3
     bl KiTrapReturn
@@ -195,8 +230,8 @@ KiArm64VectorSyncSpx:
     .global KiArm64VectorSyncLowerA64
     .seh_proc KiArm64VectorSyncLowerA64
 KiArm64VectorSyncLowerA64:
-    stp x29, x30, [sp, #-16]!
-    .seh_save_fplr_x 16
+    stp x29, x30, [sp, #-32]!
+    .seh_save_fplr_x 32
     mov x29, sp
     .seh_set_fp
     sub sp, sp, #ARM64_EARLY_STATE_SIZE
@@ -252,6 +287,7 @@ KiArm64VectorSyncLowerA64:
     str x16, [sp, #ARM64_EARLY_STATE_VECTORID]
     str xzr, [sp, #ARM64_EARLY_STATE_TRAP_PTR]
     str xzr, [sp, #ARM64_EARLY_STATE_EXC_PTR]
+    ARM64_CAPTURE_EARLY_VFP
     mov x0, sp
     mov x19, sp
     bl KiArm64HandleSynchronousException
@@ -259,7 +295,7 @@ KiArm64VectorSyncLowerA64:
     ldr x2, [sp, #ARM64_EARLY_STATE_TRAP_PTR]
     ldr x3, [sp, #ARM64_EARLY_STATE_EXC_PTR]
     add sp, sp, #ARM64_EARLY_STATE_SIZE
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
     mov x0, x2
     mov x1, x3
     bl KiTrapReturn
@@ -276,8 +312,8 @@ KiArm64VectorSyncLowerA64:
     .global KiArm64VectorIrqSp0
     .seh_proc KiArm64VectorIrqSp0
 KiArm64VectorIrqSp0:
-    stp x29, x30, [sp, #-16]!
-    .seh_save_fplr_x 16
+    stp x29, x30, [sp, #-32]!
+    .seh_save_fplr_x 32
     mov x29, sp
     .seh_set_fp
     sub sp, sp, #64
@@ -304,11 +340,11 @@ KiArm64VectorIrqSp0:
     ldp x0, x1, [sp, #0]
     ldp x2, x3, [sp, #16]
     mov sp, x29
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
     eret
 .Lirq1_hang:
     mov sp, x29
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
 .Lirq1_wfe:
     wfe
     b .Lirq1_wfe
@@ -318,8 +354,8 @@ KiArm64VectorIrqSp0:
     .global KiArm64VectorFiqSp0
     .seh_proc KiArm64VectorFiqSp0
 KiArm64VectorFiqSp0:
-    stp x29, x30, [sp, #-16]!
-    .seh_save_fplr_x 16
+    stp x29, x30, [sp, #-32]!
+    .seh_save_fplr_x 32
     mov x29, sp
     .seh_set_fp
     sub sp, sp, #64
@@ -346,11 +382,11 @@ KiArm64VectorFiqSp0:
     ldp x0, x1, [sp, #0]
     ldp x2, x3, [sp, #16]
     mov sp, x29
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
     eret
 .Lfiq2_hang:
     mov sp, x29
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
 .Lfiq2_wfe:
     wfe
     b .Lfiq2_wfe
@@ -360,8 +396,8 @@ KiArm64VectorFiqSp0:
     .global KiArm64VectorSErrorSp0
     .seh_proc KiArm64VectorSErrorSp0
 KiArm64VectorSErrorSp0:
-    stp x29, x30, [sp, #-16]!
-    .seh_save_fplr_x 16
+    stp x29, x30, [sp, #-32]!
+    .seh_save_fplr_x 32
     mov x29, sp
     .seh_set_fp
     sub sp, sp, #64
@@ -388,11 +424,11 @@ KiArm64VectorSErrorSp0:
     ldp x0, x1, [sp, #0]
     ldp x2, x3, [sp, #16]
     mov sp, x29
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
     eret
 .Lserr3_hang:
     mov sp, x29
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
 .Lserr3_wfe:
     wfe
     b .Lserr3_wfe
@@ -402,8 +438,8 @@ KiArm64VectorSErrorSp0:
     .global KiArm64VectorIrqSpx
     .seh_proc KiArm64VectorIrqSpx
 KiArm64VectorIrqSpx:
-    stp x29, x30, [sp, #-16]!
-    .seh_save_fplr_x 16
+    stp x29, x30, [sp, #-32]!
+    .seh_save_fplr_x 32
     mov x29, sp
     .seh_set_fp
     sub sp, sp, #64
@@ -430,11 +466,11 @@ KiArm64VectorIrqSpx:
     ldp x0, x1, [sp, #0]
     ldp x2, x3, [sp, #16]
     mov sp, x29
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
     eret
 .Lirq5_hang:
     mov sp, x29
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
 .Lirq5_wfe:
     wfe
     b .Lirq5_wfe
@@ -444,8 +480,8 @@ KiArm64VectorIrqSpx:
     .global KiArm64VectorFiqSpx
     .seh_proc KiArm64VectorFiqSpx
 KiArm64VectorFiqSpx:
-    stp x29, x30, [sp, #-16]!
-    .seh_save_fplr_x 16
+    stp x29, x30, [sp, #-32]!
+    .seh_save_fplr_x 32
     mov x29, sp
     .seh_set_fp
     sub sp, sp, #64
@@ -472,11 +508,11 @@ KiArm64VectorFiqSpx:
     ldp x0, x1, [sp, #0]
     ldp x2, x3, [sp, #16]
     mov sp, x29
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
     eret
 .Lfiq6_hang:
     mov sp, x29
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
 .Lfiq6_wfe:
     wfe
     b .Lfiq6_wfe
@@ -486,8 +522,8 @@ KiArm64VectorFiqSpx:
     .global KiArm64VectorSErrorSpx
     .seh_proc KiArm64VectorSErrorSpx
 KiArm64VectorSErrorSpx:
-    stp x29, x30, [sp, #-16]!
-    .seh_save_fplr_x 16
+    stp x29, x30, [sp, #-32]!
+    .seh_save_fplr_x 32
     mov x29, sp
     .seh_set_fp
     sub sp, sp, #64
@@ -514,11 +550,11 @@ KiArm64VectorSErrorSpx:
     ldp x0, x1, [sp, #0]
     ldp x2, x3, [sp, #16]
     mov sp, x29
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
     eret
 .Lserr7_hang:
     mov sp, x29
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
 .Lserr7_wfe:
     wfe
     b .Lserr7_wfe
@@ -528,8 +564,8 @@ KiArm64VectorSErrorSpx:
     .global KiArm64VectorIrqLowerA64
     .seh_proc KiArm64VectorIrqLowerA64
 KiArm64VectorIrqLowerA64:
-    stp x29, x30, [sp, #-16]!
-    .seh_save_fplr_x 16
+    stp x29, x30, [sp, #-32]!
+    .seh_save_fplr_x 32
     mov x29, sp
     .seh_set_fp
     sub sp, sp, #64
@@ -556,11 +592,11 @@ KiArm64VectorIrqLowerA64:
     ldp x0, x1, [sp, #0]
     ldp x2, x3, [sp, #16]
     mov sp, x29
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
     eret
 .Lirq9_hang:
     mov sp, x29
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
 .Lirq9_wfe:
     wfe
     b .Lirq9_wfe
@@ -570,8 +606,8 @@ KiArm64VectorIrqLowerA64:
     .global KiArm64VectorFiqLowerA64
     .seh_proc KiArm64VectorFiqLowerA64
 KiArm64VectorFiqLowerA64:
-    stp x29, x30, [sp, #-16]!
-    .seh_save_fplr_x 16
+    stp x29, x30, [sp, #-32]!
+    .seh_save_fplr_x 32
     mov x29, sp
     .seh_set_fp
     sub sp, sp, #64
@@ -598,11 +634,11 @@ KiArm64VectorFiqLowerA64:
     ldp x0, x1, [sp, #0]
     ldp x2, x3, [sp, #16]
     mov sp, x29
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
     eret
 .Lfiq10_hang:
     mov sp, x29
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
 .Lfiq10_wfe:
     wfe
     b .Lfiq10_wfe
@@ -612,8 +648,8 @@ KiArm64VectorFiqLowerA64:
     .global KiArm64VectorSErrorLowerA64
     .seh_proc KiArm64VectorSErrorLowerA64
 KiArm64VectorSErrorLowerA64:
-    stp x29, x30, [sp, #-16]!
-    .seh_save_fplr_x 16
+    stp x29, x30, [sp, #-32]!
+    .seh_save_fplr_x 32
     mov x29, sp
     .seh_set_fp
     sub sp, sp, #64
@@ -640,11 +676,11 @@ KiArm64VectorSErrorLowerA64:
     ldp x0, x1, [sp, #0]
     ldp x2, x3, [sp, #16]
     mov sp, x29
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
     eret
 .Lserr11_hang:
     mov sp, x29
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
 .Lserr11_wfe:
     wfe
     b .Lserr11_wfe
@@ -654,8 +690,8 @@ KiArm64VectorSErrorLowerA64:
     .global KiArm64VectorSyncLowerA32
     .seh_proc KiArm64VectorSyncLowerA32
 KiArm64VectorSyncLowerA32:
-    stp x29, x30, [sp, #-16]!
-    .seh_save_fplr_x 16
+    stp x29, x30, [sp, #-32]!
+    .seh_save_fplr_x 32
     mov x29, sp
     .seh_set_fp
     sub sp, sp, #64
@@ -682,11 +718,11 @@ KiArm64VectorSyncLowerA32:
     ldp x0, x1, [sp, #0]
     ldp x2, x3, [sp, #16]
     mov sp, x29
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
     eret
 .Lsync12_hang:
     mov sp, x29
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
 .Lsync12_wfe:
     wfe
     b .Lsync12_wfe
@@ -696,8 +732,8 @@ KiArm64VectorSyncLowerA32:
     .global KiArm64VectorIrqLowerA32
     .seh_proc KiArm64VectorIrqLowerA32
 KiArm64VectorIrqLowerA32:
-    stp x29, x30, [sp, #-16]!
-    .seh_save_fplr_x 16
+    stp x29, x30, [sp, #-32]!
+    .seh_save_fplr_x 32
     mov x29, sp
     .seh_set_fp
     sub sp, sp, #64
@@ -724,11 +760,11 @@ KiArm64VectorIrqLowerA32:
     ldp x0, x1, [sp, #0]
     ldp x2, x3, [sp, #16]
     mov sp, x29
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
     eret
 .Lirq13_hang:
     mov sp, x29
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
 .Lirq13_wfe:
     wfe
     b .Lirq13_wfe
@@ -738,8 +774,8 @@ KiArm64VectorIrqLowerA32:
     .global KiArm64VectorFiqLowerA32
     .seh_proc KiArm64VectorFiqLowerA32
 KiArm64VectorFiqLowerA32:
-    stp x29, x30, [sp, #-16]!
-    .seh_save_fplr_x 16
+    stp x29, x30, [sp, #-32]!
+    .seh_save_fplr_x 32
     mov x29, sp
     .seh_set_fp
     sub sp, sp, #64
@@ -766,11 +802,11 @@ KiArm64VectorFiqLowerA32:
     ldp x0, x1, [sp, #0]
     ldp x2, x3, [sp, #16]
     mov sp, x29
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
     eret
 .Lfiq14_hang:
     mov sp, x29
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
 .Lfiq14_wfe:
     wfe
     b .Lfiq14_wfe
@@ -780,8 +816,8 @@ KiArm64VectorFiqLowerA32:
     .global KiArm64VectorSErrorLowerA32
     .seh_proc KiArm64VectorSErrorLowerA32
 KiArm64VectorSErrorLowerA32:
-    stp x29, x30, [sp, #-16]!
-    .seh_save_fplr_x 16
+    stp x29, x30, [sp, #-32]!
+    .seh_save_fplr_x 32
     mov x29, sp
     .seh_set_fp
     sub sp, sp, #64
@@ -808,11 +844,11 @@ KiArm64VectorSErrorLowerA32:
     ldp x0, x1, [sp, #0]
     ldp x2, x3, [sp, #16]
     mov sp, x29
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
     eret
 .Lserr15_hang:
     mov sp, x29
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
 .Lserr15_wfe:
     wfe
     b .Lserr15_wfe

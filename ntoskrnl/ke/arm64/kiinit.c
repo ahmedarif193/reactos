@@ -7,7 +7,6 @@
  */
 
 #include <ntoskrnl.h>
-#include <fpstate.h>
 #define NDEBUG
 #include <debug.h>
 #include <arm64pl011.h>
@@ -513,9 +512,13 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
 
     if ((IdleStack == KiArm64P0BootStack) && (KiArm64P0BootStackLimit != NULL))
     {
-        InitThread->InitialStack = KiArm64P0BootStack;
+        PKSTACK_CONTROL StackControl = (PKSTACK_CONTROL)InitThread->InitialStack;
+
+        /* KiInitializeContextThread reserved the persistent VFP image here. */
         InitThread->StackBase = KiArm64P0BootStack;
         InitThread->StackLimit = (ULONG_PTR)KiArm64P0BootStackLimit;
+        StackControl->StackBase = (ULONG_PTR)KiArm64P0BootStack;
+        StackControl->ActualLimit = (ULONG_PTR)KiArm64P0BootStackLimit;
     }
 
     InitThread->NextProcessor = Number;
@@ -973,17 +976,9 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Skip DbgPrintEx for now, KD not yet initialized */
 
     /*
-     * ARM64: Configure CPU features based on hardware capabilities.
-     * Use ID registers to detect features before disabling unsupported ones.
-     *
-     * LAZY FP/SVE CONTEXT SWITCHING:
-     * We now support lazy floating-point context switching. This means:
-     * 1. FP/NEON access is initially enabled for the kernel (essential)
-     * 2. SVE access causes a trap, which allocates state on first use
-     * 3. SME access causes a trap (not yet fully implemented)
-     * 4. Per-thread FP state is saved/restored only when needed
-     *
-     * This provides optimal performance for threads that don't use FP/SVE.
+     * Configure per-CPU architectural policy after reading the hardware ID
+     * registers. FP/NEON is enabled and eagerly preserved. SVE and SME remain
+     * trapped because Windows exposes no kernel/driver ABI for their state.
      */
     KiArm64ApplySctlrPolicy();
 
@@ -1061,31 +1056,18 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         /* Read current CPACR_EL1 */
         __asm__ __volatile__("mrs %0, cpacr_el1" : "=r"(Cpacr));
 
-        /*
-         * Enable FP/ASIMD for kernel initialization.
-         * During boot we need FP enabled, but after thread scheduling starts,
-         * we use lazy context switching (trap-on-first-use).
-         */
+        /* Windows ARM64 keeps base FP/ASIMD enabled and switches it eagerly. */
         Cpacr |= (3ULL << 20); /* FPEN = 11 (no trap on FP) */
 
-        /*
-         * SVE: Enable with lazy context switching via trap-on-first-use.
-         * When a thread first uses SVE, it will trap and we allocate state.
-         * This is more efficient than disabling SVE entirely because:
-         * 1. User-mode apps with SVE-optimized libraries can still work
-         * 2. We only pay the cost of SVE state for threads that use it
-         */
+        /* SVE stays unavailable until all Z/P/FFR state is preserved. */
         if (Arm64CpuFeatures.SveSupported)
         {
-            Cpacr &= ~(3ULL << 16); /* ZEN = 00 (trap SVE -> lazy context switch) */
+            Cpacr &= ~(3ULL << 16); /* ZEN = 00 (trap SVE) */
         }
 
         /*
-         * SME: Trap for now. Full SME support would require:
-         * 1. Streaming SVE mode context save/restore
-         * 2. ZA (matrix) state management
-         * 3. PSTATE.SM/ZA bit handling
-         * For now, SME traps are handled but state is not preserved.
+         * SME additionally requires streaming-SVE mode, ZA state and
+         * PSTATE.SM/ZA preservation, so it remains unavailable too.
          */
         if (Arm64CpuFeatures.SmeSupported)
         {
@@ -1095,9 +1077,6 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         /* Apply configuration */
         __asm__ __volatile__("msr cpacr_el1, %0" : : "r"(Cpacr));
         __asm__ __volatile__("isb" ::: "memory");
-
-        /* Publish hardware FP capability policy used by trap handlers. */
-        KiArm64InitializeFpSupport();
     }
     else
     {
@@ -1107,9 +1086,6 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
          * Per-CPU system registers (CPACR_EL1, SCTLR_EL1, TCR_EL1, PSTATE.PAN)
          * are NOT shared across CPUs. Each AP starts with reset defaults after
          * PSCI CPU_ON and must be configured independently.
-         *
-         * Feature detection globals (KiArm64HasNeon, KiArm64HasSve, etc.)
-         * were set by the BSP and are valid for all CPUs in a homogeneous system.
          */
         ARM64_CPU_FEATURES LocalFeatures;
         ULONG64 Cpacr;
@@ -1254,10 +1230,7 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         Pcr->CurrentIrql = DISPATCH_LEVEL;
     }
 
-    /*
-     * Defer FP trap-on-first-use activation until later scheduling paths.
-     * Early KiInitializeKernel execution still relies on fully enabled FP.
-     */
+    /* Base FP/NEON stays enabled; SVE and SME stay trapped on every CPU. */
 
     if (Pcr == NULL)
     {

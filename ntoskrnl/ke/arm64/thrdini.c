@@ -7,7 +7,6 @@
  */
 
 #include <ntoskrnl.h>
-#include <fpstate.h>
 #define NDEBUG
 #include <debug.h>
 #include <reactos/smpdbg.h>
@@ -15,6 +14,12 @@
 /*
  * Stack layout used during context acquisition:
  *
+ *   +-------------------------------+
+ *   | persistent KARM64_VFP_STATE   |  <- Thread->VfpState
+ *   +-------------------------------+
+ *   |       KSTACK_CONTROL          |  <- Thread->InitialStack
+ *   +-------------------------------+
+ *   | trap-local VFP state (user)   |
  *   +-------------------------------+
  *   |   KTRAP_FRAME (user threads)  |
  *   +-------------------------------+
@@ -32,6 +37,7 @@ typedef struct _KUINIT_FRAME
     KSTART_FRAME StartFrame;
     KEXCEPTION_FRAME ExceptionFrame;
     KTRAP_FRAME TrapFrame;
+    KARM64_VFP_STATE VfpState;
 } KUINIT_FRAME, *PKUINIT_FRAME;
 
 typedef struct _KKINIT_FRAME
@@ -74,14 +80,24 @@ KiInitializeContextThread(_Inout_ PKTHREAD Thread,
                           _In_opt_ PCONTEXT ContextPointer)
 {
     ULONG_PTR StackTop;
+    ULONG_PTR RawStackTop;
+    PKSTACK_CONTROL StackControl;
     PKSWITCH_FRAME SwitchFrame;
     PKSTART_FRAME StartFrame;
 
     ASSERT(Thread != NULL);
     ASSERT(SystemRoutine != NULL);
 
-    StackTop = (ULONG_PTR)ALIGN_DOWN_POINTER_BY(Thread->InitialStack, 16);
-    Thread->InitialStack = (PVOID)StackTop;
+    RawStackTop = (ULONG_PTR)ALIGN_DOWN_POINTER_BY(Thread->InitialStack, 16);
+    Thread->VfpState = (PVOID)(RawStackTop - sizeof(KARM64_VFP_STATE));
+    RtlZeroMemory(Thread->VfpState, sizeof(KARM64_VFP_STATE));
+
+    StackTop = (ULONG_PTR)Thread->VfpState - sizeof(KSTACK_CONTROL);
+    StackControl = (PKSTACK_CONTROL)StackTop;
+    RtlZeroMemory(StackControl, sizeof(*StackControl));
+    StackControl->StackBase = RawStackTop;
+    StackControl->ActualLimit = RawStackTop - KERNEL_STACK_SIZE;
+    Thread->InitialStack = StackControl;
 
     if (ContextPointer != NULL)
     {
@@ -99,6 +115,7 @@ KiInitializeContextThread(_Inout_ PKTHREAD Thread,
         StartFrame = &InitFrame->StartFrame;
         ExceptionFrame = &InitFrame->ExceptionFrame;
         TrapFrame = &InitFrame->TrapFrame;
+        TrapFrame->VfpState = &InitFrame->VfpState;
 
         KiArm64SetupStartFrame(StartFrame,
                                SystemRoutine,
@@ -385,10 +402,7 @@ KiSwapContextResume(
 
     KiSwapProcess(NewProcess, OldProcess);
 
-    /*
-     * FP/SIMD trap-on-first-use remains deferred until the ARM64 context-switch
-     * path has validated IRQL-safe state handling.
-     */
+    /* KiSwapContext saves and restores the complete eager per-thread VFP image. */
 
     /*
      * ARM64 ABI: Do NOT set x18=TEB or tpidr_el0=TEB here.

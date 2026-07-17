@@ -681,6 +681,30 @@ KeFlushIoBuffers(_Inout_ PMDL Mdl,
     }
 }
 
+/*
+ * Windows ARM64 treats the base FP/NEON register bank as part of the normal
+ * kernel ABI. The WDK exposes KFLOATING_SAVE as an opaque dummy and inlines
+ * these operations as successful no-ops. Keep real exports for precompiled
+ * drivers that import the routines instead of using the inline definitions.
+ */
+NTSTATUS
+NTAPI
+KxSaveFloatingPointState(
+    _Out_ PKFLOATING_SAVE FloatingState)
+{
+    UNREFERENCED_PARAMETER(FloatingState);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+KxRestoreFloatingPointState(
+    _In_ PKFLOATING_SAVE FloatingState)
+{
+    UNREFERENCED_PARAMETER(FloatingState);
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 NTAPI
 NtVdmControl(_In_ ULONG ControlCode,

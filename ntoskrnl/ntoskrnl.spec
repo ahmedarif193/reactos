@@ -2588,10 +2588,10 @@
 @ stub -arch=arm64 KeRemoveQueueDpcEx
 @ stub -arch=arm64 KeRemoveQueueEx
 @ stub -arch=arm64 KeReportCacheIncoherentDevice
-@ stub -arch=arm64 KeRestoreExtendedProcessorState
+@ stdcall -arch=arm64 KeRestoreExtendedProcessorState(ptr)
 @ stub -arch=arm64 KeRestoreProcessorState
 @ stdcall -arch=arm64 KeRevertToUserGroupAffinityThread(ptr)
-@ stub -arch=arm64 KeSaveExtendedProcessorState
+@ stdcall -arch=arm64 KeSaveExtendedProcessorState(int64 ptr)
 @ stdcall -arch=arm64 KeSetActualBasePriorityThread(ptr long)
 @ stdcall -arch=arm64 KeSetHardwareCounterConfiguration(ptr long)
 @ stdcall -arch=arm64 KeSetHeteroCpuPolicyThread(ptr long long)
@@ -3003,7 +3003,7 @@
 @ stub -arch=arm64 RtlGetConsoleSessionForegroundProcessId
 @ stub -arch=arm64 RtlGetCurrentServiceSessionId
 @ stub -arch=arm64 RtlGetEnabledExtendedAndSupervisorFeatures
-@ stub -arch=arm64 RtlGetEnabledExtendedFeatures
+@ stdcall -arch=arm64 RtlGetEnabledExtendedFeatures(int64)
 @ stub -arch=arm64 RtlGetExtendedContextLength
 @ stub -arch=arm64 RtlGetIntegerAtom
 @ stub -arch=arm64 RtlGetLastRange

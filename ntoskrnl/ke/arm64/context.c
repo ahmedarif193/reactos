@@ -42,7 +42,10 @@ KeContextToTrapFrame(_In_ PCONTEXT Context,
         KeRaiseIrql(APC_LEVEL, &OldIrql);
     }
 
-    /* Integer/volatile register bank (x0-x18 + FP/LR) */
+    /*
+     * Win11 groups the trap-resident X0-X18 and FP/LR bank when any of
+     * CONTEXT_INTEGER, CONTEXT_CONTROL or CONTEXT_X18 is requested.
+     */
     if (ContextFlags & (CONTEXT_INTEGER | CONTEXT_CONTROL | CONTEXT_X18))
     {
         for (Index = 0; Index <= 18; Index++)
@@ -107,20 +110,22 @@ KeContextToTrapFrame(_In_ PCONTEXT Context,
         TrapFrame->DebugRegistersValid = TRUE;
     }
 
-    /* Floating point/NEON state: mirror into the per-CPU processor state so
-     * KD (and later context swaps) can observe modifications. We avoid
-     * touching hardware registers here; the arch save/restore helpers are
-     * responsible for syncing ProcessorState <-> hardware. */
+    /* The trap owns the exact interrupted vector snapshot. */
     if (ContextFlags & CONTEXT_FLOATING_POINT)
     {
-        PKPRCB Prcb = KeGetCurrentPrcb();
-        if (Prcb != NULL)
+        PKARM64_VFP_STATE VfpState = TrapFrame->VfpState;
+
+        if (VfpState != NULL)
         {
-            RtlCopyMemory(Prcb->ProcessorState.ContextFrame.V,
-                          Context->V,
-                          sizeof(Context->V));
-            Prcb->ProcessorState.ContextFrame.Fpcr = Context->Fpcr;
-            Prcb->ProcessorState.ContextFrame.Fpsr = Context->Fpsr;
+            RtlCopyMemory(VfpState->V, Context->V, sizeof(Context->V));
+            VfpState->Fpcr = Context->Fpcr;
+            VfpState->Fpsr = Context->Fpsr;
+        }
+
+        if (ExceptionFrame != NULL)
+        {
+            ExceptionFrame->Fpcr = Context->Fpcr;
+            ExceptionFrame->Fpsr = Context->Fpsr;
         }
     }
 
@@ -200,19 +205,16 @@ KeTrapFrameToContext(_In_ PKTRAP_FRAME TrapFrame,
         }
     }
 
-    /* Floating point/NEON state: provide a view from the per-CPU snapshot.
-     * This keeps KD context queries consistent even before full FP save/restore
-     * is implemented in the trap path. */
+    /* Return the state captured with this trap, never another CPU/thread. */
     if (ContextFlags & CONTEXT_FLOATING_POINT)
     {
-        PKPRCB Prcb = KeGetCurrentPrcb();
-        if (Prcb != NULL)
+        PKARM64_VFP_STATE VfpState = TrapFrame->VfpState;
+
+        if (VfpState != NULL)
         {
-            RtlCopyMemory(Context->V,
-                          Prcb->ProcessorState.ContextFrame.V,
-                          sizeof(Context->V));
-            Context->Fpcr = Prcb->ProcessorState.ContextFrame.Fpcr;
-            Context->Fpsr = Prcb->ProcessorState.ContextFrame.Fpsr;
+            RtlCopyMemory(Context->V, VfpState->V, sizeof(Context->V));
+            Context->Fpcr = VfpState->Fpcr;
+            Context->Fpsr = VfpState->Fpsr;
         }
     }
 

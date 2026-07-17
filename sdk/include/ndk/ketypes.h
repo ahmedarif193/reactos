@@ -1789,11 +1789,7 @@ typedef struct _KTHREAD
     SHORT PriorityDecrement;                             // 0x1FE
     LIST_ENTRY QueueListEntry;                           // 0x200
     ULONG64 SwitchFrame[4];                              // 0x210 Win11 KSWITCH_FRAME (0x20)
-    union
-    {
-        PVOID VfpState;                                  // 0x230 PKARM64_VFP_STATE
-        PVOID Arm64FpState;                              // [ReactOS] alias
-    };
+    PVOID VfpState;                                      // 0x230 PKARM64_VFP_STATE
     volatile ULONG NextProcessor;                        // 0x238
     LONG QueuePriority;                                  // 0x23C
     struct _KPROCESS *Process;                           // 0x240
