@@ -716,12 +716,8 @@ KiArm64PermVectorIrqSp0_Handler:
     stp x18, x19, [sp, #0x90]
     ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
     ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
-    dsb sy
-    isb
     mov w0, #1
     bl KiArm64InterruptDispatchEntry
-    dsb sy
-    isb
     /*
      * CRITICAL: Mask ALL exceptions before restoring ELR_EL1/SPSR_EL1.
      * If an IRQ fires between msr elr_el1 and eret, the hardware overwrites
@@ -750,8 +746,6 @@ KiArm64PermVectorIrqSp0_Handler:
     ldp x20, x21, [sp, #0xA0]
     add sp, sp, #ARM64_IRQ_FRAME_SIZE
     mrs x18, tpidr_el1
-    dsb sy
-    isb
     eret
     .seh_endproc
 
@@ -781,12 +775,8 @@ KiArm64PermVectorFiqSp0_Handler:
     stp x18, x19, [sp, #0x90]
     ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
     ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
-    dsb sy
-    isb
     mov w0, #2
     bl KiArm64InterruptDispatchEntry
-    dsb sy
-    isb
     msr daifset, #0xF
     isb
     ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
@@ -808,8 +798,6 @@ KiArm64PermVectorFiqSp0_Handler:
     ldp x20, x21, [sp, #0xA0]
     add sp, sp, #ARM64_IRQ_FRAME_SIZE
     mrs x18, tpidr_el1
-    dsb sy
-    isb
     eret
     .seh_endproc
 
@@ -839,12 +827,8 @@ KiArm64PermVectorIrqSpx_Handler:
     stp x18, x19, [sp, #0x90]
     ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
     ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
-    dsb sy
-    isb
     mov w0, #5
     bl KiArm64InterruptDispatchEntry
-    dsb sy
-    isb
     msr daifset, #0xF
     isb
     ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
@@ -866,8 +850,6 @@ KiArm64PermVectorIrqSpx_Handler:
     ldp x20, x21, [sp, #0xA0]
     add sp, sp, #ARM64_IRQ_FRAME_SIZE
     mrs x18, tpidr_el1
-    dsb sy
-    isb
     eret
     .seh_endproc
 
@@ -897,12 +879,8 @@ KiArm64PermVectorFiqSpx_Handler:
     stp x18, x19, [sp, #0x90]
     ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
     ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
-    dsb sy
-    isb
     mov w0, #6
     bl KiArm64InterruptDispatchEntry
-    dsb sy
-    isb
     msr daifset, #0xF
     isb
     ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
@@ -924,8 +902,6 @@ KiArm64PermVectorFiqSpx_Handler:
     ldp x20, x21, [sp, #0xA0]
     add sp, sp, #ARM64_IRQ_FRAME_SIZE
     mrs x18, tpidr_el1
-    dsb sy
-    isb
     eret
     .seh_endproc
 
@@ -974,12 +950,8 @@ KiArm64PermVectorIrqLowerA64_Handler:
     ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
     ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
 
-    dsb sy
-    isb
     mov w0, #9
     bl KiArm64InterruptDispatchEntry
-    dsb sy
-    isb
     msr daifset, #0xF
     isb
     ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
@@ -1002,8 +974,6 @@ KiArm64PermVectorIrqLowerA64_Handler:
     msr spsr_el1, x21
     ldp x20, x21, [sp, #0xA0]
     add sp, sp, #ARM64_IRQ_FRAME_SIZE
-    dsb sy
-    isb
     eret
     .seh_endproc
 
@@ -1037,12 +1007,8 @@ KiArm64PermVectorFiqLowerA64_Handler:
     ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
     ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
 
-    dsb sy
-    isb
     mov w0, #10
     bl KiArm64InterruptDispatchEntry
-    dsb sy
-    isb
     msr daifset, #0xF
     isb
     ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
@@ -1065,8 +1031,6 @@ KiArm64PermVectorFiqLowerA64_Handler:
     msr spsr_el1, x21
     ldp x20, x21, [sp, #0xA0]
     add sp, sp, #ARM64_IRQ_FRAME_SIZE
-    dsb sy
-    isb
     eret
     .seh_endproc
 
@@ -1099,12 +1063,8 @@ KiArm64PermVectorIrqLowerA32_Handler:
     mrs x18, tpidr_el1
     ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
     ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
-    dsb sy
-    isb
     mov w0, #13
     bl KiArm64InterruptDispatchEntry
-    dsb sy
-    isb
     msr daifset, #0xF
     isb
     ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
@@ -1127,8 +1087,6 @@ KiArm64PermVectorIrqLowerA32_Handler:
     msr spsr_el1, x21
     ldp x20, x21, [sp, #0xA0]
     add sp, sp, #ARM64_IRQ_FRAME_SIZE
-    dsb sy
-    isb
     eret
     .seh_endproc
 
@@ -1161,12 +1119,8 @@ KiArm64PermVectorFiqLowerA32_Handler:
     mrs x18, tpidr_el1
     ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
     ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
-    dsb sy
-    isb
     mov w0, #14
     bl KiArm64InterruptDispatchEntry
-    dsb sy
-    isb
     msr daifset, #0xF
     isb
     ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
@@ -1189,8 +1143,6 @@ KiArm64PermVectorFiqLowerA32_Handler:
     msr spsr_el1, x21
     ldp x20, x21, [sp, #0xA0]
     add sp, sp, #ARM64_IRQ_FRAME_SIZE
-    dsb sy
-    isb
     eret
     .seh_endproc
 
