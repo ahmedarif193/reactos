@@ -230,6 +230,8 @@ typedef struct _ROS_VACB
     PROS_SHARED_CACHE_MAP SharedCacheMap;
     /* Next VACB in the same file-offset hash bucket. */
     struct _ROS_VACB *NextInHash;
+    /* Access counter used to sample approximate LRU updates. */
+    volatile ULONG LruAccessCount;
 } ROS_VACB, *PROS_VACB;
 
 typedef struct _INTERNAL_BCB
