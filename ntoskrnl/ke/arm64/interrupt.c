@@ -264,8 +264,6 @@ KiArm64TimerIsr(
     UNREFERENCED_PARAMETER(Interrupt);
     UNREFERENCED_PARAMETER(ServiceContext);
 
-    KiTimerIsrCallCount++;
-
     Cpu = KeGetCurrentProcessorNumber();
     if (Cpu >= MAXIMUM_PROCESSORS)
     {
@@ -309,8 +307,12 @@ KiArm64TimerIsr(
     /* SMP boot diagnostics: silent per-CPU tick counter only. The periodic
      * serial dump is disabled for this probe - at 115200 baud it perturbs the
      * timing race; the per-CPU counters are read via GDB at the stall instead. */
-    SmpDbgTimerTick(Cpu);
-    SmpDbgHeartbeat(Cpu);
+    if (SmpDbgEnabled)
+    {
+        KiTimerIsrCallCount++;
+        SmpDbgTimerTick(Cpu);
+        SmpDbgHeartbeat(Cpu);
+    }
 
     /*
      * KeUpdateRunTime accounts kernel/user/idle/DPC/interrupt time from the
