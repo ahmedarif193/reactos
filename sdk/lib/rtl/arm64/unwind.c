@@ -92,7 +92,7 @@ NTAPI
 RtlLookupFunctionEntry(
     _In_ DWORD64 ControlPc,
     _Out_ PDWORD64 ImageBase,
-    _Inout_opt_ PVOID HistoryTable)
+    _Inout_opt_ PUNWIND_HISTORY_TABLE HistoryTable)
 {
     PIMAGE_DOS_HEADER DosHeader = NULL;
     PIMAGE_NT_HEADERS NtHeaders;
@@ -661,7 +661,7 @@ RtlVirtualUnwind(
     _Inout_ PCONTEXT Context,
     _Out_ PVOID *HandlerData,
     _Out_ PULONG64 EstablisherFrame,
-    _Inout_opt_ PVOID ContextPointers)
+    _Inout_opt_ PKNONVOLATILE_CONTEXT_POINTERS ContextPointers)
 {
     PARM64_RT_FUNCTION Func = (PARM64_RT_FUNCTION)FunctionEntry;
     PVOID Handler = NULL;
@@ -714,7 +714,7 @@ RtlUnwindEx(
     _In_opt_ PEXCEPTION_RECORD ExceptionRecord,
     _In_ PVOID ReturnValue,
     _In_ PCONTEXT ContextRecord,
-    _Inout_opt_ PVOID HistoryTable)
+    _In_opt_ PUNWIND_HISTORY_TABLE HistoryTable)
 {
     EXCEPTION_RECORD LocalExceptionRecord;
     DISPATCHER_CONTEXT DispatcherContext;

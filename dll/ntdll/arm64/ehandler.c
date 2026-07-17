@@ -40,16 +40,7 @@ typedef struct _ARM64_DISPATCHER_CONTEXT
 typedef EXCEPTION_DISPOSITION (__cdecl *PTERMINATION_HANDLER)(BOOLEAN, PVOID);
 typedef EXCEPTION_DISPOSITION (__cdecl *PEXCEPTION_FILTER)(PEXCEPTION_POINTERS, PVOID);
 
-NTSYSAPI
-VOID
-NTAPI
-RtlUnwindEx(
-    _In_opt_ PVOID TargetFrame,
-    _In_opt_ PVOID TargetIp,
-    _In_ PEXCEPTION_RECORD ExceptionRecord,
-    _In_ PVOID ReturnValue,
-    _In_ PCONTEXT ContextRecord,
-    _Inout_opt_ PVOID HistoryTable);
+/* RtlUnwindEx is declared by the SDK headers */
 
 EXCEPTION_DISPOSITION
 __cdecl

@@ -355,6 +355,7 @@ elseif(ARCH STREQUAL "amd64")
     list(APPEND SOURCE
         ${REACTOS_SOURCE_DIR}/ntoskrnl/config/i386/cmhardwr.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/i386/page.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/kdcontrol.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/amd64/kdx64.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/context.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/cpu.c
@@ -412,6 +413,7 @@ elseif(ARCH STREQUAL "arm64")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/arm64/init.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/arm64/probe.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/arm64/ioport.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/kdcontrol.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/arm64/kdarm64.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/atomics.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/boot.c
@@ -469,9 +471,7 @@ endif()
         list(APPEND SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kd/arm64/kdserial.c)
         if(KDBG)
             list(APPEND ASM_SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/arm64/kdb_help.S)
-            list(APPEND SOURCE
-                ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/arm64/arm64-dis.c
-                ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/arm64/kdb_shim.c)
+            list(APPEND SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/arm64/arm64-dis.c)
         endif()
     endif()
 

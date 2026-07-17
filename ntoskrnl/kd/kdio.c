@@ -385,20 +385,29 @@ KdpSerialPrint(
 {
     BOOLEAN LockAcquired;
     PCCH pch = String;
+    PCCH End = String + Length;
+    PCCH Run;
     KIRQL OldIrql;
 
     /* Acquire the printing spinlock without waiting at raised IRQL */
     LockAcquired = KdbpAcquireLock(&KdpSerialSpinLock, &OldIrql);
 
-    /* Output unlocked rather than deadlock if the lock is unavailable */
-    while (pch < String + Length && *pch)
+    /* Output unlocked rather than deadlock if the lock is unavailable.
+     * Send the longest newline-free run as one buffer write, so transports
+     * with per-transfer command cost pay it per run instead of per byte. */
+    while (pch < End && *pch)
     {
-        if (*pch == '\n')
+        Run = pch;
+        while (pch < End && *pch && *pch != '\n') ++pch;
+        if (pch > Run)
         {
-            KdPortPutByteEx(&SerialPortInfo, '\r');
+            KdPortPutBufferEx(&SerialPortInfo, Run, (ULONG)(pch - Run));
         }
-        KdPortPutByteEx(&SerialPortInfo, *pch);
-        ++pch;
+        if (pch < End && *pch == '\n')
+        {
+            KdPortPutBufferEx(&SerialPortInfo, "\r\n", 2);
+            ++pch;
+        }
     }
 
     /* Release the spinlock */
@@ -783,10 +792,8 @@ KdReceivePacket(
     KdIoPrintString("\n", 1);
     KdIoPuts(KdbPromptStr.Buffer); // Alternatively, use "Input> "
 
-#ifndef _M_ARM64
     if (!KdTermSerial)
         KbdDisableMouse();
-#endif
 
     /*
      * Read a NULL-terminated line of user input and retrieve its length.
@@ -800,10 +807,8 @@ KdReceivePacket(
         (USHORT)KdIoReadLine(ResponseString.Buffer,
                              ResponseString.MaximumLength);
 
-#ifndef _M_ARM64
     if (!KdTermSerial)
         KbdEnableMouse();
-#endif
 
     /* Adjust and return the string length */
     *DataLength = min(ResponseString.Length + sizeof(ANSI_NULL),

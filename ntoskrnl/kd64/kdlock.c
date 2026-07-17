@@ -79,8 +79,8 @@ KdPollBreakIn(VOID)
     /* First make sure that KD is enabled */
     if (KdDebuggerEnabled)
     {
-#if defined(_M_ARM64) && DBG
-        if (((KSPIN_LOCK)KeGetCurrentThread() | 1) == KdpDebuggerLock)
+#if defined(_M_ARM64)
+        if (KdpDebuggerLockOwnedByCurrentThread())
         {
             return FALSE;
         }
