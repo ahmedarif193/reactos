@@ -435,23 +435,21 @@ SdBusInitializeController(
                     SDHCI_INT_CMD_ERROR_MASK |
                     SDHCI_INT_DATA_ERROR_MASK);
 
-    {
-        ULONG SignalEnable = SDHCI_INT_CMD_COMPLETE |
-                             SDHCI_INT_XFER_COMPLETE |
-                             SDHCI_INT_DMA |
-                             SDHCI_INT_BUFFER_WRITE_READY |
-                             SDHCI_INT_BUFFER_READ_READY |
-                             SDHCI_INT_ERROR |
-                             SDHCI_INT_CMD_ERROR_MASK |
-                             SDHCI_INT_DATA_ERROR_MASK;
-        if (!FdoExtension->NonRemovable)
-        {
-            SignalEnable |= SDHCI_INT_CARD_INSERTION |
-                            SDHCI_INT_CARD_REMOVAL |
-                            SDHCI_INT_CARD_INTERRUPT;
-        }
-        SdBusWriteReg32(FdoExtension, SDHCI_INT_SIGNAL_ENABLE, SignalEnable);
-    }
+    /*
+     * Transfer/error signaling only. Card-detect signaling is deferred to
+     * SdBusFdoStartDevice (after DeviceState==Started): the ISR drops interrupts
+     * unacknowledged until Started, so a level-triggered card interrupt from an
+     * already-powered SDIO card (on-board Wi-Fi) would storm here and wedge boot.
+     */
+    SdBusWriteReg32(FdoExtension, SDHCI_INT_SIGNAL_ENABLE,
+                    SDHCI_INT_CMD_COMPLETE |
+                    SDHCI_INT_XFER_COMPLETE |
+                    SDHCI_INT_DMA |
+                    SDHCI_INT_BUFFER_WRITE_READY |
+                    SDHCI_INT_BUFFER_READ_READY |
+                    SDHCI_INT_ERROR |
+                    SDHCI_INT_CMD_ERROR_MASK |
+                    SDHCI_INT_DATA_ERROR_MASK);
 
     /*
      * Try ADMA2 first (scatter-gather directly to caller pages, no bounce buffer).
@@ -772,6 +770,14 @@ SdBusFdoStartDevice(
                         "(0x%08lx)\n", Status);
             }
         }
+    }
+
+    /* Device is Started and the ISR is live: enable card-detect signaling for hotplug. */
+    if (!FdoExtension->NonRemovable)
+    {
+        SdBusUpdateInterruptSignalEnable(FdoExtension,
+                                         SDHCI_INT_CARD_INSERTION | SDHCI_INT_CARD_REMOVAL,
+                                         0);
     }
 
     Irp->IoStatus.Status = STATUS_SUCCESS;
