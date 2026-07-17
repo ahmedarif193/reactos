@@ -128,4 +128,19 @@ KdPortPutByteEx(
     CpPutByte(PortInformation, ByteToSend);
 }
 
+VOID
+NTAPI
+KdPortPutBufferEx(
+    IN PCPPORT PortInformation,
+    IN PCCH Buffer,
+    IN ULONG Length)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < Length; Index++)
+    {
+        CpPutByte(PortInformation, (UCHAR)Buffer[Index]);
+    }
+}
+
 /* EOF */

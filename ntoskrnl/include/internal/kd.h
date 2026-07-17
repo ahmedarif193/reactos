@@ -26,6 +26,14 @@ KdPortPutByteEx(
     UCHAR ByteToSend
 );
 
+VOID
+NTAPI
+KdPortPutBufferEx(
+    PCPPORT PortInformation,
+    PCCH Buffer,
+    ULONG Length
+);
+
 #ifdef _NTOSKRNL_
 
 /* KD GLOBALS ****************************************************************/

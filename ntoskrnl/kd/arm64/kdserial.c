@@ -9,9 +9,7 @@
 #define NDEBUG
 #include <debug.h>
 #include <reactos/arm64/early_uart.h>
-
-CPPORT DefaultPort = {0};
-extern BOOLEAN KdDebuggerNotPresent;
+#include <cportlib/uartinfo.h>
 
 /*
  * ARM64 KD serial transport over the runtime-detected early UART.
@@ -26,21 +24,25 @@ KdPortInitializeEx(_Inout_ PCPPORT PortInformation,
     PUCHAR Base;
     ULONG Baud;
 
+    UNREFERENCED_PARAMETER(ComPortNumber);
 
-    if (!EarlyUartIsInitialized())
-    {
-        EarlyUartInitialize(0);
-    }
+    EarlyUartInitialize(0);
 
     /*
      * Require a driver-known interface, not just a base address. FreeLDR may
      * have captured the base from ACPI DBG2 but reported Interface=Unknown;
      * in that case KD must fail cleanly rather than silently swallow output.
      */
-    Base = EarlyUartReady() ?
-           (PUCHAR)(ULONG_PTR)EarlyUartPhysToVa(EarlyUartGetBaseAddress()) :
-           NULL;
-    Baud = (PortInformation->BaudRate != 0) ? PortInformation->BaudRate : 115200;
+    Base = EarlyUartReady() ? (PUCHAR)(ULONG_PTR)EarlyUartPhysToVa(EarlyUartGetBaseAddress()) : NULL;
+    Baud = (PortInformation->BaudRate != 0) ? PortInformation->BaudRate : DEFAULT_DEBUG_BAUD_RATE;
+
+    /* The firmware-described UART is authoritative on ARM64; a user-supplied
+     * DEBUGPORT=COM:<addr> address cannot be honored (its register layout is
+     * unknown), so reject it explicitly rather than discard it silently. */
+    if ((PortInformation->Address != NULL) && (PortInformation->Address != Base))
+    {
+        HalDisplayString("\r\nKernel Debugger: DEBUGPORT address override is not supported on ARM64; using the firmware-detected UART.\r\n\r\n");
+    }
 
     PortInformation->Address = Base;
     PortInformation->BaudRate = Baud;
@@ -53,23 +55,6 @@ KdPortInitializeEx(_Inout_ PCPPORT PortInformation,
 
     /* Make sure no stale characters are queued before kdcom starts listening */
     EarlyUartDrainReceiveFifo();
-
-    /* Transport is live; record transport-present bit.
-     * Parity flip of NotPresent is done post-banner in kdinit to avoid stalls. */
-    MmWriteableSharedUserData->KdDebuggerEnabled |= 0x00000002;
-
-#ifndef NDEBUG
-    {
-        CHAR Buffer[128];
-        int Length = snprintf(Buffer, sizeof(Buffer),
-                              "\r\nKernel Debugger: Serial port found: COM%lu (Port 0x%p) BaudRate %lu\r\n\r\n",
-                              (unsigned long)(ComPortNumber ? ComPortNumber : 1),
-                              PortInformation->Address,
-                              PortInformation->BaudRate);
-        if (Length < 0) Buffer[sizeof(Buffer) - 1] = '\0';
-        HalDisplayString(Buffer);
-    }
-#endif
 
     return TRUE;
 }
@@ -90,4 +75,14 @@ KdPortPutByteEx(_Inout_ PCPPORT PortInformation,
 {
     UNREFERENCED_PARAMETER(PortInformation);
     EarlyUartPutc((CHAR)ByteToSend);
+}
+
+VOID
+NTAPI
+KdPortPutBufferEx(_Inout_ PCPPORT PortInformation,
+                  _In_reads_bytes_(Length) PCCH Buffer,
+                  _In_ ULONG Length)
+{
+    UNREFERENCED_PARAMETER(PortInformation);
+    EarlyUartWrite(Buffer, Length);
 }

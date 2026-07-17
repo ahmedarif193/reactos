@@ -24,15 +24,6 @@ VOID NTAPI PspDumpThreads(BOOLEAN SystemThreads);
 
 #if defined(_M_ARM64)
 static volatile LONG KdpArm64DebuggerNestedDepth;
-
-static
-BOOLEAN
-KdpArm64DebuggerLockOwnedByCurrentThread(VOID)
-{
-    return (((KSPIN_LOCK)KeGetCurrentThread() | 1) == KdpDebuggerLock);
-}
-#else
-#define KdpArm64DebuggerLockOwnedByCurrentThread() FALSE
 #endif
 
 VOID
@@ -1914,7 +1905,7 @@ KdEnterDebugger(IN PKTRAP_FRAME TrapFrame,
     BOOLEAN Enable;
 
 #if defined(_M_ARM64)
-    if (KdEnteredDebugger || KdpArm64DebuggerLockOwnedByCurrentThread())
+    if (KdEnteredDebugger || KdpDebuggerLockOwnedByCurrentThread())
     {
         InterlockedIncrement(&KdpArm64DebuggerNestedDepth);
         return FALSE;

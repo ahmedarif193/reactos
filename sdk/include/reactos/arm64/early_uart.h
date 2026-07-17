@@ -150,6 +150,7 @@ typedef enum _ARM64_UART_INTERFACE
 #define ARM64_QCOM_GENI_RX_LAST_VALID_SHIFT    28
 #define ARM64_QCOM_GENI_RX_FIFO_WORD_COUNT     0x01FFFFFFU
 #define ARM64_QCOM_GENI_FIFO_WORD_BYTES        4
+#define ARM64_QCOM_GENI_TX_FIFO_DEPTH_WORDS    16
 #define ARM64_QCOM_GENI_POLL_LIMIT             1000000U
 
 #define ARM64_QCOM_UART_TX_TRANS_CFG           0x25C
@@ -199,22 +200,36 @@ extern volatile UINT32 EarlyUartRxCachedByteCount;
 
 /*
  * Inline UART access macros.
- * These read/write to the runtime-detected UART address.
+ * The _AT variants take a pre-computed virtual base so hot loops can snapshot
+ * the (volatile, but immutable after init) globals once; the plain variants
+ * re-derive the base from the globals on each access.
  *
  * Note: Use ULONG_PTR for portability between bootloader (UEFI) and kernel contexts.
  * UINTN is a UEFI-only type; ULONG_PTR is defined in both environments.
  */
+#define EARLY_UART_READ_AT(BaseVa, offset) \
+    (*(volatile UINT32*)(ULONG_PTR)((BaseVa) + (offset)))
+
+#define EARLY_UART_WRITE_AT(BaseVa, offset, value) \
+    (*(volatile UINT32*)(ULONG_PTR)((BaseVa) + (offset)) = (value))
+
+#define EARLY_UART_READ8_AT(BaseVa, offset) \
+    (*(volatile UCHAR*)(ULONG_PTR)((BaseVa) + (offset)))
+
+#define EARLY_UART_WRITE8_AT(BaseVa, offset, value) \
+    (*(volatile UCHAR*)(ULONG_PTR)((BaseVa) + (offset)) = (UCHAR)(value))
+
 #define EARLY_UART_READ(offset) \
-    (*(volatile UINT32*)(ULONG_PTR)(EarlyUartPhysToVa(EarlyUartBaseAddress) + (offset)))
+    EARLY_UART_READ_AT(EarlyUartPhysToVa(EarlyUartBaseAddress), offset)
 
 #define EARLY_UART_WRITE(offset, value) \
-    (*(volatile UINT32*)(ULONG_PTR)(EarlyUartPhysToVa(EarlyUartBaseAddress) + (offset)) = (value))
+    EARLY_UART_WRITE_AT(EarlyUartPhysToVa(EarlyUartBaseAddress), offset, value)
 
 #define EARLY_UART_READ8(offset) \
-    (*(volatile UCHAR*)(ULONG_PTR)(EarlyUartPhysToVa(EarlyUartBaseAddress) + (offset)))
+    EARLY_UART_READ8_AT(EarlyUartPhysToVa(EarlyUartBaseAddress), offset)
 
 #define EARLY_UART_WRITE8(offset, value) \
-    (*(volatile UCHAR*)(ULONG_PTR)(EarlyUartPhysToVa(EarlyUartBaseAddress) + (offset)) = (UCHAR)(value))
+    EARLY_UART_WRITE8_AT(EarlyUartPhysToVa(EarlyUartBaseAddress), offset, value)
 
 static __inline BOOLEAN
 EarlyUartReady(VOID)
@@ -389,11 +404,8 @@ EarlyUartQcomGeniInitialize(VOID)
 }
 
 static __inline VOID
-EarlyUartQcomGeniPutc(CHAR Ch)
+EarlyUartQcomGeniEnsureTxIdle(VOID)
 {
-    if (!EarlyUartQcomGeniInitialize())
-        return;
-
     if (EARLY_UART_READ(ARM64_QCOM_GENI_STATUS) & ARM64_QCOM_GENI_M_CMD_ACTIVE)
     {
         EarlyUartQcomGeniPollTxDone();
@@ -418,15 +430,70 @@ EarlyUartQcomGeniPutc(CHAR Ch)
         EARLY_UART_WRITE(ARM64_QCOM_GENI_M_IRQ_CLEAR,
                          ARM64_QCOM_GENI_M_CMD_CANCEL);
     }
+}
 
-    EARLY_UART_WRITE(ARM64_QCOM_GENI_M_IRQ_CLEAR,
-                     ARM64_QCOM_GENI_M_CMD_DONE);
-    EARLY_UART_WRITE(ARM64_QCOM_UART_TX_TRANS_LEN, 1);
-    EARLY_UART_WRITE(ARM64_QCOM_GENI_M_CMD0,
-                     ARM64_QCOM_GENI_UART_START_TX <<
-                     ARM64_QCOM_GENI_M_OPCODE_SHIFT);
-    EARLY_UART_WRITE(ARM64_QCOM_GENI_TX_FIFO, (UINT32)(UCHAR)Ch);
-    EarlyUartQcomGeniPollTxDone();
+/*
+ * EarlyUartQcomGeniWrite - Send a buffer with one TX command per FIFO-sized
+ * chunk instead of one full command sequence per byte. Each chunk fits in
+ * the TX FIFO entirely, so no per-word watermark handshake is needed: the
+ * command setup and done-poll cost is paid once per chunk.
+ */
+static __inline VOID
+EarlyUartQcomGeniWrite(const CHAR *String, UINT32 Length)
+{
+    UINT32 Chunk;
+    UINT32 Word;
+    UINT32 Shift;
+    UINT32 Index;
+
+    if (!EarlyUartQcomGeniInitialize())
+        return;
+
+    while (Length != 0)
+    {
+        Chunk = ARM64_QCOM_GENI_TX_FIFO_DEPTH_WORDS * ARM64_QCOM_GENI_FIFO_WORD_BYTES;
+        if (Chunk > Length)
+            Chunk = Length;
+
+        EarlyUartQcomGeniEnsureTxIdle();
+
+        EARLY_UART_WRITE(ARM64_QCOM_GENI_M_IRQ_CLEAR,
+                         ARM64_QCOM_GENI_M_CMD_DONE);
+        EARLY_UART_WRITE(ARM64_QCOM_UART_TX_TRANS_LEN, Chunk);
+        EARLY_UART_WRITE(ARM64_QCOM_GENI_M_CMD0,
+                         ARM64_QCOM_GENI_UART_START_TX <<
+                         ARM64_QCOM_GENI_M_OPCODE_SHIFT);
+
+        /* Little-endian 8x4 byte packing, as configured in TX_PACKING_CFG */
+        Word = 0;
+        Shift = 0;
+        for (Index = 0; Index < Chunk; Index++)
+        {
+            Word |= ((UINT32)(UCHAR)String[Index]) << Shift;
+            Shift += 8;
+            if (Shift == 32)
+            {
+                EARLY_UART_WRITE(ARM64_QCOM_GENI_TX_FIFO, Word);
+                Word = 0;
+                Shift = 0;
+            }
+        }
+        if (Shift != 0)
+        {
+            EARLY_UART_WRITE(ARM64_QCOM_GENI_TX_FIFO, Word);
+        }
+
+        EarlyUartQcomGeniPollTxDone();
+
+        String += Chunk;
+        Length -= Chunk;
+    }
+}
+
+static __inline VOID
+EarlyUartQcomGeniPutc(CHAR Ch)
+{
+    EarlyUartQcomGeniWrite(&Ch, 1);
 }
 
 static __inline BOOLEAN
@@ -478,28 +545,33 @@ EarlyUartQcomGeniGetc(_Out_ UCHAR *Byte)
 static __inline VOID
 EarlyUartPutc(CHAR Ch)
 {
+    UINT64 BaseVa;
+
     if (!EarlyUartReady())
         return;
+
+    /* Snapshot the immutable-after-init base once: the poll loops below must
+     * not re-load the volatile globals on every iteration */
+    BaseVa = EarlyUartPhysToVa(EarlyUartBaseAddress);
 
     switch (EarlyUartInterface)
     {
         case Arm64UartNs16550:
-            while (!(EARLY_UART_READ8(ARM64_NS16550_LSR) & ARM64_NS16550_LSR_THRE))
+            while (!(EARLY_UART_READ8_AT(BaseVa, ARM64_NS16550_LSR) & ARM64_NS16550_LSR_THRE))
             {
                 __asm__ __volatile__("yield");
             }
 
-            EARLY_UART_WRITE8(ARM64_NS16550_THR, (UCHAR)Ch);
+            EARLY_UART_WRITE8_AT(BaseVa, ARM64_NS16550_THR, (UCHAR)Ch);
             break;
 
         case Arm64UartBcm2835Mini:
-            while (!(EARLY_UART_READ(ARM64_BCM2835_MINI_UART_LSR) &
-                     ARM64_BCM2835_MINI_UART_LSR_TX_EMPTY))
+            while (!(EARLY_UART_READ_AT(BaseVa, ARM64_BCM2835_MINI_UART_LSR) & ARM64_BCM2835_MINI_UART_LSR_TX_EMPTY))
             {
                 __asm__ __volatile__("yield");
             }
 
-            EARLY_UART_WRITE(ARM64_BCM2835_MINI_UART_IO, (UINT32)(UCHAR)Ch);
+            EARLY_UART_WRITE_AT(BaseVa, ARM64_BCM2835_MINI_UART_IO, (UINT32)(UCHAR)Ch);
             break;
 
         case Arm64UartQcomGeni:
@@ -507,12 +579,12 @@ EarlyUartPutc(CHAR Ch)
             break;
 
         case Arm64UartPl011:
-            while (EARLY_UART_READ(ARM64_PL011_FR) & ARM64_PL011_FR_TXFF)
+            while (EARLY_UART_READ_AT(BaseVa, ARM64_PL011_FR) & ARM64_PL011_FR_TXFF)
             {
                 __asm__ __volatile__("yield");
             }
 
-            EARLY_UART_WRITE(ARM64_PL011_DR, (UINT32)(UCHAR)Ch);
+            EARLY_UART_WRITE_AT(BaseVa, ARM64_PL011_DR, (UINT32)(UCHAR)Ch);
             break;
 
         default:
@@ -527,36 +599,40 @@ EarlyUartPutc(CHAR Ch)
 static __inline BOOLEAN
 EarlyUartGetc(_Out_ UCHAR *Byte)
 {
+    UINT64 BaseVa;
+
     if (!EarlyUartReady() || Byte == NULL)
         return FALSE;
+
+    /* Snapshot the immutable-after-init base, as in EarlyUartPutc */
+    BaseVa = EarlyUartPhysToVa(EarlyUartBaseAddress);
 
     switch (EarlyUartInterface)
     {
         case Arm64UartNs16550:
-            if (!(EARLY_UART_READ8(ARM64_NS16550_LSR) & ARM64_NS16550_LSR_DR))
+            if (!(EARLY_UART_READ8_AT(BaseVa, ARM64_NS16550_LSR) & ARM64_NS16550_LSR_DR))
                 return FALSE;
 
-            *Byte = EARLY_UART_READ8(ARM64_NS16550_RBR);
+            *Byte = EARLY_UART_READ8_AT(BaseVa, ARM64_NS16550_RBR);
             break;
 
         case Arm64UartBcm2835Mini:
-            if (!(EARLY_UART_READ(ARM64_BCM2835_MINI_UART_LSR) &
-                  ARM64_BCM2835_MINI_UART_LSR_DR))
+            if (!(EARLY_UART_READ_AT(BaseVa, ARM64_BCM2835_MINI_UART_LSR) & ARM64_BCM2835_MINI_UART_LSR_DR))
             {
                 return FALSE;
             }
 
-            *Byte = (UCHAR)(EARLY_UART_READ(ARM64_BCM2835_MINI_UART_IO) & 0xFF);
+            *Byte = (UCHAR)(EARLY_UART_READ_AT(BaseVa, ARM64_BCM2835_MINI_UART_IO) & 0xFF);
             break;
 
         case Arm64UartQcomGeni:
             return EarlyUartQcomGeniGetc(Byte);
 
         case Arm64UartPl011:
-            if (EARLY_UART_READ(ARM64_PL011_FR) & ARM64_PL011_FR_RXFE)
+            if (EARLY_UART_READ_AT(BaseVa, ARM64_PL011_FR) & ARM64_PL011_FR_RXFE)
                 return FALSE;
 
-            *Byte = (UCHAR)(EARLY_UART_READ(ARM64_PL011_DR) & 0xFF);
+            *Byte = (UCHAR)(EARLY_UART_READ_AT(BaseVa, ARM64_PL011_DR) & 0xFF);
             break;
 
         default:
@@ -564,6 +640,31 @@ EarlyUartGetc(_Out_ UCHAR *Byte)
     }
 
     return TRUE;
+}
+
+/*
+ * EarlyUartWrite - Output a buffer to the early UART.
+ * On Qualcomm GENI the transfer is batched into per-FIFO-chunk TX commands;
+ * the other interfaces are plain per-byte FIFOs and just loop.
+ */
+static __inline VOID
+EarlyUartWrite(const CHAR *String, UINT32 Length)
+{
+    UINT32 Index;
+
+    if (!EarlyUartReady() || String == NULL)
+        return;
+
+    if (EarlyUartInterface == Arm64UartQcomGeni)
+    {
+        EarlyUartQcomGeniWrite(String, Length);
+        return;
+    }
+
+    for (Index = 0; Index < Length; Index++)
+    {
+        EarlyUartPutc(String[Index]);
+    }
 }
 
 /*
