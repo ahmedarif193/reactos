@@ -8,8 +8,6 @@
 #define NDEBUG
 #include <debug.h>
 
-extern BOOLEAN KiHalInitialized;
-
 KIRQL
 NTAPI
 KxFreezeExecutionRaiseIrql(
@@ -43,11 +41,7 @@ KxFreezeExecutionLowerIrql(
      * Restore the saved logical IRQL and matching GIC PMR.
      * KeRestoreInterrupts() handles the final DAIF state on the shared path.
      */
-    KiSetCurrentIrql(OldIrql);
-    if (KiHalInitialized)
-    {
-        HalSetGicPriorityMask(OldIrql);
-    }
+    KiSetIrqlAndPriorityMask(OldIrql);
     __asm__ __volatile__("dsb sy\n\tisb" ::: "memory");
 }
 
