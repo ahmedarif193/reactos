@@ -69,7 +69,7 @@ HalpAllocPhysicalMemory(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
             BasePage = MdBlock->BasePage;
             if ((BasePage) &&
                 (MdBlock->PageCount >= PageCount + Alignment) &&
-                (BasePage + PageCount + Alignment < MaxPage))
+                (BasePage + PageCount + Alignment <= MaxPage))
             {
                 /* We found an address */
                 PhysicalAddress = ((ULONG64)BasePage + Alignment) << PAGE_SHIFT;
