@@ -12,7 +12,6 @@
 #undef KeReleaseSpinLock
 
 extern BOOLEAN ExpArm64PoolBootstrapMode;
-extern volatile LONG MiArm64PfnLockDepth[MAXIMUM_PROCESSORS];
 
 /*
  * PFN-lock depth accounting (reader: MiArm64AllocatePageTablePage, which
@@ -30,7 +29,7 @@ KiArm64AdjustPfnLockDepth(
 
     if (CpuIndex < MAXIMUM_PROCESSORS)
     {
-        MiArm64PfnLockDepth[CpuIndex] += Delta;
+        MiArm64PfnLockDepth[CpuIndex].Depth += Delta;
     }
 }
 

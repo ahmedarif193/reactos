@@ -20,7 +20,6 @@ MiArchCreateProcessAddressSpace(
     PMMPTE PageTable;
     MMPTE TempPte, MapPte;
     ULONG Index;
-    ULONG PageColor;
     KIRQL OldIrql;
 
     ASSERT(DirectoryTableBase != NULL);
@@ -28,44 +27,35 @@ MiArchCreateProcessAddressSpace(
     RootPfn = DirectoryTableBase[0] >> PAGE_SHIFT;
     HyperPfn = DirectoryTableBase[1] >> PAGE_SHIFT;
 
-    /* Allocate backing pages for the hyperspace PD/PT */
-    OldIrql = MiAcquirePfnLock();
-
+    /* Allocate backing pages for the hyperspace PD/PT (colored, zeroed,
+     * KSEG0-mapped and PoC-cleaned by the shared helper) */
     MI_SET_USAGE(MI_USAGE_PAGE_DIRECTORY);
-    PageColor = MI_GET_NEXT_PROCESS_COLOR(Process);
-    HyperPdPfn = MiRemoveZeroPageSafe(PageColor);
-    if (!HyperPdPfn)
+    if (!NT_SUCCESS(MiArm64AllocateCleanPage(Process, &HyperPdPfn)))
     {
-        HyperPdPfn = MiRemoveAnyPage(PageColor);
-        MiReleasePfnLock(OldIrql);
-        MiZeroPhysicalPage(HyperPdPfn);
-        OldIrql = MiAcquirePfnLock();
+        DirectoryTableBase[0] = 0;
+        DirectoryTableBase[1] = 0;
+        return FALSE;
     }
 
     MI_SET_USAGE(MI_USAGE_PAGE_TABLE);
-    PageColor = MI_GET_NEXT_PROCESS_COLOR(Process);
-    HyperPtPfn = MiRemoveZeroPageSafe(PageColor);
-    if (!HyperPtPfn)
+    if (!NT_SUCCESS(MiArm64AllocateCleanPage(Process, &HyperPtPfn)))
     {
-        HyperPtPfn = MiRemoveAnyPage(PageColor);
+        OldIrql = MiAcquirePfnLock();
+        MiInsertPageInFreeList(HyperPdPfn);
         MiReleasePfnLock(OldIrql);
-        MiZeroPhysicalPage(HyperPtPfn);
-    }
-    else
-    {
-        MiReleasePfnLock(OldIrql);
+        DirectoryTableBase[0] = 0;
+        DirectoryTableBase[1] = 0;
+        return FALSE;
     }
 
     /*
      * The new root is copied from the current kernel half below. Ensure the
-     * freshly allocated process page-table pages are reachable through KSEG0
-     * before taking that copy, otherwise a later TTBR switch can leave the
-     * debugger and ARM64 table walkers unable to inspect the active root.
+     * remaining process page-table pages are reachable through KSEG0 before
+     * taking that copy, otherwise a later TTBR switch can leave the debugger
+     * and ARM64 table walkers unable to inspect the active root.
      */
     MiArm64MapKseg0Page(RootPfn);
     MiArm64MapKseg0Page(HyperPfn);
-    MiArm64MapKseg0Page(HyperPdPfn);
-    MiArm64MapKseg0Page(HyperPtPfn);
     MiArm64MapKseg0Page(Process->WorkingSetPage);
 
     MappingPte = MiReserveSystemPtes(1, SystemPteSpace);
@@ -118,13 +108,15 @@ MiArchCreateProcessAddressSpace(
 
     MiArm64CleanPageToPoC((PVOID)PageTable);
 
-    /* Map hyperspace PDPT */
+    /* Map hyperspace PDPT (deliberate remap: the PFN changes, so this must
+     * not go through MI_UPDATE_VALID_PTE, which asserts PFN equality) */
     MI_MAKE_HARDWARE_PTE_KERNEL(&MapPte,
                                 MappingPte,
                                 MM_READWRITE,
                                 HyperPfn);
     MI_MAKE_DIRTY_PAGE(&MapPte);
     *MappingPte = MapPte;
+    MiArm64CleanEntryToPoC((volatile UINT64 *)MappingPte);
     KeInvalidateTlbEntry(PageTable);
 
     /* L1 table entry - use table descriptor template */
@@ -135,9 +127,10 @@ MiArchCreateProcessAddressSpace(
 
     MiArm64CleanPageToPoC((PVOID)PageTable);
 
-    /* Map hyperspace PD */
+    /* Map hyperspace PD (remap, see above) */
     MapPte.u.Hard.PageFrameNumber = HyperPdPfn;
     *MappingPte = MapPte;
+    MiArm64CleanEntryToPoC((volatile UINT64 *)MappingPte);
     KeInvalidateTlbEntry(PageTable);
 
     /* L2 table entry - use table descriptor template */
@@ -148,9 +141,10 @@ MiArchCreateProcessAddressSpace(
 
     MiArm64CleanPageToPoC((PVOID)PageTable);
 
-    /* Map hyperspace PT */
+    /* Map hyperspace PT (remap, see above) */
     MapPte.u.Hard.PageFrameNumber = HyperPtPfn;
     *MappingPte = MapPte;
+    MiArm64CleanEntryToPoC((volatile UINT64 *)MappingPte);
     KeInvalidateTlbEntry(PageTable);
 
     PageTable = MiPteToAddress(MappingPte);

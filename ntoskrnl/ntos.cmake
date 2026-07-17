@@ -437,7 +437,6 @@ elseif(ARCH STREQUAL "arm64")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/usercall.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/kvalayout.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/arm64/page.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/arm64/section.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/arm64/procsup.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/ARM3/arm64/init.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/ARM3/arm64/maputils.c

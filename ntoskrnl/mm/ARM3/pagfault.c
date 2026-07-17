@@ -36,7 +36,7 @@ MiArm64CompleteFaultPteUpdate(
     _In_ PMMPTE ValidPte)
 {
     PVOID PageAddress;
-    ULONG64 Ctr;
+    ULONG DLine;
     ULONG ILine;
     ULONG_PTR Start, End, Addr;
 
@@ -53,8 +53,7 @@ MiArm64CompleteFaultPteUpdate(
 
     if (MI_IS_PAGE_EXECUTABLE(ValidPte))
     {
-        __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
-        ILine = 4u << (Ctr & 0xF);
+        KiArm64GetCacheLineSizes(&DLine, &ILine);
         Start = (ULONG_PTR)PageAddress & ~(ULONG_PTR)(ILine - 1);
         End = (ULONG_PTR)PageAddress + PAGE_SIZE;
         for (Addr = Start; Addr < End; Addr += ILine)
@@ -66,47 +65,35 @@ MiArm64CompleteFaultPteUpdate(
 }
 
 static
-VOID
-MiArm64WriteFaultPte(
-    _In_ PVOID FaultAddress,
-    _Inout_ PMMPTE PointerPte,
-    _In_ MMPTE ValidPte)
-{
-    if (((ULONG_PTR)FaultAddress < (ULONG_PTR)MmSystemRangeStart) &&
-        !MI_IS_PAGE_TABLE_ADDRESS(PointerPte))
-    {
-        MI_WRITE_VALID_PTE_NO_FLUSH(PointerPte, ValidPte);
-        MiArm64CleanEntryToPoC(PointerPte);
-        __asm__ __volatile__("tlbi vaale1is, %0" :: "r"((ULONG_PTR)FaultAddress >> PAGE_SHIFT) : "memory");
-        __asm__ __volatile__("dsb ish\n\tisb" ::: "memory");
-    }
-    else if (MI_IS_PAGE_TABLE_ADDRESS(PointerPte))
-    {
-        MI_WRITE_VALID_PTE_NO_FLUSH(PointerPte, ValidPte);
-        MiArm64CompleteFaultPteUpdate(FaultAddress, &ValidPte);
-    }
-    else
-    {
-        MI_WRITE_VALID_PTE(PointerPte, ValidPte);
-    }
-}
-
-static
 BOOLEAN
 MiArm64GetUserFaultPteFrame(
     _In_ PVOID FaultAddress,
     _In_ PMMPTE PointerPte,
     _Out_ PPFN_NUMBER PteFrame)
 {
-    PMMPTE UserPte;
+    ULONG_PTR PtePtr = (ULONG_PTR)PointerPte;
 
     *PteFrame = 0;
 
     if ((ULONG_PTR)FaultAddress >= (ULONG_PTR)MmSystemRangeStart)
         return FALSE;
 
-    UserPte = MiArm64UserPteKseg0ForPfn(FaultAddress, PteFrame);
-    return (PointerPte == UserPte);
+    /*
+     * A user leaf slot resolved via KSEG0 *is* its physical location: the
+     * phys-map base is the highest VA region, so the range test uniquely
+     * identifies KSEG0 aliases (prototype PTEs live in pool, page-table
+     * PTEs in the self-map, both below it), the PTI index confirms the
+     * slot, and the table frame falls out arithmetically - no 4-level
+     * walk needed.
+     */
+    if (PtePtr < (ULONG_PTR)MI_ARM64_PHYS_MAP_BASE)
+        return FALSE;
+
+    if (((PtePtr >> 3) & PTI_MASK_ARM64) != (((ULONG_PTR)FaultAddress >> PTI_SHIFT) & PTI_MASK_ARM64))
+        return FALSE;
+
+    *PteFrame = (PFN_NUMBER)((PtePtr - (ULONG_PTR)MI_ARM64_PHYS_MAP_BASE) >> PAGE_SHIFT);
+    return TRUE;
 }
 
 static
@@ -118,6 +105,54 @@ MiArm64IsUserFaultPte(
     PFN_NUMBER PteFrame;
 
     return MiArm64GetUserFaultPteFrame(FaultAddress, PointerPte, &PteFrame);
+}
+
+/* Single owner of the software Accessed-bit fault fixup (TCR.HA=0 cores) */
+static
+VOID
+MiArm64SetPteAccessed(
+    _In_ PVOID Address,
+    _Inout_ PMMPTE PointerPte)
+{
+    MMPTE TempPte = *PointerPte;
+
+    TempPte.u.Hard.Accessed = 1;
+    MI_UPDATE_VALID_PTE(PointerPte, TempPte);
+    KeInvalidateTlbEntry(Address);
+}
+
+static
+VOID
+MiArm64WriteFaultPte(
+    _In_ PVOID FaultAddress,
+    _Inout_ PMMPTE PointerPte,
+    _In_ MMPTE ValidPte)
+{
+    if (MiArm64IsUserFaultPte(FaultAddress, PointerPte))
+    {
+        /* Real user leaf slot (KSEG0): publish, then invalidate the mapped VA */
+        MI_WRITE_VALID_PTE_NO_FLUSH(PointerPte, ValidPte);
+        MiArm64CleanEntryToPoC(PointerPte);
+        MiArm64InvalidateUserAddress(FaultAddress);
+    }
+    else if (((ULONG_PTR)FaultAddress < (ULONG_PTR)MmSystemRangeStart) &&
+             !MI_IS_PAGE_TABLE_ADDRESS(PointerPte))
+    {
+        /* Prototype PTE in pool: a software structure, never walked by
+         * hardware - no TLBI; the hardware-leaf install that follows does
+         * its own invalidate */
+        MI_WRITE_VALID_PTE_NO_FLUSH(PointerPte, ValidPte);
+        MiArm64CleanEntryToPoC(PointerPte);
+    }
+    else if (MI_IS_PAGE_TABLE_ADDRESS(PointerPte))
+    {
+        MI_WRITE_VALID_PTE_NO_FLUSH(PointerPte, ValidPte);
+        MiArm64CompleteFaultPteUpdate(FaultAddress, &ValidPte);
+    }
+    else
+    {
+        MI_WRITE_VALID_PTE(PointerPte, ValidPte);
+    }
 }
 
 static
@@ -2104,8 +2139,7 @@ MmArmAccessFault(IN ULONG FaultCode,
         if ((PointerPte->u.Hard.Valid != 0) &&
             (PointerPte->u.Hard.Accessed == 0))
         {
-            PointerPte->u.Hard.Accessed = 1;
-            KeInvalidateTlbEntry(Address);
+            MiArm64SetPteAccessed(Address, PointerPte);
         }
 #endif
 
@@ -2183,9 +2217,8 @@ MmArmAccessFault(IN ULONG FaultCode,
 #if defined(_M_ARM64)
                     if (TempPte.u.Hard.Accessed == 0)
                     {
-                        TempPte.u.Hard.Accessed = 1;
-                        MI_UPDATE_VALID_PTE(PointerPte, TempPte);
-                        KeInvalidateTlbEntry(Address);
+                        MiArm64SetPteAccessed(Address, PointerPte);
+                        TempPte = *PointerPte;
                     }
 #endif
 
@@ -2304,9 +2337,8 @@ RetryKernel:
 #if defined(_M_ARM64)
             if (TempPte.u.Hard.Accessed == 0)
             {
-                TempPte.u.Hard.Accessed = 1;
-                MI_UPDATE_VALID_PTE(PointerPte, TempPte);
-                KeInvalidateTlbEntry(Address);
+                MiArm64SetPteAccessed(Address, PointerPte);
+                TempPte = *PointerPte;
             }
 #endif
 
@@ -2502,7 +2534,7 @@ UserFault:
                 return STATUS_ACCESS_VIOLATION;
             }
 
-            Status = MiArm64EnsureUserPte(CurrentProcess, Address, &Arm64PointerPte);
+            Status = MiArm64EnsureUserPte(CurrentProcess, Address, &Arm64PointerPte, NULL);
             if (!NT_SUCCESS(Status))
             {
                 goto ExitUser;
