@@ -113,17 +113,13 @@ KdSendPacket(
             /* Check if this is an assertion failure */
             if (KdbgExceptionRecord.ExceptionCode == STATUS_ASSERTION_FAILURE)
             {
-#ifdef _M_ARM64
-                KeSetContextPc(&KdbgContext, KeGetContextPc(&KdbgContext) + KD_BREAKPOINT_SIZE);
-#else
-                /* Bump EIP to the instruction following the int 2C */
-                KeSetContextPc(&KdbgContext, KeGetContextPc(&KdbgContext) + 2);
-#endif
+                /* Bump the PC to the instruction following the assertion breakpoint */
+                KeSetContextPc(&KdbgContext, KeGetContextPc(&KdbgContext) + KD_ASSERT_BREAKPOINT_SIZE);
             }
 
             Result = KdbEnterDebuggerException(&KdbgExceptionRecord,
 #ifdef _M_ARM64
-                                               ((KdbgContext.Cpsr >> 2) & 3) == 0 ? UserMode : KernelMode,
+                                               KiGetContextPreviousMode(&KdbgContext),
 #else
                                                KdbgContext.SegCs & 1,
 #endif

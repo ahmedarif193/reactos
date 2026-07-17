@@ -10,6 +10,45 @@
 #define NDEBUG
 #include <debug.h>
 
+#define KD_100NS_PER_SECOND 10000000ULL
+
+/* cntfrq_el0 is immutable after firmware init; read and sanitize it once */
+static ULONGLONG KdpArm64CounterFrequency;
+
+ULONGLONG
+NTAPI
+KdpQueryDebugTimestamp(VOID)
+{
+    ULONGLONG InterruptTime;
+    ULONGLONG Frequency;
+    ULONGLONG Counter;
+    ULONGLONG Seconds;
+    ULONGLONG Remainder;
+    ULONGLONG CounterTime;
+
+    InterruptTime = KeQueryInterruptTime();
+
+    Frequency = KdpArm64CounterFrequency;
+    if (Frequency == 0)
+    {
+        Frequency = KiArm64GetCounterFrequency();
+        KdpArm64CounterFrequency = Frequency;
+    }
+
+    /*
+     * ARM64 keeps GIC Group 1 delivery masked during early MM bring-up, so
+     * SharedUserData->InterruptTime remains zero until the clock ISR can run.
+     * The architectural counter is already live and gives useful monotonic
+     * debug timestamps without enabling interrupts too early.
+     */
+    __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(Counter));
+    Seconds = Counter / Frequency;
+    Remainder = Counter % Frequency;
+    CounterTime = (Seconds * KD_100NS_PER_SECOND) + ((Remainder * KD_100NS_PER_SECOND) / Frequency);
+
+    return max(CounterTime, InterruptTime);
+}
+
 VOID
 NTAPI
 KdpGetStateChange(_Inout_ PDBGKD_MANIPULATE_STATE64 State,
@@ -111,93 +150,8 @@ KdpSysWriteBusData(_In_ BUS_DATA_TYPE BusDataType,
     return STATUS_NOT_IMPLEMENTED;
 }
 
-NTSTATUS
-NTAPI
-KdpSysReadControlSpace(_In_ ULONG Processor,
-                       _In_ ULONG64 BaseAddress,
-                       _Out_writes_bytes_(Length) PVOID Buffer,
-                       _In_ ULONG Length,
-                       _Out_ PULONG ActualLength)
-{
-    PVOID ControlStart;
-    PKPRCB Prcb;
-    PKIPCR Pcr;
-
-    if (Processor >= KeNumberProcessors)
-    {
-        if (ActualLength) *ActualLength = 0;
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    Prcb = KiProcessorBlock[Processor];
-    Pcr = CONTAINING_RECORD(Prcb, KIPCR, Prcb);
-
-    /* TODO: are those correct and should they be called AMD64_xxx? */
-    switch (BaseAddress)
-    {
-        case AMD64_DEBUG_CONTROL_SPACE_KPCR:
-            ControlStart = &Pcr;
-            *ActualLength = sizeof(PVOID);
-            break;
-
-        case AMD64_DEBUG_CONTROL_SPACE_KPRCB:
-            ControlStart = &Prcb;
-            *ActualLength = sizeof(PVOID);
-            break;
-
-        case AMD64_DEBUG_CONTROL_SPACE_KSPECIAL:
-            ControlStart = &Prcb->ProcessorState.SpecialRegisters;
-            *ActualLength = sizeof(KSPECIAL_REGISTERS);
-            break;
-
-        case AMD64_DEBUG_CONTROL_SPACE_KTHREAD:
-            ControlStart = &Prcb->CurrentThread;
-            *ActualLength = sizeof(PVOID);
-            break;
-
-        default:
-            *ActualLength = 0;
-            return STATUS_UNSUCCESSFUL;
-    }
-
-    RtlCopyMemory(Buffer, ControlStart, min(Length, *ActualLength));
-    return STATUS_SUCCESS;
-}
-
-NTSTATUS
-NTAPI
-KdpSysWriteControlSpace(_In_ ULONG Processor,
-                        _In_ ULONG64 BaseAddress,
-                        _In_reads_bytes_(Length) PVOID Buffer,
-                        _In_ ULONG Length,
-                        _Out_ PULONG ActualLength)
-{
-    PVOID ControlStart;
-    PKPRCB Prcb;
-
-    if (Processor >= KeNumberProcessors)
-    {
-        if (ActualLength) *ActualLength = 0;
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    Prcb = KiProcessorBlock[Processor];
-
-    switch (BaseAddress)
-    {
-        case AMD64_DEBUG_CONTROL_SPACE_KSPECIAL:
-            ControlStart = &Prcb->ProcessorState.SpecialRegisters;
-            *ActualLength = sizeof(KSPECIAL_REGISTERS);
-            break;
-
-        default:
-            *ActualLength = 0;
-            return STATUS_UNSUCCESSFUL;
-    }
-
-    RtlCopyMemory(ControlStart, Buffer, min(Length, *ActualLength));
-    return STATUS_SUCCESS;
-}
+/* KdpSysReadControlSpace/KdpSysWriteControlSpace live in kd64/kdcontrol.c,
+ * shared with AMD64 (same control-space layout and constants). */
 
 NTSTATUS
 NTAPI

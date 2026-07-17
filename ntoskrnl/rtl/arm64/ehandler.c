@@ -6,13 +6,9 @@
 #include <ntoskrnl.h>
 #include <ndk/rtltypes.h>
 
-typedef struct _RUNTIME_FUNCTION {
-    ULONG BeginAddress;
-    ULONG UnwindData;
-} RUNTIME_FUNCTION, *PRUNTIME_FUNCTION;
+/* RUNTIME_FUNCTION comes from the NDK (ndk/rtltypes.h) */
 
 #define NDEBUG
-#include <debug.h>
 #include <debug.h>
 
 #ifndef _ARM64_DISPATCHER_CONTEXT_DEFINED

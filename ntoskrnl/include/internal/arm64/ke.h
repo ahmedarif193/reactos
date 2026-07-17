@@ -89,6 +89,7 @@ KiArm64ReadCcsidr(
 #define KD_BREAKPOINT_TYPE        ULONG
 #define KD_BREAKPOINT_SIZE        sizeof(ULONG)
 #define KD_BREAKPOINT_VALUE       0xD43E0000
+#define KD_ASSERT_BREAKPOINT_SIZE KD_BREAKPOINT_SIZE
 #define MM_SYSTEM_RANGE_START         MmSystemRangeStart
 
 // Interrupt state helper. The DAIF.I bit (bit 7) mirrors the PSR interrupt
@@ -437,6 +438,10 @@ KiGetLinkedTrapFrame(
 
 #define KiGetPreviousMode(TrapFrame) \
     (((TrapFrame)->Spsr & 0xF) == 0 ? UserMode : KernelMode)
+
+/* Same EL0 test for a CONTEXT, whose Cpsr field carries the saved PSTATE */
+#define KiGetContextPreviousMode(Context) \
+    (((Context)->Cpsr & 0xF) == 0 ? UserMode : KernelMode)
 
 VOID
 KeFlushTb(VOID);

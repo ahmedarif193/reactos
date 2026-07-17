@@ -236,7 +236,8 @@ KdbpOverwriteInstruction(
 #if defined(_M_ARM64)
     if (NT_SUCCESS(Status))
     {
-        HalSweepIcache();
+        /* Ranged, SMP-broadcast maintenance for exactly the patched instruction */
+        KeSweepICache((PVOID)Address, sizeof(NewInst));
     }
 #endif
 
@@ -1230,9 +1231,7 @@ KdbpInternalEnter(
     PVOID SavedInitialStack, SavedStackBase, SavedKernelStack;
     ULONG SavedStackLimit;
 
-#ifndef _M_ARM64
     KbdDisableMouse();
-#endif
 
     /* Take control of the display */
     if (KdpDebugMode.Screen)
@@ -1262,9 +1261,7 @@ KdbpInternalEnter(
     if (KdpDebugMode.Screen)
         KdpScreenRelease();
 
-#ifndef _M_ARM64
     KbdEnableMouse();
-#endif
 }
 
 static ULONG
@@ -1320,6 +1317,17 @@ KdbpGetExceptionNumberFromStatus(
     return Ret;
 }
 
+/* Arch hooks to save/restore the interrupted flags state around the debugger
+ * critical section. ARM64 has no EFLAGS to preserve here: interrupts are
+ * masked via _disable() and the trap frame already carries the saved PSTATE. */
+#if defined(_M_ARM64)
+#define KdbpArchSaveInterruptState()          0
+#define KdbpArchRestoreInterruptState(State)  ((VOID)(State))
+#else
+#define KdbpArchSaveInterruptState()          __readeflags()
+#define KdbpArchRestoreInterruptState(State)  __writeeflags(State)
+#endif
+
 /*!\brief KDB Exception filter
  *
  * Called by the exception dispatcher.
@@ -1347,8 +1355,8 @@ KdbEnterDebuggerException(
     ULONGLONG ull;
 #if !defined(_M_ARM64)
     BOOLEAN Resume = FALSE;
-    ULONG OldEflags;
 #endif
+    ULONG_PTR OldInterruptState;
     BOOLEAN EnterConditionMet = TRUE;
     KIRQL OldIrql;
     NTSTATUS ExceptionCode;
@@ -1639,9 +1647,7 @@ EnterKdbg:;
     KdbTrapFrame = *Context;
 
     /* Enter critical section */
-#if !defined(_M_ARM64)
-    OldEflags = __readeflags();
-#endif
+    OldInterruptState = KdbpArchSaveInterruptState();
     _disable();
 
     /* HACK: Save the current IRQL and pretend we are at dispatch level */
@@ -1652,9 +1658,7 @@ EnterKdbg:;
     /* Exception inside the debugger? Game over. */
     if (InterlockedIncrement(&KdbEntryCount) > 1)
     {
-#if !defined(_M_ARM64)
-        __writeeflags(OldEflags);
-#endif
+        KdbpArchRestoreInterruptState(OldInterruptState);
         return kdHandleException;
     }
 
@@ -1700,9 +1704,7 @@ EnterKdbg:;
         KeRaiseIrql(OldIrql, &OldIrql);
 
     /* Leave critical section */
-#if !defined(_M_ARM64)
-    __writeeflags(OldEflags);
-#endif
+    KdbpArchRestoreInterruptState(OldInterruptState);
 
     /* Check if user requested a bugcheck */
     if (KdbpBugCheckRequested)
