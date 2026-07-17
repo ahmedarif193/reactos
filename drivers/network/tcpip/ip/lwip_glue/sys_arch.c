@@ -264,8 +264,6 @@ LwipThreadMain(PVOID Context)
 
     ExInterlockedInsertHeadList(&ThreadListHead, &Container->ListEntry, &ThreadListLock);
 
-    KeSetPriorityThread(KeGetCurrentThread(), LOW_REALTIME_PRIORITY);
-
     Container->ThreadFunction(Container->ThreadContext);
 
     KeAcquireSpinLock(&ThreadListLock, &OldIrql);
