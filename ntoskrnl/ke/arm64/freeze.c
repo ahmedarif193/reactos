@@ -8,43 +8,6 @@
 #define NDEBUG
 #include <debug.h>
 
-KIRQL
-NTAPI
-KxFreezeExecutionRaiseIrql(
-    VOID)
-{
-    KIRQL OldIrql;
-
-    /*
-     * Bypass the generic IRQL path while entering KDBG freeze on ARM64.
-     * The debugger only needs a stable HIGH_LEVEL mask across DAIF and PMR.
-     */
-    OldIrql = KeGetCurrentIrql();
-    __asm__ __volatile__("msr daifset, #0xf" ::: "memory");
-    __asm__ __volatile__("dsb sy" ::: "memory");
-    if (KiHalInitialized)
-    {
-        HalSetGicPriorityMask(HIGH_LEVEL);
-    }
-    KiSetCurrentIrql(HIGH_LEVEL);
-    __asm__ __volatile__("isb" ::: "memory");
-
-    return OldIrql;
-}
-
-VOID
-NTAPI
-KxFreezeExecutionLowerIrql(
-    _In_ KIRQL OldIrql)
-{
-    /*
-     * Restore the saved logical IRQL and matching GIC PMR.
-     * KeRestoreInterrupts() handles the final DAIF state on the shared path.
-     */
-    KiSetIrqlAndPriorityMask(OldIrql);
-    __asm__ __volatile__("dsb sy\n\tisb" ::: "memory");
-}
-
 #ifdef CONFIG_SMP
 
 VOID

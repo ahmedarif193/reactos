@@ -17,18 +17,6 @@ ULONG64 KiArm64BootSErrorDisr = 0;
 
 extern const UINT64 KiArm64VectorTable[];
 
-/* Lightweight vector log for IRQ/FIQ/SError permanent stubs */
-VOID
-KiArm64VectorLogOnly(
-    _In_ ULONG Esr,
-    _In_ ULONG_PTR Far,
-    _In_ ULONG VectorId)
-{
-    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_TRACE_LEVEL,
-               "[arm64] PermVector: id=%lu esr=0x%lx far=%p\n",
-               VectorId, Esr, (PVOID)Far);
-}
-
 CODE_SEG("INIT")
 VOID
 NTAPI

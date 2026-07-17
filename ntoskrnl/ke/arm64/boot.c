@@ -82,66 +82,6 @@ static UINT64 *KiArm64IdentityL1;
 static UINT64 (*KiArm64IdentityL2)[512];
 static BOOLEAN KiArm64IdentityMapActive;
 
-typedef struct _ARM64_EARLY_TRAP_STATE
-{
-    ARM64_EARLY_GPRS Registers;
-    UINT64 VectorId;
-    UINT64 ExceptionSyndrome;
-    UINT64 FaultAddress;
-    UINT64 Elr;
-    UINT64 Spsr;
-} ARM64_EARLY_TRAP_STATE, *PARM64_EARLY_TRAP_STATE;
-
-static ARM64_EARLY_TRAP_STATE KiArm64LastTrapState;
-static BOOLEAN KiArm64TrapStateValid = FALSE;
-
-static const PCSTR KiArm64EsrClassNames[64] =
-{
-    [0x00] = "Unknown",
-    [0x01] = "WFI/WFE trap",
-    [0x03] = "CP15 RT trap",
-    [0x04] = "CP15 R trap",
-    [0x05] = "CP15 W trap",
-    [0x07] = "FP/SIMD access",
-    [0x08] = "MCRR/MRRC trap",
-    [0x0C] = "SVE access",
-    [0x11] = "SVC in AArch32",
-    [0x12] = "HVC in AArch32",
-    [0x13] = "SMC in AArch32",
-    [0x15] = "SVC in AArch64",
-    [0x16] = "HVC in AArch64",
-    [0x17] = "SMC in AArch64",
-    [0x18] = "MSR/MRS trap",
-    [0x1C] = "Instruction abort (lower EL)",
-    [0x1D] = "Instruction abort (same EL)",
-    [0x20] = "Data abort (lower EL)",
-    [0x21] = "Data abort (same EL)",
-    [0x22] = "SP alignment fault",
-    [0x24] = "FP exception",
-    [0x26] = "FP exception (AArch64)",
-    [0x2F] = "SError interrupt",
-};
-
-static const PCSTR KiArm64VectorNames[16] =
-{
-    [0]  = "Sync SP0",
-    [1]  = "IRQ SP0",
-    [2]  = "FIQ SP0",
-    [3]  = "SError SP0",
-    [4]  = "Sync SPx",
-    [5]  = "IRQ SPx",
-    [6]  = "FIQ SPx",
-    [7]  = "SError SPx",
-    [8]  = "Sync lower A64",
-    [9]  = "IRQ lower A64",
-    [10] = "FIQ lower A64",
-    [11] = "SError lower A64",
-    [12] = "Sync lower A32",
-    [13] = "IRQ lower A32",
-    [14] = "FIQ lower A32",
-    [15] = "SError lower A32",
-};
-
 typedef struct _ARM64_BOOT_CONTEXT
 {
     PLOADER_PARAMETER_BLOCK LoaderBlock;
@@ -196,30 +136,6 @@ KiArm64MapIdentityRange(_In_ UINT64 PhysicalStart,
 CODE_SEG("INIT")
 static DECLSPEC_NORETURN VOID
 KiArm64FatalHalt(VOID);
-
-/* KiArm64DescribeEsr is defined in trapdump.c */
-#if 0
-CODE_SEG("INIT")
-static PCSTR
-KiArm64DescribeEsr(_In_ UINT64 ExceptionSyndrome)
-{
-    ULONG Class = (ULONG)((ExceptionSyndrome >> 26) & 0x3FULL);
-
-    if (Class < RTL_NUMBER_OF(KiArm64EsrClassNames) &&
-        KiArm64EsrClassNames[Class] != NULL)
-    {
-        return KiArm64EsrClassNames[Class];
-    }
-
-    return "Unknown";
-}
-#endif
-
-CODE_SEG("INIT")
-static VOID
-KiArm64MapIdentityRange(_In_ UINT64 PhysicalStart,
-                        _In_ UINT64 PhysicalEnd,
-                        _In_ UINT64 Attributes);
 
 CODE_SEG("INIT")
 static VOID
@@ -754,25 +670,10 @@ KiArm64EarlyVectorHandler(_In_ UINT64 VectorId,
                           _In_ UINT64 FaultAddress,
                           _In_opt_ PARM64_EARLY_GPRS Registers)
 {
-    UINT64 Spsr, Elr;
-    ARM64_EARLY_GPRS LocalRegisters = {0};
-
-    __asm__ __volatile__("mrs %0, spsr_el1" : "=r"(Spsr));
-    __asm__ __volatile__("mrs %0, elr_el1"  : "=r"(Elr));
-
-    if (Registers)
-    {
-        LocalRegisters = *Registers;
-    }
-
-    KiArm64LastTrapState.Registers = LocalRegisters;
-    KiArm64LastTrapState.VectorId = VectorId;
-    KiArm64LastTrapState.ExceptionSyndrome = ExceptionSyndrome;
-    KiArm64LastTrapState.FaultAddress = FaultAddress;
-    KiArm64LastTrapState.Elr = Elr;
-    KiArm64LastTrapState.Spsr = Spsr;
-    KiArm64TrapStateValid = TRUE;
-
+    UNREFERENCED_PARAMETER(VectorId);
+    UNREFERENCED_PARAMETER(ExceptionSyndrome);
+    UNREFERENCED_PARAMETER(FaultAddress);
+    UNREFERENCED_PARAMETER(Registers);
 
     /*
      * If final vectors are installed, return and let the permanent

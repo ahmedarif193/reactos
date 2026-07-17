@@ -1420,18 +1420,6 @@ MmDeleteProcessAddressSpace(IN PEPROCESS Process)
     KIRQL OldIrql;
     PFN_NUMBER PageFrameIndex;
 
-#if defined(_M_ARM64)
-    /*
-     * Reclaim this process's ASID (if the ARM64 ASID allocator is enabled) and
-     * strip the ASID/generation tag from DirectoryTableBase[0] before the code
-     * below derives page frames from it. No-op when the allocator is disabled.
-     */
-    {
-        extern VOID NTAPI KiArm64ReleaseProcessAsid(PKPROCESS Process);
-        KiArm64ReleaseProcessAsid(&Process->Pcb);
-    }
-#endif
-
 #if !defined(_M_AMD64) && !defined(_M_ARM64)
     OldIrql = MiAcquireExpansionLock();
     RemoveEntryList(&Process->MmProcessLinks);

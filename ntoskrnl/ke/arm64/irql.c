@@ -23,23 +23,6 @@ KiQueryCurrentIrql(VOID)
 #undef KeGetCurrentIrql
 
 VOID
-KiSetCurrentIrql(
-    _In_ KIRQL Irql)
-{
-    ULONG Value = Irql;
-
-    /* The global fallback is valid only during BSP bootstrap, before x18. */
-    if (KeGetPcr() == NULL)
-    {
-        KeArm64CurrentIrql = Irql;
-        return;
-    }
-
-    __asm__ __volatile__("strb %w0, [x18, #" ARM64_KPCR_STRINGIFY(ARM64_KPCR_CURRENT_IRQL) "]"
-                         :: "r"(Value) : "memory");
-}
-
-VOID
 NTAPI
 KiRestoreTrapFrameIrql(
     _In_ KIRQL Irql)
@@ -69,23 +52,6 @@ NTAPI
 KeGetCurrentProcessorNumber(VOID)
 {
     return KiQueryCurrentProcessorNumber();
-}
-
-ULONG
-NTAPI
-KeGetCurrentProcessorNumberEx(
-    _Out_opt_ PPROCESSOR_NUMBER ProcNumber)
-{
-    ULONG Number = KiQueryCurrentProcessorNumber();
-
-    if (ProcNumber != NULL)
-    {
-        ProcNumber->Group = 0;
-        ProcNumber->Number = (UCHAR)Number;
-        ProcNumber->Reserved = 0;
-    }
-
-    return Number;
 }
 
 KIRQL
@@ -209,13 +175,6 @@ NTAPI
 KeRaiseIrqlToDpcLevel(VOID)
 {
     return KfRaiseIrql(DISPATCH_LEVEL);
-}
-
-NTKERNELAPI
-KIRQL
-KxRaiseIrqlToSynchLevel(VOID)
-{
-    return KeRaiseIrqlToSynchLevel();
 }
 
 KIRQL
