@@ -230,12 +230,15 @@ KiResolveUserDispatcherAddress(
 }
 
 /*
- * KI_ARM64_TTBR_ADDR_MASK isolates the translation-table base from a TTBR
- * value. All processes run under ASID 0 with a broadcast TLB flush on every
- * switch; a future targeted-ASID scheme must place the ASID in TTBR1_EL1.ASID
- * (TCR.A1=1 is forced, matching Win11) and confirm user leaf PTEs are nG=1.
+ * The TTBR masks isolate translation-table bases from tagged TTBR values.
+ * TTBR1 retains bit 11 because T1SZ=17 selects the upper 256-entry half of the
+ * shared L0 page. TCR.A1=1 is forced on every CPU, so the current 8-bit ASID
+ * belongs in TTBR1_EL1[55:48]. User and process-local leaf descriptors are nG;
+ * shared kernel leaf descriptors remain global.
  */
 #define KI_ARM64_TTBR_ADDR_MASK   0x0000FFFFFFFFF000ULL
+#define KI_ARM64_TTBR1_ADDR_MASK  0x0000FFFFFFFFF800ULL
+#define KI_ARM64_TTBR_ASID_SHIFT  48
 
 FORCEINLINE
 ULONGLONG
@@ -243,26 +246,33 @@ KiArm64KernelTtbrBase(
     _In_ ULONGLONG UserDirectoryBase)
 {
     ULONGLONG RootBase = UserDirectoryBase & KI_ARM64_TTBR_ADDR_MASK;
+#if DBG
     ULONGLONG TcrEl1;
     ULONGLONG T1sz;
 
     __asm__ __volatile__("mrs %0, tcr_el1" : "=r"(TcrEl1));
     T1sz = (TcrEl1 >> 16) & 0x3FULL;
-    return (T1sz == 17) ? RootBase + KE_ARM64_TTBR1_L0_OFFSET : RootBase;
+    ASSERT(T1sz == 17);
+#endif
+    return RootBase + KE_ARM64_TTBR1_L0_OFFSET;
 }
 
 FORCEINLINE
 VOID
 KiArm64WriteUserTtbr(
     _In_ ULONGLONG UserDirectoryBase,
-    _In_ ULONGLONG KernelRootBase)
+    _In_ ULONGLONG KernelRootBase,
+    _In_ UCHAR Asid,
+    _In_ BOOLEAN FlushAll)
 {
     /*
-     * Process switch: write both TTBRs, then broadcast-flush the TLB (all
-     * processes share ASID 0). KernelRootBase is the caller's already-computed
-     * KiArm64KernelTtbrBase() value, so the switch pays a single TCR_EL1 read.
+     * Process switch: TCR.A1 selects the tag in TTBR1. A generation-live ASID
+     * needs no invalidation; ASID-0 fallback retains the old full-flush safety
+     * contract. Interrupts stay masked across the transient TTBR0/TTBR1 pair.
      */
     ULONGLONG RootBase = UserDirectoryBase & KI_ARM64_TTBR_ADDR_MASK;
+    ULONGLONG TaggedKernelRoot = (KernelRootBase & KI_ARM64_TTBR1_ADDR_MASK) |
+                                 ((ULONGLONG)Asid << KI_ARM64_TTBR_ASID_SHIFT);
     ULONGLONG SavedDaif;
 
     __asm__ __volatile__("mrs %0, daif" : "=r"(SavedDaif));
@@ -271,12 +281,15 @@ KiArm64WriteUserTtbr(
     __asm__ __volatile__("dsb ishst" ::: "memory");
     __asm__ __volatile__("msr ttbr0_el1, %0" :: "r"(RootBase) : "memory");
     __asm__ __volatile__("isb" ::: "memory");
-    __asm__ __volatile__("msr ttbr1_el1, %0" :: "r"(KernelRootBase) : "memory");
+    __asm__ __volatile__("msr ttbr1_el1, %0" :: "r"(TaggedKernelRoot) : "memory");
     __asm__ __volatile__("isb" ::: "memory");
 
-    __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
-    __asm__ __volatile__("dsb ish" ::: "memory");
-    __asm__ __volatile__("isb" ::: "memory");
+    if (FlushAll)
+    {
+        __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
+        __asm__ __volatile__("dsb ish" ::: "memory");
+        __asm__ __volatile__("isb" ::: "memory");
+    }
 
     __asm__ __volatile__("msr daif, %0" :: "r"(SavedDaif) : "memory");
 }
