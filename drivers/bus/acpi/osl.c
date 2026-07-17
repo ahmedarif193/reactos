@@ -162,7 +162,7 @@ ACPI_PHYSICAL_ADDRESS
 AcpiBuildLoaderRootPointer(VOID)
 {
     PACPI_BIOS_MULTI_NODE NodeData;
-    ACPI_TABLE_HEADER *RootTable;
+    ACPI_TABLE_HEADER *RootTable = NULL;
     PHYSICAL_ADDRESS PhysicalAddress;
 
     if (AcpiLoaderRsdp != NULL)
