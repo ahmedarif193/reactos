@@ -301,7 +301,6 @@
 #ifndef SYSFUNCS_NT5_ONLY
     SVC_(GetCurrentProcessorNumberEx, 1)
     SVC_(CreateUserProcess, 11)
-#endif
 #if (NTDDI_VERSION >= NTDDI_WIN7)
     SVC_(QuerySystemInformationEx, 6)
 #endif
@@ -331,3 +330,4 @@
 #if (NTDDI_VERSION >= NTDDI_WIN10_RS3)
     SVC_(NotifyChangeDirectoryFileEx, 10)
 #endif
+#endif // SYSFUNCS_NT5_ONLY
