@@ -51,6 +51,15 @@ static __inline ULONG KiArm64ClockTimerIntId(void)
 static KTRAP_FRAME KiArm64InterruptTrapFrame[MAXIMUM_PROCESSORS];
 static PKTRAP_FRAME KiArm64CurrentInterruptTrapFrame[MAXIMUM_PROCESSORS];
 
+typedef struct DECLSPEC_CACHEALIGN _KI_ARM64_TIMER_STATE
+{
+    ULONG Increment;
+    ULONG TickOffset;
+    ULONGLONG PeriodTicks;
+} KI_ARM64_TIMER_STATE, *PKI_ARM64_TIMER_STATE;
+
+static KI_ARM64_TIMER_STATE KiArm64TimerState[MAXIMUM_PROCESSORS];
+
 /*
  * Even/odd dispatch epoch per CPU (seqlock-style): odd while an ISR chain is
  * running, so KeDisconnectInterrupt can wait out in-flight dispatches. Each
@@ -80,15 +89,9 @@ ULONG KiTimerCtlReadback = 0;
 
 static
 PKTRAP_FRAME
-KiArm64GetCurrentInterruptTrapFrame(VOID)
+KiArm64GetInterruptTrapFrame(
+    _In_ ULONG Cpu)
 {
-    ULONG Cpu = KeGetCurrentProcessorNumber();
-
-    if (Cpu >= MAXIMUM_PROCESSORS)
-    {
-        Cpu = 0;
-    }
-
     return KiArm64CurrentInterruptTrapFrame[Cpu] ?
            KiArm64CurrentInterruptTrapFrame[Cpu] :
            &KiArm64InterruptTrapFrame[Cpu];
@@ -254,20 +257,34 @@ KiArm64TimerIsr(
 {
     ULONGLONG period;
     ULONG Increment;
+    ULONG RuntimeIncrement;
     PKTRAP_FRAME TrapFrame;
+    PKI_ARM64_TIMER_STATE TimerState;
     ULONG Cpu;
     UNREFERENCED_PARAMETER(Interrupt);
     UNREFERENCED_PARAMETER(ServiceContext);
 
     KiTimerIsrCallCount++;
 
+    Cpu = KeGetCurrentProcessorNumber();
+    if (Cpu >= MAXIMUM_PROCESSORS)
+    {
+        Cpu = 0;
+    }
+
     Increment = KiArm64CurrentTimerIncrement();
-    if (KeGetCurrentProcessorNumber() != 0 && KeMaximumIncrement > Increment)
+    if (Cpu != 0 && KeMaximumIncrement > Increment)
     {
         Increment = KeMaximumIncrement;
     }
-    period = KiArm64ComputeTimerPeriodTicks(Increment);
-    KiArm64TimerPeriodTicks = period;
+
+    TimerState = &KiArm64TimerState[Cpu];
+    if (TimerState->Increment != Increment || TimerState->PeriodTicks == 0)
+    {
+        TimerState->Increment = Increment;
+        TimerState->PeriodTicks = KiArm64ComputeTimerPeriodTicks(Increment);
+    }
+    period = TimerState->PeriodTicks;
 
     /* Reload next tick first to minimize jitter. */
     if (KiArm64UseVirtualTimer)
@@ -287,8 +304,7 @@ KiArm64TimerIsr(
      * The common clock path dereferences the trap frame for previous-mode
      * accounting. Keep this as a real frame, not a sentinel pointer.
      */
-    TrapFrame = KiArm64GetCurrentInterruptTrapFrame();
-    Cpu = KeGetCurrentProcessorNumber();
+    TrapFrame = KiArm64GetInterruptTrapFrame(Cpu);
 
     /* SMP boot diagnostics: silent per-CPU tick counter only. The periodic
      * serial dump is disabled for this probe - at 115200 baud it perturbs the
@@ -312,16 +328,12 @@ KiArm64TimerIsr(
     }
     else
     {
-        static LONG KiArm64ApTickOffset[MAXIMUM_PROCESSORS];
-
-        if (Cpu < MAXIMUM_PROCESSORS)
+        RuntimeIncrement = KeMaximumIncrement ? KeMaximumIncrement : Increment;
+        TimerState->TickOffset += Increment;
+        if (TimerState->TickOffset >= RuntimeIncrement)
         {
-            KiArm64ApTickOffset[Cpu] += (LONG)Increment;
-            if (KiArm64ApTickOffset[Cpu] >= (LONG)KeMaximumIncrement)
-            {
-                KiArm64ApTickOffset[Cpu] -= (LONG)KeMaximumIncrement;
-                KeUpdateRunTime(TrapFrame, TrapFrame->PreviousIrql);
-            }
+            TimerState->TickOffset -= RuntimeIncrement;
+            KeUpdateRunTime(TrapFrame, TrapFrame->PreviousIrql);
         }
     }
 
@@ -378,7 +390,9 @@ VOID
 KiArm64StartLocalTimer(VOID)
 {
     ULONGLONG frq;
+    PKI_ARM64_TIMER_STATE TimerState;
     ULONG Increment;
+    ULONG Cpu;
     ULONG ctl;
 
     /* Read and validate CNTFRQ_EL0 (shared fallback for bogus firmware) */
@@ -386,7 +400,17 @@ KiArm64StartLocalTimer(VOID)
 
     KiArm64TimerFrequency = frq;
     Increment = KiArm64CurrentTimerIncrement();
-    KiArm64TimerPeriodTicks = KiArm64ComputeTimerPeriodTicks(Increment);
+    Cpu = KeGetCurrentProcessorNumber();
+    if (Cpu >= MAXIMUM_PROCESSORS)
+    {
+        Cpu = 0;
+    }
+
+    TimerState = &KiArm64TimerState[Cpu];
+    TimerState->Increment = Increment;
+    TimerState->TickOffset = 0;
+    TimerState->PeriodTicks = KiArm64ComputeTimerPeriodTicks(Increment);
+    KiArm64TimerPeriodTicks = TimerState->PeriodTicks;
 
     if (KiArm64UseVirtualTimer)
     {
@@ -395,7 +419,7 @@ KiArm64StartLocalTimer(VOID)
          * 1. Set countdown value in CNTV_TVAL_EL0
          * 2. Enable timer with ENABLE=1, IMASK=0 in CNTV_CTL_EL0
          */
-        KiArm64WriteCntvTval(KiArm64TimerPeriodTicks);
+        KiArm64WriteCntvTval(TimerState->PeriodTicks);
         KiArm64WriteCntvCtl(1); /* ENABLE=1, IMASK=0 */
 
         ctl = KiArm64ReadCntvCtl();
@@ -407,7 +431,7 @@ KiArm64StartLocalTimer(VOID)
          * 1. Set countdown value in CNTP_TVAL_EL0
          * 2. Enable timer with ENABLE=1, IMASK=0 in CNTP_CTL_EL0
          */
-        KiArm64WriteCntpTval(KiArm64TimerPeriodTicks);
+        KiArm64WriteCntpTval(TimerState->PeriodTicks);
         KiArm64WriteCntpCtl(1); /* ENABLE=1, IMASK=0 */
 
         ctl = KiArm64ReadCntpCtl();
