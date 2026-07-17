@@ -330,7 +330,7 @@ MiUnmapLockedPagesInUserSpace(
     ULONG NumberOfPages;
     PPFN_NUMBER MdlPages;
     PFN_NUMBER PageTablePage;
-#if defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64)
     PVOID FlushBase;
     ULONG FlushPages = 0;
 #endif
@@ -364,7 +364,7 @@ MiUnmapLockedPagesInUserSpace(
     ASSERT(Process->VadRoot.NodeHint != Vad);
 
     PointerPte = MiAddressToPte(BaseAddress);
-#if defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64)
     FlushBase = BaseAddress;
 #endif
     OldIrql = MiAcquirePfnLock();
@@ -376,7 +376,7 @@ MiUnmapLockedPagesInUserSpace(
 
         /* Invalidate it */
         MI_ERASE_PTE(PointerPte);
-#if defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64)
         FlushPages++;
 #endif
 
@@ -398,8 +398,8 @@ MiUnmapLockedPagesInUserSpace(
         MdlPages++;
     }
 
-#if defined(_M_ARM64)
-    MiFlushSystemTbRange(FlushBase, FlushPages);
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    MiFlushProcessTbRange(FlushBase, FlushPages);
 #else
     KeFlushProcessTb();
 #endif
