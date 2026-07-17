@@ -79,9 +79,6 @@ KeQueryMaximumProcessorCountEx(
     return KeQueryMaximumProcessorCount();
 }
 
-#ifndef _M_ARM64
-/* The ARM64 port provides its own KeGetCurrentProcessorNumberEx() in
- * ke/arm64/irql.c; every other architecture uses this portable version. */
 ULONG
 NTAPI
 KeGetCurrentProcessorNumberEx(
@@ -100,7 +97,6 @@ KeGetCurrentProcessorNumberEx(
 
     return Number;
 }
-#endif /* _M_ARM64 */
 
 /**
  * Retrieves the number of the current processor.

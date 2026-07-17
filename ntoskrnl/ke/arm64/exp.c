@@ -82,14 +82,7 @@ KiDispatchExceptionToUser(
             KeUserExceptionDispatcher != NULL &&
             PspSystemDllBase != NULL)
         {
-            PVOID UserDispatcher = KiConvertSystemDllAddressToUser(
-                KeUserExceptionDispatcher, Process);
-            if ((UserDispatcher == NULL) &&
-                (KeUserExceptionDispatcher != NULL) &&
-                ((ULONG_PTR)KeUserExceptionDispatcher < (ULONG_PTR)MmSystemRangeStart))
-            {
-                UserDispatcher = KeUserExceptionDispatcher;
-            }
+            PVOID UserDispatcher = KiResolveUserDispatcherAddress(KeUserExceptionDispatcher, Process);
 
             if (UserDispatcher != NULL)
             {
@@ -256,13 +249,7 @@ KiDispatchExceptionToUser(
     {
         PKTHREAD Thread = KeGetCurrentThread();
         PEPROCESS Process = (PEPROCESS)Thread->ApcState.Process;
-        PVOID UserExceptionDispatcher = KiConvertSystemDllAddressToUser(KeUserExceptionDispatcher, Process);
-        if ((UserExceptionDispatcher == NULL) &&
-            (KeUserExceptionDispatcher != NULL) &&
-            ((ULONG_PTR)KeUserExceptionDispatcher < (ULONG_PTR)MmSystemRangeStart))
-        {
-            UserExceptionDispatcher = KeUserExceptionDispatcher;
-        }
+        PVOID UserExceptionDispatcher = KiResolveUserDispatcherAddress(KeUserExceptionDispatcher, Process);
         if (UserExceptionDispatcher == NULL)
         {
             DPRINT1("[arm64][EXC] unresolved exception dispatcher: proc=%.16s KeUserExceptionDispatcher=%p SystemDllBase=%p PspSystemDllBase=%p TrapPc=%p CtxPc=%p CtxLr=%p\n",

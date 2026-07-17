@@ -7,75 +7,13 @@
  */
 
 #include <ntoskrnl.h>
-#include <ntstrsafe.h>
-#include <string.h>
 #define NDEBUG
 #include <debug.h>
 #include <arm64trap.h>
-#include <mm/ARM3/miarm.h>
-#include <pseh/pseh2.h>
 
 extern BOOLEAN KdDebuggerEnabled;
 extern BOOLEAN KdDebuggerNotPresent;
-#define KI_ARM64_MIN_KERNEL_ADDRESS 0xFFFF000000000000ULL
 
-
-extern ULONG ExpPoolFlags;
-extern POOL_DESCRIPTOR NonPagedPoolDescriptor;
-extern PPOOL_DESCRIPTOR PoolVector[2];
-/* Selected refptrs to validate at trap time (object manager globals) */
-extern volatile ULONG * const ObpLUIDDeviceMapsEnabledPtr __asm__(".refptr.ObpLUIDDeviceMapsEnabled");
-extern volatile PVOID  * const ObpNameBufferLookasideListPtr __asm__(".refptr.ObpNameBufferLookasideList");
-extern volatile ULONG * const ObpObjectSecurityModePtr __asm__(".refptr.ObpObjectSecurityMode");
-extern volatile ULONG * const ObpProtectionModePtr __asm__(".refptr.ObpProtectionMode");
-volatile ULONG MiArm64LastFaultIrqlEntry;
-volatile ULONG MiArm64LastFaultIrqlRaised;
-volatile ULONG MiArm64LastFaultIrqlAfterDispatch;
-volatile ULONG MiArm64LastFaultIrqlBeforeUnlock;
-volatile ULONG MiArm64LastFaultIrqlAfterLower;
-volatile ULONG MiArm64LastFaultStatus;
-volatile LONG MiArm64LastSpecialApcDisableEntry;
-volatile LONG MiArm64LastKernelApcDisableEntry;
-volatile LONG MiArm64LastSpecialApcDisableBeforeUnlock;
-volatile LONG MiArm64LastKernelApcDisableBeforeUnlock;
-volatile ULONG MiArm64LastFaultPathFlags;
-volatile ULONG MiArm64LastFaultLockIrql;
-volatile LONG MiArm64LastSpecialApcDisableAfterUnlock;
-volatile LONG MiArm64LastKernelApcDisableAfterUnlock;
-volatile ULONG MiArm64LastFaultPfnOldIrql;
-volatile ULONG MiArm64LastFaultPfnNewIrql;
-volatile ULONG MiArm64LastFaultPfnReleaseIrql;
-volatile ULONG MiArm64LastFaultPfnAfterReleaseIrql;
-volatile ULONG_PTR MiArm64LastFaultPfnThread;
-volatile ULONG_PTR MiArm64LastFaultPfnCaller;
-volatile ULONG MiArm64LastGuardedLeaveIrql;
-volatile ULONG_PTR MiArm64LastGuardedLeaveThread;
-volatile LONG MiArm64LastGuardedLeaveSpecial;
-volatile LONG MiArm64LastGuardedLeaveKernel;
-volatile ULONG MiArm64LastGuardedAssertFlags;
-volatile ULONG MiArm64LastGuardedAssertIrql;
-volatile ULONG_PTR MiArm64LastGuardedAssertThread;
-volatile ULONG_PTR MiArm64LastGuardedAssertCaller;
-volatile LONG MiArm64LastGuardedAssertSpecial;
-volatile LONG MiArm64LastGuardedAssertKernel;
-volatile ULONG MiArm64LastMdlFreeFlags;
-volatile ULONG MiArm64LastMdlFreeIrql;
-volatile LONG MiArm64LastMdlFreeSpecial;
-volatile LONG MiArm64LastMdlFreeKernel;
-volatile ULONG_PTR MiArm64LastMdlFreeThread;
-volatile ULONG_PTR MiArm64LastMdlFreeEThread;
-volatile ULONG_PTR MiArm64LastMdlFreeCaller;
-volatile ULONG_PTR MiArm64LastMdlFreeCaller2;
-volatile ULONG_PTR MiArm64LastMdlFreeMdl;
-volatile ULONG MiArm64LastIrqlRaiseFrom;
-volatile ULONG MiArm64LastIrqlRaiseTo;
-volatile ULONG MiArm64LastIrqlLowerFrom;
-volatile ULONG MiArm64LastIrqlLowerTo;
-volatile ULONG_PTR MiArm64LastIrqlRaiseCaller;
-volatile ULONG_PTR MiArm64LastIrqlLowerCaller;
-volatile ULONG_PTR MiArm64LastIrqlRaiseThread;
-volatile ULONG_PTR MiArm64LastIrqlLowerThread;
-volatile LONG MiArm64IrqlTraceBudget = 64;
 volatile LONG MiArm64TrapTraceIndex;
 volatile ULONG64 MiArm64TrapTraceElr[4];
 volatile ULONG64 MiArm64TrapTraceFar[4];
@@ -90,47 +28,6 @@ volatile ULONG64 MiArm64TrapTraceX8[4];
 volatile ULONG64 MiArm64TrapTraceX9[4];
 volatile ULONG64 MiArm64TrapTraceX20[4];
 volatile ULONG64 MiArm64TrapTraceX21[4];
-/* Pointers to our own guarded-leave diagnostics via .refptr */
-extern volatile ULONG * const MiArm64LastGuardedLeaveIrqlPtr __asm__(".refptr.MiArm64LastGuardedLeaveIrql");
-extern volatile ULONG_PTR * const MiArm64LastGuardedLeaveThreadPtr __asm__(".refptr.MiArm64LastGuardedLeaveThread");
-extern volatile LONG * const MiArm64LastGuardedLeaveSpecialPtr __asm__(".refptr.MiArm64LastGuardedLeaveSpecial");
-extern volatile LONG * const MiArm64LastGuardedLeaveKernelPtr __asm__(".refptr.MiArm64LastGuardedLeaveKernel");
-volatile PVOID MiArm64RefptrGuardBase;
-volatile SIZE_T MiArm64RefptrGuardSize;
-
-/* Define .refptr entries for our own guarded-leave diagnostics so the
- * linker finds them on ARM64. These are read-only pointers whose symbol
- * names are .refptr.<name>, pointing at the actual globals above. */
-__attribute__((used, section(".rdata$.refptr.MiArm64LastGuardedLeaveIrql")))
-volatile ULONG * const __MiArm64LastGuardedLeaveIrqlRefptr __asm__(".refptr.MiArm64LastGuardedLeaveIrql") = &MiArm64LastGuardedLeaveIrql;
-
-__attribute__((used, section(".rdata$.refptr.MiArm64LastGuardedLeaveThread")))
-volatile ULONG_PTR * const __MiArm64LastGuardedLeaveThreadRefptr __asm__(".refptr.MiArm64LastGuardedLeaveThread") = &MiArm64LastGuardedLeaveThread;
-
-__attribute__((used, section(".rdata$.refptr.MiArm64LastGuardedLeaveSpecial")))
-volatile LONG * const __MiArm64LastGuardedLeaveSpecialRefptr __asm__(".refptr.MiArm64LastGuardedLeaveSpecial") = &MiArm64LastGuardedLeaveSpecial;
-
-__attribute__((used, section(".rdata$.refptr.MiArm64LastGuardedLeaveKernel")))
-volatile LONG * const __MiArm64LastGuardedLeaveKernelRefptr __asm__(".refptr.MiArm64LastGuardedLeaveKernel") = &MiArm64LastGuardedLeaveKernel;
-
-/* Define .refptr entries for selected object manager globals so the
- * linker finds them on ARM64 when referenced via the Obp*Ptr aliases.
- * Clang already materializes these symbols for the asm-alias externs,
- * so we only emit the backing pointers for GCC/MinGW. */
-#if defined(__GNUC__) && !defined(__clang__)
-__attribute__((used, section(".rdata$.refptr.ObpLUIDDeviceMapsEnabled")))
-volatile ULONG * const __ObpLUIDDeviceMapsEnabledRefptr __asm__(".refptr.ObpLUIDDeviceMapsEnabled") = &ObpLUIDDeviceMapsEnabled;
-
-__attribute__((used, section(".rdata$.refptr.ObpNameBufferLookasideList")))
-volatile PVOID * const __ObpNameBufferLookasideListRefptr __asm__(".refptr.ObpNameBufferLookasideList") = (PVOID *)&ObpNameBufferLookasideList;
-
-__attribute__((used, section(".rdata$.refptr.ObpObjectSecurityMode")))
-volatile ULONG * const __ObpObjectSecurityModeRefptr __asm__(".refptr.ObpObjectSecurityMode") = &ObpObjectSecurityMode;
-
-__attribute__((used, section(".rdata$.refptr.ObpProtectionMode")))
-volatile ULONG * const __ObpProtectionModeRefptr __asm__(".refptr.ObpProtectionMode") = &ObpProtectionMode;
-#endif
-
 
 static const PCSTR KiArm64VectorNames[16] =
 {
@@ -224,15 +121,6 @@ KiArm64DumpRegisterState(_In_ const ARM64_EARLY_TRAP_STATE *State,
                State->Registers.Pstate);
 }
 
-static BOOLEAN
-KiArm64DumpStackSnapshot(_In_ const ARM64_EARLY_TRAP_STATE *State,
-                         _In_opt_ PARM64_EARLY_LOG_SINK Sink)
-{
-    UNREFERENCED_PARAMETER(State);
-    UNREFERENCED_PARAMETER(Sink);
-    return FALSE;
-}
-
 VOID
 KiArm64DumpEarlyTrapState(_In_ const ARM64_EARLY_TRAP_STATE *State,
                           _In_opt_ PARM64_EARLY_LOG_SINK Sink)
@@ -286,8 +174,6 @@ KiArm64DumpEarlyTrapState(_In_ const ARM64_EARLY_TRAP_STATE *State,
 
     DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL, "Registers:\n");
     KiArm64DumpRegisterState(State, Sink);
-
-    KiArm64DumpStackSnapshot(State, Sink);
 }
 
 static

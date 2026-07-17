@@ -23,12 +23,14 @@
 int _SEH2_Volatile0 = 0;
 int _SEH2_VolatileExceptionCode = 0;
 
+/* Out-of-line linkage symbols; the bodies defer to the compiler builtins the
+ * inline versions in sdk/include/vcruntime/mingw32/intrin_arm64.h use. */
 unsigned short
 __cdecl
 _byteswap_ushort(
     unsigned short Value)
 {
-    return (unsigned short)((Value >> 8) | (Value << 8));
+    return __builtin_bswap16(Value);
 }
 
 unsigned long
@@ -36,10 +38,7 @@ __cdecl
 _byteswap_ulong(
     unsigned long Value)
 {
-    return (Value >> 24) |
-           ((Value >> 8) & 0x0000FF00UL) |
-           ((Value << 8) & 0x00FF0000UL) |
-           (Value << 24);
+    return __builtin_bswap32(Value);
 }
 
 __uint128_t
@@ -277,15 +276,16 @@ VOID
 __cdecl
 __debugbreak(VOID) __attribute__((alias("__reactos_debugbreak_impl")));
 
+/*
+ * Out-of-line linkage symbols for _disable/_enable. The DAIF-masking policy
+ * (IRQ-only, I bit) MUST stay byte-identical to the inline versions in
+ * sdk/include/vcruntime/mingw32/intrin_arm64.h, or IRQ masking semantics
+ * fork depending on which copy a call site gets.
+ */
 VOID
 __cdecl
 _disable(VOID)
 {
-    /*
-     * Mask IRQ only (I bit). Keep SError (A) unmasked per IRQL policy
-     * and avoid forcing full DAIF state changes that bypass IRQL tracking.
-     * ISB is sufficient for DAIF changes (no memory ordering required).
-     */
     __asm__ __volatile__("msr daifset, #0x2\n\tisb" ::: "memory");
 }
 
@@ -293,10 +293,6 @@ VOID
 __cdecl
 _enable(VOID)
 {
-    /*
-     * IRQL is enforced via GIC priority masking; DAIF.I is a global gate.
-     * ISB is sufficient for DAIF changes (no memory ordering required).
-     */
     __asm__ __volatile__("msr daifclr, #0x2\n\tisb" ::: "memory");
 }
 

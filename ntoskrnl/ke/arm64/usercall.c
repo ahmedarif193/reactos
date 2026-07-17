@@ -91,6 +91,37 @@ C_ASSERT(RTL_NUMBER_OF(KiSyscallHandlers) == 0x12);
 
 static
 NTSTATUS
+KiArm64ProbeAndCopyUserBuffer(
+    _In_ PVOID TargetAddress,
+    _In_reads_bytes_(BufferSize) CONST VOID *Buffer,
+    _In_ SIZE_T BufferSize)
+{
+    EXCEPTION_RECORD ExceptionRecord;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    /*
+     * Copy the APC frame through the actual EL0 VA. This matches the
+     * established exception/callout paths and removes the PFN-alias/full-page
+     * DC-CIVAC workaround that can defer a bad cache-maintenance side effect
+     * until the first ERET into user mode.
+     */
+    _SEH2_TRY
+    {
+        ProbeForWrite(TargetAddress, BufferSize, sizeof(ULONG64));
+        RtlCopyMemory(TargetAddress, Buffer, BufferSize);
+    }
+    _SEH2_EXCEPT(ExceptionRecord = *_SEH2_GetExceptionInformation()->ExceptionRecord,
+                 EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = ExceptionRecord.ExceptionCode;
+    }
+    _SEH2_END;
+
+    return Status;
+}
+
+static
+NTSTATUS
 KiArm64CopyToCurrentUserBuffer(
     _In_ PVOID TargetAddress,
     _In_reads_bytes_(BufferSize) CONST VOID *Buffer,
@@ -99,10 +130,21 @@ KiArm64CopyToCurrentUserBuffer(
 {
     ULONG_PTR CurrentVa;
     SIZE_T RemainingSize;
-    EXCEPTION_RECORD ExceptionRecord;
-    NTSTATUS Status = STATUS_SUCCESS;
+    NTSTATUS Status;
 
     UNREFERENCED_PARAMETER(Tag);
+
+    /*
+     * Fast path: the frame pages are normally already resident and writable,
+     * so the probe+copy succeeds without any explicit fault-in or per-page
+     * broadcast TLB invalidation. Only on failure fault each page in with
+     * the original UserMode fault-in semantics and retry once.
+     */
+    Status = KiArm64ProbeAndCopyUserBuffer(TargetAddress, Buffer, BufferSize);
+    if (NT_SUCCESS(Status))
+    {
+        return STATUS_SUCCESS;
+    }
 
     CurrentVa = (ULONG_PTR)TargetAddress;
     RemainingSize = BufferSize;
@@ -133,30 +175,7 @@ KiArm64CopyToCurrentUserBuffer(
         RemainingSize -= ChunkSize;
     }
 
-    /*
-     * Copy the APC frame through the actual EL0 VA once the pages are known to
-     * be resident. This matches the established exception/callout paths and
-     * removes the PFN-alias/full-page-DC-CIVAC workaround that can defer a
-     * bad cache-maintenance side effect until the first ERET into user mode.
-     */
-    _SEH2_TRY
-    {
-        ProbeForWrite(TargetAddress, BufferSize, sizeof(ULONG64));
-        RtlCopyMemory(TargetAddress, Buffer, BufferSize);
-    }
-    _SEH2_EXCEPT(ExceptionRecord = *_SEH2_GetExceptionInformation()->ExceptionRecord,
-                 EXCEPTION_EXECUTE_HANDLER)
-    {
-        Status = ExceptionRecord.ExceptionCode;
-    }
-    _SEH2_END;
-
-    if (!NT_SUCCESS(Status))
-    {
-        return Status;
-    }
-
-    return STATUS_SUCCESS;
+    return KiArm64ProbeAndCopyUserBuffer(TargetAddress, Buffer, BufferSize);
 }
 
 VOID
@@ -187,11 +206,6 @@ KiSystemService(
     if (Prcb != NULL)
     {
         Prcb->KeSystemCalls++;
-    }
-
-    for (Index = 0; Index < RTL_NUMBER_OF(RegisterArguments); Index++)
-    {
-        RegisterArguments[Index] = TrapFrame->X[Index];
     }
 
 #if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
@@ -239,7 +253,20 @@ KiSystemService(
             /* Only convert if win32k callouts are registered */
             if (PspW32ProcessCallout != NULL && PspW32ThreadCallout != NULL)
             {
-                NTSTATUS ConvertStatus = PsConvertToGuiThread();
+                NTSTATUS ConvertStatus;
+
+                /*
+                 * Snapshot the register arguments: PsConvertToGuiThread switches
+                 * kernel stacks, and the relocated trap frame is re-seeded from
+                 * this copy below. Done here (once per thread) instead of on
+                 * every system call.
+                 */
+                for (Index = 0; Index < RTL_NUMBER_OF(RegisterArguments); Index++)
+                {
+                    RegisterArguments[Index] = TrapFrame->X[Index];
+                }
+
+                ConvertStatus = PsConvertToGuiThread();
                 if (NT_SUCCESS(ConvertStatus) ||
                     ConvertStatus == STATUS_ALREADY_WIN32)
                 {
@@ -445,25 +472,17 @@ KiInitializeUserApc(
      * address to the user-space equivalent. If conversion fails but the
      * global already contains a user VA, use it directly.
      */
-    UserApcDispatcher = KiConvertSystemDllAddressToUser(KeUserApcDispatcher, Process);
+    UserApcDispatcher = KiResolveUserDispatcherAddress(KeUserApcDispatcher, Process);
     if (!UserApcDispatcher)
     {
-        if ((KeUserApcDispatcher != NULL) &&
-            ((ULONG_PTR)KeUserApcDispatcher < (ULONG_PTR)MmSystemRangeStart))
-        {
-            UserApcDispatcher = KeUserApcDispatcher;
-        }
-        if (!UserApcDispatcher)
-        {
-            DPRINT1("[arm64][APC] unresolved APC dispatcher: proc=%.16s KeUserApcDispatcher=%p SystemDllBase=%p PspSystemDllBase=%p TrapPc=%p TrapSp=%p\n",
-                    PsGetCurrentProcess()->ImageFileName,
-                    KeUserApcDispatcher,
-                    Process ? PspSystemDllBase : NULL,
-                    PspSystemDllBase,
-                    (PVOID)(ULONG_PTR)TrapFrame->Pc,
-                    (PVOID)(ULONG_PTR)TrapFrame->Sp);
-            return;
-        }
+        DPRINT1("[arm64][APC] unresolved APC dispatcher: proc=%.16s KeUserApcDispatcher=%p SystemDllBase=%p PspSystemDllBase=%p TrapPc=%p TrapSp=%p\n",
+                PsGetCurrentProcess()->ImageFileName,
+                KeUserApcDispatcher,
+                Process ? PspSystemDllBase : NULL,
+                PspSystemDllBase,
+                (PVOID)(ULONG_PTR)TrapFrame->Pc,
+                (PVOID)(ULONG_PTR)TrapFrame->Sp);
+        return;
     }
 
     /*
@@ -559,13 +578,7 @@ KiUserModeCallout(
     ASSERT((CurrentThread->ApcStateIndex == OriginalApcEnvironment) &&
            (CurrentThread->CombinedApcDisable == 0));
 
-    UserCallbackDispatcher = KiConvertSystemDllAddressToUser(KeUserCallbackDispatcher, Process);
-    if (!UserCallbackDispatcher &&
-        (KeUserCallbackDispatcher != NULL) &&
-        ((ULONG_PTR)KeUserCallbackDispatcher < (ULONG_PTR)MmSystemRangeStart))
-    {
-        UserCallbackDispatcher = KeUserCallbackDispatcher;
-    }
+    UserCallbackDispatcher = KiResolveUserDispatcherAddress(KeUserCallbackDispatcher, Process);
 
     if (!UserCallbackDispatcher)
     {

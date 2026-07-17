@@ -140,30 +140,12 @@ PspSystemThreadStartup(IN PKSTART_ROUTINE StartRoutine,
                        IN PVOID StartContext)
 {
     PETHREAD Thread;
-#if defined(_M_ARM64)
-    static LONG PspArm64SystemThreadTraceBudget = 16;
-#endif
     PSTRACE(PS_THREAD_DEBUG,
             "StartRoutine: %p StartContext: %p\n", StartRoutine, StartContext);
 
     /* Unlock the dispatcher Database */
     KeLowerIrql(PASSIVE_LEVEL);
     Thread = PsGetCurrentThread();
-
-#if defined(_M_ARM64)
-    if (PspArm64SystemThreadTraceBudget > 0)
-    {
-        LONG OldBudget = InterlockedDecrement(&PspArm64SystemThreadTraceBudget);
-        if (OldBudget >= 0)
-        {
-            DPRINT("[arm64][ps] PspSystemThreadStartup: thread=%p start=%p context=%p irql=%u\n",
-                    Thread,
-                    StartRoutine,
-                    StartContext,
-                    KeGetCurrentIrql());
-        }
-    }
-#endif
 
     /* Make sure the thread isn't gone */
     _SEH2_TRY

@@ -39,9 +39,31 @@ static ULONGLONG KiArm64TimerFrequency;
 static KINTERRUPT KiArm64IpiInterrupt;
 static KSPIN_LOCK KiArm64IpiLock;
 static BOOLEAN KiArm64UseVirtualTimer = TRUE; /* Use virtual timer - physical timer doesn't work under HVF */
+
+/*
+ * Generic-timer PPI INTIDs: 27 = virtual timer (CNTV), 30 = non-secure EL1
+ * physical timer (CNTP). Single decision point for every timer PPI operation.
+ */
+static __inline ULONG KiArm64ClockTimerIntId(void)
+{
+    return KiArm64UseVirtualTimer ? 27u : 30u;
+}
 static KTRAP_FRAME KiArm64InterruptTrapFrame[MAXIMUM_PROCESSORS];
 static PKTRAP_FRAME KiArm64CurrentInterruptTrapFrame[MAXIMUM_PROCESSORS];
-static volatile LONG KiArm64DispatchEpoch[MAXIMUM_PROCESSORS];
+
+/*
+ * Even/odd dispatch epoch per CPU (seqlock-style): odd while an ISR chain is
+ * running, so KeDisconnectInterrupt can wait out in-flight dispatches. Each
+ * slot is written only by its own CPU but read cross-CPU, so keep the
+ * interlocked ordering; the cache-line alignment stops the per-interrupt
+ * increments from bouncing one shared line between all CPUs.
+ */
+typedef struct DECLSPEC_ALIGN(64) _KI_ARM64_DISPATCH_EPOCH
+{
+    volatile LONG Value;
+} KI_ARM64_DISPATCH_EPOCH;
+
+static KI_ARM64_DISPATCH_EPOCH KiArm64DispatchEpoch[MAXIMUM_PROCESSORS];
 
 static inline
 PKINTERRUPT
@@ -55,19 +77,6 @@ ULONG KiTimerIsrCallCount = 0;
 ULONG KiInitInterruptsCallCount = 0;
 ULONG KiTimerStartedFlag = 0;
 ULONG KiTimerCtlReadback = 0;
-
-PKTRAP_FRAME
-KiArm64ActiveInterruptTrapFrame(VOID)
-{
-    ULONG Cpu = KeGetCurrentProcessorNumber();
-
-    if (Cpu >= MAXIMUM_PROCESSORS)
-    {
-        Cpu = 0;
-    }
-
-    return KiArm64CurrentInterruptTrapFrame[Cpu];
-}
 
 static
 PKTRAP_FRAME
@@ -88,8 +97,6 @@ KiArm64GetCurrentInterruptTrapFrame(VOID)
 static inline void KiRawDebugPuts(const char *str) {
     UNREFERENCED_PARAMETER(str);
 }
-
-static __inline ULONGLONG KiArm64ReadCntFrq(void);
 
 static
 ULONG
@@ -118,9 +125,7 @@ KiArm64ComputeTimerPeriodTicks(
     ULONGLONG Period;
 
     if (Frequency == 0)
-        Frequency = KiArm64ReadCntFrq();
-    if (Frequency == 0 || Frequency > 10000000000ULL)
-        Frequency = 100000000ULL;
+        Frequency = KiArm64GetCounterFrequency();
 
     Period = (Frequency * Increment) / 10000000ULL;
     return Period ? Period : 1;
@@ -161,13 +166,6 @@ KiDeliverApc(
  * before subsequent code executes. For TVAL writes during ISR reload, ISB
  * is optional but recommended for deterministic timing.
  */
-
-static __inline ULONGLONG KiArm64ReadCntFrq(void)
-{
-    ULONGLONG v;
-    __asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(v));
-    return v;
-}
 
 static __inline ULONG KiArm64ReadCntpCtl(void)
 {
@@ -383,21 +381,8 @@ KiArm64StartLocalTimer(VOID)
     ULONG Increment;
     ULONG ctl;
 
-    /* Read counter frequency from CNTFRQ_EL0 */
-    frq = KiArm64ReadCntFrq();
-
-    /*
-     * Validate frequency - if zero or unreasonable, use a safe default.
-     * QEMU virt uses 62.5 MHz (62500000), real hardware varies widely:
-     *   - Cortex-A53/A72: typically 19.2 MHz or 24.576 MHz
-     *   - Apple M1: 24 MHz
-     *   - QEMU: 62.5 MHz or 1 GHz depending on configuration
-     */
-    if (frq == 0 || frq > 10000000000ULL)
-    {
-        DPRINT1("[arm64] CNTFRQ_EL0 invalid (0x%llx), using 100 MHz default\n", frq);
-        frq = 100000000ULL;
-    }
+    /* Read and validate CNTFRQ_EL0 (shared fallback for bogus firmware) */
+    frq = KiArm64GetCounterFrequency();
 
     KiArm64TimerFrequency = frq;
     Increment = KiArm64CurrentTimerIncrement();
@@ -435,7 +420,7 @@ VOID
 NTAPI
 KeStartArm64ProcessorTimer(VOID)
 {
-    ULONG TimerIntId = KiArm64UseVirtualTimer ? 27 : 30;
+    ULONG TimerIntId = KiArm64ClockTimerIntId();
 
     /*
      * The ARM generic timer is a per-CPU PPI. The interrupt object is
@@ -495,7 +480,7 @@ KeInitInterrupts(VOID)
      * tick to preempt device ISRs for accurate timing.
      */
     {
-        ULONG TimerIntId = KiArm64UseVirtualTimer ? 27 : 30;
+        ULONG TimerIntId = KiArm64ClockTimerIntId();
 
         KiRawDebugPuts("[KeInitInterrupts] Timer spinlock\n");
         KeInitializeSpinLock(&KiArm64TimerLock);
@@ -550,7 +535,7 @@ VOID
 NTAPI
 KeReenableTimerInterrupt(VOID)
 {
-    ULONG TimerIntId = KiArm64UseVirtualTimer ? 27 : 30;
+    ULONG TimerIntId = KiArm64ClockTimerIntId();
 
     /*
      * Re-enable the timer interrupt in the GIC.
@@ -705,7 +690,11 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId)
         Cpu = 0;
     }
 
-    RtlZeroMemory(&LocalTrapFrame, sizeof(LocalTrapFrame));
+    /*
+     * Only PreviousMode/PreviousIrql are ever consumed from this frame
+     * (KeUpdateSystemTime/KeUpdateRunTime via KiArm64GetCurrentInterruptTrapFrame),
+     * so skip zeroing the remaining 340+ bytes on every interrupt.
+     */
     LocalTrapFrame.PreviousMode = (VectorId >= 8) ? UserMode : KernelMode;
     LocalTrapFrame.PreviousIrql = OldIrql;
     SavedTrapFrame = KiArm64CurrentInterruptTrapFrame[Cpu];
@@ -713,11 +702,11 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId)
 
     if (Head != NULL)
     {
-        InterlockedIncrement(&KiArm64DispatchEpoch[Cpu]);
+        InterlockedIncrement(&KiArm64DispatchEpoch[Cpu].Value);
         _enable();
         KiArm64DispatchChain(IntId);
         _disable();
-        InterlockedIncrement(&KiArm64DispatchEpoch[Cpu]);
+        InterlockedIncrement(&KiArm64DispatchEpoch[Cpu].Value);
     }
 
     KiArm64CurrentInterruptTrapFrame[Cpu] = SavedTrapFrame;
@@ -860,13 +849,13 @@ Done:
         KeMemoryBarrier();
         for (Cpu = 0; Cpu < (ULONG)KeNumberProcessors && Cpu < MAXIMUM_PROCESSORS; Cpu++)
         {
-            LONG Epoch = KiArm64DispatchEpoch[Cpu];
+            LONG Epoch = KiArm64DispatchEpoch[Cpu].Value;
             ULONG Spins = 0;
 
             if (!(Epoch & 1))
                 continue;
 
-            while (KiArm64DispatchEpoch[Cpu] == Epoch)
+            while (KiArm64DispatchEpoch[Cpu].Value == Epoch)
             {
                 YieldProcessor();
                 KeMemoryBarrier();

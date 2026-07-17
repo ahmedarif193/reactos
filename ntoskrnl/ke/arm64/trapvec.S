@@ -7,7 +7,6 @@
     .extern KiArm64HandleSynchronousException
     .extern KiArm64BugCheckEntry
     .extern KiTrapReturn
-    .extern KiArm64VectorLogOnly
 
 .equ ARM64_EARLY_STATE_VECTORID,      0x0
 .equ ARM64_EARLY_STATE_ESR,           0x8

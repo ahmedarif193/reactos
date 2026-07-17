@@ -724,13 +724,7 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
     Pcr->SecondLevelCacheAssociativity = 0;
 
     {
-        ULONG64 CounterFrequency = 0;
-
-        __asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(CounterFrequency));
-        if (CounterFrequency == 0)
-        {
-            CounterFrequency = 62500000ULL;
-        }
+        ULONG64 CounterFrequency = KiArm64GetCounterFrequency();
 
         Pcr->Prcb.CycleCounterFrequency = CounterFrequency;
         Pcr->Prcb.MHz = (ULONG)((CounterFrequency + 999999ULL) / 1000000ULL);

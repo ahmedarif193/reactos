@@ -14,6 +14,25 @@
 extern BOOLEAN ExpArm64PoolBootstrapMode;
 extern volatile LONG MiArm64PfnLockDepth[MAXIMUM_PROCESSORS];
 
+/*
+ * PFN-lock depth accounting (reader: MiArm64AllocatePageTablePage, which
+ * checks its own CPU's slot to detect re-entry). The counter is only ever
+ * updated by the owning CPU at >= DISPATCH_LEVEL, so a plain volatile
+ * update is sufficient - no interlocked traffic on the PFN-lock hot path.
+ */
+static
+VOID
+KiArm64AdjustPfnLockDepth(
+    _In_ LONG Delta)
+{
+    ULONG CpuIndex = KeGetCurrentProcessorNumber();
+
+    if (CpuIndex < MAXIMUM_PROCESSORS)
+    {
+        MiArm64PfnLockDepth[CpuIndex] += Delta;
+    }
+}
+
 KIRQL
 FASTCALL
 KfAcquireSpinLock(
@@ -109,11 +128,7 @@ KeAcquireQueuedSpinLock(
     KxAcquireSpinLock(Lock);
     if (LockNumber == LockQueuePfnLock)
     {
-        ULONG CpuIndex = KeGetCurrentProcessorNumber();
-        if (CpuIndex < MAXIMUM_PROCESSORS)
-        {
-            InterlockedIncrement(&MiArm64PfnLockDepth[CpuIndex]);
-        }
+        KiArm64AdjustPfnLockDepth(1);
     }
     return OldIrql;
 }
@@ -133,11 +148,7 @@ KeAcquireQueuedSpinLockRaiseToSynch(
      * the RaiseToSynch path without this increment underflows the depth. */
     if (LockNumber == LockQueuePfnLock)
     {
-        ULONG CpuIndex = KeGetCurrentProcessorNumber();
-        if (CpuIndex < MAXIMUM_PROCESSORS)
-        {
-            InterlockedIncrement(&MiArm64PfnLockDepth[CpuIndex]);
-        }
+        KiArm64AdjustPfnLockDepth(1);
     }
     return OldIrql;
 }
@@ -171,11 +182,7 @@ KeReleaseQueuedSpinLock(
     KxReleaseSpinLock(Lock);
     if (LockNumber == LockQueuePfnLock)
     {
-        ULONG CpuIndex = KeGetCurrentProcessorNumber();
-        if (CpuIndex < MAXIMUM_PROCESSORS)
-        {
-            InterlockedDecrement(&MiArm64PfnLockDepth[CpuIndex]);
-        }
+        KiArm64AdjustPfnLockDepth(-1);
     }
     KeLowerIrql(OldIrql);
 }
@@ -229,11 +236,7 @@ KeTryToAcquireQueuedSpinLock(
             KeGetCurrentPrcb()->LockQueue[LockNumber].Lock);
         if (Acquired && (LockNumber == LockQueuePfnLock))
         {
-            ULONG CpuIndex = KeGetCurrentProcessorNumber();
-            if (CpuIndex < MAXIMUM_PROCESSORS)
-            {
-                InterlockedIncrement(&MiArm64PfnLockDepth[CpuIndex]);
-            }
+            KiArm64AdjustPfnLockDepth(1);
         }
         return Acquired;
     }
@@ -257,11 +260,7 @@ KeTryToAcquireQueuedSpinLockRaiseToSynch(
             KeGetCurrentPrcb()->LockQueue[LockNumber].Lock);
         if (Acquired && (LockNumber == LockQueuePfnLock))
         {
-            ULONG CpuIndex = KeGetCurrentProcessorNumber();
-            if (CpuIndex < MAXIMUM_PROCESSORS)
-            {
-                InterlockedIncrement(&MiArm64PfnLockDepth[CpuIndex]);
-            }
+            KiArm64AdjustPfnLockDepth(1);
         }
         return Acquired;
     }

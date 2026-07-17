@@ -142,6 +142,29 @@ KeFlushProcessTb(VOID)
 }
 
 /*
+ * Fallback for firmware that leaves CNTFRQ_EL0 unprogrammed or bogus.
+ * 62.5 MHz is the QEMU-virt value; real hardware varies widely (Cortex-A5x:
+ * 19.2/24.576 MHz, Apple M1: 24 MHz). One constant shared by cycle accounting
+ * (kiinit.c) and the clock tick period (interrupt.c) so they cannot disagree.
+ */
+#define KI_ARM64_COUNTER_FREQUENCY_FALLBACK 62500000ULL
+
+FORCEINLINE
+ULONGLONG
+KiArm64GetCounterFrequency(VOID)
+{
+    ULONGLONG Frequency;
+
+    __asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(Frequency));
+    if ((Frequency == 0) || (Frequency > 10000000000ULL))
+    {
+        return KI_ARM64_COUNTER_FREQUENCY_FALLBACK;
+    }
+
+    return Frequency;
+}
+
+/*
  * Conservative upper bound for the kernel ntdll mapping size.
  * Typical ntdll is well under 4MB; 16MB is generous headroom.
  * Used until PspSystemDllSize (or SizeOfImage from the PE header) is
@@ -185,25 +208,33 @@ KiConvertSystemDllAddressToUser(
 }
 
 /*
- * ARM64 ASID encoding inside KPROCESS DirectoryTableBase[0] (== TTBR0_EL1).
- *
- *   [63:56] ignored (8-bit ASID, TCR.AS=0)   [55:48] ASID   [47:12] table base
- *
- * KI_ARM64_TTBR_ADDR_MASK isolates the table base; KI_ARM64_TTBR_ASID_MASK the
- * 8-bit ASID. The ASID allocator (ke/arm64/trapc.c, gated by KiArm64AsidEnabled,
- * default off) writes the ASID into DirectoryTableBase[0]; with the default
- * ASID == 0 every switch broadcast-flushes exactly as the original bring-up code
- * did, so the encoding is behaviour-neutral until the allocator is enabled.
- *
- * Note: TCR.A1=1 is now forced (TTBR1 selects the current ASID, matching Win11),
- * but this helper still composes the ASID into TTBR0. Before enabling targeted
- * (flush-free) switching, move the ASID into TTBR1_EL1.ASID to match A1=1 and
- * confirm user leaf PTEs are non-global (nG=1); otherwise the current ASID stays
- * 0 and the flush-free path corrupts cross-process translations.
+ * Resolve a user-mode dispatcher target: convert a kernel-mapped ntdll
+ * address to its user alias, falling back to the raw pointer when it is
+ * already a user-space VA. Returns NULL when no user-resolvable address
+ * exists; callers decide how to fail. All ARM64 dispatcher paths must use
+ * this single implementation of the fallback policy.
+ */
+static inline PVOID
+KiResolveUserDispatcherAddress(
+    _In_opt_ PVOID KernelAddress,
+    _In_ PEPROCESS Process)
+{
+    PVOID UserAddress = KiConvertSystemDllAddressToUser(KernelAddress, Process);
+
+    if (UserAddress != NULL) return UserAddress;
+    if (KernelAddress == NULL) return NULL;
+    if ((ULONG_PTR)KernelAddress >= (ULONG_PTR)MmSystemRangeStart) return NULL;
+
+    return KernelAddress;
+}
+
+/*
+ * KI_ARM64_TTBR_ADDR_MASK isolates the translation-table base from a TTBR
+ * value. All processes run under ASID 0 with a broadcast TLB flush on every
+ * switch; a future targeted-ASID scheme must place the ASID in TTBR1_EL1.ASID
+ * (TCR.A1=1 is forced, matching Win11) and confirm user leaf PTEs are nG=1.
  */
 #define KI_ARM64_TTBR_ADDR_MASK   0x0000FFFFFFFFF000ULL
-#define KI_ARM64_TTBR_ASID_SHIFT  48
-#define KI_ARM64_TTBR_ASID_MASK   (0xFFULL << KI_ARM64_TTBR_ASID_SHIFT)
 
 FORCEINLINE
 ULONGLONG
@@ -222,88 +253,31 @@ KiArm64KernelTtbrBase(
 FORCEINLINE
 VOID
 KiArm64WriteUserTtbr(
-    _In_ ULONGLONG UserDirectoryBase)
+    _In_ ULONGLONG UserDirectoryBase,
+    _In_ ULONGLONG KernelRootBase)
 {
     /*
-     * ARM64 ASID-aware process switch.
-     *
-     * When the ASID allocator is disabled (default), DirectoryTableBase[0] has
-     * ASID == 0: we write the bare table base and broadcast-flush the whole TLB,
-     * exactly as the original single-ASID bring-up code did.
-     *
-     * When the allocator has tagged this process with a non-zero ASID, we write
-     * the ASID into TTBR0 and skip the flush entirely: the incoming process's
-     * translations are cached under its own ASID and the outgoing process's stay
-     * cached under theirs, so no eviction is needed on the switch. (ASIDs are
-     * recycled by degrading to ASID 0, never by reuse, so a freshly assigned
-     * ASID can never alias stale entries.)
+     * Process switch: write both TTBRs, then broadcast-flush the TLB (all
+     * processes share ASID 0). KernelRootBase is the caller's already-computed
+     * KiArm64KernelTtbrBase() value, so the switch pays a single TCR_EL1 read.
      */
     ULONGLONG RootBase = UserDirectoryBase & KI_ARM64_TTBR_ADDR_MASK;
-    ULONGLONG Asid = UserDirectoryBase & KI_ARM64_TTBR_ASID_MASK;
-    ULONGLONG KernelRootBase = KiArm64KernelTtbrBase(UserDirectoryBase);
     ULONGLONG SavedDaif;
 
     __asm__ __volatile__("mrs %0, daif" : "=r"(SavedDaif));
     __asm__ __volatile__("msr daifset, #0xF" ::: "memory");
 
     __asm__ __volatile__("dsb ishst" ::: "memory");
-    __asm__ __volatile__("msr ttbr0_el1, %0" :: "r"(RootBase | Asid) : "memory");
+    __asm__ __volatile__("msr ttbr0_el1, %0" :: "r"(RootBase) : "memory");
     __asm__ __volatile__("isb" ::: "memory");
     __asm__ __volatile__("msr ttbr1_el1, %0" :: "r"(KernelRootBase) : "memory");
     __asm__ __volatile__("isb" ::: "memory");
 
-    if (Asid == 0)
-    {
-        __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
-        __asm__ __volatile__("dsb ish" ::: "memory");
-        __asm__ __volatile__("isb" ::: "memory");
-    }
+    __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
+    __asm__ __volatile__("dsb ish" ::: "memory");
+    __asm__ __volatile__("isb" ::: "memory");
 
     __asm__ __volatile__("msr daif, %0" :: "r"(SavedDaif) : "memory");
-}
-
-FORCEINLINE
-VOID
-KeSweepICache(
-    _In_opt_ PVOID BaseAddress,
-    _In_ SIZE_T FlushSize)
-{
-    ULONG64 Ctr;
-    ULONG DLine, ILine;
-    ULONG_PTR Start, End, Addr;
-
-    if (!BaseAddress || FlushSize == 0)
-    {
-        /* ic ialluis broadcasts to all CPUs in inner shareable domain (SMP-safe) */
-        __asm__ __volatile__("ic ialluis\n\tdsb ish\n\tisb" ::: "memory");
-        return;
-    }
-
-    __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
-    DLine = 4u << ((Ctr >> 16) & 0xF);
-    ILine = 4u << (Ctr & 0xF);
-
-    /* Clean D-cache to PoU for the modified range before invalidating I-cache. */
-    Start = (ULONG_PTR)BaseAddress & ~(ULONG_PTR)(DLine - 1);
-    End = (ULONG_PTR)BaseAddress + FlushSize;
-    for (Addr = Start; Addr < End; Addr += DLine)
-    {
-        /*
-         * TODO: Revisit once ARM64 user/kernel executable mappings are proven
-         * alias-safe. CIVAC is stronger than CVAU and can hurt performance for
-         * large or frequent code-publication ranges because it also invalidates
-         * the data-cache line and pushes maintenance to the point of coherency.
-         */
-        __asm__ __volatile__("dc civac, %0" :: "r"(Addr) : "memory");
-    }
-    __asm__ __volatile__("dsb ish" ::: "memory");
-
-    Start = (ULONG_PTR)BaseAddress & ~(ULONG_PTR)(ILine - 1);
-    for (Addr = Start; Addr < End; Addr += ILine)
-    {
-        __asm__ __volatile__("ic ivau, %0" :: "r"(Addr) : "memory");
-    }
-    __asm__ __volatile__("dsb ish\n\tisb" ::: "memory");
 }
 
 ULONG
@@ -479,9 +453,27 @@ FASTCALL
 HalSetGicPriorityMask(
     _In_ KIRQL Irql);
 
+/*
+ * Publish the logical IRQL. Inline because this sits on every raise/lower
+ * (i.e. every spinlock acquire/release); the fast path is one strb via x18.
+ * The global fallback is valid only during BSP bootstrap, before x18 is set.
+ */
+FORCEINLINE
 VOID
 KiSetCurrentIrql(
-    _In_ KIRQL Irql);
+    _In_ KIRQL Irql)
+{
+    ULONG Value = Irql;
+
+    if (KeGetPcr() == NULL)
+    {
+        KeArm64CurrentIrql = Irql;
+        return;
+    }
+
+    __asm__ __volatile__("strb %w0, [x18, #" ARM64_KPCR_STRINGIFY(ARM64_KPCR_CURRENT_IRQL) "]"
+                         :: "r"(Value) : "memory");
+}
 
 VOID
 NTAPI
@@ -573,6 +565,47 @@ KiArm64GetCacheLineSizes(
     *IcacheLineSize = 4u << (Ctr & 0xF);
 }
 
+FORCEINLINE
+VOID
+KeSweepICache(
+    _In_opt_ PVOID BaseAddress,
+    _In_ SIZE_T FlushSize)
+{
+    ULONG DLine, ILine;
+    ULONG_PTR Start, End, Addr;
+
+    if (!BaseAddress || FlushSize == 0)
+    {
+        /* ic ialluis broadcasts to all CPUs in inner shareable domain (SMP-safe) */
+        __asm__ __volatile__("ic ialluis\n\tdsb ish\n\tisb" ::: "memory");
+        return;
+    }
+
+    KiArm64GetCacheLineSizes(&DLine, &ILine);
+
+    /* Clean D-cache to PoU for the modified range before invalidating I-cache. */
+    Start = (ULONG_PTR)BaseAddress & ~(ULONG_PTR)(DLine - 1);
+    End = (ULONG_PTR)BaseAddress + FlushSize;
+    for (Addr = Start; Addr < End; Addr += DLine)
+    {
+        /*
+         * TODO: Revisit once ARM64 user/kernel executable mappings are proven
+         * alias-safe. CIVAC is stronger than CVAU and can hurt performance for
+         * large or frequent code-publication ranges because it also invalidates
+         * the data-cache line and pushes maintenance to the point of coherency.
+         */
+        __asm__ __volatile__("dc civac, %0" :: "r"(Addr) : "memory");
+    }
+    __asm__ __volatile__("dsb ish" ::: "memory");
+
+    Start = (ULONG_PTR)BaseAddress & ~(ULONG_PTR)(ILine - 1);
+    for (Addr = Start; Addr < End; Addr += ILine)
+    {
+        __asm__ __volatile__("ic ivau, %0" :: "r"(Addr) : "memory");
+    }
+    __asm__ __volatile__("dsb ish\n\tisb" ::: "memory");
+}
+
 VOID
 KiInitializeDebugRegisterCounts(VOID);
 
@@ -598,8 +631,4 @@ KiProcessorFreezeHandler(
 /* Debug CPU features banner */
 #if DBG
 VOID KiReportCpuFeatures(IN PKPRCB Prcb);
-
-PKTRAP_FRAME
-KiArm64ActiveInterruptTrapFrame(VOID);
-
 #endif
