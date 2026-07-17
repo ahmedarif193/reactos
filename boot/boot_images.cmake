@@ -259,7 +259,7 @@ add_allusers_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "Prof
 add_user_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "Profiles" "Default User")
 
 # Disk image size configuration (in MB)
-set(_preinstall_image_size_default 400)
+set(_preinstall_image_size_default 512)
 set(PREINSTALL_IMAGE_SIZE_MB ${_preinstall_image_size_default} CACHE STRING "Pre-installed disk image size in MB")
 set(_rosprofiler_package_pdbs_default OFF)
 if(MSVC AND (CMAKE_BUILD_TYPE MATCHES "^[Dd]ebug$" OR
