@@ -56,6 +56,10 @@
 #include <stdbool.h>
 #include <string.h>
 
+#ifdef __REACTOS__
+#include "reactos_math.h"
+#endif
+
 #define VKD3D_VEC4_SIZE 4
 #define VKD3D_DVEC2_SIZE 2
 
