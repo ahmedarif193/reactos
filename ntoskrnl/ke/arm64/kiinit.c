@@ -440,9 +440,9 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
          * firmware leaves the wrong VA/PA sizes. Otherwise the BSP keeps
          * firmware's arbitrary A1 while every AP sets A1=1 (secondary path
          * below), so MmSelfMap's A1 check passes or fails depending on which
-         * CPU it ran on. ASID tagging is disabled by default (every switch
-         * full-flushes) so A1 only selects which TTBR's ASID field is current;
-         * keeping it 1 on all CPUs matches the Windows ARM64 contract.
+         * CPU it ran on. Generation-tagged switching uses the ASID from
+         * TTBR1, so keeping A1 set on every CPU is part of the address-space
+         * contract and matches Windows ARM64.
          */
         {
             ULONG64 CurrentTcr, FixedTcr;
@@ -499,6 +499,20 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
                             DirectoryTableBase,
                             FALSE);
         InitProcess->QuantumReset = MAXCHAR;
+    }
+    else
+    {
+        ULONGLONG UserRoot;
+        ULONGLONG KernelRoot;
+
+        /* The HAL trampoline enters with an identity-map TTBR0 and may copy a
+           tagged BSP TTBR1. Install the idle process roots under ASID 0 before
+           this CPU can enter the scheduler; same-process switches can then be
+           a true no-op. */
+        ASSERT(InitProcess->DirectoryTableBase[0] != 0);
+        UserRoot = InitProcess->DirectoryTableBase[0] & ARM64_PTE_ADDR_MASK;
+        KernelRoot = KiArm64KernelTtbrBase(InitProcess->DirectoryTableBase[0]);
+        KiArm64WriteUserTtbr(UserRoot, KernelRoot, 0, TRUE);
     }
     /* quiet */
     KeInitializeThread(InitProcess,
