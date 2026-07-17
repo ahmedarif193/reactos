@@ -47,6 +47,7 @@ KiIpiSend(
 #ifdef CONFIG_SMP
     KAFFINITY RemainingSet;
     ULONG Index;
+    PKPRCB Prcb;
 
     if (TargetSet == 0)
         return;
@@ -54,18 +55,16 @@ KiIpiSend(
     /* Iterate only the set bits; the common case is a single-target IPI. */
     for (RemainingSet = TargetSet; RemainingSet != 0; RemainingSet &= RemainingSet - 1)
     {
-        Index = (ULONG)__builtin_ctzll(RemainingSet);
+        BitScanForwardAffinity(&Index, RemainingSet);
         if (Index >= (ULONG)KeNumberProcessors)
         {
             break;
         }
 
+        Prcb = KiProcessorBlock[Index];
+        if (Prcb != NULL)
         {
-            PKPRCB Prcb = KiProcessorBlock[Index];
-            if (Prcb != NULL)
-            {
-                InterlockedBitTestAndSet((PLONG)&Prcb->RequestSummary, IpiRequest);
-            }
+            InterlockedBitTestAndSet((PLONG)&Prcb->RequestSummary, IpiRequest);
         }
     }
 
