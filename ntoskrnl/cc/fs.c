@@ -274,7 +274,7 @@ CcPurgeCacheSection (
         {
             CcRosUnmarkDirtyVacb(Vacb, FALSE);
         }
-        RemoveEntryList(&Vacb->CacheMapVacbListEntry);
+        CcRosUnlinkVacb(SharedCacheMap, Vacb);
         InsertHeadList(&FreeList, &Vacb->CacheMapVacbListEntry);
     }
     KeReleaseSpinLockFromDpcLevel(&SharedCacheMap->CacheMapLock);
