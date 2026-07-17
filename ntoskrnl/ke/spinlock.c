@@ -15,9 +15,6 @@
 #define LQ_WAIT     1
 #define LQ_OWN      2
 
-#if defined(_M_ARM64)
-#endif
-
 /* PRIVATE FUNCTIONS *********************************************************/
 
 #if 0
@@ -119,7 +116,7 @@ KeAcquireQueuedSpinLockAtDpcLevel(_Inout_ PKSPIN_LOCK_QUEUE LockHandle)
 #endif
 
     /* Do the inlined function */
-#ifdef _M_ARM64
+#if defined(_M_AMD64) || defined(_M_ARM64)
     KxAcquireQueuedSpinLock(LockHandle);
 #else
     KxAcquireSpinLock(LockHandle->Lock);
@@ -147,7 +144,7 @@ KeReleaseQueuedSpinLockFromDpcLevel(_Inout_ PKSPIN_LOCK_QUEUE LockHandle)
 #endif
 
     /* Do the inlined function */
-#ifdef _M_ARM64
+#if defined(_M_AMD64) || defined(_M_ARM64)
     KxReleaseQueuedSpinLock(LockHandle);
 #else
     KxReleaseSpinLock(LockHandle->Lock);
@@ -410,7 +407,7 @@ KeAcquireInStackQueuedSpinLockAtDpcLevel(IN PKSPIN_LOCK SpinLock,
 #endif
 
     /* Acquire the lock */
-#ifdef _M_ARM64
+#if defined(_M_AMD64) || defined(_M_ARM64)
     KxAcquireQueuedSpinLock(&LockHandle->LockQueue);
 #else
     KxAcquireSpinLock(LockHandle->LockQueue.Lock); // HACK
@@ -445,7 +442,7 @@ KeReleaseInStackQueuedSpinLockFromDpcLevel(IN PKLOCK_QUEUE_HANDLE LockHandle)
 #endif
 
     /* Release the lock */
-#ifdef _M_ARM64
+#if defined(_M_AMD64) || defined(_M_ARM64)
     KxReleaseQueuedSpinLock(&LockHandle->LockQueue);
 #else
     KxReleaseSpinLock(LockHandle->LockQueue.Lock); // HACK
