@@ -96,7 +96,6 @@ KiArm64ProbeAndCopyUserBuffer(
     _In_reads_bytes_(BufferSize) CONST VOID *Buffer,
     _In_ SIZE_T BufferSize)
 {
-    EXCEPTION_RECORD ExceptionRecord;
     NTSTATUS Status = STATUS_SUCCESS;
 
     /*
@@ -110,10 +109,9 @@ KiArm64ProbeAndCopyUserBuffer(
         ProbeForWrite(TargetAddress, BufferSize, sizeof(ULONG64));
         RtlCopyMemory(TargetAddress, Buffer, BufferSize);
     }
-    _SEH2_EXCEPT(ExceptionRecord = *_SEH2_GetExceptionInformation()->ExceptionRecord,
-                 EXCEPTION_EXECUTE_HANDLER)
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
-        Status = ExceptionRecord.ExceptionCode;
+        Status = _SEH2_GetExceptionCode();
     }
     _SEH2_END;
 
