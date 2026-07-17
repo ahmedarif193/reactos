@@ -97,18 +97,6 @@ add_library(halmp MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/hal.def)
 reactos_hal_setup(halmp 0)
 
-if((CMAKE_C_COMPILER_ID STREQUAL "Clang") OR (CMAKE_C_COMPILER_ID STREQUAL "GNU"))
-    target_compile_options(hal PRIVATE
-        $<$<COMPILE_LANGUAGE:C>:-mgeneral-regs-only>
-        $<$<COMPILE_LANGUAGE:CXX>:-mgeneral-regs-only>)
-    target_compile_options(halmacpi PRIVATE
-        $<$<COMPILE_LANGUAGE:C>:-mgeneral-regs-only>
-        $<$<COMPILE_LANGUAGE:CXX>:-mgeneral-regs-only>)
-    target_compile_options(halmp PRIVATE
-        $<$<COMPILE_LANGUAGE:C>:-mgeneral-regs-only>
-        $<$<COMPILE_LANGUAGE:CXX>:-mgeneral-regs-only>)
-endif()
-
 # Ensure the PCI data headers are generated before compiling halacpi.c
 set_source_files_properties(${HAL_ARM64_SOURCE_DIR}/acpi/halacpi.c PROPERTIES
     OBJECT_DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/pci_classes.h;${CMAKE_CURRENT_BINARY_DIR}/pci_vendors.h")

@@ -22,7 +22,7 @@ $if (_WDMDDK_)
 #ifndef __ASSEMBLER__
 typedef struct _KFLOATING_SAVE
 {
-    ULONG Reserved;
+    ULONG Dummy;
 } KFLOATING_SAVE, *PKFLOATING_SAVE;
 #endif
 

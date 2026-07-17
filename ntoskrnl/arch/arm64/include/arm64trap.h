@@ -17,6 +17,11 @@
 
 #define ARM64_KSEG0_BASE 0xFFFF800000000000ULL
 
+/* ESR_EL1.EC values for trapped vector extensions. */
+#define ESR_EC_FP_TRAP  0x07
+#define ESR_EC_SVE_TRAP 0x19
+#define ESR_EC_SME_TRAP 0x1D
+
 #ifndef __ASSEMBLER__
 
 #include <stddef.h>

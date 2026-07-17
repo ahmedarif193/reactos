@@ -10,6 +10,8 @@
 	.extern KfLowerIrql
 	.extern KiRetireDpcList
 	.extern KiTrapReturn
+	.extern KiSaveVfpState
+	.extern KiRestoreVfpState
 
     .global KiRetireDpcListInDpcStack
     .seh_proc KiRetireDpcListInDpcStack
@@ -75,7 +77,7 @@ KiThreadStartup:
      */
     mrs     x18, tpidr_el1
 
-    /* Clear non-volatile registers to prevent stale data leaking to new thread */
+    /* Clear non-volatile GPRs to prevent stale data leaking to new thread */
     mov     x19, xzr
     mov     x20, xzr
     mov     x21, xzr
@@ -144,6 +146,7 @@ KiThreadStartup:
 	    cbz     x16, .Lthreadstart_bad_return
 	    ldr     x0, [x16, #ThTrapFrame]     /* x0 = TrapFrame */
 	    cbz     x0, .Lthreadstart_bad_return
+	    str     xzr, [x16, #ThTrapFrame]    /* init frame is below InitialStack */
 
 	    mov     x1, sp                      /* x1 = ExceptionFrame (user threads) */
 
@@ -202,6 +205,8 @@ KiSwapContext:
     .seh_save_regp x27, SwX27
     str     x29, [sp, #SwFp]
     .seh_save_reg x29, SwFp
+    str     x30, [sp, #SwReturn]
+    .seh_save_reg x30, SwReturn
     .seh_endprologue
 
     /*
@@ -216,7 +221,6 @@ KiSwapContext:
      * SwLr must contain the address of .Lrestore_context so that after stack switch,
      * KiSwapContextInternal can return there to restore registers.
      */
-    str     x30, [sp, #SwReturn]   /* Save caller's return address */
     adr     x9, .Lrestore_context  /* Get address of restore label */
     str     x9, [sp, #SwLr]        /* Save for KiSwapContextInternal */
 
@@ -230,12 +234,24 @@ KiSwapContext:
     ldr     x2, [x9, #PcCurrentThread]
     cbz     x2, .Lbad_current_thread
 
+    mov     x12, x0
+    mov     x13, x1
+    ldr     x0, [x1, #ThVfpState]
+    cbz     x0, .Lbad_vfp_state
+    bl      KiSaveVfpState
+    mov     x0, x12
+    mov     x1, x13
+
     bl      KiSwapContextInternal
     b       .Lrestore_context
 
 .Lbad_current_thread:
     brk     #0xf000
     b       .Lbad_current_thread
+
+.Lbad_vfp_state:
+    brk     #0xf000
+    b       .Lbad_vfp_state
 
 .Lrestore_context:
     /* Restore the saved non-volatile register bank */
@@ -254,9 +270,9 @@ KiSwapContext:
 
     msr     daifclr, #0x2
 
-    ldr     x9,  [sp, #SwReturn]   /* Load caller's return address */
+    ldr     x30, [sp, #SwReturn]   /* Load caller's return address */
     add     sp, sp, #KSWITCH_FRAME_LENGTH
-    ret     x9                      /* Return to our caller */
+    ret                              /* Return to our caller */
     .seh_endproc
 
 /*
@@ -352,7 +368,22 @@ KiSwapContextInternal:
     /* Resumed/new thread: Call KiSwapContextResume and return */
     str     x10, [sp, #-16]!     /* Save return address */
     bl      KiSwapContextResume
+    str     w0, [sp, #8]         /* Preserve the APC-pending return value */
+
+    /* Restore the incoming thread's complete eager VFP image last. */
+    mrs     x9, tpidr_el1
+    cbz     x9, .Lbad_restore_vfp_state
+    ldr     x9, [x9, #PcCurrentThread]
+    cbz     x9, .Lbad_restore_vfp_state
+    ldr     x0, [x9, #ThVfpState]
+    cbz     x0, .Lbad_restore_vfp_state
+    bl      KiRestoreVfpState
+    ldr     w0, [sp, #8]
     ldr     x30, [sp], #16       /* Restore return address to LR */
 
     ret                          /* Return (new threads: to KiThreadStartup) */
+
+.Lbad_restore_vfp_state:
+    brk     #0xf000
+    b       .Lbad_restore_vfp_state
     .seh_endproc
