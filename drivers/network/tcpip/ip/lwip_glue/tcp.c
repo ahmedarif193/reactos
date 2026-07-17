@@ -97,25 +97,74 @@ PQUEUE_ENTRY LibTCPDequeuePacket(PCONNECTION_ENDPOINT Connection)
     return qp;
 }
 
+/* tcp_recved() takes a u16 count, so larger credits are fed in chunks */
 static
 void
-LibTCPRecved(PCONNECTION_ENDPOINT Connection, u32_t Length, const int safe)
+LibTCPRecvedChunked(PTCP_PCB pcb, u32_t Length)
 {
-    PTCP_PCB pcb;
-
-    if (!safe)
-        LOCK_TCPIP_CORE();
-
-    pcb = (PTCP_PCB)Connection->SocketContext;
     while (pcb && Length > 0)
     {
         u16_t Chunk = (Length > 0xFFFF) ? 0xFFFF : (u16_t)Length;
         tcp_recved(pcb, Chunk);
         Length -= Chunk;
     }
+}
 
-    if (!safe)
-        UNLOCK_TCPIP_CORE();
+/* The gate must drop before the credit is drained: a producer racing in
+ * between either has its credit drained here or can queue a new flush */
+static
+LONG
+LibTCPRecvedDrainCredit(PCONNECTION_ENDPOINT Connection)
+{
+    InterlockedExchange(&Connection->CreditFlushQueued, 0);
+    return InterlockedExchange(&Connection->PendingRecvCredit, 0);
+}
+
+static
+void
+LibTCPRecvedFlush(void *arg)
+{
+    PCONNECTION_ENDPOINT Connection = arg;
+    LONG Credit = LibTCPRecvedDrainCredit(Connection);
+
+    if (Credit > 0)
+        LibTCPRecvedChunked((PTCP_PCB)Connection->SocketContext, (u32_t)Credit);
+
+    DereferenceObject(Connection);
+}
+
+static
+void
+LibTCPRecved(PCONNECTION_ENDPOINT Connection, u32_t Length, const int safe)
+{
+    if (safe)
+    {
+        LibTCPRecvedChunked((PTCP_PCB)Connection->SocketContext, Length);
+        return;
+    }
+
+    InterlockedExchangeAdd(&Connection->PendingRecvCredit, (LONG)Length);
+
+    if (InterlockedCompareExchange(&Connection->CreditFlushQueued, 1, 0) != 0)
+        return;
+
+    ReferenceObject(Connection);
+
+    if (tcpip_callback_with_block(LibTCPRecvedFlush, Connection, 1) != ERR_OK)
+    {
+        /* The credit must still reach lwIP now: with the window exhausted
+         * no more data arrives, so no later call would retry */
+        LONG Credit = LibTCPRecvedDrainCredit(Connection);
+
+        if (Credit > 0)
+        {
+            LOCK_TCPIP_CORE();
+            LibTCPRecvedChunked((PTCP_PCB)Connection->SocketContext, (u32_t)Credit);
+            UNLOCK_TCPIP_CORE();
+        }
+
+        DereferenceObject(Connection);
+    }
 }
 
 NTSTATUS LibTCPGetDataFromConnectionQueue(PCONNECTION_ENDPOINT Connection, PUCHAR RecvBuffer, UINT RecvLen, UINT *Received, const int safe)
