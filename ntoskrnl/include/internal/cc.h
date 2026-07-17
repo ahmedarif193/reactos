@@ -167,6 +167,8 @@ typedef struct _PFSN_PREFETCHER_GLOBALS
     LONG ActivePrefetches;
 } PFSN_PREFETCHER_GLOBALS, *PPFSN_PREFETCHER_GLOBALS;
 
+#define VACB_HASH_ENTRIES 16
+
 typedef struct _ROS_SHARED_CACHE_MAP
 {
     CSHORT NodeTypeCode;
@@ -191,6 +193,7 @@ typedef struct _ROS_SHARED_CACHE_MAP
 
     /* ROS specific */
     LIST_ENTRY CacheMapVacbListHead;
+    struct _ROS_VACB *VacbHash[VACB_HASH_ENTRIES];
     BOOLEAN PinAccess;
     KSPIN_LOCK CacheMapLock;
     KGUARDED_MUTEX FlushCacheLock;
@@ -225,7 +228,8 @@ typedef struct _ROS_VACB
     volatile ULONG ReferenceCount;
     /* Pointer to the shared cache map for the file which this view maps data for. */
     PROS_SHARED_CACHE_MAP SharedCacheMap;
-    /* Pointer to the next VACB in a chain. */
+    /* Next VACB in the same file-offset hash bucket. */
+    struct _ROS_VACB *NextInHash;
 } ROS_VACB, *PROS_VACB;
 
 typedef struct _INTERNAL_BCB
@@ -354,6 +358,12 @@ PROS_VACB
 CcRosLookupVacb(
     PROS_SHARED_CACHE_MAP SharedCacheMap,
     LONGLONG FileOffset
+);
+
+VOID
+CcRosUnlinkVacb(
+    PROS_SHARED_CACHE_MAP SharedCacheMap,
+    PROS_VACB Vacb
 );
 
 VOID
