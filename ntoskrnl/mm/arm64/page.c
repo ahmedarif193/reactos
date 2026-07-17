@@ -17,11 +17,6 @@
 #define ARM64_PTE_ADDR_MASK 0x0000FFFFFFFFF000ULL
 #endif
 
-#define MI_ARM64_SWAP_ENTRY_MARKER 0x400ULL
-#define MI_ARM64_SWAP_FILE_FROM_ENTRY(Entry) ((ULONG)((Entry) & 0x0F))
-#define MI_ARM64_SWAP_OFFSET_FROM_ENTRY(Entry) ((ULONG_PTR)((Entry) >> 11))
-#define MI_ARM64_SWAP_ENTRY_FROM_FILE_OFFSET(File, Offset) \
-    ((SWAPENTRY)((File) | ((ULONG_PTR)(Offset) << 11) | MI_ARM64_SWAP_ENTRY_MARKER))
 
 static
 NTSTATUS
@@ -34,25 +29,29 @@ MmCreateVirtualMappingUnsafeEx(
 
 static
 BOOLEAN
-MiIsPageTablePresent(
-    _In_ PVOID Address);
-
-BOOLEAN
 MiArm64ReadUserPtePhysically(
     _In_ PVOID Address,
-    _Out_opt_ PULONG64 OutPte,
-    _Out_opt_ PULONG OutDepth);
+    _Out_opt_ PULONG64 OutPte);
 
 typedef struct _MI_ARM64_USER_PTE_WALK
 {
     volatile ULONG64 *PointerPte;
     ULONG64 PteValue;
     ULONG Depth;
+    /* Per-level KSEG0 table bases and table-page PFNs (L0..L3) captured
+     * during the walk so release paths never re-walk the hierarchy. */
+    volatile ULONG64 *LevelTable[4];
+    PFN_NUMBER LevelPfn[4];
 } MI_ARM64_USER_PTE_WALK, *PMI_ARM64_USER_PTE_WALK;
 
-static
+/*
+ * Sanity-check a table physical address without probing or mapping. The
+ * read-only walkers use this: every live table page is KSEG0-mapped at
+ * allocation time, so the AT-probe/ensure machinery is pure overhead there.
+ */
+FORCEINLINE
 BOOLEAN
-MiArm64EnsureTablePageMapped(
+MiArm64IsValidTablePa(
     _In_ ULONG64 TablePa)
 {
     PFN_NUMBER Pfn;
@@ -63,9 +62,32 @@ MiArm64EnsureTablePageMapped(
     }
 
     Pfn = (PFN_NUMBER)(TablePa >> PAGE_SHIFT);
-    if ((Pfn == 0) || (Pfn > MmHighestPhysicalPage))
+    return ((Pfn != 0) && (Pfn <= MmHighestPhysicalPage));
+}
+
+static
+BOOLEAN
+MiArm64EnsureTablePageMapped(
+    _In_ ULONG64 TablePa)
+{
+    PFN_NUMBER Pfn;
+
+    if (!MiArm64IsValidTablePa(TablePa))
     {
         return FALSE;
+    }
+
+    Pfn = (PFN_NUMBER)(TablePa >> PAGE_SHIFT);
+
+    /*
+     * Fast path: probe the KSEG0 alias translation with AT S1E1R. Frames
+     * already covered by the boot KSEG0 direct map (the steady state) skip
+     * the identity-mapping machinery, which costs several table walks per
+     * call and runs four times per user PTE walk.
+     */
+    if (MiArm64ProbeForAccess((PVOID)MI_ARM64_PFN_TO_VA(Pfn), FALSE))
+    {
+        return TRUE;
     }
 
     MiArm64MapKseg0Page(Pfn);
@@ -89,7 +111,8 @@ static
 MMPTE
 MiArm64ClearKernelPte(
     _In_ PVOID Address,
-    _Inout_ PMMPTE PointerPte);
+    _Inout_ PMMPTE PointerPte,
+    _In_ PMMPTE Kseg0Pte);
 
 static
 MMPTE
@@ -119,7 +142,8 @@ VOID
 MiArm64ReleaseUserPageTableReference(
     _In_ PEPROCESS Process,
     _In_ PVOID Address,
-    _In_ BOOLEAN ReleaseLeafShare);
+    _In_ BOOLEAN ReleaseLeafShare,
+    _In_ PMI_ARM64_USER_PTE_WALK Walk);
 
 static
 VOID
@@ -131,20 +155,17 @@ MiArm64SynchronizeUserTablePfn(
     _In_ ULONG Level,
     _In_reads_(PTE_PER_PAGE) volatile ULONG64 *Table);
 
+FORCEINLINE
+VOID
+MiArm64WritePteEntry(
+    _Inout_ volatile ULONG64 *Entry,
+    _In_ ULONG64 Value);
+
 typedef enum _MI_ARM64_DCACHE_OPERATION
 {
     MiArm64DcacheInvalidate,
     MiArm64DcacheCleanInvalidate
 } MI_ARM64_DCACHE_OPERATION;
-
-FORCEINLINE
-VOID
-MiArm64CacheLineSizes(
-    _Out_ PULONG DcacheLineSize,
-    _Out_ PULONG IcacheLineSize)
-{
-    KiArm64GetCacheLineSizes(DcacheLineSize, IcacheLineSize);
-}
 
 FORCEINLINE
 VOID
@@ -157,10 +178,13 @@ MiArm64MaintainPageCache(
     ULONG IcacheLineSize;
     ULONG_PTR Va;
 
-    MiArm64CacheLineSizes(&DcacheLineSize, &IcacheLineSize);
+    KiArm64GetCacheLineSizes(&DcacheLineSize, &IcacheLineSize);
     Va = (ULONG_PTR)Address & ~(ULONG_PTR)(PAGE_SIZE - 1);
 
-    __asm__ __volatile__("dsb sy" ::: "memory");
+    /* Inner-shareable barriers: every observer of this maintenance (other
+     * CPUs, I-fetch, IS-broadcast cache/TLB ops) is in the IS domain; DMA
+     * coherency is owned by KeFlushIoBuffers, which uses the same policy. */
+    __asm__ __volatile__("dsb ish" ::: "memory");
     for (ULONG_PTR Offset = 0; Offset < PAGE_SIZE; Offset += DcacheLineSize)
     {
         if (DcacheOperation == MiArm64DcacheCleanInvalidate)
@@ -172,7 +196,7 @@ MiArm64MaintainPageCache(
             __asm__ __volatile__("dc ivac, %0" :: "r"(Va + Offset) : "memory");
         }
     }
-    __asm__ __volatile__("dsb sy" ::: "memory");
+    __asm__ __volatile__("dsb ish" ::: "memory");
 
     if (SweepIcache)
     {
@@ -180,20 +204,10 @@ MiArm64MaintainPageCache(
         {
             __asm__ __volatile__("ic ivau, %0" :: "r"(Va + Offset) : "memory");
         }
-        __asm__ __volatile__("dsb sy" ::: "memory");
+        __asm__ __volatile__("dsb ish" ::: "memory");
     }
 
     __asm__ __volatile__("isb" ::: "memory");
-}
-
-FORCEINLINE
-VOID
-MiArm64CleanInvalidateCacheLine(
-    _In_ PVOID Address)
-{
-    __asm__ __volatile__("dmb ish" ::: "memory");
-    __asm__ __volatile__("dc civac, %0" :: "r"(Address) : "memory");
-    __asm__ __volatile__("dsb ish" ::: "memory");
 }
 
 FORCEINLINE
@@ -220,29 +234,15 @@ MiArm64PublishPageByPfnAlias(
 FORCEINLINE
 VOID
 MiArm64SyncMappedPfnCacheAttribute(
-    _In_opt_ PEPROCESS Process,
-    _In_ PVOID Address,
-    _In_ PFN_NUMBER PageFrameNumber,
+    _In_ PMMPFN Pfn1,
     _In_ MMPTE FinalPte)
 {
-    PMMPFN Pfn1;
-    MI_PFN_CACHE_ATTRIBUTE OldCache;
-    MI_PFN_CACHE_ATTRIBUTE NewCache;
+    MI_PFN_CACHE_ATTRIBUTE NewCache = MiGetPteCacheAttribute(&FinalPte);
 
-    Pfn1 = MiGetPfnEntry(PageFrameNumber);
-    if (Pfn1 == NULL)
+    if (Pfn1->u3.e1.CacheAttribute != NewCache)
     {
-        return;
+        Pfn1->u3.e1.CacheAttribute = NewCache;
     }
-
-    OldCache = Pfn1->u3.e1.CacheAttribute;
-    NewCache = MiGetPteCacheAttribute(&FinalPte);
-    if (OldCache == NewCache)
-    {
-        return;
-    }
-
-    Pfn1->u3.e1.CacheAttribute = NewCache;
 }
 
 static
@@ -257,9 +257,7 @@ MiArm64GetUserPteAddressForProcess(
     ULONG L0Idx, L1Idx, L2Idx, L3Idx;
     ULONG64 L0Entry, L1Entry, L2Entry;
 
-    Walk->PointerPte = NULL;
-    Walk->PteValue = 0;
-    Walk->Depth = 0;
+    RtlZeroMemory(Walk, sizeof(*Walk));
 
     if (Address >= MmSystemRangeStart)
     {
@@ -284,17 +282,19 @@ MiArm64GetUserPteAddressForProcess(
         return FALSE;
     }
 
-    L0Idx = ((ULONG64)(ULONG_PTR)Address >> 39) & 0x1FF;
-    L1Idx = ((ULONG64)(ULONG_PTR)Address >> 30) & 0x1FF;
-    L2Idx = ((ULONG64)(ULONG_PTR)Address >> 21) & 0x1FF;
-    L3Idx = ((ULONG64)(ULONG_PTR)Address >> 12) & 0x1FF;
+    L0Idx = ((ULONG64)(ULONG_PTR)Address >> PXI_SHIFT) & PXI_MASK;
+    L1Idx = ((ULONG64)(ULONG_PTR)Address >> PPI_SHIFT) & PPI_MASK;
+    L2Idx = ((ULONG64)(ULONG_PTR)Address >> PDI_SHIFT) & PDI_MASK_ARM64;
+    L3Idx = ((ULONG64)(ULONG_PTR)Address >> PTI_SHIFT) & PTI_MASK_ARM64;
 
-    if (!MiArm64EnsureTablePageMapped(RootPa))
+    if (!MiArm64IsValidTablePa(RootPa))
     {
         return FALSE;
     }
 
     L0Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(RootPa);
+    Walk->LevelTable[0] = L0Table;
+    Walk->LevelPfn[0] = (PFN_NUMBER)(RootPa >> PAGE_SHIFT);
     L0Entry = L0Table[L0Idx];
     if ((L0Entry & 0x3ULL) != 0x3ULL)
     {
@@ -303,12 +303,14 @@ MiArm64GetUserPteAddressForProcess(
     Walk->Depth = 1;
 
     L1Pa = L0Entry & ARM64_PTE_ADDR_MASK;
-    if (!MiArm64EnsureTablePageMapped(L1Pa))
+    if (!MiArm64IsValidTablePa(L1Pa))
     {
         return FALSE;
     }
 
     L1Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L1Pa);
+    Walk->LevelTable[1] = L1Table;
+    Walk->LevelPfn[1] = (PFN_NUMBER)(L1Pa >> PAGE_SHIFT);
     L1Entry = L1Table[L1Idx];
     if ((L1Entry & 0x1ULL) == 0)
     {
@@ -326,12 +328,14 @@ MiArm64GetUserPteAddressForProcess(
     Walk->Depth = 2;
 
     L2Pa = L1Entry & ARM64_PTE_ADDR_MASK;
-    if (!MiArm64EnsureTablePageMapped(L2Pa))
+    if (!MiArm64IsValidTablePa(L2Pa))
     {
         return FALSE;
     }
 
     L2Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L2Pa);
+    Walk->LevelTable[2] = L2Table;
+    Walk->LevelPfn[2] = (PFN_NUMBER)(L2Pa >> PAGE_SHIFT);
     L2Entry = L2Table[L2Idx];
     if ((L2Entry & 0x1ULL) == 0)
     {
@@ -349,12 +353,14 @@ MiArm64GetUserPteAddressForProcess(
     Walk->Depth = 3;
 
     L3Pa = L2Entry & ARM64_PTE_ADDR_MASK;
-    if (!MiArm64EnsureTablePageMapped(L3Pa))
+    if (!MiArm64IsValidTablePa(L3Pa))
     {
         return FALSE;
     }
 
     L3Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L3Pa);
+    Walk->LevelTable[3] = L3Table;
+    Walk->LevelPfn[3] = (PFN_NUMBER)(L3Pa >> PAGE_SHIFT);
     Walk->PointerPte = &L3Table[L3Idx];
     Walk->PteValue = L3Table[L3Idx];
     if ((Walk->PteValue & 0x3ULL) == 0x3ULL)
@@ -375,27 +381,19 @@ MiArm64GetUserPteAddress(
 }
 
 /* Walk the active TTBR0 hierarchy via KSEG0 and return the L3 PTE state. */
+static
 BOOLEAN
 MiArm64ReadUserPtePhysically(
     _In_ PVOID Address,
-    _Out_opt_ PULONG64 OutPte,
-    _Out_opt_ PULONG OutDepth)
+    _Out_opt_ PULONG64 OutPte)
 {
     MI_ARM64_USER_PTE_WALK Walk;
-
-    if (!MiArm64GetUserPteAddress(Address, &Walk))
-    {
-        if (OutPte) *OutPte = Walk.PteValue;
-        if (OutDepth) *OutDepth = Walk.Depth;
-        return FALSE;
-    }
+    BOOLEAN Reached = MiArm64GetUserPteAddress(Address, &Walk);
 
     if (OutPte) *OutPte = Walk.PteValue;
-    if (OutDepth) *OutDepth = Walk.Depth;
-    return ((Walk.PteValue & 0x3ULL) == 0x3ULL);
+    return (Reached && ((Walk.PteValue & 0x3ULL) == 0x3ULL));
 }
 
-static
 NTSTATUS
 MiArm64AllocateCleanPage(
     _Inout_ PEPROCESS Process,
@@ -500,6 +498,27 @@ MiArm64AccountUserLeafPte(
     MiReleasePfnLock(OldIrql);
 }
 
+/* Batched form: one PFN-lock section accounts a whole run of new PTEs
+ * installed in the same L3 table (used by the ARM64 commit loop). */
+VOID
+MiArm64AccountUserLeafPteCount(
+    _In_ PFN_NUMBER PteFrame,
+    _In_ ULONG NewUsedEntries)
+{
+    KIRQL OldIrql;
+    PMMPFN Pfn;
+
+    OldIrql = MiAcquirePfnLock();
+
+    Pfn = MiGetPfnEntry(PteFrame);
+    ASSERT(Pfn != NULL);
+
+    Pfn->OriginalPte.u.Soft.UsedPageTableEntries += NewUsedEntries;
+    ASSERT(Pfn->OriginalPte.u.Soft.UsedPageTableEntries <= PTE_PER_PAGE);
+
+    MiReleasePfnLock(OldIrql);
+}
+
 VOID
 MiArm64IncrementUserPageTableReferences(
     _In_ PVOID Address)
@@ -514,21 +533,55 @@ MiArm64IncrementUserPageTableReferences(
     MiArm64AccountUserLeafPte(PteFrame, FALSE, TRUE);
 }
 
+/*
+ * Steady-state predicate: TRUE when the table PFN is already fully
+ * accounted for. Caller holds the PFN lock.
+ */
+FORCEINLINE
+BOOLEAN
+MiArm64UserTablePfnHealthy(
+    _In_ PFN_NUMBER TablePfn,
+    _In_ PVOID PteAddress,
+    _In_ PFN_NUMBER ParentPfn)
+{
+    PMMPFN Pfn = MiGetPfnEntry(TablePfn);
+
+    if (Pfn == NULL)
+    {
+        return FALSE;
+    }
+
+    return ((Pfn->u3.e1.PageLocation == ActiveAndValid) &&
+            (Pfn->u3.e2.ReferenceCount != 0) &&
+            (Pfn->PteAddress == PteAddress) &&
+            ((ParentPfn == 0) || (Pfn->u4.PteFrame == ParentPfn)));
+}
+
 NTSTATUS
 MiArm64EnsureUserPte(
     _Inout_ PEPROCESS Process,
     _In_ PVOID Address,
-    _Outptr_ PMMPTE *PointerPte)
+    _Outptr_ PMMPTE *PointerPte,
+    _Out_opt_ PPFN_NUMBER L3TablePfn)
 {
     ULONG64 Ttbr0, RootPa;
-    volatile ULONG64 *L0Table, *L1Table, *L2Table, *L3Table;
-    ULONG L0Idx, L1Idx, L2Idx, L3Idx;
+    volatile ULONG64 *Table;
     ULONG64 Entry;
-    PFN_NUMBER RootPfn, L1Pfn, L2Pfn, L3Pfn;
-    MMPTE TempPte;
+    PFN_NUMBER ParentPfn, ChildPfn;
+    PFN_NUMBER RootPfn;
+    PFN_NUMBER TablePfn[3];
+    PVOID LevelPteAddress[3];
+    ULONG LevelIndex[4];
     NTSTATUS Status;
+    ULONG Level;
+    KIRQL OldIrql;
+    BOOLEAN Healthy;
 
     *PointerPte = NULL;
+    if (L3TablePfn != NULL)
+    {
+        *L3TablePfn = 0;
+    }
 
     if (Address >= MmSystemRangeStart)
     {
@@ -547,183 +600,93 @@ MiArm64EnsureUserPte(
     }
 
     RootPfn = RootPa >> PAGE_SHIFT;
-    L0Idx = ((ULONG64)(ULONG_PTR)Address >> PXI_SHIFT) & PXI_MASK;
-    L1Idx = ((ULONG64)(ULONG_PTR)Address >> PPI_SHIFT) & PPI_MASK;
-    L2Idx = ((ULONG64)(ULONG_PTR)Address >> PDI_SHIFT) & PDI_MASK_ARM64;
-    L3Idx = ((ULONG64)(ULONG_PTR)Address >> PTI_SHIFT) & PTI_MASK_ARM64;
+    LevelIndex[0] = ((ULONG64)(ULONG_PTR)Address >> PXI_SHIFT) & PXI_MASK;
+    LevelIndex[1] = ((ULONG64)(ULONG_PTR)Address >> PPI_SHIFT) & PPI_MASK;
+    LevelIndex[2] = ((ULONG64)(ULONG_PTR)Address >> PDI_SHIFT) & PDI_MASK_ARM64;
+    LevelIndex[3] = ((ULONG64)(ULONG_PTR)Address >> PTI_SHIFT) & PTI_MASK_ARM64;
+    LevelPteAddress[0] = MiAddressToPxe(Address);
+    LevelPteAddress[1] = MiAddressToPpe(Address);
+    LevelPteAddress[2] = MiAddressToPde(Address);
 
     if (!MiArm64EnsureTablePageMapped(RootPa))
     {
         return STATUS_INVALID_PARAMETER;
     }
 
-    L0Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(RootPa);
-    Entry = L0Table[L0Idx];
-    if ((Entry & 0x3ULL) == 0)
+    Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(RootPa);
+    ParentPfn = RootPfn;
+
+    /*
+     * Descend L0->L3, allocating any missing table level. The three level
+     * steps are identical except for the child PteAddress and the 2MB-block
+     * demolition, which only boot mappings at the L2 level can require.
+     */
+    for (Level = 0; Level < 3; Level++)
     {
-        Status = MiArm64AllocateCleanPage(Process, &L1Pfn);
-        if (!NT_SUCCESS(Status))
+        Entry = Table[LevelIndex[Level]];
+
+        if ((Level == 2) && ((Entry & 0x3ULL) == 0x1ULL))
         {
-            return Status;
+            Table[LevelIndex[Level]] = 0;
+            MiArm64CleanEntryToPoC(&Table[LevelIndex[Level]]);
+            MiArm64InvalidateUserAddress(Address);
+            Entry = 0;
         }
 
-        MiArm64InitializeUserTablePage(Process, L1Pfn, MiAddressToPxe(Address), RootPfn);
-
-        TempPte = ValidKernelPde;
-        TempPte.u.Hard.PageFrameNumber = L1Pfn;
-        TempPte.u.Hard.Owner = 0;
-        L0Table[L0Idx] = TempPte.u.Long;
-        MiArm64CleanEntryToPoC(&L0Table[L0Idx]);
-    }
-    else if ((Entry & 0x3ULL) == 0x3ULL)
-    {
-        L1Pfn = (PFN_NUMBER)((Entry & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
-    }
-    else
-    {
-        return STATUS_CONFLICTING_ADDRESSES;
-    }
-
-    if (!MiArm64EnsureTablePageMapped((ULONG64)L1Pfn << PAGE_SHIFT))
-    {
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    L1Table = (volatile ULONG64 *)MI_ARM64_PFN_TO_VA(L1Pfn);
-    MiArm64SynchronizeUserTablePfn(Process, L1Pfn, MiAddressToPxe(Address), RootPfn, 1, L1Table);
-    Entry = L1Table[L1Idx];
-    if ((Entry & 0x3ULL) == 0)
-    {
-        Status = MiArm64AllocateCleanPage(Process, &L2Pfn);
-        if (!NT_SUCCESS(Status))
+        if ((Entry & 0x3ULL) == 0)
         {
-            return Status;
-        }
-
-        MiArm64InitializeUserTablePage(Process, L2Pfn, MiAddressToPpe(Address), L1Pfn);
-
-        TempPte = ValidKernelPde;
-        TempPte.u.Hard.PageFrameNumber = L2Pfn;
-        TempPte.u.Hard.Owner = 0;
-        L1Table[L1Idx] = TempPte.u.Long;
-        MiArm64CleanEntryToPoC(&L1Table[L1Idx]);
-    }
-    else if ((Entry & 0x3ULL) == 0x3ULL)
-    {
-        L2Pfn = (PFN_NUMBER)((Entry & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
-    }
-    else
-    {
-        return STATUS_CONFLICTING_ADDRESSES;
-    }
-
-    if (!MiArm64EnsureTablePageMapped((ULONG64)L2Pfn << PAGE_SHIFT))
-    {
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    L2Table = (volatile ULONG64 *)MI_ARM64_PFN_TO_VA(L2Pfn);
-    MiArm64SynchronizeUserTablePfn(Process, L2Pfn, MiAddressToPpe(Address), L1Pfn, 2, L2Table);
-    Entry = L2Table[L2Idx];
-    if ((Entry & 0x3ULL) == 0x1ULL)
-    {
-        L2Table[L2Idx] = 0;
-        MiArm64CleanEntryToPoC(&L2Table[L2Idx]);
-        __asm__ __volatile__("dsb ishst\n\t"
-                             "tlbi vaale1is, %0\n\t"
-                             "dsb ish\n\t"
-                             "isb"
-                             :: "r"((ULONG_PTR)Address >> PAGE_SHIFT) : "memory");
-        Entry = 0;
-    }
-
-    if ((Entry & 0x3ULL) == 0)
-    {
-        Status = MiArm64AllocateCleanPage(Process, &L3Pfn);
-        if (!NT_SUCCESS(Status))
-        {
-            return Status;
-        }
-
-        MiArm64InitializeUserTablePage(Process, L3Pfn, MiAddressToPde(Address), L2Pfn);
-
-        TempPte = ValidKernelPde;
-        TempPte.u.Hard.PageFrameNumber = L3Pfn;
-        TempPte.u.Hard.Owner = 0;
-        L2Table[L2Idx] = TempPte.u.Long;
-        MiArm64CleanEntryToPoC(&L2Table[L2Idx]);
-    }
-    else if ((Entry & 0x3ULL) == 0x3ULL)
-    {
-        L3Pfn = (PFN_NUMBER)((Entry & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
-    }
-    else
-    {
-        return STATUS_CONFLICTING_ADDRESSES;
-    }
-
-    if (!MiArm64EnsureTablePageMapped((ULONG64)L3Pfn << PAGE_SHIFT))
-    {
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    L3Table = (volatile ULONG64 *)MI_ARM64_PFN_TO_VA(L3Pfn);
-    MiArm64SynchronizeUserTablePfn(Process, L3Pfn, MiAddressToPde(Address), L2Pfn, 3, L3Table);
-    *PointerPte = (PMMPTE)&L3Table[L3Idx];
-    return STATUS_SUCCESS;
-}
-
-static
-NTSTATUS
-MiArm64PrepareUserPageForMdl(
-    _In_ PEPROCESS Process,
-    _In_ PVOID PageAddress,
-    _In_ KPROCESSOR_MODE AccessMode,
-    _In_ LOCK_OPERATION Operation)
-{
-    ULONG Attempt;
-    NTSTATUS Status = STATUS_ACCESS_VIOLATION;
-    ULONG NotPresentFaultCode;
-
-    NotPresentFaultCode = (Operation == IoReadAccess) ? 0x0 : 0x2;
-
-    for (Attempt = 0; Attempt < 4; Attempt++)
-    {
-        MI_ARM64_USER_PTE_WALK Walk;
-        MMPTE Pte;
-
-        if (MiArm64GetUserPteAddressForProcess(Process, PageAddress, &Walk))
-        {
-            Pte.u.Long = Walk.PteValue;
-            if (Pte.u.Hard.Valid)
+            Status = MiArm64AllocateCleanPage(Process, &ChildPfn);
+            if (!NT_SUCCESS(Status))
             {
-                if ((Operation == IoReadAccess) ||
-                    (MI_IS_PAGE_WRITEABLE(&Pte) && MI_IS_PAGE_DIRTY(&Pte)))
-                {
-                    return STATUS_SUCCESS;
-                }
+                return Status;
+            }
 
-                Status = MmAccessFaultEx(0x3, PageAddress, AccessMode, NULL, FALSE);
-            }
-            else
-            {
-                Status = MmAccessFaultEx(NotPresentFaultCode, PageAddress, AccessMode, NULL, FALSE);
-            }
+            MiArm64InitializeUserTablePage(Process, ChildPfn, LevelPteAddress[Level], ParentPfn);
+
+            MiArm64WritePteEntry(&Table[LevelIndex[Level]], ARM64_MAKE_TABLE_DESCRIPTOR(ChildPfn));
+        }
+        else if ((Entry & 0x3ULL) == 0x3ULL)
+        {
+            ChildPfn = (PFN_NUMBER)((Entry & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
         }
         else
         {
-            Status = MmAccessFaultEx(NotPresentFaultCode, PageAddress, AccessMode, NULL, FALSE);
+            return STATUS_CONFLICTING_ADDRESSES;
         }
 
-        if (!NT_SUCCESS(Status))
+        if (!MiArm64EnsureTablePageMapped((ULONG64)ChildPfn << PAGE_SHIFT))
         {
-            return Status;
+            return STATUS_INVALID_PARAMETER;
         }
 
-        KeInvalidateTlbEntry(PageAddress);
+        TablePfn[Level] = ChildPfn;
+        Table = (volatile ULONG64 *)MI_ARM64_PFN_TO_VA(ChildPfn);
+        ParentPfn = ChildPfn;
     }
 
-    return STATUS_ACCESS_VIOLATION;
+    /*
+     * One PFN-lock section validates all three table PFNs in the steady
+     * state; the per-table repair scan runs only when a check fails.
+     */
+    OldIrql = MiAcquirePfnLock();
+    Healthy = MiArm64UserTablePfnHealthy(TablePfn[0], LevelPteAddress[0], RootPfn) &&
+              MiArm64UserTablePfnHealthy(TablePfn[1], LevelPteAddress[1], TablePfn[0]) &&
+              MiArm64UserTablePfnHealthy(TablePfn[2], LevelPteAddress[2], TablePfn[1]);
+    MiReleasePfnLock(OldIrql);
+
+    if (!Healthy)
+    {
+        MiArm64SynchronizeUserTablePfn(Process, TablePfn[0], LevelPteAddress[0], RootPfn, 1, (volatile ULONG64 *)MI_ARM64_PFN_TO_VA(TablePfn[0]));
+        MiArm64SynchronizeUserTablePfn(Process, TablePfn[1], LevelPteAddress[1], TablePfn[0], 2, (volatile ULONG64 *)MI_ARM64_PFN_TO_VA(TablePfn[1]));
+        MiArm64SynchronizeUserTablePfn(Process, TablePfn[2], LevelPteAddress[2], TablePfn[1], 3, (volatile ULONG64 *)MI_ARM64_PFN_TO_VA(TablePfn[2]));
+    }
+
+    *PointerPte = (PMMPTE)&Table[LevelIndex[3]];
+    if (L3TablePfn != NULL)
+    {
+        *L3TablePfn = TablePfn[2];
+    }
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS
@@ -738,12 +701,19 @@ MiArm64ProbeAndLockUserPages(
     PPFN_NUMBER MdlPages;
     PVOID PageAddress;
     ULONG PageIndex;
+    ULONG Attempt;
     NTSTATUS Status;
     PFN_NUMBER PageFrameIndex;
+    PFN_NUMBER L3Pfn;
     PMMPFN Pfn1;
+    volatile ULONG64 *PteSlot;
+    MMPTE Pte;
+    ULONG NotPresentFaultCode;
 
     ASSERT(TotalPages != 0);
     ASSERT(CurrentProcess == PsGetCurrentProcess());
+
+    NotPresentFaultCode = (Operation == IoReadAccess) ? 0x0 : 0x2;
 
     MdlPages = (PPFN_NUMBER)(Mdl + 1);
     PageAddress = PAGE_ALIGN(StartAddress);
@@ -764,50 +734,62 @@ MiArm64ProbeAndLockUserPages(
     InterlockedExchangeAddSizeT(&CurrentProcess->NumberOfLockedPages,
                                 TotalPages);
 
+    /*
+     * Hold the working-set lock across resident runs: the KSEG0 L3 slot
+     * advances linearly within each 2MB chunk, so the steady state costs one
+     * walk and one lock round-trip per chunk instead of two walks and a lock
+     * cycle per page. The lock is dropped only to fault a page in, and the
+     * slot is re-resolved after every fault (and at every table-page
+     * boundary, which the pointer alignment check detects).
+     */
+    MiLockProcessWorkingSet(CurrentProcess, PsGetCurrentThread());
+
+    PteSlot = NULL;
     for (PageIndex = 0; PageIndex < TotalPages; PageIndex++)
     {
-        MI_ARM64_USER_PTE_WALK Walk;
-        MMPTE Pte;
+        MdlPages[PageIndex] = LIST_HEAD;
 
-        *MdlPages = LIST_HEAD;
-
-        Status = MiArm64PrepareUserPageForMdl(CurrentProcess,
-                                              PageAddress,
-                                              AccessMode,
-                                              Operation);
-        if (!NT_SUCCESS(Status))
+        for (Attempt = 0; ; Attempt++)
         {
-            goto Cleanup;
-        }
+            ULONG FaultCode;
 
-        MiLockProcessWorkingSet(CurrentProcess, PsGetCurrentThread());
+            if ((PteSlot == NULL) || (((ULONG_PTR)PteSlot & (PAGE_SIZE - 1)) == 0))
+            {
+                PteSlot = (volatile ULONG64 *)MiArm64UserPteKseg0ForPfn(PageAddress, &L3Pfn);
+            }
 
-        /*
-         * ARM64 user VAs are translated through TTBR0, while the generic ARM3
-         * self-map helpers describe TTBR1. Walk the process user page tables
-         * directly and then fill the MDL with the resolved PFN.
-         */
-        if (!MiArm64GetUserPteAddressForProcess(CurrentProcess, PageAddress, &Walk))
-        {
-            Status = STATUS_ACCESS_VIOLATION;
+            FaultCode = NotPresentFaultCode;
+            if (PteSlot != NULL)
+            {
+                Pte.u.Long = *PteSlot;
+                if (Pte.u.Hard.Valid)
+                {
+                    if ((Operation == IoReadAccess) ||
+                        (MI_IS_PAGE_WRITEABLE(&Pte) && MI_IS_PAGE_DIRTY(&Pte)))
+                    {
+                        break;
+                    }
+
+                    FaultCode = 0x3;
+                }
+            }
+
+            if (Attempt >= 4)
+            {
+                Status = STATUS_ACCESS_VIOLATION;
+                goto FailUnlock;
+            }
+
             MiUnlockProcessWorkingSet(CurrentProcess, PsGetCurrentThread());
-            goto Cleanup;
-        }
+            Status = MmAccessFaultEx(FaultCode, PageAddress, AccessMode, NULL, FALSE);
+            if (!NT_SUCCESS(Status))
+            {
+                goto Cleanup;
+            }
 
-        Pte.u.Long = Walk.PteValue;
-        if (!Pte.u.Hard.Valid)
-        {
-            Status = STATUS_ACCESS_VIOLATION;
-            MiUnlockProcessWorkingSet(CurrentProcess, PsGetCurrentThread());
-            goto Cleanup;
-        }
-
-        if ((Operation != IoReadAccess) &&
-            (!MI_IS_PAGE_WRITEABLE(&Pte) || !MI_IS_PAGE_DIRTY(&Pte)))
-        {
-            Status = STATUS_ACCESS_VIOLATION;
-            MiUnlockProcessWorkingSet(CurrentProcess, PsGetCurrentThread());
-            goto Cleanup;
+            KeInvalidateTlbEntry(PageAddress);
+            MiLockProcessWorkingSet(CurrentProcess, PsGetCurrentThread());
+            PteSlot = NULL;
         }
 
         PageFrameIndex = PFN_FROM_PTE(&Pte);
@@ -815,37 +797,27 @@ MiArm64ProbeAndLockUserPages(
         if (Pfn1 == NULL)
         {
             Status = STATUS_ACCESS_VIOLATION;
-            MiUnlockProcessWorkingSet(CurrentProcess, PsGetCurrentThread());
-            goto Cleanup;
+            goto FailUnlock;
         }
 
         ASSERT(CurrentProcess->PhysicalVadRoot == NULL);
         MiReferenceProbedPageAndBumpLockCount(Pfn1);
 
-        *MdlPages++ = PageFrameIndex;
-
-        MiUnlockProcessWorkingSet(CurrentProcess, PsGetCurrentThread());
-
+        MdlPages[PageIndex] = PageFrameIndex;
         PageAddress = (PVOID)((ULONG_PTR)PageAddress + PAGE_SIZE);
+        PteSlot = (PteSlot != NULL) ? (PteSlot + 1) : NULL;
     }
 
+    MiUnlockProcessWorkingSet(CurrentProcess, PsGetCurrentThread());
     return STATUS_SUCCESS;
+
+FailUnlock:
+    MiUnlockProcessWorkingSet(CurrentProcess, PsGetCurrentThread());
 
 Cleanup:
     ASSERT(!NT_SUCCESS(Status));
     MmUnlockPages(Mdl);
     return Status;
-}
-
-FORCEINLINE
-VOID
-MiArm64InvalidateUserAddress(
-    _In_ PVOID Address)
-{
-    __asm__ __volatile__("dsb ishst" ::: "memory");
-    __asm__ __volatile__("tlbi vaale1is, %0" :: "r"((ULONG_PTR)Address >> PAGE_SHIFT) : "memory");
-    __asm__ __volatile__("dsb ish" ::: "memory");
-    __asm__ __volatile__("isb" ::: "memory");
 }
 
 FORCEINLINE
@@ -934,6 +906,22 @@ MiArm64SynchronizeUserTablePfn(
     ULONG ExpectedShareCount;
     PMMPFN Pfn;
 
+    OldIrql = MiAcquirePfnLock();
+    if (MiArm64UserTablePfnHealthy(TablePfn, PteAddress, ParentPfn))
+    {
+        MiReleasePfnLock(OldIrql);
+        return;
+    }
+
+    if (MiGetPfnEntry(TablePfn) == NULL)
+    {
+        MiReleasePfnLock(OldIrql);
+        return;
+    }
+
+    MiReleasePfnLock(OldIrql);
+
+    /* Repair path: reconcile the PFN entry from an actual table scan */
     UsedEntries = MiArm64CountUserTableEntries(Table, Level, &ShareReferences);
     ExpectedShareCount = ShareReferences + 1;
 
@@ -994,19 +982,24 @@ static
 MMPTE
 MiArm64ClearKernelPte(
     _In_ PVOID Address,
-    _Inout_ PMMPTE PointerPte)
+    _Inout_ PMMPTE PointerPte,
+    _In_ PMMPTE Kseg0Pte)
 {
     MMPTE OldPte;
 
     OldPte.u.Long = PointerPte->u.Long;
     if (OldPte.u.Hard.Valid)
     {
-        MiArm64MaintainPageCache(Address, MiArm64DcacheCleanInvalidate, TRUE);
+        /* Sweep the I-cache only for pages that were EL1-executable */
+        MiArm64MaintainPageCache(Address,
+                                 MiArm64DcacheCleanInvalidate,
+                                 OldPte.u.Hard.PrivilegedNoExecute == 0);
     }
 
+    /* KeInvalidateTlbEntry opens with dsb ishst; the mirror write is sealed
+     * by MiArm64CleanEntryToPoC inside the WriteTo helper */
     PointerPte->u.Long = 0;
-    MiArm64SyncKernelLeafPteWrite(PointerPte);
-    __asm__ __volatile__("dsb ishst" ::: "memory");
+    MiArm64SyncKernelLeafPteWriteTo(PointerPte, Kseg0Pte);
     KeInvalidateTlbEntry(Address);
 
     return OldPte;
@@ -1021,10 +1014,15 @@ MiArm64ClearUserPte(
     MMPTE OldPte;
 
     OldPte.u.Long = Walk->PteValue;
-    if (OldPte.u.Hard.Valid)
+    if (OldPte.u.Hard.Valid && (OldPte.u.Hard.UserNoExecute == 0))
     {
-        MiArm64PublishPageByPfnAlias(OldPte.u.Hard.PageFrameNumber,
-                                     OldPte.u.Hard.UserNoExecute == 0);
+        /*
+         * I-fetch coherency publish for executable pages only. Data pages
+         * need no PoC maintenance here: CPU observers are PIPT-coherent and
+         * DMA is handled at the I/O layer by KeFlushIoBuffers (the ARM3
+         * fault path installs data PTEs with no D-publish at all).
+         */
+        MiArm64PublishPageByPfnAlias(OldPte.u.Hard.PageFrameNumber, TRUE);
     }
 
     if (OldPte.u.Long != 0)
@@ -1143,228 +1141,104 @@ VOID
 MiArm64ReleaseUserPageTableReference(
     _In_ PEPROCESS Process,
     _In_ PVOID Address,
-    _In_ BOOLEAN ReleaseLeafShare)
+    _In_ BOOLEAN ReleaseLeafShare,
+    _In_ PMI_ARM64_USER_PTE_WALK Walk)
 {
-    ULONG64 RootPa, L1Pa, L2Pa;
-    volatile ULONG64 *L0Table, *L1Table, *L2Table, *L3Table;
-    ULONG L0Idx, L1Idx, L2Idx;
-    ULONG64 L0Entry, L1Entry, L2Entry;
-    PFN_NUMBER RootPfn, L1Pfn, L2Pfn, L3Pfn;
     KIRQL OldIrql;
-    PMMPFN PfnRoot, PfnL1, PfnL2, PfnL3;
+    ULONG Level;
+    ULONG Index[3];
     ULONG ActualEntries;
     ULONG ActualShareReferences;
+    PMMPFN Pfn[4];
 
     ASSERT(Process != NULL);
-    RootPa = Process->Pcb.DirectoryTableBase[0] & ARM64_PTE_ADDR_MASK;
-    if (RootPa == 0)
+    UNREFERENCED_PARAMETER(Process);
+
+    /* Nothing to release unless the walk reached the L3 table */
+    if (Walk->Depth < 3)
     {
         return;
     }
 
-    L0Idx = ((ULONG64)(ULONG_PTR)Address >> PXI_SHIFT) & PXI_MASK;
-    L1Idx = ((ULONG64)(ULONG_PTR)Address >> PPI_SHIFT) & PPI_MASK;
-    L2Idx = ((ULONG64)(ULONG_PTR)Address >> PDI_SHIFT) & PDI_MASK_ARM64;
-
-    RootPfn = RootPa >> PAGE_SHIFT;
-    if (!MiArm64EnsureTablePageMapped(RootPa))
-        return;
-
-    L0Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(RootPa);
-    L0Entry = L0Table[L0Idx];
-    if ((L0Entry & 0x3ULL) != 0x3ULL)
-        return;
-
-    L1Pa = L0Entry & ARM64_PTE_ADDR_MASK;
-    if (!MiArm64EnsureTablePageMapped(L1Pa))
-        return;
-
-    L1Pfn = L1Pa >> PAGE_SHIFT;
-    L1Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L1Pa);
-    L1Entry = L1Table[L1Idx];
-    if ((L1Entry & 0x3ULL) != 0x3ULL)
-        return;
-
-    L2Pa = L1Entry & ARM64_PTE_ADDR_MASK;
-    if (!MiArm64EnsureTablePageMapped(L2Pa))
-        return;
-
-    L2Pfn = L2Pa >> PAGE_SHIFT;
-    L2Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L2Pa);
-    L2Entry = L2Table[L2Idx];
-    if ((L2Entry & 0x3ULL) != 0x3ULL)
-        return;
-
-    L3Pfn = (L2Entry & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT;
-    if (!MiArm64EnsureTablePageMapped((ULONG64)L3Pfn << PAGE_SHIFT))
-        return;
-
-    L3Table = (volatile ULONG64 *)MI_ARM64_PFN_TO_VA(L3Pfn);
+    Index[0] = ((ULONG64)(ULONG_PTR)Address >> PXI_SHIFT) & PXI_MASK;
+    Index[1] = ((ULONG64)(ULONG_PTR)Address >> PPI_SHIFT) & PPI_MASK;
+    Index[2] = ((ULONG64)(ULONG_PTR)Address >> PDI_SHIFT) & PDI_MASK_ARM64;
 
     OldIrql = MiAcquirePfnLock();
-    PfnRoot = MiGetPfnEntry(RootPfn);
-    PfnL1 = MiGetPfnEntry(L1Pfn);
-    PfnL2 = MiGetPfnEntry(L2Pfn);
-    PfnL3 = MiGetPfnEntry(L3Pfn);
 
-    if (PfnL3 == NULL || PfnL2 == NULL || PfnL1 == NULL || PfnRoot == NULL)
+    for (Level = 0; Level < 4; Level++)
     {
-        MiReleasePfnLock(OldIrql);
-        return;
-    }
-
-    if (ReleaseLeafShare && (PfnL3->u2.ShareCount > 0))
-    {
-        MiDecrementShareCount(PfnL3, L3Pfn);
-    }
-
-    if (PfnL3->OriginalPte.u.Soft.UsedPageTableEntries > 0)
-    {
-        PfnL3->OriginalPte.u.Soft.UsedPageTableEntries--;
-    }
-    else
-    {
-        MiReleasePfnLock(OldIrql);
-        return;
-    }
-
-    if (PfnL3->OriginalPte.u.Soft.UsedPageTableEntries != 0)
-    {
-        MiReleasePfnLock(OldIrql);
-        return;
-    }
-
-    ActualEntries = MiArm64CountUserTableEntries(L3Table, 3, &ActualShareReferences);
-    if (ActualEntries != 0)
-    {
-        PfnL3->OriginalPte.u.Soft.UsedPageTableEntries = ActualEntries;
-        if (PfnL3->u2.ShareCount < (ActualShareReferences + 1))
+        Pfn[Level] = MiGetPfnEntry(Walk->LevelPfn[Level]);
+        if (Pfn[Level] == NULL)
         {
-            PfnL3->u2.ShareCount = ActualShareReferences + 1;
+            MiReleasePfnLock(OldIrql);
+            return;
         }
-        MiReleasePfnLock(OldIrql);
-        return;
     }
 
-    if (PfnL3->u2.ShareCount != 1)
+    if (ReleaseLeafShare && (Pfn[3]->u2.ShareCount > 0))
     {
-        MiReleasePfnLock(OldIrql);
-        return;
+        MiDecrementShareCount(Pfn[3], Walk->LevelPfn[3]);
     }
 
-    MiArm64WritePteEntry(&L2Table[L2Idx], 0);
-    MiArm64InvalidateUserAddress(Address);
-    MiDecrementShareCount(PfnL2, L2Pfn);
-    MI_SET_PFN_DELETED(PfnL3);
-    MiDecrementShareCount(PfnL3, L3Pfn);
+    /*
+     * Cascade L3 -> L2 -> L1 (the root is never freed). Each iteration
+     * releases one used-entry reference on the level's table; when the
+     * table provably empties, its parent slot is cleared and the table
+     * page is freed, and the cascade continues one level up.
+     */
+    for (Level = 3; Level >= 1; Level--)
+    {
+        PMMPFN TablePfn = Pfn[Level];
+        PMMPFN ParentPfn = Pfn[Level - 1];
 
-    if (PfnL2->OriginalPte.u.Soft.UsedPageTableEntries > 0)
-    {
-        PfnL2->OriginalPte.u.Soft.UsedPageTableEntries--;
-    }
-    else
-    {
-        MiReleasePfnLock(OldIrql);
-        return;
-    }
-
-    if (PfnL2->OriginalPte.u.Soft.UsedPageTableEntries != 0)
-    {
-        MiReleasePfnLock(OldIrql);
-        return;
-    }
-
-    ActualEntries = MiArm64CountUserTableEntries(L2Table, 2, &ActualShareReferences);
-    if (ActualEntries != 0)
-    {
-        PfnL2->OriginalPte.u.Soft.UsedPageTableEntries = ActualEntries;
-        if (PfnL2->u2.ShareCount < (ActualShareReferences + 1))
+        if (TablePfn->OriginalPte.u.Soft.UsedPageTableEntries > 0)
         {
-            PfnL2->u2.ShareCount = ActualShareReferences + 1;
+            TablePfn->OriginalPte.u.Soft.UsedPageTableEntries--;
         }
-        MiReleasePfnLock(OldIrql);
-        return;
-    }
-
-    if (PfnL2->u2.ShareCount != 1)
-    {
-        MiReleasePfnLock(OldIrql);
-        return;
-    }
-
-    MiArm64WritePteEntry(&L1Table[L1Idx], 0);
-    MiArm64InvalidateUserAddress(Address);
-    MiDecrementShareCount(PfnL1, L1Pfn);
-    MI_SET_PFN_DELETED(PfnL2);
-    MiDecrementShareCount(PfnL2, L2Pfn);
-
-    if (PfnL1->OriginalPte.u.Soft.UsedPageTableEntries > 0)
-    {
-        PfnL1->OriginalPte.u.Soft.UsedPageTableEntries--;
-    }
-    else
-    {
-        MiReleasePfnLock(OldIrql);
-        return;
-    }
-
-    if (PfnL1->OriginalPte.u.Soft.UsedPageTableEntries != 0)
-    {
-        MiReleasePfnLock(OldIrql);
-        return;
-    }
-
-    ActualEntries = MiArm64CountUserTableEntries(L1Table, 1, &ActualShareReferences);
-    if (ActualEntries != 0)
-    {
-        PfnL1->OriginalPte.u.Soft.UsedPageTableEntries = ActualEntries;
-        if (PfnL1->u2.ShareCount < (ActualShareReferences + 1))
+        else
         {
-            PfnL1->u2.ShareCount = ActualShareReferences + 1;
+            break;
         }
-        MiReleasePfnLock(OldIrql);
-        return;
-    }
 
-    if (PfnL1->u2.ShareCount != 1)
-    {
-        MiReleasePfnLock(OldIrql);
-        return;
-    }
+        if (TablePfn->OriginalPte.u.Soft.UsedPageTableEntries != 0)
+        {
+            break;
+        }
 
-    MiArm64WritePteEntry(&L0Table[L0Idx], 0);
-    MiArm64InvalidateUserAddress(Address);
-    MiDecrementShareCount(PfnRoot, RootPfn);
-    MI_SET_PFN_DELETED(PfnL1);
-    MiDecrementShareCount(PfnL1, L1Pfn);
+        /* Re-derive from the actual table before freeing; restore on drift */
+        ActualEntries = MiArm64CountUserTableEntries(Walk->LevelTable[Level], Level, &ActualShareReferences);
+        if (ActualEntries != 0)
+        {
+            TablePfn->OriginalPte.u.Soft.UsedPageTableEntries = ActualEntries;
+            if (TablePfn->u2.ShareCount < (ActualShareReferences + 1))
+            {
+                TablePfn->u2.ShareCount = ActualShareReferences + 1;
+            }
+            break;
+        }
 
-    if (PfnRoot->OriginalPte.u.Soft.UsedPageTableEntries > 0)
-    {
-        PfnRoot->OriginalPte.u.Soft.UsedPageTableEntries--;
+        if (TablePfn->u2.ShareCount != 1)
+        {
+            break;
+        }
+
+        MiArm64WritePteEntry(&Walk->LevelTable[Level - 1][Index[Level - 1]], 0);
+        MiArm64InvalidateUserAddress(Address);
+        MiDecrementShareCount(ParentPfn, Walk->LevelPfn[Level - 1]);
+        MI_SET_PFN_DELETED(TablePfn);
+        MiDecrementShareCount(TablePfn, Walk->LevelPfn[Level]);
+
+        if (Level == 1)
+        {
+            if (ParentPfn->OriginalPte.u.Soft.UsedPageTableEntries > 0)
+            {
+                ParentPfn->OriginalPte.u.Soft.UsedPageTableEntries--;
+            }
+        }
     }
 
     MiReleasePfnLock(OldIrql);
-}
-
-VOID
-MiInvalidateDCachePageIncoming(
-    _In_ PVOID Address)
-{
-    MiArm64MaintainPageCache(Address, MiArm64DcacheInvalidate, TRUE);
-}
-
-VOID
-MiInvalidateDCachePageOutgoing(
-    _In_ PVOID Address)
-{
-    MiArm64MaintainPageCache(Address, MiArm64DcacheCleanInvalidate, TRUE);
-}
-
-VOID
-MiInvalidateDCachePage(
-    _In_ PVOID Address)
-{
-    MiInvalidateDCachePageOutgoing(Address);
 }
 
 static
@@ -1510,32 +1384,20 @@ MmCreateVirtualMappingUnsafeEx(
 
         MiLockProcessWorkingSet(Process, PsGetCurrentThread());
 
-        Status = MiArm64EnsureUserPte(Process, Address, &PointerPte);
+        Status = MiArm64EnsureUserPte(Process, Address, &PointerPte, &PteFrame);
         if (!NT_SUCCESS(Status))
         {
             MiUnlockProcessWorkingSet(Process, PsGetCurrentThread());
             return Status;
         }
 
-        if (MiArm64UserPteKseg0ForPfn(Address, &PteFrame) != PointerPte)
-        {
-            MiUnlockProcessWorkingSet(Process, PsGetCurrentThread());
-            return STATUS_INVALID_ADDRESS;
-        }
-
         OldPte = *PointerPte;
         OldEntryEmpty = (OldPte.u.Long == 0);
         OldEntryHasPageTableShare = OldPte.u.Hard.Valid || OldPte.u.Soft.Transition;
 
-        FinalPte.u.Long = 0;
-        FinalPte.u.Hard.Valid = 1;
-        FinalPte.u.Hard.NotLargePage = 1;
-        FinalPte.u.Hard.Owner = 1;
-        FinalPte.u.Hard.Accessed = 1;
-        FinalPte.u.Hard.Shareability = 3;
-        FinalPte.u.Hard.NonGlobal = 1;
-        FinalPte.u.Hard.PageFrameNumber = Page;
-        FinalPte.u.Long |= MmProtectToPteMask[ProtectionMask];
+        /* Bit-for-bit the hand-built user PTE (the protection mask supplies
+         * NonGlobal on every reachable protection) */
+        MI_MAKE_HARDWARE_PTE_USER(&FinalPte, MiAddressToPte(Address), ProtectionMask, Page);
 
         if (FinalPte.u.Hard.Writable)
         {
@@ -1546,31 +1408,49 @@ MmCreateVirtualMappingUnsafeEx(
             FinalPte.u.Hard.NotDirty = 1;
         }
 
-        if (!IsPhysical)
+        /* One PFN-lock section covers the data-page reference and the
+         * page-table accounting */
         {
             KIRQL OldIrql;
-            PMMPFN Pfn1;
 
             OldIrql = MiAcquirePfnLock();
-            Pfn1 = MiGetPfnEntry(Page);
-            if (Pfn1 == NULL)
+
+            if (!IsPhysical)
             {
-                MiReleasePfnLock(OldIrql);
-                MiUnlockProcessWorkingSet(Process, PsGetCurrentThread());
-                return STATUS_INVALID_PARAMETER;
+                PMMPFN Pfn1 = MiGetPfnEntry(Page);
+
+                if (Pfn1 == NULL)
+                {
+                    MiReleasePfnLock(OldIrql);
+                    MiUnlockProcessWorkingSet(Process, PsGetCurrentThread());
+                    return STATUS_INVALID_PARAMETER;
+                }
+
+                Pfn1->u2.ShareCount++;
+                Pfn1->u3.e1.PageLocation = ActiveAndValid;
+                MiArm64SyncMappedPfnCacheAttribute(Pfn1, FinalPte);
             }
 
-            Pfn1->u2.ShareCount++;
-            Pfn1->u3.e1.PageLocation = ActiveAndValid;
-            MiArm64SyncMappedPfnCacheAttribute(Process, Address, Page, FinalPte);
-            MiReleasePfnLock(OldIrql);
-        }
+            if (!OldEntryHasPageTableShare || OldEntryEmpty)
+            {
+                PMMPFN TablePfnEntry = MiGetPfnEntry(PteFrame);
 
-        if (!OldEntryHasPageTableShare || OldEntryEmpty)
-        {
-            MiArm64AccountUserLeafPte(PteFrame,
-                                      !OldEntryHasPageTableShare,
-                                      OldEntryEmpty);
+                ASSERT(TablePfnEntry != NULL);
+                if (TablePfnEntry != NULL)
+                {
+                    if (!OldEntryHasPageTableShare)
+                    {
+                        TablePfnEntry->u2.ShareCount++;
+                    }
+                    if (OldEntryEmpty)
+                    {
+                        TablePfnEntry->OriginalPte.u.Soft.UsedPageTableEntries++;
+                        ASSERT(TablePfnEntry->OriginalPte.u.Soft.UsedPageTableEntries <= PTE_PER_PAGE);
+                    }
+                }
+            }
+
+            MiReleasePfnLock(OldIrql);
         }
 
         if (OldPte.u.Hard.Valid && OldPte.u.Hard.NotLargePage)
@@ -1580,8 +1460,12 @@ MmCreateVirtualMappingUnsafeEx(
 
         PointerPte->u.Long = FinalPte.u.Long;
         MiArm64CleanEntryToPoC(PointerPte);
-        __asm__ __volatile__("dsb sy" ::: "memory");
-        MiArm64PublishPageByPfnAlias(Page, FinalPte.u.Hard.UserNoExecute == 0);
+        if (FinalPte.u.Hard.UserNoExecute == 0)
+        {
+            /* I-fetch coherency publish for executable mappings only (see
+             * MiArm64ClearUserPte for the data-page rationale) */
+            MiArm64PublishPageByPfnAlias(Page, TRUE);
+        }
         MiArm64InvalidateUserAddress(Address);
 
         MiUnlockProcessWorkingSet(Process, PsGetCurrentThread());
@@ -1600,10 +1484,7 @@ MmCreateVirtualMappingUnsafeEx(
 
         Pfn1->u2.ShareCount++;
         Pfn1->u3.e1.PageLocation = ActiveAndValid;
-        MiArm64SyncMappedPfnCacheAttribute(Process,
-                                           Address,
-                                           Page,
-                                           TempPte);
+        MiArm64SyncMappedPfnCacheAttribute(Pfn1, TempPte);
         MiReleasePfnLock(OldIrql);
     }
 
@@ -1617,7 +1498,6 @@ MmCreateVirtualMappingUnsafeEx(
 
         PointerPte->u.Long = TempPte.u.Long;
         MiArm64SyncKernelLeafPteWrite(PointerPte);
-        __asm__ __volatile__("dsb ishst" ::: "memory");
 
         if (OldPteValue != 0)
         {
@@ -1663,25 +1543,30 @@ MmDeleteVirtualMappingEx(
     _In_ BOOLEAN IsPhysical)
 {
     MMPTE OldPte;
+    MI_ARM64_USER_PTE_WALK Walk;
     BOOLEAN ProcessWorkingSetLocked = FALSE;
 
     OldPte.u.Long = 0;
+    Walk.Depth = 0;
 
     ASSERT(((ULONG_PTR)Address & (PAGE_SIZE - 1)) == 0);
 
     if (Process == NULL)
     {
+        PMMPTE Kseg0Pte;
+
         ASSERT(Address >= MmSystemRangeStart);
 
-        if (MiIsPdeForAddressValid(Address))
+        /* One TTBR1 walk resolves both the PDE-validity gate and the KSEG0
+         * mirror slot the clear helper needs */
+        Kseg0Pte = MiArm64KernelPteKseg0(Address);
+        if (Kseg0Pte != NULL)
         {
-            OldPte = MiArm64ClearKernelPte(Address, MiAddressToPte(Address));
+            OldPte = MiArm64ClearKernelPte(Address, MiAddressToPte(Address), Kseg0Pte);
         }
     }
     else
     {
-        MI_ARM64_USER_PTE_WALK Walk;
-
         ASSERT(Address < MmSystemRangeStart);
         ASSERT(Process == PsGetCurrentProcess());
 
@@ -1720,7 +1605,8 @@ MmDeleteVirtualMappingEx(
     {
         MiArm64ReleaseUserPageTableReference(Process,
                                              Address,
-                                             OldPte.u.Hard.Valid || OldPte.u.Soft.Transition);
+                                             OldPte.u.Hard.Valid || OldPte.u.Soft.Transition,
+                                             &Walk);
     }
 
     if (ProcessWorkingSetLocked)
@@ -1753,10 +1639,11 @@ MmCreatePageFileMapping(
         PMMPTE PointerPte;
         MMPTE OldPte;
         MMPTE NewPte;
+        PFN_NUMBER PteFrame;
 
         NTSTATUS Status;
 
-        Status = MiArm64EnsureUserPte(Process, Address, &PointerPte);
+        Status = MiArm64EnsureUserPte(Process, Address, &PointerPte, &PteFrame);
         if (!NT_SUCCESS(Status))
         {
             MiUnlockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
@@ -1773,13 +1660,13 @@ MmCreatePageFileMapping(
         }
 
         NewPte.u.Long = 0;
-        NewPte.u.Soft.PageFileLow = MI_ARM64_SWAP_FILE_FROM_ENTRY(SwapEntry);
-        NewPte.u.Soft.PageFileHigh = MI_ARM64_SWAP_OFFSET_FROM_ENTRY(SwapEntry);
+        NewPte.u.Soft.PageFileLow = (ULONG)MM_SWAP_FILE_FROM_ENTRY(SwapEntry);
+        NewPte.u.Soft.PageFileHigh = (ULONG_PTR)MM_SWAP_OFFSET_FROM_ENTRY(SwapEntry);
         NewPte.u.Soft.Prototype = 0;
         NewPte.u.Soft.Protection = MM_READWRITE;
 
         MiArm64WritePteEntry((volatile ULONG64 *)PointerPte, NewPte.u.Long);
-        MiArm64IncrementUserPageTableReferences(Address);
+        MiArm64AccountUserLeafPte(PteFrame, FALSE, TRUE);
     }
 
     MiUnlockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
@@ -1794,24 +1681,21 @@ MmDeletePageFileMapping(
     _Inout_ SWAPENTRY *SwapEntry)
 {
     MMPTE OldPte;
+    MI_ARM64_USER_PTE_WALK Walk;
 
     ASSERT(Process != NULL);
     ASSERT(Process == PsGetCurrentProcess());
 
     MiLockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
 
+    if (!MiArm64GetUserPteAddress(Address, &Walk))
     {
-        MI_ARM64_USER_PTE_WALK Walk;
-
-        if (!MiArm64GetUserPteAddress(Address, &Walk))
-        {
-            *SwapEntry = 0;
-            MiUnlockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
-            return;
-        }
-
-        OldPte.u.Long = MiArm64ExchangePteEntry(Walk.PointerPte, 0);
+        *SwapEntry = 0;
+        MiUnlockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
+        return;
     }
+
+    OldPte.u.Long = MiArm64ExchangePteEntry(Walk.PointerPte, 0);
 
     if (OldPte.u.Hard.Valid ||
         OldPte.u.Soft.Prototype ||
@@ -1822,10 +1706,10 @@ MmDeletePageFileMapping(
         KeBugCheck(MEMORY_MANAGEMENT);
     }
 
-    *SwapEntry = MI_ARM64_SWAP_ENTRY_FROM_FILE_OFFSET(OldPte.u.Soft.PageFileLow,
-                                                       OldPte.u.Soft.PageFileHigh);
+    *SwapEntry = (SWAPENTRY)MM_SWAP_ENTRY_FROM_FILE_OFFSET((ULONG_PTR)OldPte.u.Soft.PageFileLow,
+                                                            (ULONG_PTR)OldPte.u.Soft.PageFileHigh);
 
-    MiArm64ReleaseUserPageTableReference(Process, Address, FALSE);
+    MiArm64ReleaseUserPageTableReference(Process, Address, FALSE, &Walk);
 
     MiUnlockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
 }
@@ -1861,8 +1745,8 @@ MmGetPageFileMapping(
                 (TempPte.u.Soft.PageFileHigh == 0))
                 *SwapEntry = 0;
             else
-                *SwapEntry = MI_ARM64_SWAP_ENTRY_FROM_FILE_OFFSET(TempPte.u.Soft.PageFileLow,
-                                                                   TempPte.u.Soft.PageFileHigh);
+                *SwapEntry = (SWAPENTRY)MM_SWAP_ENTRY_FROM_FILE_OFFSET(TempPte.u.Soft.PageFileLow,
+                                                                       TempPte.u.Soft.PageFileHigh);
         }
 
         MiUnlockProcessWorkingSetShared(Process, PsGetCurrentThread());
@@ -1880,8 +1764,8 @@ MmGetPageFileMapping(
             (PointerPte->u.Soft.PageFileHigh == 0))
             *SwapEntry = 0;
         else
-            *SwapEntry = MI_ARM64_SWAP_ENTRY_FROM_FILE_OFFSET(PointerPte->u.Soft.PageFileLow,
-                                                               PointerPte->u.Soft.PageFileHigh);
+            *SwapEntry = (SWAPENTRY)MM_SWAP_ENTRY_FROM_FILE_OFFSET(PointerPte->u.Soft.PageFileLow,
+                                                                   PointerPte->u.Soft.PageFileHigh);
 
         MiUnlockProcessWorkingSetShared(Process, PsGetCurrentThread());
     }
@@ -1921,7 +1805,7 @@ MmIsPagePresent(
     ASSERT(Process != NULL);
     ASSERT(Process == PsGetCurrentProcess());
 
-    return MiArm64ReadUserPtePhysically(Address, NULL, NULL);
+    return MiArm64ReadUserPtePhysically(Address, NULL);
 }
 
 BOOLEAN
@@ -1943,7 +1827,7 @@ MmIsDisabledPage(
         ULONG64 PteValue;
         MMPTE TempPte;
 
-        if (!MiArm64ReadUserPtePhysically(Address, &PteValue, NULL))
+        if (!MiArm64ReadUserPtePhysically(Address, &PteValue))
             return FALSE;
 
         TempPte.u.Long = PteValue;
@@ -2018,7 +1902,7 @@ MmGetPageProtect(
         ULONG64 PteValue;
         MMPTE TempPte;
 
-        if (!MiArm64ReadUserPtePhysically(Address, &PteValue, NULL))
+        if (!MiArm64ReadUserPtePhysically(Address, &PteValue))
             return PAGE_NOACCESS;
 
         TempPte.u.Long = PteValue;
@@ -2042,10 +1926,13 @@ MmSetPageProtect(
     if (Address >= MmSystemRangeStart)
     {
         PMMPTE PointerPte;
+        PMMPTE Kseg0Pte;
 
         ASSERT(Process == NULL);
 
-        if (!MiIsPdeForAddressValid(Address))
+        /* One TTBR1 walk resolves the validity gate and the mirror slot */
+        Kseg0Pte = MiArm64KernelPteKseg0(Address);
+        if (Kseg0Pte == NULL)
             return;
 
         PointerPte = MiAddressToPte(Address);
@@ -2073,13 +1960,12 @@ MmSetPageProtect(
             MI_MAKE_CLEAN_PAGE(&TempPte);
 
         PointerPte->u.Long = TempPte.u.Long;
-        MiArm64SyncKernelLeafPteWrite(PointerPte);
+        MiArm64SyncKernelLeafPteWriteTo(PointerPte, Kseg0Pte);
 
         MiArm64PreserveDirtyStateForProtect(OldPte, TempPte);
 
         if (OldPte.u.Long != TempPte.u.Long)
         {
-            __asm__ __volatile__("dsb ishst" ::: "memory");
             KeInvalidateTlbEntry(Address);
         }
 
@@ -2128,10 +2014,7 @@ MmSetPageProtect(
 
         if (OldPte.u.Long != TempPte.u.Long)
         {
-            __asm__ __volatile__("dsb ishst" ::: "memory");
-            __asm__ __volatile__("tlbi vaale1is, %0" :: "r"((ULONG_PTR)Address >> 12) : "memory");
-            __asm__ __volatile__("dsb ish" ::: "memory");
-            __asm__ __volatile__("isb" ::: "memory");
+            MiArm64InvalidateUserAddress(Address);
         }
     }
 
@@ -2148,11 +2031,14 @@ MmSetDirtyBit(
     if (Address >= MmSystemRangeStart)
     {
         PMMPTE PointerPte;
+        PMMPTE Kseg0Pte;
         MMPTE OldPte, TempPte;
 
         ASSERT(Process == NULL);
 
-        if (!MiIsPdeForAddressValid(Address))
+        /* One TTBR1 walk resolves the validity gate and the mirror slot */
+        Kseg0Pte = MiArm64KernelPteKseg0(Address);
+        if (Kseg0Pte == NULL)
             return;
 
         PointerPte = MiAddressToPte(Address);
@@ -2167,11 +2053,10 @@ MmSetDirtyBit(
             MI_MAKE_CLEAN_PAGE(&TempPte);
 
         PointerPte->u.Long = TempPte.u.Long;
-        MiArm64SyncKernelLeafPteWrite(PointerPte);
+        MiArm64SyncKernelLeafPteWriteTo(PointerPte, Kseg0Pte);
 
         if (OldPte.u.Long != TempPte.u.Long)
         {
-            __asm__ __volatile__("dsb ishst" ::: "memory");
             KeInvalidateTlbEntry(Address);
         }
 
@@ -2206,10 +2091,7 @@ MmSetDirtyBit(
 
         if (OldPte.u.Long != TempPte.u.Long)
         {
-            __asm__ __volatile__("dsb ishst" ::: "memory");
-            __asm__ __volatile__("tlbi vaale1is, %0" :: "r"((ULONG_PTR)Address >> 12) : "memory");
-            __asm__ __volatile__("dsb ish" ::: "memory");
-            __asm__ __volatile__("isb" ::: "memory");
+            MiArm64InvalidateUserAddress(Address);
         }
     }
 
@@ -2252,69 +2134,6 @@ MmGetPfnForProcess(
 }
 
 static
-BOOLEAN
-__attribute__((unused))
-MiIsPageTablePresent(
-    _In_ PVOID Address)
-{
-#if _MI_PAGING_LEVELS == 2
-    BOOLEAN Ret = MmWorkingSetList->UsedPageTableEntries[MiGetPdeOffset(Address)] != 0;
-    ASSERT(Ret == (MiAddressToPde(Address)->u.Hard.Valid != 0));
-    return Ret;
-#else
-    PMMPDE PointerPde;
-    PMMPPE PointerPpe;
-#if _MI_PAGING_LEVELS == 4
-    PMMPXE PointerPxe;
-#endif
-
-    ASSERT((PsGetCurrentThread()->OwnsProcessWorkingSetExclusive) ||
-           (PsGetCurrentThread()->OwnsProcessWorkingSetShared));
-    ASSERT(KeGetCurrentIrql() < DISPATCH_LEVEL);
-
-    if (Address < MmSystemRangeStart)
-    {
-        MI_ARM64_USER_PTE_WALK Walk;
-        return MiArm64GetUserPteAddress(Address, &Walk);
-    }
-
-#if _MI_PAGING_LEVELS == 4
-    PointerPxe = MiAddressToPxe(Address);
-
-    if (PointerPxe->u.Hard.Valid == 0 && PointerPxe->u.Soft.Transition == 0)
-    {
-        if (PointerPxe->u.Long == 0)
-            return FALSE;
-    }
-
-    if (PointerPxe->u.Hard.Valid == 0)
-        MiMakeSystemAddressValid(MiPteToAddress(PointerPxe), PsGetCurrentProcess());
-#endif
-
-    PointerPpe = MiAddressToPpe(Address);
-
-    if (PointerPpe->u.Hard.Valid == 0 && PointerPpe->u.Soft.Transition == 0)
-    {
-        if (PointerPpe->u.Long == 0)
-            return FALSE;
-    }
-
-    if (PointerPpe->u.Hard.Valid == 0)
-        MiMakeSystemAddressValid(MiPteToAddress(PointerPpe), PsGetCurrentProcess());
-
-    PointerPde = MiAddressToPde(Address);
-
-    if (PointerPde->u.Hard.Valid == 1)
-        return TRUE;
-
-    if (PointerPde->u.Soft.Transition == 1)
-        return TRUE;
-
-    return PointerPde->u.Long != 0;
-#endif
-}
-
-static
 ULONG
 MiProtectionFromPte(
     _In_ MMPTE Pte)
@@ -2328,165 +2147,4 @@ MiProtectionFromPte(
     }
 
     return PAGE_NOACCESS;
-}
-
-FORCEINLINE
-ULONG64
-MiArm64NextVaRange(
-    _In_ ULONG64 Va,
-    _In_ ULONG64 RangeSize)
-{
-    return (Va + RangeSize) & ~(RangeSize - 1);
-}
-
-FORCEINLINE
-VOID
-MiArm64ClearUserDescriptor(
-    _Inout_ volatile ULONG64 *Entry)
-{
-    MiArm64WritePteEntry(Entry, 0);
-    MiArm64CleanInvalidateCacheLine((PVOID)Entry);
-}
-
-static
-BOOLEAN
-MiArm64ClearBootUserMappingAtVa(
-    _In_ ULONG64 Va,
-    _Out_ PULONG64 NextVa,
-    _Out_ PULONG ClearedPages)
-{
-    ULONG64 Ttbr0;
-    ULONG64 RootPa;
-    ULONG64 L0Entry, L1Entry, L2Entry, L3Entry;
-    volatile ULONG64 *L0Table;
-    volatile ULONG64 *L1Table;
-    volatile ULONG64 *L2Table;
-    volatile ULONG64 *L3Table;
-    ULONG L0Idx, L1Idx, L2Idx, L3Idx;
-
-    *NextVa = Va + PAGE_SIZE;
-    *ClearedPages = 0;
-
-    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-    RootPa = Ttbr0 & ARM64_PTE_ADDR_MASK;
-    if (RootPa == 0)
-    {
-        return FALSE;
-    }
-
-    L0Idx = (Va >> 39) & 0x1FF;
-    L1Idx = (Va >> 30) & 0x1FF;
-    L2Idx = (Va >> 21) & 0x1FF;
-    L3Idx = (Va >> 12) & 0x1FF;
-
-    L0Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(RootPa);
-    L0Entry = L0Table[L0Idx];
-    if ((L0Entry & 0x3ULL) != 0x3ULL)
-    {
-        *NextVa = MiArm64NextVaRange(Va, 1ULL << 39);
-        return FALSE;
-    }
-
-    L1Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L0Entry & ARM64_PTE_ADDR_MASK);
-    L1Entry = L1Table[L1Idx];
-    if ((L1Entry & 0x1ULL) == 0)
-    {
-        *NextVa = MiArm64NextVaRange(Va, 1ULL << 30);
-        return FALSE;
-    }
-
-    if ((L1Entry & 0x3ULL) == 0x1ULL)
-    {
-        MiArm64ClearUserDescriptor(&L1Table[L1Idx]);
-        MiArm64InvalidateUserAddress((PVOID)Va);
-        *NextVa = MiArm64NextVaRange(Va, 1ULL << 30);
-        *ClearedPages = (1ULL << 30) >> PAGE_SHIFT;
-        return TRUE;
-    }
-
-    if ((L1Entry & 0x3ULL) != 0x3ULL)
-    {
-        *NextVa = MiArm64NextVaRange(Va, 1ULL << 30);
-        return FALSE;
-    }
-
-    L2Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L1Entry & ARM64_PTE_ADDR_MASK);
-    L2Entry = L2Table[L2Idx];
-    if ((L2Entry & 0x1ULL) == 0)
-    {
-        *NextVa = MiArm64NextVaRange(Va, 1ULL << 21);
-        return FALSE;
-    }
-
-    if ((L2Entry & 0x3ULL) == 0x1ULL)
-    {
-        MiArm64ClearUserDescriptor(&L2Table[L2Idx]);
-        MiArm64InvalidateUserAddress((PVOID)Va);
-        *NextVa = MiArm64NextVaRange(Va, 1ULL << 21);
-        *ClearedPages = (1ULL << 21) >> PAGE_SHIFT;
-        return TRUE;
-    }
-
-    if ((L2Entry & 0x3ULL) != 0x3ULL)
-    {
-        *NextVa = MiArm64NextVaRange(Va, 1ULL << 21);
-        return FALSE;
-    }
-
-    L3Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L2Entry & ARM64_PTE_ADDR_MASK);
-    L3Entry = L3Table[L3Idx];
-    if ((L3Entry & 0x1ULL) == 0)
-    {
-        return FALSE;
-    }
-
-    if ((L3Entry & 0x3ULL) == 0x3ULL)
-    {
-        MiArm64InvalidatePageByPfnAlias((PFN_NUMBER)((L3Entry & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT));
-    }
-
-    MiArm64ClearUserDescriptor(&L3Table[L3Idx]);
-    MiArm64InvalidateUserAddress((PVOID)Va);
-    *ClearedPages = 1;
-    return TRUE;
-}
-
-VOID
-NTAPI
-MiArm64ClearStaleUserPtes(
-    _In_ PVOID StartVa,
-    _In_ SIZE_T Size,
-    _In_ PEPROCESS Process)
-{
-    ULONG64 Va, EndVa;
-    ULONG ClearedCount = 0;
-
-    ASSERT(Process == PsGetCurrentProcess());
-    UNREFERENCED_PARAMETER(Process);
-
-    if ((ULONG_PTR)StartVa >= (ULONG_PTR)MmSystemRangeStart)
-        return;
-
-    EndVa = (ULONG64)StartVa + Size;
-    if (EndVa > (ULONG64)(ULONG_PTR)MmSystemRangeStart)
-    {
-        EndVa = (ULONG64)(ULONG_PTR)MmSystemRangeStart;
-    }
-    Va = (ULONG64)StartVa;
-
-    while (Va < EndVa)
-    {
-        ULONG64 NextVa;
-        ULONG ClearedPages;
-
-        MiArm64ClearBootUserMappingAtVa(Va, &NextVa, &ClearedPages);
-        ClearedCount += ClearedPages;
-        Va = (NextVa < EndVa) ? NextVa : EndVa;
-    }
-
-    if (ClearedCount > 0)
-    {
-        DPRINT("[arm64] MiArm64ClearStaleUserPtes: Cleared %lu stale PTEs in range %p-%p\n",
-                ClearedCount, StartVa, (PVOID)EndVa);
-    }
 }

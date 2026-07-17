@@ -87,9 +87,6 @@ MiArm64ProbeForWrite(
 #define ARM64_MAKE_TABLE_DESCRIPTOR(Pfn) \
     ((((ULONG64)(Pfn)) << PAGE_SHIFT) | ARM64_PTE_TABLE_DESCRIPTOR_ATTRS)
 
-#define MI_IS_PTE_VALID_ARM64(Pte) (((Pte).u.Long & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_PAGE)
-#define MI_IS_TABLE_VALID_ARM64(Pde) (((Pde).u.Long & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_TABLE)
-
 /*
  * ARM64 Self-Map Architecture for TTBR0/TTBR1 Split
  *
@@ -273,11 +270,35 @@ MiArm64FillSystemPageDirectory(
     _In_ PVOID Base,
     _In_ SIZE_T NumberOfBytes);
 
+/*
+ * Per-CPU PFN-lock recursion depth (writer: ke/arm64/spinlock.c on every
+ * PFN-lock acquire/release; reader: MiArm64AllocatePageTablePage, own CPU
+ * only). One slot per cache line so the hottest MM lock's accounting never
+ * bounces a shared line between CPUs.
+ */
+typedef struct DECLSPEC_CACHEALIGN _MI_ARM64_PFN_LOCK_DEPTH
+{
+    volatile LONG Depth;
+} MI_ARM64_PFN_LOCK_DEPTH;
+
+extern MI_ARM64_PFN_LOCK_DEPTH MiArm64PfnLockDepth[];
+
+VOID
+MiArm64AccountUserLeafPteCount(
+    _In_ PFN_NUMBER PteFrame,
+    _In_ ULONG NewUsedEntries);
+
+NTSTATUS
+MiArm64AllocateCleanPage(
+    _Inout_ PEPROCESS Process,
+    _Out_ PPFN_NUMBER PageFrame);
+
 NTSTATUS
 MiArm64EnsureUserPte(
     _Inout_ PEPROCESS Process,
     _In_ PVOID Address,
-    _Outptr_ PMMPTE *PointerPte);
+    _Outptr_ PMMPTE *PointerPte,
+    _Out_opt_ PPFN_NUMBER L3TablePfn);
 
 VOID
 MiArm64IncrementUserPageTableReferences(
@@ -477,62 +498,6 @@ MiPdeToPxe(PMMPDE PointerPde)
 #define MiIsPteOnPxeBoundary(PointerPte) \
     ((((ULONG_PTR)PointerPte) & (PPE_PER_PAGE * PDE_PER_PAGE * PAGE_SIZE - 1)) == 0)
 
-/* Check whether the TTBR1 hierarchy for a kernel VA has a valid PDE. */
-FORCEINLINE
-BOOLEAN
-MiIsPdeForAddressValid(PVOID Address)
-{
-    UINT64 Ttbr1;
-    UINT64 RootPa;
-    volatile UINT64 *L0, *L1, *L2;
-    UINT64 E0, E1, E2;
-    ULONG L0Index, L1Index, L2Index;
-
-    ASSERT(Address >= MmSystemRangeStart);
-
-    /* Mask for extracting physical address from page table entry (bits 47:12) */
-    #define ARM64_PTE_ADDR_MASK_LOCAL 0x0000FFFFFFFFF000ULL
-
-    /* Read TTBR1_EL1 to get the root page table physical address */
-    __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
-
-    /* Extract physical address from TTBR1 (mask out ASID bits) */
-    RootPa = Ttbr1 & ARM64_PTE_ADDR_MASK_LOCAL;
-
-    /* Map root table via KSEG0 (identity-mapped physical memory) */
-    L0 = (volatile UINT64 *)MI_ARM64_PHYS_TO_VA(RootPa);
-
-    /* Calculate indices for each level */
-    L0Index = MiAddressToPxi(Address);
-    L1Index = (((ULONG64)Address >> PPI_SHIFT) & 0x1FF);
-    L2Index = (((ULONG64)Address >> PDI_SHIFT) & 0x1FF);
-
-    /* Check L0 (PXE) - read via KSEG0, no self-map dependency */
-    E0 = L0[L0Index];
-    if ((E0 & 1ULL) == 0)
-        return FALSE;
-
-    /* Map L1 table via KSEG0 */
-    L1 = (volatile UINT64 *)MI_ARM64_PHYS_TO_VA(E0 & ARM64_PTE_ADDR_MASK_LOCAL);
-
-    /* Check L1 (PPE) */
-    E1 = L1[L1Index];
-    if ((E1 & 1ULL) == 0)
-        return FALSE;
-
-    /* Map L2 table via KSEG0 */
-    L2 = (volatile UINT64 *)MI_ARM64_PHYS_TO_VA(E1 & ARM64_PTE_ADDR_MASK_LOCAL);
-
-    /* Check L2 (PDE) */
-    E2 = L2[L2Index];
-    if ((E2 & 1ULL) == 0)
-        return FALSE;
-
-    #undef ARM64_PTE_ADDR_MASK_LOCAL
-
-    return TRUE;
-}
-
 FORCEINLINE
 BOOLEAN
 MiArm64IsAddressValid(
@@ -662,6 +627,50 @@ MiArm64ProbeForAccess(
     return ((Par & 1ULL) == 0);
 }
 
+/*
+ * Hardware address translation via AT. Owns the AT/PAR idiom together with
+ * MiArm64ProbeForAccess; MmGetPhysicalAddress dispatches here on ARM64.
+ */
+FORCEINLINE
+BOOLEAN
+MiArm64TranslateToPhysical(
+    _In_ PVOID Address,
+    _Out_ PPHYSICAL_ADDRESS PhysicalAddress)
+{
+    ULONG_PTR Va = (ULONG_PTR)Address;
+    ULONG64 Par;
+
+    PhysicalAddress->QuadPart = 0;
+
+    if (MiIsUserAddress(Address))
+    {
+        __asm__ __volatile__(
+            "at s1e0r, %1\n\t"
+            "isb\n\t"
+            "mrs %0, par_el1"
+            : "=r"(Par)
+            : "r"(Va)
+            : "memory");
+    }
+    else
+    {
+        __asm__ __volatile__(
+            "at s1e1r, %1\n\t"
+            "isb\n\t"
+            "mrs %0, par_el1"
+            : "=r"(Par)
+            : "r"(Va)
+            : "memory");
+    }
+
+    if (Par & 1ULL)
+        return FALSE;
+
+    PhysicalAddress->QuadPart =
+        (Par & ARM64_PTE_ADDR_MASK) | (Va & (PAGE_SIZE - 1));
+    return TRUE;
+}
+
 FORCEINLINE
 VOID
 MiArm64CleanEntryToPoC(
@@ -672,6 +681,18 @@ MiArm64CleanEntryToPoC(
     __asm__ __volatile__("dsb ish" ::: "memory");
 }
 
+/* Single owner of the per-VA user TLB invalidate sequence (all-ASID, broadcast). */
+FORCEINLINE
+VOID
+MiArm64InvalidateUserAddress(
+    _In_ PVOID Address)
+{
+    __asm__ __volatile__("dsb ishst" ::: "memory");
+    __asm__ __volatile__("tlbi vaale1is, %0" :: "r"((ULONG_PTR)Address >> PAGE_SHIFT) : "memory");
+    __asm__ __volatile__("dsb ish" ::: "memory");
+    __asm__ __volatile__("isb" ::: "memory");
+}
+
 FORCEINLINE
 VOID
 MiArm64CleanPageToPoC(
@@ -679,8 +700,13 @@ MiArm64CleanPageToPoC(
 {
     ULONG_PTR Va = (ULONG_PTR)PAGE_ALIGN(PageVa);
     ULONG_PTR End = Va + PAGE_SIZE;
+    ULONG DcacheLineSize;
+    ULONG IcacheLineSize;
 
-    for (; Va < End; Va += 64)
+    /* Honor the real D-line size: a hardcoded 64 under-cleans on 128-byte-line cores. */
+    KiArm64GetCacheLineSizes(&DcacheLineSize, &IcacheLineSize);
+
+    for (; Va < End; Va += DcacheLineSize)
     {
         __asm__ __volatile__("dc civac, %0" :: "r"((PVOID)Va) : "memory");
     }
@@ -736,62 +762,43 @@ MiArm64SyncPxeWrite(
  * Returns KSEG0-mapped pointer (safe at any IRQL, never stale), or NULL
  * if the page table hierarchy doesn't extend to the requested level.
  *
- * Performance: 3 memory reads (L0→L1→L2) to reach L3 PTE.
- *   Compare: MiArm64SyncSelfMapForUserAddress does 4 reads + 4 writes = SLOWER.
- *   For bulk iteration, use MiArm64UserL3BaseKseg0 to get L3 base, iterate in-page.
- *
  * Writes through returned pointer go directly to hardware page tables.
  * Caller must issue TLBI (KeInvalidateTlbEntry) for the MAPPED VA after writes.
  */
 
-/* Get L3 (PTE-level) entry for user VA via KSEG0, or NULL if hierarchy missing */
+/*
+ * MiArm64KernelTableKseg0 - single TTBR1 KSEG0 descent core.
+ *
+ * StopLevel selects the returned entry: 1 = PPE (L1), 2 = PDE (L2),
+ * 3 = PTE (L3). Returns NULL if any intermediate entry is not a valid
+ * table descriptor. StopLevel is always a constant at the call sites, so
+ * FORCEINLINE unrolls the loop to the same code as the previous per-level
+ * copies.
+ */
 FORCEINLINE
 PMMPTE
-MiArm64UserPteKseg0(_In_ PVOID Address)
+MiArm64KernelTableKseg0(
+    _In_ PVOID Address,
+    _In_ ULONG StopLevel)
 {
-    ULONG64 Ttbr0;
-    PULONG64 L0, L1, L2, L3;
-    ULONG64 E0, E1, E2;
+    ULONG64 Ttbr1;
+    ULONG64 Entry;
+    PULONG64 Table;
+    ULONG Level;
 
-    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-    L0 = (PULONG64)MI_ARM64_PHYS_TO_VA(Ttbr0 & 0x0000FFFFFFFFF000ULL);
+    ASSERT(Address >= MmSystemRangeStart);
 
-    E0 = L0[((ULONG_PTR)Address >> PXI_SHIFT) & PXI_MASK];
-    if ((E0 & 3) != 3) return NULL;
+    __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
+    Table = (PULONG64)MI_ARM64_PHYS_TO_VA(Ttbr1 & ARM64_PTE_ADDR_MASK);
 
-    L1 = (PULONG64)MI_ARM64_PHYS_TO_VA(E0 & 0x0000FFFFFFFFF000ULL);
-    E1 = L1[((ULONG_PTR)Address >> PPI_SHIFT) & PPI_MASK];
-    if ((E1 & 3) != 3) return NULL;
+    for (Level = 0; Level < StopLevel; Level++)
+    {
+        Entry = Table[((ULONG_PTR)Address >> (PXI_SHIFT - (Level * 9))) & PXI_MASK];
+        if ((Entry & 3) != 3) return NULL;
+        Table = (PULONG64)MI_ARM64_PHYS_TO_VA(Entry & ARM64_PTE_ADDR_MASK);
+    }
 
-    L2 = (PULONG64)MI_ARM64_PHYS_TO_VA(E1 & 0x0000FFFFFFFFF000ULL);
-    E2 = L2[((ULONG_PTR)Address >> PDI_SHIFT) & PDI_MASK_ARM64];
-    if ((E2 & 3) != 3) return NULL;
-
-    L3 = (PULONG64)MI_ARM64_PHYS_TO_VA(E2 & 0x0000FFFFFFFFF000ULL);
-    return (PMMPTE)&L3[((ULONG_PTR)Address >> PTI_SHIFT) & PTI_MASK_ARM64];
-}
-
-/* Get L2 (PDE-level) entry for user VA via KSEG0, or NULL */
-FORCEINLINE
-PMMPTE
-MiArm64UserPdeKseg0(_In_ PVOID Address)
-{
-    ULONG64 Ttbr0;
-    PULONG64 L0, L1, L2;
-    ULONG64 E0, E1;
-
-    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-    L0 = (PULONG64)MI_ARM64_PHYS_TO_VA(Ttbr0 & 0x0000FFFFFFFFF000ULL);
-
-    E0 = L0[((ULONG_PTR)Address >> PXI_SHIFT) & PXI_MASK];
-    if ((E0 & 3) != 3) return NULL;
-
-    L1 = (PULONG64)MI_ARM64_PHYS_TO_VA(E0 & 0x0000FFFFFFFFF000ULL);
-    E1 = L1[((ULONG_PTR)Address >> PPI_SHIFT) & PPI_MASK];
-    if ((E1 & 3) != 3) return NULL;
-
-    L2 = (PULONG64)MI_ARM64_PHYS_TO_VA(E1 & 0x0000FFFFFFFFF000ULL);
-    return (PMMPTE)&L2[((ULONG_PTR)Address >> PDI_SHIFT) & PDI_MASK_ARM64];
+    return (PMMPTE)&Table[((ULONG_PTR)Address >> (PXI_SHIFT - (StopLevel * 9))) & PXI_MASK];
 }
 
 /* Get L1 (PPE-level) entry for kernel VA via KSEG0, or NULL */
@@ -799,20 +806,7 @@ FORCEINLINE
 PMMPTE
 MiArm64KernelPpeKseg0(_In_ PVOID Address)
 {
-    ULONG64 Ttbr1;
-    PULONG64 L0, L1;
-    ULONG64 E0;
-
-    ASSERT(Address >= MmSystemRangeStart);
-
-    __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
-    L0 = (PULONG64)MI_ARM64_PHYS_TO_VA(Ttbr1 & ARM64_PTE_ADDR_MASK);
-
-    E0 = L0[((ULONG_PTR)Address >> PXI_SHIFT) & PXI_MASK];
-    if ((E0 & 3) != 3) return NULL;
-
-    L1 = (PULONG64)MI_ARM64_PHYS_TO_VA(E0 & ARM64_PTE_ADDR_MASK);
-    return (PMMPTE)&L1[((ULONG_PTR)Address >> PPI_SHIFT) & PPI_MASK];
+    return MiArm64KernelTableKseg0(Address, 1);
 }
 
 /* Get L2 (PDE-level) entry for kernel VA via KSEG0, or NULL */
@@ -820,62 +814,20 @@ FORCEINLINE
 PMMPTE
 MiArm64KernelPdeKseg0(_In_ PVOID Address)
 {
-    ULONG64 Ttbr1;
-    PULONG64 L0, L1, L2;
-    ULONG64 E0, E1;
+    return MiArm64KernelTableKseg0(Address, 2);
+}
+
+/* Check whether the TTBR1 hierarchy for a kernel VA has a valid PDE. */
+FORCEINLINE
+BOOLEAN
+MiIsPdeForAddressValid(PVOID Address)
+{
+    PMMPTE Pde;
 
     ASSERT(Address >= MmSystemRangeStart);
 
-    __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
-    L0 = (PULONG64)MI_ARM64_PHYS_TO_VA(Ttbr1 & ARM64_PTE_ADDR_MASK);
-
-    E0 = L0[((ULONG_PTR)Address >> PXI_SHIFT) & PXI_MASK];
-    if ((E0 & 3) != 3) return NULL;
-
-    L1 = (PULONG64)MI_ARM64_PHYS_TO_VA(E0 & ARM64_PTE_ADDR_MASK);
-    E1 = L1[((ULONG_PTR)Address >> PPI_SHIFT) & PPI_MASK];
-    if ((E1 & 3) != 3) return NULL;
-
-    L2 = (PULONG64)MI_ARM64_PHYS_TO_VA(E1 & ARM64_PTE_ADDR_MASK);
-    return (PMMPTE)&L2[((ULONG_PTR)Address >> PDI_SHIFT) & PDI_MASK_ARM64];
-}
-
-/*
- * MiArm64UserL3BaseKseg0 — Get KSEG0 base of L3 table for efficient iteration.
- *
- * Returns a pointer to the START of the L3 page table containing the PTE for
- * the given address. Index with MiAddressToPti(Va) for individual PTEs.
- *
- * Example:
- *   PMMPTE L3Base = MiArm64UserL3BaseKseg0((PVOID)Va);
- *   if (L3Base) {
- *       PMMPTE Pte = &L3Base[MiAddressToPti((PVOID)Va)];
- *       for (...) { process *Pte; Pte++; }
- *   }
- */
-FORCEINLINE
-PMMPTE
-MiArm64UserL3BaseKseg0(_In_ PVOID Address)
-{
-    ULONG64 Ttbr0;
-    PULONG64 L0, L1, L2;
-    ULONG64 E0, E1, E2;
-
-    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-    L0 = (PULONG64)MI_ARM64_PHYS_TO_VA(Ttbr0 & 0x0000FFFFFFFFF000ULL);
-
-    E0 = L0[((ULONG_PTR)Address >> PXI_SHIFT) & PXI_MASK];
-    if ((E0 & 3) != 3) return NULL;
-
-    L1 = (PULONG64)MI_ARM64_PHYS_TO_VA(E0 & 0x0000FFFFFFFFF000ULL);
-    E1 = L1[((ULONG_PTR)Address >> PPI_SHIFT) & PPI_MASK];
-    if ((E1 & 3) != 3) return NULL;
-
-    L2 = (PULONG64)MI_ARM64_PHYS_TO_VA(E1 & 0x0000FFFFFFFFF000ULL);
-    E2 = L2[((ULONG_PTR)Address >> PDI_SHIFT) & PDI_MASK_ARM64];
-    if ((E2 & 3) != 3) return NULL;
-
-    return (PMMPTE)MI_ARM64_PHYS_TO_VA(E2 & 0x0000FFFFFFFFF000ULL);
+    Pde = MiArm64KernelPdeKseg0(Address);
+    return ((Pde != NULL) && ((Pde->u.Long & 1ULL) != 0));
 }
 
 /*
@@ -898,22 +850,32 @@ MiArm64UserPteKseg0ForPfn(
     *L3TablePfn = 0;
 
     __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-    L0 = (PULONG64)MI_ARM64_PHYS_TO_VA(Ttbr0 & 0x0000FFFFFFFFF000ULL);
+    L0 = (PULONG64)MI_ARM64_PHYS_TO_VA(Ttbr0 & ARM64_PTE_ADDR_MASK);
 
     E0 = L0[((ULONG_PTR)Address >> PXI_SHIFT) & PXI_MASK];
     if ((E0 & 3) != 3) return NULL;
 
-    L1 = (PULONG64)MI_ARM64_PHYS_TO_VA(E0 & 0x0000FFFFFFFFF000ULL);
+    L1 = (PULONG64)MI_ARM64_PHYS_TO_VA(E0 & ARM64_PTE_ADDR_MASK);
     E1 = L1[((ULONG_PTR)Address >> PPI_SHIFT) & PPI_MASK];
     if ((E1 & 3) != 3) return NULL;
 
-    L2 = (PULONG64)MI_ARM64_PHYS_TO_VA(E1 & 0x0000FFFFFFFFF000ULL);
+    L2 = (PULONG64)MI_ARM64_PHYS_TO_VA(E1 & ARM64_PTE_ADDR_MASK);
     E2 = L2[((ULONG_PTR)Address >> PDI_SHIFT) & PDI_MASK_ARM64];
     if ((E2 & 3) != 3) return NULL;
 
-    *L3TablePfn = (PFN_NUMBER)((E2 & 0x0000FFFFFFFFF000ULL) >> PAGE_SHIFT);
-    L3 = (PULONG64)MI_ARM64_PHYS_TO_VA(E2 & 0x0000FFFFFFFFF000ULL);
+    *L3TablePfn = (PFN_NUMBER)((E2 & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
+    L3 = (PULONG64)MI_ARM64_PHYS_TO_VA(E2 & ARM64_PTE_ADDR_MASK);
     return (PMMPTE)&L3[((ULONG_PTR)Address >> PTI_SHIFT) & PTI_MASK_ARM64];
+}
+
+/* Get L3 (PTE-level) entry for user VA via KSEG0, or NULL if hierarchy missing */
+FORCEINLINE
+PMMPTE
+MiArm64UserPteKseg0(_In_ PVOID Address)
+{
+    PFN_NUMBER Unused;
+
+    return MiArm64UserPteKseg0ForPfn(Address, &Unused);
 }
 
 /*
@@ -928,34 +890,27 @@ PMMPTE
 MiArm64KernelPteKseg0(
     _In_ PVOID Address)
 {
-    ULONG64 Ttbr1;
-    PULONG64 L0, L1, L2, L3;
-    ULONG64 E0, E1, E2;
-
-    ASSERT(Address >= MmSystemRangeStart);
-
-    __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
-    L0 = (PULONG64)MI_ARM64_PHYS_TO_VA(Ttbr1 & ARM64_PTE_ADDR_MASK);
-
-    E0 = L0[((ULONG_PTR)Address >> PXI_SHIFT) & PXI_MASK];
-    if ((E0 & 3) != 3) return NULL;
-
-    L1 = (PULONG64)MI_ARM64_PHYS_TO_VA(E0 & ARM64_PTE_ADDR_MASK);
-    E1 = L1[((ULONG_PTR)Address >> PPI_SHIFT) & PPI_MASK];
-    if ((E1 & 3) != 3) return NULL;
-
-    L2 = (PULONG64)MI_ARM64_PHYS_TO_VA(E1 & ARM64_PTE_ADDR_MASK);
-    E2 = L2[((ULONG_PTR)Address >> PDI_SHIFT) & PDI_MASK_ARM64];
-    if ((E2 & 3) != 3) return NULL;
-
-    L3 = (PULONG64)MI_ARM64_PHYS_TO_VA(E2 & ARM64_PTE_ADDR_MASK);
-    return (PMMPTE)&L3[((ULONG_PTR)Address >> PTI_SHIFT) & PTI_MASK_ARM64];
+    return MiArm64KernelTableKseg0(Address, 3);
 }
 
 FORCEINLINE
 VOID
 MiArm64SyncKernelHierarchyEntryWrite(
     _In_ PMMPTE PointerEntry);
+
+/*
+ * MiArm64SyncKernelLeafPteWriteTo - mirror-store tail for callers that have
+ * already resolved the KSEG0 L3 slot (avoids a second TTBR1 walk).
+ */
+FORCEINLINE
+VOID
+MiArm64SyncKernelLeafPteWriteTo(
+    _In_ PMMPTE PointerPte,
+    _In_ PMMPTE Kseg0Pte)
+{
+    *(volatile ULONG64 *)Kseg0Pte = PointerPte->u.Long;
+    MiArm64CleanEntryToPoC(Kseg0Pte);
+}
 
 /*
  * MiArm64SyncKernelLeafPteWrite - Mirror a kernel leaf PTE write into TTBR1.
@@ -1006,8 +961,7 @@ MiArm64SyncKernelLeafPteWrite(
     if (Kseg0Pte == NULL)
         return;
 
-    *(volatile ULONG64 *)Kseg0Pte = PointerPte->u.Long;
-    MiArm64CleanEntryToPoC(Kseg0Pte);
+    MiArm64SyncKernelLeafPteWriteTo(PointerPte, Kseg0Pte);
 }
 
 /*
@@ -1118,50 +1072,6 @@ MI_MAKE_PROTOTYPE_PTE(
 #endif
 }
 
-//
-// ARM64 Prototype PTE Decoder Macros
-//
-// These macros decode the shift-based prototype PTE encoding used by ARM64.
-// MI_MAKE_PROTOTYPE_PTE encodes: PTE.u.Long = (ProtoPteAddress << 16) | 0x0400 (Prototype bit)
-//
-
-//
-// Macro: MI_IS_PROTO_PTE
-// Check if a PTE is a prototype PTE pointer (not a valid hardware PTE)
-//
-#define MI_IS_PROTO_PTE(Pte) \
-    (((Pte)->u.Proto.Prototype == 1) && ((Pte)->u.Hard.Valid == 0))
-
-//
-// Macro: MI_PROTO_PTE_ADDRESS
-// Decode a prototype PTE pointer to get the address of the actual prototype PTE
-//
-// On ARM64, the address is encoded by shifting left by 16 bits.
-// To decode: shift right by 16 bits with sign extension to preserve high kernel bits.
-//
-// Example:
-//   Original: 0xFFFFF8A000007C30 (kernel address)
-//   Encoded:  0xFFFFF8A000007C30 << 16 = 0xF8A000007C300000
-//                                         (0x400 bit set for Prototype)
-//                                       = 0xF8A000007C300400
-//   Decoded:  (INT64)0xF8A000007C300400 >> 16 = 0xFFFFF8A000007C30 (sign-extended)
-//
-// Use a signed right shift so kernel prototype PTE addresses stay canonical.
-//
-#define MI_PROTO_PTE_ADDRESS(Pte) \
-    ((PMMPTE)(((INT64)(Pte)->u.Long) >> 16))
-
-//
-// Alternative decoder that extracts the address from the bitfield union
-// (in case the shift-based encoding changes in the future)
-//
-// Note: On ARM64, we rely on the simple shift encoding for performance.
-// The bitfield union (ProtoAddressLow/High) is not used.
-//
-#define MI_PROTO_PTE_ADDRESS_FROM_BITFIELD(Pte) \
-    ((PMMPTE)(((ULONG_PTR)(Pte)->u.Proto.ProtoAddressHigh << 32) | \
-              ((ULONG_PTR)(Pte)->u.Proto.ProtoAddressLow)))
-
 #define MiSubsectionPteToSubsection(x)                              \
         (PMMPTE)((LONG64)(x)->u.Subsect.SubsectionAddress)
 
@@ -1248,19 +1158,6 @@ MI_IS_PHYSICAL_ADDRESS(
  * The guards keep this section local if it is reused in a narrower include
  * context later.
  */
-#ifndef ARM64_PTE_PXN
-#define ARM64_PTE_PXN           (1ULL << 53)
-#endif
-#ifndef ARM64_PTE_UXN
-#define ARM64_PTE_UXN           (1ULL << 54)
-#endif
-#ifndef ARM64_PTE_WRITE
-#define ARM64_PTE_WRITE         (1ULL << 55)
-#endif
-#ifndef ARM64_PTE_COPY_ON_WRITE
-#define ARM64_PTE_COPY_ON_WRITE (1ULL << 56)
-#endif
-
 /*
  * ARM64 Execute Permission Policy
  *
@@ -1293,12 +1190,6 @@ MI_IS_PHYSICAL_ADDRESS(
  * NOTE: PTE_NOEXECUTE (PXN=1, UXN=1) is the safe default and is identical
  * to PTE_READONLY's execute bits. Non-executable pages always set both bits.
  */
-
-/* User-mode execute bits (same as PTE_EXECUTE in miarm.h, repeated for clarity) */
-#define PTE_EXECUTE_USER         (ARM64_PTE_PXN)                              /* PXN=1, UXN=0 */
-#define PTE_EXECUTE_USER_READ    (ARM64_PTE_PXN)                              /* PXN=1, UXN=0 */
-#define PTE_EXECUTE_USER_RW      (ARM64_PTE_PXN | ARM64_PTE_WRITE)            /* PXN=1, UXN=0, W */
-#define PTE_EXECUTE_USER_WC      (ARM64_PTE_PXN | ARM64_PTE_COPY_ON_WRITE)    /* PXN=1, UXN=0, CoW */
 
 /* Kernel-mode execute bits: PXN=0 allows EL1 execution, UXN=1 blocks EL0 */
 #define PTE_EXECUTE_KERNEL       (ARM64_PTE_UXN)                              /* PXN=0, UXN=1 */
@@ -1368,62 +1259,6 @@ MiArm64FixupKernelExecutePte(
  */
 extern const ULONG_PTR MmProtectToPteMaskKernel[32];
 
-/*
- * MiArm64HandleUserAccessFlagFault - Set AF on user page table entry.
- *
- * ARM64 hardware (with TCR.HA=0) raises access flag faults (DFSC 0x08-0x0B)
- * when a page table entry has AF=0 (bit 10). This walks TTBR0 page tables
- * via KSEG0 to the faulting level and sets AF=1.
- *
- * Returns TRUE if AF was set, FALSE if the walk failed (entry not present).
- * Caller must issue TLBI after a successful return.
- */
-FORCEINLINE
-BOOLEAN
-MiArm64HandleUserAccessFlagFault(
-    _In_ PVOID Address,
-    _In_ ULONG FaultLevel)
-{
-    ULONG64 Ttbr0;
-    PULONG64 Table;
-    ULONG64 Entry;
-    ULONG Idx;
-
-    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-    ULONG64 RootPa = Ttbr0 & 0x0000FFFFFFFFF000ULL;
-    if (RootPa == 0) return FALSE;
-
-    Table = (PULONG64)MI_ARM64_PHYS_TO_VA(RootPa);
-
-    /* L0 */
-    Idx = ((ULONG_PTR)Address >> PXI_SHIFT) & PXI_MASK;
-    Entry = Table[Idx];
-    if (FaultLevel == 0) { if (!(Entry & 1ULL)) return FALSE; Table[Idx] = Entry | (1ULL << 10); return TRUE; }
-    if ((Entry & 3ULL) != 3ULL) return FALSE;
-
-    /* L1 */
-    Table = (PULONG64)MI_ARM64_PHYS_TO_VA(Entry & 0x0000FFFFFFFFF000ULL);
-    Idx = ((ULONG_PTR)Address >> PPI_SHIFT) & PPI_MASK;
-    Entry = Table[Idx];
-    if (FaultLevel == 1) { if (!(Entry & 1ULL)) return FALSE; Table[Idx] = Entry | (1ULL << 10); return TRUE; }
-    if ((Entry & 3ULL) != 3ULL) return FALSE;
-
-    /* L2 */
-    Table = (PULONG64)MI_ARM64_PHYS_TO_VA(Entry & 0x0000FFFFFFFFF000ULL);
-    Idx = ((ULONG_PTR)Address >> PDI_SHIFT) & PDI_MASK_ARM64;
-    Entry = Table[Idx];
-    if (FaultLevel == 2) { if (!(Entry & 1ULL)) return FALSE; Table[Idx] = Entry | (1ULL << 10); return TRUE; }
-    if ((Entry & 3ULL) != 3ULL) return FALSE;
-
-    /* L3 */
-    Table = (PULONG64)MI_ARM64_PHYS_TO_VA(Entry & 0x0000FFFFFFFFF000ULL);
-    Idx = ((ULONG_PTR)Address >> PTI_SHIFT) & PTI_MASK_ARM64;
-    Entry = Table[Idx];
-    if (FaultLevel == 3) { if (!(Entry & 1ULL)) return FALSE; Table[Idx] = Entry | (1ULL << 10); return TRUE; }
-
-    return FALSE;
-}
-
 FORCEINLINE
 ULONG
 MiGetPteCacheAttribute(
@@ -1432,14 +1267,5 @@ MiGetPteCacheAttribute(
     return (ULONG)(PointerPte->u.Hard.CacheType | (PointerPte->u.Hard.OsAvailable2 << 2));
 }
 
-FORCEINLINE
-PFN_NUMBER
-MiArm64GetUserL3PfnSafe(
-    _In_ PVOID Address)
-{
-    PFN_NUMBER L3Pfn = 0;
-    MiArm64UserPteKseg0ForPfn(Address, &L3Pfn);
-    return L3Pfn;
-}
 
 // ARM64 mm.h included successfully - shift-based MI_MAKE_PROTOTYPE_PTE active

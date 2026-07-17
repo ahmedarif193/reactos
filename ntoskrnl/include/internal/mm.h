@@ -56,6 +56,15 @@ struct _EPROCESS;
 struct _MM_RMAP_ENTRY;
 typedef ULONG_PTR SWAPENTRY;
 
+/*
+ * Swap-entry wire format, shared by the producer (mm/pagefile.c) and the
+ * ARM64 PTE codec (mm/arm64/page.c): file index in bits [3:0], marker bit
+ * 0x400, offset from bit 11 up. MM_WAIT_ENTRY round-trips through it.
+ */
+#define MM_SWAP_FILE_FROM_ENTRY(x)          ((x) & 0x0f)
+#define MM_SWAP_OFFSET_FROM_ENTRY(x)        ((x) >> 11)
+#define MM_SWAP_ENTRY_FROM_FILE_OFFSET(f,o) ((f) | ((o) << 11) | 0x400)
+
 #if (_MI_PAGING_LEVELS >= 4)
 /* Dummy values (dynamically assigned) */
 #define MI_PAGED_POOL_START 0

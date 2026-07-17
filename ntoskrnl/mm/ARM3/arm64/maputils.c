@@ -3,16 +3,6 @@
  * LICENSE:         BSD - See COPYING.ARM in the top level directory
  * FILE:            ntoskrnl/mm/ARM3/arm64/maputils.c
  * PURPOSE:         Small ARM64 MM helpers used by common ARM3 code
- *
- * Rationale:
- *  - The boot loader (FreeLdr) often maps initial images using upper-level
- *    block entries (L1/L2) for identity and hand-off mappings. Common code
- *    in ARM3 (e.g., MiReloadBootLoadedDrivers) that assumed a final-level
- *    leaf PTE would assert on ARM64 during bring-up.
- *  - These helpers let shared code ask simple questions without forcing a
- *    leaf-PTE assumption: "is this VA mapped at all?" and "is the given PTE
- *    a leaf entry?". The first uses MmGetPhysicalAddress which tolerates
- *    block descriptors; the second remains a straight check of the PTE.
  * COPYRIGHT:       Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
@@ -29,21 +19,6 @@ VOID
 MiArm64InitializeSystemPageDirectoryLock(VOID)
 {
     KeInitializeSpinLock(&MiArm64SystemPageDirectoryLock);
-}
-
-BOOLEAN
-MiArm64VaIsMapped(
-    _In_ PVOID Va)
-{
-    PHYSICAL_ADDRESS Pa = MmGetPhysicalAddress(Va);
-    return (Pa.QuadPart != 0);
-}
-
-BOOLEAN
-MiArm64PteIsLeaf(
-    _In_ PMMPTE Pte)
-{
-    return (Pte->u.Hard.Valid == 1);
 }
 
 static
@@ -104,62 +79,83 @@ MiArm64EnsureSystemTableEntry(
     return Created;
 }
 
+/*
+ * Ensure the kernel L0->L1(->L2) table hierarchy exists for TargetAddress.
+ * StopAtPpe stops after the PPE level and returns the L2 page-directory page;
+ * otherwise the walk continues and returns the L3 page-table page. Returns 0
+ * on allocation failure. RootPage is the (loop-invariant) TTBR1 root frame.
+ */
+static
+PFN_NUMBER
+MiArm64EnsureKernelHierarchy(
+    _In_ PFN_NUMBER RootPage,
+    _In_ PVOID TargetAddress,
+    _In_ BOOLEAN StopAtPpe,
+    _Inout_ PBOOLEAN FlushHierarchy)
+{
+    PMMPTE KernelPxe, KernelPpe, KernelPde;
+    PULONG64 Table;
+    PFN_NUMBER PpePage, PdePage, PageFrameIndex;
+
+    Table = (PULONG64)MI_ARM64_PFN_TO_VA(RootPage);
+    KernelPxe = (PMMPTE)&Table[((ULONG_PTR)TargetAddress >> PXI_SHIFT) & PXI_MASK];
+    *FlushHierarchy |= MiArm64EnsureSystemTableEntry(KernelPxe,
+                                                     MiAddressToPxe(TargetAddress),
+                                                     RootPage,
+                                                     &PpePage);
+    if (PpePage == 0)
+    {
+        return 0;
+    }
+
+    Table = (PULONG64)MI_ARM64_PFN_TO_VA(PpePage);
+    KernelPpe = (PMMPTE)&Table[((ULONG_PTR)TargetAddress >> PPI_SHIFT) & PPI_MASK];
+    *FlushHierarchy |= MiArm64EnsureSystemTableEntry(KernelPpe,
+                                                     MiAddressToPpe(TargetAddress),
+                                                     PpePage,
+                                                     &PdePage);
+    if (StopAtPpe || (PdePage == 0))
+    {
+        return PdePage;
+    }
+
+    Table = (PULONG64)MI_ARM64_PFN_TO_VA(PdePage);
+    KernelPde = (PMMPTE)&Table[((ULONG_PTR)TargetAddress >> PDI_SHIFT) & PDI_MASK_ARM64];
+    *FlushHierarchy |= MiArm64EnsureSystemTableEntry(KernelPde,
+                                                     (PMMPTE)MiAddressToPde(TargetAddress),
+                                                     PdePage,
+                                                     &PageFrameIndex);
+    return PageFrameIndex;
+}
+
+FORCEINLINE
+PFN_NUMBER
+MiArm64ReadTtbr1RootPage(VOID)
+{
+    ULONG64 Ttbr1;
+
+    __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
+    return (PFN_NUMBER)((Ttbr1 & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
+}
+
 VOID
 MiArm64FillSystemPageDirectory(
     _In_ PVOID Base,
     _In_ SIZE_T NumberOfBytes)
 {
     PMMPDE PointerPde, LastPde;
+    PFN_NUMBER RootPage;
     BOOLEAN FlushHierarchy = FALSE;
 
+    RootPage = MiArm64ReadTtbr1RootPage();
     PointerPde = MiAddressToPde(Base);
     LastPde = MiAddressToPde((PVOID)((ULONG_PTR)Base + NumberOfBytes - 1));
 
     while (PointerPde <= LastPde)
     {
-        PVOID TargetAddress;
-        PMMPTE KernelPxe, KernelPpe, KernelPde;
-        PULONG64 Table;
-        PFN_NUMBER RootPage, PpePage, PdePage, PageFrameIndex;
-        ULONG64 Ttbr1;
+        PVOID TargetAddress = MiPdeToAddress(PointerPde);
 
-        TargetAddress = MiPdeToAddress(PointerPde);
-
-        __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
-        RootPage = (PFN_NUMBER)((Ttbr1 & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
-
-        Table = (PULONG64)MI_ARM64_PFN_TO_VA(RootPage);
-        KernelPxe = (PMMPTE)&Table[((ULONG_PTR)TargetAddress >> PXI_SHIFT) & PXI_MASK];
-
-        FlushHierarchy |= MiArm64EnsureSystemTableEntry(KernelPxe,
-                                                        MiAddressToPxe(TargetAddress),
-                                                        RootPage,
-                                                        &PpePage);
-        if (PpePage == 0)
-        {
-            goto FlushAndReturn;
-        }
-
-        Table = (PULONG64)MI_ARM64_PFN_TO_VA(PpePage);
-        KernelPpe = (PMMPTE)&Table[((ULONG_PTR)TargetAddress >> PPI_SHIFT) & PPI_MASK];
-
-        FlushHierarchy |= MiArm64EnsureSystemTableEntry(KernelPpe,
-                                                        MiAddressToPpe(TargetAddress),
-                                                        PpePage,
-                                                        &PdePage);
-        if (PdePage == 0)
-        {
-            goto FlushAndReturn;
-        }
-
-        Table = (PULONG64)MI_ARM64_PFN_TO_VA(PdePage);
-        KernelPde = (PMMPTE)&Table[((ULONG_PTR)TargetAddress >> PDI_SHIFT) & PDI_MASK_ARM64];
-
-        FlushHierarchy |= MiArm64EnsureSystemTableEntry(KernelPde,
-                                                        (PMMPTE)PointerPde,
-                                                        PdePage,
-                                                        &PageFrameIndex);
-        if (PageFrameIndex == 0)
+        if (MiArm64EnsureKernelHierarchy(RootPage, TargetAddress, FALSE, &FlushHierarchy) == 0)
         {
             goto FlushAndReturn;
         }
@@ -197,11 +193,38 @@ MiArm64EnsureSystemPdeRangeBacked(
         return FALSE;
     }
 
+    /*
+     * Steady-state fast path: kernel PDEs are create-only, so an unlocked
+     * scan that finds every PDE in range already backed is monotonic-safe.
+     * This keeps the global lock (which serializes every paged-pool fault
+     * machine-wide) off the common already-backed path.
+     */
+    PointerPde = MiAddressToPde(BaseVa);
+    LastPde = MiAddressToPde(Add2Ptr(BaseVa, NumberOfBytes - 1));
+    while (PointerPde <= LastPde)
+    {
+        TargetVa = MiPdeToAddress(PointerPde);
+        if (!MiIsPdeForAddressValid(TargetVa) ||
+            ((PointerPde->u.Long & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE))
+        {
+            Backed = FALSE;
+            break;
+        }
+
+        PointerPde++;
+    }
+
+    if (Backed)
+    {
+        return TRUE;
+    }
+
+    Backed = TRUE;
+
     KeAcquireSpinLock(&MiArm64SystemPageDirectoryLock, &OldIrql);
     MiArm64FillSystemPageDirectory(BaseVa, NumberOfBytes);
 
     PointerPde = MiAddressToPde(BaseVa);
-    LastPde = MiAddressToPde(Add2Ptr(BaseVa, NumberOfBytes - 1));
     while (PointerPde <= LastPde)
     {
         TargetVa = MiPdeToAddress(PointerPde);
@@ -279,44 +302,21 @@ MiArm64EnsureSessionPageDirectoryPages(
      * setup can fill and assert on them.  This replaces the eager session-space
      * MiMapPPEs premap with on-demand backing, like AMD64.
      */
-    for (Va = (ULONG_PTR)BaseVa & ~((1ULL << PPI_SHIFT) - 1);
-         Va <= EndVa;
-         Va += (1ULL << PPI_SHIFT))
     {
-        PVOID TargetAddress = (PVOID)Va;
-        PMMPTE KernelPxe, KernelPpe;
-        PULONG64 Table;
-        PFN_NUMBER RootPage, PpePage, PdePage;
-        ULONG64 Ttbr1;
+        PFN_NUMBER RootPage = MiArm64ReadTtbr1RootPage();
 
-        __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
-        RootPage = (PFN_NUMBER)((Ttbr1 & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
-
-        Table = (PULONG64)MI_ARM64_PFN_TO_VA(RootPage);
-        KernelPxe = (PMMPTE)&Table[((ULONG_PTR)TargetAddress >> PXI_SHIFT) & PXI_MASK];
-        FlushHierarchy |= MiArm64EnsureSystemTableEntry(KernelPxe,
-                                                        MiAddressToPxe(TargetAddress),
-                                                        RootPage,
-                                                        &PpePage);
-        if (PpePage == 0)
+        for (Va = (ULONG_PTR)BaseVa & ~((1ULL << PPI_SHIFT) - 1);
+             Va <= EndVa;
+             Va += (1ULL << PPI_SHIFT))
         {
-            Backed = FALSE;
-            break;
+            /* Stop at the PPE level: the L2 page-directory page is ensured,
+             * the leaf L2 PDEs are left clear for session setup to fill. */
+            if (MiArm64EnsureKernelHierarchy(RootPage, (PVOID)Va, TRUE, &FlushHierarchy) == 0)
+            {
+                Backed = FALSE;
+                break;
+            }
         }
-
-        Table = (PULONG64)MI_ARM64_PFN_TO_VA(PpePage);
-        KernelPpe = (PMMPTE)&Table[((ULONG_PTR)TargetAddress >> PPI_SHIFT) & PPI_MASK];
-        FlushHierarchy |= MiArm64EnsureSystemTableEntry(KernelPpe,
-                                                        MiAddressToPpe(TargetAddress),
-                                                        PpePage,
-                                                        &PdePage);
-        if (PdePage == 0)
-        {
-            Backed = FALSE;
-            break;
-        }
-
-        /* PdePage is the L2 page-directory page; leave the L2 PDEs clear. */
     }
 
     if (FlushHierarchy)
