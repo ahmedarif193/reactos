@@ -24,8 +24,11 @@ sdk/tools/wpp                   # Synced to Wine-10.0 (Module was moved into wrc
 The following headers are shared with Wine.
 sdk/include/psdk/rpcproxy.h     # Synced to Wine-10.0
 sdk/include/psdk/netioapi.h     # Synced to Wine-10.0 (mirrors sdk/include/wine/netioapi.h)
+sdk/include/wine/list.h         # Synced to Wine-10.0
 
 The following libraries are shared with Wine.
+
+sdk/lib/3rdparty/vkd3d          # Wine-10.0 bundled vkd3d 1.14 shader subset; full Vulkan backend intentionally excluded
 
 dll/directx/wine/amstream       # Synced to WineStaging-3.9
 dll/directx/wine/d3d10          # Wine-10.0 export surface scaffold; backend blocked on matching wined3d/DXGI uplift
