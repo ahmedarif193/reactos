@@ -716,18 +716,7 @@ MiDeletePte(IN PMMPTE PointerPte,
     {
         /* The PFN lock keeps the old page from being reused until the remote
            single-address invalidation has completed. */
-#if defined(_M_ARM64)
         MiFlushTbForAddress(VirtualAddress);
-#else
-        if (PointerPte <= MiHighestUserPte)
-        {
-            MiFlushTbForAddress(VirtualAddress);
-        }
-        else
-        {
-            KeFlushEntireTb(TRUE, TRUE);
-        }
-#endif
     }
 }
 
