@@ -741,7 +741,7 @@ MiDeleteVirtualAddresses(
     BOOLEAN AddressGap = FALSE;
     BOOLEAN FlushTb;
     PSUBSECTION Subsection;
-#if defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64)
     ULONG_PTR FlushStart;
 #endif
 
@@ -855,7 +855,7 @@ MiDeleteVirtualAddresses(
         }
 
         /* Lock the PFN Database while we delete the PTEs */
-#if defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64)
         FlushStart = Va;
 #endif
         OldIrql = MiAcquirePfnLock();
@@ -946,9 +946,9 @@ MiDeleteVirtualAddresses(
            prevents deleted data and page-table frames from being reused. */
         if (FlushTb)
         {
-#if defined(_M_ARM64)
-            MiFlushSystemTbRange((PVOID)FlushStart,
-                                 (ULONG)BYTES_TO_PAGES(Va - FlushStart));
+#if defined(_M_AMD64) || defined(_M_ARM64)
+            MiFlushProcessTbRange((PVOID)FlushStart,
+                                  BYTES_TO_PAGES(Va - FlushStart));
 #else
             KeFlushProcessTb();
 #endif
@@ -2460,7 +2460,7 @@ MiProtectVirtualMemory(IN PEPROCESS Process,
     NTSTATUS Status = STATUS_SUCCESS;
     PETHREAD Thread = PsGetCurrentThread();
     TABLE_SEARCH_RESULT Result;
-#if defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64)
     BOOLEAN FlushRange = FALSE;
 #endif
 
@@ -2694,7 +2694,7 @@ MiProtectVirtualMemory(IN PEPROCESS Process,
                 {
                     /* Write the protection mask and write it with a TLB flush */
                     Pfn1->OriginalPte.u.Soft.Protection = ProtectionMask;
-#if defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64)
                     MiFlushTbAndCapture(Vad, PointerPte, ProtectionMask, Pfn1, TRUE, FALSE);
                     FlushRange = TRUE;
 #else
@@ -2718,16 +2718,11 @@ MiProtectVirtualMemory(IN PEPROCESS Process,
             PointerPte++;
         }
 
-#if defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64)
         if (FlushRange)
         {
-            SIZE_T FlushPageCount;
-
-            FlushPageCount = BYTES_TO_PAGES(EndingAddress - StartingAddress + 1);
-            MiFlushSystemTbRange((PVOID)StartingAddress,
-                                 (FlushPageCount >= KI_ARM64_TLBI_RANGE_FULL_THRESHOLD) ?
-                                     KI_ARM64_TLBI_RANGE_FULL_THRESHOLD :
-                                     (ULONG)FlushPageCount);
+            MiFlushProcessTbRange((PVOID)StartingAddress,
+                                  BYTES_TO_PAGES(EndingAddress - StartingAddress + 1));
         }
 #endif
 
