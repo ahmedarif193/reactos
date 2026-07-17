@@ -113,6 +113,64 @@ ULONG CcRosVacbGetRefCount_(PROS_VACB vacb, PCSTR file, INT line)
 
 /* FUNCTIONS *****************************************************************/
 
+static
+ULONG
+CcpVacbHashIndex(
+    _In_ LONGLONG FileOffset)
+{
+    return (ULONG)(((ULONGLONG)FileOffset / VACB_MAPPING_GRANULARITY) % VACB_HASH_ENTRIES);
+}
+
+static
+PROS_VACB
+CcpFindVacbLocked(
+    _In_ PROS_SHARED_CACHE_MAP SharedCacheMap,
+    _In_ LONGLONG FileOffset)
+{
+    PROS_VACB Vacb;
+
+    for (Vacb = SharedCacheMap->VacbHash[CcpVacbHashIndex(FileOffset)];
+         Vacb != NULL;
+         Vacb = Vacb->NextInHash)
+    {
+        if (IsPointInRange(Vacb->FileOffset.QuadPart,
+                           VACB_MAPPING_GRANULARITY,
+                           FileOffset))
+        {
+            return Vacb;
+        }
+    }
+
+    return NULL;
+}
+
+VOID
+CcRosUnlinkVacb(
+    PROS_SHARED_CACHE_MAP SharedCacheMap,
+    PROS_VACB Vacb)
+{
+    PROS_VACB *Link;
+
+    /* The caller holds SharedCacheMap->CacheMapLock. */
+    ASSERT(SharedCacheMap == Vacb->SharedCacheMap);
+
+    Link = &SharedCacheMap->VacbHash[CcpVacbHashIndex(Vacb->FileOffset.QuadPart)];
+    while ((*Link != NULL) && (*Link != Vacb))
+    {
+        Link = &(*Link)->NextInHash;
+    }
+
+    ASSERT(*Link == Vacb);
+    if (*Link == Vacb)
+    {
+        *Link = Vacb->NextInHash;
+    }
+
+    Vacb->NextInHash = NULL;
+    RemoveEntryList(&Vacb->CacheMapVacbListEntry);
+    InitializeListHead(&Vacb->CacheMapVacbListEntry);
+}
+
 VOID
 CcRosTraceCacheMap (
     PROS_SHARED_CACHE_MAP SharedCacheMap,
@@ -237,8 +295,11 @@ CcRosDeleteFileCache (
             Vacb->Dirty = TRUE;
         }
 
+        Vacb->NextInHash = NULL;
+
         current_entry = current_entry->Flink;
     }
+    RtlZeroMemory(SharedCacheMap->VacbHash, sizeof(SharedCacheMap->VacbHash));
 
     /* Make sure there is no trace anymore of this map */
     FileObject->SectionObjectPointer->SharedCacheMap = NULL;
@@ -561,7 +622,7 @@ retry:
             ASSERT(!current->MappedCount);
             ASSERT(Refs == 1);
 
-            RemoveEntryList(&current->CacheMapVacbListEntry);
+            CcRosUnlinkVacb(current->SharedCacheMap, current);
             RemoveEntryList(&current->VacbLruListEntry);
             InitializeListHead(&current->VacbLruListEntry);
             InsertHeadList(&FreeList, &current->CacheMapVacbListEntry);
@@ -643,13 +704,12 @@ CcRosReleaseVacb (
     return STATUS_SUCCESS;
 }
 
-/* Returns with VACB Lock Held! */
+/* Returns a referenced VACB, if one covers FileOffset. */
 PROS_VACB
 CcRosLookupVacb (
     PROS_SHARED_CACHE_MAP SharedCacheMap,
     LONGLONG FileOffset)
 {
-    PLIST_ENTRY current_entry;
     PROS_VACB current;
     KIRQL oldIrql;
 
@@ -661,30 +721,16 @@ CcRosLookupVacb (
     oldIrql = KeAcquireQueuedSpinLock(LockQueueMasterLock);
     KeAcquireSpinLockAtDpcLevel(&SharedCacheMap->CacheMapLock);
 
-    current_entry = SharedCacheMap->CacheMapVacbListHead.Flink;
-    while (current_entry != &SharedCacheMap->CacheMapVacbListHead)
+    current = CcpFindVacbLocked(SharedCacheMap, FileOffset);
+    if (current != NULL)
     {
-        current = CONTAINING_RECORD(current_entry,
-                                    ROS_VACB,
-                                    CacheMapVacbListEntry);
-        if (IsPointInRange(current->FileOffset.QuadPart,
-                           VACB_MAPPING_GRANULARITY,
-                           FileOffset))
-        {
-            CcRosVacbIncRefCount(current);
-            KeReleaseSpinLockFromDpcLevel(&SharedCacheMap->CacheMapLock);
-            KeReleaseQueuedSpinLock(LockQueueMasterLock, oldIrql);
-            return current;
-        }
-        if (current->FileOffset.QuadPart > FileOffset)
-            break;
-        current_entry = current_entry->Flink;
+        CcRosVacbIncRefCount(current);
     }
 
     KeReleaseSpinLockFromDpcLevel(&SharedCacheMap->CacheMapLock);
     KeReleaseQueuedSpinLock(LockQueueMasterLock, oldIrql);
 
-    return NULL;
+    return current;
 }
 
 VOID
@@ -790,8 +836,7 @@ CcRosFreeOneUnusedVacb(
             ASSERT(Refs == 1);
 
             /* Reset it, this is the one we want to free */
-            RemoveEntryList(&current->CacheMapVacbListEntry);
-            InitializeListHead(&current->CacheMapVacbListEntry);
+            CcRosUnlinkVacb(current->SharedCacheMap, current);
             RemoveEntryList(&current->VacbLruListEntry);
             InitializeListHead(&current->VacbLruListEntry);
 
@@ -848,6 +893,7 @@ CcRosCreateVacb (
     current->SharedCacheMap = SharedCacheMap;
     current->MappedCount = 0;
     current->ReferenceCount = 0;
+    current->NextInHash = NULL;
     InitializeListHead(&current->CacheMapVacbListEntry);
     InitializeListHead(&current->DirtyVacbListEntry);
     InitializeListHead(&current->VacbLruListEntry);
@@ -891,6 +937,29 @@ CcRosCreateVacb (
      * our newly created VACB and return the existing one.
      */
     KeAcquireSpinLockAtDpcLevel(&SharedCacheMap->CacheMapLock);
+    current = CcpFindVacbLocked(SharedCacheMap, FileOffset);
+    if (current != NULL)
+    {
+        CcRosVacbIncRefCount(current);
+        KeReleaseSpinLockFromDpcLevel(&SharedCacheMap->CacheMapLock);
+#if DBG
+        if (SharedCacheMap->Trace)
+        {
+            DPRINT1("CacheMap 0x%p: deleting newly created VACB 0x%p ( found existing one 0x%p )\n",
+                    SharedCacheMap,
+                    (*Vacb),
+                    current);
+        }
+#endif
+        KeReleaseQueuedSpinLock(LockQueueMasterLock, oldIrql);
+
+        Refs = CcRosVacbDecRefCount(*Vacb);
+        ASSERT(Refs == 0);
+
+        *Vacb = current;
+        return STATUS_SUCCESS;
+    }
+
     current_entry = SharedCacheMap->CacheMapVacbListHead.Flink;
     previous = NULL;
     while (current_entry != &SharedCacheMap->CacheMapVacbListHead)
@@ -898,29 +967,6 @@ CcRosCreateVacb (
         current = CONTAINING_RECORD(current_entry,
                                     ROS_VACB,
                                     CacheMapVacbListEntry);
-        if (IsPointInRange(current->FileOffset.QuadPart,
-                           VACB_MAPPING_GRANULARITY,
-                           FileOffset))
-        {
-            CcRosVacbIncRefCount(current);
-            KeReleaseSpinLockFromDpcLevel(&SharedCacheMap->CacheMapLock);
-#if DBG
-            if (SharedCacheMap->Trace)
-            {
-                DPRINT1("CacheMap 0x%p: deleting newly created VACB 0x%p ( found existing one 0x%p )\n",
-                        SharedCacheMap,
-                        (*Vacb),
-                        current);
-            }
-#endif
-            KeReleaseQueuedSpinLock(LockQueueMasterLock, oldIrql);
-
-            Refs = CcRosVacbDecRefCount(*Vacb);
-            ASSERT(Refs == 0);
-
-            *Vacb = current;
-            return STATUS_SUCCESS;
-        }
         if (current->FileOffset.QuadPart < FileOffset)
         {
             ASSERT(previous == NULL ||
@@ -941,6 +987,8 @@ CcRosCreateVacb (
     {
         InsertHeadList(&SharedCacheMap->CacheMapVacbListHead, &current->CacheMapVacbListEntry);
     }
+    current->NextInHash = SharedCacheMap->VacbHash[CcpVacbHashIndex(current->FileOffset.QuadPart)];
+    SharedCacheMap->VacbHash[CcpVacbHashIndex(current->FileOffset.QuadPart)] = current;
     KeReleaseSpinLockFromDpcLevel(&SharedCacheMap->CacheMapLock);
     InsertTailList(&VacbLruListHead, &current->VacbLruListEntry);
 
@@ -1103,6 +1151,7 @@ CcRosInternalFreeVacb (
     ASSERT(IsListEmpty(&Vacb->CacheMapVacbListEntry));
     ASSERT(IsListEmpty(&Vacb->DirtyVacbListEntry));
     ASSERT(IsListEmpty(&Vacb->VacbLruListEntry));
+    ASSERT(Vacb->NextInHash == NULL);
 
     /* Delete the mapping */
     Status = MmUnmapViewInSystemSpace(Vacb->BaseAddress);
