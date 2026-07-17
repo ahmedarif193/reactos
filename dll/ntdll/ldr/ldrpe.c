@@ -18,6 +18,13 @@
 PLDR_MANIFEST_PROBER_ROUTINE LdrpManifestProberRoutine;
 ULONG LdrpNormalSnap;
 
+typedef struct _LDRP_IAT_PROTECTION_CONTEXT
+{
+    PVOID BaseAddress;
+    SIZE_T RegionSize;
+    ULONG OldProtect;
+} LDRP_IAT_PROTECTION_CONTEXT, *PLDRP_IAT_PROTECTION_CONTEXT;
+
 /* FUNCTIONS *****************************************************************/
 
 
@@ -26,17 +33,19 @@ NTAPI
 LdrpSnapIAT(IN PLDR_DATA_TABLE_ENTRY ExportLdrEntry,
             IN PLDR_DATA_TABLE_ENTRY ImportLdrEntry,
             IN PIMAGE_IMPORT_DESCRIPTOR IatEntry,
-            IN BOOLEAN EntriesValid)
+            IN BOOLEAN EntriesValid,
+            IN OUT PLDRP_IAT_PROTECTION_CONTEXT ProtectionContext OPTIONAL)
 {
-    PVOID Iat;
-    NTSTATUS Status;
+    PVOID Iat = NULL;
+    NTSTATUS Status = STATUS_SUCCESS;
     PIMAGE_THUNK_DATA OriginalThunk, FirstThunk;
     PIMAGE_NT_HEADERS NtHeader;
     PIMAGE_SECTION_HEADER SectionHeader;
     PIMAGE_EXPORT_DIRECTORY ExportDirectory;
     LPSTR ImportName;
-    ULONG ForwarderChain, i, Rva, OldProtect, IatSize, ExportSize;
-    SIZE_T ImportSize;
+    ULONG ForwarderChain, i, Rva, OldProtect = 0, IatSize, ExportSize;
+    SIZE_T ImportSize = 0;
+    BOOLEAN RestoreProtection = FALSE;
     DPRINT("LdrpSnapIAT(%wZ %wZ %p %u)\n", &ExportLdrEntry->BaseDllName, &ImportLdrEntry->BaseDllName, IatEntry, EntriesValid);
 
     /* Get export directory */
@@ -53,6 +62,9 @@ LdrpSnapIAT(IN PLDR_DATA_TABLE_ENTRY ExportLdrEntry,
                  &ExportLdrEntry->BaseDllName);
         return STATUS_INVALID_IMAGE_FORMAT;
     }
+
+    if (ProtectionContext && ProtectionContext->BaseAddress)
+        goto IatReady;
 
     /* Get the IAT */
     Iat = RtlImageDirectoryEntryToData(ImportLdrEntry->DllBase,
@@ -131,6 +143,18 @@ LdrpSnapIAT(IN PLDR_DATA_TABLE_ENTRY ExportLdrEntry,
         return Status;
     }
 
+    if (ProtectionContext)
+    {
+        ProtectionContext->BaseAddress = Iat;
+        ProtectionContext->RegionSize = ImportSize;
+        ProtectionContext->OldProtect = OldProtect;
+    }
+    else
+    {
+        RestoreProtection = TRUE;
+    }
+
+IatReady:
     /* Check if the Thunks are already valid */
     if (EntriesValid)
     {
@@ -240,12 +264,15 @@ LdrpSnapIAT(IN PLDR_DATA_TABLE_ENTRY ExportLdrEntry,
         }
     }
 
-    /* Protect the IAT again */
-    NtProtectVirtualMemory(NtCurrentProcess(),
-                           &Iat,
-                           &ImportSize,
-                           OldProtect,
-                           &OldProtect);
+    if (RestoreProtection)
+    {
+        /* Protect the IAT again */
+        NtProtectVirtualMemory(NtCurrentProcess(),
+                               &Iat,
+                               &ImportSize,
+                               OldProtect,
+                               &OldProtect);
+    }
 
     /* LdrpSnapThunk only writes data pointers in IMAGE_THUNK_DATA entries. */
 
@@ -458,7 +485,8 @@ LdrpHandleOneNewFormatImportDescriptor(IN LPWSTR DllPath OPTIONAL,
         Status = LdrpSnapIAT(DllLdrEntry,
                              LdrEntry,
                              ImportEntry,
-                             FALSE);
+                             FALSE,
+                             NULL);
 
         /* Make sure we didn't fail */
         if (!NT_SUCCESS(Status))
@@ -514,7 +542,8 @@ NTSTATUS
 NTAPI
 LdrpHandleOneOldFormatImportDescriptor(IN LPWSTR DllPath OPTIONAL,
                                        IN PLDR_DATA_TABLE_ENTRY LdrEntry,
-                                       IN PIMAGE_IMPORT_DESCRIPTOR *ImportEntry)
+                                       IN PIMAGE_IMPORT_DESCRIPTOR *ImportEntry,
+                                       IN OUT PLDRP_IAT_PROTECTION_CONTEXT ProtectionContext)
 {
     LPSTR ImportName;
     NTSTATUS Status;
@@ -579,7 +608,7 @@ LdrpHandleOneOldFormatImportDescriptor(IN LPWSTR DllPath OPTIONAL,
     }
 
     /* Now snap the IAT Entry */
-    Status = LdrpSnapIAT(DllLdrEntry, LdrEntry, *ImportEntry, FALSE);
+    Status = LdrpSnapIAT(DllLdrEntry, LdrEntry, *ImportEntry, FALSE, ProtectionContext);
     if (!NT_SUCCESS(Status))
     {
         /* Fail */
@@ -606,20 +635,42 @@ LdrpHandleOldFormatImportDescriptors(IN LPWSTR DllPath OPTIONAL,
                                      IN PLDR_DATA_TABLE_ENTRY LdrEntry,
                                      IN PIMAGE_IMPORT_DESCRIPTOR ImportEntry)
 {
-    NTSTATUS Status;
+    LDRP_IAT_PROTECTION_CONTEXT ProtectionContext = {0};
+    NTSTATUS Status = STATUS_SUCCESS;
+    PVOID BaseAddress;
+    SIZE_T RegionSize;
+    ULONG CurrentProtect;
 
-    /* Check for Name and Thunk */
-    while ((ImportEntry->Name) && (ImportEntry->FirstThunk))
+    _SEH2_TRY
     {
-        /* Parse this descriptor */
-        Status = LdrpHandleOneOldFormatImportDescriptor(DllPath,
-                                                        LdrEntry,
-                                                        &ImportEntry);
-        if (!NT_SUCCESS(Status)) return Status;
+        /* Check for Name and Thunk */
+        while ((ImportEntry->Name) && (ImportEntry->FirstThunk))
+        {
+            /* Parse this descriptor */
+            Status = LdrpHandleOneOldFormatImportDescriptor(DllPath,
+                                                            LdrEntry,
+                                                            &ImportEntry,
+                                                            &ProtectionContext);
+            if (!NT_SUCCESS(Status)) break;
+        }
     }
+    _SEH2_FINALLY
+    {
+        if (ProtectionContext.BaseAddress)
+        {
+            BaseAddress = ProtectionContext.BaseAddress;
+            RegionSize = ProtectionContext.RegionSize;
+            NtProtectVirtualMemory(NtCurrentProcess(),
+                                   &BaseAddress,
+                                   &RegionSize,
+                                   ProtectionContext.OldProtect,
+                                   &CurrentProtect);
+        }
+    }
+    _SEH2_END;
 
     /* Done */
-    return STATUS_SUCCESS;
+    return Status;
 }
 
 USHORT
