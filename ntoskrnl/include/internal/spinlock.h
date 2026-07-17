@@ -12,6 +12,21 @@ NTAPI
 Kii386SpinOnSpinLock(PKSPIN_LOCK SpinLock, ULONG Flags);
 #endif
 
+#ifdef _M_ARM64
+FORCEINLINE
+ULONG_PTR
+KxArm64LoadExclusiveAcquirePointer(
+    _In_ PVOID const volatile *Address)
+{
+    ULONG_PTR Value;
+
+    __asm__ __volatile__("ldaxr %0, [%1]"
+                         : "=&r"(Value)
+                         : "r"(Address)
+                         : "memory");
+    return Value;
+}
+#endif
 //
 // Spinlock Acquisition at IRQL >= DISPATCH_LEVEL
 //
@@ -47,12 +62,16 @@ KxAcquireSpinLock(
         /* On x86 debug builds, we use a much slower but useful routine */
         Kii386SpinOnSpinLock(SpinLock, 5);
 #elif defined(_M_ARM64)
-        /* ARM64: use WFE for power-efficient spinning; unlock sends SEV */
-        while (*(volatile KSPIN_LOCK *)SpinLock & 1)
+        ULONG_PTR LockValue;
+
+        /* The exclusive load lets the unlock store wake only this lock's waiters. */
+        __asm__ __volatile__("sevl" ::: "memory");
+        do
         {
-            __asm__ __volatile__("yield" ::: "memory");
             __asm__ __volatile__("wfe" ::: "memory");
-        }
+            LockValue = KxArm64LoadExclusiveAcquirePointer(
+                (PVOID const volatile *)SpinLock);
+        } while (LockValue & 1);
 #else
         /* It's locked... spin until it's unlocked */
         while (*(volatile KSPIN_LOCK *)SpinLock & 1)
@@ -98,15 +117,13 @@ KxReleaseSpinLock(
 #endif
 
 #if defined(CONFIG_SMP) || DBG
-    /* Clear the lock  */
-#ifdef _WIN64
+    /* The release store also clears the waiters' exclusive monitors. */
+#ifdef _M_ARM64
+    __asm__ __volatile__("stlr xzr, [%0]" :: "r"(SpinLock) : "memory");
+#elif defined(_WIN64)
     InterlockedAnd64((PLONG64)SpinLock, 0);
 #else
     InterlockedAnd((PLONG)SpinLock, 0);
-#endif
-#ifdef _M_ARM64
-    /* Wake any WFE-waiting cores */
-    __asm__ __volatile__("sev" ::: "memory");
 #endif
 #endif
 
