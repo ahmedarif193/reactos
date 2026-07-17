@@ -33,6 +33,12 @@ DBG_DEFAULT_CHANNEL(WARNING);
 #define UEFI_FIRMWARE_RESERVE_BYTES (16ULL * 1024 * 1024)
 #define UEFI_FIRMWARE_RESERVE_PAGES (UEFI_FIRMWARE_RESERVE_BYTES / EFI_PAGE_SIZE)
 
+#if defined(_M_AMD64)
+/* Must match HALP_LOW_STUB_SIZE_IN_PAGES in hal/halx86/include/halp.h. */
+#define UEFI_AP_LOW_STUB_PAGES 5
+static EFI_PHYSICAL_ADDRESS UefiApLowStubBase;
+#endif
+
 ULONG
 AddMemoryDescriptor(
     _Inout_ PFREELDR_MEMORY_DESCRIPTOR List,
@@ -270,6 +276,41 @@ UefiMemGetMemoryMap(ULONG *MemoryMapSize)
         EfiMemoryMap = NULL;
     }
 
+#if defined(_M_AMD64)
+    /*
+     * Reserve the real-mode AP trampoline before normal loader allocations
+     * can consume the small amount of usable memory below 1 MiB. The HAL
+     * later claims this range from the LoaderFirmwareTemporary descriptor.
+     */
+    if (UefiApLowStubBase == 0)
+    {
+        EFI_PHYSICAL_ADDRESS LowStubBase = 0xFFFFF;
+
+        Status = GlobalSystemTable->BootServices->AllocatePages(AllocateMaxAddress,
+                                                                EfiLoaderData,
+                                                                UEFI_AP_LOW_STUB_PAGES,
+                                                                &LowStubBase);
+        if ((Status == EFI_SUCCESS) && (LowStubBase != 0))
+        {
+            UefiApLowStubBase = LowStubBase;
+            TRACE("Reserved low-memory AP stub at 0x%llx\n", UefiApLowStubBase);
+        }
+        else
+        {
+            if (Status == EFI_SUCCESS)
+            {
+                GlobalSystemTable->BootServices->FreePages(LowStubBase, UEFI_AP_LOW_STUB_PAGES);
+                WARN("UEFI returned page zero for the AP stub; SMP may remain unavailable\n");
+            }
+            else
+            {
+                WARN("Could not reserve low-memory AP stub (status 0x%llx); SMP may remain unavailable\n",
+                     (UINT64)Status);
+            }
+        }
+    }
+#endif
+
     TRACE("UefiMemGetMemoryMap: Gather memory map\n");
     Status = PUEFI_LoadMemoryMap(&MapKey,
                                  &MapSize,
@@ -379,6 +420,17 @@ UefiMemGetMemoryMap(ULONG *MemoryMapSize)
             MapEntry = NEXT_MEMORY_DESCRIPTOR(MapEntry, DescriptorSize);
         }
     }
+
+#if defined(_M_AMD64)
+    /* Make the pre-allocated range visible to HalpAllocPhysicalMemory(). */
+    if (UefiApLowStubBase != 0)
+    {
+        UefiSetMemory(FreeldrMem,
+                      UefiApLowStubBase,
+                      UEFI_AP_LOW_STUB_PAGES,
+                      LoaderFirmwareTemporary);
+    }
+#endif
 
     /* Windows expects the first page to be reserved, otherwise it asserts.
      * However it can be just a free page on some UEFI systems. */

@@ -59,6 +59,10 @@ HalpSetupTemporaryMappings(VOID)
     /* Start from a copy of the running address space (kernel higher half) */
     RtlCopyMemory(Pml4, MiAddressToPxe((PVOID)0), PAGE_SIZE);
 
+    /* The firmware-owned low pages are not guaranteed to arrive zeroed. */
+    RtlZeroMemory(Pdpt, PAGE_SIZE);
+    RtlZeroMemory(Pd, PAGE_SIZE);
+
     /* Identity-map the low 2 MB so the real-mode/protected-mode stub runs */
     PhysicalAddress = MmGetPhysicalAddress(Pdpt);
     Pml4[0] = (PhysicalAddress.QuadPart & ~0xFFFULL) | PTE_PRESENT_WRITE;
