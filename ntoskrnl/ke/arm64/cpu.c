@@ -176,65 +176,6 @@ KiReportCpuFeatures(IN PKPRCB Prcb)
 #endif
 
 VOID
-KiFlushSingleTb(_In_ BOOLEAN Invalid,
-                _In_ PVOID VirtualAddress)
-{
-    ULONG_PTR Addr = (ULONG_PTR)VirtualAddress;
-    BOOLEAN KernelAddress = (VirtualAddress >= MmSystemRangeStart);
-
-    UNREFERENCED_PARAMETER(Invalid);
-
-    /*
-     * ARM64 TLB invalidation for a single virtual address.
-     *
-     * The ARM64 architecture uses a weakly-ordered memory model and requires
-     * explicit synchronization barriers to ensure TLB invalidations are
-     * properly ordered with respect to page table updates:
-     *
-     * 1. DSB ISH - Ensure all prior stores (PTE writes) are visible to
-     *              all cores before the TLB invalidation
-     * 2. TLBI     - Invalidate the TLB entry for this specific VA
-     * 3. DSB ISH - Ensure the TLB invalidation completes before subsequent
-     *              memory accesses
-     * 4. ISB      - Synchronize instruction fetch (required for code pages)
-     *
-     * TLBI VAE1IS: TLB Invalidate by VA, EL1, Inner Shareable
-     * - Invalidates TLB entries for the specified VA in EL1
-     * - Inner Shareable ensures invalidation is broadcast to all cores
-     *   in the inner shareable domain
-     * - The VA must be shifted right by 12 bits (page aligned)
-     *
-     * Windows ARM64 Compliance: This matches the Windows kernel's approach
-     * of using inner-shareable TLB operations for single-address invalidation.
-     */
-
-    /* Shift VA right by PAGE_SHIFT (12 bits) as required by TLBI instruction */
-    Addr >>= PAGE_SHIFT;
-
-    /* Ensure all prior PTE stores are visible before TLB invalidation */
-    __asm__ __volatile__("dsb ish" ::: "memory");
-
-    /*
-     * Kernel mappings live in TTBR1/global space, so invalidate regardless of
-     * current ASID. User mappings stay on the narrower current-ASID path.
-     */
-    if (KernelAddress)
-    {
-        __asm__ __volatile__("tlbi vaae1is, %0" :: "r"(Addr) : "memory");
-    }
-    else
-    {
-        __asm__ __volatile__("tlbi vae1is, %0" :: "r"(Addr) : "memory");
-    }
-
-    /* Ensure TLB invalidation completes before subsequent memory accesses */
-    __asm__ __volatile__("dsb ish" ::: "memory");
-
-    /* Synchronize instruction fetch (critical for executable pages) */
-    __asm__ __volatile__("isb" ::: "memory");
-}
-
-VOID
 KeFlushTb(VOID)
 {
     __asm__ __volatile__("dsb ish" ::: "memory");
