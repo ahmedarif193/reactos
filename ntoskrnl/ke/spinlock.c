@@ -119,7 +119,11 @@ KeAcquireQueuedSpinLockAtDpcLevel(_Inout_ PKSPIN_LOCK_QUEUE LockHandle)
 #endif
 
     /* Do the inlined function */
+#ifdef _M_ARM64
+    KxAcquireQueuedSpinLock(LockHandle);
+#else
     KxAcquireSpinLock(LockHandle->Lock);
+#endif
 }
 
 _IRQL_requires_min_(DISPATCH_LEVEL)
@@ -143,7 +147,11 @@ KeReleaseQueuedSpinLockFromDpcLevel(_Inout_ PKSPIN_LOCK_QUEUE LockHandle)
 #endif
 
     /* Do the inlined function */
+#ifdef _M_ARM64
+    KxReleaseQueuedSpinLock(LockHandle);
+#else
     KxReleaseSpinLock(LockHandle->Lock);
+#endif
 }
 
 #endif
@@ -402,7 +410,11 @@ KeAcquireInStackQueuedSpinLockAtDpcLevel(IN PKSPIN_LOCK SpinLock,
 #endif
 
     /* Acquire the lock */
+#ifdef _M_ARM64
+    KxAcquireQueuedSpinLock(&LockHandle->LockQueue);
+#else
     KxAcquireSpinLock(LockHandle->LockQueue.Lock); // HACK
+#endif
 }
 
 /*
@@ -433,7 +445,11 @@ KeReleaseInStackQueuedSpinLockFromDpcLevel(IN PKLOCK_QUEUE_HANDLE LockHandle)
 #endif
 
     /* Release the lock */
+#ifdef _M_ARM64
+    KxReleaseQueuedSpinLock(&LockHandle->LockQueue);
+#else
     KxReleaseSpinLock(LockHandle->LockQueue.Lock); // HACK
+#endif
 }
 
 /*
