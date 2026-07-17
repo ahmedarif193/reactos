@@ -931,6 +931,9 @@ KeInitThread(IN OUT PKTHREAD Thread,
     /* Set the TEB and process */
     Thread->Teb = Teb;
     Thread->Process = Process;
+#if defined(_M_ARM64)
+    Thread->VfpState = NULL;
+#endif
 
     /* Check if we have a kernel stack */
     if (!KernelStack)
@@ -987,6 +990,9 @@ KeInitThread(IN OUT PKTHREAD Thread,
             /* Delete the stack */
             MmDeleteKernelStack((PVOID)Thread->StackBase, FALSE);
             Thread->InitialStack = NULL;
+#if defined(_M_ARM64)
+            Thread->VfpState = NULL;
+#endif
         }
     }
     _SEH2_END;
@@ -1029,6 +1035,9 @@ KeUninitThread(IN PKTHREAD Thread)
     /* Delete the stack */
     MmDeleteKernelStack((PVOID)Thread->StackBase, FALSE);
     Thread->InitialStack = NULL;
+#if defined(_M_ARM64)
+    Thread->VfpState = NULL;
+#endif
 }
 
 /* PUBLIC FUNCTIONS **********************************************************/

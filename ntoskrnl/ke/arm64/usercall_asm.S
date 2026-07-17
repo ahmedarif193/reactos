@@ -10,11 +10,11 @@
     .seh_proc KiCallUserMode
 KiCallUserMode:
     /*
-     * SEH: Stack must be 16-byte aligned. KEXCEPTION_FRAME_LENGTH (0xC8) is not aligned,
-     * so we allocate 0xD0 (208 bytes) which is 16-byte aligned and matches SEH directive.
+     * SEH: keep the public KEXCEPTION_FRAME layout intact, then use its aligned
+     * tail for the ARM64 ABI-nonvolatile d8-d15 register bank.
      */
-    sub     sp, sp, #0xD0
-    .seh_stackalloc 0xd0
+    sub     sp, sp, #0x110
+    .seh_stackalloc 0x110
     stp     x19, x20, [sp, #ExX19]
     .seh_save_regp x19, ExX19
     stp     x21, x22, [sp, #ExX21]
@@ -29,6 +29,14 @@ KiCallUserMode:
     .seh_save_reg x29, ExFp
     str     x30, [sp, #ExLr]
     .seh_save_reg x30, ExLr
+    stp     d8, d9, [sp, #0xD0]
+    .seh_save_fregp d8, 0xd0
+    stp     d10, d11, [sp, #0xE0]
+    .seh_save_fregp d10, 0xe0
+    stp     d12, d13, [sp, #0xF0]
+    .seh_save_fregp d12, 0xf0
+    stp     d14, d15, [sp, #0x100]
+    .seh_save_fregp d14, 0x100
     .seh_endprologue
     /* Save return address again (not tracked by SEH) */
     str     x30, [sp, #ExReturn]
@@ -56,7 +64,11 @@ KiCallUserMode:
     ldp     x27, x28, [sp, #ExX27]
     ldr     x29, [sp, #ExFp]
     ldr     x30, [sp, #ExLr]
-    add     sp, sp, #0xD0
+    ldp     d8, d9, [sp, #0xD0]
+    ldp     d10, d11, [sp, #0xE0]
+    ldp     d12, d13, [sp, #0xF0]
+    ldp     d14, d15, [sp, #0x100]
+    add     sp, sp, #0x110
     ret
     .seh_endproc
 
@@ -80,8 +92,12 @@ KiCallbackReturn:
     ldp     x27, x28, [sp, #ExX27]
     ldr     x29, [sp, #ExFp]
     ldr     x30, [sp, #ExLr]
+    ldp     d8, d9, [sp, #0xD0]
+    ldp     d10, d11, [sp, #0xE0]
+    ldp     d12, d13, [sp, #0xF0]
+    ldp     d14, d15, [sp, #0x100]
 
-    add     sp, sp, #0xD0
+    add     sp, sp, #0x110
 
     mov     x0, x9
     ret

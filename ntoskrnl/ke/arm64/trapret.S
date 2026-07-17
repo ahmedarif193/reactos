@@ -168,12 +168,8 @@ KiTrapReturn:
     mov     sp, x28
 .Lrestore_exception_frame:
 
-    /*
-     * x16/x17 are volatile, but they still belong to the interrupted context.
-     * The return path uses x16 as scratch after the early trap-frame restore,
-     * so reload both immediately before the final ERET path.
-     */
-    ldp     x16, x17, [x20, #TfX16]
+    /* Keep the trap-frame address until every interrupted register is reloaded. */
+    mov     x18, x20
 
     /* Restore non-volatiles from exception frame (if present).
      * This restores x19-x30, x27 to their correct pre-exception values.
@@ -198,10 +194,45 @@ KiTrapReturn:
     mov     x29, x24
     mov     x30, x25
 4:
-    /* All GPRs now have correct values. SPSR/ELR already set. ERET. */
+    /* Restore the exact vector snapshot owned by this trap frame. */
+    ldr     x16, [x18, #TfVfpState]
+    cbz     x16, .Lvfp_restored
+    ldr     w17, [x16, #0x08]
+    msr     fpcr, x17
+    ldr     w17, [x16, #0x0C]
+    msr     fpsr, x17
+    add     x16, x16, #0x10
+    ldp     q0, q1, [x16, #0x000]
+    ldp     q2, q3, [x16, #0x020]
+    ldp     q4, q5, [x16, #0x040]
+    ldp     q6, q7, [x16, #0x060]
+    ldp     q8, q9, [x16, #0x080]
+    ldp     q10, q11, [x16, #0x0A0]
+    ldp     q12, q13, [x16, #0x0C0]
+    ldp     q14, q15, [x16, #0x0E0]
+    ldp     q16, q17, [x16, #0x100]
+    ldp     q18, q19, [x16, #0x120]
+    ldp     q20, q21, [x16, #0x140]
+    ldp     q22, q23, [x16, #0x160]
+    ldp     q24, q25, [x16, #0x180]
+    ldp     q26, q27, [x16, #0x1A0]
+    ldp     q28, q29, [x16, #0x1C0]
+    ldp     q30, q31, [x16, #0x1E0]
+.Lvfp_restored:
+    /* Reload volatile scratch and the ABI-defined x18 platform value last. */
+    ldr     w16, [x18, #TfSpsr]
+    ands    w16, w16, #0xF
+    b.ne    .Lrestore_kernel_x18
+    ldp     x16, x17, [x18, #TfX16]
+    mrs     x18, tpidr_el0
+    b       .Lx18_restored
+.Lrestore_kernel_x18:
+    ldp     x16, x17, [x18, #TfX16]
+    mrs     x18, tpidr_el1
+.Lx18_restored:
 
-    dsb     sy
-    isb
+    /* All GPRs and vector state now match the interrupted context. */
+
     eret
 
     .seh_endproc

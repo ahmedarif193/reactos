@@ -240,17 +240,14 @@ HalpArm64ApTrampolineEntry:
     str     w1, [x19, #AP_DATA_PROGRESS_OFF]
     dsb     sy
 
-    /*
-     * Phase 5: Set up exception vectors
-     *
-     * Install the kernel's VBAR so exceptions are properly handled.
-     */
-    ldr     x0, [x19, #AP_DATA_VBAR_OFF]
-    msr     vbar_el1, x0
-    isb
-
+    /* Vector entry saves Q0-Q31, so enable FP/ASIMD before publishing VBAR. */
     ldr     x0, [x19, #AP_DATA_CPACR_OFF]
     msr     cpacr_el1, x0
+    isb
+
+    /* Phase 5: Install the kernel's exception-vector base. */
+    ldr     x0, [x19, #AP_DATA_VBAR_OFF]
+    msr     vbar_el1, x0
     isb
 
     /* Progress 0x77: VBAR set */

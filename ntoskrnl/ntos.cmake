@@ -403,6 +403,7 @@ elseif(ARCH STREQUAL "arm64")
     list(APPEND ASM_SOURCE
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/chkstk.S
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/earlyvec.S
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/fpstate_asm.S
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/trapvec.S
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/trapret.S
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/ctxswitch.S

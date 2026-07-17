@@ -749,6 +749,16 @@ CODE_SEG("INIT")
 static VOID
 KiArm64InstallEarlyExceptionVectors(VOID)
 {
+    UINT64 Cpacr;
+
+    /* The early synchronous vector captures Q0-Q31 before calling C. */
+    __asm__ __volatile__("mrs %0, cpacr_el1" : "=r"(Cpacr));
+    Cpacr |= (3ULL << 20);  /* FPEN = 11: base FP/NEON is part of the ABI. */
+    Cpacr &= ~(3ULL << 16); /* ZEN = 00: no SVE state contract is exposed. */
+    Cpacr &= ~(3ULL << 24); /* SMEN = 00: no SME/ZA state contract is exposed. */
+    __asm__ __volatile__("msr cpacr_el1, %0" :: "r"(Cpacr));
+    __asm__ __volatile__("isb");
+
     __asm__ __volatile__("msr vbar_el1, %0" :: "r"((ULONG_PTR)&KiArm64EarlyVectorTable));
     __asm__ __volatile__("isb");
 }
@@ -946,7 +956,7 @@ DECLSPEC_NORETURN
 CODE_SEG("INIT")
 VOID
 NTAPI
-KiSystemStartup(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
+KiArm64SystemStartupC(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
     ARM64_BOOT_CONTEXT BootContext = {0};
 
