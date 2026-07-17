@@ -1379,11 +1379,10 @@ KiArm64HandleSynchronousException(
 
             if (NT_SUCCESS(Status))
             {
-                KeInvalidateTlbEntry((PVOID)(ULONG_PTR)Context->State.FaultAddress);
                 /*
-                 * ARM64: cache maintenance after instruction fault resolution.
-                 * Keep this path targeted to the faulting page to avoid global
-                 * I-cache invalidation on every resolved user fault.
+                 * MM owns page-table publication and TLB completion. The trap
+                 * layer owns only instruction-cache synchronization for the
+                 * page whose fetch fault has just been resolved.
                  */
                 {
                     ULONG_PTR Va;
@@ -1621,56 +1620,8 @@ KiArm64HandleSynchronousException(
 
             if (NT_SUCCESS(Status))
             {
-                /*
-                 * Do not do generic D-cache invalidation here. A resolved data
-                 * abort can be a write/access-flag fault on a normal cached page
-                 * that already contains dirty CPU data. DC IVAC would discard those
-                 * dirty lines and corrupt unrelated data in the same page. Cache
-                 * maintenance for DMA/PIO buffers belongs at the device mapping
-                 * boundary, not in the generic page-fault return path.
-                 */
-                {
-                    ULONG_PTR Va = (ULONG_PTR)Context->State.FaultAddress;
-
-                    if (Va < (ULONG_PTR)MmSystemRangeStart)
-                    {
-                        ULONG64 Root;
-                        ULONG64 Entries[4];
-                        volatile ULONG64 *Slots[4];
-                        ULONG Depth;
-                        ULONG Level;
-
-                        __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Root));
-                        Depth = KiArm64WalkPageTable(Root, Va, Entries, Slots);
-                        for (Level = 0; Level < Depth; Level++)
-                        {
-                            MiArm64CleanEntryToPoC(Slots[Level]);
-                        }
-                    }
-                    else
-                    {
-                        volatile ULONG64 *Entry;
-
-                        Entry = (volatile ULONG64 *)MiArm64KernelPpeKseg0((PVOID)Va);
-                        if (Entry != NULL)
-                        {
-                            MiArm64CleanEntryToPoC(Entry);
-                        }
-
-                        Entry = (volatile ULONG64 *)MiArm64KernelPdeKseg0((PVOID)Va);
-                        if (Entry != NULL)
-                        {
-                            MiArm64CleanEntryToPoC(Entry);
-                        }
-
-                        Entry = (volatile ULONG64 *)MiArm64KernelPteKseg0((PVOID)Va);
-                        if (Entry != NULL)
-                        {
-                            MiArm64CleanEntryToPoC(Entry);
-                        }
-                    }
-                }
-                KeInvalidateTlbEntry((PVOID)(ULONG_PTR)Context->State.FaultAddress);
+                /* MM completed the descriptor publication and any required
+                   broadcast invalidation before returning success. */
                 goto HandledExit;
             }
 

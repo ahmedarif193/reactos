@@ -1106,7 +1106,8 @@ FORCEINLINE
 VOID
 MI_ARM64_FLUSH_VALID_PTE(IN PMMPTE PointerPte)
 {
-    ULONG_PTR Va = (ULONG_PTR)MiPteToAddress(PointerPte) >> PAGE_SHIFT;
+    ULONG_PTR Va = ((ULONG_PTR)MiPteToAddress(PointerPte) >> PAGE_SHIFT) &
+                   KI_ARM64_TLBI_VA_MASK;
 
     MI_ARM64_SYNC_VALID_PTE(PointerPte);
     __asm__ __volatile__("dsb ishst" ::: "memory");
@@ -1184,6 +1185,22 @@ MI_WRITE_INVALID_PTE(IN PMMPTE PointerPte,
 #endif
 }
 
+/*
+ * Invalid-to-invalid updates carry software MM state only. A table walker sees
+ * both values as an invalid descriptor, so ARM64 does not need to clean the
+ * cache line to PoC. Callers must use MI_WRITE_INVALID_PTE when replacing a
+ * valid hardware descriptor, before the matching TLB invalidation completes.
+ */
+FORCEINLINE
+VOID
+MI_WRITE_SOFTWARE_PTE(IN PMMPTE PointerPte,
+                      IN MMPTE InvalidPte)
+{
+    ASSERT(PointerPte->u.Hard.Valid == 0);
+    ASSERT(InvalidPte.u.Hard.Valid == 0);
+    *PointerPte = InvalidPte;
+}
+
 //
 // Erase the PTE completely
 //
@@ -1197,6 +1214,15 @@ MI_ERASE_PTE(IN PMMPTE PointerPte)
 #if defined(_M_ARM64)
     MiArm64CleanEntryToPoC(PointerPte);
 #endif
+}
+
+FORCEINLINE
+VOID
+MI_ERASE_SOFTWARE_PTE(IN PMMPTE PointerPte)
+{
+    ASSERT(PointerPte->u.Long != 0);
+    ASSERT(PointerPte->u.Hard.Valid == 0);
+    PointerPte->u.Long = 0;
 }
 
 //
@@ -1240,7 +1266,8 @@ MI_WRITE_VALID_PDE(IN PMMPDE PointerPde,
         !(((ULONG_PTR)FlushAddress >= PTE_BASE) &&
           ((ULONG_PTR)FlushAddress <= HYPER_SPACE_END)))
     {
-        ULONG_PTR Va = (ULONG_PTR)FlushAddress >> PAGE_SHIFT;
+        ULONG_PTR Va = ((ULONG_PTR)FlushAddress >> PAGE_SHIFT) &
+                       KI_ARM64_TLBI_VA_MASK;
 
         __asm__ __volatile__("dsb ishst" ::: "memory");
         __asm__ __volatile__("tlbi vaae1is, %0" :: "r"(Va) : "memory");
@@ -1291,7 +1318,8 @@ MI_WRITE_INVALID_PDE(IN PMMPDE PointerPde,
         !(((ULONG_PTR)FlushAddress >= PTE_BASE) &&
           ((ULONG_PTR)FlushAddress <= HYPER_SPACE_END)))
     {
-        ULONG_PTR Va = (ULONG_PTR)FlushAddress >> PAGE_SHIFT;
+        ULONG_PTR Va = ((ULONG_PTR)FlushAddress >> PAGE_SHIFT) &
+                       KI_ARM64_TLBI_VA_MASK;
 
         __asm__ __volatile__("dsb ishst" ::: "memory");
         __asm__ __volatile__("tlbi vaae1is, %0" :: "r"(Va) : "memory");
@@ -2718,6 +2746,20 @@ MiFlushSystemTbRange(
     KiIpiSendTbFlush((KAFFINITY)KeActiveProcessors,
                      BaseAddress,
                      PageCount);
+#elif defined(_M_ARM64)
+    if (PageCount == 0)
+    {
+        return;
+    }
+
+    /* User leaf callers publish through their resolved TTBR0/KSEG0 slots.
+       The recursive MiAddressToPte alias is only authoritative for this bulk
+       clean on system-space ranges. */
+    if ((ULONG_PTR)BaseAddress >= (ULONG_PTR)MmSystemRangeStart)
+    {
+        MiArm64CleanPteRangeToPoC(MiAddressToPte(BaseAddress), PageCount);
+    }
+    KeInvalidateTlbRange(BaseAddress, PageCount);
 #else
     UNREFERENCED_PARAMETER(BaseAddress);
     UNREFERENCED_PARAMETER(PageCount);
@@ -2744,6 +2786,8 @@ MiFlushTbForAddress(
     }
 
     KiIpiSendTbFlush(TargetSet, VirtualAddress, 1);
+#elif defined(_M_ARM64)
+    KeInvalidateTlbEntry(VirtualAddress);
 #else
     KeFlushEntireTb(TRUE, TRUE);
 #endif

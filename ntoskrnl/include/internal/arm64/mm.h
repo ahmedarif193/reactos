@@ -681,14 +681,46 @@ MiArm64CleanEntryToPoC(
     __asm__ __volatile__("dsb ish" ::: "memory");
 }
 
-/* Single owner of the per-VA user TLB invalidate sequence (all-ASID, broadcast). */
+FORCEINLINE
+VOID
+MiArm64CleanPteRangeToPoC(
+    _In_reads_(EntryCount) PMMPTE FirstEntry,
+    _In_ ULONG EntryCount)
+{
+    ULONG DcacheLineSize;
+    ULONG IcacheLineSize;
+    ULONG_PTR Current;
+    ULONG_PTR End;
+
+    if (EntryCount == 0)
+    {
+        return;
+    }
+
+    KiArm64GetCacheLineSizes(&DcacheLineSize, &IcacheLineSize);
+    UNREFERENCED_PARAMETER(IcacheLineSize);
+    Current = (ULONG_PTR)FirstEntry & ~(ULONG_PTR)(DcacheLineSize - 1);
+    End = (ULONG_PTR)(FirstEntry + EntryCount);
+
+    __asm__ __volatile__("dsb ishst" ::: "memory");
+    while (Current < End)
+    {
+        __asm__ __volatile__("dc civac, %0" :: "r"(Current) : "memory");
+        Current += DcacheLineSize;
+    }
+    __asm__ __volatile__("dsb ish" ::: "memory");
+}
+
+/* Single owner of the per-VA user TLB invalidate sequence (all-ASID, all-level, broadcast). */
 FORCEINLINE
 VOID
 MiArm64InvalidateUserAddress(
     _In_ PVOID Address)
 {
+    ULONG_PTR Va = ((ULONG_PTR)Address >> PAGE_SHIFT) & KI_ARM64_TLBI_VA_MASK;
+
     __asm__ __volatile__("dsb ishst" ::: "memory");
-    __asm__ __volatile__("tlbi vaale1is, %0" :: "r"((ULONG_PTR)Address >> PAGE_SHIFT) : "memory");
+    __asm__ __volatile__("tlbi vaae1is, %0" :: "r"(Va) : "memory");
     __asm__ __volatile__("dsb ish" ::: "memory");
     __asm__ __volatile__("isb" ::: "memory");
 }

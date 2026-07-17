@@ -35,7 +35,8 @@ MiFlushTbAndCapture(IN PMMVAD FoundVad,
                     IN PMMPTE PointerPte,
                     IN ULONG ProtectionMask,
                     IN PMMPFN Pfn1,
-                    IN BOOLEAN CaptureDirtyBit);
+                    IN BOOLEAN CaptureDirtyBit,
+                    IN BOOLEAN FlushTb);
 
 
 /* PRIVATE FUNCTIONS **********************************************************/
@@ -534,7 +535,7 @@ MiDeleteSystemPageableVm(IN PMMPTE PointerPte,
                 ASSERT(PointerPte->u.Soft.PageFileHigh == 0);
 
                 /* Destroy the PTE */
-                MI_ERASE_PTE(PointerPte);
+                MI_ERASE_SOFTWARE_PTE(PointerPte);
             }
 
             /* Actual legitimate pages */
@@ -597,7 +598,7 @@ MiDeletePte(IN PMMPTE PointerPte,
             ASSERT((PMMPTE)((ULONG_PTR)Pfn1->PteAddress & ~0x1) == PointerPte);
 
             /* Destroy the PTE */
-            MI_ERASE_PTE(PointerPte);
+            MI_ERASE_SOFTWARE_PTE(PointerPte);
 
             /* Drop the reference on the page table. */
             MiDecrementShareCount(MiGetPfnEntry(Pfn1->u4.PteFrame), Pfn1->u4.PteFrame);
@@ -715,6 +716,9 @@ MiDeletePte(IN PMMPTE PointerPte,
     {
         /* The PFN lock keeps the old page from being reused until the remote
            single-address invalidation has completed. */
+#if defined(_M_ARM64)
+        MiFlushTbForAddress(VirtualAddress);
+#else
         if (PointerPte <= MiHighestUserPte)
         {
             MiFlushTbForAddress(VirtualAddress);
@@ -723,6 +727,7 @@ MiDeletePte(IN PMMPTE PointerPte,
         {
             KeFlushEntireTb(TRUE, TRUE);
         }
+#endif
     }
 }
 
@@ -747,6 +752,9 @@ MiDeleteVirtualAddresses(
     BOOLEAN AddressGap = FALSE;
     BOOLEAN FlushTb;
     PSUBSECTION Subsection;
+#if defined(_M_ARM64)
+    ULONG_PTR FlushStart;
+#endif
 
     /* We should never get RosMm memory areas here */
     ASSERT((Vad == NULL) || !MI_IS_MEMORY_AREA_VAD(Vad));
@@ -858,6 +866,9 @@ MiDeleteVirtualAddresses(
         }
 
         /* Lock the PFN Database while we delete the PTEs */
+#if defined(_M_ARM64)
+        FlushStart = Va;
+#endif
         OldIrql = MiAcquirePfnLock();
         FlushTb = FALSE;
         PointerPte = MiAddressToPte(Va);
@@ -898,7 +909,7 @@ MiDeleteVirtualAddresses(
                         (TempPte.u.Soft.Prototype == 1))
                     {
                         /* Just nuke it */
-                        MI_ERASE_PTE(PointerPte);
+                        MI_ERASE_SOFTWARE_PTE(PointerPte);
                     }
                     else
                     {
@@ -914,7 +925,7 @@ MiDeleteVirtualAddresses(
                 else
                 {
                     /* The PTE was never mapped, just nuke it here */
-                    MI_ERASE_PTE(PointerPte);
+                    MI_ERASE_SOFTWARE_PTE(PointerPte);
                 }
 
                 if (MiDecrementPageTableReferences((PVOID)Va) == 0)
@@ -946,7 +957,12 @@ MiDeleteVirtualAddresses(
            prevents deleted data and page-table frames from being reused. */
         if (FlushTb)
         {
+#if defined(_M_ARM64)
+            MiFlushSystemTbRange((PVOID)FlushStart,
+                                 (ULONG)BYTES_TO_PAGES(Va - FlushStart));
+#else
             KeFlushProcessTb();
+#endif
         }
 
         /* Release the lock */
@@ -2455,6 +2471,9 @@ MiProtectVirtualMemory(IN PEPROCESS Process,
     NTSTATUS Status = STATUS_SUCCESS;
     PETHREAD Thread = PsGetCurrentThread();
     TABLE_SEARCH_RESULT Result;
+#if defined(_M_ARM64)
+    BOOLEAN FlushRange = FALSE;
+#endif
 
     /* We must be attached */
     ASSERT(Process == PsGetCurrentProcess());
@@ -2686,11 +2705,12 @@ MiProtectVirtualMemory(IN PEPROCESS Process,
                 {
                     /* Write the protection mask and write it with a TLB flush */
                     Pfn1->OriginalPte.u.Soft.Protection = ProtectionMask;
-                    MiFlushTbAndCapture(Vad,
-                                        PointerPte,
-                                        ProtectionMask,
-                                        Pfn1,
-                                        TRUE);
+#if defined(_M_ARM64)
+                    MiFlushTbAndCapture(Vad, PointerPte, ProtectionMask, Pfn1, TRUE, FALSE);
+                    FlushRange = TRUE;
+#else
+                    MiFlushTbAndCapture(Vad, PointerPte, ProtectionMask, Pfn1, TRUE, TRUE);
+#endif
                 }
             }
             else
@@ -2701,13 +2721,26 @@ MiProtectVirtualMemory(IN PEPROCESS Process,
 
                 /* The PTE is already demand-zero, just update the protection mask */
                 PteContents.u.Soft.Protection = ProtectionMask;
-                MI_WRITE_INVALID_PTE(PointerPte, PteContents);
+                MI_WRITE_SOFTWARE_PTE(PointerPte, PteContents);
                 ASSERT(PointerPte->u.Long != 0);
             }
 
             /* Move to the next PTE */
             PointerPte++;
         }
+
+#if defined(_M_ARM64)
+        if (FlushRange)
+        {
+            SIZE_T FlushPageCount;
+
+            FlushPageCount = BYTES_TO_PAGES(EndingAddress - StartingAddress + 1);
+            MiFlushSystemTbRange((PVOID)StartingAddress,
+                                 (FlushPageCount >= KI_ARM64_TLBI_RANGE_FULL_THRESHOLD) ?
+                                     KI_ARM64_TLBI_RANGE_FULL_THRESHOLD :
+                                     (ULONG)FlushPageCount);
+        }
+#endif
 
         /* Unlock the working set */
         MiUnlockProcessWorkingSetUnsafe(Process, Thread);
@@ -2869,7 +2902,26 @@ MiProcessValidPteList(IN PMMPTE *ValidPteList,
     //
     // Flush before the PFN lock permits page reuse.
     //
+#if defined(_M_ARM64)
+    __asm__ __volatile__("dsb ishst" ::: "memory");
+    if (Count >= KI_ARM64_TLBI_RANGE_FULL_THRESHOLD)
+    {
+        __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
+    }
+    else
+    {
+        for (i = 0; i != Count; i++)
+        {
+            ULONG_PTR Va = ((ULONG_PTR)MiPteToAddress(ValidPteList[i]) >> PAGE_SHIFT) &
+                           KI_ARM64_TLBI_VA_MASK;
+            __asm__ __volatile__("tlbi vaae1is, %0" :: "r"(Va) : "memory");
+        }
+    }
+    __asm__ __volatile__("dsb ish" ::: "memory");
+    __asm__ __volatile__("isb" ::: "memory");
+#else
     KeFlushProcessTb();
+#endif
     MiReleasePfnLock(OldIrql);
 }
 
@@ -2989,7 +3041,7 @@ MiDecommitPages(IN PVOID StartingAddress,
                     // earlier and simply make the page decommitted.
                     //
                     //Process->NumberOfPrivatePages++;
-                    MI_WRITE_INVALID_PTE(PointerPte, MmDecommittedPte);
+                    MI_WRITE_SOFTWARE_PTE(PointerPte, MmDecommittedPte);
                 }
             }
         }
@@ -3005,7 +3057,7 @@ MiDecommitPages(IN PVOID StartingAddress,
             // Next, we account for decommitted PTEs and make the PTE as such
             //
             if (PointerPte > CommitPte) CommitReduction++;
-            MI_WRITE_INVALID_PTE(PointerPte, MmDecommittedPte);
+            MI_WRITE_SOFTWARE_PTE(PointerPte, MmDecommittedPte);
         }
 
         //
@@ -3070,7 +3122,7 @@ MiResetPrivatePages(
             MiReleasePfnLock(OldIrql);
 
             MiIncrementPageTableReferences((PVOID)CurrentAddress);
-            MI_WRITE_INVALID_PTE(PointerPte, TempPte);
+            MI_WRITE_SOFTWARE_PTE(PointerPte, TempPte);
         }
 
         PointerPte++;
@@ -5482,7 +5534,7 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
             //
             if (PointerPte->u.Long == 0)
             {
-                MI_WRITE_INVALID_PTE(PointerPte, TempPte);
+                MI_WRITE_SOFTWARE_PTE(PointerPte, TempPte);
             }
             else
             {
@@ -5615,11 +5667,11 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
             if (PointerPte->u.Long == 0)
             {
                 NewUsedEntries++;
-                MI_WRITE_INVALID_PTE(PointerPte, TempPte);
+                MI_WRITE_SOFTWARE_PTE(PointerPte, TempPte);
             }
             else if (PointerPte->u.Long == MmDecommittedPte.u.Long)
             {
-                MI_WRITE_INVALID_PTE(PointerPte, TempPte);
+                MI_WRITE_SOFTWARE_PTE(PointerPte, TempPte);
             }
             else if (!(ChangeProtection) && (Protect != MiGetPageProtection(PointerPte)))
             {
@@ -5669,7 +5721,7 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
             //
             // And now write the invalid demand-zero PTE as requested
             //
-            MI_WRITE_INVALID_PTE(PointerPte, TempPte);
+            MI_WRITE_SOFTWARE_PTE(PointerPte, TempPte);
         }
         else if (PointerPte->u.Long == MmDecommittedPte.u.Long)
         {
@@ -5677,7 +5729,7 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
             // If the PTE was already decommitted, there is nothing else to do
             // but to write the new demand-zero PTE
             //
-            MI_WRITE_INVALID_PTE(PointerPte, TempPte);
+            MI_WRITE_SOFTWARE_PTE(PointerPte, TempPte);
         }
         else if (!(ChangeProtection) && (Protect != MiGetPageProtection(PointerPte)))
         {

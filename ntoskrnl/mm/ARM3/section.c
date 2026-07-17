@@ -448,7 +448,7 @@ MiAddMappedPtes(IN PMMPTE FirstPte,
 
         /* Build the prototype PTE and write it */
         MI_MAKE_PROTOTYPE_PTE(&TempPte, ProtoPte);
-        MI_WRITE_INVALID_PTE(PointerPte, TempPte);
+        MI_WRITE_SOFTWARE_PTE(PointerPte, TempPte);
 
         /* Keep going */
         PointerPte++;
@@ -1376,7 +1376,7 @@ MiMapViewOfDataSection(
             if (PointerPte->u.Long == 0)
             {
                 /* And write the invalid PTE */
-                MI_WRITE_INVALID_PTE(PointerPte, TempPte);
+                MI_WRITE_SOFTWARE_PTE(PointerPte, TempPte);
             }
             else
             {
@@ -1874,7 +1874,8 @@ MiFlushTbAndCapture(IN PMMVAD FoundVad,
                     IN PMMPTE PointerPte,
                     IN ULONG ProtectionMask,
                     IN PMMPFN Pfn1,
-                    IN BOOLEAN UpdateDirty)
+                    IN BOOLEAN UpdateDirty,
+                    IN BOOLEAN FlushTb)
 {
     MMPTE TempPte, PreviousPte;
     KIRQL OldIrql;
@@ -1944,7 +1945,10 @@ MiFlushTbAndCapture(IN PMMVAD FoundVad,
     // Flush this mapping on every processor before releasing the PFN lock.
     //
     ASSERT(PreviousPte.u.Hard.Valid == 1);
-    MiFlushTbForAddress(MiPteToAddress(PointerPte));
+    if (FlushTb)
+    {
+        MiFlushTbForAddress(MiPteToAddress(PointerPte));
+    }
     ASSERT(PreviousPte.u.Hard.Valid == 1);
 
     //
@@ -2026,7 +2030,7 @@ MiRemoveMappedPtes(IN PVOID BaseAddress,
 
             /* Remove the mapping and invalidate it before the share count can
                make either page reclaimable. */
-            PointerPte->u.Long = 0;
+            MI_ERASE_PTE(PointerPte);
             MiFlushTbForAddress(MiPteToAddress(PointerPte));
 
             /* Dereference the PDE and the PTE */
@@ -3115,7 +3119,7 @@ MmCommitSessionMappedView(IN PVOID MappedBase,
         if (PointerPte->u.Long == 0)
         {
             /* And write the invalid PTE */
-            MI_WRITE_INVALID_PTE(PointerPte, TempPte);
+            MI_WRITE_SOFTWARE_PTE(PointerPte, TempPte);
         }
 
         /* Move to the next PTE */

@@ -383,7 +383,7 @@ MiAccessCheck(IN PVOID FaultAddress,
         /* Remove the guard page bit, and return a guard page violation */
         TempPte.u.Soft.Protection = ProtectionMask & ~MM_GUARDPAGE;
         ASSERT(TempPte.u.Long != 0);
-        MI_WRITE_INVALID_PTE(PointerPte, TempPte);
+        MI_WRITE_SOFTWARE_PTE(PointerPte, TempPte);
         return STATUS_GUARD_PAGE_VIOLATION;
     }
 
@@ -1269,7 +1269,7 @@ MiResolvePageFileFault(_In_ BOOLEAN StoreInstruction,
     /* We must write the PTE now as the PFN lock will be released while performing the IO operation */
     MI_MAKE_TRANSITION_PTE(&TempPte, Page, Protection);
 
-    MI_WRITE_INVALID_PTE(PointerPte, TempPte);
+    MI_WRITE_SOFTWARE_PTE(PointerPte, TempPte);
 
     /* Release the PFN lock while we proceed */
     MiReleasePfnLock(*OldIrql);
@@ -2773,6 +2773,11 @@ Arm64UserLeafReady:
                 /* Fix up the PTE to be executable */
                 TempPte.u.Hard.NoExecute = 0;
                 MI_UPDATE_VALID_PTE(PointerPte, TempPte);
+#if defined(_M_ARM64)
+                /* MM owns completion now that the trap layer no longer applies
+                   a generic successful-fault invalidate. */
+                MiArm64InvalidateUserAddress(Address);
+#endif
                 MiUnlockProcessWorkingSet(CurrentProcess, CurrentThread);
                 return STATUS_SUCCESS;
             }
@@ -2864,7 +2869,7 @@ Arm64UserLeafReady:
 
             /* Remove the bit */
             TempPte.u.Soft.Protection = ProtectionCode & ~MM_GUARDPAGE;
-            MI_WRITE_INVALID_PTE(PointerPte, TempPte);
+            MI_WRITE_SOFTWARE_PTE(PointerPte, TempPte);
 
             /* Not supported */
             ASSERT(ProtoPte == NULL);
@@ -2898,7 +2903,7 @@ Arm64UserLeafReady:
             {
                 /* No, create a new PTE. First, write the protection */
                 TempPte.u.Soft.Protection = ProtectionCode;
-                MI_WRITE_INVALID_PTE(PointerPte, TempPte);
+                MI_WRITE_SOFTWARE_PTE(PointerPte, TempPte);
             }
 
             /* Lock the PFN database since we're going to grab a page */
@@ -2998,7 +3003,7 @@ Arm64UserLeafReady:
         TempPte = PrototypePte;
         TempPte.u.Soft.Protection = ProtectionCode;
         ASSERT(TempPte.u.Long != 0);
-        MI_WRITE_INVALID_PTE(PointerPte, TempPte);
+        MI_WRITE_SOFTWARE_PTE(PointerPte, TempPte);
     }
     else
     {

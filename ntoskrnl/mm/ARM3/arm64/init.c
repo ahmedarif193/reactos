@@ -1562,8 +1562,8 @@ MiProtectSharedUserPage(VOID)
     /* Permission tightening only, so the ARM ARM allows skipping break-before-make */
     CanonicalPte->u.Long = TempPte.u.Long;
     MiArm64CleanEntryToPoC((volatile UINT64 *)CanonicalPte);
-    /* Same last-level all-ASID sequence the user paths use; VA-based, so it
-     * applies to the kernel canonical VA as well. */
+    /* Use the same all-level, all-ASID sequence as user mappings. The TLBI
+     * operand is VA-based, so it applies to the kernel canonical VA too. */
     MiArm64InvalidateUserAddress((PVOID)KI_USER_SHARED_DATA);
 }
 

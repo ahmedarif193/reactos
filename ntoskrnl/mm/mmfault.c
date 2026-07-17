@@ -431,12 +431,6 @@ Retry:
 
 Exit:
     MiRelockWorkingSetForFault(&FaultWsState);
-#if defined(_M_ARM64)
-    if (NT_SUCCESS(Status))
-    {
-        KeInvalidateTlbEntry(Address);
-    }
-#endif
     return Status;
 }
 
