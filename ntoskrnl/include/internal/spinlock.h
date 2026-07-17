@@ -15,6 +15,20 @@ Kii386SpinOnSpinLock(PKSPIN_LOCK SpinLock, ULONG Flags);
 #ifdef _M_ARM64
 FORCEINLINE
 ULONG_PTR
+KxArm64LoadAcquirePointer(
+    _In_ PVOID const volatile *Address)
+{
+    ULONG_PTR Value;
+
+    __asm__ __volatile__("ldar %0, [%1]"
+                         : "=&r"(Value)
+                         : "r"(Address)
+                         : "memory");
+    return Value;
+}
+
+FORCEINLINE
+ULONG_PTR
 KxArm64LoadExclusiveAcquirePointer(
     _In_ PVOID const volatile *Address)
 {
@@ -26,7 +40,20 @@ KxArm64LoadExclusiveAcquirePointer(
                          : "memory");
     return Value;
 }
+
+FORCEINLINE
+VOID
+KxArm64StoreReleasePointer(
+    _Out_ PVOID volatile *Address,
+    _In_ PVOID Value)
+{
+    __asm__ __volatile__("stlr %1, [%0]"
+                         :
+                         : "r"(Address), "r"(Value)
+                         : "memory");
+}
 #endif
+
 //
 // Spinlock Acquisition at IRQL >= DISPATCH_LEVEL
 //
@@ -131,3 +158,144 @@ KxReleaseSpinLock(
        memory accesses across the borders of spinlocks */
     KeMemoryBarrierWithoutFence();
 }
+
+#ifdef _M_ARM64
+
+#define KX_ARM64_LOCK_QUEUE_WAIT  ((ULONG_PTR)LOCK_QUEUE_WAIT)
+#define KX_ARM64_LOCK_QUEUE_OWNER ((ULONG_PTR)LOCK_QUEUE_OWNER)
+#define KX_ARM64_LOCK_QUEUE_FLAGS (KX_ARM64_LOCK_QUEUE_WAIT | KX_ARM64_LOCK_QUEUE_OWNER)
+
+/*
+ * ARM64 queued spinlocks use the KSPIN_LOCK as an MCS queue tail.  Each
+ * acquisition supplies a distinct KSPIN_LOCK_QUEUE node.  The low bits of
+ * the node's Lock pointer describe whether that node is waiting or owns the
+ * lock; release restores the pointer before the node can be reused.
+ */
+FORCEINLINE
+VOID
+KxAcquireQueuedSpinLock(
+    _Inout_ PKSPIN_LOCK_QUEUE LockQueue)
+{
+#if defined(CONFIG_SMP) || DBG
+    PKSPIN_LOCK SpinLock;
+    PKSPIN_LOCK_QUEUE Predecessor;
+    ULONG_PTR QueueState;
+
+    SpinLock = LockQueue->Lock;
+    ASSERT(SpinLock != NULL);
+    ASSERT(((ULONG_PTR)SpinLock & KX_ARM64_LOCK_QUEUE_FLAGS) == 0);
+
+    LockQueue->Next = NULL;
+    LockQueue->Lock = (PKSPIN_LOCK)((ULONG_PTR)SpinLock | KX_ARM64_LOCK_QUEUE_WAIT);
+
+    Predecessor = (PKSPIN_LOCK_QUEUE)InterlockedExchangePointer(
+        (PVOID volatile *)SpinLock,
+        LockQueue);
+    if (Predecessor == NULL)
+    {
+        LockQueue->Lock = (PKSPIN_LOCK)((ULONG_PTR)SpinLock | KX_ARM64_LOCK_QUEUE_OWNER);
+        return;
+    }
+
+    KxArm64StoreReleasePointer((PVOID volatile *)&Predecessor->Next, LockQueue);
+
+    __asm__ __volatile__("sevl" ::: "memory");
+    do
+    {
+        __asm__ __volatile__("wfe" ::: "memory");
+        QueueState = KxArm64LoadExclusiveAcquirePointer(
+            (PVOID const volatile *)&LockQueue->Lock);
+    } while (QueueState & KX_ARM64_LOCK_QUEUE_WAIT);
+
+    ASSERT((QueueState & KX_ARM64_LOCK_QUEUE_OWNER) != 0);
+#else
+    UNREFERENCED_PARAMETER(LockQueue);
+    KeMemoryBarrierWithoutFence();
+#endif
+}
+
+FORCEINLINE
+VOID
+KxReleaseQueuedSpinLock(
+    _Inout_ PKSPIN_LOCK_QUEUE LockQueue)
+{
+#if defined(CONFIG_SMP) || DBG
+    PKSPIN_LOCK SpinLock;
+    PKSPIN_LOCK_QUEUE Successor;
+
+    ASSERT(((ULONG_PTR)LockQueue->Lock & KX_ARM64_LOCK_QUEUE_OWNER) != 0);
+
+    SpinLock = (PKSPIN_LOCK)((ULONG_PTR)LockQueue->Lock & ~KX_ARM64_LOCK_QUEUE_FLAGS);
+    ASSERT(SpinLock != NULL);
+
+    Successor = (PKSPIN_LOCK_QUEUE)KxArm64LoadAcquirePointer(
+        (PVOID const volatile *)&LockQueue->Next);
+    if (Successor == NULL)
+    {
+        if (InterlockedCompareExchangePointer((PVOID volatile *)SpinLock,
+                                              NULL,
+                                              LockQueue) == LockQueue)
+        {
+            LockQueue->Lock = SpinLock;
+            LockQueue->Next = NULL;
+            return;
+        }
+
+        __asm__ __volatile__("sevl" ::: "memory");
+        do
+        {
+            __asm__ __volatile__("wfe" ::: "memory");
+            Successor = (PKSPIN_LOCK_QUEUE)KxArm64LoadExclusiveAcquirePointer(
+                (PVOID const volatile *)&LockQueue->Next);
+        } while (Successor == NULL);
+    }
+    ASSERT(((ULONG_PTR)Successor->Lock & ~KX_ARM64_LOCK_QUEUE_FLAGS) ==
+           (ULONG_PTR)SpinLock);
+    KxArm64StoreReleasePointer(
+        (PVOID volatile *)&Successor->Lock,
+        (PVOID)((ULONG_PTR)SpinLock | KX_ARM64_LOCK_QUEUE_OWNER));
+
+    LockQueue->Next = NULL;
+    LockQueue->Lock = SpinLock;
+#else
+    UNREFERENCED_PARAMETER(LockQueue);
+    KeMemoryBarrierWithoutFence();
+#endif
+}
+
+FORCEINLINE
+BOOLEAN
+KxTryToAcquireQueuedSpinLock(
+    _Inout_ PKSPIN_LOCK_QUEUE LockQueue)
+{
+#if defined(CONFIG_SMP) || DBG
+    PKSPIN_LOCK SpinLock;
+    ULONG_PTR QueueState;
+
+    QueueState = (ULONG_PTR)LockQueue->Lock;
+    ASSERT(QueueState != 0);
+    if ((QueueState == 0) || (QueueState & KX_ARM64_LOCK_QUEUE_FLAGS))
+    {
+        ASSERT(FALSE);
+        return FALSE;
+    }
+    SpinLock = (PKSPIN_LOCK)QueueState;
+
+    LockQueue->Next = NULL;
+    if (InterlockedCompareExchangePointer((PVOID volatile *)SpinLock,
+                                          LockQueue,
+                                          NULL) != NULL)
+    {
+        return FALSE;
+    }
+
+    LockQueue->Lock = (PKSPIN_LOCK)((ULONG_PTR)SpinLock | KX_ARM64_LOCK_QUEUE_OWNER);
+    return TRUE;
+#else
+    UNREFERENCED_PARAMETER(LockQueue);
+    KeMemoryBarrierWithoutFence();
+    return TRUE;
+#endif
+}
+
+#endif /* _M_ARM64 */

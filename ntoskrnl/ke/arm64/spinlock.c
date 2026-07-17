@@ -104,7 +104,7 @@ KeAcquireQueuedSpinLock(
 {
     KIRQL OldIrql;
     PKPRCB Prcb;
-    PKSPIN_LOCK Lock;
+    PKSPIN_LOCK_QUEUE LockQueue;
 
     if (ExpArm64PoolBootstrapMode && LockNumber == LockQueueMmNonPagedPoolLock)
     {
@@ -119,13 +119,13 @@ KeAcquireQueuedSpinLock(
         KeBugCheckEx(SPIN_LOCK_INIT_FAILURE, 1, LockNumber, 0, 0);
     }
 
-    Lock = Prcb->LockQueue[LockNumber].Lock;
-    if (Lock == NULL)
+    LockQueue = &Prcb->LockQueue[LockNumber];
+    if (LockQueue->Lock == NULL)
     {
         KeBugCheckEx(SPIN_LOCK_INIT_FAILURE, 2, LockNumber, (ULONG_PTR)Prcb, (ULONG_PTR)KeGetPcr());
     }
 
-    KxAcquireSpinLock(Lock);
+    KxAcquireQueuedSpinLock(LockQueue);
     if (LockNumber == LockQueuePfnLock)
     {
         KiArm64AdjustPfnLockDepth(Prcb, 1);
@@ -143,7 +143,7 @@ KeAcquireQueuedSpinLockRaiseToSynch(
 
     KeRaiseIrql(SYNCH_LEVEL, &OldIrql);
     Prcb = KeGetCurrentPrcb();
-    KxAcquireSpinLock(Prcb->LockQueue[LockNumber].Lock);
+    KxAcquireQueuedSpinLock(&Prcb->LockQueue[LockNumber]);
 
     /* Keep PFN-lock depth accounting symmetric with KeReleaseQueuedSpinLock,
      * which decrements it unconditionally for LockQueuePfnLock. Acquiring via
@@ -162,7 +162,7 @@ KeReleaseQueuedSpinLock(
     _In_ KIRQL OldIrql)
 {
     PKPRCB Prcb;
-    PKSPIN_LOCK Lock;
+    PKSPIN_LOCK_QUEUE LockQueue;
 
     if (ExpArm64PoolBootstrapMode && LockNumber == LockQueueMmNonPagedPoolLock)
     {
@@ -175,13 +175,13 @@ KeReleaseQueuedSpinLock(
         KeBugCheckEx(SPIN_LOCK_INIT_FAILURE, 3, LockNumber, 0, 0);
     }
 
-    Lock = Prcb->LockQueue[LockNumber].Lock;
-    if (Lock == NULL)
+    LockQueue = &Prcb->LockQueue[LockNumber];
+    if (LockQueue->Lock == NULL)
     {
         KeBugCheckEx(SPIN_LOCK_INIT_FAILURE, 4, LockNumber, (ULONG_PTR)Prcb, (ULONG_PTR)KeGetPcr());
     }
 
-    KxReleaseSpinLock(Lock);
+    KxReleaseQueuedSpinLock(LockQueue);
     if (LockNumber == LockQueuePfnLock)
     {
         KiArm64AdjustPfnLockDepth(Prcb, -1);
@@ -199,7 +199,7 @@ KeAcquireInStackQueuedSpinLock(
     LockHandle->LockQueue.Lock = SpinLock;
 
     KeRaiseIrql(DISPATCH_LEVEL, &LockHandle->OldIrql);
-    KxAcquireSpinLock(LockHandle->LockQueue.Lock);
+    KxAcquireQueuedSpinLock(&LockHandle->LockQueue);
 }
 
 VOID
@@ -212,7 +212,7 @@ KeAcquireInStackQueuedSpinLockRaiseToSynch(
     LockHandle->LockQueue.Lock = SpinLock;
 
     KeRaiseIrql(SYNCH_LEVEL, &LockHandle->OldIrql);
-    KxAcquireSpinLock(LockHandle->LockQueue.Lock);
+    KxAcquireQueuedSpinLock(&LockHandle->LockQueue);
 }
 
 VOID
@@ -220,7 +220,7 @@ FASTCALL
 KeReleaseInStackQueuedSpinLock(
     _Inout_ PKLOCK_QUEUE_HANDLE LockHandle)
 {
-    KxReleaseSpinLock(LockHandle->LockQueue.Lock);
+    KxReleaseQueuedSpinLock(&LockHandle->LockQueue);
     KeLowerIrql(LockHandle->OldIrql);
 }
 
@@ -232,11 +232,11 @@ KeTryToAcquireQueuedSpinLock(
 {
     KeRaiseIrql(DISPATCH_LEVEL, OldIrql);
 
-#ifdef CONFIG_SMP
+#if defined(CONFIG_SMP) || DBG
     {
         PKPRCB Prcb = KeGetCurrentPrcb();
-        LOGICAL Acquired = KeTryToAcquireSpinLockAtDpcLevel(
-            Prcb->LockQueue[LockNumber].Lock);
+        LOGICAL Acquired = KxTryToAcquireQueuedSpinLock(
+            &Prcb->LockQueue[LockNumber]);
         if (Acquired && (LockNumber == LockQueuePfnLock))
         {
             KiArm64AdjustPfnLockDepth(Prcb, 1);
@@ -257,11 +257,11 @@ KeTryToAcquireQueuedSpinLockRaiseToSynch(
 {
     KeRaiseIrql(SYNCH_LEVEL, OldIrql);
 
-#ifdef CONFIG_SMP
+#if defined(CONFIG_SMP) || DBG
     {
         PKPRCB Prcb = KeGetCurrentPrcb();
-        BOOLEAN Acquired = KeTryToAcquireSpinLockAtDpcLevel(
-            Prcb->LockQueue[LockNumber].Lock);
+        BOOLEAN Acquired = KxTryToAcquireQueuedSpinLock(
+            &Prcb->LockQueue[LockNumber]);
         if (Acquired && (LockNumber == LockQueuePfnLock))
         {
             KiArm64AdjustPfnLockDepth(Prcb, 1);
