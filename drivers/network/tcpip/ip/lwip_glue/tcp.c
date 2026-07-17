@@ -17,16 +17,11 @@ static const char * const tcp_state_str[] = {
   "TIME_WAIT"
 };
 
-/* The way that lwIP does multi-threading is really not ideal for our purposes but
- * we best go along with it unless we want another unstable TCP library. lwIP uses
- * a thread called the "tcpip thread" which is the only one allowed to call raw API
- * functions. Since this is the case, for each of our LibTCP* functions, we queue a request
- * for a callback to "tcpip thread" which calls our LibTCP*Callback functions. Yes, this is
- * a lot of unnecessary thread swapping and it could definitely be faster, but I don't want
- * to going messing around in lwIP because I have no desire to create another mess like oskittcp */
+/* lwIP raw API calls are serialized either by its core lock or by a callback on
+ * the tcpip thread. Callers that hold the connection resource use callbacks to
+ * preserve the core-lock/resource order; other synchronous calls use the core lock. */
 
 extern KEVENT TerminationEvent;
-extern NPAGED_LOOKASIDE_LIST MessageLookasideList;
 extern NPAGED_LOOKASIDE_LIST QueueEntryLookasideList;
 
 /* Required for ERR_T to NTSTATUS translation in receive error handling */
@@ -61,7 +56,7 @@ LibTCPEmptyQueue(PCONNECTION_ENDPOINT Connection)
         Entry = RemoveHeadList(&Connection->PacketQueue);
         qp = CONTAINING_RECORD(Entry, QUEUE_ENTRY, ListEntry);
 
-        /* We're in the tcpip thread here so this is safe */
+        /* The caller is in serialized lwIP core context, so this is safe. */
         pbuf_free(qp->p);
 
         ExFreeToNPagedLookasideList(&QueueEntryLookasideList, qp);
@@ -399,34 +394,19 @@ LibTCPSocketCallback(void *arg)
         tcp_arg(msg->Output.Socket.NewPcb, msg->Input.Socket.Arg);
         tcp_err(msg->Output.Socket.NewPcb, InternalErrorEventHandler);
     }
-
-    KeSetEvent(&msg->Event, IO_NO_INCREMENT, FALSE);
 }
 
 struct tcp_pcb *
 LibTCPSocket(void *arg)
 {
-    struct lwip_callback_msg *msg = ExAllocateFromNPagedLookasideList(&MessageLookasideList);
-    struct tcp_pcb *ret;
+    struct lwip_callback_msg msg;
 
-    if (msg)
-    {
-        KeInitializeEvent(&msg->Event, NotificationEvent, FALSE);
-        msg->Input.Socket.Arg = arg;
+    msg.Input.Socket.Arg = arg;
 
-        tcpip_callback_with_block(LibTCPSocketCallback, msg, 1);
+    if (tcpip_callback_wait(LibTCPSocketCallback, &msg) != ERR_OK)
+        return NULL;
 
-        if (WaitForEventSafely(&msg->Event))
-            ret = msg->Output.Socket.NewPcb;
-        else
-            ret = NULL;
-
-        ExFreeToNPagedLookasideList(&MessageLookasideList, msg);
-
-        return ret;
-    }
-
-    return NULL;
+    return msg.Output.Socket.NewPcb;
 }
 
 static
@@ -485,30 +465,23 @@ done:
 err_t
 LibTCPBind(PCONNECTION_ENDPOINT Connection, ip4_addr_t *const ipaddr, const u16_t port)
 {
-    struct lwip_callback_msg *msg;
+    struct lwip_callback_msg msg;
     err_t ret;
 
-    msg = ExAllocateFromNPagedLookasideList(&MessageLookasideList);
-    if (msg)
-    {
-        KeInitializeEvent(&msg->Event, NotificationEvent, FALSE);
-        msg->Input.Bind.Connection = Connection;
-        msg->Input.Bind.IpAddress = ipaddr;
-        msg->Input.Bind.Port = port;
+    KeInitializeEvent(&msg.Event, NotificationEvent, FALSE);
+    msg.Input.Bind.Connection = Connection;
+    msg.Input.Bind.IpAddress = ipaddr;
+    msg.Input.Bind.Port = port;
 
-        tcpip_callback_with_block(LibTCPBindCallback, msg, 1);
+    if (tcpip_callback_with_block(LibTCPBindCallback, &msg, 1) != ERR_OK)
+        return ERR_MEM;
 
-        if (WaitForEventSafely(&msg->Event))
-            ret = msg->Output.Bind.Error;
-        else
-            ret = ERR_CLSD;
+    if (WaitForEventSafely(&msg.Event))
+        ret = msg.Output.Bind.Error;
+    else
+        ret = ERR_CLSD;
 
-        ExFreeToNPagedLookasideList(&MessageLookasideList, msg);
-
-        return ret;
-    }
-
-    return ERR_MEM;
+    return ret;
 }
 
 static
@@ -539,29 +512,22 @@ done:
 PTCP_PCB
 LibTCPListen(PCONNECTION_ENDPOINT Connection, const u8_t backlog)
 {
-    struct lwip_callback_msg *msg;
+    struct lwip_callback_msg msg;
     PTCP_PCB ret;
 
-    msg = ExAllocateFromNPagedLookasideList(&MessageLookasideList);
-    if (msg)
-    {
-        KeInitializeEvent(&msg->Event, NotificationEvent, FALSE);
-        msg->Input.Listen.Connection = Connection;
-        msg->Input.Listen.Backlog = backlog;
+    KeInitializeEvent(&msg.Event, NotificationEvent, FALSE);
+    msg.Input.Listen.Connection = Connection;
+    msg.Input.Listen.Backlog = backlog;
 
-        tcpip_callback_with_block(LibTCPListenCallback, msg, 1);
+    if (tcpip_callback_with_block(LibTCPListenCallback, &msg, 1) != ERR_OK)
+        return NULL;
 
-        if (WaitForEventSafely(&msg->Event))
-            ret = msg->Output.Listen.NewPcb;
-        else
-            ret = NULL;
+    if (WaitForEventSafely(&msg.Event))
+        ret = msg.Output.Listen.NewPcb;
+    else
+        ret = NULL;
 
-        ExFreeToNPagedLookasideList(&MessageLookasideList, msg);
-
-        return ret;
-    }
-
-    return NULL;
+    return ret;
 }
 
 static
@@ -621,44 +587,34 @@ LibTCPSendCallback(void *arg)
     }
 
 done:
-    KeSetEvent(&msg->Event, IO_NO_INCREMENT, FALSE);
+    return;
 }
 
 err_t
 LibTCPSend(PCONNECTION_ENDPOINT Connection, void *const dataptr, const u16_t len, ULONG *sent, const int safe)
 {
     err_t ret;
-    struct lwip_callback_msg *msg;
+    struct lwip_callback_msg msg;
 
-    msg = ExAllocateFromNPagedLookasideList(&MessageLookasideList);
-    if (msg)
+    msg.Input.Send.Connection = Connection;
+    msg.Input.Send.Data = dataptr;
+    msg.Input.Send.DataLength = len;
+
+    if (safe)
+        LibTCPSendCallback(&msg);
+    else if ((ret = tcpip_callback_wait(LibTCPSendCallback, &msg)) != ERR_OK)
     {
-        KeInitializeEvent(&msg->Event, NotificationEvent, FALSE);
-        msg->Input.Send.Connection = Connection;
-        msg->Input.Send.Data = dataptr;
-        msg->Input.Send.DataLength = len;
-
-        if (safe)
-            LibTCPSendCallback(msg);
-        else
-            tcpip_callback_with_block(LibTCPSendCallback, msg, 1);
-
-        if (WaitForEventSafely(&msg->Event))
-            ret = msg->Output.Send.Error;
-        else
-            ret = ERR_CLSD;
-
-        if (ret == ERR_OK)
-            *sent = msg->Output.Send.Information;
-        else
-            *sent = 0;
-
-        ExFreeToNPagedLookasideList(&MessageLookasideList, msg);
-
+        *sent = 0;
         return ret;
     }
 
-    return ERR_MEM;
+    ret = msg.Output.Send.Error;
+    if (ret == ERR_OK)
+        *sent = msg.Output.Send.Information;
+    else
+        *sent = 0;
+
+    return ret;
 }
 
 static
@@ -686,38 +642,24 @@ LibTCPConnectCallback(void *arg)
     msg->Output.Connect.Error = Error == ERR_OK ? ERR_INPROGRESS : Error;
 
 done:
-    KeSetEvent(&msg->Event, IO_NO_INCREMENT, FALSE);
+    return;
 }
 
 err_t
 LibTCPConnect(PCONNECTION_ENDPOINT Connection, ip_addr_t *const ipaddr, const u16_t port)
 {
-    struct lwip_callback_msg *msg;
-    err_t ret;
+    struct lwip_callback_msg msg;
+    err_t Error;
 
-    msg = ExAllocateFromNPagedLookasideList(&MessageLookasideList);
-    if (msg)
-    {
-        KeInitializeEvent(&msg->Event, NotificationEvent, FALSE);
-        msg->Input.Connect.Connection = Connection;
-        msg->Input.Connect.IpAddress = ipaddr;
-        msg->Input.Connect.Port = port;
+    msg.Input.Connect.Connection = Connection;
+    msg.Input.Connect.IpAddress = ipaddr;
+    msg.Input.Connect.Port = port;
 
-        tcpip_callback_with_block(LibTCPConnectCallback, msg, 1);
+    Error = tcpip_callback_wait(LibTCPConnectCallback, &msg);
+    if (Error != ERR_OK)
+        return Error;
 
-        if (WaitForEventSafely(&msg->Event))
-        {
-            ret = msg->Output.Connect.Error;
-        }
-        else
-            ret = ERR_CLSD;
-
-        ExFreeToNPagedLookasideList(&MessageLookasideList, msg);
-
-        return ret;
-    }
-
-    return ERR_MEM;
+    return msg.Output.Connect.Error;
 }
 
 static
@@ -781,37 +723,24 @@ LibTCPShutdownCallback(void *arg)
     }
 
 done:
-    KeSetEvent(&msg->Event, IO_NO_INCREMENT, FALSE);
+    return;
 }
 
 err_t
 LibTCPShutdown(PCONNECTION_ENDPOINT Connection, const int shut_rx, const int shut_tx)
 {
-    struct lwip_callback_msg *msg;
-    err_t ret;
+    struct lwip_callback_msg msg;
+    err_t Error;
 
-    msg = ExAllocateFromNPagedLookasideList(&MessageLookasideList);
-    if (msg)
-    {
-        KeInitializeEvent(&msg->Event, NotificationEvent, FALSE);
+    msg.Input.Shutdown.Connection = Connection;
+    msg.Input.Shutdown.shut_rx = shut_rx;
+    msg.Input.Shutdown.shut_tx = shut_tx;
 
-        msg->Input.Shutdown.Connection = Connection;
-        msg->Input.Shutdown.shut_rx = shut_rx;
-        msg->Input.Shutdown.shut_tx = shut_tx;
+    Error = tcpip_callback_wait(LibTCPShutdownCallback, &msg);
+    if (Error != ERR_OK)
+        return Error;
 
-        tcpip_callback_with_block(LibTCPShutdownCallback, msg, 1);
-
-        if (WaitForEventSafely(&msg->Event))
-            ret = msg->Output.Shutdown.Error;
-        else
-            ret = ERR_CLSD;
-
-        ExFreeToNPagedLookasideList(&MessageLookasideList, msg);
-
-        return ret;
-    }
-
-    return ERR_MEM;
+    return msg.Output.Shutdown.Error;
 }
 
 static
@@ -862,39 +791,28 @@ LibTCPCloseCallback(void *arg)
     }
 
 done:
-    KeSetEvent(&msg->Event, IO_NO_INCREMENT, FALSE);
+    return;
 }
 
 err_t
 LibTCPClose(PCONNECTION_ENDPOINT Connection, const int safe, const int callback)
 {
-    err_t ret;
-    struct lwip_callback_msg *msg;
+    struct lwip_callback_msg msg;
+    err_t Error;
 
-    msg = ExAllocateFromNPagedLookasideList(&MessageLookasideList);
-    if (msg)
+    msg.Input.Close.Connection = Connection;
+    msg.Input.Close.Callback = callback;
+
+    if (safe)
+        LibTCPCloseCallback(&msg);
+    else
     {
-        KeInitializeEvent(&msg->Event, NotificationEvent, FALSE);
-
-        msg->Input.Close.Connection = Connection;
-        msg->Input.Close.Callback = callback;
-
-        if (safe)
-            LibTCPCloseCallback(msg);
-        else
-            tcpip_callback_with_block(LibTCPCloseCallback, msg, 1);
-
-        if (WaitForEventSafely(&msg->Event))
-            ret = msg->Output.Close.Error;
-        else
-            ret = ERR_CLSD;
-
-        ExFreeToNPagedLookasideList(&MessageLookasideList, msg);
-
-        return ret;
+        Error = tcpip_callback_wait(LibTCPCloseCallback, &msg);
+        if (Error != ERR_OK)
+            return Error;
     }
 
-    return ERR_MEM;
+    return msg.Output.Close.Error;
 }
 
 void
