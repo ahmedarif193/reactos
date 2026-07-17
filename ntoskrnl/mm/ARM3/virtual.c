@@ -22,48 +22,6 @@
 
 static SIZE_T MiTotalCommitCharge;
 
-#if defined(_M_ARM64)
-static
-BOOLEAN
-MiArm64GetPhysicalAddress(
-    _In_ PVOID Address,
-    _Out_ PPHYSICAL_ADDRESS PhysicalAddress)
-{
-    ULONG_PTR Va = (ULONG_PTR)Address;
-    ULONG64 Par;
-
-    PhysicalAddress->QuadPart = 0;
-
-    if (MiIsUserAddress(Address))
-    {
-        __asm__ __volatile__(
-            "at s1e0r, %1\n\t"
-            "isb\n\t"
-            "mrs %0, par_el1"
-            : "=r"(Par)
-            : "r"(Va)
-            : "memory");
-    }
-    else
-    {
-        __asm__ __volatile__(
-            "at s1e1r, %1\n\t"
-            "isb\n\t"
-            "mrs %0, par_el1"
-            : "=r"(Par)
-            : "r"(Va)
-            : "memory");
-    }
-
-    if (Par & 1ULL)
-        return FALSE;
-
-    PhysicalAddress->QuadPart =
-        (Par & ARM64_PTE_ADDR_MASK) | (Va & (PAGE_SIZE - 1));
-    return TRUE;
-}
-#endif
-
 NTSTATUS NTAPI
 MiProtectVirtualMemory(IN PEPROCESS Process,
                        IN OUT PVOID *BaseAddress,
@@ -322,27 +280,41 @@ MiArm64CalculatePageCommitment(IN ULONG_PTR StartingAddress,
     PageCount = BYTES_TO_PAGES(EndingAddress - StartingAddress + 1);
     CommittedPages = Vad->u.VadFlags.MemCommit ? PageCount : 0;
 
-    for (Address = StartingAddress; Address <= EndingAddress; Address += PAGE_SIZE)
     {
-        PMMPTE PointerPte;
+        PMMPTE PointerPte = NULL;
 
-        PointerPte = MiArm64UserPteKseg0((PVOID)Address);
-        if ((PointerPte == NULL) || (PointerPte->u.Long == 0))
+        for (Address = StartingAddress; Address <= EndingAddress; /* advanced below */)
         {
-            continue;
-        }
+            /* Resolve the L3 slot once per 2MB chunk; a missing hierarchy
+             * skips the whole chunk without touching per-page state */
+            if ((PointerPte == NULL) || (((ULONG_PTR)PointerPte & (PAGE_SIZE - 1)) == 0))
+            {
+                PointerPte = MiArm64UserPteKseg0((PVOID)Address);
+                if (PointerPte == NULL)
+                {
+                    Address = ((Address >> PDI_SHIFT) + 1) << PDI_SHIFT;
+                    continue;
+                }
+            }
 
-        if ((PointerPte->u.Hard.Valid == 0) &&
-            (PointerPte->u.Soft.Protection == MM_DECOMMIT) &&
-            ((PointerPte->u.Soft.Prototype == 0) ||
-             (PointerPte->u.Soft.PageFileHigh == MI_PTE_LOOKUP_NEEDED)))
-        {
-            if (Vad->u.VadFlags.MemCommit)
-                CommittedPages--;
-        }
-        else if (!Vad->u.VadFlags.MemCommit)
-        {
-            CommittedPages++;
+            if (PointerPte->u.Long != 0)
+            {
+                if ((PointerPte->u.Hard.Valid == 0) &&
+                    (PointerPte->u.Soft.Protection == MM_DECOMMIT) &&
+                    ((PointerPte->u.Soft.Prototype == 0) ||
+                     (PointerPte->u.Soft.PageFileHigh == MI_PTE_LOOKUP_NEEDED)))
+                {
+                    if (Vad->u.VadFlags.MemCommit)
+                        CommittedPages--;
+                }
+                else if (!Vad->u.VadFlags.MemCommit)
+                {
+                    CommittedPages++;
+                }
+            }
+
+            Address += PAGE_SIZE;
+            PointerPte++;
         }
     }
 
@@ -3641,13 +3613,8 @@ NtProtectVirtualMemory(IN HANDLE ProcessHandle,
             //
             // Capture them
             //
-#if defined(_M_ARM64)
             BaseAddress = (PVOID)(ULONG_PTR)ReadUnalignedUlongPtr((const ULONG_PTR*)UnsafeBaseAddress);
             NumberOfBytesToProtect = (SIZE_T)ReadUnalignedUlongPtr((const ULONG_PTR*)UnsafeNumberOfBytesToProtect);
-#else
-            BaseAddress = *UnsafeBaseAddress;
-            NumberOfBytesToProtect = *UnsafeNumberOfBytesToProtect;
-#endif
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
@@ -3663,13 +3630,8 @@ NtProtectVirtualMemory(IN HANDLE ProcessHandle,
         //
         // Capture directly
         //
-#if defined(_M_ARM64)
         BaseAddress = (PVOID)(ULONG_PTR)ReadUnalignedUlongPtr((const ULONG_PTR*)UnsafeBaseAddress);
         NumberOfBytesToProtect = (SIZE_T)ReadUnalignedUlongPtr((const ULONG_PTR*)UnsafeNumberOfBytesToProtect);
-#else
-        BaseAddress = *UnsafeBaseAddress;
-        NumberOfBytesToProtect = *UnsafeNumberOfBytesToProtect;
-#endif
     }
 
     //
@@ -3743,15 +3705,9 @@ NtProtectVirtualMemory(IN HANDLE ProcessHandle,
         //
         // Return data to user
         //
-#if defined(_M_ARM64)
         WriteUnalignedU32((unsigned long*)UnsafeOldAccessProtection, OldAccessProtection);
         WriteUnalignedUlongPtr((ULONG_PTR*)UnsafeBaseAddress, (ULONG_PTR)BaseAddress);
         WriteUnalignedUlongPtr((ULONG_PTR*)UnsafeNumberOfBytesToProtect, (ULONG_PTR)NumberOfBytesToProtect);
-#else
-        *UnsafeOldAccessProtection = OldAccessProtection;
-        *UnsafeBaseAddress = BaseAddress;
-        *UnsafeNumberOfBytesToProtect = NumberOfBytesToProtect;
-#endif
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
@@ -5625,34 +5581,62 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
     // Make the current page table valid, and then loop each page within it
     //
 #if defined(_M_ARM64)
-    for (ULONG_PTR CurrentAddress = StartingAddress;
-         CurrentAddress <= EndingAddress;
-         CurrentAddress += PAGE_SIZE)
     {
-        Status = MiArm64EnsureUserPte(Process, (PVOID)CurrentAddress, &PointerPte);
-        if (!NT_SUCCESS(Status))
-        {
-            MiUnlockProcessWorkingSetUnsafe(Process, CurrentThread);
-            goto FailPath;
-        }
+        PFN_NUMBER L3Pfn = 0;
+        ULONG NewUsedEntries = 0;
 
-        if (PointerPte->u.Long == 0)
+        /*
+         * Resolve the L3 slot once per 2MB chunk (KSEG0 slots advance
+         * linearly within the table page) and batch the used-entry
+         * accounting into one PFN-lock section per chunk, instead of a
+         * full walk plus lock round-trips per page.
+         */
+        PointerPte = NULL;
+        for (ULONG_PTR CurrentAddress = StartingAddress;
+             CurrentAddress <= EndingAddress;
+             CurrentAddress += PAGE_SIZE)
         {
-            MiArm64IncrementUserPageTableReferences((PVOID)CurrentAddress);
-            MI_WRITE_INVALID_PTE(PointerPte, TempPte);
-        }
-        else if (PointerPte->u.Long == MmDecommittedPte.u.Long)
-        {
-            MI_WRITE_INVALID_PTE(PointerPte, TempPte);
-        }
-        else if (!(ChangeProtection) && (Protect != MiGetPageProtection(PointerPte)))
-        {
-            if (PointerPte->u.Soft.Valid == 0)
+            if ((PointerPte == NULL) || (((ULONG_PTR)PointerPte & (PAGE_SIZE - 1)) == 0))
             {
-                ASSERT(PointerPte->u.Soft.Prototype == 0);
+                if (NewUsedEntries != 0)
+                {
+                    MiArm64AccountUserLeafPteCount(L3Pfn, NewUsedEntries);
+                    NewUsedEntries = 0;
+                }
+
+                Status = MiArm64EnsureUserPte(Process, (PVOID)CurrentAddress, &PointerPte, &L3Pfn);
+                if (!NT_SUCCESS(Status))
+                {
+                    MiUnlockProcessWorkingSetUnsafe(Process, CurrentThread);
+                    goto FailPath;
+                }
             }
 
-            ChangeProtection = TRUE;
+            if (PointerPte->u.Long == 0)
+            {
+                NewUsedEntries++;
+                MI_WRITE_INVALID_PTE(PointerPte, TempPte);
+            }
+            else if (PointerPte->u.Long == MmDecommittedPte.u.Long)
+            {
+                MI_WRITE_INVALID_PTE(PointerPte, TempPte);
+            }
+            else if (!(ChangeProtection) && (Protect != MiGetPageProtection(PointerPte)))
+            {
+                if (PointerPte->u.Soft.Valid == 0)
+                {
+                    ASSERT(PointerPte->u.Soft.Prototype == 0);
+                }
+
+                ChangeProtection = TRUE;
+            }
+
+            PointerPte++;
+        }
+
+        if (NewUsedEntries != 0)
+        {
+            MiArm64AccountUserLeafPteCount(L3Pfn, NewUsedEntries);
         }
     }
 #else
@@ -6309,7 +6293,7 @@ MmGetPhysicalAddress(PVOID Address)
 #endif
 
 #if defined(_M_ARM64)
-    if (MiArm64GetPhysicalAddress(Address, &PhysicalAddress))
+    if (MiArm64TranslateToPhysical(Address, &PhysicalAddress))
     {
         return PhysicalAddress;
     }

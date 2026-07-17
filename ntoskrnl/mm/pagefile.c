@@ -93,9 +93,9 @@ static PFN_COUNT MiReservedSwapPages;
 /*
  * Translate between a swap entry and a file and offset pair.
  */
-#define FILE_FROM_ENTRY(i) ((i) & 0x0f)
-#define OFFSET_FROM_ENTRY(i) ((i) >> 11)
-#define ENTRY_FROM_FILE_OFFSET(i, j) ((i) | ((j) << 11) | 0x400)
+#define FILE_FROM_ENTRY(i) MM_SWAP_FILE_FROM_ENTRY(i)
+#define OFFSET_FROM_ENTRY(i) MM_SWAP_OFFSET_FROM_ENTRY(i)
+#define ENTRY_FROM_FILE_OFFSET(i, j) MM_SWAP_ENTRY_FROM_FILE_OFFSET(i, j)
 
 /* Make sure there can be only 16 paging files */
 C_ASSERT(FILE_FROM_ENTRY(0xffffffff) < MAX_PAGING_FILES);
