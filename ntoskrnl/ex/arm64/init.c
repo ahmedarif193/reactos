@@ -7,8 +7,6 @@
 #define NDEBUG
 #include <debug.h>
 
-extern BOOLEAN KiHalInitialized;
-
 CODE_SEG("INIT")
 VOID
 NTAPI

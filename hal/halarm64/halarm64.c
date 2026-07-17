@@ -23,8 +23,6 @@
 
 #include "gic_internal.h"
 
-/* KiHalInitialized flag is now set by kernel (ex/init.c), not by HAL */
-
 /*
  * HAL PnP driver initialization function - defined in halpnpdd.c
  * Called by HalInitSystem to set HalInitPnpDriver callback for PnP enumeration.
@@ -3209,20 +3207,7 @@ HalInitSystem(
         return TRUE;
     }
 
-    /*
-     * NOTE: KiHalInitialized flag is now set by the kernel (ex/init.c) after
-     * HalInitSystem(0) returns, not by the HAL. This eliminates circular
-     * import dependencies (HAL importing kernel, kernel importing HAL).
-     *
-     * Boot sequence:
-     *   1. Kernel entry, PE loader resolves HAL imports
-     *   2. Early kernel init - KiHalInitialized = FALSE (binary DAIF masking)
-     *   3. HalInitSystem(0) called and completes
-     *   4. Kernel sets KiHalInitialized = TRUE in ExArchPostHalInitSystemPhase0
-     *   5. GIC priority masking becomes active for IRQL transitions
-     *
-     * The HAL no longer needs to call back into the kernel to enable GIC support.
-     */
+    /* The kernel enables PMR-backed IRQL transitions after HAL phase 1. */
 
     KeInitializeSpinLock(&HalpPCIConfigLock);
     KeInitializeSpinLock(&HalpGicItsLock);
@@ -5374,7 +5359,7 @@ HalGetInterruptSource(VOID)
  *   0xC0 = DEVICE_LEVEL (3) - Lowest-priority device
  *
  * Windows IRQL Semantics (higher IRQL = more restrictive):
- *   IRQL 0-2 (PASSIVE/DISPATCH): Allow all interrupts
+ *   IRQL 0-2 (PASSIVE/DISPATCH): Hardware IRQs remain available
  *   IRQL 3-12 (DEVICE): Block this device level and below, allow higher-priority devices + timer + IPI
  *   IRQL 13 (CLOCK): Block all devices, allow IPI only
  *   IRQL 14 (IPI): Block everything except "NMI-like" events
@@ -5384,7 +5369,9 @@ HalGetInterruptSource(VOID)
  * ==========================
  * IRQL | Windows Semantics                  | Allowed Priorities | PMR Value
  * -----|------------------------------------|--------------------|----------
- *  0-2 | Allow all interrupts               | 0x10-0xC0          | 0xFF
+ *  0   | Allow all interrupts               | 0x10-0xC0          | 0xFF
+ *  1   | Allow all but the APC software int | 0x10-0xC0          | 0xE0
+ *  2   | Allow all but APC/DPC software ints| 0x10-0xC0          | 0xD0
  *  3   | Allow devices 4-12, timer, IPI     | 0x10-0xB0          | 0xC0
  *  4   | Allow devices 5-12, timer, IPI     | 0x10-0xA0          | 0xB0
  *  5   | Allow devices 6-12, timer, IPI     | 0x10-0x90          | 0xA0
