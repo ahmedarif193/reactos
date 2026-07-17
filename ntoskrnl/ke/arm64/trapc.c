@@ -51,46 +51,73 @@ KiArm64DumpKernelWalk(
     _In_z_ PCSTR Tag,
     _In_ ULONG64 Va);
 
+/*
+ * Shared 4-level (4K granule) translation-table walk. Records the raw entry
+ * and the KSEG0 alias of its slot at each level, stopping after the first
+ * entry that is not a valid table descriptor (invalid, block, or the level-3
+ * leaf). Returns the number of levels read (0 if Root has no table address).
+ */
+static
+ULONG
+KiArm64WalkPageTable(
+    _In_ ULONG64 Root,
+    _In_ ULONG64 Va,
+    _Out_writes_all_(4) ULONG64 *Entries,
+    _Out_writes_all_(4) volatile ULONG64 **Slots)
+{
+    static const ULONG Shifts[4] = {39, 30, 21, 12};
+    volatile ULONG64 *Table;
+    ULONG64 RootPa = Root & ARM64_PTE_ADDR_MASK;
+    ULONG Level;
+
+    for (Level = 0; Level < 4; Level++)
+    {
+        Entries[Level] = 0;
+        Slots[Level] = NULL;
+    }
+
+    if (RootPa == 0)
+        return 0;
+
+    Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(RootPa);
+    for (Level = 0; Level < 4; Level++)
+    {
+        Slots[Level] = &Table[(Va >> Shifts[Level]) & 0x1FF];
+        Entries[Level] = *Slots[Level];
+        if (Level == 3)
+            break;
+        if ((Entries[Level] & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
+            break;
+        Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Entries[Level] & ARM64_PTE_ADDR_MASK);
+    }
+
+    return Level + 1;
+}
+
 static
 BOOLEAN
 KiArm64IsKernelAddressMappedNoFault(
     _In_ ULONG_PTR Va)
 {
     ULONG64 Ttbr1;
-    ULONG64 RootPa;
-    volatile ULONG64 *Table;
-    ULONG64 Entry;
+    ULONG64 Entries[4];
+    volatile ULONG64 *Slots[4];
+    ULONG Depth;
+    ULONG64 Leaf;
 
     if (Va < (ULONG_PTR)MmSystemRangeStart)
         return FALSE;
 
     __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
-    RootPa = Ttbr1 & ARM64_PTE_ADDR_MASK;
-    if (RootPa == 0)
+    Depth = KiArm64WalkPageTable(Ttbr1, Va, Entries, Slots);
+    if (Depth < 2)
         return FALSE;
 
-    Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(RootPa);
-    Entry = Table[(Va >> PXI_SHIFT) & PXI_MASK];
-    if ((Entry & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
-        return FALSE;
+    Leaf = Entries[Depth - 1];
+    if (Depth == 4)
+        return ((Leaf & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_PAGE);
 
-    Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Entry & ARM64_PTE_ADDR_MASK);
-    Entry = Table[(Va >> PPI_SHIFT) & PPI_MASK];
-    if ((Entry & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_BLOCK)
-        return TRUE;
-    if ((Entry & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
-        return FALSE;
-
-    Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Entry & ARM64_PTE_ADDR_MASK);
-    Entry = Table[(Va >> PDI_SHIFT) & PDI_MASK_ARM64];
-    if ((Entry & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_BLOCK)
-        return TRUE;
-    if ((Entry & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
-        return FALSE;
-
-    Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Entry & ARM64_PTE_ADDR_MASK);
-    Entry = Table[(Va >> PTI_SHIFT) & PTI_MASK_ARM64];
-    return ((Entry & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_PAGE);
+    return ((Leaf & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_BLOCK);
 }
 
 static
@@ -272,61 +299,36 @@ KiArm64DumpKernelWalk(
     _In_z_ PCSTR Tag,
     _In_ ULONG64 Va)
 {
-    ULONG64 Ttbr1 = 0, RootPa = 0;
-    ULONG64 L0Entry = 0, L1Entry = 0, L2Entry = 0, L3Entry = 0;
+    ULONG64 Ttbr1 = 0;
+    ULONG64 Entries[4];
+    volatile ULONG64 *Slots[4];
+    ULONG Depth;
     ULONG64 FinalEntry = 0;
-    volatile ULONG64 *Table;
     PCSTR Level = "none";
     MMPTE HwPte;
-
-    HwPte.u.Long = 0;
 
     if ((ULONG_PTR)Va < (ULONG_PTR)MmSystemRangeStart)
         return;
 
     __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
-    RootPa = Ttbr1 & ARM64_PTE_ADDR_MASK;
-    if (RootPa == 0)
-        goto Dump;
+    Depth = KiArm64WalkPageTable(Ttbr1, Va, Entries, Slots);
 
-    Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(RootPa);
-    L0Entry = Table[MiAddressToPxi((PVOID)(ULONG_PTR)Va)];
-    if ((L0Entry & 1ULL) == 0)
-        goto Dump;
-
-    Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L0Entry & ARM64_PTE_ADDR_MASK);
-    L1Entry = Table[((ULONG_PTR)Va >> PPI_SHIFT) & PPI_MASK];
-    if ((L1Entry & 1ULL) == 0)
-        goto Dump;
-
-    if ((L1Entry & 3ULL) == 1ULL)
+    if ((Depth == 2) && ((Entries[1] & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_BLOCK))
     {
-        FinalEntry = L1Entry;
+        FinalEntry = Entries[1];
         Level = "l1blk";
-        goto Dump;
     }
-
-    Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L1Entry & ARM64_PTE_ADDR_MASK);
-    L2Entry = Table[MiAddressToPdi((PVOID)(ULONG_PTR)Va)];
-    if ((L2Entry & 1ULL) == 0)
-        goto Dump;
-
-    if ((L2Entry & 3ULL) == 1ULL)
+    else if ((Depth == 3) && ((Entries[2] & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_BLOCK))
     {
-        FinalEntry = L2Entry;
+        FinalEntry = Entries[2];
         Level = "l2blk";
-        goto Dump;
     }
-
-    Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L2Entry & ARM64_PTE_ADDR_MASK);
-    L3Entry = Table[MiAddressToPti((PVOID)(ULONG_PTR)Va)];
-    if ((L3Entry & 1ULL) != 0)
+    else if ((Depth == 4) && ((Entries[3] & 1ULL) != 0))
     {
-        FinalEntry = L3Entry;
+        FinalEntry = Entries[3];
         Level = "l3pg";
     }
 
-Dump:
     HwPte.u.Long = FinalEntry;
 
     DPRINT1("[arm64][KWALK] %s va=%p ttbr1=0x%016llx root=0x%016llx "
@@ -336,11 +338,11 @@ Dump:
             Tag,
             (PVOID)(ULONG_PTR)Va,
             (unsigned long long)Ttbr1,
-            (unsigned long long)RootPa,
-            (unsigned long long)L0Entry,
-            (unsigned long long)L1Entry,
-            (unsigned long long)L2Entry,
-            (unsigned long long)L3Entry,
+            (unsigned long long)(Ttbr1 & ARM64_PTE_ADDR_MASK),
+            (unsigned long long)Entries[0],
+            (unsigned long long)Entries[1],
+            (unsigned long long)Entries[2],
+            (unsigned long long)Entries[3],
             Level,
             (unsigned long long)FinalEntry,
             (ULONG_PTR)((FinalEntry & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT),
@@ -355,26 +357,6 @@ Dump:
 }
 
 static
-BOOLEAN
-KiArm64ShouldTraceSystemDllAddress(
-    _In_opt_ PEPROCESS Process,
-    _In_ ULONG64 Va)
-{
-    ULONG_PTR Base;
-    ULONG_PTR Address;
-
-    if ((Process == NULL) || (PspSystemDllBase == NULL))
-        return FALSE;
-
-    Address = (ULONG_PTR)Va;
-    if (Address >= (ULONG_PTR)MmSystemRangeStart)
-        return FALSE;
-
-    Base = (ULONG_PTR)PspSystemDllBase;
-    return ((Address >= Base) && (Address < (Base + 0x200000)));
-}
-
-static
 VOID
 KiArm64DumpUserWalk(
     _In_z_ PCSTR Tag,
@@ -383,9 +365,11 @@ KiArm64DumpUserWalk(
     PFN_NUMBER PteFrame = 0;
     PMMPTE PointerPte;
     MMPTE HwPte;
-    ULONG64 Ttbr0 = 0, RootPa = 0;
-    ULONG64 L0Entry = 0, L1Entry = 0, L2Entry = 0, L3Entry = 0;
+    ULONG64 Ttbr0 = 0;
+    ULONG64 Entries[4] = {0, 0, 0, 0};
+    volatile ULONG64 *Slots[4];
     ULONG Depth = 0;
+    ULONG Level;
 
     PointerPte = MiArm64UserPteKseg0ForPfn((PVOID)(ULONG_PTR)PAGE_ALIGN(Va), &PteFrame);
     if (PointerPte != NULL)
@@ -399,45 +383,15 @@ KiArm64DumpUserWalk(
 
     if ((ULONG_PTR)Va < (ULONG_PTR)MmSystemRangeStart)
     {
-        volatile ULONG64 *Table;
-        ULONG Index;
+        ULONG Read;
 
         __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-        RootPa = Ttbr0 & ARM64_PTE_ADDR_MASK;
-        if (RootPa != 0)
+        Read = KiArm64WalkPageTable(Ttbr0, Va, Entries, Slots);
+        for (Level = 0; Level < Read; Level++)
         {
-            Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(RootPa);
-            Index = ((ULONG_PTR)Va >> 39) & 0x1FF;
-            L0Entry = Table[Index];
-            if ((L0Entry & 0x3ULL) == 0x3ULL)
-            {
-                Depth = 1;
-                Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L0Entry & ARM64_PTE_ADDR_MASK);
-                Index = ((ULONG_PTR)Va >> 30) & 0x1FF;
-                L1Entry = Table[Index];
-                if ((L1Entry & 0x1ULL) != 0)
-                {
-                    Depth = 2;
-                    if ((L1Entry & 0x3ULL) == 0x3ULL)
-                    {
-                        Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L1Entry & ARM64_PTE_ADDR_MASK);
-                        Index = ((ULONG_PTR)Va >> 21) & 0x1FF;
-                        L2Entry = Table[Index];
-                        if ((L2Entry & 0x1ULL) != 0)
-                        {
-                            Depth = 3;
-                            if ((L2Entry & 0x3ULL) == 0x3ULL)
-                            {
-                                Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L2Entry & ARM64_PTE_ADDR_MASK);
-                                Index = ((ULONG_PTR)Va >> 12) & 0x1FF;
-                                L3Entry = Table[Index];
-                                if ((L3Entry & 0x3ULL) == 0x3ULL)
-                                    Depth = 4;
-                            }
-                        }
-                    }
-                }
-            }
+            if ((Entries[Level] & 1ULL) == 0)
+                break;
+            Depth = Level + 1;
         }
     }
 
@@ -448,11 +402,11 @@ KiArm64DumpUserWalk(
             Tag,
             (PVOID)(ULONG_PTR)Va,
             Depth,
-            (unsigned long long)RootPa,
-            (unsigned long long)L0Entry,
-            (unsigned long long)L1Entry,
-            (unsigned long long)L2Entry,
-            (unsigned long long)L3Entry,
+            (unsigned long long)(Ttbr0 & ARM64_PTE_ADDR_MASK),
+            (unsigned long long)Entries[0],
+            (unsigned long long)Entries[1],
+            (unsigned long long)Entries[2],
+            (unsigned long long)Entries[3],
             PointerPte,
             (unsigned long long)HwPte.u.Long,
             (ULONG_PTR)PteFrame,
@@ -544,10 +498,13 @@ KiArm64FixupUserAccessFlagFault(
     _In_ PVOID FaultAddress,
     _In_ ULONG FaultStatus)
 {
-    ULONG64 Ttbr0, RootPa;
-    volatile ULONG64 *L0Table, *L1Table, *L2Table, *L3Table;
-    ULONG L0Idx, L1Idx, L2Idx, L3Idx;
-    ULONG64 L0Entry, L1Entry, L2Entry, L3Entry;
+    ULONG64 Ttbr0;
+    ULONG64 Entries[4];
+    volatile ULONG64 *Slots[4];
+    ULONG Depth;
+    ULONG TargetLevel;
+    ULONG64 RequiredType;
+    ULONG64 Entry;
 
     /* Access Flag fault codes: 0x9/0xA/0xB for levels 1/2/3 */
     if ((FaultStatus != 0x9) && (FaultStatus != 0xA) && (FaultStatus != 0xB))
@@ -556,85 +513,28 @@ KiArm64FixupUserAccessFlagFault(
     if ((ULONG_PTR)FaultAddress >= (ULONG_PTR)MmSystemRangeStart)
         return FALSE;
 
+    /* 0x9/0xA fault on a level-1/2 block descriptor, 0xB on the level-3 page */
+    TargetLevel = FaultStatus - 0x8;
+    RequiredType = (FaultStatus == 0xB) ? ARM64_PTE_TYPE_PAGE : ARM64_PTE_TYPE_BLOCK;
+
     __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-    RootPa = Ttbr0 & ARM64_PTE_ADDR_MASK;
-    if (RootPa == 0)
+    Depth = KiArm64WalkPageTable(Ttbr0, (ULONG64)(ULONG_PTR)FaultAddress, Entries, Slots);
+    if (Depth <= TargetLevel)
         return FALSE;
 
-    L0Idx = ((ULONG64)(ULONG_PTR)FaultAddress >> 39) & 0x1FF;
-    L1Idx = ((ULONG64)(ULONG_PTR)FaultAddress >> 30) & 0x1FF;
-    L2Idx = ((ULONG64)(ULONG_PTR)FaultAddress >> 21) & 0x1FF;
-    L3Idx = ((ULONG64)(ULONG_PTR)FaultAddress >> 12) & 0x1FF;
-
-    L0Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(RootPa);
-    L0Entry = L0Table[L0Idx];
-    if ((L0Entry & 0x3ULL) != 0x3ULL)
+    Entry = Entries[TargetLevel];
+    if ((Entry & ARM64_PTE_TYPE_MASK) != RequiredType)
         return FALSE;
 
-    L1Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L0Entry & ARM64_PTE_ADDR_MASK);
-    L1Entry = L1Table[L1Idx];
-    if ((L1Entry & 0x1ULL) == 0)
-        return FALSE;
-    if ((FaultStatus == 0x9) && ((L1Entry & 0x3ULL) == 0x1ULL))
-    {
-        if ((L1Entry & (1ULL << 10)) == 0)
-            L1Table[L1Idx] = (L1Entry | (1ULL << 10));
-        goto TlbFlush;
-    }
-    if ((L1Entry & 0x3ULL) != 0x3ULL)
-        return FALSE;
+    if ((Entry & (1ULL << 10)) == 0)
+        *Slots[TargetLevel] = (Entry | (1ULL << 10));
 
-    L2Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L1Entry & ARM64_PTE_ADDR_MASK);
-    L2Entry = L2Table[L2Idx];
-    if ((L2Entry & 0x1ULL) == 0)
-        return FALSE;
-    if ((FaultStatus == 0xA) && ((L2Entry & 0x3ULL) == 0x1ULL))
-    {
-        if ((L2Entry & (1ULL << 10)) == 0)
-            L2Table[L2Idx] = (L2Entry | (1ULL << 10));
-        goto TlbFlush;
-    }
-    if ((L2Entry & 0x3ULL) != 0x3ULL)
-        return FALSE;
-
-    L3Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L2Entry & ARM64_PTE_ADDR_MASK);
-    L3Entry = L3Table[L3Idx];
-    if ((FaultStatus == 0xB) && ((L3Entry & 0x3ULL) == 0x3ULL))
-    {
-        if ((L3Entry & (1ULL << 10)) == 0)
-            L3Table[L3Idx] = (L3Entry | (1ULL << 10));
-        goto TlbFlush;
-    }
-
-    return FALSE;
-
-TlbFlush:
     __asm__ __volatile__("dsb ishst" ::: "memory");
     __asm__ __volatile__("tlbi vaae1is, %0" :: "r"((ULONG_PTR)FaultAddress >> PAGE_SHIFT) : "memory");
     __asm__ __volatile__("dsb ish" ::: "memory");
     __asm__ __volatile__("isb" ::: "memory");
     return TRUE;
 }
-
-static __inline VOID
-KiArm64StageLogf(
-    _In_z_ _Printf_format_string_ PCSTR Format,
-    ...)
-{
-    CHAR Buffer[192];
-    va_list Args;
-
-    va_start(Args, Format);
-    if (NT_SUCCESS(RtlStringCbVPrintfA(Buffer, sizeof(Buffer), Format, Args)))
-    {
-        DPRINT1("%s\n", Buffer);
-    }
-    va_end(Args);
-}
-
-#ifndef KI_ARM64_STAGE_LOGF
-#define KI_ARM64_STAGE_LOGF(...) KiArm64StageLogf(__VA_ARGS__)
-#endif
 
 NTSTATUS
 NTAPI
@@ -660,139 +560,11 @@ MmAccessFault(
     _In_ KPROCESSOR_MODE Mode,
     _In_ PVOID TrapInformation);
 
-static KIRQL KiArm64LastDataAbortIrql;
-static LONG KiArm64HighIrqlFaultLogBudget = 16;
-
 VOID
 KiSystemService(
     _Inout_ PKTHREAD Thread,
     _Inout_ PKTRAP_FRAME TrapFrame,
     _In_ ULONG Instruction);
-
-/*
- * ============================================================================
- * ARM64 ASID allocator (E1/E2) - perf optimization, OFF by default.
- * ============================================================================
- *
- * Each process is lazily tagged with a unique 8-bit ASID stored in the ASID
- * field of DirectoryTableBase[0] (== TTBR0_EL1). KiArm64WriteUserTtbr then skips
- * the per-switch broadcast TLB flush, because translations are kept tagged per
- * ASID instead of shared under ASID 0.
- *
- * Default behaviour is unchanged: KiArm64AsidEnabled is FALSE, so no ASID is
- * ever assigned, DirectoryTableBase[0] keeps ASID 0, and every switch flushes
- * exactly as before.
- *
- * WARNING: KiInitializeKernel now forces TCR.A1=1 (TTBR1 selects the current
- * ASID, matching Win11), but this allocator still composes the ASID into TTBR0
- * (KiArm64WriteUserTtbr) -- which is only the current ASID when A1=0. Do NOT set
- * KiArm64AsidEnabled = TRUE until the allocator is reworked to place the ASID in
- * TTBR1_EL1.ASID (the A1=1 model) and user leaf PTEs are confirmed non-global
- * (nG=1); otherwise the flush-free switch would run with every user translation
- * tagged ASID 0 -> cross-process stale-translation corruption.
- *
- * Allocation is lock-free; ASIDs are never reused (a process that cannot get a
- * free ASID simply keeps ASID 0 and full-flushes), so a freshly allocated ASID
- * can never alias another process's cached translations.
- */
-BOOLEAN KiArm64AsidEnabled = FALSE;
-
-#define KI_ARM64_ASID_COUNT 256
-static volatile LONG KiArm64AsidBitmap[KI_ARM64_ASID_COUNT / 32];
-
-static
-ULONG
-KiArm64AllocateAsid(VOID)
-{
-    ULONG Asid;
-
-    /* ASID 0 is reserved for the "no ASID / full-flush" fallback. */
-    for (Asid = 1; Asid < KI_ARM64_ASID_COUNT; Asid++)
-    {
-        if (!InterlockedBitTestAndSet(&KiArm64AsidBitmap[Asid >> 5], (LONG)(Asid & 31)))
-        {
-            return Asid;   /* transitioned this bit 0 -> 1: it is ours */
-        }
-    }
-
-    return 0;   /* exhausted: caller stays on ASID 0 (full-flush, still correct) */
-}
-
-static
-VOID
-KiArm64FreeAsid(
-    _In_ ULONG Asid)
-{
-    if ((Asid != 0) && (Asid < KI_ARM64_ASID_COUNT))
-    {
-        InterlockedBitTestAndReset(&KiArm64AsidBitmap[Asid >> 5], (LONG)(Asid & 31));
-    }
-}
-
-static
-VOID
-KiArm64EnsureProcessAsid(
-    _Inout_ PKPROCESS Process)
-{
-    ULONG Asid;
-
-    if (!KiArm64AsidEnabled || (Process == NULL))
-        return;
-
-    /* No address space yet, or already tagged: nothing to do. The ASID lives in
-     * the native Win11 KPROCESS.Asid field (0x030); DirectoryTableBase[0] stays
-     * a pure physical table base. */
-    if ((Process->DirectoryTableBase[0] == 0) || (Process->Asid != 0))
-        return;
-
-    Asid = KiArm64AllocateAsid();
-    if (Asid == 0)
-        return;   /* none free: leave at ASID 0 (full-flush path) */
-
-    /* Publish atomically; if another CPU tagged it first, give our ASID back. */
-    if (InterlockedCompareExchange((volatile LONG *)&Process->Asid, (LONG)Asid, 0) != 0)
-    {
-        KiArm64FreeAsid(Asid);
-    }
-}
-
-/*
- * KiArm64ReleaseProcessAsid - reclaim a process's ASID when its address space
- * is torn down (called from MmDeleteProcessAddressSpace).
- *
- * Freeing on teardown is what keeps the 256-entry ASID space from leaking: a
- * killed process returns its ASID for reuse, so exhaustion (and the ASID-0
- * full-flush fallback) only happens when more than 255 processes are alive at
- * once, rather than after 255 processes have ever existed. The ASID's stale
- * translations are invalidated before the slot can be recycled.
- *
- * No-op unless the allocator is enabled.
- */
-VOID
-NTAPI
-KiArm64ReleaseProcessAsid(
-    _Inout_ PKPROCESS Process)
-{
-    ULONG Asid;
-
-    if (!KiArm64AsidEnabled || (Process == NULL))
-        return;
-
-    Asid = Process->Asid;
-    if (Asid == 0)
-        return;
-
-    /* Evict this ASID's translations before the slot is recycled. */
-    __asm__ __volatile__("dsb ishst" ::: "memory");
-    __asm__ __volatile__("tlbi aside1is, %0"
-                         :: "r"((ULONGLONG)Asid << KI_ARM64_TTBR_ASID_SHIFT)
-                         : "memory");
-    __asm__ __volatile__("dsb ish" ::: "memory");
-    __asm__ __volatile__("isb" ::: "memory");
-
-    KiArm64FreeAsid(Asid);
-    Process->Asid = 0;
-}
 
 VOID
 NTAPI
@@ -856,14 +628,8 @@ KiSwapProcess(_Inout_ PKPROCESS NewProcess,
     ASSERT(NewProcess->DirectoryTableBase[0] != 0);
     ASSERT(NewProcess->Unused0 != 0);   /* hyperspace root (Win11 ARM64: 0x030 is the ASID field) */
 
-    /* Lazily assign this process an ASID (no-op unless the allocator is enabled);
-     * KiArm64WriteUserTtbr then switches flush-free when an ASID is present. The
-     * ASID is composed into TTBR0 here; DirectoryTableBase[0] itself stays a
-     * pure physical table base. */
-    KiArm64EnsureProcessAsid(NewProcess);
-
-    KiArm64WriteUserTtbr((NewProcess->DirectoryTableBase[0] & KI_ARM64_TTBR_ADDR_MASK) |
-                         ((ULONGLONG)NewProcess->Asid << KI_ARM64_TTBR_ASID_SHIFT));
+    KiArm64WriteUserTtbr(NewProcess->DirectoryTableBase[0] & KI_ARM64_TTBR_ADDR_MASK,
+                         NewKernelRoot);
 }
 
 typedef struct _ARM64_EARLY_SYNC_CONTEXT
@@ -1001,20 +767,21 @@ KiArm64InitializeTrapFrame(
     Context->ExceptionFramePointer = ExceptionFrame;
 }
 
-static LONG KiArm64SyncExceptionLogBudget = 128;
-static LONG KiArm64SessionFaultLogBudget = 16;
-extern volatile ULONG_PTR MiArm64SessionWsStage;
-extern volatile ULONG_PTR MiArm64SessionWsFp;
-extern volatile ULONG_PTR MiArm64SessionWsLr;
-extern volatile ULONG_PTR MiArm64SessionWsSavedFp;
-extern volatile ULONG_PTR MiArm64SessionWsSavedLr;
-extern volatile ULONG_PTR MiArm64SessionWsSp;
 /*
  * One-shot trap guard per CPU to prevent recursive exception storms before
  * the debugger is fully operational. Set on first entry; any re-entry while
  * set triggers an immediate bugcheck with the captured context.
+ *
+ * Each slot is only ever accessed by its own CPU (traps nest sequentially on
+ * one CPU), so plain volatile accesses suffice; the cache-line alignment
+ * keeps the per-syscall/per-fault writes from bouncing a shared line.
  */
-static volatile LONG KiArm64TrapActive[MAXIMUM_PROCESSORS] = {0};
+typedef struct DECLSPEC_ALIGN(64) _KI_ARM64_TRAP_GUARD
+{
+    volatile LONG Active;
+} KI_ARM64_TRAP_GUARD;
+
+static KI_ARM64_TRAP_GUARD KiArm64TrapActive[MAXIMUM_PROCESSORS];
 
 static
 VOID
@@ -1061,61 +828,6 @@ KiArm64DeliverPendingUserApc(
     }
 }
 
-static
-VOID
-KiArm64ReleaseWorkingSetsForBugCheck(VOID)
-{
-    PETHREAD Thread = PsGetCurrentThread();
-    PEPROCESS Process = PsGetCurrentProcess();
-    BOOLEAN Raised = FALSE;
-    KIRQL PreviousIrql = KeGetCurrentIrql();
-
-    if (PreviousIrql < APC_LEVEL)
-    {
-        KeRaiseIrql(APC_LEVEL, &PreviousIrql);
-        Raised = TRUE;
-    }
-
-    if (Thread->OwnsSystemWorkingSetExclusive || Thread->OwnsSystemWorkingSetShared)
-    {
-        DbgPrintEx(DPFLTR_DEFAULT_ID,
-                   DPFLTR_TRACE_LEVEL,
-                   "[arm64] KiArm64ReleaseWorkingSets: releasing system WS=%p thread=%p mutex=%p count=0x%llx\n",
-                   &MmSystemCacheWs,
-                   Thread,
-                   &MmSystemCacheWs.WorkingSetMutex,
-                   (unsigned long long)MmSystemCacheWs.WorkingSetMutex.Value);
-        MiUnlockWorkingSet(Thread, &MmSystemCacheWs);
-    }
-
-    if ((Thread->OwnsSessionWorkingSetExclusive || Thread->OwnsSessionWorkingSetShared) &&
-        (MmSessionSpace != NULL))
-    {
-        MiUnlockWorkingSet(Thread, &MmSessionSpace->GlobalVirtualAddress->Vm);
-    }
-
-    if (Thread->OwnsProcessWorkingSetExclusive || Thread->OwnsProcessWorkingSetShared)
-    {
-        if (Process != NULL)
-        {
-            DbgPrintEx(DPFLTR_DEFAULT_ID,
-                       DPFLTR_TRACE_LEVEL,
-                       "[arm64] KiArm64ReleaseWorkingSets: releasing process WS thread=%p process=%p vm=%p mutex=%p count=0x%llx\n",
-                       Thread,
-                       Process,
-                       &Process->Vm,
-                       &Process->Vm.WorkingSetMutex,
-                       (unsigned long long)Process->Vm.WorkingSetMutex.Value);
-            MiUnlockProcessWorkingSetUnsafe(Process, Thread);
-        }
-    }
-
-    if (Raised)
-    {
-        KeLowerIrql(PreviousIrql);
-    }
-}
-
 static __inline VOID
 KiArm64ClearTrapActive(VOID)
 {
@@ -1123,7 +835,7 @@ KiArm64ClearTrapActive(VOID)
 
     if (ProcessorIndex < MAXIMUM_PROCESSORS)
     {
-        InterlockedExchange(&KiArm64TrapActive[ProcessorIndex], 0);
+        KiArm64TrapActive[ProcessorIndex].Active = 0;
     }
 }
 
@@ -1153,13 +865,6 @@ KiArm64BuildFaultCode(
     _In_ KPROCESSOR_MODE PreviousMode)
 {
     ULONG Code = 0;
-
-    /* Prevent unused warnings for bring-up-only debug guards on GCC/MinGW. */
-    if (0)
-    {
-        (void)KiArm64SyncExceptionLogBudget;
-        KiArm64ReleaseWorkingSetsForBugCheck();
-    }
 
     switch (FaultStatus & 0x3FULL)
     {
@@ -1197,16 +902,6 @@ KiArm64BuildFaultCode(
     return Code;
 }
 
-static
-VOID
-KiArm64ReportUnhandledSyncException(
-    _Inout_ PARM64_EARLY_SYNC_CONTEXT Context,
-    _In_ ULONG Esr)
-{
-    UNREFERENCED_PARAMETER(Context);
-    UNREFERENCED_PARAMETER(Esr);
-}
-
 static volatile LONG KiArm64FirstCrashPrinted;
 
 DECLSPEC_NORETURN
@@ -1240,11 +935,12 @@ KiArm64BugCheckSynchronousException(
     /* Print first crash info */
     if (InterlockedCompareExchange(&KiArm64FirstCrashPrinted, 1, 0) == 0)
     {
-        KI_ARM64_STAGE_LOGF("[arm64] FirstCrash: vec=%lu esr=0x%lx elr=%p far=%p",
-                           (ULONG)Context->State.VectorId,
-                           (ULONG)Context->State.ExceptionSyndrome,
-                           (PVOID)(ULONG_PTR)Context->State.Elr,
-                           (PVOID)(ULONG_PTR)Context->State.FaultAddress);
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "[arm64] FirstCrash: vec=%lu esr=0x%lx elr=%p far=%p\n",
+                   (ULONG)Context->State.VectorId,
+                   (ULONG)Context->State.ExceptionSyndrome,
+                   (PVOID)(ULONG_PTR)Context->State.Elr,
+                   (PVOID)(ULONG_PTR)Context->State.FaultAddress);
         DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
                    "[arm64] CRASH regs: elr=%p far=%p x0=%p x1=%p lr=%p fp=%p cpu=%lu\n",
                    (PVOID)(ULONG_PTR)Context->State.Elr,
@@ -1361,11 +1057,12 @@ KiArm64HandleSynchronousException(
             (CpuIndex < MAXIMUM_PROCESSORS) &&
             (FaultMode == KernelMode))
         {
-            if (InterlockedCompareExchange(&KiArm64TrapActive[CpuIndex], 1, 0) != 0)
+            if (KiArm64TrapActive[CpuIndex].Active != 0)
             {
                 KiArm64BugCheckSynchronousException(Context);
                 return TRUE; /* not reached */
             }
+            KiArm64TrapActive[CpuIndex].Active = 1;
         }
     }
 
@@ -1380,10 +1077,7 @@ KiArm64HandleSynchronousException(
 
                     if (KiArm64HandleFpTrap(TrapFrame, Esr))
                     {
-                        Context->TrapFramePointer = TrapFrame;
-                        Context->ExceptionFramePointer = &Context->ExceptionFrame;
-                        KiArm64ClearTrapActive();
-                        return TRUE;
+                        goto HandledExit;
                     }
 
                     break;
@@ -1532,9 +1226,7 @@ KiArm64HandleSynchronousException(
                         (PVOID)(ULONG_PTR)TrapFrame->TrapFrame,
                         Thread->TrapFrame);
             }
-            Context->TrapFramePointer = TrapFrame;
-            Context->ExceptionFramePointer = &Context->ExceptionFrame;
-            return TRUE;
+            goto HandledExit;
         }
 
 	        case 0x20: /* Instruction abort, lower EL */
@@ -1580,9 +1272,7 @@ KiArm64HandleSynchronousException(
                 if (KiArm64FixupUserAccessFlagFault(
                         (PVOID)(ULONG_PTR)Context->State.FaultAddress, FaultStatus))
                 {
-                    Context->TrapFramePointer = TrapFrame;
-                    Context->ExceptionFramePointer = &Context->ExceptionFrame;
-                    return TRUE;
+                    goto HandledExit;
                 }
             }
 
@@ -1630,10 +1320,7 @@ KiArm64HandleSynchronousException(
                     __asm__ __volatile__("isb" ::: "memory");
                 }
 
-                Context->TrapFramePointer = TrapFrame;
-                Context->ExceptionFramePointer = &Context->ExceptionFrame;
-                KiArm64ClearTrapActive();
-                return TRUE;
+                goto HandledExit;
             }
 
             RtlZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
@@ -1645,19 +1332,13 @@ KiArm64HandleSynchronousException(
             ExceptionRecord.ExceptionInformation[0] = KiArm64AccessTypeToExceptionInfo(WriteAccess, TRUE);
             ExceptionRecord.ExceptionInformation[1] = (ULONG_PTR)Context->State.FaultAddress;
 
-            if (!KdDebuggerEnabled || KdDebuggerNotPresent)
-                KiArm64ReportUnhandledSyncException(Context, Esr);
-
             KiDispatchException(&ExceptionRecord,
                                 Context->ExceptionFramePointer,
                                 TrapFrame,
                                 PreviousMode,
                                 TRUE);
 
-            Context->TrapFramePointer = TrapFrame;
-            Context->ExceptionFramePointer = &Context->ExceptionFrame;
-            KiArm64ClearTrapActive();
-            return TRUE;
+            goto HandledExit;
         }
 
         case 0x24: /* Data abort, lower EL */
@@ -1666,6 +1347,7 @@ KiArm64HandleSynchronousException(
             PETHREAD CurrentThread;
             ULONG64 CurrentSp;
             PVOID StackLimit;
+            KIRQL AbortIrql;
 
             /*
              * ARM64: Handle alignment faults (DFSC = 0x21) as exceptions.
@@ -1701,21 +1383,13 @@ KiArm64HandleSynchronousException(
                 ExceptionRecord.ExceptionInformation[0] = (ULONG_PTR)IsWrite;
                 ExceptionRecord.ExceptionInformation[1] = (ULONG_PTR)Context->State.FaultAddress;
 
-                if (!KdDebuggerEnabled || KdDebuggerNotPresent)
-                {
-                    KiArm64ReportUnhandledSyncException(Context, Esr);
-                }
-
                 KiDispatchException(&ExceptionRecord,
                                     Context->ExceptionFramePointer,
                                     TrapFrame,
                                     Mode,
                                     TRUE);
 
-                Context->TrapFramePointer = TrapFrame;
-                Context->ExceptionFramePointer = &Context->ExceptionFrame;
-                KiArm64ClearTrapActive();
-                return TRUE;
+                goto HandledExit;
             }
 
 
@@ -1810,10 +1484,7 @@ KiArm64HandleSynchronousException(
                     {
                         if (KiArm64FixupUserAccessFlagFault(AddressArg, FaultStatus))
                         {
-                            Context->TrapFramePointer = TrapFrame;
-                            Context->ExceptionFramePointer = &Context->ExceptionFrame;
-                            KiArm64ClearTrapActive();
-                            return TRUE;
+                            goto HandledExit;
                         }
                     }
 
@@ -1836,64 +1507,12 @@ KiArm64HandleSynchronousException(
                      */
                     KiArm64ClearTrapActive();
 
-                    if ((MmSessionSpace != NULL) &&
-                        ((ULONG_PTR)AddressArg >= (ULONG_PTR)MmSessionSpace) &&
-                        ((ULONG_PTR)AddressArg < ((ULONG_PTR)MmSessionSpace + PAGE_SIZE)) &&
-                        (InterlockedDecrement(&KiArm64SessionFaultLogBudget) >= 0))
-                    {
-                        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                                   "[arm64][SESSION-DA] pre va=%p elr=%p esr=0x%lx dfsc=0x%lx write=%d "
-                                   "tf=%p ef=%p sp=%p fp=%p lr=%p x8=%p x10=%p x11=%p prev=%d stage=%p\n",
-                                   AddressArg,
-                                   (PVOID)(ULONG_PTR)Context->State.Elr,
-                                   Esr,
-                                   (ULONG)FaultStatus,
-                                   (int)WriteAccess,
-                                   TrapFrame,
-                                   &Context->ExceptionFrame,
-                                   (PVOID)TrapFrame->Sp,
-                                   (PVOID)TrapFrame->Fp,
-                                   (PVOID)TrapFrame->Lr,
-                                   (PVOID)TrapFrame->X8,
-                                   (PVOID)TrapFrame->X10,
-                                   (PVOID)TrapFrame->X11,
-                                   (int)PreviousMode,
-                                   (PVOID)MiArm64SessionWsStage);
-                    }
-
-                    KiArm64LastDataAbortIrql = KeGetCurrentIrql();
-                    if ((KiArm64LastDataAbortIrql >= DISPATCH_LEVEL) && (InterlockedDecrement(&KiArm64HighIrqlFaultLogBudget) >= 0))
-                    {
-                        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL, "[arm64][HIGH-IRQL-FAULT] irql=%u va=%p pc=%p lr=%p sp=%p code=0x%lx mode=%d\n", (ULONG)KiArm64LastDataAbortIrql, AddressArg, (PVOID)(ULONG_PTR)Context->State.Elr, (PVOID)TrapFrame->Lr, (PVOID)TrapFrame->Sp, FaultCodeArg, (int)PreviousMode);
-                    }
+                    AbortIrql = KeGetCurrentIrql();
 
                     Status = MmAccessFault(FaultCodeArg, AddressArg, PreviousMode, TrapFrame);
 
                     /* MM refuses not-present faults above APC_LEVEL; that is a fatal IRQL contract violation */
                     if (Status == (NTSTATUS)(STATUS_IN_PAGE_ERROR | 0x10000000)) KeBugCheckEx(IRQL_NOT_LESS_OR_EQUAL, (ULONG_PTR)AddressArg, KeGetCurrentIrql(), WriteAccess ? 1 : 0, (ULONG_PTR)Context->State.Elr);
-
-                    if ((MmSessionSpace != NULL) &&
-                        ((ULONG_PTR)AddressArg >= (ULONG_PTR)MmSessionSpace) &&
-                        ((ULONG_PTR)AddressArg < ((ULONG_PTR)MmSessionSpace + PAGE_SIZE)) &&
-                        (KiArm64SessionFaultLogBudget >= 0))
-                    {
-                        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                                   "[arm64][SESSION-DA] post status=0x%lx tfpc=%p tffp=%p tflr=%p tfsp=%p "
-                                   "x19=%p x20=%p x21=%p x29=%p x30=%p stage=%p savedfp=%p savedlr=%p\n",
-                                   Status,
-                                   (PVOID)TrapFrame->Pc,
-                                   (PVOID)TrapFrame->Fp,
-                                   (PVOID)TrapFrame->Lr,
-                                   (PVOID)TrapFrame->Sp,
-                                   (PVOID)Context->ExceptionFrame.X19,
-                                   (PVOID)Context->ExceptionFrame.X20,
-                                   (PVOID)Context->ExceptionFrame.X21,
-                                   (PVOID)TrapFrame->Fp,
-                                   (PVOID)TrapFrame->Lr,
-                                   (PVOID)MiArm64SessionWsStage,
-                                   (PVOID)MiArm64SessionWsSavedFp,
-                                   (PVOID)MiArm64SessionWsSavedLr);
-                    }
                 }
 
 #if DBG && defined(ARM64_TRAP_TRACE)
@@ -1919,25 +1538,17 @@ KiArm64HandleSynchronousException(
 
                     if (Va < (ULONG_PTR)MmSystemRangeStart)
                     {
-                        static const ULONG Shifts[4] = {39, 30, 21, 12};
                         ULONG64 Root;
-                        ULONG64 Entry;
-                        volatile ULONG64 *Table;
-                        volatile ULONG64 *Slot;
+                        ULONG64 Entries[4];
+                        volatile ULONG64 *Slots[4];
+                        ULONG Depth;
                         ULONG Level;
 
                         __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Root));
-                        Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Root & ARM64_PTE_ADDR_MASK);
-                        for (Level = 0; Level < 4; Level++)
+                        Depth = KiArm64WalkPageTable(Root, Va, Entries, Slots);
+                        for (Level = 0; Level < Depth; Level++)
                         {
-                            Slot = &Table[(Va >> Shifts[Level]) & 0x1FF];
-                            Entry = *Slot;
-                            MiArm64CleanEntryToPoC(Slot);
-                            if ((Level == 3) || ((Entry & 3) != 3))
-                            {
-                                break;
-                            }
-                            Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Entry & ARM64_PTE_ADDR_MASK);
+                            MiArm64CleanEntryToPoC(Slots[Level]);
                         }
                     }
                     else
@@ -1964,10 +1575,7 @@ KiArm64HandleSynchronousException(
                     }
                 }
                 KeInvalidateTlbEntry((PVOID)(ULONG_PTR)Context->State.FaultAddress);
-                Context->TrapFramePointer = TrapFrame;
-                Context->ExceptionFramePointer = &Context->ExceptionFrame;
-                KiArm64ClearTrapActive();
-                return TRUE;
+                goto HandledExit;
             }
 
             /* Not resolved by Mm - unhandled data abort. */
@@ -1998,7 +1606,7 @@ KiArm64HandleSynchronousException(
                     (ULONG)FaultStatus,
                     (int)WriteAccess,
                     (PVOID)(ULONG_PTR)Context->State.VectorId,
-                    (ULONG)KiArm64LastDataAbortIrql,
+                    (ULONG)AbortIrql,
                     (PCSTR)((PEPROCESS)KeGetCurrentThread()->ApcState.Process)->ImageFileName);
                 DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
                     "[DABORT-KERNEL] insn prev=0x%08lx cur=0x%08lx read=0x%lx sp=%p fp=%p lr=%p spsr=0x%lx\n",
@@ -2031,24 +1639,12 @@ KiArm64HandleSynchronousException(
                     (PVOID)Context->ExceptionFrame.X26,
                     (PVOID)Context->ExceptionFrame.X27,
                     (PVOID)Context->ExceptionFrame.X28);
-                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                    "[DABORT-KERNEL] SessWs stage=%p fp=%p lr=%p sp=%p savedfp=%p savedlr=%p\n",
-                    (PVOID)MiArm64SessionWsStage,
-                    (PVOID)MiArm64SessionWsFp,
-                    (PVOID)MiArm64SessionWsLr,
-                    (PVOID)MiArm64SessionWsSp,
-                    (PVOID)MiArm64SessionWsSavedFp,
-                    (PVOID)MiArm64SessionWsSavedLr);
             }
 
             if (PreviousMode == UserMode)
             {
-                PKTHREAD CurrentThread = KeGetCurrentThread();
-                PETHREAD EThread = (PETHREAD)CurrentThread;
-                PEPROCESS CurrentProcess = (PEPROCESS)CurrentThread->ApcState.Process;
-                ULONG64 TpidrEl0 = 0;
-
-                __asm__ __volatile__("mrs %0, tpidr_el0" : "=r"(TpidrEl0));
+                PETHREAD EThread = PsGetCurrentThread();
+                PEPROCESS CurrentProcess = (PEPROCESS)EThread->Tcb.ApcState.Process;
 
                 DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
                     "[DABORT-USER] FAIL VA=%p ELR=%p Status=0x%lx DFSC=0x%lx Write=%d Proc=%s TID=%p\n",
@@ -2058,228 +1654,6 @@ KiArm64HandleSynchronousException(
                     (int)WriteAccess,
                     (PCSTR)CurrentProcess->ImageFileName,
                     (PVOID)EThread->Cid.UniqueThread);
-                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                    "[DABORT-USER] LR=%p SP=%p FP=%p X0=%p X1=%p\n",
-                    (PVOID)TrapFrame->Lr, (PVOID)TrapFrame->Sp,
-                    (PVOID)TrapFrame->Fp, (PVOID)TrapFrame->X0,
-                    (PVOID)TrapFrame->X1);
-                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                    "[DABORT-USER] SPSR=0x%I64x TPIDR_EL0=0x%I64x X18=%p\n",
-                    (unsigned long long)TrapFrame->Spsr,
-                    (unsigned long long)TpidrEl0,
-                    (PVOID)TrapFrame->X[18]);
-                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                    "[DABORT-USER] X2=%p X3=%p X4=%p X5=%p X6=%p X7=%p\n",
-                    (PVOID)TrapFrame->X[2], (PVOID)TrapFrame->X[3],
-                    (PVOID)TrapFrame->X[4], (PVOID)TrapFrame->X[5],
-                    (PVOID)TrapFrame->X[6], (PVOID)TrapFrame->X[7]);
-                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                    "[DABORT-USER] X8=%p X9=%p X10=%p X11=%p X12=%p X13=%p\n",
-                    (PVOID)TrapFrame->X[8], (PVOID)TrapFrame->X[9],
-                    (PVOID)TrapFrame->X[10], (PVOID)TrapFrame->X[11],
-                    (PVOID)TrapFrame->X[12], (PVOID)TrapFrame->X[13]);
-                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                    "[DABORT-USER] X14=%p X15=%p X16=%p X17=%p X19=%p X20=%p\n",
-                    (PVOID)TrapFrame->X[14], (PVOID)TrapFrame->X[15],
-                    (PVOID)TrapFrame->X[16], (PVOID)TrapFrame->X[17],
-                    (PVOID)Context->ExceptionFrame.X19,
-                    (PVOID)Context->ExceptionFrame.X20);
-                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                    "[DABORT-USER] X21=%p X22=%p X23=%p X24=%p X25=%p X26=%p X27=%p X28=%p\n",
-                    (PVOID)Context->ExceptionFrame.X21,
-                    (PVOID)Context->ExceptionFrame.X22,
-                    (PVOID)Context->ExceptionFrame.X23,
-                    (PVOID)Context->ExceptionFrame.X24,
-                    (PVOID)Context->ExceptionFrame.X25,
-                    (PVOID)Context->ExceptionFrame.X26,
-                    (PVOID)Context->ExceptionFrame.X27,
-                    (PVOID)Context->ExceptionFrame.X28);
-                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                    "[DABORT-USER] StartAddr=%p Win32StartAddr=%p\n",
-                    (PVOID)EThread->StartAddress,
-                    (PVOID)EThread->Win32StartAddress);
-
-                /*
-                 * One-shot diagnostic: walk TTBR0 page table to dump PTEs for
-                 * the faulting PC page and the faulting data page. This tells us
-                 * which physical pages are backing the code and data at crash time.
-                 * Also dump 8 bytes of page content via KSEG0 to verify data correctness.
-                 */
-                {
-                    static volatile LONG DabortDiagCount = 0;
-                    if (InterlockedIncrement(&DabortDiagCount) <= 3)
-                    {
-                        ULONG64 Ttbr0;
-                        ULONG64 Ttbr1;
-                        __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-                        __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
-                        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                            "[DABORT-DIAG] TTBR0=0x%I64x TTBR1=0x%I64x\n",
-                            Ttbr0, Ttbr1);
-
-                        /*
-                         * Walk user page table for three VAs:
-                         *  - faulting PC
-                         *  - faulting data address (FAR)
-                         *  - user stack pointer at fault time (SP)
-                         */
-                        ULONG64 DiagVAs[3] = {
-                            Context->State.Elr,
-                            Context->State.FaultAddress,
-                            TrapFrame->Sp
-                        };
-                        const char *DiagNames[3] = { "PC", "FAR", "SP" };
-                        for (int dv = 0; dv < 3; dv++)
-                        {
-                            ULONG64 Va = DiagVAs[dv];
-                            ULONG64 Root = Ttbr0 & 0x0000FFFFFFFFF000ULL;
-                            volatile ULONG64 *L0 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Root);
-                            ULONG L0i = (Va >> 39) & 0x1FF;
-                            ULONG64 L0e = (L0i < 512) ? L0[L0i] : 0;
-                            ULONG64 L1e = 0, L2e = 0, L3e = 0;
-                            PFN_NUMBER DataPfn = 0;
-                            if ((L0e & 0x3) == 0x3) {
-                                volatile ULONG64 *L1 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L0e & 0x0000FFFFFFFFF000ULL);
-                                ULONG L1i = (Va >> 30) & 0x1FF;
-                                L1e = L1[L1i];
-                                if ((L1e & 0x3) == 0x3) {
-                                    volatile ULONG64 *L2 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L1e & 0x0000FFFFFFFFF000ULL);
-                                    ULONG L2i = (Va >> 21) & 0x1FF;
-                                    L2e = L2[L2i];
-                                    if ((L2e & 0x3) == 0x3) {
-                                        volatile ULONG64 *L3 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L2e & 0x0000FFFFFFFFF000ULL);
-                                        ULONG L3i = (Va >> 12) & 0x1FF;
-                                        L3e = L3[L3i];
-                                        if ((L3e & 0x3) == 0x3) {
-                                            DataPfn = (PFN_NUMBER)((L3e >> 12) & 0xFFFFFFFFFULL);
-                                        }
-                                    }
-                                }
-                            }
-                            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                                "[DABORT-DIAG] %s VA=%p L0[%u]=0x%I64x L1e=0x%I64x L2e=0x%I64x L3e=0x%I64x PFN=0x%lx\n",
-                                DiagNames[dv], (PVOID)Va, L0i, L0e, L1e, L2e, L3e, (ULONG)DataPfn);
-                            /* Dump 16 bytes from the page via KSEG0 at the page-offset of the VA */
-                            if (DataPfn != 0)
-                            {
-                                ULONG PageOff = (ULONG)(Va & 0xFFF);
-                                volatile ULONG64 *Kseg = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(((ULONG64)DataPfn << PAGE_SHIFT) | (PageOff & ~7ULL));
-                                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                                    "[DABORT-DIAG] %s KSEG0[%03x]=0x%016I64x %016I64x\n",
-                                    DiagNames[dv], PageOff & ~7U, Kseg[0], Kseg[1]);
-                            }
-                        }
-
-                        if ((Context->State.FaultAddress == 0) &&
-                            (KiArm64ShouldTraceSystemDllAddress(CurrentProcess, Context->State.Elr)))
-                        {
-                            ULONG64 X1 = TrapFrame->X[1];
-                            ULONG64 Fp = TrapFrame->Fp;
-                            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                                "[DABORT-DIAG] ntdll-null x1=%p fp=%p sp=%p lr=%p\n",
-                                (PVOID)X1,
-                                (PVOID)Fp,
-                                (PVOID)TrapFrame->Sp,
-                                (PVOID)TrapFrame->Lr);
-                            KiArm64DumpUserAliasQwords("ntdll-null-x1",
-                                                       X1,
-                                                       (ULONG)(X1 & (PAGE_SIZE - 1)),
-                                                       (ULONG)((X1 + 8) & (PAGE_SIZE - 1)),
-                                                       (ULONG)((X1 + 16) & (PAGE_SIZE - 1)));
-                            KiArm64DumpUserAliasQwords("ntdll-null-fp",
-                                                       Fp,
-                                                       (ULONG)(Fp & (PAGE_SIZE - 1)),
-                                                       (ULONG)((Fp + 8) & (PAGE_SIZE - 1)),
-                                                       (ULONG)((Fp + 16) & (PAGE_SIZE - 1)));
-                            KiArm64DumpUserAliasQwords("ntdll-null-sp-copy",
-                                                       TrapFrame->Sp,
-                                                       (ULONG)((TrapFrame->Sp + 64) & (PAGE_SIZE - 1)),
-                                                       (ULONG)((TrapFrame->Sp + 72) & (PAGE_SIZE - 1)),
-                                                       (ULONG)((TrapFrame->Sp + 80) & (PAGE_SIZE - 1)));
-                        }
-
-                        /*
-                         * kernel32 .rsrc corruption diagnostic: when FAR=0xFF2B4002,
-                         * probe several pages within kernel32's .rsrc section to find
-                         * which page has wrong content. Also dump the page at X0 - 0x1000
-                         * (the page the string walk was on just before the fault).
-                         * Expected values from on-disk PE file for comparison.
-                         */
-                        if (Context->State.FaultAddress == 0xFF2B4002ULL)
-                        {
-                            /* Probe specific VAs within kernel32 .rsrc to find corruption */
-                            static const ULONG64 ProbeVAs[] = {
-                                0xFF09E000ULL,  /* .rsrc start (RVA 0x9E000) */
-                                0xFF262000ULL,  /* locale strings area (RVA 0x262000) */
-                                0xFF2A9000ULL,  /* last full .rsrc page (RVA 0x2A9000) */
-                            };
-                            for (int pv = 0; pv < 3; pv++)
-                            {
-                                ULONG64 PVa = ProbeVAs[pv];
-                                ULONG64 PRoot = Ttbr0 & 0x0000FFFFFFFFF000ULL;
-                                volatile ULONG64 *PL0 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(PRoot);
-                                ULONG PL0i = (PVa >> 39) & 0x1FF;
-                                ULONG64 PL0e = PL0[PL0i];
-                                PFN_NUMBER PPfn = 0;
-                                if ((PL0e & 3) == 3) {
-                                    volatile ULONG64 *PL1 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(PL0e & 0x0000FFFFFFFFF000ULL);
-                                    ULONG64 PL1e = PL1[(PVa >> 30) & 0x1FF];
-                                    if ((PL1e & 3) == 3) {
-                                        volatile ULONG64 *PL2 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(PL1e & 0x0000FFFFFFFFF000ULL);
-                                        ULONG64 PL2e = PL2[(PVa >> 21) & 0x1FF];
-                                        if ((PL2e & 3) == 3) {
-                                            volatile ULONG64 *PL3 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(PL2e & 0x0000FFFFFFFFF000ULL);
-                                            ULONG64 PL3e = PL3[(PVa >> 12) & 0x1FF];
-                                            if ((PL3e & 3) == 3)
-                                                PPfn = (PFN_NUMBER)((PL3e >> 12) & 0xFFFFFFFFFULL);
-                                        }
-                                    }
-                                }
-                                if (PPfn != 0) {
-                                    volatile ULONG64 *PK = (volatile ULONG64 *)MI_ARM64_PFN_TO_VA(PPfn);
-                                    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                                        "[RSRC-DIAG] VA=%p PFN=0x%lx data[0..3]=0x%016I64x 0x%016I64x 0x%016I64x 0x%016I64x\n",
-                                        (PVOID)PVa, (ULONG)PPfn, PK[0], PK[1], PK[2], PK[3]);
-                                } else {
-                                    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                                        "[RSRC-DIAG] VA=%p UNMAPPED\n", (PVOID)PVa);
-                                }
-                            }
-
-                            /* Also probe 16 pages leading up to the fault to find which has bad data */
-                            for (ULONG64 ScanVa = 0xFF2A0000ULL; ScanVa < 0xFF2AC000ULL; ScanVa += 0x1000ULL)
-                            {
-                                ULONG64 SRoot = Ttbr0 & 0x0000FFFFFFFFF000ULL;
-                                volatile ULONG64 *SL0 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(SRoot);
-                                ULONG64 SL0e = SL0[(ScanVa >> 39) & 0x1FF];
-                                PFN_NUMBER SPfn = 0;
-                                if ((SL0e & 3) == 3) {
-                                    volatile ULONG64 *SL1 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(SL0e & 0x0000FFFFFFFFF000ULL);
-                                    ULONG64 SL1e = SL1[(ScanVa >> 30) & 0x1FF];
-                                    if ((SL1e & 3) == 3) {
-                                        volatile ULONG64 *SL2 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(SL1e & 0x0000FFFFFFFFF000ULL);
-                                        ULONG64 SL2e = SL2[(ScanVa >> 21) & 0x1FF];
-                                        if ((SL2e & 3) == 3) {
-                                            volatile ULONG64 *SL3 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(SL2e & 0x0000FFFFFFFFF000ULL);
-                                            ULONG64 SL3e = SL3[(ScanVa >> 12) & 0x1FF];
-                                            if ((SL3e & 3) == 3)
-                                                SPfn = (PFN_NUMBER)((SL3e >> 12) & 0xFFFFFFFFFULL);
-                                        }
-                                    }
-                                }
-                                if (SPfn != 0) {
-                                    volatile ULONG64 *SK = (volatile ULONG64 *)MI_ARM64_PFN_TO_VA(SPfn);
-                                    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                                        "[RSRC-SCAN] VA=%p PFN=0x%lx d[0]=0x%016I64x d[1]=0x%016I64x\n",
-                                        (PVOID)ScanVa, (ULONG)SPfn, SK[0], SK[1]);
-                                } else {
-                                    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                                        "[RSRC-SCAN] VA=%p UNMAPPED\n", (PVOID)ScanVa);
-                                }
-                            }
-                        }
-                    }
-                }
             }
 #ifdef KDBG
             /*
@@ -2331,10 +1705,7 @@ KiArm64HandleSynchronousException(
                                     TRUE);
 
                 /* Return with updated trap frame (either resumed, or KD/bugcheck handled). */
-                Context->TrapFramePointer = TrapFrame;
-                Context->ExceptionFramePointer = &Context->ExceptionFrame;
-                KiArm64ClearTrapActive();
-                return TRUE;
+                goto HandledExit;
             }
         }
 
@@ -2356,19 +1727,13 @@ KiArm64HandleSynchronousException(
             ExceptionRecord.ExceptionAddress = (PVOID)(ULONG_PTR)Context->State.Elr;
             ExceptionRecord.NumberParameters = 0;
 
-            if (!KdDebuggerEnabled || KdDebuggerNotPresent)
-                KiArm64ReportUnhandledSyncException(Context, Esr);
-
             KiDispatchException(&ExceptionRecord,
                                 Context->ExceptionFramePointer,
                                 TrapFrame,
                                 Mode,
                                 TRUE);
 
-            Context->TrapFramePointer = TrapFrame;
-            Context->ExceptionFramePointer = &Context->ExceptionFrame;
-            KiArm64ClearTrapActive();
-            return TRUE;
+            goto HandledExit;
         }
 
         case 0x2F: /* SError */
@@ -2384,10 +1749,7 @@ KiArm64HandleSynchronousException(
 
             if (KiSErrorHandler(TrapFrame))
             {
-                Context->TrapFramePointer = TrapFrame;
-                Context->ExceptionFramePointer = &Context->ExceptionFrame;
-                KiArm64ClearTrapActive();
-                return TRUE;
+                goto HandledExit;
             }
 
             /* Fallback: user-mode termination failed unexpectedly */
@@ -2501,10 +1863,7 @@ KiArm64HandleSynchronousException(
                 TrapFrame->Pc = (ULONG64)((ULONG_PTR)ServiceElr + 4);
                 Context->State.Elr = ServiceElr + 4;
 
-                Context->TrapFramePointer = TrapFrame;
-                Context->ExceptionFramePointer = &Context->ExceptionFrame;
-                KiArm64ClearTrapActive();
-                return TRUE;
+                goto HandledExit;
             }
 
             TrapFrame = &Context->TrapFrame;
@@ -2564,10 +1923,7 @@ KiArm64HandleSynchronousException(
                                     TRUE);
             }
 
-            Context->TrapFramePointer = TrapFrame;
-            Context->ExceptionFramePointer = &Context->ExceptionFrame;
-            KiArm64ClearTrapActive();
-            return TRUE;
+            goto HandledExit;
         }
 
         default:
@@ -2590,8 +1946,7 @@ KiArm64HandleSynchronousException(
                     (int)Mode,
                     (PCSTR)((PEPROCESS)KeGetCurrentThread()->ApcState.Process)->ImageFileName);
             DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                    "[arm64] UNHANDLED regs sp=%p fp=%p lr=%p x19=%p x20=%p x21=%p x22=%p x28=%p "
-                    "sessstage=%p sessfp=%p sesslr=%p sesssp=%p savedfp=%p savedlr=%p\n",
+                    "[arm64] UNHANDLED regs sp=%p fp=%p lr=%p x19=%p x20=%p x21=%p x22=%p x28=%p\n",
                     (PVOID)TrapFrame->Sp,
                     (PVOID)TrapFrame->Fp,
                     (PVOID)TrapFrame->Lr,
@@ -2599,13 +1954,7 @@ KiArm64HandleSynchronousException(
                     (PVOID)Context->ExceptionFrame.X20,
                     (PVOID)Context->ExceptionFrame.X21,
                     (PVOID)Context->ExceptionFrame.X22,
-                    (PVOID)Context->ExceptionFrame.X28,
-                    (PVOID)MiArm64SessionWsStage,
-                    (PVOID)MiArm64SessionWsFp,
-                    (PVOID)MiArm64SessionWsLr,
-                    (PVOID)MiArm64SessionWsSp,
-                    (PVOID)MiArm64SessionWsSavedFp,
-                    (PVOID)MiArm64SessionWsSavedLr);
+                    (PVOID)Context->ExceptionFrame.X28);
 
             if (Context->State.Elr >= (ULONG_PTR)MmSystemRangeStart)
             {
@@ -2646,34 +1995,15 @@ KiArm64HandleSynchronousException(
 
                 /* Walk TTBR0 page tables via KSEG0 to diagnose wrong-page vs bad-data */
                 {
-                    ULONG64 Ttbr0, Pa, L3Entry = 0;
-                    volatile ULONG64 *Table;
-                    ULONG64 Entry;
+                    ULONG64 Ttbr0, L3Entry = 0;
+                    ULONG64 Entries[4];
+                    volatile ULONG64 *Slots[4];
                     ULONG64 Elr = Context->State.Elr;
 
                     __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-                    Pa = Ttbr0 & 0x0000FFFFFFFFF000ULL;
-
-                    /* Walk L0 → L1 → L2 → L3 */
-                    if (Pa != 0)
+                    if (KiArm64WalkPageTable(Ttbr0, Elr, Entries, Slots) == 4)
                     {
-                        Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Pa);
-                        Entry = Table[(Elr >> 39) & 0x1FF];
-                        if ((Entry & 0x3ULL) == 0x3ULL) /* L0 valid */
-                        {
-                            Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Entry & 0x0000FFFFFFFFF000ULL);
-                            Entry = Table[(Elr >> 30) & 0x1FF];
-                            if ((Entry & 0x3ULL) == 0x3ULL) /* L1 valid */
-                            {
-                                Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Entry & 0x0000FFFFFFFFF000ULL);
-                                Entry = Table[(Elr >> 21) & 0x1FF];
-                                if ((Entry & 0x3ULL) == 0x3ULL) /* L2 valid → L3 table */
-                                {
-                                    Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Entry & 0x0000FFFFFFFFF000ULL);
-                                    L3Entry = Table[(Elr >> 12) & 0x1FF];
-                                }
-                            }
-                        }
+                        L3Entry = Entries[3];
                     }
 
                     DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
@@ -2723,15 +2053,18 @@ KiArm64HandleSynchronousException(
                                 Mode,
                                 TRUE);
 
-            Context->TrapFramePointer = TrapFrame;
-            Context->ExceptionFramePointer = &Context->ExceptionFrame;
-            KiArm64ClearTrapActive();
-            return TRUE;
+            goto HandledExit;
         }
     }
 
     KiArm64ClearTrapActive();
     return FALSE;
+
+HandledExit:
+    Context->TrapFramePointer = TrapFrame;
+    Context->ExceptionFramePointer = &Context->ExceptionFrame;
+    KiArm64ClearTrapActive();
+    return TRUE;
 }
 
 /*

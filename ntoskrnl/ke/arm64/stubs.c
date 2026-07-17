@@ -300,13 +300,7 @@ KeRaiseUserException(
     {
         PKTHREAD Thread = KeGetCurrentThread();
         PEPROCESS Process = (PEPROCESS)Thread->ApcState.Process;
-        PVOID UserRaiseExceptionDispatcher = KiConvertSystemDllAddressToUser(KeRaiseUserExceptionDispatcher, Process);
-        if ((UserRaiseExceptionDispatcher == NULL) &&
-            (KeRaiseUserExceptionDispatcher != NULL) &&
-            ((ULONG_PTR)KeRaiseUserExceptionDispatcher < (ULONG_PTR)MmSystemRangeStart))
-        {
-            UserRaiseExceptionDispatcher = KeRaiseUserExceptionDispatcher;
-        }
+        PVOID UserRaiseExceptionDispatcher = KiResolveUserDispatcherAddress(KeRaiseUserExceptionDispatcher, Process);
         if (UserRaiseExceptionDispatcher == NULL)
         {
             DPRINT1("[arm64][EXC] unresolved raise dispatcher: proc=%.16s KeRaiseUserExceptionDispatcher=%p SystemDllBase=%p PspSystemDllBase=%p TrapPc=%p ExceptionCode=0x%08lx\n",
@@ -330,51 +324,11 @@ NTAPI
 MmInitGlobalKernelPageDirectory(VOID)
 {
     /*
-     * Populate a minimal kernel PDE template from the current page tables.
-     *
-     * Notes:
-     * - On ARM64 the kernel page tables are 4-level. Common MM expects this
-     *   routine to seed a global array with kernel PDEs so future address
-     *   spaces can inherit them. Our ARM64 address space creation actually
-     *   clones the kernel half of the PXE page directly (see
-     *   arch/arm64/mm/procsup.c:MiArchCreateProcessAddressSpace), so this
-     *   array is not currently consumed. However, mm/mminit.c still calls
-     *   this API. We therefore fill a sensible subset without logging TODOs.
-     * - We only mirror the first PDE page that covers MmSystemRangeStart.
-     *   This keeps behavior similar to ARM32 and avoids overcommitting a
-     *   large global array that is not referenced on ARM64 paths.
-     * - PDE_BASE points to the linear self-map of the page directory level.
-     *   However, we must access the specific PDE page covering kernel space,
-     *   not the base of the region (which corresponds to user space and may
-     *   not be valid/mapped).
-     * - We skip the PTE_BASE and HYPER_SPACE slots: those are self-map and
-     *   hyperspace PDEs managed elsewhere (and can have special semantics).
-     * - We never overwrite a non-zero MmGlobalKernelPageDirectory entry: if
-     *   something pre-seeded a slot, we keep that, mirroring i386/ARM logic.
-     * - Concurrency: runs during early MmInitSystem; single-threaded.
+     * Nothing to seed on ARM64: address space creation clones the kernel
+     * half of the PXE page directly (MiArchCreateProcessAddressSpace), so
+     * the shared MmGlobalKernelPageDirectory template is never consumed.
+     * mm/mminit.c still calls this API, hence the empty body.
      */
-#if 0
-    /* Current kernel PDE page (self-mapped view) corresponding to start of kernel space */
-    PULONG_PTR CurrentPde = (PULONG_PTR)PAGE_ALIGN(MiAddressToPde(MmSystemRangeStart));
-    /* First index of the kernel range within the current PDE page */
-    const ULONG start = MiGetPdeOffset(MmSystemRangeStart);
-    /* Indices of special regions to be skipped */
-    const ULONG pte_off = MiGetPdeOffset((PVOID)PTE_BASE);
-    const ULONG hyper_off = MiGetPdeOffset((PVOID)HYPER_SPACE);
-
-    for (ULONG i = start; i < PDE_PER_PAGE; ++i)
-    {
-        /* Skip the PTE self-map and hyperspace PDEs */
-        if ((i == pte_off) || (i == hyper_off))
-            continue;
-
-        /* Copy the current PDE entry if our template slot is empty */
-        if (!MmGlobalKernelPageDirectory[i] && CurrentPde[i])
-        {
-            MmGlobalKernelPageDirectory[i] = CurrentPde[i];
-        }
-    }
-#endif
 }
 
 /*

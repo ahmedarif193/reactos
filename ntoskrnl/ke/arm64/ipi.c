@@ -45,15 +45,21 @@ KiIpiSend(
     _In_ ULONG IpiRequest)
 {
 #ifdef CONFIG_SMP
-    KAFFINITY ProcessorMask;
+    KAFFINITY RemainingSet;
     ULONG Index;
 
     if (TargetSet == 0)
         return;
 
-    for (Index = 0, ProcessorMask = 1; Index < KeNumberProcessors; Index++, ProcessorMask <<= 1)
+    /* Iterate only the set bits; the common case is a single-target IPI. */
+    for (RemainingSet = TargetSet; RemainingSet != 0; RemainingSet &= RemainingSet - 1)
     {
-        if (TargetSet & ProcessorMask)
+        Index = (ULONG)__builtin_ctzll(RemainingSet);
+        if (Index >= (ULONG)KeNumberProcessors)
+        {
+            break;
+        }
+
         {
             PKPRCB Prcb = KiProcessorBlock[Index];
             if (Prcb != NULL)
