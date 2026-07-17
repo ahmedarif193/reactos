@@ -3964,9 +3964,6 @@ HalPerformEndOfInterrupt(VOID)
         /* Decode actual INTID (stored as intid + 1 to avoid sentinel conflict with INTID 0) */
         ULONG intid = stored - 1;
 
-        /* Memory barrier to ensure all interrupt processing is visible */
-        __asm__ __volatile__("dsb sy" ::: "memory");
-
         /* Signal EOI (ICC_EOIR1_EL1 on GICv3 / GICC_EOIR on GICv2). */
         HalpGicEndInterrupt(intid);
     }
