@@ -34,6 +34,10 @@ KiArm64TtbrToPa(
 #define SCTLR_EL1_BT0   (1ULL << 35)
 #define SCTLR_EL1_BT1   (1ULL << 36)
 #define KI_ARM64_ID_AA64ISAR0_ATOMIC_LSE 2
+#define KI_ARM64_CNTKCTL_EL0PCTEN (1ULL << 0)
+#define KI_ARM64_QPC_BYPASS_CONFIGURATION 0x0001
+#define KI_ARM64_IMPLEMENTER_ARM 0x41
+#define KI_ARM64_PART_CORTEX_A73 0xD09
 
 static
 ARM64_CPU_FEATURES
@@ -142,6 +146,36 @@ KiArm64ApplySctlrPolicy(VOID)
         __asm__ __volatile__("msr sctlr_el1, %0" :: "r"(NewSctlr) : "memory");
         __asm__ __volatile__("isb" ::: "memory");
     }
+}
+
+static
+BOOLEAN
+KiArm64EnableUserPerformanceCounter(
+    _Out_ PULONG64 CounterFrequency)
+{
+    ULONG64 CounterControl, Frequency, Midr;
+    ULONG Implementer, PartNumber;
+
+    __asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(Frequency));
+    *CounterFrequency = Frequency;
+    if ((Frequency == 0) || (Frequency > 10000000000ULL))
+        return FALSE;
+
+    __asm__ __volatile__("mrs %0, midr_el1" : "=r"(Midr));
+    Implementer = (ULONG)((Midr >> 24) & 0xFF);
+    PartNumber = (ULONG)((Midr >> 4) & 0xFFF);
+    if ((Implementer == KI_ARM64_IMPLEMENTER_ARM) &&
+        (PartNumber == KI_ARM64_PART_CORTEX_A73))
+    {
+        /* Keep the syscall path until its counter-read erratum is handled. */
+        return FALSE;
+    }
+
+    __asm__ __volatile__("mrs %0, cntkctl_el1" : "=r"(CounterControl));
+    CounterControl |= KI_ARM64_CNTKCTL_EL0PCTEN;
+    __asm__ __volatile__("msr cntkctl_el1, %0" :: "r"(CounterControl) : "memory");
+    __asm__ __volatile__("isb" ::: "memory");
+    return TRUE;
 }
 
 #ifndef KE_ARM64_TTBR1_L0_OFFSET
@@ -864,6 +898,8 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     ULONG ProcessorNumber;
 
     BOOLEAN IsBsp;
+    BOOLEAN QpcBypassSafe;
+    ULONG64 QpcFrequency;
 
 
     if (LoaderBlock == NULL)
@@ -988,6 +1024,23 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     HalInitializeProcessor(ProcessorNumber, KeLoaderBlock);
     /* Skip DbgPrintEx for now, KD not yet initialized */
+
+    QpcBypassSafe = KiArm64EnableUserPerformanceCounter(&QpcFrequency);
+    if (ProcessorNumber == 0)
+    {
+        *(volatile USHORT *)&MmWriteableSharedUserData->QpcData = 0;
+        MmWriteableSharedUserData->QpcFrequency = QpcFrequency;
+        MmWriteableSharedUserData->QpcBias = 0;
+        __asm__ __volatile__("dmb ishst" ::: "memory");
+        if (QpcBypassSafe)
+            *(volatile USHORT *)&MmWriteableSharedUserData->QpcData = KI_ARM64_QPC_BYPASS_CONFIGURATION;
+    }
+    else if (!QpcBypassSafe ||
+             (QpcFrequency != MmWriteableSharedUserData->QpcFrequency))
+    {
+        *(volatile USHORT *)&MmWriteableSharedUserData->QpcData = 0;
+        __asm__ __volatile__("dmb ishst" ::: "memory");
+    }
 
     /*
      * Configure per-CPU architectural policy after reading the hardware ID
