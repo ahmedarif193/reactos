@@ -143,6 +143,7 @@ KeInitializeProcess(IN OUT PKPROCESS Process,
      * does) instead of DirectoryTableBase[1], so 0x030 stays the native ASID
      * field used by the ARM64 ASID allocator. */
     Process->DirectoryTableBase[0] = DirectoryTableBase[0];
+    Process->Asid = 0;
     Process->Unused0 = DirectoryTableBase[1];
 #else
     Process->DirectoryTableBase[0] = DirectoryTableBase[0];
