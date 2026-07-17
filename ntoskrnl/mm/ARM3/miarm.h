@@ -2769,6 +2769,41 @@ MiFlushSystemTbRange(
 
 FORCEINLINE
 VOID
+MiFlushProcessTbRange(
+    _In_ PVOID BaseAddress,
+    _In_ SIZE_T PageCount)
+{
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    ULONG FlushPageCount;
+#endif
+
+    if (PageCount == 0)
+    {
+        return;
+    }
+
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    FlushPageCount = (PageCount > MAXULONG) ? MAXULONG : (ULONG)PageCount;
+#endif
+
+#if defined(_M_AMD64)
+    {
+        PKPRCB Prcb = KeGetCurrentPrcb();
+        KAFFINITY TargetSet = KeGetCurrentThread()->ApcState.Process->ActiveProcessors |
+                              Prcb->SetMember;
+
+        KiIpiSendTbFlush(TargetSet, BaseAddress, FlushPageCount);
+    }
+#elif defined(_M_ARM64)
+    KeInvalidateTlbRange(BaseAddress, FlushPageCount);
+#else
+    UNREFERENCED_PARAMETER(BaseAddress);
+    KeFlushProcessTb();
+#endif
+}
+
+FORCEINLINE
+VOID
 MiFlushTbForAddress(
     _In_ PVOID VirtualAddress)
 {
