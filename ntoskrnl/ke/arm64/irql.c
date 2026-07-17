@@ -8,46 +8,35 @@
 #define NDEBUG
 #include <debug.h>
 
-extern KIRQL KeArm64CurrentIrql;
-
 BOOLEAN KiHalInitialized = FALSE;
+
+/* Capture the macro implementation before defining the exported function. */
+FORCEINLINE
+KIRQL
+KiQueryCurrentIrql(VOID)
+{
+    return KeGetCurrentIrql();
+}
 
 #undef KeLowerIrql
 #undef KeRaiseIrql
 #undef KeGetCurrentIrql
 
-FORCEINLINE
-KIRQL
-KiQueryCurrentIrql(VOID)
-{
-    ULONG_PTR Pcr = (ULONG_PTR)KeGetPcr();
-    ULONG Irql;
-
-    if (Pcr != 0)
-    {
-        __asm__ __volatile__("ldrb %w0, [x18, #" ARM64_KPCR_STRINGIFY(ARM64_KPCR_CURRENT_IRQL) "]"
-                             : "=r"(Irql) :: "memory");
-        return (KIRQL)Irql;
-    }
-
-    return KeArm64CurrentIrql;
-}
-
 VOID
 KiSetCurrentIrql(
     _In_ KIRQL Irql)
 {
-    ULONG_PTR Pcr = (ULONG_PTR)KeGetPcr();
     ULONG Value = Irql;
 
-    if (Pcr != 0)
+    /* The global fallback is valid only during BSP bootstrap, before x18. */
+    if (KeGetPcr() == NULL)
     {
-        __asm__ __volatile__("strb %w0, [x18, #" ARM64_KPCR_STRINGIFY(ARM64_KPCR_CURRENT_IRQL) "]"
-                             :: "r"(Value) : "memory");
+        KeArm64CurrentIrql = Irql;
         return;
     }
 
-    KeArm64CurrentIrql = Irql;
+    __asm__ __volatile__("strb %w0, [x18, #" ARM64_KPCR_STRINGIFY(ARM64_KPCR_CURRENT_IRQL) "]"
+                         :: "r"(Value) : "memory");
 }
 
 VOID
@@ -55,29 +44,31 @@ NTAPI
 KiRestoreTrapFrameIrql(
     _In_ KIRQL Irql)
 {
-    KiSetCurrentIrql(Irql);
+    /* Called from the KiTrapReturn assembly tail. */
+    KiSetIrqlAndPriorityMask(Irql);
+}
 
-    if (KiHalInitialized)
+FORCEINLINE
+ULONG
+KiQueryCurrentProcessorNumber(VOID)
+{
+    ULONG Number;
+
+    if (KeGetPcr() == NULL)
     {
-        HalSetGicPriorityMask(Irql);
+        return 0;
     }
+
+    __asm__ __volatile__("ldr %w0, [x18, #" ARM64_KPCR_STRINGIFY(ARM64_KPCR_PRCB_NUMBER) "]"
+                         : "=r"(Number) :: "memory");
+    return Number;
 }
 
 ULONG
 NTAPI
 KeGetCurrentProcessorNumber(VOID)
 {
-    ULONG_PTR Pcr = (ULONG_PTR)KeGetPcr();
-    ULONG Number;
-
-    if (Pcr != 0)
-    {
-        __asm__ __volatile__("ldr %w0, [x18, #" ARM64_KPCR_STRINGIFY(ARM64_KPCR_PRCB_NUMBER) "]"
-                             : "=r"(Number) :: "memory");
-        return Number;
-    }
-
-    return 0;
+    return KiQueryCurrentProcessorNumber();
 }
 
 ULONG
@@ -85,27 +76,16 @@ NTAPI
 KeGetCurrentProcessorNumberEx(
     _Out_opt_ PPROCESSOR_NUMBER ProcNumber)
 {
-    ULONG_PTR Pcr = (ULONG_PTR)KeGetPcr();
-    ULONG Processor;
+    ULONG Number = KiQueryCurrentProcessorNumber();
 
-    if (Pcr != 0)
-    {
-        __asm__ __volatile__("ldr %w0, [x18, #" ARM64_KPCR_STRINGIFY(ARM64_KPCR_PRCB_NUMBER) "]"
-                             : "=r"(Processor) :: "memory");
-    }
-    else
-    {
-        Processor = 0;
-    }
-
-    if (ProcNumber)
+    if (ProcNumber != NULL)
     {
         ProcNumber->Group = 0;
-        ProcNumber->Number = (UCHAR)Processor;
+        ProcNumber->Number = (UCHAR)Number;
         ProcNumber->Reserved = 0;
     }
 
-    return Processor;
+    return Number;
 }
 
 KIRQL
@@ -132,9 +112,39 @@ KfRaiseIrql(
         return OldIrql;
     }
 
+    /*
+     * Lazy IRQL: raising deliberately leaves the GIC priority mask alone.
+     * The HAL defers any interrupt that arrives below the new level and
+     * reconciles it on the way back down, from HalSetGicPriorityMask().
+     */
     KiSetCurrentIrql(NewIrql);
 
     return OldIrql;
+}
+
+/* Synchronous APC delivery here requires IRQ delivery to be available. */
+static
+BOOLEAN
+KiShouldDeliverApcOnLower(
+    _In_ KIRQL NewIrql)
+{
+    ULONG64 Daif;
+    PKTHREAD Thread;
+
+    if (NewIrql >= APC_LEVEL)
+    {
+        return FALSE;
+    }
+
+    __asm__ __volatile__("mrs %0, daif" : "=r"(Daif));
+    if (Daif & ARM64_PSTATE_IRQ_MASK)
+    {
+        return FALSE;
+    }
+
+    Thread = KeGetCurrentThread();
+    return ((Thread != NULL) &&
+            KiIsKernelApcDeliverable(Thread, NewIrql));
 }
 
 VOID
@@ -146,11 +156,7 @@ KfLowerIrql(
 
     if (NewIrql > OldIrql)
     {
-        KeBugCheckEx(IRQL_NOT_GREATER_OR_EQUAL,
-                     NewIrql,
-                     OldIrql,
-                     (ULONG_PTR)_ReturnAddress(),
-                     0);
+        KeBugCheckEx(IRQL_NOT_GREATER_OR_EQUAL, NewIrql, OldIrql, (ULONG_PTR)_ReturnAddress(), 0);
     }
 
     if (NewIrql == OldIrql)
@@ -158,37 +164,13 @@ KfLowerIrql(
         return;
     }
 
-    KiSetCurrentIrql(NewIrql);
+    KiSetIrqlAndPriorityMask(NewIrql);
 
-    if (KiHalInitialized)
+    if (KiShouldDeliverApcOnLower(NewIrql))
     {
-        HalSetGicPriorityMask(NewIrql);
-    }
-
-    if ((OldIrql >= APC_LEVEL) && (NewIrql < APC_LEVEL))
-    {
-        ULONG64 Daif;
-        PKTHREAD Thread;
-
-        __asm__ __volatile__("mrs %0, daif" : "=r"(Daif));
-        if (!(Daif & 0x80))
-        {
-            Thread = KeGetCurrentThread();
-            if ((Thread != NULL) &&
-                (Thread->ApcState.KernelApcPending) &&
-                !(Thread->SpecialApcDisable))
-            {
-                KiSetCurrentIrql(APC_LEVEL);
-                if (KiHalInitialized)
-                    HalSetGicPriorityMask(APC_LEVEL);
-
-                KiDeliverApc(KernelMode, NULL, NULL);
-
-                KiSetCurrentIrql(NewIrql);
-                if (KiHalInitialized)
-                    HalSetGicPriorityMask(NewIrql);
-            }
-        }
+        KiSetIrqlAndPriorityMask(APC_LEVEL);
+        KiDeliverApc(KernelMode, NULL, NULL);
+        KiSetIrqlAndPriorityMask(NewIrql);
     }
 }
 

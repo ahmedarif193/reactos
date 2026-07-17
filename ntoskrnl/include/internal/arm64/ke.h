@@ -488,6 +488,23 @@ NTAPI
 KiRestoreTrapFrameIrql(
     _In_ KIRQL Irql);
 
+/* Set after HAL phase 1 makes GIC priority masking available. */
+extern BOOLEAN KiHalInitialized;
+
+/* Keep the logical IRQL and GIC priority mask together; raises remain lazy. */
+FORCEINLINE
+VOID
+KiSetIrqlAndPriorityMask(
+    _In_ KIRQL Irql)
+{
+    KiSetCurrentIrql(Irql);
+
+    if (KiHalInitialized)
+    {
+        HalSetGicPriorityMask(Irql);
+    }
+}
+
 VOID
 NTAPI
 KeReenableTimerInterrupt(
