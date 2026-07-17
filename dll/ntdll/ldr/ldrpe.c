@@ -247,8 +247,7 @@ LdrpSnapIAT(IN PLDR_DATA_TABLE_ENTRY ExportLdrEntry,
                            OldProtect,
                            &OldProtect);
 
-    /* Also flush out the cache */
-    NtFlushInstructionCache(NtCurrentProcess(), Iat, IatSize);
+    /* LdrpSnapThunk only writes data pointers in IMAGE_THUNK_DATA entries. */
 
     /* Return to Caller */
     return Status;
