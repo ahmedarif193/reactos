@@ -2120,7 +2120,7 @@ MmProtectMdlSystemAddress(IN PMDL MemoryDescriptorList,
     PFN_NUMBER NumberOfPages, PageFrameIndex;
     ULONG ProtectionMask;
     BOOLEAN NoAccess;
-#if defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64)
     ULONG_PTR FlushBase;
     PFN_NUMBER FlushPages;
 #endif
@@ -2196,7 +2196,7 @@ MmProtectMdlSystemAddress(IN PMDL MemoryDescriptorList,
     NumberOfPages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(SystemAddress,
                                                    MemoryDescriptorList->ByteCount);
     PointerPte = MiAddressToPte(SystemAddress);
-#if defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64)
     FlushBase = Va;
     FlushPages = 0;
 #endif
@@ -2269,7 +2269,7 @@ MmProtectMdlSystemAddress(IN PMDL MemoryDescriptorList,
             /* Only a previously-valid translation can be cached in the TLB */
             if (OldPte.u.Hard.Valid)
             {
-#if defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64)
                 FlushPages++;
 #else
                 KeInvalidateTlbEntry((PVOID)Va);
@@ -2326,7 +2326,7 @@ MmProtectMdlSystemAddress(IN PMDL MemoryDescriptorList,
                 // valid-to-valid update needs an explicit TLB invalidation.
                 //
                 MI_UPDATE_VALID_PTE(PointerPte, TempPte);
-#if defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64)
                 FlushPages++;
 #else
                 KeInvalidateTlbEntry((PVOID)Va);
@@ -2349,7 +2349,7 @@ MmProtectMdlSystemAddress(IN PMDL MemoryDescriptorList,
         NumberOfPages--;
     }
 
-#if defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64)
     if (FlushPages != 0)
     {
         /* Pages remain locked by the MDL, so all permission updates can share
