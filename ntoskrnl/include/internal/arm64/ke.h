@@ -20,6 +20,9 @@
 
 #define KE_ARM64_TTBR1_L0_OFFSET 0x800ULL
 
+/* TLBI VA operands carry VA[55:12] in bits [43:0]. */
+#define KI_ARM64_TLBI_VA_MASK 0x00000FFFFFFFFFFFULL
+
 #define ARM64_SYNC_BARRIER() do { __dmb(_ARM64_BARRIER_SY); __isb(_ARM64_BARRIER_SY); } while (0)
 
 #define ARM64_PSTATE_ASYNC_ABORT_MASK 0x100UL
@@ -114,7 +117,7 @@ VOID
 KeInvalidateTlbEntry(
     _In_ PVOID Address)
 {
-    ULONG_PTR Va = (ULONG_PTR)Address >> PAGE_SHIFT;
+    ULONG_PTR Va = ((ULONG_PTR)Address >> PAGE_SHIFT) & KI_ARM64_TLBI_VA_MASK;
 
     /*
      * ARM64 single-address invalidation must evict translations regardless of
@@ -128,6 +131,48 @@ KeInvalidateTlbEntry(
      */
     __asm__ __volatile__("dsb ishst" ::: "memory");
     __asm__ __volatile__("tlbi vaae1is, %0" :: "r"(Va) : "memory");
+    __asm__ __volatile__("dsb ish" ::: "memory");
+    __asm__ __volatile__("isb" ::: "memory");
+}
+
+/*
+ * Keep short mapping ranges targeted. The cutoff is deliberately conservative:
+ * one global invalidation is preferable once issuing a long run of VA operands
+ * would dominate, while the common protection/MDL ranges avoid repeated
+ * completion barriers and whole-TLB broadcasts.
+ */
+#define KI_ARM64_TLBI_RANGE_FULL_THRESHOLD 256UL
+
+FORCEINLINE
+VOID
+KeInvalidateTlbRange(
+    _In_ PVOID BaseAddress,
+    _In_ ULONG PageCount)
+{
+    ULONG_PTR Va;
+    ULONG Index;
+
+    if (PageCount == 0)
+    {
+        return;
+    }
+
+    __asm__ __volatile__("dsb ishst" ::: "memory");
+
+    if (PageCount >= KI_ARM64_TLBI_RANGE_FULL_THRESHOLD)
+    {
+        __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
+    }
+    else
+    {
+        Va = ((ULONG_PTR)BaseAddress >> PAGE_SHIFT) & KI_ARM64_TLBI_VA_MASK;
+        for (Index = 0; Index < PageCount; Index++, Va++)
+        {
+            /* All-ASID, all-level invalidation also covers a removed table. */
+            __asm__ __volatile__("tlbi vaae1is, %0" :: "r"(Va) : "memory");
+        }
+    }
+
     __asm__ __volatile__("dsb ish" ::: "memory");
     __asm__ __volatile__("isb" ::: "memory");
 }
