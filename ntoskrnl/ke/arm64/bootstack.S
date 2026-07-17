@@ -5,8 +5,23 @@
 
     .text
     .align  2
+    .global KiSystemStartup
     .global KiArm64SwitchToBootStack
+    .extern KiArm64SystemStartupC
     .extern KiArm64SystemStartupBootStack
+
+/* Enable mandatory base FP/ASIMD before entering compiler-generated C. */
+    .seh_proc KiSystemStartup
+KiSystemStartup:
+    .seh_endprologue
+    mrs     x9, cpacr_el1
+    mov     x10, #3
+    lsl     x10, x10, #20
+    orr     x9, x9, x10
+    msr     cpacr_el1, x9
+    isb
+    b       KiArm64SystemStartupC
+    .seh_endproc
 
 /*
  * VOID KiArm64SwitchToBootStack(ULONG_PTR InitialStack,

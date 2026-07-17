@@ -121,32 +121,6 @@ __atomic_compare_exchange_16(
     }
 }
 
-int
-__netf2(
-    _In_ long double A,
-    _In_ long double B)
-{
-    return (A != B);
-}
-
-int
-__getf2(
-    _In_ long double A,
-    _In_ long double B)
-{
-    if (A > B)
-    {
-        return 1;
-    }
-
-    if (A < B)
-    {
-        return -1;
-    }
-
-    return 0;
-}
-
 extern BOOLEAN KdDebuggerEnabled;
 extern BOOLEAN KdDebuggerNotPresent;
 

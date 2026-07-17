@@ -97,9 +97,10 @@ typedef struct _KARM64_VFP_STATE
     ARM64_NT_NEON128 V[32];              // 0x010
 } KARM64_VFP_STATE, *PKARM64_VFP_STATE;
 
-// Win11 26100 arm64 layout, sizeof 0x160
-// PreviousIrql is a standalone byte at 0x004; ReactOS packs the SVC mode
-// cookie into the separate Reserved dword at 0x008 (bits 8-31)
+/*
+ * ReactOS ARM64 trap-frame layout. The VFP field follows the Windows pointer
+ * semantics; the surrounding private offsets remain ReactOS-specific.
+ */
 typedef struct _KTRAP_FRAME
 {
     UCHAR ExceptionActive;               // 0x000
@@ -112,8 +113,8 @@ typedef struct _KTRAP_FRAME
     ULONG ReservedPad;                   // 0x00C
     ULONG64 FaultAddress;                // 0x010
     ULONG64 TrapFrame;                   // 0x018
-    ULONG VfpState;                      // 0x020
-    ULONG Bcr[8];                        // 0x024
+    PKARM64_VFP_STATE VfpState;          // 0x020
+    ULONG Bcr[8];                        // 0x028
     ULONG64 Bvr[8];                      // 0x048
     ULONG Wcr[2];                        // 0x088
     ULONG64 Wvr[2];                      // 0x090
@@ -159,7 +160,7 @@ C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Reserved) == 0x008);
 C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, FaultAddress) == 0x010);
 C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, TrapFrame) == 0x018);
 C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, VfpState) == 0x020);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Bcr) == 0x024);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Bcr) == 0x028);
 C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Bvr) == 0x048);
 C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Wcr) == 0x088);
 C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Wvr) == 0x090);

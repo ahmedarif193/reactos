@@ -42,7 +42,7 @@ static VOID Arm64FrameLayout(VOID)
     ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, VfpState), 0x20ULL);
 
     /* Debug registers. */
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, Bcr), 0x24ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, Bcr), 0x28ULL);
     ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, Bvr), 0x48ULL);
     ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, Wcr), 0x88ULL);
     ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, Wvr), 0x90ULL);

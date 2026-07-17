@@ -190,6 +190,9 @@ PspReapRoutine(IN PVOID Context)
             MmDeleteKernelStack((PVOID)Thread->Tcb.StackBase,
                                 Thread->Tcb.LargeStack);
             Thread->Tcb.InitialStack = NULL;
+#if defined(_M_ARM64)
+            Thread->Tcb.VfpState = NULL;
+#endif
 
             /* Move to the next entry */
             NextEntry = NextEntry->Next;
@@ -405,6 +408,10 @@ PspDeleteThread(IN PVOID ObjectBody)
         /* Release it */
         MmDeleteKernelStack((PVOID)Thread->Tcb.StackBase,
                             Thread->Tcb.LargeStack);
+#if defined(_M_ARM64)
+        Thread->Tcb.InitialStack = NULL;
+        Thread->Tcb.VfpState = NULL;
+#endif
     }
 
     /* Check if we have a CID Handle */
