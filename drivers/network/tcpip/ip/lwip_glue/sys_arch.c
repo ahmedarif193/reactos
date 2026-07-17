@@ -9,7 +9,6 @@ static ERESOURCE GlobalLock;
 static ULONG GlobalLockLevel = 0;
 
 KEVENT TerminationEvent;
-NPAGED_LOOKASIDE_LIST MessageLookasideList;
 NPAGED_LOOKASIDE_LIST QueueEntryLookasideList;
 
 static LARGE_INTEGER StartTime;
@@ -315,14 +314,6 @@ sys_init(void)
 
     KeInitializeEvent(&TerminationEvent, NotificationEvent, FALSE);
 
-    ExInitializeNPagedLookasideList(&MessageLookasideList,
-                                    NULL,
-                                    NULL,
-                                    0,
-                                    sizeof(struct lwip_callback_msg),
-                                    LWIP_MESSAGE_TAG,
-                                    0);
-
     ExInitializeNPagedLookasideList(&QueueEntryLookasideList,
                                     NULL,
                                     NULL,
@@ -358,6 +349,5 @@ sys_shutdown(void)
         }
     }
 
-    ExDeleteNPagedLookasideList(&MessageLookasideList);
     ExDeleteNPagedLookasideList(&QueueEntryLookasideList);
 }
