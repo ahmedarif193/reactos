@@ -551,19 +551,226 @@ KiSystemService(
     _Inout_ PKTRAP_FRAME TrapFrame,
     _In_ ULONG Instruction);
 
+/*
+ * TCR_EL1.AS is intentionally clear, so the hardware tag is eight bits. Pack
+ * a 24-bit software generation above it in KPROCESS.Asid. On rollover, ASIDs
+ * that are still installed on a CPU are reserved; every CPU lazily invalidates
+ * its local old-generation translations before installing a new-generation
+ * tag. This prevents an active old context from colliding with a reused ASID
+ * without broadcasting a full invalidation on every process switch.
+ */
+#define KI_ARM64_ASID_BITS             8
+#define KI_ARM64_ASID_COUNT            (1UL << KI_ARM64_ASID_BITS)
+#define KI_ARM64_ASID_MASK             (KI_ARM64_ASID_COUNT - 1)
+#define KI_ARM64_ASID_GENERATION_MASK  (~KI_ARM64_ASID_MASK)
+#define KI_ARM64_ASID_FIRST_GENERATION KI_ARM64_ASID_COUNT
+
+static volatile LONG KiArm64AsidLock;
+static ULONG KiArm64AsidGeneration = KI_ARM64_ASID_FIRST_GENERATION;
+static ULONG KiArm64NextAsid = 1;
+static ULONG64 KiArm64AsidBitmap[KI_ARM64_ASID_COUNT / 64] = {1};
+static PKPROCESS KiArm64AsidOwner[KI_ARM64_ASID_COUNT];
+static UCHAR KiArm64ActiveAsid[MAXIMUM_PROCESSORS];
+static ULONG KiArm64AsidGenerationSeen[MAXIMUM_PROCESSORS];
+static BOOLEAN KiArm64AsidsDisabled;
+
+static
+VOID
+KiArm64AcquireAsidLock(VOID)
+{
+    while (InterlockedCompareExchange(&KiArm64AsidLock, 1, 0) != 0)
+    {
+        YieldProcessor();
+    }
+}
+
+static
+VOID
+KiArm64ReleaseAsidLock(VOID)
+{
+    InterlockedExchange(&KiArm64AsidLock, 0);
+}
+
+static
+VOID
+KiArm64FlushLocalAsidGeneration(VOID)
+{
+    __asm__ __volatile__("dsb ish" ::: "memory");
+    __asm__ __volatile__("tlbi vmalle1" ::: "memory");
+    __asm__ __volatile__("dsb ish" ::: "memory");
+    __asm__ __volatile__("isb" ::: "memory");
+}
+
+static
+VOID
+KiArm64ReserveAsidLocked(
+    _In_ ULONG Asid)
+{
+    ASSERT(Asid < KI_ARM64_ASID_COUNT);
+    KiArm64AsidBitmap[Asid >> 6] |= 1ULL << (Asid & 63);
+}
+
+static
+ULONG
+KiArm64AllocateAsidIndexLocked(VOID)
+{
+    ULONG Offset;
+
+    for (Offset = 0; Offset < KI_ARM64_ASID_MASK; Offset++)
+    {
+        ULONG Asid = 1 + ((KiArm64NextAsid - 1 + Offset) % KI_ARM64_ASID_MASK);
+
+        if ((KiArm64AsidBitmap[Asid >> 6] & (1ULL << (Asid & 63))) == 0)
+        {
+            KiArm64ReserveAsidLocked(Asid);
+            KiArm64NextAsid = (Asid == KI_ARM64_ASID_MASK) ? 1 : Asid + 1;
+            return Asid;
+        }
+    }
+
+    return 0;
+}
+
+static
+BOOLEAN
+KiArm64RollAsidGenerationLocked(VOID)
+{
+    ULONG NextGeneration;
+    ULONG Processor;
+
+    NextGeneration = KiArm64AsidGeneration + KI_ARM64_ASID_COUNT;
+    if ((NextGeneration & KI_ARM64_ASID_GENERATION_MASK) == 0)
+    {
+        /* Never let a wrapped software generation alias a live process token. */
+        KiArm64AsidsDisabled = TRUE;
+        return FALSE;
+    }
+
+    RtlZeroMemory(KiArm64AsidBitmap, sizeof(KiArm64AsidBitmap));
+    RtlZeroMemory(KiArm64AsidOwner, sizeof(KiArm64AsidOwner));
+    KiArm64ReserveAsidLocked(0);
+
+    /* An installed old-generation ASID can keep filling until that CPU next
+       switches, so it must not be reused in this generation. */
+    for (Processor = 0; Processor < MAXIMUM_PROCESSORS; Processor++)
+    {
+        if (KiArm64ActiveAsid[Processor] != 0)
+        {
+            KiArm64ReserveAsidLocked(KiArm64ActiveAsid[Processor]);
+        }
+    }
+
+    KiArm64AsidGeneration = NextGeneration;
+    KiArm64NextAsid = 1;
+    return TRUE;
+}
+
+static
+BOOLEAN
+KiArm64SwitchAddressSpace(
+    _Inout_ PKPROCESS NewProcess,
+    _In_ ULONGLONG NewUserRoot,
+    _In_ ULONGLONG NewKernelRoot)
+{
+    ULONG Processor;
+    ULONG Token;
+    ULONG Asid;
+    ULONGLONG SavedDaif;
+
+    Processor = KeGetCurrentProcessorNumber();
+    if (Processor >= MAXIMUM_PROCESSORS)
+    {
+        KiArm64WriteUserTtbr(NewUserRoot, NewKernelRoot, 0, TRUE);
+        return FALSE;
+    }
+
+    /* The allocator lock spans the TTBR install. Mask exceptions so an
+       interrupt-driven context switch cannot recurse on the same CPU. */
+    __asm__ __volatile__("mrs %0, daif" : "=r"(SavedDaif));
+    __asm__ __volatile__("msr daifset, #0xF" ::: "memory");
+    KiArm64AcquireAsidLock();
+
+    if (KiArm64AsidsDisabled)
+    {
+        KiArm64WriteUserTtbr(NewUserRoot, NewKernelRoot, 0, TRUE);
+        KiArm64ActiveAsid[Processor] = 0;
+        KiArm64ReleaseAsidLock();
+        __asm__ __volatile__("msr daif, %0" :: "r"(SavedDaif) : "memory");
+        return FALSE;
+    }
+
+    if (KiArm64AsidGenerationSeen[Processor] != KiArm64AsidGeneration)
+    {
+        KiArm64FlushLocalAsidGeneration();
+        KiArm64AsidGenerationSeen[Processor] = KiArm64AsidGeneration;
+        KiArm64ActiveAsid[Processor] = 0;
+    }
+
+    Token = NewProcess->Asid;
+    Asid = Token & KI_ARM64_ASID_MASK;
+    if (((Token & KI_ARM64_ASID_GENERATION_MASK) != KiArm64AsidGeneration) ||
+        (Asid == 0) ||
+        (KiArm64AsidOwner[Asid] != NewProcess))
+    {
+        Asid = KiArm64AllocateAsidIndexLocked();
+        if (Asid == 0)
+        {
+            if (!KiArm64RollAsidGenerationLocked())
+            {
+                KiArm64WriteUserTtbr(NewUserRoot, NewKernelRoot, 0, TRUE);
+                KiArm64ActiveAsid[Processor] = 0;
+                KiArm64ReleaseAsidLock();
+                __asm__ __volatile__("msr daif, %0" :: "r"(SavedDaif) : "memory");
+                return FALSE;
+            }
+
+            KiArm64FlushLocalAsidGeneration();
+            KiArm64AsidGenerationSeen[Processor] = KiArm64AsidGeneration;
+            KiArm64ActiveAsid[Processor] = 0;
+            Asid = KiArm64AllocateAsidIndexLocked();
+            if (Asid == 0)
+            {
+                /* Every hardware ASID can legitimately remain installed when
+                   the machine has at least 255 active CPUs. Keep correctness
+                   by falling back to ASID 0 instead of aliasing a live tag. */
+                KiArm64AsidsDisabled = TRUE;
+                KiArm64WriteUserTtbr(NewUserRoot, NewKernelRoot, 0, TRUE);
+                KiArm64ActiveAsid[Processor] = 0;
+                KiArm64ReleaseAsidLock();
+                __asm__ __volatile__("msr daif, %0" :: "r"(SavedDaif) : "memory");
+                return FALSE;
+            }
+        }
+
+        Token = KiArm64AsidGeneration | Asid;
+        NewProcess->Asid = Token;
+        KiArm64AsidOwner[Asid] = NewProcess;
+    }
+
+    KiArm64WriteUserTtbr(NewUserRoot, NewKernelRoot, (UCHAR)Asid, FALSE);
+    KiArm64ActiveAsid[Processor] = (UCHAR)Asid;
+    KiArm64ReleaseAsidLock();
+    __asm__ __volatile__("msr daif, %0" :: "r"(SavedDaif) : "memory");
+    return TRUE;
+}
+
 VOID
 NTAPI
 KiSwapProcess(_Inout_ PKPROCESS NewProcess,
               _Inout_ PKPROCESS OldProcess)
 {
-    ULONGLONG CurrentTtbr0;
-    ULONGLONG CurrentTtbr1;
-    ULONGLONG CurrentKernelRoot;
-    ULONGLONG CurrentUserRoot;
     ULONGLONG NewKernelRoot;
     ULONGLONG NewUserRoot;
 
     ASSERT(NewProcess != NULL);
+
+    /* Once a CPU enters scheduling, only this routine changes its process
+       roots. A same-process thread switch therefore needs no process masks,
+       system-register reads, allocator lock, or TTBR write. */
+    if (OldProcess == NewProcess)
+    {
+        return;
+    }
 
 #ifdef CONFIG_SMP
     {
@@ -583,37 +790,11 @@ KiSwapProcess(_Inout_ PKPROCESS NewProcess,
 
     NewUserRoot = NewProcess->DirectoryTableBase[0] & ARM64_PTE_ADDR_MASK;
     NewKernelRoot = KiArm64KernelTtbrBase(NewProcess->DirectoryTableBase[0]);
-    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(CurrentTtbr0));
-    __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(CurrentTtbr1));
-    CurrentUserRoot = CurrentTtbr0 & ARM64_PTE_ADDR_MASK;
-    CurrentKernelRoot = CurrentTtbr1 & MI_ARM64_PHYS_ADDR_MASK;
-
-    /*
-     * APs may enter the scheduler with the right process object but stale TTBR
-     * roots. Only skip the hardware switch when the active roots match too.
-     */
-    if ((OldProcess == NewProcess) &&
-        (CurrentUserRoot == NewUserRoot) &&
-        (CurrentKernelRoot == NewKernelRoot))
-    {
-        /* Same process, nothing to do */
-        return;
-    }
-
-    if ((OldProcess != NULL) &&
-        (NewProcess->DirectoryTableBase[0] == OldProcess->DirectoryTableBase[0]) &&
-        (NewProcess->Unused0 == OldProcess->Unused0) &&
-        (CurrentUserRoot == NewUserRoot) &&
-        (CurrentKernelRoot == NewKernelRoot))
-    {
-        /* Same TTBR roots and hyperspace, nothing to do */
-        return;
-    }
 
     ASSERT(NewProcess->DirectoryTableBase[0] != 0);
     ASSERT(NewProcess->Unused0 != 0);   /* hyperspace root (Win11 ARM64: 0x030 is the ASID field) */
 
-    KiArm64WriteUserTtbr(NewUserRoot, NewKernelRoot);
+    KiArm64SwitchAddressSpace(NewProcess, NewUserRoot, NewKernelRoot);
 }
 
 #define ARM64_EARLY_SYNC_CONTEXT_ALLOC_SIZE 0x590

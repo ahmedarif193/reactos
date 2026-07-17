@@ -33,8 +33,9 @@
  * cached across context switches (a global entry would match any ASID and leak
  * across processes once flush-free switching is enabled). This is the user
  * counterpart to MmProtectToPteMaskKernel[], whose kernel pages stay global.
- * With the ASID allocator disabled (default), every switch still broadcast-
- * flushes, so the NG bit is behaviour-neutral until the allocator is enabled.
+ * The generation-based ASID allocator relies on this bit when preserving user
+ * translations across process switches; its ASID-0 fallback still performs a
+ * full broadcast invalidation.
  */
 const ULONG_PTR MmProtectToPteMask[32] =
 {

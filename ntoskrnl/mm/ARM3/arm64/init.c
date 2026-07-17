@@ -1592,6 +1592,10 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     MI_ARM64_SET_TEMPLATE_NORMAL_WB(ValidKernelPdeLocal);
 #undef MI_ARM64_SET_TEMPLATE_NORMAL_WB
 
+    /* Hyperspace and session-local leaf mappings vary with the process root.
+       They must participate in ASID matching; shared kernel leaves stay global. */
+    ValidKernelPteLocal.u.Long |= ARM64_PTE_NG;
+
     {
         UINT64 MairVal;
         UINT64 Slot;

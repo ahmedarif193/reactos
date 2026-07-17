@@ -387,20 +387,16 @@ KiSwapContextResume(
     __asm__ __volatile__("sev" ::: "memory");
 #endif
 
-    /*
-     * ARM64: Let KiSwapProcess repair the active TTBR roots. This is needed
-     * even for same-process switches because APs can enter the scheduler with
-     * stale hardware roots during bring-up.
-     *
-     * KiSwapProcess will:
-     * 1. Update process ActiveProcessors for SMP
-     * 2. Write the new process's DirectoryTableBase[0] to TTBR0_EL1
-     * 3. Perform necessary TLB invalidation
-     */
+    /* AP initialization installs the idle-process roots before scheduler
+       release. After that invariant is established, only a real process
+       change needs ActiveProcessors or TTBR/ASID work. */
     OldProcess = OldThread->ApcState.Process;
     NewProcess = NewThread->ApcState.Process;
 
-    KiSwapProcess(NewProcess, OldProcess);
+    if (NewProcess != OldProcess)
+    {
+        KiSwapProcess(NewProcess, OldProcess);
+    }
 
     /* KiSwapContext saves and restores the complete eager per-thread VFP image. */
 
