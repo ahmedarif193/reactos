@@ -448,6 +448,7 @@ VOID KiGetCacheInformation(VOID);
 VOID KiSetProcessorType(VOID);
 ULONG64 KiGetFeatureBits(VOID);
 VOID KiInitializeCpuFeatures(VOID);
+ULONG NTAPI KiAmd64QueryEffectiveMHz(_In_ ULONG ProcessorNumber);
 #if DBG
 VOID KiReportCpuFeatures(IN PKPRCB Prcb);
 #endif

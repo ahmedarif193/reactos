@@ -1002,6 +1002,8 @@ NtPowerInformation(IN POWER_INFORMATION_LEVEL PowerInformationLevel,
         {
             PPROCESSOR_POWER_INFORMATION PowerInformation = (PPROCESSOR_POWER_INFORMATION)OutputBuffer;
             ULONG ProcessorCount, i;
+            ULONG CurrentSpeed[MAXIMUM_PROCESSORS];
+            ULONG MaxSpeed[MAXIMUM_PROCESSORS];
 
             if (InputBuffer != NULL)
                 return STATUS_INVALID_PARAMETER;
@@ -1012,24 +1014,36 @@ NtPowerInformation(IN POWER_INFORMATION_LEVEL PowerInformationLevel,
             ProcessorCount = min((ULONG)KeNumberProcessors,
                                  OutputBufferLength / sizeof(PROCESSOR_POWER_INFORMATION));
 
+            for (i = 0; i < ProcessorCount; i++)
+            {
+#if defined(_M_ARM64)
+                KeSetSystemAffinityThread(AFFINITY_MASK(i));
+                CurrentSpeed[i] = KiArm64QueryEffectiveClockMHz(i);
+                MaxSpeed[i] = KiArm64GetProcessorClockMHz(i);
+#elif defined(_M_AMD64)
+                KeSetSystemAffinityThread(AFFINITY_MASK(i));
+                CurrentSpeed[i] = KiAmd64QueryEffectiveMHz(i);
+                MaxSpeed[i] = KiProcessorBlock[i]->MHz;
+#else
+                CurrentSpeed[i] = KiProcessorBlock[i]->MHz;
+                MaxSpeed[i] = CurrentSpeed[i];
+#endif
+            }
+#if defined(_M_ARM64) || defined(_M_AMD64)
+            if (ProcessorCount != 0)
+            {
+                KeRevertToUserAffinityThread();
+            }
+#endif
+
             _SEH2_TRY
             {
                 for (i = 0; i < ProcessorCount; i++)
                 {
-#ifdef _M_ARM64
-                    ULONG CpuMHz = KiArm64GetProcessorClockMHz(i);
-#else
-                    ULONG CpuMHz = KiProcessorBlock[i]->MHz;
-#endif
-
                     PowerInformation[i].Number = i;
-
-                    /* There is no processor frequency scaling, so the
-                       frequency measured at boot is both the current
-                       and the maximum frequency */
-                    PowerInformation[i].MaxMhz = CpuMHz;
-                    PowerInformation[i].CurrentMhz = CpuMHz;
-                    PowerInformation[i].MhzLimit = CpuMHz;
+                    PowerInformation[i].MaxMhz = MaxSpeed[i];
+                    PowerInformation[i].CurrentMhz = CurrentSpeed[i];
+                    PowerInformation[i].MhzLimit = MaxSpeed[i];
 
                     /* No processor idle states are implemented */
                     PowerInformation[i].MaxIdleState = 0;

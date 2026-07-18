@@ -751,6 +751,79 @@ KiArm64GetProcessorClockMHz(_In_ ULONG ProcessorNumber)
     return (ULONG)((CpuClock + 500000ULL) / 1000000ULL);
 }
 
+ULONG64 KiArm64IdleCounterTicks[MAXIMUM_PROCESSORS];
+
+static struct
+{
+    ULONG64 Cycles;
+    ULONG64 Ref;
+    ULONG64 Idle;
+    ULONG Mhz;
+} KiArm64ClockSample[MAXIMUM_PROCESSORS];
+
+ULONG
+NTAPI
+KiArm64QueryEffectiveClockMHz(_In_ ULONG ProcessorNumber)
+{
+    ULONG64 Cycles, Ref, Idle, CounterFrequency;
+    ULONG64 DeltaCycles, DeltaRef, DeltaIdle, BusyRef, EffectiveHz;
+    ULONG MaxMhz, Mhz;
+
+    MaxMhz = KiArm64GetProcessorClockMHz(ProcessorNumber);
+    if ((ProcessorNumber >= MAXIMUM_PROCESSORS) ||
+        (KiArm64CpuClockHz[ProcessorNumber] == 0))
+    {
+        return MaxMhz;
+    }
+
+    __asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(CounterFrequency));
+    if (CounterFrequency == 0)
+    {
+        return MaxMhz;
+    }
+
+    __asm__ __volatile__("isb");
+    __asm__ __volatile__("mrs %0, pmccntr_el0" : "=r"(Cycles));
+    __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(Ref));
+    Idle = KiArm64IdleCounterTicks[ProcessorNumber];
+
+    DeltaCycles = Cycles - KiArm64ClockSample[ProcessorNumber].Cycles;
+    DeltaRef = Ref - KiArm64ClockSample[ProcessorNumber].Ref;
+    DeltaIdle = Idle - KiArm64ClockSample[ProcessorNumber].Idle;
+
+    if (DeltaRef < (CounterFrequency / 50))
+    {
+        Mhz = KiArm64ClockSample[ProcessorNumber].Mhz;
+        return Mhz ? Mhz : MaxMhz;
+    }
+
+    KiArm64ClockSample[ProcessorNumber].Cycles = Cycles;
+    KiArm64ClockSample[ProcessorNumber].Ref = Ref;
+    KiArm64ClockSample[ProcessorNumber].Idle = Idle;
+
+    BusyRef = (DeltaIdle < DeltaRef) ? (DeltaRef - DeltaIdle) : 0;
+    if ((BusyRef < (CounterFrequency / 1000)) || (DeltaCycles == 0))
+    {
+        Mhz = KiArm64ClockSample[ProcessorNumber].Mhz;
+        if (Mhz == 0)
+        {
+            Mhz = MaxMhz;
+        }
+    }
+    else
+    {
+        EffectiveHz = (DeltaCycles * CounterFrequency) / BusyRef;
+        Mhz = (ULONG)((EffectiveHz + 500000ULL) / 1000000ULL);
+        if (Mhz > MaxMhz)
+        {
+            Mhz = MaxMhz;
+        }
+    }
+
+    KiArm64ClockSample[ProcessorNumber].Mhz = Mhz;
+    return Mhz;
+}
+
 VOID
 NTAPI
 KiInitializePcr(_In_ ULONG ProcessorNumber,
