@@ -8,6 +8,7 @@
 
 KMT_TESTFUNC Test_CddDisplay;
 KMT_TESTFUNC Test_CmSecurity;
+KMT_TESTFUNC Test_Dxgmms2Timeline;
 KMT_TESTFUNC Test_Example;
 KMT_TESTFUNC Test_ExCallback;
 KMT_TESTFUNC Test_ExDoubleList;
@@ -185,6 +186,7 @@ const KMT_TEST TestList[] =
 {
     { "CddDisplay",                         Test_CddDisplay },
     { "CmSecurity",                         Test_CmSecurity },
+    { "Dxgmms2Timeline",                   Test_Dxgmms2Timeline },
     { "ExCallback",                         Test_ExCallback },
     { "ExDoubleList",                       Test_ExDoubleList },
     { "ExFastMutex",                        Test_ExFastMutex },
