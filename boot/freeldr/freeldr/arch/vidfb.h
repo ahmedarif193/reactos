@@ -151,7 +151,8 @@ FbConsPutChar(
 
 VOID
 FbConsScrollTextCache(
-    _In_ UCHAR Attr);
+    _In_ UCHAR Attr,
+    _In_ ULONG Lines);
 
 VOID
 FbConsMarkDirtyRect(
@@ -159,6 +160,9 @@ FbConsMarkDirtyRect(
     _In_ ULONG Y,
     _In_ ULONG Width,
     _In_ ULONG Height);
+
+VOID
+FbConsResetDirtyRect(VOID);
 
 BOOLEAN
 FbConsTakeDirtyRect(
@@ -199,5 +203,11 @@ FbConsCopyOffScreenBufferToVRAM(
     _In_ PVOID Buffer);
 
 VOID
+FbConsClearScrollArea(
+    _In_ UCHAR Attr,
+    _In_ ULONG Lines);
+
+VOID
 FbConsScrollUp(
-    _In_ UCHAR Attr);
+    _In_ UCHAR Attr,
+    _In_ ULONG Lines);
