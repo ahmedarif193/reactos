@@ -1069,6 +1069,8 @@ cleanup:
     return hr;
 }
 
+#ifndef __REACTOS__
+
 struct dxgi_vk_funcs
 {
     PFN_vkAcquireNextImageKHR p_vkAcquireNextImageKHR;
@@ -3444,3 +3446,10 @@ HRESULT d3d12_swapchain_create(IWineDXGIFactory *factory, ID3D12CommandQueue *qu
 
     return S_OK;
 }
+
+#else
+
+/* ReactOS currently carries vkd3d-shader, not the full vkd3d D3D12 runtime required by Wine's D3D12 swapchain. */
+HRESULT d3d12_swapchain_create(IWineDXGIFactory *factory, ID3D12CommandQueue *queue, HWND window, const DXGI_SWAP_CHAIN_DESC1 *swapchain_desc, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *fullscreen_desc, IDXGISwapChain1 **swapchain) { return DXGI_ERROR_UNSUPPORTED; }
+
+#endif

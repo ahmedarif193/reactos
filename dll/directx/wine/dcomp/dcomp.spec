@@ -1,13 +1,13 @@
-1017 stub @
-1019 stub @
-1028 stub @
-1031 stub @
-1033 stub @
-1038 stub @
-1039 stub @
-1040 stub @
-1041 stub @
-1042 stub @
+1017 stub -noname Ordinal1017
+1019 stub -noname Ordinal1019
+1028 stub -noname Ordinal1028
+1031 stub -noname Ordinal1031
+1033 stub -noname Ordinal1033
+1038 stub -noname Ordinal1038
+1039 stub -noname Ordinal1039
+1040 stub -noname Ordinal1040
+1041 stub -noname Ordinal1041
+1042 stub -noname Ordinal1042
 
 @ stub CompileEffectDescription
 @ stub CreateEffectDescription

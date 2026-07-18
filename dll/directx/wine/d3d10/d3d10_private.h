@@ -316,11 +316,16 @@ HRESULT WINAPI D3D10CoreCreateDevice(IDXGIFactory *factory, IDXGIAdapter *adapte
         unsigned int flags, D3D_FEATURE_LEVEL feature_level, ID3D10Device **device);
 
 /* d3dcompiler_39 function prototypes */
+#ifdef __REACTOS__
+#define D3DCompileFromMemory D3DCompile
+#define D3DDisassembleCode D3DDisassemble
+#else
 HRESULT WINAPI D3DCompileFromMemory(const void *data, SIZE_T data_size, const char *filename,
         const D3D_SHADER_MACRO *defines, ID3DInclude *include, const char *entrypoint,
         const char *target, UINT sflags, UINT eflags, ID3DBlob **shader, ID3DBlob **error_messages);
 
 HRESULT WINAPI D3DDisassembleCode(const void *data, SIZE_T data_size,
         UINT flags, const char *comments, ID3DBlob **disassembly);
+#endif
 
 #endif /* __WINE_D3D10_PRIVATE_H */

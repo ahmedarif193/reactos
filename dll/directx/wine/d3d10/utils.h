@@ -21,6 +21,28 @@
 
 #include <stdint.h>
 
+#ifdef __REACTOS__
+#include <math.h>
+
+static inline const char *debugstr_fourcc(DWORD fourcc)
+{
+    return wine_dbg_sprintf("%c%c%c%c", (char)fourcc, (char)(fourcc >> 8), (char)(fourcc >> 16), (char)(fourcc >> 24));
+}
+
+static inline float reactos_exp2f(float value)
+{
+    return powf(2.0f, value);
+}
+
+static inline float reactos_log2f(float value)
+{
+    return logf(value) / 0.69314718055994530942f;
+}
+
+#define exp2f reactos_exp2f
+#define log2f reactos_log2f
+#endif
+
 static inline uint32_t read_u32(const char **ptr)
 {
     uint32_t r;

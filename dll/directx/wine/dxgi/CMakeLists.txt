@@ -1,7 +1,19 @@
 spec2def(dxgi.dll dxgi.spec ADD_IMPORTLIB)
 
+# D3DKMTEnumAdapters2 is part of the Win8+ thunk surface; match the WDDM 2.0 kernel stack contract.
+remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
+add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x5023)
+
 list(APPEND SOURCE
-    dxgi_main.c)
+    adapter.c
+    device.c
+    dxgi_main.c
+    factory.c
+    output.c
+    reactos.c
+    resource.c
+    swapchain.c
+    utils.c)
 
 add_library(dxgi MODULE
     ${SOURCE}
@@ -10,11 +22,9 @@ add_library(dxgi MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/dxgi_stubs.c)
 
 set_module_type(dxgi win32dll)
-# NT10 / WDDM3.0 interface version (exposes D3DKMTEnumAdapters2 & co.).
-target_compile_definitions(dxgi PRIVATE DXGKDDI_INTERFACE_VERSION=0xF003)
-target_link_libraries(dxgi uuid wine)
-add_importlibs(dxgi gdi32 user32 msvcrt kernel32 ntdll)
-# Native dxgkrnl-backed DXGI is the system dxgi.dll (Win11 model); DXVK's
-# Vulkan-based dxgi is app-local only (see dll/3rdparty/dxvk).
+target_include_directories(dxgi PRIVATE ${REACTOS_SOURCE_DIR}/sdk/lib/3rdparty/vkd3d/include)
+target_link_libraries(dxgi dx10guid uuid wine)
+add_importlibs(dxgi d3dwine gdi32 user32 msvcrt kernel32 ntdll)
+add_dependencies(dxgi d3d_idl_headers wineheaders)
 add_cd_file(TARGET dxgi DESTINATION reactos/system32 FOR all)
 set_wine_module_FIXME(dxgi)
