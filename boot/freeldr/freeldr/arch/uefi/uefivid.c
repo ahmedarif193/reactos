@@ -35,16 +35,6 @@ static UINT32 UefiGopHeight = 0;
 static ULONG_PTR UefiRenderAddress = 0;
 static UINT32 UefiRenderPixelsPerScanLine = 0;
 
-/*
- * Shadow framebuffer for linear GOP modes: when UefiShadowBuffer is set, all
- * rendering (glyph blending, scrolling) happens in cached RAM and only
- * write-only dirty-rectangle flushes touch the video memory at VramAddress.
- * Reading real VRAM is extremely slow on hardware where the framebuffer is
- * mapped uncached/write-combined.
- */
-static PUCHAR UefiShadowBuffer = NULL;
-static ULONG UefiShadowDelta = 0;
-
 typedef struct _UEFI_BGRT_LOGO
 {
     BOOLEAN Valid;
@@ -205,130 +195,53 @@ UefiBltPixelFromTextBackground(
 static
 BOOLEAN
 UefiVideoFastScrollUp(
-    _In_ UCHAR Attr,
-    _In_ ULONG Lines)
+    _In_ UCHAR Attr)
 {
     EFI_STATUS Status;
     EFI_GRAPHICS_OUTPUT_BLT_PIXEL FillPixel;
     ULONG CellWidth, CellHeight;
-    ULONG ScrollPixels;
     UINTN CopyHeight;
 
     if (UefiGop == NULL)
         return FALSE;
 
-    /* With a shadow framebuffer the software scroll runs in cached RAM
-     * and gets flushed write-only, without any VRAM read */
-    if (UefiShadowBuffer != NULL)
-        return FALSE;
-
     FbConsGetCellSize(&CellWidth, &CellHeight);
-    if (CellHeight == 0)
+    if ((CellHeight == 0) || (CellHeight >= UefiGopHeight))
         return FALSE;
 
-    /* Let the software path handle degenerate scrolls covering the screen */
-    if ((Lines == 0) || (Lines > (UefiGopHeight - 1) / CellHeight))
-        return FALSE;
-
-    ScrollPixels = Lines * CellHeight;
-    CopyHeight = UefiGopHeight - ScrollPixels;
-    Status = UefiGop->Blt(UefiGop, NULL, EfiBltVideoToVideo, 0, ScrollPixels, 0, 0, UefiGopWidth, CopyHeight, 0);
+    CopyHeight = UefiGopHeight - CellHeight;
+    Status = UefiGop->Blt(UefiGop,
+                          NULL,
+                          EfiBltVideoToVideo,
+                          0,
+                          CellHeight,
+                          0,
+                          0,
+                          UefiGopWidth,
+                          CopyHeight,
+                          0);
     if (Status != EFI_SUCCESS)
         return FALSE;
 
     UefiBltPixelFromTextBackground(Attr, &FillPixel);
-    Status = UefiGop->Blt(UefiGop, &FillPixel, EfiBltVideoFill, 0, 0, 0, CopyHeight, UefiGopWidth, ScrollPixels, 0);
+    Status = UefiGop->Blt(UefiGop,
+                          &FillPixel,
+                          EfiBltVideoFill,
+                          0,
+                          0,
+                          0,
+                          CopyHeight,
+                          UefiGopWidth,
+                          CellHeight,
+                          0);
     if (Status != EFI_SUCCESS)
     {
         ERR("GOP scroll clear failed: %lu\n", Status);
     }
 
-    FbConsScrollTextCache(Attr, Lines);
+    FbConsScrollTextCache(Attr);
 
     return TRUE;
-}
-
-static
-VOID
-UefiShadowReset(VOID)
-{
-    if (UefiShadowBuffer != NULL)
-    {
-        GlobalSystemTable->BootServices->FreePool(UefiShadowBuffer);
-    }
-
-    UefiShadowBuffer = NULL;
-    UefiShadowDelta = 0;
-}
-
-/* Rectangles come pre-clipped to the screen by FbConsMarkDirtyRect */
-static
-VOID
-UefiShadowFlushRect(
-    _In_ ULONG X,
-    _In_ ULONG Y,
-    _In_ ULONG Width,
-    _In_ ULONG Height)
-{
-    ULONG Row;
-    ULONG Offset;
-    PUCHAR Source;
-    PUCHAR Destination;
-
-    Offset = Y * UefiShadowDelta + X * sizeof(UINT32);
-    Source = UefiShadowBuffer + Offset;
-    Destination = (PUCHAR)VramAddress + Offset;
-
-    if ((X == 0) && (Width * sizeof(UINT32) == UefiShadowDelta))
-    {
-        RtlCopyMemory(Destination, Source, Height * UefiShadowDelta);
-        return;
-    }
-
-    for (Row = 0; Row < Height; ++Row)
-    {
-        RtlCopyMemory(Destination, Source, Width * sizeof(UINT32));
-        Source += UefiShadowDelta;
-        Destination += UefiShadowDelta;
-    }
-}
-
-static
-VOID
-UefiInitializeShadowFramebuffer(
-    _In_ UINT32 Width,
-    _In_ UINT32 Height,
-    _In_ UINT32 PixelsPerScanLine,
-    _In_ ULONG BitsPerPixel)
-{
-    EFI_STATUS Status;
-    ULONGLONG BufferSize;
-    ULONG Delta;
-    VOID* Buffer = NULL;
-
-    UefiShadowReset();
-
-    if (BitsPerPixel != RTL_BITS_OF(UINT32))
-        return;
-
-    Delta = PixelsPerScanLine * sizeof(UINT32);
-    BufferSize = (ULONGLONG)Height * Delta;
-    if ((BufferSize == 0) || (BufferSize > VramSize))
-        return;
-
-    Status = GlobalSystemTable->BootServices->AllocatePool(EfiLoaderData, (UINTN)BufferSize, &Buffer);
-    if (Status != EFI_SUCCESS)
-    {
-        TRACE("No shadow framebuffer (%llu bytes): %lu\n", BufferSize, Status);
-        return;
-    }
-
-    /* Start from the current firmware-drawn screen content */
-    RtlCopyMemory(Buffer, (PVOID)VramAddress, (SIZE_T)BufferSize);
-
-    UefiShadowBuffer = Buffer;
-    UefiShadowDelta = Delta;
-    TRACE("Rendering through a shadow framebuffer (%ux%u)\n", Width, Height);
 }
 
 static
@@ -395,23 +308,17 @@ UefiBltOnlyFlush(VOID)
     UefiBltOnlyFlushRect(0, 0, UefiBltOnlyWidth, UefiBltOnlyHeight);
 }
 
-/* Propagate pending rendering to the visible screen, whatever the backend */
 static
-VOID
-UefiVideoFlushDirty(VOID)
+BOOLEAN
+UefiBltOnlyFlushDirty(VOID)
 {
     ULONG X, Y, Width, Height;
 
-    if (!UefiBltOnlyMode && (UefiShadowBuffer == NULL))
-        return;
-
     if (!FbConsTakeDirtyRect(&X, &Y, &Width, &Height))
-        return;
+        return FALSE;
 
-    if (UefiBltOnlyMode)
-        UefiBltOnlyFlushRect(X, Y, Width, Height);
-    else
-        UefiShadowFlushRect(X, Y, Width, Height);
+    UefiBltOnlyFlushRect(X, Y, Width, Height);
+    return TRUE;
 }
 
 static
@@ -873,7 +780,6 @@ UefiInitializeGop(VOID)
     EFI_GRAPHICS_PIXEL_FORMAT PixelFormat;
     EFI_PIXEL_BITMASK* pPixelBitmask;
     ULONG BitsPerPixel;
-    ULONG_PTR RenderAddress;
 
     Status = GlobalSystemTable->BootServices->LocateProtocol(&EfiGraphicsOutputProtocol, 0, (void**)&gop);
     if (Status != EFI_SUCCESS)
@@ -944,14 +850,8 @@ UefiInitializeGop(VOID)
     UefiGopHeight = gop->Mode->Info->VerticalResolution;
     UefiVideoConfigureFramebufferCache();
 
-    /* Render into cached RAM when possible; fall back to direct video memory.
-     * The kernel hand-off is unaffected: VramAddress/FrameBufferData keep
-     * describing the physical framebuffer. */
-    UefiInitializeShadowFramebuffer(UefiGopWidth, UefiGopHeight, gop->Mode->Info->PixelsPerScanLine, BitsPerPixel);
-    RenderAddress = (UefiShadowBuffer != NULL) ? (ULONG_PTR)UefiShadowBuffer : VramAddress;
-
     if (!VidFbInitializeVideo(&FrameBufferData,
-                              RenderAddress,
+                              VramAddress,
                               VramSize,
                               gop->Mode->Info->HorizontalResolution,
                               gop->Mode->Info->VerticalResolution,
@@ -960,7 +860,6 @@ UefiInitializeGop(VOID)
                               (PPIXEL_BITMASK)pPixelBitmask))
     {
         ERR("Couldn't initialize video framebuffer\n");
-        UefiShadowReset();
         UefiGop = NULL;
         UefiGopWidth = 0;
         UefiGopHeight = 0;
@@ -968,7 +867,7 @@ UefiInitializeGop(VOID)
     }
     else
     {
-        UefiRenderAddress = RenderAddress;
+        UefiRenderAddress = VramAddress;
         UefiRenderPixelsPerScanLine = gop->Mode->Info->PixelsPerScanLine;
         UefiInitializeBgrtLogo();
     }
@@ -1060,9 +959,6 @@ UefiInitializeVideo(VOID)
 VOID
 UefiVideoPrepareForExitBootServices(VOID)
 {
-    /* The shadow framebuffer deliberately stays active: flushing it is a
-     * plain memory copy, keeping the console usable after ExitBootServices
-     * (e.g. for the ARM64 trap screen) */
     UefiGop = NULL;
     UefiGopWidth = 0;
     UefiGopHeight = 0;
@@ -1084,14 +980,16 @@ VOID
 UefiVideoClearScreen(UCHAR Attr)
 {
     FbConsClearScreen(Attr);
-    UefiVideoFlushDirty();
+    if (UefiBltOnlyMode)
+        UefiBltOnlyFlush();
 }
 
 VOID
 UefiVideoPutChar(int Ch, UCHAR Attr, unsigned X, unsigned Y)
 {
     FbConsPutChar(Ch, Attr, X, Y);
-    UefiVideoFlushDirty();
+    if (UefiBltOnlyMode)
+        UefiBltOnlyFlushDirty();
 }
 
 VOID
@@ -1119,23 +1017,26 @@ UefiVideoCopyOffScreenBufferToVRAM(PVOID Buffer)
 {
     FbConsCopyOffScreenBufferToVRAM(Buffer);
     UefiDrawBgrtLogo();
-    UefiVideoFlushDirty();
+    if (UefiBltOnlyMode)
+        UefiBltOnlyFlushDirty();
 }
 
 VOID
 UefiVideoSync(VOID)
 {
-    UefiVideoFlushDirty();
+    if (UefiBltOnlyMode)
+        UefiBltOnlyFlushDirty();
 }
 
 VOID
-UefiVideoScrollUp(UCHAR Attr, ULONG Lines)
+UefiVideoScrollUp(UCHAR Attr)
 {
-    if (UefiVideoFastScrollUp(Attr, Lines))
-        return;
-
-    FbConsScrollUp(Attr, Lines);
-    UefiVideoFlushDirty();
+    if (!UefiVideoFastScrollUp(Attr))
+    {
+        FbConsScrollUp(Attr);
+        if (UefiBltOnlyMode)
+            UefiBltOnlyFlushDirty();
+    }
 }
 
 VOID

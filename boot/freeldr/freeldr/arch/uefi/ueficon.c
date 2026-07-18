@@ -26,7 +26,6 @@ VOID
 UefiConsPutChar(int c)
 {
     ULONG Width, Height, Unused;
-    ULONG ScrollLines;
     BOOLEAN NeedScroll;
 
     UefiVideoGetDisplaySize(&Width, &Height, &Unused);
@@ -34,13 +33,8 @@ UefiConsPutChar(int c)
     NeedScroll = (CurrentCursorY >= Height);
     if (NeedScroll)
     {
-        /* Jump-scroll half the console at once: a scroll costs a
-         * framebuffer-wide pixel move, so batching it keeps continuous
-         * output at glyph-drawing speed instead of paying that move for
-         * every single printed line */
-        ScrollLines = max(Height / 2, 1UL);
-        UefiVideoScrollUp(CurrentAttr, ScrollLines);
-        CurrentCursorY = Height - ScrollLines;
+        UefiVideoScrollUp(CurrentAttr);
+        --CurrentCursorY;
     }
     if (c == '\r')
     {
