@@ -322,6 +322,8 @@ Ndis6CreateLogicalAdapter(
     Ext->PhysicalDeviceObject   = Pdo;
     Ext->FunctionalDeviceObject = Fdo;
     KeInitializeSpinLock(&Ext->IsrLock);
+    Ext->InterruptRundownState = NDIS6_INTERRUPT_RUNDOWN_STOPPING;
+    KeInitializeEvent(&Ext->InterruptDrainEvent, NotificationEvent, TRUE);
 
     /* Phase 3 TX thunk: in-flight wrapper NBL list. */
     KeInitializeSpinLock(&Ext->TxLookupLock);
@@ -331,6 +333,7 @@ Ndis6CreateLogicalAdapter(
      * for count == 0 with a timeout. */
     Ext->TxInFlightCount = 0;
     KeInitializeEvent(&Ext->TxDrainEvent, NotificationEvent, TRUE);
+    Ext->TxAccepting = FALSE;
 
     /* A4: Pause/Restart state machine — starts paused after InitializeEx
      * and transitions to running when a protocol opens the adapter. */
@@ -617,6 +620,18 @@ Ndis6CallMiniportHaltEx(
  *  respective event in that case.
  * ============================================================================ */
 
+static VOID
+Ndis6SetTransmitAccepting(
+    _In_ PNDIS6_ADAPTER_EXT Ext,
+    _In_ BOOLEAN Accepting)
+{
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&Ext->TxLookupLock, &OldIrql);
+    Ext->TxAccepting = Accepting;
+    KeReleaseSpinLock(&Ext->TxLookupLock, OldIrql);
+}
+
 NDIS_STATUS
 Ndis6CallMiniportPauseEx(
     _In_ PLOGICAL_ADAPTER Adapter)
@@ -629,12 +644,16 @@ Ndis6CallMiniportPauseEx(
         return NDIS_STATUS_INVALID_PARAMETER;
 
     Ext = NDIS6_EXT(Adapter);
-    if (Ext == NULL || Ext->DriverBlock == NULL ||
+    if (Ext == NULL)
+        return NDIS_STATUS_INVALID_PARAMETER;
+
+    if (Ext->DriverBlock == NULL ||
         Ext->DriverBlock->Characteristics.PauseHandler == NULL ||
         Ext->MiniportAdapterContext == NULL)
     {
         /* Driver has no pause handler — treat as already paused. Many
          * simple miniports don't need pause semantics and fall through. */
+        Ndis6SetTransmitAccepting(Ext, FALSE);
         Ext->PauseState = NDIS6_PAUSE_STATE_PAUSED;
         return NDIS_STATUS_SUCCESS;
     }
@@ -652,6 +671,7 @@ Ndis6CallMiniportPauseEx(
     PauseParams.Flags           = 0;
     PauseParams.PauseReason     = 0;
 
+    Ndis6SetTransmitAccepting(Ext, FALSE);
     Ext->PauseState  = NDIS6_PAUSE_STATE_PAUSING;
     Ext->PauseStatus = NDIS_STATUS_PENDING;
     KeClearEvent(&Ext->PauseEvent);
@@ -673,7 +693,10 @@ Ndis6CallMiniportPauseEx(
     if (NT_SUCCESS(Status))
         Ext->PauseState = NDIS6_PAUSE_STATE_PAUSED;
     else
+    {
         Ext->PauseState = NDIS6_PAUSE_STATE_RUNNING;  /* stay in running on fail */
+        Ndis6SetTransmitAccepting(Ext, TRUE);
+    }
 
     return Status;
 }
@@ -690,16 +713,25 @@ Ndis6CallMiniportRestartEx(
         return NDIS_STATUS_INVALID_PARAMETER;
 
     Ext = NDIS6_EXT(Adapter);
-    if (Ext == NULL || Ext->DriverBlock == NULL ||
+    if (Ext == NULL)
+        return NDIS_STATUS_INVALID_PARAMETER;
+
+    if (Ext->DriverBlock == NULL ||
         Ext->DriverBlock->Characteristics.RestartHandler == NULL ||
         Ext->MiniportAdapterContext == NULL)
     {
         Ext->PauseState = NDIS6_PAUSE_STATE_RUNNING;
+        Ndis6SetTransmitAccepting(Ext, TRUE);
         return NDIS_STATUS_SUCCESS;
     }
 
-    if (Ext->PauseState == NDIS6_PAUSE_STATE_RUNNING ||
-        Ext->PauseState == NDIS6_PAUSE_STATE_RESTARTING)
+    if (Ext->PauseState == NDIS6_PAUSE_STATE_RUNNING)
+    {
+        Ndis6SetTransmitAccepting(Ext, TRUE);
+        return NDIS_STATUS_SUCCESS;
+    }
+
+    if (Ext->PauseState == NDIS6_PAUSE_STATE_RESTARTING)
     {
         return NDIS_STATUS_SUCCESS;
     }
@@ -730,9 +762,15 @@ Ndis6CallMiniportRestartEx(
     }
 
     if (NT_SUCCESS(Status))
+    {
         Ext->PauseState = NDIS6_PAUSE_STATE_RUNNING;
+        Ndis6SetTransmitAccepting(Ext, TRUE);
+    }
     else
+    {
         Ext->PauseState = NDIS6_PAUSE_STATE_PAUSED;  /* stay paused on fail */
+        Ndis6SetTransmitAccepting(Ext, FALSE);
+    }
 
     return Status;
 }
@@ -939,10 +977,13 @@ Ndis6CreateImInstance(
     Ext->PhysicalDeviceObject   = Fdo;   /* self-PDO: no bus underneath */
     Ext->FunctionalDeviceObject = Fdo;
     KeInitializeSpinLock(&Ext->IsrLock);
+    Ext->InterruptRundownState = NDIS6_INTERRUPT_RUNDOWN_STOPPING;
+    KeInitializeEvent(&Ext->InterruptDrainEvent, NotificationEvent, TRUE);
     KeInitializeSpinLock(&Ext->TxLookupLock);
     InitializeListHead(&Ext->InFlightNblsTx);
     Ext->TxInFlightCount = 0;
     KeInitializeEvent(&Ext->TxDrainEvent, NotificationEvent, TRUE);
+    Ext->TxAccepting = FALSE;
     Ext->PauseState    = NDIS6_PAUSE_STATE_PAUSED;
     Ext->PauseStatus   = NDIS_STATUS_SUCCESS;
     Ext->RestartStatus = NDIS_STATUS_SUCCESS;
