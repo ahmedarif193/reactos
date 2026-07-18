@@ -223,6 +223,14 @@ DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeCreateAllocation,
                             D3DKMT_CREATEALLOCATION)
 
 /*
+ * DxgBridgeCreateAllocation2
+ *
+ * Preserve the advanced-scheduling allocation-info layout through its own
+ * v3 bridge callback instead of reinterpreting it as D3DDDI_ALLOCATIONINFO.
+ */
+DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeCreateAllocation2, D3DKMTCreateAllocation2, _Inout_, D3DKMT_CREATEALLOCATION)
+
+/*
  * DxgBridgeDestroyAllocation
  *
  * Bridges NtGdiDdDDIDestroyAllocation -> D3DKMTDestroyAllocation.
@@ -729,4 +737,6 @@ WddmBridgeInitCallbacks(
         Interface->RxgkIntPfnCreateContextVirtual = DxgBridgeCreateContextVirtual;
         Interface->RxgkIntPfnSubmitCommand = DxgBridgeSubmitCommand;
     }
+    if (WddmBridgeGetInterfaceVersion() >= DXGKRNL_INTERFACE_VERSION_3)
+        Interface->RxgkIntPfnCreateAllocation2 = DxgBridgeCreateAllocation2;
 }
