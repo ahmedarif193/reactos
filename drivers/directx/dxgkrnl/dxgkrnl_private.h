@@ -1822,10 +1822,14 @@ NTSTATUS
 DxgkGpuVaMakeResident(
     _In_    PDXGKRNL_ADAPTER   Adapter,
     _In_    PDXGKRNL_PROCESS   Process,
+    _In_opt_ PDXGKRNL_DEVICE   Device,
+    _In_    D3DKMT_HANDLE      hPagingSyncObject,
+    _Inout_opt_ volatile LONG64 *PagingFenceCounter,
     _In_reads_(NumAllocations) CONST D3DKMT_HANDLE *AllocationList,
     _In_    ULONG              NumAllocations,
     _Out_   ULONG             *OutCompleted,
-    _Out_   ULONGLONG         *OutNumBytesToTrim);
+    _Out_   ULONGLONG         *OutNumBytesToTrim,
+    _Out_   ULONGLONG         *OutPagingFenceValue);
 
 NTSTATUS
 DxgkGpuVaEvict(

@@ -408,6 +408,11 @@ VidSchpCompletionDpcRoutine(
     KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
     VidSchpKickEngine(Engine);
 
+    /* Completion drives tracked-DMA retirement (fence signals, open-binding
+     * closes, in-flight accounting); nothing may wait for a later submission
+     * to flush a completed packet. */
+    DxgkRetireCompletedDmaBuffers(Engine->Adapter);
+
     if (PreemptionCompleted)
         KeSetEvent(&Engine->PreemptionCompletedEvent, IO_NO_INCREMENT, FALSE);
 
