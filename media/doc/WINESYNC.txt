@@ -24,7 +24,42 @@ sdk/tools/wpp                   # Synced to Wine-10.0 (Module was moved into wrc
 The following headers are shared with Wine.
 sdk/include/psdk/rpcproxy.h     # Synced to Wine-10.0
 sdk/include/psdk/netioapi.h     # Synced to Wine-10.0 (mirrors sdk/include/wine/netioapi.h)
+sdk/include/psdk/d2dbasetypes.h # Synced to Wine-10.0
+sdk/include/psdk/dcommon.idl    # Synced to Wine-10.0
+sdk/include/psdk/d3dcommon.idl  # Synced to Wine-10.0
+sdk/include/psdk/d3d10.idl      # Synced to Wine-10.0
+sdk/include/psdk/d3d10_1.idl    # Synced to Wine-10.0
+sdk/include/psdk/d3d10_1shader.h # Synced to Wine-10.0
+sdk/include/psdk/d3d10effect.idl # Synced to Wine-10.0
+sdk/include/psdk/d3d10sdklayers.idl # Synced to Wine-10.0
+sdk/include/psdk/d3d10shader.idl # Synced to Wine-10.0
+sdk/include/psdk/d3d11.idl      # Synced to Wine-10.0
+sdk/include/psdk/d3d11_1.idl    # Synced to Wine-10.0
+sdk/include/psdk/d3d11_2.idl    # Synced to Wine-10.0
+sdk/include/psdk/d3d11_3.idl    # Synced to Wine-10.0
+sdk/include/psdk/d3d11_4.idl    # Synced to Wine-10.0
+sdk/include/psdk/d3d11on12.idl  # Synced to Wine-10.0
+sdk/include/psdk/d3d11sdklayers.idl # Synced to Wine-10.0
+sdk/include/psdk/d3d11shader.h  # Synced to Wine-10.0
+sdk/include/psdk/d3d12.idl      # Synced to Wine-10.0 (public header only)
+sdk/include/psdk/d3d12sdklayers.idl # Synced to Wine-10.0 (public header only)
+sdk/include/psdk/d3d12shader.idl # Synced to Wine-10.0 (d3dcompiler.h header closure only)
+sdk/include/psdk/d3dcompiler.h  # Synced to Wine-10.0
+sdk/include/psdk/dcomp.idl      # Synced to Wine-10.0
+sdk/include/psdk/dcompanimation.idl # Synced to Wine-10.0
+sdk/include/psdk/dcomptypes.idl # Synced to Wine-10.0
+sdk/include/psdk/dxgi.idl       # Synced to Wine-10.0
+sdk/include/psdk/dxgi1_2.idl    # Synced to Wine-10.0
+sdk/include/psdk/dxgi1_3.idl    # Synced to Wine-10.0
+sdk/include/psdk/dxgi1_4.idl    # Synced to Wine-10.0
+sdk/include/psdk/dxgi1_5.idl    # Synced to Wine-10.0
+sdk/include/psdk/dxgi1_6.idl    # Synced to Wine-10.0
+sdk/include/psdk/dxgicommon.idl # Synced to Wine-10.0
+sdk/include/psdk/dxgidebug.idl  # Synced to Wine-10.0
+sdk/include/psdk/dxgitype.idl   # Synced to Wine-10.0
 sdk/include/wine/list.h         # Synced to Wine-10.0
+sdk/include/wine/vulkan.h       # Synced to Wine-10.0 (public declarations only)
+sdk/include/wine/winedxgi.idl   # Synced to Wine-10.0
 
 The following libraries are shared with Wine.
 
