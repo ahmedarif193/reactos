@@ -1464,22 +1464,28 @@ NTSTATUS
 DxgkGpuVaMakeResident(
     _In_    PDXGKRNL_ADAPTER   Adapter,
     _In_    PDXGKRNL_PROCESS   Process,
+    _In_opt_ PDXGKRNL_DEVICE   Device,
+    _In_    D3DKMT_HANDLE      hPagingSyncObject,
+    _Inout_opt_ volatile LONG64 *PagingFenceCounter,
     _In_reads_(NumAllocations) CONST D3DKMT_HANDLE *AllocationList,
     _In_    ULONG              NumAllocations,
     _Out_   ULONG             *OutCompleted,
-    _Out_   ULONGLONG         *OutNumBytesToTrim)
+    _Out_   ULONGLONG         *OutNumBytesToTrim,
+    _Out_   ULONGLONG         *OutPagingFenceValue)
 {
     ULONG i;
+    ULONG PacketsQueued = 0;
 
     PAGED_CODE();
 
     DPRINT("DxgkGpuVaMakeResident: %lu allocations\n", NumAllocations);
 
-    if (Adapter == NULL || Process == NULL || Process->Adapter != Adapter || AllocationList == NULL || NumAllocations == 0 || OutCompleted == NULL || OutNumBytesToTrim == NULL)
+    if (Adapter == NULL || Process == NULL || Process->Adapter != Adapter || AllocationList == NULL || NumAllocations == 0 || OutCompleted == NULL || OutNumBytesToTrim == NULL || OutPagingFenceValue == NULL)
         return STATUS_INVALID_PARAMETER;
 
     *OutCompleted = 0;
     *OutNumBytesToTrim = 0;
+    *OutPagingFenceValue = 0;
 
     /*
      * Each list entry adds one residency reference on its allocation and, on
@@ -1511,12 +1517,23 @@ DxgkGpuVaMakeResident(
                     Status = DxgkVidMmMakeResident(Alloc, Adapter);
                     if (NT_SUCCESS(Status))
                         Placed[i] = TRUE;
-                    else
+                    else if (Status == STATUS_NO_MEMORY || Status == STATUS_GRAPHICS_NO_VIDEO_MEMORY)
+                        *OutNumBytesToTrim += Alloc->Size;
+                    if (NT_SUCCESS(Status) && Device != NULL && hPagingSyncObject != 0 && PagingFenceCounter != NULL)
                     {
-                        if (Status == STATUS_NO_MEMORY || Status == STATUS_GRAPHICS_NO_VIDEO_MEMORY)
-                            *OutNumBytesToTrim += Alloc->Size;
-                        InterlockedDecrement(&Alloc->ResidencyReferenceCount);
+                        ULONG64 FenceValue = (ULONG64)InterlockedIncrement64(PagingFenceCounter);
+
+                        Status = DxgkVidMmSubmitAperturePagingPacket(Adapter, Device, Alloc, TRUE, hPagingSyncObject, FenceValue);
+                        if (NT_SUCCESS(Status))
+                        {
+                            *OutPagingFenceValue = FenceValue;
+                            PacketsQueued++;
+                        }
+                        else
+                            (VOID)DxgkVidMmEvict(Alloc);
                     }
+                    if (!NT_SUCCESS(Status))
+                        InterlockedDecrement(&Alloc->ResidencyReferenceCount);
                 }
                 DxgkVidMmDereferenceAllocation(Alloc);
             }
@@ -1543,7 +1560,9 @@ DxgkGpuVaMakeResident(
     }
 
     *OutCompleted = NumAllocations;
-    return STATUS_SUCCESS;
+    /* Queued paging work completes through the paging queue's monitored
+     * fence; the caller waits *OutPagingFenceValue per the native contract. */
+    return PacketsQueued != 0 ? STATUS_PENDING : STATUS_SUCCESS;
 }
 
 

@@ -443,6 +443,15 @@ DxgkVidMmQuerySegmentSizes(
     _Out_ D3DKMT_SEGMENTGROUPSIZEINFO *Info);
 
 NTSTATUS
+DxgkVidMmSubmitAperturePagingPacket(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ BOOLEAN Map,
+    _In_ D3DKMT_HANDLE hSignalSyncObject,
+    _In_ ULONG64 SignalFenceValue);
+
+NTSTATUS
 DxgkVidMmReferenceAllocation(
     _In_opt_ HANDLE Handle,
     _In_opt_ PDXGKRNL_ADAPTER ExpectedAdapter,

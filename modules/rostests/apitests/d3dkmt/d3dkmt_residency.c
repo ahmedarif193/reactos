@@ -128,6 +128,129 @@ static void Test_Evict_BadHandle(void)
        "Evict with a bogus device should fail, got 0x%08lX\n", (long)Status);
 }
 
+/*
+ * Full residency cycle: create an allocation, evict it (removes the implicit
+ * created-resident reference), bring it back with MakeResident, and honor the
+ * paging-fence contract: STATUS_PENDING means wait for the paging queue's
+ * monitored fence to reach PagingFenceValue, observable both through the
+ * CPU wait API and the fence's CPU-mapped value.  Every step that a given
+ * adapter refuses is a skip, so the test also passes on native Windows where
+ * runtime-private CreateAllocation data is required.
+ */
+static void Test_ResidencyCycle_EvictMakeResidentWait(void)
+{
+    D3DKMT_HANDLE hAdapter, hDevice;
+    D3DKMT_CREATEPAGINGQUEUE cpq;
+    D3DDDI_DESTROYPAGINGQUEUE dpq;
+    D3DKMT_CREATEALLOCATION ca;
+    D3DDDI_ALLOCATIONINFO ai;
+    D3DKMT_DESTROYALLOCATION da;
+    D3DDDI_MAKERESIDENT mr;
+    D3DKMT_EVICT ev;
+    D3DKMT_HANDLE hAlloc;
+    UINT Pass;
+    NTSTATUS Status;
+
+    LOADFN(PFND3DKMT_CREATEPAGINGQUEUE, pCreateQueue, "D3DKMTCreatePagingQueue");
+    LOADFN(PFND3DKMT_DESTROYPAGINGQUEUE, pDestroyQueue, "D3DKMTDestroyPagingQueue");
+    LOADFN(PFND3DKMT_CREATEALLOCATION, pCreateAlloc, "D3DKMTCreateAllocation");
+    LOADFN(PFND3DKMT_DESTROYALLOCATION, pDestroyAlloc, "D3DKMTDestroyAllocation");
+    LOADFN(PFND3DKMT_MAKERESIDENT, pMakeResident, "D3DKMTMakeResident");
+    LOADFN(PFND3DKMT_EVICT, pEvict, "D3DKMTEvict");
+    LOADFN(PFND3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU, pWaitCpu, "D3DKMTWaitForSynchronizationObjectFromCpu");
+
+    hAdapter = OpenRenderAdapter();
+    if (!hAdapter) { skip("No render-capable adapter\n"); return; }
+    hDevice = CreateTestDevice(hAdapter);
+    if (!hDevice) { skip("CreateDevice failed\n"); CloseAdapter(hAdapter); return; }
+
+    memset(&cpq, 0, sizeof(cpq));
+    cpq.hDevice = hDevice;
+    cpq.Priority = D3DDDI_PAGINGQUEUE_PRIORITY_NORMAL;
+    Status = pCreateQueue(&cpq);
+    if (!NT_SUCCESS(Status) || cpq.hPagingQueue == 0) { skip("CreatePagingQueue not supported (0x%08lX)\n", (long)Status); goto cleanup_device; }
+
+    memset(&ai, 0, sizeof(ai));
+    memset(&ca, 0, sizeof(ca));
+    ca.hDevice = hDevice;
+    ca.NumAllocations = 1;
+    ca.pAllocationInfo = &ai;
+    Status = pCreateAlloc(&ca);
+    if (!NT_SUCCESS(Status) || ai.hAllocation == 0) { skip("Runtime-private CreateAllocation refused (0x%08lX)\n", (long)Status); goto cleanup_queue; }
+    hAlloc = ai.hAllocation;
+
+    for (Pass = 0; Pass < 2; ++Pass)
+    {
+        memset(&ev, 0, sizeof(ev));
+        ev.hDevice = hDevice;
+        ev.NumAllocations = 1;
+        ev.AllocationList = &hAlloc;
+        Status = pEvict(&ev);
+        ok(NT_SUCCESS(Status), "Evict pass %u failed 0x%08lX\n", Pass, (long)Status);
+        if (!NT_SUCCESS(Status))
+            break;
+
+        memset(&mr, 0, sizeof(mr));
+        mr.hPagingQueue = cpq.hPagingQueue;
+        mr.NumAllocations = 1;
+        mr.AllocationList = &hAlloc;
+        Status = pMakeResident(&mr);
+        ok(NT_SUCCESS(Status), "MakeResident pass %u failed 0x%08lX\n", Pass, (long)Status);
+        if (!NT_SUCCESS(Status))
+            break;
+        ok(mr.NumAllocations == 1, "MakeResident pass %u completed %u of 1\n", Pass, mr.NumAllocations);
+
+        if (Status == STATUS_PENDING)
+        {
+            ok(mr.PagingFenceValue != 0, "PENDING MakeResident returned a zero paging fence\n");
+            if (pWaitCpu != NULL && cpq.hSyncObject != 0)
+            {
+                D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU wait;
+                D3DKMT_HANDLE hFence = cpq.hSyncObject;
+                UINT64 FenceValue = mr.PagingFenceValue;
+
+                memset(&wait, 0, sizeof(wait));
+                wait.hDevice = hDevice;
+                wait.ObjectCount = 1;
+                wait.ObjectHandleArray = &hFence;
+                wait.FenceValueArray = &FenceValue;
+                Status = pWaitCpu(&wait);
+                ok(NT_SUCCESS(Status), "CPU wait on the paging fence failed 0x%08lX\n", (long)Status);
+            }
+            if (cpq.FenceValueCPUVirtualAddress != NULL)
+            {
+                volatile UINT64 *MappedFence = (volatile UINT64 *)cpq.FenceValueCPUVirtualAddress;
+                UINT Spin;
+
+                for (Spin = 0; Spin < 1000 && *MappedFence < mr.PagingFenceValue; ++Spin)
+                    Sleep(1);
+                ok(*MappedFence >= mr.PagingFenceValue,
+                   "Mapped paging fence stuck at %I64u, expected >= %I64u\n",
+                   *MappedFence, mr.PagingFenceValue);
+            }
+            trace("MakeResident pass %u: PENDING, paging fence %I64u reached\n", Pass, mr.PagingFenceValue);
+        }
+        else
+            trace("MakeResident pass %u completed synchronously\n", Pass);
+    }
+
+    memset(&da, 0, sizeof(da));
+    da.hDevice = hDevice;
+    da.phAllocationList = &hAlloc;
+    da.AllocationCount = 1;
+    Status = pDestroyAlloc(&da);
+    ok(NT_SUCCESS(Status), "DestroyAllocation failed 0x%08lX\n", (long)Status);
+
+cleanup_queue:
+    memset(&dpq, 0, sizeof(dpq));
+    dpq.hPagingQueue = cpq.hPagingQueue;
+    Status = pDestroyQueue(&dpq);
+    ok(NT_SUCCESS(Status), "DestroyPagingQueue failed 0x%08lX\n", (long)Status);
+cleanup_device:
+    DestroyTestDevice(hDevice);
+    CloseAdapter(hAdapter);
+}
+
 START_TEST(residency)
 {
     Test_MakeResident_NullArg();
@@ -137,4 +260,5 @@ START_TEST(residency)
     Test_MakeResident_BadHandle();
     Test_MakeResident_MustSucceedRequiresCantTrimFurther();
     Test_Evict_BadHandle();
+    Test_ResidencyCycle_EvictMakeResidentWait();
 }

@@ -52,6 +52,7 @@
 #include "dxgkrnl_private.h"
 #include "handles.h"
 #include "vidmm.h"
+#include "vidsch.h"
 #include "debug.h"
 
 #define NDEBUG
@@ -7112,6 +7113,109 @@ DxgkVidMmQueryProcessBudget(
     /* Reservation changes are not implemented, so advertising zero is the
      * only truthful AvailableForReservation value. */
     return STATUS_SUCCESS;
+}
+
+/*
+ * DxgkVidMmSubmitAperturePagingPacket
+ *
+ * Builds a MAP/UNMAP_APERTURE_SEGMENT paging buffer through the miniport and
+ * submits it as a tracked packet on node 0.  The packet signals the caller's
+ * monitored fence (the device paging queue) with SignalFenceValue when the
+ * scheduler retires it, which is the WDDM 2.0 paging-completion contract.
+ */
+NTSTATUS
+DxgkVidMmSubmitAperturePagingPacket(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ BOOLEAN Map,
+    _In_ D3DKMT_HANDLE hSignalSyncObject,
+    _In_ ULONG64 SignalFenceValue)
+{
+    PDXGKRNL_DMA_BUFFER DmaBuffer = NULL;
+    DXGKARG_BUILDPAGINGBUFFER BuildArgs;
+    DXGKRNL_TRACK_DMA_ARGS TrackArgs;
+    SIZE_T NumberOfPages;
+    ULONG DmaBytesUsed = 0;
+    ULONG VidSchFence = 0;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Adapter == NULL || Device == NULL || Allocation == NULL || hSignalSyncObject == 0)
+        return STATUS_INVALID_PARAMETER;
+    if (DXGK_CB_FULL(Adapter, DxgkDdiBuildPagingBuffer) == NULL)
+        return STATUS_NOT_SUPPORTED;
+
+    Status = DxgkAllocateDmaBuffer(Adapter, PAGE_SIZE, &DmaBuffer);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    NumberOfPages = (SIZE_T)((Allocation->Size + PAGE_SIZE - 1) / PAGE_SIZE);
+    RtlZeroMemory(&BuildArgs, sizeof(BuildArgs));
+    BuildArgs.pDmaBuffer = DmaBuffer->VirtualAddress;
+    BuildArgs.DmaSize = (UINT)DmaBuffer->Capacity;
+    if (Map)
+    {
+        BuildArgs.Operation = DXGK_OPERATION_MAP_APERTURE_SEGMENT;
+        BuildArgs.MapApertureSegment.hDevice = Device->hMiniportDevice;
+        BuildArgs.MapApertureSegment.hAllocation = Allocation->MiniportHandle;
+        BuildArgs.MapApertureSegment.SegmentId = Allocation->SegmentId;
+        BuildArgs.MapApertureSegment.OffsetInPages = (SIZE_T)(Allocation->SegmentOffset / PAGE_SIZE);
+        BuildArgs.MapApertureSegment.NumberOfPages = NumberOfPages;
+        BuildArgs.MapApertureSegment.pMdl = Allocation->ApertureMdl;
+    }
+    else
+    {
+        BuildArgs.Operation = DXGK_OPERATION_UNMAP_APERTURE_SEGMENT;
+        BuildArgs.UnmapApertureSegment.hDevice = Device->hMiniportDevice;
+        BuildArgs.UnmapApertureSegment.hAllocation = Allocation->MiniportHandle;
+        BuildArgs.UnmapApertureSegment.SegmentId = Allocation->SegmentId;
+        BuildArgs.UnmapApertureSegment.OffsetInPages = (SIZE_T)(Allocation->SegmentOffset / PAGE_SIZE);
+        BuildArgs.UnmapApertureSegment.NumberOfPages = NumberOfPages;
+    }
+
+    if (!DxgkAcquireKmdCall(Adapter))
+    {
+        Status = STATUS_DELETE_PENDING;
+        goto Cleanup;
+    }
+    Status = DXGK_CB_FULL(Adapter, DxgkDdiBuildPagingBuffer)(Adapter->MiniportDeviceContext, &BuildArgs);
+    DxgkReleaseKmdCall(Adapter);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    if (BuildArgs.pDmaBuffer != NULL &&
+        (PUCHAR)BuildArgs.pDmaBuffer >= (PUCHAR)DmaBuffer->VirtualAddress &&
+        (PUCHAR)BuildArgs.pDmaBuffer <= (PUCHAR)DmaBuffer->VirtualAddress + DmaBuffer->Capacity)
+    {
+        DmaBytesUsed = (ULONG)((PUCHAR)BuildArgs.pDmaBuffer - (PUCHAR)DmaBuffer->VirtualAddress);
+    }
+    if (DmaBytesUsed == 0)
+    {
+        /* A miniport with nothing to program still retires a real packet. */
+        DmaBytesUsed = 16;
+    }
+    if (DmaBytesUsed > DmaBuffer->Capacity)
+    {
+        Status = STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+        goto Cleanup;
+    }
+    DmaBuffer->SubmissionStartOffset = 0;
+    DmaBuffer->SubmissionEndOffset = DmaBytesUsed;
+
+    RtlZeroMemory(&TrackArgs, sizeof(TrackArgs));
+    TrackArgs.hSignalSyncObject = hSignalSyncObject;
+    TrackArgs.SignalFenceValue = SignalFenceValue;
+    TrackArgs.Device = Device;
+
+    Status = VidSchSubmitCommandTracked(Adapter, 0, 0, DmaBuffer, NULL, 0, NULL, 0, NULL, 0, Device->hMiniportDevice, NULL, 0, &TrackArgs, 0, 0, &VidSchFence);
+    if (NT_SUCCESS(Status))
+        DmaBuffer = NULL;
+
+Cleanup:
+    if (DmaBuffer != NULL)
+        DxgkFreeDmaBuffer(DmaBuffer);
+    return Status;
 }
 
 NTSTATUS
