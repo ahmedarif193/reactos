@@ -7,12 +7,11 @@
  * D3DKMT type definitions for adapter enumeration
  * ================================================
  * The D3DKMT_ENUMADAPTERS, D3DKMT_ADAPTERINFO, and D3DKMT_OPENADAPTERFROMLUID
- * types are guarded by DXGKDDI_INTERFACE_VERSION >= WIN8 in d3dkmthk.h, but
- * dxgkrnl targets WDDM 1.0 (Vista) for the miniport DDI layer.
+ * types are guarded by DXGKDDI_INTERFACE_VERSION >= WIN8 in d3dkmthk.h.
  *
  * We need these types in kernel space to process user-mode D3DKMT IOCTLs
  * from DXGI / D3D9 / D3D11 regardless of the miniport DDI version.
- * Define them locally to avoid changing the global interface version.
+ * Keep local definitions only as a fallback for lower-interface consumers.
  */
 
 #pragma once
@@ -109,6 +108,7 @@ typedef struct _D3DKMT_SEGMENTSIZEINFO
  * ====================================================================== */
 
 #include <reactos/rddm/rxgkinterface.h>
+#include <reactos/rddm/rxgkioctl.h>
 
 #define IOCTL_D3DKMT_ENUMADAPTERS \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x100, METHOD_BUFFERED, FILE_ANY_ACCESS)
@@ -451,8 +451,8 @@ typedef struct _D3DKMT_UPDATEGPUVIRTUALADDRESS_LOCAL
     D3DKMT_HANDLE               hContext;
     D3DKMT_HANDLE               hFenceObject;
     UINT                        NumOperations;
-    PVOID                       Operations;
-    UINT64                      Reserved0;
+    D3DDDI_UPDATEGPUVIRTUALADDRESS_OPERATION *Operations;
+    UINT                        Reserved0;
     UINT64                      Reserved1;
     UINT64                      FenceValue;
     union

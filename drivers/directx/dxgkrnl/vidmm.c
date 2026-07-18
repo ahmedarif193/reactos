@@ -50,6 +50,7 @@
 /* INCLUDES *******************************************************************/
 
 #include "dxgkrnl_private.h"
+#include "handles.h"
 #include "vidmm.h"
 #include "debug.h"
 
@@ -68,6 +69,11 @@
 /* Forward declaration — defined later in this file. */
 static VOID DxgkpVidMmReleaseApertureMapping(_In_ PDXGKVMM_ALLOCATION Allocation);
 static VOID DxgkpVidMmReleaseSegmentPlacement(_In_ PDXGKVMM_ALLOCATION Allocation);
+static VOID DxgkpVidMmFinalizeAllocation(_In_ PDXGKVMM_ALLOCATION Allocation);
+static VOID DxgkpVidMmFinalizeResource(_In_ PDXGKVMM_RESOURCE Resource);
+static VOID DxgkpVidMmDropAllocationHandleReference(_In_ PDXGKVMM_ALLOCATION Allocation);
+static VOID DxgkpVidMmDropLogicalHandleReference(_In_ PDXGKVMM_ALLOCATION Allocation);
+static VOID DxgkpVidMmCloseAllocationBinding(_In_ PDXGKVMM_ALLOCATION Allocation);
 
 /*
  * VIDMM_PAGING_BUFFER_SIZE_DEFAULT: fallback when the miniport does not
@@ -87,8 +93,6 @@ static VOID DxgkpVidMmReleaseSegmentPlacement(_In_ PDXGKVMM_ALLOCATION Allocatio
  */
 #define ADAPTER_SEGMENTS(Adapter) \
     ((PDXGKRNL_SEGMENT)(Adapter)->Segments)
-
-#define VIDMM_MAX_TRACKED_ADAPTERS 16
 
 static LONG       DxgkVidMmGlobalsState = 0;
 static FAST_MUTEX DxgkVidMmAllocationListLock;
@@ -170,6 +174,102 @@ DxgkpVidMmEnsureGlobalsInitialized(VOID)
         YieldProcessor();
 }
 
+static VOID
+DxgkpVidMmInitializeAllocationLifetime(
+    _Inout_ PDXGKVMM_ALLOCATION Allocation)
+{
+    Allocation->ReferenceCount = 1;
+    Allocation->Destroying = 0;
+    Allocation->FinalizeQueued = 0;
+    Allocation->LogicalReferenceCount = 1;
+    Allocation->LogicalHandleReferenceDropped = 0;
+    KeInitializeEvent(&Allocation->ReferencesDrainedEvent, NotificationEvent, FALSE);
+    KeInitializeEvent(&Allocation->LogicalReferencesDrainedEvent, NotificationEvent, FALSE);
+}
+
+static VOID
+DxgkpVidMmInitializeResourceLifetime(
+    _Inout_ PDXGKVMM_RESOURCE Resource)
+{
+    Resource->ReferenceCount = 1;
+    Resource->Destroying = 0;
+    Resource->FinalizeQueued = 0;
+    KeInitializeEvent(&Resource->ReferencesDrainedEvent, NotificationEvent, FALSE);
+}
+
+static VOID
+NTAPI
+DxgkpVidMmFinalizeAllocationWorker(
+    _In_ PVOID Context)
+{
+    DxgkpVidMmFinalizeAllocation((PDXGKVMM_ALLOCATION)Context);
+}
+
+static VOID
+NTAPI
+DxgkpVidMmFinalizeResourceWorker(
+    _In_ PVOID Context)
+{
+    DxgkpVidMmFinalizeResource((PDXGKVMM_RESOURCE)Context);
+}
+
+static VOID
+DxgkpVidMmScheduleAllocationFinalizer(
+    _In_ PDXGKVMM_ALLOCATION Allocation)
+{
+    if (InterlockedCompareExchange(&Allocation->FinalizeQueued, 1, 0) != 0)
+        return;
+    if (KeGetCurrentIrql() == PASSIVE_LEVEL)
+    {
+        DxgkpVidMmFinalizeAllocation(Allocation);
+        return;
+    }
+    ExInitializeWorkItem(&Allocation->FinalizeWorkItem, DxgkpVidMmFinalizeAllocationWorker, Allocation);
+    ExQueueWorkItem(&Allocation->FinalizeWorkItem, DelayedWorkQueue);
+}
+
+static VOID
+DxgkpVidMmScheduleResourceFinalizer(
+    _In_ PDXGKVMM_RESOURCE Resource)
+{
+    if (InterlockedCompareExchange(&Resource->FinalizeQueued, 1, 0) != 0)
+        return;
+    if (KeGetCurrentIrql() == PASSIVE_LEVEL)
+    {
+        DxgkpVidMmFinalizeResource(Resource);
+        return;
+    }
+    ExInitializeWorkItem(&Resource->FinalizeWorkItem, DxgkpVidMmFinalizeResourceWorker, Resource);
+    ExQueueWorkItem(&Resource->FinalizeWorkItem, DelayedWorkQueue);
+}
+
+static VOID
+DxgkpVidMmTrackBacking(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    if (InterlockedIncrement(&Adapter->VidMmBackingCount) == 1)
+        KeResetEvent(&Adapter->VidMmBackingsDrainedEvent);
+}
+
+static VOID
+DxgkpVidMmReleaseBacking(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    LONG Count = InterlockedDecrement(&Adapter->VidMmBackingCount);
+
+    ASSERT(Count >= 0);
+    if (Count == 0)
+        KeSetEvent(&Adapter->VidMmBackingsDrainedEvent, IO_NO_INCREMENT, FALSE);
+}
+
+static VOID
+DxgkpVidMmSaturatingAdd(
+    _Inout_ UINT64 *Total,
+    _In_ UINT64 Value)
+{
+    *Total = (~(UINT64)0 - *Total < Value) ? ~(UINT64)0 : *Total + Value;
+}
+
 static D3DKMT_HANDLE
 DxgkpVidMmAllocateHandle(
     _Inout_ volatile LONG *Sequence,
@@ -211,6 +311,7 @@ DxgkpVidMmCreateSystemAllocation(
         return STATUS_INSUFFICIENT_RESOURCES;
 
     RtlZeroMemory(Alloc, sizeof(*Alloc));
+    DxgkpVidMmInitializeAllocationLifetime(Alloc);
 
     Alloc->SystemMemory = ExAllocatePoolWithTag(NonPagedPool,
                                                 AllocSize,
@@ -228,6 +329,7 @@ DxgkpVidMmCreateSystemAllocation(
     Alloc->Magic = DXGKVMM_ALLOCATION_MAGIC;
     Alloc->Adapter = Adapter;
     Alloc->Device = Device;
+    Alloc->MiniportDeviceHandle = Device != NULL ? Device->hMiniportDevice : NULL;
     Alloc->Size = AllocInfo->Size;
     Alloc->Alignment = AllocInfo->Alignment ? AllocInfo->Alignment : PAGE_SIZE;
     Alloc->AllocationPriority = AllocInfo->AllocationPriority ?
@@ -268,7 +370,9 @@ DxgkpVidMmCreateSystemAllocation(
     InitializeListHead(&Alloc->SegmentEntry);
     InitializeListHead(&Alloc->DeviceEntry);
     InitializeListHead(&Alloc->GlobalAllocationEntry);
+    InitializeListHead(&Alloc->ResourceEntry);
 
+    DxgkpVidMmTrackBacking(Adapter);
     ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
     InsertTailList(&DxgkVidMmAllocationListHead, &Alloc->GlobalAllocationEntry);
     ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
@@ -278,78 +382,21 @@ DxgkpVidMmCreateSystemAllocation(
     return STATUS_SUCCESS;
 }
 
-static ULONG
-DxgkpVidMmSnapshotAdapters(
-    _Out_writes_(VIDMM_MAX_TRACKED_ADAPTERS) PDXGKRNL_ADAPTER *AdapterArray)
-{
-    PLIST_ENTRY Entry;
-    ULONG Count = 0;
-    KIRQL OldIrql;
-
-    KeAcquireSpinLock(&DxgkAdapterGlobalListLock, &OldIrql);
-
-    for (Entry = DxgkAdapterGlobalListHead.Flink;
-         Entry != &DxgkAdapterGlobalListHead && Count < VIDMM_MAX_TRACKED_ADAPTERS;
-         Entry = Entry->Flink)
-    {
-        AdapterArray[Count++] = CONTAINING_RECORD(Entry,
-                                                  DXGKRNL_ADAPTER,
-                                                  GlobalAdapterListEntry);
-    }
-
-    KeReleaseSpinLock(&DxgkAdapterGlobalListLock, OldIrql);
-    return Count;
-}
-
 static PDXGKRNL_DEVICE
 DxgkpVidMmFindDeviceByHandle(
     _In_ D3DKMT_HANDLE Handle,
     _Out_opt_ PDXGKRNL_ADAPTER *OutAdapter)
 {
-    PDXGKRNL_ADAPTER Snapshot[VIDMM_MAX_TRACKED_ADAPTERS];
-    ULONG Count, i;
+    PDXGKRNL_ADAPTER Adapter;
+    PDXGKRNL_DEVICE Device;
 
     if (OutAdapter != NULL)
         *OutAdapter = NULL;
-
-    if (Handle == 0)
+    if (!NT_SUCCESS(DxgkReferenceDeviceByHandle(Handle, PsGetCurrentProcess(), &Adapter, &Device)))
         return NULL;
-
-    Count = DxgkpVidMmSnapshotAdapters(Snapshot);
-
-    for (i = 0; i < Count; ++i)
-    {
-        PDXGKRNL_ADAPTER Adapter = Snapshot[i];
-        PLIST_ENTRY Entry;
-        PDXGKRNL_DEVICE Found = NULL;
-
-        ExAcquireFastMutex(&Adapter->AdapterMutex);
-
-        for (Entry = Adapter->DeviceListHead.Flink;
-             Entry != &Adapter->DeviceListHead;
-             Entry = Entry->Flink)
-        {
-            PDXGKRNL_DEVICE Candidate;
-
-            Candidate = CONTAINING_RECORD(Entry, DXGKRNL_DEVICE, DeviceListEntry);
-            if (Candidate->Handle == Handle)
-            {
-                Found = Candidate;
-                break;
-            }
-        }
-
-        ExReleaseFastMutex(&Adapter->AdapterMutex);
-
-        if (Found != NULL)
-        {
-            if (OutAdapter != NULL)
-                *OutAdapter = Adapter;
-            return Found;
-        }
-    }
-
-    return NULL;
+    if (OutAdapter != NULL)
+        *OutAdapter = Adapter;
+    return Device;
 }
 
 static PDXGKVMM_ALLOCATION
@@ -405,84 +452,583 @@ DxgkpVidMmLookupGlobalShareLocked(
         PDXGKVMM_RESOURCE Resource;
 
         Resource = CONTAINING_RECORD(Entry, DXGKVMM_RESOURCE, GlobalResourceEntry);
-        if (Resource->GlobalShareHandle == Handle)
+        if (Resource->Shareable && Resource->GlobalShareHandle == Handle)
             return Resource;
     }
 
     return NULL;
 }
 
-PDXGKVMM_ALLOCATION
-DxgkVidMmHandleToAllocation(
-    _In_opt_ HANDLE Handle)
+NTSTATUS
+DxgkVidMmReferenceAllocation(
+    _In_opt_ HANDLE Handle,
+    _In_opt_ PDXGKRNL_ADAPTER ExpectedAdapter,
+    _In_opt_ PDXGKRNL_DEVICE ExpectedDevice,
+    _Out_ PDXGKVMM_ALLOCATION *OutAllocation)
 {
-    PDXGKVMM_ALLOCATION Alloc;
+    PDXGKVMM_ALLOCATION Allocation;
+    PDXGKVMM_ALLOCATION ReferencedAllocation;
+    NTSTATUS Status = STATUS_INVALID_HANDLE;
 
+    if (OutAllocation == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *OutAllocation = NULL;
     if (Handle == NULL)
-        return NULL;
+        return STATUS_INVALID_HANDLE;
 
     DxgkpVidMmEnsureGlobalsInitialized();
+    ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+    Allocation = DxgkpVidMmLookupAllocationLocked((D3DKMT_HANDLE)(ULONG_PTR)Handle);
+    ReferencedAllocation = Allocation != NULL && Allocation->BackingAllocation != NULL ? Allocation->BackingAllocation : Allocation;
+    if (Allocation != NULL && ReferencedAllocation != NULL && !Allocation->Initializing && InterlockedCompareExchange(&Allocation->Destroying, 0, 0) == 0 && InterlockedCompareExchange(&ReferencedAllocation->ReferenceCount, 0, 0) > 0 && (ExpectedAdapter == NULL || Allocation->Adapter == ExpectedAdapter) && (ExpectedDevice == NULL || Allocation->Device == ExpectedDevice))
+    {
+        InterlockedIncrement(&ReferencedAllocation->ReferenceCount);
+        *OutAllocation = ReferencedAllocation;
+        Status = STATUS_SUCCESS;
+    }
+    ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+    return Status;
+}
+
+NTSTATUS
+DxgkVidMmReferenceProcessAllocation(
+    _In_ HANDLE Handle,
+    _In_ PDXGKRNL_ADAPTER ExpectedAdapter,
+    _In_ PDXGKRNL_PROCESS ExpectedProcess,
+    _Out_ PDXGKVMM_ALLOCATION *OutAllocation)
+{
+    PDXGKVMM_ALLOCATION Allocation;
+    PDXGKVMM_ALLOCATION ReferencedAllocation;
+    NTSTATUS Status = STATUS_INVALID_HANDLE;
+
+    if (Handle == NULL || ExpectedAdapter == NULL || ExpectedProcess == NULL || ExpectedProcess->Adapter != ExpectedAdapter || OutAllocation == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *OutAllocation = NULL;
+
+    DxgkpVidMmEnsureGlobalsInitialized();
+    ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+    Allocation = DxgkpVidMmLookupAllocationLocked((D3DKMT_HANDLE)(ULONG_PTR)Handle);
+    ReferencedAllocation = Allocation != NULL && Allocation->BackingAllocation != NULL ? Allocation->BackingAllocation : Allocation;
+    if (Allocation != NULL && ReferencedAllocation != NULL && !Allocation->Initializing && InterlockedCompareExchange(&Allocation->Destroying, 0, 0) == 0 && Allocation->Adapter == ExpectedAdapter)
+    {
+        if (Allocation->Device == NULL || Allocation->Device->ProcessRecord != ExpectedProcess)
+            Status = STATUS_ACCESS_DENIED;
+        else if (InterlockedCompareExchange(&ReferencedAllocation->ReferenceCount, 0, 0) > 0)
+        {
+            InterlockedIncrement(&ReferencedAllocation->ReferenceCount);
+            *OutAllocation = ReferencedAllocation;
+            Status = STATUS_SUCCESS;
+        }
+    }
+    ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+    return Status;
+}
+
+NTSTATUS
+DxgkVidMmReferenceOpenBinding(
+    _In_ HANDLE Handle,
+    _In_ PDXGKRNL_ADAPTER ExpectedAdapter,
+    _In_ PDXGKRNL_DEVICE ExpectedDevice,
+    _Out_ PHANDLE OutOpenBindingHandle,
+    _Out_ PDXGKVMM_ALLOCATION *OutBindingReference)
+{
+    PDXGKVMM_ALLOCATION Allocation;
+    NTSTATUS Status = STATUS_INVALID_HANDLE;
+
+    if (Handle == NULL || ExpectedAdapter == NULL || ExpectedDevice == NULL || ExpectedDevice->Adapter != ExpectedAdapter || OutOpenBindingHandle == NULL || OutBindingReference == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *OutOpenBindingHandle = NULL;
+    *OutBindingReference = NULL;
+
+    DxgkpVidMmEnsureGlobalsInitialized();
+    ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+    Allocation = DxgkpVidMmLookupAllocationLocked((D3DKMT_HANDLE)(ULONG_PTR)Handle);
+    if (Allocation != NULL && !Allocation->Initializing && InterlockedCompareExchange(&Allocation->Destroying, 0, 0) == 0 && Allocation->Adapter == ExpectedAdapter && Allocation->Device == ExpectedDevice)
+    {
+        if (Allocation->OpenBindingHandle == NULL)
+            Status = STATUS_NOT_FOUND;
+        else
+        {
+            InterlockedIncrement(&Allocation->LogicalReferenceCount);
+            *OutOpenBindingHandle = Allocation->OpenBindingHandle;
+            *OutBindingReference = Allocation;
+            Status = STATUS_SUCCESS;
+        }
+    }
+    ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+    return Status;
+}
+
+BOOLEAN
+DxgkVidMmDuplicateLogicalReference(
+    _In_ PDXGKVMM_ALLOCATION Allocation)
+{
+    LONG References;
+
+    if (Allocation == NULL)
+        return FALSE;
+    do
+    {
+        References = InterlockedCompareExchange(&Allocation->LogicalReferenceCount, 0, 0);
+        if (References <= 0)
+            return FALSE;
+    } while (InterlockedCompareExchange(&Allocation->LogicalReferenceCount, References + 1, References) != References);
+    return TRUE;
+}
+
+VOID
+DxgkVidMmDereferenceLogicalAllocation(
+    _In_ PDXGKVMM_ALLOCATION Allocation)
+{
+    LONG References;
+
+    ASSERT(Allocation != NULL);
+    References = InterlockedDecrement(&Allocation->LogicalReferenceCount);
+    ASSERT(References >= 0);
+    if (References == 0)
+        KeSetEvent(&Allocation->LogicalReferencesDrainedEvent, IO_NO_INCREMENT, FALSE);
+}
+
+VOID
+DxgkVidMmDereferenceAllocation(
+    _In_ PDXGKVMM_ALLOCATION Allocation)
+{
+    LONG References;
+
+    ASSERT(Allocation != NULL);
+    References = InterlockedDecrement(&Allocation->ReferenceCount);
+    ASSERT(References >= 0);
+    if (References == 0)
+    {
+        KeSetEvent(&Allocation->ReferencesDrainedEvent, IO_NO_INCREMENT, FALSE);
+        if (InterlockedCompareExchange(&Allocation->Destroying, 0, 0) != 0 && InterlockedCompareExchange(&Allocation->FinalizeQueued, 0, 0) != 2)
+            DxgkpVidMmScheduleAllocationFinalizer(Allocation);
+    }
+}
+
+NTSTATUS
+DxgkVidMmReferenceResource(
+    _In_ D3DKMT_HANDLE Handle,
+    _In_ BOOLEAN GlobalShareHandle,
+    _In_opt_ PDXGKRNL_DEVICE ExpectedDevice,
+    _Out_ PDXGKVMM_RESOURCE *OutResource)
+{
+    PDXGKVMM_RESOURCE Resource;
+    NTSTATUS Status = STATUS_INVALID_HANDLE;
+
+    if (OutResource == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *OutResource = NULL;
+    if (Handle == 0)
+        return STATUS_INVALID_HANDLE;
+
+    DxgkpVidMmEnsureGlobalsInitialized();
+    ExAcquireFastMutex(&DxgkVidMmResourceListLock);
+    Resource = GlobalShareHandle ? DxgkpVidMmLookupGlobalShareLocked(Handle) : DxgkpVidMmLookupResourceLocked(Handle);
+    if (Resource != NULL && InterlockedCompareExchange(&Resource->Destroying, 0, 0) == 0 && (ExpectedDevice == NULL || Resource->Device == ExpectedDevice))
+    {
+        InterlockedIncrement(&Resource->ReferenceCount);
+        *OutResource = Resource;
+        Status = STATUS_SUCCESS;
+    }
+    ExReleaseFastMutex(&DxgkVidMmResourceListLock);
+    return Status;
+}
+
+VOID
+DxgkVidMmDereferenceResource(
+    _In_ PDXGKVMM_RESOURCE Resource)
+{
+    LONG References;
+
+    ASSERT(Resource != NULL);
+    References = InterlockedDecrement(&Resource->ReferenceCount);
+    ASSERT(References >= 0);
+    if (References == 0)
+    {
+        KeSetEvent(&Resource->ReferencesDrainedEvent, IO_NO_INCREMENT, FALSE);
+        if (InterlockedCompareExchange(&Resource->Destroying, 0, 0) != 0)
+            DxgkpVidMmScheduleResourceFinalizer(Resource);
+    }
+}
+
+NTSTATUS
+DxgkVidMmSnapshotResourceAllocations(
+    _In_ PDXGKVMM_RESOURCE Resource,
+    _In_ PDXGKRNL_ADAPTER ExpectedAdapter,
+    _Outptr_result_buffer_(*OutAllocationCount) PDXGKVMM_ALLOCATION **OutAllocations,
+    _Out_ PUINT OutAllocationCount,
+    _Out_ PUINT OutTotalPrivateDriverDataSize)
+{
+    PDXGKVMM_ALLOCATION *Allocations;
+    PLIST_ENTRY Entry;
+    UINT Capacity;
+    UINT Count;
+    UINT TotalSize;
+    UINT Index;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Resource == NULL || ExpectedAdapter == NULL || OutAllocations == NULL || OutAllocationCount == NULL || OutTotalPrivateDriverDataSize == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *OutAllocations = NULL;
+    *OutAllocationCount = 0;
+    *OutTotalPrivateDriverDataSize = 0;
+
+    for (;;)
+    {
+        ExAcquireFastMutex(&DxgkVidMmResourceListLock);
+        if (Resource->Adapter != ExpectedAdapter || Resource->BackingResource != NULL || InterlockedCompareExchange(&Resource->Destroying, 0, 0) != 0 || Resource->AllocationCount == 0)
+        {
+            ExReleaseFastMutex(&DxgkVidMmResourceListLock);
+            return STATUS_INVALID_HANDLE;
+        }
+        Capacity = Resource->AllocationCount;
+        ExReleaseFastMutex(&DxgkVidMmResourceListLock);
+        if ((SIZE_T)Capacity > MAXULONG_PTR / sizeof(*Allocations))
+            return STATUS_INTEGER_OVERFLOW;
+        Allocations = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)Capacity * sizeof(*Allocations), TAG_VIDMM_RESOURCE);
+        if (Allocations == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+
+        Count = 0;
+        TotalSize = 0;
+        Status = STATUS_SUCCESS;
+        ExAcquireFastMutex(&DxgkVidMmResourceListLock);
+        ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+        if (Resource->AllocationCount != Capacity || InterlockedCompareExchange(&Resource->Destroying, 0, 0) != 0)
+            Status = STATUS_RETRY;
+        else
+        {
+            for (Entry = Resource->AllocationList.Flink; Entry != &Resource->AllocationList; Entry = Entry->Flink)
+            {
+                PDXGKVMM_ALLOCATION Allocation = CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, ResourceEntry);
+
+                if (Count >= Capacity || Allocation->Adapter != ExpectedAdapter || Allocation->Resource != Resource || Allocation->Initializing || InterlockedCompareExchange(&Allocation->Destroying, 0, 0) != 0)
+                {
+                    Status = STATUS_RETRY;
+                    break;
+                }
+                if (TotalSize > MAXULONG - Allocation->PrivateDriverDataSize)
+                {
+                    Status = STATUS_INTEGER_OVERFLOW;
+                    break;
+                }
+                InterlockedIncrement(&Allocation->ReferenceCount);
+                Allocations[Count++] = Allocation;
+                TotalSize += Allocation->PrivateDriverDataSize;
+            }
+            if (NT_SUCCESS(Status) && Count != Capacity)
+                Status = STATUS_RETRY;
+        }
+        ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+        ExReleaseFastMutex(&DxgkVidMmResourceListLock);
+        if (NT_SUCCESS(Status))
+        {
+            *OutAllocations = Allocations;
+            *OutAllocationCount = Count;
+            *OutTotalPrivateDriverDataSize = TotalSize;
+            return STATUS_SUCCESS;
+        }
+        for (Index = 0; Index < Count; ++Index)
+            DxgkVidMmDereferenceAllocation(Allocations[Index]);
+        ExFreePoolWithTag(Allocations, TAG_VIDMM_RESOURCE);
+        if (Status != STATUS_RETRY)
+            return Status;
+    }
+}
+
+VOID
+DxgkVidMmReleaseAllocationSnapshot(
+    _In_reads_(AllocationCount) PDXGKVMM_ALLOCATION *Allocations,
+    _In_ UINT AllocationCount)
+{
+    UINT Index;
+
+    if (Allocations == NULL)
+        return;
+    for (Index = 0; Index < AllocationCount; ++Index)
+        DxgkVidMmDereferenceAllocation(Allocations[Index]);
+    ExFreePoolWithTag(Allocations, TAG_VIDMM_RESOURCE);
+}
+
+NTSTATUS
+DxgkVidMmCreateOpenResource(
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ PDXGKVMM_RESOURCE BackingResource,
+    _In_reads_(AllocationCount) PDXGKVMM_ALLOCATION const *BackingAllocations,
+    _In_ UINT AllocationCount,
+    _In_reads_bytes_opt_(ResourcePrivateDriverDataSize) PVOID ResourcePrivateDriverData,
+    _In_ UINT ResourcePrivateDriverDataSize,
+    _Inout_updates_bytes_opt_(TotalPrivateDriverDataSize) PVOID TotalPrivateDriverData,
+    _In_ UINT TotalPrivateDriverDataSize,
+    _Out_ PDXGKVMM_RESOURCE *OutResource,
+    _Out_writes_(AllocationCount) PHANDLE OutAllocationHandles)
+{
+    PDXGKRNL_ADAPTER Adapter;
+    PDXGKVMM_RESOURCE Resource = NULL;
+    DXGK_OPENALLOCATIONINFO *OpenInfo = NULL;
+    DXGKARG_OPENALLOCATION OpenArgs;
+    DXGKARG_CLOSEALLOCATION CloseArgs;
+    UINT Offset = 0;
+    UINT Index;
+    UINT CloseCount = 0;
+    BOOLEAN AllocationsPublished = FALSE;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    PAGED_CODE();
+    if (Device == NULL || Device->Adapter == NULL || BackingResource == NULL || BackingAllocations == NULL || AllocationCount == 0 || OutResource == NULL || OutAllocationHandles == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *OutResource = NULL;
+    for (Index = 0; Index < AllocationCount; ++Index)
+        OutAllocationHandles[Index] = NULL;
+    Adapter = Device->Adapter;
+    if (BackingResource->Adapter != Adapter || BackingResource->BackingResource != NULL || DXGK_CB_FULL(Adapter, DxgkDdiOpenAllocation) == NULL || DXGK_CB_FULL(Adapter, DxgkDdiCloseAllocation) == NULL)
+        return STATUS_NOT_SUPPORTED;
+    if ((SIZE_T)AllocationCount > MAXULONG_PTR / sizeof(*OpenInfo) || (SIZE_T)AllocationCount > MAXULONG_PTR / sizeof(*Resource->OpenAllocations) || (SIZE_T)AllocationCount > MAXULONG_PTR / sizeof(*Resource->OpenBindingScratch))
+        return STATUS_INTEGER_OVERFLOW;
+
+    Resource = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Resource), TAG_VIDMM_RESOURCE);
+    OpenInfo = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)AllocationCount * sizeof(*OpenInfo), TAG_VIDMM_RESOURCE);
+    if (Resource == NULL || OpenInfo == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Cleanup;
+    }
+    RtlZeroMemory(Resource, sizeof(*Resource));
+    RtlZeroMemory(OpenInfo, (SIZE_T)AllocationCount * sizeof(*OpenInfo));
+    DxgkpVidMmInitializeResourceLifetime(Resource);
+    Resource->Device = Device;
+    Resource->Adapter = Adapter;
+    Resource->BackingResource = BackingResource;
+    Resource->Handle = DxgkpVidMmAllocateHandle(&DxgkVidMmNextResourceHandle, DxgkVidMmResourceHandleCookie);
+    Resource->OpenAllocationCapacity = AllocationCount;
+    Resource->OpenAllocations = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)AllocationCount * sizeof(*Resource->OpenAllocations), TAG_VIDMM_RESOURCE);
+    Resource->OpenBindingScratch = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)AllocationCount * sizeof(*Resource->OpenBindingScratch), TAG_VIDMM_RESOURCE);
+    if (Resource->OpenAllocations == NULL || Resource->OpenBindingScratch == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Cleanup;
+    }
+    RtlZeroMemory(Resource->OpenAllocations, (SIZE_T)AllocationCount * sizeof(*Resource->OpenAllocations));
+    RtlZeroMemory(Resource->OpenBindingScratch, (SIZE_T)AllocationCount * sizeof(*Resource->OpenBindingScratch));
+    InitializeListHead(&Resource->AllocationList);
+    InitializeListHead(&Resource->GlobalResourceEntry);
+    InterlockedIncrement(&BackingResource->ReferenceCount);
+
+    for (Index = 0; Index < AllocationCount; ++Index)
+    {
+        PDXGKVMM_ALLOCATION Allocation;
+        PDXGKVMM_ALLOCATION BackingAllocation = BackingAllocations[Index];
+
+        if (BackingAllocation == NULL || BackingAllocation->Adapter != Adapter || BackingAllocation->BackingAllocation != NULL || Offset > TotalPrivateDriverDataSize || BackingAllocation->PrivateDriverDataSize > TotalPrivateDriverDataSize - Offset)
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Cleanup;
+        }
+        Allocation = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Allocation), TAG_VIDMM_ALLOC);
+        if (Allocation == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Cleanup;
+        }
+        RtlZeroMemory(Allocation, sizeof(*Allocation));
+        DxgkpVidMmInitializeAllocationLifetime(Allocation);
+        Allocation->Magic = DXGKVMM_ALLOCATION_MAGIC;
+        Allocation->Adapter = Adapter;
+        Allocation->Device = Device;
+        Allocation->MiniportDeviceHandle = Device->hMiniportDevice;
+        Allocation->BackingAllocation = BackingAllocation;
+        Allocation->Resource = Resource;
+        Allocation->OpenBindingIndex = Index;
+        Allocation->Initializing = TRUE;
+        Allocation->Handle = DxgkpVidMmAllocateHandle(&DxgkVidMmNextAllocationHandle, DxgkVidMmAllocationHandleCookie);
+        ExInitializeFastMutex(&Allocation->UserModeLock);
+        InitializeListHead(&Allocation->SegmentEntry);
+        InitializeListHead(&Allocation->DeviceEntry);
+        InitializeListHead(&Allocation->GlobalAllocationEntry);
+        InitializeListHead(&Allocation->ResourceEntry);
+        InterlockedIncrement(&BackingAllocation->ReferenceCount);
+        InterlockedIncrement(&Resource->ReferenceCount);
+        InsertTailList(&Resource->AllocationList, &Allocation->ResourceEntry);
+        Resource->AllocationCount++;
+        Resource->OpenAllocations[Index] = Allocation;
+        OpenInfo[Index].hAllocation = Allocation->Handle;
+        OpenInfo[Index].pPrivateDriverData = BackingAllocation->PrivateDriverDataSize != 0 ? (PVOID)((PUCHAR)TotalPrivateDriverData + Offset) : NULL;
+        OpenInfo[Index].PrivateDriverDataSize = BackingAllocation->PrivateDriverDataSize;
+        Offset += BackingAllocation->PrivateDriverDataSize;
+    }
+    if (Offset != TotalPrivateDriverDataSize)
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto Cleanup;
+    }
 
     ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
-    Alloc = DxgkpVidMmLookupAllocationLocked((D3DKMT_HANDLE)(ULONG_PTR)Handle);
+    for (Index = 0; Index < AllocationCount; ++Index)
+        InsertTailList(&DxgkVidMmAllocationListHead, &Resource->OpenAllocations[Index]->GlobalAllocationEntry);
+    ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+    AllocationsPublished = TRUE;
+
+    RtlZeroMemory(&OpenArgs, sizeof(OpenArgs));
+    OpenArgs.NumAllocations = AllocationCount;
+    OpenArgs.pOpenAllocation = OpenInfo;
+    OpenArgs.pPrivateDriverData = ResourcePrivateDriverData;
+    OpenArgs.PrivateDriverSize = ResourcePrivateDriverDataSize;
+    if (!DxgkAcquireMiniportCallback(Adapter))
+    {
+        Status = STATUS_DEVICE_NOT_READY;
+        goto Cleanup;
+    }
+    Status = DXGK_CB_FULL(Adapter, DxgkDdiOpenAllocation)(Device->hMiniportDevice, &OpenArgs);
+    DxgkReleaseMiniportCallback(Adapter);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    for (Index = 0; Index < AllocationCount; ++Index)
+    {
+        if (OpenInfo[Index].hDeviceSpecificAllocation == NULL)
+        {
+            Status = STATUS_INVALID_HANDLE;
+            goto Cleanup;
+        }
+        Resource->OpenBindingScratch[CloseCount++] = OpenInfo[Index].hDeviceSpecificAllocation;
+    }
+    ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+    for (Index = 0; Index < AllocationCount; ++Index)
+        Resource->OpenAllocations[Index]->OpenBindingHandle = OpenInfo[Index].hDeviceSpecificAllocation;
     ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
 
-    return Alloc;
-}
-
-PDXGKVMM_RESOURCE
-DxgkVidMmHandleToResource(
-    _In_ D3DKMT_HANDLE Handle)
-{
-    PDXGKVMM_RESOURCE Resource;
-
-    if (Handle == 0)
-        return NULL;
-
-    DxgkpVidMmEnsureGlobalsInitialized();
-
+    DxgkpVidMmTrackBacking(Adapter);
+    for (Index = 0; Index < AllocationCount; ++Index)
+        DxgkpVidMmTrackBacking(Adapter);
     ExAcquireFastMutex(&DxgkVidMmResourceListLock);
-    Resource = DxgkpVidMmLookupResourceLocked(Handle);
+    ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+    for (Index = 0; Index < AllocationCount; ++Index)
+        Resource->OpenAllocations[Index]->Initializing = FALSE;
+    InsertTailList(&DxgkVidMmResourceListHead, &Resource->GlobalResourceEntry);
+    ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
     ExReleaseFastMutex(&DxgkVidMmResourceListLock);
+    for (Index = 0; Index < AllocationCount; ++Index)
+        OutAllocationHandles[Index] = (HANDLE)(ULONG_PTR)Resource->OpenAllocations[Index]->Handle;
+    *OutResource = Resource;
+    ExFreePoolWithTag(OpenInfo, TAG_VIDMM_RESOURCE);
+    return STATUS_SUCCESS;
 
-    return Resource;
-}
+Cleanup:
+    if (AllocationsPublished && Resource != NULL && Resource->OpenAllocations != NULL)
+    {
+        ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+        for (Index = 0; Index < AllocationCount; ++Index)
+        {
+            PDXGKVMM_ALLOCATION Allocation = Resource->OpenAllocations[Index];
 
-PDXGKVMM_RESOURCE
-DxgkVidMmHandleToGlobalShare(
-    _In_ D3DKMT_HANDLE Handle)
-{
-    PDXGKVMM_RESOURCE Resource;
+            if (Allocation != NULL && !IsListEmpty(&Allocation->GlobalAllocationEntry))
+            {
+                InterlockedExchange(&Allocation->Destroying, 1);
+                InterlockedExchange(&Allocation->FinalizeQueued, 2);
+                RemoveEntryList(&Allocation->GlobalAllocationEntry);
+                InitializeListHead(&Allocation->GlobalAllocationEntry);
+            }
+        }
+        ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+        for (Index = 0; Index < AllocationCount; ++Index)
+        {
+            PDXGKVMM_ALLOCATION Allocation = Resource->OpenAllocations[Index];
 
-    if (Handle == 0)
-        return NULL;
+            if (Allocation != NULL && InterlockedCompareExchange(&Allocation->FinalizeQueued, 0, 0) == 2)
+            {
+                DxgkpVidMmDropLogicalHandleReference(Allocation);
+                KeWaitForSingleObject(&Allocation->LogicalReferencesDrainedEvent, Executive, KernelMode, FALSE, NULL);
+                DxgkpVidMmDropAllocationHandleReference(Allocation);
+                KeWaitForSingleObject(&Allocation->ReferencesDrainedEvent, Executive, KernelMode, FALSE, NULL);
+            }
+        }
+    }
+    if (Resource != NULL && OpenInfo != NULL)
+    {
+        CloseCount = 0;
+        for (Index = 0; Index < AllocationCount; ++Index)
+        {
+            if (OpenInfo[Index].hDeviceSpecificAllocation != NULL && Resource->OpenBindingScratch != NULL)
+                Resource->OpenBindingScratch[CloseCount++] = OpenInfo[Index].hDeviceSpecificAllocation;
+        }
+        if (CloseCount != 0 && Resource->OpenBindingScratch != NULL && DxgkAcquireMiniportCallback(Adapter))
+        {
+            RtlZeroMemory(&CloseArgs, sizeof(CloseArgs));
+            CloseArgs.NumAllocations = CloseCount;
+            CloseArgs.pOpenHandleList = Resource->OpenBindingScratch;
+            DXGK_CB_FULL(Adapter, DxgkDdiCloseAllocation)(Device->hMiniportDevice, &CloseArgs);
+            DxgkReleaseMiniportCallback(Adapter);
+        }
+    }
+    if (Resource != NULL && Resource->OpenAllocations != NULL)
+    {
+        for (Index = 0; Index < AllocationCount; ++Index)
+        {
+            PDXGKVMM_ALLOCATION Allocation = Resource->OpenAllocations[Index];
 
-    DxgkpVidMmEnsureGlobalsInitialized();
-
-    ExAcquireFastMutex(&DxgkVidMmResourceListLock);
-    Resource = DxgkpVidMmLookupGlobalShareLocked(Handle);
-    ExReleaseFastMutex(&DxgkVidMmResourceListLock);
-
-    return Resource;
+            if (Allocation == NULL)
+                continue;
+            if (Allocation->BackingAllocation != NULL)
+                DxgkVidMmDereferenceAllocation(Allocation->BackingAllocation);
+            ExFreePoolWithTag(Allocation, TAG_VIDMM_ALLOC);
+        }
+    }
+    if (Resource != NULL && Resource->BackingResource != NULL)
+        DxgkVidMmDereferenceResource(Resource->BackingResource);
+    if (Resource != NULL && Resource->OpenBindingScratch != NULL)
+        ExFreePoolWithTag(Resource->OpenBindingScratch, TAG_VIDMM_RESOURCE);
+    if (Resource != NULL && Resource->OpenAllocations != NULL)
+        ExFreePoolWithTag(Resource->OpenAllocations, TAG_VIDMM_RESOURCE);
+    if (OpenInfo != NULL)
+        ExFreePoolWithTag(OpenInfo, TAG_VIDMM_RESOURCE);
+    if (Resource != NULL)
+        ExFreePoolWithTag(Resource, TAG_VIDMM_RESOURCE);
+    return Status;
 }
 
 PVOID
 DxgkVidMmGetHandleData(
     _In_ DXGK_HANDLE_TYPE Type,
-    _In_ D3DKMT_HANDLE Handle)
+    _In_ D3DKMT_HANDLE Handle,
+    _In_ BOOLEAN DeviceSpecific)
 {
+    PVOID MiniportHandle = NULL;
+
+    DxgkpVidMmEnsureGlobalsInitialized();
     switch (Type)
     {
         case DXGK_HANDLE_ALLOCATION:
         {
-            PDXGKVMM_ALLOCATION Alloc = DxgkVidMmHandleToAllocation((HANDLE)(ULONG_PTR)Handle);
-            return Alloc ? Alloc->MiniportHandle : NULL;
+            PDXGKVMM_ALLOCATION Allocation;
+
+            ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+            Allocation = DxgkpVidMmLookupAllocationLocked(Handle);
+            if (Allocation != NULL && InterlockedCompareExchange(&Allocation->Destroying, 0, 0) == 0)
+            {
+                if (DeviceSpecific)
+                    MiniportHandle = Allocation->OpenBindingHandle;
+                else if (Allocation->BackingAllocation != NULL)
+                    MiniportHandle = Allocation->BackingAllocation->MiniportHandle;
+                else
+                    MiniportHandle = Allocation->MiniportHandle;
+            }
+            ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+            return MiniportHandle;
         }
 
         case DXGK_HANDLE_RESOURCE:
         {
-            PDXGKVMM_RESOURCE Resource = DxgkVidMmHandleToResource(Handle);
-            return Resource ? Resource->MiniportHandle : NULL;
+            PDXGKVMM_RESOURCE Resource;
+
+            if (DeviceSpecific)
+                return NULL;
+            ExAcquireFastMutex(&DxgkVidMmResourceListLock);
+            Resource = DxgkpVidMmLookupResourceLocked(Handle);
+            if (Resource != NULL && InterlockedCompareExchange(&Resource->Destroying, 0, 0) == 0)
+                MiniportHandle = Resource->BackingResource != NULL ? Resource->BackingResource->MiniportHandle : Resource->MiniportHandle;
+            ExReleaseFastMutex(&DxgkVidMmResourceListLock);
+            return MiniportHandle;
         }
 
         default:
@@ -493,109 +1039,632 @@ DxgkVidMmGetHandleData(
     }
 }
 
+PVOID
+DxgkVidMmAcquireHandleData(
+    _In_ DXGK_HANDLE_TYPE Type,
+    _In_ D3DKMT_HANDLE Handle,
+    _In_ BOOLEAN DeviceSpecific,
+    _Out_ PDXGKARG_RELEASE_HANDLE ReleaseHandle)
+{
+    PVOID MiniportHandle = NULL;
+
+    if (ReleaseHandle == NULL)
+        return NULL;
+    *ReleaseHandle = NULL;
+    DxgkpVidMmEnsureGlobalsInitialized();
+    switch (Type)
+    {
+        case DXGK_HANDLE_ALLOCATION:
+        {
+            PDXGKVMM_ALLOCATION Allocation;
+            PDXGKVMM_ALLOCATION BackingAllocation;
+
+            ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+            Allocation = DxgkpVidMmLookupAllocationLocked(Handle);
+            if (Allocation != NULL && InterlockedCompareExchange(&Allocation->Destroying, 0, 0) == 0)
+            {
+                BackingAllocation = Allocation->BackingAllocation != NULL ? Allocation->BackingAllocation : Allocation;
+                MiniportHandle = DeviceSpecific ? Allocation->OpenBindingHandle : BackingAllocation->MiniportHandle;
+                if (MiniportHandle != NULL && InterlockedCompareExchange(&Allocation->LogicalReferenceCount, 0, 0) > 0)
+                {
+                    InterlockedIncrement(&Allocation->LogicalReferenceCount);
+                    *ReleaseHandle = Allocation;
+                }
+                else
+                {
+                    MiniportHandle = NULL;
+                }
+            }
+            ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+            return MiniportHandle;
+        }
+
+        case DXGK_HANDLE_RESOURCE:
+        {
+            PDXGKVMM_RESOURCE Resource;
+            PDXGKVMM_RESOURCE ReferencedResource;
+
+            if (DeviceSpecific)
+                return NULL;
+            ExAcquireFastMutex(&DxgkVidMmResourceListLock);
+            Resource = DxgkpVidMmLookupResourceLocked(Handle);
+            if (Resource != NULL && InterlockedCompareExchange(&Resource->Destroying, 0, 0) == 0)
+            {
+                ReferencedResource = Resource->BackingResource != NULL ? Resource->BackingResource : Resource;
+                MiniportHandle = ReferencedResource->MiniportHandle;
+                if (MiniportHandle != NULL && InterlockedCompareExchange(&ReferencedResource->ReferenceCount, 0, 0) > 0)
+                {
+                    InterlockedIncrement(&ReferencedResource->ReferenceCount);
+                    *ReleaseHandle = ReferencedResource;
+                }
+                else
+                {
+                    MiniportHandle = NULL;
+                }
+            }
+            ExReleaseFastMutex(&DxgkVidMmResourceListLock);
+            return MiniportHandle;
+        }
+
+        default:
+            DPRINT1("DxgkVidMmAcquireHandleData: unsupported type %u handle 0x%08X\n", Type, Handle);
+            return NULL;
+    }
+}
+
+VOID
+DxgkVidMmReleaseHandleData(
+    _In_ DXGK_HANDLE_TYPE Type,
+    _In_ DXGKARG_RELEASE_HANDLE ReleaseHandle)
+{
+    if (ReleaseHandle == NULL)
+        return;
+
+    switch (Type)
+    {
+        case DXGK_HANDLE_ALLOCATION:
+            DxgkVidMmDereferenceLogicalAllocation((PDXGKVMM_ALLOCATION)ReleaseHandle);
+            break;
+
+        case DXGK_HANDLE_RESOURCE:
+            DxgkVidMmDereferenceResource((PDXGKVMM_RESOURCE)ReleaseHandle);
+            break;
+
+        default:
+            DPRINT1("DxgkVidMmReleaseHandleData: unsupported type %u\n", Type);
+            break;
+    }
+}
+
 PDXGKVMM_RESOURCE
 DxgkVidMmCreateResourceWrapper(
+    _In_ PDXGKRNL_ADAPTER Adapter,
     _In_opt_ PDXGKRNL_DEVICE Device,
     _In_opt_ HANDLE          MiniportHandle,
     _In_ D3DKMT_HANDLE       GlobalShareHandle,
-    _In_opt_ HANDLE          AllocationHandle,
+    _In_ BOOLEAN              Shareable,
+    _In_reads_bytes_opt_(PrivateRuntimeDataSize) CONST VOID *PrivateRuntimeData,
+    _In_ UINT PrivateRuntimeDataSize,
     _In_reads_bytes_opt_(ResourcePrivateDriverDataSize)
             CONST VOID      *ResourcePrivateDriverData,
     _In_    UINT             ResourcePrivateDriverDataSize)
 {
     PDXGKVMM_RESOURCE Resource;
 
+    if (Adapter == NULL || (Device != NULL && Device->Adapter != Adapter) || (PrivateRuntimeDataSize != 0 && PrivateRuntimeData == NULL) || (ResourcePrivateDriverDataSize != 0 && ResourcePrivateDriverData == NULL))
+        return NULL;
     DxgkpVidMmEnsureGlobalsInitialized();
 
-    Resource = (PDXGKVMM_RESOURCE)ExAllocatePoolWithTag(NonPagedPool,
-                                                        sizeof(DXGKVMM_RESOURCE),
-                                                        TAG_VIDMM_RESOURCE);
+    Resource = (PDXGKVMM_RESOURCE)ExAllocatePoolWithTag(NonPagedPool, sizeof(DXGKVMM_RESOURCE), TAG_VIDMM_RESOURCE);
     if (Resource == NULL)
         return NULL;
 
     RtlZeroMemory(Resource, sizeof(*Resource));
+    DxgkpVidMmInitializeResourceLifetime(Resource);
     Resource->Device         = Device;
+    Resource->Adapter        = Adapter;
     Resource->MiniportHandle = MiniportHandle;
-    Resource->Handle         = DxgkpVidMmAllocateHandle(&DxgkVidMmNextResourceHandle,
-                                                        DxgkVidMmResourceHandleCookie);
-    Resource->GlobalShareHandle = GlobalShareHandle ? GlobalShareHandle :
-        DxgkpVidMmAllocateHandle(&DxgkVidMmNextGlobalShareHandle,
-                                 DxgkVidMmGlobalShareHandleCookie);
-    Resource->AllocationHandle = AllocationHandle;
+    Resource->Handle = DxgkpVidMmAllocateHandle(&DxgkVidMmNextResourceHandle, DxgkVidMmResourceHandleCookie);
+    Resource->Shareable = Shareable;
+    if (Shareable)
+        Resource->GlobalShareHandle = GlobalShareHandle ? GlobalShareHandle : DxgkpVidMmAllocateHandle(&DxgkVidMmNextGlobalShareHandle, DxgkVidMmGlobalShareHandleCookie);
+    if (PrivateRuntimeDataSize != 0)
+    {
+        Resource->PrivateRuntimeData = ExAllocatePoolWithTag(NonPagedPool, PrivateRuntimeDataSize, TAG_VIDMM_RESOURCE);
+        if (Resource->PrivateRuntimeData == NULL)
+            goto Fail;
+        RtlCopyMemory(Resource->PrivateRuntimeData, PrivateRuntimeData, PrivateRuntimeDataSize);
+        Resource->PrivateRuntimeDataSize = PrivateRuntimeDataSize;
+    }
     if (ResourcePrivateDriverDataSize != 0)
     {
         ASSERT(ResourcePrivateDriverData != NULL);
 
-        Resource->ResourcePrivateDriverData = ExAllocatePoolWithTag(
-            NonPagedPool,
-            ResourcePrivateDriverDataSize,
-            TAG_VIDMM_RESOURCE);
+        Resource->ResourcePrivateDriverData = ExAllocatePoolWithTag(NonPagedPool, ResourcePrivateDriverDataSize, TAG_VIDMM_RESOURCE);
         if (Resource->ResourcePrivateDriverData == NULL)
         {
-            ExFreePoolWithTag(Resource, TAG_VIDMM_RESOURCE);
-            return NULL;
+            goto Fail;
         }
 
-        RtlCopyMemory(Resource->ResourcePrivateDriverData,
-                      ResourcePrivateDriverData,
-                      ResourcePrivateDriverDataSize);
-        Resource->ResourcePrivateDriverDataSize =
-            ResourcePrivateDriverDataSize;
+        RtlCopyMemory(Resource->ResourcePrivateDriverData, ResourcePrivateDriverData, ResourcePrivateDriverDataSize);
+        Resource->ResourcePrivateDriverDataSize = ResourcePrivateDriverDataSize;
     }
+    InitializeListHead(&Resource->AllocationList);
     InitializeListHead(&Resource->GlobalResourceEntry);
 
+    DxgkpVidMmTrackBacking(Adapter);
     ExAcquireFastMutex(&DxgkVidMmResourceListLock);
     InsertTailList(&DxgkVidMmResourceListHead, &Resource->GlobalResourceEntry);
     ExReleaseFastMutex(&DxgkVidMmResourceListLock);
 
     return Resource;
+
+Fail:
+    if (Resource->ResourcePrivateDriverData != NULL)
+        ExFreePoolWithTag(Resource->ResourcePrivateDriverData, TAG_VIDMM_RESOURCE);
+    if (Resource->PrivateRuntimeData != NULL)
+        ExFreePoolWithTag(Resource->PrivateRuntimeData, TAG_VIDMM_RESOURCE);
+    ExFreePoolWithTag(Resource, TAG_VIDMM_RESOURCE);
+    return NULL;
 }
 
 NTSTATUS
-DxgkpVidMmDestroyResourceWrapper(
-    _In_ PDXGKRNL_ADAPTER  Adapter,
-    _In_ PDXGKVMM_RESOURCE Resource)
+DxgkVidMmAttachAllocationToResource(
+    _In_ PDXGKVMM_RESOURCE Resource,
+    _In_ PDXGKVMM_ALLOCATION Allocation)
 {
     NTSTATUS Status = STATUS_SUCCESS;
 
-    if (Resource == NULL)
-        return STATUS_INVALID_PARAMETER;
+    ExAcquireFastMutex(&DxgkVidMmResourceListLock);
+    if (Resource->Adapter == NULL || Allocation->Adapter != Resource->Adapter || Allocation->Resource != NULL || InterlockedCompareExchange(&Resource->Destroying, 0, 0) != 0)
+        Status = STATUS_INVALID_HANDLE;
+    else
+    {
+        InterlockedIncrement(&Resource->ReferenceCount);
+        Allocation->Resource = Resource;
+        InsertTailList(&Resource->AllocationList, &Allocation->ResourceEntry);
+        Resource->AllocationCount++;
+    }
+    ExReleaseFastMutex(&DxgkVidMmResourceListLock);
+    return Status;
+}
 
-    if (Resource->AllocationCount != 0)
-        return STATUS_DEVICE_BUSY;
+static VOID
+DxgkpVidMmDropAllocationHandleReference(
+    _In_ PDXGKVMM_ALLOCATION Allocation)
+{
+    LONG References;
 
-    if (Adapter != NULL &&
-        Adapter->MiniportContext->InitData.s.DxgkDdiDestroyAllocation != NULL &&
-        Resource->MiniportHandle != NULL)
+    if (InterlockedCompareExchange(&Allocation->HandleReferenceDropped, 1, 0) != 0)
+        return;
+    References = InterlockedDecrement(&Allocation->ReferenceCount);
+    ASSERT(References >= 0);
+    if (References == 0)
+    {
+        KeSetEvent(&Allocation->ReferencesDrainedEvent, IO_NO_INCREMENT, FALSE);
+        if (InterlockedCompareExchange(&Allocation->FinalizeQueued, 0, 0) != 2)
+            DxgkpVidMmScheduleAllocationFinalizer(Allocation);
+    }
+}
+
+static VOID
+DxgkpVidMmDropLogicalHandleReference(
+    _In_ PDXGKVMM_ALLOCATION Allocation)
+{
+    LONG References;
+
+    if (InterlockedCompareExchange(&Allocation->LogicalHandleReferenceDropped, 1, 0) != 0)
+        return;
+    References = InterlockedDecrement(&Allocation->LogicalReferenceCount);
+    ASSERT(References >= 0);
+    if (References == 0)
+        KeSetEvent(&Allocation->LogicalReferencesDrainedEvent, IO_NO_INCREMENT, FALSE);
+}
+
+static VOID
+DxgkpVidMmCloseAllocationBinding(
+    _In_ PDXGKVMM_ALLOCATION Allocation)
+{
+    PDXGKRNL_ADAPTER Adapter;
+    DXGKARG_CLOSEALLOCATION CloseArgs;
+    HANDLE OpenHandle;
+
+    PAGED_CODE();
+    ASSERT(Allocation != NULL);
+    DxgkpVidMmDropLogicalHandleReference(Allocation);
+    KeWaitForSingleObject(&Allocation->LogicalReferencesDrainedEvent, Executive, KernelMode, FALSE, NULL);
+    ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+    OpenHandle = Allocation->OpenBindingHandle;
+    Allocation->OpenBindingHandle = NULL;
+    ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+    Adapter = Allocation->Adapter;
+    if (OpenHandle == NULL || Adapter == NULL || DXGK_CB_FULL(Adapter, DxgkDdiCloseAllocation) == NULL || !DxgkAcquireMiniportCallback(Adapter))
+        return;
+    RtlZeroMemory(&CloseArgs, sizeof(CloseArgs));
+    CloseArgs.NumAllocations = 1;
+    CloseArgs.pOpenHandleList = &OpenHandle;
+    DXGK_CB_FULL(Adapter, DxgkDdiCloseAllocation)(Allocation->MiniportDeviceHandle, &CloseArgs);
+    DxgkReleaseMiniportCallback(Adapter);
+}
+
+static VOID
+DxgkpVidMmFinalizeAllocation(
+    _In_ PDXGKVMM_ALLOCATION Allocation)
+{
+    PDXGKRNL_ADAPTER Adapter = Allocation->Adapter;
+    PDXGKVMM_RESOURCE Resource = Allocation->Resource;
+
+    PAGED_CODE();
+    ASSERT(InterlockedCompareExchange(&Allocation->Destroying, 0, 0) != 0);
+    ASSERT(InterlockedCompareExchange(&Allocation->ReferenceCount, 0, 0) == 0);
+    ASSERT(InterlockedCompareExchange(&Allocation->LogicalReferenceCount, 0, 0) == 0);
+
+    if (Allocation->BackingAllocation != NULL)
+    {
+        ASSERT(Allocation->OpenBindingHandle == NULL);
+        DxgkVidMmDereferenceAllocation(Allocation->BackingAllocation);
+        Allocation->BackingAllocation = NULL;
+    }
+    else
+    {
+        if (Allocation->ApertureMdl != NULL)
+        {
+            IoFreeMdl(Allocation->ApertureMdl);
+            Allocation->ApertureMdl = NULL;
+        }
+        Allocation->ApertureMapped = FALSE;
+        if (Allocation->UserModeAddress != NULL)
+            DxgkVidMmUnmapAllocationUser(Allocation);
+        if (Allocation->CpuAddress != NULL)
+            DxgkVidMmUnmapAllocationCpu(Allocation);
+        if (Allocation->Resident)
+            DxgkpVidMmReleaseSegmentPlacement(Allocation);
+        if (Allocation->SystemMemory != NULL)
+            ExFreePoolWithTag(Allocation->SystemMemory, TAG_VIDMM_ALLOC);
+        Allocation->SystemMemory = NULL;
+        if (Allocation->PrivateDriverData != NULL)
+            ExFreePoolWithTag(Allocation->PrivateDriverData, TAG_VIDMM_ALLOC);
+        Allocation->PrivateDriverData = NULL;
+        Allocation->PrivateDriverDataSize = 0;
+        if (Allocation->MiniportHandle != NULL && Adapter != NULL && DxgkAcquireMiniportCallback(Adapter))
+        {
+            DXGKARG_DESTROYALLOCATION DestroyArgs;
+
+            RtlZeroMemory(&DestroyArgs, sizeof(DestroyArgs));
+            DestroyArgs.NumAllocations = 1;
+            DestroyArgs.phAllocation = &Allocation->MiniportHandle;
+            if (Adapter->MiniportContext->InitData.s.DxgkDdiDestroyAllocation != NULL)
+                Adapter->MiniportContext->InitData.s.DxgkDdiDestroyAllocation(Adapter->MiniportDeviceContext, &DestroyArgs);
+            DxgkReleaseMiniportCallback(Adapter);
+        }
+    }
+
+    if (Resource != NULL)
+    {
+        ExAcquireFastMutex(&DxgkVidMmResourceListLock);
+        if (!IsListEmpty(&Allocation->ResourceEntry))
+        {
+            RemoveEntryList(&Allocation->ResourceEntry);
+            InitializeListHead(&Allocation->ResourceEntry);
+        }
+        if (Resource->OpenAllocations != NULL && Allocation->OpenBindingIndex < Resource->OpenAllocationCapacity && Resource->OpenAllocations[Allocation->OpenBindingIndex] == Allocation)
+            Resource->OpenAllocations[Allocation->OpenBindingIndex] = NULL;
+        ExReleaseFastMutex(&DxgkVidMmResourceListLock);
+        Allocation->Resource = NULL;
+        DxgkVidMmDereferenceResource(Resource);
+    }
+
+    Allocation->Magic = 0;
+    DxgkpVidMmReleaseBacking(Adapter);
+    ExFreePoolWithTag(Allocation, TAG_VIDMM_ALLOC);
+}
+
+static VOID
+DxgkpVidMmFinalizeResource(
+    _In_ PDXGKVMM_RESOURCE Resource)
+{
+    PDXGKRNL_ADAPTER Adapter = Resource->Adapter;
+
+    PAGED_CODE();
+    ASSERT(InterlockedCompareExchange(&Resource->Destroying, 0, 0) != 0);
+    ASSERT(InterlockedCompareExchange(&Resource->ReferenceCount, 0, 0) == 0);
+    ASSERT(IsListEmpty(&Resource->AllocationList));
+
+    if (Resource->BackingResource != NULL)
+    {
+        DxgkVidMmDereferenceResource(Resource->BackingResource);
+        Resource->BackingResource = NULL;
+    }
+    else if (Resource->MiniportHandle != NULL && Adapter != NULL && DxgkAcquireMiniportCallback(Adapter))
     {
         DXGKARG_DESTROYALLOCATION DestroyArgs;
 
         RtlZeroMemory(&DestroyArgs, sizeof(DestroyArgs));
-        DestroyArgs.hResource             = Resource->MiniportHandle;
+        DestroyArgs.hResource = Resource->MiniportHandle;
         DestroyArgs.Flags.DestroyResource = 1;
+        if (Adapter->MiniportContext->InitData.s.DxgkDdiDestroyAllocation != NULL)
+            Adapter->MiniportContext->InitData.s.DxgkDdiDestroyAllocation(Adapter->MiniportDeviceContext, &DestroyArgs);
+        DxgkReleaseMiniportCallback(Adapter);
+    }
+    if (Resource->OpenBindingScratch != NULL)
+        ExFreePoolWithTag(Resource->OpenBindingScratch, TAG_VIDMM_RESOURCE);
+    if (Resource->OpenAllocations != NULL)
+        ExFreePoolWithTag(Resource->OpenAllocations, TAG_VIDMM_RESOURCE);
+    if (Resource->ResourcePrivateDriverData != NULL)
+        ExFreePoolWithTag(Resource->ResourcePrivateDriverData, TAG_VIDMM_RESOURCE);
+    if (Resource->PrivateRuntimeData != NULL)
+        ExFreePoolWithTag(Resource->PrivateRuntimeData, TAG_VIDMM_RESOURCE);
+    DxgkpVidMmReleaseBacking(Adapter);
+    ExFreePoolWithTag(Resource, TAG_VIDMM_RESOURCE);
+}
 
-        Status = Adapter->MiniportContext->InitData.s.DxgkDdiDestroyAllocation(
-                     Adapter->MiniportDeviceContext,
-                     &DestroyArgs);
-        if (!NT_SUCCESS(Status))
+static VOID
+NTAPI
+DxgkpVidMmCloseOpenResourceWorker(
+    _In_ PVOID Context)
+{
+    PDXGKVMM_RESOURCE Resource = Context;
+    PDXGKRNL_ADAPTER Adapter = Resource->Adapter;
+    DXGKARG_CLOSEALLOCATION CloseArgs;
+    HANDLE MiniportDeviceHandle = NULL;
+    UINT CloseCount = 0;
+    UINT Index;
+
+    PAGED_CODE();
+    for (Index = 0; Index < Resource->OpenAllocationCapacity; ++Index)
+    {
+        PDXGKVMM_ALLOCATION Allocation;
+
+        ExAcquireFastMutex(&DxgkVidMmResourceListLock);
+        Allocation = Resource->OpenAllocations[Index];
+        ExReleaseFastMutex(&DxgkVidMmResourceListLock);
+        if (Allocation != NULL && InterlockedCompareExchange(&Allocation->FinalizeQueued, 0, 0) == 2)
         {
-            DPRINT1("DxgkpVidMmDestroyResourceWrapper: miniport destroy failed 0x%08lx\n",
-                    Status);
-            return Status;
+            KeWaitForSingleObject(&Allocation->LogicalReferencesDrainedEvent, Executive, KernelMode, FALSE, NULL);
+            KeWaitForSingleObject(&Allocation->ReferencesDrainedEvent, Executive, KernelMode, FALSE, NULL);
         }
     }
 
     ExAcquireFastMutex(&DxgkVidMmResourceListLock);
-    if (!IsListEmpty(&Resource->GlobalResourceEntry))
-        RemoveEntryList(&Resource->GlobalResourceEntry);
-    InitializeListHead(&Resource->GlobalResourceEntry);
+    for (Index = 0; Index < Resource->OpenAllocationCapacity; ++Index)
+    {
+        PDXGKVMM_ALLOCATION Allocation = Resource->OpenAllocations[Index];
+
+        if (Allocation == NULL || InterlockedCompareExchange(&Allocation->FinalizeQueued, 0, 0) != 2)
+            continue;
+        if (Allocation->OpenBindingHandle != NULL)
+            Resource->OpenBindingScratch[CloseCount++] = Allocation->OpenBindingHandle;
+        if (MiniportDeviceHandle == NULL)
+            MiniportDeviceHandle = Allocation->MiniportDeviceHandle;
+    }
+    ExReleaseFastMutex(&DxgkVidMmResourceListLock);
+    if (CloseCount != 0 && Adapter != NULL && DxgkAcquireMiniportCallback(Adapter))
+    {
+        RtlZeroMemory(&CloseArgs, sizeof(CloseArgs));
+        CloseArgs.NumAllocations = CloseCount;
+        CloseArgs.pOpenHandleList = Resource->OpenBindingScratch;
+        if (DXGK_CB_FULL(Adapter, DxgkDdiCloseAllocation) != NULL)
+            DXGK_CB_FULL(Adapter, DxgkDdiCloseAllocation)(MiniportDeviceHandle, &CloseArgs);
+        DxgkReleaseMiniportCallback(Adapter);
+    }
+    for (Index = 0; Index < Resource->OpenAllocationCapacity; ++Index)
+    {
+        PDXGKVMM_ALLOCATION Allocation;
+
+        ExAcquireFastMutex(&DxgkVidMmResourceListLock);
+        Allocation = Resource->OpenAllocations[Index];
+        if (Allocation != NULL && InterlockedCompareExchange(&Allocation->FinalizeQueued, 0, 0) == 2)
+            Allocation->OpenBindingHandle = NULL;
+        else
+            Allocation = NULL;
+        ExReleaseFastMutex(&DxgkVidMmResourceListLock);
+        if (Allocation != NULL)
+        {
+            InterlockedExchange(&Allocation->FinalizeQueued, 1);
+            DxgkpVidMmFinalizeAllocation(Allocation);
+        }
+    }
+    DxgkVidMmDereferenceResource(Resource);
+}
+
+NTSTATUS
+DxgkpVidMmDestroyResourceWrapper(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKVMM_RESOURCE Resource)
+{
+    PDXGKVMM_ALLOCATION *SourceAllocations = NULL;
+    PHANDLE SourceOpenHandles = NULL;
+    HANDLE SourceMiniportDeviceHandle = NULL;
+    PLIST_ENTRY Entry;
+    UINT BatchCount = 0;
+    UINT SourceCount = 0;
+    UINT SourceCloseCount = 0;
+    UINT SourceCapacity = 0;
+    UINT Index;
+    BOOLEAN SourceResource;
+
+    if (Adapter == NULL || Resource == NULL || Resource->Adapter != Adapter)
+        return STATUS_INVALID_PARAMETER;
+    DxgkpVidMmEnsureGlobalsInitialized();
+
+RetrySnapshot:
+    ExAcquireFastMutex(&DxgkVidMmResourceListLock);
+    if (InterlockedCompareExchange(&Resource->Destroying, 0, 0) != 0)
+    {
+        ExReleaseFastMutex(&DxgkVidMmResourceListLock);
+        return STATUS_INVALID_HANDLE;
+    }
+    for (Entry = DxgkVidMmResourceListHead.Flink; Entry != &DxgkVidMmResourceListHead && CONTAINING_RECORD(Entry, DXGKVMM_RESOURCE, GlobalResourceEntry) != Resource; Entry = Entry->Flink)
+        NOTHING;
+    if (Entry == &DxgkVidMmResourceListHead)
+    {
+        ExReleaseFastMutex(&DxgkVidMmResourceListLock);
+        return STATUS_INVALID_HANDLE;
+    }
+    InterlockedIncrement(&Resource->ReferenceCount);
+    SourceResource = Resource->BackingResource == NULL;
+    SourceCapacity = SourceResource ? Resource->AllocationCount : 0;
     ExReleaseFastMutex(&DxgkVidMmResourceListLock);
 
-    if (Resource->ResourcePrivateDriverData != NULL)
-        ExFreePoolWithTag(Resource->ResourcePrivateDriverData,
-                          TAG_VIDMM_RESOURCE);
+    if (SourceCapacity != 0)
+    {
+        if ((SIZE_T)SourceCapacity > MAXULONG_PTR / sizeof(*SourceAllocations) || (SIZE_T)SourceCapacity > MAXULONG_PTR / sizeof(*SourceOpenHandles))
+        {
+            DxgkVidMmDereferenceResource(Resource);
+            return STATUS_INTEGER_OVERFLOW;
+        }
+        SourceAllocations = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)SourceCapacity * sizeof(*SourceAllocations), TAG_VIDMM_RESOURCE);
+        SourceOpenHandles = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)SourceCapacity * sizeof(*SourceOpenHandles), TAG_VIDMM_RESOURCE);
+        if (SourceAllocations == NULL || SourceOpenHandles == NULL)
+        {
+            if (SourceOpenHandles != NULL)
+                ExFreePoolWithTag(SourceOpenHandles, TAG_VIDMM_RESOURCE);
+            if (SourceAllocations != NULL)
+                ExFreePoolWithTag(SourceAllocations, TAG_VIDMM_RESOURCE);
+            DxgkVidMmDereferenceResource(Resource);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        RtlZeroMemory(SourceAllocations, (SIZE_T)SourceCapacity * sizeof(*SourceAllocations));
+        RtlZeroMemory(SourceOpenHandles, (SIZE_T)SourceCapacity * sizeof(*SourceOpenHandles));
+    }
 
-    ExFreePoolWithTag(Resource, TAG_VIDMM_RESOURCE);
+    ExAcquireFastMutex(&DxgkVidMmResourceListLock);
+    ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+    if (InterlockedCompareExchange(&Resource->Destroying, 0, 0) != 0)
+    {
+        ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+        ExReleaseFastMutex(&DxgkVidMmResourceListLock);
+        if (SourceOpenHandles != NULL)
+            ExFreePoolWithTag(SourceOpenHandles, TAG_VIDMM_RESOURCE);
+        if (SourceAllocations != NULL)
+            ExFreePoolWithTag(SourceAllocations, TAG_VIDMM_RESOURCE);
+        DxgkVidMmDereferenceResource(Resource);
+        return STATUS_INVALID_HANDLE;
+    }
+    for (Entry = DxgkVidMmResourceListHead.Flink; Entry != &DxgkVidMmResourceListHead && CONTAINING_RECORD(Entry, DXGKVMM_RESOURCE, GlobalResourceEntry) != Resource; Entry = Entry->Flink)
+        NOTHING;
+    if (Entry == &DxgkVidMmResourceListHead)
+    {
+        ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+        ExReleaseFastMutex(&DxgkVidMmResourceListLock);
+        if (SourceOpenHandles != NULL)
+            ExFreePoolWithTag(SourceOpenHandles, TAG_VIDMM_RESOURCE);
+        if (SourceAllocations != NULL)
+            ExFreePoolWithTag(SourceAllocations, TAG_VIDMM_RESOURCE);
+        DxgkVidMmDereferenceResource(Resource);
+        return STATUS_INVALID_HANDLE;
+    }
+    if (SourceResource && Resource->AllocationCount > SourceCapacity)
+    {
+        ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+        ExReleaseFastMutex(&DxgkVidMmResourceListLock);
+        if (SourceOpenHandles != NULL)
+            ExFreePoolWithTag(SourceOpenHandles, TAG_VIDMM_RESOURCE);
+        if (SourceAllocations != NULL)
+            ExFreePoolWithTag(SourceAllocations, TAG_VIDMM_RESOURCE);
+        SourceOpenHandles = NULL;
+        SourceAllocations = NULL;
+        DxgkVidMmDereferenceResource(Resource);
+        goto RetrySnapshot;
+    }
+
+    InterlockedExchange(&Resource->Destroying, 1);
+    RemoveEntryList(&Resource->GlobalResourceEntry);
+    InitializeListHead(&Resource->GlobalResourceEntry);
+    if (SourceResource)
+    {
+        for (Entry = Resource->AllocationList.Flink; Entry != &Resource->AllocationList; Entry = Entry->Flink)
+        {
+            PDXGKVMM_ALLOCATION Allocation = CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, ResourceEntry);
+
+            if (InterlockedCompareExchange(&Allocation->Destroying, 1, 0) != 0)
+                continue;
+            ASSERT(SourceCount < SourceCapacity);
+            SourceAllocations[SourceCount++] = Allocation;
+            if (!IsListEmpty(&Allocation->GlobalAllocationEntry))
+            {
+                RemoveEntryList(&Allocation->GlobalAllocationEntry);
+                InitializeListHead(&Allocation->GlobalAllocationEntry);
+            }
+            if (Resource->AllocationCount != 0)
+                Resource->AllocationCount--;
+            if (Allocation->OpenBindingHandle != NULL)
+            {
+                SourceOpenHandles[SourceCloseCount++] = Allocation->OpenBindingHandle;
+                Allocation->OpenBindingHandle = NULL;
+            }
+            if (SourceMiniportDeviceHandle == NULL)
+                SourceMiniportDeviceHandle = Allocation->MiniportDeviceHandle;
+        }
+    }
+    else
+    {
+        for (Index = 0; Index < Resource->OpenAllocationCapacity; ++Index)
+        {
+            PDXGKVMM_ALLOCATION Allocation = Resource->OpenAllocations[Index];
+
+            if (Allocation == NULL)
+                continue;
+            if (InterlockedCompareExchange(&Allocation->Destroying, 1, 0) == 0)
+            {
+                if (!IsListEmpty(&Allocation->GlobalAllocationEntry))
+                {
+                    RemoveEntryList(&Allocation->GlobalAllocationEntry);
+                    InitializeListHead(&Allocation->GlobalAllocationEntry);
+                }
+                if (Resource->AllocationCount != 0)
+                    Resource->AllocationCount--;
+            }
+            if (InterlockedCompareExchange(&Allocation->FinalizeQueued, 2, 0) == 0)
+                BatchCount++;
+        }
+        if (BatchCount != 0)
+            InterlockedIncrement(&Resource->ReferenceCount);
+    }
+    ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+    ExReleaseFastMutex(&DxgkVidMmResourceListLock);
+
+    if (SourceResource)
+    {
+        DXGKARG_CLOSEALLOCATION CloseArgs;
+
+        for (Index = 0; Index < SourceCount; ++Index)
+        {
+            DxgkpVidMmDropLogicalHandleReference(SourceAllocations[Index]);
+            KeWaitForSingleObject(&SourceAllocations[Index]->LogicalReferencesDrainedEvent, Executive, KernelMode, FALSE, NULL);
+        }
+        if (SourceCloseCount != 0 && DXGK_CB_FULL(Adapter, DxgkDdiCloseAllocation) != NULL && DxgkAcquireMiniportCallback(Adapter))
+        {
+            RtlZeroMemory(&CloseArgs, sizeof(CloseArgs));
+            CloseArgs.NumAllocations = SourceCloseCount;
+            CloseArgs.pOpenHandleList = SourceOpenHandles;
+            DXGK_CB_FULL(Adapter, DxgkDdiCloseAllocation)(SourceMiniportDeviceHandle, &CloseArgs);
+            DxgkReleaseMiniportCallback(Adapter);
+        }
+        for (Index = 0; Index < SourceCount; ++Index)
+            DxgkpVidMmDropAllocationHandleReference(SourceAllocations[Index]);
+        if (SourceOpenHandles != NULL)
+            ExFreePoolWithTag(SourceOpenHandles, TAG_VIDMM_RESOURCE);
+        if (SourceAllocations != NULL)
+            ExFreePoolWithTag(SourceAllocations, TAG_VIDMM_RESOURCE);
+    }
+    else
+    {
+        for (Index = 0; Index < Resource->OpenAllocationCapacity; ++Index)
+        {
+            PDXGKVMM_ALLOCATION Allocation = Resource->OpenAllocations[Index];
+
+            if (Allocation != NULL && InterlockedCompareExchange(&Allocation->FinalizeQueued, 0, 0) == 2)
+            {
+                DxgkpVidMmDropLogicalHandleReference(Allocation);
+                DxgkpVidMmDropAllocationHandleReference(Allocation);
+            }
+        }
+    }
+    DxgkVidMmDereferenceResource(Resource);
+    DxgkVidMmDereferenceResource(Resource);
+    if (BatchCount != 0)
+        DxgkpVidMmCloseOpenResourceWorker(Resource);
     return STATUS_SUCCESS;
 }
 
@@ -644,6 +1713,8 @@ DxgkVidMmInitializeAdapter(
     ASSERT(Adapter != NULL);
     ASSERT(Adapter->MiniportDeviceContext != NULL);
     ASSERT(Adapter->MiniportContext != NULL);
+    InterlockedExchange(&Adapter->VidMmBackingCount, 0);
+    KeInitializeEvent(&Adapter->VidMmBackingsDrainedEvent, NotificationEvent, TRUE);
 
     /*
      * Display-Only Drivers (DOD) do not implement DxgkDdiQueryAdapterInfo
@@ -938,6 +2009,10 @@ DxgkVidMmTeardownAdapter(
 
     DPRINT("DxgkVidMmTeardownAdapter: Adapter %p\n", Adapter);
 
+    DxgkVidMmCleanupAdapterAllocations(Adapter);
+    if (InterlockedCompareExchange(&Adapter->VidMmBackingCount, 0, 0) != 0)
+        KeWaitForSingleObject(&Adapter->VidMmBackingsDrainedEvent, Executive, KernelMode, FALSE, NULL);
+
     if (Adapter->Segments == NULL)
         return;
 
@@ -1107,6 +2182,7 @@ DxgkVidMmCreateAllocation(
     }
 
     RtlZeroMemory(Alloc, sizeof(DXGKVMM_ALLOCATION));
+    DxgkpVidMmInitializeAllocationLifetime(Alloc);
 
     Alloc->Size               = AllocInfo->Size;
     Alloc->Alignment          = (AllocInfo->Alignment != 0)
@@ -1120,6 +2196,7 @@ DxgkVidMmCreateAllocation(
     Alloc->Resident           = FALSE;
     Alloc->Adapter            = Adapter;
     Alloc->Device             = Device;
+    Alloc->MiniportDeviceHandle = Device != NULL ? Device->hMiniportDevice : NULL;
     Alloc->Resource           = NULL;
     ExInitializeFastMutex(&Alloc->UserModeLock);
 
@@ -1149,6 +2226,7 @@ DxgkVidMmCreateAllocation(
     InitializeListHead(&Alloc->SegmentEntry);
     InitializeListHead(&Alloc->DeviceEntry);
     InitializeListHead(&Alloc->GlobalAllocationEntry);
+    InitializeListHead(&Alloc->ResourceEntry);
 
     DxgkpVidMmEnsureGlobalsInitialized();
     Alloc->Handle = DxgkpVidMmAllocateHandle(&DxgkVidMmNextAllocationHandle,
@@ -1301,6 +2379,7 @@ DxgkVidMmCreateAllocation(
             Alloc->CpuAddress = Alloc->SystemMemory;
     }
 
+    DxgkpVidMmTrackBacking(Adapter);
     ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
     InsertTailList(&DxgkVidMmAllocationListHead, &Alloc->GlobalAllocationEntry);
     ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
@@ -1371,6 +2450,7 @@ DxgkVidMmCreatePreMappedAllocation(
         return STATUS_INSUFFICIENT_RESOURCES;
 
     RtlZeroMemory(Alloc, sizeof(*Alloc));
+    DxgkpVidMmInitializeAllocationLifetime(Alloc);
 
     Alloc->Handle = DxgkpVidMmAllocateHandle(&DxgkVidMmNextAllocationHandle,
                                               DxgkVidMmAllocationHandleCookie);
@@ -1395,7 +2475,9 @@ DxgkVidMmCreatePreMappedAllocation(
     InitializeListHead(&Alloc->SegmentEntry);
     InitializeListHead(&Alloc->DeviceEntry);
     InitializeListHead(&Alloc->GlobalAllocationEntry);
+    InitializeListHead(&Alloc->ResourceEntry);
 
+    DxgkpVidMmTrackBacking(Adapter);
     ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
     InsertTailList(&DxgkVidMmAllocationListHead, &Alloc->GlobalAllocationEntry);
     ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
@@ -1416,113 +2498,230 @@ DxgkVidMmCreatePreMappedAllocation(
  * Validates the handle, evicts the allocation if resident, frees system
  * backing memory, notifies the miniport, and frees the tracking object.
  */
-NTSTATUS
-DxgkVidMmDestroyAllocation(
-    _In_ PDXGKRNL_ADAPTER   Adapter,
-    _In_ HANDLE             AllocationHandle)
+static NTSTATUS
+DxgkpVidMmDetachAllocation(
+    _In_opt_ PDXGKRNL_ADAPTER ExpectedAdapter,
+    _In_opt_ PDXGKRNL_DEVICE ExpectedDevice,
+    _In_opt_ PDXGKVMM_RESOURCE ExpectedResource,
+    _In_ HANDLE AllocationHandle)
 {
-    PDXGKVMM_ALLOCATION     Alloc;
-    NTSTATUS                Status;
+    PDXGKVMM_ALLOCATION Allocation;
+    PDXGKVMM_RESOURCE Resource;
+    NTSTATUS Status = STATUS_SUCCESS;
 
-    DPRINT("DxgkVidMmDestroyAllocation: Adapter=%p Handle=%p\n",
-           Adapter, AllocationHandle);
+    if (AllocationHandle == NULL)
+        return STATUS_INVALID_HANDLE;
 
-    Alloc = DxgkVidMmHandleToAllocation(AllocationHandle);
-
-    if (Alloc == NULL)
+    DxgkpVidMmEnsureGlobalsInitialized();
+    ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+    Allocation = DxgkpVidMmLookupAllocationLocked((D3DKMT_HANDLE)(ULONG_PTR)AllocationHandle);
+    if (Allocation == NULL || (ExpectedAdapter != NULL && Allocation->Adapter != ExpectedAdapter) || (ExpectedDevice != NULL && Allocation->Device != ExpectedDevice) || (ExpectedResource == NULL && Allocation->Resource != NULL) || (ExpectedResource != NULL && Allocation->Resource != ExpectedResource) || InterlockedCompareExchange(&Allocation->Destroying, 0, 0) != 0)
     {
-        DPRINT1("DxgkVidMmDestroyAllocation: invalid handle %p\n",
-                AllocationHandle);
+        ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
         return STATUS_INVALID_HANDLE;
     }
+    InterlockedIncrement(&Allocation->ReferenceCount);
+    Resource = Allocation->Resource;
+    ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
 
-    if (Adapter == NULL)
-        Adapter = Alloc->Adapter;
-
-    if (Alloc->ApertureMapped || Alloc->ApertureMdl != NULL)
-        DxgkpVidMmReleaseApertureMapping(Alloc);
-
-    if (Alloc->UserModeAddress != NULL)
-        DxgkVidMmUnmapAllocationUser(Alloc);
-
-    /* Unmap any CPU mapping before evicting. */
-    if (Alloc->CpuAddress != NULL)
-        DxgkVidMmUnmapAllocationCpu(Alloc);
-
-    /* Evict from segment if resident. */
-    if (Alloc->Resident)
+    ExAcquireFastMutex(&DxgkVidMmResourceListLock);
+    ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+    if (DxgkpVidMmLookupAllocationLocked((D3DKMT_HANDLE)(ULONG_PTR)AllocationHandle) != Allocation || (ExpectedResource == NULL && Allocation->Resource != NULL) || (ExpectedResource != NULL && Allocation->Resource != ExpectedResource) || InterlockedCompareExchange(&Allocation->Destroying, 1, 0) != 0)
+        Status = STATUS_INVALID_HANDLE;
+    else
     {
-        Status = DxgkVidMmEvict(Alloc);
+        RemoveEntryList(&Allocation->GlobalAllocationEntry);
+        InitializeListHead(&Allocation->GlobalAllocationEntry);
+        if (Resource != NULL && Resource->AllocationCount != 0)
+            Resource->AllocationCount--;
+    }
+    ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+    ExReleaseFastMutex(&DxgkVidMmResourceListLock);
+    if (NT_SUCCESS(Status))
+    {
+        DxgkpVidMmCloseAllocationBinding(Allocation);
+        DxgkpVidMmDropAllocationHandleReference(Allocation);
+    }
+    DxgkVidMmDereferenceAllocation(Allocation);
+    return Status;
+}
 
-        if (!NT_SUCCESS(Status))
+static NTSTATUS
+DxgkpVidMmDestroyAllocation(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ PDXGKRNL_DEVICE ExpectedDevice,
+    _In_opt_ PDXGKVMM_RESOURCE ExpectedResource,
+    _In_ HANDLE AllocationHandle)
+{
+    NTSTATUS Status;
+
+    DPRINT("DxgkVidMmDestroyAllocation: Adapter=%p Handle=%p\n", Adapter, AllocationHandle);
+    Status = DxgkpVidMmDetachAllocation(Adapter, ExpectedDevice, ExpectedResource, AllocationHandle);
+    if (!NT_SUCCESS(Status))
+        DPRINT1("DxgkVidMmDestroyAllocation: invalid handle %p\n", AllocationHandle);
+    return Status;
+}
+
+NTSTATUS
+DxgkVidMmDestroyAllocation(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ HANDLE AllocationHandle)
+{
+    return DxgkpVidMmDestroyAllocation(Adapter, NULL, NULL, AllocationHandle);
+}
+
+static NTSTATUS
+DxgkpVidMmOpenCreatorAllocations(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ D3DKMT_CREATEALLOCATION *CreateAllocation)
+{
+    PDXGKVMM_ALLOCATION *Allocations = NULL;
+    DXGK_OPENALLOCATIONINFO *OpenInfo = NULL;
+    PHANDLE CloseHandles = NULL;
+    PVOID ResourcePrivateData = NULL;
+    DXGKARG_OPENALLOCATION OpenArgs;
+    DXGKARG_CLOSEALLOCATION CloseArgs;
+    UINT AllocationCount;
+    UINT CloseCount = 0;
+    UINT Index;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    PAGED_CODE();
+    if (Adapter == NULL || Device == NULL || CreateAllocation == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (DXGK_CB_FULL(Adapter, DxgkDdiOpenAllocation) == NULL)
+        return STATUS_SUCCESS;
+    if (DXGK_CB_FULL(Adapter, DxgkDdiCloseAllocation) == NULL)
+        return STATUS_NOT_SUPPORTED;
+    AllocationCount = CreateAllocation->NumAllocations;
+    if (AllocationCount == 0 || (SIZE_T)AllocationCount > MAXULONG_PTR / sizeof(*Allocations) || (SIZE_T)AllocationCount > MAXULONG_PTR / sizeof(*OpenInfo) || (SIZE_T)AllocationCount > MAXULONG_PTR / sizeof(*CloseHandles))
+        return STATUS_INTEGER_OVERFLOW;
+
+    Allocations = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)AllocationCount * sizeof(*Allocations), TAG_VIDMM_ALLOC);
+    OpenInfo = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)AllocationCount * sizeof(*OpenInfo), TAG_VIDMM_ALLOC);
+    CloseHandles = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)AllocationCount * sizeof(*CloseHandles), TAG_VIDMM_ALLOC);
+    if (Allocations == NULL || OpenInfo == NULL || CloseHandles == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Cleanup;
+    }
+    RtlZeroMemory(Allocations, (SIZE_T)AllocationCount * sizeof(*Allocations));
+    RtlZeroMemory(OpenInfo, (SIZE_T)AllocationCount * sizeof(*OpenInfo));
+    RtlZeroMemory(CloseHandles, (SIZE_T)AllocationCount * sizeof(*CloseHandles));
+    if (CreateAllocation->PrivateDriverDataSize != 0)
+    {
+        if (CreateAllocation->pPrivateDriverData == NULL)
         {
-            /*
-             * Log but continue: we must not leak the tracking object.
-             * A partial eviction may leave segment UsedSize inconsistent
-             * but that is recoverable at adapter-stop time.
-             */
-            DPRINT1("DxgkVidMmDestroyAllocation: eviction of %p failed "
-                    "0x%08lx — continuing\n", Alloc, Status);
+            Status = STATUS_INVALID_PARAMETER;
+            goto Cleanup;
         }
-    }
-
-    /* Free system-memory backing (if any). */
-    if (Alloc->SystemMemory != NULL)
-    {
-        ExFreePoolWithTag(Alloc->SystemMemory, TAG_VIDMM_ALLOC);
-        Alloc->SystemMemory = NULL;
-    }
-
-    if (Alloc->PrivateDriverData != NULL)
-    {
-        ExFreePoolWithTag(Alloc->PrivateDriverData, TAG_VIDMM_ALLOC);
-        Alloc->PrivateDriverData = NULL;
-        Alloc->PrivateDriverDataSize = 0;
-    }
-
-    /* Notify miniport. */
-    if (Adapter != NULL &&
-        Adapter->MiniportContext->InitData.s.DxgkDdiDestroyAllocation != NULL &&
-        Alloc->MiniportHandle != NULL)
-    {
-        DXGKARG_DESTROYALLOCATION DestroyArgs;
-
-        RtlZeroMemory(&DestroyArgs, sizeof(DestroyArgs));
-        DestroyArgs.NumAllocations  = 1;
-        DestroyArgs.phAllocation    = &Alloc->MiniportHandle;
-
-        Status = Adapter->MiniportContext->InitData.s.DxgkDdiDestroyAllocation(
-                     Adapter->MiniportDeviceContext,
-                     &DestroyArgs);
-
-        if (!NT_SUCCESS(Status))
+        ResourcePrivateData = ExAllocatePoolWithTag(NonPagedPool, CreateAllocation->PrivateDriverDataSize, TAG_VIDMM_ALLOC);
+        if (ResourcePrivateData == NULL)
         {
-            DPRINT1("DxgkVidMmDestroyAllocation: DxgkDdiDestroyAllocation "
-                    "returned 0x%08lx (non-fatal)\n", Status);
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Cleanup;
+        }
+        RtlCopyMemory(ResourcePrivateData, CreateAllocation->pPrivateDriverData, CreateAllocation->PrivateDriverDataSize);
+    }
+
+    for (Index = 0; Index < AllocationCount; ++Index)
+    {
+        D3DDDI_ALLOCATIONINFO *AllocationInfo = &CreateAllocation->pAllocationInfo[Index];
+        HANDLE AllocationHandle = (HANDLE)(ULONG_PTR)AllocationInfo->hAllocation;
+
+        Status = DxgkVidMmReferenceAllocation(AllocationHandle, Adapter, Device, &Allocations[Index]);
+        if (!NT_SUCCESS(Status) || Allocations[Index]->BackingAllocation != NULL || Allocations[Index]->PrivateDriverDataSize != AllocationInfo->PrivateDriverDataSize)
+        {
+            Status = STATUS_INVALID_HANDLE;
+            goto Cleanup;
+        }
+        OpenInfo[Index].hAllocation = AllocationInfo->hAllocation;
+        OpenInfo[Index].pPrivateDriverData = AllocationInfo->pPrivateDriverData;
+        OpenInfo[Index].PrivateDriverDataSize = AllocationInfo->PrivateDriverDataSize;
+    }
+
+    RtlZeroMemory(&OpenArgs, sizeof(OpenArgs));
+    OpenArgs.NumAllocations = AllocationCount;
+    OpenArgs.pOpenAllocation = OpenInfo;
+    OpenArgs.pPrivateDriverData = ResourcePrivateData;
+    OpenArgs.PrivateDriverSize = CreateAllocation->PrivateDriverDataSize;
+    OpenArgs.Flags.Create = 1;
+    if (!DxgkAcquireMiniportCallback(Adapter))
+    {
+        Status = STATUS_DEVICE_NOT_READY;
+        goto Cleanup;
+    }
+    Status = DXGK_CB_FULL(Adapter, DxgkDdiOpenAllocation)(Device->hMiniportDevice, &OpenArgs);
+    DxgkReleaseMiniportCallback(Adapter);
+    if (!NT_SUCCESS(Status))
+        goto RollbackOpen;
+    for (Index = 0; Index < AllocationCount; ++Index)
+    {
+        if (OpenInfo[Index].hDeviceSpecificAllocation == NULL)
+        {
+            Status = STATUS_INVALID_HANDLE;
+            goto RollbackOpen;
         }
     }
 
     ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
-    if (!IsListEmpty(&Alloc->GlobalAllocationEntry))
-        RemoveEntryList(&Alloc->GlobalAllocationEntry);
-    InitializeListHead(&Alloc->GlobalAllocationEntry);
-    ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
-
-    if (Alloc->Resource != NULL)
+    for (Index = 0; Index < AllocationCount; ++Index)
     {
-        ExAcquireFastMutex(&DxgkVidMmResourceListLock);
-        if (Alloc->Resource->AllocationCount != 0)
-            Alloc->Resource->AllocationCount--;
-        ExReleaseFastMutex(&DxgkVidMmResourceListLock);
+        if (DxgkpVidMmLookupAllocationLocked(OpenInfo[Index].hAllocation) != Allocations[Index] || InterlockedCompareExchange(&Allocations[Index]->Destroying, 0, 0) != 0 || Allocations[Index]->OpenBindingHandle != NULL)
+        {
+            Status = STATUS_INVALID_HANDLE;
+            break;
+        }
+    }
+    if (NT_SUCCESS(Status))
+    {
+        for (Index = 0; Index < AllocationCount; ++Index)
+            Allocations[Index]->OpenBindingHandle = OpenInfo[Index].hDeviceSpecificAllocation;
+    }
+    ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+    if (!NT_SUCCESS(Status))
+        goto RollbackOpen;
+
+    for (Index = 0; Index < AllocationCount; ++Index)
+    {
+        if (Allocations[Index]->PrivateDriverDataSize != 0)
+            RtlCopyMemory(Allocations[Index]->PrivateDriverData, OpenInfo[Index].pPrivateDriverData, Allocations[Index]->PrivateDriverDataSize);
+    }
+    goto Cleanup;
+
+RollbackOpen:
+    for (Index = 0; Index < AllocationCount; ++Index)
+    {
+        if (OpenInfo[Index].hDeviceSpecificAllocation != NULL)
+            CloseHandles[CloseCount++] = OpenInfo[Index].hDeviceSpecificAllocation;
+    }
+    if (CloseCount != 0 && DxgkAcquireMiniportCallback(Adapter))
+    {
+        RtlZeroMemory(&CloseArgs, sizeof(CloseArgs));
+        CloseArgs.NumAllocations = CloseCount;
+        CloseArgs.pOpenHandleList = CloseHandles;
+        DXGK_CB_FULL(Adapter, DxgkDdiCloseAllocation)(Device->hMiniportDevice, &CloseArgs);
+        DxgkReleaseMiniportCallback(Adapter);
     }
 
-    /* Poison magic before freeing to catch use-after-free in debug builds. */
-    Alloc->Magic = 0;
-    ExFreePoolWithTag(Alloc, TAG_VIDMM_ALLOC);
-
-    DPRINT("DxgkVidMmDestroyAllocation: done\n");
-
-    return STATUS_SUCCESS;
+Cleanup:
+    if (Allocations != NULL)
+    {
+        for (Index = 0; Index < AllocationCount; ++Index)
+        {
+            if (Allocations[Index] != NULL)
+                DxgkVidMmDereferenceAllocation(Allocations[Index]);
+        }
+        ExFreePoolWithTag(Allocations, TAG_VIDMM_ALLOC);
+    }
+    if (OpenInfo != NULL)
+        ExFreePoolWithTag(OpenInfo, TAG_VIDMM_ALLOC);
+    if (CloseHandles != NULL)
+        ExFreePoolWithTag(CloseHandles, TAG_VIDMM_ALLOC);
+    if (ResourcePrivateData != NULL)
+        ExFreePoolWithTag(ResourcePrivateData, TAG_VIDMM_ALLOC);
+    return Status;
 }
 
 NTSTATUS
@@ -1533,6 +2732,8 @@ DxgkCreateAllocation(
     PDXGKRNL_DEVICE Device;
     PDXGKVMM_RESOURCE Resource = NULL;
     DXGK_CREATEALLOCATIONFLAGS CreateFlags;
+    BOOLEAN CreatedResource = FALSE;
+    BOOLEAN ResourceReferenced = FALSE;
     NTSTATUS Status = STATUS_SUCCESS;
     UINT i;
 
@@ -1544,10 +2745,6 @@ DxgkCreateAllocation(
     {
         return STATUS_INVALID_PARAMETER;
     }
-
-    Device = DxgkpVidMmFindDeviceByHandle(pCreateAllocation->hDevice, &Adapter);
-    if (Device == NULL)
-        return STATUS_INVALID_HANDLE;
 
     if (pCreateAllocation->Flags.RestrictSharedAccess ||
         pCreateAllocation->Flags.CreateProtected ||
@@ -1618,11 +2815,24 @@ DxgkCreateAllocation(
         }
     }
 
+    Device = DxgkpVidMmFindDeviceByHandle(pCreateAllocation->hDevice, &Adapter);
+    if (Device == NULL)
+        return STATUS_INVALID_HANDLE;
+
     if (pCreateAllocation->hResource != 0)
     {
-        Resource = DxgkVidMmHandleToResource(pCreateAllocation->hResource);
-        if (Resource == NULL || Resource->Device != Device)
-            return STATUS_INVALID_HANDLE;
+        Status = DxgkVidMmReferenceResource(pCreateAllocation->hResource, FALSE, Device, &Resource);
+        if (!NT_SUCCESS(Status))
+        {
+            Status = STATUS_INVALID_HANDLE;
+            goto Cleanup;
+        }
+        ResourceReferenced = TRUE;
+        if (Resource->BackingResource != NULL)
+        {
+            Status = STATUS_INVALID_HANDLE;
+            goto Cleanup;
+        }
     }
 
     RtlZeroMemory(&CreateFlags, sizeof(CreateFlags));
@@ -1732,10 +2942,7 @@ DxgkCreateAllocation(
              Adapter->MiniportContext->InitData.s.DxgkDdiCreateAllocation == NULL))
         {
             DxgkAllocInfo.Flags.CpuVisible = 1;
-            Status = DxgkpVidMmCreateSystemAllocation(Adapter,
-                                                       Device,
-                                                       &DxgkAllocInfo,
-                                                       &AllocationHandle);
+            Status = DxgkpVidMmCreateSystemAllocation(Adapter, Device, &DxgkAllocInfo, &AllocationHandle);
             MiniportResourceHandle = NULL;
         }
         else
@@ -1745,50 +2952,41 @@ DxgkCreateAllocation(
 
         if (Status == STATUS_NOT_SUPPORTED)
         {
-            Status = DxgkVidMmCreateAllocation(Adapter,
-                                               Device,
-                                               &DxgkAllocInfo,
-                                               pCreateAllocation->pPrivateDriverData,
-                                               pCreateAllocation->PrivateDriverDataSize,
-                                               Resource ? Resource->MiniportHandle : NULL,
-                                               CreateFlags,
-                                               &AllocationHandle,
-                                               &MiniportResourceHandle);
+            Status = DxgkVidMmCreateAllocation(Adapter, Device, &DxgkAllocInfo, pCreateAllocation->pPrivateDriverData, pCreateAllocation->PrivateDriverDataSize, Resource ? Resource->MiniportHandle : NULL, CreateFlags, &AllocationHandle, &MiniportResourceHandle);
         }
         if (!NT_SUCCESS(Status))
             break;
 
-        TrackedAlloc = DxgkVidMmHandleToAllocation(AllocationHandle);
-        if (TrackedAlloc == NULL)
+        Status = DxgkVidMmReferenceAllocation(AllocationHandle, Adapter, Device, &TrackedAlloc);
+        if (!NT_SUCCESS(Status))
         {
             Status = STATUS_INTERNAL_ERROR;
+            DxgkpVidMmDestroyAllocation(Adapter, Device, NULL, AllocationHandle);
             break;
         }
 
         if (CreateFlags.Resource && Resource == NULL)
         {
-            Resource = DxgkVidMmCreateResourceWrapper(Device,
-                                                      MiniportResourceHandle,
-                                                      0,
-                                                      AllocationHandle,
-                                                      pCreateAllocation->pPrivateDriverData,
-                                                      pCreateAllocation->PrivateDriverDataSize);
+            Resource = DxgkVidMmCreateResourceWrapper(Adapter, Device, MiniportResourceHandle, 0, pCreateAllocation->Flags.CreateShared != 0, pCreateAllocation->pPrivateRuntimeData, pCreateAllocation->PrivateRuntimeDataSize, pCreateAllocation->pPrivateDriverData, pCreateAllocation->PrivateDriverDataSize);
             if (Resource == NULL)
             {
-                if (MiniportResourceHandle != NULL)
+                if (MiniportResourceHandle != NULL && DxgkAcquireMiniportCallback(Adapter))
                 {
                     DXGKARG_DESTROYALLOCATION DestroyArgs;
                     RtlZeroMemory(&DestroyArgs, sizeof(DestroyArgs));
                     DestroyArgs.hResource             = MiniportResourceHandle;
                     DestroyArgs.Flags.DestroyResource = 1;
-                    Adapter->MiniportContext->InitData.s.DxgkDdiDestroyAllocation(
-                        Adapter->MiniportDeviceContext,
-                        &DestroyArgs);
+                    if (Adapter->MiniportContext->InitData.s.DxgkDdiDestroyAllocation != NULL)
+                        Adapter->MiniportContext->InitData.s.DxgkDdiDestroyAllocation(Adapter->MiniportDeviceContext, &DestroyArgs);
+                    DxgkReleaseMiniportCallback(Adapter);
                 }
-                DxgkVidMmDestroyAllocation(Adapter, AllocationHandle);
+                DxgkVidMmDereferenceAllocation(TrackedAlloc);
+                DxgkpVidMmDestroyAllocation(Adapter, Device, NULL, AllocationHandle);
                 Status = STATUS_INSUFFICIENT_RESOURCES;
                 break;
             }
+
+            CreatedResource = TRUE;
 
             pCreateAllocation->hResource = Resource->Handle;
             if (pCreateAllocation->Flags.CreateShared)
@@ -1801,11 +2999,13 @@ DxgkCreateAllocation(
 
         if (Resource != NULL)
         {
-            ExAcquireFastMutex(&DxgkVidMmResourceListLock);
-            Resource->AllocationHandle = AllocationHandle;
-            Resource->AllocationCount++;
-            ExReleaseFastMutex(&DxgkVidMmResourceListLock);
-            TrackedAlloc->Resource = Resource;
+            Status = DxgkVidMmAttachAllocationToResource(Resource, TrackedAlloc);
+            if (!NT_SUCCESS(Status))
+            {
+                DxgkVidMmDereferenceAllocation(TrackedAlloc);
+                DxgkpVidMmDestroyAllocation(Adapter, Device, NULL, AllocationHandle);
+                break;
+            }
         }
 
         _SEH2_TRY
@@ -1819,9 +3019,17 @@ DxgkCreateAllocation(
         }
         _SEH2_END;
 
+        DxgkVidMmDereferenceAllocation(TrackedAlloc);
+
         if (!NT_SUCCESS(Status))
+        {
+            DxgkpVidMmDestroyAllocation(Adapter, Device, Resource, AllocationHandle);
             break;
+        }
     }
+
+    if (NT_SUCCESS(Status) && i == pCreateAllocation->NumAllocations)
+        Status = DxgkpVidMmOpenCreatorAllocations(Adapter, Device, pCreateAllocation);
 
     if (!NT_SUCCESS(Status))
     {
@@ -1829,21 +3037,25 @@ DxgkCreateAllocation(
         {
             HANDLE AllocationHandle;
 
-            AllocationHandle =
-                (HANDLE)(ULONG_PTR)pCreateAllocation->pAllocationInfo[i].hAllocation;
+            AllocationHandle = (HANDLE)(ULONG_PTR)pCreateAllocation->pAllocationInfo[i].hAllocation;
             if (AllocationHandle != NULL)
             {
-                DxgkVidMmDestroyAllocation(Adapter, AllocationHandle);
+                DxgkpVidMmDestroyAllocation(Adapter, Device, Resource, AllocationHandle);
                 pCreateAllocation->pAllocationInfo[i].hAllocation = 0;
             }
         }
 
-        if (Resource != NULL && Resource->AllocationCount == 0)
+        if (CreatedResource && Resource != NULL && Resource->AllocationCount == 0)
             DxgkpVidMmDestroyResourceWrapper(Adapter, Resource);
 
         pCreateAllocation->hResource = 0;
     }
 
+    if (ResourceReferenced)
+        DxgkVidMmDereferenceResource(Resource);
+
+Cleanup:
+    DxgkDereferenceDevice(Device);
     return Status;
 }
 
@@ -1851,8 +3063,8 @@ NTSTATUS
 DxgkDestroyAllocation(
     _In_ CONST D3DKMT_DESTROYALLOCATION *pDestroyAllocation)
 {
-    PDXGKRNL_ADAPTER Adapter;
-    PDXGKRNL_DEVICE Device;
+    PDXGKRNL_ADAPTER Adapter = NULL;
+    PDXGKRNL_DEVICE Device = NULL;
     PDXGKVMM_RESOURCE Resource = NULL;
     NTSTATUS Status = STATUS_SUCCESS;
     UINT i;
@@ -1862,8 +3074,7 @@ DxgkDestroyAllocation(
     if (pDestroyAllocation == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    if (pDestroyAllocation->AllocationCount != 0 &&
-        pDestroyAllocation->phAllocationList == NULL)
+    if (pDestroyAllocation->hResource == 0 && pDestroyAllocation->AllocationCount != 0 && pDestroyAllocation->phAllocationList == NULL)
     {
         return STATUS_INVALID_PARAMETER;
     }
@@ -1874,69 +3085,37 @@ DxgkDestroyAllocation(
 
     if (pDestroyAllocation->hResource != 0)
     {
-        Resource = DxgkVidMmHandleToResource(pDestroyAllocation->hResource);
-        if (Resource == NULL || Resource->Device != Device)
-            return STATUS_INVALID_HANDLE;
+        Status = DxgkVidMmReferenceResource(pDestroyAllocation->hResource, FALSE, Device, &Resource);
+        if (!NT_SUCCESS(Status))
+        {
+            Status = STATUS_INVALID_HANDLE;
+            goto Cleanup;
+        }
     }
 
-    if (Resource != NULL && pDestroyAllocation->AllocationCount == 0)
+    if (Resource != NULL)
     {
-        for (;;)
-        {
-            PLIST_ENTRY Entry;
-            HANDLE AllocationHandle = NULL;
-
-            ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
-            for (Entry = DxgkVidMmAllocationListHead.Flink;
-                 Entry != &DxgkVidMmAllocationListHead;
-                 Entry = Entry->Flink)
-            {
-                PDXGKVMM_ALLOCATION Alloc;
-
-                Alloc = CONTAINING_RECORD(Entry,
-                                          DXGKVMM_ALLOCATION,
-                                          GlobalAllocationEntry);
-                if (Alloc->Resource == Resource && Alloc->Device == Device)
-                {
-                    AllocationHandle = (HANDLE)(ULONG_PTR)Alloc->Handle;
-                    break;
-                }
-            }
-            ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
-
-            if (AllocationHandle == NULL)
-                break;
-
-            Status = DxgkVidMmDestroyAllocation(Adapter, AllocationHandle);
-            if (!NT_SUCCESS(Status))
-                return Status;
-        }
-
-        return DxgkpVidMmDestroyResourceWrapper(Adapter, Resource);
+        Status = DxgkpVidMmDestroyResourceWrapper(Adapter, Resource);
+        DxgkVidMmDereferenceResource(Resource);
+        Resource = NULL;
+        goto Cleanup;
     }
 
     for (i = 0; i < pDestroyAllocation->AllocationCount; ++i)
     {
-        PDXGKVMM_ALLOCATION Alloc;
         HANDLE AllocationHandle;
 
         AllocationHandle = (HANDLE)(ULONG_PTR)pDestroyAllocation->phAllocationList[i];
-        Alloc = DxgkVidMmHandleToAllocation(AllocationHandle);
-        if (Alloc == NULL || Alloc->Device != Device)
-            return STATUS_INVALID_HANDLE;
-
-        if (Resource != NULL && Alloc->Resource != Resource)
-            return STATUS_INVALID_PARAMETER;
-
-        Status = DxgkVidMmDestroyAllocation(Adapter, AllocationHandle);
+        Status = DxgkpVidMmDestroyAllocation(Adapter, Device, NULL, AllocationHandle);
         if (!NT_SUCCESS(Status))
-            return Status;
+            goto Cleanup;
     }
 
+Cleanup:
     if (Resource != NULL)
-        return DxgkpVidMmDestroyResourceWrapper(Adapter, Resource);
-
-    return STATUS_SUCCESS;
+        DxgkVidMmDereferenceResource(Resource);
+    DxgkDereferenceDevice(Device);
+    return Status;
 }
 
 
@@ -2529,26 +3708,18 @@ DxgkpVidMmReleaseApertureMapping(
         return;
 
     Adapter = Allocation->Adapter;
-    if (Allocation->ApertureMapped &&
-        Adapter != NULL &&
-        Adapter->MiniportContext != NULL &&
-        Adapter->MiniportContext->InitData.s.DxgkDdiBuildPagingBuffer != NULL &&
-        Allocation->SegmentId >= 1 &&
-        Allocation->SegmentId <= Adapter->SegmentCount)
+    if (Allocation->ApertureMapped && Adapter != NULL && Allocation->SegmentId >= 1 && Allocation->SegmentId <= Adapter->SegmentCount && DxgkAcquireMiniportCallback(Adapter))
     {
         RtlZeroMemory(&BuildArgs, sizeof(BuildArgs));
         BuildArgs.Operation = DXGK_OPERATION_UNMAP_APERTURE_SEGMENT;
+        BuildArgs.UnmapApertureSegment.hDevice = Allocation->MiniportDeviceHandle;
         BuildArgs.UnmapApertureSegment.hAllocation = Allocation->MiniportHandle;
         BuildArgs.UnmapApertureSegment.SegmentId = Allocation->SegmentId;
-        BuildArgs.UnmapApertureSegment.OffsetInPages =
-            (SIZE_T)(Allocation->SegmentOffset / PAGE_SIZE);
-        BuildArgs.UnmapApertureSegment.NumberOfPages =
-            ADDRESS_AND_SIZE_TO_SPAN_PAGES(Allocation->SystemMemory,
-                                           Allocation->Size);
-
-        Adapter->MiniportContext->InitData.s.DxgkDdiBuildPagingBuffer(
-            Adapter->MiniportDeviceContext,
-            &BuildArgs);
+        BuildArgs.UnmapApertureSegment.OffsetInPages = (SIZE_T)(Allocation->SegmentOffset / PAGE_SIZE);
+        BuildArgs.UnmapApertureSegment.NumberOfPages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(Allocation->SystemMemory, Allocation->Size);
+        if (Adapter->MiniportContext->InitData.s.DxgkDdiBuildPagingBuffer != NULL)
+            Adapter->MiniportContext->InitData.s.DxgkDdiBuildPagingBuffer(Adapter->MiniportDeviceContext, &BuildArgs);
+        DxgkReleaseMiniportCallback(Adapter);
     }
 
     if (Allocation->ApertureMdl != NULL)
@@ -2594,12 +3765,8 @@ DxgkVidMmEnsureAllocationApertureMapped(
     if (Allocation->ApertureMapped)
         return STATUS_SUCCESS;
 
-    if (Allocation->SystemMemory == NULL ||
-        Adapter->MiniportContext == NULL ||
-        Adapter->MiniportContext->InitData.s.DxgkDdiBuildPagingBuffer == NULL)
-    {
+    if (Allocation->SystemMemory == NULL)
         return STATUS_INVALID_PARAMETER;
-    }
 
     if (((ULONG_PTR)Allocation->SystemMemory & (PAGE_SIZE - 1)) != 0)
     {
@@ -2607,13 +3774,8 @@ DxgkVidMmEnsureAllocationApertureMapped(
                 Allocation->SystemMemory);
     }
 
-    NumberOfPages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(Allocation->SystemMemory,
-                                                   Allocation->Size);
-    Mdl = IoAllocateMdl(Allocation->SystemMemory,
-                        (ULONG)ALIGN_UP_BY(Allocation->Size, PAGE_SIZE),
-                        FALSE,
-                        FALSE,
-                        NULL);
+    NumberOfPages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(Allocation->SystemMemory, Allocation->Size);
+    Mdl = IoAllocateMdl(Allocation->SystemMemory, (ULONG)ALIGN_UP_BY(Allocation->Size, PAGE_SIZE), FALSE, FALSE, NULL);
     if (Mdl == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
 
@@ -2621,10 +3783,10 @@ DxgkVidMmEnsureAllocationApertureMapped(
 
     RtlZeroMemory(&BuildArgs, sizeof(BuildArgs));
     BuildArgs.Operation = DXGK_OPERATION_MAP_APERTURE_SEGMENT;
+    BuildArgs.MapApertureSegment.hDevice = Allocation->MiniportDeviceHandle;
     BuildArgs.MapApertureSegment.hAllocation = Allocation->MiniportHandle;
     BuildArgs.MapApertureSegment.SegmentId = Allocation->SegmentId;
-    BuildArgs.MapApertureSegment.OffsetInPages =
-        (SIZE_T)(Allocation->SegmentOffset / PAGE_SIZE);
+    BuildArgs.MapApertureSegment.OffsetInPages = (SIZE_T)(Allocation->SegmentOffset / PAGE_SIZE);
     BuildArgs.MapApertureSegment.NumberOfPages = NumberOfPages;
     BuildArgs.MapApertureSegment.pMdl = Mdl;
     BuildArgs.MapApertureSegment.MdlOffset = 0;
@@ -2633,9 +3795,16 @@ DxgkVidMmEnsureAllocationApertureMapped(
                     "hAlloc=%p SegId=%u Pages=%Iu\n",
                     Allocation->MiniportHandle, Allocation->SegmentId, NumberOfPages);
 
-    Status = Adapter->MiniportContext->InitData.s.DxgkDdiBuildPagingBuffer(
-        Adapter->MiniportDeviceContext,
-        &BuildArgs);
+    if (!DxgkAcquireMiniportCallback(Adapter))
+    {
+        IoFreeMdl(Mdl);
+        return STATUS_DEVICE_NOT_READY;
+    }
+    if (Adapter->MiniportContext->InitData.s.DxgkDdiBuildPagingBuffer != NULL)
+        Status = Adapter->MiniportContext->InitData.s.DxgkDdiBuildPagingBuffer(Adapter->MiniportDeviceContext, &BuildArgs);
+    else
+        Status = STATUS_NOT_SUPPORTED;
+    DxgkReleaseMiniportCallback(Adapter);
 
     DXGKRNL_VERBOSE("EnsureApertureMapped: BuildPagingBuffer returned 0x%08lX\n", Status);
 
@@ -2701,47 +3870,36 @@ DxgkpVidMmTransferAllocationContent(
     if (VidMmSegmentIsAperture(Segment))
         return; /* aperture placements alias the backing store directly */
 
-    if (Adapter->MiniportContext != NULL &&
-        Adapter->MiniportContext->InitData.s.DxgkDdiBuildPagingBuffer != NULL)
+    if (!DxgkAcquireMiniportCallback(Adapter))
+        return;
+    if (Adapter->MiniportContext->InitData.s.DxgkDdiBuildPagingBuffer != NULL)
     {
-        Mdl = IoAllocateMdl(Allocation->SystemMemory,
-                            (ULONG)ALIGN_UP_BY(Allocation->Size, PAGE_SIZE),
-                            FALSE,
-                            FALSE,
-                            NULL);
+        Mdl = IoAllocateMdl(Allocation->SystemMemory, (ULONG)ALIGN_UP_BY(Allocation->Size, PAGE_SIZE), FALSE, FALSE, NULL);
         if (Mdl != NULL)
         {
             MmBuildMdlForNonPagedPool(Mdl);
 
             RtlZeroMemory(&BuildArgs, sizeof(BuildArgs));
             BuildArgs.Operation = DXGK_OPERATION_TRANSFER;
+            BuildArgs.Transfer.hAllocation = Allocation->MiniportHandle;
             BuildArgs.Transfer.TransferSize = Allocation->Size;
 
             if (ToSegment)
             {
                 BuildArgs.Transfer.Source.SegmentId = 0;
                 BuildArgs.Transfer.Source.pMdl = Mdl;
-                BuildArgs.Transfer.Destination.hAllocation =
-                    Allocation->MiniportHandle;
-                BuildArgs.Transfer.Destination.SegmentId =
-                    Allocation->SegmentId;
-                BuildArgs.Transfer.Destination.SegmentAddress.QuadPart =
-                    (LONGLONG)Allocation->SegmentOffset;
+                BuildArgs.Transfer.Destination.SegmentId = Allocation->SegmentId;
+                BuildArgs.Transfer.Destination.SegmentAddress.QuadPart = (LONGLONG)Allocation->SegmentOffset;
             }
             else
             {
-                BuildArgs.Transfer.Source.hAllocation =
-                    Allocation->MiniportHandle;
                 BuildArgs.Transfer.Source.SegmentId = Allocation->SegmentId;
-                BuildArgs.Transfer.Source.SegmentAddress.QuadPart =
-                    (LONGLONG)Allocation->SegmentOffset;
+                BuildArgs.Transfer.Source.SegmentAddress.QuadPart = (LONGLONG)Allocation->SegmentOffset;
                 BuildArgs.Transfer.Destination.SegmentId = 0;
                 BuildArgs.Transfer.Destination.pMdl = Mdl;
             }
 
-            Status = Adapter->MiniportContext->InitData.s.DxgkDdiBuildPagingBuffer(
-                         Adapter->MiniportDeviceContext,
-                         &BuildArgs);
+            Status = Adapter->MiniportContext->InitData.s.DxgkDdiBuildPagingBuffer(Adapter->MiniportDeviceContext, &BuildArgs);
 
             IoFreeMdl(Mdl);
         }
@@ -2753,22 +3911,21 @@ DxgkpVidMmTransferAllocationContent(
         if (NT_SUCCESS(VidMmMapSegmentCpu(Segment)) &&
             Allocation->SegmentOffset + Allocation->Size <= Segment->Size)
         {
-            PUCHAR SegmentVa = (PUCHAR)Segment->CpuBase +
-                               Allocation->SegmentOffset;
+            PUCHAR SegmentVa = (PUCHAR)Segment->CpuBase + Allocation->SegmentOffset;
 
             if (ToSegment)
             {
-                RtlCopyMemory(SegmentVa, Allocation->SystemMemory,
-                              Allocation->Size);
+                RtlCopyMemory(SegmentVa, Allocation->SystemMemory, Allocation->Size);
             }
             else
             {
-                RtlCopyMemory(Allocation->SystemMemory, SegmentVa,
-                              Allocation->Size);
+                RtlCopyMemory(Allocation->SystemMemory, SegmentVa, Allocation->Size);
             }
             Status = STATUS_SUCCESS;
         }
     }
+
+    DxgkReleaseMiniportCallback(Adapter);
 
     if (!NT_SUCCESS(Status))
     {
@@ -2788,14 +3945,13 @@ DxgkVidMmFillAllocationListEntry(
     if (ListEntry == NULL || AllocationHandle == 0)
         return;
 
-    Allocation = DxgkVidMmHandleToAllocation((HANDLE)(ULONG_PTR)AllocationHandle);
-    if (Allocation == NULL)
+    if (!NT_SUCCESS(DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)AllocationHandle, NULL, NULL, &Allocation)))
         return;
 
     /* SegmentId is a 5-bit field in DXGK_ALLOCATIONLIST. */
-    ListEntry->SegmentId = (Allocation->SegmentId <= 31)
-                               ? Allocation->SegmentId : 0;
+    ListEntry->SegmentId = (Allocation->SegmentId <= 31) ? Allocation->SegmentId : 0;
     ListEntry->PhysicalAddress = Allocation->PhysicalAddress;
+    DxgkVidMmDereferenceAllocation(Allocation);
 }
 
 static NTSTATUS
@@ -3341,8 +4497,7 @@ DxgkVidMmProcessCleanup(
     {
         PDXGKVMM_ALLOCATION Alloc;
 
-        Alloc = DxgkVidMmHandleToAllocation((HANDLE)(ULONG_PTR)HandleArray[--Index]);
-        if (Alloc == NULL)
+        if (!NT_SUCCESS(DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)HandleArray[--Index], NULL, NULL, &Alloc)))
             continue;
 
         ExAcquireFastMutex(&Alloc->UserModeLock);
@@ -3370,7 +4525,165 @@ DxgkVidMmProcessCleanup(
         ExReleaseFastMutex(&Alloc->UserModeLock);
 
         DxgkVidMmUnmapAllocationUser(Alloc);
+        DxgkVidMmDereferenceAllocation(Alloc);
     }
 
     ExFreePoolWithTag(HandleArray, TAG_VIDMM_ALLOC);
+}
+
+static VOID
+DxgkpVidMmCleanupAllocations(
+    _In_opt_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ PDXGKRNL_DEVICE Device)
+{
+    PDXGKRNL_ADAPTER OwningAdapter = Device != NULL ? Device->Adapter : Adapter;
+
+    ASSERT(OwningAdapter != NULL);
+    for (;;)
+    {
+        PDXGKVMM_ALLOCATION Allocation;
+        PLIST_ENTRY Entry;
+        HANDLE AllocationHandle = NULL;
+        NTSTATUS Status;
+
+        ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+        for (Entry = DxgkVidMmAllocationListHead.Flink; Entry != &DxgkVidMmAllocationListHead; Entry = Entry->Flink)
+        {
+            Allocation = CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, GlobalAllocationEntry);
+            if (((Device != NULL && Allocation->Device == Device) || (Device == NULL && Allocation->Adapter == Adapter)) && Allocation->Resource == NULL)
+            {
+                AllocationHandle = (HANDLE)(ULONG_PTR)Allocation->Handle;
+                break;
+            }
+        }
+        ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+        if (AllocationHandle == NULL)
+            break;
+        Status = DxgkpVidMmDestroyAllocation(OwningAdapter, Device, NULL, AllocationHandle);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("DxgkpVidMmCleanupAllocations: failed to destroy allocation %p\n", AllocationHandle);
+            break;
+        }
+    }
+
+    for (;;)
+    {
+        PDXGKVMM_RESOURCE Resource = NULL;
+        PLIST_ENTRY Entry;
+        NTSTATUS Status;
+
+        ExAcquireFastMutex(&DxgkVidMmResourceListLock);
+        for (Entry = DxgkVidMmResourceListHead.Flink; Entry != &DxgkVidMmResourceListHead; Entry = Entry->Flink)
+        {
+            PDXGKVMM_RESOURCE Candidate = CONTAINING_RECORD(Entry, DXGKVMM_RESOURCE, GlobalResourceEntry);
+
+            if ((Device != NULL && Candidate->Device == Device) || (Device == NULL && Candidate->Adapter == Adapter))
+            {
+                Resource = Candidate;
+                break;
+            }
+        }
+        ExReleaseFastMutex(&DxgkVidMmResourceListLock);
+        if (Resource == NULL)
+            break;
+        Status = DxgkpVidMmDestroyResourceWrapper(OwningAdapter, Resource);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("DxgkpVidMmCleanupAllocations: failed to destroy resource %p status 0x%08lX\n", Resource, Status);
+            break;
+        }
+    }
+}
+
+VOID
+DxgkVidMmCleanupDeviceAllocations(
+    _In_ PDXGKRNL_DEVICE Device)
+{
+    PAGED_CODE();
+    if (Device != NULL && Device->Adapter != NULL)
+        DxgkpVidMmCleanupAllocations(NULL, Device);
+}
+
+VOID
+DxgkVidMmCleanupAdapterAllocations(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PAGED_CODE();
+    if (Adapter != NULL)
+        DxgkpVidMmCleanupAllocations(Adapter, NULL);
+}
+
+NTSTATUS
+DxgkVidMmQueryProcessBudget(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PEPROCESS Process,
+    _In_ D3DKMT_MEMORY_SEGMENT_GROUP MemorySegmentGroup,
+    _Out_ UINT64 *Budget,
+    _Out_ UINT64 *CurrentUsage,
+    _Out_ UINT64 *CurrentReservation,
+    _Out_ UINT64 *AvailableForReservation)
+{
+    PDXGKRNL_SEGMENT Segments;
+    PLIST_ENTRY Entry;
+    ULONG SegmentCount;
+    ULONG Index;
+
+    PAGED_CODE();
+    if (Adapter == NULL || Process == NULL || Budget == NULL || CurrentUsage == NULL || CurrentReservation == NULL || AvailableForReservation == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (MemorySegmentGroup != D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL && MemorySegmentGroup != D3DKMT_MEMORY_SEGMENT_GROUP_NON_LOCAL)
+        return STATUS_INVALID_PARAMETER;
+
+    *Budget = 0;
+    *CurrentUsage = 0;
+    *CurrentReservation = 0;
+    *AvailableForReservation = 0;
+    Segments = ADAPTER_SEGMENTS(Adapter);
+    SegmentCount = Adapter->SegmentCount;
+    if (SegmentCount != 0 && Segments == NULL)
+        return STATUS_DEVICE_NOT_READY;
+
+    for (Index = 0; Index < SegmentCount; ++Index)
+        ExAcquireFastMutex(&Segments[Index].Lock);
+    ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+
+    for (Index = 0; Index < SegmentCount; ++Index)
+    {
+        BOOLEAN IsNonLocal = VidMmSegmentIsAperture(&Segments[Index]);
+
+        if ((MemorySegmentGroup == D3DKMT_MEMORY_SEGMENT_GROUP_NON_LOCAL) == IsNonLocal)
+            DxgkpVidMmSaturatingAdd(Budget, Segments[Index].Size);
+    }
+
+    for (Entry = DxgkVidMmAllocationListHead.Flink; Entry != &DxgkVidMmAllocationListHead; Entry = Entry->Flink)
+    {
+        PDXGKVMM_ALLOCATION Allocation = CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, GlobalAllocationEntry);
+        BOOLEAN IsNonLocal;
+
+        if (Allocation->Adapter != Adapter || Allocation->Device == NULL || Allocation->Device->OwnerProcess != Process)
+            continue;
+        if (Allocation->Resident)
+        {
+            if (Allocation->SegmentId == 0 || Allocation->SegmentId > SegmentCount)
+                continue;
+            IsNonLocal = VidMmSegmentIsAperture(&Segments[Allocation->SegmentId - 1]);
+        }
+        else
+        {
+            if (Allocation->SystemMemory == NULL)
+                continue;
+            IsNonLocal = TRUE;
+        }
+        if ((MemorySegmentGroup == D3DKMT_MEMORY_SEGMENT_GROUP_NON_LOCAL) == IsNonLocal)
+            DxgkpVidMmSaturatingAdd(CurrentUsage, (UINT64)Allocation->Size);
+    }
+
+    ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+    while (SegmentCount != 0)
+        ExReleaseFastMutex(&Segments[--SegmentCount].Lock);
+
+    /* Reservation changes are not implemented, so advertising zero is the
+     * only truthful AvailableForReservation value. */
+    return STATUS_SUCCESS;
 }

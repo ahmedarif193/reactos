@@ -460,8 +460,8 @@ SoftGpuDdiSetVidPnSourceAddress(
         return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE;
     }
 
-    if (SetVidPnSourceAddress->SegmentId != 0 &&
-        SetVidPnSourceAddress->SegmentId != SOFTGPU_SEGMENT_ID)
+    if (SetVidPnSourceAddress->PrimarySegment != 0 &&
+        SetVidPnSourceAddress->PrimarySegment != SOFTGPU_SEGMENT_ID)
     {
         return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
     }

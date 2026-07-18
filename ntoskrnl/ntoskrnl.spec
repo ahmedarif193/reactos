@@ -1107,6 +1107,7 @@
 @ stdcall PsRevertToSelf()
 @ stdcall PsSetContextThread(ptr ptr long)
 @ stdcall PsSetCreateProcessNotifyRoutine(ptr long)
+@ stdcall PsSetCreateProcessNotifyRoutineEx(ptr long)
 @ stdcall PsSetCreateThreadNotifyRoutine(ptr)
 @ stdcall PsSetJobUIRestrictionsClass(ptr long)
 @ stdcall PsSetLegoNotifyRoutine(ptr)
@@ -2911,7 +2912,6 @@
 @ stub -arch=arm64 PsRemoveSiloContext
 @ stub -arch=arm64 PsReplaceSiloContext
 @ stub -arch=arm64 PsRevertToUserMultipleGroupAffinityThread
-@ stdcall -arch=arm64 PsSetCreateProcessNotifyRoutineEx(ptr long)
 @ stub -arch=arm64 PsSetCreateProcessNotifyRoutineEx2
 @ stub -arch=arm64 PsSetCreateThreadNotifyRoutineEx
 @ stub -arch=arm64 PsSetCurrentThreadPrefetching

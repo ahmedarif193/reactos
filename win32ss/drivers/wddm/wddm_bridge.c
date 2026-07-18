@@ -49,24 +49,74 @@ PDEVICE_OBJECT g_DxgkrnlDeviceObject = NULL;
 static NTSTATUS g_WddmBridgeStatus = STATUS_DEVICE_NOT_CONNECTED;
 static REACTOS_WIN32K_DXGKRNL_INTERFACE g_DxgkrnlInterface;
 static BOOLEAN g_DxgkrnlInterfaceValid = FALSE;
+static ULONG g_DxgkrnlInterfaceVersion = 0;
+
+static FAST_MUTEX g_WddmBridgeLock;
+static volatile LONG g_WddmBridgeLockState = 0;
+static EX_RUNDOWN_REF g_WddmBridgeRundown;
+static BOOLEAN g_WddmBridgeRundownInitialized = FALSE;
+
+/* The mutex serializes state publication; rundown protects concurrent IOCTLs. */
+
+static NTSTATUS
+WddmBridgeSendIoctlToDevice(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ ULONG IoControlCode,
+    _In_opt_ PVOID InputBuffer,
+    _In_ ULONG InputSize,
+    _Out_opt_ PVOID OutputBuffer,
+    _In_ ULONG OutputSize,
+    _Out_opt_ PULONG_PTR Information);
 
 /* ---- Helpers ------------------------------------------------------------- */
+
+static VOID
+WddmBridgeEnsureLockInitialized(VOID)
+{
+    LONG State = InterlockedCompareExchange(&g_WddmBridgeLockState, 1, 0);
+
+    if (State == 0)
+    {
+        ExInitializeFastMutex(&g_WddmBridgeLock);
+        KeMemoryBarrier();
+        InterlockedExchange(&g_WddmBridgeLockState, 2);
+        return;
+    }
+
+    while (InterlockedCompareExchange(&g_WddmBridgeLockState, 2, 2) != 2)
+        YieldProcessor();
+}
+
+static VOID
+WddmBridgeAcquireLock(VOID)
+{
+    WddmBridgeEnsureLockInitialized();
+    KeEnterCriticalRegion();
+    ExAcquireFastMutexUnsafe(&g_WddmBridgeLock);
+}
+
+static VOID
+WddmBridgeReleaseLock(VOID)
+{
+    ExReleaseFastMutexUnsafe(&g_WddmBridgeLock);
+    KeLeaveCriticalRegion();
+}
 
 static VOID
 WddmBridgeDropReference(VOID)
 {
     PFILE_OBJECT FileObject = g_DxgkrnlFileObject;
 
+    g_DxgkrnlDeviceObject = NULL;
+    g_DxgkrnlFileObject = NULL;
+    g_DxgkrnlInterfaceValid = FALSE;
+    g_DxgkrnlInterfaceVersion = 0;
+    RtlZeroMemory(&g_DxgkrnlInterface, sizeof(g_DxgkrnlInterface));
+
     if (FileObject != NULL)
     {
         DPRINT("WddmBridgeDropReference: releasing \\Device\\DxgKrnl file object %p\n",
                FileObject);
-
-        g_DxgkrnlDeviceObject = NULL;
-        g_DxgkrnlFileObject = NULL;
-        g_DxgkrnlInterfaceValid = FALSE;
-        RtlZeroMemory(&g_DxgkrnlInterface, sizeof(g_DxgkrnlInterface));
-
         ObDereferenceObject(FileObject);
     }
 }
@@ -74,27 +124,44 @@ WddmBridgeDropReference(VOID)
 NTSTATUS
 WddmBridgeGetStatus(VOID)
 {
-    return g_WddmBridgeStatus;
+    NTSTATUS Status;
+
+    WddmBridgeAcquireLock();
+    Status = g_WddmBridgeStatus;
+    WddmBridgeReleaseLock();
+    return Status;
 }
 
 NTSTATUS
 WddmBridgeRequireReady(VOID)
 {
-    NTSTATUS Status = WddmBridgeGetStatus();
+    NTSTATUS Status;
 
-    if (!NT_SUCCESS(Status))
-        return Status;
+    WddmBridgeAcquireLock();
+    Status = g_WddmBridgeStatus;
 
-    if (g_DxgkrnlFileObject == NULL || g_DxgkrnlDeviceObject == NULL)
-        return STATUS_DEVICE_NOT_CONNECTED;
+    if (NT_SUCCESS(Status) && (g_DxgkrnlFileObject == NULL || g_DxgkrnlDeviceObject == NULL))
+        Status = STATUS_DEVICE_NOT_CONNECTED;
 
-    return STATUS_SUCCESS;
+    WddmBridgeReleaseLock();
+    return Status;
 }
 
 BOOLEAN
 WddmBridgeIsReady(VOID)
 {
     return NT_SUCCESS(WddmBridgeRequireReady());
+}
+
+ULONG
+WddmBridgeGetInterfaceVersion(VOID)
+{
+    ULONG Version;
+
+    WddmBridgeAcquireLock();
+    Version = g_DxgkrnlInterfaceValid ? g_DxgkrnlInterfaceVersion : 0;
+    WddmBridgeReleaseLock();
+    return Version;
 }
 
 NTSTATUS
@@ -107,16 +174,16 @@ WddmBridgeGetInterface(
         return STATUS_INVALID_PARAMETER;
 
     RtlZeroMemory(Interface, sizeof(*Interface));
-
-    Status = WddmBridgeRequireReady();
-    if (!NT_SUCCESS(Status))
-        return Status;
-
-    if (!g_DxgkrnlInterfaceValid)
-        return STATUS_DEVICE_NOT_READY;
-
-    RtlCopyMemory(Interface, &g_DxgkrnlInterface, sizeof(*Interface));
-    return STATUS_SUCCESS;
+    WddmBridgeAcquireLock();
+    Status = g_WddmBridgeStatus;
+    if (NT_SUCCESS(Status) && (g_DxgkrnlFileObject == NULL || g_DxgkrnlDeviceObject == NULL))
+        Status = STATUS_DEVICE_NOT_CONNECTED;
+    if (NT_SUCCESS(Status) && !g_DxgkrnlInterfaceValid)
+        Status = STATUS_DEVICE_NOT_READY;
+    if (NT_SUCCESS(Status))
+        RtlCopyMemory(Interface, &g_DxgkrnlInterface, sizeof(*Interface));
+    WddmBridgeReleaseLock();
+    return Status;
 }
 
 /*
@@ -131,17 +198,19 @@ WddmBridgeGetInterface(
  * It is safe to call this function more than once: subsequent calls are
  * no-ops if the bridge is already open.
  *
- * x86/amd64 note: IoGetDeviceObjectPointer acquires a reference on the file
- * object.  On x86-64 the IRQL is PASSIVE_LEVEL during driver/module init,
- * which is required by this API — do not call from a raised-IRQL context.
+ * IoGetDeviceObjectPointer acquires a reference on the file object and
+ * requires PASSIVE_LEVEL on every architecture.
  */
 NTSTATUS
 WddmBridgeInit(VOID)
 {
-    NTSTATUS         Status;
-    UNICODE_STRING   DxgKrnlName;
-    PFILE_OBJECT     FileObject;
-    PDEVICE_OBJECT   DeviceObject;
+    NTSTATUS Status;
+    UNICODE_STRING DxgKrnlName;
+    PFILE_OBJECT FileObject = NULL;
+    PDEVICE_OBJECT DeviceObject = NULL;
+    DXGKRNL_INTERFACE_EXCHANGE_IN ExchangeIn;
+    REACTOS_WIN32K_DXGKRNL_INTERFACE ExchangeOut;
+    ULONG_PTR Information = 0;
 
     if (KeGetCurrentIrql() != PASSIVE_LEVEL)
     {
@@ -149,15 +218,16 @@ WddmBridgeInit(VOID)
         return STATUS_INVALID_DEVICE_STATE;
     }
 
-    /*
-     * Idempotency guard: if we already have a valid file object the bridge
-     * has been successfully opened.  Return early to avoid a redundant open
-     * (and a leaked reference).
-     */
+    WddmBridgeAcquireLock();
+
     if (g_DxgkrnlFileObject != NULL)
     {
         DPRINT("WddmBridgeInit: bridge already open, skipping\n");
-        return WddmBridgeRequireReady();
+        Status = g_WddmBridgeStatus;
+        if (NT_SUCCESS(Status) && g_DxgkrnlDeviceObject == NULL)
+            Status = STATUS_DEVICE_NOT_CONNECTED;
+        WddmBridgeReleaseLock();
+        return Status;
     }
 
     RtlInitUnicodeString(&DxgKrnlName, L"\\Device\\DxgKrnl");
@@ -172,37 +242,15 @@ WddmBridgeInit(VOID)
      * The caller (DxStartupDxgkInt) is expected to handle this gracefully
      * and retry later, or fall back to the legacy XDDM path.
      */
-    Status = IoGetDeviceObjectPointer(&DxgKrnlName,
-                                      FILE_ALL_ACCESS,
-                                      &FileObject,
-                                      &DeviceObject);
+    Status = IoGetDeviceObjectPointer(&DxgKrnlName, FILE_ALL_ACCESS, &FileObject, &DeviceObject);
     if (!NT_SUCCESS(Status))
     {
         g_WddmBridgeStatus = Status;
         DPRINT1("WddmBridgeInit: IoGetDeviceObjectPointer(\\Device\\DxgKrnl) "
                 "failed with 0x%08lX\n", Status);
+        WddmBridgeReleaseLock();
         return Status;
     }
-
-    /*
-     * Commit the pointers.  We store both so that:
-     *   - g_DxgkrnlFileObject  tracks the lifetime reference.
-     *   - g_DxgkrnlDeviceObject is passed directly to IoCallDriver, avoiding
-     *     a pointer dereference through the file object on every IOCTL.
-     *
-     * On SMP systems these stores are visible to all processors before any
-     * subsequent use because win32k's initialisation path runs while the
-     * system is still single-threaded with respect to these globals.
-     * If that assumption ever changes a cmpxchg/InterlockedCompareExchangePointer
-     * should be used here.
-     */
-    g_DxgkrnlFileObject   = FileObject;
-    g_DxgkrnlDeviceObject = DeviceObject;
-    g_WddmBridgeStatus = STATUS_DEVICE_NOT_READY;
-
-    DPRINT("WddmBridgeInit: \\Device\\DxgKrnl opened successfully "
-           "(FileObject=%p, DeviceObject=%p)\n",
-           g_DxgkrnlFileObject, g_DxgkrnlDeviceObject);
 
     /*
      * CORE-20027: Send the interface exchange IOCTL to dxgkrnl.
@@ -216,51 +264,52 @@ WddmBridgeInit(VOID)
      * The exchange IOCTL uses METHOD_BUFFERED with
      * IRP_MJ_INTERNAL_DEVICE_CONTROL for kernel-to-kernel communication.
      */
+    ExchangeIn.Version = DXGKRNL_INTERFACE_VERSION_CURRENT;
+    ExchangeIn.Size = DXGKRNL_INTERFACE_VERSION_2_SIZE;
+    RtlZeroMemory(&ExchangeOut, sizeof(ExchangeOut));
+    Status = WddmBridgeSendIoctlToDevice(DeviceObject, IOCTL_DXGKRNL_EXCHANGE_INTERFACE, &ExchangeIn, sizeof(ExchangeIn), &ExchangeOut, sizeof(ExchangeOut), &Information);
+
+    /* A version-1 dxgkrnl rejects version 2.  Retry with its prefix size. */
+    if (Status == STATUS_NOT_SUPPORTED)
     {
-        DXGKRNL_INTERFACE_EXCHANGE_IN ExchangeIn;
-        REACTOS_WIN32K_DXGKRNL_INTERFACE ExchangeOut;
-
         ExchangeIn.Version = DXGKRNL_INTERFACE_VERSION_1;
-        ExchangeIn.Size = sizeof(REACTOS_WIN32K_DXGKRNL_INTERFACE);
+        ExchangeIn.Size = DXGKRNL_INTERFACE_VERSION_1_SIZE;
         RtlZeroMemory(&ExchangeOut, sizeof(ExchangeOut));
-
-        Status = WddmBridgeSendIoctl(
-            IOCTL_DXGKRNL_EXCHANGE_INTERFACE,
-            &ExchangeIn, sizeof(ExchangeIn),
-            &ExchangeOut, sizeof(ExchangeOut));
-
-        if (!NT_SUCCESS(Status))
-        {
-            DPRINT1("WddmBridgeInit: IOCTL_DXGKRNL_EXCHANGE_INTERFACE "
-                    "failed with 0x%08lX\n", Status);
-            WddmBridgeDropReference();
-            g_WddmBridgeStatus = Status;
-            return Status;
-        }
-        else
-        {
-            if (ExchangeOut.RxgkIntPfnCreateDevice == NULL ||
-                ExchangeOut.RxgkIntPfnPresent == NULL ||
-                ExchangeOut.RxgkIntPfnQueryAdapterInfo == NULL)
-            {
-                DPRINT1("WddmBridgeInit: interface exchange returned an "
-                        "incomplete direct callback table\n");
-                WddmBridgeDropReference();
-                g_WddmBridgeStatus = STATUS_INVALID_DEVICE_STATE;
-                return STATUS_INVALID_DEVICE_STATE;
-            }
-
-            RtlCopyMemory(&g_DxgkrnlInterface,
-                          &ExchangeOut,
-                          sizeof(g_DxgkrnlInterface));
-            g_DxgkrnlInterfaceValid = TRUE;
-
-            DPRINT("WddmBridgeInit: interface exchange succeeded, direct "
-                   "dxgkrnl callbacks cached\n");
-        }
+        Information = 0;
+        Status = WddmBridgeSendIoctlToDevice(DeviceObject, IOCTL_DXGKRNL_EXCHANGE_INTERFACE, &ExchangeIn, sizeof(ExchangeIn), &ExchangeOut, sizeof(ExchangeOut), &Information);
     }
 
+    if (NT_SUCCESS(Status) && Information != ExchangeIn.Size)
+        Status = STATUS_INFO_LENGTH_MISMATCH;
+
+    if (NT_SUCCESS(Status) && (ExchangeOut.RxgkIntPfnCreateDevice == NULL || ExchangeOut.RxgkIntPfnPresent == NULL || ExchangeOut.RxgkIntPfnQueryAdapterInfo == NULL || (ExchangeIn.Version >= DXGKRNL_INTERFACE_VERSION_2 && (ExchangeOut.RxgkIntPfnCreateContextVirtual == NULL || ExchangeOut.RxgkIntPfnSubmitCommand == NULL))))
+        Status = STATUS_INVALID_DEVICE_STATE;
+
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("WddmBridgeInit: interface exchange failed with 0x%08lX\n", Status);
+        ObDereferenceObject(FileObject);
+        g_WddmBridgeStatus = Status;
+        WddmBridgeReleaseLock();
+        return Status;
+    }
+
+    if (g_WddmBridgeRundownInitialized)
+        ExReInitializeRundownProtection(&g_WddmBridgeRundown);
+    else
+    {
+        ExInitializeRundownProtection(&g_WddmBridgeRundown);
+        g_WddmBridgeRundownInitialized = TRUE;
+    }
+
+    g_DxgkrnlFileObject = FileObject;
+    g_DxgkrnlDeviceObject = DeviceObject;
+    RtlCopyMemory(&g_DxgkrnlInterface, &ExchangeOut, sizeof(g_DxgkrnlInterface));
+    g_DxgkrnlInterfaceValid = TRUE;
+    g_DxgkrnlInterfaceVersion = ExchangeIn.Version;
     g_WddmBridgeStatus = STATUS_SUCCESS;
+    DPRINT("WddmBridgeInit: interface exchange v%lu succeeded, direct dxgkrnl callbacks cached\n", g_DxgkrnlInterfaceVersion);
+    WddmBridgeReleaseLock();
     return STATUS_SUCCESS;
 }
 
@@ -290,12 +339,26 @@ WddmBridgeSendIoctl(
     _Out_opt_ PVOID  OutputBuffer,
     _In_      ULONG  OutputSize)
 {
-    KEVENT           Event;
-    IO_STATUS_BLOCK  IoStatus;
-    PIRP             Irp;
-    NTSTATUS         Status;
+    return WddmBridgeSendIoctlWithInformation(IoControlCode, InputBuffer, InputSize, OutputBuffer, OutputSize, NULL);
+}
+
+NTSTATUS
+WddmBridgeSendIoctlWithInformation(
+    _In_ ULONG IoControlCode,
+    _In_opt_ PVOID InputBuffer,
+    _In_ ULONG InputSize,
+    _Out_opt_ PVOID OutputBuffer,
+    _In_ ULONG OutputSize,
+    _Out_opt_ PULONG_PTR Information)
+{
+    PDEVICE_OBJECT DeviceObject;
+    BOOLEAN RundownAcquired = FALSE;
+    NTSTATUS Status;
 
     ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
+
+    if (Information != NULL)
+        *Information = 0;
 
     if (KeGetCurrentIrql() > APC_LEVEL)
     {
@@ -319,13 +382,20 @@ WddmBridgeSendIoctl(
         return STATUS_INVALID_PARAMETER;
     }
 
-    /* Bridge must be open before sending any IOCTL. */
-    if (g_DxgkrnlDeviceObject == NULL)
-    {
-        Status = WddmBridgeGetStatus();
-        if (NT_SUCCESS(Status))
-            Status = STATUS_DEVICE_NOT_CONNECTED;
+    WddmBridgeAcquireLock();
+    DeviceObject = g_DxgkrnlDeviceObject;
+    Status = g_WddmBridgeStatus;
+    if (NT_SUCCESS(Status) && DeviceObject == NULL)
+        Status = STATUS_DEVICE_NOT_CONNECTED;
+    if (NT_SUCCESS(Status) && (!g_WddmBridgeRundownInitialized || !ExAcquireRundownProtection(&g_WddmBridgeRundown)))
+        Status = STATUS_DEVICE_NOT_CONNECTED;
+    else if (NT_SUCCESS(Status))
+        RundownAcquired = TRUE;
 
+    WddmBridgeReleaseLock();
+
+    if (!NT_SUCCESS(Status))
+    {
         DPRINT1("WddmBridgeSendIoctl: bridge not initialised "
                 "(IoControlCode=0x%08lX, status=0x%08lX)\n",
                 IoControlCode,
@@ -333,7 +403,36 @@ WddmBridgeSendIoctl(
         return Status;
     }
 
+    Status = WddmBridgeSendIoctlToDevice(DeviceObject, IoControlCode, InputBuffer, InputSize, OutputBuffer, OutputSize, Information);
+    if (RundownAcquired)
+        ExReleaseRundownProtection(&g_WddmBridgeRundown);
+    return Status;
+}
+
+static NTSTATUS
+WddmBridgeSendIoctlToDevice(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ ULONG IoControlCode,
+    _In_opt_ PVOID InputBuffer,
+    _In_ ULONG InputSize,
+    _Out_opt_ PVOID OutputBuffer,
+    _In_ ULONG OutputSize,
+    _Out_opt_ PULONG_PTR Information)
+{
+    KEVENT Event;
+    IO_STATUS_BLOCK IoStatus;
+    PIRP Irp;
+    NTSTATUS Status;
+
+    if (Information != NULL)
+        *Information = 0;
+
+    if (DeviceObject == NULL)
+        return STATUS_DEVICE_NOT_CONNECTED;
+
     KeInitializeEvent(&Event, NotificationEvent, FALSE);
+    IoStatus.Status = STATUS_NOT_SUPPORTED;
+    IoStatus.Information = 0;
 
     /*
      * IoBuildDeviceIoControlRequest builds an IRP suitable for a
@@ -345,15 +444,7 @@ WddmBridgeSendIoctl(
      * completes — both are stack-allocated here so that is guaranteed by the
      * synchronous wait below.
      */
-    Irp = IoBuildDeviceIoControlRequest(IoControlCode,
-                                        g_DxgkrnlDeviceObject,
-                                        InputBuffer,
-                                        InputSize,
-                                        OutputBuffer,
-                                        OutputSize,
-                                        TRUE,        /* InternalDeviceIoControl */
-                                        &Event,
-                                        &IoStatus);
+    Irp = IoBuildDeviceIoControlRequest(IoControlCode, DeviceObject, InputBuffer, InputSize, OutputBuffer, OutputSize, TRUE, &Event, &IoStatus);
     if (Irp == NULL)
     {
         DPRINT1("WddmBridgeSendIoctl: IoBuildDeviceIoControlRequest failed "
@@ -368,10 +459,9 @@ WddmBridgeSendIoctl(
      * in some ReactOS versions.  Explicitly setting the field here is
      * unconditionally correct.
      */
-    IoGetNextIrpStackLocation(Irp)->MajorFunction =
-        IRP_MJ_INTERNAL_DEVICE_CONTROL;
+    IoGetNextIrpStackLocation(Irp)->MajorFunction = IRP_MJ_INTERNAL_DEVICE_CONTROL;
 
-    Status = IoCallDriver(g_DxgkrnlDeviceObject, Irp);
+    Status = IoCallDriver(DeviceObject, Irp);
 
     /* Wait for asynchronous completion. */
     if (Status == STATUS_PENDING)
@@ -379,6 +469,9 @@ WddmBridgeSendIoctl(
         KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
         Status = IoStatus.Status;
     }
+
+    if (Information != NULL)
+        *Information = IoStatus.Information;
 
     /* STATUS_DEVICE_BUSY is the escape-busy/retry backpressure the UMD
      * deliberately spins on when the GPU queue is full — expected flow
@@ -408,6 +501,15 @@ WddmBridgeSendIoctl(
 VOID
 WddmBridgeCleanup(VOID)
 {
-    WddmBridgeDropReference();
+    ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
+    if (KeGetCurrentIrql() > APC_LEVEL)
+        return;
+
+    WddmBridgeAcquireLock();
     g_WddmBridgeStatus = STATUS_DEVICE_NOT_CONNECTED;
+    g_DxgkrnlDeviceObject = NULL;
+    if (g_WddmBridgeRundownInitialized)
+        ExWaitForRundownProtectionRelease(&g_WddmBridgeRundown);
+    WddmBridgeDropReference();
+    WddmBridgeReleaseLock();
 }

@@ -65,6 +65,39 @@ typedef enum _DXGKRNL_PRESENT_TYPE
 
 } DXGKRNL_PRESENT_TYPE;
 
+/* One coherent SharedPrimary/SharedShadow generation.  The snapshot owns the
+ * allocation references and the shared-surface rundown reference until it is
+ * released or transferred to a queued present entry. */
+typedef struct _DXGKRNL_SHARED_SURFACE_SNAPSHOT
+{
+    struct _DXGKRNL_ADAPTER        *Adapter;
+    ULONG64                         Generation;
+    HANDLE                          PrimaryHandle;
+    HANDLE                          ShadowHandle;
+    PDXGKVMM_ALLOCATION             PrimaryAllocation;
+    PDXGKVMM_ALLOCATION             ShadowAllocation;
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID  VidPnSourceId;
+    ULONG                           PrimaryWidth;
+    ULONG                           PrimaryHeight;
+    D3DDDIFORMAT                    PrimaryFormat;
+    ULONG                           ShadowWidth;
+    ULONG                           ShadowHeight;
+    ULONG                           ShadowPitch;
+    D3DDDIFORMAT                    ShadowFormat;
+    PVOID                           ShadowFb;
+    ULONG                           ShadowFbPitch;
+    ULONG                           ShadowFbSize;
+    BOOLEAN                         ShadowFbPoolOwned;
+    ULONG                           CommittedWidth;
+    ULONG                           CommittedHeight;
+    PVOID                           PostDisplayVirtualAddress;
+    SIZE_T                          PostDisplayMappingSize;
+    ULONG                           PostDisplayPitch;
+    ULONG                           PostDisplayHeight;
+    BOOLEAN                         VidPnCommitted;
+    BOOLEAN                         RundownHeld;
+} DXGKRNL_SHARED_SURFACE_SNAPSHOT, *PDXGKRNL_SHARED_SURFACE_SNAPSHOT;
+
 /* ========================================================================
  * Present operation descriptor
  *
@@ -86,6 +119,28 @@ typedef struct _DXGKRNL_PRESENT_ENTRY
     D3DKMT_HANDLE                   hSource;
     D3DKMT_HANDLE                   hDestination;
 
+    /* Owned VidMm references acquired when the present is admitted.  These
+     * remain valid through a queued VSync wait and execution; no execution
+     * path is allowed to resolve hSource/hDestination again.  Aliased source
+     * and destination handles deliberately own two balanced references. */
+    PDXGKVMM_ALLOCATION             SourceAllocation;
+    PDXGKVMM_ALLOCATION             DestinationAllocation;
+
+    /* An OpenResource alias owns a persistent per-device miniport binding.
+     * Keep the logical alias referenced separately from its physical backing. */
+    HANDLE                          SourceOpenBindingHandle;
+    HANDLE                          DestinationOpenBindingHandle;
+    PDXGKVMM_ALLOCATION             SourceOpenBindingReference;
+    PDXGKVMM_ALLOCATION             DestinationOpenBindingReference;
+
+    /* Shared-surface identity is captured at admission, never inferred later
+     * by comparing a queued handle with mutable adapter fields. */
+    DXGKRNL_SHARED_SURFACE_SNAPSHOT SharedSurface;
+    BOOLEAN                         SourceIsSharedPrimary;
+    BOOLEAN                         SourceIsSharedShadow;
+    BOOLEAN                         DestinationIsSharedPrimary;
+    BOOLEAN                         DestinationIsSharedShadow;
+
     /* Source and destination rectangles. */
     RECT                            SrcRect;
     RECT                            DstRect;
@@ -99,8 +154,10 @@ typedef struct _DXGKRNL_PRESENT_ENTRY
      */
     D3DDDI_FLIPINTERVAL_TYPE        FlipInterval;
 
-    /* Back-pointer to the device that submitted this present. */
-    D3DKMT_HANDLE                   hDevice;
+    /* Owned references to the submitting context, when the caller supplied
+     * one, and its device.  The DMA tracker takes independent references. */
+    struct _DXGKRNL_CONTEXT        *Context;
+    struct _DXGKRNL_DEVICE         *Device;
 
 } DXGKRNL_PRESENT_ENTRY, *PDXGKRNL_PRESENT_ENTRY;
 
@@ -109,15 +166,13 @@ typedef struct _DXGKRNL_PRESENT_ENTRY
  *
  * One instance per VidPn source (display output).  Stored in the
  * PresentQueues array inside DXGKRNL_ADAPTER.  The queue is a fixed-size
- * circular buffer protected by a KSPIN_LOCK so that the enqueue path
- * (PASSIVE_LEVEL) and the VSync/timer dequeue path (DISPATCH_LEVEL DPC)
- * can safely coordinate.
+ * circular buffer protected by a KSPIN_LOCK so that enqueue and the
+ * PASSIVE_LEVEL VSync worker can safely coordinate.
  *
  * VSync tracking:
- *   VBlankCount is incremented by the VSync interrupt handler
- *   (DxgkCbNotifyInterrupt with DXGK_INTERRUPT_CRTC_VSYNC).  The
- *   dequeue path compares the entry's target VBlank against VBlankCount
- *   to decide when to execute the present.
+ *   DxgkpNotifyVSync records each CRTC_VSYNC pulse.  The PASSIVE worker
+ *   compares the entry's target VBlank against VBlankCount to decide when to
+ *   execute the present.
  * ====================================================================== */
 typedef struct _DXGKRNL_PRESENT_QUEUE
 {
@@ -152,6 +207,11 @@ typedef struct _DXGKRNL_PRESENT_QUEUE
 
     /* Back-pointer to the owning adapter. */
     struct _DXGKRNL_ADAPTER        *Adapter;
+
+    /* A DPC records pending pulses and queues a PASSIVE_LEVEL worker.  A
+     * queued worker owns one PresentQueueActiveCalls reference until exit. */
+    volatile LONG                  VSyncWorkQueued;
+    volatile LONG                  PendingVBlanks;
 
 } DXGKRNL_PRESENT_QUEUE, *PDXGKRNL_PRESENT_QUEUE;
 
@@ -198,15 +258,37 @@ DxgkPresentTeardown(
 NTSTATUS
 DxgkpQueuePresent(
     _In_  struct _DXGKRNL_ADAPTER  *Adapter,
-    _In_  PDXGKRNL_PRESENT_ENTRY    Entry,
+    _Inout_ PDXGKRNL_PRESENT_ENTRY  Entry,
     _Out_ ULONG64                  *OutPresentId);
+
+/* Releases every owned reference in an entry and clears the fields. */
+VOID
+DxgkpReleasePresentEntry(
+    _Inout_ PDXGKRNL_PRESENT_ENTRY Entry);
+
+NTSTATUS
+DxgkpAcquireSharedSurfaceSnapshot(
+    _In_ struct _DXGKRNL_ADAPTER *Adapter,
+    _Out_ PDXGKRNL_SHARED_SURFACE_SNAPSHOT Snapshot);
+
+VOID
+DxgkpReleaseSharedSurfaceSnapshot(
+    _Inout_ PDXGKRNL_SHARED_SURFACE_SNAPSHOT Snapshot);
+
+VOID
+DxgkpBeginSharedSurfaceMutationLocked(
+    _In_ struct _DXGKRNL_ADAPTER *Adapter);
+
+VOID
+DxgkpEndSharedSurfaceMutationLocked(
+    _In_ struct _DXGKRNL_ADAPTER *Adapter);
 
 /*
  * DxgkpProcessPresentQueue
  *
  * Dequeues and executes the head present from the specified VidPn source
- * queue.  Called from the VSync path (DPC context) or from the periodic
- * present timer work item for display-only adapters.
+ * queue.  Called from the VSync work item or directly for an immediate
+ * present.
  *
  * Returns STATUS_SUCCESS if a present was executed, STATUS_NO_MORE_ENTRIES
  * if the queue was empty.
@@ -221,9 +303,8 @@ DxgkpProcessPresentQueue(
 /*
  * DxgkpNotifyVSync
  *
- * Called from DxgkCbNotifyInterrupt (CRTC_VSYNC) to bump the VBlank
- * counter on the specified VidPn source queue.  This is the trigger
- * for VSync-synchronized flip presents.
+ * Called from the adapter DPC for a recorded CRTC_VSYNC source.  It records
+ * the pulse and queues a PASSIVE_LEVEL worker; it never calls a miniport DDI.
  *
  * IRQL: DISPATCH_LEVEL (ISR DPC context)
  */

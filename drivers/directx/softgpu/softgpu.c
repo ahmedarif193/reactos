@@ -2,8 +2,8 @@
  * PROJECT:     ReactOS WDDM Null/Software GPU Miniport
  * LICENSE:     GPL-2.0+ (https://spdx.org/licenses/GPL-2.0+)
  * PURPOSE:     DriverEntry and core DDI callbacks for softgpu.sys.
- *              Implements a WDDM 1.0 software display miniport that renders
- *              to a 16 MB write-combined system-RAM framebuffer.
+ *              Implements a WDDM 2.0 ABI miniport with a physical/software
+ *              engine, no GPU MMU, and a 16 MB system-RAM framebuffer.
  * COPYRIGHT:   Copyright 2024 ReactOS WDDM Team
  *
  * Target device: QEMU STD VGA (PCI VEN_1234&DEV_1111) or root-enumerated
@@ -57,8 +57,9 @@
  * Statically-initialised DXGK_DRIVERCAPS advertised to dxgkrnl.
  * All capability fields left at zero except what softgpu actually supports:
  *   - MaxPointerWidth/Height: 64x64 hardware-cursor placeholder (unused)
- *   - MaxAllocationListSlotId: 255 (max for WDDM 1.0)
+ *   - MaxAllocationListSlotId: 255
  *   - GpuEngineTopology: 1 (one 3D engine node)
+ *   - WDDMVersion: WDDM 2.0, matching the registered DDI table
  */
 static const DXGK_DRIVERCAPS SOFTGPU_DRIVER_CAPS =
 {
@@ -75,6 +76,7 @@ static const DXGK_DRIVERCAPS SOFTGPU_DRIVER_CAPS =
     .SchedulingCaps.Value       = 0,
     .MemoryManagementCaps.Value = 0,
     .GpuEngineTopology.NbAsymetricProcessingNodes = 1,
+    .WDDMVersion                = DXGKDDI_WDDMv2_ENUM,
 };
 
 
@@ -107,9 +109,8 @@ DriverEntry(
     RtlZeroMemory(&InitData, sizeof(InitData));
 
     /*
-     * Version field is set to DXGKDDI_INTERFACE_VERSION_WDDM2_0 (0x5023) so
-     * dxgkrnl treats softgpu as a full WDDM 2.0 miniport and enables the GPU
-     * virtual-addressing / per-process page-table DDIs wired below.
+     * The WDDM 2.0 version selects the ABI table consumed by dxgkrnl. The
+     * physical/software engine does not advertise GPU-MMU or IOMMU support.
      */
     InitData.Version = DXGKDDI_INTERFACE_VERSION_WDDM2_0;
 
@@ -126,6 +127,7 @@ DriverEntry(
     InitData.DxgkDdiQueryChildRelations             = SoftGpuDdiQueryChildRelations;
     InitData.DxgkDdiQueryChildStatus                = SoftGpuDdiQueryChildStatus;
     InitData.DxgkDdiQueryDeviceDescriptor           = SoftGpuDdiQueryDeviceDescriptor;
+    InitData.DxgkDdiGetNodeMetadata                 = SoftGpuDdiGetNodeMetadata;
 
     /* --- Interrupt / DPC ------------------------------------------------- */
     InitData.DxgkDdiInterruptRoutine                = SoftGpuDdiInterruptRoutine;
@@ -253,6 +255,7 @@ SoftGpuDdiAddDevice(
     Device->Width           = SOFTGPU_DEFAULT_WIDTH;
     Device->Height          = SOFTGPU_DEFAULT_HEIGHT;
     Device->Format          = SOFTGPU_DEFAULT_FORMAT;
+    Device->Stopped         = 1;
 
     KeInitializeSpinLock(&Device->FenceLock);
 
@@ -325,6 +328,7 @@ SoftGpuDdiStartDevice(
     _Out_ PULONG            NumberOfChildren)
 {
     PSOFTGPU_DEVICE Device = (PSOFTGPU_DEVICE)MiniportDeviceContext;
+    KIRQL OldIrql;
 
     DPRINT("SOFTGPU: StartDevice Device=%p\n", Device);
 
@@ -390,9 +394,11 @@ SoftGpuDdiStartDevice(
      * The DPC is queued from SoftGpuDdiSubmitCommand at DISPATCH_LEVEL and
      * fires SoftGpuDpcRoutine which notifies dxgkrnl of fence completion.
      */
-    KeInitializeDpc(&Device->DpcObject,
-                    SoftGpuDpcRoutine,
-                    Device);
+    KeInitializeDpc(&Device->DpcObject, SoftGpuDpcRoutine, Device);
+    Device->DpcInitialized = TRUE;
+    KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
+    Device->Stopped = 0;
+    KeReleaseSpinLock(&Device->FenceLock, OldIrql);
 
     DPRINT("SOFTGPU: StartDevice success: %lu source(s), %lu child(ren)\n",
            Device->NumSources, Device->NumChildren);
@@ -411,17 +417,25 @@ SoftGpuDdiStopDevice(
     _In_ PVOID MiniportDeviceContext)
 {
     PSOFTGPU_DEVICE Device = (PSOFTGPU_DEVICE)MiniportDeviceContext;
+    KIRQL OldIrql;
 
     DPRINT("SOFTGPU: StopDevice Device=%p\n", Device);
 
     if (Device == NULL || Device->Magic != SOFTGPU_DEVICE_MAGIC)
         return STATUS_INVALID_PARAMETER;
 
-    /*
-     * Cancel any pending DPC before dxgkrnl tears down the interface.
-     * KeRemoveQueueDpc returns FALSE if the DPC was not in the queue.
-     */
-    KeRemoveQueueDpc(&Device->DpcObject);
+    /* Serialize the stopped gate with every DPC insertion. Once the gate is
+     * closed, remove queued work and wait for any running callback to return. */
+    KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
+    Device->Stopped = 1;
+    KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+    if (Device->DpcInitialized)
+    {
+        KeRemoveQueueDpc(&Device->DpcObject);
+        KeFlushQueuedDpcs();
+        Device->DpcInitialized = FALSE;
+    }
+    RtlZeroMemory(&Device->DxgkInterface, sizeof(Device->DxgkInterface));
 
     return STATUS_SUCCESS;
 }
@@ -445,11 +459,16 @@ SoftGpuDdiRemoveDevice(
     _In_ PVOID MiniportDeviceContext)
 {
     PSOFTGPU_DEVICE Device = (PSOFTGPU_DEVICE)MiniportDeviceContext;
+    NTSTATUS Status;
 
     DPRINT("SOFTGPU: RemoveDevice Device=%p\n", Device);
 
     if (Device == NULL || Device->Magic != SOFTGPU_DEVICE_MAGIC)
         return STATUS_INVALID_PARAMETER;
+
+    Status = SoftGpuDdiStopDevice(Device);
+    if (!NT_SUCCESS(Status))
+        return Status;
 
     if (Device->FrameBuffer != NULL)
     {
@@ -472,6 +491,28 @@ SoftGpuDdiRemoveDevice(
  * DxgkDdiQueryAdapterInfo
  * =========================================================================
  */
+
+NTSTATUS
+APIENTRY
+SoftGpuDdiGetNodeMetadata(
+    _In_ PVOID MiniportDeviceContext,
+    _In_ UINT NodeOrdinalAndAdapterIndex,
+    _Out_ DXGKARG_GETNODEMETADATA *GetNodeMetadata)
+{
+    PSOFTGPU_DEVICE Device = (PSOFTGPU_DEVICE)MiniportDeviceContext;
+
+    if (Device == NULL || Device->Magic != SOFTGPU_DEVICE_MAGIC || GetNodeMetadata == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (NodeOrdinalAndAdapterIndex != 0)
+        return STATUS_INVALID_PARAMETER;
+
+    RtlZeroMemory(GetNodeMetadata, sizeof(*GetNodeMetadata));
+    GetNodeMetadata->EngineType = DXGK_ENGINE_TYPE_3D;
+    RtlCopyMemory(GetNodeMetadata->FriendlyName, L"ReactOS software GPU", sizeof(L"ReactOS software GPU"));
+    GetNodeMetadata->GpuMmuSupported = FALSE;
+    GetNodeMetadata->IoMmuSupported = FALSE;
+    return STATUS_SUCCESS;
+}
 
 /*
  * SoftGpuDdiQueryAdapterInfo
@@ -824,6 +865,7 @@ SoftGpuDdiCreateAllocation(
         pInfo->EvictionSegmentSet      = 0;     /* no eviction for aperture */
         pInfo->Flags.CpuVisible        = 1;
         pInfo->Flags.PermanentSysMem   = 1;     /* stays in system memory   */
+        pInfo->Flags.AccessedPhysically= 1;
         pInfo->hAllocation             = (HANDLE)Alloc;
 
         DPRINT("SOFTGPU: CreateAllocation alloc[%lu]: size=%Iu handle=%p\n",
