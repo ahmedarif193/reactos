@@ -423,6 +423,9 @@ DxgkpVidMmInitializeAllocationLifetime(
     Allocation->FinalizeQueued = 0;
     Allocation->LogicalReferenceCount = 1;
     Allocation->LogicalHandleReferenceDropped = 0;
+    /* Native WDDM 2 allocations begin life resident with one implicit
+     * residency reference; the first Evict removes it. */
+    Allocation->ResidencyReferenceCount = 1;
     KeInitializeEvent(&Allocation->ReferencesDrainedEvent, NotificationEvent, FALSE);
     KeInitializeEvent(&Allocation->LogicalReferencesDrainedEvent, NotificationEvent, FALSE);
 }
@@ -5602,6 +5605,15 @@ VidMmFindLowestPriorityResident(
     {
         PDXGKVMM_ALLOCATION Candidate =
             CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, SegmentEntry);
+
+        /* In a local segment a residency-referenced allocation is pinned:
+         * demand repaging does not exist yet, so evicting it would move
+         * content out from under submitted work.  Aperture placements keep
+         * their system-memory content across eviction, so pure priority
+         * pressure eviction remains valid there. */
+        if (!VidMmSegmentIsAperture(Segment) &&
+            InterlockedCompareExchange(&Candidate->ResidencyReferenceCount, 0, 0) != 0)
+            continue;
 
         if (Victim == NULL ||
             Candidate->AllocationPriority < Victim->AllocationPriority)
