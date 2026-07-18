@@ -151,7 +151,10 @@ DxgkpAdapterSupportsRender(
         return FALSE;
 
     MiniportContext = Adapter->MiniportContext;
-    if (MiniportContext->IsDisplayOnlyDriver || MiniportContext->IsBasicDisplayFallback || Adapter->NodeCount == 0 || Adapter->VidSchContext == NULL)
+    /* The basic-display fallback stays render-capable like a software
+     * (WARP-class) adapter; only its display ownership yields to a real
+     * miniport.  Display-only drivers have no render pipeline at all. */
+    if (MiniportContext->IsDisplayOnlyDriver || Adapter->NodeCount == 0 || Adapter->VidSchContext == NULL)
         return FALSE;
 
     return MiniportContext->InitData.s.DxgkDdiCreateDevice != NULL && MiniportContext->InitData.s.DxgkDdiDestroyDevice != NULL && MiniportContext->InitData.s.DxgkDdiCreateAllocation != NULL && MiniportContext->InitData.s.DxgkDdiDestroyAllocation != NULL && MiniportContext->InitData.s.DxgkDdiCreateContext != NULL && MiniportContext->InitData.s.DxgkDdiDestroyContext != NULL && MiniportContext->InitData.s.DxgkDdiRender != NULL && MiniportContext->InitData.s.DxgkDdiSubmitCommand != NULL;
@@ -3235,6 +3238,10 @@ typedef struct _DXGKRNL_PAGING_QUEUE
     volatile LONG   ReferenceCount;
     volatile LONG   Destroying;
     volatile LONG   TeardownClaimed;
+
+    /* Monotonic paging fence: one value per queued paging operation; the
+     * queue's monitored fence is signaled to it at packet retirement. */
+    volatile LONG64 LastQueuedFence;
 } DXGKRNL_PAGING_QUEUE, *PDXGKRNL_PAGING_QUEUE;
 
 static LONG DxgkPagingQueueInitialized = 0;
@@ -3323,6 +3330,48 @@ DxgkpReferencePagingQueueDevice(
     *OutAdapter = Queue->Device->Adapter;
     *OutDevice = Queue->Device;
     DxgkpDereferencePagingQueue(Queue);
+    return STATUS_SUCCESS;
+}
+
+/* Like DxgkpReferencePagingQueueDevice, but keeps the queue referenced so
+ * the caller can use its monitored fence and fence counter; release both
+ * the device and the queue when done. */
+static NTSTATUS
+DxgkpReferencePagingQueueForPaging(
+    _In_ D3DKMT_HANDLE Handle,
+    _In_ PEPROCESS OwnerProcess,
+    _Out_ PDXGKRNL_ADAPTER *OutAdapter,
+    _Out_ PDXGKRNL_DEVICE *OutDevice,
+    _Out_ PDXGKRNL_PAGING_QUEUE *OutQueue)
+{
+    PDXGKRNL_PAGING_QUEUE Queue;
+    PVOID Object;
+    NTSTATUS Status;
+
+    if (Handle == 0 || OwnerProcess == NULL || OutAdapter == NULL || OutDevice == NULL || OutQueue == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    *OutAdapter = NULL;
+    *OutDevice = NULL;
+    *OutQueue = NULL;
+    Status = DxgkReferenceOwnedHandle(Handle, DxgkHandleTypePagingQueue, OwnerProcess, DxgkpReferencePagingQueue, &Object);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Queue = Object;
+    if (!DxgkReferenceDevice(Queue->Device))
+    {
+        DxgkpDereferencePagingQueue(Queue);
+        return STATUS_DELETE_PENDING;
+    }
+    if (!DxgkpDeviceExecutionActive(Queue->Device))
+    {
+        DxgkDereferenceDevice(Queue->Device);
+        DxgkpDereferencePagingQueue(Queue);
+        return STATUS_DEVICE_REMOVED;
+    }
+    *OutAdapter = Queue->Device->Adapter;
+    *OutDevice = Queue->Device;
+    *OutQueue = Queue;
     return STATUS_SUCCESS;
 }
 
@@ -4687,9 +4736,11 @@ DxgkpDispatchBufferedIoctl(
             D3DDDI_MAKERESIDENT_LOCAL *pMakeResident;
             PDXGKRNL_ADAPTER Adapter;
             PDXGKRNL_DEVICE Device;
+            PDXGKRNL_PAGING_QUEUE PagingQueue = NULL;
             D3DKMT_HANDLE *AllocationList = NULL;
             UINT *PriorityList = NULL;
             SIZE_T AllocationListSize;
+            ULONGLONG PagingFenceValue = 0;
             ULONG Completed = 0;
             UINT i;
 
@@ -4699,7 +4750,7 @@ DxgkpDispatchBufferedIoctl(
             pMakeResident = (D3DDDI_MAKERESIDENT_LOCAL *)SystemBuffer;
             if (pMakeResident->hPagingQueue == 0 || pMakeResident->NumAllocations > DXGKP_MAX_D3DKMT_LIST_COUNT || (pMakeResident->NumAllocations != 0 && pMakeResident->AllocationList == NULL) || pMakeResident->Flags.Reserved != 0 || (pMakeResident->Flags.MustSucceed && !pMakeResident->Flags.CantTrimFurther))
                 return STATUS_INVALID_PARAMETER;
-            Status = DxgkpReferencePagingQueueDevice(pMakeResident->hPagingQueue, PsGetCurrentProcess(), &Adapter, &Device);
+            Status = DxgkpReferencePagingQueueForPaging(pMakeResident->hPagingQueue, PsGetCurrentProcess(), &Adapter, &Device, &PagingQueue);
             if (!NT_SUCCESS(Status))
                 return Status;
 
@@ -4761,7 +4812,7 @@ DxgkpDispatchBufferedIoctl(
                 if (NT_SUCCESS(Status) && PriorityList != NULL)
                     Status = STATUS_NOT_SUPPORTED;
                 if (NT_SUCCESS(Status))
-                    Status = DxgkGpuVaMakeResident(Adapter, Device->ProcessRecord, AllocationList, pMakeResident->NumAllocations, &Completed, &pMakeResident->NumBytesToTrim);
+                    Status = DxgkGpuVaMakeResident(Adapter, Device->ProcessRecord, Device, PagingQueue->hSyncObject, &PagingQueue->LastQueuedFence, AllocationList, pMakeResident->NumAllocations, &Completed, &pMakeResident->NumBytesToTrim, &PagingFenceValue);
             }
             else
             {
@@ -4769,12 +4820,18 @@ DxgkpDispatchBufferedIoctl(
                 pMakeResident->NumBytesToTrim = 0;
             }
 
-            pMakeResident->PagingFenceValue = 0;
+            /* STATUS_PENDING is an API status, not an IRP completion status:
+             * the IRP completes successfully and the nonzero paging fence in
+             * the output tells the bridge to surface PENDING to the caller. */
+            if (Status == STATUS_PENDING)
+                Status = STATUS_SUCCESS;
+            pMakeResident->PagingFenceValue = PagingFenceValue;
             pMakeResident->NumAllocations = Completed;
             if (PriorityList != NULL)
                 ExFreePoolWithTag(PriorityList, TAG_DXGK_GPUVA);
             if (AllocationList != NULL)
                 ExFreePoolWithTag(AllocationList, TAG_DXGK_GPUVA);
+            DxgkpDereferencePagingQueue(PagingQueue);
             DxgkDereferenceDevice(Device);
             if (NT_SUCCESS(Status))
                 Irp->IoStatus.Information = sizeof(D3DDDI_MAKERESIDENT_LOCAL);
