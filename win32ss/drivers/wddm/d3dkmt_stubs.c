@@ -2688,6 +2688,12 @@ D3DKMTMakeResident(
     if (NT_SUCCESS(Status))
         Status = WddmBridgeSafeCopyTo((PUCHAR)pData + FIELD_OFFSET(D3DDDI_MAKERESIDENT, NumBytesToTrim), &Captured.NumBytesToTrim, sizeof(Captured.NumBytesToTrim));
 
+    /* The IRP completes with STATUS_SUCCESS (an IRP cannot complete as
+     * PENDING); a nonzero paging fence in the output is the wire encoding
+     * for queued paging work, surfaced as the native STATUS_PENDING. */
+    if (Status == STATUS_SUCCESS && Captured.PagingFenceValue != 0)
+        Status = STATUS_PENDING;
+
 Cleanup:
     if (PriorityList != NULL)
         ExFreePoolWithTag(PriorityList, TAG_WDDM_BRIDGE);
