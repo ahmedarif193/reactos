@@ -590,9 +590,17 @@ static void Test_SharedResource_MultiAllocationRoundTrip(void)
     const UINT RuntimePrivate[2] = { 0x52554E31, 0x52554E32 };
     const UINT ResourcePrivate = 0x52535243;
     UINT AllocationPrivate[3] = { 4096, 8192, 16384 };
-    D3DDDI_ALLOCATIONINFO AllocationInfo[3];
+    D3DDDI_ALLOCATIONINFO AllocationInfo[2];
+    D3DDDI_ALLOCATIONINFO AppendedAllocationInfo;
     D3DKMT_CREATEALLOCATION Create;
+    D3DKMT_CREATEALLOCATION Append;
+    D3DKMT_DESTROYALLOCATION DestroyList;
     D3DKMT_QUERYRESOURCEINFO Query;
+    D3DKMT_QUERYRESOURCEINFO QueryAfterSubset;
+    D3DKMT_HANDLE DuplicateList[2];
+    D3DKMT_HANDLE MixedDeviceList[2];
+    D3DKMT_HANDLE CreatorSubset[2];
+    D3DKMT_HANDLE DestroyedAlias;
     SHARED_OPEN_BUFFERS Opened;
     D3DKMT_HANDLE hAdapter = 0;
     D3DKMT_HANDLE hCreatorDevice = 0;
@@ -601,6 +609,8 @@ static void Test_SharedResource_MultiAllocationRoundTrip(void)
     UINT Index;
 
     memset(&Create, 0, sizeof(Create));
+    memset(&Append, 0, sizeof(Append));
+    memset(&AppendedAllocationInfo, 0, sizeof(AppendedAllocationInfo));
     memset(&Opened, 0, sizeof(Opened));
     if (pCreate == NULL || pQuery == NULL || pOpen == NULL || pDestroy == NULL || pLock == NULL || pUnlock == NULL)
     {
@@ -648,6 +658,33 @@ static void Test_SharedResource_MultiAllocationRoundTrip(void)
     if (Create.hResource == 0 || Create.hGlobalShare == 0)
         goto Cleanup;
 
+    AppendedAllocationInfo.pPrivateDriverData = &AllocationPrivate[2];
+    AppendedAllocationInfo.PrivateDriverDataSize = sizeof(AllocationPrivate[2]);
+    Append.hDevice = hCreatorDevice;
+    Append.hResource = Create.hResource;
+    Append.pPrivateDriverData = &ResourcePrivate;
+    Append.PrivateDriverDataSize = sizeof(ResourcePrivate);
+    Append.NumAllocations = 1;
+    Append.pAllocationInfo = &AppendedAllocationInfo;
+    Status = pCreate(&Append);
+    ok(NT_SUCCESS(Status), "Appending an allocation to an existing resource failed 0x%08lX\n", (long)Status);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    ok(Append.hResource == Create.hResource, "Existing-resource CreateAllocation changed hResource from 0x%08lX to 0x%08lX\n", (unsigned long)Create.hResource, (unsigned long)Append.hResource);
+    ok(AppendedAllocationInfo.hAllocation != 0, "Existing-resource CreateAllocation returned a zero allocation handle\n");
+    ok(AppendedAllocationInfo.pPrivateDriverData == &AllocationPrivate[2] && AppendedAllocationInfo.PrivateDriverDataSize == sizeof(AllocationPrivate[2]), "Existing-resource CreateAllocation did not preserve the allocation-private copyback descriptor\n");
+    if (Append.hResource != Create.hResource || AppendedAllocationInfo.hAllocation == 0)
+        goto Cleanup;
+
+    DuplicateList[0] = AllocationInfo[0].hAllocation;
+    DuplicateList[1] = AllocationInfo[0].hAllocation;
+    memset(&DestroyList, 0, sizeof(DestroyList));
+    DestroyList.hDevice = hCreatorDevice;
+    DestroyList.phAllocationList = DuplicateList;
+    DestroyList.AllocationCount = ARRAYSIZE(DuplicateList);
+    Status = pDestroy(&DestroyList);
+    ok(!NT_SUCCESS(Status), "DestroyAllocation accepted a duplicate allocation list: 0x%08lX\n", (long)Status);
+
     memset(&Query, 0, sizeof(Query));
     Query.hDevice = hOpenerDevice;
     Query.hGlobalShare = Create.hGlobalShare;
@@ -655,11 +692,11 @@ static void Test_SharedResource_MultiAllocationRoundTrip(void)
     ok(NT_SUCCESS(Status), "QueryResourceInfo null-buffer discovery failed 0x%08lX\n", (long)Status);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
-    ok(Query.NumAllocations == ARRAYSIZE(AllocationInfo), "QueryResourceInfo returned %u allocations, expected %u\n", Query.NumAllocations, (unsigned)ARRAYSIZE(AllocationInfo));
+    ok(Query.NumAllocations == ARRAYSIZE(AllocationPrivate), "QueryResourceInfo returned %u allocations, expected %u\n", Query.NumAllocations, (unsigned)ARRAYSIZE(AllocationPrivate));
     ok(Query.PrivateRuntimeDataSize == sizeof(RuntimePrivate), "Runtime-private size %u, expected %u\n", Query.PrivateRuntimeDataSize, (unsigned)sizeof(RuntimePrivate));
     ok(Query.ResourcePrivateDriverDataSize == sizeof(ResourcePrivate), "Resource-private size %u, expected %u\n", Query.ResourcePrivateDriverDataSize, (unsigned)sizeof(ResourcePrivate));
     ok(Query.TotalPrivateDriverDataSize == sizeof(AllocationPrivate), "Total allocation-private size %u, expected %u\n", Query.TotalPrivateDriverDataSize, (unsigned)sizeof(AllocationPrivate));
-    if (Query.NumAllocations != ARRAYSIZE(AllocationInfo) || Query.PrivateRuntimeDataSize != sizeof(RuntimePrivate) || Query.ResourcePrivateDriverDataSize != sizeof(ResourcePrivate) || Query.TotalPrivateDriverDataSize != sizeof(AllocationPrivate))
+    if (Query.NumAllocations != ARRAYSIZE(AllocationPrivate) || Query.PrivateRuntimeDataSize != sizeof(RuntimePrivate) || Query.ResourcePrivateDriverDataSize != sizeof(ResourcePrivate) || Query.TotalPrivateDriverDataSize != sizeof(AllocationPrivate))
         goto Cleanup;
     if (!InitializeSharedOpenBuffers(&Opened, hOpenerDevice, Create.hGlobalShare, &Query))
     {
@@ -675,13 +712,117 @@ static void Test_SharedResource_MultiAllocationRoundTrip(void)
     ok(memcmp(Opened.PrivateRuntimeData, RuntimePrivate, sizeof(RuntimePrivate)) == 0, "OpenResource changed runtime-private data\n");
     ok(memcmp(Opened.ResourcePrivateDriverData, &ResourcePrivate, sizeof(ResourcePrivate)) == 0, "OpenResource changed resource-private data\n");
     ok(memcmp(Opened.TotalPrivateDriverData, AllocationPrivate, sizeof(AllocationPrivate)) == 0, "OpenResource changed ordered allocation-private data\n");
-    for (Index = 0; Index < ARRAYSIZE(AllocationInfo); ++Index)
+    for (Index = 0; Index < Query.NumAllocations; ++Index)
     {
         PVOID ExpectedPrivateData = (PUCHAR)Opened.TotalPrivateDriverData + Index * sizeof(AllocationPrivate[Index]);
 
         ok(Opened.AllocationInfo[Index].hAllocation != 0, "Opened allocation %u has a zero handle\n", Index);
         ok(Opened.AllocationInfo[Index].PrivateDriverDataSize == sizeof(AllocationPrivate[Index]), "Opened allocation %u private size %u, expected %u\n", Index, Opened.AllocationInfo[Index].PrivateDriverDataSize, (unsigned)sizeof(AllocationPrivate[Index]));
         ok(Opened.AllocationInfo[Index].pPrivateDriverData == ExpectedPrivateData, "Opened allocation %u private pointer %p, expected rebased slice %p\n", Index, Opened.AllocationInfo[Index].pPrivateDriverData, ExpectedPrivateData);
+    }
+
+    MixedDeviceList[0] = AllocationInfo[0].hAllocation;
+    MixedDeviceList[1] = Opened.AllocationInfo[0].hAllocation;
+    memset(&DestroyList, 0, sizeof(DestroyList));
+    DestroyList.hDevice = hCreatorDevice;
+    DestroyList.phAllocationList = MixedDeviceList;
+    DestroyList.AllocationCount = ARRAYSIZE(MixedDeviceList);
+    Status = pDestroy(&DestroyList);
+    ok(!NT_SUCCESS(Status), "DestroyAllocation accepted a mixed-device allocation list: 0x%08lX\n", (long)Status);
+    if (!NT_SUCCESS(Status))
+    {
+        D3DKMT_LOCK Lock;
+
+        memset(&Lock, 0, sizeof(Lock));
+        Lock.hDevice = hCreatorDevice;
+        Lock.hAllocation = AllocationInfo[0].hAllocation;
+        Lock.Flags.LockEntire = 1;
+        Status = pLock(&Lock);
+        ok(NT_SUCCESS(Status), "Valid member of rejected mixed-device list did not survive: 0x%08lX\n", (long)Status);
+        if (NT_SUCCESS(Status))
+        {
+            D3DKMT_UNLOCK Unlock;
+            D3DKMT_HANDLE Allocation = AllocationInfo[0].hAllocation;
+
+            memset(&Unlock, 0, sizeof(Unlock));
+            Unlock.hDevice = hCreatorDevice;
+            Unlock.NumAllocations = 1;
+            Unlock.phAllocations = &Allocation;
+            Status = pUnlock(&Unlock);
+            ok(NT_SUCCESS(Status), "Unlock after rejected mixed-device list failed 0x%08lX\n", (long)Status);
+        }
+    }
+
+    memset(&DestroyList, 0, sizeof(DestroyList));
+    DestroyedAlias = Opened.AllocationInfo[0].hAllocation;
+    DestroyList.hDevice = hOpenerDevice;
+    DestroyList.phAllocationList = &Opened.AllocationInfo[0].hAllocation;
+    DestroyList.AllocationCount = 1;
+    Status = pDestroy(&DestroyList);
+    ok(NT_SUCCESS(Status), "DestroyAllocation rejected a legal OpenResource alias subset: 0x%08lX\n", (long)Status);
+    if (NT_SUCCESS(Status))
+    {
+        D3DKMT_LOCK Lock;
+
+        memset(&Lock, 0, sizeof(Lock));
+        Lock.hDevice = hOpenerDevice;
+        Lock.hAllocation = DestroyedAlias;
+        Lock.Flags.LockEntire = 1;
+        Status = pLock(&Lock);
+        ok(!NT_SUCCESS(Status), "Destroyed opened alias remained lockable after subset destruction: 0x%08lX\n", (long)Status);
+        if (NT_SUCCESS(Status))
+        {
+            D3DKMT_UNLOCK Unlock;
+
+            memset(&Unlock, 0, sizeof(Unlock));
+            Unlock.hDevice = hOpenerDevice;
+            Unlock.NumAllocations = 1;
+            Unlock.phAllocations = &DestroyedAlias;
+            pUnlock(&Unlock);
+        }
+        Opened.AllocationInfo[0].hAllocation = 0;
+        memset(&Lock, 0, sizeof(Lock));
+        Lock.hDevice = hOpenerDevice;
+        Lock.hAllocation = Opened.AllocationInfo[1].hAllocation;
+        Lock.Flags.LockEntire = 1;
+        Status = pLock(&Lock);
+        ok(NT_SUCCESS(Status) && Lock.pData != NULL, "Surviving opened alias failed after subset destruction: 0x%08lX, pData=%p\n", (long)Status, Lock.pData);
+        if (NT_SUCCESS(Status))
+        {
+            D3DKMT_UNLOCK Unlock;
+            D3DKMT_HANDLE Allocation = Opened.AllocationInfo[1].hAllocation;
+
+            memset(&Unlock, 0, sizeof(Unlock));
+            Unlock.hDevice = hOpenerDevice;
+            Unlock.NumAllocations = 1;
+            Unlock.phAllocations = &Allocation;
+            Status = pUnlock(&Unlock);
+            ok(NT_SUCCESS(Status), "Unlock of surviving alias after subset destruction failed 0x%08lX\n", (long)Status);
+        }
+    }
+
+    CreatorSubset[0] = AllocationInfo[0].hAllocation;
+    CreatorSubset[1] = AppendedAllocationInfo.hAllocation;
+    memset(&DestroyList, 0, sizeof(DestroyList));
+    DestroyList.hDevice = hCreatorDevice;
+    DestroyList.phAllocationList = CreatorSubset;
+    DestroyList.AllocationCount = ARRAYSIZE(CreatorSubset);
+    Status = pDestroy(&DestroyList);
+    ok(NT_SUCCESS(Status), "DestroyAllocation rejected a legal resource-owned allocation subset: 0x%08lX\n", (long)Status);
+    if (NT_SUCCESS(Status))
+    {
+        AllocationInfo[0].hAllocation = 0;
+        AppendedAllocationInfo.hAllocation = 0;
+        memset(&QueryAfterSubset, 0, sizeof(QueryAfterSubset));
+        QueryAfterSubset.hDevice = hOpenerDevice;
+        QueryAfterSubset.hGlobalShare = Create.hGlobalShare;
+        Status = pQuery(&QueryAfterSubset);
+        ok(NT_SUCCESS(Status), "QueryResourceInfo after subset destruction failed 0x%08lX\n", (long)Status);
+        if (NT_SUCCESS(Status))
+        {
+            ok(QueryAfterSubset.NumAllocations == 1, "Subset destruction left %u source allocations, expected 1\n", QueryAfterSubset.NumAllocations);
+            ok(QueryAfterSubset.TotalPrivateDriverDataSize == sizeof(AllocationPrivate[2]), "Subset destruction left %u private bytes, expected %u\n", QueryAfterSubset.TotalPrivateDriverDataSize, (unsigned)sizeof(AllocationPrivate[2]));
+        }
     }
 
     Status = DestroyOpenedResource(pDestroy, hCreatorDevice, Create.hResource);

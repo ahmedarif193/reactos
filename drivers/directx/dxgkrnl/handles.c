@@ -274,6 +274,48 @@ DxgkDereferenceAdapter(
     ExReleaseRundownProtection(&Adapter->RundownRef);
 }
 
+BOOLEAN
+DxgkBeginDeviceLifecycleOperation(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    LONG ActiveOperations;
+
+    if (Adapter == NULL)
+        return FALSE;
+    ActiveOperations = InterlockedIncrement(&Adapter->DeviceLifecycleActiveOperations);
+    ASSERT(ActiveOperations > 0);
+    if (ActiveOperations == 1)
+        KeResetEvent(&Adapter->DeviceLifecycleOperationsDrainedEvent);
+    KeMemoryBarrier();
+    if (InterlockedCompareExchange(&Adapter->RundownStarted, 0, 0) == 0)
+        return TRUE;
+    DxgkEndDeviceLifecycleOperation(Adapter);
+    return FALSE;
+}
+
+VOID
+DxgkEndDeviceLifecycleOperation(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    LONG ActiveOperations;
+
+    ASSERT(Adapter != NULL);
+    ActiveOperations = InterlockedDecrement(&Adapter->DeviceLifecycleActiveOperations);
+    ASSERT(ActiveOperations >= 0);
+    if (ActiveOperations == 0)
+        KeSetEvent(&Adapter->DeviceLifecycleOperationsDrainedEvent, IO_NO_INCREMENT, FALSE);
+}
+
+VOID
+DxgkWaitForDeviceLifecycleOperations(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    if (Adapter == NULL)
+        return;
+    while (InterlockedCompareExchange(&Adapter->DeviceLifecycleActiveOperations, 0, 0) != 0)
+        KeWaitForSingleObject(&Adapter->DeviceLifecycleOperationsDrainedEvent, Executive, KernelMode, FALSE, NULL);
+}
+
 ULONG
 DxgkReferenceStartedAdapters(
     _Out_writes_(Capacity) PDXGKRNL_ADAPTER *Adapters,
@@ -420,8 +462,13 @@ DxgkDetachDeviceHandle(
     ExAcquireFastMutex(&DxgkHandleTableLock);
     Entry = DxgkpFindHandleLocked(Handle);
     Status = DxgkpValidateHandleEntry(Entry, Handle, DxgkHandleTypeDevice, OwnerProcess);
-    if (NT_SUCCESS(Status) && !DxgkTryClaimTeardown(Entry->TeardownClaimed))
+    if (NT_SUCCESS(Status) && !DxgkBeginDeviceLifecycleOperation(Entry->Adapter))
         Status = STATUS_DELETE_PENDING;
+    if (NT_SUCCESS(Status) && !DxgkTryClaimTeardown(Entry->TeardownClaimed))
+    {
+        DxgkEndDeviceLifecycleOperation(Entry->Adapter);
+        Status = STATUS_DELETE_PENDING;
+    }
     if (NT_SUCCESS(Status))
     {
         InterlockedExchange(&((PDXGKRNL_DEVICE)Entry->Object)->Destroying, 1);

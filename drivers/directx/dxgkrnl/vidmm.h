@@ -96,6 +96,10 @@ typedef struct _DXGKRNL_SEGMENT
     ULONG               PagingBufferSegmentId;
     ULONG               PagingBufferSize;
 
+    /* Page to which UNMAP_APERTURE_SEGMENT redirects a retired aperture. */
+    PVOID               DummyPageVa;
+    PHYSICAL_ADDRESS    DummyPage;
+
 } DXGKRNL_SEGMENT, *PDXGKRNL_SEGMENT;
 
 typedef struct _DXGKVMM_RESOURCE
@@ -106,7 +110,6 @@ typedef struct _DXGKVMM_RESOURCE
     volatile LONG      FinalizeQueued;
     KEVENT             ReferencesDrainedEvent;
     WORK_QUEUE_ITEM    FinalizeWorkItem;
-    WORK_QUEUE_ITEM    CloseBatchWorkItem;
 
     /* Owning logical device. */
     PDXGKRNL_DEVICE    Device;
@@ -119,6 +122,10 @@ typedef struct _DXGKVMM_RESOURCE
 
     /* Opaque miniport-side resource handle. */
     HANDLE             MiniportHandle;
+    KMUTEX             MiniportResourceLock;
+    KMUTEX             ResourceOperationLock;
+    volatile LONG      CloseUncertain;
+    volatile LONG      DestroyFailureUncertain;
 
     /* 32-bit user-visible D3DKMT resource handle. */
     D3DKMT_HANDLE      Handle;
@@ -176,6 +183,7 @@ typedef struct _DXGKVMM_ALLOCATION
     volatile LONG       HandleReferenceDropped;
     KEVENT              ReferencesDrainedEvent;
     WORK_QUEUE_ITEM     FinalizeWorkItem;
+    KMUTEX              ResidencyLock;
 
     /* Back-pointer to the owning adapter. */
     PDXGKRNL_ADAPTER    Adapter;
@@ -186,12 +194,19 @@ typedef struct _DXGKVMM_ALLOCATION
     /* Stable miniport-device handle retained after logical device teardown. */
     HANDLE              MiniportDeviceHandle;
 
+    /* Creation-time resource ownership retained until wrapper attachment. */
+    HANDLE              MiniportResourceHandle;
+    BOOLEAN             DestroyMiniportResource;
+
     /* Source allocation retained by a per-device OpenResource alias. */
     struct _DXGKVMM_ALLOCATION *BackingAllocation;
 
     /* Miniport binding created by DxgkDdiOpenAllocation for an open alias. */
     HANDLE               OpenBindingHandle;
     UINT                 OpenBindingIndex;
+    UINT                 OpenBindingGroupIndex;
+    struct _DXGKVMM_OPEN_BINDING_GROUP *OpenBindingGroup;
+    struct _DXGKVMM_DESTROY_BATCH *DestroyBatch;
     volatile LONG        LogicalReferenceCount;
     volatile LONG        LogicalHandleReferenceDropped;
     KEVENT               LogicalReferencesDrainedEvent;
@@ -260,7 +275,7 @@ typedef struct _DXGKVMM_ALLOCATION
     PMDL                UserModeMdl;
     PEPROCESS           UserModeProcess;
     ULONG               UserModeLockCount;
-    FAST_MUTEX          UserModeLock;
+    KMUTEX              UserModeLock;
 
     /* Miniport-side allocation handle (from DxgkDdiCreateAllocation). */
     HANDLE              MiniportHandle;
@@ -274,6 +289,9 @@ typedef struct _DXGKVMM_ALLOCATION
 
     /* TRUE once BuildPagingBuffer(MAP_APERTURE_SEGMENT) succeeded. */
     BOOLEAN             ApertureMapped;
+
+    /* TRUE when reset purged a memory-segment placement without a transfer. */
+    BOOLEAN             ContentLost;
 
     /*
      * 32-bit user-visible D3DKMT allocation handle.
@@ -315,6 +333,22 @@ typedef struct _DXGKVMM_ALLOCATION
  */
 NTSTATUS
 DxgkVidMmInitializeAdapter(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
+VOID
+DxgkVidMmQuiesceAdapter(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
+VOID
+DxgkVidMmResumeAdapter(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
+NTSTATUS
+DxgkVidMmPrepareForIdle(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
+NTSTATUS
+DxgkVidMmRecoverFromTimeout(
     _In_ PDXGKRNL_ADAPTER Adapter);
 
 VOID
@@ -376,7 +410,7 @@ VOID
 DxgkVidMmProcessCleanup(
     _In_ PEPROCESS Process);
 
-VOID
+NTSTATUS
 DxgkVidMmCleanupDeviceAllocations(
     _In_ PDXGKRNL_DEVICE Device);
 
