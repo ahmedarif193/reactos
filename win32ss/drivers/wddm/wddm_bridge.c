@@ -59,6 +59,9 @@ static BOOLEAN g_WddmBridgeRundownInitialized = FALSE;
 typedef struct _WDDM_BRIDGE_COMPLETION_CONTEXT
 {
     ULONG OutputSize;
+    NTSTATUS FinalStatus;
+    ULONG_PTR FinalInformation;
+    volatile LONG FinalValid;
 } WDDM_BRIDGE_COMPLETION_CONTEXT, *PWDDM_BRIDGE_COMPLETION_CONTEXT;
 
 /* The mutex serializes state publication; rundown protects concurrent IOCTLs. */
@@ -89,6 +92,15 @@ WddmBridgeClampIoctlCompletion(
         Irp->IoStatus.Information = 0;
         Irp->IoStatus.Status = STATUS_INFO_LENGTH_MISMATCH;
     }
+
+    /* IopCompleteRequest does not write the caller IOSB for an NT_ERROR
+     * completion of a synchronous request, which would leave the send path
+     * reading its stack preset instead of the real status.  Capture the
+     * final IOSB here, before that gate. */
+    CompletionContext->FinalStatus = Irp->IoStatus.Status;
+    CompletionContext->FinalInformation = Irp->IoStatus.Information;
+    KeMemoryBarrier();
+    InterlockedExchange(&CompletionContext->FinalValid, 1);
 
     return STATUS_CONTINUE_COMPLETION;
 }
@@ -470,6 +482,9 @@ WddmBridgeSendIoctlToDevice(
     IoStatus.Status = STATUS_NOT_SUPPORTED;
     IoStatus.Information = 0;
     CompletionContext.OutputSize = OutputSize;
+    CompletionContext.FinalStatus = STATUS_NOT_SUPPORTED;
+    CompletionContext.FinalInformation = 0;
+    CompletionContext.FinalValid = 0;
 
     /*
      * IoBuildDeviceIoControlRequest builds an IRP suitable for a
@@ -505,6 +520,12 @@ WddmBridgeSendIoctlToDevice(
     /* Wait for asynchronous completion. */
     if (Status == STATUS_PENDING)
         KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+    if (InterlockedCompareExchange(&CompletionContext.FinalValid, 0, 0) != 0)
+    {
+        KeMemoryBarrier();
+        IoStatus.Status = CompletionContext.FinalStatus;
+        IoStatus.Information = CompletionContext.FinalInformation;
+    }
     Status = IoStatus.Status;
 
     if (Information != NULL)
