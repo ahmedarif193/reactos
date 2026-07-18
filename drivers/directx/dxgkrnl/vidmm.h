@@ -234,6 +234,15 @@ typedef struct _DXGKVMM_ALLOCATION
     BOOLEAN             Resident;
 
     /*
+     * WDDM 2.0 residency references (D3DKMTMakeResident/D3DKMTEvict).
+     * Each MakeResident list entry adds one; each Evict list entry removes
+     * one.  A referenced allocation is pinned against pressure trimming; at
+     * zero references it is a trim candidate, and an Evict that drops the
+     * count to zero releases the placement unless EvictOnlyIfNecessary.
+     */
+    volatile LONG       ResidencyReferenceCount;
+
+    /*
      * Physical base address of the allocation.
      * Segment->BaseAddress.QuadPart + SegmentOffset when resident;
      * MmGetPhysicalAddress(SystemMemory) when in system memory.
