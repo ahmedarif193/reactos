@@ -378,6 +378,8 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
     /* Bind the idle stack */
     Prcb->SpBase = IdleStack;
 
+    KiArm64SaveProcessorClock((ULONG)Number);
+
     /* Boot CPU only work */
     if (Number == 0)
     {
@@ -660,6 +662,95 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
     KiIdleLoop();
 }
 
+static
+ULONG64
+KiArm64MeasureCpuClockHz(_In_ ULONG64 CounterFrequency)
+{
+    ULONG64 Dfr0, Pmcr, StartTicks, NowTicks, StartCycles, EndCycles;
+    ULONG64 WindowTicks, Cycles, Ticks, PmuVer;
+
+    __asm__ __volatile__("mrs %0, id_aa64dfr0_el1" : "=r"(Dfr0));
+    PmuVer = (Dfr0 >> 8) & 0xF;
+    if (PmuVer == 0 || PmuVer == 0xF)
+    {
+        return 0;
+    }
+
+    __asm__ __volatile__("mrs %0, pmcr_el0" : "=r"(Pmcr));
+    __asm__ __volatile__("msr pmccfiltr_el0, %0" : : "r"(0ULL));
+    __asm__ __volatile__("msr pmcntenset_el0, %0" : : "r"(1ULL << 31));
+    Pmcr = (Pmcr | 0x45ULL) & ~0x8ULL;
+    __asm__ __volatile__("msr pmcr_el0, %0" : : "r"(Pmcr));
+    __asm__ __volatile__("isb");
+
+    WindowTicks = (CounterFrequency + 499ULL) / 500ULL;
+    __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(StartTicks));
+    __asm__ __volatile__("mrs %0, pmccntr_el0" : "=r"(StartCycles));
+    do
+    {
+        __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(NowTicks));
+    } while ((NowTicks - StartTicks) < WindowTicks);
+    __asm__ __volatile__("isb");
+    __asm__ __volatile__("mrs %0, pmccntr_el0" : "=r"(EndCycles));
+
+    Cycles = EndCycles - StartCycles;
+    Ticks = NowTicks - StartTicks;
+    if (Cycles == 0 || Ticks == 0)
+    {
+        return 0;
+    }
+
+    return (Cycles * CounterFrequency) / Ticks;
+}
+
+ULONG64 KiArm64CpuClockHz[MAXIMUM_PROCESSORS];
+
+VOID
+NTAPI
+KiArm64SaveProcessorClock(_In_ ULONG ProcessorNumber)
+{
+    ULONG64 CounterFrequency = 0;
+    ULONG64 CpuClock;
+
+    if (ProcessorNumber >= MAXIMUM_PROCESSORS)
+    {
+        return;
+    }
+
+    __asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(CounterFrequency));
+    if (CounterFrequency == 0)
+    {
+        CounterFrequency = 62500000ULL;
+    }
+
+    CpuClock = KiArm64MeasureCpuClockHz(CounterFrequency);
+    if (CpuClock >= 10000000ULL)
+    {
+        KiArm64CpuClockHz[ProcessorNumber] = CpuClock;
+        DPRINT1("[arm64] CPU%u clock %u MHz\n",
+                ProcessorNumber,
+                (ULONG)((CpuClock + 500000ULL) / 1000000ULL));
+    }
+}
+
+ULONG
+NTAPI
+KiArm64GetProcessorClockMHz(_In_ ULONG ProcessorNumber)
+{
+    ULONG64 CpuClock = 0;
+
+    if (ProcessorNumber < MAXIMUM_PROCESSORS)
+    {
+        CpuClock = KiArm64CpuClockHz[ProcessorNumber];
+    }
+    if (CpuClock == 0)
+    {
+        CpuClock = KiArm64CpuClockHz[0];
+    }
+
+    return (ULONG)((CpuClock + 500000ULL) / 1000000ULL);
+}
+
 VOID
 NTAPI
 KiInitializePcr(_In_ ULONG ProcessorNumber,
@@ -778,7 +869,7 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
         ULONG64 CounterFrequency = KiArm64GetCounterFrequency();
 
         Pcr->Prcb.CycleCounterFrequency = CounterFrequency;
-        Pcr->Prcb.MHz = (ULONG)((CounterFrequency + 999999ULL) / 1000000ULL);
+        Pcr->Prcb.MHz = (ULONG)((CounterFrequency + 500000ULL) / 1000000ULL);
     }
 
     Arm64Block = (KeLoaderBlock != NULL) ? &KeLoaderBlock->u.Arm64 : NULL;

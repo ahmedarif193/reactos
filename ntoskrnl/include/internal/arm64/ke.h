@@ -570,6 +570,16 @@ NTAPI
 KeStartArm64ProcessorTimer(
     VOID);
 
+VOID
+NTAPI
+KiArm64SaveProcessorClock(
+    _In_ ULONG ProcessorNumber);
+
+ULONG
+NTAPI
+KiArm64GetProcessorClockMHz(
+    _In_ ULONG ProcessorNumber);
+
 ULONG
 FASTCALL
 HalGetGicPriorityMask(VOID);
