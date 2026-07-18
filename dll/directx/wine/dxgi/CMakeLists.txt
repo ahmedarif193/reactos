@@ -2,7 +2,7 @@ spec2def(dxgi.dll dxgi.spec ADD_IMPORTLIB)
 
 # D3DKMTEnumAdapters2 is part of the Win8+ thunk surface; match the WDDM 2.0 kernel stack contract.
 remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
-add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x5023)
+add_definitions(-DDXGKDDI_INTERFACE_VERSION=0xF003)
 
 list(APPEND SOURCE
     adapter.c

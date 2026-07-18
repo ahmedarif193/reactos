@@ -26,7 +26,7 @@ add_definitions(-DNTDDI_VERSION=0x06010000)    # NTDDI_WIN7
 # The global default DXGKDDI version (0x1052) gates out the WDDM 2.0 ABI fields.
 # Raise it to WDDM 2.0 to match dxgkrnl; this does not claim a GPU MMU.
 remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
-add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x5023)
+add_definitions(-DDXGKDDI_INTERFACE_VERSION=0xF003)
 
 list(APPEND SOURCE
     softgpu.c
