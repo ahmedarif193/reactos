@@ -99,6 +99,69 @@ KiGetCpuVendor(VOID)
     return Prcb->CpuVendor;
 }
 
+static struct
+{
+    ULONG64 Aperf;
+    ULONG64 Mperf;
+    ULONG Mhz;
+} KiAmd64ClockSample[MAXIMUM_PROCESSORS];
+
+static LONG KiAmd64AperfMperfState;
+
+ULONG
+NTAPI
+KiAmd64QueryEffectiveMHz(_In_ ULONG ProcessorNumber)
+{
+    CPU_INFO CpuInfo;
+    ULONG64 Aperf, Mperf, DeltaAperf, DeltaMperf;
+    ULONG BaseMhz, Mhz;
+
+    if (ProcessorNumber >= MAXIMUM_PROCESSORS)
+    {
+        return 0;
+    }
+
+    BaseMhz = KiProcessorBlock[ProcessorNumber]->MHz;
+
+    if (KiAmd64AperfMperfState == 0)
+    {
+        KiCpuId(&CpuInfo, 0);
+        if (CpuInfo.Eax >= 6)
+        {
+            KiCpuId(&CpuInfo, 6);
+            KiAmd64AperfMperfState = (CpuInfo.Ecx & 1) ? 1 : -1;
+        }
+        else
+        {
+            KiAmd64AperfMperfState = -1;
+        }
+    }
+
+    if ((KiAmd64AperfMperfState < 0) || (BaseMhz == 0))
+    {
+        return BaseMhz;
+    }
+
+    Mperf = __readmsr(MSR_IA32_MPERF);
+    Aperf = __readmsr(MSR_IA32_APERF);
+
+    DeltaAperf = Aperf - KiAmd64ClockSample[ProcessorNumber].Aperf;
+    DeltaMperf = Mperf - KiAmd64ClockSample[ProcessorNumber].Mperf;
+
+    if (DeltaMperf < 100000ULL)
+    {
+        Mhz = KiAmd64ClockSample[ProcessorNumber].Mhz;
+        return Mhz ? Mhz : BaseMhz;
+    }
+
+    KiAmd64ClockSample[ProcessorNumber].Aperf = Aperf;
+    KiAmd64ClockSample[ProcessorNumber].Mperf = Mperf;
+
+    Mhz = (ULONG)(((ULONG64)BaseMhz * DeltaAperf + (DeltaMperf / 2)) / DeltaMperf);
+    KiAmd64ClockSample[ProcessorNumber].Mhz = Mhz;
+    return Mhz;
+}
+
 VOID
 NTAPI
 KiSetProcessorType(VOID)
