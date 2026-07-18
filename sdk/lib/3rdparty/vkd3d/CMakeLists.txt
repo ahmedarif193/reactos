@@ -37,6 +37,7 @@ list(APPEND SOURCE
     libs/vkd3d-shader/hlsl_constant_ops.c
     libs/vkd3d-shader/ir.c
     libs/vkd3d-shader/msl.c
+    libs/vkd3d-shader/reactos_runtime.c
     libs/vkd3d-shader/spirv.c
     libs/vkd3d-shader/tpf.c
     libs/vkd3d-shader/vkd3d_shader_main.c

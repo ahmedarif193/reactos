@@ -267,7 +267,11 @@ static void vkd3d_log_callback(const char *fmt, va_list args)
     char buffer[1024];
 
     vsnprintf(buffer, sizeof(buffer), fmt, args);
+#ifdef __REACTOS__
+    wine_dbg_printf("%s", buffer);
+#else
     __wine_dbg_output(buffer);
+#endif
 }
 
 static BOOL wined3d_dll_init(HINSTANCE hInstDLL)
@@ -490,7 +494,11 @@ static BOOL wined3d_dll_init(HINSTANCE hInstDLL)
         else putenv( "VKD3D_SHADER_DEBUG=none" );
     }
 
+#ifdef __REACTOS__
+    vkd3d_shader_set_log_callback(vkd3d_log_callback);
+#else
     vkd3d_set_log_callback(vkd3d_log_callback);
+#endif
 
     return TRUE;
 }

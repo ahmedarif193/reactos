@@ -26,6 +26,10 @@
 #define COBJMACROS
 #include "wine/debug.h"
 
+#ifdef __REACTOS__
+#define debugstr_fourcc(fourcc) wine_dbg_sprintf("0x%08x", (unsigned int)(fourcc))
+#endif
+
 #include "winbase.h"
 #include "wingdi.h"
 #include "winuser.h"

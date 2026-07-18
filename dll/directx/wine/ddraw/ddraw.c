@@ -25,6 +25,11 @@
 #include "ddrawi.h"
 #include "d3dhal.h"
 
+#ifdef __REACTOS__
+typedef D3DDEVICEDESC2 D3DDEVICEDESC_V2;
+typedef D3DDEVICEDESC D3DDEVICEDESC_V3;
+#endif
+
 #include "wine/exception.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(ddraw);

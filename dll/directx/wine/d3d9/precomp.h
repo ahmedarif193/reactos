@@ -9,5 +9,6 @@
 #define COM_NO_WINDOWS_H
 
 #include "d3d9_private.h"
+#include <winnls.h>
 
 #endif /* __WINE_D3D9_PRECOMP_H */

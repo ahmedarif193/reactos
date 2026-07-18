@@ -24,6 +24,15 @@
 #include "hlsl.h"
 #include "hlsl.tab.h"
 
+#ifdef __REACTOS__
+#undef stdin
+#undef stdout
+#undef stderr
+#define stdin (__iob_func() + 0)
+#define stdout (__iob_func() + 1)
+#define stderr (__iob_func() + 2)
+#endif
+
 #define YYSTYPE HLSL_YYSTYPE
 #define YYLTYPE HLSL_YYLTYPE
 

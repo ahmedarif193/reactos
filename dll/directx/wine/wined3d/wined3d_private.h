@@ -46,6 +46,15 @@
 #include "ddk/d3dkmthk.h"
 #include "wine/debug.h"
 
+#if defined(__REACTOS__) && !defined(_SSIZE_T_DEFINED)
+typedef SSIZE_T ssize_t;
+#define _SSIZE_T_DEFINED
+#endif
+
+#ifdef __REACTOS__
+#define debugstr_fourcc(fourcc) wine_dbg_sprintf("0x%08x", (unsigned int)(fourcc))
+#endif
+
 #include "objbase.h"
 #include "wine/wined3d.h"
 #include "wine/list.h"
