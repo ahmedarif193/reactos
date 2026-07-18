@@ -38,9 +38,7 @@ UefiConsPutChar(int c)
          * framebuffer-wide pixel move, so batching it keeps continuous
          * output at glyph-drawing speed instead of paying that move for
          * every single printed line */
-        ScrollLines = Height / 2;
-        if (ScrollLines == 0)
-            ScrollLines = 1;
+        ScrollLines = max(Height / 2, 1UL);
         UefiVideoScrollUp(CurrentAttr, ScrollLines);
         CurrentCursorY = Height - ScrollLines;
     }
