@@ -17,33 +17,62 @@
 TDI_STATUS InfoTdiQueryGetRouteTable( PIP_INTERFACE IF, PNDIS_BUFFER Buffer, PUINT BufferSize ) {
     TDI_STATUS Status;
     KIRQL OldIrql;
-    UINT RtCount = CountFIBs(IF);
-    UINT Size = sizeof( IPROUTE_ENTRY ) * RtCount;
+    UINT RtCount;
+    UINT Capacity = CountFIBs(IF);
+    UINT Size;
     PFIB_ENTRY RCache, RCacheCur;
     PIPROUTE_ENTRY RouteEntries, RtCurrent;
     UINT i;
 
     TI_DbgPrint(DEBUG_INFO, ("Called, routes = %d\n",
-			    RtCount));
+				    Capacity));
 
-    if (RtCount == 0)
+    if (Capacity == 0)
         return InfoCopyOut(NULL, 0, NULL, BufferSize);
 
-    RouteEntries = ExAllocatePoolWithTag( NonPagedPool, Size, ROUTE_ENTRY_TAG );
-    RtCurrent = RouteEntries;
+    for (;;) {
+        if (Capacity > MAXULONG / sizeof(FIB_ENTRY))
+            return TDI_NO_RESOURCES;
 
-    RCache = ExAllocatePoolWithTag( NonPagedPool, sizeof( FIB_ENTRY ) * RtCount, FIB_TAG );
-    RCacheCur = RCache;
+        RCache = ExAllocatePoolWithTag(NonPagedPool, sizeof(FIB_ENTRY) * Capacity, FIB_TAG);
+        if (!RCache)
+            return TDI_NO_RESOURCES;
 
-    if( !RCache || !RouteEntries ) {
-	if( RCache ) ExFreePoolWithTag( RCache, FIB_TAG );
-	if( RouteEntries ) ExFreePoolWithTag( RouteEntries, ROUTE_ENTRY_TAG );
-	return TDI_NO_RESOURCES;
+        RtCount = CopyFIBs(IF, RCache, Capacity);
+        if (RtCount <= Capacity)
+            break;
+
+        for (i = 0; i < Capacity; i++)
+            NBDereferenceNeighbor(RCache[i].Router);
+
+        ExFreePoolWithTag(RCache, FIB_TAG);
+        Capacity = RtCount;
     }
 
-    RtlZeroMemory( RouteEntries, Size );
+    if (RtCount == 0) {
+        ExFreePoolWithTag(RCache, FIB_TAG);
+        return InfoCopyOut(NULL, 0, NULL, BufferSize);
+    }
 
-    RtCount = CopyFIBs( IF, RCache );
+    if (RtCount > MAXULONG / sizeof(IPROUTE_ENTRY)) {
+        for (i = 0; i < RtCount; i++)
+            NBDereferenceNeighbor(RCache[i].Router);
+        ExFreePoolWithTag(RCache, FIB_TAG);
+        return TDI_NO_RESOURCES;
+    }
+
+    Size = sizeof(IPROUTE_ENTRY) * RtCount;
+    RouteEntries = ExAllocatePoolWithTag(NonPagedPool, Size, ROUTE_ENTRY_TAG);
+    if (!RouteEntries) {
+        for (i = 0; i < RtCount; i++)
+            NBDereferenceNeighbor(RCache[i].Router);
+        ExFreePoolWithTag(RCache, FIB_TAG);
+        return TDI_NO_RESOURCES;
+    }
+
+    RtlZeroMemory(RouteEntries, Size);
+    RtCurrent = RouteEntries;
+    RCacheCur = RCache;
 
     while( RtCurrent < RouteEntries + RtCount ) {
 	ASSERT(RCacheCur->Router);
@@ -86,6 +115,9 @@ TDI_STATUS InfoTdiQueryGetRouteTable( PIP_INTERFACE IF, PNDIS_BUFFER Buffer, PUI
     }
 
     Status = InfoCopyOut( (PCHAR)RouteEntries, Size, Buffer, BufferSize );
+
+    for (i = 0; i < RtCount; i++)
+        NBDereferenceNeighbor(RCache[i].Router);
 
     ExFreePoolWithTag( RouteEntries, ROUTE_ENTRY_TAG );
     ExFreePoolWithTag( RCache, FIB_TAG );

@@ -12,6 +12,25 @@
 
 NEIGHBOR_CACHE_TABLE NeighborCache[NB_HASHMASK + 1];
 
+VOID NBReferenceNeighbor(PNEIGHBOR_CACHE_ENTRY NCE)
+{
+    ASSERT(NCE->RefCount > 0);
+    InterlockedIncrement(&NCE->RefCount);
+}
+
+VOID NBDereferenceNeighbor(PNEIGHBOR_CACHE_ENTRY NCE)
+{
+    ASSERT(NCE->RefCount > 0);
+
+    if (InterlockedDecrement(&NCE->RefCount) == 0)
+    {
+        ASSERT(NCE->Removed);
+        ASSERT(IsListEmpty(&NCE->PacketQueue));
+        IPDereferenceInterface(NCE->Interface);
+        ExFreePoolWithTag(NCE, NCE_TAG);
+    }
+}
+
 VOID NBCompleteSend( PVOID Context,
 		     PNDIS_PACKET NdisPacket,
 		     NDIS_STATUS Status ) {
@@ -152,8 +171,8 @@ VOID NBTimeout(VOID)
                     }
 
                     NBFlushPacketQueue(NCE, Status);
-
-                    ExFreePoolWithTag(NCE, NCE_TAG);
+                    NCE->Removed = TRUE;
+                    NBDereferenceNeighbor(NCE);
 
                     continue;
                 }
@@ -203,8 +222,8 @@ VOID NBShutdown(VOID)
 
           /* Flush wait queue */
 	  NBFlushPacketQueue( CurNCE, NDIS_STATUS_NOT_ACCEPTED );
-
-          ExFreePoolWithTag(CurNCE, NCE_TAG);
+          CurNCE->Removed = TRUE;
+          NBDereferenceNeighbor(CurNCE);
 
 	  CurNCE = NextNCE;
       }
@@ -254,7 +273,8 @@ VOID NBDestroyNeighborsForInterface(PIP_INTERFACE Interface)
                 *PrevNCE = NCE->Next;
 
                 NBFlushPacketQueue(NCE, NDIS_STATUS_REQUEST_ABORTED);
-                ExFreePoolWithTag(NCE, NCE_TAG);
+                NCE->Removed = TRUE;
+                NBDereferenceNeighbor(NCE);
 
                 continue;
             }
@@ -293,6 +313,7 @@ PNEIGHBOR_CACHE_ENTRY NBAddNeighbor(
  */
 {
   PNEIGHBOR_CACHE_ENTRY NCE;
+  PNEIGHBOR_CACHE_ENTRY ExistingNCE;
   ULONG HashValue;
   KIRQL OldIrql;
   IP_ADDRESS InternalAddress;
@@ -309,6 +330,14 @@ PNEIGHBOR_CACHE_ENTRY NBAddNeighbor(
   if (NCE == NULL)
     {
       TI_DbgPrint(MIN_TRACE, ("Insufficient resources.\n"));
+      return NULL;
+    }
+
+  RtlZeroMemory(NCE, sizeof(*NCE));
+
+  if (!IPReferenceInterface(Interface))
+    {
+      ExFreePoolWithTag(NCE, NCE_TAG);
       return NULL;
     }
 
@@ -339,12 +368,40 @@ PNEIGHBOR_CACHE_ENTRY NBAddNeighbor(
   HashValue ^= HashValue >> 4;
   HashValue &= NB_HASHMASK;
 
-  TcpipAcquireSpinLock(&NeighborCache[HashValue].Lock, &OldIrql);
+  TcpipAcquireSpinLock(&InterfaceListLock, &OldIrql);
 
+  if (!Interface->Registered)
+    {
+      TcpipReleaseSpinLock(&InterfaceListLock, OldIrql);
+      IPDereferenceInterface(Interface);
+      ExFreePoolWithTag(NCE, NCE_TAG);
+      return NULL;
+    }
+
+  TcpipAcquireSpinLockAtDpcLevel(&NeighborCache[HashValue].Lock);
+
+  for (ExistingNCE = NeighborCache[HashValue].Cache;
+       ExistingNCE != NULL;
+       ExistingNCE = ExistingNCE->Next)
+    {
+      if (ExistingNCE->Interface == Interface &&
+          AddrIsEqual(&ExistingNCE->Address, &InternalAddress))
+        {
+          NBReferenceNeighbor(ExistingNCE);
+          TcpipReleaseSpinLockFromDpcLevel(&NeighborCache[HashValue].Lock);
+          TcpipReleaseSpinLock(&InterfaceListLock, OldIrql);
+          IPDereferenceInterface(Interface);
+          ExFreePoolWithTag(NCE, NCE_TAG);
+          return ExistingNCE;
+        }
+    }
+
+  NCE->RefCount = 2;
   NCE->Next = NeighborCache[HashValue].Cache;
   NeighborCache[HashValue].Cache = NCE;
 
-  TcpipReleaseSpinLock(&NeighborCache[HashValue].Lock, OldIrql);
+  TcpipReleaseSpinLockFromDpcLevel(&NeighborCache[HashValue].Lock);
+  TcpipReleaseSpinLock(&InterfaceListLock, OldIrql);
 
   return NCE;
 }
@@ -375,6 +432,12 @@ VOID NBUpdateNeighbor(
     HashValue &= NB_HASHMASK;
 
     TcpipAcquireSpinLock(&NeighborCache[HashValue].Lock, &OldIrql);
+
+    if (NCE->Removed)
+    {
+        TcpipReleaseSpinLock(&NeighborCache[HashValue].Lock, OldIrql);
+        return;
+    }
 
     RtlCopyMemory(NCE->LinkAddress, LinkAddress, NCE->LinkAddressLength);
     NCE->State = State;
@@ -438,7 +501,6 @@ PNEIGHBOR_CACHE_ENTRY NBLocateNeighbor(
   PNEIGHBOR_CACHE_ENTRY NCE;
   UINT HashValue;
   KIRQL OldIrql;
-  PIP_INTERFACE FirstInterface;
   IP_ADDRESS InternalAddress;
 
   TI_DbgPrint(DEBUG_NCACHE, ("Called. Address (0x%X).\n", Address));
@@ -457,51 +519,18 @@ PNEIGHBOR_CACHE_ENTRY NBLocateNeighbor(
 
   TcpipAcquireSpinLock(&NeighborCache[HashValue].Lock, &OldIrql);
 
-  /* If there's no adapter specified, we'll look for a match on
-   * each one. */
-  if (Interface == NULL)
+  NCE = NeighborCache[HashValue].Cache;
+  while (NCE != NULL)
   {
-      FirstInterface = GetDefaultInterface();
-      Interface = FirstInterface;
-  }
-  else
-  {
-      FirstInterface = NULL;
-  }
-
-  do
-  {
-      NCE = NeighborCache[HashValue].Cache;
-      while (NCE != NULL)
+      if ((Interface == NULL || NCE->Interface == Interface) &&
+          AddrIsEqual(&InternalAddress, &NCE->Address))
       {
-         if (NCE->Interface == Interface &&
-             AddrIsEqual(&InternalAddress, &NCE->Address))
-         {
-             break;
-         }
-
-         NCE = NCE->Next;
-      }
-
-      if (NCE != NULL)
+          ASSERT(!NCE->Removed);
+          NBReferenceNeighbor(NCE);
           break;
-  }
-  while ((FirstInterface != NULL) &&
-         ((Interface = GetDefaultInterface()) != FirstInterface));
-
-  if ((NCE == NULL) && (FirstInterface != NULL))
-  {
-      /* This time we'll even match loopback NCEs */
-      NCE = NeighborCache[HashValue].Cache;
-      while (NCE != NULL)
-      {
-         if (AddrIsEqual(&InternalAddress, &NCE->Address))
-         {
-             break;
-         }
-
-         NCE = NCE->Next;
       }
+
+      NCE = NCE->Next;
   }
 
   TcpipReleaseSpinLock(&NeighborCache[HashValue].Lock, OldIrql);
@@ -590,6 +619,15 @@ BOOLEAN NBQueuePacket(
   Packet->Complete = PacketComplete;
   Packet->Context = PacketContext;
   Packet->Packet = NdisPacket;
+
+  if (NCE->Removed)
+    {
+      TcpipReleaseSpinLock(&NeighborCache[HashValue].Lock, OldIrql);
+      PacketComplete(PacketContext, NdisPacket, NDIS_STATUS_REQUEST_ABORTED);
+      ExFreePoolWithTag(Packet, NEIGHBOR_PACKET_TAG);
+      return TRUE;
+    }
+
   InsertTailList( &NCE->PacketQueue, &Packet->Next );
 
   TcpipReleaseSpinLock(&NeighborCache[HashValue].Lock, OldIrql);
@@ -637,7 +675,8 @@ VOID NBRemoveNeighbor(
           *PrevNCE = CurNCE->Next;
 
 	  NBFlushPacketQueue( CurNCE, NDIS_STATUS_REQUEST_ABORTED );
-          ExFreePoolWithTag(CurNCE, NCE_TAG);
+          CurNCE->Removed = TRUE;
+          NBDereferenceNeighbor(CurNCE);
 
 	  break;
         }
