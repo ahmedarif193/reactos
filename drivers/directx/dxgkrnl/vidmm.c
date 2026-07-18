@@ -7101,3 +7101,34 @@ DxgkVidMmQueryProcessBudget(
      * only truthful AvailableForReservation value. */
     return STATUS_SUCCESS;
 }
+
+NTSTATUS
+DxgkVidMmQuerySegmentSizes(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Out_ D3DKMT_SEGMENTGROUPSIZEINFO *Info)
+{
+    PDXGKRNL_SEGMENT Segments;
+    ULONG SegmentCount;
+    ULONG Index;
+
+    PAGED_CODE();
+    if (Adapter == NULL || Info == NULL)
+        return STATUS_INVALID_PARAMETER;
+    RtlZeroMemory(Info, sizeof(*Info));
+    Segments = ADAPTER_SEGMENTS(Adapter);
+    SegmentCount = Adapter->SegmentCount;
+    if (SegmentCount != 0 && Segments == NULL)
+        return STATUS_DEVICE_NOT_READY;
+    for (Index = 0; Index < SegmentCount; ++Index)
+    {
+        ExAcquireFastMutex(&Segments[Index].Lock);
+        if (VidMmSegmentIsAperture(&Segments[Index]))
+            DxgkpVidMmSaturatingAdd(&Info->NonLocalMemory, Segments[Index].Size);
+        else
+            DxgkpVidMmSaturatingAdd(&Info->LocalMemory, Segments[Index].Size);
+        ExReleaseFastMutex(&Segments[Index].Lock);
+    }
+    Info->LegacyInfo.DedicatedVideoMemorySize = Info->LocalMemory;
+    Info->LegacyInfo.SharedSystemMemorySize = Info->NonLocalMemory;
+    return STATUS_SUCCESS;
+}

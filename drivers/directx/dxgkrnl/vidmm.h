@@ -429,6 +429,11 @@ DxgkVidMmQueryProcessBudget(
     _Out_ UINT64 *AvailableForReservation);
 
 NTSTATUS
+DxgkVidMmQuerySegmentSizes(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Out_ D3DKMT_SEGMENTGROUPSIZEINFO *Info);
+
+NTSTATUS
 DxgkVidMmReferenceAllocation(
     _In_opt_ HANDLE Handle,
     _In_opt_ PDXGKRNL_ADAPTER ExpectedAdapter,

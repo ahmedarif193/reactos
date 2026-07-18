@@ -21,6 +21,7 @@ extern void func_overlay(void);
 extern void func_power(void);
 extern void func_D3dkmtAdapterInfo(void);
 extern void func_adapterclass(void);
+extern void func_wddmcaps(void);
 extern void func_sharing(void);
 extern void func_syncext(void);
 extern void func_keyedmutexlife(void);
@@ -70,6 +71,7 @@ const struct test winetest_testlist[] =
     { "power",         func_power },
     { "D3dkmtAdapterInfo", func_D3dkmtAdapterInfo },
     { "adapterclass",  func_adapterclass },
+    { "wddmcaps",      func_wddmcaps },
     { "sharing",       func_sharing },
     { "syncext",       func_syncext },
     { "keyedmutexlife", func_keyedmutexlife },
