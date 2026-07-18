@@ -56,13 +56,52 @@ C_ASSERT(FIELD_OFFSET(RXGK_SUBMITCOMMAND_PACKET, ContextHandle) == 32);
 C_ASSERT(FIELD_OFFSET(RXGK_SUBMITCOMMAND_PACKET, PrivateDriverDataSize) == 36);
 C_ASSERT(FIELD_OFFSET(RXGK_SUBMITCOMMAND_PACKET, PrivateDriverDataOffset) == 40);
 C_ASSERT(FIELD_OFFSET(RXGK_SUBMITCOMMAND_PACKET, Reserved) == 44);
+C_ASSERT(DXGKRNL_INTERFACE_VERSION_1_SIZE == FIELD_OFFSET(REACTOS_WIN32K_DXGKRNL_INTERFACE, RxgkIntPfnCreateContextVirtual));
+C_ASSERT(DXGKRNL_INTERFACE_VERSION_2_SIZE == FIELD_OFFSET(REACTOS_WIN32K_DXGKRNL_INTERFACE, RxgkIntPfnCreateAllocation2));
+C_ASSERT(DXGKRNL_INTERFACE_VERSION_3_SIZE == sizeof(REACTOS_WIN32K_DXGKRNL_INTERFACE));
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, hAllocation) == 0);
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, hAllocation) == 0);
 #if defined(_WIN64)
+C_ASSERT(DXGKRNL_INTERFACE_VERSION_1_SIZE == 536);
+C_ASSERT(DXGKRNL_INTERFACE_VERSION_2_SIZE == 552);
+C_ASSERT(DXGKRNL_INTERFACE_VERSION_3_SIZE == 560);
+C_ASSERT(sizeof(D3DDDI_ALLOCATIONINFO) == 40);
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, pSystemMem) == 8);
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, pPrivateDriverData) == 16);
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, Flags) == 32);
+C_ASSERT(sizeof(D3DDDI_ALLOCATIONINFO2) == 96);
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, pSystemMem) == 8);
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, pPrivateDriverData) == 16);
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, Flags) == 32);
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, GpuVirtualAddress) == 40);
+#if ((DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2) || (D3D_UMD_INTERFACE_VERSION >= D3D_UMD_INTERFACE_VERSION_WDDM2_2))
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, Reserved) == 56);
+#else
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, Reserved) == 48);
+#endif
 C_ASSERT(sizeof(D3DKMT_DESTROYALLOCATION2) == 24);
 C_ASSERT(FIELD_OFFSET(D3DKMT_DESTROYALLOCATION2, phAllocationList) == 8);
 C_ASSERT(FIELD_OFFSET(D3DKMT_DESTROYALLOCATION2, Flags) == 20);
 C_ASSERT(sizeof(D3DKMT_LOCK2) == 24);
 C_ASSERT(FIELD_OFFSET(D3DKMT_LOCK2, pData) == 16);
 #else
+C_ASSERT(DXGKRNL_INTERFACE_VERSION_1_SIZE == 268);
+C_ASSERT(DXGKRNL_INTERFACE_VERSION_2_SIZE == 276);
+C_ASSERT(DXGKRNL_INTERFACE_VERSION_3_SIZE == 280);
+C_ASSERT(sizeof(D3DDDI_ALLOCATIONINFO) == 24);
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, pSystemMem) == 4);
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, pPrivateDriverData) == 8);
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, Flags) == 20);
+C_ASSERT(sizeof(D3DDDI_ALLOCATIONINFO2) == 56);
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, pSystemMem) == 4);
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, pPrivateDriverData) == 8);
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, Flags) == 20);
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, GpuVirtualAddress) == 24);
+#if ((DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2) || (D3D_UMD_INTERFACE_VERSION >= D3D_UMD_INTERFACE_VERSION_WDDM2_2))
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, Reserved) == 36);
+#else
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, Reserved) == 32);
+#endif
 C_ASSERT(sizeof(D3DKMT_DESTROYALLOCATION2) == 20);
 C_ASSERT(FIELD_OFFSET(D3DKMT_DESTROYALLOCATION2, phAllocationList) == 8);
 C_ASSERT(FIELD_OFFSET(D3DKMT_DESTROYALLOCATION2, Flags) == 16);
@@ -90,6 +129,8 @@ C_ASSERT(sizeof(D3DKMT_UNLOCK2) == 8);
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x121, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_D3DKMT_CREATEALLOCATION \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x130, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_CREATEALLOCATION2 \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x138, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_D3DKMT_DESTROYALLOCATION \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x131, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_D3DKMT_LOCK \
@@ -541,16 +582,134 @@ D3DKMTDestroyDevice(
 
 /* ---- Allocation management ----------------------------------------------- */
 
-NTSTATUS
-APIENTRY
-D3DKMTCreateAllocation(
-    _Inout_ D3DKMT_CREATEALLOCATION *pData)
+typedef struct _WDDM_BRIDGE_ALLOCATION_INFO_VIEW
+{
+    D3DKMT_HANDLE hAllocation;
+    PVOID pSystemMem;
+    PVOID pPrivateDriverData;
+    UINT PrivateDriverDataSize;
+    UINT Flags;
+    D3DGPU_VIRTUAL_ADDRESS GpuVirtualAddress;
+} WDDM_BRIDGE_ALLOCATION_INFO_VIEW, *PWDDM_BRIDGE_ALLOCATION_INFO_VIEW;
+
+static VOID
+WddmBridgeReadAllocationInfo(
+    _In_ PVOID AllocationInfo,
+    _In_ BOOLEAN UseAllocationInfo2,
+    _In_ UINT Index,
+    _Out_ PWDDM_BRIDGE_ALLOCATION_INFO_VIEW View)
+{
+    RtlZeroMemory(View, sizeof(*View));
+    if (UseAllocationInfo2)
+    {
+        D3DDDI_ALLOCATIONINFO2 *Info = &((D3DDDI_ALLOCATIONINFO2 *)AllocationInfo)[Index];
+
+        View->hAllocation = Info->hAllocation;
+        View->pSystemMem = (PVOID)Info->pSystemMem;
+        View->pPrivateDriverData = Info->pPrivateDriverData;
+        View->PrivateDriverDataSize = Info->PrivateDriverDataSize;
+        View->Flags = Info->Flags.Value;
+        View->GpuVirtualAddress = Info->GpuVirtualAddress;
+    }
+    else
+    {
+        D3DDDI_ALLOCATIONINFO *Info = &((D3DDDI_ALLOCATIONINFO *)AllocationInfo)[Index];
+
+        View->hAllocation = Info->hAllocation;
+        View->pSystemMem = (PVOID)Info->pSystemMem;
+        View->pPrivateDriverData = Info->pPrivateDriverData;
+        View->PrivateDriverDataSize = Info->PrivateDriverDataSize;
+        View->Flags = Info->Flags.Value;
+    }
+}
+
+static VOID
+WddmBridgeSetAllocationPrivateData(
+    _Inout_ PVOID AllocationInfo,
+    _In_ BOOLEAN UseAllocationInfo2,
+    _In_ UINT Index,
+    _In_opt_ PVOID PrivateDriverData)
+{
+    if (UseAllocationInfo2)
+        ((D3DDDI_ALLOCATIONINFO2 *)AllocationInfo)[Index].pPrivateDriverData = PrivateDriverData;
+    else
+        ((D3DDDI_ALLOCATIONINFO *)AllocationInfo)[Index].pPrivateDriverData = PrivateDriverData;
+}
+
+static NTSTATUS
+WddmBridgeValidateAllocationInfo2(
+    _Inout_ D3DDDI_ALLOCATIONINFO2 *Info)
+{
+    CONST ULONG_PTR *Tail = (CONST ULONG_PTR *)((CONST UCHAR *)Info + sizeof(*Info) - (6 * sizeof(ULONG_PTR)));
+    UINT AllowedFlags = 0x1u;
+    UINT Index;
+
+#if ((DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8) || (D3D_UMD_INTERFACE_VERSION >= D3D_UMD_INTERFACE_VERSION_WIN8))
+    AllowedFlags |= 0x2u;
+#endif
+#if ((DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2) || (D3D_UMD_INTERFACE_VERSION >= D3D_UMD_INTERFACE_VERSION_WDDM2_2))
+    AllowedFlags |= 0x4u;
+    if ((Info->Flags.Value & ~AllowedFlags) != 0)
+        return STATUS_INVALID_PARAMETER;
+    for (Index = 1; Index < 6; ++Index)
+    {
+        if (Tail[Index] != 0)
+            return STATUS_INVALID_PARAMETER;
+    }
+    if ((Info->Flags.Value & 0x4u) == 0 && Tail[0] != 0)
+        return STATUS_INVALID_PARAMETER;
+    if ((Info->Flags.Value & 0x4u) != 0)
+        return STATUS_NOT_SUPPORTED;
+#else
+    if ((Info->Flags.Value & ~AllowedFlags) != 0)
+        return STATUS_INVALID_PARAMETER;
+    for (Index = 0; Index < 6; ++Index)
+    {
+        if (Tail[Index] != 0)
+            return STATUS_INVALID_PARAMETER;
+    }
+#endif
+
+    /* This field is output-only.  Zero is the physical-addressing/common-prefix
+     * result, not a fabricated mapping. Virtual-only inputs above stay gated
+     * until dxgkrnl can return a real process GPU virtual address. */
+    Info->GpuVirtualAddress = 0;
+    return STATUS_SUCCESS;
+}
+
+static VOID
+WddmBridgeScrubCreateAllocationOutputs(
+    _Inout_ D3DKMT_CREATEALLOCATION *UserCreateAllocation,
+    _Inout_updates_bytes_(AllocationCount * AllocationInfoStride) PVOID UserAllocationInfo,
+    _In_ UINT AllocationCount,
+    _In_ SIZE_T AllocationInfoStride,
+    _In_ BOOLEAN UseAllocationInfo2,
+    _In_ D3DKMT_HANDLE SafeResourceHandle)
+{
+    D3DKMT_HANDLE ZeroHandle = 0;
+    D3DGPU_VIRTUAL_ADDRESS ZeroGpuVirtualAddress = 0;
+    UINT Index;
+
+    for (Index = 0; Index < AllocationCount; ++Index)
+    {
+        (VOID)WddmBridgeSafeCopyTo((PUCHAR)UserAllocationInfo + ((SIZE_T)Index * AllocationInfoStride), &ZeroHandle, sizeof(ZeroHandle));
+        if (UseAllocationInfo2)
+            (VOID)WddmBridgeSafeCopyTo((PUCHAR)UserAllocationInfo + ((SIZE_T)Index * AllocationInfoStride) + FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, GpuVirtualAddress), &ZeroGpuVirtualAddress, sizeof(ZeroGpuVirtualAddress));
+    }
+    (VOID)WddmBridgeSafeCopyTo((PUCHAR)UserCreateAllocation + FIELD_OFFSET(D3DKMT_CREATEALLOCATION, hResource), &SafeResourceHandle, sizeof(SafeResourceHandle));
+    (VOID)WddmBridgeSafeCopyTo((PUCHAR)UserCreateAllocation + FIELD_OFFSET(D3DKMT_CREATEALLOCATION, hGlobalShare), &ZeroHandle, sizeof(ZeroHandle));
+}
+
+static NTSTATUS
+WddmBridgeCreateAllocation(
+    _Inout_ D3DKMT_CREATEALLOCATION *pData,
+    _In_ BOOLEAN UseAllocationInfo2)
 {
     typedef struct _WDDM_ALLOCATION_PRIVATE_CAPTURE { PVOID UserBuffer; UINT Size; } WDDM_ALLOCATION_PRIVATE_CAPTURE, *PWDDM_ALLOCATION_PRIVATE_CAPTURE;
     D3DKMT_CREATEALLOCATION Captured;
     D3DKMT_DESTROYALLOCATION DestroyAllocation;
-    D3DDDI_ALLOCATIONINFO *AllocationInfo = NULL;
-    D3DDDI_ALLOCATIONINFO *UserAllocationInfo;
+    PVOID AllocationInfo = NULL;
+    PVOID UserAllocationInfo;
     D3DKMT_HANDLE *CreatedHandles = NULL;
     PVOID *AllocationPrivateBuffers = NULL;
     PWDDM_ALLOCATION_PRIVATE_CAPTURE AllocationPrivateCapture = NULL;
@@ -560,6 +719,7 @@ D3DKMTCreateAllocation(
     SIZE_T AllocationPrivateCaptureSize;
     SIZE_T CreatedHandlesSize;
     SIZE_T PointerArraySize;
+    SIZE_T AllocationInfoStride;
     SIZE_T TotalPrivateSize = 0;
     ULONG_PTR Information = 0;
     D3DKMT_HANDLE InputDevice;
@@ -579,7 +739,7 @@ D3DKMTCreateAllocation(
     if (!NT_SUCCESS(Status))
         return Status;
 
-    UserAllocationInfo = Captured.pAllocationInfo;
+    UserAllocationInfo = UseAllocationInfo2 ? (PVOID)Captured.pAllocationInfo2 : (PVOID)Captured.pAllocationInfo;
     InputDevice = Captured.hDevice;
     InputResource = Captured.hResource;
     InputAllocationCount = Captured.NumAllocations;
@@ -588,13 +748,14 @@ D3DKMTCreateAllocation(
 
     if (Captured.NumAllocations == 0 ||
         Captured.NumAllocations > D3DKMT_BRIDGE_MAX_ALLOCATIONS ||
-        Captured.pAllocationInfo == NULL ||
+        UserAllocationInfo == NULL ||
         (InputCreatesResource && InputResource != 0))
     {
         return STATUS_INVALID_PARAMETER;
     }
 
-    Status = WddmBridgeSizeForCount(InputAllocationCount, sizeof(*AllocationInfo), &AllocationInfoSize);
+    AllocationInfoStride = UseAllocationInfo2 ? sizeof(D3DDDI_ALLOCATIONINFO2) : sizeof(D3DDDI_ALLOCATIONINFO);
+    Status = WddmBridgeSizeForCount(InputAllocationCount, AllocationInfoStride, &AllocationInfoSize);
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -653,6 +814,14 @@ D3DKMTCreateAllocation(
     Status = WddmBridgeSafeProbeForWrite((PUCHAR)pData + FIELD_OFFSET(D3DKMT_CREATEALLOCATION, hGlobalShare), sizeof(Captured.hGlobalShare));
     if (!NT_SUCCESS(Status))
         goto Cleanup;
+
+    /* ExistingSection changes the INFO2 union from pSystemMem to hSection.
+     * Section referencing and lifetime ownership are not implemented yet. */
+    if (UseAllocationInfo2 && ((*(CONST UINT *)&Captured.Flags & 0x00020000U) != 0))
+    {
+        Status = STATUS_NOT_SUPPORTED;
+        goto Cleanup;
+    }
 
     if (StandardAllocation)
     {
@@ -733,54 +902,69 @@ D3DKMTCreateAllocation(
 
     for (i = 0; i < InputAllocationCount; ++i)
     {
-        AllocationPrivateCapture[i].UserBuffer = AllocationInfo[i].pPrivateDriverData;
-        AllocationPrivateCapture[i].Size = AllocationInfo[i].PrivateDriverDataSize;
-        if (ExGetPreviousMode() != KernelMode && AllocationInfo[i].pSystemMem != NULL)
+        WDDM_BRIDGE_ALLOCATION_INFO_VIEW View;
+
+        if (UseAllocationInfo2)
+        {
+            Status = WddmBridgeValidateAllocationInfo2(&((D3DDDI_ALLOCATIONINFO2 *)AllocationInfo)[i]);
+            if (!NT_SUCCESS(Status))
+                goto Cleanup;
+        }
+        WddmBridgeReadAllocationInfo(AllocationInfo, UseAllocationInfo2, i, &View);
+        AllocationPrivateCapture[i].UserBuffer = View.pPrivateDriverData;
+        AllocationPrivateCapture[i].Size = View.PrivateDriverDataSize;
+        if (ExGetPreviousMode() != KernelMode && View.pSystemMem != NULL)
         {
             Status = STATUS_INVALID_PARAMETER;
             goto Cleanup;
         }
 
-        if (AllocationInfo[i].PrivateDriverDataSize == 0)
+        if (View.PrivateDriverDataSize == 0)
         {
-            AllocationInfo[i].pPrivateDriverData = NULL;
+            WddmBridgeSetAllocationPrivateData(AllocationInfo, UseAllocationInfo2, i, NULL);
             continue;
         }
 
-        if (AllocationInfo[i].pPrivateDriverData == NULL ||
-            AllocationInfo[i].PrivateDriverDataSize > D3DKMT_BRIDGE_MAX_PRIVATE_BYTES ||
-            TotalPrivateSize > D3DKMT_BRIDGE_MAX_PRIVATE_BYTES - AllocationInfo[i].PrivateDriverDataSize)
+        if (View.pPrivateDriverData == NULL || View.PrivateDriverDataSize > D3DKMT_BRIDGE_MAX_PRIVATE_BYTES || TotalPrivateSize > D3DKMT_BRIDGE_MAX_PRIVATE_BYTES - View.PrivateDriverDataSize)
         {
             Status = STATUS_INVALID_PARAMETER;
             goto Cleanup;
         }
 
-        AllocationPrivateBuffers[i] = ExAllocatePoolWithTag(NonPagedPool, AllocationInfo[i].PrivateDriverDataSize, TAG_WDDM_BRIDGE);
+        AllocationPrivateBuffers[i] = ExAllocatePoolWithTag(NonPagedPool, View.PrivateDriverDataSize, TAG_WDDM_BRIDGE);
         if (AllocationPrivateBuffers[i] == NULL)
         {
             Status = STATUS_INSUFFICIENT_RESOURCES;
             goto Cleanup;
         }
 
-        Status = WddmBridgeSafeCopyFrom(AllocationPrivateBuffers[i], AllocationInfo[i].pPrivateDriverData, AllocationInfo[i].PrivateDriverDataSize);
+        Status = WddmBridgeSafeCopyFrom(AllocationPrivateBuffers[i], View.pPrivateDriverData, View.PrivateDriverDataSize);
         if (!NT_SUCCESS(Status))
             goto Cleanup;
         Status = WddmBridgeSafeProbeForWrite(AllocationPrivateCapture[i].UserBuffer, AllocationPrivateCapture[i].Size);
         if (!NT_SUCCESS(Status))
             goto Cleanup;
 
-        AllocationInfo[i].pPrivateDriverData = AllocationPrivateBuffers[i];
-        TotalPrivateSize += AllocationInfo[i].PrivateDriverDataSize;
+        WddmBridgeSetAllocationPrivateData(AllocationInfo, UseAllocationInfo2, i, AllocationPrivateBuffers[i]);
+        TotalPrivateSize += View.PrivateDriverDataSize;
     }
 
-    Captured.pAllocationInfo = AllocationInfo;
+    if (UseAllocationInfo2)
+        Captured.pAllocationInfo2 = (D3DDDI_ALLOCATIONINFO2 *)AllocationInfo;
+    else
+        Captured.pAllocationInfo = (D3DDDI_ALLOCATIONINFO *)AllocationInfo;
 
-    Status = WddmBridgeSendIoctlWithInformation(IOCTL_D3DKMT_CREATEALLOCATION, &Captured, sizeof(Captured), &Captured, sizeof(Captured), &Information);
+    Status = WddmBridgeSendIoctlWithInformation(UseAllocationInfo2 ? IOCTL_D3DKMT_CREATEALLOCATION2 : IOCTL_D3DKMT_CREATEALLOCATION, &Captured, sizeof(Captured), &Captured, sizeof(Captured), &Information);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
     IoctlSucceeded = TRUE;
     for (i = 0; i < InputAllocationCount; ++i)
-        CreatedHandles[i] = AllocationInfo[i].hAllocation;
+    {
+        WDDM_BRIDGE_ALLOCATION_INFO_VIEW View;
+
+        WddmBridgeReadAllocationInfo(AllocationInfo, UseAllocationInfo2, i, &View);
+        CreatedHandles[i] = View.hAllocation;
+    }
     if (Information != sizeof(Captured) || Captured.NumAllocations != InputAllocationCount)
     {
         Status = STATUS_INFO_LENGTH_MISMATCH;
@@ -808,7 +992,16 @@ D3DKMTCreateAllocation(
             Status = WddmBridgeSafeCopyTo(AllocationPrivateCapture[i].UserBuffer, AllocationPrivateBuffers[i], AllocationPrivateCapture[i].Size);
     }
     for (i = 0; NT_SUCCESS(Status) && i < InputAllocationCount; ++i)
-        Status = WddmBridgeSafeCopyTo((PUCHAR)UserAllocationInfo + ((SIZE_T)i * sizeof(*UserAllocationInfo)) + FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, hAllocation), &AllocationInfo[i].hAllocation, sizeof(AllocationInfo[i].hAllocation));
+        Status = WddmBridgeSafeCopyTo((PUCHAR)UserAllocationInfo + ((SIZE_T)i * AllocationInfoStride), &CreatedHandles[i], sizeof(CreatedHandles[i]));
+    if (UseAllocationInfo2)
+    {
+        for (i = 0; NT_SUCCESS(Status) && i < InputAllocationCount; ++i)
+        {
+            D3DGPU_VIRTUAL_ADDRESS GpuVirtualAddress = ((D3DDDI_ALLOCATIONINFO2 *)AllocationInfo)[i].GpuVirtualAddress;
+
+            Status = WddmBridgeSafeCopyTo((PUCHAR)UserAllocationInfo + ((SIZE_T)i * AllocationInfoStride) + FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, GpuVirtualAddress), &GpuVirtualAddress, sizeof(GpuVirtualAddress));
+        }
+    }
     if (NT_SUCCESS(Status))
         Status = WddmBridgeSafeCopyTo((PUCHAR)pData + FIELD_OFFSET(D3DKMT_CREATEALLOCATION, hResource), &Captured.hResource, sizeof(Captured.hResource));
     if (NT_SUCCESS(Status))
@@ -841,6 +1034,7 @@ Rollback:
         }
         if (!NT_SUCCESS(CleanupStatus))
             DPRINT1("D3DKMTCreateAllocation: rollback failed with 0x%08lX\n", CleanupStatus);
+        WddmBridgeScrubCreateAllocationOutputs(pData, UserAllocationInfo, InputAllocationCount, AllocationInfoStride, UseAllocationInfo2, InputCreatesResource ? 0 : InputResource);
     }
 
 Cleanup:
@@ -871,6 +1065,22 @@ Cleanup:
         ExFreePoolWithTag(CreatedHandles, TAG_WDDM_BRIDGE);
 
     return Status;
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTCreateAllocation(
+    _Inout_ D3DKMT_CREATEALLOCATION *pData)
+{
+    return WddmBridgeCreateAllocation(pData, FALSE);
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTCreateAllocation2(
+    _Inout_ D3DKMT_CREATEALLOCATION *pData)
+{
+    return WddmBridgeCreateAllocation(pData, TRUE);
 }
 
 NTSTATUS
