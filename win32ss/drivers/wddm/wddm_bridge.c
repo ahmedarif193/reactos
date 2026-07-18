@@ -56,6 +56,11 @@ static volatile LONG g_WddmBridgeLockState = 0;
 static EX_RUNDOWN_REF g_WddmBridgeRundown;
 static BOOLEAN g_WddmBridgeRundownInitialized = FALSE;
 
+typedef struct _WDDM_BRIDGE_COMPLETION_CONTEXT
+{
+    ULONG OutputSize;
+} WDDM_BRIDGE_COMPLETION_CONTEXT, *PWDDM_BRIDGE_COMPLETION_CONTEXT;
+
 /* The mutex serializes state publication; rundown protects concurrent IOCTLs. */
 
 static NTSTATUS
@@ -67,6 +72,26 @@ WddmBridgeSendIoctlToDevice(
     _Out_opt_ PVOID OutputBuffer,
     _In_ ULONG OutputSize,
     _Out_opt_ PULONG_PTR Information);
+
+static NTSTATUS
+NTAPI
+WddmBridgeClampIoctlCompletion(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp,
+    _In_ PVOID Context)
+{
+    PWDDM_BRIDGE_COMPLETION_CONTEXT CompletionContext = Context;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    if (Irp->IoStatus.Information > CompletionContext->OutputSize)
+    {
+        Irp->IoStatus.Information = 0;
+        Irp->IoStatus.Status = STATUS_INFO_LENGTH_MISMATCH;
+    }
+
+    return STATUS_CONTINUE_COMPLETION;
+}
 
 /* ---- Helpers ------------------------------------------------------------- */
 
@@ -421,6 +446,7 @@ WddmBridgeSendIoctlToDevice(
 {
     KEVENT Event;
     IO_STATUS_BLOCK IoStatus;
+    WDDM_BRIDGE_COMPLETION_CONTEXT CompletionContext;
     PIRP Irp;
     NTSTATUS Status;
 
@@ -433,6 +459,7 @@ WddmBridgeSendIoctlToDevice(
     KeInitializeEvent(&Event, NotificationEvent, FALSE);
     IoStatus.Status = STATUS_NOT_SUPPORTED;
     IoStatus.Information = 0;
+    CompletionContext.OutputSize = OutputSize;
 
     /*
      * IoBuildDeviceIoControlRequest builds an IRP suitable for a
@@ -452,6 +479,8 @@ WddmBridgeSendIoctlToDevice(
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
+    IoSetCompletionRoutine(Irp, WddmBridgeClampIoctlCompletion, &CompletionContext, TRUE, TRUE, TRUE);
+
     /*
      * Patch to IRP_MJ_INTERNAL_DEVICE_CONTROL.
      * IoBuildDeviceIoControlRequest always sets MajorFunction to
@@ -465,10 +494,8 @@ WddmBridgeSendIoctlToDevice(
 
     /* Wait for asynchronous completion. */
     if (Status == STATUS_PENDING)
-    {
         KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
-        Status = IoStatus.Status;
-    }
+    Status = IoStatus.Status;
 
     if (Information != NULL)
         *Information = IoStatus.Information;

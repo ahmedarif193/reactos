@@ -2943,7 +2943,7 @@ DxgkSetDisplayMode(
     if (!NT_SUCCESS(Status))
         goto Cleanup;
 
-    Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)pSetDisplayMode->hPrimaryAllocation, Adapter, NULL, &Allocation);
+    Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)pSetDisplayMode->hPrimaryAllocation, Adapter, Device, &Allocation);
     if (!NT_SUCCESS(Status))
     {
         Status = STATUS_INVALID_HANDLE;

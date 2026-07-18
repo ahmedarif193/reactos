@@ -172,13 +172,7 @@ DxgkSyncObjectAttachMonitoredPage(
 
     _SEH2_TRY
     {
-        SyncObj->MonitoredValueUserVa = MmMapLockedPagesSpecifyCache(
-            SyncObj->MonitoredValueMdl,
-            UserMode,
-            MmCached,
-            NULL,
-            FALSE,
-            NormalPagePriority);
+        SyncObj->MonitoredValueUserVa = MmMapLockedPagesSpecifyCache(SyncObj->MonitoredValueMdl, UserMode, MmCached, NULL, FALSE, NormalPagePriority | MdlMappingNoWrite | MdlMappingNoExecute);
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
