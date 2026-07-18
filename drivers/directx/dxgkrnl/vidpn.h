@@ -140,6 +140,10 @@ DxgkpDeviceOwnsVidPnSource(
     _In_ D3DKMT_HANDLE hDevice,
     _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId);
 
+VOID
+DxgkVidPnCleanupDeviceOwners(
+    _In_ PDXGKRNL_DEVICE Device);
+
 /* ========================================================================
  * DXGKP_VIDPN - Internal VidPN object
  *

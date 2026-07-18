@@ -13,6 +13,9 @@
 #                     full call path from user-mode syscall to bridge
 #
 
+remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
+add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x5023)
+
 list(APPEND SOURCE
     wddm_bridge.c
     d3dkmt_stubs.c

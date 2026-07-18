@@ -345,6 +345,9 @@ Rpi5Vc4DdiSetVidPnSourceAddress(
     if (SetVidPnSourceAddress->VidPnSourceId != 0)
         return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE;
 
+    if (SetVidPnSourceAddress->PrimarySegment != 0 && SetVidPnSourceAddress->PrimarySegment != RPI5VC4_SEGMENT_ID)
+        return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+
     Target = SetVidPnSourceAddress->PrimaryAddress;
 
     /* A null address parks the scanout back on the firmware framebuffer. */

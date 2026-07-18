@@ -520,6 +520,135 @@ static void Test_LegacySync_V1_Lifecycle(void)
     CloseAdapter(hAdapter);
 }
 
+typedef struct _SYNC_DEVICE_TEARDOWN_RACE
+{
+    HANDLE StartEvent;
+    D3DKMT_HANDLE hDevice;
+    D3DKMT_HANDLE hSyncObject;
+    PFN_D3DKMTDestroyDevice DestroyDevice;
+    PFN_D3DKMTDestroySynchronizationObject DestroySyncObject;
+    volatile NTSTATUS DeviceStatus;
+    volatile NTSTATUS SyncStatus;
+} SYNC_DEVICE_TEARDOWN_RACE;
+
+static DWORD WINAPI SyncDeviceRaceDestroySync(LPVOID Parameter)
+{
+    SYNC_DEVICE_TEARDOWN_RACE *Race = Parameter;
+    D3DKMT_DESTROYSYNCHRONIZATIONOBJECT Destroy;
+
+    WaitForSingleObject(Race->StartEvent, INFINITE);
+    memset(&Destroy, 0, sizeof(Destroy));
+    Destroy.hSyncObject = Race->hSyncObject;
+    Race->SyncStatus = Race->DestroySyncObject(&Destroy);
+    return 0;
+}
+
+static DWORD WINAPI SyncDeviceRaceDestroyDevice(LPVOID Parameter)
+{
+    SYNC_DEVICE_TEARDOWN_RACE *Race = Parameter;
+    D3DKMT_DESTROYDEVICE Destroy;
+
+    WaitForSingleObject(Race->StartEvent, INFINITE);
+    memset(&Destroy, 0, sizeof(Destroy));
+    Destroy.hDevice = Race->hDevice;
+    Race->DeviceStatus = Race->DestroyDevice(&Destroy);
+    return 0;
+}
+
+/* Regression for direct sync-object destruction racing the device's bulk cleanup. */
+static void Test_SyncDeviceConcurrentTeardown(void)
+{
+    PFN_D3DKMTCreateSynchronizationObject CreateSyncObject;
+    PFN_D3DKMTDestroySynchronizationObject DestroySyncObject;
+    PFN_D3DKMTDestroyDevice DestroyDevice;
+    D3DKMT_HANDLE hAdapter;
+    ULONG Iteration;
+
+    CreateSyncObject = (PFN_D3DKMTCreateSynchronizationObject)LoadD3DKMTProc("D3DKMTCreateSynchronizationObject");
+    DestroySyncObject = (PFN_D3DKMTDestroySynchronizationObject)LoadD3DKMTProc("D3DKMTDestroySynchronizationObject");
+    DestroyDevice = (PFN_D3DKMTDestroyDevice)LoadD3DKMTProc("D3DKMTDestroyDevice");
+    if (!CreateSyncObject || !DestroySyncObject || !DestroyDevice)
+    {
+        skip("sync/device teardown race entry points not all exported\n");
+        return;
+    }
+
+    hAdapter = OpenRenderAdapterEx(NULL, NULL);
+    if (!hAdapter)
+        hAdapter = OpenAdapterFromDisplay1();
+    if (!hAdapter)
+    {
+        skip("No adapter for sync/device teardown race\n");
+        return;
+    }
+
+    for (Iteration = 0; Iteration < 32; ++Iteration)
+    {
+        SYNC_DEVICE_TEARDOWN_RACE Race;
+        D3DKMT_CREATESYNCHRONIZATIONOBJECT Create;
+        HANDLE Threads[2];
+        DWORD WaitStatus;
+
+        memset(&Race, 0, sizeof(Race));
+        Race.hDevice = CreateTestDevice(hAdapter);
+        if (!Race.hDevice)
+        {
+            skip("CreateDevice failed at teardown-race iteration %lu\n", Iteration);
+            break;
+        }
+
+        memset(&Create, 0, sizeof(Create));
+        Create.hDevice = Race.hDevice;
+        Create.Info.Type = D3DDDI_SYNCHRONIZATION_MUTEX;
+        if (!NT_SUCCESS(CreateSyncObject(&Create)))
+        {
+            skip("CreateSynchronizationObject failed at teardown-race iteration %lu\n", Iteration);
+            DestroyTestDevice(Race.hDevice);
+            break;
+        }
+
+        Race.hSyncObject = Create.hSyncObject;
+        Race.DestroyDevice = DestroyDevice;
+        Race.DestroySyncObject = DestroySyncObject;
+        Race.DeviceStatus = STATUS_UNSUCCESSFUL;
+        Race.SyncStatus = STATUS_UNSUCCESSFUL;
+        Race.StartEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+        Threads[0] = Race.StartEvent ? CreateThread(NULL, 0, SyncDeviceRaceDestroySync, &Race, 0, NULL) : NULL;
+        Threads[1] = Race.StartEvent ? CreateThread(NULL, 0, SyncDeviceRaceDestroyDevice, &Race, 0, NULL) : NULL;
+        if (!Race.StartEvent || !Threads[0] || !Threads[1])
+        {
+            if (Race.StartEvent)
+                SetEvent(Race.StartEvent);
+            if (Threads[0])
+                WaitForSingleObject(Threads[0], INFINITE);
+            if (Threads[1])
+                WaitForSingleObject(Threads[1], INFINITE);
+            if (Threads[0])
+                CloseHandle(Threads[0]);
+            if (Threads[1])
+                CloseHandle(Threads[1]);
+            if (Race.StartEvent)
+                CloseHandle(Race.StartEvent);
+            if (!Threads[1])
+                DestroyTestDevice(Race.hDevice);
+            skip("Unable to create teardown-race synchronization objects\n");
+            break;
+        }
+
+        SetEvent(Race.StartEvent);
+        WaitStatus = WaitForMultipleObjects(ARRAYSIZE(Threads), Threads, TRUE, 10000);
+        ok(WaitStatus == WAIT_OBJECT_0, "sync/device teardown race timed out at iteration %lu (wait=%lu)\n", Iteration, WaitStatus);
+        if (WaitStatus != WAIT_OBJECT_0)
+            WaitForMultipleObjects(ARRAYSIZE(Threads), Threads, TRUE, INFINITE);
+        ok(NT_SUCCESS(Race.DeviceStatus), "DestroyDevice failed at teardown-race iteration %lu with 0x%08lX (sync=0x%08lX)\n", Iteration, (long)Race.DeviceStatus, (long)Race.SyncStatus);
+        CloseHandle(Threads[0]);
+        CloseHandle(Threads[1]);
+        CloseHandle(Race.StartEvent);
+    }
+
+    CloseAdapter(hAdapter);
+}
+
 START_TEST(syncext)
 {
     /* NULL contract not already covered by sync.c / sync2.c. */
@@ -530,6 +659,7 @@ START_TEST(syncext)
     Test_OpenSyncObject_Positive();
     Test_WaitForIdle_Positive();
     Test_LegacySync_V1_Lifecycle();
+    Test_SyncDeviceConcurrentTeardown();
 }
 
 /* ===================================================================== */

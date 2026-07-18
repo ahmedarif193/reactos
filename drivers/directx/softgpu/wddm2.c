@@ -1,11 +1,9 @@
 /*
  * PROJECT:     ReactOS WDDM Null/Software GPU Miniport
  * LICENSE:     GPL-2.0+ (https://spdx.org/licenses/GPL-2.0+)
- * PURPOSE:     WDDM 2.0 DDI callbacks for softgpu.sys.
- *              Implements the GPU virtual-addressing / per-process page-table
- *              DDIs (CreateProcess, DestroyProcess, GetRootPageTableSize,
- *              SetRootPageTable, Map/UnmapCpuHostAperture) plus the virtual
- *              submission and GDI-render DDIs that dxgkrnl's WDDM2 paths drive.
+ * PURPOSE:     WDDM 2.0 ABI callbacks for softgpu.sys. The process/page-table
+ *              DDIs retain ABI bookkeeping only; the physical/software engine
+ *              has no GPU MMU and virtual submission accepts null rendering.
  * COPYRIGHT:   Copyright 2024 ReactOS WDDM Team
  *
  * Architecture notes
@@ -300,9 +298,8 @@ SoftGpuDdiUnmapCpuHostAperture(
  *
  * WDDM2 GPU-virtual-addressing submission path (the DMA buffer is referenced
  * by GPU virtual address rather than a patched allocation list).  softgpu
- * simulates instantaneous completion exactly like the legacy SubmitCommand
- * path: record the submission fence under FenceLock and queue the completion
- * DPC, which calls DxgkCbNotifyInterrupt(DMA_COMPLETED) + DxgkCbNotifyDpc.
+ * only completes explicit null-rendering submissions. It has no GPU command
+ * interpreter, so accepting ordinary virtual work would report false success.
  *
  * IRQL: DISPATCH_LEVEL (called from dxgkrnl scheduler)
  */
@@ -323,6 +320,8 @@ SoftGpuDdiSubmitCommandVirtual(
 
     if (pSubmitCommand->NodeOrdinal != 0 || pSubmitCommand->EngineOrdinal != 0)
         return STATUS_INVALID_PARAMETER;
+    if (!pSubmitCommand->Flags.NullRendering)
+        return STATUS_NOT_SUPPORTED;
 
     DPRINT("SOFTGPU: SubmitCommandVirtual fence=%u node=%u gpuVa=0x%I64x size=%u\n",
            pSubmitCommand->SubmissionFenceId,
@@ -331,10 +330,14 @@ SoftGpuDdiSubmitCommandVirtual(
            pSubmitCommand->DmaBufferSize);
 
     KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
+    if (Device->Stopped)
+    {
+        KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+        return STATUS_DELETE_PENDING;
+    }
     Device->CurrentFence = pSubmitCommand->SubmissionFenceId;
-    KeReleaseSpinLock(&Device->FenceLock, OldIrql);
-
     KeInsertQueueDpc(&Device->DpcObject, NULL, NULL);
+    KeReleaseSpinLock(&Device->FenceLock, OldIrql);
     return STATUS_SUCCESS;
 }
 

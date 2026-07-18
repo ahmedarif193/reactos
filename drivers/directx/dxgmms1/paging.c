@@ -28,13 +28,9 @@
  * 20–80 GB/s so a 16 KB transfer completes in < 1 µs and we will overshoot
  * the first iteration — that is acceptable because paging is not latency-critical.
  *
- * ExQueueWorkItem(CriticalWorkQueue) is used for PageIn/PageOut because:
- *   - These operations must execute at PASSIVE_LEVEL (MmAllocateContiguous,
- *     KeDelayExecutionThread both require PASSIVE).
- *   - CriticalWorkQueue items preempt background/delayed work items, matching
- *     the high-priority paging requirement.
- *   - The calling thread blocks on a KEVENT so it does not spin-wait on the
- *     system worker pool.
+ * PageIn/PageOut deliberately reject requests because their legacy signature
+ * cannot carry the transfer size and system-memory MDL required by the DDI.
+ * The active dxgkrnl VidMm path constructs complete paging operations itself.
  */
 
 /*
@@ -47,12 +43,6 @@
 /* =========================================================================
  * Forward declarations of internal helpers
  * ========================================================================= */
-
-static
-VOID
-NTAPI
-DxgkMmsPagingWorker(
-    _In_ PVOID Parameter);
 
 static
 NTSTATUS
@@ -626,29 +616,8 @@ DxgkMmsBuildPagingBuffer(
     {
     case DXGK_OPERATION_TRANSFER:
     case DXGK_OPERATION_SPECIAL_LOCK_TRANSFER:
-        /*
-         * Transfer: move allocation data between two segments (or between
-         * a segment and system memory).
-         *
-         * For this simplified public interface, SrcOffset == source segment
-         * offset (SrcSegmentId inferred from context = 0 for sys, non-zero
-         * for VRAM) and similarly for DstOffset.
-         *
-         * We treat SrcOffset == 0 and DstOffset != 0 as page-in (sys→VRAM)
-         * when Allocation's system-memory MDL is implied by the caller.
-         * The full MDL is NULL here because this interface does not pass it
-         * explicitly — callers with MDL knowledge should use
-         * DxgkMmsPageIn / DxgkMmsPageOut instead.
-         */
-        Status = DxgkMmsBuildTransferBuffer(Adapter,
-                                             PagBuf,
-                                             Allocation,
-                                             0,          /* SrcSegmentId: sys */
-                                             SrcOffset,
-                                             1,          /* DstSegmentId: seg 1 */
-                                             DstOffset,
-                                             TransferSize,
-                                             NULL        /* SysMdl: unknown */);
+        DXGMMS_WARN("DxgkMmsBuildPagingBuffer: TRANSFER needs segment IDs and a system-memory MDL absent from this interface\n");
+        Status = STATUS_NOT_SUPPORTED;
         break;
 
     case DXGK_OPERATION_FILL:
@@ -853,7 +822,7 @@ DxgkMmsSubmitPagingBuffer(
         return STATUS_INVALID_PARAMETER;
     }
 
-    if (PagBuf->Buffer == NULL || PagBuf->UsedSize > (SIZE_T)MAXULONG)
+    if (PagBuf->Buffer == NULL || PagBuf->BufferSize > (SIZE_T)MAXULONG || PagBuf->UsedSize > PagBuf->BufferSize)
     {
         DXGMMS_ERR("DxgkMmsSubmitPagingBuffer: invalid buffer VA=%p "
                    "used=%Iu\n", PagBuf->Buffer, PagBuf->UsedSize);
@@ -914,7 +883,12 @@ DxgkMmsSubmitPagingBuffer(
     RtlZeroMemory(&Command, sizeof(Command));
     Command.DxgkrnlBuffer = PagBuf;
     Command.DmaBuffer = PagBuf->Buffer;
-    Command.DmaBufferSize = (ULONG)PagBuf->UsedSize;
+    Command.DmaBufferSegmentId = 0;
+    Command.DmaBufferPhysicalAddress = PagBuf->PhysicalAddress;
+    Command.DmaBufferSize = (ULONG)PagBuf->BufferSize;
+    Command.DmaBufferSubmissionStartOffset = 0;
+    Command.DmaBufferSubmissionEndOffset = (ULONG)PagBuf->UsedSize;
+    Command.Flags = DXGMMS_SUBMIT_FLAG_PAGING;
     Command.NodeOrdinal = DXGMMS_PAGING_NODE_ORDINAL;
     Command.Priority = DXGMMS_PRIORITY_HIGH;
     Command.SubmitFenceId = FenceId;
@@ -962,92 +936,6 @@ DxgkMmsSubmitPagingBuffer(
 
 
 /* =========================================================================
- * DxgkMmsPagingWorker  (internal work-item callback)
- *
- * Executed in a system worker thread (CriticalWorkQueue) at PASSIVE_LEVEL.
- * Performs the actual BuildPagingBuffer + SubmitPagingBuffer sequence for
- * a page-in or page-out operation queued by DxgkMmsPageIn / DxgkMmsPageOut.
- *
- * On completion the work item's Completed event is signalled so the
- * submitting thread can proceed.
- * ========================================================================= */
-static
-VOID
-NTAPI
-DxgkMmsPagingWorker(
-    _In_ PVOID Parameter)
-{
-    PDXGMMS_PAGING_WORK_ITEM    WorkItem;
-    PDXGMMS_ADAPTER_CONTEXT     Adapter;
-    PDXGMMS_PAGING_BUFFER       PagBuf;
-    NTSTATUS                    Status;
-
-    PAGED_CODE();
-
-    ASSERT(Parameter != NULL);
-
-    WorkItem = (PDXGMMS_PAGING_WORK_ITEM)Parameter;
-    Adapter  = WorkItem->Adapter;
-
-    DXGMMS_TRACE("DxgkMmsPagingWorker: op=%u alloc=%p src seg=%u "
-                 "off=0x%I64x dst seg=%u off=0x%I64x size=%Iu\n",
-                 WorkItem->Operation,
-                 WorkItem->Allocation,
-                 WorkItem->SrcSegmentId, WorkItem->SrcOffset,
-                 WorkItem->DstSegmentId, WorkItem->DstOffset,
-                 WorkItem->TransferSize);
-
-    DxgMmsAssert(Adapter->Signature == DXGMMS_ADAPTER_SIGNATURE,
-                 DXGMMS1_BUGCHECK_NULL_CONTEXT);
-
-    PagBuf = (PDXGMMS_PAGING_BUFFER)Adapter->PagingBuffer;
-    if (PagBuf == NULL)
-    {
-        DXGMMS_ERR("DxgkMmsPagingWorker: no paging buffer\n");
-        WorkItem->Status = STATUS_GRAPHICS_NO_VIDEO_MEMORY;
-        goto done;
-    }
-
-    /* Build the paging DMA buffer for a TRANSFER operation. */
-    Status = DxgkMmsBuildTransferBuffer(Adapter,
-                                         PagBuf,
-                                         WorkItem->Allocation,
-                                         WorkItem->SrcSegmentId,
-                                         WorkItem->SrcOffset,
-                                         WorkItem->DstSegmentId,
-                                         WorkItem->DstOffset,
-                                         WorkItem->TransferSize,
-                                         (PMDL)WorkItem->SysMdl);
-    if (!NT_SUCCESS(Status))
-    {
-        DXGMMS_ERR("DxgkMmsPagingWorker: BuildTransfer failed 0x%08lx\n",
-                   Status);
-        WorkItem->Status = Status;
-        goto done;
-    }
-
-    /* Submit the filled buffer to the GPU copy engine and wait for done. */
-    Status = DxgkMmsSubmitPagingBuffer(Adapter, PagBuf);
-    if (!NT_SUCCESS(Status))
-    {
-        DXGMMS_ERR("DxgkMmsPagingWorker: Submit failed 0x%08lx\n", Status);
-    }
-
-    WorkItem->Status = Status;
-
-done:
-    /*
-     * Signal the originating thread that the paging operation is complete.
-     * The originating thread (DxgkMmsPageIn / DxgkMmsPageOut) is blocked on
-     * WorkItem->Completed and will free the work item after this signal.
-     */
-    DXGMMS_TRACE("DxgkMmsPagingWorker: signalling completion "
-                 "status=0x%08lx\n", WorkItem->Status);
-    KeSetEvent(&WorkItem->Completed, IO_NO_INCREMENT, FALSE);
-}
-
-
-/* =========================================================================
  * DxgkMmsPageIn
  *
  * Move an allocation from system memory into a VRAM segment (populate).
@@ -1059,13 +947,9 @@ DxgkMmsPageIn(
     _In_ ULONG                   TargetSegmentId,
     _In_ ULONGLONG               TargetOffset)
 {
-    PDXGMMS_PAGING_WORK_ITEM    WorkItem;
-    NTSTATUS                    Status;
-
     PAGED_CODE();
 
-    DXGMMS_TRACE("DxgkMmsPageIn: alloc=%p dstSeg=%u dstOff=0x%I64x\n",
-                 DxgkAllocation, TargetSegmentId, TargetOffset);
+    DXGMMS_TRACE("DxgkMmsPageIn: alloc=%p dstSeg=%u dstOff=0x%I64x\n", DxgkAllocation, TargetSegmentId, TargetOffset);
 
     if (Adapter == NULL || DxgkAllocation == NULL)
     {
@@ -1073,98 +957,16 @@ DxgkMmsPageIn(
         return STATUS_INVALID_PARAMETER;
     }
 
-    DxgMmsAssert(Adapter->Signature == DXGMMS_ADAPTER_SIGNATURE,
-                 DXGMMS1_BUGCHECK_BAD_SIGNATURE);
+    DxgMmsAssert(Adapter->Signature == DXGMMS_ADAPTER_SIGNATURE, DXGMMS1_BUGCHECK_BAD_SIGNATURE);
 
     if (TargetSegmentId == 0)
     {
-        DXGMMS_ERR("DxgkMmsPageIn: TargetSegmentId must be non-zero "
-                   "(0 = system memory)\n");
+        DXGMMS_ERR("DxgkMmsPageIn: TargetSegmentId must be non-zero (0 = system memory)\n");
         return STATUS_INVALID_PARAMETER;
     }
 
-    DXGMMS_WARN("DxgkMmsPageIn: explicit MDL and transfer size are not "
-                "wired in this interface\n");
+    DXGMMS_WARN("DxgkMmsPageIn: transfer size and system-memory MDL are absent from this interface\n");
     return STATUS_NOT_SUPPORTED;
-
-    /*
-     * Allocate the work item from non-paged pool.  It will be freed by
-     * this function after KeWaitForSingleObject returns.
-     */
-    WorkItem = ExAllocatePoolWithTag(NonPagedPool,
-                                     sizeof(DXGMMS_PAGING_WORK_ITEM),
-                                     TAG_DXGMMS_PAGING);
-    if (WorkItem == NULL)
-    {
-        DXGMMS_ERR("DxgkMmsPageIn: out of pool memory\n");
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-    RtlZeroMemory(WorkItem, sizeof(DXGMMS_PAGING_WORK_ITEM));
-
-    /*
-     * Populate the work item fields.
-     *
-     * Operation   : TRANSFER (system memory → VRAM)
-     * SrcSegmentId: 0 (system memory side)
-     * SrcOffset   : 0 (full allocation starting at MDL offset 0)
-     * DstSegmentId: TargetSegmentId (VRAM destination)
-     * DstOffset   : TargetOffset
-     * TransferSize: unknown at this level — the caller must set the correct
-     *               size.  For this interface we use 0 as a sentinel to tell
-     *               the miniport to transfer the whole allocation.
-     *               TODO: accept TransferSize as a parameter.
-     * SysMdl      : NULL — caller must wire up the MDL if needed.
-     *               TODO: accept SysMdl as a parameter.
-     */
-    ExInitializeWorkItem(&WorkItem->WorkItem,
-                         DxgkMmsPagingWorker,
-                         WorkItem);
-
-    WorkItem->Adapter       = Adapter;
-    WorkItem->Operation     = DXGK_OPERATION_TRANSFER;
-    WorkItem->Allocation    = DxgkAllocation;
-    WorkItem->SrcSegmentId  = 0;                /* system memory source */
-    WorkItem->SrcOffset     = 0;
-    WorkItem->DstSegmentId  = TargetSegmentId;
-    WorkItem->DstOffset     = TargetOffset;
-    WorkItem->TransferSize  = 0;                /* full allocation */
-    WorkItem->SysMdl        = NULL;
-    WorkItem->Status        = STATUS_PENDING;
-
-    /*
-     * Initialise the completion event (SynchronizationEvent, not signalled).
-     * The worker signals it when done; we block on it below.
-     */
-    KeInitializeEvent(&WorkItem->Completed, SynchronizationEvent, FALSE);
-
-    /*
-     * Queue to the Critical work queue.  CriticalWorkQueue items run before
-     * DelayedWorkQueue items, ensuring paging is not starved by lower-priority
-     * system work.  The work item is consumed by DxgkMmsPagingWorker.
-     */
-    ExQueueWorkItem(&WorkItem->WorkItem, CriticalWorkQueue);
-
-    /*
-     * Block until the worker signals completion.  Use an infinite wait
-     * (no timeout) because the TDR watchdog handles the timeout case
-     * independently.  Using a finite timeout here risks false failures
-     * on loaded systems.
-     */
-    KeWaitForSingleObject(&WorkItem->Completed,
-                          Executive,
-                          KernelMode,
-                          FALSE,
-                          NULL);
-
-    Status = WorkItem->Status;
-
-    DXGMMS_TRACE("DxgkMmsPageIn: alloc=%p dstSeg=%u completed "
-                 "status=0x%08lx\n",
-                 DxgkAllocation, TargetSegmentId, Status);
-
-    ExFreePoolWithTag(WorkItem, TAG_DXGMMS_PAGING);
-
-    return Status;
 }
 
 
@@ -1180,13 +982,9 @@ DxgkMmsPageOut(
     _In_ ULONG                   SrcSegmentId,
     _In_ ULONGLONG               SrcOffset)
 {
-    PDXGMMS_PAGING_WORK_ITEM    WorkItem;
-    NTSTATUS                    Status;
-
     PAGED_CODE();
 
-    DXGMMS_TRACE("DxgkMmsPageOut: alloc=%p srcSeg=%u srcOff=0x%I64x\n",
-                 DxgkAllocation, SrcSegmentId, SrcOffset);
+    DXGMMS_TRACE("DxgkMmsPageOut: alloc=%p srcSeg=%u srcOff=0x%I64x\n", DxgkAllocation, SrcSegmentId, SrcOffset);
 
     if (Adapter == NULL || DxgkAllocation == NULL)
     {
@@ -1194,64 +992,16 @@ DxgkMmsPageOut(
         return STATUS_INVALID_PARAMETER;
     }
 
-    DxgMmsAssert(Adapter->Signature == DXGMMS_ADAPTER_SIGNATURE,
-                 DXGMMS1_BUGCHECK_BAD_SIGNATURE);
+    DxgMmsAssert(Adapter->Signature == DXGMMS_ADAPTER_SIGNATURE, DXGMMS1_BUGCHECK_BAD_SIGNATURE);
 
     if (SrcSegmentId == 0)
     {
-        DXGMMS_ERR("DxgkMmsPageOut: SrcSegmentId must be non-zero "
-                   "(0 = system memory)\n");
+        DXGMMS_ERR("DxgkMmsPageOut: SrcSegmentId must be non-zero (0 = system memory)\n");
         return STATUS_INVALID_PARAMETER;
     }
 
-    DXGMMS_WARN("DxgkMmsPageOut: explicit MDL and transfer size are not "
-                "wired in this interface\n");
+    DXGMMS_WARN("DxgkMmsPageOut: transfer size and system-memory MDL are absent from this interface\n");
     return STATUS_NOT_SUPPORTED;
-
-    WorkItem = ExAllocatePoolWithTag(NonPagedPool,
-                                     sizeof(DXGMMS_PAGING_WORK_ITEM),
-                                     TAG_DXGMMS_PAGING);
-    if (WorkItem == NULL)
-    {
-        DXGMMS_ERR("DxgkMmsPageOut: out of pool memory\n");
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-    RtlZeroMemory(WorkItem, sizeof(DXGMMS_PAGING_WORK_ITEM));
-
-    ExInitializeWorkItem(&WorkItem->WorkItem,
-                         DxgkMmsPagingWorker,
-                         WorkItem);
-
-    WorkItem->Adapter       = Adapter;
-    WorkItem->Operation     = DXGK_OPERATION_TRANSFER;
-    WorkItem->Allocation    = DxgkAllocation;
-    WorkItem->SrcSegmentId  = SrcSegmentId;    /* VRAM source       */
-    WorkItem->SrcOffset     = SrcOffset;
-    WorkItem->DstSegmentId  = 0;               /* system memory dst */
-    WorkItem->DstOffset     = 0;
-    WorkItem->TransferSize  = 0;               /* full allocation   */
-    WorkItem->SysMdl        = NULL;
-    WorkItem->Status        = STATUS_PENDING;
-
-    KeInitializeEvent(&WorkItem->Completed, SynchronizationEvent, FALSE);
-
-    ExQueueWorkItem(&WorkItem->WorkItem, CriticalWorkQueue);
-
-    KeWaitForSingleObject(&WorkItem->Completed,
-                          Executive,
-                          KernelMode,
-                          FALSE,
-                          NULL);
-
-    Status = WorkItem->Status;
-
-    DXGMMS_TRACE("DxgkMmsPageOut: alloc=%p srcSeg=%u completed "
-                 "status=0x%08lx\n",
-                 DxgkAllocation, SrcSegmentId, Status);
-
-    ExFreePoolWithTag(WorkItem, TAG_DXGMMS_PAGING);
-
-    return Status;
 }
 
 

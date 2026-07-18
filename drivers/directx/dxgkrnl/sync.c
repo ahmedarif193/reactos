@@ -11,13 +11,6 @@
 
 #include "dxgkrnl_private.h"
 
-/* Sync-object handles are opaque 32-bit ids tracked in a validated list. */
-static ULONG DxgkSyncHandleCookie = 0x434E5953; /* "SYNC" */
-static LONG DxgkSyncInitialized = 0;
-static FAST_MUTEX DxgkSyncListLock;
-static LIST_ENTRY DxgkSyncListHead;
-static volatile LONG DxgkNextSyncHandle = 0;
-
 FORCEINLINE BOOLEAN
 DxgkpIsListEntryLinked(
     _In_ PLIST_ENTRY Entry)
@@ -25,60 +18,38 @@ DxgkpIsListEntryLinked(
     return (Entry->Flink != Entry);
 }
 
-static VOID
-DxgkpSyncInit(VOID)
+static BOOLEAN
+DxgkpReferenceSyncObject(
+    _In_ PVOID Object)
 {
-    if (InterlockedCompareExchange(&DxgkSyncInitialized, 1, 0) != 0)
-        return;
+    PDXGKRNL_SYNC_OBJECT SyncObj = Object;
 
-    ExInitializeFastMutex(&DxgkSyncListLock);
-    InitializeListHead(&DxgkSyncListHead);
-}
-
-static D3DKMT_HANDLE
-DxgkpAllocateSyncHandle(VOID)
-{
-    ULONG Sequence;
-
-    do
+    if (SyncObj == NULL || InterlockedCompareExchange(&SyncObj->Destroying, 0, 0) != 0)
+        return FALSE;
+    InterlockedIncrement(&SyncObj->RefCount);
+    if (InterlockedCompareExchange(&SyncObj->Destroying, 0, 0) != 0)
     {
-        Sequence = (ULONG)InterlockedIncrement(&DxgkNextSyncHandle);
-    } while (Sequence == 0);
-
-    return (D3DKMT_HANDLE)(Sequence ^ DxgkSyncHandleCookie);
-}
-
-static PDXGKRNL_SYNC_OBJECT
-DxgkpReferenceSyncObjectByHandle(
-    _In_ D3DKMT_HANDLE Handle)
-{
-    PLIST_ENTRY Entry;
-    PDXGKRNL_SYNC_OBJECT Found = NULL;
-
-    if (Handle == 0)
-        return NULL;
-
-    DxgkpSyncInit();
-
-    ExAcquireFastMutex(&DxgkSyncListLock);
-    for (Entry = DxgkSyncListHead.Flink;
-         Entry != &DxgkSyncListHead;
-         Entry = Entry->Flink)
-    {
-        PDXGKRNL_SYNC_OBJECT Candidate;
-
-        Candidate = CONTAINING_RECORD(Entry, DXGKRNL_SYNC_OBJECT,
-                                      SyncObjListEntry);
-        if (Candidate->Handle == Handle)
-        {
-            InterlockedIncrement(&Candidate->RefCount);
-            Found = Candidate;
-            break;
-        }
+        if (InterlockedDecrement(&SyncObj->RefCount) == 0)
+            KeSetEvent(&SyncObj->CpuEvent, IO_NO_INCREMENT, FALSE);
+        return FALSE;
     }
-    ExReleaseFastMutex(&DxgkSyncListLock);
+    return TRUE;
+}
 
-    return Found;
+static NTSTATUS
+DxgkpReferenceSyncObjectByHandle(
+    _In_ D3DKMT_HANDLE Handle,
+    _In_opt_ PEPROCESS OwnerProcess,
+    _Out_ PDXGKRNL_SYNC_OBJECT *OutSyncObj)
+{
+    PVOID Object;
+    NTSTATUS Status;
+
+    *OutSyncObj = NULL;
+    Status = DxgkReferenceOwnedHandle(Handle, DxgkHandleTypeSynchronizationObject, OwnerProcess, DxgkpReferenceSyncObject, &Object);
+    if (NT_SUCCESS(Status))
+        *OutSyncObj = Object;
+    return Status;
 }
 
 /*
@@ -139,8 +110,12 @@ DxgkpDereferenceSyncObject(
     if (SyncObj != NULL &&
         InterlockedDecrement(&SyncObj->RefCount) == 0)
     {
+        PDXGKRNL_DEVICE Device = SyncObj->Device;
+
         DxgkpSyncReleaseMonitoredPage(SyncObj);
         ExFreePoolWithTag(SyncObj, TAG_DXGK_SYNC);
+        if (Device != NULL)
+            DxgkDereferenceDevice(Device);
     }
 }
 
@@ -168,9 +143,9 @@ DxgkSyncObjectAttachMonitoredPage(
         return STATUS_INVALID_PARAMETER;
     *UserVa = NULL;
 
-    SyncObj = DxgkpReferenceSyncObjectByHandle(hSyncObject);
-    if (SyncObj == NULL)
-        return STATUS_INVALID_HANDLE;
+    Status = DxgkpReferenceSyncObjectByHandle(hSyncObject, PsGetCurrentProcess(), &SyncObj);
+    if (!NT_SUCCESS(Status))
+        return Status;
 
     /* Pool allocations of PAGE_SIZE are page-aligned. */
     SyncObj->MonitoredValueKernelVa =
@@ -230,41 +205,6 @@ Fail:
     return Status;
 }
 
-static PDXGKRNL_SYNC_OBJECT
-DxgkpUnlinkSyncObject(
-    _In_ D3DKMT_HANDLE Handle)
-{
-    PLIST_ENTRY Entry;
-    PDXGKRNL_SYNC_OBJECT Found = NULL;
-
-    if (Handle == 0)
-        return NULL;
-
-    DxgkpSyncInit();
-
-    ExAcquireFastMutex(&DxgkSyncListLock);
-    for (Entry = DxgkSyncListHead.Flink;
-         Entry != &DxgkSyncListHead;
-         Entry = Entry->Flink)
-    {
-        PDXGKRNL_SYNC_OBJECT Candidate;
-
-        Candidate = CONTAINING_RECORD(Entry, DXGKRNL_SYNC_OBJECT,
-                                      SyncObjListEntry);
-        if (Candidate->Handle == Handle)
-        {
-            RemoveEntryList(&Candidate->SyncObjListEntry);
-            InitializeListHead(&Candidate->SyncObjListEntry);
-            Candidate->Handle = 0;
-            Found = Candidate;
-            break;
-        }
-    }
-    ExReleaseFastMutex(&DxgkSyncListLock);
-
-    return Found;
-}
-
 /*
  * DxgkCreateSynchronizationObject
  *
@@ -280,33 +220,37 @@ DxgkCreateSynchronizationObject(
     PDXGKRNL_ADAPTER     Adapter;
     PDXGKRNL_DEVICE      Device;
     PDXGKRNL_SYNC_OBJECT SyncObj;
+    NTSTATUS Status;
 
     PAGED_CODE();
 
     if (pCreateSyncObject == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    DxgkpSyncInit();
-
-    Device = DxgkLookupDeviceByHandle(pCreateSyncObject->hDevice, &Adapter);
-    if (Device == NULL || Adapter == NULL)
-        return STATUS_INVALID_HANDLE;
+    Status = DxgkReferenceOwnedDeviceByHandle(pCreateSyncObject->hDevice, PsGetCurrentProcess(), &Adapter, &Device);
+    if (!NT_SUCCESS(Status))
+        return Status;
 
     if (pCreateSyncObject->Info.Type != D3DDDI_SYNCHRONIZATION_MUTEX &&
         pCreateSyncObject->Info.Type != D3DDDI_SEMAPHORE &&
         pCreateSyncObject->Info.Type != D3DDDI_FENCE &&
         pCreateSyncObject->Info.Type != D3DDDI_CPU_NOTIFICATION)
     {
+        DxgkDereferenceDevice(Device);
         return STATUS_NOT_SUPPORTED;
     }
 
-    SyncObj = (PDXGKRNL_SYNC_OBJECT)ExAllocatePoolWithTag(
-                  NonPagedPool, sizeof(DXGKRNL_SYNC_OBJECT), TAG_DXGK_SYNC);
+    SyncObj = (PDXGKRNL_SYNC_OBJECT)ExAllocatePoolWithTag(NonPagedPool, sizeof(DXGKRNL_SYNC_OBJECT), TAG_DXGK_SYNC);
     if (SyncObj == NULL)
+    {
+        DxgkDereferenceDevice(Device);
         return STATUS_INSUFFICIENT_RESOURCES;
+    }
 
     RtlZeroMemory(SyncObj, sizeof(*SyncObj));
     SyncObj->hDevice = Device->Handle;
+    SyncObj->Device = Device;
+    SyncObj->OwnerProcess = PsGetCurrentProcess();
     SyncObj->Info = pCreateSyncObject->Info;
     SyncObj->RefCount = 1;
     SyncObj->FenceValue = 0;
@@ -314,20 +258,29 @@ DxgkCreateSynchronizationObject(
     InitializeListHead(&SyncObj->SyncObjListEntry);
     InitializeListHead(&SyncObj->DeviceSyncObjListEntry);
 
-    SyncObj->Handle = DxgkpAllocateSyncHandle();
-
-    ExAcquireFastMutex(&DxgkSyncListLock);
-    InsertTailList(&DxgkSyncListHead, &SyncObj->SyncObjListEntry);
-    ExReleaseFastMutex(&DxgkSyncListLock);
+    Status = DxgkCreateOwnedHandle(DxgkHandleTypeSynchronizationObject, SyncObj, Adapter, SyncObj->OwnerProcess, &SyncObj->Destroying, &SyncObj->TeardownClaimed, &SyncObj->Handle);
+    if (!NT_SUCCESS(Status))
+    {
+        InterlockedExchange(&SyncObj->Destroying, 1);
+        DxgkpDereferenceSyncObject(SyncObj);
+        return Status;
+    }
 
     ExAcquireFastMutex(&Device->DeviceMutex);
+    if (InterlockedCompareExchange(&Device->Destroying, 0, 0) != 0)
+    {
+        ExReleaseFastMutex(&Device->DeviceMutex);
+        DxgkRemoveOwnedHandleObject(DxgkHandleTypeSynchronizationObject, SyncObj);
+        InterlockedExchange(&SyncObj->Destroying, 1);
+        DxgkpDereferenceSyncObject(SyncObj);
+        return STATUS_DELETE_PENDING;
+    }
     InsertTailList(&Device->SyncObjListHead, &SyncObj->DeviceSyncObjListEntry);
     ExReleaseFastMutex(&Device->DeviceMutex);
 
     pCreateSyncObject->hSyncObject = SyncObj->Handle;
 
-    DXGKRNL_TRACE("DxgkCreateSynchronizationObject: handle=0x%X type=%d\n",
-                  SyncObj->Handle, SyncObj->Info.Type);
+    DXGKRNL_TRACE("DxgkCreateSynchronizationObject: handle=0x%X type=%d\n", SyncObj->Handle, SyncObj->Info.Type);
     return STATUS_SUCCESS;
 }
 
@@ -343,35 +296,30 @@ NTAPI
 DxgkDestroySynchronizationObject(
     _In_ D3DKMT_DESTROYSYNCHRONIZATIONOBJECT *pDestroySyncObject)
 {
-    PDXGKRNL_ADAPTER     Adapter;
-    PDXGKRNL_DEVICE      Device;
     PDXGKRNL_SYNC_OBJECT SyncObj;
+    PVOID Object;
+    NTSTATUS Status;
 
     PAGED_CODE();
 
     if (pDestroySyncObject == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    SyncObj = DxgkpUnlinkSyncObject(pDestroySyncObject->hSyncObject);
-    if (SyncObj == NULL)
-        return STATUS_INVALID_HANDLE;
-
-    Device = DxgkLookupDeviceByHandle(SyncObj->hDevice, &Adapter);
-    if (Device != NULL)
+    Status = DxgkDetachOwnedHandle(pDestroySyncObject->hSyncObject, DxgkHandleTypeSynchronizationObject, PsGetCurrentProcess(), &Object);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    SyncObj = Object;
+    ASSERT(InterlockedCompareExchange(&SyncObj->TeardownClaimed, 1, 1) == 1);
+    ExAcquireFastMutex(&SyncObj->Device->DeviceMutex);
+    if (DxgkpIsListEntryLinked(&SyncObj->DeviceSyncObjListEntry))
     {
-        ExAcquireFastMutex(&Device->DeviceMutex);
-        if (DxgkpIsListEntryLinked(&SyncObj->DeviceSyncObjListEntry))
-        {
-            RemoveEntryList(&SyncObj->DeviceSyncObjListEntry);
-            InitializeListHead(&SyncObj->DeviceSyncObjListEntry);
-        }
-        ExReleaseFastMutex(&Device->DeviceMutex);
+        RemoveEntryList(&SyncObj->DeviceSyncObjListEntry);
+        InitializeListHead(&SyncObj->DeviceSyncObjListEntry);
     }
+    ExReleaseFastMutex(&SyncObj->Device->DeviceMutex);
+    KeSetEvent(&SyncObj->CpuEvent, IO_NO_INCREMENT, FALSE);
 
-    SyncObj->hDevice = 0;
-
-    DXGKRNL_TRACE("DxgkDestroySynchronizationObject: handle=0x%X\n",
-                  pDestroySyncObject->hSyncObject);
+    DXGKRNL_TRACE("DxgkDestroySynchronizationObject: handle=0x%X\n", pDestroySyncObject->hSyncObject);
 
     DxgkpDereferenceSyncObject(SyncObj);
     return STATUS_SUCCESS;
@@ -391,8 +339,8 @@ DxgkSignalSynchronizationObject(
 {
     PDXGKRNL_ADAPTER Adapter;
     PDXGKRNL_DEVICE  Device;
+    PDXGKRNL_CONTEXT Context;
     PDXGKRNL_SYNC_OBJECT SyncObjs[D3DDDI_MAX_OBJECT_SIGNALED];
-    D3DKMT_HANDLE DeviceHandle;
     ULONG i;
     ULONG CleanupIndex;
     NTSTATUS Status = STATUS_SUCCESS;
@@ -408,28 +356,21 @@ DxgkSignalSynchronizationObject(
         return STATUS_INVALID_PARAMETER;
     }
 
-    if (DxgkLookupContextByHandle(pSignalSyncObject->hContext,
-                                  &Adapter,
-                                  &Device) == NULL)
-    {
-        return STATUS_INVALID_HANDLE;
-    }
-
-    DeviceHandle = Device->Handle;
+    Status = DxgkReferenceContextByHandle(pSignalSyncObject->hContext, PsGetCurrentProcess(), &Adapter, &Device, &Context);
+    if (!NT_SUCCESS(Status))
+        return Status;
     RtlZeroMemory(SyncObjs, sizeof(SyncObjs));
 
     for (i = 0; i < pSignalSyncObject->ObjectCount; ++i)
     {
         PDXGKRNL_SYNC_OBJECT SyncObj;
 
-        SyncObj = DxgkpReferenceSyncObjectByHandle(
-                      pSignalSyncObject->ObjectHandleArray[i]);
-        if (SyncObj == NULL)
+        Status = DxgkpReferenceSyncObjectByHandle(pSignalSyncObject->ObjectHandleArray[i], PsGetCurrentProcess(), &SyncObj);
+        if (!NT_SUCCESS(Status))
         {
-            Status = STATUS_INVALID_HANDLE;
             goto CleanupReferences;
         }
-        if (SyncObj->hDevice != DeviceHandle)
+        if (SyncObj->Device != Device)
         {
             DxgkpDereferenceSyncObject(SyncObj);
             Status = STATUS_INVALID_HANDLE;
@@ -448,17 +389,16 @@ DxgkSignalSynchronizationObject(
         SyncObjs[i] = NULL;
     }
 
+    DxgkDereferenceContext(Context);
     return STATUS_SUCCESS;
 
 CleanupReferences:
-    for (CleanupIndex = 0;
-         CleanupIndex < pSignalSyncObject->ObjectCount;
-         ++CleanupIndex)
+    for (CleanupIndex = 0; CleanupIndex < pSignalSyncObject->ObjectCount; ++CleanupIndex)
     {
         if (SyncObjs[CleanupIndex] != NULL)
             DxgkpDereferenceSyncObject(SyncObjs[CleanupIndex]);
     }
-
+    DxgkDereferenceContext(Context);
     return Status;
 }
 
@@ -477,8 +417,8 @@ DxgkWaitForSynchronizationObject(
 {
     PDXGKRNL_ADAPTER Adapter;
     PDXGKRNL_DEVICE  Device;
+    PDXGKRNL_CONTEXT Context;
     PDXGKRNL_SYNC_OBJECT SyncObjs[D3DDDI_MAX_OBJECT_WAITED_ON];
-    D3DKMT_HANDLE DeviceHandle;
     ULONG i;
     ULONG CleanupIndex;
     NTSTATUS Status = STATUS_SUCCESS;
@@ -494,28 +434,21 @@ DxgkWaitForSynchronizationObject(
         return STATUS_INVALID_PARAMETER;
     }
 
-    if (DxgkLookupContextByHandle(pWaitSyncObject->hContext,
-                                  &Adapter,
-                                  &Device) == NULL)
-    {
-        return STATUS_INVALID_HANDLE;
-    }
-
-    DeviceHandle = Device->Handle;
+    Status = DxgkReferenceContextByHandle(pWaitSyncObject->hContext, PsGetCurrentProcess(), &Adapter, &Device, &Context);
+    if (!NT_SUCCESS(Status))
+        return Status;
     RtlZeroMemory(SyncObjs, sizeof(SyncObjs));
 
     for (i = 0; i < pWaitSyncObject->ObjectCount; ++i)
     {
         PDXGKRNL_SYNC_OBJECT SyncObj;
 
-        SyncObj = DxgkpReferenceSyncObjectByHandle(
-                      pWaitSyncObject->ObjectHandleArray[i]);
-        if (SyncObj == NULL)
+        Status = DxgkpReferenceSyncObjectByHandle(pWaitSyncObject->ObjectHandleArray[i], PsGetCurrentProcess(), &SyncObj);
+        if (!NT_SUCCESS(Status))
         {
-            Status = STATUS_INVALID_HANDLE;
             goto CleanupReferences;
         }
-        if (SyncObj->hDevice != DeviceHandle)
+        if (SyncObj->Device != Device)
         {
             DxgkpDereferenceSyncObject(SyncObj);
             Status = STATUS_INVALID_HANDLE;
@@ -537,11 +470,9 @@ DxgkWaitForSynchronizationObject(
         {
             LARGE_INTEGER Timeout;
             Timeout.QuadPart = -10LL * 1000LL * 100LL; /* 100ms */
-            Status = KeWaitForSingleObject(&SyncObj->CpuEvent,
-                                           Executive,
-                                           KernelMode,
-                                           FALSE,
-                                           &Timeout);
+            Status = KeWaitForSingleObject(&SyncObj->CpuEvent, Executive, KernelMode, FALSE, &Timeout);
+            if (InterlockedCompareExchange(&SyncObj->Destroying, 0, 0) != 0)
+                Status = STATUS_DELETE_PENDING;
         }
         DxgkpDereferenceSyncObject(SyncObj);
         SyncObjs[i] = NULL;
@@ -550,17 +481,16 @@ DxgkWaitForSynchronizationObject(
             goto CleanupReferences;
     }
 
+    DxgkDereferenceContext(Context);
     return STATUS_SUCCESS;
 
 CleanupReferences:
-    for (CleanupIndex = 0;
-         CleanupIndex < pWaitSyncObject->ObjectCount;
-         ++CleanupIndex)
+    for (CleanupIndex = 0; CleanupIndex < pWaitSyncObject->ObjectCount; ++CleanupIndex)
     {
         if (SyncObjs[CleanupIndex] != NULL)
             DxgkpDereferenceSyncObject(SyncObjs[CleanupIndex]);
     }
-
+    DxgkDereferenceContext(Context);
     return Status;
 }
 
@@ -581,8 +511,7 @@ DxgkpSyncPublishFenceValue(
 {
     if (SyncObj->MonitoredValueKernelVa != NULL)
     {
-        *(volatile UINT64 *)SyncObj->MonitoredValueKernelVa =
-            (UINT64)SyncObj->FenceValue;
+        *(volatile UINT64 *)SyncObj->MonitoredValueKernelVa = (UINT64)SyncObj->FenceValue;
         KeMemoryBarrier();
     }
 
@@ -597,12 +526,13 @@ DxgkSyncObjectCpuSignal(
     _In_ UINT64 FenceValue)
 {
     PDXGKRNL_SYNC_OBJECT SyncObj;
+    NTSTATUS Status;
 
     PAGED_CODE();
 
-    SyncObj = DxgkpReferenceSyncObjectByHandle(hSyncObject);
-    if (SyncObj == NULL)
-        return STATUS_INVALID_HANDLE;
+    Status = DxgkpReferenceSyncObjectByHandle(hSyncObject, PsGetCurrentProcess(), &SyncObj);
+    if (!NT_SUCCESS(Status))
+        return Status;
 
     if (hDevice != 0 && SyncObj->hDevice != hDevice)
     {
@@ -632,21 +562,20 @@ DxgkSyncObjectGpuRetireSignal(
 {
     PDXGKRNL_SYNC_OBJECT SyncObj;
     LONG64 Current;
+    NTSTATUS Status;
 
     PAGED_CODE();
 
-    SyncObj = DxgkpReferenceSyncObjectByHandle(hSyncObject);
-    if (SyncObj == NULL)
-        return STATUS_INVALID_HANDLE;
+    Status = DxgkpReferenceSyncObjectByHandle(hSyncObject, NULL, &SyncObj);
+    if (!NT_SUCCESS(Status))
+        return Status;
 
     for (;;)
     {
         Current = SyncObj->FenceValue;
         if ((UINT64)Current >= FenceValue)
             break;
-        if (InterlockedCompareExchange64(&SyncObj->FenceValue,
-                                         (LONG64)FenceValue,
-                                         Current) == Current)
+        if (InterlockedCompareExchange64(&SyncObj->FenceValue, (LONG64)FenceValue, Current) == Current)
         {
             break;
         }
@@ -666,12 +595,13 @@ DxgkSyncObjectCpuWait(
     _In_ BOOLEAN NonBlocking)
 {
     PDXGKRNL_SYNC_OBJECT SyncObj;
+    NTSTATUS Status;
 
     PAGED_CODE();
 
-    SyncObj = DxgkpReferenceSyncObjectByHandle(hSyncObject);
-    if (SyncObj == NULL)
-        return STATUS_INVALID_HANDLE;
+    Status = DxgkpReferenceSyncObjectByHandle(hSyncObject, PsGetCurrentProcess(), &SyncObj);
+    if (!NT_SUCCESS(Status))
+        return Status;
 
     if (hDevice != 0 && SyncObj->hDevice != hDevice)
     {
@@ -694,8 +624,12 @@ DxgkSyncObjectCpuWait(
     {
         LARGE_INTEGER Timeout;
         Timeout.QuadPart = -10LL * 1000LL * 100LL;
-        KeWaitForSingleObject(&SyncObj->CpuEvent, Executive, KernelMode,
-                              FALSE, &Timeout);
+        KeWaitForSingleObject(&SyncObj->CpuEvent, Executive, KernelMode, FALSE, &Timeout);
+        if (InterlockedCompareExchange(&SyncObj->Destroying, 0, 0) != 0)
+        {
+            DxgkpDereferenceSyncObject(SyncObj);
+            return STATUS_DELETE_PENDING;
+        }
     }
 
     DxgkpDereferenceSyncObject(SyncObj);
@@ -718,6 +652,7 @@ DxgkCleanupDeviceSynchronizationObjects(
     for (;;)
     {
         PDXGKRNL_SYNC_OBJECT SyncObj;
+        BOOLEAN OwnsTeardown;
 
         ExAcquireFastMutex(&Device->DeviceMutex);
         if (IsListEmpty(&Device->SyncObjListHead))
@@ -726,30 +661,28 @@ DxgkCleanupDeviceSynchronizationObjects(
             break;
         }
 
-        Entry = RemoveHeadList(&Device->SyncObjListHead);
+        Entry = Device->SyncObjListHead.Flink;
+        SyncObj = CONTAINING_RECORD(Entry, DXGKRNL_SYNC_OBJECT, DeviceSyncObjListEntry);
+        OwnsTeardown = DxgkTryClaimTeardown(&SyncObj->TeardownClaimed);
+        InterlockedExchange(&SyncObj->Destroying, 1);
+        RemoveEntryList(Entry);
         InitializeListHead(Entry);
         ExReleaseFastMutex(&Device->DeviceMutex);
 
-        SyncObj = CONTAINING_RECORD(Entry, DXGKRNL_SYNC_OBJECT,
-                                    DeviceSyncObjListEntry);
-
-        ExAcquireFastMutex(&DxgkSyncListLock);
-        if (DxgkpIsListEntryLinked(&SyncObj->SyncObjListEntry))
+        if (!OwnsTeardown)
         {
-            RemoveEntryList(&SyncObj->SyncObjListEntry);
-            InitializeListHead(&SyncObj->SyncObjListEntry);
-            SyncObj->Handle = 0;
+            /* The direct owner retains this Device until its final release. */
+            continue;
         }
-        ExReleaseFastMutex(&DxgkSyncListLock);
-
-        SyncObj->hDevice = 0;
+        ASSERT(InterlockedCompareExchange(&SyncObj->TeardownClaimed, 1, 1) == 1);
+        DxgkRemoveOwnedHandleObject(DxgkHandleTypeSynchronizationObject, SyncObj);
+        KeSetEvent(&SyncObj->CpuEvent, IO_NO_INCREMENT, FALSE);
         DxgkpDereferenceSyncObject(SyncObj);
         ++Cleaned;
     }
 
     if (Cleaned != 0)
     {
-        DXGKRNL_WARN("DxgkCleanupDeviceSynchronizationObjects: cleaned %lu leaked sync objects\n",
-                     Cleaned);
+        DXGKRNL_WARN("DxgkCleanupDeviceSynchronizationObjects: cleaned %lu leaked sync objects\n", Cleaned);
     }
 }

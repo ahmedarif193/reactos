@@ -62,6 +62,17 @@ typedef enum _VIDSCH_ENGINE_STATE
     VidSchEngineStateCount      = 14
 } VIDSCH_ENGINE_STATE;
 
+typedef enum _VIDSCH_SCHEDULER_STATE
+{
+    VidSchSchedulerUninitialized = 0,
+    VidSchSchedulerRunning       = 1,
+    VidSchSchedulerSuspending    = 2,
+    VidSchSchedulerSuspended     = 3,
+    VidSchSchedulerResetting     = 4,
+    VidSchSchedulerStopping      = 5,
+    VidSchSchedulerError         = 6
+} VIDSCH_SCHEDULER_STATE;
+
 /* ========================================================================
  * VIDSCH_DMA_PACKET — Queued command descriptor
  *
@@ -71,8 +82,9 @@ typedef enum _VIDSCH_ENGINE_STATE
 
 /* Inline (deep-copied) list capacities; submissions with larger lists are
  * rejected with STATUS_NOT_SUPPORTED and take the caller's fallback path. */
-#define VIDSCH_INLINE_ALLOCATIONS   2
+#define VIDSCH_INLINE_ALLOCATIONS   3
 #define VIDSCH_INLINE_PATCHES       8
+#define VIDSCH_MAX_PENDING_PACKETS  512
 
 typedef struct _VIDSCH_DMA_PACKET
 {
@@ -88,9 +100,10 @@ typedef struct _VIDSCH_DMA_PACKET
     /* Node ordinal (GPU node index). */
     UINT                        NodeOrdinal;
 
-    /* DMA buffer virtual address and size for the miniport. */
-    PVOID                       DmaBufferVa;
-    ULONG                       DmaBufferSize;
+    /* Physical DMA descriptor, or GPU VA geometry for virtual submits. */
+    PDXGKRNL_DMA_BUFFER         DmaBuffer;
+    D3DGPU_VIRTUAL_ADDRESS      DmaBufferGpuVa;
+    ULONG                       VirtualDmaBufferSize;
 
     /* Private driver data passed through to DxgkDdiSubmitCommand. */
     PVOID                       DriverPrivateData;
@@ -105,6 +118,8 @@ typedef struct _VIDSCH_DMA_PACKET
 
     /* Back-pointer to the submitting context (for priority). */
     PVOID                       Context;        /* PDXGKRNL_CONTEXT */
+    HANDLE                      MiniportDeviceHandle;
+    HANDLE                      MiniportContextHandle;
 
     /* TRUE if this packet represents a present/flip operation. */
     BOOLEAN                     IsPresent;
@@ -114,14 +129,19 @@ typedef struct _VIDSCH_DMA_PACKET
      * packet may be kicked later from the completion DPC).  Tracked
      * (fence-at-kick) submissions store KERNEL-side DXGK_ALLOCATIONLIST
      * entries: SegmentId + PhysicalAddress must survive to the kick-time
-     * DxgkDdiPatch — a D3DDDI-typed copy truncates PhysicalAddress and
-     * the miniport patches garbage.  The untracked present path stores
-     * its packed D3DDDI_ALLOCATIONLIST entries in the same storage.
+     * DxgkDdiPatch. Public D3DDDI_ALLOCATIONLIST entries never own the
+     * miniport-private allocation handle.
      */
     DXGK_ALLOCATIONLIST         InlineAllocationList[VIDSCH_INLINE_ALLOCATIONS];
     ULONG                       InlineAllocationCount;
     ULONG                       VidPnSourceId;
     ULONG                       SubmitFlags;
+    BOOLEAN                     VirtualAddressing;
+    BOOLEAN                     HoldsContextReference;
+    PVOID                       OwnedDriverPrivateData;
+    PVOID                       VirtualSubmitWorkItem;
+    struct _VIDSCH_ENGINE      *OwnerEngine;
+    volatile LONG               ReferenceCount;
 
     /*
      * Tracked mode: the DMA buffer is patched and handed to the
@@ -130,16 +150,13 @@ typedef struct _VIDSCH_DMA_PACKET
      * kick order; retirement never crosses un-executed work.
      */
     LONG                        Priority;
-    BOOLEAN                     TrackOnKick;
     BOOLEAN                     Kicked;
-    ULONG                       TrackTag;
-    PVOID                       TrackDevice;        /* PDXGKRNL_DEVICE */
-    PHANDLE                     TrackOpenHandles;   /* pool copy, freed after track */
-    UINT                        TrackOpenHandleCount;
+    PDXGKRNL_SUBMIT_DMA_BUFFER  TrackerReservation;
     D3DKMT_HANDLE               SignalSyncObject;   /* fired at retire */
     ULONG64                     SignalFenceValue;
     D3DDDI_PATCHLOCATIONLIST    InlinePatchList[VIDSCH_INLINE_PATCHES];
     ULONG                       InlinePatchCount;
+    WORK_QUEUE_ITEM             CleanupWorkItem;
 
 } VIDSCH_DMA_PACKET, *PVIDSCH_DMA_PACKET;
 
@@ -153,6 +170,9 @@ typedef struct _VIDSCH_ENGINE
 {
     /* Back-pointer to owning adapter. */
     struct _DXGKRNL_ADAPTER    *Adapter;
+
+    /* Back-pointer to the owning scheduler lifecycle context. */
+    struct _VIDSCH_CONTEXT      *Scheduler;
 
     /* Zero-based engine ordinal within the adapter. */
     ULONG                       EngineOrdinal;
@@ -178,6 +198,9 @@ typedef struct _VIDSCH_ENGINE
 
     /* Number of packets currently in the run queue. */
     ULONG                       PendingPacketCount;
+
+    /* Set by the ISR when a DMA_PREEMPTED notification must be consumed. */
+    volatile LONG               PreemptionInterruptPending;
 
     /*
      * Fence tracking.
@@ -206,12 +229,14 @@ typedef struct _VIDSCH_ENGINE
     KDPC                        CompletionDpc;
 
     /*
-     * Timer for TDR (Timeout Detection and Recovery).
-     * Armed when a command is submitted; cancelled on completion.
-     * Phase 1: timer is initialized but TDR logic is stubbed.
+     * Reserved per-engine TDR timer. The adapter watchdog currently owns
+     * timeout detection so only one PASSIVE_LEVEL reset can be active.
      */
     KTIMER                      TdrTimer;
     KDPC                        TdrDpc;
+
+    volatile LONG               OutstandingWorkers;
+    KEVENT                      WorkersDrainedEvent;
 
 } VIDSCH_ENGINE, *PVIDSCH_ENGINE;
 
@@ -232,6 +257,13 @@ typedef struct _VIDSCH_CONTEXT
      */
     PVIDSCH_ENGINE              Engines;
     ULONG                       EngineCount;
+
+    /* Serializes submit admission against suspend, reset, and teardown. */
+    FAST_MUTEX                  LifecycleMutex;
+    volatile LONG               LifecycleState;
+
+    /* Typed DpiGet/SetSchedulerCallbackState contract. */
+    volatile LONG               CallbacksEnabled;
 
     /* TRUE once VidSchInitialize has completed successfully. */
     BOOLEAN                     Initialized;
@@ -324,13 +356,19 @@ VidSchInitialize(
 /*
  * VidSchDestroy
  *
- * Tears down the scheduler context and frees all engine structures.
- * Called from DxgkAdapterStop before the miniport is stopped.
+ * Tears down the scheduler context and frees all engine structures after the
+ * miniport has stopped owning submitted work.
  *
  * IRQL: PASSIVE_LEVEL
  */
 VOID
 VidSchDestroy(
+    _In_ struct _DXGKRNL_ADAPTER *Adapter);
+
+/* Stops admission, DPCs, and workers, then cancels packets never submitted to
+ * the miniport. Submitted packets remain pinned until VidSchDestroy. */
+VOID
+VidSchPrepareForStop(
     _In_ struct _DXGKRNL_ADAPTER *Adapter);
 
 /*
@@ -349,21 +387,26 @@ VidSchDestroy(
 NTSTATUS
 VidSchSubmitCommand(
     _In_  struct _DXGKRNL_ADAPTER *Adapter,
+    _In_  ULONG                    NodeOrdinal,
     _In_  ULONG                    EngineOrdinal,
     _In_  ULONG                    SubmissionFenceId,
-    _In_  PVOID                    DmaBufferVa,
-    _In_  ULONG                    DmaBufferSize,
-    _In_opt_ PVOID                 DriverPrivateData,
-    _In_  ULONG                    DriverPrivateDataSize,
-    _In_reads_opt_(AllocationListCount) CONST D3DDDI_ALLOCATIONLIST *AllocationList,
-    _In_  ULONG                    AllocationListCount,
-    _In_opt_ PVOID                 PatchLocationList,
-    _In_  ULONG                    PatchLocationListSize,
-    _In_opt_ PVOID                 Context,
+    _In_opt_ HANDLE                MiniportDeviceHandle,
+    _In_opt_ HANDLE                MiniportContextHandle,
     _In_  BOOLEAN                  IsPresent,
     _In_  ULONG                    SubmitFlags,
     _In_  ULONG                    VidPnSourceId,
     _Out_ ULONG                   *OutFenceId);
+
+NTSTATUS
+VidSchSubmitCommandVirtual(
+    _In_ struct _DXGKRNL_ADAPTER *Adapter,
+    _In_ struct _DXGKRNL_CONTEXT *Context,
+    _In_ D3DGPU_VIRTUAL_ADDRESS DmaBufferGpuVa,
+    _In_ ULONG DmaBufferSize,
+    _In_reads_bytes_opt_(DriverPrivateDataSize) PVOID DriverPrivateData,
+    _In_ ULONG DriverPrivateDataSize,
+    _In_ BOOLEAN NullRendering,
+    _Out_ ULONG *OutFenceId);
 
 /*
  * VidSchSubmitCommandTracked
@@ -382,21 +425,22 @@ VidSchSubmitCommand(
 NTSTATUS
 VidSchSubmitCommandTracked(
     _In_  struct _DXGKRNL_ADAPTER *Adapter,
+    _In_  ULONG                    NodeOrdinal,
     _In_  ULONG                    EngineOrdinal,
-    _In_  PVOID                    DmaBufferVa,
-    _In_  ULONG                    DmaBufferSize,
+    _In_  PDXGKRNL_DMA_BUFFER      DmaBuffer,
+    _In_reads_bytes_opt_(DriverPrivateDataSize) CONST VOID *DriverPrivateData,
+    _In_  ULONG                    DriverPrivateDataSize,
     _In_reads_opt_(AllocationListCount) CONST DXGK_ALLOCATIONLIST *AllocationList,
     _In_  ULONG                    AllocationListCount,
     _In_reads_opt_(PatchLocationListCount) CONST D3DDDI_PATCHLOCATIONLIST *PatchLocationList,
     _In_  ULONG                    PatchLocationListCount,
-    _In_opt_ PVOID                 Context,
+    _In_opt_ HANDLE                MiniportDeviceHandle,
+    _In_opt_ HANDLE                MiniportContextHandle,
     _In_  LONG                     Priority,
-    _In_  ULONG                    TrackTag,
-    _In_opt_ PVOID                 TrackDevice,
-    _In_reads_opt_(OpenHandleCount) CONST HANDLE *OpenHandles,
-    _In_  UINT                     OpenHandleCount,
-    _In_  D3DKMT_HANDLE            SignalSyncObject,
-    _In_  ULONG64                  SignalFenceValue);
+    _In_  const DXGKRNL_TRACK_DMA_ARGS *TrackArgs,
+    _In_  ULONG                    SubmitFlags,
+    _In_  ULONG                    VidPnSourceId,
+    _Out_ ULONG                   *OutFenceId);
 
 /*
  * VidSchNotifyInterrupt
@@ -458,9 +502,7 @@ VidSchQueryEngineStatus(
 /*
  * VidSchStartScheduler
  *
- * Activates the scheduler for the adapter.  On Windows this creates a
- * system thread and initializes periodic scheduling timers.
- * Phase 1: stub — scheduling is driven directly by submit/DPC paths.
+ * Activates or resumes the inline scheduler for the adapter.
  *
  * IRQL: PASSIVE_LEVEL
  */
@@ -500,12 +542,13 @@ VidSchGetInterface(
     _Out_ PVIDSCH_INTERFACE Interface);
 
 /* ========================================================================
- * Stub interfaces — Phase 2+ (declared now, stubbed in vidsch.c)
+ * Scheduler lifecycle and recovery interfaces
  * ====================================================================== */
 
 NTSTATUS
 VidSchPreemptEngine(
     _In_ struct _DXGKRNL_ADAPTER *Adapter,
+    _In_ ULONG                    NodeOrdinal,
     _In_ ULONG                    EngineOrdinal);
 
 NTSTATUS
@@ -531,6 +574,25 @@ NTSTATUS
 VidSchSetSchedulerCallback(
     _In_ struct _DXGKRNL_ADAPTER *Adapter,
     _In_ PVOID                    CallbackContext);
+
+NTSTATUS
+VidSchGetSchedulerCallbackState(
+    _In_ struct _DXGKRNL_ADAPTER *Adapter,
+    _Out_ PBOOLEAN                Enabled);
+
+NTSTATUS
+VidSchSetSchedulerCallbackState(
+    _In_ struct _DXGKRNL_ADAPTER *Adapter,
+    _In_ BOOLEAN                  Enabled);
+
+NTSTATUS
+VidSchPrepareAdapterReset(
+    _In_ struct _DXGKRNL_ADAPTER *Adapter);
+
+VOID
+VidSchCompleteAdapterReset(
+    _In_ struct _DXGKRNL_ADAPTER *Adapter,
+    _In_ BOOLEAN                  ResetSucceeded);
 
 NTSTATUS
 VidSchGetEngineTdrInfo(

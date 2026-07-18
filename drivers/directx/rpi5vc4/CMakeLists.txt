@@ -7,8 +7,8 @@
 # KMDDOD_INITIALIZATION_DATA, DXGK_INTERFACE and every DXGKARG_* structure
 # have byte-identical layouts between the port driver and this miniport.
 # Mirror dxgkrnl/softgpu CMakeLists exactly.
-remove_definitions(-D_WIN32_WINNT=0x502)
-remove_definitions(-DWINVER=0x502)
+remove_definitions(-D_WIN32_WINNT=${REACTOS_TARGET_NT})
+remove_definitions(-DWINVER=${REACTOS_TARGET_NT})
 add_definitions(-D_WIN32_WINNT=0x0601 -DWINVER=0x0601)
 add_definitions(-DNTDDI_VERSION=0x06010000)    # NTDDI_WIN7
 

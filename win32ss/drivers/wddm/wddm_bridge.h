@@ -15,6 +15,7 @@ VOID     WddmBridgeCleanup(VOID);
 NTSTATUS WddmBridgeGetStatus(VOID);
 NTSTATUS WddmBridgeRequireReady(VOID);
 BOOLEAN  WddmBridgeIsReady(VOID);
+ULONG    WddmBridgeGetInterfaceVersion(VOID);
 NTSTATUS WddmBridgeGetInterface(_Out_ PREACTOS_WIN32K_DXGKRNL_INTERFACE Interface);
 
 /* Kernel-to-kernel IOCTL helper */
@@ -25,6 +26,15 @@ WddmBridgeSendIoctl(
     _In_      ULONG  InputSize,
     _Out_opt_ PVOID  OutputBuffer,
     _In_      ULONG  OutputSize);
+
+NTSTATUS
+WddmBridgeSendIoctlWithInformation(
+    _In_      ULONG      IoControlCode,
+    _In_opt_  PVOID      InputBuffer,
+    _In_      ULONG      InputSize,
+    _Out_opt_ PVOID      OutputBuffer,
+    _In_      ULONG      OutputSize,
+    _Out_opt_ PULONG_PTR Information);
 
 /* Cached device object pointer (set by WddmBridgeInit) */
 extern PFILE_OBJECT   g_DxgkrnlFileObject;

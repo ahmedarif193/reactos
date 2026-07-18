@@ -10,6 +10,56 @@
 #include <reactos/rddm/rxgkinterface.h>
 #include <debug.h>
 
+#if (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+typedef union _D3DKMT_DESTROYALLOCATION2FLAGS_LOCAL
+{
+    UINT Value;
+} D3DKMT_DESTROYALLOCATION2FLAGS_LOCAL;
+
+typedef union _D3DKMT_LOCK2FLAGS_LOCAL
+{
+    UINT Value;
+} D3DKMT_LOCK2FLAGS_LOCAL;
+
+struct _D3DKMT_DESTROYALLOCATION2
+{
+    D3DKMT_HANDLE hDevice;
+    D3DKMT_HANDLE hResource;
+    CONST D3DKMT_HANDLE *phAllocationList;
+    UINT AllocationCount;
+    D3DKMT_DESTROYALLOCATION2FLAGS_LOCAL Flags;
+};
+
+struct _D3DKMT_LOCK2
+{
+    D3DKMT_HANDLE hDevice;
+    D3DKMT_HANDLE hAllocation;
+    D3DKMT_LOCK2FLAGS_LOCAL Flags;
+    PVOID pData;
+};
+
+struct _D3DKMT_UNLOCK2
+{
+    D3DKMT_HANDLE hDevice;
+    D3DKMT_HANDLE hAllocation;
+};
+
+#if defined(_WIN64)
+C_ASSERT(sizeof(struct _D3DKMT_DESTROYALLOCATION2) == 24);
+C_ASSERT(FIELD_OFFSET(struct _D3DKMT_DESTROYALLOCATION2, phAllocationList) == 8);
+C_ASSERT(FIELD_OFFSET(struct _D3DKMT_DESTROYALLOCATION2, Flags) == 20);
+C_ASSERT(sizeof(struct _D3DKMT_LOCK2) == 24);
+C_ASSERT(FIELD_OFFSET(struct _D3DKMT_LOCK2, pData) == 16);
+#else
+C_ASSERT(sizeof(struct _D3DKMT_DESTROYALLOCATION2) == 20);
+C_ASSERT(FIELD_OFFSET(struct _D3DKMT_DESTROYALLOCATION2, phAllocationList) == 8);
+C_ASSERT(FIELD_OFFSET(struct _D3DKMT_DESTROYALLOCATION2, Flags) == 16);
+C_ASSERT(sizeof(struct _D3DKMT_LOCK2) == 16);
+C_ASSERT(FIELD_OFFSET(struct _D3DKMT_LOCK2, pData) == 12);
+#endif
+C_ASSERT(sizeof(struct _D3DKMT_UNLOCK2) == 8);
+#endif
+
 #define RETURN_STATUS_IF_NULL(Argument)            \
     do                                             \
     {                                              \
@@ -80,22 +130,37 @@ D3DKMTOpenAdapterFromHdc(
 NTSTATUS
 APIENTRY
 D3DKMTEnumAdapters(
-    _Inout_ D3DKMT_ENUMADAPTERS *pData);
+    _Inout_ CONST D3DKMT_ENUMADAPTERS *pData);
 
 NTSTATUS
 APIENTRY
 D3DKMTEnumAdapters2(
-    _Inout_ D3DKMT_ENUMADAPTERS2 *pData);
+    _Inout_ CONST D3DKMT_ENUMADAPTERS2 *pData);
 
 NTSTATUS
 APIENTRY
 D3DKMTOpenAdapterFromLuid(
-    _Inout_ D3DKMT_OPENADAPTERFROMLUID *pData);
+    _Inout_ CONST D3DKMT_OPENADAPTERFROMLUID *pData);
 
 NTSTATUS
 APIENTRY
 D3DKMTCheckVidPnExclusiveOwnership(
     _In_ CONST D3DKMT_CHECKVIDPNEXCLUSIVEOWNERSHIP *pData);
+
+NTSTATUS
+APIENTRY
+D3DKMTDestroyAllocation2(
+    _In_ CONST struct _D3DKMT_DESTROYALLOCATION2 *pData);
+
+NTSTATUS
+APIENTRY
+D3DKMTLock2(
+    _Inout_ struct _D3DKMT_LOCK2 *pData);
+
+NTSTATUS
+APIENTRY
+D3DKMTUnlock2(
+    _In_ CONST struct _D3DKMT_UNLOCK2 *pData);
 
 VOID
 WddmBridgeInitCallbacks(
@@ -1215,30 +1280,42 @@ NtGdiDdDDISignalSynchronizationObjectFromCpu(_In_ const D3DKMT_SIGNALSYNCHRONIZA
     D3DKMT_CALL_CALLBACK(RxgkIntPfnSignalSynchronizationObjectFromCpu, unnamedParam1);
 }
 
-/* ---- WDDM 2.x contract stubs (validate NULL; full impl pending dxgkrnl) ---- */
+/* ---- WDDM 2.x contracts ------------------------------------------------- */
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIDestroyAllocation2(_In_ const struct _D3DKMT_DESTROYALLOCATION2* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status;
+
+    Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    return D3DKMTDestroyAllocation2(unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDILock2(_Inout_ struct _D3DKMT_LOCK2* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status;
+
+    Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    return D3DKMTLock2(unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIUnlock2(_In_ const struct _D3DKMT_UNLOCK2* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status;
+
+    Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    return D3DKMTUnlock2(unnamedParam1);
 }
 
 NTSTATUS
@@ -1270,7 +1347,7 @@ APIENTRY
 NtGdiDdDDISubmitCommand(_In_ const struct _D3DKMT_SUBMITCOMMAND* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    D3DKMT_CALL_CALLBACK(RxgkIntPfnSubmitCommand, unnamedParam1);
 }
 
 NTSTATUS
@@ -1552,7 +1629,7 @@ APIENTRY
 NtGdiDdDDICreateContextVirtual(_Inout_ struct _D3DKMT_CREATECONTEXTVIRTUAL* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    D3DKMT_CALL_CALLBACK(RxgkIntPfnCreateContextVirtual, unnamedParam1);
 }
 
 NTSTATUS
