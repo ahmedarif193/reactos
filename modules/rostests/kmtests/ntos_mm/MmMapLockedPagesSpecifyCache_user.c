@@ -25,6 +25,7 @@
     QueryBuffer.Buffer = NULL;                                 \
     QueryBuffer.Cached = UseCache;                             \
     QueryBuffer.Status = STATUS_SUCCESS;                       \
+    QueryBuffer.MappingFlags = 0;                              \
 }
 
 #define FILL_READ_BUFFER(QueryBuffer, ReadBuffer)               \
@@ -116,6 +117,23 @@ START_TEST(MmMapLockedPagesSpecifyCache)
     Length = 0;
     FILL_READ_BUFFER(QueryBuffer, ReadBuffer);
     ok(KmtSendBufferToDriver(IOCTL_READ_BUFFER, &ReadBuffer, sizeof(READ_BUFFER), &Length) == ERROR_SUCCESS, "\n");
+
+    // read-only, non-executable user mapping
+    Length = sizeof(QUERY_BUFFER);
+    FILL_QUERY_BUFFER(QueryBuffer, BufferLength, TRUE);
+    QueryBuffer.MappingFlags = TEST_MDL_MAPPING_NO_WRITE | TEST_MDL_MAPPING_NO_EXECUTE;
+    ok(KmtSendBufferToDriver(IOCTL_QUERY_BUFFER, &QueryBuffer, sizeof(QUERY_BUFFER), &Length) == ERROR_SUCCESS, "\n");
+    ok_eq_int(QueryBuffer.Length, BufferLength);
+    ok(QueryBuffer.Buffer != NULL, "Buffer is NULL\n");
+    CHECK_ALLOC(QueryBuffer.Buffer, BufferLength);
+    KmtStartSeh()
+    *(volatile ULONG *)QueryBuffer.Buffer;
+    KmtEndSeh(STATUS_SUCCESS);
+    KmtStartSeh()
+    *(volatile ULONG *)QueryBuffer.Buffer = WRITE_PATTERN;
+    KmtEndSeh(STATUS_ACCESS_VIOLATION);
+    Length = 0;
+    ok(KmtSendBufferToDriver(IOCTL_CLEAN, NULL, 0, &Length) == ERROR_SUCCESS, "\n");
 
     // 1 page
     SET_BUFFER_LENGTH(BufferLength, 4096);

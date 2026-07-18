@@ -143,6 +143,9 @@ typedef enum _MM_PAGE_PRIORITY {
   HighPagePriority = 32
 } MM_PAGE_PRIORITY;
 
+#define MdlMappingNoWrite   0x80000000
+#define MdlMappingNoExecute 0x40000000
+
 typedef enum _MM_SYSTEM_SIZE {
   MmSmallSystem,
   MmMediumSystem,
@@ -257,4 +260,3 @@ typedef union _MM_PREFETCH_FLAGS {
                                         HEAP_CREATE_ENABLE_TRACING    |   \
                                         HEAP_CREATE_ENABLE_EXECUTE)
 $endif (_NTIFS_)
-

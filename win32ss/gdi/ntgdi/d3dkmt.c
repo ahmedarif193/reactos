@@ -1170,10 +1170,6 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIMakeResident(_Inout_ D3DDDI_MAKERESIDENT* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hPagingQueue);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->AllocationList,
-                                    unnamedParam1->NumAllocations);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnMakeResident, unnamedParam1);
 }
 
@@ -1181,10 +1177,6 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIEvict(_Inout_ D3DKMT_EVICT* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->AllocationList,
-                                    unnamedParam1->NumAllocations);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnEvict, unnamedParam1);
 }
 
@@ -1192,8 +1184,6 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIQueryVideoMemoryInfo(_Inout_ D3DKMT_QUERYVIDEOMEMORYINFO* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hAdapter);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnQueryVideoMemoryInfo, unnamedParam1);
 }
 
@@ -1201,8 +1191,6 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDICreatePagingQueue(_Inout_ D3DKMT_CREATEPAGINGQUEUE* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnCreatePagingQueue, unnamedParam1);
 }
 
@@ -1210,8 +1198,6 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIDestroyPagingQueue(_Inout_ D3DDDI_DESTROYPAGINGQUEUE* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hPagingQueue);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnDestroyPagingQueue, unnamedParam1);
 }
 
@@ -1219,9 +1205,6 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIReserveGpuVirtualAddress(_Inout_ D3DDDI_RESERVEGPUVIRTUALADDRESS* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    /* hAdapter / hPagingQueue alias the same union; both forms require it set. */
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hAdapter);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnReserveGpuVirtualAddress, unnamedParam1);
 }
 
@@ -1229,8 +1212,6 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIMapGpuVirtualAddress(_Inout_ D3DDDI_MAPGPUVIRTUALADDRESS* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hPagingQueue);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnMapGpuVirtualAddress, unnamedParam1);
 }
 
@@ -1238,8 +1219,6 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIFreeGpuVirtualAddress(_In_ const D3DKMT_FREEGPUVIRTUALADDRESS* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hAdapter);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnFreeGpuVirtualAddress, unnamedParam1);
 }
 
@@ -1247,8 +1226,6 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIUpdateGpuVirtualAddress(_In_ const D3DKMT_UPDATEGPUVIRTUALADDRESS* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnUpdateGpuVirtualAddress, unnamedParam1);
 }
 
@@ -1256,13 +1233,6 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIWaitForSynchronizationObjectFromCpu(_In_ const D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
-    D3DKMT_REQUIRE_SYNC_COUNT(unnamedParam1->ObjectCount, D3DDDI_MAX_OBJECT_WAITED_ON);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->ObjectHandleArray,
-                                    unnamedParam1->ObjectCount);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->FenceValueArray,
-                                    unnamedParam1->ObjectCount);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnWaitForSynchronizationObjectFromCpu, unnamedParam1);
 }
 
@@ -1270,13 +1240,6 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDISignalSynchronizationObjectFromCpu(_In_ const D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
-    D3DKMT_REQUIRE_SYNC_COUNT(unnamedParam1->ObjectCount, D3DDDI_MAX_OBJECT_SIGNALED);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->ObjectHandleArray,
-                                    unnamedParam1->ObjectCount);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->FenceValueArray,
-                                    unnamedParam1->ObjectCount);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnSignalSynchronizationObjectFromCpu, unnamedParam1);
 }
 

@@ -2732,6 +2732,7 @@ DxgkCreateAllocation(
     PDXGKRNL_DEVICE Device;
     PDXGKVMM_RESOURCE Resource = NULL;
     DXGK_CREATEALLOCATIONFLAGS CreateFlags;
+    D3DKMT_HANDLE InputResourceHandle;
     BOOLEAN CreatedResource = FALSE;
     BOOLEAN ResourceReferenced = FALSE;
     NTSTATUS Status = STATUS_SUCCESS;
@@ -2745,6 +2746,10 @@ DxgkCreateAllocation(
     {
         return STATUS_INVALID_PARAMETER;
     }
+
+    InputResourceHandle = pCreateAllocation->hResource;
+    if (pCreateAllocation->Flags.CreateResource && InputResourceHandle != 0)
+        return STATUS_INVALID_PARAMETER;
 
     if (pCreateAllocation->Flags.RestrictSharedAccess ||
         pCreateAllocation->Flags.CreateProtected ||
@@ -2840,7 +2845,7 @@ DxgkCreateAllocation(
     CreateFlags.Shared   = pCreateAllocation->Flags.CreateShared ? 1 : 0;
 
     pCreateAllocation->hGlobalShare = 0;
-    pCreateAllocation->hResource    = 0;
+    pCreateAllocation->hResource    = InputResourceHandle;
 
     for (i = 0; i < pCreateAllocation->NumAllocations; ++i)
     {
