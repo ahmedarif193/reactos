@@ -556,24 +556,21 @@ static BOOLEAN
 XHCI_ReferenceEndpointForSwEnum(
     _In_opt_ PXHCI_ENDPOINT Endpoint)
 {
+    KIRQL OldIrql;
+    BOOLEAN Referenced = FALSE;
+
     if (!Endpoint)
         return FALSE;
 
-    /*
-     * Increment the reference count first, then check if closing.
-     * This eliminates the race window between check and increment.
-     * If the endpoint is closing, we undo the increment immediately.
-     */
-    InterlockedIncrement(&Endpoint->SwEnumRefCount);
-
-    if (InterlockedCompareExchange(&Endpoint->Closing, 0, 0) != 0)
+    KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
+    if (!Endpoint->Closing)
     {
-        /* Endpoint is closing - undo the increment and reject the reference */
-        InterlockedDecrement(&Endpoint->SwEnumRefCount);
-        return FALSE;
+        InterlockedIncrement(&Endpoint->SwEnumRefCount);
+        Referenced = TRUE;
     }
+    KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
 
-    return TRUE;
+    return Referenced;
 }
 
 /*
@@ -591,6 +588,62 @@ XHCI_DereferenceEndpointForSwEnum(
         return;
 
     InterlockedDecrement(&Endpoint->SwEnumRefCount);
+}
+
+static BOOLEAN
+XHCI_ReferenceEndpointWork(
+    _Inout_ PXHCI_ENDPOINT Endpoint)
+{
+    KIRQL OldIrql;
+    BOOLEAN Referenced = FALSE;
+
+    KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
+    if (!Endpoint->Closing)
+    {
+        InterlockedIncrement(&Endpoint->PendingWorkCount);
+        Referenced = TRUE;
+    }
+    KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
+
+    return Referenced;
+}
+
+static VOID
+XHCI_DereferenceEndpointWork(
+    _Inout_ PXHCI_ENDPOINT Endpoint)
+{
+    InterlockedDecrement(&Endpoint->PendingWorkCount);
+}
+
+static VOID
+XHCI_DereferenceControllerWorker(
+    _Inout_ PXHCI_EXTENSION Extension)
+{
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&Extension->WorkerRundownLock, &OldIrql);
+    if (InterlockedDecrement(&Extension->WorkerRundownCount) == 0)
+        KeSetEvent(&Extension->WorkerRundownEvent, IO_NO_INCREMENT, FALSE);
+    KeReleaseSpinLock(&Extension->WorkerRundownLock, OldIrql);
+}
+
+static BOOLEAN
+XHCI_ReferenceControllerWorker(
+    _Inout_ PXHCI_EXTENSION Extension)
+{
+    KIRQL OldIrql;
+    BOOLEAN Referenced = FALSE;
+
+    KeAcquireSpinLock(&Extension->WorkerRundownLock, &OldIrql);
+    if (!Extension->StoppingOrRemoved && !Extension->FatalError)
+    {
+        if (InterlockedIncrement(&Extension->WorkerRundownCount) == 1)
+            KeClearEvent(&Extension->WorkerRundownEvent);
+        Referenced = TRUE;
+    }
+    KeReleaseSpinLock(&Extension->WorkerRundownLock, OldIrql);
+
+    return Referenced;
 }
 
 typedef struct _XHCI_COMMON_BUFFER_LAYOUT {
@@ -1635,11 +1688,21 @@ XHCI_CommandContextInit(
 {
     RtlZeroMemory(Context, sizeof(*Context));
     InitializeListHead(&Context->ListEntry);
+    Context->References = 1;
+    KeInitializeEvent(&Context->CompletionEvent, NotificationEvent, FALSE);
     Context->CommandType = CommandType;
     Context->CompletionCode = XHCI_COMPLETION_SUCCESS;
     Context->Completed = FALSE;
     Context->InList = FALSE;
-    Context->CompletionEvent = NULL;
+}
+
+static
+VOID
+XHCI_DereferenceCommandContext(
+    _Inout_ PXHCI_COMMAND_CONTEXT Context)
+{
+    if (InterlockedDecrement(&Context->References) == 0)
+        ExFreePoolWithTag(Context, XHCI_TAG);
 }
 
 static
@@ -1648,22 +1711,26 @@ XHCI_CommandContextLink(
     _Inout_ PXHCI_EXTENSION Extension,
     _Inout_ PXHCI_COMMAND_CONTEXT Context)
 {
+    InterlockedIncrement(&Context->References);
     InsertTailList(&Extension->CommandContextList, &Context->ListEntry);
     Context->InList = TRUE;
 }
 
 static
-VOID
+BOOLEAN
 XHCI_CommandContextUnlink(
     _Inout_ PXHCI_EXTENSION Extension,
     _Inout_ PXHCI_COMMAND_CONTEXT Context)
 {
+    UNREFERENCED_PARAMETER(Extension);
+
     if (!Context->InList)
-        return;
+        return FALSE;
 
     RemoveEntryList(&Context->ListEntry);
     InitializeListHead(&Context->ListEntry);
     Context->InList = FALSE;
+    return TRUE;
 }
 
 static
@@ -3611,7 +3678,15 @@ XHCI_QueueEp0StallReset(
         return;
     }
 
-    InterlockedIncrement(&Endpoint->PendingWorkCount);
+    if (!XHCI_ReferenceEndpointWork(Endpoint))
+    {
+        ExFreePoolWithTag(Work, XHCI_TAG);
+        InterlockedExchange(&Slot->Ep0NeedsStallReset, 0);
+        InterlockedExchange(&Slot->Ep0StallResetQueued, 0);
+        KeSetEvent(&Slot->Ep0StallResetEvent, IO_NO_INCREMENT, FALSE);
+        return;
+    }
+
     Work->Extension = Extension;
     Work->Endpoint = Endpoint;
     Work->RingDoorbell = FALSE;
@@ -3694,7 +3769,6 @@ static VOID NTAPI
 XHCI_EndpointResetWorker(PVOID Context)
 {
     PXHCI_EP_RESET_WORK Work = (PXHCI_EP_RESET_WORK)Context;
-    LONG NewCount;
 
     if (!Work)
         return;
@@ -3723,12 +3797,11 @@ XHCI_EndpointResetWorker(PVOID Context)
 
     if (Work->Endpoint)
     {
-        NewCount = InterlockedDecrement(&Work->Endpoint->PendingWorkCount);
         XHCI_DBG(XHCI_TRACE_TRANSFERS,
-                 "usbxhci: EndpointResetWorker done, slot=%u ep=%u PendingWorkCount now=%ld\n",
+                 "usbxhci: EndpointResetWorker done, slot=%u ep=%u\n",
                  Work->Endpoint->SlotId,
-                 Work->Endpoint->EndpointId,
-                 NewCount);
+                 Work->Endpoint->EndpointId);
+        XHCI_DereferenceEndpointWork(Work->Endpoint);
     }
 
     ExFreePoolWithTag(Work, XHCI_TAG);
@@ -4345,12 +4418,16 @@ XHCI_TtUpdateWorker(
     _In_ PVOID Context)
 {
     PXHCI_TT_UPDATE_WORK Work = (PXHCI_TT_UPDATE_WORK)Context;
+    PXHCI_EXTENSION Extension;
+
     if (!Work)
         return;
 
+    Extension = Work->Extension;
     XHCI_UpdateSlotTtInfo(Work->Extension, Work->Slot);
     if (Work->UpdateChildren && Work->Slot && Work->Slot->IsHub)
         XHCI_UpdateChildrenTtInfo(Work->Extension, Work->Slot);
+    XHCI_DereferenceControllerWorker(Extension);
     ExFreePoolWithTag(Work, XHCI_TAG);
 }
 
@@ -4666,6 +4743,7 @@ XHCI_UpdateEp0MaxPacketSizeWorker(PVOID Context)
     if (Work)
     {
         XHCI_UpdateEp0MaxPacketSize(Work->Extension, Work->Slot, Work->MaxPacketSize);
+        XHCI_DereferenceControllerWorker(Work->Extension);
         ExFreePoolWithTag(Work, XHCI_TAG);
     }
 }
@@ -4795,11 +4873,18 @@ XHCI_HandleEnumerationTransfer(
                                                   XHCI_TAG);
                         if (Work)
                         {
-                            Work->Extension = Extension;
-                            Work->Slot = Endpoint->Slot;
-                            Work->MaxPacketSize = DevDesc->bMaxPacketSize0;
-                            ExInitializeWorkItem(&Work->WorkItem, XHCI_UpdateEp0MaxPacketSizeWorker, Work);
-                            ExQueueWorkItem(&Work->WorkItem, CriticalWorkQueue);
+                            if (!XHCI_ReferenceControllerWorker(Extension))
+                            {
+                                ExFreePoolWithTag(Work, XHCI_TAG);
+                            }
+                            else
+                            {
+                                Work->Extension = Extension;
+                                Work->Slot = Endpoint->Slot;
+                                Work->MaxPacketSize = DevDesc->bMaxPacketSize0;
+                                ExInitializeWorkItem(&Work->WorkItem, XHCI_UpdateEp0MaxPacketSizeWorker, Work);
+                                ExQueueWorkItem(&Work->WorkItem, CriticalWorkQueue);
+                            }
                         }
                     }
                 }
@@ -4829,13 +4914,18 @@ XHCI_HandleEnumerationTransfer(
                                                       XHCI_TAG);
                             if (Work)
                             {
-                                Work->Extension = Extension;
-                                Work->Slot = Endpoint->Slot;
-                                Work->UpdateChildren = FALSE;
-                                ExInitializeWorkItem(&Work->Item,
-                                                     XHCI_TtUpdateWorker,
-                                                     Work);
-                                ExQueueWorkItem(&Work->Item, DelayedWorkQueue);
+                                if (!XHCI_ReferenceControllerWorker(Extension))
+                                {
+                                    ExFreePoolWithTag(Work, XHCI_TAG);
+                                }
+                                else
+                                {
+                                    Work->Extension = Extension;
+                                    Work->Slot = Endpoint->Slot;
+                                    Work->UpdateChildren = FALSE;
+                                    ExInitializeWorkItem(&Work->Item, XHCI_TtUpdateWorker, Work);
+                                    ExQueueWorkItem(&Work->Item, DelayedWorkQueue);
+                                }
                             }
                         }
                     }
@@ -4885,13 +4975,18 @@ XHCI_HandleEnumerationTransfer(
                                                   XHCI_TAG);
                         if (Work)
                         {
-                            Work->Extension = Extension;
-                            Work->Slot = Endpoint->Slot;
-                            Work->UpdateChildren = TRUE;
-                            ExInitializeWorkItem(&Work->Item,
-                                                 XHCI_TtUpdateWorker,
-                                                 Work);
-                            ExQueueWorkItem(&Work->Item, DelayedWorkQueue);
+                            if (!XHCI_ReferenceControllerWorker(Extension))
+                            {
+                                ExFreePoolWithTag(Work, XHCI_TAG);
+                            }
+                            else
+                            {
+                                Work->Extension = Extension;
+                                Work->Slot = Endpoint->Slot;
+                                Work->UpdateChildren = TRUE;
+                                ExInitializeWorkItem(&Work->Item, XHCI_TtUpdateWorker, Work);
+                                ExQueueWorkItem(&Work->Item, DelayedWorkQueue);
+                            }
                         }
                     }
                 }
@@ -4934,13 +5029,18 @@ XHCI_HandleEnumerationTransfer(
                                                   XHCI_TAG);
                         if (Work)
                         {
-                            Work->Extension = Extension;
-                            Work->Slot = Endpoint->Slot;
-                            Work->UpdateChildren = FALSE;
-                            ExInitializeWorkItem(&Work->Item,
-                                                 XHCI_TtUpdateWorker,
-                                                 Work);
-                            ExQueueWorkItem(&Work->Item, DelayedWorkQueue);
+                            if (!XHCI_ReferenceControllerWorker(Extension))
+                            {
+                                ExFreePoolWithTag(Work, XHCI_TAG);
+                            }
+                            else
+                            {
+                                Work->Extension = Extension;
+                                Work->Slot = Endpoint->Slot;
+                                Work->UpdateChildren = FALSE;
+                                ExInitializeWorkItem(&Work->Item, XHCI_TtUpdateWorker, Work);
+                                ExQueueWorkItem(&Work->Item, DelayedWorkQueue);
+                            }
                         }
                     }
                 }
@@ -6293,10 +6393,9 @@ XHCI_HandleCommandCompletion(
 
     if (CommandContext)
     {
-        KeMemoryBarrier();
-        CommandContext->Completed = TRUE;
-        if (CommandContext->CompletionEvent)
-            KeSetEvent(CommandContext->CompletionEvent, IO_NO_INCREMENT, FALSE);
+        InterlockedExchange(&CommandContext->Completed, TRUE);
+        KeSetEvent(&CommandContext->CompletionEvent, IO_NO_INCREMENT, FALSE);
+        XHCI_DereferenceCommandContext(CommandContext);
     }
 }
 
@@ -6388,12 +6487,25 @@ XHCI_ScheduleTransferPoll(
     _Inout_ PXHCI_EXTENSION Extension)
 {
     LARGE_INTEGER DueTime;
+    KIRQL OldIrql;
 
     if (!Extension)
         return;
 
+    KeAcquireSpinLock(&Extension->TransferPollLock, &OldIrql);
+    if (Extension->FatalError || Extension->StoppingOrRemoved ||
+        Extension->TransferPollScheduled != 0 ||
+        InterlockedCompareExchange(&Extension->TransferPollCounter, 0, 0) <= 0)
+    {
+        KeReleaseSpinLock(&Extension->TransferPollLock, OldIrql);
+        return;
+    }
+
+    InterlockedExchange(&Extension->TransferPollScheduled, 1);
+    KeClearEvent(&Extension->TransferPollDpcEvent);
     DueTime.QuadPart = -(LONGLONG)XHCI_TRANSFER_POLL_INTERVAL_US * 10;
     KeSetTimer(&Extension->TransferPollTimer, DueTime, &Extension->TransferPollDpc);
+    KeReleaseSpinLock(&Extension->TransferPollLock, OldIrql);
 }
 
 static
@@ -6405,10 +6517,9 @@ XHCI_ArmTransferPoll(
     if (!Extension || !Transfer)
         return;
 
-    if (Transfer->Flags & XHCI_TRANSFER_FLAG_NEEDS_POLL)
+    if (InterlockedBitTestAndSet((volatile LONG *)&Transfer->Flags, XHCI_TRANSFER_FLAG_NEEDS_POLL_BIT))
         return;
 
-    Transfer->Flags |= XHCI_TRANSFER_FLAG_NEEDS_POLL;
     if (InterlockedIncrement(&Extension->TransferPollCounter) == 1)
         XHCI_ScheduleTransferPoll(Extension);
 }
@@ -6422,12 +6533,11 @@ XHCI_DisarmTransferPoll(
     if (!Extension || !Transfer)
         return;
 
-    if (!(Transfer->Flags & XHCI_TRANSFER_FLAG_NEEDS_POLL))
+    if (!InterlockedBitTestAndReset((volatile LONG *)&Transfer->Flags, XHCI_TRANSFER_FLAG_NEEDS_POLL_BIT))
         return;
 
-    Transfer->Flags &= ~XHCI_TRANSFER_FLAG_NEEDS_POLL;
     if (InterlockedDecrement(&Extension->TransferPollCounter) <= 0)
-        KeCancelTimer(&Extension->TransferPollTimer);
+        InterlockedExchange(&Extension->TransferPollCounter, 0);
 }
 
 static
@@ -6440,18 +6550,32 @@ XHCI_TransferPollDpc(
     _In_opt_ PVOID SystemArg2)
 {
     PXHCI_EXTENSION Extension = (PXHCI_EXTENSION)DeferredContext;
+    LARGE_INTEGER DueTime;
+    KIRQL OldIrql;
 
     UNREFERENCED_PARAMETER(Dpc);
     UNREFERENCED_PARAMETER(SystemArg1);
     UNREFERENCED_PARAMETER(SystemArg2);
 
-    if (!Extension || Extension->FatalError || Extension->StoppingOrRemoved)
+    if (!Extension)
         return;
 
-    XHCI_PollForWork(Extension, TRUE);
+    if (!Extension->FatalError && !Extension->StoppingOrRemoved)
+        XHCI_PollForWork(Extension, TRUE);
 
-    if (InterlockedCompareExchange(&Extension->TransferPollCounter, 0, 0) > 0)
-        XHCI_ScheduleTransferPoll(Extension);
+    KeAcquireSpinLock(&Extension->TransferPollLock, &OldIrql);
+    if (!Extension->FatalError && !Extension->StoppingOrRemoved &&
+        InterlockedCompareExchange(&Extension->TransferPollCounter, 0, 0) > 0)
+    {
+        DueTime.QuadPart = -(LONGLONG)XHCI_TRANSFER_POLL_INTERVAL_US * 10;
+        KeSetTimer(&Extension->TransferPollTimer, DueTime, &Extension->TransferPollDpc);
+    }
+    else
+    {
+        InterlockedExchange(&Extension->TransferPollScheduled, 0);
+        KeSetEvent(&Extension->TransferPollDpcEvent, IO_NO_INCREMENT, FALSE);
+    }
+    KeReleaseSpinLock(&Extension->TransferPollLock, OldIrql);
 }
 
 static
@@ -6523,101 +6647,94 @@ XHCI_QueueDeferredTransferCompletion(
         return;
 
     KeAcquireSpinLock(&Extension->DeferredTransferLock, &OldIrql);
+    if (Extension->FatalError || Extension->StoppingOrRemoved)
+    {
+        KeReleaseSpinLock(&Extension->DeferredTransferLock, OldIrql);
+        return;
+    }
     InsertTailList(&Extension->DeferredTransferList, &Transfer->ListEntry);
     KeReleaseSpinLock(&Extension->DeferredTransferLock, OldIrql);
 
-    if (!Extension->FatalError && !Extension->StoppingOrRemoved)
-        XHCI_ScheduleTransferPoll(Extension);
+    XHCI_ScheduleTransferPoll(Extension);
 }
 
-/**
- * @brief Drain deferred transfer completions belonging to a specific slot.
- *
- * When a slot is being disabled due to device disconnect, any transfers that
- * were deferred (queued on DeferredTransferList because AllowCallbacks was
- * FALSE at the time of the transfer event) must be completed BEFORE the slot
- * state is torn down. Otherwise, the deferred drain that runs later would
- * pass stale TransferParameters pointers to USBPORT after the USBPORT_TRANSFER
- * structures have been freed by the abort path, causing a use-after-free crash.
- *
- * This function removes only transfers belonging to the specified slot and
- * completes them immediately. Transfers for other slots remain on the list.
- */
+static
+VOID
+XHCI_CompleteDeferredTransferLocked(
+    _Inout_ PXHCI_EXTENSION Extension,
+    _Inout_ PXHCI_TRANSFER Transfer,
+    _In_ USBD_STATUS TransferStatus)
+{
+    PXHCI_ENDPOINT Endpoint;
+    PUSBPORT_TRANSFER_PARAMETERS TransferParameters;
+    ULONG BytesTransferred;
+    BOOLEAN IsIsochronous;
+
+    Endpoint = Transfer->Endpoint;
+    TransferParameters = Transfer->TransferParameters;
+    BytesTransferred = Transfer->BytesTransferred;
+    IsIsochronous = Transfer->IsIsochronous;
+    if (!Endpoint || !TransferParameters)
+        return;
+
+    if (InterlockedBitTestAndSet((volatile LONG *)&Transfer->Flags, XHCI_TRANSFER_FLAG_COMPLETED_BIT))
+    {
+        DPRINT1("usbxhci: deferred completion skipping already-completed transfer %p\n", Transfer);
+        return;
+    }
+
+    if (IsIsochronous && XhciRegPacket.UsbPortCompleteIsoTransfer)
+    {
+        XhciRegPacket.UsbPortCompleteIsoTransfer(Extension, Endpoint, TransferParameters, BytesTransferred);
+    }
+    else if (XhciRegPacket.UsbPortCompleteTransfer)
+    {
+        XhciRegPacket.UsbPortCompleteTransfer(Extension, Endpoint, TransferParameters, TransferStatus, BytesTransferred);
+    }
+}
+
 static
 VOID
 XHCI_FlushDeferredCompletionsForSlot(
     _Inout_ PXHCI_EXTENSION Extension,
     _In_ UCHAR SlotId)
 {
-    LIST_ENTRY SlotList;
-    LIST_ENTRY KeepList;
     KIRQL OldIrql;
 
     if (!Extension)
         return;
 
-    InitializeListHead(&SlotList);
-    InitializeListHead(&KeepList);
-
-    /* Partition the deferred list: transfers for this slot go to SlotList,
-     * everything else goes to KeepList. */
-    KeAcquireSpinLock(&Extension->DeferredTransferLock, &OldIrql);
-    while (!IsListEmpty(&Extension->DeferredTransferList))
+    for (;;)
     {
-        PLIST_ENTRY Entry = RemoveHeadList(&Extension->DeferredTransferList);
-        PXHCI_TRANSFER Transfer = CONTAINING_RECORD(Entry, XHCI_TRANSFER, ListEntry);
+        PLIST_ENTRY Entry;
+        PXHCI_TRANSFER Transfer = NULL;
+        USBD_STATUS TransferStatus = USBD_STATUS_CANCELED;
 
-        if (Transfer->Endpoint && Transfer->Endpoint->SlotId == SlotId)
-            InsertTailList(&SlotList, Entry);
-        else
-            InsertTailList(&KeepList, Entry);
-    }
-
-    /* Re-populate the deferred list with non-matching transfers */
-    while (!IsListEmpty(&KeepList))
-    {
-        PLIST_ENTRY Entry = RemoveHeadList(&KeepList);
-        InsertTailList(&Extension->DeferredTransferList, Entry);
-    }
-    KeReleaseSpinLock(&Extension->DeferredTransferLock, OldIrql);
-
-    /* Now complete the slot's deferred transfers outside the lock */
-    while (!IsListEmpty(&SlotList))
-    {
-        PLIST_ENTRY Entry = RemoveHeadList(&SlotList);
-        PXHCI_TRANSFER Transfer = CONTAINING_RECORD(Entry, XHCI_TRANSFER, ListEntry);
-        PXHCI_ENDPOINT Endpoint = Transfer->Endpoint;
-
-        if (!Endpoint || !Transfer->TransferParameters)
-            continue;
-
-        /* Mark as completed to prevent any other path from double-completing */
-        if (InterlockedBitTestAndSet((volatile LONG *)&Transfer->Flags,
-                                     XHCI_TRANSFER_FLAG_COMPLETED_BIT))
+        KeAcquireSpinLock(&Extension->DeferredTransferLock, &OldIrql);
+        for (Entry = Extension->DeferredTransferList.Flink;
+             Entry != &Extension->DeferredTransferList;
+             Entry = Entry->Flink)
         {
-            DPRINT1("usbxhci: slot %u deferred flush skipping already-completed transfer %p\n",
-                    SlotId, Transfer);
-            continue;
+            PXHCI_TRANSFER Candidate = CONTAINING_RECORD(Entry, XHCI_TRANSFER, ListEntry);
+
+            if (Candidate->Endpoint && Candidate->Endpoint->SlotId == SlotId)
+            {
+                Transfer = Candidate;
+                TransferStatus = Candidate->UsbdStatus;
+                RemoveEntryList(Entry);
+                InitializeListHead(&Transfer->ListEntry);
+                break;
+            }
         }
 
-        DPRINT1("usbxhci: slot %u flushing deferred transfer %p ep=%u\n",
-                SlotId, Transfer, Endpoint->EndpointId);
+        if (!Transfer)
+        {
+            KeReleaseSpinLock(&Extension->DeferredTransferLock, OldIrql);
+            break;
+        }
 
-        if (Transfer->IsIsochronous && XhciRegPacket.UsbPortCompleteIsoTransfer)
-        {
-            XhciRegPacket.UsbPortCompleteIsoTransfer(Extension,
-                                                     Endpoint,
-                                                     Transfer->TransferParameters,
-                                                     Transfer->BytesTransferred);
-        }
-        else if (XhciRegPacket.UsbPortCompleteTransfer)
-        {
-            XhciRegPacket.UsbPortCompleteTransfer(Extension,
-                                                  Endpoint,
-                                                  Transfer->TransferParameters,
-                                                  Transfer->UsbdStatus,
-                                                  Transfer->BytesTransferred);
-        }
+        XHCI_CompleteDeferredTransferLocked(Extension, Transfer, TransferStatus);
+        KeReleaseSpinLock(&Extension->DeferredTransferLock, OldIrql);
     }
 }
 
@@ -6626,72 +6743,28 @@ VOID
 XHCI_DrainDeferredTransferCompletions(
     _Inout_ PXHCI_EXTENSION Extension)
 {
-    LIST_ENTRY LocalList;
     KIRQL OldIrql;
 
     if (!Extension || Extension->FatalError || Extension->StoppingOrRemoved)
         return;
 
-    InitializeListHead(&LocalList);
-
-    KeAcquireSpinLock(&Extension->DeferredTransferLock, &OldIrql);
-    while (!IsListEmpty(&Extension->DeferredTransferList))
+    for (;;)
     {
-        PLIST_ENTRY Entry = RemoveHeadList(&Extension->DeferredTransferList);
-        InsertTailList(&LocalList, Entry);
-    }
-    KeReleaseSpinLock(&Extension->DeferredTransferLock, OldIrql);
+        PXHCI_TRANSFER Transfer;
+        USBD_STATUS TransferStatus;
 
-    while (!IsListEmpty(&LocalList))
-    {
-        PLIST_ENTRY Entry = RemoveHeadList(&LocalList);
-        PXHCI_TRANSFER Transfer = CONTAINING_RECORD(Entry, XHCI_TRANSFER, ListEntry);
-        PXHCI_ENDPOINT Endpoint = Transfer->Endpoint;
-
-        if (!Endpoint)
-            continue;
-
-        /*
-         * Guard against double-completion. Another path (disable-slot
-         * force-complete, SW-enum worker, or StopController drain) may
-         * have already handed this transfer to USBPORT. Completing it
-         * again would pass a stale TransferParameters pointer into
-         * USBPORT_MiniportCompleteTransfer, causing a use-after-free
-         * crash when USBPORT does CONTAINING_RECORD on freed memory.
-         *
-         * The XHCI_TRANSFER_FLAG_COMPLETED flag is set atomically by
-         * whichever path completes the transfer first.
-         */
-        if (InterlockedBitTestAndSet((volatile LONG *)&Transfer->Flags,
-                                     XHCI_TRANSFER_FLAG_COMPLETED_BIT))
+        KeAcquireSpinLock(&Extension->DeferredTransferLock, &OldIrql);
+        if (IsListEmpty(&Extension->DeferredTransferList))
         {
-            DPRINT1("usbxhci: deferred drain skipping already-completed transfer %p (flags=0x%lx)\n",
-                    Transfer, Transfer->Flags);
-            continue;
+            KeReleaseSpinLock(&Extension->DeferredTransferLock, OldIrql);
+            break;
         }
 
-        if (!Transfer->TransferParameters)
-        {
-            DPRINT1("usbxhci: deferred drain skipping transfer %p with NULL TransferParameters\n",
-                    Transfer);
-            continue;
-        }
-
-        if (Transfer->IsIsochronous && XhciRegPacket.UsbPortCompleteIsoTransfer)
-        {
-            XhciRegPacket.UsbPortCompleteIsoTransfer(Extension,
-                                                     Endpoint,
-                                                     Transfer->TransferParameters,
-                                                     Transfer->BytesTransferred);
-        }
-        else if (XhciRegPacket.UsbPortCompleteTransfer)
-        {
-            XhciRegPacket.UsbPortCompleteTransfer(Extension,
-                                                  Endpoint,
-                                                  Transfer->TransferParameters,
-                                                  Transfer->UsbdStatus,
-                                                  Transfer->BytesTransferred);
-        }
+        Transfer = CONTAINING_RECORD(RemoveHeadList(&Extension->DeferredTransferList), XHCI_TRANSFER, ListEntry);
+        TransferStatus = Transfer->UsbdStatus;
+        InitializeListHead(&Transfer->ListEntry);
+        XHCI_CompleteDeferredTransferLocked(Extension, Transfer, TransferStatus);
+        KeReleaseSpinLock(&Extension->DeferredTransferLock, OldIrql);
     }
 }
 
@@ -9661,9 +9734,10 @@ XHCI_SendCommand(
     MPSTATUS Status = MP_STATUS_ERROR;
     MPSTATUS RecoveryStatus;
     KIRQL OldIrql;
-    XHCI_COMMAND_CONTEXT CommandContext;
+    PXHCI_COMMAND_CONTEXT CommandContext;
     ULONG EffectiveTimeout = TimeoutMs;
     BOOLEAN RetryCommands = AllowRetry;
+    BOOLEAN Removed;
     KIRQL CurrentIrql = KeGetCurrentIrql();
 
     /*
@@ -9732,7 +9806,18 @@ XHCI_SendCommand(
 
     while (Attempts--)
     {
-        XHCI_CommandContextInit(&CommandContext, TrbType);
+#if defined(NonPagedPoolNx)
+        CommandContext = ExAllocatePoolWithTag(NonPagedPoolNx, sizeof(*CommandContext), XHCI_TAG);
+#else
+        CommandContext = ExAllocatePoolWithTag(NonPagedPool, sizeof(*CommandContext), XHCI_TAG);
+#endif
+        if (!CommandContext)
+        {
+            Status = MP_STATUS_NO_RESOURCES;
+            break;
+        }
+
+        XHCI_CommandContextInit(CommandContext, TrbType);
 
         KeAcquireSpinLock(&Extension->CommandLock, &OldIrql);
         Status = XHCI_QueueCommand(Extension,
@@ -9740,11 +9825,14 @@ XHCI_SendCommand(
                                    Parameter,
                                    Context,
                                    ControlFlags,
-                                   &CommandContext);
+                                   CommandContext);
         KeReleaseSpinLock(&Extension->CommandLock, OldIrql);
 
         if (Status != MP_STATUS_SUCCESS)
+        {
+            XHCI_DereferenceCommandContext(CommandContext);
             break;
+        }
 
         if (TrbType == XHCI_TRB_TYPE_ENABLE_SLOT ||
             TrbType == XHCI_TRB_TYPE_ADDRESS_DEV ||
@@ -9752,7 +9840,7 @@ XHCI_SendCommand(
         {
             XHCI_TraceCommandRingState(Extension,
                                        "SendCommand queued",
-                                       CommandContext.CommandPointer,
+                                       CommandContext->CommandPointer,
                                        TrbType);
             if (TrbType == XHCI_TRB_TYPE_ENABLE_SLOT)
             {
@@ -9766,15 +9854,22 @@ XHCI_SendCommand(
 
         Status = XHCI_WaitForCommandCompletion(Extension,
                                                EffectiveTimeout,
-                                               &CommandContext,
+                                               CommandContext,
                                                SlotIdOut,
                                                CompletionCodeOut);
+        if (Status != MP_STATUS_SUCCESS)
+        {
+            KeAcquireSpinLock(&Extension->CommandLock, &OldIrql);
+            Removed = XHCI_CommandContextUnlink(Extension, CommandContext);
+            KeReleaseSpinLock(&Extension->CommandLock, OldIrql);
+            if (Removed)
+                XHCI_DereferenceCommandContext(CommandContext);
+        }
+
+        XHCI_DereferenceCommandContext(CommandContext);
+
         if (Status == MP_STATUS_SUCCESS)
             break;
-
-        KeAcquireSpinLock(&Extension->CommandLock, &OldIrql);
-        XHCI_CommandContextUnlink(Extension, &CommandContext);
-        KeReleaseSpinLock(&Extension->CommandLock, OldIrql);
 
         if (!RetryCommands || Status != MP_STATUS_HW_ERROR || Extension->StoppingOrRemoved)
             break;
@@ -9827,7 +9922,6 @@ XHCI_WaitForCommandCompletion(
              TimeoutMs);
     ULONG Remaining;
     KIRQL Irql;
-    KEVENT CompletionEvent;
     LARGE_INTEGER Interval;
     BOOLEAN UseEventWait = FALSE;
     MPSTATUS Result = MP_STATUS_ERROR;
@@ -9842,8 +9936,6 @@ XHCI_WaitForCommandCompletion(
     if (Irql <= APC_LEVEL)
     {
         UseEventWait = TRUE;
-        KeInitializeEvent(&CompletionEvent, NotificationEvent, FALSE);
-        CommandContext->CompletionEvent = &CompletionEvent;
         Interval.QuadPart = -(LONGLONG)XHCI_COMMAND_POLL_INTERVAL_US * 10;
     }
 
@@ -9879,7 +9971,7 @@ XHCI_WaitForCommandCompletion(
         {
             NTSTATUS WaitStatus;
 
-            WaitStatus = KeWaitForSingleObject(&CompletionEvent,
+            WaitStatus = KeWaitForSingleObject(&CommandContext->CompletionEvent,
                                                Executive,
                                                KernelMode,
                                                FALSE,
@@ -9984,7 +10076,6 @@ CheckCompletion:
     }
 
 Exit:
-    CommandContext->CompletionEvent = NULL;
     return Result;
 }
 
@@ -12256,8 +12347,6 @@ XHCI_CloseEndpoint(PVOID MiniPortExtension,
                    BOOLEAN IsDoNotCallMiniport)
 {
     PXHCI_ENDPOINT XhciEndpoint = Endpoint;
-    ULONG WaitIterations;
-    LONG RefCount;
     KIRQL CurrentIrql;
     UNREFERENCED_PARAMETER(MiniPortExtension);
     UNREFERENCED_PARAMETER(IsDoNotCallMiniport);
@@ -12279,67 +12368,27 @@ XHCI_CloseEndpoint(PVOID MiniPortExtension,
      * Mark the endpoint as closing. This prevents new SW-enum work from
      * being queued via XHCI_ReferenceEndpointForSwEnum.
      */
-    InterlockedExchange(&XhciEndpoint->Closing, 1);
-
-    /*
-     * Wait for any pending SW-enum work to complete. We poll the reference
-     * count with a timeout to avoid blocking indefinitely if something
-     * goes wrong.
-     *
-     * IRQL handling:
-     * - At PASSIVE_LEVEL or APC_LEVEL: We can safely sleep and wait for the
-     *   work items to drain. Work items run at PASSIVE_LEVEL so they will
-     *   complete and decrement SwEnumRefCount.
-     * - At DISPATCH_LEVEL: We cannot wait because work items need PASSIVE_LEVEL
-     *   to run. Busy-waiting at DISPATCH would starve the system. Instead, we
-     *   just set Closing=1 (done above) and let StopController handle draining
-     *   later at PASSIVE_LEVEL.
-     */
-    CurrentIrql = KeGetCurrentIrql();
-    if (CurrentIrql > APC_LEVEL)
     {
-        /*
-         * At DISPATCH_LEVEL or higher - cannot wait for PASSIVE work items.
-         * The Closing flag is set, preventing new work. Any pending work
-         * will be drained by StopController at PASSIVE_LEVEL.
-         */
-        RefCount = InterlockedCompareExchange(&XhciEndpoint->SwEnumRefCount, 0, 0);
-        if (RefCount != 0)
-        {
-            DPRINT1("usbxhci: CloseEndpoint at IRQL=%u, SwEnumRefCount=%ld - deferring drain to StopController\n",
-                    (ULONG)CurrentIrql, RefCount);
-        }
+        KIRQL OldIrql;
+        KeAcquireSpinLock(&XhciEndpoint->Lock, &OldIrql);
+        InterlockedExchange(&XhciEndpoint->Closing, 1);
+        KeReleaseSpinLock(&XhciEndpoint->Lock, OldIrql);
     }
-    else
+
+    CurrentIrql = KeGetCurrentIrql();
+    ASSERT(CurrentIrql <= APC_LEVEL);
+    while (InterlockedCompareExchange(&XhciEndpoint->SwEnumRefCount, 0, 0) != 0 ||
+           InterlockedCompareExchange(&XhciEndpoint->PendingWorkCount, 0, 0) != 0)
     {
-        /* At PASSIVE_LEVEL or APC_LEVEL - safe to wait for drain */
-        WaitIterations = XHCI_CLOSE_DRAIN_TIMEOUT_US / XHCI_CLOSE_DRAIN_POLL_US;
-        while (WaitIterations > 0)
+        if (CurrentIrql <= APC_LEVEL)
         {
-            RefCount = InterlockedCompareExchange(&XhciEndpoint->SwEnumRefCount, 0, 0);
-            if (RefCount == 0)
-                break;
-
-            /*
-             * Sleep briefly to allow pending work items to complete.
-             * Use KeDelayExecutionThread to yield the CPU properly.
-             */
-            {
-                LARGE_INTEGER Delay;
-                Delay.QuadPart = -10LL * XHCI_CLOSE_DRAIN_POLL_US; /* 100ns units, negative = relative */
-                KeDelayExecutionThread(KernelMode, FALSE, &Delay);
-            }
-            WaitIterations--;
+            LARGE_INTEGER Delay;
+            Delay.QuadPart = -10LL * XHCI_CLOSE_DRAIN_POLL_US;
+            KeDelayExecutionThread(KernelMode, FALSE, &Delay);
         }
-
-        if (WaitIterations == 0)
+        else
         {
-            RefCount = InterlockedCompareExchange(&XhciEndpoint->SwEnumRefCount, 0, 0);
-            if (RefCount != 0)
-            {
-                DPRINT1("usbxhci: CloseEndpoint timeout waiting for SwEnumRefCount=%ld to drain\n",
-                        RefCount);
-            }
+            KeStallExecutionProcessor(XHCI_CLOSE_DRAIN_POLL_US);
         }
     }
 
@@ -12376,18 +12425,7 @@ XHCI_CloseEndpoint(PVOID MiniPortExtension,
     }
 
     if (!XhciEndpoint->UsesStaticRing)
-    {
-        /*
-         * Now that SwEnumRefCount has drained (or timed out), also check
-         * PendingWorkCount for any other deferred work.
-         */
-        if (InterlockedCompareExchange(&XhciEndpoint->PendingWorkCount, 0, 0) != 0)
-        {
-            DPRINT1("usbxhci: CloseEndpoint skipping ring free while PendingWorkCount is non-zero\n");
-        }
-        else
-            XHCI_FreeTransferRing(&XhciEndpoint->TransferRing);
-    }
+        XHCI_FreeTransferRing(&XhciEndpoint->TransferRing);
 
     if (XhciEndpoint->StreamsEnabled)
         XHCI_FreeStreamResources(XhciEndpoint);
@@ -12433,11 +12471,18 @@ XHCI_StartController(PVOID MiniPortExtension,
     Extension->Quirks = 0;
     Extension->PortPowerControl = FALSE;
     Extension->PortIndicatorsSupported = FALSE;
-    Extension->StoppingOrRemoved = FALSE;
+    KeInitializeSpinLock(&Extension->WorkerRundownLock);
+    KeInitializeSpinLock(&Extension->TransferPollLock);
+    InterlockedExchange(&Extension->StoppingOrRemoved, 0);
     Extension->Ep0WorkerCount = 0;
+    Extension->SwEnumWorkerCount = 0;
+    Extension->WorkerRundownCount = 0;
+    KeInitializeEvent(&Extension->WorkerRundownEvent, NotificationEvent, TRUE);
     KeInitializeTimerEx(&Extension->TransferPollTimer, NotificationTimer);
     KeInitializeDpc(&Extension->TransferPollDpc, XHCI_TransferPollDpc, Extension);
     Extension->TransferPollCounter = 0;
+    Extension->TransferPollScheduled = 0;
+    KeInitializeEvent(&Extension->TransferPollDpcEvent, NotificationEvent, TRUE);
     Extension->LastMfIndex = 0;
     Extension->FrameHighBits = 0;
     XHCI_InitDeviceAddressMap(Extension);
@@ -12989,7 +13034,6 @@ XHCI_StopController(PVOID MiniPortExtension,
 {
     PXHCI_EXTENSION Extension = MiniPortExtension;
     ULONG SlotId;
-    ULONG WaitLoops;
     KIRQL OldIrql;
 
     UNREFERENCED_PARAMETER(IsDoNotCallMiniport);
@@ -12999,8 +13043,19 @@ XHCI_StopController(PVOID MiniPortExtension,
 
     DPRINT1("usbxhci: StopController\n");
 
-    Extension->StoppingOrRemoved = TRUE;
-    KeCancelTimer(&Extension->TransferPollTimer);
+    KeAcquireSpinLock(&Extension->WorkerRundownLock, &OldIrql);
+    InterlockedExchange(&Extension->StoppingOrRemoved, 1);
+    KeReleaseSpinLock(&Extension->WorkerRundownLock, OldIrql);
+
+    KeAcquireSpinLock(&Extension->TransferPollLock, &OldIrql);
+    if (Extension->TransferPollScheduled != 0 &&
+        (KeCancelTimer(&Extension->TransferPollTimer) || KeRemoveQueueDpc(&Extension->TransferPollDpc)))
+    {
+        InterlockedExchange(&Extension->TransferPollScheduled, 0);
+        KeSetEvent(&Extension->TransferPollDpcEvent, IO_NO_INCREMENT, FALSE);
+    }
+    KeReleaseSpinLock(&Extension->TransferPollLock, OldIrql);
+    KeWaitForSingleObject(&Extension->TransferPollDpcEvent, Executive, KernelMode, FALSE, NULL);
 
     /* Reverse the ExSetTimerResolution raise performed at Start. */
     if (Extension->TimerResolutionRaised)
@@ -13051,17 +13106,10 @@ XHCI_StopController(PVOID MiniPortExtension,
 
         Interval.QuadPart = -(LONGLONG)100 * 10; /* 100us */
 
-        WaitLoops = XHCI_EP0_WORK_TIMEOUT_US / 100;
-        while (InterlockedCompareExchange(&Extension->Ep0WorkerCount, 0, 0) != 0 &&
-               WaitLoops--)
-        {
-            KeDelayExecutionThread(KernelMode, FALSE, &Interval);
-        }
+        KeWaitForSingleObject(&Extension->WorkerRundownEvent, Executive, KernelMode, FALSE, NULL);
 
-        /* Drain any deferred SW-ENUM work before tearing down controller state. */
-        WaitLoops = XHCI_SWENUM_WORK_TIMEOUT_US / 100;
-        while (InterlockedCompareExchange(&Extension->SwEnumWorkerCount, 0, 0) != 0 &&
-               WaitLoops--)
+        while (InterlockedCompareExchange(&Extension->Ep0WorkerCount, 0, 0) != 0 ||
+               InterlockedCompareExchange(&Extension->SwEnumWorkerCount, 0, 0) != 0)
         {
             KeDelayExecutionThread(KernelMode, FALSE, &Interval);
         }
@@ -13090,8 +13138,10 @@ XHCI_StopController(PVOID MiniPortExtension,
         PXHCI_COMMAND_CONTEXT Context =
             CONTAINING_RECORD(Entry, XHCI_COMMAND_CONTEXT, ListEntry);
         Context->InList = FALSE;
-        Context->Completed = TRUE;
+        InterlockedExchange(&Context->Completed, TRUE);
         Context->CompletionCode = XHCI_COMPLETION_STOPPED;
+        KeSetEvent(&Context->CompletionEvent, IO_NO_INCREMENT, FALSE);
+        XHCI_DereferenceCommandContext(Context);
     }
     InitializeListHead(&Extension->CommandContextList);
     KeReleaseSpinLock(&Extension->CommandLock, OldIrql);
@@ -13102,38 +13152,8 @@ XHCI_StopController(PVOID MiniPortExtension,
         PLIST_ENTRY Entry = RemoveHeadList(&Extension->DeferredTransferList);
         PXHCI_TRANSFER Transfer = CONTAINING_RECORD(Entry, XHCI_TRANSFER, ListEntry);
 
-        KeReleaseSpinLock(&Extension->DeferredTransferLock, OldIrql);
-
-        /* Check if already completed by another path (disable-slot, etc.) */
-        if (InterlockedBitTestAndSet((volatile LONG *)&Transfer->Flags,
-                                     XHCI_TRANSFER_FLAG_COMPLETED_BIT))
-        {
-            DPRINT1("usbxhci: StopController drain skipping already-completed transfer %p\n",
-                    Transfer);
-            KeAcquireSpinLock(&Extension->DeferredTransferLock, &OldIrql);
-            continue;
-        }
-
-        if (Transfer->Endpoint && Transfer->TransferParameters)
-        {
-            if (Transfer->IsIsochronous && XhciRegPacket.UsbPortCompleteIsoTransfer)
-            {
-                XhciRegPacket.UsbPortCompleteIsoTransfer(Extension,
-                                                         Transfer->Endpoint,
-                                                         Transfer->TransferParameters,
-                                                         Transfer->BytesTransferred);
-            }
-            else if (XhciRegPacket.UsbPortCompleteTransfer)
-            {
-                XhciRegPacket.UsbPortCompleteTransfer(Extension,
-                                                      Transfer->Endpoint,
-                                                      Transfer->TransferParameters,
-                                                      USBD_STATUS_CANCELED,
-                                                      Transfer->BytesTransferred);
-            }
-        }
-
-        KeAcquireSpinLock(&Extension->DeferredTransferLock, &OldIrql);
+        InitializeListHead(&Transfer->ListEntry);
+        XHCI_CompleteDeferredTransferLocked(Extension, Transfer, USBD_STATUS_CANCELED);
     }
     KeReleaseSpinLock(&Extension->DeferredTransferLock, OldIrql);
 
@@ -13923,12 +13943,43 @@ XHCI_AbortTransfer(PVOID MiniPortExtension,
     BOOLEAN HasActiveTransfer;
     BOOLEAN IsRequestedTransferActive;
     BOOLEAN DisownedAbortTransfer = FALSE;
+    BOOLEAN RemovedDeferredTransfer = FALSE;
 
     if (BytesTransferred)
         *BytesTransferred = 0;
 
     if (!Extension || !Endpoint)
         return;
+
+    if (Transfer)
+    {
+        PLIST_ENTRY Entry;
+
+        KeAcquireSpinLock(&Extension->DeferredTransferLock, &OldIrql);
+        for (Entry = Extension->DeferredTransferList.Flink;
+             Entry != &Extension->DeferredTransferList;
+             Entry = Entry->Flink)
+        {
+            PXHCI_TRANSFER DeferredTransfer = CONTAINING_RECORD(Entry, XHCI_TRANSFER, ListEntry);
+
+            if (DeferredTransfer == Transfer)
+            {
+                RemoveEntryList(Entry);
+                InitializeListHead(&Transfer->ListEntry);
+                RemovedDeferredTransfer = TRUE;
+                break;
+            }
+        }
+        KeReleaseSpinLock(&Extension->DeferredTransferLock, OldIrql);
+
+        if (RemovedDeferredTransfer)
+        {
+            XHCI_DisarmTransferPoll(Extension, Transfer);
+            XHCI_FreeIsoTransferContext(Transfer);
+            Transfer->UsbdStatus = USBD_STATUS_CANCELED;
+            return;
+        }
+    }
 
     /* No xHC commands for a NULL/disabled slot: code-11 completions keep IMAN.IP asserted (INTx storm) */
     if (!Endpoint->Slot || !Endpoint->Slot->InUse || Endpoint->Slot->DisablePending)
@@ -14123,9 +14174,15 @@ XHCI_AbortTransfer(PVOID MiniPortExtension,
         return;
     }
 
-    InterlockedIncrement(&Endpoint->PendingWorkCount);
+    if (!XHCI_ReferenceEndpointWork(Endpoint))
+    {
+        if (!Endpoint->DefaultControl)
+            XHCI_EndEndpointReset(Endpoint);
+        return;
+    }
+
     XHCI_PerformEndpointResetSequence(Extension, Endpoint, TRUE);
-    InterlockedDecrement(&Endpoint->PendingWorkCount);
+    XHCI_DereferenceEndpointWork(Endpoint);
 
     if (!Endpoint->DefaultControl)
         XHCI_EndEndpointReset(Endpoint);
@@ -14267,9 +14324,15 @@ XHCI_SetEndpointStatus(PVOID MiniPortExtension,
         OwnsEndpointReset = TRUE;
     }
 
-    InterlockedIncrement(&Endpoint->PendingWorkCount);
+    if (!XHCI_ReferenceEndpointWork(Endpoint))
+    {
+        if (OwnsEndpointReset)
+            XHCI_EndEndpointReset(Endpoint);
+        return;
+    }
+
     XHCI_PerformEndpointResetSequence(Extension, Endpoint, TRUE);
-    InterlockedDecrement(&Endpoint->PendingWorkCount);
+    XHCI_DereferenceEndpointWork(Endpoint);
 
     if (OwnsEndpointReset)
         XHCI_EndEndpointReset(Endpoint);

@@ -316,10 +316,16 @@ typedef struct _XHCI_EXTENSION {
   /* PnP/synchronization */
   volatile LONG Ep0WorkerCount;
   volatile LONG SwEnumWorkerCount;
-  BOOLEAN StoppingOrRemoved;
+  volatile LONG WorkerRundownCount;
+  KEVENT WorkerRundownEvent;
+  KSPIN_LOCK WorkerRundownLock;
+  volatile LONG StoppingOrRemoved;
   KTIMER TransferPollTimer;
   KDPC TransferPollDpc;
   volatile LONG TransferPollCounter;
+  volatile LONG TransferPollScheduled;
+  KEVENT TransferPollDpcEvent;
+  KSPIN_LOCK TransferPollLock;
   /* Frame number wrap tracking for Get32BitFrameNumber.
    * xHCI MFINDEX is only 14 bits and wraps every ~2 seconds.
    * USBPORT expects a monotonically increasing 32-bit value. */
@@ -336,13 +342,14 @@ typedef struct _XHCI_EXTENSION {
 
 typedef struct _XHCI_COMMAND_CONTEXT {
   LIST_ENTRY ListEntry;
+  volatile LONG References;
+  KEVENT CompletionEvent;
   ULONGLONG CommandPointer;
   ULONG CommandType;
   ULONG CompletionCode;
   UCHAR SlotId;
-  BOOLEAN Completed;
+  volatile LONG Completed;
   BOOLEAN InList;
-  PKEVENT CompletionEvent;
 } XHCI_COMMAND_CONTEXT, *PXHCI_COMMAND_CONTEXT;
 
 typedef struct _XHCI_ENDPOINT {
@@ -426,6 +433,7 @@ typedef struct _XHCI_TRANSFER {
 #define XHCI_TRANSFER_FLAG_SWENUM_DONE    0x00000020
 #define XHCI_TRANSFER_FLAG_DATA_STAGE_DONE 0x00000040  /* BytesTransferred saved from Data Stage SHORT_PACKET */
 #define XHCI_TRANSFER_FLAG_COMPLETED      0x00000080  /* Transfer already completed to USBPORT; prevents double-completion */
+#define XHCI_TRANSFER_FLAG_NEEDS_POLL_BIT 2           /* Bit position for InterlockedBitTestAndReset */
 #define XHCI_TRANSFER_FLAG_COMPLETED_BIT  7           /* Bit position for InterlockedBitTestAndSet */
 
 BOOLEAN
