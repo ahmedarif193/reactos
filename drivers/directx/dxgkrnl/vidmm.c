@@ -3772,6 +3772,24 @@ DxgkpVidMmDestroyAllocationList(
             InterlockedExchange(&Allocation->FinalizeQueued, 2);
             InterlockedExchange(&Allocation->Destroying, 1);
             Batch->OpenBindingHandles[Index] = Allocation->OpenBindingHandle;
+
+            /* Unpublish now: a destroyed handle must stop being visible even
+             * while its miniport close/free defers until the whole open
+             * binding group can close.  Snapshot/query would otherwise retry
+             * against the pending member forever.  The commit-time removal
+             * in TryCommitDestroyBatch is already idempotent. */
+            if (!IsListEmpty(&Allocation->GlobalAllocationEntry))
+            {
+                RemoveEntryList(&Allocation->GlobalAllocationEntry);
+                InitializeListHead(&Allocation->GlobalAllocationEntry);
+            }
+            if (Resource != NULL && !IsListEmpty(&Allocation->ResourceEntry))
+            {
+                ASSERT(Resource->AllocationCount != 0);
+                RemoveEntryList(&Allocation->ResourceEntry);
+                InitializeListHead(&Allocation->ResourceEntry);
+                Resource->AllocationCount--;
+            }
         }
     }
     ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
@@ -3789,7 +3807,9 @@ DxgkpVidMmDestroyAllocationList(
     for (Index = 0; Index < AllocationCount; ++Index)
         DxgkpVidMmDropLogicalHandleReference(Batch->Allocations[Index]);
     for (Index = 0; Index < AllocationCount; ++Index)
+    {
         KeWaitForSingleObject(&Batch->Allocations[Index]->LogicalReferencesDrainedEvent, Executive, KernelMode, FALSE, NULL);
+    }
     for (Index = 0; Index < AllocationCount; ++Index)
     {
         PDXGKVMM_OPEN_BINDING_GROUP Group = Batch->Allocations[Index]->OpenBindingGroup;
