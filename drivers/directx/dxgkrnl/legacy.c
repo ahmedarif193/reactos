@@ -139,12 +139,12 @@ DxgkLegacyDetach(
     if (Adapter->MiniportDeviceContext != NULL && MpCtx != NULL &&
         MpCtx->InitData.s.DxgkDdiRemoveDevice != NULL)
     {
-        ExAcquireFastMutex(&Adapter->MiniportCallbackMutex);
+        (VOID)KeWaitForSingleObject(&Adapter->MiniportCallbackMutex, Executive, KernelMode, FALSE, NULL);
         MiniportDeviceContext = Adapter->MiniportDeviceContext;
         InterlockedExchange(&Adapter->MiniportCallbacksValid, 0);
         Adapter->MiniportDeviceContext = NULL;
         MpCtx->InitData.s.DxgkDdiRemoveDevice(MiniportDeviceContext);
-        ExReleaseFastMutex(&Adapter->MiniportCallbackMutex);
+        KeReleaseMutex(&Adapter->MiniportCallbackMutex, FALSE);
     }
 
     /* Delete the FDO.  This also releases the DeviceExtension (Adapter) memory. */

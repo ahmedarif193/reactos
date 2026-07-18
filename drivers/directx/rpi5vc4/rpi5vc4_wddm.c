@@ -1541,14 +1541,20 @@ Rpi5Vc4DdiDestroyAllocation(
 
     for (i = 0; i < DestroyAllocation->NumAllocations; i++)
     {
-        PRPI5VC4_ALLOCATION Allocation =
-            (PRPI5VC4_ALLOCATION)DestroyAllocation->phAllocation[i];
+        PRPI5VC4_ALLOCATION Allocation = (PRPI5VC4_ALLOCATION)DestroyAllocation->phAllocation[i];
 
         if (Allocation == NULL)
             continue;
         if (Allocation->Magic != RPI5VC4_ALLOCATION_MAGIC)
             do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+    }
 
+    for (i = 0; i < DestroyAllocation->NumAllocations; i++)
+    {
+        PRPI5VC4_ALLOCATION Allocation = (PRPI5VC4_ALLOCATION)DestroyAllocation->phAllocation[i];
+
+        if (Allocation == NULL)
+            continue;
         Allocation->Magic = 0;
         ExFreePoolWithTag(Allocation, RPI5VC4_POOL_TAG);
     }
@@ -1622,14 +1628,20 @@ Rpi5Vc4DdiCloseAllocation(
 
     for (i = 0; i < CloseAllocation->NumAllocations; i++)
     {
-        PRPI5VC4_OPENALLOCATION Open =
-            (PRPI5VC4_OPENALLOCATION)CloseAllocation->pOpenHandleList[i];
+        PRPI5VC4_OPENALLOCATION Open = (PRPI5VC4_OPENALLOCATION)CloseAllocation->pOpenHandleList[i];
 
         if (Open == NULL)
             continue;
         if (Open->Magic != RPI5VC4_OPENALLOC_MAGIC)
             do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+    }
 
+    for (i = 0; i < CloseAllocation->NumAllocations; i++)
+    {
+        PRPI5VC4_OPENALLOCATION Open = (PRPI5VC4_OPENALLOCATION)CloseAllocation->pOpenHandleList[i];
+
+        if (Open == NULL)
+            continue;
         Open->Magic = 0;
         ExFreePoolWithTag(Open, RPI5VC4_POOL_TAG);
     }
@@ -2695,13 +2707,7 @@ Rpi5Vc4DdiEscape(
                 return STATUS_SUCCESS;
             }
 
-            Caps = RPI5VC4_CAP_GPUVA_MAP |
-                   RPI5VC4_CAP_ALLOCATION_RELOCATION |
-                   RPI5VC4_CAP_MONITORED_FENCE |
-                   RPI5VC4_CAP_SUBMIT_SIGNAL |
-                   RPI5VC4_CAP_CPU_WAIT_SIGNAL |
-                   RPI5VC4_CAP_WIN32_PRESENT |
-                   RPI5VC4_CAP_LINEAR_SCANOUT;
+            Caps = RPI5VC4_CAP_GPUVA_MAP | RPI5VC4_CAP_ALLOCATION_RELOCATION | RPI5VC4_CAP_MONITORED_FENCE | RPI5VC4_CAP_SUBMIT_SIGNAL | RPI5VC4_CAP_CPU_WAIT_SIGNAL | RPI5VC4_CAP_WIN32_PRESENT | RPI5VC4_CAP_LINEAR_SCANOUT;
 
             if (DeviceExtension->V3dReady)
             {

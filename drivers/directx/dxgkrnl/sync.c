@@ -132,6 +132,7 @@ NTAPI
 DxgkSyncObjectAttachMonitoredPage(
     _In_ D3DKMT_HANDLE hSyncObject,
     _In_ UINT64 InitialFenceValue,
+    _In_ D3DDDI_SYNCHRONIZATIONOBJECT_FLAGS Flags,
     _Out_ PVOID *UserVa)
 {
     PDXGKRNL_SYNC_OBJECT SyncObj;
@@ -157,8 +158,6 @@ DxgkSyncObjectAttachMonitoredPage(
     }
 
     RtlZeroMemory(SyncObj->MonitoredValueKernelVa, PAGE_SIZE);
-    *(volatile UINT64 *)SyncObj->MonitoredValueKernelVa = InitialFenceValue;
-    InterlockedExchange64(&SyncObj->FenceValue, (LONG64)InitialFenceValue);
 
     SyncObj->MonitoredValueMdl = IoAllocateMdl(
         SyncObj->MonitoredValueKernelVa, PAGE_SIZE, FALSE, FALSE, NULL);
@@ -188,6 +187,16 @@ DxgkSyncObjectAttachMonitoredPage(
 
     SyncObj->MonitoredValueProcess = PsGetCurrentProcess();
     ObReferenceObject(SyncObj->MonitoredValueProcess);
+
+    ExAcquireFastMutex(&SyncObj->Device->DeviceMutex);
+    SyncObj->Flags = Flags;
+    if ((InterlockedCompareExchange(&SyncObj->TdrAffected, 0, 0) != 0 || InterlockedCompareExchange(&SyncObj->Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE) && !Flags.NoSignalMaxValueOnTdr)
+        InterlockedExchange64(&SyncObj->FenceValue, -1);
+    else
+        InterlockedExchange64(&SyncObj->FenceValue, (LONG64)InitialFenceValue);
+    *(volatile UINT64 *)SyncObj->MonitoredValueKernelVa = (UINT64)SyncObj->FenceValue;
+    KeMemoryBarrier();
+    ExReleaseFastMutex(&SyncObj->Device->DeviceMutex);
 
     *UserVa = SyncObj->MonitoredValueUserVa;
     DxgkpDereferenceSyncObject(SyncObj);
@@ -512,6 +521,45 @@ DxgkpSyncPublishFenceValue(
     KeSetEvent(&SyncObj->CpuEvent, IO_NO_INCREMENT, FALSE);
 }
 
+VOID
+NTAPI
+DxgkTdrResetAdapterSynchronizationObjects(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PLIST_ENTRY DeviceLink;
+
+    PAGED_CODE();
+    if (Adapter == NULL)
+        return;
+
+    (VOID)KeWaitForSingleObject(&Adapter->AdapterMutex, Executive, KernelMode, FALSE, NULL);
+    for (DeviceLink = Adapter->DeviceListHead.Flink; DeviceLink != &Adapter->DeviceListHead; DeviceLink = DeviceLink->Flink)
+    {
+        PDXGKRNL_DEVICE Device = CONTAINING_RECORD(DeviceLink, DXGKRNL_DEVICE, DeviceListEntry);
+        PLIST_ENTRY SyncLink;
+
+        InterlockedExchange(&Device->ExecutionState, D3DKMT_DEVICEEXECUTION_RESET);
+        ExAcquireFastMutex(&Device->DeviceMutex);
+        for (SyncLink = Device->SyncObjListHead.Flink; SyncLink != &Device->SyncObjListHead; SyncLink = SyncLink->Flink)
+        {
+            PDXGKRNL_SYNC_OBJECT SyncObj = CONTAINING_RECORD(SyncLink, DXGKRNL_SYNC_OBJECT, DeviceSyncObjListEntry);
+
+            InterlockedExchange(&SyncObj->TdrAffected, 1);
+            if (SyncObj->MonitoredValueKernelVa != NULL && !SyncObj->Flags.NoSignalMaxValueOnTdr)
+            {
+                InterlockedExchange64(&SyncObj->FenceValue, -1);
+                DxgkpSyncPublishFenceValue(SyncObj);
+            }
+            else
+            {
+                KeSetEvent(&SyncObj->CpuEvent, IO_NO_INCREMENT, FALSE);
+            }
+        }
+        ExReleaseFastMutex(&Device->DeviceMutex);
+    }
+    KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+}
+
 NTSTATUS
 NTAPI
 DxgkSyncObjectCpuSignal(
@@ -533,10 +581,17 @@ DxgkSyncObjectCpuSignal(
         DxgkpDereferenceSyncObject(SyncObj);
         return STATUS_INVALID_HANDLE;
     }
+    ExAcquireFastMutex(&SyncObj->Device->DeviceMutex);
+    if (InterlockedCompareExchange(&SyncObj->Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE)
+    {
+        ExReleaseFastMutex(&SyncObj->Device->DeviceMutex);
+        DxgkpDereferenceSyncObject(SyncObj);
+        return STATUS_DEVICE_REMOVED;
+    }
 
     InterlockedExchange64(&SyncObj->FenceValue, (LONG64)FenceValue);
-
     DxgkpSyncPublishFenceValue(SyncObj);
+    ExReleaseFastMutex(&SyncObj->Device->DeviceMutex);
     DxgkpDereferenceSyncObject(SyncObj);
     return STATUS_SUCCESS;
 }
@@ -602,21 +657,26 @@ DxgkSyncObjectCpuWait(
         DxgkpDereferenceSyncObject(SyncObj);
         return STATUS_INVALID_HANDLE;
     }
-
     if (NonBlocking)
     {
         BOOLEAN Reached = ((UINT64)SyncObj->FenceValue >= FenceValue);
+        BOOLEAN TdrAffected = InterlockedCompareExchange(&SyncObj->TdrAffected, 0, 0) != 0;
 
         DxgkpDereferenceSyncObject(SyncObj);
-        return Reached ? STATUS_SUCCESS : STATUS_TIMEOUT;
+        return Reached ? STATUS_SUCCESS : (TdrAffected ? STATUS_DEVICE_REMOVED : STATUS_TIMEOUT);
     }
 
-    /* Block until the monitored fence actually reaches the value.  The
-     * 100ms bound only re-checks after a lost wake; TDR guarantees the
-     * fence always advances, so this cannot hang past a dead GPU. */
+    /* Block until the monitored fence reaches the value. The 100ms bound
+     * rechecks lost wakes and the TDR-affected state. */
     while ((UINT64)SyncObj->FenceValue < FenceValue)
     {
         LARGE_INTEGER Timeout;
+
+        if (InterlockedCompareExchange(&SyncObj->TdrAffected, 0, 0) != 0)
+        {
+            DxgkpDereferenceSyncObject(SyncObj);
+            return STATUS_DEVICE_REMOVED;
+        }
         Timeout.QuadPart = -10LL * 1000LL * 100LL;
         KeWaitForSingleObject(&SyncObj->CpuEvent, Executive, KernelMode, FALSE, &Timeout);
         if (InterlockedCompareExchange(&SyncObj->Destroying, 0, 0) != 0)

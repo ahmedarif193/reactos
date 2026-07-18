@@ -25,7 +25,10 @@
 /* The PCH already defines NDEBUG and includes <debug.h> + "debug.h". */
 #include "dxgkrnl_private.h"
 
+#include <ndk/iofuncs.h>
+
 #include "context.h"
+#include "vidmm.h"
 #include "vidsch.h"
 
 /* ========================================================================
@@ -42,12 +45,145 @@
 KSPIN_LOCK   DxgkAdapterGlobalListLock;
 LIST_ENTRY   DxgkAdapterGlobalListHead;
 
+BOOLEAN
+DxgkBeginKmdTransaction(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PVOID CurrentThread;
+
+    PAGED_CODE();
+    if (Adapter == NULL)
+        return FALSE;
+    CurrentThread = PsGetCurrentThread();
+    if (Adapter->KmdTransactionOwnerThread == CurrentThread)
+    {
+        ASSERT(InterlockedCompareExchange(&Adapter->KmdTransactionDepth, 0, 0) > 0);
+        InterlockedIncrement(&Adapter->KmdTransactionDepth);
+        return TRUE;
+    }
+    (VOID)KeWaitForSingleObject(&Adapter->KmdTransactionMutex, Executive, KernelMode, FALSE, NULL);
+    if (!DxgkAcquireKmdCall(Adapter))
+    {
+        KeReleaseMutex(&Adapter->KmdTransactionMutex, FALSE);
+        return FALSE;
+    }
+    ASSERT(Adapter->KmdTransactionOwnerThread == NULL);
+    ASSERT(InterlockedCompareExchange(&Adapter->KmdTransactionDepth, 0, 0) == 0);
+    InterlockedExchange(&Adapter->KmdTransactionDepth, 1);
+    KeMemoryBarrier();
+    Adapter->KmdTransactionOwnerThread = CurrentThread;
+    KeMemoryBarrier();
+    return TRUE;
+}
+
+VOID
+DxgkEndKmdTransaction(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    LONG Depth;
+
+    PAGED_CODE();
+    ASSERT(Adapter != NULL);
+    ASSERT(Adapter->KmdTransactionOwnerThread == PsGetCurrentThread());
+    Depth = InterlockedDecrement(&Adapter->KmdTransactionDepth);
+    ASSERT(Depth >= 0);
+    if (Depth != 0)
+        return;
+    Adapter->KmdTransactionOwnerThread = NULL;
+    KeMemoryBarrier();
+    DxgkReleaseKmdCall(Adapter);
+    KeReleaseMutex(&Adapter->KmdTransactionMutex, FALSE);
+}
+
+BOOLEAN
+DxgkAcquireInterruptCallback(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    if (Adapter == NULL || InterlockedCompareExchange(&Adapter->InterruptCallbacksBlocked, 0, 0) != 0)
+        return FALSE;
+    InterlockedIncrement(&Adapter->InterruptActiveCalls);
+    KeMemoryBarrier();
+    if (InterlockedCompareExchange(&Adapter->InterruptCallbacksBlocked, 0, 0) != 0)
+    {
+        DxgkReleaseInterruptCallback(Adapter);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+VOID
+DxgkReleaseInterruptCallback(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    LONG Remaining;
+
+    ASSERT(Adapter != NULL);
+    Remaining = InterlockedDecrement(&Adapter->InterruptActiveCalls);
+    ASSERT(Remaining >= 0);
+}
+
+VOID
+DxgkBlockInterruptCallbacks(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    LARGE_INTEGER Delay;
+
+    PAGED_CODE();
+    ASSERT(Adapter != NULL);
+    InterlockedExchange(&Adapter->InterruptCallbacksBlocked, 1);
+    KeMemoryBarrier();
+    Delay.QuadPart = -(LONGLONG)(10 * 1000);
+    while (InterlockedCompareExchange(&Adapter->InterruptActiveCalls, 0, 0) != 0)
+        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+}
+
+VOID
+DxgkUnblockInterruptCallbacks(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PAGED_CODE();
+    ASSERT(Adapter != NULL);
+    InterlockedExchange(&Adapter->InterruptCallbacksBlocked, 0);
+}
+
 /*
  * GDxgControlDeviceObject
  *
  * The \\Device\\DxgKrnl device object used to service D3DKMT IOCTLs.
  */
 PDEVICE_OBJECT GDxgControlDeviceObject = NULL;
+volatile LONG GDxgControlDeviceState = 0;
+static NTSTATUS GDxgControlDeviceStatus = STATUS_DEVICE_NOT_READY;
+
+NTSTATUS
+DxgkpEnsureControlDevice(VOID)
+{
+    UNICODE_STRING DriverName;
+    LARGE_INTEGER Delay;
+    NTSTATUS Status;
+    LONG State;
+    ULONG HandoffWaits = 0;
+
+    State = InterlockedCompareExchange(&GDxgControlDeviceState, 0, 0);
+    if (State == 2)
+        return STATUS_SUCCESS;
+    if (State == 3)
+        return GDxgControlDeviceStatus;
+    if (State == 0)
+    {
+        RtlInitUnicodeString(&DriverName, L"\\Driver\\DxgKrnl");
+        Status = IoCreateDriver(&DriverName, DriverEntry);
+        State = InterlockedCompareExchange(&GDxgControlDeviceState, 0, 0);
+        if (!NT_SUCCESS(Status) && Status != STATUS_OBJECT_NAME_COLLISION && Status != STATUS_DEVICE_BUSY && State == 0)
+            return Status;
+    }
+    Delay.QuadPart = -10 * 1000;
+    while ((State = InterlockedCompareExchange(&GDxgControlDeviceState, 0, 0)) == 0 && HandoffWaits++ < 1000)
+        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+    while ((State = InterlockedCompareExchange(&GDxgControlDeviceState, 0, 0)) == 1)
+        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+    return State == 2 ? STATUS_SUCCESS : GDxgControlDeviceStatus;
+}
 
 /*
  * GDxgmms1Interface
@@ -106,7 +242,7 @@ DXGCORE_INTERFACE DxgCoreInterface = {
     { NULL }                    /* Slots filled at init time */
 };
 
-static VOID
+VOID
 DxgkpInitializeCoreInterface(VOID)
 {
     /* Forward declarations from adapter.c (all non-paged) */
@@ -197,26 +333,79 @@ DxgkpInitializeCoreInterface(VOID)
  * g_TdrConfig — TDR configuration read from registry.
  * GraphicsDrivers\TdrDelay, TdrDdiDelay, TdrLevel, etc.
  */
-typedef struct _TDR_CONFIG
-{
-    ULONG TdrDelay;         /* seconds before declaring timeout (default 2) */
-    ULONG TdrDdiDelay;      /* DDI-specific timeout (default 5) */
-    ULONG TdrLevel;         /* 0=off, 1=bugcheck, 3=recover */
-    ULONG TdrLimitCount;    /* max recoveries in TdrLimitTime */
-    ULONG TdrLimitTime;     /* time window (seconds) for recovery counting */
-    ULONG TdrDebugMode;     /* debugger break policy (0x00-0x03) */
-    ULONG TdrTestMode;      /* testing overrides */
-} TDR_CONFIG;
-
 TDR_CONFIG g_TdrConfig = {
     2,      /* TdrDelay */
     5,      /* TdrDdiDelay */
     3,      /* TdrLevel = recover */
     5,      /* TdrLimitCount */
     60,     /* TdrLimitTime */
-    0,      /* TdrDebugMode = continue */
+    2,      /* TdrDebugMode = recover without debugger prompt */
     0       /* TdrTestMode = none */
 };
+
+static NTSTATUS
+DxgkpReadTdrDword(
+    _In_ HANDLE KeyHandle,
+    _In_ PCWSTR ValueName,
+    _Inout_ PULONG Value)
+{
+    struct
+    {
+        KEY_VALUE_PARTIAL_INFORMATION Header;
+        ULONG ExtraData;
+    } ValueBuffer;
+    PKEY_VALUE_PARTIAL_INFORMATION ValueInfo = &ValueBuffer.Header;
+    UNICODE_STRING ValueNameString;
+    ULONG ResultLength = 0;
+    NTSTATUS Status;
+
+    RtlInitUnicodeString(&ValueNameString, ValueName);
+    RtlZeroMemory(&ValueBuffer, sizeof(ValueBuffer));
+    Status = ZwQueryValueKey(KeyHandle, &ValueNameString, KeyValuePartialInformation, ValueInfo, sizeof(ValueBuffer), &ResultLength);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (ValueInfo->Type != REG_DWORD || ValueInfo->DataLength != sizeof(ULONG))
+    {
+        DXGKRNL_WARN("DxgkpLoadTdrConfig: ignoring non-DWORD %S\n", ValueName);
+        return STATUS_OBJECT_TYPE_MISMATCH;
+    }
+    RtlCopyMemory(Value, ValueInfo->Data, sizeof(*Value));
+    return STATUS_SUCCESS;
+}
+
+static VOID
+DxgkpLoadTdrConfig(VOID)
+{
+    static CONST WCHAR GraphicsDriversPath[] = L"\\Registry\\Machine\\System\\CurrentControlSet\\Control\\GraphicsDrivers";
+    UNICODE_STRING KeyName;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    HANDLE KeyHandle = NULL;
+    NTSTATUS Status;
+
+    RtlInitUnicodeString(&KeyName, GraphicsDriversPath);
+    InitializeObjectAttributes(&ObjectAttributes, &KeyName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = ZwOpenKey(&KeyHandle, KEY_QUERY_VALUE, &ObjectAttributes);
+    if (!NT_SUCCESS(Status))
+    {
+        DXGKRNL_TRACE("DxgkpLoadTdrConfig: using defaults, GraphicsDrivers key unavailable 0x%08lX\n", Status);
+        return;
+    }
+
+    (VOID)DxgkpReadTdrDword(KeyHandle, L"TdrDelay", &g_TdrConfig.TdrDelay);
+    (VOID)DxgkpReadTdrDword(KeyHandle, L"TdrDdiDelay", &g_TdrConfig.TdrDdiDelay);
+    (VOID)DxgkpReadTdrDword(KeyHandle, L"TdrLevel", &g_TdrConfig.TdrLevel);
+    (VOID)DxgkpReadTdrDword(KeyHandle, L"TdrLimitCount", &g_TdrConfig.TdrLimitCount);
+    (VOID)DxgkpReadTdrDword(KeyHandle, L"TdrLimitTime", &g_TdrConfig.TdrLimitTime);
+    (VOID)DxgkpReadTdrDword(KeyHandle, L"TdrDebugMode", &g_TdrConfig.TdrDebugMode);
+    (VOID)DxgkpReadTdrDword(KeyHandle, L"TdrTestMode", &g_TdrConfig.TdrTestMode);
+    ZwClose(KeyHandle);
+
+    if (g_TdrConfig.TdrLevel > DXGKP_TDR_LEVEL_RECOVER)
+        g_TdrConfig.TdrLevel = DXGKP_TDR_LEVEL_RECOVER;
+    if (g_TdrConfig.TdrDebugMode > DXGKP_TDR_DEBUG_RECOVER_UNCONDITIONAL)
+        g_TdrConfig.TdrDebugMode = DXGKP_TDR_DEBUG_RECOVER_NO_PROMPT;
+    DXGKRNL_TRACE("DxgkpLoadTdrConfig: delay=%lu ddi=%lu level=%lu limit=%lu/%lus debug=%lu\n", g_TdrConfig.TdrDelay, g_TdrConfig.TdrDdiDelay, g_TdrConfig.TdrLevel, g_TdrConfig.TdrLimitCount, g_TdrConfig.TdrLimitTime, g_TdrConfig.TdrDebugMode);
+}
 
 /*
  * g_TdrForceTimeout — controls forced timeout for testing/debugging.
@@ -376,8 +565,8 @@ TdrHistoryIsLimitExhausted(
     /* Convert TdrLimitTime (seconds) to 100ns units */
     LimitWindow = (ULONGLONG)g_TdrConfig.TdrLimitTime * 10000000ULL;
 
-    /* Read current timestamp from SharedUserData (same source as creation) */
-    CurrentTimestamp = *((volatile PULONGLONG)((PUCHAR)(ULONG_PTR)0xFFFFF78000000320ULL));
+    /* Use the architecture-neutral interrupt-time clock in 100ns units. */
+    CurrentTimestamp = KeQueryInterruptTime();
 
     /* Read current write index */
     WriteIndex = *(volatile PLONG)((PUCHAR)HistoryBuffer + TDR_HIST_WRITE_INDEX);
@@ -454,8 +643,8 @@ TdrCreateRecoveryContext(
     *(PULONG)(Ctx + TDR_CTX_TDR_DDI_DELAY) = g_TdrConfig.TdrDdiDelay;
     *(PULONG)(Ctx + TDR_CTX_TDR_LEVEL)     = g_TdrConfig.TdrLevel;
 
-    /* Store creation timestamp from SharedUserData */
-    *(PULONGLONG)(Ctx + TDR_CTX_TIMESTAMP) = *((volatile PULONGLONG)((PUCHAR)(ULONG_PTR)0xFFFFF78000000320ULL));
+    /* Store creation timestamp from the architecture-neutral clock. */
+    *(PULONGLONG)(Ctx + TDR_CTX_TIMESTAMP) = KeQueryInterruptTime();
 
     *RecoveryContext = (PVOID)Ctx;
     return STATUS_SUCCESS;
@@ -529,12 +718,20 @@ TdrIsTimeoutForcedFlip(
     return FALSE;
 }
 
-/*
- * TdrResetFromTimeout
- *
- * Initiates the actual GPU reset sequence.  Core TDR entry point.
- * Currently a stub — full implementation requires scheduler coordination.
- */
+static DECLSPEC_NORETURN VOID
+DxgkpBugCheckExportedTdrFailure(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PVOID RecoveryContext,
+    _In_ NTSTATUS FailureStatus)
+{
+    ULONG_PTR OwnerTag = 0;
+
+    if (Adapter != NULL && Adapter->MiniportContext != NULL && DXGK_CB_FULL(Adapter, DxgkDdiResetFromTimeout) != NULL)
+        OwnerTag = (ULONG_PTR)DXGK_CB_FULL(Adapter, DxgkDdiResetFromTimeout);
+    KeBugCheckEx(0x116, (ULONG_PTR)RecoveryContext, OwnerTag, (ULONG_PTR)FailureStatus, 0);
+}
+
+/* Core TDR entry point consumed by the external scheduler contract. */
 NTSTATUS
 NTAPI
 TdrResetFromTimeout(
@@ -543,7 +740,13 @@ TdrResetFromTimeout(
     PDXGKRNL_ADAPTER Adapter;
     NTSTATUS SchedulerStatus;
     NTSTATUS Status;
+    BOOLEAN AdapterStartedAfterReset = FALSE;
+    BOOLEAN ContextPublished = FALSE;
+    BOOLEAN DdiDeadlineArmed = FALSE;
     BOOLEAN SchedulerPrepared = FALSE;
+    BOOLEAN SchedulerCompleted = FALSE;
+    BOOLEAN KmdExclusive = FALSE;
+    BOOLEAN Level3Transition = FALSE;
 
     PAGED_CODE();
 
@@ -564,9 +767,14 @@ TdrResetFromTimeout(
 
     if (!DxgkReferenceAdapterObject(Adapter))
         return STATUS_DEVICE_NOT_READY;
-    if (Adapter == NULL || Adapter->State != DxgkAdapterStateStarted || Adapter->MiniportContext == NULL || Adapter->MiniportDeviceContext == NULL)
+    if (Adapter == NULL || Adapter->State != DxgkAdapterStateStarted || InterlockedCompareExchange(&Adapter->RundownStarted, 0, 0) != 0 || InterlockedCompareExchange(&Adapter->RemoveRundownStarted, 0, 0) != 0 || Adapter->MiniportContext == NULL || Adapter->MiniportDeviceContext == NULL)
     {
         Status = STATUS_DEVICE_NOT_READY;
+        goto Cleanup;
+    }
+    if (Adapter->TdrConfig.TdrLevel == DXGKP_TDR_LEVEL_OFF)
+    {
+        Status = STATUS_NOT_SUPPORTED;
         goto Cleanup;
     }
     if (DXGK_CB_FULL(Adapter, DxgkDdiResetFromTimeout) == NULL || DXGK_CB_FULL(Adapter, DxgkDdiRestartFromTimeout) == NULL)
@@ -574,16 +782,47 @@ TdrResetFromTimeout(
         Status = STATUS_NOT_SUPPORTED;
         goto Cleanup;
     }
+    if (InterlockedCompareExchangePointer((PVOID volatile *)&Adapter->TdrRecoveryContext, RecoveryContext, NULL) != NULL)
+    {
+        Status = STATUS_DEVICE_BUSY;
+        goto Cleanup;
+    }
+    ContextPublished = TRUE;
+    DxgkpArmTdrDdiDeadline(Adapter);
+    DdiDeadlineArmed = TRUE;
+    if (Adapter->TdrConfig.TdrLevel == DXGKP_TDR_LEVEL_BUGCHECK)
+        DxgkpBugCheckExportedTdrFailure(Adapter, RecoveryContext, STATUS_IO_TIMEOUT);
+    if (Adapter->TdrConfig.TdrLevel == DXGKP_TDR_LEVEL_RECOVER_VGA)
+        DxgkpBugCheckExportedTdrFailure(Adapter, RecoveryContext, STATUS_NOT_SUPPORTED);
+    DxgkAcquireLevel3Transition(Adapter);
+    Level3Transition = TRUE;
+    if (Adapter->State != DxgkAdapterStateStarted || InterlockedCompareExchange(&Adapter->RundownStarted, 0, 0) != 0 || InterlockedCompareExchange(&Adapter->RemoveRundownStarted, 0, 0) != 0 || Adapter->MiniportContext == NULL || Adapter->MiniportDeviceContext == NULL)
+    {
+        Status = STATUS_DEVICE_NOT_READY;
+        goto Cleanup;
+    }
 
     SchedulerStatus = VidSchPrepareAdapterReset(Adapter);
     if (NT_SUCCESS(SchedulerStatus))
         SchedulerPrepared = TRUE;
     else if (SchedulerStatus != STATUS_NOT_SUPPORTED)
+        DxgkpBugCheckExportedTdrFailure(Adapter, RecoveryContext, SchedulerStatus);
+
+    DxgkBeginKmdExclusive(Adapter);
+    KmdExclusive = TRUE;
+    DxgkVidMmQuiesceAdapter(Adapter);
+    InterlockedExchange(&Adapter->TdrOwnershipUncertain, 1);
+    if (!DxgkAcquireMiniportCallback(Adapter))
     {
-        Status = SchedulerStatus;
+        Status = STATUS_DELETE_PENDING;
         goto Cleanup;
     }
-
+    if (Adapter->State != DxgkAdapterStateStarted || InterlockedCompareExchange(&Adapter->RundownStarted, 0, 0) != 0 || InterlockedCompareExchange(&Adapter->RemoveRundownStarted, 0, 0) != 0 || Adapter->MiniportDeviceContext == NULL)
+    {
+        DxgkReleaseMiniportCallback(Adapter);
+        Status = STATUS_DEVICE_REMOVED;
+        goto Cleanup;
+    }
     _SEH2_TRY
     {
         Status = DXGK_CB_FULL(Adapter, DxgkDdiResetFromTimeout)(Adapter->MiniportDeviceContext);
@@ -593,12 +832,45 @@ TdrResetFromTimeout(
         Status = _SEH2_GetExceptionCode();
     }
     _SEH2_END;
+    DxgkReleaseMiniportCallback(Adapter);
 
-    if (SchedulerPrepared)
-        VidSchCompleteAdapterReset(Adapter, NT_SUCCESS(Status));
     if (!NT_SUCCESS(Status))
+        DxgkpBugCheckExportedTdrFailure(Adapter, RecoveryContext, Status);
+    InterlockedExchange(&Adapter->TdrCompletionNotificationsEnabled, 0);
+    DxgkDrainVidSchCallbacks(Adapter);
+    AdapterStartedAfterReset = Adapter->State == DxgkAdapterStateStarted;
+    DxgkTdrResetAdapterSynchronizationObjects(Adapter);
+    Status = DxgkVidMmRecoverFromTimeout(Adapter);
+    if (!NT_SUCCESS(Status))
+        DxgkpBugCheckExportedTdrFailure(Adapter, RecoveryContext, Status);
+    InterlockedExchange(&Adapter->TdrOwnershipUncertain, 0);
+    if (SchedulerPrepared)
+    {
+        VidSchCompleteAdapterReset(Adapter, TRUE);
+        SchedulerCompleted = TRUE;
+    }
+    DxgkReleaseTrackedDmaBuffers(Adapter, TRUE);
+    DxgkResetSubmittedFenceIdentities(Adapter);
+    if (!AdapterStartedAfterReset || Adapter->State != DxgkAdapterStateStarted || InterlockedCompareExchange(&Adapter->RundownStarted, 0, 0) != 0 || InterlockedCompareExchange(&Adapter->RemoveRundownStarted, 0, 0) != 0)
+    {
+        Status = STATUS_DEVICE_REMOVED;
         goto Cleanup;
+    }
 
+    Status = STATUS_DELETE_PENDING;
+    if (!DxgkAcquireMiniportCallback(Adapter))
+    {
+        if (Adapter->State == DxgkAdapterStateStarted && InterlockedCompareExchange(&Adapter->RundownStarted, 0, 0) == 0 && InterlockedCompareExchange(&Adapter->RemoveRundownStarted, 0, 0) == 0)
+            DxgkpBugCheckExportedTdrFailure(Adapter, RecoveryContext, Status);
+        Status = STATUS_DEVICE_REMOVED;
+        goto Cleanup;
+    }
+    if (Adapter->State != DxgkAdapterStateStarted || InterlockedCompareExchange(&Adapter->RundownStarted, 0, 0) != 0 || InterlockedCompareExchange(&Adapter->RemoveRundownStarted, 0, 0) != 0 || Adapter->MiniportDeviceContext == NULL)
+    {
+        DxgkReleaseMiniportCallback(Adapter);
+        Status = STATUS_DEVICE_REMOVED;
+        goto Cleanup;
+    }
     _SEH2_TRY
     {
         Status = DXGK_CB_FULL(Adapter, DxgkDdiRestartFromTimeout)(Adapter->MiniportDeviceContext);
@@ -608,13 +880,49 @@ TdrResetFromTimeout(
         Status = _SEH2_GetExceptionCode();
     }
     _SEH2_END;
+    DxgkReleaseMiniportCallback(Adapter);
 
-    if (!NT_SUCCESS(Status) || !SchedulerPrepared)
+    if (Adapter->State != DxgkAdapterStateStarted || InterlockedCompareExchange(&Adapter->RundownStarted, 0, 0) != 0 || InterlockedCompareExchange(&Adapter->RemoveRundownStarted, 0, 0) != 0)
+    {
+        Status = STATUS_DEVICE_REMOVED;
         goto Cleanup;
+    }
+    if (!NT_SUCCESS(Status))
+        DxgkpBugCheckExportedTdrFailure(Adapter, RecoveryContext, Status);
 
-    Status = VidSchResumeScheduler(Adapter);
+    (VOID)KeWaitForSingleObject(&Adapter->AdapterMutex, Executive, KernelMode, FALSE, NULL);
+    if (Adapter->State != DxgkAdapterStateStarted || Adapter->MiniportDeviceStopped || InterlockedCompareExchange(&Adapter->MiniportCallbacksValid, 0, 0) == 0 || InterlockedCompareExchange(&Adapter->RundownStarted, 0, 0) != 0 || InterlockedCompareExchange(&Adapter->RemoveRundownStarted, 0, 0) != 0 || Adapter->MiniportContext == NULL || Adapter->MiniportDeviceContext == NULL)
+    {
+        KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+        Status = STATUS_DEVICE_REMOVED;
+        goto Cleanup;
+    }
+    DxgkVidMmResumeAdapter(Adapter);
+    if (SchedulerPrepared)
+        Status = VidSchResumeScheduler(Adapter);
+    else
+        Status = STATUS_SUCCESS;
+    if (!NT_SUCCESS(Status))
+    {
+        KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+        DxgkpBugCheckExportedTdrFailure(Adapter, RecoveryContext, Status);
+    }
+    InterlockedExchange(&Adapter->TdrCompletionNotificationsEnabled, 1);
+    DxgkEndKmdExclusive(Adapter, TRUE);
+    KmdExclusive = FALSE;
+    KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
 
 Cleanup:
+    if (SchedulerPrepared && !SchedulerCompleted)
+        VidSchCompleteAdapterReset(Adapter, FALSE);
+    if (KmdExclusive)
+        DxgkEndKmdExclusive(Adapter, FALSE);
+    if (DdiDeadlineArmed)
+        DxgkpDisarmTdrDdiDeadline(Adapter);
+    if (ContextPublished)
+        InterlockedCompareExchangePointer((PVOID volatile *)&Adapter->TdrRecoveryContext, NULL, RecoveryContext);
+    if (Level3Transition)
+        DxgkReleaseLevel3Transition(Adapter);
     DxgkDereferenceAdapter(Adapter);
     return Status;
 }
@@ -633,19 +941,9 @@ TdrAllowToDebugEngineTimeout(
 {
     UNREFERENCED_PARAMETER(Adapter);
 
-    /* If a kernel debugger is attached and TdrDebugMode allows it,
-     * let the debugger handle the timeout instead of resetting. */
     if (KD_DEBUGGER_NOT_PRESENT)
         return FALSE;
-
-    /* TdrDebugMode 0 = continue (no debug break)
-     * TdrDebugMode 1 = break on timeout
-     * TdrDebugMode 2 = break on recovery
-     * TdrDebugMode 3 = break on both */
-    if (g_TdrConfig.TdrDebugMode == 0)
-        return FALSE;
-
-    return TRUE;
+    return g_TdrConfig.TdrDebugMode == DXGKP_TDR_DEBUG_BREAK;
 }
 
 /*
@@ -1016,32 +1314,20 @@ DriverEntry(
 {
     NTSTATUS        Status;
     UNICODE_STRING  DeviceName;
+    PDEVICE_OBJECT  ControlDeviceObject = NULL;
 
     UNREFERENCED_PARAMETER(RegistryPath);
 
     DXGKRNL_TRACE("DriverEntry: dxgkrnl.sys loading\n");
 
-    /* --- Initialise global adapter list --------------------------------- */
-
-    KeInitializeSpinLock(&DxgkAdapterGlobalListLock);
-    InitializeListHead(&DxgkAdapterGlobalListHead);
-
-    /* --- Populate DxgCoreInterface with callback pointers --------------- */
-
-    DxgkpInitializeCoreInterface();
-
-    /* --- Initialise debug helpers --------------------------------------- */
-
-    DxgkDebugInit();
-
-    /* --- Seed D3DKMT handle cookie (context.c) ------------------------- */
-
-    Status = DxgkContextInit();
-    if (!NT_SUCCESS(Status))
+    if (InterlockedCompareExchange(&GDxgControlDeviceState, 1, 0) != 0)
     {
-        DXGKRNL_ERR("DriverEntry: DxgkContextInit failed 0x%08lX\n", Status);
-        return Status;
+        if (InterlockedCompareExchange(&GDxgControlDeviceState, 0, 0) == 2 && GDxgControlDeviceObject != NULL && GDxgControlDeviceObject->DriverObject == DriverObject)
+            return DxgkpEnsureGlobalInitialization();
+        return STATUS_DEVICE_BUSY;
     }
+    GDxgControlDeviceStatus = STATUS_PENDING;
+    DxgkpLoadTdrConfig();
 
     /* --- Create the control device object ------------------------------- */
 
@@ -1053,20 +1339,48 @@ DriverEntry(
                             FILE_DEVICE_UNKNOWN,
                             FILE_DEVICE_SECURE_OPEN,
                             FALSE,
-                            &GDxgControlDeviceObject);
+                            &ControlDeviceObject);
     if (Status == STATUS_OBJECT_NAME_COLLISION)
     {
-        /* Already loaded as boot driver — device exists from first load.
-         * This is normal when dxgkrnl is Start=0 and gets re-entered. */
-        DXGKRNL_TRACE("DriverEntry: \\Device\\DxgKrnl already exists (boot driver re-entry)\n");
-        return STATUS_SUCCESS;
+        if (GDxgControlDeviceObject != NULL && GDxgControlDeviceObject->DriverObject == DriverObject)
+        {
+            DXGKRNL_TRACE("DriverEntry: \\Device\\DxgKrnl already belongs to this driver\n");
+            Status = DxgkpEnsureGlobalInitialization();
+            GDxgControlDeviceStatus = Status;
+            InterlockedExchange(&GDxgControlDeviceState, NT_SUCCESS(Status) ? 2 : 3);
+            return Status;
+        }
+        DXGKRNL_ERR("DriverEntry: \\Device\\DxgKrnl is owned by another driver instance\n");
+        GDxgControlDeviceStatus = Status;
+        InterlockedExchange(&GDxgControlDeviceState, 3);
+        return Status;
     }
     if (!NT_SUCCESS(Status))
     {
         DXGKRNL_ERR("DriverEntry: IoCreateDevice failed 0x%08lX\n", Status);
-        DxgkContextUninit();
+        GDxgControlDeviceStatus = Status;
+        InterlockedExchange(&GDxgControlDeviceState, 3);
         return Status;
     }
+
+    Status = DxgkpEnsureGlobalInitialization();
+    if (!NT_SUCCESS(Status))
+    {
+        DXGKRNL_ERR("DriverEntry: global initialization failed 0x%08lX\n", Status);
+        IoDeleteDevice(ControlDeviceObject);
+        GDxgControlDeviceStatus = Status;
+        InterlockedExchange(&GDxgControlDeviceState, 3);
+        return Status;
+    }
+
+    /* Install every dispatch target before publishing or opening admission. */
+    DriverObject->MajorFunction[IRP_MJ_CREATE] = DxgkDispatchCreate;
+    DriverObject->MajorFunction[IRP_MJ_CLOSE] = DxgkDispatchClose;
+    DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = DxgkDispatchDeviceControl;
+    DriverObject->MajorFunction[IRP_MJ_INTERNAL_DEVICE_CONTROL] = DxgkDispatchDeviceControl;
+    DriverObject->MajorFunction[IRP_MJ_PNP] = DxgkDispatchPnp;
+    DriverObject->MajorFunction[IRP_MJ_POWER] = DxgkDispatchPower;
+    GDxgControlDeviceObject = ControlDeviceObject;
 
     {
         UNICODE_STRING SymlinkName, TargetName;
@@ -1083,16 +1397,9 @@ DriverEntry(
         }
     }
 
-    /* --- Install dispatch routines on the control device ---------------- */
-
-    DriverObject->MajorFunction[IRP_MJ_CREATE]                  = DxgkDispatchCreate;
-    DriverObject->MajorFunction[IRP_MJ_CLOSE]                   = DxgkDispatchClose;
-    DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL]          = DxgkDispatchDeviceControl;
-    DriverObject->MajorFunction[IRP_MJ_INTERNAL_DEVICE_CONTROL] = DxgkDispatchDeviceControl;
-    DriverObject->MajorFunction[IRP_MJ_PNP]                     = DxgkDispatchPnp;
-    DriverObject->MajorFunction[IRP_MJ_POWER]                   = DxgkDispatchPower;
-
-    GDxgControlDeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
+    ControlDeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
+    GDxgControlDeviceStatus = STATUS_SUCCESS;
+    InterlockedExchange(&GDxgControlDeviceState, 2);
 
     DXGKRNL_TRACE("DriverEntry: success — control device at %p\n",
                   GDxgControlDeviceObject);

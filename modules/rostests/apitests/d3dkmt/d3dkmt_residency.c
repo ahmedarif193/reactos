@@ -66,6 +66,50 @@ static void Test_MakeResident_BadHandle(void)
        (long)Status);
 }
 
+static void Test_MakeResident_MustSucceedRequiresCantTrimFurther(void)
+{
+    D3DKMT_HANDLE hAdapter, hDevice;
+    D3DKMT_CREATEPAGINGQUEUE cpq;
+    D3DDDI_DESTROYPAGINGQUEUE dpq;
+    D3DDDI_MAKERESIDENT mr;
+    NTSTATUS Status;
+
+    LOADFN(PFND3DKMT_CREATEPAGINGQUEUE, pCreate, "D3DKMTCreatePagingQueue");
+    LOADFN(PFND3DKMT_DESTROYPAGINGQUEUE, pDestroy, "D3DKMTDestroyPagingQueue");
+    LOADFN(PFND3DKMT_MAKERESIDENT, pMakeResident, "D3DKMTMakeResident");
+
+    hAdapter = OpenRenderAdapter();
+    if (!hAdapter) { skip("No render-capable adapter\n"); return; }
+    hDevice = CreateTestDevice(hAdapter);
+    if (!hDevice) { skip("CreateDevice failed\n"); CloseAdapter(hAdapter); return; }
+
+    memset(&cpq, 0, sizeof(cpq));
+    cpq.hDevice = hDevice;
+    cpq.Priority = D3DDDI_PAGINGQUEUE_PRIORITY_NORMAL;
+    Status = pCreate(&cpq);
+    if (!NT_SUCCESS(Status) || cpq.hPagingQueue == 0) { skip("CreatePagingQueue not supported on this adapter (0x%08lX)\n", (long)Status); goto cleanup_device; }
+
+    memset(&mr, 0, sizeof(mr));
+    mr.hPagingQueue = cpq.hPagingQueue;
+    Status = pMakeResident(&mr);
+    if (!NT_SUCCESS(Status)) { skip("Empty MakeResident baseline not supported (0x%08lX)\n", (long)Status); goto cleanup_queue; }
+
+    memset(&mr, 0, sizeof(mr));
+    mr.hPagingQueue = cpq.hPagingQueue;
+    mr.Flags.MustSucceed = 1;
+    Status = pMakeResident(&mr);
+    ok(Status == STATUS_INVALID_PARAMETER, "MakeResident MustSucceed without CantTrimFurther returned 0x%08lX, expected STATUS_INVALID_PARAMETER\n", (long)Status);
+
+cleanup_queue:
+    memset(&dpq, 0, sizeof(dpq));
+    dpq.hPagingQueue = cpq.hPagingQueue;
+    Status = pDestroy(&dpq);
+    ok(NT_SUCCESS(Status), "DestroyPagingQueue failed 0x%08lX\n", (long)Status);
+cleanup_device:
+    DestroyTestDevice(hDevice);
+    CloseAdapter(hAdapter);
+}
+
 static void Test_Evict_BadHandle(void)
 {
     D3DKMT_EVICT ev;
@@ -91,5 +135,6 @@ START_TEST(residency)
     Test_OfferAllocations_NullArg();
     Test_ReclaimAllocations_NullArg();
     Test_MakeResident_BadHandle();
+    Test_MakeResident_MustSucceedRequiresCantTrimFurther();
     Test_Evict_BadHandle();
 }

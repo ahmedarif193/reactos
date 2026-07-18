@@ -151,6 +151,7 @@ typedef struct _VIDSCH_DMA_PACKET
      */
     LONG                        Priority;
     BOOLEAN                     Kicked;
+    BOOLEAN                     FenceIdentityReserved;
     PDXGKRNL_SUBMIT_DMA_BUFFER  TrackerReservation;
     D3DKMT_HANDLE               SignalSyncObject;   /* fired at retire */
     ULONG64                     SignalFenceValue;
@@ -201,6 +202,13 @@ typedef struct _VIDSCH_ENGINE
 
     /* Set by the ISR when a DMA_PREEMPTED notification must be consumed. */
     volatile LONG               PreemptionInterruptPending;
+    volatile LONG               PendingPreemptionFenceId;
+    ULONG                       PendingPreemptionEngineOrdinal;
+    /* 0 = not issued, 1 = DDI in flight, 2 = awaiting DMA_PREEMPTED. */
+    volatile LONG               PreemptionDdiState;
+    volatile LONG               CompletedPreemptionFenceId;
+    ULONG                       CompletedPreemptionEngineOrdinal;
+    KEVENT                      PreemptionCompletedEvent;
 
     /*
      * Fence tracking.
@@ -549,7 +557,16 @@ NTSTATUS
 VidSchPreemptEngine(
     _In_ struct _DXGKRNL_ADAPTER *Adapter,
     _In_ ULONG                    NodeOrdinal,
-    _In_ ULONG                    EngineOrdinal);
+    _In_ ULONG                    EngineOrdinal,
+    _Out_opt_ PULONG              PreemptionFenceId);
+
+NTSTATUS
+VidSchWaitForPreemption(
+    _In_ struct _DXGKRNL_ADAPTER *Adapter,
+    _In_ ULONG                    NodeOrdinal,
+    _In_ ULONG                    EngineOrdinal,
+    _In_ ULONG                    PreemptionFenceId,
+    _In_ ULONG                    TimeoutMs);
 
 NTSTATUS
 VidSchSuspendScheduler(
@@ -599,5 +616,7 @@ VidSchGetEngineTdrInfo(
     _In_  struct _DXGKRNL_ADAPTER *Adapter,
     _In_  ULONG                    EngineOrdinal,
     _Out_ PVOID                    TdrInfo);
+
+BOOLEAN VidSchGetOldestKickedPacket(_In_ struct _DXGKRNL_ADAPTER *Adapter, _Out_ PULONG FenceId, _Out_ PULONG NodeOrdinal, _Out_ PULONG EngineOrdinal);
 
 #endif /* _VIDSCH_H_ */

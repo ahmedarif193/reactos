@@ -562,6 +562,7 @@ D3DKMTCreateAllocation(
     SIZE_T PointerArraySize;
     SIZE_T TotalPrivateSize = 0;
     ULONG_PTR Information = 0;
+    D3DKMT_HANDLE InputDevice;
     D3DKMT_HANDLE InputResource;
     UINT InputAllocationCount;
     NTSTATUS CleanupStatus;
@@ -579,6 +580,7 @@ D3DKMTCreateAllocation(
         return Status;
 
     UserAllocationInfo = Captured.pAllocationInfo;
+    InputDevice = Captured.hDevice;
     InputResource = Captured.hResource;
     InputAllocationCount = Captured.NumAllocations;
     InputCreatesResource = Captured.Flags.CreateResource != 0;
@@ -654,7 +656,7 @@ D3DKMTCreateAllocation(
 
     if (StandardAllocation)
     {
-        if (Captured.pStandardAllocation == NULL)
+        if (Captured.pStandardAllocation == NULL || Captured.PrivateDriverDataSize != 0)
         {
             Status = STATUS_INVALID_PARAMETER;
             goto Cleanup;
@@ -669,6 +671,7 @@ D3DKMTCreateAllocation(
         if (!NT_SUCCESS(Status))
             goto Cleanup;
         Captured.pStandardAllocation = PrivateDriverData;
+        Captured.PrivateDriverDataSize = 0;
         TotalPrivateSize = sizeof(D3DKMT_CREATESTANDARDALLOCATION);
     }
     else if (Captured.PrivateDriverDataSize != 0)
@@ -793,7 +796,7 @@ D3DKMTCreateAllocation(
         }
     }
 
-    if ((InputCreatesResource && Captured.hResource == 0) || (!InputCreatesResource && Captured.hResource != InputResource))
+    if (Captured.hDevice != InputDevice || (InputCreatesResource && Captured.hResource == 0) || (!InputCreatesResource && Captured.hResource != InputResource))
     {
         Status = STATUS_INVALID_HANDLE;
         goto Rollback;
@@ -804,12 +807,12 @@ D3DKMTCreateAllocation(
         if (AllocationPrivateCapture[i].Size != 0)
             Status = WddmBridgeSafeCopyTo(AllocationPrivateCapture[i].UserBuffer, AllocationPrivateBuffers[i], AllocationPrivateCapture[i].Size);
     }
+    for (i = 0; NT_SUCCESS(Status) && i < InputAllocationCount; ++i)
+        Status = WddmBridgeSafeCopyTo((PUCHAR)UserAllocationInfo + ((SIZE_T)i * sizeof(*UserAllocationInfo)) + FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, hAllocation), &AllocationInfo[i].hAllocation, sizeof(AllocationInfo[i].hAllocation));
     if (NT_SUCCESS(Status))
         Status = WddmBridgeSafeCopyTo((PUCHAR)pData + FIELD_OFFSET(D3DKMT_CREATEALLOCATION, hResource), &Captured.hResource, sizeof(Captured.hResource));
     if (NT_SUCCESS(Status))
         Status = WddmBridgeSafeCopyTo((PUCHAR)pData + FIELD_OFFSET(D3DKMT_CREATEALLOCATION, hGlobalShare), &Captured.hGlobalShare, sizeof(Captured.hGlobalShare));
-    for (i = 0; NT_SUCCESS(Status) && i < InputAllocationCount; ++i)
-        Status = WddmBridgeSafeCopyTo((PUCHAR)UserAllocationInfo + ((SIZE_T)i * sizeof(*UserAllocationInfo)) + FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, hAllocation), &AllocationInfo[i].hAllocation, sizeof(AllocationInfo[i].hAllocation));
     if (NT_SUCCESS(Status))
         goto Cleanup;
 
@@ -819,7 +822,7 @@ Rollback:
         UINT CreatedHandleCount = 0;
 
         RtlZeroMemory(&DestroyAllocation, sizeof(DestroyAllocation));
-        DestroyAllocation.hDevice = Captured.hDevice;
+        DestroyAllocation.hDevice = InputDevice;
         if (InputCreatesResource && Captured.hResource != 0)
         {
             DestroyAllocation.hResource = Captured.hResource;

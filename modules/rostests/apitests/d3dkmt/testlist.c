@@ -43,6 +43,7 @@ extern void func_present(void);
 extern void func_dwm(void);
 extern void func_display(void);
 extern void func_pipeline(void);
+extern void func_capture(void);
 extern void func_cle(void);
 extern void func_v3dsmoke(void);
 extern void func_vc4kmt_smoke(void);
@@ -91,6 +92,7 @@ const struct test winetest_testlist[] =
     { "dwm",           func_dwm },
     { "display",       func_display },
     { "pipeline",      func_pipeline },
+    { "capture",       func_capture },
     { "cle",           func_cle },
     { "v3dsmoke",      func_v3dsmoke },
     { "vc4kmt_smoke",  func_vc4kmt_smoke },

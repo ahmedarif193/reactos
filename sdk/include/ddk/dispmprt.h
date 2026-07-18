@@ -334,6 +334,16 @@ typedef enum _DXGK_EVENT_TYPE
     DpEventTypeDPCRoutineEvent  = 6,
 } DXGK_EVENT_TYPE;
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
+/* WDDM 1.2 surprise-removal notification type.  PnP notification support
+ * was added to the public contract for running devices in WDDM 2.0. */
+typedef enum _DXGK_SURPRISE_REMOVAL_TYPE
+{
+    DxgkRemovalHibernation = 0,
+    DxgkRemovalPnPNotify = 1,
+} DXGK_SURPRISE_REMOVAL_TYPE;
+#endif
+
 
 /* =========================================================================
  * DISPLAY_ADAPTER_HW_ID
@@ -1412,6 +1422,15 @@ typedef NTSTATUS
     _In_ PVOID                        MiniportDeviceContext,
     _In_ CONST DXGKARG_CANCELCOMMAND *CancelCommand);
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
+typedef NTSTATUS
+DXGKDDI_NOTIFY_SURPRISE_REMOVAL(
+    _In_ PVOID MiniportDeviceContext,
+    _In_ DXGK_SURPRISE_REMOVAL_TYPE RemovalType);
+
+typedef DXGKDDI_NOTIFY_SURPRISE_REMOVAL *PDXGKDDI_NOTIFY_SURPRISE_REMOVAL;
+#endif
+
 typedef NTSTATUS
 (APIENTRY *PDXGKDDI_GET_NODE_METADATA)(
     _In_  PVOID                      MiniportDeviceContext,
@@ -1558,7 +1577,7 @@ typedef struct _DRIVER_INITIALIZATION_DATA
     PVOID                                       DxgkDdiGetChildContainerId;
     PVOID                                       DxgkDdiPowerRuntimeControlRequest;
     PDXGKDDI_SETVIDPNSOURCEADDRESSWITHMULTIPLANEOVERLAY DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay;
-    PVOID                                       DxgkDdiNotifySurpriseRemoval;
+    PDXGKDDI_NOTIFY_SURPRISE_REMOVAL            DxgkDdiNotifySurpriseRemoval;
 #endif
 
     /* ---- WDDM 1.3 / Win8.1 additions ------------------------------------ */
@@ -1622,6 +1641,7 @@ C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbHardwareContentProtectionTeardown
 C_ASSERT(sizeof(DRIVER_INITIALIZATION_DATA) == 832);
 C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiDescribePageTable) == 496);
 C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetPowerComponentFState) == 568);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiNotifySurpriseRemoval) == 656);
 C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiGetNodeMetadata) == 664);
 C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiRenderGdi) == 712);
 C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSubmitCommandVirtual) == 720);
@@ -1694,7 +1714,7 @@ struct _KMDDOD_INITIALIZATION_DATA
     PDXGKDDI_CONTROL_INTERRUPT                  DxgkDdiControlInterrupt;
     PVOID                                       DxgkDdiSetPowerComponentFState;
     PVOID                                       DxgkDdiPowerRuntimeControlRequest;
-    PVOID                                       DxgkDdiNotifySurpriseRemoval;
+    PDXGKDDI_NOTIFY_SURPRISE_REMOVAL            DxgkDdiNotifySurpriseRemoval;
     PVOID                                       DxgkDdiPowerRuntimeSetDeviceHandle;
 };
 

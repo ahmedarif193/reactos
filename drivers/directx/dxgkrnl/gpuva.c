@@ -844,9 +844,12 @@ DxgkGpuVaCreateProcess(
         CreateArgs.NumPasid     = 0;
         CreateArgs.pPasid       = NULL;
 
+        if (!DxgkAcquireKmdCall(Adapter))
+            return STATUS_DELETE_PENDING;
         Status = Adapter->MiniportContext->InitData.s.DxgkDdiCreateProcess(
                      Adapter->MiniportDeviceContext,
                      &CreateArgs);
+        DxgkReleaseKmdCall(Adapter);
 
         if (NT_SUCCESS(Status))
         {
@@ -1369,6 +1372,10 @@ DxgkGpuVaSetRootPageTable(
 
     if (Adapter == NULL || Process == NULL || Context == NULL)
         return STATUS_INVALID_PARAMETER;
+    if (Context->Device == NULL || Context->Device->Adapter != Adapter || Context->Device->ProcessRecord != Process)
+        return STATUS_INVALID_HANDLE;
+    if (InterlockedCompareExchange(&Context->Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE)
+        return STATUS_DEVICE_REMOVED;
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
     if (!DxgkGpuVaPageTableReady(Adapter, Process))
@@ -1381,7 +1388,15 @@ DxgkGpuVaSetRootPageTable(
         SetArgs.hContext = Context->hMiniportContext;
         SetArgs.Address = Process->RootPageTableAddress;
         SetArgs.NumEntries = Process->RootPageTableEntries;
+        if (!DxgkAcquireKmdCall(Adapter))
+            return STATUS_DELETE_PENDING;
+        if (InterlockedCompareExchange(&Context->Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE)
+        {
+            DxgkReleaseKmdCall(Adapter);
+            return STATUS_DEVICE_REMOVED;
+        }
         DXGK_CB_FULL(Adapter, DxgkDdiSetRootPageTable)(Adapter->MiniportDeviceContext, &SetArgs);
+        DxgkReleaseKmdCall(Adapter);
         DPRINT("DxgkGpuVaSetRootPageTable: set for context %p addr=0x%I64x entries=%u\n", Context, SetArgs.Address.SegmentOffset, SetArgs.NumEntries);
     }
 #else
@@ -1417,9 +1432,12 @@ DxgkGpuVaGetRootPageTableSize(
         Args.NumberOfPte       = NumberOfPte;
         Args.PhysicalAdapterIndex = PhysicalAdapterIndex;
 
+        if (!DxgkAcquireKmdCall(Adapter))
+            return 0;
         Size = Adapter->MiniportContext->InitData.s.DxgkDdiGetRootPageTableSize(
                    Adapter->MiniportDeviceContext,
                    &Args);
+        DxgkReleaseKmdCall(Adapter);
 
         DPRINT("DxgkGpuVaGetRootPageTableSize: NumberOfPte=%u size=%Iu\n",
                NumberOfPte, Size);
@@ -1560,6 +1578,7 @@ DxgkGpuVaMapCpuHostAperture(
     if (Adapter->MiniportContext->InitData.s.DxgkDdiMapCpuHostAperture != NULL)
     {
         DXGKARG_MAPCPUHOSTAPERTURE Args;
+        NTSTATUS Status;
 
         RtlZeroMemory(&Args, sizeof(Args));
         Args.hAllocation           = hAllocation;
@@ -1569,9 +1588,11 @@ DxgkGpuVaMapCpuHostAperture(
         Args.pCpuHostAperturePages = pCpuHostAperturePages;
         Args.pMemorySegmentPages   = pMemorySegmentPages;
 
-        return Adapter->MiniportContext->InitData.s.DxgkDdiMapCpuHostAperture(
-                   Adapter->MiniportDeviceContext,
-                   &Args);
+        if (!DxgkAcquireKmdCall(Adapter))
+            return STATUS_DELETE_PENDING;
+        Status = Adapter->MiniportContext->InitData.s.DxgkDdiMapCpuHostAperture(Adapter->MiniportDeviceContext, &Args);
+        DxgkReleaseKmdCall(Adapter);
+        return Status;
     }
 #else
     UNREFERENCED_PARAMETER(hAllocation);
@@ -1609,6 +1630,7 @@ DxgkGpuVaUnmapCpuHostAperture(
     if (Adapter->MiniportContext->InitData.s.DxgkDdiUnmapCpuHostAperture != NULL)
     {
         DXGKARG_UNMAPCPUHOSTAPERTURE Args;
+        NTSTATUS Status;
 
         RtlZeroMemory(&Args, sizeof(Args));
         Args.NumberOfPages         = NumberOfPages;
@@ -1616,9 +1638,11 @@ DxgkGpuVaUnmapCpuHostAperture(
         Args.SegmentId             = SegmentId;
         Args.PhysicalAdapterIndex  = 0;
 
-        return Adapter->MiniportContext->InitData.s.DxgkDdiUnmapCpuHostAperture(
-                   Adapter->MiniportDeviceContext,
-                   &Args);
+        if (!DxgkAcquireKmdCall(Adapter))
+            return STATUS_DELETE_PENDING;
+        Status = Adapter->MiniportContext->InitData.s.DxgkDdiUnmapCpuHostAperture(Adapter->MiniportDeviceContext, &Args);
+        DxgkReleaseKmdCall(Adapter);
+        return Status;
     }
 #else
     UNREFERENCED_PARAMETER(NumberOfPages);
