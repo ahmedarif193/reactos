@@ -3752,6 +3752,17 @@ DxgkpDispatchBufferedIoctl(
             return Status;
         }
 
+        case IOCTL_D3DKMT_CREATEALLOCATION2:
+        {
+            if (InputLength < sizeof(D3DKMT_CREATEALLOCATION) || OutputLength < sizeof(D3DKMT_CREATEALLOCATION) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+
+            Status = DxgkpCreateAllocation2WithAccessMode((D3DKMT_CREATEALLOCATION *)SystemBuffer, EmbeddedBufferMode);
+            if (NT_SUCCESS(Status))
+                Irp->IoStatus.Information = sizeof(D3DKMT_CREATEALLOCATION);
+            return Status;
+        }
+
         case IOCTL_D3DKMT_DESTROYALLOCATION:
         {
             if (InputLength < sizeof(D3DKMT_DESTROYALLOCATION) || SystemBuffer == NULL)
@@ -5089,6 +5100,8 @@ DxgkpDispatchBufferedIoctl(
                 InterfaceSize = DXGKRNL_INTERFACE_VERSION_1_SIZE;
             else if (Version == DXGKRNL_INTERFACE_VERSION_2)
                 InterfaceSize = DXGKRNL_INTERFACE_VERSION_2_SIZE;
+            else if (Version == DXGKRNL_INTERFACE_VERSION_3)
+                InterfaceSize = DXGKRNL_INTERFACE_VERSION_3_SIZE;
             else
             {
                 DXGKRNL_WARN("IOCTL_DXGKRNL_EXCHANGE_INTERFACE: "
@@ -5177,6 +5190,8 @@ DxgkpDispatchBufferedIoctl(
                 pInterface->RxgkIntPfnCreateContextVirtual = (PDXGADAPTER_CREATECONTEXTVIRTUAL)DxgkCreateContextVirtual;
                 pInterface->RxgkIntPfnSubmitCommand = (PDXGADAPTER_SUBMITCOMMAND)DxgkSubmitCommand;
             }
+            if (Version >= DXGKRNL_INTERFACE_VERSION_3)
+                pInterface->RxgkIntPfnCreateAllocation2 = (PDXGADAPTER_CREATEALLOCATION2)DxgkCreateAllocation2;
 
             Irp->IoStatus.Information = InterfaceSize;
 
@@ -5280,6 +5295,7 @@ DxgkDispatchDeviceControl(
         case IOCTL_D3DKMT_CREATEDEVICE:
         case IOCTL_D3DKMT_DESTROYDEVICE:
         case IOCTL_D3DKMT_CREATEALLOCATION:
+        case IOCTL_D3DKMT_CREATEALLOCATION2:
         case IOCTL_D3DKMT_DESTROYALLOCATION:
         case IOCTL_D3DKMT_LOCK:
         case IOCTL_D3DKMT_UNLOCK:

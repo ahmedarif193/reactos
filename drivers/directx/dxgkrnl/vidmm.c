@@ -3948,11 +3948,151 @@ DxgkVidMmDestroyAllocation(
     return Status;
 }
 
+typedef enum _DXGKP_ALLOCATION_INFO_VERSION
+{
+    DxgkpAllocationInfoVersion1 = 1,
+    DxgkpAllocationInfoVersion2 = 2
+} DXGKP_ALLOCATION_INFO_VERSION;
+
+typedef struct _DXGKP_ALLOCATION_INFO_VIEW
+{
+    D3DKMT_HANDLE hAllocation;
+    PVOID pSystemMem;
+    PVOID pPrivateDriverData;
+    UINT PrivateDriverDataSize;
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId;
+    UINT Flags;
+    D3DGPU_VIRTUAL_ADDRESS GpuVirtualAddress;
+} DXGKP_ALLOCATION_INFO_VIEW, *PDXGKP_ALLOCATION_INFO_VIEW;
+
+static VOID
+DxgkpReadAllocationInfo(
+    _In_ D3DKMT_CREATEALLOCATION *CreateAllocation,
+    _In_ DXGKP_ALLOCATION_INFO_VERSION InfoVersion,
+    _In_ UINT Index,
+    _Out_ PDXGKP_ALLOCATION_INFO_VIEW View)
+{
+    RtlZeroMemory(View, sizeof(*View));
+    if (InfoVersion == DxgkpAllocationInfoVersion2)
+    {
+        D3DDDI_ALLOCATIONINFO2 *Info = &CreateAllocation->pAllocationInfo2[Index];
+
+        View->hAllocation = Info->hAllocation;
+        View->pSystemMem = (PVOID)Info->pSystemMem;
+        View->pPrivateDriverData = Info->pPrivateDriverData;
+        View->PrivateDriverDataSize = Info->PrivateDriverDataSize;
+        View->VidPnSourceId = Info->VidPnSourceId;
+        View->Flags = Info->Flags.Value;
+        View->GpuVirtualAddress = Info->GpuVirtualAddress;
+    }
+    else
+    {
+        D3DDDI_ALLOCATIONINFO *Info = &CreateAllocation->pAllocationInfo[Index];
+
+        View->hAllocation = Info->hAllocation;
+        View->pSystemMem = (PVOID)Info->pSystemMem;
+        View->pPrivateDriverData = Info->pPrivateDriverData;
+        View->PrivateDriverDataSize = Info->PrivateDriverDataSize;
+        View->VidPnSourceId = Info->VidPnSourceId;
+        View->Flags = Info->Flags.Value;
+    }
+}
+
+static VOID
+DxgkpSetAllocationHandle(
+    _Inout_ D3DKMT_CREATEALLOCATION *CreateAllocation,
+    _In_ DXGKP_ALLOCATION_INFO_VERSION InfoVersion,
+    _In_ UINT Index,
+    _In_ D3DKMT_HANDLE Handle)
+{
+    if (InfoVersion == DxgkpAllocationInfoVersion2)
+        CreateAllocation->pAllocationInfo2[Index].hAllocation = Handle;
+    else
+        CreateAllocation->pAllocationInfo[Index].hAllocation = Handle;
+}
+
+static VOID
+DxgkpSetAllocationPrivateData(
+    _Inout_ D3DKMT_CREATEALLOCATION *CreateAllocation,
+    _In_ DXGKP_ALLOCATION_INFO_VERSION InfoVersion,
+    _In_ UINT Index,
+    _In_opt_ PVOID PrivateDriverData)
+{
+    if (InfoVersion == DxgkpAllocationInfoVersion2)
+        CreateAllocation->pAllocationInfo2[Index].pPrivateDriverData = PrivateDriverData;
+    else
+        CreateAllocation->pAllocationInfo[Index].pPrivateDriverData = PrivateDriverData;
+}
+
+static NTSTATUS
+DxgkpValidateAllocationInfo2(
+    _Inout_ D3DDDI_ALLOCATIONINFO2 *Info)
+{
+    CONST ULONG_PTR *Tail = (CONST ULONG_PTR *)((CONST UCHAR *)Info + sizeof(*Info) - (6 * sizeof(ULONG_PTR)));
+    UINT AllowedFlags = 0x1u;
+    UINT Index;
+
+#if ((DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8) || (D3D_UMD_INTERFACE_VERSION >= D3D_UMD_INTERFACE_VERSION_WIN8))
+    AllowedFlags |= 0x2u;
+#endif
+#if ((DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2) || (D3D_UMD_INTERFACE_VERSION >= D3D_UMD_INTERFACE_VERSION_WDDM2_2))
+    AllowedFlags |= 0x4u;
+    if ((Info->Flags.Value & ~AllowedFlags) != 0)
+        return STATUS_INVALID_PARAMETER;
+    for (Index = 1; Index < 6; ++Index)
+    {
+        if (Tail[Index] != 0)
+            return STATUS_INVALID_PARAMETER;
+    }
+    if ((Info->Flags.Value & 0x4u) == 0 && Tail[0] != 0)
+        return STATUS_INVALID_PARAMETER;
+    if ((Info->Flags.Value & 0x4u) != 0)
+        return STATUS_NOT_SUPPORTED;
+#else
+    if ((Info->Flags.Value & ~AllowedFlags) != 0)
+        return STATUS_INVALID_PARAMETER;
+    for (Index = 0; Index < 6; ++Index)
+    {
+        if (Tail[Index] != 0)
+            return STATUS_INVALID_PARAMETER;
+    }
+#endif
+    /* CreateAllocation2 is also valid for physical-addressing adapters. Zero
+     * records that common-prefix result; it is not a process GPUVA mapping. */
+    Info->GpuVirtualAddress = 0;
+    return STATUS_SUCCESS;
+}
+
+static VOID
+DxgkpScrubCreateAllocationOutputs(
+    _Inout_ D3DKMT_CREATEALLOCATION *CreateAllocation,
+    _Inout_updates_bytes_(AllocationCount * AllocationInfoStride) PVOID UserAllocationInfo,
+    _In_ UINT AllocationCount,
+    _In_ SIZE_T AllocationInfoStride,
+    _In_ DXGKP_ALLOCATION_INFO_VERSION InfoVersion,
+    _In_ KPROCESSOR_MODE EmbeddedBufferMode,
+    _In_ D3DKMT_HANDLE SafeResourceHandle)
+{
+    D3DKMT_HANDLE ZeroHandle = 0;
+    D3DGPU_VIRTUAL_ADDRESS ZeroGpuVirtualAddress = 0;
+    UINT Index;
+
+    for (Index = 0; Index < AllocationCount; ++Index)
+    {
+        (VOID)DxgkpCopyToUserBuffer((PUCHAR)UserAllocationInfo + ((SIZE_T)Index * AllocationInfoStride), &ZeroHandle, sizeof(ZeroHandle), EmbeddedBufferMode);
+        if (InfoVersion == DxgkpAllocationInfoVersion2)
+            (VOID)DxgkpCopyToUserBuffer((PUCHAR)UserAllocationInfo + ((SIZE_T)Index * AllocationInfoStride) + FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, GpuVirtualAddress), &ZeroGpuVirtualAddress, sizeof(ZeroGpuVirtualAddress), EmbeddedBufferMode);
+    }
+    CreateAllocation->hResource = SafeResourceHandle;
+    CreateAllocation->hGlobalShare = 0;
+}
+
 static NTSTATUS
 DxgkpVidMmOpenCreatorAllocations(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ PDXGKRNL_DEVICE Device,
     _In_ D3DKMT_CREATEALLOCATION *CreateAllocation,
+    _In_ DXGKP_ALLOCATION_INFO_VERSION InfoVersion,
     _Out_ PBOOLEAN RollbackOwned)
 {
     PDXGKVMM_ALLOCATION *Allocations = NULL;
@@ -4012,18 +4152,21 @@ DxgkpVidMmOpenCreatorAllocations(
 
     for (Index = 0; Index < AllocationCount; ++Index)
     {
-        D3DDDI_ALLOCATIONINFO *AllocationInfo = &CreateAllocation->pAllocationInfo[Index];
-        HANDLE AllocationHandle = (HANDLE)(ULONG_PTR)AllocationInfo->hAllocation;
+        DXGKP_ALLOCATION_INFO_VIEW AllocationInfo;
+        HANDLE AllocationHandle;
+
+        DxgkpReadAllocationInfo(CreateAllocation, InfoVersion, Index, &AllocationInfo);
+        AllocationHandle = (HANDLE)(ULONG_PTR)AllocationInfo.hAllocation;
 
         Status = DxgkpVidMmReferenceInitializingAllocation(AllocationHandle, Adapter, Device, &Allocations[Index]);
-        if (!NT_SUCCESS(Status) || Allocations[Index]->BackingAllocation != NULL || Allocations[Index]->PrivateDriverDataSize != AllocationInfo->PrivateDriverDataSize)
+        if (!NT_SUCCESS(Status) || Allocations[Index]->BackingAllocation != NULL || Allocations[Index]->PrivateDriverDataSize != AllocationInfo.PrivateDriverDataSize)
         {
             Status = STATUS_INVALID_HANDLE;
             goto Cleanup;
         }
-        OpenInfo[Index].hAllocation = AllocationInfo->hAllocation;
-        OpenInfo[Index].pPrivateDriverData = AllocationInfo->pPrivateDriverData;
-        OpenInfo[Index].PrivateDriverDataSize = AllocationInfo->PrivateDriverDataSize;
+        OpenInfo[Index].hAllocation = AllocationInfo.hAllocation;
+        OpenInfo[Index].pPrivateDriverData = AllocationInfo.pPrivateDriverData;
+        OpenInfo[Index].PrivateDriverDataSize = AllocationInfo.PrivateDriverDataSize;
     }
 
     RtlZeroMemory(&OpenArgs, sizeof(OpenArgs));
@@ -4198,7 +4341,8 @@ static NTSTATUS
 DxgkpVidMmCommitInitializingAllocations(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ PDXGKRNL_DEVICE Device,
-    _In_ D3DKMT_CREATEALLOCATION *CreateAllocation)
+    _In_ D3DKMT_CREATEALLOCATION *CreateAllocation,
+    _In_ DXGKP_ALLOCATION_INFO_VERSION InfoVersion)
 {
     PDXGKVMM_ALLOCATION Allocation;
     UINT Index;
@@ -4207,7 +4351,10 @@ DxgkpVidMmCommitInitializingAllocations(
     ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
     for (Index = 0; Index < CreateAllocation->NumAllocations; ++Index)
     {
-        Allocation = DxgkpVidMmLookupAllocationLocked(CreateAllocation->pAllocationInfo[Index].hAllocation);
+        DXGKP_ALLOCATION_INFO_VIEW AllocationInfo;
+
+        DxgkpReadAllocationInfo(CreateAllocation, InfoVersion, Index, &AllocationInfo);
+        Allocation = DxgkpVidMmLookupAllocationLocked(AllocationInfo.hAllocation);
         if (Allocation == NULL || Allocation->Adapter != Adapter || Allocation->Device != Device || !Allocation->Initializing || InterlockedCompareExchange(&Allocation->Destroying, 0, 0) != 0)
         {
             Status = STATUS_INVALID_HANDLE;
@@ -4218,7 +4365,10 @@ DxgkpVidMmCommitInitializingAllocations(
     {
         for (Index = 0; Index < CreateAllocation->NumAllocations; ++Index)
         {
-            Allocation = DxgkpVidMmLookupAllocationLocked(CreateAllocation->pAllocationInfo[Index].hAllocation);
+            DXGKP_ALLOCATION_INFO_VIEW AllocationInfo;
+
+            DxgkpReadAllocationInfo(CreateAllocation, InfoVersion, Index, &AllocationInfo);
+            Allocation = DxgkpVidMmLookupAllocationLocked(AllocationInfo.hAllocation);
             Allocation->Initializing = FALSE;
         }
     }
@@ -4228,7 +4378,8 @@ DxgkpVidMmCommitInitializingAllocations(
 
 static NTSTATUS
 DxgkpCreateAllocationCaptured(
-    _Inout_ D3DKMT_CREATEALLOCATION *pCreateAllocation)
+    _Inout_ D3DKMT_CREATEALLOCATION *pCreateAllocation,
+    _In_ DXGKP_ALLOCATION_INFO_VERSION InfoVersion)
 {
     PDXGKRNL_ADAPTER Adapter;
     PDXGKRNL_DEVICE Device;
@@ -4249,6 +4400,7 @@ DxgkpCreateAllocationCaptured(
     PAGED_CODE();
 
     if (pCreateAllocation == NULL ||
+        (InfoVersion != DxgkpAllocationInfoVersion1 && InfoVersion != DxgkpAllocationInfoVersion2) ||
         pCreateAllocation->NumAllocations == 0 ||
         pCreateAllocation->pAllocationInfo == NULL)
     {
@@ -4382,7 +4534,7 @@ DxgkpCreateAllocationCaptured(
 
     for (i = 0; i < pCreateAllocation->NumAllocations; ++i)
     {
-        D3DDDI_ALLOCATIONINFO AllocationInfo;
+        DXGKP_ALLOCATION_INFO_VIEW AllocationInfo;
         DXGK_ALLOCATIONINFO DxgkAllocInfo;
         HANDLE AllocationHandle = NULL;
         HANDLE MiniportResourceHandle = NULL;
@@ -4390,22 +4542,11 @@ DxgkpCreateAllocationCaptured(
         BOOLEAN UseSystemAllocation = FALSE;
 
         RtlZeroMemory(&DxgkAllocInfo, sizeof(DxgkAllocInfo));
-        _SEH2_TRY
-        {
-            AllocationInfo = pCreateAllocation->pAllocationInfo[i];
-        }
-        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-        {
-            Status = _SEH2_GetExceptionCode();
-            break;
-        }
-        _SEH2_END;
+        DxgkpReadAllocationInfo(pCreateAllocation, InfoVersion, i, &AllocationInfo);
 
-        DxgkAllocInfo.pPrivateDriverData    = AllocationInfo.pPrivateDriverData;
+        DxgkAllocInfo.pPrivateDriverData = AllocationInfo.pPrivateDriverData;
         DxgkAllocInfo.PrivateDriverDataSize = AllocationInfo.PrivateDriverDataSize;
-        DxgkAllocInfo.Flags.ExistingSysMem  =
-            (pCreateAllocation->Flags.ExistingSysMem ||
-             AllocationInfo.pSystemMem != NULL) ? 1 : 0;
+        DxgkAllocInfo.Flags.ExistingSysMem = (pCreateAllocation->Flags.ExistingSysMem || AllocationInfo.pSystemMem != NULL) ? 1 : 0;
 
         Status = STATUS_SUCCESS;
         if (DxgkAllocInfo.PrivateDriverDataSize == 0)
@@ -4547,15 +4688,7 @@ DxgkpCreateAllocationCaptured(
             TrackedAlloc->DestroyMiniportResource = FALSE;
         }
 
-        _SEH2_TRY
-        {
-            pCreateAllocation->pAllocationInfo[i].hAllocation = (D3DKMT_HANDLE)(ULONG_PTR)AllocationHandle;
-        }
-        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-        {
-            Status = _SEH2_GetExceptionCode();
-        }
-        _SEH2_END;
+        DxgkpSetAllocationHandle(pCreateAllocation, InfoVersion, i, (D3DKMT_HANDLE)(ULONG_PTR)AllocationHandle);
 
         DxgkVidMmDereferenceAllocation(TrackedAlloc);
 
@@ -4571,9 +4704,9 @@ DxgkpCreateAllocationCaptured(
     }
 
     if (NT_SUCCESS(Status) && i == pCreateAllocation->NumAllocations)
-        Status = DxgkpVidMmOpenCreatorAllocations(Adapter, Device, pCreateAllocation, &OpenRollbackOwned);
+        Status = DxgkpVidMmOpenCreatorAllocations(Adapter, Device, pCreateAllocation, InfoVersion, &OpenRollbackOwned);
     if (NT_SUCCESS(Status) && i == pCreateAllocation->NumAllocations)
-        Status = DxgkpVidMmCommitInitializingAllocations(Adapter, Device, pCreateAllocation);
+        Status = DxgkpVidMmCommitInitializingAllocations(Adapter, Device, pCreateAllocation, InfoVersion);
 
     if (!NT_SUCCESS(Status))
     {
@@ -4643,10 +4776,12 @@ DxgkpCreateAllocationCaptured(
         while (i-- > 0)
         {
             HANDLE AllocationHandle;
+            DXGKP_ALLOCATION_INFO_VIEW AllocationInfo;
 
-            AllocationHandle = (HANDLE)(ULONG_PTR)pCreateAllocation->pAllocationInfo[i].hAllocation;
+            DxgkpReadAllocationInfo(pCreateAllocation, InfoVersion, i, &AllocationInfo);
+            AllocationHandle = (HANDLE)(ULONG_PTR)AllocationInfo.hAllocation;
             if (AllocationHandle != NULL)
-                pCreateAllocation->pAllocationInfo[i].hAllocation = 0;
+                DxgkpSetAllocationHandle(pCreateAllocation, InfoVersion, i, 0);
         }
 
         if (CreatedResource && Resource != NULL && Resource->AllocationCount == 0)
@@ -4684,16 +4819,16 @@ typedef struct _DXGKP_CREATEALLOCATION_PRIVATE_CAPTURE
     UINT Size;
 } DXGKP_CREATEALLOCATION_PRIVATE_CAPTURE, *PDXGKP_CREATEALLOCATION_PRIVATE_CAPTURE;
 
-NTSTATUS
-NTAPI
-DxgkpCreateAllocationWithAccessMode(
+static NTSTATUS
+DxgkpCreateAllocationWithAccessModeVariant(
     _Inout_ D3DKMT_CREATEALLOCATION *CreateAllocation,
-    _In_ KPROCESSOR_MODE EmbeddedBufferMode)
+    _In_ KPROCESSOR_MODE EmbeddedBufferMode,
+    _In_ DXGKP_ALLOCATION_INFO_VERSION InfoVersion)
 {
     D3DKMT_CREATEALLOCATION Captured;
     D3DKMT_DESTROYALLOCATION DestroyAllocation;
-    D3DDDI_ALLOCATIONINFO *CapturedAllocationInfo = NULL;
-    D3DDDI_ALLOCATIONINFO *UserAllocationInfo;
+    PVOID CapturedAllocationInfo = NULL;
+    PVOID UserAllocationInfo;
     PDXGKP_CREATEALLOCATION_PRIVATE_CAPTURE PrivateCaptures = NULL;
     D3DKMT_HANDLE *CreatedHandles = NULL;
     PVOID CapturedPrivateDriverData = NULL;
@@ -4701,6 +4836,7 @@ DxgkpCreateAllocationWithAccessMode(
     SIZE_T AllocationInfoSize;
     SIZE_T PrivateCaptureSize;
     SIZE_T CreatedHandlesSize;
+    SIZE_T AllocationInfoStride;
     SIZE_T TotalPrivateSize = 0;
     D3DKMT_HANDLE InputDevice;
     D3DKMT_HANDLE InputResource;
@@ -4720,7 +4856,9 @@ DxgkpCreateAllocationWithAccessMode(
         return STATUS_INVALID_PARAMETER;
 
     Captured = *CreateAllocation;
-    UserAllocationInfo = Captured.pAllocationInfo;
+    if (InfoVersion != DxgkpAllocationInfoVersion1 && InfoVersion != DxgkpAllocationInfoVersion2)
+        return STATUS_INVALID_PARAMETER;
+    UserAllocationInfo = InfoVersion == DxgkpAllocationInfoVersion2 ? (PVOID)Captured.pAllocationInfo2 : (PVOID)Captured.pAllocationInfo;
     InputDevice = Captured.hDevice;
     InputResource = Captured.hResource;
     InputAllocationCount = Captured.NumAllocations;
@@ -4729,10 +4867,11 @@ DxgkpCreateAllocationWithAccessMode(
 
     if (InputAllocationCount == 0 || InputAllocationCount > DXGKP_MAX_CAPTURE_ALLOCATIONS || UserAllocationInfo == NULL || (InputCreatesResource && InputResource != 0))
         return STATUS_INVALID_PARAMETER;
-    if ((SIZE_T)InputAllocationCount > MAXULONG_PTR / sizeof(*CapturedAllocationInfo) || (SIZE_T)InputAllocationCount > MAXULONG_PTR / sizeof(*PrivateCaptures) || (SIZE_T)InputAllocationCount > MAXULONG_PTR / sizeof(*CreatedHandles))
+    AllocationInfoStride = InfoVersion == DxgkpAllocationInfoVersion2 ? sizeof(D3DDDI_ALLOCATIONINFO2) : sizeof(D3DDDI_ALLOCATIONINFO);
+    if ((SIZE_T)InputAllocationCount > MAXULONG_PTR / AllocationInfoStride || (SIZE_T)InputAllocationCount > MAXULONG_PTR / sizeof(*PrivateCaptures) || (SIZE_T)InputAllocationCount > MAXULONG_PTR / sizeof(*CreatedHandles))
         return STATUS_INTEGER_OVERFLOW;
 
-    AllocationInfoSize = (SIZE_T)InputAllocationCount * sizeof(*CapturedAllocationInfo);
+    AllocationInfoSize = (SIZE_T)InputAllocationCount * AllocationInfoStride;
     PrivateCaptureSize = (SIZE_T)InputAllocationCount * sizeof(*PrivateCaptures);
     CreatedHandlesSize = (SIZE_T)InputAllocationCount * sizeof(*CreatedHandles);
     Status = DxgkpCaptureUserBuffer(UserAllocationInfo, AllocationInfoSize, EmbeddedBufferMode, TAG_DXGK_CAPTURE, (PVOID *)&CapturedAllocationInfo);
@@ -4754,6 +4893,15 @@ DxgkpCreateAllocationWithAccessMode(
 
     Captured.hResource = InputResource;
     Captured.hGlobalShare = 0;
+    if (InfoVersion == DxgkpAllocationInfoVersion2)
+        Captured.pAllocationInfo2 = (D3DDDI_ALLOCATIONINFO2 *)CapturedAllocationInfo;
+    else
+        Captured.pAllocationInfo = (D3DDDI_ALLOCATIONINFO *)CapturedAllocationInfo;
+    if (InfoVersion == DxgkpAllocationInfoVersion2 && ((*(CONST UINT *)&Captured.Flags & 0x00020000U) != 0))
+    {
+        Status = STATUS_NOT_SUPPORTED;
+        goto Cleanup;
+    }
     if (StandardAllocation)
     {
         if (Captured.pStandardAllocation == NULL || Captured.PrivateDriverDataSize != 0)
@@ -4806,17 +4954,26 @@ DxgkpCreateAllocationWithAccessMode(
 
     for (i = 0; i < InputAllocationCount; ++i)
     {
-        PrivateCaptures[i].UserBuffer = CapturedAllocationInfo[i].pPrivateDriverData;
-        PrivateCaptures[i].Size = CapturedAllocationInfo[i].PrivateDriverDataSize;
-        CapturedAllocationInfo[i].hAllocation = 0;
-        if (EmbeddedBufferMode != KernelMode && CapturedAllocationInfo[i].pSystemMem != NULL)
+        DXGKP_ALLOCATION_INFO_VIEW AllocationInfo;
+
+        if (InfoVersion == DxgkpAllocationInfoVersion2)
+        {
+            Status = DxgkpValidateAllocationInfo2(&Captured.pAllocationInfo2[i]);
+            if (!NT_SUCCESS(Status))
+                goto Cleanup;
+        }
+        DxgkpReadAllocationInfo(&Captured, InfoVersion, i, &AllocationInfo);
+        PrivateCaptures[i].UserBuffer = AllocationInfo.pPrivateDriverData;
+        PrivateCaptures[i].Size = AllocationInfo.PrivateDriverDataSize;
+        DxgkpSetAllocationHandle(&Captured, InfoVersion, i, 0);
+        if (EmbeddedBufferMode != KernelMode && AllocationInfo.pSystemMem != NULL)
         {
             Status = STATUS_INVALID_PARAMETER;
             goto Cleanup;
         }
         if (PrivateCaptures[i].Size == 0)
         {
-            CapturedAllocationInfo[i].pPrivateDriverData = NULL;
+            DxgkpSetAllocationPrivateData(&Captured, InfoVersion, i, NULL);
             continue;
         }
         if (PrivateCaptures[i].UserBuffer == NULL || PrivateCaptures[i].Size > DXGKP_MAX_USER_PRIVATE_DATA || TotalPrivateSize > DXGKP_MAX_USER_PRIVATE_DATA - PrivateCaptures[i].Size)
@@ -4830,18 +4987,22 @@ DxgkpCreateAllocationWithAccessMode(
         Status = DxgkpProbeOutputBuffer(PrivateCaptures[i].UserBuffer, PrivateCaptures[i].Size, EmbeddedBufferMode);
         if (!NT_SUCCESS(Status))
             goto Cleanup;
-        CapturedAllocationInfo[i].pPrivateDriverData = PrivateCaptures[i].CapturedBuffer;
+        DxgkpSetAllocationPrivateData(&Captured, InfoVersion, i, PrivateCaptures[i].CapturedBuffer);
         TotalPrivateSize += PrivateCaptures[i].Size;
     }
 
-    Captured.pAllocationInfo = CapturedAllocationInfo;
-    Status = DxgkpCreateAllocationCaptured(&Captured);
+    Status = DxgkpCreateAllocationCaptured(&Captured, InfoVersion);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
     CoreSucceeded = TRUE;
 
     for (i = 0; i < InputAllocationCount; ++i)
-        CreatedHandles[i] = CapturedAllocationInfo[i].hAllocation;
+    {
+        DXGKP_ALLOCATION_INFO_VIEW AllocationInfo;
+
+        DxgkpReadAllocationInfo(&Captured, InfoVersion, i, &AllocationInfo);
+        CreatedHandles[i] = AllocationInfo.hAllocation;
+    }
     if (Captured.hDevice != InputDevice || Captured.NumAllocations != InputAllocationCount || (InputCreatesResource && Captured.hResource == 0) || (!InputCreatesResource && Captured.hResource != InputResource))
     {
         Status = STATUS_INVALID_HANDLE;
@@ -4875,9 +5036,20 @@ DxgkpCreateAllocationWithAccessMode(
     }
     for (i = 0; i < InputAllocationCount; ++i)
     {
-        Status = DxgkpCopyToUserBuffer((PUCHAR)UserAllocationInfo + ((SIZE_T)i * sizeof(*UserAllocationInfo)) + FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, hAllocation), &CreatedHandles[i], sizeof(CreatedHandles[i]), EmbeddedBufferMode);
+        Status = DxgkpCopyToUserBuffer((PUCHAR)UserAllocationInfo + ((SIZE_T)i * AllocationInfoStride), &CreatedHandles[i], sizeof(CreatedHandles[i]), EmbeddedBufferMode);
         if (!NT_SUCCESS(Status))
             goto Rollback;
+    }
+    if (InfoVersion == DxgkpAllocationInfoVersion2)
+    {
+        for (i = 0; i < InputAllocationCount; ++i)
+        {
+            D3DGPU_VIRTUAL_ADDRESS GpuVirtualAddress = Captured.pAllocationInfo2[i].GpuVirtualAddress;
+
+            Status = DxgkpCopyToUserBuffer((PUCHAR)UserAllocationInfo + ((SIZE_T)i * AllocationInfoStride) + FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, GpuVirtualAddress), &GpuVirtualAddress, sizeof(GpuVirtualAddress), EmbeddedBufferMode);
+            if (!NT_SUCCESS(Status))
+                goto Rollback;
+        }
     }
 
     CreateAllocation->hResource = Captured.hResource;
@@ -4912,6 +5084,7 @@ Rollback:
         }
         if (!NT_SUCCESS(CleanupStatus))
             DPRINT1("DxgkCreateAllocation: publication rollback failed with 0x%08lX\n", CleanupStatus);
+        DxgkpScrubCreateAllocationOutputs(CreateAllocation, UserAllocationInfo, InputAllocationCount, AllocationInfoStride, InfoVersion, EmbeddedBufferMode, InputCreatesResource ? 0 : InputResource);
     }
 
 Cleanup:
@@ -4936,10 +5109,35 @@ Cleanup:
 }
 
 NTSTATUS
+NTAPI
+DxgkpCreateAllocationWithAccessMode(
+    _Inout_ D3DKMT_CREATEALLOCATION *CreateAllocation,
+    _In_ KPROCESSOR_MODE EmbeddedBufferMode)
+{
+    return DxgkpCreateAllocationWithAccessModeVariant(CreateAllocation, EmbeddedBufferMode, DxgkpAllocationInfoVersion1);
+}
+
+NTSTATUS
+NTAPI
+DxgkpCreateAllocation2WithAccessMode(
+    _Inout_ D3DKMT_CREATEALLOCATION *CreateAllocation,
+    _In_ KPROCESSOR_MODE EmbeddedBufferMode)
+{
+    return DxgkpCreateAllocationWithAccessModeVariant(CreateAllocation, EmbeddedBufferMode, DxgkpAllocationInfoVersion2);
+}
+
+NTSTATUS
 DxgkCreateAllocation(
     _Inout_ D3DKMT_CREATEALLOCATION *CreateAllocation)
 {
     return DxgkpCreateAllocationWithAccessMode(CreateAllocation, KernelMode);
+}
+
+NTSTATUS
+DxgkCreateAllocation2(
+    _Inout_ D3DKMT_CREATEALLOCATION *CreateAllocation)
+{
+    return DxgkpCreateAllocation2WithAccessMode(CreateAllocation, KernelMode);
 }
 
 NTSTATUS

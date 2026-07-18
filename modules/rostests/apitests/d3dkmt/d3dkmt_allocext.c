@@ -41,6 +41,21 @@
  * value-union aliasing is well defined.
  */
 C_ASSERT(sizeof(D3DKMT_CREATEALLOCATIONFLAGS) == sizeof(UINT));
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, hAllocation) == 0);
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, hAllocation) == 0);
+#ifdef _WIN64
+C_ASSERT(sizeof(D3DDDI_ALLOCATIONINFO) == 40);
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, pPrivateDriverData) == 16);
+C_ASSERT(sizeof(D3DDDI_ALLOCATIONINFO2) == 96);
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, pPrivateDriverData) == 16);
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, GpuVirtualAddress) == 40);
+#else
+C_ASSERT(sizeof(D3DDDI_ALLOCATIONINFO) == 24);
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, pPrivateDriverData) == 8);
+C_ASSERT(sizeof(D3DDDI_ALLOCATIONINFO2) == 56);
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, pPrivateDriverData) == 8);
+C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, GpuVirtualAddress) == 24);
+#endif
 
 #define CAF_CREATERESOURCE          0x00000001u
 #define CAF_CREATESHARED            0x00000002u
@@ -921,6 +936,30 @@ Unlock2_BadHandle(void)
 }
 
 static void
+Allocation2_Info2StrideCanary(void)
+{
+    typedef struct _INFO2_GUARDED_ARRAY { ULONGLONG Prefix; D3DDDI_ALLOCATIONINFO2 Info[2]; ULONGLONG Suffix; } INFO2_GUARDED_ARRAY;
+    INFO2_GUARDED_ARRAY Guarded;
+    D3DKMT_CREATEALLOCATION CreateAllocation;
+    ULONG_PTR *SecondTail;
+
+    LOADFN(PFND3DKMT_CREATEALLOCATION2, pCreate, "D3DKMTCreateAllocation2");
+
+    memset(&Guarded, 0, sizeof(Guarded));
+    Guarded.Prefix = 0x1122334455667788ULL;
+    Guarded.Suffix = 0x8877665544332211ULL;
+    SecondTail = (ULONG_PTR *)((BYTE *)&Guarded.Info[1] + sizeof(Guarded.Info[1]) - (6 * sizeof(ULONG_PTR)));
+    SecondTail[5] = 1;
+    memset(&CreateAllocation, 0, sizeof(CreateAllocation));
+    CreateAllocation.hDevice = (D3DKMT_HANDLE)0xDEAD6100;
+    CreateAllocation.NumAllocations = 2;
+    CreateAllocation.pAllocationInfo2 = Guarded.Info;
+    EXPECT_REFUSED(pCreate, &CreateAllocation, "CreateAllocation2(INFO2 reserved tail)");
+    ok(Guarded.Prefix == 0x1122334455667788ULL, "CreateAllocation2 wrote before the INFO2 array\n");
+    ok(Guarded.Suffix == 0x8877665544332211ULL, "CreateAllocation2 wrote past the INFO2 array\n");
+}
+
+static void
 Allocation2_PositiveRoundTrip(void)
 {
     D3DKMT_HANDLE hAdapter, hDevice;
@@ -988,5 +1027,6 @@ START_TEST(allocdestroy2)
     Destroy2_ValidDeviceBogusAlloc();
     Lock2_BadHandle();
     Unlock2_BadHandle();
+    Allocation2_Info2StrideCanary();
     Allocation2_PositiveRoundTrip();
 }
