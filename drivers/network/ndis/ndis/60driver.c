@@ -723,8 +723,18 @@ Ndis6DispatchPnp(
         case IRP_MN_QUERY_STOP_DEVICE:
         case IRP_MN_CANCEL_REMOVE_DEVICE:
         case IRP_MN_CANCEL_STOP_DEVICE:
-        case IRP_MN_STOP_DEVICE:
             /* Forward down; no local handling needed at Phase 1. */
+            return Ndis6PassThroughIrp(LowerDevice, Irp);
+
+        case IRP_MN_STOP_DEVICE:
+            /* A resource rebalance restarts this FDO with new resources.
+             * Release the current miniport instance so the following START
+             * can initialize it again without retaining the old resources. */
+            if (Ext && Ext->Initialized)
+            {
+                Ndis6CallMiniportHaltEx(Adapter, NdisHaltDeviceStopped);
+                Ext->Initialized = FALSE;
+            }
             return Ndis6PassThroughIrp(LowerDevice, Irp);
 
         default:
