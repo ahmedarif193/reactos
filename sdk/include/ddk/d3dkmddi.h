@@ -205,6 +205,21 @@ typedef struct _DXGK_ALLOCATIONUSAGEHINT
 } DXGK_ALLOCATIONUSAGEHINT;
 C_ASSERT(sizeof(DXGK_ALLOCATIONUSAGEHINT) == 0x28);
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
+typedef struct _DXGK_ALLOCATIONINFOFLAGS2
+{
+    union
+    {
+        struct
+        {
+            UINT    CpuVisibleOnDemand      : 1;    // 0x00000001
+            UINT    Reserved                :31;    // 0xFFFFFFFE
+        };
+        UINT Value;
+    };
+} DXGK_ALLOCATIONINFOFLAGS2;
+#endif // DXGKDDI_INTERFACE_VERSION_WDDM3_0
+
 typedef struct _DXGK_ALLOCATIONINFO
 {
     VOID*                      pPrivateDriverData;
@@ -238,11 +253,9 @@ typedef struct _DXGK_ALLOCATIONINFO
 } DXGK_ALLOCATIONINFO;
 
 #ifdef _WIN64
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
-C_ASSERT(sizeof(DXGK_ALLOCATIONINFO) == 0x5C);
-#else
+/* Flags2 occupies the 64-bit tail hole after AllocationPriority, so the
+ * 64-bit size does not grow at WDDM 3.0 (the 32-bit size does). */
 C_ASSERT(sizeof(DXGK_ALLOCATIONINFO) == 0x58);
-#endif
 #else
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
 C_ASSERT(sizeof(DXGK_ALLOCATIONINFO) == 0x40);
