@@ -301,6 +301,53 @@ SoftGpuDdiPreemptCommand(
 
 
 /* =========================================================================
+ * DxgkDdiRender
+ * =========================================================================
+ */
+
+/*
+ * SoftGpuDdiRender
+ *
+ * Translates a user command buffer into a DMA buffer.  softgpu executes no
+ * command stream, so translation is a bounded copy; patch locations pass
+ * through unchanged.
+ *
+ * IRQL: PASSIVE_LEVEL
+ */
+NTSTATUS
+APIENTRY
+SoftGpuDdiRender(
+    _In_    PVOID           hContext,
+    _Inout_ DXGKARG_RENDER *pRender)
+{
+    UINT CopyLength;
+    UINT i;
+
+    UNREFERENCED_PARAMETER(hContext);
+
+    if (pRender == NULL || pRender->pCommand == NULL || pRender->pDmaBuffer == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (pRender->CommandLength > pRender->DmaSize)
+        return STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+    if (pRender->PatchLocationListInSize > pRender->PatchLocationListOutSize)
+        return STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+
+    CopyLength = pRender->CommandLength;
+    RtlCopyMemory(pRender->pDmaBuffer, pRender->pCommand, CopyLength);
+    pRender->pDmaBuffer = (PUCHAR)pRender->pDmaBuffer + CopyLength;
+
+    for (i = 0; i < pRender->PatchLocationListInSize; i++)
+    {
+        pRender->pPatchLocationListOut[i] = pRender->pPatchLocationListIn[i];
+        pRender->pPatchLocationListOut[i].PatchOffset = pRender->pPatchLocationListIn[i].PatchOffset;
+    }
+    pRender->pPatchLocationListOut += pRender->PatchLocationListInSize;
+
+    return STATUS_SUCCESS;
+}
+
+
+/* =========================================================================
  * DxgkDdiBuildPagingBuffer
  * =========================================================================
  */

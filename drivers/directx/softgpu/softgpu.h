@@ -307,6 +307,12 @@ SoftGpuDdiDestroyAllocation(
 
 NTSTATUS
 APIENTRY
+SoftGpuDdiRender(
+    _In_    PVOID           hContext,
+    _Inout_ DXGKARG_RENDER *pRender);
+
+NTSTATUS
+APIENTRY
 SoftGpuDdiOpenAllocation(
     _In_ PVOID                          hDevice,
     _In_ CONST DXGKARG_OPENALLOCATION  *OpenAllocation);

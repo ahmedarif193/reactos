@@ -140,6 +140,7 @@ DriverEntry(
     InitData.DxgkDdiCloseAllocation                 = SoftGpuDdiCloseAllocation;
     InitData.DxgkDdiBuildPagingBuffer               = SoftGpuDdiBuildPagingBuffer;
     InitData.DxgkDdiPatch                           = SoftGpuDdiPatch;
+    InitData.DxgkDdiRender                          = SoftGpuDdiRender;
 
     /* --- Command scheduling --------------------------------------------- */
     InitData.DxgkDdiSubmitCommand                   = SoftGpuDdiSubmitCommand;
