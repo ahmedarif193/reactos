@@ -25,6 +25,7 @@ typedef enum _DXGMMS2_TIMELINE_STATE
 typedef struct _DXGMMS2_TIMELINE_CONTEXT
 {
     ULONG Signature;
+    KMUTEX MaintenanceMutex;
     volatile LONG State;
     volatile LONG FastCallsOpen;
     volatile LONG ActiveFastCalls;
