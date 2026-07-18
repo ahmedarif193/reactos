@@ -98,7 +98,8 @@ PIP_INTERFACE AddrLocateInterface(
     ForEachInterface(CurrentIF) {
 	if( AddrIsEqual( &CurrentIF->Unicast, MatchAddress ) ||
             AddrIsEqual( &CurrentIF->Broadcast, MatchAddress ) ) {
-            RetIF = CurrentIF;
+            if (IPReferenceInterface(CurrentIF))
+                RetIF = CurrentIF;
             break;
 	}
     } EndFor(CurrentIF);
@@ -158,6 +159,7 @@ PIP_INTERFACE GetDefaultInterface(VOID)
    KIRQL OldIrql;
    ULONG Index = 0;
    ULONG IfStatus;
+   PIP_INTERFACE SelectedIF = NULL;
 
    IF_LIST_ITER(CurrentIF);
 
@@ -165,29 +167,23 @@ PIP_INTERFACE GetDefaultInterface(VOID)
    /* DHCP hack: Always return the adapter without an IP address */
    ForEachInterface(CurrentIF) {
       if (CurrentIF->Context && AddrIsUnspecified(&CurrentIF->Unicast)) {
-          TcpipReleaseSpinLock(&InterfaceListLock, OldIrql);
-
           GetInterfaceConnectionStatus(CurrentIF, &IfStatus);
-          if (IfStatus == MIB_IF_OPER_STATUS_OPERATIONAL) {
-              return CurrentIF;
+          if (IfStatus == MIB_IF_OPER_STATUS_OPERATIONAL && IPReferenceInterface(CurrentIF)) {
+              SelectedIF = CurrentIF;
+              goto Exit;
           }
-
-          TcpipAcquireSpinLock(&InterfaceListLock, &OldIrql);
       }
    } EndFor(CurrentIF);
 
    /* Try to continue from the next adapter */
    ForEachInterface(CurrentIF) {
       if (CurrentIF->Context && (Index++ == NextDefaultAdapter)) {
-          TcpipReleaseSpinLock(&InterfaceListLock, OldIrql);
-
           GetInterfaceConnectionStatus(CurrentIF, &IfStatus);
-          if (IfStatus == MIB_IF_OPER_STATUS_OPERATIONAL) {
+          if (IfStatus == MIB_IF_OPER_STATUS_OPERATIONAL && IPReferenceInterface(CurrentIF)) {
               NextDefaultAdapter++;
-              return CurrentIF;
+              SelectedIF = CurrentIF;
+              goto Exit;
           }
-
-          TcpipAcquireSpinLock(&InterfaceListLock, &OldIrql);
       }
    } EndFor(CurrentIF);
 
@@ -196,26 +192,26 @@ PIP_INTERFACE GetDefaultInterface(VOID)
    ForEachInterface(CurrentIF) {
       if (CurrentIF->Context) {
           Index++;
-          TcpipReleaseSpinLock(&InterfaceListLock, OldIrql);
-
           GetInterfaceConnectionStatus(CurrentIF, &IfStatus);
-          if (IfStatus == MIB_IF_OPER_STATUS_OPERATIONAL) {
+          if (IfStatus == MIB_IF_OPER_STATUS_OPERATIONAL && IPReferenceInterface(CurrentIF)) {
               NextDefaultAdapter = Index;
-              return CurrentIF;
+              SelectedIF = CurrentIF;
+              goto Exit;
           }
-
-          TcpipAcquireSpinLock(&InterfaceListLock, &OldIrql);
       }
    } EndFor(CurrentIF);
 
    /* Even that didn't work, so we'll just go with loopback */
    NextDefaultAdapter = 0;
-   TcpipReleaseSpinLock(&InterfaceListLock, OldIrql);
 
    /* There are no physical interfaces on the system
     * so we must pick the loopback interface */
+   if (Loopback && IPReferenceInterface(Loopback))
+       SelectedIF = Loopback;
 
-   return Loopback;
+Exit:
+   TcpipReleaseSpinLock(&InterfaceListLock, OldIrql);
+   return SelectedIF;
 }
 
 BOOLEAN
@@ -254,6 +250,8 @@ PIP_INTERFACE FindOnLinkInterface(PIP_ADDRESS Address)
         if (HasLoopbackPrefix(Address, &CurrentIF->Unicast) ||
             HasPrefix(Address, &CurrentIF->Unicast, AddrCountPrefixBits(&CurrentIF->Netmask)))
         {
+            if (!IPReferenceInterface(CurrentIF))
+                continue;
             TcpipReleaseSpinLock(&InterfaceListLock, OldIrql);
             return CurrentIF;
         }

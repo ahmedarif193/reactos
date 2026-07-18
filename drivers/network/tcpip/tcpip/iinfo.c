@@ -242,15 +242,22 @@ TDI_STATUS InfoTdiSetArptableMIB(PIP_INTERFACE IF, PVOID Buffer, UINT BufferSize
     AddrInitIPv4(&Address, ArpEntry->LogAddr);
 
     if ((NCE = NBLocateNeighbor(&Address, IF)))
+    {
         NBRemoveNeighbor(NCE);
+        NBDereferenceNeighbor(NCE);
+    }
 
-    if (NBAddNeighbor(IF,
-                      &Address,
-                      ArpEntry->PhysAddr,
-                      ArpEntry->AddrSize,
-                      NUD_PERMANENT,
-                      0))
+    NCE = NBAddNeighbor(IF,
+                        &Address,
+                        ArpEntry->PhysAddr,
+                        ArpEntry->AddrSize,
+                        NUD_PERMANENT,
+                        0);
+    if (NCE)
+    {
+        NBDereferenceNeighbor(NCE);
         return TDI_SUCCESS;
+    }
     else
         return TDI_INVALID_PARAMETER;
 }

@@ -151,6 +151,10 @@ typedef struct _IP_INTERFACE {
     LIST_ENTRY ListEntry;         /* Entry on list */
     OBJECT_FREE_ROUTINE Free;     /* Routine used to free resources used by the object */
     KSPIN_LOCK Lock;              /* Spin lock for this object */
+    EX_RUNDOWN_REF Rundown;       /* Protects users outside the interface list lock */
+    BOOLEAN Registered;           /* Interface is visible in global lists */
+    BOOLEAN EntityRegistered;     /* Interface is visible through TDI entities */
+    BOOLEAN RundownStarted;       /* New interface references are blocked */
     PVOID Context;                /* Pointer to link layer context information */
     UINT  HeaderSize;             /* Size of link level header */
     UINT  MinFrameSize;           /* Minimum frame size in bytes */
@@ -215,6 +219,12 @@ PIP_PACKET IPInitializePacket(
 
 PIP_INTERFACE IPCreateInterface(
     PLLIP_BIND_INFO BindInfo);
+
+BOOLEAN IPReferenceInterface(
+    PIP_INTERFACE IF);
+
+VOID IPDereferenceInterface(
+    PIP_INTERFACE IF);
 
 VOID IPAddInterfaceRoute(
     PIP_INTERFACE IF);

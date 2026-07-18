@@ -27,6 +27,8 @@ typedef struct NEIGHBOR_CACHE_TABLE {
 /* Information about a neighbor */
 typedef struct NEIGHBOR_CACHE_ENTRY {
     struct NEIGHBOR_CACHE_ENTRY *Next;  /* Pointer to next entry */
+    LONG RefCount;                      /* Cache, route and active references */
+    BOOLEAN Removed;                    /* Entry is no longer in the cache */
     UCHAR State;                        /* State of NCE */
     UINT EventTimer;                    /* Ticks since last event */
     UINT EventCount;                    /* Number of events */
@@ -67,6 +69,12 @@ VOID NBShutdown(
     VOID);
 
 VOID NBSendSolicit(
+    PNEIGHBOR_CACHE_ENTRY NCE);
+
+VOID NBReferenceNeighbor(
+    PNEIGHBOR_CACHE_ENTRY NCE);
+
+VOID NBDereferenceNeighbor(
     PNEIGHBOR_CACHE_ENTRY NCE);
 
 PNEIGHBOR_CACHE_ENTRY NBAddNeighbor(

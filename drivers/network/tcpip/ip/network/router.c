@@ -99,6 +99,8 @@ VOID DestroyFIBE(
     /* Unlink the FIB entry from the list */
     RemoveEntryList(&FIBE->ListEntry);
 
+    NBDereferenceNeighbor(FIBE->Router);
+
     /* And free the FIB entry */
     FreeFIB(FIBE);
 }
@@ -130,9 +132,12 @@ VOID DestroyFIBEs(
 
 UINT CountFIBs(PIP_INTERFACE IF) {
     UINT FibCount = 0;
+    KIRQL OldIrql;
     PLIST_ENTRY CurrentEntry;
     PLIST_ENTRY NextEntry;
     PFIB_ENTRY Current;
+
+    TcpipAcquireSpinLock(&FIBLock, &OldIrql);
 
     CurrentEntry = FIBListHead.Flink;
     while (CurrentEntry != &FIBListHead) {
@@ -143,15 +148,20 @@ UINT CountFIBs(PIP_INTERFACE IF) {
         CurrentEntry = NextEntry;
     }
 
+    TcpipReleaseSpinLock(&FIBLock, OldIrql);
+
     return FibCount;
 }
 
 
-UINT CopyFIBs( PIP_INTERFACE IF, PFIB_ENTRY Target ) {
+UINT CopyFIBs( PIP_INTERFACE IF, PFIB_ENTRY Target, UINT Capacity ) {
     UINT FibCount = 0;
+    KIRQL OldIrql;
     PLIST_ENTRY CurrentEntry;
     PLIST_ENTRY NextEntry;
     PFIB_ENTRY Current;
+
+    TcpipAcquireSpinLock(&FIBLock, &OldIrql);
 
     CurrentEntry = FIBListHead.Flink;
     while (CurrentEntry != &FIBListHead) {
@@ -159,11 +169,17 @@ UINT CopyFIBs( PIP_INTERFACE IF, PFIB_ENTRY Target ) {
 	Current = CONTAINING_RECORD(CurrentEntry, FIB_ENTRY, ListEntry);
         if (Current->Router->Interface == IF)
         {
-	    Target[FibCount] = *Current;
-	    FibCount++;
+		    if (FibCount < Capacity)
+		    {
+		        Target[FibCount] = *Current;
+		        NBReferenceNeighbor(Target[FibCount].Router);
+		    }
+		    FibCount++;
         }
         CurrentEntry = NextEntry;
     }
+
+    TcpipReleaseSpinLock(&FIBLock, OldIrql);
 
     return FibCount;
 }
@@ -258,6 +274,7 @@ PFIB_ENTRY RouterAddRoute(
 		   sizeof(FIBE->Netmask) );
     FIBE->Router         = Router;
     FIBE->Metric         = Metric;
+    NBReferenceNeighbor(Router);
 
     /* Add FIB to the forward information base */
     TcpipInterlockedInsertTailList(&FIBListHead, &FIBE->ListEntry, &FIBLock);
@@ -316,6 +333,9 @@ PNEIGHBOR_CACHE_ENTRY RouterGetRoute(PIP_ADDRESS Destination)
         CurrentEntry = NextEntry;
     }
 
+    if (BestNCE)
+        NBReferenceNeighbor(BestNCE);
+
     TcpipReleaseSpinLock(&FIBLock, OldIrql);
 
     if( BestNCE ) {
@@ -357,6 +377,7 @@ PNEIGHBOR_CACHE_ENTRY RouteGetRouteToDestination(PIP_ADDRESS Destination)
     if (Interface) {
 	/* The destination address is on-link. Check our neighbor cache */
 	NCE = NBFindOrCreateNeighbor(Interface, Destination, FALSE);
+        IPDereferenceInterface(Interface);
     } else {
 	/* Destination is not on any subnets we're on. Find a router to use */
 	NCE = RouterGetRoute(Destination);
@@ -470,6 +491,7 @@ PFIB_ENTRY RouterCreateRoute(
     PLIST_ENTRY CurrentEntry;
     PLIST_ENTRY NextEntry;
     PFIB_ENTRY Current;
+    PFIB_ENTRY FIBE;
     PNEIGHBOR_CACHE_ENTRY NCE;
 
     TcpipAcquireSpinLock(&FIBLock, &OldIrql);
@@ -503,7 +525,9 @@ PFIB_ENTRY RouterCreateRoute(
         return NULL;
     }
 
-    return RouterAddRoute(NetworkAddress, Netmask, NCE, ProcessAutoMetric(Interface));
+    FIBE = RouterAddRoute(NetworkAddress, Netmask, NCE, ProcessAutoMetric(Interface));
+    NBDereferenceNeighbor(NCE);
+    return FIBE;
 }
 
 

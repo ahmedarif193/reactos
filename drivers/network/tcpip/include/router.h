@@ -46,7 +46,7 @@ VOID RouterRemoveRoutesForInterface(PIP_INTERFACE Interface);
 
 UINT CountFIBs(PIP_INTERFACE IF);
 
-UINT CopyFIBs( PIP_INTERFACE IF, PFIB_ENTRY Target );
+UINT CopyFIBs( PIP_INTERFACE IF, PFIB_ENTRY Target, UINT Capacity );
 
 UINT ProcessAutoMetric(PIP_INTERFACE Interface);
 
