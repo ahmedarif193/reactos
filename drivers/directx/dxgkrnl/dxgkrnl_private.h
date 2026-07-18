@@ -1833,6 +1833,7 @@ DxgkGpuVaEvict(
     _In_    PDXGKRNL_PROCESS   Process,
     _In_reads_(NumAllocations) CONST D3DKMT_HANDLE *AllocationList,
     _In_    ULONG              NumAllocations,
+    _In_    BOOLEAN            EvictOnlyIfNecessary,
     _Out_   ULONGLONG         *OutNumBytesToTrim);
 
 /*

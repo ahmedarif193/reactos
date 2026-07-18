@@ -1481,23 +1481,67 @@ DxgkGpuVaMakeResident(
     *OutCompleted = 0;
     *OutNumBytesToTrim = 0;
 
-    for (i = 0; i < NumAllocations; i++)
+    /*
+     * Each list entry adds one residency reference on its allocation and, on
+     * the zero-to-one transition of an evicted allocation, performs the
+     * placement synchronously (this adapter set has no asynchronous paging
+     * engine yet, so synchronous completion with no pending fence is the
+     * truthful native contract).  The request is atomic: any failure rolls
+     * back every reference and exactly the placements this call made.
+     */
     {
-        PDXGKVMM_ALLOCATION Alloc;
-        NTSTATUS Status = DxgkVidMmReferenceProcessAllocation((HANDLE)(ULONG_PTR)AllocationList[i], Adapter, Process, &Alloc);
+        BOOLEAN *Placed;
+        NTSTATUS Status = STATUS_SUCCESS;
 
-        if (!NT_SUCCESS(Status))
-            return Status;
-        if (!Alloc->Resident)
+        Placed = ExAllocatePoolWithTag(PagedPool, NumAllocations * sizeof(*Placed), TAG_DXGK_GPUVA);
+        if (Placed == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+        RtlZeroMemory(Placed, NumAllocations * sizeof(*Placed));
+
+        for (i = 0; i < NumAllocations; i++)
         {
-            DxgkVidMmDereferenceAllocation(Alloc);
-            return STATUS_NOT_SUPPORTED;
+            PDXGKVMM_ALLOCATION Alloc;
+
+            Status = DxgkVidMmReferenceProcessAllocation((HANDLE)(ULONG_PTR)AllocationList[i], Adapter, Process, &Alloc);
+            if (NT_SUCCESS(Status))
+            {
+                InterlockedIncrement(&Alloc->ResidencyReferenceCount);
+                if (!Alloc->Resident)
+                {
+                    Status = DxgkVidMmMakeResident(Alloc, Adapter);
+                    if (NT_SUCCESS(Status))
+                        Placed[i] = TRUE;
+                    else
+                    {
+                        if (Status == STATUS_NO_MEMORY || Status == STATUS_GRAPHICS_NO_VIDEO_MEMORY)
+                            *OutNumBytesToTrim += Alloc->Size;
+                        InterlockedDecrement(&Alloc->ResidencyReferenceCount);
+                    }
+                }
+                DxgkVidMmDereferenceAllocation(Alloc);
+            }
+
+            if (!NT_SUCCESS(Status))
+            {
+                while (i-- > 0)
+                {
+                    PDXGKVMM_ALLOCATION Undo;
+
+                    if (!NT_SUCCESS(DxgkVidMmReferenceProcessAllocation((HANDLE)(ULONG_PTR)AllocationList[i], Adapter, Process, &Undo)))
+                        continue;
+                    InterlockedDecrement(&Undo->ResidencyReferenceCount);
+                    if (Placed[i])
+                        (VOID)DxgkVidMmEvict(Undo);
+                    DxgkVidMmDereferenceAllocation(Undo);
+                }
+                ExFreePoolWithTag(Placed, TAG_DXGK_GPUVA);
+                return Status;
+            }
         }
-        DxgkVidMmDereferenceAllocation(Alloc);
+
+        ExFreePoolWithTag(Placed, TAG_DXGK_GPUVA);
     }
 
-    /* Idempotent success is truthful.  A state transition is blocked above
-     * until paging-buffer transfer and scheduler completion are implemented. */
     *OutCompleted = NumAllocations;
     return STATUS_SUCCESS;
 }
@@ -1515,6 +1559,7 @@ DxgkGpuVaEvict(
     _In_    PDXGKRNL_PROCESS   Process,
     _In_reads_(NumAllocations) CONST D3DKMT_HANDLE *AllocationList,
     _In_    ULONG              NumAllocations,
+    _In_    BOOLEAN            EvictOnlyIfNecessary,
     _Out_   ULONGLONG         *OutNumBytesToTrim)
 {
     ULONG i;
@@ -1528,6 +1573,35 @@ DxgkGpuVaEvict(
 
     *OutNumBytesToTrim = 0;
 
+    /*
+     * Each list entry removes one residency reference.  The whole request is
+     * validated first so a bad handle or an over-evicted allocation fails the
+     * call before any reference changes; the release pass then drops the
+     * references and evicts each allocation whose count reaches zero.  With
+     * EvictOnlyIfNecessary the references still drop but the placement stays
+     * as a pressure-trim candidate.
+     */
+    for (i = 0; i < NumAllocations; i++)
+    {
+        PDXGKVMM_ALLOCATION Alloc;
+        NTSTATUS Status = DxgkVidMmReferenceProcessAllocation((HANDLE)(ULONG_PTR)AllocationList[i], Adapter, Process, &Alloc);
+        LONG Outstanding;
+        UINT Duplicates = 0;
+        UINT j;
+
+        if (!NT_SUCCESS(Status))
+            return Status;
+        for (j = 0; j < NumAllocations; j++)
+        {
+            if (AllocationList[j] == AllocationList[i])
+                Duplicates++;
+        }
+        Outstanding = InterlockedCompareExchange(&Alloc->ResidencyReferenceCount, 0, 0);
+        DxgkVidMmDereferenceAllocation(Alloc);
+        if (Outstanding < (LONG)Duplicates)
+            return STATUS_INVALID_PARAMETER;
+    }
+
     for (i = 0; i < NumAllocations; i++)
     {
         PDXGKVMM_ALLOCATION Alloc;
@@ -1535,16 +1609,14 @@ DxgkGpuVaEvict(
 
         if (!NT_SUCCESS(Status))
             return Status;
-        if (Alloc->Resident)
+        if (InterlockedDecrement(&Alloc->ResidencyReferenceCount) == 0 &&
+            Alloc->Resident && !EvictOnlyIfNecessary)
         {
-            DxgkVidMmDereferenceAllocation(Alloc);
-            return STATUS_NOT_SUPPORTED;
+            (VOID)DxgkVidMmEvict(Alloc);
         }
         DxgkVidMmDereferenceAllocation(Alloc);
     }
 
-    /* Idempotent success is truthful.  A state transition is blocked above
-     * until paging-buffer transfer and scheduler completion are implemented. */
     return STATUS_SUCCESS;
 }
 
