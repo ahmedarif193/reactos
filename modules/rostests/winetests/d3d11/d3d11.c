@@ -36588,7 +36588,11 @@ START_TEST(d3d11)
     HMODULE wined3d;
     char **argv;
 
+#ifdef __REACTOS__
+    if ((wined3d = GetModuleHandleA("d3dwine.dll")))
+#else
     if ((wined3d = GetModuleHandleA("wined3d.dll")))
+#endif
     {
         enum wined3d_renderer (CDECL *p_wined3d_get_renderer)(void);
 
