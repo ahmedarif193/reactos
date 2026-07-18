@@ -46,6 +46,7 @@ TCPSendDataCallback(struct netif *netif, struct pbuf *p, const ip4_addr_t *dest)
     NdisStatus = AllocatePacketWithBuffer(&Packet.NdisPacket, NULL, p->tot_len);
     if (NdisStatus != NDIS_STATUS_SUCCESS)
     {
+        NBDereferenceNeighbor(NCE);
         return ERR_MEM;
     }
 
@@ -72,6 +73,7 @@ TCPSendDataCallback(struct netif *netif, struct pbuf *p, const ip4_addr_t *dest)
     Packet.DstAddr = RemoteAddress;
 
     NdisStatus = IPSendDatagram(&Packet, NCE);
+    NBDereferenceNeighbor(NCE);
     if (!NT_SUCCESS(NdisStatus))
         return ERR_RTE;
 

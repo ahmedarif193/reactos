@@ -62,16 +62,24 @@ PADDRESS_FILE AddrSearchFirst(
 BOOLEAN AddrIsBroadcastMatch(
     PIP_ADDRESS UnicastAddress,
     PIP_ADDRESS BroadcastAddress ) {
+    KIRQL OldIrql;
+    BOOLEAN Match = FALSE;
     IF_LIST_ITER(IF);
+
+    TcpipAcquireSpinLock(&InterfaceListLock, &OldIrql);
 
     ForEachInterface(IF) {
         if ((AddrIsUnspecified(UnicastAddress) ||
              AddrIsEqual(&IF->Unicast, UnicastAddress)) &&
-            (AddrIsEqual(&IF->Broadcast, BroadcastAddress)))
-            return TRUE;
+            (AddrIsEqual(&IF->Broadcast, BroadcastAddress))) {
+            Match = TRUE;
+            break;
+        }
     } EndFor(IF);
 
-    return FALSE;
+    TcpipReleaseSpinLock(&InterfaceListLock, OldIrql);
+
+    return Match;
 }
 
 BOOLEAN AddrReceiveMatch(
@@ -292,9 +300,9 @@ PADDRESS_FILE AddrSearchNext(
     else
         Current = NULL;
 
-    DereferenceObject(StartingAddrFile);
-
     TcpipReleaseSpinLock(&AddressFileListLock, OldIrql);
+
+    DereferenceObject(StartingAddrFile);
 
     return Current;
 }
@@ -404,6 +412,7 @@ NTSTATUS FileOpenAddress(
   PVOID Options)
 {
   PADDRESS_FILE AddrFile;
+  PIP_INTERFACE Interface;
   UINT AllocatedPort;
 
   TI_DbgPrint(MID_TRACE, ("Called (Proto %d).\n", Protocol));
@@ -457,11 +466,14 @@ NTSTATUS FileOpenAddress(
   AddrFile->Address.Address.IPv4Address = Address->Address[0].Address[0].in_addr;
   AddrFile->Address.Type = IP_ADDRESS_V4;
 
-  if (!AddrIsUnspecified(&AddrFile->Address) &&
-      !AddrLocateInterface(&AddrFile->Address)) {
+  if (!AddrIsUnspecified(&AddrFile->Address)) {
+      Interface = AddrLocateInterface(&AddrFile->Address);
+      if (!Interface) {
 	  TI_DbgPrint(MIN_TRACE, ("Non-local address given (0x%X).\n", A2S(&AddrFile->Address)));
 	  ExFreePoolWithTag(AddrFile, ADDR_FILE_TAG);
 	  return STATUS_INVALID_ADDRESS;
+      }
+      IPDereferenceInterface(Interface);
   }
 
   TI_DbgPrint(MID_TRACE, ("Opening address %s for communication (P=%d U=%d).\n",

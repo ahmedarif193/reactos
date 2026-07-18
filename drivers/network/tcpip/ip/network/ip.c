@@ -89,6 +89,18 @@ VOID FreeIF(
     ExFreePoolWithTag(Object, IP_INTERFACE_TAG);
 }
 
+BOOLEAN IPReferenceInterface(
+    PIP_INTERFACE IF)
+{
+    return ExAcquireRundownProtection(&IF->Rundown);
+}
+
+VOID IPDereferenceInterface(
+    PIP_INTERFACE IF)
+{
+    ExReleaseRundownProtection(&IF->Rundown);
+}
+
 PIP_PACKET IPInitializePacket(
     PIP_PACKET IPPacket,
     ULONG Type)
@@ -225,6 +237,7 @@ PIP_INTERFACE IPCreateInterface(
 	IF->Broadcast.Type = IP_ADDRESS_V4;
 
     TcpipInitializeSpinLock(&IF->Lock);
+    ExInitializeRundownProtection(&IF->Rundown);
 
     IF->TCPContext = ExAllocatePool
 	( NonPagedPool, sizeof(struct netif));
@@ -235,7 +248,8 @@ PIP_INTERFACE IPCreateInterface(
 
     TCPRegisterInterface(IF);
 
-    InsertTDIInterfaceEntity( IF );
+    InsertTDIInterfaceEntity(IF);
+    IF->EntityRegistered = TRUE;
 
     return IF;
 }
@@ -251,7 +265,17 @@ VOID IPDestroyInterface(
 {
     TI_DbgPrint(DEBUG_IP, ("Called. IF (0x%X).\n", IF));
 
-    RemoveTDIInterfaceEntity( IF );
+    if (IF->EntityRegistered)
+    {
+        RemoveTDIInterfaceEntity(IF);
+        IF->EntityRegistered = FALSE;
+    }
+
+    if (!IF->RundownStarted)
+    {
+        IF->RundownStarted = TRUE;
+        ExWaitForRundownProtectionRelease(&IF->Rundown);
+    }
 
     TCPUnregisterInterface(IF);
 
@@ -278,6 +302,8 @@ VOID IPAddInterfaceRoute( PIP_INTERFACE IF ) {
 	TI_DbgPrint(MIN_TRACE, ("Could not add route due to insufficient resources.\n"));
     }
 
+    NBDereferenceNeighbor(NCE);
+
     /* Send a gratuitous ARP packet to update the route caches of
      * other computers */
     if (IF != Loopback)
@@ -303,7 +329,7 @@ BOOLEAN IPRegisterInterface(
 
     TI_DbgPrint(MID_TRACE, ("Called. IF (0x%X).\n", IF));
 
-    TcpipAcquireSpinLock(&IF->Lock, &OldIrql);
+    TcpipAcquireSpinLock(&InterfaceListLock, &OldIrql);
 
     /* Choose an index */
     do {
@@ -319,11 +345,10 @@ BOOLEAN IPRegisterInterface(
     IF->Index = ChosenIndex;
 
     /* Add interface to the global interface list */
-    TcpipInterlockedInsertTailList(&InterfaceListHead,
-				   &IF->ListEntry,
-				   &InterfaceListLock);
+    InsertTailList(&InterfaceListHead, &IF->ListEntry);
+    IF->Registered = TRUE;
 
-    TcpipReleaseSpinLock(&IF->Lock, OldIrql);
+    TcpipReleaseSpinLock(&InterfaceListLock, OldIrql);
 
     return TRUE;
 }
@@ -343,6 +368,7 @@ VOID IPRemoveInterfaceRoute( PIP_INTERFACE IF ) {
        RouterRemoveRoute(&GeneralRoute, &IF->Unicast);
 
        NBRemoveNeighbor(NCE);
+       NBDereferenceNeighbor(NCE);
     }
 }
 
@@ -354,15 +380,26 @@ VOID IPUnregisterInterface(
  *     IF = Pointer to interface to unregister
  */
 {
-    KIRQL OldIrql3;
+    KIRQL OldIrql;
 
     TI_DbgPrint(DEBUG_IP, ("Called. IF (0x%X).\n", IF));
 
-    IPRemoveInterfaceRoute( IF );
-
-    TcpipAcquireSpinLock(&InterfaceListLock, &OldIrql3);
+    TcpipAcquireSpinLock(&InterfaceListLock, &OldIrql);
+    ASSERT(IF->Registered);
     RemoveEntryList(&IF->ListEntry);
-    TcpipReleaseSpinLock(&InterfaceListLock, OldIrql3);
+    IF->Registered = FALSE;
+    TcpipReleaseSpinLock(&InterfaceListLock, OldIrql);
+
+    if (IF->EntityRegistered)
+    {
+        RemoveTDIInterfaceEntity(IF);
+        IF->EntityRegistered = FALSE;
+    }
+    RouterRemoveRoutesForInterface(IF);
+    NBDestroyNeighborsForInterface(IF);
+
+    IF->RundownStarted = TRUE;
+    ExWaitForRundownProtectionRelease(&IF->Rundown);
 }
 
 

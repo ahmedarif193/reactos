@@ -1663,13 +1663,15 @@ NTSTATUS DispTdiSetInformationEx(
 
 NTSTATUS DispTdiSetIPAddress( PIRP Irp, PIO_STACK_LOCATION IrpSp ) {
     NTSTATUS Status = STATUS_DEVICE_DOES_NOT_EXIST;
+    KIRQL OldIrql;
     PIP_SET_ADDRESS IpAddrChange =
         (PIP_SET_ADDRESS)Irp->AssociatedIrp.SystemBuffer;
+    PIP_INTERFACE TargetIF = NULL;
     IF_LIST_ITER(IF);
 
     TI_DbgPrint(MID_TRACE,("Setting IP Address for adapter %d\n",
 			   IpAddrChange->NteIndex));
-
+    TcpipAcquireSpinLock(&InterfaceListLock, &OldIrql);
     ForEachInterface(IF) {
 	TI_DbgPrint(MID_TRACE,("Looking at adapter %d\n", IF->Index));
 
@@ -1678,32 +1680,39 @@ NTSTATUS DispTdiSetIPAddress( PIRP Irp, PIO_STACK_LOCATION IrpSp ) {
             break;
         }
         if( IF->Index == IpAddrChange->NteIndex ) {
-            IPRemoveInterfaceRoute( IF );
-
-            IF->Unicast.Type = IP_ADDRESS_V4;
-            IF->Unicast.Address.IPv4Address = IpAddrChange->Address;
-
-            IF->Netmask.Type = IP_ADDRESS_V4;
-            IF->Netmask.Address.IPv4Address = IpAddrChange->Netmask;
-
-            IF->Broadcast.Type = IP_ADDRESS_V4;
-	    IF->Broadcast.Address.IPv4Address =
-		IF->Unicast.Address.IPv4Address |
-		~IF->Netmask.Address.IPv4Address;
-
-            TI_DbgPrint(MID_TRACE,("New Unicast Address: %x\n",
-                                   IF->Unicast.Address.IPv4Address));
-            TI_DbgPrint(MID_TRACE,("New Netmask        : %x\n",
-                                   IF->Netmask.Address.IPv4Address));
-
-            IPAddInterfaceRoute( IF );
-
-            IpAddrChange->Address = IF->Index;
-            Status = STATUS_SUCCESS;
-            Irp->IoStatus.Information = IF->Index;
+            if (IPReferenceInterface(IF))
+                TargetIF = IF;
             break;
         }
     } EndFor(IF);
+    TcpipReleaseSpinLock(&InterfaceListLock, OldIrql);
+
+    if (TargetIF) {
+        IPRemoveInterfaceRoute(TargetIF);
+
+        TargetIF->Unicast.Type = IP_ADDRESS_V4;
+        TargetIF->Unicast.Address.IPv4Address = IpAddrChange->Address;
+
+        TargetIF->Netmask.Type = IP_ADDRESS_V4;
+        TargetIF->Netmask.Address.IPv4Address = IpAddrChange->Netmask;
+
+        TargetIF->Broadcast.Type = IP_ADDRESS_V4;
+	TargetIF->Broadcast.Address.IPv4Address =
+	    TargetIF->Unicast.Address.IPv4Address |
+	    ~TargetIF->Netmask.Address.IPv4Address;
+
+        TI_DbgPrint(MID_TRACE,("New Unicast Address: %x\n",
+                               TargetIF->Unicast.Address.IPv4Address));
+        TI_DbgPrint(MID_TRACE,("New Netmask        : %x\n",
+                               TargetIF->Netmask.Address.IPv4Address));
+
+        IPAddInterfaceRoute(TargetIF);
+
+        IpAddrChange->Address = TargetIF->Index;
+        Status = STATUS_SUCCESS;
+        Irp->IoStatus.Information = TargetIF->Index;
+        IPDereferenceInterface(TargetIF);
+    }
 
     Irp->IoStatus.Status = Status;
     return Status;
@@ -1711,24 +1720,35 @@ NTSTATUS DispTdiSetIPAddress( PIRP Irp, PIO_STACK_LOCATION IrpSp ) {
 
 NTSTATUS DispTdiDeleteIPAddress( PIRP Irp, PIO_STACK_LOCATION IrpSp ) {
     NTSTATUS Status = STATUS_UNSUCCESSFUL;
+    KIRQL OldIrql;
     PUSHORT NteIndex = Irp->AssociatedIrp.SystemBuffer;
+    PIP_INTERFACE TargetIF = NULL;
     IF_LIST_ITER(IF);
 
+    TcpipAcquireSpinLock(&InterfaceListLock, &OldIrql);
     ForEachInterface(IF) {
         if( IF->Index == *NteIndex ) {
-            IPRemoveInterfaceRoute( IF );
-            IF->Unicast.Type = IP_ADDRESS_V4;
-            IF->Unicast.Address.IPv4Address = 0;
-
-            IF->Netmask.Type = IP_ADDRESS_V4;
-            IF->Netmask.Address.IPv4Address = 0;
-
-            IF->Broadcast.Type = IP_ADDRESS_V4;
-            IF->Broadcast.Address.IPv4Address = 0;
-
-            Status = STATUS_SUCCESS;
+            if (IPReferenceInterface(IF))
+                TargetIF = IF;
+            break;
         }
     } EndFor(IF);
+    TcpipReleaseSpinLock(&InterfaceListLock, OldIrql);
+
+    if (TargetIF) {
+        IPRemoveInterfaceRoute(TargetIF);
+        TargetIF->Unicast.Type = IP_ADDRESS_V4;
+        TargetIF->Unicast.Address.IPv4Address = 0;
+
+        TargetIF->Netmask.Type = IP_ADDRESS_V4;
+        TargetIF->Netmask.Address.IPv4Address = 0;
+
+        TargetIF->Broadcast.Type = IP_ADDRESS_V4;
+        TargetIF->Broadcast.Address.IPv4Address = 0;
+
+        Status = STATUS_SUCCESS;
+        IPDereferenceInterface(TargetIF);
+    }
 
     Irp->IoStatus.Status = Status;
     return Status;
@@ -1754,6 +1774,8 @@ WaitForHwAddress ( PDEVICE_OBJECT DeviceObject, PVOID Context) {
             break;
         }
 
+        if (NCE)
+            NBDereferenceNeighbor(NCE);
         NCE = NULL;
         Wait.QuadPart = -10000;
         KeDelayExecutionThread(KernelMode, FALSE, &Wait);
@@ -1771,8 +1793,10 @@ WaitForHwAddress ( PDEVICE_OBJECT DeviceObject, PVOID Context) {
             Irp->IoStatus.Information = NCE->LinkAddressLength;
             Status = STATUS_SUCCESS;
         }
+        NBDereferenceNeighbor(NCE);
     }
 
+    IPDereferenceInterface(WorkItem->Interface);
     ExFreePoolWithTag(WorkItem, QUERY_CONTEXT_TAG);
     if (Irp->Flags & IRP_SYNCHRONOUS_API) {
         Irp->IoStatus.Status = Status;
@@ -1789,6 +1813,9 @@ NTSTATUS DispTdiQueryIpHwAddress( PDEVICE_OBJECT DeviceObject, PIRP Irp, PIO_STA
     PIP_INTERFACE Interface;
     PQUERY_HW_WORK_ITEM WorkItem;
 
+    NCE = NULL;
+    Interface = NULL;
+    WorkItem = NULL;
     Irp->IoStatus.Information = 0;
 
     if (IrpSp->Parameters.DeviceIoControl.InputBufferLength < 2 * sizeof(ULONG) ||
@@ -1830,6 +1857,14 @@ NTSTATUS DispTdiQueryIpHwAddress( PDEVICE_OBJECT DeviceObject, PIRP Irp, PIO_STA
         }
 
         Interface = NCE->Interface;
+        if (!IPReferenceInterface(Interface)) {
+            NBDereferenceNeighbor(NCE);
+            NCE = NULL;
+            Status = STATUS_NETWORK_UNREACHABLE;
+            goto Exit;
+        }
+        NBDereferenceNeighbor(NCE);
+        NCE = NULL;
     }
     else {
         Interface = AddrLocateInterface(&Local);
@@ -1864,6 +1899,8 @@ NTSTATUS DispTdiQueryIpHwAddress( PDEVICE_OBJECT DeviceObject, PIRP Irp, PIO_STA
     NCE = NBLocateNeighbor(&Remote, Interface);
     if (NCE != NULL) {
         if (NCE->LinkAddressLength > IrpSp->Parameters.DeviceIoControl.OutputBufferLength) {
+            NBDereferenceNeighbor(NCE);
+            NCE = NULL;
             IoFreeWorkItem(WorkItem->WorkItem);
             ExFreePoolWithTag(WorkItem, QUERY_CONTEXT_TAG);
             Status = STATUS_INVALID_BUFFER_SIZE;
@@ -1873,6 +1910,8 @@ NTSTATUS DispTdiQueryIpHwAddress( PDEVICE_OBJECT DeviceObject, PIRP Irp, PIO_STA
         if (!(NCE->State & NUD_INCOMPLETE)) {
             PVOID LinkAddress = ExAllocatePoolWithTag(PagedPool, NCE->LinkAddressLength, QUERY_CONTEXT_TAG);
             if (LinkAddress == NULL) {
+                NBDereferenceNeighbor(NCE);
+                NCE = NULL;
                 IoFreeWorkItem(WorkItem->WorkItem);
                 ExFreePoolWithTag(WorkItem, QUERY_CONTEXT_TAG);
                 Status = STATUS_INSUFFICIENT_RESOURCES;
@@ -1882,6 +1921,8 @@ NTSTATUS DispTdiQueryIpHwAddress( PDEVICE_OBJECT DeviceObject, PIRP Irp, PIO_STA
             NBUpdateNeighbor(NCE, LinkAddress, NUD_INCOMPLETE);
             ExFreePoolWithTag(LinkAddress, QUERY_CONTEXT_TAG);
         }
+        NBDereferenceNeighbor(NCE);
+        NCE = NULL;
     }
 
     if (!ARPTransmit(&Remote, NULL, Interface)) {
@@ -1890,6 +1931,8 @@ NTSTATUS DispTdiQueryIpHwAddress( PDEVICE_OBJECT DeviceObject, PIRP Irp, PIO_STA
         Status = STATUS_UNSUCCESSFUL;
         goto Exit;
     }
+
+    Interface = NULL;
 
     if (Irp->Flags & IRP_SYNCHRONOUS_API) {
         WaitForHwAddress(DeviceObject, WorkItem);
@@ -1901,6 +1944,10 @@ NTSTATUS DispTdiQueryIpHwAddress( PDEVICE_OBJECT DeviceObject, PIRP Irp, PIO_STA
     }
 
 Exit:
+    if (NCE)
+        NBDereferenceNeighbor(NCE);
+    if (Interface)
+        IPDereferenceInterface(Interface);
     return Status;
 }
 

@@ -130,6 +130,7 @@ VOID ICMPReply(
     if (!NT_SUCCESS(BuildRawIpPacket(
         &FakeAddrFile, &NewPacket, &IPPacket->SrcAddr, 0, &Interface->Unicast, 0, IPPacket->Data, DataSize)))
     {
+        NBDereferenceNeighbor(NCE);
         return;
     }
 
@@ -139,6 +140,7 @@ VOID ICMPReply(
     ((PICMP_HEADER)NewPacket.Data)->Checksum = (USHORT)IPv4Checksum(NewPacket.Data, DataSize, 0);
 
     IPSendDatagram(&NewPacket, NCE);
+    NBDereferenceNeighbor(NCE);
 }
 
 /* EOF */

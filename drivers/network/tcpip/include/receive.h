@@ -33,6 +33,8 @@ typedef struct IPDATAGRAM_HOLE {
 typedef struct IPDATAGRAM_REASSEMBLY {
     LIST_ENTRY ListEntry;        /* Entry on list */
     KSPIN_LOCK Lock;             /* Protecting spin lock */
+    LONG RefCount;               /* List and active user references */
+    BOOLEAN Removed;             /* Entry is no longer discoverable */
     UINT DataSize;               /* Size of datagram data area */
     IP_ADDRESS SrcAddr;          /* Source address */
     IP_ADDRESS DstAddr;          /* Destination address */
