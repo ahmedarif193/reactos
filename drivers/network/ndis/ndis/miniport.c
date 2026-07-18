@@ -516,6 +516,7 @@ MiniRequestComplete(
     PLOGICAL_ADAPTER Adapter = (PLOGICAL_ADAPTER)MiniportAdapterHandle;
     PNDIS_REQUEST Request;
     PNDIS_REQUEST_MAC_BLOCK MacBlock;
+    PADAPTER_BINDING AdapterBinding = NULL;
     KIRQL OldIrql;
 
     NDIS_DbgPrint(DEBUG_MINIPORT, ("Called.\n"));
@@ -531,6 +532,8 @@ MiniRequestComplete(
     /* We may or may not be doing this request on behalf of an adapter binding */
     if (MacBlock->Binding != NULL)
     {
+        AdapterBinding = CONTAINING_RECORD(MacBlock->Binding, ADAPTER_BINDING, NdisOpenBlock);
+
         /* We are, so invoke its request complete handler */
         if (MacBlock->Binding->RequestCompleteHandler != NULL)
         {
@@ -553,6 +556,9 @@ MiniRequestComplete(
     Adapter->NdisMiniportBlock.PendingRequest = NULL;
     KeReleaseSpinLockFromDpcLevel(&Adapter->NdisMiniportBlock.Lock);
     KeLowerIrql(OldIrql);
+
+    if (AdapterBinding != NULL)
+        NdisDereferenceAdapterBinding(AdapterBinding);
 
     MiniWorkItemComplete(Adapter, NdisWorkItemRequest);
 }
@@ -606,6 +612,8 @@ MiniSendComplete(
 
     KeLowerIrql(OldIrql);
 
+    NdisDereferenceAdapterBinding(AdapterBinding);
+
     MiniWorkItemComplete(Adapter, NdisWorkItemSend);
 }
 
@@ -640,6 +648,7 @@ MiniTransferDataComplete(
         Status,
         BytesTransferred);
     KeLowerIrql(OldIrql);
+    NdisDereferenceAdapterBinding(AdapterBinding);
 }
 
 
@@ -998,6 +1007,62 @@ MiniReset(
    return Status;
 }
 
+static VOID
+MiniStartHangTimer(
+    PLOGICAL_ADAPTER Adapter)
+{
+    LARGE_INTEGER Timeout;
+    KIRQL OldIrql;
+
+    ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
+
+    KeAcquireSpinLock(&Adapter->HangTimerLock, &OldIrql);
+    ASSERT(!Adapter->HangTimerInitialized);
+    ExInitializeRundownProtection(&Adapter->HangTimerRundown);
+    Adapter->HangTimerStopping = FALSE;
+    Adapter->HangTimerInitialized = TRUE;
+    if (!ExAcquireRundownProtection(&Adapter->HangTimerRundown))
+    {
+        Adapter->HangTimerStopping = TRUE;
+        Adapter->HangTimerInitialized = FALSE;
+        KeReleaseSpinLock(&Adapter->HangTimerLock, OldIrql);
+        return;
+    }
+    Timeout.QuadPart = Int32x32To64(Adapter->NdisMiniportBlock.CheckForHangSeconds, -10000000);
+    KeSetTimer(&Adapter->NdisMiniportBlock.WakeUpDpcTimer.Timer, Timeout, &Adapter->NdisMiniportBlock.WakeUpDpcTimer.Dpc);
+    KeReleaseSpinLock(&Adapter->HangTimerLock, OldIrql);
+}
+
+static VOID
+MiniStopHangTimer(
+    PLOGICAL_ADAPTER Adapter)
+{
+    BOOLEAN Cancelled;
+    KIRQL OldIrql;
+
+    ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
+
+    KeAcquireSpinLock(&Adapter->HangTimerLock, &OldIrql);
+    if (!Adapter->HangTimerInitialized)
+    {
+        KeReleaseSpinLock(&Adapter->HangTimerLock, OldIrql);
+        return;
+    }
+
+    Adapter->HangTimerStopping = TRUE;
+    Cancelled = KeCancelTimer(&Adapter->NdisMiniportBlock.WakeUpDpcTimer.Timer);
+    KeReleaseSpinLock(&Adapter->HangTimerLock, OldIrql);
+
+    if (Cancelled)
+        ExReleaseRundownProtection(&Adapter->HangTimerRundown);
+
+    ExWaitForRundownProtectionRelease(&Adapter->HangTimerRundown);
+
+    KeAcquireSpinLock(&Adapter->HangTimerLock, &OldIrql);
+    Adapter->HangTimerInitialized = FALSE;
+    KeReleaseSpinLock(&Adapter->HangTimerLock, OldIrql);
+}
+
 VOID NTAPI
 MiniportHangDpc(
         PKDPC Dpc,
@@ -1006,17 +1071,36 @@ MiniportHangDpc(
         PVOID SystemArgument2)
 {
   PLOGICAL_ADAPTER Adapter = DeferredContext;
+  LARGE_INTEGER Timeout;
+  BOOLEAN RunCheck;
+
+  UNREFERENCED_PARAMETER(Dpc);
+  UNREFERENCED_PARAMETER(SystemArgument1);
+  UNREFERENCED_PARAMETER(SystemArgument2);
 
   /* dev-nt6-1: NDIS 6 adapters never have the legacy WakeUpDpcTimer
    * armed (the bridge never starts it). If we somehow get here for an
    * NDIS 6 adapter, bail. */
-  if (Adapter && Adapter->IsNdis6)
+  if (Adapter == NULL || Adapter->IsNdis6)
       return;
 
-  if (MiniCheckForHang(Adapter)) {
+  KeAcquireSpinLockAtDpcLevel(&Adapter->HangTimerLock);
+  RunCheck = Adapter->HangTimerInitialized && !Adapter->HangTimerStopping;
+  KeReleaseSpinLockFromDpcLevel(&Adapter->HangTimerLock);
+
+  if (RunCheck && MiniCheckForHang(Adapter)) {
       NDIS_DbgPrint(MIN_TRACE, ("Miniport detected adapter hang\n"));
       MiniReset(Adapter);
   }
+
+  KeAcquireSpinLockAtDpcLevel(&Adapter->HangTimerLock);
+  if (!Adapter->HangTimerStopping && ExAcquireRundownProtection(&Adapter->HangTimerRundown))
+  {
+      Timeout.QuadPart = Int32x32To64(Adapter->NdisMiniportBlock.CheckForHangSeconds, -10000000);
+      KeSetTimer(&Adapter->NdisMiniportBlock.WakeUpDpcTimer.Timer, Timeout, &Adapter->NdisMiniportBlock.WakeUpDpcTimer.Dpc);
+  }
+  KeReleaseSpinLockFromDpcLevel(&Adapter->HangTimerLock);
+  ExReleaseRundownProtection(&Adapter->HangTimerRundown);
 }
 
 VOID
@@ -2008,7 +2092,6 @@ NdisIPnPStartDevice(
   PNDIS_CONFIGURATION_PARAMETER ConfigParam;
   NDIS_HANDLE ConfigHandle;
   ULONG Size;
-  LARGE_INTEGER Timeout;
   UINT MaxMulticastAddresses;
   ULONG BytesWritten;
   PLIST_ENTRY CurrentEntry;
@@ -2283,10 +2366,7 @@ NdisIPnPStartDevice(
 
   IoSetDeviceInterfaceState(&Adapter->NdisMiniportBlock.SymbolicLinkName, TRUE);
 
-  Timeout.QuadPart = Int32x32To64(Adapter->NdisMiniportBlock.CheckForHangSeconds, -1000000);
-  KeSetTimerEx(&Adapter->NdisMiniportBlock.WakeUpDpcTimer.Timer, Timeout,
-               Adapter->NdisMiniportBlock.CheckForHangSeconds * 1000,
-               &Adapter->NdisMiniportBlock.WakeUpDpcTimer.Dpc);
+  MiniStartHangTimer(Adapter);
 
   /* Put adapter in adapter list for this miniport */
   ExInterlockedInsertTailList(&Adapter->NdisMiniportBlock.DriverHandle->DeviceList, &Adapter->MiniportListEntry, &Adapter->NdisMiniportBlock.DriverHandle->Lock);
@@ -2331,7 +2411,7 @@ NdisIPnPStopDevice(
   /* Remove adapter from global adapter list */
   ExInterlockedRemoveEntryList(&Adapter->ListEntry, &AdapterListLock);
 
-  KeCancelTimer(&Adapter->NdisMiniportBlock.WakeUpDpcTimer.Timer);
+  MiniStopHangTimer(Adapter);
 
   /* Set this here so MiniportISR will be forced to run for interrupts generated in MiniportHalt */
   Adapter->NdisMiniportBlock.OldPnPDeviceState = Adapter->NdisMiniportBlock.PnPDeviceState;
@@ -2474,7 +2554,7 @@ NdisIPnPRemoveDevice(
         /* Remove adapter from global adapter list */
         ExInterlockedRemoveEntryList(&Adapter->ListEntry, &AdapterListLock);
 
-        KeCancelTimer(&Adapter->NdisMiniportBlock.WakeUpDpcTimer.Timer);
+        MiniStopHangTimer(Adapter);
 
         Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.HaltHandler(Adapter);
     }
@@ -2745,6 +2825,9 @@ NdisIAddDevice(
 
   KeInitializeTimer(&Adapter->NdisMiniportBlock.WakeUpDpcTimer.Timer);
   KeInitializeDpc(&Adapter->NdisMiniportBlock.WakeUpDpcTimer.Dpc, MiniportHangDpc, Adapter);
+  KeInitializeSpinLock(&Adapter->HangTimerLock);
+  Adapter->HangTimerInitialized = FALSE;
+  Adapter->HangTimerStopping = TRUE;
 
   DeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
 

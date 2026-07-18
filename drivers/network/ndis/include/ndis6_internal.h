@@ -119,6 +119,9 @@ typedef struct _NDIS6_ADAPTER_EXT
     KDPC                            InterruptDpc;
     NDIS_MINIPORT_INTERRUPT_CHARACTERISTICS IntChars;
     NDIS_HANDLE                     MiniportInterruptContext;
+    /* High bit closes the gate; low bits count queued/running ISR-DPC work. */
+    volatile LONG                   InterruptRundownState;
+    KEVENT                          InterruptDrainEvent;
 
     /* C1: MSI/MSI-X support. If NdisMRegisterInterruptEx requested a
      * message-based connection, we used IoConnectInterruptEx which
@@ -164,6 +167,7 @@ typedef struct _NDIS6_ADAPTER_EXT
      * zero, preventing MiniSendComplete from firing on a torn-down adapter. */
     LONG                            TxInFlightCount;
     KEVENT                          TxDrainEvent;
+    BOOLEAN                         TxAccepting;
 
     /* A4: Pause/Restart state machine. A new NDIS 6 miniport is PAUSED
      * after MiniportInitializeEx and becomes RUNNING only when a protocol
@@ -319,6 +323,8 @@ Ndis6CallMiniportRestartEx(
 #define NDIS6_PAUSE_STATE_PAUSED      2
 #define NDIS6_PAUSE_STATE_RESTARTING  3
 
+#define NDIS6_INTERRUPT_RUNDOWN_STOPPING ((LONG)0x80000000)
+
 /* 60io.c */
 NDIS_STATUS
 Ndis6IoInitDmaAdapter(
@@ -327,6 +333,10 @@ Ndis6IoInitDmaAdapter(
 
 VOID
 Ndis6IoFreeDmaAdapter(
+    _In_ PNDIS6_ADAPTER_EXT     Ext);
+
+VOID
+Ndis6DisconnectInterrupt(
     _In_ PNDIS6_ADAPTER_EXT     Ext);
 
 /* 60oid.c — legacy NDIS_REQUEST dispatcher for NDIS 6 adapters.
@@ -580,7 +590,35 @@ typedef struct _NDIS6_PROTOCOL_BINDING
      * NdisMOidRequestComplete walks it to find the binding to notify. */
     LIST_ENTRY                              PendingOidRequests;
     KSPIN_LOCK                              PendingOidRequestsLock;
+    EX_RUNDOWN_REF                          RundownRef;
+    volatile LONG                           Closing;
 } NDIS6_PROTOCOL_BINDING, *PNDIS6_PROTOCOL_BINDING;
+
+static __inline BOOLEAN
+Ndis6ReferenceProtocolBinding(
+    PNDIS6_PROTOCOL_BINDING Binding)
+{
+    if (InterlockedCompareExchange(&Binding->Closing, FALSE, FALSE) != FALSE)
+        return FALSE;
+
+    if (!ExAcquireRundownProtection(&Binding->RundownRef))
+        return FALSE;
+
+    if (InterlockedCompareExchange(&Binding->Closing, FALSE, FALSE) != FALSE)
+    {
+        ExReleaseRundownProtection(&Binding->RundownRef);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static __inline VOID
+Ndis6DereferenceProtocolBinding(
+    PNDIS6_PROTOCOL_BINDING Binding)
+{
+    ExReleaseRundownProtection(&Binding->RundownRef);
+}
 
 /* D4: per-async-OID context. Stashed in OidRequest->RequestId by
  * NdisOidRequest so NdisMOidRequestComplete can find the binding +
@@ -592,6 +630,14 @@ typedef struct _NDIS6_PROTOCOL_PENDING_OID
     PVOID                                   OriginalRequestId;
     PNDIS_OID_REQUEST                       OidRequest;
 } NDIS6_PROTOCOL_PENDING_OID, *PNDIS6_PROTOCOL_PENDING_OID;
+
+BOOLEAN
+Ndis6ReferenceNativeTransmit(
+    _In_ PNDIS6_ADAPTER_EXT Ext);
+
+VOID
+Ndis6DereferenceTransmit(
+    _In_ PNDIS6_ADAPTER_EXT Ext);
 
 extern LIST_ENTRY g_Ndis6ProtocolDriverList;
 extern KSPIN_LOCK g_Ndis6ProtocolDriverListLock;
