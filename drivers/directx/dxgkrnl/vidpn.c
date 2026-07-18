@@ -215,6 +215,8 @@ typedef struct _DXGKP_SOURCE_OWNER_ADAPTER_STATE
 } DXGKP_SOURCE_OWNER_ADAPTER_STATE, *PDXGKP_SOURCE_OWNER_ADAPTER_STATE;
 
 #define DXGKP_MAX_SOURCE_OWNER_OPERATIONS 4096U
+#define DXGKP_SOURCE_OWNER_FLAG_DISABLE_DWM_VIRTUAL_MODE 0x00000002U
+#define DXGKP_SOURCE_OWNER_FLAG_USE_NT_HANDLES           0x00000004U
 #define TAG_DXGK_SOURCE_OWNER 'OxgD'
 
 static LIST_ENTRY g_SourceOwnerAdapterList;
@@ -275,7 +277,8 @@ DxgkpApplySourceOwnerOperation(
     _Inout_updates_(DXGKP_MAX_SOURCES) DXGKP_VIDPN_SOURCE_OWNER *Owners,
     _In_ PDXGKRNL_DEVICE OwnerDevice,
     _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID SourceId,
-    _In_ D3DKMT_VIDPNSOURCEOWNER_TYPE RequestedType)
+    _In_ D3DKMT_VIDPNSOURCEOWNER_TYPE RequestedType,
+    _In_ UINT OwnerFlags)
 {
     PDXGKP_VIDPN_SOURCE_OWNER Current = &Owners[SourceId];
 
@@ -285,6 +288,7 @@ DxgkpApplySourceOwnerOperation(
         {
             Current->OwnerDevice = NULL;
             Current->OwnerType = D3DKMT_VIDPNSOURCEOWNER_UNOWNED;
+            Current->OwnerFlags = 0;
         }
         return STATUS_SUCCESS;
     }
@@ -295,10 +299,14 @@ DxgkpApplySourceOwnerOperation(
         {
             Current->OwnerDevice = OwnerDevice;
             Current->OwnerType = RequestedType;
+            Current->OwnerFlags = OwnerFlags;
             return STATUS_SUCCESS;
         }
         if (Current->OwnerDevice == OwnerDevice && Current->OwnerType == RequestedType)
+        {
+            Current->OwnerFlags = OwnerFlags;
             return STATUS_SUCCESS;
+        }
         if (Current->OwnerDevice == OwnerDevice && (Current->OwnerType == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVE || Current->OwnerType == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVEGDI))
             return STATUS_INVALID_PARAMETER;
         return STATUS_GRAPHICS_VIDPN_SOURCE_IN_USE;
@@ -310,10 +318,14 @@ DxgkpApplySourceOwnerOperation(
         {
             Current->OwnerDevice = OwnerDevice;
             Current->OwnerType = RequestedType;
+            Current->OwnerFlags = OwnerFlags;
             return STATUS_SUCCESS;
         }
         if (Current->OwnerDevice == OwnerDevice && Current->OwnerType == RequestedType)
+        {
+            Current->OwnerFlags = OwnerFlags;
             return STATUS_SUCCESS;
+        }
         if (Current->OwnerDevice == OwnerDevice)
             return STATUS_INVALID_PARAMETER;
         return STATUS_GRAPHICS_VIDPN_SOURCE_IN_USE;
@@ -323,10 +335,14 @@ DxgkpApplySourceOwnerOperation(
     {
         Current->OwnerDevice = OwnerDevice;
         Current->OwnerType = D3DKMT_VIDPNSOURCEOWNER_EMULATED;
+        Current->OwnerFlags = OwnerFlags;
         return STATUS_SUCCESS;
     }
     if (Current->OwnerDevice == OwnerDevice && Current->OwnerType == D3DKMT_VIDPNSOURCEOWNER_EMULATED)
+    {
+        Current->OwnerFlags = OwnerFlags;
         return STATUS_SUCCESS;
+    }
     if (Current->OwnerDevice == OwnerDevice && (Current->OwnerType == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVE || Current->OwnerType == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVEGDI))
         return STATUS_INVALID_PARAMETER;
     return STATUS_GRAPHICS_VIDPN_SOURCE_IN_USE;
@@ -405,6 +421,7 @@ DxgkVidPnCleanupDeviceOwners(
             {
                 State->Owners[Index].OwnerDevice = NULL;
                 State->Owners[Index].OwnerType = D3DKMT_VIDPNSOURCEOWNER_UNOWNED;
+                State->Owners[Index].OwnerFlags = 0;
             }
         }
         if (DxgkpSourceOwnerStateIsEmpty(State->Owners))
@@ -415,7 +432,10 @@ DxgkVidPnCleanupDeviceOwners(
     }
     ExReleaseFastMutex(&g_SourceOwnerMutex);
     if (StateToFree != NULL)
+    {
+        RtlZeroMemory(StateToFree->Owners, sizeof(StateToFree->Owners));
         ExFreePoolWithTag(StateToFree, TAG_DXGK_SOURCE_OWNER);
+    }
 }
 
 /* ========================================================================
@@ -3688,8 +3708,9 @@ Cleanup:
 
 NTSTATUS
 NTAPI
-DxgkpSetVidPnSourceOwnerWithAccessMode(
+DxgkpSetVidPnSourceOwnerWithFlagsAndAccessMode(
     _In_ D3DKMT_SETVIDPNSOURCEOWNER *pSetVidPnSourceOwner,
+    _In_ UINT OwnerFlags,
     _In_ KPROCESSOR_MODE EmbeddedBufferMode)
 {
     PDXGKP_SOURCE_OWNER_ADAPTER_STATE State;
@@ -3717,6 +3738,10 @@ DxgkpSetVidPnSourceOwnerWithAccessMode(
         return STATUS_INVALID_PARAMETER;
     if (pSetVidPnSourceOwner->VidPnSourceCount == 0 && (pSetVidPnSourceOwner->pType != NULL || pSetVidPnSourceOwner->pVidPnSourceId != NULL))
         return STATUS_INVALID_PARAMETER;
+    if ((OwnerFlags & DXGKP_SOURCE_OWNER_FLAG_DISABLE_DWM_VIRTUAL_MODE) != 0)
+        return STATUS_NOT_SUPPORTED;
+    if ((OwnerFlags & DXGKP_SOURCE_OWNER_FLAG_USE_NT_HANDLES) != 0)
+        return STATUS_NOT_SUPPORTED;
 
     Device = DxgkLookupDeviceByHandle(pSetVidPnSourceOwner->hDevice, &Adapter);
     if (Device == NULL)
@@ -3805,6 +3830,7 @@ DxgkpSetVidPnSourceOwnerWithAccessMode(
             {
                 StagedOwners[i].OwnerDevice = NULL;
                 StagedOwners[i].OwnerType = D3DKMT_VIDPNSOURCEOWNER_UNOWNED;
+                StagedOwners[i].OwnerFlags = 0;
             }
         }
     }
@@ -3812,7 +3838,7 @@ DxgkpSetVidPnSourceOwnerWithAccessMode(
     {
         for (i = 0; i < pSetVidPnSourceOwner->VidPnSourceCount; ++i)
         {
-            Status = DxgkpApplySourceOwnerOperation(StagedOwners, Device, SourceIds[i], Types[i]);
+            Status = DxgkpApplySourceOwnerOperation(StagedOwners, Device, SourceIds[i], Types[i], OwnerFlags);
             if (!NT_SUCCESS(Status))
                 goto Unlock;
         }
@@ -3846,7 +3872,10 @@ DxgkpSetVidPnSourceOwnerWithAccessMode(
 Unlock:
     ExReleaseFastMutex(&g_SourceOwnerMutex);
     if (StateToFree != NULL)
+    {
+        RtlZeroMemory(StateToFree->Owners, sizeof(StateToFree->Owners));
         ExFreePoolWithTag(StateToFree, TAG_DXGK_SOURCE_OWNER);
+    }
 
 Cleanup:
     if (SourceIds != NULL)
@@ -3855,6 +3884,15 @@ Cleanup:
         ExFreePoolWithTag(Types, TAG_DXGK_CAPTURE);
     DxgkDereferenceDevice(Device);
     return Status;
+}
+
+NTSTATUS
+NTAPI
+DxgkpSetVidPnSourceOwnerWithAccessMode(
+    _In_ D3DKMT_SETVIDPNSOURCEOWNER *pSetVidPnSourceOwner,
+    _In_ KPROCESSOR_MODE EmbeddedBufferMode)
+{
+    return DxgkpSetVidPnSourceOwnerWithFlagsAndAccessMode(pSetVidPnSourceOwner, 0, EmbeddedBufferMode);
 }
 
 NTSTATUS
