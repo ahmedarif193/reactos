@@ -184,6 +184,22 @@ typedef struct _SOFTGPU_ALLOC
 
 
 /* =========================================================================
+ * SOFTGPU_OPENALLOC — per-device open binding for a shared allocation
+ *
+ * Returned in DXGK_OPENALLOCATIONINFO.hDeviceSpecificAllocation by
+ * DxgkDdiOpenAllocation and freed by DxgkDdiCloseAllocation.
+ * ========================================================================= */
+
+#define SOFTGPU_OPENALLOC_MAGIC 0x4F504753UL    /* 'SGPO' */
+
+typedef struct _SOFTGPU_OPENALLOC
+{
+    ULONG           Magic;          /* must equal SOFTGPU_OPENALLOC_MAGIC   */
+    D3DKMT_HANDLE   hAllocation;    /* dxgkrnl allocation handle (in)       */
+} SOFTGPU_OPENALLOC, *PSOFTGPU_OPENALLOC;
+
+
+/* =========================================================================
  * SOFTGPU_CONTEXT — per-context miniport context
  *
  * Stored in DXGKARG_CREATECONTEXT.hContext (out) for each context created
@@ -288,6 +304,18 @@ APIENTRY
 SoftGpuDdiDestroyAllocation(
     _In_ PVOID                             MiniportDeviceContext,
     _In_ CONST DXGKARG_DESTROYALLOCATION  *DestroyAllocation);
+
+NTSTATUS
+APIENTRY
+SoftGpuDdiOpenAllocation(
+    _In_ PVOID                          hDevice,
+    _In_ CONST DXGKARG_OPENALLOCATION  *OpenAllocation);
+
+NTSTATUS
+APIENTRY
+SoftGpuDdiCloseAllocation(
+    _In_ PVOID                          hDevice,
+    _In_ CONST DXGKARG_CLOSEALLOCATION *CloseAllocation);
 
 NTSTATUS
 APIENTRY

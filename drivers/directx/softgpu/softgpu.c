@@ -136,6 +136,8 @@ DriverEntry(
     /* --- Memory management ----------------------------------------------- */
     InitData.DxgkDdiCreateAllocation                = SoftGpuDdiCreateAllocation;
     InitData.DxgkDdiDestroyAllocation               = SoftGpuDdiDestroyAllocation;
+    InitData.DxgkDdiOpenAllocation                  = SoftGpuDdiOpenAllocation;
+    InitData.DxgkDdiCloseAllocation                 = SoftGpuDdiCloseAllocation;
     InitData.DxgkDdiBuildPagingBuffer               = SoftGpuDdiBuildPagingBuffer;
     InitData.DxgkDdiPatch                           = SoftGpuDdiPatch;
 
@@ -924,6 +926,124 @@ SoftGpuDdiDestroyAllocation(
 
         Alloc->Magic = 0xDEADA110UL;   /* poison */
         ExFreePoolWithTag(Alloc, SOFTGPU_POOL_TAG);
+    }
+
+    return STATUS_SUCCESS;
+}
+
+
+/* =========================================================================
+ * DxgkDdiOpenAllocation / DxgkDdiCloseAllocation
+ * =========================================================================
+ */
+
+/*
+ * SoftGpuDdiOpenAllocation
+ *
+ * Creates a per-device SOFTGPU_OPENALLOC binding for each opened allocation.
+ * A software adapter has no per-device GPU state, so the binding only records
+ * the dxgkrnl allocation handle for later validation in CloseAllocation.
+ *
+ * IRQL: PASSIVE_LEVEL
+ */
+NTSTATUS
+APIENTRY
+SoftGpuDdiOpenAllocation(
+    _In_ PVOID                          hDevice,
+    _In_ CONST DXGKARG_OPENALLOCATION  *OpenAllocation)
+{
+    ULONG              i;
+    PSOFTGPU_OPENALLOC Open;
+
+    UNREFERENCED_PARAMETER(hDevice);
+
+    if (OpenAllocation == NULL ||
+        OpenAllocation->NumAllocations == 0 ||
+        OpenAllocation->pOpenAllocation == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    DPRINT("SOFTGPU: OpenAllocation NumAllocations=%u\n",
+           OpenAllocation->NumAllocations);
+
+    for (i = 0; i < OpenAllocation->NumAllocations; i++)
+    {
+        DXGK_OPENALLOCATIONINFO *pInfo = &OpenAllocation->pOpenAllocation[i];
+
+        Open = (PSOFTGPU_OPENALLOC)ExAllocatePoolWithTag(NonPagedPool,
+                                                         sizeof(SOFTGPU_OPENALLOC),
+                                                         SOFTGPU_POOL_TAG);
+        if (Open == NULL)
+        {
+            while (i > 0)
+            {
+                --i;
+                Open = (PSOFTGPU_OPENALLOC)
+                    OpenAllocation->pOpenAllocation[i].hDeviceSpecificAllocation;
+                OpenAllocation->pOpenAllocation[i].hDeviceSpecificAllocation = NULL;
+                if (Open != NULL)
+                {
+                    Open->Magic = 0;
+                    ExFreePoolWithTag(Open, SOFTGPU_POOL_TAG);
+                }
+            }
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        RtlZeroMemory(Open, sizeof(*Open));
+        Open->Magic = SOFTGPU_OPENALLOC_MAGIC;
+        Open->hAllocation = pInfo->hAllocation;
+        pInfo->hDeviceSpecificAllocation = (HANDLE)Open;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+/*
+ * SoftGpuDdiCloseAllocation
+ *
+ * Frees each SOFTGPU_OPENALLOC binding, verifying the magic number first.
+ *
+ * IRQL: PASSIVE_LEVEL
+ */
+NTSTATUS
+APIENTRY
+SoftGpuDdiCloseAllocation(
+    _In_ PVOID                          hDevice,
+    _In_ CONST DXGKARG_CLOSEALLOCATION *CloseAllocation)
+{
+    ULONG              i;
+    PSOFTGPU_OPENALLOC Open;
+
+    UNREFERENCED_PARAMETER(hDevice);
+
+    if (CloseAllocation == NULL ||
+        CloseAllocation->NumAllocations == 0 ||
+        CloseAllocation->pOpenHandleList == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    DPRINT("SOFTGPU: CloseAllocation NumAllocations=%u\n",
+           CloseAllocation->NumAllocations);
+
+    for (i = 0; i < CloseAllocation->NumAllocations; i++)
+    {
+        Open = (PSOFTGPU_OPENALLOC)CloseAllocation->pOpenHandleList[i];
+        if (Open == NULL || Open->Magic != SOFTGPU_OPENALLOC_MAGIC)
+        {
+            DPRINT1("SOFTGPU: CloseAllocation open[%lu]=%p: bad binding\n",
+                    i, Open);
+            return STATUS_INVALID_PARAMETER;
+        }
+    }
+
+    for (i = 0; i < CloseAllocation->NumAllocations; i++)
+    {
+        Open = (PSOFTGPU_OPENALLOC)CloseAllocation->pOpenHandleList[i];
+        Open->Magic = 0xDEAD0A11UL;    /* poison */
+        ExFreePoolWithTag(Open, SOFTGPU_POOL_TAG);
     }
 
     return STATUS_SUCCESS;
