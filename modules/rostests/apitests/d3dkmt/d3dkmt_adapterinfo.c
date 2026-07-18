@@ -1005,3 +1005,182 @@ START_TEST(adapterclass)
 
     CloseAdapter(h);
 }
+
+/* --------------------------------------------------------------------------
+ * START_TEST: WDDM 2.x/3.0 capability words
+ *
+ * Queries every per-level capability selector and asserts only invariants
+ * that hold on native Windows as well: a successful query never sets a
+ * dependent bit without its prerequisite, the segment views agree with each
+ * other, and the physical adapter count is at least one.  A selector the
+ * target OS/adapter does not support is traced, never a failure.
+ * -------------------------------------------------------------------------- */
+
+START_TEST(wddmcaps)
+{
+    PFND3DKMT_QUERYADAPTERINFO pfn;
+    D3DKMT_HANDLE h;
+    NTSTATUS st;
+
+    pfn = (PFND3DKMT_QUERYADAPTERINFO)LoadD3DKMTProc("D3DKMTQueryAdapterInfo");
+    if (!pfn)
+    {
+        skip("D3DKMTQueryAdapterInfo not exported by gdi32.dll\n");
+        return;
+    }
+    h = OpenAdapterFromDisplay1();
+    if (!h)
+    {
+        skip("Cannot open \\\\.\\DISPLAY1 adapter\n");
+        return;
+    }
+
+    {
+        D3DKMT_WDDM_2_0_CAPS caps;
+
+        memset(&caps, 0xCC, sizeof(caps));
+        st = QueryAI(pfn, h, KMTQAITYPE_WDDM_2_0_CAPS, &caps, sizeof(caps));
+        if (NT_SUCCESS(st))
+            trace("WDDM_2_0_CAPS: 0x%08X GpuMmu=%u IoMmu=%u\n",
+                  (unsigned)caps.Value, (unsigned)caps.GpuMmuSupported,
+                  (unsigned)caps.IoMmuSupported);
+        else
+            trace("WDDM_2_0_CAPS not available (0x%08lX)\n", (long)st);
+    }
+
+    {
+        D3DKMT_WDDM_2_7_CAPS caps;
+
+        memset(&caps, 0xCC, sizeof(caps));
+        st = QueryAI(pfn, h, KMTQAITYPE_WDDM_2_7_CAPS, &caps, sizeof(caps));
+        if (NT_SUCCESS(st))
+        {
+            ok(!caps.HwSchEnabled || caps.HwSchSupported,
+               "WDDM_2_7_CAPS: HwSchEnabled without HwSchSupported (0x%08X)\n",
+               (unsigned)caps.Value);
+            trace("WDDM_2_7_CAPS: 0x%08X HwSchSupported=%u HwSchEnabled=%u "
+                  "IndependentVidPnVSyncControl=%u\n",
+                  (unsigned)caps.Value, (unsigned)caps.HwSchSupported,
+                  (unsigned)caps.HwSchEnabled,
+                  (unsigned)caps.IndependentVidPnVSyncControl);
+        }
+        else
+            trace("WDDM_2_7_CAPS not available (0x%08lX)\n", (long)st);
+    }
+
+    {
+        D3DKMT_WDDM_2_9_CAPS caps;
+
+        memset(&caps, 0xCC, sizeof(caps));
+        st = QueryAI(pfn, h, KMTQAITYPE_WDDM_2_9_CAPS, &caps, sizeof(caps));
+        if (NT_SUCCESS(st))
+        {
+            ok(!caps.HwSchEnabled ||
+               caps.HwSchSupportState != DXGK_FEATURE_SUPPORT_ALWAYS_OFF,
+               "WDDM_2_9_CAPS: HwSchEnabled while support state is ALWAYS_OFF\n");
+            trace("WDDM_2_9_CAPS: 0x%08X HwSchSupportState=%u HwSchEnabled=%u "
+                  "SelfRefreshMemorySupported=%u\n",
+                  (unsigned)caps.Value, (unsigned)caps.HwSchSupportState,
+                  (unsigned)caps.HwSchEnabled,
+                  (unsigned)caps.SelfRefreshMemorySupported);
+        }
+        else
+            trace("WDDM_2_9_CAPS not available (0x%08lX)\n", (long)st);
+    }
+
+    {
+        D3DKMT_WDDM_3_0_CAPS caps;
+
+        memset(&caps, 0xCC, sizeof(caps));
+        st = QueryAI(pfn, h, KMTQAITYPE_WDDM_3_0_CAPS, &caps, sizeof(caps));
+        if (NT_SUCCESS(st))
+        {
+            ok(!caps.HwFlipQueueEnabled ||
+               caps.HwFlipQueueSupportState != DXGK_FEATURE_SUPPORT_ALWAYS_OFF,
+               "WDDM_3_0_CAPS: HwFlipQueueEnabled while support state is ALWAYS_OFF\n");
+            trace("WDDM_3_0_CAPS: 0x%08X HwFlipQueueSupportState=%u "
+                  "HwFlipQueueEnabled=%u DisplayableSupported=%u\n",
+                  (unsigned)caps.Value, (unsigned)caps.HwFlipQueueSupportState,
+                  (unsigned)caps.HwFlipQueueEnabled,
+                  (unsigned)caps.DisplayableSupported);
+        }
+        else
+            trace("WDDM_3_0_CAPS not available (0x%08lX)\n", (long)st);
+    }
+
+    {
+        D3DKMT_CROSSADAPTERRESOURCE_SUPPORT support;
+
+        memset(&support, 0xCC, sizeof(support));
+        st = QueryAI(pfn, h, KMTQAITYPE_CROSSADAPTERRESOURCE_SUPPORT,
+                     &support, sizeof(support));
+        if (NT_SUCCESS(st))
+        {
+            ok(support.SupportTier <= D3DKMT_CROSSADAPTERRESOURCE_SUPPORT_TIER_SCANOUT,
+               "CROSSADAPTERRESOURCE_SUPPORT: bogus tier %u\n",
+               (unsigned)support.SupportTier);
+            trace("CROSSADAPTERRESOURCE_SUPPORT: tier=%u\n",
+                  (unsigned)support.SupportTier);
+        }
+        else
+            trace("CROSSADAPTERRESOURCE_SUPPORT not available (0x%08lX)\n", (long)st);
+    }
+
+    {
+        D3DKMT_PHYSICAL_ADAPTER_COUNT count;
+
+        memset(&count, 0, sizeof(count));
+        st = QueryAI(pfn, h, KMTQAITYPE_PHYSICALADAPTERCOUNT, &count, sizeof(count));
+        if (NT_SUCCESS(st))
+        {
+            ok(count.Count >= 1, "PHYSICALADAPTERCOUNT: zero adapters\n");
+            trace("PHYSICALADAPTERCOUNT: %u\n", (unsigned)count.Count);
+        }
+        else
+            trace("PHYSICALADAPTERCOUNT not available (0x%08lX)\n", (long)st);
+    }
+
+    {
+        D3DKMT_SEGMENTSIZEINFO seg;
+        D3DKMT_SEGMENTGROUPSIZEINFO group;
+        NTSTATUS st2;
+
+        memset(&seg, 0, sizeof(seg));
+        memset(&group, 0, sizeof(group));
+        st = QueryAI(pfn, h, KMTQAITYPE_GETSEGMENTSIZE, &seg, sizeof(seg));
+        st2 = QueryAI(pfn, h, KMTQAITYPE_GETSEGMENTGROUPSIZE, &group, sizeof(group));
+        if (NT_SUCCESS(st) && NT_SUCCESS(st2))
+        {
+            ok(seg.DedicatedVideoMemorySize == group.LegacyInfo.DedicatedVideoMemorySize &&
+               seg.SharedSystemMemorySize == group.LegacyInfo.SharedSystemMemorySize,
+               "segment views disagree: legacy %I64u/%I64u vs group legacy %I64u/%I64u\n",
+               seg.DedicatedVideoMemorySize, seg.SharedSystemMemorySize,
+               group.LegacyInfo.DedicatedVideoMemorySize,
+               group.LegacyInfo.SharedSystemMemorySize);
+            trace("SEGMENTGROUPSIZE: local=%I64u nonlocal=%I64u\n",
+                  group.LocalMemory, group.NonLocalMemory);
+        }
+        else
+            trace("segment size queries: 0x%08lX / 0x%08lX\n", (long)st, (long)st2);
+    }
+
+    {
+        D3DKMT_NODEMETADATA meta;
+
+        memset(&meta, 0, sizeof(meta));
+        meta.NodeOrdinalAndAdapterIndex = 0;
+        st = QueryAI(pfn, h, KMTQAITYPE_NODEMETADATA, &meta, sizeof(meta));
+        if (NT_SUCCESS(st))
+            trace("NODEMETADATA[0]: EngineType=%d name=%.32ws\n",
+                  (int)meta.NodeData.EngineType, meta.NodeData.FriendlyName);
+        else
+            trace("NODEMETADATA not available (0x%08lX)\n", (long)st);
+
+        memset(&meta, 0, sizeof(meta));
+        meta.NodeOrdinalAndAdapterIndex = 0xFFFF;
+        st = QueryAI(pfn, h, KMTQAITYPE_NODEMETADATA, &meta, sizeof(meta));
+        ok(!NT_SUCCESS(st), "NODEMETADATA accepted bogus node ordinal 0xFFFF\n");
+    }
+
+    CloseAdapter(h);
+}

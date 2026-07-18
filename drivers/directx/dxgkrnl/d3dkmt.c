@@ -85,16 +85,36 @@ typedef struct _DXGKRNL_FILE_CONTEXT
     ULONG Magic;
 } DXGKRNL_FILE_CONTEXT, *PDXGKRNL_FILE_CONTEXT;
 
+/*
+ * The highest WDDM 2.x level whose OS-side scheduler, VidMm, paging,
+ * synchronization, and KMT paths are complete in this dxgkrnl.  A level is
+ * raised here only when its whole execution and teardown path works; the
+ * reported version is the minimum of this and what the miniport declares.
+ */
+#define DXGKP_OS_COMPLETED_WDDM_LEVEL KMT_DRIVERVERSION_WDDM_2_0
+
 static D3DKMT_DRIVERVERSION
-DxgkpGetReportedDriverVersion(
-    _In_ PDXGKRNL_ADAPTER Adapter)
+DxgkpMiniportDeclaredWddmLevel(
+    _In_ ULONG Version)
 {
-    ULONG Version;
-
-    if (Adapter == NULL || Adapter->MiniportContext == NULL)
-        return KMT_DRIVERVERSION_WDDM_1_0;
-
-    Version = Adapter->MiniportContext->InitData.s.Version;
+    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+        return KMT_DRIVERVERSION_WDDM_2_9;
+    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_8)
+        return KMT_DRIVERVERSION_WDDM_2_8;
+    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_7)
+        return KMT_DRIVERVERSION_WDDM_2_7;
+    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_6)
+        return KMT_DRIVERVERSION_WDDM_2_6;
+    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_5)
+        return KMT_DRIVERVERSION_WDDM_2_5;
+    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
+        return KMT_DRIVERVERSION_WDDM_2_4;
+    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_3)
+        return KMT_DRIVERVERSION_WDDM_2_3;
+    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
+        return KMT_DRIVERVERSION_WDDM_2_2;
+    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_1)
+        return KMT_DRIVERVERSION_WDDM_2_1;
     if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
         return KMT_DRIVERVERSION_WDDM_2_0;
     if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM1_3)
@@ -104,6 +124,21 @@ DxgkpGetReportedDriverVersion(
     if (Version >= DXGKDDI_INTERFACE_VERSION_WIN7)
         return KMT_DRIVERVERSION_WDDM_1_1;
     return KMT_DRIVERVERSION_WDDM_1_0;
+}
+
+static D3DKMT_DRIVERVERSION
+DxgkpGetReportedDriverVersion(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    D3DKMT_DRIVERVERSION Declared;
+
+    if (Adapter == NULL || Adapter->MiniportContext == NULL)
+        return KMT_DRIVERVERSION_WDDM_1_0;
+
+    Declared = DxgkpMiniportDeclaredWddmLevel(Adapter->MiniportContext->InitData.s.Version);
+    if (Declared < KMT_DRIVERVERSION_WDDM_2_0)
+        return Declared;
+    return min(Declared, DXGKP_OS_COMPLETED_WDDM_LEVEL);
 }
 
 static BOOLEAN
@@ -980,13 +1015,19 @@ DxgkpQueryAdapterInfoCaptured(
             pSegInfo = (D3DKMT_SEGMENTSIZEINFO *)pQueryAdapterInfo->pPrivateDriverData;
 
             /*
-             * For DOD/display-only: no dedicated VRAM, report system memory.
-             * A real adapter would query segments from vidmm here.
+             * Report the adapter's real segment topology so this query, the
+             * segment-group query, and the memory budgets all agree.  An
+             * adapter with no segments (display-only) truthfully reports a
+             * shared-only view of zero.
              */
-            RtlZeroMemory(&SegInfo, sizeof(SegInfo));
-            SegInfo.DedicatedVideoMemorySize = 0;
-            SegInfo.DedicatedSystemMemorySize = 0;
-            SegInfo.SharedSystemMemorySize = 256 * 1024 * 1024; /* 256 MB */
+            {
+                D3DKMT_SEGMENTGROUPSIZEINFO GroupInfo;
+                NTSTATUS SegStatus = DxgkVidMmQuerySegmentSizes(Adapter, &GroupInfo);
+
+                if (!NT_SUCCESS(SegStatus))
+                    DXGKP_QUERY_RETURN(SegStatus);
+                SegInfo = GroupInfo.LegacyInfo;
+            }
             _SEH2_TRY
             {
                 *pSegInfo = SegInfo;
@@ -1181,6 +1222,230 @@ DxgkpQueryAdapterInfoCaptured(
         case KMTQAITYPE_UMDRIVERPRIVATE:
         {
             DXGKP_QUERY_RETURN(STATUS_NOT_SUPPORTED);
+        }
+
+        /*
+         * Per-level capability words.  Every bit is derived from a complete,
+         * reachable execution path; scaffolding stays zero.  No adapter in
+         * this tree has a GPU MMU/IoMmu path, hardware scheduling, hardware
+         * flip queues, self-refresh memory, or cross-adapter scan-out yet.
+         */
+        case KMTQAITYPE_WDDM_2_0_CAPS:
+        {
+            D3DKMT_WDDM_2_0_CAPS Caps;
+
+            if (pQueryAdapterInfo->pPrivateDriverData == NULL ||
+                pQueryAdapterInfo->PrivateDriverDataSize < sizeof(Caps))
+            {
+                DXGKP_QUERY_RETURN(STATUS_BUFFER_TOO_SMALL);
+            }
+            RtlZeroMemory(&Caps, sizeof(Caps));
+            _SEH2_TRY
+            {
+                *(D3DKMT_WDDM_2_0_CAPS *)pQueryAdapterInfo->pPrivateDriverData = Caps;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                DXGKP_QUERY_RETURN(_SEH2_GetExceptionCode());
+            }
+            _SEH2_END;
+            DXGKP_QUERY_RETURN(STATUS_SUCCESS);
+        }
+
+        case KMTQAITYPE_WDDM_2_7_CAPS:
+        {
+            D3DKMT_WDDM_2_7_CAPS Caps;
+
+            if (pQueryAdapterInfo->pPrivateDriverData == NULL ||
+                pQueryAdapterInfo->PrivateDriverDataSize < sizeof(Caps))
+            {
+                DXGKP_QUERY_RETURN(STATUS_BUFFER_TOO_SMALL);
+            }
+            RtlZeroMemory(&Caps, sizeof(Caps));
+            _SEH2_TRY
+            {
+                *(D3DKMT_WDDM_2_7_CAPS *)pQueryAdapterInfo->pPrivateDriverData = Caps;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                DXGKP_QUERY_RETURN(_SEH2_GetExceptionCode());
+            }
+            _SEH2_END;
+            DXGKP_QUERY_RETURN(STATUS_SUCCESS);
+        }
+
+        case KMTQAITYPE_WDDM_2_9_CAPS:
+        {
+            D3DKMT_WDDM_2_9_CAPS Caps;
+
+            if (pQueryAdapterInfo->pPrivateDriverData == NULL ||
+                pQueryAdapterInfo->PrivateDriverDataSize < sizeof(Caps))
+            {
+                DXGKP_QUERY_RETURN(STATUS_BUFFER_TOO_SMALL);
+            }
+            RtlZeroMemory(&Caps, sizeof(Caps));
+            Caps.HwSchSupportState = DXGK_FEATURE_SUPPORT_ALWAYS_OFF;
+            _SEH2_TRY
+            {
+                *(D3DKMT_WDDM_2_9_CAPS *)pQueryAdapterInfo->pPrivateDriverData = Caps;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                DXGKP_QUERY_RETURN(_SEH2_GetExceptionCode());
+            }
+            _SEH2_END;
+            DXGKP_QUERY_RETURN(STATUS_SUCCESS);
+        }
+
+        case KMTQAITYPE_WDDM_3_0_CAPS:
+        {
+            D3DKMT_WDDM_3_0_CAPS Caps;
+
+            if (pQueryAdapterInfo->pPrivateDriverData == NULL ||
+                pQueryAdapterInfo->PrivateDriverDataSize < sizeof(Caps))
+            {
+                DXGKP_QUERY_RETURN(STATUS_BUFFER_TOO_SMALL);
+            }
+            RtlZeroMemory(&Caps, sizeof(Caps));
+            Caps.HwFlipQueueSupportState = DXGK_FEATURE_SUPPORT_ALWAYS_OFF;
+            _SEH2_TRY
+            {
+                *(D3DKMT_WDDM_3_0_CAPS *)pQueryAdapterInfo->pPrivateDriverData = Caps;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                DXGKP_QUERY_RETURN(_SEH2_GetExceptionCode());
+            }
+            _SEH2_END;
+            DXGKP_QUERY_RETURN(STATUS_SUCCESS);
+        }
+
+        case KMTQAITYPE_CROSSADAPTERRESOURCE_SUPPORT:
+        {
+            D3DKMT_CROSSADAPTERRESOURCE_SUPPORT Support;
+
+            if (pQueryAdapterInfo->pPrivateDriverData == NULL ||
+                pQueryAdapterInfo->PrivateDriverDataSize < sizeof(Support))
+            {
+                DXGKP_QUERY_RETURN(STATUS_BUFFER_TOO_SMALL);
+            }
+            RtlZeroMemory(&Support, sizeof(Support));
+            Support.SupportTier = D3DKMT_CROSSADAPTERRESOURCE_SUPPORT_TIER_NONE;
+            _SEH2_TRY
+            {
+                *(D3DKMT_CROSSADAPTERRESOURCE_SUPPORT *)pQueryAdapterInfo->pPrivateDriverData = Support;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                DXGKP_QUERY_RETURN(_SEH2_GetExceptionCode());
+            }
+            _SEH2_END;
+            DXGKP_QUERY_RETURN(STATUS_SUCCESS);
+        }
+
+        case KMTQAITYPE_PHYSICALADAPTERCOUNT:
+        {
+            D3DKMT_PHYSICAL_ADAPTER_COUNT Count;
+
+            if (pQueryAdapterInfo->pPrivateDriverData == NULL ||
+                pQueryAdapterInfo->PrivateDriverDataSize < sizeof(Count))
+            {
+                DXGKP_QUERY_RETURN(STATUS_BUFFER_TOO_SMALL);
+            }
+            RtlZeroMemory(&Count, sizeof(Count));
+            Count.Count = 1;
+            _SEH2_TRY
+            {
+                *(D3DKMT_PHYSICAL_ADAPTER_COUNT *)pQueryAdapterInfo->pPrivateDriverData = Count;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                DXGKP_QUERY_RETURN(_SEH2_GetExceptionCode());
+            }
+            _SEH2_END;
+            DXGKP_QUERY_RETURN(STATUS_SUCCESS);
+        }
+
+        case KMTQAITYPE_GETSEGMENTGROUPSIZE:
+        {
+            D3DKMT_SEGMENTGROUPSIZEINFO GroupInfo;
+            NTSTATUS Status;
+
+            if (pQueryAdapterInfo->pPrivateDriverData == NULL ||
+                pQueryAdapterInfo->PrivateDriverDataSize < sizeof(GroupInfo))
+            {
+                DXGKP_QUERY_RETURN(STATUS_BUFFER_TOO_SMALL);
+            }
+            Status = DxgkVidMmQuerySegmentSizes(Adapter, &GroupInfo);
+            if (!NT_SUCCESS(Status))
+                DXGKP_QUERY_RETURN(Status);
+            _SEH2_TRY
+            {
+                *(D3DKMT_SEGMENTGROUPSIZEINFO *)pQueryAdapterInfo->pPrivateDriverData = GroupInfo;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                DXGKP_QUERY_RETURN(_SEH2_GetExceptionCode());
+            }
+            _SEH2_END;
+            DXGKP_QUERY_RETURN(STATUS_SUCCESS);
+        }
+
+        case KMTQAITYPE_NODEMETADATA:
+        {
+            D3DKMT_NODEMETADATA Metadata;
+            PDXGKDDI_GET_NODE_METADATA GetNodeMetadata;
+            NTSTATUS Status;
+
+            if (pQueryAdapterInfo->pPrivateDriverData == NULL ||
+                pQueryAdapterInfo->PrivateDriverDataSize < sizeof(Metadata))
+            {
+                DXGKP_QUERY_RETURN(STATUS_BUFFER_TOO_SMALL);
+            }
+            _SEH2_TRY
+            {
+                Metadata = *(D3DKMT_NODEMETADATA *)pQueryAdapterInfo->pPrivateDriverData;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                DXGKP_QUERY_RETURN(_SEH2_GetExceptionCode());
+            }
+            _SEH2_END;
+            if ((Metadata.NodeOrdinalAndAdapterIndex & 0xFFFF) >= Adapter->NodeCount ||
+                (Metadata.NodeOrdinalAndAdapterIndex >> 16) != 0)
+            {
+                DXGKP_QUERY_RETURN(STATUS_INVALID_PARAMETER);
+            }
+            GetNodeMetadata = DXGK_CB_FULL(Adapter, DxgkDdiGetNodeMetadata);
+            if (GetNodeMetadata == NULL)
+                DXGKP_QUERY_RETURN(STATUS_NOT_SUPPORTED);
+            if (!DxgkAcquireKmdCall(Adapter))
+                DXGKP_QUERY_RETURN(STATUS_DEVICE_NOT_READY);
+            RtlZeroMemory(&Metadata.NodeData, sizeof(Metadata.NodeData));
+            _SEH2_TRY
+            {
+                Status = GetNodeMetadata(Adapter->MiniportDeviceContext,
+                                         Metadata.NodeOrdinalAndAdapterIndex & 0xFFFF,
+                                         &Metadata.NodeData);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            DxgkReleaseKmdCall(Adapter);
+            if (!NT_SUCCESS(Status))
+                DXGKP_QUERY_RETURN(Status);
+            _SEH2_TRY
+            {
+                *(D3DKMT_NODEMETADATA *)pQueryAdapterInfo->pPrivateDriverData = Metadata;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                DXGKP_QUERY_RETURN(_SEH2_GetExceptionCode());
+            }
+            _SEH2_END;
+            DXGKP_QUERY_RETURN(STATUS_SUCCESS);
         }
 
         default:
