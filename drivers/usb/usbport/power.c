@@ -208,6 +208,7 @@ USBPORT_ResumeController(IN PDEVICE_OBJECT FdoDevice)
     KeReleaseSpinLock(&FdoExtension->TimerFlagsSpinLock, OldIrql);
 
     USBPORT_MiniportInterrupts(FdoDevice, FALSE);
+    USBPORT_StopIsrDpcRundown(FdoExtension);
 
     Packet->StopController(FdoExtension->MiniPortExt, 1);
 
@@ -227,6 +228,7 @@ USBPORT_ResumeController(IN PDEVICE_OBJECT FdoDevice)
 
     if (!MpStatus)
     {
+        USBPORT_StartIsrDpcRundown(FdoExtension);
         USBPORT_MiniportInterrupts(FdoDevice, TRUE);
     }
 

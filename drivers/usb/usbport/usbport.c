@@ -906,6 +906,122 @@ USBPORT_MiniportInterrupts(IN PDEVICE_OBJECT FdoDevice,
         KeReleaseSpinLock(&FdoExtension->MiniportSpinLock, OldIrql);
 }
 
+static BOOLEAN
+USBPORT_AcquireIsrDpcRundown(IN PUSBPORT_DEVICE_EXTENSION FdoExtension)
+{
+    LONG State;
+
+    for (;;)
+    {
+        State = InterlockedCompareExchange(&FdoExtension->IsrDpcRundownState, 0, 0);
+        if (State < 0)
+            return FALSE;
+
+        ASSERT(State != MAXLONG);
+        if (InterlockedCompareExchange(&FdoExtension->IsrDpcRundownState,
+                                       State + 1,
+                                       State) == State)
+        {
+            return TRUE;
+        }
+    }
+}
+
+static VOID
+USBPORT_ReleaseIsrDpcRundown(IN PUSBPORT_DEVICE_EXTENSION FdoExtension)
+{
+    LONG State;
+
+    State = InterlockedDecrement(&FdoExtension->IsrDpcRundownState);
+    /* A failed queue can release at DIRQL. Stop rechecks the state after
+     * KeSynchronizeExecution and publishes idle from a wait-safe IRQL. */
+    if (State == USBPORT_ISR_DPC_RUNDOWN_STOPPING &&
+        KeGetCurrentIrql() <= DISPATCH_LEVEL)
+    {
+        KeSetEvent(&FdoExtension->IsrDpcRundownEvent, IO_NO_INCREMENT, FALSE);
+    }
+}
+
+static BOOLEAN
+USBPORT_QueueIsrDpc(IN PUSBPORT_DEVICE_EXTENSION FdoExtension,
+                    IN PVOID SystemArgument1,
+                    IN PVOID SystemArgument2)
+{
+    if (!USBPORT_AcquireIsrDpcRundown(FdoExtension))
+        return FALSE;
+
+    if (KeInsertQueueDpc(&FdoExtension->IsrDpc, SystemArgument1, SystemArgument2))
+        return TRUE;
+
+    USBPORT_ReleaseIsrDpcRundown(FdoExtension);
+    return FALSE;
+}
+
+static BOOLEAN NTAPI
+USBPORT_IsrDpcSynchronizeRoutine(IN PVOID Context)
+{
+    UNREFERENCED_PARAMETER(Context);
+    return TRUE;
+}
+
+VOID
+USBPORT_StartIsrDpcRundown(IN PUSBPORT_DEVICE_EXTENSION FdoExtension)
+{
+    ASSERT(InterlockedCompareExchange(&FdoExtension->IsrDpcRundownState, 0, 0) ==
+           USBPORT_ISR_DPC_RUNDOWN_STOPPING);
+    KeClearEvent(&FdoExtension->IsrDpcRundownEvent);
+    InterlockedExchange(&FdoExtension->IsrDpcRundownState, 0);
+}
+
+VOID
+USBPORT_StopIsrDpcRundown(IN PUSBPORT_DEVICE_EXTENSION FdoExtension)
+{
+    LONG State;
+    ULONG MessageIndex;
+
+    for (;;)
+    {
+        State = InterlockedCompareExchange(&FdoExtension->IsrDpcRundownState, 0, 0);
+        if (State < 0)
+            break;
+
+        if (InterlockedCompareExchange(&FdoExtension->IsrDpcRundownState,
+                                       State | USBPORT_ISR_DPC_RUNDOWN_STOPPING,
+                                       State) == State)
+        {
+            break;
+        }
+    }
+
+    if (FdoExtension->InterruptMessageInfo)
+    {
+        for (MessageIndex = 0; MessageIndex < FdoExtension->InterruptMessageInfo->MessageCount; MessageIndex++)
+        {
+            PKINTERRUPT InterruptObject = FdoExtension->InterruptMessageInfo->MessageInfo[MessageIndex].InterruptObject;
+
+            if (InterruptObject)
+                KeSynchronizeExecution(InterruptObject, USBPORT_IsrDpcSynchronizeRoutine, FdoExtension);
+        }
+    }
+    else if (FdoExtension->InterruptObject)
+    {
+        KeSynchronizeExecution(FdoExtension->InterruptObject, USBPORT_IsrDpcSynchronizeRoutine, FdoExtension);
+    }
+
+    if (KeRemoveQueueDpc(&FdoExtension->IsrDpc))
+        USBPORT_ReleaseIsrDpcRundown(FdoExtension);
+
+    if (InterlockedCompareExchange(&FdoExtension->IsrDpcRundownState, 0, 0) ==
+        USBPORT_ISR_DPC_RUNDOWN_STOPPING)
+    {
+        KeSetEvent(&FdoExtension->IsrDpcRundownEvent, IO_NO_INCREMENT, FALSE);
+    }
+
+    KeWaitForSingleObject(&FdoExtension->IsrDpcRundownEvent, Executive, KernelMode, FALSE, NULL);
+    ASSERT(InterlockedCompareExchange(&FdoExtension->IsrDpcRundownState, 0, 0) ==
+           USBPORT_ISR_DPC_RUNDOWN_STOPPING);
+}
+
 VOID
 NTAPI
 USBPORT_SoftInterruptDpc(IN PRKDPC Dpc,
@@ -921,7 +1037,7 @@ USBPORT_SoftInterruptDpc(IN PRKDPC Dpc,
     FdoDevice = DeferredContext;
     FdoExtension = FdoDevice->DeviceExtension;
 
-    if (!KeInsertQueueDpc(&FdoExtension->IsrDpc, NULL, (PVOID)1))
+    if (!USBPORT_QueueIsrDpc(FdoExtension, NULL, (PVOID)1))
     {
         InterlockedDecrement(&FdoExtension->IsrDpcCounter);
     }
@@ -1504,7 +1620,7 @@ USBPORT_IsrDpcHandler(IN PDEVICE_OBJECT FdoDevice,
 
     if (InterlockedIncrement(&FdoExtension->IsrDpcHandlerCounter))
     {
-        KeInsertQueueDpc(&FdoExtension->IsrDpc, NULL, NULL);
+        USBPORT_QueueIsrDpc(FdoExtension, NULL, NULL);
         InterlockedDecrement(&FdoExtension->IsrDpcHandlerCounter);
         return;
     }
@@ -1618,6 +1734,7 @@ USBPORT_IsrDpc(IN PRKDPC Dpc,
     }
 
     DPRINT_INT("USBPORT_IsrDpc: exit\n");
+    USBPORT_ReleaseIsrDpcRundown(FdoExtension);
 }
 
 BOOLEAN
@@ -1654,7 +1771,7 @@ USBPORT_InterruptService(IN PKINTERRUPT Interrupt,
              * has serviced the controller.
              */
             Packet->DisableInterrupts(FdoExtension->MiniPortExt);
-            KeInsertQueueDpc(&FdoExtension->IsrDpc, NULL, NULL);
+            USBPORT_QueueIsrDpc(FdoExtension, NULL, NULL);
         }
     }
 
