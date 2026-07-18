@@ -3069,7 +3069,7 @@ DxgkSetVidPnSourceOwner1(
         return STATUS_INVALID_PARAMETER;
 
     Owner = pData->Version0;
-    return DxgkSetVidPnSourceOwner(&Owner);
+    return DxgkpSetVidPnSourceOwnerWithFlagsAndAccessMode(&Owner, pData->Flags.Value, KernelMode);
 }
 
 static NTSTATUS
@@ -5224,7 +5224,7 @@ DxgkpDispatchBufferedIoctl(
                 return STATUS_BUFFER_TOO_SMALL;
 
             pOwner1 = (D3DKMT_SETVIDPNSOURCEOWNER1 *)SystemBuffer;
-            Status = DxgkpSetVidPnSourceOwnerWithAccessMode(&pOwner1->Version0, EmbeddedBufferMode);
+            Status = DxgkpSetVidPnSourceOwnerWithFlagsAndAccessMode(&pOwner1->Version0, pOwner1->Flags.Value, EmbeddedBufferMode);
             return Status;
         }
 
