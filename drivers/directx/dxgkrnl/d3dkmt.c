@@ -4850,8 +4850,8 @@ DxgkpDispatchBufferedIoctl(
                 }
             }
 
-            if (NT_SUCCESS(Status) && !pEvict->Flags.EvictOnlyIfNecessary)
-                Status = DxgkGpuVaEvict(Adapter, Device->ProcessRecord, AllocationList, pEvict->NumAllocations, &pEvict->NumBytesToTrim);
+            if (NT_SUCCESS(Status))
+                Status = DxgkGpuVaEvict(Adapter, Device->ProcessRecord, AllocationList, pEvict->NumAllocations, pEvict->Flags.EvictOnlyIfNecessary != 0, &pEvict->NumBytesToTrim);
 
             ExFreePoolWithTag(AllocationList, TAG_DXGK_GPUVA);
             DxgkDereferenceDevice(Device);
