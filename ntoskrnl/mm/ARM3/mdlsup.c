@@ -52,7 +52,8 @@ MiMapLockedPagesInUserSpace(
     _In_ PMDL Mdl,
     _In_ PVOID StartVa,
     _In_ MEMORY_CACHING_TYPE CacheType,
-    _In_opt_ PVOID BaseAddress)
+    _In_opt_ PVOID BaseAddress,
+    _In_ ULONG ProtectionMask)
 {
     NTSTATUS Status;
     PEPROCESS Process = PsGetCurrentProcess();
@@ -112,7 +113,7 @@ MiMapLockedPagesInUserSpace(
     RtlZeroMemory(Vad, sizeof(*Vad));
     Vad->u2.VadFlags2.LongVad = 1;
     Vad->u.VadFlags.VadType = VadDevicePhysicalMemory;
-    Vad->u.VadFlags.Protection = MM_READWRITE;
+    Vad->u.VadFlags.Protection = ProtectionMask;
     Vad->u.VadFlags.PrivateMemory = 1;
 
     /* Did the caller specify an address? */
@@ -203,10 +204,7 @@ MiMapLockedPagesInUserSpace(
         MiIncrementPageTableReferences(BaseAddress);
 
         /* Set up our basic user PTE */
-        MI_MAKE_HARDWARE_PTE_USER(&TempPte,
-                                  PointerPte,
-                                  MM_READWRITE,
-                                  *MdlPages);
+        MI_MAKE_HARDWARE_PTE_USER(&TempPte, PointerPte, ProtectionMask, *MdlPages);
 
         EffectiveCacheAttribute = CacheAttribute;
 
@@ -715,11 +713,19 @@ MmMapLockedPagesSpecifyCache(IN PMDL Mdl,
 #if defined(_M_ARM64)
     PMMPTE FirstPte;
 #endif
+    ULONG MappingFlags;
+    ULONG ProtectionMask;
 
     //
     // Sanity check
     //
     ASSERT(Mdl->ByteCount != 0);
+
+    MappingFlags = Priority & (MdlMappingNoWrite | MdlMappingNoExecute);
+    Priority &= ~(MdlMappingNoWrite | MdlMappingNoExecute);
+    /* Both user data protections are NX where supported; NoWrite selects read-only. */
+    ProtectionMask = (MappingFlags & MdlMappingNoWrite) ? MM_READONLY : MM_READWRITE;
+    UNREFERENCED_PARAMETER(Priority);
 
     //
     // Get the base
@@ -863,7 +869,7 @@ MmMapLockedPagesSpecifyCache(IN PMDL Mdl,
         return Base;
     }
 
-    return MiMapLockedPagesInUserSpace(Mdl, Base, CacheType, BaseAddress);
+    return MiMapLockedPagesInUserSpace(Mdl, Base, CacheType, BaseAddress, ProtectionMask);
 }
 
 /*

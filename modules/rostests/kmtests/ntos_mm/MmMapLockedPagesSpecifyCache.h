@@ -15,6 +15,7 @@ typedef struct _QUERY_BUFFER
     PVOID Buffer;
     BOOLEAN Cached;
     NTSTATUS Status;
+    ULONG MappingFlags;
 } QUERY_BUFFER, *PQUERY_BUFFER;
 
 typedef struct _READ_BUFFER
@@ -29,5 +30,7 @@ typedef struct _READ_BUFFER
 #define IOCTL_CLEAN        3
 
 #define WRITE_PATTERN 0xA4A5A6A7
+#define TEST_MDL_MAPPING_NO_WRITE   0x80000000UL
+#define TEST_MDL_MAPPING_NO_EXECUTE 0x40000000UL
 
 #endif /* !defined _KMTEST_MMMAPLOCKEDPAGESSPECIFYCACHE_H_ */
