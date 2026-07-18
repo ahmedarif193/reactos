@@ -1016,16 +1016,20 @@ NtPowerInformation(IN POWER_INFORMATION_LEVEL PowerInformationLevel,
             {
                 for (i = 0; i < ProcessorCount; i++)
                 {
-                    PKPRCB Prcb = KiProcessorBlock[i];
+#ifdef _M_ARM64
+                    ULONG CpuMHz = KiArm64GetProcessorClockMHz(i);
+#else
+                    ULONG CpuMHz = KiProcessorBlock[i]->MHz;
+#endif
 
                     PowerInformation[i].Number = i;
 
                     /* There is no processor frequency scaling, so the
                        frequency measured at boot is both the current
                        and the maximum frequency */
-                    PowerInformation[i].MaxMhz = Prcb->MHz;
-                    PowerInformation[i].CurrentMhz = Prcb->MHz;
-                    PowerInformation[i].MhzLimit = Prcb->MHz;
+                    PowerInformation[i].MaxMhz = CpuMHz;
+                    PowerInformation[i].CurrentMhz = CpuMHz;
+                    PowerInformation[i].MhzLimit = CpuMHz;
 
                     /* No processor idle states are implemented */
                     PowerInformation[i].MaxIdleState = 0;
