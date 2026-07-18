@@ -563,9 +563,11 @@ D3DKMTCreateAllocation(
     SIZE_T TotalPrivateSize = 0;
     ULONG_PTR Information = 0;
     D3DKMT_HANDLE InputResource;
+    UINT InputAllocationCount;
     NTSTATUS CleanupStatus;
     NTSTATUS Status;
     BOOLEAN IoctlSucceeded = FALSE;
+    BOOLEAN InputCreatesResource;
     BOOLEAN StandardAllocation;
     UINT i;
 
@@ -578,26 +580,29 @@ D3DKMTCreateAllocation(
 
     UserAllocationInfo = Captured.pAllocationInfo;
     InputResource = Captured.hResource;
+    InputAllocationCount = Captured.NumAllocations;
+    InputCreatesResource = Captured.Flags.CreateResource != 0;
     StandardAllocation = ((*(CONST UINT *)&Captured.Flags & 0x00010000U) != 0);
 
     if (Captured.NumAllocations == 0 ||
         Captured.NumAllocations > D3DKMT_BRIDGE_MAX_ALLOCATIONS ||
-        Captured.pAllocationInfo == NULL)
+        Captured.pAllocationInfo == NULL ||
+        (InputCreatesResource && InputResource != 0))
     {
         return STATUS_INVALID_PARAMETER;
     }
 
-    Status = WddmBridgeSizeForCount(Captured.NumAllocations, sizeof(*AllocationInfo), &AllocationInfoSize);
+    Status = WddmBridgeSizeForCount(InputAllocationCount, sizeof(*AllocationInfo), &AllocationInfoSize);
     if (!NT_SUCCESS(Status))
         return Status;
 
-    Status = WddmBridgeSizeForCount(Captured.NumAllocations, sizeof(*AllocationPrivateBuffers), &PointerArraySize);
+    Status = WddmBridgeSizeForCount(InputAllocationCount, sizeof(*AllocationPrivateBuffers), &PointerArraySize);
     if (!NT_SUCCESS(Status))
         return Status;
-    Status = WddmBridgeSizeForCount(Captured.NumAllocations, sizeof(*AllocationPrivateCapture), &AllocationPrivateCaptureSize);
+    Status = WddmBridgeSizeForCount(InputAllocationCount, sizeof(*AllocationPrivateCapture), &AllocationPrivateCaptureSize);
     if (!NT_SUCCESS(Status))
         return Status;
-    Status = WddmBridgeSizeForCount(Captured.NumAllocations, sizeof(*CreatedHandles), &CreatedHandlesSize);
+    Status = WddmBridgeSizeForCount(InputAllocationCount, sizeof(*CreatedHandles), &CreatedHandlesSize);
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -723,7 +728,7 @@ D3DKMTCreateAllocation(
         Captured.pPrivateRuntimeData = NULL;
     }
 
-    for (i = 0; i < Captured.NumAllocations; ++i)
+    for (i = 0; i < InputAllocationCount; ++i)
     {
         AllocationPrivateCapture[i].UserBuffer = AllocationInfo[i].pPrivateDriverData;
         AllocationPrivateCapture[i].Size = AllocationInfo[i].PrivateDriverDataSize;
@@ -771,15 +776,15 @@ D3DKMTCreateAllocation(
     if (!NT_SUCCESS(Status))
         goto Cleanup;
     IoctlSucceeded = TRUE;
-    for (i = 0; i < Captured.NumAllocations; ++i)
+    for (i = 0; i < InputAllocationCount; ++i)
         CreatedHandles[i] = AllocationInfo[i].hAllocation;
-    if (Information != sizeof(Captured))
+    if (Information != sizeof(Captured) || Captured.NumAllocations != InputAllocationCount)
     {
         Status = STATUS_INFO_LENGTH_MISMATCH;
         goto Rollback;
     }
 
-    for (i = 0; i < Captured.NumAllocations; ++i)
+    for (i = 0; i < InputAllocationCount; ++i)
     {
         if (CreatedHandles[i] == 0)
         {
@@ -788,7 +793,13 @@ D3DKMTCreateAllocation(
         }
     }
 
-    for (i = 0; NT_SUCCESS(Status) && i < Captured.NumAllocations; ++i)
+    if ((InputCreatesResource && Captured.hResource == 0) || (!InputCreatesResource && Captured.hResource != InputResource))
+    {
+        Status = STATUS_INVALID_HANDLE;
+        goto Rollback;
+    }
+
+    for (i = 0; NT_SUCCESS(Status) && i < InputAllocationCount; ++i)
     {
         if (AllocationPrivateCapture[i].Size != 0)
             Status = WddmBridgeSafeCopyTo(AllocationPrivateCapture[i].UserBuffer, AllocationPrivateBuffers[i], AllocationPrivateCapture[i].Size);
@@ -797,7 +808,7 @@ D3DKMTCreateAllocation(
         Status = WddmBridgeSafeCopyTo((PUCHAR)pData + FIELD_OFFSET(D3DKMT_CREATEALLOCATION, hResource), &Captured.hResource, sizeof(Captured.hResource));
     if (NT_SUCCESS(Status))
         Status = WddmBridgeSafeCopyTo((PUCHAR)pData + FIELD_OFFSET(D3DKMT_CREATEALLOCATION, hGlobalShare), &Captured.hGlobalShare, sizeof(Captured.hGlobalShare));
-    for (i = 0; NT_SUCCESS(Status) && i < Captured.NumAllocations; ++i)
+    for (i = 0; NT_SUCCESS(Status) && i < InputAllocationCount; ++i)
         Status = WddmBridgeSafeCopyTo((PUCHAR)UserAllocationInfo + ((SIZE_T)i * sizeof(*UserAllocationInfo)) + FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, hAllocation), &AllocationInfo[i].hAllocation, sizeof(AllocationInfo[i].hAllocation));
     if (NT_SUCCESS(Status))
         goto Cleanup;
@@ -805,30 +816,26 @@ D3DKMTCreateAllocation(
 Rollback:
     if (IoctlSucceeded)
     {
+        UINT CreatedHandleCount = 0;
+
+        RtlZeroMemory(&DestroyAllocation, sizeof(DestroyAllocation));
         DestroyAllocation.hDevice = Captured.hDevice;
-        if (InputResource == 0 && Captured.hResource != 0)
+        if (InputCreatesResource && Captured.hResource != 0)
         {
             DestroyAllocation.hResource = Captured.hResource;
-            DestroyAllocation.phAllocationList = NULL;
-            DestroyAllocation.AllocationCount = 0;
+            CleanupStatus = WddmBridgeSendIoctl(IOCTL_D3DKMT_DESTROYALLOCATION, &DestroyAllocation, sizeof(DestroyAllocation), NULL, 0);
         }
         else
         {
-            DestroyAllocation.hResource = InputResource;
-            DestroyAllocation.AllocationCount = 1;
-            for (i = 0; i < Captured.NumAllocations; ++i)
+            for (i = 0; i < InputAllocationCount; ++i)
             {
-                if (CreatedHandles[i] == 0)
-                    continue;
-                DestroyAllocation.phAllocationList = &CreatedHandles[i];
-                CleanupStatus = WddmBridgeSendIoctl(IOCTL_D3DKMT_DESTROYALLOCATION, &DestroyAllocation, sizeof(DestroyAllocation), NULL, 0);
-                if (!NT_SUCCESS(CleanupStatus))
-                    DPRINT1("D3DKMTCreateAllocation: rollback of allocation 0x%X failed with 0x%08lX\n", CreatedHandles[i], CleanupStatus);
+                if (CreatedHandles[i] != 0)
+                    CreatedHandles[CreatedHandleCount++] = CreatedHandles[i];
             }
-            CleanupStatus = STATUS_SUCCESS;
+            DestroyAllocation.phAllocationList = CreatedHandles;
+            DestroyAllocation.AllocationCount = CreatedHandleCount;
+            CleanupStatus = CreatedHandleCount == 0 ? STATUS_SUCCESS : WddmBridgeSendIoctl(IOCTL_D3DKMT_DESTROYALLOCATION, &DestroyAllocation, sizeof(DestroyAllocation), NULL, 0);
         }
-        if (InputResource == 0 && Captured.hResource != 0)
-            CleanupStatus = WddmBridgeSendIoctl(IOCTL_D3DKMT_DESTROYALLOCATION, &DestroyAllocation, sizeof(DestroyAllocation), NULL, 0);
         if (!NT_SUCCESS(CleanupStatus))
             DPRINT1("D3DKMTCreateAllocation: rollback failed with 0x%08lX\n", CleanupStatus);
     }
@@ -836,7 +843,7 @@ Rollback:
 Cleanup:
     if (AllocationPrivateBuffers != NULL)
     {
-        for (i = 0; i < Captured.NumAllocations; ++i)
+        for (i = 0; i < InputAllocationCount; ++i)
         {
             if (AllocationPrivateBuffers[i] != NULL)
                 ExFreePoolWithTag(AllocationPrivateBuffers[i], TAG_WDDM_BRIDGE);

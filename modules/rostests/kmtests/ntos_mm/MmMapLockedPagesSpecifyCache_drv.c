@@ -12,6 +12,9 @@
 
 #include "MmMapLockedPagesSpecifyCache.h"
 
+C_ASSERT(MdlMappingNoWrite == TEST_MDL_MAPPING_NO_WRITE);
+C_ASSERT(MdlMappingNoExecute == TEST_MDL_MAPPING_NO_EXECUTE);
+
 static KMT_IRP_HANDLER TestIrpHandler;
 static KMT_MESSAGE_HANDLER TestMessageHandler;
 
@@ -178,7 +181,7 @@ TestMessageHandler(
                             SehStatus = STATUS_SUCCESS;
                             _SEH2_TRY
                             {
-                                CurrentUser = MmMapLockedPagesSpecifyCache(CurrentMdl, UserMode, CacheType, QueryBuffer->Buffer, FALSE, NormalPagePriority);
+                                CurrentUser = MmMapLockedPagesSpecifyCache(CurrentMdl, UserMode, CacheType, QueryBuffer->Buffer, FALSE, NormalPagePriority | QueryBuffer->MappingFlags);
                             }
                             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
                             {

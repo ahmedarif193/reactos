@@ -530,6 +530,78 @@ static void Test_SetDisplayMode_Negative(void)
        (unsigned long)Status, faulted ? " (faulted)" : "");
 }
 
+/* A primary allocation is a device-owned handle, even when both devices use the same adapter. */
+static void Test_SetDisplayMode_CrossDeviceAllocation(void)
+{
+    D3DKMT_HANDLE hAdapter = 0, hOwnerDevice = 0, hOtherDevice = 0;
+    D3DKMT_CREATEALLOCATION CreateAllocation;
+    D3DDDI_ALLOCATIONINFO AllocationInfo;
+    D3DKMT_DESTROYALLOCATION DestroyAllocation;
+    D3DKMT_SETDISPLAYMODE SetMode;
+    struct { UINT Width; UINT Height; UINT Bpp; } PrivateData;
+    NTSTATUS Status;
+    BOOL faulted;
+
+    LOADFN(PFND3DKMT_CREATEALLOCATION, pCreate, "D3DKMTCreateAllocation");
+    LOADFN(PFND3DKMT_DESTROYALLOCATION, pDestroy, "D3DKMTDestroyAllocation");
+    LOADFN(PFND3DKMT_SETDISPLAYMODE, pSetMode, "D3DKMTSetDisplayMode");
+
+    hAdapter = OpenAdapterFromDisplay1();
+    if (hAdapter == 0)
+    {
+        skip("Cannot open adapter for SetDisplayMode cross-device test\n");
+        return;
+    }
+    hOwnerDevice = CreateTestDevice(hAdapter);
+    hOtherDevice = CreateTestDevice(hAdapter);
+    if (hOwnerDevice == 0 || hOtherDevice == 0)
+    {
+        skip("Cannot create two devices for SetDisplayMode cross-device test\n");
+        goto Cleanup;
+    }
+
+    PrivateData.Width = 64;
+    PrivateData.Height = 64;
+    PrivateData.Bpp = 32;
+    memset(&AllocationInfo, 0, sizeof(AllocationInfo));
+    AllocationInfo.pPrivateDriverData = &PrivateData;
+    AllocationInfo.PrivateDriverDataSize = sizeof(PrivateData);
+    memset(&CreateAllocation, 0, sizeof(CreateAllocation));
+    CreateAllocation.hDevice = hOwnerDevice;
+    CreateAllocation.NumAllocations = 1;
+    CreateAllocation.pAllocationInfo = &AllocationInfo;
+    Status = pCreate(&CreateAllocation);
+    if (!NT_SUCCESS(Status) || AllocationInfo.hAllocation == 0)
+    {
+        skip("Cannot create primary candidate for SetDisplayMode cross-device test (0x%08lx)\n", (unsigned long)Status);
+        goto Cleanup;
+    }
+
+    memset(&SetMode, 0, sizeof(SetMode));
+    SetMode.hDevice = hOtherDevice;
+    SetMode.hPrimaryAllocation = AllocationInfo.hAllocation;
+    Status = STATUS_SUCCESS;
+    faulted = FALSE;
+    _SEH2_TRY { Status = pSetMode(&SetMode); }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) { faulted = TRUE; }
+    _SEH2_END;
+    ok(faulted || !NT_SUCCESS(Status), "SetDisplayMode must reject an allocation owned by another device on the same adapter, got 0x%08lx%s\n", (unsigned long)Status, faulted ? " (faulted)" : "");
+
+    memset(&DestroyAllocation, 0, sizeof(DestroyAllocation));
+    DestroyAllocation.hDevice = hOwnerDevice;
+    DestroyAllocation.phAllocationList = &AllocationInfo.hAllocation;
+    DestroyAllocation.AllocationCount = 1;
+    Status = pDestroy(&DestroyAllocation);
+    ok(NT_SUCCESS(Status), "DestroyAllocation after SetDisplayMode cross-device rejection failed 0x%08lx\n", (unsigned long)Status);
+
+Cleanup:
+    if (hOtherDevice != 0)
+        DestroyTestDevice(hOtherDevice);
+    if (hOwnerDevice != 0)
+        DestroyTestDevice(hOwnerDevice);
+    CloseAdapter(hAdapter);
+}
+
 /*
  * ---- Gamma ramp: NULL contract + non-destructive round-trip ----
  * Reads the current ramp through GDI (same 256x3x16 layout as the D3DKMT ramp)
@@ -943,6 +1015,7 @@ START_TEST(displayext)
     /* Mode enumeration / mode set */
     Test_GetDisplayModeList_Deep();
     Test_SetDisplayMode_Negative();
+    Test_SetDisplayMode_CrossDeviceAllocation();
 
     /* Gamma */
     Test_GammaRamp();
