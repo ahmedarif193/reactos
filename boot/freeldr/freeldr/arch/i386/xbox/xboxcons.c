@@ -36,7 +36,7 @@ XboxConsPutChar(int c)
     NeedScroll = (CurrentCursorY >= Height);
     if (NeedScroll)
     {
-        FbConsScrollUp(CurrentAttr);
+        FbConsScrollUp(CurrentAttr, 1);
         --CurrentCursorY;
     }
 
