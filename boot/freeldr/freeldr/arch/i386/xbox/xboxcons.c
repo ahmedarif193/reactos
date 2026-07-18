@@ -36,8 +36,7 @@ XboxConsPutChar(int c)
     NeedScroll = (CurrentCursorY >= Height);
     if (NeedScroll)
     {
-        /* Keep single-line scrolling: jump-scroll batching is untested on Xbox hardware */
-        FbConsScrollUp(CurrentAttr, 1);
+        FbConsScrollUp(CurrentAttr);
         --CurrentCursorY;
     }
 

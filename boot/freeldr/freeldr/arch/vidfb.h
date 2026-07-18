@@ -151,8 +151,7 @@ FbConsPutChar(
 
 VOID
 FbConsScrollTextCache(
-    _In_ UCHAR Attr,
-    _In_ ULONG Lines);
+    _In_ UCHAR Attr);
 
 VOID
 FbConsMarkDirtyRect(
@@ -201,5 +200,4 @@ FbConsCopyOffScreenBufferToVRAM(
 
 VOID
 FbConsScrollUp(
-    _In_ UCHAR Attr,
-    _In_ ULONG Lines);
+    _In_ UCHAR Attr);
