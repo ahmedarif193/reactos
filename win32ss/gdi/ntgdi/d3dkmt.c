@@ -845,11 +845,13 @@ NtGdiDdDDICreateAllocation2(_Inout_ D3DKMT_CREATEALLOCATION* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
     D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
+    /* The win32k PCH exposes the shared union through its INFO1 alias; the
+     * v3 callback preserves INFO2 identity before any element is accessed. */
     D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->pAllocationInfo,
                                     unnamedParam1->NumAllocations);
     D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->pPrivateDriverData,
                                     unnamedParam1->PrivateDriverDataSize);
-    D3DKMT_CALL_CALLBACK(RxgkIntPfnCreateAllocation, unnamedParam1);
+    D3DKMT_CALL_CALLBACK(RxgkIntPfnCreateAllocation2, unnamedParam1);
 }
 
 NTSTATUS

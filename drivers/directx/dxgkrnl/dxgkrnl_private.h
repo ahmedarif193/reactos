@@ -183,6 +183,7 @@ NTSTATUS NTAPI DxgkpProbeOutputBuffer(_Out_writes_bytes_(BufferSize) PVOID Desti
 NTSTATUS NTAPI DxgkpCaptureUserBuffer(_In_reads_bytes_opt_(BufferSize) CONST VOID *SourceBuffer, _In_ SIZE_T BufferSize, _In_ KPROCESSOR_MODE AccessMode, _In_ ULONG PoolTag, _Outptr_result_bytebuffer_maybenull_(BufferSize) PVOID *CapturedBuffer);
 NTSTATUS NTAPI DxgkpCreateContextWithAccessMode(_Inout_ D3DKMT_CREATECONTEXT *CreateContext, _In_ KPROCESSOR_MODE EmbeddedBufferMode);
 NTSTATUS NTAPI DxgkpCreateAllocationWithAccessMode(_Inout_ D3DKMT_CREATEALLOCATION *CreateAllocation, _In_ KPROCESSOR_MODE EmbeddedBufferMode);
+NTSTATUS NTAPI DxgkpCreateAllocation2WithAccessMode(_Inout_ D3DKMT_CREATEALLOCATION *CreateAllocation, _In_ KPROCESSOR_MODE EmbeddedBufferMode);
 NTSTATUS NTAPI DxgkpSetVidPnSourceOwnerWithAccessMode(_In_ D3DKMT_SETVIDPNSOURCEOWNER *SetVidPnSourceOwner, _In_ KPROCESSOR_MODE EmbeddedBufferMode);
 
 /* ========================================================================
@@ -537,6 +538,8 @@ struct _DXGKRNL_ADAPTER
     DXGMMS2_STOP_REASON         Mms2StopReason;
     DXGMMS2_SCHEDULER_TIMELINE_INTERFACE_V1 Mms2Timeline;
     volatile LONG               Mms2TimelineValid;
+    volatile LONG               Mms2TimelineCallsOpen;
+    volatile LONG               Mms2TimelineActiveCalls;
 
     /* Serializes start against stop, remove, and boot-display handover. */
     KEVENT                      AdapterStartCompletedEvent;
@@ -1745,6 +1748,10 @@ DxgkVidMmGetAllocationPrimaryAddress(
 
 NTSTATUS
 DxgkCreateAllocation(
+    _Inout_ D3DKMT_CREATEALLOCATION *pCreateAllocation);
+
+NTSTATUS
+DxgkCreateAllocation2(
     _Inout_ D3DKMT_CREATEALLOCATION *pCreateAllocation);
 
 NTSTATUS
