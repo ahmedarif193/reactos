@@ -499,7 +499,6 @@ typedef struct _D3DDDI_ALLOCATIONLIST
         };
         UINT                Value;
     };
-    D3DKMT_HANDLE       hDeviceSpecificAllocation;
 } D3DDDI_ALLOCATIONLIST;
 
 typedef struct _D3DDDI_PATCHLOCATIONLIST

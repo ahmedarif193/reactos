@@ -24,14 +24,12 @@
  *   6. The GPU executes the copy.  Completion is signalled via the normal
  *      fence/interrupt path (DxgkMmsCommandCompleted).
  *
- * Work-item serialisation
- * ------------------------
- * PageIn / PageOut requests arrive from dxgkrnl at PASSIVE_LEVEL but must
- * be serialised to prevent concurrent paging operations racing on the same
- * allocation.  dxgmms1 queues a DXGMMS_PAGING_WORK_ITEM on the system
- * CriticalWorkQueue and blocks the caller on a KEVENT until the work item
- * signals completion.  This keeps the paging thread at PASSIVE_LEVEL and
- * avoids holding any spinlock during the (potentially slow) DMA setup.
+ * PageIn / PageOut boundary
+ * -------------------------
+ * The current PageIn / PageOut entry points do not carry the transfer size or
+ * system-memory MDL required by DXGK_OPERATION_TRANSFER. They therefore return
+ * STATUS_NOT_SUPPORTED instead of manufacturing an invalid zero-byte request.
+ * Active VidMm paging builds the complete miniport operation directly.
  *
  * Aperture operations (MAP / UNMAP) do not require a DMA transfer;
  * they only build and submit a paging buffer that programs the GPU's
@@ -294,10 +292,8 @@ typedef NTSTATUS
  *   Submitted  : DxgkMmsSubmitPagingBuffer (queued to copy engine).
  *   Freed      : DxgkMmsFreePagingBuffer (at adapter-remove time).
  *
- * Note that only ONE paging buffer exists per adapter (allocated at start
- * time) because paging operations are serialised through work items.  The
- * buffer is reused for every successive paging operation once the GPU
- * signals completion.
+ * Only one paging buffer exists per adapter. Callers must serialize its use
+ * and wait for the submitted fence before building the next operation.
  * ========================================================================= */
 typedef struct _DXGMMS_PAGING_BUFFER
 {
@@ -344,107 +340,6 @@ typedef struct _DXGMMS_PAGING_BUFFER
     LIST_ENTRY          Entry;
 
 } DXGMMS_PAGING_BUFFER, *PDXGMMS_PAGING_BUFFER;
-
-
-/* =========================================================================
- * DXGMMS_PAGING_WORK_ITEM
- *
- * Per-operation work item posted to the system work queue to ensure that
- * paging operations execute at PASSIVE_LEVEL even when the caller (e.g. the
- * VidMm eviction path) is running at PASSIVE but must not block the current
- * thread for an extended period.
- *
- * Lifecycle:
- *   Allocated  : DxgkMmsPageIn / DxgkMmsPageOut from NonPagedPool.
- *   Queued     : ExQueueWorkItem(CriticalWorkQueue) — paging is critical
- *                work that must not be starved behind background tasks.
- *   Executed   : DxgkMmsPagingWorker (BuildPagingBuffer + SubmitPagingBuffer
- *                + wait for fence).
- *   Signalled  : KeSetEvent(Completed) so the calling thread unblocks.
- *   Freed      : by the calling thread after KeWaitForSingleObject returns.
- * ========================================================================= */
-typedef struct _DXGMMS_PAGING_WORK_ITEM
-{
-    /*
-     * ExInitializeWorkItem / ExQueueWorkItem infrastructure.
-     * MUST be the first field because ExInitializeWorkItem writes to this
-     * structure via a PWORK_QUEUE_ITEM pointer.
-     */
-    WORK_QUEUE_ITEM         WorkItem;
-
-    /*
-     * Adapter on which the paging operation runs.
-     * Validated (Signature check) at worker entry; never modified after
-     * ExQueueWorkItem.
-     */
-    PDXGMMS_ADAPTER_CONTEXT Adapter;
-
-    /*
-     * Paging operation type.  One of the DXGK_OPERATION_* constants defined
-     * in vidmm.h (DXGK_OPERATION_TRANSFER, DXGK_OPERATION_FILL, etc.).
-     */
-    ULONG                   Operation;
-
-    /*
-     * dxgkrnl allocation handle (PDXGKRNL_ALLOCATION * cast to PVOID).
-     * Passed verbatim to DXGKARG_BUILDPAGINGBUFFER.Transfer.hAllocation.
-     */
-    PVOID                   Allocation;
-
-    /*
-     * Source offset within the source segment (or MDL byte offset for
-     * system-memory sources).  For TRANSFER operations this is the
-     * starting byte offset within SrcSegmentId.
-     */
-    ULONGLONG               SrcOffset;
-
-    /*
-     * Destination offset within the destination segment (or MDL byte
-     * offset for system-memory destinations).
-     */
-    ULONGLONG               DstOffset;
-
-    /*
-     * Number of bytes to transfer.
-     */
-    SIZE_T                  TransferSize;
-
-    /*
-     * Source segment identifier (1-based).  0 means system memory; in
-     * that case SysMdl carries the MDL for the system-memory side.
-     */
-    ULONG                   SrcSegmentId;
-
-    /*
-     * Destination segment identifier (1-based).  0 means system memory.
-     */
-    ULONG                   DstSegmentId;
-
-    /*
-     * MDL for the system memory side of a TRANSFER operation.
-     * Non-NULL when SrcSegmentId == 0 (page-in: sys->VRAM)
-     * or DstSegmentId == 0 (page-out: VRAM->sys).
-     * NULL for VRAM-to-VRAM transfers.
-     */
-    PVOID                   SysMdl;
-
-    /*
-     * Synchronisation event.  The submitting thread calls
-     * KeWaitForSingleObject on this event; the worker calls KeSetEvent
-     * after the paging DMA buffer has been submitted and the GPU fence
-     * has been waited on.
-     *
-     * Type: SynchronizationEvent (auto-reset).
-     */
-    KEVENT                  Completed;
-
-    /*
-     * NTSTATUS result of the paging operation.  Written by the worker
-     * before signalling Completed; read by the caller after waking.
-     */
-    NTSTATUS                Status;
-
-} DXGMMS_PAGING_WORK_ITEM, *PDXGMMS_PAGING_WORK_ITEM;
 
 
 /* =========================================================================
@@ -556,10 +451,9 @@ DxgkMmsSubmitPagingBuffer(
 /*
  * DxgkMmsPageIn
  *
- * Move an allocation from system memory into a VRAM segment (populate).
- * Queues a CriticalWorkQueue work item so that the DMA setup occurs at
- * PASSIVE_LEVEL in a dedicated system thread.  Blocks the calling thread
- * until the page-in is complete.
+ * Reserved interface for moving an allocation from system memory into VRAM.
+ * The signature lacks the nonzero transfer size and MDL required by the
+ * miniport paging DDI, so the implementation returns STATUS_NOT_SUPPORTED.
  *
  * Parameters:
  *   Adapter         — dxgmms1 per-adapter context.
@@ -568,9 +462,8 @@ DxgkMmsSubmitPagingBuffer(
  *   TargetOffset    — byte offset within TargetSegmentId.
  *
  * Returns:
- *   STATUS_SUCCESS          on success; allocation is resident in VRAM.
- *   STATUS_NO_MEMORY        if the work item cannot be allocated.
- *   Propagated status       from BuildPagingBuffer or SubmitPagingBuffer.
+ *   STATUS_NOT_SUPPORTED    transfer metadata is not present in this ABI.
+ *   STATUS_INVALID_PARAMETER for invalid adapter/allocation/segment input.
  *
  * IRQL: PASSIVE_LEVEL
  */
@@ -584,8 +477,9 @@ DxgkMmsPageIn(
 /*
  * DxgkMmsPageOut
  *
- * Move an allocation from a VRAM segment to system memory (evict).
- * Mirrors DxgkMmsPageIn: queues a work item, waits for completion.
+ * Reserved interface for moving an allocation from VRAM into system memory.
+ * The signature lacks the nonzero transfer size and MDL required by the
+ * miniport paging DDI, so the implementation returns STATUS_NOT_SUPPORTED.
  *
  * Parameters:
  *   Adapter      — dxgmms1 per-adapter context.
@@ -594,9 +488,8 @@ DxgkMmsPageIn(
  *   SrcOffset    — byte offset within SrcSegmentId.
  *
  * Returns:
- *   STATUS_SUCCESS          on success; allocation has been moved to system RAM.
- *   STATUS_NO_MEMORY        if the work item cannot be allocated.
- *   Propagated status       from BuildPagingBuffer or SubmitPagingBuffer.
+ *   STATUS_NOT_SUPPORTED    transfer metadata is not present in this ABI.
+ *   STATUS_INVALID_PARAMETER for invalid adapter/allocation/segment input.
  *
  * IRQL: PASSIVE_LEVEL
  */
@@ -667,7 +560,7 @@ DxgkMmsUnmapAperture(
  *
  * Block the calling thread until the GPU's copy engine has advanced its
  * completed-fence counter to at least FenceId.  Used internally by
- * DxgkMmsSubmitPagingBuffer and DxgkMmsPagingWorker.
+ * DxgkMmsSubmitPagingBuffer.
  *
  * Polls with a short exponential back-off to avoid flooding the query path.
  * Falls back to KeDelayExecutionThread for the long-sleep phase.

@@ -123,9 +123,27 @@ typedef struct _LINKED_DEVICE         *PLINKED_DEVICE;
 #define DXGK_INTERRUPT_DMA_PREEMPTED                        2
 #define DXGK_INTERRUPT_CRTC_VSYNC                           3
 #define DXGK_INTERRUPT_DMA_FAULTED                          4
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
 #define DXGK_INTERRUPT_DISPLAYONLY_VSYNC                    5
 #define DXGK_INTERRUPT_DISPLAYONLY_PRESENT_PROGRESS         6
-#define DXGK_INTERRUPT_PERIODICED_MONITORED_FENCE_SIGNALED  7
+#define DXGK_INTERRUPT_CRTC_VSYNC_WITH_MULTIPLANE_OVERLAY   7
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM1_3)
+#define DXGK_INTERRUPT_MICACAST_CHUNK_PROCESSING_COMPLETE   8
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+#define DXGK_INTERRUPT_DMA_PAGE_FAULTED                     9
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_1)
+#define DXGK_INTERRUPT_CRTC_VSYNC_WITH_MULTIPLANE_OVERLAY2 10
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
+#define DXGK_INTERRUPT_MONITORED_FENCE_SIGNALED             11
+#define DXGK_INTERRUPT_HWQUEUE_PAGE_FAULTED                 12
+#define DXGK_INTERRUPT_HWCONTEXTLIST_SWITCH_COMPLETED       13
+#define DXGK_INTERRUPT_PERIODIC_MONITORED_FENCE_SIGNALED    14
+#define DXGK_INTERRUPT_PERIODICED_MONITORED_FENCE_SIGNALED  DXGK_INTERRUPT_PERIODIC_MONITORED_FENCE_SIGNALED
+#endif
 
 
 /* =========================================================================
@@ -140,6 +158,7 @@ typedef enum _DXGK_CHILD_DEVICE_TYPE
     TypeUninitialized   = 0,
     TypeVideoOutput     = 1,
     TypeOther           = 2,
+    TypeIntegratedDisplay = 3,
 } DXGK_CHILD_DEVICE_TYPE;
 
 
@@ -167,17 +186,24 @@ typedef struct _DXGK_VIDEO_OUTPUT_CAPABILITIES
     BOOLEAN                             SupportsSdtvModes;
 } DXGK_VIDEO_OUTPUT_CAPABILITIES;
 
+typedef struct _DXGK_INTEGRATED_DISPLAY_CHILD
+{
+    D3DKMDT_VIDEO_OUTPUT_TECHNOLOGY InterfaceTechnology;
+    USHORT                          DescriptorLength;
+} DXGK_INTEGRATED_DISPLAY_CHILD, *PDXGK_INTEGRATED_DISPLAY_CHILD;
+
 typedef struct _DXGK_CHILD_CAPABILITIES
 {
-    DXGK_CHILD_DEVICE_HPD_AWARENESS    HpdAwareness;
     union
     {
         DXGK_VIDEO_OUTPUT_CAPABILITIES VideoOutput;
         struct
         {
-            UINT    Reserved;
+            UINT MustBeZero;
         } Other;
+        DXGK_INTEGRATED_DISPLAY_CHILD IntegratedDisplayChild;
     } Type;
+    DXGK_CHILD_DEVICE_HPD_AWARENESS HpdAwareness;
 } DXGK_CHILD_CAPABILITIES;
 
 
@@ -208,6 +234,9 @@ typedef enum _DXGK_CHILD_STATUS_TYPE
     StatusUninitialized = 0,
     StatusConnection    = 1,
     StatusRotation      = 2,
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM1_3)
+    StatusMiracastConnection = 3,
+#endif
 } DXGK_CHILD_STATUS_TYPE;
 
 typedef struct _DXGK_CHILD_STATUS
@@ -218,6 +247,13 @@ typedef struct _DXGK_CHILD_STATUS
     {
         struct { BOOLEAN Connected; } HotPlug;
         struct { UCHAR   Angle;     } Rotation;
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM1_3)
+        struct
+        {
+            BOOLEAN Connected;
+            D3DKMDT_VIDEO_OUTPUT_TECHNOLOGY MiracastMonitorType;
+        } Miracast;
+#endif
     };
 } DXGK_CHILD_STATUS, *PDXGK_CHILD_STATUS;
 
@@ -271,21 +307,13 @@ typedef struct _DXGK_DEVICE_INFO
  * Passed as the first argument to DxgkDdiStartDevice.
  * =========================================================================
  */
-typedef union _DXGK_START_FLAGS
-{
-    struct
-    {
-        UINT    Reserved    : 32;
-    };
-    UINT    Value;
-} DXGK_START_FLAGS;
-
 typedef struct _DXGK_START_INFO
 {
-    ULONG               RequiredDxgkVtableVersion;
     ULONG               RequiredDmaQueueEntry;
+    GUID                AdapterGuid;
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
     LUID                AdapterLuid;
-    DXGK_START_FLAGS    StartFlags;
+#endif
 } DXGK_START_INFO, *PDXGK_START_INFO;
 
 
@@ -451,35 +479,6 @@ typedef NTSTATUS
     _In_  ULONG   Offset,
     _In_  ULONG   Length,
     _Out_ PULONG  BytesWritten);
-
-typedef enum _DXGK_HANDLE_TYPE
-{
-    DXGK_HANDLE_ALLOCATION = 1,
-    DXGK_HANDLE_RESOURCE   = 2,
-    DXGK_HANDLE_DEVICE     = 3,
-    DXGK_HANDLE_CONTEXT    = 4
-} DXGK_HANDLE_TYPE, *PDXGK_HANDLE_TYPE;
-
-typedef union _DXGK_GETHANDLEDATAFLAGS
-{
-    struct
-    {
-        UINT DeviceSpecific : 1;
-        UINT Reserved       : 31;
-    };
-    UINT Value;
-} DXGK_GETHANDLEDATAFLAGS, *PDXGK_GETHANDLEDATAFLAGS;
-
-typedef struct _DXGKARGCB_GETHANDLEDATA
-{
-    D3DKMT_HANDLE           hObject;
-    DXGK_HANDLE_TYPE        Type;
-    DXGK_GETHANDLEDATAFLAGS Flags;
-} DXGKARGCB_GETHANDLEDATA, *PDXGKARGCB_GETHANDLEDATA;
-
-typedef PVOID
-(APIENTRY *PDXGKCB_GETHANDLEDATA)(
-    _In_ PDXGKARGCB_GETHANDLEDATA HandleData);
 
 /* DXGK_WHICHSPACE constants for Read/WriteDeviceSpace */
 #ifndef DXGK_WHICHSPACE_BRIDGE
@@ -796,18 +795,6 @@ typedef union _D3DKMT_PRESENT_DISPLAY_ONLY_FLAGS
     UINT Value;
 } D3DKMT_PRESENT_DISPLAY_ONLY_FLAGS, *PD3DKMT_PRESENT_DISPLAY_ONLY_FLAGS;
 
-/*
- * Reserved for OS use by asynchronous KMDOD presents.
- * ReactOS currently drives display-only presents synchronously and
- * always sets the callback pointer to NULL.
- */
-typedef struct _DXGKARGCB_PRESENT_DISPLAYONLY_PROGRESS
-{
-    D3DDDI_VIDEO_PRESENT_SOURCE_ID               VidPnSourceId;
-    ULONG                                        ProgressId;
-} DXGKARGCB_PRESENT_DISPLAYONLY_PROGRESS,
- *PDXGKARGCB_PRESENT_DISPLAYONLY_PROGRESS;
-
 typedef VOID
 (APIENTRY *DXGKCB_PRESENT_DISPLAYONLY_PROGRESS)(
     _In_ HANDLE hAdapter,
@@ -900,7 +887,7 @@ typedef struct _DXGK_INTERFACE
     PDXGKCB_UNMAP_MEMORY      DxgkCbUnmapMemory;       /* 0x50 */
     PDXGKCB_WRITE_DEVICE_SPACE DxgkCbWriteDeviceSpace;  /* 0x58 */
     PVOID   DxgkCbIsDevicePresent;                      /* 0x60 */
-    PDXGKCB_GETHANDLEDATA DxgkCbGetHandleData;          /* 0x68 */
+    DXGKCB_GETHANDLEDATA DxgkCbGetHandleData;           /* 0x68 */
     PVOID   DxgkCbGetHandleParent;                      /* 0x70 */
     PVOID   DxgkCbEnumHandleChildren;                   /* 0x78 */
     PDXGKCB_NOTIFY_INTERRUPT  DxgkCbNotifyInterrupt;    /* 0x80 */
@@ -913,6 +900,7 @@ typedef struct _DXGK_INTERFACE
     PVOID   DxgkCbLogEtwEvent;                          /* 0xa8 */
     PVOID   DxgkCbExcludeAdapterAccess;                 /* 0xb0 */
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
     /* --- Win8 (WDDM 1.2) additions --- */
     PVOID   DxgkCbCreateContextAllocation;              /* 0xb8 */
     PVOID   DxgkCbDestroyContextAllocation;             /* 0xc0 */
@@ -923,31 +911,43 @@ typedef struct _DXGK_INTERFACE
     PVOID   DxgkCbSetPowerComponentLatency;             /* 0xe8 */
     PVOID   DxgkCbSetPowerComponentResidency;           /* 0xf0 */
     PVOID   DxgkCbCompleteFStateTransition;             /* 0xf8 */
+#endif
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM1_3)
     /* --- Win8.1 (WDDM 1.3) --- */
     PVOID   DxgkCbCompletePStateTransition;             /* 0x100 */
+#endif
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
     /* --- WDDM 2.0 additions --- */
     PVOID   DxgkCbMapContextAllocation;                 /* 0x108 */
     PVOID   DxgkCbUpdateContextAllocation;              /* 0x110 */
     PVOID   DxgkCbReserveGpuVirtualAddressRange;        /* 0x118 */
-    PVOID   DxgkCbAcquireHandleData;                    /* 0x120 */
-    PVOID   DxgkCbReleaseHandleData;                    /* 0x128 */
+    DXGKCB_ACQUIREHANDLEDATA DxgkCbAcquireHandleData;   /* 0x120 */
+    DXGKCB_RELEASEHANDLEDATA DxgkCbReleaseHandleData;   /* 0x128 */
     PVOID   DxgkCbHardwareContentProtectionTeardown;    /* 0x130 */
+#endif
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_1)
     /* --- WDDM 2.1 additions --- */
     PVOID   DxgkCbMultiPlaneOverlayDisabled;            /* 0x138 */
     PVOID   DxgkCbMitigatedRangeUpdate;                 /* 0x140 */
+#endif
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
     /* --- WDDM 2.2 additions --- */
     PVOID   DxgkCbInvalidateHwContext;                  /* 0x148 */
     PVOID   DxgkCbIndicateConnectorChange;              /* 0x150 */
     PVOID   DxgkCbUnblockUEFIFrameBufferRanges;         /* 0x158 */
     PVOID   DxgkCbAcquirePostDisplayOwnership2;         /* 0x160 */
+#endif
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_3)
     /* --- WDDM 2.3 additions --- */
     PVOID   DxgkCbSetProtectedSessionStatus;            /* 0x168 */
+#endif
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
     /* --- WDDM 2.4 additions --- */
     PDXGKCB_ALLOCATE_CONTIGUOUS_MEMORY DxgkCbAllocateContiguousMemory; /* 0x170 */
     PDXGKCB_FREE_CONTIGUOUS_MEMORY DxgkCbFreeContiguousMemory;       /* 0x178 */
@@ -960,17 +960,25 @@ typedef struct _DXGK_INTERFACE
     PVOID   DxgkCbMapMdlToIoMmu;                        /* 0x1b0 */
     PVOID   DxgkCbUnmapMdlFromIoMmu;                    /* 0x1b8 */
     PVOID   DxgkCbReportDiagnostic;                     /* 0x1c0 */
+#endif
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_5)
     /* --- WDDM 2.5+ additions --- */
     PVOID   DxgkCbSignalEvent;                          /* 0x1c8 */
+#endif
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_6)
     /* --- WDDM 2.6 additions --- */
     PVOID   DxgkCbIsFeatureEnabled;                     /* 0x1d0 */
     PVOID   DxgkCbSaveMemoryForHotUpdate;               /* 0x1d8 */
+#endif
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_8)
     /* --- WDDM 2.8 --- */
     PVOID   DxgkCbNotifyCursorSupportChange;            /* 0x1e0 */
+#endif
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
     /* --- WDDM 2.9 additions --- */
     PVOID   DxgkCbQueryFeatureSupport;                  /* 0x1e8 */
     PVOID   DxgkCbCreatePhysicalMemoryObject;           /* 0x1f0 */
@@ -982,9 +990,13 @@ typedef struct _DXGK_INTERFACE
     PVOID   DxgkCbOpenPhysicalMemoryObject;             /* 0x220 */
     PVOID   DxgkCbClosePhysicalMemoryObject;            /* 0x228 */
     PVOID   DxgkCbPinFrameBufferForSave2;               /* 0x230 */
+#endif
 
+#if defined(DXGKDDI_INTERFACE_VERSION_WDDM3_1) && \
+    (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
     /* --- WDDM 3.1 --- */
     PVOID   DxgkCbDisconnectDoorbell;                   /* 0x238 */
+#endif
 } DXGK_INTERFACE, *PDXGK_INTERFACE;
 
 /* Windows WDK uses DXGKRNL_INTERFACE as the official name */
@@ -1547,7 +1559,6 @@ typedef struct _DRIVER_INITIALIZATION_DATA
     PVOID                                       DxgkDdiPowerRuntimeControlRequest;
     PDXGKDDI_SETVIDPNSOURCEADDRESSWITHMULTIPLANEOVERLAY DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay;
     PVOID                                       DxgkDdiNotifySurpriseRemoval;
-    PVOID                                       DxgkDdiPresentDisplayOnly;
 #endif
 
     /* ---- WDDM 1.3 / Win8.1 additions ------------------------------------ */
@@ -1580,6 +1591,42 @@ typedef struct _DRIVER_INITIALIZATION_DATA
 #endif
 
 } DRIVER_INITIALIZATION_DATA, *PDRIVER_INITIALIZATION_DATA;
+
+#if defined(_WIN64) && (DXGKDDI_INTERFACE_VERSION == 0x5023)
+C_ASSERT(sizeof(D3DKMDT_VIDEO_OUTPUT_TECHNOLOGY) == 4);
+C_ASSERT(sizeof(DXGK_CHILD_CAPABILITIES) == 16);
+C_ASSERT(FIELD_OFFSET(DXGK_CHILD_CAPABILITIES, HpdAwareness) == 12);
+C_ASSERT(sizeof(DXGK_CHILD_DESCRIPTOR) == 28);
+C_ASSERT(FIELD_OFFSET(DXGK_CHILD_DESCRIPTOR, ChildCapabilities) == 4);
+C_ASSERT(FIELD_OFFSET(DXGK_CHILD_DESCRIPTOR, AcpiUid) == 20);
+C_ASSERT(FIELD_OFFSET(DXGK_CHILD_DESCRIPTOR, ChildUid) == 24);
+C_ASSERT(sizeof(DXGK_CHILD_STATUS) == 16);
+C_ASSERT(FIELD_OFFSET(DXGK_CHILD_STATUS, Miracast.MiracastMonitorType) == 12);
+C_ASSERT(sizeof(DXGK_START_INFO) == 28);
+C_ASSERT(FIELD_OFFSET(DXGK_START_INFO, RequiredDmaQueueEntry) == 0);
+C_ASSERT(FIELD_OFFSET(DXGK_START_INFO, AdapterGuid) == 4);
+C_ASSERT(FIELD_OFFSET(DXGK_START_INFO, AdapterLuid) == 20);
+C_ASSERT(sizeof(DXGKRNL_INTERFACE) == 312);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, Size) == 0);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, Version) == 4);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DeviceHandle) == 8);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbEvalAcpiMethod) == 16);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbLogEtwEvent) == 168);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbExcludeAdapterAccess) == 176);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbCreateContextAllocation) == 184);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbCompletePStateTransition) == 256);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbMapContextAllocation) == 264);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbAcquireHandleData) == 288);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbReleaseHandleData) == 296);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbHardwareContentProtectionTeardown) == 304);
+C_ASSERT(sizeof(DRIVER_INITIALIZATION_DATA) == 832);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiDescribePageTable) == 496);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetPowerComponentFState) == 568);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiGetNodeMetadata) == 664);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiRenderGdi) == 712);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSubmitCommandVirtual) == 720);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetVideoProtectedRegion) == 824);
+#endif
 
 
 /*

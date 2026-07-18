@@ -34,6 +34,7 @@
  */
 
 #include "dxgkrnl_private.h"
+#include "present.h"
 #include "vidpn.h"
 #include "d3dkmt.h"
 #include <ntddvdeo.h>
@@ -857,30 +858,41 @@ DxgkDisplayEstablishInitialMode(
 static NTSTATUS
 DxgkpBlitShadowToGop(
     _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ const DXGKRNL_SHARED_SURFACE_SNAPSHOT *SharedSurface,
     _In_ const RECT *Rect)
 {
-    PUCHAR Src = (PUCHAR)Adapter->ShadowFb;
-    PUCHAR Dst = (PUCHAR)Adapter->PostDisplayVirtualAddress;
-    LONG   SrcPitch = (LONG)(Adapter->ShadowFbPitch ? Adapter->ShadowFbPitch
-                                                    : Adapter->CommittedWidth * 4);
-    LONG   DstPitch = (LONG)Adapter->PostDisplayPitch;
-    SIZE_T GopSize  = Adapter->PostDisplayMappingSize;
+    PUCHAR Src;
+    PUCHAR Dst;
+    LONG SrcPitch;
+    LONG DstPitch;
+    SIZE_T GopSize;
     LONG   Left, Top, Right, Bottom, y, BytesPerRow, GopRows;
 
+    UNREFERENCED_PARAMETER(Adapter);
+
+    if (SharedSurface == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Src = (PUCHAR)SharedSurface->ShadowFb;
+    Dst = (PUCHAR)SharedSurface->PostDisplayVirtualAddress;
+    SrcPitch = (LONG)(SharedSurface->ShadowFbPitch ? SharedSurface->ShadowFbPitch : SharedSurface->CommittedWidth * 4);
+    DstPitch = (LONG)SharedSurface->PostDisplayPitch;
+    GopSize = SharedSurface->PostDisplayMappingSize;
     if (Src == NULL || Dst == NULL || SrcPitch <= 0 || DstPitch <= 0 || GopSize == 0)
         return STATUS_NOT_SUPPORTED;
 
     Left = Rect->left; Top = Rect->top; Right = Rect->right; Bottom = Rect->bottom;
     if (Left < 0) Left = 0;
     if (Top < 0) Top = 0;
-    if (Right > (LONG)Adapter->CommittedWidth)  Right  = (LONG)Adapter->CommittedWidth;
-    if (Bottom > (LONG)Adapter->CommittedHeight) Bottom = (LONG)Adapter->CommittedHeight;
+    if (Right > (LONG)SharedSurface->CommittedWidth)  Right  = (LONG)SharedSurface->CommittedWidth;
+    if (Bottom > (LONG)SharedSurface->CommittedHeight) Bottom = (LONG)SharedSurface->CommittedHeight;
 
     /* Never write past the mapped GOP. */
     GopRows = (LONG)(GopSize / (SIZE_T)DstPitch);
     if (Bottom > GopRows) Bottom = GopRows;
     if (Left >= Right || Top >= Bottom)
         return STATUS_SUCCESS;
+    if (SharedSurface->ShadowFbSize < ((SIZE_T)(Bottom - 1) * (ULONG)SrcPitch) + ((SIZE_T)Right * 4))
+        return STATUS_INVALID_BUFFER_SIZE;
 
     BytesPerRow = (Right - Left) * 4;
     if ((Left * 4 + BytesPerRow) > DstPitch)
@@ -890,9 +902,7 @@ DxgkpBlitShadowToGop(
 
     for (y = Top; y < Bottom; y++)
     {
-        RtlCopyMemory(Dst + (SIZE_T)y * DstPitch + (SIZE_T)Left * 4,
-                      Src + (SIZE_T)y * SrcPitch + (SIZE_T)Left * 4,
-                      (SIZE_T)BytesPerRow);
+        RtlCopyMemory(Dst + (SIZE_T)y * DstPitch + (SIZE_T)Left * 4, Src + (SIZE_T)y * SrcPitch + (SIZE_T)Left * 4, (SIZE_T)BytesPerRow);
     }
 
     InterlockedExchange64(&g_LastPresentSubmit100ns,
@@ -922,19 +932,29 @@ DxgkpPresentShadowFbInternal(
 
     PFN_PRESENT_DISPLAY_ONLY PfnPresent;
     DXGKARG_PRESENT_DISPLAYONLY PresentArgs;
+    DXGKRNL_SHARED_SURFACE_SNAPSHOT SharedSurface;
     RECT DirtyRect;
     ULONGLONG Start100ns;
     ULONGLONG ElapsedUs;
     LONG ShadowPitch;
     LONG TraceSeq;
+    NTSTATUS Status;
 
-    if (Adapter == NULL || Adapter->ShadowFb == NULL || !Adapter->VidPnCommitted)
-        return STATUS_UNSUCCESSFUL;
+    if (Adapter == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Status = DxgkpAcquireSharedSurfaceSnapshot(Adapter, &SharedSurface);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (SharedSurface.ShadowFb == NULL || !SharedSurface.VidPnCommitted)
+    {
+        Status = STATUS_UNSUCCESSFUL;
+        goto Cleanup;
+    }
 
     /*
-     * DxgkDdiPresentDisplayOnly is a Win8+ (WDDM 1.2) field.
-     * For DOD drivers, it's in the KMDDOD_INITIALIZATION_DATA struct.
-     * For full WDDM drivers, it's after the Win7 extension fields.
+     * DxgkDdiPresentDisplayOnly belongs only to the Win8+ display-only
+     * driver registration table. Full WDDM miniports present through
+     * DxgkDdiPresent and must never be interpreted with the KMDOD layout.
      */
     if (Adapter->MiniportContext->IsDisplayOnlyDriver)
     {
@@ -953,23 +973,7 @@ DxgkpPresentShadowFbInternal(
     }
     else
     {
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
-        SIZE_T Offset = FIELD_OFFSET(DRIVER_INITIALIZATION_DATA,
-                                     DxgkDdiPresentDisplayOnly);
-
-        if (Adapter->MiniportContext->InitDataSize >= Offset + sizeof(PVOID))
-        {
-            PfnPresent = *(PFN_PRESENT_DISPLAY_ONLY *)
-                ((PUCHAR)&Adapter->MiniportContext->InitData + Offset);
-        }
-        else
-        {
-            PfnPresent = NULL;
-        }
-#else
-        /* Win7 full WDDM miniports do not expose PresentDisplayOnly. */
         PfnPresent = NULL;
-#endif
     }
 
     /*
@@ -1016,18 +1020,18 @@ DxgkpPresentShadowFbInternal(
             DirtyRect.left = 0;
         if (DirtyRect.top < 0)
             DirtyRect.top = 0;
-        if (DirtyRect.right > (LONG)Adapter->CommittedWidth)
-            DirtyRect.right = (LONG)Adapter->CommittedWidth;
-        if (DirtyRect.bottom > (LONG)Adapter->CommittedHeight)
-            DirtyRect.bottom = (LONG)Adapter->CommittedHeight;
+        if (DirtyRect.right > (LONG)SharedSurface.CommittedWidth)
+            DirtyRect.right = (LONG)SharedSurface.CommittedWidth;
+        if (DirtyRect.bottom > (LONG)SharedSurface.CommittedHeight)
+            DirtyRect.bottom = (LONG)SharedSurface.CommittedHeight;
 
         if (DirtyRect.left >= DirtyRect.right ||
             DirtyRect.top >= DirtyRect.bottom)
         {
             DirtyRect.left   = 0;
             DirtyRect.top    = 0;
-            DirtyRect.right  = (LONG)Adapter->CommittedWidth;
-            DirtyRect.bottom = (LONG)Adapter->CommittedHeight;
+            DirtyRect.right  = (LONG)SharedSurface.CommittedWidth;
+            DirtyRect.bottom = (LONG)SharedSurface.CommittedHeight;
         }
     }
     else
@@ -1035,8 +1039,8 @@ DxgkpPresentShadowFbInternal(
         /* Periodic fallback: push the whole surface. */
         DirtyRect.left   = 0;
         DirtyRect.top    = 0;
-        DirtyRect.right  = (LONG)Adapter->CommittedWidth;
-        DirtyRect.bottom = (LONG)Adapter->CommittedHeight;
+        DirtyRect.right  = (LONG)SharedSurface.CommittedWidth;
+        DirtyRect.bottom = (LONG)SharedSurface.CommittedHeight;
     }
 
     /*
@@ -1044,16 +1048,22 @@ DxgkpPresentShadowFbInternal(
      * framebuffer straight to the firmware GOP ourselves.
      */
     if (PfnPresent == NULL)
-        return DxgkpBlitShadowToGop(Adapter, &DirtyRect);
+    {
+        Status = DxgkpBlitShadowToGop(Adapter, &SharedSurface, &DirtyRect);
+        goto Cleanup;
+    }
 
-    ASSERT(Adapter->ShadowFbPitch != 0);
-    ShadowPitch = (LONG)(Adapter->ShadowFbPitch != 0 ?
-                         Adapter->ShadowFbPitch :
-                         (Adapter->CommittedWidth * 4));
+    ASSERT(SharedSurface.ShadowFbPitch != 0);
+    ShadowPitch = (LONG)(SharedSurface.ShadowFbPitch != 0 ? SharedSurface.ShadowFbPitch : (SharedSurface.CommittedWidth * 4));
+    if (SharedSurface.CommittedWidth == 0 || SharedSurface.CommittedHeight == 0 || ShadowPitch < (LONG)(SharedSurface.CommittedWidth * 4) || SharedSurface.ShadowFbSize < ((SIZE_T)(SharedSurface.CommittedHeight - 1) * (ULONG)ShadowPitch) + ((SIZE_T)SharedSurface.CommittedWidth * 4))
+    {
+        Status = STATUS_INVALID_BUFFER_SIZE;
+        goto Cleanup;
+    }
 
     RtlZeroMemory(&PresentArgs, sizeof(PresentArgs));
     PresentArgs.VidPnSourceId = 0;
-    PresentArgs.pSource       = Adapter->ShadowFb;
+    PresentArgs.pSource       = SharedSurface.ShadowFb;
     PresentArgs.BytesPerPixel = 4;
     PresentArgs.Pitch         = ShadowPitch;
     PresentArgs.Flags.Value   = 0;
@@ -1063,10 +1073,15 @@ DxgkpPresentShadowFbInternal(
     PresentArgs.pDirtyRect    = &DirtyRect;
     PresentArgs.pfnPresentDisplayOnlyProgress = NULL;
 
+    if (!DxgkAcquireMiniportCallback(Adapter))
     {
-        NTSTATUS PresentStatus;
+        Status = STATUS_DELETE_PENDING;
+        goto Cleanup;
+    }
+    {
         Start100ns = DxgkpDisplayTraceNow100ns();
-        PresentStatus = PfnPresent(Adapter->MiniportDeviceContext, &PresentArgs);
+        Status = PfnPresent(Adapter->MiniportDeviceContext, &PresentArgs);
+        DxgkReleaseMiniportCallback(Adapter);
         ElapsedUs = DxgkpDisplayTraceElapsedUs(Start100ns);
         TraceSeq = InterlockedIncrement(&g_PresentShadowTraceCount);
         if (TraceSeq <= DXGK_PRESENT_TRACE_LOG_LIMIT ||
@@ -1078,20 +1093,23 @@ DxgkpPresentShadowFbInternal(
                           TraceReason,
                           TraceSeq,
                           PfnPresent,
-                          PresentStatus,
+                          Status,
                           ElapsedUs,
                           DirtyRect.left,
                           DirtyRect.top,
                           DirtyRect.right,
                           DirtyRect.bottom,
-                          Adapter->CommittedWidth,
-                          Adapter->CommittedHeight,
+                          SharedSurface.CommittedWidth,
+                          SharedSurface.CommittedHeight,
                           PresentArgs.Pitch);
         }
         InterlockedExchange64(&g_LastPresentSubmit100ns,
                               (LONGLONG)DxgkpDisplayTraceNow100ns());
-        return PresentStatus;
     }
+
+Cleanup:
+    DxgkpReleaseSharedSurfaceSnapshot(&SharedSurface);
+    return Status;
 }
 
 static NTSTATUS
@@ -1274,7 +1292,7 @@ DxgkpPresentSyncNow(
 {
     RECTL DirtyRect;
 
-    if (Adapter == NULL || Adapter->ShadowFb == NULL || !Adapter->VidPnCommitted)
+    if (Adapter == NULL || InterlockedCompareExchange(&Adapter->SharedSurfaceAvailable, 0, 0) == 0)
         return;
 
     if (KeGetCurrentIrql() != PASSIVE_LEVEL ||
@@ -1333,7 +1351,7 @@ DxgkpPresentWorkItemRoutineEx(
 
     UNREFERENCED_PARAMETER(DeviceObject);
 
-    if (Adapter != NULL && Adapter->ShadowFb != NULL && Adapter->VidPnCommitted)
+    if (Adapter != NULL && InterlockedCompareExchange(&Adapter->SharedSurfaceAvailable, 0, 0) != 0)
     {
         DxgkpEnsurePresentMutex();
         KeWaitForSingleObject(&g_PresentMutex, Executive, KernelMode, FALSE, NULL);
@@ -1433,10 +1451,13 @@ DxgkpPresentTimerDpc(
     UNREFERENCED_PARAMETER(SystemArgument1);
     UNREFERENCED_PARAMETER(SystemArgument2);
 
-    if (Adapter == NULL || Adapter->ShadowFb == NULL ||
-        !Adapter->PresentTimerActive ||
-        !Adapter->VidPnCommitted || Adapter->FunctionalDeviceObject == NULL)
+    if (Adapter == NULL || InterlockedCompareExchange(&Adapter->SharedSurfaceAvailable, 0, 0) == 0 || !Adapter->PresentTimerActive || Adapter->FunctionalDeviceObject == NULL)
         return;
+
+    /* Display-only miniports need a software VBlank source when they expose no
+     * CRTC interrupt.  This timer represents the primary scanout cadence. */
+    if (Adapter->MiniportContext != NULL && Adapter->MiniportContext->IsDisplayOnlyDriver)
+        DxgkpNotifyVSync(Adapter, 0);
 
     /* Scanout heartbeat for dwm: this timer IS the display path's refresh. */
     {
@@ -1662,7 +1683,10 @@ DxgkpPointerBridgeSupported(
         return FALSE;
     }
 
+    if (!DxgkAcquireMiniportCallback(Adapter))
+        return FALSE;
     Status = DxgkpQueryDriverCaps(Adapter, Caps);
+    DxgkReleaseMiniportCallback(Adapter);
 
     if (!NT_SUCCESS(Status) ||
         !Caps->PointerCaps.Color ||
@@ -1697,6 +1721,8 @@ DxgkpPointerBridgeSetPosition(
     PfnSetPosition = DXGK_CB(Adapter, DxgkDdiSetPointerPosition);
     if (PfnSetPosition == NULL)
         return STATUS_NOT_SUPPORTED;
+    if (!DxgkAcquireMiniportCallback(Adapter))
+        return STATUS_DELETE_PENDING;
 
     RtlZeroMemory(&PositionArgs, sizeof(PositionArgs));
     PositionArgs.VidPnSourceId = 0;
@@ -1714,6 +1740,7 @@ DxgkpPointerBridgeSetPosition(
         Status = _SEH2_GetExceptionCode();
     }
     _SEH2_END;
+    DxgkReleaseMiniportCallback(Adapter);
 
     return Status;
 }
@@ -1768,6 +1795,8 @@ DxgkpPointerBridgeSetShape(
     ShapeArgs.XHot = 0;
     ShapeArgs.YHot = 0;
 
+    if (!DxgkAcquireMiniportCallback(Adapter))
+        return STATUS_DELETE_PENDING;
     _SEH2_TRY
     {
         Status = PfnSetShape(Adapter->MiniportDeviceContext, &ShapeArgs);
@@ -1777,6 +1806,7 @@ DxgkpPointerBridgeSetShape(
         Status = _SEH2_GetExceptionCode();
     }
     _SEH2_END;
+    DxgkReleaseMiniportCallback(Adapter);
 
     if (!NT_SUCCESS(Status))
     {
@@ -2025,12 +2055,15 @@ DxgkpDisplayDispatch(
                 Stack->Parameters.DeviceIoControl.InputBufferLength >= sizeof(VIDEO_MEMORY) &&
                 Stack->Parameters.DeviceIoControl.OutputBufferLength >= sizeof(VIDEO_MEMORY_INFORMATION))
             {
-                ULONG Width = (g_DisplayAdapter && g_DisplayAdapter->CommittedWidth) ?
-                              g_DisplayAdapter->CommittedWidth : 1024;
-                ULONG Height = (g_DisplayAdapter && g_DisplayAdapter->CommittedHeight) ?
-                               g_DisplayAdapter->CommittedHeight : 768;
+                DXGKRNL_SHARED_SURFACE_SNAPSHOT SharedSurface;
+                ULONG Width;
+                ULONG Height;
                 ULONG FbSize;
                 PVOID FbVa;
+                PVOID OldFb = NULL;
+                BOOLEAN ReuseExisting;
+                BOOLEAN StartTimer;
+                BOOLEAN SnapshotHeld = TRUE;
 
                 if (g_DisplayAdapter == NULL)
                 {
@@ -2038,11 +2071,18 @@ DxgkpDisplayDispatch(
                     break;
                 }
 
+                Status = DxgkpAcquireSharedSurfaceSnapshot(g_DisplayAdapter, &SharedSurface);
+                if (!NT_SUCCESS(Status))
+                    break;
+                Width = SharedSurface.CommittedWidth != 0 ? SharedSurface.CommittedWidth : 1024;
+                Height = SharedSurface.CommittedHeight != 0 ? SharedSurface.CommittedHeight : 768;
+
                 if (Width == 0 ||
                     Height == 0 ||
                     Width > (MAXULONG / 4) ||
                     Height > (MAXULONG / (Width * 4)))
                 {
+                    DxgkpReleaseSharedSurfaceSnapshot(&SharedSurface);
                     Status = STATUS_INVALID_PARAMETER;
                     break;
                 }
@@ -2057,6 +2097,7 @@ DxgkpDisplayDispatch(
                 FbVa = ExAllocatePoolZero(NonPagedPool, FbSize, TAG_DXGK_DISPLAY);
                 if (FbVa == NULL)
                 {
+                    DxgkpReleaseSharedSurfaceSnapshot(&SharedSurface);
                     Status = STATUS_INSUFFICIENT_RESOURCES;
                     break;
                 }
@@ -2064,56 +2105,48 @@ DxgkpDisplayDispatch(
                 DXGKRNL_TRACE("DxgkpDisplayDispatch: shadow FB at VA=%p size=0x%lX\n",
                               FbVa, FbSize);
 
-                /* Store the shadow FB pointer in the adapter for PresentDisplayOnly. */
-                if (g_DisplayAdapter != NULL)
+                ReuseExisting = SharedSurface.ShadowFb != NULL && !SharedSurface.ShadowFbPoolOwned;
+                StartTimer = SharedSurface.VidPnCommitted;
+                if (ReuseExisting)
                 {
-                    /*
-                     * Display-only driver with an active WDDM shared-primary:
-                     * DxgkpEnsureSharedPrimary already pointed ShadowFb at the
-                     * CDD/WDDM primary's CPU VA — that surface is where GDI draws
-                     * the live desktop and what the present timer scans out.
-                     * framebuf.dll's MAP_VIDEO_MEMORY must NOT replace it with a
-                     * private NonPagedPool buffer: doing so splits the primary
-                     * into two virtio-gpu resources (a frozen framebuf resource
-                     * vs the live WDDM resource) that fight over the scanout, and
-                     * would ExFreePoolWithTag() a mapped VA never pool-allocated.
-                     * Hand framebuf the WDDM primary so there is exactly one.
-                     */
-                    if (g_DisplayAdapter->MiniportContext != NULL &&
-                        g_DisplayAdapter->MiniportContext->IsDisplayOnlyDriver &&
-                        g_DisplayAdapter->SharedPrimaryAllocationHandle != NULL &&
-                        g_DisplayAdapter->ShadowFb != NULL)
+                    ExFreePoolWithTag(FbVa, TAG_DXGK_DISPLAY);
+                    FbVa = SharedSurface.ShadowFb;
+                    FbSize = SharedSurface.ShadowFbSize;
+                    if (FbSize == 0)
                     {
-                        ExFreePoolWithTag(FbVa, TAG_DXGK_DISPLAY);
-                        FbVa = g_DisplayAdapter->ShadowFb;
-                        FbSize = g_DisplayAdapter->ShadowFbSize;
-                        if (g_DisplayAdapter->VidPnCommitted)
-                            DxgkpStartPresentTimer(g_DisplayAdapter);
-                    }
-                    else
-                    {
-                        if (g_DisplayAdapter->ShadowFb != NULL)
-                        {
-                            DxgkpStopPresentTimer(g_DisplayAdapter);
-                            ExFreePoolWithTag(g_DisplayAdapter->ShadowFb, TAG_DXGK_DISPLAY);
-                        }
-
-                        g_DisplayAdapter->ShadowFb = FbVa;
-                        g_DisplayAdapter->ShadowFbPitch = Width * 4;
-                        g_DisplayAdapter->ShadowFbSize = FbSize;
-
-                        /* Start the periodic present timer if CommitVidPn succeeded. */
-                        if (g_DisplayAdapter->VidPnCommitted)
-                        {
-                            DxgkpStartPresentTimer(g_DisplayAdapter);
-                        }
+                        DxgkpReleaseSharedSurfaceSnapshot(&SharedSurface);
+                        Status = STATUS_INVALID_BUFFER_SIZE;
+                        break;
                     }
                 }
+                else
+                {
+                    DxgkpReleaseSharedSurfaceSnapshot(&SharedSurface);
+                    SnapshotHeld = FALSE;
+                    DxgkpStopPresentTimer(g_DisplayAdapter);
+                    ExAcquireFastMutex(&g_DisplayAdapter->SharedPrimaryMutex);
+                    DxgkpBeginSharedSurfaceMutationLocked(g_DisplayAdapter);
+                    if (g_DisplayAdapter->ShadowFbPoolOwned)
+                        OldFb = g_DisplayAdapter->ShadowFb;
+                    g_DisplayAdapter->ShadowFb = FbVa;
+                    g_DisplayAdapter->ShadowFbPitch = Width * 4;
+                    g_DisplayAdapter->ShadowFbSize = FbSize;
+                    g_DisplayAdapter->ShadowFbPoolOwned = TRUE;
+                    DxgkpEndSharedSurfaceMutationLocked(g_DisplayAdapter);
+                    ExReleaseFastMutex(&g_DisplayAdapter->SharedPrimaryMutex);
+                    if (OldFb != NULL)
+                        ExFreePoolWithTag(OldFb, TAG_DXGK_DISPLAY);
+                }
+
+                if (StartTimer)
+                    DxgkpStartPresentTimer(g_DisplayAdapter);
 
                 MemoryInfo->VideoRamBase = FbVa;
                 MemoryInfo->VideoRamLength = FbSize;
                 MemoryInfo->FrameBufferBase = FbVa;
                 MemoryInfo->FrameBufferLength = FbSize;
+                if (SnapshotHeld)
+                    DxgkpReleaseSharedSurfaceSnapshot(&SharedSurface);
 
                 BytesReturned = sizeof(VIDEO_MEMORY_INFORMATION);
                 Status = STATUS_SUCCESS;
@@ -2134,30 +2167,23 @@ DxgkpDisplayDispatch(
 
             if (g_DisplayAdapter != NULL)
             {
-                DxgkpStopPresentTimer(g_DisplayAdapter);
+                PVOID OldFb = NULL;
 
-                /*
-                 * Shared-primary configuration (DOD + cdd): ShadowFb is the
-                 * WDDM primary allocation's CPU mapping — owned by VidMm
-                 * (TAG_VIDMM_ALLOC) and still the committed scan-out surface.
-                 * Freeing it here would be a wrong-tag pool free and a
-                 * use-after-free under GPU DMA (the mirror of the MAP-side
-                 * guard above). Keep the pointer so the next MAP hands the
-                 * same primary back out; only a private buffer this handler
-                 * itself pool-allocated may be freed.
-                 */
-                if (!(g_DisplayAdapter->MiniportContext != NULL &&
-                      g_DisplayAdapter->MiniportContext->IsDisplayOnlyDriver &&
-                      g_DisplayAdapter->SharedPrimaryAllocationHandle != NULL))
+                DxgkpStopPresentTimer(g_DisplayAdapter);
+                ExAcquireFastMutex(&g_DisplayAdapter->SharedPrimaryMutex);
+                DxgkpBeginSharedSurfaceMutationLocked(g_DisplayAdapter);
+                if (g_DisplayAdapter->ShadowFbPoolOwned)
                 {
-                    if (g_DisplayAdapter->ShadowFb != NULL)
-                    {
-                        ExFreePoolWithTag(g_DisplayAdapter->ShadowFb, TAG_DXGK_DISPLAY);
-                        g_DisplayAdapter->ShadowFb = NULL;
-                        g_DisplayAdapter->ShadowFbPitch = 0;
-                        g_DisplayAdapter->ShadowFbSize = 0;
-                    }
+                    OldFb = g_DisplayAdapter->ShadowFb;
+                    g_DisplayAdapter->ShadowFb = NULL;
+                    g_DisplayAdapter->ShadowFbPitch = 0;
+                    g_DisplayAdapter->ShadowFbSize = 0;
+                    g_DisplayAdapter->ShadowFbPoolOwned = FALSE;
                 }
+                DxgkpEndSharedSurfaceMutationLocked(g_DisplayAdapter);
+                ExReleaseFastMutex(&g_DisplayAdapter->SharedPrimaryMutex);
+                if (OldFb != NULL)
+                    ExFreePoolWithTag(OldFb, TAG_DXGK_DISPLAY);
             }
             Status = STATUS_SUCCESS;
             break;
@@ -2175,7 +2201,7 @@ DxgkpDisplayDispatch(
                 break;
             }
 
-            if (g_DisplayAdapter == NULL || g_DisplayAdapter->ShadowFb == NULL)
+            if (g_DisplayAdapter == NULL || InterlockedCompareExchange(&g_DisplayAdapter->SharedSurfaceAvailable, 0, 0) == 0)
             {
                 Status = STATUS_DEVICE_NOT_READY;
                 break;
@@ -2879,17 +2905,34 @@ Cleanup:
 VOID
 DxgkDisplayUnregister(VOID)
 {
+    PDXGKRNL_ADAPTER Adapter;
+    PVOID OldFb = NULL;
+
     PAGED_CODE();
 
-    if (g_DisplayAdapter != NULL)
+    Adapter = g_DisplayAdapter;
+    if (Adapter != NULL)
     {
-        DxgkpStopPresentTimer(g_DisplayAdapter);
+        DxgkpStopPresentTimer(Adapter);
+        ExAcquireFastMutex(&Adapter->SharedPrimaryMutex);
+        DxgkpBeginSharedSurfaceMutationLocked(Adapter);
+        if (Adapter->ShadowFbPoolOwned)
+        {
+            OldFb = Adapter->ShadowFb;
+            Adapter->ShadowFb = NULL;
+            Adapter->ShadowFbPitch = 0;
+            Adapter->ShadowFbSize = 0;
+            Adapter->ShadowFbPoolOwned = FALSE;
+        }
+        DxgkpEndSharedSurfaceMutationLocked(Adapter);
+        ExReleaseFastMutex(&Adapter->SharedPrimaryMutex);
+        if (OldFb != NULL)
+            ExFreePoolWithTag(OldFb, TAG_DXGK_DISPLAY);
     }
 
     if (g_DisplayDeviceObject != NULL)
     {
-        DXGKRNL_TRACE("DxgkDisplayUnregister: deleting \\Device\\Video%lu\n",
-                      g_DisplayDeviceNumber);
+        DXGKRNL_TRACE("DxgkDisplayUnregister: deleting \\Device\\Video%lu\n", g_DisplayDeviceNumber);
         IoDeleteDevice(g_DisplayDeviceObject);
         g_DisplayDeviceObject = NULL;
         g_DisplayAdapter = NULL;

@@ -100,8 +100,22 @@ typedef struct _DXGKRNL_SEGMENT
 
 typedef struct _DXGKVMM_RESOURCE
 {
+    /* Handle-table ownership plus transient users. */
+    volatile LONG      ReferenceCount;
+    volatile LONG      Destroying;
+    volatile LONG      FinalizeQueued;
+    KEVENT             ReferencesDrainedEvent;
+    WORK_QUEUE_ITEM    FinalizeWorkItem;
+    WORK_QUEUE_ITEM    CloseBatchWorkItem;
+
     /* Owning logical device. */
     PDXGKRNL_DEVICE    Device;
+
+    /* Owning adapter, retained even for internal resources without a device. */
+    PDXGKRNL_ADAPTER   Adapter;
+
+    /* Source resource retained by a per-device OpenResource alias. */
+    struct _DXGKVMM_RESOURCE *BackingResource;
 
     /* Opaque miniport-side resource handle. */
     HANDLE             MiniportHandle;
@@ -112,15 +126,25 @@ typedef struct _DXGKVMM_RESOURCE
     /* Global-share handle used by OpenResource / GetSharedPrimaryHandle. */
     D3DKMT_HANDLE      GlobalShareHandle;
 
-    /* Primary allocation exported by this resource, when any. */
-    HANDLE             AllocationHandle;
+    /* TRUE only when the creator explicitly exported this resource. */
+    BOOLEAN            Shareable;
+
+    /* Runtime-private data copied from D3DKMT_CREATEALLOCATION. */
+    PVOID              PrivateRuntimeData;
+    UINT               PrivateRuntimeDataSize;
 
     /* Resource-private driver data used by QueryResourceInfo/OpenResource. */
     PVOID              ResourcePrivateDriverData;
     UINT               ResourcePrivateDriverDataSize;
 
-    /* Number of tracked allocations referencing this resource. */
+    /* Ordered live allocation membership for Query/OpenResource. */
     ULONG              AllocationCount;
+    LIST_ENTRY         AllocationList;
+
+    /* Per-open arrays used to close all surviving bindings in one DDI call. */
+    struct _DXGKVMM_ALLOCATION **OpenAllocations;
+    PHANDLE             OpenBindingScratch;
+    UINT                OpenAllocationCapacity;
 
     /* Linkage in the VidMm global resource list. */
     LIST_ENTRY         GlobalResourceEntry;
@@ -145,11 +169,33 @@ typedef struct _DXGKVMM_ALLOCATION
     /* Magic word for use-after-free detection (debug builds). */
     ULONG               Magic;
 
+    /* Handle-table ownership plus transient users. */
+    volatile LONG       ReferenceCount;
+    volatile LONG       Destroying;
+    volatile LONG       FinalizeQueued;
+    volatile LONG       HandleReferenceDropped;
+    KEVENT              ReferencesDrainedEvent;
+    WORK_QUEUE_ITEM     FinalizeWorkItem;
+
     /* Back-pointer to the owning adapter. */
     PDXGKRNL_ADAPTER    Adapter;
 
     /* Owning logical device for user-mode allocations, NULL for internal use. */
     PDXGKRNL_DEVICE     Device;
+
+    /* Stable miniport-device handle retained after logical device teardown. */
+    HANDLE              MiniportDeviceHandle;
+
+    /* Source allocation retained by a per-device OpenResource alias. */
+    struct _DXGKVMM_ALLOCATION *BackingAllocation;
+
+    /* Miniport binding created by DxgkDdiOpenAllocation for an open alias. */
+    HANDLE               OpenBindingHandle;
+    UINT                 OpenBindingIndex;
+    volatile LONG        LogicalReferenceCount;
+    volatile LONG        LogicalHandleReferenceDropped;
+    KEVENT               LogicalReferencesDrainedEvent;
+    BOOLEAN              Initializing;
 
     /* Optional parent resource wrapper. */
     PDXGKVMM_RESOURCE   Resource;
@@ -251,6 +297,9 @@ typedef struct _DXGKVMM_ALLOCATION
      */
     LIST_ENTRY          GlobalAllocationEntry;
 
+    /* Ordered membership in DXGKVMM_RESOURCE.AllocationList. */
+    LIST_ENTRY          ResourceEntry;
+
 } DXGKVMM_ALLOCATION, *PDXGKVMM_ALLOCATION;
 
 /* =========================================================================
@@ -327,14 +376,57 @@ VOID
 DxgkVidMmProcessCleanup(
     _In_ PEPROCESS Process);
 
-/*
- * DxgkVidMmHandleToAllocation
- *
- * Validates and dereferences a D3DKMT allocation handle.
- */
-PDXGKVMM_ALLOCATION
-DxgkVidMmHandleToAllocation(
-    _In_opt_ HANDLE Handle);
+VOID
+DxgkVidMmCleanupDeviceAllocations(
+    _In_ PDXGKRNL_DEVICE Device);
+
+VOID
+DxgkVidMmCleanupAdapterAllocations(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
+NTSTATUS
+DxgkVidMmQueryProcessBudget(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PEPROCESS Process,
+    _In_ D3DKMT_MEMORY_SEGMENT_GROUP MemorySegmentGroup,
+    _Out_ UINT64 *Budget,
+    _Out_ UINT64 *CurrentUsage,
+    _Out_ UINT64 *CurrentReservation,
+    _Out_ UINT64 *AvailableForReservation);
+
+NTSTATUS
+DxgkVidMmReferenceAllocation(
+    _In_opt_ HANDLE Handle,
+    _In_opt_ PDXGKRNL_ADAPTER ExpectedAdapter,
+    _In_opt_ PDXGKRNL_DEVICE ExpectedDevice,
+    _Out_ PDXGKVMM_ALLOCATION *OutAllocation);
+
+NTSTATUS
+DxgkVidMmReferenceProcessAllocation(
+    _In_ HANDLE Handle,
+    _In_ PDXGKRNL_ADAPTER ExpectedAdapter,
+    _In_ PDXGKRNL_PROCESS ExpectedProcess,
+    _Out_ PDXGKVMM_ALLOCATION *OutAllocation);
+
+NTSTATUS
+DxgkVidMmReferenceOpenBinding(
+    _In_ HANDLE Handle,
+    _In_ PDXGKRNL_ADAPTER ExpectedAdapter,
+    _In_ PDXGKRNL_DEVICE ExpectedDevice,
+    _Out_ PHANDLE OutOpenBindingHandle,
+    _Out_ PDXGKVMM_ALLOCATION *OutBindingReference);
+
+BOOLEAN
+DxgkVidMmDuplicateLogicalReference(
+    _In_ PDXGKVMM_ALLOCATION Allocation);
+
+VOID
+DxgkVidMmDereferenceLogicalAllocation(
+    _In_ PDXGKVMM_ALLOCATION Allocation);
+
+VOID
+DxgkVidMmDereferenceAllocation(
+    _In_ PDXGKVMM_ALLOCATION Allocation);
 
 /*
  * DxgkVidMmFillAllocationListEntry
@@ -348,20 +440,58 @@ DxgkVidMmFillAllocationListEntry(
     _In_ D3DKMT_HANDLE AllocationHandle,
     _Inout_ DXGK_ALLOCATIONLIST *ListEntry);
 
-PDXGKVMM_RESOURCE
-DxgkVidMmHandleToResource(
-    _In_ D3DKMT_HANDLE Handle);
+NTSTATUS
+DxgkVidMmReferenceResource(
+    _In_ D3DKMT_HANDLE Handle,
+    _In_ BOOLEAN GlobalShareHandle,
+    _In_opt_ PDXGKRNL_DEVICE ExpectedDevice,
+    _Out_ PDXGKVMM_RESOURCE *OutResource);
 
-PDXGKVMM_RESOURCE
-DxgkVidMmHandleToGlobalShare(
-    _In_ D3DKMT_HANDLE Handle);
+NTSTATUS
+DxgkVidMmCreateOpenResource(
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ PDXGKVMM_RESOURCE BackingResource,
+    _In_reads_(AllocationCount) PDXGKVMM_ALLOCATION const *BackingAllocations,
+    _In_ UINT AllocationCount,
+    _In_reads_bytes_opt_(ResourcePrivateDriverDataSize) PVOID ResourcePrivateDriverData,
+    _In_ UINT ResourcePrivateDriverDataSize,
+    _Inout_updates_bytes_opt_(TotalPrivateDriverDataSize) PVOID TotalPrivateDriverData,
+    _In_ UINT TotalPrivateDriverDataSize,
+    _Out_ PDXGKVMM_RESOURCE *OutResource,
+    _Out_writes_(AllocationCount) PHANDLE OutAllocationHandles);
+
+NTSTATUS
+DxgkVidMmSnapshotResourceAllocations(
+    _In_ PDXGKVMM_RESOURCE Resource,
+    _In_ PDXGKRNL_ADAPTER ExpectedAdapter,
+    _Outptr_result_buffer_(*OutAllocationCount) PDXGKVMM_ALLOCATION **OutAllocations,
+    _Out_ PUINT OutAllocationCount,
+    _Out_ PUINT OutTotalPrivateDriverDataSize);
+
+VOID
+DxgkVidMmReleaseAllocationSnapshot(
+    _In_reads_(AllocationCount) PDXGKVMM_ALLOCATION *Allocations,
+    _In_ UINT AllocationCount);
+
+NTSTATUS
+DxgkVidMmAttachAllocationToResource(
+    _In_ PDXGKVMM_RESOURCE Resource,
+    _In_ PDXGKVMM_ALLOCATION Allocation);
+
+VOID
+DxgkVidMmDereferenceResource(
+    _In_ PDXGKVMM_RESOURCE Resource);
 
 PDXGKVMM_RESOURCE
 DxgkVidMmCreateResourceWrapper(
+    _In_ PDXGKRNL_ADAPTER Adapter,
     _In_opt_ PDXGKRNL_DEVICE Device,
     _In_opt_ HANDLE          MiniportHandle,
     _In_ D3DKMT_HANDLE       GlobalShareHandle,
-    _In_opt_ HANDLE          AllocationHandle,
+    _In_ BOOLEAN              Shareable,
+    _In_reads_bytes_opt_(PrivateRuntimeDataSize)
+            CONST VOID      *PrivateRuntimeData,
+    _In_    UINT             PrivateRuntimeDataSize,
     _In_reads_bytes_opt_(ResourcePrivateDriverDataSize)
             CONST VOID      *ResourcePrivateDriverData,
     _In_    UINT             ResourcePrivateDriverDataSize);
@@ -396,4 +526,17 @@ DxgkVidMmGetAllocationPrimaryAddress(
 PVOID
 DxgkVidMmGetHandleData(
     _In_ DXGK_HANDLE_TYPE Type,
-    _In_ D3DKMT_HANDLE Handle);
+    _In_ D3DKMT_HANDLE Handle,
+    _In_ BOOLEAN DeviceSpecific);
+
+PVOID
+DxgkVidMmAcquireHandleData(
+    _In_ DXGK_HANDLE_TYPE Type,
+    _In_ D3DKMT_HANDLE Handle,
+    _In_ BOOLEAN DeviceSpecific,
+    _Out_ PDXGKARG_RELEASE_HANDLE ReleaseHandle);
+
+VOID
+DxgkVidMmReleaseHandleData(
+    _In_ DXGK_HANDLE_TYPE Type,
+    _In_ DXGKARG_RELEASE_HANDLE ReleaseHandle);

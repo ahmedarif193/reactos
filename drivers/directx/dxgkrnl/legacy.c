@@ -88,6 +88,7 @@ DxgkLegacyDetach(
 {
     PDXGKRNL_ADAPTER            Adapter;
     PDXGKRNL_MINIPORT_CONTEXT   MpCtx;
+    PVOID                       MiniportDeviceContext;
     KIRQL                       OldIrql;
 
     PAGED_CODE();
@@ -138,8 +139,12 @@ DxgkLegacyDetach(
     if (Adapter->MiniportDeviceContext != NULL && MpCtx != NULL &&
         MpCtx->InitData.s.DxgkDdiRemoveDevice != NULL)
     {
-        MpCtx->InitData.s.DxgkDdiRemoveDevice(Adapter->MiniportDeviceContext);
+        ExAcquireFastMutex(&Adapter->MiniportCallbackMutex);
+        MiniportDeviceContext = Adapter->MiniportDeviceContext;
+        InterlockedExchange(&Adapter->MiniportCallbacksValid, 0);
         Adapter->MiniportDeviceContext = NULL;
+        MpCtx->InitData.s.DxgkDdiRemoveDevice(MiniportDeviceContext);
+        ExReleaseFastMutex(&Adapter->MiniportCallbackMutex);
     }
 
     /* Delete the FDO.  This also releases the DeviceExtension (Adapter) memory. */

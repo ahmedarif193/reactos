@@ -661,7 +661,11 @@ Vc4KmtSubmitPacket(
      * write-combined mappings) to DRAM before ownership passes to the
      * kernel: the V3D is a non-coherent DMA reader, and a DSB drains only
      * the issuing PE's write buffer — this is the writer PE. */
+#if defined(_M_ARM64)
     __dsb(_ARM64_BARRIER_SY);
+#else
+    MemoryBarrier();
+#endif
 
     RtlZeroMemory(&Escape, sizeof(Escape));
     Escape.hAdapter = Device->hAdapter;

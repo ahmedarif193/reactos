@@ -242,6 +242,7 @@ DriverEntry(
     InitData.DxgkDdiSubmitCommand         = Rpi5Vc4DdiSubmitCommand;
     InitData.DxgkDdiPreemptCommand        = Rpi5Vc4DdiPreemptCommand;
     InitData.DxgkDdiQueryCurrentFence     = Rpi5Vc4DdiQueryCurrentFence;
+    InitData.DxgkDdiGetNodeMetadata       = Rpi5Vc4DdiGetNodeMetadata;
     InitData.DxgkDdiResetFromTimeout      = Rpi5Vc4DdiResetFromTimeout;
     InitData.DxgkDdiRestartFromTimeout    = Rpi5Vc4DdiRestartFromTimeout;
     InitData.DxgkDdiControlInterrupt      = Rpi5Vc4DdiControlInterrupt;
@@ -279,9 +280,6 @@ DriverEntry(
         Rpi5Vc4DdiStopDeviceAndReleasePostDisplayOwnership;
     InitData.DxgkDdiSystemDisplayEnable   = Rpi5Vc4DdiSystemDisplayEnable;
     InitData.DxgkDdiSystemDisplayWrite    = Rpi5Vc4DdiSystemDisplayWrite;
-
-    /* Shadow-present seam used by dxgkrnl's display path */
-    InitData.DxgkDdiPresentDisplayOnly    = (PVOID)Rpi5Vc4DdiPresentDisplayOnly;
 
     return DxgkInitialize(DriverObject, RegistryPath, &InitData);
 }
@@ -560,14 +558,14 @@ Rpi5Vc4DdiStopDevice(
     if (DeviceExtension == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    /* Quiesce the submission pipeline and the 3D engine first. */
-    if (DeviceExtension->Started)
-    {
+    /* Close every producer before any timer, DPC, worker, MMIO mapping, or
+     * backing allocation can be released. This is idempotent for RemoveDevice. */
+    DeviceExtension->StopAccepting = TRUE;
+    Rpi5V3dDisconnectInterrupt(DeviceExtension);
+    if (DeviceExtension->DmaPipelineInitialized)
         Rpi5Vc4DmaPipelineDrain(DeviceExtension);
-        Rpi5V3dDisconnectInterrupt(DeviceExtension);
-        Rpi5V3dTeardown(DeviceExtension);
-        Rpi5MboxTeardown(DeviceExtension);
-    }
+    Rpi5V3dTeardown(DeviceExtension);
+    Rpi5MboxTeardown(DeviceExtension);
 
     /* Restore the firmware framebuffer as the (only) scanout plane. */
     DeviceExtension->CursorVisible = FALSE;
@@ -630,8 +628,14 @@ APIENTRY
 Rpi5Vc4DdiRemoveDevice(
     _In_ PVOID MiniportDeviceContext)
 {
+    NTSTATUS Status;
+
     if (MiniportDeviceContext == NULL)
         return STATUS_INVALID_PARAMETER;
+
+    Status = Rpi5Vc4DdiStopDevice(MiniportDeviceContext);
+    if (!NT_SUCCESS(Status))
+        return Status;
 
     ExFreePoolWithTag(MiniportDeviceContext, RPI5VC4_POOL_TAG);
     return STATUS_SUCCESS;

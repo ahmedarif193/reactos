@@ -26,6 +26,7 @@
 #include "dxgkrnl_private.h"
 
 #include "context.h"
+#include "vidsch.h"
 
 /* ========================================================================
  * Global state
@@ -421,8 +422,6 @@ TdrCreateRecoveryContext(
 {
     PUCHAR Ctx;
 
-    UNREFERENCED_PARAMETER(AdapterContext);
-
     if (RecoveryContext == NULL)
         return STATUS_INVALID_PARAMETER;
 
@@ -444,6 +443,9 @@ TdrCreateRecoveryContext(
     *(PULONG)(Ctx + TDR_CTX_SIGNATURE2) = TAG_TDR_CONTEXT;
     *(PULONG)(Ctx + TDR_CTX_SIGNATURE3) = TAG_TDR_CONTEXT;
 
+    /* Preserve the caller's adapter/scheduler context for recovery. */
+    *(PVOID *)(Ctx + TDR_CTX_SCHEDULER_PTR) = AdapterContext;
+
     /* Default timeout multiplier */
     *(PULONG)(Ctx + TDR_CTX_TIMEOUT_MULT) = 0x10;
 
@@ -453,8 +455,7 @@ TdrCreateRecoveryContext(
     *(PULONG)(Ctx + TDR_CTX_TDR_LEVEL)     = g_TdrConfig.TdrLevel;
 
     /* Store creation timestamp from SharedUserData */
-    *(PULONGLONG)(Ctx + TDR_CTX_TIMESTAMP) =
-        *((volatile PULONGLONG)((PUCHAR)(ULONG_PTR)0xFFFFF78000000320ULL));
+    *(PULONGLONG)(Ctx + TDR_CTX_TIMESTAMP) = *((volatile PULONGLONG)((PUCHAR)(ULONG_PTR)0xFFFFF78000000320ULL));
 
     *RecoveryContext = (PVOID)Ctx;
     return STATUS_SUCCESS;
@@ -539,10 +540,83 @@ NTAPI
 TdrResetFromTimeout(
     _In_ PVOID RecoveryContext)
 {
+    PDXGKRNL_ADAPTER Adapter;
+    NTSTATUS SchedulerStatus;
+    NTSTATUS Status;
+    BOOLEAN SchedulerPrepared = FALSE;
+
+    PAGED_CODE();
+
     if (RecoveryContext == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    return STATUS_NOT_IMPLEMENTED;
+    _SEH2_TRY
+    {
+        if (*(PULONG)((PUCHAR)RecoveryContext + TDR_CTX_SIGNATURE1) != TAG_TDR_CONTEXT || *(PULONG)((PUCHAR)RecoveryContext + TDR_CTX_SIGNATURE2) != TAG_TDR_CONTEXT || *(PULONG)((PUCHAR)RecoveryContext + TDR_CTX_SIGNATURE3) != TAG_TDR_CONTEXT)
+            _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
+        Adapter = *(PDXGKRNL_ADAPTER *)((PUCHAR)RecoveryContext + TDR_CTX_SCHEDULER_PTR);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
+    }
+    _SEH2_END;
+
+    if (!DxgkReferenceAdapterObject(Adapter))
+        return STATUS_DEVICE_NOT_READY;
+    if (Adapter == NULL || Adapter->State != DxgkAdapterStateStarted || Adapter->MiniportContext == NULL || Adapter->MiniportDeviceContext == NULL)
+    {
+        Status = STATUS_DEVICE_NOT_READY;
+        goto Cleanup;
+    }
+    if (DXGK_CB_FULL(Adapter, DxgkDdiResetFromTimeout) == NULL || DXGK_CB_FULL(Adapter, DxgkDdiRestartFromTimeout) == NULL)
+    {
+        Status = STATUS_NOT_SUPPORTED;
+        goto Cleanup;
+    }
+
+    SchedulerStatus = VidSchPrepareAdapterReset(Adapter);
+    if (NT_SUCCESS(SchedulerStatus))
+        SchedulerPrepared = TRUE;
+    else if (SchedulerStatus != STATUS_NOT_SUPPORTED)
+    {
+        Status = SchedulerStatus;
+        goto Cleanup;
+    }
+
+    _SEH2_TRY
+    {
+        Status = DXGK_CB_FULL(Adapter, DxgkDdiResetFromTimeout)(Adapter->MiniportDeviceContext);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    if (SchedulerPrepared)
+        VidSchCompleteAdapterReset(Adapter, NT_SUCCESS(Status));
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    _SEH2_TRY
+    {
+        Status = DXGK_CB_FULL(Adapter, DxgkDdiRestartFromTimeout)(Adapter->MiniportDeviceContext);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    if (!NT_SUCCESS(Status) || !SchedulerPrepared)
+        goto Cleanup;
+
+    Status = VidSchResumeScheduler(Adapter);
+
+Cleanup:
+    DxgkDereferenceAdapter(Adapter);
+    return Status;
 }
 
 /*
@@ -714,13 +788,7 @@ DpiGetSchedulerCallbackState(
     _In_  PVOID AdapterContext,
     _Out_ PBOOLEAN Enabled)
 {
-    UNREFERENCED_PARAMETER(AdapterContext);
-
-    if (Enabled == NULL)
-        return STATUS_INVALID_PARAMETER;
-
-    *Enabled = TRUE;
-    return STATUS_SUCCESS;
+    return VidSchGetSchedulerCallbackState((PDXGKRNL_ADAPTER)AdapterContext, Enabled);
 }
 
 /*
@@ -734,9 +802,7 @@ DpiSetSchedulerCallbackState(
     _In_ PVOID AdapterContext,
     _In_ BOOLEAN Enable)
 {
-    UNREFERENCED_PARAMETER(AdapterContext);
-    UNREFERENCED_PARAMETER(Enable);
-    return STATUS_SUCCESS;
+    return VidSchSetSchedulerCallbackState((PDXGKRNL_ADAPTER)AdapterContext, Enable);
 }
 
 /* ========================================================================

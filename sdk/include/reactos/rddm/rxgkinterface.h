@@ -29,12 +29,14 @@
 #define IOCTL_DXGKRNL_EXCHANGE_INTERFACE \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x200, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
-#define DXGKRNL_INTERFACE_VERSION_1  1
+#define DXGKRNL_INTERFACE_VERSION_1        1
+#define DXGKRNL_INTERFACE_VERSION_2        2
+#define DXGKRNL_INTERFACE_VERSION_CURRENT  DXGKRNL_INTERFACE_VERSION_2
 
 typedef struct _DXGKRNL_INTERFACE_EXCHANGE_IN
 {
-    ULONG Version;      /* Must be DXGKRNL_INTERFACE_VERSION_1 */
-    ULONG Size;         /* sizeof(REACTOS_WIN32K_DXGKRNL_INTERFACE) */
+    ULONG Version;      /* Highest interface version understood by caller. */
+    ULONG Size;         /* Bytes available for that version's callback table. */
 } DXGKRNL_INTERFACE_EXCHANGE_IN, *PDXGKRNL_INTERFACE_EXCHANGE_IN;
 
 /* REACTOS_WIN32K_DXGKRNL_INTERFACE function Pointers: */
@@ -809,6 +811,21 @@ DXGADAPTER_SIGNALSYNCHRONIZATIONOBJECTFROMCPU(_In_ const D3DKMT_SIGNALSYNCHRONIZ
 
 typedef DXGADAPTER_SIGNALSYNCHRONIZATIONOBJECTFROMCPU *PDXGADAPTER_SIGNALSYNCHRONIZATIONOBJECTFROMCPU;
 
+/* Version 2 additions. */
+
+/* Keep these tags visible even in builds whose public D3DKMT header target is
+ * older than WDDM 2.0 and therefore does not define the complete structures. */
+struct _D3DKMT_CREATECONTEXTVIRTUAL;
+struct _D3DKMT_SUBMITCOMMAND;
+
+typedef NTSTATUS
+(APIENTRY *PDXGADAPTER_CREATECONTEXTVIRTUAL)(
+    _Inout_ struct _D3DKMT_CREATECONTEXTVIRTUAL* unnamedParam1);
+
+typedef NTSTATUS
+(APIENTRY *PDXGADAPTER_SUBMITCOMMAND)(
+    _In_ const struct _D3DKMT_SUBMITCOMMAND* unnamedParam1);
+
 /*
  * This structure is the callbacks list that exist between DXGKNRL and Win32k.
  * This private interface is undocumented and changes with every Windows update
@@ -890,4 +907,14 @@ typedef struct _REACTOS_WIN32K_DXGKRNL_INTERFACE
     PDXGADAPTER_UPDATEGPUVIRTUALADDRESS RxgkIntPfnUpdateGpuVirtualAddress;
     PDXGADAPTER_WAITFORSYNCHRONIZATIONOBJECTFROMCPU RxgkIntPfnWaitForSynchronizationObjectFromCpu;
     PDXGADAPTER_SIGNALSYNCHRONIZATIONOBJECTFROMCPU RxgkIntPfnSignalSynchronizationObjectFromCpu;
+
+    /* Private interface version 2 additions; append-only ABI. */
+    PDXGADAPTER_CREATECONTEXTVIRTUAL RxgkIntPfnCreateContextVirtual;
+    PDXGADAPTER_SUBMITCOMMAND RxgkIntPfnSubmitCommand;
 } REACTOS_WIN32K_DXGKRNL_INTERFACE, *PREACTOS_WIN32K_DXGKRNL_INTERFACE;
+
+/* Sizes used to negotiate the append-only callback table. */
+#define DXGKRNL_INTERFACE_VERSION_1_SIZE \
+    FIELD_OFFSET(REACTOS_WIN32K_DXGKRNL_INTERFACE, RxgkIntPfnCreateContextVirtual)
+#define DXGKRNL_INTERFACE_VERSION_2_SIZE \
+    sizeof(REACTOS_WIN32K_DXGKRNL_INTERFACE)

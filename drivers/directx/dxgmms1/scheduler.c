@@ -46,17 +46,20 @@ DxgkpSubmitToHardware(
     }
 
     RtlZeroMemory(&SubmitArg, sizeof(SubmitArg));
-    SubmitArg.pDmaBuffer = CmdBuf->DmaBuffer;
+    SubmitArg.hDevice = CmdBuf->ContextHandle;
+    SubmitArg.DmaBufferSegmentId = CmdBuf->DmaBufferSegmentId;
+    SubmitArg.DmaBufferPhysicalAddress = CmdBuf->DmaBufferPhysicalAddress;
     SubmitArg.DmaBufferSize = CmdBuf->DmaBufferSize;
+    SubmitArg.DmaBufferSubmissionStartOffset = CmdBuf->DmaBufferSubmissionStartOffset;
+    SubmitArg.DmaBufferSubmissionEndOffset = CmdBuf->DmaBufferSubmissionEndOffset;
     SubmitArg.pDmaBufferPrivateData = CmdBuf->DmaBufferPrivateData;
     SubmitArg.DmaBufferPrivateDataSize = CmdBuf->DmaBufferPrivateDataSize;
-    SubmitArg.DmaBufferSubmissionStartOffset = 0;
-    SubmitArg.DmaBufferSubmissionEndOffset = CmdBuf->DmaBufferSize;
+    SubmitArg.DmaBufferPrivateDataSubmissionStartOffset = CmdBuf->DmaBufferPrivateDataSubmissionStartOffset;
+    SubmitArg.DmaBufferPrivateDataSubmissionEndOffset = CmdBuf->DmaBufferPrivateDataSubmissionEndOffset;
     SubmitArg.SubmissionFenceId = (UINT)CmdBuf->SubmitFenceId;
-    SubmitArg.NodeOrdinal = CmdBuf->NodeOrdinal;
     SubmitArg.EngineOrdinal = 0;
-    SubmitArg.hContext = CmdBuf->ContextHandle;
-    SubmitArg.Flags = CmdBuf->Flags;
+    SubmitArg.NodeOrdinal = CmdBuf->NodeOrdinal;
+    SubmitArg.Flags.Value = CmdBuf->Flags;
 
     DxgkMmsTdrStart(Adapter, Node->NodeOrdinal);
 

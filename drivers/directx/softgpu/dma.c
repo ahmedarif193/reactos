@@ -100,6 +100,11 @@ SoftGpuDpcRoutine(
 
     /* Step 1-3: promote CurrentFence to CompletedFence under FenceLock. */
     KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
+    if (Device->Stopped)
+    {
+        KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+        return;
+    }
     Device->CompletedFence = Device->CurrentFence;
     CompletedFence         = Device->CompletedFence;
     KeReleaseSpinLock(&Device->FenceLock, OldIrql);
@@ -223,9 +228,15 @@ SoftGpuDdiSubmitCommand(
 
     Start100ns = SoftGpuTraceNow100ns();
 
-    /* Store the fence ID under FenceLock. */
+    /* The same lock serializes StopDevice's gate with DPC insertion. */
     KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
+    if (Device->Stopped)
+    {
+        KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+        return STATUS_DELETE_PENDING;
+    }
     Device->CurrentFence = SubmitCommand->SubmissionFenceId;
+    Queued = KeInsertQueueDpc(&Device->DpcObject, NULL, NULL);
     KeReleaseSpinLock(&Device->FenceLock, OldIrql);
 
     /*
@@ -233,7 +244,6 @@ SoftGpuDdiSubmitCommand(
      * KeInsertQueueDpc returns FALSE if the DPC is already queued; that is
      * acceptable since the DPC will fire and pick up CurrentFence.
      */
-    Queued = KeInsertQueueDpc(&Device->DpcObject, NULL, NULL);
     ElapsedUs = SoftGpuTraceElapsedUs(Start100ns);
     TraceSeq = InterlockedIncrement(&g_SoftGpuSubmitTraceCount);
 
@@ -261,8 +271,8 @@ SoftGpuDdiSubmitCommand(
 /*
  * SoftGpuDdiPreemptCommand
  *
- * Simulates a preemption by directly notifying dxgkrnl that a preemption
- * fence has been signalled with no last-completed fence.
+ * The software queue has no atomic cancellation primitive.  Refuse preemption
+ * instead of reporting a fence that no engine actually preempted.
  *
  * IRQL: DISPATCH_LEVEL
  */
@@ -272,9 +282,7 @@ SoftGpuDdiPreemptCommand(
     _In_ PVOID                         MiniportDeviceContext,
     _In_ CONST DXGKARG_PREEMPTCOMMAND *PreemptCommand)
 {
-    PSOFTGPU_DEVICE              Device = (PSOFTGPU_DEVICE)MiniportDeviceContext;
-    DXGKARGCB_NOTIFY_INTERRUPT_DATA NotifyData;
-    KIRQL                        OldIrql;
+    PSOFTGPU_DEVICE Device = (PSOFTGPU_DEVICE)MiniportDeviceContext;
 
     if (Device == NULL || Device->Magic != SOFTGPU_DEVICE_MAGIC ||
         PreemptCommand == NULL)
@@ -288,29 +296,7 @@ SoftGpuDdiPreemptCommand(
         return STATUS_INVALID_PARAMETER;
     }
 
-    RtlZeroMemory(&NotifyData, sizeof(NotifyData));
-    NotifyData.InterruptType                    = DXGK_INTERRUPT_TYPE_DMA_PREEMPTED;
-    NotifyData.DmaPreempted.PreemptionFenceId   = PreemptCommand->PreemptionFenceId;
-    KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
-    NotifyData.DmaPreempted.LastCompletedFenceId= Device->CompletedFence;
-    KeReleaseSpinLock(&Device->FenceLock, OldIrql);
-    NotifyData.DmaPreempted.NodeOrdinal         = PreemptCommand->NodeOrdinal;
-    NotifyData.DmaPreempted.EngineOrdinal       = PreemptCommand->EngineOrdinal;
-
-    if (Device->DxgkInterface.DxgkCbNotifyInterrupt != NULL)
-    {
-        Device->DxgkInterface.DxgkCbNotifyInterrupt(
-            Device->DxgkInterface.DeviceHandle,
-            &NotifyData);
-    }
-
-    if (Device->DxgkInterface.DxgkCbNotifyDpc != NULL)
-    {
-        Device->DxgkInterface.DxgkCbNotifyDpc(
-            Device->DxgkInterface.DeviceHandle);
-    }
-
-    return STATUS_SUCCESS;
+    return STATUS_NOT_SUPPORTED;
 }
 
 
@@ -573,15 +559,15 @@ SoftGpuDdiCreateContext(
      * DmaBufferSize:            64 KB — sufficient for a Vista-era command batch.
      * AllocationListSize:       256 entries.
      * PatchLocationListSize:    256 entries.
-     * DmaBufferSegmentSet:      bit 0 set → segment 1 (our aperture segment).
+     * DmaBufferSegmentSet:      0 requests physically contiguous system memory.
      * DmaBufferPrivateDataSize: 0 (softgpu has no per-DMA private state).
      */
     CreateContext->ContextInfo.DmaBufferSize            = 64 * 1024;
-    CreateContext->ContextInfo.DmaBufferSegmentSet      = (1 << (SOFTGPU_SEGMENT_ID - 1));
+    CreateContext->ContextInfo.DmaBufferSegmentSet      = 0;
     CreateContext->ContextInfo.DmaBufferPrivateDataSize = 0;
     CreateContext->ContextInfo.AllocationListSize       = 256;
     CreateContext->ContextInfo.PatchLocationListSize    = 256;
-    CreateContext->ContextInfo.Flags.Value              = 0;
+    CreateContext->ContextInfo.Caps.Value               = 0;
 
     CreateContext->hContext = (HANDLE)Ctx;
 

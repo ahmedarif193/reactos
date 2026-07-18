@@ -33,40 +33,25 @@
  * --------------------
  * The existing d3dkmt.c dispatches through the REACTOS_WIN32K_DXGKRNL_INTERFACE
  * callback table.  That table is populated at runtime by DxStartupDxgkInt().
- * Until the private IOCTL interface to dxgkrnl is reverse-engineered, the
- * table cannot be populated — so every NtGdiDdDDI* call returns
- * STATUS_PROCEDURE_NOT_FOUND.
- *
- * This file provides explicit, named NtGdiDdDDI* → D3DKMT* forwarding
- * functions that can be installed into the callback table by WddmBridgeInit()
- * as an intermediate step, enabling end-to-end tracing before the IOCTL
- * wire protocol is known.  Each function:
+ * The private interface is negotiated at bridge startup, then this file
+ * installs explicit NtGdiDdDDI* -> D3DKMT* forwarding functions.  Each
+ * function:
  *
  *   1. Validates the parameter pointer.
- *   2. Calls the corresponding D3DKMT* stub (which currently returns
- *      STATUS_NOT_IMPLEMENTED and logs a DPRINT1 message).
- *   3. Returns the stub's status to the original NtGdiDdDDI* caller.
+ *   2. Calls the corresponding D3DKMT* bridge entry point.
+ *   3. Returns the bridge entry point's status to the original caller.
  *
  * When D3DKMT stubs are fully implemented, this layer becomes a zero-cost
  * abstraction that can be inlined or removed.
  *
- * HOW TO WIRE THIS INTO DxStartupDxgkInt
- * ----------------------------------------
- * In win32ss/gdi/ntgdi/d3dkmt.c, DxStartupDxgkInt() should call
- * WddmBridgeInit() and, on success, populate DxgAdapterCallbacks with
- * the function pointers declared in this file:
+ * CALLBACK WIRING
+ * ---------------
+ * DxStartupDxgkInt() negotiates the bridge and calls
+ * WddmBridgeInitCallbacks(), which installs the forwarders below.
  *
- *   NTSTATUS Status = WddmBridgeInit();
- *   if (NT_SUCCESS(Status))
- *   {
- *       DxgAdapterCallbacks.RxgkIntPfnCreateDevice  = DxgBridgeCreateDevice;
- *       DxgAdapterCallbacks.RxgkIntPfnDestroyDevice = DxgBridgeDestroyDevice;
- *       // ... etc.
- *   }
- *
- * TODO (CORE-20027): Replace the DxgBridge* pointers with real dxgkrnl
- *   function pointers obtained via the "exchange capability table" IOCTL
- *   once that IOCTL is implemented.
+ * The exchange table is a version/readiness handshake.  Public handles must
+ * still pass through these marshalling shims rather than direct kernel-private
+ * callbacks.
  */
 
 #include <ntifs.h>
@@ -142,10 +127,10 @@ NTSTATUS APIENTRY D3DKMTWaitForIdle(CONST D3DKMT_WAITFORIDLE *pData);
 NTSTATUS APIENTRY D3DKMTWaitForVerticalBlankEvent(CONST D3DKMT_WAITFORVERTICALBLANKEVENT *pData);
 
 /* WDDM 1.2 additions */
-NTSTATUS APIENTRY D3DKMTEnumAdapters(D3DKMT_ENUMADAPTERS *pData);
-NTSTATUS APIENTRY D3DKMTOpenAdapterFromLuid(D3DKMT_OPENADAPTERFROMLUID *pData);
+NTSTATUS APIENTRY D3DKMTEnumAdapters(CONST D3DKMT_ENUMADAPTERS *pData);
+NTSTATUS APIENTRY D3DKMTOpenAdapterFromLuid(CONST D3DKMT_OPENADAPTERFROMLUID *pData);
 NTSTATUS APIENTRY D3DKMTOfferAllocations(CONST D3DKMT_OFFERALLOCATIONS *pData);
-NTSTATUS APIENTRY D3DKMTReclaimAllocations(D3DKMT_RECLAIMALLOCATIONS *pData);
+NTSTATUS APIENTRY D3DKMTReclaimAllocations(CONST D3DKMT_RECLAIMALLOCATIONS *pData);
 NTSTATUS APIENTRY D3DKMTSetVidPnSourceOwner1(CONST D3DKMT_SETVIDPNSOURCEOWNER1 *pData);
 NTSTATUS APIENTRY D3DKMTWaitForVerticalBlankEvent2(CONST D3DKMT_WAITFORVERTICALBLANKEVENT2 *pData);
 NTSTATUS APIENTRY D3DKMTCreateSynchronizationObject2(D3DKMT_CREATESYNCHRONIZATIONOBJECT2 *pData);
@@ -164,6 +149,8 @@ NTSTATUS APIENTRY D3DKMTFreeGpuVirtualAddress(CONST D3DKMT_FREEGPUVIRTUALADDRESS
 NTSTATUS APIENTRY D3DKMTUpdateGpuVirtualAddress(CONST D3DKMT_UPDATEGPUVIRTUALADDRESS *pData);
 NTSTATUS APIENTRY D3DKMTWaitForSynchronizationObjectFromCpu(CONST D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU *pData);
 NTSTATUS APIENTRY D3DKMTSignalSynchronizationObjectFromCpu(CONST D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU *pData);
+NTSTATUS APIENTRY D3DKMTCreateContextVirtual(D3DKMT_CREATECONTEXTVIRTUAL *pData);
+NTSTATUS APIENTRY D3DKMTSubmitCommand(CONST D3DKMT_SUBMITCOMMAND *pData);
 
 /*
  * ==========================================================================
@@ -179,8 +166,6 @@ NTSTATUS APIENTRY D3DKMTSignalSynchronizationObjectFromCpu(CONST D3DKMT_SIGNALSY
  * Bridges NtGdiDdDDIOpenAdapterFromHdc -> D3DKMTOpenAdapterFromHdc.
  * The HDC in pData->hDc must identify a WDDM display; GDI DCs backed by
  * software-only adapters are rejected by dxgkrnl.
- *
- * TODO: wire into DxgAdapterCallbacks.RxgkIntPfn<name> in DxStartupDxgkInt.
  */
 DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeOpenAdapterFromHdc,
                             D3DKMTOpenAdapterFromHdc,
@@ -191,8 +176,6 @@ DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeOpenAdapterFromHdc,
  * DxgBridgeCloseAdapter
  *
  * Bridges NtGdiDdDDICloseAdapter -> D3DKMTCloseAdapter.
- *
- * TODO: wire into DxgAdapterCallbacks.RxgkIntPfnCloseAdapter.
  */
 DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeCloseAdapter,
                             D3DKMTCloseAdapter,
@@ -203,8 +186,6 @@ DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeCloseAdapter,
  * DxgBridgeQueryAdapterInfo
  *
  * Bridges NtGdiDdDDIQueryAdapterInfo -> D3DKMTQueryAdapterInfo.
- *
- * TODO: wire into DxgAdapterCallbacks.RxgkIntPfnQueryAdapterInfo.
  */
 DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeQueryAdapterInfo,
                             D3DKMTQueryAdapterInfo,
@@ -215,8 +196,6 @@ DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeQueryAdapterInfo,
  * DxgBridgeCreateDevice
  *
  * Bridges NtGdiDdDDICreateDevice -> D3DKMTCreateDevice.
- *
- * TODO: wire into DxgAdapterCallbacks.RxgkIntPfnCreateDevice.
  */
 DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeCreateDevice,
                             D3DKMTCreateDevice,
@@ -227,8 +206,6 @@ DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeCreateDevice,
  * DxgBridgeDestroyDevice
  *
  * Bridges NtGdiDdDDIDestroyDevice -> D3DKMTDestroyDevice.
- *
- * TODO: wire into DxgAdapterCallbacks.RxgkIntPfnDestroyDevice.
  */
 DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeDestroyDevice,
                             D3DKMTDestroyDevice,
@@ -239,8 +216,6 @@ DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeDestroyDevice,
  * DxgBridgeCreateAllocation
  *
  * Bridges NtGdiDdDDICreateAllocation -> D3DKMTCreateAllocation.
- *
- * TODO: wire into DxgAdapterCallbacks.RxgkIntPfnCreateAllocation.
  */
 DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeCreateAllocation,
                             D3DKMTCreateAllocation,
@@ -251,8 +226,6 @@ DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeCreateAllocation,
  * DxgBridgeDestroyAllocation
  *
  * Bridges NtGdiDdDDIDestroyAllocation -> D3DKMTDestroyAllocation.
- *
- * TODO: wire into DxgAdapterCallbacks.RxgkIntPfnDestroyAllocation.
  */
 DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeDestroyAllocation,
                             D3DKMTDestroyAllocation,
@@ -263,8 +236,6 @@ DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeDestroyAllocation,
  * DxgBridgeLock
  *
  * Bridges NtGdiDdDDILock -> D3DKMTLock.
- *
- * TODO: wire into DxgAdapterCallbacks.RxgkIntPfnLock.
  */
 DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeLock,
                             D3DKMTLock,
@@ -275,8 +246,6 @@ DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeLock,
  * DxgBridgeUnlock
  *
  * Bridges NtGdiDdDDIUnlock -> D3DKMTUnlock.
- *
- * TODO: wire into DxgAdapterCallbacks.RxgkIntPfnUnlock.
  */
 DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeUnlock,
                             D3DKMTUnlock,
@@ -288,8 +257,6 @@ DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeUnlock,
  *
  * Bridges NtGdiDdDDIRender -> D3DKMTRender.
  * This is the hot path for all GPU command submission.
- *
- * TODO: wire into DxgAdapterCallbacks.RxgkIntPfnRender.
  */
 DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeRender,
                             D3DKMTRender,
@@ -300,8 +267,6 @@ DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeRender,
  * DxgBridgePresent
  *
  * Bridges NtGdiDdDDIPresent -> D3DKMTPresent.
- *
- * TODO: wire into DxgAdapterCallbacks.RxgkIntPfnPresent.
  */
 DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgePresent,
                             D3DKMTPresent,
@@ -313,8 +278,6 @@ DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgePresent,
  *
  * Bridges NtGdiDdDDIWaitForSynchronizationObject ->
  *   D3DKMTWaitForSynchronizationObject.
- *
- * TODO: wire into DxgAdapterCallbacks.RxgkIntPfnWaitForSynchronizationObject.
  */
 DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeWaitForSynchronizationObject,
                             D3DKMTWaitForSynchronizationObject,
@@ -326,8 +289,6 @@ DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeWaitForSynchronizationObject,
  *
  * Bridges NtGdiDdDDISignalSynchronizationObject ->
  *   D3DKMTSignalSynchronizationObject.
- *
- * TODO: wire into DxgAdapterCallbacks.RxgkIntPfnSignalSynchronizationObject.
  */
 DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeSignalSynchronizationObject,
                             D3DKMTSignalSynchronizationObject,
@@ -338,8 +299,6 @@ DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeSignalSynchronizationObject,
  * DxgBridgeGetDisplayModeList
  *
  * Bridges NtGdiDdDDIGetDisplayModeList -> D3DKMTGetDisplayModeList.
- *
- * TODO: wire into DxgAdapterCallbacks.RxgkIntPfnGetDisplayModeList.
  */
 DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeGetDisplayModeList,
                             D3DKMTGetDisplayModeList,
@@ -350,8 +309,6 @@ DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeGetDisplayModeList,
  * DxgBridgeSetDisplayMode
  *
  * Bridges NtGdiDdDDISetDisplayMode -> D3DKMTSetDisplayMode.
- *
- * TODO: wire into DxgAdapterCallbacks.RxgkIntPfnSetDisplayMode.
  */
 DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeSetDisplayMode,
                             D3DKMTSetDisplayMode,
@@ -633,6 +590,10 @@ DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeSignalSynchronizationObjectFromCpu,
                             _In_,
                             CONST D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU)
 
+DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeCreateContextVirtual, D3DKMTCreateContextVirtual, _Inout_, D3DKMT_CREATECONTEXTVIRTUAL)
+
+DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeSubmitCommand, D3DKMTSubmitCommand, _In_, CONST D3DKMT_SUBMITCOMMAND)
+
 /*
  * DxgBridgeReleaseProcessVidPnSourceOwners
  *
@@ -762,4 +723,10 @@ WddmBridgeInitCallbacks(
     Interface->RxgkIntPfnUpdateGpuVirtualAddress = DxgBridgeUpdateGpuVirtualAddress;
     Interface->RxgkIntPfnWaitForSynchronizationObjectFromCpu = DxgBridgeWaitForSynchronizationObjectFromCpu;
     Interface->RxgkIntPfnSignalSynchronizationObjectFromCpu = DxgBridgeSignalSynchronizationObjectFromCpu;
+
+    if (WddmBridgeGetInterfaceVersion() >= DXGKRNL_INTERFACE_VERSION_2)
+    {
+        Interface->RxgkIntPfnCreateContextVirtual = DxgBridgeCreateContextVirtual;
+        Interface->RxgkIntPfnSubmitCommand = DxgBridgeSubmitCommand;
+    }
 }
