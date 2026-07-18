@@ -229,6 +229,12 @@ static void Test_GetDeviceState(void)
     ok(!NT_SUCCESS(Status),
        "GetDeviceState with invalid device should fail, got 0x%lx\n", Status);
 
+    memset(&StateData, 0, sizeof(StateData));
+    StateData.hDevice = hDevice;
+    StateData.StateType = (D3DKMT_DEVICESTATE_TYPE)0x7fffffff;
+    Status = pfnD3DKMTGetDeviceState(&StateData);
+    ok(Status == STATUS_INVALID_PARAMETER, "GetDeviceState with invalid state type returned 0x%lx, expected STATUS_INVALID_PARAMETER\n", Status);
+
     DestroyTestDevice(hDevice);
     CloseAdapter(hAdapter);
 }

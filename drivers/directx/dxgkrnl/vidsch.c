@@ -61,10 +61,34 @@
  */
 FORCEINLINE BOOLEAN
 VidSchpFenceReached(
-    _In_ LONG CompletedFence,
-    _In_ LONG TargetFence)
+    _In_ ULONG CompletedFence,
+    _In_ ULONG TargetFence)
 {
-    return ((CompletedFence - TargetFence) >= 0);
+    return ((LONG)(CompletedFence - TargetFence) >= 0);
+}
+
+static VOID
+VidSchpUpdateFence(
+    _Inout_ volatile LONG *Fence,
+    _In_ ULONG ReportedFence)
+{
+    LONG Current;
+
+    for (;;)
+    {
+        Current = InterlockedCompareExchange(Fence, 0, 0);
+        if (VidSchpFenceReached((ULONG)Current, ReportedFence) || InterlockedCompareExchange(Fence, (LONG)ReportedFence, Current) == Current)
+            return;
+    }
+}
+
+static DECLSPEC_NORETURN VOID
+VidSchpBugCheckInvalidFence(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG ReportedFence,
+    _In_ ULONG LastSubmittedFence)
+{
+    KeBugCheckEx(0x119, 0x1, (ULONG_PTR)ReportedFence, (ULONG_PTR)LastSubmittedFence, (ULONG_PTR)Adapter);
 }
 
 static BOOLEAN
@@ -237,6 +261,8 @@ VidSchpDereferencePacket(
     if (InterlockedDecrement(&Packet->ReferenceCount) != 0)
         return;
 
+    if (Packet->FenceIdentityReserved && Packet->OwnerEngine != NULL)
+        DxgkReleaseSubmittedFenceIdentity(Packet->OwnerEngine->Adapter, Packet->NodeOrdinal, Packet->SubmissionFenceId);
     if (Packet->TrackerReservation != NULL)
         DxgkCancelTrackedDmaBuffer(Packet->TrackerReservation);
     if (Packet->DmaBuffer != NULL)
@@ -286,6 +312,8 @@ VidSchpCompletionDpcRoutine(
     LIST_ENTRY RetireList;
     PLIST_ENTRY Link;
     BOOLEAN PreemptionInterrupt;
+    BOOLEAN PreemptionCompleted = FALSE;
+    ULONG CompletedPreemptionFence = 0;
 
     UNREFERENCED_PARAMETER(Dpc);
     UNREFERENCED_PARAMETER(SystemArgument1);
@@ -304,6 +332,18 @@ VidSchpCompletionDpcRoutine(
      */
     KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
 
+    if (PreemptionInterrupt)
+    {
+        CompletedPreemptionFence = (ULONG)InterlockedExchange(&Engine->PendingPreemptionFenceId, 0);
+        InterlockedExchange(&Engine->PreemptionDdiState, 0);
+        if (CompletedPreemptionFence != 0 && VidSchpTryTransition(&Engine->State, (LONG)VidSchEnginePreempting, (LONG)VidSchEnginePreempted, NULL))
+        {
+            Engine->CompletedPreemptionEngineOrdinal = Engine->PendingPreemptionEngineOrdinal;
+            InterlockedExchange(&Engine->CompletedPreemptionFenceId, (LONG)CompletedPreemptionFence);
+            PreemptionCompleted = TRUE;
+        }
+    }
+
     while (!IsListEmpty(&Engine->RunQueueHead))
     {
         PVIDSCH_DMA_PACKET Packet;
@@ -314,7 +354,7 @@ VidSchpCompletionDpcRoutine(
         /* Never retire un-kicked work: its DMA has not executed, whatever
          * the fence threshold says. */
         if (!Packet->Kicked ||
-            !VidSchpFenceReached(Completed, (LONG)Packet->SubmissionFenceId))
+            !VidSchpFenceReached((ULONG)Completed, Packet->SubmissionFenceId))
             break;
 
         RemoveEntryList(Link);
@@ -329,6 +369,11 @@ VidSchpCompletionDpcRoutine(
      */
     if (IsListEmpty(&Engine->RunQueueHead))
     {
+        if (!PreemptionCompleted && VidSchpReadState(Engine) == VidSchEnginePreempting && InterlockedCompareExchange(&Engine->PreemptionDdiState, 0, 0) == 0)
+        {
+            InterlockedExchange(&Engine->PendingPreemptionFenceId, 0);
+            VidSchpTryTransition(&Engine->State, (LONG)VidSchEnginePreempting, (LONG)VidSchEngineRunning, NULL);
+        }
         VidSchpTryTransition(&Engine->State, (LONG)VidSchEnginePreempted, (LONG)VidSchEngineIdle, NULL);
         /* Try RUNNING -> COMPLETING -> IDLE */
         if (VidSchpTryTransition(&Engine->State, (LONG)VidSchEngineRunning, (LONG)VidSchEngineCompleting, NULL))
@@ -350,18 +395,21 @@ VidSchpCompletionDpcRoutine(
 
         if (!HeadPkt->Kicked)
         {
+            if (!PreemptionCompleted && VidSchpReadState(Engine) == VidSchEnginePreempting && InterlockedCompareExchange(&Engine->PreemptionDdiState, 0, 0) == 0)
+            {
+                InterlockedExchange(&Engine->PendingPreemptionFenceId, 0);
+                VidSchpTryTransition(&Engine->State, (LONG)VidSchEnginePreempting, (LONG)VidSchEngineRunning, NULL);
+            }
             VidSchpTryTransition(&Engine->State, (LONG)VidSchEnginePreempted, (LONG)VidSchEngineIdle, NULL);
             VidSchpTryTransition(&Engine->State, (LONG)VidSchEngineRunning, (LONG)VidSchEngineIdle, NULL);
         }
 
-        /* A DMA_PREEMPTED notification does not complete the preempted head.
-         * Leave it parked for TDR reset instead of submitting the same DMA
-         * descriptor twice. If all submitted work retired, the next unkicked
-         * packet is safe to dispatch normally. */
-        if (!PreemptionInterrupt || !HeadPkt->Kicked)
-            VidSchpKickEngine(Engine);
     }
     KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+    VidSchpKickEngine(Engine);
+
+    if (PreemptionCompleted)
+        KeSetEvent(&Engine->PreemptionCompletedEvent, IO_NO_INCREMENT, FALSE);
 
     /* Signal completion event so VidSchWaitForIdle can wake up. */
     KeSetEvent(&Engine->CompletionEvent, IO_NO_INCREMENT, FALSE);
@@ -448,8 +496,22 @@ VidSchpVirtualSubmitWorker(
     }
     KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
 
-    if (Packet != NULL && DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommandVirtual) != NULL)
-        Status = DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommandVirtual)(Adapter->MiniportDeviceContext, &SubmitArgs);
+    if (Packet != NULL && DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommandVirtual) != NULL && DxgkAcquireKmdCall(Adapter))
+    {
+        DxgkPublishSubmittedFence(Adapter, Packet->NodeOrdinal, Packet->SubmissionFenceId);
+        _SEH2_TRY
+        {
+            Status = DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommandVirtual)(Adapter->MiniportDeviceContext, &SubmitArgs);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+        DxgkReleaseKmdCall(Adapter);
+        if (!NT_SUCCESS(Status))
+            KeBugCheckEx(0x119, 0x2, (ULONG_PTR)Status, (ULONG_PTR)&SubmitArgs, (ULONG_PTR)Engine);
+    }
 
     if (Packet != NULL && !NT_SUCCESS(Status))
     {
@@ -462,10 +524,10 @@ VidSchpVirtualSubmitWorker(
             Removed = TRUE;
         }
         VidSchpTryTransition(&Engine->State, (LONG)VidSchEngineRunning, (LONG)VidSchEngineIdle, NULL);
-        VidSchpKickEngine(Engine);
         KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
         if (Removed)
             VidSchpDereferencePacket(Packet);
+        VidSchpKickEngine(Engine);
     }
 
     if (Packet != NULL)
@@ -479,135 +541,153 @@ VidSchpVirtualSubmitWorker(
 /* ========================================================================
  * VidSchpKickEngine — submit the next queued packet to the miniport
  *
- * MUST be called with Engine->QueueLock held at DISPATCH_LEVEL.
- * Transitions the engine from IDLE to SUBMITTING to RUNNING.
+ * Claims queue state under QueueLock, but never holds that lock across the
+ * miniport callback. This lets TDR claim the engine if SubmitCommand stalls.
  * ====================================================================== */
 static VOID
 VidSchpKickEngine(
     _In_ PVIDSCH_ENGINE Engine)
 {
-    PVIDSCH_DMA_PACKET Packet;
-    PLIST_ENTRY Link;
-    PDXGKRNL_ADAPTER Adapter;
-    NTSTATUS Status;
-    DXGKARG_SUBMITCOMMAND SubmitArgs;
+    PDXGKRNL_ADAPTER Adapter = Engine != NULL ? Engine->Adapter : NULL;
 
-    if (IsListEmpty(&Engine->RunQueueHead))
-        return;
-
-    if (Engine->Scheduler == NULL || (VidSchpReadSchedulerState(Engine->Scheduler) != VidSchSchedulerRunning && VidSchpReadSchedulerState(Engine->Scheduler) != VidSchSchedulerSuspending))
-        return;
-
-    Adapter = Engine->Adapter;
     if (Adapter == NULL)
         return;
 
-    /*
-     * Only kick if the engine is IDLE.  If it's already RUNNING or in
-     * another active state, the completion DPC will re-kick when the
-     * current command finishes.
-     */
-    if (!VidSchpTryTransition(&Engine->State,
-                              (LONG)VidSchEngineIdle,
-                              (LONG)VidSchEngineSubmitting,
-                              NULL))
+    for (;;)
     {
-        return;
-    }
+        PDXGKRNL_SUBMIT_DMA_BUFFER Reservation = NULL;
+        PVIDSCH_DMA_PACKET Packet;
+        PLIST_ENTRY Link;
+        DXGKARG_SUBMITCOMMAND SubmitArgs;
+        KIRQL CallIrql;
+        KIRQL OldIrql;
+        NTSTATUS Status = STATUS_NOT_SUPPORTED;
+        BOOLEAN KmdCallAcquired = FALSE;
+        BOOLEAN KickNext = FALSE;
 
-    /* Peek the head packet (don't dequeue — it stays until completion). */
-    Link = Engine->RunQueueHead.Flink;
-    Packet = CONTAINING_RECORD(Link, VIDSCH_DMA_PACKET, RunQueueEntry);
-
-    if (Packet->VirtualAddressing)
-    {
-        PVIDSCH_VIRTUAL_SUBMIT_WORK Work = (PVIDSCH_VIRTUAL_SUBMIT_WORK)Packet->VirtualSubmitWorkItem;
-
-        if (Work == NULL)
+        KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
+        if (IsListEmpty(&Engine->RunQueueHead) || Engine->Scheduler == NULL || (VidSchpReadSchedulerState(Engine->Scheduler) != VidSchSchedulerRunning && VidSchpReadSchedulerState(Engine->Scheduler) != VidSchSchedulerSuspending) || !VidSchpTryTransition(&Engine->State, (LONG)VidSchEngineIdle, (LONG)VidSchEngineSubmitting, NULL))
         {
-            VidSchpTryTransition(&Engine->State, (LONG)VidSchEngineSubmitting, (LONG)VidSchEngineError, NULL);
+            KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
             return;
         }
 
-        Packet->VirtualSubmitWorkItem = NULL;
-        VidSchpReferenceActiveCall(Adapter);
-        if (InterlockedIncrement(&Engine->OutstandingWorkers) == 1)
-            KeClearEvent(&Engine->WorkersDrainedEvent);
-        ExQueueWorkItem(&Work->WorkItem, DelayedWorkQueue);
-        return;
+        Link = Engine->RunQueueHead.Flink;
+        Packet = CONTAINING_RECORD(Link, VIDSCH_DMA_PACKET, RunQueueEntry);
+        if (Packet->VirtualAddressing)
+        {
+            PVIDSCH_VIRTUAL_SUBMIT_WORK Work = (PVIDSCH_VIRTUAL_SUBMIT_WORK)Packet->VirtualSubmitWorkItem;
+
+            if (Work == NULL)
+            {
+                VidSchpTryTransition(&Engine->State, (LONG)VidSchEngineSubmitting, (LONG)VidSchEngineError, NULL);
+                KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+                return;
+            }
+            Packet->VirtualSubmitWorkItem = NULL;
+            VidSchpReferenceActiveCall(Adapter);
+            if (InterlockedIncrement(&Engine->OutstandingWorkers) == 1)
+                KeClearEvent(&Engine->WorkersDrainedEvent);
+            ExQueueWorkItem(&Work->WorkItem, DelayedWorkQueue);
+            KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+            return;
+        }
+
+        if (Packet->SubmissionFenceId == 0)
+            Packet->SubmissionFenceId = DxgkAllocateSubmissionFenceId(Adapter);
+        Packet->Kicked = TRUE;
+        Engine->LastSubmittedFence = (LONG)Packet->SubmissionFenceId;
+        InterlockedIncrement(&Packet->ReferenceCount);
+
+        RtlZeroMemory(&SubmitArgs, sizeof(SubmitArgs));
+        if (Adapter->SchedulingCaps.MultiEngineAware)
+            SubmitArgs.hContext = Packet->MiniportContextHandle;
+        else
+            SubmitArgs.hDevice = Packet->MiniportDeviceHandle;
+        if (Packet->DmaBuffer != NULL)
+        {
+            SubmitArgs.DmaBufferSegmentId = Packet->DmaBuffer->SegmentId;
+            SubmitArgs.DmaBufferPhysicalAddress = Packet->DmaBuffer->SegmentAddress;
+            SubmitArgs.DmaBufferSize = Packet->DmaBuffer->Capacity;
+            SubmitArgs.DmaBufferSubmissionStartOffset = Packet->DmaBuffer->SubmissionStartOffset;
+            SubmitArgs.DmaBufferSubmissionEndOffset = Packet->DmaBuffer->SubmissionEndOffset;
+        }
+        SubmitArgs.pDmaBufferPrivateData = Packet->DriverPrivateData;
+        SubmitArgs.DmaBufferPrivateDataSize = Packet->DriverPrivateDataSize;
+        SubmitArgs.DmaBufferPrivateDataSubmissionStartOffset = 0;
+        SubmitArgs.DmaBufferPrivateDataSubmissionEndOffset = Packet->DriverPrivateDataSize;
+        SubmitArgs.SubmissionFenceId = Packet->SubmissionFenceId;
+        SubmitArgs.VidPnSourceId = Packet->VidPnSourceId;
+        SubmitArgs.FlipInterval = D3DDDI_FLIPINTERVAL_IMMEDIATE;
+        SubmitArgs.NodeOrdinal = Packet->NodeOrdinal;
+        SubmitArgs.EngineOrdinal = Packet->EngineOrdinal;
+        SubmitArgs.Flags.Value = Packet->SubmitFlags;
+        if (Packet->IsPresent)
+            SubmitArgs.Flags.Present = 1;
+        KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+
+        if (DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommand) != NULL)
+            KmdCallAcquired = DxgkAcquireKmdCall(Adapter);
+        if (KmdCallAcquired)
+        {
+            DxgkPublishSubmittedFence(Adapter, Packet->NodeOrdinal, Packet->SubmissionFenceId);
+            KeRaiseIrql(DISPATCH_LEVEL, &CallIrql);
+            _SEH2_TRY
+            {
+                Status = DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommand)(Adapter->MiniportDeviceContext, &SubmitArgs);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            KeLowerIrql(CallIrql);
+            if (!NT_SUCCESS(Status))
+                KeBugCheckEx(0x119, 0x2, (ULONG_PTR)Status, (ULONG_PTR)&SubmitArgs, (ULONG_PTR)Engine);
+        }
+
+        KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
+        if (!KmdCallAcquired)
+        {
+            if (!IsListEmpty(&Engine->RunQueueHead) && Engine->RunQueueHead.Flink == &Packet->RunQueueEntry)
+            {
+                RemoveEntryList(&Packet->RunQueueEntry);
+                Engine->PendingPacketCount--;
+                VidSchpTryTransition(&Engine->State, (LONG)VidSchEngineSubmitting, (LONG)VidSchEngineIdle, NULL);
+                VidSchpReferenceActiveCall(Adapter);
+                if (InterlockedIncrement(&Engine->OutstandingWorkers) == 1)
+                    KeClearEvent(&Engine->WorkersDrainedEvent);
+                ExQueueWorkItem(&Packet->CleanupWorkItem, DelayedWorkQueue);
+                KickNext = TRUE;
+            }
+        }
+        else
+        {
+            Reservation = Packet->TrackerReservation;
+            Packet->TrackerReservation = NULL;
+            Packet->DmaBuffer = NULL;
+            if (Reservation != NULL)
+            {
+                Reservation->FenceIdentityOwned = TRUE;
+                Packet->FenceIdentityReserved = FALSE;
+            }
+            if (!IsListEmpty(&Engine->RunQueueHead) && Engine->RunQueueHead.Flink == &Packet->RunQueueEntry)
+                VidSchpTryTransition(&Engine->State, (LONG)VidSchEngineSubmitting, (LONG)VidSchEngineRunning, NULL);
+            else if (VidSchpTryTransition(&Engine->State, (LONG)VidSchEngineSubmitting, (LONG)VidSchEngineIdle, NULL))
+                KickNext = TRUE;
+        }
+        KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+
+        if (Reservation != NULL)
+            DxgkCommitTrackedDmaBuffer(Adapter, Reservation);
+        if (KmdCallAcquired)
+            DxgkReleaseKmdCall(Adapter);
+        VidSchpDereferencePacket(Packet);
+        if (KickNext)
+            continue;
+        if (KmdCallAcquired)
+            return;
     }
-
-    if (Packet->SubmissionFenceId == 0)
-        Packet->SubmissionFenceId = DxgkAllocateSubmissionFenceId(Adapter);
-    Packet->Kicked = TRUE;
-
-    Engine->LastSubmittedFence = (LONG)Packet->SubmissionFenceId;
-
-    /*
-     * Build the DXGKARG_SUBMITCOMMAND for the miniport.
-     * The miniport reads the DMA buffer and programs the GPU to execute it.
-     */
-    RtlZeroMemory(&SubmitArgs, sizeof(SubmitArgs));
-    if (Adapter->SchedulingCaps.MultiEngineAware)
-        SubmitArgs.hContext = Packet->MiniportContextHandle;
-    else
-        SubmitArgs.hDevice = Packet->MiniportDeviceHandle;
-    if (Packet->DmaBuffer != NULL)
-    {
-        SubmitArgs.DmaBufferSegmentId = Packet->DmaBuffer->SegmentId;
-        SubmitArgs.DmaBufferPhysicalAddress = Packet->DmaBuffer->SegmentAddress;
-        SubmitArgs.DmaBufferSize = Packet->DmaBuffer->Capacity;
-        SubmitArgs.DmaBufferSubmissionStartOffset = Packet->DmaBuffer->SubmissionStartOffset;
-        SubmitArgs.DmaBufferSubmissionEndOffset = Packet->DmaBuffer->SubmissionEndOffset;
-    }
-    SubmitArgs.pDmaBufferPrivateData = Packet->DriverPrivateData;
-    SubmitArgs.DmaBufferPrivateDataSize = Packet->DriverPrivateDataSize;
-    SubmitArgs.DmaBufferPrivateDataSubmissionStartOffset = 0;
-    SubmitArgs.DmaBufferPrivateDataSubmissionEndOffset = Packet->DriverPrivateDataSize;
-    SubmitArgs.SubmissionFenceId = Packet->SubmissionFenceId;
-    SubmitArgs.VidPnSourceId = Packet->VidPnSourceId;
-    SubmitArgs.FlipInterval = D3DDDI_FLIPINTERVAL_IMMEDIATE;
-    SubmitArgs.NodeOrdinal = Packet->NodeOrdinal;
-    SubmitArgs.EngineOrdinal = Packet->EngineOrdinal;
-    SubmitArgs.Flags.Value = Packet->SubmitFlags;
-    if (Packet->IsPresent)
-        SubmitArgs.Flags.Present = 1;
-
-    /*
-     * Call the miniport's DxgkDdiSubmitCommand.
-     * This is a full-WDDM-only callback — DOD adapters don't have it.
-     */
-    Status = STATUS_NOT_SUPPORTED;
-    if (DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommand) != NULL)
-        Status = DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommand)(Adapter->MiniportDeviceContext, &SubmitArgs);
-
-    if (!NT_SUCCESS(Status))
-    {
-        DXGKRNL_ERR("VidSch: DxgkDdiSubmitCommand failed 0x%08lX engine=%lu fence=%lu\n", Status, Packet->NodeOrdinal, Packet->SubmissionFenceId);
-        RemoveEntryList(&Packet->RunQueueEntry);
-        Engine->PendingPacketCount--;
-        /* Packet cleanup runs at PASSIVE_LEVEL and cancels the adopted
-         * tracker reservation, including its miniport allocation handles. */
-        VidSchpTryTransition(&Engine->State, (LONG)VidSchEngineSubmitting, (LONG)VidSchEngineIdle, NULL);
-        VidSchpReferenceActiveCall(Adapter);
-        if (InterlockedIncrement(&Engine->OutstandingWorkers) == 1)
-            KeClearEvent(&Engine->WorkersDrainedEvent);
-        ExQueueWorkItem(&Packet->CleanupWorkItem, DelayedWorkQueue);
-        VidSchpKickEngine(Engine);
-        return;
-    }
-
-    if (Packet->TrackerReservation != NULL)
-    {
-        PDXGKRNL_SUBMIT_DMA_BUFFER Reservation = Packet->TrackerReservation;
-
-        Packet->TrackerReservation = NULL;
-        Packet->DmaBuffer = NULL;
-        DxgkCommitTrackedDmaBuffer(Adapter, Reservation);
-    }
-
-    /* Transition SUBMITTING -> RUNNING. */
-    VidSchpTryTransition(&Engine->State, (LONG)VidSchEngineSubmitting, (LONG)VidSchEngineRunning, NULL);
 }
 
 /* ========================================================================
@@ -676,11 +756,18 @@ VidSchInitialize(
         Engine->Scheduler = Ctx;
         Engine->EngineOrdinal = i;
         Engine->State = (LONG)VidSchEngineIdle;
+        Engine->PendingPreemptionFenceId = 0;
+        Engine->PendingPreemptionEngineOrdinal = 0;
+        Engine->PreemptionDdiState = 0;
+        Engine->PreemptionInterruptPending = 0;
+        Engine->CompletedPreemptionFenceId = 0;
+        Engine->CompletedPreemptionEngineOrdinal = 0;
         Engine->NextFenceId = 1;
 
         KeInitializeSpinLock(&Engine->QueueLock);
         InitializeListHead(&Engine->RunQueueHead);
         KeInitializeEvent(&Engine->CompletionEvent, SynchronizationEvent, FALSE);
+        KeInitializeEvent(&Engine->PreemptionCompletedEvent, NotificationEvent, FALSE);
         KeInitializeEvent(&Engine->WorkersDrainedEvent, NotificationEvent, TRUE);
 
         KeInitializeDpc(&Engine->CompletionDpc, VidSchpCompletionDpcRoutine, Engine);
@@ -961,6 +1048,13 @@ VidSchSubmitCommand(
         Packet->SubmissionFenceId = SubmissionFenceId;
     else
         Packet->SubmissionFenceId = DxgkAllocateSubmissionFenceId(Adapter);
+    if (Packet->SubmissionFenceId == 0 || !DxgkReserveSubmissionFenceIdentity(Adapter, NodeOrdinal, Packet->SubmissionFenceId))
+    {
+        VidSchpDereferencePacket(Packet);
+        VidSchpReleaseCall(Adapter);
+        return STATUS_DEVICE_BUSY;
+    }
+    Packet->FenceIdentityReserved = TRUE;
     Packet->MiniportDeviceHandle = MiniportDeviceHandle;
     Packet->MiniportContextHandle = MiniportContextHandle;
     Packet->IsPresent = IsPresent;
@@ -992,9 +1086,7 @@ VidSchSubmitCommand(
     KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
     ExReleaseFastMutex(&Ctx->LifecycleMutex);
 
-    KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
     VidSchpKickEngine(Engine);
-    KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
     *OutFenceId = FenceId;
     VidSchpReleaseCall(Adapter);
     return STATUS_SUCCESS;
@@ -1072,6 +1164,13 @@ VidSchSubmitCommandVirtual(
     ExInitializeWorkItem(&Work->WorkItem, VidSchpVirtualSubmitWorker, Work);
     Packet->VirtualSubmitWorkItem = Work;
     Packet->SubmissionFenceId = DxgkAllocateSubmissionFenceId(Adapter);
+    if (Packet->SubmissionFenceId == 0 || !DxgkReserveSubmissionFenceIdentity(Adapter, Context->NodeOrdinal, Packet->SubmissionFenceId))
+    {
+        VidSchpDereferencePacket(Packet);
+        VidSchpReleaseCall(Adapter);
+        return STATUS_DEVICE_BUSY;
+    }
+    Packet->FenceIdentityReserved = TRUE;
     Packet->DmaBufferGpuVa = DmaBufferGpuVa;
     Packet->VirtualDmaBufferSize = DmaBufferSize;
     Packet->Context = Context;
@@ -1102,9 +1201,7 @@ VidSchSubmitCommandVirtual(
     Packet->HoldsContextReference = TRUE;
     KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
     ExReleaseFastMutex(&Ctx->LifecycleMutex);
-    KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
     VidSchpKickEngine(Engine);
-    KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
     *OutFenceId = FenceId;
     VidSchpReleaseCall(Adapter);
     return STATUS_SUCCESS;
@@ -1166,6 +1263,13 @@ VidSchSubmitCommandTracked(
         VidSchpReleaseCall(Adapter);
         return STATUS_INTEGER_OVERFLOW;
     }
+    if (!DxgkReserveSubmissionFenceIdentity(Adapter, NodeOrdinal, Packet->SubmissionFenceId))
+    {
+        VidSchpDereferencePacket(Packet);
+        VidSchpReleaseCall(Adapter);
+        return STATUS_DEVICE_BUSY;
+    }
+    Packet->FenceIdentityReserved = TRUE;
     Packet->MiniportDeviceHandle = MiniportDeviceHandle;
     Packet->MiniportContextHandle = MiniportContextHandle;
     Packet->Priority = Priority;
@@ -1240,6 +1344,14 @@ VidSchSubmitCommandTracked(
         PatchArgs.Flags.Value = SubmitFlags & 0x0fu;
         PatchArgs.EngineOrdinal = EngineOrdinal;
 
+        if (!DxgkAcquireKmdCall(Adapter))
+        {
+            DxgkCancelTrackedDmaBuffer(Reservation);
+            VidSchpDereferencePacket(Packet);
+            VidSchpReleaseCall(Adapter);
+            return STATUS_DELETE_PENDING;
+        }
+
         _SEH2_TRY
         {
             Status = DXGK_CB_FULL(Adapter, DxgkDdiPatch)(Adapter->MiniportDeviceContext, &PatchArgs);
@@ -1249,6 +1361,7 @@ VidSchSubmitCommandTracked(
             Status = _SEH2_GetExceptionCode();
         }
         _SEH2_END;
+        DxgkReleaseKmdCall(Adapter);
 
         if (!NT_SUCCESS(Status))
         {
@@ -1288,9 +1401,7 @@ VidSchSubmitCommandTracked(
     KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
     ExReleaseFastMutex(&Ctx->LifecycleMutex);
 
-    KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
     VidSchpKickEngine(Engine);
-    KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
     *OutFenceId = FenceId;
     VidSchpReleaseCall(Adapter);
     return STATUS_SUCCESS;
@@ -1307,59 +1418,67 @@ VidSchNotifyInterrupt(
     _In_ CONST DXGKARGCB_NOTIFY_INTERRUPT_DATA *NotifyData)
 {
     PVIDSCH_CONTEXT Ctx;
-    PVIDSCH_ENGINE Engine;
-    ULONG FenceId;
-    ULONG NodeOrdinal;
+    PVIDSCH_ENGINE Engine = NULL;
+    DXGMMS2_FENCE_SNAPSHOT_V1 FenceSnapshot;
+    ULONG CurrentCompletedFence;
+    ULONG FenceId = 0;
+    ULONG LastSubmittedFence;
+    ULONG NodeOrdinal = 0;
+    BOOLEAN PreemptionNotification = FALSE;
 
     if (Adapter == NULL || NotifyData == NULL)
         return;
-    if (!VidSchpAcquireCall(Adapter))
-        return;
 
     Ctx = (PVIDSCH_CONTEXT)Adapter->VidSchContext;
-    if (Ctx == NULL || !Ctx->Initialized)
-        goto Exit;
-
     if (NotifyData->InterruptType == DXGK_INTERRUPT_DMA_COMPLETED)
     {
-        FenceId       = NotifyData->DmaCompleted.SubmissionFenceId;
+        FenceId = NotifyData->DmaCompleted.SubmissionFenceId;
         NodeOrdinal = NotifyData->DmaCompleted.NodeOrdinal;
     }
     else if (NotifyData->InterruptType == DXGK_INTERRUPT_DMA_PREEMPTED)
     {
-        FenceId       = NotifyData->DmaPreempted.LastCompletedFenceId;
+        FenceId = NotifyData->DmaPreempted.LastCompletedFenceId;
         NodeOrdinal = NotifyData->DmaPreempted.NodeOrdinal;
+        PreemptionNotification = TRUE;
     }
     else
+        return;
+
+    if (InterlockedCompareExchange(&Adapter->TdrCompletionNotificationsEnabled, 0, 0) == 0)
+        KeBugCheckEx(0x119, 0x10, (ULONG_PTR)NotifyData, (ULONG_PTR)Adapter, 0);
+
+    if (NodeOrdinal >= Adapter->NodeCount || NodeOrdinal >= DXGK_MAX_TRACKED_NODES)
+        VidSchpBugCheckInvalidFence(Adapter, FenceId, 0);
+    LastSubmittedFence = (ULONG)InterlockedCompareExchange((volatile LONG *)&Adapter->NodeLastSubmittedFenceId[NodeOrdinal], 0, 0);
+    if ((!PreemptionNotification && FenceId == 0) || LastSubmittedFence == 0 || (FenceId != 0 && !VidSchpFenceReached(LastSubmittedFence, FenceId)))
+        VidSchpBugCheckInvalidFence(Adapter, FenceId, LastSubmittedFence);
+    CurrentCompletedFence = (ULONG)InterlockedCompareExchange((volatile LONG *)&Adapter->NodeLastCompletedFenceId[NodeOrdinal], 0, 0);
+    if ((!PreemptionNotification && !DxgkIsSubmittedFenceIdentity(Adapter, NodeOrdinal, FenceId)) || (PreemptionNotification && FenceId != 0 && !VidSchpFenceReached(CurrentCompletedFence, FenceId) && !DxgkIsSubmittedFenceIdentity(Adapter, NodeOrdinal, FenceId)))
+        VidSchpBugCheckInvalidFence(Adapter, FenceId, LastSubmittedFence);
+
+    if (Ctx != NULL && Ctx->Initialized && NodeOrdinal < Ctx->EngineCount)
+        Engine = &Ctx->Engines[NodeOrdinal];
+
+    if (PreemptionNotification)
     {
-        /* Other interrupt types are not handled by VidSch Phase 1. */
-        goto Exit;
+        ULONG PendingFence = Engine != NULL ? (ULONG)InterlockedCompareExchange(&Engine->PendingPreemptionFenceId, 0, 0) : 0;
+
+        KeMemoryBarrier();
+        if (Engine == NULL || PendingFence == 0 || PendingFence != NotifyData->DmaPreempted.PreemptionFenceId || Engine->PendingPreemptionEngineOrdinal != NotifyData->DmaPreempted.EngineOrdinal || (VidSchpReadState(Engine) != VidSchEnginePreempting && VidSchpReadState(Engine) != VidSchEngineResetting) || InterlockedCompareExchange(&Engine->PreemptionInterruptPending, 1, 0) != 0)
+            VidSchpBugCheckInvalidFence(Adapter, FenceId, LastSubmittedFence);
     }
 
-    if (NodeOrdinal >= Ctx->EngineCount)
-        goto Exit;
+    if (!NT_SUCCESS(DxgkNotifySubmissionFenceCompletion(Adapter, NodeOrdinal, FenceId, PreemptionNotification, &FenceSnapshot)))
+        VidSchpBugCheckInvalidFence(Adapter, FenceId, LastSubmittedFence);
+    if (FenceId != 0 && Engine != NULL)
+        VidSchpUpdateFence(&Engine->LastCompletedFence, FenceSnapshot.LastCompletedFence);
 
-    Engine = &Ctx->Engines[NodeOrdinal];
-    if (NotifyData->InterruptType == DXGK_INTERRUPT_DMA_PREEMPTED)
-        InterlockedExchange(&Engine->PreemptionInterruptPending, 1);
-
-    /* Update the completed fence — monotonic max, safe at DIRQL. */
-    for (;;)
+    if (Engine != NULL)
     {
-        LONG Current = Engine->LastCompletedFence;
-
-        if (VidSchpFenceReached(Current, (LONG)FenceId))
-            break;
-        if (InterlockedCompareExchange(&Engine->LastCompletedFence, (LONG)FenceId, Current) == Current)
-            break;
+        VidSchpReferenceActiveCall(Adapter);
+        if (!KeInsertQueueDpc(&Engine->CompletionDpc, NULL, NULL))
+            VidSchpReleaseCall(Adapter);
     }
-
-    /* Transfer a scheduler rundown reference to every queued DPC. */
-    VidSchpReferenceActiveCall(Adapter);
-    if (!KeInsertQueueDpc(&Engine->CompletionDpc, NULL, NULL))
-        VidSchpReleaseCall(Adapter);
-Exit:
-    VidSchpReleaseCall(Adapter);
 }
 
 /*
@@ -1614,7 +1733,12 @@ VidSchpIfSubmitCommand(PVOID Adapter, PVOID SubmitArgs)
 static VOID NTAPI
 VidSchpIfNotifyInterrupt(PVOID Adapter, CONST DXGKARGCB_NOTIFY_INTERRUPT_DATA *NotifyData)
 {
-    VidSchNotifyInterrupt((PDXGKRNL_ADAPTER)Adapter, NotifyData);
+    PDXGKRNL_ADAPTER DxgkAdapter = (PDXGKRNL_ADAPTER)Adapter;
+
+    if (!VidSchpAcquireCall(DxgkAdapter))
+        return;
+    VidSchNotifyInterrupt(DxgkAdapter, NotifyData);
+    VidSchpReleaseCall(DxgkAdapter);
 }
 
 static VOID NTAPI
@@ -1626,7 +1750,7 @@ VidSchpIfNotifyDpc(PVOID Adapter)
 static NTSTATUS NTAPI
 VidSchpIfPreemptEngine(PVOID Adapter, ULONG EngineOrdinal)
 {
-    return VidSchPreemptEngine((PDXGKRNL_ADAPTER)Adapter, EngineOrdinal, 0);
+    return VidSchPreemptEngine((PDXGKRNL_ADAPTER)Adapter, EngineOrdinal, 0, NULL);
 }
 
 static NTSTATUS NTAPI
@@ -1723,16 +1847,20 @@ NTSTATUS
 VidSchPreemptEngine(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ ULONG            NodeOrdinal,
-    _In_ ULONG            EngineOrdinal)
+    _In_ ULONG            EngineOrdinal,
+    _Out_opt_ PULONG      PreemptionFenceId)
 {
     PVIDSCH_CONTEXT Ctx;
     PVIDSCH_ENGINE Engine;
     DXGKARG_PREEMPTCOMMAND PreemptArgs;
+    KIRQL CallIrql;
     KIRQL OldIrql;
     NTSTATUS Status;
 
     if (Adapter == NULL)
         return STATUS_INVALID_PARAMETER;
+    if (PreemptionFenceId != NULL)
+        *PreemptionFenceId = 0;
     if (!VidSchpAcquireCall(Adapter))
         return STATUS_DELETE_PENDING;
 
@@ -1755,6 +1883,16 @@ VidSchPreemptEngine(
 
     Engine = &Ctx->Engines[NodeOrdinal];
 
+    RtlZeroMemory(&PreemptArgs, sizeof(PreemptArgs));
+    PreemptArgs.PreemptionFenceId = DxgkAllocateSubmissionFenceId(Adapter);
+    if (PreemptArgs.PreemptionFenceId == 0)
+    {
+        VidSchpReleaseCall(Adapter);
+        return STATUS_INTEGER_OVERFLOW;
+    }
+    PreemptArgs.NodeOrdinal = NodeOrdinal;
+    PreemptArgs.EngineOrdinal = EngineOrdinal;
+
     /* Nothing running: nothing to preempt. */
     KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
     if (!VidSchpTryTransition(&Engine->State, (LONG)VidSchEngineRunning, (LONG)VidSchEnginePreempting, NULL))
@@ -1763,12 +1901,37 @@ VidSchPreemptEngine(
         VidSchpReleaseCall(Adapter);
         return STATUS_SUCCESS;
     }
+    Engine->PendingPreemptionEngineOrdinal = EngineOrdinal;
+    Engine->CompletedPreemptionEngineOrdinal = 0;
+    InterlockedExchange(&Engine->CompletedPreemptionFenceId, 0);
+    KeResetEvent(&Engine->PreemptionCompletedEvent);
+    InterlockedExchange(&Engine->PendingPreemptionFenceId, (LONG)PreemptArgs.PreemptionFenceId);
+    KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
 
-    RtlZeroMemory(&PreemptArgs, sizeof(PreemptArgs));
-    PreemptArgs.PreemptionFenceId = DxgkAllocateSubmissionFenceId(Adapter);
-    PreemptArgs.NodeOrdinal = NodeOrdinal;
-    PreemptArgs.EngineOrdinal = EngineOrdinal;
+    if (!DxgkAcquireKmdCall(Adapter))
+    {
+        KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
+        if ((ULONG)InterlockedCompareExchange(&Engine->PendingPreemptionFenceId, 0, 0) == PreemptArgs.PreemptionFenceId)
+        {
+            InterlockedExchange(&Engine->PendingPreemptionFenceId, 0);
+            VidSchpTryTransition(&Engine->State, (LONG)VidSchEnginePreempting, (LONG)VidSchEngineRunning, NULL);
+        }
+        KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+        VidSchpReleaseCall(Adapter);
+        return STATUS_DELETE_PENDING;
+    }
 
+    KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
+    if ((ULONG)InterlockedCompareExchange(&Engine->PendingPreemptionFenceId, 0, 0) != PreemptArgs.PreemptionFenceId || Engine->PendingPreemptionEngineOrdinal != EngineOrdinal || VidSchpReadState(Engine) != VidSchEnginePreempting || InterlockedCompareExchange(&Engine->PreemptionDdiState, 1, 0) != 0)
+    {
+        KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+        DxgkReleaseKmdCall(Adapter);
+        VidSchpReleaseCall(Adapter);
+        return STATUS_SUCCESS;
+    }
+    KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+
+    KeRaiseIrql(DISPATCH_LEVEL, &CallIrql);
     _SEH2_TRY
     {
         Status = DXGK_CB_FULL(Adapter, DxgkDdiPreemptCommand)(Adapter->MiniportDeviceContext, &PreemptArgs);
@@ -1778,21 +1941,59 @@ VidSchPreemptEngine(
         Status = _SEH2_GetExceptionCode();
     }
     _SEH2_END;
-
+    KeLowerIrql(CallIrql);
     if (NT_SUCCESS(Status))
+        InterlockedCompareExchange(&Engine->PreemptionDdiState, 2, 1);
+    DxgkReleaseKmdCall(Adapter);
+
+    if (!NT_SUCCESS(Status))
     {
-        /* The miniport reports DMA_PREEMPTED; the completion DPC retires
-         * finished packets and returns the engine to IDLE (re-kicking any
-         * remaining queued work). */
-        VidSchpTryTransition(&Engine->State, (LONG)VidSchEnginePreempting, (LONG)VidSchEnginePreempted, NULL);
-    }
-    else
-    {
-        VidSchpTryTransition(&Engine->State, (LONG)VidSchEnginePreempting, (LONG)VidSchEngineRunning, NULL);
-        DXGKRNL_WARN("VidSch: PreemptCommand failed 0x%08lX node=%lu engine=%lu\n", Status, NodeOrdinal, EngineOrdinal);
+        DXGKRNL_ERR("VidSch: PreemptCommand failed 0x%08lX node=%lu engine=%lu\n", Status, NodeOrdinal, EngineOrdinal);
+        VidSchpReleaseCall(Adapter);
+        KeBugCheckEx(0x119, 0x2, (ULONG_PTR)Status, (ULONG_PTR)&PreemptArgs, (ULONG_PTR)Engine);
+        return Status;
     }
 
-    KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+    if (PreemptionFenceId != NULL)
+        *PreemptionFenceId = PreemptArgs.PreemptionFenceId;
+    VidSchpReleaseCall(Adapter);
+    return Status;
+}
+
+NTSTATUS
+VidSchWaitForPreemption(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG            NodeOrdinal,
+    _In_ ULONG            EngineOrdinal,
+    _In_ ULONG            PreemptionFenceId,
+    _In_ ULONG            TimeoutMs)
+{
+    PVIDSCH_CONTEXT Ctx;
+    PVIDSCH_ENGINE Engine;
+    LARGE_INTEGER Timeout;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Adapter == NULL || PreemptionFenceId == 0)
+        return STATUS_INVALID_PARAMETER;
+    if (!VidSchpAcquireCall(Adapter))
+        return STATUS_DELETE_PENDING;
+    Ctx = (PVIDSCH_CONTEXT)Adapter->VidSchContext;
+    if (Ctx == NULL || !Ctx->Initialized || NodeOrdinal >= Ctx->EngineCount)
+    {
+        VidSchpReleaseCall(Adapter);
+        return STATUS_INVALID_PARAMETER;
+    }
+    Engine = &Ctx->Engines[NodeOrdinal];
+    if ((ULONG)InterlockedCompareExchange(&Engine->CompletedPreemptionFenceId, 0, 0) == PreemptionFenceId && Engine->CompletedPreemptionEngineOrdinal == EngineOrdinal)
+    {
+        VidSchpReleaseCall(Adapter);
+        return STATUS_SUCCESS;
+    }
+    Timeout.QuadPart = -(LONGLONG)TimeoutMs * 10 * 1000;
+    Status = KeWaitForSingleObject(&Engine->PreemptionCompletedEvent, Executive, KernelMode, FALSE, &Timeout);
+    if (NT_SUCCESS(Status) && ((ULONG)InterlockedCompareExchange(&Engine->CompletedPreemptionFenceId, 0, 0) != PreemptionFenceId || Engine->CompletedPreemptionEngineOrdinal != EngineOrdinal))
+        Status = STATUS_DEVICE_PROTOCOL_ERROR;
     VidSchpReleaseCall(Adapter);
     return Status;
 }
@@ -1954,13 +2155,7 @@ VidSchResumeScheduler(
     ExReleaseFastMutex(&Ctx->LifecycleMutex);
 
     for (i = 0; i < Ctx->EngineCount; i++)
-    {
-        KIRQL OldIrql;
-
-        KeAcquireSpinLock(&Ctx->Engines[i].QueueLock, &OldIrql);
         VidSchpKickEngine(&Ctx->Engines[i]);
-        KeReleaseSpinLock(&Ctx->Engines[i].QueueLock, OldIrql);
-    }
 
     VidSchpReleaseCall(Adapter);
     return STATUS_SUCCESS;
@@ -2010,12 +2205,19 @@ VidSchResetEngine(
         VidSchpReleaseCall(Adapter);
         return STATUS_DEVICE_BUSY;
     }
+    if (!DxgkAcquireKmdCall(Adapter))
+    {
+        ExReleaseFastMutex(&Ctx->LifecycleMutex);
+        VidSchpReleaseCall(Adapter);
+        return STATUS_DELETE_PENDING;
+    }
 
     KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
     if (!IsListEmpty(&Engine->RunQueueHead) || Engine->PendingPacketCount != 0)
     {
         KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
         ExReleaseFastMutex(&Ctx->LifecycleMutex);
+        DxgkReleaseKmdCall(Adapter);
         VidSchpReleaseCall(Adapter);
         return STATUS_NOT_SUPPORTED;
     }
@@ -2025,6 +2227,7 @@ VidSchResetEngine(
     {
         KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
         ExReleaseFastMutex(&Ctx->LifecycleMutex);
+        DxgkReleaseKmdCall(Adapter);
         VidSchpReleaseCall(Adapter);
         return STATUS_INVALID_DEVICE_STATE;
     }
@@ -2046,6 +2249,7 @@ VidSchResetEngine(
         Status = _SEH2_GetExceptionCode();
     }
     _SEH2_END;
+    DxgkReleaseKmdCall(Adapter);
 
     if (NT_SUCCESS(Status) && ((LONG)(ResetArgs.LastAbortedFenceId - (ULONG)Engine->LastCompletedFence) < 0 || (LONG)((ULONG)Engine->LastSubmittedFence - ResetArgs.LastAbortedFenceId) < 0))
         Status = STATUS_DEVICE_PROTOCOL_ERROR;
@@ -2293,6 +2497,9 @@ VidSchCompleteAdapterReset(
         KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
         if (ResetSucceeded)
         {
+            InterlockedExchange(&Engine->PendingPreemptionFenceId, 0);
+            InterlockedExchange(&Engine->PreemptionDdiState, 0);
+            InterlockedExchange(&Engine->PreemptionInterruptPending, 0);
             while (!IsListEmpty(&Engine->RunQueueHead))
             {
                 Link = RemoveHeadList(&Engine->RunQueueHead);
@@ -2323,6 +2530,48 @@ VidSchCompleteAdapterReset(
     }
 
     VidSchpReleaseCall(Adapter);
+}
+
+BOOLEAN
+VidSchGetOldestKickedPacket(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Out_ PULONG FenceId,
+    _Out_ PULONG NodeOrdinal,
+    _Out_ PULONG EngineOrdinal)
+{
+    PVIDSCH_CONTEXT Ctx;
+    BOOLEAN Found = FALSE;
+    ULONG Index;
+
+    if (Adapter == NULL || FenceId == NULL || NodeOrdinal == NULL || EngineOrdinal == NULL)
+        return FALSE;
+    *FenceId = 0;
+    *NodeOrdinal = 0;
+    *EngineOrdinal = 0;
+    Ctx = (PVIDSCH_CONTEXT)Adapter->VidSchContext;
+    if (Ctx == NULL || !Ctx->Initialized)
+        return FALSE;
+
+    for (Index = 0; Index < Ctx->EngineCount; ++Index)
+    {
+        PVIDSCH_ENGINE Engine = &Ctx->Engines[Index];
+
+        KeAcquireSpinLockAtDpcLevel(&Engine->QueueLock);
+        if (!IsListEmpty(&Engine->RunQueueHead))
+        {
+            PVIDSCH_DMA_PACKET Packet = CONTAINING_RECORD(Engine->RunQueueHead.Flink, VIDSCH_DMA_PACKET, RunQueueEntry);
+
+            if (Packet->Kicked && Packet->SubmissionFenceId != 0 && (!Found || (LONG)(Packet->SubmissionFenceId - *FenceId) < 0))
+            {
+                *FenceId = Packet->SubmissionFenceId;
+                *NodeOrdinal = Packet->NodeOrdinal;
+                *EngineOrdinal = Packet->EngineOrdinal;
+                Found = TRUE;
+            }
+        }
+        KeReleaseSpinLockFromDpcLevel(&Engine->QueueLock);
+    }
+    return Found;
 }
 
 NTSTATUS

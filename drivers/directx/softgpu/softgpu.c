@@ -141,7 +141,6 @@ DriverEntry(
 
     /* --- Command scheduling --------------------------------------------- */
     InitData.DxgkDdiSubmitCommand                   = SoftGpuDdiSubmitCommand;
-    InitData.DxgkDdiPreemptCommand                  = SoftGpuDdiPreemptCommand;
     InitData.DxgkDdiQueryCurrentFence               = SoftGpuDdiQueryCurrentFence;
     InitData.DxgkDdiResetFromTimeout                = SoftGpuDdiResetFromTimeout;
     InitData.DxgkDdiRestartFromTimeout              = SoftGpuDdiRestartFromTimeout;

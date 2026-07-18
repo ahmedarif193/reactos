@@ -115,25 +115,27 @@ typedef struct _DXGKP_CHILD_MONITOR
 } DXGKP_CHILD_MONITOR, *PDXGKP_CHILD_MONITOR;
 
 /* ========================================================================
- * DXGKP_VIDPN_SOURCE_OWNER - VidPN source ownership tracking
+ * DXGKP_VIDPN_SOURCE_OWNER - one (adapter, source) ownership tuple
  *
- * Tracks which device owns each VidPN source for exclusive/shared access.
+ * SHARED is one yieldable owner, not evidence that Windows permits an
+ * arbitrary collection of simultaneous non-GDI owners.  EXCLUSIVEGDI and
+ * EMULATED remain distinct because their primary-present rights differ.
  * ====================================================================== */
 typedef struct _DXGKP_VIDPN_SOURCE_OWNER
 {
-    /* D3DKMT_HANDLE of the device that owns this source, or 0 if unowned. */
-    D3DKMT_HANDLE                   OwnerDevice;
+    /* Stable device identity, or NULL if unowned; cleanup precedes final free. */
+    PDXGKRNL_DEVICE                 OwnerDevice;
 
-    /* Ownership type: 0=unowned, 1=exclusive, 2=shared */
+    /* Exact D3DKMT_VIDPNSOURCEOWNER_* value; never collapse enum members. */
     D3DKMT_VIDPNSOURCEOWNER_TYPE    OwnerType;
 } DXGKP_VIDPN_SOURCE_OWNER, *PDXGKP_VIDPN_SOURCE_OWNER;
 
 /*
  * DxgkpDeviceOwnsVidPnSource
  *
- * TRUE if hDevice owns VidPnSourceId (via D3DKMTSetVidPnSourceOwner).  The
- * present path gates primary scanout on this so an app present only reaches the
- * primary when the app owns the source (Windows DWM-ownership model).
+ * TRUE if hDevice has SHARED, EXCLUSIVE, or EXCLUSIVEGDI ownership of
+ * VidPnSourceId.  EMULATED ownership deliberately returns FALSE because it
+ * grants gamma control without real primary ownership.
  */
 BOOLEAN
 DxgkpDeviceOwnsVidPnSource(

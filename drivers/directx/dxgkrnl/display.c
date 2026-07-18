@@ -282,6 +282,7 @@ DxgkDisplayCommitVidPn(
     SIZE_T i;
     BOOLEAN ForceDodPresentOnlyPath;
     BOOLEAN SkipDodVidPnNegotiation;
+    BOOLEAN KmdTransaction = FALSE;
 
     PAGED_CODE();
 
@@ -300,6 +301,10 @@ DxgkDisplayCommitVidPn(
         DXGKRNL_ERR("DxgkpCommitVidPnToMiniport: bad VidPN signature\n");
         return STATUS_INVALID_PARAMETER;
     }
+
+    if (!DxgkBeginKmdTransaction(Adapter))
+        return STATUS_DELETE_PENDING;
+    KmdTransaction = TRUE;
 
     DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: starting mode-set sequence\n");
     DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: callbacks IsSupportedVidPn=%p "
@@ -331,27 +336,29 @@ DxgkDisplayCommitVidPn(
         IsSupportedArgs.hDesiredVidPn = (D3DKMDT_HVIDPN)VidPn;
         IsSupportedArgs.IsVidPnSupported = FALSE;
 
-        DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: calling DxgkDdiIsSupportedVidPn\n");
-        _SEH2_TRY
+        if (DxgkAcquireKmdCall(Adapter))
         {
-            Status = DXGK_CB(Adapter, DxgkDdiIsSupportedVidPn)(
-                         Adapter->MiniportDeviceContext,
-                         &IsSupportedArgs);
-        }
-        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-        {
-            Status = _SEH2_GetExceptionCode();
-            DXGKRNL_ERR("DxgkpCommitVidPnToMiniport: IsSupportedVidPn FAULTED 0x%08lX\n",
-                        Status);
-        }
-        _SEH2_END;
-        DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: IsSupportedVidPn returned 0x%08lX, "
-                      "supported=%d\n", Status, IsSupportedArgs.IsVidPnSupported);
+            DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: calling DxgkDdiIsSupportedVidPn\n");
+            _SEH2_TRY
+            {
+                Status = DXGK_CB(Adapter, DxgkDdiIsSupportedVidPn)(Adapter->MiniportDeviceContext, &IsSupportedArgs);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                DXGKRNL_ERR("DxgkpCommitVidPnToMiniport: IsSupportedVidPn FAULTED 0x%08lX\n",
+                            Status);
+            }
+            _SEH2_END;
+            DxgkReleaseKmdCall(Adapter);
+            DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: IsSupportedVidPn returned 0x%08lX, "
+                          "supported=%d\n", Status, IsSupportedArgs.IsVidPnSupported);
 
-        if (!NT_SUCCESS(Status))
-        {
-            DXGKRNL_WARN("DxgkpCommitVidPnToMiniport: IsSupportedVidPn failed 0x%08lX "
-                         "(continuing anyway)\n", Status);
+            if (!NT_SUCCESS(Status))
+            {
+                DXGKRNL_WARN("DxgkpCommitVidPnToMiniport: IsSupportedVidPn failed 0x%08lX "
+                             "(continuing anyway)\n", Status);
+            }
         }
     }
 
@@ -370,27 +377,29 @@ DxgkDisplayCommitVidPn(
         EnumArgs.hConstrainingVidPn = (D3DKMDT_HVIDPN)VidPn;
         EnumArgs.EnumPivotType = D3DKMDT_EPT_NOPIVOT;
 
-        DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: calling DxgkDdiEnumVidPnCofuncModality\n");
-        _SEH2_TRY
+        if (DxgkAcquireKmdCall(Adapter))
         {
-            Status = DXGK_CB(Adapter, DxgkDdiEnumVidPnCofuncModality)(
-                         Adapter->MiniportDeviceContext,
-                         &EnumArgs);
-        }
-        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-        {
-            Status = _SEH2_GetExceptionCode();
-            DXGKRNL_ERR("DxgkpCommitVidPnToMiniport: EnumCofuncModality FAULTED 0x%08lX\n",
-                        Status);
-        }
-        _SEH2_END;
-        DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: EnumCofuncModality returned 0x%08lX\n",
-                      Status);
+            DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: calling DxgkDdiEnumVidPnCofuncModality\n");
+            _SEH2_TRY
+            {
+                Status = DXGK_CB(Adapter, DxgkDdiEnumVidPnCofuncModality)(Adapter->MiniportDeviceContext, &EnumArgs);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                DXGKRNL_ERR("DxgkpCommitVidPnToMiniport: EnumCofuncModality FAULTED 0x%08lX\n",
+                            Status);
+            }
+            _SEH2_END;
+            DxgkReleaseKmdCall(Adapter);
+            DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: EnumCofuncModality returned 0x%08lX\n",
+                          Status);
 
-        if (!NT_SUCCESS(Status))
-        {
-            DXGKRNL_WARN("DxgkpCommitVidPnToMiniport: EnumCofuncModality failed 0x%08lX "
-                         "(continuing anyway)\n", Status);
+            if (!NT_SUCCESS(Status))
+            {
+                DXGKRNL_WARN("DxgkpCommitVidPnToMiniport: EnumCofuncModality failed 0x%08lX "
+                             "(continuing anyway)\n", Status);
+            }
         }
     }
 
@@ -739,9 +748,15 @@ DxgkDisplayCommitVidPn(
 
         DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: calling DxgkDdiCommitVidPn "
                       "(hVidPn=%p)\n", CommitArgs.hFunctionalVidPn);
+        if (!DxgkAcquireKmdCall(Adapter))
+        {
+            Status = STATUS_DELETE_PENDING;
+            goto Cleanup;
+        }
         Status = DXGK_CB(Adapter, DxgkDdiCommitVidPn)(
                      Adapter->MiniportDeviceContext,
                      &CommitArgs);
+        DxgkReleaseKmdCall(Adapter);
         DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: CommitVidPn returned 0x%08lX\n",
                       Status);
 
@@ -749,7 +764,7 @@ DxgkDisplayCommitVidPn(
         {
             DXGKRNL_ERR("DxgkpCommitVidPnToMiniport: CommitVidPn failed 0x%08lX\n",
                         Status);
-            return Status;
+            goto Cleanup;
         }
     }
     else
@@ -790,17 +805,19 @@ DxgkDisplayCommitVidPn(
         VisArgs.VidPnSourceId = 0;
         VisArgs.Visible = TRUE;
 
-        DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: calling SetVidPnSourceVisibility\n");
-        Status = DXGK_CB(Adapter, DxgkDdiSetVidPnSourceVisibility)(
-                     Adapter->MiniportDeviceContext,
-                     &VisArgs);
-        DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: SetVidPnSourceVisibility returned "
-                      "0x%08lX\n", Status);
-
-        if (!NT_SUCCESS(Status))
+        if (DxgkAcquireKmdCall(Adapter))
         {
-            DXGKRNL_WARN("DxgkpCommitVidPnToMiniport: SetVisibility failed 0x%08lX\n",
-                         Status);
+            DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: calling SetVidPnSourceVisibility\n");
+            Status = DXGK_CB(Adapter, DxgkDdiSetVidPnSourceVisibility)(Adapter->MiniportDeviceContext, &VisArgs);
+            DxgkReleaseKmdCall(Adapter);
+            DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: SetVidPnSourceVisibility returned "
+                          "0x%08lX\n", Status);
+
+            if (!NT_SUCCESS(Status))
+            {
+                DXGKRNL_WARN("DxgkpCommitVidPnToMiniport: SetVisibility failed 0x%08lX\n",
+                             Status);
+            }
         }
     }
 
@@ -809,7 +826,12 @@ DxgkDisplayCommitVidPn(
 
     DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: mode-set complete (%ux%u)\n",
                   Adapter->CommittedWidth, Adapter->CommittedHeight);
-    return STATUS_SUCCESS;
+    Status = STATUS_SUCCESS;
+
+Cleanup:
+    if (KmdTransaction)
+        DxgkEndKmdTransaction(Adapter);
+    return Status;
 }
 
 NTSTATUS
@@ -2124,7 +2146,7 @@ DxgkpDisplayDispatch(
                     DxgkpReleaseSharedSurfaceSnapshot(&SharedSurface);
                     SnapshotHeld = FALSE;
                     DxgkpStopPresentTimer(g_DisplayAdapter);
-                    ExAcquireFastMutex(&g_DisplayAdapter->SharedPrimaryMutex);
+                    (VOID)KeWaitForSingleObject(&g_DisplayAdapter->SharedPrimaryMutex, Executive, KernelMode, FALSE, NULL);
                     DxgkpBeginSharedSurfaceMutationLocked(g_DisplayAdapter);
                     if (g_DisplayAdapter->ShadowFbPoolOwned)
                         OldFb = g_DisplayAdapter->ShadowFb;
@@ -2133,7 +2155,7 @@ DxgkpDisplayDispatch(
                     g_DisplayAdapter->ShadowFbSize = FbSize;
                     g_DisplayAdapter->ShadowFbPoolOwned = TRUE;
                     DxgkpEndSharedSurfaceMutationLocked(g_DisplayAdapter);
-                    ExReleaseFastMutex(&g_DisplayAdapter->SharedPrimaryMutex);
+                    KeReleaseMutex(&g_DisplayAdapter->SharedPrimaryMutex, FALSE);
                     if (OldFb != NULL)
                         ExFreePoolWithTag(OldFb, TAG_DXGK_DISPLAY);
                 }
@@ -2170,7 +2192,7 @@ DxgkpDisplayDispatch(
                 PVOID OldFb = NULL;
 
                 DxgkpStopPresentTimer(g_DisplayAdapter);
-                ExAcquireFastMutex(&g_DisplayAdapter->SharedPrimaryMutex);
+                (VOID)KeWaitForSingleObject(&g_DisplayAdapter->SharedPrimaryMutex, Executive, KernelMode, FALSE, NULL);
                 DxgkpBeginSharedSurfaceMutationLocked(g_DisplayAdapter);
                 if (g_DisplayAdapter->ShadowFbPoolOwned)
                 {
@@ -2181,7 +2203,7 @@ DxgkpDisplayDispatch(
                     g_DisplayAdapter->ShadowFbPoolOwned = FALSE;
                 }
                 DxgkpEndSharedSurfaceMutationLocked(g_DisplayAdapter);
-                ExReleaseFastMutex(&g_DisplayAdapter->SharedPrimaryMutex);
+                KeReleaseMutex(&g_DisplayAdapter->SharedPrimaryMutex, FALSE);
                 if (OldFb != NULL)
                     ExFreePoolWithTag(OldFb, TAG_DXGK_DISPLAY);
             }
@@ -2914,7 +2936,7 @@ DxgkDisplayUnregister(VOID)
     if (Adapter != NULL)
     {
         DxgkpStopPresentTimer(Adapter);
-        ExAcquireFastMutex(&Adapter->SharedPrimaryMutex);
+        (VOID)KeWaitForSingleObject(&Adapter->SharedPrimaryMutex, Executive, KernelMode, FALSE, NULL);
         DxgkpBeginSharedSurfaceMutationLocked(Adapter);
         if (Adapter->ShadowFbPoolOwned)
         {
@@ -2925,7 +2947,7 @@ DxgkDisplayUnregister(VOID)
             Adapter->ShadowFbPoolOwned = FALSE;
         }
         DxgkpEndSharedSurfaceMutationLocked(Adapter);
-        ExReleaseFastMutex(&Adapter->SharedPrimaryMutex);
+        KeReleaseMutex(&Adapter->SharedPrimaryMutex, FALSE);
         if (OldFb != NULL)
             ExFreePoolWithTag(OldFb, TAG_DXGK_DISPLAY);
     }
