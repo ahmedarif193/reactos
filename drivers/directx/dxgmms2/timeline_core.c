@@ -46,6 +46,43 @@ static VOID Dxgmms2TimelineReleaseFastCall(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Tim
     ASSERT(InterlockedDecrement(&Timeline->ActiveFastCalls) >= 0);
 }
 
+static VOID Dxgmms2TimelineAcquireMaintenance(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline)
+{
+    PAGED_CODE();
+    (VOID)KeWaitForSingleObject(&Timeline->MaintenanceMutex, Executive, KernelMode, FALSE, NULL);
+}
+
+static VOID Dxgmms2TimelineReleaseMaintenance(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline)
+{
+    PAGED_CODE();
+    KeReleaseMutex(&Timeline->MaintenanceMutex, FALSE);
+}
+
+static VOID Dxgmms2TimelineCloseFastCalls(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline)
+{
+    PAGED_CODE();
+    InterlockedExchange(&Timeline->FastCallsOpen, 0);
+    KeMemoryBarrier();
+}
+
+static VOID Dxgmms2TimelineDrainFastCalls(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline)
+{
+    LARGE_INTEGER Delay;
+
+    PAGED_CODE();
+    Delay.QuadPart = -10000;
+    while (InterlockedCompareExchange(&Timeline->ActiveFastCalls, 0, 0) != 0)
+        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+    KeMemoryBarrier();
+}
+
+static VOID Dxgmms2TimelineOpenFastCalls(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline)
+{
+    PAGED_CODE();
+    KeMemoryBarrier();
+    InterlockedExchange(&Timeline->FastCallsOpen, 1);
+}
+
 static ULONG Dxgmms2TimelineHashIdentity(_In_ LONG64 Identity)
 {
     return (ULONG)(((ULONGLONG)Identity ^ ((ULONGLONG)Identity >> 32)) * 2654435761ULL) & (DXGMMS2_TIMELINE_IDENTITY_CAPACITY - 1);
@@ -76,7 +113,7 @@ static BOOLEAN Dxgmms2TimelineLookupPublished(_Inout_ PDXGMMS2_TIMELINE_CONTEXT 
     return FALSE;
 }
 
-static NTSTATUS Dxgmms2TimelineFillSnapshot(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline, _In_ ULONG Generation, _In_ ULONG NodeOrdinal, _Inout_ DXGMMS2_FENCE_SNAPSHOT_V1 *Snapshot)
+static NTSTATUS Dxgmms2TimelineValidateSnapshot(_Inout_ DXGMMS2_FENCE_SNAPSHOT_V1 *Snapshot)
 {
     ULONG Capacity;
 
@@ -96,6 +133,11 @@ static NTSTATUS Dxgmms2TimelineFillSnapshot(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Ti
         Snapshot->Size = DXGMMS2_FENCE_SNAPSHOT_V1_SIZE;
         return STATUS_BUFFER_TOO_SMALL;
     }
+    return STATUS_SUCCESS;
+}
+
+static VOID Dxgmms2TimelineFillSnapshot(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline, _In_ ULONG Generation, _In_ ULONG NodeOrdinal, _Inout_ DXGMMS2_FENCE_SNAPSHOT_V1 *Snapshot)
+{
     RtlZeroMemory(Snapshot, DXGMMS2_FENCE_SNAPSHOT_V1_SIZE);
     Snapshot->Size = DXGMMS2_FENCE_SNAPSHOT_V1_SIZE;
     Snapshot->Version = DXGMMS2_SCHEDULER_TIMELINE_VERSION_1;
@@ -104,7 +146,6 @@ static NTSTATUS Dxgmms2TimelineFillSnapshot(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Ti
     Snapshot->LastSubmittedFence = (ULONG)InterlockedCompareExchange((volatile LONG *)&Timeline->NodeLastSubmittedFenceId[NodeOrdinal], 0, 0);
     Snapshot->LastCompletedFence = (ULONG)InterlockedCompareExchange((volatile LONG *)&Timeline->NodeLastCompletedFenceId[NodeOrdinal], 0, 0);
     Snapshot->GlobalLastCompletedFence = (ULONG)InterlockedCompareExchange((volatile LONG *)&Timeline->LastCompletedFenceId, 0, 0);
-    return STATUS_SUCCESS;
 }
 
 VOID Dxgmms2TimelineInitialize(_Out_ PDXGMMS2_TIMELINE_CONTEXT Timeline)
@@ -112,19 +153,36 @@ VOID Dxgmms2TimelineInitialize(_Out_ PDXGMMS2_TIMELINE_CONTEXT Timeline)
     RtlZeroMemory(Timeline, sizeof(*Timeline));
     Timeline->Signature = DXGMMS2_TIMELINE_SIGNATURE;
     Timeline->State = Dxgmms2TimelineCreated;
+    KeInitializeMutex(&Timeline->MaintenanceMutex, 0);
 }
 
 NTSTATUS Dxgmms2TimelineStart(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline, _In_ ULONG NodeCount)
 {
     ULONG Generation;
     ULONG Slot;
+    LONG State;
+    NTSTATUS Status;
 
+    PAGED_CODE();
     if (Timeline == NULL || Timeline->Signature != DXGMMS2_TIMELINE_SIGNATURE || NodeCount > DXGMMS2_TIMELINE_MAX_NODES)
         return STATUS_INVALID_PARAMETER;
-    if (InterlockedCompareExchange(&Timeline->State, 0, 0) != Dxgmms2TimelineCreated && InterlockedCompareExchange(&Timeline->State, 0, 0) != Dxgmms2TimelineStopped)
-        return STATUS_INVALID_DEVICE_STATE;
-    if (InterlockedCompareExchange(&Timeline->LiveIdentityCount, 0, 0) != 0 || InterlockedCompareExchange(&Timeline->ActiveFastCalls, 0, 0) != 0)
-        return STATUS_DEVICE_BUSY;
+    Status = STATUS_SUCCESS;
+    Dxgmms2TimelineAcquireMaintenance(Timeline);
+    State = InterlockedCompareExchange(&Timeline->State, 0, 0);
+    if (State != Dxgmms2TimelineCreated && State != Dxgmms2TimelineStopped)
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+        goto Exit;
+    }
+    Dxgmms2TimelineCloseFastCalls(Timeline);
+    Dxgmms2TimelineDrainFastCalls(Timeline);
+    if (InterlockedCompareExchange(&Timeline->LiveIdentityCount, 0, 0) != 0)
+    {
+        if (State == Dxgmms2TimelineStopped)
+            Dxgmms2TimelineOpenFastCalls(Timeline);
+        Status = STATUS_DEVICE_BUSY;
+        goto Exit;
+    }
     for (Slot = 0; Slot < DXGMMS2_TIMELINE_IDENTITY_CAPACITY; ++Slot)
         InterlockedExchange64(&Timeline->Identities[Slot], 0);
     RtlZeroMemory((PVOID)Timeline->NodeLastSubmittedFenceId, sizeof(Timeline->NodeLastSubmittedFenceId));
@@ -134,46 +192,88 @@ NTSTATUS Dxgmms2TimelineStart(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline, _In_ U
     Generation = (ULONG)InterlockedIncrement(&Timeline->Generation);
     if (Generation == 0)
         Generation = (ULONG)InterlockedIncrement(&Timeline->Generation);
-    InterlockedExchange(&Timeline->FastCallsOpen, 1);
-    KeMemoryBarrier();
     InterlockedExchange(&Timeline->State, Dxgmms2TimelineActive);
-    return STATUS_SUCCESS;
+    Dxgmms2TimelineOpenFastCalls(Timeline);
+
+Exit:
+    Dxgmms2TimelineReleaseMaintenance(Timeline);
+    return Status;
 }
 
 NTSTATUS Dxgmms2TimelineBeginStop(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline)
 {
-    if (Timeline == NULL || Timeline->Signature != DXGMMS2_TIMELINE_SIGNATURE)
-        return STATUS_INVALID_PARAMETER;
-    return InterlockedCompareExchange(&Timeline->State, Dxgmms2TimelineStopping, Dxgmms2TimelineActive) == Dxgmms2TimelineActive || InterlockedCompareExchange(&Timeline->State, 0, 0) == Dxgmms2TimelineStopping ? STATUS_SUCCESS : STATUS_INVALID_DEVICE_STATE;
-}
-
-NTSTATUS Dxgmms2TimelineCompleteStop(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline)
-{
-    if (Timeline == NULL || Timeline->Signature != DXGMMS2_TIMELINE_SIGNATURE)
-        return STATUS_INVALID_PARAMETER;
-    return InterlockedCompareExchange(&Timeline->State, Dxgmms2TimelineStopped, Dxgmms2TimelineStopping) == Dxgmms2TimelineStopping || InterlockedCompareExchange(&Timeline->State, 0, 0) == Dxgmms2TimelineStopped ? STATUS_SUCCESS : STATUS_INVALID_DEVICE_STATE;
-}
-
-NTSTATUS Dxgmms2TimelinePrepareDestroy(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline)
-{
-    LARGE_INTEGER Delay;
-    LONG State;
+    LONG PreviousState;
+    NTSTATUS Status;
 
     PAGED_CODE();
     if (Timeline == NULL || Timeline->Signature != DXGMMS2_TIMELINE_SIGNATURE)
         return STATUS_INVALID_PARAMETER;
+    Dxgmms2TimelineAcquireMaintenance(Timeline);
+    PreviousState = InterlockedCompareExchange(&Timeline->State, Dxgmms2TimelineStopping, Dxgmms2TimelineActive);
+    if (PreviousState == Dxgmms2TimelineActive || PreviousState == Dxgmms2TimelineStopping)
+        Status = STATUS_SUCCESS;
+    else
+        Status = STATUS_INVALID_DEVICE_STATE;
+    Dxgmms2TimelineReleaseMaintenance(Timeline);
+    return Status;
+}
+
+NTSTATUS Dxgmms2TimelineCompleteStop(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline)
+{
+    LONG State;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Timeline == NULL || Timeline->Signature != DXGMMS2_TIMELINE_SIGNATURE)
+        return STATUS_INVALID_PARAMETER;
+    Dxgmms2TimelineAcquireMaintenance(Timeline);
+    State = InterlockedCompareExchange(&Timeline->State, 0, 0);
+    if (State == Dxgmms2TimelineStopping)
+    {
+        Dxgmms2TimelineCloseFastCalls(Timeline);
+        Dxgmms2TimelineDrainFastCalls(Timeline);
+        InterlockedExchange(&Timeline->State, Dxgmms2TimelineStopped);
+        Dxgmms2TimelineOpenFastCalls(Timeline);
+        Status = STATUS_SUCCESS;
+    }
+    else
+    {
+        Status = State == Dxgmms2TimelineStopped ? STATUS_SUCCESS : STATUS_INVALID_DEVICE_STATE;
+    }
+    Dxgmms2TimelineReleaseMaintenance(Timeline);
+    return Status;
+}
+
+NTSTATUS Dxgmms2TimelinePrepareDestroy(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline)
+{
+    LONG State;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Timeline == NULL || Timeline->Signature != DXGMMS2_TIMELINE_SIGNATURE)
+        return STATUS_INVALID_PARAMETER;
+    Dxgmms2TimelineAcquireMaintenance(Timeline);
     State = InterlockedCompareExchange(&Timeline->State, 0, 0);
     if (State != Dxgmms2TimelineCreated && State != Dxgmms2TimelineStopped)
-        return STATUS_INVALID_DEVICE_STATE;
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+        goto Exit;
+    }
+    Dxgmms2TimelineCloseFastCalls(Timeline);
+    Dxgmms2TimelineDrainFastCalls(Timeline);
     if (InterlockedCompareExchange(&Timeline->LiveIdentityCount, 0, 0) != 0)
-        return STATUS_DEVICE_BUSY;
-    InterlockedExchange(&Timeline->FastCallsOpen, 0);
-    KeMemoryBarrier();
-    Delay.QuadPart = -10000;
-    while (InterlockedCompareExchange(&Timeline->ActiveFastCalls, 0, 0) != 0)
-        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+    {
+        if (State == Dxgmms2TimelineStopped)
+            Dxgmms2TimelineOpenFastCalls(Timeline);
+        Status = STATUS_DEVICE_BUSY;
+        goto Exit;
+    }
     InterlockedExchange(&Timeline->State, Dxgmms2TimelineDestroying);
-    return STATUS_SUCCESS;
+    Status = STATUS_SUCCESS;
+
+Exit:
+    Dxgmms2TimelineReleaseMaintenance(Timeline);
+    return Status;
 }
 
 ULONG Dxgmms2TimelineAllocateFence(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline, _In_ ULONG Generation)
@@ -240,12 +340,13 @@ BOOLEAN Dxgmms2TimelineReserveFence(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline, 
             ULONG TargetSlot = FirstTombstone != DXGMMS2_TIMELINE_IDENTITY_CAPACITY ? FirstTombstone : Slot;
             LONG64 TargetValue = FirstTombstone != DXGMMS2_TIMELINE_IDENTITY_CAPACITY ? DXGMMS2_TIMELINE_TOMBSTONE : 0;
 
+            InterlockedIncrement(&Timeline->LiveIdentityCount);
             if (InterlockedCompareExchange64(&Timeline->Identities[TargetSlot], Identity, TargetValue) == TargetValue)
             {
-                InterlockedIncrement(&Timeline->LiveIdentityCount);
                 Reserved = TRUE;
                 break;
             }
+            ASSERT(InterlockedDecrement(&Timeline->LiveIdentityCount) >= 0);
         }
     }
 
@@ -310,6 +411,9 @@ NTSTATUS Dxgmms2TimelineNotifyFenceCompletion(_Inout_ PDXGMMS2_TIMELINE_CONTEXT 
         Status = STATUS_INVALID_PARAMETER;
         goto Exit;
     }
+    Status = Dxgmms2TimelineValidateSnapshot(Snapshot);
+    if (!NT_SUCCESS(Status))
+        goto Exit;
     LastSubmittedFence = (ULONG)InterlockedCompareExchange((volatile LONG *)&Timeline->NodeLastSubmittedFenceId[NodeOrdinal], 0, 0);
     CurrentCompletedFence = (ULONG)InterlockedCompareExchange((volatile LONG *)&Timeline->NodeLastCompletedFenceId[NodeOrdinal], 0, 0);
     if (((Flags & DXGMMS2_TIMELINE_NOTIFY_PREEMPTED) == 0 && FenceId == 0) || LastSubmittedFence == 0 || (FenceId != 0 && !Dxgmms2TimelineFenceReached(LastSubmittedFence, FenceId)) || (((Flags & DXGMMS2_TIMELINE_NOTIFY_PREEMPTED) == 0 && !Dxgmms2TimelineLookupPublished(Timeline, NodeOrdinal, FenceId)) || ((Flags & DXGMMS2_TIMELINE_NOTIFY_PREEMPTED) != 0 && FenceId != 0 && !Dxgmms2TimelineFenceReached(CurrentCompletedFence, FenceId) && !Dxgmms2TimelineLookupPublished(Timeline, NodeOrdinal, FenceId))))
@@ -322,7 +426,8 @@ NTSTATUS Dxgmms2TimelineNotifyFenceCompletion(_Inout_ PDXGMMS2_TIMELINE_CONTEXT 
         Dxgmms2TimelineUpdateFence(&Timeline->LastCompletedFenceId, FenceId);
         Dxgmms2TimelineUpdateFence(&Timeline->NodeLastCompletedFenceId[NodeOrdinal], FenceId);
     }
-    Status = Dxgmms2TimelineFillSnapshot(Timeline, Generation, NodeOrdinal, Snapshot);
+    Dxgmms2TimelineFillSnapshot(Timeline, Generation, NodeOrdinal, Snapshot);
+    Status = STATUS_SUCCESS;
 
 Exit:
     Dxgmms2TimelineReleaseFastCall(Timeline);
@@ -384,20 +489,29 @@ NTSTATUS Dxgmms2TimelineResetFenceIdentities(_Inout_ PDXGMMS2_TIMELINE_CONTEXT T
 {
     ULONG Slot;
     LONG State;
+    NTSTATUS Status;
 
     PAGED_CODE();
-    if (!Dxgmms2TimelineAcquireFastCall(Timeline, Generation, &State))
-        return STATUS_INVALID_DEVICE_STATE;
-    if (State != Dxgmms2TimelineActive && State != Dxgmms2TimelineStopping)
+    if (Timeline == NULL || Timeline->Signature != DXGMMS2_TIMELINE_SIGNATURE)
+        return STATUS_INVALID_PARAMETER;
+    Dxgmms2TimelineAcquireMaintenance(Timeline);
+    State = InterlockedCompareExchange(&Timeline->State, 0, 0);
+    if ((ULONG)InterlockedCompareExchange(&Timeline->Generation, 0, 0) != Generation || (State != Dxgmms2TimelineActive && State != Dxgmms2TimelineStopping))
     {
-        Dxgmms2TimelineReleaseFastCall(Timeline);
-        return STATUS_INVALID_DEVICE_STATE;
+        Status = STATUS_INVALID_DEVICE_STATE;
+        goto Exit;
     }
+    Dxgmms2TimelineCloseFastCalls(Timeline);
+    Dxgmms2TimelineDrainFastCalls(Timeline);
     for (Slot = 0; Slot < DXGMMS2_TIMELINE_IDENTITY_CAPACITY; ++Slot)
         InterlockedExchange64(&Timeline->Identities[Slot], 0);
     InterlockedExchange(&Timeline->LiveIdentityCount, 0);
-    Dxgmms2TimelineReleaseFastCall(Timeline);
-    return STATUS_SUCCESS;
+    Dxgmms2TimelineOpenFastCalls(Timeline);
+    Status = STATUS_SUCCESS;
+
+Exit:
+    Dxgmms2TimelineReleaseMaintenance(Timeline);
+    return Status;
 }
 
 NTSTATUS Dxgmms2TimelineQueryFenceSnapshot(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline, _In_ ULONG Generation, _In_ ULONG NodeOrdinal, _Inout_ DXGMMS2_FENCE_SNAPSHOT_V1 *Snapshot)
@@ -411,7 +525,11 @@ NTSTATUS Dxgmms2TimelineQueryFenceSnapshot(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Tim
     if (NodeOrdinal >= Timeline->NodeCount || NodeOrdinal >= DXGMMS2_TIMELINE_MAX_NODES)
         Status = STATUS_INVALID_PARAMETER;
     else
-        Status = Dxgmms2TimelineFillSnapshot(Timeline, Generation, NodeOrdinal, Snapshot);
+    {
+        Status = Dxgmms2TimelineValidateSnapshot(Snapshot);
+        if (NT_SUCCESS(Status))
+            Dxgmms2TimelineFillSnapshot(Timeline, Generation, NodeOrdinal, Snapshot);
+    }
     Dxgmms2TimelineReleaseFastCall(Timeline);
     return Status;
 }

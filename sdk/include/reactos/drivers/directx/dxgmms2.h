@@ -129,6 +129,9 @@ typedef struct _DXGMMS2_FENCE_SNAPSHOT_V1
     ULONG Reserved;
 } DXGMMS2_FENCE_SNAPSHOT_V1, *PDXGMMS2_FENCE_SNAPSHOT_V1;
 
+/* Allocate, Reserve, Publish, Notify, Is, and Release are nonpaged,
+ * nonblocking callbacks callable from ISR/DIRQL. Notify supplies the ISR
+ * snapshot. Reset and Query are PASSIVE_LEVEL-only maintenance operations. */
 typedef ULONG (NTAPI *PDXGMMS2_ALLOCATE_FENCE)(_In_ DXGMMS2_SCHEDULER_TIMELINE_HANDLE Timeline, _In_ ULONG Generation);
 typedef BOOLEAN (NTAPI *PDXGMMS2_RESERVE_FENCE)(_In_ DXGMMS2_SCHEDULER_TIMELINE_HANDLE Timeline, _In_ ULONG Generation, _In_ ULONG NodeOrdinal, _In_ ULONG FenceId);
 typedef BOOLEAN (NTAPI *PDXGMMS2_PUBLISH_FENCE)(_In_ DXGMMS2_SCHEDULER_TIMELINE_HANDLE Timeline, _In_ ULONG Generation, _In_ ULONG NodeOrdinal, _In_ ULONG FenceId);
