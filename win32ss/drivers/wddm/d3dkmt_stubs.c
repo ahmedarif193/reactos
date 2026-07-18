@@ -2764,8 +2764,6 @@ D3DKMTQueryVideoMemoryInfo(
     Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
     if (!NT_SUCCESS(Status))
         return Status;
-    if (Captured.hProcess != NULL || Captured.PhysicalAdapterIndex != 0)
-        return STATUS_NOT_SUPPORTED;
 
     Status = WddmBridgeSafeProbeForWrite((PUCHAR)pData + FIELD_OFFSET(D3DKMT_QUERYVIDEOMEMORYINFO, Budget), sizeof(Captured.Budget));
     if (!NT_SUCCESS(Status))
