@@ -1491,7 +1491,7 @@ KeSetActualBasePriorityThread(
     if (NewPriority != Thread->Priority)
     {
         /* Reset the quantum and do the actual priority modification */
-        Thread->Quantum = Thread->QuantumReset;
+        KiSetThreadQuantum(Thread, Thread->QuantumReset);
         KiSetPriorityThread(Thread, NewPriority);
     }
 
