@@ -1937,6 +1937,12 @@ USBPORT_DmaEndpointPaused(IN PDEVICE_OBJECT FdoDevice,
 
                 KeReleaseSpinLock(&FdoExtension->MiniportSpinLock, OldIrql);
 
+                if (InterlockedOr((volatile LONG *)&Transfer->Flags, 0) & TRANSFER_FLAG_COMPLETED)
+                {
+                    Entry = Transfer->TransferLink.Flink;
+                    continue;
+                }
+
                 if (Transfer->Flags & TRANSFER_FLAG_ISO)
                 {
                     USBPORT_FlushIsoTransfer(Transfer);

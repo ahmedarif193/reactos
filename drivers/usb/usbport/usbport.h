@@ -8,6 +8,8 @@
 #ifndef USBPORT_H__
 #define USBPORT_H__
 
+#define USBPORT_ISR_DPC_RUNDOWN_STOPPING ((LONG)0x80000000)
+
 #include <ntifs.h>
 #include <windef.h>
 #include <stdio.h>
@@ -457,6 +459,9 @@ typedef struct _USBPORT_DEVICE_EXTENSION {
   KDPC IsrDpc;
   LONG IsrDpcCounter;
   LONG IsrDpcHandlerCounter;
+  KEVENT IsrDpcRundownEvent;
+  /* High bit closes the gate; low bits count queued/running ISR DPCs. */
+  volatile LONG IsrDpcRundownState;
   KSPIN_LOCK MiniportInterruptsSpinLock;
   KTIMER TimerSoftInterrupt;
   KDPC SoftInterruptDpc;
@@ -849,6 +854,14 @@ USBPORT_IsrDpc(
   IN PVOID DeferredContext,
   IN PVOID SystemArgument1,
   IN PVOID SystemArgument2);
+
+VOID
+USBPORT_StartIsrDpcRundown(
+  IN PUSBPORT_DEVICE_EXTENSION FdoExtension);
+
+VOID
+USBPORT_StopIsrDpcRundown(
+  IN PUSBPORT_DEVICE_EXTENSION FdoExtension);
 
 BOOLEAN
 NTAPI

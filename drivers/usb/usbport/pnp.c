@@ -1335,6 +1335,7 @@ USBPORT_StopDevice(IN PDEVICE_OBJECT FdoDevice)
         KeCancelTimer(&FdoExtension->TimerSoftInterrupt);
     }
     FdoExtension->TimerFlags = 0;
+    USBPORT_StopIsrDpcRundown(FdoExtension);
 
     if (Packet && (FdoExtension->Flags & USBPORT_FLAG_HC_STARTED) &&
         Packet->StopController)
@@ -1693,6 +1694,7 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
     KeInitializeSpinLock(&FdoExtension->MiniportSpinLock);
     KeInitializeSpinLock(&FdoExtension->TimerFlagsSpinLock);
     KeInitializeEvent(&FdoExtension->TimerDpcEvent, NotificationEvent, TRUE);
+    KeInitializeEvent(&FdoExtension->IsrDpcRundownEvent, NotificationEvent, TRUE);
     KeInitializeSpinLock(&FdoExtension->PowerWakeSpinLock);
     KeInitializeSpinLock(&FdoExtension->SetPowerD0SpinLock);
     KeInitializeSpinLock(&FdoExtension->RootHubCallbackSpinLock);
@@ -1732,6 +1734,7 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
 
     FdoExtension->IsrDpcCounter = -1;
     FdoExtension->IsrDpcHandlerCounter = -1;
+    FdoExtension->IsrDpcRundownState = USBPORT_ISR_DPC_RUNDOWN_STOPPING;
     FdoExtension->IdleLockCounter = -1;
     FdoExtension->BadRequestLockCounter = -1;
     FdoExtension->ChirpRootPortLock = -1;
@@ -2211,6 +2214,7 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
     }
     else
     {
+        USBPORT_StartIsrDpcRundown(FdoExtension);
         FdoExtension->MiniPortFlags |= USBPORT_MPFLAG_INTERRUPTS_ENABLED;
         USBPORT_MiniportInterrupts(FdoDevice, TRUE);
     }
