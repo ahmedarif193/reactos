@@ -1510,38 +1510,44 @@ FbConsClearTextCache(
 
 VOID
 FbConsScrollTextCache(
-    _In_ UCHAR Attr)
+    _In_ UCHAR Attr,
+    _In_ ULONG Lines)
 {
-    ULONG Column;
+    ULONG Index;
     ULONG Width = FbConsWidth();
     ULONG Height = FbConsHeight();
     ULONG RowSize = Width * VGA_CHAR_SIZE;
     ULONG BufferSize = Height * RowSize;
-    PUCHAR LastRow;
+    ULONG ScrollSize;
+    PUCHAR Cell;
 
     if (!FbConsCachedTextBufferValid)
         return;
 
-    if ((Height == 0) || (RowSize == 0) ||
-        (BufferSize != FbConsCachedTextBufferSize))
+    if ((Height == 0) || (RowSize == 0) || (BufferSize != FbConsCachedTextBufferSize))
     {
         FbConsInvalidateTextCache();
         return;
     }
 
-    if (Height > 1)
+    if (Lines == 0)
+        return;
+
+    if (Lines >= Height)
     {
-        RtlMoveMemory(FbConsCachedTextBuffer,
-                      FbConsCachedTextBuffer + RowSize,
-                      BufferSize - RowSize);
+        FbConsClearTextCache(Attr);
+        return;
     }
 
-    LastRow = FbConsCachedTextBuffer + BufferSize - RowSize;
-    for (Column = 0; Column < Width; ++Column)
+    ScrollSize = Lines * RowSize;
+    RtlMoveMemory(FbConsCachedTextBuffer, FbConsCachedTextBuffer + ScrollSize, BufferSize - ScrollSize);
+
+    Cell = FbConsCachedTextBuffer + BufferSize - ScrollSize;
+    for (Index = 0; Index < Lines * Width; ++Index)
     {
-        LastRow[0] = ' ';
-        LastRow[1] = Attr;
-        LastRow += VGA_CHAR_SIZE;
+        Cell[0] = ' ';
+        Cell[1] = Attr;
+        Cell += VGA_CHAR_SIZE;
     }
 }
 
@@ -1794,10 +1800,14 @@ FbConsCopyOffScreenBufferToVRAM(
 
 VOID
 FbConsScrollUp(
-    _In_ UCHAR Attr)
+    _In_ UCHAR Attr,
+    _In_ ULONG Lines)
 {
     UINT32 BgColor, Dummy;
+
+    Lines = min(Lines, FbConsHeight());
+
     FbConsAttrToColors(Attr, &Dummy, &BgColor);
-    VidFbScrollUp(BgColor, FbConsCellHeight());
-    FbConsScrollTextCache(Attr);
+    VidFbScrollUp(BgColor, Lines * FbConsCellHeight());
+    FbConsScrollTextCache(Attr, Lines);
 }

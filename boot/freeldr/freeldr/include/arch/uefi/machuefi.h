@@ -68,7 +68,7 @@ VOID
 UefiVideoSync(VOID);
 
 VOID
-UefiVideoScrollUp(UCHAR Attr);
+UefiVideoScrollUp(UCHAR Attr, ULONG Lines);
 
 VOID
 UefiVideoPrepareForExitBootServices(VOID);
