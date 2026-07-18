@@ -239,6 +239,7 @@ struct _DXGMMS_INTERFACE
 #define DXGMMS_PRIORITY_NORMAL          1
 #define DXGMMS_PRIORITY_HIGH            2
 #define DXGMMS_PRIORITY_REALTIME        3
+#define DXGMMS_SUBMIT_FLAG_PAGING       0x00000001u
 
 /* Default GPU quantum in milliseconds and as a negative 100-ns KTIMER interval. */
 #define DXGMMS_QUANTUM_MS               16
@@ -261,9 +262,15 @@ typedef struct _DXGMMS_COMMAND_BUFFER
     LIST_ENTRY          QueueEntry;
     PVOID               DxgkrnlBuffer;
     PVOID               DmaBuffer;
+    ULONG               DmaBufferSegmentId;
+    PHYSICAL_ADDRESS    DmaBufferPhysicalAddress;
     ULONG               DmaBufferSize;
+    ULONG               DmaBufferSubmissionStartOffset;
+    ULONG               DmaBufferSubmissionEndOffset;
     PVOID               DmaBufferPrivateData;
     ULONG               DmaBufferPrivateDataSize;
+    ULONG               DmaBufferPrivateDataSubmissionStartOffset;
+    ULONG               DmaBufferPrivateDataSubmissionEndOffset;
     HANDLE              ContextHandle;
     ULONG               Flags;
     ULONG               NodeOrdinal;

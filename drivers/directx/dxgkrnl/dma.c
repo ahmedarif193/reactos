@@ -4,7 +4,7 @@
  * PURPOSE:     GPU command buffer / DMA submission
  * COPYRIGHT:   Copyright 2024-2026 ReactOS WDDM Team
  *
- * DxgkRender — command buffer submission (stub for DOD, future dxgmms1).
+ * DxgkRender — validates the legacy render entry point without faking work.
  * DxgkPresent — present surface to display via the present queue.
  *
  * The present path validates parameters, builds a DXGKRNL_PRESENT_ENTRY
@@ -16,110 +16,17 @@
 
 #include "dxgkrnl_private.h"
 #include "present.h"
+#include "vidmm.h"
 #include "vidpn.h"
-
-/* ========================================================================
- * Helper: find the adapter that owns a given D3DKMT device handle.
- *
- * Walks the global adapter list + per-adapter device lists.  Returns the
- * PDXGKRNL_ADAPTER on success, NULL if the handle is unknown.
- *
- * This is the same pattern used by context.c (DxgkpFindDeviceByHandle)
- * but we keep a local copy to avoid exposing context.c internals.
- *
- * IRQL: PASSIVE_LEVEL
- * ====================================================================== */
-
-/* Maximum adapters snapshotted (matches context.c). */
-#define DMA_MAX_ADAPTERS 16
-
-static PDXGKRNL_ADAPTER
-DxgkpFindAdapterForDevice(
-    _In_ D3DKMT_HANDLE hDevice)
-{
-    PDXGKRNL_ADAPTER Snapshot[DMA_MAX_ADAPTERS];
-    ULONG Count, i;
-    PLIST_ENTRY Entry;
-    KIRQL OldIrql;
-
-    PAGED_CODE();
-
-    /* Snapshot the global adapter list under the spinlock. */
-    KeAcquireSpinLock(&DxgkAdapterGlobalListLock, &OldIrql);
-    Count = 0;
-    for (Entry  = DxgkAdapterGlobalListHead.Flink;
-         Entry != &DxgkAdapterGlobalListHead && Count < DMA_MAX_ADAPTERS;
-         Entry  = Entry->Flink)
-    {
-        Snapshot[Count++] = CONTAINING_RECORD(Entry, DXGKRNL_ADAPTER,
-                                               GlobalAdapterListEntry);
-    }
-    KeReleaseSpinLock(&DxgkAdapterGlobalListLock, OldIrql);
-
-    /* Search each adapter's device list for the handle. */
-    for (i = 0; i < Count; ++i)
-    {
-        PDXGKRNL_ADAPTER Adapter = Snapshot[i];
-        PLIST_ENTRY DevEntry;
-
-        ExAcquireFastMutex(&Adapter->AdapterMutex);
-
-        for (DevEntry  = Adapter->DeviceListHead.Flink;
-             DevEntry != &Adapter->DeviceListHead;
-             DevEntry  = DevEntry->Flink)
-        {
-            PDXGKRNL_DEVICE Device = CONTAINING_RECORD(DevEntry,
-                                                        DXGKRNL_DEVICE,
-                                                        DeviceListEntry);
-            if (Device->Handle == hDevice)
-            {
-                ExReleaseFastMutex(&Adapter->AdapterMutex);
-                return Adapter;
-            }
-        }
-
-        ExReleaseFastMutex(&Adapter->AdapterMutex);
-    }
-
-    return NULL;
-}
-
-/*
- * DxgkpGetFirstAdapter
- *
- * Returns the first adapter in the global list.  Used as a fallback when
- * no device handle is available (e.g., for present calls that only carry
- * a window handle).
- *
- * IRQL: PASSIVE_LEVEL
- */
-static PDXGKRNL_ADAPTER
-DxgkpGetFirstAdapter(VOID)
-{
-    PDXGKRNL_ADAPTER Adapter = NULL;
-    KIRQL OldIrql;
-
-    KeAcquireSpinLock(&DxgkAdapterGlobalListLock, &OldIrql);
-
-    if (!IsListEmpty(&DxgkAdapterGlobalListHead))
-    {
-        Adapter = CONTAINING_RECORD(DxgkAdapterGlobalListHead.Flink,
-                                     DXGKRNL_ADAPTER,
-                                     GlobalAdapterListEntry);
-    }
-
-    KeReleaseSpinLock(&DxgkAdapterGlobalListLock, OldIrql);
-    return Adapter;
-}
 
 /* ========================================================================
  * DxgkRender
  *
  * D3DKMTRender -- submits a command buffer to the GPU scheduler.
  *
- * For display-only adapters there is no GPU command stream, so we
- * validate parameters and return success with a zero-length output
- * command buffer.  Full WDDM adapters need dxgmms1 scheduler integration.
+ * A zero-length render carries no GPU work and is acknowledged after context
+ * validation.  Non-empty legacy render streams remain unsupported until the
+ * complete Render/Patch/Submit contract is implemented.
  *
  * IRQL: PASSIVE_LEVEL
  * ====================================================================== */
@@ -128,35 +35,41 @@ NTAPI
 DxgkRender(
     _Inout_ D3DKMT_RENDER *pRender)
 {
+    PDXGKRNL_ADAPTER Adapter = NULL;
+    PDXGKRNL_DEVICE Device = NULL;
+    PDXGKRNL_CONTEXT Context;
+    NTSTATUS Status;
+
     PAGED_CODE();
 
     if (pRender == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    {
-        PDXGKRNL_ADAPTER Adapter = NULL;
-        PDXGKRNL_CONTEXT Context;
-
-        if (pRender->hContext == 0)
-            return STATUS_INVALID_HANDLE;
-
-        Context = DxgkLookupContextByHandle(pRender->hContext,
-                                            &Adapter,
-                                            NULL);
-        if (Context == NULL || Adapter == NULL)
-            return STATUS_INVALID_HANDLE;
-
-        if ((Adapter->MiniportContext == NULL ||
-             !Adapter->MiniportContext->IsDisplayOnlyDriver) &&
-            pRender->CommandLength != 0)
-        {
-            return STATUS_NOT_SUPPORTED;
-        }
-    }
+    if (pRender->hContext == 0)
+        return STATUS_INVALID_HANDLE;
 
     if (pRender->Flags.RenderKm || pRender->Flags.RenderKmReadback)
-    {
         return STATUS_NOT_SUPPORTED;
+
+    Context = DxgkLookupContextByHandle(pRender->hContext, &Adapter, &Device);
+    if (Context == NULL)
+        return STATUS_INVALID_HANDLE;
+    if (Adapter == NULL || Device == NULL)
+    {
+        DxgkDereferenceContext(Context);
+        return STATUS_INVALID_HANDLE;
+    }
+
+    Status = STATUS_SUCCESS;
+    if (pRender->hDevice != 0 && pRender->hDevice != Device->Handle)
+        Status = STATUS_INVALID_HANDLE;
+    else if (pRender->CommandLength != 0)
+        Status = STATUS_NOT_SUPPORTED;
+
+    if (!NT_SUCCESS(Status))
+    {
+        DxgkDereferenceContext(Context);
+        return Status;
     }
 
     DXGKRNL_TRACE("DxgkRender: hDevice=0x%X hContext=0x%X CmdBufSize=%u\n",
@@ -164,13 +77,8 @@ DxgkRender(
                   pRender->hContext,
                   pRender->CommandLength);
 
-    /*
-     * For display-only DOD adapters: acknowledge the render call without
-     * submitting anything.  Return a zero-length new command buffer to
-     * indicate no further work is queued.
-     *
-     * TODO (Priority 3): Route through dxgmms1 scheduler for real GPU work.
-     */
+    /* A zero-length render has no GPU work.  Non-empty legacy render streams
+     * stay unsupported until a complete Render/Patch/Submit path exists. */
     pRender->pNewCommandBuffer = NULL;
     pRender->NewCommandBufferSize = 0;
     pRender->pNewAllocationList = NULL;
@@ -178,6 +86,7 @@ DxgkRender(
     pRender->pNewPatchLocationList = NULL;
     pRender->NewPatchLocationListSize = 0;
 
+    DxgkDereferenceContext(Context);
     return STATUS_SUCCESS;
 }
 
@@ -202,59 +111,65 @@ NTAPI
 DxgkPresent(
     _Inout_ D3DKMT_PRESENT *pPresent)
 {
-    PDXGKRNL_ADAPTER         Adapter;
+    PDXGKRNL_ADAPTER         Adapter = NULL;
+    PDXGKRNL_DEVICE          Device = NULL;
+    PDXGKRNL_CONTEXT         Context = NULL;
     DXGKRNL_PRESENT_ENTRY    Entry;
     ULONG64                  PresentId;
     NTSTATUS                 Status;
+    BOOLEAN                  DestinationIsInternal = FALSE;
 
     PAGED_CODE();
 
     if (pPresent == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    if (pPresent->hDevice != 0 &&
-        DxgkLookupDeviceByHandle(pPresent->hDevice, NULL) == NULL)
-    {
+    if (pPresent->hDevice == 0)
         return STATUS_INVALID_HANDLE;
-    }
 
     if (pPresent->Flags.Value == 0 && pPresent->hSource == 0)
         return STATUS_INVALID_PARAMETER;
 
-    /* --- Resolve the adapter from the device handle --------------------- */
+    RtlZeroMemory(&Entry, sizeof(Entry));
 
-    Adapter = DxgkpFindAdapterForDevice(pPresent->hDevice);
-    if (Adapter == NULL)
+    Context = DxgkLookupContextByHandle(pPresent->hContext, &Adapter, &Device);
+    if (Context != NULL)
     {
-        /*
-         * The device handle may be zero for some runtime paths (e.g.,
-         * GDI presents that only carry a window handle).  Fall back to
-         * the first adapter in the global list.
-         */
-        Adapter = DxgkpGetFirstAdapter();
-        if (Adapter == NULL)
+        if (!DxgkReferenceDevice(Device))
         {
-            DXGKRNL_WARN("DxgkPresent: no adapter found for hDevice=0x%X\n",
-                         pPresent->hDevice);
-            return STATUS_DEVICE_NOT_READY;
+            DxgkDereferenceContext(Context);
+            return STATUS_DELETE_PENDING;
+        }
+    }
+    else
+    {
+        Status = DxgkReferenceOwnedDeviceByHandle(pPresent->hDevice, PsGetCurrentProcess(), &Adapter, &Device);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        if (Adapter->SchedulingCaps.MultiEngineAware)
+        {
+            DxgkDereferenceDevice(Device);
+            return STATUS_INVALID_HANDLE;
         }
     }
 
-    /*
-     * If the present queue is not initialised (adapter not fully started),
-     * fall through to the legacy behaviour: acknowledge the present and
-     * let the periodic timer in display.c handle pixel output.
-     */
-    if (Adapter->PresentQueues == NULL)
+    Entry.Context = Context;
+    Entry.Device = Device;
+    if (Adapter->State != DxgkAdapterStateStarted || InterlockedCompareExchange(&Adapter->SubmitDmaStopping, 0, 0) != 0)
     {
-        return STATUS_DEVICE_NOT_READY;
+        DxgkpReleasePresentEntry(&Entry);
+        return STATUS_DELETE_PENDING;
+    }
+
+    Status = DxgkpAcquireSharedSurfaceSnapshot(Adapter, &Entry.SharedSurface);
+    if (!NT_SUCCESS(Status))
+    {
+        DxgkpReleasePresentEntry(&Entry);
+        return Status;
     }
 
     /* --- Build the present entry ---------------------------------------- */
 
-    RtlZeroMemory(&Entry, sizeof(Entry));
-
-    Entry.hDevice        = pPresent->hDevice;
     Entry.hSource        = pPresent->hSource;
     Entry.hDestination   = pPresent->hDestination;
     Entry.Color          = pPresent->Color;
@@ -280,8 +195,8 @@ DxgkPresent(
         /* Default to the full committed display resolution. */
         Entry.SrcRect.left   = 0;
         Entry.SrcRect.top    = 0;
-        Entry.SrcRect.right  = (LONG)Adapter->CommittedWidth;
-        Entry.SrcRect.bottom = (LONG)Adapter->CommittedHeight;
+        Entry.SrcRect.right  = (LONG)Entry.SharedSurface.CommittedWidth;
+        Entry.SrcRect.bottom = (LONG)Entry.SharedSurface.CommittedHeight;
     }
 
     /* Destination rectangle. */
@@ -293,8 +208,8 @@ DxgkPresent(
     {
         Entry.DstRect.left   = 0;
         Entry.DstRect.top    = 0;
-        Entry.DstRect.right  = (LONG)Adapter->CommittedWidth;
-        Entry.DstRect.bottom = (LONG)Adapter->CommittedHeight;
+        Entry.DstRect.right  = (LONG)Entry.SharedSurface.CommittedWidth;
+        Entry.DstRect.bottom = (LONG)Entry.SharedSurface.CommittedHeight;
     }
 
     /*
@@ -341,13 +256,14 @@ DxgkPresent(
                           Entry.DstRect.top,
                           Entry.DstRect.right,
                           Entry.DstRect.bottom);
+            DxgkpReleasePresentEntry(&Entry);
             return STATUS_INVALID_PARAMETER;
         }
 
         if (Entry.hSource != 0 &&
             Entry.hDestination == 0 &&
-            Adapter->SharedPrimaryAllocationHandle != NULL &&
-            DxgkpDeviceOwnsVidPnSource(pPresent->hDevice, Entry.VidPnSourceId))
+            Entry.SharedSurface.PrimaryHandle != NULL &&
+            DxgkpDeviceOwnsVidPnSource(Device->Handle, Entry.VidPnSourceId))
         {
             /*
              * Only the VidPn source owner may present straight to the primary.
@@ -358,10 +274,52 @@ DxgkPresent(
              * This mirrors the Windows model where DWM owns the primary and
              * composites app presents into their window.
              */
-            Entry.hDestination =
-                (D3DKMT_HANDLE)(ULONG_PTR)Adapter->SharedPrimaryAllocationHandle;
+            Entry.hDestination = (D3DKMT_HANDLE)(ULONG_PTR)Entry.SharedSurface.PrimaryHandle;
+            DestinationIsInternal = TRUE;
         }
     }
+
+    if (Entry.hSource != 0)
+    {
+        Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)Entry.hSource, Adapter, Device, &Entry.SourceAllocation);
+        if (!NT_SUCCESS(Status))
+        {
+            DxgkpReleasePresentEntry(&Entry);
+            return Status;
+        }
+        Status = DxgkVidMmReferenceOpenBinding((HANDLE)(ULONG_PTR)Entry.hSource, Adapter, Device, &Entry.SourceOpenBindingHandle, &Entry.SourceOpenBindingReference);
+        if (!NT_SUCCESS(Status) && Status != STATUS_NOT_FOUND)
+        {
+            DxgkpReleasePresentEntry(&Entry);
+            return Status;
+        }
+    }
+
+    if (Entry.hDestination != 0)
+    {
+        Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)Entry.hDestination, Adapter, DestinationIsInternal ? NULL : Device, &Entry.DestinationAllocation);
+        if (!NT_SUCCESS(Status))
+        {
+            DxgkpReleasePresentEntry(&Entry);
+            return Status;
+        }
+        if (!DestinationIsInternal)
+        {
+            Status = DxgkVidMmReferenceOpenBinding((HANDLE)(ULONG_PTR)Entry.hDestination, Adapter, Device, &Entry.DestinationOpenBindingHandle, &Entry.DestinationOpenBindingReference);
+            if (!NT_SUCCESS(Status) && Status != STATUS_NOT_FOUND)
+            {
+                DxgkpReleasePresentEntry(&Entry);
+                return Status;
+            }
+        }
+    }
+
+    Entry.SourceIsSharedPrimary = Entry.SourceAllocation != NULL && Entry.SourceAllocation == Entry.SharedSurface.PrimaryAllocation;
+    Entry.SourceIsSharedShadow = Entry.SourceAllocation != NULL && Entry.SourceAllocation == Entry.SharedSurface.ShadowAllocation;
+    Entry.DestinationIsSharedPrimary = Entry.DestinationAllocation != NULL && Entry.DestinationAllocation == Entry.SharedSurface.PrimaryAllocation;
+    Entry.DestinationIsSharedShadow = Entry.DestinationAllocation != NULL && Entry.DestinationAllocation == Entry.SharedSurface.ShadowAllocation;
+    if (!Adapter->MiniportContext->IsDisplayOnlyDriver && Entry.SharedSurface.ShadowFb == NULL && !Entry.SourceIsSharedPrimary && !Entry.SourceIsSharedShadow && !Entry.DestinationIsSharedPrimary && !Entry.DestinationIsSharedShadow)
+        DxgkpReleaseSharedSurfaceSnapshot(&Entry.SharedSurface);
 
     /* --- Submit to the present queue ----------------------------------- */
 

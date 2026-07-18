@@ -35,6 +35,7 @@
 #include "dxgkrnl_private.h"
 #include "vidmm.h"
 #include "vidpn.h"
+#include "present.h"
 
 /* ========================================================================
  * Forward declarations for all interface functions
@@ -201,17 +202,23 @@ static CONST DXGKP_MONITOR_INTERFACE g_MonitorInterface =
  * ====================================================================== */
 static DXGKP_VIDPN_SOURCE_OWNER g_SourceOwners[DXGKP_MAX_SOURCES];
 static FAST_MUTEX g_SourceOwnerMutex;
-static BOOLEAN g_SourceOwnerMutexInitialized = FALSE;
+static volatile LONG g_SourceOwnerState = 0;
 
 static VOID
 DxgkpEnsureSourceOwnerMutex(VOID)
 {
-    if (!g_SourceOwnerMutexInitialized)
+    LONG State = InterlockedCompareExchange(&g_SourceOwnerState, 1, 0);
+
+    if (State == 0)
     {
         ExInitializeFastMutex(&g_SourceOwnerMutex);
         RtlZeroMemory(g_SourceOwners, sizeof(g_SourceOwners));
-        g_SourceOwnerMutexInitialized = TRUE;
+        InterlockedExchange(&g_SourceOwnerState, 2);
+        return;
     }
+
+    while (InterlockedCompareExchange(&g_SourceOwnerState, 2, 2) != 2)
+        YieldProcessor();
 }
 
 /* ========================================================================
@@ -241,6 +248,27 @@ DxgkpDeviceOwnsVidPnSource(
     ExReleaseFastMutex(&g_SourceOwnerMutex);
 
     return Owns;
+}
+
+VOID
+DxgkVidPnCleanupDeviceOwners(
+    _In_ PDXGKRNL_DEVICE Device)
+{
+    ULONG Index;
+
+    if (Device == NULL || Device->Handle == 0)
+        return;
+    DxgkpEnsureSourceOwnerMutex();
+    ExAcquireFastMutex(&g_SourceOwnerMutex);
+    for (Index = 0; Index < DXGKP_MAX_SOURCES; ++Index)
+    {
+        if (g_SourceOwners[Index].OwnerDevice == Device->Handle)
+        {
+            g_SourceOwners[Index].OwnerDevice = 0;
+            g_SourceOwners[Index].OwnerType = D3DKMT_VIDPNSOURCEOWNER_UNOWNED;
+        }
+    }
+    ExReleaseFastMutex(&g_SourceOwnerMutex);
 }
 
 /* ========================================================================
@@ -2324,29 +2352,31 @@ Monitor_ReleaseMonitorSourceModeSet(
  * ====================================================================== */
 
 static VOID
-DxgkpDestroySharedPrimary(
+DxgkpDestroySharedPrimaryLocked(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
-    PDXGKVMM_RESOURCE Resource;
+    PDXGKVMM_RESOURCE Resource = NULL;
 
     if (Adapter == NULL)
         return;
+
+    DxgkpBeginSharedSurfaceMutationLocked(Adapter);
 
     if (Adapter->SharedPrimaryAllocationHandle != NULL)
     {
         /*
          * Display-only adapters point Adapter->ShadowFb at this allocation's
-         * CPU VA. Drain the present worker and clear it before the allocation
-         * (and its mapping) is freed, or delayed present work scans freed
-         * memory and the UNMAP handler keeps a dangling pointer.
+         * CPU VA. Shared-surface rundown above drained every retained snapshot,
+         * so clear the allocation-backed alias before destroying its mapping.
          */
         if (Adapter->MiniportContext != NULL &&
-            Adapter->MiniportContext->IsDisplayOnlyDriver)
+            Adapter->MiniportContext->IsDisplayOnlyDriver &&
+            !Adapter->ShadowFbPoolOwned)
         {
-            DxgkpStopPresentTimer(Adapter);
             Adapter->ShadowFb = NULL;
             Adapter->ShadowFbPitch = 0;
             Adapter->ShadowFbSize = 0;
+            Adapter->ShadowFbPoolOwned = FALSE;
         }
 
         DxgkVidMmDestroyAllocation(Adapter, Adapter->SharedPrimaryAllocationHandle);
@@ -2355,9 +2385,19 @@ DxgkpDestroySharedPrimary(
 
     if (Adapter->SharedPrimaryResourceHandle != 0)
     {
-        Resource = DxgkVidMmHandleToResource(Adapter->SharedPrimaryResourceHandle);
-        if (Resource != NULL)
-            DxgkpVidMmDestroyResourceWrapper(Adapter, Resource);
+        if (NT_SUCCESS(DxgkVidMmReferenceResource(Adapter->SharedPrimaryResourceHandle, FALSE, NULL, &Resource)))
+        {
+            if (Resource->Adapter != Adapter)
+            {
+                DxgkVidMmDereferenceResource(Resource);
+            }
+            else
+            {
+                DxgkVidMmDereferenceResource(Resource);
+                DxgkpVidMmDestroyResourceWrapper(Adapter, Resource);
+            }
+            Resource = NULL;
+        }
         Adapter->SharedPrimaryResourceHandle = 0;
     }
 
@@ -2372,15 +2412,14 @@ DxgkpDestroySharedPrimary(
     {
         /*
          * Full-WDDM adapters reuse Adapter->ShadowFb as the live CPU VA for
-         * the shadow allocation. Clear it before destroying the allocation so
-         * delayed present work cannot present from freed backing memory.
+         * the shadow allocation. Rundown makes clearing it here generation-safe.
          */
-        if (!Adapter->MiniportContext->IsDisplayOnlyDriver)
+        if (Adapter->MiniportContext != NULL && !Adapter->MiniportContext->IsDisplayOnlyDriver && !Adapter->ShadowFbPoolOwned)
         {
-            DxgkpStopPresentTimer(Adapter);
             Adapter->ShadowFb = NULL;
             Adapter->ShadowFbPitch = 0;
             Adapter->ShadowFbSize = 0;
+            Adapter->ShadowFbPoolOwned = FALSE;
         }
 
         DxgkVidMmDestroyAllocation(Adapter, Adapter->SharedShadowAllocationHandle);
@@ -2389,9 +2428,19 @@ DxgkpDestroySharedPrimary(
 
     if (Adapter->SharedShadowResourceHandle != 0)
     {
-        Resource = DxgkVidMmHandleToResource(Adapter->SharedShadowResourceHandle);
-        if (Resource != NULL)
-            DxgkpVidMmDestroyResourceWrapper(Adapter, Resource);
+        if (NT_SUCCESS(DxgkVidMmReferenceResource(Adapter->SharedShadowResourceHandle, FALSE, NULL, &Resource)))
+        {
+            if (Resource->Adapter != Adapter)
+            {
+                DxgkVidMmDereferenceResource(Resource);
+            }
+            else
+            {
+                DxgkVidMmDereferenceResource(Resource);
+                DxgkpVidMmDestroyResourceWrapper(Adapter, Resource);
+            }
+            Resource = NULL;
+        }
         Adapter->SharedShadowResourceHandle = 0;
     }
 
@@ -2400,10 +2449,11 @@ DxgkpDestroySharedPrimary(
     Adapter->SharedShadowHeight = 0;
     Adapter->SharedShadowPitch = 0;
     Adapter->SharedShadowFormat = 0;
+    DxgkpEndSharedSurfaceMutationLocked(Adapter);
 }
 
 static NTSTATUS
-DxgkpEnsureSharedShadowSurface(
+DxgkpEnsureSharedShadowSurfaceLocked(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId)
 {
@@ -2413,12 +2463,14 @@ DxgkpEnsureSharedShadowSurface(
     DXGK_CREATEALLOCATIONFLAGS CreateFlags;
     HANDLE AllocationHandle = NULL;
     HANDLE MiniportResourceHandle = NULL;
-    PDXGKVMM_ALLOCATION Allocation;
-    PDXGKVMM_RESOURCE Resource;
+    PDXGKVMM_ALLOCATION Allocation = NULL;
+    PDXGKVMM_RESOURCE Resource = NULL;
     PVOID AllocationPrivateData = NULL;
     PVOID ResourcePrivateData = NULL;
     UINT AllocationPrivateDataSize = 0;
     UINT ResourcePrivateDataSize = 0;
+    PVOID ShadowVa = NULL;
+    BOOLEAN StartTimer = FALSE;
     NTSTATUS Status;
 
     if (Adapter == NULL)
@@ -2503,44 +2555,42 @@ DxgkpEnsureSharedShadowSurface(
                   AllocationPrivateDataSize,
                   ResourcePrivateDataSize);
 
-    Status = DxgkVidMmCreateAllocation(Adapter,
-                                       NULL,
-                                       &AllocInfo,
-                                       ResourcePrivateData,
-                                       ResourcePrivateDataSize,
-                                       NULL,
-                                       CreateFlags,
-                                       &AllocationHandle,
-                                       &MiniportResourceHandle);
+    Status = DxgkVidMmCreateAllocation(Adapter, NULL, &AllocInfo, ResourcePrivateData, ResourcePrivateDataSize, NULL, CreateFlags, &AllocationHandle, &MiniportResourceHandle);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
 
-    Allocation = DxgkVidMmHandleToAllocation(AllocationHandle);
-    if (Allocation == NULL)
-    {
-        Status = STATUS_INTERNAL_ERROR;
+    Status = DxgkVidMmReferenceAllocation(AllocationHandle, Adapter, NULL, &Allocation);
+    if (!NT_SUCCESS(Status))
         goto Cleanup;
-    }
 
-    Resource = DxgkVidMmCreateResourceWrapper(NULL,
-                                              MiniportResourceHandle,
-                                              0,
-                                              AllocationHandle,
-                                              ResourcePrivateData,
-                                              ResourcePrivateDataSize);
+    Resource = DxgkVidMmCreateResourceWrapper(Adapter, NULL, MiniportResourceHandle, 0, TRUE, NULL, 0, ResourcePrivateData, ResourcePrivateDataSize);
     if (Resource == NULL)
     {
         Status = STATUS_INSUFFICIENT_RESOURCES;
         goto Cleanup;
     }
 
-    Resource->AllocationCount = 1;
-    Allocation->Resource = Resource;
+    Status = DxgkVidMmAttachAllocationToResource(Resource, Allocation);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
 
     Status = DxgkVidMmEnsureAllocationApertureMapped(Allocation);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
 
+    if (!Adapter->MiniportContext->IsDisplayOnlyDriver)
+    {
+        Status = DxgkVidMmMapAllocationCpu(Allocation, &ShadowVa);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+        if (ShadowVa == NULL)
+        {
+            Status = STATUS_UNSUCCESSFUL;
+            goto Cleanup;
+        }
+    }
+
+    DxgkpBeginSharedSurfaceMutationLocked(Adapter);
     Adapter->SharedShadowResourceHandle = Resource->Handle;
     Adapter->SharedShadowGlobalShareHandle = Resource->GlobalShareHandle;
     Adapter->SharedShadowAllocationHandle = AllocationHandle;
@@ -2555,25 +2605,18 @@ DxgkpEnsureSharedShadowSurface(
      * present timer can copy CDD's draws to the display via
      * DxgkDdiPresentDisplayOnly.
      */
-    if (!Adapter->MiniportContext->IsDisplayOnlyDriver)
+    if (ShadowVa != NULL)
     {
-        PVOID ShadowVa = NULL;
-
-        if (NT_SUCCESS(DxgkVidMmMapAllocationCpu(Allocation, &ShadowVa)) &&
-            ShadowVa != NULL)
-        {
-            Adapter->ShadowFb = ShadowVa;
-            Adapter->ShadowFbPitch = SurfaceData.Pitch;
-            Adapter->ShadowFbSize = AllocInfo.Size;
-
-            DXGKRNL_TRACE("DxgkpEnsureSharedShadowSurface: ShadowFb=%p "
-                          "pitch=%u (%Iu bytes) for DOD present path\n",
-                          ShadowVa, SurfaceData.Pitch, AllocInfo.Size);
-
-            if (Adapter->VidPnCommitted)
-                DxgkpStartPresentTimer(Adapter);
-        }
+        Adapter->ShadowFb = ShadowVa;
+        Adapter->ShadowFbPitch = SurfaceData.Pitch;
+        Adapter->ShadowFbSize = AllocInfo.Size;
+        Adapter->ShadowFbPoolOwned = FALSE;
+        StartTimer = Adapter->VidPnCommitted;
+        DXGKRNL_TRACE("DxgkpEnsureSharedShadowSurface: ShadowFb=%p pitch=%u (%Iu bytes) for DOD present path\n", ShadowVa, SurfaceData.Pitch, AllocInfo.Size);
     }
+    DxgkpEndSharedSurfaceMutationLocked(Adapter);
+    if (StartTimer)
+        DxgkpStartPresentTimer(Adapter);
 
     DXGKRNL_TRACE("DxgkpEnsureSharedShadowSurface: created %ux%u pitch=%u "
                   "ResHandle=0x%X GlobalShare=0x%X AllocHandle=%p\n",
@@ -2587,20 +2630,20 @@ DxgkpEnsureSharedShadowSurface(
     Status = STATUS_SUCCESS;
 
 Cleanup:
+    if (Allocation != NULL)
+    {
+        DxgkVidMmDereferenceAllocation(Allocation);
+        Allocation = NULL;
+    }
+
     if (!NT_SUCCESS(Status))
     {
         DXGKRNL_WARN("DxgkpEnsureSharedShadowSurface: FAILED status=0x%08lX\n",
                      Status);
         if (AllocationHandle != NULL)
             DxgkVidMmDestroyAllocation(Adapter, AllocationHandle);
-        if (Adapter->SharedShadowResourceHandle != 0)
-            Adapter->SharedShadowResourceHandle = 0;
-        Adapter->SharedShadowGlobalShareHandle = 0;
-        Adapter->SharedShadowAllocationHandle = NULL;
-        Adapter->SharedShadowWidth = 0;
-        Adapter->SharedShadowHeight = 0;
-        Adapter->SharedShadowPitch = 0;
-        Adapter->SharedShadowFormat = 0;
+        if (Resource != NULL)
+            DxgkpVidMmDestroyResourceWrapper(Adapter, Resource);
     }
 
     if (AllocationPrivateData != NULL)
@@ -2613,7 +2656,7 @@ Cleanup:
 }
 
 static NTSTATUS
-DxgkpEnsureSharedPrimary(
+DxgkpEnsureSharedPrimaryLocked(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId)
 {
@@ -2623,12 +2666,14 @@ DxgkpEnsureSharedPrimary(
     DXGK_CREATEALLOCATIONFLAGS CreateFlags;
     HANDLE AllocationHandle = NULL;
     HANDLE MiniportResourceHandle = NULL;
-    PDXGKVMM_ALLOCATION Allocation;
-    PDXGKVMM_RESOURCE Resource;
+    PDXGKVMM_ALLOCATION Allocation = NULL;
+    PDXGKVMM_RESOURCE Resource = NULL;
     PVOID AllocationPrivateData = NULL;
     PVOID ResourcePrivateData = NULL;
     UINT AllocationPrivateDataSize = 0;
     UINT ResourcePrivateDataSize = 0;
+    PVOID CpuVa = NULL;
+    BOOLEAN StartTimer = FALSE;
     NTSTATUS Status;
 
     if (Adapter == NULL)
@@ -2656,7 +2701,7 @@ DxgkpEnsureSharedPrimary(
         return STATUS_SUCCESS;
     }
 
-    DxgkpDestroySharedPrimary(Adapter);
+    DxgkpDestroySharedPrimaryLocked(Adapter);
 
     if (DXGK_CB_FULL(Adapter, DxgkDdiGetStandardAllocationDriverData) == NULL)
         return STATUS_NOT_SUPPORTED;
@@ -2731,15 +2776,7 @@ DxgkpEnsureSharedPrimary(
                   "PrivDataSize=%u ResPrivDataSize=%u\n",
                   AllocationPrivateDataSize, ResourcePrivateDataSize);
 
-    Status = DxgkVidMmCreateAllocation(Adapter,
-                                       NULL,
-                                       &AllocInfo,
-                                       ResourcePrivateData,
-                                       ResourcePrivateDataSize,
-                                       NULL,
-                                       CreateFlags,
-                                       &AllocationHandle,
-                                       &MiniportResourceHandle);
+    Status = DxgkVidMmCreateAllocation(Adapter, NULL, &AllocInfo, ResourcePrivateData, ResourcePrivateDataSize, NULL, CreateFlags, &AllocationHandle, &MiniportResourceHandle);
     if (!NT_SUCCESS(Status))
     {
         DXGKRNL_WARN("DxgkpEnsureSharedPrimary: CreateAllocation failed 0x%08lX\n",
@@ -2747,54 +2784,32 @@ DxgkpEnsureSharedPrimary(
         goto Cleanup;
     }
 
-    Allocation = DxgkVidMmHandleToAllocation(AllocationHandle);
-    if (Allocation == NULL)
-    {
-        Status = STATUS_INTERNAL_ERROR;
+    Status = DxgkVidMmReferenceAllocation(AllocationHandle, Adapter, NULL, &Allocation);
+    if (!NT_SUCCESS(Status))
         goto Cleanup;
-    }
 
-    Resource = DxgkVidMmCreateResourceWrapper(NULL,
-                                              MiniportResourceHandle,
-                                              0,
-                                              AllocationHandle,
-                                              ResourcePrivateData,
-                                              ResourcePrivateDataSize);
+    Resource = DxgkVidMmCreateResourceWrapper(Adapter, NULL, MiniportResourceHandle, 0, TRUE, NULL, 0, ResourcePrivateData, ResourcePrivateDataSize);
     if (Resource == NULL)
     {
         Status = STATUS_INSUFFICIENT_RESOURCES;
         goto Cleanup;
     }
 
-    Resource->AllocationCount = 1;
-    Allocation->Resource = Resource;
+    Status = DxgkVidMmAttachAllocationToResource(Resource, Allocation);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
 
     if (Adapter->MiniportContext->IsDisplayOnlyDriver)
     {
-        PVOID CpuVa = NULL;
-
-        if (NT_SUCCESS(DxgkVidMmMapAllocationCpu(Allocation, &CpuVa)) && CpuVa)
+        Status = DxgkVidMmMapAllocationCpu(Allocation, &CpuVa);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+        if (CpuVa == NULL)
         {
-            Adapter->ShadowFb = CpuVa;
-            Adapter->ShadowFbPitch = SurfaceData.Width * 4;
-            Adapter->ShadowFbSize = AllocInfo.Size;
-            DXGKRNL_TRACE("DxgkpEnsureSharedPrimary: ShadowFb set to %p "
-                          "pitch=%u (%Iu bytes)\n",
-                          CpuVa, SurfaceData.Width * 4, AllocInfo.Size);
-
-            if (Adapter->VidPnCommitted)
-                DxgkpStartPresentTimer(Adapter);
+            Status = STATUS_UNSUCCESSFUL;
+            goto Cleanup;
         }
     }
-
-    Adapter->SharedPrimaryResourceHandle = Resource->Handle;
-    Adapter->SharedPrimaryGlobalShareHandle = Resource->GlobalShareHandle;
-    Adapter->SharedPrimaryAllocationHandle = AllocationHandle;
-    Adapter->SharedPrimaryVidPnSourceId = VidPnSourceId;
-    Adapter->SharedPrimaryWidth = SurfaceData.Width;
-    Adapter->SharedPrimaryHeight = SurfaceData.Height;
-    Adapter->SharedPrimaryFormat = SurfaceData.Format;
-    Adapter->SharedPrimaryIsGopBacked = FALSE;
 
     /*
      * Attach system memory backing to the GPU resource via aperture mapping.
@@ -2808,6 +2823,28 @@ DxgkpEnsureSharedPrimary(
                      Status);
         goto Cleanup;
     }
+
+    DxgkpBeginSharedSurfaceMutationLocked(Adapter);
+    Adapter->SharedPrimaryResourceHandle = Resource->Handle;
+    Adapter->SharedPrimaryGlobalShareHandle = Resource->GlobalShareHandle;
+    Adapter->SharedPrimaryAllocationHandle = AllocationHandle;
+    Adapter->SharedPrimaryVidPnSourceId = VidPnSourceId;
+    Adapter->SharedPrimaryWidth = SurfaceData.Width;
+    Adapter->SharedPrimaryHeight = SurfaceData.Height;
+    Adapter->SharedPrimaryFormat = SurfaceData.Format;
+    Adapter->SharedPrimaryIsGopBacked = FALSE;
+    if (CpuVa != NULL)
+    {
+        Adapter->ShadowFb = CpuVa;
+        Adapter->ShadowFbPitch = SurfaceData.Width * 4;
+        Adapter->ShadowFbSize = AllocInfo.Size;
+        Adapter->ShadowFbPoolOwned = FALSE;
+        StartTimer = Adapter->VidPnCommitted;
+        DXGKRNL_TRACE("DxgkpEnsureSharedPrimary: ShadowFb set to %p pitch=%u (%Iu bytes)\n", CpuVa, SurfaceData.Width * 4, AllocInfo.Size);
+    }
+    DxgkpEndSharedSurfaceMutationLocked(Adapter);
+    if (StartTimer)
+        DxgkpStartPresentTimer(Adapter);
 
     /*
      * Shared-primary creation only prepares the backing allocation.
@@ -2824,10 +2861,26 @@ DxgkpEnsureSharedPrimary(
     Status = STATUS_SUCCESS;
 
 Cleanup:
+    if (Allocation != NULL)
+    {
+        DxgkVidMmDereferenceAllocation(Allocation);
+        Allocation = NULL;
+    }
+
     if (!NT_SUCCESS(Status))
     {
         DXGKRNL_WARN("DxgkpEnsureSharedPrimary: FAILED status=0x%08lX\n", Status);
-        DxgkpDestroySharedPrimary(Adapter);
+        if (Adapter->SharedPrimaryAllocationHandle != NULL || Adapter->SharedPrimaryResourceHandle != 0)
+        {
+            DxgkpDestroySharedPrimaryLocked(Adapter);
+        }
+        else
+        {
+            if (AllocationHandle != NULL)
+                DxgkVidMmDestroyAllocation(Adapter, AllocationHandle);
+            if (Resource != NULL)
+                DxgkpVidMmDestroyResourceWrapper(Adapter, Resource);
+        }
     }
 
     if (AllocationPrivateData != NULL)
@@ -2842,7 +2895,11 @@ VOID
 DxgkDestroySharedPrimary(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
-    DxgkpDestroySharedPrimary(Adapter);
+    if (Adapter == NULL)
+        return;
+    ExAcquireFastMutex(&Adapter->SharedPrimaryMutex);
+    DxgkpDestroySharedPrimaryLocked(Adapter);
+    ExReleaseFastMutex(&Adapter->SharedPrimaryMutex);
 }
 
 NTSTATUS
@@ -2850,13 +2907,13 @@ NTAPI
 DxgkSetDisplayMode(
     _In_ D3DKMT_SETDISPLAYMODE *pSetDisplayMode)
 {
-    PDXGKRNL_ADAPTER Adapter;
-    PDXGKRNL_DEVICE  Device;
-    PDXGKP_VIDPN     VidPn;
-    PDXGKVMM_ALLOCATION Allocation;
-    DXGKARG_SETVIDPNSOURCEADDRESS SetSourceAddress;
+    PDXGKRNL_ADAPTER Adapter = NULL;
+    PDXGKRNL_DEVICE Device = NULL;
+    PDXGKP_VIDPN VidPn;
+    PDXGKVMM_ALLOCATION Allocation = NULL;
+    PDXGKARG_SETVIDPNSOURCEADDRESS SetSourceAddress = NULL;
     LARGE_INTEGER PrimaryAddress;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
 
     PAGED_CODE();
 
@@ -2876,32 +2933,48 @@ DxgkSetDisplayMode(
     if (VidPn == NULL || VidPn->Signature != DXGKP_VIDPN_SIGNATURE)
     {
         DXGKRNL_WARN("DxgkSetDisplayMode: no VidPN on adapter\n");
-        return STATUS_UNSUCCESSFUL;
+        Status = STATUS_UNSUCCESSFUL;
+        goto Cleanup;
     }
 
-    Allocation = DxgkVidMmHandleToAllocation((HANDLE)(ULONG_PTR)pSetDisplayMode->hPrimaryAllocation);
-    if (Allocation == NULL || Allocation->Adapter != Adapter)
-        return STATUS_INVALID_HANDLE;
-
-    Status = DxgkpEnsureSharedPrimary(Adapter, 0);
+    ExAcquireFastMutex(&Adapter->SharedPrimaryMutex);
+    Status = DxgkpEnsureSharedPrimaryLocked(Adapter, 0);
+    ExReleaseFastMutex(&Adapter->SharedPrimaryMutex);
     if (!NT_SUCCESS(Status))
-        return Status;
+        goto Cleanup;
+
+    Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)pSetDisplayMode->hPrimaryAllocation, Adapter, NULL, &Allocation);
+    if (!NT_SUCCESS(Status))
+    {
+        Status = STATUS_INVALID_HANDLE;
+        goto Cleanup;
+    }
 
     Status = DxgkVidMmEnsureAllocationApertureMapped(Allocation);
     if (!NT_SUCCESS(Status))
-        return Status;
+        goto Cleanup;
 
     if (DXGK_CB_FULL(Adapter, DxgkDdiSetVidPnSourceAddress) == NULL)
-        return STATUS_NOT_SUPPORTED;
+    {
+        Status = STATUS_NOT_SUPPORTED;
+        goto Cleanup;
+    }
 
     PrimaryAddress = DxgkVidMmGetAllocationPrimaryAddress(Allocation);
 
-    RtlZeroMemory(&SetSourceAddress, sizeof(SetSourceAddress));
-    SetSourceAddress.VidPnSourceId = 0;
-    SetSourceAddress.hAllocation = Allocation->MiniportHandle;
-    SetSourceAddress.PrimaryAddress = PrimaryAddress;
-    SetSourceAddress.SegmentId = Allocation->SegmentId;
-    SetSourceAddress.Flags.ModeChange = 1;
+    SetSourceAddress = ExAllocatePoolWithTag(NonPagedPool, sizeof(*SetSourceAddress), TAG_DXGK_VIDPN);
+    if (SetSourceAddress == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Cleanup;
+    }
+
+    RtlZeroMemory(SetSourceAddress, sizeof(*SetSourceAddress));
+    SetSourceAddress->VidPnSourceId = 0;
+    SetSourceAddress->hAllocation = Allocation->MiniportHandle;
+    SetSourceAddress->PrimaryAddress = PrimaryAddress;
+    SetSourceAddress->PrimarySegment = Allocation->SegmentId;
+    SetSourceAddress->Flags.ModeChange = 1;
 
     DXGKRNL_TRACE("DxgkSetDisplayMode: device=0x%X alloc=0x%X seg=%u addr=0x%I64x\n",
                   pSetDisplayMode->hDevice,
@@ -2909,23 +2982,28 @@ DxgkSetDisplayMode(
                   Allocation->SegmentId,
                   PrimaryAddress.QuadPart);
 
-    Status = DXGK_CB_FULL(Adapter, DxgkDdiSetVidPnSourceAddress)(
-        Adapter->MiniportDeviceContext,
-        &SetSourceAddress);
+    Status = DXGK_CB_FULL(Adapter, DxgkDdiSetVidPnSourceAddress)(Adapter->MiniportDeviceContext, SetSourceAddress);
+    ExFreePoolWithTag(SetSourceAddress, TAG_DXGK_VIDPN);
+    SetSourceAddress = NULL;
     if (!NT_SUCCESS(Status))
-        return Status;
+        goto Cleanup;
 
     if (DXGK_CB(Adapter, DxgkDdiSetVidPnSourceVisibility) != NULL)
     {
         DXGKARG_SETVIDPNSOURCEVISIBILITY Visibility;
         Visibility.VidPnSourceId = 0;
         Visibility.Visible = TRUE;
-        DXGK_CB(Adapter, DxgkDdiSetVidPnSourceVisibility)(
-            Adapter->MiniportDeviceContext,
-            &Visibility);
+        DXGK_CB(Adapter, DxgkDdiSetVidPnSourceVisibility)(Adapter->MiniportDeviceContext, &Visibility);
     }
 
-    return STATUS_SUCCESS;
+Cleanup:
+    if (SetSourceAddress != NULL)
+        ExFreePoolWithTag(SetSourceAddress, TAG_DXGK_VIDPN);
+    if (Allocation != NULL)
+        DxgkVidMmDereferenceAllocation(Allocation);
+    if (Device != NULL)
+        DxgkDereferenceDevice(Device);
+    return Status;
 }
 
 NTSTATUS
@@ -2933,7 +3011,7 @@ NTAPI
 DxgkGetSharedPrimaryHandle(
     _Inout_ D3DKMT_GETSHAREDPRIMARYHANDLE *pGetSharedPrimaryHandle)
 {
-    PDXGKRNL_ADAPTER Adapter;
+    PDXGKRNL_ADAPTER Adapter = NULL;
     NTSTATUS Status;
 
     PAGED_CODE();
@@ -2953,9 +3031,13 @@ DxgkGetSharedPrimaryHandle(
         return STATUS_INVALID_HANDLE;
     }
 
-    Status = DxgkpEnsureSharedPrimary(Adapter, pGetSharedPrimaryHandle->VidPnSourceId);
+    ExAcquireFastMutex(&Adapter->SharedPrimaryMutex);
+    Status = DxgkpEnsureSharedPrimaryLocked(Adapter, pGetSharedPrimaryHandle->VidPnSourceId);
     if (!NT_SUCCESS(Status))
-        return Status;
+    {
+        ExReleaseFastMutex(&Adapter->SharedPrimaryMutex);
+        goto Cleanup;
+    }
 
     pGetSharedPrimaryHandle->hSharedPrimary = Adapter->SharedPrimaryGlobalShareHandle;
 
@@ -2966,8 +3048,11 @@ DxgkGetSharedPrimaryHandle(
                   Adapter->SharedPrimaryResourceHandle,
                   Adapter->SharedPrimaryWidth,
                   Adapter->SharedPrimaryHeight);
+    ExReleaseFastMutex(&Adapter->SharedPrimaryMutex);
 
-    return STATUS_SUCCESS;
+Cleanup:
+    DxgkDereferenceAdapter(Adapter);
+    return Status;
 }
 
 NTSTATUS
@@ -2975,7 +3060,7 @@ NTAPI
 DxgkGetShadowSurface(
     _Inout_ DXGKMT_GETSHADOWSURFACE *pGetShadowSurface)
 {
-    PDXGKRNL_ADAPTER Adapter;
+    PDXGKRNL_ADAPTER Adapter = NULL;
     NTSTATUS Status;
 
     PAGED_CODE();
@@ -2987,13 +3072,20 @@ DxgkGetShadowSurface(
     if (Adapter == NULL)
         return STATUS_INVALID_HANDLE;
 
-    Status = DxgkpEnsureSharedPrimary(Adapter, pGetShadowSurface->VidPnSourceId);
+    ExAcquireFastMutex(&Adapter->SharedPrimaryMutex);
+    Status = DxgkpEnsureSharedPrimaryLocked(Adapter, pGetShadowSurface->VidPnSourceId);
     if (!NT_SUCCESS(Status))
-        return Status;
+    {
+        ExReleaseFastMutex(&Adapter->SharedPrimaryMutex);
+        goto Cleanup;
+    }
 
-    Status = DxgkpEnsureSharedShadowSurface(Adapter, pGetShadowSurface->VidPnSourceId);
+    Status = DxgkpEnsureSharedShadowSurfaceLocked(Adapter, pGetShadowSurface->VidPnSourceId);
     if (!NT_SUCCESS(Status))
-        return Status;
+    {
+        ExReleaseFastMutex(&Adapter->SharedPrimaryMutex);
+        goto Cleanup;
+    }
 
     pGetShadowSurface->hShadowSurface = Adapter->SharedShadowGlobalShareHandle;
     pGetShadowSurface->Width = Adapter->SharedShadowWidth;
@@ -3009,8 +3101,11 @@ DxgkGetShadowSurface(
                   Adapter->SharedShadowWidth,
                   Adapter->SharedShadowHeight,
                   Adapter->SharedShadowPitch);
+    ExReleaseFastMutex(&Adapter->SharedPrimaryMutex);
 
-    return STATUS_SUCCESS;
+Cleanup:
+    DxgkDereferenceAdapter(Adapter);
+    return Status;
 }
 
 NTSTATUS
@@ -3018,35 +3113,64 @@ NTAPI
 DxgkQueryResourceInfo(
     _Inout_ D3DKMT_QUERYRESOURCEINFO *pQueryResourceInfo)
 {
-    PDXGKRNL_ADAPTER Adapter;
-    PDXGKRNL_DEVICE Device;
-    PDXGKVMM_RESOURCE Resource;
-    PDXGKVMM_ALLOCATION Allocation;
+    PDXGKRNL_ADAPTER Adapter = NULL;
+    PDXGKRNL_DEVICE Device = NULL;
+    PDXGKVMM_RESOURCE Resource = NULL;
+    PDXGKVMM_ALLOCATION *Allocations = NULL;
+    UINT AllocationCount = 0;
+    UINT TotalPrivateDriverDataSize = 0;
+    UINT RuntimeCapacity;
+    NTSTATUS Status = STATUS_SUCCESS;
 
     PAGED_CODE();
 
     if (pQueryResourceInfo == NULL)
         return STATUS_INVALID_PARAMETER;
+    RuntimeCapacity = pQueryResourceInfo->PrivateRuntimeDataSize;
 
     Device = DxgkLookupDeviceByHandle(pQueryResourceInfo->hDevice, &Adapter);
     if (Device == NULL || Adapter == NULL)
         return STATUS_INVALID_HANDLE;
 
-    Resource = DxgkVidMmHandleToGlobalShare(pQueryResourceInfo->hGlobalShare);
-    if (Resource == NULL)
-        return STATUS_INVALID_HANDLE;
+    Status = DxgkVidMmReferenceResource(pQueryResourceInfo->hGlobalShare, TRUE, NULL, &Resource);
+    if (!NT_SUCCESS(Status) || Resource->Adapter != Adapter)
+    {
+        Status = STATUS_INVALID_HANDLE;
+        goto Cleanup;
+    }
 
-    Allocation = DxgkVidMmHandleToAllocation(Resource->AllocationHandle);
-    if (Allocation == NULL || Allocation->Adapter != Adapter)
-        return STATUS_INVALID_HANDLE;
+    Status = DxgkVidMmSnapshotResourceAllocations(Resource, Adapter, &Allocations, &AllocationCount, &TotalPrivateDriverDataSize);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    pQueryResourceInfo->PrivateRuntimeDataSize = Resource->PrivateRuntimeDataSize;
+    pQueryResourceInfo->TotalPrivateDriverDataSize = TotalPrivateDriverDataSize;
+    pQueryResourceInfo->ResourcePrivateDriverDataSize = Resource->ResourcePrivateDriverDataSize;
+    pQueryResourceInfo->NumAllocations = AllocationCount;
+    if (Resource->PrivateRuntimeDataSize != 0 && pQueryResourceInfo->pPrivateRuntimeData != NULL)
+    {
+        if (RuntimeCapacity < Resource->PrivateRuntimeDataSize)
+            Status = STATUS_BUFFER_TOO_SMALL;
+        else
+        {
+            _SEH2_TRY
+            {
+                RtlCopyMemory(pQueryResourceInfo->pPrivateRuntimeData, Resource->PrivateRuntimeData, Resource->PrivateRuntimeDataSize);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+        }
+    }
 
-    pQueryResourceInfo->PrivateRuntimeDataSize = 0;
-    pQueryResourceInfo->TotalPrivateDriverDataSize =
-        Allocation->PrivateDriverDataSize;
-    pQueryResourceInfo->ResourcePrivateDriverDataSize =
-        Resource->ResourcePrivateDriverDataSize;
-    pQueryResourceInfo->NumAllocations = 1;
-    return STATUS_SUCCESS;
+Cleanup:
+    if (Allocations != NULL)
+        DxgkVidMmReleaseAllocationSnapshot(Allocations, AllocationCount);
+    if (Resource != NULL)
+        DxgkVidMmDereferenceResource(Resource);
+    DxgkDereferenceDevice(Device);
+    return Status;
 }
 
 NTSTATUS
@@ -3054,118 +3178,168 @@ NTAPI
 DxgkOpenResource(
     _Inout_ D3DKMT_OPENRESOURCE *pOpenResource)
 {
-    PDXGKRNL_ADAPTER Adapter;
-    PDXGKRNL_DEVICE Device;
-    PDXGKVMM_RESOURCE Resource;
-    PDXGKVMM_ALLOCATION Allocation;
+    PDXGKRNL_ADAPTER Adapter = NULL;
+    PDXGKRNL_DEVICE Device = NULL;
+    PDXGKVMM_RESOURCE Resource = NULL;
+    PDXGKVMM_ALLOCATION *Allocations = NULL;
+    PDXGKVMM_RESOURCE OpenedResource = NULL;
+    PHANDLE OpenedAllocationHandles = NULL;
+    PVOID RuntimeCopy = NULL;
+    PVOID ResourcePrivateCopy = NULL;
+    PVOID TotalPrivateCopy = NULL;
+    UINT AllocationCount = 0;
+    UINT TotalPrivateSize = 0;
+    UINT AllocationCapacity;
+    UINT RuntimeCapacity;
+    UINT ResourcePrivateCapacity;
+    UINT TotalPrivateCapacity;
+    UINT Offset;
+    UINT Index;
+    BOOLEAN BufferTooSmall = FALSE;
+    NTSTATUS Status = STATUS_SUCCESS;
 
     PAGED_CODE();
 
     if (pOpenResource == NULL)
         return STATUS_INVALID_PARAMETER;
 
+    AllocationCapacity = pOpenResource->NumAllocations;
+    RuntimeCapacity = pOpenResource->PrivateRuntimeDataSize;
+    ResourcePrivateCapacity = pOpenResource->ResourcePrivateDriverDataSize;
+    TotalPrivateCapacity = pOpenResource->TotalPrivateDriverDataBufferSize;
+
     Device = DxgkLookupDeviceByHandle(pOpenResource->hDevice, &Adapter);
     if (Device == NULL || Adapter == NULL)
         return STATUS_INVALID_HANDLE;
 
-    Resource = DxgkVidMmHandleToGlobalShare(pOpenResource->hGlobalShare);
-    if (Resource == NULL)
-        return STATUS_INVALID_HANDLE;
-
-    Allocation = DxgkVidMmHandleToAllocation(Resource->AllocationHandle);
-    if (Allocation == NULL || Allocation->Adapter != Adapter)
-        return STATUS_INVALID_HANDLE;
-
-    if (pOpenResource->NumAllocations < 1 || pOpenResource->pOpenAllocationInfo == NULL)
+    Status = DxgkVidMmReferenceResource(pOpenResource->hGlobalShare, TRUE, NULL, &Resource);
+    if (!NT_SUCCESS(Status) || Resource->Adapter != Adapter)
     {
-        pOpenResource->NumAllocations = 1;
-        return STATUS_BUFFER_TOO_SMALL;
+        Status = STATUS_INVALID_HANDLE;
+        goto Cleanup;
     }
 
+    Status = DxgkVidMmSnapshotResourceAllocations(Resource, Adapter, &Allocations, &AllocationCount, &TotalPrivateSize);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    pOpenResource->NumAllocations = AllocationCount;
+    pOpenResource->PrivateRuntimeDataSize = Resource->PrivateRuntimeDataSize;
+    pOpenResource->ResourcePrivateDriverDataSize = Resource->ResourcePrivateDriverDataSize;
+    pOpenResource->TotalPrivateDriverDataBufferSize = TotalPrivateSize;
+    if (AllocationCapacity < AllocationCount || pOpenResource->pOpenAllocationInfo == NULL)
+        BufferTooSmall = TRUE;
+    if (Resource->PrivateRuntimeDataSize != 0 && (pOpenResource->pPrivateRuntimeData == NULL || RuntimeCapacity < Resource->PrivateRuntimeDataSize))
+        BufferTooSmall = TRUE;
+    if (Resource->ResourcePrivateDriverDataSize != 0 && (pOpenResource->pResourcePrivateDriverData == NULL || ResourcePrivateCapacity < Resource->ResourcePrivateDriverDataSize))
+        BufferTooSmall = TRUE;
+    if (TotalPrivateSize != 0 && (pOpenResource->pTotalPrivateDriverDataBuffer == NULL || TotalPrivateCapacity < TotalPrivateSize))
+        BufferTooSmall = TRUE;
+    if (BufferTooSmall)
+    {
+        Status = STATUS_BUFFER_TOO_SMALL;
+        goto Cleanup;
+    }
+
+    if ((SIZE_T)AllocationCount > MAXULONG_PTR / sizeof(*OpenedAllocationHandles))
+    {
+        Status = STATUS_INTEGER_OVERFLOW;
+        goto Cleanup;
+    }
+    OpenedAllocationHandles = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)AllocationCount * sizeof(*OpenedAllocationHandles), TAG_VIDMM_RESOURCE);
+    if (OpenedAllocationHandles == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Cleanup;
+    }
+    RtlZeroMemory(OpenedAllocationHandles, (SIZE_T)AllocationCount * sizeof(*OpenedAllocationHandles));
+    if (Resource->PrivateRuntimeDataSize != 0)
+    {
+        RuntimeCopy = ExAllocatePoolWithTag(NonPagedPool, Resource->PrivateRuntimeDataSize, TAG_VIDMM_RESOURCE);
+        if (RuntimeCopy == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Cleanup;
+        }
+        RtlCopyMemory(RuntimeCopy, Resource->PrivateRuntimeData, Resource->PrivateRuntimeDataSize);
+    }
     if (Resource->ResourcePrivateDriverDataSize != 0)
     {
-        if (pOpenResource->pResourcePrivateDriverData == NULL ||
-            pOpenResource->ResourcePrivateDriverDataSize <
-                Resource->ResourcePrivateDriverDataSize)
+        ResourcePrivateCopy = ExAllocatePoolWithTag(NonPagedPool, Resource->ResourcePrivateDriverDataSize, TAG_VIDMM_RESOURCE);
+        if (ResourcePrivateCopy == NULL)
         {
-            pOpenResource->ResourcePrivateDriverDataSize =
-                Resource->ResourcePrivateDriverDataSize;
-            return STATUS_BUFFER_TOO_SMALL;
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Cleanup;
         }
-
-        _SEH2_TRY
-        {
-            RtlCopyMemory(pOpenResource->pResourcePrivateDriverData,
-                          Resource->ResourcePrivateDriverData,
-                          Resource->ResourcePrivateDriverDataSize);
-        }
-        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-        {
-            return _SEH2_GetExceptionCode();
-        }
-        _SEH2_END;
+        RtlCopyMemory(ResourcePrivateCopy, Resource->ResourcePrivateDriverData, Resource->ResourcePrivateDriverDataSize);
     }
-
-    if (Allocation->PrivateDriverDataSize != 0)
+    if (TotalPrivateSize != 0)
     {
-        if (pOpenResource->pTotalPrivateDriverDataBuffer == NULL ||
-            pOpenResource->TotalPrivateDriverDataBufferSize <
-                Allocation->PrivateDriverDataSize)
+        TotalPrivateCopy = ExAllocatePoolWithTag(NonPagedPool, TotalPrivateSize, TAG_VIDMM_RESOURCE);
+        if (TotalPrivateCopy == NULL)
         {
-            pOpenResource->TotalPrivateDriverDataBufferSize =
-                Allocation->PrivateDriverDataSize;
-            return STATUS_BUFFER_TOO_SMALL;
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Cleanup;
         }
+        Offset = 0;
+        for (Index = 0; Index < AllocationCount; ++Index)
+        {
+            if (Allocations[Index]->PrivateDriverDataSize != 0)
+                RtlCopyMemory((PUCHAR)TotalPrivateCopy + Offset, Allocations[Index]->PrivateDriverData, Allocations[Index]->PrivateDriverDataSize);
+            Offset += Allocations[Index]->PrivateDriverDataSize;
+        }
+        ASSERT(Offset == TotalPrivateSize);
+    }
 
-        _SEH2_TRY
-        {
-            RtlCopyMemory(pOpenResource->pTotalPrivateDriverDataBuffer,
-                          Allocation->PrivateDriverData,
-                          Allocation->PrivateDriverDataSize);
-            pOpenResource->pOpenAllocationInfo[0].pPrivateDriverData =
-                pOpenResource->pTotalPrivateDriverDataBuffer;
-            pOpenResource->pOpenAllocationInfo[0].PrivateDriverDataSize =
-                Allocation->PrivateDriverDataSize;
-        }
-        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-        {
-            return _SEH2_GetExceptionCode();
-        }
-        _SEH2_END;
-    }
-    else
-    {
-        _SEH2_TRY
-        {
-            pOpenResource->pOpenAllocationInfo[0].pPrivateDriverData = NULL;
-            pOpenResource->pOpenAllocationInfo[0].PrivateDriverDataSize = 0;
-        }
-        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-        {
-            return _SEH2_GetExceptionCode();
-        }
-        _SEH2_END;
-    }
+    Status = DxgkVidMmCreateOpenResource(Device, Resource, Allocations, AllocationCount, ResourcePrivateCopy, Resource->ResourcePrivateDriverDataSize, TotalPrivateCopy, TotalPrivateSize, &OpenedResource, OpenedAllocationHandles);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
 
     _SEH2_TRY
     {
-        pOpenResource->NumAllocations = 1;
-        pOpenResource->pOpenAllocationInfo[0].hAllocation =
-            (D3DKMT_HANDLE)(ULONG_PTR)Resource->AllocationHandle;
-        pOpenResource->hResource = Resource->Handle;
-        pOpenResource->PrivateRuntimeDataSize = 0;
-        pOpenResource->ResourcePrivateDriverDataSize =
-            Resource->ResourcePrivateDriverDataSize;
-        pOpenResource->TotalPrivateDriverDataBufferSize =
-            Allocation->PrivateDriverDataSize;
+        if (Resource->PrivateRuntimeDataSize != 0)
+            RtlCopyMemory(pOpenResource->pPrivateRuntimeData, RuntimeCopy, Resource->PrivateRuntimeDataSize);
+        if (Resource->ResourcePrivateDriverDataSize != 0)
+            RtlCopyMemory(pOpenResource->pResourcePrivateDriverData, ResourcePrivateCopy, Resource->ResourcePrivateDriverDataSize);
+        if (TotalPrivateSize != 0)
+            RtlCopyMemory(pOpenResource->pTotalPrivateDriverDataBuffer, TotalPrivateCopy, TotalPrivateSize);
+        Offset = 0;
+        for (Index = 0; Index < AllocationCount; ++Index)
+        {
+            pOpenResource->pOpenAllocationInfo[Index].hAllocation = (D3DKMT_HANDLE)(ULONG_PTR)OpenedAllocationHandles[Index];
+            pOpenResource->pOpenAllocationInfo[Index].pPrivateDriverData = Allocations[Index]->PrivateDriverDataSize != 0 ? (PVOID)((PUCHAR)pOpenResource->pTotalPrivateDriverDataBuffer + Offset) : NULL;
+            pOpenResource->pOpenAllocationInfo[Index].PrivateDriverDataSize = Allocations[Index]->PrivateDriverDataSize;
+            Offset += Allocations[Index]->PrivateDriverDataSize;
+        }
+        pOpenResource->hResource = OpenedResource->Handle;
+        pOpenResource->NumAllocations = AllocationCount;
+        pOpenResource->PrivateRuntimeDataSize = Resource->PrivateRuntimeDataSize;
+        pOpenResource->ResourcePrivateDriverDataSize = Resource->ResourcePrivateDriverDataSize;
+        pOpenResource->TotalPrivateDriverDataBufferSize = TotalPrivateSize;
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
-        return _SEH2_GetExceptionCode();
+        Status = _SEH2_GetExceptionCode();
     }
     _SEH2_END;
 
-    return STATUS_SUCCESS;
+Cleanup:
+    if (!NT_SUCCESS(Status) && OpenedResource != NULL)
+        DxgkpVidMmDestroyResourceWrapper(Adapter, OpenedResource);
+    if (TotalPrivateCopy != NULL)
+        ExFreePoolWithTag(TotalPrivateCopy, TAG_VIDMM_RESOURCE);
+    if (ResourcePrivateCopy != NULL)
+        ExFreePoolWithTag(ResourcePrivateCopy, TAG_VIDMM_RESOURCE);
+    if (RuntimeCopy != NULL)
+        ExFreePoolWithTag(RuntimeCopy, TAG_VIDMM_RESOURCE);
+    if (OpenedAllocationHandles != NULL)
+        ExFreePoolWithTag(OpenedAllocationHandles, TAG_VIDMM_RESOURCE);
+    if (Allocations != NULL)
+        DxgkVidMmReleaseAllocationSnapshot(Allocations, AllocationCount);
+    if (Resource != NULL)
+        DxgkVidMmDereferenceResource(Resource);
+    DxgkDereferenceDevice(Device);
+    return Status;
 }
 
 typedef struct _DXGKP_DEFAULT_DISPLAY_MODE
@@ -3248,10 +3422,11 @@ NTAPI
 DxgkGetDisplayModeList(
     _Inout_ D3DKMT_GETDISPLAYMODELIST *pGetDisplayModeList)
 {
-    PDXGKRNL_ADAPTER    Adapter;
-    PDXGKP_VIDPN        VidPn;
+    PDXGKRNL_ADAPTER Adapter = NULL;
+    PDXGKP_VIDPN VidPn;
     PDXGKP_VIDPN_SOURCE_MODESET SrcSet;
-    UINT                NumModes, i;
+    NTSTATUS Status = STATUS_SUCCESS;
+    UINT NumModes, i;
 
     PAGED_CODE();
 
@@ -3263,37 +3438,56 @@ DxgkGetDisplayModeList(
         return STATUS_INVALID_HANDLE;
 
     if (pGetDisplayModeList->VidPnSourceId >= Adapter->NumberOfVideoPresentSources)
-        return STATUS_INVALID_PARAMETER;
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto Cleanup;
+    }
 
     if (Adapter->CommittedWidth != 0 && Adapter->CommittedHeight != 0)
-        return DxgkpReturnDefaultDisplayModeList(pGetDisplayModeList);
+    {
+        Status = DxgkpReturnDefaultDisplayModeList(pGetDisplayModeList);
+        goto Cleanup;
+    }
 
     VidPn = (PDXGKP_VIDPN)Adapter->VidPn;
     if (VidPn == NULL || VidPn->Signature != DXGKP_VIDPN_SIGNATURE)
-        return DxgkpReturnDefaultDisplayModeList(pGetDisplayModeList);
+    {
+        Status = DxgkpReturnDefaultDisplayModeList(pGetDisplayModeList);
+        goto Cleanup;
+    }
 
     if (pGetDisplayModeList->VidPnSourceId >= VidPn->NumSources)
-        return STATUS_INVALID_PARAMETER;
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto Cleanup;
+    }
 
     SrcSet = VidPn->SourceModeSets[pGetDisplayModeList->VidPnSourceId];
     if (SrcSet == NULL)
-        return DxgkpReturnDefaultDisplayModeList(pGetDisplayModeList);
+    {
+        Status = DxgkpReturnDefaultDisplayModeList(pGetDisplayModeList);
+        goto Cleanup;
+    }
 
     NumModes = (UINT)SrcSet->NumModes;
     if (NumModes < RTL_NUMBER_OF(DxgkpDefaultDisplayModes))
-        return DxgkpReturnDefaultDisplayModeList(pGetDisplayModeList);
+    {
+        Status = DxgkpReturnDefaultDisplayModeList(pGetDisplayModeList);
+        goto Cleanup;
+    }
 
     /* Pass 1: caller wants the mode count only. */
     if (pGetDisplayModeList->pModeList == NULL || pGetDisplayModeList->ModeCount == 0)
     {
         pGetDisplayModeList->ModeCount = NumModes;
-        return STATUS_SUCCESS;
+        goto Cleanup;
     }
 
     if (pGetDisplayModeList->ModeCount < NumModes)
     {
         pGetDisplayModeList->ModeCount = NumModes;
-        return STATUS_BUFFER_TOO_SMALL;
+        Status = STATUS_BUFFER_TOO_SMALL;
+        goto Cleanup;
     }
 
     _SEH2_TRY
@@ -3303,19 +3497,21 @@ DxgkGetDisplayModeList(
             D3DKMT_DISPLAYMODE *pOut = &pGetDisplayModeList->pModeList[i];
             const D3DKMDT_VIDPN_SOURCE_MODE *pSrc = &SrcSet->Modes[i];
 
-            DxgkpInitializeDisplayMode(pOut,
-                                       pSrc->Format.Graphics.PrimSurfSize.cx,
-                                       pSrc->Format.Graphics.PrimSurfSize.cy);
+            DxgkpInitializeDisplayMode(pOut, pSrc->Format.Graphics.PrimSurfSize.cx, pSrc->Format.Graphics.PrimSurfSize.cy);
         }
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
-        return _SEH2_GetExceptionCode();
+        Status = _SEH2_GetExceptionCode();
     }
     _SEH2_END;
 
-    pGetDisplayModeList->ModeCount = NumModes;
-    return STATUS_SUCCESS;
+    if (NT_SUCCESS(Status))
+        pGetDisplayModeList->ModeCount = NumModes;
+
+Cleanup:
+    DxgkDereferenceAdapter(Adapter);
+    return Status;
 }
 
 NTSTATUS
@@ -3323,8 +3519,9 @@ NTAPI
 DxgkSetVidPnSourceOwner(
     _In_ D3DKMT_SETVIDPNSOURCEOWNER *pSetVidPnSourceOwner)
 {
-    PDXGKRNL_DEVICE Device;
-    PDXGKRNL_ADAPTER Adapter;
+    PDXGKRNL_DEVICE Device = NULL;
+    PDXGKRNL_ADAPTER Adapter = NULL;
+    NTSTATUS Status = STATUS_SUCCESS;
     ULONG i;
 
     PAGED_CODE();
@@ -3354,8 +3551,7 @@ DxgkSetVidPnSourceOwner(
                 g_SourceOwners[i].OwnerType = D3DKMT_VIDPNSOURCEOWNER_UNOWNED;
             }
         }
-        ExReleaseFastMutex(&g_SourceOwnerMutex);
-        return STATUS_SUCCESS;
+        goto Unlock;
     }
 
     /* Acquire/update ownership. */
@@ -3366,8 +3562,8 @@ DxgkSetVidPnSourceOwner(
 
         if (SrcId >= DXGKP_MAX_SOURCES || SrcId >= Adapter->NumberOfVideoPresentSources)
         {
-            ExReleaseFastMutex(&g_SourceOwnerMutex);
-            return STATUS_INVALID_PARAMETER;
+            Status = STATUS_INVALID_PARAMETER;
+            goto Unlock;
         }
 
         if (Type == D3DKMT_VIDPNSOURCEOWNER_UNOWNED)
@@ -3385,8 +3581,8 @@ DxgkSetVidPnSourceOwner(
             if (g_SourceOwners[SrcId].OwnerDevice != 0 &&
                 g_SourceOwners[SrcId].OwnerDevice != pSetVidPnSourceOwner->hDevice)
             {
-                ExReleaseFastMutex(&g_SourceOwnerMutex);
-                return STATUS_GRAPHICS_VIDPN_SOURCE_IN_USE;
+                Status = STATUS_GRAPHICS_VIDPN_SOURCE_IN_USE;
+                goto Unlock;
             }
             g_SourceOwners[SrcId].OwnerDevice = pSetVidPnSourceOwner->hDevice;
             g_SourceOwners[SrcId].OwnerType = D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVE;
@@ -3396,16 +3592,18 @@ DxgkSetVidPnSourceOwner(
             if (g_SourceOwners[SrcId].OwnerType == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVE &&
                 g_SourceOwners[SrcId].OwnerDevice != pSetVidPnSourceOwner->hDevice)
             {
-                ExReleaseFastMutex(&g_SourceOwnerMutex);
-                return STATUS_GRAPHICS_VIDPN_SOURCE_IN_USE;
+                Status = STATUS_GRAPHICS_VIDPN_SOURCE_IN_USE;
+                goto Unlock;
             }
             g_SourceOwners[SrcId].OwnerDevice = pSetVidPnSourceOwner->hDevice;
             g_SourceOwners[SrcId].OwnerType = D3DKMT_VIDPNSOURCEOWNER_SHARED;
         }
     }
 
+Unlock:
     ExReleaseFastMutex(&g_SourceOwnerMutex);
-    return STATUS_SUCCESS;
+    DxgkDereferenceDevice(Device);
+    return Status;
 }
 
 NTSTATUS
@@ -3413,7 +3611,8 @@ NTAPI
 DxgkCheckVidPnExclusiveOwnership(
     _In_ CONST D3DKMT_CHECKVIDPNEXCLUSIVEOWNERSHIP *pCheckVidPnExclusiveOwnership)
 {
-    PDXGKRNL_ADAPTER Adapter;
+    PDXGKRNL_ADAPTER Adapter = NULL;
+    NTSTATUS Status = STATUS_SUCCESS;
 
     PAGED_CODE();
 
@@ -3427,7 +3626,8 @@ DxgkCheckVidPnExclusiveOwnership(
     if (pCheckVidPnExclusiveOwnership->VidPnSourceId >=
         Adapter->NumberOfVideoPresentSources)
     {
-        return STATUS_INVALID_PARAMETER;
+        Status = STATUS_INVALID_PARAMETER;
+        goto Cleanup;
     }
 
     DxgkpEnsureSourceOwnerMutex();
@@ -3437,10 +3637,12 @@ DxgkCheckVidPnExclusiveOwnership(
             D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVE ||
         g_SourceOwners[pCheckVidPnExclusiveOwnership->VidPnSourceId].OwnerDevice == 0)
     {
-        ExReleaseFastMutex(&g_SourceOwnerMutex);
-        return STATUS_GRAPHICS_VIDPN_SOURCE_IN_USE;
+        Status = STATUS_GRAPHICS_VIDPN_SOURCE_IN_USE;
     }
 
     ExReleaseFastMutex(&g_SourceOwnerMutex);
-    return STATUS_SUCCESS;
+
+Cleanup:
+    DxgkDereferenceAdapter(Adapter);
+    return Status;
 }

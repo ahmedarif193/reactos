@@ -5,10 +5,10 @@
 
 spec2def(dxgkrnl.sys dxgkrnl.spec ADD_IMPORTLIB)
 
-# dxgkrnl targets the Windows 7 WDDM 1.1 contract. Override the global
-# ReactOS XP target so the correct prototypes and NTDDI guards are resolved.
-remove_definitions(-D_WIN32_WINNT=0x502)
-remove_definitions(-DWINVER=0x502)
+# dxgkrnl uses Windows 7 kernel declarations while exposing a WDDM 2.0 DDI
+# surface. Replace the configured tree-wide target for the required NT APIs.
+remove_definitions(-D_WIN32_WINNT=${REACTOS_TARGET_NT})
+remove_definitions(-DWINVER=${REACTOS_TARGET_NT})
 add_definitions(-D_WIN32_WINNT=0x0601 -DWINVER=0x0601)
 add_definitions(-DNTDDI_VERSION=0x06010000)    # NTDDI_WIN7
 
@@ -24,6 +24,8 @@ list(APPEND SOURCE
     legacy.c
     pnp.c
     vidmm.c
+    gpuva.c
+    handles.c
     context.c
     dma.c
     present.c

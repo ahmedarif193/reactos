@@ -1,10 +1,9 @@
 # WDDM D3DKMT test surface: pin struct layouts to WDDM 3.0 (0xF003, the header
 # maximum) so the ENTIRE WDDM 2.x/3.0 structure surface is visible -- paging
 # queues & GPU virtual addressing (2.0), HW queues (2.2), EnumAdapters3 (2.7),
-# etc. -- and so the layouts match a real Windows 11 (WDDM 3.x) runtime, which
-# is what the suite is validated against. Entry points are still resolved
-# dynamically via GetProcAddress, so the same binary degrades gracefully on
-# hosts (e.g. down-level ReactOS) that lack the newer exports.
+# etc. -- and so tests can compare the visible Windows 11-era surface. Entry
+# points are still resolved dynamically via GetProcAddress, so the same binary
+# degrades gracefully on hosts (e.g. WDDM 2.0 ReactOS) that lack newer exports.
 remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
 add_definitions(-DDXGKDDI_INTERFACE_VERSION=0xF003)
 

@@ -1,16 +1,16 @@
 /*
  * PROJECT:     ReactOS WDDM Null/Software GPU Miniport
  * LICENSE:     GPL-2.0+ (https://spdx.org/licenses/GPL-2.0+)
- * PURPOSE:     Private header for softgpu.sys — WDDM 2.0 software display
- *              miniport targeting QEMU STD VGA (PCI VEN_1234&DEV_1111) or the
- *              firmware framebuffer.
+ * PURPOSE:     Private header for softgpu.sys — WDDM 2.0 ABI miniport with a
+ *              physical/software engine and no GPU MMU, targeting QEMU STD
+ *              VGA (PCI VEN_1234&DEV_1111) or the firmware framebuffer.
  * COPYRIGHT:   Copyright 2024 ReactOS WDDM Team
  *
  * Architecture notes
  * ==================
- * softgpu is a pure software device with no real GPU hardware.  It allocates
- * a 16 MB write-combined contiguous buffer from system RAM and presents it to
- * dxgkrnl as a single CPU-visible aperture segment.
+ * softgpu is a pure software device with no real GPU hardware or GPU MMU. It
+ * allocates a 16 MB write-combined contiguous buffer from system RAM and
+ * presents it to dxgkrnl as one CPU-visible physical aperture segment.
  *
  * ABI contract (CRITICAL)
  * =======================
@@ -151,6 +151,8 @@ typedef struct _SOFTGPU_DEVICE
      * fence completion.
      */
     KDPC                DpcObject;
+    volatile LONG       Stopped;
+    BOOLEAN             DpcInitialized;
 
     /*
      * dxgkrnl callback vtable.  Copied from the PDXGK_INTERFACE argument
@@ -256,6 +258,13 @@ APIENTRY
 SoftGpuDdiQueryAdapterInfo(
     _In_ PVOID                            MiniportDeviceContext,
     _In_ CONST DXGKARG_QUERYADAPTERINFO  *pQueryAdapterInfo);
+
+NTSTATUS
+APIENTRY
+SoftGpuDdiGetNodeMetadata(
+    _In_ PVOID MiniportDeviceContext,
+    _In_ UINT NodeOrdinalAndAdapterIndex,
+    _Out_ DXGKARG_GETNODEMETADATA *GetNodeMetadata);
 
 NTSTATUS
 APIENTRY

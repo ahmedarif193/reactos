@@ -1,7 +1,7 @@
 # PROJECT:  ReactOS WDDM Null/Software GPU Miniport
 # LICENSE:  GPL-2.0+ (https://spdx.org/licenses/GPL-2.0+)
-# PURPOSE:  Build file for softgpu.sys — WDDM 1.0 test miniport targeting
-#           QEMU STD VGA (PCI VEN_1234&DEV_1111).
+# PURPOSE:  Build file for softgpu.sys — WDDM 2.0 ABI test miniport with a
+#           physical/software engine and no GPU MMU, targeting QEMU STD VGA.
 # COPYRIGHT: Copyright 2024 ReactOS WDDM Team
 #
 # Build order in drivers/directx:
@@ -18,14 +18,13 @@ spec2def(softgpu.sys softgpu.spec ADD_IMPORTLIB)
 # (its own, WDDM2-sized) bytes out of the table softgpu passes, so a smaller /
 # differently-versioned table on this side reads stack garbage into the WDDM2
 # DDI slots.  Mirror dxgkrnl/CMakeLists.txt exactly (lines 10-19).
-remove_definitions(-D_WIN32_WINNT=0x502)
-remove_definitions(-DWINVER=0x502)
+remove_definitions(-D_WIN32_WINNT=${REACTOS_TARGET_NT})
+remove_definitions(-DWINVER=${REACTOS_TARGET_NT})
 add_definitions(-D_WIN32_WINNT=0x0601 -DWINVER=0x0601)
 add_definitions(-DNTDDI_VERSION=0x06010000)    # NTDDI_WIN7
 
-# The global default DXGKDDI version (0x1052) gates out the WDDM 2.0 DDI surface
-# (GPU virtual addressing, per-process page tables, SubmitCommandVirtual, ...).
-# Raise it to WDDM 2.0 to match dxgkrnl.
+# The global default DXGKDDI version (0x1052) gates out the WDDM 2.0 ABI fields.
+# Raise it to WDDM 2.0 to match dxgkrnl; this does not claim a GPU MMU.
 remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
 add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x5023)
 

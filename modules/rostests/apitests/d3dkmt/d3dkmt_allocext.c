@@ -4,7 +4,7 @@
  * PURPOSE:     In-depth D3DKMT allocation-feature coverage: standard allocations,
  *              the CreateAllocation flags matrix, allocation priority get/set,
  *              residency + property update, video-memory reservation / queued
- *              limit, and the WDDM 2.0 destroy/lock/unlock-2 bad-handle contract.
+ *              limit, and the WDDM 2.0 destroy/lock/unlock-2 contracts.
  * COPYRIGHT:   Copyright 2026 ReactOS WDDM Team
  *
  * Goes deeper than d3dkmt_alloc.c (NULL contract), vidmm_test.c (basic
@@ -844,7 +844,7 @@ START_TEST(allocreserve)
 }
 
 /* =====================================================================
- * Group 6: WDDM 2.0 DestroyAllocation2 / Lock2 / Unlock2 bad-handle contract
+ * Group 6: WDDM 2.0 DestroyAllocation2 / Lock2 / Unlock2 contracts
  * (NULL contract for these lives in d3dkmt_surface.c's "alloc2" group)
  * ===================================================================== */
 
@@ -920,10 +920,73 @@ Unlock2_BadHandle(void)
     EXPECT_REFUSED(p, &ul, "Unlock2(bogus device/allocation)");
 }
 
+static void
+Allocation2_PositiveRoundTrip(void)
+{
+    D3DKMT_HANDLE hAdapter, hDevice;
+    D3DKMT_CREATEALLOCATION CreateAllocation;
+    D3DDDI_ALLOCATIONINFO AllocationInfo;
+    D3DKMT_DESTROYALLOCATION2 DestroyAllocation;
+    D3DKMT_LOCK2 Lock;
+    D3DKMT_UNLOCK2 Unlock;
+    UINT AllocationSize = 4096;
+    NTSTATUS Status;
+
+    LOADFN(PFND3DKMT_CREATEALLOCATION, pCreate, "D3DKMTCreateAllocation");
+    LOADFN(PFND3DKMT_LOCK2, pLock, "D3DKMTLock2");
+    LOADFN(PFND3DKMT_UNLOCK2, pUnlock, "D3DKMTUnlock2");
+    LOADFN(PFND3DKMT_DESTROYALLOCATION2, pDestroy, "D3DKMTDestroyAllocation2");
+
+    if (!OpenAdapterAndDevice(&hAdapter, &hDevice))
+        return;
+
+    memset(&AllocationInfo, 0, sizeof(AllocationInfo));
+    AllocationInfo.pPrivateDriverData = &AllocationSize;
+    AllocationInfo.PrivateDriverDataSize = sizeof(AllocationSize);
+    memset(&CreateAllocation, 0, sizeof(CreateAllocation));
+    CreateAllocation.hDevice = hDevice;
+    CreateAllocation.pAllocationInfo = &AllocationInfo;
+    CreateAllocation.NumAllocations = 1;
+    Status = pCreate(&CreateAllocation);
+    if (!NT_SUCCESS(Status))
+    {
+        skip("CreateAllocation is not supported by this KMD (0x%08lX)\n", (long)Status);
+        goto cleanup;
+    }
+
+    ok(AllocationInfo.hAllocation != 0, "CreateAllocation returned a zero allocation handle\n");
+    memset(&Lock, 0, sizeof(Lock));
+    Lock.hDevice = hDevice;
+    Lock.hAllocation = AllocationInfo.hAllocation;
+    Status = pLock(&Lock);
+    ok(NT_SUCCESS(Status), "Lock2 failed 0x%08lX\n", (long)Status);
+    if (NT_SUCCESS(Status))
+    {
+        ok(Lock.pData != NULL, "Lock2 succeeded without returning a mapping\n");
+        memset(&Unlock, 0, sizeof(Unlock));
+        Unlock.hDevice = hDevice;
+        Unlock.hAllocation = AllocationInfo.hAllocation;
+        Status = pUnlock(&Unlock);
+        ok(NT_SUCCESS(Status), "Unlock2 failed 0x%08lX\n", (long)Status);
+    }
+
+    memset(&DestroyAllocation, 0, sizeof(DestroyAllocation));
+    DestroyAllocation.hDevice = hDevice;
+    DestroyAllocation.phAllocationList = &AllocationInfo.hAllocation;
+    DestroyAllocation.AllocationCount = 1;
+    Status = pDestroy(&DestroyAllocation);
+    ok(NT_SUCCESS(Status), "DestroyAllocation2 failed 0x%08lX\n", (long)Status);
+
+cleanup:
+    DestroyTestDevice(hDevice);
+    CloseAdapter(hAdapter);
+}
+
 START_TEST(allocdestroy2)
 {
     Destroy2_BadHandle();
     Destroy2_ValidDeviceBogusAlloc();
     Lock2_BadHandle();
     Unlock2_BadHandle();
+    Allocation2_PositiveRoundTrip();
 }

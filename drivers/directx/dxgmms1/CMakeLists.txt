@@ -10,6 +10,11 @@
 #   1. dxgmms1  (no upstream ReactOS deps beyond ntoskrnl/hal)
 #   2. dxgkrnl  (links against dxgmms1 import library)
 
+# dxgmms1 and dxgkrnl exchange WDDM structures by value. Keep both targets on
+# the same WDDM 2.0 ABI instead of inheriting the tree-wide Vista default.
+remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
+add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x5023)
+
 spec2def(dxgmms1.sys dxgmms1.spec ADD_IMPORTLIB)
 
 list(APPEND SOURCE

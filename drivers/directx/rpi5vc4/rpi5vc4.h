@@ -53,6 +53,7 @@
 
 /* In-order submission tracking ("the GPU pipeline"). */
 #define RPI5VC4_MAX_PENDING         64
+#define RPI5VC4_DMA_MAPPING_COUNT   256
 
 /* GPU nodes exposed via GpuEngineTopology: 0 = CLE (3D bin/render),
  * 1 = TFU (conversion/blit), 2 = CSD (compute).  One shared hardware
@@ -152,7 +153,7 @@ typedef struct _RPI5VC4_DMA_PACKET
         {
             /* UMD-encoded TFU register image:
              * [Icfg Iia Ica Iis Iua Ioc Ioa Ios Coef0..Coef3]. */
-            ULONG Regs[12];
+            UINT Regs[12];
         } TfuJob;
         struct
         {
@@ -194,6 +195,14 @@ typedef struct _RPI5VC4_OPENALLOCATION
     ULONG Magic;
     D3DKMT_HANDLE hVidMmAllocation;
 } RPI5VC4_OPENALLOCATION, *PRPI5VC4_OPENALLOCATION;
+
+typedef struct _RPI5VC4_DMA_MAPPING
+{
+    UINT             SegmentId;
+    PHYSICAL_ADDRESS PhysicalAddress;
+    PVOID            VirtualAddress;
+    ULONG            Size;
+} RPI5VC4_DMA_MAPPING, *PRPI5VC4_DMA_MAPPING;
 
 struct _RPI5VC4_DEVICE_EXTENSION
 {
@@ -298,6 +307,8 @@ struct _RPI5VC4_DEVICE_EXTENSION
 
     /* ---- In-order submission/fence pipeline ---------------------------- */
     KSPIN_LOCK DmaLock;
+    RPI5VC4_DMA_MAPPING DmaMappings[RPI5VC4_DMA_MAPPING_COUNT];
+    ULONG DmaMappingNext;
     LONG V3dKickPrints;
     /* One in-order queue per GPU node; the engines run in parallel. */
     struct
@@ -313,6 +324,7 @@ struct _RPI5VC4_DEVICE_EXTENSION
     KTIMER V3dPollTimer;              /* drives V3D job completion polling */
     KDPC V3dPollDpc;
     BOOLEAN StopAccepting;            /* set during StopDevice             */
+    BOOLEAN DmaPipelineInitialized;
 
     /* Vsync source: refresh-rate timer polling the PixelValve VFP latch
      * (the root-enumerated devnode has no interrupt resource). */
@@ -476,6 +488,11 @@ NTSTATUS APIENTRY Rpi5Vc4DdiPreemptCommand(
 NTSTATUS APIENTRY Rpi5Vc4DdiQueryCurrentFence(
     _In_    PVOID MiniportDeviceContext,
     _Inout_ PDXGKARG_QUERYCURRENTFENCE CurrentFence);
+
+NTSTATUS APIENTRY Rpi5Vc4DdiGetNodeMetadata(
+    _In_ PVOID MiniportDeviceContext,
+    _In_ UINT NodeOrdinalAndAdapterIndex,
+    _Out_ DXGKARG_GETNODEMETADATA *GetNodeMetadata);
 
 NTSTATUS APIENTRY Rpi5Vc4DdiBuildPagingBuffer(
     _In_    PVOID MiniportDeviceContext,

@@ -19,12 +19,10 @@
  *     DEVICE — one per D3D application device  (DXGKRNL_DEVICE)
  *       CONTEXT — one per GPU command stream   (DXGKRNL_CONTEXT)
  *
- * Handle encoding
- * ---------------
- * D3DKMT_HANDLE values returned to callers are the low 32 bits of the
- * kernel object pointer XOR'd with a per-boot cookie (DxgkHandleCookie32).
- * The stored DXGKRNL_DEVICE.Handle and DXGKRNL_CONTEXT.Handle fields hold
- * the encoded value so that validation is a direct compare.
+ * Handle namespace
+ * ----------------
+ * D3DKMT_HANDLE values are owner-scoped typed generation identifiers.  No
+ * public handle contains or reconstructs a kernel pointer.
  *
  * Adapter identification (D3DKMT_CREATEDEVICE)
  * --------------------------------------------
@@ -52,24 +50,18 @@
 
 #include "dxgkrnl_private.h"
 #include "context.h"
+#include "handles.h"
 #include "vidmm.h"
+#include "vidpn.h"
 
 /* GLOBALS *******************************************************************/
 
-/*
- * DxgkHandleCookie32
- *
- * Per-boot XOR mask.  D3DKMT_HANDLE is UINT (32 bits); we use 32-bit XOR.
- * Bit 0 is cleared so that encoded handles from naturally-aligned pool
- * allocations (always even-addressed) also have bit 0 clear — this lets
- * the validation path quickly reject odd values as corrupt handles.
- */
-static ULONG DxgkHandleCookie32;
-
-/*
- * DxgkProcessNotifyRegistered — TRUE if the process-exit callback is active.
- */
+/* DxgkProcessNotifyRegistered — TRUE if the process-exit callback is active. */
 static BOOLEAN DxgkProcessNotifyRegistered = FALSE;
+
+/* Shared WDDM 2.0 process records, keyed by (PEPROCESS, adapter). */
+static FAST_MUTEX DxgkProcessListLock;
+static LIST_ENTRY DxgkProcessListHead;
 
 /* Forward declaration — defined later in this file. */
 VOID
@@ -82,230 +74,221 @@ DxgkProcessCleanup(
 /* Maximum adapters snapshotted in one operation (on-stack arrays). */
 #define DXGK_MAX_ADAPTERS 16
 
-/* PRIVATE HELPERS ***********************************************************/
-
-/*
- * DxgkpEncodeHandle
- *
- * XOR obfuscation for D3DKMT_HANDLE.  Only the low 32 bits of the pointer
- * participate because D3DKMT_HANDLE is a 32-bit type.  The stored Handle
- * field in each object records the encoded value so we can do a round-trip
- * check without a separate lookup table.
- */
-FORCEINLINE D3DKMT_HANDLE
-DxgkpEncodeHandle(
-    _In_ PVOID Pointer)
+static VOID
+DxgkpDereferenceDevice(
+    _In_ PDXGKRNL_DEVICE Device)
 {
-    return (D3DKMT_HANDLE)((ULONG_PTR)Pointer ^ (ULONG_PTR)DxgkHandleCookie32);
+    if (InterlockedDecrement(&Device->ReferenceCount) == 0)
+        KeSetEvent(&Device->ReferencesDrainedEvent, IO_NO_INCREMENT, FALSE);
+    DxgkDereferenceAdapter(Device->Adapter);
 }
 
-/*
- * DxgkpSnapshotAdapters
- *
- * Build an on-stack array of all current DXGKRNL_ADAPTER pointers while
- * holding DxgkAdapterGlobalListLock.  Returns the number of adapters found
- * (capped at DXGK_MAX_ADAPTERS).
- *
- * This pattern is used throughout context.c to avoid holding a KSPIN_LOCK
- * while subsequently acquiring FAST_MUTEXes (which require IRQL <= APC_LEVEL).
- */
-static ULONG
-DxgkpSnapshotAdapters(
-    _Out_writes_(DXGK_MAX_ADAPTERS) PDXGKRNL_ADAPTER *AdapterArray)
+BOOLEAN
+DxgkReferenceDevice(
+    _In_ PDXGKRNL_DEVICE Device)
+{
+    if (Device == NULL || !DxgkReferenceAdapter(Device->Adapter))
+        return FALSE;
+    if (InterlockedCompareExchange(&Device->Destroying, 0, 0) != 0)
+    {
+        DxgkDereferenceAdapter(Device->Adapter);
+        return FALSE;
+    }
+    InterlockedIncrement(&Device->ReferenceCount);
+    if (InterlockedCompareExchange(&Device->Destroying, 0, 0) != 0)
+    {
+        DxgkpDereferenceDevice(Device);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+BOOLEAN
+DxgkReferenceContext(
+    _In_ PDXGKRNL_CONTEXT Context)
+{
+    if (Context == NULL || InterlockedCompareExchange(&Context->Destroying, 0, 0) != 0)
+        return FALSE;
+    InterlockedIncrement(&Context->ReferenceCount);
+    if (InterlockedCompareExchange(&Context->Destroying, 0, 0) != 0)
+    {
+        DxgkDereferenceContext(Context);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+VOID
+DxgkDereferenceDevice(
+    _In_ PDXGKRNL_DEVICE Device)
+{
+    DxgkpDereferenceDevice(Device);
+}
+
+VOID
+DxgkDereferenceContext(
+    _In_ PDXGKRNL_CONTEXT Context)
+{
+    if (InterlockedDecrement(&Context->ReferenceCount) == 0)
+        KeSetEvent(&Context->ReferencesDrainedEvent, IO_NO_INCREMENT, FALSE);
+}
+
+static VOID
+DxgkpWaitForDeviceReferences(
+    _In_ PDXGKRNL_DEVICE Device)
+{
+    if (InterlockedDecrement(&Device->ReferenceCount) != 0)
+        KeWaitForSingleObject(&Device->ReferencesDrainedEvent, Executive, KernelMode, FALSE, NULL);
+}
+
+static VOID
+DxgkpWaitForContextReferences(
+    _In_ PDXGKRNL_CONTEXT Context)
+{
+    if (InterlockedDecrement(&Context->ReferenceCount) != 0)
+        KeWaitForSingleObject(&Context->ReferencesDrainedEvent, Executive, KernelMode, FALSE, NULL);
+}
+
+static NTSTATUS
+DxgkpAcquireProcessRecord(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PEPROCESS Process,
+    _Out_ PDXGKRNL_PROCESS *OutProcessRecord)
+{
+    PDXGKRNL_PROCESS Candidate;
+    PLIST_ENTRY Entry;
+    NTSTATUS Status;
+
+    *OutProcessRecord = NULL;
+
+    ExAcquireFastMutex(&DxgkProcessListLock);
+    for (Entry = DxgkProcessListHead.Flink; Entry != &DxgkProcessListHead; Entry = Entry->Flink)
+    {
+        PDXGKRNL_PROCESS Existing = CONTAINING_RECORD(Entry, DXGKRNL_PROCESS, GlobalProcessListEntry);
+
+        if (Existing->Process == Process && Existing->Adapter == Adapter)
+        {
+            InterlockedIncrement(&Existing->ReferenceCount);
+            ExReleaseFastMutex(&DxgkProcessListLock);
+            *OutProcessRecord = Existing;
+            return STATUS_SUCCESS;
+        }
+    }
+    ExReleaseFastMutex(&DxgkProcessListLock);
+
+    Candidate = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Candidate), TAG_DXGK_PROCESS);
+    if (Candidate == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    RtlZeroMemory(Candidate, sizeof(*Candidate));
+    Candidate->Process = Process;
+    Candidate->ReferenceCount = 1;
+    InitializeListHead(&Candidate->DeviceListHead);
+    InitializeListHead(&Candidate->AllocationListHead);
+    InitializeListHead(&Candidate->GlobalProcessListEntry);
+    ExInitializeFastMutex(&Candidate->ProcessMutex);
+    ObReferenceObject(Process);
+
+    Status = DxgkGpuVaCreateProcess(Adapter, Candidate);
+    if (!NT_SUCCESS(Status))
+    {
+        ObDereferenceObject(Process);
+        ExFreePoolWithTag(Candidate, TAG_DXGK_PROCESS);
+        return Status;
+    }
+    ExAcquireFastMutex(&DxgkProcessListLock);
+    for (Entry = DxgkProcessListHead.Flink; Entry != &DxgkProcessListHead; Entry = Entry->Flink)
+    {
+        PDXGKRNL_PROCESS Existing = CONTAINING_RECORD(Entry, DXGKRNL_PROCESS, GlobalProcessListEntry);
+
+        if (Existing->Process == Process && Existing->Adapter == Adapter)
+        {
+            InterlockedIncrement(&Existing->ReferenceCount);
+            ExReleaseFastMutex(&DxgkProcessListLock);
+            DxgkGpuVaDestroyProcess(Adapter, Candidate);
+            ObDereferenceObject(Process);
+            ExFreePoolWithTag(Candidate, TAG_DXGK_PROCESS);
+            *OutProcessRecord = Existing;
+            return STATUS_SUCCESS;
+        }
+    }
+
+    InsertTailList(&DxgkProcessListHead, &Candidate->GlobalProcessListEntry);
+    ExReleaseFastMutex(&DxgkProcessListLock);
+    *OutProcessRecord = Candidate;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+DxgkReferenceProcessRecordByAdapter(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PEPROCESS Process,
+    _Out_ PDXGKRNL_PROCESS *OutProcessRecord)
 {
     PLIST_ENTRY Entry;
-    ULONG       Count = 0;
-    KIRQL       OldIrql;
 
-    KeAcquireSpinLock(&DxgkAdapterGlobalListLock, &OldIrql);
+    if (Adapter == NULL || Process == NULL || OutProcessRecord == NULL)
+        return STATUS_INVALID_PARAMETER;
 
-    for (Entry  = DxgkAdapterGlobalListHead.Flink;
-         Entry != &DxgkAdapterGlobalListHead && Count < DXGK_MAX_ADAPTERS;
-         Entry  = Entry->Flink)
+    *OutProcessRecord = NULL;
+    ExAcquireFastMutex(&DxgkProcessListLock);
+    for (Entry = DxgkProcessListHead.Flink; Entry != &DxgkProcessListHead; Entry = Entry->Flink)
     {
-        AdapterArray[Count++] = CONTAINING_RECORD(Entry, DXGKRNL_ADAPTER,
-                                                   GlobalAdapterListEntry);
-    }
+        PDXGKRNL_PROCESS ProcessRecord = CONTAINING_RECORD(Entry, DXGKRNL_PROCESS, GlobalProcessListEntry);
 
-    KeReleaseSpinLock(&DxgkAdapterGlobalListLock, OldIrql);
-    return Count;
+        if (ProcessRecord->Adapter != Adapter || ProcessRecord->Process != Process)
+            continue;
+
+        InterlockedIncrement(&ProcessRecord->ReferenceCount);
+        ExReleaseFastMutex(&DxgkProcessListLock);
+        *OutProcessRecord = ProcessRecord;
+        return STATUS_SUCCESS;
+    }
+    ExReleaseFastMutex(&DxgkProcessListLock);
+    return STATUS_NOT_FOUND;
 }
 
-/*
- * DxgkpValidateAdapter
- *
- * Confirm that Adapter is a member of the global adapter list.  Returns TRUE
- * if found, FALSE otherwise.
- *
- * Must be called at IRQL <= APC_LEVEL (snapshot acquires a spinlock briefly).
- */
-static BOOLEAN
-DxgkpValidateAdapter(
-    _In_ PDXGKRNL_ADAPTER Adapter)
+VOID
+DxgkDereferenceProcessRecord(
+    _In_opt_ PDXGKRNL_PROCESS ProcessRecord)
 {
-    PDXGKRNL_ADAPTER Snapshot[DXGK_MAX_ADAPTERS];
-    ULONG            Count, i;
+    BOOLEAN Destroy = FALSE;
 
-    Count = DxgkpSnapshotAdapters(Snapshot);
-    for (i = 0; i < Count; ++i)
+    if (ProcessRecord == NULL)
+        return;
+
+    ExAcquireFastMutex(&DxgkProcessListLock);
+    if (InterlockedDecrement(&ProcessRecord->ReferenceCount) == 0)
     {
-        if (Snapshot[i] == Adapter)
-            return TRUE;
+        RemoveEntryList(&ProcessRecord->GlobalProcessListEntry);
+        InitializeListHead(&ProcessRecord->GlobalProcessListEntry);
+        Destroy = TRUE;
     }
-    return FALSE;
+    ExReleaseFastMutex(&DxgkProcessListLock);
+
+    if (Destroy)
+    {
+        DxgkGpuVaDestroyProcess(ProcessRecord->Adapter, ProcessRecord);
+        ObDereferenceObject(ProcessRecord->Process);
+        ExFreePoolWithTag(ProcessRecord, TAG_DXGK_PROCESS);
+    }
 }
 
-/*
- * DxgkpFindDeviceOnAdapter
- *
- * Search Adapter->DeviceListHead for a device with Handle == hDevice.
- * Returns the DXGKRNL_DEVICE pointer or NULL.  Acquires Device->DeviceMutex.
- *
- * Must be called at IRQL <= APC_LEVEL.
- */
-static PDXGKRNL_DEVICE
-DxgkpFindDeviceOnAdapter(
-    _In_ PDXGKRNL_ADAPTER Adapter,
-    _In_ D3DKMT_HANDLE    hDevice)
-{
-    PLIST_ENTRY     Entry;
-    PDXGKRNL_DEVICE Found = NULL;
-
-    PAGED_CODE();
-
-    ExAcquireFastMutex(&Adapter->AdapterMutex);
-
-    for (Entry  = Adapter->DeviceListHead.Flink;
-         Entry != &Adapter->DeviceListHead;
-         Entry  = Entry->Flink)
-    {
-        PDXGKRNL_DEVICE Candidate = CONTAINING_RECORD(Entry, DXGKRNL_DEVICE,
-                                                       DeviceListEntry);
-        if (Candidate->Handle == hDevice)
-        {
-            Found = Candidate;
-            break;
-        }
-    }
-
-    ExReleaseFastMutex(&Adapter->AdapterMutex);
-    return Found;
-}
-
-/*
- * DxgkpFindDeviceByHandle
- *
- * Walk all adapters looking for a device with the given handle.
- * Sets *OutAdapter to the owning adapter on success.
- *
- * Must be called at IRQL <= APC_LEVEL (acquires FAST_MUTEXes).
- */
-static PDXGKRNL_DEVICE
-DxgkpFindDeviceByHandle(
-    _In_  D3DKMT_HANDLE     hDevice,
-    _Out_ PDXGKRNL_ADAPTER *OutAdapter)
-{
-    PDXGKRNL_ADAPTER Snapshot[DXGK_MAX_ADAPTERS];
-    ULONG            Count, i;
-    PDXGKRNL_DEVICE  Device = NULL;
-
-    PAGED_CODE();
-
-    *OutAdapter = NULL;
-
-    Count = DxgkpSnapshotAdapters(Snapshot);
-
-    for (i = 0; i < Count; ++i)
-    {
-        Device = DxgkpFindDeviceOnAdapter(Snapshot[i], hDevice);
-        if (Device != NULL)
-        {
-            *OutAdapter = Snapshot[i];
-            return Device;
-        }
-    }
-
-    return NULL;
-}
+/* PRIVATE HELPERS ***********************************************************/
 
 PDXGKRNL_DEVICE
 DxgkLookupDeviceByHandle(
     _In_ D3DKMT_HANDLE       Handle,
     _Out_opt_ PDXGKRNL_ADAPTER *OutAdapter)
 {
-    PDXGKRNL_ADAPTER LocalAdapter;
+    PDXGKRNL_ADAPTER Adapter;
+    PDXGKRNL_DEVICE Device;
 
-    if (OutAdapter == NULL)
-        OutAdapter = &LocalAdapter;
-
-    return DxgkpFindDeviceByHandle(Handle, OutAdapter);
-}
-
-/*
- * DxgkpFindContextByHandle
- *
- * Walk all adapters → all devices looking for a context with the given handle.
- * Sets *OutAdapter and *OutDevice on success.
- *
- * Must be called at IRQL <= APC_LEVEL.
- */
-static PDXGKRNL_CONTEXT
-DxgkpFindContextByHandle(
-    _In_  D3DKMT_HANDLE     hContext,
-    _Out_ PDXGKRNL_ADAPTER *OutAdapter,
-    _Out_ PDXGKRNL_DEVICE  *OutDevice)
-{
-    PDXGKRNL_ADAPTER Snapshot[DXGK_MAX_ADAPTERS];
-    ULONG            Count, i;
-    PLIST_ENTRY      DevEntry;
-
-    PAGED_CODE();
-
-    *OutAdapter = NULL;
-    *OutDevice  = NULL;
-
-    Count = DxgkpSnapshotAdapters(Snapshot);
-
-    for (i = 0; i < Count; ++i)
-    {
-        PDXGKRNL_ADAPTER Adapter = Snapshot[i];
-
-        ExAcquireFastMutex(&Adapter->AdapterMutex);
-
-        for (DevEntry  = Adapter->DeviceListHead.Flink;
-             DevEntry != &Adapter->DeviceListHead;
-             DevEntry  = DevEntry->Flink)
-        {
-            PDXGKRNL_DEVICE Device = CONTAINING_RECORD(DevEntry, DXGKRNL_DEVICE,
-                                                        DeviceListEntry);
-            PLIST_ENTRY CtxEntry;
-
-            ExAcquireFastMutex(&Device->DeviceMutex);
-
-            for (CtxEntry  = Device->ContextListHead.Flink;
-                 CtxEntry != &Device->ContextListHead;
-                 CtxEntry  = CtxEntry->Flink)
-            {
-                PDXGKRNL_CONTEXT Ctx = CONTAINING_RECORD(CtxEntry,
-                                                          DXGKRNL_CONTEXT,
-                                                          ContextListEntry);
-                if (Ctx->Handle == hContext)
-                {
-                    ExReleaseFastMutex(&Device->DeviceMutex);
-                    ExReleaseFastMutex(&Adapter->AdapterMutex);
-                    *OutAdapter = Adapter;
-                    *OutDevice  = Device;
-                    return Ctx;
-                }
-            }
-
-            ExReleaseFastMutex(&Device->DeviceMutex);
-        }
-
-        ExReleaseFastMutex(&Adapter->AdapterMutex);
-    }
-
-    return NULL;
+    if (!NT_SUCCESS(DxgkReferenceDeviceByHandle(Handle, PsGetCurrentProcess(), &Adapter, &Device)))
+        return NULL;
+    if (OutAdapter != NULL)
+        *OutAdapter = Adapter;
+    return Device;
 }
 
 PDXGKRNL_CONTEXT
@@ -314,50 +297,137 @@ DxgkLookupContextByHandle(
     _Out_opt_ PDXGKRNL_ADAPTER *OutAdapter,
     _Out_opt_ PDXGKRNL_DEVICE  *OutDevice)
 {
-    PDXGKRNL_ADAPTER LocalAdapter;
-    PDXGKRNL_DEVICE  LocalDevice;
+    PDXGKRNL_ADAPTER Adapter;
+    PDXGKRNL_DEVICE Device;
+    PDXGKRNL_CONTEXT Context;
 
-    if (OutAdapter == NULL)
-        OutAdapter = &LocalAdapter;
-    if (OutDevice == NULL)
-        OutDevice = &LocalDevice;
-
-    return DxgkpFindContextByHandle(Handle, OutAdapter, OutDevice);
+    if (!NT_SUCCESS(DxgkReferenceContextByHandle(Handle, PsGetCurrentProcess(), &Adapter, &Device, &Context)))
+        return NULL;
+    if (OutAdapter != NULL)
+        *OutAdapter = Adapter;
+    if (OutDevice != NULL)
+        *OutDevice = Device;
+    return Context;
 }
 
-/*
- * DxgkpDestroyContextNoLock
- *
- * Internal context teardown.  The context MUST already have been removed from
- * Device->ContextListHead before this is called (so that no other path can
- * find or reference it).  Device->DeviceMutex must NOT be held on entry.
- *
- * Calls DxgkDdiDestroyContext and frees the pool allocation.
- */
+NTSTATUS
+DxgkReferenceOwnedDeviceByHandle(
+    _In_ D3DKMT_HANDLE Handle,
+    _In_ PEPROCESS OwnerProcess,
+    _Out_ PDXGKRNL_ADAPTER *OutAdapter,
+    _Out_ PDXGKRNL_DEVICE *OutDevice)
+{
+    return DxgkReferenceDeviceByHandle(Handle, OwnerProcess, OutAdapter, OutDevice);
+}
+
+NTSTATUS
+DxgkReferenceVirtualContextByHandle(
+    _In_ D3DKMT_HANDLE Handle,
+    _In_ PEPROCESS OwnerProcess,
+    _Out_ PDXGKRNL_ADAPTER *OutAdapter,
+    _Out_ PDXGKRNL_DEVICE *OutDevice,
+    _Out_ PDXGKRNL_CONTEXT *OutContext)
+{
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    Status = DxgkReferenceContextByHandle(Handle, OwnerProcess, OutAdapter, OutDevice, OutContext);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (!(*OutContext)->VirtualAddressing)
+    {
+        DxgkDereferenceContext(*OutContext);
+        *OutAdapter = NULL;
+        *OutDevice = NULL;
+        *OutContext = NULL;
+        return STATUS_OBJECT_TYPE_MISMATCH;
+    }
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+DxgkpDetachOwnedContextByHandle(
+    _In_ D3DKMT_HANDLE Handle,
+    _In_ PEPROCESS OwnerProcess,
+    _Out_ PDXGKRNL_CONTEXT *OutContext)
+{
+    NTSTATUS Status;
+    PDXGKRNL_CONTEXT Context;
+
+    Status = DxgkDetachContextHandle(Handle, OwnerProcess, &Context);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    ExAcquireFastMutex(&Context->Device->DeviceMutex);
+    if (!IsListEmpty(&Context->ContextListEntry))
+    {
+        RemoveEntryList(&Context->ContextListEntry);
+        InitializeListHead(&Context->ContextListEntry);
+    }
+    ExReleaseFastMutex(&Context->Device->DeviceMutex);
+    *OutContext = Context;
+    return STATUS_SUCCESS;
+}
+
+/* Serialize teardown DDIs with the final DxgkDdiRemoveDevice boundary. */
+static NTSTATUS
+DxgkpDestroyMiniportContext(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ HANDLE MiniportContext)
+{
+    NTSTATUS Status;
+
+    if (MiniportContext == NULL || Adapter->MiniportContext->InitData.s.DxgkDdiDestroyContext == NULL)
+        return STATUS_SUCCESS;
+    if (!DxgkAcquireMiniportCallback(Adapter))
+        return STATUS_SUCCESS;
+    Status = Adapter->MiniportContext->InitData.s.DxgkDdiDestroyContext(MiniportContext);
+    DxgkReleaseMiniportCallback(Adapter);
+    return Status;
+}
+
+static NTSTATUS
+DxgkpDestroyMiniportDevice(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ HANDLE MiniportDevice)
+{
+    NTSTATUS Status;
+
+    if (MiniportDevice == NULL || Adapter->MiniportContext->InitData.s.DxgkDdiDestroyDevice == NULL)
+        return STATUS_SUCCESS;
+    if (!DxgkAcquireMiniportCallback(Adapter))
+        return STATUS_SUCCESS;
+    Status = Adapter->MiniportContext->InitData.s.DxgkDdiDestroyDevice(MiniportDevice);
+    DxgkReleaseMiniportCallback(Adapter);
+    return Status;
+}
+
+/* Context must be detached from Device->ContextListHead and DeviceMutex must
+ * not be held. The helper waits transient references before final teardown. */
 static VOID
 DxgkpDestroyContextNoLock(
     _In_ _Post_invalid_ PDXGKRNL_CONTEXT Context)
 {
     PDXGKRNL_ADAPTER Adapter;
+    PDXGKRNL_DEVICE Device;
     NTSTATUS         Status;
 
     PAGED_CODE();
 
-    Adapter = Context->Device->Adapter;
+    Device = Context->Device;
+    Adapter = Device->Adapter;
 
-    DXGKRNL_TRACE("DxgkpDestroyContextNoLock: Context %p hMiniport %p\n",
-                  Context, Context->hMiniportContext);
+    ASSERT(InterlockedCompareExchange(&Context->TeardownClaimed, 1, 1) == 1);
+    InterlockedExchange(&Context->Destroying, 1);
+    DxgkRemoveContextHandleObject(Context);
+    DxgkpWaitForContextReferences(Context);
 
-    if (Context->hMiniportContext != NULL &&
-        Adapter->MiniportContext->InitData.s.DxgkDdiDestroyContext != NULL)
+    DXGKRNL_TRACE("DxgkpDestroyContextNoLock: Context %p hMiniport %p\n", Context, Context->hMiniportContext);
+
+    Status = DxgkpDestroyMiniportContext(Adapter, Context->hMiniportContext);
+    if (!NT_SUCCESS(Status))
     {
-        Status = Adapter->MiniportContext->InitData.s.DxgkDdiDestroyContext(
-                     Context->hMiniportContext);
-        if (!NT_SUCCESS(Status))
-        {
-            DXGKRNL_ERR("DxgkpDestroyContextNoLock: DxgkDdiDestroyContext "
-                        "failed 0x%08lX\n", Status);
-        }
+        DXGKRNL_ERR("DxgkpDestroyContextNoLock: DxgkDdiDestroyContext failed 0x%08lX\n", Status);
     }
 
 #if DBG
@@ -366,6 +436,7 @@ DxgkpDestroyContextNoLock(
 #endif
 
     ExFreePoolWithTag(Context, TAG_DXGK_CONTEXT);
+    DxgkDereferenceDevice(Device);
 }
 
 /*
@@ -418,37 +489,31 @@ DxgkpQueryFence(
 /*
  * DxgkContextInit
  *
- * Called once from DriverEntry.  Seeds the handle cookie from the performance
- * counter and registers DxgkProcessCleanup via PsSetCreateProcessNotifyRoutine.
+ * Initializes the typed handle namespace and registers DxgkProcessCleanup via
+ * PsSetCreateProcessNotifyRoutineEx.
  */
 NTSTATUS
 DxgkContextInit(VOID)
 {
-    LARGE_INTEGER Counter;
     NTSTATUS      Status;
 
     PAGED_CODE();
 
     DXGKRNL_TRACE("DxgkContextInit: enter\n");
 
-    Counter = KeQueryPerformanceCounter(NULL);
+    ExInitializeFastMutex(&DxgkProcessListLock);
+    InitializeListHead(&DxgkProcessListHead);
 
-    /*
-     * 32-bit cookie from the lower and upper halves of the counter XOR'd
-     * together.  Bit 0 cleared to preserve the even-address invariant.
-     */
-    DxgkHandleCookie32 = (ULONG)(Counter.LowPart ^ Counter.HighPart) & ~1UL;
-    if (DxgkHandleCookie32 == 0)
-        DxgkHandleCookie32 = 0xDEADBEEEUL & ~1UL;
-
-    DXGKRNL_TRACE("DxgkContextInit: handle cookie = 0x%08lX\n",
-                  DxgkHandleCookie32);
+    Status = DxgkHandleManagerInitialize();
+    if (!NT_SUCCESS(Status))
+        return Status;
 
     Status = PsSetCreateProcessNotifyRoutineEx(DxgkProcessCleanup, FALSE);
     if (!NT_SUCCESS(Status))
     {
         DXGKRNL_ERR("DxgkContextInit: PsSetCreateProcessNotifyRoutineEx "
                     "failed 0x%08lX\n", Status);
+        DxgkHandleManagerUninitialize();
         return Status;
     }
 
@@ -475,6 +540,7 @@ DxgkContextUninit(VOID)
         DxgkProcessNotifyRegistered = FALSE;
         DXGKRNL_TRACE("DxgkContextUninit: process notify deregistered\n");
     }
+    DxgkHandleManagerUninitialize();
 }
 
 /*
@@ -500,10 +566,7 @@ DxgkCreateDevice(
 
     PAGED_CODE();
 
-    DXGKRNL_TRACE("DxgkCreateDevice: pAdapter=%p Flags=0x%08X\n",
-                  pCreateDevice->pAdapter,
-                  (UINT)(pCreateDevice->Flags.LegacyMode |
-                         (pCreateDevice->Flags.RequestVSync << 1)));
+    DXGKRNL_TRACE("DxgkCreateDevice: pAdapter=%p Flags=0x%08X\n", pCreateDevice->pAdapter, (UINT)(pCreateDevice->Flags.LegacyMode | (pCreateDevice->Flags.RequestVSync << 1)));
 
     /*
      * Kernel-mode callers set pAdapter to the raw DXGKRNL_ADAPTER pointer.
@@ -511,21 +574,19 @@ DxgkCreateDevice(
      */
     Adapter = (PDXGKRNL_ADAPTER)pCreateDevice->pAdapter;
 
-    if (Adapter == NULL || !DxgkpValidateAdapter(Adapter))
+    if (Adapter == NULL || !DxgkReferenceAdapterObject(Adapter))
     {
         DXGKRNL_ERR("DxgkCreateDevice: invalid adapter %p\n", Adapter);
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
     }
 
     /* --- Allocate the device -------------------------------------------- */
 
-    Device = (PDXGKRNL_DEVICE)ExAllocatePoolWithTag(NonPagedPool,
-                                                     sizeof(DXGKRNL_DEVICE),
-                                                     TAG_DXGK_DEVICE);
+    Device = (PDXGKRNL_DEVICE)ExAllocatePoolWithTag(NonPagedPool, sizeof(DXGKRNL_DEVICE), TAG_DXGK_DEVICE);
     if (Device == NULL)
     {
-        DXGKRNL_ERR("DxgkCreateDevice: pool alloc failed (%Iu bytes)\n",
-                    sizeof(DXGKRNL_DEVICE));
+        DXGKRNL_ERR("DxgkCreateDevice: pool alloc failed (%Iu bytes)\n", sizeof(DXGKRNL_DEVICE));
+        DxgkDereferenceAdapter(Adapter);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -536,42 +597,39 @@ DxgkCreateDevice(
     Device->Adapter = Adapter;
     Device->OwnerProcess = PsGetCurrentProcess();
     Device->Flags   = pCreateDevice->Flags;
+    Device->ReferenceCount = 1;
 
     InitializeListHead(&Device->ContextListHead);
     InitializeListHead(&Device->SyncObjListHead);
     InitializeListHead(&Device->DeviceListEntry);
     ExInitializeFastMutex(&Device->DeviceMutex);
+    KeInitializeEvent(&Device->ReferencesDrainedEvent, NotificationEvent, FALSE);
 
-    /*
-     * Encode the device handle (XOR of low 32 bits of pointer with cookie).
-     * Store it in Device->Handle for round-trip validation.
-     */
-    Device->Handle = DxgkpEncodeHandle(Device);
-
-    DXGKRNL_TRACE("DxgkCreateDevice: Device %p handle 0x%08X\n",
-                  Device, Device->Handle);
+    Status = DxgkpAcquireProcessRecord(Adapter, Device->OwnerProcess, &Device->ProcessRecord);
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePoolWithTag(Device, TAG_DXGK_DEVICE);
+        DxgkDereferenceAdapter(Adapter);
+        return Status;
+    }
 
     /* --- Call DxgkDdiCreateDevice ---------------------------------------- */
 
     RtlZeroMemory(&CreateDeviceArg, sizeof(CreateDeviceArg));
     CreateDeviceArg.hDevice             = (HANDLE)Device; /* raw pointer as token */
-    /*
-     * D3DKMT_CREATEDEVICEFLAGS (no .Value union) → DXGK_CREATEDEVICEFLAGS (.Value union).
-     * Copy the two defined bits explicitly.
-     */
-    CreateDeviceArg.Flags.LegacyMode    = pCreateDevice->Flags.LegacyMode;
-    CreateDeviceArg.Flags.RequestVSync  = pCreateDevice->Flags.RequestVSync;
+    /* UMD D3DKMT flags are not bit-compatible with the KMD device flags. */
+    CreateDeviceArg.Flags.Value         = 0;
+    CreateDeviceArg.hKmdProcess         = Device->ProcessRecord->hMiniportProcess;
 
     if (Adapter->MiniportContext->InitData.s.DxgkDdiCreateDevice != NULL)
     {
-        Status = Adapter->MiniportContext->InitData.s.DxgkDdiCreateDevice(
-                     Adapter->MiniportDeviceContext,
-                     &CreateDeviceArg);
+        Status = Adapter->MiniportContext->InitData.s.DxgkDdiCreateDevice(Adapter->MiniportDeviceContext, &CreateDeviceArg);
         if (!NT_SUCCESS(Status))
         {
-            DXGKRNL_ERR("DxgkCreateDevice: DxgkDdiCreateDevice failed "
-                        "0x%08lX\n", Status);
+            DXGKRNL_ERR("DxgkCreateDevice: DxgkDdiCreateDevice failed 0x%08lX\n", Status);
+            DxgkDereferenceProcessRecord(Device->ProcessRecord);
             ExFreePoolWithTag(Device, TAG_DXGK_DEVICE);
+            DxgkDereferenceAdapter(Adapter);
             return Status;
         }
 
@@ -582,27 +640,176 @@ DxgkCreateDevice(
          */
         Device->hMiniportDevice = CreateDeviceArg.hDevice;
 
-        DXGKRNL_TRACE("DxgkCreateDevice: miniport device handle %p\n",
-                      Device->hMiniportDevice);
+        DXGKRNL_TRACE("DxgkCreateDevice: miniport device handle %p\n", Device->hMiniportDevice);
     }
     else
     {
         DXGKRNL_WARN("DxgkCreateDevice: miniport has no DxgkDdiCreateDevice\n");
+        DxgkDereferenceProcessRecord(Device->ProcessRecord);
         ExFreePoolWithTag(Device, TAG_DXGK_DEVICE);
+        DxgkDereferenceAdapter(Adapter);
         return STATUS_NOT_SUPPORTED;
     }
 
-    /* --- Link into adapter's device list --------------------------------- */
+    Status = DxgkCreateDeviceHandle(Device, Device->OwnerProcess, &Device->Handle);
+    if (!NT_SUCCESS(Status))
+    {
+        (VOID)DxgkpDestroyMiniportDevice(Adapter, Device->hMiniportDevice);
+        DxgkDereferenceProcessRecord(Device->ProcessRecord);
+        ExFreePoolWithTag(Device, TAG_DXGK_DEVICE);
+        DxgkDereferenceAdapter(Adapter);
+        return Status;
+    }
+
+    DXGKRNL_TRACE("DxgkCreateDevice: Device %p handle 0x%08X\n", Device, Device->Handle);
 
     ExAcquireFastMutex(&Adapter->AdapterMutex);
+    if (InterlockedCompareExchange(&Adapter->RundownStarted, 0, 0) != 0 || Adapter->State != DxgkAdapterStateStarted || InterlockedCompareExchange(&Device->Destroying, 0, 0) != 0)
+    {
+        ExReleaseFastMutex(&Adapter->AdapterMutex);
+        DxgkRemoveDeviceHandleObject(Device);
+        (VOID)DxgkpDestroyMiniportDevice(Adapter, Device->hMiniportDevice);
+        DxgkDereferenceProcessRecord(Device->ProcessRecord);
+        ExFreePoolWithTag(Device, TAG_DXGK_DEVICE);
+        DxgkDereferenceAdapter(Adapter);
+        return STATUS_DELETE_PENDING;
+    }
     InsertTailList(&Adapter->DeviceListHead, &Device->DeviceListEntry);
     ExReleaseFastMutex(&Adapter->AdapterMutex);
 
     pCreateDevice->hDevice = Device->Handle;
 
-    DXGKRNL_TRACE("DxgkCreateDevice: success hDevice=0x%08X\n",
-                  pCreateDevice->hDevice);
+    DXGKRNL_TRACE("DxgkCreateDevice: success hDevice=0x%08X\n", pCreateDevice->hDevice);
     return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+DxgkpDetachOwnedDeviceByHandle(
+    _In_ D3DKMT_HANDLE Handle,
+    _In_ PEPROCESS OwnerProcess,
+    _Out_ PDXGKRNL_ADAPTER *OutAdapter,
+    _Out_ PDXGKRNL_DEVICE *OutDevice)
+{
+    PDXGKRNL_DEVICE Device;
+    NTSTATUS Status;
+
+    *OutAdapter = NULL;
+    *OutDevice = NULL;
+    Status = DxgkDetachDeviceHandle(Handle, OwnerProcess, &Device);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    ExAcquireFastMutex(&Device->Adapter->AdapterMutex);
+    if (!IsListEmpty(&Device->DeviceListEntry))
+    {
+        RemoveEntryList(&Device->DeviceListEntry);
+        InitializeListHead(&Device->DeviceListEntry);
+    }
+    ExReleaseFastMutex(&Device->Adapter->AdapterMutex);
+    *OutAdapter = Device->Adapter;
+    *OutDevice = Device;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+DxgkpDestroyDetachedDevice(
+    _In_ _Post_invalid_ PDXGKRNL_DEVICE Device)
+{
+    PDXGKRNL_ADAPTER Adapter = Device->Adapter;
+    NTSTATUS Status;
+    NTSTATUS FinalStatus = STATUS_SUCCESS;
+
+    ASSERT(InterlockedCompareExchange(&Device->TeardownClaimed, 1, 1) == 1);
+    InterlockedExchange(&Device->Destroying, 1);
+    DxgkRemoveDeviceHandleObject(Device);
+    DxgkVidPnCleanupDeviceOwners(Device);
+    DxgkD3dkmtDeviceCleanup(Device);
+    DxgkCleanupDeviceSynchronizationObjects(Device);
+
+    for (;;)
+    {
+        PDXGKRNL_CONTEXT Context;
+        PLIST_ENTRY Entry;
+        BOOLEAN OwnsTeardown;
+
+        ExAcquireFastMutex(&Device->DeviceMutex);
+        if (IsListEmpty(&Device->ContextListHead))
+        {
+            ExReleaseFastMutex(&Device->DeviceMutex);
+            break;
+        }
+        Entry = Device->ContextListHead.Flink;
+        Context = CONTAINING_RECORD(Entry, DXGKRNL_CONTEXT, ContextListEntry);
+        OwnsTeardown = DxgkTryClaimTeardown(&Context->TeardownClaimed);
+        InterlockedExchange(&Context->Destroying, 1);
+        RemoveEntryList(Entry);
+        InitializeListHead(Entry);
+        ExReleaseFastMutex(&Device->DeviceMutex);
+        if (!OwnsTeardown)
+        {
+            /* The direct owner retains this Device until its final release. */
+            continue;
+        }
+        DxgkRemoveContextHandleObject(Context);
+        DxgkpDestroyContextNoLock(Context);
+    }
+
+    DxgkpWaitForDeviceReferences(Device);
+    DxgkVidMmCleanupDeviceAllocations(Device);
+    Status = DxgkpDestroyMiniportDevice(Adapter, Device->hMiniportDevice);
+    if (!NT_SUCCESS(Status))
+        FinalStatus = Status;
+
+#if DBG
+    Device->Handle = 0xDEADDEAD;
+    Device->hMiniportDevice = (HANDLE)(ULONG_PTR)0xDEADDEADDEADDEADULL;
+#endif
+
+    DxgkDereferenceProcessRecord(Device->ProcessRecord);
+    ExFreePoolWithTag(Device, TAG_DXGK_DEVICE);
+    DxgkDereferenceAdapter(Adapter);
+    return FinalStatus;
+}
+
+VOID
+DxgkCleanupAdapterDevices(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PDXGKRNL_DEVICE DetachedHead = NULL;
+
+    if (Adapter == NULL)
+        return;
+    DxgkD3dkmtAdapterCleanup(Adapter);
+    DxgkPurgeAdapterHandles(Adapter);
+    ExAcquireFastMutex(&Adapter->AdapterMutex);
+    while (!IsListEmpty(&Adapter->DeviceListHead))
+    {
+        PLIST_ENTRY Entry = Adapter->DeviceListHead.Flink;
+        PDXGKRNL_DEVICE Device = CONTAINING_RECORD(Entry, DXGKRNL_DEVICE, DeviceListEntry);
+        BOOLEAN OwnsTeardown = DxgkTryClaimTeardown(&Device->TeardownClaimed);
+
+        InterlockedExchange(&Device->Destroying, 1);
+        RemoveEntryList(Entry);
+        if (OwnsTeardown)
+        {
+            Device->DeviceListEntry.Flink = (PLIST_ENTRY)DetachedHead;
+            DetachedHead = Device;
+        }
+        else
+        {
+            /* The direct owner retains Adapter rundown through this Device. */
+            InitializeListHead(&Device->DeviceListEntry);
+        }
+    }
+    ExReleaseFastMutex(&Adapter->AdapterMutex);
+
+    while (DetachedHead != NULL)
+    {
+        PDXGKRNL_DEVICE Device = DetachedHead;
+
+        DetachedHead = (PDXGKRNL_DEVICE)Device->DeviceListEntry.Flink;
+        InitializeListHead(&Device->DeviceListEntry);
+        DxgkpDestroyDetachedDevice(Device);
+    }
 }
 
 /*
@@ -620,97 +827,26 @@ DxgkDestroyDevice(
 {
     PDXGKRNL_ADAPTER Adapter;
     PDXGKRNL_DEVICE  Device;
-    PLIST_ENTRY      Entry;
     NTSTATUS         Status;
-    NTSTATUS         FinalStatus = STATUS_SUCCESS;
 
     PAGED_CODE();
 
-    DXGKRNL_TRACE("DxgkDestroyDevice: hDevice=0x%08X\n",
-                  pDestroyDevice->hDevice);
+    DXGKRNL_TRACE("DxgkDestroyDevice: hDevice=0x%08X\n", pDestroyDevice->hDevice);
 
     /* --- Validate handle ------------------------------------------------- */
 
-    Device = DxgkpFindDeviceByHandle(pDestroyDevice->hDevice, &Adapter);
-    if (Device == NULL)
+    Status = DxgkpDetachOwnedDeviceByHandle(pDestroyDevice->hDevice, PsGetCurrentProcess(), &Adapter, &Device);
+    if (!NT_SUCCESS(Status))
     {
-        DXGKRNL_ERR("DxgkDestroyDevice: invalid handle 0x%08X\n",
-                    pDestroyDevice->hDevice);
-        return STATUS_INVALID_HANDLE;
+        DXGKRNL_ERR("DxgkDestroyDevice: invalid handle 0x%08X\n", pDestroyDevice->hDevice);
+        return STATUS_INVALID_PARAMETER;
     }
 
-    DXGKRNL_TRACE("DxgkDestroyDevice: Device %p on Adapter %p\n",
-                  Device, Adapter);
+    DXGKRNL_TRACE("DxgkDestroyDevice: Device %p on Adapter %p\n", Device, Adapter);
 
-    /* --- Unlink from adapter's device list before destroying contexts ---- */
-
-    /*
-     * Remove from the list first so that DxgkProcessCleanup cannot also
-     * find and destroy this device concurrently.
-     */
-    ExAcquireFastMutex(&Adapter->AdapterMutex);
-    RemoveEntryList(&Device->DeviceListEntry);
-    InitializeListHead(&Device->DeviceListEntry);
-    ExReleaseFastMutex(&Adapter->AdapterMutex);
-
-    /* --- Tear down leaked sync objects before freeing the device --------- */
-
-    DxgkCleanupDeviceSynchronizationObjects(Device);
-
-    /* --- Destroy all contexts ------------------------------------------- */
-
-    /*
-     * Pop contexts one at a time: acquire DeviceMutex, remove head, release
-     * mutex, then call the miniport DDI (which may block at PASSIVE_LEVEL).
-     */
-    for (;;)
-    {
-        PDXGKRNL_CONTEXT Context;
-
-        ExAcquireFastMutex(&Device->DeviceMutex);
-
-        if (IsListEmpty(&Device->ContextListHead))
-        {
-            ExReleaseFastMutex(&Device->DeviceMutex);
-            break;
-        }
-
-        Entry = RemoveHeadList(&Device->ContextListHead);
-        InitializeListHead(Entry); /* self-loop: double-remove is a no-op */
-        ExReleaseFastMutex(&Device->DeviceMutex);
-
-        Context = CONTAINING_RECORD(Entry, DXGKRNL_CONTEXT, ContextListEntry);
-
-        DXGKRNL_TRACE("DxgkDestroyDevice: destroying Context %p\n", Context);
-        DxgkpDestroyContextNoLock(Context);
-    }
-
-    /* --- Call DxgkDdiDestroyDevice --------------------------------------- */
-
-    if (Device->hMiniportDevice != NULL &&
-        Adapter->MiniportContext->InitData.s.DxgkDdiDestroyDevice != NULL)
-    {
-        Status = Adapter->MiniportContext->InitData.s.DxgkDdiDestroyDevice(
-                     Device->hMiniportDevice);
-        if (!NT_SUCCESS(Status))
-        {
-            DXGKRNL_ERR("DxgkDestroyDevice: DxgkDdiDestroyDevice failed "
-                        "0x%08lX (continuing)\n", Status);
-            FinalStatus = Status;
-        }
-    }
-
-    /* --- Free the device ------------------------------------------------- */
-
-#if DBG
-    Device->Handle          = 0xDEADDEAD;
-    Device->hMiniportDevice = (HANDLE)(ULONG_PTR)0xDEADDEADDEADDEADULL;
-#endif
-
-    ExFreePoolWithTag(Device, TAG_DXGK_DEVICE);
-
-    DXGKRNL_TRACE("DxgkDestroyDevice: done (0x%08lX)\n", FinalStatus);
-    return FinalStatus;
+    Status = DxgkpDestroyDetachedDevice(Device);
+    DXGKRNL_TRACE("DxgkDestroyDevice: done (0x%08lX)\n", Status);
+    return Status;
 }
 
 /*
@@ -736,31 +872,29 @@ DxgkCreateContext(
 
     PAGED_CODE();
 
-    DXGKRNL_TRACE("DxgkCreateContext: hDevice=0x%08X NodeOrdinal=%u "
-                  "EngineAffinity=0x%08X\n",
-                  pCreateContext->hDevice,
-                  pCreateContext->NodeOrdinal,
-                  pCreateContext->EngineAffinity);
+    DXGKRNL_TRACE("DxgkCreateContext: hDevice=0x%08X NodeOrdinal=%u EngineAffinity=0x%08X\n", pCreateContext->hDevice, pCreateContext->NodeOrdinal, pCreateContext->EngineAffinity);
 
     /* --- Validate device handle ----------------------------------------- */
 
-    Device = DxgkpFindDeviceByHandle(pCreateContext->hDevice, &Adapter);
-    if (Device == NULL)
+    Status = DxgkReferenceOwnedDeviceByHandle(pCreateContext->hDevice, PsGetCurrentProcess(), &Adapter, &Device);
+    if (!NT_SUCCESS(Status))
     {
-        DXGKRNL_ERR("DxgkCreateContext: invalid device handle 0x%08X\n",
-                    pCreateContext->hDevice);
-        return STATUS_INVALID_HANDLE;
+        DXGKRNL_ERR("DxgkCreateContext: invalid device handle 0x%08X\n", pCreateContext->hDevice);
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (pCreateContext->NodeOrdinal >= Adapter->NodeCount)
+    {
+        DxgkDereferenceDevice(Device);
+        return STATUS_INVALID_PARAMETER;
     }
 
     /* --- Allocate context ------------------------------------------------ */
 
-    Context = (PDXGKRNL_CONTEXT)ExAllocatePoolWithTag(NonPagedPool,
-                                                       sizeof(DXGKRNL_CONTEXT),
-                                                       TAG_DXGK_CONTEXT);
+    Context = (PDXGKRNL_CONTEXT)ExAllocatePoolWithTag(NonPagedPool, sizeof(DXGKRNL_CONTEXT), TAG_DXGK_CONTEXT);
     if (Context == NULL)
     {
-        DXGKRNL_ERR("DxgkCreateContext: pool alloc failed (%Iu bytes)\n",
-                    sizeof(DXGKRNL_CONTEXT));
+        DXGKRNL_ERR("DxgkCreateContext: pool alloc failed (%Iu bytes)\n", sizeof(DXGKRNL_CONTEXT));
+        DxgkpDereferenceDevice(Device);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -772,12 +906,10 @@ DxgkCreateContext(
     Context->NodeOrdinal    = pCreateContext->NodeOrdinal;
     Context->EngineAffinity = pCreateContext->EngineAffinity;
     Context->SchedulingPriority = 0;
+    Context->ReferenceCount = 1;
 
     InitializeListHead(&Context->ContextListEntry);
-    Context->Handle = DxgkpEncodeHandle(Context);
-
-    DXGKRNL_TRACE("DxgkCreateContext: Context %p handle 0x%08X\n",
-                  Context, Context->Handle);
+    KeInitializeEvent(&Context->ReferencesDrainedEvent, NotificationEvent, FALSE);
 
     /* --- Call DxgkDdiCreateContext --------------------------------------- */
 
@@ -798,26 +930,19 @@ DxgkCreateContext(
 
     if (Adapter->MiniportContext->InitData.s.DxgkDdiCreateContext != NULL)
     {
-        Status = Adapter->MiniportContext->InitData.s.DxgkDdiCreateContext(
-                     Device->hMiniportDevice,
-                     &CreateContextArg);
+        Status = Adapter->MiniportContext->InitData.s.DxgkDdiCreateContext(Device->hMiniportDevice, &CreateContextArg);
         if (!NT_SUCCESS(Status))
         {
-            DXGKRNL_ERR("DxgkCreateContext: DxgkDdiCreateContext failed "
-                        "0x%08lX\n", Status);
+            DXGKRNL_ERR("DxgkCreateContext: DxgkDdiCreateContext failed 0x%08lX\n", Status);
             ExFreePoolWithTag(Context, TAG_DXGK_CONTEXT);
+            DxgkpDereferenceDevice(Device);
             return Status;
         }
 
         Context->hMiniportContext = CreateContextArg.hContext;
+        Context->ContextInfo = CreateContextArg.ContextInfo;
 
-        DXGKRNL_TRACE("DxgkCreateContext: miniport ctx %p "
-                      "DmaBufferSize=%u AllocationListSize=%u "
-                      "PatchLocationListSize=%u\n",
-                      Context->hMiniportContext,
-                      CreateContextArg.ContextInfo.DmaBufferSize,
-                      CreateContextArg.ContextInfo.AllocationListSize,
-                      CreateContextArg.ContextInfo.PatchLocationListSize);
+        DXGKRNL_TRACE("DxgkCreateContext: miniport ctx %p DmaBufferSize=%u AllocationListSize=%u PatchLocationListSize=%u\n", Context->hMiniportContext, CreateContextArg.ContextInfo.DmaBufferSize, CreateContextArg.ContextInfo.AllocationListSize, CreateContextArg.ContextInfo.PatchLocationListSize);
 
         /*
          * Propagate DMA-buffer geometry to the caller so the UMD can
@@ -825,30 +950,158 @@ DxgkCreateContext(
          * pPatchLocationList (actual mapped addresses) are set by the DMA
          * submission path in dxgmms1 / dma.c; for now they remain NULL.
          */
-        pCreateContext->CommandBufferSize     =
-            CreateContextArg.ContextInfo.DmaBufferSize;
-        pCreateContext->AllocationListSize    =
-            CreateContextArg.ContextInfo.AllocationListSize;
-        pCreateContext->PatchLocationListSize =
-            CreateContextArg.ContextInfo.PatchLocationListSize;
+        pCreateContext->CommandBufferSize = CreateContextArg.ContextInfo.DmaBufferSize;
+        pCreateContext->AllocationListSize = CreateContextArg.ContextInfo.AllocationListSize;
+        pCreateContext->PatchLocationListSize = CreateContextArg.ContextInfo.PatchLocationListSize;
     }
     else
     {
         DXGKRNL_WARN("DxgkCreateContext: miniport has no DxgkDdiCreateContext\n");
         ExFreePoolWithTag(Context, TAG_DXGK_CONTEXT);
+        DxgkpDereferenceDevice(Device);
         return STATUS_NOT_SUPPORTED;
     }
 
-    /* --- Link into device's context list --------------------------------- */
+    Status = DxgkCreateContextHandle(Context, Device->OwnerProcess, &Context->Handle);
+    if (!NT_SUCCESS(Status))
+    {
+        (VOID)DxgkpDestroyMiniportContext(Adapter, Context->hMiniportContext);
+        ExFreePoolWithTag(Context, TAG_DXGK_CONTEXT);
+        DxgkDereferenceDevice(Device);
+        return Status;
+    }
+
+    DXGKRNL_TRACE("DxgkCreateContext: Context %p handle 0x%08X\n", Context, Context->Handle);
 
     ExAcquireFastMutex(&Device->DeviceMutex);
+    if (InterlockedCompareExchange(&Device->Destroying, 0, 0) != 0)
+    {
+        ExReleaseFastMutex(&Device->DeviceMutex);
+        DxgkRemoveContextHandleObject(Context);
+        (VOID)DxgkpDestroyMiniportContext(Adapter, Context->hMiniportContext);
+        ExFreePoolWithTag(Context, TAG_DXGK_CONTEXT);
+        DxgkDereferenceDevice(Device);
+        return STATUS_DELETE_PENDING;
+    }
     InsertTailList(&Device->ContextListHead, &Context->ContextListEntry);
     ExReleaseFastMutex(&Device->DeviceMutex);
 
     pCreateContext->hContext = Context->Handle;
 
-    DXGKRNL_TRACE("DxgkCreateContext: success hContext=0x%08X\n",
-                  pCreateContext->hContext);
+    DXGKRNL_TRACE("DxgkCreateContext: success hContext=0x%08X\n", pCreateContext->hContext);
+    return STATUS_SUCCESS;
+}
+
+/*
+ * D3DKMTCreateContextVirtual is a thunk-layer entry point, not a distinct
+ * miniport DDI. The WDDM 2.0 contract uses DxgkDdiCreateContext with the
+ * VirtualAddressing KMD flag set, then submits through
+ * DxgkDdiSubmitCommandVirtual.
+ */
+NTSTATUS
+NTAPI
+DxgkCreateContextVirtual(
+    _Inout_ D3DKMT_CREATECONTEXTVIRTUAL *pCreateContext)
+{
+    PDXGKRNL_ADAPTER Adapter;
+    PDXGKRNL_DEVICE Device;
+    PDXGKRNL_CONTEXT Context;
+    DXGKARG_CREATECONTEXT CreateContextArg;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (pCreateContext == NULL || (pCreateContext->Flags.Value & ~RXGK_CREATECONTEXTVIRTUAL_SUPPORTED_FLAGS) != 0)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = DxgkReferenceOwnedDeviceByHandle(pCreateContext->hDevice, PsGetCurrentProcess(), &Adapter, &Device);
+    if (!NT_SUCCESS(Status))
+        return STATUS_INVALID_PARAMETER;
+
+    if (pCreateContext->NodeOrdinal >= Adapter->NodeCount || Adapter->MiniportContext->InitData.s.Version < DXGKDDI_INTERFACE_VERSION_WDDM2_0 || DXGK_CB_FULL(Adapter, DxgkDdiCreateContext) == NULL || DXGK_CB_FULL(Adapter, DxgkDdiDestroyContext) == NULL || DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommandVirtual) == NULL)
+    {
+        DxgkpDereferenceDevice(Device);
+        return STATUS_NOT_SUPPORTED;
+    }
+    if (!pCreateContext->Flags.NullRendering && !DxgkGpuVaPageTableReady(Adapter, Device->ProcessRecord))
+    {
+        DxgkpDereferenceDevice(Device);
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    Context = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Context), TAG_DXGK_CONTEXT);
+    if (Context == NULL)
+    {
+        DxgkpDereferenceDevice(Device);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    RtlZeroMemory(Context, sizeof(*Context));
+    Context->Device = Device;
+    Context->NodeOrdinal = pCreateContext->NodeOrdinal;
+    Context->EngineAffinity = pCreateContext->EngineAffinity;
+    Context->SchedulingPriority = 0;
+    Context->VirtualAddressing = TRUE;
+    Context->UserModeCreateFlags = pCreateContext->Flags;
+    Context->ReferenceCount = 1;
+    InitializeListHead(&Context->ContextListEntry);
+    KeInitializeEvent(&Context->ReferencesDrainedEvent, NotificationEvent, FALSE);
+
+    RtlZeroMemory(&CreateContextArg, sizeof(CreateContextArg));
+    CreateContextArg.hContext = (HANDLE)Context;
+    CreateContextArg.NodeOrdinal = pCreateContext->NodeOrdinal;
+    CreateContextArg.EngineAffinity = pCreateContext->EngineAffinity;
+    CreateContextArg.Flags.Value = 0;
+    CreateContextArg.Flags.VirtualAddressing = 1;
+    CreateContextArg.pPrivateDriverData = pCreateContext->pPrivateDriverData;
+    CreateContextArg.PrivateDriverDataSize = pCreateContext->PrivateDriverDataSize;
+
+    Status = DXGK_CB_FULL(Adapter, DxgkDdiCreateContext)(Device->hMiniportDevice, &CreateContextArg);
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePoolWithTag(Context, TAG_DXGK_CONTEXT);
+        DxgkpDereferenceDevice(Device);
+        return Status;
+    }
+
+    Context->hMiniportContext = CreateContextArg.hContext;
+    Context->ContextInfo = CreateContextArg.ContextInfo;
+    if (pCreateContext->Flags.NullRendering)
+        Status = STATUS_SUCCESS;
+    else
+        Status = DxgkGpuVaSetRootPageTable(Adapter, Device->ProcessRecord, Context);
+
+    if (!NT_SUCCESS(Status))
+    {
+        (VOID)DxgkpDestroyMiniportContext(Adapter, Context->hMiniportContext);
+        ExFreePoolWithTag(Context, TAG_DXGK_CONTEXT);
+        DxgkpDereferenceDevice(Device);
+        return Status;
+    }
+
+    Status = DxgkCreateContextHandle(Context, Device->OwnerProcess, &Context->Handle);
+    if (!NT_SUCCESS(Status))
+    {
+        (VOID)DxgkpDestroyMiniportContext(Adapter, Context->hMiniportContext);
+        ExFreePoolWithTag(Context, TAG_DXGK_CONTEXT);
+        DxgkDereferenceDevice(Device);
+        return Status;
+    }
+
+    ExAcquireFastMutex(&Device->DeviceMutex);
+    if (InterlockedCompareExchange(&Device->Destroying, 0, 0) != 0)
+    {
+        ExReleaseFastMutex(&Device->DeviceMutex);
+        DxgkRemoveContextHandleObject(Context);
+        (VOID)DxgkpDestroyMiniportContext(Adapter, Context->hMiniportContext);
+        ExFreePoolWithTag(Context, TAG_DXGK_CONTEXT);
+        DxgkpDereferenceDevice(Device);
+        return STATUS_DELETE_PENDING;
+    }
+    InsertTailList(&Device->ContextListHead, &Context->ContextListEntry);
+    ExReleaseFastMutex(&Device->DeviceMutex);
+
+    pCreateContext->hContext = Context->Handle;
     return STATUS_SUCCESS;
 }
 
@@ -865,42 +1118,31 @@ NTAPI
 DxgkDestroyContext(
     _In_ D3DKMT_DESTROYCONTEXT *pDestroyContext)
 {
-    PDXGKRNL_ADAPTER Adapter;
-    PDXGKRNL_DEVICE  Device;
     PDXGKRNL_CONTEXT Context;
+    PDXGKRNL_DEVICE Device;
+    NTSTATUS Status;
 
     PAGED_CODE();
 
-    DXGKRNL_TRACE("DxgkDestroyContext: hContext=0x%08X\n",
-                  pDestroyContext->hContext);
+    DXGKRNL_TRACE("DxgkDestroyContext: hContext=0x%08X\n", pDestroyContext->hContext);
 
     /* --- Validate handle ------------------------------------------------- */
 
-    Context = DxgkpFindContextByHandle(pDestroyContext->hContext,
-                                       &Adapter, &Device);
-    if (Context == NULL)
+    Status = DxgkpDetachOwnedContextByHandle(pDestroyContext->hContext, PsGetCurrentProcess(), &Context);
+    if (!NT_SUCCESS(Status))
     {
-        DXGKRNL_ERR("DxgkDestroyContext: invalid handle 0x%08X\n",
-                    pDestroyContext->hContext);
-        return STATUS_INVALID_HANDLE;
+        DXGKRNL_ERR("DxgkDestroyContext: invalid handle 0x%08X\n", pDestroyContext->hContext);
+        return STATUS_INVALID_PARAMETER;
     }
 
-    DXGKRNL_TRACE("DxgkDestroyContext: Context %p on Device %p\n",
-                  Context, Device);
-
-    /* --- Remove from device's context list ------------------------------ */
-
-    ExAcquireFastMutex(&Device->DeviceMutex);
-    RemoveEntryList(&Context->ContextListEntry);
-    InitializeListHead(&Context->ContextListEntry);
-    ExReleaseFastMutex(&Device->DeviceMutex);
+    Device = Context->Device;
+    DXGKRNL_TRACE("DxgkDestroyContext: Context %p on Device %p\n", Context, Context->Device);
 
     /* --- Call miniport destroy and free ---------------------------------- */
 
     DxgkpDestroyContextNoLock(Context);
 
-    DXGKRNL_TRACE("DxgkDestroyContext: done hContext=0x%08X\n",
-                  pDestroyContext->hContext);
+    DXGKRNL_TRACE("DxgkDestroyContext: done hContext=0x%08X\n", pDestroyContext->hContext);
     return STATUS_SUCCESS;
 }
 
@@ -910,19 +1152,9 @@ DxgkDestroyContext(
  * PCREATE_PROCESS_NOTIFY_ROUTINE_EX callback.  Invoked at PASSIVE_LEVEL
  * when a process is created (CreateInfo != NULL) or exits (CreateInfo == NULL).
  *
- * On exit (CreateInfo == NULL): walks all adapters and destroys DXGKRNL_DEVICE
- * objects owned by the exiting process.  Ownership is established via the
- * DXGKRNL_PROCESS record linked from each device.
- *
- * NOTE: DXGKRNL_PROCESS integration is pending (dxgkrnl_private.h declares
- * the struct but it is not yet fully wired into device creation).  Once
- * device-to-process linkage is in place, the check below should compare
- * Device->ProcessRecord->Process against the Process argument.
- *
- * Until then this function logs a trace for each device discovered and
- * relies on the D3D runtime enforcing explicit cleanup before process exit.
- * This is safe because DxgkProcessCleanup is still registered — it simply
- * has no devices to destroy in the current implementation.
+ * On exit (CreateInfo == NULL): removes every owned device from the public
+ * handle namespace, waits for transient users, and tears down contexts,
+ * synchronization objects, miniport devices, and the shared miniport process.
  */
 VOID
 NTAPI
@@ -948,105 +1180,54 @@ DxgkProcessCleanup(
      * VADs that ARM3 expects to be gone by this point.
      */
     DxgkVidMmProcessCleanup(Process);
-
-    /*
-     * Snapshot adapters under the global spinlock, then iterate each one
-     * at APC_LEVEL to collect and destroy orphaned devices.
-     */
-    Count = DxgkpSnapshotAdapters(Snapshot);
+    DxgkD3dkmtProcessCleanup(Process);
+    DxgkPurgeProcessHandles(Process);
+    Count = DxgkReferenceStartedAdapters(Snapshot, DXGK_MAX_ADAPTERS);
 
     for (i = 0; i < Count; ++i)
     {
         PDXGKRNL_ADAPTER Adapter = Snapshot[i];
+        PDXGKRNL_DEVICE DetachedHead = NULL;
 
-        /*
-         * Collect devices owned by the dying process from this adapter.
-         * We build a local singly-linked list (reusing DeviceListEntry.Flink
-         * as a next pointer after removing from the doubly-linked list) to
-         * avoid calling the miniport while holding AdapterMutex.
-         */
+        ExAcquireFastMutex(&Adapter->AdapterMutex);
         {
-            PDXGKRNL_DEVICE OrphanHead = NULL;
-            PDXGKRNL_DEVICE OrphanCurr;
+            PLIST_ENTRY Entry = Adapter->DeviceListHead.Flink;
 
-            ExAcquireFastMutex(&Adapter->AdapterMutex);
-
-            DevEntry = Adapter->DeviceListHead.Flink;
-            while (DevEntry != &Adapter->DeviceListHead)
+            while (Entry != &Adapter->DeviceListHead)
             {
-                PLIST_ENTRY     Next   = DevEntry->Flink;
-                /*
-                 * TODO: Replace this stub with the real process-ownership
-                 * test once DXGKRNL_PROCESS is wired into DxgkCreateDevice:
-                 *
-                 *   if (Device->ProcessRecord != NULL &&
-                 *       Device->ProcessRecord->Process == Process)
-                 *   {
-                 *       RemoveEntryList(&Device->DeviceListEntry);
-                 *       Device->DeviceListEntry.Flink = (PLIST_ENTRY)OrphanHead;
-                 *       OrphanHead = Device;
-                 *   }
-                 */
-                DevEntry = Next;
-            }
+                PLIST_ENTRY Next = Entry->Flink;
+                PDXGKRNL_DEVICE Device = CONTAINING_RECORD(Entry, DXGKRNL_DEVICE, DeviceListEntry);
 
-            ExReleaseFastMutex(&Adapter->AdapterMutex);
-
-            /*
-             * Drain the orphan list outside AdapterMutex so miniport DDIs
-             * can run at PASSIVE_LEVEL without holding the mutex.
-             */
-            OrphanCurr = OrphanHead;
-            while (OrphanCurr != NULL)
-            {
-                PDXGKRNL_DEVICE Next = (PDXGKRNL_DEVICE)
-                                       OrphanCurr->DeviceListEntry.Flink;
-                PLIST_ENTRY     CtxEntry;
-
-                /* Destroy all contexts. */
-                for (;;)
+                if (Device->OwnerProcess == Process)
                 {
-                    PDXGKRNL_CONTEXT Ctx;
+                    BOOLEAN OwnsTeardown = DxgkTryClaimTeardown(&Device->TeardownClaimed);
 
-                    ExAcquireFastMutex(&OrphanCurr->DeviceMutex);
-
-                    if (IsListEmpty(&OrphanCurr->ContextListHead))
+                    InterlockedExchange(&Device->Destroying, 1);
+                    RemoveEntryList(&Device->DeviceListEntry);
+                    if (OwnsTeardown)
                     {
-                        ExReleaseFastMutex(&OrphanCurr->DeviceMutex);
-                        break;
+                        Device->DeviceListEntry.Flink = (PLIST_ENTRY)DetachedHead;
+                        DetachedHead = Device;
                     }
-
-                    CtxEntry = RemoveHeadList(&OrphanCurr->ContextListHead);
-                    InitializeListHead(CtxEntry);
-                    ExReleaseFastMutex(&OrphanCurr->DeviceMutex);
-
-                    Ctx = CONTAINING_RECORD(CtxEntry, DXGKRNL_CONTEXT,
-                                            ContextListEntry);
-                    DxgkpDestroyContextNoLock(Ctx);
-                }
-
-                /* Call miniport device destroy. */
-                if (OrphanCurr->hMiniportDevice != NULL &&
-                    Adapter->MiniportContext->InitData.s.DxgkDdiDestroyDevice
-                    != NULL)
-                {
-                    NTSTATUS Status =
-                        Adapter->MiniportContext->InitData.s.DxgkDdiDestroyDevice(
-                            OrphanCurr->hMiniportDevice);
-                    if (!NT_SUCCESS(Status))
+                    else
                     {
-                        DXGKRNL_ERR("DxgkProcessCleanup: DxgkDdiDestroyDevice "
-                                    "failed 0x%08lX\n", Status);
+                        InitializeListHead(&Device->DeviceListEntry);
                     }
                 }
-
-#if DBG
-                OrphanCurr->Handle = 0xDEADDEAD;
-#endif
-                ExFreePoolWithTag(OrphanCurr, TAG_DXGK_DEVICE);
-                OrphanCurr = Next;
+                Entry = Next;
             }
         }
+        ExReleaseFastMutex(&Adapter->AdapterMutex);
+
+        while (DetachedHead != NULL)
+        {
+            PDXGKRNL_DEVICE Device = DetachedHead;
+
+            DetachedHead = (PDXGKRNL_DEVICE)Device->DeviceListEntry.Flink;
+            InitializeListHead(&Device->DeviceListEntry);
+            DxgkpDestroyDetachedDevice(Device);
+        }
+        DxgkDereferenceAdapter(Adapter);
     }
 }
 
