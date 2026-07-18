@@ -505,7 +505,7 @@ IntsDisabled:
 
     /* Check whether the kernel debugger has owed breakpoints to be inserted */
     call KdSetOwedBreakpoints
-    /* We succeeded, return */
+
     jmp PageFaultReturn
 
 PageFaultError:

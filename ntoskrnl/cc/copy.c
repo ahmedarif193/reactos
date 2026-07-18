@@ -482,6 +482,15 @@ CcpEnsureVacbResidentForCopy(
                                  FileOffset,
                                  Length))
     {
+        NTSTATUS Status;
+
+        Status = MmMakeDataSectionResident(SharedCacheMap->FileObject->SectionObjectPointer,
+                                           FileOffset,
+                                           Length,
+                                           &SharedCacheMap->ValidDataLength);
+        if (!NT_SUCCESS(Status))
+            ExRaiseStatus(Status);
+
         return FALSE;
     }
 

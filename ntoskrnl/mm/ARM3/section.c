@@ -3120,6 +3120,12 @@ NtCreateSection(OUT PHANDLE SectionHandle,
         return STATUS_INVALID_PARAMETER_6;
     }
 
+    if (!FileHandle &&
+        ((AllocationAttributes & (SEC_LARGE_PAGES | SEC_COMMIT)) == (SEC_LARGE_PAGES | SEC_COMMIT)))
+    {
+        return STATUS_INVALID_PARAMETER_4;
+    }
+
     /* Now check for valid protection */
     if ((SectionPageProtection & PAGE_NOCACHE) ||
         (SectionPageProtection & PAGE_WRITECOMBINE) ||

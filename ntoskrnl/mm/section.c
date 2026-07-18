@@ -5111,7 +5111,6 @@ MmCreateSection (OUT PVOID  * Section,
 #endif
 
 Exit:
-
     if (FileLock)
         FsRtlReleaseFile(FileObject);
     if (FileObject)

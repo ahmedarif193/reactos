@@ -365,6 +365,70 @@ CcpEnsureBcbResident(
 
 static
 BOOLEAN
+CcpEnsureBcbResident(
+    IN PROS_SHARED_CACHE_MAP SharedCacheMap,
+    IN PINTERNAL_BCB Bcb,
+    IN BOOLEAN Wait,
+    IN BOOLEAN NoRead)
+{
+    LONGLONG CurrentOffset;
+    ULONG Remaining;
+    ULONG VacbOffset;
+
+    CurrentOffset = Bcb->PFCB.MappedFileOffset.QuadPart;
+    Remaining = Bcb->PFCB.MappedLength;
+
+    while (Remaining != 0)
+    {
+        PROS_VACB Vacb;
+        ULONG ChunkLength;
+        BOOLEAN Result;
+        BOOLEAN ExtraReference = FALSE;
+
+        VacbOffset = (ULONG)(CurrentOffset % VACB_MAPPING_GRANULARITY);
+        ChunkLength = min(Remaining, VACB_MAPPING_GRANULARITY - VacbOffset);
+
+        if (ROUND_DOWN(CurrentOffset, VACB_MAPPING_GRANULARITY) == Bcb->Vacb->FileOffset.QuadPart)
+        {
+            Vacb = Bcb->Vacb;
+        }
+        else
+        {
+            NTSTATUS Status;
+
+            Status = CcRosGetVacb(SharedCacheMap,
+                                  ROUND_DOWN(CurrentOffset, VACB_MAPPING_GRANULARITY),
+                                  &Vacb);
+            if (!NT_SUCCESS(Status))
+            {
+                ExRaiseStatus(Status);
+                return FALSE;
+            }
+
+            ExtraReference = TRUE;
+        }
+
+        Result = CcRosEnsureVacbResident(Vacb, Wait, NoRead, VacbOffset, ChunkLength);
+
+        if (ExtraReference)
+        {
+            CcRosReleaseVacb(SharedCacheMap, Vacb, FALSE, FALSE);
+        }
+
+        if (!Result)
+        {
+            return FALSE;
+        }
+
+        CurrentOffset += ChunkLength;
+        Remaining -= ChunkLength;
+    }
+
+    return TRUE;
+}
+
+static
+BOOLEAN
 CcpPinData(
     IN PROS_SHARED_CACHE_MAP SharedCacheMap,
     IN PLARGE_INTEGER FileOffset,
