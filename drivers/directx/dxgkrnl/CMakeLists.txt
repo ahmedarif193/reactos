@@ -20,11 +20,13 @@ add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x5023)
 
 list(APPEND SOURCE
     dxgkrnl.c
+    dxgmms2_client.c
     adapter.c
     legacy.c
     pnp.c
     vidmm.c
     gpuva.c
+    capture.c
     handles.c
     context.c
     dma.c
@@ -42,7 +44,7 @@ add_library(dxgkrnl MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/dxgkrnl.def)
 
 set_module_type(dxgkrnl kernelmodedriver)
-add_importlibs(dxgkrnl ntoskrnl hal)
+add_importlibs(dxgkrnl dxgmms2 ntoskrnl hal)
 add_pch(dxgkrnl dxgkrnl_private.h "${SOURCE}")
 add_cd_file(TARGET dxgkrnl DESTINATION reactos/system32/drivers FOR all)
 

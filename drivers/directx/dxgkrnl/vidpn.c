@@ -198,9 +198,26 @@ static CONST DXGKP_MONITOR_INTERFACE g_MonitorInterface =
 };
 
 /* ========================================================================
- * VidPN source ownership tracking (global, per-adapter)
+ * VidPN source ownership tracking
+ *
+ * A source identifier is only meaningful within one adapter.  Keep one
+ * state object for each adapter that currently has at least one owner rather
+ * than aliasing source zero from every adapter through one global array.
+ * The state object does not need a separate adapter reference: every stored
+ * owner is a live device, and each live device pins its adapter.  Empty state
+ * objects are detached and freed before the last owner can disappear.
  * ====================================================================== */
-static DXGKP_VIDPN_SOURCE_OWNER g_SourceOwners[DXGKP_MAX_SOURCES];
+typedef struct _DXGKP_SOURCE_OWNER_ADAPTER_STATE
+{
+    LIST_ENTRY Entry;
+    PDXGKRNL_ADAPTER Adapter;
+    DXGKP_VIDPN_SOURCE_OWNER Owners[DXGKP_MAX_SOURCES];
+} DXGKP_SOURCE_OWNER_ADAPTER_STATE, *PDXGKP_SOURCE_OWNER_ADAPTER_STATE;
+
+#define DXGKP_MAX_SOURCE_OWNER_OPERATIONS 4096U
+#define TAG_DXGK_SOURCE_OWNER 'OxgD'
+
+static LIST_ENTRY g_SourceOwnerAdapterList;
 static FAST_MUTEX g_SourceOwnerMutex;
 static volatile LONG g_SourceOwnerState = 0;
 
@@ -212,7 +229,7 @@ DxgkpEnsureSourceOwnerMutex(VOID)
     if (State == 0)
     {
         ExInitializeFastMutex(&g_SourceOwnerMutex);
-        RtlZeroMemory(g_SourceOwners, sizeof(g_SourceOwners));
+        InitializeListHead(&g_SourceOwnerAdapterList);
         InterlockedExchange(&g_SourceOwnerState, 2);
         return;
     }
@@ -221,12 +238,108 @@ DxgkpEnsureSourceOwnerMutex(VOID)
         YieldProcessor();
 }
 
+static PDXGKP_SOURCE_OWNER_ADAPTER_STATE
+DxgkpFindSourceOwnerAdapterLocked(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PLIST_ENTRY Entry;
+
+    for (Entry = g_SourceOwnerAdapterList.Flink; Entry != &g_SourceOwnerAdapterList; Entry = Entry->Flink)
+    {
+        PDXGKP_SOURCE_OWNER_ADAPTER_STATE State = CONTAINING_RECORD(Entry, DXGKP_SOURCE_OWNER_ADAPTER_STATE, Entry);
+
+        if (State->Adapter == Adapter)
+            return State;
+    }
+
+    return NULL;
+}
+
+static BOOLEAN
+DxgkpSourceOwnerStateIsEmpty(
+    _In_reads_(DXGKP_MAX_SOURCES) CONST DXGKP_VIDPN_SOURCE_OWNER *Owners)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < DXGKP_MAX_SOURCES; ++Index)
+    {
+        if (Owners[Index].OwnerDevice != NULL)
+            return FALSE;
+    }
+
+    return TRUE;
+}
+
+static NTSTATUS
+DxgkpApplySourceOwnerOperation(
+    _Inout_updates_(DXGKP_MAX_SOURCES) DXGKP_VIDPN_SOURCE_OWNER *Owners,
+    _In_ PDXGKRNL_DEVICE OwnerDevice,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID SourceId,
+    _In_ D3DKMT_VIDPNSOURCEOWNER_TYPE RequestedType)
+{
+    PDXGKP_VIDPN_SOURCE_OWNER Current = &Owners[SourceId];
+
+    if (RequestedType == D3DKMT_VIDPNSOURCEOWNER_UNOWNED)
+    {
+        if (Current->OwnerDevice == OwnerDevice)
+        {
+            Current->OwnerDevice = NULL;
+            Current->OwnerType = D3DKMT_VIDPNSOURCEOWNER_UNOWNED;
+        }
+        return STATUS_SUCCESS;
+    }
+
+    if (RequestedType == D3DKMT_VIDPNSOURCEOWNER_SHARED)
+    {
+        if (Current->OwnerDevice == NULL)
+        {
+            Current->OwnerDevice = OwnerDevice;
+            Current->OwnerType = RequestedType;
+            return STATUS_SUCCESS;
+        }
+        if (Current->OwnerDevice == OwnerDevice && Current->OwnerType == RequestedType)
+            return STATUS_SUCCESS;
+        if (Current->OwnerDevice == OwnerDevice && (Current->OwnerType == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVE || Current->OwnerType == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVEGDI))
+            return STATUS_INVALID_PARAMETER;
+        return STATUS_GRAPHICS_VIDPN_SOURCE_IN_USE;
+    }
+
+    if (RequestedType == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVE || RequestedType == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVEGDI)
+    {
+        if (Current->OwnerDevice == NULL || Current->OwnerType == D3DKMT_VIDPNSOURCEOWNER_SHARED)
+        {
+            Current->OwnerDevice = OwnerDevice;
+            Current->OwnerType = RequestedType;
+            return STATUS_SUCCESS;
+        }
+        if (Current->OwnerDevice == OwnerDevice && Current->OwnerType == RequestedType)
+            return STATUS_SUCCESS;
+        if (Current->OwnerDevice == OwnerDevice)
+            return STATUS_INVALID_PARAMETER;
+        return STATUS_GRAPHICS_VIDPN_SOURCE_IN_USE;
+    }
+
+    if (Current->OwnerDevice == NULL)
+    {
+        Current->OwnerDevice = OwnerDevice;
+        Current->OwnerType = D3DKMT_VIDPNSOURCEOWNER_EMULATED;
+        return STATUS_SUCCESS;
+    }
+    if (Current->OwnerDevice == OwnerDevice && Current->OwnerType == D3DKMT_VIDPNSOURCEOWNER_EMULATED)
+        return STATUS_SUCCESS;
+    if (Current->OwnerDevice == OwnerDevice && (Current->OwnerType == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVE || Current->OwnerType == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVEGDI))
+        return STATUS_INVALID_PARAMETER;
+    return STATUS_GRAPHICS_VIDPN_SOURCE_IN_USE;
+}
+
 /* ========================================================================
  * DxgkpDeviceOwnsVidPnSource
  *
- * Returns TRUE if hDevice currently owns VidPnSourceId (exclusive or shared,
- * via D3DKMTSetVidPnSourceOwner).  The present path uses this to decide whether
- * a present may scan out to the primary: only the source owner drives scanout.
+ * Returns TRUE if hDevice currently has real primary ownership of
+ * VidPnSourceId (SHARED, EXCLUSIVE, or EXCLUSIVEGDI).  EMULATED ownership is
+ * deliberately excluded: it reserves gamma control but has no real primary
+ * ownership.  The present path uses this to decide whether a present may scan
+ * out to the primary.
  * This mirrors Windows, where the desktop compositor owns the primary and an
  * ordinary app present is composited into the app's window rather than
  * overwriting the live desktop.  Without it, any process presenting an
@@ -237,15 +350,36 @@ DxgkpDeviceOwnsVidPnSource(
     _In_ D3DKMT_HANDLE hDevice,
     _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId)
 {
-    BOOLEAN Owns;
+    PDXGKP_SOURCE_OWNER_ADAPTER_STATE State;
+    PDXGKRNL_ADAPTER Adapter = NULL;
+    PDXGKRNL_DEVICE Device;
+    BOOLEAN Owns = FALSE;
 
     if (hDevice == 0 || VidPnSourceId >= DXGKP_MAX_SOURCES)
         return FALSE;
 
+    Device = DxgkLookupDeviceByHandle(hDevice, &Adapter);
+    if (Device == NULL)
+        return FALSE;
+    if (Adapter == NULL)
+    {
+        DxgkDereferenceDevice(Device);
+        return FALSE;
+    }
+
     DxgkpEnsureSourceOwnerMutex();
     ExAcquireFastMutex(&g_SourceOwnerMutex);
-    Owns = (BOOLEAN)(g_SourceOwners[VidPnSourceId].OwnerDevice == hDevice);
+    if (InterlockedCompareExchange(&Device->Destroying, 0, 0) != 0 || InterlockedCompareExchange(&Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE)
+    {
+        ExReleaseFastMutex(&g_SourceOwnerMutex);
+        DxgkDereferenceDevice(Device);
+        return FALSE;
+    }
+    State = DxgkpFindSourceOwnerAdapterLocked(Adapter);
+    if (State != NULL && State->Owners[VidPnSourceId].OwnerDevice == Device)
+        Owns = (BOOLEAN)(State->Owners[VidPnSourceId].OwnerType == D3DKMT_VIDPNSOURCEOWNER_SHARED || State->Owners[VidPnSourceId].OwnerType == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVE || State->Owners[VidPnSourceId].OwnerType == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVEGDI);
     ExReleaseFastMutex(&g_SourceOwnerMutex);
+    DxgkDereferenceDevice(Device);
 
     return Owns;
 }
@@ -254,21 +388,34 @@ VOID
 DxgkVidPnCleanupDeviceOwners(
     _In_ PDXGKRNL_DEVICE Device)
 {
+    PDXGKP_SOURCE_OWNER_ADAPTER_STATE State;
+    PDXGKP_SOURCE_OWNER_ADAPTER_STATE StateToFree = NULL;
     ULONG Index;
 
-    if (Device == NULL || Device->Handle == 0)
+    if (Device == NULL || Device->Adapter == NULL || Device->Handle == 0)
         return;
     DxgkpEnsureSourceOwnerMutex();
     ExAcquireFastMutex(&g_SourceOwnerMutex);
-    for (Index = 0; Index < DXGKP_MAX_SOURCES; ++Index)
+    State = DxgkpFindSourceOwnerAdapterLocked(Device->Adapter);
+    if (State != NULL)
     {
-        if (g_SourceOwners[Index].OwnerDevice == Device->Handle)
+        for (Index = 0; Index < DXGKP_MAX_SOURCES; ++Index)
         {
-            g_SourceOwners[Index].OwnerDevice = 0;
-            g_SourceOwners[Index].OwnerType = D3DKMT_VIDPNSOURCEOWNER_UNOWNED;
+            if (State->Owners[Index].OwnerDevice == Device)
+            {
+                State->Owners[Index].OwnerDevice = NULL;
+                State->Owners[Index].OwnerType = D3DKMT_VIDPNSOURCEOWNER_UNOWNED;
+            }
+        }
+        if (DxgkpSourceOwnerStateIsEmpty(State->Owners))
+        {
+            RemoveEntryList(&State->Entry);
+            StateToFree = State;
         }
     }
     ExReleaseFastMutex(&g_SourceOwnerMutex);
+    if (StateToFree != NULL)
+        ExFreePoolWithTag(StateToFree, TAG_DXGK_SOURCE_OWNER);
 }
 
 /* ========================================================================
@@ -2496,9 +2643,12 @@ DxgkpEnsureSharedShadowSurfaceLocked(
     QueryArgs.StandardAllocationType = DXGK_STDALLOCATION_SHADOWSURFACE;
     QueryArgs.pCreateShadowSurfaceData = &SurfaceData;
 
+    if (!DxgkAcquireKmdCall(Adapter))
+        return STATUS_DELETE_PENDING;
     Status = DXGK_CB_FULL(Adapter, DxgkDdiGetStandardAllocationDriverData)(
         Adapter->MiniportDeviceContext,
         &QueryArgs);
+    DxgkReleaseKmdCall(Adapter);
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -2534,9 +2684,15 @@ DxgkpEnsureSharedShadowSurfaceLocked(
     QueryArgs.pResourcePrivateDriverData = ResourcePrivateData;
     QueryArgs.ResourcePrivateDriverDataSize = ResourcePrivateDataSize;
 
+    if (!DxgkAcquireKmdCall(Adapter))
+    {
+        Status = STATUS_DELETE_PENDING;
+        goto Cleanup;
+    }
     Status = DXGK_CB_FULL(Adapter, DxgkDdiGetStandardAllocationDriverData)(
         Adapter->MiniportDeviceContext,
         &QueryArgs);
+    DxgkReleaseKmdCall(Adapter);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
 
@@ -2718,9 +2874,12 @@ DxgkpEnsureSharedPrimaryLocked(
     QueryArgs.StandardAllocationType = DXGK_STDALLOCATION_SHAREDPRIMARYSURFACE;
     QueryArgs.pCreateSharedPrimarySurfaceData = &SurfaceData;
 
+    if (!DxgkAcquireKmdCall(Adapter))
+        return STATUS_DELETE_PENDING;
     Status = DXGK_CB_FULL(Adapter, DxgkDdiGetStandardAllocationDriverData)(
         Adapter->MiniportDeviceContext,
         &QueryArgs);
+    DxgkReleaseKmdCall(Adapter);
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -2756,9 +2915,15 @@ DxgkpEnsureSharedPrimaryLocked(
     QueryArgs.pResourcePrivateDriverData = ResourcePrivateData;
     QueryArgs.ResourcePrivateDriverDataSize = ResourcePrivateDataSize;
 
+    if (!DxgkAcquireKmdCall(Adapter))
+    {
+        Status = STATUS_DELETE_PENDING;
+        goto Cleanup;
+    }
     Status = DXGK_CB_FULL(Adapter, DxgkDdiGetStandardAllocationDriverData)(
         Adapter->MiniportDeviceContext,
         &QueryArgs);
+    DxgkReleaseKmdCall(Adapter);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
 
@@ -2897,9 +3062,9 @@ DxgkDestroySharedPrimary(
 {
     if (Adapter == NULL)
         return;
-    ExAcquireFastMutex(&Adapter->SharedPrimaryMutex);
+    (VOID)KeWaitForSingleObject(&Adapter->SharedPrimaryMutex, Executive, KernelMode, FALSE, NULL);
     DxgkpDestroySharedPrimaryLocked(Adapter);
-    ExReleaseFastMutex(&Adapter->SharedPrimaryMutex);
+    KeReleaseMutex(&Adapter->SharedPrimaryMutex, FALSE);
 }
 
 NTSTATUS
@@ -2937,9 +3102,9 @@ DxgkSetDisplayMode(
         goto Cleanup;
     }
 
-    ExAcquireFastMutex(&Adapter->SharedPrimaryMutex);
+    (VOID)KeWaitForSingleObject(&Adapter->SharedPrimaryMutex, Executive, KernelMode, FALSE, NULL);
     Status = DxgkpEnsureSharedPrimaryLocked(Adapter, 0);
-    ExReleaseFastMutex(&Adapter->SharedPrimaryMutex);
+    KeReleaseMutex(&Adapter->SharedPrimaryMutex, FALSE);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
 
@@ -2982,18 +3147,25 @@ DxgkSetDisplayMode(
                   Allocation->SegmentId,
                   PrimaryAddress.QuadPart);
 
+    if (!DxgkAcquireKmdCall(Adapter))
+    {
+        Status = STATUS_DELETE_PENDING;
+        goto Cleanup;
+    }
     Status = DXGK_CB_FULL(Adapter, DxgkDdiSetVidPnSourceAddress)(Adapter->MiniportDeviceContext, SetSourceAddress);
+    DxgkReleaseKmdCall(Adapter);
     ExFreePoolWithTag(SetSourceAddress, TAG_DXGK_VIDPN);
     SetSourceAddress = NULL;
     if (!NT_SUCCESS(Status))
         goto Cleanup;
 
-    if (DXGK_CB(Adapter, DxgkDdiSetVidPnSourceVisibility) != NULL)
+    if (DXGK_CB(Adapter, DxgkDdiSetVidPnSourceVisibility) != NULL && DxgkAcquireKmdCall(Adapter))
     {
         DXGKARG_SETVIDPNSOURCEVISIBILITY Visibility;
         Visibility.VidPnSourceId = 0;
         Visibility.Visible = TRUE;
         DXGK_CB(Adapter, DxgkDdiSetVidPnSourceVisibility)(Adapter->MiniportDeviceContext, &Visibility);
+        DxgkReleaseKmdCall(Adapter);
     }
 
 Cleanup:
@@ -3031,11 +3203,11 @@ DxgkGetSharedPrimaryHandle(
         return STATUS_INVALID_HANDLE;
     }
 
-    ExAcquireFastMutex(&Adapter->SharedPrimaryMutex);
+    (VOID)KeWaitForSingleObject(&Adapter->SharedPrimaryMutex, Executive, KernelMode, FALSE, NULL);
     Status = DxgkpEnsureSharedPrimaryLocked(Adapter, pGetSharedPrimaryHandle->VidPnSourceId);
     if (!NT_SUCCESS(Status))
     {
-        ExReleaseFastMutex(&Adapter->SharedPrimaryMutex);
+        KeReleaseMutex(&Adapter->SharedPrimaryMutex, FALSE);
         goto Cleanup;
     }
 
@@ -3048,7 +3220,7 @@ DxgkGetSharedPrimaryHandle(
                   Adapter->SharedPrimaryResourceHandle,
                   Adapter->SharedPrimaryWidth,
                   Adapter->SharedPrimaryHeight);
-    ExReleaseFastMutex(&Adapter->SharedPrimaryMutex);
+    KeReleaseMutex(&Adapter->SharedPrimaryMutex, FALSE);
 
 Cleanup:
     DxgkDereferenceAdapter(Adapter);
@@ -3072,18 +3244,18 @@ DxgkGetShadowSurface(
     if (Adapter == NULL)
         return STATUS_INVALID_HANDLE;
 
-    ExAcquireFastMutex(&Adapter->SharedPrimaryMutex);
+    (VOID)KeWaitForSingleObject(&Adapter->SharedPrimaryMutex, Executive, KernelMode, FALSE, NULL);
     Status = DxgkpEnsureSharedPrimaryLocked(Adapter, pGetShadowSurface->VidPnSourceId);
     if (!NT_SUCCESS(Status))
     {
-        ExReleaseFastMutex(&Adapter->SharedPrimaryMutex);
+        KeReleaseMutex(&Adapter->SharedPrimaryMutex, FALSE);
         goto Cleanup;
     }
 
     Status = DxgkpEnsureSharedShadowSurfaceLocked(Adapter, pGetShadowSurface->VidPnSourceId);
     if (!NT_SUCCESS(Status))
     {
-        ExReleaseFastMutex(&Adapter->SharedPrimaryMutex);
+        KeReleaseMutex(&Adapter->SharedPrimaryMutex, FALSE);
         goto Cleanup;
     }
 
@@ -3101,7 +3273,7 @@ DxgkGetShadowSurface(
                   Adapter->SharedShadowWidth,
                   Adapter->SharedShadowHeight,
                   Adapter->SharedShadowPitch);
-    ExReleaseFastMutex(&Adapter->SharedPrimaryMutex);
+    KeReleaseMutex(&Adapter->SharedPrimaryMutex, FALSE);
 
 Cleanup:
     DxgkDereferenceAdapter(Adapter);
@@ -3516,94 +3688,181 @@ Cleanup:
 
 NTSTATUS
 NTAPI
-DxgkSetVidPnSourceOwner(
-    _In_ D3DKMT_SETVIDPNSOURCEOWNER *pSetVidPnSourceOwner)
+DxgkpSetVidPnSourceOwnerWithAccessMode(
+    _In_ D3DKMT_SETVIDPNSOURCEOWNER *pSetVidPnSourceOwner,
+    _In_ KPROCESSOR_MODE EmbeddedBufferMode)
 {
+    PDXGKP_SOURCE_OWNER_ADAPTER_STATE State;
+    PDXGKP_SOURCE_OWNER_ADAPTER_STATE StateToFree = NULL;
     PDXGKRNL_DEVICE Device = NULL;
     PDXGKRNL_ADAPTER Adapter = NULL;
+    D3DKMT_VIDPNSOURCEOWNER_TYPE *Types = NULL;
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID *SourceIds = NULL;
+    DXGKP_VIDPN_SOURCE_OWNER StagedOwners[DXGKP_MAX_SOURCES];
+    BOOLEAN SeenSources[DXGKP_MAX_SOURCES];
+    BOOLEAN HasExclusiveGdi = FALSE;
+    BOOLEAN ReleaseAll;
     NTSTATUS Status = STATUS_SUCCESS;
+    SIZE_T TypesSize = 0;
+    SIZE_T SourceIdsSize = 0;
     ULONG i;
 
     PAGED_CODE();
 
     if (pSetVidPnSourceOwner == NULL)
         return STATUS_INVALID_PARAMETER;
-
-    DxgkpEnsureSourceOwnerMutex();
+    if (pSetVidPnSourceOwner->VidPnSourceCount > DXGKP_MAX_SOURCE_OWNER_OPERATIONS)
+        return STATUS_INVALID_PARAMETER;
+    if (pSetVidPnSourceOwner->VidPnSourceCount != 0 && (pSetVidPnSourceOwner->pType == NULL || pSetVidPnSourceOwner->pVidPnSourceId == NULL))
+        return STATUS_INVALID_PARAMETER;
+    if (pSetVidPnSourceOwner->VidPnSourceCount == 0 && (pSetVidPnSourceOwner->pType != NULL || pSetVidPnSourceOwner->pVidPnSourceId != NULL))
+        return STATUS_INVALID_PARAMETER;
 
     Device = DxgkLookupDeviceByHandle(pSetVidPnSourceOwner->hDevice, &Adapter);
-    if (Device == NULL || Adapter == NULL)
+    if (Device == NULL)
         return STATUS_INVALID_HANDLE;
-
-    ExAcquireFastMutex(&g_SourceOwnerMutex);
-
-    /* Release case: pType is NULL or pVidPnSourceId is NULL means release all. */
-    if (pSetVidPnSourceOwner->pType == NULL ||
-        pSetVidPnSourceOwner->pVidPnSourceId == NULL ||
-        pSetVidPnSourceOwner->VidPnSourceCount == 0)
+    if (Adapter == NULL)
     {
-        /* Release all sources owned by this device. */
-        for (i = 0; i < DXGKP_MAX_SOURCES; i++)
-        {
-            if (g_SourceOwners[i].OwnerDevice == pSetVidPnSourceOwner->hDevice)
-            {
-                g_SourceOwners[i].OwnerDevice = 0;
-                g_SourceOwners[i].OwnerType = D3DKMT_VIDPNSOURCEOWNER_UNOWNED;
-            }
-        }
-        goto Unlock;
+        DxgkDereferenceDevice(Device);
+        return STATUS_INVALID_HANDLE;
+    }
+    if (InterlockedCompareExchange(&Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE)
+    {
+        Status = STATUS_DEVICE_REMOVED;
+        goto Cleanup;
     }
 
-    /* Acquire/update ownership. */
-    for (i = 0; i < pSetVidPnSourceOwner->VidPnSourceCount; i++)
+    ReleaseAll = pSetVidPnSourceOwner->VidPnSourceCount == 0;
+    if (!ReleaseAll)
     {
-        D3DDDI_VIDEO_PRESENT_SOURCE_ID SrcId = pSetVidPnSourceOwner->pVidPnSourceId[i];
-        D3DKMT_VIDPNSOURCEOWNER_TYPE Type = pSetVidPnSourceOwner->pType[i];
+        TypesSize = (SIZE_T)pSetVidPnSourceOwner->VidPnSourceCount * sizeof(*Types);
+        SourceIdsSize = (SIZE_T)pSetVidPnSourceOwner->VidPnSourceCount * sizeof(*SourceIds);
+        Status = DxgkpCaptureUserBuffer(pSetVidPnSourceOwner->pType, TypesSize, EmbeddedBufferMode, TAG_DXGK_CAPTURE, (PVOID *)&Types);
+        if (NT_SUCCESS(Status))
+            Status = DxgkpCaptureUserBuffer(pSetVidPnSourceOwner->pVidPnSourceId, SourceIdsSize, EmbeddedBufferMode, TAG_DXGK_CAPTURE, (PVOID *)&SourceIds);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
 
-        if (SrcId >= DXGKP_MAX_SOURCES || SrcId >= Adapter->NumberOfVideoPresentSources)
+        for (i = 0; i < pSetVidPnSourceOwner->VidPnSourceCount; ++i)
         {
-            Status = STATUS_INVALID_PARAMETER;
-            goto Unlock;
+            if (SourceIds[i] >= DXGKP_MAX_SOURCES || SourceIds[i] >= Adapter->NumberOfVideoPresentSources)
+            {
+                Status = STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE;
+                goto Cleanup;
+            }
+            if (Types[i] < D3DKMT_VIDPNSOURCEOWNER_UNOWNED || Types[i] > D3DKMT_VIDPNSOURCEOWNER_EMULATED)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                goto Cleanup;
+            }
+            if (Types[i] == D3DKMT_VIDPNSOURCEOWNER_SHARED && Device->Flags.LegacyMode)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                goto Cleanup;
+            }
+            if (Types[i] == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVEGDI)
+                HasExclusiveGdi = TRUE;
         }
 
-        if (Type == D3DKMT_VIDPNSOURCEOWNER_UNOWNED)
+        if (HasExclusiveGdi)
         {
-            /* Release this specific source. */
-            if (g_SourceOwners[SrcId].OwnerDevice == pSetVidPnSourceOwner->hDevice)
+            if (!Device->Flags.LegacyMode || Adapter->NumberOfVideoPresentSources > DXGKP_MAX_SOURCES || pSetVidPnSourceOwner->VidPnSourceCount != Adapter->NumberOfVideoPresentSources)
             {
-                g_SourceOwners[SrcId].OwnerDevice = 0;
-                g_SourceOwners[SrcId].OwnerType = D3DKMT_VIDPNSOURCEOWNER_UNOWNED;
+                Status = STATUS_INVALID_PARAMETER;
+                goto Cleanup;
+            }
+            RtlZeroMemory(SeenSources, sizeof(SeenSources));
+            for (i = 0; i < pSetVidPnSourceOwner->VidPnSourceCount; ++i)
+            {
+                if (Types[i] != D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVEGDI || SeenSources[SourceIds[i]])
+                {
+                    Status = STATUS_INVALID_PARAMETER;
+                    goto Cleanup;
+                }
+                SeenSources[SourceIds[i]] = TRUE;
             }
         }
-        else if (Type == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVE)
+    }
+
+    DxgkpEnsureSourceOwnerMutex();
+    ExAcquireFastMutex(&g_SourceOwnerMutex);
+    if (InterlockedCompareExchange(&Device->Destroying, 0, 0) != 0 || InterlockedCompareExchange(&Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE)
+    {
+        Status = STATUS_DEVICE_REMOVED;
+        goto Unlock;
+    }
+    State = DxgkpFindSourceOwnerAdapterLocked(Adapter);
+    if (State != NULL)
+        RtlCopyMemory(StagedOwners, State->Owners, sizeof(StagedOwners));
+    else
+        RtlZeroMemory(StagedOwners, sizeof(StagedOwners));
+
+    if (ReleaseAll)
+    {
+        for (i = 0; i < DXGKP_MAX_SOURCES; ++i)
         {
-            /* Check for conflicting ownership. */
-            if (g_SourceOwners[SrcId].OwnerDevice != 0 &&
-                g_SourceOwners[SrcId].OwnerDevice != pSetVidPnSourceOwner->hDevice)
+            if (StagedOwners[i].OwnerDevice == Device)
             {
-                Status = STATUS_GRAPHICS_VIDPN_SOURCE_IN_USE;
+                StagedOwners[i].OwnerDevice = NULL;
+                StagedOwners[i].OwnerType = D3DKMT_VIDPNSOURCEOWNER_UNOWNED;
+            }
+        }
+    }
+    else
+    {
+        for (i = 0; i < pSetVidPnSourceOwner->VidPnSourceCount; ++i)
+        {
+            Status = DxgkpApplySourceOwnerOperation(StagedOwners, Device, SourceIds[i], Types[i]);
+            if (!NT_SUCCESS(Status))
+                goto Unlock;
+        }
+    }
+
+    if (DxgkpSourceOwnerStateIsEmpty(StagedOwners))
+    {
+        if (State != NULL)
+        {
+            RemoveEntryList(&State->Entry);
+            StateToFree = State;
+        }
+    }
+    else
+    {
+        if (State == NULL)
+        {
+            State = ExAllocatePoolWithTag(NonPagedPool, sizeof(*State), TAG_DXGK_SOURCE_OWNER);
+            if (State == NULL)
+            {
+                Status = STATUS_INSUFFICIENT_RESOURCES;
                 goto Unlock;
             }
-            g_SourceOwners[SrcId].OwnerDevice = pSetVidPnSourceOwner->hDevice;
-            g_SourceOwners[SrcId].OwnerType = D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVE;
+            RtlZeroMemory(State, sizeof(*State));
+            State->Adapter = Adapter;
+            InsertTailList(&g_SourceOwnerAdapterList, &State->Entry);
         }
-        else /* SHARED */
-        {
-            if (g_SourceOwners[SrcId].OwnerType == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVE &&
-                g_SourceOwners[SrcId].OwnerDevice != pSetVidPnSourceOwner->hDevice)
-            {
-                Status = STATUS_GRAPHICS_VIDPN_SOURCE_IN_USE;
-                goto Unlock;
-            }
-            g_SourceOwners[SrcId].OwnerDevice = pSetVidPnSourceOwner->hDevice;
-            g_SourceOwners[SrcId].OwnerType = D3DKMT_VIDPNSOURCEOWNER_SHARED;
-        }
+        RtlCopyMemory(State->Owners, StagedOwners, sizeof(State->Owners));
     }
 
 Unlock:
     ExReleaseFastMutex(&g_SourceOwnerMutex);
+    if (StateToFree != NULL)
+        ExFreePoolWithTag(StateToFree, TAG_DXGK_SOURCE_OWNER);
+
+Cleanup:
+    if (SourceIds != NULL)
+        ExFreePoolWithTag(SourceIds, TAG_DXGK_CAPTURE);
+    if (Types != NULL)
+        ExFreePoolWithTag(Types, TAG_DXGK_CAPTURE);
     DxgkDereferenceDevice(Device);
     return Status;
+}
+
+NTSTATUS
+NTAPI
+DxgkSetVidPnSourceOwner(
+    _In_ D3DKMT_SETVIDPNSOURCEOWNER *pSetVidPnSourceOwner)
+{
+    return DxgkpSetVidPnSourceOwnerWithAccessMode(pSetVidPnSourceOwner, KernelMode);
 }
 
 NTSTATUS
@@ -3611,6 +3870,7 @@ NTAPI
 DxgkCheckVidPnExclusiveOwnership(
     _In_ CONST D3DKMT_CHECKVIDPNEXCLUSIVEOWNERSHIP *pCheckVidPnExclusiveOwnership)
 {
+    PDXGKP_SOURCE_OWNER_ADAPTER_STATE State;
     PDXGKRNL_ADAPTER Adapter = NULL;
     NTSTATUS Status = STATUS_SUCCESS;
 
@@ -3622,24 +3882,24 @@ DxgkCheckVidPnExclusiveOwnership(
     Adapter = DxgkLookupAdapterByHandle(pCheckVidPnExclusiveOwnership->hAdapter);
     if (Adapter == NULL)
         return STATUS_INVALID_HANDLE;
-
-    if (pCheckVidPnExclusiveOwnership->VidPnSourceId >=
-        Adapter->NumberOfVideoPresentSources)
+    if (Adapter->State != DxgkAdapterStateStarted)
     {
-        Status = STATUS_INVALID_PARAMETER;
+        Status = STATUS_DEVICE_REMOVED;
+        goto Cleanup;
+    }
+
+    if (pCheckVidPnExclusiveOwnership->VidPnSourceId >= DXGKP_MAX_SOURCES || pCheckVidPnExclusiveOwnership->VidPnSourceId >= Adapter->NumberOfVideoPresentSources)
+    {
+        Status = STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE;
         goto Cleanup;
     }
 
     DxgkpEnsureSourceOwnerMutex();
 
     ExAcquireFastMutex(&g_SourceOwnerMutex);
-    if (g_SourceOwners[pCheckVidPnExclusiveOwnership->VidPnSourceId].OwnerType !=
-            D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVE ||
-        g_SourceOwners[pCheckVidPnExclusiveOwnership->VidPnSourceId].OwnerDevice == 0)
-    {
-        Status = STATUS_GRAPHICS_VIDPN_SOURCE_IN_USE;
-    }
-
+    State = DxgkpFindSourceOwnerAdapterLocked(Adapter);
+    if (State != NULL && State->Owners[pCheckVidPnExclusiveOwnership->VidPnSourceId].OwnerDevice != NULL && (State->Owners[pCheckVidPnExclusiveOwnership->VidPnSourceId].OwnerType == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVE || State->Owners[pCheckVidPnExclusiveOwnership->VidPnSourceId].OwnerType == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVEGDI))
+        Status = STATUS_GRAPHICS_PRESENT_OCCLUDED;
     ExReleaseFastMutex(&g_SourceOwnerMutex);
 
 Cleanup:

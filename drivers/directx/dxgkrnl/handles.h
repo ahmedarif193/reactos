@@ -144,6 +144,18 @@ VOID
 DxgkDereferenceAdapter(
     _In_ PDXGKRNL_ADAPTER Adapter);
 
+BOOLEAN
+DxgkBeginDeviceLifecycleOperation(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
+VOID
+DxgkEndDeviceLifecycleOperation(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
+VOID
+DxgkWaitForDeviceLifecycleOperations(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
 ULONG
 DxgkReferenceStartedAdapters(
     _Out_writes_(Capacity) PDXGKRNL_ADAPTER *Adapters,

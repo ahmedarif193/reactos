@@ -33,7 +33,7 @@
  *
  * x86/amd64 memory ordering notes
  * --------------------------------
- * The adapter State field is read/written under AdapterMutex (FAST_MUTEX at
+ * The adapter State field is read/written under AdapterMutex (KMUTEX at
  * APC_LEVEL) from PASSIVE_LEVEL paths and is updated only in the PnP dispatch
  * which is serialised by the I/O manager.  No additional barriers are needed
  * for State.
@@ -56,6 +56,7 @@
 #include "present.h"
 #include "pnp.h"
 #include "context.h"
+#include "dxgmms2_client.h"
 
 #include <reactos/arc/arc.h>
 /*
@@ -64,6 +65,14 @@
  */
 const GUID GUID_DISPLAY_DEVICE_ARRIVAL =
     {0x1ca05180, 0xa699, 0x450a, {0x9a, 0x0c, 0xde, 0x4f, 0xbe, 0x3d, 0xdd, 0x89}};
+
+#define DXGKP_BUGCHECK_VIDEO_DXGKRNL_FATAL_ERROR 0x113
+#define DXGKP_FATAL_SURPRISE_REMOVAL_SUBTYPE 0x19
+#define DXGKP_FATAL_MMS2_LIFECYCLE_SUBTYPE 0x1A
+#define DXGKP_MMS2_FAILURE_ADD_ROLLBACK 1
+#define DXGKP_MMS2_FAILURE_ATTACH_ROLLBACK 2
+#define DXGKP_MMS2_FAILURE_FINAL_RETIREMENT 3
+#define DXGKP_MMS2_FAILURE_FINAL_DESTROY 4
 
 /* ========================================================================
  * InbV forward declarations
@@ -98,7 +107,93 @@ InbvAcquireDisplayOwnership(VOID);
  * empty descriptor so its StartDevice declines and the fallback devnode is
  * torn down.
  * ====================================================================== */
+static KSPIN_LOCK g_PostDisplayOwnerLock;
+static KMUTEX g_PostDisplayOwnershipMutex;
 static PDXGKRNL_ADAPTER g_PostDisplayOwnerAdapter = NULL;
+
+static NTSTATUS
+DxgkpAdapterStopInternal(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ BOOLEAN ReleasePostDisplayOwnership,
+    _In_ DXGMMS2_STOP_REASON StopReason);
+
+static NTSTATUS
+DxgkpStopMiniportForTeardown(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
+/* The published owner holds one FDO reference. A transient reference returned
+ * here keeps both the device extension and Owner valid after dropping the lock. */
+static PDXGKRNL_ADAPTER
+DxgkpReferencePostDisplayOwner(
+    _Out_ PDEVICE_OBJECT *OwnerDeviceObject)
+{
+    PDXGKRNL_ADAPTER Owner;
+    PDEVICE_OBJECT DeviceObject = NULL;
+    KIRQL OldIrql;
+
+    *OwnerDeviceObject = NULL;
+    KeAcquireSpinLock(&g_PostDisplayOwnerLock, &OldIrql);
+    Owner = g_PostDisplayOwnerAdapter;
+    if (Owner != NULL)
+    {
+        DeviceObject = Owner->FunctionalDeviceObject;
+        if (DeviceObject != NULL)
+            ObReferenceObject(DeviceObject);
+        else
+            Owner = NULL;
+    }
+    KeReleaseSpinLock(&g_PostDisplayOwnerLock, OldIrql);
+    *OwnerDeviceObject = DeviceObject;
+    return Owner;
+}
+
+static VOID
+DxgkpSetPostDisplayOwner(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PDXGKRNL_ADAPTER PreviousOwner;
+    PDEVICE_OBJECT NewDeviceObject;
+    PDEVICE_OBJECT ReleasedDeviceObject = NULL;
+    KIRQL OldIrql;
+
+    if (Adapter == NULL || Adapter->FunctionalDeviceObject == NULL)
+        return;
+    NewDeviceObject = Adapter->FunctionalDeviceObject;
+    ObReferenceObject(NewDeviceObject);
+    KeAcquireSpinLock(&g_PostDisplayOwnerLock, &OldIrql);
+    PreviousOwner = g_PostDisplayOwnerAdapter;
+    if (PreviousOwner == Adapter)
+    {
+        KeReleaseSpinLock(&g_PostDisplayOwnerLock, OldIrql);
+        ObDereferenceObject(NewDeviceObject);
+        return;
+    }
+    if (PreviousOwner != NULL)
+        ReleasedDeviceObject = PreviousOwner->FunctionalDeviceObject;
+    g_PostDisplayOwnerAdapter = Adapter;
+    KeReleaseSpinLock(&g_PostDisplayOwnerLock, OldIrql);
+    if (ReleasedDeviceObject != NULL)
+        ObDereferenceObject(ReleasedDeviceObject);
+}
+
+/* Called from stop/remove so a dead adapter never stays published. */
+static VOID
+DxgkpClearPostDisplayOwner(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PDEVICE_OBJECT ReleasedDeviceObject = NULL;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&g_PostDisplayOwnerLock, &OldIrql);
+    if (g_PostDisplayOwnerAdapter == Adapter)
+    {
+        ReleasedDeviceObject = Adapter->FunctionalDeviceObject;
+        g_PostDisplayOwnerAdapter = NULL;
+    }
+    KeReleaseSpinLock(&g_PostDisplayOwnerLock, OldIrql);
+    if (ReleasedDeviceObject != NULL)
+        ObDereferenceObject(ReleasedDeviceObject);
+}
 
 /*
  * Stop the adapter currently holding the boot display so a new claimant can
@@ -107,59 +202,38 @@ static PDXGKRNL_ADAPTER g_PostDisplayOwnerAdapter = NULL;
  * implements it, then runs the generic adapter stop (which unregisters the
  * \Device\VideoN display device so the claimant can register its own).
  */
-static VOID
+static NTSTATUS
 DxgkpStopPostDisplayOwner(
     _In_ PDXGKRNL_ADAPTER Owner)
 {
-    PDXGKDDI_STOP_DEVICE_AND_RELEASE_POST_DISPLAY_OWNERSHIP PfnRelease;
-    DXGK_DISPLAY_INFORMATION ReleasedInfo;
     NTSTATUS Status;
 
-    DXGKRNL_WARN("DxgkpStopPostDisplayOwner: stopping %s adapter %p — "
-                 "a new miniport is acquiring the boot display\n",
-                 (Owner->MiniportContext != NULL &&
-                  Owner->MiniportContext->IsBasicDisplayFallback)
-                     ? "basic-display fallback" : "display",
-                 Owner);
-
-    if (Owner->State == DxgkAdapterStateStarted)
-    {
-        PfnRelease = DXGK_CB(Owner, DxgkDdiStopDeviceAndReleasePostDisplayOwnership);
-        if (PfnRelease != NULL)
-        {
-            RtlZeroMemory(&ReleasedInfo, sizeof(ReleasedInfo));
-            _SEH2_TRY
-            {
-                Status = PfnRelease(Owner->MiniportDeviceContext, 0, &ReleasedInfo);
-            }
-            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-            {
-                Status = _SEH2_GetExceptionCode();
-            }
-            _SEH2_END;
-
-            if (NT_SUCCESS(Status))
-                Owner->MiniportDeviceStopped = TRUE;
-            else
-                DXGKRNL_WARN("DxgkpStopPostDisplayOwner: "
-                             "StopDeviceAndReleasePostDisplayOwnership "
-                             "failed 0x%08lX\n", Status);
-        }
-
-        DxgkAdapterStop(Owner);
-    }
-
-    if (g_PostDisplayOwnerAdapter == Owner)
-        g_PostDisplayOwnerAdapter = NULL;
+    DXGKRNL_WARN("DxgkpStopPostDisplayOwner: stopping %s adapter %p — a new miniport is acquiring the boot display\n", (Owner->MiniportContext != NULL && Owner->MiniportContext->IsBasicDisplayFallback) ? "basic-display fallback" : "display", Owner);
+    Status = DxgkpAdapterStopInternal(Owner, TRUE, Dxgmms2StopReasonPnpStop);
+    if (NT_SUCCESS(Status))
+        DxgkpClearPostDisplayOwner(Owner);
+    return Status;
 }
 
-/* Called from DxgkAdapterStop so a stopped adapter never stays the owner. */
-static VOID
-DxgkpClearPostDisplayOwner(
-    _In_ PDXGKRNL_ADAPTER Adapter)
+static NTSTATUS
+DxgkpRemoveMiniportDevice(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ PVOID MiniportDeviceContext)
 {
-    if (g_PostDisplayOwnerAdapter == Adapter)
-        g_PostDisplayOwnerAdapter = NULL;
+    NTSTATUS Status;
+
+    if (Adapter == NULL || Adapter->MiniportContext == NULL || Adapter->MiniportContext->InitData.s.DxgkDdiRemoveDevice == NULL || MiniportDeviceContext == NULL)
+        return STATUS_NOT_SUPPORTED;
+    _SEH2_TRY
+    {
+        Status = Adapter->MiniportContext->InitData.s.DxgkDdiRemoveDevice(MiniportDeviceContext);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    return Status;
 }
 
 /* ========================================================================
@@ -181,34 +255,47 @@ DxgkpBugCheckCallback(
     _In_opt_ PVOID Buffer,
     _In_ ULONG Length)
 {
-    PDXGKRNL_ADAPTER Owner = g_PostDisplayOwnerAdapter;
+    PDXGKRNL_ADAPTER Owner;
     PDXGKDDI_SYSTEM_DISPLAY_ENABLE PfnEnable;
     DXGKARG_SYSTEM_DISPLAY_ENABLE_FLAGS Flags;
     UINT Width = 0;
     UINT Height = 0;
     D3DDDIFORMAT ColorFormat = D3DDDIFMT_UNKNOWN;
+    KIRQL CurrentIrql;
+    KIRQL OldIrql = PASSIVE_LEVEL;
+    BOOLEAN LockAtDpcLevel;
 
     UNREFERENCED_PARAMETER(Buffer);
     UNREFERENCED_PARAMETER(Length);
 
-    if (Owner == NULL ||
-        Owner->State != DxgkAdapterStateStarted ||
-        Owner->MiniportContext == NULL)
+    CurrentIrql = KeGetCurrentIrql();
+    LockAtDpcLevel = (CurrentIrql >= DISPATCH_LEVEL);
+    if (LockAtDpcLevel)
     {
-        return;
+        if (!KeTryToAcquireSpinLockAtDpcLevel(&g_PostDisplayOwnerLock))
+            return;
     }
+    else
+    {
+        KeAcquireSpinLock(&g_PostDisplayOwnerLock, &OldIrql);
+    }
+
+    Owner = g_PostDisplayOwnerAdapter;
+    if (Owner == NULL || Owner->State != DxgkAdapterStateStarted || Owner->MiniportContext == NULL)
+        goto ReleaseLock;
 
     PfnEnable = DXGK_CB(Owner, DxgkDdiSystemDisplayEnable);
     if (PfnEnable == NULL)
-        return;
+        goto ReleaseLock;
 
     RtlZeroMemory(&Flags, sizeof(Flags));
-    (VOID)PfnEnable(Owner->MiniportDeviceContext,
-                    0,
-                    &Flags,
-                    &Width,
-                    &Height,
-                    &ColorFormat);
+    (VOID)PfnEnable(Owner->MiniportDeviceContext, 0, &Flags, &Width, &Height, &ColorFormat);
+
+ReleaseLock:
+    if (LockAtDpcLevel)
+        KeReleaseSpinLockFromDpcLevel(&g_PostDisplayOwnerLock);
+    else
+        KeReleaseSpinLock(&g_PostDisplayOwnerLock, OldIrql);
 }
 
 VOID
@@ -225,15 +312,112 @@ DxgkpRegisterBugCheckCallback(VOID)
 /* ========================================================================
  * TDR watchdog
  *
- * A 1 Hz per-adapter timer watches the oldest entry of the tracked
- * submitted-DMA list.  If the same fence stays at the head for
- * DXGKP_TDR_STUCK_TICKS consecutive ticks without the miniport reporting
- * completion, a work item performs the documented timeout recovery:
+ * A per-adapter timer watches the oldest tracked submission and measures
+ * elapsed time since the last observed fence progress.  A work item performs
+ * the documented timeout recovery after the configured TdrDelay:
  * DxgkDdiResetFromTimeout -> DxgkDdiRestartFromTimeout -> retire.
  * ====================================================================== */
 
-#define DXGKP_TDR_TICK_MS       1000
-#define DXGKP_TDR_STUCK_TICKS   3
+#define DXGKP_TDR_TICK_MS 100
+
+static DECLSPEC_NORETURN VOID
+DxgkpBugCheckTdrFailure(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ NTSTATUS FailureStatus)
+{
+    PVOID RecoveryContext;
+    ULONG_PTR OwnerTag = 0;
+
+    DXGKRNL_ERR("DxgkpBugCheckTdrFailure: unrecoverable TDR on adapter %p status 0x%08lX\n", Adapter, FailureStatus);
+    RecoveryContext = InterlockedCompareExchangePointer((PVOID volatile *)&Adapter->TdrRecoveryContext, NULL, NULL);
+    if (Adapter->MiniportContext != NULL && DXGK_CB_FULL(Adapter, DxgkDdiResetFromTimeout) != NULL)
+        OwnerTag = (ULONG_PTR)DXGK_CB_FULL(Adapter, DxgkDdiResetFromTimeout);
+    KeBugCheckEx(0x116, (ULONG_PTR)RecoveryContext, OwnerTag, (ULONG_PTR)FailureStatus, 0);
+}
+
+static VOID
+NTAPI
+DxgkpTdrDdiDpcRoutine(
+    _In_ PKDPC Dpc,
+    _In_opt_ PVOID DeferredContext,
+    _In_opt_ PVOID SystemArgument1,
+    _In_opt_ PVOID SystemArgument2)
+{
+    PDXGKRNL_ADAPTER Adapter = (PDXGKRNL_ADAPTER)DeferredContext;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+    if (Adapter != NULL && InterlockedCompareExchange(&Adapter->TdrDdiTimerArmed, 1, 1) != 0)
+        DxgkpBugCheckTdrFailure(Adapter, STATUS_IO_TIMEOUT);
+}
+
+VOID
+DxgkpArmTdrDdiDeadline(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    LARGE_INTEGER Due;
+    ULONGLONG Due100ns = (ULONGLONG)Adapter->TdrConfig.TdrDdiDelay * 10000000ULL;
+
+    if (Due100ns == 0)
+        Due100ns = 1;
+    if (Due100ns > (ULONGLONG)MAXLONGLONG)
+        Due100ns = (ULONGLONG)MAXLONGLONG;
+    Due.QuadPart = -(LONGLONG)Due100ns;
+    InterlockedExchange(&Adapter->TdrDdiTimerArmed, 1);
+    KeSetTimer(&Adapter->TdrDdiTimer, Due, &Adapter->TdrDdiDpc);
+}
+
+VOID
+DxgkpDisarmTdrDdiDeadline(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    InterlockedExchange(&Adapter->TdrDdiTimerArmed, 0);
+    KeCancelTimer(&Adapter->TdrDdiTimer);
+    KeRemoveQueueDpc(&Adapter->TdrDdiDpc);
+    KeFlushQueuedDpcs();
+}
+
+static BOOLEAN
+DxgkpTdrRecoveryLimitExhausted(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONGLONG Now100ns)
+{
+    ULONGLONG Window100ns = (ULONGLONG)Adapter->TdrConfig.TdrLimitTime * 10000000ULL;
+    ULONG Count = 0;
+    ULONG Index;
+    KIRQL OldIrql;
+
+    if (Adapter->TdrConfig.TdrDebugMode == DXGKP_TDR_DEBUG_RECOVER_UNCONDITIONAL)
+        return FALSE;
+    if (Adapter->TdrConfig.TdrLimitCount == 0)
+        return TRUE;
+    KeAcquireSpinLock(&Adapter->TdrHistoryLock, &OldIrql);
+    for (Index = 0; Index < Adapter->TdrRecoveryEntryCount; ++Index)
+    {
+        ULONGLONG Timestamp = Adapter->TdrRecoveryTimestamps[Index];
+
+        if (Timestamp != 0 && Now100ns >= Timestamp && Now100ns - Timestamp <= Window100ns)
+            Count++;
+    }
+    KeReleaseSpinLock(&Adapter->TdrHistoryLock, OldIrql);
+    return Count >= Adapter->TdrConfig.TdrLimitCount;
+}
+
+static VOID
+DxgkpRecordTdrRecovery(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONGLONG Timestamp100ns)
+{
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&Adapter->TdrHistoryLock, &OldIrql);
+    Adapter->TdrRecoveryTimestamps[Adapter->TdrRecoveryWriteIndex] = Timestamp100ns;
+    Adapter->TdrRecoveryWriteIndex = (Adapter->TdrRecoveryWriteIndex + 1) % DXGKP_TDR_HISTORY_CAPACITY;
+    if (Adapter->TdrRecoveryEntryCount < DXGKP_TDR_HISTORY_CAPACITY)
+        Adapter->TdrRecoveryEntryCount++;
+    KeReleaseSpinLock(&Adapter->TdrHistoryLock, OldIrql);
+}
 
 static VOID
 NTAPI
@@ -241,39 +425,72 @@ DxgkpTdrWorker(
     _In_ PVOID Context)
 {
     PDXGKRNL_ADAPTER Adapter = (PDXGKRNL_ADAPTER)Context;
+    ULONG WorkFence;
+    ULONG WorkNode;
+    ULONG WorkEngine;
+    ULONG PreemptionFenceId = 0;
     ULONG CompletedBeforePreempt;
     ULONG CompletedAfterPreempt;
+    BOOLEAN AdapterStartedAfterReset;
+    BOOLEAN DdiDeadlineArmed = FALSE;
+    BOOLEAN Level3Transition = FALSE;
+    BOOLEAN RecoveryContextPublished = FALSE;
     BOOLEAN SchedulerPrepared = FALSE;
-    BOOLEAN ResetSucceeded = FALSE;
+    PVOID RecoveryContext = NULL;
     NTSTATUS Status;
 
     if (Adapter == NULL)
         return;
 
-    DXGKRNL_ERR("DxgkpTdrWorker: GPU timeout — fence %lu stuck on "
-                "adapter %p\n", Adapter->TdrLastObservedFence, Adapter);
-
-    /*
-     * Documented TDR escalation: attempt engine preemption first; a hung
-     * submission that preempts cleanly recovers without an adapter reset.
-     * Give the miniport a short window to report DMA_PREEMPTED progress.
-     */
-    if (Adapter->TdrLastObservedNode >= Adapter->NodeCount || Adapter->TdrLastObservedNode >= DXGK_MAX_TRACKED_NODES)
+    Status = TdrCreateRecoveryContext(&RecoveryContext, Adapter);
+    if (!NT_SUCCESS(Status))
+        DxgkpBugCheckTdrFailure(Adapter, Status);
+    if (InterlockedCompareExchangePointer((PVOID volatile *)&Adapter->TdrRecoveryContext, RecoveryContext, NULL) != NULL)
         goto Exit;
-    CompletedBeforePreempt = Adapter->NodeLastCompletedFenceId[Adapter->TdrLastObservedNode];
-    if (CompletedBeforePreempt == 0 && Adapter->TdrLastObservedNode == 0)
-        CompletedBeforePreempt = Adapter->LastCompletedSubmissionFenceId;
-    if (NT_SUCCESS(VidSchPreemptEngine(Adapter, Adapter->TdrLastObservedNode, Adapter->TdrLastObservedEngine)))
+    RecoveryContextPublished = TRUE;
+    DxgkpArmTdrDdiDeadline(Adapter);
+    DdiDeadlineArmed = TRUE;
+    DxgkAcquireLevel3Transition(Adapter);
+    Level3Transition = TRUE;
+    if (Adapter->State != DxgkAdapterStateStarted || InterlockedCompareExchange(&Adapter->TdrTimerActive, 0, 0) == 0)
+        goto Exit;
+    if (Adapter->TdrConfig.TdrLevel == DXGKP_TDR_LEVEL_OFF)
+        goto Exit;
+    if (Adapter->TdrConfig.TdrLevel == DXGKP_TDR_LEVEL_BUGCHECK)
+        DxgkpBugCheckTdrFailure(Adapter, STATUS_IO_TIMEOUT);
+    if (Adapter->TdrConfig.TdrLevel == DXGKP_TDR_LEVEL_RECOVER_VGA)
+        DxgkpBugCheckTdrFailure(Adapter, STATUS_NOT_SUPPORTED);
+    if (DxgkpTdrRecoveryLimitExhausted(Adapter, KeQueryInterruptTime()))
+        DxgkpBugCheckTdrFailure(Adapter, STATUS_IO_TIMEOUT);
+    if (Adapter->TdrConfig.TdrDebugMode == DXGKP_TDR_DEBUG_BREAK && !KD_DEBUGGER_NOT_PRESENT)
+        DbgBreakPoint();
+
+    WorkFence = Adapter->TdrWorkFence;
+    WorkNode = Adapter->TdrWorkNode;
+    WorkEngine = Adapter->TdrWorkEngine;
+
+    DXGKRNL_ERR("DxgkpTdrWorker: GPU timeout — fence %lu stuck on adapter %p\n", WorkFence, Adapter);
+
+    /* Attempt engine preemption first and give the miniport a short window to
+     * report DMA_PREEMPTED progress. A preempted but incomplete packet is not
+     * completion: until resubmission exists, it must continue into TDR reset. */
+    if (WorkNode >= Adapter->NodeCount || WorkNode >= DXGK_MAX_TRACKED_NODES)
+        DxgkpBugCheckTdrFailure(Adapter, STATUS_INVALID_PARAMETER);
+    if (!DxgkIsSubmittedFenceIdentity(Adapter, WorkNode, WorkFence))
+        goto Exit;
+    CompletedBeforePreempt = Adapter->NodeLastCompletedFenceId[WorkNode];
+    if ((LONG)(CompletedBeforePreempt - WorkFence) >= 0)
     {
-        LARGE_INTEGER Delay;
-
-        Delay.QuadPart = -(LONGLONG)(100 * 10 * 1000);  /* 100 ms */
-        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
-
-        CompletedAfterPreempt = Adapter->NodeLastCompletedFenceId[Adapter->TdrLastObservedNode];
-        if (CompletedAfterPreempt == 0 && Adapter->TdrLastObservedNode == 0)
-            CompletedAfterPreempt = Adapter->LastCompletedSubmissionFenceId;
-        if ((LONG)(CompletedAfterPreempt - Adapter->TdrLastObservedFence) >= 0)
+        Adapter->TdrStuckTicks = 0;
+        goto Exit;
+    }
+    Status = VidSchPreemptEngine(Adapter, WorkNode, WorkEngine, &PreemptionFenceId);
+    if (NT_SUCCESS(Status))
+    {
+        if (PreemptionFenceId != 0)
+            (VOID)VidSchWaitForPreemption(Adapter, WorkNode, WorkEngine, PreemptionFenceId, 100);
+        CompletedAfterPreempt = Adapter->NodeLastCompletedFenceId[WorkNode];
+        if ((LONG)(CompletedAfterPreempt - WorkFence) >= 0)
         {
             DXGKRNL_ERR("DxgkpTdrWorker: preemption recovered adapter %p (fence %lu -> %lu), skipping reset\n", Adapter, CompletedBeforePreempt, CompletedAfterPreempt);
             Adapter->TdrStuckTicks = 0;
@@ -290,6 +507,25 @@ DxgkpTdrWorker(
     else if (Status != STATUS_NOT_SUPPORTED)
     {
         DXGKRNL_ERR("DxgkpTdrWorker: scheduler reset preparation failed 0x%08lX\n", Status);
+        DxgkpBugCheckTdrFailure(Adapter, Status);
+    }
+
+    DxgkBeginKmdExclusive(Adapter);
+    DxgkVidMmQuiesceAdapter(Adapter);
+    InterlockedExchange(&Adapter->TdrOwnershipUncertain, 1);
+    if (!DxgkAcquireMiniportCallback(Adapter))
+    {
+        if (SchedulerPrepared)
+            VidSchCompleteAdapterReset(Adapter, FALSE);
+        DxgkEndKmdExclusive(Adapter, FALSE);
+        goto Exit;
+    }
+    if (Adapter->State != DxgkAdapterStateStarted || InterlockedCompareExchange(&Adapter->RundownStarted, 0, 0) != 0 || InterlockedCompareExchange(&Adapter->TdrTimerActive, 0, 0) == 0 || Adapter->MiniportDeviceContext == NULL)
+    {
+        DxgkReleaseMiniportCallback(Adapter);
+        if (SchedulerPrepared)
+            VidSchCompleteAdapterReset(Adapter, FALSE);
+        DxgkEndKmdExclusive(Adapter, FALSE);
         goto Exit;
     }
 
@@ -327,7 +563,34 @@ DxgkpTdrWorker(
         }
         _SEH2_END;
 
-        if (NT_SUCCESS(Status) && DXGK_CB_FULL(Adapter, DxgkDdiRestartFromTimeout) != NULL)
+    }
+    DxgkReleaseMiniportCallback(Adapter);
+
+    if (!NT_SUCCESS(Status))
+        DxgkpBugCheckTdrFailure(Adapter, Status);
+    InterlockedExchange(&Adapter->TdrCompletionNotificationsEnabled, 0);
+    DxgkDrainVidSchCallbacks(Adapter);
+    AdapterStartedAfterReset = Adapter->State == DxgkAdapterStateStarted;
+    DxgkTdrResetAdapterSynchronizationObjects(Adapter);
+    Status = DxgkVidMmRecoverFromTimeout(Adapter);
+    if (!NT_SUCCESS(Status))
+        DxgkpBugCheckTdrFailure(Adapter, Status);
+    InterlockedExchange(&Adapter->TdrOwnershipUncertain, 0);
+    if (SchedulerPrepared)
+        VidSchCompleteAdapterReset(Adapter, TRUE);
+    DxgkReleaseTrackedDmaBuffers(Adapter, TRUE);
+    DxgkResetSubmittedFenceIdentities(Adapter);
+    if (!AdapterStartedAfterReset || Adapter->State != DxgkAdapterStateStarted)
+    {
+        Adapter->TdrStuckTicks = 0;
+        DxgkEndKmdExclusive(Adapter, FALSE);
+        goto Exit;
+    }
+
+    Status = STATUS_NOT_SUPPORTED;
+    if (DxgkAcquireMiniportCallback(Adapter))
+    {
+        if (Adapter->State == DxgkAdapterStateStarted && DXGK_CB_FULL(Adapter, DxgkDdiRestartFromTimeout) != NULL)
         {
             _SEH2_TRY
             {
@@ -339,28 +602,54 @@ DxgkpTdrWorker(
             }
             _SEH2_END;
         }
+        DxgkReleaseMiniportCallback(Adapter);
     }
-
-    ResetSucceeded = NT_SUCCESS(Status);
-    if (!ResetSucceeded)
-        DXGKRNL_ERR("DxgkpTdrWorker: timeout reset/restart failed 0x%08lX\n", Status);
-
-    if (SchedulerPrepared)
-        VidSchCompleteAdapterReset(Adapter, ResetSucceeded);
-
-    if (ResetSucceeded)
+    if (Adapter->State != DxgkAdapterStateStarted)
     {
-        DxgkReleaseTrackedDmaBuffers(Adapter, TRUE);
-        if (SchedulerPrepared)
+        Adapter->TdrStuckTicks = 0;
+        DxgkEndKmdExclusive(Adapter, FALSE);
+        goto Exit;
+    }
+    if (!NT_SUCCESS(Status))
+        DxgkpBugCheckTdrFailure(Adapter, Status);
+
+    (VOID)KeWaitForSingleObject(&Adapter->AdapterMutex, Executive, KernelMode, FALSE, NULL);
+    if (Adapter->State != DxgkAdapterStateStarted || Adapter->MiniportDeviceStopped || InterlockedCompareExchange(&Adapter->MiniportCallbacksValid, 0, 0) == 0 || InterlockedCompareExchange(&Adapter->RundownStarted, 0, 0) != 0 || InterlockedCompareExchange(&Adapter->RemoveRundownStarted, 0, 0) != 0 || Adapter->MiniportContext == NULL || Adapter->MiniportDeviceContext == NULL)
+    {
+        KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+        Adapter->TdrStuckTicks = 0;
+        DxgkEndKmdExclusive(Adapter, FALSE);
+        goto Exit;
+    }
+    DxgkVidMmResumeAdapter(Adapter);
+    if (SchedulerPrepared)
+    {
+        Status = VidSchResumeScheduler(Adapter);
+        if (!NT_SUCCESS(Status))
         {
-            Status = VidSchResumeScheduler(Adapter);
-            if (!NT_SUCCESS(Status))
-                DXGKRNL_ERR("DxgkpTdrWorker: scheduler resume failed 0x%08lX\n", Status);
+            KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+            DxgkpBugCheckTdrFailure(Adapter, Status);
         }
     }
+    Adapter->TdrStuckTicks = 0;
+    DxgkpRecordTdrRecovery(Adapter, KeQueryInterruptTime());
+    InterlockedExchange(&Adapter->TdrCompletionNotificationsEnabled, 1);
+    DxgkEndKmdExclusive(Adapter, TRUE);
+    KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
 
 Exit:
+    if (DdiDeadlineArmed)
+        DxgkpDisarmTdrDdiDeadline(Adapter);
+    if (RecoveryContext != NULL)
+    {
+        if (RecoveryContextPublished)
+            InterlockedCompareExchangePointer((PVOID volatile *)&Adapter->TdrRecoveryContext, NULL, RecoveryContext);
+        (VOID)TdrCompleteRecoveryContext(RecoveryContext);
+    }
+    ExReleaseRundownProtection(&Adapter->RundownRef);
     InterlockedExchange(&Adapter->TdrWorkQueued, 0);
+    if (Level3Transition)
+        DxgkReleaseLevel3Transition(Adapter);
 }
 
 static VOID
@@ -376,14 +665,21 @@ DxgkpTdrDpcRoutine(
     ULONG HeadNode = 0;
     ULONG HeadEngine = 0;
     ULONG CompletedFence = 0;
+    ULONG SchedulerFence = 0;
+    ULONG SchedulerNode = 0;
+    ULONG SchedulerEngine = 0;
+    ULONGLONG Delay100ns;
+    ULONGLONG Now100ns;
     BOOLEAN Outstanding = FALSE;
+    BOOLEAN SchedulerOutstanding;
 
     UNREFERENCED_PARAMETER(Dpc);
     UNREFERENCED_PARAMETER(SystemArgument1);
     UNREFERENCED_PARAMETER(SystemArgument2);
 
-    if (Adapter == NULL || !Adapter->TdrTimerActive)
+    if (Adapter == NULL || InterlockedCompareExchange(&Adapter->TdrTimerActive, 0, 0) == 0 || InterlockedCompareExchangePointer((PVOID volatile *)&Adapter->TdrRecoveryContext, NULL, NULL) != NULL)
         return;
+    Now100ns = KeQueryInterruptTime();
 
     KeAcquireSpinLockAtDpcLevel(&Adapter->SubmitDmaLock);
     if (!IsListEmpty(&Adapter->SubmitDmaListHead))
@@ -396,13 +692,20 @@ DxgkpTdrDpcRoutine(
     }
     KeReleaseSpinLockFromDpcLevel(&Adapter->SubmitDmaLock);
 
+    SchedulerOutstanding = VidSchGetOldestKickedPacket(Adapter, &SchedulerFence, &SchedulerNode, &SchedulerEngine);
+    if (SchedulerOutstanding && (!Outstanding || (LONG)(SchedulerFence - HeadFence) < 0))
+    {
+        HeadFence = SchedulerFence;
+        HeadNode = SchedulerNode;
+        HeadEngine = SchedulerEngine;
+        Outstanding = TRUE;
+    }
+
     if (Outstanding)
     {
         if (HeadNode >= Adapter->NodeCount || HeadNode >= DXGK_MAX_TRACKED_NODES)
             return;
         CompletedFence = Adapter->NodeLastCompletedFenceId[HeadNode];
-        if (CompletedFence == 0 && HeadNode == 0)
-            CompletedFence = Adapter->LastCompletedSubmissionFenceId;
     }
     if (!Outstanding || (LONG)(CompletedFence - HeadFence) >= 0)
     {
@@ -411,23 +714,56 @@ DxgkpTdrDpcRoutine(
         Adapter->TdrLastObservedFence = HeadFence;
         Adapter->TdrLastObservedNode = HeadNode;
         Adapter->TdrLastObservedEngine = HeadEngine;
+        Adapter->TdrLastObservedCompletedFence = CompletedFence;
+        Adapter->TdrLastProgressTime100ns = Now100ns;
         return;
     }
 
-    if (HeadFence != Adapter->TdrLastObservedFence || HeadNode != Adapter->TdrLastObservedNode || HeadEngine != Adapter->TdrLastObservedEngine)
+    if (HeadFence != Adapter->TdrLastObservedFence || HeadNode != Adapter->TdrLastObservedNode || HeadEngine != Adapter->TdrLastObservedEngine || CompletedFence != Adapter->TdrLastObservedCompletedFence)
     {
         Adapter->TdrLastObservedFence = HeadFence;
         Adapter->TdrLastObservedNode = HeadNode;
         Adapter->TdrLastObservedEngine = HeadEngine;
+        Adapter->TdrLastObservedCompletedFence = CompletedFence;
         Adapter->TdrStuckTicks = 0;
+        Adapter->TdrLastProgressTime100ns = Now100ns;
         return;
     }
 
-    if (++Adapter->TdrStuckTicks >= DXGKP_TDR_STUCK_TICKS)
+    Delay100ns = (ULONGLONG)Adapter->TdrConfig.TdrDelay * 10000000ULL;
+    if (Now100ns < Adapter->TdrLastProgressTime100ns || Now100ns - Adapter->TdrLastProgressTime100ns < Delay100ns)
+        return;
+    Adapter->TdrLastProgressTime100ns = Now100ns;
+    if (Adapter->TdrConfig.TdrDebugMode == DXGKP_TDR_DEBUG_IGNORE_TIMEOUT)
+        return;
+
     {
         Adapter->TdrStuckTicks = 0;
+        if (InterlockedCompareExchange(&Adapter->RundownStarted, 0, 0) != 0 || !ExAcquireRundownProtection(&Adapter->RundownRef))
+            return;
+        if (InterlockedCompareExchange(&Adapter->RundownStarted, 0, 0) != 0 || InterlockedCompareExchange(&Adapter->TdrTimerActive, 0, 0) == 0)
+        {
+            ExReleaseRundownProtection(&Adapter->RundownRef);
+            return;
+        }
         if (InterlockedCompareExchange(&Adapter->TdrWorkQueued, 1, 0) == 0)
+        {
+            if (InterlockedCompareExchange(&Adapter->RundownStarted, 0, 0) != 0 || InterlockedCompareExchange(&Adapter->TdrTimerActive, 0, 0) == 0)
+            {
+                InterlockedExchange(&Adapter->TdrWorkQueued, 0);
+                ExReleaseRundownProtection(&Adapter->RundownRef);
+                return;
+            }
+            Adapter->TdrWorkFence = HeadFence;
+            Adapter->TdrWorkNode = HeadNode;
+            Adapter->TdrWorkEngine = HeadEngine;
+            KeMemoryBarrier();
             ExQueueWorkItem(&Adapter->TdrWorkItem, DelayedWorkQueue);
+        }
+        else
+        {
+            ExReleaseRundownProtection(&Adapter->RundownRef);
+        }
     }
 }
 
@@ -439,13 +775,30 @@ DxgkpStartTdrWatchdog(
 
     KeInitializeTimer(&Adapter->TdrTimer);
     KeInitializeDpc(&Adapter->TdrDpc, DxgkpTdrDpcRoutine, Adapter);
+    KeInitializeTimer(&Adapter->TdrDdiTimer);
+    KeInitializeDpc(&Adapter->TdrDdiDpc, DxgkpTdrDdiDpcRoutine, Adapter);
     ExInitializeWorkItem(&Adapter->TdrWorkItem, DxgkpTdrWorker, Adapter);
     Adapter->TdrWorkQueued = 0;
+    Adapter->TdrOwnershipUncertain = 0;
+    Adapter->TdrWorkFence = 0;
+    Adapter->TdrWorkNode = 0;
+    Adapter->TdrWorkEngine = 0;
     Adapter->TdrLastObservedFence = 0;
     Adapter->TdrLastObservedNode = 0;
     Adapter->TdrLastObservedEngine = 0;
+    Adapter->TdrLastObservedCompletedFence = 0;
     Adapter->TdrStuckTicks = 0;
-    Adapter->TdrTimerActive = TRUE;
+    Adapter->TdrLastProgressTime100ns = KeQueryInterruptTime();
+    Adapter->TdrDdiTimerArmed = 0;
+    Adapter->TdrRecoveryContext = NULL;
+    DxgkResetSubmittedFenceIdentities(Adapter);
+    InterlockedExchange(&Adapter->TdrCompletionNotificationsEnabled, 1);
+    if (Adapter->TdrConfig.TdrLevel == DXGKP_TDR_LEVEL_OFF)
+    {
+        InterlockedExchange(&Adapter->TdrTimerActive, 0);
+        return;
+    }
+    InterlockedExchange(&Adapter->TdrTimerActive, 1);
 
     Due.QuadPart = -10000LL * DXGKP_TDR_TICK_MS;
     KeSetTimerEx(&Adapter->TdrTimer, Due, DXGKP_TDR_TICK_MS, &Adapter->TdrDpc);
@@ -455,13 +808,12 @@ static VOID
 DxgkpStopTdrWatchdog(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
-    if (!Adapter->TdrTimerActive)
-        return;
-
-    Adapter->TdrTimerActive = FALSE;
-    KeCancelTimer(&Adapter->TdrTimer);
-    KeRemoveQueueDpc(&Adapter->TdrDpc);
-    KeFlushQueuedDpcs();
+    if (InterlockedExchange(&Adapter->TdrTimerActive, 0) != 0)
+    {
+        KeCancelTimer(&Adapter->TdrTimer);
+        KeRemoveQueueDpc(&Adapter->TdrDpc);
+        KeFlushQueuedDpcs();
+    }
 
     /* A TDR work item may be mid-reset against the miniport; wait it out. */
     DxgkpWaitForFlagClear(&Adapter->TdrWorkQueued);
@@ -555,11 +907,12 @@ DxgkpEnsurePostDisplayResolution(
 /*
  * DxgkpInitialized
  *
- * One-time init guard.  0 = not yet initialised, 1 = initialised.
- * Written only by DxgkpFirstInit via InterlockedCompareExchange so that
- * concurrent DriverEntry calls from multiple miniports are safe.
+ * One-time init guard.  0 = not yet initialised, 1 = initialising,
+ * 2 = initialised, 3 = initialization failed.  Contending callers wait until
+ * the first caller publishes either the complete global state or its failure.
  */
 static LONG DxgkpInitialized = 0;
+static NTSTATUS DxgkpInitializationStatus = STATUS_UNSUCCESSFUL;
 static FAST_MUTEX DxgkpMapMemoryMutex;
 static LIST_ENTRY DxgkpMapMemoryList;
 static volatile LONG DxgkpTrackedRefreshTraceCount = 0;
@@ -655,24 +1008,314 @@ DxgkpReleasePostDisplayMapping(
     Adapter->PostDisplayHeight = 0;
 }
 
-ULONG
-NTAPI
-DxgkAllocateSubmissionFenceId(
+static ULONG
+DxgkpShadowAllocateSubmissionFenceId(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
-    LONG FenceId;
+    ULONG CurrentFenceId;
+    ULONG NextFenceId;
 
     if (Adapter == NULL)
         return 0;
 
-    FenceId = InterlockedIncrement(&Adapter->NextSubmissionFenceId);
-    if (FenceId <= 0)
+    for (;;)
     {
-        Adapter->NextSubmissionFenceId = 1;
-        FenceId = 1;
+        CurrentFenceId = (ULONG)InterlockedCompareExchange(&Adapter->NextSubmissionFenceId, 0, 0);
+        NextFenceId = CurrentFenceId + 1;
+        if (NextFenceId == 0)
+            NextFenceId = 1;
+        if ((ULONG)InterlockedCompareExchange(&Adapter->NextSubmissionFenceId, (LONG)NextFenceId, (LONG)CurrentFenceId) == CurrentFenceId)
+            return NextFenceId;
     }
+}
 
-    return (ULONG)FenceId;
+static BOOLEAN
+DxgkpShadowReserveSubmissionFenceIdentity(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG NodeOrdinal,
+    _In_ ULONG SubmissionFenceId)
+{
+    LONG64 Identity;
+    LONG64 CurrentIdentity;
+    LONG64 PreviousIdentity;
+    ULONG FirstTombstone;
+    ULONG Probe;
+    ULONG Slot;
+    ULONG StartSlot;
+    ULONG TargetSlot;
+    LONG64 TargetValue;
+
+    if (Adapter == NULL || NodeOrdinal >= Adapter->NodeCount || NodeOrdinal >= DXGK_MAX_TRACKED_NODES || SubmissionFenceId == 0)
+        return FALSE;
+    Identity = (LONG64)(((ULONGLONG)(NodeOrdinal + 1) << 32) | SubmissionFenceId);
+    StartSlot = (ULONG)(((ULONGLONG)Identity ^ ((ULONGLONG)Identity >> 32)) * 2654435761ULL) & (DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY - 1);
+    for (;;)
+    {
+        FirstTombstone = DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY;
+        for (Probe = 0; Probe < DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY; ++Probe)
+        {
+            Slot = (StartSlot + Probe) & (DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY - 1);
+            CurrentIdentity = InterlockedCompareExchange64(&Adapter->SubmittedFenceIdentities[Slot], 0, 0);
+            if (CurrentIdentity == Identity || CurrentIdentity == (LONG64)((ULONGLONG)Identity | DXGK_SUBMITTED_FENCE_PUBLISHED_BIT))
+                return FALSE;
+            if (CurrentIdentity == DXGK_SUBMITTED_FENCE_TOMBSTONE && FirstTombstone == DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY)
+                FirstTombstone = Slot;
+            if (CurrentIdentity == 0)
+                break;
+        }
+        if (Probe == DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY && FirstTombstone == DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY)
+            return FALSE;
+        TargetSlot = FirstTombstone != DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY ? FirstTombstone : Slot;
+        TargetValue = FirstTombstone != DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY ? DXGK_SUBMITTED_FENCE_TOMBSTONE : 0;
+        PreviousIdentity = InterlockedCompareExchange64(&Adapter->SubmittedFenceIdentities[TargetSlot], Identity, TargetValue);
+        if (PreviousIdentity == TargetValue)
+            return TRUE;
+    }
+}
+
+static VOID
+DxgkpShadowPublishSubmittedFence(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG NodeOrdinal,
+    _In_ ULONG SubmissionFenceId)
+{
+    LONG64 Identity;
+    LONG64 PublishedIdentity;
+    LONG64 CurrentIdentity;
+    ULONG Probe;
+    ULONG Slot;
+    ULONG StartSlot;
+
+    if (Adapter == NULL || NodeOrdinal >= Adapter->NodeCount || NodeOrdinal >= DXGK_MAX_TRACKED_NODES || SubmissionFenceId == 0)
+        KeBugCheckEx(0x119, 0x1, (ULONG_PTR)SubmissionFenceId, (ULONG_PTR)NodeOrdinal, (ULONG_PTR)Adapter);
+    Identity = (LONG64)(((ULONGLONG)(NodeOrdinal + 1) << 32) | SubmissionFenceId);
+    PublishedIdentity = (LONG64)((ULONGLONG)Identity | DXGK_SUBMITTED_FENCE_PUBLISHED_BIT);
+    StartSlot = (ULONG)(((ULONGLONG)Identity ^ ((ULONGLONG)Identity >> 32)) * 2654435761ULL) & (DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY - 1);
+    for (Probe = 0; Probe < DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY; ++Probe)
+    {
+        Slot = (StartSlot + Probe) & (DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY - 1);
+        CurrentIdentity = InterlockedCompareExchange64(&Adapter->SubmittedFenceIdentities[Slot], 0, 0);
+        if (CurrentIdentity == PublishedIdentity)
+            break;
+        if (CurrentIdentity == 0)
+        {
+            Probe = DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY;
+            break;
+        }
+        if (CurrentIdentity == Identity && InterlockedCompareExchange64(&Adapter->SubmittedFenceIdentities[Slot], PublishedIdentity, Identity) == Identity)
+            break;
+    }
+    if (Probe == DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY)
+        KeBugCheckEx(0x119, 0x1, (ULONG_PTR)SubmissionFenceId, (ULONG_PTR)NodeOrdinal, (ULONG_PTR)Adapter);
+    DxgkpUpdateCompletedFence(&Adapter->NodeLastSubmittedFenceId[NodeOrdinal], SubmissionFenceId);
+}
+
+static BOOLEAN
+DxgkpShadowIsSubmittedFenceIdentity(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG NodeOrdinal,
+    _In_ ULONG SubmissionFenceId)
+{
+    LONG64 Identity;
+    LONG64 PublishedIdentity;
+    LONG64 CurrentIdentity;
+    ULONG Probe;
+    ULONG Slot;
+    ULONG StartSlot;
+
+    if (Adapter == NULL || NodeOrdinal >= Adapter->NodeCount || NodeOrdinal >= DXGK_MAX_TRACKED_NODES || SubmissionFenceId == 0)
+        return FALSE;
+    Identity = (LONG64)(((ULONGLONG)(NodeOrdinal + 1) << 32) | SubmissionFenceId);
+    PublishedIdentity = (LONG64)((ULONGLONG)Identity | DXGK_SUBMITTED_FENCE_PUBLISHED_BIT);
+    StartSlot = (ULONG)(((ULONGLONG)Identity ^ ((ULONGLONG)Identity >> 32)) * 2654435761ULL) & (DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY - 1);
+    for (Probe = 0; Probe < DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY; ++Probe)
+    {
+        Slot = (StartSlot + Probe) & (DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY - 1);
+        CurrentIdentity = InterlockedCompareExchange64(&Adapter->SubmittedFenceIdentities[Slot], 0, 0);
+        if (CurrentIdentity == PublishedIdentity)
+            return TRUE;
+        if (CurrentIdentity == 0)
+            return FALSE;
+    }
+    return FALSE;
+}
+
+static BOOLEAN
+DxgkpShadowReleaseSubmittedFenceIdentity(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG NodeOrdinal,
+    _In_ ULONG SubmissionFenceId)
+{
+    LONG64 Identity;
+    LONG64 PublishedIdentity;
+    LONG64 CurrentIdentity;
+    ULONG Probe;
+    ULONG Slot;
+    ULONG StartSlot;
+
+    if (Adapter == NULL || NodeOrdinal >= DXGK_MAX_TRACKED_NODES || SubmissionFenceId == 0)
+        return FALSE;
+    Identity = (LONG64)(((ULONGLONG)(NodeOrdinal + 1) << 32) | SubmissionFenceId);
+    PublishedIdentity = (LONG64)((ULONGLONG)Identity | DXGK_SUBMITTED_FENCE_PUBLISHED_BIT);
+    StartSlot = (ULONG)(((ULONGLONG)Identity ^ ((ULONGLONG)Identity >> 32)) * 2654435761ULL) & (DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY - 1);
+    for (Probe = 0; Probe < DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY; ++Probe)
+    {
+        Slot = (StartSlot + Probe) & (DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY - 1);
+        CurrentIdentity = InterlockedCompareExchange64(&Adapter->SubmittedFenceIdentities[Slot], 0, 0);
+        if (CurrentIdentity == 0)
+            return FALSE;
+        if (CurrentIdentity != Identity && CurrentIdentity != PublishedIdentity)
+            continue;
+        if (InterlockedCompareExchange64(&Adapter->SubmittedFenceIdentities[Slot], DXGK_SUBMITTED_FENCE_TOMBSTONE, CurrentIdentity) == CurrentIdentity)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+static VOID
+DxgkpShadowResetSubmittedFenceIdentities(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    ULONG Slot;
+
+    if (Adapter == NULL)
+        return;
+    for (Slot = 0; Slot < DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY; ++Slot)
+        InterlockedExchange64(&Adapter->SubmittedFenceIdentities[Slot], 0);
+}
+
+static DECLSPEC_NORETURN VOID DxgkpBugCheckMms2Timeline(_In_ PDXGKRNL_ADAPTER Adapter, _In_ ULONG NodeOrdinal, _In_ ULONG FenceId)
+{
+    KeBugCheckEx(0x119, 0x1, (ULONG_PTR)FenceId, (ULONG_PTR)NodeOrdinal, (ULONG_PTR)Adapter);
+}
+
+ULONG NTAPI DxgkAllocateSubmissionFenceId(_In_ PDXGKRNL_ADAPTER Adapter)
+{
+    ULONG ProviderFence;
+    ULONG ShadowFence;
+
+    if (Adapter == NULL)
+        return 0;
+    if (InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) == 0)
+        return DxgkpShadowAllocateSubmissionFenceId(Adapter);
+    KeMemoryBarrier();
+    ProviderFence = Adapter->Mms2Timeline.AllocateFence(Adapter->Mms2Timeline.TimelineHandle, Adapter->Mms2Timeline.Generation);
+    if (ProviderFence == 0)
+        return 0;
+    ShadowFence = DxgkpShadowAllocateSubmissionFenceId(Adapter);
+    if (ProviderFence != ShadowFence)
+        DxgkpBugCheckMms2Timeline(Adapter, 0, ProviderFence);
+    return ProviderFence;
+}
+
+BOOLEAN NTAPI DxgkReserveSubmissionFenceIdentity(_In_ PDXGKRNL_ADAPTER Adapter, _In_ ULONG NodeOrdinal, _In_ ULONG SubmissionFenceId)
+{
+    BOOLEAN ProviderReserved;
+    BOOLEAN ShadowReserved;
+
+    if (Adapter == NULL)
+        return FALSE;
+    if (InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) == 0)
+        return DxgkpShadowReserveSubmissionFenceIdentity(Adapter, NodeOrdinal, SubmissionFenceId);
+    KeMemoryBarrier();
+    ProviderReserved = Adapter->Mms2Timeline.ReserveFence(Adapter->Mms2Timeline.TimelineHandle, Adapter->Mms2Timeline.Generation, NodeOrdinal, SubmissionFenceId);
+    ShadowReserved = DxgkpShadowReserveSubmissionFenceIdentity(Adapter, NodeOrdinal, SubmissionFenceId);
+    if (!ProviderReserved && ShadowReserved)
+    {
+        (VOID)DxgkpShadowReleaseSubmittedFenceIdentity(Adapter, NodeOrdinal, SubmissionFenceId);
+        return FALSE;
+    }
+    if (ProviderReserved && !ShadowReserved)
+    {
+        (VOID)Adapter->Mms2Timeline.ReleaseFence(Adapter->Mms2Timeline.TimelineHandle, Adapter->Mms2Timeline.Generation, NodeOrdinal, SubmissionFenceId);
+        DxgkpBugCheckMms2Timeline(Adapter, NodeOrdinal, SubmissionFenceId);
+    }
+    return ProviderReserved;
+}
+
+VOID NTAPI DxgkPublishSubmittedFence(_In_ PDXGKRNL_ADAPTER Adapter, _In_ ULONG NodeOrdinal, _In_ ULONG SubmissionFenceId)
+{
+    if (Adapter == NULL || InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) == 0)
+    {
+        DxgkpShadowPublishSubmittedFence(Adapter, NodeOrdinal, SubmissionFenceId);
+        return;
+    }
+    KeMemoryBarrier();
+    if (!Adapter->Mms2Timeline.PublishFence(Adapter->Mms2Timeline.TimelineHandle, Adapter->Mms2Timeline.Generation, NodeOrdinal, SubmissionFenceId))
+        DxgkpBugCheckMms2Timeline(Adapter, NodeOrdinal, SubmissionFenceId);
+    DxgkpShadowPublishSubmittedFence(Adapter, NodeOrdinal, SubmissionFenceId);
+}
+
+BOOLEAN NTAPI DxgkIsSubmittedFenceIdentity(_In_ PDXGKRNL_ADAPTER Adapter, _In_ ULONG NodeOrdinal, _In_ ULONG SubmissionFenceId)
+{
+    BOOLEAN ProviderPublished;
+    BOOLEAN ShadowPublished;
+
+    if (Adapter == NULL)
+        return FALSE;
+    ShadowPublished = DxgkpShadowIsSubmittedFenceIdentity(Adapter, NodeOrdinal, SubmissionFenceId);
+    if (InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) == 0)
+        return ShadowPublished;
+    KeMemoryBarrier();
+    ProviderPublished = Adapter->Mms2Timeline.IsFencePublished(Adapter->Mms2Timeline.TimelineHandle, Adapter->Mms2Timeline.Generation, NodeOrdinal, SubmissionFenceId);
+    if (ProviderPublished != ShadowPublished)
+        DxgkpBugCheckMms2Timeline(Adapter, NodeOrdinal, SubmissionFenceId);
+    return ProviderPublished;
+}
+
+VOID NTAPI DxgkReleaseSubmittedFenceIdentity(_In_ PDXGKRNL_ADAPTER Adapter, _In_ ULONG NodeOrdinal, _In_ ULONG SubmissionFenceId)
+{
+    BOOLEAN ProviderReleased;
+    BOOLEAN ShadowReleased;
+
+    if (Adapter == NULL)
+        return;
+    ShadowReleased = DxgkpShadowReleaseSubmittedFenceIdentity(Adapter, NodeOrdinal, SubmissionFenceId);
+    if (InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) == 0)
+        return;
+    KeMemoryBarrier();
+    ProviderReleased = Adapter->Mms2Timeline.ReleaseFence(Adapter->Mms2Timeline.TimelineHandle, Adapter->Mms2Timeline.Generation, NodeOrdinal, SubmissionFenceId);
+    if (ProviderReleased != ShadowReleased)
+        DxgkpBugCheckMms2Timeline(Adapter, NodeOrdinal, SubmissionFenceId);
+}
+
+VOID NTAPI DxgkResetSubmittedFenceIdentities(_In_ PDXGKRNL_ADAPTER Adapter)
+{
+    NTSTATUS Status;
+
+    if (Adapter == NULL)
+        return;
+    if (InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) != 0)
+    {
+        KeMemoryBarrier();
+        Status = Adapter->Mms2Timeline.ResetFenceIdentities(Adapter->Mms2Timeline.TimelineHandle, Adapter->Mms2Timeline.Generation);
+        if (!NT_SUCCESS(Status))
+            DxgkpBugCheckMms2Timeline(Adapter, 0, 0);
+    }
+    DxgkpShadowResetSubmittedFenceIdentities(Adapter);
+}
+
+NTSTATUS NTAPI DxgkNotifySubmissionFenceCompletion(_In_ PDXGKRNL_ADAPTER Adapter, _In_ ULONG NodeOrdinal, _In_ ULONG FenceId, _In_ BOOLEAN Preempted, _Out_ DXGMMS2_FENCE_SNAPSHOT_V1 *Snapshot)
+{
+    NTSTATUS Status;
+
+    if (Adapter == NULL || Snapshot == NULL || InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) == 0)
+        return STATUS_INVALID_DEVICE_STATE;
+    RtlZeroMemory(Snapshot, sizeof(*Snapshot));
+    Snapshot->Size = DXGMMS2_FENCE_SNAPSHOT_V1_SIZE;
+    Snapshot->Version = DXGMMS2_SCHEDULER_TIMELINE_VERSION_1;
+    KeMemoryBarrier();
+    Status = Adapter->Mms2Timeline.NotifyFenceCompletion(Adapter->Mms2Timeline.TimelineHandle, Adapter->Mms2Timeline.Generation, NodeOrdinal, FenceId, Preempted ? DXGMMS2_TIMELINE_NOTIFY_PREEMPTED : 0, Snapshot);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (FenceId != 0)
+    {
+        DxgkpUpdateCompletedFence(&Adapter->LastCompletedSubmissionFenceId, FenceId);
+        DxgkpUpdateCompletedFence(&Adapter->NodeLastCompletedFenceId[NodeOrdinal], FenceId);
+    }
+    if (Snapshot->Generation != Adapter->Mms2Timeline.Generation || Snapshot->NodeOrdinal != NodeOrdinal || Snapshot->LastSubmittedFence != (ULONG)InterlockedCompareExchange((volatile LONG *)&Adapter->NodeLastSubmittedFenceId[NodeOrdinal], 0, 0) || Snapshot->LastCompletedFence != (ULONG)InterlockedCompareExchange((volatile LONG *)&Adapter->NodeLastCompletedFenceId[NodeOrdinal], 0, 0) || Snapshot->GlobalLastCompletedFence != (ULONG)InterlockedCompareExchange((volatile LONG *)&Adapter->LastCompletedSubmissionFenceId, 0, 0))
+        return STATUS_DATA_ERROR;
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS
@@ -979,6 +1622,8 @@ DxgkCancelTrackedDmaBuffer(
     Adapter = Entry->Adapter;
     ReleaseReservation = Entry->ReservationActive;
     Entry->ReservationActive = FALSE;
+    if (Entry->FenceIdentityOwned && Adapter != NULL)
+        DxgkReleaseSubmittedFenceIdentity(Adapter, Entry->NodeOrdinal, Entry->SubmissionFenceId);
     if (Entry->CloseOpenHandlesOnCancel && Adapter != NULL && Entry->Device != NULL && Entry->OpenHandleCount != 0 && Entry->OpenHandleList != NULL && DXGK_CB_FULL(Adapter, DxgkDdiCloseAllocation) != NULL && DxgkAcquireMiniportCallback(Adapter))
     {
         DXGKARG_CLOSEALLOCATION CloseArgs;
@@ -1280,6 +1925,8 @@ DxgkpFreeTrackedDmaBufferEntry(
     _In_ BOOLEAN Completed,
     _In_ BOOLEAN MiniportCallbacksValid)
 {
+    if (Entry->FenceIdentityOwned)
+        DxgkReleaseSubmittedFenceIdentity(Adapter, Entry->NodeOrdinal, Entry->SubmissionFenceId);
     if (Completed && MiniportCallbacksValid && Entry->RefreshSharedPrimaryOnRetire)
         DxgkpRefreshTrackedSharedPrimaryScanout(Adapter, Entry);
 
@@ -1395,17 +2042,14 @@ DxgkRetireCompletedDmaBuffers(
         return;
 
     CompletedFenceId = Adapter->LastCompletedSubmissionFenceId;
-    if (CompletedFenceId == 0)
-        return;
-
     InitializeListHead(&RetireList);
 
     /*
      * Walk the whole list: independent GPU nodes complete out of global
      * fence order, so an unreached entry no longer implies everything
-     * behind it is unreached.  Each entry retires against ITS node's
-     * completed fence (falling back to the global fence for node 0
-     * completions reported before per-node tracking existed).
+     * behind it is unreached. Each entry retires only against its node's
+     * completed fence; the adapter-global maximum cannot prove completion on
+     * any particular node.
      */
     KeAcquireSpinLock(&Adapter->SubmitDmaLock, &OldIrql);
     {
@@ -1416,9 +2060,6 @@ DxgkRetireCompletedDmaBuffers(
             PDXGKRNL_SUBMIT_DMA_BUFFER Entry = CONTAINING_RECORD(Link, DXGKRNL_SUBMIT_DMA_BUFFER, ListEntry);
             PLIST_ENTRY Next = Link->Flink;
             ULONG NodeFence = Adapter->NodeLastCompletedFenceId[Entry->NodeOrdinal];
-
-            if (NodeFence == 0 && Entry->NodeOrdinal == 0)
-                NodeFence = CompletedFenceId;
 
             if (NodeFence != 0 && DxgkpFenceIdReached(NodeFence, Entry->SubmissionFenceId))
             {
@@ -1519,7 +2160,7 @@ DxgkReleaseTrackedDmaBuffers(
  * ====================================================================== */
 
 /*
- * DxgkpFirstInit
+ * DxgkpEnsureGlobalInitialization
  *
  * Performs one-time global initialisation.  Called from DxgkInitializeEx
  * (and optionally from DriverEntry if dxgkrnl loads as a service).
@@ -1535,28 +2176,68 @@ DxgkReleaseTrackedDmaBuffers(
  *
  * IRQL: PASSIVE_LEVEL
  */
-static VOID
-DxgkpFirstInit(VOID)
+NTSTATUS
+DxgkpEnsureGlobalInitialization(VOID)
 {
-    if (InterlockedCompareExchange(&DxgkpInitialized, 1, 0) != 0)
-        return; /* another caller got here first */
+    LONG PreviousState;
+    NTSTATUS Status;
+
+    PreviousState = InterlockedCompareExchange(&DxgkpInitialized, 1, 0);
+    if (PreviousState != 0)
+    {
+        LARGE_INTEGER Delay;
+
+        Delay.QuadPart = -10 * 1000;
+        while ((PreviousState = InterlockedCompareExchange(&DxgkpInitialized, 0, 0)) == 1)
+            KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+        ASSERT(PreviousState == 2 || PreviousState == 3);
+        return DxgkpInitializationStatus;
+    }
 
     /* Initialize global adapter list and lock. */
     KeInitializeSpinLock(&DxgkAdapterGlobalListLock);
     InitializeListHead(&DxgkAdapterGlobalListHead);
+    KeInitializeSpinLock(&g_PostDisplayOwnerLock);
+    KeInitializeMutex(&g_PostDisplayOwnershipMutex, 0);
     ExInitializeFastMutex(&DxgkpMapMemoryMutex);
     InitializeListHead(&DxgkpMapMemoryList);
+
+    DxgkpInitializeCoreInterface();
 
     /* Initialize debug helpers. */
     DxgkDebugInit();
 
+    Status = DxgkpMms2Initialize();
+    if (!NT_SUCCESS(Status))
+    {
+        DxgkpInitializationStatus = Status;
+        InterlockedExchange(&DxgkpInitialized, 3);
+        DXGKRNL_ERR("DxgkpEnsureGlobalInitialization: dxgmms2 registration failed 0x%08lX\n", Status);
+        return Status;
+    }
+
     /* Seed D3DKMT handle cookie. */
-    DxgkContextInit();
+    Status = DxgkContextInit();
+    if (!NT_SUCCESS(Status))
+    {
+        NTSTATUS RollbackStatus;
+
+        RollbackStatus = DxgkpMms2Uninitialize();
+        if (!NT_SUCCESS(RollbackStatus))
+            DXGKRNL_ERR("DxgkpEnsureGlobalInitialization: dxgmms2 rollback failed 0x%08lX\n", RollbackStatus);
+        DxgkpInitializationStatus = Status;
+        InterlockedExchange(&DxgkpInitialized, 3);
+        DXGKRNL_ERR("DxgkpEnsureGlobalInitialization: DxgkContextInit failed 0x%08lX\n", Status);
+        return Status;
+    }
 
     /* Bring the panic screen up through the display owner (see above). */
     DxgkpRegisterBugCheckCallback();
 
-    DXGKRNL_TRACE("DxgkpFirstInit: one-time init complete\n");
+    DxgkpInitializationStatus = STATUS_SUCCESS;
+    InterlockedExchange(&DxgkpInitialized, 2);
+    DXGKRNL_TRACE("DxgkpEnsureGlobalInitialization: one-time init complete\n");
+    return STATUS_SUCCESS;
 }
 
 /*
@@ -1611,10 +2292,21 @@ DxgkpWaitForVidSchCallbacks(
         KeDelayExecutionThread(KernelMode, FALSE, &Delay);
 }
 
+VOID
+NTAPI
+DxgkDrainVidSchCallbacks(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    if (Adapter != NULL)
+        DxgkpWaitForVidSchCallbacks(Adapter);
+}
+
 static VOID
 DxgkpDisconnectAdapterInterrupt(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
+    PAGED_CODE();
+    DxgkBlockInterruptCallbacks(Adapter);
     if (Adapter->InterruptMessageTable != NULL)
     {
         IO_DISCONNECT_INTERRUPT_PARAMETERS DisconnectParams;
@@ -1677,11 +2369,12 @@ DxgkpAdapterDpcRoutine(
                       DxgkpTraceSinceStartUs(Adapter));
     }
 
-    if (Adapter->MiniportContext->InitData.s.DxgkDdiDpcRoutine != NULL)
+    if (Adapter->MiniportContext->InitData.s.DxgkDdiDpcRoutine != NULL && DxgkAcquireInterruptCallback(Adapter))
     {
         Start100ns = DxgkpTraceNow100ns();
         Adapter->MiniportContext->InitData.s.DxgkDdiDpcRoutine(Adapter->MiniportDeviceContext);
         ElapsedUs = DxgkpTraceElapsedUs(Start100ns);
+        DxgkReleaseInterruptCallback(Adapter);
 
         if (Logged || ElapsedUs >= DXGK_TRACE_SLOW_DPC_US)
         {
@@ -2079,7 +2772,9 @@ DxgkpFillInterface(
  * All DxgkCb* callbacks call this helper to convert the opaque handle
  * supplied by the miniport back to the adapter object.
  *
- * Returns the adapter pointer or NULL if the handle is invalid.
+ * Returns the adapter pointer with ReverseCallbackRundownRef held, or NULL if the
+ * handle is invalid or final reverse-callback teardown has begun.  The caller must release
+ * ReverseCallbackRundownRef after its last adapter access.
  *
  * IRQL: any (the global list walk uses a spinlock)
  */
@@ -2108,7 +2803,8 @@ DxgkpHandleToAdapter(
             CONTAINING_RECORD(Entry, DXGKRNL_ADAPTER, GlobalAdapterListEntry);
         if (Candidate == (PDXGKRNL_ADAPTER)DeviceHandle)
         {
-            Adapter = Candidate;
+            if (ExAcquireRundownProtection(&Candidate->ReverseCallbackRundownRef))
+                Adapter = Candidate;
             break;
         }
     }
@@ -2152,33 +2848,12 @@ DxgkCbNotifyInterrupt(
     if (!DxgkpAcquireVidSchCallback(Adapter))
         return STATUS_DELETE_PENDING;
 
-    if (NotifyInterruptData->InterruptType == DXGK_INTERRUPT_DMA_COMPLETED && (NotifyInterruptData->DmaCompleted.NodeOrdinal >= Adapter->NodeCount || NotifyInterruptData->DmaCompleted.NodeOrdinal >= DXGK_MAX_TRACKED_NODES))
-    {
-        Status = STATUS_INVALID_PARAMETER;
-        goto Exit;
-    }
-    if (NotifyInterruptData->InterruptType == DXGK_INTERRUPT_DMA_PREEMPTED && (NotifyInterruptData->DmaPreempted.NodeOrdinal >= Adapter->NodeCount || NotifyInterruptData->DmaPreempted.NodeOrdinal >= DXGK_MAX_TRACKED_NODES))
-    {
-        Status = STATUS_INVALID_PARAMETER;
-        goto Exit;
-    }
-
     /* Log interrupt type for diagnostics */
     if (NotifyInterruptData)
     {
         static LONG NotifyCount = 0;
         LONG c = InterlockedIncrement(&NotifyCount);
-        if (NotifyInterruptData->InterruptType == DXGK_INTERRUPT_DMA_COMPLETED)
-        {
-            DxgkpUpdateCompletedFence(&Adapter->LastCompletedSubmissionFenceId, NotifyInterruptData->DmaCompleted.SubmissionFenceId);
-            DxgkpUpdateCompletedFence(&Adapter->NodeLastCompletedFenceId[NotifyInterruptData->DmaCompleted.NodeOrdinal], NotifyInterruptData->DmaCompleted.SubmissionFenceId);
-        }
-        else if (NotifyInterruptData->InterruptType == DXGK_INTERRUPT_DMA_PREEMPTED)
-        {
-            DxgkpUpdateCompletedFence(&Adapter->LastCompletedSubmissionFenceId, NotifyInterruptData->DmaPreempted.LastCompletedFenceId);
-            DxgkpUpdateCompletedFence(&Adapter->NodeLastCompletedFenceId[NotifyInterruptData->DmaPreempted.NodeOrdinal], NotifyInterruptData->DmaPreempted.LastCompletedFenceId);
-        }
-        else if (NotifyInterruptData->InterruptType == DXGK_INTERRUPT_CRTC_VSYNC)
+        if (NotifyInterruptData->InterruptType == DXGK_INTERRUPT_CRTC_VSYNC)
         {
             ULONG TargetId = NotifyInterruptData->CrtcVsync.VidPnTargetId;
 
@@ -2200,7 +2875,6 @@ DxgkCbNotifyInterrupt(
     }
     KeInsertQueueDpc(&Adapter->DpcObject, NULL, NULL);
 
-Exit:
     DxgkpReleaseVidSchCallback(Adapter);
     return Status;
 }
@@ -2308,6 +2982,7 @@ DxgkCbGetDeviceInformation(
                   PropertyUs,
                   DxgkpTraceElapsedUs(TotalStart100ns));
 
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
     return STATUS_SUCCESS;
 }
 
@@ -2743,22 +3418,11 @@ DxgkCbReadDeviceSpace(
 
     *BytesRead = 0;
 
-    /*
-     * Direct-cast the DeviceHandle instead of walking the global adapter
-     * list with DxgkpHandleToAdapter().  The global list walk acquires
-     * DxgkAdapterGlobalListLock at DISPATCH_LEVEL.  IoGetDeviceProperty
-     * (which we previously used below) sends PnP IRPs that re-enter this
-     * driver, and on ReactOS the IRP dispatch path can trigger a spinlock
-     * re-entrancy check (SPIN_LOCK_ALREADY_OWNED bugcheck).
-     *
-     * Since the DeviceHandle is set by DxgkpFillInterface to the Adapter
-     * pointer and remains valid for the entire adapter lifetime, a direct
-     * cast is safe and avoids the spinlock entirely.
-     */
-    Adapter = (PDXGKRNL_ADAPTER)DeviceHandle;
+    /* Resolve and pin the adapter while it remains on the global list. */
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
     if (Adapter == NULL)
     {
-        DXGKRNL_ERR("DxgkCbReadDeviceSpace: NULL handle\n");
+        DXGKRNL_ERR("DxgkCbReadDeviceSpace: invalid handle %p\n", DeviceHandle);
         return STATUS_INVALID_HANDLE;
     }
 
@@ -2784,6 +3448,7 @@ DxgkCbReadDeviceSpace(
         if (!Adapter->PciBusSlotCached)
         {
             DXGKRNL_ERR("DxgkCbReadDeviceSpace: PCI bus/slot not yet cached\n");
+            ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
             return STATUS_DEVICE_NOT_READY;
         }
 
@@ -2798,6 +3463,7 @@ DxgkCbReadDeviceSpace(
         if (BytesTransferred == 0)
         {
             DXGKRNL_ERR("DxgkCbReadDeviceSpace: HalGetBusDataByOffset failed\n");
+            ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
             return STATUS_UNSUCCESSFUL;
         }
 
@@ -2808,11 +3474,13 @@ DxgkCbReadDeviceSpace(
             DXGKRNL_WARN("DxgkCbReadDeviceSpace: slow config read Off=0x%lX Len=0x%lX Bytes=%lu took %I64u us\n",
                          Offset, Length, BytesTransferred, ElapsedUs);
         }
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
         return STATUS_SUCCESS;
     }
 
     /* Other space types not yet supported. */
     DXGKRNL_WARN("DxgkCbReadDeviceSpace: unsupported DataType %lu\n", DataType);
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
     return STATUS_NOT_SUPPORTED;
 }
 
@@ -2847,11 +3515,10 @@ DxgkCbWriteDeviceSpace(
 
     *BytesWritten = 0;
 
-    /* Direct-cast for the same reasons as DxgkCbReadDeviceSpace. */
-    Adapter = (PDXGKRNL_ADAPTER)DeviceHandle;
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
     if (Adapter == NULL)
     {
-        DXGKRNL_ERR("DxgkCbWriteDeviceSpace: NULL handle\n");
+        DXGKRNL_ERR("DxgkCbWriteDeviceSpace: invalid handle %p\n", DeviceHandle);
         return STATUS_INVALID_HANDLE;
     }
 
@@ -2867,6 +3534,7 @@ DxgkCbWriteDeviceSpace(
         if (!Adapter->PciBusSlotCached)
         {
             DXGKRNL_ERR("DxgkCbWriteDeviceSpace: PCI bus/slot not yet cached\n");
+            ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
             return STATUS_DEVICE_NOT_READY;
         }
 
@@ -2881,6 +3549,7 @@ DxgkCbWriteDeviceSpace(
         if (BytesTransferred == 0)
         {
             DXGKRNL_ERR("DxgkCbWriteDeviceSpace: HalSetBusDataByOffset failed\n");
+            ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
             return STATUS_UNSUCCESSFUL;
         }
 
@@ -2891,10 +3560,12 @@ DxgkCbWriteDeviceSpace(
             DXGKRNL_WARN("DxgkCbWriteDeviceSpace: slow config write Off=0x%lX Len=0x%lX Bytes=%lu took %I64u us\n",
                          Offset, Length, BytesTransferred, ElapsedUs);
         }
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
         return STATUS_SUCCESS;
     }
 
     DXGKRNL_WARN("DxgkCbWriteDeviceSpace: unsupported DataType %lu\n", DataType);
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
     return STATUS_NOT_SUPPORTED;
 }
 
@@ -3028,6 +3699,7 @@ DxgkCbIndicateChildStatus(
 
     IoInvalidateDeviceRelations(Adapter->PhysicalDeviceObject, BusRelations);
 
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
     return STATUS_SUCCESS;
 }
 
@@ -3109,12 +3781,14 @@ DxgkCbSynchronizeExecution(
     if (ReturnValue == NULL)
     {
         DXGKRNL_ERR("DxgkCbSynchronizeExecution: NULL ReturnValue pointer\n");
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
         return STATUS_INVALID_PARAMETER;
     }
 
     if (SynchronizeRoutine == NULL)
     {
         *ReturnValue = TRUE;
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
         return STATUS_SUCCESS;
     }
 
@@ -3147,6 +3821,7 @@ DxgkCbSynchronizeExecution(
                      MessageNumber, InterruptObject, ElapsedUs);
     }
 
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
     return STATUS_SUCCESS;
 }
 
@@ -3298,6 +3973,7 @@ DxgkCbAcquirePostDisplayOwnership(
     ULONGLONG                    GopQueryUs = 0;
     ULONGLONG                    OwnershipUs = 0;
     ULONGLONG                    StepStart100ns;
+    NTSTATUS                     Status = STATUS_SUCCESS;
 
     PAGED_CODE();
 
@@ -3307,6 +3983,7 @@ DxgkCbAcquirePostDisplayOwnership(
                   DeviceHandle, DisplayInformationArg);
 
     RtlZeroMemory(DisplayInformation, sizeof(*DisplayInformation));
+    (VOID)KeWaitForSingleObject(&g_PostDisplayOwnershipMutex, Executive, KernelMode, FALSE, NULL);
 
     /*
      * Boot display ownership policy (the MSBDD handover, see
@@ -3318,7 +3995,8 @@ DxgkCbAcquirePostDisplayOwnership(
      */
     {
         PDXGKRNL_ADAPTER Claimant = (PDXGKRNL_ADAPTER)DeviceHandle;
-        PDXGKRNL_ADAPTER Owner = g_PostDisplayOwnerAdapter;
+        PDEVICE_OBJECT OwnerDeviceObject;
+        PDXGKRNL_ADAPTER Owner = DxgkpReferencePostDisplayOwner(&OwnerDeviceObject);
 
         if (Claimant != NULL && Owner != NULL && Owner != Claimant)
         {
@@ -3330,11 +4008,20 @@ DxgkCbAcquirePostDisplayOwnership(
                 DXGKRNL_TRACE("DxgkCbAcquirePostDisplayOwnership: boot display "
                               "already owned by adapter %p — fallback yields\n",
                               Owner);
-                return STATUS_SUCCESS;
+                ObDereferenceObject(OwnerDeviceObject);
+                goto Complete;
             }
 
-            DxgkpStopPostDisplayOwner(Owner);
+            Status = DxgkpStopPostDisplayOwner(Owner);
+            if (!NT_SUCCESS(Status))
+            {
+                DXGKRNL_ERR("DxgkCbAcquirePostDisplayOwnership: old owner %p could not be stopped 0x%08lX\n", Owner, Status);
+                ObDereferenceObject(OwnerDeviceObject);
+                goto Complete;
+            }
         }
+        if (OwnerDeviceObject != NULL)
+            ObDereferenceObject(OwnerDeviceObject);
     }
 
     /*
@@ -3354,14 +4041,14 @@ DxgkCbAcquirePostDisplayOwnership(
             DXGKRNL_TRACE("DxgkCbAcquirePostDisplayOwnership: "
                           "VBE fallback succeeded total=%I64u us\n",
                           DxgkpTraceElapsedUs(TotalStart100ns));
-            g_PostDisplayOwnerAdapter = Adapter;
-            return STATUS_SUCCESS;
+            DxgkpSetPostDisplayOwner(Adapter);
+            goto Complete;
         }
 
         /* Expected on headless boots: the miniport cold-starts. */
         DXGKRNL_WARN("DxgkCbAcquirePostDisplayOwnership: "
                      "no GOP and no VBE — miniport must cold-start\n");
-        return STATUS_SUCCESS;
+        goto Complete;
     }
 
     StepStart100ns = DxgkpTraceNow100ns();
@@ -3369,7 +4056,7 @@ DxgkCbAcquirePostDisplayOwnership(
     {
         DXGKRNL_ERR("DxgkCbAcquirePostDisplayOwnership: "
                     "InbvGetGopFrameBufferInfo failed\n");
-        return STATUS_SUCCESS;
+        goto Complete;
     }
     GopQueryUs = DxgkpTraceElapsedUs(StepStart100ns);
 
@@ -3433,7 +4120,7 @@ DxgkCbAcquirePostDisplayOwnership(
         default: /* BltOnly or unknown — no usable linear framebuffer */
             DXGKRNL_WARN("DxgkCbAcquirePostDisplayOwnership: "
                          "PixelFormat %lu has no linear FB\n", Fb.PixelFormat);
-            return STATUS_SUCCESS;
+            goto Complete;
     }
 
     DisplayInformation->Width         = Fb.HorizontalResolution;
@@ -3528,14 +4215,16 @@ DxgkCbAcquirePostDisplayOwnership(
     InbvAcquireDisplayOwnership();
     OwnershipUs = DxgkpTraceElapsedUs(StepStart100ns);
 
-    g_PostDisplayOwnerAdapter = (PDXGKRNL_ADAPTER)DeviceHandle;
+    DxgkpSetPostDisplayOwner((PDXGKRNL_ADAPTER)DeviceHandle);
 
     DXGKRNL_TRACE("DxgkCbAcquirePostDisplayOwnership: gop=%I64u us ownership=%I64u us total=%I64u us\n",
                   GopQueryUs,
                   OwnershipUs,
                   DxgkpTraceElapsedUs(TotalStart100ns));
 
-    return STATUS_SUCCESS;
+Complete:
+    KeReleaseMutex(&g_PostDisplayOwnershipMutex, FALSE);
+    return Status;
 }
 
 static BOOLEAN
@@ -3559,14 +4248,18 @@ DxgkpInvokeMiniportInterrupt(
         DxgkpReleaseVidSchCallback(Adapter);
         return FALSE;
     }
+    if (!DxgkAcquireInterruptCallback(Adapter))
+    {
+        DxgkpReleaseVidSchCallback(Adapter);
+        return FALSE;
+    }
 
     Sequence = InterlockedIncrement(&Adapter->InterruptCount);
     Logged = (Sequence <= DXGK_TRACE_ISR_LOG_LIMIT);
     Start100ns = DxgkpTraceNow100ns();
 
-    Handled = Adapter->MiniportContext->InitData.s.DxgkDdiInterruptRoutine(
-        Adapter->MiniportDeviceContext,
-        MessageNumber);
+    Handled = Adapter->MiniportContext->InitData.s.DxgkDdiInterruptRoutine(Adapter->MiniportDeviceContext, MessageNumber);
+    DxgkReleaseInterruptCallback(Adapter);
 
     ElapsedUs = DxgkpTraceElapsedUs(Start100ns);
 
@@ -3716,12 +4409,10 @@ DxgkpMarkInterruptResourcesMessageBased(
 
     for (li = 0; li < ResourceList->Count; li++)
     {
-        PCM_PARTIAL_RESOURCE_LIST Partial =
-            &ResourceList->List[li].PartialResourceList;
+        PCM_PARTIAL_RESOURCE_LIST Partial = &ResourceList->List[li].PartialResourceList;
         for (di = 0; di < Partial->Count; di++)
         {
-            PCM_PARTIAL_RESOURCE_DESCRIPTOR Desc =
-                &Partial->PartialDescriptors[di];
+            PCM_PARTIAL_RESOURCE_DESCRIPTOR Desc = &Partial->PartialDescriptors[di];
             if (Desc->Type == CmResourceTypeInterrupt)
                 Desc->Flags |= CM_RESOURCE_INTERRUPT_MESSAGE;
         }
@@ -3758,6 +4449,8 @@ DxgkpQueryDriverCaps(
     PfnQueryAdapterInfo = DXGK_CB(Adapter, DxgkDdiQueryAdapterInfo);
     if (PfnQueryAdapterInfo == NULL)
         return STATUS_NOT_SUPPORTED;
+    if (!DxgkAcquireKmdCall(Adapter))
+        return STATUS_DELETE_PENDING;
 
     Status = STATUS_UNSUCCESSFUL;
     for (Attempt = 0; Attempt < 2; Attempt++)
@@ -3771,8 +4464,7 @@ DxgkpQueryDriverCaps(
 
         _SEH2_TRY
         {
-            Status = PfnQueryAdapterInfo(Adapter->MiniportDeviceContext,
-                                         &QueryArgs);
+            Status = PfnQueryAdapterInfo(Adapter->MiniportDeviceContext, &QueryArgs);
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
@@ -3784,12 +4476,251 @@ DxgkpQueryDriverCaps(
             break;
     }
 
+    DxgkReleaseKmdCall(Adapter);
     return Status;
 }
 
 /* ========================================================================
  * Adapter lifecycle functions
  * ====================================================================== */
+
+static ULONG
+DxgkpMms2GetAdapterFlags(_In_ PDXGKRNL_ADAPTER Adapter)
+{
+    return Adapter->MiniportContext->IsDisplayOnlyDriver ? DXGMMS2_ADAPTER_FLAG_DISPLAY_ONLY : 0;
+}
+
+static DECLSPEC_NORETURN VOID
+DxgkpBugCheckMms2Lifecycle(_In_ PDXGKRNL_ADAPTER Adapter, _In_ NTSTATUS FailureStatus, _In_ ULONG Phase)
+{
+    InterlockedExchange(&Adapter->KmdCallsBlocked, 1);
+    InterlockedExchange(&Adapter->InterruptCallbacksBlocked, 1);
+    InterlockedExchange(&Adapter->MiniportCallbacksValid, 0);
+    KeMemoryBarrier();
+    DXGKRNL_ERR("DxgkpBugCheckMms2Lifecycle: adapter %p cannot contain dxgmms2 lifecycle failure, status 0x%08lX phase %lu\n", Adapter, FailureStatus, Phase);
+    KeBugCheckEx(DXGKP_BUGCHECK_VIDEO_DXGKRNL_FATAL_ERROR, (ULONG_PTR)DXGKP_FATAL_MMS2_LIFECYCLE_SUBTYPE, (ULONG_PTR)FailureStatus, (ULONG_PTR)Adapter, (ULONG_PTR)Phase);
+}
+
+static VOID
+DxgkpMms2PublishStarted(_In_ PDXGKRNL_ADAPTER Adapter)
+{
+    (VOID)KeWaitForSingleObject(&Adapter->AdapterMutex, Executive, KernelMode, FALSE, NULL);
+    ASSERT(Adapter->Mms2State == DxgkMms2AdapterCreated || Adapter->Mms2State == DxgkMms2AdapterStopped);
+    Adapter->Mms2State = DxgkMms2AdapterStarted;
+    Adapter->Mms2StopReason = 0;
+    KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+}
+
+static NTSTATUS
+DxgkpMms2BeginStop(_In_ PDXGKRNL_ADAPTER Adapter, _In_ DXGMMS2_STOP_REASON RequestedReason)
+{
+    DXGMMS2_ADAPTER_HANDLE Mms2Adapter;
+    NTSTATUS Status;
+
+    (VOID)KeWaitForSingleObject(&Adapter->AdapterMutex, Executive, KernelMode, FALSE, NULL);
+    if (Adapter->Mms2State == DxgkMms2AdapterBeginPending || Adapter->Mms2State == DxgkMms2AdapterStopping || Adapter->Mms2State == DxgkMms2AdapterCreated || Adapter->Mms2State == DxgkMms2AdapterStopped)
+    {
+        KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+        return STATUS_SUCCESS;
+    }
+    if (Adapter->Mms2State != DxgkMms2AdapterStarted || Adapter->Mms2Adapter == NULL)
+    {
+        KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    Mms2Adapter = Adapter->Mms2Adapter;
+    Adapter->Mms2State = DxgkMms2AdapterBeginPending;
+    Adapter->Mms2StopReason = RequestedReason;
+    KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+
+    Status = DxgkpMms2BeginStopAdapter(Mms2Adapter, RequestedReason);
+    (VOID)KeWaitForSingleObject(&Adapter->AdapterMutex, Executive, KernelMode, FALSE, NULL);
+    if (Adapter->Mms2Adapter == Mms2Adapter && Adapter->Mms2State == DxgkMms2AdapterBeginPending && Adapter->Mms2StopReason == RequestedReason)
+    {
+        Adapter->Mms2State = NT_SUCCESS(Status) ? DxgkMms2AdapterStopping : DxgkMms2AdapterStarted;
+        if (!NT_SUCCESS(Status))
+            Adapter->Mms2StopReason = 0;
+    }
+    KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+    return Status;
+}
+
+static NTSTATUS
+DxgkpMms2CompleteRetiredStop(_In_ PDXGKRNL_ADAPTER Adapter)
+{
+    DXGMMS2_ADAPTER_HANDLE Mms2Adapter;
+    DXGMMS2_STOP_REASON Reason;
+    NTSTATUS Status;
+
+    (VOID)KeWaitForSingleObject(&Adapter->AdapterMutex, Executive, KernelMode, FALSE, NULL);
+    if (Adapter->Mms2State == DxgkMms2AdapterCreated || Adapter->Mms2State == DxgkMms2AdapterStopped)
+    {
+        KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+        return STATUS_SUCCESS;
+    }
+    if (Adapter->Mms2State != DxgkMms2AdapterStopping || Adapter->Mms2Adapter == NULL)
+    {
+        KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    Mms2Adapter = Adapter->Mms2Adapter;
+    Reason = Adapter->Mms2StopReason;
+    KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+
+    Status = DxgkpMms2CompleteStopAdapter(Mms2Adapter, Reason);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    (VOID)KeWaitForSingleObject(&Adapter->AdapterMutex, Executive, KernelMode, FALSE, NULL);
+    if (Adapter->Mms2Adapter == Mms2Adapter && Adapter->Mms2State == DxgkMms2AdapterStopping && Adapter->Mms2StopReason == Reason)
+    {
+        Adapter->Mms2State = DxgkMms2AdapterStopped;
+        Adapter->Mms2StopReason = 0;
+    }
+    KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+DxgkpMms2DestroyAdministrativeAdapter(_In_ PDXGKRNL_ADAPTER Adapter)
+{
+    DXGMMS2_ADAPTER_HANDLE Mms2Adapter;
+    NTSTATUS Status;
+
+    (VOID)KeWaitForSingleObject(&Adapter->AdapterMutex, Executive, KernelMode, FALSE, NULL);
+    if (Adapter->Mms2Adapter == NULL && Adapter->Mms2State == DxgkMms2AdapterAbsent)
+    {
+        KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+        return STATUS_SUCCESS;
+    }
+    if (Adapter->Mms2Adapter == NULL || (Adapter->Mms2State != DxgkMms2AdapterCreated && Adapter->Mms2State != DxgkMms2AdapterStopped))
+    {
+        KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    Mms2Adapter = Adapter->Mms2Adapter;
+    KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+
+    Status = DxgkpMms2DestroyAdapter(Mms2Adapter);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    InterlockedExchange(&Adapter->Mms2TimelineValid, 0);
+    KeMemoryBarrier();
+    RtlZeroMemory(&Adapter->Mms2Timeline, sizeof(Adapter->Mms2Timeline));
+    (VOID)KeWaitForSingleObject(&Adapter->AdapterMutex, Executive, KernelMode, FALSE, NULL);
+    if (Adapter->Mms2Adapter == Mms2Adapter)
+    {
+        Adapter->Mms2Adapter = NULL;
+        Adapter->Mms2State = DxgkMms2AdapterAbsent;
+        Adapter->Mms2StopReason = 0;
+    }
+    KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+DxgkpMms2StartAdministrativeAdapter(_In_ PDXGKRNL_ADAPTER Adapter, _Out_ PBOOLEAN ProviderStarted)
+{
+    DXGMMS2_SCHEDULER_TIMELINE_INTERFACE_V1 Timeline;
+    ULONGLONG EnabledSubsystems;
+    ULONG HighestCompleteWddmVersion;
+    ULONG RequestedWddmVersion;
+    NTSTATUS Status;
+
+    EnabledSubsystems = 0;
+    HighestCompleteWddmVersion = 0;
+    RequestedWddmVersion = min(Adapter->MiniportContext->InitData.s.Version, (ULONG)DXGKDDI_INTERFACE_VERSION);
+    InterlockedExchange(&Adapter->Mms2TimelineValid, 0);
+    KeMemoryBarrier();
+    Status = DxgkpMms2StartAdapter(Adapter->Mms2Adapter, Adapter->MiniportContext->InitData.s.Version, RequestedWddmVersion, Adapter->NodeCount, Adapter->SegmentCount, DxgkpMms2GetAdapterFlags(Adapter), Adapter->SchedulingCaps.Value, &EnabledSubsystems, &HighestCompleteWddmVersion, ProviderStarted);
+    if (NT_SUCCESS(Status))
+    {
+        ASSERT(EnabledSubsystems == 0);
+        ASSERT(HighestCompleteWddmVersion == 0);
+        Status = DxgkpMms2QuerySchedulerTimeline(Adapter->Mms2Adapter, &Timeline);
+        if (NT_SUCCESS(Status) && Timeline.NodeCount != Adapter->NodeCount)
+            Status = STATUS_REVISION_MISMATCH;
+        if (NT_SUCCESS(Status))
+        {
+            Adapter->Mms2Timeline = Timeline;
+            KeMemoryBarrier();
+            InterlockedExchange(&Adapter->Mms2TimelineValid, 1);
+        }
+    }
+    return Status;
+}
+
+static NTSTATUS
+DxgkpBeginAdapterStart(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Out_ PULONG Generation)
+{
+    ULONG NextGeneration;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    (VOID)KeWaitForSingleObject(&Adapter->AdapterMutex, Executive, KernelMode, FALSE, NULL);
+    if (Adapter->State != DxgkAdapterStateStopped || InterlockedCompareExchange(&Adapter->AdapterStopInProgress, 0, 0) != 0 || Adapter->AdapterStopIntentCount != 0)
+    {
+        Status = STATUS_DEVICE_BUSY;
+    }
+    else
+    {
+        NextGeneration = Adapter->AdapterStartGeneration + 1;
+        if (NextGeneration == 0)
+            NextGeneration = 1;
+        Adapter->AdapterStartGeneration = NextGeneration;
+        Adapter->AdapterStartStatus = STATUS_PENDING;
+        KeResetEvent(&Adapter->AdapterStartCompletedEvent);
+        Adapter->State = DxgkAdapterStateStarting;
+        *Generation = NextGeneration;
+    }
+    KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+    return Status;
+}
+
+static VOID
+DxgkpCompleteAdapterStart(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG Generation,
+    _In_ NTSTATUS Status,
+    _In_ BOOLEAN Restartable)
+{
+    if (!NT_SUCCESS(Status))
+        DxgkpClearPostDisplayOwner(Adapter);
+
+    (VOID)KeWaitForSingleObject(&Adapter->AdapterMutex, Executive, KernelMode, FALSE, NULL);
+    ASSERT(Adapter->AdapterStartGeneration == Generation);
+    ASSERT(Adapter->State == DxgkAdapterStateStarting);
+    if (Adapter->AdapterStartGeneration == Generation && Adapter->State == DxgkAdapterStateStarting)
+    {
+        Adapter->AdapterStartStatus = Status;
+        Adapter->AdapterStartCompletedGeneration = Generation;
+        Adapter->State = NT_SUCCESS(Status) ? DxgkAdapterStateStarted : (Restartable ? DxgkAdapterStateStopped : DxgkAdapterStateStopping);
+        KeSetEvent(&Adapter->AdapterStartCompletedEvent, IO_NO_INCREMENT, FALSE);
+    }
+    KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+}
+
+/* Returns with AdapterMutex held after every in-flight start has completed. */
+static VOID
+DxgkpAcquireAdapterMutexAfterStart(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    for (;;)
+    {
+        ULONG Generation;
+
+        (VOID)KeWaitForSingleObject(&Adapter->AdapterMutex, Executive, KernelMode, FALSE, NULL);
+        if (Adapter->State != DxgkAdapterStateStarting)
+            return;
+        Generation = Adapter->AdapterStartGeneration;
+        KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+        KeWaitForSingleObject(&Adapter->AdapterStartCompletedEvent, Executive, KernelMode, FALSE, NULL);
+        (VOID)KeWaitForSingleObject(&Adapter->AdapterMutex, Executive, KernelMode, FALSE, NULL);
+        if (Adapter->AdapterStartCompletedGeneration == Generation && Adapter->State != DxgkAdapterStateStarting)
+            return;
+        KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+    }
+}
 
 /*
  * DxgkAdapterStart
@@ -3817,14 +4748,19 @@ DxgkAdapterStart(
     ULONGLONG       VidPnUs = 0;
     ULONGLONG       PresentUs = 0;
     ULONGLONG       DisplayUs = 0;
+    ULONG           StartGeneration;
 
     PAGED_CODE();
 
     AdapterStart100ns = DxgkpTraceNow100ns();
 
     DxgkRosAssert(Adapter != NULL, DXGKRNL_BUGCHECK_NULL_ADAPTER);
-    DxgkRosAssert(Adapter->State == DxgkAdapterStateStopped,
-                  DXGKRNL_BUGCHECK_NULL_ADAPTER);
+    Status = DxgkpBeginAdapterStart(Adapter, &StartGeneration);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Adapter->MiniportDeviceStopped = FALSE;
+    Adapter->SurpriseRemovalHandled = FALSE;
+    InterlockedExchange(&Adapter->TdrOwnershipUncertain, 0);
 
     Adapter->InterruptCount = 0;
     Adapter->QueueDpcCount = 0;
@@ -3975,8 +4911,10 @@ DxgkAdapterStart(
         Adapter->AdapterLuid = StartInfo.AdapterLuid;
     }
 
-    /* Connect the interrupt BEFORE calling StartDevice — the miniport needs
-     * it for VirtIO queue completion notifications during initialization. */
+    /* Connect the interrupt before StartDevice, but hold ISR/DPC admission
+     * closed until the Level-3 StartDevice callback has returned. */
+    DxgkAcquireLevel3Transition(Adapter);
+    DxgkBeginKmdExclusive(Adapter);
     InterlockedExchange(&Adapter->VidSchStopping, 1);
     DxgkpWaitForVidSchCallbacks(Adapter);
     InterlockedExchange(&Adapter->VidSchStopping, 0);
@@ -4108,8 +5046,15 @@ DxgkAdapterStart(
                       Adapter->QueueDpcCount,
                       Adapter->DpcCount);
         Adapter->InterruptTraceEpoch100ns = 0;
+        DxgkEndKmdExclusive(Adapter, FALSE);
+        DxgkReleaseLevel3Transition(Adapter);
+        DxgkpCompleteAdapterStart(Adapter, StartGeneration, Status, TRUE);
         return Status;
     }
+
+    DxgkEndKmdExclusive(Adapter, TRUE);
+    DxgkUnblockInterruptCallbacks(Adapter);
+    DxgkReleaseLevel3Transition(Adapter);
 
     DXGKRNL_TRACE("DxgkAdapterStart: started — Sources=%lu Children=%lu\n",
                   Adapter->NumberOfVideoPresentSources,
@@ -4121,6 +5066,8 @@ DxgkAdapterStart(
     VidMmUs = DxgkpTraceElapsedUs(StepStart100ns);
     if (!NT_SUCCESS(Status))
     {
+        NTSTATUS StopStatus;
+
         DXGKRNL_ERR("DxgkAdapterStart: DxgkVidMmInitializeAdapter failed "
                     "0x%08lX\n", Status);
         InterlockedExchange(&Adapter->VidSchStopping, 1);
@@ -4128,19 +5075,26 @@ DxgkAdapterStart(
         KeRemoveQueueDpc(&Adapter->DpcObject);
         KeFlushQueuedDpcs();
         DxgkpWaitForVidSchCallbacks(Adapter);
-        Adapter->MiniportContext->InitData.s.DxgkDdiStopDevice(Adapter->MiniportDeviceContext);
-        Adapter->AllocatedResources  = NULL;
-        Adapter->TranslatedResources = NULL;
+        StopStatus = DxgkpStopMiniportForTeardown(Adapter);
+        if (NT_SUCCESS(StopStatus))
+        {
+            Adapter->AllocatedResources = NULL;
+            Adapter->TranslatedResources = NULL;
+            DxgkpCompleteAdapterStart(Adapter, StartGeneration, Status, TRUE);
+        }
+        else
+        {
+            DXGKRNL_ERR("DxgkAdapterStart: rollback StopDevice failed 0x%08lX; retaining the non-restartable miniport state\n", StopStatus);
+            Status = StopStatus;
+            DxgkpCompleteAdapterStart(Adapter, StartGeneration, Status, FALSE);
+        }
         return Status;
     }
 
-    /*
-     * Discover the GPU node topology from DRIVERCAPS (full WDDM only) so
-     * the scheduler sizes its engine array from what the miniport
-     * reports.
-     */
+    /* Cache surprise-removal support while hardware is still present.  The
+     * topology fields apply only to full WDDM adapters. */
     Adapter->NodeCount = 0;
-    if (!Adapter->MiniportContext->IsDisplayOnlyDriver)
+    Adapter->SupportSurpriseRemoval = FALSE;
     {
         PDXGK_DRIVERCAPS Caps;
 
@@ -4151,14 +5105,68 @@ DxgkAdapterStart(
         {
             if (NT_SUCCESS(DxgkpQueryDriverCaps(Adapter, Caps)))
             {
-                Adapter->NodeCount = Caps->GpuEngineTopology.NbAsymetricProcessingNodes;
-                Adapter->HighestAcceptableAddress = Caps->HighestAcceptableAddress;
-                Adapter->SchedulingCaps.Value = Caps->SchedulingCaps.Value & 0x3u;
-                DXGKRNL_TRACE("DxgkAdapterStart: %lu GPU node(s) reported\n",
-                              Adapter->NodeCount);
+                if (Adapter->MiniportContext->InitData.s.Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+                    Adapter->SupportSurpriseRemoval = Caps->SupportSurpriseRemoval;
+                if (!Adapter->MiniportContext->IsDisplayOnlyDriver)
+                {
+                    Adapter->NodeCount = Caps->GpuEngineTopology.NbAsymetricProcessingNodes;
+                    Adapter->HighestAcceptableAddress = Caps->HighestAcceptableAddress;
+                    Adapter->SchedulingCaps.Value = Caps->SchedulingCaps.Value & 0x3u;
+                    DXGKRNL_TRACE("DxgkAdapterStart: %lu GPU node(s) reported\n", Adapter->NodeCount);
+                }
             }
 
             ExFreePoolWithTag(Caps, TAG_DXGK_ADAPTER);
+        }
+    }
+
+    {
+        BOOLEAN ProviderStarted;
+        NTSTATUS Mms2Status;
+
+        ProviderStarted = FALSE;
+        Mms2Status = DxgkpMms2StartAdministrativeAdapter(Adapter, &ProviderStarted);
+        if (ProviderStarted)
+            DxgkpMms2PublishStarted(Adapter);
+        if (!NT_SUCCESS(Mms2Status))
+        {
+            NTSTATUS BeginStatus;
+            NTSTATUS CompleteStatus;
+            NTSTATUS StopStatus;
+
+            DXGKRNL_ERR("DxgkAdapterStart: dxgmms2 start failed 0x%08lX\n", Mms2Status);
+            BeginStatus = ProviderStarted ? DxgkpMms2BeginStop(Adapter, Dxgmms2StopReasonStartRollback) : STATUS_SUCCESS;
+            InterlockedExchange(&Adapter->VidSchStopping, 1);
+            DxgkpDisconnectAdapterInterrupt(Adapter);
+            KeRemoveQueueDpc(&Adapter->DpcObject);
+            KeFlushQueuedDpcs();
+            DxgkpWaitForVidSchCallbacks(Adapter);
+            StopStatus = DxgkpStopMiniportForTeardown(Adapter);
+            if (NT_SUCCESS(StopStatus) && NT_SUCCESS(BeginStatus))
+            {
+                CompleteStatus = ProviderStarted ? DxgkpMms2CompleteRetiredStop(Adapter) : STATUS_SUCCESS;
+                if (NT_SUCCESS(CompleteStatus))
+                {
+                    DxgkVidMmQuiesceAdapter(Adapter);
+                    DxgkVidMmTeardownAdapter(Adapter);
+                    Adapter->AllocatedResources = NULL;
+                    Adapter->TranslatedResources = NULL;
+                    DxgkpCompleteAdapterStart(Adapter, StartGeneration, Mms2Status, TRUE);
+                    return Mms2Status;
+                }
+                Mms2Status = CompleteStatus;
+            }
+            else if (!NT_SUCCESS(StopStatus))
+            {
+                Mms2Status = StopStatus;
+            }
+            else
+            {
+                Mms2Status = BeginStatus;
+            }
+            DXGKRNL_ERR("DxgkAdapterStart: dxgmms2 rollback incomplete 0x%08lX; retaining state for RemoveDevice\n", Mms2Status);
+            DxgkpCompleteAdapterStart(Adapter, StartGeneration, Mms2Status, FALSE);
+            return Mms2Status;
         }
     }
 
@@ -4235,7 +5243,6 @@ DxgkAdapterStart(
     DxgkReinitializeAdapterRundown(Adapter);
     InterlockedExchange(&Adapter->SubmitDmaStopping, 0);
     InterlockedExchange(&Adapter->VidSchStopping, 0);
-    Adapter->State = DxgkAdapterStateStarted;
     InterlockedExchange(&Adapter->PresentQueueStopping, 0);
 
     /* Watch for stuck submissions (documented TDR recovery). */
@@ -4245,7 +5252,7 @@ DxgkAdapterStart(
      * Ask the miniport to deliver vsync notifications; adapters that
      * report them get vblank-paced present flushes (see display.c).
      */
-    if (DXGK_CB(Adapter, DxgkDdiControlInterrupt) != NULL)
+    if (DXGK_CB(Adapter, DxgkDdiControlInterrupt) != NULL && DxgkAcquireKmdCall(Adapter))
     {
         NTSTATUS VsyncStatus;
 
@@ -4261,6 +5268,7 @@ DxgkAdapterStart(
             VsyncStatus = _SEH2_GetExceptionCode();
         }
         _SEH2_END;
+        DxgkReleaseKmdCall(Adapter);
 
         DXGKRNL_TRACE("DxgkAdapterStart: CRTC_VSYNC enable -> 0x%08lX\n",
                       VsyncStatus);
@@ -4355,7 +5363,9 @@ DxgkAdapterStart(
                   Adapter->QueueDpcCount,
                   Adapter->DpcCount);
 
-    return STATUS_SUCCESS;
+    Status = STATUS_SUCCESS;
+    DxgkpCompleteAdapterStart(Adapter, StartGeneration, Status, TRUE);
+    return Status;
 }
 
 /*
@@ -4371,15 +5381,24 @@ DxgkpStopMiniportForTeardown(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
     NTSTATUS Status;
-    NTSTATUS ResetStatus;
 
     if (Adapter->MiniportDeviceStopped)
-    {
-        Adapter->MiniportDeviceStopped = FALSE;
         return STATUS_SUCCESS;
-    }
     if (Adapter->MiniportContext->InitData.s.DxgkDdiStopDevice == NULL)
         return STATUS_NOT_SUPPORTED;
+    DxgkBeginKmdExclusive(Adapter);
+    DxgkVidMmQuiesceAdapter(Adapter);
+    Status = DxgkVidMmPrepareForIdle(Adapter);
+    if (!NT_SUCCESS(Status))
+    {
+        DxgkEndKmdExclusive(Adapter, FALSE);
+        return Status;
+    }
+    if (!DxgkAcquireMiniportCallback(Adapter))
+    {
+        DxgkEndKmdExclusive(Adapter, FALSE);
+        return STATUS_DELETE_PENDING;
+    }
 
     _SEH2_TRY
     {
@@ -4391,33 +5410,16 @@ DxgkpStopMiniportForTeardown(
     }
     _SEH2_END;
     if (NT_SUCCESS(Status))
-        return Status;
-
-    DXGKRNL_ERR("DxgkAdapterStop: DxgkDdiStopDevice failed 0x%08lX; attempting timeout reset before retry\n", Status);
-    if (DXGK_CB_FULL(Adapter, DxgkDdiResetFromTimeout) == NULL)
-        return Status;
-
-    _SEH2_TRY
     {
-        ResetStatus = DXGK_CB_FULL(Adapter, DxgkDdiResetFromTimeout)(Adapter->MiniportDeviceContext);
+        Adapter->MiniportDeviceStopped = TRUE;
+        InterlockedExchange(&Adapter->TdrOwnershipUncertain, 0);
     }
-    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    else
     {
-        ResetStatus = _SEH2_GetExceptionCode();
+        InterlockedExchange(&Adapter->TdrOwnershipUncertain, 1);
     }
-    _SEH2_END;
-    if (!NT_SUCCESS(ResetStatus))
-        return Status;
-
-    _SEH2_TRY
-    {
-        Status = Adapter->MiniportContext->InitData.s.DxgkDdiStopDevice(Adapter->MiniportDeviceContext);
-    }
-    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-    {
-        Status = _SEH2_GetExceptionCode();
-    }
-    _SEH2_END;
+    DxgkReleaseMiniportCallback(Adapter);
+    DxgkEndKmdExclusive(Adapter, FALSE);
     return Status;
 }
 
@@ -4468,6 +5470,16 @@ DxgkpResetMiniportForTeardown(
             VidSchCompleteAdapterReset(Adapter, FALSE);
         return STATUS_NOT_SUPPORTED;
     }
+    DxgkBeginKmdExclusive(Adapter);
+    DxgkVidMmQuiesceAdapter(Adapter);
+    InterlockedExchange(&Adapter->TdrOwnershipUncertain, 1);
+    if (!DxgkAcquireMiniportCallback(Adapter))
+    {
+        if (SchedulerPrepared)
+            VidSchCompleteAdapterReset(Adapter, FALSE);
+        DxgkEndKmdExclusive(Adapter, FALSE);
+        return STATUS_DELETE_PENDING;
+    }
 
     _SEH2_TRY
     {
@@ -4478,8 +5490,16 @@ DxgkpResetMiniportForTeardown(
         Status = _SEH2_GetExceptionCode();
     }
     _SEH2_END;
+    DxgkReleaseMiniportCallback(Adapter);
+    if (!NT_SUCCESS(Status))
+        DxgkpBugCheckTdrFailure(Adapter, Status);
+    Status = DxgkVidMmRecoverFromTimeout(Adapter);
+    if (!NT_SUCCESS(Status))
+        DxgkpBugCheckTdrFailure(Adapter, Status);
+    InterlockedExchange(&Adapter->TdrOwnershipUncertain, 0);
     if (SchedulerPrepared)
-        VidSchCompleteAdapterReset(Adapter, NT_SUCCESS(Status));
+        VidSchCompleteAdapterReset(Adapter, TRUE);
+    DxgkEndKmdExclusive(Adapter, FALSE);
     return Status;
 }
 
@@ -4489,10 +5509,13 @@ DxgkAcquireMiniportCallback(
 {
     if (Adapter == NULL)
         return FALSE;
-    ExAcquireFastMutex(&Adapter->MiniportCallbackMutex);
+    if (!DxgkAcquireKmdCall(Adapter))
+        return FALSE;
+    (VOID)KeWaitForSingleObject(&Adapter->MiniportCallbackMutex, Executive, KernelMode, FALSE, NULL);
     if (InterlockedCompareExchange(&Adapter->MiniportCallbacksValid, 0, 0) == 0)
     {
-        ExReleaseFastMutex(&Adapter->MiniportCallbackMutex);
+        KeReleaseMutex(&Adapter->MiniportCallbackMutex, FALSE);
+        DxgkReleaseKmdCall(Adapter);
         return FALSE;
     }
     return TRUE;
@@ -4503,17 +5526,131 @@ DxgkReleaseMiniportCallback(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
     ASSERT(Adapter != NULL);
-    ExReleaseFastMutex(&Adapter->MiniportCallbackMutex);
+    KeReleaseMutex(&Adapter->MiniportCallbackMutex, FALSE);
+    DxgkReleaseKmdCall(Adapter);
 }
 
-NTSTATUS
-DxgkAdapterStop(
+BOOLEAN
+DxgkAcquireKmdCall(
     _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PVOID CurrentThread;
+
+    if (Adapter == NULL)
+        return FALSE;
+    CurrentThread = PsGetCurrentThread();
+    if (InterlockedCompareExchange(&Adapter->KmdCallsBlocked, 0, 0) != 0 && Adapter->KmdExclusiveOwnerThread != CurrentThread && Adapter->KmdTransactionOwnerThread != CurrentThread)
+        return FALSE;
+    InterlockedIncrement(&Adapter->KmdActiveCalls);
+    KeMemoryBarrier();
+    if (InterlockedCompareExchange(&Adapter->KmdCallsBlocked, 0, 0) != 0 && Adapter->KmdExclusiveOwnerThread != CurrentThread && Adapter->KmdTransactionOwnerThread != CurrentThread)
+    {
+        DxgkReleaseKmdCall(Adapter);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+VOID
+DxgkReleaseKmdCall(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    LONG Remaining;
+
+    ASSERT(Adapter != NULL);
+    Remaining = InterlockedDecrement(&Adapter->KmdActiveCalls);
+    ASSERT(Remaining >= 0);
+}
+
+VOID
+DxgkAcquireLevel3Transition(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PVOID CurrentThread;
+
+    PAGED_CODE();
+    ASSERT(Adapter != NULL);
+    CurrentThread = PsGetCurrentThread();
+    if (Adapter->Level3TransitionOwnerThread == CurrentThread)
+    {
+        ASSERT(InterlockedCompareExchange(&Adapter->Level3TransitionDepth, 0, 0) > 0);
+        InterlockedIncrement(&Adapter->Level3TransitionDepth);
+        return;
+    }
+    (VOID)KeWaitForSingleObject(&Adapter->Level3TransitionMutex, Executive, KernelMode, FALSE, NULL);
+    ASSERT(Adapter->Level3TransitionOwnerThread == NULL);
+    ASSERT(InterlockedCompareExchange(&Adapter->Level3TransitionDepth, 0, 0) == 0);
+    InterlockedExchange(&Adapter->Level3TransitionDepth, 1);
+    KeMemoryBarrier();
+    Adapter->Level3TransitionOwnerThread = CurrentThread;
+    KeMemoryBarrier();
+}
+
+VOID
+DxgkReleaseLevel3Transition(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    LONG Depth;
+
+    PAGED_CODE();
+    ASSERT(Adapter != NULL);
+    ASSERT(Adapter->Level3TransitionOwnerThread == PsGetCurrentThread());
+    Depth = InterlockedDecrement(&Adapter->Level3TransitionDepth);
+    ASSERT(Depth >= 0);
+    if (Depth != 0)
+        return;
+    Adapter->Level3TransitionOwnerThread = NULL;
+    KeMemoryBarrier();
+    KeReleaseMutex(&Adapter->Level3TransitionMutex, FALSE);
+}
+
+VOID
+DxgkBeginKmdExclusive(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    LARGE_INTEGER Delay;
+
+    PAGED_CODE();
+    ASSERT(Adapter != NULL);
+    (VOID)KeWaitForSingleObject(&Adapter->KmdExclusiveMutex, Executive, KernelMode, FALSE, NULL);
+    InterlockedExchange(&Adapter->KmdCallsBlocked, 1);
+    KeMemoryBarrier();
+    Delay.QuadPart = -(LONGLONG)(10 * 1000);
+    while (InterlockedCompareExchange(&Adapter->KmdActiveCalls, 0, 0) != 0)
+        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+    Adapter->KmdExclusiveOwnerThread = PsGetCurrentThread();
+    KeMemoryBarrier();
+}
+
+VOID
+DxgkEndKmdExclusive(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ BOOLEAN ReopenAdmission)
+{
+    PAGED_CODE();
+    ASSERT(Adapter != NULL);
+    ASSERT(Adapter->KmdExclusiveOwnerThread == PsGetCurrentThread());
+    Adapter->KmdExclusiveOwnerThread = NULL;
+    KeMemoryBarrier();
+    if (ReopenAdmission)
+        InterlockedExchange(&Adapter->KmdCallsBlocked, 0);
+    KeReleaseMutex(&Adapter->KmdExclusiveMutex, FALSE);
+}
+
+static NTSTATUS
+DxgkpAdapterStopInternal(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ BOOLEAN ReleasePostDisplayOwnership,
+    _In_ DXGMMS2_STOP_REASON StopReason)
 {
     NTSTATUS Status;
     NTSTATUS SchedulerIdleStatus;
     NTSTATUS TrackerIdleStatus;
-    BOOLEAN TeardownPrepared;
+    PDEVICE_OBJECT FunctionalDeviceObject;
+    BOOLEAN SchedulerAlreadyPrepared;
+    BOOLEAN StopDeviceEstablishedBoundary = FALSE;
+    BOOLEAN StopChangedState = FALSE;
+    ULONG StopGeneration = 0;
 
     PAGED_CODE();
 
@@ -4521,34 +5658,107 @@ DxgkAdapterStop(
 
     DXGKRNL_TRACE("DxgkAdapterStop: Adapter %p\n", Adapter);
 
-    ExAcquireFastMutex(&Adapter->AdapterMutex);
-    if (Adapter->State == DxgkAdapterStateStarted)
-        Adapter->State = DxgkAdapterStateStopping;
-    else if (Adapter->State != DxgkAdapterStateStopping)
+    FunctionalDeviceObject = Adapter->FunctionalDeviceObject;
+    if (FunctionalDeviceObject != NULL)
+        ObReferenceObject(FunctionalDeviceObject);
+
+    DxgkpAcquireAdapterMutexAfterStart(Adapter);
+    if (InterlockedCompareExchange(&Adapter->AdapterStopInProgress, 0, 0) != 0)
+    {
+        StopGeneration = Adapter->AdapterStopGeneration;
+        ASSERT(StopGeneration != 0);
+        Adapter->AdapterStopIntentCount++;
+        KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+        for (;;)
+        {
+            KeWaitForSingleObject(&Adapter->AdapterStopCompletedEvent, Executive, KernelMode, FALSE, NULL);
+            (VOID)KeWaitForSingleObject(&Adapter->AdapterMutex, Executive, KernelMode, FALSE, NULL);
+            if (Adapter->AdapterStopCompletedGeneration == StopGeneration)
+            {
+                Status = Adapter->AdapterStopStatus;
+                ASSERT(Adapter->AdapterStopIntentCount > 0);
+                Adapter->AdapterStopIntentCount--;
+                KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+                break;
+            }
+            KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+        }
+        if (FunctionalDeviceObject != NULL)
+            ObDereferenceObject(FunctionalDeviceObject);
+        return Status;
+    }
+    if (Adapter->AdapterStopIntentCount != 0)
+    {
+        ASSERT(Adapter->AdapterStopCompletedGeneration == Adapter->AdapterStopGeneration);
+        Status = Adapter->AdapterStopStatus;
+        KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+        if (FunctionalDeviceObject != NULL)
+            ObDereferenceObject(FunctionalDeviceObject);
+        return Status;
+    }
+    if (Adapter->State == DxgkAdapterStateStarted || Adapter->State == DxgkAdapterStateStopping)
+    {
+        StopGeneration = Adapter->AdapterStopGeneration + 1;
+        if (StopGeneration == 0)
+            StopGeneration = 1;
+        Adapter->AdapterStopGeneration = StopGeneration;
+        Adapter->AdapterStopStatus = STATUS_PENDING;
+        Adapter->AdapterStopIntentCount++;
+        KeResetEvent(&Adapter->AdapterStopCompletedEvent);
+        InterlockedExchange(&Adapter->AdapterStopInProgress, 1);
+        if (Adapter->State == DxgkAdapterStateStarted)
+        {
+            Adapter->State = DxgkAdapterStateStopping;
+            StopChangedState = TRUE;
+        }
+    }
+    else
     {
         DXGKRNL_ADAPTER_STATE State = Adapter->State;
 
-        ExReleaseFastMutex(&Adapter->AdapterMutex);
+        KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
         DXGKRNL_WARN("DxgkAdapterStop: adapter not started (State=%d)\n", State);
+        if (FunctionalDeviceObject != NULL)
+            ObDereferenceObject(FunctionalDeviceObject);
         return STATUS_SUCCESS;
     }
-    ExReleaseFastMutex(&Adapter->AdapterMutex);
-    TeardownPrepared = (InterlockedCompareExchange(&Adapter->VidSchStopping, 0, 0) != 0);
+    KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+
+    Status = DxgkpMms2BeginStop(Adapter, StopReason);
+    if (!NT_SUCCESS(Status))
+    {
+        (VOID)KeWaitForSingleObject(&Adapter->AdapterMutex, Executive, KernelMode, FALSE, NULL);
+        if (StopChangedState && Adapter->State == DxgkAdapterStateStopping)
+            Adapter->State = DxgkAdapterStateStarted;
+        Adapter->AdapterStopStatus = Status;
+        Adapter->AdapterStopCompletedGeneration = StopGeneration;
+        InterlockedExchange(&Adapter->AdapterStopInProgress, 0);
+        ASSERT(Adapter->AdapterStopIntentCount > 0);
+        Adapter->AdapterStopIntentCount--;
+        KeSetEvent(&Adapter->AdapterStopCompletedEvent, IO_NO_INCREMENT, FALSE);
+        KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+        if (FunctionalDeviceObject != NULL)
+            ObDereferenceObject(FunctionalDeviceObject);
+        return Status;
+    }
+
     InterlockedExchange(&Adapter->SubmitDmaStopping, 1);
     InterlockedExchange(&Adapter->PresentQueueStopping, 1);
     DxgkBeginAdapterRundown(Adapter);
+    SchedulerAlreadyPrepared = (InterlockedCompareExchange(&Adapter->VidSchStopping, 0, 0) != 0);
 
-    if (!TeardownPrepared)
+    /* Stop the TDR watchdog before the miniport goes away. */
+    DxgkpStopTdrWatchdog(Adapter);
+    DxgkAcquireLevel3Transition(Adapter);
+
+    /* Present work and already-admitted reservations drain while completion
+     * DPCs remain active, so accepted GPU work can finish normally. */
+    DxgkPresentTeardown(Adapter);
+    if (InterlockedCompareExchange(&Adapter->SubmitDmaActiveReservations, 0, 0) != 0)
+        KeWaitForSingleObject(&Adapter->SubmitDmaReservationsDrainedEvent, Executive, KernelMode, FALSE, NULL);
+
+    if (!SchedulerAlreadyPrepared)
     {
-        /* Stop the TDR watchdog before the miniport goes away. */
-        DxgkpStopTdrWatchdog(Adapter);
-
-        /* Present work and already-admitted reservations drain while completion
-         * DPCs remain active, so accepted GPU work can finish normally. */
-        DxgkPresentTeardown(Adapter);
-        if (InterlockedCompareExchange(&Adapter->SubmitDmaActiveReservations, 0, 0) != 0)
-            KeWaitForSingleObject(&Adapter->SubmitDmaReservationsDrainedEvent, Executive, KernelMode, FALSE, NULL);
-
         SchedulerIdleStatus = VidSchWaitForIdle(Adapter, 1000);
         TrackerIdleStatus = DxgkpWaitForTrackedDmaIdle(Adapter, 1000);
         if ((!NT_SUCCESS(SchedulerIdleStatus) && SchedulerIdleStatus != STATUS_NOT_SUPPORTED) || !NT_SUCCESS(TrackerIdleStatus))
@@ -4557,28 +5767,88 @@ DxgkAdapterStop(
             if (!NT_SUCCESS(Status))
             {
                 DXGKRNL_ERR("DxgkAdapterStop: GPU could not be drained or reset (scheduler=0x%08lX tracker=0x%08lX reset=0x%08lX); retaining all owned storage\n", SchedulerIdleStatus, TrackerIdleStatus, Status);
-                return Status;
+                goto CompleteStop;
             }
         }
+    }
 
-        /* Completion or ResetFromTimeout is the DMA ownership boundary. Close
-         * every late ISR/DPC path before releasing tracker or scheduler state. */
-        VidSchPrepareForStop(Adapter);
-        KeRemoveQueueDpc(&Adapter->DpcObject);
-        KeFlushQueuedDpcs();
-        DxgkReleaseTrackedDmaBuffers(Adapter, TRUE);
+    /* Completion or ResetFromTimeout is the DMA ownership boundary. Close
+     * every late ISR/DPC path before releasing tracker or scheduler state. */
+    VidSchPrepareForStop(Adapter);
+    KeRemoveQueueDpc(&Adapter->DpcObject);
+    KeFlushQueuedDpcs();
+    if (InterlockedCompareExchange(&Adapter->TdrOwnershipUncertain, 0, 0) != 0)
+    {
+        Status = DxgkpStopMiniportForTeardown(Adapter);
+        if (!NT_SUCCESS(Status))
+        {
+            DXGKRNL_ERR("DxgkAdapterStop: StopDevice could not establish the DMA ownership boundary 0x%08lX; retaining all owned storage\n", Status);
+            goto CompleteStop;
+        }
+        Adapter->MiniportDeviceStopped = TRUE;
+        StopDeviceEstablishedBoundary = TRUE;
+        InterlockedExchange(&Adapter->TdrOwnershipUncertain, 0);
+    }
+    if (StopDeviceEstablishedBoundary)
+        DxgkVidMmQuiesceAdapter(Adapter);
+    DxgkReleaseTrackedDmaBuffers(Adapter, !StopDeviceEstablishedBoundary);
+    DxgkWaitForDeviceLifecycleOperations(Adapter);
 
-        /* No scheduler/VidMm storage can disappear while a generic adapter,
-         * device, context, present, or tracker producer still owns it. */
-        DxgkCleanupAdapterDevices(Adapter);
-        DxgkWaitForAdapterRundown(Adapter);
+    /* No scheduler/VidMm storage can disappear while a generic adapter,
+     * device, context, present, or tracker producer still owns it. */
+    Status = DxgkCleanupAdapterDevices(Adapter);
+    if (!NT_SUCCESS(Status))
+    {
+        DXGKRNL_ERR("DxgkAdapterStop: device cleanup failed 0x%08lX; retaining devices for RemoveDevice\n", Status);
+        goto CompleteStop;
+    }
+    DxgkWaitForAdapterRundown(Adapter);
+    if (!StopDeviceEstablishedBoundary)
+        DxgkVidMmQuiesceAdapter(Adapter);
+
+    if (ReleasePostDisplayOwnership && !Adapter->MiniportDeviceStopped)
+    {
+        PDXGKDDI_STOP_DEVICE_AND_RELEASE_POST_DISPLAY_OWNERSHIP PfnRelease = DXGK_CB(Adapter, DxgkDdiStopDeviceAndReleasePostDisplayOwnership);
+
+        if (PfnRelease != NULL)
+        {
+            DXGK_DISPLAY_INFORMATION ReleasedInfo;
+
+            RtlZeroMemory(&ReleasedInfo, sizeof(ReleasedInfo));
+            DxgkBeginKmdExclusive(Adapter);
+            if (DxgkAcquireMiniportCallback(Adapter))
+            {
+                _SEH2_TRY
+                {
+                    Status = PfnRelease(Adapter->MiniportDeviceContext, 0, &ReleasedInfo);
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+                if (NT_SUCCESS(Status))
+                    Adapter->MiniportDeviceStopped = TRUE;
+                else
+                    DXGKRNL_WARN("DxgkpStopPostDisplayOwner: StopDeviceAndReleasePostDisplayOwnership failed 0x%08lX\n", Status);
+                DxgkReleaseMiniportCallback(Adapter);
+            }
+            DxgkEndKmdExclusive(Adapter, FALSE);
+        }
     }
 
     Status = DxgkpStopMiniportForTeardown(Adapter);
     if (!NT_SUCCESS(Status))
     {
         DXGKRNL_ERR("DxgkAdapterStop: DxgkDdiStopDevice remained failed 0x%08lX; retaining scheduler/VidMm state for RemoveDevice\n", Status);
-        return Status;
+        goto CompleteStop;
+    }
+
+    Status = DxgkpMms2CompleteRetiredStop(Adapter);
+    if (!NT_SUCCESS(Status))
+    {
+        DXGKRNL_ERR("DxgkAdapterStop: dxgmms2 completion failed 0x%08lX; retaining scheduler/VidMm state for retry\n", Status);
+        goto CompleteStop;
     }
 
     DxgkpDisconnectAdapterInterrupt(Adapter);
@@ -4597,17 +5867,40 @@ DxgkAdapterStop(
     /* Tracker retirement can reference both objects, so destroy them last. */
     DxgkDestroySharedPrimary(Adapter);
     DxgkVidMmTeardownAdapter(Adapter);
+    (VOID)DxgkCleanupAdapterDevices(Adapter);
 
     DxgkpClearPostDisplayOwner(Adapter);
 
     Adapter->AllocatedResources  = NULL;
     Adapter->TranslatedResources = NULL;
-    Adapter->State = DxgkAdapterStateStopped;
     Adapter->InterruptTraceEpoch100ns = 0;
     DxgkpReleasePostDisplayMapping(Adapter);
 
     DXGKRNL_TRACE("DxgkAdapterStop: stopped\n");
+
+CompleteStop:
+    (VOID)KeWaitForSingleObject(&Adapter->AdapterMutex, Executive, KernelMode, FALSE, NULL);
+    ASSERT(Adapter->AdapterStopGeneration == StopGeneration);
+    ASSERT(Adapter->AdapterStopIntentCount > 0);
+    if (NT_SUCCESS(Status) && Adapter->State == DxgkAdapterStateStopping)
+        Adapter->State = DxgkAdapterStateStopped;
+    Adapter->AdapterStopStatus = Status;
+    Adapter->AdapterStopCompletedGeneration = StopGeneration;
+    InterlockedExchange(&Adapter->AdapterStopInProgress, 0);
+    Adapter->AdapterStopIntentCount--;
+    KeSetEvent(&Adapter->AdapterStopCompletedEvent, IO_NO_INCREMENT, FALSE);
+    KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+    DxgkReleaseLevel3Transition(Adapter);
+    if (FunctionalDeviceObject != NULL)
+        ObDereferenceObject(FunctionalDeviceObject);
     return Status;
+}
+
+NTSTATUS
+DxgkAdapterStop(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    return DxgkpAdapterStopInternal(Adapter, FALSE, Dxgmms2StopReasonPnpStop);
 }
 
 /*
@@ -4616,8 +5909,9 @@ DxgkAdapterStop(
  * Called from DxgkpMiniportPnpDispatch in response to IRP_MN_REMOVE_DEVICE
  * (or IRP_MN_SURPRISE_REMOVAL + IRP_MN_REMOVE_DEVICE).  Stops the adapter
  * if still started, calls DxgkDdiRemoveDevice, disconnects the interrupt,
- * frees descriptor arrays, unlinks from the per-miniport and global lists,
- * detaches from the device stack, and deletes the FDO.
+ * frees descriptor arrays, and unlinks from the per-miniport and global lists.
+ * The PnP dispatch routine forwards the remove IRP before it performs the final
+ * detach and FDO deletion.
  *
  * IRQL: PASSIVE_LEVEL
  */
@@ -4628,6 +5922,9 @@ DxgkAdapterRemove(
     KIRQL OldIrql;
     NTSTATUS StopStatus = STATUS_SUCCESS;
     PVOID MiniportDeviceContext;
+    NTSTATUS CleanupStatus;
+    BOOLEAN MiniportCleanupBeforeRemove = FALSE;
+    BOOLEAN MiniportCleanupCallbacksPermitted = FALSE;
 
     PAGED_CODE();
 
@@ -4636,12 +5933,25 @@ DxgkAdapterRemove(
     DXGKRNL_TRACE("DxgkAdapterRemove: Adapter %p State=%d\n",
                   Adapter, Adapter->State);
 
+    /* A remove cannot close admission or callbacks underneath StartDevice. */
+    DxgkpAcquireAdapterMutexAfterStart(Adapter);
+    KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+    if (InterlockedCompareExchange(&Adapter->RemoveRundownStarted, 1, 0) == 0)
+        ExWaitForRundownProtectionRelease(&Adapter->RemoveRundownRef);
+
     /* Stop the adapter if it is still running. */
     InterlockedExchange(&Adapter->SubmitDmaStopping, 1);
     InterlockedExchange(&Adapter->PresentQueueStopping, 1);
     DxgkBeginAdapterRundown(Adapter);
-    if (Adapter->State == DxgkAdapterStateStarted || Adapter->State == DxgkAdapterStateStopping)
-        StopStatus = DxgkAdapterStop(Adapter);
+    if (InterlockedCompareExchange(&Adapter->AdapterStopInProgress, 0, 0) != 0 || Adapter->State == DxgkAdapterStateStarting || Adapter->State == DxgkAdapterStateStarted || Adapter->State == DxgkAdapterStateStopping)
+    {
+        StopStatus = DxgkpAdapterStopInternal(Adapter, FALSE, Dxgmms2StopReasonRemove);
+        MiniportCleanupBeforeRemove = NT_SUCCESS(StopStatus);
+    }
+    else if (Adapter->State == DxgkAdapterStateStopped)
+    {
+        MiniportCleanupBeforeRemove = TRUE;
+    }
     else if (Adapter->State == DxgkAdapterStateSurpriseRemoved)
     {
         DxgkpStopTdrWatchdog(Adapter);
@@ -4651,10 +5961,39 @@ DxgkAdapterRemove(
         KeFlushQueuedDpcs();
         if (InterlockedCompareExchange(&Adapter->SubmitDmaActiveReservations, 0, 0) != 0)
             KeWaitForSingleObject(&Adapter->SubmitDmaReservationsDrainedEvent, Executive, KernelMode, FALSE, NULL);
-        DxgkReleaseTrackedDmaBuffers(Adapter, FALSE);
+        MiniportCleanupBeforeRemove = Adapter->SurpriseRemovalHandled || Adapter->MiniportDeviceStopped;
+        MiniportCleanupCallbacksPermitted = Adapter->SurpriseRemovalHandled;
     }
     if (!NT_SUCCESS(StopStatus))
         DXGKRNL_ERR("DxgkAdapterRemove: StopDevice remained failed 0x%08lX; deferring DMA release until RemoveDevice\n", StopStatus);
+
+    /* Close every scheduler/interrupt producer before device or VidMm
+     * cleanup. Failed StopDevice paths have not necessarily done this yet. */
+    VidSchPrepareForStop(Adapter);
+    DxgkpDisconnectAdapterInterrupt(Adapter);
+    KeRemoveQueueDpc(&Adapter->DpcObject);
+    KeFlushQueuedDpcs();
+    DxgkpWaitForVidSchCallbacks(Adapter);
+    /* Keep public KMD admission closed through software cleanup and the final
+     * RemoveDevice callback.  The exclusive owner may still issue the cleanup
+     * DDIs that a successful surprise-removal notification permits. */
+    DxgkBeginKmdExclusive(Adapter);
+    if (MiniportCleanupBeforeRemove)
+    {
+        DxgkReleaseTrackedDmaBuffers(Adapter, MiniportCleanupCallbacksPermitted);
+        DxgkWaitForDeviceLifecycleOperations(Adapter);
+        CleanupStatus = DxgkCleanupAdapterDevices(Adapter);
+        if (NT_SUCCESS(CleanupStatus))
+        {
+            DxgkWaitForAdapterRundown(Adapter);
+            DxgkVidMmQuiesceAdapter(Adapter);
+        }
+        else
+        {
+            DXGKRNL_ERR("DxgkAdapterRemove: pre-RemoveDevice cleanup failed 0x%08lX; deferring retained devices to the final boundary\n", CleanupStatus);
+            MiniportCleanupBeforeRemove = FALSE;
+        }
+    }
 
     /* Disable and free the GUID_DISPLAY_DEVICE_ARRIVAL device interface. */
     if (Adapter->DeviceInterfaceEnabled)
@@ -4674,35 +6013,61 @@ DxgkAdapterRemove(
     DxgkDisplayUnregister();
     DxgkpClearPostDisplayOwner(Adapter);
 
-    /* Disconnect the interrupt if registered. */
-    DxgkpDisconnectAdapterInterrupt(Adapter);
-    KeFlushQueuedDpcs();
-
     /* Close the callback gate and detach the opaque context before invoking
      * the final DDI. All subsequent cleanup is OS bookkeeping only. */
-    ExAcquireFastMutex(&Adapter->MiniportCallbackMutex);
+    (VOID)KeWaitForSingleObject(&Adapter->MiniportCallbackMutex, Executive, KernelMode, FALSE, NULL);
     MiniportDeviceContext = Adapter->MiniportDeviceContext;
     InterlockedExchange(&Adapter->MiniportCallbacksValid, 0);
     Adapter->MiniportDeviceContext = NULL;
     if (MiniportDeviceContext != NULL && Adapter->MiniportContext->InitData.s.DxgkDdiRemoveDevice != NULL)
     {
-        NTSTATUS Status = Adapter->MiniportContext->InitData.s.DxgkDdiRemoveDevice(MiniportDeviceContext);
+        NTSTATUS Status = DxgkpRemoveMiniportDevice(Adapter, MiniportDeviceContext);
         if (!NT_SUCCESS(Status))
             DXGKRNL_ERR("DxgkAdapterRemove: DxgkDdiRemoveDevice failed 0x%08lX (continuing)\n", Status);
     }
-    ExReleaseFastMutex(&Adapter->MiniportCallbackMutex);
+    if (InterlockedCompareExchange(&Adapter->ReverseCallbackRundownStarted, 1, 0) == 0)
+        ExWaitForRundownProtectionRelease(&Adapter->ReverseCallbackRundownRef);
+    KeReleaseMutex(&Adapter->MiniportCallbackMutex, FALSE);
+    DxgkEndKmdExclusive(Adapter, FALSE);
 
-    DxgkReleaseTrackedDmaBuffers(Adapter, FALSE);
+    {
+        DXGMMS2_STOP_REASON FinalReason;
+        NTSTATUS Mms2Status;
+
+        FinalReason = Adapter->State == DxgkAdapterStateSurpriseRemoved ? Dxgmms2StopReasonSurpriseRemove : Dxgmms2StopReasonRemove;
+        Mms2Status = DxgkpMms2BeginStop(Adapter, FinalReason);
+        if (NT_SUCCESS(Mms2Status))
+            Mms2Status = DxgkpMms2CompleteRetiredStop(Adapter);
+        if (!NT_SUCCESS(Mms2Status))
+            DxgkpBugCheckMms2Lifecycle(Adapter, Mms2Status, DXGKP_MMS2_FAILURE_FINAL_RETIREMENT);
+    }
+
+    /* RemoveDevice is the final hardware-ownership boundary when StopDevice
+     * could not complete. Only now may OS tracking force-release storage. */
+    Adapter->MiniportDeviceStopped = TRUE;
+    Adapter->MiniportRemoveDeviceComplete = TRUE;
+    InterlockedExchange(&Adapter->TdrOwnershipUncertain, 0);
+    if (!MiniportCleanupBeforeRemove)
+    {
+        DxgkReleaseTrackedDmaBuffers(Adapter, FALSE);
+        DxgkWaitForDeviceLifecycleOperations(Adapter);
+        DxgkVidMmQuiesceAdapter(Adapter);
+        CleanupStatus = DxgkCleanupAdapterDevices(Adapter);
+        if (!NT_SUCCESS(CleanupStatus))
+            DXGKRNL_ERR("DxgkAdapterRemove: local device cleanup remained failed after RemoveDevice 0x%08lX\n", CleanupStatus);
+        else
+            DxgkWaitForAdapterRundown(Adapter);
+    }
+
     VidSchDestroy(Adapter);
     if (Adapter->VidPn != NULL)
     {
         DxgkVidPnDestroy((D3DKMDT_HVIDPN)Adapter->VidPn);
         Adapter->VidPn = NULL;
     }
-    DxgkCleanupAdapterDevices(Adapter);
-    DxgkWaitForAdapterRundown(Adapter);
     DxgkDestroySharedPrimary(Adapter);
     DxgkVidMmTeardownAdapter(Adapter);
+    (VOID)DxgkCleanupAdapterDevices(Adapter);
     Adapter->AllocatedResources = NULL;
     Adapter->TranslatedResources = NULL;
     DxgkpReleasePostDisplayMapping(Adapter);
@@ -4744,6 +6109,14 @@ DxgkAdapterRemove(
      * Do not double-free here.
      */
 
+    {
+        NTSTATUS Mms2Status;
+
+        Mms2Status = DxgkpMms2DestroyAdministrativeAdapter(Adapter);
+        if (!NT_SUCCESS(Mms2Status))
+            DxgkpBugCheckMms2Lifecycle(Adapter, Mms2Status, DXGKP_MMS2_FAILURE_FINAL_DESTROY);
+    }
+
     /* Unlink from per-miniport adapter list. */
     KeAcquireSpinLock(&Adapter->MiniportContext->AdapterListLock, &OldIrql);
     RemoveEntryList(&Adapter->MiniportAdapterListEntry);
@@ -4758,19 +6131,42 @@ DxgkAdapterRemove(
     InitializeListHead(&Adapter->GlobalAdapterListEntry);
     KeReleaseSpinLock(&DxgkAdapterGlobalListLock, OldIrql);
 
-    /* Detach from the device stack and delete the FDO. */
+    Adapter->State = DxgkAdapterStateRemoved;
+    DXGKRNL_TRACE("DxgkAdapterRemove: teardown complete\n");
+}
+
+static VOID
+DxgkpDeleteRemovedAdapterFdo(_In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PDEVICE_OBJECT FunctionalDeviceObject;
+
+    DxgkRosAssert(Adapter != NULL, DXGKRNL_BUGCHECK_NULL_ADAPTER);
+    FunctionalDeviceObject = Adapter->FunctionalDeviceObject;
     if (Adapter->LowerDeviceObject != NULL)
     {
         IoDetachDevice(Adapter->LowerDeviceObject);
         Adapter->LowerDeviceObject = NULL;
     }
+    DXGKRNL_TRACE("DxgkpDeleteRemovedAdapterFdo: deleting FDO %p\n", FunctionalDeviceObject);
+    IoDeleteDevice(FunctionalDeviceObject);
+}
 
-    Adapter->State = DxgkAdapterStateRemoved;
-
-    /* The DeviceExtension (Adapter) is freed by IoDeleteDevice below. */
-    IoDeleteDevice(Adapter->FunctionalDeviceObject);
-
-    DXGKRNL_TRACE("DxgkAdapterRemove: done\n");
+/* A native Windows dump rooted at dxgkrnl!DpiFdoHandleSurpriseRemoval uses
+ * VIDEO_DXGKRNL_FATAL_ERROR (0x113), subtype 0x19.  ReactOS has no dxgkrnl
+ * graceful-reboot handoff, so this is the closest non-silent containment for
+ * the documented "no more miniport DDIs and reboot" failure contract. */
+static DECLSPEC_NORETURN VOID
+DxgkpBugCheckSurpriseRemoval(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ NTSTATUS FailureStatus,
+    _In_opt_ PDXGKDDI_NOTIFY_SURPRISE_REMOVAL NotifyCallback)
+{
+    InterlockedExchange(&Adapter->KmdCallsBlocked, 1);
+    InterlockedExchange(&Adapter->InterruptCallbacksBlocked, 1);
+    InterlockedExchange(&Adapter->MiniportCallbacksValid, 0);
+    KeMemoryBarrier();
+    DXGKRNL_ERR("DxgkpBugCheckSurpriseRemoval: adapter %p cannot contain surprise removal, status 0x%08lX callback %p\n", Adapter, FailureStatus, (PVOID)NotifyCallback);
+    KeBugCheckEx(DXGKP_BUGCHECK_VIDEO_DXGKRNL_FATAL_ERROR, (ULONG_PTR)DXGKP_FATAL_SURPRISE_REMOVAL_SUBTYPE, (ULONG_PTR)FailureStatus, (ULONG_PTR)Adapter, (ULONG_PTR)NotifyCallback);
 }
 
 /* ========================================================================
@@ -5035,32 +6431,26 @@ DxgkpMiniportPnpDispatch(
 
         case IRP_MN_REMOVE_DEVICE:
         {
-            /*
-             * Save the lower device object pointer before DxgkAdapterRemove
-             * calls IoDeleteDevice and frees the DeviceExtension (Adapter).
-             * After IoDeleteDevice the Adapter pointer is invalid.
-             *
-             * The Windows convention for IRP_MN_REMOVE_DEVICE is:
-             *   1. Perform our teardown (DxgkAdapterRemove).
-             *   2. Forward the IRP to the lower stack.
-             *   3. Do NOT complete the IRP ourselves — the lower driver does.
-             *
-             * DxgkAdapterRemove calls IoDetachDevice internally, so the lower
-             * device object is already detached; we use it only to forward
-             * the IRP.  We must not dereference Adapter after the call.
-             */
             PDEVICE_OBJECT LowerDevice = Adapter->LowerDeviceObject;
 
+            if (LowerDevice != NULL)
+                ObReferenceObject(LowerDevice);
+
+            /* Release miniport and OS-owned resources while the lower stack
+             * still owns live hardware, then forward before detach/delete. */
             DxgkAdapterRemove(Adapter);
-            /* Adapter is now invalid. */
 
             if (LowerDevice != NULL)
             {
                 Irp->IoStatus.Status = STATUS_SUCCESS;
                 IoSkipCurrentIrpStackLocation(Irp);
-                return IoCallDriver(LowerDevice, Irp);
+                Status = IoCallDriver(LowerDevice, Irp);
+                DxgkpDeleteRemovedAdapterFdo(Adapter);
+                ObDereferenceObject(LowerDevice);
+                return Status;
             }
 
+            DxgkpDeleteRemovedAdapterFdo(Adapter);
             Irp->IoStatus.Status = STATUS_SUCCESS;
             IoCompleteRequest(Irp, IO_NO_INCREMENT);
             return STATUS_SUCCESS;
@@ -5068,27 +6458,137 @@ DxgkpMiniportPnpDispatch(
 
         case IRP_MN_SURPRISE_REMOVAL:
         {
-            ExAcquireFastMutex(&Adapter->AdapterMutex);
+            PDXGKDDI_NOTIFY_SURPRISE_REMOVAL NotifyCallback;
+            DXGKRNL_ADAPTER_STATE PreviousState;
+            BOOLEAN NotifyRunningRemoval;
+            BOOLEAN WaitForStop;
+            NTSTATUS NotifyStatus;
+            NTSTATUS StopStatus = STATUS_SUCCESS;
+
+            DxgkpAcquireAdapterMutexAfterStart(Adapter);
+            PreviousState = Adapter->State;
+            WaitForStop = (InterlockedCompareExchange(&Adapter->AdapterStopInProgress, 0, 0) != 0);
+            NotifyRunningRemoval = PreviousState == DxgkAdapterStateStarted || PreviousState == DxgkAdapterStateStopping || WaitForStop;
             Adapter->State = DxgkAdapterStateSurpriseRemoved;
-            ExReleaseFastMutex(&Adapter->AdapterMutex);
+            KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+
+            /* Level-0: notify immediately and deliberately bypass ordinary
+             * KMD admission so this can run while another DDI is pending. */
+            NotifyCallback = DXGK_CB(Adapter, DxgkDdiNotifySurpriseRemoval);
+            if (NotifyRunningRemoval)
+            {
+                if (!Adapter->SupportSurpriseRemoval)
+                    DxgkpBugCheckSurpriseRemoval(Adapter, STATUS_NOT_SUPPORTED, NotifyCallback);
+                if (NotifyCallback == NULL || Adapter->MiniportDeviceContext == NULL || InterlockedCompareExchange(&Adapter->MiniportCallbacksValid, 0, 0) == 0)
+                    DxgkpBugCheckSurpriseRemoval(Adapter, STATUS_PROCEDURE_NOT_FOUND, NotifyCallback);
+                _SEH2_TRY
+                {
+                    NotifyStatus = NotifyCallback(Adapter->MiniportDeviceContext, DxgkRemovalPnPNotify);
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    NotifyStatus = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+                if (!NT_SUCCESS(NotifyStatus))
+                    DxgkpBugCheckSurpriseRemoval(Adapter, NotifyStatus, NotifyCallback);
+                Adapter->SurpriseRemovalHandled = TRUE;
+            }
+
+            if (!WaitForStop)
+            {
+                NTSTATUS Mms2Status;
+
+                Mms2Status = DxgkpMms2BeginStop(Adapter, Dxgmms2StopReasonSurpriseRemove);
+                if (!NT_SUCCESS(Mms2Status))
+                    DXGKRNL_ERR("DxgkpMiniportPnpDispatch: dxgmms2 surprise begin-stop failed 0x%08lX; final RemoveDevice will retry\n", Mms2Status);
+            }
+
+            if (WaitForStop)
+                StopStatus = DxgkAdapterStop(Adapter);
+            if (WaitForStop && NT_SUCCESS(StopStatus))
+                return DxgkpForwardIrp(Adapter, Irp);
             InterlockedExchange(&Adapter->SubmitDmaStopping, 1);
             InterlockedExchange(&Adapter->PresentQueueStopping, 1);
+            if (InterlockedCompareExchange(&Adapter->RemoveRundownStarted, 1, 0) == 0)
+                ExWaitForRundownProtectionRelease(&Adapter->RemoveRundownRef);
+            DxgkBeginAdapterRundown(Adapter);
+            /* A resetting TDR owns Level3 and may still need ISR/DPC progress. */
+            DxgkpStopTdrWatchdog(Adapter);
+            /* Serialize the remaining Level3 teardown against power/query/stop. */
+            DxgkAcquireLevel3Transition(Adapter);
+            DxgkBeginKmdExclusive(Adapter);
             InterlockedExchange(&Adapter->VidSchStopping, 1);
             DxgkpDisconnectAdapterInterrupt(Adapter);
-            DxgkBeginAdapterRundown(Adapter);
-            DxgkpStopTdrWatchdog(Adapter);
             DxgkPresentTeardown(Adapter);
             if (InterlockedCompareExchange(&Adapter->SubmitDmaActiveReservations, 0, 0) != 0)
                 KeWaitForSingleObject(&Adapter->SubmitDmaReservationsDrainedEvent, Executive, KernelMode, FALSE, NULL);
             VidSchPrepareForStop(Adapter);
             KeRemoveQueueDpc(&Adapter->DpcObject);
             KeFlushQueuedDpcs();
+            /* Do not reopen public/KMT admission after hardware removal.
+             * RemoveDevice later owns KMD exclusivity for cleanup DDIs. */
+            DxgkEndKmdExclusive(Adapter, FALSE);
+            DxgkReleaseLevel3Transition(Adapter);
             return DxgkpForwardIrp(Adapter, Irp);
         }
 
         default:
             return DxgkpForwardIrp(Adapter, Irp);
     }
+}
+
+static NTSTATUS
+DxgkpForwardPowerIrpSynchronously(
+    _In_ PDEVICE_OBJECT LowerDeviceObject,
+    _Inout_ PIRP Irp)
+{
+    KEVENT Event;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+    IoCopyCurrentIrpStackLocationToNext(Irp);
+    IoSetCompletionRoutine(Irp, DxgkpStartDeviceCompletion, &Event, TRUE, TRUE, TRUE);
+    PoStartNextPowerIrp(Irp);
+    Status = PoCallDriver(LowerDeviceObject, Irp);
+    if (Status == STATUS_PENDING)
+    {
+        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+        Status = Irp->IoStatus.Status;
+    }
+    return Status;
+}
+
+static NTSTATUS
+DxgkpCallMiniportSetPowerState(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ DEVICE_POWER_STATE NewState,
+    _In_ POWER_ACTION ShutdownType)
+{
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    ASSERT(Adapter->KmdExclusiveOwnerThread == PsGetCurrentThread());
+    if (Adapter->MiniportContext == NULL || Adapter->MiniportContext->InitData.s.DxgkDdiSetPowerState == NULL)
+        return STATUS_SUCCESS;
+    if (!DxgkAcquireMiniportCallback(Adapter))
+        return STATUS_DELETE_PENDING;
+    Status = STATUS_DELETE_PENDING;
+    if (Adapter->State == DxgkAdapterStateStarted && Adapter->MiniportDeviceContext != NULL)
+    {
+        _SEH2_TRY
+        {
+            Status = Adapter->MiniportContext->InitData.s.DxgkDdiSetPowerState(Adapter->MiniportDeviceContext, DISPLAY_ADAPTER_HW_ID, NewState, ShutdownType);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+    }
+    DxgkReleaseMiniportCallback(Adapter);
+    return Status;
 }
 
 /*
@@ -5109,6 +6609,9 @@ DxgkpMiniportPowerDispatch(
 {
     PDXGKRNL_ADAPTER   Adapter;
     PIO_STACK_LOCATION Stack;
+    PDEVICE_OBJECT LowerDeviceObject;
+    NTSTATUS Status;
+    BOOLEAN Level3TransitionHeld = FALSE;
 
     /*
      * Route non-adapter devices: \Device\Video0, \Device\DxgKrnl, child PDOs.
@@ -5147,29 +6650,296 @@ DxgkpMiniportPowerDispatch(
     Adapter = DXGKRNL_ADAPTER_FROM_DEVOBJ(DeviceObject);
     Stack   = IoGetCurrentIrpStackLocation(Irp);
 
+    if (InterlockedCompareExchange(&Adapter->RemoveRundownStarted, 0, 0) != 0 || !ExAcquireRundownProtection(&Adapter->RemoveRundownRef))
+    {
+        PoStartNextPowerIrp(Irp);
+        Irp->IoStatus.Status = STATUS_DELETE_PENDING;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return STATUS_DELETE_PENDING;
+    }
+    if (InterlockedCompareExchange(&Adapter->RemoveRundownStarted, 0, 0) != 0 || Adapter->LowerDeviceObject == NULL)
+    {
+        ExReleaseRundownProtection(&Adapter->RemoveRundownRef);
+        PoStartNextPowerIrp(Irp);
+        Irp->IoStatus.Status = STATUS_DELETE_PENDING;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return STATUS_DELETE_PENDING;
+    }
+    LowerDeviceObject = Adapter->LowerDeviceObject;
+    ObReferenceObject(LowerDeviceObject);
+
     if (Stack->MinorFunction == IRP_MN_SET_POWER &&
         Stack->Parameters.Power.Type == DevicePowerState &&
-        Adapter->State == DxgkAdapterStateStarted &&
-        Adapter->MiniportContext->InitData.s.DxgkDdiSetPowerState != NULL)
+        Adapter->State == DxgkAdapterStateStarted)
     {
-        DEVICE_POWER_STATE NewState =
-            Stack->Parameters.Power.State.DeviceState;
+        DEVICE_POWER_STATE NewState;
+        DEVICE_POWER_STATE CurrentState;
+        POWER_ACTION ShutdownType;
+        BOOLEAN ValidState;
+        BOOLEAN KmdAdmissionBlocked;
+        BOOLEAN InterruptAdmissionBlocked;
+        BOOLEAN PoweringDown;
+        BOOLEAN PoweringUp;
 
-        DXGKRNL_TRACE("DxgkpMiniportPowerDispatch: SET_POWER D%d\n",
-                      NewState - PowerDeviceD0);
+        DxgkAcquireLevel3Transition(Adapter);
+        Level3TransitionHeld = TRUE;
+        if (Adapter->State != DxgkAdapterStateStarted)
+        {
+            DxgkReleaseLevel3Transition(Adapter);
+            Level3TransitionHeld = FALSE;
+            goto ForwardPowerIrp;
+        }
+        NewState = Stack->Parameters.Power.State.DeviceState;
+        CurrentState = Adapter->DevicePowerState;
+        ShutdownType = Stack->Parameters.Power.ShutdownType;
+        ValidState = NewState >= PowerDeviceD0 && NewState < PowerDeviceMaximum;
+        KmdAdmissionBlocked = InterlockedCompareExchange(&Adapter->KmdCallsBlocked, 0, 0) != 0;
+        InterruptAdmissionBlocked = InterlockedCompareExchange(&Adapter->InterruptCallbacksBlocked, 0, 0) != 0;
+        PoweringDown = ValidState && NewState > PowerDeviceD0 && (NewState > CurrentState || (NewState == CurrentState && (!KmdAdmissionBlocked || !InterruptAdmissionBlocked)));
+        PoweringUp = ValidState && (NewState < CurrentState || (NewState == PowerDeviceD0 && KmdAdmissionBlocked && InterruptAdmissionBlocked));
 
-        Adapter->MiniportContext->InitData.s.DxgkDdiSetPowerState(
-            Adapter->MiniportDeviceContext,
-            DISPLAY_ADAPTER_HW_ID,
-            NewState,
-            Stack->Parameters.Power.ShutdownType);
+        DXGKRNL_TRACE("DxgkpMiniportPowerDispatch: SET_POWER D%d -> D%d down=%u up=%u\n", CurrentState - PowerDeviceD0, NewState - PowerDeviceD0, PoweringDown, PoweringUp);
 
-        Adapter->DevicePowerState = NewState;
+        if (PoweringDown)
+        {
+            NTSTATUS KmdStatus;
+            NTSTATUS LowerStatus;
+            NTSTATUS ResumeStatus = STATUS_SUCCESS;
+            NTSTATUS SchedulerStatus;
+            NTSTATUS TrackerStatus;
+            BOOLEAN InterruptCallbacksBlocked = InterruptAdmissionBlocked;
+            BOOLEAN LowerPowerIrpStarted = FALSE;
+            BOOLEAN SchedulerSuspended;
+
+            InterlockedExchange(&Adapter->SubmitDmaStopping, 1);
+            InterlockedExchange(&Adapter->PresentQueueStopping, 1);
+            DxgkReleaseLevel3Transition(Adapter);
+            Level3TransitionHeld = FALSE;
+            DxgkpStopTdrWatchdog(Adapter);
+            DxgkAcquireLevel3Transition(Adapter);
+            Level3TransitionHeld = TRUE;
+            if (Adapter->State != DxgkAdapterStateStarted)
+            {
+                DxgkReleaseLevel3Transition(Adapter);
+                Level3TransitionHeld = FALSE;
+                goto ForwardPowerIrp;
+            }
+            if (InterlockedCompareExchange(&Adapter->SubmitDmaActiveReservations, 0, 0) != 0)
+                KeWaitForSingleObject(&Adapter->SubmitDmaReservationsDrainedEvent, Executive, KernelMode, FALSE, NULL);
+            if (InterlockedCompareExchange(&Adapter->PresentQueueActiveCalls, 0, 0) != 0)
+                KeWaitForSingleObject(&Adapter->PresentQueueCallsDrainedEvent, Executive, KernelMode, FALSE, NULL);
+
+            SchedulerStatus = VidSchSuspendScheduler(Adapter);
+            SchedulerSuspended = NT_SUCCESS(SchedulerStatus) && Adapter->VidSchContext != NULL && CurrentState == PowerDeviceD0;
+            if (!NT_SUCCESS(SchedulerStatus) && SchedulerStatus != STATUS_NOT_SUPPORTED)
+            {
+                if (CurrentState == PowerDeviceD0)
+                {
+                    DxgkBeginKmdExclusive(Adapter);
+                    DxgkVidMmResumeAdapter(Adapter);
+                    DxgkUnblockInterruptCallbacks(Adapter);
+                    InterlockedExchange(&Adapter->SubmitDmaStopping, 0);
+                    InterlockedExchange(&Adapter->PresentQueueStopping, 0);
+                    DxgkpStartTdrWatchdog(Adapter);
+                    DxgkEndKmdExclusive(Adapter, TRUE);
+                }
+                else
+                {
+                    DxgkBeginKmdExclusive(Adapter);
+                    DxgkVidMmQuiesceAdapter(Adapter);
+                    DxgkBlockInterruptCallbacks(Adapter);
+                    DxgkEndKmdExclusive(Adapter, FALSE);
+                }
+                PoStartNextPowerIrp(Irp);
+                Status = SchedulerStatus;
+                goto CompletePowerIrp;
+            }
+
+            TrackerStatus = DxgkpWaitForTrackedDmaIdle(Adapter, 1000);
+            if (!NT_SUCCESS(TrackerStatus))
+            {
+                Status = TrackerStatus;
+                DxgkBeginKmdExclusive(Adapter);
+                if (CurrentState == PowerDeviceD0)
+                {
+                    DxgkVidMmResumeAdapter(Adapter);
+                    if (SchedulerSuspended)
+                        ResumeStatus = VidSchResumeScheduler(Adapter);
+                    if (NT_SUCCESS(ResumeStatus) || ResumeStatus == STATUS_NOT_SUPPORTED)
+                    {
+                        DxgkUnblockInterruptCallbacks(Adapter);
+                        InterlockedExchange(&Adapter->SubmitDmaStopping, 0);
+                        InterlockedExchange(&Adapter->PresentQueueStopping, 0);
+                        DxgkpStartTdrWatchdog(Adapter);
+                        DxgkEndKmdExclusive(Adapter, TRUE);
+                    }
+                    else
+                    {
+                        Status = ResumeStatus;
+                        DxgkVidMmQuiesceAdapter(Adapter);
+                        DxgkBlockInterruptCallbacks(Adapter);
+                        DxgkEndKmdExclusive(Adapter, FALSE);
+                    }
+                }
+                else
+                {
+                    DxgkVidMmQuiesceAdapter(Adapter);
+                    DxgkBlockInterruptCallbacks(Adapter);
+                    DxgkEndKmdExclusive(Adapter, FALSE);
+                }
+                PoStartNextPowerIrp(Irp);
+                goto CompletePowerIrp;
+            }
+
+            DxgkBeginKmdExclusive(Adapter);
+            DxgkVidMmQuiesceAdapter(Adapter);
+            /* Paging eviction can require ISR/DPC completion progress. */
+            Status = DxgkVidMmPrepareForIdle(Adapter);
+            if (!NT_SUCCESS(Status))
+            {
+                DXGKRNL_WARN("DxgkpMiniportPowerDispatch: power-down VidMm idle preparation failed 0x%08lX; restoring D%d\n", Status, CurrentState - PowerDeviceD0);
+                goto RollbackPowerDown;
+            }
+            DxgkBlockInterruptCallbacks(Adapter);
+            InterruptCallbacksBlocked = TRUE;
+            if (Adapter->State != DxgkAdapterStateStarted || Adapter->MiniportDeviceStopped || InterlockedCompareExchange(&Adapter->MiniportCallbacksValid, 0, 0) == 0 || InterlockedCompareExchange(&Adapter->RundownStarted, 0, 0) != 0 || InterlockedCompareExchange(&Adapter->RemoveRundownStarted, 0, 0) != 0 || Adapter->MiniportContext == NULL || Adapter->MiniportDeviceContext == NULL)
+            {
+                Status = STATUS_DELETE_PENDING;
+                goto RetainPowerDownAdmission;
+            }
+            KmdStatus = DxgkpCallMiniportSetPowerState(Adapter, NewState, ShutdownType);
+            if (!NT_SUCCESS(KmdStatus))
+            {
+                DXGKRNL_WARN("DxgkpMiniportPowerDispatch: power-down DxgkDdiSetPowerState failed 0x%08lX; restoring D%d\n", KmdStatus, CurrentState - PowerDeviceD0);
+                Status = KmdStatus;
+                goto RollbackPowerDown;
+            }
+
+            LowerPowerIrpStarted = TRUE;
+            LowerStatus = DxgkpForwardPowerIrpSynchronously(LowerDeviceObject, Irp);
+            if (!NT_SUCCESS(LowerStatus))
+            {
+                KmdStatus = DxgkpCallMiniportSetPowerState(Adapter, CurrentState, PowerActionNone);
+                if (!NT_SUCCESS(KmdStatus))
+                {
+                    DXGKRNL_ERR("DxgkpMiniportPowerDispatch: lower power-down failed 0x%08lX and D%d compensation failed 0x%08lX; retaining blocked admission\n", LowerStatus, CurrentState - PowerDeviceD0, KmdStatus);
+                    Status = KmdStatus;
+                    goto RetainPowerDownAdmission;
+                }
+                Status = LowerStatus;
+                goto RollbackPowerDown;
+            }
+
+            Adapter->DevicePowerState = NewState;
+            Status = LowerStatus;
+            DxgkEndKmdExclusive(Adapter, FALSE);
+            goto CompletePowerIrp;
+
+RollbackPowerDown:
+            if (CurrentState != PowerDeviceD0 || Adapter->State != DxgkAdapterStateStarted || Adapter->MiniportDeviceStopped || InterlockedCompareExchange(&Adapter->MiniportCallbacksValid, 0, 0) == 0 || InterlockedCompareExchange(&Adapter->RundownStarted, 0, 0) != 0 || InterlockedCompareExchange(&Adapter->RemoveRundownStarted, 0, 0) != 0 || Adapter->MiniportContext == NULL || Adapter->MiniportDeviceContext == NULL)
+                goto RetainPowerDownAdmission;
+            DxgkVidMmResumeAdapter(Adapter);
+            if (SchedulerSuspended)
+                ResumeStatus = VidSchResumeScheduler(Adapter);
+            if (!NT_SUCCESS(ResumeStatus) && ResumeStatus != STATUS_NOT_SUPPORTED)
+            {
+                DXGKRNL_ERR("DxgkpMiniportPowerDispatch: D0 rollback scheduler resume failed 0x%08lX; retaining blocked admission\n", ResumeStatus);
+                DxgkVidMmQuiesceAdapter(Adapter);
+                Status = ResumeStatus;
+                goto RetainPowerDownAdmission;
+            }
+            if (InterruptCallbacksBlocked)
+                DxgkUnblockInterruptCallbacks(Adapter);
+            InterlockedExchange(&Adapter->SubmitDmaStopping, 0);
+            InterlockedExchange(&Adapter->PresentQueueStopping, 0);
+            DxgkpStartTdrWatchdog(Adapter);
+            DxgkEndKmdExclusive(Adapter, TRUE);
+            if (!LowerPowerIrpStarted)
+                PoStartNextPowerIrp(Irp);
+            goto CompletePowerIrp;
+
+RetainPowerDownAdmission:
+            if (!InterruptCallbacksBlocked)
+            {
+                DxgkBlockInterruptCallbacks(Adapter);
+                InterruptCallbacksBlocked = TRUE;
+            }
+            DxgkEndKmdExclusive(Adapter, FALSE);
+            if (!LowerPowerIrpStarted)
+                PoStartNextPowerIrp(Irp);
+            goto CompletePowerIrp;
+        }
+
+        if (PoweringUp)
+        {
+            NTSTATUS KmdStatus;
+            NTSTATUS LowerStatus;
+            NTSTATUS SchedulerStatus;
+
+            InterlockedExchange(&Adapter->SubmitDmaStopping, 1);
+            InterlockedExchange(&Adapter->PresentQueueStopping, 1);
+            InterlockedExchange(&Adapter->KmdCallsBlocked, 1);
+            LowerStatus = DxgkpForwardPowerIrpSynchronously(LowerDeviceObject, Irp);
+            Status = LowerStatus;
+            if (!NT_SUCCESS(LowerStatus))
+                goto CompletePowerIrp;
+
+            DxgkBeginKmdExclusive(Adapter);
+            KmdStatus = DxgkpCallMiniportSetPowerState(Adapter, NewState, ShutdownType);
+            if (!NT_SUCCESS(KmdStatus))
+            {
+                DXGKRNL_WARN("DxgkpMiniportPowerDispatch: power-up DxgkDdiSetPowerState failed 0x%08lX; completing the lower power IRP and retaining blocked admission\n", KmdStatus);
+                Status = KmdStatus;
+                DxgkEndKmdExclusive(Adapter, FALSE);
+                goto CompletePowerIrp;
+            }
+            Adapter->DevicePowerState = NewState;
+
+            if (NewState == PowerDeviceD0)
+            {
+                DxgkVidMmResumeAdapter(Adapter);
+                SchedulerStatus = VidSchResumeScheduler(Adapter);
+                if (!NT_SUCCESS(SchedulerStatus) && SchedulerStatus != STATUS_NOT_SUPPORTED)
+                {
+                    DXGKRNL_ERR("DxgkpMiniportPowerDispatch: D0 scheduler resume failed 0x%08lX; retaining blocked admission\n", SchedulerStatus);
+                    DxgkVidMmQuiesceAdapter(Adapter);
+                    Status = SchedulerStatus;
+                    DxgkEndKmdExclusive(Adapter, FALSE);
+                    goto CompletePowerIrp;
+                }
+                DxgkUnblockInterruptCallbacks(Adapter);
+                InterlockedExchange(&Adapter->SubmitDmaStopping, 0);
+                InterlockedExchange(&Adapter->PresentQueueStopping, 0);
+                DxgkpStartTdrWatchdog(Adapter);
+                DxgkEndKmdExclusive(Adapter, TRUE);
+            }
+            else
+            {
+                DxgkEndKmdExclusive(Adapter, FALSE);
+            }
+            goto CompletePowerIrp;
+        }
+
+        DxgkReleaseLevel3Transition(Adapter);
+        Level3TransitionHeld = FALSE;
     }
 
+ForwardPowerIrp:
     PoStartNextPowerIrp(Irp);
     IoSkipCurrentIrpStackLocation(Irp);
-    return PoCallDriver(Adapter->LowerDeviceObject, Irp);
+    Status = PoCallDriver(LowerDeviceObject, Irp);
+    ObDereferenceObject(LowerDeviceObject);
+    ExReleaseRundownProtection(&Adapter->RemoveRundownRef);
+    return Status;
+
+CompletePowerIrp:
+    if (Level3TransitionHeld)
+        DxgkReleaseLevel3Transition(Adapter);
+    ObDereferenceObject(LowerDeviceObject);
+    ExReleaseRundownProtection(&Adapter->RemoveRundownRef);
+    Irp->IoStatus.Status = Status;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    return Status;
 }
 
 /*
@@ -5195,6 +6965,7 @@ DxgkpAddDevice(
     PDXGKRNL_ADAPTER          Adapter;
     PVOID                     MiniportDeviceContext;
     KIRQL                     OldIrql;
+    NTSTATUS                  Mms2Status;
     NTSTATUS                  Status;
 
     PAGED_CODE();
@@ -5238,6 +7009,7 @@ DxgkpAddDevice(
                     Status);
         return Status;
     }
+    Fdo->Flags |= DO_POWER_PAGABLE;
 
     Adapter = DXGKRNL_ADAPTER_FROM_DEVOBJ(Fdo);
     RtlZeroMemory(Adapter, sizeof(*Adapter));
@@ -5250,21 +7022,52 @@ DxgkpAddDevice(
     Adapter->SystemPowerState        = PowerSystemWorking;
     Adapter->HighestAcceptableAddress.QuadPart = (LONGLONG)-1;
     Adapter->SchedulingCaps.Value = 0;
+    Adapter->TdrConfig = g_TdrConfig;
 
     /* Initialise synchronisation primitives. */
     KeInitializeSpinLock(&Adapter->InterruptLock);
     KeInitializeSpinLock(&Adapter->ChildListLock);
     KeInitializeSpinLock(&Adapter->SubmitDmaLock);
+    KeInitializeSpinLock(&Adapter->TdrHistoryLock);
     KeInitializeEvent(&Adapter->SyncEvent, SynchronizationEvent, FALSE);
-    ExInitializeFastMutex(&Adapter->AdapterMutex);
-    ExInitializeFastMutex(&Adapter->MiniportCallbackMutex);
-    ExInitializeFastMutex(&Adapter->SharedPrimaryMutex);
+    KeInitializeMutex(&Adapter->AdapterMutex, 0);
+    KeInitializeEvent(&Adapter->AdapterStartCompletedEvent, NotificationEvent, TRUE);
+    Adapter->AdapterStartGeneration = 0;
+    Adapter->AdapterStartCompletedGeneration = 0;
+    Adapter->AdapterStartStatus = STATUS_SUCCESS;
+    KeInitializeEvent(&Adapter->AdapterStopCompletedEvent, NotificationEvent, TRUE);
+    Adapter->AdapterStopInProgress = 0;
+    Adapter->AdapterStopGeneration = 0;
+    Adapter->AdapterStopCompletedGeneration = 0;
+    Adapter->AdapterStopIntentCount = 0;
+    Adapter->AdapterStopStatus = STATUS_SUCCESS;
+    KeInitializeMutex(&Adapter->MiniportCallbackMutex, 0);
+    KeInitializeMutex(&Adapter->KmdExclusiveMutex, 0);
+    KeInitializeMutex(&Adapter->KmdTransactionMutex, 0);
+    KeInitializeMutex(&Adapter->Level3TransitionMutex, 0);
+    Adapter->KmdCallsBlocked = 0;
+    Adapter->KmdActiveCalls = 0;
+    Adapter->KmdExclusiveOwnerThread = NULL;
+    Adapter->KmdTransactionOwnerThread = NULL;
+    Adapter->KmdTransactionDepth = 0;
+    Adapter->Level3TransitionOwnerThread = NULL;
+    Adapter->Level3TransitionDepth = 0;
+    Adapter->InterruptCallbacksBlocked = 1;
+    Adapter->InterruptActiveCalls = 0;
+    KeInitializeMutex(&Adapter->SharedPrimaryMutex, 0);
     ExInitializeRundownProtection(&Adapter->SharedSurfaceRundown);
     Adapter->SharedSurfaceGeneration = 1;
     Adapter->SharedSurfaceMutationDepth = 0;
     Adapter->SharedSurfaceAvailable = 0;
     ExInitializeRundownProtection(&Adapter->RundownRef);
     Adapter->RundownStarted = 0;
+    Adapter->DeviceLifecycleActiveOperations = 0;
+    KeInitializeEvent(&Adapter->DeviceLifecycleOperationsDrainedEvent, NotificationEvent, TRUE);
+    ExInitializeRundownProtection(&Adapter->RemoveRundownRef);
+    Adapter->RemoveRundownStarted = 0;
+    ExInitializeRundownProtection(&Adapter->ReverseCallbackRundownRef);
+    Adapter->ReverseCallbackRundownStarted = 0;
+    Adapter->MiniportRemoveDeviceComplete = FALSE;
     KeInitializeDpc(&Adapter->DpcObject, DxgkpAdapterDpcRoutine, Adapter);
     Adapter->SubmitDmaRetireWorkQueued = 0;
     Adapter->SubmitDmaRetireActiveWorkers = 0;
@@ -5286,6 +7089,15 @@ DxgkpAddDevice(
     InitializeListHead(&Adapter->MiniportAdapterListEntry);
     InitializeListHead(&Adapter->GlobalAdapterListEntry);
 
+    Status = DxgkpMms2CreateAdapter(Adapter, DxgkpMms2GetAdapterFlags(Adapter), &Adapter->Mms2Adapter);
+    if (!NT_SUCCESS(Status))
+    {
+        DXGKRNL_ERR("DxgkpAddDevice: dxgmms2 adapter creation failed 0x%08lX\n", Status);
+        IoDeleteDevice(Fdo);
+        return Status;
+    }
+    Adapter->Mms2State = DxgkMms2AdapterCreated;
+
     /* Call DxgkDdiAddDevice to obtain the miniport's device context. */
     Status = MpCtx->InitData.s.DxgkDdiAddDevice(PhysicalDeviceObject,
                                                &Adapter->MiniportDeviceContext);
@@ -5293,6 +7105,9 @@ DxgkpAddDevice(
     {
         DXGKRNL_ERR("DxgkpAddDevice: DxgkDdiAddDevice failed 0x%08lX\n",
                     Status);
+        Mms2Status = DxgkpMms2DestroyAdministrativeAdapter(Adapter);
+        if (!NT_SUCCESS(Mms2Status))
+            DxgkpBugCheckMms2Lifecycle(Adapter, Mms2Status, DXGKP_MMS2_FAILURE_ADD_ROLLBACK);
         IoDeleteDevice(Fdo);
         return Status;
     }
@@ -5308,12 +7123,19 @@ DxgkpAddDevice(
     if (Adapter->LowerDeviceObject == NULL)
     {
         DXGKRNL_ERR("DxgkpAddDevice: IoAttachDeviceToDeviceStack failed\n");
-        ExAcquireFastMutex(&Adapter->MiniportCallbackMutex);
+        (VOID)KeWaitForSingleObject(&Adapter->MiniportCallbackMutex, Executive, KernelMode, FALSE, NULL);
         MiniportDeviceContext = Adapter->MiniportDeviceContext;
         InterlockedExchange(&Adapter->MiniportCallbacksValid, 0);
         Adapter->MiniportDeviceContext = NULL;
-        MpCtx->InitData.s.DxgkDdiRemoveDevice(MiniportDeviceContext);
-        ExReleaseFastMutex(&Adapter->MiniportCallbackMutex);
+        Status = DxgkpRemoveMiniportDevice(Adapter, MiniportDeviceContext);
+        if (!NT_SUCCESS(Status))
+            DXGKRNL_ERR("DxgkpAddDevice: rollback DxgkDdiRemoveDevice failed 0x%08lX\n", Status);
+        if (InterlockedCompareExchange(&Adapter->ReverseCallbackRundownStarted, 1, 0) == 0)
+            ExWaitForRundownProtectionRelease(&Adapter->ReverseCallbackRundownRef);
+        KeReleaseMutex(&Adapter->MiniportCallbackMutex, FALSE);
+        Mms2Status = DxgkpMms2DestroyAdministrativeAdapter(Adapter);
+        if (!NT_SUCCESS(Mms2Status))
+            DxgkpBugCheckMms2Lifecycle(Adapter, Mms2Status, DXGKP_MMS2_FAILURE_ATTACH_ROLLBACK);
         IoDeleteDevice(Fdo);
         return STATUS_NO_SUCH_DEVICE;
     }
@@ -5479,7 +7301,7 @@ DxgkInitializeEx(
     }
 
     if (DriverInitDataSize <
-        DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiStartDevice))
+        DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiRemoveDevice))
     {
         DXGKRNL_ERR("DxgkInitializeEx: DriverInitDataSize %lu too small "
                     "for mandatory callbacks\n",
@@ -5497,70 +7319,33 @@ DxgkInitializeEx(
         return STATUS_INVALID_PARAMETER;
     }
 
-    /* Mandatory callbacks: AddDevice and StartDevice are always required. */
+    /* The four PnP lifecycle callbacks are required as one transaction. */
     if (DriverInitializationData->DxgkDdiAddDevice == NULL ||
-        DriverInitializationData->DxgkDdiStartDevice == NULL)
+        DriverInitializationData->DxgkDdiStartDevice == NULL ||
+        DriverInitializationData->DxgkDdiStopDevice == NULL ||
+        DriverInitializationData->DxgkDdiRemoveDevice == NULL)
     {
-        DXGKRNL_ERR("DxgkInitializeEx: mandatory callback missing "
-                    "(AddDevice=%p StartDevice=%p)\n",
+        DXGKRNL_ERR("DxgkInitializeEx: mandatory lifecycle callback missing (AddDevice=%p StartDevice=%p StopDevice=%p RemoveDevice=%p)\n",
                     DriverInitializationData->DxgkDdiAddDevice,
-                    DriverInitializationData->DxgkDdiStartDevice);
+                    DriverInitializationData->DxgkDdiStartDevice,
+                    DriverInitializationData->DxgkDdiStopDevice,
+                    DriverInitializationData->DxgkDdiRemoveDevice);
         return STATUS_INVALID_PARAMETER;
     }
 
     /* --- One-time global init ------------------------------------------- */
 
-    DxgkpFirstInit();
+    Status = DxgkpEnsureGlobalInitialization();
+    if (!NT_SUCCESS(Status))
+        return Status;
 
-    /*
-     * Create the \Device\DxgKrnl control device if it doesn't exist.
-     * When dxgkrnl is loaded as an import dependency (DriverEntry skipped),
-     * GDxgControlDeviceObject is NULL.  Create it now using the miniport's
-     * DriverObject since all dispatch routines will be overwritten below.
-     */
-    if (GDxgControlDeviceObject == NULL)
+    /* Import-only callers create a stable dxgkrnl-owned DriverObject rather
+     * than binding the global control device to the first miniport. */
+    Status = DxgkpEnsureControlDevice();
+    if (!NT_SUCCESS(Status) || GDxgControlDeviceObject == NULL)
     {
-        UNICODE_STRING CtlDevName;
-
-        RtlInitUnicodeString(&CtlDevName, L"\\Device\\DxgKrnl");
-        Status = IoCreateDevice(DriverObject,
-                                0,
-                                &CtlDevName,
-                                FILE_DEVICE_UNKNOWN,
-                                FILE_DEVICE_SECURE_OPEN,
-                                FALSE,
-                                &GDxgControlDeviceObject);
-        if (Status == STATUS_OBJECT_NAME_COLLISION)
-        {
-            /* Already exists — DriverEntry did run or another miniport created it. */
-            DXGKRNL_TRACE("DxgkInitializeEx: \\Device\\DxgKrnl already exists\n");
-            Status = STATUS_SUCCESS;
-        }
-        else if (NT_SUCCESS(Status))
-        {
-            UNICODE_STRING SymlinkName, TargetName;
-            NTSTATUS SymStatus;
-
-            GDxgControlDeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
-            DXGKRNL_TRACE("DxgkInitializeEx: created \\Device\\DxgKrnl at %p\n",
-                          GDxgControlDeviceObject);
-
-            RtlInitUnicodeString(&SymlinkName, L"\\DosDevices\\DxgKrnl");
-            RtlInitUnicodeString(&TargetName, L"\\Device\\DxgKrnl");
-            SymStatus = IoCreateSymbolicLink(&SymlinkName, &TargetName);
-            if (!NT_SUCCESS(SymStatus) &&
-                SymStatus != STATUS_OBJECT_NAME_COLLISION)
-            {
-                DXGKRNL_WARN("DxgkInitializeEx: IoCreateSymbolicLink(DxgKrnl) "
-                             "failed 0x%08lX\n", SymStatus);
-            }
-        }
-        else
-        {
-            DXGKRNL_ERR("DxgkInitializeEx: IoCreateDevice(DxgKrnl) failed 0x%08lX\n",
-                        Status);
-            return Status;
-        }
+        DXGKRNL_ERR("DxgkInitializeEx: dxgkrnl control device initialization failed 0x%08lX\n", Status);
+        return NT_SUCCESS(Status) ? STATUS_DEVICE_NOT_READY : Status;
     }
 
     /* --- Allocate the per-miniport context ------------------------------ */

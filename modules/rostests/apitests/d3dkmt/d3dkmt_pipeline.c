@@ -190,16 +190,13 @@ START_TEST(pipeline)
         ok(Info.AbiVersion >= RPI5VC4_ESCAPE_INFO_ABI_VERSION,
            "expected rpi5vc4 escape ABI >= %u, got %lu\n",
            RPI5VC4_ESCAPE_INFO_ABI_VERSION, Info.AbiVersion);
-        ok((Info.Caps & RPI5VC4_CAP_GPUVA_MAP) != 0,
-           "rpi5vc4 escape caps missing GPUVA_MAP\n");
+        ok((Info.Caps & RPI5VC4_CAP_GPUVA_MAP) != 0, "rpi5vc4 escape caps missing GPUVA_MAP\n");
         ok((Info.Caps & RPI5VC4_CAP_ALLOCATION_RELOCATION) != 0,
            "rpi5vc4 escape caps missing ALLOCATION_RELOCATION\n");
-        ok((Info.Caps & RPI5VC4_CAP_MONITORED_FENCE) != 0,
-           "rpi5vc4 escape caps missing MONITORED_FENCE\n");
+        ok((Info.Caps & RPI5VC4_CAP_MONITORED_FENCE) != 0, "rpi5vc4 escape caps missing MONITORED_FENCE\n");
         ok((Info.Caps & RPI5VC4_CAP_SUBMIT_SIGNAL) != 0,
            "rpi5vc4 escape caps missing SUBMIT_SIGNAL\n");
-        ok((Info.Caps & RPI5VC4_CAP_CPU_WAIT_SIGNAL) != 0,
-           "rpi5vc4 escape caps missing CPU_WAIT_SIGNAL\n");
+        ok((Info.Caps & RPI5VC4_CAP_CPU_WAIT_SIGNAL) != 0, "rpi5vc4 escape caps missing CPU_WAIT_SIGNAL\n");
         ok(Info.NodeCount >= 3,
            "rpi5vc4 should expose at least 3 nodes, got %lu\n",
            Info.NodeCount);

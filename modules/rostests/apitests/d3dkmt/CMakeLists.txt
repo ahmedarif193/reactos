@@ -30,6 +30,7 @@ list(APPEND SOURCE
     d3dkmt_presentext.c
     d3dkmt_misc.c
     d3dkmt_pipeline.c
+    d3dkmt_capture.c
     d3dkmt_cle.c
     d3dkmt_v3dsmoke.c
     d3dkmt_vc4kmt_smoke.c
