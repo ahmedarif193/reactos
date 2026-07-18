@@ -652,8 +652,7 @@ WaitStart:
     Thread->Alertable = FALSE;
     Thread->WaitReason = WrAlertByThreadId;
     Thread->WaitMode = KernelMode;
-    Thread->WaitBlockCount = 1;
-    Thread->TimerActive = FALSE;
+    KxChainTimerOnly();
     Thread->WaitListEntry.Flink = NULL;
     Swappable = KiCheckThreadStackSwap(Thread, KernelMode);
     Thread->WaitTime = KeTickCount.LowPart;

@@ -327,10 +327,8 @@ typedef enum _KWAIT_REASON
     WrFastMutex,
     WrGuardedMutex,
     WrRundown,
-#if (NTDDI_VERSION >= NTDDI_WIN8)
     WrAlertByThreadId,
     WrDeferredPreempt,
-#endif
 #if (NTDDI_VERSION >= NTDDI_WIN10_RS3)
     WrPhysicalFault,
 #endif
