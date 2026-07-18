@@ -581,6 +581,13 @@ KiArm64GetProcessorClockMHz(
     _In_ ULONG ProcessorNumber);
 
 ULONG
+NTAPI
+KiArm64QueryEffectiveClockMHz(
+    _In_ ULONG ProcessorNumber);
+
+extern ULONG64 KiArm64IdleCounterTicks[];
+
+ULONG
 FASTCALL
 HalGetGicPriorityMask(VOID);
 

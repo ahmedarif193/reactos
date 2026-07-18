@@ -323,7 +323,14 @@ KiIdleLoop(VOID)
 
         /* WFI wakes on a pending interrupt even with DAIF.I masked; unmasking afterwards takes it immediately */
         SmpDbgPark(Prcb->Number);
-        __asm__ __volatile__("wfi" ::: "memory");
+        {
+            ULONG64 IdleStart, IdleEnd;
+
+            __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(IdleStart));
+            __asm__ __volatile__("wfi" ::: "memory");
+            __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(IdleEnd));
+            KiArm64IdleCounterTicks[Prcb->Number] += IdleEnd - IdleStart;
+        }
         SmpDbgWake(Prcb->Number);
         Prcb->Sleeping = FALSE;
         if (Prcb->SchedulerSubNode != NULL)
