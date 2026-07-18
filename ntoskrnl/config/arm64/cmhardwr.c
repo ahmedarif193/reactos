@@ -132,7 +132,6 @@ CmpInitializeMachineDependentConfiguration(_In_ PLOADER_PARAMETER_BLOCK LoaderBl
     HANDLE KeyHandle, SystemHandle;
     CONFIGURATION_COMPONENT_DATA ConfigData;
     CHAR Buffer[128];
-    PKPRCB Prcb;
     ULONGLONG Midr;
     ULONG Implementer, Architecture, Variant, PartNumber, Revision;
     const WCHAR *VendorName;
@@ -200,9 +199,6 @@ CmpInitializeMachineDependentConfiguration(_In_ PLOADER_PARAMETER_BLOCK LoaderBl
         /* Loop through all processors */
         for (i = 0; i < KeNumberProcessors; i++)
         {
-            /* Get the PRCB for this processor */
-            Prcb = KiProcessorBlock[i];
-
             /* Setup the configuration entry for the processor */
             RtlZeroMemory(&ConfigData, sizeof(ConfigData));
             ConfigData.ComponentEntry.Class = ProcessorClass;
@@ -261,18 +257,22 @@ CmpInitializeMachineDependentConfiguration(_In_ PLOADER_PARAMETER_BLOCK LoaderBl
             }
 
             /* Set processor speed if available */
-            if (Prcb->MHz)
             {
-                UNICODE_STRING ValueName;
-                RtlInitUnicodeString(&ValueName, L"~MHz");
-                Status = NtSetValueKey(KeyHandle,
-                                       &ValueName,
-                                       0,
-                                       REG_DWORD,
-                                       &Prcb->MHz,
-                                       sizeof(Prcb->MHz));
+                ULONG CpuMHz = KiArm64GetProcessorClockMHz(i);
 
-                DPRINT("ARM64: Set MHz = %u (status: 0x%lx)\n", Prcb->MHz, Status);
+                if (CpuMHz)
+                {
+                    UNICODE_STRING ValueName;
+                    RtlInitUnicodeString(&ValueName, L"~MHz");
+                    Status = NtSetValueKey(KeyHandle,
+                                           &ValueName,
+                                           0,
+                                           REG_DWORD,
+                                           &CpuMHz,
+                                           sizeof(CpuMHz));
+
+                    DPRINT("ARM64: Set MHz = %u (status: 0x%lx)\n", CpuMHz, Status);
+                }
             }
 
             /* Set the processor name string from MIDR_EL1 */
