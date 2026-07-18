@@ -62,6 +62,7 @@ list(APPEND KMTEST_DRV_SOURCE
     kmtest_drv/testlist.c
     kmtest_drv/vm_detect.c
 
+    directx/Dxgmms2Timeline.c
     example/Example.c
     example/KernelType.c
     hal/HalSystemInfo.c
@@ -189,6 +190,7 @@ list(APPEND KMTEST_DRV_SOURCE
     win32ss/CddDisplay.c
     ${COMMON_SOURCE}
 
+    ${REACTOS_SOURCE_DIR}/drivers/directx/dxgmms2/timeline_core.c
     kmtest_drv/kmtest_drv.rc)
 
 if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
@@ -233,6 +235,7 @@ if(ARCH STREQUAL "arm64")
 endif()
 
 add_library(kmtest_drv MODULE ${KMTEST_DRV_SOURCE})
+target_include_directories(kmtest_drv PRIVATE ${REACTOS_SOURCE_DIR}/drivers/directx/dxgmms2)
 set_module_type(kmtest_drv kernelmodedriver)
 target_link_libraries(kmtest_drv kmtest_printf chkstk memcmp ntoskrnl_vista poguid ${PSEH_LIB})
 add_importlibs(kmtest_drv ntoskrnl hal)

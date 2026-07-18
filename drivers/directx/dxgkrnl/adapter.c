@@ -1189,132 +1189,198 @@ static DECLSPEC_NORETURN VOID DxgkpBugCheckMms2Timeline(_In_ PDXGKRNL_ADAPTER Ad
     KeBugCheckEx(0x119, 0x1, (ULONG_PTR)FenceId, (ULONG_PTR)NodeOrdinal, (ULONG_PTR)Adapter);
 }
 
+static BOOLEAN DxgkpAcquireMms2TimelineCall(_In_ PDXGKRNL_ADAPTER Adapter, _Out_ DXGMMS2_SCHEDULER_TIMELINE_INTERFACE_V1 *Timeline)
+{
+    LONG ActiveCalls;
+
+    if (Adapter == NULL || Timeline == NULL)
+        return FALSE;
+    ActiveCalls = InterlockedIncrement(&Adapter->Mms2TimelineActiveCalls);
+    ASSERT(ActiveCalls > 0);
+    KeMemoryBarrier();
+    if (InterlockedCompareExchange(&Adapter->Mms2TimelineCallsOpen, 0, 0) == 0 || InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) == 0)
+    {
+        ASSERT(InterlockedDecrement(&Adapter->Mms2TimelineActiveCalls) >= 0);
+        return FALSE;
+    }
+    *Timeline = Adapter->Mms2Timeline;
+    return TRUE;
+}
+
+static VOID DxgkpReleaseMms2TimelineCall(_In_ PDXGKRNL_ADAPTER Adapter)
+{
+    ASSERT(InterlockedDecrement(&Adapter->Mms2TimelineActiveCalls) >= 0);
+}
+
+static BOOLEAN DxgkpCloseMms2TimelineCalls(_In_ PDXGKRNL_ADAPTER Adapter)
+{
+    LARGE_INTEGER Delay;
+    BOOLEAN WasOpen;
+
+    PAGED_CODE();
+    WasOpen = InterlockedExchange(&Adapter->Mms2TimelineCallsOpen, 0) != 0;
+    KeMemoryBarrier();
+    Delay.QuadPart = -10000;
+    while (InterlockedCompareExchange(&Adapter->Mms2TimelineActiveCalls, 0, 0) != 0)
+        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+    KeMemoryBarrier();
+    ASSERT(!WasOpen || InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) != 0);
+    return WasOpen;
+}
+
+static VOID DxgkpPublishMms2TimelineCalls(_In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PAGED_CODE();
+    KeMemoryBarrier();
+    InterlockedExchange(&Adapter->Mms2TimelineValid, 1);
+    KeMemoryBarrier();
+    InterlockedExchange(&Adapter->Mms2TimelineCallsOpen, 1);
+}
+
+static VOID DxgkpReopenMms2TimelineCalls(_In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PAGED_CODE();
+    ASSERT(InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) != 0);
+    KeMemoryBarrier();
+    InterlockedExchange(&Adapter->Mms2TimelineCallsOpen, 1);
+}
+
 ULONG NTAPI DxgkAllocateSubmissionFenceId(_In_ PDXGKRNL_ADAPTER Adapter)
 {
+    DXGMMS2_SCHEDULER_TIMELINE_INTERFACE_V1 Timeline;
     ULONG ProviderFence;
-    ULONG ShadowFence;
 
     if (Adapter == NULL)
         return 0;
-    if (InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) == 0)
-        return DxgkpShadowAllocateSubmissionFenceId(Adapter);
-    KeMemoryBarrier();
-    ProviderFence = Adapter->Mms2Timeline.AllocateFence(Adapter->Mms2Timeline.TimelineHandle, Adapter->Mms2Timeline.Generation);
+    if (!DxgkpAcquireMms2TimelineCall(Adapter, &Timeline))
+        return InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) == 0 ? DxgkpShadowAllocateSubmissionFenceId(Adapter) : 0;
+    ProviderFence = Timeline.AllocateFence(Timeline.TimelineHandle, Timeline.Generation);
     if (ProviderFence == 0)
+    {
+        DxgkpReleaseMms2TimelineCall(Adapter);
         return 0;
-    ShadowFence = DxgkpShadowAllocateSubmissionFenceId(Adapter);
-    if (ProviderFence != ShadowFence)
-        DxgkpBugCheckMms2Timeline(Adapter, 0, ProviderFence);
+    }
+    DxgkpReleaseMms2TimelineCall(Adapter);
     return ProviderFence;
 }
 
 BOOLEAN NTAPI DxgkReserveSubmissionFenceIdentity(_In_ PDXGKRNL_ADAPTER Adapter, _In_ ULONG NodeOrdinal, _In_ ULONG SubmissionFenceId)
 {
+    DXGMMS2_SCHEDULER_TIMELINE_INTERFACE_V1 Timeline;
     BOOLEAN ProviderReserved;
-    BOOLEAN ShadowReserved;
 
     if (Adapter == NULL)
         return FALSE;
-    if (InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) == 0)
-        return DxgkpShadowReserveSubmissionFenceIdentity(Adapter, NodeOrdinal, SubmissionFenceId);
-    KeMemoryBarrier();
-    ProviderReserved = Adapter->Mms2Timeline.ReserveFence(Adapter->Mms2Timeline.TimelineHandle, Adapter->Mms2Timeline.Generation, NodeOrdinal, SubmissionFenceId);
-    ShadowReserved = DxgkpShadowReserveSubmissionFenceIdentity(Adapter, NodeOrdinal, SubmissionFenceId);
-    if (!ProviderReserved && ShadowReserved)
-    {
-        (VOID)DxgkpShadowReleaseSubmittedFenceIdentity(Adapter, NodeOrdinal, SubmissionFenceId);
-        return FALSE;
-    }
-    if (ProviderReserved && !ShadowReserved)
-    {
-        (VOID)Adapter->Mms2Timeline.ReleaseFence(Adapter->Mms2Timeline.TimelineHandle, Adapter->Mms2Timeline.Generation, NodeOrdinal, SubmissionFenceId);
-        DxgkpBugCheckMms2Timeline(Adapter, NodeOrdinal, SubmissionFenceId);
-    }
+    if (!DxgkpAcquireMms2TimelineCall(Adapter, &Timeline))
+        return InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) == 0 ? DxgkpShadowReserveSubmissionFenceIdentity(Adapter, NodeOrdinal, SubmissionFenceId) : FALSE;
+    ProviderReserved = Timeline.ReserveFence(Timeline.TimelineHandle, Timeline.Generation, NodeOrdinal, SubmissionFenceId);
+    DxgkpReleaseMms2TimelineCall(Adapter);
     return ProviderReserved;
 }
 
 VOID NTAPI DxgkPublishSubmittedFence(_In_ PDXGKRNL_ADAPTER Adapter, _In_ ULONG NodeOrdinal, _In_ ULONG SubmissionFenceId)
 {
-    if (Adapter == NULL || InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) == 0)
+    DXGMMS2_SCHEDULER_TIMELINE_INTERFACE_V1 Timeline;
+
+    if (Adapter == NULL)
+        return;
+    if (!DxgkpAcquireMms2TimelineCall(Adapter, &Timeline))
     {
-        DxgkpShadowPublishSubmittedFence(Adapter, NodeOrdinal, SubmissionFenceId);
+        if (InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) == 0)
+            DxgkpShadowPublishSubmittedFence(Adapter, NodeOrdinal, SubmissionFenceId);
+        else
+            DxgkpBugCheckMms2Timeline(Adapter, NodeOrdinal, SubmissionFenceId);
         return;
     }
-    KeMemoryBarrier();
-    if (!Adapter->Mms2Timeline.PublishFence(Adapter->Mms2Timeline.TimelineHandle, Adapter->Mms2Timeline.Generation, NodeOrdinal, SubmissionFenceId))
+    if (!Timeline.PublishFence(Timeline.TimelineHandle, Timeline.Generation, NodeOrdinal, SubmissionFenceId))
         DxgkpBugCheckMms2Timeline(Adapter, NodeOrdinal, SubmissionFenceId);
-    DxgkpShadowPublishSubmittedFence(Adapter, NodeOrdinal, SubmissionFenceId);
+    DxgkpUpdateCompletedFence(&Adapter->NodeLastSubmittedFenceId[NodeOrdinal], SubmissionFenceId);
+    DxgkpReleaseMms2TimelineCall(Adapter);
 }
 
 BOOLEAN NTAPI DxgkIsSubmittedFenceIdentity(_In_ PDXGKRNL_ADAPTER Adapter, _In_ ULONG NodeOrdinal, _In_ ULONG SubmissionFenceId)
 {
+    DXGMMS2_SCHEDULER_TIMELINE_INTERFACE_V1 Timeline;
     BOOLEAN ProviderPublished;
-    BOOLEAN ShadowPublished;
 
     if (Adapter == NULL)
         return FALSE;
-    ShadowPublished = DxgkpShadowIsSubmittedFenceIdentity(Adapter, NodeOrdinal, SubmissionFenceId);
-    if (InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) == 0)
-        return ShadowPublished;
-    KeMemoryBarrier();
-    ProviderPublished = Adapter->Mms2Timeline.IsFencePublished(Adapter->Mms2Timeline.TimelineHandle, Adapter->Mms2Timeline.Generation, NodeOrdinal, SubmissionFenceId);
-    if (ProviderPublished != ShadowPublished)
-        DxgkpBugCheckMms2Timeline(Adapter, NodeOrdinal, SubmissionFenceId);
+    if (!DxgkpAcquireMms2TimelineCall(Adapter, &Timeline))
+        return InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) == 0 ? DxgkpShadowIsSubmittedFenceIdentity(Adapter, NodeOrdinal, SubmissionFenceId) : FALSE;
+    ProviderPublished = Timeline.IsFencePublished(Timeline.TimelineHandle, Timeline.Generation, NodeOrdinal, SubmissionFenceId);
+    DxgkpReleaseMms2TimelineCall(Adapter);
     return ProviderPublished;
 }
 
 VOID NTAPI DxgkReleaseSubmittedFenceIdentity(_In_ PDXGKRNL_ADAPTER Adapter, _In_ ULONG NodeOrdinal, _In_ ULONG SubmissionFenceId)
 {
-    BOOLEAN ProviderReleased;
-    BOOLEAN ShadowReleased;
+    DXGMMS2_SCHEDULER_TIMELINE_INTERFACE_V1 Timeline;
 
     if (Adapter == NULL)
         return;
-    ShadowReleased = DxgkpShadowReleaseSubmittedFenceIdentity(Adapter, NodeOrdinal, SubmissionFenceId);
-    if (InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) == 0)
+    if (!DxgkpAcquireMms2TimelineCall(Adapter, &Timeline))
+    {
+        if (InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) == 0)
+            (VOID)DxgkpShadowReleaseSubmittedFenceIdentity(Adapter, NodeOrdinal, SubmissionFenceId);
+        else
+            DxgkpBugCheckMms2Timeline(Adapter, NodeOrdinal, SubmissionFenceId);
         return;
-    KeMemoryBarrier();
-    ProviderReleased = Adapter->Mms2Timeline.ReleaseFence(Adapter->Mms2Timeline.TimelineHandle, Adapter->Mms2Timeline.Generation, NodeOrdinal, SubmissionFenceId);
-    if (ProviderReleased != ShadowReleased)
+    }
+    if (!Timeline.ReleaseFence(Timeline.TimelineHandle, Timeline.Generation, NodeOrdinal, SubmissionFenceId))
         DxgkpBugCheckMms2Timeline(Adapter, NodeOrdinal, SubmissionFenceId);
+    DxgkpReleaseMms2TimelineCall(Adapter);
 }
 
 VOID NTAPI DxgkResetSubmittedFenceIdentities(_In_ PDXGKRNL_ADAPTER Adapter)
 {
+    DXGMMS2_SCHEDULER_TIMELINE_INTERFACE_V1 Timeline;
+    BOOLEAN TimelineWasPublished;
     NTSTATUS Status;
 
+    PAGED_CODE();
     if (Adapter == NULL)
         return;
-    if (InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) != 0)
+    if (InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) == 0)
     {
-        KeMemoryBarrier();
-        Status = Adapter->Mms2Timeline.ResetFenceIdentities(Adapter->Mms2Timeline.TimelineHandle, Adapter->Mms2Timeline.Generation);
-        if (!NT_SUCCESS(Status))
-            DxgkpBugCheckMms2Timeline(Adapter, 0, 0);
+        DxgkpShadowResetSubmittedFenceIdentities(Adapter);
+        return;
     }
+    TimelineWasPublished = DxgkpCloseMms2TimelineCalls(Adapter);
+    if (!TimelineWasPublished)
+        DxgkpBugCheckMms2Timeline(Adapter, 0, 0);
+    Timeline = Adapter->Mms2Timeline;
+    Status = Timeline.ResetFenceIdentities(Timeline.TimelineHandle, Timeline.Generation);
+    if (!NT_SUCCESS(Status))
+        DxgkpBugCheckMms2Timeline(Adapter, 0, 0);
     DxgkpShadowResetSubmittedFenceIdentities(Adapter);
+    DxgkpReopenMms2TimelineCalls(Adapter);
 }
 
 NTSTATUS NTAPI DxgkNotifySubmissionFenceCompletion(_In_ PDXGKRNL_ADAPTER Adapter, _In_ ULONG NodeOrdinal, _In_ ULONG FenceId, _In_ BOOLEAN Preempted, _Out_ DXGMMS2_FENCE_SNAPSHOT_V1 *Snapshot)
 {
+    DXGMMS2_SCHEDULER_TIMELINE_INTERFACE_V1 Timeline;
     NTSTATUS Status;
 
-    if (Adapter == NULL || Snapshot == NULL || InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) == 0)
+    if (Adapter == NULL || Snapshot == NULL || !DxgkpAcquireMms2TimelineCall(Adapter, &Timeline))
         return STATUS_INVALID_DEVICE_STATE;
     RtlZeroMemory(Snapshot, sizeof(*Snapshot));
     Snapshot->Size = DXGMMS2_FENCE_SNAPSHOT_V1_SIZE;
     Snapshot->Version = DXGMMS2_SCHEDULER_TIMELINE_VERSION_1;
-    KeMemoryBarrier();
-    Status = Adapter->Mms2Timeline.NotifyFenceCompletion(Adapter->Mms2Timeline.TimelineHandle, Adapter->Mms2Timeline.Generation, NodeOrdinal, FenceId, Preempted ? DXGMMS2_TIMELINE_NOTIFY_PREEMPTED : 0, Snapshot);
+    Status = Timeline.NotifyFenceCompletion(Timeline.TimelineHandle, Timeline.Generation, NodeOrdinal, FenceId, Preempted ? DXGMMS2_TIMELINE_NOTIFY_PREEMPTED : 0, Snapshot);
     if (!NT_SUCCESS(Status))
-        return Status;
-    if (FenceId != 0)
     {
-        DxgkpUpdateCompletedFence(&Adapter->LastCompletedSubmissionFenceId, FenceId);
-        DxgkpUpdateCompletedFence(&Adapter->NodeLastCompletedFenceId[NodeOrdinal], FenceId);
+        DxgkpReleaseMms2TimelineCall(Adapter);
+        return Status;
     }
-    if (Snapshot->Generation != Adapter->Mms2Timeline.Generation || Snapshot->NodeOrdinal != NodeOrdinal || Snapshot->LastSubmittedFence != (ULONG)InterlockedCompareExchange((volatile LONG *)&Adapter->NodeLastSubmittedFenceId[NodeOrdinal], 0, 0) || Snapshot->LastCompletedFence != (ULONG)InterlockedCompareExchange((volatile LONG *)&Adapter->NodeLastCompletedFenceId[NodeOrdinal], 0, 0) || Snapshot->GlobalLastCompletedFence != (ULONG)InterlockedCompareExchange((volatile LONG *)&Adapter->LastCompletedSubmissionFenceId, 0, 0))
+    if (Snapshot->Size != DXGMMS2_FENCE_SNAPSHOT_V1_SIZE || Snapshot->Version != DXGMMS2_SCHEDULER_TIMELINE_VERSION_1 || Snapshot->Generation != Timeline.Generation || Snapshot->NodeOrdinal != NodeOrdinal)
+    {
+        DxgkpReleaseMms2TimelineCall(Adapter);
         return STATUS_DATA_ERROR;
+    }
+    DxgkpUpdateCompletedFence(&Adapter->NodeLastSubmittedFenceId[NodeOrdinal], Snapshot->LastSubmittedFence);
+    DxgkpUpdateCompletedFence(&Adapter->NodeLastCompletedFenceId[NodeOrdinal], Snapshot->LastCompletedFence);
+    DxgkpUpdateCompletedFence(&Adapter->LastCompletedSubmissionFenceId, Snapshot->GlobalLastCompletedFence);
+    DxgkpReleaseMms2TimelineCall(Adapter);
     return STATUS_SUCCESS;
 }
 
@@ -4550,6 +4616,7 @@ DxgkpMms2CompleteRetiredStop(_In_ PDXGKRNL_ADAPTER Adapter)
 {
     DXGMMS2_ADAPTER_HANDLE Mms2Adapter;
     DXGMMS2_STOP_REASON Reason;
+    BOOLEAN TimelineWasPublished;
     NTSTATUS Status;
 
     (VOID)KeWaitForSingleObject(&Adapter->AdapterMutex, Executive, KernelMode, FALSE, NULL);
@@ -4567,7 +4634,12 @@ DxgkpMms2CompleteRetiredStop(_In_ PDXGKRNL_ADAPTER Adapter)
     Reason = Adapter->Mms2StopReason;
     KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
 
+    TimelineWasPublished = DxgkpCloseMms2TimelineCalls(Adapter);
+    if (!TimelineWasPublished && InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) != 0)
+        DxgkpBugCheckMms2Timeline(Adapter, 0, 0);
     Status = DxgkpMms2CompleteStopAdapter(Mms2Adapter, Reason);
+    if (TimelineWasPublished)
+        DxgkpReopenMms2TimelineCalls(Adapter);
     if (!NT_SUCCESS(Status))
         return Status;
     (VOID)KeWaitForSingleObject(&Adapter->AdapterMutex, Executive, KernelMode, FALSE, NULL);
@@ -4584,6 +4656,7 @@ static NTSTATUS
 DxgkpMms2DestroyAdministrativeAdapter(_In_ PDXGKRNL_ADAPTER Adapter)
 {
     DXGMMS2_ADAPTER_HANDLE Mms2Adapter;
+    BOOLEAN TimelineWasPublished;
     NTSTATUS Status;
 
     (VOID)KeWaitForSingleObject(&Adapter->AdapterMutex, Executive, KernelMode, FALSE, NULL);
@@ -4600,9 +4673,16 @@ DxgkpMms2DestroyAdministrativeAdapter(_In_ PDXGKRNL_ADAPTER Adapter)
     Mms2Adapter = Adapter->Mms2Adapter;
     KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
 
+    TimelineWasPublished = DxgkpCloseMms2TimelineCalls(Adapter);
+    if (!TimelineWasPublished && InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) != 0)
+        DxgkpBugCheckMms2Timeline(Adapter, 0, 0);
     Status = DxgkpMms2DestroyAdapter(Mms2Adapter);
     if (!NT_SUCCESS(Status))
+    {
+        if (TimelineWasPublished)
+            DxgkpReopenMms2TimelineCalls(Adapter);
         return Status;
+    }
     InterlockedExchange(&Adapter->Mms2TimelineValid, 0);
     KeMemoryBarrier();
     RtlZeroMemory(&Adapter->Mms2Timeline, sizeof(Adapter->Mms2Timeline));
@@ -4624,13 +4704,15 @@ DxgkpMms2StartAdministrativeAdapter(_In_ PDXGKRNL_ADAPTER Adapter, _Out_ PBOOLEA
     ULONGLONG EnabledSubsystems;
     ULONG HighestCompleteWddmVersion;
     ULONG RequestedWddmVersion;
+    BOOLEAN TimelineWasPublished;
     NTSTATUS Status;
 
     EnabledSubsystems = 0;
     HighestCompleteWddmVersion = 0;
     RequestedWddmVersion = min(Adapter->MiniportContext->InitData.s.Version, (ULONG)DXGKDDI_INTERFACE_VERSION);
-    InterlockedExchange(&Adapter->Mms2TimelineValid, 0);
-    KeMemoryBarrier();
+    TimelineWasPublished = DxgkpCloseMms2TimelineCalls(Adapter);
+    if (!TimelineWasPublished && InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) != 0)
+        DxgkpBugCheckMms2Timeline(Adapter, 0, 0);
     Status = DxgkpMms2StartAdapter(Adapter->Mms2Adapter, Adapter->MiniportContext->InitData.s.Version, RequestedWddmVersion, Adapter->NodeCount, Adapter->SegmentCount, DxgkpMms2GetAdapterFlags(Adapter), Adapter->SchedulingCaps.Value, &EnabledSubsystems, &HighestCompleteWddmVersion, ProviderStarted);
     if (NT_SUCCESS(Status))
     {
@@ -4642,9 +4724,15 @@ DxgkpMms2StartAdministrativeAdapter(_In_ PDXGKRNL_ADAPTER Adapter, _Out_ PBOOLEA
         if (NT_SUCCESS(Status))
         {
             Adapter->Mms2Timeline = Timeline;
-            KeMemoryBarrier();
-            InterlockedExchange(&Adapter->Mms2TimelineValid, 1);
+            DxgkpPublishMms2TimelineCalls(Adapter);
         }
+    }
+    if (!NT_SUCCESS(Status) && !*ProviderStarted && TimelineWasPublished)
+        DxgkpReopenMms2TimelineCalls(Adapter);
+    else if (!NT_SUCCESS(Status) && *ProviderStarted)
+    {
+        InterlockedExchange(&Adapter->Mms2TimelineValid, 0);
+        KeMemoryBarrier();
     }
     return Status;
 }
@@ -7041,6 +7129,8 @@ DxgkpAddDevice(
     Adapter->AdapterStopCompletedGeneration = 0;
     Adapter->AdapterStopIntentCount = 0;
     Adapter->AdapterStopStatus = STATUS_SUCCESS;
+    Adapter->Mms2TimelineCallsOpen = 0;
+    Adapter->Mms2TimelineActiveCalls = 0;
     KeInitializeMutex(&Adapter->MiniportCallbackMutex, 0);
     KeInitializeMutex(&Adapter->KmdExclusiveMutex, 0);
     KeInitializeMutex(&Adapter->KmdTransactionMutex, 0);
