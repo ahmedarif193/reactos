@@ -618,6 +618,65 @@ Ndis6MFreeSharedMemory(
  *  so any post-registration check the driver does picks the legacy path.
  * ============================================================================ */
 
+static BOOLEAN
+Ndis6ReferenceInterrupt(
+    _In_ PNDIS6_ADAPTER_EXT Ext)
+{
+    LONG State;
+
+    for (;;)
+    {
+        State = InterlockedCompareExchange(&Ext->InterruptRundownState, 0, 0);
+        if (State < 0)
+            return FALSE;
+
+        ASSERT(State != MAXLONG);
+        if (InterlockedCompareExchange(&Ext->InterruptRundownState,
+                                       State + 1,
+                                       State) == State)
+        {
+            return TRUE;
+        }
+    }
+}
+
+static VOID
+Ndis6DereferenceInterrupt(
+    _In_ PNDIS6_ADAPTER_EXT Ext,
+    _In_ BOOLEAN SignalDrain)
+{
+    LONG State;
+
+    State = InterlockedDecrement(&Ext->InterruptRundownState);
+    if (SignalDrain && State == NDIS6_INTERRUPT_RUNDOWN_STOPPING)
+        KeSetEvent(&Ext->InterruptDrainEvent, IO_NO_INCREMENT, FALSE);
+}
+
+static VOID
+Ndis6StopInterruptRundown(
+    _In_ PNDIS6_ADAPTER_EXT Ext)
+{
+    LONG State;
+
+    for (;;)
+    {
+        State = InterlockedCompareExchange(&Ext->InterruptRundownState, 0, 0);
+        if (State < 0)
+            break;
+
+        if (InterlockedCompareExchange(&Ext->InterruptRundownState,
+                                       State | NDIS6_INTERRUPT_RUNDOWN_STOPPING,
+                                       State) == State)
+        {
+            State |= NDIS6_INTERRUPT_RUNDOWN_STOPPING;
+            break;
+        }
+    }
+
+    if (State == NDIS6_INTERRUPT_RUNDOWN_STOPPING)
+        KeSetEvent(&Ext->InterruptDrainEvent, IO_NO_INCREMENT, FALSE);
+}
+
 static BOOLEAN NTAPI
 Ndis6IsrWrapper(
     _In_ PKINTERRUPT Interrupt,
@@ -630,17 +689,24 @@ Ndis6IsrWrapper(
 
     UNREFERENCED_PARAMETER(Interrupt);
 
-    if (Ext == NULL || Ext->IntChars.InterruptHandler == NULL)
+    if (Ext == NULL || !Ndis6ReferenceInterrupt(Ext))
         return FALSE;
+
+    if (Ext->IntChars.InterruptHandler == NULL)
+    {
+        Ndis6DereferenceInterrupt(Ext, FALSE);
+        return FALSE;
+    }
 
     Recognized = Ext->IntChars.InterruptHandler(
         Ext->MiniportInterruptContext,
         &QueueDpc,
         &TargetCpus);
 
-    if (Recognized && QueueDpc)
-        KeInsertQueueDpc(&Ext->InterruptDpc, NULL, NULL);
+    if (Recognized && QueueDpc && KeInsertQueueDpc(&Ext->InterruptDpc, NULL, NULL))
+        return Recognized;
 
+    Ndis6DereferenceInterrupt(Ext, FALSE);
     return Recognized;
 }
 
@@ -657,7 +723,7 @@ Ndis6DpcWrapper(
     UNREFERENCED_PARAMETER(SystemArgument1);
     UNREFERENCED_PARAMETER(SystemArgument2);
 
-    if (Ext == NULL || Ext->IntChars.InterruptDpcHandler == NULL)
+    if (Ext == NULL)
         return;
 
     /* The NDIS 6 DPC handler signature takes:
@@ -665,11 +731,10 @@ Ndis6DpcWrapper(
      *    ReceiveThrottleParameters, NdisReserved2)
      * Drivers tolerate NULL for the latter three; e1000e
      * (interrupt_ndis6.c:743 and on) ignores them. */
-    Ext->IntChars.InterruptDpcHandler(
-        Ext->MiniportInterruptContext,
-        NULL,
-        NULL,
-        NULL);
+    if (Ext->IntChars.InterruptDpcHandler != NULL)
+        Ext->IntChars.InterruptDpcHandler(Ext->MiniportInterruptContext, NULL, NULL, NULL);
+
+    Ndis6DereferenceInterrupt(Ext, TRUE);
 }
 
 /* MSI message-service adapter. The NDIS 6 driver's message-based
@@ -699,7 +764,7 @@ Ndis6MsiIsrWrapper(
 
     UNREFERENCED_PARAMETER(Interrupt);
 
-    if (Ext == NULL)
+    if (Ext == NULL || !Ndis6ReferenceInterrupt(Ext))
         return FALSE;
 
     if (Ext->IntChars.MessageInterruptHandler != NULL)
@@ -721,12 +786,14 @@ Ndis6MsiIsrWrapper(
     }
     else
     {
+        Ndis6DereferenceInterrupt(Ext, FALSE);
         return FALSE;
     }
 
-    if (Recognized && QueueDpc)
-        KeInsertQueueDpc(&Ext->InterruptDpc, NULL, NULL);
+    if (Recognized && QueueDpc && KeInsertQueueDpc(&Ext->InterruptDpc, NULL, NULL))
+        return Recognized;
 
+    Ndis6DereferenceInterrupt(Ext, FALSE);
     return Recognized;
 }
 
@@ -750,6 +817,16 @@ NdisMRegisterInterruptEx(
     Ext = Ndis6IoExtFromHandle(NdisMiniportHandle);
     if (Ext == NULL)
         return NDIS_STATUS_INVALID_PARAMETER;
+
+    if (Ext->InterruptObject != NULL || Ext->MsiConnected)
+        return NDIS_STATUS_FAILURE;
+
+    ASSERT(InterlockedCompareExchange(&Ext->InterruptRundownState, 0, 0) ==
+           NDIS6_INTERRUPT_RUNDOWN_STOPPING);
+    Ext->MsiTable = NULL;
+    Ext->MsiConnected = FALSE;
+    KeClearEvent(&Ext->InterruptDrainEvent);
+    InterlockedExchange(&Ext->InterruptRundownState, 0);
 
     /* Save the driver's characteristics + per-interrupt context. Copy only
      * Header.Size bytes — a driver built against a shorter revision must
@@ -851,6 +928,7 @@ NdisMRegisterInterruptEx(
         /* No IRQ resource was assigned by PnP. Some drivers (notably USB
          * RNDIS) never call this function — but if they do, fail loudly
          * rather than silently dropping interrupts. */
+        Ndis6StopInterruptRundown(Ext);
         return NDIS_STATUS_RESOURCES;
     }
 
@@ -886,6 +964,7 @@ NdisMRegisterInterruptEx(
     if (!NT_SUCCESS(Status))
     {
         Ext->InterruptObject = NULL;
+        Ndis6StopInterruptRundown(Ext);
         return NDIS_STATUS_RESOURCES;
     }
 
@@ -903,28 +982,63 @@ NdisMRegisterInterruptEx(
 }
 
 VOID
-NTAPI
-NdisMDeregisterInterruptEx(
-    _In_ NDIS_HANDLE NdisInterruptHandle)
+Ndis6DisconnectInterrupt(
+    _In_ PNDIS6_ADAPTER_EXT Ext)
 {
-    PNDIS6_ADAPTER_EXT Ext = (PNDIS6_ADAPTER_EXT)NdisInterruptHandle;
+    ULONG MessageIndex;
 
     if (Ext == NULL)
         return;
 
-    /* Flush any in-flight DPC before tearing down the connection so the
-     * wrapper doesn't run after Ext->IntChars is gone. */
-    KeRemoveQueueDpc(&Ext->InterruptDpc);
+    ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
+    Ndis6StopInterruptRundown(Ext);
 
-    if (Ext->InterruptObject != NULL)
+    if (Ext->MsiConnected && Ext->MsiTable != NULL)
+    {
+        for (MessageIndex = 0; MessageIndex < Ext->MsiTable->MessageCount; MessageIndex++)
+        {
+            if (Ext->MsiTable->MessageInfo[MessageIndex].InterruptObject != NULL)
+            {
+                IoDisconnectInterrupt(Ext->MsiTable->MessageInfo[MessageIndex].InterruptObject);
+                Ext->MsiTable->MessageInfo[MessageIndex].InterruptObject = NULL;
+            }
+        }
+        Ext->InterruptObject = NULL;
+    }
+    else if (Ext->InterruptObject != NULL)
     {
         IoDisconnectInterrupt(Ext->InterruptObject);
         Ext->InterruptObject = NULL;
     }
 
+    if (InterlockedCompareExchange(&Ext->InterruptRundownState, 0, 0) !=
+        NDIS6_INTERRUPT_RUNDOWN_STOPPING)
+    {
+        KeWaitForSingleObject(&Ext->InterruptDrainEvent, Executive, KernelMode, FALSE, NULL);
+    }
+
+    ASSERT(InterlockedCompareExchange(&Ext->InterruptRundownState, 0, 0) ==
+           NDIS6_INTERRUPT_RUNDOWN_STOPPING);
+
+    if (Ext->MsiTable != NULL)
+    {
+        ExFreePool(Ext->MsiTable);
+        Ext->MsiTable = NULL;
+    }
+    Ext->MsiConnected = FALSE;
+    Ext->IntChars.MessageInfoTable = NULL;
     Ext->IntChars.InterruptHandler    = NULL;
     Ext->IntChars.InterruptDpcHandler = NULL;
+    Ext->IntChars.MessageInterruptHandler = NULL;
     Ext->MiniportInterruptContext     = NULL;
+}
+
+VOID
+NTAPI
+NdisMDeregisterInterruptEx(
+    _In_ NDIS_HANDLE NdisInterruptHandle)
+{
+    Ndis6DisconnectInterrupt((PNDIS6_ADAPTER_EXT)NdisInterruptHandle);
 }
 
 /* EOF */

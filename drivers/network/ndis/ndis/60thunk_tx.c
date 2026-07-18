@@ -47,42 +47,77 @@ typedef struct _NDIS6_TX_WRAPPER_CONTEXT
     ULONG_PTR        BindingHandle;
 } NDIS6_TX_WRAPPER_CONTEXT, *PNDIS6_TX_WRAPPER_CONTEXT;
 
-/* ============================================================================
- *  Ndis6IsNativeBinding — confirm a candidate SourceHandle is a native NDIS 6
- *  protocol binding currently open on this adapter before dereferencing it
- *  (a legacy NBL's SourceHandle may hold anything, and a binding can close
- *  while a send is in flight). No reference is taken: the caller must finish
- *  with the binding synchronously.
- * ============================================================================ */
-
-static BOOLEAN
-Ndis6IsNativeBinding(
-    _In_ PNDIS6_ADAPTER_EXT       Ext,
-    _In_ PNDIS6_PROTOCOL_BINDING  Candidate)
+BOOLEAN
+Ndis6ReferenceNativeTransmit(
+    _In_ PNDIS6_ADAPTER_EXT Ext)
 {
-    PLIST_ENTRY entry;
-    KIRQL       OldIrql;
-    BOOLEAN     Found = FALSE;
+    KIRQL OldIrql;
+    BOOLEAN Referenced = FALSE;
 
-    if (Ext == NULL || Candidate == NULL)
+    if (Ext == NULL)
         return FALSE;
 
-    KeAcquireSpinLock(&Ext->ProtocolBindingListLock, &OldIrql);
-    for (entry = Ext->ProtocolBindingList.Flink;
-         entry != &Ext->ProtocolBindingList;
-         entry = entry->Flink)
+    KeAcquireSpinLock(&Ext->TxLookupLock, &OldIrql);
+    if (Ext->TxAccepting)
     {
-        PNDIS6_PROTOCOL_BINDING Binding =
-            CONTAINING_RECORD(entry, NDIS6_PROTOCOL_BINDING, AdapterLink);
-        if (Binding == Candidate)
-        {
-            Found = TRUE;
-            break;
-        }
+        if (Ext->TxInFlightCount++ == 0)
+            KeClearEvent(&Ext->TxDrainEvent);
+        Referenced = TRUE;
     }
-    KeReleaseSpinLock(&Ext->ProtocolBindingListLock, OldIrql);
+    KeReleaseSpinLock(&Ext->TxLookupLock, OldIrql);
 
-    return Found;
+    return Referenced;
+}
+
+VOID
+Ndis6DereferenceTransmit(
+    _In_ PNDIS6_ADAPTER_EXT Ext)
+{
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&Ext->TxLookupLock, &OldIrql);
+    ASSERT(Ext->TxInFlightCount > 0);
+    if (--Ext->TxInFlightCount == 0)
+        KeSetEvent(&Ext->TxDrainEvent, IO_NO_INCREMENT, FALSE);
+    KeReleaseSpinLock(&Ext->TxLookupLock, OldIrql);
+}
+
+static BOOLEAN
+Ndis6TrackTransmitWrapper(
+    _In_ PNDIS6_ADAPTER_EXT Ext,
+    _In_ PNDIS6_TX_WRAPPER_CONTEXT TxContext)
+{
+    KIRQL OldIrql;
+    BOOLEAN Tracked = FALSE;
+
+    KeAcquireSpinLock(&Ext->TxLookupLock, &OldIrql);
+    if (Ext->TxAccepting)
+    {
+        InsertTailList(&Ext->InFlightNblsTx, &TxContext->Link);
+        if (Ext->TxInFlightCount++ == 0)
+            KeClearEvent(&Ext->TxDrainEvent);
+        Tracked = TRUE;
+    }
+    KeReleaseSpinLock(&Ext->TxLookupLock, OldIrql);
+
+    return Tracked;
+}
+
+static VOID
+Ndis6UntrackTransmitWrapper(
+    _In_ PNDIS6_ADAPTER_EXT Ext,
+    _In_ PNDIS6_TX_WRAPPER_CONTEXT TxContext)
+{
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&Ext->TxLookupLock, &OldIrql);
+    RemoveEntryList(&TxContext->Link);
+    TxContext->Link.Flink = NULL;
+    TxContext->Link.Blink = NULL;
+    ASSERT(Ext->TxInFlightCount > 0);
+    if (--Ext->TxInFlightCount == 0)
+        KeSetEvent(&Ext->TxDrainEvent, IO_NO_INCREMENT, FALSE);
+    KeReleaseSpinLock(&Ext->TxLookupLock, OldIrql);
 }
 
 /* ============================================================================
@@ -108,7 +143,6 @@ Ndis6TxSendPacket(
     PNET_BUFFER_LIST    Nbl;
     PNDIS_BUFFER        FirstBuffer;
     UINT                TotalLength;
-    KIRQL               OldIrql;
 
     if (Adapter == NULL || Packet == NULL)
         return NDIS_STATUS_FAILURE;
@@ -196,12 +230,12 @@ Ndis6TxSendPacket(
      * outstanding sends to drain before tearing down the adapter.
      * A1: also increment TxInFlightCount and clear the drain event so
      * HaltEx will actually wait. */
+    if (!Ndis6TrackTransmitWrapper(Ext, TxContext))
     {
-        KeAcquireSpinLock(&Ext->TxLookupLock, &OldIrql);
-        InsertTailList(&Ext->InFlightNblsTx, &TxContext->Link);
-        InterlockedIncrement(&Ext->TxInFlightCount);
-        KeClearEvent(&Ext->TxDrainEvent);
-        KeReleaseSpinLock(&Ext->TxLookupLock, OldIrql);
+        Nbl->NdisReserved[1] = NULL;
+        ExFreePoolWithTag(TxContext, NDIS6_TX_WRAPPER_TAG);
+        NdisFreeNetBufferList(Nbl);
+        return NDIS_STATUS_PAUSED;
     }
 
     /* Phase 8: route through the filter chain. If no filters are
@@ -309,7 +343,6 @@ Ndis6FilterTerminalSendComplete(
     PNDIS_PACKET       Packet;
     ULONG_PTR          BindingHandle;
     NDIS_STATUS        Status;
-    KIRQL              OldIrql;
 
     if (Adapter == NULL || NetBufferList == NULL)
         return;
@@ -318,24 +351,21 @@ Ndis6FilterTerminalSendComplete(
     if (Ext == NULL)
         return;
 
-    /* Native-protocol send completion: an NBL from NdisSendNetBufferLists has
-     * NdisReserved[1] == NULL (no legacy TX wrapper) and SourceHandle = the
-     * sending PNDIS6_PROTOCOL_BINDING. Validate the handle before use; the
-     * protocol owns the NBL, so hand it back rather than freeing it. */
-    if (NetBufferList->NdisReserved[1] == NULL)
+    /* Native sends carry the referenced binding in NdisReserved[1] until
+     * completion. The binding and adapter TX references remain held across
+     * the protocol callback, so close/halt cannot free either owner here. */
     {
         PNDIS6_PROTOCOL_BINDING Binding =
             (PNDIS6_PROTOCOL_BINDING)NetBufferList->SourceHandle;
 
-        if (Ndis6IsNativeBinding(Ext, Binding) &&
-            Binding->DriverBlock != NULL &&
-            Binding->DriverBlock->Characteristics.SendNetBufferListsCompleteHandler != NULL)
+        if (Binding != NULL && NetBufferList->NdisReserved[1] == Binding)
         {
+            NetBufferList->NdisReserved[1] = NULL;
             NET_BUFFER_LIST_NEXT_NBL(NetBufferList) = NULL;
-            Binding->DriverBlock->Characteristics.SendNetBufferListsCompleteHandler(
-                Binding->ProtocolBindingContext,
-                NetBufferList,
-                SendCompleteFlags);
+            if (Binding->DriverBlock != NULL && Binding->DriverBlock->Characteristics.SendNetBufferListsCompleteHandler != NULL)
+                Binding->DriverBlock->Characteristics.SendNetBufferListsCompleteHandler(Binding->ProtocolBindingContext, NetBufferList, SendCompleteFlags);
+            Ndis6DereferenceTransmit(Ext);
+            Ndis6DereferenceProtocolBinding(Binding);
             return;
         }
     }
@@ -351,17 +381,7 @@ Ndis6FilterTerminalSendComplete(
     if (TxContext != NULL &&
         TxContext->Link.Flink != NULL &&
         TxContext->Link.Blink != NULL)
-    {
-        LONG NewCount;
-        KeAcquireSpinLock(&Ext->TxLookupLock, &OldIrql);
-        RemoveEntryList(&TxContext->Link);
-        TxContext->Link.Flink = NULL;
-        TxContext->Link.Blink = NULL;
-        NewCount = InterlockedDecrement(&Ext->TxInFlightCount);
-        if (NewCount == 0)
-            KeSetEvent(&Ext->TxDrainEvent, IO_NO_INCREMENT, FALSE);
-        KeReleaseSpinLock(&Ext->TxLookupLock, OldIrql);
-    }
+        Ndis6UntrackTransmitWrapper(Ext, TxContext);
 
     /* Free the wrapper NBL. The MDL chain it pointed at is owned by
      * the original legacy NDIS_PACKET and stays alive until
@@ -411,7 +431,6 @@ Ndis6TxSendPackets(
     PNET_BUFFER_LIST    TailNbl = NULL;
     ULONG               Wrapped = 0;
     UINT                i;
-    KIRQL               OldIrql;
 
     if (Adapter == NULL || PacketArray == NULL || NumberOfPackets == 0)
         return 0;
@@ -493,11 +512,14 @@ Ndis6TxSendPackets(
                 NET_BUFFER_LIST_INFO(Nbl, Ieee8021QNetBufferListInfo) = VlanValue;
         }
 
-        KeAcquireSpinLock(&Ext->TxLookupLock, &OldIrql);
-        InsertTailList(&Ext->InFlightNblsTx, &TxContext->Link);
-        InterlockedIncrement(&Ext->TxInFlightCount);
-        KeClearEvent(&Ext->TxDrainEvent);
-        KeReleaseSpinLock(&Ext->TxLookupLock, OldIrql);
+        if (!Ndis6TrackTransmitWrapper(Ext, TxContext))
+        {
+            Nbl->NdisReserved[1] = NULL;
+            ExFreePoolWithTag(TxContext, NDIS6_TX_WRAPPER_TAG);
+            NdisFreeNetBufferList(Nbl);
+            MiniSendComplete(Adapter, Packet, NDIS_STATUS_PAUSED);
+            continue;
+        }
 
         /* Chain onto the batch. */
         if (HeadNbl == NULL)

@@ -320,6 +320,7 @@ ProRequest(
   PADAPTER_BINDING AdapterBinding;
   PLOGICAL_ADAPTER Adapter;
   PNDIS_REQUEST_MAC_BLOCK MacBlock = (PNDIS_REQUEST_MAC_BLOCK)NdisRequest->MacReserved;
+  NDIS_STATUS Status;
 
   NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
 
@@ -329,19 +330,27 @@ ProRequest(
   ASSERT(AdapterBinding->Adapter);
   Adapter = AdapterBinding->Adapter;
 
+  if (!NdisReferenceAdapterBinding(AdapterBinding))
+      return NDIS_STATUS_CLOSING;
+
   MacBlock->Binding = &AdapterBinding->NdisOpenBlock;
 
 #if WORKER_TEST
   MiniQueueWorkItem(Adapter, NdisWorkItemRequest, NdisRequest, FALSE);
-  return NDIS_STATUS_PENDING;
+  Status = NDIS_STATUS_PENDING;
 #else
   if (MiniIsBusy(Adapter, NdisWorkItemRequest)) {
       MiniQueueWorkItem(Adapter, NdisWorkItemRequest, NdisRequest, FALSE);
-      return NDIS_STATUS_PENDING;
+      Status = NDIS_STATUS_PENDING;
   }
-
-  return MiniDoRequest(Adapter, NdisRequest);
+  else
+      Status = MiniDoRequest(Adapter, NdisRequest);
 #endif
+
+  if (Status != NDIS_STATUS_PENDING)
+      NdisDereferenceAdapterBinding(AdapterBinding);
+
+  return Status;
 }
 
 
@@ -510,6 +519,9 @@ ProSend(
 
   ASSERT(Adapter);
 
+  if (!NdisReferenceAdapterBinding(AdapterBinding))
+      return NDIS_STATUS_CLOSING;
+
   /* if the following is not true, KeRaiseIrql() below will break */
   ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
 
@@ -531,7 +543,10 @@ ProSend(
         MiniQueueWorkItem(Adapter, NdisWorkItemSendLoopback, Packet, FALSE);
         return NDIS_STATUS_PENDING;
 #else
-        return ProIndicatePacket(Adapter, Packet);
+        NdisStatus = ProIndicatePacket(Adapter, Packet);
+        if (NdisStatus != NDIS_STATUS_PENDING)
+            NdisDereferenceAdapterBinding(AdapterBinding);
+        return NdisStatus;
 #endif
     } else {
         /* dev-nt6-1: NDIS 6 adapters do their own DMA via the bridge.
@@ -541,7 +556,10 @@ ProSend(
          * lands). */
         if (Adapter->IsNdis6)
         {
-            return proSendPacketToMiniport(Adapter, Packet);
+            NdisStatus = proSendPacketToMiniport(Adapter, Packet);
+            if (NdisStatus != NDIS_STATUS_PENDING)
+                NdisDereferenceAdapterBinding(AdapterBinding);
+            return NdisStatus;
         }
 
         if (Adapter->NdisMiniportBlock.ScatterGatherListSize != 0)
@@ -557,6 +575,7 @@ ProSend(
             Context = ExAllocatePool(NonPagedPool, sizeof(DMA_CONTEXT));
             if (!Context) {
                 NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources\n"));
+                NdisDereferenceAdapterBinding(AdapterBinding);
                 return NDIS_STATUS_RESOURCES;
             }
 
@@ -581,14 +600,17 @@ ProSend(
 
             if (!NT_SUCCESS(NdisStatus)) {
                 NDIS_DbgPrint(MIN_TRACE, ("GetScatterGatherList failed! (%x)\n", NdisStatus));
+                NdisDereferenceAdapterBinding(AdapterBinding);
                 return NdisStatus;
             }
 
             return NDIS_STATUS_PENDING;
         }
 
-
-        return proSendPacketToMiniport(Adapter, Packet);
+        NdisStatus = proSendPacketToMiniport(Adapter, Packet);
+        if (NdisStatus != NDIS_STATUS_PENDING)
+            NdisDereferenceAdapterBinding(AdapterBinding);
+        return NdisStatus;
     }
 }
 
@@ -604,6 +626,35 @@ ProSendPackets(
     NDIS_STATUS NdisStatus;
     UINT i;
 
+    for (i = 0; i < NumberOfPackets; i++)
+    {
+        if (PacketArray[i] == NULL)
+            continue;
+
+        if (!NdisReferenceAdapterBinding(AdapterBinding))
+        {
+            UINT j;
+
+            /* The binding started closing mid-batch. The prefix already
+             * holds references, so the binding stays valid while those
+             * packets complete back to the protocol; the unreferenced
+             * tail can only be flagged. */
+            for (j = 0; j < i; j++)
+            {
+                if (PacketArray[j] != NULL)
+                    MiniSendComplete(Adapter, PacketArray[j], NDIS_STATUS_CLOSING);
+            }
+            for (j = i; j < NumberOfPackets; j++)
+            {
+                if (PacketArray[j] != NULL)
+                    NDIS_SET_PACKET_STATUS(PacketArray[j], NDIS_STATUS_CLOSING);
+            }
+            return;
+        }
+
+        PacketArray[i]->Reserved[1] = (ULONG_PTR)NdisBindingHandle;
+    }
+
     /* dev-nt6-1: NDIS 6 adapters get the Phase 3 TX thunk. B1: use the
      * batched Ndis6TxSendPackets entry which wraps each NDIS_PACKET in
      * an NBL, chains them via NET_BUFFER_LIST_NEXT_NBL, and hands the
@@ -612,11 +663,6 @@ ProSendPackets(
     if (Adapter->IsNdis6)
     {
         extern ULONG Ndis6TxSendPackets(PLOGICAL_ADAPTER, PPNDIS_PACKET, UINT);
-        for (i = 0; i < NumberOfPackets; i++)
-        {
-            if (PacketArray[i] != NULL)
-                PacketArray[i]->Reserved[1] = (ULONG_PTR)NdisBindingHandle;
-        }
         Ndis6TxSendPackets(Adapter, PacketArray, NumberOfPackets);
         return;
     }
@@ -697,6 +743,11 @@ ProTransferData(
 
     NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
 
+    if (!NdisReferenceAdapterBinding(AdapterBinding))
+        return NDIS_STATUS_CLOSING;
+
+    Packet->Reserved[1] = (ULONG_PTR)AdapterBinding;
+
     /* dev-nt6-1: NDIS 6 miniports never get TransferDataHandler calls —
      * the NDIS 6 receive path always delivers the full payload in the
      * NB chain, so the lookahead-mismatch path that legacy protocols
@@ -704,6 +755,7 @@ ProTransferData(
     if (Adapter->IsNdis6)
     {
         *BytesTransferred = 0;
+        NdisDereferenceAdapterBinding(AdapterBinding);
         return NDIS_STATUS_NOT_SUPPORTED;
     }
 
@@ -719,6 +771,7 @@ ProTransferData(
                                    Adapter->NdisMiniportBlock.IndicatedPacket[NdisCurrentProcessorIndex()],
                                    0,
                                    BytesTransferred);
+        NdisDereferenceAdapterBinding(AdapterBinding);
         return NDIS_STATUS_SUCCESS;
     }
 
@@ -735,6 +788,9 @@ ProTransferData(
         BytesToTransfer);
 
     KeLowerIrql(OldIrql);
+
+    if (Status != NDIS_STATUS_PENDING)
+        NdisDereferenceAdapterBinding(AdapterBinding);
 
     return Status;
 }
@@ -760,11 +816,17 @@ NdisCloseAdapter(
 
     NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
 
-    /* Remove from protocol's bound adapters list */
-    ExInterlockedRemoveEntryList(&AdapterBinding->ProtocolListEntry, &AdapterBinding->ProtocolBinding->Lock);
+    ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
+    InterlockedExchange(&AdapterBinding->Closing, TRUE);
 
-    /* Remove protocol from adapter's bound protocols list */
+    /* Stop new indications from finding the binding, then wait until every
+     * asynchronous send, request, and transfer completion has returned. */
     ExInterlockedRemoveEntryList(&AdapterBinding->AdapterListEntry, &AdapterBinding->Adapter->NdisMiniportBlock.Lock);
+    ExWaitForRundownProtectionRelease(&AdapterBinding->RundownRef);
+
+    /* Keep the protocol block linked until rundown completes so completion
+     * callbacks cannot race NdisDeregisterProtocol freeing it. */
+    ExInterlockedRemoveEntryList(&AdapterBinding->ProtocolListEntry, &AdapterBinding->ProtocolBinding->Lock);
 
     ExFreePool(AdapterBinding);
 
@@ -897,6 +959,8 @@ NdisOpenAdapter(
   AdapterBinding->ProtocolBinding        = Protocol;
   AdapterBinding->Adapter                = Adapter;
   AdapterBinding->NdisOpenBlock.ProtocolBindingContext = ProtocolBindingContext;
+  ExInitializeRundownProtection(&AdapterBinding->RundownRef);
+  AdapterBinding->Closing = FALSE;
 
   /* Set fields required by some NDIS macros */
   AdapterBinding->NdisOpenBlock.BindingHandle = (NDIS_HANDLE)AdapterBinding;

@@ -579,6 +579,8 @@ NdisOpenAdapterEx(
     /* D4: initialize per-binding pending-OID list. */
     InitializeListHead(&Binding->PendingOidRequests);
     KeInitializeSpinLock(&Binding->PendingOidRequestsLock);
+    ExInitializeRundownProtection(&Binding->RundownRef);
+    Binding->Closing = FALSE;
 
     /* D6: parse NDIS_OPEN_PARAMETERS and pick a medium. Walk the
      * MediumArray looking for NdisMedium802_3 (the only medium the
@@ -655,7 +657,9 @@ NdisCloseAdapterEx(
     if (Binding == NULL)
         return NDIS_STATUS_INVALID_PARAMETER;
 
+    ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
     Block = Binding->DriverBlock;
+    InterlockedExchange(&Binding->Closing, TRUE);
 
     /* Unlink from the adapter's native-protocol list before freeing the
      * binding, so the datapath never observes a dangling AdapterLink. */
@@ -676,6 +680,8 @@ NdisCloseAdapterEx(
             KeReleaseSpinLock(&Ext->ProtocolBindingListLock, OldIrql);
         }
     }
+
+    ExWaitForRundownProtectionRelease(&Binding->RundownRef);
 
     /* Synchronous close complete. */
     if (Block != NULL &&
@@ -704,6 +710,7 @@ NdisSendNetBufferLists(
 {
     PNDIS6_PROTOCOL_BINDING Binding = (PNDIS6_PROTOCOL_BINDING)NdisBindingHandle;
     PLOGICAL_ADAPTER        Adapter;
+    PNDIS6_ADAPTER_EXT      Ext;
     PNET_BUFFER_LIST        CurrentNbl;
     PNET_BUFFER_LIST        NextNbl;
 
@@ -713,24 +720,75 @@ NdisSendNetBufferLists(
     if (Binding == NULL || NetBufferList == NULL)
         return;
 
-    Adapter = Binding->Adapter;
-    if (Adapter == NULL || !Adapter->IsNdis6)
+    if (!Ndis6ReferenceProtocolBinding(Binding))
+    {
+        /* The binding is closing (or already ran down); without a reference
+         * it may be freed at any moment, so the completion handler cannot be
+         * called. The NBLs are caller-owned — flag them and bail. A protocol
+         * racing sends against its own NdisCloseAdapterEx violates the NDIS
+         * contract and forfeits the completion callback. */
+        for (CurrentNbl = NetBufferList; CurrentNbl != NULL;
+             CurrentNbl = NET_BUFFER_LIST_NEXT_NBL(CurrentNbl))
+        {
+            NET_BUFFER_LIST_STATUS(CurrentNbl) = NDIS_STATUS_CLOSING;
+        }
         return;
+    }
+
+    Adapter = Binding->Adapter;
+    Ext = (Adapter != NULL && Adapter->IsNdis6) ? NDIS6_EXT(Adapter) : NULL;
+    if (Ext == NULL || Ext->DriverBlock == NULL || Ext->DriverBlock->Characteristics.SendNetBufferListsHandler == NULL)
+    {
+        /* No usable adapter underneath, but the binding reference is held, so
+         * the chain can be handed back through the completion handler. */
+        for (CurrentNbl = NetBufferList; CurrentNbl != NULL;
+             CurrentNbl = NET_BUFFER_LIST_NEXT_NBL(CurrentNbl))
+        {
+            NET_BUFFER_LIST_STATUS(CurrentNbl) = NDIS_STATUS_FAILURE;
+        }
+        if (Binding->DriverBlock != NULL &&
+            Binding->DriverBlock->Characteristics.SendNetBufferListsCompleteHandler != NULL)
+        {
+            Binding->DriverBlock->Characteristics.SendNetBufferListsCompleteHandler(
+                Binding->ProtocolBindingContext, NetBufferList, 0);
+        }
+        Ndis6DereferenceProtocolBinding(Binding);
+        return;
+    }
 
     /* SourceHandle = Binding marks a native send so completion routes to the
      * protocol's SendNetBufferListsCompleteHandler, not the legacy bridge
-     * path. The protocol keeps NBL ownership; NdisReserved[1] must stay NULL
-     * (it is the legacy TX-wrapper marker). */
+     * path. NdisReserved[1] carries the binding reference ownership marker
+     * until the completion path releases it. */
     for (CurrentNbl = NetBufferList; CurrentNbl != NULL; CurrentNbl = NextNbl)
     {
         NextNbl = NET_BUFFER_LIST_NEXT_NBL(CurrentNbl);
         NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = NULL;
 
+        if (!Ndis6ReferenceProtocolBinding(Binding))
+        {
+            NET_BUFFER_LIST_STATUS(CurrentNbl) = NDIS_STATUS_CLOSING;
+            if (Binding->DriverBlock->Characteristics.SendNetBufferListsCompleteHandler != NULL)
+                Binding->DriverBlock->Characteristics.SendNetBufferListsCompleteHandler(Binding->ProtocolBindingContext, CurrentNbl, 0);
+            continue;
+        }
+
+        if (!Ndis6ReferenceNativeTransmit(Ext))
+        {
+            NET_BUFFER_LIST_STATUS(CurrentNbl) = NDIS_STATUS_PAUSED;
+            if (Binding->DriverBlock->Characteristics.SendNetBufferListsCompleteHandler != NULL)
+                Binding->DriverBlock->Characteristics.SendNetBufferListsCompleteHandler(Binding->ProtocolBindingContext, CurrentNbl, 0);
+            Ndis6DereferenceProtocolBinding(Binding);
+            continue;
+        }
+
         CurrentNbl->SourceHandle      = (NDIS_HANDLE)Binding;
-        CurrentNbl->NdisReserved[1]   = NULL;
+        CurrentNbl->NdisReserved[1]   = Binding;
 
         Ndis6FilterDispatchSend(Adapter, CurrentNbl);
     }
+
+    Ndis6DereferenceProtocolBinding(Binding);
 }
 
 VOID

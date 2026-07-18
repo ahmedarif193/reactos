@@ -106,6 +106,10 @@ typedef struct _LOGICAL_ADAPTER
     PVOID                       WdfReserved[4];         /* NdisGetDeviceReservedExtension area
                                                            (NDIS-WDF miniports stash their
                                                            framework context here) */
+    KSPIN_LOCK                  HangTimerLock;          /* Serializes one-shot hang-timer ownership */
+    EX_RUNDOWN_REF              HangTimerRundown;       /* Keeps adapter alive through queued DPCs */
+    BOOLEAN                     HangTimerInitialized;
+    BOOLEAN                     HangTimerStopping;
 } LOGICAL_ADAPTER, *PLOGICAL_ADAPTER;
 
 #define GET_LOGICAL_ADAPTER(Handle)((PLOGICAL_ADAPTER)Handle)
