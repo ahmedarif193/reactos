@@ -35,6 +35,9 @@ HKR, , UpperFilters,   0x00010000, "mouclass"
 %SERIAL_MOUSE.DeviceDesc% = Serial_Inst,*PNP0F0C,SERENUM\PNP0F0C,*PNP0F17,SERENUM\PNP0F17,SERIAL_MOUSE
 %PS2_MOUSE.DeviceDesc% = PS2_Inst,*PNP0F0E,*PNP0F19,PS2_MOUSE
 %HID_MOUSE.DeviceDesc% = HID_Inst,HID_DEVICE_SYSTEM_MOUSE
+%HID_TOUCHPAD.DeviceDesc% = HID_Inst,HID_DEVICE_UP:000D_U:0005
+%HID_TOUCHSCREEN.DeviceDesc% = HID_Inst,HID_DEVICE_UP:000D_U:0004
+%HID_PEN.DeviceDesc% = HID_Inst,HID_DEVICE_UP:000D_U:0002
 %*PNP0F0D.DeviceDesc% = Inp_Inst,*PNP0F0D
 %*PNP0F11.DeviceDesc% = Inp_Inst,*PNP0F11
 %*PNP0F13.DeviceDesc% = PS2_Inst,*PNP0F13
@@ -176,6 +179,9 @@ SERIAL_MOUSE.DeviceDesc = "Standard Serial Mouse"
 PS2_MOUSE.DeviceDesc = "Standard PS/2 Mouse"
 LocationOverride = "plugged in to PS/2 mouse port"
 HID_MOUSE.DeviceDesc = "HID Mouse"
+HID_TOUCHPAD.DeviceDesc = "HID Precision Touchpad"
+HID_TOUCHSCREEN.DeviceDesc = "HID Touch Screen"
+HID_PEN.DeviceDesc = "HID Pen"
 
 *PNP0F0D.DeviceDesc = "Standard InPort Mouse"
 *PNP0F11.DeviceDesc = "Standard Bus Mouse"

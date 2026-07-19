@@ -11,6 +11,7 @@
 #include <kbdmou.h>
 #include <debug.h>
 
+#define MOUHID_MAX_TOUCHPAD_CONTACTS 16
 
 typedef struct
 {
@@ -129,11 +130,33 @@ typedef struct
     //
     HIDP_VALUE_CAPS ValueCapsY;
 
+    /* Precision Touchpad state. */
+    BOOLEAN Touchpad;
+    BOOLEAN Digitizer;
+    BOOLEAN DigitizerTipDown;
+    BOOLEAN TouchContactActive;
+    BOOLEAN ScrollActive;
+    UCHAR Reserved[3];
+    USHORT FingerLinkCount;
+    USHORT DigitizerLink;
+    USHORT FingerLinks[MOUHID_MAX_TOUCHPAD_CONTACTS];
+    ULONG PrimaryContactId;
+    LONG LastTouchX;
+    LONG LastTouchY;
+    LONG TouchRemainderX;
+    LONG TouchRemainderY;
+    LONG LastScrollX;
+    LONG LastScrollY;
+    LONG ScrollRemainderX;
+    LONG ScrollRemainderY;
+
 } MOUHID_DEVICE_EXTENSION, *PMOUHID_DEVICE_EXTENSION;
 
 #define WHEEL_DELTA 120
 #define VIRTUAL_SCREEN_SIZE_X (65536)
 #define VIRTUAL_SCREEN_SIZE_Y (65536)
+#define MOUHID_TOUCHPAD_MOTION_DIVISOR 2
+#define MOUHID_TOUCHPAD_SCROLL_STEP 40
 
 NTSTATUS
 MouHid_InitiateRead(

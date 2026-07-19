@@ -38,8 +38,10 @@ MouHid_ScaleAbsoluteCoordinate(
     IN ULONG VirtualScreenSize,
     OUT PLONG Last)
 {
-    if (ValueCaps->LogicalMax <= 0 ||
-        ValueCaps->LogicalMax <= ValueCaps->LogicalMin)
+    LONG LogicalValue;
+    ULONGLONG Position, Range;
+
+    if (ValueCaps->LogicalMax <= ValueCaps->LogicalMin)
     {
         DPRINT1("MouHid_ScaleAbsoluteCoordinate: invalid logical range %ld..%ld\n",
                 ValueCaps->LogicalMin,
@@ -47,10 +49,28 @@ MouHid_ScaleAbsoluteCoordinate(
         return FALSE;
     }
 
-    if (Value > (ULONG)ValueCaps->LogicalMax)
-        Value = ValueCaps->LogicalMax;
+    LogicalValue = (LONG)Value;
+    if (ValueCaps->LogicalMin < 0 && ValueCaps->BitSize != 0 &&
+        ValueCaps->BitSize < sizeof(Value) * 8 &&
+        (Value & (1UL << (ValueCaps->BitSize - 1))))
+    {
+        LogicalValue = (LONG)(Value |
+            ~((1UL << ValueCaps->BitSize) - 1));
+    }
 
-    *Last = (LONG)(((ULONGLONG)Value * VirtualScreenSize) / ValueCaps->LogicalMax);
+    if (LogicalValue < ValueCaps->LogicalMin)
+        LogicalValue = ValueCaps->LogicalMin;
+    else if (LogicalValue > ValueCaps->LogicalMax)
+        LogicalValue = ValueCaps->LogicalMax;
+
+    Position = (ULONGLONG)((LONGLONG)LogicalValue -
+                           ValueCaps->LogicalMin);
+    Range = (ULONGLONG)((LONGLONG)ValueCaps->LogicalMax -
+                        ValueCaps->LogicalMin);
+    if (VirtualScreenSize == 0)
+        return FALSE;
+
+    *Last = (LONG)((Position * (VirtualScreenSize - 1)) / Range);
     return TRUE;
 }
 
@@ -62,17 +82,21 @@ MouHid_GetButtonMove(
 {
     NTSTATUS Status;
     ULONG ValueX, ValueY;
+    USHORT LinkCollection;
 
     /* init result */
     *LastX = 0;
     *LastY = 0;
+    LinkCollection = DeviceExtension->Digitizer ?
+                     DeviceExtension->DigitizerLink :
+                     HIDP_LINK_COLLECTION_UNSPECIFIED;
 
     if (!DeviceExtension->MouseAbsolute)
     {
         /* get scaled usage value x */
         Status =  HidP_GetScaledUsageValue(HidP_Input,
                                        HID_USAGE_PAGE_GENERIC,
-                                       HIDP_LINK_COLLECTION_UNSPECIFIED,
+                                       LinkCollection,
                                        HID_USAGE_GENERIC_X,
                                        LastX,
                                        DeviceExtension->PreparsedData,
@@ -90,7 +114,7 @@ MouHid_GetButtonMove(
                 /* get unscaled value */
                 Status = HidP_GetUsageValue(HidP_Input,
                                         HID_USAGE_PAGE_GENERIC,
-                                        HIDP_LINK_COLLECTION_UNSPECIFIED,
+                                        LinkCollection,
                                         HID_USAGE_GENERIC_X,
                                         &ValueX,
                                         DeviceExtension->PreparsedData,
@@ -117,7 +141,7 @@ MouHid_GetButtonMove(
         /* get unscaled value */
         Status = HidP_GetUsageValue(HidP_Input,
                                     HID_USAGE_PAGE_GENERIC,
-                                    HIDP_LINK_COLLECTION_UNSPECIFIED,
+                                    LinkCollection,
                                     HID_USAGE_GENERIC_X,
                                     &ValueX,
                                     DeviceExtension->PreparsedData,
@@ -143,7 +167,7 @@ MouHid_GetButtonMove(
         /* get scaled usage value y */
         Status =  HidP_GetScaledUsageValue(HidP_Input,
                                        HID_USAGE_PAGE_GENERIC,
-                                       HIDP_LINK_COLLECTION_UNSPECIFIED,
+                                       LinkCollection,
                                        HID_USAGE_GENERIC_Y,
                                        LastY,
                                        DeviceExtension->PreparsedData,
@@ -161,7 +185,7 @@ MouHid_GetButtonMove(
                 // get unscaled value
                 Status = HidP_GetUsageValue(HidP_Input,
                                         HID_USAGE_PAGE_GENERIC,
-                                        HIDP_LINK_COLLECTION_UNSPECIFIED,
+                                        LinkCollection,
                                         HID_USAGE_GENERIC_Y,
                                         &ValueY,
                                         DeviceExtension->PreparsedData,
@@ -188,7 +212,7 @@ MouHid_GetButtonMove(
         // get unscaled value
         Status = HidP_GetUsageValue(HidP_Input,
                                 HID_USAGE_PAGE_GENERIC,
-                                HIDP_LINK_COLLECTION_UNSPECIFIED,
+                                LinkCollection,
                                 HID_USAGE_GENERIC_Y,
                                 &ValueY,
                                 DeviceExtension->PreparsedData,
@@ -308,6 +332,227 @@ MouHid_GetButtonFlags(
     }
 }
 
+typedef struct _MOUHID_TOUCH_CONTACT
+{
+    ULONG Id;
+    ULONG X;
+    ULONG Y;
+} MOUHID_TOUCH_CONTACT, *PMOUHID_TOUCH_CONTACT;
+
+static
+BOOLEAN
+MouHid_GetTouchpadUsage(
+    IN PMOUHID_DEVICE_EXTENSION DeviceExtension,
+    IN USHORT LinkCollection,
+    IN USAGE UsagePage,
+    IN USAGE Usage,
+    OUT PULONG Value)
+{
+    return HidP_GetUsageValue(HidP_Input,
+                              UsagePage,
+                              LinkCollection,
+                              Usage,
+                              Value,
+                              DeviceExtension->PreparsedData,
+                              DeviceExtension->Report,
+                              DeviceExtension->ReportLength) ==
+           HIDP_STATUS_SUCCESS;
+}
+
+static
+BOOLEAN
+MouHid_GetDigitizerTip(
+    IN PMOUHID_DEVICE_EXTENSION DeviceExtension)
+{
+    ULONG Value;
+
+    if (MouHid_GetTouchpadUsage(DeviceExtension,
+                                DeviceExtension->DigitizerLink,
+                                HID_USAGE_PAGE_DIGITIZER,
+                                HID_USAGE_DIGITIZER_TIP_SWITCH,
+                                &Value) ||
+        MouHid_GetTouchpadUsage(DeviceExtension,
+                                DeviceExtension->DigitizerLink,
+                                HID_USAGE_PAGE_DIGITIZER,
+                                HID_USAGE_DIGITIZER_TOUCH,
+                                &Value) ||
+        MouHid_GetTouchpadUsage(DeviceExtension,
+                                DeviceExtension->DigitizerLink,
+                                HID_USAGE_PAGE_DIGITIZER,
+                                HID_USAGE_DIGITIZER_IN_RANGE,
+                                &Value))
+    {
+        return Value != 0;
+    }
+
+    return FALSE;
+}
+
+static
+VOID
+MouHid_ResetTouchpadMotion(
+    IN PMOUHID_DEVICE_EXTENSION DeviceExtension)
+{
+    DeviceExtension->TouchContactActive = FALSE;
+    DeviceExtension->TouchRemainderX = 0;
+    DeviceExtension->TouchRemainderY = 0;
+}
+
+static
+VOID
+MouHid_GetTouchpadMove(
+    IN PMOUHID_DEVICE_EXTENSION DeviceExtension,
+    OUT PLONG LastX,
+    OUT PLONG LastY,
+    OUT PLONG WheelDelta)
+{
+    MOUHID_TOUCH_CONTACT Contacts[MOUHID_MAX_TOUCHPAD_CONTACTS];
+    PMOUHID_TOUCH_CONTACT Contact, Primary = NULL;
+    ULONG ContactCount = 0;
+    ULONG Confidence, Index, TipSwitch;
+    LONG CenterX, CenterY;
+    LONG DeltaX, DeltaY;
+    USHORT Link;
+
+    *LastX = 0;
+    *LastY = 0;
+    *WheelDelta = 0;
+
+    for (Index = 0; Index < DeviceExtension->FingerLinkCount; Index++)
+    {
+        Link = DeviceExtension->FingerLinks[Index];
+        if (!MouHid_GetTouchpadUsage(DeviceExtension,
+                                     Link,
+                                     HID_USAGE_PAGE_DIGITIZER,
+                                     HID_USAGE_DIGITIZER_TIP_SWITCH,
+                                     &TipSwitch) ||
+            TipSwitch == 0)
+        {
+            continue;
+        }
+
+        if (MouHid_GetTouchpadUsage(DeviceExtension,
+                                    Link,
+                                    HID_USAGE_PAGE_DIGITIZER,
+                                    HID_USAGE_DIGITIZER_CONFIDENCE,
+                                    &Confidence) &&
+            Confidence == 0)
+        {
+            continue;
+        }
+
+        Contact = &Contacts[ContactCount];
+        if (!MouHid_GetTouchpadUsage(DeviceExtension,
+                                     Link,
+                                     HID_USAGE_PAGE_GENERIC,
+                                     HID_USAGE_GENERIC_X,
+                                     &Contact->X) ||
+            !MouHid_GetTouchpadUsage(DeviceExtension,
+                                     Link,
+                                     HID_USAGE_PAGE_GENERIC,
+                                     HID_USAGE_GENERIC_Y,
+                                     &Contact->Y))
+        {
+            continue;
+        }
+
+        if (!MouHid_GetTouchpadUsage(
+                DeviceExtension,
+                Link,
+                HID_USAGE_PAGE_DIGITIZER,
+                HID_USAGE_DIGITIZER_CONTACT_IDENTIFIER,
+                &Contact->Id))
+        {
+            Contact->Id = Link;
+        }
+        ContactCount++;
+    }
+
+    if (ContactCount == 0)
+    {
+        MouHid_ResetTouchpadMotion(DeviceExtension);
+        DeviceExtension->ScrollActive = FALSE;
+        DeviceExtension->ScrollRemainderX = 0;
+        DeviceExtension->ScrollRemainderY = 0;
+        return;
+    }
+
+    if (ContactCount >= 2)
+    {
+        CenterX = ((LONG)Contacts[0].X + (LONG)Contacts[1].X) / 2;
+        CenterY = ((LONG)Contacts[0].Y + (LONG)Contacts[1].Y) / 2;
+        MouHid_ResetTouchpadMotion(DeviceExtension);
+
+        if (DeviceExtension->ScrollActive)
+        {
+            DeviceExtension->ScrollRemainderX +=
+                DeviceExtension->LastScrollX - CenterX;
+            DeviceExtension->ScrollRemainderY +=
+                DeviceExtension->LastScrollY - CenterY;
+            DeltaY = DeviceExtension->ScrollRemainderY /
+                     MOUHID_TOUCHPAD_SCROLL_STEP;
+            DeviceExtension->ScrollRemainderY -=
+                DeltaY * MOUHID_TOUCHPAD_SCROLL_STEP;
+            if (DeltaY > MAXSHORT / WHEEL_DELTA)
+                DeltaY = MAXSHORT / WHEEL_DELTA;
+            else if (DeltaY < MINSHORT / WHEEL_DELTA)
+                DeltaY = MINSHORT / WHEEL_DELTA;
+            *WheelDelta = DeltaY * WHEEL_DELTA;
+        }
+        else
+        {
+            DeviceExtension->ScrollActive = TRUE;
+            DeviceExtension->ScrollRemainderX = 0;
+            DeviceExtension->ScrollRemainderY = 0;
+        }
+
+        DeviceExtension->LastScrollX = CenterX;
+        DeviceExtension->LastScrollY = CenterY;
+        return;
+    }
+
+    DeviceExtension->ScrollActive = FALSE;
+    DeviceExtension->ScrollRemainderX = 0;
+    DeviceExtension->ScrollRemainderY = 0;
+
+    Contact = &Contacts[0];
+    if (DeviceExtension->TouchContactActive)
+    {
+        for (Index = 0; Index < ContactCount; Index++)
+        {
+            if (Contacts[Index].Id == DeviceExtension->PrimaryContactId)
+            {
+                Primary = &Contacts[Index];
+                break;
+            }
+        }
+    }
+
+    if (Primary == NULL)
+    {
+        DeviceExtension->PrimaryContactId = Contact->Id;
+        DeviceExtension->LastTouchX = Contact->X;
+        DeviceExtension->LastTouchY = Contact->Y;
+        DeviceExtension->TouchContactActive = TRUE;
+        DeviceExtension->TouchRemainderX = 0;
+        DeviceExtension->TouchRemainderY = 0;
+        return;
+    }
+
+    DeltaX = (LONG)Primary->X - DeviceExtension->LastTouchX +
+             DeviceExtension->TouchRemainderX;
+    DeltaY = (LONG)Primary->Y - DeviceExtension->LastTouchY +
+             DeviceExtension->TouchRemainderY;
+    *LastX = DeltaX / MOUHID_TOUCHPAD_MOTION_DIVISOR;
+    *LastY = DeltaY / MOUHID_TOUCHPAD_MOTION_DIVISOR;
+    DeviceExtension->TouchRemainderX =
+        DeltaX - *LastX * MOUHID_TOUCHPAD_MOTION_DIVISOR;
+    DeviceExtension->TouchRemainderY =
+        DeltaY - *LastY * MOUHID_TOUCHPAD_MOTION_DIVISOR;
+    DeviceExtension->LastTouchX = Primary->X;
+    DeviceExtension->LastTouchY = Primary->Y;
+}
+
 VOID
 MouHid_DispatchInputData(
     IN PMOUHID_DEVICE_EXTENSION DeviceExtension,
@@ -333,6 +578,26 @@ MouHid_DispatchInputData(
     KeLowerIrql(OldIrql);
 }
 
+static
+VOID
+MouHid_ContinueRead(
+    IN PMOUHID_DEVICE_EXTENSION DeviceExtension)
+{
+    if (DeviceExtension->StopReadReport)
+    {
+        DeviceExtension->ReadReportActive = FALSE;
+        DeviceExtension->StopReadReport = FALSE;
+        KeSetEvent(&DeviceExtension->ReadCompletionEvent, 0, FALSE);
+        return;
+    }
+
+    MouHid_InitiateRead(DeviceExtension);
+
+    /* Close the race where stop starts while this completion requeues. */
+    if (DeviceExtension->StopReadReport)
+        IoCancelIrp(DeviceExtension->Irp);
+}
+
 NTSTATUS
 NTAPI
 MouHid_ReadCompletion(
@@ -343,6 +608,7 @@ MouHid_ReadCompletion(
     PMOUHID_DEVICE_EXTENSION DeviceExtension;
     USHORT ButtonFlags;
     LONG UsageValue;
+    LONG TouchpadWheelDelta;
     NTSTATUS Status;
     LONG LastX, LastY;
     MOUSE_INPUT_DATA MouseInputData;
@@ -370,11 +636,42 @@ MouHid_ReadCompletion(
         return STATUS_MORE_PROCESSING_REQUIRED;
     }
 
+    if (!NT_SUCCESS(Irp->IoStatus.Status))
+    {
+        DPRINT1("[MOUHID] ReadCompletion failed with %x\n",
+                Irp->IoStatus.Status);
+        DeviceExtension->ReadReportActive = FALSE;
+        KeSetEvent(&DeviceExtension->ReadCompletionEvent, 0, 0);
+        return STATUS_MORE_PROCESSING_REQUIRED;
+    }
+
     /* get mouse change */
-    MouHid_GetButtonMove(DeviceExtension, &LastX, &LastY);
+    TouchpadWheelDelta = 0;
+    if (DeviceExtension->Touchpad)
+    {
+        MouHid_GetTouchpadMove(DeviceExtension,
+                               &LastX,
+                               &LastY,
+                               &TouchpadWheelDelta);
+    }
+    else
+    {
+        MouHid_GetButtonMove(DeviceExtension, &LastX, &LastY);
+    }
 
     /* get mouse change flags */
     MouHid_GetButtonFlags(DeviceExtension, &ButtonFlags, &Flags);
+    if (DeviceExtension->Digitizer)
+    {
+        BOOLEAN TipDown = MouHid_GetDigitizerTip(DeviceExtension);
+
+        if (TipDown != DeviceExtension->DigitizerTipDown)
+        {
+            ButtonFlags |= TipDown ? MOUSE_LEFT_BUTTON_DOWN :
+                                     MOUSE_LEFT_BUTTON_UP;
+            DeviceExtension->DigitizerTipDown = TipDown;
+        }
+    }
 
     /* init input data */
     RtlZeroMemory(&MouseInputData, sizeof(MOUSE_INPUT_DATA));
@@ -386,7 +683,13 @@ MouHid_ReadCompletion(
     MouseInputData.LastY = LastY;
 
     /* detect mouse wheel change */
-    if (DeviceExtension->MouseIdentifier == WHEELMOUSE_HID_HARDWARE)
+    if (DeviceExtension->Touchpad && TouchpadWheelDelta != 0)
+    {
+        MouseInputData.ButtonFlags |= MOUSE_WHEEL;
+        MouseInputData.ButtonData = (USHORT)(SHORT)TouchpadWheelDelta;
+    }
+    else if (!DeviceExtension->Touchpad &&
+             DeviceExtension->MouseIdentifier == WHEELMOUSE_HID_HARDWARE)
     {
         /* get usage */
         UsageValue = 0;
@@ -410,11 +713,14 @@ MouHid_ReadCompletion(
         }
     }
 
-    DPRINT("[MOUHID] ReportData %02x %02x %02x %02x %02x %02x %02x\n",
-        DeviceExtension->Report[0] & 0xFF,
-        DeviceExtension->Report[1] & 0xFF, DeviceExtension->Report[2] & 0xFF,
-        DeviceExtension->Report[3] & 0xFF, DeviceExtension->Report[4] & 0xFF,
-        DeviceExtension->Report[5] & 0xFF, DeviceExtension->Report[6] & 0xFF);
+    if (DeviceExtension->ReportLength >= 7)
+    {
+        DPRINT("[MOUHID] ReportData %02x %02x %02x %02x %02x %02x %02x\n",
+            DeviceExtension->Report[0] & 0xFF,
+            DeviceExtension->Report[1] & 0xFF, DeviceExtension->Report[2] & 0xFF,
+            DeviceExtension->Report[3] & 0xFF, DeviceExtension->Report[4] & 0xFF,
+            DeviceExtension->Report[5] & 0xFF, DeviceExtension->Report[6] & 0xFF);
+    }
 
     DPRINT("[MOUHID] LastX %ld LastY %ld Flags %x ButtonFlags %x ButtonData %x\n", MouseInputData.LastX, MouseInputData.LastY, MouseInputData.Flags, MouseInputData.ButtonFlags, MouseInputData.ButtonData);
 
@@ -422,7 +728,7 @@ MouHid_ReadCompletion(
     MouHid_DispatchInputData(DeviceExtension, &MouseInputData);
 
     /* re-init read */
-    MouHid_InitiateRead(DeviceExtension);
+    MouHid_ContinueRead(DeviceExtension);
 
     /* stop completion */
     return STATUS_MORE_PROCESSING_REQUIRED;
@@ -812,6 +1118,113 @@ MouHid_SubmitRequest(
     return Status;
 }
 
+static
+NTSTATUS
+MouHid_ConfigureTouchpad(
+    IN PMOUHID_DEVICE_EXTENSION DeviceExtension,
+    IN PHIDP_CAPS Capabilities,
+    IN PHIDP_PREPARSED_DATA PreparsedData)
+{
+    PHIDP_LINK_COLLECTION_NODE Nodes;
+    ULONG NodeCount, Index;
+    NTSTATUS Status;
+
+    NodeCount = Capabilities->NumberLinkCollectionNodes;
+    if (NodeCount == 0)
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+
+    Nodes = ExAllocatePoolWithTag(PagedPool,
+                                  NodeCount * sizeof(*Nodes),
+                                  MOUHID_TAG);
+    if (Nodes == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Status = HidP_GetLinkCollectionNodes(Nodes,
+                                         &NodeCount,
+                                         PreparsedData);
+    if (Status != HIDP_STATUS_SUCCESS)
+    {
+        ExFreePoolWithTag(Nodes, MOUHID_TAG);
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    DeviceExtension->FingerLinkCount = 0;
+    for (Index = 1;
+         Index < NodeCount &&
+         DeviceExtension->FingerLinkCount < MOUHID_MAX_TOUCHPAD_CONTACTS;
+         Index++)
+    {
+        if (Nodes[Index].LinkUsagePage == HID_USAGE_PAGE_DIGITIZER &&
+            Nodes[Index].LinkUsage == HID_USAGE_DIGITIZER_FINGER)
+        {
+            DeviceExtension->FingerLinks[
+                DeviceExtension->FingerLinkCount++] = (USHORT)Index;
+        }
+    }
+    ExFreePoolWithTag(Nodes, MOUHID_TAG);
+
+    if (DeviceExtension->FingerLinkCount == 0)
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+
+    DeviceExtension->Touchpad = TRUE;
+    DeviceExtension->MouseIdentifier = WHEELMOUSE_HID_HARDWARE;
+    MouHid_ResetTouchpadMotion(DeviceExtension);
+    DeviceExtension->ScrollActive = FALSE;
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+MouHid_ConfigureDigitizer(
+    IN PMOUHID_DEVICE_EXTENSION DeviceExtension,
+    IN PHIDP_CAPS Capabilities,
+    IN PHIDP_PREPARSED_DATA PreparsedData)
+{
+    PHIDP_LINK_COLLECTION_NODE Nodes;
+    USAGE LinkUsage;
+    ULONG NodeCount, Index;
+    NTSTATUS Status;
+
+    DeviceExtension->DigitizerLink = HIDP_LINK_COLLECTION_UNSPECIFIED;
+    NodeCount = Capabilities->NumberLinkCollectionNodes;
+    if (NodeCount != 0)
+    {
+        Nodes = ExAllocatePoolWithTag(PagedPool,
+                                      NodeCount * sizeof(*Nodes),
+                                      MOUHID_TAG);
+        if (Nodes == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+
+        Status = HidP_GetLinkCollectionNodes(Nodes,
+                                             &NodeCount,
+                                             PreparsedData);
+        if (Status != HIDP_STATUS_SUCCESS)
+        {
+            ExFreePoolWithTag(Nodes, MOUHID_TAG);
+            return STATUS_DEVICE_CONFIGURATION_ERROR;
+        }
+
+        LinkUsage = Capabilities->Usage == HID_USAGE_DIGITIZER_TOUCH_SCREEN ?
+                    HID_USAGE_DIGITIZER_FINGER :
+                    HID_USAGE_DIGITIZER_STYLUS;
+        for (Index = 1; Index < NodeCount; Index++)
+        {
+            if (Nodes[Index].LinkUsagePage == HID_USAGE_PAGE_DIGITIZER &&
+                Nodes[Index].LinkUsage == LinkUsage)
+            {
+                DeviceExtension->DigitizerLink = (USHORT)Index;
+                break;
+            }
+        }
+        ExFreePoolWithTag(Nodes, MOUHID_TAG);
+    }
+
+    DeviceExtension->Digitizer = TRUE;
+    DeviceExtension->DigitizerTipDown = FALSE;
+    DeviceExtension->MouseAbsolute = TRUE;
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 NTAPI
 MouHid_StartDevice(
@@ -826,6 +1239,9 @@ MouHid_StartDevice(
     HIDP_VALUE_CAPS ValueCaps;
     PMOUHID_DEVICE_EXTENSION DeviceExtension;
     PUSAGE Buffer;
+    ULONG AllocatedButtons;
+    BOOLEAN IsMouse, IsTouchpad, IsDigitizer;
+    USHORT ValueLink;
 
     /* get device extension */
     DeviceExtension = DeviceObject->DeviceExtension;
@@ -880,12 +1296,48 @@ MouHid_StartDevice(
 
     DPRINT("[MOUHID] Usage %x UsagePage %x InputReportLength %lu\n", Capabilities.Usage, Capabilities.UsagePage, Capabilities.InputReportByteLength);
 
+    IsMouse = Capabilities.UsagePage == HID_USAGE_PAGE_GENERIC &&
+              (Capabilities.Usage == HID_USAGE_GENERIC_POINTER ||
+               Capabilities.Usage == HID_USAGE_GENERIC_MOUSE);
+    IsTouchpad = Capabilities.UsagePage == HID_USAGE_PAGE_DIGITIZER &&
+                 Capabilities.Usage == HID_USAGE_DIGITIZER_TOUCH_PAD;
+    IsDigitizer = Capabilities.UsagePage == HID_USAGE_PAGE_DIGITIZER &&
+                  (Capabilities.Usage == HID_USAGE_DIGITIZER_TOUCH_SCREEN ||
+                   Capabilities.Usage == HID_USAGE_DIGITIZER_PEN);
+
     /* verify capabilities */
-    if ((Capabilities.Usage != HID_USAGE_GENERIC_POINTER && Capabilities.Usage != HID_USAGE_GENERIC_MOUSE) || Capabilities.UsagePage != HID_USAGE_PAGE_GENERIC)
+    if (!IsMouse && !IsTouchpad && !IsDigitizer)
     {
         /* not supported */
         ExFreePoolWithTag(PreparsedData, MOUHID_TAG);
         return STATUS_UNSUCCESSFUL;
+    }
+
+    DeviceExtension->Touchpad = FALSE;
+    DeviceExtension->Digitizer = FALSE;
+    DeviceExtension->DigitizerTipDown = FALSE;
+    DeviceExtension->FingerLinkCount = 0;
+    if (IsTouchpad)
+    {
+        Status = MouHid_ConfigureTouchpad(DeviceExtension,
+                                          &Capabilities,
+                                          PreparsedData);
+        if (!NT_SUCCESS(Status))
+        {
+            ExFreePoolWithTag(PreparsedData, MOUHID_TAG);
+            return Status;
+        }
+    }
+    else if (IsDigitizer)
+    {
+        Status = MouHid_ConfigureDigitizer(DeviceExtension,
+                                           &Capabilities,
+                                           PreparsedData);
+        if (!NT_SUCCESS(Status))
+        {
+            ExFreePoolWithTag(PreparsedData, MOUHID_TAG);
+            return Status;
+        }
     }
 
     /* init input report */
@@ -897,7 +1349,11 @@ MouHid_StartDevice(
     }
 
     DeviceExtension->Report = ExAllocatePoolWithTag(NonPagedPool, DeviceExtension->ReportLength, MOUHID_TAG);
-    ASSERT(DeviceExtension->Report);
+    if (!DeviceExtension->Report)
+    {
+        ExFreePoolWithTag(PreparsedData, MOUHID_TAG);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
     RtlZeroMemory(DeviceExtension->Report, DeviceExtension->ReportLength);
 
     /* build mdl */
@@ -906,7 +1362,13 @@ MouHid_StartDevice(
                                                FALSE,
                                                FALSE,
                                                NULL);
-    ASSERT(DeviceExtension->ReportMDL);
+    if (!DeviceExtension->ReportMDL)
+    {
+        ExFreePoolWithTag(DeviceExtension->Report, MOUHID_TAG);
+        DeviceExtension->Report = NULL;
+        ExFreePoolWithTag(PreparsedData, MOUHID_TAG);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
 
     /* init mdl */
     MmBuildMdlForNonPagedPool(DeviceExtension->ReportMDL);
@@ -916,26 +1378,32 @@ MouHid_StartDevice(
                                       HID_USAGE_PAGE_BUTTON,
                                       PreparsedData);
     DPRINT("[MOUHID] Buttons %lu\n", Buttons);
-    ASSERT(Buttons > 0);
+    AllocatedButtons = max(Buttons, 1);
 
     /* now allocate an array for those buttons */
-    Buffer = ExAllocatePoolWithTag(NonPagedPool, sizeof(USAGE) * 4 * Buttons, MOUHID_TAG);
+    Buffer = ExAllocatePoolWithTag(NonPagedPool,
+                                   sizeof(USAGE) * 4 * AllocatedButtons,
+                                   MOUHID_TAG);
     if (!Buffer)
     {
         /* no memory */
+        IoFreeMdl(DeviceExtension->ReportMDL);
+        DeviceExtension->ReportMDL = NULL;
+        ExFreePoolWithTag(DeviceExtension->Report, MOUHID_TAG);
+        DeviceExtension->Report = NULL;
         ExFreePoolWithTag(PreparsedData, MOUHID_TAG);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
     DeviceExtension->UsageListBuffer = Buffer;
 
     /* init usage lists */
-    RtlZeroMemory(Buffer, sizeof(USAGE) * 4 * Buttons);
+    RtlZeroMemory(Buffer, sizeof(USAGE) * 4 * AllocatedButtons);
     DeviceExtension->CurrentUsageList = Buffer;
-    Buffer += Buttons;
+    Buffer += AllocatedButtons;
     DeviceExtension->PreviousUsageList = Buffer;
-    Buffer += Buttons;
+    Buffer += AllocatedButtons;
     DeviceExtension->MakeUsageList = Buffer;
-    Buffer += Buttons;
+    Buffer += AllocatedButtons;
     DeviceExtension->BreakUsageList = Buffer;
 
     /* store number of buttons */
@@ -944,10 +1412,13 @@ MouHid_StartDevice(
     /* store preparsed data */
     DeviceExtension->PreparsedData = PreparsedData;
 
+    ValueLink = DeviceExtension->Digitizer ?
+                DeviceExtension->DigitizerLink :
+                HIDP_LINK_COLLECTION_UNSPECIFIED;
     ValueCapsLength = 1;
     HidP_GetSpecificValueCaps(HidP_Input,
                               HID_USAGE_PAGE_GENERIC,
-                              HIDP_LINK_COLLECTION_UNSPECIFIED,
+                              ValueLink,
                               HID_USAGE_GENERIC_X,
                               &DeviceExtension->ValueCapsX,
                               &ValueCapsLength,
@@ -956,50 +1427,55 @@ MouHid_StartDevice(
     ValueCapsLength = 1;
     HidP_GetSpecificValueCaps(HidP_Input,
                               HID_USAGE_PAGE_GENERIC,
-                              HIDP_LINK_COLLECTION_UNSPECIFIED,
+                              ValueLink,
                               HID_USAGE_GENERIC_Y,
                               &DeviceExtension->ValueCapsY,
                               &ValueCapsLength,
                               PreparsedData);
 
     /* now check for wheel mouse support */
-    ValueCapsLength = 1;
-    Status = HidP_GetSpecificValueCaps(HidP_Input,
-                                       HID_USAGE_PAGE_GENERIC,
-                                       HIDP_LINK_COLLECTION_UNSPECIFIED,
-                                       HID_USAGE_GENERIC_WHEEL,
-                                       &ValueCaps,
-                                       &ValueCapsLength,
-                                       PreparsedData);
-    if (Status == HIDP_STATUS_SUCCESS )
+    if (!DeviceExtension->Touchpad)
     {
-        /* mouse has wheel support */
-        DeviceExtension->MouseIdentifier = WHEELMOUSE_HID_HARDWARE;
-        DeviceExtension->WheelUsagePage = ValueCaps.UsagePage;
-        DPRINT("[MOUHID] mouse wheel support detected\n", Status);
-    }
-    else
-    {
-        /* check if the mouse has z-axis */
         ValueCapsLength = 1;
         Status = HidP_GetSpecificValueCaps(HidP_Input,
                                            HID_USAGE_PAGE_GENERIC,
                                            HIDP_LINK_COLLECTION_UNSPECIFIED,
-                                           HID_USAGE_GENERIC_Z,
+                                           HID_USAGE_GENERIC_WHEEL,
                                            &ValueCaps,
                                            &ValueCapsLength,
                                            PreparsedData);
-        if (Status == HIDP_STATUS_SUCCESS && ValueCapsLength == 1)
+        if (Status == HIDP_STATUS_SUCCESS)
         {
-            /* wheel support */
+            /* mouse has wheel support */
             DeviceExtension->MouseIdentifier = WHEELMOUSE_HID_HARDWARE;
             DeviceExtension->WheelUsagePage = ValueCaps.UsagePage;
-            DPRINT("[MOUHID] mouse wheel support detected with z-axis\n", Status);
+            DPRINT("[MOUHID] mouse wheel support detected\n", Status);
+        }
+        else
+        {
+            /* check if the mouse has z-axis */
+            ValueCapsLength = 1;
+            Status = HidP_GetSpecificValueCaps(HidP_Input,
+                                               HID_USAGE_PAGE_GENERIC,
+                                               HIDP_LINK_COLLECTION_UNSPECIFIED,
+                                               HID_USAGE_GENERIC_Z,
+                                               &ValueCaps,
+                                               &ValueCapsLength,
+                                               PreparsedData);
+            if (Status == HIDP_STATUS_SUCCESS && ValueCapsLength == 1)
+            {
+                /* wheel support */
+                DeviceExtension->MouseIdentifier = WHEELMOUSE_HID_HARDWARE;
+                DeviceExtension->WheelUsagePage = ValueCaps.UsagePage;
+                DPRINT("[MOUHID] mouse wheel support detected with z-axis\n",
+                       Status);
+            }
         }
     }
 
     /* check if mice is absolute */
-    if (DeviceExtension->ValueCapsY.IsAbsolute &&
+    if (!DeviceExtension->Touchpad &&
+        DeviceExtension->ValueCapsY.IsAbsolute &&
         DeviceExtension->ValueCapsX.IsAbsolute)
     {
         /* mice is absolute */
