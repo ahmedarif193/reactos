@@ -215,6 +215,7 @@ typedef struct _DXGKP_SOURCE_OWNER_ADAPTER_STATE
 } DXGKP_SOURCE_OWNER_ADAPTER_STATE, *PDXGKP_SOURCE_OWNER_ADAPTER_STATE;
 
 #define DXGKP_MAX_SOURCE_OWNER_OPERATIONS 4096U
+#define DXGKP_STDALLOC_MAX_PRIVATE_SIZE   (64U * 1024U)
 #define DXGKP_SOURCE_OWNER_FLAG_DISABLE_DWM_VIRTUAL_MODE 0x00000002U
 #define DXGKP_SOURCE_OWNER_FLAG_USE_NT_HANDLES           0x00000004U
 #define TAG_DXGK_SOURCE_OWNER 'OxgD'
@@ -2674,6 +2675,11 @@ DxgkpEnsureSharedShadowSurfaceLocked(
 
     AllocationPrivateDataSize = QueryArgs.AllocationPrivateDriverDataSize;
     ResourcePrivateDataSize = QueryArgs.ResourcePrivateDriverDataSize;
+    if (AllocationPrivateDataSize > DXGKP_STDALLOC_MAX_PRIVATE_SIZE ||
+        ResourcePrivateDataSize > DXGKP_STDALLOC_MAX_PRIVATE_SIZE)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
     if (AllocationPrivateDataSize != 0)
     {
@@ -2715,6 +2721,12 @@ DxgkpEnsureSharedShadowSurfaceLocked(
     DxgkReleaseKmdCall(Adapter);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
+    if (QueryArgs.AllocationPrivateDriverDataSize != AllocationPrivateDataSize ||
+        QueryArgs.ResourcePrivateDriverDataSize != ResourcePrivateDataSize)
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto Cleanup;
+    }
 
     RtlZeroMemory(&AllocInfo, sizeof(AllocInfo));
     AllocInfo.pPrivateDriverData = AllocationPrivateData;
@@ -2905,6 +2917,11 @@ DxgkpEnsureSharedPrimaryLocked(
 
     AllocationPrivateDataSize = QueryArgs.AllocationPrivateDriverDataSize;
     ResourcePrivateDataSize = QueryArgs.ResourcePrivateDriverDataSize;
+    if (AllocationPrivateDataSize > DXGKP_STDALLOC_MAX_PRIVATE_SIZE ||
+        ResourcePrivateDataSize > DXGKP_STDALLOC_MAX_PRIVATE_SIZE)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
     if (AllocationPrivateDataSize != 0)
     {
@@ -2946,6 +2963,12 @@ DxgkpEnsureSharedPrimaryLocked(
     DxgkReleaseKmdCall(Adapter);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
+    if (QueryArgs.AllocationPrivateDriverDataSize != AllocationPrivateDataSize ||
+        QueryArgs.ResourcePrivateDriverDataSize != ResourcePrivateDataSize)
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto Cleanup;
+    }
 
     RtlZeroMemory(&AllocInfo, sizeof(AllocInfo));
     AllocInfo.pPrivateDriverData = AllocationPrivateData;
