@@ -789,6 +789,277 @@ GpuVaApplyCopyOperation(
 }
 
 
+/* SOFTWARE PAGE TABLES (CPU_VIRTUAL GpuMmu) **********************************/
+
+/*
+ * 4-level radix over a 48-bit GPU VA space: 512 8-byte DXGK_PTE entries per
+ * 4KB table, 9 VA bits per level, 4KB pages at the leaves.  dxgkrnl owns the
+ * tables and writes PTEs directly with the CPU; the adapter declared
+ * DXGK_PAGETABLEUPDATE_CPU_VIRTUAL so no paging packets are required.
+ */
+#define GPUVA_PTE_PER_TABLE         512ULL
+#define GPUVA_TABLE_LEVELS          4UL
+
+/* Bounds user-controlled NonPagedPool growth: 1024 leaf tables map 2GB. */
+#define GPUVA_MAX_PROCESS_PAGE_TABLES 1024UL
+
+FORCEINLINE
+ULONG
+GpuVaPteIndex(
+    _In_ ULONGLONG Va,
+    _In_ ULONG Level)
+{
+    return (ULONG)((Va >> (12 + 9 * Level)) & (GPUVA_PTE_PER_TABLE - 1ULL));
+}
+
+/*
+ * GpuVaAllocPageTable
+ * Allocate one page table (a 4KB PTE page plus tracking object) and link it
+ * on the process page-table list.  Caller MUST hold GpuVaLock.
+ */
+static PDXGKRNL_GPUVA_PAGE_TABLE
+GpuVaAllocPageTable(
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_ ULONG Level,
+    _In_ ULONGLONG CoverageBase)
+{
+    PDXGKRNL_GPUVA_PAGE_TABLE Table;
+
+    if (Process->GpuVaPageTableCount >= GPUVA_MAX_PROCESS_PAGE_TABLES)
+        return NULL;
+
+    Table = (PDXGKRNL_GPUVA_PAGE_TABLE)ExAllocatePoolWithTag(
+                NonPagedPool, sizeof(*Table), TAG_DXGK_GPUVA_PT);
+    if (Table == NULL)
+        return NULL;
+    RtlZeroMemory(Table, sizeof(*Table));
+
+    Table->KernelVa = ExAllocatePoolWithTag(NonPagedPool, PAGE_SIZE,
+                                            TAG_DXGK_GPUVA_PT);
+    if (Table->KernelVa == NULL)
+    {
+        ExFreePoolWithTag(Table, TAG_DXGK_GPUVA_PT);
+        return NULL;
+    }
+    RtlZeroMemory(Table->KernelVa, PAGE_SIZE);
+
+    if (Level > 0)
+    {
+        Table->Children = (PDXGKRNL_GPUVA_PAGE_TABLE *)ExAllocatePoolWithTag(
+                    NonPagedPool,
+                    GPUVA_PTE_PER_TABLE * sizeof(PDXGKRNL_GPUVA_PAGE_TABLE),
+                    TAG_DXGK_GPUVA_PT);
+        if (Table->Children == NULL)
+        {
+            ExFreePoolWithTag(Table->KernelVa, TAG_DXGK_GPUVA_PT);
+            ExFreePoolWithTag(Table, TAG_DXGK_GPUVA_PT);
+            return NULL;
+        }
+        RtlZeroMemory(Table->Children,
+                      GPUVA_PTE_PER_TABLE * sizeof(PDXGKRNL_GPUVA_PAGE_TABLE));
+    }
+
+    Table->Level = Level;
+    Table->CoverageBase = CoverageBase;
+    Table->Physical = MmGetPhysicalAddress(Table->KernelVa);
+
+    InsertTailList(&Process->GpuVaPageTableList, &Table->PageTableListEntry);
+    Process->GpuVaPageTableCount++;
+    return Table;
+}
+
+/*
+ * GpuVaFreePageTables
+ * Free every page table of the process and reset the root state.
+ * Caller MUST hold GpuVaLock (or own the process exclusively at teardown).
+ */
+static VOID
+GpuVaFreePageTables(
+    _In_ PDXGKRNL_PROCESS Process)
+{
+    while (!IsListEmpty(&Process->GpuVaPageTableList))
+    {
+        PDXGKRNL_GPUVA_PAGE_TABLE Table =
+            CONTAINING_RECORD(RemoveHeadList(&Process->GpuVaPageTableList),
+                              DXGKRNL_GPUVA_PAGE_TABLE, PageTableListEntry);
+
+        if (Table->Children != NULL)
+            ExFreePoolWithTag(Table->Children, TAG_DXGK_GPUVA_PT);
+        ExFreePoolWithTag(Table->KernelVa, TAG_DXGK_GPUVA_PT);
+        ExFreePoolWithTag(Table, TAG_DXGK_GPUVA_PT);
+    }
+    Process->GpuVaPageTableCount = 0;
+    Process->hRootPageTable = NULL;
+    Process->RootPageTableEntries = 0;
+    Process->RootPageTableProgrammed = FALSE;
+    RtlZeroMemory(&Process->RootPageTableAddress,
+                  sizeof(Process->RootPageTableAddress));
+}
+
+/*
+ * GpuVaEnsureRootPageTable
+ * Allocate the root table on first use and publish it as the process root.
+ * The CPU-visible tables ARE the authoritative page tables in CPU_VIRTUAL
+ * mode, so the root counts as programmed from birth.
+ * Caller MUST hold GpuVaLock.
+ */
+static NTSTATUS
+GpuVaEnsureRootPageTable(
+    _In_ PDXGKRNL_PROCESS Process)
+{
+    PDXGKRNL_GPUVA_PAGE_TABLE Root;
+
+    if (Process->hRootPageTable != NULL)
+        return STATUS_SUCCESS;
+
+    Root = GpuVaAllocPageTable(Process, GPUVA_TABLE_LEVELS - 1, 0);
+    if (Root == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Process->hRootPageTable = (HANDLE)Root;
+    Process->RootPageTableAddress.SegmentId = 0;
+    Process->RootPageTableAddress.SegmentOffset = (UINT64)Root->Physical.QuadPart;
+    Process->RootPageTableEntries = (UINT)GPUVA_PTE_PER_TABLE;
+    Process->RootPageTableProgrammed = TRUE;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * GpuVaGetLeafTable
+ * Walk the radix from the root to the leaf covering Va, lazily allocating
+ * missing levels when Allocate is TRUE.  Parent PTEs are linked as valid
+ * table pointers.  Caller MUST hold GpuVaLock.
+ */
+static PDXGKRNL_GPUVA_PAGE_TABLE
+GpuVaGetLeafTable(
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_ ULONGLONG Va,
+    _In_ BOOLEAN Allocate)
+{
+    PDXGKRNL_GPUVA_PAGE_TABLE Table =
+        (PDXGKRNL_GPUVA_PAGE_TABLE)Process->hRootPageTable;
+    ULONG Level;
+
+    if (Table == NULL)
+        return NULL;
+
+    for (Level = GPUVA_TABLE_LEVELS - 1; Level > 0; Level--)
+    {
+        ULONG Index = GpuVaPteIndex(Va, Level);
+        PDXGKRNL_GPUVA_PAGE_TABLE Child = Table->Children[Index];
+
+        if (Child == NULL)
+        {
+            DXGK_PTE *Entries;
+
+            if (!Allocate)
+                return NULL;
+            Child = GpuVaAllocPageTable(Process, Level - 1,
+                        Va & ~((1ULL << (12 + 9 * Level)) - 1ULL));
+            if (Child == NULL)
+                return NULL;
+            Table->Children[Index] = Child;
+            Entries = (DXGK_PTE *)Table->KernelVa;
+            Entries[Index].Flags = 0;
+            Entries[Index].Valid = 1;
+            Entries[Index].PageTableAddress =
+                (ULONGLONG)Child->Physical.QuadPart & ~GPUVA_PAGE_MASK;
+        }
+        Table = Child;
+    }
+    return Table;
+}
+
+/*
+ * GpuVaClearPteSpan
+ * Zero the leaf PTEs over [Address, Address + SizeInBytes).  Never
+ * allocates; untouched (never-mapped) pages are skipped.
+ * Caller MUST hold GpuVaLock.
+ */
+static VOID
+GpuVaClearPteSpan(
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_ D3DGPU_VIRTUAL_ADDRESS Address,
+    _In_ ULONGLONG SizeInBytes)
+{
+    ULONGLONG Offset;
+
+    for (Offset = 0; Offset < SizeInBytes; Offset += GPUVA_PAGE_SIZE)
+    {
+        PDXGKRNL_GPUVA_PAGE_TABLE Leaf =
+            GpuVaGetLeafTable(Process, Address + Offset, FALSE);
+        DXGK_PTE *Entries;
+
+        if (Leaf == NULL)
+            continue;
+        Entries = (DXGK_PTE *)Leaf->KernelVa;
+        Entries[GpuVaPteIndex(Address + Offset, 0)].Flags = 0;
+        Entries[GpuVaPteIndex(Address + Offset, 0)].PageAddress = 0;
+    }
+}
+
+/*
+ * GpuVaWritePteSpan
+ * Write leaf PTEs for [Address, Address + SizeInBytes).  With an allocation
+ * the PTEs become valid pointers at the backing system pages honouring the
+ * protection; with Protection.Zero they become Zero PTEs; with NoAccess the
+ * span is cleared.  Rolls the span back on mid-walk allocation failure.
+ * Caller MUST hold GpuVaLock.
+ */
+static NTSTATUS
+GpuVaWritePteSpan(
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_ D3DGPU_VIRTUAL_ADDRESS Address,
+    _In_ ULONGLONG SizeInBytes,
+    _In_opt_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ ULONGLONG AllocationOffset,
+    _In_ D3DDDIGPUVIRTUALADDRESS_PROTECTION_TYPE Protection)
+{
+    ULONGLONG Offset;
+
+    if (Allocation == NULL && Protection.NoAccess)
+    {
+        GpuVaClearPteSpan(Process, Address, SizeInBytes);
+        return STATUS_SUCCESS;
+    }
+
+    for (Offset = 0; Offset < SizeInBytes; Offset += GPUVA_PAGE_SIZE)
+    {
+        PDXGKRNL_GPUVA_PAGE_TABLE Leaf =
+            GpuVaGetLeafTable(Process, Address + Offset, TRUE);
+        DXGK_PTE *Entries;
+        DXGK_PTE Pte;
+
+        if (Leaf == NULL)
+        {
+            GpuVaClearPteSpan(Process, Address, Offset);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        RtlZeroMemory(&Pte, sizeof(Pte));
+        if (Allocation != NULL)
+        {
+            PHYSICAL_ADDRESS Physical = MmGetPhysicalAddress(
+                (PUCHAR)Allocation->SystemMemory + AllocationOffset + Offset);
+
+            Pte.Valid = 1;
+            Pte.CacheCoherent = 1;
+            Pte.ReadOnly = Protection.Write ? 0 : 1;
+            Pte.NoExecute = Protection.Execute ? 0 : 1;
+            Pte.PageAddress = (ULONGLONG)Physical.QuadPart & ~GPUVA_PAGE_MASK;
+        }
+        else
+        {
+            Pte.Zero = 1;
+        }
+
+        Entries = (DXGK_PTE *)Leaf->KernelVa;
+        Entries[GpuVaPteIndex(Address + Offset, 0)] = Pte;
+    }
+    return STATUS_SUCCESS;
+}
+
+
 /* PROCESS LIFECYCLE **********************************************************/
 
 /*
@@ -831,6 +1102,8 @@ DxgkGpuVaCreateProcess(
                   sizeof(Process->RootPageTableAddress));
     Process->RootPageTableEntries = 0;
     Process->RootPageTableProgrammed = FALSE;
+    InitializeListHead(&Process->GpuVaPageTableList);
+    Process->GpuVaPageTableCount = 0;
 
     /* Call the miniport's DxgkDdiCreateProcess if available. */
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
@@ -907,12 +1180,10 @@ DxgkGpuVaDestroyProcess(
     }
     ExReleaseFastMutex(&Process->GpuVaLock);
 
-    /* Destroy root page table allocation if any. */
-    if (Process->hRootPageTable != NULL && Adapter != NULL)
-    {
-        DxgkVidMmDestroyAllocation(Adapter, Process->hRootPageTable);
-        Process->hRootPageTable = NULL;
-    }
+    /* Free the software page tables (root included). */
+    ExAcquireFastMutex(&Process->GpuVaLock);
+    GpuVaFreePageTables(Process);
+    ExReleaseFastMutex(&Process->GpuVaLock);
 
     /* Call the miniport's DxgkDdiDestroyProcess. */
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
@@ -1074,6 +1345,7 @@ DxgkGpuVaFree(
     D3DGPU_VIRTUAL_ADDRESS EndAddress;
     D3DGPU_VIRTUAL_ADDRESS ReservationBase;
     ULONGLONG ReservationSize;
+    ULONGLONG MappedBytes = 0;
     LIST_ENTRY WorkingHead;
     PLIST_ENTRY Entry;
     NTSTATUS Status;
@@ -1119,8 +1391,10 @@ DxgkGpuVaFree(
             break;
         if (Range->State == GpuVaStateMapped)
         {
-            ExReleaseFastMutex(&Process->GpuVaLock);
-            return STATUS_NOT_SUPPORTED;
+            D3DGPU_VIRTUAL_ADDRESS OverlapStart = max(Range->GpuVirtualAddress, BaseAddress);
+            D3DGPU_VIRTUAL_ADDRESS OverlapEnd = min(RangeEnd, EndAddress);
+
+            MappedBytes += OverlapEnd - OverlapStart;
         }
     }
 
@@ -1158,9 +1432,255 @@ DxgkGpuVaFree(
     }
     Process->GpuVaRangeCount = WorkingCount;
     Process->GpuVaTotalReserved -= SizeInBytes;
+    if (MappedBytes != 0)
+    {
+        GpuVaClearPteSpan(Process, BaseAddress, SizeInBytes);
+        Process->GpuVaTotalMapped -= min(MappedBytes, Process->GpuVaTotalMapped);
+    }
 
     ExReleaseFastMutex(&Process->GpuVaLock);
     DPRINT("DxgkGpuVaFree: freed at 0x%I64x\n", BaseAddress);
+    return STATUS_SUCCESS;
+}
+
+
+/*
+ * DxgkGpuVaMap
+ *
+ * Map GPU VA to an allocation's backing pages (or apply a Zero/NoAccess
+ * state mapping) by writing leaf PTEs with the CPU, per the adapter's
+ * DXGK_PAGETABLEUPDATE_CPU_VIRTUAL declaration.  The target VA is either
+ * caller-fixed (fresh space or wholly inside one existing reservation,
+ * remap over mapped pages allowed) or picked from free space.
+ * Synchronous: no paging packet, no paging fence.
+ */
+NTSTATUS
+DxgkGpuVaMap(
+    _In_ PDXGKRNL_ADAPTER       Adapter,
+    _In_ PDXGKRNL_PROCESS       Process,
+    _In_opt_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ D3DKMT_HANDLE          hAllocation,
+    _In_ ULONGLONG              AllocationOffset,
+    _In_ D3DGPU_VIRTUAL_ADDRESS BaseAddress,
+    _In_ D3DGPU_VIRTUAL_ADDRESS MinAddress,
+    _In_ D3DGPU_VIRTUAL_ADDRESS MaxAddress,
+    _In_ ULONGLONG              SizeInBytes,
+    _In_ D3DDDIGPUVIRTUALADDRESS_PROTECTION_TYPE Protection,
+    _In_ UINT64                 DriverProtection,
+    _Out_ D3DGPU_VIRTUAL_ADDRESS *OutAddress)
+{
+    D3DGPU_VIRTUAL_ADDRESS ActualAddress;
+    D3DGPU_VIRTUAL_ADDRESS ReservationBase;
+    ULONGLONG ReservationSize;
+    ULONGLONG PrevMappedBytes = 0;
+    BOOLEAN InReservation = FALSE;
+    NTSTATUS Status;
+    ULONG AuthoritativeCount;
+
+    PAGED_CODE();
+
+    DPRINT("DxgkGpuVaMap: Process=%p hAlloc=0x%x Base=0x%I64x Size=0x%I64x\n",
+           Process, hAllocation, BaseAddress, SizeInBytes);
+
+    if (Process == NULL || OutAddress == NULL || SizeInBytes == 0 ||
+        (SizeInBytes & GPUVA_PAGE_MASK) != 0 ||
+        (BaseAddress & GPUVA_PAGE_MASK) != 0 ||
+        (AllocationOffset & GPUVA_PAGE_MASK) != 0 ||
+        !GpuVaProtectionValid(Protection, FALSE))
+        return STATUS_INVALID_PARAMETER;
+    if ((Protection.Zero || Protection.NoAccess) != (Allocation == NULL))
+        return STATUS_INVALID_PARAMETER;
+    if (Adapter == NULL || !Adapter->GpuMmuCapsValid ||
+        Adapter->GpuMmuCaps.PageTableUpdateMode != DXGK_PAGETABLEUPDATE_CPU_VIRTUAL)
+        return STATUS_NOT_SUPPORTED;
+    if (Allocation != NULL && Allocation->SystemMemory == NULL)
+        return STATUS_NOT_SUPPORTED;
+
+    *OutAddress = 0;
+    if (BaseAddress != 0)
+    {
+        if (BaseAddress < GPUVA_START_ADDRESS ||
+            BaseAddress >= GPUVA_DEFAULT_SPACE_SIZE ||
+            SizeInBytes > GPUVA_DEFAULT_SPACE_SIZE - BaseAddress)
+            return STATUS_INVALID_PARAMETER;
+    }
+    else
+    {
+        if ((MinAddress & GPUVA_PAGE_MASK) != 0 || (MaxAddress & GPUVA_PAGE_MASK) != 0)
+            return STATUS_INVALID_PARAMETER;
+        if (MinAddress == 0)
+            MinAddress = GPUVA_START_ADDRESS;
+        if (MaxAddress == 0 || MaxAddress > GPUVA_DEFAULT_SPACE_SIZE)
+            MaxAddress = GPUVA_DEFAULT_SPACE_SIZE;
+        MinAddress = max(MinAddress, GPUVA_START_ADDRESS);
+        if (MinAddress >= MaxAddress || SizeInBytes > MaxAddress - MinAddress)
+            return STATUS_INVALID_PARAMETER;
+    }
+
+    ExAcquireFastMutex(&Process->GpuVaLock);
+
+    if (!GpuVaCountList(&Process->GpuVaRangeList, GPUVA_MAX_PROCESS_RANGES, &AuthoritativeCount) || AuthoritativeCount != Process->GpuVaRangeCount)
+    {
+        ExReleaseFastMutex(&Process->GpuVaLock);
+        return STATUS_INTERNAL_ERROR;
+    }
+    if ((ULONGLONG)AuthoritativeCount * 2ULL + 3ULL > GPUVA_MAX_TRANSIENT_RANGES)
+    {
+        ExReleaseFastMutex(&Process->GpuVaLock);
+        return STATUS_QUOTA_EXCEEDED;
+    }
+
+    Status = GpuVaEnsureRootPageTable(Process);
+    if (!NT_SUCCESS(Status))
+    {
+        ExReleaseFastMutex(&Process->GpuVaLock);
+        return Status;
+    }
+
+    if (BaseAddress != 0)
+    {
+        ActualAddress = BaseAddress;
+        if (GpuVaGetReservationForRange(&Process->GpuVaRangeList, ActualAddress, SizeInBytes, &ReservationBase, &ReservationSize))
+        {
+            InReservation = TRUE;
+        }
+        else if (GpuVaFindOverlapping(Process, ActualAddress, SizeInBytes) != NULL)
+        {
+            ExReleaseFastMutex(&Process->GpuVaLock);
+            return STATUS_CONFLICTING_ADDRESSES;
+        }
+    }
+    else
+    {
+        ActualAddress = GpuVaFindFreeRegion(Process, MinAddress, MaxAddress, SizeInBytes);
+        if (ActualAddress == 0)
+        {
+            ExReleaseFastMutex(&Process->GpuVaLock);
+            return STATUS_NO_MEMORY;
+        }
+    }
+
+    if (!InReservation)
+    {
+        PDXGKRNL_GPUVA_RANGE Range;
+
+        if (Process->GpuVaRangeCount >= GPUVA_MAX_PROCESS_RANGES)
+        {
+            ExReleaseFastMutex(&Process->GpuVaLock);
+            return STATUS_QUOTA_EXCEEDED;
+        }
+        Range = GpuVaAllocRange();
+        if (Range == NULL)
+        {
+            ExReleaseFastMutex(&Process->GpuVaLock);
+            return STATUS_NO_MEMORY;
+        }
+
+        Status = GpuVaWritePteSpan(Process, ActualAddress, SizeInBytes, Allocation, AllocationOffset, Protection);
+        if (!NT_SUCCESS(Status))
+        {
+            GpuVaFreeRange(Range);
+            ExReleaseFastMutex(&Process->GpuVaLock);
+            return Status;
+        }
+
+        Range->GpuVirtualAddress = ActualAddress;
+        Range->SizeInBytes       = SizeInBytes;
+        Range->State             = (Allocation != NULL) ? GpuVaStateMapped : GpuVaStateReserved;
+        Range->hAllocation       = (Allocation != NULL) ? (HANDLE)(ULONG_PTR)hAllocation : NULL;
+        Range->AllocationOffset  = (Allocation != NULL) ? AllocationOffset : 0;
+        Range->Protection        = Protection;
+        Range->DriverProtection  = DriverProtection;
+        Range->ReservationBase   = ActualAddress;
+        Range->ReservationSize   = SizeInBytes;
+
+        GpuVaInsertRange(Process, Range);
+        Process->GpuVaRangeCount++;
+        Process->GpuVaTotalReserved += SizeInBytes;
+        if (Allocation != NULL)
+            Process->GpuVaTotalMapped += SizeInBytes;
+    }
+    else
+    {
+        LIST_ENTRY WorkingHead;
+        LIST_ENTRY ReplacementHead;
+        PDXGKRNL_GPUVA_RANGE Replacement;
+        PLIST_ENTRY Entry;
+        ULONG WorkingCount;
+        D3DGPU_VIRTUAL_ADDRESS SpanEnd = ActualAddress + SizeInBytes;
+
+        for (Entry = Process->GpuVaRangeList.Flink; Entry != &Process->GpuVaRangeList; Entry = Entry->Flink)
+        {
+            PDXGKRNL_GPUVA_RANGE Range = CONTAINING_RECORD(Entry, DXGKRNL_GPUVA_RANGE, RangeListEntry);
+            D3DGPU_VIRTUAL_ADDRESS RangeEnd;
+
+            if (!GpuVaGetRangeEnd(Range->GpuVirtualAddress, Range->SizeInBytes, &RangeEnd))
+                continue;
+            if (RangeEnd <= ActualAddress)
+                continue;
+            if (Range->GpuVirtualAddress >= SpanEnd)
+                break;
+            if (Range->State == GpuVaStateMapped)
+                PrevMappedBytes += min(RangeEnd, SpanEnd) - max(Range->GpuVirtualAddress, ActualAddress);
+        }
+
+        Replacement = GpuVaAllocRange();
+        if (Replacement == NULL)
+        {
+            ExReleaseFastMutex(&Process->GpuVaLock);
+            return STATUS_NO_MEMORY;
+        }
+        Replacement->GpuVirtualAddress = ActualAddress;
+        Replacement->SizeInBytes       = SizeInBytes;
+        Replacement->State             = (Allocation != NULL) ? GpuVaStateMapped : GpuVaStateReserved;
+        Replacement->hAllocation       = (Allocation != NULL) ? (HANDLE)(ULONG_PTR)hAllocation : NULL;
+        Replacement->AllocationOffset  = (Allocation != NULL) ? AllocationOffset : 0;
+        Replacement->Protection        = Protection;
+        Replacement->DriverProtection  = DriverProtection;
+        Replacement->ReservationBase   = ReservationBase;
+        Replacement->ReservationSize   = ReservationSize;
+
+        Status = GpuVaCloneList(&Process->GpuVaRangeList, &WorkingHead);
+        if (!NT_SUCCESS(Status))
+        {
+            GpuVaFreeRange(Replacement);
+            ExReleaseFastMutex(&Process->GpuVaLock);
+            return Status;
+        }
+
+        InitializeListHead(&ReplacementHead);
+        InsertTailList(&ReplacementHead, &Replacement->RangeListEntry);
+        Status = GpuVaReplaceSpan(&WorkingHead, ActualAddress, SizeInBytes, &ReplacementHead);
+        GpuVaFreeList(&ReplacementHead);
+        if (NT_SUCCESS(Status) && !GpuVaCountList(&WorkingHead, GPUVA_MAX_PROCESS_RANGES, &WorkingCount))
+            Status = STATUS_QUOTA_EXCEEDED;
+        if (NT_SUCCESS(Status))
+            Status = GpuVaWritePteSpan(Process, ActualAddress, SizeInBytes, Allocation, AllocationOffset, Protection);
+        if (!NT_SUCCESS(Status))
+        {
+            GpuVaFreeList(&WorkingHead);
+            ExReleaseFastMutex(&Process->GpuVaLock);
+            return Status;
+        }
+
+        GpuVaFreeList(&Process->GpuVaRangeList);
+        while (!IsListEmpty(&WorkingHead))
+        {
+            PDXGKRNL_GPUVA_RANGE Range = CONTAINING_RECORD(RemoveHeadList(&WorkingHead), DXGKRNL_GPUVA_RANGE, RangeListEntry);
+
+            InitializeListHead(&Range->RangeListEntry);
+            InsertTailList(&Process->GpuVaRangeList, &Range->RangeListEntry);
+        }
+        Process->GpuVaRangeCount = WorkingCount;
+        Process->GpuVaTotalMapped -= min(PrevMappedBytes, Process->GpuVaTotalMapped);
+        if (Allocation != NULL)
+            Process->GpuVaTotalMapped += SizeInBytes;
+    }
+
+    ExReleaseFastMutex(&Process->GpuVaLock);
+
+    *OutAddress = ActualAddress;
+    DPRINT("DxgkGpuVaMap: mapped at 0x%I64x size=0x%I64x\n", ActualAddress, SizeInBytes);
     return STATUS_SUCCESS;
 }
 

@@ -511,7 +511,7 @@ SoftGpuDdiGetNodeMetadata(
     RtlZeroMemory(GetNodeMetadata, sizeof(*GetNodeMetadata));
     GetNodeMetadata->EngineType = DXGK_ENGINE_TYPE_3D;
     RtlCopyMemory(GetNodeMetadata->FriendlyName, L"ReactOS software GPU", sizeof(L"ReactOS software GPU"));
-    GetNodeMetadata->GpuMmuSupported = FALSE;
+    GetNodeMetadata->GpuMmuSupported = TRUE;
     GetNodeMetadata->IoMmuSupported = FALSE;
     return STATUS_SUCCESS;
 }
@@ -587,6 +587,33 @@ SoftGpuDdiQueryAdapterInfo(
                           pQueryAdapterInfo->OutputDataSize);
         }
         return STATUS_SUCCESS;
+
+    case DXGKQAITYPE_GPUMMUCAPS:
+    {
+        /*
+         * GPU MMU declaration: dxgkrnl owns 4-level software page tables
+         * over a 48-bit VA space and writes the PTEs with the CPU
+         * (DXGK_PAGETABLEUPDATE_CPU_VIRTUAL).  System memory is coherent,
+         * and the PTE format carries read-only/no-execute/zero bits.
+         */
+        DXGK_GPUMMUCAPS *GpuMmuCaps;
+
+        if (pQueryAdapterInfo->pOutputData == NULL)
+            return STATUS_INVALID_PARAMETER;
+        if (pQueryAdapterInfo->OutputDataSize < sizeof(DXGK_GPUMMUCAPS))
+            return STATUS_BUFFER_TOO_SMALL;
+
+        GpuMmuCaps = (DXGK_GPUMMUCAPS *)pQueryAdapterInfo->pOutputData;
+        RtlZeroMemory(GpuMmuCaps, sizeof(*GpuMmuCaps));
+        GpuMmuCaps->ReadOnlyMemorySupported = 1;
+        GpuMmuCaps->NoExecuteMemorySupported = 1;
+        GpuMmuCaps->ZeroInPteSupported = 1;
+        GpuMmuCaps->CacheCoherentMemorySupported = 1;
+        GpuMmuCaps->PageTableUpdateMode = DXGK_PAGETABLEUPDATE_CPU_VIRTUAL;
+        GpuMmuCaps->VirtualAddressBitCount = 48;
+        GpuMmuCaps->PageTableLevelCount = 4;
+        return STATUS_SUCCESS;
+    }
 
     case DXGKQAITYPE_DRIVERCAPS:
         /*
