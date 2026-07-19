@@ -23,6 +23,12 @@ target_link_libraries(reshub_apitest ${PSEH_LIB})
 add_importlibs(reshub_apitest msvcrt kernel32)
 add_rostests_file(TARGET reshub_apitest)
 
+add_executable(hidusage_haptics_apitest hidusage_haptics.c)
+set_module_type(hidusage_haptics_apitest win32cui)
+target_link_libraries(hidusage_haptics_apitest ${PSEH_LIB})
+add_importlibs(hidusage_haptics_apitest msvcrt kernel32)
+add_rostests_file(TARGET hidusage_haptics_apitest)
+
 add_executable(winuser_input_apitest winuser_input.c)
 target_compile_definitions(winuser_input_apitest PRIVATE NTDDI_VERSION=NTDDI_WIN11_GE)
 set_module_type(winuser_input_apitest win32cui)
