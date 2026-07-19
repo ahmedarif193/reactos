@@ -58,7 +58,14 @@ typedef struct _HIDI2C_DEVICE_EXTENSION
     KAFFINITY InterruptAffinity;
     KINTERRUPT_MODE InterruptMode;
     BOOLEAN UsesReportIds;
-    FAST_MUTEX IoMutex;
+    /* Serializes SPB traffic. Deliberately not a fast mutex: holding one
+       raises to APC_LEVEL, and the resource hub dispatch below the Zw*File
+       calls enforces PASSIVE_LEVEL, so a fast mutex here made every SPB
+       transfer fail with STATUS_INVALID_DEVICE_STATE. A signaled
+       synchronization event is a passive-level mutex without the IRQL
+       side effect. */
+    KEVENT IoLock;
+    KDPC InputReadyDpc;
     IO_CSQ ReadCsq;
     KSPIN_LOCK ReadQueueLock;
     LIST_ENTRY ReadQueue;

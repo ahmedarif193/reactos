@@ -48,6 +48,18 @@ HalEnableSystemInterrupt(
 /* HID-over-I2C 1.0 TIMEOUT_HostInitiatedReset. */
 #define HIDI2C_RESET_TIMEOUT_100NS (5ULL * 1000 * 1000 * 10)
 
+/* Linux i2c-hid sleeps 60 ms between SET_POWER(ON) and RESET (its source
+   notes the Windows driver also waits before resetting); ELAN parts drop a
+   RESET sent into that window and the acknowledgement never arrives. */
+#define HIDI2C_POWER_ON_DELAY_MS 60
+
+/* The SPB controller is a sibling PnP device with no start-order guarantee
+   relative to this ACPI node; the resource hub binds lazily and reports
+   STATUS_DEVICE_NOT_READY until the controller has registered and started.
+   40 x 250 ms bounds the wait to 10 seconds. */
+#define HIDI2C_CONTROLLER_WAIT_ATTEMPTS 40
+#define HIDI2C_CONTROLLER_WAIT_INTERVAL_MS 250
+
 static const UCHAR Hidi2cDsmGuid[16] =
 {
     0xF7, 0xF6, 0xDF, 0x3C, 0x67, 0x42, 0x55, 0x45,
@@ -96,6 +108,22 @@ Hidi2cDelayMilliseconds(
 
     Interval.QuadPart = -(LONGLONG)Milliseconds * 10000;
     KeDelayExecutionThread(KernelMode, FALSE, &Interval);
+}
+
+static
+VOID
+Hidi2cAcquireIoLock(
+    _Inout_ PHIDI2C_DEVICE_EXTENSION DeviceExtension)
+{
+    KeWaitForSingleObject(&DeviceExtension->IoLock, Executive, KernelMode, FALSE, NULL);
+}
+
+static
+VOID
+Hidi2cReleaseIoLock(
+    _Inout_ PHIDI2C_DEVICE_EXTENSION DeviceExtension)
+{
+    KeSetEvent(&DeviceExtension->IoLock, IO_NO_INCREMENT, FALSE);
 }
 
 static
@@ -228,14 +256,14 @@ Hidi2cReadRegister(
     NTSTATUS Status;
 
     Hidi2cWriteUshort(RegisterBuffer, Register);
-    ExAcquireFastMutex(&DeviceExtension->IoMutex);
+    Hidi2cAcquireIoLock(DeviceExtension);
     Status = Hidi2cSpbSequence(DeviceExtension,
                                RegisterBuffer,
                                sizeof(RegisterBuffer),
                                Buffer,
                                Length,
                                NULL);
-    ExReleaseFastMutex(&DeviceExtension->IoMutex);
+    Hidi2cReleaseIoLock(DeviceExtension);
     return Status;
 }
 
@@ -317,19 +345,41 @@ Hidi2cEvaluateDescriptorRegister(
         Status = IoStatusBlock.Status;
     }
     if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("hidi2c: HID-I2C _DSM evaluation failed (0x%08lx)\n", Status);
         goto Exit;
+    }
 
     if (OutputBuffer->Signature != ACPI_EVAL_OUTPUT_BUFFER_SIGNATURE ||
-        OutputBuffer->Count < 1 ||
-        OutputBuffer->Argument[0].Type != ACPI_METHOD_ARGUMENT_INTEGER)
+        OutputBuffer->Count < 1)
     {
+        DPRINT1("hidi2c: _DSM returned no usable argument\n");
         Status = STATUS_ACPI_INVALID_DATA;
         goto Exit;
     }
 
-    *DescriptorRegister = (USHORT)OutputBuffer->Argument[0].Argument;
+    Argument = &OutputBuffer->Argument[0];
+    if (Argument->Type == ACPI_METHOD_ARGUMENT_INTEGER)
+    {
+        *DescriptorRegister = (USHORT)Argument->Argument;
+    }
+    else if (Argument->Type == ACPI_METHOD_ARGUMENT_BUFFER && Argument->DataLength >= sizeof(USHORT))
+    {
+        /* Firmware in the wild returns the register address as a small
+           little-endian buffer instead of an integer. */
+        *DescriptorRegister = Hidi2cReadUshort(Argument->Data);
+    }
+    else
+    {
+        DPRINT1("hidi2c: _DSM result type %u length %u unsupported\n", Argument->Type, Argument->DataLength);
+        Status = STATUS_ACPI_INVALID_DATA;
+        goto Exit;
+    }
+
     Status = (*DescriptorRegister != 0) ?
              STATUS_SUCCESS : STATUS_DEVICE_CONFIGURATION_ERROR;
+    if (Status == STATUS_DEVICE_CONFIGURATION_ERROR)
+        DPRINT1("hidi2c: _DSM returned HID descriptor register 0\n");
 
 Exit:
     ExFreePoolWithTag(OutputBuffer, HIDI2C_TAG);
@@ -382,6 +432,24 @@ Hidi2cFindResources(
 }
 
 static
+VOID
+NTAPI
+Hidi2cInputReadyDpc(
+    _In_ PKDPC Dpc,
+    _In_opt_ PVOID DeferredContext,
+    _In_opt_ PVOID SystemArgument1,
+    _In_opt_ PVOID SystemArgument2)
+{
+    PHIDI2C_DEVICE_EXTENSION DeviceExtension = DeferredContext;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    KeSetEvent(&DeviceExtension->InputReadyEvent, IO_NO_INCREMENT, FALSE);
+}
+
+static
 BOOLEAN
 NTAPI
 Hidi2cInterruptService(
@@ -400,6 +468,8 @@ Hidi2cInterruptService(
          * HID-I2C uses a level interrupt which is cleared only by the SPB
          * read. Mask an exclusive line until the passive worker has drained
          * one report, matching threaded/one-shot GPIO interrupt semantics.
+         * The worker wakeup goes through a DPC because KeSetEvent is not
+         * legal above DISPATCH_LEVEL.
          */
         if (DeviceExtension->InterruptMode == LevelSensitive)
         {
@@ -407,9 +477,7 @@ Hidi2cInterruptService(
                                       DeviceExtension->InterruptIrql);
             InterlockedExchange(&DeviceExtension->InterruptMasked, TRUE);
         }
-        KeSetEvent(&DeviceExtension->InputReadyEvent,
-                   IO_NO_INCREMENT,
-                   FALSE);
+        KeInsertQueueDpc(&DeviceExtension->InputReadyDpc, NULL, NULL);
     }
     return TRUE;
 }
@@ -450,7 +518,10 @@ Hidi2cConnectInterrupt(
                                 DeviceExtension->InterruptAffinity,
                                 FALSE);
     if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("hidi2c: IoConnectInterrupt on vector 0x%lx failed (0x%08lx)\n", DeviceExtension->InterruptVector, Status);
         DeviceExtension->InterruptObject = NULL;
+    }
     return Status;
 }
 
@@ -459,6 +530,8 @@ NTSTATUS
 Hidi2cFinishInterrupt(
     _Inout_ PHIDI2C_DEVICE_EXTENSION DeviceExtension)
 {
+    ULONG Attempt;
+
     if (DeviceExtension->InterruptObject == NULL ||
         InterlockedExchange(&DeviceExtension->InterruptPending, FALSE) == FALSE)
     {
@@ -467,14 +540,22 @@ Hidi2cFinishInterrupt(
 
     KeClearEvent(&DeviceExtension->InputReadyEvent);
     if (!DeviceExtension->StopThread &&
-        InterlockedExchange(&DeviceExtension->InterruptMasked, FALSE) != FALSE &&
-        !HalEnableSystemInterrupt(DeviceExtension->InterruptVector,
-                                  DeviceExtension->InterruptIrql,
-                                  DeviceExtension->InterruptMode))
+        InterlockedExchange(&DeviceExtension->InterruptMasked, FALSE) != FALSE)
     {
-        DPRINT1("hidi2c: failed to re-enable interrupt vector %lu\n",
-                DeviceExtension->InterruptVector);
-        return STATUS_DEVICE_HARDWARE_ERROR;
+        /* Callers run at PASSIVE_LEVEL, so a brief retry is allowed. A
+           permanent failure here would otherwise kill the input thread
+           and leave the device dead until a restart. */
+        for (Attempt = 0; ; Attempt++)
+        {
+            if (HalEnableSystemInterrupt(DeviceExtension->InterruptVector, DeviceExtension->InterruptIrql, DeviceExtension->InterruptMode))
+                break;
+            if (Attempt >= 3)
+            {
+                DPRINT1("hidi2c: failed to re-enable interrupt vector %lu\n", DeviceExtension->InterruptVector);
+                return STATUS_DEVICE_HARDWARE_ERROR;
+            }
+            Hidi2cDelayMilliseconds(100);
+        }
     }
     return STATUS_SUCCESS;
 }
@@ -546,7 +627,7 @@ Hidi2cPowerCommand(
     ULONG Length;
     NTSTATUS Status;
 
-    ExAcquireFastMutex(&DeviceExtension->IoMutex);
+    Hidi2cAcquireIoLock(DeviceExtension);
     Hidi2cWriteUshort(DeviceExtension->CommandBuffer,
                       DeviceExtension->I2cDescriptor.CommandRegister);
     Length = 2 + Hidi2cEncodeCommand(DeviceExtension->CommandBuffer + 2,
@@ -556,7 +637,7 @@ Hidi2cPowerCommand(
     Status = Hidi2cSpbWrite(DeviceExtension,
                             DeviceExtension->CommandBuffer,
                             Length);
-    ExReleaseFastMutex(&DeviceExtension->IoMutex);
+    Hidi2cReleaseIoLock(DeviceExtension);
     return Status;
 }
 
@@ -571,7 +652,7 @@ Hidi2cResetDevice(
     USHORT ResponseLength;
     NTSTATUS FinishStatus, Status;
 
-    ExAcquireFastMutex(&DeviceExtension->IoMutex);
+    Hidi2cAcquireIoLock(DeviceExtension);
     Hidi2cWriteUshort(DeviceExtension->CommandBuffer,
                       DeviceExtension->I2cDescriptor.CommandRegister);
     Length = 2 + Hidi2cEncodeCommand(DeviceExtension->CommandBuffer + 2,
@@ -581,7 +662,7 @@ Hidi2cResetDevice(
     Status = Hidi2cSpbWrite(DeviceExtension,
                             DeviceExtension->CommandBuffer,
                             Length);
-    ExReleaseFastMutex(&DeviceExtension->IoMutex);
+    Hidi2cReleaseIoLock(DeviceExtension);
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -611,11 +692,11 @@ Hidi2cResetDevice(
             }
         }
 
-        ExAcquireFastMutex(&DeviceExtension->IoMutex);
+        Hidi2cAcquireIoLock(DeviceExtension);
         Status = Hidi2cSpbRead(DeviceExtension,
                                DeviceExtension->InputBuffer,
                                DeviceExtension->I2cDescriptor.MaxInputLength);
-        ExReleaseFastMutex(&DeviceExtension->IoMutex);
+        Hidi2cReleaseIoLock(DeviceExtension);
         FinishStatus = Hidi2cFinishInterrupt(DeviceExtension);
         if (!NT_SUCCESS(Status))
             return Status;
@@ -629,14 +710,24 @@ Hidi2cResetDevice(
             ResponseLength < sizeof(USHORT) ||
             ResponseLength > DeviceExtension->I2cDescriptor.MaxInputLength)
         {
-            return STATUS_DEVICE_PROTOCOL_ERROR;
+            /* ELAN parts raise spurious interrupts in the reset window and
+               the input register then reads as garbage (0xFFFF). Linux
+               keys I2C_HID_QUIRK_BOGUS_IRQ on ELAN for exactly this and
+               ignores the read; treat it as noise and keep waiting. */
+            DPRINT1("hidi2c: ignoring bogus input length 0x%04x during reset\n", ResponseLength);
+            continue;
         }
 
         /* The protocol permits an input report before the reset acknowledgement. */
     }
 
-    DPRINT1("hidi2c: reset acknowledgement timed out\n");
-    return STATUS_IO_TIMEOUT;
+    /* Linux warns and continues when the reset acknowledgement never
+       arrives (its timeout is 1 s; ELAN parts additionally carry the
+       NO_WAKEUP_AFTER_RESET quirk). The report-descriptor read that
+       follows validates the device either way, so a missing ack is
+       reported but not fatal here either. */
+    DPRINT1("hidi2c: reset acknowledgement timed out, continuing\n");
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS
@@ -795,7 +886,8 @@ NTSTATUS
 Hidi2cInitializeTransport(
     _Inout_ PHIDI2C_DEVICE_EXTENSION DeviceExtension)
 {
-    ExInitializeFastMutex(&DeviceExtension->IoMutex);
+    KeInitializeEvent(&DeviceExtension->IoLock, SynchronizationEvent, TRUE);
+    KeInitializeDpc(&DeviceExtension->InputReadyDpc, Hidi2cInputReadyDpc, DeviceExtension);
     KeInitializeSpinLock(&DeviceExtension->ReadQueueLock);
     InitializeListHead(&DeviceExtension->ReadQueue);
     KeInitializeEvent(&DeviceExtension->ReadQueueEvent,
@@ -924,6 +1016,7 @@ Hidi2cInputThread(
     PIO_STACK_LOCATION IrpStack;
     PIRP Irp;
     ULONG OutputLength, PayloadLength;
+    ULONG FailureCount = 0;
     UCHAR ReportId;
     USHORT ResponseLength;
     NTSTATUS Status;
@@ -961,11 +1054,11 @@ Hidi2cInputThread(
             continue;
         }
 
-        ExAcquireFastMutex(&DeviceExtension->IoMutex);
+        Hidi2cAcquireIoLock(DeviceExtension);
         Status = Hidi2cSpbRead(DeviceExtension,
                                DeviceExtension->InputBuffer,
                                DeviceExtension->I2cDescriptor.MaxInputLength);
-        ExReleaseFastMutex(&DeviceExtension->IoMutex);
+        Hidi2cReleaseIoLock(DeviceExtension);
         if (!NT_SUCCESS(Hidi2cFinishInterrupt(DeviceExtension)))
         {
             InterlockedExchange(&DeviceExtension->StopThread, TRUE);
@@ -973,6 +1066,10 @@ Hidi2cInputThread(
         }
         if (!NT_SUCCESS(Status))
         {
+            /* Rate-limited: a persistently failing bus would otherwise
+               stall input in complete silence. */
+            if ((FailureCount++ & 63) == 0)
+                DPRINT1("hidi2c: input report read failing (0x%08lx)\n", Status);
             Hidi2cDelayMilliseconds(8);
             continue;
         }
@@ -982,9 +1079,12 @@ Hidi2cInputThread(
             ResponseLength < sizeof(USHORT) ||
             ResponseLength > DeviceExtension->I2cDescriptor.MaxInputLength)
         {
+            if ((FailureCount++ & 63) == 0)
+                DPRINT1("hidi2c: discarding malformed input length 0x%04x\n", ResponseLength);
             Hidi2cDelayMilliseconds(8);
             continue;
         }
+        FailureCount = 0;
 
         PayloadLength = ResponseLength - sizeof(USHORT);
         if (PayloadLength == 0)
@@ -1076,7 +1176,7 @@ Hidi2cGetReport(
     USHORT ResponseLength;
     NTSTATUS Status;
 
-    ExAcquireFastMutex(&DeviceExtension->IoMutex);
+    Hidi2cAcquireIoLock(DeviceExtension);
     Hidi2cWriteUshort(DeviceExtension->CommandBuffer,
                       DeviceExtension->I2cDescriptor.CommandRegister);
     CommandLength = 2 + Hidi2cEncodeCommand(
@@ -1118,7 +1218,7 @@ Hidi2cGetReport(
             XferPacket->reportBufferLen = PayloadLength;
         }
     }
-    ExReleaseFastMutex(&DeviceExtension->IoMutex);
+    Hidi2cReleaseIoLock(DeviceExtension);
     return Status;
 }
 
@@ -1139,7 +1239,7 @@ Hidi2cSetReport(
         return STATUS_INVALID_BUFFER_SIZE;
     }
 
-    ExAcquireFastMutex(&DeviceExtension->IoMutex);
+    Hidi2cAcquireIoLock(DeviceExtension);
     if (UseCommandRegister)
     {
         Hidi2cWriteUshort(DeviceExtension->CommandBuffer,
@@ -1169,7 +1269,7 @@ Hidi2cSetReport(
     Status = Hidi2cSpbWrite(DeviceExtension,
                             DeviceExtension->CommandBuffer,
                             Length);
-    ExReleaseFastMutex(&DeviceExtension->IoMutex);
+    Hidi2cReleaseIoLock(DeviceExtension);
     return Status;
 }
 
@@ -1252,7 +1352,7 @@ Hidi2cStartDevice(
     PHIDI2C_DEVICE_EXTENSION DeviceExtension = HidExtension->MiniDeviceExtension;
     PCM_PARTIAL_RESOURCE_DESCRIPTOR InterruptResource;
     USHORT DescriptorRegister;
-    ULONG BufferSize;
+    ULONG BufferSize, Attempt;
     NTSTATUS Status;
 
     InterlockedExchange(&DeviceExtension->StopThread, FALSE);
@@ -1261,7 +1361,10 @@ Hidi2cStartDevice(
                                  &DeviceExtension->ConnectionId,
                                  &InterruptResource);
     if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("hidi2c: connection/interrupt resources missing (0x%08lx)\n", Status);
         return Status;
+    }
 
     Status = Hidi2cEvaluateDescriptorRegister(DeviceObject,
                                                &DescriptorRegister);
@@ -1270,18 +1373,32 @@ Hidi2cStartDevice(
 
     Status = Hidi2cOpenConnection(DeviceExtension);
     if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("hidi2c: Resource Hub connection open failed (0x%08lx)\n", Status);
         return Status;
+    }
 
-    Status = Hidi2cReadRegister(DeviceExtension,
-                                DescriptorRegister,
-                                &DeviceExtension->I2cDescriptor,
-                                sizeof(DeviceExtension->I2cDescriptor));
+    for (Attempt = 0; ; Attempt++)
+    {
+        Status = Hidi2cReadRegister(DeviceExtension, DescriptorRegister, &DeviceExtension->I2cDescriptor, sizeof(DeviceExtension->I2cDescriptor));
+        if (Status != STATUS_DEVICE_NOT_READY || Attempt >= HIDI2C_CONTROLLER_WAIT_ATTEMPTS)
+            break;
+        if (Attempt == 0)
+            DPRINT1("hidi2c: SPB controller not ready yet, waiting for it to start\n");
+        Hidi2cDelayMilliseconds(HIDI2C_CONTROLLER_WAIT_INTERVAL_MS);
+    }
     if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("hidi2c: HID descriptor read failed (0x%08lx)\n", Status);
         goto Failure;
+    }
 
     Status = Hidi2cValidateDeviceDescriptor(&DeviceExtension->I2cDescriptor);
     if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("hidi2c: HID-I2C device descriptor rejected (0x%08lx)\n", Status);
         goto Failure;
+    }
 
     BufferSize = max((ULONG)DeviceExtension->I2cDescriptor.MaxInputLength,
                      (ULONG)DeviceExtension->I2cDescriptor.MaxOutputLength);
@@ -1312,12 +1429,20 @@ Hidi2cStartDevice(
 
     Status = Hidi2cPowerCommand(DeviceExtension, HIDI2C_POWER_ON);
     if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("hidi2c: SET_POWER(ON) failed (0x%08lx)\n", Status);
         goto Failure;
+    }
     InterlockedExchange(&DeviceExtension->Powered, TRUE);
+
+    Hidi2cDelayMilliseconds(HIDI2C_POWER_ON_DELAY_MS);
 
     Status = Hidi2cResetDevice(DeviceExtension);
     if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("hidi2c: device reset failed (0x%08lx)\n", Status);
         goto Failure;
+    }
 
     Status = Hidi2cReadRegister(
                  DeviceExtension,
@@ -1325,7 +1450,10 @@ Hidi2cStartDevice(
                  DeviceExtension->ReportDescriptor,
                  DeviceExtension->I2cDescriptor.ReportDescriptorLength);
     if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("hidi2c: report descriptor read failed (0x%08lx)\n", Status);
         goto Failure;
+    }
 
     DeviceExtension->UsesReportIds = Hidi2cDescriptorUsesReportIds(
                                          DeviceExtension->ReportDescriptor,
