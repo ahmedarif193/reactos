@@ -12,11 +12,10 @@ remove_definitions(-DWINVER=${REACTOS_TARGET_NT})
 add_definitions(-D_WIN32_WINNT=0x0601 -DWINVER=0x0601)
 add_definitions(-DNTDDI_VERSION=0x06010000)    # NTDDI_WIN7
 
-# dxgkrnl implements the WDDM 2.x DDI surface (ReclaimAllocations, GPU virtual
-# addressing, SetVidPnSourceOwner1, ...). The global default DXGKDDI version
-# (0x1052) gates those types out, so raise it to WDDM 2.0.
+# Compile the shared graphics stack against the WDDM 3.1 header surface so the
+# port driver can report its completed capability tier without layout drift.
 remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
-add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x5023)
+add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x10004)
 
 list(APPEND SOURCE
     dxgkrnl.c

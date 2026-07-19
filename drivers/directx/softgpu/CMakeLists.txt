@@ -23,10 +23,10 @@ remove_definitions(-DWINVER=${REACTOS_TARGET_NT})
 add_definitions(-D_WIN32_WINNT=0x0601 -DWINVER=0x0601)
 add_definitions(-DNTDDI_VERSION=0x06010000)    # NTDDI_WIN7
 
-# The global default DXGKDDI version (0x1052) gates out the WDDM 2.0 ABI fields.
-# Raise it to WDDM 2.0 to match dxgkrnl; this does not claim a GPU MMU.
+# Match dxgkrnl's WDDM 3.1 header surface. Capability reporting still reflects
+# the paths the software miniport actually implements.
 remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
-add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x5023)
+add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x10004)
 
 list(APPEND SOURCE
     softgpu.c

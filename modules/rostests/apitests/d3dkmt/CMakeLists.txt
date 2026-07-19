@@ -1,11 +1,11 @@
-# WDDM D3DKMT test surface: pin struct layouts to WDDM 3.0 (0xF003, the header
-# maximum) so the ENTIRE WDDM 2.x/3.0 structure surface is visible -- paging
+# WDDM D3DKMT test surface: pin struct layouts to WDDM 3.1 (0x10004) so the
+# WDDM 2.x/3.1 structure surface is visible -- paging
 # queues & GPU virtual addressing (2.0), HW queues (2.2), EnumAdapters3 (2.7),
 # etc. -- and so tests can compare the visible Windows 11-era surface. Entry
 # points are still resolved dynamically via GetProcAddress, so the same binary
 # degrades gracefully on hosts (e.g. WDDM 2.0 ReactOS) that lack newer exports.
 remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
-add_definitions(-DDXGKDDI_INTERFACE_VERSION=0xF003)
+add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x10004)
 
 list(APPEND SOURCE
     d3dkmt_adapter.c
