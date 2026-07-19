@@ -265,6 +265,14 @@ typedef struct _DXGKVMM_ALLOCATION
      */
     PVOID               SystemMemory;
 
+    /*
+     * Existing-heap backing (D3DKMT_STANDARDALLOCATIONTYPE_EXISTINGHEAP):
+     * caller-owned user pages locked for the allocation's lifetime.  When
+     * non-NULL, SystemMemory is the MDL system mapping and is released by
+     * unlock/free of the MDL — never by pool free.
+     */
+    PMDL                SysMemMdl;
+
 
     /*
      * Kernel-mode CPU virtual address for CPU-visible allocations.
