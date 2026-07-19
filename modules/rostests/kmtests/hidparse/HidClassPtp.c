@@ -1,15 +1,17 @@
 /*
  * PROJECT:     ReactOS kernel-mode tests
  * LICENSE:     LGPL-2.1-or-later (https://spdx.org/licenses/LGPL-2.1-or-later)
- * PURPOSE:     HIDCLASS Precision Touchpad capability policy tests
+ * PURPOSE:     Precision Touchpad policy and input-frame tests
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
 #include <kmt_test.h>
 #include <hidpddi.h>
+#include <ntddmou.h>
 
 #include "HidP.h"
 #include "ptp.h"
+#include "../../../../drivers/hid/mouhid/ptpframe.h"
 
 #define PTP_CAPABILITIES_REPORT_ID   2
 #define PTP_CERTIFICATION_REPORT_ID  6
@@ -1357,4 +1359,162 @@ TestHidClassPtpConfiguration(VOID)
         ok_eq_hex(Status, STATUS_DEVICE_CONFIGURATION_ERROR);
         HidP_FreeCollectionDescription(&DeviceDescription);
     }
+}
+
+VOID
+TestMouHidPtpFrames(VOID)
+{
+    MOUHID_PTP_FRAME_ASSEMBLER Assembler;
+    MOUHID_PTP_FRAME_RESULT Result;
+    MOUHID_PTP_PACKET Packet;
+    MOUHID_PTP_FRAME Frame;
+
+    MouHidPtpResetFrameAssembler(&Assembler);
+
+    ok_eq_uint(MouHidPtpGetButtonFlags(
+                   0,
+                   MOUHID_PTP_BUTTON_INTEGRATED),
+               MOUSE_LEFT_BUTTON_DOWN);
+    ok_eq_uint(MouHidPtpGetButtonFlags(
+                   MOUHID_PTP_BUTTON_INTEGRATED,
+                   MOUHID_PTP_BUTTON_EXTERNAL_PRIMARY),
+               0);
+    ok_eq_uint(MouHidPtpGetButtonFlags(
+                   MOUHID_PTP_BUTTON_EXTERNAL_PRIMARY,
+                   0),
+               MOUSE_LEFT_BUTTON_UP);
+    ok_eq_uint(MouHidPtpGetButtonFlags(
+                   0,
+                   MOUHID_PTP_BUTTON_EXTERNAL_SECONDARY),
+               MOUSE_RIGHT_BUTTON_DOWN);
+
+    /* A zero-contact report is a complete empty frame, not a continuation. */
+    RtlZeroMemory(&Packet, sizeof(Packet));
+    Packet.SlotCount = 2;
+    Packet.ScanTime = 10;
+    Packet.Buttons = MOUHID_PTP_BUTTON_INTEGRATED;
+    Result = MouHidPtpAssembleFrame(&Assembler, &Packet, &Frame);
+    ok_eq_uint(Result, MouHidPtpFrameComplete);
+    ok_eq_ulong(Frame.ContactCount, 0);
+    ok_eq_uint(Frame.ScanTime, 10);
+    ok_eq_uint(Frame.Buttons, MOUHID_PTP_BUTTON_INTEGRATED);
+
+    /* Contact Count includes lifted and low-confidence contacts. */
+    RtlZeroMemory(&Packet, sizeof(Packet));
+    Packet.ContactCount = 2;
+    Packet.SlotCount = 5;
+    Packet.ScanTime = 20;
+    Packet.Contacts[0].Id = 4;
+    Packet.Contacts[0].X = 100;
+    Packet.Contacts[0].Y = 200;
+    Packet.Contacts[0].Tip = TRUE;
+    Packet.Contacts[0].Confidence = TRUE;
+    Packet.Contacts[1].Id = 7;
+    Packet.Contacts[1].X = 300;
+    Packet.Contacts[1].Y = 400;
+    Result = MouHidPtpAssembleFrame(&Assembler, &Packet, &Frame);
+    ok_eq_uint(Result, MouHidPtpFrameComplete);
+    ok_eq_ulong(Frame.ContactCount, 2);
+    ok_eq_ulong(Frame.Contacts[0].Id, 4);
+    ok(Frame.Contacts[0].Tip, "Active contact lost its tip state\n");
+    ok(Frame.Contacts[0].Confidence,
+       "Intentional contact lost its confidence state\n");
+    ok_eq_ulong(Frame.Contacts[1].Id, 7);
+    ok(!Frame.Contacts[1].Tip, "Lifted contact became active\n");
+    ok(!Frame.Contacts[1].Confidence,
+       "Low-confidence contact became confident\n");
+
+    /* Assemble a five-contact frame from three two-slot hybrid reports. */
+    RtlZeroMemory(&Packet, sizeof(Packet));
+    Packet.ContactCount = 5;
+    Packet.SlotCount = 2;
+    Packet.ScanTime = 30;
+    Packet.Buttons = MOUHID_PTP_BUTTON_EXTERNAL_PRIMARY;
+    Packet.Contacts[0].Id = 1;
+    Packet.Contacts[1].Id = 2;
+    Result = MouHidPtpAssembleFrame(&Assembler, &Packet, &Frame);
+    ok_eq_uint(Result, MouHidPtpFramePending);
+
+    RtlZeroMemory(&Packet, sizeof(Packet));
+    Packet.SlotCount = 2;
+    Packet.ScanTime = 30;
+    Packet.Contacts[0].Id = 3;
+    Packet.Contacts[1].Id = 4;
+    Result = MouHidPtpAssembleFrame(&Assembler, &Packet, &Frame);
+    ok_eq_uint(Result, MouHidPtpFramePending);
+
+    RtlZeroMemory(&Packet, sizeof(Packet));
+    Packet.SlotCount = 2;
+    Packet.ScanTime = 30;
+    Packet.Contacts[0].Id = 5;
+    Packet.Contacts[1].Id = 4; /* Unused final slot must be ignored. */
+    Result = MouHidPtpAssembleFrame(&Assembler, &Packet, &Frame);
+    ok_eq_uint(Result, MouHidPtpFrameComplete);
+    ok_eq_ulong(Frame.ContactCount, 5);
+    ok_eq_ulong(Frame.Contacts[4].Id, 5);
+    ok_eq_uint(Frame.Buttons, MOUHID_PTP_BUTTON_EXTERNAL_PRIMARY);
+    ok(!Assembler.Active, "Completed hybrid frame remained active\n");
+
+    /* Hybrid continuation reports must retain the first report's scan time. */
+    RtlZeroMemory(&Packet, sizeof(Packet));
+    Packet.ContactCount = 3;
+    Packet.SlotCount = 2;
+    Packet.ScanTime = 40;
+    Packet.Contacts[0].Id = 1;
+    Packet.Contacts[1].Id = 2;
+    Result = MouHidPtpAssembleFrame(&Assembler, &Packet, &Frame);
+    ok_eq_uint(Result, MouHidPtpFramePending);
+    Packet.ContactCount = 0;
+    Packet.ScanTime = 41;
+    Packet.Contacts[0].Id = 3;
+    Result = MouHidPtpAssembleFrame(&Assembler, &Packet, &Frame);
+    ok_eq_uint(Result, MouHidPtpFrameInvalid);
+    ok(!Assembler.Active, "Scan-time failure did not reset assembly\n");
+
+    /* A second nonzero count cannot continue an incomplete hybrid frame. */
+    RtlZeroMemory(&Packet, sizeof(Packet));
+    Packet.ContactCount = 3;
+    Packet.SlotCount = 2;
+    Packet.ScanTime = 50;
+    Packet.Contacts[0].Id = 1;
+    Packet.Contacts[1].Id = 2;
+    Result = MouHidPtpAssembleFrame(&Assembler, &Packet, &Frame);
+    ok_eq_uint(Result, MouHidPtpFramePending);
+    Packet.ContactCount = 1;
+    Packet.Contacts[0].Id = 3;
+    Result = MouHidPtpAssembleFrame(&Assembler, &Packet, &Frame);
+    ok_eq_uint(Result, MouHidPtpFrameInvalid);
+
+    /* Contact identifiers are unique within each assembled frame. */
+    RtlZeroMemory(&Packet, sizeof(Packet));
+    Packet.ContactCount = 3;
+    Packet.SlotCount = 2;
+    Packet.ScanTime = 60;
+    Packet.Contacts[0].Id = 1;
+    Packet.Contacts[1].Id = 2;
+    Result = MouHidPtpAssembleFrame(&Assembler, &Packet, &Frame);
+    ok_eq_uint(Result, MouHidPtpFramePending);
+    Packet.ContactCount = 0;
+    Packet.Contacts[0].Id = 2;
+    Result = MouHidPtpAssembleFrame(&Assembler, &Packet, &Frame);
+    ok_eq_uint(Result, MouHidPtpFrameInvalid);
+
+    RtlZeroMemory(&Packet, sizeof(Packet));
+    Packet.ContactCount = MOUHID_PTP_MAX_CONTACTS + 1;
+    Packet.SlotCount = 1;
+    Result = MouHidPtpAssembleFrame(&Assembler, &Packet, &Frame);
+    ok_eq_uint(Result, MouHidPtpFrameInvalid);
+
+    RtlZeroMemory(&Packet, sizeof(Packet));
+    Packet.ContactCount = 1;
+    Packet.SlotCount = MOUHID_PTP_MAX_CONTACTS + 1;
+    Result = MouHidPtpAssembleFrame(&Assembler, &Packet, &Frame);
+    ok_eq_uint(Result, MouHidPtpFrameInvalid);
+
+    RtlZeroMemory(&Packet, sizeof(Packet));
+    Packet.ContactCount = 1;
+    Packet.SlotCount = 1;
+    Packet.ScanTime = MAXUSHORT + 1UL;
+    Result = MouHidPtpAssembleFrame(&Assembler, &Packet, &Frame);
+    ok_eq_uint(Result, MouHidPtpFrameInvalid);
 }

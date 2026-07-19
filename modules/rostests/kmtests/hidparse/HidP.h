@@ -21,4 +21,7 @@ TestHidClassPtpConfiguration(VOID);
 VOID
 TestHidClassPtpHaptics(VOID);
 
+VOID
+TestMouHidPtpFrames(VOID);
+
 #endif /* !defined _KMTEST_HIDP_H_ */

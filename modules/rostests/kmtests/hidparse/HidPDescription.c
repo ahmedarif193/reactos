@@ -1576,6 +1576,7 @@ TestHidPDescription(
     TestHidClassPtpCapabilities();
     TestHidClassPtpConfiguration();
     TestHidClassPtpHaptics();
+    TestMouHidPtpFrames();
     TestUsageValueArrays();
     TestMultipleInputReports();
     TestConsumerAndSystemControls();

@@ -11,7 +11,7 @@
 #include <kbdmou.h>
 #include <debug.h>
 
-#define MOUHID_MAX_TOUCHPAD_CONTACTS 16
+#include "ptpframe.h"
 
 typedef struct
 {
@@ -136,10 +136,11 @@ typedef struct
     BOOLEAN DigitizerTipDown;
     BOOLEAN TouchContactActive;
     BOOLEAN ScrollActive;
-    UCHAR Reserved[3];
+    UCHAR TouchpadButtons;
+    UCHAR Reserved[2];
     USHORT FingerLinkCount;
     USHORT DigitizerLink;
-    USHORT FingerLinks[MOUHID_MAX_TOUCHPAD_CONTACTS];
+    USHORT FingerLinks[MOUHID_PTP_MAX_CONTACTS];
     ULONG PrimaryContactId;
     LONG LastTouchX;
     LONG LastTouchY;
@@ -149,6 +150,7 @@ typedef struct
     LONG LastScrollY;
     LONG ScrollRemainderX;
     LONG ScrollRemainderY;
+    MOUHID_PTP_FRAME_ASSEMBLER TouchpadFrameAssembler;
 
 } MOUHID_DEVICE_EXTENSION, *PMOUHID_DEVICE_EXTENSION;
 
