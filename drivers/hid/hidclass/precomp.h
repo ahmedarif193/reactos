@@ -86,6 +86,11 @@ typedef struct
     HIDCLASS_PTP_CAPABILITIES PrecisionTouchpad;
 
     //
+    // precision touchpad haptics capabilities
+    //
+    HIDCLASS_PTP_HAPTICS_CAPABILITIES PrecisionTouchpadHaptics;
+
+    //
     // precision touchpad configuration state
     //
     HIDCLASS_PTP_CONFIGURATION PrecisionTouchpadConfiguration;

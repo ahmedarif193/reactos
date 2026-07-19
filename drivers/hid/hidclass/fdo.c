@@ -467,6 +467,7 @@ HidClassFDO_StartDevice(
     IN PIRP Irp)
 {
     NTSTATUS Status;
+    NTSTATUS HapticsStatus;
     PHIDCLASS_FDO_EXTENSION FDODeviceExtension;
 
     //
@@ -544,6 +545,25 @@ HidClassFDO_StartDevice(
                FDODeviceExtension->PrecisionTouchpad.MaximumContactCount,
                FDODeviceExtension->PrecisionTouchpad.HasButtonType ?
                    " and reports its button type" : " with external buttons");
+
+        HapticsStatus = HidClassPtpDiscoverHaptics(
+                            &FDODeviceExtension->Common.DeviceDescription,
+                            &FDODeviceExtension->PrecisionTouchpadHaptics);
+        if (NT_SUCCESS(HapticsStatus))
+        {
+            DPRINT("[HIDCLASS] Precision Touchpad exposes%s%s%s haptic reports\n",
+                   FDODeviceExtension->PrecisionTouchpadHaptics.HasButtonPressThreshold ?
+                       " button-threshold" : "",
+                   FDODeviceExtension->PrecisionTouchpadHaptics.HasDeviceIntensity ?
+                       " device-intensity" : "",
+                   FDODeviceExtension->PrecisionTouchpadHaptics.HasHostInitiated ?
+                       " host-initiated" : "");
+        }
+        else if (HapticsStatus != STATUS_NOT_FOUND)
+        {
+            DPRINT1("[HIDCLASS] Precision Touchpad haptics discovery failed with %x\n",
+                    HapticsStatus);
+        }
 
         Status = HidClassPtpInitializeConfiguration(
                      &FDODeviceExtension->Common.DeviceDescription,

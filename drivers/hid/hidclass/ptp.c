@@ -15,6 +15,9 @@
 #define HIDCLASS_PTP_CERTIFICATION_SIZE        256
 #define HIDCLASS_PTP_MINIMUM_CONTACT_COUNT     3
 #define HIDCLASS_PTP_MAXIMUM_CONTACT_COUNT     5
+#define HIDCLASS_PTP_COLLECTION_LOGICAL        2
+#define HIDCLASS_PTP_MILLISECOND_UNIT           0x1001
+#define HIDCLASS_PTP_MILLISECOND_UNIT_EXPONENT  0x0D
 
 static
 PHIDP_COLLECTION_DESC
@@ -60,6 +63,28 @@ HidClassPtpFindFeatureReport(
 }
 
 static
+PHIDP_REPORT_IDS
+HidClassPtpFindOutputReport(
+    _In_ PHIDP_DEVICE_DESC DeviceDescription,
+    _In_ UCHAR CollectionNumber,
+    _In_ UCHAR ReportId)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < DeviceDescription->ReportIDsLength; Index++)
+    {
+        if (DeviceDescription->ReportIDs[Index].CollectionNumber == CollectionNumber &&
+            DeviceDescription->ReportIDs[Index].ReportID == ReportId &&
+            DeviceDescription->ReportIDs[Index].OutputLength != 0)
+        {
+            return &DeviceDescription->ReportIDs[Index];
+        }
+    }
+
+    return NULL;
+}
+
+static
 BOOLEAN
 HidClassPtpIsScalarCapability(
     _In_ PHIDP_VALUE_CAPS ValueCaps)
@@ -70,6 +95,366 @@ HidClassPtpIsScalarCapability(
            ValueCaps->BitSize <= sizeof(ULONG) * 8 &&
            ValueCaps->LogicalMin >= 0 &&
            ValueCaps->LogicalMax >= ValueCaps->LogicalMin;
+}
+
+static
+NTSTATUS
+HidClassPtpGetValueCapabilities(
+    _In_ PHIDP_COLLECTION_DESC Collection,
+    _In_ HIDP_REPORT_TYPE ReportType,
+    _In_ USHORT ExpectedCount,
+    _Out_ PHIDP_VALUE_CAPS *ValueCaps)
+{
+    PHIDP_VALUE_CAPS Buffer;
+    USHORT Count;
+    NTSTATUS Status;
+
+    *ValueCaps = NULL;
+    if (ExpectedCount == 0)
+        return STATUS_SUCCESS;
+
+    Buffer = ExAllocatePoolWithTag(NonPagedPool,
+                                   ExpectedCount * sizeof(*Buffer),
+                                   HIDCLASS_TAG);
+    if (Buffer == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Count = ExpectedCount;
+    Status = HidP_GetSpecificValueCaps(ReportType,
+                                       HID_USAGE_PAGE_UNDEFINED,
+                                       HIDP_LINK_COLLECTION_UNSPECIFIED,
+                                       HID_USAGE_PAGE_UNDEFINED,
+                                       Buffer,
+                                       &Count,
+                                       Collection->PreparsedData);
+    if (Status != HIDP_STATUS_SUCCESS || Count != ExpectedCount)
+    {
+        ExFreePoolWithTag(Buffer, HIDCLASS_TAG);
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    *ValueCaps = Buffer;
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+HidClassPtpGetButtonCapabilities(
+    _In_ PHIDP_COLLECTION_DESC Collection,
+    _In_ HIDP_REPORT_TYPE ReportType,
+    _In_ USHORT ExpectedCount,
+    _Out_ PHIDP_BUTTON_CAPS *ButtonCaps)
+{
+    PHIDP_BUTTON_CAPS Buffer;
+    USHORT Count;
+    NTSTATUS Status;
+
+    *ButtonCaps = NULL;
+    if (ExpectedCount == 0)
+        return STATUS_SUCCESS;
+
+    Buffer = ExAllocatePoolWithTag(NonPagedPool,
+                                   ExpectedCount * sizeof(*Buffer),
+                                   HIDCLASS_TAG);
+    if (Buffer == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Count = ExpectedCount;
+    Status = HidP_GetSpecificButtonCaps(ReportType,
+                                        HID_USAGE_PAGE_UNDEFINED,
+                                        HIDP_LINK_COLLECTION_UNSPECIFIED,
+                                        HID_USAGE_PAGE_UNDEFINED,
+                                        Buffer,
+                                        &Count,
+                                        Collection->PreparsedData);
+    if (Status != HIDP_STATUS_SUCCESS || Count != ExpectedCount)
+    {
+        ExFreePoolWithTag(Buffer, HIDCLASS_TAG);
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    *ButtonCaps = Buffer;
+    return STATUS_SUCCESS;
+}
+
+static
+BOOLEAN
+HidClassPtpCapabilityContainsUsage(
+    _In_ PHIDP_VALUE_CAPS ValueCaps,
+    _In_ USAGE UsagePage,
+    _In_ USAGE Usage)
+{
+    if (ValueCaps->UsagePage != UsagePage)
+        return FALSE;
+
+    if (ValueCaps->IsRange)
+    {
+        return Usage >= ValueCaps->Range.UsageMin &&
+               Usage <= ValueCaps->Range.UsageMax;
+    }
+
+    return ValueCaps->NotRange.Usage == Usage;
+}
+
+static
+PHIDP_VALUE_CAPS
+HidClassPtpFindValueCapability(
+    _In_reads_(ValueCapsCount) PHIDP_VALUE_CAPS ValueCaps,
+    _In_ USHORT ValueCapsCount,
+    _In_ USAGE UsagePage,
+    _In_ USAGE Usage,
+    _Out_ PULONG MatchCount)
+{
+    PHIDP_VALUE_CAPS Match = NULL;
+    ULONG Index;
+
+    *MatchCount = 0;
+    for (Index = 0; Index < ValueCapsCount; Index++)
+    {
+        if (HidClassPtpCapabilityContainsUsage(&ValueCaps[Index],
+                                               UsagePage,
+                                               Usage))
+        {
+            if (Match == NULL)
+                Match = &ValueCaps[Index];
+            (*MatchCount)++;
+        }
+    }
+
+    return Match;
+}
+
+static
+PHIDP_VALUE_CAPS
+HidClassPtpFindLinkedValueCapability(
+    _In_reads_(ValueCapsCount) PHIDP_VALUE_CAPS ValueCaps,
+    _In_ USHORT ValueCapsCount,
+    _In_ USAGE UsagePage,
+    _In_ USAGE LinkUsagePage,
+    _In_ USAGE LinkUsage,
+    _Out_ PULONG MatchCount)
+{
+    PHIDP_VALUE_CAPS Match = NULL;
+    ULONG Index;
+
+    *MatchCount = 0;
+    for (Index = 0; Index < ValueCapsCount; Index++)
+    {
+        if (ValueCaps[Index].UsagePage == UsagePage &&
+            ValueCaps[Index].LinkUsagePage == LinkUsagePage &&
+            ValueCaps[Index].LinkUsage == LinkUsage)
+        {
+            if (Match == NULL)
+                Match = &ValueCaps[Index];
+            (*MatchCount)++;
+        }
+    }
+
+    return Match;
+}
+
+static
+BOOLEAN
+HidClassPtpReportHasExactCapabilities(
+    _In_reads_(ValueCapsCount) PHIDP_VALUE_CAPS ValueCaps,
+    _In_ USHORT ValueCapsCount,
+    _In_reads_(ButtonCapsCount) PHIDP_BUTTON_CAPS ButtonCaps,
+    _In_ USHORT ButtonCapsCount,
+    _In_ UCHAR ReportId,
+    _In_ ULONG ExpectedValueCaps)
+{
+    ULONG ValueCount = 0;
+    ULONG ButtonCount = 0;
+    ULONG Index;
+
+    for (Index = 0; Index < ValueCapsCount; Index++)
+    {
+        if (ValueCaps[Index].ReportID == ReportId)
+            ValueCount++;
+    }
+
+    for (Index = 0; Index < ButtonCapsCount; Index++)
+    {
+        if (ButtonCaps[Index].ReportID == ReportId)
+            ButtonCount++;
+    }
+
+    return ValueCount == ExpectedValueCaps && ButtonCount == 0;
+}
+
+static
+BOOLEAN
+HidClassPtpIsLogicalCollection(
+    _In_reads_(NodeCount) PHIDP_LINK_COLLECTION_NODE Nodes,
+    _In_ ULONG NodeCount,
+    _In_ USHORT LinkCollection,
+    _In_ USAGE UsagePage,
+    _In_ USAGE Usage)
+{
+    return LinkCollection < NodeCount &&
+           Nodes[LinkCollection].CollectionType == HIDCLASS_PTP_COLLECTION_LOGICAL &&
+           Nodes[LinkCollection].LinkUsagePage == UsagePage &&
+           Nodes[LinkCollection].LinkUsage == Usage;
+}
+
+static
+BOOLEAN
+HidClassPtpIsScalarHapticCapability(
+    _In_ PHIDP_VALUE_CAPS ValueCaps)
+{
+    return HidClassPtpIsScalarCapability(ValueCaps) &&
+           ValueCaps->IsAbsolute &&
+           ValueCaps->ReportID != 0;
+}
+
+static
+BOOLEAN
+HidClassPtpNormalizeListCapabilities(
+    _In_reads_(ValueCapsCount) PHIDP_VALUE_CAPS ValueCaps,
+    _In_ USHORT ValueCapsCount,
+    _In_ USAGE LinkUsage,
+    _Out_ PHIDCLASS_PTP_HAPTIC_LIST_CAPABILITY ListCapability)
+{
+    PHIDP_VALUE_CAPS First = NULL;
+    USAGE UsageMinimum = MAXUSHORT;
+    USAGE UsageMaximum = 0;
+    USAGE ItemUsageMinimum;
+    USAGE ItemUsageMaximum;
+    ULONG TotalUsageCount = 0;
+    ULONG ItemUsageCount;
+    ULONG Index;
+
+    RtlZeroMemory(ListCapability, sizeof(*ListCapability));
+
+    for (Index = 0; Index < ValueCapsCount; Index++)
+    {
+        if (ValueCaps[Index].UsagePage != HID_USAGE_PAGE_ORDINAL ||
+            ValueCaps[Index].LinkUsagePage != HID_USAGE_PAGE_HAPTICS ||
+            ValueCaps[Index].LinkUsage != LinkUsage)
+        {
+            continue;
+        }
+
+        if (First == NULL)
+        {
+            First = &ValueCaps[Index];
+        }
+
+        if (!ValueCaps[Index].IsAbsolute || ValueCaps[Index].ReportID == 0 ||
+            ValueCaps[Index].BitSize == 0 ||
+            ValueCaps[Index].BitSize > sizeof(ULONG) * 8 ||
+            ValueCaps[Index].ReportCount == 0 ||
+            ValueCaps[Index].LogicalMin < 0 ||
+            ValueCaps[Index].LogicalMax < ValueCaps[Index].LogicalMin ||
+            ValueCaps[Index].ReportID != First->ReportID ||
+            ValueCaps[Index].LinkCollection != First->LinkCollection ||
+            ValueCaps[Index].BitSize != First->BitSize ||
+            ValueCaps[Index].LogicalMin != First->LogicalMin ||
+            ValueCaps[Index].LogicalMax != First->LogicalMax ||
+            ValueCaps[Index].PhysicalMin != First->PhysicalMin ||
+            ValueCaps[Index].PhysicalMax != First->PhysicalMax ||
+            ValueCaps[Index].Units != First->Units ||
+            ValueCaps[Index].UnitsExp != First->UnitsExp)
+        {
+            return FALSE;
+        }
+
+        if (ValueCaps[Index].IsRange)
+        {
+            ItemUsageMinimum = ValueCaps[Index].Range.UsageMin;
+            ItemUsageMaximum = ValueCaps[Index].Range.UsageMax;
+        }
+        else
+        {
+            ItemUsageMinimum = ValueCaps[Index].NotRange.Usage;
+            ItemUsageMaximum = ItemUsageMinimum;
+        }
+
+        if (ItemUsageMinimum == 0 || ItemUsageMaximum < ItemUsageMinimum)
+            return FALSE;
+
+        if (TotalUsageCount == 0)
+        {
+            UsageMinimum = ItemUsageMinimum;
+        }
+        else if ((ULONG)UsageMaximum + 1 != ItemUsageMinimum)
+        {
+            return FALSE;
+        }
+
+        ItemUsageCount = (ULONG)ItemUsageMaximum - ItemUsageMinimum + 1;
+        if (ItemUsageCount != ValueCaps[Index].ReportCount ||
+            TotalUsageCount > MAXUSHORT - ItemUsageCount)
+        {
+            return FALSE;
+        }
+
+        TotalUsageCount += ItemUsageCount;
+        UsageMaximum = ItemUsageMaximum;
+    }
+
+    if (First == NULL ||
+        TotalUsageCount != (ULONG)UsageMaximum - UsageMinimum + 1)
+    {
+        return FALSE;
+    }
+
+    ListCapability->ReportId = First->ReportID;
+    ListCapability->LinkCollection = First->LinkCollection;
+    ListCapability->BitSize = First->BitSize;
+    ListCapability->ReportCount = (USHORT)TotalUsageCount;
+    ListCapability->UsageMinimum = UsageMinimum;
+    ListCapability->UsageMaximum = UsageMaximum;
+    ListCapability->LogicalMinimum = First->LogicalMin;
+    ListCapability->LogicalMaximum = First->LogicalMax;
+    ListCapability->PhysicalMinimum = First->PhysicalMin;
+    ListCapability->PhysicalMaximum = First->PhysicalMax;
+    ListCapability->Units = First->Units;
+    ListCapability->UnitsExponent = First->UnitsExp;
+    return TRUE;
+}
+
+static
+BOOLEAN
+HidClassPtpHasMillisecondPhysicalRange(
+    _In_ PHIDP_VALUE_CAPS ValueCaps)
+{
+    if (ValueCaps->PhysicalMin == 0 && ValueCaps->PhysicalMax == 0)
+        return TRUE;
+
+    return ValueCaps->PhysicalMin == ValueCaps->LogicalMin &&
+           ValueCaps->PhysicalMax == ValueCaps->LogicalMax &&
+           ValueCaps->Units == HIDCLASS_PTP_MILLISECOND_UNIT &&
+           ValueCaps->UnitsExp == HIDCLASS_PTP_MILLISECOND_UNIT_EXPONENT;
+}
+
+static
+BOOLEAN
+HidClassPtpListHasMillisecondPhysicalRange(
+    _In_ PHIDCLASS_PTP_HAPTIC_LIST_CAPABILITY ListCapability)
+{
+    if (ListCapability->PhysicalMinimum == 0 &&
+        ListCapability->PhysicalMaximum == 0)
+    {
+        return TRUE;
+    }
+
+    return ListCapability->PhysicalMinimum == ListCapability->LogicalMinimum &&
+           ListCapability->PhysicalMaximum == ListCapability->LogicalMaximum &&
+           ListCapability->Units == HIDCLASS_PTP_MILLISECOND_UNIT &&
+           ListCapability->UnitsExponent ==
+               HIDCLASS_PTP_MILLISECOND_UNIT_EXPONENT;
+}
+
+static
+VOID
+HidClassPtpStoreHapticCapability(
+    _Out_ PHIDCLASS_PTP_HAPTIC_VALUE_CAPABILITY Destination,
+    _In_ PHIDP_VALUE_CAPS Source,
+    _In_ USHORT ReportLength)
+{
+    Destination->ValueCaps = *Source;
+    Destination->ReportLength = ReportLength;
 }
 
 static
@@ -341,6 +726,552 @@ Cleanup:
     if (CapabilitiesReport != NULL)
         ExFreePoolWithTag(CapabilitiesReport, HIDCLASS_TAG);
 
+    return Status;
+}
+
+NTSTATUS
+HidClassPtpDiscoverHaptics(
+    _In_ PHIDP_DEVICE_DESC DeviceDescription,
+    _Out_ PHIDCLASS_PTP_HAPTICS_CAPABILITIES HapticsCapabilities)
+{
+    HIDCLASS_PTP_HAPTICS_CAPABILITIES Result;
+    PHIDP_COLLECTION_DESC Collection;
+    PHIDP_LINK_COLLECTION_NODE Nodes = NULL;
+    PHIDP_VALUE_CAPS FeatureCaps = NULL;
+    PHIDP_VALUE_CAPS OutputCaps = NULL;
+    PHIDP_BUTTON_CAPS FeatureButtonCaps = NULL;
+    PHIDP_BUTTON_CAPS OutputButtonCaps = NULL;
+    PHIDP_VALUE_CAPS ButtonPressThreshold;
+    PHIDP_VALUE_CAPS DeviceIntensity;
+    PHIDP_VALUE_CAPS ManualTrigger;
+    PHIDP_VALUE_CAPS HostIntensity;
+    PHIDP_VALUE_CAPS RepeatCount;
+    PHIDP_VALUE_CAPS RetriggerPeriod;
+    PHIDP_VALUE_CAPS WaveformCutoffTime;
+    PHIDP_REPORT_IDS ReportDescription;
+    HIDP_CAPS Caps;
+    ULONG ButtonPressThresholdCount;
+    ULONG DeviceIntensityCount;
+    ULONG WaveformListCount;
+    ULONG DurationListCount;
+    ULONG ManualTriggerCount;
+    ULONG HostIntensityCount;
+    ULONG RepeatCountCount;
+    ULONG RetriggerPeriodCount;
+    ULONG WaveformCutoffTimeCount;
+    ULONG NodeCount;
+    ULONG Index;
+    ULONG HostCapabilityCount;
+    ULONG OptionalControlCount;
+    USHORT HostInformationController;
+    USHORT ManualTriggerController;
+    USHORT HostControllerParent;
+    BOOLEAN ForbiddenUsagePresent = FALSE;
+    NTSTATUS Status;
+
+    if (DeviceDescription == NULL || HapticsCapabilities == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    RtlZeroMemory(HapticsCapabilities, sizeof(*HapticsCapabilities));
+    RtlZeroMemory(&Result, sizeof(Result));
+
+    Collection = HidClassPtpFindCollection(DeviceDescription,
+                                            HID_USAGE_PAGE_DIGITIZER,
+                                            HID_USAGE_DIGITIZER_TOUCH_PAD);
+    if (Collection == NULL)
+        return STATUS_NOT_FOUND;
+
+    Status = HidP_GetCaps(Collection->PreparsedData, &Caps);
+    if (Status != HIDP_STATUS_SUCCESS || Caps.NumberLinkCollectionNodes == 0)
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+
+    NodeCount = Caps.NumberLinkCollectionNodes;
+    Nodes = ExAllocatePoolWithTag(NonPagedPool,
+                                  NodeCount * sizeof(*Nodes),
+                                  HIDCLASS_TAG);
+    if (Nodes == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Status = HidP_GetLinkCollectionNodes(Nodes,
+                                         &NodeCount,
+                                         Collection->PreparsedData);
+    if (Status != HIDP_STATUS_SUCCESS ||
+        NodeCount != Caps.NumberLinkCollectionNodes ||
+        Nodes[0].LinkUsagePage != HID_USAGE_PAGE_DIGITIZER ||
+        Nodes[0].LinkUsage != HID_USAGE_DIGITIZER_TOUCH_PAD)
+    {
+        Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        goto Cleanup;
+    }
+
+    Status = HidClassPtpGetValueCapabilities(Collection,
+                                              HidP_Feature,
+                                              Caps.NumberFeatureValueCaps,
+                                              &FeatureCaps);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    Status = HidClassPtpGetValueCapabilities(Collection,
+                                              HidP_Output,
+                                              Caps.NumberOutputValueCaps,
+                                              &OutputCaps);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    Status = HidClassPtpGetButtonCapabilities(Collection,
+                                               HidP_Feature,
+                                               Caps.NumberFeatureButtonCaps,
+                                               &FeatureButtonCaps);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    Status = HidClassPtpGetButtonCapabilities(Collection,
+                                               HidP_Output,
+                                               Caps.NumberOutputButtonCaps,
+                                               &OutputButtonCaps);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    ButtonPressThreshold = HidClassPtpFindValueCapability(
+                               FeatureCaps,
+                               Caps.NumberFeatureValueCaps,
+                               HID_USAGE_PAGE_DIGITIZER,
+                               HID_USAGE_DIGITIZER_BUTTON_PRESS_THRESHOLD,
+                               &ButtonPressThresholdCount);
+    DeviceIntensity = HidClassPtpFindValueCapability(
+                          FeatureCaps,
+                          Caps.NumberFeatureValueCaps,
+                          HID_USAGE_PAGE_HAPTICS,
+                          HID_USAGE_HAPTICS_INTENSITY,
+                          &DeviceIntensityCount);
+    (VOID)HidClassPtpFindLinkedValueCapability(
+              FeatureCaps,
+              Caps.NumberFeatureValueCaps,
+              HID_USAGE_PAGE_ORDINAL,
+              HID_USAGE_PAGE_HAPTICS,
+              HID_USAGE_HAPTICS_WAVEFORM_LIST,
+              &WaveformListCount);
+    (VOID)HidClassPtpFindLinkedValueCapability(
+              FeatureCaps,
+              Caps.NumberFeatureValueCaps,
+              HID_USAGE_PAGE_ORDINAL,
+              HID_USAGE_PAGE_HAPTICS,
+              HID_USAGE_HAPTICS_DURATION_LIST,
+              &DurationListCount);
+    ManualTrigger = HidClassPtpFindValueCapability(
+                        OutputCaps,
+                        Caps.NumberOutputValueCaps,
+                        HID_USAGE_PAGE_HAPTICS,
+                        HID_USAGE_HAPTICS_MANUAL_TRIGGER,
+                        &ManualTriggerCount);
+    HostIntensity = HidClassPtpFindValueCapability(
+                        OutputCaps,
+                        Caps.NumberOutputValueCaps,
+                        HID_USAGE_PAGE_HAPTICS,
+                        HID_USAGE_HAPTICS_INTENSITY,
+                        &HostIntensityCount);
+    RepeatCount = HidClassPtpFindValueCapability(
+                      OutputCaps,
+                      Caps.NumberOutputValueCaps,
+                      HID_USAGE_PAGE_HAPTICS,
+                      HID_USAGE_HAPTICS_REPEAT_COUNT,
+                      &RepeatCountCount);
+    RetriggerPeriod = HidClassPtpFindValueCapability(
+                          OutputCaps,
+                          Caps.NumberOutputValueCaps,
+                          HID_USAGE_PAGE_HAPTICS,
+                          HID_USAGE_HAPTICS_RETRIGGER_PERIOD,
+                          &RetriggerPeriodCount);
+    WaveformCutoffTime = HidClassPtpFindValueCapability(
+                             OutputCaps,
+                             Caps.NumberOutputValueCaps,
+                             HID_USAGE_PAGE_HAPTICS,
+                             HID_USAGE_HAPTICS_WAVEFORM_CUTOFF_TIME,
+                             &WaveformCutoffTimeCount);
+
+    HostCapabilityCount = WaveformListCount + DurationListCount +
+                          ManualTriggerCount + HostIntensityCount +
+                          RepeatCountCount + RetriggerPeriodCount +
+                          WaveformCutoffTimeCount;
+    if (ButtonPressThresholdCount == 0 && DeviceIntensityCount == 0 &&
+        HostCapabilityCount == 0)
+    {
+        Status = STATUS_NOT_FOUND;
+        goto Cleanup;
+    }
+
+    Result.Present = TRUE;
+    Result.CollectionNumber = Collection->CollectionNumber;
+
+    if (ButtonPressThresholdCount > 1 || DeviceIntensityCount > 1 ||
+        ManualTriggerCount > 1 || HostIntensityCount > 1 ||
+        RepeatCountCount > 1 || RetriggerPeriodCount > 1 ||
+        WaveformCutoffTimeCount > 1)
+    {
+        Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        goto Cleanup;
+    }
+
+    for (Index = 0; Index < Caps.NumberFeatureValueCaps; Index++)
+    {
+        if (HidClassPtpCapabilityContainsUsage(&FeatureCaps[Index],
+                                               HID_USAGE_PAGE_HAPTICS,
+                                               HID_USAGE_HAPTICS_AUTO_TRIGGER) ||
+            HidClassPtpCapabilityContainsUsage(&FeatureCaps[Index],
+                                               HID_USAGE_PAGE_HAPTICS,
+                                               HID_USAGE_HAPTICS_AUTO_ASSOCIATED_CONTROL))
+        {
+            ForbiddenUsagePresent = TRUE;
+        }
+    }
+
+    for (Index = 0; Index < Caps.NumberOutputValueCaps; Index++)
+    {
+        if (HidClassPtpCapabilityContainsUsage(&OutputCaps[Index],
+                                               HID_USAGE_PAGE_HAPTICS,
+                                               HID_USAGE_HAPTICS_AUTO_TRIGGER) ||
+            HidClassPtpCapabilityContainsUsage(&OutputCaps[Index],
+                                               HID_USAGE_PAGE_HAPTICS,
+                                               HID_USAGE_HAPTICS_AUTO_ASSOCIATED_CONTROL))
+        {
+            ForbiddenUsagePresent = TRUE;
+        }
+    }
+
+    if (ForbiddenUsagePresent)
+    {
+        Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        goto Cleanup;
+    }
+
+    if (ButtonPressThresholdCount == 1)
+    {
+        ReportDescription = HidClassPtpFindFeatureReport(
+                                DeviceDescription,
+                                Collection->CollectionNumber,
+                                ButtonPressThreshold->ReportID);
+        if (!HidClassPtpIsScalarHapticCapability(ButtonPressThreshold) ||
+            ButtonPressThreshold->LinkCollection !=
+                HIDP_LINK_COLLECTION_UNSPECIFIED ||
+            ButtonPressThreshold->LogicalMin >= ButtonPressThreshold->LogicalMax ||
+            ButtonPressThreshold->PhysicalMin >= ButtonPressThreshold->PhysicalMax ||
+            ReportDescription == NULL || ReportDescription->FeatureLength < 2 ||
+            ReportDescription->InputLength != 0 ||
+            ReportDescription->OutputLength != 0 ||
+            !HidClassPtpReportHasExactCapabilities(
+                 FeatureCaps,
+                 Caps.NumberFeatureValueCaps,
+                 FeatureButtonCaps,
+                 Caps.NumberFeatureButtonCaps,
+                 ButtonPressThreshold->ReportID,
+                 1))
+        {
+            Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+            goto Cleanup;
+        }
+
+        Result.HasButtonPressThreshold = TRUE;
+        HidClassPtpStoreHapticCapability(&Result.ButtonPressThreshold,
+                                         ButtonPressThreshold,
+                                         ReportDescription->FeatureLength);
+    }
+
+    if (DeviceIntensityCount == 1)
+    {
+        ReportDescription = HidClassPtpFindFeatureReport(
+                                DeviceDescription,
+                                Collection->CollectionNumber,
+                                DeviceIntensity->ReportID);
+        if (!HidClassPtpIsScalarHapticCapability(DeviceIntensity) ||
+            DeviceIntensity->LogicalMin != 0 ||
+            DeviceIntensity->LogicalMax < 4 ||
+            !HidClassPtpIsLogicalCollection(
+                 Nodes,
+                 NodeCount,
+                 DeviceIntensity->LinkCollection,
+                 HID_USAGE_PAGE_HAPTICS,
+                 HID_USAGE_HAPTICS_SIMPLE_CONTROLLER) ||
+            Nodes[DeviceIntensity->LinkCollection].Parent != 0 ||
+            ReportDescription == NULL || ReportDescription->FeatureLength < 2 ||
+            ReportDescription->InputLength != 0 ||
+            ReportDescription->OutputLength != 0 ||
+            !HidClassPtpReportHasExactCapabilities(
+                 FeatureCaps,
+                 Caps.NumberFeatureValueCaps,
+                 FeatureButtonCaps,
+                 Caps.NumberFeatureButtonCaps,
+                 DeviceIntensity->ReportID,
+                 1))
+        {
+            Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+            goto Cleanup;
+        }
+
+        for (Index = 0; Index < Caps.NumberFeatureValueCaps; Index++)
+        {
+            if (FeatureCaps[Index].LinkCollection ==
+                    DeviceIntensity->LinkCollection &&
+                (HidClassPtpCapabilityContainsUsage(
+                     &FeatureCaps[Index],
+                     HID_USAGE_PAGE_HAPTICS,
+                     HID_USAGE_HAPTICS_AUTO_TRIGGER) ||
+                 HidClassPtpCapabilityContainsUsage(
+                     &FeatureCaps[Index],
+                     HID_USAGE_PAGE_HAPTICS,
+                     HID_USAGE_HAPTICS_MANUAL_TRIGGER)))
+            {
+                Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+                goto Cleanup;
+            }
+        }
+
+        Result.HasDeviceIntensity = TRUE;
+        HidClassPtpStoreHapticCapability(&Result.DeviceIntensity,
+                                         DeviceIntensity,
+                                         ReportDescription->FeatureLength);
+    }
+
+    if (Result.HasButtonPressThreshold && Result.HasDeviceIntensity &&
+        ButtonPressThreshold->ReportID == DeviceIntensity->ReportID)
+    {
+        Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        goto Cleanup;
+    }
+
+    if (HostCapabilityCount != 0)
+    {
+        OptionalControlCount = RepeatCountCount + RetriggerPeriodCount +
+                               WaveformCutoffTimeCount;
+        if (WaveformListCount == 0 || DurationListCount == 0 ||
+            ManualTriggerCount != 1 || HostIntensityCount != 1 ||
+            (OptionalControlCount != 0 && OptionalControlCount != 3) ||
+            !Result.HasButtonPressThreshold || !Result.HasDeviceIntensity)
+        {
+            Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+            goto Cleanup;
+        }
+
+        if (!HidClassPtpNormalizeListCapabilities(
+                 FeatureCaps,
+                 Caps.NumberFeatureValueCaps,
+                 HID_USAGE_HAPTICS_WAVEFORM_LIST,
+                 &Result.WaveformList) ||
+            !HidClassPtpNormalizeListCapabilities(
+                 FeatureCaps,
+                 Caps.NumberFeatureValueCaps,
+                 HID_USAGE_HAPTICS_DURATION_LIST,
+                 &Result.DurationList) ||
+            Result.WaveformList.PhysicalMinimum != 0 ||
+            Result.WaveformList.PhysicalMaximum != 0 ||
+            Result.WaveformList.Units != 0 ||
+            Result.WaveformList.LogicalMinimum >
+                HID_USAGE_HAPTICS_WAVEFORM_NONE ||
+            Result.WaveformList.LogicalMaximum <
+                HID_USAGE_HAPTICS_WAVEFORM_STOP ||
+            Result.DurationList.UsageMinimum !=
+                Result.WaveformList.UsageMinimum ||
+            Result.DurationList.UsageMaximum !=
+                Result.WaveformList.UsageMaximum ||
+            Result.DurationList.ReportCount !=
+                Result.WaveformList.ReportCount ||
+            Result.DurationList.LogicalMinimum != 0 ||
+            Result.DurationList.LogicalMaximum <= 0 ||
+            !HidClassPtpListHasMillisecondPhysicalRange(&Result.DurationList) ||
+            Result.WaveformList.ReportId != Result.DurationList.ReportId ||
+            !HidClassPtpIsLogicalCollection(
+                 Nodes,
+                 NodeCount,
+                 Result.WaveformList.LinkCollection,
+                 HID_USAGE_PAGE_HAPTICS,
+                 HID_USAGE_HAPTICS_WAVEFORM_LIST) ||
+            !HidClassPtpIsLogicalCollection(
+                 Nodes,
+                 NodeCount,
+                 Result.DurationList.LinkCollection,
+                 HID_USAGE_PAGE_HAPTICS,
+                 HID_USAGE_HAPTICS_DURATION_LIST) ||
+            Nodes[Result.WaveformList.LinkCollection].Parent !=
+                Nodes[Result.DurationList.LinkCollection].Parent)
+        {
+            Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+            goto Cleanup;
+        }
+
+        HostInformationController =
+            Nodes[Result.WaveformList.LinkCollection].Parent;
+        ManualTriggerController = ManualTrigger->LinkCollection;
+        if (!HidClassPtpIsLogicalCollection(
+                 Nodes,
+                 NodeCount,
+                 HostInformationController,
+                 HID_USAGE_PAGE_HAPTICS,
+                 HID_USAGE_HAPTICS_SIMPLE_CONTROLLER) ||
+            !HidClassPtpIsLogicalCollection(
+                 Nodes,
+                 NodeCount,
+                 ManualTriggerController,
+                 HID_USAGE_PAGE_HAPTICS,
+                 HID_USAGE_HAPTICS_SIMPLE_CONTROLLER) ||
+            HostInformationController == ManualTriggerController)
+        {
+            Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+            goto Cleanup;
+        }
+
+        HostControllerParent = Nodes[HostInformationController].Parent;
+        if (HostControllerParent != Nodes[ManualTriggerController].Parent ||
+            (HostControllerParent != 0 &&
+             !HidClassPtpIsLogicalCollection(
+                  Nodes,
+                  NodeCount,
+                  HostControllerParent,
+                  HID_USAGE_PAGE_HAPTICS,
+                  HID_USAGE_HAPTICS_SIMPLE_CONTROLLER)) ||
+            HostControllerParent == DeviceIntensity->LinkCollection ||
+            HostInformationController == DeviceIntensity->LinkCollection ||
+            ManualTriggerController == DeviceIntensity->LinkCollection)
+        {
+            Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+            goto Cleanup;
+        }
+
+        if (!HidClassPtpIsScalarHapticCapability(ManualTrigger) ||
+            !HidClassPtpIsScalarHapticCapability(HostIntensity) ||
+            ManualTrigger->ReportID != HostIntensity->ReportID ||
+            ManualTrigger->LinkCollection != HostIntensity->LinkCollection ||
+            ManualTrigger->LogicalMin > 1 ||
+            ManualTrigger->LogicalMax < Result.WaveformList.UsageMaximum ||
+            ManualTrigger->PhysicalMin != 0 || ManualTrigger->PhysicalMax != 0 ||
+            ManualTrigger->Units != 0 ||
+            HostIntensity->LogicalMin != 0 ||
+            HostIntensity->LogicalMax < 4 || HostIntensity->LogicalMax > 100 ||
+            HostIntensity->PhysicalMin != 0 || HostIntensity->PhysicalMax != 0 ||
+            HostIntensity->Units != 0)
+        {
+            Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+            goto Cleanup;
+        }
+
+        if (OptionalControlCount == 3)
+        {
+            if (!HidClassPtpIsScalarHapticCapability(RepeatCount) ||
+                !HidClassPtpIsScalarHapticCapability(RetriggerPeriod) ||
+                !HidClassPtpIsScalarHapticCapability(WaveformCutoffTime) ||
+                RepeatCount->ReportID != ManualTrigger->ReportID ||
+                RetriggerPeriod->ReportID != ManualTrigger->ReportID ||
+                WaveformCutoffTime->ReportID != ManualTrigger->ReportID ||
+                RepeatCount->LinkCollection != ManualTriggerController ||
+                RetriggerPeriod->LinkCollection != ManualTriggerController ||
+                WaveformCutoffTime->LinkCollection != ManualTriggerController ||
+                RepeatCount->LogicalMin != 0 || RepeatCount->LogicalMax <= 0 ||
+                RepeatCount->PhysicalMin != 0 || RepeatCount->PhysicalMax != 0 ||
+                RepeatCount->Units != 0 ||
+                RetriggerPeriod->LogicalMin != 0 ||
+                RetriggerPeriod->LogicalMax < 1000 ||
+                !HidClassPtpHasMillisecondPhysicalRange(RetriggerPeriod) ||
+                WaveformCutoffTime->LogicalMin <= 0 ||
+                WaveformCutoffTime->LogicalMax < WaveformCutoffTime->LogicalMin ||
+                !HidClassPtpHasMillisecondPhysicalRange(WaveformCutoffTime))
+            {
+                Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+                goto Cleanup;
+            }
+        }
+
+        ReportDescription = HidClassPtpFindFeatureReport(
+                                DeviceDescription,
+                                Collection->CollectionNumber,
+                                Result.WaveformList.ReportId);
+        if (ReportDescription == NULL || ReportDescription->FeatureLength < 2 ||
+            ReportDescription->InputLength != 0 ||
+            ReportDescription->OutputLength != 0 ||
+            !HidClassPtpReportHasExactCapabilities(
+                 FeatureCaps,
+                 Caps.NumberFeatureValueCaps,
+                 FeatureButtonCaps,
+                 Caps.NumberFeatureButtonCaps,
+                 Result.WaveformList.ReportId,
+                 WaveformListCount + DurationListCount))
+        {
+            Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+            goto Cleanup;
+        }
+
+        Result.WaveformList.ReportLength = ReportDescription->FeatureLength;
+        Result.DurationList.ReportLength = ReportDescription->FeatureLength;
+
+        ReportDescription = HidClassPtpFindOutputReport(
+                                DeviceDescription,
+                                Collection->CollectionNumber,
+                                ManualTrigger->ReportID);
+        if (ReportDescription == NULL || ReportDescription->OutputLength < 2 ||
+            ReportDescription->InputLength != 0 ||
+            ReportDescription->FeatureLength != 0 ||
+            !HidClassPtpReportHasExactCapabilities(
+                 OutputCaps,
+                 Caps.NumberOutputValueCaps,
+                 OutputButtonCaps,
+                 Caps.NumberOutputButtonCaps,
+                 ManualTrigger->ReportID,
+                 OptionalControlCount == 3 ? 5 : 2))
+        {
+            Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+            goto Cleanup;
+        }
+
+        if (Result.WaveformList.ReportId == ManualTrigger->ReportID ||
+            Result.WaveformList.ReportId == ButtonPressThreshold->ReportID ||
+            Result.WaveformList.ReportId == DeviceIntensity->ReportID ||
+            ManualTrigger->ReportID == ButtonPressThreshold->ReportID ||
+            ManualTrigger->ReportID == DeviceIntensity->ReportID)
+        {
+            Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+            goto Cleanup;
+        }
+
+        HidClassPtpStoreHapticCapability(&Result.ManualTrigger,
+                                         ManualTrigger,
+                                         ReportDescription->OutputLength);
+        HidClassPtpStoreHapticCapability(&Result.HostIntensity,
+                                         HostIntensity,
+                                         ReportDescription->OutputLength);
+        if (OptionalControlCount == 3)
+        {
+            Result.HasRepeatControl = TRUE;
+            HidClassPtpStoreHapticCapability(&Result.RepeatCount,
+                                             RepeatCount,
+                                             ReportDescription->OutputLength);
+            HidClassPtpStoreHapticCapability(&Result.RetriggerPeriod,
+                                             RetriggerPeriod,
+                                             ReportDescription->OutputLength);
+            HidClassPtpStoreHapticCapability(&Result.WaveformCutoffTime,
+                                             WaveformCutoffTime,
+                                             ReportDescription->OutputLength);
+        }
+
+        Result.HasHostInitiated = TRUE;
+    }
+
+    Result.Valid = TRUE;
+    *HapticsCapabilities = Result;
+    Status = STATUS_SUCCESS;
+
+Cleanup:
+    if (!NT_SUCCESS(Status) && Result.Present)
+    {
+        HapticsCapabilities->Present = TRUE;
+        HapticsCapabilities->CollectionNumber = Result.CollectionNumber;
+    }
+    if (OutputButtonCaps != NULL)
+        ExFreePoolWithTag(OutputButtonCaps, HIDCLASS_TAG);
+    if (FeatureButtonCaps != NULL)
+        ExFreePoolWithTag(FeatureButtonCaps, HIDCLASS_TAG);
+    if (OutputCaps != NULL)
+        ExFreePoolWithTag(OutputCaps, HIDCLASS_TAG);
+    if (FeatureCaps != NULL)
+        ExFreePoolWithTag(FeatureCaps, HIDCLASS_TAG);
+    if (Nodes != NULL)
+        ExFreePoolWithTag(Nodes, HIDCLASS_TAG);
     return Status;
 }
 

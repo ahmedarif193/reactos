@@ -42,6 +42,52 @@ typedef struct _HIDCLASS_PTP_CONFIGURATION
     USHORT SelectiveReportingReportLength;
 } HIDCLASS_PTP_CONFIGURATION, *PHIDCLASS_PTP_CONFIGURATION;
 
+typedef struct _HIDCLASS_PTP_HAPTIC_VALUE_CAPABILITY
+{
+    HIDP_VALUE_CAPS ValueCaps;
+    USHORT ReportLength;
+} HIDCLASS_PTP_HAPTIC_VALUE_CAPABILITY,
+  *PHIDCLASS_PTP_HAPTIC_VALUE_CAPABILITY;
+
+typedef struct _HIDCLASS_PTP_HAPTIC_LIST_CAPABILITY
+{
+    UCHAR ReportId;
+    USHORT LinkCollection;
+    USHORT ReportLength;
+    USHORT BitSize;
+    USHORT ReportCount;
+    USAGE UsageMinimum;
+    USAGE UsageMaximum;
+    LONG LogicalMinimum;
+    LONG LogicalMaximum;
+    LONG PhysicalMinimum;
+    LONG PhysicalMaximum;
+    ULONG Units;
+    ULONG UnitsExponent;
+} HIDCLASS_PTP_HAPTIC_LIST_CAPABILITY,
+  *PHIDCLASS_PTP_HAPTIC_LIST_CAPABILITY;
+
+typedef struct _HIDCLASS_PTP_HAPTICS_CAPABILITIES
+{
+    BOOLEAN Present;
+    BOOLEAN Valid;
+    BOOLEAN HasButtonPressThreshold;
+    BOOLEAN HasDeviceIntensity;
+    BOOLEAN HasHostInitiated;
+    BOOLEAN HasRepeatControl;
+    UCHAR CollectionNumber;
+    HIDCLASS_PTP_HAPTIC_VALUE_CAPABILITY ButtonPressThreshold;
+    HIDCLASS_PTP_HAPTIC_VALUE_CAPABILITY DeviceIntensity;
+    HIDCLASS_PTP_HAPTIC_LIST_CAPABILITY WaveformList;
+    HIDCLASS_PTP_HAPTIC_LIST_CAPABILITY DurationList;
+    HIDCLASS_PTP_HAPTIC_VALUE_CAPABILITY ManualTrigger;
+    HIDCLASS_PTP_HAPTIC_VALUE_CAPABILITY HostIntensity;
+    HIDCLASS_PTP_HAPTIC_VALUE_CAPABILITY RepeatCount;
+    HIDCLASS_PTP_HAPTIC_VALUE_CAPABILITY RetriggerPeriod;
+    HIDCLASS_PTP_HAPTIC_VALUE_CAPABILITY WaveformCutoffTime;
+} HIDCLASS_PTP_HAPTICS_CAPABILITIES,
+  *PHIDCLASS_PTP_HAPTICS_CAPABILITIES;
+
 typedef
 NTSTATUS
 (NTAPI *PHIDCLASS_PTP_GET_FEATURE)(
@@ -64,6 +110,11 @@ HidClassPtpValidateCapabilities(
     _In_ PHIDCLASS_PTP_GET_FEATURE GetFeature,
     _In_ PVOID Context,
     _Out_ PHIDCLASS_PTP_CAPABILITIES Capabilities);
+
+NTSTATUS
+HidClassPtpDiscoverHaptics(
+    _In_ PHIDP_DEVICE_DESC DeviceDescription,
+    _Out_ PHIDCLASS_PTP_HAPTICS_CAPABILITIES HapticsCapabilities);
 
 NTSTATUS
 HidClassPtpInitializeConfiguration(

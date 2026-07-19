@@ -8,6 +8,7 @@
 #include <kmt_test.h>
 #include <hidpddi.h>
 
+#include "HidP.h"
 #include "ptp.h"
 
 #define PTP_CAPABILITIES_REPORT_ID   2
@@ -20,6 +21,21 @@
 #define PTP_CONFIG_SELECTIVE_ID_OFFSET       30
 #define PTP_CONFIG_BUTTON_USAGE_OFFSET       34
 #define PTP_CONFIG_SELECTIVE_MAXIMUM_OFFSET  38
+
+#define PTP_HAPTIC_THRESHOLD_MAIN_ITEM_OFFSET       31
+#define PTP_HAPTIC_DEVICE_INTENSITY_ID_OFFSET       33
+#define PTP_HAPTIC_DEVICE_COLLECTION_TYPE_OFFSET    39
+#define PTP_HAPTIC_DEVICE_INTENSITY_MAXIMUM_OFFSET  55
+#define PTP_HAPTIC_DEVICE_INTENSITY_MAIN_OFFSET     61
+#define PTP_HAPTIC_WAVEFORM_REPORT_COUNT_OFFSET     98
+#define PTP_HAPTIC_DURATION_USAGE_MAXIMUM_OFFSET    115
+#define PTP_HAPTIC_DURATION_UNIT_EXPONENT_OFFSET    124
+#define PTP_HAPTIC_MANUAL_USAGE_OFFSET              148
+#define PTP_HAPTIC_MANUAL_MAIN_ITEM_OFFSET          166
+#define PTP_HAPTIC_HOST_INTENSITY_MAIN_OFFSET       188
+#define PTP_HAPTIC_REPEAT_MAIN_ITEM_OFFSET           210
+#define PTP_HAPTIC_RETRIGGER_MAIN_ITEM_OFFSET        235
+#define PTP_HAPTIC_CUTOFF_MAIN_ITEM_OFFSET           262
 
 static UCHAR PtpDescriptor[] =
 {
@@ -155,6 +171,46 @@ static UCHAR PtpConfigurationDescriptor[] =
     0xb1, 0x02,                         /*     Feature (Data, Variable, Absolute) */
     0x95, 0x0e,                         /*     Report Count (14) */
     0xb1, 0x03,                         /*     Feature (Constant, Variable, Absolute) */
+    0xc0,                               /*   End Collection */
+    0xc0                                /* End Collection */
+};
+
+static UCHAR PtpHapticThresholdOnlyDescriptor[] =
+{
+    0x05, 0x0d,                         /* Usage Page (Digitizers) */
+    0x09, 0x05,                         /* Usage (Touch Pad) */
+    0xa1, 0x01,                         /* Collection (Application) */
+    0x85, 0x40,                         /*   Report ID (Button Threshold) */
+    0x05, 0x0d,                         /*   Usage Page (Digitizers) */
+    0x09, 0xb0,                         /*   Usage (Button Press Threshold) */
+    0x35, 0x6e,                         /*   Physical Minimum (110) */
+    0x46, 0xbe, 0x00,                   /*   Physical Maximum (190) */
+    0x66, 0x01, 0x01,                   /*   Unit (Gram) */
+    0x55, 0x00,                         /*   Unit Exponent (0) */
+    0x15, 0x01,                         /*   Logical Minimum (1) */
+    0x25, 0x03,                         /*   Logical Maximum (3) */
+    0x95, 0x01,                         /*   Report Count (1) */
+    0x75, 0x08,                         /*   Report Size (8) */
+    0xb1, 0x02,                         /*   Feature (Data, Variable, Absolute) */
+    0xc0                                /* End Collection */
+};
+
+static UCHAR PtpHapticIntensityOnlyDescriptor[] =
+{
+    0x05, 0x0d,                         /* Usage Page (Digitizers) */
+    0x09, 0x05,                         /* Usage (Touch Pad) */
+    0xa1, 0x01,                         /* Collection (Application) */
+    0x85, 0x41,                         /*   Report ID (Haptic Intensity) */
+    0x05, 0x0e,                         /*   Usage Page (Haptics) */
+    0x09, 0x01,                         /*   Usage (Simple Haptic Controller) */
+    0xa1, 0x02,                         /*   Collection (Logical) */
+    0x05, 0x0e,                         /*     Usage Page (Haptics) */
+    0x09, 0x23,                         /*     Usage (Intensity) */
+    0x15, 0x00,                         /*     Logical Minimum (0) */
+    0x25, 0x04,                         /*     Logical Maximum (4) */
+    0x95, 0x01,                         /*     Report Count (1) */
+    0x75, 0x08,                         /*     Report Size (8) */
+    0xb1, 0x02,                         /*     Feature (Data, Variable, Absolute) */
     0xc0,                               /*   End Collection */
     0xc0                                /* End Collection */
 };
@@ -317,6 +373,30 @@ PtpTestValidateConfigurationDescriptor(
     return Status;
 }
 
+static
+NTSTATUS
+PtpTestDiscoverHaptics(
+    _In_reads_bytes_(DescriptorLength) PUCHAR Descriptor,
+    _In_ ULONG DescriptorLength,
+    _Out_ PHIDCLASS_PTP_HAPTICS_CAPABILITIES HapticsCapabilities)
+{
+    HIDP_DEVICE_DESC DeviceDescription;
+    NTSTATUS Status;
+
+    Status = HidP_GetCollectionDescription(Descriptor,
+                                           DescriptorLength,
+                                           NonPagedPool,
+                                           &DeviceDescription);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = HidClassPtpDiscoverHaptics(&DeviceDescription,
+                                        HapticsCapabilities);
+    HidP_FreeCollectionDescription(&DeviceDescription);
+    return Status;
+}
+
 VOID
 TestHidClassPtpCapabilities(VOID)
 {
@@ -459,6 +539,185 @@ TestHidClassPtpCapabilities(VOID)
     ok_eq_hex(Status, STATUS_NOT_FOUND);
     ok(!Capabilities.Present, "Non-touchpad collection was detected as a touchpad\n");
     ok_eq_ulong(Context.Calls, 0);
+}
+
+VOID
+TestHidClassPtpHaptics(VOID)
+{
+    static const struct
+    {
+        USHORT Offset;
+        UCHAR Value;
+        PCSTR Name;
+    } InvalidCases[] =
+    {
+        {PTP_HAPTIC_THRESHOLD_MAIN_ITEM_OFFSET, 0x03, "missing button threshold"},
+        {PTP_HAPTIC_DEVICE_INTENSITY_ID_OFFSET, 0x40, "shared device report ID"},
+        {PTP_HAPTIC_DEVICE_COLLECTION_TYPE_OFFSET, 0x00, "non-logical intensity collection"},
+        {PTP_HAPTIC_DEVICE_INTENSITY_MAXIMUM_OFFSET, 0x03, "three-level intensity"},
+        {PTP_HAPTIC_DEVICE_INTENSITY_MAIN_OFFSET, 0x03, "missing device intensity"},
+        {PTP_HAPTIC_WAVEFORM_REPORT_COUNT_OFFSET, 0x06, "waveform ordinal mismatch"},
+        {PTP_HAPTIC_DURATION_USAGE_MAXIMUM_OFFSET, 0x06, "duration ordinal mismatch"},
+        {PTP_HAPTIC_DURATION_UNIT_EXPONENT_OFFSET, 0x00, "non-millisecond duration"},
+        {PTP_HAPTIC_MANUAL_USAGE_OFFSET, 0x20, "forbidden auto trigger"},
+        {PTP_HAPTIC_MANUAL_MAIN_ITEM_OFFSET, 0x03, "missing manual trigger"},
+        {PTP_HAPTIC_HOST_INTENSITY_MAIN_OFFSET, 0x03, "missing host intensity"},
+        {PTP_HAPTIC_REPEAT_MAIN_ITEM_OFFSET, 0x03, "partial repeat controls"},
+        {PTP_HAPTIC_CUTOFF_MAIN_ITEM_OFFSET, 0x03, "partial cutoff controls"}
+    };
+    HIDCLASS_PTP_HAPTICS_CAPABILITIES HapticsCapabilities;
+    HIDP_DEVICE_DESC DeviceDescription;
+    UCHAR Descriptor[sizeof(HidPTestHapticTouchpadDescriptor)];
+    ULONG Index;
+    NTSTATUS Status;
+
+    Status = HidClassPtpDiscoverHaptics(NULL, &HapticsCapabilities);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+
+    Status = PtpTestDiscoverHaptics(HidPTestHapticTouchpadDescriptor,
+                                    sizeof(HidPTestHapticTouchpadDescriptor),
+                                    &HapticsCapabilities);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok(HapticsCapabilities.Present, "Haptic touchpad was not detected\n");
+    ok(HapticsCapabilities.Valid, "Haptic touchpad was not validated\n");
+    ok(HapticsCapabilities.HasButtonPressThreshold,
+       "Button Press Threshold report was not discovered\n");
+    ok(HapticsCapabilities.HasDeviceIntensity,
+       "Device-initiated intensity report was not discovered\n");
+    ok(HapticsCapabilities.HasHostInitiated,
+       "Host-initiated reports were not discovered\n");
+    ok(HapticsCapabilities.HasRepeatControl,
+       "Optional repeat controls were not discovered\n");
+    ok_eq_uint(HapticsCapabilities.CollectionNumber, 1);
+
+    ok_eq_uint(HapticsCapabilities.ButtonPressThreshold.ValueCaps.ReportID, 0x40);
+    ok_eq_uint(HapticsCapabilities.ButtonPressThreshold.ValueCaps.LinkCollection, 0);
+    ok_eq_uint(HapticsCapabilities.ButtonPressThreshold.ReportLength, 2);
+    ok_eq_long(HapticsCapabilities.ButtonPressThreshold.ValueCaps.LogicalMin, 1);
+    ok_eq_long(HapticsCapabilities.ButtonPressThreshold.ValueCaps.LogicalMax, 3);
+    ok_eq_long(HapticsCapabilities.ButtonPressThreshold.ValueCaps.PhysicalMin, 110);
+    ok_eq_long(HapticsCapabilities.ButtonPressThreshold.ValueCaps.PhysicalMax, 190);
+
+    ok_eq_uint(HapticsCapabilities.DeviceIntensity.ValueCaps.ReportID, 0x41);
+    ok_eq_uint(HapticsCapabilities.DeviceIntensity.ValueCaps.LinkCollection, 1);
+    ok_eq_uint(HapticsCapabilities.DeviceIntensity.ReportLength, 2);
+    ok_eq_long(HapticsCapabilities.DeviceIntensity.ValueCaps.LogicalMin, 0);
+    ok_eq_long(HapticsCapabilities.DeviceIntensity.ValueCaps.LogicalMax, 4);
+
+    ok_eq_uint(HapticsCapabilities.WaveformList.ReportId, 0x42);
+    ok_eq_uint(HapticsCapabilities.WaveformList.LinkCollection, 3);
+    ok_eq_uint(HapticsCapabilities.WaveformList.ReportLength, 16);
+    ok_eq_uint(HapticsCapabilities.WaveformList.UsageMinimum, 3);
+    ok_eq_uint(HapticsCapabilities.WaveformList.UsageMaximum, 7);
+    ok_eq_uint(HapticsCapabilities.WaveformList.ReportCount, 5);
+    ok_eq_uint(HapticsCapabilities.DurationList.ReportId, 0x42);
+    ok_eq_uint(HapticsCapabilities.DurationList.LinkCollection, 4);
+    ok_eq_uint(HapticsCapabilities.DurationList.ReportLength, 16);
+    ok_eq_long(HapticsCapabilities.DurationList.LogicalMinimum, 0);
+    ok_eq_long(HapticsCapabilities.DurationList.LogicalMaximum, 50);
+    ok_eq_ulong(HapticsCapabilities.DurationList.Units, 0x1001);
+    ok_eq_ulong(HapticsCapabilities.DurationList.UnitsExponent, 0x0d);
+
+    ok_eq_uint(HapticsCapabilities.ManualTrigger.ValueCaps.ReportID, 0x43);
+    ok_eq_uint(HapticsCapabilities.ManualTrigger.ValueCaps.LinkCollection, 5);
+    ok_eq_uint(HapticsCapabilities.ManualTrigger.ReportLength, 8);
+    ok_eq_long(HapticsCapabilities.ManualTrigger.ValueCaps.LogicalMin, 1);
+    ok_eq_long(HapticsCapabilities.ManualTrigger.ValueCaps.LogicalMax, 7);
+    ok_eq_uint(HapticsCapabilities.HostIntensity.ValueCaps.ReportID, 0x43);
+    ok_eq_uint(HapticsCapabilities.RepeatCount.ValueCaps.ReportID, 0x43);
+    ok_eq_uint(HapticsCapabilities.RetriggerPeriod.ValueCaps.ReportID, 0x43);
+    ok_eq_uint(HapticsCapabilities.WaveformCutoffTime.ValueCaps.ReportID, 0x43);
+
+    Status = PtpTestDiscoverHaptics(PtpHapticThresholdOnlyDescriptor,
+                                    sizeof(PtpHapticThresholdOnlyDescriptor),
+                                    &HapticsCapabilities);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok(HapticsCapabilities.Valid, "Threshold-only haptics were rejected\n");
+    ok(HapticsCapabilities.HasButtonPressThreshold,
+       "Threshold-only report was not discovered\n");
+    ok(!HapticsCapabilities.HasDeviceIntensity,
+       "Threshold-only descriptor gained intensity support\n");
+    ok(!HapticsCapabilities.HasHostInitiated,
+       "Threshold-only descriptor gained host-initiated support\n");
+
+    Status = PtpTestDiscoverHaptics(PtpHapticIntensityOnlyDescriptor,
+                                    sizeof(PtpHapticIntensityOnlyDescriptor),
+                                    &HapticsCapabilities);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok(HapticsCapabilities.Valid, "Intensity-only haptics were rejected\n");
+    ok(!HapticsCapabilities.HasButtonPressThreshold,
+       "Intensity-only descriptor gained threshold support\n");
+    ok(HapticsCapabilities.HasDeviceIntensity,
+       "Intensity-only report was not discovered\n");
+    ok(!HapticsCapabilities.HasHostInitiated,
+       "Intensity-only descriptor gained host-initiated support\n");
+
+    Status = PtpTestDiscoverHaptics(PtpDescriptor,
+                                    sizeof(PtpDescriptor),
+                                    &HapticsCapabilities);
+    ok_eq_hex(Status, STATUS_NOT_FOUND);
+    ok(!HapticsCapabilities.Present,
+       "A non-haptic Precision Touchpad gained haptic capabilities\n");
+    ok(!HapticsCapabilities.Valid,
+       "A non-haptic Precision Touchpad gained valid haptics\n");
+
+    RtlCopyMemory(Descriptor,
+                  HidPTestHapticTouchpadDescriptor,
+                  sizeof(Descriptor));
+    Descriptor[PTP_HAPTIC_REPEAT_MAIN_ITEM_OFFSET] = 0x03;
+    Descriptor[PTP_HAPTIC_RETRIGGER_MAIN_ITEM_OFFSET] = 0x03;
+    Descriptor[PTP_HAPTIC_CUTOFF_MAIN_ITEM_OFFSET] = 0x03;
+    Status = PtpTestDiscoverHaptics(Descriptor,
+                                    sizeof(Descriptor),
+                                    &HapticsCapabilities);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok(HapticsCapabilities.HasHostInitiated,
+       "Host haptics without optional repeat controls were rejected\n");
+    ok(!HapticsCapabilities.HasRepeatControl,
+       "Constant optional fields were reported as repeat controls\n");
+
+    for (Index = 0; Index < RTL_NUMBER_OF(InvalidCases); Index++)
+    {
+        RtlCopyMemory(Descriptor,
+                      HidPTestHapticTouchpadDescriptor,
+                      sizeof(Descriptor));
+        Descriptor[InvalidCases[Index].Offset] = InvalidCases[Index].Value;
+        Status = PtpTestDiscoverHaptics(Descriptor,
+                                        sizeof(Descriptor),
+                                        &HapticsCapabilities);
+        ok(Status == STATUS_DEVICE_CONFIGURATION_ERROR,
+           "%s returned %lx instead of STATUS_DEVICE_CONFIGURATION_ERROR\n",
+           InvalidCases[Index].Name,
+           Status);
+        ok(HapticsCapabilities.Present,
+           "%s was not recognized as malformed haptics\n",
+           InvalidCases[Index].Name);
+        ok(!HapticsCapabilities.Valid,
+           "%s was accepted as valid haptics\n",
+           InvalidCases[Index].Name);
+    }
+
+    Status = HidP_GetCollectionDescription(HidPTestHapticTouchpadDescriptor,
+                                           sizeof(HidPTestHapticTouchpadDescriptor),
+                                           NonPagedPool,
+                                           &DeviceDescription);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+    {
+        for (Index = 0; Index < DeviceDescription.ReportIDsLength; Index++)
+        {
+            if (DeviceDescription.ReportIDs[Index].ReportID == 0x43)
+                DeviceDescription.ReportIDs[Index].OutputLength = 1;
+        }
+        Status = HidClassPtpDiscoverHaptics(&DeviceDescription,
+                                            &HapticsCapabilities);
+        ok_eq_hex(Status, STATUS_DEVICE_CONFIGURATION_ERROR);
+        ok(HapticsCapabilities.Present,
+           "The short output report was not recognized as haptics\n");
+        ok(!HapticsCapabilities.Valid,
+           "The short output report was accepted\n");
+        HidP_FreeCollectionDescription(&DeviceDescription);
+    }
 }
 
 VOID

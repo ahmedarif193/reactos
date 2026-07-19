@@ -10,10 +10,15 @@
 
 #define IOCTL_TEST_DESCRIPTION      1
 
+extern UCHAR HidPTestHapticTouchpadDescriptor[265];
+
 VOID
 TestHidClassPtpCapabilities(VOID);
 
 VOID
 TestHidClassPtpConfiguration(VOID);
+
+VOID
+TestHidClassPtpHaptics(VOID);
 
 #endif /* !defined _KMTEST_HIDP_H_ */

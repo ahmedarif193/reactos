@@ -193,7 +193,7 @@ static UCHAR ElanPrecisionTouchpadDescriptor[] =
 C_ASSERT(sizeof(ElanPrecisionTouchpadDescriptor) == 679);
 
 /* Microsoft Windows 11 haptic touchpad sample report descriptor. */
-static UCHAR HapticTouchpadDescriptor[] =
+UCHAR HidPTestHapticTouchpadDescriptor[] =
 {
     0x05, 0x0d, 0x09, 0x05, 0xa1, 0x01,
     0x85, 0x40, 0x05, 0x0d, 0x09, 0xb0, 0x35, 0x6e, 0x46, 0xbe, 0x00,
@@ -223,7 +223,7 @@ static UCHAR HapticTouchpadDescriptor[] =
     0x66, 0x01, 0x10, 0x55, 0x0d, 0x16, 0xe8, 0x03, 0x26, 0x88, 0x13,
     0x95, 0x01, 0x75, 0x10, 0x91, 0x02, 0xc0, 0xc0
 };
-C_ASSERT(sizeof(HapticTouchpadDescriptor) == 265);
+C_ASSERT(sizeof(HidPTestHapticTouchpadDescriptor) == 265);
 
 static UCHAR MultipleInputReportDescriptor[] =
 {
@@ -868,8 +868,8 @@ TestHapticTouchpad(VOID)
     USHORT ValueCapsLength;
     NTSTATUS Status;
 
-    Status = HidP_GetCollectionDescription(HapticTouchpadDescriptor,
-                                           sizeof(HapticTouchpadDescriptor),
+    Status = HidP_GetCollectionDescription(HidPTestHapticTouchpadDescriptor,
+                                           sizeof(HidPTestHapticTouchpadDescriptor),
                                            NonPagedPool,
                                            &DeviceDescription);
     ok_eq_hex(Status, STATUS_SUCCESS);
@@ -1575,6 +1575,7 @@ TestHidPDescription(
     TestHapticTouchpad();
     TestHidClassPtpCapabilities();
     TestHidClassPtpConfiguration();
+    TestHidClassPtpHaptics();
     TestUsageValueArrays();
     TestMultipleInputReports();
     TestConsumerAndSystemControls();
