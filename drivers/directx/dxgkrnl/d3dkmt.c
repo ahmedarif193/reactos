@@ -101,16 +101,21 @@ typedef struct _DXGKRNL_FILE_CONTEXT
  * 2.4-2.6: no optional paravirtualization/hot-update features claimed;
  *      per-level capability words report truthful zeros.
  * 2.7-2.9: hardware scheduling reported ALWAYS_OFF; 2.9 feature queries.
- * 3.0 (NT10): whole component set at DXGKDDI 0xF003; WDDM_3_0_CAPS reports
- *      hardware flip queues ALWAYS_OFF and Displayable unsupported.
+ * 3.0 (NT10): whole component set at the NT10 DXGKDDI level; WDDM_3_0_CAPS
+ *      reports hardware flip queues ALWAYS_OFF and Displayable unsupported.
+ * 3.1 (NT10.1): WDDM_3_1_CAPS reports NativeGpuFenceSupported = 0 — native
+ *      fences require hardware scheduling, which this stack truthfully does
+ *      not have; Windows 11 WARP reports the level the same way.
  * Optional features stay capability-gated; absence is reported, never faked.
  */
-#define DXGKP_OS_COMPLETED_WDDM_LEVEL KMT_DRIVERVERSION_WDDM_3_0
+#define DXGKP_OS_COMPLETED_WDDM_LEVEL KMT_DRIVERVERSION_WDDM_3_1
 
 static D3DKMT_DRIVERVERSION
 DxgkpMiniportDeclaredWddmLevel(
     _In_ ULONG Version)
 {
+    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
+        return KMT_DRIVERVERSION_WDDM_3_1;
     if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
         return KMT_DRIVERVERSION_WDDM_3_0;
     if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
@@ -1496,6 +1501,29 @@ DxgkpQueryAdapterInfoCaptured(
             _SEH2_TRY
             {
                 *(D3DKMT_WDDM_3_0_CAPS *)pQueryAdapterInfo->pPrivateDriverData = Caps;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                DXGKP_QUERY_RETURN(_SEH2_GetExceptionCode());
+            }
+            _SEH2_END;
+            DXGKP_QUERY_RETURN(STATUS_SUCCESS);
+        }
+
+        case KMTQAITYPE_WDDM_3_1_CAPS:
+        {
+            D3DKMT_WDDM_3_1_CAPS Caps;
+
+            if (pQueryAdapterInfo->pPrivateDriverData == NULL ||
+                pQueryAdapterInfo->PrivateDriverDataSize < sizeof(Caps))
+            {
+                DXGKP_QUERY_RETURN(STATUS_BUFFER_TOO_SMALL);
+            }
+            /* Native fences require hardware scheduling: truthfully absent. */
+            RtlZeroMemory(&Caps, sizeof(Caps));
+            _SEH2_TRY
+            {
+                *(D3DKMT_WDDM_3_1_CAPS *)pQueryAdapterInfo->pPrivateDriverData = Caps;
             }
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
             {
