@@ -17,6 +17,12 @@ foreach(testname testid IN ZIP_LISTS DELAYIMP_TEST_NAME DELAYIMP_TEST_INDEX)
     add_rostests_file(TARGET delayimp_${testname}_apitest)
 endforeach()
 
+add_executable(reshub_apitest reshub.c)
+set_module_type(reshub_apitest win32cui)
+target_link_libraries(reshub_apitest ${PSEH_LIB})
+add_importlibs(reshub_apitest msvcrt kernel32)
+add_rostests_file(TARGET reshub_apitest)
+
 #add_executable(sdk_apitest testlist.c)
 #set_module_type(sdk_apitest win32cui)
 #target_link_libraries(sdk_apitest ${PSEH_LIB})
