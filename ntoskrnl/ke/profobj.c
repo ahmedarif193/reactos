@@ -18,10 +18,73 @@ KIRQL KiProfileIrql = PROFILE_LEVEL;
 LIST_ENTRY KiProfileListHead;
 LIST_ENTRY KiProfileSourceListHead;
 KSPIN_LOCK KiProfileLock;
+/* Serializes physical profile-source transitions at passive level: the HAL
+   start/stop broadcasts an IPI rendezvous, which must never run under
+   KiProfileLock at an interrupt level that can block the rendezvous */
+KGUARDED_MUTEX KiProfileSourceMutex;
 ULONG KiProfileTimeInterval = 78125; /* Default resolution 7.8ms (sysinternals) */
 ULONG KiProfileAlignmentFixupInterval;
 
 /* FUNCTIONS *****************************************************************/
+
+static
+BOOLEAN
+KiAcquireProfileSourceLocked(
+    IN KPROFILE_SOURCE Source,
+    IN PKPROFILE_SOURCE_OBJECT NewSource)
+{
+    PLIST_ENTRY NextEntry;
+    PKPROFILE_SOURCE_OBJECT CurrentSource;
+
+    for (NextEntry = KiProfileSourceListHead.Flink;
+         NextEntry != &KiProfileSourceListHead;
+         NextEntry = NextEntry->Flink)
+    {
+        CurrentSource = CONTAINING_RECORD(NextEntry, KPROFILE_SOURCE_OBJECT, ListEntry);
+        if (CurrentSource->Source == Source)
+        {
+            ASSERT(CurrentSource->References != MAXULONG);
+            CurrentSource->References++;
+            return FALSE;
+        }
+    }
+
+    NewSource->Source = Source;
+    NewSource->References = 1;
+    InsertHeadList(&KiProfileSourceListHead, &NewSource->ListEntry);
+    return TRUE;
+}
+
+static
+PKPROFILE_SOURCE_OBJECT
+KiReleaseProfileSourceLocked(
+    IN KPROFILE_SOURCE Source)
+{
+    PLIST_ENTRY NextEntry;
+    PKPROFILE_SOURCE_OBJECT CurrentSource;
+
+    for (NextEntry = KiProfileSourceListHead.Flink;
+         NextEntry != &KiProfileSourceListHead;
+         NextEntry = NextEntry->Flink)
+    {
+        CurrentSource = CONTAINING_RECORD(NextEntry, KPROFILE_SOURCE_OBJECT, ListEntry);
+        if (CurrentSource->Source == Source)
+        {
+            ASSERT(CurrentSource->References != 0);
+            CurrentSource->References--;
+            if (CurrentSource->References == 0)
+            {
+                RemoveEntryList(&CurrentSource->ListEntry);
+                return CurrentSource;
+            }
+
+            return NULL;
+        }
+    }
+
+    ASSERT(FALSE);
+    return NULL;
+}
 
 VOID
 NTAPI
@@ -54,10 +117,16 @@ KeStartProfile(IN PKPROFILE Profile,
 {
     KIRQL OldIrql;
     PKPROFILE_SOURCE_OBJECT SourceBuffer;
-    PKPROFILE_SOURCE_OBJECT CurrentSource;
-    BOOLEAN FreeBuffer = TRUE, SourceFound = FALSE, StartedProfile;
+    BOOLEAN FreeBuffer = TRUE, StartedProfile = FALSE;
+    BOOLEAN StartSource = FALSE;
     PKPROCESS ProfileProcess;
-    PLIST_ENTRY NextEntry;
+
+    /* Callers must be at IRQL <= APC_LEVEL: starting blocks on the source
+       transition mutex and an all-processor timer rendezvous */
+    ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
+
+    /* Do not create a profile which the HAL cannot actually deliver. */
+    if (!Buffer || !KeQueryIntervalProfile(Profile->Source)) return FALSE;
 
     /* Allocate a buffer first, before we raise IRQL */
     SourceBuffer = ExAllocatePoolWithTag(NonPagedPool,
@@ -66,80 +135,45 @@ KeStartProfile(IN PKPROFILE Profile,
     if (!SourceBuffer) return FALSE;
     RtlZeroMemory(SourceBuffer, sizeof(KPROFILE_SOURCE_OBJECT));
 
+    /* Serialize the physical source transition with other transitions */
+    KeAcquireGuardedMutex(&KiProfileSourceMutex);
+
     /* Raise to profile IRQL and acquire the profile lock */
     KeRaiseIrql(KiProfileIrql, &OldIrql);
     KeAcquireSpinLockAtDpcLevel(&KiProfileLock);
 
-    /* Make sure it's not running */
+    /* Make sure it's not running. */
     if (!Profile->Started)
     {
-        /* Set it as Started */
+        StartSource = KiAcquireProfileSourceLocked(Profile->Source, SourceBuffer);
+        if (StartSource) FreeBuffer = FALSE;
+
         Profile->Buffer = Buffer;
         Profile->Started = TRUE;
-        StartedProfile = TRUE;
-
-        /* Get the process, if any */
         ProfileProcess = Profile->Process;
-
-        /* Check where we should insert it */
         if (ProfileProcess)
         {
-            /* Insert it into the Process List */
             InsertTailList(&ProfileProcess->ProfileListHead, &Profile->ProfileListEntry);
         }
         else
         {
-            /* Insert it into the Global List */
             InsertTailList(&KiProfileListHead, &Profile->ProfileListEntry);
         }
 
-        /* Start looping */
-        for (NextEntry = KiProfileSourceListHead.Flink;
-             NextEntry != &KiProfileSourceListHead;
-             NextEntry = NextEntry->Flink)
-        {
-            /* Get the entry */
-            CurrentSource = CONTAINING_RECORD(NextEntry,
-                                              KPROFILE_SOURCE_OBJECT,
-                                              ListEntry);
-
-            /* Check if it's the same as the one being requested now */
-            if (CurrentSource->Source == Profile->Source)
-            {
-                /* It is, break out */
-                SourceFound = TRUE;
-                break;
-            }
-        }
-
-        /* See if the loop found something */
-        if (!SourceFound)
-        {
-            /* Nothing found, use our allocated buffer */
-            CurrentSource = SourceBuffer;
-
-            /* Set up the Source Object */
-            CurrentSource->Source = Profile->Source;
-            InsertHeadList(&KiProfileSourceListHead, &CurrentSource->ListEntry);
-
-            /* Don't free the pool later on */
-            FreeBuffer = FALSE;
-        }
-    }
-    else
-    {
-        /* Already running so nothing to start */
-        StartedProfile = FALSE;
+        StartedProfile = TRUE;
     }
 
     /* Release the profile lock */
     KeReleaseSpinLockFromDpcLevel(&KiProfileLock);
 
-    /* Tell HAL to start the profile interrupt */
-    HalStartProfileInterrupt(Profile->Source);
-
     /* Lower back to original IRQL */
     KeLowerIrql(OldIrql);
+
+    /* Arm the timer outside the profile lock: the HAL rendezvous IPIs every
+       processor, and a concurrent profile interrupt spinning on the lock at
+       PROFILE_LEVEL would keep that rendezvous from ever completing */
+    if (StartSource) HalStartProfileInterrupt(Profile->Source);
+    KeReleaseGuardedMutex(&KiProfileSourceMutex);
 
     /* Free the pool */
     if (FreeBuffer) ExFreePoolWithTag(SourceBuffer, 'forP');
@@ -154,8 +188,14 @@ KeStopProfile(IN PKPROFILE Profile)
 {
     KIRQL OldIrql;
     PKPROFILE_SOURCE_OBJECT CurrentSource = NULL;
-    PLIST_ENTRY NextEntry;
-    BOOLEAN SourceFound = FALSE, StoppedProfile;
+    BOOLEAN StoppedProfile = FALSE;
+
+    /* Callers must be at IRQL <= APC_LEVEL: stopping blocks on the source
+       transition mutex and an all-processor timer rendezvous */
+    ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
+
+    /* Serialize the physical source transition with other transitions */
+    KeAcquireGuardedMutex(&KiProfileSourceMutex);
 
     /* Raise to profile IRQL and acquire the profile lock */
     KeRaiseIrql(KiProfileIrql, &OldIrql);
@@ -164,51 +204,27 @@ KeStopProfile(IN PKPROFILE Profile)
     /* Make sure it's running */
     if (Profile->Started)
     {
-        /* Remove it from the list and disable */
+        /* Remove it from the list and disable it before dropping the source. */
         RemoveEntryList(&Profile->ProfileListEntry);
         Profile->Started = FALSE;
         StoppedProfile = TRUE;
 
-        /* Start looping */
-        for (NextEntry = KiProfileSourceListHead.Flink;
-             NextEntry != &KiProfileSourceListHead;
-             NextEntry = NextEntry->Flink)
-        {
-            /* Get the entry */
-            CurrentSource = CONTAINING_RECORD(NextEntry,
-                                              KPROFILE_SOURCE_OBJECT,
-                                              ListEntry);
-
-            /* Check if this is the Source Object */
-            if (CurrentSource->Source == Profile->Source)
-            {
-                /* Remember we found one */
-                SourceFound = TRUE;
-
-                /* Remove it and break out */
-                RemoveEntryList(&CurrentSource->ListEntry);
-                break;
-            }
-        }
-
-    }
-    else
-    {
-        /* It wasn't! */
-        StoppedProfile = FALSE;
+        CurrentSource = KiReleaseProfileSourceLocked(Profile->Source);
     }
 
     /* Release the profile lock */
     KeReleaseSpinLockFromDpcLevel(&KiProfileLock);
 
-    /* Stop the profile interrupt */
-    HalStopProfileInterrupt(Profile->Source);
-
     /* Lower back to original IRQL */
     KeLowerIrql(OldIrql);
 
+    /* Disarm the timer outside the profile lock: the HAL rendezvous IPIs
+       every processor and must not wait behind PROFILE_LEVEL spinners */
+    if (CurrentSource) HalStopProfileInterrupt(Profile->Source);
+    KeReleaseGuardedMutex(&KiProfileSourceMutex);
+
     /* Free the Source Object */
-    if (SourceFound) ExFreePool(CurrentSource);
+    if (CurrentSource) ExFreePoolWithTag(CurrentSource, 'forP');
 
     /* Return whether we could stop the profile */
     return StoppedProfile;
@@ -225,8 +241,13 @@ KeQueryIntervalProfile(IN KPROFILE_SOURCE ProfileSource)
     /* Check what profile this is */
     if (ProfileSource == ProfileTime)
     {
+#if defined(_M_ARM) && !defined(_M_ARM64)
+        /* The ARM32 HAL has no profile interrupt provider. */
+        Interval = 0;
+#else
         /* Return the time interval */
         Interval = KiProfileTimeInterval;
+#endif
     }
     else if (ProfileSource == ProfileAlignmentFixup)
     {
@@ -269,8 +290,12 @@ KeSetIntervalProfile(IN ULONG Interval,
     /* Check what profile this is */
     if (ProfileSource == ProfileTime)
     {
-        /* Set the interval through HAL */
+        /* Keep the published interval and per-processor HAL broadcast in the
+           same order as profile source start/stop transitions. */
+        ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
+        KeAcquireGuardedMutex(&KiProfileSourceMutex);
         KiProfileTimeInterval = (ULONG)HalSetProfileInterval(Interval);
+        KeReleaseGuardedMutex(&KiProfileSourceMutex);
     }
     else if (ProfileSource == ProfileAlignmentFixup)
     {
@@ -309,9 +334,11 @@ KiParseProfileList(IN PKTRAP_FRAME TrapFrame,
     PKPROFILE Profile;
     PLIST_ENTRY NextEntry;
     ULONG_PTR ProgramCounter;
+    ULONG Processor;
 
     /* Get the Program Counter */
     ProgramCounter = KeGetTrapFramePc(TrapFrame);
+    Processor = KeGetCurrentProcessorNumber();
 
     /* Loop the List */
     for (NextEntry = ListHead->Flink;
@@ -323,8 +350,9 @@ KiParseProfileList(IN PKTRAP_FRAME TrapFrame,
 
         /* Check if the source is good, and if it's within the range */
         if ((Profile->Source != Source) ||
+            !(Profile->Affinity & AFFINITY_MASK(Processor)) ||
             (ProgramCounter < (ULONG_PTR)Profile->RangeBase) ||
-            (ProgramCounter > (ULONG_PTR)Profile->RangeLimit))
+            (ProgramCounter >= (ULONG_PTR)Profile->RangeLimit))
         {
             continue;
         }
@@ -335,7 +363,7 @@ KiParseProfileList(IN PKTRAP_FRAME TrapFrame,
                                 >> Profile->BucketShift) &~ 0x3));
 
         /* Increment the value */
-        (*BucketValue)++;
+        InterlockedIncrement((PLONG)BucketValue);
     }
 }
 
@@ -355,10 +383,24 @@ KeProfileInterruptWithSource(IN PKTRAP_FRAME TrapFrame,
                              IN KPROFILE_SOURCE Source)
 {
     PKPROCESS Process = KeGetCurrentThread()->ApcState.Process;
+    KIRQL OldIrql;
+    BOOLEAN RaisedIrql = FALSE;
 
-    /* We have to parse 2 lists. Per-Process and System-Wide */
+    /* Feed the loss-aware trace engine from the same physical interrupt. */
+
+    if (KeGetCurrentIrql() < KiProfileIrql)
+    {
+        KeRaiseIrql(KiProfileIrql, &OldIrql);
+        RaisedIrql = TRUE;
+    }
+
+    /* Start/stop and interrupt traversal share this lifetime lock. */
+    KeAcquireSpinLockAtDpcLevel(&KiProfileLock);
     KiParseProfileList(TrapFrame, Source, &Process->ProfileListHead);
     KiParseProfileList(TrapFrame, Source, &KiProfileListHead);
+    KeReleaseSpinLockFromDpcLevel(&KiProfileLock);
+
+    if (RaisedIrql) KeLowerIrql(OldIrql);
 }
 
 /*

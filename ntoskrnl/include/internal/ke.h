@@ -19,6 +19,7 @@ typedef struct _WOW64_PROCESS
 typedef struct _KPROFILE_SOURCE_OBJECT
 {
     KPROFILE_SOURCE Source;
+    ULONG References;
     LIST_ENTRY ListEntry;
 } KPROFILE_SOURCE_OBJECT, *PKPROFILE_SOURCE_OBJECT;
 
@@ -172,6 +173,7 @@ extern KTIMER_TABLE_ENTRY KiTimerTableListHead[TIMER_TABLE_SIZE];
 extern FAST_MUTEX KiGenericCallDpcMutex;
 extern LIST_ENTRY KiProfileListHead, KiProfileSourceListHead;
 extern KSPIN_LOCK KiProfileLock;
+extern KGUARDED_MUTEX KiProfileSourceMutex;
 extern LIST_ENTRY KiProcessListHead;
 extern LIST_ENTRY KiProcessInSwapListHead, KiProcessOutSwapListHead;
 extern LIST_ENTRY KiStackInSwapListHead;

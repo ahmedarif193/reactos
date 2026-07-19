@@ -52,7 +52,7 @@ VOID
 
 /* HAL profiling offsets in KeGetPcr()->HalReserved[] */
 #define HAL_PROFILING_INTERVAL      0
-#define HAL_PROFILING_MULTIPLIER    1
+#define HAL_PROFILING_FREQUENCY     1
 
 /* Usage flags */
 #define IDT_REGISTERED          0x01

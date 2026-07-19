@@ -104,11 +104,12 @@ NtCreateProfile(OUT PHANDLE ProfileHandle,
     NTSTATUS Status;
     ULONG Log2 = 0;
     ULONG_PTR Segment = 0;
-    ULONG BucketsRequired;
+    SIZE_T BucketsRequired;
     PAGED_CODE();
 
     /* Easy way out */
-    if(!BufferSize) return STATUS_INVALID_PARAMETER_7;
+    if (!BufferSize) return STATUS_INVALID_PARAMETER_7;
+    if (!(Affinity & KeActiveProcessors)) return STATUS_INVALID_PARAMETER_9;
 
     /* Check if this is a low-memory profile */
     if ((!BucketSize) && (RangeBase < (PVOID)(0x10000)))
@@ -138,7 +139,7 @@ NtCreateProfile(OUT PHANDLE ProfileHandle,
 
     /* Make sure that the buckets can map the range */
     BucketsRequired = RangeSize >> BucketSize;
-    if (RangeSize & ((1 << BucketSize) - 1))
+    if (RangeSize & (((SIZE_T)1 << BucketSize) - 1))
     {
         BucketsRequired++;
     }
@@ -149,7 +150,7 @@ NtCreateProfile(OUT PHANDLE ProfileHandle,
     }
 
     /* Make sure that the range isn't too gigantic */
-    if (((ULONG_PTR)RangeBase + RangeSize) < RangeSize)
+    if (RangeSize > MAXULONG_PTR - (ULONG_PTR)RangeBase)
     {
         DPRINT1("Range too big\n");
         return STATUS_BUFFER_OVERFLOW;
@@ -235,7 +236,9 @@ NtCreateProfile(OUT PHANDLE ProfileHandle,
     Profile->Buffer = Buffer;
     Profile->BufferSize = BufferSize;
     Profile->BucketSize = BucketSize;
+    Profile->ProfileObject = NULL;
     Profile->LockedBufferAddress = NULL;
+    Profile->Mdl = NULL;
     Profile->Segment = Segment;
     Profile->ProfileSource = ProfileSource;
     Profile->Affinity = Affinity;
@@ -252,8 +255,7 @@ NtCreateProfile(OUT PHANDLE ProfileHandle,
     /* Check for Success */
     if (!NT_SUCCESS(Status))
     {
-        /* Dereference Process on failure */
-        if (pProcess) ObDereferenceObject(pProcess);
+        /* ObInsertObject deleted Profile; ExpDeleteProfile released Process. */
         return Status;
     }
 
@@ -329,6 +331,7 @@ NtStartProfile(IN HANDLE ProfileHandle)
 {
     PEPROFILE Profile;
     PKPROFILE ProfileObject;
+    PMDL Mdl;
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     PVOID TempLockedBufferAddress;
     NTSTATUS Status;
@@ -371,48 +374,74 @@ NtStartProfile(IN HANDLE ProfileHandle)
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    /* Allocate the Mdl Structure */
-    Profile->Mdl = IoAllocateMdl(Profile->Buffer, Profile->BufferSize, FALSE, FALSE, NULL);
+    /* Reject a source for which no interrupt provider exists. */
+    if (!KeQueryIntervalProfile(Profile->ProfileSource))
+    {
+        Status = STATUS_NOT_SUPPORTED;
+        goto FailureProfileObject;
+    }
+
+    /* Allocate the MDL without publishing partially initialized state. */
+    Mdl = IoAllocateMdl(Profile->Buffer, Profile->BufferSize, FALSE, FALSE, NULL);
+    if (!Mdl)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto FailureProfileObject;
+    }
 
     /* Protect this in SEH as we might raise an exception */
     _SEH2_TRY
     {
         /* Probe and Lock for Write Access */
-        MmProbeAndLockPages(Profile->Mdl, PreviousMode, IoWriteAccess);
+        MmProbeAndLockPages(Mdl, PreviousMode, IoWriteAccess);
     }
     _SEH2_EXCEPT(ExSystemExceptionFilter())
     {
-        /* Release our lock, free the buffer, dereference and return */
-        KeReleaseMutex(&ExpProfileMutex, FALSE);
-        ObDereferenceObject(Profile);
-        ExFreePoolWithTag(ProfileObject, TAG_PROFILE);
-        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        Status = _SEH2_GetExceptionCode();
+        IoFreeMdl(Mdl);
+        _SEH2_YIELD(goto FailureProfileObject);
     }
     _SEH2_END;
 
     /* Map the pages */
-    TempLockedBufferAddress = MmMapLockedPages(Profile->Mdl, KernelMode);
+    TempLockedBufferAddress = MmMapLockedPagesSpecifyCache(Mdl, KernelMode, MmCached, NULL, FALSE, NormalPagePriority);
+    if (!TempLockedBufferAddress)
+    {
+        MmUnlockPages(Mdl);
+        IoFreeMdl(Mdl);
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto FailureProfileObject;
+    }
 
     /* Initialize the Kernel Profile Object */
-    Profile->ProfileObject = ProfileObject;
-    KeInitializeProfile(ProfileObject,
-                        &Profile->Process->Pcb,
-                        Profile->RangeBase,
-                        Profile->RangeSize,
-                        Profile->BucketSize,
-                        Profile->ProfileSource,
-                        Profile->Affinity);
+    KeInitializeProfile(ProfileObject, Profile->Process ? &Profile->Process->Pcb : NULL, Profile->RangeBase, Profile->RangeSize, Profile->BucketSize, Profile->ProfileSource, Profile->Affinity);
+    ProfileObject->Segment = Profile->Segment;
 
     /* Start the Profiling */
-    KeStartProfile(ProfileObject, TempLockedBufferAddress);
+    if (!KeStartProfile(ProfileObject, TempLockedBufferAddress))
+    {
+        MmUnmapLockedPages(TempLockedBufferAddress, Mdl);
+        MmUnlockPages(Mdl);
+        IoFreeMdl(Mdl);
+        Status = STATUS_PROFILING_NOT_STARTED;
+        goto FailureProfileObject;
+    }
 
-    /* Now it's safe to save this */
+    /* Publish the state only after every fallible operation succeeded. */
+    Profile->ProfileObject = ProfileObject;
+    Profile->Mdl = Mdl;
     Profile->LockedBufferAddress = TempLockedBufferAddress;
 
     /* Release mutex, dereference and return */
     KeReleaseMutex(&ExpProfileMutex, FALSE);
     ObDereferenceObject(Profile);
     return STATUS_SUCCESS;
+
+FailureProfileObject:
+    ExFreePoolWithTag(ProfileObject, TAG_PROFILE);
+    KeReleaseMutex(&ExpProfileMutex, FALSE);
+    ObDereferenceObject(Profile);
+    return Status;
 }
 
 NTSTATUS
@@ -448,7 +477,11 @@ NtStopProfile(IN HANDLE ProfileHandle)
     }
 
     /* Stop the Profile */
-    KeStopProfile(Profile->ProfileObject);
+    if (!KeStopProfile(Profile->ProfileObject))
+    {
+        Status = STATUS_PROFILING_NOT_STARTED;
+        goto Exit;
+    }
 
     /* Unlock the Buffer */
     MmUnmapLockedPages(Profile->LockedBufferAddress, Profile->Mdl);
@@ -458,6 +491,8 @@ NtStopProfile(IN HANDLE ProfileHandle)
 
     /* Clear the Locked Buffer pointer, meaning the Object is Stopped */
     Profile->LockedBufferAddress = NULL;
+    Profile->Mdl = NULL;
+    Profile->ProfileObject = NULL;
 
 Exit:
     /* Release Mutex, Dereference and Return */

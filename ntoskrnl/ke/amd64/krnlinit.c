@@ -258,6 +258,7 @@ KiInitializeKernel(IN PKPROCESS InitProcess,
 
     /* Initialize Profiling data */
     KeInitializeSpinLock(&KiProfileLock);
+    KeInitializeGuardedMutex(&KiProfileSourceMutex);
     InitializeListHead(&KiProfileListHead);
     InitializeListHead(&KiProfileSourceListHead);
 
