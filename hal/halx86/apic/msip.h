@@ -14,16 +14,8 @@
 
 /* MSI Vector Range Definitions
  *
- * The lower window [PRIMARY_VECTOR_BASE .. PRIMARY_VECTOR_BASE + APIC_MAX_IRQ)
- * i.e. 0x30 .. 0x47, is reserved for line-based IOAPIC IRQs via
- * HalpIrqToVector(IRQ) = IRQ + PRIMARY_VECTOR_BASE (see hal/halx86/include/halirq.h).
- * We therefore start MSI allocation at 0x50 so MSI vectors never collide with
- * legacy line vectors and the two classes are trivially distinguishable in
- * logs and IDT dumps.
- *
- * The upper bound stops at 0xCF — the APIC reserves the range [0xD0 .. 0xFF]
- * for CLOCK, IPI, SPURIOUS, PROFILE, PERF, NMI and related system vectors
- * (see apicp.h). */
+ * Lines own 0x30..0x47 plus the spillover window 0x48..0x4F, so MSI starts
+ * at 0x50; 0xD0..0xFF stays reserved for system vectors (see apicp.h). */
 #define MSI_VECTOR_MIN              0x50    /* Start of allocatable MSI vectors (above legacy IRQ range) */
 #define MSI_VECTOR_MAX              0xCF    /* End of allocatable MSI vectors */
 #define MSI_VECTOR_COUNT            (MSI_VECTOR_MAX - MSI_VECTOR_MIN + 1)

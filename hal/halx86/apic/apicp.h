@@ -62,6 +62,21 @@
 #define APIC_FREE_VECTOR 0xFF
 #define APIC_RESERVED_VECTOR 0xFE
 
+/* Upper bound on boot-IOAPIC redirection entries (PCH-class: 120 pins) */
+#include <reactos/hal/acpi_pci.h>
+#define APIC_MAX_GSI_PINS HAL_ACPI_MAX_GSI_PINS
+
+/* Pins actually present, from the IOAPIC version register; stays at
+   APIC_MAX_IRQ when discovery fails */
+extern ULONG HalpIoApicMaxIrq;
+
+#ifdef _M_AMD64
+/* Free vector window between the fixed line window (0x30..0x47) and the MSI
+   pool (0x50..0xCF), handed out to GSIs at or above APIC_MAX_IRQ. */
+#define APIC_SPILL_VECTOR_MIN 0x48
+#define APIC_SPILL_VECTOR_MAX 0x4F
+#endif
+
 extern UCHAR HalpVectorToIndex[256];
 
 /* The IMCR is supported by two read/writable or write-only I/O ports,
@@ -195,7 +210,8 @@ typedef union _APIC_BASE_ADDRESS_REGISTER
     {
         UINT64 Reserved1:8;
         UINT64 BootStrapCPUCore:1;
-        UINT64 Reserved2:2;
+        UINT64 Reserved2:1;
+        UINT64 ExtendedMode:1;
         UINT64 Enable:1;
         UINT64 BaseAddress:40;
         UINT64 ReservedMBZ:12;
