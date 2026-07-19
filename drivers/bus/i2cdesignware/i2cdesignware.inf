@@ -1,0 +1,78 @@
+; Intel LPSS DesignWare I2C controller driver
+
+[Version]
+Signature  = "$Windows NT$"
+Class      = System
+ClassGUID  = {4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider   = %ReactOS%
+DriverVer  = 07/19/2026,1.0.0.0
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[Manufacturer]
+%Intel% = Intel,NTamd64
+
+[Intel.NTamd64]
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_7A4C
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_7A4D
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_7A4E
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_7A4F
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_7A7C
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_7A7D
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_7ACC
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_7ACD
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_7ACE
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_7ACF
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_7AFC
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_7AFD
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_51C5
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_51C6
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_51D8
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_51D9
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_51E8
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_51E9
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_51EA
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_51EB
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_54C5
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_54C6
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_54E8
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_54E9
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_54EA
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_54EB
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_7E50
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_7E51
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_7E78
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_7E79
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_7E7A
+%IntelLPSSI2C.DeviceDesc% = IntelLPSSI2C_Install, PCI\VEN_8086&DEV_7E7B
+
+[IntelLPSSI2C_Install]
+CopyFiles = IntelLPSSI2C_CopyFiles
+
+[IntelLPSSI2C_CopyFiles]
+i2cdesignware.sys
+
+[IntelLPSSI2C_Install.Services]
+AddService = i2cdesignware, 0x00000002, IntelLPSSI2C_Service
+
+[IntelLPSSI2C_Service]
+DisplayName    = %IntelLPSSI2C.ServiceDesc%
+ServiceType    = 1
+StartType      = 3
+ErrorControl   = 1
+ServiceBinary  = %12%\i2cdesignware.sys
+LoadOrderGroup = System Bus Extender
+
+[SourceDisksNames]
+1 = %DiskName%
+
+[SourceDisksFiles]
+i2cdesignware.sys = 1
+
+[Strings]
+ReactOS                    = "ReactOS Project"
+Intel                      = "Intel Corporation"
+IntelLPSSI2C.DeviceDesc    = "Intel Serial IO I2C Host Controller"
+IntelLPSSI2C.ServiceDesc   = "Intel LPSS DesignWare I2C Controller Driver"
+DiskName                   = "ReactOS Intel LPSS I2C Driver Installation Disk"
