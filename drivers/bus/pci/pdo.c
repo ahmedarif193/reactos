@@ -2680,6 +2680,8 @@ PdoQueryResources(
     BOOLEAN RomReported = FALSE;
     ULONGLONG SocketBase = 0, SocketLength = 0;
     BOOLEAN SocketReported = FALSE;
+    UCHAR ExposableRoutedLine = 0;
+    BOOLEAN ExposeInterrupt = FALSE;
 
     Segment = PciPdoGetSegment((PPDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension);
     DPRINT("PdoQueryResources() called (seg %u)\n", Segment);
@@ -2724,10 +2726,14 @@ PdoQueryResources(
         if (RomReported)
             ResCount++;
 
-        if (PciPdoShouldExposeInterruptResources(&PciConfig) &&
-            (PciConfig.u.type0.InterruptPin != 0) &&
-            (PciConfig.u.type0.InterruptLine != 0) &&
-            (PciConfig.u.type0.InterruptLine != 0xFF))
+        /* Gate on the _PRT-routed line: modern UEFI leaves InterruptLine at
+         * 0/0xFF and publishes the real GSI only through the ACPI _PRT. */
+        if (PciPdoShouldExposeInterruptResources(&PciConfig) && (PciConfig.u.type0.InterruptPin != 0))
+        {
+            ExposableRoutedLine = PciPdoRoutedInterruptLine(DeviceExtension, PciConfig.u.type0.InterruptPin, PciConfig.u.type0.InterruptLine);
+            ExposeInterrupt = (ExposableRoutedLine != 0 && ExposableRoutedLine != 0xFF);
+        }
+        if (ExposeInterrupt)
             ResCount++;
     }
     else if (PCI_CONFIGURATION_TYPE(&PciConfig) == PCI_BRIDGE_TYPE)
@@ -2916,18 +2922,13 @@ PdoQueryResources(
         }
 
         /* Add interrupt resource */
-        if (PciPdoShouldExposeInterruptResources(&PciConfig) &&
-            (PciConfig.u.type0.InterruptPin != 0) &&
-            (PciConfig.u.type0.InterruptLine != 0) &&
-            (PciConfig.u.type0.InterruptLine != 0xFF))
+        if (ExposeInterrupt)
         {
-            UCHAR RoutedLine = PciPdoRoutedInterruptLine(DeviceExtension, PciConfig.u.type0.InterruptPin, PciConfig.u.type0.InterruptLine);
-
             Descriptor->Type = CmResourceTypeInterrupt;
             Descriptor->ShareDisposition = CmResourceShareShared;
             Descriptor->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
-            Descriptor->u.Interrupt.Level = RoutedLine;
-            Descriptor->u.Interrupt.Vector = RoutedLine;
+            Descriptor->u.Interrupt.Level = ExposableRoutedLine;
+            Descriptor->u.Interrupt.Vector = ExposableRoutedLine;
             Descriptor->u.Interrupt.Affinity = 0xFFFFFFFF;
         }
 
