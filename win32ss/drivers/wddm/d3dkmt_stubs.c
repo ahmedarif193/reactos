@@ -1888,6 +1888,8 @@ D3DKMTGetDeviceState(
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1B1, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_D3DKMT_SETVIDPNSOURCEOWNER1 \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1B2, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_SETVIDPNSOURCEOWNER2 \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1B7, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_D3DKMT_WAITFORVERTICALBLANKEVENT2 \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1B3, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_D3DKMT_CREATESYNCHRONIZATIONOBJECT2 \
@@ -2531,6 +2533,65 @@ D3DKMTSetVidPnSourceOwner1(
     Status = WddmBridgeSendIoctl(IOCTL_D3DKMT_SETVIDPNSOURCEOWNER1, &Captured, sizeof(Captured), NULL, 0);
 
 Cleanup:
+    if (SourceIds != NULL)
+        ExFreePoolWithTag(SourceIds, TAG_WDDM_BRIDGE);
+    if (OwnerTypes != NULL)
+        ExFreePoolWithTag(OwnerTypes, TAG_WDDM_BRIDGE);
+    return Status;
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTSetVidPnSourceOwner2(
+    _In_ CONST D3DKMT_SETVIDPNSOURCEOWNER2 *pData)
+{
+    D3DKMT_SETVIDPNSOURCEOWNER2 Captured;
+    D3DKMT_VIDPNSOURCEOWNER_TYPE *OwnerTypes = NULL;
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID *SourceIds = NULL;
+    D3DKMT_PTR_TYPE *NtHandles = NULL;
+    SIZE_T OwnerTypesSize = 0;
+    SIZE_T SourceIdsSize = 0;
+    SIZE_T NtHandlesSize = 0;
+    NTSTATUS Status;
+
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Captured.Version1.Version0.VidPnSourceCount > D3DKMT_BRIDGE_MAX_ALLOCATIONS)
+        return STATUS_INVALID_PARAMETER;
+
+    if (Captured.Version1.Version0.VidPnSourceCount != 0 && Captured.Version1.Version0.pType != NULL && Captured.Version1.Version0.pVidPnSourceId != NULL)
+    {
+        Status = WddmBridgeCaptureArray(Captured.Version1.Version0.pType, Captured.Version1.Version0.VidPnSourceCount, sizeof(*OwnerTypes), D3DKMT_BRIDGE_MAX_ALLOCATIONS, TRUE, FALSE, (PVOID *)&OwnerTypes, &OwnerTypesSize);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+        Status = WddmBridgeCaptureArray(Captured.Version1.Version0.pVidPnSourceId, Captured.Version1.Version0.VidPnSourceCount, sizeof(*SourceIds), D3DKMT_BRIDGE_MAX_ALLOCATIONS, TRUE, FALSE, (PVOID *)&SourceIds, &SourceIdsSize);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+        Captured.Version1.Version0.pType = OwnerTypes;
+        Captured.Version1.Version0.pVidPnSourceId = SourceIds;
+        if (Captured.pVidPnSourceNtHandles != NULL)
+        {
+            Status = WddmBridgeCaptureArray(Captured.pVidPnSourceNtHandles, Captured.Version1.Version0.VidPnSourceCount, sizeof(*NtHandles), D3DKMT_BRIDGE_MAX_ALLOCATIONS, TRUE, FALSE, (PVOID *)&NtHandles, &NtHandlesSize);
+            if (!NT_SUCCESS(Status))
+                goto Cleanup;
+            Captured.pVidPnSourceNtHandles = NtHandles;
+        }
+    }
+    else
+    {
+        Captured.Version1.Version0.pType = NULL;
+        Captured.Version1.Version0.pVidPnSourceId = NULL;
+        Captured.pVidPnSourceNtHandles = NULL;
+    }
+
+    Status = WddmBridgeSendIoctl(IOCTL_D3DKMT_SETVIDPNSOURCEOWNER2, &Captured, sizeof(Captured), NULL, 0);
+
+Cleanup:
+    if (NtHandles != NULL)
+        ExFreePoolWithTag(NtHandles, TAG_WDDM_BRIDGE);
     if (SourceIds != NULL)
         ExFreePoolWithTag(SourceIds, TAG_WDDM_BRIDGE);
     if (OwnerTypes != NULL)
