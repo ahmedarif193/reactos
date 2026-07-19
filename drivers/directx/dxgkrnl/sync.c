@@ -61,6 +61,15 @@ static VOID
 DxgkpSyncReleaseMonitoredPage(
     _In_ PDXGKRNL_SYNC_OBJECT SyncObj)
 {
+    if (SyncObj->MonitoredValueGpuVa != 0 &&
+        SyncObj->Device != NULL &&
+        SyncObj->Device->ProcessRecord != NULL)
+    {
+        DxgkGpuVaUnmapFencePage(SyncObj->Device->ProcessRecord,
+                                SyncObj->MonitoredValueGpuVa);
+        SyncObj->MonitoredValueGpuVa = 0;
+    }
+
     if (SyncObj->MonitoredValueUserVa != NULL &&
         SyncObj->MonitoredValueMdl != NULL &&
         SyncObj->MonitoredValueProcess != NULL)
@@ -133,7 +142,8 @@ DxgkSyncObjectAttachMonitoredPage(
     _In_ D3DKMT_HANDLE hSyncObject,
     _In_ UINT64 InitialFenceValue,
     _In_ D3DDDI_SYNCHRONIZATIONOBJECT_FLAGS Flags,
-    _Out_ PVOID *UserVa)
+    _Out_ PVOID *UserVa,
+    _Out_opt_ D3DGPU_VIRTUAL_ADDRESS *GpuVa)
 {
     PDXGKRNL_SYNC_OBJECT SyncObj;
     NTSTATUS Status;
@@ -143,6 +153,8 @@ DxgkSyncObjectAttachMonitoredPage(
     if (UserVa == NULL)
         return STATUS_INVALID_PARAMETER;
     *UserVa = NULL;
+    if (GpuVa != NULL)
+        *GpuVa = 0;
 
     Status = DxgkpReferenceSyncObjectByHandle(hSyncObject, PsGetCurrentProcess(), &SyncObj);
     if (!NT_SUCCESS(Status))
@@ -188,6 +200,23 @@ DxgkSyncObjectAttachMonitoredPage(
     SyncObj->MonitoredValueProcess = PsGetCurrentProcess();
     ObReferenceObject(SyncObj->MonitoredValueProcess);
 
+    /* GPU-side view of the value page on CPU_VIRTUAL GpuMmu adapters. */
+    SyncObj->MonitoredValueGpuVa = 0;
+    if (SyncObj->Device != NULL &&
+        SyncObj->Device->ProcessRecord != NULL &&
+        SyncObj->Device->Adapter != NULL)
+    {
+        D3DGPU_VIRTUAL_ADDRESS FenceGpuVa = 0;
+
+        if (NT_SUCCESS(DxgkGpuVaMapFencePage(SyncObj->Device->Adapter,
+                                             SyncObj->Device->ProcessRecord,
+                                             SyncObj->MonitoredValueKernelVa,
+                                             &FenceGpuVa)))
+        {
+            SyncObj->MonitoredValueGpuVa = FenceGpuVa;
+        }
+    }
+
     ExAcquireFastMutex(&SyncObj->Device->DeviceMutex);
     SyncObj->Flags = Flags;
     if ((InterlockedCompareExchange(&SyncObj->TdrAffected, 0, 0) != 0 || InterlockedCompareExchange(&SyncObj->Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE) && !Flags.NoSignalMaxValueOnTdr)
@@ -199,6 +228,8 @@ DxgkSyncObjectAttachMonitoredPage(
     ExReleaseFastMutex(&SyncObj->Device->DeviceMutex);
 
     *UserVa = SyncObj->MonitoredValueUserVa;
+    if (GpuVa != NULL)
+        *GpuVa = SyncObj->MonitoredValueGpuVa;
     DxgkpDereferenceSyncObject(SyncObj);
     return STATUS_SUCCESS;
 
