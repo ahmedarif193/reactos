@@ -464,12 +464,9 @@ HidClass_ReadCompleteIrp(
     PHIDCLASS_IRP_CONTEXT IrpContext;
     KIRQL OldLevel;
     PUCHAR Address;
-    ULONG Offset;
     ULONG CopyLength;
     ULONG ReadLength;
     PIO_STACK_LOCATION OriginalIoStack;
-    PHIDP_COLLECTION_DESC CollectionDescription;
-    PHIDP_REPORT_IDS ReportDescription;
     BOOLEAN IsEmpty;
     KIRQL CancelIrql;
     NTSTATUS OriginalStatus;
@@ -518,54 +515,30 @@ HidClass_ReadCompleteIrp(
         if (Address)
         {
             //
-            // reports may have a report id prepended
-            //
-            Offset = 0;
-
-            //
-            // get collection description
-            //
-            CollectionDescription = HidClassPDO_GetCollectionDescription(&IrpContext->FileOp->DeviceExtension->Common.DeviceDescription,
-                                                                         IrpContext->FileOp->DeviceExtension->CollectionNumber);
-            ASSERT(CollectionDescription);
-
-            //
-            // get report description
-            //
-            ReportDescription = HidClassPDO_GetReportDescription(&IrpContext->FileOp->DeviceExtension->Common.DeviceDescription,
-                                                                 IrpContext->FileOp->DeviceExtension->CollectionNumber);
-            ASSERT(ReportDescription);
-
-            if (CollectionDescription && ReportDescription)
-            {
-                //
-                // calculate offset
-                //
-                ASSERT(CollectionDescription->InputLength >= ReportDescription->InputLength);
-                Offset = CollectionDescription->InputLength - ReportDescription->InputLength;
-            }
-
-            //
             // copy result
             //
             OriginalIoStack = IoGetCurrentIrpStackLocation(IrpContext->OriginalIrp);
             ReadLength = OriginalIoStack->Parameters.Read.Length;
 
-            if (Offset >= ReadLength)
+            if (IrpContext->ReportDataOffset >= ReadLength)
             {
                 OriginalStatus = STATUS_BUFFER_TOO_SMALL;
                 OriginalInformation = 0;
             }
             else
             {
+                RtlZeroMemory(Address, ReadLength);
                 CopyLength = IrpContext->InputReportBufferLength;
                 if (CopyLength > Irp->IoStatus.Information)
                     CopyLength = (ULONG)Irp->IoStatus.Information;
-                if (CopyLength > ReadLength - Offset)
-                    CopyLength = ReadLength - Offset;
+                if (CopyLength > ReadLength - IrpContext->ReportDataOffset)
+                    CopyLength = ReadLength - IrpContext->ReportDataOffset;
 
-                RtlCopyMemory(&Address[Offset], IrpContext->InputReportBuffer, CopyLength);
-                OriginalInformation = Offset + CopyLength;
+                RtlCopyMemory(&Address[IrpContext->ReportDataOffset],
+                              IrpContext->InputReportBuffer,
+                              CopyLength);
+                OriginalInformation =
+                    IrpContext->ReportDataOffset + CopyLength;
             }
         }
         else
@@ -693,7 +666,9 @@ HidClass_BuildIrp(
     PHIDCLASS_IRP_CONTEXT IrpContext;
     PHIDCLASS_PDO_DEVICE_EXTENSION PDODeviceExtension;
     PHIDP_COLLECTION_DESC CollectionDescription;
-    PHIDP_REPORT_IDS ReportDescription;
+    PHIDP_DEVICE_DESC DeviceDescription;
+    ULONG Index, InputReportCount = 0;
+    UCHAR SingleReportId = 0;
 
     //
     // get an irp from fresh list
@@ -754,17 +729,25 @@ HidClass_BuildIrp(
                                                                  IrpContext->FileOp->DeviceExtension->CollectionNumber);
     ASSERT(CollectionDescription);
 
-    //
-    // get report description
-    //
-    ReportDescription = HidClassPDO_GetReportDescription(&IrpContext->FileOp->DeviceExtension->Common.DeviceDescription,
-                                                         IrpContext->FileOp->DeviceExtension->CollectionNumber);
-    ASSERT(ReportDescription);
-
-    //
-    // sanity check
-    //
-    ASSERT(CollectionDescription->InputLength >= ReportDescription->InputLength);
+    DeviceDescription =
+        &IrpContext->FileOp->DeviceExtension->Common.DeviceDescription;
+    for (Index = 0; Index < DeviceDescription->ReportIDsLength; Index++)
+    {
+        if (DeviceDescription->ReportIDs[Index].CollectionNumber ==
+                IrpContext->FileOp->DeviceExtension->CollectionNumber &&
+            DeviceDescription->ReportIDs[Index].InputLength != 0)
+        {
+            SingleReportId = DeviceDescription->ReportIDs[Index].ReportID;
+            InputReportCount++;
+        }
+    }
+    if (InputReportCount == 0 || CollectionDescription == NULL ||
+        CollectionDescription->InputLength == 0)
+    {
+        IoFreeIrp(Irp);
+        ExFreePoolWithTag(IrpContext, HIDCLASS_TAG);
+        return STATUS_NOT_SUPPORTED;
+    }
 
     if (Context->StopInProgress)
     {
@@ -782,7 +765,9 @@ HidClass_BuildIrp(
     //
     // store report length
     //
-    IrpContext->InputReportBufferLength = ReportDescription->InputLength;
+    IrpContext->InputReportBufferLength = CollectionDescription->InputLength;
+    IrpContext->ReportDataOffset =
+        (InputReportCount == 1 && SingleReportId == 0) ? 1 : 0;
 
     //
     // allocate buffer
@@ -797,6 +782,17 @@ HidClass_BuildIrp(
         ExFreePoolWithTag(IrpContext, HIDCLASS_TAG);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
+
+    /*
+     * A transport normally receives only an output buffer for
+     * IOCTL_HID_READ_REPORT. Seed its first byte with the report ID so a
+     * composite transport can match an input packet to the correct TLC read.
+     * USB miniports simply overwrite this byte, preserving their ABI.
+     */
+    RtlZeroMemory(IrpContext->InputReportBuffer,
+                  IrpContext->InputReportBufferLength);
+    if (InputReportCount == 1 && SingleReportId != 0)
+        ((PUCHAR)IrpContext->InputReportBuffer)[0] = SingleReportId;
 
     //
     // get stack location

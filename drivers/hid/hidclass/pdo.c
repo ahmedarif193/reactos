@@ -50,7 +50,8 @@ HidClassPDO_GetReportDescription(
 
     for (Index = 0; Index < DeviceDescription->ReportIDsLength; Index++)
     {
-        if (DeviceDescription->ReportIDs[Index].CollectionNumber == CollectionNumber)
+        if (DeviceDescription->ReportIDs[Index].CollectionNumber == CollectionNumber &&
+            DeviceDescription->ReportIDs[Index].InputLength != 0)
         {
             //
             // found collection
@@ -62,8 +63,8 @@ HidClassPDO_GetReportDescription(
     //
     // failed to find collection
     //
-    DPRINT1("[HIDCLASS] GetReportDescription CollectionNumber %x not found\n", CollectionNumber);
-    ASSERT(FALSE);
+    DPRINT1("[HIDCLASS] GetReportDescription CollectionNumber %x has no input report\n",
+            CollectionNumber);
     return NULL;
 }
 

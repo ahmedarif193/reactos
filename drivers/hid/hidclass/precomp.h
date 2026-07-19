@@ -170,6 +170,9 @@ typedef struct
     //
     ULONG InputReportBufferLength;
 
+    /* Unnumbered HID reports get the required leading zero byte here. */
+    UCHAR ReportDataOffset;
+
     //
     // work item
     //
