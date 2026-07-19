@@ -1683,23 +1683,10 @@ acpi_bus_init (void)
 	//result = acpi_ec_ecdt_probe();
 	/* Ignore result. Not having an ECDT is not fatal. */
 
-	status = AcpiInitializeObjects(ACPI_FULL_INITIALIZATION);
-	if (ACPI_FAILURE(status)) {
-		DPRINT1("Unable to initialize ACPI objects\n");
-		goto error1;
-	}
-
 	/*
-	 * Inform the firmware that the OS is using the IOAPIC. This switches
-	 * the _PRT routing returned by Link objects from PIC-mode legacy ISA
-	 * IRQs (0-15) to the IOAPIC input numbers (16+ for PIRQA..D on a
-	 * PIIX/ICH south bridge). Without this call, a kernel running in
-	 * APIC mode receives _PRT entries that do not correspond to the
-	 * IOAPIC pins where the virtual (and real) PCH actually asserts
-	 * PCI INTx, and level-triggered PCI interrupts are never delivered.
-	 *
-	 * A missing _PIC method is not fatal; some firmwares do not expose
-	 * it and default to returning APIC-ready routing unconditionally.
+	 * _PIC(1): switch _PRT routing from PIC-mode ISA IRQs to IOAPIC inputs.
+	 * Evaluated BEFORE AcpiInitializeObjects because _INI methods branch on
+	 * the PICM state. A missing _PIC method is not fatal.
 	 */
 	{
 		ACPI_OBJECT_LIST ArgList;
@@ -1720,6 +1707,12 @@ acpi_bus_init (void)
 		}
 		/* Reset status so a non-fatal _PIC failure does not stop init. */
 		status = AE_OK;
+	}
+
+	status = AcpiInitializeObjects(ACPI_FULL_INITIALIZATION);
+	if (ACPI_FAILURE(status)) {
+		DPRINT1("Unable to initialize ACPI objects\n");
+		goto error1;
 	}
 
 	/*
