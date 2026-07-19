@@ -917,6 +917,131 @@ DxgkpOpenFirstStartedAdapter(
     return *OutHandle != 0 ? STATUS_SUCCESS : STATUS_INSUFFICIENT_RESOURCES;
 }
 
+/*
+ * DxgkpOpenAdapterByDisplayOrdinal
+ *
+ * Exact GDI display selection: \\.\DISPLAYn maps to the n-th started
+ * display-capable adapter (each adapter exposes one source, so display
+ * ordinal == adapter ordinal among display adapters).
+ */
+static NTSTATUS
+DxgkpOpenAdapterByDisplayOrdinal(
+    _In_ ULONG DisplayOrdinal,
+    _Out_ D3DKMT_HANDLE *OutHandle,
+    _Out_ LUID *OutLuid)
+{
+    PDXGKRNL_ADAPTER Snapshot[DXGKP_MAX_ADAPTERS];
+    ULONG Count;
+    ULONG Seen = 0;
+    ULONG i;
+    NTSTATUS Status = STATUS_NO_SUCH_DEVICE;
+
+    *OutHandle = 0;
+    RtlZeroMemory(OutLuid, sizeof(*OutLuid));
+    if (DisplayOrdinal == 0)
+        return STATUS_INVALID_PARAMETER;
+    Count = DxgkpSnapshotAdapters(Snapshot);
+    for (i = 0; i < Count; ++i)
+    {
+        if (Snapshot[i]->NumberOfVideoPresentSources == 0)
+            continue;
+        if (++Seen != DisplayOrdinal)
+            continue;
+        *OutHandle = DxgkpCreateAdapterHandle(Snapshot[i]);
+        *OutLuid = Snapshot[i]->AdapterLuid;
+        Status = *OutHandle != 0 ? STATUS_SUCCESS : STATUS_INSUFFICIENT_RESOURCES;
+        break;
+    }
+    DxgkpDereferenceAdapterSnapshot(Snapshot, Count);
+    return Status;
+}
+
+/*
+ * DxgkpParseGdiDisplayName
+ * Parses "\\.\DISPLAYn" (case-insensitive prefix) from an inline WCHAR
+ * buffer; returns the 1-based ordinal or 0 on mismatch.
+ */
+static ULONG
+DxgkpParseGdiDisplayName(
+    _In_reads_(NameLength) CONST WCHAR *Name,
+    _In_ ULONG NameLength)
+{
+    static CONST WCHAR Prefix[] = L"\\\\.\\DISPLAY";
+    CONST ULONG PrefixLength = (ULONG)(sizeof(Prefix) / sizeof(WCHAR)) - 1;
+    ULONG Ordinal = 0;
+    ULONG i;
+
+    if (NameLength <= PrefixLength)
+        return 0;
+    for (i = 0; i < PrefixLength; ++i)
+    {
+        WCHAR C = Name[i];
+
+        if (C >= L'a' && C <= L'z')
+            C = (WCHAR)(C - L'a' + L'A');
+        if (C != Prefix[i])
+            return 0;
+    }
+    for (i = PrefixLength; i < NameLength && Name[i] != L'\0'; ++i)
+    {
+        if (Name[i] < L'0' || Name[i] > L'9' || Ordinal > 999)
+            return 0;
+        Ordinal = Ordinal * 10 + (ULONG)(Name[i] - L'0');
+    }
+    return Ordinal;
+}
+
+/*
+ * DxgkpOpenAdapterByDeviceObjectName
+ *
+ * Exact device-interface selection: resolves the caller's device name to a
+ * device object and matches its stack base PDO against each started
+ * adapter's physical device object.
+ */
+static NTSTATUS
+DxgkpOpenAdapterByDeviceObjectName(
+    _In_ PCWSTR DeviceName,
+    _Out_ D3DKMT_HANDLE *OutHandle,
+    _Out_ LUID *OutLuid)
+{
+    PDXGKRNL_ADAPTER Snapshot[DXGKP_MAX_ADAPTERS];
+    UNICODE_STRING Name;
+    PFILE_OBJECT FileObject = NULL;
+    PDEVICE_OBJECT DeviceObject = NULL;
+    PDEVICE_OBJECT BasePdo = NULL;
+    ULONG Count;
+    ULONG i;
+    NTSTATUS Status;
+
+    *OutHandle = 0;
+    RtlZeroMemory(OutLuid, sizeof(*OutLuid));
+
+    RtlInitUnicodeString(&Name, DeviceName);
+    Status = IoGetDeviceObjectPointer(&Name, FILE_READ_ATTRIBUTES, &FileObject, &DeviceObject);
+    if (!NT_SUCCESS(Status))
+        return STATUS_NO_SUCH_DEVICE;
+    BasePdo = IoGetDeviceAttachmentBaseRef(DeviceObject);
+
+    Status = STATUS_NO_SUCH_DEVICE;
+    Count = DxgkpSnapshotAdapters(Snapshot);
+    for (i = 0; i < Count; ++i)
+    {
+        if (Snapshot[i]->PhysicalDeviceObject != BasePdo &&
+            Snapshot[i]->PhysicalDeviceObject != DeviceObject)
+            continue;
+        *OutHandle = DxgkpCreateAdapterHandle(Snapshot[i]);
+        *OutLuid = Snapshot[i]->AdapterLuid;
+        Status = *OutHandle != 0 ? STATUS_SUCCESS : STATUS_INSUFFICIENT_RESOURCES;
+        break;
+    }
+    DxgkpDereferenceAdapterSnapshot(Snapshot, Count);
+
+    if (BasePdo != NULL)
+        ObDereferenceObject(BasePdo);
+    ObDereferenceObject(FileObject);
+    return Status;
+}
+
 /* ========================================================================
  * DxgkCloseAdapter — D3DKMTCloseAdapter
  *
@@ -4020,11 +4145,11 @@ DxgkpDispatchBufferedIoctl(
         /*
          * Priority 1: Bridge IOCTLs from win32k D3DKMT stubs.
          *
-         * OpenAdapterFromHdc / FromGdiDisplayName / FromDeviceName all
-         * resolve to the single started adapter for the current display-only
-         * DOD path.  A full implementation would look up the adapter by the
-         * HDC, display name, or device name, but for now we return the first
-         * started adapter — matching the viogpudo single-adapter model.
+         * Exact adapter selection: FromGdiDisplayName maps \\.\DISPLAYn to
+         * the n-th display-capable adapter; FromDeviceName resolves the
+         * device path to a PDO and matches it; FromHdc opens the primary
+         * display adapter (HDC-to-display translation belongs to win32k,
+         * which owns HDCs — the bridge transports the primary's surface).
          */
         case IOCTL_D3DKMT_OPENADAPTERFROMHDC:
         {
@@ -4037,7 +4162,7 @@ DxgkpDispatchBufferedIoctl(
             if (pData->hDc == NULL)
                 return STATUS_INVALID_PARAMETER;
 
-            Status = DxgkpOpenFirstStartedAdapter(&pData->hAdapter, &pData->AdapterLuid);
+            Status = DxgkpOpenAdapterByDisplayOrdinal(1, &pData->hAdapter, &pData->AdapterLuid);
             if (!NT_SUCCESS(Status))
                 return Status;
             pData->VidPnSourceId = 0;
@@ -4048,12 +4173,16 @@ DxgkpDispatchBufferedIoctl(
         case IOCTL_D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME:
         {
             D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME *pData;
+            ULONG DisplayOrdinal;
 
             if (InputLength < sizeof(D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME) || SystemBuffer == NULL)
                 return STATUS_BUFFER_TOO_SMALL;
 
             pData = (D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME *)SystemBuffer;
-            Status = DxgkpOpenFirstStartedAdapter(&pData->hAdapter, &pData->AdapterLuid);
+            DisplayOrdinal = DxgkpParseGdiDisplayName(pData->DeviceName, RTL_NUMBER_OF(pData->DeviceName));
+            if (DisplayOrdinal == 0)
+                return STATUS_INVALID_PARAMETER;
+            Status = DxgkpOpenAdapterByDisplayOrdinal(DisplayOrdinal, &pData->hAdapter, &pData->AdapterLuid);
             if (!NT_SUCCESS(Status))
                 return Status;
             pData->VidPnSourceId = 0;
@@ -4064,6 +4193,8 @@ DxgkpDispatchBufferedIoctl(
         case IOCTL_D3DKMT_OPENADAPTERFROMDEVICENAME:
         {
             D3DKMT_OPENADAPTERFROMDEVICENAME *pData;
+            WCHAR NameBuffer[260];
+            ULONG i;
 
             if (InputLength < sizeof(D3DKMT_OPENADAPTERFROMDEVICENAME) || SystemBuffer == NULL)
                 return STATUS_BUFFER_TOO_SMALL;
@@ -4072,7 +4203,28 @@ DxgkpDispatchBufferedIoctl(
             if (pData->pDeviceName == NULL)
                 return STATUS_INVALID_PARAMETER;
 
-            Status = DxgkpOpenFirstStartedAdapter(&pData->hAdapter, &pData->AdapterLuid);
+            Status = STATUS_SUCCESS;
+            _SEH2_TRY
+            {
+                for (i = 0; i < RTL_NUMBER_OF(NameBuffer) - 1; ++i)
+                {
+                    NameBuffer[i] = pData->pDeviceName[i];
+                    if (NameBuffer[i] == L'\0')
+                        break;
+                }
+                if (i == 0 || i == RTL_NUMBER_OF(NameBuffer) - 1)
+                    Status = STATUS_INVALID_PARAMETER;
+                NameBuffer[i] = L'\0';
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            if (!NT_SUCCESS(Status))
+                return Status;
+
+            Status = DxgkpOpenAdapterByDeviceObjectName(NameBuffer, &pData->hAdapter, &pData->AdapterLuid);
             if (!NT_SUCCESS(Status))
                 return Status;
             Irp->IoStatus.Information = sizeof(D3DKMT_OPENADAPTERFROMDEVICENAME);
@@ -5379,6 +5531,25 @@ DxgkpDispatchBufferedIoctl(
 
             pOwner1 = (D3DKMT_SETVIDPNSOURCEOWNER1 *)SystemBuffer;
             Status = DxgkpSetVidPnSourceOwnerWithFlagsAndAccessMode(&pOwner1->Version0, pOwner1->Flags.Value, EmbeddedBufferMode);
+            return Status;
+        }
+
+        case IOCTL_D3DKMT_SETVIDPNSOURCEOWNER2:
+        {
+            D3DKMT_SETVIDPNSOURCEOWNER2 *pOwner2;
+
+            if (InputLength < sizeof(D3DKMT_SETVIDPNSOURCEOWNER2) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+
+            pOwner2 = (D3DKMT_SETVIDPNSOURCEOWNER2 *)SystemBuffer;
+            /*
+             * The NT-handle form needs a real DispMgr authorization object
+             * type to validate each entry against; until that type exists
+             * the path stays gated rather than accepting unverified proofs.
+             */
+            if (pOwner2->pVidPnSourceNtHandles != NULL || pOwner2->Version1.Flags.UseNtHandles)
+                return STATUS_NOT_SUPPORTED;
+            Status = DxgkpSetVidPnSourceOwnerWithFlagsAndAccessMode(&pOwner2->Version1.Version0, pOwner2->Version1.Flags.Value, EmbeddedBufferMode);
             return Status;
         }
 
