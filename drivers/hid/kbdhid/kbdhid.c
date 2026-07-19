@@ -103,6 +103,24 @@ KbdHid_InsertScanCodes(
     return TRUE;
 }
 
+static
+VOID
+KbdHid_ContinueRead(
+    IN PKBDHID_DEVICE_EXTENSION DeviceExtension)
+{
+    if (DeviceExtension->StopReadReport)
+    {
+        DeviceExtension->ReadReportActive = FALSE;
+        DeviceExtension->StopReadReport = FALSE;
+        KeSetEvent(&DeviceExtension->ReadCompletionEvent, 0, FALSE);
+        return;
+    }
+
+    KbdHid_InitiateRead(DeviceExtension);
+
+    if (DeviceExtension->StopReadReport)
+        IoCancelIrp(DeviceExtension->Irp);
+}
 
 NTSTATUS
 NTAPI
@@ -166,7 +184,7 @@ KbdHid_ReadCompletion(
     if (Status != HIDP_STATUS_SUCCESS)
     {
         DPRINT1("[KBDHID] HidP_GetUsagesEx failed with %x\n", Status);
-        KbdHid_InitiateRead(DeviceExtension);
+        KbdHid_ContinueRead(DeviceExtension);
         return STATUS_MORE_PROCESSING_REQUIRED;
     }
 
@@ -181,7 +199,7 @@ KbdHid_ReadCompletion(
     if (Status != HIDP_STATUS_SUCCESS)
     {
         DPRINT1("[KBDHID] HidP_UsageAndPageListDifference failed with %x\n", Status);
-        KbdHid_InitiateRead(DeviceExtension);
+        KbdHid_ContinueRead(DeviceExtension);
         return STATUS_MORE_PROCESSING_REQUIRED;
     }
 
@@ -211,7 +229,7 @@ KbdHid_ReadCompletion(
         DPRINT1("[KBDHID] make translation failed with %x\n", Status);
 
     /* re-init read */
-    KbdHid_InitiateRead(DeviceExtension);
+    KbdHid_ContinueRead(DeviceExtension);
 
     /* stop completion */
     return STATUS_MORE_PROCESSING_REQUIRED;
@@ -757,9 +775,17 @@ KbdHid_StartDevice(
 
     /* init input report */
     DeviceExtension->ReportLength = Capabilities.InputReportByteLength;
-    ASSERT(DeviceExtension->ReportLength);
+    if (!DeviceExtension->ReportLength)
+    {
+        ExFreePoolWithTag(PreparsedData, KBDHID_TAG);
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
     DeviceExtension->Report = ExAllocatePoolWithTag(NonPagedPool, DeviceExtension->ReportLength, KBDHID_TAG);
-    ASSERT(DeviceExtension->Report);
+    if (!DeviceExtension->Report)
+    {
+        ExFreePoolWithTag(PreparsedData, KBDHID_TAG);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
     RtlZeroMemory(DeviceExtension->Report, DeviceExtension->ReportLength);
 
     /* build mdl */
@@ -768,21 +794,41 @@ KbdHid_StartDevice(
                                                FALSE,
                                                FALSE,
                                                NULL);
-    ASSERT(DeviceExtension->ReportMDL);
+    if (!DeviceExtension->ReportMDL)
+    {
+        ExFreePoolWithTag(DeviceExtension->Report, KBDHID_TAG);
+        DeviceExtension->Report = NULL;
+        ExFreePoolWithTag(PreparsedData, KBDHID_TAG);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
 
     /* init mdl */
     MmBuildMdlForNonPagedPool(DeviceExtension->ReportMDL);
 
     /* get max number of buttons */
-    Buttons = HidP_MaxUsageListLength(HidP_Input, HID_USAGE_PAGE_KEYBOARD, PreparsedData);
+    Buttons = HidP_MaxUsageListLength(HidP_Input,
+                                      HID_USAGE_PAGE_UNDEFINED,
+                                      PreparsedData);
     DPRINT("[KBDHID] Buttons %lu\n", Buttons);
-    ASSERT(Buttons > 0);
+    if (Buttons == 0)
+    {
+        IoFreeMdl(DeviceExtension->ReportMDL);
+        DeviceExtension->ReportMDL = NULL;
+        ExFreePoolWithTag(DeviceExtension->Report, KBDHID_TAG);
+        DeviceExtension->Report = NULL;
+        ExFreePoolWithTag(PreparsedData, KBDHID_TAG);
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
 
     /* now allocate an array for those buttons */
     Buffer = ExAllocatePoolWithTag(NonPagedPool, sizeof(USAGE_AND_PAGE) * 4 * Buttons, KBDHID_TAG);
     if (!Buffer)
     {
         /* no memory */
+        IoFreeMdl(DeviceExtension->ReportMDL);
+        DeviceExtension->ReportMDL = NULL;
+        ExFreePoolWithTag(DeviceExtension->Report, KBDHID_TAG);
+        DeviceExtension->Report = NULL;
         ExFreePoolWithTag(PreparsedData, KBDHID_TAG);
         return STATUS_INSUFFICIENT_RESOURCES;
     }

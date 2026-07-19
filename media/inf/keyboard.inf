@@ -31,6 +31,8 @@ HKR, , UpperFilters,   0x00010000, "kbdclass"
 %*PNP0303.DeviceDesc%    = PS2_Inst.NT,*PNP0303
 %*PNP030B.DeviceDesc%    = PS2_Inst.NT,*PNP030B
 %HID.KeyboardDevice%     = HID_Keyboard_Inst,,HID_DEVICE_SYSTEM_KEYBOARD
+%HID.ConsumerDevice%     = HID_Keyboard_Inst,,HID_DEVICE_SYSTEM_CONSUMER
+%HID.SystemControlDevice% = HID_Keyboard_Inst,,HID_DEVICE_SYSTEM_CONTROL
 
 ;------------------------------ HID DRIVER ------------------------------
 
@@ -110,6 +112,8 @@ StdMfg = "(Standard keyboards)"
 *PNP030B.DeviceDesc = "PC/AT Enhanced PS/2 keyboard (101/102-key)"
 LocationOverride = "plugged in to keyboard port"
 HID.KeyboardDevice = "HID-Keyboard"
+HID.ConsumerDevice = "HID Consumer Control"
+HID.SystemControlDevice = "HID System Control"
 
 [Strings.0404]
 KeyboardClassName = "鍵盤"
