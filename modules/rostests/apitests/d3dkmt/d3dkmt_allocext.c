@@ -60,7 +60,7 @@ C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, GpuVirtualAddress) == 24);
 #define CAF_CREATERESOURCE          0x00000001u
 #define CAF_CREATESHARED            0x00000002u
 #define CAF_CREATEPROTECTED         0x00000008u  /* forbidden from user mode */
-#define CAF_EXISTINGSYSMEM          0x00000020u  /* forbidden from user mode */
+#define CAF_EXISTINGSYSMEM          0x00000020u  /* user mode: EXISTINGHEAP only */
 #define CAF_CREATEWRITECOMBINED     0x00000100u  /* forbidden from user mode */
 #define CAF_CREATECACHED            0x00000200u  /* forbidden from user mode */
 #define CAF_OPENCROSSADAPTER        0x00001000u  /* forbidden from user mode */
@@ -206,7 +206,10 @@ Std_Attempt(D3DKMT_STANDARDALLOCATIONTYPE Type, const char *TypeName, BOOL UseV2
     ca.hDevice = hDevice;
     ca.pStandardAllocation = &std;            /* union: read because flag set  */
     ca.NumAllocations = 1;
-    ca.Flags = MakeAllocFlags(CAF_STANDARDALLOCATION);
+    /* EXISTINGHEAP is the documented ExistingSysMem+StandardAllocation
+     * combination (exactly one backing source). */
+    ca.Flags = MakeAllocFlags(CAF_STANDARDALLOCATION |
+                              (heap ? CAF_EXISTINGSYSMEM : 0));
 
     if (UseV2)
     {
