@@ -11,6 +11,8 @@
 #include <debug.h>
 
 #define LPSS_PRIV_OFFSET                    0x200
+#define LPSS_PRIV_CLOCK_GATE                (LPSS_PRIV_OFFSET + 0x00)
+#define LPSS_PRIV_CLOCK_GATE_ENABLE         0x00000001
 #define LPSS_PRIV_RESETS                    (LPSS_PRIV_OFFSET + 0x04)
 #define LPSS_PRIV_RESETS_IDMA               0x00000004
 #define LPSS_PRIV_RESETS_FUNC               0x00000003
@@ -75,6 +77,12 @@
 #define DW_IC_TX_ABRT_NOACK_MASK            0x0000001F
 #define DW_IC_TX_ABRT_ARB_LOST              0x00001000
 
+/* Reference clock and line timing for the supported Serial IO parts. Linux
+   maps every PCI ID in i2cdesignware.inf (ADL-S/P/N, RPL-S, MTL) to
+   bxt_i2c_info in drivers/mfd/intel-lpss-pci.c: 133 MHz with 42 ns SDA
+   hold and 171/208 ns fall times — exactly the values below. Adding a
+   PCH generation with a different reference (SPT 120 MHz, CNL-LP 216 MHz)
+   requires turning this into a device-ID-keyed table first. */
 #define DW_I2C_DEFAULT_CLOCK_HZ             133000000
 #define DW_I2C_SDA_FALL_NS                  171
 #define DW_I2C_SCL_FALL_NS                  208
@@ -294,7 +302,7 @@ NTSTATUS
 DwInitializeHardware(
     _Inout_ PDW_I2C_DEVICE_EXTENSION DeviceExtension)
 {
-    ULONG Capabilities, ComponentType, ComponentParameters, HoldCount;
+    ULONG Capabilities, ComponentType, ComponentParameters, HoldCount, ClockGate;
     NTSTATUS Status;
 
     if (DeviceExtension->Registers == NULL ||
@@ -324,6 +332,14 @@ DwInitializeHardware(
     DwWriteRegister(DeviceExtension,
                     LPSS_PRIV_REMAP_ADDR + sizeof(ULONG),
                     DeviceExtension->PhysicalBase.HighPart);
+
+    /* Open the functional clock gate (Linux registers a gate clock on
+       private offset 0 bit 0 and enables it before touching the DesignWare
+       core). Firmware that hands the function over with the gate closed
+       leaves the core unclocked, and the COMP_TYPE check below then reads
+       back garbage. */
+    ClockGate = DwReadRegister(DeviceExtension, LPSS_PRIV_CLOCK_GATE);
+    DwWriteRegister(DeviceExtension, LPSS_PRIV_CLOCK_GATE, ClockGate | LPSS_PRIV_CLOCK_GATE_ENABLE);
 
     ComponentType = DwReadRegister(DeviceExtension, DW_IC_COMP_TYPE);
     if (ComponentType != DW_IC_COMP_TYPE_VALUE)

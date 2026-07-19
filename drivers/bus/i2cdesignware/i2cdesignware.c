@@ -281,9 +281,12 @@ DwInternalDeviceControl(
             return DwCompleteIrp(Irp, STATUS_SUCCESS, 0);
 
         case IOCTL_INTERNAL_SPB_UNLOCK_CONTROLLER:
-            if (!DeviceExtension->ControllerExternallyLocked)
+            /* Atomic claim: with a plain check-then-clear two racing
+               unlockers could both release the limit-1 semaphore, which
+               raises an exception. Only the caller that flips TRUE->FALSE
+               performs the release. */
+            if (InterlockedExchange(&DeviceExtension->ControllerExternallyLocked, FALSE) == FALSE)
                 return DwCompleteIrp(Irp, STATUS_INVALID_DEVICE_STATE, 0);
-            DeviceExtension->ControllerExternallyLocked = FALSE;
             KeReleaseSemaphore(&DeviceExtension->TransferSemaphore,
                                IO_NO_INCREMENT,
                                1,

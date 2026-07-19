@@ -31,7 +31,7 @@ typedef struct _DW_I2C_DEVICE_EXTENSION
     BOOLEAN InterfaceRegistered;
     BOOLEAN InterfaceEnabled;
     BOOLEAN Started;
-    BOOLEAN ControllerExternallyLocked;
+    volatile LONG ControllerExternallyLocked;
     DEVICE_POWER_STATE DevicePowerState;
 } DW_I2C_DEVICE_EXTENSION, *PDW_I2C_DEVICE_EXTENSION;
 
