@@ -1371,6 +1371,10 @@ typedef struct _DXGKRNL_SYNC_OBJECT
     PMDL                        MonitoredValueMdl;
     PVOID                       MonitoredValueUserVa;
     PEPROCESS                   MonitoredValueProcess;
+
+    /* GPU VA of the value page in the creating process's address space
+     * (CPU_VIRTUAL GpuMmu adapters only), 0 when not mapped. */
+    D3DGPU_VIRTUAL_ADDRESS      MonitoredValueGpuVa;
 } DXGKRNL_SYNC_OBJECT, *PDXGKRNL_SYNC_OBJECT;
 
 /* ========================================================================
@@ -1887,6 +1891,18 @@ DxgkGpuVaApplyUpdate(
     _In_reads_(NumOperations) CONST D3DDDI_UPDATEGPUVIRTUALADDRESS_OPERATION *Operations,
     _In_ UINT NumOperations);
 
+NTSTATUS
+DxgkGpuVaMapFencePage(
+    _In_ PDXGKRNL_ADAPTER  Adapter,
+    _In_ PDXGKRNL_PROCESS  Process,
+    _In_ PVOID             KernelVa,
+    _Out_ D3DGPU_VIRTUAL_ADDRESS *OutAddress);
+
+VOID
+DxgkGpuVaUnmapFencePage(
+    _In_ PDXGKRNL_PROCESS       Process,
+    _In_ D3DGPU_VIRTUAL_ADDRESS Address);
+
 /*
  * GPU VA residency management (WDDM 2.0).
  */
@@ -2119,7 +2135,8 @@ DxgkSyncObjectAttachMonitoredPage(
     _In_ D3DKMT_HANDLE hSyncObject,
     _In_ UINT64 InitialFenceValue,
     _In_ D3DDDI_SYNCHRONIZATIONOBJECT_FLAGS Flags,
-    _Out_ PVOID *UserVa);
+    _Out_ PVOID *UserVa,
+    _Out_opt_ D3DGPU_VIRTUAL_ADDRESS *GpuVa);
 
 VOID
 NTAPI

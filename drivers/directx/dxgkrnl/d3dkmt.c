@@ -3171,9 +3171,10 @@ DxgkCreateSynchronizationObject2(
              * WDDM 2.0 monitored fence: back it with a CPU-side fence
              * object plus the documented CPU-visible value page (mapped
              * read-only into the caller and returned through
-             * MonitoredFence.FenceValueCPUVirtualAddress).  GPU-side
-             * monitoring of the value awaits the scheduler; the GPU VA is
-             * reported as 0 until then.
+             * MonitoredFence.FenceValueCPUVirtualAddress).  On CPU_VIRTUAL
+             * GpuMmu adapters the value page is also mapped into the
+             * process GPU VA space and reported through
+             * FenceValueGPUVirtualAddress; otherwise the GPU VA stays 0.
              */
             Create1.Info.Type = D3DDDI_FENCE;
             break;
@@ -3189,9 +3190,10 @@ DxgkCreateSynchronizationObject2(
         if (pData->Info.Type == D3DDDI_MONITORED_FENCE)
         {
             PVOID UserVa = NULL;
+            D3DGPU_VIRTUAL_ADDRESS FenceGpuVa = 0;
             NTSTATUS PageStatus;
 
-            PageStatus = DxgkSyncObjectAttachMonitoredPage(Create1.hSyncObject, pData->Info.MonitoredFence.InitialFenceValue, pData->Info.Flags, &UserVa);
+            PageStatus = DxgkSyncObjectAttachMonitoredPage(Create1.hSyncObject, pData->Info.MonitoredFence.InitialFenceValue, pData->Info.Flags, &UserVa, &FenceGpuVa);
             if (!NT_SUCCESS(PageStatus))
             {
                 D3DKMT_DESTROYSYNCHRONIZATIONOBJECT DestroySync;
@@ -3204,7 +3206,7 @@ DxgkCreateSynchronizationObject2(
             }
 
             pData->Info.MonitoredFence.FenceValueCPUVirtualAddress = UserVa;
-            pData->Info.MonitoredFence.FenceValueGPUVirtualAddress = 0;
+            pData->Info.MonitoredFence.FenceValueGPUVirtualAddress = FenceGpuVa;
         }
     }
 
