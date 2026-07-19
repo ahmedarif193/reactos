@@ -913,7 +913,11 @@ WddmBridgeCreateAllocation(
         WddmBridgeReadAllocationInfo(AllocationInfo, UseAllocationInfo2, i, &View);
         AllocationPrivateCapture[i].UserBuffer = View.pPrivateDriverData;
         AllocationPrivateCapture[i].Size = View.PrivateDriverDataSize;
-        if (ExGetPreviousMode() != KernelMode && View.pSystemMem != NULL)
+        /* User pSystemMem is only legal as EXISTINGHEAP backing; dxgkrnl
+         * probes and locks the pages in-context. */
+        if (ExGetPreviousMode() != KernelMode && View.pSystemMem != NULL &&
+            !(StandardAllocation &&
+              ((CONST D3DKMT_CREATESTANDARDALLOCATION *)Captured.pStandardAllocation)->Type == D3DKMT_STANDARDALLOCATIONTYPE_EXISTINGHEAP))
         {
             Status = STATUS_INVALID_PARAMETER;
             goto Cleanup;
@@ -2982,6 +2986,7 @@ D3DKMTMapGpuVirtualAddress(
     _Inout_ D3DDDI_MAPGPUVIRTUALADDRESS *pData)
 {
     D3DDDI_MAPGPUVIRTUALADDRESS Captured;
+    ULONG_PTR Information = 0;
     NTSTATUS Status;
 
     if (pData == NULL)
@@ -2989,7 +2994,24 @@ D3DKMTMapGpuVirtualAddress(
     Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
     if (!NT_SUCCESS(Status))
         return Status;
-    return WddmBridgeSendIoctl(IOCTL_D3DKMT_MAPGPUVIRTUALADDRESS, &Captured, sizeof(Captured), NULL, 0);
+    /* Probe the output words up front so the post-map copies cannot fail
+     * and orphan a mapping the caller never learned about. */
+    Status = WddmBridgeSafeProbeForWrite((PUCHAR)pData + FIELD_OFFSET(D3DDDI_MAPGPUVIRTUALADDRESS, VirtualAddress), sizeof(Captured.VirtualAddress));
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = WddmBridgeSafeProbeForWrite((PUCHAR)pData + FIELD_OFFSET(D3DDDI_MAPGPUVIRTUALADDRESS, PagingFenceValue), sizeof(Captured.PagingFenceValue));
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = WddmBridgeSendIoctlWithInformation(IOCTL_D3DKMT_MAPGPUVIRTUALADDRESS, &Captured, sizeof(Captured), &Captured, sizeof(Captured), &Information);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Information != sizeof(Captured))
+        return STATUS_INFO_LENGTH_MISMATCH;
+    Status = WddmBridgeSafeCopyTo((PUCHAR)pData + FIELD_OFFSET(D3DDDI_MAPGPUVIRTUALADDRESS, VirtualAddress), &Captured.VirtualAddress, sizeof(Captured.VirtualAddress));
+    if (NT_SUCCESS(Status))
+        Status = WddmBridgeSafeCopyTo((PUCHAR)pData + FIELD_OFFSET(D3DDDI_MAPGPUVIRTUALADDRESS, PagingFenceValue), &Captured.PagingFenceValue, sizeof(Captured.PagingFenceValue));
+    return Status;
 }
 
 NTSTATUS
