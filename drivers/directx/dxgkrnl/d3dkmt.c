@@ -4788,12 +4788,10 @@ DxgkpDispatchBufferedIoctl(
             _SEH2_END;
 
             if (NT_SUCCESS(Status))
-                Status = DxgkGpuVaValidateUpdate(Adapter, Device->ProcessRecord, Operations, pUpdate->NumOperations);
+                Status = DxgkGpuVaApplyUpdate(Adapter, Device->ProcessRecord, Operations, pUpdate->NumOperations);
             ExFreePoolWithTag(Operations, TAG_DXGK_GPUVA);
             DxgkDereferenceContext(VirtualContext);
-            if (!NT_SUCCESS(Status))
-                return Status;
-            return STATUS_NOT_SUPPORTED;
+            return Status;
         }
 
         case IOCTL_D3DKMT_MAKERESIDENT:
