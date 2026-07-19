@@ -872,8 +872,11 @@ NtGdiDdDDICreateSynchronizationObject2(_Inout_ D3DKMT_CREATESYNCHRONIZATIONOBJEC
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
     D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
+    /* The NT10 type range: this file builds at the pre-WDDM2 interface
+     * version, where D3DDDI_SYNCHRONIZATION_TYPE_LIMIT compiles to 5 and
+     * would reject MONITORED_FENCE(5)/PERIODIC_MONITORED_FENCE(6). */
     if (unnamedParam1->Info.Type <= 0 ||
-        unnamedParam1->Info.Type >= D3DDDI_SYNCHRONIZATION_TYPE_LIMIT)
+        unnamedParam1->Info.Type > 6)
     {
         return STATUS_INVALID_PARAMETER;
     }
