@@ -73,6 +73,9 @@ struct _XHCI_ISO_PACKET_CONTEXT {
 #ifndef PCI_COMMAND_OFFSET
 #define PCI_COMMAND_OFFSET      0x04
 #endif
+#ifndef PCI_DISABLE_LEVEL_INTERRUPT
+#define PCI_DISABLE_LEVEL_INTERRUPT 0x0400
+#endif
 
 #define XHCI_INVALID_LINK_STATE 0xFF
 #define USBPORT_NO_HUB_ADDRESS 0xFFFF
@@ -462,7 +465,8 @@ static VOID NTAPI XHCI_RebalanceEndpoint(PVOID MiniPortExtension,
                                          PVOID EndpointHandle);
 static BOOLEAN XHCI_EnablePciBusMaster(PXHCI_EXTENSION Extension);
 static BOOLEAN XHCI_DisableMessageInterrupts(PXHCI_EXTENSION Extension);
-static VOID XHCI_DisablePciIntx(PXHCI_EXTENSION Extension);
+static VOID XHCI_SetPciIntx(PXHCI_EXTENSION Extension, BOOLEAN Enable);
+static VOID XHCI_EnableIntelPortSwitchover(PXHCI_EXTENSION Extension);
 static VOID NTAPI XHCI_FlushInterrupts(PVOID MiniPortExtension);
 static MPSTATUS NTAPI XHCI_RH_ChirpRootPort(PVOID MiniPortExtension,
                                             USHORT Port);
@@ -8695,27 +8699,38 @@ XHCI_DetectHardwareQuirks(
     if (Extension->HciVersion <= 0x0100)
         Extension->Quirks |= XHCI_QUIRK_LIMIT_U1U2;
 
-    /* VID/DID logging + QEMU auto-detection. qemu-xhci advertises
-     * VID=0x1b36 (Red Hat) DID=0x000d. On QEMU, MSI interrupt delivery
-     * for interrupt-type endpoints is unreliable, causing HID mouse
-     * cursor lag (~64Hz vs >=125Hz expected). Force the poll fallback
-     * to also cover bulk/interrupt transfers on QEMU. */
-    if (XHCI_ReadPciConfig(Extension, 0x00, &VendorId, sizeof(VendorId)) &&
-        XHCI_ReadPciConfig(Extension, 0x02, &DeviceId, sizeof(DeviceId)))
+    /* On QEMU, MSI interrupt delivery for interrupt-type endpoints is
+     * unreliable, causing HID mouse cursor lag (~64Hz vs >=125Hz expected).
+     * Force the poll fallback to also cover bulk/interrupt transfers. */
+    Extension->PciVendorId = 0;
+    Extension->PciDeviceId = 0;
+    if (XHCI_ReadPciConfig(Extension, 0x00, &VendorId, sizeof(VendorId)) && XHCI_ReadPciConfig(Extension, 0x02, &DeviceId, sizeof(DeviceId)))
     {
-        DPRINT("usbxhci: PCI VID=%04x DID=%04x HciVer=%04x\n",
-                VendorId,
-                DeviceId,
-                Extension->HciVersion);
+        Extension->PciVendorId = VendorId;
+        Extension->PciDeviceId = DeviceId;
+        DPRINT("usbxhci: PCI VID=%04x DID=%04x HciVer=%04x\n", VendorId, DeviceId, Extension->HciVersion);
 
         if (VendorId == 0x1B36 && DeviceId == 0x000D)
         {
-            Extension->Quirks |= XHCI_QUIRK_IS_QEMU_XHCI |
-                                 XHCI_QUIRK_QEMU_POLL_XFERS |
-                                 XHCI_QUIRK_IGNORE_STARTUP_HCE |
-                                 XHCI_QUIRK_QEMU_CONFIG_EP_ORDER |
-                                 XHCI_QUIRK_QEMU_PORT_RESET;
+            Extension->Quirks |= XHCI_QUIRK_IS_QEMU_XHCI | XHCI_QUIRK_QEMU_POLL_XFERS | XHCI_QUIRK_IGNORE_STARTUP_HCE | XHCI_QUIRK_QEMU_CONFIG_EP_ORDER | XHCI_QUIRK_QEMU_PORT_RESET;
             DPRINT("usbxhci: detected qemu-xhci, enabling QEMU quirks + poll fallback\n");
+        }
+
+        /* Pre-Skylake Intel PCHs mux the shared USB ports between the EHCI
+         * companion and this xHCI; mark them for the port switchover. */
+        if (VendorId == 0x8086)
+        {
+            static const USHORT SwitchableDeviceIds[] = { 0x1E31, 0x8C31, 0x9C31, 0x9CB1, 0x8D31, 0x0F35, 0x22B5 };
+            ULONG IdIndex;
+
+            for (IdIndex = 0; IdIndex < RTL_NUMBER_OF(SwitchableDeviceIds); IdIndex++)
+            {
+                if (SwitchableDeviceIds[IdIndex] == DeviceId)
+                {
+                    Extension->Quirks |= XHCI_QUIRK_INTEL_PORT_SWITCHOVER;
+                    break;
+                }
+            }
         }
     }
 
@@ -9190,34 +9205,35 @@ XHCI_DisableLegacySupport(
                                         Offset + XHCI_LEGACY_CONTROL_OFFSET);
 
     Value = XHCI_READ_REGISTER_ULONG(LegacySupport);
-    if ((Value & XHCI_HC_BIOS_OWNED) == 0)
-        return MP_STATUS_SUCCESS;
-
-    Extension->Resources->LegacySupport = 1;
-    XHCI_WRITE_REGISTER_ULONG(LegacySupport, Value | XHCI_HC_OS_OWNED);
-
-    for (Retry = 0; Retry < TimeoutUs / 100; Retry++)
-    {
-        Value = XHCI_READ_REGISTER_ULONG(LegacySupport);
-        if ((Value & XHCI_HC_BIOS_OWNED) == 0)
-            break;
-
-        KeStallExecutionProcessor(100);
-    }
-
     if (Value & XHCI_HC_BIOS_OWNED)
     {
-        DPRINT1("usbxhci: BIOS failed to release legacy ownership within %lu us, continuing with shared control\n",
-                TimeoutUs);
-        /* Fall back to shared legacy ownership instead of treating the
-         * controller as completely unsupported. This matches the tolerant
-         * behaviour of Windows on firmware that never clears HC BIOS
-         * ownership and avoids hard‑failing StartController. */
-        return MP_STATUS_SUCCESS;
+        Extension->Resources->LegacySupport = 1;
+        XHCI_WRITE_REGISTER_ULONG(LegacySupport, Value | XHCI_HC_OS_OWNED);
+
+        for (Retry = 0; Retry < TimeoutUs / 100; Retry++)
+        {
+            Value = XHCI_READ_REGISTER_ULONG(LegacySupport);
+            if ((Value & XHCI_HC_BIOS_OWNED) == 0)
+                break;
+
+            KeStallExecutionProcessor(100);
+        }
+
+        if (Value & XHCI_HC_BIOS_OWNED)
+        {
+            /* Shared control with live SMM is not survivable; take ownership
+             * by force and neuter the SMI sources below. */
+            DPRINT1("usbxhci: BIOS failed to release legacy ownership within %lu us, forcibly taking ownership\n", TimeoutUs);
+            XHCI_WRITE_REGISTER_ULONG(LegacySupport, (Value | XHCI_HC_OS_OWNED) & ~XHCI_HC_BIOS_OWNED);
+        }
     }
 
+    /* Always disable the USB legacy SMI sources: XHCI_LEGACY_DISABLE_SMI is
+     * the preserve mask (reserved fields only, so the SMI enables drop), and
+     * XHCI_LEGACY_SMI_EVENTS write-1-clears anything latched. */
     Value = XHCI_READ_REGISTER_ULONG(LegacyControl);
-    Value &= ~(XHCI_LEGACY_DISABLE_SMI | XHCI_LEGACY_SMI_EVENTS);
+    Value &= XHCI_LEGACY_DISABLE_SMI;
+    Value |= XHCI_LEGACY_SMI_EVENTS;
     XHCI_WRITE_REGISTER_ULONG(LegacyControl, Value);
 
     return MP_STATUS_SUCCESS;
@@ -9483,58 +9499,78 @@ XHCI_DisableMessageInterrupts(
 }
 
 /*
- * XHCI_DisablePciIntx - Set the Interrupt Disable bit in PCI Command register
+ * XHCI_SetPciIntx - Set or clear the Interrupt Disable bit in the PCI Command register
  *
- * Per PCI 3.0 spec section 6.8.1, when MSI or MSI-X is enabled, the device
- * must not assert INTx. The OS must set bit 10 (Interrupt Disable) of the
- * PCI Command register to prevent the device from generating legacy INTx
- * interrupts on the PCI bus.
- *
- * This is critical because some emulators (e.g., QEMU xhci-pci) may assert
- * BOTH MSI and INTx simultaneously. If the ISR is only registered on the
- * MSI vector, the INTx goes to an unhandled vector causing an interrupt storm.
- *
- * PCI Command register bit 10 = Interrupt Disable:
- *   0 = INTx assertion enabled (default)
- *   1 = INTx assertion disabled
+ * Per PCI 3.0 sect 6.8.1 INTx must not assert while MSI/MSI-X is enabled
+ * (QEMU xhci-pci asserts both, storming the unhandled legacy vector); on
+ * the legacy path the wire must be allowed to assert.
  */
 static VOID
-XHCI_DisablePciIntx(
-    _Inout_ PXHCI_EXTENSION Extension)
+XHCI_SetPciIntx(_Inout_ PXHCI_EXTENSION Extension, _In_ BOOLEAN Enable)
 {
     USHORT Command;
+    USHORT NewCommand;
 
     if (!Extension || !XhciRegPacket.UsbPortReadWriteConfigSpace)
         return;
 
-    if (!XHCI_ReadPciConfig(Extension,
-                            PCI_COMMAND_OFFSET,
-                            &Command,
-                            sizeof(Command)))
+    if (!XHCI_ReadPciConfig(Extension, PCI_COMMAND_OFFSET, &Command, sizeof(Command)))
     {
-        DPRINT1("usbxhci: DisablePciIntx: failed to read PCI command register\n");
+        DPRINT1("usbxhci: SetPciIntx: failed to read PCI command register\n");
         return;
     }
 
-    if (Command & 0x0400)
+    NewCommand = Enable ? (Command & (USHORT)~PCI_DISABLE_LEVEL_INTERRUPT) : (Command | PCI_DISABLE_LEVEL_INTERRUPT);
+    if (NewCommand == Command)
     {
-        DPRINT("usbxhci: PCI INTx already disabled (cmd=0x%04x)\n", Command);
+        DPRINT("usbxhci: PCI INTx already %s (cmd=0x%04x)\n", Enable ? "enabled" : "disabled", Command);
         return;
     }
 
-    Command |= 0x0400; /* Interrupt Disable (bit 10) */
-
-    if (XhciRegPacket.UsbPortReadWriteConfigSpace(Extension,
-                                                   FALSE,
-                                                   &Command,
-                                                   PCI_COMMAND_OFFSET,
-                                                   sizeof(Command)) != MP_STATUS_SUCCESS)
+    if (!XHCI_WritePciConfig(Extension, PCI_COMMAND_OFFSET, &NewCommand, sizeof(NewCommand)))
     {
-        DPRINT1("usbxhci: DisablePciIntx: failed to write PCI command register\n");
+        DPRINT1("usbxhci: SetPciIntx: failed to write PCI command register\n");
         return;
     }
 
-    DPRINT1("usbxhci: disabled PCI INTx (cmd=0x%04x)\n", Command);
+    DPRINT1("usbxhci: %s PCI INTx (cmd=0x%04x)\n", Enable ? "enabled" : "disabled", NewCommand);
+}
+
+/*
+ * XHCI_EnableIntelPortSwitchover - Route shared Intel ports to the xHCI
+ *
+ * Muxed ports boot on the EHCI companion in BIOS Auto mode; claim them via
+ * USB3_PSSEN(0xD8) = USB3PRM(0xDC) and XUSB2PR(0xD0) = XUSB2PRM(0xD4).
+ */
+static VOID
+XHCI_EnableIntelPortSwitchover(_Inout_ PXHCI_EXTENSION Extension)
+{
+    ULONG PortMask = 0;
+    ULONG Routing = 0;
+
+    if (!Extension || !XhciRegPacket.UsbPortReadWriteConfigSpace)
+        return;
+
+    if (!XHCI_QuirkEnabled(Extension, XHCI_QUIRK_INTEL_PORT_SWITCHOVER))
+        return;
+
+    /* Enable SuperSpeed terminations on all switchable USB3 ports first. */
+    if (XHCI_ReadPciConfig(Extension, 0xDC, &PortMask, sizeof(PortMask)))
+    {
+        if (XHCI_WritePciConfig(Extension, 0xD8, &PortMask, sizeof(PortMask)) && XHCI_ReadPciConfig(Extension, 0xD8, &Routing, sizeof(Routing)))
+        {
+            DPRINT1("usbxhci: Intel USB3_PSSEN=%08lx (USB3PRM=%08lx)\n", Routing, PortMask);
+        }
+    }
+
+    /* Then steal the switchable USB2 ports from the EHCI companion. */
+    if (XHCI_ReadPciConfig(Extension, 0xD4, &PortMask, sizeof(PortMask)))
+    {
+        if (XHCI_WritePciConfig(Extension, 0xD0, &PortMask, sizeof(PortMask)) && XHCI_ReadPciConfig(Extension, 0xD0, &Routing, sizeof(Routing)))
+        {
+            DPRINT1("usbxhci: Intel XUSB2PR=%08lx (XUSB2PRM=%08lx)\n", Routing, PortMask);
+        }
+    }
 }
 
 static
@@ -12591,6 +12627,7 @@ XHCI_StartController(PVOID MiniPortExtension,
                 Status);
 #endif
     }
+
     /* Probe for MSI/MSI-X capabilities */
     XHCI_ProbeMsiMsix(Extension);
     MessageResourceAssigned =
@@ -12606,7 +12643,7 @@ XHCI_StartController(PVOID MiniPortExtension,
          * this by asserting BOTH MSI and INTx simultaneously, causing an
          * interrupt storm on the unhandled legacy vector after device disconnect.
          */
-        XHCI_DisablePciIntx(Extension);
+        XHCI_SetPciIntx(Extension, FALSE);
 
         {
             ULONG Messages = UsbPortResources->InterruptMessageCount ?
@@ -12633,6 +12670,10 @@ XHCI_StartController(PVOID MiniPortExtension,
         {
             DPRINT("usbxhci: no message interrupt resource assigned, using legacy INTx\n");
         }
+
+        /* Firmware may hand off with Interrupt Disable set; the INTx wire
+         * must be able to assert. */
+        XHCI_SetPciIntx(Extension, TRUE);
     }
 
     Extension->PendingUsbSts = 0;
@@ -12790,6 +12831,8 @@ XHCI_StartController(PVOID MiniPortExtension,
     }
 
     XHCI_DetectHardwareQuirks(Extension);
+
+    XHCI_EnableIntelPortSwitchover(Extension);
 
     Status = XHCI_BuildCommonBufferLayout(Extension, UsbPortResources);
     if (Status != MP_STATUS_SUCCESS)
@@ -14704,7 +14747,7 @@ XHCI_ResumeController(
      */
     XHCI_EnablePciBusMaster(Extension);
     if (Extension->MsixEnabled || Extension->MsiEnabled)
-        XHCI_DisablePciIntx(Extension);
+        XHCI_SetPciIntx(Extension, FALSE);
 
     XHCI_ReprogramControllerState(Extension);
     XHCI_ProgramInterrupterState(Extension);

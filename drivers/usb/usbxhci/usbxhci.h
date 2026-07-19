@@ -53,6 +53,7 @@ typedef struct _XHCI_ISO_PACKET_CONTEXT XHCI_ISO_PACKET_CONTEXT, *PXHCI_ISO_PACK
 #define XHCI_QUIRK_VBOX_POLL_XFERS    0x00000800
 #define XHCI_QUIRK_QEMU_POLL_XFERS    0x00001000
 #define XHCI_QUIRK_IS_QEMU_XHCI       0x00002000
+#define XHCI_QUIRK_INTEL_PORT_SWITCHOVER 0x00004000
 
 /* Mask of quirks that force transfer polling for the fallback event drain.
  * Board-specific controllers must request polling via a registry quirk
@@ -309,6 +310,9 @@ typedef struct _XHCI_EXTENSION {
   ULONG BounceBufferSize;
   ULONG BounceBuffersInUseMask;
   KSPIN_LOCK BounceBufferLock;
+  /* PCI identity, read once by XHCI_DetectHardwareQuirks (0 when no config space) */
+  USHORT PciVendorId;
+  USHORT PciDeviceId;
   /* MSI/MSI-X discovery (message interrupts not yet connected on ReactOS) */
   BOOLEAN MsiSupported;
     BOOLEAN MsixSupported;
