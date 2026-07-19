@@ -48,6 +48,13 @@ HalpGetMessageRoutingInfo(
 #define IOP_APIC_MSI_VECTOR_MIN   0x50
 #endif
 
+/* Fixed GSIs in [IOP_APIC_MAX_IRQ, IOP_APIC_MAX_GSI) pass through to the
+ * HAL spillover allocator; flexible ranges stay below IOP_APIC_MAX_IRQ. */
+#if defined(_M_AMD64)
+#include <reactos/hal/acpi_pci.h>
+#define IOP_APIC_MAX_GSI          HAL_ACPI_MAX_GSI_PINS
+#endif
+
 FORCEINLINE
 PIO_RESOURCE_LIST
 IopGetNextResourceList(
@@ -474,17 +481,30 @@ IopFindInterruptResource(
         ULONG LegacyMin = IoDesc->u.Interrupt.MinimumVector;
         ULONG LegacyMax = IoDesc->u.Interrupt.MaximumVector;
 
-#if defined(_M_IX86) || defined(_M_AMD64)
-        /* The "Vector" field iterated here is actually the bus
-         * interrupt level (IRQ index) passed to HalGetInterruptVector
-         * during translation, not a system vector. On Intel APIC HAL
-         * the valid IOAPIC GSI range is [0 .. APIC_MAX_IRQ), and any
-         * value above that translates via HalpIrqToVector() into the
-         * MSI vector pool. Clamp to keep legacy IRQs strictly below
-         * the MSI range. Bus drivers (notably the PCI FDO) commonly
-         * emit max=0xFF; clamping here is the only reliable choke
-         * point since the bus driver doesn't know the HAL's IOAPIC
-         * topology. */
+#if defined(_M_AMD64)
+        /* Fixed requirements (min == max) are firmware-assigned GSIs: let
+         * them through to the pin bound and let translation decide.
+         * Flexible ranges stay clamped below the fixed line window. */
+        if (LegacyMin == LegacyMax)
+        {
+            if (LegacyMin >= IOP_APIC_MAX_GSI)
+            {
+                DPRINT1("IopFindInterruptResource: fixed GSI %lu past IOAPIC range\n", LegacyMin);
+                return FALSE;
+            }
+        }
+        else
+        {
+            if (LegacyMax >= IOP_APIC_MAX_IRQ)
+                LegacyMax = IOP_APIC_MAX_IRQ - 1;
+            if (LegacyMin >= IOP_APIC_MAX_IRQ)
+            {
+                DPRINT1("IopFindInterruptResource: legacy min %lu past IOAPIC range\n", LegacyMin);
+                return FALSE;
+            }
+        }
+#elif defined(_M_IX86)
+        /* The i386 APIC HAL keeps the fixed 24-line window */
         if (LegacyMax >= IOP_APIC_MAX_IRQ)
             LegacyMax = IOP_APIC_MAX_IRQ - 1;
         if (LegacyMin >= IOP_APIC_MAX_IRQ)

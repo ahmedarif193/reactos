@@ -288,6 +288,17 @@ HalpCalibrateStallExecution(VOID);
 /* pci.c */
 VOID HalpInitPciBus (VOID);
 
+/* legacy/bus/pcibus.c: ACPI _PRT line-shape hints for IOAPIC RTE programming */
+BOOLEAN NTAPI HalpQueryPciGsiRteHints(_In_ ULONG Gsi, _Out_ PBOOLEAN ActiveLow, _Out_ PBOOLEAN LevelTriggered);
+
+/* generic/spinlock.c: any-IRQL lock protocol for shared hardware index/data windows */
+VOID NTAPI HalpAcquireRaisedSpinLock(_In_ PKSPIN_LOCK SpinLock, _Out_ PULONG_PTR OutFlags);
+VOID NTAPI HalpReleaseRaisedSpinLock(_In_ PKSPIN_LOCK SpinLock, _In_ ULONG_PTR Flags);
+
+/* generic/gsihints.c: MADT interrupt-source-override hints for IOAPIC RTE programming */
+VOID NTAPI HalpRegisterInterruptOverride(_In_ ULONG SourceIrq, _In_ ULONG GlobalIrq, _In_ USHORT IntiFlags);
+BOOLEAN NTAPI HalpQueryMadtRteHints(_In_ ULONG Gsi, _Out_ PBOOLEAN ActiveLow, _Out_ PBOOLEAN LevelTriggered);
+
 /* dma.c */
 CODE_SEG("INIT") VOID HalpInitDma (VOID);
 

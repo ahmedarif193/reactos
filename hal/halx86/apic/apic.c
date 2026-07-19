@@ -26,6 +26,26 @@
 
 ULONG ApicVersion;
 UCHAR HalpVectorToIndex[256];
+ULONG HalpIoApicMaxIrq = APIC_MAX_IRQ;
+
+/* The shared IOREGSEL/IOWIN select/access pair must not interleave between
+   CPUs, and level lines are masked from interrupt context: any-IRQL lock. */
+static KSPIN_LOCK HalpIoApicPairLock;
+static ULONG_PTR HalpIoApicPairFlags;
+
+static
+VOID
+HalpAcquireIoApicPairLock(VOID)
+{
+    HalpAcquireRaisedSpinLock(&HalpIoApicPairLock, &HalpIoApicPairFlags);
+}
+
+static
+VOID
+HalpReleaseIoApicPairLock(VOID)
+{
+    HalpReleaseRaisedSpinLock(&HalpIoApicPairLock, HalpIoApicPairFlags);
+}
 
 #ifndef _M_AMD64
 const UCHAR
@@ -89,35 +109,56 @@ HalVectorToIRQL[16] =
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
+/* Raw select/access pairs — caller must hold the pair lock */
 FORCEINLINE
 ULONG
-IOApicRead(UCHAR Register)
+IOApicReadRaw(UCHAR Register)
 {
-    /* Select the register, then do the read */
-    ASSERT(Register <= 0x3F);
     WRITE_REGISTER_ULONG((PULONG)(IOAPIC_BASE + IOAPIC_IOREGSEL), Register);
     return READ_REGISTER_ULONG((PULONG)(IOAPIC_BASE + IOAPIC_IOWIN));
 }
 
 FORCEINLINE
 VOID
-IOApicWrite(UCHAR Register, ULONG Value)
+IOApicWriteRaw(UCHAR Register, ULONG Value)
 {
-    /* Select the register, then do the write */
-    ASSERT(Register <= 0x3F);
     WRITE_REGISTER_ULONG((PULONG)(IOAPIC_BASE + IOAPIC_IOREGSEL), Register);
     WRITE_REGISTER_ULONG((PULONG)(IOAPIC_BASE + IOAPIC_IOWIN), Value);
 }
 
+FORCEINLINE
+ULONG
+IOApicRead(UCHAR Register)
+{
+    ULONG Value;
+
+    HalpAcquireIoApicPairLock();
+    Value = IOApicReadRaw(Register);
+    HalpReleaseIoApicPairLock();
+    return Value;
+}
+
+FORCEINLINE
+VOID
+IOApicWrite(UCHAR Register, ULONG Value)
+{
+    HalpAcquireIoApicPairLock();
+    IOApicWriteRaw(Register, Value);
+    HalpReleaseIoApicPairLock();
+}
+
+/* One lock hold covers both dwords, keeping the 64-bit entry access atomic */
 FORCEINLINE
 VOID
 ApicWriteIORedirectionEntry(
     UCHAR Index,
     IOAPIC_REDIRECTION_REGISTER ReDirReg)
 {
-    ASSERT(Index < APIC_MAX_IRQ);
-    IOApicWrite(IOAPIC_REDTBL + 2 * Index, ReDirReg.Long0);
-    IOApicWrite(IOAPIC_REDTBL + 2 * Index + 1, ReDirReg.Long1);
+    ASSERT(Index < HalpIoApicMaxIrq);
+    HalpAcquireIoApicPairLock();
+    IOApicWriteRaw(IOAPIC_REDTBL + 2 * Index, ReDirReg.Long0);
+    IOApicWriteRaw(IOAPIC_REDTBL + 2 * Index + 1, ReDirReg.Long1);
+    HalpReleaseIoApicPairLock();
 }
 
 FORCEINLINE
@@ -127,9 +168,11 @@ ApicReadIORedirectionEntry(
 {
     IOAPIC_REDIRECTION_REGISTER ReDirReg;
 
-    ASSERT(Index < APIC_MAX_IRQ);
-    ReDirReg.Long0 = IOApicRead(IOAPIC_REDTBL + 2 * Index);
-    ReDirReg.Long1 = IOApicRead(IOAPIC_REDTBL + 2 * Index + 1);
+    ASSERT(Index < HalpIoApicMaxIrq);
+    HalpAcquireIoApicPairLock();
+    ReDirReg.Long0 = IOApicReadRaw(IOAPIC_REDTBL + 2 * Index);
+    ReDirReg.Long1 = IOApicReadRaw(IOAPIC_REDTBL + 2 * Index + 1);
+    HalpReleaseIoApicPairLock();
 
     return ReDirReg;
 }
@@ -297,6 +340,18 @@ ApicInitializeLocalApic(ULONG Cpu)
 
     /* Enable the APIC if it wasn't yet */
     BaseRegister.LongLong = __readmsr(MSR_APIC_BASE);
+
+    /* This HAL drives the LAPIC through the xAPIC MMIO window, which is
+     * disabled while x2APIC EXTD is set; the only legal exit from x2APIC
+     * is through the disabled state. */
+    if (BaseRegister.ExtendedMode)
+    {
+        DPRINT1("APIC: CPU %lu handed over in x2APIC mode, forcing xAPIC\n", Cpu);
+        BaseRegister.Enable = 0;
+        BaseRegister.ExtendedMode = 0;
+        __writemsr(MSR_APIC_BASE, BaseRegister.LongLong);
+    }
+
     BaseRegister.Enable = 1;
     BaseRegister.BootStrapCPUCore = (Cpu == 0);
     __writemsr(MSR_APIC_BASE, BaseRegister.LongLong);
@@ -372,7 +427,7 @@ HalpAllocateSystemInterrupt(
 {
     IOAPIC_REDIRECTION_REGISTER ReDirReg;
 
-    ASSERT(Irq < APIC_MAX_IRQ);
+    ASSERT(Irq < HalpIoApicMaxIrq);
     ASSERT(HalpVectorToIndex[Vector] == APIC_FREE_VECTOR);
 
     /* Setup a redirection entry. Use fixed physical delivery: lowest-priority logical delivery can land the vector on a CPU whose IDT was never patched by KeConnectInterrupt, where it would be swallowed by KiUnexpectedInterrupt. */
@@ -406,20 +461,12 @@ HalpGetRootInterruptVector(
 {
     UCHAR Vector;
 
-    /* The IOAPIC exposes APIC_MAX_IRQ GSIs. Bus interrupt levels
-     * outside that range cannot be routed by a line and must be
-     * rejected so the caller falls back to another allocation path
-     * (MSI, deferred, etc.) instead of producing a vector that would
-     * land in the MSI/MSI-X pool. */
-    if (BusInterruptLevel >= APIC_MAX_IRQ)
+    /* Levels beyond the discovered pin count cannot be routed by a line;
+     * reject so the caller falls back to MSI/deferred allocation. */
+    if (BusInterruptLevel >= HalpIoApicMaxIrq)
     {
-        DPRINT1("HalpGetRootInterruptVector: out-of-range IRQ %lu (max %u)\n",
-                BusInterruptLevel, APIC_MAX_IRQ);
-        if (OutAffinity)
-            *OutAffinity = 0;
-        if (OutIrql)
-            *OutIrql = 0;
-        return 0;
+        DPRINT1("HalpGetRootInterruptVector: out-of-range IRQ %lu (max %lu)\n", BusInterruptLevel, HalpIoApicMaxIrq);
+        goto Reject;
     }
 
     /* If the IOAPIC redirection entry for this GSI is already
@@ -430,38 +477,66 @@ HalpGetRootInterruptVector(
         NT_ASSERT(HalpVectorToIndex[Vector] == BusInterruptLevel);
         *OutIrql = HalpVectorToIrql(Vector);
     }
-    else
+    else if (BusInterruptLevel < APIC_MAX_IRQ)
     {
-        /* Use the fixed IRQ -> vector mapping:
-         *     Vector = PRIMARY_VECTOR_BASE + BusInterruptLevel
-         *
-         * With BusInterruptLevel validated above to be < APIC_MAX_IRQ,
-         * the result is bounded to
-         * [PRIMARY_VECTOR_BASE .. PRIMARY_VECTOR_BASE + APIC_MAX_IRQ),
-         * i.e. 0x30..0x47. This window is strictly disjoint from the
-         * MSI/MSI-X allocation pool (0x50..0xCF), so the two interrupt
-         * classes cannot collide by construction. */
+        /* Fixed mapping bounded to 0x30..0x47, disjoint from the MSI pool
+         * (0x50..0xCF) by construction */
         Vector = (UCHAR)(PRIMARY_VECTOR_BASE + BusInterruptLevel);
 
         if (HalpVectorToIrq(Vector) != APIC_FREE_VECTOR)
         {
             DPRINT1("HalpGetRootInterruptVector: vector 0x%x already claimed for IRQ %lu\n",
                     Vector, BusInterruptLevel);
-            if (OutAffinity)
-                *OutAffinity = 0;
-            if (OutIrql)
-                *OutIrql = 0;
-            return 0;
+            goto Reject;
         }
 
         Vector = HalpAllocateSystemInterrupt(BusInterruptLevel, Vector);
         *OutIrql = HalpVectorToIrql(Vector);
+    }
+    else
+    {
+#ifdef _M_AMD64
+        /* GSIs past the fixed line window get a spillover vector below the
+         * MSI pool; first-fit, never freed. */
+        ULONG Candidate;
+
+        Vector = 0;
+        for (Candidate = APIC_SPILL_VECTOR_MIN; Candidate <= APIC_SPILL_VECTOR_MAX; Candidate++)
+        {
+            if (HalpVectorToIndex[Candidate] == APIC_FREE_VECTOR)
+            {
+                Vector = (UCHAR)Candidate;
+                break;
+            }
+        }
+
+        if (Vector == 0)
+        {
+            DPRINT1("HalpGetRootInterruptVector: spillover vector window exhausted for GSI %lu\n", BusInterruptLevel);
+            goto Reject;
+        }
+
+        Vector = HalpAllocateSystemInterrupt((UCHAR)BusInterruptLevel, Vector);
+        *OutIrql = HalpVectorToIrql(Vector);
+#else
+        /* The i386 TPR tables map the spillover window onto software
+         * IRQLs, so high GSIs stay unroutable there. */
+        DPRINT1("HalpGetRootInterruptVector: GSI %lu beyond the fixed line window\n", BusInterruptLevel);
+        goto Reject;
+#endif
     }
 
     *OutAffinity = HalpDefaultInterruptAffinity;
     ASSERT(HalpDefaultInterruptAffinity);
 
     return Vector;
+
+Reject:
+    if (OutAffinity)
+        *OutAffinity = 0;
+    if (OutIrql)
+        *OutIrql = 0;
+    return 0;
 }
 
 VOID
@@ -483,6 +558,21 @@ ApicInitializeIOApic(VOID)
     Pte->Global = 1;
     _ReadWriteBarrier();
 
+    /* Version register bits 16-23 hold the max redirection entry index;
+       keep the historical 24 lines when the read is implausible. */
+    {
+        ULONG VersionReg;
+        ULONG PinCount;
+
+        VersionReg = IOApicRead(IOAPIC_VER);
+        PinCount = ((VersionReg >> 16) & 0xFF) + 1;
+        if (VersionReg == 0xFFFFFFFF || PinCount == 0x100 || PinCount == 0)
+            PinCount = APIC_MAX_IRQ;
+        if (PinCount > APIC_MAX_GSI_PINS)
+            PinCount = APIC_MAX_GSI_PINS;
+        HalpIoApicMaxIrq = PinCount;
+    }
+
     /* Setup a redirection entry */
     ReDirReg.Vector = APIC_FREE_VECTOR;
     ReDirReg.MessageType = APIC_MT_Fixed;
@@ -496,7 +586,7 @@ ApicInitializeIOApic(VOID)
     ReDirReg.Destination = ApicRead(APIC_ID) >> 24;
 
     /* Loop all table entries */
-    for (Index = 0; Index < APIC_MAX_IRQ; Index++)
+    for (Index = 0; Index < HalpIoApicMaxIrq; Index++)
     {
         /* Initialize entry */
         ApicWriteIORedirectionEntry(Index, ReDirReg);
@@ -737,9 +827,26 @@ HalEnableSystemInterrupt(
     ReDirReg.MessageType = APIC_MT_Fixed;
     ReDirReg.DestinationMode = APIC_DM_Physical;
     ReDirReg.Destination = ApicRead(APIC_ID) >> 24;
-    ReDirReg.TriggerMode = (InterruptMode == LevelSensitive) ?
-        APIC_TGM_Level : APIC_TGM_Edge;
+    ReDirReg.TriggerMode = (InterruptMode == LevelSensitive) ? APIC_TGM_Level : APIC_TGM_Edge;
     ReDirReg.Mask = FALSE;
+
+    /* Pin shape: MADT overrides are authoritative for ISA-sourced GSIs,
+     * the _PRT for PCI GSIs; otherwise bus convention (level = PCI INTx =
+     * active-low, edge = ISA = active-high). */
+    {
+        BOOLEAN ActiveLow;
+        BOOLEAN LevelTriggered;
+
+        if (HalpQueryMadtRteHints(Index, &ActiveLow, &LevelTriggered) || HalpQueryPciGsiRteHints(Index, &ActiveLow, &LevelTriggered))
+        {
+            ReDirReg.Polarity = ActiveLow ? 1 : 0;
+            ReDirReg.TriggerMode = LevelTriggered ? APIC_TGM_Level : APIC_TGM_Edge;
+        }
+        else
+        {
+            ReDirReg.Polarity = (ReDirReg.TriggerMode == APIC_TGM_Level) ? 1 : 0;
+        }
+    }
 
     /* Write back the entry */
     ApicWriteIORedirectionEntry(Index, ReDirReg);
@@ -761,6 +868,14 @@ HalDisableSystemInterrupt(
     ASSERT(Vector < RTL_NUMBER_OF(HalpVectorToIndex));
 
     Index = HalpVectorToIndex[Vector];
+
+    /* No IOAPIC line behind this vector; a blind RMW through the stale
+       index would target an unrelated register. */
+    if (Index >= HalpIoApicMaxIrq)
+    {
+        DPRINT1("HalDisableSystemInterrupt: vector 0x%lx has no IOAPIC line (index 0x%x)\n", Vector, Index);
+        return;
+    }
 
     /* Read lower dword of redirection entry */
     ReDirReg.Long0 = IOApicRead(IOAPIC_REDTBL + 2 * Index);
@@ -804,7 +919,7 @@ HalBeginSystemInterrupt(
         Index = HalpVectorToIndex[Vector];
 
         /* Check if it's valid */
-        if (Index < APIC_MAX_IRQ)
+        if (Index < HalpIoApicMaxIrq)
         {
             /* Read the I/O redirection entry */
             RedirReg = ApicReadIORedirectionEntry(Index);

@@ -245,9 +245,7 @@ HalpParseApicTables(
                     return;
                 }
 
-                DPRINT00(" Interrupt Override: Bus %u, SourceIrq %u, GlobalIrq %08X, IntiFlags %04X / UNIMPLEMENTED\n",
-                         InterruptOverride->Bus, InterruptOverride->SourceIrq,
-                         InterruptOverride->GlobalIrq, InterruptOverride->IntiFlags);
+                DPRINT00(" Interrupt Override: Bus %u, SourceIrq %u, GlobalIrq %08X, IntiFlags %04X\n", InterruptOverride->Bus, InterruptOverride->SourceIrq, InterruptOverride->GlobalIrq, InterruptOverride->IntiFlags);
 
                 if (InterruptOverride->Bus != 0) // 0 = ISA
                 {
@@ -255,8 +253,13 @@ HalpParseApicTables(
                     return;
                 }
 
+                /* Record the firmware line shape (polarity/trigger) so the
+                   APIC HAL programs the redirection entry from firmware data
+                   (the SCI is routinely overridden to active-high level). */
+                HalpRegisterInterruptOverride(InterruptOverride->SourceIrq, InterruptOverride->GlobalIrq, InterruptOverride->IntiFlags);
+
 #if 1
-                // TODO: Implement it.
+                // TODO: Implement the SourceIrq -> GlobalIrq vector redirect.
 #else // TODO: Is that correct?
                 if (InterruptOverride->SourceIrq > _countof(HalpPicVectorRedirect))
                 {

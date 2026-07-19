@@ -1409,6 +1409,22 @@ HalpSetPciRoutingMap(
     }
 }
 
+/* ACPI _PRT line shape for a GSI; FALSE = no entry, caller uses convention */
+BOOLEAN
+NTAPI
+HalpQueryPciGsiRteHints(_In_ ULONG Gsi, _Out_ PBOOLEAN ActiveLow, _Out_ PBOOLEAN LevelTriggered)
+{
+    if (!ActiveLow || !LevelTriggered)
+        return FALSE;
+
+    if (Gsi >= RTL_NUMBER_OF(HalpPciGsiStaticInfo) || !HalpPciGsiInfo[Gsi].Valid)
+        return FALSE;
+
+    *ActiveLow = (HalpPciGsiInfo[Gsi].Polarity != HAL_ACPI_POLARITY_HIGH);
+    *LevelTriggered = (HalpPciGsiInfo[Gsi].Trigger == HAL_ACPI_TRIGGER_LEVEL);
+    return TRUE;
+}
+
 VOID
 NTAPI
 HalpRecordPciMaxGsi(
