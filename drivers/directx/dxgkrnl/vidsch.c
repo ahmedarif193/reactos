@@ -363,6 +363,61 @@ VidSchpCompletionDpcRoutine(
     }
 
     /*
+     * Preemption re-admission.  Every kicked-but-uncompleted packet was
+     * interrupted by the preemption:
+     *  - paging, tracked, and virtual packets keep their fence (identity
+     *    and order preserved: paging by contract, tracked/virtual because
+     *    the tracker/worker are bound to the minted fence) and are re-kicked
+     *    in place with the Resubmission flag;
+     *  - untracked ordinary packets are re-admitted at the tail behind all
+     *    queued work (paging first by construction), re-minting their fence
+     *    NOW so fence order == queue order stays intact, ordered among
+     *    themselves by descending priority (FIFO within a level).
+     */
+    if (PreemptionCompleted)
+    {
+        LIST_ENTRY ReadmitHead;
+        PLIST_ENTRY ReadmitLink;
+
+        InitializeListHead(&ReadmitHead);
+        Link = Engine->RunQueueHead.Flink;
+        while (Link != &Engine->RunQueueHead)
+        {
+            PVIDSCH_DMA_PACKET Preempted = CONTAINING_RECORD(Link, VIDSCH_DMA_PACKET, RunQueueEntry);
+            PLIST_ENTRY Next = Link->Flink;
+
+            if (!Preempted->Kicked)
+                break;
+            Preempted->Kicked = FALSE;
+            Preempted->SubmitFlags |= VIDSCH_SUBMITFLAG_RESUBMISSION;
+            if (!Preempted->Tracked && !Preempted->VirtualAddressing &&
+                (Preempted->SubmitFlags & VIDSCH_SUBMITFLAG_PAGING) == 0)
+            {
+                PLIST_ENTRY Sorted;
+
+                RemoveEntryList(Link);
+                for (Sorted = ReadmitHead.Flink; Sorted != &ReadmitHead; Sorted = Sorted->Flink)
+                {
+                    PVIDSCH_DMA_PACKET Queued = CONTAINING_RECORD(Sorted, VIDSCH_DMA_PACKET, RunQueueEntry);
+
+                    if (Queued->Priority < Preempted->Priority)
+                        break;
+                }
+                InsertTailList(Sorted, Link);
+            }
+            Link = Next;
+        }
+        for (ReadmitLink = ReadmitHead.Flink; ReadmitLink != &ReadmitHead; ReadmitLink = ReadmitLink->Flink)
+        {
+            PVIDSCH_DMA_PACKET Readmit = CONTAINING_RECORD(ReadmitLink, VIDSCH_DMA_PACKET, RunQueueEntry);
+
+            Readmit->SubmissionFenceId = DxgkAllocateSubmissionFenceId(Engine->Adapter);
+        }
+        while (!IsListEmpty(&ReadmitHead))
+            InsertTailList(&Engine->RunQueueHead, RemoveHeadList(&ReadmitHead));
+    }
+
+    /*
      * Transition engine state: if the run queue is now empty and the engine
      * was RUNNING, move to COMPLETING then IDLE.  If packets remain, the
      * engine stays RUNNING.
@@ -494,8 +549,7 @@ VidSchpVirtualSubmitWorker(
         SubmitArgs.SubmissionFenceId = Packet->SubmissionFenceId;
         SubmitArgs.VidPnSourceId = 0;
         SubmitArgs.FlipInterval = D3DDDI_FLIPINTERVAL_IMMEDIATE;
-        SubmitArgs.Flags.Value = 0;
-        SubmitArgs.Flags.NullRendering = Packet->SubmitFlags != 0;
+        SubmitArgs.Flags.Value = Packet->SubmitFlags;
         SubmitArgs.EngineOrdinal = Packet->EngineOrdinal;
         SubmitArgs.NodeOrdinal = Packet->NodeOrdinal;
     }
@@ -583,6 +637,18 @@ VidSchpKickEngine(
         {
             PVIDSCH_VIRTUAL_SUBMIT_WORK Work = (PVIDSCH_VIRTUAL_SUBMIT_WORK)Packet->VirtualSubmitWorkItem;
 
+            /* Resubmission after preemption: the original work item was
+             * consumed by the first kick — mint a fresh one. */
+            if (Work == NULL)
+            {
+                Work = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Work), TAG_VIDSCH);
+                if (Work != NULL)
+                {
+                    RtlZeroMemory(Work, sizeof(*Work));
+                    Work->Engine = Engine;
+                    ExInitializeWorkItem(&Work->WorkItem, VidSchpVirtualSubmitWorker, Work);
+                }
+            }
             if (Work == NULL)
             {
                 VidSchpTryTransition(&Engine->State, (LONG)VidSchEngineSubmitting, (LONG)VidSchEngineError, NULL);
@@ -1180,7 +1246,7 @@ VidSchSubmitCommandVirtual(
     Packet->VirtualDmaBufferSize = DmaBufferSize;
     Packet->Context = Context;
     Packet->VirtualAddressing = TRUE;
-    Packet->SubmitFlags = NullRendering ? 1u : 0u;
+    Packet->SubmitFlags = NullRendering ? VIDSCH_SUBMITFLAG_NULLRENDERING : 0u;
     FenceId = Packet->SubmissionFenceId;
 
     Ctx = (PVIDSCH_CONTEXT)Adapter->VidSchContext;
@@ -1278,8 +1344,9 @@ VidSchSubmitCommandTracked(
     Packet->MiniportDeviceHandle = MiniportDeviceHandle;
     Packet->MiniportContextHandle = MiniportContextHandle;
     Packet->Priority = Priority;
+    Packet->Tracked = TRUE;
     Packet->SubmitFlags = SubmitFlags;
-    Packet->IsPresent = ((SubmitFlags & 0x2u) != 0);
+    Packet->IsPresent = ((SubmitFlags & VIDSCH_SUBMITFLAG_PRESENT) != 0);
     Packet->VidPnSourceId = VidPnSourceId;
 
     if (DriverPrivateDataSize != 0)

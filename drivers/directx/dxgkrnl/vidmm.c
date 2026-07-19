@@ -7387,7 +7387,7 @@ DxgkVidMmSubmitAperturePagingPacket(
     TrackArgs.SignalFenceValue = SignalFenceValue;
     TrackArgs.Device = Device;
 
-    Status = VidSchSubmitCommandTracked(Adapter, 0, 0, DmaBuffer, NULL, 0, NULL, 0, NULL, 0, Device->hMiniportDevice, NULL, 0, &TrackArgs, 0, 0, &VidSchFence);
+    Status = VidSchSubmitCommandTracked(Adapter, 0, 0, DmaBuffer, NULL, 0, NULL, 0, NULL, 0, Device->hMiniportDevice, NULL, 0, &TrackArgs, VIDSCH_SUBMITFLAG_PAGING, 0, &VidSchFence);
     if (NT_SUCCESS(Status))
         DmaBuffer = NULL;
 

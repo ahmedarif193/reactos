@@ -86,6 +86,12 @@ typedef enum _VIDSCH_SCHEDULER_STATE
 #define VIDSCH_INLINE_PATCHES       8
 #define VIDSCH_MAX_PENDING_PACKETS  512
 
+/* VIDSCH_DMA_PACKET.SubmitFlags uses the DXGK_SUBMITCOMMANDFLAGS layout. */
+#define VIDSCH_SUBMITFLAG_PAGING        0x00000001u
+#define VIDSCH_SUBMITFLAG_PRESENT       0x00000002u
+#define VIDSCH_SUBMITFLAG_NULLRENDERING 0x00000008u
+#define VIDSCH_SUBMITFLAG_RESUBMISSION  0x00000080u
+
 typedef struct _VIDSCH_DMA_PACKET
 {
     /* Linkage in VIDSCH_ENGINE->RunQueueHead. */
@@ -136,6 +142,7 @@ typedef struct _VIDSCH_DMA_PACKET
     ULONG                       InlineAllocationCount;
     ULONG                       VidPnSourceId;
     ULONG                       SubmitFlags;
+    BOOLEAN                     Tracked;
     BOOLEAN                     VirtualAddressing;
     BOOLEAN                     HoldsContextReference;
     PVOID                       OwnedDriverPrivateData;
