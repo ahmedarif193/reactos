@@ -5758,7 +5758,7 @@ HalSetEnvironmentVariable(
  */
 static volatile LONG HalpArm64ProfileSources = 0;   /* bitmask of active KPROFILE_SOURCEs */
 static ULONG HalpArm64ProfileInterval = 100000;     /* requested interval, 100ns units */
-static LONG HalpArm64ProfileAccum[MAXIMUM_PROCESSORS];
+static ULONGLONG HalpArm64ProfileAccum[MAXIMUM_PROCESSORS];
 
 BOOLEAN
 NTAPI
@@ -5775,10 +5775,10 @@ HalArm64ProfileSample(
         return FALSE;
 
     /* Honor the requested interval even when it is coarser than the clock tick. */
-    HalpArm64ProfileAccum[Cpu] += (LONG)Increment;
-    if (HalpArm64ProfileAccum[Cpu] >= (LONG)HalpArm64ProfileInterval)
+    HalpArm64ProfileAccum[Cpu] += Increment;
+    if (HalpArm64ProfileAccum[Cpu] >= HalpArm64ProfileInterval)
     {
-        HalpArm64ProfileAccum[Cpu] -= (LONG)HalpArm64ProfileInterval;
+        HalpArm64ProfileAccum[Cpu] -= HalpArm64ProfileInterval;
         return TRUE;
     }
 
@@ -5799,6 +5799,8 @@ HalSetProfileInterval(
      * honored by accumulation in HalArm64ProfileSample. */
     if (Interval < Minimum)
         Interval = Minimum;
+    if (Interval > MAXULONG)
+        Interval = MAXULONG;
 
     HalpArm64ProfileInterval = (ULONG)Interval;
     return Interval;
