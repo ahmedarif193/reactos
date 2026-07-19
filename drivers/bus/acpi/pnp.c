@@ -133,6 +133,8 @@ Bus_FDO_PnP (
         break;
 
     case IRP_MN_REMOVE_DEVICE:
+        AcpiResourceHubUnregisterFdo(DeviceData);
+
         //
         // Clean up the PCI device interface.
         //

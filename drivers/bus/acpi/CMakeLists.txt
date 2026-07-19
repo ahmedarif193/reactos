@@ -204,6 +204,7 @@ list(APPEND ACPI_SOURCE
     opregion.c
     pnp.c
     power.c
+    reshub.c
     buspdo.c
     main.c)
 

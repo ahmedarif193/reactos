@@ -150,6 +150,7 @@ Bus_AddDevice(
     // We are done with initializing, so let's indicate that and return.
     // This should be the final step in the AddDevice process.
     //
+    AcpiResourceHubRegisterFdo(deviceData);
     deviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
 
 End:
@@ -174,6 +175,9 @@ ACPIDispatchCreateClose(
    IN PDEVICE_OBJECT DeviceObject,
    IN PIRP Irp)
 {
+   if (AcpiResourceHubIsDevice(DeviceObject))
+       return AcpiResourceHubCreateClose(DeviceObject, Irp);
+
    Irp->IoStatus.Status = STATUS_SUCCESS;
    Irp->IoStatus.Information = 0;
 
@@ -227,6 +231,9 @@ ACPIDispatchDeviceControl(
     PCOMMON_DEVICE_DATA     commonData;
     ULONG Caps = 0;
     HANDLE ThreadHandle;
+
+    if (AcpiResourceHubIsDevice(DeviceObject))
+        return AcpiResourceHubDeviceControl(DeviceObject, Irp);
 
     irpStack = IoGetCurrentIrpStackLocation (Irp);
     ASSERT (IRP_MJ_DEVICE_CONTROL == irpStack->MajorFunction);
@@ -769,8 +776,10 @@ DriverEntry (
     DriverObject->MajorFunction [IRP_MJ_POWER] = Bus_Power;
     DriverObject->MajorFunction [IRP_MJ_CREATE] = ACPIDispatchCreateClose;
     DriverObject->MajorFunction [IRP_MJ_CLOSE] = ACPIDispatchCreateClose;
+    DriverObject->MajorFunction [IRP_MJ_READ] = AcpiResourceHubReadWrite;
+    DriverObject->MajorFunction [IRP_MJ_WRITE] = AcpiResourceHubReadWrite;
 
     DriverObject->DriverExtension->AddDevice = Bus_AddDevice;
 
-    return STATUS_SUCCESS;
+    return AcpiResourceHubInitialize(DriverObject);
 }

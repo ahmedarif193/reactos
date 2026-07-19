@@ -74,6 +74,7 @@ typedef struct _PDO_DEVICE_DATA
     ULONG PciRootMemWindowCount;
     struct { ULONGLONG Start; ULONGLONG End; BOOLEAN Prefetchable; } PciRootMemWindows[ACPI_PCI_MAX_WINDOWS];
     BOOLEAN PciRootLogged;
+    ULONG ResourceHubId;
 } PDO_DEVICE_DATA, *PPDO_DEVICE_DATA;
 
 struct acpi_device_flags
@@ -177,6 +178,27 @@ AcpiGetPossibleResources (
     ok((Desc)->u.Port.MaximumAddress.QuadPart == ExpectedMax, "Desc->u.Port.MaximumAddress = 0x%I64x\n", (Desc)->u.Port.MaximumAddress.QuadPart);   \
     } while (0)
 
+#define expect_connection(Desc, ExpectedOption, ExpectedShare, ExpectedClass, ExpectedType, ExpectedIdLow, ExpectedIdHigh)       \
+    do {                                                                                                                         \
+    ok((Desc)->Option == ExpectedOption, "Desc->Option = %u\n", (Desc)->Option);                                                 \
+    ok((Desc)->Type == CmResourceTypeConnection, "Desc->Type = %u\n", (Desc)->Type);                                            \
+    ok((Desc)->ShareDisposition == ExpectedShare, "Desc->ShareDisposition = %u\n", (Desc)->ShareDisposition);                    \
+    ok((Desc)->u.Connection.Class == ExpectedClass, "Desc->u.Connection.Class = %u\n", (Desc)->u.Connection.Class);              \
+    ok((Desc)->u.Connection.Type == ExpectedType, "Desc->u.Connection.Type = %u\n", (Desc)->u.Connection.Type);                  \
+    ok((Desc)->u.Connection.IdLowPart == ExpectedIdLow, "Desc->u.Connection.IdLowPart = %lu\n", (Desc)->u.Connection.IdLowPart); \
+    ok((Desc)->u.Connection.IdHighPart == ExpectedIdHigh, "Desc->u.Connection.IdHighPart = %lu\n", (Desc)->u.Connection.IdHighPart); \
+    } while (0)
+
+#define expect_cm_connection(Desc, ExpectedShare, ExpectedClass, ExpectedType, ExpectedIdLow, ExpectedIdHigh)                     \
+    do {                                                                                                                          \
+    ok((Desc)->Type == CmResourceTypeConnection, "Desc->Type = %u\n", (Desc)->Type);                                             \
+    ok((Desc)->ShareDisposition == ExpectedShare, "Desc->ShareDisposition = %u\n", (Desc)->ShareDisposition);                     \
+    ok((Desc)->u.Connection.Class == ExpectedClass, "Desc->u.Connection.Class = %u\n", (Desc)->u.Connection.Class);               \
+    ok((Desc)->u.Connection.Type == ExpectedType, "Desc->u.Connection.Type = %u\n", (Desc)->u.Connection.Type);                   \
+    ok((Desc)->u.Connection.IdLowPart == ExpectedIdLow, "Desc->u.Connection.IdLowPart = %lu\n", (Desc)->u.Connection.IdLowPart);  \
+    ok((Desc)->u.Connection.IdHighPart == ExpectedIdHigh, "Desc->u.Connection.IdHighPart = %lu\n", (Desc)->u.Connection.IdHighPart); \
+    } while (0)
+
 START_TEST(Bus_PDO_QueryResourceRequirements)
 {
     NTSTATUS Status;
@@ -186,6 +208,7 @@ START_TEST(Bus_PDO_QueryResourceRequirements)
     ACPI_RESOURCE *Resource;
     PIO_RESOURCE_REQUIREMENTS_LIST ReqList;
     PIO_RESOURCE_LIST ReqList2;
+    PCM_RESOURCE_LIST CmList;
 
     /* Invalid AcpiHandle */
     AcpiCallExpected = FALSE;
@@ -498,4 +521,102 @@ START_TEST(Bus_PDO_QueryResourceRequirements)
     todo_if(1)
     ok_int(ReqList->ListSize, (ULONG_PTR)&ReqList2->Descriptors[6] - (ULONG_PTR)ReqList);
     ExFreePoolWithTag(ReqList, 'RpcA');
+
+    /* Serial bus and GPIO connection descriptors */
+    AcpiCallExpected = TRUE;
+    Irp.IoStatus.Status = STATUS_WAIT_0 + 17;
+    Irp.IoStatus.Information = 0;
+    DeviceData.AcpiHandle = CorrectHandle;
+    DeviceData.HardwareIDs = L"PNP0C50\0";
+    DeviceData.ResourceHubId = 0x12345678;
+    Resource = ResourcesBuffer;
+
+    Resource->Type = ACPI_RESOURCE_TYPE_SERIAL_BUS;
+    Resource->Length = sizeof(*Resource);
+    Resource->Data.I2cSerialBus.Type = ACPI_RESOURCE_SERIAL_TYPE_I2C;
+    Resource->Data.I2cSerialBus.ProducerConsumer = ACPI_CONSUMER;
+    Resource->Data.I2cSerialBus.ConnectionSharing = ACPI_EXCLUSIVE;
+
+    Resource = ACPI_NEXT_RESOURCE(Resource);
+    Resource->Type = ACPI_RESOURCE_TYPE_SERIAL_BUS;
+    Resource->Length = sizeof(*Resource);
+    Resource->Data.SpiSerialBus.Type = ACPI_RESOURCE_SERIAL_TYPE_SPI;
+    Resource->Data.SpiSerialBus.ProducerConsumer = ACPI_CONSUMER;
+    Resource->Data.SpiSerialBus.ConnectionSharing = ACPI_SHARED;
+
+    Resource = ACPI_NEXT_RESOURCE(Resource);
+    Resource->Type = ACPI_RESOURCE_TYPE_SERIAL_BUS;
+    Resource->Length = sizeof(*Resource);
+    Resource->Data.UartSerialBus.Type = ACPI_RESOURCE_SERIAL_TYPE_UART;
+    Resource->Data.UartSerialBus.ProducerConsumer = ACPI_CONSUMER;
+    Resource->Data.UartSerialBus.ConnectionSharing = ACPI_EXCLUSIVE;
+
+    /* Producer descriptors are controller resources, not client connections. */
+    Resource = ACPI_NEXT_RESOURCE(Resource);
+    Resource->Type = ACPI_RESOURCE_TYPE_SERIAL_BUS;
+    Resource->Length = sizeof(*Resource);
+    Resource->Data.I2cSerialBus.Type = ACPI_RESOURCE_SERIAL_TYPE_I2C;
+    Resource->Data.I2cSerialBus.ProducerConsumer = ACPI_PRODUCER;
+    Resource->Data.I2cSerialBus.ConnectionSharing = ACPI_EXCLUSIVE;
+
+    Resource = ACPI_NEXT_RESOURCE(Resource);
+    Resource->Type = ACPI_RESOURCE_TYPE_GPIO;
+    Resource->Length = sizeof(*Resource);
+    Resource->Data.Gpio.ProducerConsumer = ACPI_CONSUMER;
+    Resource->Data.Gpio.ConnectionType = ACPI_RESOURCE_GPIO_TYPE_IO;
+    Resource->Data.Gpio.Shareable = ACPI_SHARED;
+
+    /* GPIO interrupts remain ordinary interrupt resources, not connections. */
+    Resource = ACPI_NEXT_RESOURCE(Resource);
+    Resource->Type = ACPI_RESOURCE_TYPE_GPIO;
+    Resource->Length = sizeof(*Resource);
+    Resource->Data.Gpio.ProducerConsumer = ACPI_CONSUMER;
+    Resource->Data.Gpio.ConnectionType = ACPI_RESOURCE_GPIO_TYPE_INT;
+    Resource->Data.Gpio.Shareable = ACPI_SHARED;
+
+    Resource = ACPI_NEXT_RESOURCE(Resource);
+    Resource->Type = ACPI_RESOURCE_TYPE_END_TAG;
+    Resource->Length = 0;
+    Resource++;
+    PossibleBuffer.Pointer = ResourcesBuffer;
+    PossibleBuffer.Length = (ULONG_PTR)Resource - (ULONG_PTR)ResourcesBuffer;
+    CurrentBuffer = PossibleBuffer;
+
+    Status = Bus_PDO_QueryResourceRequirements(&DeviceData, &Irp);
+    ok(Status == STATUS_SUCCESS, "Status = 0x%lx\n", Status);
+    ReqList = (PVOID)Irp.IoStatus.Information;
+    ok(ReqList != NULL, "ReqList is NULL\n");
+    if (ReqList != NULL)
+    {
+        ok(ReqList->List[0].Count == 4, "List[0].Count = %lu\n", ReqList->List[0].Count);
+        expect_connection(&ReqList->List[0].Descriptors[0], IO_RESOURCE_PREFERRED, CmResourceShareDeviceExclusive,
+                          CM_RESOURCE_CONNECTION_CLASS_SERIAL, CM_RESOURCE_CONNECTION_TYPE_SERIAL_I2C, 1, 0x12345678);
+        expect_connection(&ReqList->List[0].Descriptors[1], IO_RESOURCE_PREFERRED, CmResourceShareShared,
+                          CM_RESOURCE_CONNECTION_CLASS_SERIAL, CM_RESOURCE_CONNECTION_TYPE_SERIAL_SPI, 2, 0x12345678);
+        expect_connection(&ReqList->List[0].Descriptors[2], IO_RESOURCE_PREFERRED, CmResourceShareDeviceExclusive,
+                          CM_RESOURCE_CONNECTION_CLASS_SERIAL, CM_RESOURCE_CONNECTION_TYPE_SERIAL_UART, 3, 0x12345678);
+        expect_connection(&ReqList->List[0].Descriptors[3], IO_RESOURCE_PREFERRED, CmResourceShareShared,
+                          CM_RESOURCE_CONNECTION_CLASS_GPIO, CM_RESOURCE_CONNECTION_TYPE_GPIO_IO, 5, 0x12345678);
+        ok_int(ReqList->ListSize, GetPoolAllocSize(ReqList));
+        ExFreePoolWithTag(ReqList, 'RpcA');
+    }
+
+    Status = BuspCreateResourceListFromAcpiResources(&DeviceData, CurrentBuffer.Pointer, FALSE, 0, &CmList);
+    ok(Status == STATUS_SUCCESS, "Status = 0x%lx\n", Status);
+    ok(CmList != NULL, "CmList is NULL\n");
+    if (CmList != NULL)
+    {
+        ok(CmList->List[0].PartialResourceList.Count == 4,
+           "PartialResourceList.Count = %lu\n",
+           CmList->List[0].PartialResourceList.Count);
+        expect_cm_connection(&CmList->List[0].PartialResourceList.PartialDescriptors[0], CmResourceShareDeviceExclusive,
+                             CM_RESOURCE_CONNECTION_CLASS_SERIAL, CM_RESOURCE_CONNECTION_TYPE_SERIAL_I2C, 1, 0x12345678);
+        expect_cm_connection(&CmList->List[0].PartialResourceList.PartialDescriptors[1], CmResourceShareShared,
+                             CM_RESOURCE_CONNECTION_CLASS_SERIAL, CM_RESOURCE_CONNECTION_TYPE_SERIAL_SPI, 2, 0x12345678);
+        expect_cm_connection(&CmList->List[0].PartialResourceList.PartialDescriptors[2], CmResourceShareDeviceExclusive,
+                             CM_RESOURCE_CONNECTION_CLASS_SERIAL, CM_RESOURCE_CONNECTION_TYPE_SERIAL_UART, 3, 0x12345678);
+        expect_cm_connection(&CmList->List[0].PartialResourceList.PartialDescriptors[3], CmResourceShareShared,
+                             CM_RESOURCE_CONNECTION_CLASS_GPIO, CM_RESOURCE_CONNECTION_TYPE_GPIO_IO, 5, 0x12345678);
+        ExFreePoolWithTag(CmList, 'RpcA');
+    }
 }

@@ -201,6 +201,7 @@ Bus_PlugInDevice (
     pdoData = (PPDO_DEVICE_DATA) pdo->DeviceExtension;
     RtlZeroMemory(pdoData, sizeof(*pdoData));
     pdoData->AcpiHandle = Device->handle;
+    pdoData->ResourceHubId = (ULONG)InterlockedIncrement(&FdoData->NextResourceHubId);
     InitializeListHead(&pdoData->NotificationList);
     KeInitializeSpinLock(&pdoData->NotificationLock);
 

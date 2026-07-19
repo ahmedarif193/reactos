@@ -74,6 +74,7 @@ typedef struct _PDO_DEVICE_DATA
     ULONG NotificationRegistrationCount;
     BOOLEAN NotificationHandlersInstalled;
     BOOLEAN PciRootLogged;
+    ULONG ResourceHubId;
 
 } PDO_DEVICE_DATA, *PPDO_DEVICE_DATA;
 
@@ -104,8 +105,45 @@ typedef struct _FDO_DEVICE_DATA
     UNICODE_STRING  PciInterfaceName;
     BOOLEAN         PciInterfaceRegistered;
     BOOLEAN         PciInterfaceEnabled;
+    volatile LONG   NextResourceHubId;
 
 } FDO_DEVICE_DATA, *PFDO_DEVICE_DATA;
+
+/* reshub.c */
+
+NTSTATUS
+AcpiResourceHubInitialize(
+    _In_ PDRIVER_OBJECT DriverObject);
+
+VOID
+AcpiResourceHubRegisterFdo(
+    _In_ PFDO_DEVICE_DATA FdoData);
+
+VOID
+AcpiResourceHubUnregisterFdo(
+    _In_ PFDO_DEVICE_DATA FdoData);
+
+BOOLEAN
+AcpiResourceHubIsDevice(
+    _In_ PDEVICE_OBJECT DeviceObject);
+
+NTSTATUS
+NTAPI
+AcpiResourceHubCreateClose(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp);
+
+NTSTATUS
+NTAPI
+AcpiResourceHubDeviceControl(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp);
+
+NTSTATUS
+NTAPI
+AcpiResourceHubReadWrite(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp);
 
 #define FDO_FROM_PDO(pdoData) \
           ((PFDO_DEVICE_DATA) (pdoData)->ParentFdo->DeviceExtension)
