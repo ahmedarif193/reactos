@@ -35,7 +35,13 @@ typedef struct _ACPI_RESOURCE_HUB_FILE_CONTEXT
     PFILE_OBJECT ControllerFileObject;
     PDEVICE_OBJECT ControllerDeviceObject;
     BOOLEAN ControllerLocked;
-    FAST_MUTEX ControllerMutex;
+    /* Serializes controller binding and transfer forwarding. Deliberately
+       not a fast mutex: holding one raises to APC_LEVEL, and the SPB
+       controller dispatch below us enforces PASSIVE_LEVEL, so a fast
+       mutex here made every forwarded IOCTL fail with
+       STATUS_INVALID_DEVICE_STATE. A signaled synchronization event is a
+       passive-level mutex without the IRQL side effect. */
+    KEVENT ControllerLock;
 } ACPI_RESOURCE_HUB_FILE_CONTEXT, *PACPI_RESOURCE_HUB_FILE_CONTEXT;
 
 static PDEVICE_OBJECT AcpiResourceHubDeviceObject;
@@ -548,6 +554,22 @@ RhNormalizeTransferList(
 }
 
 static
+VOID
+RhAcquireControllerLock(
+    _Inout_ PACPI_RESOURCE_HUB_FILE_CONTEXT Context)
+{
+    KeWaitForSingleObject(&Context->ControllerLock, Executive, KernelMode, FALSE, NULL);
+}
+
+static
+VOID
+RhReleaseControllerLock(
+    _Inout_ PACPI_RESOURCE_HUB_FILE_CONTEXT Context)
+{
+    KeSetEvent(&Context->ControllerLock, IO_NO_INCREMENT, FALSE);
+}
+
+static
 NTSTATUS
 RhExecuteTransferList(
     _Inout_ PACPI_RESOURCE_HUB_FILE_CONTEXT Context,
@@ -556,7 +578,7 @@ RhExecuteTransferList(
 {
     NTSTATUS Status;
 
-    ExAcquireFastMutex(&Context->ControllerMutex);
+    RhAcquireControllerLock(Context);
     Status = RhBindSpbController(Context);
     if (NT_SUCCESS(Status))
     {
@@ -571,7 +593,7 @@ RhExecuteTransferList(
                                      0,
                                      Information);
     }
-    ExReleaseFastMutex(&Context->ControllerMutex);
+    RhReleaseControllerLock(Context);
     return Status;
 }
 
@@ -583,11 +605,11 @@ RhSetControllerLock(
 {
     NTSTATUS Status;
 
-    ExAcquireFastMutex(&Context->ControllerMutex);
+    RhAcquireControllerLock(Context);
     if (Context->ControllerLocked == Lock)
     {
         Status = Lock ? STATUS_DEVICE_BUSY : STATUS_INVALID_DEVICE_STATE;
-        ExReleaseFastMutex(&Context->ControllerMutex);
+        RhReleaseControllerLock(Context);
         return Status;
     }
 
@@ -606,7 +628,7 @@ RhSetControllerLock(
         if (NT_SUCCESS(Status))
             Context->ControllerLocked = Lock;
     }
-    ExReleaseFastMutex(&Context->ControllerMutex);
+    RhReleaseControllerLock(Context);
     return Status;
 }
 
@@ -716,7 +738,7 @@ AcpiResourceHubCreateClose(
     RtlZeroMemory(Context, sizeof(*Context));
     Context->Signature = RH_CONTEXT_SIGNATURE;
     Context->ConnectionId = ConnectionId;
-    ExInitializeFastMutex(&Context->ControllerMutex);
+    KeInitializeEvent(&Context->ControllerLock, SynchronizationEvent, TRUE);
 
     if (ConnectionId.QuadPart != 0)
     {
