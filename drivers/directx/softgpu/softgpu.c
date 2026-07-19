@@ -109,10 +109,11 @@ DriverEntry(
     RtlZeroMemory(&InitData, sizeof(InitData));
 
     /*
-     * The WDDM 2.0 version selects the ABI table consumed by dxgkrnl. The
-     * physical/software engine does not advertise GPU-MMU or IOMMU support.
+     * Declare the build-level (NT10) ABI: the whole softgpu DDI surface is
+     * compiled and exercised at this version — GpuMmu, virtual submission,
+     * and the WDDM 2.x/3.0 capability words all report their true state.
      */
-    InitData.Version = DXGKDDI_INTERFACE_VERSION_WDDM2_0;
+    InitData.Version = DXGKDDI_INTERFACE_VERSION;
 
     /* --- Adapter lifecycle ----------------------------------------------- */
     InitData.DxgkDdiAddDevice                       = SoftGpuDdiAddDevice;
