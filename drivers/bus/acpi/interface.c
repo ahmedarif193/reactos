@@ -260,6 +260,157 @@ AcpiInterfaceNotifyThunk(ACPI_HANDLE Handle,
 }
 
 /*
+ * GPE vector connections
+ *
+ * A connection maps the NT contract (opaque ObjectContext token, a
+ * BOOLEAN-returning service routine) onto ACPICA's GPE handler API.
+ * Connections are tracked in a spinlocked list so the version-1
+ * interface — whose ObjectContext is a caller-chosen token rather than
+ * a pointer we hand out — can find its connection again.
+ */
+
+#define ACPI_GPE_CONNECTION_TAG 'CGcA'
+
+typedef struct _ACPI_GPE_CONNECTION
+{
+    LIST_ENTRY ListEntry;
+    ULONG GpeNumber;
+    PGPE_SERVICE_ROUTINE ServiceRoutine;
+    PVOID ServiceContext;
+    PVOID CallerToken;
+} ACPI_GPE_CONNECTION, *PACPI_GPE_CONNECTION;
+
+static LIST_ENTRY AcpiGpeConnectionList = {&AcpiGpeConnectionList, &AcpiGpeConnectionList};
+static KSPIN_LOCK AcpiGpeConnectionLock;
+
+static
+UINT32
+AcpiGpeHandlerThunk(ACPI_HANDLE GpeDevice, UINT32 GpeNumber, void *Context)
+{
+    PACPI_GPE_CONNECTION Connection = (PACPI_GPE_CONNECTION)Context;
+
+    UNREFERENCED_PARAMETER(GpeDevice);
+    UNREFERENCED_PARAMETER(GpeNumber);
+
+    if (Connection && Connection->ServiceRoutine)
+    {
+        Connection->ServiceRoutine(Connection->CallerToken, Connection->ServiceContext);
+    }
+
+    /* Status handled; re-enable level-triggered GPEs for the next event */
+    return ACPI_REENABLE_GPE;
+}
+
+static
+NTSTATUS
+AcpiGpeConnect(ULONG GpeNumber, KINTERRUPT_MODE Mode, PGPE_SERVICE_ROUTINE ServiceRoutine, PVOID ServiceContext, PVOID CallerToken, PACPI_GPE_CONNECTION *OutConnection)
+{
+    PACPI_GPE_CONNECTION Connection;
+    ACPI_STATUS AcpiStatus;
+    KIRQL OldIrql;
+
+    if (!ServiceRoutine)
+        return STATUS_INVALID_PARAMETER;
+
+    Connection = ExAllocatePoolWithTag(NonPagedPool, sizeof(ACPI_GPE_CONNECTION), ACPI_GPE_CONNECTION_TAG);
+    if (!Connection)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Connection->GpeNumber = GpeNumber;
+    Connection->ServiceRoutine = ServiceRoutine;
+    Connection->ServiceContext = ServiceContext;
+    Connection->CallerToken = CallerToken;
+
+    AcpiStatus = AcpiInstallGpeHandler(NULL, GpeNumber, (Mode == Latched) ? ACPI_GPE_EDGE_TRIGGERED : ACPI_GPE_LEVEL_TRIGGERED, AcpiGpeHandlerThunk, Connection);
+    if (ACPI_FAILURE(AcpiStatus))
+    {
+        DPRINT1("ACPI: AcpiInstallGpeHandler(GPE 0x%lx) failed 0x%X\n", GpeNumber, AcpiStatus);
+        ExFreePoolWithTag(Connection, ACPI_GPE_CONNECTION_TAG);
+        return STATUS_UNSUCCESSFUL;
+    }
+
+    AcpiStatus = AcpiEnableGpe(NULL, GpeNumber);
+    if (ACPI_FAILURE(AcpiStatus))
+    {
+        DPRINT1("ACPI: AcpiEnableGpe(GPE 0x%lx) failed 0x%X\n", GpeNumber, AcpiStatus);
+        AcpiRemoveGpeHandler(NULL, GpeNumber, AcpiGpeHandlerThunk);
+        ExFreePoolWithTag(Connection, ACPI_GPE_CONNECTION_TAG);
+        return STATUS_UNSUCCESSFUL;
+    }
+
+    KeAcquireSpinLock(&AcpiGpeConnectionLock, &OldIrql);
+    InsertTailList(&AcpiGpeConnectionList, &Connection->ListEntry);
+    KeReleaseSpinLock(&AcpiGpeConnectionLock, OldIrql);
+
+    DPRINT1("ACPI: Connected GPE 0x%lx (%s)\n", GpeNumber, (Mode == Latched) ? "edge" : "level");
+
+    if (OutConnection)
+        *OutConnection = Connection;
+
+    return STATUS_SUCCESS;
+}
+
+static
+PACPI_GPE_CONNECTION
+AcpiGpeFindConnection(PVOID TokenOrConnection)
+{
+    PLIST_ENTRY Entry;
+    PACPI_GPE_CONNECTION Connection;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&AcpiGpeConnectionLock, &OldIrql);
+    for (Entry = AcpiGpeConnectionList.Flink; Entry != &AcpiGpeConnectionList; Entry = Entry->Flink)
+    {
+        Connection = CONTAINING_RECORD(Entry, ACPI_GPE_CONNECTION, ListEntry);
+        if (Connection == TokenOrConnection || Connection->CallerToken == TokenOrConnection)
+        {
+            KeReleaseSpinLock(&AcpiGpeConnectionLock, OldIrql);
+            return Connection;
+        }
+    }
+    KeReleaseSpinLock(&AcpiGpeConnectionLock, OldIrql);
+    return NULL;
+}
+
+static
+NTSTATUS
+AcpiGpeDisconnect(PVOID TokenOrConnection)
+{
+    PACPI_GPE_CONNECTION Connection;
+    KIRQL OldIrql;
+
+    Connection = AcpiGpeFindConnection(TokenOrConnection);
+    if (!Connection)
+        return STATUS_INVALID_PARAMETER;
+
+    AcpiDisableGpe(NULL, Connection->GpeNumber);
+    AcpiRemoveGpeHandler(NULL, Connection->GpeNumber, AcpiGpeHandlerThunk);
+
+    KeAcquireSpinLock(&AcpiGpeConnectionLock, &OldIrql);
+    RemoveEntryList(&Connection->ListEntry);
+    KeReleaseSpinLock(&AcpiGpeConnectionLock, OldIrql);
+
+    ExFreePoolWithTag(Connection, ACPI_GPE_CONNECTION_TAG);
+    return STATUS_SUCCESS;
+}
+
+/* Enable/disable/clear on an existing connection, shared by both
+ * interface versions (the token-vs-pointer difference is absorbed by
+ * AcpiGpeFindConnection) */
+static
+NTSTATUS
+AcpiGpeEventOp(PVOID TokenOrConnection, ACPI_STATUS (*Op)(ACPI_HANDLE GpeDevice, UINT32 GpeNumber))
+{
+    PACPI_GPE_CONNECTION Connection;
+
+    Connection = AcpiGpeFindConnection(TokenOrConnection);
+    if (!Connection)
+        return STATUS_INVALID_PARAMETER;
+
+    return ACPI_FAILURE(Op(NULL, Connection->GpeNumber)) ? STATUS_UNSUCCESSFUL : STATUS_SUCCESS;
+}
+
+/*
  * ACPI_INTERFACE_STANDARD callbacks (take PDEVICE_OBJECT as context)
  */
 NTSTATUS
@@ -272,18 +423,17 @@ AcpiInterfaceConnectVector(PDEVICE_OBJECT Context,
                            PVOID ServiceContext,
                            PVOID ObjectContext)
 {
-  UNIMPLEMENTED;
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(Shareable);
 
-  return STATUS_NOT_IMPLEMENTED;
+    return AcpiGpeConnect(GpeNumber, Mode, ServiceRoutine, ServiceContext, ObjectContext, NULL);
 }
 
 NTSTATUS
 NTAPI
 AcpiInterfaceDisconnectVector(PVOID ObjectContext)
 {
-  UNIMPLEMENTED;
-
-  return STATUS_NOT_IMPLEMENTED;
+    return AcpiGpeDisconnect(ObjectContext);
 }
 
 NTSTATUS
@@ -291,9 +441,9 @@ NTAPI
 AcpiInterfaceEnableEvent(PDEVICE_OBJECT Context,
                          PVOID ObjectContext)
 {
-  UNIMPLEMENTED;
+    UNREFERENCED_PARAMETER(Context);
 
-  return STATUS_NOT_IMPLEMENTED;
+    return AcpiGpeEventOp(ObjectContext, AcpiEnableGpe);
 }
 
 NTSTATUS
@@ -301,9 +451,9 @@ NTAPI
 AcpiInterfaceDisableEvent(PDEVICE_OBJECT Context,
                           PVOID ObjectContext)
 {
-  UNIMPLEMENTED;
+    UNREFERENCED_PARAMETER(Context);
 
-  return STATUS_NOT_IMPLEMENTED;
+    return AcpiGpeEventOp(ObjectContext, AcpiDisableGpe);
 }
 
 NTSTATUS
@@ -311,9 +461,9 @@ NTAPI
 AcpiInterfaceClearStatus(PDEVICE_OBJECT Context,
                          PVOID ObjectContext)
 {
-  UNIMPLEMENTED;
+    UNREFERENCED_PARAMETER(Context);
 
-  return STATUS_NOT_IMPLEMENTED;
+    return AcpiGpeEventOp(ObjectContext, AcpiClearGpe);
 }
 
 /*
@@ -351,16 +501,20 @@ AcpiInterface2ConnectVector(
     PVOID ServiceContext,
     PVOID *ObjectContext)
 {
-    UNREFERENCED_PARAMETER(Context);
-    UNREFERENCED_PARAMETER(GpeNumber);
-    UNREFERENCED_PARAMETER(Mode);
-    UNREFERENCED_PARAMETER(Shareable);
-    UNREFERENCED_PARAMETER(ServiceRoutine);
-    UNREFERENCED_PARAMETER(ServiceContext);
-    UNREFERENCED_PARAMETER(ObjectContext);
+    PACPI_GPE_CONNECTION Connection = NULL;
+    NTSTATUS Status;
 
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(Shareable);
+
+    if (!ObjectContext)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = AcpiGpeConnect(GpeNumber, Mode, ServiceRoutine, ServiceContext, NULL, &Connection);
+    if (NT_SUCCESS(Status))
+        *ObjectContext = Connection;
+
+    return Status;
 }
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -373,10 +527,8 @@ AcpiInterface2DisconnectVector(
     PVOID ObjectContext)
 {
     UNREFERENCED_PARAMETER(Context);
-    UNREFERENCED_PARAMETER(ObjectContext);
 
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    return AcpiGpeDisconnect(ObjectContext);
 }
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -389,10 +541,8 @@ AcpiInterface2EnableEvent(
     PVOID ObjectContext)
 {
     UNREFERENCED_PARAMETER(Context);
-    UNREFERENCED_PARAMETER(ObjectContext);
 
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    return AcpiGpeEventOp(ObjectContext, AcpiEnableGpe);
 }
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -405,10 +555,8 @@ AcpiInterface2DisableEvent(
     PVOID ObjectContext)
 {
     UNREFERENCED_PARAMETER(Context);
-    UNREFERENCED_PARAMETER(ObjectContext);
 
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    return AcpiGpeEventOp(ObjectContext, AcpiDisableGpe);
 }
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -421,10 +569,8 @@ AcpiInterface2ClearStatus(
     PVOID ObjectContext)
 {
     UNREFERENCED_PARAMETER(Context);
-    UNREFERENCED_PARAMETER(ObjectContext);
 
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    return AcpiGpeEventOp(ObjectContext, AcpiClearGpe);
 }
 
 _IRQL_requires_max_(DISPATCH_LEVEL)

@@ -2390,17 +2390,56 @@ Bus_PDO_QueryDeviceCaps(
         }
     }
 
-    deviceCapabilities->DeviceWake = PowerDeviceD1;
-
     deviceCapabilities->DeviceD1 =
         (deviceCapabilities->DeviceState[PowerSystemSleeping1] == PowerDeviceD1);
     deviceCapabilities->DeviceD2 =
         (deviceCapabilities->DeviceState[PowerSystemSleeping2] == PowerDeviceD2);
 
+    /*
+     * Wake capabilities come from _PRW, not from assumptions: SystemWake
+     * is the deepest S-state the wake GPE works from (_PRW package entry
+     * 1), DeviceWake the deepest D-state the device supports there.  A
+     * device without a valid _PRW cannot wake the system at all.
+     */
+    deviceCapabilities->DeviceWake = PowerDeviceUnspecified;
+    deviceCapabilities->SystemWake = PowerSystemUnspecified;
     deviceCapabilities->WakeFromD0 = FALSE;
-    deviceCapabilities->WakeFromD1 = TRUE;
+    deviceCapabilities->WakeFromD1 = FALSE;
     deviceCapabilities->WakeFromD2 = FALSE;
     deviceCapabilities->WakeFromD3 = FALSE;
+
+    if (device && device->wakeup.flags.valid)
+    {
+        switch (device->wakeup.sleep_state)
+        {
+            case ACPI_STATE_S1: deviceCapabilities->SystemWake = PowerSystemSleeping1; break;
+            case ACPI_STATE_S2: deviceCapabilities->SystemWake = PowerSystemSleeping2; break;
+            case ACPI_STATE_S3: deviceCapabilities->SystemWake = PowerSystemSleeping3; break;
+            case ACPI_STATE_S4: deviceCapabilities->SystemWake = PowerSystemHibernate; break;
+            default: deviceCapabilities->SystemWake = PowerSystemSleeping1; break;
+        }
+
+        if (device->power.states[ACPI_STATE_D3].flags.valid)
+        {
+            deviceCapabilities->DeviceWake = PowerDeviceD3;
+            deviceCapabilities->WakeFromD3 = TRUE;
+        }
+        else if (device->power.states[ACPI_STATE_D2].flags.valid)
+        {
+            deviceCapabilities->DeviceWake = PowerDeviceD2;
+            deviceCapabilities->WakeFromD2 = TRUE;
+        }
+        else if (device->power.states[ACPI_STATE_D1].flags.valid)
+        {
+            deviceCapabilities->DeviceWake = PowerDeviceD1;
+            deviceCapabilities->WakeFromD1 = TRUE;
+        }
+        else
+        {
+            deviceCapabilities->DeviceWake = PowerDeviceD0;
+            deviceCapabilities->WakeFromD0 = TRUE;
+        }
+    }
 
     if (device)
     {

@@ -4,6 +4,7 @@ include_directories(
 
 list(APPEND SOURCE
     arb.c
+    cb.c
     config.c
     fdo.c
     hookhal.c

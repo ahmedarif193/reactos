@@ -139,6 +139,13 @@ typedef struct _PCIPBUSDATA
     /* Extended fields (appended to preserve ABI with original layout above) */
     BOOLEAN ResourcesInitialized;
     USHORT PciSegment;
+
+    /* ACPI _OSC negotiation result for this root (from acpi.sys) */
+    BOOLEAN OscEvaluated;
+    BOOLEAN OscFailed;
+    ULONG OscStatusFlags;
+    ULONG OscSupportSet;
+    ULONG OscControlGranted;
 } PCIPBUSDATA, *PPCIPBUSDATA;
 
 typedef ULONG

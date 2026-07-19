@@ -8,6 +8,7 @@
  */
 
 #include <ntoskrnl.h>
+#include <wdmguid.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -184,17 +185,328 @@ IopCheckDescriptorForConflict(
     return FALSE;
 }
 
+/* --- Bus arbiter consultation ---------------------------------------------
+ *
+ * NT bus drivers (pci.sys) expose per-bus resource arbiters through
+ * IRP_MN_QUERY_INTERFACE / GUID_ARBITER_INTERFACE_STANDARD on the bus
+ * device stack, with the resource type in InterfaceSpecificData.  When a
+ * device's parent provides an arbiter for a resource type, that arbiter
+ * decides placement (it knows the bridge windows and sibling allocations);
+ * the global resource map remains a cross-bus safety net.  Buses without
+ * arbiters keep the legacy central scan unchanged.
+ */
+
+typedef struct _IOP_ARBITER_SLOT
+{
+    BOOLEAN Queried;
+    BOOLEAN Valid;
+    ARBITER_INTERFACE Interface;
+} IOP_ARBITER_SLOT, *PIOP_ARBITER_SLOT;
+
+typedef struct _IOP_ARBITER_CONTEXT
+{
+    PDEVICE_NODE DeviceNode;
+    IOP_ARBITER_SLOT Port;
+    IOP_ARBITER_SLOT Memory;
+    IOP_ARBITER_SLOT BusNumber;
+} IOP_ARBITER_CONTEXT, *PIOP_ARBITER_CONTEXT;
+
+static
+PIOP_ARBITER_SLOT
+IopArbiterGetSlot(IN PIOP_ARBITER_CONTEXT ArbCtx, IN UCHAR Type)
+{
+    if (!ArbCtx || !ArbCtx->DeviceNode)
+        return NULL;
+
+    switch (Type)
+    {
+        case CmResourceTypePort: return &ArbCtx->Port;
+        case CmResourceTypeMemory: return &ArbCtx->Memory;
+        case CmResourceTypeBusNumber: return &ArbCtx->BusNumber;
+        default: return NULL;
+    }
+}
+
+static
+PARBITER_INTERFACE
+IopArbiterForType(IN PIOP_ARBITER_CONTEXT ArbCtx, IN UCHAR Type)
+{
+    PIOP_ARBITER_SLOT Slot;
+    PDEVICE_NODE ParentNode;
+    IO_STACK_LOCATION Stack;
+    PVOID Info;
+    NTSTATUS Status;
+
+    Slot = IopArbiterGetSlot(ArbCtx, Type);
+    if (!Slot)
+        return NULL;
+
+    if (!Slot->Queried)
+    {
+        Slot->Queried = TRUE;
+        Slot->Valid = FALSE;
+
+        ParentNode = ArbCtx->DeviceNode->Parent;
+        if (ParentNode && ParentNode->PhysicalDeviceObject)
+        {
+            RtlZeroMemory(&Slot->Interface, sizeof(Slot->Interface));
+            Slot->Interface.Size = sizeof(ARBITER_INTERFACE);
+
+            RtlZeroMemory(&Stack, sizeof(Stack));
+            Stack.MajorFunction = IRP_MJ_PNP;
+            Stack.MinorFunction = IRP_MN_QUERY_INTERFACE;
+            Stack.Parameters.QueryInterface.InterfaceType = &GUID_ARBITER_INTERFACE_STANDARD;
+            Stack.Parameters.QueryInterface.Size = sizeof(ARBITER_INTERFACE);
+            Stack.Parameters.QueryInterface.Version = 1;
+            Stack.Parameters.QueryInterface.Interface = (PINTERFACE)&Slot->Interface;
+            Stack.Parameters.QueryInterface.InterfaceSpecificData = (PVOID)(ULONG_PTR)Type;
+
+            Status = IopSynchronousCall(ParentNode->PhysicalDeviceObject, &Stack, &Info);
+            if (NT_SUCCESS(Status) && Slot->Interface.ArbiterHandler)
+            {
+                Slot->Valid = TRUE;
+                DPRINT("Bus arbiter (type %u) found on %wZ for %wZ\n", Type, &ParentNode->InstancePath, &ArbCtx->DeviceNode->InstancePath);
+            }
+        }
+    }
+
+    return Slot->Valid ? &Slot->Interface : NULL;
+}
+
+static
+VOID
+IopArbiterReleaseContext(IN PIOP_ARBITER_CONTEXT ArbCtx)
+{
+    PIOP_ARBITER_SLOT Slots[3];
+    ULONG i;
+
+    Slots[0] = &ArbCtx->Port;
+    Slots[1] = &ArbCtx->Memory;
+    Slots[2] = &ArbCtx->BusNumber;
+
+    for (i = 0; i < 3; i++)
+    {
+        if (Slots[i]->Valid && Slots[i]->Interface.InterfaceDereference)
+            Slots[i]->Interface.InterfaceDereference(Slots[i]->Interface.Context);
+        Slots[i]->Valid = FALSE;
+        Slots[i]->Queried = FALSE;
+    }
+}
+
+/* Ask the parent's arbiter to place one requirement; the chosen range is
+ * written into CmDesc through the ARBITER_LIST_ENTRY Assignment field. */
 static
 BOOLEAN
-IopFindBusNumberResource(
-    IN PIO_RESOURCE_DESCRIPTOR IoDesc,
-    OUT PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc)
+IopArbiterPickRange(IN PIOP_ARBITER_CONTEXT ArbCtx, IN PIO_RESOURCE_DESCRIPTOR IoDesc, OUT PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc)
+{
+    PARBITER_INTERFACE Interface;
+    ARBITER_LIST_ENTRY Entry;
+    ARBITER_PARAMETERS Parameters;
+    LIST_ENTRY ArbitrationList;
+    NTSTATUS Status;
+
+    Interface = IopArbiterForType(ArbCtx, IoDesc->Type);
+    if (!Interface)
+        return FALSE;
+
+    InitializeListHead(&ArbitrationList);
+
+    RtlZeroMemory(&Entry, sizeof(Entry));
+    Entry.AlternativeCount = 1;
+    Entry.Alternatives = IoDesc;
+    Entry.PhysicalDeviceObject = ArbCtx->DeviceNode->PhysicalDeviceObject;
+    Entry.RequestSource = ArbiterRequestPnpEnumerated;
+    Entry.Assignment = CmDesc;
+    Entry.Result = ArbiterResultUndefined;
+    InsertTailList(&ArbitrationList, &Entry.ListEntry);
+
+    RtlZeroMemory(&Parameters, sizeof(Parameters));
+    Parameters.Parameters.TestAllocation.ArbitrationList = &ArbitrationList;
+
+    Status = Interface->ArbiterHandler(Interface->Context, ArbiterActionTestAllocation, &Parameters);
+
+    DPRINT("ARB-PICK type %u dev %p -> 0x%lx res %d\n", IoDesc->Type, ArbCtx->DeviceNode->PhysicalDeviceObject, Status, Entry.Result);
+
+    return (NT_SUCCESS(Status) && Entry.Result == ArbiterResultSuccess);
+}
+
+static
+VOID
+IopArbiterCommit(IN PIOP_ARBITER_CONTEXT ArbCtx, IN UCHAR Type)
+{
+    PARBITER_INTERFACE Interface;
+    ARBITER_PARAMETERS Parameters;
+
+    Interface = IopArbiterForType(ArbCtx, Type);
+    if (!Interface)
+        return;
+
+    RtlZeroMemory(&Parameters, sizeof(Parameters));
+    Interface->ArbiterHandler(Interface->Context, ArbiterActionCommitAllocation, &Parameters);
+}
+
+/* Record a device's final resource list with the parent's arbiters (or
+ * release everything it held when ResourceList is NULL/empty for a type).
+ * Best-effort: the global resource map remains the authoritative guard. */
+VOID
+IopArbiterRecordAssignment(IN PDEVICE_NODE DeviceNode, IN PCM_RESOURCE_LIST ResourceList)
+{
+    IOP_ARBITER_CONTEXT ArbCtx;
+    PARBITER_INTERFACE Interface;
+    PCM_PARTIAL_RESOURCE_LIST PartialList = NULL;
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc;
+    PARBITER_LIST_ENTRY Entries;
+    PIO_RESOURCE_DESCRIPTOR Fixed;
+    ARBITER_PARAMETERS Parameters;
+    LIST_ENTRY ArbitrationList;
+    ULONG TypeIndex, i, Count;
+    NTSTATUS Status;
+    static const UCHAR ArbTypes[] = { CmResourceTypePort, CmResourceTypeMemory, CmResourceTypeBusNumber };
+
+    RtlZeroMemory(&ArbCtx, sizeof(ArbCtx));
+    ArbCtx.DeviceNode = DeviceNode;
+
+    DPRINT("ARB-RECORD enter %wZ list %p\n", &DeviceNode->InstancePath, ResourceList);
+
+    if (ResourceList && ResourceList->Count >= 1)
+        PartialList = &ResourceList->List[0].PartialResourceList;
+
+    for (TypeIndex = 0; TypeIndex < RTL_NUMBER_OF(ArbTypes); TypeIndex++)
+    {
+        UCHAR Type = ArbTypes[TypeIndex];
+
+        Interface = IopArbiterForType(&ArbCtx, Type);
+        if (!Interface)
+            continue;
+
+        /* Count this type's descriptors */
+        Count = 0;
+        if (PartialList)
+        {
+            for (i = 0; i < PartialList->Count; i++)
+            {
+                CmDesc = &PartialList->PartialDescriptors[i];
+                if (CmDesc->Type != Type)
+                    continue;
+                if (Type == CmResourceTypeBusNumber ? (CmDesc->u.BusNumber.Length != 0) : (CmDesc->u.Generic.Length != 0))
+                    Count++;
+            }
+        }
+
+        /* One entry per descriptor, or a single release entry when none */
+        Entries = ExAllocatePool(PagedPool, (Count ? Count : 1) * sizeof(ARBITER_LIST_ENTRY) + Count * sizeof(IO_RESOURCE_DESCRIPTOR));
+        if (!Entries)
+            continue;
+
+        Fixed = (PIO_RESOURCE_DESCRIPTOR)(Entries + (Count ? Count : 1));
+        RtlZeroMemory(Entries, (Count ? Count : 1) * sizeof(ARBITER_LIST_ENTRY) + Count * sizeof(IO_RESOURCE_DESCRIPTOR));
+
+        InitializeListHead(&ArbitrationList);
+
+        if (Count == 0)
+        {
+            /* Pure release of anything this device held */
+            Entries[0].AlternativeCount = 0;
+            Entries[0].Alternatives = NULL;
+            Entries[0].PhysicalDeviceObject = DeviceNode->PhysicalDeviceObject;
+            Entries[0].RequestSource = ArbiterRequestPnpEnumerated;
+            Entries[0].Result = ArbiterResultUndefined;
+            InsertTailList(&ArbitrationList, &Entries[0].ListEntry);
+        }
+        else
+        {
+            ULONG EntryIndex = 0;
+
+            for (i = 0; i < PartialList->Count; i++)
+            {
+                PIO_RESOURCE_DESCRIPTOR IoDesc;
+
+                CmDesc = &PartialList->PartialDescriptors[i];
+                if (CmDesc->Type != Type)
+                    continue;
+                if (Type == CmResourceTypeBusNumber ? (CmDesc->u.BusNumber.Length == 0) : (CmDesc->u.Generic.Length == 0))
+                    continue;
+
+                IoDesc = &Fixed[EntryIndex];
+                IoDesc->Option = 0;
+                IoDesc->Type = Type;
+                IoDesc->ShareDisposition = CmDesc->ShareDisposition;
+                IoDesc->Flags = CmDesc->Flags;
+                if (Type == CmResourceTypeBusNumber)
+                {
+                    IoDesc->u.BusNumber.Length = CmDesc->u.BusNumber.Length;
+                    IoDesc->u.BusNumber.MinBusNumber = CmDesc->u.BusNumber.Start;
+                    IoDesc->u.BusNumber.MaxBusNumber = CmDesc->u.BusNumber.Start + CmDesc->u.BusNumber.Length - 1;
+                }
+                else
+                {
+                    IoDesc->u.Generic.Length = CmDesc->u.Generic.Length;
+                    IoDesc->u.Generic.Alignment = 1;
+                    IoDesc->u.Generic.MinimumAddress = CmDesc->u.Generic.Start;
+                    IoDesc->u.Generic.MaximumAddress.QuadPart = CmDesc->u.Generic.Start.QuadPart + CmDesc->u.Generic.Length - 1;
+                }
+
+                Entries[EntryIndex].AlternativeCount = 1;
+                Entries[EntryIndex].Alternatives = IoDesc;
+                Entries[EntryIndex].PhysicalDeviceObject = DeviceNode->PhysicalDeviceObject;
+                Entries[EntryIndex].RequestSource = ArbiterRequestPnpEnumerated;
+                Entries[EntryIndex].Flags = ARBITER_FLAG_BOOT_CONFIG;
+                Entries[EntryIndex].Result = ArbiterResultUndefined;
+                InsertTailList(&ArbitrationList, &Entries[EntryIndex].ListEntry);
+                EntryIndex++;
+            }
+        }
+
+        RtlZeroMemory(&Parameters, sizeof(Parameters));
+        Parameters.Parameters.BootAllocation.ArbitrationList = &ArbitrationList;
+
+        Status = Interface->ArbiterHandler(Interface->Context, ArbiterActionBootAllocation, &Parameters);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("Arbiter record (type %u) failed 0x%lx for %wZ\n", Type, Status, &DeviceNode->InstancePath);
+        }
+
+        ExFreePool(Entries);
+    }
+
+    IopArbiterReleaseContext(&ArbCtx);
+}
+
+static
+BOOLEAN
+IopFindBusNumberResource(IN PIOP_ARBITER_CONTEXT ArbCtx, IN PIO_RESOURCE_DESCRIPTOR IoDesc, OUT PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc)
 {
     ULONG Start;
     CM_PARTIAL_RESOURCE_DESCRIPTOR ConflictingDesc;
 
     ASSERT(IoDesc->Type == CmDesc->Type);
     ASSERT(IoDesc->Type == CmResourceTypeBusNumber);
+
+    /* When the parent bus provides an arbiter, it owns placement */
+    if (ArbCtx && IopArbiterForType(ArbCtx, CmResourceTypeBusNumber))
+    {
+        IO_RESOURCE_DESCRIPTOR LocalDesc = *IoDesc;
+
+        while (IopArbiterPickRange(ArbCtx, &LocalDesc, CmDesc))
+        {
+            if (!IopCheckDescriptorForConflict(CmDesc, &ConflictingDesc))
+            {
+                IopArbiterCommit(ArbCtx, CmResourceTypeBusNumber);
+                DPRINT1("Satisfying bus number requirement with 0x%x (length: 0x%x) via bus arbiter\n", CmDesc->u.BusNumber.Start, CmDesc->u.BusNumber.Length);
+                return TRUE;
+            }
+
+            /* Conflict known only to the global map: skip past it and retry */
+            Start = ConflictingDesc.u.BusNumber.Start + ConflictingDesc.u.BusNumber.Length;
+            if (Start <= LocalDesc.u.BusNumber.MinBusNumber || Start > LocalDesc.u.BusNumber.MaxBusNumber - LocalDesc.u.BusNumber.Length + 1)
+            {
+                return FALSE;
+            }
+            LocalDesc.u.BusNumber.MinBusNumber = Start;
+        }
+
+        return FALSE;
+    }
 
     for (Start = IoDesc->u.BusNumber.MinBusNumber;
          Start <= IoDesc->u.BusNumber.MaxBusNumber - IoDesc->u.BusNumber.Length + 1;
@@ -219,9 +531,7 @@ IopFindBusNumberResource(
 
 static
 BOOLEAN
-IopFindMemoryResource(
-    IN PIO_RESOURCE_DESCRIPTOR IoDesc,
-    OUT PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc)
+IopFindMemoryResource(IN PIOP_ARBITER_CONTEXT ArbCtx, IN PIO_RESOURCE_DESCRIPTOR IoDesc, OUT PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc)
 {
     ULONGLONG Start;
     CM_PARTIAL_RESOURCE_DESCRIPTOR ConflictingDesc;
@@ -232,6 +542,32 @@ IopFindMemoryResource(
     /* HACK */
     if (IoDesc->u.Memory.Alignment == 0)
         IoDesc->u.Memory.Alignment = 1;
+
+    /* When the parent bus provides an arbiter, it owns placement */
+    if (ArbCtx && IopArbiterForType(ArbCtx, CmResourceTypeMemory))
+    {
+        IO_RESOURCE_DESCRIPTOR LocalDesc = *IoDesc;
+
+        while (IopArbiterPickRange(ArbCtx, &LocalDesc, CmDesc))
+        {
+            if (!IopCheckDescriptorForConflict(CmDesc, &ConflictingDesc))
+            {
+                IopArbiterCommit(ArbCtx, CmResourceTypeMemory);
+                DPRINT1("Satisfying memory requirement with 0x%I64x (length: 0x%x) via bus arbiter\n", CmDesc->u.Memory.Start.QuadPart, CmDesc->u.Memory.Length);
+                return TRUE;
+            }
+
+            /* Conflict known only to the global map: skip past it and retry */
+            Start = (ULONGLONG)ConflictingDesc.u.Memory.Start.QuadPart + ConflictingDesc.u.Memory.Length;
+            if (Start <= (ULONGLONG)LocalDesc.u.Memory.MinimumAddress.QuadPart || Start > (ULONGLONG)LocalDesc.u.Memory.MaximumAddress.QuadPart - LocalDesc.u.Memory.Length + 1)
+            {
+                return FALSE;
+            }
+            LocalDesc.u.Memory.MinimumAddress.QuadPart = (LONGLONG)Start;
+        }
+
+        return FALSE;
+    }
 
     for (Start = (ULONGLONG)IoDesc->u.Memory.MinimumAddress.QuadPart;
          Start <= (ULONGLONG)IoDesc->u.Memory.MaximumAddress.QuadPart - IoDesc->u.Memory.Length + 1;
@@ -257,9 +593,7 @@ IopFindMemoryResource(
 
 static
 BOOLEAN
-IopFindPortResource(
-    IN PIO_RESOURCE_DESCRIPTOR IoDesc,
-    OUT PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc)
+IopFindPortResource(IN PIOP_ARBITER_CONTEXT ArbCtx, IN PIO_RESOURCE_DESCRIPTOR IoDesc, OUT PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc)
 {
     ULONGLONG Start;
     CM_PARTIAL_RESOURCE_DESCRIPTOR ConflictingDesc;
@@ -270,6 +604,32 @@ IopFindPortResource(
     /* HACK */
     if (IoDesc->u.Port.Alignment == 0)
         IoDesc->u.Port.Alignment = 1;
+
+    /* When the parent bus provides an arbiter, it owns placement */
+    if (ArbCtx && IopArbiterForType(ArbCtx, CmResourceTypePort))
+    {
+        IO_RESOURCE_DESCRIPTOR LocalDesc = *IoDesc;
+
+        while (IopArbiterPickRange(ArbCtx, &LocalDesc, CmDesc))
+        {
+            if (!IopCheckDescriptorForConflict(CmDesc, &ConflictingDesc))
+            {
+                IopArbiterCommit(ArbCtx, CmResourceTypePort);
+                DPRINT1("Satisfying port requirement with 0x%I64x (length: 0x%x) via bus arbiter\n", CmDesc->u.Port.Start.QuadPart, CmDesc->u.Port.Length);
+                return TRUE;
+            }
+
+            /* Conflict known only to the global map: skip past it and retry */
+            Start = (ULONGLONG)ConflictingDesc.u.Port.Start.QuadPart + ConflictingDesc.u.Port.Length;
+            if (Start <= (ULONGLONG)LocalDesc.u.Port.MinimumAddress.QuadPart || Start > (ULONGLONG)LocalDesc.u.Port.MaximumAddress.QuadPart - LocalDesc.u.Port.Length + 1)
+            {
+                return FALSE;
+            }
+            LocalDesc.u.Port.MinimumAddress.QuadPart = (LONGLONG)Start;
+        }
+
+        return FALSE;
+    }
 
     for (Start = (ULONGLONG)IoDesc->u.Port.MinimumAddress.QuadPart;
          Start <= (ULONGLONG)IoDesc->u.Port.MaximumAddress.QuadPart - IoDesc->u.Port.Length + 1;
@@ -452,13 +812,17 @@ IopFindInterruptResource(
 }
 
 NTSTATUS NTAPI
-IopFixupResourceListWithRequirements(
-    IN PIO_RESOURCE_REQUIREMENTS_LIST RequirementsList,
-    OUT PCM_RESOURCE_LIST *ResourceList)
+IopFixupResourceListWithRequirements(IN PIO_RESOURCE_REQUIREMENTS_LIST RequirementsList, OUT PCM_RESOURCE_LIST *ResourceList, IN PDEVICE_NODE DeviceNode OPTIONAL)
 {
     ULONG i, OldCount;
     BOOLEAN AlternateRequired = FALSE;
     PIO_RESOURCE_LIST ResList;
+    IOP_ARBITER_CONTEXT ArbCtx;
+    NTSTATUS FinalStatus;
+
+    /* Bus arbiters (if the parent provides them) are queried lazily */
+    RtlZeroMemory(&ArbCtx, sizeof(ArbCtx));
+    ArbCtx.DeviceNode = DeviceNode;
 
     /* Save the initial resource count when we got here so we can restore if an alternate fails */
     if (*ResourceList != NULL)
@@ -488,7 +852,10 @@ IopFixupResourceListWithRequirements(
             /* Allocate the new smaller list */
             NewList = ExAllocatePool(PagedPool, PnpDetermineResourceListSize(*ResourceList));
             if (!NewList)
-                return STATUS_NO_MEMORY;
+            {
+                FinalStatus = STATUS_NO_MEMORY;
+                goto Done;
+            }
 
             /* Copy the old stuff back */
             RtlCopyMemory(NewList, *ResourceList, PnpDetermineResourceListSize(*ResourceList));
@@ -670,7 +1037,7 @@ IopFixupResourceListWithRequirements(
 
                     case CmResourceTypePort:
                         /* Find an available port range */
-                        if (!IopFindPortResource(IoDesc, &NewDesc))
+                        if (!IopFindPortResource(&ArbCtx, IoDesc, &NewDesc))
                         {
                             DPRINT1("Failed to find an available port resource (0x%I64x to 0x%I64x length: 0x%x)\n",
                                     IoDesc->u.Port.MinimumAddress.QuadPart, IoDesc->u.Port.MaximumAddress.QuadPart,
@@ -682,7 +1049,7 @@ IopFixupResourceListWithRequirements(
 
                     case CmResourceTypeMemory:
                         /* Find an available memory range */
-                        if (!IopFindMemoryResource(IoDesc, &NewDesc))
+                        if (!IopFindMemoryResource(&ArbCtx, IoDesc, &NewDesc))
                         {
                             DPRINT1("Failed to find an available memory resource (0x%I64x to 0x%I64x length: 0x%x)\n",
                                     IoDesc->u.Memory.MinimumAddress.QuadPart, IoDesc->u.Memory.MaximumAddress.QuadPart,
@@ -694,7 +1061,7 @@ IopFixupResourceListWithRequirements(
 
                     case CmResourceTypeBusNumber:
                         /* Find an available bus address range */
-                        if (!IopFindBusNumberResource(IoDesc, &NewDesc))
+                        if (!IopFindBusNumberResource(&ArbCtx, IoDesc, &NewDesc))
                         {
                             DPRINT1("Failed to find an available bus number resource (0x%x to 0x%x length: 0x%x)\n",
                                     IoDesc->u.BusNumber.MinBusNumber, IoDesc->u.BusNumber.MaxBusNumber,
@@ -746,7 +1113,10 @@ IopFixupResourceListWithRequirements(
                     /* We need a new list */
                     NewList = ExAllocatePool(PagedPool, sizeof(CM_RESOURCE_LIST));
                     if (!NewList)
-                        return STATUS_NO_MEMORY;
+                    {
+                        FinalStatus = STATUS_NO_MEMORY;
+                        goto Done;
+                    }
 
                     /* Set it up */
                     NewList->Count = 1;
@@ -764,7 +1134,10 @@ IopFixupResourceListWithRequirements(
                     /* Allocate the new larger list */
                     NewList = ExAllocatePool(PagedPool, PnpDetermineResourceListSize(*ResourceList) + sizeof(CM_PARTIAL_RESOURCE_DESCRIPTOR));
                     if (!NewList)
-                        return STATUS_NO_MEMORY;
+                    {
+                        FinalStatus = STATUS_NO_MEMORY;
+                        goto Done;
+                    }
 
                     /* Copy the old stuff back */
                     RtlCopyMemory(NewList, *ResourceList, PnpDetermineResourceListSize(*ResourceList));
@@ -797,7 +1170,8 @@ IopFixupResourceListWithRequirements(
         }
 
         /* We're done because we satisfied one of the alternate lists */
-        return STATUS_SUCCESS;
+        FinalStatus = STATUS_SUCCESS;
+        goto Done;
     }
 
     /* We ran out of alternates */
@@ -811,7 +1185,10 @@ IopFixupResourceListWithRequirements(
     }
 
     /* Fail */
-    return STATUS_CONFLICTING_ADDRESSES;
+    FinalStatus = STATUS_CONFLICTING_ADDRESSES;
+
+Done: IopArbiterReleaseContext(&ArbCtx);
+    return FinalStatus;
 }
 
 static
@@ -1504,8 +1881,7 @@ IopAssignDeviceResources(
    HalAdjustResourceList(&DeviceNode->ResourceRequirements);
 
    /* Add resource requirements that aren't in the list we already got */
-   Status = IopFixupResourceListWithRequirements(DeviceNode->ResourceRequirements,
-                                                 &DeviceNode->ResourceList);
+   Status = IopFixupResourceListWithRequirements(DeviceNode->ResourceRequirements, &DeviceNode->ResourceList, DeviceNode);
 
 #if defined(_M_IX86) || defined(_M_AMD64)
    /* Second consolidation pass: now that arbitration has finished
@@ -1528,6 +1904,10 @@ IopAssignDeviceResources(
    ASSERT(PnpEnableParallelEnum || IopDetectResourceConflict(DeviceNode->ResourceList, FALSE, NULL) != STATUS_CONFLICTING_ADDRESSES);
 
 Finish:
+   /* Tell the parent bus's arbiters (if any) what this device finally owns,
+    * whether the values came from boot config or from arbitration above */
+   IopArbiterRecordAssignment(DeviceNode, DeviceNode->ResourceList);
+
    Status = IopTranslateDeviceResources(DeviceNode);
    if (!NT_SUCCESS(Status))
    {
@@ -1553,6 +1933,9 @@ Finish:
    return STATUS_SUCCESS;
 
 ByeBye:
+   /* Give back anything the parent's arbiters were holding for this device */
+   IopArbiterRecordAssignment(DeviceNode, NULL);
+
    if (DeviceNode->ResourceList)
    {
       ExFreePool(DeviceNode->ResourceList);

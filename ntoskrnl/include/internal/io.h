@@ -553,10 +553,10 @@ IopAssignDeviceResources(
 
 NTSTATUS
 NTAPI
-IopFixupResourceListWithRequirements(
-    IN PIO_RESOURCE_REQUIREMENTS_LIST RequirementsList,
-    OUT PCM_RESOURCE_LIST *ResourceList
-);
+IopFixupResourceListWithRequirements(IN PIO_RESOURCE_REQUIREMENTS_LIST RequirementsList, OUT PCM_RESOURCE_LIST *ResourceList, IN PDEVICE_NODE DeviceNode OPTIONAL);
+
+VOID
+IopArbiterRecordAssignment(IN PDEVICE_NODE DeviceNode, IN PCM_RESOURCE_LIST ResourceList);
 
 NTSTATUS
 NTAPI

@@ -314,6 +314,10 @@ struct acpi_bus_event {
 int acpi_bus_get_private_data(ACPI_HANDLE, void **);
 
 void acpi_bus_data_handler(ACPI_HANDLE handle, void *context);
+/* NT-layer hook invoked when a device's _STA presence changes (hotplug) */
+typedef void (*acpi_device_change_handler)(void);
+void acpi_bus_set_device_change_handler(acpi_device_change_handler handler);
+
 ACPI_STATUS acpi_bus_get_status_handle(ACPI_HANDLE handle,
 				       unsigned long long *sta);
 int acpi_bus_get_status(struct acpi_device *device);

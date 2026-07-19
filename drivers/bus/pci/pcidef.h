@@ -151,6 +151,7 @@
 #define  PCI_BRIDGE_CTL_FAST_BACK 0x80	/* Fast Back2Back enabled on secondary interface */
 
 /* Header type 2 (CardBus bridges) */
+#define PCI_CB_MEMORY_WINDOW_MASK 0xFFFFF000 /* Memory windows: 4 KB granularity */
 #define PCI_CB_CAPABILITY_LIST	0x14
 /* 0x15 reserved */
 #define PCI_CB_SEC_STATUS	0x16	/* Secondary status */

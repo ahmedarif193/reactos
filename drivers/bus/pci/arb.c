@@ -50,6 +50,9 @@ typedef struct _PCI_ARBITER
     BOOLEAN TransactionInProgress;
 } PCI_ARBITER, *PPCI_ARBITER;
 
+PPCI_ARBITER
+PciFindArbiter(_In_ PFDO_DEVICE_EXTENSION FdoExtension, _In_ CM_RESOURCE_TYPE ResourceType);
+
 /* ---- Internal helpers ---- */
 
 /**
@@ -81,23 +84,59 @@ PciArbiterReleaseMutex(
 /* ---- Arbiter Operations ---- */
 
 /**
+ * @brief Report a chosen range back through the NT arbiter contract.
+ */
+static
+VOID
+PciArbiterWriteAssignment(_Inout_ PARBITER_LIST_ENTRY ArbEntry, _In_ PIO_RESOURCE_DESCRIPTOR Descriptor, _In_ ULONGLONG Start, _In_ ULONGLONG Length)
+{
+    if (ArbEntry->Assignment)
+    {
+        ArbEntry->Assignment->Type = Descriptor->Type;
+        ArbEntry->Assignment->ShareDisposition = Descriptor->ShareDisposition;
+        ArbEntry->Assignment->Flags = Descriptor->Flags;
+        if (Descriptor->Type == CmResourceTypeBusNumber)
+        {
+            ArbEntry->Assignment->u.BusNumber.Start = (ULONG)Start;
+            ArbEntry->Assignment->u.BusNumber.Length = (ULONG)Length;
+            ArbEntry->Assignment->u.BusNumber.Reserved = 0;
+        }
+        else
+        {
+            ArbEntry->Assignment->u.Generic.Start.QuadPart = (LONGLONG)Start;
+            ArbEntry->Assignment->u.Generic.Length = (ULONG)Length;
+        }
+    }
+    ArbEntry->SelectedAlternative = Descriptor;
+    ArbEntry->Result = ArbiterResultSuccess;
+}
+
+/**
  * @brief Test whether a proposed allocation can be satisfied.
  *
  * Copies the committed AllocatedRanges into PossibleRanges, then removes
  * the requesting device's existing ranges so they can be reassigned.
- * For each requirement, calls RtlFindRange to check if a suitable range
- * exists in the available space.
+ * For each entry, tries the alternatives in order until one fits; the
+ * chosen range is written back through the NT arbiter contract fields
+ * (Assignment, SelectedAlternative, Result).
+ *
+ * An entry with AlternativeCount == 0 acts as a pure release: the owner's
+ * ranges are removed and nothing is reallocated.
+ *
+ * DeleteOwners distinguishes the two callers: a boot/record operation
+ * (TRUE) replaces everything the owner holds, while an incremental pick
+ * (FALSE) must leave the owner's earlier committed ranges in place so a
+ * device's second BAR cannot land on top of its first.
  *
  * @param[in] Arbiter         The resource arbiter.
  * @param[in] ArbitrationList List of ARBITER_LIST_ENTRY describing requests.
+ * @param[in] DeleteOwners    Remove each owner's existing ranges first.
  *
  * @return STATUS_SUCCESS if all requests can be satisfied,
  *         STATUS_CONFLICTING_ADDRESSES if not.
  */
 NTSTATUS
-PciArbiterTestAllocation(
-    _In_ PPCI_ARBITER Arbiter,
-    _In_ PLIST_ENTRY ArbitrationList)
+PciArbiterTestAllocation(_In_ PPCI_ARBITER Arbiter, _In_ PLIST_ENTRY ArbitrationList, _In_ BOOLEAN DeleteOwners)
 {
     NTSTATUS Status;
     PLIST_ENTRY Entry;
@@ -105,6 +144,10 @@ PciArbiterTestAllocation(
     PIO_RESOURCE_DESCRIPTOR Descriptor;
     ULONG i;
     ULONGLONG Start;
+    ULONGLONG Length;
+    ULONG Alignment;
+    BOOLEAN Satisfied;
+    BOOLEAN HadCandidate;
 
     DPRINT("PCI: TestAllocation for %s arbiter on bus %lu\n",
            Arbiter->ResourceType == CmResourceTypePort ? "I/O" :
@@ -123,19 +166,19 @@ PciArbiterTestAllocation(
         return Status;
     }
 
-    /* For each entry, remove the device's existing ranges so they can be reallocated */
-    for (Entry = ArbitrationList->Flink;
-         Entry != ArbitrationList;
-         Entry = Entry->Flink)
+    /* For a record/release operation, drop the devices' existing ranges first */
+    if (DeleteOwners)
     {
-        ArbEntry = CONTAINING_RECORD(Entry, ARBITER_LIST_ENTRY, ListEntry);
-
-        Status = RtlDeleteOwnersRanges(&Arbiter->PossibleRanges,
-                                       (PVOID)ArbEntry->PhysicalDeviceObject);
-        if (!NT_SUCCESS(Status))
+        for (Entry = ArbitrationList->Flink; Entry != ArbitrationList; Entry = Entry->Flink)
         {
-            DPRINT1("PCI: RtlDeleteOwnersRanges failed: 0x%lx\n", Status);
-            goto Cleanup;
+            ArbEntry = CONTAINING_RECORD(Entry, ARBITER_LIST_ENTRY, ListEntry);
+
+            Status = RtlDeleteOwnersRanges(&Arbiter->PossibleRanges, (PVOID)ArbEntry->PhysicalDeviceObject);
+            if (!NT_SUCCESS(Status))
+            {
+                DPRINT1("PCI: RtlDeleteOwnersRanges failed: 0x%lx\n", Status);
+                goto Cleanup;
+            }
         }
     }
 
@@ -146,6 +189,9 @@ PciArbiterTestAllocation(
     {
         ArbEntry = CONTAINING_RECORD(Entry, ARBITER_LIST_ENTRY, ListEntry);
 
+        Satisfied = FALSE;
+        HadCandidate = FALSE;
+
         for (i = 0; i < ArbEntry->AlternativeCount; i++)
         {
             Descriptor = &ArbEntry->Alternatives[i];
@@ -154,62 +200,87 @@ PciArbiterTestAllocation(
             if (Descriptor->Type != Arbiter->ResourceType)
                 continue;
 
+            HadCandidate = TRUE;
+
+            /*
+             * A boot configuration is a statement of fact, not a request:
+             * it is recorded even when it overlaps (IDE compatibility-mode
+             * channels legitimately alias their legacy ranges).  Skip the
+             * availability check and add with conflicts allowed.
+             */
+            if (ArbEntry->Flags & ARBITER_FLAG_BOOT_CONFIG)
+            {
+                if (Descriptor->Type == CmResourceTypeBusNumber)
+                {
+                    Start = Descriptor->u.BusNumber.MinBusNumber;
+                    Length = Descriptor->u.BusNumber.Length;
+                }
+                else
+                {
+                    Start = Descriptor->u.Generic.MinimumAddress.QuadPart;
+                    Length = Descriptor->u.Generic.Length;
+                }
+
+                if (Length == 0)
+                    continue;
+
+                Status = RtlAddRange(&Arbiter->PossibleRanges, Start, Start + Length - 1, 0, RTL_RANGE_LIST_ADD_IF_CONFLICT | RTL_RANGE_LIST_ADD_SHARED, NULL, (PVOID)ArbEntry->PhysicalDeviceObject);
+                if (!NT_SUCCESS(Status))
+                    continue;
+
+                PciArbiterWriteAssignment(ArbEntry, Descriptor, Start, Length);
+                Satisfied = TRUE;
+                break;
+            }
+
             if (Descriptor->Type == CmResourceTypePort ||
                 Descriptor->Type == CmResourceTypeMemory)
             {
-                Status = RtlFindRange(&Arbiter->PossibleRanges,
-                                      Descriptor->u.Generic.MinimumAddress.QuadPart,
-                                      Descriptor->u.Generic.MaximumAddress.QuadPart,
-                                      Descriptor->u.Generic.Length,
-                                      Descriptor->u.Generic.Alignment,
-                                      0,  /* Flags */
-                                      0,  /* AttributeAvailableMask */
-                                      NULL,  /* Context */
-                                      NULL,  /* Callback */
-                                      &Start);
+                Length = Descriptor->u.Generic.Length;
+                Alignment = Descriptor->u.Generic.Alignment ? Descriptor->u.Generic.Alignment : 1;
+                Status = RtlFindRange(&Arbiter->PossibleRanges, Descriptor->u.Generic.MinimumAddress.QuadPart, Descriptor->u.Generic.MaximumAddress.QuadPart, (ULONG)Length, Alignment, 0, 0, NULL, NULL, &Start);
             }
             else if (Descriptor->Type == CmResourceTypeBusNumber)
             {
-                Status = RtlFindRange(&Arbiter->PossibleRanges,
-                                      (ULONGLONG)Descriptor->u.BusNumber.MinBusNumber,
-                                      (ULONGLONG)Descriptor->u.BusNumber.MaxBusNumber,
-                                      Descriptor->u.BusNumber.Length,
-                                      1,  /* Alignment */
-                                      0,
-                                      0,
-                                      NULL,
-                                      NULL,
-                                      &Start);
+                Length = Descriptor->u.BusNumber.Length;
+                Status = RtlFindRange(&Arbiter->PossibleRanges, (ULONGLONG)Descriptor->u.BusNumber.MinBusNumber, (ULONGLONG)Descriptor->u.BusNumber.MaxBusNumber, Descriptor->u.BusNumber.Length, 1, 0, 0, NULL, NULL, &Start);
             }
             else
             {
                 continue;
             }
 
-            if (!NT_SUCCESS(Status))
+            if (!NT_SUCCESS(Status) || Length == 0)
             {
-                DPRINT("PCI: TestAllocation - no range found for device %p, type %u\n",
-                       ArbEntry->PhysicalDeviceObject, Descriptor->Type);
-                Status = STATUS_CONFLICTING_ADDRESSES;
-                goto Cleanup;
+                /* This alternative cannot be satisfied, try the next one */
+                continue;
             }
 
             /* Reserve the found range in the working set */
-            Status = RtlAddRange(&Arbiter->PossibleRanges,
-                                 Start,
-                                 Start + Descriptor->u.Generic.Length - 1,
-                                 0,  /* Attributes */
-                                 RTL_RANGE_LIST_ADD_IF_CONFLICT,
-                                 NULL,  /* UserData */
-                                 (PVOID)ArbEntry->PhysicalDeviceObject);
+            Status = RtlAddRange(&Arbiter->PossibleRanges, Start, Start + Length - 1, 0, RTL_RANGE_LIST_ADD_IF_CONFLICT, NULL, (PVOID)ArbEntry->PhysicalDeviceObject);
             if (!NT_SUCCESS(Status))
             {
                 DPRINT1("PCI: TestAllocation - RtlAddRange failed: 0x%lx\n", Status);
-                goto Cleanup;
+                continue;
             }
 
-            /* Found a valid alternative, move to next entry */
+            PciArbiterWriteAssignment(ArbEntry, Descriptor, Start, Length);
+            Satisfied = TRUE;
             break;
+        }
+
+        if (!Satisfied && HadCandidate)
+        {
+            DPRINT("PCI: TestAllocation - no range found for device %p\n", ArbEntry->PhysicalDeviceObject);
+            ArbEntry->Result = ArbiterResultExternalConflict;
+            Status = STATUS_CONFLICTING_ADDRESSES;
+            goto Cleanup;
+        }
+
+        if (!HadCandidate && ArbEntry->AlternativeCount == 0)
+        {
+            /* Pure release request: owner ranges were already deleted above */
+            ArbEntry->Result = ArbiterResultSuccess;
         }
     }
 
@@ -223,83 +294,44 @@ Cleanup:
 }
 
 /**
- * @brief Add a range to the arbiter's working (possible) range list.
- *
- * Records a device's allocation in the PossibleRanges list with
- * RTL_RANGE_LIST_ADD_IF_CONFLICT to handle overlapping ranges.
- *
- * @param[in] Arbiter The resource arbiter.
- * @param[in] Start   Start of the range.
- * @param[in] End     End of the range (inclusive).
- * @param[in] Owner   Device object that owns this range.
- *
- * @return NTSTATUS from RtlAddRange.
- */
-NTSTATUS
-PciArbiterAddAllocation(
-    _In_ PPCI_ARBITER Arbiter,
-    _In_ ULONGLONG Start,
-    _In_ ULONGLONG End,
-    _In_ PVOID Owner)
-{
-    NTSTATUS Status;
-
-    DPRINT("PCI: AddAllocation %s [%I64x-%I64x] owner %p\n",
-           Arbiter->ResourceType == CmResourceTypePort ? "I/O" :
-           Arbiter->ResourceType == CmResourceTypeMemory ? "Memory" : "BusNumber",
-           Start, End, Owner);
-
-    Status = RtlAddRange(&Arbiter->PossibleRanges,
-                         Start,
-                         End,
-                         0,  /* Attributes */
-                         RTL_RANGE_LIST_ADD_IF_CONFLICT,
-                         NULL,  /* UserData */
-                         Owner);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("PCI: AddAllocation failed: 0x%lx\n", Status);
-    }
-
-    return Status;
-}
-
-/**
  * @brief Commit a successful allocation.
  *
  * The PossibleRanges list (which now contains the new allocation state)
- * becomes the new AllocatedRanges list. The old AllocatedRanges is freed
- * and repurposed as the new (empty) PossibleRanges container.
+ * is copied into AllocatedRanges.  An RTL_RANGE_LIST embeds a LIST_ENTRY
+ * head, so the lists must NEVER be swapped by struct copy: the first and
+ * last entries would keep pointing at the old head's address and every
+ * subsequent walk of the list would run off into freed memory.
  *
  * @param[in] Arbiter The resource arbiter.
  *
- * @return STATUS_SUCCESS.
+ * @return NTSTATUS.
  */
 NTSTATUS
 PciArbiterCommitAllocation(
     _In_ PPCI_ARBITER Arbiter)
 {
-    RTL_RANGE_LIST TempRanges;
+    NTSTATUS Status;
 
     DPRINT("PCI: CommitAllocation for %s arbiter on bus %lu\n",
            Arbiter->ResourceType == CmResourceTypePort ? "I/O" :
            Arbiter->ResourceType == CmResourceTypeMemory ? "Memory" : "BusNumber",
            Arbiter->FdoExtension->BusNumber);
 
-    /* Free the old committed allocations */
+    /* Replace the committed state with the working state */
     RtlFreeRangeList(&Arbiter->AllocatedRanges);
+    Status = RtlCopyRangeList(&Arbiter->AllocatedRanges, &Arbiter->PossibleRanges);
+    if (!NT_SUCCESS(Status))
+    {
+        /* AllocatedRanges is empty but consistent; report the failure */
+        DPRINT1("PCI: CommitAllocation - RtlCopyRangeList failed: 0x%lx\n", Status);
+    }
 
-    /* Swap: possible becomes allocated, old allocated container becomes possible */
-    TempRanges = Arbiter->AllocatedRanges;
-    Arbiter->AllocatedRanges = Arbiter->PossibleRanges;
-    Arbiter->PossibleRanges = TempRanges;
-
-    /* Re-initialize the now-empty PossibleRanges */
+    RtlFreeRangeList(&Arbiter->PossibleRanges);
     RtlInitializeRangeList(&Arbiter->PossibleRanges);
 
     Arbiter->TransactionInProgress = FALSE;
 
-    return STATUS_SUCCESS;
+    return Status;
 }
 
 /**
@@ -331,165 +363,142 @@ PciArbiterRollbackAllocation(
 }
 
 /**
- * @brief Find a suitable range in the arbiter's available space.
+ * @brief Mark a range as permanently unavailable in an arbiter.
  *
- * Uses RtlFindRange on PossibleRanges to locate a free range that
- * satisfies the given constraints (length, alignment, address bounds).
- *
- * @param[in]  Arbiter     The resource arbiter.
- * @param[in]  MinAddr     Minimum acceptable address.
- * @param[in]  MaxAddr     Maximum acceptable address.
- * @param[in]  Length      Required length of the range.
- * @param[in]  Alignment   Required alignment of the start address.
- * @param[out] ResultStart Receives the start of the found range.
- *
- * @return NTSTATUS from RtlFindRange.
+ * Blocker ranges are owned by the FDO extension itself so that
+ * RtlDeleteOwnersRanges for a device PDO can never remove them.
  */
+static
 NTSTATUS
-PciArbiterFindSuitableRange(
-    _In_ PPCI_ARBITER Arbiter,
-    _In_ ULONGLONG MinAddr,
-    _In_ ULONGLONG MaxAddr,
-    _In_ ULONG Length,
-    _In_ ULONG Alignment,
-    _Out_ PULONGLONG ResultStart)
+PciArbiterBlockRange(_In_ PPCI_ARBITER Arbiter, _In_ ULONGLONG Start, _In_ ULONGLONG End)
 {
     NTSTATUS Status;
 
-    DPRINT("PCI: FindSuitableRange %s [%I64x-%I64x] len=%lx align=%lx\n",
-           Arbiter->ResourceType == CmResourceTypePort ? "I/O" :
-           Arbiter->ResourceType == CmResourceTypeMemory ? "Memory" : "BusNumber",
-           MinAddr, MaxAddr, Length, Alignment);
+    if (Start > End)
+        return STATUS_SUCCESS;
 
-    Status = RtlFindRange(&Arbiter->PossibleRanges,
-                          MinAddr,
-                          MaxAddr,
-                          Length,
-                          Alignment,
-                          0,      /* Flags */
-                          0,      /* AttributeAvailableMask */
-                          NULL,   /* Context */
-                          NULL,   /* Callback */
-                          ResultStart);
-
-    if (NT_SUCCESS(Status))
+    Status = RtlAddRange(&Arbiter->AllocatedRanges, Start, End, 0,      /* Attributes */ RTL_RANGE_LIST_ADD_IF_CONFLICT, NULL,   /* UserData */ (PVOID)Arbiter->FdoExtension);
+    if (!NT_SUCCESS(Status))
     {
-        DPRINT("PCI: FindSuitableRange found start=%I64x\n", *ResultStart);
-    }
-    else
-    {
-        DPRINT("PCI: FindSuitableRange failed: 0x%lx\n", Status);
+        DPRINT1("PCI: BlockRange [%I64x-%I64x] failed: 0x%lx\n", Start, End, Status);
     }
 
     return Status;
 }
 
 /**
- * @brief Initialize the arbiter's PossibleRanges from boot-allocated resources.
+ * @brief Seed an FDO's arbiters with the windows the bus decodes.
  *
- * Given an array of CM_PARTIAL_RESOURCE_DESCRIPTORs (from firmware/BIOS),
- * builds a temporary range list of all allocated ranges for the matching
- * resource type, then inverts it (via RtlInvertRangeList) to produce
- * the list of AVAILABLE ranges.
+ * The range lists hold OCCUPIED space, so constraining allocation to the
+ * bridge windows means blocking the complement of the windows.  A root
+ * FDO usually receives no memory/port descriptors in its start resources;
+ * in that case those arbiters stay unconstrained and the global resource
+ * map remains the only guard.  A bridge FDO that decodes no window of a
+ * given type gets that entire space blocked, matching the hardware.
  *
- * @param[in] Arbiter        The resource arbiter.
- * @param[in] BootResources  Array of resource descriptors from firmware.
- * @param[in] ResourceCount  Number of descriptors in the array.
- *
- * @return NTSTATUS.
+ * The bus-number arbiter is always constrained to the FDO's bus range,
+ * and the FDO's own bus number is blocked so a child bridge can never
+ * alias its parent.
  */
-NTSTATUS
-PciArbiterInitializeFromBootConfig(
-    _In_ PPCI_ARBITER Arbiter,
-    _In_reads_(ResourceCount) PCM_PARTIAL_RESOURCE_DESCRIPTOR BootResources,
-    _In_ ULONG ResourceCount)
+VOID
+PciArbiterSeedWindows(_In_ PFDO_DEVICE_EXTENSION FdoExtension, _In_ PCM_RESOURCE_LIST AllocatedResources, _In_ BOOLEAN IsBridgeFdo)
 {
-    NTSTATUS Status;
-    RTL_RANGE_LIST TempRangeList;
+    PPCI_ARBITER Arbiter;
+    RTL_RANGE_LIST WindowList;
+    RTL_RANGE_LIST BlockedList;
+    RTL_RANGE_LIST_ITERATOR Iterator;
+    PRTL_RANGE Range;
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR Desc;
+    CM_RESOURCE_TYPE Type;
+    ULONG WindowCount;
     ULONG i;
-    ULONGLONG Start;
-    ULONGLONG Length;
-    ULONGLONG End;
+    ULONG ii;
+    static const CM_RESOURCE_TYPE SeedTypes[] = { CmResourceTypePort, CmResourceTypeMemory };
 
-    DPRINT("PCI: InitializeFromBootConfig %s arbiter, %lu resources\n",
-           Arbiter->ResourceType == CmResourceTypePort ? "I/O" :
-           Arbiter->ResourceType == CmResourceTypeMemory ? "Memory" : "BusNumber",
-           ResourceCount);
-
-    /* Initialize a temporary range list for boot-allocated ranges */
-    RtlInitializeRangeList(&TempRangeList);
-
-    for (i = 0; i < ResourceCount; i++)
+    /* Constrain the I/O and memory arbiters to the decoded windows */
+    for (i = 0; i < RTL_NUMBER_OF(SeedTypes); i++)
     {
-        PCM_PARTIAL_RESOURCE_DESCRIPTOR Desc = &BootResources[i];
+        Type = SeedTypes[i];
 
-        /* Skip descriptors that don't match our resource type.
-         * Type 7 (CmResourceTypeMemoryLarge) aliases to Memory. */
-        if (Desc->Type != Arbiter->ResourceType &&
-            !(Desc->Type == 7 && Arbiter->ResourceType == CmResourceTypeMemory))
-        {
-            continue;
-        }
-
-        /* Extract start and length based on resource type */
-        if (Desc->Type == CmResourceTypePort)
-        {
-            Start = Desc->u.Port.Start.QuadPart;
-            Length = (ULONGLONG)Desc->u.Port.Length;
-        }
-        else if (Desc->Type == CmResourceTypeMemory || Desc->Type == 7)
-        {
-            Start = Desc->u.Memory.Start.QuadPart;
-            Length = (ULONGLONG)Desc->u.Memory.Length;
-        }
-        else if (Desc->Type == CmResourceTypeBusNumber)
-        {
-            Start = (ULONGLONG)Desc->u.BusNumber.Start;
-            Length = (ULONGLONG)Desc->u.BusNumber.Length;
-        }
-        else
-        {
-            continue;
-        }
-
-        if (Length == 0)
+        Arbiter = PciFindArbiter(FdoExtension, Type);
+        if (!Arbiter)
             continue;
 
-        End = Start + Length - 1;
+        RtlInitializeRangeList(&WindowList);
+        WindowCount = 0;
 
-        DPRINT("PCI: Boot resource %s [%I64x-%I64x]\n",
-               Arbiter->ResourceType == CmResourceTypePort ? "I/O" :
-               Arbiter->ResourceType == CmResourceTypeMemory ? "Memory" : "BusNumber",
-               Start, End);
-
-        /* Add to temp list with ADD_IF_CONFLICT to handle overlaps */
-        Status = RtlAddRange(&TempRangeList,
-                             Start,
-                             End,
-                             0,      /* Attributes */
-                             RTL_RANGE_LIST_ADD_IF_CONFLICT,
-                             NULL,   /* UserData */
-                             NULL);  /* Owner */
-        if (!NT_SUCCESS(Status))
+        if (AllocatedResources && AllocatedResources->Count >= 1)
         {
-            DPRINT1("PCI: RtlAddRange for boot resource failed: 0x%lx\n", Status);
-            goto Cleanup;
+            PCM_PARTIAL_RESOURCE_LIST PartialList = &AllocatedResources->List[0].PartialResourceList;
+
+            for (ii = 0; ii < PartialList->Count; ii++)
+            {
+                ULONGLONG Start, Length;
+
+                Desc = &PartialList->PartialDescriptors[ii];
+                if (Desc->Type != Type)
+                    continue;
+
+                if (Type == CmResourceTypePort)
+                {
+                    Start = (ULONGLONG)Desc->u.Port.Start.QuadPart;
+                    Length = Desc->u.Port.Length;
+                }
+                else
+                {
+                    Start = (ULONGLONG)Desc->u.Memory.Start.QuadPart;
+                    Length = Desc->u.Memory.Length;
+                }
+
+                if (Length == 0)
+                    continue;
+
+                if (NT_SUCCESS(RtlAddRange(&WindowList, Start, Start + Length - 1, 0, RTL_RANGE_LIST_ADD_IF_CONFLICT, NULL, NULL)))
+                {
+                    WindowCount++;
+                }
+            }
         }
+
+        if (WindowCount != 0)
+        {
+            /* Block everything outside the windows */
+            RtlInitializeRangeList(&BlockedList);
+            if (NT_SUCCESS(RtlInvertRangeList(&BlockedList, &WindowList)))
+            {
+                if (!NT_SUCCESS(RtlGetFirstRange(&BlockedList, &Iterator, &Range)))
+                    Range = NULL;
+                while (Range)
+                {
+                    PciArbiterBlockRange(Arbiter, Range->Start, Range->End);
+                    if (!NT_SUCCESS(RtlGetNextRange(&Iterator, &Range, TRUE)))
+                        Range = NULL;
+                }
+            }
+            RtlFreeRangeList(&BlockedList);
+        }
+        else if (IsBridgeFdo)
+        {
+            /* Bridge with this window disabled: it forwards nothing */
+            PciArbiterBlockRange(Arbiter, 0, MAXULONGLONG);
+        }
+
+        RtlFreeRangeList(&WindowList);
     }
 
-    /* Invert the occupied ranges to get the available ranges */
-    RtlFreeRangeList(&Arbiter->PossibleRanges);
-    RtlInitializeRangeList(&Arbiter->PossibleRanges);
-
-    Status = RtlInvertRangeList(&Arbiter->PossibleRanges, &TempRangeList);
-    if (!NT_SUCCESS(Status))
+    /* Constrain the bus-number arbiter to the FDO's bus range */
+    Arbiter = PciFindArbiter(FdoExtension, CmResourceTypeBusNumber);
+    if (Arbiter)
     {
-        DPRINT1("PCI: RtlInvertRangeList failed: 0x%lx\n", Status);
+        if (FdoExtension->BusRangeStart > 0)
+            PciArbiterBlockRange(Arbiter, 0, FdoExtension->BusRangeStart - 1);
+        PciArbiterBlockRange(Arbiter, FdoExtension->BusRangeEnd + 1, MAXULONGLONG);
+
+        /* The FDO's own bus number is taken */
+        PciArbiterBlockRange(Arbiter, FdoExtension->BusNumber, FdoExtension->BusNumber);
     }
 
-Cleanup:
-    RtlFreeRangeList(&TempRangeList);
-    return Status;
+    DPRINT1("PCI: Seeded arbiter windows for bus %lu (bridge=%d)\n", FdoExtension->BusNumber, IsBridgeFdo);
 }
 
 /**
@@ -526,9 +535,7 @@ PciArbiterHandler(
     switch (Action)
     {
         case ArbiterActionTestAllocation:
-            Status = PciArbiterTestAllocation(
-                         Arbiter,
-                         Parameters->Parameters.TestAllocation.ArbitrationList);
+            Status = PciArbiterTestAllocation(Arbiter, Parameters->Parameters.TestAllocation.ArbitrationList, FALSE);
             break;
 
         case ArbiterActionCommitAllocation:
@@ -541,16 +548,12 @@ PciArbiterHandler(
 
         case ArbiterActionRetestAllocation:
             /* Retest uses same logic as test */
-            Status = PciArbiterTestAllocation(
-                         Arbiter,
-                         Parameters->Parameters.RetestAllocation.ArbitrationList);
+            Status = PciArbiterTestAllocation(Arbiter, Parameters->Parameters.RetestAllocation.ArbitrationList, FALSE);
             break;
 
         case ArbiterActionBootAllocation:
-            /* Boot allocation: record existing firmware assignments */
-            Status = PciArbiterTestAllocation(
-                         Arbiter,
-                         Parameters->Parameters.BootAllocation.ArbitrationList);
+            /* Record a final assignment: replace whatever the owner held */
+            Status = PciArbiterTestAllocation(Arbiter, Parameters->Parameters.BootAllocation.ArbitrationList, TRUE);
             if (NT_SUCCESS(Status))
             {
                 Status = PciArbiterCommitAllocation(Arbiter);

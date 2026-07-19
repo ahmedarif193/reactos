@@ -13,6 +13,50 @@ Bus_PlugInDevice (
     PFDO_DEVICE_DATA    FdoData
     );
 
+/* The single ACPI root FDO, for firmware-triggered re-enumeration */
+static PFDO_DEVICE_DATA AcpiRootFdoData;
+
+/**
+ * @brief Fresh _STA verdict for a child PDO.
+ *
+ * A device that is neither present nor functional has left the machine
+ * (undock, bay removal, ACPI hotplug) and must drop out of BusRelations
+ * so the PnP manager runs its removal path.
+ */
+BOOLEAN
+AcpiPdoIsDevicePresent(PPDO_DEVICE_DATA PdoData)
+{
+    struct acpi_device *AcpiDevice = NULL;
+
+    if (!PdoData || !PdoData->AcpiHandle)
+    {
+        /* Objects without a namespace node (e.g. the fixed power button)
+         * cannot vanish */
+        return TRUE;
+    }
+
+    if (acpi_bus_get_device(PdoData->AcpiHandle, &AcpiDevice) || !AcpiDevice)
+        return TRUE;
+
+    if (acpi_bus_get_status(AcpiDevice))
+        return TRUE;
+
+    return (AcpiDevice->status.present || AcpiDevice->status.functional);
+}
+
+/**
+ * @brief busmgr callback: firmware signaled a presence change.
+ */
+static VOID
+AcpiDeviceChangeHandler(VOID)
+{
+    if (AcpiRootFdoData && AcpiRootFdoData->UnderlyingPDO)
+    {
+        DPRINT1("ACPI: Presence change - invalidating bus relations\n");
+        IoInvalidateDeviceRelations(AcpiRootFdoData->UnderlyingPDO, BusRelations);
+    }
+}
+
 #ifdef ALLOC_PRAGMA
 #pragma alloc_text (PAGE, Bus_PnP)
 #pragma alloc_text (PAGE, Bus_PlugInDevice)
@@ -190,13 +234,14 @@ Bus_FDO_PnP (
             prevcount = 0;
         }
 
-        // Count PDOs actually present
+        // Upper-bound the allocation by the raw child count; the single
+        // populate pass below runs the (expensive) _STA presence check
+        // exactly once per PDO and sets the real Count
         numPdosPresent = 0;
         for (entry = DeviceData->ListOfPDOs.Flink;
              entry != &DeviceData->ListOfPDOs;
              entry = entry->Flink)
         {
-            pdoData = CONTAINING_RECORD(entry, PDO_DEVICE_DATA, Link);
             numPdosPresent++;
         }
 
@@ -229,18 +274,20 @@ Bus_FDO_PnP (
                           prevcount * sizeof(PDEVICE_OBJECT));
         }
 
-        relations->Count = prevcount + numPdosPresent;
-
-        // Append our PDOs and reference them
+        // Append PDOs whose fresh _STA says they are still in the machine
         for (entry = DeviceData->ListOfPDOs.Flink;
              entry != &DeviceData->ListOfPDOs;
              entry = entry->Flink)
         {
             pdoData = CONTAINING_RECORD(entry, PDO_DEVICE_DATA, Link);
+            if (!AcpiPdoIsDevicePresent(pdoData))
+                continue;
             relations->Objects[prevcount] = pdoData->Common.Self;
             ObReferenceObject(pdoData->Common.Self);
             prevcount++;
         }
+
+        relations->Count = prevcount;
 
         DPRINT("\t#PDOs present = %d\n\t#PDOs reported = %d\n",
                DeviceData->NumPDOs, relations->Count);
@@ -385,6 +432,14 @@ Bus_StartFdo (
     DPRINT1("Bus_StartFdo: Calling ACPIEnumerateDevices\n");
     status = ACPIEnumerateDevices(FdoData);
     DPRINT1("Bus_StartFdo: ACPIEnumerateDevices done (Status 0x%x)\n", status);
+
+    if (NT_SUCCESS(status))
+    {
+        /* Let firmware Notify(Bus/Device Check) reach the PnP manager */
+        AcpiRootFdoData = FdoData;
+        acpi_bus_set_device_change_handler(AcpiDeviceChangeHandler);
+    }
+
     return status;
 }
 

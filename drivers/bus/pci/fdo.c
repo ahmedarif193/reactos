@@ -9,6 +9,8 @@
 
 #include "pci.h"
 
+#include <wdmguid.h>
+
 #define NDEBUG
 #include <debug.h>
 
@@ -49,6 +51,44 @@ FdoLocateChildDevice(
     *Device = NULL;
     DPRINT("Done\n");
     return STATUS_UNSUCCESSFUL;
+}
+
+/**
+ * @brief Forward legacy VGA ranges through the bridge path to a display.
+ *
+ * A VGA-class device only receives 0x3B0-0x3DF and 0xA0000-0xBFFFF
+ * cycles if every bridge between it and the root has VGA Enable set in
+ * Bridge Control (offset 0x3E, shared by type 1 and type 2 headers).
+ * Firmware handles the boot display; anything re-parented, renumbered,
+ * or hot-added (docks, CardBus GPUs) is pci.sys's job.  Bits already
+ * set by firmware are never cleared.
+ */
+static VOID
+PciPropagateVgaRouting(PFDO_DEVICE_EXTENSION FdoExtension)
+{
+    PFDO_DEVICE_EXTENSION CurrentFdo = FdoExtension;
+
+    while (CurrentFdo != NULL && CurrentFdo->Ldo != NULL && CurrentFdo->Common.DeviceObject != NULL && CurrentFdo->Ldo->DriverObject == CurrentFdo->Common.DeviceObject->DriverObject)
+    {
+        PPDO_DEVICE_EXTENSION BridgePdoExtension = (PPDO_DEVICE_EXTENSION)CurrentFdo->Ldo->DeviceExtension;
+        USHORT BridgeControl = 0;
+
+        if (!BridgePdoExtension || BridgePdoExtension->Common.IsFDO || !BridgePdoExtension->PciDevice)
+            break;
+
+        PciPdoGetBusDataByOffset(BridgePdoExtension, &BridgeControl, FIELD_OFFSET(PCI_COMMON_CONFIG, u.type1.BridgeControl), sizeof(USHORT));
+
+        if (!(BridgeControl & PCI_BRIDGE_CTL_VGA))
+        {
+            BridgeControl |= PCI_BRIDGE_CTL_VGA;
+            PciPdoSetBusDataByOffset(BridgePdoExtension, &BridgeControl, FIELD_OFFSET(PCI_COMMON_CONFIG, u.type1.BridgeControl), sizeof(USHORT));
+
+            DPRINT1("PCI: Enabled VGA routing through bridge %02x:%02x.%u\n", (UCHAR)BridgePdoExtension->PciDevice->BusNumber, BridgePdoExtension->PciDevice->SlotNumber.u.bits.DeviceNumber, BridgePdoExtension->PciDevice->SlotNumber.u.bits.FunctionNumber);
+        }
+
+        /* Continue with the bridge's own parent bus */
+        CurrentFdo = BridgePdoExtension->Fdo ? (PFDO_DEVICE_EXTENSION)BridgePdoExtension->Fdo->DeviceExtension : NULL;
+    }
 }
 
 static NTSTATUS
@@ -237,6 +277,13 @@ FdoEnumerateDevices(
 
             DeviceExtension->DeviceListCount++;
 
+            /* A display controller behind a bridge needs the legacy VGA
+             * ranges forwarded along its whole bridge path */
+            if (PciConfig.BaseClass == PCI_CLASS_DISPLAY_CTLR && PciConfig.SubClass == PCI_SUBCLASS_VID_VGA_CTLR)
+            {
+                PciPropagateVgaRouting(DeviceExtension);
+            }
+
             /* Skip to next device if the current one is not a multifunction device */
             if ((FunctionNumber == 0) &&
                 ((PciConfig.HeaderType & 0x80) == 0))
@@ -252,7 +299,7 @@ FdoEnumerateDevices(
 }
 
 
-static NTSTATUS
+NTSTATUS
 FdoQueryBusRelations(
     IN PDEVICE_OBJECT DeviceObject,
     IN PIRP Irp,
@@ -300,7 +347,11 @@ FdoQueryBusRelations(
            sizeof(Relations->Objects) * (DeviceExtension->DeviceListCount - 1);
     Relations = ExAllocatePoolWithTag(PagedPool, Size, TAG_PCI);
     if (!Relations)
+    {
+        KeSetEvent(&PciGlobalLock, IO_NO_INCREMENT, FALSE);
+        KeLeaveCriticalRegion();
         return STATUS_INSUFFICIENT_RESOURCES;
+    }
 
     Relations->Count = DeviceExtension->DeviceListCount;
 
@@ -454,6 +505,23 @@ FdoQueryBusRelations(
 }
 
 
+/**
+ * @brief Stand up the per-bus child tracking and arbiters on an FDO.
+ *
+ * Shared by the real bus FDOs (FdoStartDevice) and the virtual CardBus
+ * segment object (PciCbAddCardBus) so the two can never drift.
+ */
+VOID
+PciFdoInitializeChildTracking(PFDO_DEVICE_EXTENSION FdoExtension)
+{
+    InitializeListHead(&FdoExtension->DeviceListHead);
+    KeInitializeSpinLock(&FdoExtension->DeviceListLock);
+    FdoExtension->DeviceListCount = 0;
+
+    InitializeListHead(&FdoExtension->ArbiterListHead);
+    PciCreateFdoArbiters(FdoExtension);
+}
+
 static NTSTATUS
 FdoStartDevice(
     IN PDEVICE_OBJECT DeviceObject,
@@ -464,10 +532,8 @@ FdoStartDevice(
     PCM_PARTIAL_RESOURCE_DESCRIPTOR ResourceDescriptor;
     ULONG FoundBusNumber = FALSE;
     ULONG i;
-#ifdef _M_ARM64
     BOOLEAN HalMsiSupported;
     USHORT EffectiveSegment;
-#endif
 
     DeviceExtension = (PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
 
@@ -537,11 +603,11 @@ FdoStartDevice(
     }
 
     /*
-     * On x86 ACPI platforms, pci.sys owns the MSI policy decision. On
-     * ARM64, message interrupts additionally depend on platform interrupt
-     * controller routing, so ask HAL before exposing MSI/MSI-X resources.
+     * Ask the HAL for MSI capability and the ACPI _OSC outcome for this
+     * root.  The grant (native hot-plug/PME/AER/Express) and effective
+     * segment gate feature use exactly as on Windows; MSI additionally
+     * remains subject to the driver policy switch.
      */
-#ifdef _M_ARM64
     EffectiveSegment = DeviceExtension->BusSegment;
     HalMsiSupported = HalQueryPciMsiSupport(DeviceExtension->BusSegment,
                                             (UCHAR)DeviceExtension->BusNumber,
@@ -552,16 +618,37 @@ FdoStartDevice(
                                             &DeviceExtension->OscMasked);
     DeviceExtension->BusSegment = EffectiveSegment;
     DeviceExtension->MsiSupported = PciMsiEnabledByPolicy && HalMsiSupported;
-#else
-    DeviceExtension->MsiSupported = PciMsiEnabledByPolicy;
-#endif
+    if (DeviceExtension->OscControlGranted != 0)
+    {
+        DPRINT1("PCI: Root bus %lu _OSC control granted 0x%lx\n", DeviceExtension->BusNumber, DeviceExtension->OscControlGranted);
+    }
 
-    InitializeListHead(&DeviceExtension->DeviceListHead);
-    KeInitializeSpinLock(&DeviceExtension->DeviceListLock);
-    DeviceExtension->DeviceListCount = 0;
+    PciFdoInitializeChildTracking(DeviceExtension);
 
-    InitializeListHead(&DeviceExtension->ArbiterListHead);
-    PciCreateFdoArbiters(DeviceExtension);
+    /*
+     * Constrain the arbiters to what this bus actually decodes.  A bridge
+     * FDO (our own driver also owns the underlying PDO) is limited to the
+     * bridge windows it received in its start resources; a root FDO stays
+     * unconstrained for I/O and memory.  A subtractive-decode bridge
+     * (ProgIf bit 0) forwards everything the upstream bus did not claim,
+     * so it must not be limited to positive-decode windows either.
+     */
+    {
+        BOOLEAN IsBridgeFdo = (DeviceExtension->Ldo != NULL && DeviceExtension->Ldo->DriverObject == DeviceObject->DriverObject);
+
+        if (IsBridgeFdo)
+        {
+            PPDO_DEVICE_EXTENSION BridgePdoExtension = (PPDO_DEVICE_EXTENSION)DeviceExtension->Ldo->DeviceExtension;
+
+            if (BridgePdoExtension && !BridgePdoExtension->Common.IsFDO && BridgePdoExtension->PciDevice && BridgePdoExtension->PciDevice->PciConfig.BaseClass == PCI_CLASS_BRIDGE_DEV && BridgePdoExtension->PciDevice->PciConfig.SubClass == PCI_SUBCLASS_BR_PCI_TO_PCI && (BridgePdoExtension->PciDevice->PciConfig.ProgIf & 0x01))
+            {
+                DPRINT1("PCI: Bus %lu behind subtractive-decode bridge, windows unconstrained\n", DeviceExtension->BusNumber);
+                IsBridgeFdo = FALSE;
+            }
+        }
+
+        PciArbiterSeedWindows(DeviceExtension, AllocatedResources, IsBridgeFdo);
+    }
 
     /* Initialize power management S-to-D mapping */
     DeviceExtension->SystemPowerState = PowerSystemWorking;
@@ -716,6 +803,40 @@ FdoPnpControl(
             break;
 
         case IRP_MN_FILTER_RESOURCE_REQUIREMENTS:
+            break;
+
+        case IRP_MN_QUERY_INTERFACE:
+            /*
+             * The PnP manager locates resource arbiters by querying
+             * GUID_ARBITER_INTERFACE_STANDARD on the bus stack, with the
+             * resource type passed in InterfaceSpecificData.  The FDO owns
+             * the arbiters; anything else keeps flowing down the stack.
+             */
+            if (RtlCompareMemory(IrpSp->Parameters.QueryInterface.InterfaceType, &GUID_ARBITER_INTERFACE_STANDARD, sizeof(GUID)) == sizeof(GUID))
+            {
+                CM_RESOURCE_TYPE ResourceType;
+                NTSTATUS ArbStatus;
+
+                ResourceType = (CM_RESOURCE_TYPE)(ULONG_PTR)
+                    IrpSp->Parameters.QueryInterface.InterfaceSpecificData;
+
+                if (IrpSp->Parameters.QueryInterface.Size < sizeof(ARBITER_INTERFACE))
+                {
+                    ArbStatus = STATUS_INVALID_PARAMETER;
+                }
+                else
+                {
+                    ArbStatus = PciQueryArbiterInterface(DeviceExtension, ResourceType, (PARBITER_INTERFACE)IrpSp->Parameters.QueryInterface.Interface);
+                }
+
+                if (NT_SUCCESS(ArbStatus))
+                {
+                    IoReleaseRemoveLock(&DeviceExtension->RemoveLock, Irp);
+                    Irp->IoStatus.Status = ArbStatus;
+                    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                    return ArbStatus;
+                }
+            }
             break;
 
         case IRP_MN_REMOVE_DEVICE:

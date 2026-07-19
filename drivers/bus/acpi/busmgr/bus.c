@@ -643,6 +643,19 @@ acpi_bus_walk (
                              Notification Handling
    -------------------------------------------------------------------------- */
 
+/*
+ * The NT layer (acpisys) registers a handler so that firmware-signaled
+ * presence changes (dock, bay, ACPI-mediated hotplug) propagate into an
+ * IoInvalidateDeviceRelations and the PnP manager re-queries the bus.
+ */
+static acpi_device_change_handler acpi_bus_device_change_handler;
+
+void
+acpi_bus_set_device_change_handler(acpi_device_change_handler handler)
+{
+	acpi_bus_device_change_handler = handler;
+}
+
 static void
 acpi_bus_check_device (ACPI_HANDLE handle)
 {
@@ -675,19 +688,30 @@ acpi_bus_check_device (ACPI_HANDLE handle)
 
 
 	/*
-	 * Device Insertion/Removal
+	 * Device Insertion/Removal: the updated _STA is already latched in
+	 * device->status; tell the NT layer to re-query bus relations so
+	 * the PnP manager sees the change.
 	 */
 	if ((device->status.present) && !(old_status.present)) {
-		DPRINT("Device insertion detected\n");
-		/* TBD: Handle device insertion */
+		DPRINT1("ACPI: Device insertion detected [%s]\n", device->pnp.bus_id);
+		if (acpi_bus_device_change_handler)
+			acpi_bus_device_change_handler();
 	}
 	else if (!(device->status.present) && (old_status.present)) {
-		DPRINT("Device removal detected\n");
-		/* TBD: Handle device removal */
+		DPRINT1("ACPI: Device removal detected [%s]\n", device->pnp.bus_id);
+		if (acpi_bus_device_change_handler)
+			acpi_bus_device_change_handler();
 	}
 
 }
 
+
+static ACPI_STATUS
+acpi_bus_check_scope_callback (ACPI_HANDLE handle, UINT32 nesting_level, void *context, void **return_value)
+{
+	acpi_bus_check_device(handle);
+	return AE_OK;
+}
 
 static void
 acpi_bus_check_scope (ACPI_HANDLE handle)
@@ -695,10 +719,8 @@ acpi_bus_check_scope (ACPI_HANDLE handle)
 	/* Status Change? */
 	acpi_bus_check_device(handle);
 
-	/*
-	 * TBD: Enumerate child devices within this device's scope and
-	 *       run acpi_bus_check_device()'s on them.
-	 */
+	/* Re-check every known device below this scope as well */
+	AcpiWalkNamespace(ACPI_TYPE_DEVICE, handle, ACPI_UINT32_MAX, acpi_bus_check_scope_callback, NULL, NULL, NULL);
 }
 
 
@@ -1699,6 +1721,25 @@ acpi_bus_init (void)
 		/* Reset status so a non-fatal _PIC failure does not stop init. */
 		status = AE_OK;
 	}
+
+	/*
+	 * Complete GPE initialization and enable all runtime GPEs.  Without
+	 * this, every event delivered through a general-purpose event pin —
+	 * PME# routed over GPE, GPE-wired control methods, thermal and dock
+	 * notifications — is armed in AML but never fires.  Windows enables
+	 * runtime GPEs at exactly this point of acpi.sys initialization.
+	 */
+	status = AcpiUpdateAllGpes();
+	if (ACPI_FAILURE(status)) {
+		DPRINT1("ACPI: AcpiUpdateAllGpes failed (0x%X)\n", status);
+	}
+	status = AcpiEnableAllRuntimeGpes();
+	if (ACPI_FAILURE(status)) {
+		DPRINT1("ACPI: AcpiEnableAllRuntimeGpes failed (0x%X)\n", status);
+	} else {
+		DPRINT1("ACPI: Runtime GPEs enabled\n");
+	}
+	status = AE_OK;
 
 	/*
 	 * Maybe EC region is required at bus_scan/acpi_get_devices. So it

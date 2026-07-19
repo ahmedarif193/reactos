@@ -277,16 +277,27 @@ AcpiPciRootEvaluateOsc(
     ACPI_BUFFER ReturnBuffer = { ACPI_ALLOCATE_BUFFER, NULL };
     ACPI_STATUS Status;
 
-    /* Build Support capabilities (DWORD 1) */
+    /* Build Support capabilities (DWORD 1) - everything the OS handles */
     SupportValue |= OSC_SUPPORT_EXTENDED_CONFIG_REGIONS;
+    SupportValue |= OSC_SUPPORT_ASPM;
+    SupportValue |= OSC_SUPPORT_CLOCK_PM;
     SupportValue |= OSC_SUPPORT_SEGMENT_GROUPS;
     SupportValue |= OSC_SUPPORT_MSI;
 
-    /* Build Control request (DWORD 2) - request PCIe native control */
+    /*
+     * Build Control request (DWORD 2).  Like Windows, ask for the full
+     * set of native PCIe features; the query pass below discovers what
+     * the firmware is willing to give up, and the commit pass requests
+     * exactly that subset so the firmware never has to mask anything.
+     */
+    ControlValue |= OSC_CONTROL_NATIVE_HOTPLUG;
+    ControlValue |= OSC_CONTROL_SHPC_NATIVE;
+    ControlValue |= OSC_CONTROL_NATIVE_PME;
+    ControlValue |= OSC_CONTROL_NATIVE_AER;
     ControlValue |= OSC_CONTROL_EXPRESS_CAP_STRUCTURE;
 
-    /* Populate the 3-DWORD capabilities buffer */
-    CapBuffer[0] = 0;            /* Status/Query: 0 = commit mode (not query) */
+    /* Populate the 3-DWORD capabilities buffer for the QUERY pass */
+    CapBuffer[0] = 1;            /* Status/Query: bit 0 = query mode */
     CapBuffer[1] = SupportValue; /* Support capabilities */
     CapBuffer[2] = ControlValue; /* Control request */
 
@@ -316,8 +327,44 @@ AcpiPciRootEvaluateOsc(
     RootInfo->Osc.ControlGranted = 0;
     RootInfo->Osc.Failed = TRUE;
 
-    DPRINT1("ACPI: _OSC calling with Support=0x%lx Control=0x%lx\n",
-            SupportValue, ControlValue);
+    DPRINT1("ACPI: _OSC query with Support=0x%lx Control=0x%lx\n", SupportValue, ControlValue);
+
+    /* QUERY pass: discover which controls the firmware would grant */
+    Status = AcpiEvaluateObject(Handle, "_OSC", &ArgumentList, &ReturnBuffer);
+    if (ACPI_SUCCESS(Status) && ReturnBuffer.Pointer)
+    {
+        ACPI_OBJECT *QueryResult = ReturnBuffer.Pointer;
+
+        if (QueryResult->Type == ACPI_TYPE_BUFFER && QueryResult->Buffer.Length >= (3 * sizeof(ULONG)))
+        {
+            const ULONG *QueryData = (const ULONG *)QueryResult->Buffer.Pointer;
+
+            if (!(QueryData[0] & (OSC_FIRMWARE_FAILURE | OSC_UNRECOGNIZED_UUID | OSC_UNRECOGNIZED_REVISION)))
+            {
+                /* Commit exactly what the firmware offered */
+                ControlValue &= QueryData[2];
+                DPRINT1("ACPI: _OSC query granted control mask 0x%lx\n", QueryData[2]);
+            }
+        }
+
+        ACPI_FREE(ReturnBuffer.Pointer);
+        ReturnBuffer.Pointer = NULL;
+        ReturnBuffer.Length = ACPI_ALLOCATE_BUFFER;
+    }
+    else if (ACPI_FAILURE(Status))
+    {
+        /* No _OSC or query unsupported: fall through to the plain commit */
+        if (Status != AE_NOT_FOUND)
+            DPRINT1("ACPI: _OSC query pass failed (0x%X), committing directly\n", Status);
+        ReturnBuffer.Pointer = NULL;
+        ReturnBuffer.Length = ACPI_ALLOCATE_BUFFER;
+    }
+
+    /* COMMIT pass */
+    CapBuffer[0] = 0;
+    CapBuffer[1] = SupportValue;
+    CapBuffer[2] = ControlValue;
+    RootInfo->Osc.ControlRequest = ControlValue;
 
     Status = AcpiEvaluateObject(Handle, "_OSC", &ArgumentList, &ReturnBuffer);
     if (ACPI_FAILURE(Status))

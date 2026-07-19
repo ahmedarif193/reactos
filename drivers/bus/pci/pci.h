@@ -58,6 +58,8 @@ typedef struct _PCI_DEVICE
     ULONG MsixPbaOffset;
     // Power Management capability offset (0 if none)
     UCHAR PmCapability;
+    // Whether the PM capability has been searched for
+    BOOLEAN PmProbed;
     // Whether this device has an interrupt connected
     BOOLEAN InterruptConnected;
     // Whether MSI has been allocated/enabled for this device
@@ -121,6 +123,8 @@ typedef struct _PDO_DEVICE_EXTENSION
     LONG WaitWakeState;
     // Spinlock protecting WaitWakeIrp and WaitWakeState
     KSPIN_LOCK WaitWakeSpinLock;
+    // Power policy owner's D3cold consent (D3COLD_SUPPORT_INTERFACE)
+    BOOLEAN D3ColdSupportEnabled;
 } PDO_DEVICE_EXTENSION, *PPDO_DEVICE_EXTENSION;
 
 typedef struct _PCI_ROOT_BUS_INTERFACE
@@ -179,6 +183,38 @@ typedef struct _FDO_DEVICE_EXTENSION
     KSPIN_LOCK WaitWakeSpinLock;
     LONG WaitWakeChildCount;
 } FDO_DEVICE_EXTENSION, *PFDO_DEVICE_EXTENSION;
+
+/**
+ * @brief Decode one CardBus bridge window (type 2 header Range[0..3]).
+ *
+ * Windows 0/1 are memory (4 KB granularity), 2/3 are I/O (4 byte).
+ * Returns TRUE when the window is configured (nonzero base <= limit).
+ */
+static __inline BOOLEAN
+PciCbDecodeWindow(_In_ const PCI_COMMON_CONFIG *PciConfig, _In_ ULONG Window, _Out_ PULONG WindowBase, _Out_ PULONG WindowLimit, _Out_opt_ PBOOLEAN IsMemoryWindow)
+{
+    BOOLEAN IsMemory = (Window < 2);
+    ULONG Base = PciConfig->u.type2.Range[Window].Base;
+    ULONG Limit = PciConfig->u.type2.Range[Window].Limit;
+
+    if (IsMemory)
+    {
+        Base &= PCI_CB_MEMORY_WINDOW_MASK;
+        Limit |= ~PCI_CB_MEMORY_WINDOW_MASK;
+    }
+    else
+    {
+        Base &= PCI_ADDRESS_IO_ADDRESS_MASK;
+        Limit |= ~PCI_ADDRESS_IO_ADDRESS_MASK;
+    }
+
+    *WindowBase = Base;
+    *WindowLimit = Limit;
+    if (IsMemoryWindow)
+        *IsMemoryWindow = IsMemory;
+
+    return (Base != 0) && (Base <= Limit);
+}
 
 static __inline BOOLEAN
 PciIsBusInRange(
@@ -286,6 +322,12 @@ FdoPowerControl(
     PDEVICE_OBJECT DeviceObject,
     PIRP Irp);
 
+NTSTATUS
+FdoQueryBusRelations(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp, PIO_STACK_LOCATION IrpSp);
+
+VOID
+PciFdoInitializeChildTracking(PFDO_DEVICE_EXTENSION FdoExtension);
+
 /* pci.c */
 
 NTSTATUS
@@ -325,6 +367,15 @@ PciDuplicateUnicodeString(
     OUT PUNICODE_STRING DestinationString);
 
 /* pdo.c */
+
+ULONG
+PciPdoGetBusData(_In_ PPDO_DEVICE_EXTENSION DeviceExtension, _Out_writes_bytes_(Length) PVOID Buffer, _In_ ULONG Length);
+
+ULONG
+PciPdoGetBusDataByOffset(_In_ PPDO_DEVICE_EXTENSION DeviceExtension, _Out_writes_bytes_(Length) PVOID Buffer, _In_ ULONG Offset, _In_ ULONG Length);
+
+ULONG
+PciPdoSetBusDataByOffset(_In_ PPDO_DEVICE_EXTENSION DeviceExtension, _In_reads_bytes_(Length) PVOID Buffer, _In_ ULONG Offset, _In_ ULONG Length);
 
 NTSTATUS
 PdoPnpControl(
@@ -408,12 +459,29 @@ PciQueryArbiterInterface(
     _In_ CM_RESOURCE_TYPE ResourceType,
     _Out_ PARBITER_INTERFACE Interface);
 
+VOID
+PciArbiterSeedWindows(_In_ PFDO_DEVICE_EXTENSION FdoExtension, _In_ PCM_RESOURCE_LIST AllocatedResources, _In_ BOOLEAN IsBridgeFdo);
+
 NTSTATUS
 NTAPI
 PciArbiterHandler(
     _Inout_opt_ PVOID Context,
     _In_ ARBITER_ACTION Action,
     _Inout_ PARBITER_PARAMETERS Parameters);
+
+/* cb.c - CardBus private interface (pci.sys <-> pcmcia.sys) */
+
+NTSTATUS
+NTAPI
+PciCbAddCardBus(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PVOID *DeviceContext);
+
+NTSTATUS
+NTAPI
+PciCbDeleteCardBus(_In_ PVOID DeviceContext);
+
+NTSTATUS
+NTAPI
+PciCbDispatchPnp(_In_ PVOID DeviceContext, _In_ PIRP Irp);
 
 /* hookhal.c */
 

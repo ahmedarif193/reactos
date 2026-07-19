@@ -52,6 +52,43 @@ static PHALP_PCI_GSI_INFO HalpPciGsiInfo = HalpPciGsiStaticInfo;
 /* ACPI PCI routing callback (set by ACPI driver via HalpRegisterPciRouteQuery) */
 static PHAL_ACPI_PCI_ROUTE_QUERY HalpPciRouteQueryCallback;
 
+/**
+ * @brief Resolve a device's interrupt line through the ACPI _PRT.
+ *
+ * After _PIC(1) the firmware's config-space InterruptLine values (PIC
+ * IRQs) and the IOAPIC inputs where INTx actually asserts can diverge;
+ * the _PRT is the authoritative map.  Falls back to the raw
+ * InterruptLine when no provider is registered or the (bus, device,
+ * pin) has no entry — e.g. devices behind bridges, which the cache does
+ * not swizzle.
+ */
+static
+UCHAR
+HalpPciRoutedInterruptLine(IN PBUS_HANDLER BusHandler, IN PCI_SLOT_NUMBER Slot, IN UCHAR InterruptPin, IN UCHAR InterruptLine)
+{
+    ULONG Gsi = 0;
+    USHORT Segment = 0;
+    PPCIPBUSDATA BusData;
+
+    if (InterruptPin == 0 || HalpPciRouteQueryCallback == NULL)
+        return InterruptLine;
+
+    BusData = (PPCIPBUSDATA)BusHandler->BusData;
+    if (BusData)
+        Segment = BusData->PciSegment;
+
+    if (HalpPciRouteQueryCallback(Segment, (UCHAR)BusHandler->BusNumber, (UCHAR)Slot.u.bits.DeviceNumber, (UCHAR)Slot.u.bits.FunctionNumber, InterruptPin, &Gsi, NULL, NULL) && Gsi != 0 && Gsi < 0xFF)
+    {
+        if ((UCHAR)Gsi != InterruptLine)
+        {
+            DPRINT1("HAL: _PRT routes %lu:%u.%u INT%c# to GSI %lu (line was %u)\n", BusHandler->BusNumber, Slot.u.bits.DeviceNumber, Slot.u.bits.FunctionNumber, 'A' + InterruptPin - 1, Gsi, InterruptLine);
+        }
+        return (UCHAR)Gsi;
+    }
+
+    return InterruptLine;
+}
+
 /* MSI support: TRUE by default on x86 APIC systems, set to FALSE on _OSC failure */
 
 /* PCI Operation Matrix */
@@ -759,19 +796,21 @@ HalpGetISAFixedPCIIrq(IN PBUS_HANDLER BusHandler,
     /* If the PCI device has no IRQ, nothing to do */
     if (!PciData.u.type0.InterruptPin) return STATUS_SUCCESS;
 
-    /* FIXME: The PCI IRQ Routing Miniport should be called */
-
-    /* Also if the INT# seems bogus, nothing to do either */
-    if ((PciData.u.type0.InterruptLine == 0) ||
-        (PciData.u.type0.InterruptLine == 255))
+    /* Prefer the ACPI _PRT routing over the firmware-planted line */
     {
-        /* Fake success */
-        return STATUS_SUCCESS;
-    }
+        UCHAR RoutedLine = HalpPciRoutedInterruptLine(BusHandler, PciSlot, PciData.u.type0.InterruptPin, PciData.u.type0.InterruptLine);
 
-    /* Otherwise, the INT# should be valid, return it to the caller */
-    (*Range)->Base = PciData.u.type0.InterruptLine;
-    (*Range)->Limit = PciData.u.type0.InterruptLine;
+        /* Also if the INT# seems bogus, nothing to do either */
+        if ((RoutedLine == 0) || (RoutedLine == 255))
+        {
+            /* Fake success */
+            return STATUS_SUCCESS;
+        }
+
+        /* Otherwise, the INT# should be valid, return it to the caller */
+        (*Range)->Base = RoutedLine;
+        (*Range)->Limit = RoutedLine;
+    }
     return STATUS_SUCCESS;
 }
 #endif // _MINIHAL_
@@ -944,11 +983,13 @@ HalpAssignPCISlotResources(IN PBUS_HANDLER BusHandler,
         0 != PciConfig.u.type0.InterruptLine &&
         0xFF != PciConfig.u.type0.InterruptLine)
     {
+        UCHAR RoutedLine = HalpPciRoutedInterruptLine(BusHandler, SlotNumber, PciConfig.u.type0.InterruptPin, PciConfig.u.type0.InterruptLine);
+
         Descriptor->Type = CmResourceTypeInterrupt;
         Descriptor->ShareDisposition = CmResourceShareShared;          /* FIXME Just a guess */
         Descriptor->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;     /* FIXME Just a guess */
-        Descriptor->u.Interrupt.Level = PciConfig.u.type0.InterruptLine;
-        Descriptor->u.Interrupt.Vector = PciConfig.u.type0.InterruptLine;
+        Descriptor->u.Interrupt.Level = RoutedLine;
+        Descriptor->u.Interrupt.Vector = RoutedLine;
         Descriptor->u.Interrupt.Affinity = 0xFFFFFFFF;
 
         Descriptor++;
@@ -1343,6 +1384,28 @@ HalpRegisterPciRouteQuery(
     HalpPciRouteQueryCallback = Provider;
 }
 
+/**
+ * @brief Public _PRT lookup for bus drivers (pci.sys).
+ *
+ * Returns TRUE with the GSI the ACPI _PRT routes (Bus, Device, Pin) to;
+ * FALSE when no provider is registered or no entry exists, in which case
+ * the caller falls back to the config-space InterruptLine.
+ */
+BOOLEAN
+NTAPI
+HalQueryPciRoutedInterrupt(_In_ ULONG Segment, _In_ ULONG Bus, _In_ ULONG Device, _In_ ULONG Function, _In_ ULONG Pin, _Out_ PULONG Gsi)
+{
+    if (!Gsi)
+        return FALSE;
+
+    *Gsi = 0;
+
+    if (HalpPciRouteQueryCallback == NULL || Pin == 0)
+        return FALSE;
+
+    return HalpPciRouteQueryCallback((USHORT)Segment, (UCHAR)Bus, (UCHAR)Device, (UCHAR)Function, (UCHAR)Pin, Gsi, NULL, NULL) && *Gsi != 0;
+}
+
 VOID
 NTAPI
 HalpSetPciRoutingMap(
@@ -1388,6 +1451,55 @@ HalpRecordPciMaxGsi(
     UNREFERENCED_PARAMETER(Entry);
 }
 
+/**
+ * @brief Report MSI capability and the ACPI _OSC outcome for a root bus.
+ *
+ * The pci.sys FDO calls this at start so the _OSC grant negotiated by
+ * acpi.sys (and stashed in the bus handler by HalpConfigurePciRootBridge)
+ * gates native PCIe feature use, mirroring the Windows acpi/pci contract.
+ * On amd64 the APIC HAL always provides an MSI vector pool; the i386
+ * legacy lib is shared with the PIC HAL, where MSI stays off.
+ */
+BOOLEAN
+NTAPI
+HalQueryPciMsiSupport(_In_ ULONG Segment, _In_ UCHAR Bus, _Out_opt_ PBOOLEAN Supported, _Out_opt_ PULONG OscStatusFlags, _Out_opt_ PULONG OscControlGranted, _Out_opt_ PUSHORT EffectiveSegment, _Out_opt_ PULONG OscMaskedControls)
+{
+    PBUS_HANDLER Handler;
+    PPCIPBUSDATA BusData = NULL;
+    BOOLEAN MsiSupported;
+
+#if defined(_M_AMD64)
+    MsiSupported = TRUE;
+#else
+    MsiSupported = FALSE;
+#endif
+
+    if (Supported) *Supported = MsiSupported;
+    if (OscStatusFlags) *OscStatusFlags = 0;
+    if (OscControlGranted) *OscControlGranted = 0;
+    if (OscMaskedControls) *OscMaskedControls = 0;
+    if (EffectiveSegment) *EffectiveSegment = (USHORT)Segment;
+
+    Handler = HalHandlerForBus(PCIBus, Bus);
+    if (Handler && Handler->BusData)
+    {
+        BusData = (PPCIPBUSDATA)Handler->BusData;
+
+        if (EffectiveSegment)
+            *EffectiveSegment = BusData->PciSegment;
+
+        if (BusData->OscEvaluated && !BusData->OscFailed)
+        {
+            if (OscStatusFlags) *OscStatusFlags = BusData->OscStatusFlags;
+            if (OscControlGranted) *OscControlGranted = BusData->OscControlGranted;
+            /* OscMaskedControls stays 0: the support set is an offer, and
+             * a control the firmware kept is visible in ControlGranted */
+        }
+    }
+
+    return MsiSupported;
+}
+
 VOID
 NTAPI
 HalpConfigurePciRootBridge(
@@ -1430,6 +1542,17 @@ HalpConfigurePciRootBridge(
     BusData->BusNumberStart = (UCHAR)BusStart;
     BusData->BusNumberEnd = (UCHAR)BusEnd;
     BusData->BusNumbersConfigured = TRUE;
+
+    /* Keep the _OSC negotiation result so pci.sys can query it */
+    BusData->OscEvaluated = Info->Osc.Evaluated;
+    BusData->OscFailed = Info->Osc.Failed;
+    BusData->OscStatusFlags = Info->Osc.StatusFlags;
+    BusData->OscSupportSet = Info->Osc.SupportSet;
+    BusData->OscControlGranted = Info->Osc.ControlGranted;
+    if (Info->Osc.Evaluated)
+    {
+        DPRINT1("HAL: Root bus %lu _OSC %s, control granted 0x%lx\n", Info->Bus, Info->Osc.Failed ? "failed" : "OK", Info->Osc.ControlGranted);
+    }
 
     if (Info->IoWindow.Present)
     {
