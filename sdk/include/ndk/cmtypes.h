@@ -87,6 +87,7 @@ Author:
 #define CmResourceTypeDevicePrivate             129
 #define CmResourceTypePcCardConfig              130
 #define CmResourceTypeMfCardConfig              131
+#define CmResourceTypeConnection                132
 
 
 //
@@ -150,6 +151,27 @@ typedef enum _CM_SHARE_DISPOSITION
 #define CM_RESOURCE_DMA_TYPE_A            0x0010
 #define CM_RESOURCE_DMA_TYPE_B            0x0020
 #define CM_RESOURCE_DMA_TYPE_F            0x0040
+#define CM_RESOURCE_DMA_V3                0x0080
+
+#define DMAV3_TRANFER_WIDTH_8              0x00
+#define DMAV3_TRANFER_WIDTH_16             0x01
+#define DMAV3_TRANFER_WIDTH_32             0x02
+#define DMAV3_TRANFER_WIDTH_64             0x03
+#define DMAV3_TRANFER_WIDTH_128            0x04
+#define DMAV3_TRANFER_WIDTH_256            0x05
+
+//
+// Connection Resource Descriptor Class and Type
+//
+#define CM_RESOURCE_CONNECTION_CLASS_GPIO            0x01
+#define CM_RESOURCE_CONNECTION_CLASS_SERIAL          0x02
+#define CM_RESOURCE_CONNECTION_CLASS_FUNCTION_CONFIG 0x03
+
+#define CM_RESOURCE_CONNECTION_TYPE_GPIO_IO          0x02
+#define CM_RESOURCE_CONNECTION_TYPE_SERIAL_I2C       0x01
+#define CM_RESOURCE_CONNECTION_TYPE_SERIAL_SPI       0x02
+#define CM_RESOURCE_CONNECTION_TYPE_SERIAL_UART      0x03
+#define CM_RESOURCE_CONNECTION_TYPE_FUNCTION_CONFIG  0x01
 
 //
 // Interrupt Resource Descriptor Flags
@@ -669,6 +691,17 @@ typedef struct _CM_PARTIAL_RESOURCE_DESCRIPTOR
             ULONG Port;
             ULONG Reserved1;
         } Dma;
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+        struct
+        {
+            ULONG Channel;
+            ULONG RequestLine;
+            UCHAR TransferWidth;
+            UCHAR Reserved1;
+            UCHAR Reserved2;
+            UCHAR Reserved3;
+        } DmaV3;
+#endif
         struct
         {
             ULONG Data[3];
@@ -701,6 +734,17 @@ typedef struct _CM_PARTIAL_RESOURCE_DESCRIPTOR
             PHYSICAL_ADDRESS Start;
             ULONG Length64;
         } Memory64;
+#endif
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+        struct
+        {
+            UCHAR Class;
+            UCHAR Type;
+            UCHAR Reserved1;
+            UCHAR Reserved2;
+            ULONG IdLowPart;
+            ULONG IdHighPart;
+        } Connection;
 #endif
     } u;
 } CM_PARTIAL_RESOURCE_DESCRIPTOR, *PCM_PARTIAL_RESOURCE_DESCRIPTOR;

@@ -76,6 +76,10 @@ PipDumpCmResourceDescriptor(
             DPRINT1("[%p:%X:%X] PVT: D[0] %X D[1] %X D[2] %X\n", Descriptor, Descriptor->ShareDisposition, Descriptor->Flags, Descriptor->u.DevicePrivate.Data[0], Descriptor->u.DevicePrivate.Data[1], Descriptor->u.DevicePrivate.Data[2]);
             break;
 
+        case CmResourceTypeConnection:
+            DPRINT1("[%p:%X:%X] CON: Class %X Type %X Id %08X:%08X\n", Descriptor, Descriptor->ShareDisposition, Descriptor->Flags, Descriptor->u.Connection.Class, Descriptor->u.Connection.Type, Descriptor->u.Connection.IdHighPart, Descriptor->u.Connection.IdLowPart);
+            break;
+
         default:
             DPRINT1("[%p] Unknown type %X\n", Descriptor, Descriptor->Type);
             break;
@@ -231,6 +235,10 @@ PipDumpIoResourceDescriptor(
 
         case CmResourceTypeDevicePrivate:
             DPRINT1("[%p:%X:%X] DAT: %X %X %X\n", Descriptor, Descriptor->Option, Descriptor->ShareDisposition, Descriptor->u.DevicePrivate.Data[0], Descriptor->u.DevicePrivate.Data[1], Descriptor->u.DevicePrivate.Data[2]);
+            break;
+
+        case CmResourceTypeConnection:
+            DPRINT1("[%p:%X:%X] CON: Class %X Type %X Id %08X:%08X\n", Descriptor, Descriptor->Option, Descriptor->ShareDisposition, Descriptor->u.Connection.Class, Descriptor->u.Connection.Type, Descriptor->u.Connection.IdHighPart, Descriptor->u.Connection.IdLowPart);
             break;
 
         default:

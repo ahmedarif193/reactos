@@ -624,6 +624,16 @@ IopFixupResourceListWithRequirements(
                         }
                         break;
 
+                    case CmResourceTypeConnection:
+                        if (CmDesc->u.Connection.Class == IoDesc->u.Connection.Class &&
+                            CmDesc->u.Connection.Type == IoDesc->u.Connection.Type &&
+                            CmDesc->u.Connection.IdLowPart == IoDesc->u.Connection.IdLowPart &&
+                            CmDesc->u.Connection.IdHighPart == IoDesc->u.Connection.IdHighPart)
+                        {
+                            Matched = TRUE;
+                        }
+                        break;
+
                     default:
                         /* Other stuff is fine */
                         Matched = TRUE;
@@ -1390,6 +1400,7 @@ IopTranslateDeviceResources(
 
             case CmResourceTypeDma:
             case CmResourceTypeBusNumber:
+            case CmResourceTypeConnection:
             case CmResourceTypeDevicePrivate:
             case CmResourceTypeDeviceSpecific:
                /* Nothing to do */

@@ -2736,6 +2736,14 @@ typedef struct _IO_RESOURCE_DESCRIPTOR {
       ULONG MinimumChannel;
       ULONG MaximumChannel;
     } Dma;
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+    struct {
+      ULONG RequestLine;
+      ULONG Reserved;
+      ULONG Channel;
+      ULONG TransferWidth;
+    } DmaV3;
+#endif
     struct {
       ULONG Length;
       ULONG Alignment;
@@ -2756,6 +2764,36 @@ typedef struct _IO_RESOURCE_DESCRIPTOR {
       ULONG Reserved1;
       ULONG Reserved2;
     } ConfigData;
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    struct {
+      ULONG Length40;
+      ULONG Alignment40;
+      PHYSICAL_ADDRESS MinimumAddress;
+      PHYSICAL_ADDRESS MaximumAddress;
+    } Memory40;
+    struct {
+      ULONG Length48;
+      ULONG Alignment48;
+      PHYSICAL_ADDRESS MinimumAddress;
+      PHYSICAL_ADDRESS MaximumAddress;
+    } Memory48;
+    struct {
+      ULONG Length64;
+      ULONG Alignment64;
+      PHYSICAL_ADDRESS MinimumAddress;
+      PHYSICAL_ADDRESS MaximumAddress;
+    } Memory64;
+#endif
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+    struct {
+      UCHAR Class;
+      UCHAR Type;
+      UCHAR Reserved1;
+      UCHAR Reserved2;
+      ULONG IdLowPart;
+      ULONG IdHighPart;
+    } Connection;
+#endif
   } u;
 } IO_RESOURCE_DESCRIPTOR, *PIO_RESOURCE_DESCRIPTOR;
 
