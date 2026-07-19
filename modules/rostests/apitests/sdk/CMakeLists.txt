@@ -24,6 +24,7 @@ add_importlibs(reshub_apitest msvcrt kernel32)
 add_rostests_file(TARGET reshub_apitest)
 
 add_executable(winuser_input_apitest winuser_input.c)
+target_compile_definitions(winuser_input_apitest PRIVATE NTDDI_VERSION=NTDDI_WIN11_GE)
 set_module_type(winuser_input_apitest win32cui)
 target_link_libraries(winuser_input_apitest ${PSEH_LIB})
 add_importlibs(winuser_input_apitest user32 msvcrt kernel32)

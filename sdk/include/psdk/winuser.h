@@ -1509,6 +1509,10 @@ extern "C" {
     #define SPI_GETDOCKMOVING       0x0090
     #define SPI_SETDOCKMOVING       0x0091
 #endif
+#if (NTDDI_VERSION >= NTDDI_WIN11_GE)
+    #define SPI_GETTOUCHPADPARAMETERS 0x00AE
+    #define SPI_SETTOUCHPADPARAMETERS 0x00AF
+#endif
 #if(WINVER >= 0x0500)
     #define SPI_GETACTIVEWINDOWTRACKING 0x1000
     #define SPI_SETACTIVEWINDOWTRACKING 0x1001
@@ -4300,15 +4304,43 @@ BOOL WINAPI GetGestureConfig(_In_ HWND hwnd, _In_ DWORD dwReserved, _In_ DWORD d
 
 #if(WINVER >= 0x0602)
 
+#define POINTER_STRUCTURES
+
 enum tagPOINTER_INPUT_TYPE {
-  PT_POINTER = 1,
-  PT_TOUCH,
-  PT_PEN,
-  PT_MOUSE,
-  PT_TOUCHPAD
+    PT_POINTER = 1,
+    PT_TOUCH,
+    PT_PEN,
+    PT_MOUSE,
+#if(WINVER >= 0x0603)
+    PT_TOUCHPAD
+#endif /* WINVER >= 0x0603 */
 };
 typedef DWORD POINTER_INPUT_TYPE;
 typedef UINT32 POINTER_FLAGS;
+
+#define POINTER_FLAG_NONE           0x00000000
+#define POINTER_FLAG_NEW            0x00000001
+#define POINTER_FLAG_INRANGE        0x00000002
+#define POINTER_FLAG_INCONTACT      0x00000004
+#define POINTER_FLAG_FIRSTBUTTON    0x00000010
+#define POINTER_FLAG_SECONDBUTTON   0x00000020
+#define POINTER_FLAG_THIRDBUTTON    0x00000040
+#define POINTER_FLAG_FOURTHBUTTON   0x00000080
+#define POINTER_FLAG_FIFTHBUTTON    0x00000100
+#define POINTER_FLAG_PRIMARY        0x00002000
+#define POINTER_FLAG_CONFIDENCE     0x00004000
+#define POINTER_FLAG_CANCELED       0x00008000
+#define POINTER_FLAG_DOWN           0x00010000
+#define POINTER_FLAG_UPDATE         0x00020000
+#define POINTER_FLAG_UP             0x00040000
+#define POINTER_FLAG_WHEEL          0x00080000
+#define POINTER_FLAG_HWHEEL         0x00100000
+#define POINTER_FLAG_CAPTURECHANGED 0x00200000
+#define POINTER_FLAG_HASTRANSFORM   0x00400000
+
+#define POINTER_MOD_SHIFT (0x0004)
+#define POINTER_MOD_CTRL  (0x0008)
+
 typedef enum tagPOINTER_BUTTON_CHANGE_TYPE
 {
     POINTER_CHANGE_NONE,
@@ -4343,6 +4375,50 @@ typedef struct tagPOINTER_INFO
     POINTER_BUTTON_CHANGE_TYPE ButtonChangeType;
 } POINTER_INFO;
 
+typedef UINT32 TOUCH_FLAGS;
+#define TOUCH_FLAG_NONE 0x00000000
+
+typedef UINT32 TOUCH_MASK;
+#define TOUCH_MASK_NONE        0x00000000
+#define TOUCH_MASK_CONTACTAREA 0x00000001
+#define TOUCH_MASK_ORIENTATION 0x00000002
+#define TOUCH_MASK_PRESSURE    0x00000004
+
+typedef struct tagPOINTER_TOUCH_INFO
+{
+    POINTER_INFO pointerInfo;
+    TOUCH_FLAGS touchFlags;
+    TOUCH_MASK touchMask;
+    RECT rcContact;
+    RECT rcContactRaw;
+    UINT32 orientation;
+    UINT32 pressure;
+} POINTER_TOUCH_INFO;
+
+typedef UINT32 PEN_FLAGS;
+#define PEN_FLAG_NONE     0x00000000
+#define PEN_FLAG_BARREL   0x00000001
+#define PEN_FLAG_INVERTED 0x00000002
+#define PEN_FLAG_ERASER   0x00000004
+
+typedef UINT32 PEN_MASK;
+#define PEN_MASK_NONE     0x00000000
+#define PEN_MASK_PRESSURE 0x00000001
+#define PEN_MASK_ROTATION 0x00000002
+#define PEN_MASK_TILT_X   0x00000004
+#define PEN_MASK_TILT_Y   0x00000008
+
+typedef struct tagPOINTER_PEN_INFO
+{
+    POINTER_INFO pointerInfo;
+    PEN_FLAGS penFlags;
+    PEN_MASK penMask;
+    UINT32 pressure;
+    UINT32 rotation;
+    INT32 tiltX;
+    INT32 tiltY;
+} POINTER_PEN_INFO;
+
 #define POINTER_MESSAGE_FLAG_NEW          0x00000001
 #define POINTER_MESSAGE_FLAG_INRANGE      0x00000002
 #define POINTER_MESSAGE_FLAG_INCONTACT    0x00000004
@@ -4354,6 +4430,111 @@ typedef struct tagPOINTER_INFO
 #define POINTER_MESSAGE_FLAG_PRIMARY      0x00002000
 #define POINTER_MESSAGE_FLAG_CONFIDENCE   0x00004000
 #define POINTER_MESSAGE_FLAG_CANCELED     0x00008000
+
+#define GET_POINTERID_WPARAM(wParam)             (LOWORD(wParam))
+#define IS_POINTER_FLAG_SET_WPARAM(wParam, flag) (((DWORD)HIWORD(wParam) & (flag)) == (flag))
+#define IS_POINTER_NEW_WPARAM(wParam)            IS_POINTER_FLAG_SET_WPARAM(wParam, POINTER_MESSAGE_FLAG_NEW)
+#define IS_POINTER_INRANGE_WPARAM(wParam)        IS_POINTER_FLAG_SET_WPARAM(wParam, POINTER_MESSAGE_FLAG_INRANGE)
+#define IS_POINTER_INCONTACT_WPARAM(wParam)      IS_POINTER_FLAG_SET_WPARAM(wParam, POINTER_MESSAGE_FLAG_INCONTACT)
+#define IS_POINTER_FIRSTBUTTON_WPARAM(wParam)    IS_POINTER_FLAG_SET_WPARAM(wParam, POINTER_MESSAGE_FLAG_FIRSTBUTTON)
+#define IS_POINTER_SECONDBUTTON_WPARAM(wParam)   IS_POINTER_FLAG_SET_WPARAM(wParam, POINTER_MESSAGE_FLAG_SECONDBUTTON)
+#define IS_POINTER_THIRDBUTTON_WPARAM(wParam)    IS_POINTER_FLAG_SET_WPARAM(wParam, POINTER_MESSAGE_FLAG_THIRDBUTTON)
+#define IS_POINTER_FOURTHBUTTON_WPARAM(wParam)   IS_POINTER_FLAG_SET_WPARAM(wParam, POINTER_MESSAGE_FLAG_FOURTHBUTTON)
+#define IS_POINTER_FIFTHBUTTON_WPARAM(wParam)    IS_POINTER_FLAG_SET_WPARAM(wParam, POINTER_MESSAGE_FLAG_FIFTHBUTTON)
+#define IS_POINTER_PRIMARY_WPARAM(wParam)        IS_POINTER_FLAG_SET_WPARAM(wParam, POINTER_MESSAGE_FLAG_PRIMARY)
+#define HAS_POINTER_CONFIDENCE_WPARAM(wParam)    IS_POINTER_FLAG_SET_WPARAM(wParam, POINTER_MESSAGE_FLAG_CONFIDENCE)
+#define IS_POINTER_CANCELED_WPARAM(wParam)       IS_POINTER_FLAG_SET_WPARAM(wParam, POINTER_MESSAGE_FLAG_CANCELED)
+
+#define PA_ACTIVATE   MA_ACTIVATE
+#define PA_NOACTIVATE MA_NOACTIVATE
+
+#define MAX_TOUCH_COUNT 256
+
+#define TOUCH_FEEDBACK_DEFAULT  0x1
+#define TOUCH_FEEDBACK_INDIRECT 0x2
+#define TOUCH_FEEDBACK_NONE     0x3
+
+typedef enum
+{
+    POINTER_FEEDBACK_DEFAULT = 1,
+    POINTER_FEEDBACK_INDIRECT = 2,
+    POINTER_FEEDBACK_NONE = 3,
+} POINTER_FEEDBACK_MODE;
+
+BOOL WINAPI InitializeTouchInjection(_In_ UINT32 maxCount, _In_ DWORD dwMode);
+BOOL WINAPI InjectTouchInput(_In_ UINT32 count, _In_reads_(count) CONST POINTER_TOUCH_INFO *contacts);
+
+typedef struct tagUSAGE_PROPERTIES
+{
+    USHORT level;
+    USHORT page;
+    USHORT usage;
+    INT32 logicalMinimum;
+    INT32 logicalMaximum;
+    USHORT unit;
+    USHORT exponent;
+    BYTE count;
+    INT32 physicalMinimum;
+    INT32 physicalMaximum;
+} USAGE_PROPERTIES, *PUSAGE_PROPERTIES;
+
+typedef struct tagPOINTER_TYPE_INFO
+{
+    POINTER_INPUT_TYPE type;
+    union
+    {
+        POINTER_INFO pointerInfo;
+        POINTER_TOUCH_INFO touchInfo;
+        POINTER_PEN_INFO penInfo;
+    } DUMMYUNIONNAME;
+} POINTER_TYPE_INFO, *PPOINTER_TYPE_INFO;
+
+typedef struct tagINPUT_INJECTION_VALUE
+{
+    USHORT page;
+    USHORT usage;
+    INT32 value;
+    USHORT index;
+} INPUT_INJECTION_VALUE, *PINPUT_INJECTION_VALUE;
+
+BOOL WINAPI GetPointerType(_In_ UINT32 pointerId, _Out_ POINTER_INPUT_TYPE *pointerType);
+BOOL WINAPI GetPointerCursorId(_In_ UINT32 pointerId, _Out_ UINT32 *cursorId);
+BOOL WINAPI GetPointerInfo(_In_ UINT32 pointerId, _Out_writes_(1) POINTER_INFO *pointerInfo);
+BOOL WINAPI GetPointerInfoHistory(_In_ UINT32 pointerId, _Inout_ UINT32 *entriesCount, _Out_writes_opt_(*entriesCount) POINTER_INFO *pointerInfo);
+BOOL WINAPI GetPointerFrameInfo(_In_ UINT32 pointerId, _Inout_ UINT32 *pointerCount, _Out_writes_opt_(*pointerCount) POINTER_INFO *pointerInfo);
+BOOL WINAPI GetPointerFrameInfoHistory(_In_ UINT32 pointerId, _Inout_ UINT32 *entriesCount, _Inout_ UINT32 *pointerCount, _Out_writes_opt_(*entriesCount * *pointerCount) POINTER_INFO *pointerInfo);
+BOOL WINAPI GetPointerTouchInfo(_In_ UINT32 pointerId, _Out_writes_(1) POINTER_TOUCH_INFO *touchInfo);
+BOOL WINAPI GetPointerTouchInfoHistory(_In_ UINT32 pointerId, _Inout_ UINT32 *entriesCount, _Out_writes_opt_(*entriesCount) POINTER_TOUCH_INFO *touchInfo);
+BOOL WINAPI GetPointerFrameTouchInfo(_In_ UINT32 pointerId, _Inout_ UINT32 *pointerCount, _Out_writes_opt_(*pointerCount) POINTER_TOUCH_INFO *touchInfo);
+BOOL WINAPI GetPointerFrameTouchInfoHistory(_In_ UINT32 pointerId, _Inout_ UINT32 *entriesCount, _Inout_ UINT32 *pointerCount, _Out_writes_opt_(*entriesCount * *pointerCount) POINTER_TOUCH_INFO *touchInfo);
+BOOL WINAPI GetPointerPenInfo(_In_ UINT32 pointerId, _Out_writes_(1) POINTER_PEN_INFO *penInfo);
+BOOL WINAPI GetPointerPenInfoHistory(_In_ UINT32 pointerId, _Inout_ UINT32 *entriesCount, _Out_writes_opt_(*entriesCount) POINTER_PEN_INFO *penInfo);
+BOOL WINAPI GetPointerFramePenInfo(_In_ UINT32 pointerId, _Inout_ UINT32 *pointerCount, _Out_writes_opt_(*pointerCount) POINTER_PEN_INFO *penInfo);
+BOOL WINAPI GetPointerFramePenInfoHistory(_In_ UINT32 pointerId, _Inout_ UINT32 *entriesCount, _Inout_ UINT32 *pointerCount, _Out_writes_opt_(*entriesCount * *pointerCount) POINTER_PEN_INFO *penInfo);
+BOOL WINAPI SkipPointerFrameMessages(_In_ UINT32 pointerId);
+BOOL WINAPI RegisterPointerInputTarget(_In_ HWND hwnd, _In_ POINTER_INPUT_TYPE pointerType);
+BOOL WINAPI UnregisterPointerInputTarget(_In_ HWND hwnd, _In_ POINTER_INPUT_TYPE pointerType);
+BOOL WINAPI RegisterPointerInputTargetEx(_In_ HWND hwnd, _In_ POINTER_INPUT_TYPE pointerType, _In_ BOOL fObserve);
+BOOL WINAPI UnregisterPointerInputTargetEx(_In_ HWND hwnd, _In_ POINTER_INPUT_TYPE pointerType);
+
+#if (NTDDI_VERSION >= NTDDI_WIN10_RS5)
+DECLARE_HANDLE(HSYNTHETICPOINTERDEVICE);
+HSYNTHETICPOINTERDEVICE WINAPI CreateSyntheticPointerDevice(_In_ POINTER_INPUT_TYPE pointerType, _In_ ULONG maxCount, _In_ POINTER_FEEDBACK_MODE mode);
+BOOL WINAPI InjectSyntheticPointerInput(_In_ HSYNTHETICPOINTERDEVICE device, _In_reads_(count) CONST POINTER_TYPE_INFO *pointerInfo, _In_ UINT32 count);
+VOID WINAPI DestroySyntheticPointerDevice(_In_ HSYNTHETICPOINTERDEVICE device);
+#endif /* NTDDI_VERSION >= NTDDI_WIN10_RS5 */
+
+BOOL WINAPI EnableMouseInPointer(_In_ BOOL fEnable);
+BOOL WINAPI IsMouseInPointerEnabled(VOID);
+#if (WDK_NTDDI_VERSION >= NTDDI_WIN10_RS3)
+BOOL WINAPI EnableMouseInPointerForThread(VOID);
+#endif
+
+#define TOUCH_HIT_TESTING_DEFAULT 0x0
+#define TOUCH_HIT_TESTING_CLIENT  0x1
+#define TOUCH_HIT_TESTING_NONE    0x2
+
+BOOL WINAPI RegisterTouchHitTestingWindow(_In_ HWND hwnd, _In_ ULONG value);
 
 #if !defined(_HPOWERNOTIFY_DEF_)
 #define _HPOWERNOTIFY_DEF_
@@ -4379,7 +4560,64 @@ typedef struct tagTOUCH_HIT_TESTING_INPUT
 #define TOUCH_HIT_TESTING_PROXIMITY_CLOSEST  0x0
 #define TOUCH_HIT_TESTING_PROXIMITY_FARTHEST 0xFFF
 
+BOOL WINAPI EvaluateProximityToRect(_In_ const RECT *controlBoundingBox, _In_ const TOUCH_HIT_TESTING_INPUT *pHitTestingInput, _Out_ TOUCH_HIT_TESTING_PROXIMITY_EVALUATION *pProximityEval);
+BOOL WINAPI EvaluateProximityToPolygon(_In_ UINT32 numVertices, _In_reads_(numVertices) const POINT *controlPolygon, _In_ const TOUCH_HIT_TESTING_INPUT *pHitTestingInput, _Out_ TOUCH_HIT_TESTING_PROXIMITY_EVALUATION *pProximityEval);
+LRESULT WINAPI PackTouchHitTestingProximityEvaluation(_In_ const TOUCH_HIT_TESTING_INPUT *pHitTestingInput, _In_ const TOUCH_HIT_TESTING_PROXIMITY_EVALUATION *pProximityEval);
+
+typedef enum tagFEEDBACK_TYPE
+{
+    FEEDBACK_TOUCH_CONTACTVISUALIZATION = 1,
+    FEEDBACK_PEN_BARRELVISUALIZATION = 2,
+    FEEDBACK_PEN_TAP = 3,
+    FEEDBACK_PEN_DOUBLETAP = 4,
+    FEEDBACK_PEN_PRESSANDHOLD = 5,
+    FEEDBACK_PEN_RIGHTTAP = 6,
+    FEEDBACK_TOUCH_TAP = 7,
+    FEEDBACK_TOUCH_DOUBLETAP = 8,
+    FEEDBACK_TOUCH_PRESSANDHOLD = 9,
+    FEEDBACK_TOUCH_RIGHTTAP = 10,
+    FEEDBACK_GESTURE_PRESSANDTAP = 11,
+    FEEDBACK_MAX = 0xFFFFFFFF
+} FEEDBACK_TYPE;
+
+#define GWFS_INCLUDE_ANCESTORS 0x00000001
+
+BOOL WINAPI GetWindowFeedbackSetting(_In_ HWND hwnd, _In_ FEEDBACK_TYPE feedback, _In_ DWORD dwFlags, _Inout_ UINT32 *pSize, _Out_writes_bytes_opt_(*pSize) VOID *config);
+BOOL WINAPI SetWindowFeedbackSetting(_In_ HWND hwnd, _In_ FEEDBACK_TYPE feedback, _In_ DWORD dwFlags, _In_ UINT32 size, _In_reads_bytes_opt_(size) CONST VOID *configuration);
+
+#if(WINVER >= 0x0603)
+typedef struct tagINPUT_TRANSFORM
+{
+    union
+    {
+        struct
+        {
+            float _11, _12, _13, _14;
+            float _21, _22, _23, _24;
+            float _31, _32, _33, _34;
+            float _41, _42, _43, _44;
+        } DUMMYSTRUCTNAME;
+        float m[4][4];
+    } DUMMYUNIONNAME;
+} INPUT_TRANSFORM;
+
+BOOL WINAPI GetPointerInputTransform(_In_ UINT32 pointerId, _In_ UINT32 historyCount, _Out_writes_(historyCount) INPUT_TRANSFORM *inputTransform);
+#endif /* WINVER >= 0x0603 */
+
 #define POINTER_DEVICE_PRODUCT_STRING_MAX 520
+
+#define PDC_ARRIVAL                   0x001
+#define PDC_REMOVAL                   0x002
+#define PDC_ORIENTATION_0             0x004
+#define PDC_ORIENTATION_90            0x008
+#define PDC_ORIENTATION_180           0x010
+#define PDC_ORIENTATION_270           0x020
+#define PDC_MODE_DEFAULT              0x040
+#define PDC_MODE_CENTERED             0x080
+#define PDC_MAPPING_CHANGE            0x100
+#define PDC_RESOLUTION                0x200
+#define PDC_ORIGIN                    0x400
+#define PDC_MODE_ASPECTRATIOPRESERVED 0x800
 
 typedef enum tagPOINTER_DEVICE_TYPE {
     POINTER_DEVICE_TYPE_INTEGRATED_PEN = 0x00000001,
@@ -4401,24 +4639,114 @@ typedef struct tagPOINTER_DEVICE_INFO {
     WCHAR productString[POINTER_DEVICE_PRODUCT_STRING_MAX];
 } POINTER_DEVICE_INFO;
 
-typedef UINT32 TOUCH_FLAGS;
-#define TOUCH_FLAG_NONE                 0x00000000
+typedef struct tagPOINTER_DEVICE_PROPERTY
+{
+    INT32 logicalMin;
+    INT32 logicalMax;
+    INT32 physicalMin;
+    INT32 physicalMax;
+    UINT32 unit;
+    UINT32 unitExponent;
+    USHORT usagePageId;
+    USHORT usageId;
+} POINTER_DEVICE_PROPERTY;
 
-typedef UINT32 TOUCH_MASK;
-#define TOUCH_MASK_NONE                 0x00000000
-#define TOUCH_MASK_CONTACTAREA          0x00000001
-#define TOUCH_MASK_ORIENTATION          0x00000002
-#define TOUCH_MASK_PRESSURE             0x00000004
+typedef enum tagPOINTER_DEVICE_CURSOR_TYPE
+{
+    POINTER_DEVICE_CURSOR_TYPE_UNKNOWN = 0x00000000,
+    POINTER_DEVICE_CURSOR_TYPE_TIP = 0x00000001,
+    POINTER_DEVICE_CURSOR_TYPE_ERASER = 0x00000002,
+    POINTER_DEVICE_CURSOR_TYPE_MAX = 0xFFFFFFFF
+} POINTER_DEVICE_CURSOR_TYPE;
 
-typedef struct tagPOINTER_TOUCH_INFO {
-    POINTER_INFO    pointerInfo;
-    TOUCH_FLAGS     touchFlags;
-    TOUCH_MASK      touchMask;
-    RECT            rcContact;
-    RECT            rcContactRaw;
-    UINT32          orientation;
-    UINT32          pressure;
-} POINTER_TOUCH_INFO;
+typedef struct tagPOINTER_DEVICE_CURSOR_INFO
+{
+    UINT32 cursorId;
+    POINTER_DEVICE_CURSOR_TYPE cursor;
+} POINTER_DEVICE_CURSOR_INFO;
+
+BOOL WINAPI GetPointerDevices(_Inout_ UINT32 *deviceCount, _Out_writes_opt_(*deviceCount) POINTER_DEVICE_INFO *pointerDevices);
+BOOL WINAPI GetPointerDevice(_In_ HANDLE device, _Out_writes_(1) POINTER_DEVICE_INFO *pointerDevice);
+BOOL WINAPI GetPointerDeviceProperties(_In_ HANDLE device, _Inout_ UINT32 *propertyCount, _Out_writes_opt_(*propertyCount) POINTER_DEVICE_PROPERTY *pointerProperties);
+BOOL WINAPI RegisterPointerDeviceNotifications(_In_ HWND window, _In_ BOOL notifyRange);
+BOOL WINAPI GetPointerDeviceRects(_In_ HANDLE device, _Out_writes_(1) RECT *pointerDeviceRect, _Out_writes_(1) RECT *displayRect);
+BOOL WINAPI GetPointerDeviceCursors(_In_ HANDLE device, _Inout_ UINT32 *cursorCount, _Out_writes_opt_(*cursorCount) POINTER_DEVICE_CURSOR_INFO *deviceCursors);
+BOOL WINAPI GetRawPointerDeviceData(_In_ UINT32 pointerId, _In_ UINT32 historyCount, _In_ UINT32 propertiesCount, _In_reads_(propertiesCount) POINTER_DEVICE_PROPERTY *pProperties, _Out_writes_(historyCount * propertiesCount) LONG *pValues);
+
+typedef enum LEGACY_TOUCHPAD_FEATURES
+{
+    LEGACY_TOUCHPAD_FEATURE_NONE = 0x00000000,
+    LEGACY_TOUCHPAD_FEATURE_ENABLE_DISABLE = 0x00000001,
+    LEGACY_TOUCHPAD_FEATURE_REVERSE_SCROLL_DIRECTION = 0x00000004,
+} LEGACY_TOUCHPAD_FEATURES;
+
+#ifndef MIDL_PASS
+DEFINE_ENUM_FLAG_OPERATORS(LEGACY_TOUCHPAD_FEATURES)
+#endif
+
+typedef enum TOUCHPAD_SENSITIVITY_LEVEL
+{
+    TOUCHPAD_SENSITIVITY_LEVEL_MOST_SENSITIVE = 0x00000000,
+    TOUCHPAD_SENSITIVITY_LEVEL_HIGH_SENSITIVITY = 0x00000001,
+    TOUCHPAD_SENSITIVITY_LEVEL_MEDIUM_SENSITIVITY = 0x00000002,
+    TOUCHPAD_SENSITIVITY_LEVEL_LOW_SENSITIVITY = 0x00000003,
+    TOUCHPAD_SENSITIVITY_LEVEL_LEAST_SENSITIVE = 0x00000004,
+} TOUCHPAD_SENSITIVITY_LEVEL;
+
+#define TOUCHPAD_PARAMETERS_VERSION_1 1
+
+typedef struct TOUCHPAD_PARAMETERS_V1
+{
+    UINT versionNumber;
+    UINT maxSupportedContacts;
+    LEGACY_TOUCHPAD_FEATURES legacyTouchpadFeatures;
+    BOOL touchpadPresent : 1;
+    BOOL legacyTouchpadPresent : 1;
+    BOOL externalMousePresent : 1;
+    BOOL touchpadEnabled : 1;
+    BOOL touchpadActive : 1;
+    BOOL feedbackSupported : 1;
+    BOOL clickForceSupported : 1;
+    BOOL Reserved1 : 25;
+    BOOL allowActiveWhenMousePresent : 1;
+    BOOL feedbackEnabled : 1;
+    BOOL tapEnabled : 1;
+    BOOL tapAndDragEnabled : 1;
+    BOOL twoFingerTapEnabled : 1;
+    BOOL rightClickZoneEnabled : 1;
+    BOOL mouseAccelSettingHonored : 1;
+    BOOL panEnabled : 1;
+    BOOL zoomEnabled : 1;
+    BOOL scrollDirectionReversed : 1;
+    BOOL Reserved2 : 22;
+    TOUCHPAD_SENSITIVITY_LEVEL sensitivityLevel;
+    UINT cursorSpeed;
+    UINT feedbackIntensity;
+    UINT clickForceSensitivity;
+    UINT rightClickZoneWidth;
+    UINT rightClickZoneHeight;
+} TOUCHPAD_PARAMETERS_V1, *PTOUCHPAD_PARAMETERS_V1;
+
+#define TOUCHPAD_PARAMETERS_VERSION_2 0x2
+
+#if defined(__cplusplus)
+typedef struct tagTOUCHPAD_PARAMETERS_V2 : public TOUCHPAD_PARAMETERS_V1
+{
+    BOOL button1Supported : 1;
+    BOOL button2Supported : 1;
+    BOOL button3Supported : 1;
+    BOOL Reserved3 : 29;
+} TOUCHPAD_PARAMETERS_V2, *PTOUCHPAD_PARAMETERS_V2;
+#else
+typedef struct tagTOUCHPAD_PARAMETERS_V2
+{
+    TOUCHPAD_PARAMETERS_V1 DUMMYSTRUCTNAME;
+    BOOL button1Supported : 1;
+    BOOL button2Supported : 1;
+    BOOL button3Supported : 1;
+    BOOL Reserved3 : 29;
+} TOUCHPAD_PARAMETERS_V2, *PTOUCHPAD_PARAMETERS_V2;
+#endif
 
 #endif /* WINVER >= 0x0602 */
 

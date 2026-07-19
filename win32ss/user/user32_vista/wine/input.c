@@ -32,13 +32,6 @@
 #include <wingdi.h>
 #include <winuser.h>
 #include <winbase.h>
-DECLARE_HANDLE(HSYNTHETICPOINTERDEVICE);
-typedef enum
-{
-    POINTER_FEEDBACK_DEFAULT = 1,
-    POINTER_FEEDBACK_INDIRECT = 2,
-    POINTER_FEEDBACK_NONE = 3,
-} POINTER_FEEDBACK_MODE;
 
 typedef enum ORIENTATION_PREFERENCE {
     ORIENTATION_PREFERENCE_NONE              = 0x0,
