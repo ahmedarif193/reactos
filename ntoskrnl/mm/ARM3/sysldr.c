@@ -10,6 +10,7 @@
 /* INCLUDES *******************************************************************/
 
 #include <ntoskrnl.h>
+#include <internal/proftrace.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -989,6 +990,7 @@ MmUnloadSystemImage(IN PVOID ImageHandle)
     }
 
     /* Delete the system image mapping and return its system PTEs. */
+    KprofTraceImageEvent(NULL, LdrEntry->DllBase, LdrEntry->SizeOfImage, FALSE, TRUE, &LdrEntry->FullDllName);
     MiDeleteSystemPageableVm(MiAddressToPte(LdrEntry->DllBase),
                              ROUND_TO_PAGES(LdrEntry->SizeOfImage) >> PAGE_SHIFT,
                              0,
@@ -3458,6 +3460,7 @@ LoaderScan:
     LdrpInitSecurityCookie(LdrEntry);
 
     /* Check if notifications are enabled */
+    KprofTraceImageEvent(NULL, LdrEntry->DllBase, LdrEntry->SizeOfImage, TRUE, TRUE, FileName);
     if (PsImageNotifyEnabled)
     {
         /* Fill out the notification data */

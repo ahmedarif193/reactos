@@ -10,6 +10,7 @@
 /* INCLUDES ****************************************************************/
 
 #include <ntoskrnl.h>
+#include <internal/proftrace.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -559,6 +560,7 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
     /* Get the create time */
     KeQuerySystemTime(&Thread->CreateTime);
     ASSERT(!(Thread->CreateTime.HighPart & 0xF0000000));
+    KprofTraceThreadEvent(Thread, TRUE);
 
     /* Make sure the thread isn't dead */
     if (!Thread->DeadThread)

@@ -11,6 +11,7 @@
 /* INCLUDES *****************************************************************/
 
 #include <ntoskrnl.h>
+#include <internal/proftrace.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -537,6 +538,7 @@ PspExitThread(IN NTSTATUS ExitStatus)
 
     /* Run Thread Notify Routines before we desintegrate the thread */
     PspRunCreateThreadNotifyRoutines(Thread, FALSE);
+    KprofTraceThreadEvent(Thread, FALSE);
 
     /* Lock the Process before we modify its thread entries */
     KeEnterCriticalRegion();
@@ -1119,6 +1121,7 @@ PspExitProcess(IN BOOLEAN LastThread,
 
         /* Run the Notification Routines */
         PspRunCreateProcessNotifyRoutines(Process, FALSE);
+        KprofTraceProcessEvent(Process, FALSE);
     }
 
     /* Cleanup the power state */

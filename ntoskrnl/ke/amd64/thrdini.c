@@ -10,6 +10,7 @@
 /* INCLUDES ******************************************************************/
 
 #include <ntoskrnl.h>
+#include <internal/proftrace.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -181,6 +182,8 @@ KiSwapContextResume(
 #if (NTDDI_VERSION >= NTDDI_WIN7)
     BOOLEAN ReadyTransition, ReapThread;
 #endif
+
+    KprofTraceSchedulerSwitch(OldThread, NewThread, OldThread->WaitReason);
 
     /* Setup ring 0 stack pointer */
     Pcr->TssBase->Rsp0 = (ULONG64)NewThread->InitialStack;
