@@ -18,7 +18,7 @@
 #include <spb.h>
 
 #define HIDI2C_TAG '2IdH'
-#define HIDI2C_MAX_DESCRIPTOR_SIZE 4096
+#define HIDI2C_MIN_TRANSFER_BUFFER_SIZE 4096
 #define HIDI2C_COMMAND_OVERHEAD 16
 
 #include <pshpack1.h>
@@ -72,6 +72,10 @@ typedef struct _HIDI2C_DEVICE_EXTENSION
     volatile LONG Started;
     volatile LONG Powered;
 } HIDI2C_DEVICE_EXTENSION, *PHIDI2C_DEVICE_EXTENSION;
+
+NTSTATUS
+Hidi2cValidateDeviceDescriptor(
+    _In_ const HIDI2C_DEVICE_DESCRIPTOR *Descriptor);
 
 NTSTATUS
 Hidi2cInitializeTransport(

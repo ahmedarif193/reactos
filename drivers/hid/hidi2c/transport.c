@@ -1075,8 +1075,9 @@ Hidi2cGetReport(
                       DeviceExtension->I2cDescriptor.DataRegister);
     CommandLength += 2;
 
-    ResponseCapacity = min(XferPacket->reportBufferLen + sizeof(USHORT),
-                           DeviceExtension->TransferBufferSize);
+    ResponseCapacity = min(XferPacket->reportBufferLen,
+                           DeviceExtension->TransferBufferSize - sizeof(USHORT)) +
+                       sizeof(USHORT);
     Status = Hidi2cSpbSequence(DeviceExtension,
                                DeviceExtension->CommandBuffer,
                                CommandLength,
@@ -1119,7 +1120,8 @@ Hidi2cSetReport(
     ULONG Length;
     NTSTATUS Status;
 
-    if (XferPacket->reportBufferLen > DeviceExtension->TransferBufferSize)
+    if (XferPacket->reportBufferLen > MAXUSHORT - sizeof(USHORT) ||
+        XferPacket->reportBufferLen > DeviceExtension->TransferBufferSize)
     {
         return STATUS_INVALID_BUFFER_SIZE;
     }
@@ -1264,25 +1266,13 @@ Hidi2cStartDevice(
     if (!NT_SUCCESS(Status))
         goto Failure;
 
-    if (DeviceExtension->I2cDescriptor.HidDescriptorLength !=
-            sizeof(HIDI2C_DEVICE_DESCRIPTOR) ||
-        DeviceExtension->I2cDescriptor.BcdVersion != 0x0100 ||
-        DeviceExtension->I2cDescriptor.ReportDescriptorLength == 0 ||
-        DeviceExtension->I2cDescriptor.ReportDescriptorLength >
-            HIDI2C_MAX_DESCRIPTOR_SIZE ||
-        DeviceExtension->I2cDescriptor.MaxInputLength < sizeof(USHORT) ||
-        DeviceExtension->I2cDescriptor.MaxInputLength >
-            HIDI2C_MAX_DESCRIPTOR_SIZE ||
-        DeviceExtension->I2cDescriptor.MaxOutputLength >
-            HIDI2C_MAX_DESCRIPTOR_SIZE)
-    {
-        Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+    Status = Hidi2cValidateDeviceDescriptor(&DeviceExtension->I2cDescriptor);
+    if (!NT_SUCCESS(Status))
         goto Failure;
-    }
 
     BufferSize = max((ULONG)DeviceExtension->I2cDescriptor.MaxInputLength,
                      (ULONG)DeviceExtension->I2cDescriptor.MaxOutputLength);
-    BufferSize = max(BufferSize, (ULONG)HIDI2C_MAX_DESCRIPTOR_SIZE);
+    BufferSize = max(BufferSize, (ULONG)HIDI2C_MIN_TRANSFER_BUFFER_SIZE);
     DeviceExtension->InputBuffer = ExAllocatePoolWithTag(NonPagedPool,
                                                           BufferSize,
                                                           HIDI2C_TAG);

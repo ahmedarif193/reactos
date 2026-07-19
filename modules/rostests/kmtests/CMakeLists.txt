@@ -7,6 +7,7 @@ include_directories(include)
 add_subdirectory(example)
 add_subdirectory(fltmgr)
 add_subdirectory(hidparse)
+add_subdirectory(hidi2c)
 add_subdirectory(kernel32)
 add_subdirectory(ntos_cc)
 add_subdirectory(ntos_io)
@@ -245,6 +246,7 @@ list(APPEND KMTEST_SOURCE
     fltmgr/fltmgr_register/fltmgr_reg_user.c
 
     hidparse/HidP_user.c
+    hidi2c/Hidi2cDescriptor_user.c
     kernel32/FileAttributes_user.c
     kernel32/FindFile_user.c
     ntos_cc/CcCopyRead_user.c
@@ -283,6 +285,7 @@ add_dependencies(kmtest_drivers
     kmtest_drv
     example_drv
     hidp_drv
+    hidi2cdescriptor_drv
     iocreatefile_drv
     iodeviceobject_drv
     iohelper_drv
