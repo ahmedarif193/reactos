@@ -736,6 +736,109 @@ DxgkpVidMmCreateSystemAllocation(
     return STATUS_SUCCESS;
 }
 
+/*
+ * DxgkpVidMmCreateExistingHeapAllocation
+ *
+ * D3DKMT_STANDARDALLOCATIONTYPE_EXISTINGHEAP backing: the caller's own
+ * page-aligned heap pages are probed, locked for write, and given a kernel
+ * mapping that becomes the allocation's system backing.  The pages remain
+ * caller-owned — DxgkpVidMmReleaseSystemBacking unlocks them, it never
+ * pool-frees them.  Kernel-managed: no miniport placement, CPU-visible,
+ * GPU access goes through GpuMmu PTEs over the locked pages.
+ */
+static NTSTATUS
+DxgkpVidMmCreateExistingHeapAllocation(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE  Device,
+    _In_ PVOID            UserSystemMem,
+    _In_ SIZE_T           Size,
+    _Out_ PHANDLE         OutHandle)
+{
+    PDXGKVMM_ALLOCATION Alloc;
+    PMDL Mdl;
+    PVOID SystemVa;
+
+    if (Adapter == NULL || Device == NULL || OutHandle == NULL ||
+        UserSystemMem == NULL || Size == 0 ||
+        ((ULONG_PTR)UserSystemMem & (PAGE_SIZE - 1)) != 0 ||
+        (Size & (PAGE_SIZE - 1)) != 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    *OutHandle = NULL;
+
+    DxgkpVidMmEnsureGlobalsInitialized();
+
+    Mdl = IoAllocateMdl(UserSystemMem, (ULONG)Size, FALSE, FALSE, NULL);
+    if (Mdl == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    _SEH2_TRY
+    {
+        MmProbeAndLockPages(Mdl, UserMode, IoWriteAccess);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        IoFreeMdl(Mdl);
+        _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
+    }
+    _SEH2_END;
+
+    SystemVa = MmGetSystemAddressForMdlSafe(Mdl, NormalPagePriority | MdlMappingNoExecute);
+    if (SystemVa == NULL)
+    {
+        MmUnlockPages(Mdl);
+        IoFreeMdl(Mdl);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    Alloc = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Alloc), TAG_VIDMM_ALLOC);
+    if (Alloc == NULL)
+    {
+        MmUnlockPages(Mdl);
+        IoFreeMdl(Mdl);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    RtlZeroMemory(Alloc, sizeof(*Alloc));
+    DxgkpVidMmInitializeAllocationLifetime(Alloc);
+    KeInitializeMutex(&Alloc->ResidencyLock, 0);
+
+    Alloc->Handle = DxgkpVidMmAllocateHandle(&DxgkVidMmNextAllocationHandle,
+                                             DxgkVidMmAllocationHandleCookie);
+    Alloc->Magic = DXGKVMM_ALLOCATION_MAGIC;
+    Alloc->Adapter = Adapter;
+    Alloc->Device = Device;
+    Alloc->MiniportDeviceHandle = Device->hMiniportDevice;
+    Alloc->Initializing = TRUE;
+    Alloc->Size = Size;
+    Alloc->Alignment = PAGE_SIZE;
+    Alloc->AllocationPriority = VIDMM_PRIORITY_NORMAL;
+    Alloc->CpuVisible = TRUE;
+    Alloc->Resident = FALSE;
+    Alloc->SystemMemory = SystemVa;
+    Alloc->SysMemMdl = Mdl;
+    Alloc->PhysicalAddress = MmGetPhysicalAddress(SystemVa);
+    Alloc->CpuAddress = SystemVa;
+    KeInitializeMutex(&Alloc->UserModeLock, 0);
+
+    InitializeListHead(&Alloc->SegmentEntry);
+    InitializeListHead(&Alloc->DeviceEntry);
+    InitializeListHead(&Alloc->GlobalAllocationEntry);
+    InitializeListHead(&Alloc->ResourceEntry);
+
+    DxgkpVidMmTrackBacking(Adapter);
+    ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+    InsertTailList(&DxgkVidMmAllocationListHead, &Alloc->GlobalAllocationEntry);
+    ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+
+    *OutHandle = (HANDLE)(ULONG_PTR)Alloc->Handle;
+    DPRINT("DxgkpVidMmCreateExistingHeapAllocation: handle=%p user=%p size=%Iu\n",
+           *OutHandle, UserSystemMem, Size);
+    return STATUS_SUCCESS;
+}
+
 static PDXGKRNL_DEVICE
 DxgkpVidMmFindDeviceByHandle(
     _In_ D3DKMT_HANDLE Handle,
@@ -1718,6 +1821,32 @@ DxgkpVidMmDropLogicalHandleReference(
 }
 
 
+/*
+ * DxgkpVidMmReleaseSystemBacking
+ *
+ * Releases the system backing by kind: existing-heap backing unlocks and
+ * frees the caller-page MDL (never pool-frees caller memory); pool-owned
+ * backing is pool-freed.
+ */
+static VOID
+DxgkpVidMmReleaseSystemBacking(
+    _In_ PDXGKVMM_ALLOCATION Allocation)
+{
+    if (Allocation->SysMemMdl != NULL)
+    {
+        MmUnlockPages(Allocation->SysMemMdl);
+        IoFreeMdl(Allocation->SysMemMdl);
+        Allocation->SysMemMdl = NULL;
+        Allocation->SystemMemory = NULL;
+        return;
+    }
+    if (Allocation->SystemMemory != NULL)
+    {
+        ExFreePoolWithTag(Allocation->SystemMemory, TAG_VIDMM_ALLOC);
+        Allocation->SystemMemory = NULL;
+    }
+}
+
 static VOID
 DxgkpVidMmFinalizeAllocation(
     _In_ PDXGKVMM_ALLOCATION Allocation)
@@ -1750,9 +1879,7 @@ DxgkpVidMmFinalizeAllocation(
             DxgkVidMmUnmapAllocationCpu(Allocation);
         if (Allocation->Resident)
             DxgkpVidMmReleaseSegmentPlacement(Allocation);
-        if (Allocation->SystemMemory != NULL)
-            ExFreePoolWithTag(Allocation->SystemMemory, TAG_VIDMM_ALLOC);
-        Allocation->SystemMemory = NULL;
+        DxgkpVidMmReleaseSystemBacking(Allocation);
         if (Allocation->PrivateDriverData != NULL)
             ExFreePoolWithTag(Allocation->PrivateDriverData, TAG_VIDMM_ALLOC);
         Allocation->PrivateDriverData = NULL;
@@ -4418,6 +4545,7 @@ DxgkpCreateAllocationCaptured(
     PDXGKVMM_ALLOCATION *CreateRollbackAllocations = NULL;
     PDXGKVMM_DESTROY_BATCH CreateRollbackBatch = NULL;
     UINT CreatedAllocationCount = 0;
+    SIZE_T StdExistingHeapSize = 0;
     NTSTATUS Status = STATUS_SUCCESS;
     UINT i;
 
@@ -4459,7 +4587,8 @@ DxgkpCreateAllocationCaptured(
      * in user mode (gdi32 -> win32k -> bridge), so these are always illegal here
      * and must be refused before reaching the miniport.
      */
-    if (pCreateAllocation->Flags.ExistingSysMem ||
+    if ((pCreateAllocation->Flags.ExistingSysMem &&
+         ((*(const UINT *)&pCreateAllocation->Flags) & 0x00010000u) == 0) ||
         pCreateAllocation->Flags.CreateWriteCombined ||
         pCreateAllocation->Flags.CreateCached ||
         pCreateAllocation->Flags.OpenCrossAdapter)
@@ -4483,13 +4612,17 @@ DxgkpCreateAllocationCaptured(
         D3DKMT_CREATESTANDARDALLOCATION *StdAlloc =
             pCreateAllocation->pStandardAllocation;
         D3DKMT_STANDARDALLOCATIONTYPE StdType = D3DKMT_STANDARDALLOCATIONTYPE_MAX;
+        D3DKMT_STANDARDALLOCATION_EXISTINGHEAP HeapData;
 
         if (StdAlloc == NULL)
             return STATUS_INVALID_PARAMETER;
 
+        RtlZeroMemory(&HeapData, sizeof(HeapData));
         _SEH2_TRY
         {
             StdType = StdAlloc->Type;
+            if (StdType == D3DKMT_STANDARDALLOCATIONTYPE_EXISTINGHEAP)
+                HeapData = StdAlloc->ExistingHeapData;
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
@@ -4499,6 +4632,30 @@ DxgkpCreateAllocationCaptured(
 
         if (StdType < D3DKMT_STANDARDALLOCATIONTYPE_EXISTINGHEAP ||
             StdType >= D3DKMT_STANDARDALLOCATIONTYPE_MAX)
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        if (StdType == D3DKMT_STANDARDALLOCATIONTYPE_EXISTINGHEAP)
+        {
+            /* Exactly one backing source for an existing heap. */
+            if (pCreateAllocation->Flags.ExistingSysMem == pCreateAllocation->Flags.ExistingSection)
+                return STATUS_INVALID_PARAMETER;
+            if (pCreateAllocation->Flags.ExistingSection)
+                return STATUS_NOT_SUPPORTED;
+            if (pCreateAllocation->NumAllocations != 1 ||
+                pCreateAllocation->Flags.CreateShared ||
+                pCreateAllocation->Flags.CreateResource ||
+                pCreateAllocation->hResource != 0 ||
+                HeapData.Size == 0 ||
+                (HeapData.Size & (PAGE_SIZE - 1)) != 0 ||
+                HeapData.Size > MAXULONG)
+            {
+                return STATUS_INVALID_PARAMETER;
+            }
+            StdExistingHeapSize = (SIZE_T)HeapData.Size;
+        }
+        else if (pCreateAllocation->Flags.ExistingSysMem)
         {
             return STATUS_INVALID_PARAMETER;
         }
@@ -4573,7 +4730,17 @@ DxgkpCreateAllocationCaptured(
         DxgkAllocInfo.Flags.ExistingSysMem = (pCreateAllocation->Flags.ExistingSysMem || AllocationInfo.pSystemMem != NULL) ? 1 : 0;
 
         Status = STATUS_SUCCESS;
-        if (DxgkAllocInfo.PrivateDriverDataSize == 0)
+        if (StdExistingHeapSize != 0)
+        {
+            if (AllocationInfo.pSystemMem == NULL ||
+                AllocationInfo.PrivateDriverDataSize != 0)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+            DxgkAllocInfo.Size = StdExistingHeapSize;
+        }
+        else if (DxgkAllocInfo.PrivateDriverDataSize == 0)
         {
             DxgkAllocInfo.Size = PAGE_SIZE;
             UseSystemAllocation = TRUE;
@@ -4640,7 +4807,12 @@ DxgkpCreateAllocationCaptured(
          * rejected by the UMD at D3DKMTMapGpuVirtualAddress time.  Only adapters
          * with no CreateAllocation DDI fall back to the synthetic system path.
          */
-        if (UseSystemAllocation &&
+        if (StdExistingHeapSize != 0)
+        {
+            Status = DxgkpVidMmCreateExistingHeapAllocation(Adapter, Device, AllocationInfo.pSystemMem, StdExistingHeapSize, &AllocationHandle);
+            MiniportResourceHandle = NULL;
+        }
+        else if (UseSystemAllocation &&
             (Adapter->MiniportContext == NULL ||
              Adapter->MiniportContext->InitData.s.DxgkDdiCreateAllocation == NULL))
         {
@@ -4871,6 +5043,7 @@ DxgkpCreateAllocationWithAccessModeVariant(
     BOOLEAN CoreSucceeded = FALSE;
     BOOLEAN InputCreatesResource;
     BOOLEAN StandardAllocation;
+    BOOLEAN StdExistingHeap = FALSE;
     NTSTATUS CleanupStatus;
     NTSTATUS Status;
 
@@ -4939,6 +5112,12 @@ DxgkpCreateAllocationWithAccessModeVariant(
         Captured.pStandardAllocation = CapturedPrivateDriverData;
         Captured.PrivateDriverDataSize = 0;
         TotalPrivateSize = sizeof(D3DKMT_CREATESTANDARDALLOCATION);
+        StdExistingHeap = ((D3DKMT_CREATESTANDARDALLOCATION *)CapturedPrivateDriverData)->Type == D3DKMT_STANDARDALLOCATIONTYPE_EXISTINGHEAP;
+        if (EmbeddedBufferMode != KernelMode && !StdExistingHeap)
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Cleanup;
+        }
     }
     else if (Captured.PrivateDriverDataSize != 0)
     {
@@ -4990,7 +5169,7 @@ DxgkpCreateAllocationWithAccessModeVariant(
         PrivateCaptures[i].UserBuffer = AllocationInfo.pPrivateDriverData;
         PrivateCaptures[i].Size = AllocationInfo.PrivateDriverDataSize;
         DxgkpSetAllocationHandle(&Captured, InfoVersion, i, 0);
-        if (EmbeddedBufferMode != KernelMode && AllocationInfo.pSystemMem != NULL)
+        if (EmbeddedBufferMode != KernelMode && AllocationInfo.pSystemMem != NULL && !StdExistingHeap)
         {
             Status = STATUS_INVALID_PARAMETER;
             goto Cleanup;
