@@ -240,6 +240,22 @@ typedef struct _PTP_CONFIGURATION_TEST_CONTEXT
     PTP_CONFIGURATION_TRANSFER Transfers[8];
 } PTP_CONFIGURATION_TEST_CONTEXT, *PPTP_CONFIGURATION_TEST_CONTEXT;
 
+typedef struct _PTP_HAPTIC_TEST_CONTEXT
+{
+    NTSTATUS GetStatus;
+    NTSTATUS SetStatus;
+    NTSTATUS OutputStatus;
+    BOOLEAN CorruptReportId;
+    ULONG GetCalls;
+    ULONG SetCalls;
+    ULONG OutputCalls;
+    ULONG WaveformUsage[5];
+    ULONG DurationMilliseconds[5];
+    UCHAR LastReportId;
+    UCHAR LastReport[16];
+    ULONG LastReportLength;
+} PTP_HAPTIC_TEST_CONTEXT, *PPTP_HAPTIC_TEST_CONTEXT;
+
 static
 NTSTATUS
 NTAPI
@@ -342,6 +358,78 @@ PtpTestSetFeature(
         return STATUS_IO_DEVICE_ERROR;
 
     return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+NTAPI
+PtpTestGetHapticFeature(
+    _In_ PVOID Context,
+    _In_ UCHAR ReportId,
+    _Inout_updates_bytes_(ReportLength) PUCHAR ReportBuffer,
+    _In_ ULONG ReportLength)
+{
+    PPTP_HAPTIC_TEST_CONTEXT TestContext = Context;
+    ULONG Index;
+
+    TestContext->GetCalls++;
+    if (!NT_SUCCESS(TestContext->GetStatus))
+        return TestContext->GetStatus;
+    if (ReportId != 0x42 || ReportLength != 16)
+        return STATUS_INFO_LENGTH_MISMATCH;
+
+    RtlZeroMemory(ReportBuffer, ReportLength);
+    ReportBuffer[0] = TestContext->CorruptReportId ? ReportId + 1 : ReportId;
+    for (Index = 0; Index < RTL_NUMBER_OF(TestContext->WaveformUsage); Index++)
+    {
+        ReportBuffer[1 + Index * 2] = (UCHAR)TestContext->WaveformUsage[Index];
+        ReportBuffer[2 + Index * 2] = (UCHAR)(TestContext->WaveformUsage[Index] >> 8);
+        ReportBuffer[11 + Index] = (UCHAR)TestContext->DurationMilliseconds[Index];
+    }
+
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+NTAPI
+PtpTestSetHapticFeature(
+    _In_ PVOID Context,
+    _In_ UCHAR ReportId,
+    _In_reads_bytes_(ReportLength) PUCHAR ReportBuffer,
+    _In_ ULONG ReportLength)
+{
+    PPTP_HAPTIC_TEST_CONTEXT TestContext = Context;
+
+    TestContext->SetCalls++;
+    TestContext->LastReportId = ReportId;
+    TestContext->LastReportLength = ReportLength;
+    RtlZeroMemory(TestContext->LastReport, sizeof(TestContext->LastReport));
+    RtlCopyMemory(TestContext->LastReport,
+                  ReportBuffer,
+                  min(ReportLength, sizeof(TestContext->LastReport)));
+    return TestContext->SetStatus;
+}
+
+static
+NTSTATUS
+NTAPI
+PtpTestWriteHapticOutput(
+    _In_ PVOID Context,
+    _In_ UCHAR ReportId,
+    _In_reads_bytes_(ReportLength) PUCHAR ReportBuffer,
+    _In_ ULONG ReportLength)
+{
+    PPTP_HAPTIC_TEST_CONTEXT TestContext = Context;
+
+    TestContext->OutputCalls++;
+    TestContext->LastReportId = ReportId;
+    TestContext->LastReportLength = ReportLength;
+    RtlZeroMemory(TestContext->LastReport, sizeof(TestContext->LastReport));
+    RtlCopyMemory(TestContext->LastReport,
+                  ReportBuffer,
+                  min(ReportLength, sizeof(TestContext->LastReport)));
+    return TestContext->OutputStatus;
 }
 
 static
@@ -566,8 +654,13 @@ TestHidClassPtpHaptics(VOID)
         {PTP_HAPTIC_CUTOFF_MAIN_ITEM_OFFSET, 0x03, "partial cutoff controls"}
     };
     HIDCLASS_PTP_HAPTICS_CAPABILITIES HapticsCapabilities;
+    HIDCLASS_PTP_HAPTIC_WAVEFORM Waveforms[5];
+    HIDCLASS_PTP_HAPTIC_OUTPUT HapticOutput;
+    PTP_HAPTIC_TEST_CONTEXT HapticContext;
     HIDP_DEVICE_DESC DeviceDescription;
     UCHAR Descriptor[sizeof(HidPTestHapticTouchpadDescriptor)];
+    ULONG WaveformCount;
+    ULONG Calls;
     ULONG Index;
     NTSTATUS Status;
 
@@ -628,6 +721,271 @@ TestHidClassPtpHaptics(VOID)
     ok_eq_uint(HapticsCapabilities.RetriggerPeriod.ValueCaps.ReportID, 0x43);
     ok_eq_uint(HapticsCapabilities.WaveformCutoffTime.ValueCaps.ReportID, 0x43);
 
+    RtlZeroMemory(&HapticContext, sizeof(HapticContext));
+    Status = HidP_GetCollectionDescription(HidPTestHapticTouchpadDescriptor,
+                                           sizeof(HidPTestHapticTouchpadDescriptor),
+                                           NonPagedPool,
+                                           &DeviceDescription);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+    {
+        HapticContext.WaveformUsage[0] = HID_USAGE_HAPTICS_WAVEFORM_PRESS;
+        HapticContext.WaveformUsage[1] = HID_USAGE_HAPTICS_WAVEFORM_RELEASE;
+        HapticContext.WaveformUsage[2] = HID_USAGE_HAPTICS_WAVEFORM_HOVER;
+        HapticContext.WaveformUsage[3] = HID_USAGE_HAPTICS_WAVEFORM_SUCCESS;
+        HapticContext.WaveformUsage[4] = HID_USAGE_HAPTICS_WAVEFORM_ERROR;
+        HapticContext.DurationMilliseconds[0] = 50;
+        HapticContext.DurationMilliseconds[1] = 50;
+        HapticContext.DurationMilliseconds[2] = 20;
+        HapticContext.DurationMilliseconds[3] = 30;
+        HapticContext.DurationMilliseconds[4] = 30;
+
+        WaveformCount = 0;
+        Status = HidClassPtpGetHapticWaveforms(
+                     &DeviceDescription,
+                     &HapticsCapabilities,
+                     PtpTestGetHapticFeature,
+                     &HapticContext,
+                     NULL,
+                     0,
+                     &WaveformCount);
+        ok_eq_hex(Status, STATUS_BUFFER_TOO_SMALL);
+        ok_eq_ulong(WaveformCount, RTL_NUMBER_OF(Waveforms));
+        ok_eq_ulong(HapticContext.GetCalls, 0);
+
+        WaveformCount = 0;
+        Status = HidClassPtpGetHapticWaveforms(
+                     &DeviceDescription,
+                     &HapticsCapabilities,
+                     PtpTestGetHapticFeature,
+                     &HapticContext,
+                     Waveforms,
+                     RTL_NUMBER_OF(Waveforms) - 1,
+                     &WaveformCount);
+        ok_eq_hex(Status, STATUS_BUFFER_TOO_SMALL);
+        ok_eq_ulong(WaveformCount, RTL_NUMBER_OF(Waveforms));
+        ok_eq_ulong(HapticContext.GetCalls, 0);
+
+        WaveformCount = 0;
+        Status = HidClassPtpGetHapticWaveforms(
+                     &DeviceDescription,
+                     &HapticsCapabilities,
+                     PtpTestGetHapticFeature,
+                     &HapticContext,
+                     Waveforms,
+                     RTL_NUMBER_OF(Waveforms),
+                     &WaveformCount);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        ok_eq_ulong(WaveformCount, RTL_NUMBER_OF(Waveforms));
+        ok_eq_ulong(HapticContext.GetCalls, 1);
+        for (Index = 0; Index < RTL_NUMBER_OF(Waveforms); Index++)
+        {
+            ok_eq_ulong(Waveforms[Index].Ordinal, Index + 3);
+            ok_eq_ulong(Waveforms[Index].WaveformUsage,
+                        HapticContext.WaveformUsage[Index]);
+            ok_eq_ulong(Waveforms[Index].DurationMilliseconds,
+                        HapticContext.DurationMilliseconds[Index]);
+        }
+
+        Status = HidClassPtpSetHapticButtonPressThreshold(
+                     &DeviceDescription,
+                     &HapticsCapabilities,
+                     2,
+                     PtpTestSetHapticFeature,
+                     &HapticContext);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        ok_eq_ulong(HapticContext.SetCalls, 1);
+        ok_eq_uint(HapticContext.LastReportId, 0x40);
+        ok_eq_ulong(HapticContext.LastReportLength, 2);
+        ok_eq_uint(HapticContext.LastReport[0], 0x40);
+        ok_eq_uint(HapticContext.LastReport[1], 2);
+
+        Calls = HapticContext.SetCalls;
+        Status = HidClassPtpSetHapticButtonPressThreshold(
+                     &DeviceDescription,
+                     &HapticsCapabilities,
+                     0,
+                     PtpTestSetHapticFeature,
+                     &HapticContext);
+        ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+        ok_eq_ulong(HapticContext.SetCalls, Calls);
+
+        Status = HidClassPtpSetDeviceHapticIntensity(
+                     &DeviceDescription,
+                     &HapticsCapabilities,
+                     4,
+                     PtpTestSetHapticFeature,
+                     &HapticContext);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        ok_eq_ulong(HapticContext.SetCalls, Calls + 1);
+        ok_eq_uint(HapticContext.LastReportId, 0x41);
+        ok_eq_ulong(HapticContext.LastReportLength, 2);
+        ok_eq_uint(HapticContext.LastReport[0], 0x41);
+        ok_eq_uint(HapticContext.LastReport[1], 4);
+
+        Calls = HapticContext.SetCalls;
+        Status = HidClassPtpSetDeviceHapticIntensity(
+                     &DeviceDescription,
+                     &HapticsCapabilities,
+                     5,
+                     PtpTestSetHapticFeature,
+                     &HapticContext);
+        ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+        ok_eq_ulong(HapticContext.SetCalls, Calls);
+
+        HapticContext.SetStatus = STATUS_IO_DEVICE_ERROR;
+        Status = HidClassPtpSetDeviceHapticIntensity(
+                     &DeviceDescription,
+                     &HapticsCapabilities,
+                     3,
+                     PtpTestSetHapticFeature,
+                     &HapticContext);
+        ok_eq_hex(Status, STATUS_IO_DEVICE_ERROR);
+        ok_eq_ulong(HapticContext.SetCalls, Calls + 1);
+        HapticContext.SetStatus = STATUS_SUCCESS;
+
+        RtlZeroMemory(&HapticOutput, sizeof(HapticOutput));
+        HapticOutput.WaveformOrdinal = 5;
+        HapticOutput.Intensity = 4;
+        HapticOutput.RepeatCount = 2;
+        HapticOutput.RetriggerPeriodMilliseconds = 500;
+        HapticOutput.WaveformCutoffTimeMilliseconds = 3000;
+        Status = HidClassPtpSendHapticOutput(
+                     &DeviceDescription,
+                     &HapticsCapabilities,
+                     &HapticOutput,
+                     PtpTestWriteHapticOutput,
+                     &HapticContext);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        ok_eq_ulong(HapticContext.OutputCalls, 1);
+        ok_eq_uint(HapticContext.LastReportId, 0x43);
+        ok_eq_ulong(HapticContext.LastReportLength, 8);
+        ok_eq_uint(HapticContext.LastReport[0], 0x43);
+        ok_eq_uint(HapticContext.LastReport[1], 5);
+        ok_eq_uint(HapticContext.LastReport[2], 4);
+        ok_eq_uint(HapticContext.LastReport[3], 2);
+        ok_eq_uint(HapticContext.LastReport[4], 0xf4);
+        ok_eq_uint(HapticContext.LastReport[5], 0x01);
+        ok_eq_uint(HapticContext.LastReport[6], 0xb8);
+        ok_eq_uint(HapticContext.LastReport[7], 0x0b);
+
+        Calls = HapticContext.OutputCalls;
+        HapticOutput.Intensity = 0;
+        Status = HidClassPtpSendHapticOutput(
+                     &DeviceDescription,
+                     &HapticsCapabilities,
+                     &HapticOutput,
+                     PtpTestWriteHapticOutput,
+                     &HapticContext);
+        ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+        ok_eq_ulong(HapticContext.OutputCalls, Calls);
+
+        HapticOutput.WaveformOrdinal = HIDCLASS_PTP_HAPTIC_STOP_ORDINAL;
+        HapticOutput.RepeatCount = 0;
+        HapticOutput.RetriggerPeriodMilliseconds = 0;
+        HapticOutput.WaveformCutoffTimeMilliseconds = 1000;
+        Status = HidClassPtpSendHapticOutput(
+                     &DeviceDescription,
+                     &HapticsCapabilities,
+                     &HapticOutput,
+                     PtpTestWriteHapticOutput,
+                     &HapticContext);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        ok_eq_ulong(HapticContext.OutputCalls, Calls + 1);
+        ok_eq_uint(HapticContext.LastReport[1], HIDCLASS_PTP_HAPTIC_STOP_ORDINAL);
+        ok_eq_uint(HapticContext.LastReport[2], 0);
+
+        Calls = HapticContext.OutputCalls;
+        HapticOutput.WaveformOrdinal = 5;
+        HapticOutput.Intensity = 4;
+        HapticOutput.WaveformCutoffTimeMilliseconds = 999;
+        Status = HidClassPtpSendHapticOutput(
+                     &DeviceDescription,
+                     &HapticsCapabilities,
+                     &HapticOutput,
+                     PtpTestWriteHapticOutput,
+                     &HapticContext);
+        ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+        ok_eq_ulong(HapticContext.OutputCalls, Calls);
+
+        HapticOutput.WaveformCutoffTimeMilliseconds = 3000;
+        HapticContext.OutputStatus = STATUS_IO_DEVICE_ERROR;
+        Status = HidClassPtpSendHapticOutput(
+                     &DeviceDescription,
+                     &HapticsCapabilities,
+                     &HapticOutput,
+                     PtpTestWriteHapticOutput,
+                     &HapticContext);
+        ok_eq_hex(Status, STATUS_IO_DEVICE_ERROR);
+        ok_eq_ulong(HapticContext.OutputCalls, Calls + 1);
+        HapticContext.OutputStatus = STATUS_SUCCESS;
+
+        HapticContext.CorruptReportId = TRUE;
+        WaveformCount = 0;
+        Status = HidClassPtpGetHapticWaveforms(
+                     &DeviceDescription,
+                     &HapticsCapabilities,
+                     PtpTestGetHapticFeature,
+                     &HapticContext,
+                     Waveforms,
+                     RTL_NUMBER_OF(Waveforms),
+                     &WaveformCount);
+        ok_eq_hex(Status, STATUS_DEVICE_CONFIGURATION_ERROR);
+        ok_eq_ulong(Waveforms[0].Ordinal, 0);
+        HapticContext.CorruptReportId = FALSE;
+
+        HapticContext.GetStatus = STATUS_IO_DEVICE_ERROR;
+        Status = HidClassPtpGetHapticWaveforms(
+                     &DeviceDescription,
+                     &HapticsCapabilities,
+                     PtpTestGetHapticFeature,
+                     &HapticContext,
+                     Waveforms,
+                     RTL_NUMBER_OF(Waveforms),
+                     &WaveformCount);
+        ok_eq_hex(Status, STATUS_IO_DEVICE_ERROR);
+        ok_eq_ulong(Waveforms[0].Ordinal, 0);
+        HapticContext.GetStatus = STATUS_SUCCESS;
+
+        HapticContext.WaveformUsage[0] = HID_USAGE_HAPTICS_WAVEFORM_CLICK;
+        Status = HidClassPtpGetHapticWaveforms(
+                     &DeviceDescription,
+                     &HapticsCapabilities,
+                     PtpTestGetHapticFeature,
+                     &HapticContext,
+                     Waveforms,
+                     RTL_NUMBER_OF(Waveforms),
+                     &WaveformCount);
+        ok_eq_hex(Status, STATUS_DEVICE_CONFIGURATION_ERROR);
+        HapticContext.WaveformUsage[0] = HID_USAGE_HAPTICS_WAVEFORM_PRESS;
+
+        HapticContext.DurationMilliseconds[0] = 0;
+        Status = HidClassPtpGetHapticWaveforms(
+                     &DeviceDescription,
+                     &HapticsCapabilities,
+                     PtpTestGetHapticFeature,
+                     &HapticContext,
+                     Waveforms,
+                     RTL_NUMBER_OF(Waveforms),
+                     &WaveformCount);
+        ok_eq_hex(Status, STATUS_DEVICE_CONFIGURATION_ERROR);
+        HapticContext.DurationMilliseconds[0] = 50;
+
+        HapticContext.WaveformUsage[1] = HID_USAGE_HAPTICS_WAVEFORM_HOVER;
+        Status = HidClassPtpGetHapticWaveforms(
+                     &DeviceDescription,
+                     &HapticsCapabilities,
+                     PtpTestGetHapticFeature,
+                     &HapticContext,
+                     Waveforms,
+                     RTL_NUMBER_OF(Waveforms),
+                     &WaveformCount);
+        ok_eq_hex(Status, STATUS_DEVICE_CONFIGURATION_ERROR);
+        HapticContext.WaveformUsage[1] = HID_USAGE_HAPTICS_WAVEFORM_RELEASE;
+
+        HidP_FreeCollectionDescription(&DeviceDescription);
+    }
+
     Status = PtpTestDiscoverHaptics(PtpHapticThresholdOnlyDescriptor,
                                     sizeof(PtpHapticThresholdOnlyDescriptor),
                                     &HapticsCapabilities);
@@ -675,6 +1033,43 @@ TestHidClassPtpHaptics(VOID)
        "Host haptics without optional repeat controls were rejected\n");
     ok(!HapticsCapabilities.HasRepeatControl,
        "Constant optional fields were reported as repeat controls\n");
+
+    Status = HidP_GetCollectionDescription(Descriptor,
+                                           sizeof(Descriptor),
+                                           NonPagedPool,
+                                           &DeviceDescription);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+    {
+        RtlZeroMemory(&HapticOutput, sizeof(HapticOutput));
+        HapticOutput.WaveformOrdinal = 5;
+        HapticOutput.Intensity = 4;
+        Calls = HapticContext.OutputCalls;
+        Status = HidClassPtpSendHapticOutput(
+                     &DeviceDescription,
+                     &HapticsCapabilities,
+                     &HapticOutput,
+                     PtpTestWriteHapticOutput,
+                     &HapticContext);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        ok_eq_ulong(HapticContext.OutputCalls, Calls + 1);
+        ok_eq_uint(HapticContext.LastReport[1], 5);
+        ok_eq_uint(HapticContext.LastReport[2], 4);
+        ok_eq_uint(HapticContext.LastReport[3], 0);
+        ok_eq_uint(HapticContext.LastReport[7], 0);
+
+        Calls = HapticContext.OutputCalls;
+        HapticOutput.RepeatCount = 1;
+        Status = HidClassPtpSendHapticOutput(
+                     &DeviceDescription,
+                     &HapticsCapabilities,
+                     &HapticOutput,
+                     PtpTestWriteHapticOutput,
+                     &HapticContext);
+        ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+        ok_eq_ulong(HapticContext.OutputCalls, Calls);
+        HidP_FreeCollectionDescription(&DeviceDescription);
+    }
 
     for (Index = 0; Index < RTL_NUMBER_OF(InvalidCases); Index++)
     {

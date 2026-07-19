@@ -10,6 +10,8 @@
 
 #define HIDCLASS_PTP_MOUSE_MODE               0
 #define HIDCLASS_PTP_PRECISION_TOUCHPAD_MODE  3
+#define HIDCLASS_PTP_HAPTIC_NONE_ORDINAL      1
+#define HIDCLASS_PTP_HAPTIC_STOP_ORDINAL      2
 
 typedef struct _HIDCLASS_PTP_CAPABILITIES
 {
@@ -88,6 +90,24 @@ typedef struct _HIDCLASS_PTP_HAPTICS_CAPABILITIES
 } HIDCLASS_PTP_HAPTICS_CAPABILITIES,
   *PHIDCLASS_PTP_HAPTICS_CAPABILITIES;
 
+typedef struct _HIDCLASS_PTP_HAPTIC_WAVEFORM
+{
+    ULONG Ordinal;
+    ULONG WaveformUsage;
+    ULONG DurationMilliseconds;
+} HIDCLASS_PTP_HAPTIC_WAVEFORM,
+  *PHIDCLASS_PTP_HAPTIC_WAVEFORM;
+
+typedef struct _HIDCLASS_PTP_HAPTIC_OUTPUT
+{
+    ULONG WaveformOrdinal;
+    ULONG Intensity;
+    ULONG RepeatCount;
+    ULONG RetriggerPeriodMilliseconds;
+    ULONG WaveformCutoffTimeMilliseconds;
+} HIDCLASS_PTP_HAPTIC_OUTPUT,
+  *PHIDCLASS_PTP_HAPTIC_OUTPUT;
+
 typedef
 NTSTATUS
 (NTAPI *PHIDCLASS_PTP_GET_FEATURE)(
@@ -104,6 +124,14 @@ NTSTATUS
     _In_reads_bytes_(ReportLength) PUCHAR ReportBuffer,
     _In_ ULONG ReportLength);
 
+typedef
+NTSTATUS
+(NTAPI *PHIDCLASS_PTP_WRITE_OUTPUT)(
+    _In_ PVOID Context,
+    _In_ UCHAR ReportId,
+    _In_reads_bytes_(ReportLength) PUCHAR ReportBuffer,
+    _In_ ULONG ReportLength);
+
 NTSTATUS
 HidClassPtpValidateCapabilities(
     _In_ PHIDP_DEVICE_DESC DeviceDescription,
@@ -115,6 +143,40 @@ NTSTATUS
 HidClassPtpDiscoverHaptics(
     _In_ PHIDP_DEVICE_DESC DeviceDescription,
     _Out_ PHIDCLASS_PTP_HAPTICS_CAPABILITIES HapticsCapabilities);
+
+NTSTATUS
+HidClassPtpSetHapticButtonPressThreshold(
+    _In_ PHIDP_DEVICE_DESC DeviceDescription,
+    _In_ PHIDCLASS_PTP_HAPTICS_CAPABILITIES HapticsCapabilities,
+    _In_ ULONG Threshold,
+    _In_ PHIDCLASS_PTP_SET_FEATURE SetFeature,
+    _In_ PVOID Context);
+
+NTSTATUS
+HidClassPtpSetDeviceHapticIntensity(
+    _In_ PHIDP_DEVICE_DESC DeviceDescription,
+    _In_ PHIDCLASS_PTP_HAPTICS_CAPABILITIES HapticsCapabilities,
+    _In_ ULONG Intensity,
+    _In_ PHIDCLASS_PTP_SET_FEATURE SetFeature,
+    _In_ PVOID Context);
+
+NTSTATUS
+HidClassPtpGetHapticWaveforms(
+    _In_ PHIDP_DEVICE_DESC DeviceDescription,
+    _In_ PHIDCLASS_PTP_HAPTICS_CAPABILITIES HapticsCapabilities,
+    _In_ PHIDCLASS_PTP_GET_FEATURE GetFeature,
+    _In_ PVOID Context,
+    _Out_writes_to_opt_(WaveformCapacity, *WaveformCount) PHIDCLASS_PTP_HAPTIC_WAVEFORM Waveforms,
+    _In_ ULONG WaveformCapacity,
+    _Out_ PULONG WaveformCount);
+
+NTSTATUS
+HidClassPtpSendHapticOutput(
+    _In_ PHIDP_DEVICE_DESC DeviceDescription,
+    _In_ PHIDCLASS_PTP_HAPTICS_CAPABILITIES HapticsCapabilities,
+    _In_ PHIDCLASS_PTP_HAPTIC_OUTPUT Output,
+    _In_ PHIDCLASS_PTP_WRITE_OUTPUT WriteOutput,
+    _In_ PVOID Context);
 
 NTSTATUS
 HidClassPtpInitializeConfiguration(

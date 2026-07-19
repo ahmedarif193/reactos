@@ -1275,6 +1275,533 @@ Cleanup:
     return Status;
 }
 
+static
+BOOLEAN
+HidClassPtpHapticValueCapabilityMatches(
+    _In_ PHIDCLASS_PTP_HAPTIC_VALUE_CAPABILITY Capability,
+    _In_ USAGE UsagePage,
+    _In_ USAGE Usage)
+{
+    return Capability->ReportLength >= 2 &&
+           HidClassPtpIsScalarHapticCapability(&Capability->ValueCaps) &&
+           Capability->ValueCaps.UsagePage == UsagePage &&
+           Capability->ValueCaps.NotRange.Usage == Usage;
+}
+
+static
+BOOLEAN
+HidClassPtpHapticValueInRange(
+    _In_ PHIDCLASS_PTP_HAPTIC_VALUE_CAPABILITY Capability,
+    _In_ ULONG Value)
+{
+    return Capability->ValueCaps.LogicalMin >= 0 &&
+           Capability->ValueCaps.LogicalMax >= Capability->ValueCaps.LogicalMin &&
+           Value >= (ULONG)Capability->ValueCaps.LogicalMin &&
+           Value <= (ULONG)Capability->ValueCaps.LogicalMax;
+}
+
+static
+NTSTATUS
+HidClassPtpWriteHapticFeature(
+    _In_ PHIDP_DEVICE_DESC DeviceDescription,
+    _In_ PHIDCLASS_PTP_HAPTICS_CAPABILITIES HapticsCapabilities,
+    _In_ PHIDCLASS_PTP_HAPTIC_VALUE_CAPABILITY Capability,
+    _In_ USAGE UsagePage,
+    _In_ USAGE Usage,
+    _In_ ULONG Value,
+    _In_ PHIDCLASS_PTP_SET_FEATURE SetFeature,
+    _In_ PVOID Context)
+{
+    PHIDP_COLLECTION_DESC Collection;
+    PHIDP_REPORT_IDS ReportDescription;
+    PUCHAR ReportBuffer;
+    NTSTATUS Status;
+
+    if (!HidClassPtpHapticValueCapabilityMatches(Capability, UsagePage, Usage))
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+
+    if (!HidClassPtpHapticValueInRange(Capability, Value))
+        return STATUS_INVALID_PARAMETER;
+
+    Collection = HidClassPtpFindCollection(DeviceDescription,
+                                            HID_USAGE_PAGE_DIGITIZER,
+                                            HID_USAGE_DIGITIZER_TOUCH_PAD);
+    if (Collection == NULL ||
+        Collection->CollectionNumber != HapticsCapabilities->CollectionNumber)
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    ReportDescription = HidClassPtpFindFeatureReport(
+                            DeviceDescription,
+                            Collection->CollectionNumber,
+                            Capability->ValueCaps.ReportID);
+    if (ReportDescription == NULL ||
+        ReportDescription->FeatureLength != Capability->ReportLength)
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    ReportBuffer = ExAllocatePoolWithTag(NonPagedPool,
+                                         ReportDescription->FeatureLength,
+                                         HIDCLASS_TAG);
+    if (ReportBuffer == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    RtlZeroMemory(ReportBuffer, ReportDescription->FeatureLength);
+    ReportBuffer[0] = Capability->ValueCaps.ReportID;
+    Status = HidP_SetUsageValue(HidP_Feature,
+                                UsagePage,
+                                Capability->ValueCaps.LinkCollection,
+                                Usage,
+                                Value,
+                                Collection->PreparsedData,
+                                (PCHAR)ReportBuffer,
+                                ReportDescription->FeatureLength);
+    if (Status == HIDP_STATUS_SUCCESS)
+    {
+        Status = SetFeature(Context,
+                            Capability->ValueCaps.ReportID,
+                            ReportBuffer,
+                            ReportDescription->FeatureLength);
+    }
+    else
+    {
+        Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    ExFreePoolWithTag(ReportBuffer, HIDCLASS_TAG);
+    return Status;
+}
+
+NTSTATUS
+HidClassPtpSetHapticButtonPressThreshold(
+    _In_ PHIDP_DEVICE_DESC DeviceDescription,
+    _In_ PHIDCLASS_PTP_HAPTICS_CAPABILITIES HapticsCapabilities,
+    _In_ ULONG Threshold,
+    _In_ PHIDCLASS_PTP_SET_FEATURE SetFeature,
+    _In_ PVOID Context)
+{
+    if (DeviceDescription == NULL || HapticsCapabilities == NULL ||
+        SetFeature == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (!HapticsCapabilities->Valid)
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    if (!HapticsCapabilities->HasButtonPressThreshold)
+        return STATUS_NOT_SUPPORTED;
+
+    return HidClassPtpWriteHapticFeature(
+               DeviceDescription,
+               HapticsCapabilities,
+               &HapticsCapabilities->ButtonPressThreshold,
+               HID_USAGE_PAGE_DIGITIZER,
+               HID_USAGE_DIGITIZER_BUTTON_PRESS_THRESHOLD,
+               Threshold,
+               SetFeature,
+               Context);
+}
+
+NTSTATUS
+HidClassPtpSetDeviceHapticIntensity(
+    _In_ PHIDP_DEVICE_DESC DeviceDescription,
+    _In_ PHIDCLASS_PTP_HAPTICS_CAPABILITIES HapticsCapabilities,
+    _In_ ULONG Intensity,
+    _In_ PHIDCLASS_PTP_SET_FEATURE SetFeature,
+    _In_ PVOID Context)
+{
+    if (DeviceDescription == NULL || HapticsCapabilities == NULL ||
+        SetFeature == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (!HapticsCapabilities->Valid)
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    if (!HapticsCapabilities->HasDeviceIntensity)
+        return STATUS_NOT_SUPPORTED;
+
+    return HidClassPtpWriteHapticFeature(
+               DeviceDescription,
+               HapticsCapabilities,
+               &HapticsCapabilities->DeviceIntensity,
+               HID_USAGE_PAGE_HAPTICS,
+               HID_USAGE_HAPTICS_INTENSITY,
+               Intensity,
+               SetFeature,
+               Context);
+}
+
+static
+BOOLEAN
+HidClassPtpIsForbiddenTouchpadWaveform(
+    _In_ ULONG Waveform)
+{
+    switch (Waveform)
+    {
+        case HID_USAGE_HAPTICS_WAVEFORM_CLICK:
+        case HID_USAGE_HAPTICS_WAVEFORM_BUZZ:
+        case HID_USAGE_HAPTICS_WAVEFORM_RUMBLE:
+        case HID_USAGE_HAPTICS_WAVEFORM_INK_CONTINUOUS:
+        case HID_USAGE_HAPTICS_WAVEFORM_PENCIL_CONTINUOUS:
+        case HID_USAGE_HAPTICS_WAVEFORM_MARKER_CONTINUOUS:
+        case HID_USAGE_HAPTICS_WAVEFORM_CHISEL_MARKER_CONTINUOUS:
+        case HID_USAGE_HAPTICS_WAVEFORM_BRUSH_CONTINUOUS:
+        case HID_USAGE_HAPTICS_WAVEFORM_ERASER_CONTINUOUS:
+        case HID_USAGE_HAPTICS_WAVEFORM_SPARKLE_CONTINUOUS:
+            return TRUE;
+
+        default:
+            return FALSE;
+    }
+}
+
+NTSTATUS
+HidClassPtpGetHapticWaveforms(
+    _In_ PHIDP_DEVICE_DESC DeviceDescription,
+    _In_ PHIDCLASS_PTP_HAPTICS_CAPABILITIES HapticsCapabilities,
+    _In_ PHIDCLASS_PTP_GET_FEATURE GetFeature,
+    _In_ PVOID Context,
+    _Out_writes_to_opt_(WaveformCapacity, *WaveformCount) PHIDCLASS_PTP_HAPTIC_WAVEFORM Waveforms,
+    _In_ ULONG WaveformCapacity,
+    _Out_ PULONG WaveformCount)
+{
+    PHIDP_COLLECTION_DESC Collection;
+    PUCHAR ReportBuffer = NULL;
+    ULONG ReportLength = 0;
+    ULONG RequiredCount;
+    ULONG Index;
+    ULONG Ordinal;
+    ULONG Waveform;
+    ULONG Duration;
+    BOOLEAN HasPress = FALSE;
+    BOOLEAN HasRelease = FALSE;
+    BOOLEAN HasSuccess = FALSE;
+    BOOLEAN HasError = FALSE;
+    NTSTATUS Status;
+
+    if (DeviceDescription == NULL || HapticsCapabilities == NULL ||
+        GetFeature == NULL || WaveformCount == NULL ||
+        (Waveforms == NULL && WaveformCapacity != 0))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    *WaveformCount = 0;
+    if (!HapticsCapabilities->Valid)
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    if (!HapticsCapabilities->HasHostInitiated)
+        return STATUS_NOT_SUPPORTED;
+
+    RequiredCount = HapticsCapabilities->WaveformList.ReportCount;
+    if (RequiredCount == 0 ||
+        RequiredCount != HapticsCapabilities->DurationList.ReportCount ||
+        HapticsCapabilities->WaveformList.ReportId == 0 ||
+        HapticsCapabilities->WaveformList.ReportId !=
+            HapticsCapabilities->DurationList.ReportId ||
+        HapticsCapabilities->WaveformList.ReportLength !=
+            HapticsCapabilities->DurationList.ReportLength)
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    *WaveformCount = RequiredCount;
+    if (Waveforms == NULL || WaveformCapacity < RequiredCount)
+        return STATUS_BUFFER_TOO_SMALL;
+
+    Collection = HidClassPtpFindCollection(DeviceDescription,
+                                            HID_USAGE_PAGE_DIGITIZER,
+                                            HID_USAGE_DIGITIZER_TOUCH_PAD);
+    if (Collection == NULL ||
+        Collection->CollectionNumber != HapticsCapabilities->CollectionNumber)
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    RtlZeroMemory(Waveforms, RequiredCount * sizeof(*Waveforms));
+    Status = HidClassPtpReadFeature(
+                 DeviceDescription,
+                 Collection,
+                 HapticsCapabilities->WaveformList.ReportId,
+                 GetFeature,
+                 Context,
+                 &ReportBuffer,
+                 &ReportLength);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (ReportLength != HapticsCapabilities->WaveformList.ReportLength)
+    {
+        Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        goto Cleanup;
+    }
+
+    for (Index = 0; Index < RequiredCount; Index++)
+    {
+        Ordinal = HapticsCapabilities->WaveformList.UsageMinimum + Index;
+        Waveform = 0;
+        Status = HidP_GetUsageValue(
+                     HidP_Feature,
+                     HID_USAGE_PAGE_ORDINAL,
+                     HapticsCapabilities->WaveformList.LinkCollection,
+                     (USAGE)Ordinal,
+                     &Waveform,
+                     Collection->PreparsedData,
+                     (PCHAR)ReportBuffer,
+                     ReportLength);
+        if (Status != HIDP_STATUS_SUCCESS)
+        {
+            Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+            goto Cleanup;
+        }
+
+        Duration = 0;
+        Status = HidP_GetUsageValue(
+                     HidP_Feature,
+                     HID_USAGE_PAGE_ORDINAL,
+                     HapticsCapabilities->DurationList.LinkCollection,
+                     (USAGE)Ordinal,
+                     &Duration,
+                     Collection->PreparsedData,
+                     (PCHAR)ReportBuffer,
+                     ReportLength);
+        if (Status != HIDP_STATUS_SUCCESS)
+        {
+            Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+            goto Cleanup;
+        }
+
+        if (Waveform < (ULONG)HapticsCapabilities->WaveformList.LogicalMinimum ||
+            Waveform > (ULONG)HapticsCapabilities->WaveformList.LogicalMaximum ||
+            Duration < (ULONG)HapticsCapabilities->DurationList.LogicalMinimum ||
+            Duration > (ULONG)HapticsCapabilities->DurationList.LogicalMaximum ||
+            HidClassPtpIsForbiddenTouchpadWaveform(Waveform) ||
+            (Ordinal == HIDCLASS_PTP_HAPTIC_NONE_ORDINAL &&
+             Waveform != HID_USAGE_HAPTICS_WAVEFORM_NONE) ||
+            (Ordinal == HIDCLASS_PTP_HAPTIC_STOP_ORDINAL &&
+             Waveform != HID_USAGE_HAPTICS_WAVEFORM_STOP) ||
+            (Ordinal != HIDCLASS_PTP_HAPTIC_STOP_ORDINAL &&
+             Waveform == HID_USAGE_HAPTICS_WAVEFORM_STOP) ||
+            ((Waveform == HID_USAGE_HAPTICS_WAVEFORM_NONE ||
+              Waveform == HID_USAGE_HAPTICS_WAVEFORM_STOP) && Duration != 0) ||
+            (Waveform != HID_USAGE_HAPTICS_WAVEFORM_NONE &&
+             Waveform != HID_USAGE_HAPTICS_WAVEFORM_STOP && Duration == 0))
+        {
+            Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+            goto Cleanup;
+        }
+
+        if (Waveform == HID_USAGE_HAPTICS_WAVEFORM_PRESS)
+            HasPress = TRUE;
+        else if (Waveform == HID_USAGE_HAPTICS_WAVEFORM_RELEASE)
+            HasRelease = TRUE;
+        else if (Waveform == HID_USAGE_HAPTICS_WAVEFORM_SUCCESS)
+            HasSuccess = TRUE;
+        else if (Waveform == HID_USAGE_HAPTICS_WAVEFORM_ERROR)
+            HasError = TRUE;
+
+        Waveforms[Index].Ordinal = Ordinal;
+        Waveforms[Index].WaveformUsage = Waveform;
+        Waveforms[Index].DurationMilliseconds = Duration;
+    }
+
+    if (HasPress != HasRelease || HasSuccess != HasError)
+    {
+        Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        goto Cleanup;
+    }
+
+    Status = STATUS_SUCCESS;
+
+Cleanup:
+    if (!NT_SUCCESS(Status))
+        RtlZeroMemory(Waveforms, RequiredCount * sizeof(*Waveforms));
+    ExFreePoolWithTag(ReportBuffer, HIDCLASS_TAG);
+    return Status;
+}
+
+static
+NTSTATUS
+HidClassPtpSetHapticOutputValue(
+    _In_ PHIDP_COLLECTION_DESC Collection,
+    _In_ PHIDCLASS_PTP_HAPTIC_VALUE_CAPABILITY Capability,
+    _In_ USAGE Usage,
+    _In_ ULONG Value,
+    _Inout_updates_bytes_(ReportLength) PUCHAR ReportBuffer,
+    _In_ ULONG ReportLength)
+{
+    NTSTATUS Status;
+
+    if (!HidClassPtpHapticValueCapabilityMatches(Capability,
+                                                  HID_USAGE_PAGE_HAPTICS,
+                                                  Usage) ||
+        Capability->ReportLength != ReportLength)
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    if (!HidClassPtpHapticValueInRange(Capability, Value))
+        return STATUS_INVALID_PARAMETER;
+
+    Status = HidP_SetUsageValue(HidP_Output,
+                                HID_USAGE_PAGE_HAPTICS,
+                                Capability->ValueCaps.LinkCollection,
+                                Usage,
+                                Value,
+                                Collection->PreparsedData,
+                                (PCHAR)ReportBuffer,
+                                ReportLength);
+    return Status == HIDP_STATUS_SUCCESS ?
+           STATUS_SUCCESS : STATUS_DEVICE_CONFIGURATION_ERROR;
+}
+
+NTSTATUS
+HidClassPtpSendHapticOutput(
+    _In_ PHIDP_DEVICE_DESC DeviceDescription,
+    _In_ PHIDCLASS_PTP_HAPTICS_CAPABILITIES HapticsCapabilities,
+    _In_ PHIDCLASS_PTP_HAPTIC_OUTPUT Output,
+    _In_ PHIDCLASS_PTP_WRITE_OUTPUT WriteOutput,
+    _In_ PVOID Context)
+{
+    PHIDP_COLLECTION_DESC Collection;
+    PHIDP_REPORT_IDS ReportDescription;
+    PUCHAR ReportBuffer;
+    NTSTATUS Status;
+
+    if (DeviceDescription == NULL || HapticsCapabilities == NULL ||
+        Output == NULL || WriteOutput == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (!HapticsCapabilities->Valid)
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    if (!HapticsCapabilities->HasHostInitiated)
+        return STATUS_NOT_SUPPORTED;
+
+    if (!HidClassPtpHapticValueInRange(&HapticsCapabilities->ManualTrigger,
+                                       Output->WaveformOrdinal) ||
+        !HidClassPtpHapticValueInRange(&HapticsCapabilities->HostIntensity,
+                                       Output->Intensity) ||
+        ((Output->Intensity == 0) !=
+         (Output->WaveformOrdinal == HIDCLASS_PTP_HAPTIC_STOP_ORDINAL)))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (HapticsCapabilities->HasRepeatControl)
+    {
+        if (!HidClassPtpHapticValueInRange(&HapticsCapabilities->RepeatCount,
+                                           Output->RepeatCount) ||
+            !HidClassPtpHapticValueInRange(&HapticsCapabilities->RetriggerPeriod,
+                                           Output->RetriggerPeriodMilliseconds) ||
+            !HidClassPtpHapticValueInRange(&HapticsCapabilities->WaveformCutoffTime,
+                                           Output->WaveformCutoffTimeMilliseconds))
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+    }
+    else if (Output->RepeatCount != 0 ||
+             Output->RetriggerPeriodMilliseconds != 0 ||
+             Output->WaveformCutoffTimeMilliseconds != 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Collection = HidClassPtpFindCollection(DeviceDescription,
+                                            HID_USAGE_PAGE_DIGITIZER,
+                                            HID_USAGE_DIGITIZER_TOUCH_PAD);
+    if (Collection == NULL ||
+        Collection->CollectionNumber != HapticsCapabilities->CollectionNumber)
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    ReportDescription = HidClassPtpFindOutputReport(
+                            DeviceDescription,
+                            Collection->CollectionNumber,
+                            HapticsCapabilities->ManualTrigger.ValueCaps.ReportID);
+    if (ReportDescription == NULL ||
+        ReportDescription->OutputLength !=
+            HapticsCapabilities->ManualTrigger.ReportLength)
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    ReportBuffer = ExAllocatePoolWithTag(NonPagedPool,
+                                         ReportDescription->OutputLength,
+                                         HIDCLASS_TAG);
+    if (ReportBuffer == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    RtlZeroMemory(ReportBuffer, ReportDescription->OutputLength);
+    ReportBuffer[0] = HapticsCapabilities->ManualTrigger.ValueCaps.ReportID;
+    Status = HidClassPtpSetHapticOutputValue(
+                 Collection,
+                 &HapticsCapabilities->ManualTrigger,
+                 HID_USAGE_HAPTICS_MANUAL_TRIGGER,
+                 Output->WaveformOrdinal,
+                 ReportBuffer,
+                 ReportDescription->OutputLength);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    Status = HidClassPtpSetHapticOutputValue(
+                 Collection,
+                 &HapticsCapabilities->HostIntensity,
+                 HID_USAGE_HAPTICS_INTENSITY,
+                 Output->Intensity,
+                 ReportBuffer,
+                 ReportDescription->OutputLength);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    if (HapticsCapabilities->HasRepeatControl)
+    {
+        Status = HidClassPtpSetHapticOutputValue(
+                     Collection,
+                     &HapticsCapabilities->RepeatCount,
+                     HID_USAGE_HAPTICS_REPEAT_COUNT,
+                     Output->RepeatCount,
+                     ReportBuffer,
+                     ReportDescription->OutputLength);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+
+        Status = HidClassPtpSetHapticOutputValue(
+                     Collection,
+                     &HapticsCapabilities->RetriggerPeriod,
+                     HID_USAGE_HAPTICS_RETRIGGER_PERIOD,
+                     Output->RetriggerPeriodMilliseconds,
+                     ReportBuffer,
+                     ReportDescription->OutputLength);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+
+        Status = HidClassPtpSetHapticOutputValue(
+                     Collection,
+                     &HapticsCapabilities->WaveformCutoffTime,
+                     HID_USAGE_HAPTICS_WAVEFORM_CUTOFF_TIME,
+                     Output->WaveformCutoffTimeMilliseconds,
+                     ReportBuffer,
+                     ReportDescription->OutputLength);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+    }
+
+    Status = WriteOutput(
+                 Context,
+                 HapticsCapabilities->ManualTrigger.ValueCaps.ReportID,
+                 ReportBuffer,
+                 ReportDescription->OutputLength);
+
+Cleanup:
+    ExFreePoolWithTag(ReportBuffer, HIDCLASS_TAG);
+    return Status;
+}
+
 NTSTATUS
 HidClassPtpInitializeConfiguration(
     _In_ PHIDP_DEVICE_DESC DeviceDescription,
