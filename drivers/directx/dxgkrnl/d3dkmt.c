@@ -101,14 +101,18 @@ typedef struct _DXGKRNL_FILE_CONTEXT
  * 2.4-2.6: no optional paravirtualization/hot-update features claimed;
  *      per-level capability words report truthful zeros.
  * 2.7-2.9: hardware scheduling reported ALWAYS_OFF; 2.9 feature queries.
+ * 3.0 (NT10): whole component set at DXGKDDI 0xF003; WDDM_3_0_CAPS reports
+ *      hardware flip queues ALWAYS_OFF and Displayable unsupported.
  * Optional features stay capability-gated; absence is reported, never faked.
  */
-#define DXGKP_OS_COMPLETED_WDDM_LEVEL KMT_DRIVERVERSION_WDDM_2_9
+#define DXGKP_OS_COMPLETED_WDDM_LEVEL KMT_DRIVERVERSION_WDDM_3_0
 
 static D3DKMT_DRIVERVERSION
 DxgkpMiniportDeclaredWddmLevel(
     _In_ ULONG Version)
 {
+    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
+        return KMT_DRIVERVERSION_WDDM_3_0;
     if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
         return KMT_DRIVERVERSION_WDDM_2_9;
     if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_8)
