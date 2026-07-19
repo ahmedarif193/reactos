@@ -46,6 +46,7 @@ add_subdirectory(nt)
 add_subdirectory(pathcch)
 add_subdirectory(poguid)
 add_subdirectory(pseh)
+add_subdirectory(rperf)
 
 if(KDBG)
     add_subdirectory(rossym)
