@@ -192,6 +192,39 @@ static UCHAR ElanPrecisionTouchpadDescriptor[] =
 };
 C_ASSERT(sizeof(ElanPrecisionTouchpadDescriptor) == 679);
 
+/* Microsoft Windows 11 haptic touchpad sample report descriptor. */
+static UCHAR HapticTouchpadDescriptor[] =
+{
+    0x05, 0x0d, 0x09, 0x05, 0xa1, 0x01,
+    0x85, 0x40, 0x05, 0x0d, 0x09, 0xb0, 0x35, 0x6e, 0x46, 0xbe, 0x00,
+    0x66, 0x01, 0x01, 0x55, 0x00, 0x15, 0x01, 0x25, 0x03, 0x95, 0x01,
+    0x75, 0x08, 0xb1, 0x02,
+    0x85, 0x41, 0x05, 0x0e, 0x09, 0x01, 0xa1, 0x02, 0x05, 0x0e, 0x09, 0x23,
+    0x35, 0x00, 0x45, 0x00, 0x65, 0x00, 0x55, 0x00, 0x15, 0x00, 0x25, 0x04,
+    0x95, 0x01, 0x75, 0x08, 0xb1, 0x02, 0xc0,
+    0x85, 0x42, 0x05, 0x0e, 0x09, 0x01, 0xa1, 0x02,
+    0x05, 0x0e, 0x09, 0x10, 0xa1, 0x02, 0x05, 0x0a, 0x19, 0x03, 0x29, 0x07,
+    0x35, 0x00, 0x45, 0x00, 0x65, 0x00, 0x55, 0x00, 0x16, 0x01, 0x10,
+    0x26, 0xff, 0x2f, 0x95, 0x05, 0x75, 0x10, 0xb1, 0x02, 0xc0,
+    0x05, 0x0e, 0x09, 0x11, 0xa1, 0x02, 0x05, 0x0a, 0x19, 0x03, 0x29, 0x07,
+    0x35, 0x00, 0x45, 0x32, 0x66, 0x01, 0x10, 0x55, 0x0d, 0x15, 0x00,
+    0x25, 0x32, 0x95, 0x05, 0x75, 0x08, 0xb1, 0x02, 0xc0, 0xc0,
+    0x85, 0x43, 0x05, 0x0e, 0x09, 0x01, 0xa1, 0x02,
+    0x05, 0x0e, 0x09, 0x21, 0x35, 0x00, 0x45, 0x00, 0x65, 0x00, 0x55, 0x00,
+    0x15, 0x01, 0x25, 0x07, 0x95, 0x01, 0x75, 0x08, 0x91, 0x02,
+    0x05, 0x0e, 0x09, 0x23, 0x35, 0x00, 0x45, 0x00, 0x65, 0x00, 0x55, 0x00,
+    0x15, 0x00, 0x25, 0x04, 0x95, 0x01, 0x75, 0x08, 0x91, 0x02,
+    0x05, 0x0e, 0x09, 0x24, 0x35, 0x00, 0x45, 0x00, 0x65, 0x00, 0x55, 0x00,
+    0x15, 0x00, 0x25, 0x05, 0x95, 0x01, 0x75, 0x08, 0x91, 0x02,
+    0x05, 0x0e, 0x09, 0x25, 0x35, 0x00, 0x46, 0xe8, 0x03, 0x66, 0x01, 0x10,
+    0x55, 0x0d, 0x15, 0x00, 0x26, 0xe8, 0x03, 0x95, 0x01, 0x75, 0x10,
+    0x91, 0x02,
+    0x05, 0x0e, 0x09, 0x28, 0x36, 0xe8, 0x03, 0x46, 0x88, 0x13,
+    0x66, 0x01, 0x10, 0x55, 0x0d, 0x16, 0xe8, 0x03, 0x26, 0x88, 0x13,
+    0x95, 0x01, 0x75, 0x10, 0x91, 0x02, 0xc0, 0xc0
+};
+C_ASSERT(sizeof(HapticTouchpadDescriptor) == 265);
+
 static UCHAR MultipleInputReportDescriptor[] =
 {
     0x05, 0x01,             /* Usage Page (Generic Desktop) */
@@ -804,6 +837,338 @@ TestElanPrecisionTouchpad(VOID)
 
 static
 VOID
+TestHapticTouchpad(VOID)
+{
+    static const struct
+    {
+        USAGE Usage;
+        USHORT BitSize;
+        LONG LogicalMin;
+        LONG LogicalMax;
+        LONG PhysicalMin;
+        LONG PhysicalMax;
+        ULONG Units;
+        ULONG UnitsExp;
+        ULONG Value;
+    } OutputFields[] =
+    {
+        {HID_USAGE_HAPTICS_MANUAL_TRIGGER, 8, 1, 7, 0, 0, 0, 0, 5},
+        {HID_USAGE_HAPTICS_INTENSITY, 8, 0, 4, 0, 0, 0, 0, 4},
+        {HID_USAGE_HAPTICS_REPEAT_COUNT, 8, 0, 5, 0, 0, 0, 0, 2},
+        {HID_USAGE_HAPTICS_RETRIGGER_PERIOD, 16, 0, 1000, 0, 1000, 0x1001, 0x0d, 500},
+        {HID_USAGE_HAPTICS_WAVEFORM_CUTOFF_TIME, 16, 1000, 5000, 1000, 5000, 0x1001, 0x0d, 3000}
+    };
+    HIDP_LINK_COLLECTION_NODE Nodes[6];
+    HIDP_DEVICE_DESC DeviceDescription;
+    HIDP_VALUE_CAPS ValueCaps;
+    HIDP_CAPS Caps;
+    UCHAR FeatureReport[16] = {0};
+    UCHAR OutputReport[8] = {0};
+    ULONG NodeCount, Index, Value;
+    USHORT ValueCapsLength;
+    NTSTATUS Status;
+
+    Status = HidP_GetCollectionDescription(HapticTouchpadDescriptor,
+                                           sizeof(HapticTouchpadDescriptor),
+                                           NonPagedPool,
+                                           &DeviceDescription);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    ok_eq_ulong(DeviceDescription.CollectionDescLength, 1);
+    ok_eq_ulong(DeviceDescription.ReportIDsLength, 4);
+    if (DeviceDescription.CollectionDescLength != 1 ||
+        DeviceDescription.ReportIDsLength != 4)
+    {
+        HidP_FreeCollectionDescription(&DeviceDescription);
+        return;
+    }
+
+    ok_eq_uint(DeviceDescription.CollectionDesc[0].UsagePage,
+               HID_USAGE_PAGE_DIGITIZER);
+    ok_eq_uint(DeviceDescription.CollectionDesc[0].Usage,
+               HID_USAGE_DIGITIZER_TOUCH_PAD);
+    ok_eq_uint(DeviceDescription.CollectionDesc[0].InputLength, 0);
+    ok_eq_uint(DeviceDescription.CollectionDesc[0].OutputLength,
+               sizeof(OutputReport));
+    ok_eq_uint(DeviceDescription.CollectionDesc[0].FeatureLength,
+               sizeof(FeatureReport));
+
+    ok_eq_uint(DeviceDescription.ReportIDs[0].ReportID, 0x40);
+    ok_eq_uint(DeviceDescription.ReportIDs[0].FeatureLength, 2);
+    ok_eq_uint(DeviceDescription.ReportIDs[1].ReportID, 0x41);
+    ok_eq_uint(DeviceDescription.ReportIDs[1].FeatureLength, 2);
+    ok_eq_uint(DeviceDescription.ReportIDs[2].ReportID, 0x42);
+    ok_eq_uint(DeviceDescription.ReportIDs[2].FeatureLength,
+               sizeof(FeatureReport));
+    ok_eq_uint(DeviceDescription.ReportIDs[3].ReportID, 0x43);
+    ok_eq_uint(DeviceDescription.ReportIDs[3].OutputLength,
+               sizeof(OutputReport));
+
+    Status = HidP_GetCaps(DeviceDescription.CollectionDesc[0].PreparsedData,
+                          &Caps);
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    if (Status != HIDP_STATUS_SUCCESS)
+    {
+        HidP_FreeCollectionDescription(&DeviceDescription);
+        return;
+    }
+
+    ok_eq_uint(Caps.InputReportByteLength, 0);
+    ok_eq_uint(Caps.OutputReportByteLength, sizeof(OutputReport));
+    ok_eq_uint(Caps.FeatureReportByteLength, sizeof(FeatureReport));
+    ok_eq_uint(Caps.NumberLinkCollectionNodes, RTL_NUMBER_OF(Nodes));
+
+    NodeCount = RTL_NUMBER_OF(Nodes);
+    Status = HidP_GetLinkCollectionNodes(
+                 Nodes,
+                 &NodeCount,
+                 DeviceDescription.CollectionDesc[0].PreparsedData);
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok_eq_ulong(NodeCount, RTL_NUMBER_OF(Nodes));
+    if (Status == HIDP_STATUS_SUCCESS && NodeCount == RTL_NUMBER_OF(Nodes))
+    {
+        ok_eq_uint(Nodes[0].LinkUsagePage, HID_USAGE_PAGE_DIGITIZER);
+        ok_eq_uint(Nodes[0].LinkUsage, HID_USAGE_DIGITIZER_TOUCH_PAD);
+        ok_eq_uint(Nodes[0].NumberOfChildren, 3);
+        ok_eq_uint(Nodes[1].LinkUsagePage, HID_USAGE_PAGE_HAPTICS);
+        ok_eq_uint(Nodes[1].LinkUsage, HID_USAGE_HAPTICS_SIMPLE_CONTROLLER);
+        ok_eq_uint(Nodes[1].Parent, 0);
+        ok_eq_uint(Nodes[2].LinkUsagePage, HID_USAGE_PAGE_HAPTICS);
+        ok_eq_uint(Nodes[2].LinkUsage, HID_USAGE_HAPTICS_SIMPLE_CONTROLLER);
+        ok_eq_uint(Nodes[2].Parent, 0);
+        ok_eq_uint(Nodes[2].NumberOfChildren, 2);
+        ok_eq_uint(Nodes[3].LinkUsagePage, HID_USAGE_PAGE_HAPTICS);
+        ok_eq_uint(Nodes[3].LinkUsage, HID_USAGE_HAPTICS_WAVEFORM_LIST);
+        ok_eq_uint(Nodes[3].Parent, 2);
+        ok_eq_uint(Nodes[4].LinkUsagePage, HID_USAGE_PAGE_HAPTICS);
+        ok_eq_uint(Nodes[4].LinkUsage, HID_USAGE_HAPTICS_DURATION_LIST);
+        ok_eq_uint(Nodes[4].Parent, 2);
+        ok_eq_uint(Nodes[5].LinkUsagePage, HID_USAGE_PAGE_HAPTICS);
+        ok_eq_uint(Nodes[5].LinkUsage, HID_USAGE_HAPTICS_SIMPLE_CONTROLLER);
+        ok_eq_uint(Nodes[5].Parent, 0);
+    }
+
+    ValueCapsLength = 1;
+    Status = HidP_GetSpecificValueCaps(
+                 HidP_Feature,
+                 HID_USAGE_PAGE_DIGITIZER,
+                 HIDP_LINK_COLLECTION_UNSPECIFIED,
+                 HID_USAGE_DIGITIZER_BUTTON_PRESS_THRESHOLD,
+                 &ValueCaps,
+                 &ValueCapsLength,
+                 DeviceDescription.CollectionDesc[0].PreparsedData);
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok_eq_uint(ValueCapsLength, 1);
+    if (Status == HIDP_STATUS_SUCCESS && ValueCapsLength == 1)
+    {
+        ok_eq_uint(ValueCaps.ReportID, 0x40);
+        ok_eq_uint(ValueCaps.BitSize, 8);
+        ok_eq_long(ValueCaps.LogicalMin, 1);
+        ok_eq_long(ValueCaps.LogicalMax, 3);
+        ok_eq_long(ValueCaps.PhysicalMin, 110);
+        ok_eq_long(ValueCaps.PhysicalMax, 190);
+        ok_eq_ulong(ValueCaps.Units, 0x0101);
+        ok_eq_ulong(ValueCaps.UnitsExp, 0);
+    }
+
+    ValueCapsLength = 1;
+    Status = HidP_GetSpecificValueCaps(
+                 HidP_Feature,
+                 HID_USAGE_PAGE_HAPTICS,
+                 1,
+                 HID_USAGE_HAPTICS_INTENSITY,
+                 &ValueCaps,
+                 &ValueCapsLength,
+                 DeviceDescription.CollectionDesc[0].PreparsedData);
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok_eq_uint(ValueCapsLength, 1);
+    if (Status == HIDP_STATUS_SUCCESS && ValueCapsLength == 1)
+    {
+        ok_eq_uint(ValueCaps.ReportID, 0x41);
+        ok_eq_uint(ValueCaps.BitSize, 8);
+        ok_eq_long(ValueCaps.LogicalMin, 0);
+        ok_eq_long(ValueCaps.LogicalMax, 4);
+    }
+
+    ValueCapsLength = 1;
+    Status = HidP_GetSpecificValueCaps(
+                 HidP_Feature,
+                 HID_USAGE_PAGE_ORDINAL,
+                 3,
+                 3,
+                 &ValueCaps,
+                 &ValueCapsLength,
+                 DeviceDescription.CollectionDesc[0].PreparsedData);
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok_eq_uint(ValueCapsLength, 1);
+    if (Status == HIDP_STATUS_SUCCESS && ValueCapsLength == 1)
+    {
+        ok_eq_uint(ValueCaps.ReportID, 0x42);
+        ok_eq_uint(ValueCaps.BitSize, 16);
+        ok_eq_long(ValueCaps.LogicalMin, 0x1001);
+        ok_eq_long(ValueCaps.LogicalMax, 0x2fff);
+    }
+
+    ValueCapsLength = 1;
+    Status = HidP_GetSpecificValueCaps(
+                 HidP_Feature,
+                 HID_USAGE_PAGE_ORDINAL,
+                 4,
+                 3,
+                 &ValueCaps,
+                 &ValueCapsLength,
+                 DeviceDescription.CollectionDesc[0].PreparsedData);
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok_eq_uint(ValueCapsLength, 1);
+    if (Status == HIDP_STATUS_SUCCESS && ValueCapsLength == 1)
+    {
+        ok_eq_uint(ValueCaps.ReportID, 0x42);
+        ok_eq_uint(ValueCaps.BitSize, 8);
+        ok_eq_long(ValueCaps.LogicalMin, 0);
+        ok_eq_long(ValueCaps.LogicalMax, 50);
+        ok_eq_long(ValueCaps.PhysicalMin, 0);
+        ok_eq_long(ValueCaps.PhysicalMax, 50);
+        ok_eq_ulong(ValueCaps.Units, 0x1001);
+        ok_eq_ulong(ValueCaps.UnitsExp, 0x0d);
+    }
+
+    for (Index = 0; Index < RTL_NUMBER_OF(OutputFields); Index++)
+    {
+        ValueCapsLength = 1;
+        Status = HidP_GetSpecificValueCaps(
+                     HidP_Output,
+                     HID_USAGE_PAGE_HAPTICS,
+                     5,
+                     OutputFields[Index].Usage,
+                     &ValueCaps,
+                     &ValueCapsLength,
+                     DeviceDescription.CollectionDesc[0].PreparsedData);
+        ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+        ok_eq_uint(ValueCapsLength, 1);
+        if (Status == HIDP_STATUS_SUCCESS && ValueCapsLength == 1)
+        {
+            ok_eq_uint(ValueCaps.ReportID, 0x43);
+            ok_eq_uint(ValueCaps.BitSize, OutputFields[Index].BitSize);
+            ok_eq_long(ValueCaps.LogicalMin, OutputFields[Index].LogicalMin);
+            ok_eq_long(ValueCaps.LogicalMax, OutputFields[Index].LogicalMax);
+            ok_eq_long(ValueCaps.PhysicalMin, OutputFields[Index].PhysicalMin);
+            ok_eq_long(ValueCaps.PhysicalMax, OutputFields[Index].PhysicalMax);
+            ok_eq_ulong(ValueCaps.Units, OutputFields[Index].Units);
+            ok_eq_ulong(ValueCaps.UnitsExp, OutputFields[Index].UnitsExp);
+        }
+    }
+
+    FeatureReport[0] = 0x40;
+    Status = HidP_SetUsageValue(
+                 HidP_Feature,
+                 HID_USAGE_PAGE_DIGITIZER,
+                 HIDP_LINK_COLLECTION_UNSPECIFIED,
+                 HID_USAGE_DIGITIZER_BUTTON_PRESS_THRESHOLD,
+                 2,
+                 DeviceDescription.CollectionDesc[0].PreparsedData,
+                 (PCHAR)FeatureReport,
+                 sizeof(FeatureReport));
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok_eq_uint(FeatureReport[1], 2);
+
+    RtlZeroMemory(FeatureReport, sizeof(FeatureReport));
+    FeatureReport[0] = 0x41;
+    Status = HidP_SetUsageValue(
+                 HidP_Feature,
+                 HID_USAGE_PAGE_HAPTICS,
+                 1,
+                 HID_USAGE_HAPTICS_INTENSITY,
+                 4,
+                 DeviceDescription.CollectionDesc[0].PreparsedData,
+                 (PCHAR)FeatureReport,
+                 sizeof(FeatureReport));
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok_eq_uint(FeatureReport[1], 4);
+
+    RtlZeroMemory(FeatureReport, sizeof(FeatureReport));
+    FeatureReport[0] = 0x42;
+    Status = HidP_SetUsageValue(
+                 HidP_Feature,
+                 HID_USAGE_PAGE_ORDINAL,
+                 3,
+                 3,
+                 HID_USAGE_HAPTICS_WAVEFORM_CLICK,
+                 DeviceDescription.CollectionDesc[0].PreparsedData,
+                 (PCHAR)FeatureReport,
+                 sizeof(FeatureReport));
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    Status = HidP_SetUsageValue(
+                 HidP_Feature,
+                 HID_USAGE_PAGE_ORDINAL,
+                 4,
+                 3,
+                 50,
+                 DeviceDescription.CollectionDesc[0].PreparsedData,
+                 (PCHAR)FeatureReport,
+                 sizeof(FeatureReport));
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok_eq_uint(FeatureReport[1], 0x03);
+    ok_eq_uint(FeatureReport[2], 0x10);
+    ok_eq_uint(FeatureReport[11], 50);
+
+    Value = 0;
+    Status = HidP_GetUsageValue(
+                 HidP_Feature,
+                 HID_USAGE_PAGE_ORDINAL,
+                 3,
+                 3,
+                 &Value,
+                 DeviceDescription.CollectionDesc[0].PreparsedData,
+                 (PCHAR)FeatureReport,
+                 sizeof(FeatureReport));
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok_eq_ulong(Value, HID_USAGE_HAPTICS_WAVEFORM_CLICK);
+
+    OutputReport[0] = 0x43;
+    for (Index = 0; Index < RTL_NUMBER_OF(OutputFields); Index++)
+    {
+        Status = HidP_SetUsageValue(
+                     HidP_Output,
+                     HID_USAGE_PAGE_HAPTICS,
+                     5,
+                     OutputFields[Index].Usage,
+                     OutputFields[Index].Value,
+                     DeviceDescription.CollectionDesc[0].PreparsedData,
+                     (PCHAR)OutputReport,
+                     sizeof(OutputReport));
+        ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    }
+    ok_eq_uint(OutputReport[1], 5);
+    ok_eq_uint(OutputReport[2], 4);
+    ok_eq_uint(OutputReport[3], 2);
+    ok_eq_uint(OutputReport[4], 0xf4);
+    ok_eq_uint(OutputReport[5], 0x01);
+    ok_eq_uint(OutputReport[6], 0xb8);
+    ok_eq_uint(OutputReport[7], 0x0b);
+
+    for (Index = 0; Index < RTL_NUMBER_OF(OutputFields); Index++)
+    {
+        Value = 0;
+        Status = HidP_GetUsageValue(
+                     HidP_Output,
+                     HID_USAGE_PAGE_HAPTICS,
+                     5,
+                     OutputFields[Index].Usage,
+                     &Value,
+                     DeviceDescription.CollectionDesc[0].PreparsedData,
+                     (PCHAR)OutputReport,
+                     sizeof(OutputReport));
+        ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+        ok_eq_ulong(Value, OutputFields[Index].Value);
+    }
+
+    HidP_FreeCollectionDescription(&DeviceDescription);
+}
+
+static
+VOID
 TestUsageValueArrays(VOID)
 {
     HIDP_DEVICE_DESC DeviceDescription;
@@ -1207,6 +1572,7 @@ TestHidPDescription(
 
     TestGetCollectionDescription();
     TestElanPrecisionTouchpad();
+    TestHapticTouchpad();
     TestHidClassPtpCapabilities();
     TestHidClassPtpConfiguration();
     TestUsageValueArrays();
