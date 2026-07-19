@@ -44,6 +44,10 @@ list(APPEND SOURCE
     wine/crypt_lmhash.c
     wine/security.c)
 
+if(DLL_EXPORT_VERSION GREATER_EQUAL 0x600)
+    list(APPEND SOURCE misc/rosprof_etw.c)
+endif()
+
 list(APPEND PCH_SKIP_SOURCE
     ${CMAKE_CURRENT_BINARY_DIR}/advapi32_stubs.c
     ${CMAKE_CURRENT_BINARY_DIR}/eventlogrpc_c.c

@@ -198,6 +198,7 @@ typedef ULONG64 TRACEHANDLE, *PTRACEHANDLE;
 #define EVENT_TRACE_RELOG_MODE              0x00010000
 
 #define EVENT_TRACE_USE_PAGED_MEMORY        0x01000000
+#define EVENT_TRACE_SYSTEM_LOGGER_MODE      0x02000000
 
 #define EVENT_TRACE_FILE_MODE_NEWFILE       0x00000008
 #define EVENT_TRACE_FILE_MODE_PREALLOCATE   0x00000020
@@ -417,6 +418,15 @@ typedef struct _TRACE_GUID_INFO {
   ULONG Reserved;
 } TRACE_GUID_INFO, *PTRACE_GUID_INFO;
 
+typedef struct _PROFILE_SOURCE_INFO {
+  ULONG NextEntryOffset;
+  ULONG Source;
+  ULONG MinInterval;
+  ULONG MaxInterval;
+  ULONG64 Reserved;
+  WCHAR Description[ANYSIZE_ARRAY];
+} PROFILE_SOURCE_INFO, *PPROFILE_SOURCE_INFO;
+
 typedef struct _EVENT_TRACE {
   EVENT_TRACE_HEADER Header;
   ULONG InstanceId;
@@ -566,6 +576,11 @@ typedef struct _TRACE_LOGFILE_HEADER64 {
 #if !defined(_WMIKM_) && !defined(_NTDDK_) && !defined(_NTIFS_)
 
 #define ENABLE_TRACE_PARAMETERS_VERSION     1
+#define ENABLE_TRACE_PARAMETERS_VERSION_2   2
+
+#ifndef _EVNTPROV_
+typedef struct _EVENT_FILTER_DESCRIPTOR EVENT_FILTER_DESCRIPTOR, *PEVENT_FILTER_DESCRIPTOR;
+#endif
 
 typedef struct _EVENT_TRACE_PROPERTIES {
   WNODE_HEADER Wnode;
@@ -588,6 +603,47 @@ typedef struct _EVENT_TRACE_PROPERTIES {
   ULONG LoggerNameOffset;
 } EVENT_TRACE_PROPERTIES, *PEVENT_TRACE_PROPERTIES;
 
+typedef struct _EVENT_TRACE_PROPERTIES_V2 {
+  WNODE_HEADER Wnode;
+  ULONG BufferSize;
+  ULONG MinimumBuffers;
+  ULONG MaximumBuffers;
+  ULONG MaximumFileSize;
+  ULONG LogFileMode;
+  ULONG FlushTimer;
+  ULONG EnableFlags;
+  _ANONYMOUS_UNION union {
+    LONG AgeLimit;
+    LONG FlushThreshold;
+  } DUMMYUNIONNAME;
+  ULONG NumberOfBuffers;
+  ULONG FreeBuffers;
+  ULONG EventsLost;
+  ULONG BuffersWritten;
+  ULONG LogBuffersLost;
+  ULONG RealTimeBuffersLost;
+  HANDLE LoggerThreadId;
+  ULONG LogFileNameOffset;
+  ULONG LoggerNameOffset;
+  _ANONYMOUS_UNION union {
+    _ANONYMOUS_STRUCT struct {
+      ULONG VersionNumber : 8;
+    } DUMMYSTRUCTNAME;
+    ULONG V2Control;
+  } DUMMYUNIONNAME2;
+  ULONG FilterDescCount;
+  PEVENT_FILTER_DESCRIPTOR FilterDesc;
+  _ANONYMOUS_UNION union {
+    _ANONYMOUS_STRUCT struct {
+      ULONG Wow : 1;
+      ULONG QpcDeltaTracking : 1;
+      ULONG LargeMdlPages : 1;
+      ULONG ExcludeKernelStack : 1;
+    } DUMMYSTRUCTNAME;
+    ULONG64 V2Options;
+  } DUMMYUNIONNAME3;
+} EVENT_TRACE_PROPERTIES_V2, *PEVENT_TRACE_PROPERTIES_V2;
+
 typedef struct _TRACE_GUID_REGISTRATION {
   LPCGUID Guid;
   HANDLE RegHandle;
@@ -596,9 +652,6 @@ typedef struct _TRACE_GUID_REGISTRATION {
 typedef struct _EVENT_RECORD EVENT_RECORD, *PEVENT_RECORD;
 typedef struct _EVENT_TRACE_LOGFILEW EVENT_TRACE_LOGFILEW, *PEVENT_TRACE_LOGFILEW;
 typedef struct _EVENT_TRACE_LOGFILEA EVENT_TRACE_LOGFILEA, *PEVENT_TRACE_LOGFILEA;
-#ifndef _EVNTPROV_
-typedef struct _EVENT_FILTER_DESCRIPTOR EVENT_FILTER_DESCRIPTOR, *PEVENT_FILTER_DESCRIPTOR;
-#endif
 
 typedef ULONG
 (WINAPI *PEVENT_TRACE_BUFFER_CALLBACKW)(
@@ -690,11 +743,36 @@ struct _EVENT_TRACE_LOGFILEA {
 #endif /* defined(_UNICODE) || defined(UNICODE) */
 
 typedef enum _TRACE_QUERY_INFO_CLASS {
-  TraceGuidQueryList,
-  TraceGuidQueryInfo,
-  TraceGuidQueryProcess,
-  TraceStackTracingInfo,
-  MaxTraceSetInfoClass
+  TraceGuidQueryList = 0,
+  TraceGuidQueryInfo = 1,
+  TraceGuidQueryProcess = 2,
+  TraceStackTracingInfo = 3,
+  TraceSystemTraceEnableFlagsInfo = 4,
+  TraceSampledProfileIntervalInfo = 5,
+  TraceProfileSourceConfigInfo = 6,
+  TraceProfileSourceListInfo = 7,
+  TracePmcEventListInfo = 8,
+  TracePmcCounterListInfo = 9,
+  TraceSetDisallowList = 10,
+  TraceVersionInfo = 11,
+  TraceGroupQueryList = 12,
+  TraceGroupQueryInfo = 13,
+  TraceDisallowListQuery = 14,
+  TraceInfoReserved15 = 15,
+  TracePeriodicCaptureStateListInfo = 16,
+  TracePeriodicCaptureStateInfo = 17,
+  TraceProviderBinaryTracking = 18,
+  TraceMaxLoggersQuery = 19,
+  TraceLbrConfigurationInfo = 20,
+  TraceLbrEventListInfo = 21,
+  TraceMaxPmcCounterQuery = 22,
+  TraceStreamCount = 23,
+  TraceStackCachingInfo = 24,
+  TracePmcCounterOwners = 25,
+  TraceUnifiedStackCachingInfo = 26,
+  TracePmcSessionInformation = 27,
+  TraceContextRegisterInfo = 28,
+  MaxTraceSetInfoClass = 29
 } TRACE_QUERY_INFO_CLASS, TRACE_INFO_CLASS;
 
 typedef struct _CLASSIC_EVENT_ID {
@@ -703,12 +781,48 @@ typedef struct _CLASSIC_EVENT_ID {
   UCHAR Reserved[7];
 } CLASSIC_EVENT_ID, *PCLASSIC_EVENT_ID;
 
+typedef struct _TRACE_PROFILE_INTERVAL {
+  ULONG Source;
+  ULONG Interval;
+} TRACE_PROFILE_INTERVAL, *PTRACE_PROFILE_INTERVAL;
+
+typedef struct _TRACE_VERSION_INFO {
+  UINT EtwTraceProcessingVersion;
+  UINT Reserved;
+} TRACE_VERSION_INFO, *PTRACE_VERSION_INFO;
+
+typedef struct _TRACE_PERIODIC_CAPTURE_STATE_INFO {
+  ULONG CaptureStateFrequencyInSeconds;
+  USHORT ProviderCount;
+  USHORT Reserved;
+} TRACE_PERIODIC_CAPTURE_STATE_INFO, *PTRACE_PERIODIC_CAPTURE_STATE_INFO;
+
+typedef enum ETW_CONTEXT_REGISTER_TYPES {
+  EtwContextRegisterTypeNone = 0,
+  EtwContextRegisterTypeControl = 1,
+  EtwContextRegisterTypeInteger = 2
+} ETW_CONTEXT_REGISTER_TYPES;
+
+typedef struct TRACE_CONTEXT_REGISTER_INFO {
+  ETW_CONTEXT_REGISTER_TYPES RegisterTypes;
+  ULONG Reserved;
+} TRACE_CONTEXT_REGISTER_INFO, *PTRACE_CONTEXT_REGISTER_INFO;
+
+typedef struct _ENABLE_TRACE_PARAMETERS_V1 {
+  ULONG Version;
+  ULONG EnableProperty;
+  ULONG ControlFlags;
+  GUID SourceId;
+  PEVENT_FILTER_DESCRIPTOR EnableFilterDesc;
+} ENABLE_TRACE_PARAMETERS_V1, *PENABLE_TRACE_PARAMETERS_V1;
+
 typedef struct _ENABLE_TRACE_PARAMETERS {
   ULONG Version;
   ULONG EnableProperty;
   ULONG ControlFlags;
   GUID SourceId;
   PEVENT_FILTER_DESCRIPTOR EnableFilterDesc;
+  ULONG FilterDescCount;
 } ENABLE_TRACE_PARAMETERS, *PENABLE_TRACE_PARAMETERS;
 
 #define INVALID_PROCESSTRACE_HANDLE ((TRACEHANDLE)(ULONG_PTR)INVALID_HANDLE_VALUE)
@@ -1092,6 +1206,20 @@ TraceSetInformation(
   IN ULONG InformationLength);
 
 #endif /* (WINVER >= _WIN32_WINNT_WIN7) */
+
+#if (WINVER >= _WIN32_WINNT_WIN8)
+
+EXTERN_C
+ULONG
+WMIAPI
+TraceQueryInformation(
+  IN TRACEHANDLE SessionHandle,
+  IN TRACE_INFO_CLASS InformationClass,
+  OUT PVOID TraceInformation,
+  IN ULONG InformationLength,
+  OUT PULONG ReturnLength OPTIONAL);
+
+#endif /* (WINVER >= _WIN32_WINNT_WIN8) */
 
 #endif /* !defined(_WMIKM_) && !defined(_NTDDK_) && !defined(_NTIFS_) */
 
