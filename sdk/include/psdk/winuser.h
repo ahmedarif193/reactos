@@ -1066,6 +1066,11 @@ extern "C" {
 #define SM_CXPADDEDBORDER 92
 #endif /* _WIN32_WINNT >= 0x0600 */
 
+#if (WINVER >= 0x0601)
+#define SM_DIGITIZER 94
+#define SM_MAXIMUMTOUCHES 95
+#endif /* WINVER >= 0x0601 */
+
 #define SM_REMOTESESSION 0x1000
 #if (_WIN32_WINNT >= 0x0501)
 #define SM_SHUTTINGDOWN 0x2000
@@ -1077,9 +1082,11 @@ extern "C" {
 #elif (WINVER == 0x500)
 #define SM_CMETRICS 83
 #elif (WINVER == 0x501)
-#define SM_CMETRICS 90
-#else
+#define SM_CMETRICS 91
+#elif (WINVER == 0x600)
 #define SM_CMETRICS 93
+#else
+#define SM_CMETRICS 97
 #endif
 
 #define ARW_BOTTOMLEFT 0
@@ -1772,6 +1779,10 @@ typedef enum tagHANDEDNESS
 #define WM_VSCROLL 277
 #define WM_INITMENU 278
 #define WM_INITMENUPOPUP 279
+#if (WINVER >= 0x0601)
+#define WM_GESTURE 0x0119
+#define WM_GESTURENOTIFY 0x011A
+#endif /* WINVER >= 0x0601 */
 #define WM_MENUSELECT 287
 #define WM_MENUCHAR 288
 #define WM_ENTERIDLE 289
@@ -1852,6 +1863,10 @@ typedef enum tagHANDEDNESS
 #define WM_EXITSIZEMOVE 562
 #define WM_DROPFILES 563
 #define WM_MDIREFRESHMENU 564
+
+#if (WINVER >= 0x0601)
+#define WM_TOUCH                    0x0240
+#endif /* WINVER >= 0x0601 */
 
 #if (WINVER >= 0x0602)
 #define WM_POINTERDEVICECHANGE      0x0238
@@ -4167,6 +4182,119 @@ typedef struct tagINPUT_MESSAGE_SOURCE {
   INPUT_MESSAGE_DEVICE_TYPE deviceType;
   INPUT_MESSAGE_ORIGIN_ID originId;
 } INPUT_MESSAGE_SOURCE;
+
+DECLARE_HANDLE(HTOUCHINPUT);
+
+typedef struct tagTOUCHINPUT {
+  LONG x;
+  LONG y;
+  HANDLE hSource;
+  DWORD dwID;
+  DWORD dwFlags;
+  DWORD dwMask;
+  DWORD dwTime;
+  ULONG_PTR dwExtraInfo;
+  DWORD cxContact;
+  DWORD cyContact;
+} TOUCHINPUT, *PTOUCHINPUT;
+typedef const TOUCHINPUT *PCTOUCHINPUT;
+
+#define TOUCH_COORD_TO_PIXEL(l) ((l) / 100)
+
+#define TOUCHEVENTF_MOVE       0x0001
+#define TOUCHEVENTF_DOWN       0x0002
+#define TOUCHEVENTF_UP         0x0004
+#define TOUCHEVENTF_INRANGE    0x0008
+#define TOUCHEVENTF_PRIMARY    0x0010
+#define TOUCHEVENTF_NOCOALESCE 0x0020
+#define TOUCHEVENTF_PEN        0x0040
+#define TOUCHEVENTF_PALM       0x0080
+
+#define TOUCHINPUTMASKF_TIMEFROMSYSTEM 0x0001
+#define TOUCHINPUTMASKF_EXTRAINFO      0x0002
+#define TOUCHINPUTMASKF_CONTACTAREA    0x0004
+
+#define TWF_FINETOUCH 0x00000001
+#define TWF_WANTPALM  0x00000002
+
+DECLARE_HANDLE(HGESTUREINFO);
+
+#define GF_BEGIN   0x00000001
+#define GF_INERTIA 0x00000002
+#define GF_END     0x00000004
+
+#define GID_BEGIN        1
+#define GID_END          2
+#define GID_ZOOM         3
+#define GID_PAN          4
+#define GID_ROTATE       5
+#define GID_TWOFINGERTAP 6
+#define GID_PRESSANDTAP   7
+#define GID_ROLLOVER      GID_PRESSANDTAP
+
+typedef struct tagGESTUREINFO {
+  UINT cbSize;
+  DWORD dwFlags;
+  DWORD dwID;
+  HWND hwndTarget;
+  POINTS ptsLocation;
+  DWORD dwInstanceID;
+  DWORD dwSequenceID;
+  ULONGLONG ullArguments;
+  UINT cbExtraArgs;
+} GESTUREINFO, *PGESTUREINFO;
+typedef const GESTUREINFO *PCGESTUREINFO;
+
+typedef struct tagGESTURENOTIFYSTRUCT {
+  UINT cbSize;
+  DWORD dwFlags;
+  HWND hwndTarget;
+  POINTS ptsLocation;
+  DWORD dwInstanceID;
+} GESTURENOTIFYSTRUCT, *PGESTURENOTIFYSTRUCT;
+
+#define GID_ROTATE_ANGLE_TO_ARGUMENT(_arg_) ((USHORT)((((_arg_) + 2.0 * 3.14159265) / (4.0 * 3.14159265)) * 65535.0))
+#define GID_ROTATE_ANGLE_FROM_ARGUMENT(_arg_) ((((double)(_arg_) / 65535.0) * 4.0 * 3.14159265) - 2.0 * 3.14159265)
+
+typedef struct tagGESTURECONFIG {
+  DWORD dwID;
+  DWORD dwWant;
+  DWORD dwBlock;
+} GESTURECONFIG, *PGESTURECONFIG;
+
+#define GC_ALLGESTURES                       0x00000001
+#define GC_ZOOM                              0x00000001
+#define GC_PAN                               0x00000001
+#define GC_PAN_WITH_SINGLE_FINGER_VERTICALLY 0x00000002
+#define GC_PAN_WITH_SINGLE_FINGER_HORIZONTALLY 0x00000004
+#define GC_PAN_WITH_GUTTER                   0x00000008
+#define GC_PAN_WITH_INERTIA                  0x00000010
+#define GC_ROTATE                            0x00000001
+#define GC_TWOFINGERTAP                      0x00000001
+#define GC_PRESSANDTAP                       0x00000001
+#define GC_ROLLOVER                          GC_PRESSANDTAP
+
+#define GESTURECONFIGMAXCOUNT 256
+#define GCF_INCLUDE_ANCESTORS  0x00000001
+
+BOOL WINAPI GetTouchInputInfo(_In_ HTOUCHINPUT hTouchInput, _In_ UINT cInputs, _Out_writes_(cInputs) PTOUCHINPUT pInputs, _In_ int cbSize);
+BOOL WINAPI CloseTouchInputHandle(_In_ HTOUCHINPUT hTouchInput);
+BOOL WINAPI RegisterTouchWindow(_In_ HWND hwnd, _In_ ULONG ulFlags);
+BOOL WINAPI UnregisterTouchWindow(_In_ HWND hwnd);
+BOOL WINAPI IsTouchWindow(_In_ HWND hwnd, _Out_opt_ PULONG pulFlags);
+
+BOOL WINAPI GetGestureInfo(_In_ HGESTUREINFO hGestureInfo, _Out_ PGESTUREINFO pGestureInfo);
+BOOL WINAPI GetGestureExtraArgs(_In_ HGESTUREINFO hGestureInfo, _In_ UINT cbExtraArgs, _Out_writes_bytes_(cbExtraArgs) PBYTE pExtraArgs);
+BOOL WINAPI CloseGestureInfoHandle(_In_ HGESTUREINFO hGestureInfo);
+BOOL WINAPI SetGestureConfig(_In_ HWND hwnd, _In_ DWORD dwReserved, _In_ UINT cIDs, _In_reads_(cIDs) PGESTURECONFIG pGestureConfig, _In_ UINT cbSize);
+BOOL WINAPI GetGestureConfig(_In_ HWND hwnd, _In_ DWORD dwReserved, _In_ DWORD dwFlags, _In_ PUINT pcIDs, _Inout_updates_(*pcIDs) PGESTURECONFIG pGestureConfig, _In_ UINT cbSize);
+
+#define NID_INTEGRATED_TOUCH 0x00000001
+#define NID_EXTERNAL_TOUCH   0x00000002
+#define NID_INTEGRATED_PEN   0x00000004
+#define NID_EXTERNAL_PEN     0x00000008
+#define NID_MULTI_INPUT      0x00000040
+#define NID_READY            0x00000080
 
 #endif /* WINVER >= 0x0601 */
 

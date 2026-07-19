@@ -23,6 +23,12 @@ target_link_libraries(reshub_apitest ${PSEH_LIB})
 add_importlibs(reshub_apitest msvcrt kernel32)
 add_rostests_file(TARGET reshub_apitest)
 
+add_executable(winuser_input_apitest winuser_input.c)
+set_module_type(winuser_input_apitest win32cui)
+target_link_libraries(winuser_input_apitest ${PSEH_LIB})
+add_importlibs(winuser_input_apitest user32 msvcrt kernel32)
+add_rostests_file(TARGET winuser_input_apitest)
+
 #add_executable(sdk_apitest testlist.c)
 #set_module_type(sdk_apitest win32cui)
 #target_link_libraries(sdk_apitest ${PSEH_LIB})

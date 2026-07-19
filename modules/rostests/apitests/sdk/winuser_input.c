@@ -1,0 +1,125 @@
+/*
+ * PROJECT:     ReactOS API tests
+ * LICENSE:     LGPL-2.1-or-later (https://spdx.org/licenses/LGPL-2.1-or-later)
+ * PURPOSE:     Validate the Windows 11 touch and gesture data ABI
+ * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+ */
+
+#define STANDALONE
+#include <apitest.h>
+#include <winuser.h>
+
+/* Public ABI from Microsoft.Windows.SDK.CPP 10.0.26100.8249. */
+C_ASSERT(WM_GESTURE == 0x0119);
+C_ASSERT(WM_GESTURENOTIFY == 0x011A);
+C_ASSERT(WM_TOUCH == 0x0240);
+C_ASSERT(SM_DIGITIZER == 94);
+C_ASSERT(SM_MAXIMUMTOUCHES == 95);
+C_ASSERT(SM_CMETRICS == 97);
+
+C_ASSERT(TOUCH_COORD_TO_PIXEL(1234) == 12);
+C_ASSERT(TOUCHEVENTF_MOVE == 0x0001);
+C_ASSERT(TOUCHEVENTF_DOWN == 0x0002);
+C_ASSERT(TOUCHEVENTF_UP == 0x0004);
+C_ASSERT(TOUCHEVENTF_INRANGE == 0x0008);
+C_ASSERT(TOUCHEVENTF_PRIMARY == 0x0010);
+C_ASSERT(TOUCHEVENTF_NOCOALESCE == 0x0020);
+C_ASSERT(TOUCHEVENTF_PEN == 0x0040);
+C_ASSERT(TOUCHEVENTF_PALM == 0x0080);
+C_ASSERT(TOUCHINPUTMASKF_TIMEFROMSYSTEM == 0x0001);
+C_ASSERT(TOUCHINPUTMASKF_EXTRAINFO == 0x0002);
+C_ASSERT(TOUCHINPUTMASKF_CONTACTAREA == 0x0004);
+C_ASSERT(TWF_FINETOUCH == 0x00000001);
+C_ASSERT(TWF_WANTPALM == 0x00000002);
+
+C_ASSERT(GF_BEGIN == 0x00000001);
+C_ASSERT(GF_INERTIA == 0x00000002);
+C_ASSERT(GF_END == 0x00000004);
+C_ASSERT(GID_BEGIN == 1);
+C_ASSERT(GID_END == 2);
+C_ASSERT(GID_ZOOM == 3);
+C_ASSERT(GID_PAN == 4);
+C_ASSERT(GID_ROTATE == 5);
+C_ASSERT(GID_TWOFINGERTAP == 6);
+C_ASSERT(GID_PRESSANDTAP == 7);
+C_ASSERT(GID_ROLLOVER == GID_PRESSANDTAP);
+C_ASSERT(GC_ALLGESTURES == 0x00000001);
+C_ASSERT(GC_ZOOM == 0x00000001);
+C_ASSERT(GC_PAN == 0x00000001);
+C_ASSERT(GC_PAN_WITH_SINGLE_FINGER_VERTICALLY == 0x00000002);
+C_ASSERT(GC_PAN_WITH_SINGLE_FINGER_HORIZONTALLY == 0x00000004);
+C_ASSERT(GC_PAN_WITH_GUTTER == 0x00000008);
+C_ASSERT(GC_PAN_WITH_INERTIA == 0x00000010);
+C_ASSERT(GC_ROTATE == 0x00000001);
+C_ASSERT(GC_TWOFINGERTAP == 0x00000001);
+C_ASSERT(GC_PRESSANDTAP == 0x00000001);
+C_ASSERT(GC_ROLLOVER == GC_PRESSANDTAP);
+C_ASSERT(GESTURECONFIGMAXCOUNT == 256);
+C_ASSERT(GCF_INCLUDE_ANCESTORS == 0x00000001);
+
+C_ASSERT(NID_INTEGRATED_TOUCH == 0x00000001);
+C_ASSERT(NID_EXTERNAL_TOUCH == 0x00000002);
+C_ASSERT(NID_INTEGRATED_PEN == 0x00000004);
+C_ASSERT(NID_EXTERNAL_PEN == 0x00000008);
+C_ASSERT(NID_MULTI_INPUT == 0x00000040);
+C_ASSERT(NID_READY == 0x00000080);
+
+#ifdef _WIN64
+C_ASSERT(sizeof(TOUCHINPUT) == 48);
+C_ASSERT(FIELD_OFFSET(TOUCHINPUT, dwExtraInfo) == 32);
+C_ASSERT(sizeof(GESTUREINFO) == 56);
+C_ASSERT(FIELD_OFFSET(GESTUREINFO, hwndTarget) == 16);
+C_ASSERT(FIELD_OFFSET(GESTUREINFO, ullArguments) == 40);
+C_ASSERT(FIELD_OFFSET(GESTUREINFO, cbExtraArgs) == 48);
+C_ASSERT(sizeof(GESTURENOTIFYSTRUCT) == 24);
+#else
+C_ASSERT(sizeof(TOUCHINPUT) == 40);
+C_ASSERT(FIELD_OFFSET(TOUCHINPUT, dwExtraInfo) == 28);
+C_ASSERT(sizeof(GESTUREINFO) == 48);
+C_ASSERT(FIELD_OFFSET(GESTUREINFO, hwndTarget) == 12);
+C_ASSERT(FIELD_OFFSET(GESTUREINFO, ullArguments) == 32);
+C_ASSERT(FIELD_OFFSET(GESTUREINFO, cbExtraArgs) == 40);
+C_ASSERT(sizeof(GESTURENOTIFYSTRUCT) == 20);
+#endif
+
+C_ASSERT(FIELD_OFFSET(TOUCHINPUT, hSource) == 8);
+C_ASSERT(FIELD_OFFSET(GESTURENOTIFYSTRUCT, hwndTarget) == 8);
+C_ASSERT(sizeof(GESTURECONFIG) == 12);
+C_ASSERT(FIELD_OFFSET(GESTURECONFIG, dwWant) == 4);
+C_ASSERT(FIELD_OFFSET(GESTURECONFIG, dwBlock) == 8);
+
+typedef BOOL (WINAPI *PGET_TOUCH_INPUT_INFO)(HTOUCHINPUT, UINT, PTOUCHINPUT, int);
+typedef BOOL (WINAPI *PCLOSE_TOUCH_INPUT_HANDLE)(HTOUCHINPUT);
+typedef BOOL (WINAPI *PREGISTER_TOUCH_WINDOW)(HWND, ULONG);
+typedef BOOL (WINAPI *PUNREGISTER_TOUCH_WINDOW)(HWND);
+typedef BOOL (WINAPI *PIS_TOUCH_WINDOW)(HWND, PULONG);
+typedef BOOL (WINAPI *PGET_GESTURE_INFO)(HGESTUREINFO, PGESTUREINFO);
+typedef BOOL (WINAPI *PGET_GESTURE_EXTRA_ARGS)(HGESTUREINFO, UINT, PBYTE);
+typedef BOOL (WINAPI *PCLOSE_GESTURE_INFO_HANDLE)(HGESTUREINFO);
+typedef BOOL (WINAPI *PSET_GESTURE_CONFIG)(HWND, DWORD, UINT, PGESTURECONFIG, UINT);
+typedef BOOL (WINAPI *PGET_GESTURE_CONFIG)(HWND, DWORD, DWORD, PUINT, PGESTURECONFIG, UINT);
+
+static const PGET_TOUCH_INPUT_INFO GetTouchInputInfoSignature = GetTouchInputInfo;
+static const PCLOSE_TOUCH_INPUT_HANDLE CloseTouchInputHandleSignature = CloseTouchInputHandle;
+static const PREGISTER_TOUCH_WINDOW RegisterTouchWindowSignature = RegisterTouchWindow;
+static const PUNREGISTER_TOUCH_WINDOW UnregisterTouchWindowSignature = UnregisterTouchWindow;
+static const PIS_TOUCH_WINDOW IsTouchWindowSignature = IsTouchWindow;
+static const PGET_GESTURE_INFO GetGestureInfoSignature = GetGestureInfo;
+static const PGET_GESTURE_EXTRA_ARGS GetGestureExtraArgsSignature = GetGestureExtraArgs;
+static const PCLOSE_GESTURE_INFO_HANDLE CloseGestureInfoHandleSignature = CloseGestureInfoHandle;
+static const PSET_GESTURE_CONFIG SetGestureConfigSignature = SetGestureConfig;
+static const PGET_GESTURE_CONFIG GetGestureConfigSignature = GetGestureConfig;
+
+START_TEST(winuser_input)
+{
+    ok(GetTouchInputInfoSignature != NULL, "GetTouchInputInfo is not linked\n");
+    ok(CloseTouchInputHandleSignature != NULL, "CloseTouchInputHandle is not linked\n");
+    ok(RegisterTouchWindowSignature != NULL, "RegisterTouchWindow is not linked\n");
+    ok(UnregisterTouchWindowSignature != NULL, "UnregisterTouchWindow is not linked\n");
+    ok(IsTouchWindowSignature != NULL, "IsTouchWindow is not linked\n");
+    ok(GetGestureInfoSignature != NULL, "GetGestureInfo is not linked\n");
+    ok(GetGestureExtraArgsSignature != NULL, "GetGestureExtraArgs is not linked\n");
+    ok(CloseGestureInfoHandleSignature != NULL, "CloseGestureInfoHandle is not linked\n");
+    ok(SetGestureConfigSignature != NULL, "SetGestureConfig is not linked\n");
+    ok(GetGestureConfigSignature != NULL, "GetGestureConfig is not linked\n");
+}

@@ -48,49 +48,6 @@ typedef enum ORIENTATION_PREFERENCE {
     ORIENTATION_PREFERENCE_PORTRAIT_FLIPPED  = 0x8
 } ORIENTATION_PREFERENCE;
 
-/* Touch input definitions */
-DECLARE_HANDLE(HTOUCHINPUT);
-
-
-typedef struct tagTOUCHINPUT {
-    LONG      x;
-    LONG      y;
-    HANDLE    hSource;
-    DWORD     dwID;
-    DWORD     dwFlags;
-    DWORD     dwMask;
-    DWORD     dwTime;
-    ULONG_PTR dwExtraInfo;
-    DWORD     cxContact;
-    DWORD     cyContact;
-} TOUCHINPUT, *PTOUCHINPUT;
-typedef TOUCHINPUT const * PCTOUCHINPUT;
-
-DECLARE_HANDLE(HGESTUREINFO);
-
-#define GF_BEGIN    0x00000001
-#define GF_INERTIA  0x00000002
-#define GF_END      0x00000004
-
-typedef struct tagGESTURECONFIG {
-    DWORD dwID;
-    DWORD dwWant;
-    DWORD dwBlock;
-} GESTURECONFIG, *PGESTURECONFIG;
-
-typedef struct tagGESTUREINFO {
-    UINT      cbSize;
-    DWORD     dwFlags;
-    DWORD     dwID;
-    HWND      hwndTarget;
-    POINTS    ptsLocation;
-    DWORD     dwInstanceID;
-    DWORD     dwSequenceID;
-    ULONGLONG ullArguments;
-    UINT      cbExtraArgs;
-} GESTUREINFO, *PGESTUREINFO;
-typedef GESTUREINFO const * PCGESTUREINFO;
-
 #if (WINVER < 0x0602)
 typedef enum tagPOINTER_BUTTON_CHANGE_TYPE
 {
