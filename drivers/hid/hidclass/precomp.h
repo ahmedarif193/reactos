@@ -85,6 +85,11 @@ typedef struct
     //
     HIDCLASS_PTP_CAPABILITIES PrecisionTouchpad;
 
+    //
+    // precision touchpad configuration state
+    //
+    HIDCLASS_PTP_CONFIGURATION PrecisionTouchpadConfiguration;
+
 } HIDCLASS_FDO_EXTENSION, *PHIDCLASS_FDO_EXTENSION;
 
 typedef struct

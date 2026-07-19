@@ -13,4 +13,7 @@
 VOID
 TestHidClassPtpCapabilities(VOID);
 
+VOID
+TestHidClassPtpConfiguration(VOID);
+
 #endif /* !defined _KMTEST_HIDP_H_ */

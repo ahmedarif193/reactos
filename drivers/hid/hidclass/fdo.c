@@ -441,94 +441,23 @@ HidClassFDO_GetPrecisionTouchpadFeature(
 
 static
 NTSTATUS
-HidClassFDO_ConfigurePrecisionTouchpad(
-    IN PDEVICE_OBJECT DeviceObject)
+NTAPI
+HidClassFDO_SetPrecisionTouchpadFeature(
+    _In_ PVOID Context,
+    _In_ UCHAR ReportId,
+    _In_reads_bytes_(ReportLength) PUCHAR ReportBuffer,
+    _In_ ULONG ReportLength)
 {
-    PHIDCLASS_FDO_EXTENSION DeviceExtension = DeviceObject->DeviceExtension;
-    PHIDP_DEVICE_DESC DeviceDescription =
-        &DeviceExtension->Common.DeviceDescription;
-    PHIDP_COLLECTION_DESC Collection;
-    PHIDP_REPORT_IDS ReportDescription = NULL;
-    HIDP_VALUE_CAPS ModeCaps;
     HID_XFER_PACKET XferPacket;
-    PUCHAR ReportBuffer;
-    USHORT CapsLength;
-    NTSTATUS Status;
-    ULONG Index;
 
-    Collection = NULL;
-    for (Index = 0; Index < DeviceDescription->CollectionDescLength; Index++)
-    {
-        if (DeviceDescription->CollectionDesc[Index].UsagePage ==
-                HID_USAGE_PAGE_DIGITIZER &&
-            DeviceDescription->CollectionDesc[Index].Usage ==
-                HID_USAGE_DIGITIZER_DEVICE_CONFIGURATION)
-        {
-            Collection = &DeviceDescription->CollectionDesc[Index];
-            break;
-        }
-    }
-    if (Collection == NULL)
-        return STATUS_NOT_SUPPORTED;
+    RtlZeroMemory(&XferPacket, sizeof(XferPacket));
+    XferPacket.reportBuffer = ReportBuffer;
+    XferPacket.reportBufferLen = ReportLength;
+    XferPacket.reportId = ReportId;
 
-    CapsLength = 1;
-    Status = HidP_GetSpecificValueCaps(HidP_Feature,
-                                       HID_USAGE_PAGE_DIGITIZER,
-                                       HIDP_LINK_COLLECTION_UNSPECIFIED,
-                                       HID_USAGE_DIGITIZER_DEVICE_MODE,
-                                       &ModeCaps,
-                                       &CapsLength,
-                                       Collection->PreparsedData);
-    if (Status != HIDP_STATUS_SUCCESS || CapsLength != 1 ||
-        ModeCaps.ReportID == 0)
-    {
-        return STATUS_NOT_SUPPORTED;
-    }
-
-    for (Index = 0; Index < DeviceDescription->ReportIDsLength; Index++)
-    {
-        if (DeviceDescription->ReportIDs[Index].CollectionNumber ==
-                Collection->CollectionNumber &&
-            DeviceDescription->ReportIDs[Index].ReportID ==
-                ModeCaps.ReportID &&
-            DeviceDescription->ReportIDs[Index].FeatureLength != 0)
-        {
-            ReportDescription = &DeviceDescription->ReportIDs[Index];
-            break;
-        }
-    }
-    if (ReportDescription == NULL)
-        return STATUS_NOT_SUPPORTED;
-
-    ReportBuffer = ExAllocatePoolWithTag(NonPagedPool,
-                                         ReportDescription->FeatureLength,
-                                         HIDCLASS_TAG);
-    if (ReportBuffer == NULL)
-        return STATUS_INSUFFICIENT_RESOURCES;
-
-    RtlZeroMemory(ReportBuffer, ReportDescription->FeatureLength);
-    ReportBuffer[0] = ModeCaps.ReportID;
-    Status = HidP_SetUsageValue(HidP_Feature,
-                                HID_USAGE_PAGE_DIGITIZER,
-                                ModeCaps.LinkCollection,
-                                HID_USAGE_DIGITIZER_DEVICE_MODE,
-                                3,
-                                Collection->PreparsedData,
-                                (PCHAR)ReportBuffer,
-                                ReportDescription->FeatureLength);
-    if (Status == HIDP_STATUS_SUCCESS)
-    {
-        RtlZeroMemory(&XferPacket, sizeof(XferPacket));
-        XferPacket.reportBuffer = ReportBuffer;
-        XferPacket.reportBufferLen = ReportDescription->FeatureLength;
-        XferPacket.reportId = ModeCaps.ReportID;
-        Status = HidClassFDO_SendReportRequest(DeviceObject,
-                                               IOCTL_HID_SET_FEATURE,
-                                               &XferPacket);
-    }
-
-    ExFreePoolWithTag(ReportBuffer, HIDCLASS_TAG);
-    return Status;
+    return HidClassFDO_SendReportRequest(Context,
+                                         IOCTL_HID_SET_FEATURE,
+                                         &XferPacket);
 }
 
 
@@ -616,10 +545,22 @@ HidClassFDO_StartDevice(
                FDODeviceExtension->PrecisionTouchpad.HasButtonType ?
                    " and reports its button type" : " with external buttons");
 
-        Status = HidClassFDO_ConfigurePrecisionTouchpad(DeviceObject);
+        Status = HidClassPtpInitializeConfiguration(
+                     &FDODeviceExtension->Common.DeviceDescription,
+                     &FDODeviceExtension->PrecisionTouchpad,
+                     &FDODeviceExtension->PrecisionTouchpadConfiguration);
+        if (NT_SUCCESS(Status))
+        {
+            Status = HidClassPtpSetDeviceMode(
+                         &FDODeviceExtension->Common.DeviceDescription,
+                         &FDODeviceExtension->PrecisionTouchpadConfiguration,
+                         HIDCLASS_PTP_PRECISION_TOUCHPAD_MODE,
+                         HidClassFDO_SetPrecisionTouchpadFeature,
+                         DeviceObject);
+        }
         if (!NT_SUCCESS(Status))
         {
-            DPRINT1("[HIDCLASS] Precision Touchpad input mode failed with %x\n",
+            DPRINT1("[HIDCLASS] Precision Touchpad configuration failed with %x\n",
                     Status);
         }
     }

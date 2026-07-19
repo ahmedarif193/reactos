@@ -1208,6 +1208,7 @@ TestHidPDescription(
     TestGetCollectionDescription();
     TestElanPrecisionTouchpad();
     TestHidClassPtpCapabilities();
+    TestHidClassPtpConfiguration();
     TestUsageValueArrays();
     TestMultipleInputReports();
     TestConsumerAndSystemControls();

@@ -1,7 +1,7 @@
 /*
  * PROJECT:     ReactOS HID Class Driver
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
- * PURPOSE:     Windows Precision Touchpad capability validation
+ * PURPOSE:     Windows Precision Touchpad capability and configuration policy
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
@@ -341,5 +341,341 @@ Cleanup:
     if (CapabilitiesReport != NULL)
         ExFreePoolWithTag(CapabilitiesReport, HIDCLASS_TAG);
 
+    return Status;
+}
+
+NTSTATUS
+HidClassPtpInitializeConfiguration(
+    _In_ PHIDP_DEVICE_DESC DeviceDescription,
+    _In_ PHIDCLASS_PTP_CAPABILITIES Capabilities,
+    _Out_ PHIDCLASS_PTP_CONFIGURATION Configuration)
+{
+    PHIDP_COLLECTION_DESC Collection;
+    PHIDP_REPORT_IDS ModeReportDescription;
+    PHIDP_REPORT_IDS SelectiveReportDescription;
+    HIDP_VALUE_CAPS ModeCaps;
+    HIDP_VALUE_CAPS SurfaceCaps;
+    HIDP_VALUE_CAPS ButtonCaps;
+    PUCHAR ModeReport = NULL;
+    PUCHAR SelectiveReport = NULL;
+    USHORT CapsLength;
+    NTSTATUS Status;
+
+    if (DeviceDescription == NULL || Capabilities == NULL || Configuration == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    RtlZeroMemory(Configuration, sizeof(*Configuration));
+
+    if (!Capabilities->Present || !Capabilities->Valid)
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+
+    Collection = HidClassPtpFindCollection(DeviceDescription,
+                                            HID_USAGE_PAGE_DIGITIZER,
+                                            HID_USAGE_DIGITIZER_DEVICE_CONFIGURATION);
+    if (Collection == NULL)
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+
+    CapsLength = 1;
+    Status = HidP_GetSpecificValueCaps(HidP_Feature,
+                                       HID_USAGE_PAGE_DIGITIZER,
+                                       HIDP_LINK_COLLECTION_UNSPECIFIED,
+                                       HID_USAGE_DIGITIZER_DEVICE_MODE,
+                                       &ModeCaps,
+                                       &CapsLength,
+                                       Collection->PreparsedData);
+    if (Status != HIDP_STATUS_SUCCESS || CapsLength != 1 ||
+        !HidClassPtpIsScalarCapability(&ModeCaps) ||
+        ModeCaps.LogicalMin != 0 || ModeCaps.LogicalMax != 10)
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    CapsLength = 1;
+    Status = HidP_GetSpecificValueCaps(HidP_Feature,
+                                       HID_USAGE_PAGE_DIGITIZER,
+                                       HIDP_LINK_COLLECTION_UNSPECIFIED,
+                                       HID_USAGE_DIGITIZER_SURFACE_SWITCH,
+                                       &SurfaceCaps,
+                                       &CapsLength,
+                                       Collection->PreparsedData);
+    if (Status != HIDP_STATUS_SUCCESS || CapsLength != 1 ||
+        !HidClassPtpIsScalarCapability(&SurfaceCaps) ||
+        SurfaceCaps.LogicalMin != 0 || SurfaceCaps.LogicalMax != 1)
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    CapsLength = 1;
+    Status = HidP_GetSpecificValueCaps(HidP_Feature,
+                                       HID_USAGE_PAGE_DIGITIZER,
+                                       HIDP_LINK_COLLECTION_UNSPECIFIED,
+                                       HID_USAGE_DIGITIZER_BUTTON_SWITCH,
+                                       &ButtonCaps,
+                                       &CapsLength,
+                                       Collection->PreparsedData);
+    if (Status != HIDP_STATUS_SUCCESS || CapsLength != 1 ||
+        !HidClassPtpIsScalarCapability(&ButtonCaps) ||
+        ButtonCaps.LogicalMin != 0 || ButtonCaps.LogicalMax != 1 ||
+        ButtonCaps.ReportID != SurfaceCaps.ReportID ||
+        ModeCaps.ReportID == SurfaceCaps.ReportID)
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    ModeReportDescription = HidClassPtpFindFeatureReport(DeviceDescription,
+                                                          Collection->CollectionNumber,
+                                                          ModeCaps.ReportID);
+    SelectiveReportDescription = HidClassPtpFindFeatureReport(DeviceDescription,
+                                                               Collection->CollectionNumber,
+                                                               SurfaceCaps.ReportID);
+    if (ModeReportDescription == NULL || SelectiveReportDescription == NULL)
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+
+    ModeReport = ExAllocatePoolWithTag(NonPagedPool,
+                                       ModeReportDescription->FeatureLength,
+                                       HIDCLASS_TAG);
+    SelectiveReport = ExAllocatePoolWithTag(NonPagedPool,
+                                            SelectiveReportDescription->FeatureLength,
+                                            HIDCLASS_TAG);
+    if (ModeReport == NULL || SelectiveReport == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Cleanup;
+    }
+
+    RtlZeroMemory(ModeReport, ModeReportDescription->FeatureLength);
+    ModeReport[0] = ModeCaps.ReportID;
+    Status = HidP_SetUsageValue(HidP_Feature,
+                                HID_USAGE_PAGE_DIGITIZER,
+                                ModeCaps.LinkCollection,
+                                HID_USAGE_DIGITIZER_DEVICE_MODE,
+                                3,
+                                Collection->PreparsedData,
+                                (PCHAR)ModeReport,
+                                ModeReportDescription->FeatureLength);
+    if (Status != HIDP_STATUS_SUCCESS)
+    {
+        Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        goto Cleanup;
+    }
+
+    RtlZeroMemory(SelectiveReport, SelectiveReportDescription->FeatureLength);
+    SelectiveReport[0] = SurfaceCaps.ReportID;
+    Status = HidP_SetUsageValue(HidP_Feature,
+                                HID_USAGE_PAGE_DIGITIZER,
+                                SurfaceCaps.LinkCollection,
+                                HID_USAGE_DIGITIZER_SURFACE_SWITCH,
+                                1,
+                                Collection->PreparsedData,
+                                (PCHAR)SelectiveReport,
+                                SelectiveReportDescription->FeatureLength);
+    if (Status != HIDP_STATUS_SUCCESS)
+    {
+        Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        goto Cleanup;
+    }
+
+    Status = HidP_SetUsageValue(HidP_Feature,
+                                HID_USAGE_PAGE_DIGITIZER,
+                                ButtonCaps.LinkCollection,
+                                HID_USAGE_DIGITIZER_BUTTON_SWITCH,
+                                1,
+                                Collection->PreparsedData,
+                                (PCHAR)SelectiveReport,
+                                SelectiveReportDescription->FeatureLength);
+    if (Status != HIDP_STATUS_SUCCESS)
+    {
+        Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        goto Cleanup;
+    }
+
+    Configuration->Valid = TRUE;
+    Configuration->CollectionNumber = Collection->CollectionNumber;
+    Configuration->DeviceModeReportId = ModeCaps.ReportID;
+    Configuration->SelectiveReportingReportId = SurfaceCaps.ReportID;
+    Configuration->DeviceModeLinkCollection = ModeCaps.LinkCollection;
+    Configuration->SurfaceSwitchLinkCollection = SurfaceCaps.LinkCollection;
+    Configuration->ButtonSwitchLinkCollection = ButtonCaps.LinkCollection;
+    Configuration->DeviceModeReportLength = ModeReportDescription->FeatureLength;
+    Configuration->SelectiveReportingReportLength = SelectiveReportDescription->FeatureLength;
+    Status = STATUS_SUCCESS;
+
+Cleanup:
+    if (SelectiveReport != NULL)
+        ExFreePoolWithTag(SelectiveReport, HIDCLASS_TAG);
+    if (ModeReport != NULL)
+        ExFreePoolWithTag(ModeReport, HIDCLASS_TAG);
+    return Status;
+}
+
+NTSTATUS
+HidClassPtpSetDeviceMode(
+    _In_ PHIDP_DEVICE_DESC DeviceDescription,
+    _Inout_ PHIDCLASS_PTP_CONFIGURATION Configuration,
+    _In_ UCHAR DeviceMode,
+    _In_ PHIDCLASS_PTP_SET_FEATURE SetFeature,
+    _In_ PVOID Context)
+{
+    PHIDP_COLLECTION_DESC Collection;
+    PHIDP_REPORT_IDS ReportDescription;
+    PUCHAR ReportBuffer;
+    NTSTATUS Status;
+
+    if (DeviceDescription == NULL || Configuration == NULL || SetFeature == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    if (!Configuration->Valid)
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+
+    if (DeviceMode != HIDCLASS_PTP_MOUSE_MODE &&
+        DeviceMode != HIDCLASS_PTP_PRECISION_TOUCHPAD_MODE)
+        return STATUS_INVALID_PARAMETER;
+
+    Collection = HidClassPtpFindCollection(DeviceDescription,
+                                            HID_USAGE_PAGE_DIGITIZER,
+                                            HID_USAGE_DIGITIZER_DEVICE_CONFIGURATION);
+    if (Collection == NULL || Collection->CollectionNumber != Configuration->CollectionNumber)
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+
+    ReportDescription = HidClassPtpFindFeatureReport(DeviceDescription,
+                                                      Collection->CollectionNumber,
+                                                      Configuration->DeviceModeReportId);
+    if (ReportDescription == NULL ||
+        ReportDescription->FeatureLength != Configuration->DeviceModeReportLength)
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    ReportBuffer = ExAllocatePoolWithTag(NonPagedPool,
+                                         ReportDescription->FeatureLength,
+                                         HIDCLASS_TAG);
+    if (ReportBuffer == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    RtlZeroMemory(ReportBuffer, ReportDescription->FeatureLength);
+    ReportBuffer[0] = Configuration->DeviceModeReportId;
+    Status = HidP_SetUsageValue(HidP_Feature,
+                                HID_USAGE_PAGE_DIGITIZER,
+                                Configuration->DeviceModeLinkCollection,
+                                HID_USAGE_DIGITIZER_DEVICE_MODE,
+                                DeviceMode,
+                                Collection->PreparsedData,
+                                (PCHAR)ReportBuffer,
+                                ReportDescription->FeatureLength);
+    if (Status == HIDP_STATUS_SUCCESS)
+    {
+        Status = SetFeature(Context,
+                            Configuration->DeviceModeReportId,
+                            ReportBuffer,
+                            ReportDescription->FeatureLength);
+        if (NT_SUCCESS(Status))
+        {
+            Configuration->DeviceMode = DeviceMode;
+            Configuration->DeviceModeKnown = TRUE;
+        }
+        else
+        {
+            Configuration->DeviceModeKnown = FALSE;
+        }
+    }
+    else
+    {
+        Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    ExFreePoolWithTag(ReportBuffer, HIDCLASS_TAG);
+    return Status;
+}
+
+NTSTATUS
+HidClassPtpSetSelectiveReporting(
+    _In_ PHIDP_DEVICE_DESC DeviceDescription,
+    _Inout_ PHIDCLASS_PTP_CONFIGURATION Configuration,
+    _In_ BOOLEAN EnableSurfaceReporting,
+    _In_ BOOLEAN EnableButtonReporting,
+    _In_ PHIDCLASS_PTP_SET_FEATURE SetFeature,
+    _In_ PVOID Context)
+{
+    PHIDP_COLLECTION_DESC Collection;
+    PHIDP_REPORT_IDS ReportDescription;
+    PUCHAR ReportBuffer;
+    NTSTATUS Status;
+
+    if (DeviceDescription == NULL || Configuration == NULL || SetFeature == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    if (!Configuration->Valid)
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+
+    Collection = HidClassPtpFindCollection(DeviceDescription,
+                                            HID_USAGE_PAGE_DIGITIZER,
+                                            HID_USAGE_DIGITIZER_DEVICE_CONFIGURATION);
+    if (Collection == NULL || Collection->CollectionNumber != Configuration->CollectionNumber)
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+
+    ReportDescription = HidClassPtpFindFeatureReport(DeviceDescription,
+                                                      Collection->CollectionNumber,
+                                                      Configuration->SelectiveReportingReportId);
+    if (ReportDescription == NULL ||
+        ReportDescription->FeatureLength != Configuration->SelectiveReportingReportLength)
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    ReportBuffer = ExAllocatePoolWithTag(NonPagedPool,
+                                         ReportDescription->FeatureLength,
+                                         HIDCLASS_TAG);
+    if (ReportBuffer == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    RtlZeroMemory(ReportBuffer, ReportDescription->FeatureLength);
+    ReportBuffer[0] = Configuration->SelectiveReportingReportId;
+    Status = HidP_SetUsageValue(HidP_Feature,
+                                HID_USAGE_PAGE_DIGITIZER,
+                                Configuration->SurfaceSwitchLinkCollection,
+                                HID_USAGE_DIGITIZER_SURFACE_SWITCH,
+                                EnableSurfaceReporting ? 1 : 0,
+                                Collection->PreparsedData,
+                                (PCHAR)ReportBuffer,
+                                ReportDescription->FeatureLength);
+    if (Status != HIDP_STATUS_SUCCESS)
+    {
+        Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        goto Cleanup;
+    }
+
+    Status = HidP_SetUsageValue(HidP_Feature,
+                                HID_USAGE_PAGE_DIGITIZER,
+                                Configuration->ButtonSwitchLinkCollection,
+                                HID_USAGE_DIGITIZER_BUTTON_SWITCH,
+                                EnableButtonReporting ? 1 : 0,
+                                Collection->PreparsedData,
+                                (PCHAR)ReportBuffer,
+                                ReportDescription->FeatureLength);
+    if (Status != HIDP_STATUS_SUCCESS)
+    {
+        Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        goto Cleanup;
+    }
+
+    Status = SetFeature(Context,
+                        Configuration->SelectiveReportingReportId,
+                        ReportBuffer,
+                        ReportDescription->FeatureLength);
+    if (NT_SUCCESS(Status))
+    {
+        Configuration->SelectiveReportingKnown = TRUE;
+        Configuration->SurfaceReportingEnabled = EnableSurfaceReporting;
+        Configuration->ButtonReportingEnabled = EnableButtonReporting;
+    }
+    else
+    {
+        Configuration->SelectiveReportingKnown = FALSE;
+    }
+
+Cleanup:
+    ExFreePoolWithTag(ReportBuffer, HIDCLASS_TAG);
     return Status;
 }

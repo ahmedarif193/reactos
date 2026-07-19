@@ -12,6 +12,14 @@
 
 #define PTP_CAPABILITIES_REPORT_ID   2
 #define PTP_CERTIFICATION_REPORT_ID  6
+#define PTP_DEVICE_MODE_REPORT_ID    3
+#define PTP_SELECTIVE_REPORT_ID      5
+
+#define PTP_CONFIG_MODE_MAXIMUM_OFFSET       17
+#define PTP_CONFIG_MODE_SIZE_OFFSET          19
+#define PTP_CONFIG_SELECTIVE_ID_OFFSET       30
+#define PTP_CONFIG_BUTTON_USAGE_OFFSET       34
+#define PTP_CONFIG_SELECTIVE_MAXIMUM_OFFSET  38
 
 static UCHAR PtpDescriptor[] =
 {
@@ -120,6 +128,37 @@ static UCHAR NonPtpDescriptor[] =
     0xc0                                /* End Collection */
 };
 
+static UCHAR PtpConfigurationDescriptor[] =
+{
+    0x05, 0x0d,                         /* Usage Page (Digitizers) */
+    0x09, 0x0e,                         /* Usage (Device Configuration) */
+    0xa1, 0x01,                         /* Collection (Application) */
+    0x85, PTP_DEVICE_MODE_REPORT_ID,    /*   Report ID (Device Mode) */
+    0x09, 0x22,                         /*   Usage (Finger) */
+    0xa1, 0x02,                         /*   Collection (Logical) */
+    0x09, 0x52,                         /*     Usage (Device Mode) */
+    0x15, 0x00,                         /*     Logical Minimum (0) */
+    0x25, 0x0a,                         /*     Logical Maximum (10) */
+    0x75, 0x10,                         /*     Report Size (16) */
+    0x95, 0x01,                         /*     Report Count (1) */
+    0xb1, 0x02,                         /*     Feature (Data, Variable, Absolute) */
+    0xc0,                               /*   End Collection */
+    0x09, 0x22,                         /*   Usage (Finger) */
+    0xa1, 0x00,                         /*   Collection (Physical) */
+    0x85, PTP_SELECTIVE_REPORT_ID,      /*     Report ID (Selective Reporting) */
+    0x09, 0x57,                         /*     Usage (Surface Switch) */
+    0x09, 0x58,                         /*     Usage (Button Switch) */
+    0x15, 0x00,                         /*     Logical Minimum (0) */
+    0x25, 0x01,                         /*     Logical Maximum (1) */
+    0x75, 0x01,                         /*     Report Size (1) */
+    0x95, 0x02,                         /*     Report Count (2) */
+    0xb1, 0x02,                         /*     Feature (Data, Variable, Absolute) */
+    0x95, 0x0e,                         /*     Report Count (14) */
+    0xb1, 0x03,                         /*     Feature (Constant, Variable, Absolute) */
+    0xc0,                               /*   End Collection */
+    0xc0                                /* End Collection */
+};
+
 typedef struct _PTP_TEST_CONTEXT
 {
     UCHAR MaximumContactCount;
@@ -130,6 +169,20 @@ typedef struct _PTP_TEST_CONTEXT
     ULONG CapabilitiesCalls;
     ULONG CertificationCalls;
 } PTP_TEST_CONTEXT, *PPTP_TEST_CONTEXT;
+
+typedef struct _PTP_CONFIGURATION_TRANSFER
+{
+    UCHAR ReportId;
+    UCHAR Report[4];
+    ULONG ReportLength;
+} PTP_CONFIGURATION_TRANSFER, *PPTP_CONFIGURATION_TRANSFER;
+
+typedef struct _PTP_CONFIGURATION_TEST_CONTEXT
+{
+    ULONG Calls;
+    ULONG FailureMask;
+    PTP_CONFIGURATION_TRANSFER Transfers[8];
+} PTP_CONFIGURATION_TEST_CONTEXT, *PPTP_CONFIGURATION_TEST_CONTEXT;
 
 static
 NTSTATUS
@@ -202,6 +255,64 @@ PtpTestValidateDescriptor(
                                              PtpTestGetFeature,
                                              TestContext,
                                              Capabilities);
+    HidP_FreeCollectionDescription(&DeviceDescription);
+    return Status;
+}
+
+static
+NTSTATUS
+NTAPI
+PtpTestSetFeature(
+    _In_ PVOID Context,
+    _In_ UCHAR ReportId,
+    _In_reads_bytes_(ReportLength) PUCHAR ReportBuffer,
+    _In_ ULONG ReportLength)
+{
+    PPTP_CONFIGURATION_TEST_CONTEXT TestContext = Context;
+    PPTP_CONFIGURATION_TRANSFER Transfer;
+    ULONG Call = TestContext->Calls++;
+
+    if (Call < RTL_NUMBER_OF(TestContext->Transfers))
+    {
+        Transfer = &TestContext->Transfers[Call];
+        Transfer->ReportId = ReportId;
+        Transfer->ReportLength = ReportLength;
+        RtlCopyMemory(Transfer->Report,
+                      ReportBuffer,
+                      min(ReportLength, sizeof(Transfer->Report)));
+    }
+
+    if (TestContext->FailureMask & (1UL << Call))
+        return STATUS_IO_DEVICE_ERROR;
+
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+PtpTestValidateConfigurationDescriptor(
+    _In_reads_bytes_(DescriptorLength) PUCHAR Descriptor,
+    _In_ ULONG DescriptorLength,
+    _Out_ PHIDCLASS_PTP_CONFIGURATION Configuration)
+{
+    HIDCLASS_PTP_CAPABILITIES Capabilities;
+    HIDP_DEVICE_DESC DeviceDescription;
+    NTSTATUS Status;
+
+    Status = HidP_GetCollectionDescription(Descriptor,
+                                           DescriptorLength,
+                                           NonPagedPool,
+                                           &DeviceDescription);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlZeroMemory(&Capabilities, sizeof(Capabilities));
+    Capabilities.Present = TRUE;
+    Capabilities.Valid = TRUE;
+    Status = HidClassPtpInitializeConfiguration(&DeviceDescription,
+                                                &Capabilities,
+                                                Configuration);
     HidP_FreeCollectionDescription(&DeviceDescription);
     return Status;
 }
@@ -348,4 +459,248 @@ TestHidClassPtpCapabilities(VOID)
     ok_eq_hex(Status, STATUS_NOT_FOUND);
     ok(!Capabilities.Present, "Non-touchpad collection was detected as a touchpad\n");
     ok_eq_ulong(Context.Calls, 0);
+}
+
+VOID
+TestHidClassPtpConfiguration(VOID)
+{
+    HIDCLASS_PTP_CONFIGURATION Configuration;
+    HIDCLASS_PTP_CAPABILITIES Capabilities;
+    PTP_CONFIGURATION_TEST_CONTEXT Context;
+    HIDP_DEVICE_DESC DeviceDescription;
+    UCHAR Descriptor[sizeof(PtpConfigurationDescriptor)];
+    ULONG Selection;
+    ULONG Index;
+    NTSTATUS Status;
+
+    ok_eq_uint(PtpConfigurationDescriptor[PTP_CONFIG_MODE_MAXIMUM_OFFSET], 0x0a);
+    ok_eq_uint(PtpConfigurationDescriptor[PTP_CONFIG_MODE_SIZE_OFFSET], 0x10);
+    ok_eq_uint(PtpConfigurationDescriptor[PTP_CONFIG_SELECTIVE_ID_OFFSET], PTP_SELECTIVE_REPORT_ID);
+    ok_eq_uint(PtpConfigurationDescriptor[PTP_CONFIG_BUTTON_USAGE_OFFSET], 0x58);
+    ok_eq_uint(PtpConfigurationDescriptor[PTP_CONFIG_SELECTIVE_MAXIMUM_OFFSET], 0x01);
+
+    Status = HidP_GetCollectionDescription(PtpConfigurationDescriptor,
+                                           sizeof(PtpConfigurationDescriptor),
+                                           NonPagedPool,
+                                           &DeviceDescription);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    RtlZeroMemory(&Capabilities, sizeof(Capabilities));
+    Capabilities.Present = TRUE;
+    Capabilities.Valid = TRUE;
+    Status = HidClassPtpInitializeConfiguration(&DeviceDescription,
+                                                &Capabilities,
+                                                &Configuration);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok(Configuration.Valid, "Configuration descriptor was not validated\n");
+    ok(!Configuration.DeviceModeKnown, "Device mode was recorded before a successful report\n");
+    ok(!Configuration.SelectiveReportingKnown,
+       "Selective-reporting state was recorded before a successful report\n");
+    ok_eq_uint(Configuration.CollectionNumber, 1);
+    ok_eq_uint(Configuration.DeviceModeReportId, PTP_DEVICE_MODE_REPORT_ID);
+    ok_eq_uint(Configuration.SelectiveReportingReportId, PTP_SELECTIVE_REPORT_ID);
+
+    RtlZeroMemory(&Context, sizeof(Context));
+    Status = HidClassPtpSetDeviceMode(&DeviceDescription,
+                                      &Configuration,
+                                      3,
+                                      PtpTestSetFeature,
+                                      &Context);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok(Configuration.DeviceModeKnown, "Successful mode report was not recorded\n");
+    ok_eq_uint(Configuration.DeviceMode, 3);
+    ok_eq_ulong(Context.Calls, 1);
+    ok_eq_uint(Context.Transfers[0].ReportId, PTP_DEVICE_MODE_REPORT_ID);
+    ok_eq_ulong(Context.Transfers[0].ReportLength, 3);
+    ok_eq_uint(Context.Transfers[0].Report[0], PTP_DEVICE_MODE_REPORT_ID);
+    ok_eq_uint(Context.Transfers[0].Report[1], 3);
+    ok_eq_uint(Context.Transfers[0].Report[2], 0);
+
+    Status = HidClassPtpSetDeviceMode(&DeviceDescription,
+                                      &Configuration,
+                                      0,
+                                      PtpTestSetFeature,
+                                      &Context);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_uint(Configuration.DeviceMode, 0);
+    ok_eq_ulong(Context.Calls, 2);
+    ok_eq_uint(Context.Transfers[1].Report[1], 0);
+
+    Status = HidClassPtpSetDeviceMode(&DeviceDescription,
+                                      &Configuration,
+                                      2,
+                                      PtpTestSetFeature,
+                                      &Context);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    ok_eq_uint(Configuration.DeviceMode, 0);
+    ok_eq_ulong(Context.Calls, 2);
+
+    for (Selection = 0; Selection < 4; Selection++)
+    {
+        RtlZeroMemory(&Context, sizeof(Context));
+        Status = HidClassPtpSetSelectiveReporting(&DeviceDescription,
+                                                  &Configuration,
+                                                  !!(Selection & 1),
+                                                  !!(Selection & 2),
+                                                  PtpTestSetFeature,
+                                                  &Context);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        ok(Configuration.SelectiveReportingKnown,
+           "Successful selective report was not recorded\n");
+        ok_eq_uint(Configuration.SurfaceReportingEnabled, !!(Selection & 1));
+        ok_eq_uint(Configuration.ButtonReportingEnabled, !!(Selection & 2));
+        ok_eq_ulong(Context.Calls, 1);
+        ok_eq_uint(Context.Transfers[0].ReportId, PTP_SELECTIVE_REPORT_ID);
+        ok_eq_ulong(Context.Transfers[0].ReportLength, 3);
+        ok_eq_uint(Context.Transfers[0].Report[0], PTP_SELECTIVE_REPORT_ID);
+        ok_eq_uint(Context.Transfers[0].Report[1] & 3, Selection);
+        ok_eq_uint(Context.Transfers[0].Report[2], 0);
+    }
+
+    /* A failed transfer leaves the corresponding applied state unknown. */
+    RtlZeroMemory(&Context, sizeof(Context));
+    Context.FailureMask = 1;
+    Status = HidClassPtpSetDeviceMode(&DeviceDescription,
+                                      &Configuration,
+                                      3,
+                                      PtpTestSetFeature,
+                                      &Context);
+    ok_eq_hex(Status, STATUS_IO_DEVICE_ERROR);
+    ok(!Configuration.DeviceModeKnown, "Failed mode report left state known\n");
+    ok_eq_ulong(Context.Calls, 1);
+
+    RtlZeroMemory(&Context, sizeof(Context));
+    Context.FailureMask = 1;
+    Status = HidClassPtpSetSelectiveReporting(&DeviceDescription,
+                                              &Configuration,
+                                              FALSE,
+                                              FALSE,
+                                              PtpTestSetFeature,
+                                              &Context);
+    ok_eq_hex(Status, STATUS_IO_DEVICE_ERROR);
+    ok(!Configuration.SelectiveReportingKnown,
+       "Failed selective report left state known\n");
+    ok_eq_ulong(Context.Calls, 1);
+
+    HidP_FreeCollectionDescription(&DeviceDescription);
+
+    /* An eight-bit Device Mode field and a high report ID are both valid. */
+    RtlCopyMemory(Descriptor,
+                  PtpConfigurationDescriptor,
+                  sizeof(PtpConfigurationDescriptor));
+    Descriptor[PTP_CONFIG_MODE_SIZE_OFFSET] = 8;
+    Descriptor[PTP_CONFIG_SELECTIVE_ID_OFFSET] = 0x15;
+    Status = HidP_GetCollectionDescription(Descriptor,
+                                           sizeof(Descriptor),
+                                           NonPagedPool,
+                                           &DeviceDescription);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+    Status = HidClassPtpInitializeConfiguration(&DeviceDescription,
+                                                &Capabilities,
+                                                &Configuration);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    RtlZeroMemory(&Context, sizeof(Context));
+    Status = HidClassPtpSetDeviceMode(&DeviceDescription,
+                                      &Configuration,
+                                      3,
+                                      PtpTestSetFeature,
+                                      &Context);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = HidClassPtpSetSelectiveReporting(&DeviceDescription,
+                                              &Configuration,
+                                              TRUE,
+                                              TRUE,
+                                              PtpTestSetFeature,
+                                              &Context);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_ulong(Context.Calls, 2);
+    ok_eq_ulong(Context.Transfers[0].ReportLength, 2);
+    ok_eq_uint(Context.Transfers[0].Report[1], 3);
+    ok_eq_uint(Context.Transfers[1].ReportId, 0x15);
+    HidP_FreeCollectionDescription(&DeviceDescription);
+
+    /* Invalid PTP capability state must not validate the configuration. */
+    Status = HidP_GetCollectionDescription(PtpConfigurationDescriptor,
+                                           sizeof(PtpConfigurationDescriptor),
+                                           NonPagedPool,
+                                           &DeviceDescription);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+    {
+        RtlZeroMemory(&Capabilities, sizeof(Capabilities));
+        Status = HidClassPtpInitializeConfiguration(&DeviceDescription,
+                                                    &Capabilities,
+                                                    &Configuration);
+        ok_eq_hex(Status, STATUS_DEVICE_CONFIGURATION_ERROR);
+        HidP_FreeCollectionDescription(&DeviceDescription);
+    }
+
+    /* Reject incomplete or contradictory Windows PTP descriptors. */
+    Status = PtpTestValidateConfigurationDescriptor(NonPtpDescriptor,
+                                                    sizeof(NonPtpDescriptor),
+                                                    &Configuration);
+    ok_eq_hex(Status, STATUS_DEVICE_CONFIGURATION_ERROR);
+
+    RtlCopyMemory(Descriptor,
+                  PtpConfigurationDescriptor,
+                  sizeof(PtpConfigurationDescriptor));
+    Descriptor[PTP_CONFIG_MODE_MAXIMUM_OFFSET] = 2;
+    Status = PtpTestValidateConfigurationDescriptor(Descriptor,
+                                                    sizeof(Descriptor),
+                                                    &Configuration);
+    ok_eq_hex(Status, STATUS_DEVICE_CONFIGURATION_ERROR);
+
+    RtlCopyMemory(Descriptor,
+                  PtpConfigurationDescriptor,
+                  sizeof(PtpConfigurationDescriptor));
+    Descriptor[PTP_CONFIG_BUTTON_USAGE_OFFSET] = 0x57;
+    Status = PtpTestValidateConfigurationDescriptor(Descriptor,
+                                                    sizeof(Descriptor),
+                                                    &Configuration);
+    ok_eq_hex(Status, STATUS_DEVICE_CONFIGURATION_ERROR);
+
+    RtlCopyMemory(Descriptor,
+                  PtpConfigurationDescriptor,
+                  sizeof(PtpConfigurationDescriptor));
+    Descriptor[PTP_CONFIG_SELECTIVE_MAXIMUM_OFFSET] = 2;
+    Status = PtpTestValidateConfigurationDescriptor(Descriptor,
+                                                    sizeof(Descriptor),
+                                                    &Configuration);
+    ok_eq_hex(Status, STATUS_DEVICE_CONFIGURATION_ERROR);
+
+    RtlCopyMemory(Descriptor,
+                  PtpConfigurationDescriptor,
+                  sizeof(PtpConfigurationDescriptor));
+    Descriptor[PTP_CONFIG_SELECTIVE_ID_OFFSET] = PTP_DEVICE_MODE_REPORT_ID;
+    Status = PtpTestValidateConfigurationDescriptor(Descriptor,
+                                                    sizeof(Descriptor),
+                                                    &Configuration);
+    ok_eq_hex(Status, STATUS_DEVICE_CONFIGURATION_ERROR);
+
+    /* A parser-visible short report is rejected before the first transfer. */
+    Status = HidP_GetCollectionDescription(PtpConfigurationDescriptor,
+                                           sizeof(PtpConfigurationDescriptor),
+                                           NonPagedPool,
+                                           &DeviceDescription);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+    {
+        RtlZeroMemory(&Capabilities, sizeof(Capabilities));
+        Capabilities.Present = TRUE;
+        Capabilities.Valid = TRUE;
+        for (Index = 0; Index < DeviceDescription.ReportIDsLength; Index++)
+        {
+            if (DeviceDescription.ReportIDs[Index].ReportID == PTP_SELECTIVE_REPORT_ID)
+                DeviceDescription.ReportIDs[Index].FeatureLength = 1;
+        }
+        Status = HidClassPtpInitializeConfiguration(&DeviceDescription,
+                                                    &Capabilities,
+                                                    &Configuration);
+        ok_eq_hex(Status, STATUS_DEVICE_CONFIGURATION_ERROR);
+        HidP_FreeCollectionDescription(&DeviceDescription);
+    }
 }
