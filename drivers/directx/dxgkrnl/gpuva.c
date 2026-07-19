@@ -1059,6 +1059,132 @@ GpuVaWritePteSpan(
     return STATUS_SUCCESS;
 }
 
+/*
+ * GpuVaRewriteSpanPtes
+ * Re-derive the leaf PTEs for [Address, Address + SizeInBytes) from the
+ * authoritative range list: mapped ranges point at their allocation's
+ * backing pages, Zero-protected reservations become Zero PTEs, everything
+ * else (NoAccess, plain reservations, gaps) is cleared.  A subrange whose
+ * allocation vanished or whose tables cannot grow is cleared and the
+ * failure reported, so the GPU faults instead of reading stale pages.
+ * Caller MUST hold GpuVaLock.
+ */
+static NTSTATUS
+GpuVaRewriteSpanPtes(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_ D3DGPU_VIRTUAL_ADDRESS Address,
+    _In_ ULONGLONG SizeInBytes)
+{
+    D3DGPU_VIRTUAL_ADDRESS EndAddress;
+    D3DGPU_VIRTUAL_ADDRESS Cursor;
+    NTSTATUS FinalStatus = STATUS_SUCCESS;
+    PLIST_ENTRY Entry;
+
+    if (!GpuVaGetRangeEnd(Address, SizeInBytes, &EndAddress))
+        return STATUS_INVALID_PARAMETER;
+
+    Cursor = Address;
+    for (Entry = Process->GpuVaRangeList.Flink;
+         Entry != &Process->GpuVaRangeList && Cursor < EndAddress;
+         Entry = Entry->Flink)
+    {
+        PDXGKRNL_GPUVA_RANGE Range = CONTAINING_RECORD(Entry, DXGKRNL_GPUVA_RANGE, RangeListEntry);
+        D3DGPU_VIRTUAL_ADDRESS RangeEnd;
+        D3DGPU_VIRTUAL_ADDRESS OverlapEnd;
+        ULONGLONG OverlapSize;
+        NTSTATUS Status;
+
+        if (!GpuVaGetRangeEnd(Range->GpuVirtualAddress, Range->SizeInBytes, &RangeEnd))
+            continue;
+        if (RangeEnd <= Cursor)
+            continue;
+        if (Range->GpuVirtualAddress >= EndAddress)
+            break;
+        if (Range->GpuVirtualAddress > Cursor)
+        {
+            GpuVaClearPteSpan(Process, Cursor, Range->GpuVirtualAddress - Cursor);
+            Cursor = Range->GpuVirtualAddress;
+        }
+        OverlapEnd = min(RangeEnd, EndAddress);
+        OverlapSize = OverlapEnd - Cursor;
+
+        if (Range->State == GpuVaStateMapped)
+        {
+            PDXGKVMM_ALLOCATION Allocation;
+
+            Status = DxgkVidMmReferenceProcessAllocation(Range->hAllocation, Adapter, Process, &Allocation);
+            if (NT_SUCCESS(Status))
+            {
+                if (Allocation->SystemMemory != NULL)
+                    Status = GpuVaWritePteSpan(Process, Cursor, OverlapSize, Allocation,
+                                 Range->AllocationOffset + (Cursor - Range->GpuVirtualAddress),
+                                 Range->Protection);
+                else
+                    Status = STATUS_NOT_SUPPORTED;
+                DxgkVidMmDereferenceAllocation(Allocation);
+            }
+            if (!NT_SUCCESS(Status))
+            {
+                GpuVaClearPteSpan(Process, Cursor, OverlapSize);
+                FinalStatus = Status;
+            }
+        }
+        else if (Range->Protection.Zero)
+        {
+            Status = GpuVaWritePteSpan(Process, Cursor, OverlapSize, NULL, 0, Range->Protection);
+            if (!NT_SUCCESS(Status))
+            {
+                GpuVaClearPteSpan(Process, Cursor, OverlapSize);
+                FinalStatus = Status;
+            }
+        }
+        else
+        {
+            GpuVaClearPteSpan(Process, Cursor, OverlapSize);
+        }
+        Cursor = OverlapEnd;
+    }
+    if (Cursor < EndAddress)
+        GpuVaClearPteSpan(Process, Cursor, EndAddress - Cursor);
+    return FinalStatus;
+}
+
+/*
+ * GpuVaOperationSpan
+ * Target VA span of an update operation (destination span for COPY).
+ */
+static BOOLEAN
+GpuVaOperationSpan(
+    _In_ CONST D3DDDI_UPDATEGPUVIRTUALADDRESS_OPERATION *Operation,
+    _Out_ D3DGPU_VIRTUAL_ADDRESS *Address,
+    _Out_ ULONGLONG *Size)
+{
+    switch (Operation->OperationType)
+    {
+        case D3DDDI_UPDATEGPUVIRTUALADDRESS_MAP:
+            *Address = Operation->Map.BaseAddress;
+            *Size = Operation->Map.SizeInBytes;
+            return TRUE;
+        case D3DDDI_UPDATEGPUVIRTUALADDRESS_UNMAP:
+            *Address = Operation->Unmap.BaseAddress;
+            *Size = Operation->Unmap.SizeInBytes;
+            return TRUE;
+        case D3DDDI_UPDATEGPUVIRTUALADDRESS_COPY:
+            *Address = Operation->Copy.DestAddress;
+            *Size = Operation->Copy.SizeInBytes;
+            return TRUE;
+        case D3DDDI_UPDATEGPUVIRTUALADDRESS_MAP_PROTECT:
+            *Address = Operation->MapProtect.BaseAddress;
+            *Size = Operation->MapProtect.SizeInBytes;
+            return TRUE;
+        default:
+            *Address = 0;
+            *Size = 0;
+            return FALSE;
+    }
+}
+
 
 /* PROCESS LIFECYCLE **********************************************************/
 
@@ -1718,12 +1844,13 @@ DxgkGpuVaValidateRange(
     return Valid;
 }
 
-NTSTATUS
-DxgkGpuVaValidateUpdate(
+static NTSTATUS
+DxgkpGpuVaUpdateWorker(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ PDXGKRNL_PROCESS Process,
     _In_reads_(NumOperations) CONST D3DDDI_UPDATEGPUVIRTUALADDRESS_OPERATION *Operations,
-    _In_ UINT NumOperations)
+    _In_ UINT NumOperations,
+    _In_ BOOLEAN Commit)
 {
     LIST_ENTRY WorkingHead;
     D3DGPU_VIRTUAL_ADDRESS ExpectedReservationBase = 0;
@@ -1739,7 +1866,18 @@ DxgkGpuVaValidateUpdate(
 
     if (Adapter == NULL || Process == NULL || Process->Adapter != Adapter || Operations == NULL || NumOperations == 0)
         return STATUS_INVALID_PARAMETER;
+    if (Commit && (!Adapter->GpuMmuCapsValid || Adapter->GpuMmuCaps.PageTableUpdateMode != DXGK_PAGETABLEUPDATE_CPU_VIRTUAL))
+        return STATUS_NOT_SUPPORTED;
     ExAcquireFastMutex(&Process->GpuVaLock);
+    if (Commit)
+    {
+        Status = GpuVaEnsureRootPageTable(Process);
+        if (!NT_SUCCESS(Status))
+        {
+            ExReleaseFastMutex(&Process->GpuVaLock);
+            return Status;
+        }
+    }
     if (!GpuVaCountList(&Process->GpuVaRangeList, GPUVA_MAX_PROCESS_RANGES, &AuthoritativeCount) || AuthoritativeCount != Process->GpuVaRangeCount)
     {
         ExReleaseFastMutex(&Process->GpuVaLock);
@@ -1865,9 +2003,73 @@ DxgkGpuVaValidateUpdate(
     }
 
 ValidationDone:
+    if (Commit && NT_SUCCESS(Status))
+    {
+        ULONGLONG TotalMapped = 0;
+        PLIST_ENTRY Entry;
+
+        GpuVaFreeList(&Process->GpuVaRangeList);
+        while (!IsListEmpty(&WorkingHead))
+        {
+            PDXGKRNL_GPUVA_RANGE Range = CONTAINING_RECORD(RemoveHeadList(&WorkingHead), DXGKRNL_GPUVA_RANGE, RangeListEntry);
+
+            InitializeListHead(&Range->RangeListEntry);
+            InsertTailList(&Process->GpuVaRangeList, &Range->RangeListEntry);
+        }
+        Process->GpuVaRangeCount = WorkingCount;
+
+        for (Index = 0; Index < NumOperations; ++Index)
+        {
+            D3DGPU_VIRTUAL_ADDRESS Address;
+            ULONGLONG Size;
+            NTSTATUS PteStatus;
+
+            if (!GpuVaOperationSpan(&Operations[Index], &Address, &Size))
+                continue;
+            PteStatus = GpuVaRewriteSpanPtes(Adapter, Process, Address, Size);
+            if (!NT_SUCCESS(PteStatus))
+                Status = PteStatus;
+        }
+
+        for (Entry = Process->GpuVaRangeList.Flink; Entry != &Process->GpuVaRangeList; Entry = Entry->Flink)
+        {
+            PDXGKRNL_GPUVA_RANGE Range = CONTAINING_RECORD(Entry, DXGKRNL_GPUVA_RANGE, RangeListEntry);
+
+            if (Range->State == GpuVaStateMapped)
+                TotalMapped += Range->SizeInBytes;
+        }
+        Process->GpuVaTotalMapped = TotalMapped;
+    }
     GpuVaFreeList(&WorkingHead);
     ExReleaseFastMutex(&Process->GpuVaLock);
     return Status;
+}
+
+NTSTATUS
+DxgkGpuVaValidateUpdate(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_reads_(NumOperations) CONST D3DDDI_UPDATEGPUVIRTUALADDRESS_OPERATION *Operations,
+    _In_ UINT NumOperations)
+{
+    return DxgkpGpuVaUpdateWorker(Adapter, Process, Operations, NumOperations, FALSE);
+}
+
+/*
+ * DxgkGpuVaApplyUpdate
+ *
+ * Validate and COMMIT a batch of UpdateGpuVirtualAddress operations: the
+ * fully-updated working list becomes authoritative and the leaf PTEs of
+ * every touched span are rewritten from it (CPU_VIRTUAL mode).
+ */
+NTSTATUS
+DxgkGpuVaApplyUpdate(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_reads_(NumOperations) CONST D3DDDI_UPDATEGPUVIRTUALADDRESS_OPERATION *Operations,
+    _In_ UINT NumOperations)
+{
+    return DxgkpGpuVaUpdateWorker(Adapter, Process, Operations, NumOperations, TRUE);
 }
 
 
