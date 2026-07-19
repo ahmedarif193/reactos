@@ -110,6 +110,9 @@ typedef struct
     //
     UCHAR ReadReportActive;
 
+    /* consecutive failed read completions; the pump gives up only after a burst */
+    ULONG ReadFailureCount;
+
     //
     // stop reading flag
     //

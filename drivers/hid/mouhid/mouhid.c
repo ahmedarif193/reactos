@@ -755,12 +755,24 @@ MouHid_ReadCompletion(
 
     if (!NT_SUCCESS(Irp->IoStatus.Status))
     {
-        DPRINT1("[MOUHID] ReadCompletion failed with %x\n",
-                Irp->IoStatus.Status);
+        /* A single odd completion (say STATUS_BUFFER_TOO_SMALL for one
+           oversized report) must not kill pointer input for good: requeue
+           and only give up after a solid burst of consecutive failures. */
+        DeviceExtension->ReadFailureCount++;
+        DPRINT1("[MOUHID] ReadCompletion failed with %x (failure %lu)\n", Irp->IoStatus.Status, DeviceExtension->ReadFailureCount);
+        if (DeviceExtension->ReadFailureCount < 8)
+        {
+            MouHid_ContinueRead(DeviceExtension);
+            return STATUS_MORE_PROCESSING_REQUIRED;
+        }
+
+        DPRINT1("[MOUHID] ReadCompletion giving up after repeated failures\n");
         DeviceExtension->ReadReportActive = FALSE;
         KeSetEvent(&DeviceExtension->ReadCompletionEvent, 0, 0);
         return STATUS_MORE_PROCESSING_REQUIRED;
     }
+
+    DeviceExtension->ReadFailureCount = 0;
 
     /* get mouse change */
     TouchpadWheelDelta = 0;
@@ -1308,8 +1320,13 @@ MouHid_ConfigureTouchpad(
         {
             if (FingerCount == MOUHID_PTP_MAX_CONTACTS)
             {
-                ExFreePoolWithTag(Nodes, MOUHID_TAG);
-                return STATUS_DEVICE_CONFIGURATION_ERROR;
+                /* hidclass accepts the device with Contact Count Maximum
+                   up to 5; a descriptor with more finger collections than
+                   that still works with the extra contacts ignored, and
+                   rejecting it here after hidclass switched the device to
+                   PTP mode would leave both collections mute. */
+                DPRINT1("[MOUHID] More than %u finger collections, extra contacts ignored\n", MOUHID_PTP_MAX_CONTACTS);
+                break;
             }
             DeviceExtension->FingerLinks[FingerCount++] = (USHORT)Index;
         }
@@ -1328,6 +1345,7 @@ MouHid_ConfigureTouchpad(
             HID_USAGE_PAGE_DIGITIZER,
             HID_USAGE_DIGITIZER_SCAN_TIME))
     {
+        DPRINT1("[MOUHID] Touchpad collection lacks contact count/scan time, rejecting\n");
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
 
@@ -1361,6 +1379,7 @@ MouHid_ConfigureTouchpad(
                 HID_USAGE_PAGE_GENERIC,
                 HID_USAGE_GENERIC_Y))
         {
+            DPRINT1("[MOUHID] Finger collection %u lacks a mandatory usage, rejecting\n", Index);
             return STATUS_DEVICE_CONFIGURATION_ERROR;
         }
     }
@@ -1870,6 +1889,8 @@ MouHid_Pnp(
 
         /* lets start the device */
         Status = MouHid_StartDevice(DeviceObject);
+        if (!NT_SUCCESS(Status))
+            DPRINT1("[MOUHID] MouHid_StartDevice failed with %x\n", Status);
         DPRINT("MouHid_StartDevice %x\n", Status);
 
         /* complete request */
