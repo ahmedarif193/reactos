@@ -134,8 +134,8 @@ typedef struct __GLOBAL_ITEM_STATE_
     ULONG  LogicialMaximum;
     ULONG  PhysicalMinimum;
     ULONG  PhysicalMaximum;
-    UCHAR  UnitExponent;
-    UCHAR  Unit;
+    ULONG  UnitExponent;
+    ULONG  Unit;
     ULONG  ReportSize;
     ULONG  ReportCount;
     UCHAR  ReportId;
@@ -187,6 +187,9 @@ typedef struct
 {
     ULONG ByteOffset;
     UCHAR Shift;
+    UCHAR UnitExponent;
+    USHORT LinkCollection;
+    USHORT BitField;
     ULONG Mask;
     UCHAR BitCount;
     UCHAR HasData;
@@ -196,8 +199,9 @@ typedef struct
     ULONG Maximum;
     ULONG UsageMinimum;
     ULONG UsageMaximum;
-    ULONG Data;
-    UCHAR Valid;
+    ULONG PhysicalMinimum;
+    ULONG PhysicalMaximum;
+    ULONG Units;
 }HID_REPORT_ITEM, *PHID_REPORT_ITEM;
 
 struct _HID_REPORT;
@@ -208,6 +212,7 @@ typedef struct __HID_COLLECTION__
     ULONG Usage;
     UCHAR StringID;
     UCHAR PhysicalID;
+    USHORT LinkCollection;
     ULONG ReportCount;
     ULONG NodeCount;
 
@@ -273,6 +278,13 @@ HidParser_GetCollectionUsagePage(
     OUT PUSHORT Usage,
     OUT PUSHORT UsagePage);
 
+NTSTATUS
+HidParser_GetLinkCollectionUsagePage(
+    IN PVOID CollectionContext,
+    IN USHORT LinkCollection,
+    OUT PUSHORT Usage,
+    OUT PUSHORT UsagePage);
+
 ULONG
 HidParser_GetReportLength(
     IN PVOID CollectionContext,
@@ -313,6 +325,7 @@ HidParser_GetSpecificValueCapsWithReport(
     IN PVOID CollectionContext,
     IN UCHAR ReportType,
     IN USHORT UsagePage,
+    IN USHORT LinkCollection,
     IN USHORT Usage,
     OUT PHIDP_VALUE_CAPS  ValueCaps,
     IN OUT PUSHORT  ValueCapsLength);
@@ -322,6 +335,7 @@ HidParser_GetSpecificButtonCapsWithReport(
     IN PVOID CollectionContext,
     IN UCHAR ReportType,
     IN USHORT UsagePage,
+    IN USHORT LinkCollection,
     IN USHORT Usage,
     OUT PHIDP_BUTTON_CAPS ButtonCaps,
     IN OUT PULONG ButtonCapsLength);
@@ -331,6 +345,7 @@ HidParser_GetUsagesWithReport(
     IN PVOID CollectionContext,
     IN UCHAR  ReportType,
     IN USAGE  UsagePage,
+    IN USHORT LinkCollection,
     OUT USAGE  *UsageList,
     IN OUT PULONG UsageLength,
     IN PCHAR  ReportDescriptor,
@@ -341,6 +356,7 @@ HidParser_GetScaledUsageValueWithReport(
     IN PVOID CollectionContext,
     IN UCHAR ReportType,
     IN USAGE UsagePage,
+    IN USHORT LinkCollection,
     IN USAGE  Usage,
     OUT PLONG UsageValue,
     IN PCHAR ReportDescriptor,
@@ -351,9 +367,21 @@ HidParser_GetUsageValueWithReport(
     IN PVOID CollectionContext,
     IN UCHAR ReportType,
     IN USAGE UsagePage,
+    IN USHORT LinkCollection,
     IN USAGE  Usage,
     OUT PULONG UsageValue,
     IN PCHAR ReportDescriptor,
+    IN ULONG ReportDescriptorLength);
+
+NTSTATUS
+HidParser_SetUsageValueWithReport(
+    IN PVOID CollectionContext,
+    IN UCHAR ReportType,
+    IN USAGE UsagePage,
+    IN USHORT LinkCollection,
+    IN USAGE Usage,
+    IN ULONG UsageValue,
+    IN OUT PCHAR ReportDescriptor,
     IN ULONG ReportDescriptorLength);
 
 /* parser.c */
@@ -405,5 +433,20 @@ PHID_REPORT
 HidParser_GetReportInCollection(
     IN PVOID Context,
     IN UCHAR ReportType);
+
+PHID_REPORT
+HidParser_GetReportInCollectionById(
+    IN PVOID Context,
+    IN UCHAR ReportType,
+    IN UCHAR ReportId);
+
+ULONG
+HidParser_GetReportCountInCollection(
+    IN PVOID Context);
+
+PHID_REPORT
+HidParser_GetReportByIndex(
+    IN PVOID Context,
+    IN ULONG Index);
 
 #endif /* _HIDPARSER_H_ */

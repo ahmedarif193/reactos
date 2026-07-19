@@ -337,6 +337,13 @@ HidParser_TranslateCustUsage(
     IN PHIDP_INSERT_SCANCODES  InsertCodesProcedure,
     IN PVOID  InsertCodesContext);
 
+NTSTATUS
+HidParser_TranslateSystemUsage(
+    IN USAGE Usage,
+    IN HIDP_KEYBOARD_DIRECTION KeyAction,
+    IN PHIDP_INSERT_SCANCODES InsertCodesProcedure,
+    IN PVOID InsertCodesContext);
+
 HIDAPI
 NTSTATUS
 NTAPI

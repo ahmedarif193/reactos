@@ -346,6 +346,80 @@ HidParser_GetReportInCollection(
 }
 
 static
+PHID_REPORT
+HidParser_SearchReportInCollectionById(
+    IN PHID_COLLECTION_CONTEXT CollectionContext,
+    IN PHID_COLLECTION Collection,
+    IN UCHAR ReportType,
+    IN UCHAR ReportId)
+{
+    PHID_COLLECTION SubCollection;
+    PHID_REPORT Report;
+    ULONG Index;
+
+    for (Index = 0; Index < Collection->ReportCount; Index++)
+    {
+        Report = (PHID_REPORT)(CollectionContext->RawData +
+                               Collection->Offsets[Index]);
+        if (Report->Type == ReportType && Report->ReportID == ReportId)
+            return Report;
+    }
+
+    for (Index = 0; Index < Collection->NodeCount; Index++)
+    {
+        SubCollection = (PHID_COLLECTION)(CollectionContext->RawData +
+            Collection->Offsets[Collection->ReportCount + Index]);
+        Report = HidParser_SearchReportInCollectionById(CollectionContext,
+                                                        SubCollection,
+                                                        ReportType,
+                                                        ReportId);
+        if (Report != NULL)
+            return Report;
+    }
+
+    return NULL;
+}
+
+PHID_REPORT
+HidParser_GetReportInCollectionById(
+    IN PVOID Context,
+    IN UCHAR ReportType,
+    IN UCHAR ReportId)
+{
+    PHID_COLLECTION_CONTEXT CollectionContext = Context;
+
+    return HidParser_SearchReportInCollectionById(
+               CollectionContext,
+               (PHID_COLLECTION)&CollectionContext->RawData,
+               ReportType,
+               ReportId);
+}
+
+ULONG
+HidParser_GetReportCountInCollection(
+    IN PVOID Context)
+{
+    PHID_COLLECTION Collection = HidParser_GetCollectionFromContext(Context);
+
+    return Collection != NULL ? Collection->ReportCount : 0;
+}
+
+PHID_REPORT
+HidParser_GetReportByIndex(
+    IN PVOID Context,
+    IN ULONG Index)
+{
+    PHID_COLLECTION_CONTEXT CollectionContext = Context;
+    PHID_COLLECTION Collection = HidParser_GetCollectionFromContext(Context);
+
+    if (Collection == NULL || Index >= Collection->ReportCount)
+        return NULL;
+
+    return (PHID_REPORT)(CollectionContext->RawData +
+                         Collection->Offsets[Index]);
+}
+
+static
 ULONG
 HidParser_BitsToBytes(
     IN ULONG BitCount)
@@ -555,6 +629,68 @@ HidParser_GetCollectionFromContext(
     // return root collection
     //
     return (PHID_COLLECTION)CollectionContext->RawData;
+}
+
+static
+BOOLEAN
+HidParser_FindLinkCollectionUsage(
+    _In_ PHID_COLLECTION_CONTEXT CollectionContext,
+    _In_ ULONG CollectionOffset,
+    _In_ USHORT LinkCollection,
+    _Out_ PULONG Usage)
+{
+    PHID_COLLECTION Collection;
+    ULONG Index;
+
+    if (!HidParser_GetCollectionAtOffset(CollectionContext,
+                                         CollectionOffset,
+                                         &Collection))
+    {
+        return FALSE;
+    }
+
+    if (Collection->LinkCollection == LinkCollection)
+    {
+        *Usage = Collection->Usage;
+        return TRUE;
+    }
+
+    for (Index = 0; Index < Collection->NodeCount; Index++)
+    {
+        if (HidParser_FindLinkCollectionUsage(
+                CollectionContext,
+                Collection->Offsets[Collection->ReportCount + Index],
+                LinkCollection,
+                Usage))
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+NTSTATUS
+HidParser_GetLinkCollectionUsagePage(
+    _In_ PVOID Context,
+    _In_ USHORT LinkCollection,
+    _Out_ PUSHORT Usage,
+    _Out_ PUSHORT UsagePage)
+{
+    PHID_COLLECTION_CONTEXT CollectionContext = Context;
+    ULONG ExtendedUsage;
+
+    if (Context == NULL || Usage == NULL || UsagePage == NULL ||
+        !HidParser_FindLinkCollectionUsage(CollectionContext,
+                                           0,
+                                           LinkCollection,
+                                           &ExtendedUsage))
+    {
+        return HIDP_STATUS_USAGE_NOT_FOUND;
+    }
+
+    *Usage = (USHORT)(ExtendedUsage & 0xFFFF);
+    *UsagePage = (USHORT)(ExtendedUsage >> 16);
+    return HIDP_STATUS_SUCCESS;
 }
 
 ULONG

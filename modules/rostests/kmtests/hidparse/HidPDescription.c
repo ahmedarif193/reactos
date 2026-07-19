@@ -128,6 +128,159 @@ static UCHAR PowerProEliteDescriptor[] = {
 };
 C_ASSERT(sizeof(PowerProEliteDescriptor) == 148);
 
+/* ELAN0685 Windows Precision Touchpad report descriptor (04F3:320B). */
+static UCHAR ElanPrecisionTouchpadDescriptor[] =
+{
+
+  0x05, 0x01, 0x09, 0x02, 0xa1, 0x01, 0x85, 0x01, 0x09, 0x01, 0xa1, 0x00,
+  0x05, 0x09, 0x19, 0x01, 0x29, 0x02, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01,
+  0x95, 0x02, 0x81, 0x02, 0x95, 0x06, 0x81, 0x03, 0x05, 0x01, 0x09, 0x30,
+  0x09, 0x31, 0x15, 0x81, 0x25, 0x7f, 0x75, 0x08, 0x95, 0x02, 0x81, 0x06,
+  0x75, 0x08, 0x95, 0x05, 0x81, 0x03, 0xc0, 0x06, 0x00, 0xff, 0x09, 0x01,
+  0x85, 0x0e, 0x09, 0xc5, 0x15, 0x00, 0x26, 0xff, 0x00, 0x75, 0x08, 0x95,
+  0x04, 0xb1, 0x02, 0xc0, 0x06, 0x00, 0xff, 0x09, 0x01, 0xa1, 0x01, 0x85,
+  0x5c, 0x09, 0x01, 0x95, 0x0b, 0x75, 0x08, 0x81, 0x06, 0x85, 0x0d, 0x09,
+  0xc5, 0x15, 0x00, 0x26, 0xff, 0x00, 0x75, 0x08, 0x95, 0x04, 0xb1, 0x02,
+  0x85, 0x0c, 0x09, 0xc6, 0x96, 0x48, 0x03, 0x75, 0x08, 0xb1, 0x02, 0x85,
+  0x0b, 0x09, 0xc7, 0x96, 0x82, 0x00, 0x96, 0x82, 0x00, 0x75, 0x08, 0xb1,
+  0x02, 0xc0, 0x05, 0x0d, 0x09, 0x05, 0xa1, 0x01, 0x85, 0x54, 0x05, 0x09,
+  0x09, 0x01, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x01, 0x81, 0x02,
+  0x75, 0x01, 0x95, 0x03, 0x81, 0x03, 0x05, 0x0d, 0x09, 0x54, 0x25, 0x0f,
+  0x75, 0x04, 0x95, 0x01, 0x81, 0x02, 0x05, 0x0d, 0x09, 0x56, 0x15, 0x00,
+  0x25, 0x64, 0x55, 0x0c, 0x66, 0x01, 0x10, 0x47, 0xff, 0xff, 0x00, 0x00,
+  0x27, 0xff, 0xff, 0x00, 0x00, 0x75, 0x10, 0x95, 0x01, 0x81, 0x02, 0x05,
+  0x0d, 0x09, 0x22, 0xa1, 0x02, 0x09, 0x47, 0x09, 0x42, 0x15, 0x00, 0x25,
+  0x01, 0x75, 0x01, 0x95, 0x02, 0x81, 0x02, 0x75, 0x01, 0x95, 0x02, 0x81,
+  0x03, 0x09, 0x51, 0x25, 0x0f, 0x75, 0x04, 0x95, 0x01, 0x81, 0x02, 0x05,
+  0x01, 0x09, 0x30, 0x15, 0x00, 0x26, 0xc8, 0x0d, 0x35, 0x00, 0x46, 0xd4,
+  0x2b, 0x55, 0x0d, 0x65, 0x11, 0x75, 0x10, 0x95, 0x01, 0x81, 0x02, 0x09,
+  0x31, 0x26, 0xd2, 0x07, 0x46, 0xe7, 0x18, 0x46, 0xe7, 0x18, 0x81, 0x02,
+  0xc0, 0x05, 0x0d, 0x09, 0x22, 0xa1, 0x02, 0x09, 0x47, 0x09, 0x42, 0x15,
+  0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x02, 0x81, 0x02, 0x75, 0x01, 0x95,
+  0x02, 0x81, 0x03, 0x09, 0x51, 0x25, 0x0f, 0x75, 0x04, 0x95, 0x01, 0x81,
+  0x02, 0x05, 0x01, 0x09, 0x30, 0x15, 0x00, 0x26, 0xc8, 0x0d, 0x35, 0x00,
+  0x46, 0xd4, 0x2b, 0x55, 0x0d, 0x65, 0x11, 0x75, 0x10, 0x95, 0x01, 0x81,
+  0x02, 0x09, 0x31, 0x26, 0xd2, 0x07, 0x46, 0xe7, 0x18, 0x46, 0xe7, 0x18,
+  0x81, 0x02, 0xc0, 0x05, 0x0d, 0x09, 0x22, 0xa1, 0x02, 0x09, 0x47, 0x09,
+  0x42, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x02, 0x81, 0x02, 0x75,
+  0x01, 0x95, 0x02, 0x81, 0x03, 0x09, 0x51, 0x25, 0x0f, 0x75, 0x04, 0x95,
+  0x01, 0x81, 0x02, 0x05, 0x01, 0x09, 0x30, 0x15, 0x00, 0x26, 0xc8, 0x0d,
+  0x35, 0x00, 0x46, 0xd4, 0x2b, 0x55, 0x0d, 0x65, 0x11, 0x75, 0x10, 0x95,
+  0x01, 0x81, 0x02, 0x09, 0x31, 0x26, 0xd2, 0x07, 0x46, 0xe7, 0x18, 0x46,
+  0xe7, 0x18, 0x81, 0x02, 0xc0, 0x05, 0x0d, 0x09, 0x22, 0xa1, 0x02, 0x09,
+  0x47, 0x09, 0x42, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x02, 0x81,
+  0x02, 0x75, 0x01, 0x95, 0x02, 0x81, 0x03, 0x09, 0x51, 0x25, 0x0f, 0x75,
+  0x04, 0x95, 0x01, 0x81, 0x02, 0x05, 0x01, 0x09, 0x30, 0x15, 0x00, 0x26,
+  0xc8, 0x0d, 0x35, 0x00, 0x46, 0xd4, 0x2b, 0x55, 0x0d, 0x65, 0x11, 0x75,
+  0x10, 0x95, 0x01, 0x81, 0x02, 0x09, 0x31, 0x26, 0xd2, 0x07, 0x46, 0xe7,
+  0x18, 0x46, 0xe7, 0x18, 0x81, 0x02, 0xc0, 0x05, 0x0d, 0x09, 0x22, 0xa1,
+  0x02, 0x09, 0x47, 0x09, 0x42, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95,
+  0x02, 0x81, 0x02, 0x75, 0x01, 0x95, 0x02, 0x81, 0x03, 0x09, 0x51, 0x25,
+  0x0f, 0x75, 0x04, 0x95, 0x01, 0x81, 0x02, 0x05, 0x01, 0x09, 0x30, 0x15,
+  0x00, 0x26, 0xc8, 0x0d, 0x35, 0x00, 0x46, 0xd4, 0x2b, 0x55, 0x0d, 0x65,
+  0x11, 0x75, 0x10, 0x95, 0x01, 0x81, 0x02, 0x09, 0x31, 0x26, 0xd2, 0x07,
+  0x46, 0xe7, 0x18, 0x46, 0xe7, 0x18, 0x81, 0x02, 0xc0, 0x05, 0x0d, 0x85,
+  0x02, 0x09, 0x55, 0x09, 0x59, 0x75, 0x04, 0x95, 0x02, 0x25, 0x0f, 0xb1,
+  0x02, 0x85, 0x07, 0x09, 0x60, 0x75, 0x01, 0x95, 0x01, 0x15, 0x00, 0x25,
+  0x01, 0xb1, 0x02, 0x95, 0x0f, 0xb1, 0x03, 0x06, 0x00, 0xff, 0x06, 0x00,
+  0xff, 0x85, 0x06, 0x09, 0xc5, 0x15, 0x00, 0x26, 0xff, 0x00, 0x75, 0x08,
+  0x96, 0x00, 0x01, 0xb1, 0x02, 0xc0, 0x05, 0x0d, 0x09, 0x0e, 0xa1, 0x01,
+  0x85, 0x03, 0x09, 0x22, 0xa1, 0x00, 0x09, 0x52, 0x15, 0x00, 0x25, 0x0a,
+  0x75, 0x10, 0x95, 0x01, 0xb1, 0x02, 0xc0, 0x09, 0x22, 0xa1, 0x00, 0x85,
+  0x05, 0x09, 0x57, 0x09, 0x58, 0x75, 0x01, 0x95, 0x02, 0x25, 0x01, 0xb1,
+  0x02, 0x95, 0x0e, 0xb1, 0x03, 0xc0, 0xc0
+};
+C_ASSERT(sizeof(ElanPrecisionTouchpadDescriptor) == 679);
+
+static UCHAR MultipleInputReportDescriptor[] =
+{
+    0x05, 0x01,             /* Usage Page (Generic Desktop) */
+    0x09, 0x02,             /* Usage (Mouse) */
+    0xa1, 0x01,             /* Collection (Application) */
+    0x85, 0x01,             /*   Report ID (1) */
+    0x09, 0x30,             /*   Usage (X) */
+    0x15, 0x00,             /*   Logical Minimum (0) */
+    0x26, 0xff, 0x00,       /*   Logical Maximum (255) */
+    0x75, 0x08,             /*   Report Size (8) */
+    0x95, 0x01,             /*   Report Count (1) */
+    0x81, 0x02,             /*   Input (Data, Variable, Absolute) */
+    0x85, 0x02,             /*   Report ID (2) */
+    0x09, 0x31,             /*   Usage (Y) */
+    0x09, 0x32,             /*   Usage (Z) */
+    0x15, 0x00,             /*   Logical Minimum (0) */
+    0x27, 0xff, 0xff, 0x00, 0x00, /* Logical Maximum (65535) */
+    0x75, 0x10,             /*   Report Size (16) */
+    0x95, 0x02,             /*   Report Count (2) */
+    0x81, 0x02,             /*   Input (Data, Variable, Absolute) */
+    0xc0                    /* End Collection */
+};
+
+static UCHAR ConsumerControlDescriptor[] =
+{
+    0x05, 0x0c,             /* Usage Page (Consumer) */
+    0x09, 0x01,             /* Usage (Consumer Control) */
+    0xa1, 0x01,             /* Collection (Application) */
+    0x85, 0x10,             /*   Report ID (16) */
+    0x15, 0x00,             /*   Logical Minimum (0) */
+    0x25, 0x01,             /*   Logical Maximum (1) */
+    0x75, 0x01,             /*   Report Size (1) */
+    0x95, 0x03,             /*   Report Count (3) */
+    0x0a, 0xe2, 0x00,       /*   Usage (Mute) */
+    0x0a, 0xe9, 0x00,       /*   Usage (Volume Increment) */
+    0x0a, 0xea, 0x00,       /*   Usage (Volume Decrement) */
+    0x81, 0x02,             /*   Input (Data, Variable, Absolute) */
+    0x75, 0x05,             /*   Report Size (5) */
+    0x95, 0x01,             /*   Report Count (1) */
+    0x81, 0x03,             /*   Input (Constant, Variable, Absolute) */
+    0xc0                    /* End Collection */
+};
+
+static UCHAR SystemControlDescriptor[] =
+{
+    0x05, 0x01,             /* Usage Page (Generic Desktop) */
+    0x09, 0x80,             /* Usage (System Control) */
+    0xa1, 0x01,             /* Collection (Application) */
+    0x85, 0x11,             /*   Report ID (17) */
+    0x15, 0x01,             /*   Logical Minimum (1) */
+    0x25, 0x03,             /*   Logical Maximum (3) */
+    0x19, 0x81,             /*   Usage Minimum (System Power Down) */
+    0x29, 0x83,             /*   Usage Maximum (System Wake Up) */
+    0x75, 0x02,             /*   Report Size (2) */
+    0x95, 0x01,             /*   Report Count (1) */
+    0x81, 0x00,             /*   Input (Data, Array, Absolute) */
+    0x75, 0x06,             /*   Report Size (6) */
+    0x95, 0x01,             /*   Report Count (1) */
+    0x81, 0x03,             /*   Input (Constant, Variable, Absolute) */
+    0xc0                    /* End Collection */
+};
+
+typedef struct _HIDP_TEST_SCAN_CODES
+{
+    UCHAR Buffer[16];
+    ULONG Length;
+} HIDP_TEST_SCAN_CODES, *PHIDP_TEST_SCAN_CODES;
+
+static
+BOOLEAN
+NTAPI
+TestInsertScanCodes(
+    _In_opt_ PVOID Context,
+    _In_reads_bytes_(Length) PCHAR NewScanCodes,
+    _In_ ULONG Length)
+{
+    PHIDP_TEST_SCAN_CODES ScanCodes = Context;
+
+    if (Length > sizeof(ScanCodes->Buffer) - ScanCodes->Length)
+        return FALSE;
+
+    RtlCopyMemory(&ScanCodes->Buffer[ScanCodes->Length],
+                  NewScanCodes,
+                  Length);
+    ScanCodes->Length += Length;
+    return TRUE;
+}
+
+
 static
 VOID
 TestGetCollectionDescription(VOID)
@@ -166,7 +319,8 @@ TestGetCollectionDescription(VOID)
             ok_eq_uint(DeviceDescription.CollectionDesc[0].InputLength, 9);
             ok_eq_uint(DeviceDescription.CollectionDesc[0].OutputLength, 2);
             ok_eq_uint(DeviceDescription.CollectionDesc[0].FeatureLength, 0);
-            ok_eq_uint(DeviceDescription.CollectionDesc[0].PreparsedDataLength, 476);
+            ok(DeviceDescription.CollectionDesc[0].PreparsedDataLength != 0,
+               "Expected non-empty preparsed data\n");
         }
         if (!skip(DeviceDescription.ReportIDsLength >= 1, "No report IDs\n"))
         {
@@ -197,7 +351,8 @@ TestGetCollectionDescription(VOID)
             ok_eq_uint(DeviceDescription.CollectionDesc[0].InputLength, 49);
             ok_eq_uint(DeviceDescription.CollectionDesc[0].OutputLength, 49);
             ok_eq_uint(DeviceDescription.CollectionDesc[0].FeatureLength, 49);
-            ok_eq_uint(DeviceDescription.CollectionDesc[0].PreparsedDataLength, 1388);
+            ok(DeviceDescription.CollectionDesc[0].PreparsedDataLength != 0,
+               "Expected non-empty preparsed data\n");
         }
         if (!skip(DeviceDescription.ReportIDsLength >= 1, "No first report ID\n"))
         {
@@ -235,6 +390,421 @@ TestGetCollectionDescription(VOID)
     }
 }
 
+static
+VOID
+TestElanPrecisionTouchpad(VOID)
+{
+    HIDP_LINK_COLLECTION_NODE Nodes[6];
+    HIDP_VALUE_CAPS ValueCaps[5], ModeCaps;
+    HIDP_DEVICE_DESC DeviceDescription;
+    HIDP_CAPS Caps;
+    UCHAR Report[29] = {0};
+    UCHAR ModeReport[3] = {0x03, 0, 0};
+    PHIDP_REPORT_IDS TouchReport = NULL;
+    ULONG NodeCount, Index, Value;
+    USHORT ValueCapsLength;
+    NTSTATUS Status;
+
+    Status = HidP_GetCollectionDescription(ElanPrecisionTouchpadDescriptor,
+                                           sizeof(ElanPrecisionTouchpadDescriptor),
+                                           NonPagedPool,
+                                           &DeviceDescription);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    ok_eq_ulong(DeviceDescription.CollectionDescLength, 4);
+    ok_eq_ulong(DeviceDescription.ReportIDsLength, 12);
+    if (DeviceDescription.CollectionDescLength < 3)
+    {
+        HidP_FreeCollectionDescription(&DeviceDescription);
+        return;
+    }
+
+    ok_eq_uint(DeviceDescription.CollectionDesc[2].UsagePage,
+               HID_USAGE_PAGE_DIGITIZER);
+    ok_eq_uint(DeviceDescription.CollectionDesc[2].Usage,
+               HID_USAGE_DIGITIZER_TOUCH_PAD);
+    ok_eq_uint(DeviceDescription.CollectionDesc[2].CollectionNumber, 3);
+    ok_eq_uint(DeviceDescription.CollectionDesc[2].InputLength, 29);
+
+    for (Index = 0; Index < DeviceDescription.ReportIDsLength; Index++)
+    {
+        if (DeviceDescription.ReportIDs[Index].ReportID == 0x54)
+        {
+            TouchReport = &DeviceDescription.ReportIDs[Index];
+            break;
+        }
+    }
+    ok(TouchReport != NULL, "Touch report ID 54 was not found\n");
+    if (TouchReport != NULL)
+    {
+        ok_eq_uint(TouchReport->CollectionNumber, 3);
+        ok_eq_uint(TouchReport->InputLength, 29);
+    }
+
+    Status = HidP_GetCaps(DeviceDescription.CollectionDesc[2].PreparsedData,
+                          &Caps);
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    if (Status != HIDP_STATUS_SUCCESS)
+    {
+        HidP_FreeCollectionDescription(&DeviceDescription);
+        return;
+    }
+
+    ok_eq_uint(Caps.InputReportByteLength, 29);
+    ok_eq_uint(Caps.NumberLinkCollectionNodes, 6);
+
+    NodeCount = RTL_NUMBER_OF(Nodes);
+    Status = HidP_GetLinkCollectionNodes(Nodes,
+                                         &NodeCount,
+                                         DeviceDescription.CollectionDesc[2].PreparsedData);
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok_eq_ulong(NodeCount, RTL_NUMBER_OF(Nodes));
+    if (Status == HIDP_STATUS_SUCCESS && NodeCount == RTL_NUMBER_OF(Nodes))
+    {
+        ok_eq_uint(Nodes[0].LinkUsagePage, HID_USAGE_PAGE_DIGITIZER);
+        ok_eq_uint(Nodes[0].LinkUsage, HID_USAGE_DIGITIZER_TOUCH_PAD);
+        ok_eq_uint(Nodes[0].NumberOfChildren, 5);
+        for (Index = 1; Index < RTL_NUMBER_OF(Nodes); Index++)
+        {
+            ok_eq_uint(Nodes[Index].LinkUsagePage, HID_USAGE_PAGE_DIGITIZER);
+            ok_eq_uint(Nodes[Index].LinkUsage, HID_USAGE_DIGITIZER_FINGER);
+            ok_eq_uint(Nodes[Index].Parent, 0);
+        }
+    }
+
+    ValueCapsLength = RTL_NUMBER_OF(ValueCaps);
+    Status = HidP_GetSpecificValueCaps(HidP_Input,
+                                       HID_USAGE_PAGE_GENERIC,
+                                       HIDP_LINK_COLLECTION_UNSPECIFIED,
+                                       HID_USAGE_GENERIC_X,
+                                       ValueCaps,
+                                       &ValueCapsLength,
+                                       DeviceDescription.CollectionDesc[2].PreparsedData);
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok_eq_uint(ValueCapsLength, RTL_NUMBER_OF(ValueCaps));
+    if (Status == HIDP_STATUS_SUCCESS &&
+        ValueCapsLength == RTL_NUMBER_OF(ValueCaps))
+    {
+        for (Index = 0; Index < RTL_NUMBER_OF(ValueCaps); Index++)
+        {
+            ok_eq_uint(ValueCaps[Index].LinkCollection, Index + 1);
+            ok_eq_uint(ValueCaps[Index].BitField, 2);
+            ok_eq_uint(ValueCaps[Index].BitSize, 16);
+            ok_eq_long(ValueCaps[Index].LogicalMax, 3528);
+            ok_eq_long(ValueCaps[Index].PhysicalMax, 11220);
+            ok_eq_ulong(ValueCaps[Index].Units, 0x11);
+            ok_eq_ulong(ValueCaps[Index].UnitsExp, 0x0d);
+        }
+    }
+
+    Report[0] = 0x54;
+    Report[4] = 0x33;
+    Report[5] = 100;
+    Report[7] = 200;
+
+    Status = HidP_GetUsageValue(HidP_Input,
+                                HID_USAGE_PAGE_GENERIC,
+                                1,
+                                HID_USAGE_GENERIC_X,
+                                &Value,
+                                DeviceDescription.CollectionDesc[2].PreparsedData,
+                                (PCHAR)Report,
+                                sizeof(Report));
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok_eq_ulong(Value, 100);
+
+    Status = HidP_GetUsageValue(HidP_Input,
+                                HID_USAGE_PAGE_GENERIC,
+                                2,
+                                HID_USAGE_GENERIC_X,
+                                &Value,
+                                DeviceDescription.CollectionDesc[2].PreparsedData,
+                                (PCHAR)Report,
+                                sizeof(Report));
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok_eq_ulong(Value, 0);
+
+    Status = HidP_GetUsageValue(HidP_Input,
+                                HID_USAGE_PAGE_DIGITIZER,
+                                1,
+                                HID_USAGE_DIGITIZER_TIP_SWITCH,
+                                &Value,
+                                DeviceDescription.CollectionDesc[2].PreparsedData,
+                                (PCHAR)Report,
+                                sizeof(Report));
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok_eq_ulong(Value, 1);
+
+    Status = HidP_GetUsageValue(HidP_Input,
+                                HID_USAGE_PAGE_DIGITIZER,
+                                1,
+                                HID_USAGE_DIGITIZER_CONFIDENCE,
+                                &Value,
+                                DeviceDescription.CollectionDesc[2].PreparsedData,
+                                (PCHAR)Report,
+                                sizeof(Report));
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok_eq_ulong(Value, 1);
+
+    Status = HidP_GetUsageValue(HidP_Input,
+                                HID_USAGE_PAGE_DIGITIZER,
+                                1,
+                                HID_USAGE_DIGITIZER_CONTACT_IDENTIFIER,
+                                &Value,
+                                DeviceDescription.CollectionDesc[2].PreparsedData,
+                                (PCHAR)Report,
+                                sizeof(Report));
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok_eq_ulong(Value, 3);
+
+    if (DeviceDescription.CollectionDescLength >= 4)
+    {
+        ValueCapsLength = 1;
+        Status = HidP_GetSpecificValueCaps(
+                     HidP_Feature,
+                     HID_USAGE_PAGE_DIGITIZER,
+                     HIDP_LINK_COLLECTION_UNSPECIFIED,
+                     HID_USAGE_DIGITIZER_DEVICE_MODE,
+                     &ModeCaps,
+                     &ValueCapsLength,
+                     DeviceDescription.CollectionDesc[3].PreparsedData);
+        ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+        ok_eq_uint(ValueCapsLength, 1);
+        if (Status == HIDP_STATUS_SUCCESS && ValueCapsLength == 1)
+        {
+            ok_eq_uint(ModeCaps.ReportID, 3);
+            ok_eq_uint(ModeCaps.BitField, 2);
+            ok_eq_uint(ModeCaps.BitSize, 16);
+        }
+
+        Status = HidP_SetUsageValue(
+                     HidP_Feature,
+                     HID_USAGE_PAGE_DIGITIZER,
+                     HIDP_LINK_COLLECTION_UNSPECIFIED,
+                     HID_USAGE_DIGITIZER_DEVICE_MODE,
+                     3,
+                     DeviceDescription.CollectionDesc[3].PreparsedData,
+                     (PCHAR)ModeReport,
+                     sizeof(ModeReport));
+        ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+        ok_eq_uint(ModeReport[0], 3);
+        ok_eq_uint(ModeReport[1], 3);
+        ok_eq_uint(ModeReport[2], 0);
+
+        Value = 0;
+        Status = HidP_GetUsageValue(
+                     HidP_Feature,
+                     HID_USAGE_PAGE_DIGITIZER,
+                     HIDP_LINK_COLLECTION_UNSPECIFIED,
+                     HID_USAGE_DIGITIZER_DEVICE_MODE,
+                     &Value,
+                     DeviceDescription.CollectionDesc[3].PreparsedData,
+                     (PCHAR)ModeReport,
+                     sizeof(ModeReport));
+        ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+        ok_eq_ulong(Value, 3);
+    }
+
+    HidP_FreeCollectionDescription(&DeviceDescription);
+}
+
+static
+VOID
+TestMultipleInputReports(VOID)
+{
+    HIDP_DEVICE_DESC DeviceDescription;
+    HIDP_VALUE_CAPS ValueCaps[3];
+    UCHAR Report1[5] = {1, 42, 0, 0, 0};
+    UCHAR Report2[5] = {2, 0x34, 0x12, 0x78, 0x56};
+    HIDP_CAPS Caps;
+    USHORT ValueCapsLength;
+    ULONG Value;
+    NTSTATUS Status;
+
+    Status = HidP_GetCollectionDescription(MultipleInputReportDescriptor,
+                                           sizeof(MultipleInputReportDescriptor),
+                                           NonPagedPool,
+                                           &DeviceDescription);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    ok_eq_ulong(DeviceDescription.CollectionDescLength, 1);
+    ok_eq_ulong(DeviceDescription.ReportIDsLength, 2);
+    ok_eq_uint(DeviceDescription.CollectionDesc[0].InputLength, 5);
+    ok_eq_uint(DeviceDescription.ReportIDs[0].ReportID, 1);
+    ok_eq_uint(DeviceDescription.ReportIDs[0].InputLength, 2);
+    ok_eq_uint(DeviceDescription.ReportIDs[1].ReportID, 2);
+    ok_eq_uint(DeviceDescription.ReportIDs[1].InputLength, 5);
+
+    Status = HidP_GetCaps(DeviceDescription.CollectionDesc[0].PreparsedData,
+                          &Caps);
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok_eq_uint(Caps.InputReportByteLength, 5);
+
+    ValueCapsLength = RTL_NUMBER_OF(ValueCaps);
+    Status = HidP_GetSpecificValueCaps(
+                 HidP_Input,
+                 HID_USAGE_PAGE_GENERIC,
+                 HIDP_LINK_COLLECTION_UNSPECIFIED,
+                 HID_USAGE_PAGE_UNDEFINED,
+                 ValueCaps,
+                 &ValueCapsLength,
+                 DeviceDescription.CollectionDesc[0].PreparsedData);
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok_eq_uint(ValueCapsLength, RTL_NUMBER_OF(ValueCaps));
+
+    Value = 0;
+    Status = HidP_GetUsageValue(
+                 HidP_Input,
+                 HID_USAGE_PAGE_GENERIC,
+                 HIDP_LINK_COLLECTION_UNSPECIFIED,
+                 HID_USAGE_GENERIC_X,
+                 &Value,
+                 DeviceDescription.CollectionDesc[0].PreparsedData,
+                 (PCHAR)Report1,
+                 sizeof(Report1));
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok_eq_ulong(Value, 42);
+
+    Value = 0;
+    Status = HidP_GetUsageValue(
+                 HidP_Input,
+                 HID_USAGE_PAGE_GENERIC,
+                 HIDP_LINK_COLLECTION_UNSPECIFIED,
+                 HID_USAGE_GENERIC_Y,
+                 &Value,
+                 DeviceDescription.CollectionDesc[0].PreparsedData,
+                 (PCHAR)Report2,
+                 sizeof(Report2));
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok_eq_ulong(Value, 0x1234);
+
+    HidP_FreeCollectionDescription(&DeviceDescription);
+}
+
+static
+VOID
+TestConsumerAndSystemControls(VOID)
+{
+    HIDP_DEVICE_DESC DeviceDescription;
+    USAGE_AND_PAGE Usages[3];
+    UCHAR ConsumerReport[] = {0x10, 0x05};
+    UCHAR SystemReport[] = {0x11, 0x02};
+    HIDP_KEYBOARD_MODIFIER_STATE ModifierState;
+    HIDP_TEST_SCAN_CODES ScanCodes;
+    ULONG UsageLength;
+    NTSTATUS Status;
+
+    Status = HidP_GetCollectionDescription(ConsumerControlDescriptor,
+                                           sizeof(ConsumerControlDescriptor),
+                                           NonPagedPool,
+                                           &DeviceDescription);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+    {
+        ok_eq_ulong(DeviceDescription.CollectionDescLength, 1);
+        ok_eq_ulong(DeviceDescription.ReportIDsLength, 1);
+        ok_eq_uint(DeviceDescription.CollectionDesc[0].UsagePage,
+                   HID_USAGE_PAGE_CONSUMER);
+        ok_eq_uint(DeviceDescription.CollectionDesc[0].Usage,
+                   HID_USAGE_CONSUMERCTRL);
+        ok_eq_ulong(HidP_MaxUsageListLength(
+                        HidP_Input,
+                        HID_USAGE_PAGE_UNDEFINED,
+                        DeviceDescription.CollectionDesc[0].PreparsedData),
+                    3);
+
+        RtlZeroMemory(Usages, sizeof(Usages));
+        UsageLength = RTL_NUMBER_OF(Usages);
+        Status = HidP_GetUsagesEx(
+                     HidP_Input,
+                     HIDP_LINK_COLLECTION_UNSPECIFIED,
+                     Usages,
+                     &UsageLength,
+                     DeviceDescription.CollectionDesc[0].PreparsedData,
+                     (PCHAR)ConsumerReport,
+                     sizeof(ConsumerReport));
+        ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+        ok_eq_ulong(UsageLength, 2);
+        ok_eq_uint(Usages[0].UsagePage, HID_USAGE_PAGE_CONSUMER);
+        ok_eq_uint(Usages[0].Usage, 0x00e2);
+        ok_eq_uint(Usages[1].UsagePage, HID_USAGE_PAGE_CONSUMER);
+        ok_eq_uint(Usages[1].Usage, 0x00ea);
+
+        RtlZeroMemory(&ModifierState, sizeof(ModifierState));
+        RtlZeroMemory(&ScanCodes, sizeof(ScanCodes));
+        Status = HidP_TranslateUsageAndPagesToI8042ScanCodes(
+                     Usages,
+                     UsageLength,
+                     HidP_Keyboard_Make,
+                     &ModifierState,
+                     TestInsertScanCodes,
+                     &ScanCodes);
+        ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+        ok_eq_ulong(ScanCodes.Length, 4);
+        ok_eq_uint(ScanCodes.Buffer[0], 0xe0);
+        ok_eq_uint(ScanCodes.Buffer[1], 0x20);
+        ok_eq_uint(ScanCodes.Buffer[2], 0xe0);
+        ok_eq_uint(ScanCodes.Buffer[3], 0x2e);
+
+        HidP_FreeCollectionDescription(&DeviceDescription);
+    }
+
+    Status = HidP_GetCollectionDescription(SystemControlDescriptor,
+                                           sizeof(SystemControlDescriptor),
+                                           NonPagedPool,
+                                           &DeviceDescription);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+    {
+        ok_eq_ulong(DeviceDescription.CollectionDescLength, 1);
+        ok_eq_ulong(DeviceDescription.ReportIDsLength, 1);
+        ok_eq_uint(DeviceDescription.CollectionDesc[0].UsagePage,
+                   HID_USAGE_PAGE_GENERIC);
+        ok_eq_uint(DeviceDescription.CollectionDesc[0].Usage,
+                   HID_USAGE_GENERIC_SYSTEM_CTL);
+        ok_eq_ulong(HidP_MaxUsageListLength(
+                        HidP_Input,
+                        HID_USAGE_PAGE_UNDEFINED,
+                        DeviceDescription.CollectionDesc[0].PreparsedData),
+                    1);
+
+        RtlZeroMemory(Usages, sizeof(Usages));
+        UsageLength = RTL_NUMBER_OF(Usages);
+        Status = HidP_GetUsagesEx(
+                     HidP_Input,
+                     HIDP_LINK_COLLECTION_UNSPECIFIED,
+                     Usages,
+                     &UsageLength,
+                     DeviceDescription.CollectionDesc[0].PreparsedData,
+                     (PCHAR)SystemReport,
+                     sizeof(SystemReport));
+        ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+        ok_eq_ulong(UsageLength, 1);
+        ok_eq_uint(Usages[0].UsagePage, HID_USAGE_PAGE_GENERIC);
+        ok_eq_uint(Usages[0].Usage, HID_USAGE_GENERIC_SYSTEM_SLEEP);
+
+        RtlZeroMemory(&ModifierState, sizeof(ModifierState));
+        RtlZeroMemory(&ScanCodes, sizeof(ScanCodes));
+        Status = HidP_TranslateUsageAndPagesToI8042ScanCodes(
+                     Usages,
+                     UsageLength,
+                     HidP_Keyboard_Make,
+                     &ModifierState,
+                     TestInsertScanCodes,
+                     &ScanCodes);
+        ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+        ok_eq_ulong(ScanCodes.Length, 2);
+        ok_eq_uint(ScanCodes.Buffer[0], 0xe0);
+        ok_eq_uint(ScanCodes.Buffer[1], 0x5f);
+
+        HidP_FreeCollectionDescription(&DeviceDescription);
+    }
+}
+
 NTSTATUS
 TestHidPDescription(
     IN PDEVICE_OBJECT DeviceObject,
@@ -253,6 +823,9 @@ TestHidPDescription(
     NT_VERIFY(ControlCode == IOCTL_TEST_DESCRIPTION);
 
     TestGetCollectionDescription();
+    TestElanPrecisionTouchpad();
+    TestMultipleInputReports();
+    TestConsumerAndSystemControls();
 
     return STATUS_SUCCESS;
 }

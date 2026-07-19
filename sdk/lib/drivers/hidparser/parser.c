@@ -581,10 +581,24 @@ HidParser_InitReportItem(
     ReportItem->HasData = (ItemData->DataConstant == FALSE);
     ReportItem->Array = (ItemData->ArrayVariable == 0);
     ReportItem->Relative = (ItemData->Relative != FALSE);
+    ReportItem->BitField =
+        ((USHORT)ItemData->DataConstant) |
+        ((USHORT)ItemData->ArrayVariable << 1) |
+        ((USHORT)ItemData->Relative << 2) |
+        ((USHORT)ItemData->Wrap << 3) |
+        ((USHORT)ItemData->NonLinear << 4) |
+        ((USHORT)ItemData->NoPreferred << 5) |
+        ((USHORT)ItemData->NullState << 6) |
+        ((USHORT)ItemData->IsVolatile << 7) |
+        ((USHORT)ItemData->BitsBytes << 8);
     ReportItem->Minimum = LogicalMinimum;
     ReportItem->Maximum = LogicalMaximum;
     ReportItem->UsageMinimum = UsageMinimum;
     ReportItem->UsageMaximum = UsageMaximum;
+    ReportItem->PhysicalMinimum = PhysicalMinimum;
+    ReportItem->PhysicalMaximum = PhysicalMaximum;
+    ReportItem->UnitExponent = (UCHAR)GlobalItemState->UnitExponent;
+    ReportItem->Units = GlobalItemState->Unit;
 
     //
     // increment report size
@@ -727,6 +741,9 @@ HidParser_AddMainItem(
             return Status;
         }
 
+        NewReport->Items[NewReport->ItemCount].LinkCollection =
+            Collection->LinkCollection;
+
         //
         // increment report item count
         //
@@ -749,7 +766,7 @@ HidParser_ParseReportDescriptor(
     ULONG Index;
     PUSAGE_VALUE NewUsageStack, UsageValue;
     NTSTATUS Status;
-    PHID_COLLECTION CurrentCollection, NewCollection;
+    PHID_COLLECTION CurrentCollection, NewCollection, ReportCollection;
     PUCHAR CurrentOffset, ReportEnd;
     PITEM_PREFIX CurrentItem;
     ULONG CurrentItemSize;
@@ -908,6 +925,20 @@ HidParser_ParseReportDescriptor(
                     Status = HidParser_AllocateCollection(CurrentCollection, (UCHAR)Data, &ParserContext->LocalItemState, &NewCollection);
                     ASSERT(Status == HIDP_STATUS_SUCCESS);
 
+                    if (CurrentCollection == ParserContext->RootCollection)
+                    {
+                        ParserContext->CollectionIndex = 0;
+                        NewCollection->LinkCollection = HIDP_LINK_COLLECTION_UNSPECIFIED;
+                    }
+                    else
+                    {
+                        ParserContext->CollectionIndex++;
+                        if (ParserContext->CollectionIndex > MAXUSHORT)
+                            return HIDP_STATUS_INTERNAL_ERROR;
+                        NewCollection->LinkCollection =
+                            (USHORT)ParserContext->CollectionIndex;
+                    }
+
                     //
                     // add new collection to current collection
                     //
@@ -959,10 +990,23 @@ HidParser_ParseReportDescriptor(
 
                     if (ReportType != HID_REPORT_TYPE_ANY)
                     {
+                        /*
+                         * One physical report spans every nested collection
+                         * in its TLC. Keep it on the top-level collection and
+                         * record each item's owning link collection instead
+                         * of creating duplicate same-ID partial reports.
+                         */
+                        ReportCollection = CurrentCollection;
+                        while (ReportCollection->Root != NULL &&
+                               ReportCollection->Root != ParserContext->RootCollection)
+                        {
+                            ReportCollection = ReportCollection->Root;
+                        }
+
                         //
                         // get report
                         //
-                        Status = HidParser_GetReport(ParserContext, CurrentCollection, ReportType, ParserContext->GlobalItemState.ReportId, TRUE, &Report);
+                        Status = HidParser_GetReport(ParserContext, ReportCollection, ReportType, ParserContext->GlobalItemState.ReportId, TRUE, &Report);
                         ASSERT(Status == HIDP_STATUS_SUCCESS);
 
                         // fill in a sensible default if the index isn't set
