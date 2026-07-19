@@ -297,9 +297,11 @@ SoftGpuDdiUnmapCpuHostAperture(
  * SoftGpuDdiSubmitCommandVirtual
  *
  * WDDM2 GPU-virtual-addressing submission path (the DMA buffer is referenced
- * by GPU virtual address rather than a patched allocation list).  softgpu
- * only completes explicit null-rendering submissions. It has no GPU command
- * interpreter, so accepting ordinary virtual work would report false success.
+ * by GPU virtual address rather than a patched allocation list).  dxgkrnl
+ * validates the buffer VA against the process's real GpuMmu page tables
+ * before submission; execution follows the same software-engine model as
+ * SoftGpuDdiSubmitCommand (rendering happened on the CPU, executing a DMA
+ * buffer is completing its fence).
  *
  * IRQL: DISPATCH_LEVEL (called from dxgkrnl scheduler)
  */
@@ -320,8 +322,6 @@ SoftGpuDdiSubmitCommandVirtual(
 
     if (pSubmitCommand->NodeOrdinal != 0 || pSubmitCommand->EngineOrdinal != 0)
         return STATUS_INVALID_PARAMETER;
-    if (!pSubmitCommand->Flags.NullRendering)
-        return STATUS_NOT_SUPPORTED;
 
     DPRINT("SOFTGPU: SubmitCommandVirtual fence=%u node=%u gpuVa=0x%I64x size=%u\n",
            pSubmitCommand->SubmissionFenceId,
