@@ -541,7 +541,7 @@ HidParser_InitReportItem(
             //
             UsageValue = LocalItemState->UsageStack[ReportItemIndex];
         }
-        else
+        else if (LocalItemState->UsageMinimumSet)
         {
             //
             // get usage minimum from local state
@@ -551,7 +551,8 @@ HidParser_InitReportItem(
             //
             // append item index
             //
-            UsageValue.u.Extended += ReportItemIndex;
+            UsageValue.u.Extended +=
+                ReportItemIndex - LocalItemState->UsageStackUsed;
 
             if (LocalItemState->UsageMaximumSet)
             {
@@ -563,6 +564,17 @@ HidParser_InitReportItem(
                     UsageValue.u.Extended = LocalItemState->UsageMaximum.u.Extended;
                 }
             }
+        }
+        else if (LocalItemState->UsageStackUsed != 0)
+        {
+            /* A single usage applies to every remaining value field. */
+            UsageValue = LocalItemState->UsageStack[
+                LocalItemState->UsageStackUsed - 1];
+        }
+        else
+        {
+            UsageValue.u.Extended = 0;
+            UsageValue.IsExtended = FALSE;
         }
 
         //
@@ -693,6 +705,7 @@ HidParser_AddMainItem(
 {
     NTSTATUS Status;
     ULONG Index;
+    ULONG MainItem;
     PHID_REPORT NewReport;
     BOOLEAN Found;
 
@@ -730,6 +743,8 @@ HidParser_AddMainItem(
     //
     ASSERT(NewReport->ItemCount + GlobalItemState->ReportCount <= NewReport->ItemAllocated);
 
+    MainItem = NewReport->ItemCount;
+
     for(Index = 0; Index < GlobalItemState->ReportCount; Index++)
     {
         Status = HidParser_InitReportItem(NewReport, &NewReport->Items[NewReport->ItemCount], GlobalItemState, LocalItemState, ItemData, Index);
@@ -743,6 +758,7 @@ HidParser_AddMainItem(
 
         NewReport->Items[NewReport->ItemCount].LinkCollection =
             Collection->LinkCollection;
+        NewReport->Items[NewReport->ItemCount].MainItem = MainItem;
 
         //
         // increment report item count

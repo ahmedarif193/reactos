@@ -186,6 +186,7 @@ typedef struct
 typedef struct
 {
     ULONG ByteOffset;
+    ULONG MainItem;
     UCHAR Shift;
     UCHAR UnitExponent;
     USHORT LinkCollection;
@@ -374,6 +375,18 @@ HidParser_GetUsageValueWithReport(
     IN ULONG ReportDescriptorLength);
 
 NTSTATUS
+HidParser_GetUsageValueArrayWithReport(
+    IN PVOID CollectionContext,
+    IN UCHAR ReportType,
+    IN USAGE UsagePage,
+    IN USHORT LinkCollection,
+    IN USAGE Usage,
+    OUT PCHAR UsageValue,
+    IN USHORT UsageValueByteLength,
+    IN PCHAR ReportDescriptor,
+    IN ULONG ReportDescriptorLength);
+
+NTSTATUS
 HidParser_SetUsageValueWithReport(
     IN PVOID CollectionContext,
     IN UCHAR ReportType,
@@ -381,6 +394,18 @@ HidParser_SetUsageValueWithReport(
     IN USHORT LinkCollection,
     IN USAGE Usage,
     IN ULONG UsageValue,
+    IN OUT PCHAR ReportDescriptor,
+    IN ULONG ReportDescriptorLength);
+
+NTSTATUS
+HidParser_SetUsageValueArrayWithReport(
+    IN PVOID CollectionContext,
+    IN UCHAR ReportType,
+    IN USAGE UsagePage,
+    IN USHORT LinkCollection,
+    IN USAGE Usage,
+    IN PCHAR UsageValue,
+    IN USHORT UsageValueByteLength,
     IN OUT PCHAR ReportDescriptor,
     IN ULONG ReportDescriptorLength);
 

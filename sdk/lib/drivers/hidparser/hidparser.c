@@ -1069,9 +1069,32 @@ HidParser_GetUsageValueArray(
     IN PCHAR  Report,
     IN ULONG  ReportLength)
 {
-    UNIMPLEMENTED;
-    ASSERT(FALSE);
-    return STATUS_NOT_IMPLEMENTED;
+    UCHAR NativeReportType;
+
+    switch (ReportType)
+    {
+        case HidP_Input:
+            NativeReportType = HID_REPORT_TYPE_INPUT;
+            break;
+        case HidP_Output:
+            NativeReportType = HID_REPORT_TYPE_OUTPUT;
+            break;
+        case HidP_Feature:
+            NativeReportType = HID_REPORT_TYPE_FEATURE;
+            break;
+        default:
+            return HIDP_STATUS_INVALID_REPORT_TYPE;
+    }
+
+    return HidParser_GetUsageValueArrayWithReport(CollectionContext,
+                                                   NativeReportType,
+                                                   UsagePage,
+                                                   LinkCollection,
+                                                   Usage,
+                                                   UsageValue,
+                                                   UsageValueByteLength,
+                                                   Report,
+                                                   ReportLength);
 }
 
 HIDAPI
@@ -1140,9 +1163,32 @@ HidParser_SetUsageValueArray(
     OUT PCHAR  Report,
     IN ULONG  ReportLength)
 {
-    UNIMPLEMENTED;
-    ASSERT(FALSE);
-    return STATUS_NOT_IMPLEMENTED;
+    UCHAR NativeReportType;
+
+    switch (ReportType)
+    {
+        case HidP_Input:
+            NativeReportType = HID_REPORT_TYPE_INPUT;
+            break;
+        case HidP_Output:
+            NativeReportType = HID_REPORT_TYPE_OUTPUT;
+            break;
+        case HidP_Feature:
+            NativeReportType = HID_REPORT_TYPE_FEATURE;
+            break;
+        default:
+            return HIDP_STATUS_INVALID_REPORT_TYPE;
+    }
+
+    return HidParser_SetUsageValueArrayWithReport(CollectionContext,
+                                                   NativeReportType,
+                                                   UsagePage,
+                                                   LinkCollection,
+                                                   Usage,
+                                                   UsageValue,
+                                                   UsageValueByteLength,
+                                                   Report,
+                                                   ReportLength);
 }
 
 HIDAPI

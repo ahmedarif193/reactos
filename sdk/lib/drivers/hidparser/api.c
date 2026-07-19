@@ -331,13 +331,15 @@ HidParser_GetSpecificValueCapsWithReport(
     OUT PHIDP_VALUE_CAPS  ValueCaps,
     IN OUT PUSHORT  ValueCapsLength)
 {
-    ULONG Index, ReportCount, ReportIndex, DataIndexBase = 0;
+    ULONG Index, ReportCount, ReportIndex, DataIndex = 0;
     PHID_REPORT Report;
     USHORT ItemCount = 0;
     USHORT Capacity;
     USHORT CurrentUsagePage;
     USHORT CurrentUsage;
+    USHORT CurrentDataIndex;
     PHID_REPORT_ITEM ReportItem;
+    PHID_REPORT_ITEM PreviousItem;
     BOOLEAN ReportFound = FALSE;
 
     if (!ValueCapsLength)
@@ -354,15 +356,26 @@ HidParser_GetSpecificValueCapsWithReport(
         if (Report->Type != ReportType)
             continue;
         ReportFound = TRUE;
+        PreviousItem = NULL;
 
         for (Index = 0; Index < Report->ItemCount; Index++)
         {
         ReportItem = &Report->Items[Index];
-        if (HidParser_ReportItemIsButtonCap(ReportItem))
+        if (!ReportItem->HasData)
+        {
+            PreviousItem = NULL;
             continue;
+        }
+        CurrentDataIndex = (USHORT)DataIndex++;
+        if (HidParser_ReportItemIsButtonCap(ReportItem))
+        {
+            PreviousItem = NULL;
+            continue;
+        }
         if (LinkCollection != HIDP_LINK_COLLECTION_UNSPECIFIED &&
             ReportItem->LinkCollection != LinkCollection)
         {
+            PreviousItem = NULL;
             continue;
         }
 
@@ -372,8 +385,32 @@ HidParser_GetSpecificValueCapsWithReport(
         CurrentUsagePage = HidParser_ReportItemUsagePage(ReportItem);
         CurrentUsage = (ReportItem->UsageMinimum & 0xFFFF);
 
-        if (HidParser_ReportItemMatchesUsage(ReportItem, UsagePage, Usage))
+        if (!HidParser_ReportItemMatchesUsage(ReportItem, UsagePage, Usage))
         {
+            PreviousItem = NULL;
+            continue;
+        }
+
+        /*
+         * A variable main item with fewer usages than report fields repeats
+         * its last usage.  Those consecutive fields form one usage value
+         * array and therefore one capability with ReportCount greater than
+         * one, not one capability per field.
+         */
+        if (PreviousItem != NULL &&
+            PreviousItem->MainItem == ReportItem->MainItem &&
+            PreviousItem->UsageMinimum == ReportItem->UsageMinimum &&
+            PreviousItem->UsageMaximum == ReportItem->UsageMaximum)
+        {
+            if (ItemCount <= Capacity &&
+                ValueCaps[ItemCount - 1].ReportCount != MAXUSHORT)
+            {
+                ValueCaps[ItemCount - 1].ReportCount++;
+            }
+            PreviousItem = ReportItem;
+            continue;
+        }
+
             //
             // check if there is enough place for the caps
             //
@@ -402,6 +439,8 @@ HidParser_GetSpecificValueCapsWithReport(
                     &ValueCaps[ItemCount].LinkUsagePage);
                 ValueCaps[ItemCount].BitSize = ReportItem->BitCount;
                 ValueCaps[ItemCount].ReportCount = 1;
+                ValueCaps[ItemCount].HasNull =
+                    (ReportItem->BitField & (1 << 6)) != 0;
                 ValueCaps[ItemCount].PhysicalMin =
                     ReportItem->PhysicalMinimum;
                 ValueCaps[ItemCount].PhysicalMax =
@@ -414,19 +453,15 @@ HidParser_GetSpecificValueCapsWithReport(
                     ValueCaps[ItemCount].IsRange = TRUE;
                     ValueCaps[ItemCount].Range.UsageMin = (ReportItem->UsageMinimum & 0xFFFF);
                     ValueCaps[ItemCount].Range.UsageMax = (ReportItem->UsageMaximum & 0xFFFF);
-                    ValueCaps[ItemCount].Range.DataIndexMin =
-                        DataIndexBase + Index;
-                    ValueCaps[ItemCount].Range.DataIndexMax =
-                        DataIndexBase + Index;
+                    ValueCaps[ItemCount].Range.DataIndexMin = CurrentDataIndex;
+                    ValueCaps[ItemCount].Range.DataIndexMax = CurrentDataIndex;
                 }
                 else
                 {
                     ValueCaps[ItemCount].NotRange.Usage = CurrentUsage;
                     ValueCaps[ItemCount].NotRange.Reserved1 = CurrentUsage;
-                    ValueCaps[ItemCount].NotRange.DataIndex =
-                        DataIndexBase + Index;
-                    ValueCaps[ItemCount].NotRange.Reserved4 =
-                        DataIndexBase + Index;
+                    ValueCaps[ItemCount].NotRange.DataIndex = CurrentDataIndex;
+                    ValueCaps[ItemCount].NotRange.Reserved4 = CurrentDataIndex;
                 }
 
                 //
@@ -439,9 +474,8 @@ HidParser_GetSpecificValueCapsWithReport(
             // found item
             //
             ItemCount++;
+            PreviousItem = ReportItem;
         }
-        }
-        DataIndexBase += Report->ItemCount;
     }
 
     if (!ReportFound)
@@ -523,13 +557,14 @@ HidParser_GetSpecificButtonCapsWithReport(
     OUT PHIDP_BUTTON_CAPS ButtonCaps,
     IN OUT PULONG ButtonCapsLength)
 {
-    ULONG Index, ReportCount, ReportIndex, DataIndexBase = 0;
+    ULONG Index, ReportCount, ReportIndex, DataIndex = 0;
     ULONG ItemCount = 0;
     ULONG Capacity;
     PHID_REPORT Report;
     PHID_REPORT_ITEM ReportItem;
     PHIDP_BUTTON_CAPS CurrentCaps;
     USHORT CurrentUsagePage;
+    USHORT CurrentDataIndex;
     USAGE UsageMin;
     USAGE UsageMax;
     BOOLEAN ReportFound = FALSE;
@@ -552,6 +587,9 @@ HidParser_GetSpecificButtonCapsWithReport(
         for (Index = 0; Index < Report->ItemCount; Index++)
         {
         ReportItem = &Report->Items[Index];
+        if (!ReportItem->HasData)
+            continue;
+        CurrentDataIndex = (USHORT)DataIndex++;
         if (!HidParser_ReportItemIsButtonCap(ReportItem))
             continue;
         if (LinkCollection != HIDP_LINK_COLLECTION_UNSPECIFIED &&
@@ -583,7 +621,7 @@ HidParser_GetSpecificButtonCapsWithReport(
             if (ItemCount <= Capacity)
                 HidParser_ExtendButtonCapRange(&ButtonCaps[ItemCount - 1],
                                                UsageMax,
-                                               (USHORT)(DataIndexBase + Index));
+                                               CurrentDataIndex);
             continue;
         }
 
@@ -608,25 +646,20 @@ HidParser_GetSpecificButtonCapsWithReport(
                 CurrentCaps->IsRange = TRUE;
                 CurrentCaps->Range.UsageMin = UsageMin;
                 CurrentCaps->Range.UsageMax = UsageMax;
-                CurrentCaps->Range.DataIndexMin =
-                    (USHORT)(DataIndexBase + Index);
-                CurrentCaps->Range.DataIndexMax =
-                    (USHORT)(DataIndexBase + Index);
+                CurrentCaps->Range.DataIndexMin = CurrentDataIndex;
+                CurrentCaps->Range.DataIndexMax = CurrentDataIndex;
             }
             else
             {
                 CurrentCaps->NotRange.Usage = UsageMin;
                 CurrentCaps->NotRange.Reserved1 = UsageMin;
-                CurrentCaps->NotRange.DataIndex =
-                    (USHORT)(DataIndexBase + Index);
-                CurrentCaps->NotRange.Reserved4 =
-                    (USHORT)(DataIndexBase + Index);
+                CurrentCaps->NotRange.DataIndex = CurrentDataIndex;
+                CurrentCaps->NotRange.Reserved4 = CurrentDataIndex;
             }
         }
 
         ItemCount++;
     }
-        DataIndexBase += Report->ItemCount;
     }
 
     if (!ReportFound)
@@ -852,6 +885,34 @@ HidParser_UsesReportId(
     return FALSE;
 }
 
+static
+ULONG
+HidParser_GetValueArrayCount(
+    IN PHID_REPORT Report,
+    IN ULONG FirstIndex)
+{
+    PHID_REPORT_ITEM FirstItem, ReportItem;
+    ULONG Count, Index;
+
+    FirstItem = &Report->Items[FirstIndex];
+    Count = 1;
+    for (Index = FirstIndex + 1; Index < Report->ItemCount; Index++)
+    {
+        ReportItem = &Report->Items[Index];
+        if (ReportItem->MainItem != FirstItem->MainItem ||
+            !ReportItem->HasData ||
+            HidParser_ReportItemIsButtonCap(ReportItem) ||
+            ReportItem->LinkCollection != FirstItem->LinkCollection ||
+            ReportItem->UsageMinimum != FirstItem->UsageMinimum ||
+            ReportItem->UsageMaximum != FirstItem->UsageMaximum)
+        {
+            break;
+        }
+        Count++;
+    }
+    return Count;
+}
+
 NTSTATUS
 HidParser_GetUsageValueWithReport(
     IN PVOID CollectionContext,
@@ -898,7 +959,8 @@ HidParser_GetUsageValueWithReport(
         // get report item
         //
         ReportItem = &Report->Items[Index];
-        if (HidParser_ReportItemIsButtonCap(ReportItem))
+        if (!ReportItem->HasData ||
+            HidParser_ReportItemIsButtonCap(ReportItem))
             continue;
         if (LinkCollection != HIDP_LINK_COLLECTION_UNSPECIFIED &&
             ReportItem->LinkCollection != LinkCollection)
@@ -922,6 +984,9 @@ HidParser_GetUsageValueWithReport(
         //
         if (Usage != (ReportItem->UsageMinimum & 0xFFFF))
             continue;
+
+        if (HidParser_GetValueArrayCount(Report, Index) > 1)
+            return HIDP_STATUS_IS_VALUE_ARRAY;
 
         //
         // check if the specified usage is activated
@@ -955,6 +1020,148 @@ HidParser_GetUsageValueWithReport(
     // usage not found
     //
     return HIDP_STATUS_USAGE_NOT_FOUND;
+}
+
+static
+NTSTATUS
+HidParser_GetValueArrayMissingStatus(
+    IN PVOID CollectionContext,
+    IN UCHAR ReportType,
+    IN PHID_REPORT RequestedReport,
+    IN USAGE UsagePage,
+    IN USHORT LinkCollection,
+    IN USAGE Usage)
+{
+    PHID_REPORT Report;
+    PHID_REPORT_ITEM ReportItem;
+    ULONG Index, ReportCount, ReportIndex;
+    BOOLEAN ReportFound = FALSE;
+    BOOLEAN ScalarFound = FALSE;
+
+    ReportCount = HidParser_GetReportCountInCollection(CollectionContext);
+    for (ReportIndex = 0; ReportIndex < ReportCount; ReportIndex++)
+    {
+        Report = HidParser_GetReportByIndex(CollectionContext, ReportIndex);
+        if (Report->Type != ReportType)
+            continue;
+        ReportFound = TRUE;
+
+        for (Index = 0; Index < Report->ItemCount; Index++)
+        {
+            ReportItem = &Report->Items[Index];
+            if (!ReportItem->HasData ||
+                HidParser_ReportItemIsButtonCap(ReportItem) ||
+                (LinkCollection != HIDP_LINK_COLLECTION_UNSPECIFIED &&
+                 ReportItem->LinkCollection != LinkCollection) ||
+                !HidParser_ReportItemMatchesUsage(ReportItem,
+                                                  UsagePage,
+                                                  Usage))
+            {
+                continue;
+            }
+
+            if (HidParser_GetValueArrayCount(Report, Index) > 1)
+            {
+                if (Report != RequestedReport)
+                    return HIDP_STATUS_INCOMPATIBLE_REPORT_ID;
+                return HIDP_STATUS_NOT_VALUE_ARRAY;
+            }
+            ScalarFound = TRUE;
+        }
+    }
+
+    if (!ReportFound)
+        return HIDP_STATUS_REPORT_DOES_NOT_EXIST;
+    if (ScalarFound)
+        return HIDP_STATUS_NOT_VALUE_ARRAY;
+    return HIDP_STATUS_USAGE_NOT_FOUND;
+}
+
+NTSTATUS
+HidParser_GetUsageValueArrayWithReport(
+    IN PVOID CollectionContext,
+    IN UCHAR ReportType,
+    IN USAGE UsagePage,
+    IN USHORT LinkCollection,
+    IN USAGE Usage,
+    OUT PCHAR UsageValue,
+    IN USHORT UsageValueByteLength,
+    IN PCHAR ReportDescriptor,
+    IN ULONG ReportDescriptorLength)
+{
+    PHID_REPORT_ITEM ReportItem;
+    PHID_REPORT Report;
+    ULONG ArrayCount, Bit, DataBit, Index;
+    ULONG RequiredLength, TotalBits;
+
+    if (ReportDescriptor == NULL || ReportDescriptorLength == 0)
+        return HIDP_STATUS_INVALID_REPORT_LENGTH;
+
+    Report = HidParser_GetReportInCollectionById(CollectionContext,
+                                                  ReportType,
+                                                  ReportDescriptor[0]);
+    if (Report == NULL)
+    {
+        return HidParser_GetValueArrayMissingStatus(CollectionContext,
+                                                     ReportType,
+                                                     NULL,
+                                                     UsagePage,
+                                                     LinkCollection,
+                                                     Usage);
+    }
+
+    if (HidParser_BitsToBytes(Report->ReportSize) >
+        ReportDescriptorLength - 1)
+    {
+        return HIDP_STATUS_INVALID_REPORT_LENGTH;
+    }
+
+    for (Index = 0; Index < Report->ItemCount; Index++)
+    {
+        ReportItem = &Report->Items[Index];
+        if (!ReportItem->HasData ||
+            HidParser_ReportItemIsButtonCap(ReportItem) ||
+            (LinkCollection != HIDP_LINK_COLLECTION_UNSPECIFIED &&
+             ReportItem->LinkCollection != LinkCollection) ||
+            !HidParser_ReportItemMatchesUsage(ReportItem,
+                                              UsagePage,
+                                              Usage))
+        {
+            continue;
+        }
+
+        ArrayCount = HidParser_GetValueArrayCount(Report, Index);
+        if (ArrayCount == 1)
+            return HIDP_STATUS_NOT_VALUE_ARRAY;
+
+        TotalBits = ReportItem->BitCount * ArrayCount;
+        RequiredLength = HidParser_BitsToBytes(TotalBits);
+        if (UsageValueByteLength < RequiredLength)
+            return HIDP_STATUS_BUFFER_TOO_SMALL;
+        if (UsageValue == NULL)
+            return HIDP_STATUS_NULL;
+
+        ZeroFunction(UsageValue, RequiredLength);
+        for (Bit = 0; Bit < TotalBits; Bit++)
+        {
+            DataBit = ReportItem->ByteOffset * 8 +
+                      ReportItem->Shift + Bit;
+            if (((PUCHAR)ReportDescriptor)[1 + DataBit / 8] &
+                (1U << (DataBit % 8)))
+            {
+                ((PUCHAR)UsageValue)[Bit / 8] |=
+                    (UCHAR)(1U << (Bit % 8));
+            }
+        }
+        return HIDP_STATUS_SUCCESS;
+    }
+
+    return HidParser_GetValueArrayMissingStatus(CollectionContext,
+                                                 ReportType,
+                                                 Report,
+                                                 UsagePage,
+                                                 LinkCollection,
+                                                 Usage);
 }
 
 NTSTATUS
@@ -991,7 +1198,8 @@ HidParser_SetUsageValueWithReport(
     for (Index = 0; Index < Report->ItemCount; Index++)
     {
         ReportItem = &Report->Items[Index];
-        if (HidParser_ReportItemIsButtonCap(ReportItem))
+        if (!ReportItem->HasData ||
+            HidParser_ReportItemIsButtonCap(ReportItem))
             continue;
         if (LinkCollection != HIDP_LINK_COLLECTION_UNSPECIFIED &&
             ReportItem->LinkCollection != LinkCollection)
@@ -1004,7 +1212,7 @@ HidParser_SetUsageValueWithReport(
         {
             continue;
         }
-        if (ReportItem->Array)
+        if (HidParser_GetValueArrayCount(Report, Index) > 1)
             return HIDP_STATUS_IS_VALUE_ARRAY;
         if (((LONG)ReportItem->Minimum < 0 &&
              ((LONG)UsageValue < (LONG)ReportItem->Minimum ||
@@ -1036,6 +1244,99 @@ HidParser_SetUsageValueWithReport(
     }
 
     return HIDP_STATUS_USAGE_NOT_FOUND;
+}
+
+NTSTATUS
+HidParser_SetUsageValueArrayWithReport(
+    IN PVOID CollectionContext,
+    IN UCHAR ReportType,
+    IN USAGE UsagePage,
+    IN USHORT LinkCollection,
+    IN USAGE Usage,
+    IN PCHAR UsageValue,
+    IN USHORT UsageValueByteLength,
+    IN OUT PCHAR ReportDescriptor,
+    IN ULONG ReportDescriptorLength)
+{
+    PHID_REPORT_ITEM ReportItem;
+    PHID_REPORT Report;
+    ULONG ArrayCount, Bit, DataBit, Index;
+    ULONG RequiredLength, TotalBits;
+
+    if (ReportDescriptor == NULL || ReportDescriptorLength == 0)
+        return HIDP_STATUS_INVALID_REPORT_LENGTH;
+
+    Report = HidParser_GetReportInCollectionById(CollectionContext,
+                                                  ReportType,
+                                                  ReportDescriptor[0]);
+    if (Report == NULL)
+    {
+        return HidParser_GetValueArrayMissingStatus(CollectionContext,
+                                                     ReportType,
+                                                     NULL,
+                                                     UsagePage,
+                                                     LinkCollection,
+                                                     Usage);
+    }
+
+    if (HidParser_BitsToBytes(Report->ReportSize) >
+        ReportDescriptorLength - 1)
+    {
+        return HIDP_STATUS_INVALID_REPORT_LENGTH;
+    }
+
+    for (Index = 0; Index < Report->ItemCount; Index++)
+    {
+        ReportItem = &Report->Items[Index];
+        if (!ReportItem->HasData ||
+            HidParser_ReportItemIsButtonCap(ReportItem) ||
+            (LinkCollection != HIDP_LINK_COLLECTION_UNSPECIFIED &&
+             ReportItem->LinkCollection != LinkCollection) ||
+            !HidParser_ReportItemMatchesUsage(ReportItem,
+                                              UsagePage,
+                                              Usage))
+        {
+            continue;
+        }
+
+        ArrayCount = HidParser_GetValueArrayCount(Report, Index);
+        if (ArrayCount == 1)
+            return HIDP_STATUS_NOT_VALUE_ARRAY;
+        if ((ReportItem->BitCount % 8) != 0)
+            return HIDP_STATUS_NOT_IMPLEMENTED;
+
+        TotalBits = ReportItem->BitCount * ArrayCount;
+        RequiredLength = HidParser_BitsToBytes(TotalBits);
+        if (UsageValueByteLength < RequiredLength)
+            return HIDP_STATUS_BUFFER_TOO_SMALL;
+        if (UsageValue == NULL)
+            return HIDP_STATUS_NULL;
+
+        for (Bit = 0; Bit < TotalBits; Bit++)
+        {
+            DataBit = ReportItem->ByteOffset * 8 +
+                      ReportItem->Shift + Bit;
+            if (((PUCHAR)UsageValue)[Bit / 8] &
+                (1U << (Bit % 8)))
+            {
+                ((PUCHAR)ReportDescriptor)[1 + DataBit / 8] |=
+                    (UCHAR)(1U << (DataBit % 8));
+            }
+            else
+            {
+                ((PUCHAR)ReportDescriptor)[1 + DataBit / 8] &=
+                    (UCHAR)~(1U << (DataBit % 8));
+            }
+        }
+        return HIDP_STATUS_SUCCESS;
+    }
+
+    return HidParser_GetValueArrayMissingStatus(CollectionContext,
+                                                 ReportType,
+                                                 Report,
+                                                 UsagePage,
+                                                 LinkCollection,
+                                                 Usage);
 }
 
 

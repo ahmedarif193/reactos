@@ -215,6 +215,43 @@ static UCHAR MultipleInputReportDescriptor[] =
     0xc0                    /* End Collection */
 };
 
+static UCHAR UsageValueArrayDescriptor[] =
+{
+    0x05, 0x01,             /* Usage Page (Generic Desktop) */
+    0x09, 0x04,             /* Usage (Joystick) */
+    0xa1, 0x01,             /* Collection (Application) */
+    0x85, 0x20,             /*   Report ID (32) */
+    0x75, 0x02,             /*   Report Size (2) */
+    0x95, 0x01,             /*   Report Count (1) */
+    0x81, 0x03,             /*   Input (Constant, Variable, Absolute) */
+    0x09, 0x30,             /*   Usage (X) */
+    0x15, 0x00,             /*   Logical Minimum (0) */
+    0x25, 0x3f,             /*   Logical Maximum (63) */
+    0x75, 0x06,             /*   Report Size (6) */
+    0x95, 0x05,             /*   Report Count (5) */
+    0x81, 0x02,             /*   Input (Data, Variable, Absolute) */
+    0x85, 0x21,             /*   Report ID (33) */
+    0x09, 0x31,             /*   Usage (Y) */
+    0x75, 0x08,             /*   Report Size (8) */
+    0x95, 0x01,             /*   Report Count (1) */
+    0x81, 0x02,             /*   Input (Data, Variable, Absolute) */
+    0x85, 0x22,             /*   Report ID (34) */
+    0x75, 0x03,             /*   Report Size (3) */
+    0x95, 0x01,             /*   Report Count (1) */
+    0x81, 0x03,             /*   Input (Constant, Variable, Absolute) */
+    0x05, 0x09,             /*   Usage Page (Button) */
+    0x09, 0x01,             /*   Usage (Button 1) */
+    0x15, 0x00,             /*   Logical Minimum (0) */
+    0x25, 0x01,             /*   Logical Maximum (1) */
+    0x75, 0x01,             /*   Report Size (1) */
+    0x95, 0x01,             /*   Report Count (1) */
+    0x81, 0x02,             /*   Input (Data, Variable, Absolute) */
+    0x75, 0x04,             /*   Report Size (4) */
+    0x95, 0x01,             /*   Report Count (1) */
+    0x81, 0x03,             /*   Input (Constant, Variable, Absolute) */
+    0xc0                    /* End Collection */
+};
+
 static UCHAR ConsumerControlDescriptor[] =
 {
     0x05, 0x0c,             /* Usage Page (Consumer) */
@@ -395,11 +432,15 @@ VOID
 TestElanPrecisionTouchpad(VOID)
 {
     HIDP_LINK_COLLECTION_NODE Nodes[6];
-    HIDP_VALUE_CAPS ValueCaps[5], ModeCaps;
+    HIDP_VALUE_CAPS ValueCaps[5], ModeCaps, FeatureCaps;
     HIDP_DEVICE_DESC DeviceDescription;
     HIDP_CAPS Caps;
     UCHAR Report[29] = {0};
     UCHAR ModeReport[3] = {0x03, 0, 0};
+    UCHAR SelectiveReport[3] = {0x05, 0, 0};
+    UCHAR CertificationReport[257] = {0};
+    UCHAR CertificationValue[256];
+    UCHAR NewCertificationValue[256];
     PHIDP_REPORT_IDS TouchReport = NULL;
     ULONG NodeCount, Index, Value;
     USHORT ValueCapsLength;
@@ -453,6 +494,103 @@ TestElanPrecisionTouchpad(VOID)
     }
 
     ok_eq_uint(Caps.InputReportByteLength, 29);
+    ok_eq_uint(Caps.FeatureReportByteLength, 257);
+    ok_eq_uint(Caps.NumberFeatureValueCaps, 4);
+    ok_eq_uint(Caps.NumberFeatureDataIndices, 259);
+
+    ValueCapsLength = 1;
+    Status = HidP_GetSpecificValueCaps(
+                 HidP_Feature,
+                 HID_USAGE_PAGE_DIGITIZER,
+                 HIDP_LINK_COLLECTION_UNSPECIFIED,
+                 HID_USAGE_DIGITIZER_CONTACT_COUNT_MAXIMUM,
+                 &FeatureCaps,
+                 &ValueCapsLength,
+                 DeviceDescription.CollectionDesc[2].PreparsedData);
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok_eq_uint(ValueCapsLength, 1);
+    if (Status == HIDP_STATUS_SUCCESS && ValueCapsLength == 1)
+    {
+        ok_eq_uint(FeatureCaps.ReportID, 2);
+        ok_eq_uint(FeatureCaps.BitSize, 4);
+        ok_eq_uint(FeatureCaps.ReportCount, 1);
+    }
+
+    ValueCapsLength = 1;
+    Status = HidP_GetSpecificValueCaps(
+                 HidP_Feature,
+                 0xff00,
+                 HIDP_LINK_COLLECTION_UNSPECIFIED,
+                 0x00c5,
+                 &FeatureCaps,
+                 &ValueCapsLength,
+                 DeviceDescription.CollectionDesc[2].PreparsedData);
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok_eq_uint(ValueCapsLength, 1);
+    if (Status == HIDP_STATUS_SUCCESS && ValueCapsLength == 1)
+    {
+        ok_eq_uint(FeatureCaps.ReportID, 6);
+        ok_eq_uint(FeatureCaps.BitSize, 8);
+        ok_eq_uint(FeatureCaps.ReportCount, 256);
+        ok_eq_uint(FeatureCaps.NotRange.Usage, 0x00c5);
+        ok_eq_uint(FeatureCaps.NotRange.DataIndex, 3);
+    }
+
+    CertificationReport[0] = 6;
+    for (Index = 0; Index < RTL_NUMBER_OF(CertificationValue); Index++)
+    {
+        CertificationReport[Index + 1] = (UCHAR)Index;
+        NewCertificationValue[Index] = (UCHAR)(Index ^ 0x5a);
+    }
+
+    RtlZeroMemory(CertificationValue, sizeof(CertificationValue));
+    Status = HidP_GetUsageValueArray(
+                 HidP_Feature,
+                 0xff00,
+                 HIDP_LINK_COLLECTION_UNSPECIFIED,
+                 0x00c5,
+                 (PCHAR)CertificationValue,
+                 sizeof(CertificationValue),
+                 DeviceDescription.CollectionDesc[2].PreparsedData,
+                 (PCHAR)CertificationReport,
+                 sizeof(CertificationReport));
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok(RtlCompareMemory(CertificationValue,
+                        CertificationReport + 1,
+                        sizeof(CertificationValue)) ==
+           sizeof(CertificationValue),
+       "Certification value array differs from the feature report\n");
+
+    Status = HidP_GetUsageValueArray(
+                 HidP_Feature,
+                 0xff00,
+                 HIDP_LINK_COLLECTION_UNSPECIFIED,
+                 0x00c5,
+                 (PCHAR)CertificationValue,
+                 sizeof(CertificationValue) - 1,
+                 DeviceDescription.CollectionDesc[2].PreparsedData,
+                 (PCHAR)CertificationReport,
+                 sizeof(CertificationReport));
+    ok_eq_hex(Status, HIDP_STATUS_BUFFER_TOO_SMALL);
+
+    RtlZeroMemory(CertificationReport + 1,
+                  sizeof(CertificationReport) - 1);
+    Status = HidP_SetUsageValueArray(
+                 HidP_Feature,
+                 0xff00,
+                 HIDP_LINK_COLLECTION_UNSPECIFIED,
+                 0x00c5,
+                 (PCHAR)NewCertificationValue,
+                 sizeof(NewCertificationValue),
+                 DeviceDescription.CollectionDesc[2].PreparsedData,
+                 (PCHAR)CertificationReport,
+                 sizeof(CertificationReport));
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok(RtlCompareMemory(NewCertificationValue,
+                        CertificationReport + 1,
+                        sizeof(NewCertificationValue)) ==
+           sizeof(NewCertificationValue),
+       "Set certification value array differs from its source\n");
     ok_eq_uint(Caps.NumberLinkCollectionNodes, 6);
 
     NodeCount = RTL_NUMBER_OF(Nodes);
@@ -561,6 +699,17 @@ TestElanPrecisionTouchpad(VOID)
 
     if (DeviceDescription.CollectionDescLength >= 4)
     {
+        Status = HidP_GetCaps(
+                     DeviceDescription.CollectionDesc[3].PreparsedData,
+                     &Caps);
+        ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+        if (Status == HIDP_STATUS_SUCCESS)
+        {
+            ok_eq_uint(Caps.FeatureReportByteLength, 3);
+            ok_eq_uint(Caps.NumberFeatureValueCaps, 3);
+            ok_eq_uint(Caps.NumberFeatureDataIndices, 3);
+        }
+
         ValueCapsLength = 1;
         Status = HidP_GetSpecificValueCaps(
                      HidP_Feature,
@@ -605,7 +754,241 @@ TestElanPrecisionTouchpad(VOID)
                      sizeof(ModeReport));
         ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
         ok_eq_ulong(Value, 3);
+
+        ValueCapsLength = 1;
+        Status = HidP_GetSpecificValueCaps(
+                     HidP_Feature,
+                     HID_USAGE_PAGE_DIGITIZER,
+                     HIDP_LINK_COLLECTION_UNSPECIFIED,
+                     HID_USAGE_DIGITIZER_SURFACE_SWITCH,
+                     &FeatureCaps,
+                     &ValueCapsLength,
+                     DeviceDescription.CollectionDesc[3].PreparsedData);
+        ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+        ok_eq_uint(ValueCapsLength, 1);
+        if (Status == HIDP_STATUS_SUCCESS && ValueCapsLength == 1)
+        {
+            ok_eq_uint(FeatureCaps.ReportID, 5);
+            ok_eq_uint(FeatureCaps.BitSize, 1);
+            ok_eq_uint(FeatureCaps.ReportCount, 1);
+            ok_eq_uint(FeatureCaps.NotRange.DataIndex, 1);
+        }
+
+        Status = HidP_SetUsageValue(
+                     HidP_Feature,
+                     HID_USAGE_PAGE_DIGITIZER,
+                     HIDP_LINK_COLLECTION_UNSPECIFIED,
+                     HID_USAGE_DIGITIZER_SURFACE_SWITCH,
+                     1,
+                     DeviceDescription.CollectionDesc[3].PreparsedData,
+                     (PCHAR)SelectiveReport,
+                     sizeof(SelectiveReport));
+        ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+        Status = HidP_SetUsageValue(
+                     HidP_Feature,
+                     HID_USAGE_PAGE_DIGITIZER,
+                     HIDP_LINK_COLLECTION_UNSPECIFIED,
+                     HID_USAGE_DIGITIZER_BUTTON_SWITCH,
+                     1,
+                     DeviceDescription.CollectionDesc[3].PreparsedData,
+                     (PCHAR)SelectiveReport,
+                     sizeof(SelectiveReport));
+        ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+        ok_eq_uint(SelectiveReport[0], 5);
+        ok_eq_uint(SelectiveReport[1], 3);
+        ok_eq_uint(SelectiveReport[2], 0);
     }
+
+    HidP_FreeCollectionDescription(&DeviceDescription);
+}
+
+static
+VOID
+TestUsageValueArrays(VOID)
+{
+    HIDP_DEVICE_DESC DeviceDescription;
+    HIDP_BUTTON_CAPS ButtonCaps;
+    HIDP_VALUE_CAPS ValueCaps;
+    HIDP_CAPS Caps;
+    UCHAR ArrayReport[5] = {0x20, 0x47, 0x88, 0xcc, 0x10};
+    UCHAR OriginalReport[sizeof(ArrayReport)];
+    UCHAR ScalarReport[5] = {0x21, 0x2a, 0, 0, 0};
+    UCHAR UsageValue[4];
+    static const UCHAR ExpectedValue[] = {0x11, 0x22, 0x33, 0x04};
+    ULONG ScalarValue;
+    USHORT ButtonCapsLength, ValueCapsLength;
+    NTSTATUS Status;
+
+    Status = HidP_GetCollectionDescription(UsageValueArrayDescriptor,
+                                           sizeof(UsageValueArrayDescriptor),
+                                           NonPagedPool,
+                                           &DeviceDescription);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    ok_eq_ulong(DeviceDescription.CollectionDescLength, 1);
+    ok_eq_ulong(DeviceDescription.ReportIDsLength, 3);
+
+    Status = HidP_GetCaps(DeviceDescription.CollectionDesc[0].PreparsedData,
+                          &Caps);
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    if (Status == HIDP_STATUS_SUCCESS)
+    {
+        ok_eq_uint(Caps.InputReportByteLength, sizeof(ArrayReport));
+        ok_eq_uint(Caps.NumberInputValueCaps, 2);
+        ok_eq_uint(Caps.NumberInputButtonCaps, 1);
+        ok_eq_uint(Caps.NumberInputDataIndices, 7);
+    }
+
+    ValueCapsLength = 1;
+    Status = HidP_GetSpecificValueCaps(
+                 HidP_Input,
+                 HID_USAGE_PAGE_GENERIC,
+                 HIDP_LINK_COLLECTION_UNSPECIFIED,
+                 HID_USAGE_GENERIC_X,
+                 &ValueCaps,
+                 &ValueCapsLength,
+                 DeviceDescription.CollectionDesc[0].PreparsedData);
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok_eq_uint(ValueCapsLength, 1);
+    if (Status == HIDP_STATUS_SUCCESS && ValueCapsLength == 1)
+    {
+        ok_eq_uint(ValueCaps.ReportID, 0x20);
+        ok_eq_uint(ValueCaps.BitSize, 6);
+        ok_eq_uint(ValueCaps.ReportCount, 5);
+        ok_eq_uint(ValueCaps.NotRange.Usage, HID_USAGE_GENERIC_X);
+        ok_eq_uint(ValueCaps.NotRange.DataIndex, 0);
+    }
+
+    ValueCapsLength = 1;
+    Status = HidP_GetSpecificValueCaps(
+                 HidP_Input,
+                 HID_USAGE_PAGE_GENERIC,
+                 HIDP_LINK_COLLECTION_UNSPECIFIED,
+                 HID_USAGE_GENERIC_Y,
+                 &ValueCaps,
+                 &ValueCapsLength,
+                 DeviceDescription.CollectionDesc[0].PreparsedData);
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok_eq_uint(ValueCapsLength, 1);
+    if (Status == HIDP_STATUS_SUCCESS && ValueCapsLength == 1)
+        ok_eq_uint(ValueCaps.NotRange.DataIndex, 5);
+
+    ButtonCapsLength = 1;
+    Status = HidP_GetSpecificButtonCaps(
+                 HidP_Input,
+                 HID_USAGE_PAGE_BUTTON,
+                 HIDP_LINK_COLLECTION_UNSPECIFIED,
+                 1,
+                 &ButtonCaps,
+                 &ButtonCapsLength,
+                 DeviceDescription.CollectionDesc[0].PreparsedData);
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok_eq_uint(ButtonCapsLength, 1);
+    if (Status == HIDP_STATUS_SUCCESS && ButtonCapsLength == 1)
+    {
+        ok_eq_uint(ButtonCaps.ReportID, 0x22);
+        ok_eq_uint(ButtonCaps.NotRange.DataIndex, 6);
+    }
+
+    RtlFillMemory(UsageValue, sizeof(UsageValue), 0xff);
+    Status = HidP_GetUsageValueArray(
+                 HidP_Input,
+                 HID_USAGE_PAGE_GENERIC,
+                 HIDP_LINK_COLLECTION_UNSPECIFIED,
+                 HID_USAGE_GENERIC_X,
+                 (PCHAR)UsageValue,
+                 sizeof(UsageValue),
+                 DeviceDescription.CollectionDesc[0].PreparsedData,
+                 (PCHAR)ArrayReport,
+                 sizeof(ArrayReport));
+    ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+    ok(RtlCompareMemory(UsageValue,
+                        ExpectedValue,
+                        sizeof(ExpectedValue)) == sizeof(ExpectedValue),
+       "Non-byte-aligned value array differs from the report\n");
+
+    Status = HidP_GetUsageValueArray(
+                 HidP_Input,
+                 HID_USAGE_PAGE_GENERIC,
+                 HIDP_LINK_COLLECTION_UNSPECIFIED,
+                 HID_USAGE_GENERIC_X,
+                 (PCHAR)UsageValue,
+                 sizeof(UsageValue) - 1,
+                 DeviceDescription.CollectionDesc[0].PreparsedData,
+                 (PCHAR)ArrayReport,
+                 sizeof(ArrayReport));
+    ok_eq_hex(Status, HIDP_STATUS_BUFFER_TOO_SMALL);
+
+    ScalarValue = 0;
+    Status = HidP_GetUsageValue(
+                 HidP_Input,
+                 HID_USAGE_PAGE_GENERIC,
+                 HIDP_LINK_COLLECTION_UNSPECIFIED,
+                 HID_USAGE_GENERIC_X,
+                 &ScalarValue,
+                 DeviceDescription.CollectionDesc[0].PreparsedData,
+                 (PCHAR)ArrayReport,
+                 sizeof(ArrayReport));
+    ok_eq_hex(Status, HIDP_STATUS_IS_VALUE_ARRAY);
+
+    RtlCopyMemory(OriginalReport, ArrayReport, sizeof(ArrayReport));
+    Status = HidP_SetUsageValue(
+                 HidP_Input,
+                 HID_USAGE_PAGE_GENERIC,
+                 HIDP_LINK_COLLECTION_UNSPECIFIED,
+                 HID_USAGE_GENERIC_X,
+                 1,
+                 DeviceDescription.CollectionDesc[0].PreparsedData,
+                 (PCHAR)ArrayReport,
+                 sizeof(ArrayReport));
+    ok_eq_hex(Status, HIDP_STATUS_IS_VALUE_ARRAY);
+    ok(RtlCompareMemory(ArrayReport,
+                        OriginalReport,
+                        sizeof(ArrayReport)) == sizeof(ArrayReport),
+       "Scalar write modified a value-array report\n");
+
+    RtlCopyMemory(OriginalReport, ArrayReport, sizeof(ArrayReport));
+    Status = HidP_SetUsageValueArray(
+                 HidP_Input,
+                 HID_USAGE_PAGE_GENERIC,
+                 HIDP_LINK_COLLECTION_UNSPECIFIED,
+                 HID_USAGE_GENERIC_X,
+                 (PCHAR)UsageValue,
+                 sizeof(UsageValue),
+                 DeviceDescription.CollectionDesc[0].PreparsedData,
+                 (PCHAR)ArrayReport,
+                 sizeof(ArrayReport));
+    ok_eq_hex(Status, HIDP_STATUS_NOT_IMPLEMENTED);
+    ok(RtlCompareMemory(ArrayReport,
+                        OriginalReport,
+                        sizeof(ArrayReport)) == sizeof(ArrayReport),
+       "Unsupported value-array write modified the report\n");
+
+    Status = HidP_GetUsageValueArray(
+                 HidP_Input,
+                 HID_USAGE_PAGE_GENERIC,
+                 HIDP_LINK_COLLECTION_UNSPECIFIED,
+                 HID_USAGE_GENERIC_X,
+                 (PCHAR)UsageValue,
+                 sizeof(UsageValue),
+                 DeviceDescription.CollectionDesc[0].PreparsedData,
+                 (PCHAR)ScalarReport,
+                 sizeof(ScalarReport));
+    ok_eq_hex(Status, HIDP_STATUS_INCOMPATIBLE_REPORT_ID);
+
+    Status = HidP_GetUsageValueArray(
+                 HidP_Input,
+                 HID_USAGE_PAGE_GENERIC,
+                 HIDP_LINK_COLLECTION_UNSPECIFIED,
+                 HID_USAGE_GENERIC_Y,
+                 (PCHAR)UsageValue,
+                 sizeof(UsageValue),
+                 DeviceDescription.CollectionDesc[0].PreparsedData,
+                 (PCHAR)ScalarReport,
+                 sizeof(ScalarReport));
+    ok_eq_hex(Status, HIDP_STATUS_NOT_VALUE_ARRAY);
 
     HidP_FreeCollectionDescription(&DeviceDescription);
 }
@@ -824,6 +1207,7 @@ TestHidPDescription(
 
     TestGetCollectionDescription();
     TestElanPrecisionTouchpad();
+    TestUsageValueArrays();
     TestMultipleInputReports();
     TestConsumerAndSystemControls();
 

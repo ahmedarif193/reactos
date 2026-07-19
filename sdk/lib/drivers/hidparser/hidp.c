@@ -448,9 +448,19 @@ HidP_GetUsageValueArray(
     IN PCHAR  Report,
     IN ULONG  ReportLength)
 {
-    UNIMPLEMENTED;
-    ASSERT(FALSE);
-    return STATUS_NOT_IMPLEMENTED;
+    PreparsedData = HidP_GetParserContext(PreparsedData);
+    if (PreparsedData == NULL)
+        return HIDP_STATUS_INVALID_PREPARSED_DATA;
+
+    return HidParser_GetUsageValueArray(PreparsedData,
+                                        ReportType,
+                                        UsagePage,
+                                        LinkCollection,
+                                        Usage,
+                                        UsageValue,
+                                        UsageValueByteLength,
+                                        Report,
+                                        ReportLength);
 }
 
 
@@ -520,9 +530,19 @@ HidP_SetUsageValueArray(
     OUT PCHAR  Report,
     IN ULONG  ReportLength)
 {
-    UNIMPLEMENTED;
-    ASSERT(FALSE);
-    return STATUS_NOT_IMPLEMENTED;
+    PreparsedData = HidP_GetParserContext(PreparsedData);
+    if (PreparsedData == NULL)
+        return HIDP_STATUS_INVALID_PREPARSED_DATA;
+
+    return HidParser_SetUsageValueArray(PreparsedData,
+                                        ReportType,
+                                        UsagePage,
+                                        LinkCollection,
+                                        Usage,
+                                        UsageValue,
+                                        UsageValueByteLength,
+                                        Report,
+                                        ReportLength);
 }
 
 HIDAPI
