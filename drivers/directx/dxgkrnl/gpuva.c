@@ -1810,6 +1810,146 @@ DxgkGpuVaMap(
     return STATUS_SUCCESS;
 }
 
+
+/*
+ * DxgkGpuVaMapFencePage
+ *
+ * Map a kernel-owned nonpaged page (a monitored-fence value page) into the
+ * process GPU VA space so the GPU can address the fence value.  The range
+ * is system-use: mapped, writable, with no allocation handle behind it.
+ */
+NTSTATUS
+DxgkGpuVaMapFencePage(
+    _In_ PDXGKRNL_ADAPTER  Adapter,
+    _In_ PDXGKRNL_PROCESS  Process,
+    _In_ PVOID             KernelVa,
+    _Out_ D3DGPU_VIRTUAL_ADDRESS *OutAddress)
+{
+    PDXGKRNL_GPUVA_RANGE Range;
+    PDXGKRNL_GPUVA_PAGE_TABLE Leaf;
+    D3DGPU_VIRTUAL_ADDRESS ActualAddress;
+    PHYSICAL_ADDRESS Physical;
+    DXGK_PTE *Entries;
+    DXGK_PTE Pte;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (Adapter == NULL || Process == NULL || KernelVa == NULL || OutAddress == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *OutAddress = 0;
+    if (!Adapter->GpuMmuCapsValid ||
+        Adapter->GpuMmuCaps.PageTableUpdateMode != DXGK_PAGETABLEUPDATE_CPU_VIRTUAL)
+        return STATUS_NOT_SUPPORTED;
+
+    Range = GpuVaAllocRange();
+    if (Range == NULL)
+        return STATUS_NO_MEMORY;
+
+    ExAcquireFastMutex(&Process->GpuVaLock);
+
+    if (Process->GpuVaRangeCount >= GPUVA_MAX_PROCESS_RANGES)
+    {
+        ExReleaseFastMutex(&Process->GpuVaLock);
+        GpuVaFreeRange(Range);
+        return STATUS_QUOTA_EXCEEDED;
+    }
+    Status = GpuVaEnsureRootPageTable(Process);
+    if (!NT_SUCCESS(Status))
+    {
+        ExReleaseFastMutex(&Process->GpuVaLock);
+        GpuVaFreeRange(Range);
+        return Status;
+    }
+    ActualAddress = GpuVaFindFreeRegion(Process, GPUVA_START_ADDRESS,
+                                        GPUVA_DEFAULT_SPACE_SIZE, GPUVA_PAGE_SIZE);
+    if (ActualAddress == 0)
+    {
+        ExReleaseFastMutex(&Process->GpuVaLock);
+        GpuVaFreeRange(Range);
+        return STATUS_NO_MEMORY;
+    }
+    Leaf = GpuVaGetLeafTable(Process, ActualAddress, TRUE);
+    if (Leaf == NULL)
+    {
+        ExReleaseFastMutex(&Process->GpuVaLock);
+        GpuVaFreeRange(Range);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    Physical = MmGetPhysicalAddress(KernelVa);
+    RtlZeroMemory(&Pte, sizeof(Pte));
+    Pte.Valid = 1;
+    Pte.CacheCoherent = 1;
+    Pte.PageAddress = (ULONGLONG)Physical.QuadPart & ~GPUVA_PAGE_MASK;
+    Entries = (DXGK_PTE *)Leaf->KernelVa;
+    Entries[GpuVaPteIndex(ActualAddress, 0)] = Pte;
+
+    Range->GpuVirtualAddress = ActualAddress;
+    Range->SizeInBytes       = GPUVA_PAGE_SIZE;
+    Range->State             = GpuVaStateMapped;
+    Range->hAllocation       = NULL;
+    Range->AllocationOffset  = 0;
+    Range->Protection.Write  = 1;
+    Range->Protection.SystemUseOnly = 1;
+    Range->ReservationBase   = ActualAddress;
+    Range->ReservationSize   = GPUVA_PAGE_SIZE;
+
+    GpuVaInsertRange(Process, Range);
+    Process->GpuVaRangeCount++;
+    Process->GpuVaTotalReserved += GPUVA_PAGE_SIZE;
+    Process->GpuVaTotalMapped   += GPUVA_PAGE_SIZE;
+
+    ExReleaseFastMutex(&Process->GpuVaLock);
+
+    *OutAddress = ActualAddress;
+    DPRINT("DxgkGpuVaMapFencePage: fence page at 0x%I64x\n", ActualAddress);
+    return STATUS_SUCCESS;
+}
+
+
+/*
+ * DxgkGpuVaUnmapFencePage
+ * Remove a fence-page mapping created by DxgkGpuVaMapFencePage.
+ */
+VOID
+DxgkGpuVaUnmapFencePage(
+    _In_ PDXGKRNL_PROCESS       Process,
+    _In_ D3DGPU_VIRTUAL_ADDRESS Address)
+{
+    PLIST_ENTRY Entry;
+
+    if (Process == NULL || Address == 0)
+        return;
+
+    ExAcquireFastMutex(&Process->GpuVaLock);
+    for (Entry = Process->GpuVaRangeList.Flink;
+         Entry != &Process->GpuVaRangeList;
+         Entry = Entry->Flink)
+    {
+        PDXGKRNL_GPUVA_RANGE Range =
+            CONTAINING_RECORD(Entry, DXGKRNL_GPUVA_RANGE, RangeListEntry);
+
+        if (Range->GpuVirtualAddress != Address)
+            continue;
+        if (Range->SizeInBytes != GPUVA_PAGE_SIZE ||
+            Range->State != GpuVaStateMapped ||
+            Range->hAllocation != NULL ||
+            !Range->Protection.SystemUseOnly)
+            break;
+
+        RemoveEntryList(&Range->RangeListEntry);
+        GpuVaFreeRange(Range);
+        if (Process->GpuVaRangeCount != 0)
+            Process->GpuVaRangeCount--;
+        Process->GpuVaTotalReserved -= min(GPUVA_PAGE_SIZE, Process->GpuVaTotalReserved);
+        Process->GpuVaTotalMapped -= min(GPUVA_PAGE_SIZE, Process->GpuVaTotalMapped);
+        GpuVaClearPteSpan(Process, Address, GPUVA_PAGE_SIZE);
+        break;
+    }
+    ExReleaseFastMutex(&Process->GpuVaLock);
+}
+
 BOOLEAN
 DxgkGpuVaPageTableReady(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -2100,6 +2240,17 @@ DxgkGpuVaSetRootPageTable(
         return STATUS_DEVICE_REMOVED;
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+    if (Adapter->GpuMmuCapsValid &&
+        Adapter->GpuMmuCaps.PageTableUpdateMode == DXGK_PAGETABLEUPDATE_CPU_VIRTUAL)
+    {
+        NTSTATUS Status;
+
+        ExAcquireFastMutex(&Process->GpuVaLock);
+        Status = GpuVaEnsureRootPageTable(Process);
+        ExReleaseFastMutex(&Process->GpuVaLock);
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
     if (!DxgkGpuVaPageTableReady(Adapter, Process))
         return STATUS_NOT_SUPPORTED;
 
