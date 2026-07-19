@@ -2078,11 +2078,16 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
 
         if (!NT_SUCCESS(Status))
         {
-            DPRINT1("USBPORT_StartDevice: IoConnectInterrupt failed (Vector=%lu)!\n", FallbackVector);
-            goto ExitWithError;
+            /* The 500ms CheckController poll keeps the miniport functional;
+             * continue interrupt-less instead of failing the start */
+            DPRINT1("USBPORT_StartDevice: IoConnectInterrupt failed (Status=0x%lx Vector=%lu), continuing WITHOUT hardware interrupts (500ms poll fallback)\n", Status, FallbackVector);
+            FdoExtension->InterruptObject = NULL;
+            Status = STATUS_SUCCESS;
         }
-
-        FdoExtension->Flags |= USBPORT_FLAG_INT_CONNECTED;
+        else
+        {
+            FdoExtension->Flags |= USBPORT_FLAG_INT_CONNECTED;
+        }
     }
 
     if (Packet->MiniPortExtensionSize)
