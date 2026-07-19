@@ -3039,6 +3039,8 @@ DxgkOfferAllocations(
 
     if (pData->NumAllocations == 0 ||
         pData->NumAllocations > DXGKP_MAX_D3DKMT_LIST_COUNT ||
+        pData->Priority < D3DKMT_OFFER_PRIORITY_LOW ||
+        pData->Priority > D3DKMT_OFFER_PRIORITY_AUTO ||
         ((pData->pResources == NULL) == (pData->HandleList == NULL)))
     {
         DxgkDereferenceDevice(Device);
@@ -3047,12 +3049,24 @@ DxgkOfferAllocations(
 
     if (pData->HandleList != NULL)
     {
+        UINT i;
+
         Status = DxgkpValidateAllocationListForIoctl(Adapter, Device, pData->HandleList, pData->NumAllocations);
-        if (!NT_SUCCESS(Status))
+        if (NT_SUCCESS(Status))
         {
-            DxgkDereferenceDevice(Device);
-            return Status;
+            _SEH2_TRY
+            {
+                for (i = 0; i < pData->NumAllocations && NT_SUCCESS(Status); ++i)
+                    Status = DxgkVidMmOfferAllocation(Adapter, Device, pData->HandleList[i], (ULONG)pData->Priority);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
         }
+        DxgkDereferenceDevice(Device);
+        return Status;
     }
 
     DxgkDereferenceDevice(Device);
@@ -3090,12 +3104,30 @@ DxgkReclaimAllocations(
 
     if (pData->HandleList != NULL)
     {
+        UINT i;
+
         Status = DxgkpValidateAllocationListForIoctl(Adapter, Device, pData->HandleList, pData->NumAllocations);
-        if (!NT_SUCCESS(Status))
+        if (NT_SUCCESS(Status))
         {
-            DxgkDereferenceDevice(Device);
-            return Status;
+            _SEH2_TRY
+            {
+                for (i = 0; i < pData->NumAllocations && NT_SUCCESS(Status); ++i)
+                {
+                    BOOLEAN Discarded = FALSE;
+
+                    Status = DxgkVidMmReclaimAllocation(Adapter, Device, pData->HandleList[i], &Discarded);
+                    if (NT_SUCCESS(Status) && pData->pDiscarded != NULL)
+                        pData->pDiscarded[i] = Discarded ? TRUE : FALSE;
+                }
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
         }
+        DxgkDereferenceDevice(Device);
+        return Status;
     }
 
     DxgkDereferenceDevice(Device);

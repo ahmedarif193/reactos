@@ -5758,8 +5758,86 @@ DxgkVidMmEvict(
         return STATUS_INVALID_PARAMETER;
     (VOID)KeWaitForSingleObject(&Allocation->ResidencyLock, Executive, KernelMode, FALSE, NULL);
     Status = DxgkpVidMmEvictLocked(Allocation);
+    if (NT_SUCCESS(Status) && Allocation->Offered)
+        Allocation->OfferDiscarded = TRUE;
     KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
     return Status;
+}
+
+/*
+ * DxgkVidMmOfferAllocation / DxgkVidMmReclaimAllocation
+ *
+ * D3DKMTOfferAllocations marks the backing as reclaimable by the memory
+ * manager (a preferred eviction victim); ReclaimAllocations clears the
+ * offer and reports whether the content was discarded in between.  A
+ * discarded pool-owned backing is replaced with zeroed pages at reclaim.
+ */
+NTSTATUS
+DxgkVidMmOfferAllocation(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE  Device,
+    _In_ D3DKMT_HANDLE    Handle,
+    _In_ ULONG            Priority)
+{
+    PDXGKVMM_ALLOCATION Allocation;
+    NTSTATUS Status;
+
+    Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)Handle, Adapter, Device, &Allocation);
+    if (!NT_SUCCESS(Status))
+        return STATUS_INVALID_HANDLE;
+
+    (VOID)KeWaitForSingleObject(&Allocation->ResidencyLock, Executive, KernelMode, FALSE, NULL);
+    Allocation->Offered = TRUE;
+    Allocation->OfferPriority = Priority;
+    KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+
+    DxgkVidMmDereferenceAllocation(Allocation);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+DxgkVidMmReclaimAllocation(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE  Device,
+    _In_ D3DKMT_HANDLE    Handle,
+    _Out_ PBOOLEAN        Discarded)
+{
+    PDXGKVMM_ALLOCATION Allocation;
+    NTSTATUS Status;
+
+    *Discarded = FALSE;
+    Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)Handle, Adapter, Device, &Allocation);
+    if (!NT_SUCCESS(Status))
+        return STATUS_INVALID_HANDLE;
+
+    (VOID)KeWaitForSingleObject(&Allocation->ResidencyLock, Executive, KernelMode, FALSE, NULL);
+    *Discarded = Allocation->OfferDiscarded;
+    if (Allocation->OfferDiscarded &&
+        Allocation->SystemMemory == NULL &&
+        Allocation->SysMemMdl == NULL)
+    {
+        SIZE_T AllocSize = (Allocation->Size + PAGE_SIZE - 1) & ~(SIZE_T)(PAGE_SIZE - 1);
+
+        Allocation->SystemMemory = ExAllocatePoolWithTag(NonPagedPool, AllocSize, TAG_VIDMM_ALLOC);
+        if (Allocation->SystemMemory == NULL)
+        {
+            KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+            DxgkVidMmDereferenceAllocation(Allocation);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        RtlZeroMemory(Allocation->SystemMemory, AllocSize);
+        if (!Allocation->Resident)
+            Allocation->PhysicalAddress = MmGetPhysicalAddress(Allocation->SystemMemory);
+        if (Allocation->CpuVisible && Allocation->CpuAddress == NULL)
+            Allocation->CpuAddress = Allocation->SystemMemory;
+    }
+    Allocation->Offered = FALSE;
+    Allocation->OfferDiscarded = FALSE;
+    Allocation->OfferPriority = 0;
+    KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+
+    DxgkVidMmDereferenceAllocation(Allocation);
+    return STATUS_SUCCESS;
 }
 
 
@@ -5795,8 +5873,14 @@ VidMmFindLowestPriorityResident(
             InterlockedCompareExchange(&Candidate->ResidencyReferenceCount, 0, 0) != 0)
             continue;
 
+        /* Offered allocations are the preferred victims (lowest offer
+         * priority first), before any non-offered allocation. */
         if (Victim == NULL ||
-            Candidate->AllocationPriority < Victim->AllocationPriority)
+            (Candidate->Offered && !Victim->Offered) ||
+            (Candidate->Offered && Victim->Offered &&
+             Candidate->OfferPriority < Victim->OfferPriority) ||
+            (!Candidate->Offered && !Victim->Offered &&
+             Candidate->AllocationPriority < Victim->AllocationPriority))
         {
             Victim = Candidate;
         }
@@ -5937,7 +6021,7 @@ DxgkVidMmMakeResident(
         ExReleaseFastMutex(&Seg->Lock);
         if (Victim == NULL)
             continue;
-        if (Victim->AllocationPriority >= Allocation->AllocationPriority)
+        if (!Victim->Offered && Victim->AllocationPriority >= Allocation->AllocationPriority)
         {
             DPRINT("DxgkVidMmMakeResident: victim %p priority %lu >= our priority %lu, skipping seg %lu\n", Victim, Victim->AllocationPriority, Allocation->AllocationPriority, Seg->SegmentId);
             DxgkVidMmDereferenceAllocation(Victim);
