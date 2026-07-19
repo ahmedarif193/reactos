@@ -1880,6 +1880,13 @@ DxgkGpuVaValidateUpdate(
     _In_reads_(NumOperations) CONST D3DDDI_UPDATEGPUVIRTUALADDRESS_OPERATION *Operations,
     _In_ UINT NumOperations);
 
+NTSTATUS
+DxgkGpuVaApplyUpdate(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_reads_(NumOperations) CONST D3DDDI_UPDATEGPUVIRTUALADDRESS_OPERATION *Operations,
+    _In_ UINT NumOperations);
+
 /*
  * GPU VA residency management (WDDM 2.0).
  */
