@@ -1010,8 +1010,9 @@ IntWideCharToMultiByteUTF8(UINT CodePage,
 {
     INT TempLength;
     DWORD Char;
+    BOOL StringIsValid = TRUE;
 
-    if (Flags)
+    if (Flags != 0 && Flags != WC_ERR_INVALID_CHARS)
     {
         SetLastError(ERROR_INVALID_FLAGS);
         return 0;
@@ -1031,15 +1032,25 @@ IntWideCharToMultiByteUTF8(UINT CodePage,
                 {
                     TempLength++;
                     if (*WideCharString >= 0xd800 && *WideCharString < 0xdc00 &&
-                        WideCharCount >= 1 &&
-                        WideCharString[1] >= 0xdc00 && WideCharString[1] <= 0xe000)
+                        WideCharCount > 1 &&
+                        WideCharString[1] >= 0xdc00 && WideCharString[1] < 0xe000)
                     {
                         WideCharCount--;
                         WideCharString++;
                         TempLength++;
                     }
+                    else if (*WideCharString >= 0xd800 &&
+                             *WideCharString < 0xe000)
+                    {
+                        StringIsValid = FALSE;
+                    }
                 }
             }
+        }
+        if (Flags == WC_ERR_INVALID_CHARS && !StringIsValid)
+        {
+            SetLastError(ERROR_NO_UNICODE_TRANSLATION);
+            return 0;
         }
         return TempLength;
     }
@@ -1075,7 +1086,7 @@ IntWideCharToMultiByteUTF8(UINT CodePage,
 
         /* surrogate pair 0x10000-0x10ffff: 4 bytes */
         if (Char >= 0xd800 && Char < 0xdc00 &&
-            WideCharCount >= 1 &&
+            WideCharCount > 1 &&
             WideCharString[1] >= 0xdc00 && WideCharString[1] < 0xe000)
         {
             WideCharCount--;
@@ -1102,6 +1113,13 @@ IntWideCharToMultiByteUTF8(UINT CodePage,
             continue;
         }
 
+        /* Vista and later replace an unpaired UTF-16 surrogate with U+FFFD. */
+        if (Char >= 0xd800 && Char < 0xe000)
+        {
+            Char = 0xfffd;
+            StringIsValid = FALSE;
+        }
+
         /* 0x800-0xffff: 3 bytes */
         if (TempLength < 3)
         {
@@ -1113,6 +1131,12 @@ IntWideCharToMultiByteUTF8(UINT CodePage,
         MultiByteString[0] = 0xe0 | Char;
         MultiByteString += 3;
         TempLength -= 3;
+    }
+
+    if (Flags == WC_ERR_INVALID_CHARS && !StringIsValid)
+    {
+        SetLastError(ERROR_NO_UNICODE_TRANSLATION);
+        return 0;
     }
 
     return MultiByteCount - TempLength;
