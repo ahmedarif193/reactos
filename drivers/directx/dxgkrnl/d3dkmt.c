@@ -1229,8 +1229,9 @@ DxgkpQueryAdapterInfoCaptured(
 
         /*
          * Per-level capability words.  Every bit is derived from a complete,
-         * reachable execution path; scaffolding stays zero.  No adapter in
-         * this tree has a GPU MMU/IoMmu path, hardware scheduling, hardware
+         * reachable execution path; scaffolding stays zero.  GpuMmuSupported
+         * reflects a real CPU_VIRTUAL software page-table path; no adapter
+         * in this tree has an IoMmu path, hardware scheduling, hardware
          * flip queues, self-refresh memory, or cross-adapter scan-out yet.
          */
         case KMTQAITYPE_WDDM_2_0_CAPS:
@@ -1243,9 +1244,49 @@ DxgkpQueryAdapterInfoCaptured(
                 DXGKP_QUERY_RETURN(STATUS_BUFFER_TOO_SMALL);
             }
             RtlZeroMemory(&Caps, sizeof(Caps));
+            Caps.GpuMmuSupported = Adapter->GpuMmuCapsValid ? 1 : 0;
             _SEH2_TRY
             {
                 *(D3DKMT_WDDM_2_0_CAPS *)pQueryAdapterInfo->pPrivateDriverData = Caps;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                DXGKP_QUERY_RETURN(_SEH2_GetExceptionCode());
+            }
+            _SEH2_END;
+            DXGKP_QUERY_RETURN(STATUS_SUCCESS);
+        }
+
+        case KMTQAITYPE_QUERY_GPUMMU_CAPS:
+        {
+            D3DKMT_QUERY_GPUMMU_CAPS Query;
+
+            if (pQueryAdapterInfo->pPrivateDriverData == NULL ||
+                pQueryAdapterInfo->PrivateDriverDataSize < sizeof(Query))
+            {
+                DXGKP_QUERY_RETURN(STATUS_BUFFER_TOO_SMALL);
+            }
+            _SEH2_TRY
+            {
+                Query = *(D3DKMT_QUERY_GPUMMU_CAPS *)pQueryAdapterInfo->pPrivateDriverData;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                DXGKP_QUERY_RETURN(_SEH2_GetExceptionCode());
+            }
+            _SEH2_END;
+            if (Query.PhysicalAdapterIndex != 0)
+                DXGKP_QUERY_RETURN(STATUS_INVALID_PARAMETER);
+            if (!Adapter->GpuMmuCapsValid)
+                DXGKP_QUERY_RETURN(STATUS_NOT_SUPPORTED);
+            RtlZeroMemory(&Query.Caps, sizeof(Query.Caps));
+            Query.Caps.Flags.ReadOnlyMemorySupported = Adapter->GpuMmuCaps.ReadOnlyMemorySupported;
+            Query.Caps.Flags.NoExecuteMemorySupported = Adapter->GpuMmuCaps.NoExecuteMemorySupported;
+            Query.Caps.Flags.CacheCoherentMemorySupported = Adapter->GpuMmuCaps.CacheCoherentMemorySupported;
+            Query.Caps.VirtualAddressBitCount = Adapter->GpuMmuCaps.VirtualAddressBitCount;
+            _SEH2_TRY
+            {
+                *(D3DKMT_QUERY_GPUMMU_CAPS *)pQueryAdapterInfo->pPrivateDriverData = Query;
             }
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
             {
@@ -4574,10 +4615,34 @@ DxgkpDispatchBufferedIoctl(
                     DxgkDereferenceDevice(Device);
                     return STATUS_INVALID_PARAMETER;
                 }
-                DxgkVidMmDereferenceAllocation(Allocation);
             }
+
+            {
+                D3DDDIGPUVIRTUALADDRESS_PROTECTION_TYPE Protection;
+
+                Protection.Value = pMap->Protection.Value;
+                Status = DxgkGpuVaMap(Adapter,
+                                      Device->ProcessRecord,
+                                      Allocation,
+                                      pMap->hAllocation,
+                                      MapOffset,
+                                      pMap->BaseAddress,
+                                      pMap->MinimumAddress,
+                                      pMap->MaximumAddress,
+                                      MapSize,
+                                      Protection,
+                                      pMap->DriverProtection,
+                                      &pMap->VirtualAddress);
+            }
+            if (Allocation != NULL)
+                DxgkVidMmDereferenceAllocation(Allocation);
             DxgkDereferenceDevice(Device);
-            return STATUS_NOT_SUPPORTED;
+            if (NT_SUCCESS(Status))
+            {
+                pMap->PagingFenceValue = 0;
+                Irp->IoStatus.Information = sizeof(D3DDDI_MAPGPUVIRTUALADDRESS_LOCAL);
+            }
+            return Status;
         }
 
         case IOCTL_D3DKMT_RESERVEGPUVIRTUALADDRESS:

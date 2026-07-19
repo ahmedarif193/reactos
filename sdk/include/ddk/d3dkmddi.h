@@ -1373,6 +1373,41 @@ typedef enum _DXGK_PAGETABLEUPDATEMODE
     DXGK_PAGETABLEUPDATE_GPU_PHYSICAL,
 } DXGK_PAGETABLEUPDATEMODE;
 
+typedef struct _DXGK_GPUMMUCAPS
+{
+    union
+    {
+        struct
+        {
+            UINT ReadOnlyMemorySupported                : 1;
+            UINT NoExecuteMemorySupported               : 1;
+            UINT ZeroInPteSupported                     : 1;
+            UINT ExplicitPageTableInvalidation          : 1;
+            UINT CacheCoherentMemorySupported           : 1;
+            UINT PageTableUpdateRequireAddressSpaceIdle : 1;
+            UINT LargePageSupported                     : 1;
+            UINT DualPteSupported                       : 1;
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_1)
+            UINT AllowNonAlignedLargePageAddress        : 1;
+            UINT SysMem64KBPageSupported                : 1;
+            UINT Reserved                               : 22;
+#else
+            UINT Reserved                               : 24;
+#endif // (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_1)
+        };
+        UINT        Value;
+    };
+    DXGK_PAGETABLEUPDATEMODE    PageTableUpdateMode;
+    UINT                        VirtualAddressBitCount;
+    UINT                        LeafPageTableSizeFor64KPagesInBytes;
+    UINT                        PageTableLevelCount;
+    struct
+    {
+        UINT SourcePageTableVaInTransfer  : 1;
+        UINT Reserved                     : 31;
+    } LegacyBehaviors;
+} DXGK_GPUMMUCAPS;
+
 typedef struct _DXGK_PAGETABLEUPDATEADDRESS
 {
     union

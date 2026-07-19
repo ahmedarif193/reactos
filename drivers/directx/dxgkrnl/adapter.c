@@ -4546,6 +4546,46 @@ DxgkpQueryDriverCaps(
     return Status;
 }
 
+NTSTATUS
+DxgkpQueryGpuMmuCaps(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Out_ DXGK_GPUMMUCAPS *Caps)
+{
+    PDXGKDDI_QUERY_ADAPTER_INFO PfnQueryAdapterInfo;
+    DXGKARG_QUERYADAPTERINFO QueryArgs;
+    NTSTATUS Status;
+
+    if (Caps == NULL)
+        return STATUS_INVALID_PARAMETER;
+    RtlZeroMemory(Caps, sizeof(*Caps));
+    if (Adapter == NULL || Adapter->MiniportContext == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    PfnQueryAdapterInfo = DXGK_CB(Adapter, DxgkDdiQueryAdapterInfo);
+    if (PfnQueryAdapterInfo == NULL)
+        return STATUS_NOT_SUPPORTED;
+    if (!DxgkAcquireKmdCall(Adapter))
+        return STATUS_DELETE_PENDING;
+
+    RtlZeroMemory(&QueryArgs, sizeof(QueryArgs));
+    QueryArgs.Type = DXGKQAITYPE_GPUMMUCAPS;
+    QueryArgs.pOutputData = Caps;
+    QueryArgs.OutputDataSize = sizeof(*Caps);
+
+    _SEH2_TRY
+    {
+        Status = PfnQueryAdapterInfo(Adapter->MiniportDeviceContext, &QueryArgs);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    DxgkReleaseKmdCall(Adapter);
+    return Status;
+}
+
 /* ========================================================================
  * Adapter lifecycle functions
  * ====================================================================== */
@@ -5206,6 +5246,21 @@ DxgkAdapterStart(
 
             ExFreePoolWithTag(Caps, TAG_DXGK_ADAPTER);
         }
+    }
+
+    /* Cache the GPU MMU declaration while the miniport is callable. */
+    Adapter->GpuMmuCapsValid = FALSE;
+    RtlZeroMemory(&Adapter->GpuMmuCaps, sizeof(Adapter->GpuMmuCaps));
+    if (!Adapter->MiniportContext->IsDisplayOnlyDriver &&
+        Adapter->MiniportContext->InitData.s.Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_0 &&
+        NT_SUCCESS(DxgkpQueryGpuMmuCaps(Adapter, &Adapter->GpuMmuCaps)) &&
+        Adapter->GpuMmuCaps.VirtualAddressBitCount != 0 &&
+        Adapter->GpuMmuCaps.PageTableLevelCount != 0)
+    {
+        Adapter->GpuMmuCapsValid = TRUE;
+        DXGKRNL_TRACE("DxgkAdapterStart: GpuMmu %u-bit, %u level(s)\n",
+                      Adapter->GpuMmuCaps.VirtualAddressBitCount,
+                      Adapter->GpuMmuCaps.PageTableLevelCount);
     }
 
     {
