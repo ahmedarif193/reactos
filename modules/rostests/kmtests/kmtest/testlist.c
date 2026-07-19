@@ -19,6 +19,7 @@ KMT_TESTFUNC Test_FltMgrLoad;
 KMT_TESTFUNC Test_FltMgrReg;
 KMT_TESTFUNC Test_HidPDescription;
 KMT_TESTFUNC Test_Hidi2cDescriptor;
+KMT_TESTFUNC Test_Hidi2cTransfer;
 KMT_TESTFUNC Test_IoCreateFile;
 KMT_TESTFUNC Test_IoDeviceObject;
 KMT_TESTFUNC Test_IoReadWrite;
@@ -57,6 +58,7 @@ const KMT_TEST TestList[] =
     { "-FltMgrReg",                   Test_FltMgrReg }, // TODO: WIP/untested/crashes.
     { "HidPDescription",              Test_HidPDescription },
     { "Hidi2cDescriptor",             Test_Hidi2cDescriptor },
+    { "Hidi2cTransfer",               Test_Hidi2cTransfer },
     { "IoCreateFile",                 Test_IoCreateFile },
     { "IoDeviceObject",               Test_IoDeviceObject },
     { "IoReadWrite",                  Test_IoReadWrite },

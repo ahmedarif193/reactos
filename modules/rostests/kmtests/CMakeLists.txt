@@ -247,6 +247,7 @@ list(APPEND KMTEST_SOURCE
 
     hidparse/HidP_user.c
     hidi2c/Hidi2cDescriptor_user.c
+    hidi2c/Hidi2cTransfer_user.c
     kernel32/FileAttributes_user.c
     kernel32/FindFile_user.c
     ntos_cc/CcCopyRead_user.c

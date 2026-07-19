@@ -8,3 +8,4 @@
 #pragma once
 
 #define IOCTL_TEST_HIDI2C_DESCRIPTOR 1
+#define IOCTL_TEST_HIDI2C_TRANSFER   2

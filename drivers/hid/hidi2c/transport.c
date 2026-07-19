@@ -150,9 +150,18 @@ Hidi2cSpbSequence(
                                    InputLength,
                                    NULL,
                                    0);
+    if (Status != STATUS_SUCCESS)
+    {
+        if (Information != NULL)
+            *Information = 0;
+        return Status;
+    }
+
     if (Information != NULL)
-        *Information = NT_SUCCESS(Status) ? IoStatusBlock.Information : 0;
-    return Status;
+        *Information = IoStatusBlock.Information;
+    return Hidi2cValidateTransferResult(Status,
+                                        IoStatusBlock.Information,
+                                        (ULONG_PTR)WriteLength + ReadLength);
 }
 
 static
@@ -174,9 +183,11 @@ Hidi2cSpbRead(
                         Length,
                         NULL,
                         NULL);
-    if (NT_SUCCESS(Status) && IoStatusBlock.Information != Length)
-        return STATUS_DEVICE_PROTOCOL_ERROR;
-    return Status;
+    if (Status != STATUS_SUCCESS)
+        return Status;
+    return Hidi2cValidateTransferResult(Status,
+                                        IoStatusBlock.Information,
+                                        Length);
 }
 
 static
@@ -198,9 +209,11 @@ Hidi2cSpbWrite(
                          Length,
                          NULL,
                          NULL);
-    if (NT_SUCCESS(Status) && IoStatusBlock.Information != Length)
-        return STATUS_DEVICE_PROTOCOL_ERROR;
-    return Status;
+    if (Status != STATUS_SUCCESS)
+        return Status;
+    return Hidi2cValidateTransferResult(Status,
+                                        IoStatusBlock.Information,
+                                        Length);
 }
 
 static

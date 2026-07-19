@@ -78,6 +78,12 @@ Hidi2cValidateDeviceDescriptor(
     _In_ const HIDI2C_DEVICE_DESCRIPTOR *Descriptor);
 
 NTSTATUS
+Hidi2cValidateTransferResult(
+    _In_ NTSTATUS Status,
+    _In_ ULONG_PTR Information,
+    _In_ ULONG_PTR ExpectedLength);
+
+NTSTATUS
 Hidi2cInitializeTransport(
     _Inout_ PHIDI2C_DEVICE_EXTENSION DeviceExtension);
 

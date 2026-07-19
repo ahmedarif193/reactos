@@ -1,6 +1,7 @@
 list(APPEND SOURCE
     descriptor.c
     hidi2c.c
+    transfer.c
     transport.c
     hidi2c.h)
 
