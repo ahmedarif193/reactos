@@ -1,0 +1,48 @@
+; HID over I2C ACPI minidriver
+
+[Version]
+Signature  = "$Windows NT$"
+Class      = HIDClass
+ClassGUID  = {745A17A0-74D3-11D0-B6FE-00A0C90F57DA}
+Provider   = %ReactOS%
+DriverVer  = 07/19/2026,1.0.0.0
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[Manufacturer]
+%StandardMfg% = Standard
+
+[Standard]
+%HIDI2C.DeviceDesc% = HIDI2C_Install, ACPI\PNP0C50
+%HIDI2C.DeviceDesc% = HIDI2C_Install, ACPI\ACPI0C50
+
+[HIDI2C_Install]
+CopyFiles = HIDI2C_CopyFiles
+
+[HIDI2C_CopyFiles]
+hidi2c.sys
+
+[HIDI2C_Install.Services]
+AddService = hidi2c, 0x00000002, HIDI2C_Service
+
+[HIDI2C_Service]
+DisplayName    = %HIDI2C.ServiceDesc%
+ServiceType    = 1
+StartType      = 3
+ErrorControl   = 1
+ServiceBinary  = %12%\hidi2c.sys
+LoadOrderGroup = Extended Base
+
+[SourceDisksNames]
+1 = %DiskName%
+
+[SourceDisksFiles]
+hidi2c.sys = 1
+
+[Strings]
+ReactOS              = "ReactOS Project"
+StandardMfg          = "Standard system devices"
+HIDI2C.DeviceDesc    = "HID over I2C Device"
+HIDI2C.ServiceDesc   = "HID over I2C Minidriver"
+DiskName             = "ReactOS HID over I2C Driver Installation Disk"
