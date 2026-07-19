@@ -8,6 +8,8 @@
 #include <hidport.h>
 #include <pseh/pseh2.h>
 
+#include "ptp.h"
+
 #define HIDCLASS_TAG 'CdiH'
 
 typedef struct
@@ -77,6 +79,11 @@ typedef struct
     // device relations
     //
     PDEVICE_RELATIONS DeviceRelations;
+
+    //
+    // precision touchpad capabilities
+    //
+    HIDCLASS_PTP_CAPABILITIES PrecisionTouchpad;
 
 } HIDCLASS_FDO_EXTENSION, *PHIDCLASS_FDO_EXTENSION;
 

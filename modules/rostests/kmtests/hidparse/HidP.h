@@ -10,4 +10,7 @@
 
 #define IOCTL_TEST_DESCRIPTION      1
 
+VOID
+TestHidClassPtpCapabilities(VOID);
+
 #endif /* !defined _KMTEST_HIDP_H_ */

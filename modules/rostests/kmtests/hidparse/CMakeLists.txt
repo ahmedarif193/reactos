@@ -7,7 +7,11 @@ include_directories(../include)
 list(APPEND HIDP_DRV_SOURCE
     ../kmtest_drv/kmtest_standalone.c
     HidP_drv.c
-    HidPDescription.c)
+    HidPDescription.c
+    HidClassPtp.c
+    ${REACTOS_SOURCE_DIR}/drivers/hid/hidclass/ptp.c)
+
+include_directories(${REACTOS_SOURCE_DIR}/drivers/hid/hidclass)
 
 add_library(hidp_drv MODULE ${HIDP_DRV_SOURCE})
 set_module_type(hidp_drv kernelmodedriver)

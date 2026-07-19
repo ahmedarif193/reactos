@@ -419,23 +419,24 @@ HidClassFDO_SendReportRequest(
 }
 
 static
-BOOLEAN
-HidClassFDO_HasPrecisionTouchpad(
-    IN PHIDP_DEVICE_DESC DeviceDescription)
+NTSTATUS
+NTAPI
+HidClassFDO_GetPrecisionTouchpadFeature(
+    _In_ PVOID Context,
+    _In_ UCHAR ReportId,
+    _Inout_updates_bytes_(ReportLength) PUCHAR ReportBuffer,
+    _In_ ULONG ReportLength)
 {
-    ULONG Index;
+    HID_XFER_PACKET XferPacket;
 
-    for (Index = 0; Index < DeviceDescription->CollectionDescLength; Index++)
-    {
-        if (DeviceDescription->CollectionDesc[Index].UsagePage ==
-                HID_USAGE_PAGE_DIGITIZER &&
-            DeviceDescription->CollectionDesc[Index].Usage ==
-                HID_USAGE_DIGITIZER_TOUCH_PAD)
-        {
-            return TRUE;
-        }
-    }
-    return FALSE;
+    RtlZeroMemory(&XferPacket, sizeof(XferPacket));
+    XferPacket.reportBuffer = ReportBuffer;
+    XferPacket.reportBufferLen = ReportLength;
+    XferPacket.reportId = ReportId;
+
+    return HidClassFDO_SendReportRequest(Context,
+                                         IOCTL_HID_GET_FEATURE,
+                                         &XferPacket);
 }
 
 static
@@ -454,9 +455,6 @@ HidClassFDO_ConfigurePrecisionTouchpad(
     USHORT CapsLength;
     NTSTATUS Status;
     ULONG Index;
-
-    if (!HidClassFDO_HasPrecisionTouchpad(DeviceDescription))
-        return STATUS_NOT_FOUND;
 
     Collection = NULL;
     for (Index = 0; Index < DeviceDescription->CollectionDescLength; Index++)
@@ -597,11 +595,33 @@ HidClassFDO_StartDevice(
         return Status;
     }
 
-    Status = HidClassFDO_ConfigurePrecisionTouchpad(DeviceObject);
-    if (!NT_SUCCESS(Status) && Status != STATUS_NOT_FOUND)
+    Status = HidClassPtpValidateCapabilities(
+                 &FDODeviceExtension->Common.DeviceDescription,
+                 HidClassFDO_GetPrecisionTouchpadFeature,
+                 DeviceObject,
+                 &FDODeviceExtension->PrecisionTouchpad);
+    if (Status == STATUS_NOT_FOUND)
     {
-        DPRINT1("[HIDCLASS] Precision Touchpad input mode failed with %x\n",
+        Status = STATUS_SUCCESS;
+    }
+    else if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("[HIDCLASS] Precision Touchpad capability validation failed with %x\n",
                 Status);
+    }
+    else
+    {
+        DPRINT("[HIDCLASS] Precision Touchpad supports %u contacts%s\n",
+               FDODeviceExtension->PrecisionTouchpad.MaximumContactCount,
+               FDODeviceExtension->PrecisionTouchpad.HasButtonType ?
+                   " and reports its button type" : " with external buttons");
+
+        Status = HidClassFDO_ConfigurePrecisionTouchpad(DeviceObject);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("[HIDCLASS] Precision Touchpad input mode failed with %x\n",
+                    Status);
+        }
     }
 
     //
