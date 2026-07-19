@@ -311,6 +311,15 @@ typedef struct _DXGKVMM_ALLOCATION
     BOOLEAN             ContentLost;
 
     /*
+     * D3DKMTOfferAllocations state.  An offered allocation is a preferred
+     * eviction victim and its content may be discarded; Reclaim reports and
+     * clears the discard.  Protected by ResidencyLock.
+     */
+    BOOLEAN             Offered;
+    BOOLEAN             OfferDiscarded;
+    ULONG               OfferPriority;
+
+    /*
      * 32-bit user-visible D3DKMT allocation handle.
      */
     D3DKMT_HANDLE       Handle;
@@ -396,6 +405,20 @@ NTSTATUS
 DxgkVidMmMakeResident(
     _In_ PDXGKVMM_ALLOCATION    Allocation,
     _In_ PDXGKRNL_ADAPTER       Adapter);
+
+NTSTATUS
+DxgkVidMmOfferAllocation(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE  Device,
+    _In_ D3DKMT_HANDLE    Handle,
+    _In_ ULONG            Priority);
+
+NTSTATUS
+DxgkVidMmReclaimAllocation(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE  Device,
+    _In_ D3DKMT_HANDLE    Handle,
+    _Out_ PBOOLEAN        Discarded);
 
 /*
  * DxgkVidMmMapAllocationCpu
