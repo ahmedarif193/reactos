@@ -620,6 +620,13 @@ struct _DXGKRNL_ADAPTER
     PHYSICAL_ADDRESS            HighestAcceptableAddress;
     DXGK_SCHEDULINGCAPS         SchedulingCaps;
 
+    /* GPU MMU declaration cached from DXGKQAITYPE_GPUMMUCAPS at start.
+     * Valid only when the miniport reports a nonzero virtual address
+     * width; physical-mode adapters leave this invalid and every GPUVA
+     * mapping path stays truthfully refused. */
+    DXGK_GPUMMUCAPS             GpuMmuCaps;
+    BOOLEAN                     GpuMmuCapsValid;
+
     /* Cached while hardware is present.  A running-device surprise-removal
      * IRP must not query capabilities after the adapter has disappeared. */
     BOOLEAN                     SupportSurpriseRemoval;
@@ -1174,6 +1181,36 @@ typedef struct _DXGKRNL_GPUVA_RANGE
 /* Pool tag for GPU VA range objects. */
 #define TAG_DXGK_GPUVA     'GVxD'   /* DXVG - GPU VA range */
 
+/*
+ * Software GPU page table (GpuMmu, DXGK_PAGETABLEUPDATE_CPU_VIRTUAL mode).
+ * One 4KB page of 512 DXGK_PTE entries per table; four radix levels cover
+ * a 48-bit GPU VA space.  Non-leaf tables keep a kernel-side child pointer
+ * array so the CPU walk never reverse-maps physical addresses.
+ * All tables of a process live on DXGKRNL_PROCESS->GpuVaPageTableList,
+ * protected by GpuVaLock.
+ */
+typedef struct _DXGKRNL_GPUVA_PAGE_TABLE
+{
+    LIST_ENTRY                  PageTableListEntry;
+
+    /* 0 = leaf (maps 4KB pages), PageTableLevelCount-1 = root. */
+    ULONG                       Level;
+
+    /* First GPU VA covered by this table. */
+    ULONGLONG                   CoverageBase;
+
+    /* One page of DXGK_PTE entries and its physical address. */
+    PVOID                       KernelVa;
+    PHYSICAL_ADDRESS            Physical;
+
+    /* Child table pointers (non-leaf only, 512 entries), else NULL. */
+    struct _DXGKRNL_GPUVA_PAGE_TABLE **Children;
+
+} DXGKRNL_GPUVA_PAGE_TABLE, *PDXGKRNL_GPUVA_PAGE_TABLE;
+
+/* Pool tag for GPU page table objects. */
+#define TAG_DXGK_GPUVA_PT  'PVxD'   /* DXVP - GPU VA page table */
+
 /* ========================================================================
  * DXGKRNL_PROCESS — Per-process GPU state
  *
@@ -1226,8 +1263,8 @@ struct _DXGKRNL_PROCESS
     HANDLE                      hMiniportProcess;
 
     /*
-     * Root page table allocation handle (dxgkrnl-managed).
-     * Created when the process GPU VA space is initialized.
+     * Root page table (a DXGKRNL_GPUVA_PAGE_TABLE, dxgkrnl-managed).
+     * Created lazily on the first GPU VA map.
      */
     HANDLE                      hRootPageTable;
 
@@ -1245,6 +1282,14 @@ struct _DXGKRNL_PROCESS
 
     /* TRUE only after dxgkrnl has built and submitted real GPU PTE updates. */
     BOOLEAN                     RootPageTableProgrammed;
+
+    /*
+     * Software GPU page tables (CPU_VIRTUAL update mode).
+     * hRootPageTable points at the root DXGKRNL_GPUVA_PAGE_TABLE.
+     * Protected by GpuVaLock.
+     */
+    LIST_ENTRY                  GpuVaPageTableList;
+    ULONG                       GpuVaPageTableCount;
 
     /*
      * GPU VA range list: sorted doubly-linked list of DXGKRNL_GPUVA_RANGE.
@@ -1627,6 +1672,11 @@ DxgkUnblockInterruptCallbacks(
 #define DXGKP_DRIVERCAPS_QUERY_SIZE 1024
 
 NTSTATUS
+DxgkpQueryGpuMmuCaps(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Out_ DXGK_GPUMMUCAPS *Caps);
+
+NTSTATUS
 DxgkpQueryDriverCaps(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _Out_writes_bytes_(DXGKP_DRIVERCAPS_QUERY_SIZE) PDXGK_DRIVERCAPS Caps);
@@ -1795,6 +1845,21 @@ DxgkGpuVaFree(
     _In_ PDXGKRNL_PROCESS       Process,
     _In_ D3DGPU_VIRTUAL_ADDRESS BaseAddress,
     _In_ ULONGLONG              SizeInBytes);
+
+NTSTATUS
+DxgkGpuVaMap(
+    _In_ PDXGKRNL_ADAPTER       Adapter,
+    _In_ PDXGKRNL_PROCESS       Process,
+    _In_opt_ PDXGKVMM_ALLOCATION    Allocation,
+    _In_ D3DKMT_HANDLE          hAllocation,
+    _In_ ULONGLONG              AllocationOffset,
+    _In_ D3DGPU_VIRTUAL_ADDRESS BaseAddress,
+    _In_ D3DGPU_VIRTUAL_ADDRESS MinAddress,
+    _In_ D3DGPU_VIRTUAL_ADDRESS MaxAddress,
+    _In_ ULONGLONG              SizeInBytes,
+    _In_ D3DDDIGPUVIRTUALADDRESS_PROTECTION_TYPE Protection,
+    _In_ UINT64                 DriverProtection,
+    _Out_ D3DGPU_VIRTUAL_ADDRESS *OutAddress);
 
 BOOLEAN
 DxgkGpuVaPageTableReady(
