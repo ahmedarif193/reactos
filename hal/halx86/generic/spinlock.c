@@ -221,9 +221,11 @@ KeTryToAcquireQueuedSpinLock(IN KSPIN_LOCK_QUEUE_NUMBER LockNumber,
 
 #endif /* defined(_M_IX86) */
 
+/* Any-IRQL lock protocol for shared hardware index/data windows (CMOS,
+   IOAPIC): taken with interrupts disabled, caller restores the state. */
 VOID
 NTAPI
-HalpAcquireCmosSpinLock(VOID)
+HalpAcquireRaisedSpinLock(_In_ PKSPIN_LOCK SpinLock, _Out_ PULONG_PTR OutFlags)
 {
     ULONG_PTR Flags;
 
@@ -232,25 +234,34 @@ HalpAcquireCmosSpinLock(VOID)
     _disable();
 
     /* Acquire the lock */
-    KxAcquireSpinLock(&HalpSystemHardwareLock);
+    KxAcquireSpinLock(SpinLock);
 
-    /* We have the lock, save the flags now */
-    HalpSystemHardwareFlags = Flags;
+    /* We have the lock, hand the flags back now */
+    *OutFlags = Flags;
+}
+
+VOID
+NTAPI
+HalpReleaseRaisedSpinLock(_In_ PKSPIN_LOCK SpinLock, _In_ ULONG_PTR Flags)
+{
+    /* Release the lock */
+    KxReleaseSpinLock(SpinLock);
+
+    /* Restore the flags */
+    __writeeflags(Flags);
+}
+
+VOID
+NTAPI
+HalpAcquireCmosSpinLock(VOID)
+{
+    HalpAcquireRaisedSpinLock(&HalpSystemHardwareLock, &HalpSystemHardwareFlags);
 }
 
 VOID
 NTAPI
 HalpReleaseCmosSpinLock(VOID)
 {
-    ULONG_PTR Flags;
-
-    /* Get the flags */
-    Flags = HalpSystemHardwareFlags;
-
-    /* Release the lock */
-    KxReleaseSpinLock(&HalpSystemHardwareLock);
-
-    /* Restore the flags */
-    __writeeflags(Flags);
+    HalpReleaseRaisedSpinLock(&HalpSystemHardwareLock, HalpSystemHardwareFlags);
 }
 

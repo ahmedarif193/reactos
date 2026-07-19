@@ -83,6 +83,10 @@ typedef struct _HAL_ACPI_PCI_ROOT_INFO
 #define HAL_ACPI_TRIGGER_EDGE    0
 #define HAL_ACPI_TRIGGER_LEVEL   1
 
+/* Boot-IOAPIC GSI pin ceiling, shared by the HAL tables and the IO-manager
+ * arbiter clamp */
+#define HAL_ACPI_MAX_GSI_PINS    120
+
 /*
  * Callback prototype used by the ACPI driver to provide PCI interrupt
  * routing information to the HAL on demand.

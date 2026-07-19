@@ -5,6 +5,7 @@ list(APPEND HAL_GENERIC_SOURCE
     generic/display.c
     generic/dma.c
     generic/drive.c
+    generic/gsihints.c
     generic/halinit.c
     generic/kdpci.c
     generic/memory.c
