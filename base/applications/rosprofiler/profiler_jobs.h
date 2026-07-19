@@ -10,6 +10,7 @@
 #include "profiler_codec.h"
 #include "profiler_legacy_bridge.h"
 #include "profiler_symbolizer.h"
+#include "profiler_viewmodel.h"
 
 typedef enum _RPERF_JOB_KIND
 {
@@ -52,6 +53,7 @@ RPERF_JOB *RperfJobStartAnalysis(ULONGLONG Generation,
 RPERF_JOB *RperfJobStartPrepareLegacy(ULONGLONG Generation,
                                       RPERF_RECORDING *Recording,
                                       PCWSTR SourcePath,
+                                      SIZE_T TimelineBucketCount,
                                       RPERF_JOB_PROGRESS Progress,
                                       RPERF_JOB_COMPLETE Complete,
                                       PVOID Context);
@@ -61,4 +63,5 @@ DWORD RperfJobGetStatus(const RPERF_JOB *Job);
 RPERF_RECORDING *RperfJobTakeRecording(RPERF_JOB *Job);
 RPERF_ANALYSIS *RperfJobTakeAnalysis(RPERF_JOB *Job);
 RPERF_SESSION *RperfJobTakeLegacySession(RPERF_JOB *Job);
+RPERF_TIMELINE_VIEW *RperfJobTakeTimelineView(RPERF_JOB *Job);
 VOID RperfJobDestroy(RPERF_JOB *Job);

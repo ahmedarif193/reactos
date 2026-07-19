@@ -15,6 +15,16 @@
 #include <stdlib.h>
 #include <string.h>
 
+C_ASSERT(RperfThreadStateUnknown == RPERF_THREAD_STATE_UNKNOWN);
+C_ASSERT(RperfThreadStateInitialized == RPERF_THREAD_STATE_INITIALIZED);
+C_ASSERT(RperfThreadStateReady == RPERF_THREAD_STATE_READY);
+C_ASSERT(RperfThreadStateRunning == RPERF_THREAD_STATE_RUNNING);
+C_ASSERT(RperfThreadStateStandby == RPERF_THREAD_STATE_STANDBY);
+C_ASSERT(RperfThreadStateTerminated == RPERF_THREAD_STATE_TERMINATED);
+C_ASSERT(RperfThreadStateWaiting == RPERF_THREAD_STATE_WAITING);
+C_ASSERT(RperfThreadStateTransition == RPERF_THREAD_STATE_TRANSITION);
+C_ASSERT(RperfThreadStateDeferredReady == RPERF_THREAD_STATE_DEFERRED_READY);
+
 #define RPERF_CODEC_TIMESTAMP_FREQUENCY 1000000000ULL
 #define RPERF_CODEC_CHUNK_TARGET (1024U * 1024U)
 #define RPERF_CODEC_RECOVERY_SCAN (64ULL * 1024 * 1024)
@@ -531,6 +541,16 @@ RperfRecordingFromLegacySession(const RPERF_SESSION *Legacy,
             Record.Header.Flags |= RPERF_MODEL_RECORD_FLAG_TRUNCATED;
         if (Old->Flags & RPERF_SAMPLE_UNWIND_FAILED)
             Record.Header.Flags |= RPERF_MODEL_RECORD_FLAG_UNWIND_FAILED;
+        if (Old->Flags & RPERF_SAMPLE_STATE_KNOWN)
+        {
+            Record.Header.Flags |= RPERF_MODEL_RECORD_FLAG_STATE_KNOWN;
+            if (Old->Flags & RPERF_SAMPLE_WAITING)
+                Record.Header.Flags |= RPERF_MODEL_RECORD_FLAG_WAITING;
+            Record.Header.Flags |=
+                ((ULONG)(Old->Flags & RPERF_SAMPLE_WAIT_REASON_MASK) >>
+                 RPERF_SAMPLE_WAIT_REASON_SHIFT) <<
+                RPERF_MODEL_RECORD_FLAG_WAIT_REASON_SHIFT;
+        }
         Record.Data.Sample.Weight = 1;
         Record.Data.Sample.Period = Legacy->IntervalMs * 1000000ULL;
         Record.Data.Sample.Depth = Old->Depth;
@@ -1740,6 +1760,17 @@ RperfAppendSampleEvent(RPERF_V2_OUTPUT *Output,
         SampleFlags |= RPERF_SAMPLE_FLAG_UNWIND_FAILED;
     if (Source->Header.Flags & RPERF_MODEL_RECORD_FLAG_INCOMPLETE)
         SampleFlags |= RPERF_SAMPLE_FLAG_INCOMPLETE;
+    if (Source->Header.Flags & RPERF_MODEL_RECORD_FLAG_STATE_KNOWN)
+    {
+        SampleFlags |= RPERF_SAMPLE_FLAG_STATE_KNOWN;
+        if (Source->Header.Flags & RPERF_MODEL_RECORD_FLAG_WAITING)
+            SampleFlags |= RPERF_SAMPLE_FLAG_WAITING;
+        SampleFlags |=
+            ((Source->Header.Flags &
+              RPERF_MODEL_RECORD_FLAG_WAIT_REASON_MASK) >>
+             RPERF_MODEL_RECORD_FLAG_WAIT_REASON_SHIFT) <<
+            RPERF_SAMPLE_FLAG_WAIT_REASON_SHIFT;
+    }
     RperfStoreLe32((UCHAR *)Record +
                    offsetof(RPERF_SAMPLE_RECORD_V1, SampleFlags),
                    SampleFlags);
@@ -2805,6 +2836,16 @@ RperfInputSampleFlags(ULONG SampleFlags)
         Flags |= RPERF_MODEL_RECORD_FLAG_UNWIND_FAILED;
     if (SampleFlags & RPERF_SAMPLE_FLAG_INCOMPLETE)
         Flags |= RPERF_MODEL_RECORD_FLAG_INCOMPLETE;
+    if (SampleFlags & RPERF_SAMPLE_FLAG_STATE_KNOWN)
+    {
+        Flags |= RPERF_MODEL_RECORD_FLAG_STATE_KNOWN;
+        if (SampleFlags & RPERF_SAMPLE_FLAG_WAITING)
+            Flags |= RPERF_MODEL_RECORD_FLAG_WAITING;
+        Flags |=
+            ((SampleFlags & RPERF_SAMPLE_FLAG_WAIT_REASON_MASK) >>
+             RPERF_SAMPLE_FLAG_WAIT_REASON_SHIFT) <<
+            RPERF_MODEL_RECORD_FLAG_WAIT_REASON_SHIFT;
+    }
     return Flags;
 }
 
@@ -4120,8 +4161,11 @@ RperfFinalizeMetadata(RPERF_V2_INPUT *Input)
               sizeof(*Input->Recording->Symbols),
               RperfCompareModelSymbolAddress);
     }
-    Input->Recording->Info.Metric = Input->PmuSource ?
-        RperfMetricEventWeight : RperfMetricCpuSamples;
+    if (Input->Recording->Info.Metric == 0)
+    {
+        Input->Recording->Info.Metric = Input->PmuSource ?
+            RperfMetricEventWeight : RperfMetricCpuSamples;
+    }
     return TRUE;
 }
 

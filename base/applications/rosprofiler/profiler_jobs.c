@@ -22,6 +22,8 @@ struct _RPERF_JOB
     RPERF_RECORDING *RecordingResult;
     RPERF_ANALYSIS *AnalysisResult;
     RPERF_SESSION *LegacyResult;
+    RPERF_TIMELINE_VIEW *TimelineResult;
+    SIZE_T TimelineBucketCount;
     RPERF_SYMBOL_PROVIDER *Provider;
     RPERF_JOB_PROGRESS Progress;
     RPERF_JOB_COMPLETE Complete;
@@ -97,6 +99,9 @@ RperfJobWorker(PVOID Opaque)
     }
     else if (Job->Kind == RperfJobPrepareLegacy)
     {
+        RPERF_FILTER Filter;
+        ULONGLONG ProcessKey;
+
         Job->LegacyResult = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
                                       sizeof(*Job->LegacyResult));
         if (Job->LegacyResult == NULL)
@@ -113,6 +118,24 @@ RperfJobWorker(PVOID Opaque)
                          RperfJobSessionProgress,
                          Job,
                          Job->LegacyResult);
+            if (Result)
+            {
+                RperfInitializeFilter(&Filter);
+                ProcessKey = RperfTimelineFindProcessKey(
+                    Job->Input, Job->LegacyResult->ProcessId);
+                if (ProcessKey != 0)
+                {
+                    Filter.Enabled |= RPERF_FILTER_PROCESS;
+                    Filter.ProcessKey = ProcessKey;
+                }
+                Job->TimelineResult = RperfTimelineViewCreate(
+                    Job->Input,
+                    &Filter,
+                    RPERF_TIMELINE_DEFAULT_MAX_LANES,
+                    Job->TimelineBucketCount,
+                    Job->CancelEvent);
+                Result = Job->TimelineResult != NULL;
+            }
             if (!Result)
             {
                 RperfSessionClear(Job->LegacyResult);
@@ -255,6 +278,7 @@ RPERF_JOB *
 RperfJobStartPrepareLegacy(ULONGLONG Generation,
                            RPERF_RECORDING *Recording,
                            PCWSTR SourcePath,
+                           SIZE_T TimelineBucketCount,
                            RPERF_JOB_PROGRESS Progress,
                            RPERF_JOB_COMPLETE Complete,
                            PVOID Context)
@@ -262,14 +286,18 @@ RperfJobStartPrepareLegacy(ULONGLONG Generation,
     RPERF_JOB *Job;
     SIZE_T Bytes;
 
-    if (Recording == NULL)
+    if (Recording == NULL || TimelineBucketCount == 0)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
         return NULL;
+    }
     Job = RperfJobAllocate(Generation, RperfJobPrepareLegacy,
                            Progress, Complete, Context);
     if (Job == NULL)
         return NULL;
     Job->Input = Recording;
     RperfRecordingAddRef(Recording);
+    Job->TimelineBucketCount = TimelineBucketCount;
     if (SourcePath != NULL)
     {
         Bytes = (wcslen(SourcePath) + 1) * sizeof(WCHAR);
@@ -358,6 +386,18 @@ RperfJobTakeLegacySession(RPERF_JOB *Job)
     return Result;
 }
 
+RPERF_TIMELINE_VIEW *
+RperfJobTakeTimelineView(RPERF_JOB *Job)
+{
+    RPERF_TIMELINE_VIEW *Result;
+
+    if (Job == NULL || InterlockedCompareExchange(&Job->Joined, 0, 0) == 0)
+        return NULL;
+    Result = Job->TimelineResult;
+    Job->TimelineResult = NULL;
+    return Result;
+}
+
 VOID
 RperfJobDestroy(RPERF_JOB *Job)
 {
@@ -386,5 +426,7 @@ RperfJobDestroy(RPERF_JOB *Job)
         RperfSessionClear(Job->LegacyResult);
         HeapFree(GetProcessHeap(), 0, Job->LegacyResult);
     }
+    if (Job->TimelineResult != NULL)
+        RperfTimelineViewDestroy(Job->TimelineResult);
     HeapFree(GetProcessHeap(), 0, Job);
 }

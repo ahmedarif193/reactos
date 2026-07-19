@@ -367,6 +367,7 @@ RperfLegacySessionFromRecordingEx(const RPERF_RECORDING *Recording,
     RPERF_SESSION Loaded;
     SIZE_T Index, SampleCount = 0, SampleIndex = 0;
     ULONGLONG StartNs, EndNs;
+    ULONGLONG ProgressTotal;
     RPERF_LEGACY_PROGRESS_STATE ProgressState;
 
     if (Recording == NULL || !Recording->Frozen || Session == NULL)
@@ -374,7 +375,9 @@ RperfLegacySessionFromRecordingEx(const RPERF_RECORDING *Recording,
         SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
-    if (Recording->RecordCount > ((ULONGLONG)-1) / 6)
+    ProgressTotal = (ULONGLONG)Recording->RecordCount * 6;
+    if (Recording->RecordCount != 0 &&
+        ProgressTotal / 6 != Recording->RecordCount)
     {
         SetLastError(ERROR_ARITHMETIC_OVERFLOW);
         return FALSE;
@@ -383,7 +386,7 @@ RperfLegacySessionFromRecordingEx(const RPERF_RECORDING *Recording,
     ProgressState.Callback = Progress;
     ProgressState.Context = ProgressContext;
     ProgressState.PhaseSpan = Recording->RecordCount;
-    ProgressState.Total = (ULONGLONG)Recording->RecordCount * 6;
+    ProgressState.Total = ProgressTotal;
     if (!RperfLegacyContinue(CancelEvent))
         return FALSE;
     RperfLegacyReportPhase(&ProgressState, 0, 0,
@@ -464,10 +467,34 @@ RperfLegacySessionFromRecordingEx(const RPERF_RECORDING *Recording,
             Sample->Flags |= RPERF_SAMPLE_TRUNCATED;
         if (Record->Header.Flags & RPERF_MODEL_RECORD_FLAG_UNWIND_FAILED)
             Sample->Flags |= RPERF_SAMPLE_UNWIND_FAILED;
-        /* Recorder backends interrupt only threads that were on a CPU, so
-         * their samples always carry a known running state. */
-        Sample->Flags |= RPERF_SAMPLE_STATE_KNOWN;
-        if (Loaded.StateTaggedSamples != (ULONGLONG)-1) Loaded.StateTaggedSamples++;
+        if (Record->Header.Flags & RPERF_MODEL_RECORD_FLAG_STATE_KNOWN)
+        {
+            ULONG Reason =
+                (Record->Header.Flags &
+                 RPERF_MODEL_RECORD_FLAG_WAIT_REASON_MASK) >>
+                RPERF_MODEL_RECORD_FLAG_WAIT_REASON_SHIFT;
+
+            Sample->Flags |= RPERF_SAMPLE_STATE_KNOWN;
+            if (Record->Header.Flags & RPERF_MODEL_RECORD_FLAG_WAITING)
+            {
+                Sample->Flags |= RPERF_SAMPLE_WAITING;
+                if (Loaded.WaitingSamples != (ULONGLONG)-1)
+                    Loaded.WaitingSamples++;
+            }
+            Sample->Flags |= (USHORT)(Reason <<
+                                      RPERF_SAMPLE_WAIT_REASON_SHIFT);
+            if (Loaded.StateTaggedSamples != (ULONGLONG)-1)
+                Loaded.StateTaggedSamples++;
+        }
+        else if (Recording->Info.Metric == RperfMetricCpuSamples ||
+                 Recording->Info.Metric == RperfMetricEventWeight)
+        {
+            /* Sampled-profile and PMU records are emitted only while the
+             * interrupted thread is executing on a processor. */
+            Sample->Flags |= RPERF_SAMPLE_STATE_KNOWN;
+            if (Loaded.StateTaggedSamples != (ULONGLONG)-1)
+                Loaded.StateTaggedSamples++;
+        }
         for (FrameIndex = 0; FrameIndex < Sample->Depth; ++FrameIndex)
             Sample->Frames[FrameIndex] =
                 Record->Data.Sample.Frames[FrameIndex].Address;

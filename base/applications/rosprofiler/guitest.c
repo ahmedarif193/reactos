@@ -23,6 +23,7 @@
 #define IDC_TAB 1010
 #define IDC_FLAME 1011
 #define IDC_FUNCTIONS 1012
+#define IDC_STATUS 1013
 #define IDC_LAUNCH 1014
 #define IDC_SEARCH 1015
 #define IDC_THREAD_FILTER 1016
@@ -32,6 +33,7 @@
 #define IDC_TIMELINE 1021
 #define IDC_SESSION_SUMMARY 1022
 #define IDC_BACKEND 1023
+#define IDC_CPU_ONLY 1024
 
 #define IDM_FILE_OPEN 2001
 #define RPERF_MAIN_CLASS L"RosProfilerMainWindow"
@@ -56,6 +58,7 @@ typedef struct _RPERF_GUI_TEST
     HANDLE DoneEvent;
     WCHAR LogPath[MAX_PATH];
     WCHAR ReloadPath[MAX_PATH];
+    WCHAR TimelinePath[MAX_PATH];
 } RPERF_GUI_TEST;
 
 static VOID
@@ -308,6 +311,52 @@ RperfBuildModuleDirectory(PWSTR Path,
 }
 
 static BOOL
+RperfCreateTimelineFixture(PCWSTR SelfTestPath,
+                           PCWSTR FixturePath,
+                           PCWSTR WorkDirectory)
+{
+    STARTUPINFOW Startup;
+    PROCESS_INFORMATION Process;
+    WCHAR CommandLine[MAX_PATH * 3];
+    DWORD ExitCode;
+    BOOL Result = FALSE;
+
+    ZeroMemory(&Startup, sizeof(Startup));
+    Startup.cb = sizeof(Startup);
+    ZeroMemory(&Process, sizeof(Process));
+    _snwprintf(CommandLine,
+               ARRAYSIZE(CommandLine),
+               L"\"%s\" --write-timeline-fixture \"%s\"",
+               SelfTestPath,
+               FixturePath);
+    CommandLine[ARRAYSIZE(CommandLine) - 1] = UNICODE_NULL;
+    if (!CreateProcessW(SelfTestPath,
+                        CommandLine,
+                        NULL,
+                        NULL,
+                        FALSE,
+                        0,
+                        NULL,
+                        WorkDirectory,
+                        &Startup,
+                        &Process))
+    {
+        return FALSE;
+    }
+    if (WaitForSingleObject(Process.hProcess,
+                            RPERF_GUI_TEST_TIMEOUT) == WAIT_OBJECT_0 &&
+        GetExitCodeProcess(Process.hProcess, &ExitCode) &&
+        ExitCode == 0 &&
+        GetFileAttributesW(FixturePath) != INVALID_FILE_ATTRIBUTES)
+    {
+        Result = TRUE;
+    }
+    CloseHandle(Process.hThread);
+    CloseHandle(Process.hProcess);
+    return Result;
+}
+
+static BOOL
 RperfVerifyApplicationIcon(PCWSTR Path)
 {
     HMODULE Image;
@@ -488,6 +537,8 @@ RperfCleanupGuiTest(RPERF_GUI_TEST *Test)
         DeleteFileW(Test->LogPath);
     if (Test->ReloadPath[0] != UNICODE_NULL)
         DeleteFileW(Test->ReloadPath);
+    if (Test->TimelinePath[0] != UNICODE_NULL)
+        DeleteFileW(Test->TimelinePath);
 }
 
 static LRESULT
@@ -829,13 +880,18 @@ wmain(int argc,
     WCHAR ReadyName[96], StopName[96], DoneName[96];
     WCHAR TemporaryDirectory[MAX_PATH];
     WCHAR TimeText[64];
+    WCHAR StatusText[768];
     DWORD Unique = GetTickCount();
     DWORD TemporaryLength;
     HWND Dialog, StopButton, Functions, Threads, Summary, Timeline, Tab;
+    HWND StatusBar;
+    HWND CpuOnly;
     HWND Pages[4];
     RECT TimelineRect;
+    LRESULT TimelineOrigin;
     LRESULT LiveRows, ReloadedRows;
-    SIZE_T FilteredSamples, TotalSamples;
+    SIZE_T FilteredSamples, TotalSamples, TimelineTotal, TimelineSelected;
+    SIZE_T TimelineRunning, TimelineWaiting, TimelineUnknown;
     ULONGLONG AttemptedSamples, AcceptedSamples, FailedSamples;
     INT GraphLeft, GraphWidth;
     BOOL Result = FALSE;
@@ -921,8 +977,20 @@ wmain(int argc,
                GetCurrentProcessId(),
                Unique);
     Test.ReloadPath[ARRAYSIZE(Test.ReloadPath) - 1] = UNICODE_NULL;
+    _snwprintf(Test.TimelinePath,
+               ARRAYSIZE(Test.TimelinePath),
+               L"%srosprofiler-timeline-%lu-%lu.rperf",
+               TemporaryDirectory,
+               GetCurrentProcessId(),
+               Unique);
+    Test.TimelinePath[ARRAYSIZE(Test.TimelinePath) - 1] = UNICODE_NULL;
     DeleteFileW(Test.LogPath);
     DeleteFileW(Test.ReloadPath);
+    DeleteFileW(Test.TimelinePath);
+    RPERF_GUI_CHECK(RperfCreateTimelineFixture(WorkloadPath,
+                                               Test.TimelinePath,
+                                               WorkDirectory),
+                    "cannot create the scheduler timeline fixture");
 
     _snwprintf(CommandLine,
                ARRAYSIZE(CommandLine),
@@ -1037,13 +1105,15 @@ wmain(int argc,
     Threads = GetDlgItem(Test.MainWindow, IDC_THREAD_FILTER);
     Summary = GetDlgItem(Test.MainWindow, IDC_SESSION_SUMMARY);
     Timeline = GetDlgItem(Test.MainWindow, IDC_TIMELINE);
+    CpuOnly = GetDlgItem(Test.MainWindow, IDC_CPU_ONLY);
     Tab = GetDlgItem(Test.MainWindow, IDC_TAB);
     Pages[0] = GetDlgItem(Test.MainWindow, IDC_FLAME);
     Pages[1] = Functions;
     Pages[2] = Timeline;
     Pages[3] = Summary;
     RPERF_GUI_CHECK(Functions != NULL && Threads != NULL && Summary != NULL &&
-                        Timeline != NULL && Tab != NULL && Pages[0] != NULL,
+                        Timeline != NULL && CpuOnly != NULL && Tab != NULL &&
+                        Pages[0] != NULL,
                     "analysis controls are missing");
     RPERF_GUI_CHECK(RperfWaitForListRows(Functions,
                                          &LiveRows,
@@ -1114,21 +1184,67 @@ wmain(int argc,
                     "reopened sample totals are inconsistent");
 
     GetClientRect(Timeline, &TimelineRect);
-    GraphLeft = 88;
-    GraphWidth = TimelineRect.right - GraphLeft - 12;
+    TimelineOrigin = SendMessageW(Timeline,
+                                  WM_RPERF_TIMELINE_GET_GRAPH_ORIGIN,
+                                  0,
+                                  0);
+    TimelineRect.left = LOWORD(TimelineOrigin);
+    TimelineRect.top = HIWORD(TimelineOrigin);
+    TimelineTotal = (SIZE_T)SendMessageW(
+        Timeline, WM_RPERF_TIMELINE_GET_STAT,
+        RPERF_TIMELINE_STAT_TOTAL, 0);
+    TimelineSelected = (SIZE_T)SendMessageW(
+        Timeline, WM_RPERF_TIMELINE_GET_STAT,
+        RPERF_TIMELINE_STAT_SELECTED, 0);
+    TimelineRunning = (SIZE_T)SendMessageW(
+        Timeline, WM_RPERF_TIMELINE_GET_STAT,
+        RPERF_TIMELINE_STAT_RUNNING, 0);
+    TimelineWaiting = (SIZE_T)SendMessageW(
+        Timeline, WM_RPERF_TIMELINE_GET_STAT,
+        RPERF_TIMELINE_STAT_WAITING, 0);
+    TimelineUnknown = (SIZE_T)SendMessageW(
+        Timeline, WM_RPERF_TIMELINE_GET_STAT,
+        RPERF_TIMELINE_STAT_UNKNOWN, 0);
+    RPERF_GUI_CHECK(TimelineTotal == TotalSamples &&
+                        TimelineSelected == TotalSamples &&
+                        TimelineRunning + TimelineWaiting + TimelineUnknown ==
+                            TimelineSelected,
+                    "timeline full-range visual population is inconsistent");
+    SendMessageW(CpuOnly, BM_CLICK, 0, 0);
+    Sleep(150);
+    TimelineSelected = (SIZE_T)SendMessageW(
+        Timeline, WM_RPERF_TIMELINE_GET_STAT,
+        RPERF_TIMELINE_STAT_SELECTED, 0);
+    RPERF_GUI_CHECK(SendMessageW(Timeline,
+                                 WM_RPERF_TIMELINE_GET_STAT,
+                                 RPERF_TIMELINE_STAT_CPU_ONLY,
+                                 0) != 0 &&
+                        TimelineSelected == TotalSamples - TimelineWaiting &&
+                        (SIZE_T)SendMessageW(
+                            Timeline, WM_RPERF_TIMELINE_GET_STAT,
+                            RPERF_TIMELINE_STAT_WAITING_EXCLUDED, 0) ==
+                            TimelineWaiting,
+                    "timeline CPU-only visual population is inconsistent");
+    SendMessageW(CpuOnly, BM_CLICK, 0, 0);
+    Sleep(150);
+    GraphLeft = TimelineRect.left;
+    GraphWidth = TimelineRect.right - TimelineRect.left;
     RPERF_GUI_CHECK(GraphWidth > 200, "timeline has no usable graph area");
     SendMessageW(Timeline,
                  WM_LBUTTONDOWN,
                  MK_LBUTTON,
-                 MAKELPARAM(GraphLeft + GraphWidth / 4, 60));
+                 MAKELPARAM(GraphLeft + GraphWidth / 4,
+                            TimelineRect.top + 12));
     SendMessageW(Timeline,
                  WM_MOUSEMOVE,
                  MK_LBUTTON,
-                 MAKELPARAM(GraphLeft + (GraphWidth * 3) / 4, 60));
+                 MAKELPARAM(GraphLeft + (GraphWidth * 3) / 4,
+                            TimelineRect.top + 12));
     SendMessageW(Timeline,
                  WM_LBUTTONUP,
                  0,
-                 MAKELPARAM(GraphLeft + (GraphWidth * 3) / 4, 60));
+                 MAKELPARAM(GraphLeft + (GraphWidth * 3) / 4,
+                            TimelineRect.top + 12));
     Sleep(200);
     RPERF_GUI_CHECK(RperfReadSummarySamples(Summary,
                                             &FilteredSamples,
@@ -1136,6 +1252,15 @@ wmain(int argc,
                         FilteredSamples != 0 &&
                         FilteredSamples < TotalSamples,
                     "timeline range did not reduce the sample population");
+    TimelineTotal = (SIZE_T)SendMessageW(
+        Timeline, WM_RPERF_TIMELINE_GET_STAT,
+        RPERF_TIMELINE_STAT_TOTAL, 0);
+    TimelineSelected = (SIZE_T)SendMessageW(
+        Timeline, WM_RPERF_TIMELINE_GET_STAT,
+        RPERF_TIMELINE_STAT_SELECTED, 0);
+    RPERF_GUI_CHECK(TimelineSelected == FilteredSamples &&
+                        TimelineSelected < TimelineTotal,
+                    "timeline did not expose its filtered visual population");
 
     PostMessageW(Test.MainWindow,
                  WM_COMMAND,
@@ -1188,6 +1313,114 @@ wmain(int argc,
                         !IsWindowVisible(Pages[3]),
                     "flame tab did not restore its page");
 
+    PostMessageW(Test.MainWindow,
+                 WM_COMMAND,
+                 MAKEWPARAM(IDM_FILE_OPEN, 0),
+                 0);
+    Dialog = RperfWaitForProcessWindow(Test.GuiProcess.dwProcessId,
+                                       L"#32770",
+                                       cmb13,
+                                       RPERF_GUI_TEST_TIMEOUT);
+    if (Dialog == NULL)
+    {
+        Dialog = RperfWaitForProcessWindow(Test.GuiProcess.dwProcessId,
+                                           L"#32770",
+                                           edt1,
+                                           1000);
+    }
+    RPERF_GUI_CHECK(Dialog != NULL,
+                    "scheduler timeline open dialog did not appear");
+    RPERF_GUI_CHECK(RperfSetFileDialogName(Dialog, Test.TimelinePath),
+                    "cannot set the scheduler timeline fixture path");
+    PostMessageW(Dialog, WM_COMMAND, MAKEWPARAM(IDOK, BN_CLICKED), 0);
+    RPERF_GUI_CHECK(RperfWaitForSummaryPath(Summary,
+                                            Test.TimelinePath,
+                                            RPERF_GUI_TEST_TIMEOUT),
+                    "scheduler timeline fixture was not presented");
+    RPERF_GUI_CHECK(RperfWaitForWindowEnabled(Tab,
+                                              TRUE,
+                                              RPERF_GUI_TEST_TIMEOUT),
+                    "scheduler timeline fixture did not finish loading");
+    RPERF_GUI_CHECK(
+        SendMessageW(Timeline,
+                     WM_RPERF_TIMELINE_GET_STAT,
+                     RPERF_TIMELINE_STAT_HAS_SCHEDULER,
+                     0) != 0 &&
+        SendMessageW(Timeline,
+                     WM_RPERF_TIMELINE_GET_STAT,
+                     RPERF_TIMELINE_STAT_CPU_COUNT,
+                     0) == 2 &&
+        SendMessageW(Timeline,
+                     WM_RPERF_TIMELINE_GET_STAT,
+                     RPERF_TIMELINE_STAT_CONTEXT_SWITCHES,
+                     0) == 4 &&
+        SendMessageW(Timeline,
+                     WM_RPERF_TIMELINE_GET_STAT,
+                     RPERF_TIMELINE_STAT_WAKEUPS,
+                     0) == 1 &&
+        SendMessageW(Timeline,
+                     WM_RPERF_TIMELINE_GET_STAT,
+                     RPERF_TIMELINE_STAT_LOSS,
+                     0) == 2,
+        "scheduler timeline tracks are missing normalized events");
+    RPERF_GUI_CHECK(
+        SendMessageW(Timeline,
+                     WM_RPERF_TIMELINE_GET_TRACK_MODE,
+                     0,
+                     0) == RPERF_TIMELINE_TRACK_THREADS &&
+        SendMessageW(Timeline,
+                     WM_RPERF_TIMELINE_SET_TRACK_MODE,
+                     RPERF_TIMELINE_TRACK_CPUS,
+                     0) != 0 &&
+        SendMessageW(Timeline,
+                     WM_RPERF_TIMELINE_GET_TRACK_MODE,
+                     0,
+                     0) == RPERF_TIMELINE_TRACK_CPUS,
+        "CPU timeline track mode did not activate");
+    RPERF_GUI_CHECK(RperfClickTab(Tab, 2) && IsWindowVisible(Timeline),
+                    "scheduler timeline page did not become visible");
+    GetClientRect(Timeline, &TimelineRect);
+    TimelineOrigin = SendMessageW(Timeline,
+                                  WM_RPERF_TIMELINE_GET_GRAPH_ORIGIN,
+                                  0,
+                                  0);
+    SendMessageW(Timeline,
+                 WM_MOUSEMOVE,
+                 0,
+                 MAKELPARAM(LOWORD(TimelineOrigin) +
+                                (TimelineRect.right -
+                                 LOWORD(TimelineOrigin)) / 2,
+                            HIWORD(TimelineOrigin) + 12));
+    StatusBar = GetDlgItem(Test.MainWindow, IDC_STATUS);
+    RPERF_GUI_CHECK(StatusBar != NULL &&
+                        SendMessageW(StatusBar,
+                                     WM_GETTEXT,
+                                     ARRAYSIZE(StatusText),
+                                     (LPARAM)StatusText) > 0 &&
+                        wcsstr(StatusText, L"CPU ") != NULL,
+                    "CPU timeline hover details were not published");
+    RPERF_GUI_CHECK(
+        SendMessageW(Timeline,
+                     WM_RPERF_TIMELINE_SET_TRACK_MODE,
+                     RPERF_TIMELINE_TRACK_THREADS,
+                     0) != 0,
+        "thread timeline track mode did not reactivate");
+    SendMessageW(Timeline,
+                 WM_MOUSEMOVE,
+                 0,
+                 MAKELPARAM(LOWORD(TimelineOrigin) +
+                                (TimelineRect.right -
+                                 LOWORD(TimelineOrigin)) / 2,
+                            HIWORD(TimelineOrigin) + 12));
+    RPERF_GUI_CHECK(SendMessageW(StatusBar,
+                                 WM_GETTEXT,
+                                 ARRAYSIZE(StatusText),
+                                 (LPARAM)StatusText) > 0 &&
+                        wcsstr(StatusText, L"TID ") != NULL,
+                    "thread timeline hover details were not published");
+    RPERF_GUI_CHECK(RperfClickTab(Tab, 0),
+                    "flame tab did not restore after track checks");
+
     SetEvent(Test.StopEvent);
     RPERF_GUI_CHECK(WaitForSingleObject(Test.DoneEvent,
                                         RPERF_GUI_TEST_TIMEOUT) == WAIT_OBJECT_0,
@@ -1198,7 +1431,8 @@ Cleanup:
     if (Result)
     {
         printf("[PASS] GUI icon, launch, streamed capture, manual stop, analysis, "
-               "reopen, timeline, thread/search filters, reset, and tabs "
+               "reopen, timeline tracks, hover details, thread/search "
+               "filters, reset, and tabs "
                "(%ld hot functions)\n",
                (long)ReloadedRows);
     }

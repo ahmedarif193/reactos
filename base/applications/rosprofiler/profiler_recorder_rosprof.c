@@ -288,6 +288,23 @@ RperfKernelResolveId(const RPERF_KERNEL_ID *Ids,
     return KernelId;
 }
 
+static RPERF_THREAD_STATE_KIND
+RperfKernelThreadState(ULONG State)
+{
+    switch (State)
+    {
+        case ROSPROF_THREAD_STATE_INITIALIZED: return RperfThreadStateInitialized;
+        case ROSPROF_THREAD_STATE_READY: return RperfThreadStateReady;
+        case ROSPROF_THREAD_STATE_RUNNING: return RperfThreadStateRunning;
+        case ROSPROF_THREAD_STATE_STANDBY: return RperfThreadStateStandby;
+        case ROSPROF_THREAD_STATE_TERMINATED: return RperfThreadStateTerminated;
+        case ROSPROF_THREAD_STATE_WAITING: return RperfThreadStateWaiting;
+        case ROSPROF_THREAD_STATE_TRANSITION: return RperfThreadStateTransition;
+        case ROSPROF_THREAD_STATE_DEFERRED_READY: return RperfThreadStateDeferredReady;
+        default: return RperfThreadStateUnknown;
+    }
+}
+
 static BOOL
 RperfKernelSetBaselineId(RPERF_KERNEL_ID **Ids,
                          SIZE_T *Count,
@@ -944,7 +961,8 @@ RperfKernelNormalizeRecord(RPERF_KERNEL_STATE *State,
                 RperfKernelResolveId(State->Threads, State->ThreadCount,
                                      Source->NewThreadId,
                                      Source->NewThreadKey);
-            Record.Data.Scheduler.State = Source->OldThreadState;
+            Record.Data.Scheduler.State =
+                RperfKernelThreadState(Source->OldThreadState);
             Record.Data.Scheduler.Reason = Source->OldWaitReason;
             Record.Data.Scheduler.TargetCpu = Source->NewProcessorNumber;
             Record.Data.Scheduler.Flags = Source->SchedulerFlags;
@@ -1520,6 +1538,21 @@ RperfKernelCreate(const RPERF_CAPTURE_CONFIGURATION *Configuration,
         Config.Sources |= ROSPROF_SOURCE_THREAD;
     if (State->Capabilities.Capabilities & ROSPROF_CAP_IMAGE_LIFECYCLE)
         Config.Sources |= ROSPROF_SOURCE_IMAGE;
+    if ((State->Capabilities.Capabilities & ROSPROF_CAP_CONTEXT_SWITCH) &&
+        (State->Capabilities.SupportedSources &
+         ROSPROF_SOURCE_CONTEXT_SWITCH) &&
+        (State->Capabilities.SupportedRecordTypes &
+         ROSPROF_RECORD_MASK(ROSPROF_RECORD_CONTEXT_SWITCH)))
+    {
+        Config.Sources |= ROSPROF_SOURCE_CONTEXT_SWITCH;
+    }
+    if ((State->Capabilities.Capabilities & ROSPROF_CAP_SCHED_WAKEUP) &&
+        (State->Capabilities.SupportedSources & ROSPROF_SOURCE_SCHED_WAKEUP) &&
+        (State->Capabilities.SupportedRecordTypes &
+         ROSPROF_RECORD_MASK(ROSPROF_RECORD_SCHED_WAKEUP)))
+    {
+        Config.Sources |= ROSPROF_SOURCE_SCHED_WAKEUP;
+    }
     Config.RecordTypes = ROSPROF_RECORD_MASK(ROSPROF_RECORD_SESSION) |
                          ROSPROF_RECORD_MASK(ROSPROF_RECORD_SAMPLE);
     if (State->Capabilities.Capabilities & ROSPROF_CAP_LOSS_RECORDS)
@@ -1530,6 +1563,16 @@ RperfKernelCreate(const RPERF_CAPTURE_CONFIGURATION *Configuration,
         Config.RecordTypes |= ROSPROF_RECORD_MASK(ROSPROF_RECORD_THREAD);
     if (Config.Sources & ROSPROF_SOURCE_IMAGE)
         Config.RecordTypes |= ROSPROF_RECORD_MASK(ROSPROF_RECORD_IMAGE);
+    if (Config.Sources & ROSPROF_SOURCE_CONTEXT_SWITCH)
+    {
+        Config.RecordTypes |=
+            ROSPROF_RECORD_MASK(ROSPROF_RECORD_CONTEXT_SWITCH);
+    }
+    if (Config.Sources & ROSPROF_SOURCE_SCHED_WAKEUP)
+    {
+        Config.RecordTypes |=
+            ROSPROF_RECORD_MASK(ROSPROF_RECORD_SCHED_WAKEUP);
+    }
     if (State->Capabilities.SupportedRecordTypes &
         ROSPROF_RECORD_MASK(ROSPROF_RECORD_SECURITY))
         Config.RecordTypes |= ROSPROF_RECORD_MASK(ROSPROF_RECORD_SECURITY);

@@ -564,6 +564,23 @@ RperfSetSessionStatus(VOID)
     RperfSetStatus(Status);
 }
 
+static PCWSTR
+RperfTimelineWaitReasonName(ULONG Reason)
+{
+    static const PCWSTR Names[] =
+    {
+        L"Executive", L"Free page", L"Page in", L"Pool allocation",
+        L"Delay execution", L"Suspended", L"User request",
+        L"Executive", L"Free page", L"Page in", L"Pool allocation",
+        L"Delay execution", L"Suspended", L"User request",
+        L"Event pair", L"Queue", L"LPC receive", L"LPC reply",
+        L"Virtual memory", L"Page out", L"Rendezvous", L"Spare 2",
+        L"Spare 3", L"Spare 4", L"Spare 5", L"Spare 6", L"Kernel"
+    };
+
+    return Reason < ARRAYSIZE(Names) ? Names[Reason] : L"Other";
+}
+
 static int __cdecl
 RperfCompareThreadIds(const void *Left,
                       const void *Right)
@@ -973,7 +990,7 @@ RperfUpdateSearch(VOID)
 }
 
 static VOID
-RperfShowSession(VOID)
+RperfShowSession(RPERF_TIMELINE_VIEW *TimelineView)
 {
     WCHAR WindowTitle[MAX_PATH + 160];
     WPARAM CpuOnlyState;
@@ -995,6 +1012,13 @@ RperfShowSession(VOID)
                  WM_RPERF_TIMELINE_SET_SESSION,
                  0,
                  (LPARAM)&App.Session);
+    if (!SendMessageW(App.Timeline,
+                      WM_RPERF_TIMELINE_SET_VIEW,
+                      0,
+                      (LPARAM)TimelineView))
+    {
+        RperfTimelineViewDestroy(TimelineView);
+    }
     RperfUpdateSessionSummary();
     _snwprintf(WindowTitle,
                ARRAYSIZE(WindowTitle),
@@ -1095,6 +1119,7 @@ RperfClearViews(PCWSTR Status)
 {
     SendMessageW(App.FlameGraph, WM_RPERF_SET_SESSION, 0, 0);
     SendMessageW(App.FlameGraph, WM_RPERF_SET_SEARCH, 0, (LPARAM)L"");
+    SendMessageW(App.Timeline, WM_RPERF_TIMELINE_SET_VIEW, 0, 0);
     SendMessageW(App.Timeline, WM_RPERF_TIMELINE_SET_SESSION, 0, 0);
     SendMessageW(App.FunctionList, LVM_DELETEALLITEMS, 0, 0);
     SendMessageW(App.ThreadCombo, CB_RESETCONTENT, 0, 0);
@@ -1792,13 +1817,22 @@ static BOOL
 RperfCompleteControllerPresentation(VOID)
 {
     RPERF_SESSION *PreparedSession;
+    RPERF_TIMELINE_VIEW *TimelineView;
     DWORD Error;
 
     PreparedSession =
         RperfControllerTakePreparedSession(&App.Controller);
-    if (PreparedSession == NULL)
+    TimelineView =
+        RperfControllerTakePreparedTimeline(&App.Controller);
+    if (PreparedSession == NULL || TimelineView == NULL)
     {
         Error = GetLastError();
+        if (PreparedSession != NULL)
+        {
+            RperfSessionClear(PreparedSession);
+            HeapFree(GetProcessHeap(), 0, PreparedSession);
+        }
+        RperfTimelineViewDestroy(TimelineView);
         RperfSetProcessing(FALSE);
         RperfShowSystemError(App.MainWindow,
                              L"Preparing the profile views",
@@ -1810,7 +1844,7 @@ RperfCompleteControllerPresentation(VOID)
     HeapFree(GetProcessHeap(), 0, PreparedSession);
     App.HasSymbolSummary = App.JobHasSymbolSummary;
     App.SymbolSummary = App.JobSymbolSummary;
-    RperfShowSession();
+    RperfShowSession(TimelineView);
     RperfSetProcessing(FALSE);
     if (App.JobSymbolError != ERROR_SUCCESS)
     {
@@ -1830,10 +1864,14 @@ static BOOL
 RperfBeginControllerPresentation(DWORD SymbolError)
 {
     DWORD Error;
+    SIZE_T TimelineBucketCount;
 
     App.JobSymbolError = SymbolError;
+    TimelineBucketCount = (SIZE_T)SendMessageW(
+        App.Timeline, WM_RPERF_TIMELINE_GET_BUCKET_COUNT, 0, 0);
     if (!RperfControllerBeginPrepareLegacy(&App.Controller,
                                            App.JobPath,
+                                           TimelineBucketCount,
                                            RperfOpenJobProgress,
                                            RperfOpenJobComplete,
                                            App.MainWindow,
@@ -2652,7 +2690,7 @@ RperfMainWndProc(HWND Window,
             }
             RperfCaptureWait(&App.Session);
             if (App.Session.SampleCount != 0)
-                RperfShowSession();
+                RperfShowSession(NULL);
             else
                 RperfClearViews(L"Recording ended without a usable stack sample.");
             RperfSetCapturing(FALSE);
@@ -2775,6 +2813,103 @@ RperfMainWndProc(HWND Window,
                 Status[ARRAYSIZE(Status) - 1] = UNICODE_NULL;
                 RperfSetStatus(Status);
             }
+            return 0;
+        }
+
+        case WM_RPERF_TIMELINE_HOVER:
+        {
+            const RPERF_TIMELINE_HOVER *Hover =
+                (const RPERF_TIMELINE_HOVER *)LParam;
+            WCHAR Status[768];
+
+            if (Hover == NULL || !Hover->Active)
+            {
+                RperfSetSessionStatus();
+                return 0;
+            }
+            if (Hover->TrackMode == RPERF_TIMELINE_TRACK_CPUS)
+            {
+                if (Hover->Flags & RPERF_TIMELINE_HOVER_PRECISE)
+                {
+                    double BucketNs =
+                        (double)(Hover->EndUs - Hover->StartUs) * 1000.0;
+                    double Utilization = BucketNs != 0.0 ?
+                        100.0 * (double)Hover->RunningNs / BucketNs : 0.0;
+
+                    _snwprintf(
+                        Status,
+                        ARRAYSIZE(Status),
+                        L"CPU %lu | %.6f-%.6f s | running %.3f ms "
+                        L"(%.1f%%), ready target %.3f ms | %I64u samples, "
+                        L"%I64u lost records.",
+                        Hover->Cpu,
+                        (double)Hover->StartUs / 1000000.0,
+                        (double)Hover->EndUs / 1000000.0,
+                        (double)Hover->RunningNs / 1000000.0,
+                        Utilization,
+                        (double)Hover->ReadyNs / 1000000.0,
+                        Hover->Samples,
+                        Hover->Loss);
+                }
+                else
+                {
+                    _snwprintf(
+                        Status,
+                        ARRAYSIZE(Status),
+                        L"CPU %lu | %.6f-%.6f s | %I64u samples, "
+                        L"%I64u lost records; sampled activity does not "
+                        L"measure utilization.",
+                        Hover->Cpu,
+                        (double)Hover->StartUs / 1000000.0,
+                        (double)Hover->EndUs / 1000000.0,
+                        Hover->Samples,
+                        Hover->Loss);
+                }
+            }
+            else
+            {
+                WCHAR Reason[64];
+
+                if (Hover->WaitingNs == 0)
+                {
+                    lstrcpyW(Reason, L"none");
+                }
+                else if (Hover->Flags &
+                         RPERF_TIMELINE_HOVER_MIXED_REASON)
+                {
+                    lstrcpyW(Reason, L"mixed");
+                }
+                else
+                {
+                    _snwprintf(Reason,
+                               ARRAYSIZE(Reason),
+                               L"%s (%lu)",
+                               RperfTimelineWaitReasonName(
+                                   Hover->WaitReason),
+                               Hover->WaitReason);
+                    Reason[ARRAYSIZE(Reason) - 1] = UNICODE_NULL;
+                }
+                _snwprintf(
+                    Status,
+                    ARRAYSIZE(Status),
+                    L"PID %lu, TID %lu | %.6f-%.6f s | running %.3f ms, "
+                    L"ready %.3f ms, waiting %.3f ms (%s) | %I64u samples, "
+                    L"%I64u switches, %I64u wakeups, %I64u lost records.",
+                    Hover->ProcessId,
+                    Hover->ThreadId,
+                    (double)Hover->StartUs / 1000000.0,
+                    (double)Hover->EndUs / 1000000.0,
+                    (double)Hover->RunningNs / 1000000.0,
+                    (double)Hover->ReadyNs / 1000000.0,
+                    (double)Hover->WaitingNs / 1000000.0,
+                    Reason,
+                    Hover->Samples,
+                    Hover->ContextSwitches,
+                    Hover->Wakeups,
+                    Hover->Loss);
+            }
+            Status[ARRAYSIZE(Status) - 1] = UNICODE_NULL;
+            RperfSetStatus(Status);
             return 0;
         }
 

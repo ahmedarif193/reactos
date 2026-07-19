@@ -64,9 +64,9 @@ different backend.
 The GUI marks unavailable backends in place.  Non-intrusive captures run
 through the pluggable recorder contract and are saved as binary v2 `.rperf`
 recordings after capture stops.  The loader preserves normalized lifecycle,
-scheduler, image, clock, security, and loss records; the current flame,
-function, and sample-timeline widgets consume only the sample projection, so
-richer scheduler/off-CPU presentation remains tracked in [TODO.md](TODO.md).
+scheduler, image, clock, security, and loss records.  Flame and function views
+consume the sample projection; the timeline also consumes scheduler,
+lifecycle, CPU, and loss records when the selected backend recorded them.
 
 ## Clean-room statement
 
@@ -268,10 +268,27 @@ one function.
 
 ### Timeline and session summary
 
-The timeline shows when each successfully captured thread stack was taken.
-Dragging a time range applies that range to the analysis; double-clicking
-resets it.  These are sample markers, not scheduler execution spans.  The view
-does not show CPU assignment, wakeups, blocking reasons, or off-CPU intervals.
+The default thread timeline always shows when successfully captured stacks
+were taken.  Intrusive captures distinguish running, waiting, unknown-state,
+and diagnostic samples; **CPU-only** visibly de-emphasizes the waiting samples
+that it excludes from the shared analysis.  The header immediately reports the
+selected time range and selected/total sample population.  Dragging a range
+applies it to hot functions and the flame graph, and double-clicking resets it.
+
+When a recording contains scheduler events, the thread view replaces isolated
+markers with bucketed **Running**, **Ready**, and **Waiting** spans plus context
+switch, wakeup, lifecycle, wait-reason, and loss cues.  The **CPUs** button
+switches to per-CPU tracks.  Those tracks show measured target-process CPU
+residency only when context-switch data is available; otherwise they are
+explicitly labeled as sampled activity.  Hovering either scheduler view publishes the time bucket,
+thread or CPU, state durations, samples, switches/wakeups, wait reason, and
+loss count in the status bar.  Red loss markers are capture gaps, and open
+scheduler states are not extended through a known loss.
+
+Scheduler tracks are source-dependent.  RosProf requests context-switch and
+wakeup records only when its capability, source, and record-type masks all
+advertise them.  Older logs, ETW captures without scheduler events, and
+intrusive captures retain the honest sample-marker fallback.
 
 The session page exposes capture configuration, completion state, wall-clock
 elapsed time, filtered and total sample counts, process CPU-time metadata, and
@@ -347,10 +364,11 @@ performance, security, and architecture matrices in [TODO.md](TODO.md).
   architecture transitions, and unusual stacks can truncate a call chain.
 - **Statistical gaps.** Short or rare paths may not be sampled, fixed intervals
   can alias with periodic work, and failed snapshots bias the population.
-- **Scheduler UI is incomplete.** The v2 model and RosProf/ETW adapters preserve
-  lifecycle, scheduler, clock, security, and loss records, but the current GUI
-  projects samples into its timeline and does not yet render scheduler lanes,
-  wait reasons, or off-CPU intervals.
+- **Scheduler coverage is backend-dependent.** RosProf recordings can drive
+  thread-state and CPU-residency tracks when the running driver advertises the
+  scheduler sources.  The current ETW adapter does not decode context-switch
+  events, and intrusive snapshots provide point-in-time thread state rather
+  than precise scheduler intervals.
 - **No PMU events.** Cycles, instructions, cache/branch events, multiplexing,
   and scaled hardware counts are not collected.
 - **Lifecycle quality depends on the backend.** ETW and RosProf normalize image

@@ -136,6 +136,10 @@ typedef int32_t RPERF_STATUS;
 #define RPERF_SAMPLE_FLAG_INCOMPLETE              UINT32_C(0x00000004)
 #define RPERF_SAMPLE_FLAG_WOW64                   UINT32_C(0x00000008)
 #define RPERF_SAMPLE_FLAG_PRECISE_IP              UINT32_C(0x00000010)
+#define RPERF_SAMPLE_FLAG_STATE_KNOWN              UINT32_C(0x00000020)
+#define RPERF_SAMPLE_FLAG_WAITING                  UINT32_C(0x00000040)
+#define RPERF_SAMPLE_FLAG_WAIT_REASON_SHIFT        8
+#define RPERF_SAMPLE_FLAG_WAIT_REASON_MASK         UINT32_C(0x0000ff00)
 
 #define RPERF_RECORD_SESSION                      1U
 #define RPERF_RECORD_SOURCE                       2U
@@ -160,6 +164,16 @@ typedef int32_t RPERF_STATUS;
 #define RPERF_SCHED_CONTEXT_SWITCH                1U
 #define RPERF_SCHED_READY                         2U
 #define RPERF_SCHED_WAKEUP                        3U
+
+#define RPERF_THREAD_STATE_UNKNOWN                0U
+#define RPERF_THREAD_STATE_INITIALIZED            1U
+#define RPERF_THREAD_STATE_READY                  2U
+#define RPERF_THREAD_STATE_RUNNING                3U
+#define RPERF_THREAD_STATE_STANDBY                4U
+#define RPERF_THREAD_STATE_TERMINATED             5U
+#define RPERF_THREAD_STATE_WAITING                6U
+#define RPERF_THREAD_STATE_TRANSITION             7U
+#define RPERF_THREAD_STATE_DEFERRED_READY         8U
 
 #define RPERF_SOURCE_TIMER                        1U
 #define RPERF_SOURCE_PMU                          2U

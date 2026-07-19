@@ -17,6 +17,7 @@ typedef struct _RPERF_SESSION_CONTROLLER
     RPERF_RECORDING *Recording;
     RPERF_ANALYSIS *Analysis;
     RPERF_SESSION *PreparedSession;
+    RPERF_TIMELINE_VIEW *PreparedTimeline;
 } RPERF_SESSION_CONTROLLER;
 
 VOID RperfControllerInitialize(RPERF_SESSION_CONTROLLER *Controller);
@@ -43,6 +44,7 @@ BOOL RperfControllerBeginFilter(RPERF_SESSION_CONTROLLER *Controller,
                                 ULONGLONG *Generation);
 BOOL RperfControllerBeginPrepareLegacy(RPERF_SESSION_CONTROLLER *Controller,
                                        PCWSTR SourcePath,
+                                       SIZE_T TimelineBucketCount,
                                        RPERF_JOB_PROGRESS Progress,
                                        RPERF_JOB_COMPLETE Complete,
                                        PVOID Context,
@@ -56,3 +58,5 @@ RPERF_ANALYSIS *
 RperfControllerAcquireAnalysis(RPERF_SESSION_CONTROLLER *Controller);
 RPERF_SESSION *
 RperfControllerTakePreparedSession(RPERF_SESSION_CONTROLLER *Controller);
+RPERF_TIMELINE_VIEW *
+RperfControllerTakePreparedTimeline(RPERF_SESSION_CONTROLLER *Controller);

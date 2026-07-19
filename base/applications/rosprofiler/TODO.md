@@ -44,6 +44,8 @@ not confused with proof that it is safe under every failure mode.
   using the filtered sample count as the percentage denominator.
 - [x] Display per-thread sample markers in a timeline and use a dragged time
   selection as the analysis range.
+- [x] Make timeline selection visible immediately, distinguish classic sample
+  states and CPU-only exclusions, and report the selected sample population.
 - [x] Display capture settings, completion state, sample totals, process times,
   and available gap/truncation counters in a session summary.
 - [x] Register loaded modules independently of DbgHelp invasion and refresh
@@ -398,20 +400,24 @@ ABI can evolve without exposing internal kernel structures.
 
 - [ ] Record scheduler switch, ready/wakeup, block, migration, and priority
   changes with timestamps, CPU, old/new thread identity, and state/reason.
+- [x] Negotiate RosProf context-switch and wakeup sources against the complete
+  capability/source/record-type contract and retain those records in v2 logs.
 - [ ] Correlate scheduler records with process/thread lifecycle records without
   relying on reusable numeric IDs alone.
 - [ ] Define off-CPU intervals and their attribution rules, including sleep,
   synchronization wait, I/O wait, preemption, and unknown wait reason.
 - [ ] Optionally capture a bounded blocking-site stack at the transition to a
   waiting state.
-- [ ] Replace or augment userspace snapshot markers with per-thread and per-CPU
-  scheduler lanes, zoom, pan, and precise visible-range summaries.
+- [x] Augment sample markers with bounded per-thread scheduler-state and
+  per-CPU residency tracks, source-dependent legends, and bucket hover details.
+- [ ] Add timeline zoom, pan, navigation history, and precise visible-range
+  scheduler summaries without rebuilding large models on the UI thread.
 - [x] Apply the current sample timeline's time selection consistently to hot
   functions and the flame graph.
 - [ ] Keep CPU-sample cost, wall-clock latency, and off-CPU duration as separate
   metrics; never combine their percentages without an explicit mode.
-- [ ] Show gaps and lost intervals in the timeline rather than interpolating
-  apparently complete activity.
+- [x] Mark buckets containing loss records in every timeline mode and stop
+  extending an inferred open scheduler state after known loss.
 
 ## P2: launch and capture workflows
 

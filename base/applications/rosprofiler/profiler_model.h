@@ -42,6 +42,19 @@ typedef enum _RPERF_COMPLETION_REASON
     RperfCompletionError
 } RPERF_COMPLETION_REASON;
 
+typedef enum _RPERF_THREAD_STATE_KIND
+{
+    RperfThreadStateUnknown = 0,
+    RperfThreadStateInitialized,
+    RperfThreadStateReady,
+    RperfThreadStateRunning,
+    RperfThreadStateStandby,
+    RperfThreadStateTerminated,
+    RperfThreadStateWaiting,
+    RperfThreadStateTransition,
+    RperfThreadStateDeferredReady
+} RPERF_THREAD_STATE_KIND;
+
 typedef enum _RPERF_RECORD_KIND
 {
     RperfRecordSessionInfo = 1,
@@ -117,6 +130,10 @@ typedef enum _RPERF_LOSS_REASON
 #define RPERF_MODEL_RECORD_FLAG_FILTERED        0x00000008
 #define RPERF_MODEL_RECORD_FLAG_REDACTED        0x00000010
 #define RPERF_MODEL_RECORD_FLAG_SYNTHETIC       0x00000020
+#define RPERF_MODEL_RECORD_FLAG_STATE_KNOWN     0x00000040
+#define RPERF_MODEL_RECORD_FLAG_WAITING         0x00000080
+#define RPERF_MODEL_RECORD_FLAG_WAIT_REASON_SHIFT 16
+#define RPERF_MODEL_RECORD_FLAG_WAIT_REASON_MASK 0x00ff0000
 
 #define RPERF_FILTER_TIME                 0x00000001
 #define RPERF_FILTER_PROCESS              0x00000002

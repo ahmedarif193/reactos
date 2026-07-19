@@ -14,6 +14,7 @@
 #include "profiler_legacy_bridge.h"
 #include "profiler_pe.h"
 #include "profiler_symbolizer_dbghelp.h"
+#include "profiler_viewmodel.h"
 
 #include <reactos/rperf.h>
 #include <errno.h>
@@ -507,9 +508,15 @@ RperfTestSchedulerStateFilter(PCWSTR Path)
     const RPERF_SYMBOL *Hot;
     const RPERF_SYMBOL *Parent;
     const RPERF_SYMBOL *Other;
+    RPERF_CAPTURE_LIMITS Limits;
+    RPERF_RECORDING *Recording = NULL;
+    RPERF_RECORDING *Reloaded = NULL;
+    RPERF_SESSION Roundtrip;
+    RPERF_CODEC_FORMAT Format = RperfCodecAuto;
     BOOL Result = FALSE;
 
     RperfSessionInitialize(&Session);
+    RperfSessionInitialize(&Roundtrip);
     RPERF_CHECK(TestName, RperfWriteFixture(Path, RperfStateTaggedLog));
     RPERF_CHECK(TestName, RperfLoadLog(&Session, Path));
     RPERF_CHECK(TestName, Session.LogComplete);
@@ -539,13 +546,291 @@ RperfTestSchedulerStateFilter(PCWSTR Path)
     Hot = RperfFindSymbol(&Session, 0x1000);
     RPERF_CHECK(TestName, Hot != NULL && Hot->Inclusive == 2);
 
+    RperfDefaultCaptureLimits(&Limits);
+    Recording = RperfRecordingFromLegacySession(&Session, &Limits);
+    RPERF_CHECK(TestName, Recording != NULL);
+    RPERF_CHECK(TestName,
+                RperfCodecSave(Path, RperfCodecV2Binary, Recording,
+                               NULL, NULL, NULL));
+    RPERF_CHECK(TestName,
+                RperfCodecLoad(Path, RperfCodecAuto, &Limits,
+                               NULL, NULL, NULL, &Reloaded, &Format));
+    RPERF_CHECK(TestName, Format == RperfCodecV2Binary);
+    RPERF_CHECK(TestName,
+                RperfLegacySessionFromRecording(Reloaded, Path,
+                                                &Roundtrip));
+    RPERF_CHECK(TestName, Roundtrip.StateTaggedSamples == 2);
+    RPERF_CHECK(TestName, Roundtrip.WaitingSamples == 1);
+    RPERF_CHECK(TestName,
+                (Roundtrip.Samples[1].Flags & RPERF_SAMPLE_WAITING) != 0);
+    RPERF_CHECK(TestName,
+                ((Roundtrip.Samples[1].Flags &
+                  RPERF_SAMPLE_WAIT_REASON_MASK) >>
+                 RPERF_SAMPLE_WAIT_REASON_SHIFT) == 6);
+    RPERF_CHECK(TestName,
+                RperfBuildFilteredAnalysis(&Roundtrip, 0, 0,
+                                           (ULONGLONG)-1,
+                                           RPERF_FILTER_CPU_ONLY));
+    RPERF_CHECK(TestName, Roundtrip.FilteredSampleCount == 2);
+
     SetLastError(ERROR_SUCCESS);
     RPERF_CHECK(TestName, !RperfBuildFilteredAnalysis(&Session, 0, 0, (ULONGLONG)-1, 0x2));
     RPERF_CHECK(TestName, GetLastError() == ERROR_INVALID_PARAMETER);
     Result = TRUE;
 
 Cleanup:
+    if (Reloaded != NULL)
+        RperfRecordingRelease(Reloaded);
+    if (Recording != NULL)
+        RperfRecordingRelease(Recording);
+    RperfSessionClear(&Roundtrip);
     RperfSessionClear(&Session);
+    if (Result)
+        printf("[PASS] %s\n", TestName);
+    return Result;
+}
+
+static BOOL
+RperfTestTimelineTracks(PCWSTR SavePath)
+{
+    static const CHAR TestName[] = "timeline scheduler tracks";
+    RPERF_CAPTURE_LIMITS Limits;
+    RPERF_RECORDING *Recording = NULL;
+    RPERF_TIMELINE_VIEW *View = NULL;
+    RPERF_TIMELINE_VIEW *LimitedView = NULL;
+    RPERF_TIMELINE_VIEW *FilteredView = NULL;
+    RPERF_FILTER Filter;
+    RPERF_RECORD Record;
+    SIZE_T Index, Lane10 = (SIZE_T)-1, Cpu0 = (SIZE_T)-1;
+    ULONGLONG Running = 0, Ready = 0, Waiting = 0;
+    ULONGLONG CpuRunning = 0, Samples = 0;
+    ULONG Starts = 0, Ends = 0;
+    BOOL SawReason = FALSE;
+    BOOL Result = FALSE;
+
+    RperfDefaultCaptureLimits(&Limits);
+    Recording = RperfRecordingCreate(&Limits);
+    RPERF_CHECK(TestName, Recording != NULL);
+    Recording->Info.Backend = RperfBackendKernel;
+    Recording->Info.Metric = RperfMetricCpuSamples;
+    Recording->Info.StartTimeNs = 0;
+    Recording->Info.EndTimeNs = 1000000;
+    Recording->Info.CompletionReason = RperfCompletionUserStop;
+    Recording->Info.Complete = TRUE;
+    RPERF_CHECK(TestName,
+                RperfRecordingSetTargetName(Recording,
+                                            L"timeline-fixture.exe"));
+
+#define RPERF_TIMELINE_RECORD(_Kind, _Time, _Sequence) \
+    do \
+    { \
+        ZeroMemory(&Record, sizeof(Record)); \
+        Record.Header.Kind = (_Kind); \
+        Record.Header.TimestampNs = (_Time); \
+        Record.Header.Sequence = (_Sequence); \
+        Record.Header.ProcessKey = 1; \
+        Record.Header.ProcessId = 42; \
+        Record.Header.Cpu = RPERF_MODEL_ALL_CPUS; \
+    } while (0)
+
+    RPERF_TIMELINE_RECORD(RperfRecordProcessStart, 0, 0);
+    Record.Data.Lifecycle.ObjectId = 1;
+    RPERF_CHECK(TestName, RperfRecordingAddRecord(Recording, &Record));
+    RPERF_TIMELINE_RECORD(RperfRecordThreadStart, 0, 1);
+    Record.Header.ThreadKey = 10;
+    Record.Header.ThreadId = 10;
+    RPERF_CHECK(TestName, RperfRecordingAddRecord(Recording, &Record));
+    RPERF_TIMELINE_RECORD(RperfRecordThreadStart, 0, 2);
+    Record.Header.ThreadKey = 11;
+    Record.Header.ThreadId = 11;
+    RPERF_CHECK(TestName, RperfRecordingAddRecord(Recording, &Record));
+
+    RPERF_TIMELINE_RECORD(RperfRecordContextSwitch, 100000, 3);
+    Record.Header.Cpu = 0;
+    Record.Data.Scheduler.OldProcessKey = 2;
+    Record.Data.Scheduler.OldThreadKey = 99;
+    Record.Data.Scheduler.OldProcessId = 7;
+    Record.Data.Scheduler.OldThreadId = 99;
+    Record.Data.Scheduler.NewProcessKey = 1;
+    Record.Data.Scheduler.NewThreadKey = 10;
+    Record.Data.Scheduler.NewProcessId = 42;
+    Record.Data.Scheduler.NewThreadId = 10;
+    Record.Data.Scheduler.State = RperfThreadStateReady;
+    Record.Data.Scheduler.TargetCpu = 0;
+    RPERF_CHECK(TestName, RperfRecordingAddRecord(Recording, &Record));
+
+    RPERF_TIMELINE_RECORD(RperfRecordSample, 200000, 4);
+    Record.Header.ThreadKey = 10;
+    Record.Header.ThreadId = 10;
+    Record.Header.Cpu = 0;
+    Record.Data.Sample.Weight = 1;
+    Record.Data.Sample.Depth = 1;
+    Record.Data.Sample.Frames[0].Address = 0x1000;
+    RPERF_CHECK(TestName, RperfRecordingAddRecord(Recording, &Record));
+
+    RPERF_TIMELINE_RECORD(RperfRecordContextSwitch, 300000, 5);
+    Record.Header.Cpu = 0;
+    Record.Data.Scheduler.OldProcessKey = 1;
+    Record.Data.Scheduler.OldThreadKey = 10;
+    Record.Data.Scheduler.OldProcessId = 42;
+    Record.Data.Scheduler.OldThreadId = 10;
+    Record.Data.Scheduler.NewProcessKey = 1;
+    Record.Data.Scheduler.NewThreadKey = 11;
+    Record.Data.Scheduler.NewProcessId = 42;
+    Record.Data.Scheduler.NewThreadId = 11;
+    Record.Data.Scheduler.State = RperfThreadStateWaiting;
+    Record.Data.Scheduler.Reason = 6;
+    Record.Data.Scheduler.TargetCpu = 0;
+    RPERF_CHECK(TestName, RperfRecordingAddRecord(Recording, &Record));
+
+    RPERF_TIMELINE_RECORD(RperfRecordWakeup, 500000, 6);
+    Record.Header.Cpu = 0;
+    Record.Data.Scheduler.OldProcessKey = 1;
+    Record.Data.Scheduler.OldThreadKey = 11;
+    Record.Data.Scheduler.OldProcessId = 42;
+    Record.Data.Scheduler.OldThreadId = 11;
+    Record.Data.Scheduler.NewProcessKey = 1;
+    Record.Data.Scheduler.NewThreadKey = 10;
+    Record.Data.Scheduler.NewProcessId = 42;
+    Record.Data.Scheduler.NewThreadId = 10;
+    Record.Data.Scheduler.TargetCpu = 1;
+    RPERF_CHECK(TestName, RperfRecordingAddRecord(Recording, &Record));
+
+    RPERF_TIMELINE_RECORD(RperfRecordLost, 600000, 7);
+    Record.Data.Lost.Count = 2;
+    RPERF_CHECK(TestName, RperfRecordingAddRecord(Recording, &Record));
+
+    RPERF_TIMELINE_RECORD(RperfRecordContextSwitch, 700000, 8);
+    Record.Header.Cpu = 1;
+    Record.Data.Scheduler.OldProcessKey = 1;
+    Record.Data.Scheduler.OldThreadKey = 11;
+    Record.Data.Scheduler.OldProcessId = 42;
+    Record.Data.Scheduler.OldThreadId = 11;
+    Record.Data.Scheduler.NewProcessKey = 1;
+    Record.Data.Scheduler.NewThreadKey = 10;
+    Record.Data.Scheduler.NewProcessId = 42;
+    Record.Data.Scheduler.NewThreadId = 10;
+    Record.Data.Scheduler.State = RperfThreadStateReady;
+    Record.Data.Scheduler.TargetCpu = 1;
+    RPERF_CHECK(TestName, RperfRecordingAddRecord(Recording, &Record));
+
+    RPERF_TIMELINE_RECORD(RperfRecordSample, 800000, 9);
+    Record.Header.ThreadKey = 10;
+    Record.Header.ThreadId = 10;
+    Record.Header.Cpu = 1;
+    Record.Data.Sample.Weight = 1;
+    Record.Data.Sample.Depth = 1;
+    Record.Data.Sample.Frames[0].Address = 0x1000;
+    RPERF_CHECK(TestName, RperfRecordingAddRecord(Recording, &Record));
+
+    RPERF_TIMELINE_RECORD(RperfRecordContextSwitch, 900000, 10);
+    Record.Header.Cpu = 1;
+    Record.Data.Scheduler.OldProcessKey = 1;
+    Record.Data.Scheduler.OldThreadKey = 10;
+    Record.Data.Scheduler.OldProcessId = 42;
+    Record.Data.Scheduler.OldThreadId = 10;
+    Record.Data.Scheduler.NewProcessKey = 1;
+    Record.Data.Scheduler.NewThreadKey = 11;
+    Record.Data.Scheduler.NewProcessId = 42;
+    Record.Data.Scheduler.NewThreadId = 11;
+    Record.Data.Scheduler.State = RperfThreadStateReady;
+    Record.Data.Scheduler.TargetCpu = 1;
+    RPERF_CHECK(TestName, RperfRecordingAddRecord(Recording, &Record));
+
+    RPERF_TIMELINE_RECORD(RperfRecordThreadEnd, 950000, 11);
+    Record.Header.ThreadKey = 10;
+    Record.Header.ThreadId = 10;
+    RPERF_CHECK(TestName, RperfRecordingAddRecord(Recording, &Record));
+#undef RPERF_TIMELINE_RECORD
+
+    RPERF_CHECK(TestName, RperfRecordingFreeze(Recording));
+    if (SavePath != NULL)
+    {
+        RPERF_CHECK(TestName,
+                    RperfCodecSave(SavePath,
+                                   RperfCodecV2Binary,
+                                   Recording,
+                                   NULL,
+                                   NULL,
+                                   NULL));
+    }
+    View = RperfTimelineViewCreate(Recording, NULL, 8, 10, NULL);
+    RPERF_CHECK(TestName, View != NULL);
+    RPERF_CHECK(TestName, View->HasScheduler);
+    RPERF_CHECK(TestName, View->HasLifecycle);
+    RPERF_CHECK(TestName, View->ContextSwitchCount == 4);
+    RPERF_CHECK(TestName, View->WakeupCount == 1);
+    RPERF_CHECK(TestName, View->GlobalLoss == 2);
+    RPERF_CHECK(TestName, View->CpuCount == 2);
+    for (Index = 0; Index < View->LaneCount; Index++)
+    {
+        if (View->Lanes[Index].ThreadKey == 10)
+            Lane10 = Index;
+    }
+    for (Index = 0; Index < View->CpuCount; Index++)
+    {
+        if (View->CpuIds[Index] == 0)
+            Cpu0 = Index;
+    }
+    RPERF_CHECK(TestName, Lane10 != (SIZE_T)-1);
+    RPERF_CHECK(TestName, Cpu0 != (SIZE_T)-1);
+    for (Index = 0; Index < View->BucketCount; Index++)
+    {
+        const RPERF_TIMELINE_CELL *Cell =
+            RperfTimelineCell(View, Lane10, Index);
+        const RPERF_TIMELINE_CELL *CpuCell =
+            RperfTimelineCpuCell(View, Cpu0, Index);
+
+        Running += Cell->RunningNs;
+        Ready += Cell->ReadyNs;
+        Waiting += Cell->WaitingNs;
+        Samples += Cell->Samples;
+        Starts += Cell->ThreadStarts;
+        Ends += Cell->ThreadEnds;
+        CpuRunning += CpuCell->RunningNs;
+        if (Cell->WaitReason == 6)
+            SawReason = TRUE;
+    }
+    RPERF_CHECK(TestName, Running == 400000);
+    RPERF_CHECK(TestName, Ready == 150000);
+    RPERF_CHECK(TestName, Waiting == 200000);
+    RPERF_CHECK(TestName, Samples == 2);
+    RPERF_CHECK(TestName, Starts == 1 && Ends == 1);
+    RPERF_CHECK(TestName, CpuRunning == 500000);
+    RPERF_CHECK(TestName, SawReason);
+    RPERF_CHECK(TestName,
+                RperfTimelineCell(View, Lane10, 6)->ReadyNs == 0);
+    RPERF_CHECK(TestName,
+                RperfTimelineCpuCell(View, Cpu0, 6)->RunningNs == 0);
+    LimitedView = RperfTimelineViewCreate(Recording, NULL, 1, 10, NULL);
+    RPERF_CHECK(TestName, LimitedView != NULL);
+    RPERF_CHECK(TestName, LimitedView->LaneCount == 1);
+    RPERF_CHECK(TestName, LimitedView->LanesTruncated);
+    RPERF_CHECK(TestName, LimitedView->Lanes[0].ThreadKey == 10);
+    RPERF_CHECK(TestName, LimitedView->CpuCount == 1);
+    RPERF_CHECK(TestName, LimitedView->CpusTruncated);
+    RPERF_CHECK(TestName, LimitedView->CpuIds[0] == 0);
+    RperfInitializeFilter(&Filter);
+    Filter.Enabled = RPERF_FILTER_PROCESS;
+    Filter.ProcessKey = 1;
+    FilteredView = RperfTimelineViewCreate(Recording,
+                                          &Filter,
+                                          8,
+                                          10,
+                                          NULL);
+    RPERF_CHECK(TestName, FilteredView != NULL);
+    RPERF_CHECK(TestName, FilteredView->LaneCount == 2);
+    RPERF_CHECK(TestName, FilteredView->GlobalLoss == 2);
+    for (Index = 0; Index < FilteredView->LaneCount; Index++)
+        RPERF_CHECK(TestName, FilteredView->Lanes[Index].ThreadKey != 99);
+    Result = TRUE;
+
+Cleanup:
+    RperfTimelineViewDestroy(FilteredView);
+    RperfTimelineViewDestroy(LimitedView);
+    RperfTimelineViewDestroy(View);
+    if (Recording != NULL)
+        RperfRecordingRelease(Recording);
     if (Result)
         printf("[PASS] %s\n", TestName);
     return Result;
@@ -1121,6 +1406,7 @@ RperfTestAsyncPresentationController(PCWSTR Path)
     RPERF_SESSION_CONTROLLER Controller;
     RPERF_ASYNC_TEST_CONTEXT Context;
     RPERF_SESSION *PreparedSession = NULL;
+    RPERF_TIMELINE_VIEW *PreparedTimeline = NULL;
     ULONGLONG Generation = 0;
     BOOL ControllerInitialized = FALSE;
     BOOL Result = FALSE;
@@ -1158,6 +1444,7 @@ RperfTestAsyncPresentationController(PCWSTR Path)
     RPERF_CHECK(TestName,
                 RperfControllerBeginPrepareLegacy(&Controller,
                                                   Path,
+                                                  256,
                                                   RperfAsyncTestProgress,
                                                   RperfAsyncTestComplete,
                                                   &Context,
@@ -1174,7 +1461,11 @@ RperfTestAsyncPresentationController(PCWSTR Path)
                 RperfControllerCommitCompleted(&Controller, Generation));
     PreparedSession =
         RperfControllerTakePreparedSession(&Controller);
+    PreparedTimeline =
+        RperfControllerTakePreparedTimeline(&Controller);
     RPERF_CHECK(TestName, PreparedSession != NULL);
+    RPERF_CHECK(TestName, PreparedTimeline != NULL);
+    RPERF_CHECK(TestName, PreparedTimeline->BucketCount == 256);
     RPERF_CHECK(TestName, PreparedSession->SampleCount == 100);
     RPERF_CHECK(TestName, PreparedSession->Nodes != NULL);
     RPERF_CHECK(TestName, PreparedSession->Nodes[0].Count == 100);
@@ -1184,6 +1475,7 @@ RperfTestAsyncPresentationController(PCWSTR Path)
     RPERF_CHECK(TestName,
                 RperfControllerBeginPrepareLegacy(&Controller,
                                                   Path,
+                                                  256,
                                                   RperfAsyncTestProgress,
                                                   RperfAsyncTestComplete,
                                                   &Context,
@@ -1198,12 +1490,15 @@ RperfTestAsyncPresentationController(PCWSTR Path)
     RPERF_CHECK(TestName, GetLastError() == ERROR_CANCELLED);
     RPERF_CHECK(TestName,
                 RperfControllerTakePreparedSession(&Controller) == NULL);
+    RPERF_CHECK(TestName,
+                RperfControllerTakePreparedTimeline(&Controller) == NULL);
 
     /* Also cancel while the conversion worker is actively inside a phase. */
     RperfResetAsyncTestContext(&Context, TRUE);
     RPERF_CHECK(TestName,
                 RperfControllerBeginPrepareLegacy(&Controller,
                                                   Path,
+                                                  256,
                                                   RperfAsyncTestProgress,
                                                   RperfAsyncTestComplete,
                                                   &Context,
@@ -1224,11 +1519,14 @@ RperfTestAsyncPresentationController(PCWSTR Path)
     RPERF_CHECK(TestName, GetLastError() == ERROR_CANCELLED);
     RPERF_CHECK(TestName,
                 RperfControllerTakePreparedSession(&Controller) == NULL);
+    RPERF_CHECK(TestName,
+                RperfControllerTakePreparedTimeline(&Controller) == NULL);
 
     RperfControllerDestroy(&Controller);
     ControllerInitialized = FALSE;
     RPERF_CHECK(TestName, PreparedSession->SampleCount == 100);
     RPERF_CHECK(TestName, PreparedSession->Nodes[0].Count == 100);
+    RPERF_CHECK(TestName, PreparedTimeline->BucketCount == 256);
     Result = TRUE;
 
 Cleanup:
@@ -1241,6 +1539,7 @@ Cleanup:
         RperfSessionClear(PreparedSession);
         HeapFree(GetProcessHeap(), 0, PreparedSession);
     }
+    RperfTimelineViewDestroy(PreparedTimeline);
     if (Context.ReleaseProgressEvent != NULL)
         CloseHandle(Context.ReleaseProgressEvent);
     if (Context.ProgressEnteredEvent != NULL)
@@ -2092,6 +2391,11 @@ wmain(int argc,
     if (argc == 5 && lstrcmpW(argv[1], L"--named-workload") == 0)
         return RperfRunNamedWorkload(argv[2], argv[3], argv[4]);
     if (argc == 3 &&
+        lstrcmpW(argv[1], L"--write-timeline-fixture") == 0)
+    {
+        return RperfTestTimelineTracks(argv[2]) ? 0 : 1;
+    }
+    if (argc == 3 &&
         (lstrcmpW(argv[1], L"--inspect-log") == 0 ||
          lstrcmpW(argv[1], L"--inspect-log-modules") == 0))
     {
@@ -2157,6 +2461,8 @@ wmain(int argc,
     if (!RperfTestMalformedLogs(MalformedPath))
         Failed++;
     if (!RperfTestSchedulerStateFilter(MalformedPath))
+        Failed++;
+    if (!RperfTestTimelineTracks(NULL))
         Failed++;
     if (!RperfTestDescendingSymbols(MalformedPath))
         Failed++;

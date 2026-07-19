@@ -52,6 +52,8 @@ RperfControllerDestroy(RPERF_SESSION_CONTROLLER *Controller)
     if (Controller->Recording != NULL)
         RperfRecordingRelease(Controller->Recording);
     RperfControllerFreePreparedSession(Controller->PreparedSession);
+    if (Controller->PreparedTimeline != NULL)
+        RperfTimelineViewDestroy(Controller->PreparedTimeline);
     DeleteCriticalSection(&Controller->Lock);
     ZeroMemory(Controller, sizeof(*Controller));
 }
@@ -187,6 +189,7 @@ RperfControllerBeginFilter(RPERF_SESSION_CONTROLLER *Controller,
 BOOL
 RperfControllerBeginPrepareLegacy(RPERF_SESSION_CONTROLLER *Controller,
                                   PCWSTR SourcePath,
+                                  SIZE_T TimelineBucketCount,
                                   RPERF_JOB_PROGRESS Progress,
                                   RPERF_JOB_COMPLETE Complete,
                                   PVOID Context,
@@ -205,6 +208,7 @@ RperfControllerBeginPrepareLegacy(RPERF_SESSION_CONTROLLER *Controller,
     Job = RperfJobStartPrepareLegacy(Value,
                                      Recording,
                                      SourcePath,
+                                     TimelineBucketCount,
                                      Progress,
                                      Complete,
                                      Context);
@@ -224,6 +228,7 @@ RperfControllerCommitCompleted(RPERF_SESSION_CONTROLLER *Controller,
     RPERF_RECORDING *Recording;
     RPERF_ANALYSIS *Analysis;
     RPERF_SESSION *PreparedSession;
+    RPERF_TIMELINE_VIEW *PreparedTimeline;
     DWORD JobStatus;
 
     EnterCriticalSection(&Controller->Lock);
@@ -244,6 +249,8 @@ RperfControllerCommitCompleted(RPERF_SESSION_CONTROLLER *Controller,
                RperfJobTakeAnalysis(Job) : NULL;
     PreparedSession = JobStatus == ERROR_SUCCESS ?
                       RperfJobTakeLegacySession(Job) : NULL;
+    PreparedTimeline = JobStatus == ERROR_SUCCESS ?
+                       RperfJobTakeTimelineView(Job) : NULL;
     EnterCriticalSection(&Controller->Lock);
     if (Generation != Controller->Generation ||
         Job != Controller->ActiveJob)
@@ -252,6 +259,7 @@ RperfControllerCommitCompleted(RPERF_SESSION_CONTROLLER *Controller,
         if (Recording != NULL) RperfRecordingRelease(Recording);
         if (Analysis != NULL) RperfAnalysisRelease(Analysis);
         RperfControllerFreePreparedSession(PreparedSession);
+        RperfTimelineViewDestroy(PreparedTimeline);
         SetLastError(ERROR_CANCELLED);
         return FALSE;
     }
@@ -269,6 +277,8 @@ RperfControllerCommitCompleted(RPERF_SESSION_CONTROLLER *Controller,
         }
         RperfControllerFreePreparedSession(PreparedSession);
         PreparedSession = NULL;
+        RperfTimelineViewDestroy(PreparedTimeline);
+        PreparedTimeline = NULL;
         JobStatus = ERROR_CANCELLED;
     }
     Controller->ActiveJob = NULL;
@@ -285,6 +295,8 @@ RperfControllerCommitCompleted(RPERF_SESSION_CONTROLLER *Controller,
         }
         RperfControllerFreePreparedSession(Controller->PreparedSession);
         Controller->PreparedSession = NULL;
+        RperfTimelineViewDestroy(Controller->PreparedTimeline);
+        Controller->PreparedTimeline = NULL;
     }
     if (Analysis != NULL)
     {
@@ -296,6 +308,11 @@ RperfControllerCommitCompleted(RPERF_SESSION_CONTROLLER *Controller,
     {
         RperfControllerFreePreparedSession(Controller->PreparedSession);
         Controller->PreparedSession = PreparedSession;
+    }
+    if (PreparedTimeline != NULL)
+    {
+        RperfTimelineViewDestroy(Controller->PreparedTimeline);
+        Controller->PreparedTimeline = PreparedTimeline;
     }
     LeaveCriticalSection(&Controller->Lock);
     RperfJobDestroy(Job);
@@ -341,4 +358,16 @@ RperfControllerTakePreparedSession(RPERF_SESSION_CONTROLLER *Controller)
     Controller->PreparedSession = NULL;
     LeaveCriticalSection(&Controller->Lock);
     return Session;
+}
+
+RPERF_TIMELINE_VIEW *
+RperfControllerTakePreparedTimeline(RPERF_SESSION_CONTROLLER *Controller)
+{
+    RPERF_TIMELINE_VIEW *Timeline;
+
+    EnterCriticalSection(&Controller->Lock);
+    Timeline = Controller->PreparedTimeline;
+    Controller->PreparedTimeline = NULL;
+    LeaveCriticalSection(&Controller->Lock);
+    return Timeline;
 }
