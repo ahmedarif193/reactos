@@ -393,8 +393,13 @@ IopConnectInterruptExMessageBased(
             }
             else
             {
-                DPRINT1("IoConnectInterruptEx: HalpGetMessageRoutingInfo failed 0x%lx vec=0x%lx\n",
-                        RoutingStatus, d->u.Interrupt.Vector);
+                /* MessageAddress 0 would mean MSI DMA writes to PA 0 and no
+                 * interrupts; fail so callers take their fallback */
+                DPRINT1("IoConnectInterruptEx: HalpGetMessageRoutingInfo failed 0x%lx vec=0x%lx, failing message connect\n", RoutingStatus, d->u.Interrupt.Vector);
+                IoDisconnectInterrupt(InterruptObject);
+                ExFreePoolWithTag(DispEntry, 'EsMI');
+                Status = RoutingStatus;
+                goto FailureCleanup;
             }
         }
 #endif
