@@ -45,7 +45,8 @@ HalEnableSystemInterrupt(
 #define HIDI2C_POWER_ON           0x00
 #define HIDI2C_POWER_SLEEP        0x01
 
-#define HIDI2C_ELAN_VENDOR_ID     0x04F3
+/* HID-over-I2C 1.0 TIMEOUT_HostInitiatedReset. */
+#define HIDI2C_RESET_TIMEOUT_100NS (5ULL * 1000 * 1000 * 10)
 
 static const UCHAR Hidi2cDsmGuid[16] =
 {
@@ -325,13 +326,14 @@ Exit:
 
 static
 NTSTATUS
-Hidi2cFindConnection(
+Hidi2cFindResources(
     _In_opt_ PCM_RESOURCE_LIST Resources,
-    _Out_ PLARGE_INTEGER ConnectionId)
+    _Out_ PLARGE_INTEGER ConnectionId,
+    _Out_ PCM_PARTIAL_RESOURCE_DESCRIPTOR *InterruptResource)
 {
     PCM_FULL_RESOURCE_DESCRIPTOR FullDescriptor;
-    PCM_PARTIAL_RESOURCE_DESCRIPTOR Descriptor;
-    ULONG FullIndex, PartialIndex;
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR Connection, Interrupt;
+    ULONG FullIndex;
 
     if (Resources == NULL)
         return STATUS_DEVICE_CONFIGURATION_ERROR;
@@ -339,22 +341,28 @@ Hidi2cFindConnection(
     for (FullIndex = 0; FullIndex < Resources->Count; FullIndex++)
     {
         FullDescriptor = &Resources->List[FullIndex];
-        for (PartialIndex = 0;
-             PartialIndex < FullDescriptor->PartialResourceList.Count;
-             PartialIndex++)
+        if (FullDescriptor->PartialResourceList.Count < 2)
+            continue;
+
+        Connection = &FullDescriptor->PartialResourceList.PartialDescriptors[0];
+        if (Connection->Type != CmResourceTypeConnection ||
+            Connection->u.Connection.Class != CM_RESOURCE_CONNECTION_CLASS_SERIAL ||
+            Connection->u.Connection.Type != CM_RESOURCE_CONNECTION_TYPE_SERIAL_I2C)
         {
-            Descriptor = &FullDescriptor->PartialResourceList.PartialDescriptors[PartialIndex];
-            if (Descriptor->Type == CmResourceTypeConnection &&
-                Descriptor->u.Connection.Class ==
-                    CM_RESOURCE_CONNECTION_CLASS_SERIAL &&
-                Descriptor->u.Connection.Type ==
-                    CM_RESOURCE_CONNECTION_TYPE_SERIAL_I2C)
-            {
-                ConnectionId->LowPart = Descriptor->u.Connection.IdLowPart;
-                ConnectionId->HighPart = Descriptor->u.Connection.IdHighPart;
-                return STATUS_SUCCESS;
-            }
+            continue;
         }
+
+        Interrupt = &FullDescriptor->PartialResourceList.PartialDescriptors[1];
+        if (Interrupt->Type != CmResourceTypeInterrupt ||
+            (Interrupt->Flags & CM_RESOURCE_INTERRUPT_MESSAGE) != 0)
+        {
+            return STATUS_DEVICE_CONFIGURATION_ERROR;
+        }
+
+        ConnectionId->LowPart = Connection->u.Connection.IdLowPart;
+        ConnectionId->HighPart = Connection->u.Connection.IdHighPart;
+        *InterruptResource = Interrupt;
+        return STATUS_SUCCESS;
     }
 
     return STATUS_DEVICE_CONFIGURATION_ERROR;
@@ -394,85 +402,54 @@ Hidi2cInterruptService(
 }
 
 static
-VOID
+NTSTATUS
 Hidi2cConnectInterrupt(
     _Inout_ PHIDI2C_DEVICE_EXTENSION DeviceExtension,
-    _In_opt_ PCM_RESOURCE_LIST Resources)
+    _In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR Descriptor)
 {
-    PCM_FULL_RESOURCE_DESCRIPTOR FullDescriptor;
-    PCM_PARTIAL_RESOURCE_DESCRIPTOR Descriptor;
-    ULONG FullIndex, PartialIndex;
     NTSTATUS Status;
-
-    if (Resources == NULL)
-        return;
 
     InterlockedExchange(&DeviceExtension->InterruptPending, FALSE);
     InterlockedExchange(&DeviceExtension->InterruptMasked, FALSE);
     KeClearEvent(&DeviceExtension->InputReadyEvent);
-    DeviceExtension->PollingFallback = FALSE;
 
-    for (FullIndex = 0; FullIndex < Resources->Count; FullIndex++)
+    if (Descriptor->ShareDisposition != CmResourceShareDeviceExclusive ||
+        (Descriptor->Flags & CM_RESOURCE_INTERRUPT_LEVEL_LATCHED_BITS) !=
+            CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE)
     {
-        FullDescriptor = &Resources->List[FullIndex];
-        for (PartialIndex = 0;
-             PartialIndex < FullDescriptor->PartialResourceList.Count;
-             PartialIndex++)
-        {
-            Descriptor = &FullDescriptor->PartialResourceList.PartialDescriptors[PartialIndex];
-            if (Descriptor->Type != CmResourceTypeInterrupt ||
-                (Descriptor->Flags & CM_RESOURCE_INTERRUPT_MESSAGE) != 0)
-            {
-                continue;
-            }
-
-            /* Masking a shared line would stall unrelated devices. */
-            if (Descriptor->ShareDisposition == CmResourceShareShared)
-            {
-                DPRINT1("hidi2c: shared interrupt cannot use one-shot mode; using polling fallback\n");
-                return;
-            }
-
-            DeviceExtension->InterruptVector = Descriptor->u.Interrupt.Vector;
-            DeviceExtension->InterruptIrql = (KIRQL)Descriptor->u.Interrupt.Level;
-            DeviceExtension->InterruptAffinity = Descriptor->u.Interrupt.Affinity;
-            DeviceExtension->InterruptMode =
-                (Descriptor->Flags & CM_RESOURCE_INTERRUPT_LATCHED) ?
-                Latched : LevelSensitive;
-            Status = IoConnectInterrupt(
-                         &DeviceExtension->InterruptObject,
-                         Hidi2cInterruptService,
-                         DeviceExtension,
-                         NULL,
-                         DeviceExtension->InterruptVector,
-                         DeviceExtension->InterruptIrql,
-                         DeviceExtension->InterruptIrql,
-                         DeviceExtension->InterruptMode,
-                         FALSE,
-                         DeviceExtension->InterruptAffinity,
-                         FALSE);
-            if (!NT_SUCCESS(Status))
-            {
-                DeviceExtension->InterruptObject = NULL;
-                DPRINT1("hidi2c: IoConnectInterrupt failed %08lx; using polling fallback\n",
-                        Status);
-            }
-            return;
-        }
+        DPRINT1("hidi2c: HID-I2C requires an exclusive level interrupt\n");
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
 
-    DPRINT1("hidi2c: no translated interrupt resource; using polling fallback\n");
+    DeviceExtension->InterruptVector = Descriptor->u.Interrupt.Vector;
+    DeviceExtension->InterruptIrql = (KIRQL)Descriptor->u.Interrupt.Level;
+    DeviceExtension->InterruptAffinity = Descriptor->u.Interrupt.Affinity;
+    DeviceExtension->InterruptMode = LevelSensitive;
+    Status = IoConnectInterrupt(&DeviceExtension->InterruptObject,
+                                Hidi2cInterruptService,
+                                DeviceExtension,
+                                NULL,
+                                DeviceExtension->InterruptVector,
+                                DeviceExtension->InterruptIrql,
+                                DeviceExtension->InterruptIrql,
+                                DeviceExtension->InterruptMode,
+                                FALSE,
+                                DeviceExtension->InterruptAffinity,
+                                FALSE);
+    if (!NT_SUCCESS(Status))
+        DeviceExtension->InterruptObject = NULL;
+    return Status;
 }
 
 static
-VOID
+NTSTATUS
 Hidi2cFinishInterrupt(
     _Inout_ PHIDI2C_DEVICE_EXTENSION DeviceExtension)
 {
     if (DeviceExtension->InterruptObject == NULL ||
         InterlockedExchange(&DeviceExtension->InterruptPending, FALSE) == FALSE)
     {
-        return;
+        return STATUS_SUCCESS;
     }
 
     KeClearEvent(&DeviceExtension->InputReadyEvent);
@@ -484,8 +461,9 @@ Hidi2cFinishInterrupt(
     {
         DPRINT1("hidi2c: failed to re-enable interrupt vector %lu\n",
                 DeviceExtension->InterruptVector);
-        DeviceExtension->PollingFallback = TRUE;
+        return STATUS_DEVICE_HARDWARE_ERROR;
     }
+    return STATUS_SUCCESS;
 }
 
 static
@@ -574,9 +552,11 @@ NTSTATUS
 Hidi2cResetDevice(
     _Inout_ PHIDI2C_DEVICE_EXTENSION DeviceExtension)
 {
-    ULONG Length, Index;
+    LARGE_INTEGER Timeout;
+    ULONGLONG Deadline, Now;
+    ULONG Length;
     USHORT ResponseLength;
-    NTSTATUS Status;
+    NTSTATUS FinishStatus, Status;
 
     ExAcquireFastMutex(&DeviceExtension->IoMutex);
     Hidi2cWriteUshort(DeviceExtension->CommandBuffer,
@@ -592,20 +572,54 @@ Hidi2cResetDevice(
     if (!NT_SUCCESS(Status))
         return Status;
 
-    for (Index = 0; Index < 100; Index++)
+    Deadline = KeQueryInterruptTime() + HIDI2C_RESET_TIMEOUT_100NS;
+    for (;;)
     {
+        if (!DeviceExtension->InterruptPending)
+        {
+            Now = KeQueryInterruptTime();
+            if (Now >= Deadline)
+                break;
+
+            Timeout.QuadPart = -(LONGLONG)(Deadline - Now);
+            Status = KeWaitForSingleObject(&DeviceExtension->InputReadyEvent,
+                                           Executive,
+                                           KernelMode,
+                                           FALSE,
+                                           &Timeout);
+            if (Status == STATUS_TIMEOUT)
+                break;
+            if (!NT_SUCCESS(Status))
+                return Status;
+            if (!DeviceExtension->InterruptPending)
+            {
+                KeClearEvent(&DeviceExtension->InputReadyEvent);
+                continue;
+            }
+        }
+
         ExAcquireFastMutex(&DeviceExtension->IoMutex);
         Status = Hidi2cSpbRead(DeviceExtension,
                                DeviceExtension->InputBuffer,
                                DeviceExtension->I2cDescriptor.MaxInputLength);
         ExReleaseFastMutex(&DeviceExtension->IoMutex);
-        if (NT_SUCCESS(Status))
+        FinishStatus = Hidi2cFinishInterrupt(DeviceExtension);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        if (!NT_SUCCESS(FinishStatus))
+            return FinishStatus;
+
+        ResponseLength = Hidi2cReadUshort(DeviceExtension->InputBuffer);
+        if (ResponseLength == 0)
+            return STATUS_SUCCESS;
+        if (ResponseLength == 0xFFFF ||
+            ResponseLength < sizeof(USHORT) ||
+            ResponseLength > DeviceExtension->I2cDescriptor.MaxInputLength)
         {
-            ResponseLength = Hidi2cReadUshort(DeviceExtension->InputBuffer);
-            if (ResponseLength == 0)
-                return STATUS_SUCCESS;
+            return STATUS_DEVICE_PROTOCOL_ERROR;
         }
-        Hidi2cDelayMilliseconds(10);
+
+        /* The protocol permits an input report before the reset acknowledgement. */
     }
 
     DPRINT1("hidi2c: reset acknowledgement timed out\n");
@@ -627,18 +641,11 @@ Hidi2cSetDevicePower(
     if (!PowerOn)
         InterlockedExchange(&DeviceExtension->Powered, FALSE);
 
-    Status = Hidi2cPowerCommand(
-                 DeviceExtension,
-                 PowerOn ? HIDI2C_POWER_ON : HIDI2C_POWER_SLEEP);
-    if (!NT_SUCCESS(Status) && PowerOn)
-    {
-        Hidi2cDelayMilliseconds(1);
-        Status = Hidi2cPowerCommand(DeviceExtension, HIDI2C_POWER_ON);
-    }
+    Status = Hidi2cPowerCommand(DeviceExtension,
+                                PowerOn ? HIDI2C_POWER_ON : HIDI2C_POWER_SLEEP);
 
     if (NT_SUCCESS(Status) && PowerOn)
     {
-        Hidi2cDelayMilliseconds(60);
         InterlockedExchange(&DeviceExtension->Powered, TRUE);
     }
     return Status;
@@ -923,9 +930,7 @@ Hidi2cInputThread(
             continue;
         }
 
-        if (DeviceExtension->InterruptObject != NULL &&
-            !DeviceExtension->PollingFallback &&
-            !DeviceExtension->InterruptPending)
+        if (!DeviceExtension->InterruptPending)
         {
             KeWaitForSingleObject(&DeviceExtension->InputReadyEvent,
                                   Executive,
@@ -948,7 +953,11 @@ Hidi2cInputThread(
                                DeviceExtension->InputBuffer,
                                DeviceExtension->I2cDescriptor.MaxInputLength);
         ExReleaseFastMutex(&DeviceExtension->IoMutex);
-        Hidi2cFinishInterrupt(DeviceExtension);
+        if (!NT_SUCCESS(Hidi2cFinishInterrupt(DeviceExtension)))
+        {
+            InterlockedExchange(&DeviceExtension->StopThread, TRUE);
+            break;
+        }
         if (!NT_SUCCESS(Status))
         {
             Hidi2cDelayMilliseconds(8);
@@ -1226,11 +1235,16 @@ Hidi2cStartDevice(
 {
     PHID_DEVICE_EXTENSION HidExtension = DeviceObject->DeviceExtension;
     PHIDI2C_DEVICE_EXTENSION DeviceExtension = HidExtension->MiniDeviceExtension;
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR InterruptResource;
     USHORT DescriptorRegister;
-    ULONG BufferSize, Index;
+    ULONG BufferSize;
     NTSTATUS Status;
 
-    Status = Hidi2cFindConnection(Resources, &DeviceExtension->ConnectionId);
+    InterlockedExchange(&DeviceExtension->StopThread, FALSE);
+
+    Status = Hidi2cFindResources(Resources,
+                                 &DeviceExtension->ConnectionId,
+                                 &InterruptResource);
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -1243,16 +1257,10 @@ Hidi2cStartDevice(
     if (!NT_SUCCESS(Status))
         return Status;
 
-    for (Index = 0; Index < 3; Index++)
-    {
-        Status = Hidi2cReadRegister(DeviceExtension,
-                                    DescriptorRegister,
-                                    &DeviceExtension->I2cDescriptor,
-                                    sizeof(DeviceExtension->I2cDescriptor));
-        if (NT_SUCCESS(Status))
-            break;
-        Hidi2cDelayMilliseconds(1);
-    }
+    Status = Hidi2cReadRegister(DeviceExtension,
+                                DescriptorRegister,
+                                &DeviceExtension->I2cDescriptor,
+                                sizeof(DeviceExtension->I2cDescriptor));
     if (!NT_SUCCESS(Status))
         goto Failure;
 
@@ -1295,28 +1303,18 @@ Hidi2cStartDevice(
     }
     DeviceExtension->TransferBufferSize = BufferSize;
 
-    Status = Hidi2cPowerCommand(DeviceExtension, HIDI2C_POWER_ON);
+    Status = Hidi2cConnectInterrupt(DeviceExtension, InterruptResource);
     if (!NT_SUCCESS(Status))
-    {
-        Hidi2cDelayMilliseconds(1);
-        Status = Hidi2cPowerCommand(DeviceExtension, HIDI2C_POWER_ON);
-    }
+        goto Failure;
+
+    Status = Hidi2cPowerCommand(DeviceExtension, HIDI2C_POWER_ON);
     if (!NT_SUCCESS(Status))
         goto Failure;
     InterlockedExchange(&DeviceExtension->Powered, TRUE);
-    Hidi2cDelayMilliseconds(60);
 
     Status = Hidi2cResetDevice(DeviceExtension);
     if (!NT_SUCCESS(Status))
         goto Failure;
-
-    if (DeviceExtension->I2cDescriptor.VendorId != HIDI2C_ELAN_VENDOR_ID)
-    {
-        Status = Hidi2cPowerCommand(DeviceExtension, HIDI2C_POWER_ON);
-        if (!NT_SUCCESS(Status))
-            goto Failure;
-        Hidi2cDelayMilliseconds(60);
-    }
 
     Status = Hidi2cReadRegister(
                  DeviceExtension,
@@ -1329,8 +1327,6 @@ Hidi2cStartDevice(
     DeviceExtension->UsesReportIds = Hidi2cDescriptorUsesReportIds(
                                          DeviceExtension->ReportDescriptor,
                                          DeviceExtension->I2cDescriptor.ReportDescriptorLength);
-
-    Hidi2cConnectInterrupt(DeviceExtension, Resources);
 
     RtlZeroMemory(&DeviceExtension->HidDescriptor,
                   sizeof(DeviceExtension->HidDescriptor));

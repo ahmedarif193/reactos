@@ -58,7 +58,6 @@ typedef struct _HIDI2C_DEVICE_EXTENSION
     KAFFINITY InterruptAffinity;
     KINTERRUPT_MODE InterruptMode;
     BOOLEAN UsesReportIds;
-    BOOLEAN PollingFallback;
     FAST_MUTEX IoMutex;
     IO_CSQ ReadCsq;
     KSPIN_LOCK ReadQueueLock;
