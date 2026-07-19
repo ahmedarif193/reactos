@@ -13,7 +13,7 @@ add_definitions(-D_WIN32_WINNT=0x0601 -DWINVER=0x0601)
 add_definitions(-DNTDDI_VERSION=0x06010000)    # NTDDI_WIN7
 
 remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
-add_definitions(-DDXGKDDI_INTERFACE_VERSION=0xF003)
+add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x10003)
 
 list(APPEND SOURCE
     rpi5vc4.c

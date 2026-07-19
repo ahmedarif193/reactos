@@ -14,7 +14,7 @@
 #
 
 remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
-add_definitions(-DDXGKDDI_INTERFACE_VERSION=0xF003)
+add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x10003)
 
 list(APPEND SOURCE
     wddm_bridge.c

@@ -16,7 +16,7 @@ add_definitions(-DNTDDI_VERSION=0x06010000)    # NTDDI_WIN7
 # addressing, SetVidPnSourceOwner1, ...). The global default DXGKDDI version
 # (0x1052) gates those types out, so raise it to WDDM 2.0.
 remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
-add_definitions(-DDXGKDDI_INTERFACE_VERSION=0xF003)
+add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x10003)
 
 list(APPEND SOURCE
     dxgkrnl.c

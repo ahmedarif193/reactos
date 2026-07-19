@@ -5,7 +5,7 @@
 # points are still resolved dynamically via GetProcAddress, so the same binary
 # degrades gracefully on hosts (e.g. WDDM 2.0 ReactOS) that lack newer exports.
 remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
-add_definitions(-DDXGKDDI_INTERFACE_VERSION=0xF003)
+add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x10003)
 
 list(APPEND SOURCE
     d3dkmt_adapter.c

@@ -1109,6 +1109,22 @@ START_TEST(wddmcaps)
     }
 
     {
+        D3DKMT_WDDM_3_1_CAPS caps;
+
+        memset(&caps, 0xCC, sizeof(caps));
+        st = QueryAI(pfn, h, KMTQAITYPE_WDDM_3_1_CAPS, &caps, sizeof(caps));
+        if (NT_SUCCESS(st))
+        {
+            ok(caps.Reserved == 0,
+               "WDDM_3_1_CAPS: reserved bits set (0x%08X)\n", (unsigned)caps.Value);
+            trace("WDDM_3_1_CAPS: 0x%08X NativeGpuFenceSupported=%u\n",
+                  (unsigned)caps.Value, (unsigned)caps.NativeGpuFenceSupported);
+        }
+        else
+            trace("WDDM_3_1_CAPS not available (0x%08lX)\n", (long)st);
+    }
+
+    {
         D3DKMT_CROSSADAPTERRESOURCE_SUPPORT support;
 
         memset(&support, 0xCC, sizeof(support));
