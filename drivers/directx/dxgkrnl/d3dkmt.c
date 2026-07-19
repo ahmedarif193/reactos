@@ -90,8 +90,20 @@ typedef struct _DXGKRNL_FILE_CONTEXT
  * synchronization, and KMT paths are complete in this dxgkrnl.  A level is
  * raised here only when its whole execution and teardown path works; the
  * reported version is the minimum of this and what the miniport declares.
+ *
+ * 2.0: residency references, paging queues/fences, CPU_VIRTUAL GpuMmu,
+ *      monitored fences (CPU+GPU VA), virtual submission.
+ * 2.1: OfferAllocations/ReclaimAllocations; no 64KB-page support (caps say
+ *      so truthfully).
+ * 2.2: node/engine metadata and per-level capability words.
+ * 2.3: EXISTINGHEAP standard allocations, Owner1 flags + Owner2 transport
+ *      (NT-handle authorization gated by caps until a DispMgr type exists).
+ * 2.4-2.6: no optional paravirtualization/hot-update features claimed;
+ *      per-level capability words report truthful zeros.
+ * 2.7-2.9: hardware scheduling reported ALWAYS_OFF; 2.9 feature queries.
+ * Optional features stay capability-gated; absence is reported, never faked.
  */
-#define DXGKP_OS_COMPLETED_WDDM_LEVEL KMT_DRIVERVERSION_WDDM_2_0
+#define DXGKP_OS_COMPLETED_WDDM_LEVEL KMT_DRIVERVERSION_WDDM_2_9
 
 static D3DKMT_DRIVERVERSION
 DxgkpMiniportDeclaredWddmLevel(
