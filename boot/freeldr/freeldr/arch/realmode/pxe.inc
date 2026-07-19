@@ -19,14 +19,14 @@
 
 PxeCallApi:
 
-    mov ax, word ptr ds:[BSS_PxeBufferSegment]
+    mov ax, word ptr [BSS_PxeBufferSegment]
     push ax
-    mov ax, word ptr ds:[BSS_PxeBufferOffset]
+    mov ax, word ptr [BSS_PxeBufferOffset]
     push ax
-    mov ax, word ptr ds:[BSS_PxeFunction]
+    mov ax, word ptr [BSS_PxeFunction]
     push ax
-    call dword ptr ds:[BSS_PxeEntryPoint]
+    call_far32 BSS_PxeEntryPoint
     add esp, 6
-    mov word ptr ds:[BSS_PxeResult], ax
+    mov word ptr [BSS_PxeResult], ax
 
     ret

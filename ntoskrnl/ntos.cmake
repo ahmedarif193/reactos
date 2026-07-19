@@ -344,6 +344,13 @@ elseif(ARCH STREQUAL "amd64")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/trap.S
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/usercall_asm.S
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/zeropage.S)
+    if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND REACTOS_CLANG_GNU_AS_FLAGS)
+        # trap.S relies on MASM-isms GNU as tolerates but LLVM's integrated
+        # assembler rejects (altmacro '&' concatenation, jmp $, lowercase
+        # operators): assemble it with GNU as
+        set_source_files_properties(${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/trap.S
+            PROPERTIES COMPILE_OPTIONS "${REACTOS_CLANG_GNU_AS_FLAGS}")
+    endif()
     list(APPEND SOURCE
         ${REACTOS_SOURCE_DIR}/ntoskrnl/config/i386/cmhardwr.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/i386/page.c

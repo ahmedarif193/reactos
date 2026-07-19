@@ -11,7 +11,9 @@
 #include <asm.inc>
 #include <freeldr/include/arch/pc/x86common.h>
 
-#define BP_REL(x) [bp+x-offset start]
+#include <code16call.inc>
+
+#include "fatbpb.inc"
 
 .code16
 
@@ -77,6 +79,12 @@ VolumeLabel:
     .ascii "NO NAME    "
 FileSystem:
     .ascii "FAT32   "
+
+/* FAT32-specific BPB fields */
+SectorsPerFatBigRel = SectorsPerFatBig - start
+ExtendedFlagsRel = ExtendedFlags - start
+FSVersionRel = FSVersion - start
+RootDirStartClusterRel = RootDirStartCluster - start
 
 main:
     xor ax,ax               // Setup segment registers

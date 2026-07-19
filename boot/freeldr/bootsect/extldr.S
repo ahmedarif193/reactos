@@ -38,7 +38,7 @@ ExtLdrEntryPoint:
     mov edx, eax
 .FLoop2:
     // Load directory Inode
-    mov eax, dword ptr ds:[si]
+    mov eax, dword ptr [si]
 
     // If the buffer reached the end then abort the search
     cmp si, dx
@@ -52,8 +52,8 @@ ExtLdrEntryPoint:
     jz .FSkip2
 
     mov di, offset FreeLdrFileName                                      // Load target filename address
-    mov cx, offset FreeLdrFileNameEnd - FreeLdrFileName                 // Length of filename to compare
-    cmp byte ptr ds:[si + EXT_DIRECTORY_ENTRY_NAME_LENGTH_OFFSET], cl   // Compare if both names have the same length
+    mov cx, offset FreeLdrFileNameLen                                   // Length of filename to compare
+    cmp byte ptr [si + EXT_DIRECTORY_ENTRY_NAME_LENGTH_OFFSET], cl   // Compare if both names have the same length
     jnz .FSkip2                                                         // Skip this entry if not
     add si, EXT_DIRECTORY_ENTRY_NAME_OFFSET                             // Move to filename in entry
     repe cmpsb                                                          // Compare filenames
@@ -66,7 +66,7 @@ ExtLdrEntryPoint:
     pop si
 
     // Move to next directory entry
-    add si, word ptr ds:[si + EXT_DIRECTORY_ENTRY_SIZE_OFFSET]
+    add si, word ptr [si + EXT_DIRECTORY_ENTRY_SIZE_OFFSET]
 
     jmp .FLoop2
 
@@ -355,9 +355,9 @@ ExtReadEntireFileExtentsLevelX:
     shl bp, 1
 
     // Call the segment and level functions
-    call word ptr cs:ExtExtentsLevelSegmentFunctionTable[bp]
+    call word ptr cs:[ExtExtentsLevelSegmentFunctionTable+bp]
     call ExtSafeReadBlock
-    call word ptr cs:ExtExtentsLevelFunctionTable[bp]
+    call word ptr cs:[ExtExtentsLevelFunctionTable+bp]
 
     // Restore state and continue loop
     popad
@@ -563,6 +563,7 @@ FreeLdrPrintRegFileError:
 FreeLdrFileName:
     .ascii "freeldr.sys"
 FreeLdrFileNameEnd:
+FreeLdrFileNameLen = FreeLdrFileNameEnd - FreeLdrFileName
 
 msgFreeLdrZero:
     .ascii "freeldr.sys size is zero", CR, LF, NUL

@@ -79,11 +79,28 @@
 #define BOOTSECTOR_STACK_TEMP_VARIABLES_SIZE    (4 * BOOTSECTOR_STACK_TEMP_VARIABLES)
 #define BOOTSECTOR_STACK_OFFSET                 (8 + BOOTSECTOR_STACK_TEMP_VARIABLES_SIZE)
 #define BOOTSECTOR_STACK_BASE                   (BOOTSECTOR_BASE_ADDRESS - BOOTSECTOR_STACK_OFFSET)
-#define BP_REL(x)                               ss:[bp + (x - BOOTSECTOR_BASE_ADDRESS)]
+#define BP_REL(x)                               [bp + (x - BOOTSECTOR_BASE_ADDRESS)]
 
 // Temporary variables
 #define ExtFileSizeState                        ((BOOTSECTOR_STACK_BASE + BOOTSECTOR_STACK_TEMP_VARIABLES_SIZE) - 4)
 #define LBASectorsRead                          (ExtFileSizeState - 4)
+
+// Clang call/ret remap (also inherited by extldr.S, which includes this file)
+#include <code16call.inc>
+
+// LLVM's Intel-syntax operand parser rejects two-symbol expressions like
+// "offset X - start", so pre-compute them as named absolute constants
+// (fine for GNU as too, and evaluated lazily, so the forward references
+// are fine). The labels only exist in the boot sector body, which
+// extldr.S's include excludes.
+#ifndef INCLUDED_ASM
+ExtReadInodeGroupRel        = ExtReadInodeGroup - start
+ExtReadInodeIndexRel        = ExtReadInodeIndex - start
+ExtReadInodeGroupBlockRel   = ExtReadInodeGroupBlock - start
+ExtReadInodeIndexBlockRel   = ExtReadInodeIndexBlock - start
+ExtReadInodeGroupOffsetRel  = ExtReadInodeGroupOffset - start
+ExtReadInodeIndexOffsetRel  = ExtReadInodeIndexOffset - start
+#endif
 
 .code16
 
@@ -145,10 +162,10 @@ main:
     sub sp, BOOTSECTOR_STACK_OFFSET
 
     // Save the function addresses so the helper code knows where to call them
-    mov word ptr ss:[bp-ExtReadBlockOffset],            offset ExtReadBlock
-    mov word ptr ss:[bp-ExtReadInodeOffset],            offset ExtReadInode
-    mov word ptr ss:[bp-DisplayItAndRebootOffset],      offset DisplayItAndReboot
-    mov word ptr ss:[bp-PutCharsOffset],                offset PutChars
+    mov word ptr [bp-ExtReadBlockOffset],            offset ExtReadBlock
+    mov word ptr [bp-ExtReadInodeOffset],            offset ExtReadInode
+    mov word ptr [bp-DisplayItAndRebootOffset],      offset DisplayItAndReboot
+    mov word ptr [bp-PutCharsOffset],                offset PutChars
 
     mov si, offset BootDrive
     cmp byte ptr [si], HEX(0ff) // If they have specified a boot drive then use it
@@ -286,7 +303,7 @@ ExtCalculateOffset:
     xor edx, edx                                        // Clear EDX before multiplication
     mov eax, dword ptr ds:[bp + si]                     // Get the Inode block
     mul dword ptr BP_REL(ExtBlockSizeInBytes)           // Inode *= ExtBlockSizeInBytes
-    mov ecx, dword ptr ds:[bx]                          // Get the Inode
+    mov ecx, dword ptr [bx]                          // Get the Inode
     sub ecx, eax                                        // Subtract the original Inode with rounded down Inode
     mov word ptr ds:[bp + di], cx                       // Store the rounded down Inode
     ret
@@ -324,24 +341,24 @@ ExtReadInode:
     mov dword ptr BP_REL(ExtReadInodeIndex), eax        // Store the Inode index
 
     // Calculate the Inode index block
-    mov si, offset ExtReadInodeIndexBlock - start
+    mov si, offset ExtReadInodeIndexBlockRel
     call ExtCalculateBlock
 
     // Calculate the Inode group block
     mov eax, dword ptr BP_REL(ExtReadInodeGroup)
-    mov si, offset ExtReadInodeGroupBlock - start
+    mov si, offset ExtReadInodeGroupBlockRel
     call ExtCalculateBlock
 
     // Calculate the Inode group offset
-    mov bx, offset ExtReadInodeGroup - start
-    mov si, offset ExtReadInodeGroupBlock - start
-    mov di, offset ExtReadInodeGroupOffset - start
+    mov bx, offset ExtReadInodeGroupRel
+    mov si, offset ExtReadInodeGroupBlockRel
+    mov di, offset ExtReadInodeGroupOffsetRel
     call ExtCalculateOffset
 
     // Calculate the Inode index offset
-    mov bx, offset ExtReadInodeIndex - start
-    mov si, offset ExtReadInodeIndexBlock - start
-    mov di, offset ExtReadInodeIndexOffset - start
+    mov bx, offset ExtReadInodeIndexRel
+    mov si, offset ExtReadInodeIndexBlockRel
+    mov di, offset ExtReadInodeIndexOffsetRel
     call ExtCalculateOffset
 
     // Read group descriptor
@@ -594,7 +611,7 @@ SearchFile:
     xor si, si
     mov dx, word ptr BP_REL(ExtFileSize)
 .FLoop:
-    mov eax, dword ptr ds:[si]                                          // Load directory Inode
+    mov eax, dword ptr [si]                                          // Load directory Inode
 
     cmp si, dx                                                          // End of buffer reached?
     jae .Done                                                           // Abort the search if yes
@@ -606,8 +623,8 @@ SearchFile:
     jz .Skip                                                            // Skip this entry if yes
 
     mov di, offset ExtLdrFileName                                       // Load target filename address
-    mov cx, offset ExtLdrFileNameEnd - ExtLdrFileName                   // Length of filename to compare
-    cmp byte ptr ds:[si + EXT_DIRECTORY_ENTRY_NAME_LENGTH_OFFSET], cl   // Compare if both names have the same length
+    mov cx, offset ExtLdrFileNameLen                                    // Length of filename to compare
+    cmp byte ptr [si + EXT_DIRECTORY_ENTRY_NAME_LENGTH_OFFSET], cl   // Compare if both names have the same length
     jnz .Skip                                                           // Skip this entry if not
     add si, EXT_DIRECTORY_ENTRY_NAME_OFFSET                             // Move to filename in entry
     repe cmpsb                                                          // Compare filenames
@@ -620,7 +637,7 @@ SearchFile:
     pop si
 
     // Move to next directory entry and continue looping
-    add si, word ptr ds:[si + EXT_DIRECTORY_ENTRY_SIZE_OFFSET]
+    add si, word ptr [si + EXT_DIRECTORY_ENTRY_SIZE_OFFSET]
     jmp .FLoop
 .Done:
     ret
@@ -672,6 +689,7 @@ DisplayItAndReboot:
 ExtLdrFileName:
     .ascii "extldr.sys"
 ExtLdrFileNameEnd:
+ExtLdrFileNameLen = ExtLdrFileNameEnd - ExtLdrFileName
 
 msgExtLdr:
     .ascii "extldr.sys not found", CR, LF, NUL
@@ -718,9 +736,9 @@ END
 
 #define BootPartition               (BootDrive + 506)
 
-#define ExtReadBlock                word ptr ss:[bp-ExtReadBlockOffset]
-#define ExtReadInode                word ptr ss:[bp-ExtReadInodeOffset]
-#define DisplayItAndReboot          word ptr ss:[bp-DisplayItAndRebootOffset]
-#define PutChars                    word ptr ss:[bp-PutCharsOffset]
+#define ExtReadBlock                word ptr [bp-ExtReadBlockOffset]
+#define ExtReadInode                word ptr [bp-ExtReadInodeOffset]
+#define DisplayItAndReboot          word ptr [bp-DisplayItAndRebootOffset]
+#define PutChars                    word ptr [bp-PutCharsOffset]
 
 #endif

@@ -25,8 +25,8 @@ Startup:
     mov ss, ax
 
     /* Save the boot drive and partition */
-    mov byte ptr ds:[BSS_BootDrive], dl
-    mov byte ptr ds:[BSS_BootPartition], dh
+    mov byte ptr [BSS_BootDrive], dl
+    mov byte ptr [BSS_BootPartition], dh
 
     /* Setup a real mode stack */
     mov sp, STACK16ADDR
@@ -70,13 +70,13 @@ Msg_Starting:
 //    call writestr
 
     /* Load the GDT */
-    lgdt lXdtPrefix ds:[gdtptr]
+    lgdt lXdtPrefix [gdtptr]
 
     /* Build the startup page tables */
     call BuildPageTables
 
     /* Store real mode entry point in shared memory */
-    mov dword ptr ds:[BSS_RealModeEntry], offset RealModeEntryPoint
+    mov dword ptr [BSS_RealModeEntry], offset RealModeEntryPoint
 
     /* Address the image with es segment */
     mov ax, FREELDR_PE_BASE / 16
@@ -91,7 +91,7 @@ Msg_Starting:
     add eax, FREELDR_PE_BASE
 
     /* Save entry point */
-    mov dword ptr ds:[LongModeEntryPoint], eax
+    mov dword ptr [LongModeEntryPoint], eax
 
     /* Restore es */
     xor ax, ax
@@ -293,13 +293,13 @@ InRealMode:
     xor esp, esp
 
     /* Restore real mode stack */
-    mov sp, word ptr ds:[stack16]
+    mov sp, word ptr [stack16]
 
     // sti /* These are ok now */
 
     /* Do the callback, specified by bx */
     shl bx, 1
-    call word ptr ds:CallbackTable[bx]
+    call word ptr [CallbackTable+bx]
 
 ExitToLongMode:
     /* Disable interrupts */
@@ -314,7 +314,7 @@ ExitToLongMode:
     mov ss,ax
 
     /* Save current stack pointer */
-    mov word ptr ds:[stack16], sp
+    mov word ptr [stack16], sp
 
     /* Set PAE and PGE: 10100000b */
     mov eax, cr4

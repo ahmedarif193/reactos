@@ -387,6 +387,10 @@ function(set_entrypoint MODULE ENTRYPOINT)
 endfunction()
 
 function(set_subsystem MODULE SUBSYSTEM)
+    # GNU ld only knows the numeric value of the EFI application subsystem
+    if(SUBSYSTEM STREQUAL "EFI_APPLICATION")
+        set(SUBSYSTEM 10)
+    endif()
     target_link_options(${MODULE} PRIVATE "-Wl,--subsystem,${SUBSYSTEM}:5.01")
 endfunction()
 

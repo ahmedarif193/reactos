@@ -41,7 +41,9 @@
 #include <asm.inc>
 #include <freeldr/include/arch/pc/x86common.h>
 
-#define BP_REL(x) [bp+x-offset start]
+#include <code16call.inc>
+
+#include "fatbpb.inc"
 
 DataAreaStartHigh       =   2
 DataAreaStartLow        =   4
@@ -154,7 +156,7 @@ CalcDriveSize:
     mov al, byte ptr BP_REL(NumberOfFats)       // Number of fats
     mul word ptr BP_REL(SectorsPerFat)          // Times sectors per fat
     add ax, word ptr BP_REL(HiddenSectors)
-    adc dx, word ptr BP_REL(HiddenSectors+2)    // Add the number of hidden sectors
+    adc dx, word ptr BP_REL_PLUS(HiddenSectors, 2) // Add the number of hidden sectors
     add ax, word ptr BP_REL(ReservedSectors)    // Add the number of reserved sectors
     adc dx, cx                                  // Add carry bit
     mov word ptr [bp - DataAreaStartLow], ax    // Save the starting sector of the root directory

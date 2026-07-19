@@ -149,11 +149,7 @@ else()
                     COMMAND ${CMAKE_STRIP} --strip-all $<TARGET_FILE:uefildr>)
 endif()
 
-if(MSVC)
-    set_subsystem(uefildr EFI_APPLICATION)
-else()
-    set_subsystem(uefildr 10)
-endif()
+set_subsystem(uefildr EFI_APPLICATION)
 
 set_entrypoint(uefildr EfiEntry)
 

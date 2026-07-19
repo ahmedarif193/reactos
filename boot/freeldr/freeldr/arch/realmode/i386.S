@@ -38,7 +38,7 @@ RealModeEntryPoint:
     call writestr
 
     /* Save real mode entry point in shared memory */
-    mov dword ptr ds:[BSS_RealModeEntry], offset switch_to_real16
+    mov dword ptr [BSS_RealModeEntry], offset switch_to_real16
 
     /* Address the image with es segment */
     mov ax, FREELDR_PE_BASE / 16
@@ -53,7 +53,7 @@ RealModeEntryPoint:
     add eax, FREELDR_PE_BASE
 
     /* Save entry point */
-    mov dword ptr ds:[pm_entrypoint], eax
+    mov dword ptr [pm_entrypoint], eax
 
     /* Restore es */
     xor ax, ax
@@ -101,16 +101,16 @@ inrmode:
     xor esp, esp
 
     /* Restore real mode stack */
-    mov sp, word ptr ds:[stack16]
+    mov sp, word ptr [stack16]
 
     /* Load IDTR with real mode value */
-    lidt lXdtPrefix ds:[rmode_idtptr]
+    lidt lXdtPrefix [rmode_idtptr]
 
     sti /* These are ok now */
 
     /* Do the callback, specified by bx */
     shl bx, 1
-    call word ptr ds:CallbackTable[bx]
+    call word ptr [CallbackTable+bx]
 
 
 /*
@@ -122,10 +122,10 @@ exit_to_protected:
     cli
 
     /* Save current stack pointer */
-    mov word ptr ds:[stack16], sp
+    mov word ptr [stack16], sp
 
     /* Load the GDT */
-    lgdt lXdtPrefix ds:[gdtptr]
+    lgdt lXdtPrefix [gdtptr]
 
     /* Enable Protected Mode */
     mov eax, cr0

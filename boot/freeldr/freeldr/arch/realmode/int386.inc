@@ -10,8 +10,8 @@ Int386:
     pushad
 
     /* Get the interrupt vector and patch the opcode */
-    mov al, byte ptr ds:[BSS_IntVector]
-    mov byte ptr ds:[Int386_vector_opcode], al
+    mov al, byte ptr [BSS_IntVector]
+    mov byte ptr [Int386_vector_opcode], al
 
     /* Get current EFLAGS and mask CF, ZF and SF */
     pushf
