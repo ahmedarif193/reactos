@@ -170,7 +170,7 @@ GetICMProfileA(
 
 
 /*
- * @unimplemented
+ * @implemented
  */
 BOOL
 WINAPI
@@ -180,10 +180,39 @@ GetICMProfileW(
     LPWSTR		filename
 )
 {
-    if (!hdc || !size || !filename) return FALSE;
+    WCHAR wszProfile[MAX_PATH];
+    DWORD cchProfile;
 
-    UNIMPLEMENTED;
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    if (!hdc || !size) return FALSE;
+
+    /* We report the default sRGB profile without checking whether the
+       file actually exists, like Windows does */
+    if (!GetSystemDirectoryW(wszProfile, _countof(wszProfile)))
+        return FALSE;
+
+    cchProfile = lstrlenW(wszProfile);
+    if (cchProfile + sizeof("\\spool\\drivers\\color\\sRGB Color Space Profile.icm") >
+        _countof(wszProfile))
+        return FALSE;
+
+    lstrcatW(wszProfile, L"\\spool\\drivers\\color\\sRGB Color Space Profile.icm");
+    cchProfile = lstrlenW(wszProfile) + 1;
+
+    if (!filename)
+    {
+        *size = cchProfile;
+        return FALSE;
+    }
+
+    if (*size >= cchProfile)
+    {
+        lstrcpyW(filename, wszProfile);
+        *size = cchProfile;
+        return TRUE;
+    }
+
+    SetLastError(ERROR_INSUFFICIENT_BUFFER);
+    *size = cchProfile;
     return FALSE;
 }
 
@@ -309,7 +338,7 @@ UpdateICMRegKeyW(
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 int
 WINAPI
@@ -318,14 +347,30 @@ SetICMMode(
     int	iEnableICM
 )
 {
-    /*FIXME:  Assume that ICM is always off, and cannot be turned on */
-    if (iEnableICM == ICM_OFF) return ICM_OFF;
-    if (iEnableICM == ICM_ON) return 0;
-    if (iEnableICM == ICM_QUERY) return ICM_OFF;
+    PDC_ATTR pdcattr;
 
-    UNIMPLEMENTED;
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return 0;
+    pdcattr = GdiGetDcAttr(hdc);
+    if (pdcattr == NULL)
+    {
+        SetLastError(ERROR_INVALID_HANDLE);
+        return 0;
+    }
+
+    if (iEnableICM == ICM_QUERY)
+    {
+        return pdcattr->lIcmMode ? pdcattr->lIcmMode : ICM_OFF;
+    }
+
+    if ((iEnableICM != ICM_ON) &&
+        (iEnableICM != ICM_OFF) &&
+        (iEnableICM != ICM_DONE_OUTSIDEDC))
+    {
+        return 0;
+    }
+
+    /* Color management is not actually performed, we only track the mode */
+    pdcattr->lIcmMode = iEnableICM;
+    return iEnableICM;
 }
 
 /*
