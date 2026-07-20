@@ -46,6 +46,8 @@
  * @param DriverInitializationData
  *   Pointer to a DRIVER_INITIALIZATION_DATA filled in by the miniport.
  *   Version must be >= DXGKDDI_INTERFACE_VERSION_VISTA (0x1052).
+ *   The size-less entry point derives the readable append-only prefix from
+ *   this Version and never substitutes dxgkrnl's compile-time structure size.
  *
  * @return STATUS_SUCCESS on success, an error NTSTATUS otherwise.
  */
@@ -85,6 +87,18 @@ DxgkInitializeEx(
     _In_ PUNICODE_STRING             RegistryPath,
     _In_ ULONG                       DriverInitDataSize,
     _In_ PDRIVER_INITIALIZATION_DATA DriverInitializationData);
+
+/**
+ * DxgkUnInitialize
+ *
+ * Undoes a WDDM 2.0+ miniport registration when no adapter created from that
+ * registration remains.  Like native DpiCleanup(FALSE), this does not invoke
+ * DxgkDdiUnload or restore the port-installed DRIVER_OBJECT hooks.
+ */
+NTSTATUS
+APIENTRY
+DxgkUnInitialize(
+    _In_ PDRIVER_OBJECT DriverObject);
 
 /* =========================================================================
  * Per-adapter lifecycle API

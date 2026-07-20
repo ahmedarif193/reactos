@@ -471,7 +471,7 @@ DxgkDetachDeviceHandle(
     }
     if (NT_SUCCESS(Status))
     {
-        InterlockedExchange(&((PDXGKRNL_DEVICE)Entry->Object)->Destroying, 1);
+        DxgkDeviceBeginDestroy((PDXGKRNL_DEVICE)Entry->Object);
         RemoveEntryList(&Entry->ListEntry);
         InitializeListHead(&Entry->ListEntry);
         *OutDevice = (PDXGKRNL_DEVICE)Entry->Object;
@@ -705,7 +705,7 @@ DxgkpPurgeHandles(
         if ((Process == NULL || HandleEntry->OwnerProcess == Process) && (Adapter == NULL || HandleEntry->Adapter == Adapter))
         {
             if (HandleEntry->Type == DxgkHandleTypeDevice)
-                InterlockedExchange(&((PDXGKRNL_DEVICE)HandleEntry->Object)->Destroying, 1);
+                DxgkDeviceBeginDestroy((PDXGKRNL_DEVICE)HandleEntry->Object);
             else if (HandleEntry->Type == DxgkHandleTypeContext)
                 InterlockedExchange(&((PDXGKRNL_CONTEXT)HandleEntry->Object)->Destroying, 1);
             RemoveEntryList(&HandleEntry->ListEntry);

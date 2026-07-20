@@ -65,3 +65,4 @@
 @ stdcall DxgkInitialize(ptr ptr ptr)
 @ stdcall DxgkInitializeEx(ptr ptr long ptr)
 @ stdcall DxgkInitializeDisplayOnlyDriver(ptr ptr ptr)
+@ stdcall DxgkUnInitialize(ptr)

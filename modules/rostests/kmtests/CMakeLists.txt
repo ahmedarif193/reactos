@@ -47,6 +47,14 @@ list(APPEND KMTEST_DRV_SOURCE
     kmtest_drv/testlist.c
     kmtest_drv/vm_detect.c
 
+    directx/DxgkDeviceWork.c
+    directx/DxgkHotPlugWork.c
+    directx/DxgkContextSync.c
+    directx/DxgkPresentQueue.c
+    directx/DxgkSyncWait.c
+    directx/DxgkTrackedWork.c
+    directx/DxgkVidMmWorkerDrain.c
+    directx/Dxgmms2ContextStream.c
     directx/Dxgmms2Timeline.c
     example/Example.c
     example/KernelType.c
@@ -172,6 +180,14 @@ list(APPEND KMTEST_DRV_SOURCE
     win32ss/CddDisplay.c
     ${COMMON_SOURCE}
 
+    ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/device_work_core.c
+    ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/present_queue_core.c
+    ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/submit_reservation_core.c
+    ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/context_sync_core.c
+    ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/sync_wait_core.c
+    ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/tracked_work_core.c
+    ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/vidmm_worker_drain_core.c
+    ${REACTOS_SOURCE_DIR}/drivers/directx/dxgmms2/context_stream_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgmms2/timeline_core.c
     kmtest_drv/kmtest_drv.rc)
 
@@ -214,7 +230,7 @@ if(ARCH STREQUAL "arm64")
 endif()
 
 add_library(kmtest_drv MODULE ${KMTEST_DRV_SOURCE})
-target_include_directories(kmtest_drv PRIVATE ${REACTOS_SOURCE_DIR}/drivers/directx/dxgmms2)
+target_include_directories(kmtest_drv PRIVATE ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl ${REACTOS_SOURCE_DIR}/drivers/directx/dxgmms2)
 set_module_type(kmtest_drv kernelmodedriver)
 target_link_libraries(kmtest_drv kmtest_printf chkstk memcmp ntoskrnl_vista ${PSEH_LIB})
 add_importlibs(kmtest_drv ntoskrnl hal)

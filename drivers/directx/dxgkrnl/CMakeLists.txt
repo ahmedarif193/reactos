@@ -16,7 +16,7 @@ add_definitions(-DNTDDI_VERSION=0x06010000)    # NTDDI_WIN7
 # addressing, SetVidPnSourceOwner1, ...). The global default DXGKDDI version
 # (0x1052) gates those types out, so raise it to WDDM 2.0.
 remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
-add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x10003)
+add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x11007)
 
 list(APPEND SOURCE
     dxgkrnl.c
@@ -28,10 +28,19 @@ list(APPEND SOURCE
     gpuva.c
     capture.c
     handles.c
+    device_work_core.c
+    present_queue_core.c
+    submit_reservation_core.c
+    tracked_work_core.c
+    vidmm_worker_drain_core.c
+    context_sync.c
+    context_sync_core.c
     context.c
+    context_order.c
     dma.c
     present.c
     sync.c
+    sync_wait_core.c
     vidsch.c
     vidpn.c
     d3dkmt.c

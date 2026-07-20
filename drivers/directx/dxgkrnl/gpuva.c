@@ -61,6 +61,10 @@
 #define GPUVA_MAX_PROCESS_RANGES    1024UL
 #define GPUVA_MAX_TRANSIENT_RANGES  (GPUVA_MAX_PROCESS_RANGES * 3UL + 2UL)
 
+/* Kept disabled until residency references, paging packets, and allocation
+ * destruction share one completion-driven state machine. */
+#define GPUVA_RESIDENCY_END_TO_END  0
+
 /*
  * GPU VA space starts at 64 KB (skip the first 16 pages as a guard region
  * to catch NULL pointer dereferences on the GPU).
@@ -120,6 +124,76 @@ GpuVaAllocRange(VOID)
     return Range;
 }
 
+static NTSTATUS
+GpuVaCreateBinding(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_ D3DKMT_HANDLE Handle,
+    _Out_ PDXGKRNL_GPUVA_BINDING *OutBinding)
+{
+    PDXGKRNL_GPUVA_BINDING Binding;
+    PDXGKVMM_ALLOCATION LogicalAllocation;
+    PDXGKVMM_ALLOCATION BackingAllocation;
+    NTSTATUS Status;
+
+    if (OutBinding == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *OutBinding = NULL;
+    Status = DxgkVidMmAcquireGpuVaBindingReferences((HANDLE)(ULONG_PTR)Handle, Adapter, Process, &LogicalAllocation, &BackingAllocation);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Binding = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Binding), TAG_DXGK_GPUVA);
+    if (Binding == NULL)
+    {
+        DxgkVidMmDereferenceAllocation(BackingAllocation);
+        DxgkVidMmDereferenceLogicalAllocation(LogicalAllocation);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    Binding->ReferenceCount = 1;
+    Binding->Handle = Handle;
+    Binding->LogicalAllocation = LogicalAllocation;
+    Binding->BackingAllocation = BackingAllocation;
+    *OutBinding = Binding;
+    return STATUS_SUCCESS;
+}
+
+static BOOLEAN
+GpuVaReferenceBinding(
+    _In_ PDXGKRNL_GPUVA_BINDING Binding)
+{
+    LONG References;
+
+    if (Binding == NULL)
+        return FALSE;
+    do
+    {
+        References = InterlockedCompareExchange(&Binding->ReferenceCount, 0, 0);
+        if (References <= 0)
+            return FALSE;
+    } while (InterlockedCompareExchange(&Binding->ReferenceCount, References + 1, References) != References);
+    return TRUE;
+}
+
+static VOID
+GpuVaDereferenceBinding(
+    _In_ PDXGKRNL_GPUVA_BINDING Binding)
+{
+    PDXGKVMM_ALLOCATION LogicalAllocation;
+    PDXGKVMM_ALLOCATION BackingAllocation;
+    LONG References;
+
+    ASSERT(Binding != NULL);
+    References = InterlockedDecrement(&Binding->ReferenceCount);
+    ASSERT(References >= 0);
+    if (References != 0)
+        return;
+    LogicalAllocation = Binding->LogicalAllocation;
+    BackingAllocation = Binding->BackingAllocation;
+    ExFreePoolWithTag(Binding, TAG_DXGK_GPUVA);
+    DxgkVidMmDereferenceAllocation(BackingAllocation);
+    DxgkVidMmDereferenceLogicalAllocation(LogicalAllocation);
+}
+
 /*
  * GpuVaFreeRange
  * Free a DXGKRNL_GPUVA_RANGE.
@@ -128,6 +202,8 @@ static VOID
 GpuVaFreeRange(
     _In_ PDXGKRNL_GPUVA_RANGE Range)
 {
+    if (Range->Binding != NULL)
+        GpuVaDereferenceBinding(Range->Binding);
     ExFreePoolWithTag(Range, TAG_DXGK_GPUVA);
 }
 
@@ -287,6 +363,21 @@ GpuVaFreeList(
     }
 }
 
+static VOID
+GpuVaMoveList(
+    _Inout_ PLIST_ENTRY DestinationHead,
+    _Inout_ PLIST_ENTRY SourceHead)
+{
+    ASSERT(IsListEmpty(DestinationHead));
+    while (!IsListEmpty(SourceHead))
+    {
+        PDXGKRNL_GPUVA_RANGE Range = CONTAINING_RECORD(RemoveHeadList(SourceHead), DXGKRNL_GPUVA_RANGE, RangeListEntry);
+
+        InitializeListHead(&Range->RangeListEntry);
+        InsertTailList(DestinationHead, &Range->RangeListEntry);
+    }
+}
+
 static PDXGKRNL_GPUVA_RANGE
 GpuVaCloneRange(
     _In_ CONST DXGKRNL_GPUVA_RANGE *Source)
@@ -299,6 +390,12 @@ GpuVaCloneRange(
         Clone->SizeInBytes = Source->SizeInBytes;
         Clone->State = Source->State;
         Clone->hAllocation = Source->hAllocation;
+        if (Source->Binding != NULL && !GpuVaReferenceBinding(Source->Binding))
+        {
+            GpuVaFreeRange(Clone);
+            return NULL;
+        }
+        Clone->Binding = Source->Binding;
         Clone->AllocationOffset = Source->AllocationOffset;
         Clone->Protection = Source->Protection;
         Clone->DriverProtection = Source->DriverProtection;
@@ -380,6 +477,8 @@ GpuVaListCoversRange(
         if (RangeEnd <= Cursor)
             continue;
         if (Range->GpuVirtualAddress > Cursor || Range->State != RequiredState)
+            return FALSE;
+        if (RequiredState == GpuVaStateMapped && !Range->Protection.SystemUseOnly && (Range->Binding == NULL || Range->hAllocation != (HANDLE)(ULONG_PTR)Range->Binding->Handle || InterlockedCompareExchange(&Range->Binding->LogicalAllocation->Destroying, 0, 0) != 0 || InterlockedCompareExchange(&Range->Binding->BackingAllocation->ReferenceCount, 0, 0) <= 0))
             return FALSE;
         Cursor = min(RangeEnd, EndAddress);
     }
@@ -565,31 +664,6 @@ GpuVaProtectionValid(
 }
 
 static NTSTATUS
-GpuVaValidateAllocationMapping(
-    _In_ PDXGKRNL_ADAPTER Adapter,
-    _In_ PDXGKRNL_PROCESS Process,
-    _In_ D3DKMT_HANDLE AllocationHandle,
-    _In_ ULONGLONG AllocationOffset,
-    _In_ ULONGLONG AllocationSize)
-{
-    PDXGKVMM_ALLOCATION Allocation;
-    NTSTATUS Status;
-
-    if (AllocationHandle == 0 || AllocationSize == 0 || AllocationOffset > MAXULONGLONG - AllocationSize)
-        return STATUS_INVALID_PARAMETER;
-
-    Status = DxgkVidMmReferenceProcessAllocation((HANDLE)(ULONG_PTR)AllocationHandle, Adapter, Process, &Allocation);
-    if (!NT_SUCCESS(Status))
-        return Status;
-    if (AllocationOffset > Allocation->Size || AllocationSize > Allocation->Size - AllocationOffset)
-        Status = STATUS_INVALID_PARAMETER;
-    else
-        Status = STATUS_SUCCESS;
-    DxgkVidMmDereferenceAllocation(Allocation);
-    return Status;
-}
-
-static NTSTATUS
 GpuVaApplyMapOperation(
     _Inout_ PLIST_ENTRY ListHead,
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -606,6 +680,7 @@ GpuVaApplyMapOperation(
     ULONGLONG AllocationSize;
     ULONGLONG RangeOffset;
     D3DDDIGPUVIRTUALADDRESS_PROTECTION_TYPE Protection;
+    PDXGKRNL_GPUVA_BINDING Binding = NULL;
     UINT64 DriverProtection;
     LIST_ENTRY ReplacementHead;
     NTSTATUS Status;
@@ -664,9 +739,16 @@ GpuVaApplyMapOperation(
             return STATUS_INVALID_PARAMETER;
         if (Size / AllocationSize > GPUVA_MAX_PROCESS_RANGES)
             return STATUS_QUOTA_EXCEEDED;
-        Status = GpuVaValidateAllocationMapping(Adapter, Process, AllocationHandle, AllocationOffset, AllocationSize);
+        if (AllocationHandle == 0 || AllocationOffset > MAXULONGLONG - AllocationSize)
+            return STATUS_INVALID_PARAMETER;
+        Status = GpuVaCreateBinding(Adapter, Process, AllocationHandle, &Binding);
         if (!NT_SUCCESS(Status))
             return Status;
+        if (AllocationOffset > Binding->BackingAllocation->Size || AllocationSize > Binding->BackingAllocation->Size - AllocationOffset)
+        {
+            GpuVaDereferenceBinding(Binding);
+            return STATUS_INVALID_PARAMETER;
+        }
 
         for (RangeOffset = 0; RangeOffset < Size; RangeOffset += AllocationSize)
         {
@@ -675,12 +757,21 @@ GpuVaApplyMapOperation(
             if (Replacement == NULL)
             {
                 GpuVaFreeList(&ReplacementHead);
+                GpuVaDereferenceBinding(Binding);
                 return STATUS_INSUFFICIENT_RESOURCES;
+            }
+            if (!GpuVaReferenceBinding(Binding))
+            {
+                GpuVaFreeRange(Replacement);
+                GpuVaFreeList(&ReplacementHead);
+                GpuVaDereferenceBinding(Binding);
+                return STATUS_DELETE_PENDING;
             }
             Replacement->GpuVirtualAddress = Address + RangeOffset;
             Replacement->SizeInBytes = AllocationSize;
             Replacement->State = GpuVaStateMapped;
             Replacement->hAllocation = (HANDLE)(ULONG_PTR)AllocationHandle;
+            Replacement->Binding = Binding;
             Replacement->AllocationOffset = AllocationOffset;
             Replacement->Protection = Protection;
             Replacement->DriverProtection = DriverProtection;
@@ -692,6 +783,8 @@ GpuVaApplyMapOperation(
 
     Status = GpuVaReplaceSpan(ListHead, Address, Size, &ReplacementHead);
     GpuVaFreeList(&ReplacementHead);
+    if (Binding != NULL)
+        GpuVaDereferenceBinding(Binding);
     return Status;
 }
 
@@ -792,13 +885,18 @@ GpuVaApplyCopyOperation(
 /* SOFTWARE PAGE TABLES (CPU_VIRTUAL GpuMmu) **********************************/
 
 /*
- * 4-level radix over a 48-bit GPU VA space: 512 8-byte DXGK_PTE entries per
- * 4KB table, 9 VA bits per level, 4KB pages at the leaves.  dxgkrnl owns the
+ * 4-level radix over a 48-bit GPU VA space: 512 DXGK_PTE entries per table,
+ * 9 VA bits per level, 4KB pages at the leaves.  DXGK_PTE is a 16-byte public
+ * update descriptor, so one software table occupies 8KB rather than one page.
+ * dxgkrnl owns the
  * tables and writes PTEs directly with the CPU; the adapter declared
  * DXGK_PAGETABLEUPDATE_CPU_VIRTUAL so no paging packets are required.
  */
 #define GPUVA_PTE_PER_TABLE         512ULL
 #define GPUVA_TABLE_LEVELS          4UL
+#define GPUVA_PAGE_TABLE_BYTES      (GPUVA_PTE_PER_TABLE * sizeof(DXGK_PTE))
+
+C_ASSERT(sizeof(DXGK_PTE) == 16);
 
 /* Bounds user-controlled NonPagedPool growth: 1024 leaf tables map 2GB. */
 #define GPUVA_MAX_PROCESS_PAGE_TABLES 1024UL
@@ -814,7 +912,7 @@ GpuVaPteIndex(
 
 /*
  * GpuVaAllocPageTable
- * Allocate one page table (a 4KB PTE page plus tracking object) and link it
+ * Allocate one software page table plus its tracking object and link it
  * on the process page-table list.  Caller MUST hold GpuVaLock.
  */
 static PDXGKRNL_GPUVA_PAGE_TABLE
@@ -824,6 +922,10 @@ GpuVaAllocPageTable(
     _In_ ULONGLONG CoverageBase)
 {
     PDXGKRNL_GPUVA_PAGE_TABLE Table;
+    PHYSICAL_ADDRESS LowestAddress;
+    PHYSICAL_ADDRESS HighestAddress;
+    PHYSICAL_ADDRESS BoundaryAddress;
+    MEMORY_CACHING_TYPE CacheType;
 
     if (Process->GpuVaPageTableCount >= GPUVA_MAX_PROCESS_PAGE_TABLES)
         return NULL;
@@ -834,14 +936,17 @@ GpuVaAllocPageTable(
         return NULL;
     RtlZeroMemory(Table, sizeof(*Table));
 
-    Table->KernelVa = ExAllocatePoolWithTag(NonPagedPool, PAGE_SIZE,
-                                            TAG_DXGK_GPUVA_PT);
+    LowestAddress.QuadPart = 0;
+    HighestAddress.QuadPart = Process->Adapter != NULL ? Process->Adapter->HighestAcceptableAddress.QuadPart : (LONGLONG)-1;
+    BoundaryAddress.QuadPart = 0;
+    CacheType = Process->Adapter != NULL && Process->Adapter->GpuMmuCaps.CacheCoherentMemorySupported ? MmCached : MmNonCached;
+    Table->KernelVa = MmAllocateContiguousMemorySpecifyCache(GPUVA_PAGE_TABLE_BYTES, LowestAddress, HighestAddress, BoundaryAddress, CacheType);
     if (Table->KernelVa == NULL)
     {
         ExFreePoolWithTag(Table, TAG_DXGK_GPUVA_PT);
         return NULL;
     }
-    RtlZeroMemory(Table->KernelVa, PAGE_SIZE);
+    RtlZeroMemory(Table->KernelVa, GPUVA_PAGE_TABLE_BYTES);
 
     if (Level > 0)
     {
@@ -851,7 +956,7 @@ GpuVaAllocPageTable(
                     TAG_DXGK_GPUVA_PT);
         if (Table->Children == NULL)
         {
-            ExFreePoolWithTag(Table->KernelVa, TAG_DXGK_GPUVA_PT);
+            MmFreeContiguousMemorySpecifyCache(Table->KernelVa, GPUVA_PAGE_TABLE_BYTES, CacheType);
             ExFreePoolWithTag(Table, TAG_DXGK_GPUVA_PT);
             return NULL;
         }
@@ -861,6 +966,7 @@ GpuVaAllocPageTable(
 
     Table->Level = Level;
     Table->CoverageBase = CoverageBase;
+    Table->CacheType = CacheType;
     Table->Physical = MmGetPhysicalAddress(Table->KernelVa);
 
     InsertTailList(&Process->GpuVaPageTableList, &Table->PageTableListEntry);
@@ -885,7 +991,7 @@ GpuVaFreePageTables(
 
         if (Table->Children != NULL)
             ExFreePoolWithTag(Table->Children, TAG_DXGK_GPUVA_PT);
-        ExFreePoolWithTag(Table->KernelVa, TAG_DXGK_GPUVA_PT);
+        MmFreeContiguousMemorySpecifyCache(Table->KernelVa, GPUVA_PAGE_TABLE_BYTES, Table->CacheType);
         ExFreePoolWithTag(Table, TAG_DXGK_GPUVA_PT);
     }
     Process->GpuVaPageTableCount = 0;
@@ -908,9 +1014,19 @@ GpuVaEnsureRootPageTable(
     _In_ PDXGKRNL_PROCESS Process)
 {
     PDXGKRNL_GPUVA_PAGE_TABLE Root;
+    SIZE_T ReportedSize;
 
     if (Process->hRootPageTable != NULL)
         return STATUS_SUCCESS;
+
+    if (Process->Adapter == NULL || !Process->Adapter->GpuMmuCapsValid || Process->Adapter->GpuMmuCaps.PageTableUpdateMode != DXGK_PAGETABLEUPDATE_CPU_VIRTUAL || Process->Adapter->GpuMmuCaps.VirtualAddressBitCount != 48 || Process->Adapter->GpuMmuCaps.PageTableLevelCount != GPUVA_TABLE_LEVELS)
+        return STATUS_NOT_SUPPORTED;
+    ReportedSize = DxgkGpuVaGetRootPageTableSize(Process->Adapter, (UINT)GPUVA_PTE_PER_TABLE, 0);
+    if (ReportedSize != GPUVA_PAGE_TABLE_BYTES)
+    {
+        DPRINT1("DxgkGpuVa: unsupported root table size %Iu (expected %Iu)\n", ReportedSize, (SIZE_T)GPUVA_PAGE_TABLE_BYTES);
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
 
     Root = GpuVaAllocPageTable(Process, GPUVA_TABLE_LEVELS - 1, 0);
     if (Root == NULL)
@@ -1111,19 +1227,10 @@ GpuVaRewriteSpanPtes(
 
         if (Range->State == GpuVaStateMapped)
         {
-            PDXGKVMM_ALLOCATION Allocation;
-
-            Status = DxgkVidMmReferenceProcessAllocation(Range->hAllocation, Adapter, Process, &Allocation);
-            if (NT_SUCCESS(Status))
-            {
-                if (Allocation->SystemMemory != NULL)
-                    Status = GpuVaWritePteSpan(Process, Cursor, OverlapSize, Allocation,
-                                 Range->AllocationOffset + (Cursor - Range->GpuVirtualAddress),
-                                 Range->Protection);
-                else
-                    Status = STATUS_NOT_SUPPORTED;
-                DxgkVidMmDereferenceAllocation(Allocation);
-            }
+            if (Range->Binding != NULL && Range->Binding->BackingAllocation != NULL && Range->Binding->BackingAllocation->SystemMemory != NULL)
+                Status = GpuVaWritePteSpan(Process, Cursor, OverlapSize, Range->Binding->BackingAllocation, Range->AllocationOffset + (Cursor - Range->GpuVirtualAddress), Range->Protection);
+            else
+                Status = STATUS_NOT_SUPPORTED;
             if (!NT_SUCCESS(Status))
             {
                 GpuVaClearPteSpan(Process, Cursor, OverlapSize);
@@ -1233,7 +1340,7 @@ DxgkGpuVaCreateProcess(
 
     /* Call the miniport's DxgkDdiCreateProcess if available. */
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
-    if (Adapter->MiniportContext->InitData.s.DxgkDdiCreateProcess != NULL)
+    if (DXGK_CB_FULL(Adapter, DxgkDdiCreateProcess) != NULL)
     {
         DXGKARG_CREATEPROCESS CreateArgs;
 
@@ -1245,9 +1352,7 @@ DxgkGpuVaCreateProcess(
 
         if (!DxgkAcquireKmdCall(Adapter))
             return STATUS_DELETE_PENDING;
-        Status = Adapter->MiniportContext->InitData.s.DxgkDdiCreateProcess(
-                     Adapter->MiniportDeviceContext,
-                     &CreateArgs);
+        Status = DXGK_CB_FULL(Adapter, DxgkDdiCreateProcess)(Adapter->MiniportDeviceContext, &CreateArgs);
         DxgkReleaseKmdCall(Adapter);
 
         if (NT_SUCCESS(Status))
@@ -1315,12 +1420,12 @@ DxgkGpuVaDestroyProcess(
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
     if (Process->hMiniportProcess != NULL &&
         Adapter != NULL &&
-        Adapter->MiniportContext->InitData.s.DxgkDdiDestroyProcess != NULL &&
+        DXGK_CB_FULL(Adapter, DxgkDdiDestroyProcess) != NULL &&
         DxgkAcquireMiniportCallback(Adapter))
     {
         NTSTATUS Status;
 
-        Status = Adapter->MiniportContext->InitData.s.DxgkDdiDestroyProcess(Adapter->MiniportDeviceContext, Process->hMiniportProcess);
+        Status = DXGK_CB_FULL(Adapter, DxgkDdiDestroyProcess)(Adapter->MiniportDeviceContext, Process->hMiniportProcess);
         DxgkReleaseMiniportCallback(Adapter);
 
         if (!NT_SUCCESS(Status))
@@ -1341,6 +1446,164 @@ DxgkGpuVaDestroyProcess(
 
 
 /* GPU VA RANGE MANAGEMENT ****************************************************/
+
+/*
+ * Plan a reservation without changing the process GPUVA state.  The win32k
+ * bridge publishes the selected address first and then commits the same fixed
+ * address through DxgkGpuVaReserve.  A failed user copy therefore cannot leave
+ * an unreachable reservation behind.
+ */
+NTSTATUS
+DxgkGpuVaPlanReserve(_In_ PDXGKRNL_PROCESS Process, _In_ D3DGPU_VIRTUAL_ADDRESS BaseAddress, _In_ D3DGPU_VIRTUAL_ADDRESS MinAddress, _In_ D3DGPU_VIRTUAL_ADDRESS MaxAddress, _In_ ULONGLONG SizeInBytes, _In_ D3DDDIGPUVIRTUALADDRESS_RESERVATION_TYPE ReservationType, _Out_ D3DGPU_VIRTUAL_ADDRESS *OutAddress)
+{
+    D3DGPU_VIRTUAL_ADDRESS ActualAddress;
+
+    PAGED_CODE();
+
+    if (Process == NULL || OutAddress == NULL || SizeInBytes == 0 || (SizeInBytes & GPUVA_RESERVATION_MASK) != 0 || ReservationType > D3DDDIGPUVIRTUALADDRESS_RESERVE_ZERO)
+        return STATUS_INVALID_PARAMETER;
+
+    *OutAddress = 0;
+    if (BaseAddress != 0)
+    {
+        if ((BaseAddress & GPUVA_RESERVATION_MASK) != 0 || BaseAddress < GPUVA_START_ADDRESS || BaseAddress >= GPUVA_DEFAULT_SPACE_SIZE || SizeInBytes > GPUVA_DEFAULT_SPACE_SIZE - BaseAddress)
+            return STATUS_INVALID_PARAMETER;
+    }
+    else
+    {
+        if ((MinAddress != 0 && (MinAddress & GPUVA_RESERVATION_MASK) != 0) || (MaxAddress != 0 && (MaxAddress & GPUVA_RESERVATION_MASK) != 0))
+            return STATUS_INVALID_PARAMETER;
+        if (MinAddress == 0)
+            MinAddress = GPUVA_START_ADDRESS;
+        if (MaxAddress == 0 || MaxAddress > GPUVA_DEFAULT_SPACE_SIZE)
+            MaxAddress = GPUVA_DEFAULT_SPACE_SIZE;
+        MinAddress = max(MinAddress, GPUVA_START_ADDRESS);
+        if (MinAddress >= MaxAddress || SizeInBytes > MaxAddress - MinAddress)
+            return STATUS_INVALID_PARAMETER;
+    }
+
+    ExAcquireFastMutex(&Process->GpuVaLock);
+    if (Process->GpuVaRangeCount >= GPUVA_MAX_PROCESS_RANGES)
+    {
+        ExReleaseFastMutex(&Process->GpuVaLock);
+        return STATUS_QUOTA_EXCEEDED;
+    }
+
+    if (BaseAddress != 0)
+    {
+        ActualAddress = BaseAddress;
+        if (GpuVaFindOverlapping(Process, ActualAddress, SizeInBytes) != NULL)
+        {
+            ExReleaseFastMutex(&Process->GpuVaLock);
+            return STATUS_CONFLICTING_ADDRESSES;
+        }
+    }
+    else
+    {
+        ActualAddress = GpuVaFindFreeRegion(Process, MinAddress, MaxAddress, SizeInBytes);
+        if (ActualAddress == 0)
+        {
+            ExReleaseFastMutex(&Process->GpuVaLock);
+            return STATUS_NO_MEMORY;
+        }
+    }
+
+    ExReleaseFastMutex(&Process->GpuVaLock);
+    *OutAddress = ActualAddress;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * Plan a map without allocating ranges or writing PTEs.  A later fixed-base
+ * DxgkGpuVaMap call performs the atomic commit after win32k has published the
+ * selected address.  If another thread wins the address in between, commit
+ * fails and no hidden mapping is created.
+ */
+NTSTATUS
+DxgkGpuVaPlanMap(_In_ PDXGKRNL_ADAPTER Adapter, _In_ PDXGKRNL_PROCESS Process, _In_opt_ PDXGKVMM_ALLOCATION Allocation, _In_ ULONGLONG AllocationOffset, _In_ D3DGPU_VIRTUAL_ADDRESS BaseAddress, _In_ D3DGPU_VIRTUAL_ADDRESS MinAddress, _In_ D3DGPU_VIRTUAL_ADDRESS MaxAddress, _In_ ULONGLONG SizeInBytes, _In_ D3DDDIGPUVIRTUALADDRESS_PROTECTION_TYPE Protection, _Out_ D3DGPU_VIRTUAL_ADDRESS *OutAddress)
+{
+    D3DGPU_VIRTUAL_ADDRESS ActualAddress;
+    D3DGPU_VIRTUAL_ADDRESS ReservationBase;
+    ULONGLONG ReservationSize;
+    ULONG AuthoritativeCount;
+    BOOLEAN InReservation;
+
+    PAGED_CODE();
+
+    if (Process == NULL || OutAddress == NULL || SizeInBytes == 0 || (SizeInBytes & GPUVA_PAGE_MASK) != 0 || (BaseAddress & GPUVA_PAGE_MASK) != 0 || (AllocationOffset & GPUVA_PAGE_MASK) != 0 || !GpuVaProtectionValid(Protection, FALSE))
+        return STATUS_INVALID_PARAMETER;
+    if ((Protection.Zero || Protection.NoAccess) != (Allocation == NULL))
+        return STATUS_INVALID_PARAMETER;
+    if (Adapter == NULL || !Adapter->GpuMmuCapsValid || Adapter->GpuMmuCaps.PageTableUpdateMode != DXGK_PAGETABLEUPDATE_CPU_VIRTUAL)
+        return STATUS_NOT_SUPPORTED;
+    if (Allocation != NULL && Allocation->SystemMemory == NULL)
+        return STATUS_NOT_SUPPORTED;
+
+    *OutAddress = 0;
+    if (BaseAddress != 0)
+    {
+        if (BaseAddress < GPUVA_START_ADDRESS || BaseAddress >= GPUVA_DEFAULT_SPACE_SIZE || SizeInBytes > GPUVA_DEFAULT_SPACE_SIZE - BaseAddress)
+            return STATUS_INVALID_PARAMETER;
+    }
+    else
+    {
+        if ((MinAddress & GPUVA_PAGE_MASK) != 0 || (MaxAddress & GPUVA_PAGE_MASK) != 0)
+            return STATUS_INVALID_PARAMETER;
+        if (MinAddress == 0)
+            MinAddress = GPUVA_START_ADDRESS;
+        if (MaxAddress == 0 || MaxAddress > GPUVA_DEFAULT_SPACE_SIZE)
+            MaxAddress = GPUVA_DEFAULT_SPACE_SIZE;
+        MinAddress = max(MinAddress, GPUVA_START_ADDRESS);
+        if (MinAddress >= MaxAddress || SizeInBytes > MaxAddress - MinAddress)
+            return STATUS_INVALID_PARAMETER;
+    }
+
+    ExAcquireFastMutex(&Process->GpuVaLock);
+    if (!GpuVaCountList(&Process->GpuVaRangeList, GPUVA_MAX_PROCESS_RANGES, &AuthoritativeCount) || AuthoritativeCount != Process->GpuVaRangeCount)
+    {
+        ExReleaseFastMutex(&Process->GpuVaLock);
+        return STATUS_INTERNAL_ERROR;
+    }
+    if ((ULONGLONG)AuthoritativeCount * 2ULL + 3ULL > GPUVA_MAX_TRANSIENT_RANGES)
+    {
+        ExReleaseFastMutex(&Process->GpuVaLock);
+        return STATUS_QUOTA_EXCEEDED;
+    }
+
+    if (BaseAddress != 0)
+    {
+        ActualAddress = BaseAddress;
+        InReservation = GpuVaGetReservationForRange(&Process->GpuVaRangeList, ActualAddress, SizeInBytes, &ReservationBase, &ReservationSize);
+        if (!InReservation && GpuVaFindOverlapping(Process, ActualAddress, SizeInBytes) != NULL)
+        {
+            ExReleaseFastMutex(&Process->GpuVaLock);
+            return STATUS_CONFLICTING_ADDRESSES;
+        }
+        if (!InReservation && Process->GpuVaRangeCount >= GPUVA_MAX_PROCESS_RANGES)
+        {
+            ExReleaseFastMutex(&Process->GpuVaLock);
+            return STATUS_QUOTA_EXCEEDED;
+        }
+    }
+    else
+    {
+        if (Process->GpuVaRangeCount >= GPUVA_MAX_PROCESS_RANGES)
+        {
+            ExReleaseFastMutex(&Process->GpuVaLock);
+            return STATUS_QUOTA_EXCEEDED;
+        }
+        ActualAddress = GpuVaFindFreeRegion(Process, MinAddress, MaxAddress, SizeInBytes);
+        if (ActualAddress == 0)
+        {
+            ExReleaseFastMutex(&Process->GpuVaLock);
+            return STATUS_NO_MEMORY;
+        }
+    }
+
+    ExReleaseFastMutex(&Process->GpuVaLock);
+    *OutAddress = ActualAddress;
+    return STATUS_SUCCESS;
+}
 
 /*
  * DxgkGpuVaReserve
@@ -1558,11 +1821,9 @@ DxgkGpuVaFree(
     }
     Process->GpuVaRangeCount = WorkingCount;
     Process->GpuVaTotalReserved -= SizeInBytes;
+    GpuVaClearPteSpan(Process, BaseAddress, SizeInBytes);
     if (MappedBytes != 0)
-    {
-        GpuVaClearPteSpan(Process, BaseAddress, SizeInBytes);
         Process->GpuVaTotalMapped -= min(MappedBytes, Process->GpuVaTotalMapped);
-    }
 
     ExReleaseFastMutex(&Process->GpuVaLock);
     DPRINT("DxgkGpuVaFree: freed at 0x%I64x\n", BaseAddress);
@@ -1599,6 +1860,7 @@ DxgkGpuVaMap(
     D3DGPU_VIRTUAL_ADDRESS ReservationBase;
     ULONGLONG ReservationSize;
     ULONGLONG PrevMappedBytes = 0;
+    PDXGKRNL_GPUVA_BINDING Binding = NULL;
     BOOLEAN InReservation = FALSE;
     NTSTATUS Status;
     ULONG AuthoritativeCount;
@@ -1643,16 +1905,40 @@ DxgkGpuVaMap(
             return STATUS_INVALID_PARAMETER;
     }
 
+    if (Allocation != NULL)
+    {
+        Status = GpuVaCreateBinding(Adapter, Process, hAllocation, &Binding);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        if (Binding->BackingAllocation != Allocation)
+        {
+            GpuVaDereferenceBinding(Binding);
+            return STATUS_INVALID_HANDLE;
+        }
+        Allocation = Binding->BackingAllocation;
+    }
+
     ExAcquireFastMutex(&Process->GpuVaLock);
+
+    if (Binding != NULL && InterlockedCompareExchange(&Binding->LogicalAllocation->Destroying, 0, 0) != 0)
+    {
+        ExReleaseFastMutex(&Process->GpuVaLock);
+        GpuVaDereferenceBinding(Binding);
+        return STATUS_DELETE_PENDING;
+    }
 
     if (!GpuVaCountList(&Process->GpuVaRangeList, GPUVA_MAX_PROCESS_RANGES, &AuthoritativeCount) || AuthoritativeCount != Process->GpuVaRangeCount)
     {
         ExReleaseFastMutex(&Process->GpuVaLock);
+        if (Binding != NULL)
+            GpuVaDereferenceBinding(Binding);
         return STATUS_INTERNAL_ERROR;
     }
     if ((ULONGLONG)AuthoritativeCount * 2ULL + 3ULL > GPUVA_MAX_TRANSIENT_RANGES)
     {
         ExReleaseFastMutex(&Process->GpuVaLock);
+        if (Binding != NULL)
+            GpuVaDereferenceBinding(Binding);
         return STATUS_QUOTA_EXCEEDED;
     }
 
@@ -1660,6 +1946,8 @@ DxgkGpuVaMap(
     if (!NT_SUCCESS(Status))
     {
         ExReleaseFastMutex(&Process->GpuVaLock);
+        if (Binding != NULL)
+            GpuVaDereferenceBinding(Binding);
         return Status;
     }
 
@@ -1673,6 +1961,8 @@ DxgkGpuVaMap(
         else if (GpuVaFindOverlapping(Process, ActualAddress, SizeInBytes) != NULL)
         {
             ExReleaseFastMutex(&Process->GpuVaLock);
+            if (Binding != NULL)
+                GpuVaDereferenceBinding(Binding);
             return STATUS_CONFLICTING_ADDRESSES;
         }
     }
@@ -1682,6 +1972,8 @@ DxgkGpuVaMap(
         if (ActualAddress == 0)
         {
             ExReleaseFastMutex(&Process->GpuVaLock);
+            if (Binding != NULL)
+                GpuVaDereferenceBinding(Binding);
             return STATUS_NO_MEMORY;
         }
     }
@@ -1693,18 +1985,26 @@ DxgkGpuVaMap(
         if (Process->GpuVaRangeCount >= GPUVA_MAX_PROCESS_RANGES)
         {
             ExReleaseFastMutex(&Process->GpuVaLock);
+            if (Binding != NULL)
+                GpuVaDereferenceBinding(Binding);
             return STATUS_QUOTA_EXCEEDED;
         }
         Range = GpuVaAllocRange();
         if (Range == NULL)
         {
             ExReleaseFastMutex(&Process->GpuVaLock);
+            if (Binding != NULL)
+                GpuVaDereferenceBinding(Binding);
             return STATUS_NO_MEMORY;
         }
+
+        Range->Binding = Binding;
+        Binding = NULL;
 
         Status = GpuVaWritePteSpan(Process, ActualAddress, SizeInBytes, Allocation, AllocationOffset, Protection);
         if (!NT_SUCCESS(Status))
         {
+            GpuVaClearPteSpan(Process, ActualAddress, SizeInBytes);
             GpuVaFreeRange(Range);
             ExReleaseFastMutex(&Process->GpuVaLock);
             return Status;
@@ -1754,12 +2054,16 @@ DxgkGpuVaMap(
         if (Replacement == NULL)
         {
             ExReleaseFastMutex(&Process->GpuVaLock);
+            if (Binding != NULL)
+                GpuVaDereferenceBinding(Binding);
             return STATUS_NO_MEMORY;
         }
         Replacement->GpuVirtualAddress = ActualAddress;
         Replacement->SizeInBytes       = SizeInBytes;
         Replacement->State             = (Allocation != NULL) ? GpuVaStateMapped : GpuVaStateReserved;
         Replacement->hAllocation       = (Allocation != NULL) ? (HANDLE)(ULONG_PTR)hAllocation : NULL;
+        Replacement->Binding           = Binding;
+        Binding = NULL;
         Replacement->AllocationOffset  = (Allocation != NULL) ? AllocationOffset : 0;
         Replacement->Protection        = Protection;
         Replacement->DriverProtection  = DriverProtection;
@@ -1781,7 +2085,19 @@ DxgkGpuVaMap(
         if (NT_SUCCESS(Status) && !GpuVaCountList(&WorkingHead, GPUVA_MAX_PROCESS_RANGES, &WorkingCount))
             Status = STATUS_QUOTA_EXCEEDED;
         if (NT_SUCCESS(Status))
+        {
             Status = GpuVaWritePteSpan(Process, ActualAddress, SizeInBytes, Allocation, AllocationOffset, Protection);
+            if (!NT_SUCCESS(Status))
+            {
+                NTSTATUS RollbackStatus = GpuVaRewriteSpanPtes(Adapter, Process, ActualAddress, SizeInBytes);
+
+                if (!NT_SUCCESS(RollbackStatus))
+                {
+                    DPRINT1("DxgkGpuVaMap: PTE rollback failed 0x%08lx after map failure 0x%08lx\n", RollbackStatus, Status);
+                    Status = RollbackStatus;
+                }
+            }
+        }
         if (!NT_SUCCESS(Status))
         {
             GpuVaFreeList(&WorkingHead);
@@ -1790,13 +2106,7 @@ DxgkGpuVaMap(
         }
 
         GpuVaFreeList(&Process->GpuVaRangeList);
-        while (!IsListEmpty(&WorkingHead))
-        {
-            PDXGKRNL_GPUVA_RANGE Range = CONTAINING_RECORD(RemoveHeadList(&WorkingHead), DXGKRNL_GPUVA_RANGE, RangeListEntry);
-
-            InitializeListHead(&Range->RangeListEntry);
-            InsertTailList(&Process->GpuVaRangeList, &Range->RangeListEntry);
-        }
+        GpuVaMoveList(&Process->GpuVaRangeList, &WorkingHead);
         Process->GpuVaRangeCount = WorkingCount;
         Process->GpuVaTotalMapped -= min(PrevMappedBytes, Process->GpuVaTotalMapped);
         if (Allocation != NULL)
@@ -1881,6 +2191,7 @@ DxgkGpuVaMapFencePage(
     RtlZeroMemory(&Pte, sizeof(Pte));
     Pte.Valid = 1;
     Pte.CacheCoherent = 1;
+    Pte.NoExecute = 1;
     Pte.PageAddress = (ULONGLONG)Physical.QuadPart & ~GPUVA_PAGE_MASK;
     Entries = (DXGK_PTE *)Leaf->KernelVa;
     Entries[GpuVaPteIndex(ActualAddress, 0)] = Pte;
@@ -1950,6 +2261,41 @@ DxgkGpuVaUnmapFencePage(
     ExReleaseFastMutex(&Process->GpuVaLock);
 }
 
+VOID
+DxgkGpuVaInvalidateAllocation(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_ PDXGKVMM_ALLOCATION LogicalAllocation)
+{
+    PLIST_ENTRY Entry;
+
+    PAGED_CODE();
+
+    if (Adapter == NULL || Process == NULL || Process->Adapter != Adapter || LogicalAllocation == NULL)
+        return;
+
+    ExAcquireFastMutex(&Process->GpuVaLock);
+    for (Entry = Process->GpuVaRangeList.Flink; Entry != &Process->GpuVaRangeList; Entry = Entry->Flink)
+    {
+        PDXGKRNL_GPUVA_RANGE Range = CONTAINING_RECORD(Entry, DXGKRNL_GPUVA_RANGE, RangeListEntry);
+
+        if (Range->State != GpuVaStateMapped || Range->Protection.SystemUseOnly || Range->Binding == NULL || Range->Binding->LogicalAllocation != LogicalAllocation)
+            continue;
+        GpuVaClearPteSpan(Process, Range->GpuVirtualAddress, Range->SizeInBytes);
+        Process->GpuVaTotalMapped -= min(Range->SizeInBytes, Process->GpuVaTotalMapped);
+        Range->State = GpuVaStateReserved;
+        Range->hAllocation = NULL;
+        GpuVaDereferenceBinding(Range->Binding);
+        Range->Binding = NULL;
+        Range->AllocationOffset = 0;
+        Range->Protection.Value = 0;
+        Range->Protection.NoAccess = 1;
+        Range->DriverProtection = 0;
+    }
+    KeMemoryBarrier();
+    ExReleaseFastMutex(&Process->GpuVaLock);
+}
+
 BOOLEAN
 DxgkGpuVaPageTableReady(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -1993,6 +2339,7 @@ DxgkpGpuVaUpdateWorker(
     _In_ BOOLEAN Commit)
 {
     LIST_ENTRY WorkingHead;
+    LIST_ENTRY PreviousHead;
     D3DGPU_VIRTUAL_ADDRESS ExpectedReservationBase = 0;
     D3DGPU_VIRTUAL_ADDRESS ExpectedSourceReservationBase = 0;
     ULONGLONG ExpectedReservationSize = 0;
@@ -2001,6 +2348,7 @@ DxgkpGpuVaUpdateWorker(
     UINT Index;
     ULONG AuthoritativeCount;
     ULONG WorkingCount;
+    ULONGLONG PreviousMappedBytes;
 
     PAGED_CODE();
 
@@ -2147,15 +2495,12 @@ ValidationDone:
     {
         ULONGLONG TotalMapped = 0;
         PLIST_ENTRY Entry;
+        NTSTATUS RollbackStatus = STATUS_SUCCESS;
 
-        GpuVaFreeList(&Process->GpuVaRangeList);
-        while (!IsListEmpty(&WorkingHead))
-        {
-            PDXGKRNL_GPUVA_RANGE Range = CONTAINING_RECORD(RemoveHeadList(&WorkingHead), DXGKRNL_GPUVA_RANGE, RangeListEntry);
-
-            InitializeListHead(&Range->RangeListEntry);
-            InsertTailList(&Process->GpuVaRangeList, &Range->RangeListEntry);
-        }
+        InitializeListHead(&PreviousHead);
+        PreviousMappedBytes = Process->GpuVaTotalMapped;
+        GpuVaMoveList(&PreviousHead, &Process->GpuVaRangeList);
+        GpuVaMoveList(&Process->GpuVaRangeList, &WorkingHead);
         Process->GpuVaRangeCount = WorkingCount;
 
         for (Index = 0; Index < NumOperations; ++Index)
@@ -2168,17 +2513,48 @@ ValidationDone:
                 continue;
             PteStatus = GpuVaRewriteSpanPtes(Adapter, Process, Address, Size);
             if (!NT_SUCCESS(PteStatus))
+            {
                 Status = PteStatus;
+                break;
+            }
         }
 
-        for (Entry = Process->GpuVaRangeList.Flink; Entry != &Process->GpuVaRangeList; Entry = Entry->Flink)
+        if (!NT_SUCCESS(Status))
+        {
+            GpuVaMoveList(&WorkingHead, &Process->GpuVaRangeList);
+            GpuVaMoveList(&Process->GpuVaRangeList, &PreviousHead);
+            Process->GpuVaRangeCount = AuthoritativeCount;
+            Process->GpuVaTotalMapped = PreviousMappedBytes;
+            for (Index = 0; Index < NumOperations; ++Index)
+            {
+                D3DGPU_VIRTUAL_ADDRESS Address;
+                ULONGLONG Size;
+                NTSTATUS PteStatus;
+
+                if (!GpuVaOperationSpan(&Operations[Index], &Address, &Size))
+                    continue;
+                PteStatus = GpuVaRewriteSpanPtes(Adapter, Process, Address, Size);
+                if (!NT_SUCCESS(PteStatus) && NT_SUCCESS(RollbackStatus))
+                    RollbackStatus = PteStatus;
+            }
+            if (!NT_SUCCESS(RollbackStatus))
+            {
+                DPRINT1("DxgkGpuVaApplyUpdate: PTE rollback failed 0x%08lx after update failure 0x%08lx\n", RollbackStatus, Status);
+                Status = RollbackStatus;
+            }
+        }
+        else for (Entry = Process->GpuVaRangeList.Flink; Entry != &Process->GpuVaRangeList; Entry = Entry->Flink)
         {
             PDXGKRNL_GPUVA_RANGE Range = CONTAINING_RECORD(Entry, DXGKRNL_GPUVA_RANGE, RangeListEntry);
 
             if (Range->State == GpuVaStateMapped)
                 TotalMapped += Range->SizeInBytes;
         }
-        Process->GpuVaTotalMapped = TotalMapped;
+        if (NT_SUCCESS(Status))
+        {
+            Process->GpuVaTotalMapped = TotalMapped;
+            GpuVaFreeList(&PreviousHead);
+        }
     }
     GpuVaFreeList(&WorkingHead);
     ExReleaseFastMutex(&Process->GpuVaLock);
@@ -2297,7 +2673,7 @@ DxgkGpuVaGetRootPageTableSize(
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
     if (Adapter != NULL &&
-        Adapter->MiniportContext->InitData.s.DxgkDdiGetRootPageTableSize != NULL)
+        DXGK_CB_FULL(Adapter, DxgkDdiGetRootPageTableSize) != NULL)
     {
         DXGKARG_GETROOTPAGETABLESIZE Args;
         SIZE_T Size;
@@ -2307,9 +2683,7 @@ DxgkGpuVaGetRootPageTableSize(
 
         if (!DxgkAcquireKmdCall(Adapter))
             return 0;
-        Size = Adapter->MiniportContext->InitData.s.DxgkDdiGetRootPageTableSize(
-                   Adapter->MiniportDeviceContext,
-                   &Args);
+        Size = DXGK_CB_FULL(Adapter, DxgkDdiGetRootPageTableSize)(Adapter->MiniportDeviceContext, &Args);
         DxgkReleaseKmdCall(Adapter);
 
         DPRINT("DxgkGpuVaGetRootPageTableSize: NumberOfPte=%u size=%Iu\n",
@@ -2330,8 +2704,9 @@ DxgkGpuVaGetRootPageTableSize(
 /*
  * DxgkGpuVaMakeResident
  *
- * Validate a WDDM 2.0 MakeResident request.  Only the idempotent case is
- * currently observable; a real residency transition needs paging execution.
+ * Execute the WDDM 2.0 MakeResident residency-reference transaction after the
+ * end-to-end residency gate is enabled.  Nonempty work remains unobservable
+ * while paging execution, completion, budgets, and teardown are incomplete.
  */
 NTSTATUS
 DxgkGpuVaMakeResident(
@@ -2359,6 +2734,8 @@ DxgkGpuVaMakeResident(
     *OutCompleted = 0;
     *OutNumBytesToTrim = 0;
     *OutPagingFenceValue = 0;
+    if (!GPUVA_RESIDENCY_END_TO_END)
+        return STATUS_NOT_SUPPORTED;
 
     /*
      * Each list entry adds one residency reference on its allocation and, on
@@ -2442,8 +2819,9 @@ DxgkGpuVaMakeResident(
 /*
  * DxgkGpuVaEvict
  *
- * Validate a WDDM 2.0 Evict request.  Only the idempotent case is currently
- * observable; a real residency transition needs paging execution.
+ * Execute the WDDM 2.0 Evict residency-reference transaction after the
+ * end-to-end residency gate is enabled.  Nonempty work remains unobservable
+ * while paging execution, completion, budgets, and teardown are incomplete.
  */
 NTSTATUS
 DxgkGpuVaEvict(
@@ -2464,6 +2842,8 @@ DxgkGpuVaEvict(
         return STATUS_INVALID_PARAMETER;
 
     *OutNumBytesToTrim = 0;
+    if (!GPUVA_RESIDENCY_END_TO_END)
+        return STATUS_NOT_SUPPORTED;
 
     /*
      * Each list entry removes one residency reference.  The whole request is
@@ -2539,7 +2919,7 @@ DxgkGpuVaMapCpuHostAperture(
         return STATUS_INVALID_PARAMETER;
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
-    if (Adapter->MiniportContext->InitData.s.DxgkDdiMapCpuHostAperture != NULL)
+    if (DXGK_CB_FULL(Adapter, DxgkDdiMapCpuHostAperture) != NULL)
     {
         DXGKARG_MAPCPUHOSTAPERTURE Args;
         NTSTATUS Status;
@@ -2554,7 +2934,7 @@ DxgkGpuVaMapCpuHostAperture(
 
         if (!DxgkAcquireKmdCall(Adapter))
             return STATUS_DELETE_PENDING;
-        Status = Adapter->MiniportContext->InitData.s.DxgkDdiMapCpuHostAperture(Adapter->MiniportDeviceContext, &Args);
+        Status = DXGK_CB_FULL(Adapter, DxgkDdiMapCpuHostAperture)(Adapter->MiniportDeviceContext, &Args);
         DxgkReleaseKmdCall(Adapter);
         return Status;
     }
@@ -2591,7 +2971,7 @@ DxgkGpuVaUnmapCpuHostAperture(
         return STATUS_INVALID_PARAMETER;
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
-    if (Adapter->MiniportContext->InitData.s.DxgkDdiUnmapCpuHostAperture != NULL)
+    if (DXGK_CB_FULL(Adapter, DxgkDdiUnmapCpuHostAperture) != NULL)
     {
         DXGKARG_UNMAPCPUHOSTAPERTURE Args;
         NTSTATUS Status;
@@ -2604,7 +2984,7 @@ DxgkGpuVaUnmapCpuHostAperture(
 
         if (!DxgkAcquireKmdCall(Adapter))
             return STATUS_DELETE_PENDING;
-        Status = Adapter->MiniportContext->InitData.s.DxgkDdiUnmapCpuHostAperture(Adapter->MiniportDeviceContext, &Args);
+        Status = DXGK_CB_FULL(Adapter, DxgkDdiUnmapCpuHostAperture)(Adapter->MiniportDeviceContext, &Args);
         DxgkReleaseKmdCall(Adapter);
         return Status;
     }
