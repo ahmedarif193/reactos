@@ -30,24 +30,32 @@ IntCreateDICW(
 
     if ((!lpwszDevice) && (!lpwszDriver))
     {
+        /* CreateDC(NULL, NULL, ...) fails on Windows, but an information
+           context still defaults to the display */
+        if (iType == 0)
+            return NULL;
         Default = TRUE;  // Ask Win32k to set Default device.
         Display = TRUE;   // Most likely to be DISPLAY.
     }
     else
     {
-        if ((lpwszDevice) && (wcslen(lpwszDevice) != 0))  // First
+        /* A valid display driver name wins over whatever is passed as
+           the device (Windows accepts CreateDC("display", "deadbeef")) */
+        if ((lpwszDriver) && (wcslen(lpwszDriver) != 0) &&
+            ((_wcsicmp(lpwszDriver, L"DISPLAY") == 0) ||
+             (!_wcsnicmp(lpwszDriver, L"\\\\.\\DISPLAY", 11))))
+        {
+            Display = TRUE;
+            RtlInitUnicodeString(&Device, lpwszDriver);
+        }
+        else if ((lpwszDevice) && (wcslen(lpwszDevice) != 0))
         {
             if (!_wcsnicmp(lpwszDevice, L"\\\\.\\DISPLAY",11)) Display = TRUE;
             RtlInitUnicodeString(&Device, lpwszDevice);
         }
-        else
+        else if (lpwszDriver)
         {
-            if (lpwszDriver) // Second
-            {
-                if ((!_wcsnicmp(lpwszDriver, L"DISPLAY",7)) ||
-                        (!_wcsnicmp(lpwszDriver, L"\\\\.\\DISPLAY",11))) Display = TRUE;
-                RtlInitUnicodeString(&Device, lpwszDriver);
-            }
+            RtlInitUnicodeString(&Device, lpwszDriver);
         }
     }
 
