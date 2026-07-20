@@ -750,6 +750,7 @@ RtlpUnwindInternal(
     {
         if (!RtlpIsStackPointerValid(UnwindContext.Rsp, StackLow, StackHigh))
         {
+            DPRINT1("RtlpUnwindInternal: invalid Rsp %p (low %p, high %p), Rip %p, TargetFrame %p, TargetIp %p\n", (PVOID)UnwindContext.Rsp, (PVOID)StackLow, (PVOID)StackHigh, (PVOID)UnwindContext.Rip, TargetFrame, TargetIp);
             return FALSE;
         }
 
@@ -759,6 +760,7 @@ RtlpUnwindInternal(
         {
             /* No function entry, so this must be a leaf function. Pop the return address from the stack.
                Note: this can happen after the first frame as the result of an exception */
+            DPRINT1("RtlpUnwindInternal: no function entry for Rip %p, popping Rip %p from Rsp %p (TargetFrame %p)\n", (PVOID)UnwindContext.Rip, (PVOID)*(DWORD64*)UnwindContext.Rsp, (PVOID)UnwindContext.Rsp, TargetFrame);
             UnwindContext.Rip = *(DWORD64*)UnwindContext.Rsp;
             UnwindContext.Rsp += sizeof(DWORD64);
 
