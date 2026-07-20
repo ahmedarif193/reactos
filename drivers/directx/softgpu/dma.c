@@ -71,6 +71,131 @@ SoftGpuTraceElapsedUs(
  * Notifies dxgkrnl that the last submitted fence has been "completed" by
  * our simulated GPU.
  */
+static VOID
+SoftGpuExecuteBlt(
+    _In_ PSOFTGPU_DEVICE Device,
+    _In_ CONST SOFTGPU_CMD *Cmd)
+{
+    LONG Width = Cmd->DstRect.right - Cmd->DstRect.left;
+    LONG Height = Cmd->DstRect.bottom - Cmd->DstRect.top;
+    ULONGLONG SlabBase = (ULONGLONG)Device->FrameBufferPhys.QuadPart;
+    ULONGLONG RowBytes;
+    ULONGLONG SrcSpan;
+    ULONGLONG DstSpan;
+    PUCHAR SrcVa;
+    PUCHAR DstVa;
+    LONG Row;
+
+    if (Width <= 0 || Height <= 0 || Width > 16384 || Height > 16384)
+        return;
+    RowBytes = (ULONGLONG)Width * 4;
+    if (Cmd->SrcPitch < RowBytes || Cmd->DstPitch < RowBytes ||
+        Cmd->SrcPitch > 0x100000 || Cmd->DstPitch > 0x100000)
+        return;
+    SrcSpan = (ULONGLONG)Cmd->SrcPitch * (Height - 1) + RowBytes;
+    DstSpan = (ULONGLONG)Cmd->DstPitch * (Height - 1) + RowBytes;
+    if (Cmd->SrcAddress < SlabBase || Cmd->DstAddress < SlabBase ||
+        Cmd->SrcAddress - SlabBase + SrcSpan > Device->FrameBufferSize ||
+        Cmd->DstAddress - SlabBase + DstSpan > Device->FrameBufferSize)
+        return;
+
+    SrcVa = (PUCHAR)Device->FrameBuffer + (Cmd->SrcAddress - SlabBase);
+    DstVa = (PUCHAR)Device->FrameBuffer + (Cmd->DstAddress - SlabBase);
+    if (Cmd->SrcPitch == Cmd->DstPitch && Cmd->SrcPitch == RowBytes)
+    {
+        RtlMoveMemory(DstVa, SrcVa, (SIZE_T)RowBytes * Height);
+        return;
+    }
+    for (Row = 0; Row < Height; Row++)
+    {
+        RtlMoveMemory(DstVa + (SIZE_T)Cmd->DstPitch * Row,
+                      SrcVa + (SIZE_T)Cmd->SrcPitch * Row,
+                      (SIZE_T)RowBytes);
+    }
+}
+
+static VOID
+SoftGpuExecuteFill(
+    _In_ PSOFTGPU_DEVICE Device,
+    _In_ CONST SOFTGPU_CMD *Cmd)
+{
+    LONG Width = Cmd->DstRect.right - Cmd->DstRect.left;
+    LONG Height = Cmd->DstRect.bottom - Cmd->DstRect.top;
+    ULONGLONG SlabBase = (ULONGLONG)Device->FrameBufferPhys.QuadPart;
+    ULONGLONG RowBytes;
+    ULONGLONG DstSpan;
+    PUCHAR DstVa;
+    LONG Row;
+    LONG Col;
+
+    if (Width <= 0 || Height <= 0 || Width > 16384 || Height > 16384)
+        return;
+    RowBytes = (ULONGLONG)Width * 4;
+    if (Cmd->DstPitch < RowBytes || Cmd->DstPitch > 0x100000)
+        return;
+    DstSpan = (ULONGLONG)Cmd->DstPitch * (Height - 1) + RowBytes;
+    if (Cmd->DstAddress < SlabBase ||
+        Cmd->DstAddress - SlabBase + DstSpan > Device->FrameBufferSize)
+        return;
+
+    DstVa = (PUCHAR)Device->FrameBuffer + (Cmd->DstAddress - SlabBase);
+    for (Row = 0; Row < Height; Row++)
+    {
+        PULONG RowPtr = (PULONG)(DstVa + (SIZE_T)Cmd->DstPitch * Row);
+
+        for (Col = 0; Col < Width; Col++)
+            RowPtr[Col] = Cmd->Color;
+    }
+}
+
+static VOID
+SoftGpuExecuteDmaBuffer(
+    _In_ PSOFTGPU_DEVICE Device,
+    _In_ CONST SOFTGPU_SUBMIT *Submit)
+{
+    PUCHAR MapVa;
+    ULONG Offset;
+
+    if (Submit->EndOffset <= Submit->StartOffset ||
+        Submit->EndOffset - Submit->StartOffset < sizeof(SOFTGPU_CMD) ||
+        Submit->DmaPhys.QuadPart == 0)
+        return;
+
+    MapVa = MmMapIoSpace(Submit->DmaPhys, Submit->EndOffset, MmCached);
+    if (MapVa == NULL)
+        return;
+
+    Offset = Submit->StartOffset;
+    while (Offset + sizeof(SOFTGPU_CMD) <= Submit->EndOffset)
+    {
+        CONST SOFTGPU_CMD *Cmd = (CONST SOFTGPU_CMD *)(MapVa + Offset);
+
+        if (Cmd->Magic != SOFTGPU_CMD_MAGIC ||
+            Cmd->Size < sizeof(SOFTGPU_CMD) ||
+            Offset + Cmd->Size > Submit->EndOffset)
+            break;
+        switch (Cmd->Op)
+        {
+            case SOFTGPU_CMD_OP_BLT:
+                SoftGpuExecuteBlt(Device, Cmd);
+                break;
+            case SOFTGPU_CMD_OP_FILL:
+                SoftGpuExecuteFill(Device, Cmd);
+                break;
+            case SOFTGPU_CMD_OP_NOP:
+                break;
+            default:
+                Offset = Submit->EndOffset;
+                break;
+        }
+        if (Offset >= Submit->EndOffset)
+            break;
+        Offset += Cmd->Size;
+    }
+
+    MmUnmapIoSpace(MapVa, Submit->EndOffset);
+}
+
 VOID
 NTAPI
 SoftGpuDpcRoutine(
@@ -86,6 +211,8 @@ SoftGpuDpcRoutine(
     ULONGLONG                    Start100ns;
     ULONGLONG                    ElapsedUs;
     LONG                         TraceSeq;
+    SOFTGPU_SUBMIT               Submit;
+    BOOLEAN                      HaveSubmit;
 
     UNREFERENCED_PARAMETER(Dpc);
     UNREFERENCED_PARAMETER(SystemArgument1);
@@ -98,15 +225,46 @@ SoftGpuDpcRoutine(
     ASSERT(Device->Magic == SOFTGPU_DEVICE_MAGIC);
     Start100ns = SoftGpuTraceNow100ns();
 
-    /* Step 1-3: promote CurrentFence to CompletedFence under FenceLock. */
     KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
     if (Device->Stopped)
     {
         KeReleaseSpinLock(&Device->FenceLock, OldIrql);
         return;
     }
-    Device->CompletedFence = Device->CurrentFence;
-    CompletedFence         = Device->CompletedFence;
+    HaveSubmit = Device->EngineActive == 0;
+    if (HaveSubmit)
+        Device->EngineActive = 1;
+    KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+
+    if (HaveSubmit)
+    {
+        for (;;)
+        {
+            KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
+            if (Device->Stopped || Device->SubmitRingHead == Device->SubmitRingTail)
+            {
+                Device->EngineActive = 0;
+                KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+                break;
+            }
+            Submit = Device->SubmitRing[Device->SubmitRingHead % SOFTGPU_SUBMIT_RING_SIZE];
+            Device->SubmitRingHead++;
+            KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+            SoftGpuExecuteDmaBuffer(Device, &Submit);
+            KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
+            if (!Device->Stopped && (LONG)(Submit.Fence - Device->CompletedFence) > 0)
+                Device->CompletedFence = Submit.Fence;
+            KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+        }
+    }
+
+    KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
+    if (Device->Stopped)
+    {
+        KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+        return;
+    }
+    CompletedFence = Device->CompletedFence;
     KeReleaseSpinLock(&Device->FenceLock, OldIrql);
 
     /* Step 4: notify dxgkrnl of DMA completion (in "interrupt context"). */
@@ -141,6 +299,45 @@ SoftGpuDpcRoutine(
                ElapsedUs,
                CompletedFence);
     }
+}
+
+
+VOID
+NTAPI
+SoftGpuVsyncDpcRoutine(
+    _In_     PKDPC   Dpc,
+    _In_opt_ PVOID   DeferredContext,
+    _In_opt_ PVOID   SystemArgument1,
+    _In_opt_ PVOID   SystemArgument2)
+{
+    PSOFTGPU_DEVICE Device = (PSOFTGPU_DEVICE)DeferredContext;
+    DXGKARGCB_NOTIFY_INTERRUPT_DATA NotifyData;
+    KIRQL OldIrql;
+    BOOLEAN Deliver;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    if (Device == NULL || Device->Magic != SOFTGPU_DEVICE_MAGIC)
+        return;
+
+    KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
+    Deliver = !Device->Stopped &&
+              InterlockedCompareExchange(&Device->VsyncEnabled, 0, 0) != 0 &&
+              Device->DxgkInterface.DxgkCbNotifyInterrupt != NULL;
+    KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+    if (!Deliver)
+        return;
+
+    RtlZeroMemory(&NotifyData, sizeof(NotifyData));
+    NotifyData.InterruptType = DXGK_INTERRUPT_CRTC_VSYNC;
+    NotifyData.CrtcVsync.VidPnTargetId = 0;
+    NotifyData.CrtcVsync.PhysicalAddress = Device->FrameBufferPhys;
+    NotifyData.CrtcVsync.PhysicalAdapterMask = 0;
+    Device->DxgkInterface.DxgkCbNotifyInterrupt(
+        Device->DxgkInterface.DeviceHandle,
+        &NotifyData);
 }
 
 
@@ -235,7 +432,21 @@ SoftGpuDdiSubmitCommand(
         KeReleaseSpinLock(&Device->FenceLock, OldIrql);
         return STATUS_DELETE_PENDING;
     }
+    if (Device->SubmitRingTail - Device->SubmitRingHead >= SOFTGPU_SUBMIT_RING_SIZE)
+    {
+        KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+        return STATUS_DEVICE_BUSY;
+    }
     Device->CurrentFence = SubmitCommand->SubmissionFenceId;
+    {
+        PSOFTGPU_SUBMIT Entry = &Device->SubmitRing[Device->SubmitRingTail % SOFTGPU_SUBMIT_RING_SIZE];
+
+        Entry->DmaPhys = SubmitCommand->DmaBufferPhysicalAddress;
+        Entry->StartOffset = SubmitCommand->DmaBufferSubmissionStartOffset;
+        Entry->EndOffset = SubmitCommand->DmaBufferSubmissionEndOffset;
+        Entry->Fence = SubmitCommand->SubmissionFenceId;
+        Device->SubmitRingTail++;
+    }
     Queued = KeInsertQueueDpc(&Device->DpcObject, NULL, NULL);
     KeReleaseSpinLock(&Device->FenceLock, OldIrql);
 
@@ -419,7 +630,8 @@ SoftGpuDdiQueryCurrentFence(
 /*
  * SoftGpuDdiPatch
  *
- * softgpu never reads DMA buffer contents, so patching is a no-op.
+ * Writes the absolute physical placement of each referenced allocation into
+ * the DMA buffer at the recorded patch offsets.
  *
  * IRQL: PASSIVE_LEVEL or DISPATCH_LEVEL (called from dxgkrnl scheduler)
  */
@@ -429,11 +641,117 @@ SoftGpuDdiPatch(
     _In_ PVOID                   MiniportDeviceContext,
     _In_ CONST DXGKARG_PATCH    *Patch)
 {
+    UINT i;
+
     UNREFERENCED_PARAMETER(MiniportDeviceContext);
 
     if (Patch == NULL)
         return STATUS_INVALID_PARAMETER;
+    if (Patch->PatchLocationListSubmissionLength == 0)
+        return STATUS_SUCCESS;
+    if (Patch->pPatchLocationList == NULL || Patch->pDmaBuffer == NULL ||
+        Patch->pAllocationList == NULL)
+        return STATUS_INVALID_PARAMETER;
 
+    for (i = Patch->PatchLocationListSubmissionStart;
+         i < Patch->PatchLocationListSubmissionStart + Patch->PatchLocationListSubmissionLength;
+         i++)
+    {
+        CONST D3DDDI_PATCHLOCATIONLIST *Entry = &Patch->pPatchLocationList[i];
+        CONST DXGK_ALLOCATIONLIST *Allocation;
+
+        if (Entry->AllocationIndex >= Patch->AllocationListSize)
+            return STATUS_INVALID_PARAMETER;
+        if (Entry->PatchOffset + sizeof(ULONGLONG) > Patch->DmaBufferSubmissionEndOffset ||
+            Entry->PatchOffset < Patch->DmaBufferSubmissionStartOffset)
+            return STATUS_INVALID_PARAMETER;
+        Allocation = &Patch->pAllocationList[Entry->AllocationIndex];
+        *(ULONGLONG UNALIGNED *)((PUCHAR)Patch->pDmaBuffer + Entry->PatchOffset) =
+            (ULONGLONG)Allocation->PhysicalAddress.QuadPart + Entry->AllocationOffset;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+/*
+ * SoftGpuDdiPresent
+ *
+ * Builds one SOFTGPU_CMD present record into the DMA buffer.  Blt becomes a
+ * rect-packed copy between the patched source and destination placements,
+ * ColorFill a rect fill; Flip and destination-less presents complete as
+ * ordered no-ops (scan-out address updates travel the SetVidPnSourceAddress
+ * path).
+ *
+ * IRQL: PASSIVE_LEVEL
+ */
+NTSTATUS
+APIENTRY
+SoftGpuDdiPresent(
+    _In_    PVOID            hContext,
+    _Inout_ DXGKARG_PRESENT *pPresent)
+{
+    PSOFTGPU_CMD Cmd;
+    LONG Width;
+    LONG Height;
+    UINT PatchesNeeded;
+
+    UNREFERENCED_PARAMETER(hContext);
+
+    if (pPresent == NULL || pPresent->pDmaBuffer == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (pPresent->DmaSize < sizeof(SOFTGPU_CMD))
+        return STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+    if (pPresent->Flags.Flip && pPresent->FlipInterval > D3DDDI_FLIPINTERVAL_FOUR)
+        return STATUS_INVALID_PARAMETER;
+
+    PatchesNeeded = 0;
+    if (pPresent->Flags.Blt && pPresent->NumSrcAllocations != 0 && pPresent->NumDstAllocations != 0)
+        PatchesNeeded = 2;
+    else if (pPresent->Flags.ColorFill && pPresent->NumDstAllocations != 0)
+        PatchesNeeded = 1;
+    if (PatchesNeeded != 0 &&
+        (pPresent->pPatchLocationListOut == NULL ||
+         pPresent->PatchLocationListOutSize < PatchesNeeded))
+        return STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+
+    Cmd = (PSOFTGPU_CMD)pPresent->pDmaBuffer;
+    RtlZeroMemory(Cmd, sizeof(*Cmd));
+    Cmd->Magic = SOFTGPU_CMD_MAGIC;
+    Cmd->Size = sizeof(*Cmd);
+    Cmd->Op = SOFTGPU_CMD_OP_NOP;
+
+    if (PatchesNeeded != 0)
+    {
+        Width = pPresent->DstRect.right - pPresent->DstRect.left;
+        Height = pPresent->DstRect.bottom - pPresent->DstRect.top;
+        if (Width <= 0 || Height <= 0 || Width > 16384 || Height > 16384)
+            return STATUS_INVALID_PARAMETER;
+
+        Cmd->SrcRect = pPresent->SrcRect;
+        Cmd->DstRect = pPresent->DstRect;
+        Cmd->Color = pPresent->Color;
+        Cmd->SrcPitch = (ULONG)Width * 4;
+        Cmd->DstPitch = (ULONG)Width * 4;
+
+        if (pPresent->Flags.Blt && pPresent->NumSrcAllocations != 0)
+        {
+            Cmd->Op = SOFTGPU_CMD_OP_BLT;
+            pPresent->pPatchLocationListOut[0].AllocationIndex = DXGK_PRESENT_SOURCE_INDEX;
+            pPresent->pPatchLocationListOut[0].PatchOffset = FIELD_OFFSET(SOFTGPU_CMD, SrcAddress);
+            pPresent->pPatchLocationListOut[1].AllocationIndex = DXGK_PRESENT_DESTINATION_INDEX;
+            pPresent->pPatchLocationListOut[1].PatchOffset = FIELD_OFFSET(SOFTGPU_CMD, DstAddress);
+            pPresent->pPatchLocationListOut += 2;
+        }
+        else
+        {
+            Cmd->Op = SOFTGPU_CMD_OP_FILL;
+            pPresent->pPatchLocationListOut[0].AllocationIndex = DXGK_PRESENT_DESTINATION_INDEX;
+            pPresent->pPatchLocationListOut[0].PatchOffset = FIELD_OFFSET(SOFTGPU_CMD, DstAddress);
+            pPresent->pPatchLocationListOut += 1;
+        }
+    }
+
+    pPresent->pDmaBuffer = (PUCHAR)pPresent->pDmaBuffer + sizeof(SOFTGPU_CMD);
     return STATUS_SUCCESS;
 }
 

@@ -139,6 +139,7 @@ DriverEntry(
     InitData.DxgkDdiBuildPagingBuffer               = SoftGpuDdiBuildPagingBuffer;
     InitData.DxgkDdiPatch                           = SoftGpuDdiPatch;
     InitData.DxgkDdiRender                          = SoftGpuDdiRender;
+    InitData.DxgkDdiPresent                         = SoftGpuDdiPresent;
 
     /* --- Command scheduling --------------------------------------------- */
     InitData.DxgkDdiSubmitCommand                   = SoftGpuDdiSubmitCommand;
@@ -395,6 +396,10 @@ SoftGpuDdiStartDevice(
      */
     KeInitializeDpc(&Device->DpcObject, SoftGpuDpcRoutine, Device);
     Device->DpcInitialized = TRUE;
+    KeInitializeTimer(&Device->VsyncTimer);
+    KeInitializeDpc(&Device->VsyncDpc, SoftGpuVsyncDpcRoutine, Device);
+    Device->VsyncTimerInitialized = TRUE;
+    InterlockedExchange(&Device->VsyncEnabled, 0);
     KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
     Device->Stopped = 0;
     KeReleaseSpinLock(&Device->FenceLock, OldIrql);
@@ -428,9 +433,16 @@ SoftGpuDdiStopDevice(
     KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
     Device->Stopped = 1;
     KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+    InterlockedExchange(&Device->VsyncEnabled, 0);
+    if (Device->VsyncTimerInitialized)
+    {
+        KeCancelTimer(&Device->VsyncTimer);
+        Device->VsyncTimerInitialized = FALSE;
+    }
     if (Device->DpcInitialized)
     {
         KeRemoveQueueDpc(&Device->DpcObject);
+        KeRemoveQueueDpc(&Device->VsyncDpc);
         KeFlushQueuedDpcs();
         Device->DpcInitialized = FALSE;
     }
@@ -1210,8 +1222,32 @@ SoftGpuDdiControlInterrupt(
     _In_ CONST DXGK_INTERRUPT_TYPE InterruptType,
     _In_ BOOLEAN                   EnableInterrupt)
 {
-    UNREFERENCED_PARAMETER(MiniportDeviceContext);
-    UNREFERENCED_PARAMETER(EnableInterrupt);
+    PSOFTGPU_DEVICE Device = (PSOFTGPU_DEVICE)MiniportDeviceContext;
+
+    if (Device == NULL || Device->Magic != SOFTGPU_DEVICE_MAGIC)
+        return STATUS_INVALID_PARAMETER;
+
+    if (InterruptType == DXGK_INTERRUPT_CRTC_VSYNC)
+    {
+        if (!Device->VsyncTimerInitialized)
+            return STATUS_INVALID_DEVICE_STATE;
+        if (EnableInterrupt)
+        {
+            LARGE_INTEGER Due;
+
+            if (InterlockedExchange(&Device->VsyncEnabled, 1) == 0)
+            {
+                Due.QuadPart = -166667;
+                KeSetTimerEx(&Device->VsyncTimer, Due, 16, &Device->VsyncDpc);
+            }
+        }
+        else
+        {
+            InterlockedExchange(&Device->VsyncEnabled, 0);
+            KeCancelTimer(&Device->VsyncTimer);
+        }
+        return STATUS_SUCCESS;
+    }
 
     if (InterruptType != DXGK_INTERRUPT_TYPE_DMA_COMPLETED &&
         InterruptType != DXGK_INTERRUPT_TYPE_DMA_PREEMPTED)

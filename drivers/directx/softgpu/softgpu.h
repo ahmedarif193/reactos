@@ -105,6 +105,46 @@
 /* Framebuffer size: 16 MB (sufficient for 1920x1080x32bpp = ~8 MB) */
 #define SOFTGPU_FB_SIZE         (16 * 1024 * 1024)
 
+/* =========================================================================
+ * SOFTGPU_CMD — the KMD DMA command stream format
+ *
+ * Every DMA buffer softgpu executes is a sequence of SOFTGPU_CMD records.
+ * Address fields are patched at kick time (DxgkDdiPatch) with the absolute
+ * physical placement of the referenced allocation plus AllocationOffset.
+ * The execution engine validates every record against the VRAM slab before
+ * touching memory; unrecognized DMA content completes as a no-op.
+ * ========================================================================= */
+
+#define SOFTGPU_CMD_MAGIC       0x444D4753UL    /* 'SGMD' */
+
+#define SOFTGPU_CMD_OP_NOP      1
+#define SOFTGPU_CMD_OP_BLT      2
+#define SOFTGPU_CMD_OP_FILL     3
+
+typedef struct _SOFTGPU_CMD
+{
+    ULONG       Magic;
+    ULONG       Op;
+    ULONG       Size;
+    ULONG       Color;
+    RECT        SrcRect;
+    RECT        DstRect;
+    ULONG       SrcPitch;
+    ULONG       DstPitch;
+    ULONGLONG   SrcAddress;
+    ULONGLONG   DstAddress;
+} SOFTGPU_CMD, *PSOFTGPU_CMD;
+
+#define SOFTGPU_SUBMIT_RING_SIZE 1024
+
+typedef struct _SOFTGPU_SUBMIT
+{
+    PHYSICAL_ADDRESS DmaPhys;
+    ULONG            StartOffset;
+    ULONG            EndOffset;
+    ULONG            Fence;
+} SOFTGPU_SUBMIT, *PSOFTGPU_SUBMIT;
+
 typedef struct _SOFTGPU_DEVICE
 {
     /* Sanity / validation marker */
@@ -151,6 +191,16 @@ typedef struct _SOFTGPU_DEVICE
     KDPC                DpcObject;
     volatile LONG       Stopped;
     BOOLEAN             DpcInitialized;
+
+    KTIMER              VsyncTimer;
+    KDPC                VsyncDpc;
+    volatile LONG       VsyncEnabled;
+    BOOLEAN             VsyncTimerInitialized;
+
+    SOFTGPU_SUBMIT      SubmitRing[SOFTGPU_SUBMIT_RING_SIZE];
+    ULONG               SubmitRingHead;
+    ULONG               SubmitRingTail;
+    LONG                EngineActive;
 
     /*
      * dxgkrnl callback vtable.  Copied from the PDXGK_INTERFACE argument
@@ -378,6 +428,14 @@ SoftGpuDpcRoutine(
     _In_opt_ PVOID   SystemArgument1,
     _In_opt_ PVOID   SystemArgument2);
 
+VOID
+NTAPI
+SoftGpuVsyncDpcRoutine(
+    _In_     PKDPC   Dpc,
+    _In_opt_ PVOID   DeferredContext,
+    _In_opt_ PVOID   SystemArgument1,
+    _In_opt_ PVOID   SystemArgument2);
+
 NTSTATUS
 APIENTRY
 SoftGpuDdiSubmitCommand(
@@ -389,6 +447,12 @@ APIENTRY
 SoftGpuDdiPreemptCommand(
     _In_ PVOID                         MiniportDeviceContext,
     _In_ CONST DXGKARG_PREEMPTCOMMAND *PreemptCommand);
+
+NTSTATUS
+APIENTRY
+SoftGpuDdiPresent(
+    _In_    PVOID            hContext,
+    _Inout_ DXGKARG_PRESENT *pPresent);
 
 NTSTATUS
 APIENTRY
