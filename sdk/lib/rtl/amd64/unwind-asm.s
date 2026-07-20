@@ -26,9 +26,6 @@ RtlpExecuteHandlerForUnwind PROC FRAME:RtlpExecuteHandlerForUnwindHandler
 #else
 .PROC RtlpExecuteHandlerForUnwind
 .seh_handler RtlpExecuteHandlerForUnwindHandler, @unwind, @except
-.seh_handlerdata
-.long 0 // Count
-.text
 #endif
 
     /* Save ExceptionRecord->ExceptionFlags in the home space */
@@ -55,6 +52,10 @@ RtlpExecuteHandlerForUnwind PROC FRAME:RtlpExecuteHandlerForUnwindHandler
 #ifdef _USE_ML
 RtlpExecuteHandlerForUnwind ENDP
 #else
+/* Emit handler data after the prolog directives so unwind codes are retained. */
+.seh_handlerdata
+.long 0 // Count
+.text
 .ENDP
 #endif
 
