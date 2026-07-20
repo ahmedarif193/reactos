@@ -96,6 +96,21 @@ IntEngStretchBlt(SURFOBJ *DestObj,
                  ULONG Mode);
 
 BOOL APIENTRY
+IntEngStretchBltMode(SURFOBJ *DestObj,
+                 SURFOBJ *SourceObj,
+                 SURFOBJ *Mask,
+                 CLIPOBJ *ClipRegion,
+                 XLATEOBJ *ColorTranslation,
+                 COLORADJUSTMENT *pca,
+                 RECTL *DestRect,
+                 RECTL *SourceRect,
+                 POINTL *pMaskOrigin,
+                 BRUSHOBJ *Brush,
+                 POINTL *BrushOrigin,
+                 ULONG Rop4,
+                 ULONG iMode);
+
+BOOL APIENTRY
 IntEngGradientFill(SURFOBJ *psoDest,
                    CLIPOBJ *pco,
                    XLATEOBJ *pxlo,

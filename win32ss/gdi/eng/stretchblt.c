@@ -121,6 +121,8 @@ EngStretchBltROP(
     BOOLEAN            Ret = TRUE;
     POINTL             AdjustedBrushOrigin;
     BOOL               UsesSource = ROP4_USES_SOURCE(Rop4);
+    HBITMAP            hbmCombined = NULL;
+    SURFOBJ*           psoCombined = NULL;
 
     BYTE               clippingType;
     RECTL              ClipRect;
@@ -212,6 +214,80 @@ EngStretchBltROP(
         InputRect.right += Translate.x;
         InputRect.top += Translate.y;
         InputRect.bottom += Translate.y;
+
+        /* For the AND/OR stretch modes a shrink must combine all covered
+           source pixels instead of point-sampling them. Pre-combine into a
+           temporary bitmap and continue with that as the source. */
+        if (((Mode == BLACKONWHITE) || (Mode == WHITEONBLACK)) &&
+            (psoInput != NULL) &&
+            (cxSrc > 0) && (cySrc > 0) && (cxDest > 0) && (cyDest > 0) &&
+            ((cxSrc > cxDest) || (cySrc > cyDest)))
+        {
+            LONG cxIn = InputRect.right - InputRect.left;
+            LONG cyIn = InputRect.bottom - InputRect.top;
+            LONG cxT = min(cxIn, cxDest);
+            LONG cyT = min(cyIn, cyDest);
+
+            if ((cxT > 0) && (cyT > 0) && (cxIn > 0) && (cyIn > 0))
+            {
+                SIZEL sizl;
+                sizl.cx = cxT;
+                sizl.cy = cyT;
+                hbmCombined = (HBITMAP)EngCreateBitmap(sizl, 0,
+                                                       psoInput->iBitmapFormat,
+                                                       BMF_TOPDOWN, NULL);
+                if (hbmCombined)
+                    psoCombined = EngLockSurface((HSURF)hbmCombined);
+
+                if (psoCombined)
+                {
+                    PFN_DIB_GetPixel fnGet =
+                        DibFunctionsForBitmapFormat[psoInput->iBitmapFormat].DIB_GetPixel;
+                    PFN_DIB_PutPixel fnPut =
+                        DibFunctionsForBitmapFormat[psoCombined->iBitmapFormat].DIB_PutPixel;
+                    LONG x, y, sx, sy, sx0, sx1, sy0, sy1;
+                    ULONG ulAcc;
+
+                    for (y = 0; y < cyT; y++)
+                    {
+                        sy0 = InputRect.top + (y * cyIn) / cyT;
+                        sy1 = InputRect.top + ((y + 1) * cyIn) / cyT;
+                        if (sy1 <= sy0) sy1 = sy0 + 1;
+                        for (x = 0; x < cxT; x++)
+                        {
+                            sx0 = InputRect.left + (x * cxIn) / cxT;
+                            sx1 = InputRect.left + ((x + 1) * cxIn) / cxT;
+                            if (sx1 <= sx0) sx1 = sx0 + 1;
+
+                            ulAcc = (Mode == BLACKONWHITE) ? ~0ul : 0ul;
+                            for (sy = sy0; sy < sy1; sy++)
+                            {
+                                for (sx = sx0; sx < sx1; sx++)
+                                {
+                                    if (Mode == BLACKONWHITE)
+                                        ulAcc &= fnGet(psoInput, sx, sy);
+                                    else
+                                        ulAcc |= fnGet(psoInput, sx, sy);
+                                }
+                            }
+                            fnPut(psoCombined, x, y, ulAcc);
+                        }
+                    }
+
+                    /* Continue the operation with the combined bitmap */
+                    psoInput = psoCombined;
+                    InputRect.left = 0;
+                    InputRect.top = 0;
+                    InputRect.right = cxT;
+                    InputRect.bottom = cyT;
+                }
+                else if (hbmCombined)
+                {
+                    EngDeleteSurface((HSURF)hbmCombined);
+                    hbmCombined = NULL;
+                }
+            }
+        }
     }
     else
     {
@@ -250,6 +326,8 @@ EngStretchBltROP(
        nothing to do */
     if (OutputRect.right <= OutputRect.left || OutputRect.bottom <= OutputRect.top)
     {
+        if (psoCombined) EngUnlockSurface(psoCombined);
+        if (hbmCombined) EngDeleteSurface((HSURF)hbmCombined);
         if (UsesSource)
         {
             IntEngLeave(&EnterLeaveSource);
@@ -259,6 +337,8 @@ EngStretchBltROP(
 
     if (! IntEngEnter(&EnterLeaveDest, psoDest, &OutputRect, FALSE, &Translate, &psoOutput))
     {
+        if (psoCombined) EngUnlockSurface(psoCombined);
+        if (hbmCombined) EngDeleteSurface((HSURF)hbmCombined);
         if (UsesSource)
         {
             IntEngLeave(&EnterLeaveSource);
@@ -423,6 +503,8 @@ EngStretchBltROP(
     }
 
     IntEngLeave(&EnterLeaveDest);
+    if (psoCombined) EngUnlockSurface(psoCombined);
+    if (hbmCombined) EngDeleteSurface((HSURF)hbmCombined);
     if (UsesSource)
     {
         IntEngLeave(&EnterLeaveSource);
@@ -466,7 +548,7 @@ EngStretchBlt(
 }
 
 BOOL APIENTRY
-IntEngStretchBlt(SURFOBJ *psoDest,
+IntEngStretchBltMode(SURFOBJ *psoDest,
                  SURFOBJ *psoSource,
                  SURFOBJ *MaskSurf,
                  CLIPOBJ *ClipRegion,
@@ -477,7 +559,8 @@ IntEngStretchBlt(SURFOBJ *psoDest,
                  POINTL *pMaskOrigin,
                  BRUSHOBJ *pbo,
                  POINTL *BrushOrigin,
-                 DWORD Rop4)
+                 DWORD Rop4,
+                 ULONG iMode)
 {
     BOOLEAN ret;
     POINTL MaskOrigin = {0, 0};
@@ -808,7 +891,7 @@ IntEngStretchBlt(SURFOBJ *psoDest,
                                                  &OutputRect,
                                                  &InputRect,
                                                  &MaskOrigin,
-                                                 COLORONCOLOR,
+                                                 iMode,
                                                  pbo,
                                                  Rop4);
     }
@@ -844,12 +927,32 @@ IntEngStretchBlt(SURFOBJ *psoDest,
                                &OutputRect,
                                &InputRect,
                                &MaskOrigin,
-                               COLORONCOLOR,
+                               iMode,
                                pbo,
                                Rop4);
     }
 
     return ret;
+}
+
+BOOL APIENTRY
+IntEngStretchBlt(SURFOBJ *psoDest,
+                 SURFOBJ *psoSource,
+                 SURFOBJ *MaskSurf,
+                 CLIPOBJ *ClipRegion,
+                 XLATEOBJ *ColorTranslation,
+                 COLORADJUSTMENT *pca,
+                 RECTL *DestRect,
+                 RECTL *SourceRect,
+                 POINTL *pMaskOrigin,
+                 BRUSHOBJ *pbo,
+                 POINTL *BrushOrigin,
+                 DWORD Rop4)
+{
+    return IntEngStretchBltMode(psoDest, psoSource, MaskSurf, ClipRegion,
+                                ColorTranslation, pca, DestRect, SourceRect,
+                                pMaskOrigin, pbo, BrushOrigin, Rop4,
+                                COLORONCOLOR);
 }
 
 BOOL
