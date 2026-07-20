@@ -655,6 +655,16 @@ NtGdiSetDIBitsToDeviceInternal(
         {
             ScanLines = lHeight - StartScan;
         }
+        else if (bTopDown)
+        {
+            /* Windows bounds the scan count by the unsigned biHeight
+               minus the start scan, which only bites for pathological
+               huge heights (verified by the SetDIBitsToDevice apitest
+               overflow cases) */
+            ULONG ulLimit = (ULONG)bmi->bmiHeader.biHeight - StartScan;
+            if (ScanLines > ulLimit)
+                ScanLines = ulLimit;
+        }
 
         llSrcY = (LONGLONG)StartScan + ScanLines - ((LONGLONG)YSrc + Height);
         if (llSrcY > 0)
