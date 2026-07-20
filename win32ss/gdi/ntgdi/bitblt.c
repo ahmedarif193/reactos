@@ -123,6 +123,28 @@ NtGdiAlphaBlend(
         goto leave;
     }
 
+    /* The source rect must lie entirely within the source surface */
+    if ((SourceRect.left < 0) || (SourceRect.top < 0) ||
+        (SourceRect.right > BitmapSrc->SurfObj.sizlBitmap.cx) ||
+        (SourceRect.bottom > BitmapSrc->SurfObj.sizlBitmap.cy))
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        bResult = FALSE;
+        goto leave;
+    }
+
+    /* Source and destination must not overlap */
+    if (BitmapDest == BitmapSrc)
+    {
+        RECTL rclOverlap;
+        if (RECTL_bIntersectRect(&rclOverlap, &DestRect, &SourceRect))
+        {
+            EngSetLastError(ERROR_INVALID_PARAMETER);
+            bResult = FALSE;
+            goto leave;
+        }
+    }
+
     /* Create the XLATEOBJ. */
     EXLATEOBJ_vInitXlateFromDCs(&exlo, DCSrc, DCDest);
 
@@ -161,7 +183,18 @@ NtGdiBitBlt(
     IN FLONG fl)
 {
 
-    if (dwRop & CAPTUREBLT)
+    BOOL bRtlDest = FALSE;
+    PDC pdcPeek;
+
+    /* An RTL destination needs the mirroring-capable stretch path */
+    pdcPeek = DC_LockDc(hDCDest);
+    if (pdcPeek)
+    {
+        bRtlDest = (pdcPeek->pdcattr->dwLayout & LAYOUT_RTL) != 0;
+        DC_UnlockDc(pdcPeek);
+    }
+
+    if ((dwRop & CAPTUREBLT) || bRtlDest)
     {
        return NtGdiStretchBlt(hDCDest,
                               XDest,
@@ -841,7 +874,8 @@ GreStretchBltMask(
     IN DWORD dwBackColor,
     HDC hDCMask,
     INT XOriginMask,
-    INT YOriginMask)
+    INT YOriginMask,
+    BOOL bNoMirror)
 {
     PDC DCDest;
     PDC DCSrc  = NULL;
@@ -946,6 +980,30 @@ GreStretchBltMask(
     DestRect.right  += DCDest->ptlDCOrig.x;
     DestRect.bottom += DCDest->ptlDCOrig.y;
 
+    /* LAYOUT_BITMAPORIENTATIONPRESERVED acts as a permanent NOMIRRORBITMAP */
+    if (pdcattr->dwLayout & LAYOUT_BITMAPORIENTATIONPRESERVED)
+        bNoMirror = TRUE;
+
+    /* An RTL layout mirrors the mapped rect; the corners are then
+       inclusive, so shift them to the exclusive convention. With
+       NOMIRRORBITMAP the rect is normalized instead and the content
+       stays unmirrored. */
+    if ((pdcattr->dwLayout & LAYOUT_RTL) && (WidthDest > 0) &&
+        (DestRect.left > DestRect.right))
+    {
+        if (bNoMirror)
+        {
+            LONG lTmpRtl = DestRect.left;
+            DestRect.left = DestRect.right;
+            DestRect.right = lTmpRtl;
+        }
+        else
+        {
+            DestRect.left++;
+            DestRect.right++;
+        }
+    }
+
     if (DCDest->fs & (DC_ACCUM_APP|DC_ACCUM_WMGR))
     {
        IntUpdateBoundsRect(DCDest, &DestRect);
@@ -1033,7 +1091,30 @@ GreStretchBltMask(
           DestRect.left, DestRect.top, DestRect.right, DestRect.bottom);
 
     /* Perform the bitblt operation */
-    Status = IntEngStretchBlt(&BitmapDest->SurfObj,
+    if (!UsesSource && !UsesMask)
+    {
+        /* Pattern and destination rops involve no source, so there is
+           nothing to stretch: this is a plain rect operation */
+        RECTL rclDest = DestRect;
+        RECTL_vMakeWellOrdered(&rclDest);
+        Status = IntEngBitBlt(&BitmapDest->SurfObj,
+                              NULL,
+                              NULL,
+                              (CLIPOBJ *)&DCDest->co,
+                              NULL,
+                              &rclDest,
+                              NULL,
+                              NULL,
+                              &DCDest->eboFill.BrushObject,
+                              &BrushOrigin,
+                              rop4);
+    }
+    else
+    {
+        /* Note: StretchBlt does not apply the AND/OR stretch modes the way
+           StretchDIBits does (32bpp shrinks point-sample on Windows), so
+           the plain COLORONCOLOR path is used here */
+        Status = IntEngStretchBlt(&BitmapDest->SurfObj,
                               BitmapSrc ? &BitmapSrc->SurfObj : NULL,
                               BitmapMask ? &BitmapMask->SurfObj : NULL,
                               (CLIPOBJ *)&DCDest->co,
@@ -1046,6 +1127,7 @@ GreStretchBltMask(
                               &BrushOrigin,
                               pdcattr->jStretchBltMode,
                               rop4);
+    }
     if (UsesSource)
     {
         EXLATEOBJ_vCleanup(&exlo);
@@ -1082,6 +1164,8 @@ NtGdiStretchBlt(
     DWORD dwRop3,
     IN DWORD dwBackColor)
 {
+    BOOL bNoMirror = (dwRop3 & NOMIRRORBITMAP) != 0;
+
     dwRop3 = dwRop3 & ~(NOMIRRORBITMAP|CAPTUREBLT);
 
     return GreStretchBltMask(
@@ -1099,7 +1183,8 @@ NtGdiStretchBlt(
                 dwBackColor,
                 NULL,
                 0,
-                0);
+                0,
+                bNoMirror);
 }
 
 
