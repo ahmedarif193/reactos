@@ -41,6 +41,7 @@ EngAlphaBlend(
     BOOL               EnumMore;
     ULONG              i;
     BOOLEAN            Ret;
+    PFN_DIB_AlphaBlend pfnAlphaBlend;
 
     DPRINT("EngAlphaBlend(psoDest:0x%p, psoSource:0x%p, ClipRegion:0x%p, ColorTranslation:0x%p,\n", psoDest, psoSource, ClipRegion, ColorTranslation);
     DPRINT("              DestRect:{0x%x, 0x%x, 0x%x, 0x%x}, SourceRect:{0x%x, 0x%x, 0x%x, 0x%x},\n",
@@ -122,11 +123,31 @@ EngAlphaBlend(
     ASSERT(InputRect.left <= InputRect.right && InputRect.top <= InputRect.bottom);
 
     Ret = FALSE;
+    pfnAlphaBlend = DibFunctionsForBitmapFormat[OutputObj->iBitmapFormat].DIB_AlphaBlend;
+
+    /* The dedicated 16 and 32 bpp versions assume the standard channel
+       layouts; other bitfield formats go through the generic version,
+       which converts via the XLATEOBJ */
+    if (ColorTranslation != NULL)
+    {
+        PPALETTE ppalDst = CONTAINING_RECORD(ColorTranslation, EXLATEOBJ, xlo)->ppalDst;
+        if (ppalDst != NULL)
+        {
+            if (((OutputObj->iBitmapFormat == BMF_16BPP) &&
+                 !(ppalDst->flFlags & (PAL_RGB16_555 | PAL_RGB16_565))) ||
+                ((OutputObj->iBitmapFormat == BMF_32BPP) &&
+                 !(ppalDst->flFlags & (PAL_RGB | PAL_BGR))))
+            {
+                pfnAlphaBlend = DIB_XXBPP_AlphaBlend;
+            }
+        }
+    }
+
     ClippingType = (ClipRegion == NULL) ? DC_TRIVIAL : ClipRegion->iDComplexity;
     switch (ClippingType)
     {
         case DC_TRIVIAL:
-            Ret = DibFunctionsForBitmapFormat[OutputObj->iBitmapFormat].DIB_AlphaBlend(
+            Ret = pfnAlphaBlend(
                       OutputObj, InputObj, &OutputRect, &InputRect, ClipRegion, ColorTranslation, BlendObj);
             break;
 
@@ -145,7 +166,7 @@ EngAlphaBlend(
                 Rect.bottom = InputRect.bottom + (CombinedRect.bottom - OutputRect.bottom) * (InputRect.bottom - InputRect.top) / (OutputRect.bottom - OutputRect.top);
 
                 /* Aplha blend one rect */
-                Ret = DibFunctionsForBitmapFormat[OutputObj->iBitmapFormat].DIB_AlphaBlend(
+                Ret = pfnAlphaBlend(
                           OutputObj, InputObj, &CombinedRect, &Rect, ClipRegion, ColorTranslation, BlendObj);
             }
             break;
@@ -173,7 +194,7 @@ EngAlphaBlend(
                         Rect.bottom = InputRect.bottom + (CombinedRect.bottom - OutputRect.bottom) * (InputRect.bottom - InputRect.top) / (OutputRect.bottom - OutputRect.top);
 
                         /* Alpha blend one rect */
-                        Ret = DibFunctionsForBitmapFormat[OutputObj->iBitmapFormat].DIB_AlphaBlend(
+                        Ret = pfnAlphaBlend(
                                   OutputObj, InputObj, &CombinedRect, &Rect, ClipRegion, ColorTranslation, BlendObj) && Ret;
                     }
                 }

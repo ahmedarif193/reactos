@@ -753,11 +753,6 @@ typedef union {
   } col;
 } NICEPIXEL32;
 
-static __inline UCHAR
-Clamp8(ULONG val)
-{
-  return (val > 255) ? 255 : (UCHAR)val;
-}
 
 BOOLEAN
 DIB_32BPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
@@ -810,21 +805,34 @@ DIB_32BPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
     while (++Cols <= DestRect->right - DestRect->left)
     {
       SrcPixel.ul = DIB_GetSource(Source, SrcX, SrcY, ColorTranslation);
-      SrcPixel.col.red = (SrcPixel.col.red * BlendFunc.SourceConstantAlpha) / 255;
-      SrcPixel.col.green = (SrcPixel.col.green * BlendFunc.SourceConstantAlpha)  / 255;
-      SrcPixel.col.blue = (SrcPixel.col.blue * BlendFunc.SourceConstantAlpha) / 255;
-      SrcPixel.col.alpha = (32 == SrcBpp) ?
-                        (SrcPixel.col.alpha * BlendFunc.SourceConstantAlpha) / 255 :
-                        BlendFunc.SourceConstantAlpha ;
-
-      Alpha = ((BlendFunc.AlphaFormat & AC_SRC_ALPHA) != 0) ?
-           SrcPixel.col.alpha : BlendFunc.SourceConstantAlpha ;
-
       DstPixel.ul = *Dst;
-      DstPixel.col.red = Clamp8((DstPixel.col.red * (255 - Alpha)) / 255 + SrcPixel.col.red) ;
-      DstPixel.col.green = Clamp8((DstPixel.col.green * (255 - Alpha)) / 255 + SrcPixel.col.green) ;
-      DstPixel.col.blue = Clamp8((DstPixel.col.blue * (255 - Alpha)) / 255 + SrcPixel.col.blue) ;
-      DstPixel.col.alpha = Clamp8((DstPixel.col.alpha * (255 - Alpha)) / 255 + SrcPixel.col.alpha) ;
+
+      if ((BlendFunc.AlphaFormat & AC_SRC_ALPHA) != 0)
+      {
+        /* Premultiplied source: scale by the constant alpha, then blend
+           with the per-pixel alpha, rounding to nearest like Windows */
+        if (BlendFunc.SourceConstantAlpha != 255)
+        {
+          SrcPixel.col.red = DIB_ScaleAlpha(SrcPixel.col.red, BlendFunc.SourceConstantAlpha);
+          SrcPixel.col.green = DIB_ScaleAlpha(SrcPixel.col.green, BlendFunc.SourceConstantAlpha);
+          SrcPixel.col.blue = DIB_ScaleAlpha(SrcPixel.col.blue, BlendFunc.SourceConstantAlpha);
+          SrcPixel.col.alpha = DIB_ScaleAlpha(SrcPixel.col.alpha, BlendFunc.SourceConstantAlpha);
+        }
+        Alpha = SrcPixel.col.alpha;
+        DstPixel.col.red = DIB_BlendOver(SrcPixel.col.red, DstPixel.col.red, Alpha);
+        DstPixel.col.green = DIB_BlendOver(SrcPixel.col.green, DstPixel.col.green, Alpha);
+        DstPixel.col.blue = DIB_BlendOver(SrcPixel.col.blue, DstPixel.col.blue, Alpha);
+        DstPixel.col.alpha = DIB_BlendOver(SrcPixel.col.alpha, DstPixel.col.alpha, Alpha);
+      }
+      else
+      {
+        UCHAR SrcAlpha = (32 == SrcBpp) ? SrcPixel.col.alpha : 255;
+        Alpha = BlendFunc.SourceConstantAlpha;
+        DstPixel.col.red = DIB_BlendLerp(SrcPixel.col.red, DstPixel.col.red, Alpha);
+        DstPixel.col.green = DIB_BlendLerp(SrcPixel.col.green, DstPixel.col.green, Alpha);
+        DstPixel.col.blue = DIB_BlendLerp(SrcPixel.col.blue, DstPixel.col.blue, Alpha);
+        DstPixel.col.alpha = DIB_BlendLerp(SrcAlpha, DstPixel.col.alpha, Alpha);
+      }
       *Dst++ = DstPixel.ul;
       SrcX = SourceRect->left + (Cols*(SourceRect->right - SourceRect->left))/(DestRect->right - DestRect->left);
     }

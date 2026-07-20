@@ -715,12 +715,6 @@ typedef union {
    } col;
 } NICEPIXEL32;
 
-static __inline UCHAR
-Clamp8(ULONG val)
-{
-   return (val > 255) ? 255 : (UCHAR)val;
-}
-
 BOOLEAN
 DIB_24BPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
                      RECTL* SourceRect, CLIPOBJ* ClipRegion,
@@ -773,21 +767,29 @@ DIB_24BPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
     while (++Cols <= DestRect->right - DestRect->left)
     {
       SrcPixel.ul = DIB_GetSource(Source, SrcX, SrcY, ColorTranslation);
-      SrcPixel.col.red = (SrcPixel.col.red * BlendFunc.SourceConstantAlpha) / 255;
-      SrcPixel.col.green = (SrcPixel.col.green * BlendFunc.SourceConstantAlpha) / 255;
-      SrcPixel.col.blue = (SrcPixel.col.blue * BlendFunc.SourceConstantAlpha) / 255;
-      if (!(BlendFunc.AlphaFormat & AC_SRC_ALPHA))
+
+      if ((BlendFunc.AlphaFormat & AC_SRC_ALPHA) != 0)
       {
-          Alpha = BlendFunc.SourceConstantAlpha ;
+        /* Premultiplied source, rounded to nearest like Windows */
+        if (BlendFunc.SourceConstantAlpha != 255)
+        {
+          SrcPixel.col.red = DIB_ScaleAlpha(SrcPixel.col.red, BlendFunc.SourceConstantAlpha);
+          SrcPixel.col.green = DIB_ScaleAlpha(SrcPixel.col.green, BlendFunc.SourceConstantAlpha);
+          SrcPixel.col.blue = DIB_ScaleAlpha(SrcPixel.col.blue, BlendFunc.SourceConstantAlpha);
+          SrcPixel.col.alpha = DIB_ScaleAlpha(SrcPixel.col.alpha, BlendFunc.SourceConstantAlpha);
+        }
+        Alpha = SrcPixel.col.alpha;
+        DstPixel.col.red = DIB_BlendOver(SrcPixel.col.red, *Dst, Alpha);
+        DstPixel.col.green = DIB_BlendOver(SrcPixel.col.green, *(Dst+1), Alpha);
+        DstPixel.col.blue = DIB_BlendOver(SrcPixel.col.blue, *(Dst+2), Alpha);
       }
       else
       {
-        Alpha = (SrcPixel.col.alpha * BlendFunc.SourceConstantAlpha) / 255;
+        Alpha = BlendFunc.SourceConstantAlpha;
+        DstPixel.col.red = DIB_BlendLerp(SrcPixel.col.red, *Dst, Alpha);
+        DstPixel.col.green = DIB_BlendLerp(SrcPixel.col.green, *(Dst+1), Alpha);
+        DstPixel.col.blue = DIB_BlendLerp(SrcPixel.col.blue, *(Dst+2), Alpha);
       }
-
-      DstPixel.col.red = Clamp8((*Dst * (255 - Alpha)) / 255 + SrcPixel.col.red) ;
-      DstPixel.col.green = Clamp8((*(Dst+1) * (255 - Alpha) / 255 + SrcPixel.col.green)) ;
-      DstPixel.col.blue = Clamp8((*(Dst+2) * (255 - Alpha)) / 255 + SrcPixel.col.blue) ;
       *Dst++ = DstPixel.col.red;
       *Dst++ = DstPixel.col.green;
       *Dst++ = DstPixel.col.blue;
