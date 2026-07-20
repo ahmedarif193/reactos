@@ -134,6 +134,10 @@ typedef struct _SHARED_FACE {
   PSHARED_MEM   Memory;
   SHARED_FACE_CACHE EnglishUS;
   SHARED_FACE_CACHE UserLanguage;
+  /* First and last BMP char in the cmap, cached lazily (see FillTM) */
+  BOOL          CmapCached;
+  ULONG         CmapFirst;
+  ULONG         CmapLast;
 } SHARED_FACE, *PSHARED_FACE;
 
 typedef struct _FONTGDI {
