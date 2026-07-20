@@ -427,6 +427,9 @@ SharedFace_Create(FT_Face Face, PSHARED_MEM Memory)
         Ptr->Face = Face;
         Ptr->RefCount = 1;
         Ptr->Memory = Memory;
+        Ptr->CmapCached = FALSE;
+        Ptr->CmapFirst = 0;
+        Ptr->CmapLast = 0;
         SharedFaceCache_Init(&Ptr->EnglishUS);
         SharedFaceCache_Init(&Ptr->UserLanguage);
 
@@ -2751,6 +2754,37 @@ static BOOL face_has_symbol_charmap(FT_Face ft_face)
     return FALSE;
 }
 
+/* Get the first and last character of the face's cmap within the BMP,
+   which is what Windows reports in the TEXTMETRICW char range, rather
+   than the (often inaccurate) OS/2 table fields. Cached per face. */
+static void
+IntGetCmapRange(PSHARED_FACE SharedFace)
+{
+    FT_Face Face = SharedFace->Face;
+    FT_ULong CharCode, NextCode;
+    FT_UInt GlyphIndex;
+
+    ASSERT_FREETYPE_LOCK_HELD();
+
+    if (SharedFace->CmapCached)
+        return;
+
+    CharCode = FT_Get_First_Char(Face, &GlyphIndex);
+    SharedFace->CmapFirst = (ULONG)min(CharCode, 0xFFFF);
+    SharedFace->CmapLast = SharedFace->CmapFirst;
+
+    while (GlyphIndex != 0 && CharCode <= 0xFFFF)
+    {
+        SharedFace->CmapLast = (ULONG)CharCode;
+        NextCode = FT_Get_Next_Char(Face, CharCode, &GlyphIndex);
+        if (NextCode <= CharCode)
+            break;
+        CharCode = NextCode;
+    }
+
+    SharedFace->CmapCached = TRUE;
+}
+
 static void FASTCALL
 FillTM(TEXTMETRICW *TM, PFONTGDI FontGDI,
        TT_OS2 *pOS2, TT_HoriHeader *pHori,
@@ -2861,8 +2895,11 @@ FillTM(TEXTMETRICW *TM, PFONTGDI FontGDI,
     }
     else
     {
-        TM->tmFirstChar = pOS2->usFirstCharIndex; /* Should be the first char in the cmap */
-        TM->tmLastChar = pOS2->usLastCharIndex;   /* Should be min(cmap_last, os2_last) */
+        /* The char range comes from the cmap, while the break char
+           is derived from the OS/2 table's first char field */
+        IntGetCmapRange(FontGDI->SharedFace);
+        TM->tmFirstChar = FontGDI->SharedFace->CmapFirst;
+        TM->tmLastChar = FontGDI->SharedFace->CmapLast;
 
         if(pOS2->usFirstCharIndex <= 1)
             TM->tmBreakChar = pOS2->usFirstCharIndex + 2;
@@ -3476,7 +3513,30 @@ FontFamilyFillInfo(PFONTFAMILYINFO Info, LPCWSTR FaceName,
 
     Ntm->ntmSizeEM = Otm->otmEMSquare;
     Ntm->ntmCellHeight = (FT_Short)pOS2->usWinAscent + (FT_Short)pOS2->usWinDescent;
-    Ntm->ntmAvgWidth = 0;
+    Ntm->ntmAvgWidth = pOS2->xAvgCharWidth;
+
+    /* For scalable fonts the enumerated metrics describe a nominal
+       instance at 32 pixels per em, scaled from the design units
+       (verified by the gdi32 winetest font metrics checks) */
+    if (FT_IS_SCALABLE(Face) && (Ntm->ntmSizeEM != 0) && (Ntm->ntmCellHeight != 0))
+    {
+        Ntm->tmHeight = EngMulDiv(32, Ntm->ntmCellHeight, Ntm->ntmSizeEM);
+        Ntm->tmAscent = EngMulDiv(Ntm->tmHeight, (FT_Short)pOS2->usWinAscent,
+                                  Ntm->ntmCellHeight);
+        Ntm->tmDescent = Ntm->tmHeight - Ntm->tmAscent;
+        Ntm->tmInternalLeading = EngMulDiv(Ntm->tmHeight,
+                                           Ntm->ntmCellHeight - Ntm->ntmSizeEM,
+                                           Ntm->ntmCellHeight);
+        Ntm->tmAveCharWidth = EngMulDiv(Ntm->tmHeight, Ntm->ntmAvgWidth,
+                                        Ntm->ntmCellHeight);
+        Ntm->tmMaxCharWidth = EngMulDiv(Ntm->tmHeight, Face->max_advance_width,
+                                        Ntm->ntmCellHeight);
+
+        /* The enumerated LOGFONT must match the metrics
+           (winetest checks lfHeight == tmHeight) */
+        Lf->lfHeight = Ntm->tmHeight;
+        Lf->lfWidth = Ntm->tmAveCharWidth;
+    }
 
     ExFreePoolWithTag(Otm, GDITAG_TEXT);
 
@@ -4593,6 +4653,23 @@ ftGdiGetGlyphOutline(
         if (potm) ExFreePoolWithTag(potm, GDITAG_TEXT);
         return GDI_ERROR;
     }
+    /* Some glyphs exceed the boundaries set by the text metrics;
+       Windows clips the glyph metrics to the ascent and descent */
+    {
+        FT_Glyph_Metrics *pmetrics = &ft_face->glyph->metrics;
+        FT_Pos top = min(pmetrics->horiBearingY, FontGDI->tmAscent << 6);
+        FT_Pos bottom = max(pmetrics->horiBearingY - pmetrics->height,
+                            -(FontGDI->tmDescent << 6));
+        if (top < bottom)
+        {
+            FT_Pos t = top;
+            top = bottom;
+            bottom = t;
+        }
+        pmetrics->horiBearingY = top;
+        pmetrics->height = top - bottom;
+    }
+
     IntUnLockFreeType();
 
     FLOATOBJ_Set1(&widthRatio);
@@ -4748,9 +4825,16 @@ ftGdiGetGlyphOutline(
 
     if (iFormat == GGO_METRICS)
     {
+        /* Windows returns sizeof(GLYPHMETRICS) plus a step for each
+           black box dimension above the step size (empirical, see the
+           gdi32:GetGlyphOutline apitest) */
+#define GGO_METRICS_SIZE_STEP 8
         DPRINT("GGO_METRICS Exit!\n");
         *pgm = gm;
-        return 1; /* FIXME */
+        return sizeof(GLYPHMETRICS) +
+               ((gm.gmBlackBoxX > GGO_METRICS_SIZE_STEP) ? GGO_METRICS_SIZE_STEP : 0) +
+               ((gm.gmBlackBoxY > GGO_METRICS_SIZE_STEP) ? GGO_METRICS_SIZE_STEP : 0);
+#undef GGO_METRICS_SIZE_STEP
     }
 
     if (ft_face->glyph->format != ft_glyph_format_outline && iFormat != GGO_BITMAP)
@@ -7774,9 +7858,16 @@ GreGetCharWidthW(
         FT_Load_Glyph(face, glyph_index, FT_LOAD_DEFAULT);
 
         if (!fl)
-            SafeBuffF[i - FirstChar] = (FLOAT) ((face->glyph->advance.x + 32) >> 6);
+        {
+            /* The float width is the integer width in 1/16 units
+               (GetCharWidthFloat returns exactly GetCharWidth / 16) */
+            SafeBuffF[i - FirstChar] =
+                (FLOAT)((face->glyph->advance.x + 32) >> 6) / 16.0f;
+        }
         else
+        {
             SafeBuffI[i - FirstChar] = (face->glyph->advance.x + 32) >> 6;
+        }
     }
 
     IntUnLockFreeType();
