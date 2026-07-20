@@ -1462,11 +1462,14 @@ IntDrawRoundRect( PDC dc,
 {
     Rect r;
     int rx, ry; /* Radius in x and y directions */
+    int hw, hh; /* Corner span consumed by the arcs on each side */
     int w = pbrushPen->lWidth;
 
     r = rect( Left, Top, abs(Right-Left), abs(Bottom-Top));
     rx = Wellipse/2;
     ry = Hellipse/2;
+    hw = max(rx, 1);
+    hh = max(ry, 1);
 
     if (Wellipse > r.width)
     {
@@ -1503,18 +1506,18 @@ IntDrawRoundRect( PDC dc,
     }
     if ( Hellipse < r.height)
     {
-        app_fill_rect(dc, rect(r.x, r.y+ry+1, w, r.height-ry-ry), pbrushPen, TRUE);
+        /* The straight edges span between the corner arcs on both sides */
+        app_fill_rect(dc, rect(r.x, r.y+hh, w, r.height-hh-hh), pbrushPen, TRUE);
 
-
-        app_fill_rect(dc, rect(r.x+r.width-w, r.y+ry+1, w, r.height-ry-ry),
+        app_fill_rect(dc, rect(r.x+r.width-w, r.y+hh, w, r.height-hh-hh),
                       pbrushPen, TRUE);
     }
     if ( Wellipse < r.width)
     {
-        app_fill_rect(dc, rect(r.x+rx, r.y+r.height-w, r.width-rx-rx, w),
+        app_fill_rect(dc, rect(r.x+hw, r.y+r.height-w, r.width-hw-hw, w),
                       pbrushPen, TRUE);
 
-        app_fill_rect(dc, rect(r.x+rx, r.y, r.width-rx-rx, w), pbrushPen, TRUE);
+        app_fill_rect(dc, rect(r.x+hw, r.y, r.width-hw-hw, w), pbrushPen, TRUE);
     }
     return TRUE;
 }

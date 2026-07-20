@@ -544,11 +544,9 @@ NtGdiPolyPolyDraw( IN HDC hDC,
             Ret = IntGdiPolylineTo(dc, SafePoints, *SafeCounts);
             break;
         case GdiPolyBezierTo:
-            /* From Wine 10.0 dlls/win32u/painting.c NtGdiPolyPolyDraw
-             * UnsafeCounts[0] must be 3 * n + 1 (where n >= 1) */
-            if (Count == 1 && UnsafeCounts[0] != 1 && UnsafeCounts[0] % 3 == 1)
+            /* The point count must be a multiple of 3 (n curves, n >= 1) */
+            if (Count == 1 && UnsafeCounts[0] != 0 && UnsafeCounts[0] % 3 == 0)
             {
-                SafeCounts[0]--;
                 Ret = IntGdiPolyBezierTo(dc, SafePoints, *SafeCounts);
             }
             else
@@ -815,8 +813,12 @@ IntRoundRect(
 
     if ((Left == Right) || (Top == Bottom)) return TRUE;
 
-    xCurveDiameter = max(abs( xCurveDiameter ), 1);
-    yCurveDiameter = max(abs( yCurveDiameter ), 1);
+    xCurveDiameter = abs( xCurveDiameter );
+    yCurveDiameter = abs( yCurveDiameter );
+
+    /* A zero-sized corner ellipse makes this a plain rectangle */
+    if ((xCurveDiameter == 0) || (yCurveDiameter == 0))
+        return IntRectangle(dc, Left, Top, Right, Bottom);
 
     if (Right < Left)
     {
@@ -870,6 +872,16 @@ IntRoundRect(
     RectBounds.top    += dc->ptlDCOrig.y;
     RectBounds.right  += dc->ptlDCOrig.x;
     RectBounds.bottom += dc->ptlDCOrig.y;
+
+    /* The transform may have flipped the rect */
+    RECTL_vMakeWellOrdered(&RectBounds);
+
+    if (pdcattr->iGraphicsMode == GM_ADVANCED)
+    {
+        /* In advanced mode the frame includes the right/bottom edge */
+        RectBounds.right++;
+        RectBounds.bottom++;
+    }
 
     pbrFill = BRUSH_ShareLockBrush(pdcattr->hbrush);
     if (!pbrFill)
@@ -975,7 +987,7 @@ GreGradientFill(
                 pTriangle->Vertex2 >= nVertex ||
                 pTriangle->Vertex3 >= nVertex)
             {
-                EngSetLastError(ERROR_INVALID_PARAMETER);
+                /* Windows fails this case without setting an error */
                 return FALSE;
             }
         }
@@ -987,7 +999,7 @@ GreGradientFill(
         {
             if (pRect->UpperLeft >= nVertex || pRect->LowerRight >= nVertex)
             {
-                EngSetLastError(ERROR_INVALID_PARAMETER);
+                /* Windows fails this case without setting an error */
                 return FALSE;
             }
         }
@@ -997,7 +1009,7 @@ GreGradientFill(
     pdc = DC_LockDc(hdc);
     if(!pdc)
     {
-        EngSetLastError(ERROR_INVALID_HANDLE);
+        EngSetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
 
