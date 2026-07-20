@@ -284,7 +284,6 @@ PolyBezierTo(
     _In_ DWORD cpt)
 {
     POINT pt1 = { 0, 0 };
-    BOOL ret = FALSE;
 
     HANDLE_EMETAFDC(BOOL, PolyBezierTo, FALSE, hdc, apt, cpt);
 
@@ -312,25 +311,9 @@ PolyBezierTo(
         }
     }
 
-    /* Following based on Wine 10.0 nulldrv_PolyBezierTo function */
-    POINT *pts = HeapAlloc(GetProcessHeap(), 0, (cpt + 1) * sizeof(*apt));
-    if (!pts)
-    {
-        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
-        return FALSE;
-    }
-
-    if (GetCurrentPositionEx(hdc, &pt1))
-    {
-        pts[0] = pt1;
-        memcpy(&pts[1], apt, sizeof(*apt) * cpt);
-        cpt++;
-        ret = NtGdiPolyPolyDraw(hdc, (PPOINT)pts, &cpt, 1, GdiPolyBezierTo);
-    }
-
-    HeapFree(GetProcessHeap(), 0, pts);
-
-    return ret;
+    /* The kernel prepends the current position itself, both when drawing
+       and when recording a path */
+    return NtGdiPolyPolyDraw(hdc, (PPOINT)apt, &cpt, 1, GdiPolyBezierTo);
 }
 
 
@@ -399,32 +382,13 @@ PolylineTo(
     _In_reads_(cpt) const POINT *apt,
     _In_ DWORD cpt)
 {
-    POINT pt1 = { 0, 0 };
-    BOOL ret = FALSE;
-
     HANDLE_EMETAFDC(BOOL, PolylineTo, FALSE, hdc, apt, cpt);
 
     if ( GdiConvertAndCheckDC(hdc) == NULL ) return FALSE;
 
-    /* Following based on Wine 10.0 nulldrv_PolylineTo function */
-    POINT *pts = HeapAlloc(GetProcessHeap(), 0, (cpt + 1) * sizeof(*apt));
-    if (!pts)
-    {
-        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
-        return FALSE;
-    }
-
-    if (GetCurrentPositionEx(hdc, &pt1))
-    {
-        pts[0] = pt1;
-        memcpy(&pts[1], apt, sizeof(*apt) * cpt);
-        cpt++;
-        ret = NtGdiPolyPolyDraw(hdc, (PPOINT)pts, &cpt, 1, GdiPolyLineTo);
-    }
-
-    HeapFree(GetProcessHeap(), 0, pts);
-
-    return ret;
+    /* The kernel prepends the current position itself, both when drawing
+       and when recording a path */
+    return NtGdiPolyPolyDraw(hdc, (PPOINT)apt, &cpt, 1, GdiPolyLineTo);
 }
 
 
