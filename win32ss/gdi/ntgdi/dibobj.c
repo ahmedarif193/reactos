@@ -233,6 +233,15 @@ CreateDIBPalette(
     return ppal;
 }
 
+static
+HBITMAP
+IntGdiCreateMaskFromRLE(
+    DWORD Width,
+    DWORD Height,
+    ULONG Compression,
+    const BYTE* Bits,
+    DWORD BitsSize);
+
 // Converts a DIB to a device-dependent bitmap
 static INT
 FASTCALL
@@ -247,15 +256,22 @@ IntSetDIBits(
     UINT  ColorUse)
 {
     HBITMAP     SourceBitmap;
+    HBITMAP     hMaskBitmap = NULL;
     PSURFACE    psurfDst, psurfSrc;
+    SURFOBJ    *pMaskSurf = NULL;
     INT         result = 0;
     RECT		rcDst;
     POINTL		ptSrc;
     EXLATEOBJ	exlo;
     PPALETTE    ppalDIB = 0;
     ULONG cjSizeImage;
+    BOOL bRle;
+    LONG lSrcHeight;
 
     if (!bmi || !Bits) return 0;
+
+    bRle = (bmi->bmiHeader.biCompression == BI_RLE8) ||
+           (bmi->bmiHeader.biCompression == BI_RLE4);
 
     /* Check for uncompressed formats */
     if ((bmi->bmiHeader.biCompression == BI_RGB) ||
@@ -287,8 +303,25 @@ IntSetDIBits(
         return 0;
     }
 
+    if (bRle)
+    {
+        /* Top-down compressed DIBs are invalid */
+        if (bmi->bmiHeader.biHeight < 0)
+        {
+            EngSetLastError(ERROR_INVALID_PARAMETER);
+            return 0;
+        }
+        /* The RLE bits describe the whole DIB: the band parameters are
+           ignored and the result is the DIB height */
+        lSrcHeight = bmi->bmiHeader.biHeight;
+    }
+    else
+    {
+        lSrcHeight = ScanLines;
+    }
+
     SourceBitmap = GreCreateBitmapEx(bmi->bmiHeader.biWidth,
-                                     ScanLines,
+                                     lSrcHeight,
                                      0,
                                      BitmapFormat(bmi->bmiHeader.biBitCount,
                                                   bmi->bmiHeader.biCompression),
@@ -301,6 +334,25 @@ IntSetDIBits(
         DPRINT1("Error: Could not create a bitmap.\n");
         EngSetLastError(ERROR_NO_SYSTEM_RESOURCES);
         return 0;
+    }
+
+    if (bRle)
+    {
+        /* Only the pixels covered by the RLE data may be modified */
+        hMaskBitmap = IntGdiCreateMaskFromRLE(bmi->bmiHeader.biWidth,
+                                              lSrcHeight,
+                                              bmi->bmiHeader.biCompression,
+                                              Bits,
+                                              cjMaxBits);
+        if (hMaskBitmap) pMaskSurf = EngLockSurface((HSURF)hMaskBitmap);
+        if (!pMaskSurf)
+        {
+            DPRINT1("Error: Could not create the RLE mask.\n");
+            GreDeleteObject(SourceBitmap);
+            if (hMaskBitmap) GreDeleteObject(hMaskBitmap);
+            EngSetLastError(ERROR_NO_SYSTEM_RESOURCES);
+            return 0;
+        }
     }
 
     psurfDst = SURFACE_ShareLockSurface(hBitmap);
@@ -328,21 +380,48 @@ IntSetDIBits(
                           RGB(0xff, 0xff, 0xff), //DC->pdcattr->crBackgroundClr,
                           0); // DC->pdcattr->crForegroundClr);
 
-    rcDst.top = StartScan;
-    rcDst.left = 0;
-    rcDst.bottom = rcDst.top + ScanLines;
-    rcDst.right = psurfDst->SurfObj.sizlBitmap.cx;
     ptSrc.x = 0;
     ptSrc.y = 0;
 
-    result = IntEngCopyBits(&psurfDst->SurfObj,
-                            &psurfSrc->SurfObj,
-                            NULL,
-                            &exlo.xlo,
-                            &rcDst,
-                            &ptSrc);
-    if(result)
-        result = ScanLines;
+    if (bRle)
+    {
+        /* The decoded image is placed with its top edge aligned to the
+           top of the destination, and only mask-covered pixels are set */
+        rcDst.top = 0;
+        rcDst.left = 0;
+        rcDst.bottom = min(lSrcHeight, psurfDst->SurfObj.sizlBitmap.cy);
+        rcDst.right = min(bmi->bmiHeader.biWidth, psurfDst->SurfObj.sizlBitmap.cx);
+
+        result = IntEngBitBlt(&psurfDst->SurfObj,
+                              &psurfSrc->SurfObj,
+                              pMaskSurf,
+                              NULL,
+                              &exlo.xlo,
+                              &rcDst,
+                              &ptSrc,
+                              &ptSrc,
+                              NULL,
+                              NULL,
+                              ROP4_MASK);
+        if(result)
+            result = lSrcHeight;
+    }
+    else
+    {
+        rcDst.top = StartScan;
+        rcDst.left = 0;
+        rcDst.bottom = rcDst.top + ScanLines;
+        rcDst.right = psurfDst->SurfObj.sizlBitmap.cx;
+
+        result = IntEngCopyBits(&psurfDst->SurfObj,
+                                &psurfSrc->SurfObj,
+                                NULL,
+                                &exlo.xlo,
+                                &rcDst,
+                                &ptSrc);
+        if(result)
+            result = ScanLines;
+    }
 
     EXLATEOBJ_vCleanup(&exlo);
 
@@ -350,6 +429,8 @@ cleanup:
     if (ppalDIB) PALETTE_ShareUnlockPalette(ppalDIB);
     if(psurfSrc) SURFACE_ShareUnlockSurface(psurfSrc);
     if(psurfDst) SURFACE_ShareUnlockSurface(psurfDst);
+    if (pMaskSurf) EngUnlockSurface(pMaskSurf);
+    if (hMaskBitmap) GreDeleteObject(hMaskBitmap);
     GreDeleteObject(SourceBitmap);
 
     return result;
@@ -401,7 +482,8 @@ IntGdiCreateMaskFromRLE(
             if (NumPixels == 0)
                 continue;
 
-            DIB_1BPP_HLine(SurfObj, x, x + NumPixels, y, 1);
+            /* RLE row 0 is the visual bottom row */
+            DIB_1BPP_HLine(SurfObj, x, x + NumPixels, Height - 1 - y, 1);
             x += NumPixels;
             continue;
         }
@@ -453,7 +535,8 @@ IntGdiCreateMaskFromRLE(
 
         if (NumPixels != 0)
         {
-            DIB_1BPP_HLine(SurfObj, x, x + NumPixels, y, 1);
+            /* RLE row 0 is the visual bottom row */
+            DIB_1BPP_HLine(SurfObj, x, x + NumPixels, Height - 1 - y, 1);
             x += NumPixels;
         }
         i += ToSkip;
@@ -498,6 +581,9 @@ NtGdiSetDIBitsToDeviceInternal(
     PPALETTE ppalDIB = NULL;
     LPBITMAPINFO pbmiSafe;
     BOOL bResult;
+    BOOL bTopDown;
+    LONGLONG llHeight, llSrcY;
+    LONG lHeight, lBandHeight;
 
     if (!Bits) return 0;
 
@@ -528,17 +614,71 @@ NtGdiSetDIBitsToDeviceInternal(
            bmi->bmiHeader.biBitCount,
            XSrc, YSrc, XDest, YDest);
 
-    if (YDest < 0)
-    {
-        ScanLines = min(ScanLines, abs(bmi->bmiHeader.biHeight) - StartScan);
-    }
-
     if (ScanLines == 0)
     {
         DPRINT1("ScanLines == 0\n");
         ret = 0;
         goto Exit;
     }
+
+    /* Get the source DIB orientation and magnitude-safe height */
+    llHeight = bmi->bmiHeader.biHeight;
+    bTopDown = (llHeight < 0);
+    if (llHeight < 0) llHeight = -llHeight;
+    if (llHeight == 0)
+    {
+        ret = 0;
+        goto Exit;
+    }
+    lHeight = (llHeight > MAXLONG) ? MAXLONG : (LONG)llHeight;
+
+    if ((bmi->bmiHeader.biCompression == BI_RLE8) ||
+        (bmi->bmiHeader.biCompression == BI_RLE4))
+    {
+        /* RLE bits describe the whole DIB, the band parameters do not apply */
+        StartScan = 0;
+        ScanLines = lHeight;
+        llSrcY = (LONGLONG)lHeight - ((LONGLONG)YSrc + Height);
+    }
+    else
+    {
+        /* Map the source rect into the coordinate space of the passed band
+           (rows [StartScan, StartScan + ScanLines) of the DIB), following
+           Wine's NtGdiSetDIBitsToDevice */
+        if (StartScan >= (ULONG)lHeight)
+        {
+            ret = 0;
+            goto Exit;
+        }
+
+        if (!bTopDown && (ScanLines > (ULONG)lHeight - StartScan))
+        {
+            ScanLines = lHeight - StartScan;
+        }
+
+        llSrcY = (LONGLONG)StartScan + ScanLines - ((LONGLONG)YSrc + Height);
+        if (llSrcY > 0)
+        {
+            if (!bTopDown)
+            {
+                /* Get rid of the rows above the source rect */
+                if (llSrcY >= ScanLines)
+                {
+                    ret = 0;
+                    goto Exit;
+                }
+                ScanLines -= (DWORD)llSrcY;
+                llSrcY = 0;
+            }
+            else if (llSrcY >= ScanLines)
+            {
+                ret = ScanLines;
+                goto Exit;
+            }
+        }
+    }
+
+    lBandHeight = bTopDown ? (LONG)min(ScanLines, (DWORD)lHeight) : (LONG)ScanLines;
 
     pDC = DC_LockDc(hDC);
     if (!pDC)
@@ -558,33 +698,58 @@ NtGdiSetDIBitsToDeviceInternal(
     rcDest.top = YDest;
     if (bTransformCoordinates)
     {
-        IntLPtoDP(pDC, (LPPOINT)&rcDest, 2);
+        IntLPtoDP(pDC, (LPPOINT)&rcDest, 1);
     }
     rcDest.left += pDC->ptlDCOrig.x;
     rcDest.top += pDC->ptlDCOrig.y;
     rcDest.right = rcDest.left + Width;
     rcDest.bottom = rcDest.top + Height;
-    rcDest.top += StartScan;
+
+    /* Clip the source rect to the band extents and trim the destination
+       rect by the same amounts */
+    {
+        LONGLONG llSrcT = llSrcY;
+        LONGLONG llSrcB = llSrcY + Height;
+        LONGLONG llSrcL = XSrc;
+        LONGLONG llSrcR = (LONGLONG)XSrc + Width;
+        LONGLONG llClpT = max(llSrcT, 0LL);
+        LONGLONG llClpL = max(llSrcL, 0LL);
+        LONGLONG llClpB = min(llSrcB, (LONGLONG)lBandHeight);
+        LONGLONG llClpR = min(llSrcR, (LONGLONG)bmi->bmiHeader.biWidth);
+
+        if ((llClpT >= llClpB) || (llClpL >= llClpR))
+        {
+            /* Nothing of the source rect is within the band, but the call
+               still succeeds */
+            ret = ScanLines;
+            goto Exit;
+        }
+
+        rcDest.top    += (LONG)(llClpT - llSrcT);
+        rcDest.left   += (LONG)(llClpL - llSrcL);
+        rcDest.bottom -= (LONG)(llSrcB - llClpB);
+        rcDest.right  -= (LONG)(llSrcR - llClpR);
+
+        ptSource.x = (LONG)llClpL;
+        ptSource.y = (LONG)llClpT;
+    }
 
     if (pDC->fs & (DC_ACCUM_APP|DC_ACCUM_WMGR))
     {
        IntUpdateBoundsRect(pDC, &rcDest);
     }
 
-    ptSource.x = XSrc;
-    ptSource.y = YSrc;
-
     SourceSize.cx = bmi->bmiHeader.biWidth;
-    SourceSize.cy = ScanLines;
+    SourceSize.cy = lBandHeight;
 
     //DIBWidth = WIDTH_BYTES_ALIGN32(SourceSize.cx, bmi->bmiHeader.biBitCount);
 
     hSourceBitmap = GreCreateBitmapEx(bmi->bmiHeader.biWidth,
-                                      ScanLines,
+                                      lBandHeight,
                                       0,
                                       BitmapFormat(bmi->bmiHeader.biBitCount,
                                                    bmi->bmiHeader.biCompression),
-                                      bmi->bmiHeader.biHeight < 0 ? BMF_TOPDOWN : 0,
+                                      bTopDown ? BMF_TOPDOWN : 0,
                                       bmi->bmiHeader.biSizeImage,
                                       Bits,
                                       0);
@@ -607,7 +772,7 @@ NtGdiSetDIBitsToDeviceInternal(
     if ((bmi->bmiHeader.biCompression == BI_RLE8) || (bmi->bmiHeader.biCompression == BI_RLE4))
     {
         hMaskBitmap = IntGdiCreateMaskFromRLE(bmi->bmiHeader.biWidth,
-            ScanLines,
+            lBandHeight,
             bmi->bmiHeader.biCompression,
             Bits,
             cjMaxBits);
@@ -660,13 +825,6 @@ NtGdiSetDIBitsToDeviceInternal(
     DPRINT("BitsToDev with rcDest=(%d|%d) (%d|%d), ptSource=(%d|%d) w=%d h=%d\n",
            rcDest.left, rcDest.top, rcDest.right, rcDest.bottom,
            ptSource.x, ptSource.y, SourceSize.cx, SourceSize.cy);
-
-    /* This fixes the large Google text on Google.com from being upside down */
-    if (rcDest.top > rcDest.bottom)
-    {
-        RECTL_vMakeWellOrdered(&rcDest);
-        ptSource.y -= SourceSize.cy;
-    }
 
     bResult = IntEngBitBlt(pDestSurf,
                           pSourceSurf,
@@ -784,7 +942,7 @@ GreGetDIBitsInternal(
        - negative width is always an invalid value
        - non-null Bits and zero bpp is an invalid combination
        - only check the rest of the input params if either bpp is non-zero or Bits are set */
-    if (width < 0 || (bpp == 0 && Bits))
+    if (width < 0 || (bpp == 0 && Bits && ScanLines))
     {
         ScanLines = 0;
         goto done;
@@ -793,6 +951,23 @@ GreGetDIBitsInternal(
     if (Bits || bpp)
     {
         if ((height == 0 || width == 0) || (compr && compr != BI_BITFIELDS && compr != BI_RGB))
+        {
+            ScanLines = 0;
+            goto done;
+        }
+    }
+
+    /* Image data can only be retrieved from a DDB that is compatible
+       with the DC: same depth or monochrome. Pure header queries with
+       biBitCount = 0 still work on any bitmap. */
+    if ((bpp != 0) && (psurf->hSecure == NULL))
+    {
+        ULONG cBppSurf = BitsPerFormat(psurf->SurfObj.iBitmapFormat);
+        PSURFACE psurfDC = pDC->dclevel.pSurface;
+        ULONG cBppDC = psurfDC ? BitsPerFormat(psurfDC->SurfObj.iBitmapFormat)
+                               : pDC->ppdev->gdiinfo.cBitsPixel;
+
+        if ((cBppSurf != 1) && (cBppSurf != cBppDC))
         {
             ScanLines = 0;
             goto done;
@@ -823,13 +998,18 @@ GreGetDIBitsInternal(
         if (Info->bmiHeader.biBitCount <= 8 && Info->bmiHeader.biClrUsed == 0)
             Info->bmiHeader.biClrUsed = 1 << Info->bmiHeader.biBitCount;
 
+        /* The pure info query reports the color count in both fields */
+        Info->bmiHeader.biClrImportant = Info->bmiHeader.biClrUsed;
+
         ScanLines = 1;
         goto done;
 
     case 1:
     case 4:
     case 8:
-        Info->bmiHeader.biClrUsed = 1 << bpp;
+        /* Windows leaves biClrUsed as 0 here, while still returning the
+           full color table and reporting its size in biClrImportant */
+        Info->bmiHeader.biClrImportant = 1 << bpp;
 
         /* If the bitmap is a DIB section and has the same format as what
          * is requested, go ahead! */
@@ -839,7 +1019,6 @@ GreGetDIBitsInternal(
             if(Usage == DIB_RGB_COLORS)
             {
                 ULONG colors = min(psurf->ppal->NumColors, 256);
-                if(colors != 256) Info->bmiHeader.biClrUsed = colors;
                 for(i = 0; i < colors; i++)
                 {
                     rgbQuads[i].rgbRed = psurf->ppal->IndexedColors[i].peRed;
@@ -847,6 +1026,9 @@ GreGetDIBitsInternal(
                     rgbQuads[i].rgbBlue = psurf->ppal->IndexedColors[i].peBlue;
                     rgbQuads[i].rgbReserved = 0;
                 }
+                if (colors < (1UL << bpp))
+                    RtlZeroMemory(&rgbQuads[colors],
+                                  ((1UL << bpp) - colors) * sizeof(RGBQUAD));
             }
             else
             {
@@ -976,6 +1158,13 @@ GreGetDIBitsInternal(
 
     Info->bmiHeader.biSizeImage = DIB_GetDIBImageBytes(width, height, bpp);
     Info->bmiHeader.biPlanes = 1;
+
+    if (Bits && (ScanLines == 0))
+    {
+        /* A buffer with zero lines requested is just a header query */
+        ScanLines = 1;
+        goto done;
+    }
 
     if(Bits && ScanLines)
     {
@@ -1683,8 +1872,8 @@ NtGdiCreateDIBitmapInternal(
 
     if(!NT_SUCCESS(Status))
     {
+        /* Windows fails this case without setting a last error */
         DPRINT1("Got an exception! pjInit = %p\n", pjInit);
-        SetLastNtError(Status);
         goto cleanup;
     }
 
@@ -1723,11 +1912,13 @@ GreCreateDIBitmapInternal(
     USHORT bpp, planes;
     DWORD compression;
     HDC hdcDest;
+    BOOL bTempDC = FALSE;
 
     if (!hDc) /* 1bpp monochrome bitmap */
     {
         // Should use System Bitmap DC hSystemBM, with CreateCompatibleDC for this.
         hdcDest = NtGdiCreateCompatibleDC(0);
+        bTempDC = TRUE;
         if(!hdcDest)
         {
             DPRINT1("NtGdiCreateCompatibleDC failed\n");
@@ -1740,10 +1931,27 @@ GreCreateDIBitmapInternal(
     }
 
     Dc = DC_LockDc(hdcDest);
+    if (!Dc && !bTempDC && (fInit & CBM_CREATDIB) && (iUsage == DIB_RGB_COLORS))
+    {
+        /* Windows tolerates a bogus hdc for CBM_CREATDIB with DIB_RGB_COLORS:
+           the format comes from the bitmap info and no palette is needed, so
+           fall back to a temporary DC */
+        hdcDest = NtGdiCreateCompatibleDC(0);
+        bTempDC = TRUE;
+        if (!hdcDest)
+        {
+            return NULL;
+        }
+        Dc = DC_LockDc(hdcDest);
+    }
+
     if (!Dc)
     {
         DPRINT1("Failed to lock hdcDest %p\n", hdcDest);
-        EngSetLastError(ERROR_INVALID_HANDLE);
+        if (bTempDC)
+        {
+            NtGdiDeleteObjectApp(hdcDest);
+        }
         return NULL;
     }
     /* It's OK to set bpp=0 here, as IntCreateDIBitmap will create a compatible Bitmap
@@ -1773,7 +1981,7 @@ GreCreateDIBitmapInternal(
     Bmp = IntCreateDIBitmap(Dc, cx, cy, planes, bpp, compression, fInit, pjInit, cjMaxBits, pbmi, iUsage);
     DC_UnlockDc(Dc);
 
-    if(!hDc)
+    if (bTempDC)
     {
         NtGdiDeleteObjectApp(hdcDest);
     }
