@@ -158,8 +158,15 @@ typedef struct _DXGKRNL_PRESENT_ENTRY
      * one, and its device.  The DMA tracker takes independent references. */
     struct _DXGKRNL_CONTEXT        *Context;
     struct _DXGKRNL_DEVICE         *Device;
+    struct _DXGKRNL_DEVICE_WORK    *DeviceWork;
+    BOOLEAN                         PresentLimitReservationOwned;
 
 } DXGKRNL_PRESENT_ENTRY, *PDXGKRNL_PRESENT_ENTRY;
+
+NTSTATUS DxgkPresentSetQueuedLimit(_In_ struct _DXGKRNL_DEVICE *Device, _In_ ULONG RequestedLimit);
+NTSTATUS DxgkPresentGetQueuedLimit(_In_ struct _DXGKRNL_DEVICE *Device, _Out_ PUINT QueuedPresentLimit);
+NTSTATUS DxgkPresentGetPendingFlipLimit(_In_ struct _DXGKRNL_DEVICE *Device, _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId, _Out_ PUINT QueuedPendingFlipLimit);
+NTSTATUS DxgkPresentGetQueueLimitState(_In_ struct _DXGKRNL_DEVICE *Device, _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId, _Out_ PBOOLEAN LimitReached);
 
 /* ========================================================================
  * DXGKRNL_PRESENT_QUEUE — Per-VidPn-source present FIFO
@@ -204,6 +211,8 @@ typedef struct _DXGKRNL_PRESENT_QUEUE
      */
     volatile LONG64                 VBlankCount;
     LONG64                          LastPresentVBlank;
+    KSPIN_LOCK                      VBlankWaitLock;
+    LIST_ENTRY                      VBlankWaiterList;
 
     /* Back-pointer to the owning adapter. */
     struct _DXGKRNL_ADAPTER        *Adapter;
@@ -242,6 +251,52 @@ DxgkPresentInit(
 VOID
 DxgkPresentTeardown(
     _In_ struct _DXGKRNL_ADAPTER *Adapter);
+
+BOOLEAN
+DxgkPresentTryBeginStop(
+    _In_ struct _DXGKRNL_ADAPTER *Adapter);
+
+VOID
+DxgkPresentBeginStop(
+    _In_ struct _DXGKRNL_ADAPTER *Adapter);
+
+VOID
+DxgkPresentResume(
+    _In_ struct _DXGKRNL_ADAPTER *Adapter);
+
+VOID
+DxgkPresentBeginReset(
+    _In_ struct _DXGKRNL_ADAPTER *Adapter);
+
+VOID
+DxgkPresentCompleteReset(
+    _In_ struct _DXGKRNL_ADAPTER *Adapter);
+
+VOID
+DxgkPresentNotifyDeviceRemoved(
+    _In_ struct _DXGKRNL_ADAPTER *Adapter);
+
+VOID
+DxgkPresentCancelDevice(
+    _In_ struct _DXGKRNL_ADAPTER *Adapter,
+    _In_ struct _DXGKRNL_DEVICE *Device);
+
+VOID
+DxgkPresentCancelContext(
+    _In_ struct _DXGKRNL_ADAPTER *Adapter,
+    _In_ struct _DXGKRNL_CONTEXT *Context);
+
+VOID
+DxgkPresentCancelAllStopped(
+    _In_ struct _DXGKRNL_ADAPTER *Adapter);
+
+NTSTATUS
+DxgkpWaitForVerticalBlank(
+    _In_ struct _DXGKRNL_ADAPTER *Adapter,
+    _In_opt_ struct _DXGKRNL_DEVICE *Device,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+    _In_ UINT NumObjects,
+    _In_reads_opt_(NumObjects) CONST D3DKMT_PTR_TYPE *ObjectHandleArray);
 
 /*
  * DxgkpQueuePresent

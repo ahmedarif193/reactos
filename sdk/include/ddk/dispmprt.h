@@ -1017,13 +1017,21 @@ typedef DXGK_INTERFACE *PDXGKRNL_INTERFACE;
 typedef struct _KMDDOD_INITIALIZATION_DATA  KMDDOD_INITIALIZATION_DATA;
 typedef struct _KMDDOD_INITIALIZATION_DATA *PKMDDOD_INITIALIZATION_DATA;
 
-/* DxgkInitializeDisplayOnlyDriver — exported by dxgkrnl.sys */
+/* Public Displib API. Native miniports resolve its private dxgkrnl target at
+ * runtime; ReactOS also retains a direct dxgkrnl compatibility export. */
 NTSTATUS
 APIENTRY
 DxgkInitializeDisplayOnlyDriver(
     _In_ PDRIVER_OBJECT  DriverObject,
     _In_ PUNICODE_STRING RegistryPath,
     _In_ PKMDDOD_INITIALIZATION_DATA KmDodInitializationData);
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+NTSTATUS
+APIENTRY
+DxgkUnInitialize(
+    _In_ PDRIVER_OBJECT DriverObject);
+#endif
 
 
 /* =========================================================================
@@ -1609,7 +1617,29 @@ typedef struct _DRIVER_INITIALIZATION_DATA
     PVOID                                                           DxgkDdiSetVideoProtectedRegion;
 #endif
 
+    /* ---- WDDM 2.1 additions --------------------------------------------- */
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_1)
+    PDXGKDDI_CHECKMULTIPLANEOVERLAYSUPPORT3                         DxgkDdiCheckMultiPlaneOverlaySupport3;
+    PDXGKDDI_SETVIDPNSOURCEADDRESSWITHMULTIPLANEOVERLAY3             DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay3;
+    PDXGKDDI_POSTMULTIPLANEOVERLAYPRESENT                            DxgkDdiPostMultiPlaneOverlayPresent;
+    PDXGKDDI_VALIDATEUPDATEALLOCATIONPROPERTY                        DxgkDdiValidateUpdateAllocationProperty;
+    PDXGKDDI_CONTROLMODEBEHAVIOR                                     DxgkDdiControlModeBehavior;
+    PDXGKDDI_UPDATEMONITORLINKINFO                                   DxgkDdiUpdateMonitorLinkInfo;
+#endif
+
 } DRIVER_INITIALIZATION_DATA, *PDRIVER_INITIALIZATION_DATA;
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_1) && (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WDDM2_2)
+#ifdef _WIN64
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCheckMultiPlaneOverlaySupport3) == 0x340);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiUpdateMonitorLinkInfo) == 0x368);
+C_ASSERT(sizeof(DRIVER_INITIALIZATION_DATA) == 0x370);
+#else
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCheckMultiPlaneOverlaySupport3) == 0x1A0);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiUpdateMonitorLinkInfo) == 0x1B4);
+C_ASSERT(sizeof(DRIVER_INITIALIZATION_DATA) == 0x1B8);
+#endif
+#endif
 
 #if defined(_WIN64) && (DXGKDDI_INTERFACE_VERSION == 0x5023)
 C_ASSERT(sizeof(D3DKMDT_VIDEO_OUTPUT_TECHNOLOGY) == 4);
@@ -1715,21 +1745,37 @@ struct _KMDDOD_INITIALIZATION_DATA
     PVOID                                       DxgkDdiSetPowerComponentFState;
     PVOID                                       DxgkDdiPowerRuntimeControlRequest;
     PDXGKDDI_NOTIFY_SURPRISE_REMOVAL            DxgkDdiNotifySurpriseRemoval;
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
     PVOID                                       DxgkDdiPowerRuntimeSetDeviceHandle;
+#endif
 };
+
+#ifdef _WIN64
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+C_ASSERT(sizeof(KMDDOD_INITIALIZATION_DATA) == 0x150);
+#else
+C_ASSERT(sizeof(KMDDOD_INITIALIZATION_DATA) == 0x148);
+#endif
+#else
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+C_ASSERT(sizeof(KMDDOD_INITIALIZATION_DATA) == 0xA8);
+#else
+C_ASSERT(sizeof(KMDDOD_INITIALIZATION_DATA) == 0xA4);
+#endif
+#endif
 
 
 /* =========================================================================
  * DxgkInitialize / DxgkInitializeEx
  *
- * Entry points exported by dxgkrnl.sys.  The miniport calls DxgkInitialize
- * from its DriverEntry to register with the display kernel subsystem.
+ * Entry points provided by Displib.  The miniport calls DxgkInitialize from
+ * its DriverEntry to register with the display kernel subsystem.
  * =========================================================================
  */
 
 /*
  * DxgkInitialize — Vista WDDM 1.0 entry point.
- * Exported by dxgkrnl.sys; the miniport's import library must reference it.
+ * Displib resolves the private dxgkrnl initializer at runtime.
  */
 NTSTATUS
 APIENTRY

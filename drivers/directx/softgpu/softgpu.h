@@ -14,16 +14,14 @@
  *
  * ABI contract (CRITICAL)
  * =======================
- * softgpu speaks the *same* WDDM DDI contract as dxgkrnl: both compile against
- * the SDK <dispmprt.h> at DXGKDDI_INTERFACE_VERSION_WDDM2_0 (0x5023).  This is
- * mandatory, not cosmetic:
+ * softgpu and dxgkrnl compile against the same SDK <dispmprt.h> layout.  The
+ * header may include newer ABI tails, while softgpu deliberately declares
+ * DXGKDDI_INTERFACE_VERSION_WDDM2_0 (0x5023) in InitData.Version.  Keeping the
+ * compile-time layout identical is mandatory, not cosmetic:
  *
- *   - dxgkrnl's DxgkInitialize() forwards sizeof(DRIVER_INITIALIZATION_DATA)
- *     (its own, WDDM2-sized ~ 840 bytes on a 64-bit build) to DxgkInitializeEx,
- *     which RtlCopyMemory's that many bytes out of the table softgpu hands it.
- *     If softgpu's table is only WDDM 1.0 sized, the WDDM2 DDI slots are filled
- *     with stack garbage and dxgkrnl calls bogus function pointers the moment a
- *     WDDM2 path (gpuva.c CreateProcess/GetRootPageTableSize/...) runs.
+ *   - dxgkrnl's DxgkInitialize() derives the readable WDDM 2.0 prefix from
+ *     InitData.Version and copies exactly that prefix.  The compile-time table
+ *     may be larger, but its newer zeroed tail is neither read nor advertised.
  *
  *   - dxgkrnl fills the DXGK_INTERFACE it passes to DxgkDdiStartDevice using the
  *     dispmprt.h layout (DxgkCbNotifyInterrupt at offset 0x80, NotifyDpc 0x88).

@@ -8,6 +8,14 @@
 
 KMT_TESTFUNC Test_CddDisplay;
 KMT_TESTFUNC Test_CmSecurity;
+KMT_TESTFUNC Test_DxgkDeviceWork;
+KMT_TESTFUNC Test_DxgkHotPlugWork;
+KMT_TESTFUNC Test_DxgkContextSync;
+KMT_TESTFUNC Test_DxgkPresentQueue;
+KMT_TESTFUNC Test_DxgkSyncWait;
+KMT_TESTFUNC Test_DxgkTrackedWork;
+KMT_TESTFUNC Test_DxgkVidMmWorkerDrain;
+KMT_TESTFUNC Test_Dxgmms2ContextStream;
 KMT_TESTFUNC Test_Dxgmms2Timeline;
 KMT_TESTFUNC Test_Example;
 KMT_TESTFUNC Test_ExCallback;
@@ -192,6 +200,14 @@ const KMT_TEST TestList[] =
 {
     { "CddDisplay",                         Test_CddDisplay },
     { "CmSecurity",                         Test_CmSecurity },
+    { "DxgkDeviceWork",                    Test_DxgkDeviceWork },
+    { "DxgkHotPlugWork",                   Test_DxgkHotPlugWork },
+    { "DxgkContextSync",                   Test_DxgkContextSync },
+    { "DxgkPresentQueue",                  Test_DxgkPresentQueue },
+    { "DxgkSyncWait",                      Test_DxgkSyncWait },
+    { "DxgkTrackedWork",                   Test_DxgkTrackedWork },
+    { "DxgkVidMmWorkerDrain",              Test_DxgkVidMmWorkerDrain },
+    { "Dxgmms2ContextStream",              Test_Dxgmms2ContextStream },
     { "Dxgmms2Timeline",                   Test_Dxgmms2Timeline },
     { "ExCallback",                         Test_ExCallback },
     { "ExDoubleList",                       Test_ExDoubleList },

@@ -18,7 +18,8 @@ static VOID Dxgmms2TimelineUpdateFence(_Inout_ volatile ULONG *Fence, _In_ ULONG
     for (;;)
     {
         Current = InterlockedCompareExchange((volatile LONG *)Fence, 0, 0);
-        if (Dxgmms2TimelineFenceReached((ULONG)Current, Value) || InterlockedCompareExchange((volatile LONG *)Fence, (LONG)Value, Current) == Current)
+        /* Fence zero is the uninitialized sentinel; the retained allocator may restart immediately before wrap. */
+        if (((ULONG)Current != 0 && Dxgmms2TimelineFenceReached((ULONG)Current, Value)) || InterlockedCompareExchange((volatile LONG *)Fence, (LONG)Value, Current) == Current)
             return;
     }
 }
@@ -43,7 +44,9 @@ static BOOLEAN Dxgmms2TimelineAcquireFastCall(_Inout_ PDXGMMS2_TIMELINE_CONTEXT 
 
 static VOID Dxgmms2TimelineReleaseFastCall(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline)
 {
-    ASSERT(InterlockedDecrement(&Timeline->ActiveFastCalls) >= 0);
+    LONG ActiveFastCalls = InterlockedDecrement(&Timeline->ActiveFastCalls);
+
+    ASSERT(ActiveFastCalls >= 0);
 }
 
 static VOID Dxgmms2TimelineAcquireMaintenance(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline)
@@ -339,6 +342,7 @@ BOOLEAN Dxgmms2TimelineReserveFence(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline, 
         {
             ULONG TargetSlot = FirstTombstone != DXGMMS2_TIMELINE_IDENTITY_CAPACITY ? FirstTombstone : Slot;
             LONG64 TargetValue = FirstTombstone != DXGMMS2_TIMELINE_IDENTITY_CAPACITY ? DXGMMS2_TIMELINE_TOMBSTONE : 0;
+            LONG LiveIdentityCount;
 
             InterlockedIncrement(&Timeline->LiveIdentityCount);
             if (InterlockedCompareExchange64(&Timeline->Identities[TargetSlot], Identity, TargetValue) == TargetValue)
@@ -346,7 +350,8 @@ BOOLEAN Dxgmms2TimelineReserveFence(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline, 
                 Reserved = TRUE;
                 break;
             }
-            ASSERT(InterlockedDecrement(&Timeline->LiveIdentityCount) >= 0);
+            LiveIdentityCount = InterlockedDecrement(&Timeline->LiveIdentityCount);
+            ASSERT(LiveIdentityCount >= 0);
         }
     }
 
@@ -474,7 +479,9 @@ BOOLEAN Dxgmms2TimelineReleaseFence(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline, 
             continue;
         if (InterlockedCompareExchange64(&Timeline->Identities[Slot], DXGMMS2_TIMELINE_TOMBSTONE, CurrentIdentity) == CurrentIdentity)
         {
-            ASSERT(InterlockedDecrement(&Timeline->LiveIdentityCount) >= 0);
+            LONG LiveIdentityCount = InterlockedDecrement(&Timeline->LiveIdentityCount);
+
+            ASSERT(LiveIdentityCount >= 0);
             Released = TRUE;
             break;
         }
