@@ -874,7 +874,8 @@ DceResetActiveDCEs(PWND Window)
 
             if (NULL != dc->dclevel.prgnClip)
             {
-               REGION_bOffsetRgn(dc->dclevel.prgnClip, DeltaX, DeltaY);
+               /* The application clip region is DC-relative and follows
+                  the window; only the RAO region needs a rebuild */
                dc->fs |= DC_DIRTY_RAO;
             }
             if (NULL != pDCE->hrgnClip)
