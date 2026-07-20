@@ -347,6 +347,7 @@ DC_vInitDc(
     pdc->ptlDoBanding.y = 0;
 	pdc->dclevel.lSaveDepth = 1;
 	pdc->dclevel.hdcSave = NULL;
+	pdc->dclevel.laPath.eMiterLimit = 10.0;
 	pdc->dcattr.iGraphicsMode = GM_COMPATIBLE;
 	pdc->dcattr.iCS_CP = 0;
     pdc->pSurfInfo = NULL;
