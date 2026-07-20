@@ -141,3 +141,32 @@ ULONG DIB_DoRop(ULONG Rop, ULONG Dest, ULONG Source, ULONG Pattern);
 #define DIB_GetSourceIndex(SourceSurf,sx,sy)                \
   DibFunctionsForBitmapFormat[SourceSurf->iBitmapFormat].   \
     DIB_GetPixel(SourceSurf, sx, sy)
+
+/* Shared per-channel alpha blend math (rounding to nearest like Windows,
+   see the gdi32:dib winetest hashes) */
+static __inline UCHAR
+Clamp8(ULONG val)
+{
+  return (val > 255) ? 255 : (UCHAR)val;
+}
+
+/* v scaled by alpha: (v * a + 127) / 255 */
+static __inline UCHAR
+DIB_ScaleAlpha(ULONG v, ULONG a)
+{
+  return (UCHAR)((v * a + 127) / 255);
+}
+
+/* Premultiplied source over destination */
+static __inline UCHAR
+DIB_BlendOver(ULONG s, ULONG d, ULONG a)
+{
+  return Clamp8(s + (d * (255 - a) + 127) / 255);
+}
+
+/* Linear interpolation by constant alpha */
+static __inline UCHAR
+DIB_BlendLerp(ULONG s, ULONG d, ULONG a)
+{
+  return (UCHAR)((s * a + d * (255 - a) + 127) / 255);
+}
