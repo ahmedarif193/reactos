@@ -248,7 +248,7 @@ D3dkmtValidateWddmHandleThunk(
     _In_opt_ HANDLE Handle)
 {
     if (Handle == NULL)
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
 
     return WddmBridgeRequireReady();
 }
