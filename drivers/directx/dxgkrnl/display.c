@@ -261,6 +261,31 @@ DxgkpGetTargetModeDimensions(
     }
 }
 
+static VOID
+DxgkpSnapshotCommittedDisplayState(
+    _In_opt_ PDXGKRNL_ADAPTER Adapter,
+    _Out_opt_ PULONG CommittedWidth,
+    _Out_opt_ PULONG CommittedHeight,
+    _Out_opt_ PBOOLEAN VidPnCommitted)
+{
+    if (CommittedWidth != NULL)
+        *CommittedWidth = 0;
+    if (CommittedHeight != NULL)
+        *CommittedHeight = 0;
+    if (VidPnCommitted != NULL)
+        *VidPnCommitted = FALSE;
+    if (Adapter == NULL)
+        return;
+    (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
+    if (CommittedWidth != NULL)
+        *CommittedWidth = Adapter->CommittedWidth;
+    if (CommittedHeight != NULL)
+        *CommittedHeight = Adapter->CommittedHeight;
+    if (VidPnCommitted != NULL)
+        *VidPnCommitted = Adapter->VidPnCommitted;
+    KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
+}
+
 /* ========================================================================
  * DxgkDisplayCommitVidPn
  *
@@ -274,8 +299,10 @@ DxgkpGetTargetModeDimensions(
  * IRQL: PASSIVE_LEVEL
  * ====================================================================== */
 NTSTATUS
-DxgkDisplayCommitVidPn(
-    _In_ PDXGKRNL_ADAPTER Adapter)
+DxgkpDisplayCommitVidPnCandidate(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ D3DKMDT_HVIDPN hVidPn,
+    _Out_ PDXGKP_DISPLAY_COMMIT_RESULT Result)
 {
     NTSTATUS Status;
     PDXGKP_VIDPN VidPn;
@@ -283,23 +310,39 @@ DxgkDisplayCommitVidPn(
     BOOLEAN ForceDodPresentOnlyPath;
     BOOLEAN SkipDodVidPnNegotiation;
     BOOLEAN KmdTransaction = FALSE;
+    BOOLEAN TopologyEmpty;
+    ULONG NewCommittedWidth;
+    ULONG NewCommittedHeight;
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID ActiveSourceId = 0;
+    D3DDDI_VIDEO_PRESENT_TARGET_ID ActiveTargetId = 0;
 
     PAGED_CODE();
 
-    if (Adapter == NULL || Adapter->VidPn == NULL)
+    if (Adapter == NULL || hVidPn == NULL || Result == NULL)
     {
         DXGKRNL_ERR("DxgkpCommitVidPnToMiniport: NULL adapter or VidPN\n");
         return STATUS_INVALID_PARAMETER;
     }
 
-    VidPn = (PDXGKP_VIDPN)Adapter->VidPn;
+    VidPn = (PDXGKP_VIDPN)hVidPn;
+    RtlZeroMemory(Result, sizeof(*Result));
     SkipDodVidPnNegotiation = FALSE;
     ForceDodPresentOnlyPath = (DXGK_CB(Adapter, DxgkDdiCommitVidPn) == NULL);
+    TopologyEmpty = VidPn->NumPaths == 0;
+    NewCommittedWidth = Adapter->CommittedWidth;
+    NewCommittedHeight = Adapter->CommittedHeight;
 
     if (VidPn->Signature != DXGKP_VIDPN_SIGNATURE)
     {
         DXGKRNL_ERR("DxgkpCommitVidPnToMiniport: bad VidPN signature\n");
         return STATUS_INVALID_PARAMETER;
+    }
+    if (!TopologyEmpty)
+    {
+        ActiveSourceId = VidPn->Paths[0].VidPnSourceId;
+        ActiveTargetId = VidPn->Paths[0].VidPnTargetId;
+        if (ActiveSourceId >= VidPn->NumSources || ActiveSourceId >= DXGKP_MAX_SOURCES || ActiveTargetId >= VidPn->NumTargets || ActiveTargetId >= DXGKP_MAX_TARGETS)
+            return STATUS_GRAPHICS_INVALID_VIDPN_TOPOLOGY;
     }
 
     if (!DxgkBeginKmdTransaction(Adapter))
@@ -336,7 +379,12 @@ DxgkDisplayCommitVidPn(
         IsSupportedArgs.hDesiredVidPn = (D3DKMDT_HVIDPN)VidPn;
         IsSupportedArgs.IsVidPnSupported = FALSE;
 
-        if (DxgkAcquireKmdCall(Adapter))
+        if (!DxgkAcquireKmdCall(Adapter))
+        {
+            Status = STATUS_DELETE_PENDING;
+            goto Cleanup;
+        }
+        else
         {
             DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: calling DxgkDdiIsSupportedVidPn\n");
             _SEH2_TRY
@@ -356,8 +404,13 @@ DxgkDisplayCommitVidPn(
 
             if (!NT_SUCCESS(Status))
             {
-                DXGKRNL_WARN("DxgkpCommitVidPnToMiniport: IsSupportedVidPn failed 0x%08lX "
-                             "(continuing anyway)\n", Status);
+                DXGKRNL_WARN("DxgkpCommitVidPnToMiniport: IsSupportedVidPn failed 0x%08lX\n", Status);
+                goto Cleanup;
+            }
+            if (!IsSupportedArgs.IsVidPnSupported)
+            {
+                Status = STATUS_GRAPHICS_INVALID_VIDPN_TOPOLOGY;
+                goto Cleanup;
             }
         }
     }
@@ -377,7 +430,12 @@ DxgkDisplayCommitVidPn(
         EnumArgs.hConstrainingVidPn = (D3DKMDT_HVIDPN)VidPn;
         EnumArgs.EnumPivotType = D3DKMDT_EPT_NOPIVOT;
 
-        if (DxgkAcquireKmdCall(Adapter))
+        if (!DxgkAcquireKmdCall(Adapter))
+        {
+            Status = STATUS_DELETE_PENDING;
+            goto Cleanup;
+        }
+        else
         {
             DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: calling DxgkDdiEnumVidPnCofuncModality\n");
             _SEH2_TRY
@@ -397,8 +455,8 @@ DxgkDisplayCommitVidPn(
 
             if (!NT_SUCCESS(Status))
             {
-                DXGKRNL_WARN("DxgkpCommitVidPnToMiniport: EnumCofuncModality failed 0x%08lX "
-                             "(continuing anyway)\n", Status);
+                DXGKRNL_WARN("DxgkpCommitVidPnToMiniport: EnumCofuncModality failed 0x%08lX\n", Status);
+                goto Cleanup;
             }
         }
     }
@@ -411,6 +469,7 @@ DxgkDisplayCommitVidPn(
      * add a single target mode matching the POST display resolution.
      * Pin the first available target mode, then find a matching source mode.
      */
+    if (!TopologyEmpty)
     {
         UINT TargetWidth = 0, TargetHeight = 0;
         UINT DesiredWidth = 0, DesiredHeight = 0;
@@ -424,9 +483,9 @@ DxgkDisplayCommitVidPn(
          * sync with the miniport's boot framebuffer when cofunc negotiation
          * is skipped.
          */
-        if (VidPn->TargetModeSets[0] != NULL && VidPn->TargetModeSets[0]->NumModes > 0)
+        if (VidPn->TargetModeSets[ActiveTargetId] != NULL && VidPn->TargetModeSets[ActiveTargetId]->NumModes > 0)
         {
-            PDXGKP_VIDPN_TARGET_MODESET TgtSet = VidPn->TargetModeSets[0];
+            PDXGKP_VIDPN_TARGET_MODESET TgtSet = VidPn->TargetModeSets[ActiveTargetId];
             SIZE_T TargetIndex = 0;
 
             DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: %u target modes, "
@@ -508,10 +567,10 @@ DxgkDisplayCommitVidPn(
          */
         if (Adapter->MiniportContext != NULL &&
             Adapter->MiniportContext->IsDisplayOnlyDriver &&
-            VidPn->SourceModeSets[0] != NULL &&
-            VidPn->SourceModeSets[0]->NumModes > 0)
+            VidPn->SourceModeSets[ActiveSourceId] != NULL &&
+            VidPn->SourceModeSets[ActiveSourceId]->NumModes > 0)
         {
-            PDXGKP_VIDPN_SOURCE_MODESET DodSrc = VidPn->SourceModeSets[0];
+            PDXGKP_VIDPN_SOURCE_MODESET DodSrc = VidPn->SourceModeSets[ActiveSourceId];
             for (i = 0; i < DodSrc->NumModes; i++)
             {
                 UINT cx = (UINT)DodSrc->Modes[i].Format.Graphics.PrimSurfSize.cx;
@@ -530,9 +589,9 @@ DxgkDisplayCommitVidPn(
             DesiredHeight = DodDesktopH;
 
             /* Re-pin the target to the desktop mode if the set advertises it. */
-            if (VidPn->TargetModeSets[0] != NULL)
+            if (VidPn->TargetModeSets[ActiveTargetId] != NULL)
             {
-                PDXGKP_VIDPN_TARGET_MODESET DodTgt = VidPn->TargetModeSets[0];
+                PDXGKP_VIDPN_TARGET_MODESET DodTgt = VidPn->TargetModeSets[ActiveTargetId];
                 BOOLEAN FoundDodTgt = FALSE;
                 SIZE_T PinIdx = 0;
 
@@ -593,9 +652,9 @@ DxgkDisplayCommitVidPn(
         if (DodDesktopW == 0 &&
             Adapter->PostDisplayWidth > 0 &&
             Adapter->PostDisplayHeight > 0 &&
-            VidPn->SourceModeSets[0] != NULL)
+            VidPn->SourceModeSets[ActiveSourceId] != NULL)
         {
-            PDXGKP_VIDPN_SOURCE_MODESET SrcSet = VidPn->SourceModeSets[0];
+            PDXGKP_VIDPN_SOURCE_MODESET SrcSet = VidPn->SourceModeSets[ActiveSourceId];
 
             for (i = 0; i < SrcSet->NumModes; i++)
             {
@@ -632,9 +691,9 @@ DxgkDisplayCommitVidPn(
         }
 
         /* Pin a source mode matching the desired display resolution. */
-        if (VidPn->SourceModeSets[0] != NULL)
+        if (VidPn->SourceModeSets[ActiveSourceId] != NULL)
         {
-            PDXGKP_VIDPN_SOURCE_MODESET SrcSet = VidPn->SourceModeSets[0];
+            PDXGKP_VIDPN_SOURCE_MODESET SrcSet = VidPn->SourceModeSets[ActiveSourceId];
             BOOLEAN FoundSource = FALSE;
             SIZE_T BestSourceIndex = (SIZE_T)-1;
             ULONGLONG BestSourceScore = ~0ULL;
@@ -725,8 +784,13 @@ DxgkDisplayCommitVidPn(
         }
 
         /* Store the committed resolution for MAP_VIDEO_MEMORY and present. */
-        Adapter->CommittedWidth  = SourceWidth;
-        Adapter->CommittedHeight = SourceHeight;
+        NewCommittedWidth = SourceWidth;
+        NewCommittedHeight = SourceHeight;
+    }
+    else
+    {
+        NewCommittedWidth = 0;
+        NewCommittedHeight = 0;
     }
 
     /*
@@ -740,7 +804,7 @@ DxgkDisplayCommitVidPn(
         DXGKARG_COMMITVIDPN CommitArgs;
         RtlZeroMemory(&CommitArgs, sizeof(CommitArgs));
         CommitArgs.hFunctionalVidPn = (D3DKMDT_HVIDPN)VidPn;
-        CommitArgs.AffectedVidPnSourceId = 0;
+        CommitArgs.AffectedVidPnSourceId = ActiveSourceId;
         CommitArgs.MonitorConnectivityChecks = D3DKMDT_MCC_IGNORE;
         CommitArgs.hPrimaryAllocation = NULL;
         CommitArgs.Flags.PathPowerTransition = 0;
@@ -766,6 +830,7 @@ DxgkDisplayCommitVidPn(
                         Status);
             goto Cleanup;
         }
+        Status = STATUS_SUCCESS;
     }
     else
     {
@@ -783,11 +848,11 @@ DxgkDisplayCommitVidPn(
          * viogpudo's StartDevice already initialized the display from the
          * POST framebuffer via DxgkCbAcquirePostDisplayOwnership.
          */
-        if (Adapter->CommittedWidth == 0 &&
+        if (NewCommittedWidth == 0 &&
             Adapter->PostDisplayWidth > 0 && Adapter->PostDisplayHeight > 0)
         {
-            Adapter->CommittedWidth  = Adapter->PostDisplayWidth;
-            Adapter->CommittedHeight = Adapter->PostDisplayHeight;
+            NewCommittedWidth = Adapter->PostDisplayWidth;
+            NewCommittedHeight = Adapter->PostDisplayHeight;
         }
     }
 
@@ -801,36 +866,92 @@ DxgkDisplayCommitVidPn(
         DXGK_CB(Adapter, DxgkDdiSetVidPnSourceVisibility) != NULL)
     {
         DXGKARG_SETVIDPNSOURCEVISIBILITY VisArgs;
+        NTSTATUS VisibilityStatus;
         RtlZeroMemory(&VisArgs, sizeof(VisArgs));
-        VisArgs.VidPnSourceId = 0;
-        VisArgs.Visible = TRUE;
+        VisArgs.VidPnSourceId = ActiveSourceId;
+        VisArgs.Visible = TopologyEmpty ? FALSE : TRUE;
 
         if (DxgkAcquireKmdCall(Adapter))
         {
             DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: calling SetVidPnSourceVisibility\n");
-            Status = DXGK_CB(Adapter, DxgkDdiSetVidPnSourceVisibility)(Adapter->MiniportDeviceContext, &VisArgs);
+            VisibilityStatus = DXGK_CB(Adapter, DxgkDdiSetVidPnSourceVisibility)(Adapter->MiniportDeviceContext, &VisArgs);
             DxgkReleaseKmdCall(Adapter);
             DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: SetVidPnSourceVisibility returned "
-                          "0x%08lX\n", Status);
+                          "0x%08lX\n", VisibilityStatus);
 
-            if (!NT_SUCCESS(Status))
+            if (!NT_SUCCESS(VisibilityStatus))
             {
+                /* CommitVidPn already made the topology functional.  Visibility
+                 * is a separate best-effort state transition and cannot turn a
+                 * completed hardware commit into an uncommitted transaction. */
                 DXGKRNL_WARN("DxgkpCommitVidPnToMiniport: SetVisibility failed 0x%08lX\n",
-                             Status);
+                             VisibilityStatus);
             }
         }
     }
 
-    Adapter->VidPnCommitted = TRUE;
-    /* CommittedWidth/Height were set during mode pinning above. */
+    Result->CommittedWidth = NewCommittedWidth;
+    Result->CommittedHeight = NewCommittedHeight;
+    Result->VidPnCommitted = TRUE;
 
-    DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: mode-set complete (%ux%u)\n",
-                  Adapter->CommittedWidth, Adapter->CommittedHeight);
+    DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: mode-set complete (%ux%u)\n", Result->CommittedWidth, Result->CommittedHeight);
     Status = STATUS_SUCCESS;
 
 Cleanup:
     if (KmdTransaction)
         DxgkEndKmdTransaction(Adapter);
+    return Status;
+}
+
+NTSTATUS
+DxgkpDisplayCommitVidPnWhileSharedPrimaryLocked(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    D3DKMDT_HVIDPN hVidPn;
+    DXGKP_DISPLAY_COMMIT_RESULT Result;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Adapter == NULL)
+        return STATUS_INVALID_PARAMETER;
+    DxgkpBeginSharedSurfaceMutationLocked(Adapter);
+    (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
+    hVidPn = (D3DKMDT_HVIDPN)Adapter->VidPn;
+    if (!DxgkVidPnReference(hVidPn))
+        hVidPn = NULL;
+    KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
+    Status = hVidPn != NULL ? DxgkpDisplayCommitVidPnCandidate(Adapter, hVidPn, &Result) : STATUS_INVALID_PARAMETER;
+    if (NT_SUCCESS(Status))
+    {
+        (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
+        if ((D3DKMDT_HVIDPN)Adapter->VidPn == hVidPn)
+        {
+            Adapter->CommittedWidth = Result.CommittedWidth;
+            Adapter->CommittedHeight = Result.CommittedHeight;
+            Adapter->VidPnCommitted = Result.VidPnCommitted;
+        }
+        else
+            Status = STATUS_RETRY;
+        KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
+    }
+    if (hVidPn != NULL)
+        DxgkVidPnDestroy(hVidPn);
+    DxgkpEndSharedSurfaceMutationLocked(Adapter);
+    return Status;
+}
+
+NTSTATUS
+DxgkDisplayCommitVidPn(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Adapter == NULL)
+        return STATUS_INVALID_PARAMETER;
+    (VOID)KeWaitForSingleObject(&Adapter->SharedPrimaryMutex, Executive, KernelMode, FALSE, NULL);
+    Status = DxgkpDisplayCommitVidPnWhileSharedPrimaryLocked(Adapter);
+    KeReleaseMutex(&Adapter->SharedPrimaryMutex, FALSE);
     return Status;
 }
 
@@ -978,7 +1099,7 @@ DxgkpPresentShadowFbInternal(
      * driver registration table. Full WDDM miniports present through
      * DxgkDdiPresent and must never be interpreted with the KMDOD layout.
      */
-    if (Adapter->MiniportContext->IsDisplayOnlyDriver)
+    if (Adapter->MiniportContext->UseDodLayout)
     {
         /* DOD drivers: DxgkDdiPresentDisplayOnly is in the KMDDOD struct. */
         SIZE_T Offset = FIELD_OFFSET(KMDDOD_INITIALIZATION_DATA,
@@ -999,40 +1120,10 @@ DxgkpPresentShadowFbInternal(
     }
 
     /*
-     * Validate the function pointer.  DOD drivers may have a KMDDOD struct
-     * smaller than our definition, causing the PresentDisplayOnly offset
-     * to read stack garbage.  Compare against a known good callback
-     * (DxgkDdiStartDevice) — PresentDisplayOnly must be in the same
-     * driver image, so they should share the same high address bits.
-     */
-    /*
      * PfnPresent is NULL for a software / WDDM 1.0 miniport (softgpu) that has
      * no DxgkDdiPresentDisplayOnly. Don't bail here — fall through to the
-     * direct shadow->GOP blit after the dirty rect is computed. Only validate
-     * the pointer when the miniport actually exposes one.
+     * direct shadow->GOP blit after the dirty rect is computed.
      */
-    if (PfnPresent != NULL)
-    {
-        PVOID KnownGoodCb = (PVOID)DXGK_CB(Adapter, DxgkDdiStartDevice);
-        if (KnownGoodCb != NULL)
-        {
-            /* Both pointers should be in the same ~256KB image region */
-            ULONG_PTR Delta = ((ULONG_PTR)PfnPresent > (ULONG_PTR)KnownGoodCb)
-                ? (ULONG_PTR)PfnPresent - (ULONG_PTR)KnownGoodCb
-                : (ULONG_PTR)KnownGoodCb - (ULONG_PTR)PfnPresent;
-            if (Delta > 0x100000) /* > 1MB apart = different module = garbage */
-            {
-                static LONG s_Logged = 0;
-                if (InterlockedCompareExchange(&s_Logged, 1, 0) == 0)
-                {
-                    DXGKRNL_WARN("DxgkpPresentShadowFb: PfnPresent=%p is garbage "
-                                 "(StartDevice=%p delta=0x%IX) — using direct blit\n",
-                                 PfnPresent, KnownGoodCb, Delta);
-                }
-                PfnPresent = NULL; /* treat garbage as "no present DDI" */
-            }
-        }
-    }
 
     if (DirtyRectOpt != NULL)
     {
@@ -1148,20 +1239,23 @@ DxgkpRecordDirtyRect(
 {
     RECTL Clipped;
     DXGK_PRESENT_LOCK_STATE LockState;
+    ULONG CommittedWidth;
+    ULONG CommittedHeight;
 
     if (Adapter == NULL || DirtyRect == NULL)
         return;
 
+    DxgkpSnapshotCommittedDisplayState(Adapter, &CommittedWidth, &CommittedHeight, NULL);
     Clipped = *DirtyRect;
 
     if (Clipped.left < 0)
         Clipped.left = 0;
     if (Clipped.top < 0)
         Clipped.top = 0;
-    if (Clipped.right > (LONG)Adapter->CommittedWidth)
-        Clipped.right = (LONG)Adapter->CommittedWidth;
-    if (Clipped.bottom > (LONG)Adapter->CommittedHeight)
-        Clipped.bottom = (LONG)Adapter->CommittedHeight;
+    if (Clipped.right > (LONG)CommittedWidth)
+        Clipped.right = (LONG)CommittedWidth;
+    if (Clipped.bottom > (LONG)CommittedHeight)
+        Clipped.bottom = (LONG)CommittedHeight;
 
     if (Clipped.left >= Clipped.right || Clipped.top >= Clipped.bottom)
         return;
@@ -1979,6 +2073,8 @@ DxgkpDisplayDispatch(
              */
             PVIDEO_MODE_INFORMATION ModeInfo =
                 (PVIDEO_MODE_INFORMATION)Irp->AssociatedIrp.SystemBuffer;
+            ULONG CommittedWidth;
+            ULONG CommittedHeight;
 
             DXGKRNL_TRACE("DxgkpDisplayDispatch: IOCTL_VIDEO_QUERY_%s\n",
                           Stack->Parameters.DeviceIoControl.IoControlCode ==
@@ -1987,16 +2083,17 @@ DxgkpDisplayDispatch(
             if (ModeInfo != NULL &&
                 Stack->Parameters.DeviceIoControl.OutputBufferLength >= sizeof(VIDEO_MODE_INFORMATION))
             {
+                DxgkpSnapshotCommittedDisplayState(g_DisplayAdapter, &CommittedWidth, &CommittedHeight, NULL);
                 RtlZeroMemory(ModeInfo, sizeof(VIDEO_MODE_INFORMATION));
 
                 ModeInfo->Length = sizeof(VIDEO_MODE_INFORMATION);
                 ModeInfo->ModeIndex = 0;
-                ModeInfo->VisScreenWidth = (g_DisplayAdapter && g_DisplayAdapter->CommittedWidth) ?
-                                           g_DisplayAdapter->CommittedWidth :
+                ModeInfo->VisScreenWidth = CommittedWidth != 0 ?
+                                           CommittedWidth :
                                            (g_DisplayAdapter && g_DisplayAdapter->PostDisplayWidth) ?
                                            g_DisplayAdapter->PostDisplayWidth : 1024;
-                ModeInfo->VisScreenHeight = (g_DisplayAdapter && g_DisplayAdapter->CommittedHeight) ?
-                                            g_DisplayAdapter->CommittedHeight :
+                ModeInfo->VisScreenHeight = CommittedHeight != 0 ?
+                                            CommittedHeight :
                                             (g_DisplayAdapter && g_DisplayAdapter->PostDisplayHeight) ?
                                             g_DisplayAdapter->PostDisplayHeight : 768;
                 ModeInfo->ScreenStride = ModeInfo->VisScreenWidth * 4;
@@ -2028,6 +2125,7 @@ DxgkpDisplayDispatch(
 
         case IOCTL_VIDEO_SET_CURRENT_MODE:
         {
+            BOOLEAN VidPnCommitted;
             /*
              * framebuf.dll requests a mode change.
              * This is our trigger to call CommitVidPn on the miniport,
@@ -2036,7 +2134,8 @@ DxgkpDisplayDispatch(
              */
             DXGKRNL_TRACE("DxgkpDisplayDispatch: IOCTL_VIDEO_SET_CURRENT_MODE\n");
 
-            if (g_DisplayAdapter != NULL && !g_DisplayAdapter->VidPnCommitted)
+            DxgkpSnapshotCommittedDisplayState(g_DisplayAdapter, NULL, NULL, &VidPnCommitted);
+            if (g_DisplayAdapter != NULL && !VidPnCommitted)
             {
                 NTSTATUS CommitStatus = DxgkDisplayCommitVidPn(g_DisplayAdapter);
                 if (!NT_SUCCESS(CommitStatus))
@@ -2739,6 +2838,7 @@ DxgkDisplayRegister(
 
     /* Store the device number we actually got. */
     g_DisplayDeviceNumber = DeviceNumber;
+    (VOID)RtlStringCchCopyW(Adapter->DisplayDeviceName, RTL_NUMBER_OF(Adapter->DisplayDeviceName), DeviceBuffer);
 
     /* Store adapter back-pointer in the device extension */
     *(PDXGKRNL_ADAPTER *)g_DisplayDeviceObject->DeviceExtension = Adapter;
@@ -2912,6 +3012,7 @@ Cleanup:
         g_DisplayDeviceObject = NULL;
         g_DisplayAdapter = NULL;
         g_DisplayDeviceNumber = 0;
+        Adapter->DisplayDeviceName[0] = L'\0';
     }
 
     return Status;
@@ -2960,6 +3061,8 @@ DxgkDisplayUnregister(VOID)
         g_DisplayAdapter = NULL;
         g_DisplayDeviceNumber = 0;
     }
+    if (Adapter != NULL)
+        Adapter->DisplayDeviceName[0] = L'\0';
 }
 
 /* ========================================================================

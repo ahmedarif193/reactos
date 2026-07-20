@@ -59,6 +59,11 @@ DxgkRender(
         DxgkDereferenceContext(Context);
         return STATUS_INVALID_HANDLE;
     }
+    if (Adapter->MiniportContext == NULL || Adapter->MiniportContext->UseDodLayout || Adapter->MiniportContext->IsDisplayOnlyDriver)
+    {
+        DxgkDereferenceContext(Context);
+        return STATUS_NOT_SUPPORTED;
+    }
 
     Status = STATUS_SUCCESS;
     if (pRender->hDevice != 0 && pRender->hDevice != Device->Handle)

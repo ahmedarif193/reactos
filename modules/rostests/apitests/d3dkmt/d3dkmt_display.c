@@ -230,6 +230,25 @@ static void Test_PollDisplayChildren(void)
     ok(!NT_SUCCESS(Status),
        "PollDisplayChildren with invalid adapter should fail, got 0x%lx\n",
        Status);
+
+    memset(&PollData, 0, sizeof(PollData));
+    PollData.hAdapter = 0xBAD0CAFE;
+    PollData.PollAllAdapters = 1;
+    Status = pfnD3DKMTPollDisplayChildren(&PollData);
+    ok(!NT_SUCCESS(Status), "PollDisplayChildren PollAllAdapters accepted an invalid anchor adapter, status 0x%lx\n", Status);
+
+    /* Reserved flag bits are rejected before adapter selection. */
+    memset(&PollData, 0, sizeof(PollData));
+    PollData.hAdapter = 0xBAD0CAFE;
+    PollData.Reserved = 1;
+    Status = pfnD3DKMTPollDisplayChildren(&PollData);
+    ok(Status == STATUS_INVALID_PARAMETER, "PollDisplayChildren with reserved flags returned 0x%lx\n", Status);
+
+    memset(&PollData, 0, sizeof(PollData));
+    PollData.hAdapter = 0xBAD0CAFE;
+    PollData.DisableModeReset = 1;
+    Status = pfnD3DKMTPollDisplayChildren(&PollData);
+    ok(Status == STATUS_INVALID_PARAMETER, "PollDisplayChildren accepted DisableModeReset without SynchronousPolling, status 0x%lx\n", Status);
 }
 
 static void Test_InvalidateActiveVidPn(void)

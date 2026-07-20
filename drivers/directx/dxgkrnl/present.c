@@ -47,6 +47,7 @@
 #include "vidmm.h"
 #include "vidsch.h"
 #include "present.h"
+#include "present_queue_core.h"
 
 #define DXGK_PRESENT_EXEC_LOG_LIMIT  32
 #define DXGK_PRESENT_EXEC_SLOW_US    5000ULL
@@ -64,6 +65,14 @@ typedef struct _DXGKRNL_VSYNC_WORK
     WORK_QUEUE_ITEM WorkItem;
     PDXGKRNL_PRESENT_QUEUE Queue;
 } DXGKRNL_VSYNC_WORK, *PDXGKRNL_VSYNC_WORK;
+
+typedef struct _DXGKRNL_VBLANK_WAITER
+{
+    LIST_ENTRY Entry;
+    KEVENT Event;
+    LONG64 TargetVBlank;
+    LONG64 ResetGeneration;
+} DXGKRNL_VBLANK_WAITER, *PDXGKRNL_VBLANK_WAITER;
 
 static VOID NTAPI DxgkpVSyncWorker(_In_ PVOID Context);
 
@@ -101,12 +110,216 @@ DxgkpWaitForPresentQueues(
         KeWaitForSingleObject(&Adapter->PresentQueueCallsDrainedEvent, Executive, KernelMode, FALSE, NULL);
 }
 
+static VOID
+DxgkpSignalQueueVBlankWaiters(
+    _In_ PDXGKRNL_PRESENT_QUEUE Queue,
+    _In_ BOOLEAN Force)
+{
+    LONG64 VBlankCount = InterlockedCompareExchange64(&Queue->VBlankCount, 0, 0);
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&Queue->VBlankWaitLock, &OldIrql);
+    for (Entry = Queue->VBlankWaiterList.Flink; Entry != &Queue->VBlankWaiterList; Entry = Entry->Flink)
+    {
+        PDXGKRNL_VBLANK_WAITER Waiter = CONTAINING_RECORD(Entry, DXGKRNL_VBLANK_WAITER, Entry);
+
+        if (Force || VBlankCount >= Waiter->TargetVBlank)
+            KeSetEvent(&Waiter->Event, IO_NO_INCREMENT, FALSE);
+    }
+    KeReleaseSpinLock(&Queue->VBlankWaitLock, OldIrql);
+}
+
+static VOID
+DxgkpSignalVBlankWaiters(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PDXGKRNL_PRESENT_QUEUE Queues = (PDXGKRNL_PRESENT_QUEUE)Adapter->PresentQueues;
+    ULONG QueueCount = Adapter->PresentQueueCount;
+    ULONG Index;
+
+    if (Queues == NULL)
+        return;
+    for (Index = 0; Index < QueueCount; ++Index)
+        DxgkpSignalQueueVBlankWaiters(&Queues[Index], TRUE);
+}
+
+BOOLEAN
+DxgkPresentTryBeginStop(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    if (Adapter == NULL || InterlockedCompareExchange(&Adapter->PresentQueueStopping, 1, 0) != 0)
+        return FALSE;
+    KeMemoryBarrier();
+    DxgkpSignalVBlankWaiters(Adapter);
+    return TRUE;
+}
+
+VOID
+DxgkPresentBeginStop(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    (VOID)DxgkPresentTryBeginStop(Adapter);
+}
+
+VOID
+DxgkPresentResume(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    if (Adapter == NULL)
+        return;
+    InterlockedExchange(&Adapter->VBlankResetActive, 0);
+    KeMemoryBarrier();
+    InterlockedExchange(&Adapter->PresentQueueStopping, 0);
+}
+
+VOID
+DxgkPresentBeginReset(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    if (Adapter == NULL)
+        return;
+    InterlockedExchange(&Adapter->VBlankResetActive, 1);
+    InterlockedIncrement64(&Adapter->VBlankResetGeneration);
+    KeMemoryBarrier();
+    if (!DxgkpAcquirePresentQueues(Adapter))
+        return;
+    DxgkpSignalVBlankWaiters(Adapter);
+    DxgkpReleasePresentQueues(Adapter);
+}
+
+VOID
+DxgkPresentCompleteReset(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    if (Adapter == NULL)
+        return;
+    KeMemoryBarrier();
+    InterlockedExchange(&Adapter->VBlankResetActive, 0);
+}
+
+VOID
+DxgkPresentNotifyDeviceRemoved(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    if (Adapter == NULL || !DxgkpAcquirePresentQueues(Adapter))
+        return;
+    DxgkpSignalVBlankWaiters(Adapter);
+    DxgkpReleasePresentQueues(Adapter);
+}
+
+NTSTATUS
+DxgkpWaitForVerticalBlank(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ PDXGKRNL_DEVICE Device,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+    _In_ UINT NumObjects,
+    _In_reads_opt_(NumObjects) CONST D3DKMT_PTR_TYPE *ObjectHandleArray)
+{
+    PVOID WaitObjects[D3DKMT_MAX_WAITFORVERTICALBLANK_OBJECTS + 1];
+    PVOID ReferencedObjects[D3DKMT_MAX_WAITFORVERTICALBLANK_OBJECTS];
+    KWAIT_BLOCK WaitBlocks[D3DKMT_MAX_WAITFORVERTICALBLANK_OBJECTS + 1];
+    PDXGKRNL_PRESENT_QUEUE Queue;
+    DXGKRNL_VBLANK_WAITER Waiter;
+    BOOLEAN WaiterLinked = FALSE;
+    KIRQL OldIrql;
+    ULONG Index;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Adapter == NULL || NumObjects > D3DKMT_MAX_WAITFORVERTICALBLANK_OBJECTS || (NumObjects != 0 && ObjectHandleArray == NULL))
+        return STATUS_INVALID_PARAMETER;
+    RtlZeroMemory(ReferencedObjects, sizeof(ReferencedObjects));
+    if (!DxgkpAcquirePresentQueues(Adapter))
+        return STATUS_DEVICE_REMOVED;
+    if (Adapter->PresentQueues == NULL || VidPnSourceId >= Adapter->PresentQueueCount)
+    {
+        Status = Adapter->PresentQueues == NULL ? Adapter->PresentQueueInitializationStatus : STATUS_INVALID_PARAMETER;
+        goto Cleanup;
+    }
+    Queue = &((PDXGKRNL_PRESENT_QUEUE)Adapter->PresentQueues)[VidPnSourceId];
+    for (Index = 0; Index < NumObjects; ++Index)
+    {
+        Status = ObReferenceObjectByHandle((HANDLE)(ULONG_PTR)ObjectHandleArray[Index], SYNCHRONIZE, *ExEventObjectType, UserMode, &ReferencedObjects[Index], NULL);
+        if (!NT_SUCCESS(Status))
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Cleanup;
+        }
+        WaitObjects[Index + 1] = ReferencedObjects[Index];
+    }
+    RtlZeroMemory(&Waiter, sizeof(Waiter));
+    KeInitializeEvent(&Waiter.Event, NotificationEvent, FALSE);
+    WaitObjects[0] = &Waiter.Event;
+    KeAcquireSpinLock(&Queue->VBlankWaitLock, &OldIrql);
+    if (InterlockedCompareExchange(&Adapter->PresentQueueStopping, 0, 0) != 0 || InterlockedCompareExchange(&Adapter->VBlankResetActive, 0, 0) != 0)
+    {
+        KeReleaseSpinLock(&Queue->VBlankWaitLock, OldIrql);
+        Status = STATUS_DEVICE_REMOVED;
+        goto Cleanup;
+    }
+    if (Device != NULL && InterlockedCompareExchange(&Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE)
+    {
+        KeReleaseSpinLock(&Queue->VBlankWaitLock, OldIrql);
+        Status = STATUS_DEVICE_REMOVED;
+        goto Cleanup;
+    }
+    Waiter.ResetGeneration = InterlockedCompareExchange64(&Adapter->VBlankResetGeneration, 0, 0);
+    Waiter.TargetVBlank = InterlockedCompareExchange64(&Queue->VBlankCount, 0, 0) + 1;
+    InsertTailList(&Queue->VBlankWaiterList, &Waiter.Entry);
+    WaiterLinked = TRUE;
+    KeReleaseSpinLock(&Queue->VBlankWaitLock, OldIrql);
+    for (;;)
+    {
+        Status = KeWaitForMultipleObjects(NumObjects + 1, WaitObjects, WaitAny, UserRequest, KernelMode, FALSE, NULL, WaitBlocks);
+        if (InterlockedCompareExchange(&Adapter->PresentQueueStopping, 0, 0) != 0 || InterlockedCompareExchange(&Adapter->VBlankResetActive, 0, 0) != 0 || InterlockedCompareExchange64(&Adapter->VBlankResetGeneration, 0, 0) != Waiter.ResetGeneration || (Device != NULL && InterlockedCompareExchange(&Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE))
+        {
+            Status = STATUS_DEVICE_REMOVED;
+            break;
+        }
+        if (Status >= STATUS_WAIT_1 && Status <= STATUS_WAIT_0 + NumObjects)
+            break;
+        if (Status != STATUS_WAIT_0)
+            break;
+        KeAcquireSpinLock(&Queue->VBlankWaitLock, &OldIrql);
+        if (InterlockedCompareExchange64(&Queue->VBlankCount, 0, 0) >= Waiter.TargetVBlank)
+        {
+            KeReleaseSpinLock(&Queue->VBlankWaitLock, OldIrql);
+            break;
+        }
+        KeClearEvent(&Waiter.Event);
+        KeReleaseSpinLock(&Queue->VBlankWaitLock, OldIrql);
+    }
+
+Cleanup:
+    if (WaiterLinked)
+    {
+        KeAcquireSpinLock(&Queue->VBlankWaitLock, &OldIrql);
+        RemoveEntryList(&Waiter.Entry);
+        KeReleaseSpinLock(&Queue->VBlankWaitLock, OldIrql);
+    }
+    for (Index = 0; Index < NumObjects; ++Index)
+    {
+        if (ReferencedObjects[Index] != NULL)
+            ObDereferenceObject(ReferencedObjects[Index]);
+    }
+    DxgkpReleasePresentQueues(Adapter);
+    return Status;
+}
+
 VOID
 DxgkpReleasePresentEntry(
     _Inout_ PDXGKRNL_PRESENT_ENTRY Entry)
 {
     if (Entry == NULL)
         return;
+    if (Entry->PresentLimitReservationOwned)
+    {
+        ASSERT(Entry->Device != NULL);
+        if (Entry->Device != NULL)
+            DxgkPresentLimitCoreRelease(&Entry->Device->PresentLimit);
+        Entry->PresentLimitReservationOwned = FALSE;
+    }
     if (Entry->DestinationOpenBindingReference != NULL)
         DxgkVidMmDereferenceLogicalAllocation(Entry->DestinationOpenBindingReference);
     if (Entry->SourceOpenBindingReference != NULL)
@@ -117,6 +330,8 @@ DxgkpReleasePresentEntry(
         DxgkVidMmDereferenceAllocation(Entry->SourceAllocation);
     if (Entry->Context != NULL)
         DxgkDereferenceContext(Entry->Context);
+    DxgkDeviceWorkDestroy(Entry->DeviceWork);
+    Entry->DeviceWork = NULL;
     if (Entry->Device != NULL)
         DxgkDereferenceDevice(Entry->Device);
     Entry->DestinationAllocation = NULL;
@@ -132,6 +347,80 @@ DxgkpReleasePresentEntry(
     Entry->SourceIsSharedShadow = FALSE;
     Entry->DestinationIsSharedPrimary = FALSE;
     Entry->DestinationIsSharedShadow = FALSE;
+}
+
+NTSTATUS DxgkPresentSetQueuedLimit(_In_ PDXGKRNL_DEVICE Device, _In_ ULONG RequestedLimit)
+{
+    NTSTATUS Status;
+
+    if (Device == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (InterlockedCompareExchange(&Device->Destroying, 0, 0) != 0 || InterlockedCompareExchange(&Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE)
+        return STATUS_DEVICE_REMOVED;
+    if (!DxgkpAcquirePresentQueues(Device->Adapter))
+        return STATUS_DEVICE_REMOVED;
+    Status = DxgkPresentLimitCoreSet(&Device->PresentLimit, RequestedLimit, DXGKRNL_DEFAULT_QUEUED_PRESENT_LIMIT, DXGKRNL_PRESENT_QUEUE_DEPTH);
+    DxgkpReleasePresentQueues(Device->Adapter);
+    return Status;
+}
+
+NTSTATUS DxgkPresentGetQueuedLimit(_In_ PDXGKRNL_DEVICE Device, _Out_ PUINT QueuedPresentLimit)
+{
+    if (Device == NULL || QueuedPresentLimit == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (InterlockedCompareExchange(&Device->Destroying, 0, 0) != 0 || InterlockedCompareExchange(&Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE)
+        return STATUS_DEVICE_REMOVED;
+    if (!DxgkpAcquirePresentQueues(Device->Adapter))
+        return STATUS_DEVICE_REMOVED;
+    *QueuedPresentLimit = DxgkPresentLimitCoreGetLimit(&Device->PresentLimit);
+    DxgkpReleasePresentQueues(Device->Adapter);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS DxgkPresentGetPendingFlipLimit(_In_ PDXGKRNL_DEVICE Device, _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId, _Out_ PUINT QueuedPendingFlipLimit)
+{
+    PDXGKRNL_ADAPTER Adapter;
+    NTSTATUS Status;
+
+    if (Device == NULL || QueuedPendingFlipLimit == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (InterlockedCompareExchange(&Device->Destroying, 0, 0) != 0 || InterlockedCompareExchange(&Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE)
+        return STATUS_DEVICE_REMOVED;
+    Adapter = Device->Adapter;
+    if (Adapter == NULL || !DxgkpAcquirePresentQueues(Adapter))
+        return STATUS_DEVICE_REMOVED;
+    if (Adapter->State != DxgkAdapterStateStarted || Adapter->PresentQueues == NULL || VidPnSourceId >= Adapter->PresentQueueCount)
+        Status = Adapter->State != DxgkAdapterStateStarted ? STATUS_DEVICE_REMOVED : STATUS_INVALID_PARAMETER;
+    else
+    {
+        *QueuedPendingFlipLimit = DXGKRNL_DEFAULT_PENDING_FLIP_LIMIT;
+        Status = STATUS_SUCCESS;
+    }
+    DxgkpReleasePresentQueues(Adapter);
+    return Status;
+}
+
+NTSTATUS DxgkPresentGetQueueLimitState(_In_ PDXGKRNL_DEVICE Device, _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId, _Out_ PBOOLEAN LimitReached)
+{
+    PDXGKRNL_ADAPTER Adapter;
+    NTSTATUS Status;
+
+    if (Device == NULL || LimitReached == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (InterlockedCompareExchange(&Device->Destroying, 0, 0) != 0 || InterlockedCompareExchange(&Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE)
+        return STATUS_DEVICE_REMOVED;
+    Adapter = Device->Adapter;
+    if (Adapter == NULL || !DxgkpAcquirePresentQueues(Adapter))
+        return STATUS_DEVICE_REMOVED;
+    if (Adapter->State != DxgkAdapterStateStarted || Adapter->PresentQueues == NULL || VidPnSourceId >= Adapter->PresentQueueCount)
+        Status = Adapter->State != DxgkAdapterStateStarted ? STATUS_DEVICE_REMOVED : STATUS_INVALID_PARAMETER;
+    else
+    {
+        *LimitReached = DxgkPresentLimitCoreIsReached(&Device->PresentLimit);
+        Status = STATUS_SUCCESS;
+    }
+    DxgkpReleasePresentQueues(Adapter);
+    return Status;
 }
 
 NTSTATUS
@@ -362,85 +651,6 @@ DxgkpCopyShadowToSharedPrimary(
         RtlCopyMemory(DestinationVa + ((SIZE_T)Row * DestinationPitch), SourceVa + ((SIZE_T)Row * SourcePitch), RowBytes);
 
     return STATUS_SUCCESS;
-}
-
-static NTSTATUS
-DxgkpOpenPresentAllocation(
-    _In_ PDXGKRNL_ADAPTER Adapter,
-    _In_ PDXGKRNL_DEVICE Device,
-    _In_ PDXGKVMM_ALLOCATION Allocation,
-    _In_ BOOLEAN ReadOnly,
-    _Out_ PHANDLE DeviceSpecificHandle)
-{
-    DXGK_OPENALLOCATIONINFO OpenInfo;
-    DXGKARG_OPENALLOCATION OpenArgs;
-    NTSTATUS Status;
-
-    if (Adapter == NULL || Device == NULL || DeviceSpecificHandle == NULL)
-        return STATUS_INVALID_PARAMETER;
-
-    *DeviceSpecificHandle = NULL;
-
-    if (Allocation == NULL)
-        return STATUS_SUCCESS;
-
-    if (DXGK_CB_FULL(Adapter, DxgkDdiOpenAllocation) == NULL)
-        return STATUS_NOT_SUPPORTED;
-
-    RtlZeroMemory(&OpenInfo, sizeof(OpenInfo));
-    RtlZeroMemory(&OpenArgs, sizeof(OpenArgs));
-
-    OpenInfo.hAllocation = Allocation->Handle;
-    OpenInfo.pPrivateDriverData = Allocation->PrivateDriverData;
-    OpenInfo.PrivateDriverDataSize = Allocation->PrivateDriverDataSize;
-
-    OpenArgs.NumAllocations = 1;
-    OpenArgs.pOpenAllocation = &OpenInfo;
-    OpenArgs.pPrivateDriverData = NULL;
-    OpenArgs.PrivateDriverSize = 0;
-    OpenArgs.Flags.ReadOnly = ReadOnly;
-
-    if (!DxgkAcquireKmdCall(Adapter))
-        return STATUS_DELETE_PENDING;
-    Status = DXGK_CB_FULL(Adapter, DxgkDdiOpenAllocation)(Device->hMiniportDevice, &OpenArgs);
-    DxgkReleaseKmdCall(Adapter);
-    if (!NT_SUCCESS(Status))
-        return Status;
-
-    if (OpenInfo.hDeviceSpecificAllocation == NULL)
-        return STATUS_INVALID_HANDLE;
-
-    *DeviceSpecificHandle = OpenInfo.hDeviceSpecificAllocation;
-    return STATUS_SUCCESS;
-}
-
-static VOID
-DxgkpClosePresentAllocation(
-    _In_ PDXGKRNL_ADAPTER Adapter,
-    _In_ PDXGKRNL_DEVICE Device,
-    _In_opt_ HANDLE DeviceSpecificHandle)
-{
-    DXGKARG_CLOSEALLOCATION CloseArgs;
-    HANDLE OpenHandle;
-
-    if (Adapter == NULL ||
-        Device == NULL ||
-        DeviceSpecificHandle == NULL ||
-        DXGK_CB_FULL(Adapter, DxgkDdiCloseAllocation) == NULL)
-    {
-        return;
-    }
-
-    OpenHandle = DeviceSpecificHandle;
-
-    RtlZeroMemory(&CloseArgs, sizeof(CloseArgs));
-    CloseArgs.NumAllocations = 1;
-    CloseArgs.pOpenHandleList = &OpenHandle;
-
-    if (!DxgkAcquireKmdCall(Adapter))
-        return;
-    DXGK_CB_FULL(Adapter, DxgkDdiCloseAllocation)(Device->hMiniportDevice, &CloseArgs);
-    DxgkReleaseKmdCall(Adapter);
 }
 
 /*
@@ -753,6 +963,8 @@ DxgkPresentInit(
         Queues[i].VSyncWorkQueued = 0;
         Queues[i].PendingVBlanks = 0;
         KeInitializeSpinLock(&Queues[i].QueueLock);
+        KeInitializeSpinLock(&Queues[i].VBlankWaitLock);
+        InitializeListHead(&Queues[i].VBlankWaiterList);
     }
 
     Adapter->PresentQueues     = Queues;
@@ -762,6 +974,109 @@ DxgkPresentInit(
                   NumSources, Queues);
 
     return STATUS_SUCCESS;
+}
+
+typedef struct _DXGKP_PRESENT_QUEUE_MATCH_CONTEXT
+{
+    PDXGKRNL_DEVICE Device;
+    PDXGKRNL_CONTEXT Context;
+} DXGKP_PRESENT_QUEUE_MATCH_CONTEXT, *PDXGKP_PRESENT_QUEUE_MATCH_CONTEXT;
+
+static BOOLEAN NTAPI
+DxgkpMatchQueuedPresent(
+    _In_ const VOID *OpaqueEntry,
+    _In_opt_ PVOID OpaqueContext)
+{
+    const DXGKRNL_PRESENT_ENTRY *Entry = OpaqueEntry;
+    const DXGKP_PRESENT_QUEUE_MATCH_CONTEXT *MatchContext = OpaqueContext;
+
+    return !((MatchContext->Device != NULL && Entry->Device != MatchContext->Device) || (MatchContext->Context != NULL && Entry->Context != MatchContext->Context));
+}
+
+static BOOLEAN
+DxgkpRemoveQueuedPresent(
+    _Inout_ PDXGKRNL_PRESENT_QUEUE Queue,
+    _In_opt_ PDXGKRNL_DEVICE Device,
+    _In_opt_ PDXGKRNL_CONTEXT Context,
+    _Out_ PDXGKRNL_PRESENT_ENTRY RemovedEntry)
+{
+    DXGKP_PRESENT_QUEUE_MATCH_CONTEXT MatchContext;
+
+    MatchContext.Device = Device;
+    MatchContext.Context = Context;
+    return DxgkPresentQueueCoreRemove(&Queue->QueueLock, Queue->Entries, sizeof(Queue->Entries[0]), DXGKRNL_PRESENT_QUEUE_DEPTH, &Queue->Head, &Queue->Tail, &Queue->Count, DxgkpMatchQueuedPresent, &MatchContext, RemovedEntry);
+}
+
+static ULONG
+DxgkpCancelQueuedPresents(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ PDXGKRNL_DEVICE Device,
+    _In_opt_ PDXGKRNL_CONTEXT Context)
+{
+    PDXGKRNL_PRESENT_QUEUE Queues = (PDXGKRNL_PRESENT_QUEUE)Adapter->PresentQueues;
+    ULONG Canceled = 0;
+    ULONG Index;
+
+    if (Queues == NULL)
+        return 0;
+    for (Index = 0; Index < Adapter->PresentQueueCount; ++Index)
+    {
+        DXGKRNL_PRESENT_ENTRY Entry;
+
+        while (DxgkpRemoveQueuedPresent(&Queues[Index], Device, Context, &Entry))
+        {
+            Canceled++;
+            DxgkpReleasePresentEntry(&Entry);
+        }
+    }
+    return Canceled;
+}
+
+VOID
+DxgkPresentCancelDevice(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device)
+{
+    ULONG Canceled;
+
+    PAGED_CODE();
+    if (Adapter == NULL || Device == NULL || !DxgkpAcquirePresentQueues(Adapter))
+        return;
+    Canceled = DxgkpCancelQueuedPresents(Adapter, Device, NULL);
+    DxgkpReleasePresentQueues(Adapter);
+    if (Canceled != 0)
+        DXGKRNL_TRACE("DxgkPresentCancelDevice: canceled %lu queued present(s) for device %p\n", Canceled, Device);
+}
+
+VOID
+DxgkPresentCancelContext(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_CONTEXT Context)
+{
+    ULONG Canceled;
+
+    PAGED_CODE();
+    if (Adapter == NULL || Context == NULL || !DxgkpAcquirePresentQueues(Adapter))
+        return;
+    Canceled = DxgkpCancelQueuedPresents(Adapter, NULL, Context);
+    DxgkpReleasePresentQueues(Adapter);
+    if (Canceled != 0)
+        DXGKRNL_TRACE("DxgkPresentCancelContext: canceled %lu queued present(s) for context %p\n", Canceled, Context);
+}
+
+VOID
+DxgkPresentCancelAllStopped(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    ULONG Canceled;
+
+    PAGED_CODE();
+    if (Adapter == NULL || InterlockedCompareExchange(&Adapter->PresentQueueStopping, 0, 0) == 0)
+        return;
+    DxgkpWaitForPresentQueues(Adapter);
+    Canceled = DxgkpCancelQueuedPresents(Adapter, NULL, NULL);
+    if (Canceled != 0)
+        DXGKRNL_TRACE("DxgkPresentCancelAllStopped: canceled %lu queued present(s)\n", Canceled);
 }
 
 /* ========================================================================
@@ -782,43 +1097,13 @@ DxgkPresentTeardown(
     if (Adapter == NULL)
         return;
 
-    InterlockedExchange(&Adapter->PresentQueueStopping, 1);
+    DxgkPresentBeginStop(Adapter);
     DxgkpWaitForPresentQueues(Adapter);
+
+    DxgkPresentCancelAllStopped(Adapter);
 
     if (Adapter->PresentQueues != NULL)
     {
-        ULONG i;
-
-        for (i = 0; i < Adapter->PresentQueueCount; i++)
-        {
-            PDXGKRNL_PRESENT_QUEUE Queue = &((PDXGKRNL_PRESENT_QUEUE)Adapter->PresentQueues)[i];
-            ULONG Discarded = 0;
-
-            for (;;)
-            {
-                DXGKRNL_PRESENT_ENTRY Entry;
-                KIRQL OldIrql;
-
-                KeAcquireSpinLock(&Queue->QueueLock, &OldIrql);
-                if (Queue->Count == 0)
-                {
-                    KeReleaseSpinLock(&Queue->QueueLock, OldIrql);
-                    break;
-                }
-                Entry = Queue->Entries[Queue->Head];
-                RtlZeroMemory(&Queue->Entries[Queue->Head], sizeof(Queue->Entries[Queue->Head]));
-                Queue->Head = (Queue->Head + 1) % DXGKRNL_PRESENT_QUEUE_DEPTH;
-                Queue->Count--;
-                Discarded++;
-                KeReleaseSpinLock(&Queue->QueueLock, OldIrql);
-
-                DxgkpReleasePresentEntry(&Entry);
-            }
-
-            if (Discarded != 0)
-                DXGKRNL_WARN("DxgkPresentTeardown: VidPnSource %lu — discarding %lu queued present(s)\n", Queue->VidPnSourceId, Discarded);
-        }
-
         ExFreePoolWithTag(Adapter->PresentQueues, TAG_DXGK_PRESENT);
         Adapter->PresentQueues     = NULL;
         Adapter->PresentQueueCount = 0;
@@ -868,7 +1153,7 @@ DxgkpExecuteDodPresent(
      * Retrieve the display-only miniport callback. Full WDDM miniports do
      * not contain this slot; their presentation path is DxgkDdiPresent.
      */
-    if (Adapter->MiniportContext->IsDisplayOnlyDriver)
+    if (Adapter->MiniportContext->UseDodLayout)
     {
         SIZE_T Offset = FIELD_OFFSET(KMDDOD_INITIALIZATION_DATA,
                                      DxgkDdiPresentDisplayOnly);
@@ -889,28 +1174,6 @@ DxgkpExecuteDodPresent(
 
     if (PfnPresent == NULL)
         return STATUS_NOT_SUPPORTED;
-
-    /* Validate the function pointer against a known good callback. */
-    {
-        PVOID KnownGoodCb = (PVOID)(Adapter->MiniportContext->UseDodLayout
-            ? Adapter->MiniportContext->InitData.dod.DxgkDdiStartDevice
-            : Adapter->MiniportContext->InitData.s.DxgkDdiStartDevice);
-
-        if (KnownGoodCb != NULL)
-        {
-            ULONG_PTR Delta = ((ULONG_PTR)PfnPresent > (ULONG_PTR)KnownGoodCb)
-                ? (ULONG_PTR)PfnPresent - (ULONG_PTR)KnownGoodCb
-                : (ULONG_PTR)KnownGoodCb - (ULONG_PTR)PfnPresent;
-
-            if (Delta > 0x100000)
-            {
-                DXGKRNL_WARN("DxgkpExecuteDodPresent: PfnPresent=%p garbage "
-                             "(StartDevice=%p delta=0x%IX)\n",
-                             PfnPresent, KnownGoodCb, Delta);
-                return STATUS_NOT_SUPPORTED;
-            }
-        }
-    }
 
     /* Build a full-screen dirty rect. */
     DirtyRect.left   = 0;
@@ -1178,8 +1441,8 @@ DxgkpExecuteFullPresent(
     RECT DstSubRect;
     HANDLE SourceDeviceSpecificHandle = NULL;
     HANDLE DestinationDeviceSpecificHandle = NULL;
-    BOOLEAN CloseSourceHandle = FALSE;
-    BOOLEAN CloseDestinationHandle = FALSE;
+    PDXGKVMM_ALLOCATION PresentBindingReferences[2];
+    UINT PresentBindingReferenceCount = 0;
     PDXGKRNL_DEVICE Device = NULL;
     PDXGKRNL_CONTEXT Context;
     HANDLE MiniportDeviceHandle;
@@ -1191,9 +1454,7 @@ DxgkpExecuteFullPresent(
     PVOID DmaBufferPrivateData = NULL;
     ULONG SubmissionFenceId = 0;
     UINT DmaBytesUsed = 0;
-    HANDLE TrackedOpenHandles[2];
-    UINT TrackedOpenHandleCount = 0;
-    BOOLEAN HandlesTracked = FALSE;
+    BOOLEAN PresentBindingsTracked = FALSE;
     BOOLEAN RefreshSharedPrimaryOnRetire = FALSE;
     ULONG PresentNode;
     ULONG PresentEngine;
@@ -1226,7 +1487,7 @@ DxgkpExecuteFullPresent(
      * Check that the miniport provides DxgkDdiPresent.
      * DOD drivers do not have this callback.
      */
-    if (Adapter->MiniportContext->InitData.s.DxgkDdiPresent == NULL)
+    if (DXGK_CB_FULL(Adapter, DxgkDdiPresent) == NULL)
     {
         DXGKRNL_TRACE("DxgkpExecuteFullPresent: no DxgkDdiPresent DDI\n");
         Status = STATUS_NOT_SUPPORTED;
@@ -1235,6 +1496,7 @@ DxgkpExecuteFullPresent(
 
     RtlZeroMemory(&PresentArgs, sizeof(PresentArgs));
     RtlZeroMemory(PresentAllocationList, sizeof(PresentAllocationList));
+    RtlZeroMemory(PresentBindingReferences, sizeof(PresentBindingReferences));
 
     MiniportDeviceHandle = Device->hMiniportDevice;
     if (MiniportDeviceHandle == NULL)
@@ -1306,14 +1568,16 @@ DxgkpExecuteFullPresent(
             SourceDeviceSpecificHandle = Entry->SourceOpenBindingHandle;
         else
         {
-            Status = DxgkpOpenPresentAllocation(Adapter, Device, Entry->SourceAllocation, TRUE, &SourceDeviceSpecificHandle);
+            BOOLEAN ReadOnly = Entry->hDestination == 0 || Entry->hDestination != Entry->hSource;
+
+            Status = DxgkVidMmCreatePresentBinding(Device, Entry->SourceAllocation, ReadOnly, &SourceDeviceSpecificHandle, &PresentBindingReferences[PresentBindingReferenceCount]);
             if (!NT_SUCCESS(Status))
             {
                 DXGKRNL_WARN("DxgkpExecuteFullPresent: invalid hSource=0x%X\n",
                              Entry->hSource);
                 goto PresentCleanup;
             }
-            CloseSourceHandle = TRUE;
+            PresentBindingReferenceCount++;
         }
 
         PresentAllocationList[DXGK_PRESENT_SOURCE_INDEX].hDeviceSpecificAllocation = SourceDeviceSpecificHandle;
@@ -1333,15 +1597,14 @@ DxgkpExecuteFullPresent(
         }
         else
         {
-            Status = DxgkpOpenPresentAllocation(Adapter, Device, Entry->DestinationAllocation, FALSE, &DestinationDeviceSpecificHandle);
+            Status = DxgkVidMmCreatePresentBinding(Device, Entry->DestinationAllocation, FALSE, &DestinationDeviceSpecificHandle, &PresentBindingReferences[PresentBindingReferenceCount]);
             if (!NT_SUCCESS(Status))
             {
                 DXGKRNL_WARN("DxgkpExecuteFullPresent: invalid hDestination=0x%X\n",
                              Entry->hDestination);
                 goto PresentCleanup;
             }
-
-            CloseDestinationHandle = TRUE;
+            PresentBindingReferenceCount++;
         }
 
         PresentAllocationList[DXGK_PRESENT_DESTINATION_INDEX].hDeviceSpecificAllocation = DestinationDeviceSpecificHandle;
@@ -1425,9 +1688,7 @@ DxgkpExecuteFullPresent(
     }
     _SEH2_TRY
     {
-        Status = Adapter->MiniportContext->InitData.s.DxgkDdiPresent(
-                     MiniportPresentContext,
-                     &PresentArgs);
+        Status = DXGK_CB_FULL(Adapter, DxgkDdiPresent)(MiniportPresentContext, &PresentArgs);
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
@@ -1481,14 +1742,10 @@ DxgkpExecuteFullPresent(
             SubmitFlags.Flip = 1;
         TrackRefresh = Entry->Type == DxgkPresentTypeBlt && Entry->hDestination != 0 && Entry->DestinationIsSharedPrimary;
 
-        if (CloseSourceHandle && SourceDeviceSpecificHandle != NULL)
-            TrackedOpenHandles[TrackedOpenHandleCount++] = SourceDeviceSpecificHandle;
-        if (CloseDestinationHandle && DestinationDeviceSpecificHandle != NULL && DestinationDeviceSpecificHandle != SourceDeviceSpecificHandle)
-            TrackedOpenHandles[TrackedOpenHandleCount++] = DestinationDeviceSpecificHandle;
-
         RtlZeroMemory(&TrackArgs, sizeof(TrackArgs));
         TrackArgs.PresentId = Entry->PresentId;
         TrackArgs.Device = Device;
+        TrackArgs.DeviceWork = Entry->DeviceWork;
         TrackArgs.Context = Context;
         TrackArgs.SourceAllocation = Entry->SourceAllocation;
         TrackArgs.RefreshAllocation = TrackRefresh ? Entry->DestinationAllocation : NULL;
@@ -1508,15 +1765,16 @@ DxgkpExecuteFullPresent(
         TrackArgs.SourcePitch = Entry->SourceIsSharedShadow ? Entry->SharedSurface.ShadowPitch : 0;
         TrackArgs.RefreshWidth = Entry->SharedSurface.PrimaryWidth;
         TrackArgs.RefreshHeight = Entry->SharedSurface.PrimaryHeight;
-        TrackArgs.OpenHandles = TrackedOpenHandles;
-        TrackArgs.OpenHandleCount = TrackedOpenHandleCount;
+        TrackArgs.PresentBindingReferences = PresentBindingReferences;
+        TrackArgs.PresentBindingReferenceCount = PresentBindingReferenceCount;
 
         Status = VidSchSubmitCommandTracked(Adapter, PresentNode, PresentEngine, DmaBuffer, &DmaBufferPrivateData, sizeof(DmaBufferPrivateData), PresentAllocationList, RTL_NUMBER_OF(PresentAllocationList), PatchLocationList, PatchEntries, Adapter->SchedulingCaps.MultiEngineAware ? NULL : MiniportDeviceHandle, Adapter->SchedulingCaps.MultiEngineAware ? MiniportContextHandle : NULL, PresentPriority, &TrackArgs, SubmitFlags.Value, Entry->VidPnSourceId, &VidSchFence);
         if (NT_SUCCESS(Status))
         {
             SubmissionFenceId = VidSchFence;
+            Entry->DeviceWork = NULL;
             DmaBuffer = NULL;
-            HandlesTracked = TRUE;
+            PresentBindingsTracked = TRUE;
             RefreshSharedPrimaryOnRetire = TrackRefresh;
             goto PresentSubmissionDone;
         }
@@ -1615,8 +1873,15 @@ DxgkpExecuteFullPresent(
             Status = STATUS_DEVICE_BUSY;
             goto PresentSubmissionDone;
         }
-        DxgkPublishSubmittedFence(Adapter, PresentNode, SubmissionFenceId);
         Reservation->FenceIdentityOwned = TRUE;
+        Status = DxgkActivateTrackedDmaBuffer(Reservation);
+        if (!NT_SUCCESS(Status))
+        {
+            DxgkReleaseKmdCall(Adapter);
+            goto PresentSubmissionDone;
+        }
+        Entry->DeviceWork = NULL;
+        DxgkPublishSubmittedFence(Adapter, PresentNode, SubmissionFenceId);
         Status = DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommand)(Adapter->MiniportDeviceContext, &SubmitArgs);
         DxgkReleaseKmdCall(Adapter);
         if (!NT_SUCCESS(Status))
@@ -1625,7 +1890,7 @@ DxgkpExecuteFullPresent(
         CommittedReservation = Reservation;
         Reservation = NULL;
         DmaBuffer = NULL;
-        HandlesTracked = TRUE;
+        PresentBindingsTracked = TRUE;
         RefreshSharedPrimaryOnRetire = TrackRefresh;
         DxgkCommitTrackedDmaBuffer(Adapter, CommittedReservation);
 
@@ -1700,17 +1965,20 @@ PresentCleanup:
     if (DmaBuffer != NULL)
         DxgkFreeDmaBuffer(DmaBuffer);
 
-    if (HandlesTracked)
+    while (PresentBindingReferenceCount != 0)
     {
-        CloseDestinationHandle = FALSE;
-        CloseSourceHandle = FALSE;
+        NTSTATUS BindingStatus;
+
+        PresentBindingReferenceCount--;
+        if (PresentBindingsTracked)
+            DxgkVidMmDereferenceLogicalAllocation(PresentBindingReferences[PresentBindingReferenceCount]);
+        else
+        {
+            BindingStatus = DxgkVidMmDestroyPresentBinding(Device, PresentBindingReferences[PresentBindingReferenceCount]);
+            if (!NT_SUCCESS(BindingStatus))
+                DXGKRNL_WARN("DxgkpExecuteFullPresent: transient binding teardown deferred in VidMm 0x%08lX\n", BindingStatus);
+        }
     }
-
-    if (CloseDestinationHandle)
-        DxgkpClosePresentAllocation(Adapter, Device, DestinationDeviceSpecificHandle);
-
-    if (CloseSourceHandle)
-        DxgkpClosePresentAllocation(Adapter, Device, SourceDeviceSpecificHandle);
 
     if (KmdTransaction)
         DxgkEndKmdTransaction(Adapter);
@@ -1735,7 +2003,9 @@ DxgkpQueuePresent(
     _Out_ ULONG64                  *OutPresentId)
 {
     PDXGKRNL_PRESENT_QUEUE Queue;
+    PDXGKRNL_DEVICE_WORK DeviceWork = NULL;
     KIRQL OldIrql;
+    NTSTATUS Status;
 
     PAGED_CODE();
 
@@ -1756,7 +2026,7 @@ DxgkpQueuePresent(
         DxgkpReleasePresentEntry(Entry);
         return STATUS_INVALID_HANDLE;
     }
-    if (InterlockedCompareExchange(&Entry->Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE)
+    if (InterlockedCompareExchange(&Entry->Device->Destroying, 0, 0) != 0 || InterlockedCompareExchange(&Entry->Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE || (Entry->Context != NULL && InterlockedCompareExchange(&Entry->Context->Destroying, 0, 0) != 0))
     {
         DxgkpReleasePresentEntry(Entry);
         return STATUS_DEVICE_REMOVED;
@@ -1794,6 +2064,13 @@ DxgkpQueuePresent(
     }
 
     Queue = &((PDXGKRNL_PRESENT_QUEUE)Adapter->PresentQueues)[Entry->VidPnSourceId];
+    Status = DxgkDeviceWorkCreate(Entry->Device, &DeviceWork);
+    if (!NT_SUCCESS(Status))
+    {
+        DxgkpReleasePresentQueues(Adapter);
+        DxgkpReleasePresentEntry(Entry);
+        return Status;
+    }
 
     /*
      * For display-only adapters, execute the present immediately and
@@ -1804,9 +2081,24 @@ DxgkpQueuePresent(
     if (Adapter->MiniportContext->IsDisplayOnlyDriver &&
         Entry->FlipInterval == D3DDDI_FLIPINTERVAL_IMMEDIATE)
     {
-        NTSTATUS Status;
-
         /* Assign a present ID even for immediate presents. */
+        if (InterlockedCompareExchange(&Entry->Device->Destroying, 0, 0) != 0 || InterlockedCompareExchange(&Entry->Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE || (Entry->Context != NULL && InterlockedCompareExchange(&Entry->Context->Destroying, 0, 0) != 0))
+        {
+            DxgkDeviceWorkDestroy(DeviceWork);
+            DxgkpReleasePresentQueues(Adapter);
+            DxgkpReleasePresentEntry(Entry);
+            return STATUS_DEVICE_REMOVED;
+        }
+        Status = DxgkDeviceWorkActivate(DeviceWork);
+        if (!NT_SUCCESS(Status))
+        {
+            DxgkDeviceWorkDestroy(DeviceWork);
+            DxgkpReleasePresentQueues(Adapter);
+            DxgkpReleasePresentEntry(Entry);
+            return Status;
+        }
+        Entry->DeviceWork = DeviceWork;
+        DeviceWork = NULL;
         Entry->PresentId = InterlockedIncrement64(&Queue->NextPresentId);
         *OutPresentId = Entry->PresentId;
 
@@ -1818,6 +2110,15 @@ DxgkpQueuePresent(
 
     /* --- Enqueue into the circular FIFO --------------------------------- */
 
+    if (!DxgkPresentLimitCoreTryReserve(&Entry->Device->PresentLimit))
+    {
+        DxgkDeviceWorkDestroy(DeviceWork);
+        DxgkpReleasePresentQueues(Adapter);
+        DxgkpReleasePresentEntry(Entry);
+        return STATUS_DEVICE_BUSY;
+    }
+    Entry->PresentLimitReservationOwned = TRUE;
+
     KeAcquireSpinLock(&Queue->QueueLock, &OldIrql);
 
     if (Queue->Count >= DXGKRNL_PRESENT_QUEUE_DEPTH)
@@ -1825,10 +2126,32 @@ DxgkpQueuePresent(
         KeReleaseSpinLock(&Queue->QueueLock, OldIrql);
         DXGKRNL_WARN("DxgkpQueuePresent: queue full (VidPnSrc=%u depth=%u)\n",
                      Entry->VidPnSourceId, DXGKRNL_PRESENT_QUEUE_DEPTH);
+        DxgkDeviceWorkDestroy(DeviceWork);
         DxgkpReleasePresentQueues(Adapter);
         DxgkpReleasePresentEntry(Entry);
         return STATUS_DEVICE_BUSY;
     }
+
+    if (InterlockedCompareExchange(&Entry->Device->Destroying, 0, 0) != 0 || InterlockedCompareExchange(&Entry->Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE || (Entry->Context != NULL && InterlockedCompareExchange(&Entry->Context->Destroying, 0, 0) != 0))
+    {
+        KeReleaseSpinLock(&Queue->QueueLock, OldIrql);
+        DxgkDeviceWorkDestroy(DeviceWork);
+        DxgkpReleasePresentQueues(Adapter);
+        DxgkpReleasePresentEntry(Entry);
+        return STATUS_DEVICE_REMOVED;
+    }
+
+    Status = DxgkDeviceWorkActivate(DeviceWork);
+    if (!NT_SUCCESS(Status))
+    {
+        KeReleaseSpinLock(&Queue->QueueLock, OldIrql);
+        DxgkDeviceWorkDestroy(DeviceWork);
+        DxgkpReleasePresentQueues(Adapter);
+        DxgkpReleasePresentEntry(Entry);
+        return Status;
+    }
+    Entry->DeviceWork = DeviceWork;
+    DeviceWork = NULL;
 
     /* Assign a present ID. */
     Entry->PresentId = InterlockedIncrement64(&Queue->NextPresentId);
@@ -1838,6 +2161,8 @@ DxgkpQueuePresent(
     Queue->Entries[Queue->Tail] = *Entry;
     Entry->Context = NULL;
     Entry->Device = NULL;
+    Entry->DeviceWork = NULL;
+    Entry->PresentLimitReservationOwned = FALSE;
     Entry->SourceAllocation = NULL;
     Entry->DestinationAllocation = NULL;
     Entry->SourceOpenBindingReference = NULL;
@@ -1898,6 +2223,12 @@ DxgkpProcessPresentQueue(
     if (!DxgkpAcquirePresentQueues(Adapter))
         return STATUS_DELETE_PENDING;
 
+    if (InterlockedCompareExchange(&Adapter->SubmitDmaStopping, 0, 0) != 0)
+    {
+        DxgkpReleasePresentQueues(Adapter);
+        return STATUS_DELETE_PENDING;
+    }
+
     if (Adapter->PresentQueues == NULL)
     {
         DxgkpReleasePresentQueues(Adapter);
@@ -1956,7 +2287,7 @@ DxgkpProcessPresentQueue(
 
     /* --- Execute the present ------------------------------------------- */
 
-    if (Entry.Device == NULL || InterlockedCompareExchange(&Entry.Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE)
+    if (Entry.Device == NULL || InterlockedCompareExchange(&Entry.Device->Destroying, 0, 0) != 0 || InterlockedCompareExchange(&Entry.Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE || (Entry.Context != NULL && InterlockedCompareExchange(&Entry.Context->Destroying, 0, 0) != 0))
     {
         Status = STATUS_DEVICE_REMOVED;
     }
@@ -2030,13 +2361,14 @@ DxgkpNotifyVSync(
     }
 
     Queue = &((PDXGKRNL_PRESENT_QUEUE)Adapter->PresentQueues)[VidPnSourceId];
+    InterlockedIncrement64(&Queue->VBlankCount);
+    DxgkpSignalQueueVBlankWaiters(Queue, FALSE);
 
     KeAcquireSpinLock(&Queue->QueueLock, &OldIrql);
     HasEntries = Queue->Count != 0;
     KeReleaseSpinLock(&Queue->QueueLock, OldIrql);
     if (!HasEntries)
     {
-        InterlockedIncrement64(&Queue->VBlankCount);
         DxgkpReleasePresentQueues(Adapter);
         return;
     }
@@ -2080,7 +2412,6 @@ DxgkpVSyncWorker(
         {
             NTSTATUS Status;
 
-            InterlockedIncrement64(&Queue->VBlankCount);
             do
             {
                 Status = DxgkpProcessPresentQueue(Adapter, Queue->VidPnSourceId);

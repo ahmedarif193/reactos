@@ -12,10 +12,10 @@ remove_definitions(-DWINVER=${REACTOS_TARGET_NT})
 add_definitions(-D_WIN32_WINNT=0x0601 -DWINVER=0x0601)
 add_definitions(-DNTDDI_VERSION=0x06010000)    # NTDDI_WIN7
 
-# Compile the shared graphics stack against the WDDM 3.1 header surface so the
-# port driver can report its completed capability tier without layout drift.
+# Compile the shared graphics stack against the audited WDDM 3.2 header surface
+# while runtime capability reporting remains limited to completed paths.
 remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
-add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x10004)
+add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x11007)
 
 list(APPEND SOURCE
     dxgkrnl.c
@@ -27,10 +27,19 @@ list(APPEND SOURCE
     gpuva.c
     capture.c
     handles.c
+    device_work_core.c
+    present_queue_core.c
+    submit_reservation_core.c
+    tracked_work_core.c
+    vidmm_worker_drain_core.c
+    context_sync.c
+    context_sync_core.c
     context.c
+    context_order.c
     dma.c
     present.c
     sync.c
+    sync_wait_core.c
     vidsch.c
     vidpn.c
     d3dkmt.c

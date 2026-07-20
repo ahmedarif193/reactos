@@ -99,6 +99,7 @@ typedef struct _DXGKP_MONITOR_SOURCE_MODESET
     D3DKMDT_MONITOR_SOURCE_MODE     Modes[DXGKP_MAX_MODES];
     UINT                            NextModeId;
     D3DDDI_VIDEO_PRESENT_TARGET_ID  TargetId;
+    struct _DXGKP_VIDPN            *Owner;
 } DXGKP_MONITOR_SOURCE_MODESET, *PDXGKP_MONITOR_SOURCE_MODESET;
 
 /* ========================================================================
@@ -129,7 +130,7 @@ typedef struct _DXGKP_VIDPN_SOURCE_OWNER
     /* Exact D3DKMT_VIDPNSOURCEOWNER_* value; never collapse enum members. */
     D3DKMT_VIDPNSOURCEOWNER_TYPE    OwnerType;
 
-    /* Raw Version1 flags, including reserved bits, for the current owner. */
+    /* Validated Version1 flags for the current owner. */
     UINT                            OwnerFlags;
 } DXGKP_VIDPN_SOURCE_OWNER, *PDXGKP_VIDPN_SOURCE_OWNER;
 
@@ -148,6 +149,10 @@ DxgkpDeviceOwnsVidPnSource(
 VOID
 DxgkVidPnCleanupDeviceOwners(
     _In_ PDXGKRNL_DEVICE Device);
+
+NTSTATUS
+DxgkVidPnReleaseProcessOwners(
+    _In_ PEPROCESS Process);
 
 NTSTATUS NTAPI DxgkpSetVidPnSourceOwnerWithFlagsAndAccessMode(_In_ D3DKMT_SETVIDPNSOURCEOWNER *SetVidPnSourceOwner, _In_ UINT OwnerFlags, _In_ KPROCESSOR_MODE EmbeddedBufferMode);
 

@@ -58,13 +58,15 @@ C_ASSERT(FIELD_OFFSET(RXGK_SUBMITCOMMAND_PACKET, PrivateDriverDataOffset) == 40)
 C_ASSERT(FIELD_OFFSET(RXGK_SUBMITCOMMAND_PACKET, Reserved) == 44);
 C_ASSERT(DXGKRNL_INTERFACE_VERSION_1_SIZE == FIELD_OFFSET(REACTOS_WIN32K_DXGKRNL_INTERFACE, RxgkIntPfnCreateContextVirtual));
 C_ASSERT(DXGKRNL_INTERFACE_VERSION_2_SIZE == FIELD_OFFSET(REACTOS_WIN32K_DXGKRNL_INTERFACE, RxgkIntPfnCreateAllocation2));
-C_ASSERT(DXGKRNL_INTERFACE_VERSION_3_SIZE == sizeof(REACTOS_WIN32K_DXGKRNL_INTERFACE));
+C_ASSERT(DXGKRNL_INTERFACE_VERSION_3_SIZE == FIELD_OFFSET(REACTOS_WIN32K_DXGKRNL_INTERFACE, RxgkIntPfnGetAllocationPriority));
+C_ASSERT(DXGKRNL_INTERFACE_VERSION_4_SIZE == sizeof(REACTOS_WIN32K_DXGKRNL_INTERFACE));
 C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, hAllocation) == 0);
 C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, hAllocation) == 0);
 #if defined(_WIN64)
 C_ASSERT(DXGKRNL_INTERFACE_VERSION_1_SIZE == 536);
 C_ASSERT(DXGKRNL_INTERFACE_VERSION_2_SIZE == 552);
 C_ASSERT(DXGKRNL_INTERFACE_VERSION_3_SIZE == 560);
+C_ASSERT(DXGKRNL_INTERFACE_VERSION_4_SIZE == 568);
 C_ASSERT(sizeof(D3DDDI_ALLOCATIONINFO) == 40);
 C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, pSystemMem) == 8);
 C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, pPrivateDriverData) == 16);
@@ -88,6 +90,7 @@ C_ASSERT(FIELD_OFFSET(D3DKMT_LOCK2, pData) == 16);
 C_ASSERT(DXGKRNL_INTERFACE_VERSION_1_SIZE == 268);
 C_ASSERT(DXGKRNL_INTERFACE_VERSION_2_SIZE == 276);
 C_ASSERT(DXGKRNL_INTERFACE_VERSION_3_SIZE == 280);
+C_ASSERT(DXGKRNL_INTERFACE_VERSION_4_SIZE == 284);
 C_ASSERT(sizeof(D3DDDI_ALLOCATIONINFO) == 24);
 C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, pSystemMem) == 4);
 C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, pPrivateDriverData) == 8);
@@ -475,7 +478,57 @@ APIENTRY
 D3DKMTOpenAdapterFromDeviceName(
     _Inout_ D3DKMT_OPENADAPTERFROMDEVICENAME *pData)
 {
-    return WddmBridgeOpenAdapterIoctl(IOCTL_D3DKMT_OPENADAPTERFROMDEVICENAME, pData, sizeof(*pData), FIELD_OFFSET(D3DKMT_OPENADAPTERFROMDEVICENAME, hAdapter));
+    D3DKMT_OPENADAPTERFROMDEVICENAME Captured;
+    D3DKMT_CLOSEADAPTER CloseAdapter;
+    PCWSTR UserDeviceName;
+    WCHAR DeviceName[260];
+    ULONG_PTR Information = 0;
+    ULONG Index;
+    NTSTATUS CleanupStatus;
+    NTSTATUS Status;
+
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return Status;
+    UserDeviceName = Captured.pDeviceName;
+    if (UserDeviceName == NULL || WddmBridgeIsKernelPointerForUser(UserDeviceName) || (ULONG_PTR)UserDeviceName > MAXULONG_PTR - sizeof(DeviceName))
+        return STATUS_INVALID_PARAMETER;
+    for (Index = 0; Index < RTL_NUMBER_OF(DeviceName); ++Index)
+    {
+        Status = WddmBridgeSafeCopyFrom(&DeviceName[Index], &UserDeviceName[Index], sizeof(DeviceName[Index]));
+        if (!NT_SUCCESS(Status))
+            return Status;
+        if (DeviceName[Index] == L'\0')
+            break;
+    }
+    if (Index == 0 || Index == RTL_NUMBER_OF(DeviceName))
+        return STATUS_INVALID_PARAMETER;
+    Status = WddmBridgeSafeProbeForWrite(pData, sizeof(*pData));
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Captured.pDeviceName = DeviceName;
+    Captured.hAdapter = 0;
+    RtlZeroMemory(&Captured.AdapterLuid, sizeof(Captured.AdapterLuid));
+    Status = WddmBridgeSendIoctlWithInformation(IOCTL_D3DKMT_OPENADAPTERFROMDEVICENAME, &Captured, sizeof(Captured), &Captured, sizeof(Captured), &Information);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Information != sizeof(Captured) || Captured.hAdapter == 0)
+        Status = Information != sizeof(Captured) ? STATUS_INFO_LENGTH_MISMATCH : STATUS_INVALID_HANDLE;
+    if (NT_SUCCESS(Status))
+    {
+        Captured.pDeviceName = UserDeviceName;
+        Status = WddmBridgeSafeCopyTo(pData, &Captured, sizeof(Captured));
+    }
+    if (!NT_SUCCESS(Status) && Captured.hAdapter != 0)
+    {
+        CloseAdapter.hAdapter = Captured.hAdapter;
+        CleanupStatus = WddmBridgeSendIoctl(IOCTL_D3DKMT_CLOSEADAPTER, &CloseAdapter, sizeof(CloseAdapter), NULL, 0);
+        if (!NT_SUCCESS(CleanupStatus))
+            DPRINT1("D3DKMTOpenAdapterFromDeviceName: rollback of adapter 0x%X failed with 0x%08lX\n", Captured.hAdapter, CleanupStatus);
+    }
+    return Status;
 }
 
 NTSTATUS
@@ -592,6 +645,51 @@ typedef struct _WDDM_BRIDGE_ALLOCATION_INFO_VIEW
     D3DGPU_VIRTUAL_ADDRESS GpuVirtualAddress;
 } WDDM_BRIDGE_ALLOCATION_INFO_VIEW, *PWDDM_BRIDGE_ALLOCATION_INFO_VIEW;
 
+/* Decode the raw transport word because this tree deliberately carries newer
+ * WDDM bits even when the compilation target exposes them as Reserved. */
+C_ASSERT(sizeof(D3DKMT_CREATEALLOCATIONFLAGS) == sizeof(UINT));
+#define WDDM_CA_FLAG_CREATE_RESOURCE       0x00000001U
+#define WDDM_CA_FLAG_CREATE_SHARED         0x00000002U
+#define WDDM_CA_FLAG_EXISTING_SYSMEM       0x00000020U
+#define WDDM_CA_FLAG_CROSS_ADAPTER         0x00000800U
+#define WDDM_CA_FLAG_STANDARD_ALLOCATION   0x00010000U
+#define WDDM_CA_FLAG_EXISTING_SECTION      0x00020000U
+#define WDDM_CA_KNOWN_FLAGS_MASK           0x003FFFFFU
+/* Keep documented-but-unimplemented inputs out of this mask so they reach the
+ * STATUS_NOT_SUPPORTED gate instead of being misclassified as malformed. */
+#define WDDM_CA_INVALID_INPUT_FLAGS_MASK   0x00001308U
+#define WDDM_CA_SUPPORTED_BASE_FLAGS_MASK  (WDDM_CA_FLAG_CREATE_RESOURCE | WDDM_CA_FLAG_CREATE_SHARED)
+#define WDDM_CA_STANDARD_REQUIRED_MASK     (WDDM_CA_FLAG_CREATE_SHARED | WDDM_CA_FLAG_CROSS_ADAPTER | WDDM_CA_FLAG_STANDARD_ALLOCATION)
+#define WDDM_CA_STANDARD_SOURCE_MASK       (WDDM_CA_FLAG_EXISTING_SYSMEM | WDDM_CA_FLAG_EXISTING_SECTION)
+
+static NTSTATUS
+WddmBridgeValidateCreateAllocationFlags(
+    _In_ CONST D3DKMT_CREATEALLOCATIONFLAGS *Flags,
+    _Out_ PBOOLEAN StandardAllocation)
+{
+    UINT RawFlags;
+    UINT StandardSources;
+
+    RtlCopyMemory(&RawFlags, Flags, sizeof(RawFlags));
+    *StandardAllocation = (RawFlags & WDDM_CA_FLAG_STANDARD_ALLOCATION) != 0;
+    if ((RawFlags & ~WDDM_CA_KNOWN_FLAGS_MASK) != 0 || (RawFlags & WDDM_CA_INVALID_INPUT_FLAGS_MASK) != 0)
+        return STATUS_INVALID_PARAMETER;
+    if ((RawFlags & WDDM_CA_FLAG_CREATE_SHARED) != 0 && (RawFlags & WDDM_CA_FLAG_CREATE_RESOURCE) == 0)
+        return STATUS_INVALID_PARAMETER;
+    if (*StandardAllocation)
+    {
+        StandardSources = RawFlags & WDDM_CA_STANDARD_SOURCE_MASK;
+        if ((RawFlags & WDDM_CA_STANDARD_REQUIRED_MASK) != WDDM_CA_STANDARD_REQUIRED_MASK || StandardSources == 0 || StandardSources == WDDM_CA_STANDARD_SOURCE_MASK)
+            return STATUS_INVALID_PARAMETER;
+        return STATUS_SUCCESS;
+    }
+    if ((RawFlags & WDDM_CA_STANDARD_SOURCE_MASK) != 0)
+        return STATUS_INVALID_PARAMETER;
+    if ((RawFlags & ~WDDM_CA_SUPPORTED_BASE_FLAGS_MASK) != 0)
+        return STATUS_NOT_SUPPORTED;
+    return STATUS_SUCCESS;
+}
+
 static VOID
 WddmBridgeReadAllocationInfo(
     _In_ PVOID AllocationInfo,
@@ -637,38 +735,36 @@ WddmBridgeSetAllocationPrivateData(
 }
 
 static NTSTATUS
+WddmBridgeValidateAllocationInfo(
+    _In_ CONST D3DDDI_ALLOCATIONINFO *Info)
+{
+    if ((Info->Flags.Value & ~0x3U) != 0 || ((Info->Flags.Value & 0x2U) != 0 && (Info->Flags.Value & 0x1U) == 0))
+        return STATUS_INVALID_PARAMETER;
+    if ((Info->Flags.Value & 0x3U) != 0)
+        return STATUS_NOT_SUPPORTED;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
 WddmBridgeValidateAllocationInfo2(
     _Inout_ D3DDDI_ALLOCATIONINFO2 *Info)
 {
     CONST ULONG_PTR *Tail = (CONST ULONG_PTR *)((CONST UCHAR *)Info + sizeof(*Info) - (6 * sizeof(ULONG_PTR)));
-    UINT AllowedFlags = 0x1u;
     UINT Index;
 
-#if ((DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8) || (D3D_UMD_INTERFACE_VERSION >= D3D_UMD_INTERFACE_VERSION_WIN8))
-    AllowedFlags |= 0x2u;
-#endif
-#if ((DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2) || (D3D_UMD_INTERFACE_VERSION >= D3D_UMD_INTERFACE_VERSION_WDDM2_2))
-    AllowedFlags |= 0x4u;
-    if ((Info->Flags.Value & ~AllowedFlags) != 0)
+    if ((Info->Flags.Value & ~0x7U) != 0)
         return STATUS_INVALID_PARAMETER;
     for (Index = 1; Index < 6; ++Index)
     {
         if (Tail[Index] != 0)
             return STATUS_INVALID_PARAMETER;
     }
-    if ((Info->Flags.Value & 0x4u) == 0 && Tail[0] != 0)
+    if ((Info->Flags.Value & 0x4U) == 0 && Tail[0] != 0)
         return STATUS_INVALID_PARAMETER;
-    if ((Info->Flags.Value & 0x4u) != 0)
+    if ((Info->Flags.Value & 0x2U) != 0 && (Info->Flags.Value & 0x1U) == 0)
+        return STATUS_INVALID_PARAMETER;
+    if ((Info->Flags.Value & 0x7U) != 0)
         return STATUS_NOT_SUPPORTED;
-#else
-    if ((Info->Flags.Value & ~AllowedFlags) != 0)
-        return STATUS_INVALID_PARAMETER;
-    for (Index = 0; Index < 6; ++Index)
-    {
-        if (Tail[Index] != 0)
-            return STATUS_INVALID_PARAMETER;
-    }
-#endif
 
     /* This field is output-only.  Zero is the physical-addressing/common-prefix
      * result, not a fabricated mapping. Virtual-only inputs above stay gated
@@ -705,7 +801,7 @@ WddmBridgeCreateAllocation(
     _Inout_ D3DKMT_CREATEALLOCATION *pData,
     _In_ BOOLEAN UseAllocationInfo2)
 {
-    typedef struct _WDDM_ALLOCATION_PRIVATE_CAPTURE { PVOID UserBuffer; UINT Size; } WDDM_ALLOCATION_PRIVATE_CAPTURE, *PWDDM_ALLOCATION_PRIVATE_CAPTURE;
+    typedef struct _WDDM_ALLOCATION_PRIVATE_CAPTURE { PVOID UserBuffer; PVOID OriginalBuffer; UINT Size; } WDDM_ALLOCATION_PRIVATE_CAPTURE, *PWDDM_ALLOCATION_PRIVATE_CAPTURE;
     D3DKMT_CREATEALLOCATION Captured;
     D3DKMT_DESTROYALLOCATION DestroyAllocation;
     PVOID AllocationInfo = NULL;
@@ -739,12 +835,15 @@ WddmBridgeCreateAllocation(
     if (!NT_SUCCESS(Status))
         return Status;
 
+    Status = WddmBridgeValidateCreateAllocationFlags(&Captured.Flags, &StandardAllocation);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
     UserAllocationInfo = UseAllocationInfo2 ? (PVOID)Captured.pAllocationInfo2 : (PVOID)Captured.pAllocationInfo;
     InputDevice = Captured.hDevice;
     InputResource = Captured.hResource;
     InputAllocationCount = Captured.NumAllocations;
     InputCreatesResource = Captured.Flags.CreateResource != 0;
-    StandardAllocation = ((*(CONST UINT *)&Captured.Flags & 0x00010000U) != 0);
 
     if (Captured.NumAllocations == 0 ||
         Captured.NumAllocations > D3DKMT_BRIDGE_MAX_ALLOCATIONS ||
@@ -815,12 +914,11 @@ WddmBridgeCreateAllocation(
     if (!NT_SUCCESS(Status))
         goto Cleanup;
 
-    /* ExistingSection changes the INFO2 union from pSystemMem to hSection.
-     * Section referencing and lifetime ownership are not implemented yet. */
-    if (UseAllocationInfo2 && ((*(CONST UINT *)&Captured.Flags & 0x00020000U) != 0))
+    for (i = 0; i < InputAllocationCount; ++i)
     {
-        Status = STATUS_NOT_SUPPORTED;
-        goto Cleanup;
+        Status = UseAllocationInfo2 ? WddmBridgeValidateAllocationInfo2(&((D3DDDI_ALLOCATIONINFO2 *)AllocationInfo)[i]) : WddmBridgeValidateAllocationInfo(&((D3DDDI_ALLOCATIONINFO *)AllocationInfo)[i]);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
     }
 
     if (StandardAllocation)
@@ -839,9 +937,16 @@ WddmBridgeCreateAllocation(
         Status = WddmBridgeSafeCopyFrom(PrivateDriverData, Captured.pStandardAllocation, sizeof(D3DKMT_CREATESTANDARDALLOCATION));
         if (!NT_SUCCESS(Status))
             goto Cleanup;
-        Captured.pStandardAllocation = PrivateDriverData;
-        Captured.PrivateDriverDataSize = 0;
-        TotalPrivateSize = sizeof(D3DKMT_CREATESTANDARDALLOCATION);
+        if (((CONST D3DKMT_CREATESTANDARDALLOCATION *)PrivateDriverData)->Flags.Value != 0 ||
+            ((CONST D3DKMT_CREATESTANDARDALLOCATION *)PrivateDriverData)->Type < D3DKMT_STANDARDALLOCATIONTYPE_EXISTINGHEAP ||
+            ((CONST D3DKMT_CREATESTANDARDALLOCATION *)PrivateDriverData)->Type >= D3DKMT_STANDARDALLOCATIONTYPE_MAX ||
+            Captured.NumAllocations != 1 || Captured.hResource != 0)
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Cleanup;
+        }
+        Status = STATUS_NOT_SUPPORTED;
+        goto Cleanup;
     }
     else if (Captured.PrivateDriverDataSize != 0)
     {
@@ -904,12 +1009,6 @@ WddmBridgeCreateAllocation(
     {
         WDDM_BRIDGE_ALLOCATION_INFO_VIEW View;
 
-        if (UseAllocationInfo2)
-        {
-            Status = WddmBridgeValidateAllocationInfo2(&((D3DDDI_ALLOCATIONINFO2 *)AllocationInfo)[i]);
-            if (!NT_SUCCESS(Status))
-                goto Cleanup;
-        }
         WddmBridgeReadAllocationInfo(AllocationInfo, UseAllocationInfo2, i, &View);
         AllocationPrivateCapture[i].UserBuffer = View.pPrivateDriverData;
         AllocationPrivateCapture[i].Size = View.PrivateDriverDataSize;
@@ -945,6 +1044,13 @@ WddmBridgeCreateAllocation(
         Status = WddmBridgeSafeCopyFrom(AllocationPrivateBuffers[i], View.pPrivateDriverData, View.PrivateDriverDataSize);
         if (!NT_SUCCESS(Status))
             goto Cleanup;
+        AllocationPrivateCapture[i].OriginalBuffer = ExAllocatePoolWithTag(NonPagedPool, View.PrivateDriverDataSize, TAG_WDDM_BRIDGE);
+        if (AllocationPrivateCapture[i].OriginalBuffer == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Cleanup;
+        }
+        RtlCopyMemory(AllocationPrivateCapture[i].OriginalBuffer, AllocationPrivateBuffers[i], View.PrivateDriverDataSize);
         Status = WddmBridgeSafeProbeForWrite(AllocationPrivateCapture[i].UserBuffer, AllocationPrivateCapture[i].Size);
         if (!NT_SUCCESS(Status))
             goto Cleanup;
@@ -1038,6 +1144,11 @@ Rollback:
         }
         if (!NT_SUCCESS(CleanupStatus))
             DPRINT1("D3DKMTCreateAllocation: rollback failed with 0x%08lX\n", CleanupStatus);
+        for (i = 0; i < InputAllocationCount; ++i)
+        {
+            if (AllocationPrivateCapture[i].OriginalBuffer != NULL)
+                (VOID)WddmBridgeSafeCopyTo(AllocationPrivateCapture[i].UserBuffer, AllocationPrivateCapture[i].OriginalBuffer, AllocationPrivateCapture[i].Size);
+        }
         WddmBridgeScrubCreateAllocationOutputs(pData, UserAllocationInfo, InputAllocationCount, AllocationInfoStride, UseAllocationInfo2, InputCreatesResource ? 0 : InputResource);
     }
 
@@ -1046,6 +1157,8 @@ Cleanup:
     {
         for (i = 0; i < InputAllocationCount; ++i)
         {
+            if (AllocationPrivateCapture != NULL && AllocationPrivateCapture[i].OriginalBuffer != NULL)
+                ExFreePoolWithTag(AllocationPrivateCapture[i].OriginalBuffer, TAG_WDDM_BRIDGE);
             if (AllocationPrivateBuffers[i] != NULL)
                 ExFreePoolWithTag(AllocationPrivateBuffers[i], TAG_WDDM_BRIDGE);
         }
@@ -1837,8 +1950,12 @@ D3DKMTSetVidPnSourceOwner(
     if (!NT_SUCCESS(Status))
         return Status;
 
-    if (Captured.VidPnSourceCount > D3DKMT_BRIDGE_MAX_ALLOCATIONS)
+    if (Captured.VidPnSourceCount > D3DKMT_BRIDGE_MAX_ALLOCATIONS ||
+        (Captured.VidPnSourceCount == 0 && (Captured.pType != NULL || Captured.pVidPnSourceId != NULL)) ||
+        (Captured.VidPnSourceCount != 0 && (Captured.pType == NULL || Captured.pVidPnSourceId == NULL)))
+    {
         return STATUS_INVALID_PARAMETER;
+    }
     if (Captured.VidPnSourceCount != 0 && Captured.pType != NULL && Captured.pVidPnSourceId != NULL)
     {
         Status = WddmBridgeCaptureArray(Captured.pType, Captured.VidPnSourceCount, sizeof(*OwnerTypes), D3DKMT_BRIDGE_MAX_ALLOCATIONS, TRUE, FALSE, (PVOID *)&OwnerTypes, &OwnerTypesSize);
@@ -1928,6 +2045,10 @@ D3DKMTGetDeviceState(
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x189, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x18A, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_DXGKRNL_PREPAREMAPGPUVIRTUALADDRESS \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x18E, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_DXGKRNL_PREPARERESERVEGPUVIRTUALADDRESS \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x18F, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 #define IOCTL_D3DKMT_CHECKMONITORPOWERSTATE \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x168, METHOD_BUFFERED, FILE_ANY_ACCESS)
@@ -1967,6 +2088,8 @@ D3DKMTGetDeviceState(
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x16C, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_D3DKMT_SETALLOCATIONPRIORITY \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x162, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_GETALLOCATIONPRIORITY \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x18D, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_D3DKMT_SETDISPLAYPRIVATEDRIVERFORMAT \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x177, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_D3DKMT_SETGAMMARAMP \
@@ -2101,6 +2224,7 @@ D3DKMTQueryAllocationResidency(
     D3DKMT_ALLOCATIONRESIDENCYSTATUS *UserResidencyStatus;
     SIZE_T AllocationListSize = 0;
     SIZE_T ResidencyStatusSize = 0;
+    UINT ResidencyStatusCount;
     NTSTATUS Status;
 
     if (pData == NULL)
@@ -2109,11 +2233,15 @@ D3DKMTQueryAllocationResidency(
     if (!NT_SUCCESS(Status))
         return Status;
 
+    if ((Captured.hResource != 0 && (Captured.AllocationCount != 0 || Captured.phAllocationList != NULL || Captured.pResidencyStatus == NULL)) || (Captured.hResource == 0 && (Captured.AllocationCount == 0 || Captured.AllocationCount > D3DKMT_BRIDGE_MAX_ALLOCATIONS || Captured.phAllocationList == NULL || Captured.pResidencyStatus == NULL)))
+        return STATUS_INVALID_PARAMETER;
+
     UserResidencyStatus = Captured.pResidencyStatus;
+    ResidencyStatusCount = Captured.hResource != 0 ? 1 : Captured.AllocationCount;
     Status = WddmBridgeCaptureArray(Captured.phAllocationList, Captured.AllocationCount, sizeof(*AllocationList), D3DKMT_BRIDGE_MAX_ALLOCATIONS, TRUE, FALSE, (PVOID *)&AllocationList, &AllocationListSize);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
-    Status = WddmBridgeCaptureArray(UserResidencyStatus, Captured.AllocationCount, sizeof(*ResidencyStatus), D3DKMT_BRIDGE_MAX_ALLOCATIONS, FALSE, TRUE, (PVOID *)&ResidencyStatus, &ResidencyStatusSize);
+    Status = WddmBridgeCaptureArray(UserResidencyStatus, ResidencyStatusCount, sizeof(*ResidencyStatus), D3DKMT_BRIDGE_MAX_ALLOCATIONS, FALSE, TRUE, (PVOID *)&ResidencyStatus, &ResidencyStatusSize);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
 
@@ -2151,12 +2279,14 @@ D3DKMTReleaseProcessVidPnSourceOwners(
 
 NTSTATUS
 APIENTRY
-D3DKMTSetAllocationPriority(
-    _In_ CONST D3DKMT_SETALLOCATIONPRIORITY *pData)
+D3DKMTGetAllocationPriority(
+    _In_ CONST D3DKMT_GETALLOCATIONPRIORITY *pData)
 {
-    D3DKMT_SETALLOCATIONPRIORITY Captured;
+    D3DKMT_GETALLOCATIONPRIORITY Captured;
     D3DKMT_HANDLE *AllocationList = NULL;
     UINT *Priorities = NULL;
+    UINT *UserPriorities;
+    UINT PriorityCount;
     SIZE_T AllocationListSize = 0;
     SIZE_T PrioritiesSize = 0;
     NTSTATUS Status;
@@ -2166,11 +2296,57 @@ D3DKMTSetAllocationPriority(
     Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
     if (!NT_SUCCESS(Status))
         return Status;
-
+    if ((Captured.hResource != 0 && (Captured.AllocationCount != 0 || Captured.phAllocationList != NULL || Captured.pPriorities == NULL)) || (Captured.hResource == 0 && (Captured.AllocationCount == 0 || Captured.AllocationCount > D3DKMT_BRIDGE_MAX_ALLOCATIONS || Captured.phAllocationList == NULL || Captured.pPriorities == NULL)))
+        return STATUS_INVALID_PARAMETER;
+    UserPriorities = Captured.pPriorities;
+    PriorityCount = Captured.hResource != 0 ? 1 : Captured.AllocationCount;
     Status = WddmBridgeCaptureArray(Captured.phAllocationList, Captured.AllocationCount, sizeof(*AllocationList), D3DKMT_BRIDGE_MAX_ALLOCATIONS, TRUE, FALSE, (PVOID *)&AllocationList, &AllocationListSize);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
-    Status = WddmBridgeCaptureArray(Captured.pPriorities, Captured.AllocationCount, sizeof(*Priorities), D3DKMT_BRIDGE_MAX_ALLOCATIONS, TRUE, FALSE, (PVOID *)&Priorities, &PrioritiesSize);
+    Status = WddmBridgeCaptureArray(UserPriorities, PriorityCount, sizeof(*Priorities), D3DKMT_BRIDGE_MAX_ALLOCATIONS, FALSE, TRUE, (PVOID *)&Priorities, &PrioritiesSize);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    Captured.phAllocationList = AllocationList;
+    Captured.pPriorities = Priorities;
+    Status = WddmBridgeSendIoctl(IOCTL_D3DKMT_GETALLOCATIONPRIORITY, &Captured, sizeof(Captured), NULL, 0);
+    if (NT_SUCCESS(Status))
+        Status = WddmBridgeSafeCopyTo(UserPriorities, Priorities, PrioritiesSize);
+
+Cleanup:
+    if (Priorities != NULL)
+        ExFreePoolWithTag(Priorities, TAG_WDDM_BRIDGE);
+    if (AllocationList != NULL)
+        ExFreePoolWithTag(AllocationList, TAG_WDDM_BRIDGE);
+    return Status;
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTSetAllocationPriority(
+    _In_ CONST D3DKMT_SETALLOCATIONPRIORITY *pData)
+{
+    D3DKMT_SETALLOCATIONPRIORITY Captured;
+    D3DKMT_HANDLE *AllocationList = NULL;
+    UINT *Priorities = NULL;
+    SIZE_T AllocationListSize = 0;
+    SIZE_T PrioritiesSize = 0;
+    UINT PriorityCount;
+    NTSTATUS Status;
+
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if ((Captured.hResource != 0 && (Captured.AllocationCount != 0 || Captured.phAllocationList != NULL || Captured.pPriorities == NULL)) || (Captured.hResource == 0 && (Captured.AllocationCount == 0 || Captured.AllocationCount > D3DKMT_BRIDGE_MAX_ALLOCATIONS || Captured.phAllocationList == NULL || Captured.pPriorities == NULL)))
+        return STATUS_INVALID_PARAMETER;
+
+    PriorityCount = Captured.hResource != 0 ? 1 : Captured.AllocationCount;
+    Status = WddmBridgeCaptureArray(Captured.phAllocationList, Captured.AllocationCount, sizeof(*AllocationList), D3DKMT_BRIDGE_MAX_ALLOCATIONS, TRUE, FALSE, (PVOID *)&AllocationList, &AllocationListSize);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    Status = WddmBridgeCaptureArray(Captured.pPriorities, PriorityCount, sizeof(*Priorities), D3DKMT_BRIDGE_MAX_ALLOCATIONS, TRUE, FALSE, (PVOID *)&Priorities, &PrioritiesSize);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
 
@@ -2514,8 +2690,12 @@ D3DKMTSetVidPnSourceOwner1(
     Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
     if (!NT_SUCCESS(Status))
         return Status;
-    if (Captured.Version0.VidPnSourceCount > D3DKMT_BRIDGE_MAX_ALLOCATIONS)
+    if (Captured.Version0.VidPnSourceCount > D3DKMT_BRIDGE_MAX_ALLOCATIONS ||
+        (Captured.Version0.VidPnSourceCount == 0 && (Captured.Version0.pType != NULL || Captured.Version0.pVidPnSourceId != NULL)) ||
+        (Captured.Version0.VidPnSourceCount != 0 && (Captured.Version0.pType == NULL || Captured.Version0.pVidPnSourceId == NULL)))
+    {
         return STATUS_INVALID_PARAMETER;
+    }
 
     if (Captured.Version0.VidPnSourceCount != 0 && Captured.Version0.pType != NULL && Captured.Version0.pVidPnSourceId != NULL)
     {
@@ -2563,8 +2743,12 @@ D3DKMTSetVidPnSourceOwner2(
     Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
     if (!NT_SUCCESS(Status))
         return Status;
-    if (Captured.Version1.Version0.VidPnSourceCount > D3DKMT_BRIDGE_MAX_ALLOCATIONS)
+    if (Captured.Version1.Version0.VidPnSourceCount > D3DKMT_BRIDGE_MAX_ALLOCATIONS ||
+        (Captured.Version1.Version0.VidPnSourceCount == 0 && (Captured.Version1.Version0.pType != NULL || Captured.Version1.Version0.pVidPnSourceId != NULL || Captured.pVidPnSourceNtHandles != NULL)) ||
+        (Captured.Version1.Version0.VidPnSourceCount != 0 && (Captured.Version1.Version0.pType == NULL || Captured.Version1.Version0.pVidPnSourceId == NULL)))
+    {
         return STATUS_INVALID_PARAMETER;
+    }
 
     if (Captured.Version1.Version0.VidPnSourceCount != 0 && Captured.Version1.Version0.pType != NULL && Captured.Version1.Version0.pVidPnSourceId != NULL)
     {
@@ -2627,11 +2811,16 @@ D3DKMTCreateSynchronizationObject2(
     Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
     if (!NT_SUCCESS(Status))
         return Status;
+    if (Captured.hDevice == 0)
+        return STATUS_INVALID_HANDLE;
+    if (Captured.Info.Type <= 0 || Captured.Info.Type >= D3DDDI_SYNCHRONIZATION_TYPE_LIMIT)
+        return STATUS_INVALID_PARAMETER;
     Status = WddmBridgeSafeProbeForWrite(pData, sizeof(*pData));
     if (!NT_SUCCESS(Status))
         return Status;
 
     Captured.hSyncObject = 0;
+    Captured.Info.SharedHandle = 0;
     if (Captured.Info.Type == D3DDDI_MONITORED_FENCE)
     {
         Captured.Info.MonitoredFence.FenceValueCPUVirtualAddress = NULL;
@@ -2940,9 +3129,8 @@ D3DKMTReserveGpuVirtualAddress(
     _Inout_ D3DDDI_RESERVEGPUVIRTUALADDRESS *pData)
 {
     D3DDDI_RESERVEGPUVIRTUALADDRESS Captured;
-    D3DKMT_FREEGPUVIRTUALADDRESS FreeGpuVa;
+    D3DDDI_RESERVEGPUVIRTUALADDRESS Commit;
     ULONG_PTR Information = 0;
-    BOOLEAN ReservationCreated = FALSE;
     NTSTATUS Status;
 
     if (pData == NULL)
@@ -2957,26 +3145,22 @@ D3DKMTReserveGpuVirtualAddress(
     if (!NT_SUCCESS(Status))
         return Status;
 
-    Status = WddmBridgeSendIoctlWithInformation(IOCTL_D3DKMT_RESERVEGPUVIRTUALADDRESS, &Captured, sizeof(Captured), &Captured, sizeof(Captured), &Information);
-    if (NT_SUCCESS(Status))
-        ReservationCreated = TRUE;
-    if (ReservationCreated && Information != sizeof(Captured))
-        Status = STATUS_INFO_LENGTH_MISMATCH;
+    Status = WddmBridgeSendIoctlWithInformation(IOCTL_DXGKRNL_PREPARERESERVEGPUVIRTUALADDRESS, &Captured, sizeof(Captured), &Captured, sizeof(Captured), &Information);
+    if (NT_SUCCESS(Status) && (Information != sizeof(Captured) || Captured.VirtualAddress == 0))
+        Status = STATUS_INVALID_DEVICE_STATE;
     if (NT_SUCCESS(Status))
         Status = WddmBridgeSafeCopyTo((PUCHAR)pData + FIELD_OFFSET(D3DDDI_RESERVEGPUVIRTUALADDRESS, VirtualAddress), &Captured.VirtualAddress, sizeof(Captured.VirtualAddress));
     if (NT_SUCCESS(Status))
         Status = WddmBridgeSafeCopyTo((PUCHAR)pData + FIELD_OFFSET(D3DDDI_RESERVEGPUVIRTUALADDRESS, PagingFenceValue), &Captured.PagingFenceValue, sizeof(Captured.PagingFenceValue));
-    if (!NT_SUCCESS(Status) && ReservationCreated)
-    {
-        NTSTATUS FreeStatus;
+    if (!NT_SUCCESS(Status))
+        return Status;
 
-        FreeGpuVa.hAdapter = Captured.hAdapter;
-        FreeGpuVa.BaseAddress = Captured.VirtualAddress;
-        FreeGpuVa.Size = Captured.Size;
-        FreeStatus = WddmBridgeSendIoctl(IOCTL_D3DKMT_FREEGPUVIRTUALADDRESS, &FreeGpuVa, sizeof(FreeGpuVa), NULL, 0);
-        if (!NT_SUCCESS(FreeStatus))
-            DPRINT1("D3DKMTReserveGpuVirtualAddress: output copy failed 0x%08lX and reservation cleanup failed 0x%08lX\n", Status, FreeStatus);
-    }
+    Commit = Captured;
+    Commit.BaseAddress = Captured.VirtualAddress;
+    Information = 0;
+    Status = WddmBridgeSendIoctlWithInformation(IOCTL_D3DKMT_RESERVEGPUVIRTUALADDRESS, &Commit, sizeof(Commit), &Commit, sizeof(Commit), &Information);
+    if (NT_SUCCESS(Status) && (Information != sizeof(Commit) || Commit.VirtualAddress != Captured.VirtualAddress))
+        Status = STATUS_INVALID_DEVICE_STATE;
     return Status;
 }
 
@@ -2986,6 +3170,7 @@ D3DKMTMapGpuVirtualAddress(
     _Inout_ D3DDDI_MAPGPUVIRTUALADDRESS *pData)
 {
     D3DDDI_MAPGPUVIRTUALADDRESS Captured;
+    D3DDDI_MAPGPUVIRTUALADDRESS Commit;
     ULONG_PTR Information = 0;
     NTSTATUS Status;
 
@@ -2994,8 +3179,6 @@ D3DKMTMapGpuVirtualAddress(
     Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
     if (!NT_SUCCESS(Status))
         return Status;
-    /* Probe the output words up front so the post-map copies cannot fail
-     * and orphan a mapping the caller never learned about. */
     Status = WddmBridgeSafeProbeForWrite((PUCHAR)pData + FIELD_OFFSET(D3DDDI_MAPGPUVIRTUALADDRESS, VirtualAddress), sizeof(Captured.VirtualAddress));
     if (!NT_SUCCESS(Status))
         return Status;
@@ -3003,14 +3186,23 @@ D3DKMTMapGpuVirtualAddress(
     if (!NT_SUCCESS(Status))
         return Status;
 
-    Status = WddmBridgeSendIoctlWithInformation(IOCTL_D3DKMT_MAPGPUVIRTUALADDRESS, &Captured, sizeof(Captured), &Captured, sizeof(Captured), &Information);
+    Status = WddmBridgeSendIoctlWithInformation(IOCTL_DXGKRNL_PREPAREMAPGPUVIRTUALADDRESS, &Captured, sizeof(Captured), &Captured, sizeof(Captured), &Information);
     if (!NT_SUCCESS(Status))
         return Status;
-    if (Information != sizeof(Captured))
-        return STATUS_INFO_LENGTH_MISMATCH;
+    if (Information != sizeof(Captured) || Captured.VirtualAddress == 0)
+        return STATUS_INVALID_DEVICE_STATE;
     Status = WddmBridgeSafeCopyTo((PUCHAR)pData + FIELD_OFFSET(D3DDDI_MAPGPUVIRTUALADDRESS, VirtualAddress), &Captured.VirtualAddress, sizeof(Captured.VirtualAddress));
     if (NT_SUCCESS(Status))
         Status = WddmBridgeSafeCopyTo((PUCHAR)pData + FIELD_OFFSET(D3DDDI_MAPGPUVIRTUALADDRESS, PagingFenceValue), &Captured.PagingFenceValue, sizeof(Captured.PagingFenceValue));
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Commit = Captured;
+    Commit.BaseAddress = Captured.VirtualAddress;
+    Information = 0;
+    Status = WddmBridgeSendIoctlWithInformation(IOCTL_D3DKMT_MAPGPUVIRTUALADDRESS, &Commit, sizeof(Commit), &Commit, sizeof(Commit), &Information);
+    if (NT_SUCCESS(Status) && (Information != sizeof(Commit) || Commit.VirtualAddress != Captured.VirtualAddress))
+        Status = STATUS_INVALID_DEVICE_STATE;
     return Status;
 }
 
@@ -3083,7 +3275,7 @@ D3DKMTSignalSynchronizationObjectFromCpu(
         return Status;
     if (Captured.ObjectCount == 0 || Captured.ObjectCount > D3DDDI_MAX_OBJECT_SIGNALED || Captured.ObjectHandleArray == NULL || Captured.FenceValueArray == NULL)
         return STATUS_INVALID_PARAMETER;
-    if (Captured.Flags.Value != 0)
+    if ((Captured.Flags.Value & ~0x00000004UL) != 0)
         return STATUS_NOT_SUPPORTED;
 
     Status = WddmBridgeSizeForCount(Captured.ObjectCount, sizeof(ObjectHandles[0]), &HandleArraySize);
@@ -3123,7 +3315,7 @@ D3DKMTWaitForSynchronizationObjectFromCpu(
         return Status;
     if (Captured.ObjectCount == 0 || Captured.ObjectCount > D3DDDI_MAX_OBJECT_WAITED_ON || Captured.ObjectHandleArray == NULL || Captured.FenceValueArray == NULL)
         return STATUS_INVALID_PARAMETER;
-    if (Captured.hAsyncEvent != NULL || Captured.Flags.Value != 0)
+    if ((Captured.Flags.Value & ~1UL) != 0)
         return STATUS_NOT_SUPPORTED;
 
     Status = WddmBridgeSizeForCount(Captured.ObjectCount, sizeof(ObjectHandles[0]), &HandleArraySize);

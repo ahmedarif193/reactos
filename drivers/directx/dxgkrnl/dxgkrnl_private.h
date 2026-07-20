@@ -64,6 +64,11 @@
 #include <ntifs.h>
 #include <ntddk.h>
 #include <wdm.h>
+#include "device_work_core.h"
+#include "present_queue_core.h"
+#include "submit_reservation_core.h"
+#include "sync_wait_core.h"
+#include "tracked_work_core.h"
 
 /* ---- WDDM DDI interface version selection ------------------------------ */
 /*
@@ -210,6 +215,12 @@ typedef struct _DXGKRNL_PROCESS          *PDXGKRNL_PROCESS;
 typedef struct _DXGKRNL_SUBMIT_DMA_BUFFER DXGKRNL_SUBMIT_DMA_BUFFER;
 typedef struct _DXGKRNL_SUBMIT_DMA_BUFFER *PDXGKRNL_SUBMIT_DMA_BUFFER;
 
+typedef struct _DXGKRNL_DEVICE_WORK
+{
+    DXGK_DEVICE_WORK_ITEM       CoreItem;
+    PDXGKRNL_DEVICE             Device;
+} DXGKRNL_DEVICE_WORK, *PDXGKRNL_DEVICE_WORK;
+
 typedef enum _DXGKRNL_DMA_BACKING_KIND
 {
     DxgkDmaBackingInvalid = 0,
@@ -334,6 +345,14 @@ typedef enum _DXGKRNL_MMS2_ADAPTER_STATE
     DxgkMms2AdapterStopped
 } DXGKRNL_MMS2_ADAPTER_STATE;
 
+typedef enum _DXGKRNL_MINIPORT_REGISTRATION_STATE
+{
+    DxgkMiniportRegistrationEmpty = 0,
+    DxgkMiniportRegistrationInitializing,
+    DxgkMiniportRegistrationRegistered,
+    DxgkMiniportRegistrationUninitializing
+} DXGKRNL_MINIPORT_REGISTRATION_STATE;
+
 /* ========================================================================
  * DXGKRNL_MINIPORT_CONTEXT
  *
@@ -356,7 +375,7 @@ struct _DXGKRNL_MINIPORT_CONTEXT
         UCHAR                           Raw[1024];
     } InitData;
 
-    /* Byte count actually provided by the miniport (for version tracking). */
+    /* Byte count safely captured from the version-specific readable prefix. */
     ULONG                       InitDataSize;
 
     /* TRUE if this miniport is a Display-Only Driver (DOD). */
@@ -390,11 +409,19 @@ struct _DXGKRNL_MINIPORT_CONTEXT
     KSPIN_LOCK                  AdapterListLock;
     LIST_ENTRY                  AdapterListHead;
     ULONG                       AdapterCount;
+
+    /* The extension itself is owned by the I/O manager and survives
+     * DxgkUnInitialize, so a failed or explicitly undone registration can
+     * reuse it safely. */
+    ULONG                       Signature;
+    volatile LONG               RegistrationState;
+    EX_RUNDOWN_REF              RegistrationRundown;
 };
 
 typedef struct _DXGKRNL_SUBMIT_DMA_BUFFER
 {
     LIST_ENTRY                  ListEntry;
+    DXGK_TRACKED_WORK_CORE      TrackedWork;
     ULONG                       SubmissionFenceId;
     ULONG64                     RefreshPresentId;
     PDXGKRNL_DMA_BUFFER         DmaBuffer;
@@ -418,19 +445,24 @@ typedef struct _DXGKRNL_SUBMIT_DMA_BUFFER
     ULONG                       SourcePitch;
     ULONG                       RefreshWidth;
     ULONG                       RefreshHeight;
-    PHANDLE                     OpenHandleList;
-    UINT                        OpenHandleCount;
+    PDXGKVMM_ALLOCATION        *PresentBindingReferenceList;
+    UINT                        PresentBindingReferenceCount;
+    PDXGKVMM_ALLOCATION        *OpenBindingReferenceList;
+    UINT                        OpenBindingReferenceCount;
+    PDXGKVMM_ALLOCATION        *AllocationReferenceList;
+    UINT                        AllocationReferenceCount;
     ULONG                       NodeOrdinal;
     ULONG                       EngineOrdinal;
     PDXGKRNL_ADAPTER            Adapter;
-    BOOLEAN                     CloseOpenHandlesOnCancel;
-    BOOLEAN                     ReservationActive;
+    volatile LONG               ReservationActive;
     BOOLEAN                     FenceIdentityOwned;
+    PDXGKRNL_DEVICE_WORK        DeviceWork;
+    DXGK_SUBMISSION_ACCOUNTING  SubmissionAccounting;
 
     /* Optional monitored-fence signal fired when this submission's
      * GPU fence retires (WDDM signal-on-completion semantics for
      * hardware without GPU-writable fence values). */
-    D3DKMT_HANDLE               hSignalSyncObject;
+    PVOID                       SignalSyncObjectReference;
     ULONG64                     SignalFenceValue;
 } DXGKRNL_SUBMIT_DMA_BUFFER, *PDXGKRNL_SUBMIT_DMA_BUFFER;
 
@@ -466,12 +498,13 @@ extern TDR_CONFIG g_TdrConfig;
 
 NTSTATUS NTAPI TdrCreateRecoveryContext(_Out_ PVOID *RecoveryContext, _In_ PVOID AdapterContext);
 NTSTATUS NTAPI TdrCompleteRecoveryContext(_In_opt_ PVOID RecoveryContext);
+NTSTATUS NTAPI TdrResetFromTimeout(_In_ PVOID RecoveryContext);
 
-/* Per-device in-flight submission budget (1.6): a single device may not
- * occupy the scheduler queue with more than this many un-retired
- * submissions; excess submissions get STATUS_DEVICE_BUSY. */
+/* Direct counters include every committed tracked submission.  The public
+ * virtgpu escape path also precharges queued PREPARED work against these
+ * initial admission limits; other producers are not quota-gated yet. */
 #define DXGK_DEVICE_MAX_INFLIGHT 256
-/* Aggregate cap across ALL devices a process owns on one adapter. */
+/* Aggregate initial admission cap across all devices of one process/adapter. */
 #define DXGK_PROCESS_MAX_INFLIGHT 512
 
 /* ========================================================================
@@ -540,6 +573,8 @@ struct _DXGKRNL_ADAPTER
     volatile LONG               Mms2TimelineValid;
     volatile LONG               Mms2TimelineCallsOpen;
     volatile LONG               Mms2TimelineActiveCalls;
+    DXGMMS2_CONTEXT_STREAM_INTERFACE_V1 Mms2ContextStreamInterface;
+    volatile LONG               Mms2ContextStreamValid;
 
     /* Serializes start against stop, remove, and boot-display handover. */
     KEVENT                      AdapterStartCompletedEvent;
@@ -598,6 +633,8 @@ struct _DXGKRNL_ADAPTER
      * Count matches NumberOfChildren.
      */
     PDXGK_CHILD_DESCRIPTOR      ChildDescriptors;
+    DECLSPEC_ALIGN(8) volatile LONG64 ChildEnumerationEpoch;
+    volatile LONG               ChildRelationsEnumerated;
 
     /*
      * Runtime segment array (PDXGKRNL_SEGMENT), Pool-allocated with
@@ -683,6 +720,11 @@ struct _DXGKRNL_ADAPTER
      * (device-list modifications, resource assignments, etc.).
      */
     KMUTEX                     AdapterMutex;
+
+    /* Serializes replacement of the active VidPn and every adapter-level
+     * reader that does not already hold an explicit VidPn reference.  The
+     * shared-primary mutex is always acquired before this mutex. */
+    KMUTEX                     VidPnMutex;
 
     /* Serializes PASSIVE-level shared-primary/shadow lazy lifecycle. Readers
      * retain one coherent generation through SharedSurfaceRundown; writers
@@ -786,6 +828,9 @@ struct _DXGKRNL_ADAPTER
     ULONG                       CommittedWidth;
     ULONG                       CommittedHeight;
     BOOLEAN                     VidPnCommitted;
+    DECLSPEC_ALIGN(8) volatile LONG64 HotPlugGeneration;
+    volatile LONG               HotPlugWorkActive;
+    WORK_QUEUE_ITEM             HotPlugWorkItem;
     BOOLEAN                     SystemDisplayEnabled;
     D3DDDIFORMAT                SystemDisplayColorFormat;
 
@@ -897,7 +942,7 @@ struct _DXGKRNL_ADAPTER
     KSPIN_LOCK                  SubmitDmaLock;
     LIST_ENTRY                  SubmitDmaListHead;
     LIST_ENTRY                  SubmitDmaRetireListHead;
-    /* A dynamically allocated worker owns this active flag. */
+    WORK_QUEUE_ITEM             SubmitDmaRetireWorkItem;
     volatile LONG               SubmitDmaRetireWorkQueued;
     volatile LONG               SubmitDmaRetireActiveWorkers;
     KEVENT                      SubmitDmaRetireDrainedEvent;
@@ -921,8 +966,11 @@ struct _DXGKRNL_ADAPTER
      */
     PVOID                       PresentQueues;      /* PDXGKRNL_PRESENT_QUEUE */
     ULONG                       PresentQueueCount;
+    NTSTATUS                    PresentQueueInitializationStatus;
     volatile LONG               PresentQueueStopping;
+    volatile LONG               VBlankResetActive;
     volatile LONG               PresentQueueActiveCalls;
+    volatile LONG64             VBlankResetGeneration;
     KEVENT                      PresentQueueCallsDrainedEvent;
 
     /*
@@ -942,6 +990,7 @@ struct _DXGKRNL_ADAPTER
      */
     UNICODE_STRING              DeviceInterfaceName;
     BOOLEAN                     DeviceInterfaceEnabled;
+    WCHAR                       DisplayDeviceName[24];
 
     /*
      * Linkage in the per-miniport AdapterListHead AND in the global
@@ -952,6 +1001,7 @@ struct _DXGKRNL_ADAPTER
 };
 
 C_ASSERT((FIELD_OFFSET(DXGKRNL_ADAPTER, SubmittedFenceIdentities) & (sizeof(LONG64) - 1)) == 0);
+C_ASSERT((FIELD_OFFSET(DXGKRNL_ADAPTER, VBlankResetGeneration) & (sizeof(LONG64) - 1)) == 0);
 C_ASSERT((DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY & (DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY - 1)) == 0);
 
 /* Convenience macro: cast a PDEVICE_OBJECT to its DXGKRNL_ADAPTER extension. */
@@ -976,8 +1026,9 @@ struct _DXGKRNL_DEVICE
     /* Creation flags (D3DKMT_CREATEDEVICEFLAGS). */
     D3DKMT_CREATEDEVICEFLAGS    Flags;
 
-    /* Per-device GPU budget: submissions in flight (tracked DMA buffers
-     * not yet retired).  Bounds one device's queue occupancy. */
+    /* Direct tracked-submission count.  Quota-gated work is charged while
+     * PREPARED; other work is charged at commit and all work releases at its
+     * terminal transition. */
     volatile LONG               InFlightSubmissions;
 
     /* Persistent KMT execution result. TDR marks existing devices RESET; new
@@ -999,6 +1050,18 @@ struct _DXGKRNL_DEVICE
     volatile LONG               MiniportDestroyPending;
     volatile LONG               TeardownOsCleanupComplete;
     KEVENT                      ReferencesDrainedEvent;
+
+    /* Native WaitForIdle is a per-device snapshot, not an adapter-wide
+     * timeout. Records stay sequence-ordered from accepted admission through
+     * their final completion or cancellation boundary. */
+    DXGK_DEVICE_WORK_LEDGER     WorkLedger;
+
+    /* WDDM 2.x FromCpu waits share one nonpaged, DPC-safe completion boundary. */
+    DXGK_SYNC_WAIT_CORE_REGISTRY SyncWaitRegistry;
+
+    /* SetQueuedLimit and every queued-present admission/release use this one
+     * lock-backed state so limit changes cannot race a reservation. */
+    DXGK_PRESENT_LIMIT_CORE      PresentLimit;
 
     /*
      * Miniport-side device handle returned from DxgkDdiCreateDevice.
@@ -1055,6 +1118,18 @@ struct _DXGKRNL_CONTEXT
 
     /* Original UMD flags; these are not bit-compatible with KMD context flags. */
     D3DDDI_CREATECONTEXTFLAGS   UserModeCreateFlags;
+
+    /* One dxgmms2 ordered stream exists for every public context. The lock,
+     * operation list, worker item, and drain state form the nonpaged client
+     * serialization boundary used by the next ordering-integration phase. */
+    DXGMMS2_CONTEXT_STREAM_HANDLE Mms2ContextStream;
+    KMUTEX                      StreamAdmissionMutex;
+    KSPIN_LOCK                  StreamLock;
+    LIST_ENTRY                  StreamOperationList;
+    WORK_QUEUE_ITEM             StreamWorkItem;
+    volatile LONG               StreamWorkerQueued;
+    volatile LONG               StreamStopping;
+    KEVENT                      StreamDrainedEvent;
 
     /*
      * The list owns one reference. Virtual scheduler packets acquire an
@@ -1142,6 +1217,14 @@ typedef enum _DXGKRNL_GPUVA_STATE
     GpuVaStateMapped    = 2,    /* Mapped to an allocation               */
 } DXGKRNL_GPUVA_STATE;
 
+typedef struct _DXGKRNL_GPUVA_BINDING
+{
+    volatile LONG               ReferenceCount;
+    D3DKMT_HANDLE               Handle;
+    PDXGKVMM_ALLOCATION         LogicalAllocation;
+    PDXGKVMM_ALLOCATION         BackingAllocation;
+} DXGKRNL_GPUVA_BINDING, *PDXGKRNL_GPUVA_BINDING;
+
 typedef struct _DXGKRNL_GPUVA_RANGE
 {
     /* GPU virtual address of the start of this range. */
@@ -1158,6 +1241,9 @@ typedef struct _DXGKRNL_GPUVA_RANGE
      * When State == GpuVaStateReserved: NULL.
      */
     HANDLE                      hAllocation;
+
+    /* Stable logical identity and physical backing ownership while mapped. */
+    PDXGKRNL_GPUVA_BINDING      Binding;
 
     /* Byte offset within the allocation where this mapping starts. */
     ULONGLONG                   AllocationOffset;
@@ -1183,8 +1269,8 @@ typedef struct _DXGKRNL_GPUVA_RANGE
 
 /*
  * Software GPU page table (GpuMmu, DXGK_PAGETABLEUPDATE_CPU_VIRTUAL mode).
- * One 4KB page of 512 DXGK_PTE entries per table; four radix levels cover
- * a 48-bit GPU VA space.  Non-leaf tables keep a kernel-side child pointer
+ * One 8KB block of 512 16-byte DXGK_PTE entries per table; four radix levels
+ * cover a 48-bit GPU VA space.  Non-leaf tables keep a kernel-side child pointer
  * array so the CPU walk never reverse-maps physical addresses.
  * All tables of a process live on DXGKRNL_PROCESS->GpuVaPageTableList,
  * protected by GpuVaLock.
@@ -1199,8 +1285,9 @@ typedef struct _DXGKRNL_GPUVA_PAGE_TABLE
     /* First GPU VA covered by this table. */
     ULONGLONG                   CoverageBase;
 
-    /* One page of DXGK_PTE entries and its physical address. */
+    /* One software table of DXGK_PTE entries and its first physical address. */
     PVOID                       KernelVa;
+    MEMORY_CACHING_TYPE         CacheType;
     PHYSICAL_ADDRESS            Physical;
 
     /* Child table pointers (non-leaf only, 512 entries), else NULL. */
@@ -1226,6 +1313,11 @@ struct _DXGKRNL_PROCESS
     /* Referenced owning process object and shared-device reference count. */
     PEPROCESS                   Process;
     volatile LONG               ReferenceCount;
+
+    /* Direct aggregate for tracked submissions across every device owned by
+     * this process on this adapter, including detached devices still retained
+     * by queued or committed tracker entries. */
+    volatile LONG               InFlightSubmissions;
 
     /*
      * Kernel handle to the owning process, opened with
@@ -1349,6 +1441,7 @@ typedef struct _DXGKRNL_SYNC_OBJECT
     PDXGKRNL_DEVICE             Device;
     PEPROCESS                   OwnerProcess;
     D3DDDI_SYNCHRONIZATIONOBJECTINFO Info;
+    D3DDDI_SYNCHRONIZATIONOBJECT_TYPE PublicType;
     D3DDDI_SYNCHRONIZATIONOBJECT_FLAGS Flags;
     volatile LONG               RefCount;
     volatile LONG               Destroying;
@@ -1356,6 +1449,11 @@ typedef struct _DXGKRNL_SYNC_OBJECT
     volatile LONG               TeardownClaimed;
     volatile LONG64             FenceValue;
     volatile LONG               TdrAffected;
+    volatile LONG               MutexOwned;
+    volatile LONG64             SemaphoreCount;
+    ULONG                       SemaphoreLimit;
+    PKEVENT                     CpuNotificationEvent;
+    BOOLEAN                     CpuNotificationEventReferenced;
     KEVENT                      CpuEvent;
     LIST_ENTRY                  SyncObjListEntry;
     LIST_ENTRY                  DeviceSyncObjListEntry;
@@ -1376,6 +1474,8 @@ typedef struct _DXGKRNL_SYNC_OBJECT
      * (CPU_VIRTUAL GpuMmu adapters only), 0 when not mapped. */
     D3DGPU_VIRTUAL_ADDRESS      MonitoredValueGpuVa;
 } DXGKRNL_SYNC_OBJECT, *PDXGKRNL_SYNC_OBJECT;
+
+#include "context_sync.h"
 
 /* ========================================================================
  * Global state (defined in dxgkrnl.c, declared extern here)
@@ -1451,6 +1551,11 @@ DxgkInitializeEx(
     _In_ PUNICODE_STRING             RegistryPath,
     _In_ ULONG                       DriverInitDataSize,
     _In_ PDRIVER_INITIALIZATION_DATA DriverInitializationData);
+
+NTSTATUS
+APIENTRY
+DxgkUnInitialize(
+    _In_ PDRIVER_OBJECT DriverObject);
 
 /*
  * DxgkCb* callbacks — prototypes match the PDXGKCB_* typedefs in dispmprt.h.
@@ -1605,6 +1710,10 @@ DxgkAdapterRemove(
  * matching release; FALSE means RemoveDevice owns or crossed the boundary. */
 BOOLEAN
 DxgkAcquireMiniportCallback(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
+BOOLEAN
+DxgkAcquireMiniportCallbackFromReservedKmdCall(
     _In_ PDXGKRNL_ADAPTER Adapter);
 
 VOID
@@ -1834,6 +1943,9 @@ DxgkGpuVaDestroyProcess(
  * GPU VA range management — core operations.
  */
 NTSTATUS
+DxgkGpuVaPlanReserve(_In_ PDXGKRNL_PROCESS Process, _In_ D3DGPU_VIRTUAL_ADDRESS BaseAddress, _In_ D3DGPU_VIRTUAL_ADDRESS MinAddress, _In_ D3DGPU_VIRTUAL_ADDRESS MaxAddress, _In_ ULONGLONG SizeInBytes, _In_ D3DDDIGPUVIRTUALADDRESS_RESERVATION_TYPE ReservationType, _Out_ D3DGPU_VIRTUAL_ADDRESS *OutAddress);
+
+NTSTATUS
 DxgkGpuVaReserve(
     _In_  PDXGKRNL_PROCESS         Process,
     _In_  D3DGPU_VIRTUAL_ADDRESS   BaseAddress,
@@ -1849,6 +1961,9 @@ DxgkGpuVaFree(
     _In_ PDXGKRNL_PROCESS       Process,
     _In_ D3DGPU_VIRTUAL_ADDRESS BaseAddress,
     _In_ ULONGLONG              SizeInBytes);
+
+NTSTATUS
+DxgkGpuVaPlanMap(_In_ PDXGKRNL_ADAPTER Adapter, _In_ PDXGKRNL_PROCESS Process, _In_opt_ PDXGKVMM_ALLOCATION Allocation, _In_ ULONGLONG AllocationOffset, _In_ D3DGPU_VIRTUAL_ADDRESS BaseAddress, _In_ D3DGPU_VIRTUAL_ADDRESS MinAddress, _In_ D3DGPU_VIRTUAL_ADDRESS MaxAddress, _In_ ULONGLONG SizeInBytes, _In_ D3DDDIGPUVIRTUALADDRESS_PROTECTION_TYPE Protection, _Out_ D3DGPU_VIRTUAL_ADDRESS *OutAddress);
 
 NTSTATUS
 DxgkGpuVaMap(
@@ -1902,6 +2017,12 @@ VOID
 DxgkGpuVaUnmapFencePage(
     _In_ PDXGKRNL_PROCESS       Process,
     _In_ D3DGPU_VIRTUAL_ADDRESS Address);
+
+VOID
+DxgkGpuVaInvalidateAllocation(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_ PDXGKVMM_ALLOCATION LogicalAllocation);
 
 /*
  * GPU VA residency management (WDDM 2.0).
@@ -2004,6 +2125,35 @@ DxgkReferenceOwnedDeviceByHandle(
     _Out_ PDXGKRNL_ADAPTER *OutAdapter,
     _Out_ PDXGKRNL_DEVICE *OutDevice);
 
+VOID
+DxgkContextOrderRetire(
+    _Inout_ PDXGKRNL_CONTEXT Context,
+    _In_ const DXGMMS2_CONTEXT_RETIREMENT_V1 *Retirement);
+
+NTSTATUS
+DxgkContextOrderAdmitWait(
+    _Inout_ PDXGKRNL_CONTEXT Context,
+    _In_ DXGK_CONTEXT_SYNC_OPERATION SyncOperation,
+    _In_reads_(ObjectCount) const D3DKMT_HANDLE *ObjectHandles,
+    _In_ ULONG ObjectCount,
+    _In_ UINT64 FenceValue,
+    _In_ KPROCESSOR_MODE AccessMode);
+
+NTSTATUS
+DxgkContextOrderAdmitSignal(
+    _In_reads_(ContextCount) PDXGKRNL_CONTEXT const *Contexts,
+    _In_ ULONG ContextCount,
+    _In_ DXGK_CONTEXT_SYNC_OPERATION SyncOperation,
+    _In_reads_opt_(ObjectCount) const D3DKMT_HANDLE *ObjectHandles,
+    _In_ ULONG ObjectCount,
+    _In_ ULONG SignalFlags,
+    _In_ UINT64 PayloadValue,
+    _In_ KPROCESSOR_MODE AccessMode);
+
+VOID
+DxgkContextOrderWakeDevice(
+    _Inout_ PDXGKRNL_DEVICE Device);
+
 NTSTATUS
 DxgkReferenceProcessRecordByAdapter(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -2089,9 +2239,26 @@ DxgkEscape(
  * ====================================================================== */
 
 NTSTATUS
+DxgkpReferenceSyncObjectByHandle(
+    _In_ D3DKMT_HANDLE Handle,
+    _In_opt_ PEPROCESS OwnerProcess,
+    _Out_ PDXGKRNL_SYNC_OBJECT *OutSyncObj);
+
+VOID
+DxgkpDereferenceSyncObject(
+    _In_ PDXGKRNL_SYNC_OBJECT SyncObj);
+
+NTSTATUS
 NTAPI
 DxgkCreateSynchronizationObject(
     _Inout_ D3DKMT_CREATESYNCHRONIZATIONOBJECT *pCreateSyncObject);
+
+NTSTATUS
+NTAPI
+DxgkCreateSynchronizationObject2Core(
+    _In_ D3DKMT_HANDLE hDevice,
+    _In_ CONST D3DDDI_SYNCHRONIZATIONOBJECTINFO2 *Info,
+    _Out_ D3DKMT_HANDLE *SyncObjectHandle);
 
 NTSTATUS
 NTAPI
@@ -2117,8 +2284,54 @@ DxgkSyncObjectCpuSignal(
 
 NTSTATUS
 NTAPI
+DxgkSyncObjectCpuSignalBatch(
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_reads_(ObjectCount) CONST D3DKMT_HANDLE *ObjectHandles,
+    _In_reads_(ObjectCount) CONST UINT64 *FenceValues,
+    _In_ ULONG ObjectCount,
+    _In_ D3DDDICB_SIGNALFLAGS Flags);
+
+NTSTATUS
+NTAPI
+DxgkSyncObjectCpuWaitBatch(
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_reads_(ObjectCount) CONST D3DKMT_HANDLE *ObjectHandles,
+    _In_reads_(ObjectCount) CONST UINT64 *FenceValues,
+    _In_ ULONG ObjectCount,
+    _In_opt_ HANDLE AsyncEventHandle,
+    _In_ BOOLEAN WaitAny);
+
+VOID
+NTAPI
+DxgkSyncObjectCancelDeviceWaits(
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ NTSTATUS Status,
+    _In_ BOOLEAN ShutDown);
+
+NTSTATUS
+NTAPI
 DxgkSyncObjectGpuRetireSignal(
     _In_ D3DKMT_HANDLE hSyncObject,
+    _In_ UINT64 FenceValue);
+
+NTSTATUS
+NTAPI
+DxgkSyncObjectReferenceTrackedSignal(
+    _In_ D3DKMT_HANDLE hSyncObject,
+    _In_ PDXGKRNL_DEVICE Device,
+    _Outptr_ PVOID *Reference);
+
+VOID
+NTAPI
+DxgkSyncObjectReleaseTrackedSignal(
+    _In_opt_ PVOID Reference,
+    _In_ BOOLEAN Completed,
+    _In_ UINT64 FenceValue);
+
+VOID
+NTAPI
+DxgkSyncObjectPublishTrackedSignal(
+    _In_opt_ PVOID Reference,
     _In_ UINT64 FenceValue);
 
 NTSTATUS
@@ -2165,12 +2378,24 @@ DxgkVidPnClone(
     _In_  D3DKMDT_HVIDPN  hSourceVidPn,
     _Out_ D3DKMDT_HVIDPN *phClonedVidPn);
 
+BOOLEAN
+DxgkVidPnReference(
+    _In_ D3DKMDT_HVIDPN hVidPn);
+
 VOID
 DxgkVidPnDestroy(
     _In_ D3DKMDT_HVIDPN hVidPn);
 
 NTSTATUS
 DxgkVidPnRebuildForHotPlug(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
+NTSTATUS
+DxgkVidPnQueueHotPlugRebuild(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
+VOID
+DxgkVidPnInitializeHotPlugWorker(
     _In_ PDXGKRNL_ADAPTER Adapter);
 
 /*
@@ -2319,6 +2544,23 @@ NTSTATUS
 DxgkDisplayCommitVidPn(
     _In_ PDXGKRNL_ADAPTER Adapter);
 
+typedef struct _DXGKP_DISPLAY_COMMIT_RESULT
+{
+    ULONG CommittedWidth;
+    ULONG CommittedHeight;
+    BOOLEAN VidPnCommitted;
+} DXGKP_DISPLAY_COMMIT_RESULT, *PDXGKP_DISPLAY_COMMIT_RESULT;
+
+NTSTATUS
+DxgkpDisplayCommitVidPnCandidate(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ D3DKMDT_HVIDPN hVidPn,
+    _Out_ PDXGKP_DISPLAY_COMMIT_RESULT Result);
+
+NTSTATUS
+DxgkpDisplayCommitVidPnWhileSharedPrimaryLocked(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
 VOID
 DxgkpStartPresentTimer(
     _In_ PDXGKRNL_ADAPTER Adapter);
@@ -2344,6 +2586,44 @@ DxgkPresentInit(
 
 VOID
 DxgkPresentTeardown(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
+BOOLEAN
+DxgkPresentTryBeginStop(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
+VOID
+DxgkPresentBeginStop(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
+VOID
+DxgkPresentResume(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
+VOID
+DxgkPresentBeginReset(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
+VOID
+DxgkPresentCompleteReset(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
+VOID
+DxgkPresentNotifyDeviceRemoved(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
+VOID
+DxgkPresentCancelDevice(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device);
+
+VOID
+DxgkPresentCancelContext(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_CONTEXT Context);
+
+VOID
+DxgkPresentCancelAllStopped(
     _In_ PDXGKRNL_ADAPTER Adapter);
 
 /* ========================================================================
@@ -2444,6 +2724,8 @@ typedef struct _DXGKRNL_TRACK_DMA_ARGS
     ULONG64                         PresentId;
     PDXGKRNL_DMA_BUFFER             DmaBuffer;
     PDXGKRNL_DEVICE                 Device;
+    BOOLEAN                         EnforceSubmissionQuota;
+    PDXGKRNL_DEVICE_WORK            DeviceWork;
     PDXGKRNL_CONTEXT                Context;
     PDXGKVMM_ALLOCATION             SourceAllocation;
     PDXGKVMM_ALLOCATION             RefreshAllocation;
@@ -2463,9 +2745,55 @@ typedef struct _DXGKRNL_TRACK_DMA_ARGS
     ULONG                           SourcePitch;
     ULONG                           RefreshWidth;
     ULONG                           RefreshHeight;
-    CONST HANDLE                   *OpenHandles;
-    UINT                            OpenHandleCount;
+    PDXGKVMM_ALLOCATION const      *PresentBindingReferences;
+    UINT                            PresentBindingReferenceCount;
+    PDXGKVMM_ALLOCATION const      *OpenBindingReferences;
+    UINT                            OpenBindingReferenceCount;
+    PDXGKVMM_ALLOCATION const      *AllocationReferences;
+    UINT                            AllocationReferenceCount;
 } DXGKRNL_TRACK_DMA_ARGS, *PDXGKRNL_TRACK_DMA_ARGS;
+
+NTSTATUS
+DxgkDeviceWorkCreate(
+    _In_ PDXGKRNL_DEVICE Device,
+    _Outptr_ PDXGKRNL_DEVICE_WORK *OutWork);
+
+NTSTATUS
+DxgkDeviceWorkActivate(
+    _Inout_ PDXGKRNL_DEVICE_WORK Work);
+
+VOID
+DxgkDeviceWorkComplete(
+    _Inout_opt_ PDXGKRNL_DEVICE_WORK Work);
+
+VOID
+DxgkDeviceWorkDestroy(
+    _Inout_opt_ PDXGKRNL_DEVICE_WORK Work);
+
+VOID
+DxgkDeviceWorkNotifyStateChange(
+    _In_ PDXGKRNL_DEVICE Device);
+
+VOID
+DxgkDeviceBeginDestroy(
+    _In_ PDXGKRNL_DEVICE Device);
+
+VOID
+DxgkDeviceSetExecutionState(
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ D3DKMT_DEVICEEXECUTION_STATE ExecutionState);
+
+VOID
+DxgkMarkAdapterDevicesStopped(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
+VOID
+DxgkMarkAdapterDevicesStoppedLocked(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
+NTSTATUS
+DxgkDeviceWaitForIdle(
+    _In_ PDXGKRNL_DEVICE Device);
 
 NTSTATUS
 NTAPI
@@ -2497,6 +2825,11 @@ NTAPI
 DxgkAdoptTrackedDmaBuffer(
     _In_ PDXGKRNL_SUBMIT_DMA_BUFFER Entry);
 
+NTSTATUS
+NTAPI
+DxgkActivateTrackedDmaBuffer(
+    _In_ PDXGKRNL_SUBMIT_DMA_BUFFER Entry);
+
 VOID
 NTAPI
 DxgkCancelTrackedDmaBuffer(
@@ -2512,6 +2845,11 @@ NTAPI
 DxgkReleaseTrackedDmaBuffers(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ BOOLEAN MiniportCallbacksValid);
+
+VOID
+NTAPI
+DxgkWaitForSubmitDmaReservations(
+    _In_ PDXGKRNL_ADAPTER Adapter);
 
 PDXGKRNL_CONTEXT
 DxgkLookupContextByHandle(

@@ -10,6 +10,10 @@
 #include <reactos/rddm/rxgkinterface.h>
 #include <debug.h>
 
+#define IOCTL_RXGK_OPENADAPTERFROMDEVICENAME CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x112, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_RXGK_CLOSEADAPTER CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x103, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_CHECKOCCLUSION CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x169, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
 #if (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WDDM2_0)
 typedef union _D3DKMT_DESTROYALLOCATION2FLAGS_LOCAL
 {
@@ -97,24 +101,51 @@ C_ASSERT(sizeof(struct _D3DKMT_UNLOCK2) == 8);
             return Status;                                               \
     } while (0)
 
-#define D3DKMT_REQUIRE_POINTER_OR_EMPTY(Pointer, Count)                   \
-    do                                                                   \
-    {                                                                    \
-        if ((Count) != 0 && (Pointer) == NULL)                           \
-            return STATUS_INVALID_PARAMETER;                             \
-    } while (0)
-
-#define D3DKMT_REQUIRE_SYNC_COUNT(Count, Limit)                           \
-    do                                                                   \
-    {                                                                    \
-        if ((Count) == 0 || (Count) > (Limit))                           \
-            return STATUS_INVALID_PARAMETER;                             \
-    } while (0)
-
 NTSTATUS
 APIENTRY
 D3DKMTOpenAdapterFromDeviceName(
     _Inout_ D3DKMT_OPENADAPTERFROMDEVICENAME *pData);
+
+static VOID
+D3dkmtCloseCapturedAdapter(
+    _In_ D3DKMT_HANDLE AdapterHandle)
+{
+    D3DKMT_CLOSEADAPTER CloseAdapter;
+
+    if (AdapterHandle == 0)
+        return;
+    CloseAdapter.hAdapter = AdapterHandle;
+    (VOID)WddmBridgeSendIoctl(IOCTL_RXGK_CLOSEADAPTER, &CloseAdapter, sizeof(CloseAdapter), NULL, 0);
+}
+
+static NTSTATUS
+D3dkmtOpenAdapterByCapturedNtDeviceName(
+    _In_ PCWSTR DeviceName,
+    _Out_ D3DKMT_HANDLE *AdapterHandle,
+    _Out_ LUID *AdapterLuid)
+{
+    D3DKMT_OPENADAPTERFROMDEVICENAME OpenByName;
+    ULONG_PTR Information = 0;
+    NTSTATUS Status;
+
+    if (DeviceName == NULL || DeviceName[0] == L'\0' || AdapterHandle == NULL || AdapterLuid == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *AdapterHandle = 0;
+    RtlZeroMemory(AdapterLuid, sizeof(*AdapterLuid));
+    RtlZeroMemory(&OpenByName, sizeof(OpenByName));
+    OpenByName.pDeviceName = DeviceName;
+    Status = WddmBridgeSendIoctlWithInformation(IOCTL_RXGK_OPENADAPTERFROMDEVICENAME, &OpenByName, sizeof(OpenByName), &OpenByName, sizeof(OpenByName), &Information);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Information != sizeof(OpenByName) || OpenByName.hAdapter == 0)
+    {
+        D3dkmtCloseCapturedAdapter(OpenByName.hAdapter);
+        return Information != sizeof(OpenByName) ? STATUS_INFO_LENGTH_MISMATCH : STATUS_INVALID_HANDLE;
+    }
+    *AdapterHandle = OpenByName.hAdapter;
+    *AdapterLuid = OpenByName.AdapterLuid;
+    return STATUS_SUCCESS;
+}
 
 NTSTATUS
 APIENTRY
@@ -162,6 +193,11 @@ APIENTRY
 D3DKMTUnlock2(
     _In_ CONST struct _D3DKMT_UNLOCK2 *pData);
 
+NTSTATUS
+APIENTRY
+D3DKMTSetVidPnSourceOwner2(
+    _In_ CONST struct _D3DKMT_SETVIDPNSOURCEOWNER2 *pData);
+
 VOID
 WddmBridgeInitCallbacks(
     _Out_ PREACTOS_WIN32K_DXGKRNL_INTERFACE Interface);
@@ -184,6 +220,30 @@ D3dkmtValidateWddmThunk(
 }
 
 static NTSTATUS
+D3dkmtCaptureUserStructure(
+    _In_reads_bytes_(Size) const VOID *Argument,
+    _In_ SIZE_T Size,
+    _Out_writes_bytes_(Size) VOID *Captured)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (Argument == NULL || Captured == NULL || Size == 0)
+        return STATUS_INVALID_PARAMETER;
+    _SEH2_TRY
+    {
+        if (ExGetPreviousMode() != KernelMode)
+            ProbeForRead(Argument, Size, 1);
+        RtlCopyMemory(Captured, Argument, Size);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    return Status;
+}
+
+static NTSTATUS
 D3dkmtValidateWddmHandleThunk(
     _In_opt_ HANDLE Handle)
 {
@@ -198,41 +258,6 @@ D3dkmtValidateHandle(
     _In_ D3DKMT_HANDLE Handle)
 {
     return (Handle != 0) ? STATUS_SUCCESS : STATUS_INVALID_HANDLE;
-}
-
-static NTSTATUS
-D3dkmtValidateHandleList(
-    _In_reads_(Count) const D3DKMT_HANDLE *Handles,
-    _In_ UINT Count,
-    _In_ UINT Limit)
-{
-    UINT Index;
-
-    if (Count == 0 || Count > Limit || Handles == NULL)
-        return STATUS_INVALID_PARAMETER;
-
-    for (Index = 0; Index < Count; ++Index)
-    {
-        if (Handles[Index] == 0)
-            return STATUS_INVALID_HANDLE;
-    }
-
-    return STATUS_SUCCESS;
-}
-
-static NTSTATUS
-D3dkmtValidateAllocationListChoice(
-    _In_opt_ const VOID *Resources,
-    _In_opt_ const VOID *Allocations,
-    _In_ UINT Count)
-{
-    if (Count == 0)
-        return STATUS_INVALID_PARAMETER;
-
-    if ((Resources == NULL) == (Allocations == NULL))
-        return STATUS_INVALID_PARAMETER;
-
-    return STATUS_SUCCESS;
 }
 
 /*
@@ -274,7 +299,6 @@ NtGdiDdDDIGetProcessSchedulingPriorityClass(_In_  HANDLE unnamedParam1,
 {
     UNREFERENCED_PARAMETER(unnamedParam1);
     RETURN_STATUS_IF_NULL(unnamedParam2);
-    RtlZeroMemory(unnamedParam2, sizeof(*unnamedParam2));
     return STATUS_NOT_IMPLEMENTED;
 }
 
@@ -308,24 +332,120 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIOpenAdapterFromGdiDisplayName(_Inout_ D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME* unnamedParam1)
 {
+    D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME Captured;
+    WCHAR NtDeviceName[CCHDEVICENAME / 2];
+    UNICODE_STRING DisplayName;
+    PPDEVOBJ Pdev;
+    ULONG Index;
     NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
+
     if (!NT_SUCCESS(Status))
         return Status;
-
-    return D3DKMTOpenAdapterFromGdiDisplayName(unnamedParam1);
+    _SEH2_TRY
+    {
+        if (ExGetPreviousMode() != KernelMode)
+            ProbeForRead(unnamedParam1, sizeof(Captured), 1);
+        Captured = *unnamedParam1;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+    for (Index = 0; Index < RTL_NUMBER_OF(Captured.DeviceName) && Captured.DeviceName[Index] != L'\0'; ++Index)
+        NOTHING;
+    if (Index == 0 || Index == RTL_NUMBER_OF(Captured.DeviceName))
+        return STATUS_INVALID_PARAMETER;
+    RtlInitUnicodeString(&DisplayName, Captured.DeviceName);
+    Pdev = EngpGetPDEV(&DisplayName);
+    if (Pdev == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (Pdev->pGraphicsDevice == NULL || Pdev->pGraphicsDevice->szNtDeviceName[0] == L'\0')
+        Status = STATUS_INVALID_PARAMETER;
+    else
+    {
+        RtlCopyMemory(NtDeviceName, Pdev->pGraphicsDevice->szNtDeviceName, sizeof(NtDeviceName));
+        NtDeviceName[RTL_NUMBER_OF(NtDeviceName) - 1] = L'\0';
+    }
+    PDEVOBJ_vRelease(Pdev);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = D3dkmtOpenAdapterByCapturedNtDeviceName(NtDeviceName, &Captured.hAdapter, &Captured.AdapterLuid);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Captured.VidPnSourceId = 0;
+    _SEH2_TRY
+    {
+        if (ExGetPreviousMode() != KernelMode)
+            ProbeForWrite(unnamedParam1, sizeof(Captured), 1);
+        *unnamedParam1 = Captured;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    if (!NT_SUCCESS(Status))
+        D3dkmtCloseCapturedAdapter(Captured.hAdapter);
+    return Status;
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIOpenAdapterFromHdc(_Inout_ D3DKMT_OPENADAPTERFROMHDC* unnamedParam1)
 {
+    D3DKMT_OPENADAPTERFROMHDC Captured;
+    WCHAR DeviceName[CCHDEVICENAME / 2];
+    PDC Dc;
     NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
+
     if (!NT_SUCCESS(Status))
         return Status;
-    if (unnamedParam1->hDc == NULL)
+    _SEH2_TRY
+    {
+        if (ExGetPreviousMode() != KernelMode)
+            ProbeForRead(unnamedParam1, sizeof(Captured), 1);
+        Captured = *unnamedParam1;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+    if (Captured.hDc == NULL)
         return STATUS_INVALID_HANDLE;
+    Dc = DC_LockDc(Captured.hDc);
+    if (Dc == NULL)
+        return STATUS_INVALID_HANDLE;
+    if (Dc->dctype != DCTYPE_DIRECT || Dc->ppdev == NULL || (Dc->ppdev->flFlags & PDEV_DISPLAY) == 0 || Dc->ppdev->pGraphicsDevice == NULL || Dc->ppdev->pGraphicsDevice->szNtDeviceName[0] == L'\0')
+        Status = STATUS_INVALID_HANDLE;
+    else
+    {
+        RtlCopyMemory(DeviceName, Dc->ppdev->pGraphicsDevice->szNtDeviceName, sizeof(DeviceName));
+        DeviceName[RTL_NUMBER_OF(DeviceName) - 1] = L'\0';
+    }
+    DC_UnlockDc(Dc);
+    if (!NT_SUCCESS(Status))
+        return Status;
 
-    return D3DKMTOpenAdapterFromHdc(unnamedParam1);
+    Status = D3dkmtOpenAdapterByCapturedNtDeviceName(DeviceName, &Captured.hAdapter, &Captured.AdapterLuid);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Captured.VidPnSourceId = 0;
+    _SEH2_TRY
+    {
+        if (ExGetPreviousMode() != KernelMode)
+            ProbeForWrite(unnamedParam1, sizeof(Captured), 1);
+        *unnamedParam1 = Captured;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    if (!NT_SUCCESS(Status))
+        D3dkmtCloseCapturedAdapter(Captured.hAdapter);
+    return Status;
 }
 
 
@@ -336,8 +456,6 @@ NtGdiDdDDIOpenAdapterFromDeviceName(_Inout_ D3DKMT_OPENADAPTERFROMDEVICENAME* un
     NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
     if (!NT_SUCCESS(Status))
         return Status;
-    if (unnamedParam1->pDeviceName == NULL)
-        return STATUS_INVALID_PARAMETER;
 
     return D3DKMTOpenAdapterFromDeviceName(unnamedParam1);
 }
@@ -359,11 +477,6 @@ APIENTRY
 NtGdiDdDDICreateAllocation(_Inout_ D3DKMT_CREATEALLOCATION* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->pAllocationInfo,
-                                    unnamedParam1->NumAllocations);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->pPrivateDriverData,
-                                    unnamedParam1->PrivateDriverDataSize);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnCreateAllocation, unnamedParam1);
 }
 
@@ -372,7 +485,6 @@ APIENTRY
 NtGdiDdDDICheckMonitorPowerState(_In_ const D3DKMT_CHECKMONITORPOWERSTATE* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hAdapter);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnCheckMonitorPowerState, unnamedParam1);
 }
 
@@ -380,11 +492,15 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDICheckOcclusion(_In_ const D3DKMT_CHECKOCCLUSION* unnamedParam1)
 {
+    D3DKMT_CHECKOCCLUSION Captured;
     BOOL bEntered;
     PWND pWnd;
+    NTSTATUS Status;
 
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    if (unnamedParam1->hWindow == NULL)
+    Status = D3dkmtCaptureUserStructure(unnamedParam1, sizeof(Captured), &Captured);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Captured.hWindow == NULL)
         return STATUS_INVALID_HANDLE;
 
     /*
@@ -395,13 +511,15 @@ NtGdiDdDDICheckOcclusion(_In_ const D3DKMT_CHECKOCCLUSION* unnamedParam1)
     bEntered = UserIsEntered();
     if (!bEntered)
         UserEnterShared();
-    pWnd = ValidateHwndNoErr(unnamedParam1->hWindow);
+    pWnd = ValidateHwndNoErr(Captured.hWindow);
     if (!bEntered)
         UserLeave();
     if (pWnd == NULL)
         return STATUS_INVALID_HANDLE;
-
-    D3DKMT_CALL_CALLBACK(RxgkIntPfnCheckOcclusion, unnamedParam1);
+    Status = WddmBridgeRequireReady();
+    if (!NT_SUCCESS(Status))
+        return Status;
+    return WddmBridgeSendIoctl(IOCTL_D3DKMT_CHECKOCCLUSION, &Captured, sizeof(Captured), NULL, 0);
 }
 
 
@@ -410,7 +528,6 @@ APIENTRY
 NtGdiDdDDICloseAdapter(_In_ const D3DKMT_CLOSEADAPTER* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hAdapter);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnCloseAdapter, unnamedParam1);
 }
 
@@ -419,9 +536,6 @@ APIENTRY
 NtGdiDdDDICreateContext(_Inout_ D3DKMT_CREATECONTEXT* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->pPrivateDriverData,
-                                    unnamedParam1->PrivateDriverDataSize);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnCreateContext, unnamedParam1);
 }
 
@@ -430,7 +544,6 @@ APIENTRY
 NtGdiDdDDICreateDevice(_Inout_ D3DKMT_CREATEDEVICE* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hAdapter);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnCreateDevice, unnamedParam1);
 }
 
@@ -439,7 +552,6 @@ APIENTRY
 NtGdiDdDDICreateOverlay(_Inout_ D3DKMT_CREATEOVERLAY* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnCreateOverlay, unnamedParam1);
 }
 
@@ -448,13 +560,6 @@ APIENTRY
 NtGdiDdDDICreateSynchronizationObject(_Inout_ D3DKMT_CREATESYNCHRONIZATIONOBJECT* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
-    if (unnamedParam1->Info.Type <= 0 ||
-        unnamedParam1->Info.Type >= D3DDDI_SYNCHRONIZATION_TYPE_LIMIT)
-    {
-        return STATUS_INVALID_PARAMETER;
-    }
-
     D3DKMT_CALL_CALLBACK(RxgkIntPfnCreateSynchronizationObject, unnamedParam1);
 }
 
@@ -463,9 +568,6 @@ APIENTRY
 NtGdiDdDDIDestroyAllocation(_In_ const D3DKMT_DESTROYALLOCATION* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->phAllocationList,
-                                    unnamedParam1->AllocationCount);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnDestroyAllocation, unnamedParam1);
 }
 
@@ -474,7 +576,6 @@ APIENTRY
 NtGdiDdDDIDestroyContext(_In_ const D3DKMT_DESTROYCONTEXT* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hContext);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnDestroyContext, unnamedParam1);
 }
 
@@ -483,7 +584,6 @@ APIENTRY
 NtGdiDdDDIDestroyDevice(_In_ const D3DKMT_DESTROYDEVICE* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnDestroyDevice, unnamedParam1);
 }
 
@@ -492,8 +592,6 @@ APIENTRY
 NtGdiDdDDIDestroyOverlay(_In_ const D3DKMT_DESTROYOVERLAY* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hOverlay);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnDestroyOverlay, unnamedParam1);
 }
 
@@ -502,7 +600,6 @@ APIENTRY
 NtGdiDdDDIDestroySynchronizationObject(_In_ const D3DKMT_DESTROYSYNCHRONIZATIONOBJECT* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hSyncObject);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnDestroySynchronizationObject, unnamedParam1);
 }
 
@@ -511,13 +608,6 @@ APIENTRY
 NtGdiDdDDIEscape(_In_ const D3DKMT_ESCAPE* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hAdapter);
-    if (unnamedParam1->hDevice != 0)
-        D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
-    if (unnamedParam1->hContext != 0)
-        D3DKMT_REQUIRE_HANDLE(unnamedParam1->hContext);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->pPrivateDriverData,
-                                    unnamedParam1->PrivateDriverDataSize);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnEscape, unnamedParam1);
 }
 
@@ -526,8 +616,6 @@ APIENTRY
 NtGdiDdDDIFlipOverlay(_In_ const D3DKMT_FLIPOVERLAY* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hOverlay);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnFlipOverlay, unnamedParam1);
 }
 
@@ -536,7 +624,6 @@ APIENTRY
 NtGdiDdDDIGetContextSchedulingPriority(_Inout_ D3DKMT_GETCONTEXTSCHEDULINGPRIORITY* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hContext);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnGetContextSchedulingPriority, unnamedParam1);
 }
 
@@ -545,7 +632,6 @@ APIENTRY
 NtGdiDdDDIGetDeviceState(_Inout_ D3DKMT_GETDEVICESTATE* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnGetDeviceState, unnamedParam1);
 }
 
@@ -554,9 +640,6 @@ APIENTRY
 NtGdiDdDDIGetDisplayModeList(_Inout_ D3DKMT_GETDISPLAYMODELIST* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hAdapter);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->pModeList,
-                                    unnamedParam1->ModeCount);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnGetDisplayModeList, unnamedParam1);
 }
 
@@ -565,9 +648,6 @@ APIENTRY
 NtGdiDdDDIGetMultisampleMethodList(_Inout_ D3DKMT_GETMULTISAMPLEMETHODLIST* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hAdapter);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->pMethodList,
-                                    unnamedParam1->MethodCount);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnGetMultisampleMethodList, unnamedParam1);
 }
 
@@ -576,9 +656,6 @@ APIENTRY
 NtGdiDdDDIGetPresentHistory(_Inout_ D3DKMT_GETPRESENTHISTORY* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hAdapter);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->pTokens,
-                                    unnamedParam1->ProvidedSize);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnGetPresentHistory, unnamedParam1);
 }
 
@@ -587,10 +664,6 @@ APIENTRY
 NtGdiDdDDIGetRuntimeData(_In_ const D3DKMT_GETRUNTIMEDATA* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hAdapter);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hGlobalShare);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->pRuntimeData,
-                                    unnamedParam1->RuntimeDataSize);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnGetRuntimeData, unnamedParam1);
 }
 
@@ -599,7 +672,6 @@ APIENTRY
 NtGdiDdDDIGetScanLine(_In_ D3DKMT_GETSCANLINE* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hAdapter);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnGetScanLine, unnamedParam1);
 }
 
@@ -608,7 +680,6 @@ APIENTRY
 NtGdiDdDDIGetSharedPrimaryHandle(_Inout_ D3DKMT_GETSHAREDPRIMARYHANDLE* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hAdapter);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnGetSharedPrimaryHandle, unnamedParam1);
 }
 
@@ -617,9 +688,6 @@ APIENTRY
 NtGdiDdDDIInvalidateActiveVidPn(_In_ const D3DKMT_INVALIDATEACTIVEVIDPN* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hAdapter);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->pPrivateDriverData,
-                                    unnamedParam1->PrivateDriverDataSize);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnInvalidateActiveVidPn, unnamedParam1);
 }
 
@@ -628,10 +696,6 @@ APIENTRY
 NtGdiDdDDILock(_Inout_ D3DKMT_LOCK* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hAllocation);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->pPages,
-                                    unnamedParam1->NumPages);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnLock, unnamedParam1);
 }
 
@@ -640,16 +704,6 @@ APIENTRY
 NtGdiDdDDIOpenResource(_Inout_ D3DKMT_OPENRESOURCE* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hGlobalShare);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->pOpenAllocationInfo,
-                                    unnamedParam1->NumAllocations);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->pPrivateRuntimeData,
-                                    unnamedParam1->PrivateRuntimeDataSize);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->pResourcePrivateDriverData,
-                                    unnamedParam1->ResourcePrivateDriverDataSize);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->pTotalPrivateDriverDataBuffer,
-                                    unnamedParam1->TotalPrivateDriverDataBufferSize);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnOpenResource, unnamedParam1);
 }
 
@@ -658,8 +712,6 @@ APIENTRY
 NtGdiDdDDIPollDisplayChildren(_In_ const D3DKMT_POLLDISPLAYCHILDREN* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    if (!unnamedParam1->PollAllAdapters)
-        D3DKMT_REQUIRE_HANDLE(unnamedParam1->hAdapter);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnPollDisplayChildren, unnamedParam1);
 }
 
@@ -668,11 +720,6 @@ APIENTRY
 NtGdiDdDDIPresent(_In_ D3DKMT_PRESENT* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
-    if (unnamedParam1->BroadcastContextCount > D3DDDI_MAX_BROADCAST_CONTEXT)
-        return STATUS_INVALID_PARAMETER;
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->pSrcSubRects,
-                                    unnamedParam1->SubRectCnt);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnPresent, unnamedParam1);
 }
 
@@ -681,9 +728,6 @@ APIENTRY
 NtGdiDdDDIQueryAdapterInfo(_Inout_ const D3DKMT_QUERYADAPTERINFO* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hAdapter);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->pPrivateDriverData,
-                                    unnamedParam1->PrivateDriverDataSize);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnQueryAdapterInfo, unnamedParam1);
 }
 
@@ -692,11 +736,6 @@ APIENTRY
 NtGdiDdDDIQueryAllocationResidency(_In_ const D3DKMT_QUERYALLOCATIONRESIDENCY* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->phAllocationList,
-                                    unnamedParam1->AllocationCount);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->pResidencyStatus,
-                                    unnamedParam1->AllocationCount);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnQueryAllocationResidency, unnamedParam1);
 }
 
@@ -705,10 +744,6 @@ APIENTRY
 NtGdiDdDDIQueryResourceInfo(_Inout_ D3DKMT_QUERYRESOURCEINFO* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hGlobalShare);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->pPrivateRuntimeData,
-                                    unnamedParam1->PrivateRuntimeDataSize);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnQueryResourceInfo, unnamedParam1);
 }
 
@@ -732,9 +767,6 @@ APIENTRY
 NtGdiDdDDIRender(_In_ D3DKMT_RENDER* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
-    if (unnamedParam1->BroadcastContextCount > D3DDDI_MAX_BROADCAST_CONTEXT)
-        return STATUS_INVALID_PARAMETER;
     D3DKMT_CALL_CALLBACK(RxgkIntPfnRender, unnamedParam1);
 }
 
@@ -743,11 +775,6 @@ APIENTRY
 NtGdiDdDDISetAllocationPriority(_In_ const D3DKMT_SETALLOCATIONPRIORITY* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->phAllocationList,
-                                    unnamedParam1->AllocationCount);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->pPriorities,
-                                    unnamedParam1->AllocationCount);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnSetAllocationPriority, unnamedParam1);
 }
 
@@ -756,7 +783,6 @@ APIENTRY
 NtGdiDdDDISetContextSchedulingPriority(_In_ const D3DKMT_SETCONTEXTSCHEDULINGPRIORITY* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hContext);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnSetContextSchedulingPriority, unnamedParam1);
 }
 
@@ -765,7 +791,6 @@ APIENTRY
 NtGdiDdDDISetDisplayMode(_In_ const D3DKMT_SETDISPLAYMODE* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnSetDisplayMode, unnamedParam1);
 }
 
@@ -774,7 +799,6 @@ APIENTRY
 NtGdiDdDDISetDisplayPrivateDriverFormat(_In_ const D3DKMT_SETDISPLAYPRIVATEDRIVERFORMAT* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnSetDisplayPrivateDriverFormat, unnamedParam1);
 }
 
@@ -783,7 +807,6 @@ APIENTRY
 NtGdiDdDDISetGammaRamp(_In_ const D3DKMT_SETGAMMARAMP* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnSetGammaRamp, unnamedParam1);
 }
 
@@ -793,7 +816,6 @@ APIENTRY
 NtGdiDdDDISetQueuedLimit(_Inout_ const D3DKMT_SETQUEUEDLIMIT* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnSetQueuedLimit, unnamedParam1);
 }
 
@@ -802,11 +824,6 @@ APIENTRY
 NtGdiDdDDISetVidPnSourceOwner(_In_ const D3DKMT_SETVIDPNSOURCEOWNER* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->pType,
-                                    unnamedParam1->VidPnSourceCount);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->pVidPnSourceId,
-                                    unnamedParam1->VidPnSourceCount);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnSetVidPnSourceOwner, unnamedParam1);
 }
 
@@ -815,9 +832,6 @@ WINAPI
 NtGdiDdDDIUnlock(_In_ const D3DKMT_UNLOCK* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->phAllocations,
-                                    unnamedParam1->NumAllocations);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnUnlock, unnamedParam1);
 }
 
@@ -830,7 +844,6 @@ NtGdiDdDDICheckVidPnExclusiveOwnership(_In_ const D3DKMT_CHECKVIDPNEXCLUSIVEOWNE
     NTSTATUS Status;
 
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hAdapter);
 
     Status = WddmBridgeRequireReady();
     if (!NT_SUCCESS(Status))
@@ -844,13 +857,8 @@ APIENTRY
 NtGdiDdDDICreateAllocation2(_Inout_ D3DKMT_CREATEALLOCATION* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
-    /* The win32k PCH exposes the shared union through its INFO1 alias; the
-     * v3 callback preserves INFO2 identity before any element is accessed. */
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->pAllocationInfo,
-                                    unnamedParam1->NumAllocations);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->pPrivateDriverData,
-                                    unnamedParam1->PrivateDriverDataSize);
+    /* The bridge captures the complete top-level structure before validating
+     * any field and preserves INFO2 identity before accessing the array. */
     D3DKMT_CALL_CALLBACK(RxgkIntPfnCreateAllocation2, unnamedParam1);
 }
 
@@ -859,10 +867,6 @@ APIENTRY
 NtGdiDdDDIOpenResource2(_Inout_ D3DKMT_OPENRESOURCE* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hGlobalShare);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->pOpenAllocationInfo,
-                                    unnamedParam1->NumAllocations);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnOpenResource, unnamedParam1);
 }
 
@@ -871,16 +875,6 @@ APIENTRY
 NtGdiDdDDICreateSynchronizationObject2(_Inout_ D3DKMT_CREATESYNCHRONIZATIONOBJECT2* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
-    /* The NT10 type range: this file builds at the pre-WDDM2 interface
-     * version, where D3DDDI_SYNCHRONIZATION_TYPE_LIMIT compiles to 5 and
-     * would reject MONITORED_FENCE(5)/PERIODIC_MONITORED_FENCE(6). */
-    if (unnamedParam1->Info.Type <= 0 ||
-        unnamedParam1->Info.Type > 6)
-    {
-        return STATUS_INVALID_PARAMETER;
-    }
-
     D3DKMT_CALL_CALLBACK(RxgkIntPfnCreateSynchronizationObject2, unnamedParam1);
 }
 
@@ -889,7 +883,6 @@ APIENTRY
 NtGdiDdDDIOpenSynchronizationObject(_Inout_ D3DKMT_OPENSYNCHRONIZATIONOBJECT* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    unnamedParam1->hSyncObject = 0;
     return STATUS_NOT_IMPLEMENTED;
 }
 
@@ -898,17 +891,7 @@ APIENTRY
 NtGdiDdDDIWaitForSynchronizationObject2(_In_ const D3DKMT_WAITFORSYNCHRONIZATIONOBJECT2* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hContext);
-    D3DKMT_REQUIRE_SYNC_COUNT(unnamedParam1->ObjectCount,
-                              D3DDDI_MAX_OBJECT_WAITED_ON);
-    {
-        NTSTATUS Status = D3dkmtValidateHandleList(unnamedParam1->ObjectHandleArray,
-                                                   unnamedParam1->ObjectCount,
-                                                   D3DDDI_MAX_OBJECT_WAITED_ON);
-        if (!NT_SUCCESS(Status))
-            return Status;
-    }
-
+    /* The bridge owns top-level capture and all field validation. */
     D3DKMT_CALL_CALLBACK(RxgkIntPfnWaitForSynchronizationObject2, unnamedParam1);
 }
 
@@ -917,19 +900,7 @@ APIENTRY
 NtGdiDdDDISignalSynchronizationObject2(_In_ const D3DKMT_SIGNALSYNCHRONIZATIONOBJECT2* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hContext);
-    D3DKMT_REQUIRE_SYNC_COUNT(unnamedParam1->ObjectCount,
-                              D3DDDI_MAX_OBJECT_SIGNALED);
-    if (unnamedParam1->BroadcastContextCount > D3DDDI_MAX_BROADCAST_CONTEXT)
-        return STATUS_INVALID_PARAMETER;
-    {
-        NTSTATUS Status = D3dkmtValidateHandleList(unnamedParam1->ObjectHandleArray,
-                                                   unnamedParam1->ObjectCount,
-                                                   D3DDDI_MAX_OBJECT_SIGNALED);
-        if (!NT_SUCCESS(Status))
-            return Status;
-    }
-
+    /* The bridge owns top-level capture and all field validation. */
     D3DKMT_CALL_CALLBACK(RxgkIntPfnSignalSynchronizationObject2, unnamedParam1);
 }
 
@@ -978,7 +949,6 @@ APIENTRY
 NtGdiDdDDIGetOverlayState(_Inout_ D3DKMT_GETOVERLAYSTATE* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    unnamedParam1->OverlayEnabled = FALSE;
     return STATUS_NOT_IMPLEMENTED;
 }
 
@@ -1006,7 +976,6 @@ NtGdiDdDDIGetPresentQueueEvent(_In_ D3DKMT_HANDLE hAdapter,
     if (!unnamedParam2)
         return STATUS_INVALID_PARAMETER;
     D3DKMT_REQUIRE_HANDLE(hAdapter);
-    *unnamedParam2 = NULL;
     return STATUS_NOT_IMPLEMENTED;
 }
 
@@ -1015,8 +984,6 @@ APIENTRY
 NtGdiDdDDIUpdateOverlay(_In_ const D3DKMT_UPDATEOVERLAY* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hOverlay);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnUpdateOverlay, unnamedParam1);
 }
 
@@ -1025,7 +992,6 @@ APIENTRY
 NtGdiDdDDIWaitForIdle(_In_ const D3DKMT_WAITFORIDLE* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnWaitForIdle, unnamedParam1);
 }
 
@@ -1034,17 +1000,6 @@ APIENTRY
 NtGdiDdDDIWaitForSynchronizationObject(_In_ const D3DKMT_WAITFORSYNCHRONIZATIONOBJECT* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hContext);
-    D3DKMT_REQUIRE_SYNC_COUNT(unnamedParam1->ObjectCount,
-                              D3DDDI_MAX_OBJECT_WAITED_ON);
-    {
-        NTSTATUS Status = D3dkmtValidateHandleList(unnamedParam1->ObjectHandleArray,
-                                                   unnamedParam1->ObjectCount,
-                                                   D3DDDI_MAX_OBJECT_WAITED_ON);
-        if (!NT_SUCCESS(Status))
-            return Status;
-    }
-
     D3DKMT_CALL_CALLBACK(RxgkIntPfnWaitForSynchronizationObject, unnamedParam1);
 }
 
@@ -1053,7 +1008,6 @@ APIENTRY
 NtGdiDdDDIWaitForVerticalBlankEvent(_In_ const D3DKMT_WAITFORVERTICALBLANKEVENT* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hAdapter);
     D3DKMT_CALL_CALLBACK(RxgkIntPfnWaitForVerticalBlankEvent, unnamedParam1);
 }
 
@@ -1062,17 +1016,6 @@ APIENTRY
 NtGdiDdDDISignalSynchronizationObject(_In_ const D3DKMT_SIGNALSYNCHRONIZATIONOBJECT* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hContext);
-    D3DKMT_REQUIRE_SYNC_COUNT(unnamedParam1->ObjectCount,
-                              D3DDDI_MAX_OBJECT_SIGNALED);
-    {
-        NTSTATUS Status = D3dkmtValidateHandleList(unnamedParam1->ObjectHandleArray,
-                                                   unnamedParam1->ObjectCount,
-                                                   D3DDDI_MAX_OBJECT_SIGNALED);
-        if (!NT_SUCCESS(Status))
-            return Status;
-    }
-
     D3DKMT_CALL_CALLBACK(RxgkIntPfnSignalSynchronizationObject, unnamedParam1);
 }
 
@@ -1116,15 +1059,7 @@ APIENTRY
 NtGdiDdDDIOfferAllocations(_In_ const D3DKMT_OFFERALLOCATIONS* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
-    {
-        NTSTATUS Status = D3dkmtValidateAllocationListChoice(unnamedParam1->pResources,
-                                                             unnamedParam1->HandleList,
-                                                             unnamedParam1->NumAllocations);
-        if (!NT_SUCCESS(Status))
-            return Status;
-    }
-
+    /* The bridge owns top-level capture and all field validation. */
     D3DKMT_CALL_CALLBACK(RxgkIntPfnOfferAllocations, unnamedParam1);
 }
 
@@ -1133,15 +1068,7 @@ APIENTRY
 NtGdiDdDDIReclaimAllocations(_Inout_ D3DKMT_RECLAIMALLOCATIONS* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hDevice);
-    {
-        NTSTATUS Status = D3dkmtValidateAllocationListChoice(unnamedParam1->pResources,
-                                                             unnamedParam1->HandleList,
-                                                             unnamedParam1->NumAllocations);
-        if (!NT_SUCCESS(Status))
-            return Status;
-    }
-
+    /* The bridge owns top-level capture and all field validation. */
     D3DKMT_CALL_CALLBACK(RxgkIntPfnReclaimAllocations, unnamedParam1);
 }
 
@@ -1150,11 +1077,7 @@ APIENTRY
 NtGdiDdDDISetVidPnSourceOwner1(_In_ const D3DKMT_SETVIDPNSOURCEOWNER1* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->Version0.hDevice);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->Version0.pType,
-                                    unnamedParam1->Version0.VidPnSourceCount);
-    D3DKMT_REQUIRE_POINTER_OR_EMPTY(unnamedParam1->Version0.pVidPnSourceId,
-                                    unnamedParam1->Version0.VidPnSourceCount);
+    /* The bridge owns top-level capture and all field validation. */
     D3DKMT_CALL_CALLBACK(RxgkIntPfnSetVidPnSourceOwner1, unnamedParam1);
 }
 
@@ -1163,9 +1086,7 @@ APIENTRY
 NtGdiDdDDIWaitForVerticalBlankEvent2(_In_ const D3DKMT_WAITFORVERTICALBLANKEVENT2* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_REQUIRE_HANDLE(unnamedParam1->hAdapter);
-    if (unnamedParam1->NumObjects > D3DKMT_MAX_WAITFORVERTICALBLANK_OBJECTS)
-        return STATUS_INVALID_PARAMETER;
+    /* The bridge owns top-level capture and all field validation. */
     D3DKMT_CALL_CALLBACK(RxgkIntPfnWaitForVerticalBlankEvent2, unnamedParam1);
 }
 
@@ -1323,7 +1244,7 @@ APIENTRY
 NtGdiDdDDIGetAllocationPriority(_In_ const struct _D3DKMT_GETALLOCATIONPRIORITY* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    D3DKMT_CALL_CALLBACK(RxgkIntPfnGetAllocationPriority, unnamedParam1);
 }
 
 NTSTATUS
@@ -1636,8 +1557,10 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDISetVidPnSourceOwner2(_In_ const struct _D3DKMT_SETVIDPNSOURCEOWNER2* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    return D3DKMTSetVidPnSourceOwner2(unnamedParam1);
 }
 
 NTSTATUS

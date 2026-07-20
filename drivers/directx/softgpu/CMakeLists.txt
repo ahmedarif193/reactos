@@ -6,27 +6,25 @@
 #
 # Build order in drivers/directx:
 #   1. dxgmms1   — no dxgkrnl dependency
-#   2. dxgkrnl   — imports ntoskrnl/hal; exports DxgkInitialize
-#   3. softgpu   — links DxgkInitialize from dxgkrnl import lib
+#   2. dxgkrnl   — imports ntoskrnl/hal; owns the internal resolver device
+#   3. softgpu   — resolves DxgkInitialize through the static displib wrapper
 
 spec2def(softgpu.sys softgpu.spec ADD_IMPORTLIB)
 
-# softgpu is a WDDM 2.0 miniport.  It MUST speak the exact same DDI contract as
-# dxgkrnl so that DRIVER_INITIALIZATION_DATA, DXGK_INTERFACE and every DXGKARG_*
-# structure have byte-identical layouts between the port driver and this
-# miniport.  dxgkrnl's DxgkInitialize copies sizeof(DRIVER_INITIALIZATION_DATA)
-# (its own, WDDM2-sized) bytes out of the table softgpu passes, so a smaller /
-# differently-versioned table on this side reads stack garbage into the WDDM2
-# DDI slots.  Mirror dxgkrnl/CMakeLists.txt exactly (lines 10-19).
+# softgpu declares a WDDM 2.0 runtime contract, but it MUST compile with the
+# same current header version as dxgkrnl so DRIVER_INITIALIZATION_DATA,
+# DXGK_INTERFACE and every DXGKARG_* structure are byte-identical.  The declared
+# InitData.Version remains WDDM 2.0 and the newer table tail stays zero.  Mirror
+# dxgkrnl/CMakeLists.txt exactly.
 remove_definitions(-D_WIN32_WINNT=${REACTOS_TARGET_NT})
 remove_definitions(-DWINVER=${REACTOS_TARGET_NT})
 add_definitions(-D_WIN32_WINNT=0x0601 -DWINVER=0x0601)
 add_definitions(-DNTDDI_VERSION=0x06010000)    # NTDDI_WIN7
 
-# Match dxgkrnl's WDDM 3.1 header surface. Capability reporting still reflects
+# Match dxgkrnl's WDDM 3.2 header surface. Capability reporting still reflects
 # the paths the software miniport actually implements.
 remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
-add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x10004)
+add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x11007)
 
 list(APPEND SOURCE
     softgpu.c
@@ -40,6 +38,7 @@ add_library(softgpu MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/softgpu.def)
 
 set_module_type(softgpu kernelmodedriver)
-add_importlibs(softgpu dxgkrnl ntoskrnl hal)
+target_link_libraries(softgpu displib)
+add_importlibs(softgpu ntoskrnl hal)
 add_pch(softgpu softgpu.h "${SOURCE}")
 add_cd_file(TARGET softgpu DESTINATION reactos/system32/drivers FOR all)

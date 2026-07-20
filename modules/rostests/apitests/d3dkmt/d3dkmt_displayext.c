@@ -189,6 +189,24 @@ static void Test_SetVidPnSourceOwner_AllTypes(void)
        "SetVidPnSourceOwner(count=1, NULL arrays) must be refused, got 0x%08lx%s\n",
        (unsigned long)Status, faulted ? " (faulted)" : "");
 
+    /* A non-NULL array with count zero is malformed, not an empty release. */
+    {
+        D3DKMT_VIDPNSOURCEOWNER_TYPE et = D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVE;
+        D3DDDI_VIDEO_PRESENT_SOURCE_ID sid = 0;
+
+        memset(&OwnerData, 0, sizeof(OwnerData));
+        OwnerData.hDevice = hDevice;
+        OwnerData.pType = &et;
+        OwnerData.pVidPnSourceId = &sid;
+        OwnerData.VidPnSourceCount = 0;
+        Status = STATUS_SUCCESS;
+        faulted = FALSE;
+        _SEH2_TRY { Status = pfn(&OwnerData); }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) { faulted = TRUE; }
+        _SEH2_END;
+        ok(faulted || !NT_SUCCESS(Status), "SetVidPnSourceOwner(count=0, non-NULL arrays) must be refused, got 0x%08lx%s\n", (unsigned long)Status, faulted ? " (faulted)" : "");
+    }
+
     /* Param validation: bogus device handle must be refused. */
     {
         D3DKMT_VIDPNSOURCEOWNER_TYPE et = D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVE;
@@ -272,6 +290,18 @@ static void Test_SetVidPnSourceOwner1(void)
              (unsigned long)Status, faulted ? ", faulted" : "");
     }
 
+    memset(&Owner1, 0, sizeof(Owner1));
+    Owner1.Version0.hDevice = hDevice;
+    Owner1.Version0.pType = &ownerType;
+    Owner1.Version0.pVidPnSourceId = &srcId;
+    Owner1.Version0.VidPnSourceCount = 0;
+    Status = STATUS_SUCCESS;
+    faulted = FALSE;
+    _SEH2_TRY { Status = pfn(&Owner1); }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) { faulted = TRUE; }
+    _SEH2_END;
+    ok(faulted || !NT_SUCCESS(Status), "SetVidPnSourceOwner1(count=0, non-NULL arrays) must be refused, got 0x%08lx%s\n", (unsigned long)Status, faulted ? " (faulted)" : "");
+
     DestroyTestDevice(hDevice);
     CloseAdapter(hAdapter);
 }
@@ -289,6 +319,34 @@ static void Test_SetVidPnSourceOwner2(void)
     }
 
     EXPECT_NULL_REJECTED(pfn, "D3DKMTSetVidPnSourceOwner2");
+}
+
+static void Test_ReleaseProcessVidPnSourceOwners(void)
+{
+    HANDLE QueryProcess;
+    HANDLE SetProcess;
+    NTSTATUS Status;
+
+    LOADFN(PFND3DKMT_RELEASEPROCESSVIDPNSOURCEOWNERS, pfn, "D3DKMTReleaseProcessVidPnSourceOwners");
+    Status = pfn(NULL);
+    ok(Status == STATUS_INVALID_PARAMETER, "ReleaseProcessVidPnSourceOwners(NULL) returned 0x%08lx, expected STATUS_INVALID_PARAMETER\n", (unsigned long)Status);
+    Status = pfn((HANDLE)(ULONG_PTR)0xBAD0CAFE);
+    ok(Status == STATUS_INVALID_PARAMETER, "ReleaseProcessVidPnSourceOwners(invalid handle) returned 0x%08lx, expected STATUS_INVALID_PARAMETER\n", (unsigned long)Status);
+    QueryProcess = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, GetCurrentProcessId());
+    ok(QueryProcess != NULL, "OpenProcess(PROCESS_QUERY_INFORMATION) failed with %lu\n", GetLastError());
+    if (QueryProcess != NULL)
+    {
+        Status = pfn(QueryProcess);
+        ok(Status == STATUS_INVALID_PARAMETER, "ReleaseProcessVidPnSourceOwners(query-only handle) returned 0x%08lx, expected STATUS_INVALID_PARAMETER\n", (unsigned long)Status);
+        CloseHandle(QueryProcess);
+    }
+    SetProcess = OpenProcess(PROCESS_SET_INFORMATION, FALSE, GetCurrentProcessId());
+    ok(SetProcess != NULL, "OpenProcess(PROCESS_SET_INFORMATION) failed with %lu\n", GetLastError());
+    if (SetProcess == NULL)
+        return;
+    Status = pfn(SetProcess);
+    ok(NT_SUCCESS(Status), "ReleaseProcessVidPnSourceOwners(current process) failed with 0x%08lx\n", (unsigned long)Status);
+    CloseHandle(SetProcess);
 }
 
 /* ---- CheckVidPnExclusiveOwnership: NULL + real query + invalid adapter ---- */
@@ -887,6 +945,18 @@ static void Test_PollDisplayChildren(void)
         return;
     }
 
+    memset(&PollData, 0, sizeof(PollData));
+    PollData.hAdapter = hAdapter;
+    PollData.Reserved = 1;
+    Status = pfn(&PollData);
+    ok(!NT_SUCCESS(Status), "PollDisplayChildren must reject reserved flag bits, got 0x%08lx\n", (unsigned long)Status);
+
+    memset(&PollData, 0, sizeof(PollData));
+    PollData.hAdapter = hAdapter;
+    PollData.DisableModeReset = 1;
+    Status = pfn(&PollData);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+
     /* Non-destructive poll; a user-mode caller may be refused on Win11. */
     memset(&PollData, 0, sizeof(PollData));
     PollData.hAdapter = hAdapter;
@@ -902,6 +972,20 @@ static void Test_PollDisplayChildren(void)
     else
         skip("PollDisplayChildren refused for a user-mode caller (0x%08lx%s)\n",
              (unsigned long)Status, faulted ? ", faulted" : "");
+
+    memset(&PollData, 0, sizeof(PollData));
+    PollData.hAdapter = hAdapter;
+    PollData.NonDestructiveOnly = 1;
+    PollData.SynchronousPolling = 1;
+    Status = STATUS_SUCCESS;
+    faulted = FALSE;
+    _SEH2_TRY { Status = pfn(&PollData); }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) { faulted = TRUE; }
+    _SEH2_END;
+    if (!faulted && NT_SUCCESS(Status))
+        trace("PollDisplayChildren synchronous non-destructive poll succeeded\n");
+    else
+        skip("PollDisplayChildren synchronous poll refused (0x%08lx%s)\n", (unsigned long)Status, faulted ? ", faulted" : "");
 
     CloseAdapter(hAdapter);
 }
@@ -948,10 +1032,10 @@ static void Test_InvalidateActiveVidPn(void)
 }
 
 /*
- * ---- WaitForVerticalBlankEvent2: signaled-event, non-blocking ----
- * Drives the v2 wait with an already-signaled manual-reset user event in the
- * object array so the call returns immediately and never blocks under a virtual
- * display.  Traced only -- no timing assertion (per Win11-green rules).
+ * ---- WaitForVerticalBlankEvent2: ordinary-process authorization ----
+ * Windows 11 restricts the additional user-event wait slots to an authorized
+ * graphics process.  An ordinary apitest process must be denied even when the
+ * supplied event is already signaled.
  */
 static void Test_WaitForVerticalBlankEvent2(void)
 {
@@ -994,6 +1078,7 @@ static void Test_WaitForVerticalBlankEvent2(void)
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) { faulted = TRUE; }
     _SEH2_END;
 
+    ok(!faulted && Status == STATUS_ACCESS_DENIED, "WaitForVerticalBlankEvent2 (ordinary process) returned 0x%08lx%s, expected STATUS_ACCESS_DENIED\n", (unsigned long)Status, faulted ? " (faulted)" : "");
     trace("WaitForVerticalBlankEvent2 (pre-signaled event) -> 0x%08lx%s\n",
           (unsigned long)Status, faulted ? " (faulted)" : "");
 
@@ -1009,6 +1094,7 @@ START_TEST(displayext)
     Test_SetVidPnSourceOwner_AllTypes();
     Test_SetVidPnSourceOwner1();
     Test_SetVidPnSourceOwner2();
+    Test_ReleaseProcessVidPnSourceOwners();
     Test_CheckVidPnExclusiveOwnership();
     Test_QueryVidPnExclusiveOwnership();
 

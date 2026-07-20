@@ -564,12 +564,162 @@ static void Test_QueryAllocationResidency(void)
         /* Status should be one of the defined enum values */
         ok(ResidencyStatus == D3DKMT_ALLOCATIONRESIDENCYSTATUS_RESIDENTINGPUMEMORY ||
            ResidencyStatus == D3DKMT_ALLOCATIONRESIDENCYSTATUS_RESIDENTINSHAREDMEMORY ||
-           ResidencyStatus == D3DKMT_ALLOCATIONRESIDENCYSTATUS_NOTRESIDENT ||
-           ResidencyStatus == 0, /* stub may return 0 */
+           ResidencyStatus == D3DKMT_ALLOCATIONRESIDENCYSTATUS_NOTRESIDENT,
            "ResidencyStatus has unexpected value %u\n", ResidencyStatus);
     }
 
     DestroySingleAllocation(pfnD3DKMTDestroyAllocation, hDevice, hAlloc);
+cleanup:
+    DestroyTestDevice(hDevice);
+    CloseAdapter(hAdapter);
+}
+
+/* ---- Test 11: resource priority and aggregate residency ---- */
+static void Test_ResourcePriorityAndResidency(void)
+{
+    D3DKMT_HANDLE hAdapter, hDevice;
+    D3DKMT_CREATEALLOCATION ca;
+    D3DDDI_ALLOCATIONINFO ai[2];
+    D3DKMT_HANDLE Handles[2];
+    D3DKMT_HANDLE BadHandles[2];
+    D3DKMT_SETALLOCATIONPRIORITY sp;
+    D3DKMT_GETALLOCATIONPRIORITY gp;
+    D3DKMT_QUERYALLOCATIONRESIDENCY qr;
+    D3DKMT_DESTROYALLOCATION da;
+    D3DKMT_ALLOCATIONRESIDENCYSTATUS ResidencyStatus;
+    UINT Sizes[2] = { 4096, 8192 };
+    UINT Priorities[2] = { D3DDDI_ALLOCATIONPRIORITY_NORMAL + 1, D3DDDI_ALLOCATIONPRIORITY_LOW };
+    UINT UpdatedPriorities[2] = { D3DDDI_ALLOCATIONPRIORITY_HIGH, D3DDDI_ALLOCATIONPRIORITY_MINIMUM };
+    UINT GotPriorities[2] = { 0, 0 };
+    UINT ResourcePriority = 0;
+    UINT Index;
+    NTSTATUS Status;
+
+    LOAD_D3DKMT(D3DKMTCreateAllocation);
+    LOAD_D3DKMT(D3DKMTDestroyAllocation);
+    LOAD_D3DKMT(D3DKMTSetAllocationPriority);
+    LOAD_D3DKMT(D3DKMTGetAllocationPriority);
+    LOAD_D3DKMT(D3DKMTQueryAllocationResidency);
+
+    hAdapter = OpenAdapterFromDisplay1();
+    if (!hAdapter) { skip("No adapter\n"); return; }
+    hDevice = CreateTestDevice(hAdapter);
+    if (!hDevice) { skip("CreateDevice failed\n"); CloseAdapter(hAdapter); return; }
+
+    memset(ai, 0, sizeof(ai));
+    for (Index = 0; Index < RTL_NUMBER_OF(ai); ++Index)
+    {
+        ai[Index].PrivateDriverDataSize = sizeof(UINT);
+        ai[Index].pPrivateDriverData = &Sizes[Index];
+    }
+    memset(&ca, 0, sizeof(ca));
+    ca.hDevice = hDevice;
+    ca.NumAllocations = RTL_NUMBER_OF(ai);
+    ca.pAllocationInfo = ai;
+    ca.Flags.CreateResource = 1;
+    Status = pfnD3DKMTCreateAllocation(&ca);
+    if (!NT_SUCCESS(Status))
+    {
+        skip("resource priority test needs CreateAllocation support, got 0x%08lX\n", Status);
+        goto cleanup;
+    }
+    for (Index = 0; Index < RTL_NUMBER_OF(ai); ++Index)
+        Handles[Index] = ai[Index].hAllocation;
+
+    memset(&sp, 0, sizeof(sp));
+    sp.hDevice = hDevice;
+    sp.phAllocationList = Handles;
+    sp.AllocationCount = RTL_NUMBER_OF(ai);
+    sp.pPriorities = Priorities;
+    Status = pfnD3DKMTSetAllocationPriority(&sp);
+    ok(NT_SUCCESS(Status), "SetAllocationPriority(arbitrary UINT priority) failed 0x%08lX\n", Status);
+
+    memset(&gp, 0, sizeof(gp));
+    gp.hDevice = hDevice;
+    gp.phAllocationList = Handles;
+    gp.AllocationCount = RTL_NUMBER_OF(Handles);
+    gp.pPriorities = GotPriorities;
+    Status = pfnD3DKMTGetAllocationPriority(&gp);
+    ok(NT_SUCCESS(Status), "GetAllocationPriority(initial list) failed 0x%08lX\n", Status);
+    if (NT_SUCCESS(Status))
+        ok(GotPriorities[0] == Priorities[0] && GotPriorities[1] == Priorities[1], "initial priorities changed: got 0x%08X/0x%08X expected 0x%08X/0x%08X\n", GotPriorities[0], GotPriorities[1], Priorities[0], Priorities[1]);
+
+    BadHandles[0] = Handles[0];
+    BadHandles[1] = (D3DKMT_HANDLE)0xDEAD3003;
+    sp.phAllocationList = BadHandles;
+    sp.pPriorities = UpdatedPriorities;
+    Status = pfnD3DKMTSetAllocationPriority(&sp);
+    ok(!NT_SUCCESS(Status), "SetAllocationPriority accepted a request with an invalid second handle\n");
+    GotPriorities[0] = 0;
+    GotPriorities[1] = 0;
+    Status = pfnD3DKMTGetAllocationPriority(&gp);
+    ok(NT_SUCCESS(Status), "GetAllocationPriority(after failed set) failed 0x%08lX\n", Status);
+    if (NT_SUCCESS(Status))
+        ok(GotPriorities[0] == Priorities[0] && GotPriorities[1] == Priorities[1], "failed request was not atomic: got 0x%08X/0x%08X expected 0x%08X/0x%08X\n", GotPriorities[0], GotPriorities[1], Priorities[0], Priorities[1]);
+
+    sp.phAllocationList = Handles;
+    sp.pPriorities = UpdatedPriorities;
+    Status = pfnD3DKMTSetAllocationPriority(&sp);
+    ok(NT_SUCCESS(Status), "SetAllocationPriority(valid list) failed 0x%08lX\n", Status);
+    GotPriorities[0] = 0;
+    GotPriorities[1] = 0;
+    Status = pfnD3DKMTGetAllocationPriority(&gp);
+    ok(NT_SUCCESS(Status), "GetAllocationPriority(updated list) failed 0x%08lX\n", Status);
+    if (NT_SUCCESS(Status))
+        ok(GotPriorities[0] == UpdatedPriorities[0] && GotPriorities[1] == UpdatedPriorities[1], "updated priorities mismatch: got 0x%08X/0x%08X expected 0x%08X/0x%08X\n", GotPriorities[0], GotPriorities[1], UpdatedPriorities[0], UpdatedPriorities[1]);
+
+    memset(&gp, 0, sizeof(gp));
+    gp.hDevice = hDevice;
+    gp.hResource = ca.hResource;
+    gp.pPriorities = &ResourcePriority;
+    Status = pfnD3DKMTGetAllocationPriority(&gp);
+    ok(NT_SUCCESS(Status), "GetAllocationPriority(mixed resource) failed 0x%08lX\n", Status);
+    if (NT_SUCCESS(Status))
+        ok(ResourcePriority == D3DDDI_ALLOCATIONPRIORITY_HIGH, "resource maximum priority is 0x%08X expected 0x%08X\n", ResourcePriority, D3DDDI_ALLOCATIONPRIORITY_HIGH);
+
+    memset(&sp, 0, sizeof(sp));
+    sp.hDevice = hDevice;
+    sp.hResource = ca.hResource;
+    sp.pPriorities = &Priorities[0];
+    Status = pfnD3DKMTSetAllocationPriority(&sp);
+    ok(NT_SUCCESS(Status), "SetAllocationPriority(resource) failed 0x%08lX\n", Status);
+    GotPriorities[0] = 0;
+    GotPriorities[1] = 0;
+    memset(&gp, 0, sizeof(gp));
+    gp.hDevice = hDevice;
+    gp.phAllocationList = Handles;
+    gp.AllocationCount = RTL_NUMBER_OF(Handles);
+    gp.pPriorities = GotPriorities;
+    Status = pfnD3DKMTGetAllocationPriority(&gp);
+    ok(NT_SUCCESS(Status), "GetAllocationPriority(after resource set) failed 0x%08lX\n", Status);
+    if (NT_SUCCESS(Status))
+        ok(GotPriorities[0] == Priorities[0] && GotPriorities[1] == Priorities[0], "resource priority did not reach every allocation: got 0x%08X/0x%08X expected 0x%08X\n", GotPriorities[0], GotPriorities[1], Priorities[0]);
+    ResourcePriority = 0;
+    memset(&gp, 0, sizeof(gp));
+    gp.hDevice = hDevice;
+    gp.hResource = ca.hResource;
+    gp.pPriorities = &ResourcePriority;
+    Status = pfnD3DKMTGetAllocationPriority(&gp);
+    ok(NT_SUCCESS(Status), "GetAllocationPriority(resource after resource set) failed 0x%08lX\n", Status);
+    if (NT_SUCCESS(Status))
+        ok(ResourcePriority == Priorities[0], "resource priority is 0x%08X expected 0x%08X\n", ResourcePriority, Priorities[0]);
+
+    ResidencyStatus = (D3DKMT_ALLOCATIONRESIDENCYSTATUS)0;
+    memset(&qr, 0, sizeof(qr));
+    qr.hDevice = hDevice;
+    qr.hResource = ca.hResource;
+    qr.pResidencyStatus = &ResidencyStatus;
+    Status = pfnD3DKMTQueryAllocationResidency(&qr);
+    ok(NT_SUCCESS(Status), "QueryAllocationResidency(resource) failed 0x%08lX\n", Status);
+    if (NT_SUCCESS(Status))
+        ok(ResidencyStatus >= D3DKMT_ALLOCATIONRESIDENCYSTATUS_RESIDENTINGPUMEMORY && ResidencyStatus <= D3DKMT_ALLOCATIONRESIDENCYSTATUS_NOTRESIDENT, "resource residency has unexpected value %u\n", ResidencyStatus);
+
+    memset(&da, 0, sizeof(da));
+    da.hDevice = hDevice;
+    da.hResource = ca.hResource;
+    Status = pfnD3DKMTDestroyAllocation(&da);
+    ok(NT_SUCCESS(Status), "DestroyAllocation(resource) failed 0x%08lX\n", Status);
+
 cleanup:
     DestroyTestDevice(hDevice);
     CloseAdapter(hAdapter);
@@ -587,4 +737,5 @@ START_TEST(vidmm)
     Test_StressAllocations();
     Test_AllocationPriority();
     Test_QueryAllocationResidency();
+    Test_ResourcePriorityAndResidency();
 }

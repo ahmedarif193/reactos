@@ -95,6 +95,7 @@ Dxgmms2CreateAdapter(_In_ DXGMMS2_REGISTRATION_HANDLE Registration, _In_ const D
     KeInitializeMutex(&Context->StateMutex, 0);
     ExInitializeRundownProtection(&Context->RundownRef);
     Dxgmms2TimelineInitialize(&Context->Timeline);
+    Dxgmms2ContextStreamManagerInitialize(&Context->ContextStreamManager);
 
     Dxgmms2AcquireMutex(&Dxgmms2GlobalMutex);
     RegistrationContext = Dxgmms2ActiveRegistration;
@@ -138,6 +139,8 @@ Dxgmms2StartAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _In_ const DXGMMS2_STAR
     PDXGMMS2_ADAPTER_CONTEXT Context;
     ULONG ResultCapacity;
     LONG State;
+    NTSTATUS ManagerStatus;
+    NTSTATUS TimelineStatus;
 
     PAGED_CODE();
     if (Info == NULL || Result == NULL)
@@ -184,15 +187,23 @@ Dxgmms2StartAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _In_ const DXGMMS2_STAR
         return STATUS_INVALID_PARAMETER;
     }
 
+    ManagerStatus = Dxgmms2ContextStreamManagerStart(&Context->ContextStreamManager, Info->NodeCount);
+    if (!NT_SUCCESS(ManagerStatus))
     {
-        NTSTATUS TimelineStatus = Dxgmms2TimelineStart(&Context->Timeline, Info->NodeCount);
-
-        if (!NT_SUCCESS(TimelineStatus))
-        {
-            Dxgmms2ReleaseMutex(&Context->StateMutex);
-            Dxgmms2DereferenceAdapterContext(Context);
-            return TimelineStatus;
-        }
+        Dxgmms2ReleaseMutex(&Context->StateMutex);
+        Dxgmms2DereferenceAdapterContext(Context);
+        return ManagerStatus;
+    }
+    TimelineStatus = Dxgmms2TimelineStart(&Context->Timeline, Info->NodeCount);
+    if (!NT_SUCCESS(TimelineStatus))
+    {
+        ManagerStatus = Dxgmms2ContextStreamManagerBeginStop(&Context->ContextStreamManager, Dxgmms2StopReasonStartRollback);
+        ASSERT(NT_SUCCESS(ManagerStatus));
+        ManagerStatus = Dxgmms2ContextStreamManagerCompleteStop(&Context->ContextStreamManager, TRUE);
+        ASSERT(NT_SUCCESS(ManagerStatus));
+        Dxgmms2ReleaseMutex(&Context->StateMutex);
+        Dxgmms2DereferenceAdapterContext(Context);
+        return TimelineStatus;
     }
 
     Context->MiniportDdiVersion = Info->MiniportDdiVersion;
@@ -252,6 +263,13 @@ Dxgmms2BeginStopAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _In_ const DXGMMS2_
             Dxgmms2DereferenceAdapterContext(Context);
             return Status;
         }
+        Status = Dxgmms2ContextStreamManagerBeginStop(&Context->ContextStreamManager, Info->Reason);
+        if (!NT_SUCCESS(Status))
+        {
+            Dxgmms2ReleaseMutex(&Context->StateMutex);
+            Dxgmms2DereferenceAdapterContext(Context);
+            return Status;
+        }
         Context->StopReason = Info->Reason;
         InterlockedExchange(&Context->State, Dxgmms2AdapterStopping);
     }
@@ -292,6 +310,13 @@ Dxgmms2CompleteStopAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _In_ const DXGMM
     State = InterlockedCompareExchange(&Context->State, 0, 0);
     if (State == Dxgmms2AdapterStopping && Context->StopReason == Info->Reason)
     {
+        Status = Dxgmms2ContextStreamManagerCompleteStop(&Context->ContextStreamManager, TRUE);
+        if (!NT_SUCCESS(Status))
+        {
+            Dxgmms2ReleaseMutex(&Context->StateMutex);
+            Dxgmms2DereferenceAdapterContext(Context);
+            return Status;
+        }
         Status = Dxgmms2TimelineCompleteStop(&Context->Timeline);
         if (!NT_SUCCESS(Status))
         {
@@ -338,6 +363,17 @@ Dxgmms2DestroyAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Adapter)
         return STATUS_INVALID_DEVICE_STATE;
     }
     {
+        NTSTATUS ContextStreamStatus = Dxgmms2ContextStreamManagerCanDestroy(&Context->ContextStreamManager);
+
+        if (!NT_SUCCESS(ContextStreamStatus))
+        {
+            InterlockedExchange(&Context->DestroyClaimed, 0);
+            Dxgmms2ReleaseMutex(&Context->StateMutex);
+            Dxgmms2DereferenceAdapterContext(Context);
+            return ContextStreamStatus;
+        }
+    }
+    {
         NTSTATUS TimelineStatus = Dxgmms2TimelinePrepareDestroy(&Context->Timeline);
 
         if (!NT_SUCCESS(TimelineStatus))
@@ -346,6 +382,18 @@ Dxgmms2DestroyAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Adapter)
             Dxgmms2ReleaseMutex(&Context->StateMutex);
             Dxgmms2DereferenceAdapterContext(Context);
             return TimelineStatus;
+        }
+    }
+    {
+        NTSTATUS ContextStreamStatus = Dxgmms2ContextStreamManagerPrepareDestroy(&Context->ContextStreamManager);
+
+        ASSERT(NT_SUCCESS(ContextStreamStatus));
+        if (!NT_SUCCESS(ContextStreamStatus))
+        {
+            InterlockedExchange(&Context->DestroyClaimed, 0);
+            Dxgmms2ReleaseMutex(&Context->StateMutex);
+            Dxgmms2DereferenceAdapterContext(Context);
+            return ContextStreamStatus;
         }
     }
     InterlockedExchange(&Context->State, Dxgmms2AdapterDestroying);

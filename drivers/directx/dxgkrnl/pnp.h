@@ -46,6 +46,12 @@ typedef struct _DXGK_CHILD_PDO_EXTENSION
     /* Cached connector status (hot-plug aware children only) */
     BOOLEAN                 Connected;
 
+    /* Incremented for every presence, descriptor, or connection change. */
+    ULONG64                 StateGeneration;
+
+    /* Adapter start epoch that most recently reported this child. */
+    ULONG64                 EnumerationEpoch;
+
     /* Cached EDID blob (if obtained from DxgkDdiQueryDeviceDescriptor) */
     UCHAR                   Edid[128];
     BOOLEAN                 EdidValid;
@@ -94,6 +100,26 @@ DxgkpQueryBusRelations(
     _Out_ PDEVICE_RELATIONS *Relations);
 
 /*
+ * DxgkpPollDisplayChildrenRequest
+ *   Execute or enqueue the D3DKMT connector-poll contract for one adapter or
+ *   every started adapter.  The asynchronous path retains adapter rundown
+ *   until its worker has finished querying and publishing child state.
+ */
+NTSTATUS
+DxgkpPollDisplayChildrenRequest(
+    _In_ CONST D3DKMT_POLLDISPLAYCHILDREN *PollRequest);
+
+BOOLEAN
+DxgkPnpPublishChildConnection(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG ChildUid,
+    _In_ BOOLEAN Connected);
+
+VOID
+DxgkPnpBeginChildEnumerationEpoch(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
+/*
  * DxgkpCreateChildPdo
  *   Allocate and initialise a PDO for one child device.
  */
@@ -101,6 +127,9 @@ NTSTATUS
 DxgkpCreateChildPdo(
     _In_  PDXGKRNL_ADAPTER          Adapter,
     _In_  PDXGK_CHILD_DESCRIPTOR    Descriptor,
+    _In_  BOOLEAN                   ConnectionKnown,
+    _In_  BOOLEAN                   Connected,
+    _In_  ULONG64                   EnumerationEpoch,
     _Out_ PDXGK_CHILD_PDO_EXTENSION *ChildExtension);
 
 /*

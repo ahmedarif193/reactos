@@ -13,6 +13,7 @@
 #include <reactos/debug.h>
 #include <reactos/drivers/directx/dxgmms2.h>
 #include "timeline_core.h"
+#include "context_stream_core.h"
 
 #define DXGMMS2_REGISTRATION_TAG 'R2mG'
 #define DXGMMS2_ADAPTER_TAG      'A2mG'
@@ -62,6 +63,7 @@ typedef struct _DXGMMS2_ADAPTER_CONTEXT
     ULONG HighestCompleteWddmVersion;
     ULONG StopReason;
     DXGMMS2_TIMELINE_CONTEXT Timeline;
+    DXGMMS2_CONTEXT_STREAM_MANAGER ContextStreamManager;
 } DXGMMS2_ADAPTER_CONTEXT, *PDXGMMS2_ADAPTER_CONTEXT;
 
 extern KMUTEX Dxgmms2GlobalMutex;
@@ -79,6 +81,7 @@ NTSTATUS NTAPI Dxgmms2BeginStopAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _In_
 NTSTATUS NTAPI Dxgmms2CompleteStopAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _In_ const DXGMMS2_STOP_ADAPTER_INFO_V1 *Info);
 NTSTATUS NTAPI Dxgmms2DestroyAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Adapter);
 NTSTATUS NTAPI Dxgmms2QuerySchedulerTimelineInterface(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _Inout_ DXGMMS2_SCHEDULER_TIMELINE_INTERFACE_V1 *TimelineInterface);
+NTSTATUS NTAPI Dxgmms2QueryContextStreamInterface(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _Inout_ DXGMMS2_CONTEXT_STREAM_INTERFACE_V1 *ContextStreamInterface);
 PDXGMMS2_ADAPTER_CONTEXT Dxgmms2ReferenceAdapterContext(_In_ DXGMMS2_ADAPTER_HANDLE Adapter);
 VOID Dxgmms2DereferenceAdapterContext(_In_ PDXGMMS2_ADAPTER_CONTEXT Context);
 

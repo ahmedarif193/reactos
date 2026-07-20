@@ -85,6 +85,19 @@ START_TEST(vc4kmt_smoke)
            "monitored fence value %I64u below target %I64u\n",
            *Fence.CpuValue, Fence.Value);
     }
+    if (Fence.hSyncObject != 0 && Fence.Value != MAXULONGLONG)
+    {
+        VC4KMT_FENCE TimeoutFence = Fence;
+        DWORD StartTick;
+        DWORD Elapsed;
+
+        TimeoutFence.Value++;
+        StartTick = GetTickCount();
+        Status = vc4kmt_wait(Device, &TimeoutFence, 20);
+        Elapsed = GetTickCount() - StartTick;
+        ok_eq_hex(Status, STATUS_IO_TIMEOUT);
+        ok(Elapsed < 1000, "finite vc4kmt_wait took %lu ms\n", Elapsed);
+    }
 
 cleanup:
     vc4kmt_fence_destroy(Device, &Fence);

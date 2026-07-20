@@ -302,11 +302,21 @@ WddmBridgeInit(VOID)
      * IRP_MJ_INTERNAL_DEVICE_CONTROL for kernel-to-kernel communication.
      */
     ExchangeIn.Version = DXGKRNL_INTERFACE_VERSION_CURRENT;
-    ExchangeIn.Size = DXGKRNL_INTERFACE_VERSION_3_SIZE;
+    ExchangeIn.Size = DXGKRNL_INTERFACE_VERSION_4_SIZE;
     RtlZeroMemory(&ExchangeOut, sizeof(ExchangeOut));
     Status = WddmBridgeSendIoctlToDevice(DeviceObject, IOCTL_DXGKRNL_EXCHANGE_INTERFACE, &ExchangeIn, sizeof(ExchangeIn), &ExchangeOut, sizeof(ExchangeOut), &Information);
 
-    /* An older dxgkrnl rejects version 3.  Retry the append-only v2 prefix. */
+    /* An older dxgkrnl rejects version 4.  Retry the append-only v3 prefix. */
+    if (Status == STATUS_NOT_SUPPORTED)
+    {
+        ExchangeIn.Version = DXGKRNL_INTERFACE_VERSION_3;
+        ExchangeIn.Size = DXGKRNL_INTERFACE_VERSION_3_SIZE;
+        RtlZeroMemory(&ExchangeOut, sizeof(ExchangeOut));
+        Information = 0;
+        Status = WddmBridgeSendIoctlToDevice(DeviceObject, IOCTL_DXGKRNL_EXCHANGE_INTERFACE, &ExchangeIn, sizeof(ExchangeIn), &ExchangeOut, sizeof(ExchangeOut), &Information);
+    }
+
+    /* A version-2 dxgkrnl rejects version 3.  Retry the append-only v2 prefix. */
     if (Status == STATUS_NOT_SUPPORTED)
     {
         ExchangeIn.Version = DXGKRNL_INTERFACE_VERSION_2;
@@ -329,7 +339,7 @@ WddmBridgeInit(VOID)
     if (NT_SUCCESS(Status) && Information != ExchangeIn.Size)
         Status = STATUS_INFO_LENGTH_MISMATCH;
 
-    if (NT_SUCCESS(Status) && (ExchangeOut.RxgkIntPfnCreateDevice == NULL || ExchangeOut.RxgkIntPfnPresent == NULL || ExchangeOut.RxgkIntPfnQueryAdapterInfo == NULL || (ExchangeIn.Version >= DXGKRNL_INTERFACE_VERSION_2 && (ExchangeOut.RxgkIntPfnCreateContextVirtual == NULL || ExchangeOut.RxgkIntPfnSubmitCommand == NULL)) || (ExchangeIn.Version >= DXGKRNL_INTERFACE_VERSION_3 && ExchangeOut.RxgkIntPfnCreateAllocation2 == NULL)))
+    if (NT_SUCCESS(Status) && (ExchangeOut.RxgkIntPfnCreateDevice == NULL || ExchangeOut.RxgkIntPfnPresent == NULL || ExchangeOut.RxgkIntPfnQueryAdapterInfo == NULL || (ExchangeIn.Version >= DXGKRNL_INTERFACE_VERSION_2 && (ExchangeOut.RxgkIntPfnCreateContextVirtual == NULL || ExchangeOut.RxgkIntPfnSubmitCommand == NULL)) || (ExchangeIn.Version >= DXGKRNL_INTERFACE_VERSION_3 && ExchangeOut.RxgkIntPfnCreateAllocation2 == NULL) || (ExchangeIn.Version >= DXGKRNL_INTERFACE_VERSION_4 && ExchangeOut.RxgkIntPfnGetAllocationPriority == NULL)))
         Status = STATUS_INVALID_DEVICE_STATE;
 
     if (!NT_SUCCESS(Status))

@@ -2,11 +2,11 @@
 ;
 ; Registers the three WDDM kernel-mode drivers so they load at boot and
 ; replace the legacy XPDM display path (uefifb/vga). Load order is driven by
-; PE imports (softgpu -> dxgkrnl -> dxgmms1), reinforced by Video groups:
+; boot-start service groups; miniports use Displib to resolve dxgkrnl at runtime:
 ;
-;   dxgmms1  WDDM video memory manager      (Video Init) -- dxgkrnl import
-;   dxgkrnl  WDDM port driver / D3DKMT      (Video Init) -- softgpu import,
-;                                           creates \Device\DxgKrnl + \Device\Video0
+;   dxgmms1  legacy WDDM memory manager     (Video Init)
+;   dxgkrnl  WDDM port driver / D3DKMT      (Video Init) -- creates
+;                                           \Device\DxgKrnl + \Device\Video0
 ;   softgpu  WDDM software miniport         (Video)      -- PnP, binds the
 ;            firmware framebuffer PnP device (DETECTEDInternal\uefifb) and
 ;            triggers DxgkAdapterStart -> DxgkDisplayRegister.

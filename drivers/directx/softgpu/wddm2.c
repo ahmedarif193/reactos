@@ -30,10 +30,12 @@
 /*
  * Root page table sizing.  softgpu has no GPU MMU, but dxgkrnl uses the value
  * returned by DxgkDdiGetRootPageTableSize to allocate the root page table
- * backing store, so it must be a sane non-zero byte count.  Model 8 bytes per
- * PTE (one 64-bit entry), matching dxgkrnl's own fallback in gpuva.c.
+ * backing store, so it must be a sane non-zero byte count.  The CPU_VIRTUAL
+ * implementation stores the public 16-byte DXGK_PTE descriptor for each entry.
  */
-#define SOFTGPU_BYTES_PER_PTE   sizeof(ULONGLONG)
+#define SOFTGPU_BYTES_PER_PTE   sizeof(DXGK_PTE)
+
+C_ASSERT(sizeof(DXGK_PTE) == 16);
 
 
 /* =========================================================================
@@ -141,8 +143,8 @@ SoftGpuDdiDestroyProcess(
  *
  * Reports the byte size dxgkrnl must allocate to back the root page table for
  * NumberOfPte entries.  Returns SIZE_T (NOT NTSTATUS).  softgpu has no real
- * page table, so it returns a plausible non-zero size (8 bytes per PTE, at
- * least one page) that dxgkrnl can allocate without choking.
+ * page table, so it returns the exact size of dxgkrnl's software descriptor
+ * table (16 bytes per PTE, with at least one page).
  *
  * IRQL: PASSIVE_LEVEL
  */
@@ -322,6 +324,8 @@ SoftGpuDdiSubmitCommandVirtual(
 
     if (pSubmitCommand->NodeOrdinal != 0 || pSubmitCommand->EngineOrdinal != 0)
         return STATUS_INVALID_PARAMETER;
+    if (!pSubmitCommand->Flags.NullRendering)
+        return STATUS_NOT_SUPPORTED;
 
     DPRINT("SOFTGPU: SubmitCommandVirtual fence=%u node=%u gpuVa=0x%I64x size=%u\n",
            pSubmitCommand->SubmissionFenceId,
