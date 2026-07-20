@@ -120,10 +120,35 @@ IntArc( DC *dc,
     DPRINT("1: Left: %d, Top: %d, Right: %d, Bottom: %d\n",
                RectBounds.left,RectBounds.top,RectBounds.right,RectBounds.bottom);
 
+    /* The transform may have flipped the rect */
+    RECTL_vMakeWellOrdered(&RectBounds);
+
+    if (pdcattr->iGraphicsMode == GM_ADVANCED)
+    {
+        /* In advanced mode the bounding box includes the right/bottom edge */
+        RectBounds.right++;
+        RectBounds.bottom++;
+    }
+
     CenterX = (RectBounds.right + RectBounds.left) / 2;
     CenterY = (RectBounds.bottom + RectBounds.top) / 2;
     AngleEnd   = atan2((RectSEpts.bottom - CenterY), RectSEpts.right - CenterX)*(360.0/(M_PI*2));
     AngleStart = atan2((RectSEpts.top - CenterY), RectSEpts.left - CenterX)*(360.0/(M_PI*2));
+
+    /* Arcs sweep counterclockwise in logical space; a flipping transform
+       inverts the sweep direction in device space */
+    {
+        XFORMOBJ xo;
+        XFORML xform;
+        XFORMOBJ_vInit(&xo, &dc->pdcattr->mxWorldToDevice);
+        XFORMOBJ_iGetXform(&xo, &xform);
+        if ((xform.eM11 * xform.eM22 - xform.eM12 * xform.eM21) < 0)
+        {
+            double AngleTmp = AngleStart;
+            AngleStart = AngleEnd;
+            AngleEnd = AngleTmp;
+        }
+    }
 
     /* Edge Case: Check if the start segments overlaps(is equal) the end segment */
     if (AngleEnd == AngleStart)
