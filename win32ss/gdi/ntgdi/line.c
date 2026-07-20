@@ -64,14 +64,7 @@ AddPenLinesBounds(PDC dc, int count, POINT *points)
     DPRINT("APLB dc %p l %d t %d\n",dc,rect.left,rect.top);
     DPRINT("                 r %d b %d\n",rect.right,rect.bottom);
 
-    {
-       RECTL rcRgn = dc->erclClip; // Use the clip box for now.
-
-       if (RECTL_bIntersectRect( &rcRgn, &rcRgn, &bounds ))
-           IntUpdateBoundsRect(dc, &rcRgn);
-       else
-           IntUpdateBoundsRect(dc, &bounds);
-    }
+    IntUpdateBoundsRect(dc, &bounds);
 }
 
 // Should use Fx in Point

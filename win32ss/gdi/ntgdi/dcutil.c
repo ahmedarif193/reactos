@@ -693,13 +693,26 @@ VOID
 FASTCALL
 IntUpdateBoundsRect(PDC pdc, PRECTL pRect)
 {
+   RECTL rcl = *pRect;
+
+   /* Windows accumulates the operation extent normalized and limited by the
+      current clip extents at drawing time; the result is returned unclamped
+      by NtGdiGetBoundsRect */
+   RECTL_vMakeWellOrdered(&rcl);
+
+   if (pdc->fs & DC_DIRTY_RAO)
+       CLIPPING_UpdateGCRegion(pdc);
+
+   if (!RECTL_bIntersectRect(&rcl, &rcl, &pdc->erclClip))
+       return;
+
    if (pdc->fs & DC_ACCUM_APP)
    {
-      RECTL_bUnionRect(&pdc->erclBoundsApp, &pdc->erclBoundsApp, pRect);
+      RECTL_bUnionRect(&pdc->erclBoundsApp, &pdc->erclBoundsApp, &rcl);
    }
    if (pdc->fs & DC_ACCUM_WMGR)
    {
-      RECTL_bUnionRect(&pdc->erclBounds, &pdc->erclBounds, pRect);
+      RECTL_bUnionRect(&pdc->erclBounds, &pdc->erclBounds, &rcl);
    }
 }
 
@@ -728,19 +741,15 @@ NtGdiGetBoundsRect(
        }
        else
        {
+          /* Clamp the returned rect to the vis region dimensions (not the
+             clip region - the clip limiting already happened when the
+             bounds were accumulated), the way Windows does */
           RECTL rcRgn;
-          if (pdc->fs & DC_DIRTY_RAO) CLIPPING_UpdateGCRegion(pdc);
-          if(!REGION_GetRgnBox(pdc->prgnRao, &rcRgn))
-          {
-             REGION_GetRgnBox(pdc->prgnVis, &rcRgn);
-          }
+          REGION_GetRgnBox(pdc->prgnVis, &rcRgn);
           rc.left   = max( rc.left, 0 );
           rc.top    = max( rc.top, 0 );
           rc.right  = min( rc.right,  rcRgn.right - rcRgn.left );
           rc.bottom = min( rc.bottom, rcRgn.bottom - rcRgn.top );
-          DPRINT("Rao dc %p r %d b %d\n",pdc,rcRgn.right - rcRgn.left, rcRgn.bottom - rcRgn.top);
-          DPRINT("rc  l %d t %d\n",rc.left,rc.top);
-          DPRINT("    r %d b %d\n",rc.right,rc.bottom);
           ret = DCB_SET;
        }
        IntDPtoLP(pdc, (PPOINTL)&rc, 2);
