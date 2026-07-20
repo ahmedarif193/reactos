@@ -41,6 +41,7 @@
 #define SOFTGPU_DEFAULT_WIDTH   1024
 #define SOFTGPU_DEFAULT_HEIGHT  768
 #define SOFTGPU_DEFAULT_FORMAT  D3DDDIFMT_A8R8G8B8  /* 32-bpp ARGB */
+#define SOFTGPU_GPUMMU_END_TO_END 0
 
 /* SOFTGPU_FB_SIZE and SOFTGPU_SEGMENT_ID are defined in softgpu.h */
 
@@ -69,10 +70,10 @@ static const DXGK_DRIVERCAPS SOFTGPU_DRIVER_CAPS =
     .MaxPointerHeight           = 64,
     /* PointerCaps.Value = 0: no hardware cursor */
     .MaxAllocationListSlotId    = 255,
-    .ApertureSegmentCommitLimit = SOFTGPU_FB_SIZE,
+    .ApertureSegmentCommitLimit = 0,
     /* PresentationCaps.Value = 0 */
     .MaxOverlays                = 0,
-    .GammaRampCaps              = 0,
+    .GammaRampCaps.Value        = 0,
     .SchedulingCaps.Value       = 0,
     .MemoryManagementCaps.Value = 0,
     .GpuEngineTopology.NbAsymetricProcessingNodes = 1,
@@ -108,12 +109,8 @@ DriverEntry(
 
     RtlZeroMemory(&InitData, sizeof(InitData));
 
-    /*
-     * Declare the build-level (NT10) ABI: the whole softgpu DDI surface is
-     * compiled and exercised at this version — GpuMmu, virtual submission,
-     * and the WDDM 2.x/3.0 capability words all report their true state.
-     */
-    InitData.Version = DXGKDDI_INTERFACE_VERSION;
+    /* Keep the declared miniport contract at WDDM 2.0; compiling against the newer shared header does not advertise later DDIs. */
+    InitData.Version = DXGKDDI_INTERFACE_VERSION_WDDM2_0;
 
     /* --- Adapter lifecycle ----------------------------------------------- */
     InitData.DxgkDdiAddDevice                       = SoftGpuDdiAddDevice;
@@ -176,16 +173,15 @@ DriverEntry(
     InitData.DxgkDdiControlInterrupt                = SoftGpuDdiControlInterrupt;
 
     /* --- WDDM 2.0 additions ---------------------------------------------- *
-     * Only the fields that actually exist in DRIVER_INITIALIZATION_DATA at
-     * DXGKDDI_INTERFACE_VERSION_WDDM2_0 (0x5023) are wired (see dispmprt.h
-     * lines 1564-1580).  The GPU virtual-addressing DDIs (CreateProcess,
+     * Only fields in the declared DXGKDDI_INTERFACE_VERSION_WDDM2_0
+     * (0x5023) contract are wired.  The GPU virtual-addressing DDIs (CreateProcess,
      * DestroyProcess, GetRootPageTableSize, SetRootPageTable, Map/Unmap CPU
      * host aperture) are the ones dxgkrnl's gpuva.c invokes; SubmitCommand-
      * Virtual and RenderGdi are wired for Win11 DDI completeness.  The MPO,
      * power-runtime and protected-region DDIs are left NULL (not needed by a
-     * software/null GPU and not called by dxgkrnl).  Hardware-queue /
-     * MapGpuVirtualAddresses / monitored-fence DDIs do NOT exist at 0x5023 in
-     * this SDK, so they are intentionally not referenced. */
+     * software/null GPU and not called by dxgkrnl).  Hardware-queue,
+     * MapGpuVirtualAddresses, and monitored-fence DDIs are not part of the
+     * declared WDDM 2.0 contract and remain intentionally unwired. */
     InitData.DxgkDdiCreateProcess                   = SoftGpuDdiCreateProcess;
     InitData.DxgkDdiDestroyProcess                  = SoftGpuDdiDestroyProcess;
     InitData.DxgkDdiGetRootPageTableSize            = SoftGpuDdiGetRootPageTableSize;
@@ -512,7 +508,7 @@ SoftGpuDdiGetNodeMetadata(
     RtlZeroMemory(GetNodeMetadata, sizeof(*GetNodeMetadata));
     GetNodeMetadata->EngineType = DXGK_ENGINE_TYPE_3D;
     RtlCopyMemory(GetNodeMetadata->FriendlyName, L"ReactOS software GPU", sizeof(L"ReactOS software GPU"));
-    GetNodeMetadata->GpuMmuSupported = TRUE;
+    GetNodeMetadata->GpuMmuSupported = SOFTGPU_GPUMMU_END_TO_END;
     GetNodeMetadata->IoMmuSupported = FALSE;
     return STATUS_SUCCESS;
 }
@@ -536,18 +532,18 @@ SoftGpuDdiGetNodeMetadata(
 #define SOFTGPU_FILL_SEGMENT_COUNTS(pOut)                                   \
     do {                                                                    \
         (pOut)->NbSegment                   = 1;                            \
-        (pOut)->PagingBufferSegmentId       = SOFTGPU_SEGMENT_ID;           \
+        (pOut)->PagingBufferSegmentId       = 0;                            \
         (pOut)->PagingBufferSize            = 64 * 1024;                    \
         (pOut)->PagingBufferPrivateDataSize = 0;                            \
     } while (0)
 
-/* Fill pass: one CPU-visible aperture segment over the framebuffer slab. */
+/* Fill pass: one CPU-visible memory segment over the fixed framebuffer slab. */
 #define SOFTGPU_FILL_SEGMENT_DESC(pDesc, Dev)                               \
     do {                                                                    \
         RtlZeroMemory((pDesc), sizeof(*(pDesc)));                           \
-        (pDesc)->Flags.Aperture                  = 1;                       \
         (pDesc)->Flags.CpuVisible                = 1;                       \
         (pDesc)->Flags.PopulatedFromSystemMemory = 1;                       \
+        (pDesc)->Flags.LocalBudgetGroup          = 1;                       \
         (pDesc)->BaseAddress.QuadPart          = (Dev)->FrameBufferPhys.QuadPart; \
         (pDesc)->CpuTranslatedAddress.QuadPart = (Dev)->FrameBufferPhys.QuadPart; \
         (pDesc)->Size                          = (Dev)->FrameBufferSize;    \
@@ -599,6 +595,8 @@ SoftGpuDdiQueryAdapterInfo(
          */
         DXGK_GPUMMUCAPS *GpuMmuCaps;
 
+        if (!SOFTGPU_GPUMMU_END_TO_END)
+            return STATUS_NOT_SUPPORTED;
         if (pQueryAdapterInfo->pOutputData == NULL)
             return STATUS_INVALID_PARAMETER;
         if (pQueryAdapterInfo->OutputDataSize < sizeof(DXGK_GPUMMUCAPS))
@@ -642,12 +640,12 @@ SoftGpuDdiQueryAdapterInfo(
         /*
          * QUERYSEGMENT two-phase protocol.
          *
-         * softgpu exposes a single CPU-visible aperture segment backed by
+         * softgpu exposes a single CPU-visible memory segment backed by
          * the 16 MB write-combined contiguous buffer.
          *
          * Segment flags:
-         *   Aperture              = 1: segment is a GPU-accessible mapping
-         *                             of system memory (no real VRAM).
+         *   Aperture              = 0: the framebuffer slab is the placement,
+         *                             not a remappable aperture.
          *   CpuVisible            = 1: CPU can access directly.
          *   PopulatedFromSystemMemory = 1: backed by system RAM.
          *
@@ -892,9 +890,8 @@ SoftGpuDdiCreateAllocation(
         pInfo->Alignment               = PAGE_SIZE;
         pInfo->SupportedReadSegmentSet = (1 << (SOFTGPU_SEGMENT_ID - 1));
         pInfo->SupportedWriteSegmentSet= (1 << (SOFTGPU_SEGMENT_ID - 1));
-        pInfo->EvictionSegmentSet      = 0;     /* no eviction for aperture */
+        pInfo->EvictionSegmentSet      = 0;     /* direct system transfer */
         pInfo->Flags.CpuVisible        = 1;
-        pInfo->Flags.PermanentSysMem   = 1;     /* stays in system memory   */
         pInfo->Flags.AccessedPhysically= 1;
         pInfo->hAllocation             = (HANDLE)Alloc;
 

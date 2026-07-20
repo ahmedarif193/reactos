@@ -36,6 +36,8 @@
 #include "vidmm.h"
 #include "vidpn.h"
 #include "present.h"
+#include "pnp.h"
+#include "hotplug_work_core.h"
 
 /* ========================================================================
  * Forward declarations for all interface functions
@@ -99,6 +101,7 @@ static NTSTATUS APIENTRY VidPn_AssignTargetModeSet(D3DKMDT_HVIDPN, D3DDDI_VIDEO_
 /* Monitor interface */
 static NTSTATUS APIENTRY Monitor_AcquireMonitorSourceModeSet(HANDLE, D3DDDI_VIDEO_PRESENT_TARGET_ID, D3DKMDT_HMONITORSOURCEMODESET*, CONST DXGK_MONITORSOURCEMODESET_INTERFACE**);
 static NTSTATUS APIENTRY Monitor_ReleaseMonitorSourceModeSet(HANDLE, D3DKMDT_HMONITORSOURCEMODESET);
+static VOID DxgkpDestroySharedPrimaryLocked(PDXGKRNL_ADAPTER);
 
 /* ========================================================================
  * Static interface tables
@@ -216,8 +219,10 @@ typedef struct _DXGKP_SOURCE_OWNER_ADAPTER_STATE
 
 #define DXGKP_MAX_SOURCE_OWNER_OPERATIONS 4096U
 #define DXGKP_STDALLOC_MAX_PRIVATE_SIZE   (64U * 1024U)
+#define DXGKP_SOURCE_OWNER_FLAG_ALLOW_OUTPUT_DUPLICATION 0x00000001U
 #define DXGKP_SOURCE_OWNER_FLAG_DISABLE_DWM_VIRTUAL_MODE 0x00000002U
 #define DXGKP_SOURCE_OWNER_FLAG_USE_NT_HANDLES           0x00000004U
+#define DXGKP_SOURCE_OWNER_FLAG_VALID_MASK               0x00000007U
 #define TAG_DXGK_SOURCE_OWNER 'OxgD'
 
 static LIST_ENTRY g_SourceOwnerAdapterList;
@@ -439,6 +444,53 @@ DxgkVidPnCleanupDeviceOwners(
     }
 }
 
+NTSTATUS
+DxgkVidPnReleaseProcessOwners(
+    _In_ PEPROCESS Process)
+{
+    LIST_ENTRY FreeList;
+    PLIST_ENTRY Entry;
+
+    PAGED_CODE();
+    if (Process == NULL)
+        return STATUS_INVALID_PARAMETER;
+    InitializeListHead(&FreeList);
+    DxgkpEnsureSourceOwnerMutex();
+    ExAcquireFastMutex(&g_SourceOwnerMutex);
+    Entry = g_SourceOwnerAdapterList.Flink;
+    while (Entry != &g_SourceOwnerAdapterList)
+    {
+        PDXGKP_SOURCE_OWNER_ADAPTER_STATE State = CONTAINING_RECORD(Entry, DXGKP_SOURCE_OWNER_ADAPTER_STATE, Entry);
+        PLIST_ENTRY Next = Entry->Flink;
+        ULONG Index;
+
+        for (Index = 0; Index < DXGKP_MAX_SOURCES; ++Index)
+        {
+            if (State->Owners[Index].OwnerDevice != NULL && State->Owners[Index].OwnerDevice->OwnerProcess == Process)
+            {
+                State->Owners[Index].OwnerDevice = NULL;
+                State->Owners[Index].OwnerType = D3DKMT_VIDPNSOURCEOWNER_UNOWNED;
+                State->Owners[Index].OwnerFlags = 0;
+            }
+        }
+        if (DxgkpSourceOwnerStateIsEmpty(State->Owners))
+        {
+            RemoveEntryList(&State->Entry);
+            InsertTailList(&FreeList, &State->Entry);
+        }
+        Entry = Next;
+    }
+    ExReleaseFastMutex(&g_SourceOwnerMutex);
+    while (!IsListEmpty(&FreeList))
+    {
+        PDXGKP_SOURCE_OWNER_ADAPTER_STATE State = CONTAINING_RECORD(RemoveHeadList(&FreeList), DXGKP_SOURCE_OWNER_ADAPTER_STATE, Entry);
+
+        RtlZeroMemory(State->Owners, sizeof(State->Owners));
+        ExFreePoolWithTag(State, TAG_DXGK_SOURCE_OWNER);
+    }
+    return STATUS_SUCCESS;
+}
+
 /* ========================================================================
  * Handle validation helpers
  * ====================================================================== */
@@ -460,6 +512,25 @@ DxgkpVidPnFromHandle(
     }
 
     return VidPn;
+}
+
+BOOLEAN
+DxgkVidPnReference(
+    _In_ D3DKMDT_HVIDPN hVidPn)
+{
+    PDXGKP_VIDPN VidPn = (PDXGKP_VIDPN)hVidPn;
+    LONG References;
+
+    if (VidPn == NULL || VidPn->Signature != DXGKP_VIDPN_SIGNATURE)
+        return FALSE;
+    for (;;)
+    {
+        References = InterlockedCompareExchange(&VidPn->RefCount, 0, 0);
+        if (References <= 0 || References == MAXLONG)
+            return FALSE;
+        if (InterlockedCompareExchange(&VidPn->RefCount, References + 1, References) == References)
+            return TRUE;
+    }
 }
 
 static PDXGKP_VIDPN
@@ -800,6 +871,7 @@ DxgkpAllocateTargetModeSet(
 
 static PDXGKP_MONITOR_SOURCE_MODESET
 DxgkpAllocateMonitorModeSet(
+    _In_ PDXGKP_VIDPN VidPn,
     _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID TargetId)
 {
     PDXGKP_MONITOR_SOURCE_MODESET ModeSet;
@@ -810,6 +882,7 @@ DxgkpAllocateMonitorModeSet(
         return NULL;
 
     RtlZeroMemory(ModeSet, sizeof(*ModeSet));
+    ModeSet->Owner = VidPn;
     ModeSet->TargetId = TargetId;
     ModeSet->NextModeId = 0;
 
@@ -879,7 +952,7 @@ DxgkVidPnCreateForAdapter(
     _In_  PDXGKRNL_ADAPTER  Adapter,
     _Out_ D3DKMDT_HVIDPN   *phVidPn)
 {
-    PDXGKP_VIDPN VidPn;
+    PDXGKP_VIDPN VidPn = NULL;
     ULONG NumSources, NumTargets;
     ULONG i, PathCount;
 
@@ -931,7 +1004,7 @@ DxgkVidPnCreateForAdapter(
         if (VidPn->TargetModeSets[i] == NULL)
             goto Fail;
 
-        VidPn->MonitorModeSets[i] = DxgkpAllocateMonitorModeSet(i);
+        VidPn->MonitorModeSets[i] = DxgkpAllocateMonitorModeSet(VidPn, i);
         if (VidPn->MonitorModeSets[i] == NULL)
             goto Fail;
     }
@@ -1049,11 +1122,12 @@ DxgkVidPnClone(
         }
         if (Source->MonitorModeSets[i] != NULL)
         {
-            Clone->MonitorModeSets[i] = DxgkpAllocateMonitorModeSet(i);
+            Clone->MonitorModeSets[i] = DxgkpAllocateMonitorModeSet(Clone, i);
             if (Clone->MonitorModeSets[i] == NULL)
                 goto CloneFail;
             RtlCopyMemory(Clone->MonitorModeSets[i], Source->MonitorModeSets[i],
                            sizeof(DXGKP_MONITOR_SOURCE_MODESET));
+            Clone->MonitorModeSets[i]->Owner = Clone;
         }
     }
 
@@ -1078,6 +1152,9 @@ DxgkVidPnDestroy(
 
     VidPn = DxgkpVidPnFromHandle(hVidPn);
     if (VidPn == NULL)
+        return;
+
+    if (InterlockedDecrement(&VidPn->RefCount) != 0)
         return;
 
     DXGKRNL_TRACE("DxgkVidPnDestroy: freeing VidPN %p\n", VidPn);
@@ -1113,29 +1190,642 @@ DxgkVidPnDestroy(
  * Hot-plug detection support
  * ====================================================================== */
 
-NTSTATUS
-DxgkVidPnRebuildForHotPlug(
+typedef struct _DXGKP_HOTPLUG_MONITOR_SNAPSHOT
+{
+    BOOLEAN Connected;
+    BOOLEAN EdidValid;
+    ULONG ChildUid;
+    ULONG64 ChildStateGeneration;
+    LONG64 ChildEnumerationEpoch;
+    D3DDDI_VIDEO_PRESENT_TARGET_ID TargetId;
+    UCHAR Edid[128];
+} DXGKP_HOTPLUG_MONITOR_SNAPSHOT, *PDXGKP_HOTPLUG_MONITOR_SNAPSHOT;
+
+static NTSTATUS
+DxgkpSnapshotHotPlugMonitor(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKP_VIDPN VidPn,
+    _In_ LONG64 ExpectedGeneration,
+    _Out_ PDXGKP_HOTPLUG_MONITOR_SNAPSHOT Snapshot)
+{
+    PDXGK_CHILD_PDO_EXTENSION ConnectedChild = NULL;
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+    ULONG ConnectedCount = 0;
+
+    RtlZeroMemory(Snapshot, sizeof(*Snapshot));
+    KeAcquireSpinLock(&Adapter->ChildListLock, &OldIrql);
+    if (InterlockedCompareExchange64(&Adapter->HotPlugGeneration, 0, 0) != ExpectedGeneration)
+    {
+        KeReleaseSpinLock(&Adapter->ChildListLock, OldIrql);
+        return STATUS_RETRY;
+    }
+    Snapshot->ChildEnumerationEpoch = Adapter->ChildEnumerationEpoch;
+    if (!NT_SUCCESS(DxgkHotPlugWorkCoreValidateEnumerationLocked(&Adapter->ChildEnumerationEpoch, &Adapter->ChildRelationsEnumerated, Snapshot->ChildEnumerationEpoch)))
+    {
+        KeReleaseSpinLock(&Adapter->ChildListLock, OldIrql);
+        return STATUS_DEVICE_NOT_READY;
+    }
+    for (Entry = Adapter->ChildListHead.Flink; Entry != &Adapter->ChildListHead; Entry = Entry->Flink)
+    {
+        PDXGK_CHILD_PDO_EXTENSION Child = CONTAINING_RECORD(Entry, DXGK_CHILD_PDO_EXTENSION, ListEntry);
+
+        if (!Child->Present || Child->EnumerationEpoch != Snapshot->ChildEnumerationEpoch || Child->Descriptor.ChildDeviceType != TypeVideoOutput)
+            continue;
+        if (!Child->Connected)
+            continue;
+        ConnectedCount++;
+        ConnectedChild = Child;
+    }
+    if (ConnectedCount == 1)
+    {
+        Snapshot->Connected = TRUE;
+        Snapshot->ChildUid = ConnectedChild->Descriptor.ChildUid;
+        Snapshot->ChildStateGeneration = ConnectedChild->StateGeneration;
+        Snapshot->EdidValid = ConnectedChild->EdidValid;
+        if (Snapshot->EdidValid)
+            RtlCopyMemory(Snapshot->Edid, ConnectedChild->Edid, sizeof(Snapshot->Edid));
+    }
+    if (InterlockedCompareExchange64(&Adapter->HotPlugGeneration, 0, 0) != ExpectedGeneration)
+    {
+        KeReleaseSpinLock(&Adapter->ChildListLock, OldIrql);
+        return STATUS_RETRY;
+    }
+    KeReleaseSpinLock(&Adapter->ChildListLock, OldIrql);
+    if (ConnectedCount > 1 || VidPn->NumSources != 1)
+        return STATUS_NOT_SUPPORTED;
+    if (!Snapshot->Connected)
+        return STATUS_SUCCESS;
+    if (VidPn->NumTargets == 1)
+        Snapshot->TargetId = 0;
+    else if (Snapshot->ChildUid < VidPn->NumTargets)
+        Snapshot->TargetId = Snapshot->ChildUid;
+    else
+        return STATUS_NOT_SUPPORTED;
+    return STATUS_SUCCESS;
+}
+
+static BOOLEAN
+DxgkpHotPlugSnapshotCurrentLocked(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKP_HOTPLUG_MONITOR_SNAPSHOT Snapshot,
+    _In_ LONG64 ExpectedGeneration,
+    _Outptr_result_maybenull_ PDXGK_CHILD_PDO_EXTENSION *MatchingChild)
+{
+    PLIST_ENTRY Entry;
+    ULONG ConnectedCount = 0;
+
+    *MatchingChild = NULL;
+    if (InterlockedCompareExchange64(&Adapter->HotPlugGeneration, 0, 0) != ExpectedGeneration)
+        return FALSE;
+    if (!NT_SUCCESS(DxgkHotPlugWorkCoreValidateEnumerationLocked(&Adapter->ChildEnumerationEpoch, &Adapter->ChildRelationsEnumerated, Snapshot->ChildEnumerationEpoch)))
+        return FALSE;
+    for (Entry = Adapter->ChildListHead.Flink; Entry != &Adapter->ChildListHead; Entry = Entry->Flink)
+    {
+        PDXGK_CHILD_PDO_EXTENSION Child = CONTAINING_RECORD(Entry, DXGK_CHILD_PDO_EXTENSION, ListEntry);
+
+        if (!Child->Present || Child->EnumerationEpoch != Snapshot->ChildEnumerationEpoch || Child->Descriptor.ChildDeviceType != TypeVideoOutput || !Child->Connected)
+            continue;
+        ConnectedCount++;
+        if (Snapshot->Connected && Child->Descriptor.ChildUid == Snapshot->ChildUid && Child->StateGeneration == Snapshot->ChildStateGeneration)
+            *MatchingChild = Child;
+    }
+    if (!Snapshot->Connected)
+        return ConnectedCount == 0;
+    return ConnectedCount == 1 && *MatchingChild != NULL;
+}
+
+static NTSTATUS
+DxgkpRefreshHotPlugEdid(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Inout_ PDXGKP_HOTPLUG_MONITOR_SNAPSHOT Snapshot)
+{
+    PDXGKDDI_QUERY_DEVICE_DESCRIPTOR QueryDeviceDescriptor;
+    DXGK_DEVICE_DESCRIPTOR Descriptor;
+    NTSTATUS Status;
+
+    if (!Snapshot->Connected || Snapshot->EdidValid)
+        return STATUS_SUCCESS;
+    QueryDeviceDescriptor = DXGK_CB(Adapter, DxgkDdiQueryDeviceDescriptor);
+    if (QueryDeviceDescriptor == NULL)
+        return STATUS_SUCCESS;
+    RtlZeroMemory(&Descriptor, sizeof(Descriptor));
+    Descriptor.DescriptorOffset = 0;
+    Descriptor.DescriptorLength = sizeof(Snapshot->Edid);
+    Descriptor.DescriptorBuffer = Snapshot->Edid;
+    if (!DxgkAcquireKmdCall(Adapter))
+        return STATUS_DELETE_PENDING;
+    _SEH2_TRY
+    {
+        Status = QueryDeviceDescriptor(Adapter->MiniportDeviceContext, Snapshot->ChildUid, &Descriptor);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    DxgkReleaseKmdCall(Adapter);
+    if (NT_SUCCESS(Status))
+    {
+        Snapshot->EdidValid = TRUE;
+        return STATUS_SUCCESS;
+    }
+    if (Status == STATUS_MONITOR_NO_DESCRIPTOR || Status == STATUS_NOT_SUPPORTED)
+        return STATUS_SUCCESS;
+    DXGKRNL_WARN("DxgkpRefreshHotPlugEdid: ChildUid %lu descriptor query failed 0x%08lX; retaining existing modes\n", Snapshot->ChildUid, Status);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS DxgkpVidPnRebuildForHotPlugGeneration(_In_ PDXGKRNL_ADAPTER Adapter, _In_ LONG64 ExpectedGeneration);
+
+static VOID
+NTAPI
+DxgkpHotPlugRebuildWorker(
+    _In_ PVOID Context)
+{
+    PDXGKRNL_ADAPTER Adapter = Context;
+    LONG64 ObservedGeneration;
+    LONG64 RetryGeneration = 0;
+    ULONG RetryCount = 0;
+    KIRQL OldIrql;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    for (;;)
+    {
+        KeAcquireSpinLock(&Adapter->ChildListLock, &OldIrql);
+        if (Adapter->State != DxgkAdapterStateStarted || InterlockedCompareExchange(&Adapter->RundownStarted, 0, 0) != 0)
+        {
+            (VOID)DxgkHotPlugWorkCoreCompleteLocked(&Adapter->HotPlugGeneration, &Adapter->HotPlugWorkActive, Adapter->HotPlugGeneration, FALSE);
+            KeReleaseSpinLock(&Adapter->ChildListLock, OldIrql);
+            break;
+        }
+        ObservedGeneration = Adapter->HotPlugGeneration;
+        if (RetryGeneration != ObservedGeneration)
+        {
+            RetryGeneration = ObservedGeneration;
+            RetryCount = 0;
+        }
+        KeReleaseSpinLock(&Adapter->ChildListLock, OldIrql);
+        Status = DxgkpVidPnRebuildForHotPlugGeneration(Adapter, ObservedGeneration);
+        KeAcquireSpinLock(&Adapter->ChildListLock, &OldIrql);
+        if (Adapter->State != DxgkAdapterStateStarted || InterlockedCompareExchange(&Adapter->RundownStarted, 0, 0) != 0)
+        {
+            (VOID)DxgkHotPlugWorkCoreCompleteLocked(&Adapter->HotPlugGeneration, &Adapter->HotPlugWorkActive, Adapter->HotPlugGeneration, FALSE);
+            KeReleaseSpinLock(&Adapter->ChildListLock, OldIrql);
+            break;
+        }
+        if (Adapter->HotPlugGeneration != ObservedGeneration)
+        {
+            RetryCount = 0;
+            KeReleaseSpinLock(&Adapter->ChildListLock, OldIrql);
+            continue;
+        }
+        if (DxgkHotPlugWorkCoreShouldRetry(Status, RetryCount))
+        {
+            LARGE_INTEGER Delay;
+            ULONG DelayMs = DxgkHotPlugWorkCoreRetryDelayMs(RetryCount);
+
+            RetryCount++;
+            KeReleaseSpinLock(&Adapter->ChildListLock, OldIrql);
+            Delay.QuadPart = -(LONGLONG)DelayMs * 10000;
+            KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+            continue;
+        }
+        if (!NT_SUCCESS(Status))
+            DXGKRNL_WARN("DxgkpHotPlugRebuildWorker: adapter %p generation %I64d rebuild retired after %lu retries with 0x%08lX\n", Adapter, ObservedGeneration, RetryCount, Status);
+        if (!DxgkHotPlugWorkCoreCompleteLocked(&Adapter->HotPlugGeneration, &Adapter->HotPlugWorkActive, ObservedGeneration, TRUE))
+        {
+            KeReleaseSpinLock(&Adapter->ChildListLock, OldIrql);
+            continue;
+        }
+        KeReleaseSpinLock(&Adapter->ChildListLock, OldIrql);
+        break;
+    }
+    ExReleaseRundownProtection(&Adapter->RundownRef);
+}
+
+VOID
+DxgkVidPnInitializeHotPlugWorker(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
+    if (Adapter != NULL)
+        ExInitializeWorkItem(&Adapter->HotPlugWorkItem, DxgkpHotPlugRebuildWorker, Adapter);
+}
+
+NTSTATUS
+DxgkVidPnQueueHotPlugRebuild(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    KIRQL OldIrql;
+
+    PAGED_CODE();
+    if (Adapter == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (Adapter->State != DxgkAdapterStateStarted || InterlockedCompareExchange(&Adapter->RundownStarted, 0, 0) != 0)
+        return STATUS_DELETE_PENDING;
+    KeAcquireSpinLock(&Adapter->ChildListLock, &OldIrql);
+    (VOID)DxgkHotPlugWorkCorePublishLocked(&Adapter->HotPlugGeneration);
+    KeReleaseSpinLock(&Adapter->ChildListLock, OldIrql);
+    if (!ExAcquireRundownProtection(&Adapter->RundownRef))
+        return STATUS_DELETE_PENDING;
+    if (Adapter->State != DxgkAdapterStateStarted || InterlockedCompareExchange(&Adapter->RundownStarted, 0, 0) != 0)
+    {
+        ExReleaseRundownProtection(&Adapter->RundownRef);
+        return STATUS_DELETE_PENDING;
+    }
+    KeAcquireSpinLock(&Adapter->ChildListLock, &OldIrql);
+    if (Adapter->State != DxgkAdapterStateStarted || InterlockedCompareExchange(&Adapter->RundownStarted, 0, 0) != 0)
+    {
+        KeReleaseSpinLock(&Adapter->ChildListLock, OldIrql);
+        ExReleaseRundownProtection(&Adapter->RundownRef);
+        return STATUS_DELETE_PENDING;
+    }
+    if (!DxgkHotPlugWorkCoreTryActivateLocked(&Adapter->HotPlugWorkActive))
+    {
+        KeReleaseSpinLock(&Adapter->ChildListLock, OldIrql);
+        ExReleaseRundownProtection(&Adapter->RundownRef);
+        return STATUS_SUCCESS;
+    }
+    KeReleaseSpinLock(&Adapter->ChildListLock, OldIrql);
+    ExQueueWorkItem(&Adapter->HotPlugWorkItem, DelayedWorkQueue);
+    return STATUS_SUCCESS;
+}
+
+static BOOLEAN
+DxgkpParseEdidPreferredSignal(
+    _In_reads_bytes_(128) CONST UCHAR *Edid,
+    _Out_ D3DKMDT_VIDEO_SIGNAL_INFO *Signal)
+{
+    CONST UCHAR *Timing = &Edid[54];
+    ULONG Checksum = 0;
+    ULONG HActive;
+    ULONG HBlank;
+    ULONG VActive;
+    ULONG VBlank;
+    ULONG HTotal;
+    ULONG VTotal;
+    ULONG PixelClock;
+    ULONG Index;
+
+    if (Edid[0] != 0x00 || Edid[1] != 0xff || Edid[2] != 0xff || Edid[3] != 0xff || Edid[4] != 0xff || Edid[5] != 0xff || Edid[6] != 0xff || Edid[7] != 0x00)
+        return FALSE;
+    for (Index = 0; Index < 128; ++Index)
+        Checksum += Edid[Index];
+    if ((Checksum & 0xff) != 0)
+        return FALSE;
+    PixelClock = ((ULONG)Timing[1] << 8 | Timing[0]) * 10000UL;
+    HActive = Timing[2] | ((ULONG)(Timing[4] & 0xf0) << 4);
+    HBlank = Timing[3] | ((ULONG)(Timing[4] & 0x0f) << 8);
+    VActive = Timing[5] | ((ULONG)(Timing[7] & 0xf0) << 4);
+    VBlank = Timing[6] | ((ULONG)(Timing[7] & 0x0f) << 8);
+    HTotal = HActive + HBlank;
+    VTotal = VActive + VBlank;
+    if (PixelClock == 0 || HActive == 0 || VActive == 0 || HTotal <= HActive || VTotal <= VActive || HActive > 16384 || VActive > 16384)
+        return FALSE;
+    RtlZeroMemory(Signal, sizeof(*Signal));
+    Signal->VideoStandard = D3DKMDT_VSS_OTHER;
+    Signal->TotalSize.cx = HTotal;
+    Signal->TotalSize.cy = VTotal;
+    Signal->ActiveSize.cx = HActive;
+    Signal->ActiveSize.cy = VActive;
+    Signal->VSyncFreq.Numerator = PixelClock;
+    Signal->VSyncFreq.Denominator = HTotal * VTotal;
+    Signal->HSyncFreq.Numerator = PixelClock;
+    Signal->HSyncFreq.Denominator = HTotal;
+    Signal->PixelRate = PixelClock;
+    Signal->ScanLineOrdering = (Timing[17] & 0x80) != 0 ? D3DDDI_VSSLO_INTERLACED_UPPERFIELDFIRST : D3DDDI_VSSLO_PROGRESSIVE;
+    return TRUE;
+}
+
+static NTSTATUS
+DxgkpAddEdidPreferredModes(
+    _Inout_ PDXGKP_VIDPN VidPn,
+    _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID TargetId,
+    _In_reads_bytes_(128) CONST UCHAR *Edid)
+{
+    PDXGKP_VIDPN_SOURCE_MODESET SourceSet = VidPn->SourceModeSets[0];
+    PDXGKP_VIDPN_TARGET_MODESET TargetSet = VidPn->TargetModeSets[TargetId];
+    PDXGKP_MONITOR_SOURCE_MODESET MonitorSet = VidPn->MonitorModeSets[TargetId];
+    D3DKMDT_VIDEO_SIGNAL_INFO Signal;
+    D3DKMDT_VIDPN_SOURCE_MODE SourceMode;
+    D3DKMDT_VIDPN_TARGET_MODE TargetMode;
+    D3DKMDT_MONITOR_SOURCE_MODE MonitorMode;
+    SIZE_T Index;
+    BOOLEAN Found;
+
+    if (SourceSet == NULL || TargetSet == NULL || MonitorSet == NULL)
+        return STATUS_GRAPHICS_INVALID_VIDPN;
+    if (!DxgkpParseEdidPreferredSignal(Edid, &Signal))
+        return STATUS_SUCCESS;
+    for (Index = 0; Index < TargetSet->NumModes; ++Index)
+        TargetSet->Modes[Index].Preference = D3DKMDT_MP_NOTPREFERRED;
+    for (Index = 0; Index < MonitorSet->NumModes; ++Index)
+        MonitorSet->Modes[Index].Preference = D3DKMDT_MP_NOTPREFERRED;
+    DxgkpPopulateDefaultSourceMode(&SourceMode, SourceSet->NextModeId, Signal.ActiveSize.cx, Signal.ActiveSize.cy);
+    Found = FALSE;
+    for (Index = 0; Index < SourceSet->NumModes; ++Index)
+    {
+        if (!DxgkpAreEquivalentSourceModes(&SourceSet->Modes[Index], &SourceMode))
+            continue;
+        SourceSet->PinnedModeId = SourceSet->Modes[Index].Id;
+        Found = TRUE;
+        break;
+    }
+    if (!Found)
+    {
+        if (SourceSet->NumModes >= DXGKP_MAX_MODES)
+            return STATUS_GRAPHICS_RESOURCES_NOT_RELATED;
+        SourceMode.Id = SourceSet->NextModeId++;
+        SourceSet->Modes[SourceSet->NumModes++] = SourceMode;
+        SourceSet->PinnedModeId = SourceMode.Id;
+    }
+    RtlZeroMemory(&TargetMode, sizeof(TargetMode));
+    TargetMode.Id = TargetSet->NextModeId;
+    TargetMode.VideoSignalInfo = Signal;
+    TargetMode.Preference = D3DKMDT_MP_PREFERRED;
+    Found = FALSE;
+    for (Index = 0; Index < TargetSet->NumModes; ++Index)
+    {
+        if (!DxgkpAreEquivalentTargetModes(&TargetSet->Modes[Index], &TargetMode))
+            continue;
+        TargetSet->Modes[Index].Preference = D3DKMDT_MP_PREFERRED;
+        TargetSet->PinnedModeId = TargetSet->Modes[Index].Id;
+        Found = TRUE;
+        break;
+    }
+    if (!Found)
+    {
+        if (TargetSet->NumModes >= DXGKP_MAX_MODES)
+            return STATUS_GRAPHICS_RESOURCES_NOT_RELATED;
+        TargetMode.Id = TargetSet->NextModeId++;
+        TargetSet->Modes[TargetSet->NumModes++] = TargetMode;
+        TargetSet->PinnedModeId = TargetMode.Id;
+    }
+    RtlZeroMemory(&MonitorMode, sizeof(MonitorMode));
+    MonitorMode.Id = MonitorSet->NextModeId;
+    MonitorMode.VideoSignalInfo = Signal;
+    MonitorMode.ColorBasis = D3DKMDT_CB_SRGB;
+    MonitorMode.ColorCoeffDynamicRanges.FirstChannel = 8;
+    MonitorMode.ColorCoeffDynamicRanges.SecondChannel = 8;
+    MonitorMode.ColorCoeffDynamicRanges.ThirdChannel = 8;
+    MonitorMode.Origin = D3DKMDT_MCO_MONITORDESCRIPTOR;
+    MonitorMode.Preference = D3DKMDT_MP_PREFERRED;
+    Found = FALSE;
+    for (Index = 0; Index < MonitorSet->NumModes; ++Index)
+    {
+        if (!DxgkpAreEquivalentMonitorModes(&MonitorSet->Modes[Index], &MonitorMode))
+            continue;
+        MonitorSet->Modes[Index].Preference = D3DKMDT_MP_PREFERRED;
+        Found = TRUE;
+        break;
+    }
+    if (!Found)
+    {
+        if (MonitorSet->NumModes >= DXGKP_MAX_MODES)
+            return STATUS_GRAPHICS_RESOURCES_NOT_RELATED;
+        MonitorMode.Id = MonitorSet->NextModeId++;
+        MonitorSet->Modes[MonitorSet->NumModes++] = MonitorMode;
+    }
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+DxgkpBuildHotPlugCandidate(
+    _Inout_ PDXGKP_VIDPN VidPn,
+    _In_ PDXGKP_HOTPLUG_MONITOR_SNAPSHOT Snapshot)
+{
+    RtlZeroMemory(VidPn->Paths, sizeof(VidPn->Paths));
+    VidPn->NumPaths = 0;
+    if (!Snapshot->Connected)
+        return STATUS_SUCCESS;
+    if (Snapshot->TargetId >= VidPn->NumTargets || VidPn->NumSources != 1)
+        return STATUS_NOT_SUPPORTED;
+    DxgkpPopulateDefaultPath(&VidPn->Paths[0], 0, Snapshot->TargetId);
+    VidPn->NumPaths = 1;
+    if (Snapshot->EdidValid)
+        return DxgkpAddEdidPreferredModes(VidPn, Snapshot->TargetId, Snapshot->Edid);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+DxgkpRecommendHotPlugCandidate(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKP_VIDPN VidPn,
+    _In_ PDXGKP_HOTPLUG_MONITOR_SNAPSHOT Snapshot)
+{
+    PDXGKDDI_RECOMMEND_FUNCTIONAL_VIDPN RecommendFunctionalVidPn = DXGK_CB(Adapter, DxgkDdiRecommendFunctionalVidPn);
+    DXGKARG_RECOMMENDFUNCTIONALVIDPN RecommendArgs;
+    D3DDDI_VIDEO_PRESENT_TARGET_ID TargetId = Snapshot->TargetId;
+    NTSTATUS Status;
+
+    if (RecommendFunctionalVidPn == NULL)
+        return STATUS_SUCCESS;
+    RtlZeroMemory(&RecommendArgs, sizeof(RecommendArgs));
+    RecommendArgs.NumberOfVidPnTargets = Snapshot->Connected ? 1 : 0;
+    RecommendArgs.pVidPnTargetPrioritizationVector = Snapshot->Connected ? &TargetId : NULL;
+    RecommendArgs.hRecommendedFunctionalVidPn = (D3DKMDT_HVIDPN)VidPn;
+    RecommendArgs.RequestReason = DXGK_RFVR_HOTKEY;
+    if (!DxgkAcquireKmdCall(Adapter))
+        return STATUS_DELETE_PENDING;
+    _SEH2_TRY
+    {
+        Status = RecommendFunctionalVidPn(Adapter->MiniportDeviceContext, &RecommendArgs);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    DxgkReleaseKmdCall(Adapter);
+    if (Status == STATUS_GRAPHICS_NO_RECOMMENDED_FUNCTIONAL_VIDPN)
+        return STATUS_SUCCESS;
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (VidPn->Signature != DXGKP_VIDPN_SIGNATURE || VidPn->NumSources != 1 || VidPn->NumPaths > 1)
+        return STATUS_GRAPHICS_INVALID_VIDPN;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+DxgkpRecoverFailedHotPlugRollback(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PVOID RecoveryContext = NULL;
+    NTSTATUS CompleteStatus;
+    NTSTATUS Status;
+
+    InterlockedExchange(&Adapter->TdrOwnershipUncertain, 1);
+    Status = TdrCreateRecoveryContext(&RecoveryContext, Adapter);
+    if (NT_SUCCESS(Status))
+    {
+        Status = TdrResetFromTimeout(RecoveryContext);
+        CompleteStatus = TdrCompleteRecoveryContext(RecoveryContext);
+        RecoveryContext = NULL;
+        if (NT_SUCCESS(Status) && !NT_SUCCESS(CompleteStatus))
+            Status = CompleteStatus;
+    }
+    if (NT_SUCCESS(Status))
+    {
+        InterlockedExchange(&Adapter->TdrOwnershipUncertain, 0);
+        return STATUS_SUCCESS;
+    }
+    DXGKRNL_ERR("DxgkpRecoverFailedHotPlugRollback: reset/restart failed 0x%08lX; failing adapter closed\n", Status);
+    DxgkBeginAdapterRundown(Adapter);
+    return Status;
+}
+
+static NTSTATUS
+DxgkpVidPnRebuildForHotPlugGeneration(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ LONG64 ExpectedGeneration)
+{
+    DXGKP_HOTPLUG_MONITOR_SNAPSHOT Snapshot;
+    D3DKMDT_HVIDPN OldVidPn = NULL;
+    D3DKMDT_HVIDPN Candidate = NULL;
+    D3DKMDT_HVIDPN DetachedVidPn = NULL;
+    PDXGKP_VIDPN CandidateObject;
+    DXGKP_DISPLAY_COMMIT_RESULT CommitResult;
+    DXGKP_DISPLAY_COMMIT_RESULT RollbackResult;
+    ULONG OldCommittedWidth;
+    ULONG OldCommittedHeight;
+    BOOLEAN KmdTransaction = FALSE;
+    BOOLEAN RecoveryRequired = FALSE;
+    PDXGK_CHILD_PDO_EXTENSION MatchingChild = NULL;
+    KIRQL ChildOldIrql;
+    NTSTATUS Status;
+
     PAGED_CODE();
 
     if (Adapter == NULL)
         return STATUS_INVALID_PARAMETER;
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return STATUS_INVALID_DEVICE_STATE;
+    if (DXGK_CB(Adapter, DxgkDdiCommitVidPn) == NULL)
+        return STATUS_NOT_SUPPORTED;
+    (VOID)KeWaitForSingleObject(&Adapter->SharedPrimaryMutex, Executive, KernelMode, FALSE, NULL);
+    DxgkpBeginSharedSurfaceMutationLocked(Adapter);
+    if (!DxgkBeginKmdTransaction(Adapter))
+    {
+        Status = STATUS_DELETE_PENDING;
+        goto Cleanup;
+    }
+    KmdTransaction = TRUE;
+    (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
+    OldVidPn = (D3DKMDT_HVIDPN)Adapter->VidPn;
+    if (!DxgkVidPnReference(OldVidPn))
+        OldVidPn = NULL;
+    OldCommittedWidth = Adapter->CommittedWidth;
+    OldCommittedHeight = Adapter->CommittedHeight;
+    KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
+    if (OldVidPn == NULL)
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+        goto Cleanup;
+    }
+    Status = DxgkpSnapshotHotPlugMonitor(Adapter, (PDXGKP_VIDPN)OldVidPn, ExpectedGeneration, &Snapshot);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    Status = DxgkpRefreshHotPlugEdid(Adapter, &Snapshot);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    Status = DxgkVidPnClone(OldVidPn, &Candidate);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    CandidateObject = (PDXGKP_VIDPN)Candidate;
+    Status = DxgkpBuildHotPlugCandidate(CandidateObject, &Snapshot);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    Status = DxgkpRecommendHotPlugCandidate(Adapter, CandidateObject, &Snapshot);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    KeAcquireSpinLock(&Adapter->ChildListLock, &ChildOldIrql);
+    if (!DxgkpHotPlugSnapshotCurrentLocked(Adapter, &Snapshot, ExpectedGeneration, &MatchingChild))
+        Status = STATUS_RETRY;
+    KeReleaseSpinLock(&Adapter->ChildListLock, ChildOldIrql);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    Status = DxgkpDisplayCommitVidPnCandidate(Adapter, Candidate, &CommitResult);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
+    KeAcquireSpinLock(&Adapter->ChildListLock, &ChildOldIrql);
+    MatchingChild = NULL;
+    if ((D3DKMDT_HVIDPN)Adapter->VidPn != OldVidPn || !DxgkpHotPlugSnapshotCurrentLocked(Adapter, &Snapshot, ExpectedGeneration, &MatchingChild))
+    {
+        KeReleaseSpinLock(&Adapter->ChildListLock, ChildOldIrql);
+        KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
+        Status = DxgkpDisplayCommitVidPnCandidate(Adapter, OldVidPn, &RollbackResult);
+        if (NT_SUCCESS(Status))
+            Status = STATUS_RETRY;
+        else
+        {
+            NTSTATUS RollbackStatus = Status;
 
-    /*
-     * For now, the existing VidPN is valid (it was created at adapter start).
-     * A full implementation would:
-     *   1. Query each child's connection status
-     *   2. Read EDID from connected monitors
-     *   3. Rebuild mode sets based on EDID data
-     *   4. Call DxgkDdiRecommendFunctionalVidPn
-     *   5. CommitVidPn with the new topology
-     *
-     * For the current DOD path, the existing VidPN remains valid.
-     */
-    DXGKRNL_TRACE("DxgkVidPnRebuildForHotPlug: adapter %p (topology preserved)\n",
-                  Adapter);
-    return STATUS_SUCCESS;
+            (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
+            Adapter->VidPnCommitted = FALSE;
+            KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
+            InterlockedExchange(&Adapter->TdrOwnershipUncertain, 1);
+            RecoveryRequired = TRUE;
+            Status = RollbackStatus;
+        }
+        goto Cleanup;
+    }
+    DetachedVidPn = (D3DKMDT_HVIDPN)Adapter->VidPn;
+    Adapter->VidPn = Candidate;
+    Adapter->CommittedWidth = CommitResult.CommittedWidth;
+    Adapter->CommittedHeight = CommitResult.CommittedHeight;
+    Adapter->VidPnCommitted = CommitResult.VidPnCommitted;
+    if (Snapshot.Connected && Snapshot.EdidValid && MatchingChild != NULL)
+    {
+        RtlCopyMemory(MatchingChild->Edid, Snapshot.Edid, sizeof(MatchingChild->Edid));
+        MatchingChild->EdidValid = TRUE;
+    }
+    Candidate = NULL;
+    KeReleaseSpinLock(&Adapter->ChildListLock, ChildOldIrql);
+    KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
+    if (CommitResult.CommittedWidth != OldCommittedWidth || CommitResult.CommittedHeight != OldCommittedHeight || !Snapshot.Connected)
+        DxgkpDestroySharedPrimaryLocked(Adapter);
+    DXGKRNL_TRACE("DxgkVidPnRebuildForHotPlug: atomically published %p replacing %p connected=%u target=%u mode=%ux%u\n", Adapter->VidPn, DetachedVidPn, Snapshot.Connected, Snapshot.TargetId, CommitResult.CommittedWidth, CommitResult.CommittedHeight);
+    Status = STATUS_SUCCESS;
+
+Cleanup:
+    if (KmdTransaction)
+    {
+        DxgkEndKmdTransaction(Adapter);
+        KmdTransaction = FALSE;
+    }
+    if (RecoveryRequired)
+    {
+        NTSTATUS RecoveryStatus = DxgkpRecoverFailedHotPlugRollback(Adapter);
+
+        Status = NT_SUCCESS(RecoveryStatus) ? STATUS_RETRY : RecoveryStatus;
+    }
+    DxgkpEndSharedSurfaceMutationLocked(Adapter);
+    KeReleaseMutex(&Adapter->SharedPrimaryMutex, FALSE);
+    if (DetachedVidPn != NULL)
+        DxgkVidPnDestroy(DetachedVidPn);
+    if (OldVidPn != NULL)
+        DxgkVidPnDestroy(OldVidPn);
+    if (Candidate != NULL)
+        DxgkVidPnDestroy(Candidate);
+    return Status;
+}
+
+NTSTATUS
+DxgkVidPnRebuildForHotPlug(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    LONG64 ExpectedGeneration;
+    NTSTATUS Status;
+
+    if (Adapter == NULL)
+        return STATUS_INVALID_PARAMETER;
+    ExpectedGeneration = InterlockedCompareExchange64(&Adapter->HotPlugGeneration, 0, 0);
+    Status = DxgkpVidPnRebuildForHotPlugGeneration(Adapter, ExpectedGeneration);
+    if (Status == STATUS_RETRY)
+        Status = DxgkVidPnQueueHotPlugRebuild(Adapter);
+    return Status;
 }
 
 /* ========================================================================
@@ -2490,13 +3180,19 @@ Monitor_AcquireMonitorSourceModeSet(
     if (Adapter == NULL)
         return STATUS_INVALID_PARAMETER;
 
+    (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
     VidPn = (PDXGKP_VIDPN)Adapter->VidPn;
-    if (VidPn == NULL || VidPn->Signature != DXGKP_VIDPN_SIGNATURE)
+    if (!DxgkVidPnReference((D3DKMDT_HVIDPN)VidPn))
+    {
+        KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
         return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_TARGET;
+    }
+    KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
 
     if (VideoPresentTargetId >= VidPn->NumTargets ||
         VidPn->MonitorModeSets[VideoPresentTargetId] == NULL)
     {
+        DxgkVidPnDestroy((D3DKMDT_HVIDPN)VidPn);
         return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_TARGET;
     }
 
@@ -2510,8 +3206,11 @@ Monitor_ReleaseMonitorSourceModeSet(
     _In_ HANDLE                                        hAdapter,
     _In_ D3DKMDT_HMONITORSOURCEMODESET                 hMonitorSourceModeSet)
 {
-    UNREFERENCED_PARAMETER(hAdapter);
-    UNREFERENCED_PARAMETER(hMonitorSourceModeSet);
+    PDXGKP_MONITOR_SOURCE_MODESET ModeSet = DxgkpMonitorModeSetFromHandle(hMonitorSourceModeSet);
+
+    if (ModeSet == NULL || ModeSet->Owner == NULL || ModeSet->Owner->Adapter != (PDXGKRNL_ADAPTER)hAdapter)
+        return STATUS_INVALID_PARAMETER;
+    DxgkVidPnDestroy((D3DKMDT_HVIDPN)ModeSet->Owner);
     return STATUS_SUCCESS;
 }
 
@@ -2876,7 +3575,7 @@ DxgkpEnsureSharedPrimaryLocked(
 
     if (Adapter->CommittedWidth == 0 || Adapter->CommittedHeight == 0)
     {
-        Status = DxgkDisplayCommitVidPn(Adapter);
+        Status = DxgkpDisplayCommitVidPnWhileSharedPrimaryLocked(Adapter);
         if (!NT_SUCCESS(Status))
             return Status;
     }
@@ -3137,13 +3836,16 @@ DxgkSetDisplayMode(
         return STATUS_INVALID_HANDLE;
     }
 
+    (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
     VidPn = (PDXGKP_VIDPN)Adapter->VidPn;
     if (VidPn == NULL || VidPn->Signature != DXGKP_VIDPN_SIGNATURE)
     {
+        KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
         DXGKRNL_WARN("DxgkSetDisplayMode: no VidPN on adapter\n");
         Status = STATUS_UNSUCCESSFUL;
         goto Cleanup;
     }
+    KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
 
     (VOID)KeWaitForSingleObject(&Adapter->SharedPrimaryMutex, Executive, KernelMode, FALSE, NULL);
     Status = DxgkpEnsureSharedPrimaryLocked(Adapter, 0);
@@ -3638,7 +4340,7 @@ DxgkGetDisplayModeList(
     _Inout_ D3DKMT_GETDISPLAYMODELIST *pGetDisplayModeList)
 {
     PDXGKRNL_ADAPTER Adapter = NULL;
-    PDXGKP_VIDPN VidPn;
+    PDXGKP_VIDPN VidPn = NULL;
     PDXGKP_VIDPN_SOURCE_MODESET SrcSet;
     NTSTATUS Status = STATUS_SUCCESS;
     UINT NumModes, i;
@@ -3658,18 +4360,22 @@ DxgkGetDisplayModeList(
         goto Cleanup;
     }
 
+    (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
     if (Adapter->CommittedWidth != 0 && Adapter->CommittedHeight != 0)
     {
+        KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
         Status = DxgkpReturnDefaultDisplayModeList(pGetDisplayModeList);
         goto Cleanup;
     }
-
     VidPn = (PDXGKP_VIDPN)Adapter->VidPn;
-    if (VidPn == NULL || VidPn->Signature != DXGKP_VIDPN_SIGNATURE)
+    if (!DxgkVidPnReference((D3DKMDT_HVIDPN)VidPn))
     {
+        VidPn = NULL;
+        KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
         Status = DxgkpReturnDefaultDisplayModeList(pGetDisplayModeList);
         goto Cleanup;
     }
+    KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
 
     if (pGetDisplayModeList->VidPnSourceId >= VidPn->NumSources)
     {
@@ -3725,6 +4431,8 @@ DxgkGetDisplayModeList(
         pGetDisplayModeList->ModeCount = NumModes;
 
 Cleanup:
+    if (VidPn != NULL)
+        DxgkVidPnDestroy((D3DKMDT_HVIDPN)VidPn);
     DxgkDereferenceAdapter(Adapter);
     return Status;
 }
@@ -3761,6 +4469,10 @@ DxgkpSetVidPnSourceOwnerWithFlagsAndAccessMode(
         return STATUS_INVALID_PARAMETER;
     if (pSetVidPnSourceOwner->VidPnSourceCount == 0 && (pSetVidPnSourceOwner->pType != NULL || pSetVidPnSourceOwner->pVidPnSourceId != NULL))
         return STATUS_INVALID_PARAMETER;
+    if ((OwnerFlags & ~DXGKP_SOURCE_OWNER_FLAG_VALID_MASK) != 0)
+        return STATUS_INVALID_PARAMETER;
+    if ((OwnerFlags & DXGKP_SOURCE_OWNER_FLAG_ALLOW_OUTPUT_DUPLICATION) != 0)
+        return STATUS_NOT_SUPPORTED;
     if ((OwnerFlags & DXGKP_SOURCE_OWNER_FLAG_DISABLE_DWM_VIRTUAL_MODE) != 0)
         return STATUS_NOT_SUPPORTED;
     if ((OwnerFlags & DXGKP_SOURCE_OWNER_FLAG_USE_NT_HANDLES) != 0)

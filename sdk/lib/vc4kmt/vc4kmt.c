@@ -340,9 +340,8 @@ vc4kmt_open(
      * Per-device monitored fence: submits are executed asynchronously by
      * the kernel fence pipeline; each submit signals this fence with its
      * own value on GPU retire, and vc4kmt_wait blocks on the CPU-visible
-     * value page.  Degrade gracefully when the fence (or its CPU value
-     * page) is unavailable — submits still execute, waits become
-     * best-effort instead of failing the whole adapter open.
+     * value page.  This is part of the required ABI, so adapter open must
+     * fail rather than turn every later fence into an already-complete lie.
      */
     {
         D3DKMT_CREATESYNCHRONIZATIONOBJECT2 CreateSync;
@@ -351,19 +350,29 @@ vc4kmt_open(
         RtlZeroMemory(&CreateSync, sizeof(CreateSync));
         CreateSync.hDevice = Device->hDevice;
         CreateSync.Info.Type = D3DDDI_MONITORED_FENCE;
+        CreateSync.Info.Flags.NoGPUAccess = 1;
         CreateSync.Info.MonitoredFence.InitialFenceValue = 0;
         SyncStatus = D3DKMTCreateSynchronizationObject2(&CreateSync);
-        if (NT_SUCCESS(SyncStatus))
+        if (!NT_SUCCESS(SyncStatus))
         {
-            Device->hFence = CreateSync.hSyncObject;
-            Device->FenceCpuValue = (volatile UINT64 *)
-                CreateSync.Info.MonitoredFence.FenceValueCPUVirtualAddress;
+            Status = SyncStatus;
+            goto fail;
         }
-        else
+        if (CreateSync.hSyncObject == 0 || CreateSync.Info.MonitoredFence.FenceValueCPUVirtualAddress == NULL)
         {
-            Device->hFence = 0;
-            Device->FenceCpuValue = NULL;
+            if (CreateSync.hSyncObject != 0)
+            {
+                D3DKMT_DESTROYSYNCHRONIZATIONOBJECT DestroySync;
+
+                RtlZeroMemory(&DestroySync, sizeof(DestroySync));
+                DestroySync.hSyncObject = CreateSync.hSyncObject;
+                (void)D3DKMTDestroySynchronizationObject(&DestroySync);
+            }
+            Status = STATUS_INVALID_DEVICE_STATE;
+            goto fail;
         }
+        Device->hFence = CreateSync.hSyncObject;
+        Device->FenceCpuValue = (volatile UINT64 *)CreateSync.Info.MonitoredFence.FenceValueCPUVirtualAddress;
     }
 
     Device->NextFenceValue = 0;
@@ -781,6 +790,9 @@ vc4kmt_wait(
     _In_ const VC4KMT_FENCE *Fence,
     _In_ DWORD TimeoutMs)
 {
+    D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU Wait;
+    D3DKMT_HANDLE Handles[1];
+    UINT64 Values[1];
     DWORD Start;
 
     if (Device == NULL || Fence == NULL)
@@ -790,13 +802,24 @@ vc4kmt_wait(
     if (Fence->hSyncObject == 0 && Fence->CpuValue == NULL)
         return STATUS_SUCCESS;
 
-    if (Fence->CpuValue == NULL)
-    {
-        D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU Wait;
-        D3DKMT_HANDLE Handles[1];
-        UINT64 Values[1];
+    if (Fence->CpuValue != NULL && *Fence->CpuValue >= Fence->Value)
+        return STATUS_SUCCESS;
 
-        /* No CPU value page: best-effort bounded kernel wait. */
+    if (Fence->CpuValue != NULL && TimeoutMs != INFINITE)
+    {
+        Start = GetTickCount();
+        for (;;)
+        {
+            if (*Fence->CpuValue >= Fence->Value)
+                return STATUS_SUCCESS;
+            if (GetTickCount() - Start >= TimeoutMs)
+                return STATUS_IO_TIMEOUT;
+            Sleep(1);
+        }
+    }
+
+    if (Fence->hSyncObject != 0)
+    {
         Handles[0] = Fence->hSyncObject;
         Values[0] = Fence->Value;
         RtlZeroMemory(&Wait, sizeof(Wait));
@@ -804,8 +827,9 @@ vc4kmt_wait(
         Wait.ObjectCount = 1;
         Wait.ObjectHandleArray = Handles;
         Wait.FenceValueArray = Values;
-        (void)D3DKMTWaitForSynchronizationObjectFromCpu(&Wait);
-        return STATUS_SUCCESS;
+        if (TimeoutMs == INFINITE)
+            return D3DKMTWaitForSynchronizationObjectFromCpu(&Wait);
+        return STATUS_NOT_SUPPORTED;
     }
 
     Start = GetTickCount();
@@ -818,25 +842,7 @@ vc4kmt_wait(
         if (TimeoutMs != INFINITE && GetTickCount() - Start >= TimeoutMs)
             return STATUS_IO_TIMEOUT;
 
-        if (Fence->hSyncObject != 0)
-        {
-            D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU Wait;
-            D3DKMT_HANDLE Handles[1];
-            UINT64 Values[1];
-
-            Handles[0] = Fence->hSyncObject;
-            Values[0] = Fence->Value;
-            RtlZeroMemory(&Wait, sizeof(Wait));
-            Wait.hDevice = Device->hDevice;
-            Wait.ObjectCount = 1;
-            Wait.ObjectHandleArray = Handles;
-            Wait.FenceValueArray = Values;
-            (void)D3DKMTWaitForSynchronizationObjectFromCpu(&Wait);
-        }
-        else
-        {
-            Sleep(1);
-        }
+        Sleep(1);
     }
 }
 

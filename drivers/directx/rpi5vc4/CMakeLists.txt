@@ -13,7 +13,7 @@ add_definitions(-D_WIN32_WINNT=0x0601 -DWINVER=0x0601)
 add_definitions(-DNTDDI_VERSION=0x06010000)    # NTDDI_WIN7
 
 remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
-add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x10004)
+add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x11007)
 
 list(APPEND SOURCE
     rpi5vc4.c
@@ -27,8 +27,8 @@ list(APPEND SOURCE
 
 add_library(rpi5vc4 MODULE ${SOURCE} rpi5vc4.rc)
 set_module_type(rpi5vc4 kernelmodedriver)
-add_importlibs(rpi5vc4 dxgkrnl ntoskrnl hal)
-target_link_libraries(rpi5vc4 libcntpr)
+target_link_libraries(rpi5vc4 displib libcntpr)
+add_importlibs(rpi5vc4 ntoskrnl hal)
 add_pch(rpi5vc4 rpi5vc4.h "${SOURCE}")
 add_cd_file(TARGET rpi5vc4 DESTINATION reactos/system32/drivers FOR all)
 add_driver_inf(rpi5vc4 rpi5vc4.inf)

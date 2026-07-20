@@ -577,10 +577,7 @@ Rpi5Vc4DdiCheckMultiPlaneOverlaySupport(
     CheckMultiPlaneOverlaySupport->Supported = TRUE;
     CheckMultiPlaneOverlaySupport->ReturnInfo.Value = 0;
 
-    if (CheckMultiPlaneOverlaySupport->VidPnSourceId != 0 ||
-        CheckMultiPlaneOverlaySupport->PlaneCount > RPI5VC4_MPO_MAX_PLANES ||
-        (CheckMultiPlaneOverlaySupport->PlaneCount != 0 &&
-         CheckMultiPlaneOverlaySupport->pOverlayPlanes == NULL))
+    if (CheckMultiPlaneOverlaySupport->PlaneCount > RPI5VC4_MPO_MAX_PLANES || (CheckMultiPlaneOverlaySupport->PlaneCount != 0 && CheckMultiPlaneOverlaySupport->pPlanes == NULL))
     {
         CheckMultiPlaneOverlaySupport->Supported = FALSE;
         return STATUS_SUCCESS;
@@ -588,9 +585,7 @@ Rpi5Vc4DdiCheckMultiPlaneOverlaySupport(
 
     for (i = 0; i < CheckMultiPlaneOverlaySupport->PlaneCount; i++)
     {
-        if (!Rpi5Vc4MpoPlaneSupported(
-                DeviceExtension,
-                &CheckMultiPlaneOverlaySupport->pOverlayPlanes[i].PlaneAttributes))
+        if (CheckMultiPlaneOverlaySupport->pPlanes[i].VidPnSourceId != 0 || !Rpi5Vc4MpoPlaneSupported(DeviceExtension, &CheckMultiPlaneOverlaySupport->pPlanes[i].PlaneAttributes))
         {
             CheckMultiPlaneOverlaySupport->Supported = FALSE;
             CheckMultiPlaneOverlaySupport->ReturnInfo.FailingPlane = i;

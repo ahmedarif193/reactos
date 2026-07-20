@@ -30,6 +30,52 @@ GetPageSize(void)
 }
 
 static void
+Test_TopLevelGuardCapture(void)
+{
+    PFN_D3DKMTGetDisplayModeList pGetDisplayModeList;
+    PFN_D3DKMTQueryResourceInfo pQueryResourceInfo;
+    PFN_D3DKMTOpenResource pOpenResource;
+    PFN_D3DKMTPresent pPresent;
+    PVOID GuardPage;
+    SIZE_T PageSize;
+    BOOL Faulted;
+    NTSTATUS Status;
+
+    PageSize = GetPageSize();
+    GuardPage = VirtualAlloc(NULL, PageSize, MEM_COMMIT | MEM_RESERVE, PAGE_NOACCESS);
+    if (GuardPage == NULL)
+    {
+        skip("VirtualAlloc failed for top-level D3DKMT guard-page tests\n");
+        return;
+    }
+    pGetDisplayModeList = (PFN_D3DKMTGetDisplayModeList)LoadD3DKMTProc("D3DKMTGetDisplayModeList");
+    pQueryResourceInfo = (PFN_D3DKMTQueryResourceInfo)LoadD3DKMTProc("D3DKMTQueryResourceInfo");
+    pOpenResource = (PFN_D3DKMTOpenResource)LoadD3DKMTProc("D3DKMTOpenResource");
+    pPresent = (PFN_D3DKMTPresent)LoadD3DKMTProc("D3DKMTPresent");
+    if (pGetDisplayModeList != NULL)
+    {
+        CAPTURE_CALL(Status, Faulted, pGetDisplayModeList((D3DKMT_GETDISPLAYMODELIST *)GuardPage));
+        ok(Status == STATUS_ACCESS_VIOLATION, "GetDisplayModeList inaccessible top-level pointer returned 0x%08lX%s\n", (long)Status, Faulted ? " (faulted safely)" : "");
+    }
+    if (pQueryResourceInfo != NULL)
+    {
+        CAPTURE_CALL(Status, Faulted, pQueryResourceInfo((D3DKMT_QUERYRESOURCEINFO *)GuardPage));
+        ok(Status == STATUS_ACCESS_VIOLATION, "QueryResourceInfo inaccessible top-level pointer returned 0x%08lX%s\n", (long)Status, Faulted ? " (faulted safely)" : "");
+    }
+    if (pOpenResource != NULL)
+    {
+        CAPTURE_CALL(Status, Faulted, pOpenResource((D3DKMT_OPENRESOURCE *)GuardPage));
+        ok(Status == STATUS_ACCESS_VIOLATION, "OpenResource inaccessible top-level pointer returned 0x%08lX%s\n", (long)Status, Faulted ? " (faulted safely)" : "");
+    }
+    if (pPresent != NULL)
+    {
+        CAPTURE_CALL(Status, Faulted, pPresent((D3DKMT_PRESENT *)GuardPage));
+        ok(Status == STATUS_ACCESS_VIOLATION, "Present inaccessible top-level pointer returned 0x%08lX%s\n", (long)Status, Faulted ? " (faulted safely)" : "");
+    }
+    VirtualFree(GuardPage, 0, MEM_RELEASE);
+}
+
+static void
 Test_EnumAdapters2EmbeddedOutput(void)
 {
     PFND3DKMT_ENUMADAPTERS2 pfn;
@@ -432,6 +478,7 @@ Test_SetVidPnSourceOwnerCaptureAndRollback(void)
 
 START_TEST(capture)
 {
+    Test_TopLevelGuardCapture();
     Test_EnumAdapters2EmbeddedOutput();
     Test_CreateContextPrivateCapture();
     Test_EscapePrivateCapture();

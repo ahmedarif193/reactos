@@ -747,6 +747,7 @@ TdrResetFromTimeout(
     BOOLEAN SchedulerCompleted = FALSE;
     BOOLEAN KmdExclusive = FALSE;
     BOOLEAN Level3Transition = FALSE;
+    BOOLEAN PresentResetStarted = FALSE;
 
     PAGED_CODE();
 
@@ -802,6 +803,8 @@ TdrResetFromTimeout(
         goto Cleanup;
     }
 
+    DxgkPresentBeginReset(Adapter);
+    PresentResetStarted = TRUE;
     SchedulerStatus = VidSchPrepareAdapterReset(Adapter);
     if (NT_SUCCESS(SchedulerStatus))
         SchedulerPrepared = TRUE;
@@ -910,6 +913,8 @@ TdrResetFromTimeout(
     InterlockedExchange(&Adapter->TdrCompletionNotificationsEnabled, 1);
     DxgkEndKmdExclusive(Adapter, TRUE);
     KmdExclusive = FALSE;
+    DxgkPresentCompleteReset(Adapter);
+    PresentResetStarted = FALSE;
     KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
 
 Cleanup:
@@ -917,6 +922,8 @@ Cleanup:
         VidSchCompleteAdapterReset(Adapter, FALSE);
     if (KmdExclusive)
         DxgkEndKmdExclusive(Adapter, FALSE);
+    if (PresentResetStarted)
+        DxgkPresentCompleteReset(Adapter);
     if (DdiDeadlineArmed)
         DxgkpDisarmTdrDdiDeadline(Adapter);
     if (ContextPublished)

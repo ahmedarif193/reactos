@@ -48,6 +48,9 @@ typedef struct _DXGKRNL_SEGMENT
     /* Total size of the segment in bytes. */
     ULONGLONG           Size;
 
+    /* Maximum bytes the miniport permits dxgkrnl to commit to the segment. */
+    ULONGLONG           CommitLimit;
+
     /*
      * Bytes currently committed to resident allocations.  Updated with
      * InterlockedAdd64 under Segment->Lock for atomic RMW semantics.
@@ -61,8 +64,11 @@ typedef struct _DXGKRNL_SEGMENT
      * first-fit is the fallback once the segment tail is exhausted. */
     ULONGLONG           BumpOffset;
 
-    /* Physical base address of the segment (VRAM or aperture window). */
+    /* GPU logical base address of the segment. */
     PHYSICAL_ADDRESS    BaseAddress;
+
+    /* CPU physical base for a non-aperture CPU-visible memory segment. */
+    PHYSICAL_ADDRESS    CpuTranslatedAddress;
 
     /*
      * Kernel-mode virtual address base established by MmMapIoSpace.
@@ -218,11 +224,18 @@ typedef struct _DXGKVMM_ALLOCATION
     /* Allocation size in bytes (may be rounded up by the miniport). */
     SIZE_T              Size;
 
+    /* Segment resource size when DXGK_SEGMENTFLAGS.PitchAlignment is set. */
+    SIZE_T              PitchAlignedSize;
+
     /*
      * Required base alignment in bytes (power of two).
      * Default is PAGE_SIZE when the miniport reports 0.
      */
     SIZE_T              Alignment;
+
+    /* Miniport-declared placement sets; bit 0 names segment 1. */
+    UINT                SupportedWriteSegmentSet;
+    UINT                EvictionSegmentSet;
 
     /* WDDM allocation priority (D3DDDI_ALLOCATIONPRIORITY_NORMAL default). */
     ULONG               AllocationPriority;
@@ -241,6 +254,10 @@ typedef struct _DXGKVMM_ALLOCATION
      * count to zero releases the placement unless EvictOnlyIfNecessary.
      */
     volatile LONG       ResidencyReferenceCount;
+
+    /* Separate from user MakeResident/Evict references: each admitted GPU
+     * submission pins this exact placement until tracked terminal cleanup. */
+    volatile LONG       SubmissionResidencyPinCount;
 
     /*
      * Physical base address of the allocation.
@@ -369,6 +386,10 @@ VOID
 DxgkVidMmResumeAdapter(
     _In_ PDXGKRNL_ADAPTER Adapter);
 
+VOID
+DxgkVidMmKickDeferredDestroyBatches(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
 NTSTATUS
 DxgkVidMmPrepareForIdle(
     _In_ PDXGKRNL_ADAPTER Adapter);
@@ -471,7 +492,7 @@ DxgkVidMmQueryProcessBudget(
 NTSTATUS
 DxgkVidMmQuerySegmentSizes(
     _In_ PDXGKRNL_ADAPTER Adapter,
-    _Out_ D3DKMT_SEGMENTGROUPSIZEINFO *Info);
+    _Inout_ D3DKMT_SEGMENTGROUPSIZEINFO *Info);
 
 NTSTATUS
 DxgkVidMmSubmitAperturePagingPacket(
@@ -497,12 +518,25 @@ DxgkVidMmReferenceProcessAllocation(
     _Out_ PDXGKVMM_ALLOCATION *OutAllocation);
 
 NTSTATUS
+DxgkVidMmAcquireGpuVaBindingReferences(
+    _In_ HANDLE Handle,
+    _In_ PDXGKRNL_ADAPTER ExpectedAdapter,
+    _In_ PDXGKRNL_PROCESS ExpectedProcess,
+    _Out_ PDXGKVMM_ALLOCATION *OutLogicalAllocation,
+    _Out_ PDXGKVMM_ALLOCATION *OutBackingAllocation);
+
+NTSTATUS
 DxgkVidMmReferenceOpenBinding(
     _In_ HANDLE Handle,
     _In_ PDXGKRNL_ADAPTER ExpectedAdapter,
     _In_ PDXGKRNL_DEVICE ExpectedDevice,
     _Out_ PHANDLE OutOpenBindingHandle,
     _Out_ PDXGKVMM_ALLOCATION *OutBindingReference);
+
+NTSTATUS DxgkVidMmCreatePresentBinding(_In_ PDXGKRNL_DEVICE Device, _In_ PDXGKVMM_ALLOCATION BackingAllocation, _In_ BOOLEAN ReadOnly, _Out_ PHANDLE OutOpenBindingHandle, _Out_ PDXGKVMM_ALLOCATION *OutBindingReference);
+
+/* Device must be held by a live DxgkReferenceDevice ownership reference. */
+NTSTATUS DxgkVidMmDestroyPresentBinding(_In_ PDXGKRNL_DEVICE Device, _In_ PDXGKVMM_ALLOCATION BindingReference);
 
 BOOLEAN
 DxgkVidMmDuplicateLogicalReference(
@@ -516,6 +550,30 @@ VOID
 DxgkVidMmDereferenceAllocation(
     _In_ PDXGKVMM_ALLOCATION Allocation);
 
+/* Duplicate a lifetime reference already owned by the caller.  This remains
+ * valid after handle tombstoning, but never resurrects a zero reference. */
+BOOLEAN
+DxgkVidMmDuplicateAllocationReference(
+    _In_ PDXGKVMM_ALLOCATION Allocation);
+
+NTSTATUS
+DxgkVidMmSetAllocationPriorities(
+    _In_reads_(AllocationCount) PDXGKVMM_ALLOCATION const *Allocations,
+    _In_reads_(AllocationCount) CONST UINT *Priorities,
+    _In_ UINT AllocationCount);
+
+NTSTATUS
+DxgkVidMmQueryAllocationPriorities(
+    _In_reads_(AllocationCount) PDXGKVMM_ALLOCATION const *Allocations,
+    _In_ UINT AllocationCount,
+    _Out_writes_(AllocationCount) UINT *Priorities);
+
+NTSTATUS
+DxgkVidMmQueryAllocationResidencyStates(
+    _In_reads_(AllocationCount) PDXGKVMM_ALLOCATION const *Allocations,
+    _In_ UINT AllocationCount,
+    _Out_writes_(AllocationCount) D3DKMT_ALLOCATIONRESIDENCYSTATUS *ResidencyStates);
+
 /*
  * DxgkVidMmFillAllocationListEntry
  *
@@ -527,6 +585,18 @@ VOID
 DxgkVidMmFillAllocationListEntry(
     _In_ D3DKMT_HANDLE AllocationHandle,
     _Inout_ DXGK_ALLOCATIONLIST *ListEntry);
+
+/* The caller owns a lifetime reference.  Acquisition and the optional
+ * placement snapshot are atomic with normal residency transitions. */
+NTSTATUS
+DxgkVidMmAcquireSubmissionResidencyPin(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ PDXGKRNL_ADAPTER ExpectedAdapter,
+    _Out_opt_ DXGK_ALLOCATIONLIST *ListEntry);
+
+VOID
+DxgkVidMmReleaseSubmissionResidencyPin(
+    _In_ PDXGKVMM_ALLOCATION Allocation);
 
 NTSTATUS
 DxgkVidMmReferenceResource(

@@ -64,7 +64,6 @@
 
 #define DEFINE_DXG_BRIDGE_FORWARDER(Name, Target, Annotation, Type) \
 NTSTATUS                                                            \
-APIENTRY                                                            \
 Name(                                                               \
     Annotation Type *pData)                                         \
 {                                                                   \
@@ -117,6 +116,7 @@ NTSTATUS APIENTRY D3DKMTGetScanLine(D3DKMT_GETSCANLINE *pData);
 NTSTATUS APIENTRY D3DKMTInvalidateActiveVidPn(CONST D3DKMT_INVALIDATEACTIVEVIDPN *pData);
 NTSTATUS APIENTRY D3DKMTPollDisplayChildren(CONST D3DKMT_POLLDISPLAYCHILDREN *pData);
 NTSTATUS APIENTRY D3DKMTQueryAllocationResidency(CONST D3DKMT_QUERYALLOCATIONRESIDENCY *pData);
+NTSTATUS APIENTRY D3DKMTGetAllocationPriority(CONST D3DKMT_GETALLOCATIONPRIORITY *pData);
 NTSTATUS APIENTRY D3DKMTQueryStatistics(CONST D3DKMT_QUERYSTATISTICS *pData);
 NTSTATUS APIENTRY D3DKMTReleaseProcessVidPnSourceOwners(HANDLE hProcess);
 NTSTATUS APIENTRY D3DKMTSetAllocationPriority(CONST D3DKMT_SETALLOCATIONPRIORITY *pData);
@@ -469,6 +469,8 @@ DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeSetAllocationPriority,
                             _In_,
                             CONST D3DKMT_SETALLOCATIONPRIORITY)
 
+DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeGetAllocationPriority, D3DKMTGetAllocationPriority, _In_, CONST D3DKMT_GETALLOCATIONPRIORITY)
+
 DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeSetDisplayPrivateDriverFormat,
                             D3DKMTSetDisplayPrivateDriverFormat,
                             _In_,
@@ -608,7 +610,6 @@ DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeSubmitCommand, D3DKMTSubmitCommand, _In_, C
  * Special case: takes HANDLE, not a struct pointer.
  */
 NTSTATUS
-APIENTRY
 DxgBridgeReleaseProcessVidPnSourceOwners(
     _In_ HANDLE hProcess)
 {
@@ -739,4 +740,6 @@ WddmBridgeInitCallbacks(
     }
     if (WddmBridgeGetInterfaceVersion() >= DXGKRNL_INTERFACE_VERSION_3)
         Interface->RxgkIntPfnCreateAllocation2 = DxgBridgeCreateAllocation2;
+    if (WddmBridgeGetInterfaceVersion() >= DXGKRNL_INTERFACE_VERSION_4)
+        Interface->RxgkIntPfnGetAllocationPriority = DxgBridgeGetAllocationPriority;
 }

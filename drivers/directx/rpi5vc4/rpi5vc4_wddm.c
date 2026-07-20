@@ -1245,6 +1245,7 @@ Rpi5Vc4DdiQueryAdapterInfo(
             Desc->Size = DeviceExtension->VramSize;
             Desc->CommitLimit = DeviceExtension->VramSize;
             Desc->Flags.CpuVisible = 1;
+            Desc->Flags.LocalBudgetGroup = 1;
             return STATUS_SUCCESS;
         }
 
@@ -1277,6 +1278,7 @@ Rpi5Vc4DdiQueryAdapterInfo(
             Desc = (PDXGK_SEGMENTDESCRIPTOR4)SegOut->pSegmentDescriptor;
             RtlZeroMemory(Desc, sizeof(*Desc));
             Desc->Flags.CpuVisible = 1;
+            Desc->Flags.LocalBudgetGroup = 1;
             Desc->BaseAddress = DeviceExtension->VramPhysical;
             Desc->CpuTranslatedAddress = DeviceExtension->VramPhysical;
             Desc->Size = DeviceExtension->VramSize;
@@ -1310,6 +1312,7 @@ Rpi5Vc4DdiQueryAdapterInfo(
             Desc = &SegOut->pSegmentDescriptor[0];
             RtlZeroMemory(Desc, sizeof(*Desc));
             Desc->Flags.CpuVisible = 1;
+            Desc->Flags.LocalBudgetGroup = 1;
             Desc->BaseAddress = DeviceExtension->VramPhysical;
             Desc->CpuTranslatedAddress = DeviceExtension->VramPhysical;
             Desc->Size = DeviceExtension->VramSize;
@@ -1476,6 +1479,16 @@ Rpi5Vc4DdiCreateAllocation(
         PRPI5VC4_ALLOCATION Allocation;
         SIZE_T Size = (Info->Size != 0) ? Info->Size : PAGE_SIZE;
 
+        if (Size > MAXULONG_PTR - (PAGE_SIZE - 1))
+        {
+            while (i > 0)
+            {
+                --i;
+                ExFreePoolWithTag((PVOID)CreateAllocation->pAllocationInfo[i].hAllocation, RPI5VC4_POOL_TAG);
+                CreateAllocation->pAllocationInfo[i].hAllocation = NULL;
+            }
+            return STATUS_INTEGER_OVERFLOW;
+        }
         Size = (Size + PAGE_SIZE - 1) & ~(SIZE_T)(PAGE_SIZE - 1);
         if (Size > DeviceExtension->VramSize)
         {

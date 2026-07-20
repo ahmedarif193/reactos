@@ -122,8 +122,6 @@ DxgkLegacyDetach(
         {
             RemoveEntryList(&Adapter->MiniportAdapterListEntry);
             InitializeListHead(&Adapter->MiniportAdapterListEntry);
-            if (MpCtx->AdapterCount > 0)
-                MpCtx->AdapterCount--;
         }
         KeReleaseSpinLock(&MpCtx->AdapterListLock, OldIrql);
     }
@@ -149,6 +147,13 @@ DxgkLegacyDetach(
 
     /* Delete the FDO.  This also releases the DeviceExtension (Adapter) memory. */
     IoDeleteDevice(DeviceObject);
+    if (MpCtx != NULL)
+    {
+        KeAcquireSpinLock(&MpCtx->AdapterListLock, &OldIrql);
+        ASSERT(MpCtx->AdapterCount > 0);
+        MpCtx->AdapterCount--;
+        KeReleaseSpinLock(&MpCtx->AdapterListLock, OldIrql);
+    }
 
     /*
      * Return STATUS_NOT_SUPPORTED so the PnP Manager knows this driver

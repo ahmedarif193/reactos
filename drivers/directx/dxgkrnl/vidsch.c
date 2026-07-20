@@ -215,6 +215,49 @@ VidSchpReleaseCall(
     ASSERT(ActiveCalls >= 0);
 }
 
+static VOID VidSchpAssertOutstandingWorkersInvariantLocked(_In_ PVIDSCH_ENGINE Engine)
+{
+    ASSERT(Engine->OutstandingWorkers >= 0);
+    ASSERT((KeReadStateEvent(&Engine->WorkersDrainedEvent) != 0) == (Engine->OutstandingWorkers == 0));
+}
+
+static VOID VidSchpReferenceOutstandingWorkerLocked(_In_ PVIDSCH_ENGINE Engine)
+{
+    ASSERT(Engine->OutstandingWorkers >= 0 && Engine->OutstandingWorkers < MAXLONG);
+    if (Engine->OutstandingWorkers++ == 0)
+        KeClearEvent(&Engine->WorkersDrainedEvent);
+    VidSchpAssertOutstandingWorkersInvariantLocked(Engine);
+}
+
+static VOID VidSchpReleaseOutstandingWorker(_In_ PVIDSCH_ENGINE Engine)
+{
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
+    ASSERT(Engine->OutstandingWorkers > 0);
+    if (--Engine->OutstandingWorkers == 0)
+        KeSetEvent(&Engine->WorkersDrainedEvent, IO_NO_INCREMENT, FALSE);
+    VidSchpAssertOutstandingWorkersInvariantLocked(Engine);
+    KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+}
+
+static VOID VidSchpWaitForOutstandingWorkers(_In_ PVIDSCH_ENGINE Engine)
+{
+    BOOLEAN Drained;
+    KIRQL OldIrql;
+
+    for (;;)
+    {
+        KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
+        Drained = Engine->OutstandingWorkers == 0;
+        VidSchpAssertOutstandingWorkersInvariantLocked(Engine);
+        KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+        if (Drained)
+            return;
+        KeWaitForSingleObject(&Engine->WorkersDrainedEvent, Executive, KernelMode, FALSE, NULL);
+    }
+}
+
 static VOID
 VidSchpWaitForCalls(
     _In_ PDXGKRNL_ADAPTER Adapter)
@@ -243,12 +286,100 @@ VidSchpFirstEngineOrdinal(
 }
 
 /* Forward declaration. */
-static VOID VidSchpKickEngine(_In_ PVIDSCH_ENGINE Engine);
+static BOOLEAN VidSchpKickEngine(_In_ PVIDSCH_ENGINE Engine, _In_opt_ PVIDSCH_DMA_PACKET AuthorizedPacket);
+static VOID VidSchpDereferencePacket(_In_ PVIDSCH_DMA_PACKET Packet);
+
+BOOLEAN VidSchIsContextOrderPacketDispatchable(_In_ PVIDSCH_DMA_PACKET Packet)
+{
+    PVIDSCH_ENGINE Engine;
+    KIRQL OldIrql;
+    BOOLEAN Dispatchable;
+
+    if (Packet == NULL || Packet->OwnerEngine == NULL || InterlockedCompareExchange(&Packet->ContextOrderState, 0, 0) != VIDSCH_CONTEXT_ORDER_ADMITTED)
+        return FALSE;
+    Engine = Packet->OwnerEngine;
+    KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
+    Dispatchable = !IsListEmpty(&Engine->RunQueueHead) && Engine->RunQueueHead.Flink == &Packet->RunQueueEntry && !Packet->Kicked && VidSchpReadState(Engine) == VidSchEngineIdle && Engine->Scheduler != NULL && (VidSchpReadSchedulerState(Engine->Scheduler) == VidSchSchedulerRunning || VidSchpReadSchedulerState(Engine->Scheduler) == VidSchSchedulerSuspending);
+    KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+    return Dispatchable;
+}
+
+BOOLEAN VidSchIsContextOrderPacketResubmittable(_In_ PVIDSCH_DMA_PACKET Packet)
+{
+    PVIDSCH_ENGINE Engine;
+    KIRQL OldIrql;
+    BOOLEAN Resubmittable;
+
+    if (Packet == NULL || Packet->OwnerEngine == NULL || Packet->ContextOrderOperation == NULL || InterlockedCompareExchange(&Packet->ContextOrderState, 0, 0) != VIDSCH_CONTEXT_ORDER_SUBMITTED || InterlockedCompareExchange(&Packet->ContextOrderResubmissionPending, 0, 0) == 0)
+        return FALSE;
+    Engine = Packet->OwnerEngine;
+    KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
+    Resubmittable = !IsListEmpty(&Engine->RunQueueHead) && Engine->RunQueueHead.Flink == &Packet->RunQueueEntry && !Packet->Kicked && VidSchpReadState(Engine) == VidSchEngineIdle && Engine->Scheduler != NULL && (VidSchpReadSchedulerState(Engine->Scheduler) == VidSchSchedulerRunning || VidSchpReadSchedulerState(Engine->Scheduler) == VidSchSchedulerSuspending);
+    KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+    return Resubmittable;
+}
+
+BOOLEAN VidSchDispatchContextOrderPacketResubmission(_Inout_ PVIDSCH_DMA_PACKET Packet)
+{
+    BOOLEAN Dispatched;
+
+    if (!VidSchIsContextOrderPacketResubmittable(Packet))
+        return FALSE;
+    if (!VidSchpAcquireCall(Packet->OwnerEngine->Adapter))
+    {
+        DxgkContextOrderAbortPacket(Packet, STATUS_DEVICE_REMOVED);
+        return FALSE;
+    }
+    Dispatched = VidSchpKickEngine(Packet->OwnerEngine, Packet);
+    VidSchpReleaseCall(Packet->OwnerEngine->Adapter);
+    return Dispatched;
+}
+
+VOID VidSchDispatchClaimedContextOrderPacket(_Inout_ PVIDSCH_DMA_PACKET Packet)
+{
+    PVIDSCH_ENGINE Engine;
+    KIRQL OldIrql;
+    BOOLEAN Dispatched;
+    BOOLEAN Removed = FALSE;
+
+    if (Packet == NULL || Packet->OwnerEngine == NULL)
+        return;
+    if (InterlockedCompareExchange(&Packet->ContextOrderState, VIDSCH_CONTEXT_ORDER_DISPATCHING, VIDSCH_CONTEXT_ORDER_CLAIMED) != VIDSCH_CONTEXT_ORDER_CLAIMED)
+        return;
+    Engine = Packet->OwnerEngine;
+    if (!VidSchpAcquireCall(Engine->Adapter))
+    {
+        DxgkContextOrderAbortPacket(Packet, STATUS_DEVICE_REMOVED);
+        return;
+    }
+    Dispatched = VidSchpKickEngine(Engine, Packet);
+    if (!Dispatched)
+    {
+        KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
+        if (!Packet->Kicked && !IsListEmpty(&Engine->RunQueueHead) && Engine->RunQueueHead.Flink == &Packet->RunQueueEntry)
+        {
+            RemoveEntryList(&Packet->RunQueueEntry);
+            InitializeListHead(&Packet->RunQueueEntry);
+            ASSERT(Engine->PendingPacketCount != 0);
+            Engine->PendingPacketCount--;
+            Removed = TRUE;
+        }
+        KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+        DxgkContextOrderCommitPacket(Packet, STATUS_CANCELLED);
+        if (Removed)
+        {
+            DxgkDeviceWorkComplete(Packet->DeviceWork);
+            VidSchpDereferencePacket(Packet);
+        }
+    }
+    VidSchpReleaseCall(Engine->Adapter);
+}
 
 typedef struct _VIDSCH_VIRTUAL_SUBMIT_WORK
 {
     WORK_QUEUE_ITEM WorkItem;
     PVIDSCH_ENGINE Engine;
+    PVIDSCH_DMA_PACKET Packet;
 } VIDSCH_VIRTUAL_SUBMIT_WORK, *PVIDSCH_VIRTUAL_SUBMIT_WORK;
 
 static VOID NTAPI VidSchpVirtualSubmitWorker(_In_ PVOID Parameter);
@@ -263,17 +394,45 @@ VidSchpDereferencePacket(
 
     if (Packet->FenceIdentityReserved && Packet->OwnerEngine != NULL)
         DxgkReleaseSubmittedFenceIdentity(Packet->OwnerEngine->Adapter, Packet->NodeOrdinal, Packet->SubmissionFenceId);
-    if (Packet->TrackerReservation != NULL)
+    if (Packet->TrackerReservation != NULL && !Packet->TrackerOwnsDmaBuffer)
         DxgkCancelTrackedDmaBuffer(Packet->TrackerReservation);
-    if (Packet->DmaBuffer != NULL)
+    if (Packet->DmaBuffer != NULL && !Packet->TrackerOwnsDmaBuffer)
         DxgkFreeDmaBuffer(Packet->DmaBuffer);
     if (Packet->OwnedDriverPrivateData != NULL)
         ExFreePoolWithTag(Packet->OwnedDriverPrivateData, TAG_VIDSCH);
     if (Packet->VirtualSubmitWorkItem != NULL)
         ExFreePoolWithTag(Packet->VirtualSubmitWorkItem, TAG_VIDSCH);
+    DxgkDeviceWorkDestroy(Packet->DeviceWork);
+    Packet->DeviceWork = NULL;
     if (Packet->HoldsContextReference)
         DxgkDereferenceContext((PDXGKRNL_CONTEXT)Packet->Context);
     ExFreePoolWithTag(Packet, TAG_VIDSCH);
+}
+
+VOID VidSchReferenceContextOrderPacket(_Inout_ PVIDSCH_DMA_PACKET Packet)
+{
+    ASSERT(Packet != NULL && InterlockedCompareExchange(&Packet->ReferenceCount, 0, 0) > 0);
+    InterlockedIncrement(&Packet->ReferenceCount);
+}
+
+VOID VidSchDereferenceContextOrderPacket(_Inout_ PVIDSCH_DMA_PACKET Packet)
+{
+    if (Packet != NULL)
+        VidSchpDereferencePacket(Packet);
+}
+
+static BOOLEAN VidSchpPacketSubmissionOwned(_In_ PVIDSCH_DMA_PACKET Packet)
+{
+    return Packet->Kicked || InterlockedCompareExchange(&Packet->ContextOrderResubmissionPending, 0, 0) != 0;
+}
+
+static VOID VidSchpFinalizeDequeuedPacket(_Inout_ PVIDSCH_DMA_PACKET Packet, _In_ NTSTATUS CompletionStatus)
+{
+    InitializeListHead(&Packet->RunQueueEntry);
+    DxgkDeviceWorkComplete(Packet->DeviceWork);
+    if (Packet->ContextOrderOperation != NULL)
+        DxgkContextOrderAbortPacket(Packet, CompletionStatus);
+    VidSchpDereferencePacket(Packet);
 }
 
 static VOID
@@ -284,9 +443,9 @@ VidSchpPacketCleanupWorker(
     PVIDSCH_DMA_PACKET Packet = (PVIDSCH_DMA_PACKET)Parameter;
     PVIDSCH_ENGINE Engine = Packet->OwnerEngine;
 
+    DxgkDeviceWorkComplete(Packet->DeviceWork);
     VidSchpDereferencePacket(Packet);
-    if (InterlockedDecrement(&Engine->OutstandingWorkers) == 0)
-        KeSetEvent(&Engine->WorkersDrainedEvent, IO_NO_INCREMENT, FALSE);
+    VidSchpReleaseOutstandingWorker(Engine);
     VidSchpReleaseCall(Engine->Adapter);
 }
 
@@ -359,27 +518,21 @@ VidSchpCompletionDpcRoutine(
 
         RemoveEntryList(Link);
         Engine->PendingPacketCount--;
+        DxgkDeviceWorkComplete(Packet->DeviceWork);
+        DxgkContextOrderCompletePacket(Packet, STATUS_SUCCESS);
         InsertTailList(&RetireList, Link);
     }
 
     /*
      * Preemption re-admission.  Every kicked-but-uncompleted packet was
      * interrupted by the preemption:
-     *  - paging, tracked, and virtual packets keep their fence (identity
-     *    and order preserved: paging by contract, tracked/virtual because
-     *    the tracker/worker are bound to the minted fence) and are re-kicked
-     *    in place with the Resubmission flag;
-     *  - untracked ordinary packets are re-admitted at the tail behind all
-     *    queued work (paging first by construction), re-minting their fence
-     *    NOW so fence order == queue order stays intact, ordered among
-     *    themselves by descending priority (FIFO within a level).
+     * Resubmission continues the same queued operation.  Keep every packet
+     * in place with its reserved fence identity: changing that identity after
+     * publication would orphan the old reservation and detach tracked paging
+     * state from the DMA buffer that must be submitted again.
      */
     if (PreemptionCompleted)
     {
-        LIST_ENTRY ReadmitHead;
-        PLIST_ENTRY ReadmitLink;
-
-        InitializeListHead(&ReadmitHead);
         Link = Engine->RunQueueHead.Flink;
         while (Link != &Engine->RunQueueHead)
         {
@@ -389,32 +542,11 @@ VidSchpCompletionDpcRoutine(
             if (!Preempted->Kicked)
                 break;
             Preempted->Kicked = FALSE;
-            Preempted->SubmitFlags |= VIDSCH_SUBMITFLAG_RESUBMISSION;
-            if (!Preempted->Tracked && !Preempted->VirtualAddressing &&
-                (Preempted->SubmitFlags & VIDSCH_SUBMITFLAG_PAGING) == 0)
-            {
-                PLIST_ENTRY Sorted;
-
-                RemoveEntryList(Link);
-                for (Sorted = ReadmitHead.Flink; Sorted != &ReadmitHead; Sorted = Sorted->Flink)
-                {
-                    PVIDSCH_DMA_PACKET Queued = CONTAINING_RECORD(Sorted, VIDSCH_DMA_PACKET, RunQueueEntry);
-
-                    if (Queued->Priority < Preempted->Priority)
-                        break;
-                }
-                InsertTailList(Sorted, Link);
-            }
+            InterlockedExchange(&Preempted->ContextOrderResubmissionPending, 1);
+            if (Engine->Adapter->MiniportContext->InitData.s.Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+                Preempted->SubmitFlags |= VIDSCH_SUBMITFLAG_RESUBMISSION;
             Link = Next;
         }
-        for (ReadmitLink = ReadmitHead.Flink; ReadmitLink != &ReadmitHead; ReadmitLink = ReadmitLink->Flink)
-        {
-            PVIDSCH_DMA_PACKET Readmit = CONTAINING_RECORD(ReadmitLink, VIDSCH_DMA_PACKET, RunQueueEntry);
-
-            Readmit->SubmissionFenceId = DxgkAllocateSubmissionFenceId(Engine->Adapter);
-        }
-        while (!IsListEmpty(&ReadmitHead))
-            InsertTailList(&Engine->RunQueueHead, RemoveHeadList(&ReadmitHead));
     }
 
     /*
@@ -461,7 +593,7 @@ VidSchpCompletionDpcRoutine(
 
     }
     KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
-    VidSchpKickEngine(Engine);
+    (VOID)VidSchpKickEngine(Engine, NULL);
 
     /* Completion drives tracked-DMA retirement (fence signals, open-binding
      * closes, in-flight accounting); nothing may wait for a later submission
@@ -519,24 +651,20 @@ VidSchpVirtualSubmitWorker(
     PVIDSCH_VIRTUAL_SUBMIT_WORK Work = (PVIDSCH_VIRTUAL_SUBMIT_WORK)Parameter;
     PVIDSCH_ENGINE Engine = Work->Engine;
     PDXGKRNL_ADAPTER Adapter = Engine->Adapter;
-    PVIDSCH_DMA_PACKET Packet = NULL;
+    PVIDSCH_DMA_PACKET Packet = Work->Packet;
     DXGKARG_SUBMITCOMMANDVIRTUAL SubmitArgs;
     KIRQL OldIrql;
-    NTSTATUS Status = STATUS_DEVICE_NOT_READY;
+    NTSTATUS AbortStatus;
+    NTSTATUS Status = STATUS_DELETE_PENDING;
+    BOOLEAN KmdCallAcquired = FALSE;
     BOOLEAN Removed = FALSE;
+    BOOLEAN SubmissionOwned = FALSE;
 
     KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
-    if (!IsListEmpty(&Engine->RunQueueHead))
+    if (Packet != NULL && !IsListEmpty(&Engine->RunQueueHead) && Engine->RunQueueHead.Flink == &Packet->RunQueueEntry && Packet->VirtualAddressing && VidSchpReadState(Engine) == VidSchEngineSubmitting && (Packet->ContextOrderOperation == NULL || InterlockedCompareExchange(&Packet->ContextOrderState, 0, 0) == VIDSCH_CONTEXT_ORDER_DISPATCHING || (InterlockedCompareExchange(&Packet->ContextOrderState, 0, 0) == VIDSCH_CONTEXT_ORDER_SUBMITTED && InterlockedCompareExchange(&Packet->ContextOrderResubmissionPending, 0, 0) != 0)))
     {
-        Packet = CONTAINING_RECORD(Engine->RunQueueHead.Flink, VIDSCH_DMA_PACKET, RunQueueEntry);
-        if (!Packet->VirtualAddressing || VidSchpReadState(Engine) != VidSchEngineSubmitting)
-            Packet = NULL;
-    }
-
-    if (Packet != NULL)
-    {
-        InterlockedIncrement(&Packet->ReferenceCount);
         Packet->Kicked = TRUE;
+        SubmissionOwned = TRUE;
         Engine->LastSubmittedFence = (LONG)Packet->SubmissionFenceId;
         VidSchpTryTransition(&Engine->State, (LONG)VidSchEngineSubmitting, (LONG)VidSchEngineRunning, NULL);
         RtlZeroMemory(&SubmitArgs, sizeof(SubmitArgs));
@@ -555,7 +683,9 @@ VidSchpVirtualSubmitWorker(
     }
     KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
 
-    if (Packet != NULL && DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommandVirtual) != NULL && DxgkAcquireKmdCall(Adapter))
+    if (SubmissionOwned && DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommandVirtual) != NULL)
+        KmdCallAcquired = DxgkAcquireKmdCall(Adapter);
+    if (KmdCallAcquired)
     {
         DxgkPublishSubmittedFence(Adapter, Packet->NodeOrdinal, Packet->SubmissionFenceId);
         _SEH2_TRY
@@ -567,9 +697,16 @@ VidSchpVirtualSubmitWorker(
             Status = _SEH2_GetExceptionCode();
         }
         _SEH2_END;
-        DxgkReleaseKmdCall(Adapter);
         if (!NT_SUCCESS(Status))
             KeBugCheckEx(0x119, 0x2, (ULONG_PTR)Status, (ULONG_PTR)&SubmitArgs, (ULONG_PTR)Engine);
+    }
+
+    if (Packet != NULL && Packet->ContextOrderOperation != NULL)
+        DxgkContextOrderCommitPacket(Packet, Status);
+    if (KmdCallAcquired)
+    {
+        InterlockedExchange(&Packet->ContextOrderResubmissionPending, 0);
+        DxgkReleaseKmdCall(Adapter);
     }
 
     if (Packet != NULL && !NT_SUCCESS(Status))
@@ -579,21 +716,27 @@ VidSchpVirtualSubmitWorker(
         if (!IsListEmpty(&Engine->RunQueueHead) && Engine->RunQueueHead.Flink == &Packet->RunQueueEntry)
         {
             RemoveEntryList(&Packet->RunQueueEntry);
+            InitializeListHead(&Packet->RunQueueEntry);
             Engine->PendingPacketCount--;
             Removed = TRUE;
         }
         VidSchpTryTransition(&Engine->State, (LONG)VidSchEngineRunning, (LONG)VidSchEngineIdle, NULL);
+        VidSchpTryTransition(&Engine->State, (LONG)VidSchEngineSubmitting, (LONG)VidSchEngineIdle, NULL);
         KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
         if (Removed)
+        {
+            DxgkDeviceWorkComplete(Packet->DeviceWork);
+            AbortStatus = (NTSTATUS)InterlockedCompareExchange((volatile LONG *)&Packet->ContextOrderAbortStatus, 0, 0);
+            DxgkContextOrderAbortPacket(Packet, AbortStatus == STATUS_PENDING ? Status : AbortStatus);
             VidSchpDereferencePacket(Packet);
-        VidSchpKickEngine(Engine);
+        }
+        (VOID)VidSchpKickEngine(Engine, NULL);
     }
 
     if (Packet != NULL)
         VidSchpDereferencePacket(Packet);
     ExFreePoolWithTag(Work, TAG_VIDSCH);
-    if (InterlockedDecrement(&Engine->OutstandingWorkers) == 0)
-        KeSetEvent(&Engine->WorkersDrainedEvent, IO_NO_INCREMENT, FALSE);
+    VidSchpReleaseOutstandingWorker(Engine);
     VidSchpReleaseCall(Adapter);
 }
 
@@ -603,14 +746,15 @@ VidSchpVirtualSubmitWorker(
  * Claims queue state under QueueLock, but never holds that lock across the
  * miniport callback. This lets TDR claim the engine if SubmitCommand stalls.
  * ====================================================================== */
-static VOID
+static BOOLEAN
 VidSchpKickEngine(
-    _In_ PVIDSCH_ENGINE Engine)
+    _In_ PVIDSCH_ENGINE Engine,
+    _In_opt_ PVIDSCH_DMA_PACKET AuthorizedPacket)
 {
     PDXGKRNL_ADAPTER Adapter = Engine != NULL ? Engine->Adapter : NULL;
 
     if (Adapter == NULL)
-        return;
+        return FALSE;
 
     for (;;)
     {
@@ -625,14 +769,32 @@ VidSchpKickEngine(
         BOOLEAN KickNext = FALSE;
 
         KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
-        if (IsListEmpty(&Engine->RunQueueHead) || Engine->Scheduler == NULL || (VidSchpReadSchedulerState(Engine->Scheduler) != VidSchSchedulerRunning && VidSchpReadSchedulerState(Engine->Scheduler) != VidSchSchedulerSuspending) || !VidSchpTryTransition(&Engine->State, (LONG)VidSchEngineIdle, (LONG)VidSchEngineSubmitting, NULL))
+        if (IsListEmpty(&Engine->RunQueueHead) || Engine->Scheduler == NULL || (VidSchpReadSchedulerState(Engine->Scheduler) != VidSchSchedulerRunning && VidSchpReadSchedulerState(Engine->Scheduler) != VidSchSchedulerSuspending))
         {
             KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
-            return;
+            return FALSE;
         }
 
         Link = Engine->RunQueueHead.Flink;
         Packet = CONTAINING_RECORD(Link, VIDSCH_DMA_PACKET, RunQueueEntry);
+        if (Packet->ContextOrderOperation != NULL && (AuthorizedPacket != Packet || (InterlockedCompareExchange(&Packet->ContextOrderState, 0, 0) != VIDSCH_CONTEXT_ORDER_DISPATCHING && (InterlockedCompareExchange(&Packet->ContextOrderState, 0, 0) != VIDSCH_CONTEXT_ORDER_SUBMITTED || InterlockedCompareExchange(&Packet->ContextOrderResubmissionPending, 0, 0) == 0)) || KeGetCurrentIrql() != PASSIVE_LEVEL))
+        {
+            VidSchReferenceContextOrderPacket(Packet);
+            KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+            DxgkContextOrderScheduleReferenced((PDXGKRNL_CONTEXT)Packet->Context);
+            VidSchDereferenceContextOrderPacket(Packet);
+            return FALSE;
+        }
+        if (Packet->ContextOrderOperation == NULL && AuthorizedPacket != NULL)
+        {
+            KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+            return FALSE;
+        }
+        if (!VidSchpTryTransition(&Engine->State, (LONG)VidSchEngineIdle, (LONG)VidSchEngineSubmitting, NULL))
+        {
+            KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+            return FALSE;
+        }
         if (Packet->VirtualAddressing)
         {
             PVIDSCH_VIRTUAL_SUBMIT_WORK Work = (PVIDSCH_VIRTUAL_SUBMIT_WORK)Packet->VirtualSubmitWorkItem;
@@ -646,22 +808,32 @@ VidSchpKickEngine(
                 {
                     RtlZeroMemory(Work, sizeof(*Work));
                     Work->Engine = Engine;
+                    Work->Packet = Packet;
                     ExInitializeWorkItem(&Work->WorkItem, VidSchpVirtualSubmitWorker, Work);
                 }
             }
             if (Work == NULL)
             {
-                VidSchpTryTransition(&Engine->State, (LONG)VidSchEngineSubmitting, (LONG)VidSchEngineError, NULL);
+                RemoveEntryList(&Packet->RunQueueEntry);
+                InitializeListHead(&Packet->RunQueueEntry);
+                ASSERT(Engine->PendingPacketCount != 0);
+                Engine->PendingPacketCount--;
+                VidSchpTryTransition(&Engine->State, (LONG)VidSchEngineSubmitting, (LONG)VidSchEngineIdle, NULL);
                 KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
-                return;
+                VidSchpFinalizeDequeuedPacket(Packet, STATUS_INSUFFICIENT_RESOURCES);
+                KeSetEvent(&Engine->CompletionEvent, IO_NO_INCREMENT, FALSE);
+                if (AuthorizedPacket != NULL)
+                    return TRUE;
+                continue;
             }
+            Work->Packet = Packet;
             Packet->VirtualSubmitWorkItem = NULL;
+            InterlockedIncrement(&Packet->ReferenceCount);
             VidSchpReferenceActiveCall(Adapter);
-            if (InterlockedIncrement(&Engine->OutstandingWorkers) == 1)
-                KeClearEvent(&Engine->WorkersDrainedEvent);
+            VidSchpReferenceOutstandingWorkerLocked(Engine);
             ExQueueWorkItem(&Work->WorkItem, DelayedWorkQueue);
             KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
-            return;
+            return TRUE;
         }
 
         if (Packet->SubmissionFenceId == 0)
@@ -726,19 +898,17 @@ VidSchpKickEngine(
                 Engine->PendingPacketCount--;
                 VidSchpTryTransition(&Engine->State, (LONG)VidSchEngineSubmitting, (LONG)VidSchEngineIdle, NULL);
                 VidSchpReferenceActiveCall(Adapter);
-                if (InterlockedIncrement(&Engine->OutstandingWorkers) == 1)
-                    KeClearEvent(&Engine->WorkersDrainedEvent);
+                VidSchpReferenceOutstandingWorkerLocked(Engine);
                 ExQueueWorkItem(&Packet->CleanupWorkItem, DelayedWorkQueue);
                 KickNext = TRUE;
             }
         }
         else
         {
-            Reservation = Packet->TrackerReservation;
-            Packet->TrackerReservation = NULL;
-            Packet->DmaBuffer = NULL;
-            if (Reservation != NULL)
+            if (!Packet->TrackerOwnsDmaBuffer && Packet->TrackerReservation != NULL)
             {
+                Reservation = Packet->TrackerReservation;
+                Packet->TrackerOwnsDmaBuffer = TRUE;
                 Reservation->FenceIdentityOwned = TRUE;
                 Packet->FenceIdentityReserved = FALSE;
             }
@@ -751,13 +921,24 @@ VidSchpKickEngine(
 
         if (Reservation != NULL)
             DxgkCommitTrackedDmaBuffer(Adapter, Reservation);
+        if (Packet->ContextOrderOperation != NULL)
+            DxgkContextOrderCommitPacket(Packet, KmdCallAcquired ? Status : STATUS_DELETE_PENDING);
         if (KmdCallAcquired)
+        {
+            InterlockedExchange(&Packet->ContextOrderResubmissionPending, 0);
             DxgkReleaseKmdCall(Adapter);
+        }
         VidSchpDereferencePacket(Packet);
         if (KickNext)
+        {
+            if (AuthorizedPacket != NULL)
+                return TRUE;
             continue;
+        }
         if (KmdCallAcquired)
-            return;
+            return TRUE;
+        if (AuthorizedPacket != NULL)
+            return TRUE;
     }
 }
 
@@ -900,12 +1081,7 @@ VidSchPrepareForStop(
     VidSchpWaitForCalls(Adapter);
 
     for (i = 0; i < Ctx->EngineCount; i++)
-    {
-        PVIDSCH_ENGINE Engine = &Ctx->Engines[i];
-
-        if (InterlockedCompareExchange(&Engine->OutstandingWorkers, 0, 0) != 0)
-            KeWaitForSingleObject(&Engine->WorkersDrainedEvent, Executive, KernelMode, FALSE, NULL);
-    }
+        VidSchpWaitForOutstandingWorkers(&Ctx->Engines[i]);
 
     /* Packets not accepted by the miniport can be cancelled now. Kicked
      * packets stay pinned until StopDevice has quiesced hardware ownership. */
@@ -922,7 +1098,7 @@ VidSchPrepareForStop(
             PVIDSCH_DMA_PACKET Packet = CONTAINING_RECORD(Link, VIDSCH_DMA_PACKET, RunQueueEntry);
             PLIST_ENTRY Next = Link->Flink;
 
-            if (!Packet->Kicked)
+            if (!VidSchpPacketSubmissionOwned(Packet))
             {
                 RemoveEntryList(Link);
                 InsertTailList(&CancelList, Link);
@@ -936,7 +1112,97 @@ VidSchPrepareForStop(
     while (!IsListEmpty(&CancelList))
     {
         PVIDSCH_DMA_PACKET Packet = CONTAINING_RECORD(RemoveHeadList(&CancelList), VIDSCH_DMA_PACKET, RunQueueEntry);
-        VidSchpDereferencePacket(Packet);
+
+        VidSchpFinalizeDequeuedPacket(Packet, STATUS_CANCELLED);
+    }
+}
+
+VOID VidSchCancelContextPackets(_In_ PDXGKRNL_ADAPTER Adapter, _In_ PDXGKRNL_CONTEXT Context, _In_ NTSTATUS CompletionStatus)
+{
+    PVIDSCH_CONTEXT Ctx;
+    LIST_ENTRY CancelList;
+    ULONG i;
+
+    PAGED_CODE();
+    if (Adapter == NULL || Context == NULL || CompletionStatus == STATUS_PENDING || NT_SUCCESS(CompletionStatus))
+        return;
+    Ctx = (PVIDSCH_CONTEXT)Adapter->VidSchContext;
+    if (Ctx == NULL)
+        return;
+    InitializeListHead(&CancelList);
+    for (i = 0; i < Ctx->EngineCount; ++i)
+    {
+        PVIDSCH_ENGINE Engine = &Ctx->Engines[i];
+        PLIST_ENTRY Link;
+        KIRQL OldIrql;
+
+        KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
+        Link = Engine->RunQueueHead.Flink;
+        while (Link != &Engine->RunQueueHead)
+        {
+            PVIDSCH_DMA_PACKET Packet = CONTAINING_RECORD(Link, VIDSCH_DMA_PACKET, RunQueueEntry);
+            PLIST_ENTRY Next = Link->Flink;
+
+            if (Packet->Context == Context && !VidSchpPacketSubmissionOwned(Packet))
+            {
+                RemoveEntryList(Link);
+                InsertTailList(&CancelList, Link);
+                ASSERT(Engine->PendingPacketCount != 0);
+                Engine->PendingPacketCount--;
+            }
+            Link = Next;
+        }
+        KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+    }
+    while (!IsListEmpty(&CancelList))
+    {
+        PVIDSCH_DMA_PACKET Packet = CONTAINING_RECORD(RemoveHeadList(&CancelList), VIDSCH_DMA_PACKET, RunQueueEntry);
+
+        VidSchpFinalizeDequeuedPacket(Packet, CompletionStatus);
+    }
+    if (VidSchpAcquireCall(Adapter))
+    {
+        for (i = 0; i < Ctx->EngineCount; ++i)
+            (VOID)VidSchpKickEngine(&Ctx->Engines[i], NULL);
+        VidSchpReleaseCall(Adapter);
+    }
+}
+
+VOID VidSchAbortAllPackets(_In_ PDXGKRNL_ADAPTER Adapter, _In_ NTSTATUS CompletionStatus)
+{
+    PVIDSCH_CONTEXT Ctx;
+    LIST_ENTRY AbortList;
+    ULONG i;
+
+    PAGED_CODE();
+    if (Adapter == NULL || CompletionStatus == STATUS_PENDING || NT_SUCCESS(CompletionStatus))
+        return;
+    Ctx = (PVIDSCH_CONTEXT)Adapter->VidSchContext;
+    if (Ctx == NULL)
+        return;
+    InitializeListHead(&AbortList);
+    for (i = 0; i < Ctx->EngineCount; ++i)
+    {
+        PVIDSCH_ENGINE Engine = &Ctx->Engines[i];
+        KIRQL OldIrql;
+
+        KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
+        while (!IsListEmpty(&Engine->RunQueueHead))
+        {
+            PLIST_ENTRY Link = RemoveHeadList(&Engine->RunQueueHead);
+
+            InsertTailList(&AbortList, Link);
+            ASSERT(Engine->PendingPacketCount != 0);
+            Engine->PendingPacketCount--;
+        }
+        KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+        KeSetEvent(&Engine->CompletionEvent, IO_NO_INCREMENT, FALSE);
+    }
+    while (!IsListEmpty(&AbortList))
+    {
+        PVIDSCH_DMA_PACKET Packet = CONTAINING_RECORD(RemoveHeadList(&AbortList), VIDSCH_DMA_PACKET, RunQueueEntry);
+
+        VidSchpFinalizeDequeuedPacket(Packet, CompletionStatus);
     }
 }
 
@@ -961,6 +1227,7 @@ VidSchDestroy(
         return;
 
     VidSchPrepareForStop(Adapter);
+    VidSchAbortAllPackets(Adapter, STATUS_DEVICE_REMOVED);
     InitializeListHead(&FreeList);
 
     for (i = 0; i < Ctx->EngineCount; i++)
@@ -1144,7 +1411,7 @@ VidSchSubmitCommand(
         return STATUS_DEVICE_BUSY;
     }
     KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
-    if (Engine->PendingPacketCount >= VIDSCH_MAX_PENDING_PACKETS)
+    if (Engine->PendingPacketCount + Engine->ReservedPacketCount >= VIDSCH_MAX_PENDING_PACKETS)
     {
         KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
         ExReleaseFastMutex(&Ctx->LifecycleMutex);
@@ -1157,7 +1424,7 @@ VidSchSubmitCommand(
     KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
     ExReleaseFastMutex(&Ctx->LifecycleMutex);
 
-    VidSchpKickEngine(Engine);
+    (VOID)VidSchpKickEngine(Engine, NULL);
     *OutFenceId = FenceId;
     VidSchpReleaseCall(Adapter);
     return STATUS_SUCCESS;
@@ -1191,6 +1458,8 @@ VidSchSubmitCommandVirtual(
 
     if (Adapter == NULL || Context == NULL || DmaBufferGpuVa == 0 || DmaBufferSize == 0 || OutFenceId == NULL || (DriverPrivateDataSize != 0 && DriverPrivateData == NULL))
         return STATUS_INVALID_PARAMETER;
+    if (!NullRendering)
+        return STATUS_NOT_SUPPORTED;
 
     *OutFenceId = 0;
     if (!VidSchpAcquireCall(Adapter))
@@ -1232,6 +1501,7 @@ VidSchSubmitCommandVirtual(
 
     RtlZeroMemory(Work, sizeof(*Work));
     Work->Engine = Engine;
+    Work->Packet = Packet;
     ExInitializeWorkItem(&Work->WorkItem, VidSchpVirtualSubmitWorker, Work);
     Packet->VirtualSubmitWorkItem = Work;
     Packet->SubmissionFenceId = DxgkAllocateSubmissionFenceId(Adapter);
@@ -1247,6 +1517,13 @@ VidSchSubmitCommandVirtual(
     Packet->Context = Context;
     Packet->VirtualAddressing = TRUE;
     Packet->SubmitFlags = NullRendering ? VIDSCH_SUBMITFLAG_NULLRENDERING : 0u;
+    Status = DxgkDeviceWorkCreate(Context->Device, &Packet->DeviceWork);
+    if (!NT_SUCCESS(Status))
+    {
+        VidSchpDereferencePacket(Packet);
+        VidSchpReleaseCall(Adapter);
+        return Status;
+    }
     FenceId = Packet->SubmissionFenceId;
 
     Ctx = (PVIDSCH_CONTEXT)Adapter->VidSchContext;
@@ -1259,7 +1536,7 @@ VidSchSubmitCommandVirtual(
         return STATUS_DEVICE_BUSY;
     }
     KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
-    if (Engine->PendingPacketCount >= VIDSCH_MAX_PENDING_PACKETS)
+    if (Engine->PendingPacketCount + Engine->ReservedPacketCount >= VIDSCH_MAX_PENDING_PACKETS)
     {
         KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
         ExReleaseFastMutex(&Ctx->LifecycleMutex);
@@ -1267,12 +1544,41 @@ VidSchSubmitCommandVirtual(
         VidSchpReleaseCall(Adapter);
         return STATUS_DEVICE_BUSY;
     }
+    Engine->ReservedPacketCount++;
+    KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+    Status = DxgkDeviceWorkActivate(Packet->DeviceWork);
+    if (!NT_SUCCESS(Status))
+    {
+        KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
+        ASSERT(Engine->ReservedPacketCount != 0);
+        Engine->ReservedPacketCount--;
+        KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+        ExReleaseFastMutex(&Ctx->LifecycleMutex);
+        VidSchpDereferencePacket(Packet);
+        VidSchpReleaseCall(Adapter);
+        return Status;
+    }
+    Status = DxgkContextOrderAdmitPacket(Context, Packet);
+    if (!NT_SUCCESS(Status))
+    {
+        KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
+        ASSERT(Engine->ReservedPacketCount != 0);
+        Engine->ReservedPacketCount--;
+        KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+        ExReleaseFastMutex(&Ctx->LifecycleMutex);
+        VidSchpDereferencePacket(Packet);
+        VidSchpReleaseCall(Adapter);
+        return Status;
+    }
+    Packet->HoldsContextReference = TRUE;
+    KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
+    ASSERT(Engine->ReservedPacketCount != 0);
+    Engine->ReservedPacketCount--;
     InsertTailList(&Engine->RunQueueHead, &Packet->RunQueueEntry);
     Engine->PendingPacketCount++;
-    Packet->HoldsContextReference = TRUE;
     KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+    DxgkContextOrderPublishAdmittedPacket(Context);
     ExReleaseFastMutex(&Ctx->LifecycleMutex);
-    VidSchpKickEngine(Engine);
     *OutFenceId = FenceId;
     VidSchpReleaseCall(Adapter);
     return STATUS_SUCCESS;
@@ -1388,6 +1694,18 @@ VidSchSubmitCommandTracked(
         VidSchpReleaseCall(Adapter);
         return Status;
     }
+    if (TrackArgs->Context != NULL)
+    {
+        if (TrackArgs->Context->Device == NULL || TrackArgs->Context->Device->Adapter != Adapter || !DxgkReferenceContext(TrackArgs->Context))
+        {
+            DxgkCancelTrackedDmaBuffer(Reservation);
+            VidSchpDereferencePacket(Packet);
+            VidSchpReleaseCall(Adapter);
+            return STATUS_DELETE_PENDING;
+        }
+        Packet->Context = TrackArgs->Context;
+        Packet->HoldsContextReference = TRUE;
+    }
 
     if (DXGK_CB_FULL(Adapter, DxgkDdiPatch) != NULL)
     {
@@ -1456,7 +1774,7 @@ VidSchSubmitCommandTracked(
     }
     FenceId = Packet->SubmissionFenceId;
     KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
-    if (Engine->PendingPacketCount >= VIDSCH_MAX_PENDING_PACKETS)
+    if (Engine->PendingPacketCount + Engine->ReservedPacketCount >= VIDSCH_MAX_PENDING_PACKETS)
     {
         KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
         ExReleaseFastMutex(&Ctx->LifecycleMutex);
@@ -1465,15 +1783,52 @@ VidSchSubmitCommandTracked(
         VidSchpReleaseCall(Adapter);
         return STATUS_DEVICE_BUSY;
     }
+    Engine->ReservedPacketCount++;
+    KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+    Status = DxgkActivateTrackedDmaBuffer(Reservation);
+    if (!NT_SUCCESS(Status))
+    {
+        KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
+        ASSERT(Engine->ReservedPacketCount != 0);
+        Engine->ReservedPacketCount--;
+        KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+        ExReleaseFastMutex(&Ctx->LifecycleMutex);
+        DxgkCancelTrackedDmaBuffer(Reservation);
+        VidSchpDereferencePacket(Packet);
+        VidSchpReleaseCall(Adapter);
+        return Status;
+    }
+    if (Packet->Context != NULL)
+    {
+        Status = DxgkContextOrderAdmitPacket((PDXGKRNL_CONTEXT)Packet->Context, Packet);
+        if (!NT_SUCCESS(Status))
+        {
+            KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
+            ASSERT(Engine->ReservedPacketCount != 0);
+            Engine->ReservedPacketCount--;
+            KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+            ExReleaseFastMutex(&Ctx->LifecycleMutex);
+            DxgkCancelTrackedDmaBuffer(Reservation);
+            VidSchpDereferencePacket(Packet);
+            VidSchpReleaseCall(Adapter);
+            return Status;
+        }
+    }
+    KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
+    ASSERT(Engine->ReservedPacketCount != 0);
+    Engine->ReservedPacketCount--;
     InsertTailList(&Engine->RunQueueHead, &Packet->RunQueueEntry);
     Engine->PendingPacketCount++;
     Packet->DmaBuffer = DmaBuffer;
     Packet->TrackerReservation = Reservation;
     DxgkAdoptTrackedDmaBuffer(Reservation);
     KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+    if (Packet->ContextOrderOperation != NULL)
+        DxgkContextOrderPublishAdmittedPacket((PDXGKRNL_CONTEXT)Packet->Context);
     ExReleaseFastMutex(&Ctx->LifecycleMutex);
 
-    VidSchpKickEngine(Engine);
+    if (Packet->ContextOrderOperation == NULL)
+        (VOID)VidSchpKickEngine(Engine, NULL);
     *OutFenceId = FenceId;
     VidSchpReleaseCall(Adapter);
     return STATUS_SUCCESS;
@@ -1572,6 +1927,45 @@ VidSchNotifyDpc(
  * VidSchWaitForIdle
  */
 NTSTATUS
+VidSchBeginStopDrain(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PVIDSCH_CONTEXT Ctx;
+    VIDSCH_SCHEDULER_STATE State;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Adapter == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (!VidSchpAcquireCall(Adapter))
+        return STATUS_DELETE_PENDING;
+    Ctx = (PVIDSCH_CONTEXT)Adapter->VidSchContext;
+    if (Ctx == NULL || !Ctx->Initialized)
+    {
+        VidSchpReleaseCall(Adapter);
+        return STATUS_NOT_SUPPORTED;
+    }
+    ExAcquireFastMutex(&Ctx->LifecycleMutex);
+    State = VidSchpReadSchedulerState(Ctx);
+    if (State == VidSchSchedulerRunning)
+    {
+        Ctx->LifecycleState = (LONG)VidSchSchedulerSuspending;
+        Status = STATUS_SUCCESS;
+    }
+    else if (State == VidSchSchedulerSuspending || State == VidSchSchedulerSuspended)
+    {
+        Status = STATUS_SUCCESS;
+    }
+    else
+    {
+        Status = STATUS_DEVICE_BUSY;
+    }
+    ExReleaseFastMutex(&Ctx->LifecycleMutex);
+    VidSchpReleaseCall(Adapter);
+    return Status;
+}
+
+NTSTATUS
 VidSchWaitForIdle(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ ULONG            TimeoutMs)
@@ -1601,10 +1995,15 @@ VidSchWaitForIdle(
     for (i = 0; i < Ctx->EngineCount; i++)
     {
         PVIDSCH_ENGINE Engine = &Ctx->Engines[i];
+        VIDSCH_ENGINE_STATE EngineState;
+        VIDSCH_SCHEDULER_STATE SchedulerState;
 
-        while (VidSchpReadState(Engine) != VidSchEngineIdle ||
-               Engine->PendingPacketCount > 0)
+        for (;;)
         {
+            EngineState = VidSchpReadState(Engine);
+            SchedulerState = VidSchpReadSchedulerState(Ctx);
+            if (Engine->PendingPacketCount == 0 && (EngineState == VidSchEngineIdle || (EngineState == VidSchEngineSuspended && (SchedulerState == VidSchSchedulerSuspending || SchedulerState == VidSchSchedulerSuspended))))
+                break;
             Status = KeWaitForSingleObject(&Engine->CompletionEvent, Executive, KernelMode, FALSE, &Timeout);
             if (Status == STATUS_TIMEOUT)
             {
@@ -2227,7 +2626,7 @@ VidSchResumeScheduler(
     ExReleaseFastMutex(&Ctx->LifecycleMutex);
 
     for (i = 0; i < Ctx->EngineCount; i++)
-        VidSchpKickEngine(&Ctx->Engines[i]);
+        (VOID)VidSchpKickEngine(&Ctx->Engines[i], NULL);
 
     VidSchpReleaseCall(Adapter);
     return STATUS_SUCCESS;
@@ -2518,10 +2917,7 @@ VidSchPrepareAdapterReset(
     }
 
     for (i = 0; i < Ctx->EngineCount; i++)
-    {
-        if (InterlockedCompareExchange(&Ctx->Engines[i].OutstandingWorkers, 0, 0) != 0)
-            KeWaitForSingleObject(&Ctx->Engines[i].WorkersDrainedEvent, Executive, KernelMode, FALSE, NULL);
-    }
+        VidSchpWaitForOutstandingWorkers(&Ctx->Engines[i]);
     KeFlushQueuedDpcs();
     VidSchpReleaseCall(Adapter);
     return STATUS_SUCCESS;
@@ -2598,7 +2994,7 @@ VidSchCompleteAdapterReset(
 
         Link = RemoveHeadList(&RetireList);
         Packet = CONTAINING_RECORD(Link, VIDSCH_DMA_PACKET, RunQueueEntry);
-        VidSchpDereferencePacket(Packet);
+        VidSchpFinalizeDequeuedPacket(Packet, STATUS_GRAPHICS_GPU_EXCEPTION_ON_DEVICE);
     }
 
     VidSchpReleaseCall(Adapter);

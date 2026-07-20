@@ -355,9 +355,9 @@ SoftGpuDdiRender(
 /*
  * SoftGpuDdiBuildPagingBuffer
  *
- * softgpu has no real paging engine.  All allocations live in the aperture
- * segment backed by the contiguous framebuffer slab; dxgkrnl never actually
- * moves them.  We accept all operations as no-ops.
+ * softgpu has no real paging engine.  Its fixed framebuffer is a memory
+ * segment, not an aperture, so accepting a paging operation without moving
+ * bytes would publish false completion.
  *
  * IRQL: PASSIVE_LEVEL
  */
@@ -372,18 +372,7 @@ SoftGpuDdiBuildPagingBuffer(
     if (BuildPagingBuffer == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    switch (BuildPagingBuffer->Operation)
-    {
-    case DXGK_OPERATION_TRANSFER:
-    case DXGK_OPERATION_SPECIAL_LOCK_TRANSFER:
-    case DXGK_OPERATION_MAP_APERTURE_SEGMENT:
-    case DXGK_OPERATION_UNMAP_APERTURE_SEGMENT:
-        /* softgpu allocations are already CPU-visible system memory. */
-        return STATUS_SUCCESS;
-
-    default:
-        return STATUS_NOT_SUPPORTED;
-    }
+    return STATUS_NOT_SUPPORTED;
 }
 
 

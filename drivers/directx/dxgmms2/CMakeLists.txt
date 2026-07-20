@@ -1,8 +1,9 @@
 # dxgmms2.sys — typed WDDM 2.x memory-manager/scheduler module boundary.
 #
-# The v1 module owns administrative registration and adapter lifecycle only.
-# Functional scheduler and VidMm ownership remains in dxgkrnl until a later,
-# capability-gated contract version is implemented and tested.
+# The module owns administrative registration, adapter lifecycle, and the live
+# fence-identity timeline plus the isolated logical context-stream core.
+# Hardware dispatch, public scheduler policy, sync-object binding, and all
+# VidMm ownership remain in dxgkrnl until later capability-gated integration.
 
 spec2def(dxgmms2.sys dxgmms2.spec ADD_IMPORTLIB)
 
@@ -11,7 +12,9 @@ list(APPEND SOURCE
     interface.c
     adapter.c
     timeline.c
-    timeline_core.c)
+    timeline_core.c
+    context_stream.c
+    context_stream_core.c)
 
 add_library(dxgmms2 MODULE
     ${SOURCE}

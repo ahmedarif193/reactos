@@ -92,6 +92,14 @@ typedef enum _VIDSCH_SCHEDULER_STATE
 #define VIDSCH_SUBMITFLAG_NULLRENDERING 0x00000008u
 #define VIDSCH_SUBMITFLAG_RESUBMISSION  0x00000080u
 
+#define VIDSCH_CONTEXT_ORDER_NONE       0
+#define VIDSCH_CONTEXT_ORDER_ADMITTED   1
+#define VIDSCH_CONTEXT_ORDER_CLAIMED    2
+#define VIDSCH_CONTEXT_ORDER_DISPATCHING 3
+#define VIDSCH_CONTEXT_ORDER_SUBMITTED  4
+#define VIDSCH_CONTEXT_ORDER_COMPLETING 5
+#define VIDSCH_CONTEXT_ORDER_TERMINAL   6
+
 typedef struct _VIDSCH_DMA_PACKET
 {
     /* Linkage in VIDSCH_ENGINE->RunQueueHead. */
@@ -159,12 +167,26 @@ typedef struct _VIDSCH_DMA_PACKET
     LONG                        Priority;
     BOOLEAN                     Kicked;
     BOOLEAN                     FenceIdentityReserved;
+    /* Borrowed after first kick so preemption can resubmit the same DMA. */
     PDXGKRNL_SUBMIT_DMA_BUFFER  TrackerReservation;
+    BOOLEAN                     TrackerOwnsDmaBuffer;
+    PDXGKRNL_DEVICE_WORK        DeviceWork;
     D3DKMT_HANDLE               SignalSyncObject;   /* fired at retire */
     ULONG64                     SignalFenceValue;
     D3DDDI_PATCHLOCATIONLIST    InlinePatchList[VIDSCH_INLINE_PATCHES];
     ULONG                       InlinePatchCount;
     WORK_QUEUE_ITEM             CleanupWorkItem;
+
+    /* dxgmms2 context-stream ownership. The operation retains one packet
+     * reference from successful admission through its retirement record. */
+    PVOID                       ContextOrderOperation;
+    ULONGLONG                   ContextOrderSequence;
+    ULONGLONG                   ContextOrderClaimToken;
+    volatile LONG               ContextOrderState;
+    volatile LONG               ContextOrderCompletionPending;
+    volatile LONG               ContextOrderResubmissionPending;
+    NTSTATUS                    ContextOrderCompletionStatus;
+    NTSTATUS                    ContextOrderAbortStatus;
 
 } VIDSCH_DMA_PACKET, *PVIDSCH_DMA_PACKET;
 
@@ -206,6 +228,7 @@ typedef struct _VIDSCH_ENGINE
 
     /* Number of packets currently in the run queue. */
     ULONG                       PendingPacketCount;
+    ULONG                       ReservedPacketCount;
 
     /* Set by the ISR when a DMA_PREEMPTED notification must be consumed. */
     volatile LONG               PreemptionInterruptPending;
@@ -386,6 +409,9 @@ VOID
 VidSchPrepareForStop(
     _In_ struct _DXGKRNL_ADAPTER *Adapter);
 
+VOID VidSchCancelContextPackets(_In_ struct _DXGKRNL_ADAPTER *Adapter, _In_ struct _DXGKRNL_CONTEXT *Context, _In_ NTSTATUS CompletionStatus);
+VOID VidSchAbortAllPackets(_In_ struct _DXGKRNL_ADAPTER *Adapter, _In_ NTSTATUS CompletionStatus);
+
 /*
  * VidSchSubmitCommand
  *
@@ -492,6 +518,8 @@ VidSchNotifyDpc(
  *
  * IRQL: PASSIVE_LEVEL
  */
+NTSTATUS VidSchBeginStopDrain(_In_ struct _DXGKRNL_ADAPTER *Adapter);
+
 NTSTATUS
 VidSchWaitForIdle(
     _In_ struct _DXGKRNL_ADAPTER *Adapter,
@@ -625,5 +653,18 @@ VidSchGetEngineTdrInfo(
     _Out_ PVOID                    TdrInfo);
 
 BOOLEAN VidSchGetOldestKickedPacket(_In_ struct _DXGKRNL_ADAPTER *Adapter, _Out_ PULONG FenceId, _Out_ PULONG NodeOrdinal, _Out_ PULONG EngineOrdinal);
+
+VOID VidSchReferenceContextOrderPacket(_Inout_ PVIDSCH_DMA_PACKET Packet);
+VOID VidSchDereferenceContextOrderPacket(_Inout_ PVIDSCH_DMA_PACKET Packet);
+BOOLEAN VidSchIsContextOrderPacketDispatchable(_In_ PVIDSCH_DMA_PACKET Packet);
+VOID VidSchDispatchClaimedContextOrderPacket(_Inout_ PVIDSCH_DMA_PACKET Packet);
+BOOLEAN VidSchIsContextOrderPacketResubmittable(_In_ PVIDSCH_DMA_PACKET Packet);
+BOOLEAN VidSchDispatchContextOrderPacketResubmission(_Inout_ PVIDSCH_DMA_PACKET Packet);
+NTSTATUS DxgkContextOrderAdmitPacket(_Inout_ PDXGKRNL_CONTEXT Context, _Inout_ PVIDSCH_DMA_PACKET Packet);
+VOID DxgkContextOrderPublishAdmittedPacket(_Inout_ PDXGKRNL_CONTEXT Context);
+VOID DxgkContextOrderScheduleReferenced(_Inout_ PDXGKRNL_CONTEXT Context);
+VOID DxgkContextOrderCommitPacket(_Inout_ PVIDSCH_DMA_PACKET Packet, _In_ NTSTATUS SubmissionStatus);
+VOID DxgkContextOrderCompletePacket(_Inout_ PVIDSCH_DMA_PACKET Packet, _In_ NTSTATUS CompletionStatus);
+VOID DxgkContextOrderAbortPacket(_Inout_ PVIDSCH_DMA_PACKET Packet, _In_ NTSTATUS AbortStatus);
 
 #endif /* _VIDSCH_H_ */

@@ -417,6 +417,76 @@ static VOID InitializeSnapshot(_Out_ DXGMMS2_FENCE_SNAPSHOT_V1 *Snapshot)
     Snapshot->Version = DXGMMS2_SCHEDULER_TIMELINE_VERSION_1;
 }
 
+static VOID TestFenceWrapAcrossRestart(VOID)
+{
+    PDXGMMS2_TIMELINE_CONTEXT Timeline;
+    DXGMMS2_FENCE_SNAPSHOT_V1 Snapshot;
+    ULONG FirstGeneration;
+    ULONG SecondGeneration;
+    ULONG Fence;
+    NTSTATUS Status;
+
+    Timeline = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Timeline), TAG_DXGMMS2_TIMELINE_TEST);
+    ok(Timeline != NULL, "wrap/restart timeline allocation failed\n");
+    if (Timeline == NULL)
+        return;
+    Dxgmms2TimelineInitialize(Timeline);
+    Status = Dxgmms2TimelineStart(Timeline, 1);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    FirstGeneration = (ULONG)InterlockedCompareExchange(&Timeline->Generation, 0, 0);
+    InterlockedExchange(&Timeline->NextFenceId, (LONG)(MAXULONG - 1));
+    Status = Dxgmms2TimelineBeginStop(Timeline);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = Dxgmms2TimelineCompleteStop(Timeline);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = Dxgmms2TimelineStart(Timeline, 1);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    SecondGeneration = (ULONG)InterlockedCompareExchange(&Timeline->Generation, 0, 0);
+    ok(SecondGeneration != 0 && SecondGeneration != FirstGeneration, "wrap/restart generation did not advance\n");
+    ok_eq_ulong((ULONG)InterlockedCompareExchange((volatile LONG *)&Timeline->NodeLastSubmittedFenceId[0], 0, 0), 0);
+    ok_eq_ulong((ULONG)InterlockedCompareExchange((volatile LONG *)&Timeline->NodeLastCompletedFenceId[0], 0, 0), 0);
+
+    Fence = Dxgmms2TimelineAllocateFence(Timeline, SecondGeneration);
+    ok_eq_ulong(Fence, MAXULONG);
+    ok_bool_true(Dxgmms2TimelineReserveFence(Timeline, SecondGeneration, 0, Fence), "reserve maximum fence after restart");
+    ok_bool_true(Dxgmms2TimelinePublishFence(Timeline, SecondGeneration, 0, Fence), "publish maximum fence after restart");
+    ok_eq_ulong((ULONG)InterlockedCompareExchange((volatile LONG *)&Timeline->NodeLastSubmittedFenceId[0], 0, 0), MAXULONG);
+    InitializeSnapshot(&Snapshot);
+    Status = Dxgmms2TimelineNotifyFenceCompletion(Timeline, SecondGeneration, 0, Fence, 0, &Snapshot);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_ulong(Snapshot.LastSubmittedFence, MAXULONG);
+    ok_eq_ulong(Snapshot.LastCompletedFence, MAXULONG);
+    ok_eq_ulong(Snapshot.GlobalLastCompletedFence, MAXULONG);
+    ok_bool_true(Dxgmms2TimelineReleaseFence(Timeline, SecondGeneration, 0, Fence), "release maximum fence after restart");
+
+    Fence = Dxgmms2TimelineAllocateFence(Timeline, SecondGeneration);
+    ok_eq_ulong(Fence, 1);
+    ok_bool_true(Dxgmms2TimelineReserveFence(Timeline, SecondGeneration, 0, Fence), "reserve wrapped fence");
+    ok_bool_true(Dxgmms2TimelinePublishFence(Timeline, SecondGeneration, 0, Fence), "publish wrapped fence");
+    ok_eq_ulong((ULONG)InterlockedCompareExchange((volatile LONG *)&Timeline->NodeLastSubmittedFenceId[0], 0, 0), 1);
+    InitializeSnapshot(&Snapshot);
+    Status = Dxgmms2TimelineNotifyFenceCompletion(Timeline, SecondGeneration, 0, Fence, 0, &Snapshot);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_ulong(Snapshot.LastSubmittedFence, 1);
+    ok_eq_ulong(Snapshot.LastCompletedFence, 1);
+    ok_eq_ulong(Snapshot.GlobalLastCompletedFence, 1);
+    ok_bool_true(Dxgmms2TimelineReleaseFence(Timeline, SecondGeneration, 0, Fence), "release wrapped fence");
+
+    Status = Dxgmms2TimelineBeginStop(Timeline);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = Dxgmms2TimelineCompleteStop(Timeline);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = Dxgmms2TimelinePrepareDestroy(Timeline);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+
+Cleanup:
+    ExFreePoolWithTag(Timeline, TAG_DXGMMS2_TIMELINE_TEST);
+}
+
 START_TEST(Dxgmms2Timeline)
 {
     PDXGMMS2_TIMELINE_CONTEXT Timeline;
@@ -534,6 +604,7 @@ START_TEST(Dxgmms2Timeline)
 
     ExFreePoolWithTag(Timeline, TAG_DXGMMS2_TIMELINE_TEST);
 
+    TestFenceWrapAcrossRestart();
     TestReserveReleaseStress();
     TestMaintenanceDrainStress();
 }

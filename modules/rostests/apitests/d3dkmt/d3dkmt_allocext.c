@@ -10,8 +10,8 @@
  * Goes deeper than d3dkmt_alloc.c (NULL contract), vidmm_test.c (basic
  * lifecycle) and d3dkmt_surface.c (alloc2 NULL contract), which already exist.
  *
- * Win11-green policy (see header struct gating; build pins DXGKDDI_INTERFACE_VERSION
- * to 0x5023 / WDDM 2.0 via CMakeLists):
+ * Win11-green policy (see header struct gating; the test target selects the
+ * current NT10 graphics ABI through CMakeLists):
  *   - A generic user-mode caller cannot supply the per-KMD private driver data a
  *     real Win11 display driver validates, so any plain CreateAllocation /
  *     CreateAllocation2 is EXPECTED TO FAIL on Win11 -- treat create-failure as
@@ -63,8 +63,11 @@ C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, GpuVirtualAddress) == 24);
 #define CAF_EXISTINGSYSMEM          0x00000020u  /* user mode: EXISTINGHEAP only */
 #define CAF_CREATEWRITECOMBINED     0x00000100u  /* forbidden from user mode */
 #define CAF_CREATECACHED            0x00000200u  /* forbidden from user mode */
+#define CAF_CROSSADAPTER            0x00000800u
 #define CAF_OPENCROSSADAPTER        0x00001000u  /* forbidden from user mode */
 #define CAF_STANDARDALLOCATION      0x00010000u
+#define CAF_EXISTINGSECTION         0x00020000u
+#define CAF_RESERVED_HIGH           0x80000000u
 
 /* A pointer-taking NTSTATUS thunk -- the shared shape of every D3DKMT entry
  * point. Used both to invoke functions whose typed PFN/struct is gated out at
@@ -208,8 +211,7 @@ Std_Attempt(D3DKMT_STANDARDALLOCATIONTYPE Type, const char *TypeName, BOOL UseV2
     ca.NumAllocations = 1;
     /* EXISTINGHEAP is the documented ExistingSysMem+StandardAllocation
      * combination (exactly one backing source). */
-    ca.Flags = MakeAllocFlags(CAF_STANDARDALLOCATION |
-                              (heap ? CAF_EXISTINGSYSMEM : 0));
+    ca.Flags = MakeAllocFlags(CAF_CREATERESOURCE | CAF_CREATESHARED | CAF_CROSSADAPTER | CAF_STANDARDALLOCATION | (heap ? CAF_EXISTINGSYSMEM : CAF_EXISTINGSECTION));
 
     if (UseV2)
     {
@@ -268,7 +270,7 @@ Std_NullDescriptor(void)
     ca.pStandardAllocation = NULL;            /* flag set, descriptor missing  */
     ca.NumAllocations = 1;
     ca.pAllocationInfo = &ai;
-    ca.Flags = MakeAllocFlags(CAF_STANDARDALLOCATION);
+    ca.Flags = MakeAllocFlags(CAF_CREATERESOURCE | CAF_CREATESHARED | CAF_CROSSADAPTER | CAF_STANDARDALLOCATION | CAF_EXISTINGSYSMEM);
     EXPECT_REFUSED(pCreate, &ca,
                    "CreateAllocation(StandardAllocation, NULL descriptor)");
 
@@ -298,9 +300,42 @@ Std_BadType(void)
     ca.pStandardAllocation = &std;
     ca.NumAllocations = 1;
     ca.pAllocationInfo = &ai;
-    ca.Flags = MakeAllocFlags(CAF_STANDARDALLOCATION);
+    ca.Flags = MakeAllocFlags(CAF_CREATERESOURCE | CAF_CREATESHARED | CAF_CROSSADAPTER | CAF_STANDARDALLOCATION | CAF_EXISTINGSYSMEM);
     EXPECT_REFUSED(pCreate, &ca,
                    "CreateAllocation(StandardAllocation, invalid Type)");
+
+    DestroyTestDevice(hDevice);
+    CloseAdapter(hAdapter);
+}
+
+static void
+Std_Validation(void)
+{
+    D3DKMT_HANDLE hAdapter, hDevice;
+    D3DKMT_CREATESTANDARDALLOCATION std;
+    D3DKMT_CREATEALLOCATION ca;
+    D3DDDI_ALLOCATIONINFO ai;
+
+    LOADFN(PFND3DKMT_CREATEALLOCATION, pCreate, "D3DKMTCreateAllocation");
+
+    if (!OpenAdapterAndDevice(&hAdapter, &hDevice))
+        return;
+
+    memset(&std, 0, sizeof(std));
+    std.Type = D3DKMT_STANDARDALLOCATIONTYPE_EXISTINGHEAP;
+    std.ExistingHeapData.Size = 0x1000;
+    memset(&ai, 0, sizeof(ai));
+    memset(&ca, 0, sizeof(ca));
+    ca.hDevice = hDevice;
+    ca.pStandardAllocation = &std;
+    ca.NumAllocations = 1;
+    ca.pAllocationInfo = &ai;
+    ca.Flags = MakeAllocFlags(CAF_STANDARDALLOCATION | CAF_EXISTINGSYSMEM);
+    EXPECT_REFUSED(pCreate, &ca, "CreateAllocation(StandardAllocation without CreateShared|CrossAdapter)");
+
+    std.Flags.Value = 1;
+    ca.Flags = MakeAllocFlags(CAF_CREATERESOURCE | CAF_CREATESHARED | CAF_CROSSADAPTER | CAF_STANDARDALLOCATION | CAF_EXISTINGSYSMEM);
+    EXPECT_REFUSED(pCreate, &ca, "CreateAllocation(StandardAllocation descriptor reserved Flags)");
 
     DestroyTestDevice(hDevice);
     CloseAdapter(hAdapter);
@@ -317,6 +352,7 @@ START_TEST(allocstandard)
                 "INTERNALBACKINGSTORE", TRUE);
     Std_NullDescriptor();
     Std_BadType();
+    Std_Validation();
 }
 
 /* =====================================================================
@@ -390,23 +426,54 @@ Flags_Forbidden(UINT FlagValue, const char *Name)
     D3DKMT_HANDLE hAdapter, hDevice;
     D3DKMT_CREATEALLOCATION ca;
     D3DDDI_ALLOCATIONINFO ai;
+    D3DDDI_ALLOCATIONINFO2 ai2;
     UINT sizeblob = 0x1000;
+    FARPROC Procedures[2];
+    UINT Version;
 
-    LOADFN(PFND3DKMT_CREATEALLOCATION, pCreate, "D3DKMTCreateAllocation");
+    Procedures[0] = LoadD3DKMTProc("D3DKMTCreateAllocation");
+    Procedures[1] = LoadD3DKMTProc("D3DKMTCreateAllocation2");
+    if (Procedures[0] == NULL || Procedures[1] == NULL)
+    {
+        skip("CreateAllocation/CreateAllocation2 exports are required for flag validation tests\n");
+        return;
+    }
 
     if (!OpenAdapterAndDevice(&hAdapter, &hDevice))
         return;
 
-    memset(&ai, 0, sizeof(ai));
-    ai.pPrivateDriverData = &sizeblob;
-    ai.PrivateDriverDataSize = sizeof(UINT);
+    for (Version = 0; Version < 2; ++Version)
+    {
+        NTSTATUS Status;
+        BOOL Faulted;
 
-    memset(&ca, 0, sizeof(ca));
-    ca.hDevice = hDevice;
-    ca.NumAllocations = 1;
-    ca.pAllocationInfo = &ai;
-    ca.Flags = MakeAllocFlags(FlagValue);
-    EXPECT_REFUSED(pCreate, &ca, Name);
+        memset(&ai, 0, sizeof(ai));
+        memset(&ai2, 0, sizeof(ai2));
+        memset(&ca, 0, sizeof(ca));
+        ca.hDevice = hDevice;
+        ca.NumAllocations = 1;
+        ca.Flags = MakeAllocFlags(FlagValue);
+        if (Version == 0)
+        {
+            ai.pPrivateDriverData = &sizeblob;
+            ai.PrivateDriverDataSize = sizeof(sizeblob);
+            ca.pAllocationInfo = &ai;
+        }
+        else
+        {
+            ai2.pPrivateDriverData = &sizeblob;
+            ai2.PrivateDriverDataSize = sizeof(sizeblob);
+            ca.pAllocationInfo2 = &ai2;
+        }
+        SafeCallPtr(Procedures[Version], &ca, &Status, &Faulted);
+        ok(Faulted || !NT_SUCCESS(Status), "%s via CreateAllocation%s must be refused, got 0x%08lX%s\n", Name, Version == 0 ? "" : "2", (long)Status, Faulted ? " (faulted)" : "");
+        if (!Faulted && NT_SUCCESS(Status))
+        {
+            D3DKMT_HANDLE UnexpectedHandle = Version == 0 ? ai.hAllocation : ai2.hAllocation;
+
+            DestroyByList(hDevice, ca.hResource, &UnexpectedHandle, 1);
+        }
+    }
 
     DestroyTestDevice(hDevice);
     CloseAdapter(hAdapter);
@@ -447,13 +514,80 @@ Flags_Malformed(void)
     CloseAdapter(hAdapter);
 }
 
+static void
+AllocationInfoFlags_Malformed(void)
+{
+    static const struct { UINT Value; const char *Name; } Cases[] = {
+        { 0x00000002u, "Stereo without Primary" },
+        { 0x80000000u, "reserved bit" },
+    };
+    D3DKMT_HANDLE hAdapter, hDevice;
+    D3DKMT_CREATEALLOCATION ca;
+    D3DDDI_ALLOCATIONINFO ai;
+    D3DDDI_ALLOCATIONINFO2 ai2;
+    UINT sizeblob = 0x1000;
+    FARPROC Procedures[2];
+    UINT Version;
+    UINT Index;
+
+    Procedures[0] = LoadD3DKMTProc("D3DKMTCreateAllocation");
+    Procedures[1] = LoadD3DKMTProc("D3DKMTCreateAllocation2");
+    if (Procedures[0] == NULL || Procedures[1] == NULL)
+    {
+        skip("CreateAllocation/CreateAllocation2 exports are required for allocation-info flag tests\n");
+        return;
+    }
+    if (!OpenAdapterAndDevice(&hAdapter, &hDevice))
+        return;
+
+    for (Version = 0; Version < 2; ++Version)
+    {
+        for (Index = 0; Index < ARRAYSIZE(Cases); ++Index)
+        {
+            NTSTATUS Status;
+            BOOL Faulted;
+
+            memset(&ca, 0, sizeof(ca));
+            memset(&ai, 0, sizeof(ai));
+            memset(&ai2, 0, sizeof(ai2));
+            ca.hDevice = hDevice;
+            ca.NumAllocations = 1;
+            if (Version == 0)
+            {
+                ai.pPrivateDriverData = &sizeblob;
+                ai.PrivateDriverDataSize = sizeof(sizeblob);
+                ai.Flags.Value = Cases[Index].Value;
+                ca.pAllocationInfo = &ai;
+            }
+            else
+            {
+                ai2.pPrivateDriverData = &sizeblob;
+                ai2.PrivateDriverDataSize = sizeof(sizeblob);
+                ai2.Flags.Value = Cases[Index].Value;
+                ca.pAllocationInfo2 = &ai2;
+            }
+            SafeCallPtr(Procedures[Version], &ca, &Status, &Faulted);
+            ok(Faulted || !NT_SUCCESS(Status), "CreateAllocation%s accepted allocation-info %s flags (0x%08lX%s)\n", Version == 0 ? "" : "2", Cases[Index].Name, (long)Status, Faulted ? ", faulted" : "");
+            if (!Faulted && NT_SUCCESS(Status))
+            {
+                D3DKMT_HANDLE UnexpectedHandle = Version == 0 ? ai.hAllocation : ai2.hAllocation;
+
+                DestroyByList(hDevice, ca.hResource, &UnexpectedHandle, 1);
+            }
+        }
+    }
+
+    DestroyTestDevice(hDevice);
+    CloseAdapter(hAdapter);
+}
+
 START_TEST(allocflags)
 {
     /* Valid combinations (skip on failure -- Win11 lacks UMD data). */
     Flags_ValidCombo(CAF_CREATERESOURCE, 2, "CreateResource");
     Flags_ValidCombo(CAF_CREATERESOURCE | CAF_CREATESHARED, 2,
                      "CreateResource|CreateShared");
-    Flags_ValidCombo(CAF_CREATESHARED, 1, "CreateShared");
+    Flags_Forbidden(CAF_CREATESHARED, "CreateShared without CreateResource");
 
     /* User-mode-forbidden flags (assert refusal). */
     Flags_Forbidden(CAF_CREATEPROTECTED,
@@ -466,9 +600,11 @@ START_TEST(allocflags)
                     "CreateAllocation(CreateCached from user mode)");
     Flags_Forbidden(CAF_OPENCROSSADAPTER,
                     "CreateAllocation(OpenCrossAdapter from user mode)");
+    Flags_Forbidden(CAF_RESERVED_HIGH, "CreateAllocation(reserved high flag)");
 
     /* Malformed request shapes (assert refusal). */
     Flags_Malformed();
+    AllocationInfoFlags_Malformed();
 }
 
 /* =====================================================================
@@ -533,6 +669,7 @@ Prio_Sweep(void)
         { D3DDDI_ALLOCATIONPRIORITY_MINIMUM, "MINIMUM" },
         { D3DDDI_ALLOCATIONPRIORITY_LOW,     "LOW" },
         { D3DDDI_ALLOCATIONPRIORITY_NORMAL,  "NORMAL" },
+        { D3DDDI_ALLOCATIONPRIORITY_NORMAL + 1, "ABOVE_NORMAL" },
         { D3DDDI_ALLOCATIONPRIORITY_HIGH,    "HIGH" },
         { D3DDDI_ALLOCATIONPRIORITY_MAXIMUM, "MAXIMUM" },
     };
@@ -595,10 +732,9 @@ Prio_Sweep(void)
             gp.AllocationCount = 1;
             gp.pPriorities = &got;
             st = pGet(&gp);
+            ok(NT_SUCCESS(st), "GetAllocationPriority round-trip failed 0x%08lX\n", (long)st);
             if (NT_SUCCESS(st))
-                trace("GetAllocationPriority round-trip read 0x%08X\n", got);
-            else
-                trace("GetAllocationPriority returned 0x%08lX\n", (long)st);
+                ok(got == Levels[RTL_NUMBER_OF(Levels) - 1].value, "GetAllocationPriority returned 0x%08X expected 0x%08X\n", got, Levels[RTL_NUMBER_OF(Levels) - 1].value);
         }
     }
 #endif
@@ -843,7 +979,24 @@ QueuedLimit_Positive(void)
     ql.QueuedPresentLimit = 2;
     st = p(&ql);
     if (NT_SUCCESS(st))
+    {
+        D3DKMT_SETQUEUEDLIMIT get;
+
         trace("SetQueuedLimit(PRESENT, 2) succeeded\n");
+        memset(&get, 0, sizeof(get));
+        get.hDevice = hDevice;
+        get.Type = D3DKMT_GET_QUEUEDLIMIT_PRESENT;
+        st = p(&get);
+        ok(NT_SUCCESS(st), "GetQueuedLimit(PRESENT) failed 0x%08lX\n", (long)st);
+        if (NT_SUCCESS(st))
+            ok(get.QueuedPresentLimit == 2, "GetQueuedLimit returned %u, expected 2\n", get.QueuedPresentLimit);
+        memset(&ql, 0, sizeof(ql));
+        ql.hDevice = hDevice;
+        ql.Type = D3DKMT_SET_QUEUEDLIMIT_PRESENT;
+        ql.QueuedPresentLimit = 0;
+        st = p(&ql);
+        ok(NT_SUCCESS(st), "SetQueuedLimit(PRESENT, reset default) failed 0x%08lX\n", (long)st);
+    }
     else
         skip("SetQueuedLimit(PRESENT) not supported here (0x%08lX)\n", (long)st);
 
@@ -967,14 +1120,16 @@ Allocation2_PositiveRoundTrip(void)
 {
     D3DKMT_HANDLE hAdapter, hDevice;
     D3DKMT_CREATEALLOCATION CreateAllocation;
-    D3DDDI_ALLOCATIONINFO AllocationInfo;
+    D3DDDI_ALLOCATIONINFO2 AllocationInfo;
     D3DKMT_DESTROYALLOCATION2 DestroyAllocation;
     D3DKMT_LOCK2 Lock;
     D3DKMT_UNLOCK2 Unlock;
+    const D3DKMT_HANDLE InitialAllocationHandle = (D3DKMT_HANDLE)0xDEAD6200;
+    const D3DGPU_VIRTUAL_ADDRESS InitialGpuVirtualAddress = ~(D3DGPU_VIRTUAL_ADDRESS)0;
     UINT AllocationSize = 4096;
     NTSTATUS Status;
 
-    LOADFN(PFND3DKMT_CREATEALLOCATION, pCreate, "D3DKMTCreateAllocation");
+    LOADFN(PFND3DKMT_CREATEALLOCATION2, pCreate, "D3DKMTCreateAllocation2");
     LOADFN(PFND3DKMT_LOCK2, pLock, "D3DKMTLock2");
     LOADFN(PFND3DKMT_UNLOCK2, pUnlock, "D3DKMTUnlock2");
     LOADFN(PFND3DKMT_DESTROYALLOCATION2, pDestroy, "D3DKMTDestroyAllocation2");
@@ -983,20 +1138,23 @@ Allocation2_PositiveRoundTrip(void)
         return;
 
     memset(&AllocationInfo, 0, sizeof(AllocationInfo));
+    AllocationInfo.hAllocation = InitialAllocationHandle;
+    AllocationInfo.GpuVirtualAddress = InitialGpuVirtualAddress;
     AllocationInfo.pPrivateDriverData = &AllocationSize;
     AllocationInfo.PrivateDriverDataSize = sizeof(AllocationSize);
     memset(&CreateAllocation, 0, sizeof(CreateAllocation));
     CreateAllocation.hDevice = hDevice;
-    CreateAllocation.pAllocationInfo = &AllocationInfo;
+    CreateAllocation.pAllocationInfo2 = &AllocationInfo;
     CreateAllocation.NumAllocations = 1;
     Status = pCreate(&CreateAllocation);
     if (!NT_SUCCESS(Status))
     {
-        skip("CreateAllocation is not supported by this KMD (0x%08lX)\n", (long)Status);
+        skip("CreateAllocation2 is not supported by this KMD (0x%08lX)\n", (long)Status);
         goto cleanup;
     }
 
-    ok(AllocationInfo.hAllocation != 0, "CreateAllocation returned a zero allocation handle\n");
+    ok(AllocationInfo.hAllocation != 0 && AllocationInfo.hAllocation != InitialAllocationHandle, "CreateAllocation2 did not publish a new allocation handle\n");
+    ok(AllocationInfo.GpuVirtualAddress != InitialGpuVirtualAddress, "CreateAllocation2 did not publish GpuVirtualAddress\n");
     memset(&Lock, 0, sizeof(Lock));
     Lock.hDevice = hDevice;
     Lock.hAllocation = AllocationInfo.hAllocation;
