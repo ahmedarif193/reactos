@@ -445,7 +445,7 @@ ConCfgInitDefaultSettings(
     // wcsncpy(ConsoleInfo->FaceName, L"DejaVu Sans Mono", LF_FACESIZE);
     // ConsoleInfo->FontSize = MAKELONG(8, 12); // 0x000C0008; // font is 8x12
 
-    StringCchCopyW(ConsoleInfo->FaceName, ARRAYSIZE(ConsoleInfo->FaceName), L"VGA"); // HACK: !!
+    StringCchCopyW(ConsoleInfo->FaceName, ARRAYSIZE(ConsoleInfo->FaceName), L"Terminal"); // HACK: !!
     // ConsoleInfo->FaceName[0] = UNICODE_NULL;
     // ConsoleInfo->FontSize.X = 8;
     // ConsoleInfo->FontSize.Y = 12;
