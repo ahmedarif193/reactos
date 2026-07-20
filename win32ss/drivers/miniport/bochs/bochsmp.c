@@ -310,9 +310,9 @@ BochsGetModeInfo(
     ModeInfo->BitsPerPlane = 32;
     ModeInfo->Frequency = 60;
 
-    /* 960 DPI appears to be common */
-    ModeInfo->XMillimeter = AvailableModeInfo->XResolution * 254 / 960;
-    ModeInfo->YMillimeter = AvailableModeInfo->YResolution * 254 / 960;
+    /* Physical size derived from a 96-DPI assumption (rounded) */
+    ModeInfo->XMillimeter = ((ULONGLONG)AvailableModeInfo->XResolution * 254 + 480) / 960;
+    ModeInfo->YMillimeter = ((ULONGLONG)AvailableModeInfo->YResolution * 254 + 480) / 960;
     ModeInfo->NumberRedBits = 8;
     ModeInfo->NumberGreenBits = 8;
     ModeInfo->NumberBlueBits = 8;
