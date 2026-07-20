@@ -116,15 +116,18 @@ DC_vFixIsotropicMapping(PDC pdc)
     fx = llabs((LONG64)szlWindowExt.cx * szlViewportExt.cy);
     fy = llabs((LONG64)szlWindowExt.cy * szlViewportExt.cx);
 
+    /* The shrunken extent is rounded to nearest, like MulDiv would */
     if (fx < fy)
     {
         s = (szlWindowExt.cy ^ szlViewportExt.cx) > 0 ? 1 : -1;
-        pdcattr->szlViewportExt.cx = (LONG)(fx * s / szlWindowExt.cy);
+        pdcattr->szlViewportExt.cx =
+            (LONG)((fx + llabs((LONG64)szlWindowExt.cy) / 2) * s / szlWindowExt.cy);
     }
     else if (fx > fy)
     {
         s = (szlWindowExt.cx ^ szlViewportExt.cy) > 0 ? 1 : -1;
-        pdcattr->szlViewportExt.cy = (LONG)(fy * s / szlWindowExt.cx);
+        pdcattr->szlViewportExt.cy =
+            (LONG)((fy + llabs((LONG64)szlWindowExt.cx) / 2) * s / szlWindowExt.cx);
     }
 
     /* Reset the flag */
@@ -352,6 +355,70 @@ leave:
 }
 
 
+/* Accel flags of an identity world-to-page transform */
+#define XFORM_IDENTITY_ACCEL (XFORM_SCALE|XFORM_UNITY|XFORM_NO_TRANSLATION)
+
+/* With an identity world transform Windows converts between logical
+   and device coordinates with MulDiv precision on the extent ratio.
+   The float32 matrix cannot always reproduce that (0.5 boundaries
+   land one ulp off), so do the math integrally. Returns FALSE if a
+   divisor extent (or the x scale numerator) is 0, the caller then
+   falls back to the matrix path (which truncates, as verified by the
+   LPtoDP apitest for the degenerate isotropic cases). */
+static
+BOOL
+IntTransformPointsCompatible(
+    _In_ PDC pdc,
+    _Inout_updates_(Count) LPPOINT ppt,
+    _In_ INT Count,
+    _In_ BOOL bLpToDp)
+{
+    PDC_ATTR pdcattr = pdc->pdcattr;
+    PSIZEL pszlViewExt;
+    SIZEL szlWndExt;
+    POINTL ptlWndOrg, ptlViewOrg;
+    INT i;
+
+    /* This applies the lazy isotropic fixup */
+    pszlViewExt = DC_pszlViewportExt(pdc);
+    szlWndExt = pdcattr->szlWindowExt;
+    ptlWndOrg = pdcattr->ptlWindowOrg;
+    ptlViewOrg = pdcattr->ptlViewportOrg;
+
+    /* The divisors must not be 0, and neither may the x numerator
+       (a 0 y numerator scales that axis to the viewport origin) */
+    if (bLpToDp ? ((szlWndExt.cx == 0) || (szlWndExt.cy == 0) ||
+                   (pszlViewExt->cx == 0))
+                : ((pszlViewExt->cx == 0) || (pszlViewExt->cy == 0) ||
+                   (szlWndExt.cx == 0)))
+    {
+        return FALSE;
+    }
+
+    if (bLpToDp)
+    {
+        for (i = 0; i < Count; i++)
+        {
+            ppt[i].x = EngMulDiv(ppt[i].x - ptlWndOrg.x,
+                                 pszlViewExt->cx, szlWndExt.cx) + ptlViewOrg.x;
+            ppt[i].y = EngMulDiv(ppt[i].y - ptlWndOrg.y,
+                                 pszlViewExt->cy, szlWndExt.cy) + ptlViewOrg.y;
+        }
+    }
+    else
+    {
+        for (i = 0; i < Count; i++)
+        {
+            ppt[i].x = EngMulDiv(ppt[i].x - ptlViewOrg.x,
+                                 szlWndExt.cx, pszlViewExt->cx) + ptlWndOrg.x;
+            ppt[i].y = EngMulDiv(ppt[i].y - ptlViewOrg.y,
+                                 szlWndExt.cy, pszlViewExt->cy) + ptlWndOrg.y;
+        }
+    }
+
+    return TRUE;
+}
+
 /*!
  * Converts points from logical coordinates into device coordinates.
  * Conversion depends on the mapping mode,
@@ -416,10 +483,24 @@ NtGdiTransformPoints(
     switch (iMode)
     {
         case GdiDpToLp:
+            if (((pdc->pdcattr->mxWorldToPage.flAccel & XFORM_IDENTITY_ACCEL) ==
+                 XFORM_IDENTITY_ACCEL) &&
+                IntTransformPointsCompatible(pdc, Points, Count, FALSE))
+            {
+                ret = TRUE;
+                break;
+            }
             ret = INTERNAL_APPLY_MATRIX(DC_pmxDeviceToWorld(pdc), Points, Count);
             break;
 
         case GdiLpToDp:
+            if (((pdc->pdcattr->mxWorldToPage.flAccel & XFORM_IDENTITY_ACCEL) ==
+                 XFORM_IDENTITY_ACCEL) &&
+                IntTransformPointsCompatible(pdc, Points, Count, TRUE))
+            {
+                ret = TRUE;
+                break;
+            }
             ret = INTERNAL_APPLY_MATRIX(DC_pmxWorldToDevice(pdc), Points, Count);
             break;
 
@@ -1071,7 +1152,12 @@ IntMirrorWindowOrg(PDC dc)
     //
     // WOrgx = wox - (Width - 1) * WExtx / VExtx
     //
-    X = (dc->erclWindow.right - dc->erclWindow.left) - 1; // Get device width - 1
+    /* Use the surface width for memory DCs; erclWindow only tracks
+       display DCs */
+    if (dc->dclevel.pSurface)
+        X = dc->dclevel.pSurface->SurfObj.sizlBitmap.cx - 1;
+    else
+        X = (dc->erclWindow.right - dc->erclWindow.left) - 1; // Get device width - 1
 
     X = (X * pdcattr->szlWindowExt.cx) / cx;
 
@@ -1089,33 +1175,40 @@ DC_vSetLayout(
     IN DWORD dwLayout)
 {
     PDC_ATTR pdcattr = pdc->pdcattr;
+    DWORD dwOldLayout = pdcattr->dwLayout;
 
     pdcattr->dwLayout = dwLayout;
 
-    if (!(dwLayout & LAYOUT_ORIENTATIONMASK)) return;
+    /* Only act when the orientation actually changes */
+    if (!((dwOldLayout ^ dwLayout) & LAYOUT_ORIENTATIONMASK)) return;
 
     if (dwLayout & LAYOUT_RTL)
     {
         pdcattr->iMapMode = MM_ANISOTROPIC;
     }
 
-    //pdcattr->szlWindowExt.cy = -pdcattr->szlWindowExt.cy;
-    //pdcattr->ptlWindowOrg.x  = -pdcattr->ptlWindowOrg.x;
+    /* Mirror the x axis: negate the window extent and mirror the origin */
+    pdcattr->szlWindowExt.cx = -pdcattr->szlWindowExt.cx;
 
-    //if (wox == -1)
-    //    IntMirrorWindowOrg(pdc);
-    //else
-    //    pdcattr->ptlWindowOrg.x = wox - pdcattr->ptlWindowOrg.x;
-
-    if (!(pdcattr->flTextAlign & TA_CENTER)) pdcattr->flTextAlign |= TA_RIGHT;
-
-    if (pdc->dclevel.flPath & DCPATH_CLOCKWISE)
-        pdc->dclevel.flPath &= ~DCPATH_CLOCKWISE;
+    if (wox == -1)
+        IntMirrorWindowOrg(pdc);
     else
+        pdcattr->ptlWindowOrg.x = wox - pdcattr->ptlWindowOrg.x;
+
+    if (dwLayout & LAYOUT_RTL)
+    {
+        if (!(pdcattr->flTextAlign & TA_CENTER)) pdcattr->flTextAlign |= TA_RIGHT;
         pdc->dclevel.flPath |= DCPATH_CLOCKWISE;
+    }
+    else
+    {
+        if (!(pdcattr->flTextAlign & TA_CENTER)) pdcattr->flTextAlign &= ~TA_RIGHT;
+        pdc->dclevel.flPath &= ~DCPATH_CLOCKWISE;
+    }
 
     pdcattr->flXform |= (PAGE_EXTENTS_CHANGED |
                          INVALIDATE_ATTRIBUTES |
+                         PAGE_XLATE_CHANGED |
                          WORLD_XFORM_CHANGED |
                          DEVICE_TO_WORLD_INVALID);
 }
