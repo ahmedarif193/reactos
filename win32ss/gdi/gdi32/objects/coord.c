@@ -56,7 +56,16 @@ GdiTransformPoints(
     GdiTransformPoints2(&xform, pptOut, pptIn, nCount);
 }
 
-#define MAX_OFFSET 4294967041.0
+/* Windows converts xform1's translation into a fixed point format
+   internally (32.32 on win64, 16.16 based on x86), so it must fit into
+   the integer part, while the combined result may reach 2^32 inclusive
+   (probed by the gdi32:CombineTransform apitest). */
+#ifdef _WIN64
+#define MAX_OFFSET_IN 4294967296.0
+#else
+#define MAX_OFFSET_IN 2147483648.0
+#endif
+#define MAX_OFFSET_OUT 4294967296.0
 #define _fmul(x,y) (((x) == 0) ? 0 : (x) * (y))
 
 BOOL
@@ -88,13 +97,20 @@ CombineTransform(
         xformTmp.eM21 = 0.;
     }
 
+    /* Check the input offsets of the first transform */
+    if ((pxf1->eDx >= MAX_OFFSET_IN) || (pxf1->eDx <= -MAX_OFFSET_IN) ||
+        (pxf1->eDy >= MAX_OFFSET_IN) || (pxf1->eDy <= -MAX_OFFSET_IN))
+    {
+        return FALSE;
+    }
+
     /* Calculate the offset */
     xformTmp.eDx = _fmul(pxf1->eDx, pxf2->eM11) + _fmul(pxf1->eDy, pxf2->eM21) + pxf2->eDx;
     xformTmp.eDy = _fmul(pxf1->eDx, pxf2->eM12) + _fmul(pxf1->eDy, pxf2->eM22) + pxf2->eDy;
 
     /* Check for invalid offset ranges */
-    if ((xformTmp.eDx > MAX_OFFSET) || (xformTmp.eDx < -MAX_OFFSET) ||
-        (xformTmp.eDy > MAX_OFFSET) || (xformTmp.eDy < -MAX_OFFSET))
+    if ((xformTmp.eDx > MAX_OFFSET_OUT) || (xformTmp.eDx < -MAX_OFFSET_OUT) ||
+        (xformTmp.eDy > MAX_OFFSET_OUT) || (xformTmp.eDy < -MAX_OFFSET_OUT))
     {
         return FALSE;
     }
