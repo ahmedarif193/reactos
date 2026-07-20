@@ -981,6 +981,7 @@ extern "C" {
 #define ICM_ON 2
 #define ICM_OFF 1
 #define ICM_QUERY 3
+#define ICM_DONE_OUTSIDEDC 4
 
 #if (WINVER >= 0x0400)
 typedef struct _DRAWPATRECT {
