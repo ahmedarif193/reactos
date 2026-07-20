@@ -321,6 +321,16 @@ set(CMAKE_C_COMPILE_OBJECT "<CMAKE_C_COMPILER> <DEFINES> ${CLANG_RESOURCE_INCLUD
 set(_reactos_cppstl_pre_include_flags "")
 set(CMAKE_ASM_COMPILE_OBJECT "<CMAKE_ASM_COMPILER> -x assembler-with-cpp -o <OBJECT> -I${REACTOS_SOURCE_DIR}/sdk/include/asm -I${REACTOS_BINARY_DIR}/sdk/include/asm <INCLUDES> <FLAGS> <DEFINES> -D__ASM__ -c <SOURCE>")
 
+get_filename_component(_clang_bindir "${CMAKE_C_COMPILER}" DIRECTORY)
+find_program(_llvm_windres
+    NAMES ${CMAKE_C_COMPILER_TARGET}-windres
+    PATHS "${_clang_bindir}"
+    NO_DEFAULT_PATH)
+if(NOT _llvm_windres)
+    message(FATAL_ERROR "${CMAKE_C_COMPILER_TARGET}-windres must be installed next to Clang.")
+endif()
+set(CMAKE_RC_COMPILER "${_llvm_windres}")
+
 set(_rc_target_flag)
 if(ARCH STREQUAL "i386")
     set(_rc_target_flag "--target=pe-i386")
