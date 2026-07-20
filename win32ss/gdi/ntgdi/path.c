@@ -1288,10 +1288,7 @@ PATH_PolylineTo(
     pPath = PATH_LockPath(dc->dclevel.hPath);
     if (!pPath) return FALSE;
 
-    if (pPath->newStroke)
-        cbPoints--;
-
-    ret = add_log_points_new_stroke(dc, pPath, pts, cbPoints, PT_LINETO , TRUE);
+    ret = add_log_points_new_stroke(dc, pPath, pts, cbPoints, PT_LINETO, FALSE);
     PATH_UnlockPath(pPath);
     return ret;
 }
@@ -2756,8 +2753,10 @@ NtGdiGetMiterLimit(
 
     _SEH2_TRY
     {
+        gxf_long worker;
+        worker.f = pDc->dclevel.laPath.eMiterLimit;
         ProbeForWrite(pdwOut, sizeof(DWORD), 1);
-        *pdwOut = pDc->dclevel.laPath.eMiterLimit;
+        *pdwOut = worker.l;
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
@@ -2951,13 +2950,20 @@ NtGdiSetMiterLimit(
     gxf_long worker, worker1;
     BOOL bResult = TRUE;
 
+    worker.l = dwNew;
+
+    /* A miter limit below 1.0 is invalid and leaves the DC untouched */
+    if (!(worker.f >= 1.0f))
+    {
+        return FALSE;
+    }
+
     if (!(pDc = DC_LockDc(hdc)))
     {
         EngSetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
 
-    worker.l  = dwNew;
     worker1.f = pDc->dclevel.laPath.eMiterLimit;
     pDc->dclevel.laPath.eMiterLimit = worker.f;
 
