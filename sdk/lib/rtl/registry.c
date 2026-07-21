@@ -140,10 +140,19 @@ RtlpCallQueryRegistryRoutine(IN PRTL_QUERY_REGISTRY_TABLE QueryTable,
     NTSTATUS Status;
     BOOLEAN FoundExpander = FALSE;
     UNICODE_STRING Source, Destination;
+    ULONG DefaultType, ExpectedType;
 
     /* Setup defaults */
     InfoLength = *InfoSize;
     *InfoSize = 0;
+
+    DefaultType = QueryTable->DefaultType;
+    ExpectedType = REG_NONE;
+    if (QueryTable->Flags & RTL_QUERY_REGISTRY_TYPECHECK)
+    {
+        ExpectedType = DefaultType >> RTL_QUERY_REGISTRY_TYPECHECK_SHIFT;
+        DefaultType &= (1UL << RTL_QUERY_REGISTRY_TYPECHECK_SHIFT) - 1;
+    }
 
     /* Check if there's no data */
     if (KeyValueInfo->DataOffset == MAXULONG)
@@ -161,10 +170,10 @@ RtlpCallQueryRegistryRoutine(IN PRTL_QUERY_REGISTRY_TABLE QueryTable,
     /* Check if there's no value or data */
     if ((KeyValueInfo->Type == REG_NONE) ||
         (!(KeyValueInfo->DataLength) &&
-          (KeyValueInfo->Type == QueryTable->DefaultType)))
+          (KeyValueInfo->Type == DefaultType)))
     {
         /* Check if there's no value */
-        if (QueryTable->DefaultType == REG_NONE)
+        if (DefaultType == REG_NONE)
         {
             /* Return proper status code */
             return (QueryTable->Flags & RTL_QUERY_REGISTRY_REQUIRED) ?
@@ -173,7 +182,7 @@ RtlpCallQueryRegistryRoutine(IN PRTL_QUERY_REGISTRY_TABLE QueryTable,
 
         /* We can setup a default value... capture the defaults */
         Name = (PWCHAR)QueryTable->Name;
-        Type = QueryTable->DefaultType;
+        Type = DefaultType;
         Data = QueryTable->DefaultData;
         Length = QueryTable->DefaultLength;
         if (!Length)
@@ -196,6 +205,12 @@ RtlpCallQueryRegistryRoutine(IN PRTL_QUERY_REGISTRY_TABLE QueryTable,
     }
     else
     {
+        if ((ExpectedType != REG_NONE) &&
+            (KeyValueInfo->Type != ExpectedType))
+        {
+            return STATUS_OBJECT_TYPE_MISMATCH;
+        }
+
         /* Check if we have length */
         if (KeyValueInfo->DataLength)
         {
@@ -1346,6 +1361,21 @@ ProcessValues:
     /* Free our buffer and return status */
     RtlpAllocDeallocQueryBuffer(NULL, KeyValueInfo, BufferSize, NULL);
     return Status;
+}
+
+NTSTATUS
+NTAPI
+RtlQueryRegistryValuesEx(IN ULONG RelativeTo,
+                         IN PCWSTR Path,
+                         IN PRTL_QUERY_REGISTRY_TABLE QueryTable,
+                         IN PVOID Context,
+                         IN PVOID Environment OPTIONAL)
+{
+    return RtlQueryRegistryValues(RelativeTo,
+                                  Path,
+                                  QueryTable,
+                                  Context,
+                                  Environment);
 }
 
 /* EOF */

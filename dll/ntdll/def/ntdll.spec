@@ -1129,6 +1129,7 @@
 @ stdcall RtlQueryProcessHeapInformation(ptr)
 @ stdcall -stub RtlQueryProcessLockInformation(ptr)
 @ stdcall RtlQueryRegistryValues(long ptr ptr ptr ptr)
+@ stdcall RtlQueryRegistryValuesEx(long ptr ptr ptr ptr)
 @ stdcall RtlQuerySecurityObject(ptr long ptr long ptr)
 @ stdcall RtlQueryTagHeap(ptr long long long ptr)
 @ stdcall RtlQueryTimeZoneInformation(ptr)
