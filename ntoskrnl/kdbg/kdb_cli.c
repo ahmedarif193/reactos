@@ -1430,6 +1430,10 @@ GetNextFrame(
     PVOID HandlerData;
     ULONG64 OldPc = KeGetContextPc(Context);
     ULONG64 OldSp = KeGetContextStackRegister(Context);
+    UCHAR InstructionByte;
+
+    if (!NT_SUCCESS(KdbpSafeReadMemory(&InstructionByte, (PVOID)(ULONG_PTR)OldPc, sizeof(InstructionByte))))
+        return FALSE;
 
     _SEH2_TRY
     {
