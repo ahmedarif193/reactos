@@ -19,6 +19,7 @@ static CONTEXT KdbgContext;
 static EXCEPTION_RECORD64 KdbgExceptionRecord;
 static BOOLEAN KdbgFirstChanceException;
 static NTSTATUS KdbgContinueStatus = STATUS_SUCCESS;
+static USHORT KdbgProcessor;
 static PVOID volatile KdbgDeferredSymbolBase;
 static BOOLEAN KdbgDeferredSymbolLoad;
 
@@ -124,6 +125,7 @@ KdSendPacket(
         else if (WaitStateChange->NewState == DbgKdExceptionStateChange)
         {
             KdbgNextApiNumber = DbgKdGetContextApi;
+            KdbgProcessor = WaitStateChange->Processor;
             KdbgExceptionRecord = WaitStateChange->u.Exception.ExceptionRecord;
             KdbgFirstChanceException = WaitStateChange->u.Exception.FirstChance;
             return;
@@ -207,6 +209,7 @@ KdReceivePacket(
     {
         PDBGKD_MANIPULATE_STATE64 ManipulateState = (PDBGKD_MANIPULATE_STATE64)MessageHeader->Buffer;
         RtlZeroMemory(MessageHeader->Buffer, MessageHeader->MaximumLength);
+        ManipulateState->Processor = KdbgProcessor;
         if (KdbgNextApiNumber == DbgKdGetContextApi)
         {
             ManipulateState->ApiNumber = DbgKdGetContextApi;
