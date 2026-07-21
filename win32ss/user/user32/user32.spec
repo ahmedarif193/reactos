@@ -382,6 +382,7 @@
 @ stdcall GetTabbedTextExtentW(long wstr long long ptr)
 @ stdcall GetTaskmanWindow ()
 @ stdcall GetThreadDesktop(long)
+@ stdcall -version=0xA00+ GetThreadDpiAwarenessContext()
 @ stdcall GetTitleBarInfo(long ptr) NtUserGetTitleBarInfo
 @ stdcall GetTopWindow(long)
 @ stdcall -version=0x601+ GetTouchInputInfo(long long ptr long)
@@ -692,6 +693,7 @@
 @ stdcall SetSystemTimer(long long long ptr) NtUserSetSystemTimer
 @ stdcall SetTaskmanWindow (long)
 @ stdcall SetThreadDesktop(long) NtUserSetThreadDesktop
+@ stdcall -version=0xA00+ SetThreadDpiAwarenessContext(ptr)
 @ stdcall SetTimer(long long long ptr) NtUserSetTimer
 @ stdcall SetUserObjectInformationA(long long ptr long) NtUserSetObjectInformation
 @ stdcall SetUserObjectInformationW(long long ptr long) NtUserSetObjectInformation
