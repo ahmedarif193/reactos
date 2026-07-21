@@ -401,6 +401,13 @@ NtUserCallOneParam(
                 break;
             }
 
+            if (!Param)
+            {
+                EngSetLastError(ERROR_NOACCESS);
+                Result = FALSE;
+                break;
+            }
+
             ppi = PsGetCurrentProcessWin32Process();
             _SEH2_TRY
             {
