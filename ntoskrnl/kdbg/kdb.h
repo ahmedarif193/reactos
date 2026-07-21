@@ -190,6 +190,16 @@ BOOLEAN
 KdbSymInit(
     _In_ ULONG BootPhase);
 
+BOOLEAN
+KdbgTakeDeferredSymbolRequest(
+    _Out_ PVOID *Base,
+    _Out_ PBOOLEAN Load);
+
+VOID
+KdbgProcessDeferredSymbolRequest(
+    _In_ PVOID Base,
+    _In_ BOOLEAN Load);
+
 /* from kdb.c */
 
 LONG

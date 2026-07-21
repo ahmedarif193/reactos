@@ -1959,12 +1959,22 @@ NTAPI
 KdExitDebugger(IN BOOLEAN Enable)
 {
     ULONG TimeSlip;
+#ifdef KDBG
+    PVOID SymbolBase;
+    BOOLEAN LoadSymbols;
+    BOOLEAN ProcessSymbols;
+#endif
 
     if (KdpDebuggerNestedDepth > 0)
     {
         InterlockedDecrement(&KdpDebuggerNestedDepth);
         return;
     }
+
+#ifdef KDBG
+    /* Take the request while the debugger still owns the frozen machine. */
+    ProcessSymbols = KdbgTakeDeferredSymbolRequest(&SymbolBase, &LoadSymbols);
+#endif
 
     /* Reset the debugger entered flag, restore the port state and unlock it */
     KdEnteredDebugger = FALSE;
@@ -1973,6 +1983,11 @@ KdExitDebugger(IN BOOLEAN Enable)
 
     /* Unfreeze the CPUs, restoring also the IRQL */
     KeThawExecution(Enable);
+
+#ifdef KDBG
+    if (ProcessSymbols)
+        KdbgProcessDeferredSymbolRequest(SymbolBase, LoadSymbols);
+#endif
 
     /* Compare time with the one from KdEnterDebugger */
     if (!KdTimerStop.QuadPart)
