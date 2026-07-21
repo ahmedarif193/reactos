@@ -63,6 +63,7 @@ typedef BOOL (WINAPI *PVALIDATE_LOCALE)(IN ULONG LocaleId);
 extern HANDLE BaseSrvHeap;
 extern HANDLE BaseSrvSharedHeap;
 extern PBASE_STATIC_SERVER_DATA BaseStaticServerData;
+extern PBASE_STATIC_SERVER_DATA32 BaseStaticServerData32;
 extern ULONG SessionId;
 extern ULONG ProtectionMode;
 extern RTL_CRITICAL_SECTION BaseSrvDDDBSMCritSec;
