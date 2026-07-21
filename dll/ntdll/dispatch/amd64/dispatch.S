@@ -19,7 +19,8 @@ EXTERN RtlRaiseStatus:PROC
 
 .data
 
-Wow64PrepareForException:
+PUBLIC LdrpWow64PrepareForException
+LdrpWow64PrepareForException:
     .quad 0
 
 .code
@@ -201,7 +202,7 @@ PUBLIC KiUserExceptionDispatcher
     cld
 
     /* Check the WOW64 callback */
-    mov rax, qword ptr Wow64PrepareForException[rip]
+    mov rax, qword ptr LdrpWow64PrepareForException[rip]
     test rax, rax
     jz .NoWow64
 
@@ -274,4 +275,3 @@ Exit:
 .ENDP
 
 END
-

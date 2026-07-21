@@ -109,6 +109,17 @@ LdrpApplyFileNameRedirection(
     _Inout_ PBOOLEAN RedirectedDll);
 
 /* ldrutils.c */
+PVOID NTAPI
+RtlFindExportedRoutineByName(
+    _In_ PVOID BaseAddress,
+    _In_ PCSTR RoutineName);
+
+NTSTATUS NTAPI
+LdrpCreateDllSection(IN PUNICODE_STRING FullName,
+                     IN HANDLE DllHandle,
+                     IN PULONG DllCharacteristics OPTIONAL,
+                     OUT PHANDLE SectionHandle);
+
 NTSTATUS
 NTAPI
 LdrpGetProcedureAddress(

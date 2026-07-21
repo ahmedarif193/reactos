@@ -810,6 +810,56 @@ LdrGetProcedureAddressEx(
     return LdrpGetProcedureAddress(BaseAddress, Name, Ordinal, ProcedureAddress, ExecuteInit);
 }
 
+PVOID
+NTAPI
+RtlFindExportedRoutineByName(
+    _In_ PVOID BaseAddress,
+    _In_ PCSTR RoutineName)
+{
+    PIMAGE_EXPORT_DIRECTORY ExportDirectory;
+    PULONG Functions, Names;
+    PUSHORT Ordinals;
+    ULONG ExportSize, FunctionIndex;
+    LONG Low, High;
+
+    ExportDirectory = RtlImageDirectoryEntryToData(BaseAddress, TRUE, IMAGE_DIRECTORY_ENTRY_EXPORT, &ExportSize);
+    if (!ExportDirectory || ExportSize < sizeof(*ExportDirectory))
+        return NULL;
+
+    Names = (PULONG)((PUCHAR)BaseAddress + ExportDirectory->AddressOfNames);
+    Ordinals = (PUSHORT)((PUCHAR)BaseAddress + ExportDirectory->AddressOfNameOrdinals);
+    Low = 0;
+    High = ExportDirectory->NumberOfNames - 1;
+    while (Low <= High)
+    {
+        LONG Middle = Low + (High - Low) / 2;
+        PCSTR ExportName = (PCSTR)BaseAddress + Names[Middle];
+        LONG Result = strcmp(RoutineName, ExportName);
+
+        if (Result < 0)
+            High = Middle - 1;
+        else if (Result > 0)
+            Low = Middle + 1;
+        else
+        {
+            FunctionIndex = Ordinals[Middle];
+            if (FunctionIndex >= ExportDirectory->NumberOfFunctions)
+                return NULL;
+
+            Functions = (PULONG)((PUCHAR)BaseAddress + ExportDirectory->AddressOfFunctions);
+            if (!Functions[FunctionIndex])
+                return NULL;
+
+            RoutineName = (PCSTR)BaseAddress + Functions[FunctionIndex];
+            if ((PUCHAR)RoutineName >= (PUCHAR)ExportDirectory &&
+                (PUCHAR)RoutineName < (PUCHAR)ExportDirectory + ExportSize)
+                return NULL;
+            return (PVOID)RoutineName;
+        }
+    }
+    return NULL;
+}
+
 /*
  * @implemented
  */

@@ -129,7 +129,7 @@ static inline unsigned long HandleToUlong(const void* h )
     { return((unsigned long)(ULONG_PTR) h ); }
 static inline long HandleToLong( const void* h )
     { return((long)(LONG_PTR) h ); }
-static inline void* ULongToHandle( const long h )
+static inline void* ULongToHandle( const unsigned long h )
     { return((void*) (UINT_PTR) h ); }
 static inline void* LongToHandle( const long h )
     { return((void*) (INT_PTR) h ); }
