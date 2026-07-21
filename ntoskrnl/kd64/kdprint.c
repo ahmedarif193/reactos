@@ -555,8 +555,15 @@ KdpPrint(
         return STATUS_DEVICE_NOT_CONNECTED;
     }
 
+    if ((KdEnteredDebugger && KdpPortLocked) || KdpDebuggerLockOwnedByCurrentThread())
+    {
+        Status = KdpPrintString(&OutputString) ? STATUS_BREAKPOINT : STATUS_SUCCESS;
+        *Handled = TRUE;
+        return Status;
+    }
+
 #if defined(_M_ARM64)
-    if (KdEnteredDebugger || KdpDebuggerLockOwnedByCurrentThread())
+    if (KdEnteredDebugger)
     {
         *Handled = TRUE;
         return STATUS_SUCCESS;
