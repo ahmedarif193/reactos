@@ -101,7 +101,9 @@ GdiDllInitialize(
         case DLL_THREAD_ATTACH:
         {
             NtCurrentTeb()->GdiTebBatch.Offset = 0;
+#ifndef WOW64_I386_RUNTIME
             NtCurrentTeb()->GdiBatchCount = 0;
+#endif
             break;
         }
 

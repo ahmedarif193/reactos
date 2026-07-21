@@ -151,8 +151,12 @@ CallMsgFilterA(
   int nCode)
 {
   MSG Msg;
+#ifdef WOW64_I386_RUNTIME
+  if (NtCurrentTeb()->Win32ThreadInfo)
+#else
   if ( NtCurrentTeb()->Win32ThreadInfo &&
       (ISITHOOKED(WH_MSGFILTER) || ISITHOOKED(WH_SYSMSGFILTER)) )
+#endif
   {
      if ( lpMsg->message & ~WM_MAXIMUM )
      {
@@ -176,8 +180,12 @@ CallMsgFilterW(
   int nCode)
 {
   MSG Msg;
+#ifdef WOW64_I386_RUNTIME
+  if (NtCurrentTeb()->Win32ThreadInfo)
+#else
   if ( NtCurrentTeb()->Win32ThreadInfo &&
       (ISITHOOKED(WH_MSGFILTER) || ISITHOOKED(WH_SYSMSGFILTER)) )
+#endif
   {
      if ( lpMsg->message & ~WM_MAXIMUM )
      {
@@ -846,6 +854,4 @@ User32CallEventProcFromKernel(PVOID Arguments, ULONG ArgumentLength)
 
   return ZwCallbackReturn(NULL, 0, STATUS_SUCCESS);
 }
-
-
 

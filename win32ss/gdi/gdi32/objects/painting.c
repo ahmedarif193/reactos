@@ -560,6 +560,9 @@ PatBlt(
 
     if ( GdiConvertAndCheckDC(hdc) == NULL ) return FALSE;
 
+#ifdef WOW64_I386_RUNTIME
+    return NtGdiPatBlt(hdc, nXLeft, nYLeft, nWidth, nHeight, dwRop);
+#else
     /* Get the DC attribute */
     pdcattr = GdiGetDcAttr(hdc);
     if (pdcattr && !(pdcattr->ulDirty_ & DC_DIBSECTION))
@@ -587,6 +590,7 @@ PatBlt(
         }
     }
     return NtGdiPatBlt( hdc,  nXLeft,  nYLeft,  nWidth,  nHeight,  dwRop);
+#endif
 }
 
 BOOL

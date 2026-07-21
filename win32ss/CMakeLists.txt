@@ -267,3 +267,7 @@ add_asm_files(win32ksys_asm sys-stubs.S)
 add_library(win32ksys ${win32ksys_asm})
 set_target_properties(win32ksys PROPERTIES LINKER_LANGUAGE "C")
 add_dependencies(win32ksys asm)
+
+if(WOW64_I386_RUNTIME AND ARCH STREQUAL "i386")
+    target_compile_definitions(win32ksys PRIVATE WOW64_I386_RUNTIME)
+endif()

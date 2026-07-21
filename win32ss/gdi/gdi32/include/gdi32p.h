@@ -408,6 +408,11 @@ GdiAllocBatchCommand(
     HDC hdc,
     USHORT Cmd)
 {
+#ifdef WOW64_I386_RUNTIME
+    UNREFERENCED_PARAMETER(hdc);
+    UNREFERENCED_PARAMETER(Cmd);
+    return NULL;
+#else
     PTEB pTeb;
     USHORT cjSize;
     PGDIBATCHHDR pHdr;
@@ -470,6 +475,7 @@ GdiAllocBatchCommand(
     pHdr->Size = cjSize;
 
     return pHdr;
+#endif
 }
 
 FORCEINLINE
