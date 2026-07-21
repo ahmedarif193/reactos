@@ -96,10 +96,12 @@ _SEH3$_Unregister(
         }
 
         /* Loop to find the frame that links the target frame */
-        while (CurrentFrame->Next != Frame)
+        while (CurrentFrame != (PVOID)-1 && CurrentFrame->Next != Frame)
         {
             CurrentFrame = CurrentFrame->Next;
         }
+
+        if (CurrentFrame == (PVOID)-1) return;
 
         /* Remove the frame from the linked list */
         CurrentFrame->Next = Frame->Next;
@@ -275,9 +277,9 @@ _SEH3$_JumpToTarget(
             "movl 24(%%ecx), %%esp\n\t"
             "movl 28(%%ecx), %%ebp\n\t"
 
-            "movl 36(%%ecx), %%ebx\n\t"
-            "movl 40(%%ecx), %%esi\n\t"
-            "movl 44(%%ecx), %%edi\n\t"
+            "movl 40(%%ecx), %%ebx\n\t"
+            "movl 44(%%ecx), %%esi\n\t"
+            "movl 48(%%ecx), %%edi\n\t"
 
             /* Stack pointer is 4 off from the call to __SEH3$_RegisterFrame */
             "addl $4, %%esp\n\t"
