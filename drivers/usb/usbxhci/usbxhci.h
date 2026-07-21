@@ -189,6 +189,7 @@ typedef struct _XHCI_DEVICE_SLOT {
     BOOLEAN InUse;
     BOOLEAN Addressed;
     BOOLEAN Configured;
+    BOOLEAN PortResetSinceAddress;
     BOOLEAN DisablePending;
     ULONG Ep0ContextErrorCount;
     ULONG Ep0TransactionErrorCount;

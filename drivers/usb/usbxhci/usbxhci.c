@@ -5152,6 +5152,13 @@ XHCI_MpResetDevice(
         return MP_STATUS_SUCCESS;
     }
 
+    if (!Slot->PortResetSinceAddress)
+    {
+        DPRINT1("usbxhci: MpResetDevice: no port reset since ADDRESS_DEV for slot %u on port %u, skipping RESET_DEV\n",
+                Slot->SlotId, PortNumber);
+        return MP_STATUS_SUCCESS;
+    }
+
     return XHCI_ResetDeviceOnPort(Extension, PortNumber);
 }
 
@@ -6281,6 +6288,7 @@ XHCI_HandleCommandCompletion(
         if (Slot)
         {
             Slot->Addressed = TRUE;
+            Slot->PortResetSinceAddress = FALSE;
             DPRINT("usbxhci: slot %u addressed\n", SlotId);
         }
     }
@@ -6298,6 +6306,7 @@ XHCI_HandleCommandCompletion(
         Slot->Configured = FALSE;
         Slot->HighestEndpointId = 1;
         Slot->Addressed = FALSE;
+        Slot->PortResetSinceAddress = FALSE;
         XHCI_UpdateDeviceAddressMap(Extension, Slot, 0);
 
         /*
@@ -7593,6 +7602,7 @@ XHCI_AssignSlot(
     Slot->InUse = TRUE;
     Slot->Addressed = FALSE;
     Slot->Configured = FALSE;
+    Slot->PortResetSinceAddress = FALSE;
     Slot->DisablePending = FALSE;
     Slot->Ep0RingCycleState = 1;
     Slot->Ep0RingEnqueueIndex = 0;
@@ -15178,6 +15188,7 @@ XHCI_RH_SetFeaturePortReset(
 {
     PXHCI_EXTENSION Extension = MiniPortExtension;
     volatile ULONG *PortStatusReg;
+    PXHCI_DEVICE_SLOT Slot;
     ULONG PortValue;
     MPSTATUS Status;
 
@@ -15187,6 +15198,10 @@ XHCI_RH_SetFeaturePortReset(
     PortStatusReg = XHCI_GetPortStatusRegister(Extension, Port);
     if (!PortStatusReg)
         return MP_STATUS_ERROR;
+
+    Slot = XHCI_FindSlotByPort(Extension, Port);
+    if (Slot)
+        Slot->PortResetSinceAddress = TRUE;
 
     PortValue = XHCI_READ_REGISTER_ULONG(PortStatusReg);
     DPRINT("XHCI_RH_SetFeaturePortReset: Port=%u PORTSC=%08lx (CCS=%u PED=%u Speed=%lu)\n",
