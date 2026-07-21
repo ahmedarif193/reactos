@@ -2086,6 +2086,238 @@ ProcessIdToSessionId(IN DWORD dwProcessId,
 #define RemoveFromHandle(x,y)  ((x) = (HANDLE)((ULONG_PTR)(x) & ~(y)))
 C_ASSERT(PROCESS_PRIORITY_CLASS_REALTIME == (PROCESS_PRIORITY_CLASS_HIGH + 1));
 
+#ifdef _WIN64
+static BOOL
+BasepCreateWow64Process(IN HANDLE UserToken,
+                        IN HANDLE SaferToken,
+                        IN HANDLE JobHandle,
+                        IN PUNICODE_STRING NtImageName,
+                        IN LPCWSTR ApplicationPathName,
+                        IN LPWSTR CommandLine,
+                        IN LPVOID Environment,
+                        IN LPCWSTR CurrentDirectoryName,
+                        IN LPSTARTUPINFOW StartupInfo,
+                        IN DWORD CreationFlags,
+                        IN BOOL InheritHandles,
+                        IN LPSECURITY_ATTRIBUTES ProcessAttributes,
+                        IN LPSECURITY_ATTRIBUTES ThreadAttributes,
+                        IN ULONG ParameterFlags,
+                        IN ULONG InitialProcessFlags,
+                        IN PPROCESS_PRIORITY_CLASS PriorityClass,
+                        OUT LPPROCESS_INFORMATION ProcessInformation)
+{
+    struct
+    {
+        SIZE_T TotalLength;
+        PS_ATTRIBUTE Attributes[5];
+    } AttributeBuffer;
+    BASE_API_MESSAGE CsrMessage;
+    PBASE_CREATE_PROCESS CreateProcessMessage;
+    PPS_ATTRIBUTE_LIST AttributeList = (PPS_ATTRIBUTE_LIST)&AttributeBuffer;
+    PS_CREATE_INFO CreateInfo;
+    SECTION_IMAGE_INFORMATION ImageInformation;
+    PROCESS_PRIORITY_CLASS LocalPriorityClass;
+    RTL_USER_PROCESS_PARAMETERS *ProcessParameters = NULL;
+    OBJECT_ATTRIBUTES ProcessObjectAttributes, ThreadObjectAttributes;
+    POBJECT_ATTRIBUTES ProcessObjectAttributesPtr, ThreadObjectAttributesPtr;
+    UNICODE_STRING DllPath, ImageName, CommandLineString, CurrentDirectory;
+    UNICODE_STRING Desktop, Shell, Runtime, Title;
+    WCHAR FullPath[MAX_PATH + 5];
+    PWCHAR DllPathString = NULL;
+    LPCWSTR ImagePathName;
+    HANDLE ProcessHandle = NULL, ThreadHandle = NULL, DebugHandle = NULL;
+    HANDLE EffectiveToken;
+    CLIENT_ID ClientId = { 0 };
+    PIMAGE_NT_HEADERS NtHeaders;
+    ULONG AttributeCount = 0, ProcessFlags = InitialProcessFlags, ResumeCount;
+    ULONG HardErrorMode, Length;
+    NTSTATUS Status;
+
+    Length = GetFullPathNameW(ApplicationPathName, ARRAYSIZE(FullPath), FullPath, NULL);
+    ImagePathName = (Length && Length < ARRAYSIZE(FullPath)) ? FullPath : ApplicationPathName;
+    DllPathString = BaseComputeProcessDllPath((LPWSTR)ImagePathName, Environment);
+    if (!DllPathString)
+    {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return FALSE;
+    }
+
+    RtlInitUnicodeString(&DllPath, DllPathString);
+    RtlInitUnicodeString(&ImageName, ImagePathName);
+    RtlInitUnicodeString(&CommandLineString, CommandLine);
+    RtlInitUnicodeString(&CurrentDirectory, CurrentDirectoryName);
+    RtlInitUnicodeString(&Desktop, StartupInfo->lpDesktop ? StartupInfo->lpDesktop : L"");
+    RtlInitUnicodeString(&Shell, StartupInfo->lpReserved ? StartupInfo->lpReserved : L"");
+    RtlInitUnicodeString(&Title, StartupInfo->lpTitle ? StartupInfo->lpTitle : ImagePathName);
+    Runtime.Buffer = (LPWSTR)StartupInfo->lpReserved2;
+    Runtime.MaximumLength = Runtime.Length = StartupInfo->cbReserved2;
+
+    Status = RtlCreateProcessParameters(&ProcessParameters, &ImageName, &DllPath, CurrentDirectoryName ? &CurrentDirectory : NULL, &CommandLineString, Environment, &Title, &Desktop, &Shell, &Runtime);
+    RtlFreeHeap(RtlGetProcessHeap(), 0, DllPathString);
+    if (!NT_SUCCESS(Status))
+    {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+
+    RtlNormalizeProcessParams(ProcessParameters);
+    if (!InheritHandles) ProcessParameters->CurrentDirectory.Handle = NULL;
+    ProcessParameters->StartingX = StartupInfo->dwX;
+    ProcessParameters->StartingY = StartupInfo->dwY;
+    ProcessParameters->CountX = StartupInfo->dwXSize;
+    ProcessParameters->CountY = StartupInfo->dwYSize;
+    ProcessParameters->CountCharsX = StartupInfo->dwXCountChars;
+    ProcessParameters->CountCharsY = StartupInfo->dwYCountChars;
+    ProcessParameters->FillAttribute = StartupInfo->dwFillAttribute;
+    ProcessParameters->WindowFlags = StartupInfo->dwFlags;
+    ProcessParameters->ShowWindowFlags = StartupInfo->wShowWindow;
+
+    if (StartupInfo->dwFlags & (STARTF_USESTDHANDLES | STARTF_USEHOTKEY | STARTF_SHELLPRIVATE))
+    {
+        ProcessParameters->StandardInput = StartupInfo->hStdInput;
+        ProcessParameters->StandardOutput = StartupInfo->hStdOutput;
+        ProcessParameters->StandardError = StartupInfo->hStdError;
+    }
+
+    if (CreationFlags & DETACHED_PROCESS)
+        ProcessParameters->ConsoleHandle = HANDLE_DETACHED_PROCESS;
+    else if (CreationFlags & CREATE_NEW_CONSOLE)
+        ProcessParameters->ConsoleHandle = HANDLE_CREATE_NEW_CONSOLE;
+    else if (CreationFlags & CREATE_NO_WINDOW)
+        ProcessParameters->ConsoleHandle = HANDLE_CREATE_NO_WINDOW;
+
+    if ((CreationFlags & CREATE_NEW_PROCESS_GROUP) && !(CreationFlags & CREATE_NEW_CONSOLE)) ProcessParameters->ConsoleFlags = 1;
+    if (ParameterFlags & 1) ProcessParameters->Flags |= RTL_USER_PROCESS_PARAMETERS_LOCAL_DLL_PATH;
+    if (ParameterFlags & 2) ProcessParameters->Flags |= RTL_USER_PROCESS_PARAMETERS_IMAGE_KEY_MISSING;
+    if (CreationFlags & PROFILE_USER) ProcessParameters->Flags |= RTL_USER_PROCESS_PARAMETERS_PROFILE_USER;
+    if (CreationFlags & PROFILE_KERNEL) ProcessParameters->Flags |= RTL_USER_PROCESS_PARAMETERS_PROFILE_KERNEL;
+    if (CreationFlags & PROFILE_SERVER) ProcessParameters->Flags |= RTL_USER_PROCESS_PARAMETERS_PROFILE_SERVER;
+    ProcessParameters->Flags |= NtCurrentPeb()->ProcessParameters->Flags & RTL_USER_PROCESS_PARAMETERS_DISABLE_HEAP_CHECKS;
+
+    if (CreationFlags & (DEBUG_PROCESS | DEBUG_ONLY_THIS_PROCESS))
+    {
+        Status = DbgUiConnectToDbg();
+        if (!NT_SUCCESS(Status)) goto Failure;
+        DebugHandle = DbgUiGetThreadDebugObject();
+    }
+    if (CreationFlags & DEBUG_PROCESS) ProcessFlags |= PROCESS_CREATE_FLAGS_BREAKAWAY;
+    if (CreationFlags & DEBUG_ONLY_THIS_PROCESS) ProcessFlags |= PROCESS_CREATE_FLAGS_NO_DEBUG_INHERIT;
+    if (InheritHandles) ProcessFlags |= PROCESS_CREATE_FLAGS_INHERIT_HANDLES;
+
+    RtlZeroMemory(&AttributeBuffer, sizeof(AttributeBuffer));
+    AttributeList->Attributes[AttributeCount].Attribute = PS_ATTRIBUTE_IMAGE_NAME;
+    AttributeList->Attributes[AttributeCount].Size = NtImageName->Length;
+    AttributeList->Attributes[AttributeCount].ValuePtr = NtImageName->Buffer;
+    AttributeCount++;
+    AttributeList->Attributes[AttributeCount].Attribute = PS_ATTRIBUTE_CLIENT_ID;
+    AttributeList->Attributes[AttributeCount].Size = sizeof(ClientId);
+    AttributeList->Attributes[AttributeCount].ValuePtr = &ClientId;
+    AttributeCount++;
+    AttributeList->Attributes[AttributeCount].Attribute = PS_ATTRIBUTE_IMAGE_INFO;
+    AttributeList->Attributes[AttributeCount].Size = sizeof(ImageInformation);
+    AttributeList->Attributes[AttributeCount].ValuePtr = &ImageInformation;
+    AttributeCount++;
+    if (DebugHandle)
+    {
+        AttributeList->Attributes[AttributeCount].Attribute = PS_ATTRIBUTE_DEBUG_PORT;
+        AttributeList->Attributes[AttributeCount].Size = sizeof(DebugHandle);
+        AttributeList->Attributes[AttributeCount].Value = (ULONG_PTR)DebugHandle;
+        AttributeCount++;
+    }
+    EffectiveToken = UserToken ? UserToken : SaferToken;
+    if (EffectiveToken)
+    {
+        AttributeList->Attributes[AttributeCount].Attribute = PS_ATTRIBUTE_TOKEN;
+        AttributeList->Attributes[AttributeCount].Size = sizeof(EffectiveToken);
+        AttributeList->Attributes[AttributeCount].Value = (ULONG_PTR)EffectiveToken;
+        AttributeCount++;
+    }
+    AttributeList->TotalLength = FIELD_OFFSET(PS_ATTRIBUTE_LIST, Attributes) + AttributeCount * sizeof(PS_ATTRIBUTE);
+
+    ProcessObjectAttributesPtr = BaseFormatObjectAttributes(&ProcessObjectAttributes, ProcessAttributes, NULL);
+    ThreadObjectAttributesPtr = BaseFormatObjectAttributes(&ThreadObjectAttributes, ThreadAttributes, NULL);
+    RtlZeroMemory(&CreateInfo, sizeof(CreateInfo));
+    CreateInfo.Size = sizeof(CreateInfo);
+    CreateInfo.State = PsCreateInitialState;
+    Status = NtCreateUserProcess(&ProcessHandle, &ThreadHandle, PROCESS_ALL_ACCESS, THREAD_ALL_ACCESS, ProcessObjectAttributesPtr, ThreadObjectAttributesPtr, ProcessFlags, THREAD_CREATE_FLAGS_CREATE_SUSPENDED, ProcessParameters, &CreateInfo, AttributeList);
+    RtlDestroyProcessParameters(ProcessParameters);
+    ProcessParameters = NULL;
+
+    if (NT_SUCCESS(Status))
+    {
+        if (CreateInfo.SuccessState.FileHandle) NtClose(CreateInfo.SuccessState.FileHandle);
+        if (CreateInfo.SuccessState.SectionHandle) NtClose(CreateInfo.SuccessState.SectionHandle);
+    }
+    else
+    {
+        if (CreateInfo.State == PsCreateFailOnSectionCreate && CreateInfo.FailSection.FileHandle) NtClose(CreateInfo.FailSection.FileHandle);
+        goto Failure;
+    }
+
+    if (CreateInfo.State != PsCreateSuccess || ImageInformation.Machine != IMAGE_FILE_MACHINE_I386 || !CreateInfo.SuccessState.PebAddressWow64)
+    {
+        Status = STATUS_INVALID_IMAGE_FORMAT;
+        goto Failure;
+    }
+
+    LocalPriorityClass = *PriorityClass;
+    if (LocalPriorityClass.PriorityClass)
+    {
+        Status = NtSetInformationProcess(ProcessHandle, ProcessPriorityClass, &LocalPriorityClass, sizeof(LocalPriorityClass));
+        if (!NT_SUCCESS(Status)) goto Failure;
+    }
+    if (CreationFlags & CREATE_DEFAULT_ERROR_MODE)
+    {
+        HardErrorMode = SEM_FAILCRITICALERRORS;
+        Status = NtSetInformationProcess(ProcessHandle, ProcessDefaultHardErrorMode, &HardErrorMode, sizeof(HardErrorMode));
+        if (!NT_SUCCESS(Status)) goto Failure;
+    }
+    if (SaferToken && !UserToken)
+    {
+        Status = BasepReplaceProcessThreadTokens(SaferToken, ProcessHandle, ThreadHandle);
+        if (!NT_SUCCESS(Status)) goto Failure;
+    }
+    if (JobHandle)
+    {
+        Status = NtAssignProcessToJobObject(JobHandle, ProcessHandle);
+        if (!NT_SUCCESS(Status)) goto Failure;
+    }
+
+    RtlZeroMemory(&CsrMessage, sizeof(CsrMessage));
+    CreateProcessMessage = &CsrMessage.Data.CreateProcessRequest;
+    CreateProcessMessage->ProcessHandle = ProcessHandle;
+    CreateProcessMessage->ThreadHandle = ThreadHandle;
+    CreateProcessMessage->ClientId = ClientId;
+    CreateProcessMessage->CreationFlags = CreationFlags & ~(CREATE_NO_WINDOW | DEBUG_PROCESS | DEBUG_ONLY_THIS_PROCESS);
+    CreateProcessMessage->PebAddressNative = (PVOID)(ULONG_PTR)CreateInfo.SuccessState.PebAddressNative;
+    CreateProcessMessage->PebAddressWow64 = CreateInfo.SuccessState.PebAddressWow64;
+    CreateProcessMessage->ProcessorArchitecture = PROCESSOR_ARCHITECTURE_INTEL;
+    if (ImageInformation.SubSystemType == IMAGE_SUBSYSTEM_WINDOWS_GUI) AddToHandle(CreateProcessMessage->ProcessHandle, 2);
+    NtHeaders = RtlImageNtHeader(GetModuleHandle(NULL));
+    if (NtHeaders && NtHeaders->OptionalHeader.Subsystem == IMAGE_SUBSYSTEM_WINDOWS_GUI) AddToHandle(CreateProcessMessage->ProcessHandle, 1);
+    if (StartupInfo->dwFlags & STARTF_FORCEONFEEDBACK) AddToHandle(CreateProcessMessage->ProcessHandle, 1);
+    if (StartupInfo->dwFlags & STARTF_FORCEOFFFEEDBACK) RemoveFromHandle(CreateProcessMessage->ProcessHandle, 1);
+    Status = CsrClientCallServer((PCSR_API_MESSAGE)&CsrMessage, NULL, CSR_CREATE_API_NUMBER(BASESRV_SERVERDLL_INDEX, BasepCreateProcess), sizeof(*CreateProcessMessage));
+    if (NT_SUCCESS(Status)) Status = CsrMessage.Status;
+    if (!NT_SUCCESS(Status)) goto Failure;
+
+    if (!(CreationFlags & CREATE_SUSPENDED)) NtResumeThread(ThreadHandle, &ResumeCount);
+    ProcessInformation->hProcess = ProcessHandle;
+    ProcessInformation->hThread = ThreadHandle;
+    ProcessInformation->dwProcessId = HandleToUlong(ClientId.UniqueProcess);
+    ProcessInformation->dwThreadId = HandleToUlong(ClientId.UniqueThread);
+    return TRUE;
+
+Failure:
+    if (ProcessParameters) RtlDestroyProcessParameters(ProcessParameters);
+    if (ProcessHandle) NtTerminateProcess(ProcessHandle, Status);
+    if (ThreadHandle) NtClose(ThreadHandle);
+    if (ProcessHandle) NtClose(ProcessHandle);
+    BaseSetLastNTError(Status);
+    return FALSE;
+}
+#endif
+
 /*
  * @implemented
  */
@@ -3492,8 +3724,12 @@ StartScan:
     }
 
     /* Make sure the image was compiled for this processor */
-    if ((ImageInformation.Machine < SharedUserData->ImageNumberLow) ||
-        (ImageInformation.Machine > SharedUserData->ImageNumberHigh))
+    if (
+#ifdef _WIN64
+        (ImageInformation.Machine != IMAGE_FILE_MACHINE_I386) &&
+#endif
+        ((ImageInformation.Machine < SharedUserData->ImageNumberLow) ||
+         (ImageInformation.Machine > SharedUserData->ImageNumberHigh)))
     {
         /* It was not -- raise a hard error */
         ErrorResponse = ResponseOk;
@@ -3662,6 +3898,14 @@ StartScan:
         DPRINT1("Retrying with: %S\n", lpCommandLine);
         goto AppNameRetry;
     }
+
+#ifdef _WIN64
+    if (ImageInformation.Machine == IMAGE_FILE_MACHINE_I386)
+    {
+        Result = BasepCreateWow64Process(hUserToken, TokenHandle, JobHandle, &PathName, lpApplicationName, lpCommandLine, lpEnvironment, lpCurrentDirectory, &StartupInfo, dwCreationFlags | NoWindow, bInheritHandles, lpProcessAttributes, lpThreadAttributes, ParameterFlags, Flags, &PriorityClass, lpProcessInformation);
+        goto Quickie;
+    }
+#endif
 
     /* Initialize the process object attributes */
     ObjectAttributes = BaseFormatObjectAttributes(&LocalObjectAttributes,
