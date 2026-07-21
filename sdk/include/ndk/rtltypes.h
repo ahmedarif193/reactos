@@ -221,6 +221,8 @@ C_ASSERT(HEAP_CREATE_VALID_MASK == 0x0007F0FF);
 #define RTL_QUERY_REGISTRY_NOEXPAND                         0x00000010
 #define RTL_QUERY_REGISTRY_DIRECT                           0x00000020
 #define RTL_QUERY_REGISTRY_DELETE                           0x00000040
+#define RTL_QUERY_REGISTRY_TYPECHECK                        0x00000100
+#define RTL_QUERY_REGISTRY_TYPECHECK_SHIFT                  24
 
 //
 // Versioning
