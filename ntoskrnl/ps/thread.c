@@ -177,6 +177,7 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
                 OUT PCLIENT_ID ClientId,
                 IN PCONTEXT ThreadContext,
                 IN PINITIAL_TEB InitialTeb,
+                IN PINITIAL_TEB Wow64InitialTeb OPTIONAL,
                 IN BOOLEAN CreateSuspended,
                 IN PKSTART_ROUTINE StartRoutine OPTIONAL,
                 IN PVOID StartContext OPTIONAL)
@@ -335,7 +336,7 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
     if (ThreadContext)
     {
         /* User-mode Thread, create Teb */
-        Status = MmCreateTeb(Process, &Thread->Cid, InitialTeb, &TebBase);
+        Status = MmCreateTeb(Process, &Thread->Cid, InitialTeb, Wow64InitialTeb, &TebBase);
         if (!NT_SUCCESS(Status))
         {
             /* Failed to create the TEB. Release rundown and dereference */
@@ -700,17 +701,7 @@ PsCreateSystemThread(OUT PHANDLE ThreadHandle,
     }
 
     /* Call the shared function */
-    return PspCreateThread(ThreadHandle,
-                           DesiredAccess,
-                           ObjectAttributes,
-                           Handle,
-                           TargetProcess,
-                           ClientId,
-                           NULL,
-                           NULL,
-                           FALSE,
-                           StartRoutine,
-                           StartContext);
+    return PspCreateThread(ThreadHandle, DesiredAccess, ObjectAttributes, Handle, TargetProcess, ClientId, NULL, NULL, NULL, FALSE, StartRoutine, StartContext);
 }
 
 /*
@@ -1070,17 +1061,7 @@ NtCreateThread(OUT PHANDLE ThreadHandle,
     }
 
     /* Call the shared function */
-    return PspCreateThread(ThreadHandle,
-                           DesiredAccess,
-                           ObjectAttributes,
-                           ProcessHandle,
-                           NULL,
-                           ClientId,
-                           ThreadContext,
-                           &SafeInitialTeb,
-                           CreateSuspended,
-                           NULL,
-                           NULL);
+    return PspCreateThread(ThreadHandle, DesiredAccess, ObjectAttributes, ProcessHandle, NULL, ClientId, ThreadContext, &SafeInitialTeb, NULL, CreateSuspended, NULL, NULL);
 }
 
 /*

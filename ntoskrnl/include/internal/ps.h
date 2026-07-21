@@ -203,6 +203,7 @@ PspCreateThread(
     OUT PCLIENT_ID ClientId,
     IN PCONTEXT ThreadContext,
     IN PINITIAL_TEB InitialTeb,
+    IN PINITIAL_TEB Wow64InitialTeb OPTIONAL,
     IN BOOLEAN CreateSuspended,
     IN PKSTART_ROUTINE StartRoutine OPTIONAL,
     IN PVOID StartContext OPTIONAL

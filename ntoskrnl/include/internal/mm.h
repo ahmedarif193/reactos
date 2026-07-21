@@ -837,12 +837,24 @@ MmCreatePeb(
     OUT PPEB *BasePeb
 );
 
+#ifdef _WIN64
+NTSTATUS
+NTAPI
+MmCreatePeb32(
+    IN PEPROCESS Process,
+    IN PINITIAL_PEB InitialPeb,
+    IN PSECTION_IMAGE_INFORMATION ImageInformation,
+    OUT struct _PEB32 **BasePeb
+);
+#endif
+
 NTSTATUS
 NTAPI
 MmCreateTeb(
     IN PEPROCESS Process,
     IN PCLIENT_ID ClientId,
     IN PINITIAL_TEB InitialTeb,
+    IN PINITIAL_TEB Wow64InitialTeb OPTIONAL,
     OUT PTEB* BaseTeb
 );
 

@@ -5004,6 +5004,20 @@ NtQueryVirtualMemory(IN HANDLE ProcessHandle,
     return Status;
 }
 
+static ULONG_PTR
+MiGetHighestAddressFromZeroBits(
+    _In_ ULONG_PTR ZeroBits)
+{
+    ULONG Shift;
+
+    if (ZeroBits < 32)
+        return MAXULONG_PTR >> ZeroBits;
+
+    for (Shift = 1; Shift < sizeof(ZeroBits) * 8; Shift <<= 1)
+        ZeroBits |= ZeroBits >> Shift;
+    return ZeroBits;
+}
+
 /*
  * @implemented
  */
@@ -5037,8 +5051,13 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
     TABLE_SEARCH_RESULT Result;
     PAGED_CODE();
 
-    /* Check for valid Zero bits */
+    /* Values above 32 are an address mask on 64-bit Windows. */
+#ifdef _WIN64
+    if ((ZeroBits > 21 && ZeroBits < 32) ||
+        (ZeroBits > 32 && ZeroBits < MM_VIRTMEM_GRANULARITY - 1))
+#else
     if (ZeroBits > 21)
+#endif
     {
         DPRINT1("Too many zero bits\n");
         return STATUS_INVALID_PARAMETER_3;
@@ -5290,17 +5309,7 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
             //
             if (ZeroBits != 0)
             {
-                if (ZeroBits >= 20)
-                {
-                    Status = STATUS_NO_MEMORY;
-                    goto FailPathNoLock;
-                }
-
-                //
-                // Calculate the highest address and check if it's valid
-                //
-                HighestAddress = min(MAXULONG_PTR >> ZeroBits,
-                                     (ULONG_PTR)MM_HIGHEST_VAD_ADDRESS);
+                HighestAddress = min(MiGetHighestAddressFromZeroBits(ZeroBits), (ULONG_PTR)MM_HIGHEST_VAD_ADDRESS);
             }
         }
         else

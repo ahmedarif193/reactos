@@ -178,6 +178,7 @@ KiSwapContextResume(
 {
     PKIPCR Pcr = (PKIPCR)KeGetPcr();
     PKPROCESS OldProcess, NewProcess;
+    PVOID CompatTeb = NULL;
 #if (NTDDI_VERSION >= NTDDI_WIN7)
     BOOLEAN ReadyTransition, ReapThread;
 #endif
@@ -206,6 +207,8 @@ KiSwapContextResume(
         KiSwapProcess(NewProcess, OldProcess);
     }
 
+    if (NewThread->Teb && ((PEPROCESS)NewProcess)->Wow64Process) CompatTeb = (PUCHAR)NewThread->Teb + ROUND_TO_PAGES(sizeof(TEB));
+
     /* Set TEB pointer and GS base */
     Pcr->NtTib.Self = (PVOID)NewThread->Teb;
     if (NewThread->Teb)
@@ -213,6 +216,7 @@ KiSwapContextResume(
        /* This will switch the usermode gs */
        __writemsr(MSR_GS_SWAP, (ULONG64)NewThread->Teb);
     }
+    KiSetGdtDescriptorBase(KiGetGdtEntry(Pcr->GdtBase, KGDT64_R3_CMTEB), (ULONG64)CompatTeb);
 
     /* Increase context switch count */
     Pcr->ContextSwitches++;

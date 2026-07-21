@@ -3437,6 +3437,32 @@ NtClose(IN HANDLE Handle)
 
 NTSTATUS
 NTAPI
+NtCompareObjects(IN HANDLE FirstObjectHandle,
+                 IN HANDLE SecondObjectHandle)
+{
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    PVOID FirstObject, SecondObject;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    Status = ObReferenceObjectByHandle(FirstObjectHandle, 0, NULL, PreviousMode, &FirstObject, NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = ObReferenceObjectByHandle(SecondObjectHandle, 0, NULL, PreviousMode, &SecondObject, NULL);
+    if (NT_SUCCESS(Status))
+    {
+        Status = FirstObject == SecondObject ? STATUS_SUCCESS : STATUS_NOT_SAME_OBJECT;
+        ObDereferenceObject(SecondObject);
+    }
+
+    ObDereferenceObject(FirstObject);
+    return Status;
+}
+
+NTSTATUS
+NTAPI
 NtDuplicateObject(IN HANDLE SourceProcessHandle,
                   IN HANDLE SourceHandle,
                   IN HANDLE TargetProcessHandle OPTIONAL,

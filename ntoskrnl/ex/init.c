@@ -748,6 +748,12 @@ ExpInitSystemPhase1(VOID)
         return FALSE;
     }
 
+    if (ExpInitializeReserveObjectTypes() == FALSE)
+    {
+        DPRINT1("Executive: Reserve object initialization failed\n");
+        return FALSE;
+    }
+
     /* Initialize mutants */
     if (ExpInitializeMutantImplementation() == FALSE)
     {

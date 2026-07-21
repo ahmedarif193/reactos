@@ -9,6 +9,7 @@
 /* INCLUDES *******************************************************************/
 
 #include <ntoskrnl.h>
+#include <reactos/wow64shared.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -38,11 +39,12 @@ ULONG MmRotatingUniprocessorNumber = 0;
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
-NTSTATUS
-NTAPI
-MiCreatePebOrTeb(IN PEPROCESS Process,
-                 IN ULONG Size,
-                 OUT PULONG_PTR BaseAddress)
+static NTSTATUS
+MiCreatePebOrTebEx(IN PEPROCESS Process,
+                   IN ULONG Size,
+                   IN ULONG_PTR HighestAddressLimit,
+                   IN BOOLEAN IsPeb,
+                   OUT PULONG_PTR BaseAddress)
 {
     PMMVAD_LONG Vad;
     NTSTATUS Status;
@@ -80,23 +82,22 @@ MiCreatePebOrTeb(IN PEPROCESS Process,
     Vad->ControlArea = NULL; // For Memory-Area hack
     Vad->FirstPrototypePte = NULL;
 
-    /* Check if this is a PEB creation */
-    ASSERT(sizeof(TEB) != sizeof(PEB));
-    if (Size == sizeof(PEB))
+    /* Randomize PEBs within the highest 64-kilobyte region. */
+    if (IsPeb)
     {
         /* Create a random value to select one page in a 64k region */
         KeQueryTickCount(&CurrentTime);
         CurrentTime.LowPart &= (_64K / PAGE_SIZE) - 1;
 
         /* Calculate a random base address */
-        RandomBase = (ULONG_PTR)MM_HIGHEST_VAD_ADDRESS + 1;
+        RandomBase = HighestAddressLimit + 1;
         RandomBase -= CurrentTime.LowPart << PAGE_SHIFT;
 
         /* Make sure the base address is not too high */
         AlignedSize = ROUND_TO_PAGES(Size);
-        if ((RandomBase + AlignedSize) > (ULONG_PTR)MM_HIGHEST_VAD_ADDRESS + 1)
+        if ((RandomBase + AlignedSize) > HighestAddressLimit + 1)
         {
-            RandomBase = (ULONG_PTR)MM_HIGHEST_VAD_ADDRESS + 1 - AlignedSize;
+            RandomBase = HighestAddressLimit + 1 - AlignedSize;
         }
 
         /* Calculate the highest allowed address */
@@ -104,7 +105,7 @@ MiCreatePebOrTeb(IN PEPROCESS Process,
     }
     else
     {
-        HighestAddress = (ULONG_PTR)MM_HIGHEST_VAD_ADDRESS;
+        HighestAddress = HighestAddressLimit;
     }
 
     *BaseAddress = 0;
@@ -131,6 +132,15 @@ FailPath:
     return Status;
 }
 
+NTSTATUS
+NTAPI
+MiCreatePebOrTeb(IN PEPROCESS Process,
+                 IN ULONG Size,
+                 OUT PULONG_PTR BaseAddress)
+{
+    return MiCreatePebOrTebEx(Process, Size, (ULONG_PTR)MM_HIGHEST_VAD_ADDRESS, Size == sizeof(PEB), BaseAddress);
+}
+
 VOID
 NTAPI
 MmDeleteTeb(IN PEPROCESS Process,
@@ -142,8 +152,10 @@ MmDeleteTeb(IN PEPROCESS Process,
     PMM_AVL_TABLE VadTree = &Process->VadRoot;
     DPRINT("Deleting TEB: %p in %16s\n", Teb, Process->ImageFileName);
 
-    /* TEB is one page */
     TebEnd = (ULONG_PTR)Teb + ROUND_TO_PAGES(sizeof(TEB)) - 1;
+#ifdef _WIN64
+    if (Process->Wow64Process) TebEnd += ROUND_TO_PAGES(sizeof(TEB32));
+#endif
 
     /* Attach to the process */
     KeAttachProcess(&Process->Pcb);
@@ -543,10 +555,17 @@ MmCreatePeb(IN PEPROCESS Process,
     LARGE_INTEGER SectionOffset;
     SIZE_T ViewSize = 0;
     PVOID TableBase = NULL;
-    PIMAGE_NT_HEADERS NtHeaders;
-    PIMAGE_LOAD_CONFIG_DIRECTORY ImageConfigData;
+    PIMAGE_NT_HEADERS32 NtHeaders;
+    PVOID ImageConfigData;
     NTSTATUS Status;
     USHORT Characteristics;
+    USHORT OptionalMagic;
+    USHORT ImageSubsystem;
+    USHORT ImageSubsystemMajorVersion;
+    USHORT ImageSubsystemMinorVersion;
+    USHORT CsdVersion = 0;
+    ULONG Win32VersionValue;
+    ULONG_PTR ProcessAffinityMask = 0;
     SectionOffset.QuadPart = (ULONGLONG)0;
     *BasePeb = NULL;
 
@@ -661,8 +680,9 @@ MmCreatePeb(IN PEPROCESS Process,
         //
         // Get NT Headers
         //
-        NtHeaders = RtlImageNtHeader(Peb->ImageBaseAddress);
+        NtHeaders = (PIMAGE_NT_HEADERS32)RtlImageNtHeader(Peb->ImageBaseAddress);
         Characteristics = NtHeaders->FileHeader.Characteristics;
+        OptionalMagic = NtHeaders->OptionalHeader.Magic;
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
@@ -693,47 +713,66 @@ MmCreatePeb(IN PEPROCESS Process,
                                                            (PULONG)&ViewSize);
             if (ImageConfigData)
             {
-                //
-                // Probe it
-                //
-                ProbeForRead(ImageConfigData,
-                             sizeof(IMAGE_LOAD_CONFIG_DIRECTORY),
-                             sizeof(ULONG));
+                if (OptionalMagic == IMAGE_NT_OPTIONAL_HDR32_MAGIC)
+                {
+                    ProbeForRead(ImageConfigData, sizeof(IMAGE_LOAD_CONFIG_DIRECTORY32), sizeof(ULONG));
+                    CsdVersion = ((PIMAGE_LOAD_CONFIG_DIRECTORY32)ImageConfigData)->CSDVersion;
+                    ProcessAffinityMask = ((PIMAGE_LOAD_CONFIG_DIRECTORY32)ImageConfigData)->ProcessAffinityMask;
+                }
+                else
+                {
+                    ProbeForRead(ImageConfigData, sizeof(IMAGE_LOAD_CONFIG_DIRECTORY64), sizeof(ULONG));
+                    CsdVersion = ((PIMAGE_LOAD_CONFIG_DIRECTORY64)ImageConfigData)->CSDVersion;
+                    ProcessAffinityMask = (ULONG_PTR)((PIMAGE_LOAD_CONFIG_DIRECTORY64)ImageConfigData)->ProcessAffinityMask;
+                }
             }
 
-            //
-            // Write subsystem data
-            //
-            Peb->ImageSubsystem = NtHeaders->OptionalHeader.Subsystem;
-            Peb->ImageSubsystemMajorVersion = NtHeaders->OptionalHeader.MajorSubsystemVersion;
-            Peb->ImageSubsystemMinorVersion = NtHeaders->OptionalHeader.MinorSubsystemVersion;
+            if (OptionalMagic == IMAGE_NT_OPTIONAL_HDR32_MAGIC)
+            {
+                ImageSubsystem = NtHeaders->OptionalHeader.Subsystem;
+                ImageSubsystemMajorVersion = NtHeaders->OptionalHeader.MajorSubsystemVersion;
+                ImageSubsystemMinorVersion = NtHeaders->OptionalHeader.MinorSubsystemVersion;
+                Win32VersionValue = NtHeaders->OptionalHeader.Win32VersionValue;
+            }
+            else
+            {
+                PIMAGE_NT_HEADERS64 NtHeaders64 = (PIMAGE_NT_HEADERS64)NtHeaders;
+                ImageSubsystem = NtHeaders64->OptionalHeader.Subsystem;
+                ImageSubsystemMajorVersion = NtHeaders64->OptionalHeader.MajorSubsystemVersion;
+                ImageSubsystemMinorVersion = NtHeaders64->OptionalHeader.MinorSubsystemVersion;
+                Win32VersionValue = NtHeaders64->OptionalHeader.Win32VersionValue;
+            }
+
+            Peb->ImageSubsystem = ImageSubsystem;
+            Peb->ImageSubsystemMajorVersion = ImageSubsystemMajorVersion;
+            Peb->ImageSubsystemMinorVersion = ImageSubsystemMinorVersion;
 
             //
             // Check for version data
             //
-            if (NtHeaders->OptionalHeader.Win32VersionValue)
+            if (Win32VersionValue)
             {
                 //
                 // Extract values and write them
                 //
-                Peb->OSMajorVersion = NtHeaders->OptionalHeader.Win32VersionValue & 0xFF;
-                Peb->OSMinorVersion = (NtHeaders->OptionalHeader.Win32VersionValue >> 8) & 0xFF;
-                Peb->OSBuildNumber = (NtHeaders->OptionalHeader.Win32VersionValue >> 16) & 0x3FFF;
-                Peb->OSPlatformId = (NtHeaders->OptionalHeader.Win32VersionValue >> 30) ^ 2;
+                Peb->OSMajorVersion = Win32VersionValue & 0xFF;
+                Peb->OSMinorVersion = (Win32VersionValue >> 8) & 0xFF;
+                Peb->OSBuildNumber = (Win32VersionValue >> 16) & 0x3FFF;
+                Peb->OSPlatformId = (Win32VersionValue >> 30) ^ 2;
 
                 /* Process CSD version override */
-                if ((ImageConfigData) && (ImageConfigData->CSDVersion))
+                if (CsdVersion)
                 {
                     /* Take the value from the image configuration directory */
-                    Peb->OSCSDVersion = ImageConfigData->CSDVersion;
+                    Peb->OSCSDVersion = CsdVersion;
                 }
             }
 
             /* Process optional process affinity mask override */
-            if ((ImageConfigData) && (ImageConfigData->ProcessAffinityMask))
+            if (ProcessAffinityMask)
             {
                 /* Take the value from the image configuration directory */
-                Peb->ImageProcessAffinityMask = ImageConfigData->ProcessAffinityMask;
+                Peb->ImageProcessAffinityMask = ProcessAffinityMask;
             }
 
             //
@@ -768,16 +807,119 @@ MmCreatePeb(IN PEPROCESS Process,
     return STATUS_SUCCESS;
 }
 
+#ifdef _WIN64
+NTSTATUS
+NTAPI
+MmCreatePeb32(IN PEPROCESS Process,
+              IN PINITIAL_PEB InitialPeb,
+              IN PSECTION_IMAGE_INFORMATION ImageInformation,
+              OUT struct _PEB32 **BasePeb)
+{
+    PEB32 *Peb = NULL;
+    WOW64INFO *Wow64Info;
+    PULONG HeapArray;
+    LARGE_INTEGER SectionOffset;
+    SIZE_T ViewSize = 0;
+    PVOID TableBase = NULL;
+    NTSTATUS Status;
+
+    *BasePeb = NULL;
+    SectionOffset.QuadPart = 0;
+    KeAttachProcess(&Process->Pcb);
+
+    Status = MmMapViewOfSection(ExpNlsSectionPointer, Process, &TableBase, 32, 0, &SectionOffset, &ViewSize, ViewShare, MEM_TOP_DOWN, PAGE_READONLY);
+    if (!NT_SUCCESS(Status))
+    {
+        KeDetachProcess();
+        return Status;
+    }
+
+    Status = MiCreatePebOrTebEx(Process, PAGE_SIZE, MM_HIGHEST_USER_ADDRESS_WOW64, TRUE, (PULONG_PTR)&Peb);
+    if (!NT_SUCCESS(Status))
+    {
+        KeDetachProcess();
+        return Status;
+    }
+
+    _SEH2_TRY
+    {
+        RtlZeroMemory(Peb, PAGE_SIZE);
+        Peb->InheritedAddressSpace = InitialPeb->InheritedAddressSpace;
+        Peb->BeingDebugged = (BOOLEAN)(Process->DebugPort != NULL);
+        Peb->BitField = InitialPeb->BitField;
+        Peb->Mutant = HandleToUlong(InitialPeb->Mutant);
+        Peb->ImageBaseAddress = PtrToUlong(Process->SectionBaseAddress);
+        Peb->AnsiCodePageData = PtrToUlong((PCHAR)TableBase + ExpAnsiCodePageDataOffset);
+        Peb->OemCodePageData = PtrToUlong((PCHAR)TableBase + ExpOemCodePageDataOffset);
+        Peb->UnicodeCaseTableData = PtrToUlong((PCHAR)TableBase + ExpUnicodeCaseTableDataOffset);
+        Peb->OSMajorVersion = NtMajorVersion;
+        Peb->OSMinorVersion = NtMinorVersion;
+        Peb->OSBuildNumber = (USHORT)(NtBuildNumber & 0xffff);
+        Peb->OSPlatformId = VER_PLATFORM_WIN32_NT;
+        Peb->OSCSDVersion = (USHORT)CmNtCSDVersion;
+        Peb->NumberOfProcessors = KeNumberProcessors;
+        Peb->ImageProcessAffinityMask = (ULONG)KeActiveProcessors;
+        Peb->NtGlobalFlag = NtGlobalFlag;
+        Peb->HeapSegmentReserve = MmHeapSegmentReserve;
+        Peb->HeapSegmentCommit = MmHeapSegmentCommit;
+        Peb->HeapDeCommitTotalFreeThreshold = MmHeapDeCommitTotalFreeThreshold;
+        Peb->HeapDeCommitFreeBlockThreshold = MmHeapDeCommitFreeBlockThreshold;
+        Peb->CriticalSectionTimeout = MmCriticalSectionTimeout;
+        Peb->MinimumStackCommit = MmMinimumStackCommitInBytes;
+        Peb->ImageSubsystem = ImageInformation->SubSystemType;
+        Peb->ImageSubsystemMajorVersion = ImageInformation->SubSystemMajorVersion;
+        Peb->ImageSubsystemMinorVersion = ImageInformation->SubSystemMinorVersion;
+        if (Process->Session) Peb->SessionId = MmGetSessionId(Process);
+
+        Wow64Info = (WOW64INFO *)(Peb + 1);
+        Wow64Info->NativeSystemPageSize = PAGE_SIZE;
+        Wow64Info->NativeMachineType = IMAGE_FILE_MACHINE_AMD64;
+        Wow64Info->EmulatedMachineType = ImageInformation->Machine;
+
+        HeapArray = (PULONG)(Wow64Info + 1);
+        Peb->MaximumNumberOfHeaps = (PAGE_SIZE - sizeof(PEB32) - sizeof(WOW64INFO)) / sizeof(ULONG);
+        Peb->ProcessHeaps = PtrToUlong(HeapArray);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    KeDetachProcess();
+    if (NT_SUCCESS(Status)) *BasePeb = Peb;
+    return Status;
+}
+#endif
+
 NTSTATUS
 NTAPI
 MmCreateTeb(IN PEPROCESS Process,
             IN PCLIENT_ID ClientId,
             IN PINITIAL_TEB InitialTeb,
+            IN PINITIAL_TEB Wow64InitialTeb OPTIONAL,
             OUT PTEB *BaseTeb)
 {
     PTEB Teb;
+#ifdef _WIN64
+    TEB32 *Teb32 = NULL;
+    ULONG Teb32Offset = ROUND_TO_PAGES(sizeof(TEB));
+#endif
+    ULONG TebSize = sizeof(TEB);
+    ULONG_PTR HighestAddress = (ULONG_PTR)MM_HIGHEST_VAD_ADDRESS;
     NTSTATUS Status = STATUS_SUCCESS;
     *BaseTeb = NULL;
+
+#ifdef _WIN64
+    if (Process->Wow64Process)
+    {
+        if (!Wow64InitialTeb) return STATUS_INVALID_PARAMETER;
+        TebSize = Teb32Offset + ROUND_TO_PAGES(sizeof(TEB32));
+        HighestAddress = MM_HIGHEST_USER_ADDRESS_WOW64;
+    }
+#else
+    UNREFERENCED_PARAMETER(Wow64InitialTeb);
+#endif
 
     //
     // Attach to Target
@@ -787,7 +929,7 @@ MmCreateTeb(IN PEPROCESS Process,
     //
     // Allocate the TEB
     //
-    Status = MiCreatePebOrTeb(Process, sizeof(TEB), (PULONG_PTR)&Teb);
+    Status = MiCreatePebOrTebEx(Process, TebSize, HighestAddress, FALSE, (PULONG_PTR)&Teb);
     if (!NT_SUCCESS(Status))
     {
         /* Cleanup and exit */
@@ -803,7 +945,7 @@ MmCreateTeb(IN PEPROCESS Process,
         //
         // Initialize the PEB
         //
-        RtlZeroMemory(Teb, sizeof(TEB));
+        RtlZeroMemory(Teb, TebSize);
 
         //
         // Set TIB Data
@@ -855,6 +997,31 @@ MmCreateTeb(IN PEPROCESS Process,
         //
         Teb->StaticUnicodeString.MaximumLength = sizeof(Teb->StaticUnicodeBuffer);
         Teb->StaticUnicodeString.Buffer = Teb->StaticUnicodeBuffer;
+
+#ifdef _WIN64
+        if (Process->Wow64Process)
+        {
+            Teb32 = (TEB32 *)((PUCHAR)Teb + Teb32Offset);
+            Teb->WowTebOffset = Teb32Offset;
+            Teb->TlsSlots[WOW64_TLS_CPURESERVED] = InitialTeb->StackBase;
+
+            Teb32->NtTib.ExceptionList = MAXULONG;
+            Teb32->NtTib.StackBase = PtrToUlong(Wow64InitialTeb->StackBase);
+            Teb32->NtTib.StackLimit = PtrToUlong(Wow64InitialTeb->StackLimit);
+            Teb32->NtTib.Self = PtrToUlong(Teb32);
+            Teb32->NtTib.Version = 30 << 8;
+            Teb32->ClientId.UniqueProcess = HandleToUlong(ClientId->UniqueProcess);
+            Teb32->ClientId.UniqueThread = HandleToUlong(ClientId->UniqueThread);
+            Teb32->RealClientId = Teb32->ClientId;
+            Teb32->ProcessEnvironmentBlock = PtrToUlong(Process->Wow64Process->Peb);
+            Teb32->CurrentLocale = PsDefaultThreadLocaleId;
+            Teb32->DeallocationStack = PtrToUlong(Wow64InitialTeb->AllocatedStackBase);
+            Teb32->StaticUnicodeString.MaximumLength = sizeof(Teb32->StaticUnicodeBuffer);
+            Teb32->StaticUnicodeString.Buffer = PtrToUlong(Teb32->StaticUnicodeBuffer);
+            Teb32->GdiBatchCount = PtrToUlong(Teb);
+            Teb32->WowTebOffset = -(LONG)Teb32Offset;
+        }
+#endif
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
