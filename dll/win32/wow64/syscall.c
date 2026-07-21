@@ -20,6 +20,9 @@
 
 #include <stdarg.h>
 #include <setjmp.h>
+#ifdef __REACTOS__
+#include <wchar.h>
+#endif
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
