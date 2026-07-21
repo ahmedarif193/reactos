@@ -117,6 +117,9 @@ set(GENERATE_DEPENDENCY_GRAPH FALSE CACHE BOOL
 set(ENABLE_FEX_ARM64EC FALSE CACHE BOOL
 "Whether to build the optional FEX ARM64EC emulator for running AMD64 binaries on ARM64.")
 
+cmake_dependent_option(ENABLE_WOW64 "Whether to build the amd64 WoW64 subsystem." OFF
+                       "ARCH STREQUAL amd64" OFF)
+
 if(CMAKE_C_COMPILER_ID STREQUAL "MSVC")
     option(_PREFAST_ "Whether to enable PREFAST while compiling." OFF)
     option(_VS_ANALYZE_ "Whether to enable static analysis while compiling." OFF)
