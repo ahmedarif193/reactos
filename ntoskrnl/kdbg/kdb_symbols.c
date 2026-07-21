@@ -205,8 +205,8 @@ static KSTART_ROUTINE LoadSymbolsRoutine;
  *                  This opens the image file for reading and loads the symbols
  *                  section from there.
  *
- * \note            We must do this because KdbSymProcessSymbols is
- *                  called at high IRQL and we can't set the event from here
+ * \note            We must do this because KdbSymProcessSymbols can be
+ *                  called at DISPATCH_LEVEL, where file I/O is not allowed.
  *
  * \param Context   Unused
  */
@@ -306,8 +306,12 @@ KdbSymProcessSymbols(
     _Inout_ PLDR_DATA_TABLE_ENTRY LdrEntry,
     _In_ BOOLEAN Load)
 {
+    KIRQL OldIrql;
+
     if (!LoadSymbols)
         return;
+
+    ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
 
     /* Check if this is unload */
     if (!Load)
@@ -330,9 +334,9 @@ KdbSymProcessSymbols(
     LdrEntry->LoadCount++;
 
     /* Tell our worker thread to read from it */
-    KeAcquireSpinLockAtDpcLevel(&SymbolsToLoadLock);
+    KeAcquireSpinLock(&SymbolsToLoadLock, &OldIrql);
     InsertTailList(&SymbolsToLoad, &LdrEntry->InInitializationOrderLinks);
-    KeReleaseSpinLockFromDpcLevel(&SymbolsToLoadLock);
+    KeReleaseSpinLock(&SymbolsToLoadLock, OldIrql);
 
     KeSetEvent(&SymbolsToLoadEvent, IO_NO_INCREMENT, FALSE);
 }

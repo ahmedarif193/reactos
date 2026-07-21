@@ -19,6 +19,8 @@ static CONTEXT KdbgContext;
 static EXCEPTION_RECORD64 KdbgExceptionRecord;
 static BOOLEAN KdbgFirstChanceException;
 static NTSTATUS KdbgContinueStatus = STATUS_SUCCESS;
+static PVOID volatile KdbgDeferredSymbolBase;
+static BOOLEAN KdbgDeferredSymbolLoad;
 
 /* FUNCTIONS *****************************************************************/
 
@@ -64,6 +66,33 @@ KdRestore(
     return pKdRestore(SleepTransition);
 }
 
+BOOLEAN
+KdbgTakeDeferredSymbolRequest(
+    _Out_ PVOID *Base,
+    _Out_ PBOOLEAN Load)
+{
+    if (!KdbgDeferredSymbolBase)
+        return FALSE;
+
+    *Base = KdbgDeferredSymbolBase;
+    *Load = KdbgDeferredSymbolLoad;
+    KdbgDeferredSymbolBase = NULL;
+    return TRUE;
+}
+
+VOID
+KdbgProcessDeferredSymbolRequest(
+    _In_ PVOID Base,
+    _In_ BOOLEAN Load)
+{
+    PLDR_DATA_TABLE_ENTRY LdrEntry;
+
+    ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
+
+    if (KdbpSymFindModule(Base, -1, &LdrEntry))
+        KdbSymProcessSymbols(LdrEntry, Load);
+}
+
 VOID
 NTAPI
 KdSendPacket(
@@ -87,12 +116,9 @@ KdSendPacket(
         PDBGKD_ANY_WAIT_STATE_CHANGE WaitStateChange = (PDBGKD_ANY_WAIT_STATE_CHANGE)MessageHeader->Buffer;
         if (WaitStateChange->NewState == DbgKdLoadSymbolsStateChange)
         {
-            /* Load or unload symbols */
-            PLDR_DATA_TABLE_ENTRY LdrEntry;
-            if (KdbpSymFindModule((PVOID)(ULONG_PTR)WaitStateChange->u.LoadSymbols.BaseOfDll, -1, &LdrEntry))
-            {
-                KdbSymProcessSymbols(LdrEntry, !WaitStateChange->u.LoadSymbols.UnloadSymbols);
-            }
+            /* Defer symbol processing until KD has restored the caller's IRQL. */
+            KdbgDeferredSymbolLoad = !WaitStateChange->u.LoadSymbols.UnloadSymbols;
+            KdbgDeferredSymbolBase = (PVOID)(ULONG_PTR)WaitStateChange->u.LoadSymbols.BaseOfDll;
             return;
         }
         else if (WaitStateChange->NewState == DbgKdExceptionStateChange)
