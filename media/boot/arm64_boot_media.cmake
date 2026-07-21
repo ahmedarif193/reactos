@@ -1,7 +1,7 @@
 # ARM64 Hardware Boot Media Configuration
 #
 # This file defines ARM64 platform boot file paths for build-time embedding.
-# Enable Raspberry Pi support via CMake option (e.g., -DRPI_SUPPORT=ON)
+# The ARM64 rpi5 target profile enables Raspberry Pi support.
 
 # Save the directory where this file is located (media/boot) at include time
 set(_ARM64_BOOT_MEDIA_DIR "${CMAKE_CURRENT_LIST_DIR}")
@@ -12,8 +12,8 @@ set(ARM64_BOOT_FILE_DEPS "")
 
 if(ARCH STREQUAL "arm64")
     # Raspberry Pi support (all models: Pi 2/3/4/5, CM3/4/5, Zero 2)
-    # Controlled by RPI_SUPPORT option - default ON for arm64 builds
-    option(RPI_SUPPORT "Include Raspberry Pi boot files in ARM64 images" ON)
+    # Controlled by RPI_SUPPORT; the ARM64 rpi5 profile enables it.
+    option(RPI_SUPPORT "Include Raspberry Pi boot files in ARM64 images" OFF)
 
     if(RPI_SUPPORT)
         set(RPI_BOOT_DIR "${_ARM64_BOOT_MEDIA_DIR}/rpi")

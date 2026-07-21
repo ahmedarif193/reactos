@@ -117,11 +117,18 @@ set(GENERATE_DEPENDENCY_GRAPH FALSE CACHE BOOL
 cmake_dependent_option(ENABLE_ROSTESTS "Whether to build the ReactOS test suite." OFF
                        "CMAKE_BUILD_TYPE STREQUAL Debug" OFF)
 
-set(ENABLE_FEX_ARM64EC FALSE CACHE BOOL
-"Whether to build the optional FEX ARM64EC emulator for running AMD64 binaries on ARM64.")
+cmake_dependent_option(ENABLE_FEX_ARM64EC
+                       "Whether to build the optional FEX ARM64EC emulator for running AMD64 binaries on ARM64." OFF
+                       "ARCH STREQUAL arm64" OFF)
 
 cmake_dependent_option(ENABLE_WOW64 "Whether to build the amd64 WoW64 subsystem." OFF
                        "ARCH STREQUAL amd64" OFF)
+
+# Set by the nested build that wow64.cmake configures: marks this i386 tree
+# as the 32-bit guest half of an amd64 WoW64 build.
+cmake_dependent_option(WOW64_I386_RUNTIME
+                       "Whether this i386 build provides the 32-bit guest half of WoW64." OFF
+                       "ARCH STREQUAL i386" OFF)
 
 if(CMAKE_C_COMPILER_ID STREQUAL "MSVC")
     option(_PREFAST_ "Whether to enable PREFAST while compiling." OFF)

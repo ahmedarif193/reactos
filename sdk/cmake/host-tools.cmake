@@ -136,28 +136,33 @@ function(setup_host_tools)
         set(HOST_BUILD_TYPE Debug)
     endif()
 
-    ExternalProject_Add(host-tools
-        SOURCE_DIR ${REACTOS_SOURCE_DIR}
-        PREFIX ${REACTOS_BINARY_DIR}/host-tools
-        BINARY_DIR ${REACTOS_BINARY_DIR}/host-tools/bin
-        CMAKE_COMMAND ${HOST_TOOLS_CMAKE_COMMAND}
-        CMAKE_ARGS
-            -UCMAKE_TOOLCHAIN_FILE
-            -DARCH:STRING=${ARCH}
-            -DCMAKE_INSTALL_PREFIX=${REACTOS_BINARY_DIR}/host-tools
-            -DTOOLS_FOLDER=${REACTOS_BINARY_DIR}/host-tools/bin
-            -DTARGET_COMPILER_ID=${CMAKE_C_COMPILER_ID}
-            -DTARGET_BUILD_TYPE=${CMAKE_BUILD_TYPE}
-            -DCMAKE_BUILD_TYPE=${HOST_BUILD_TYPE}
-            -DUSE_DUMMY_PSEH:BOOL=${USE_DUMMY_PSEH}
-            -DREACTOS_TARGET_NT:STRING=0x502
-            ${CMAKE_HOST_TOOLS_EXTRA_ARGS}
-        BUILD_ALWAYS TRUE
-        INSTALL_COMMAND ${CMAKE_COMMAND} -E true
-        BUILD_BYPRODUCTS ${HOST_TOOLS_OUTPUT}
-    )
+    if(HOST_TOOLS_DIR)
+        get_filename_component(INSTALL_DIR "${HOST_TOOLS_DIR}" DIRECTORY)
+        add_custom_target(host-tools)
+    else()
+        ExternalProject_Add(host-tools
+            SOURCE_DIR ${REACTOS_SOURCE_DIR}
+            PREFIX ${REACTOS_BINARY_DIR}/host-tools
+            BINARY_DIR ${REACTOS_BINARY_DIR}/host-tools/bin
+            CMAKE_COMMAND ${HOST_TOOLS_CMAKE_COMMAND}
+            CMAKE_ARGS
+                -UCMAKE_TOOLCHAIN_FILE
+                -DARCH:STRING=${ARCH}
+                -DCMAKE_INSTALL_PREFIX=${REACTOS_BINARY_DIR}/host-tools
+                -DTOOLS_FOLDER=${REACTOS_BINARY_DIR}/host-tools/bin
+                -DTARGET_COMPILER_ID=${CMAKE_C_COMPILER_ID}
+                -DTARGET_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+                -DCMAKE_BUILD_TYPE=${HOST_BUILD_TYPE}
+                -DUSE_DUMMY_PSEH:BOOL=${USE_DUMMY_PSEH}
+                -DREACTOS_TARGET_NT:STRING=0x502
+                ${CMAKE_HOST_TOOLS_EXTRA_ARGS}
+            BUILD_ALWAYS TRUE
+            INSTALL_COMMAND ${CMAKE_COMMAND} -E true
+            BUILD_BYPRODUCTS ${HOST_TOOLS_OUTPUT}
+        )
 
-    ExternalProject_Get_Property(host-tools INSTALL_DIR)
+        ExternalProject_Get_Property(host-tools INSTALL_DIR)
+    endif()
 
     foreach(_tool ${HOST_TOOLS})
         add_executable(native-${_tool} IMPORTED)
