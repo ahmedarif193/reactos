@@ -186,7 +186,19 @@ EngBitBlt(
         else
         {
             bltdata.siDst.iFormat = psoTrg->iBitmapFormat;
-            bltdata.siSrc.iFormat = psoSrc->iBitmapFormat;
+
+            if (psoSrc->iBitmapFormat == psoTrg->iBitmapFormat &&
+                (pxlo->flXlate & XO_TRIVIAL) &&
+                !ROP4_USES_MASK(rop4) &&
+                ROP4_FGND(rop4) == R3_OPINDEX_SRCCOPY)
+            {
+                /* Use the row-copy SRCCOPY path for same-format copies. */
+                bltdata.siSrc.iFormat = 0;
+            }
+            else
+            {
+                bltdata.siSrc.iFormat = psoSrc->iBitmapFormat;
+            }
         }
 
         /* Set the source format info */
@@ -266,10 +278,14 @@ EngBitBlt(
             if (psoMask == NULL)
             {
                 /* We have no mask, assume the mask is all foreground */
-                rop4 = (rop4 & 0xFF) || ((rop4 & 0xFF) << 8);
+                rop4 = (rop4 & 0xFF) | ((rop4 & 0xFF) << 8);
             }
         }
 
+    }
+
+    if (ROP4_USES_MASK(rop4))
+    {
         /* Set the mask format info */
         bltdata.siMsk.iFormat = psoMask->iBitmapFormat;
         bltdata.siMsk.pvScan0 = psoMask->pvScan0;
@@ -649,7 +665,7 @@ EngCopyBits(
     {
         pfnCopyBits = GDIDEVFUNCS(psoTrg).CopyBits;
     }
-    if (SURFOBJ_flags(psoSrc) & HOOK_COPYBITS)
+    else if (SURFOBJ_flags(psoSrc) & HOOK_COPYBITS)
     {
         pfnCopyBits = GDIDEVFUNCS(psoSrc).CopyBits;
     }

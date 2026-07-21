@@ -10263,7 +10263,7 @@ static LRESULT LISTVIEW_KillFocus(LISTVIEW_INFO *infoPtr)
     if (infoPtr->bMarqueeSelect)
     {
         /* Remove the marquee rectangle and release our mouse capture */
-        LISTVIEW_InvalidateRect(infoPtr, &infoPtr->marqueeRect);
+        LISTVIEW_InvalidateRect(infoPtr, &infoPtr->marqueeDrawRect);
         ReleaseCapture();
 
         SetRectEmpty(&infoPtr->marqueeRect);

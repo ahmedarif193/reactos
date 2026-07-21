@@ -15,6 +15,68 @@
 #undef __FUNCTIONNAME
 #define __FUNCTIONNAME BitBlt_PATCOPY_Solid
 #define __USES_SOLID_BRUSH 1
+
+VOID
+FASTCALL
+Dib_BitBlt_PATCOPY_Solid_D8(PBLTDATA pBltData)
+{
+    ULONG cLines = pBltData->ulHeight;
+    PBYTE pjDest = pBltData->siDst.pjBase;
+
+    while (cLines--)
+    {
+        memset(pjDest, (UCHAR)pBltData->ulSolidColor, pBltData->ulWidth);
+        pjDest += pBltData->siDst.cjAdvanceY;
+    }
+}
+
+VOID
+FASTCALL
+Dib_BitBlt_PATCOPY_Solid_D16(PBLTDATA pBltData)
+{
+    ULONG cLines = pBltData->ulHeight;
+    USHORT usColor = (USHORT)pBltData->ulSolidColor;
+    PBYTE pjDestBase = pBltData->siDst.pjBase;
+
+    while (cLines--)
+    {
+        ULONG cPixels = pBltData->ulWidth;
+        PUSHORT pusDest = (PUSHORT)pjDestBase;
+
+        while (cPixels--)
+        {
+            *pusDest++ = usColor;
+        }
+
+        pjDestBase += pBltData->siDst.cjAdvanceY;
+    }
+}
+
+VOID
+FASTCALL
+Dib_BitBlt_PATCOPY_Solid_D32(PBLTDATA pBltData)
+{
+    ULONG cLines = pBltData->ulHeight;
+    PBYTE pjDestBase = pBltData->siDst.pjBase;
+
+    while (cLines--)
+    {
+        ULONG cPixels = pBltData->ulWidth;
+        PULONG pulDest = (PULONG)pjDestBase;
+
+        while (cPixels--)
+        {
+            *pulDest++ = pBltData->ulSolidColor;
+        }
+
+        pjDestBase += pBltData->siDst.cjAdvanceY;
+    }
+}
+
+#define Dib_BitBlt_PATCOPY_Solid_D8_manual 1
+#define Dib_BitBlt_PATCOPY_Solid_D16_manual 1
+#define Dib_BitBlt_PATCOPY_Solid_D32_manual 1
+
 #include "DibLib_AllDstBPP.h"
 
 VOID
@@ -33,4 +95,3 @@ Dib_BitBlt_PATCOPY(PBLTDATA pBltData)
         gapfnBitBlt_PATCOPY[pBltData->siDst.iFormat](pBltData);
     }
 }
-

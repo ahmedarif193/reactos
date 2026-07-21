@@ -1602,6 +1602,7 @@ NtGdiGetPixel(
     POINTL ptlSrc;
     RECT rcDest;
     PSURFACE psurfSrc, psurfDest;
+    BOOL bPrepared = FALSE;
 
     /* Lock the DC */
     pdc = DC_LockDc(hdc);
@@ -1634,6 +1635,7 @@ NtGdiGetPixel(
 
     /* Prepare DC for blit */
     DC_vPrepareDCsForBlit(pdc, &rcDest, NULL, NULL);
+    bPrepared = TRUE;
 
     /* Check if the pixel is outside the surface */
     psurfSrc = pdc->dclevel.pSurface;
@@ -1643,6 +1645,15 @@ NtGdiGetPixel(
         (ptlSrc.y < 0))
     {
         /* Fail! */
+        goto leave;
+    }
+
+    if (pdc->prgnRao &&
+        !REGION_PtInRegion(pdc->prgnRao,
+                           ptlSrc.x - pdc->ptlDCOrig.x,
+                           ptlSrc.y - pdc->ptlDCOrig.y))
+    {
+        /* Outside the current visible clip region. */
         goto leave;
     }
 
@@ -1689,7 +1700,8 @@ NtGdiGetPixel(
 leave:
 
     /* Unlock the DC */
-    DC_vFinishBlit(pdc, NULL);
+    if (bPrepared)
+        DC_vFinishBlit(pdc, NULL);
     DC_UnlockDc(pdc);
 
     /* Return the new RGB color or -1 on failure */

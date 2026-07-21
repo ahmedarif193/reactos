@@ -394,11 +394,11 @@ GdiGetClipBox(
         iComplexity = REGION_GetRgnBox(pdc->prgnVis, prc);
     }
 
-    /* Unlock the DC */
-    DC_UnlockDc(pdc);
-
     /* Convert the rect to logical coordinates */
     IntDPtoLP(pdc, (LPPOINT)prc, 2);
+
+    /* Unlock the DC */
+    DC_UnlockDc(pdc);
 
     /* Return the complexity */
     return iComplexity;

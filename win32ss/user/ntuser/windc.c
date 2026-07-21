@@ -82,6 +82,117 @@ DceGetVisRgn(PWND Window, ULONG Flags, HWND hWndChild, ULONG CFlags)
     return Rgn;
 }
 
+static VOID FASTCALL
+DceSelectVisRgn(PDC dc, PREGION prgn)
+{
+    if (!prgn)
+    {
+       IntGdiReleaseVisRgn(dc);
+       IntSetDefaultRegion(dc);
+       return;
+    }
+
+    dc->fs |= DC_DIRTY_RAO;
+
+    ASSERT(dc->prgnVis != NULL);
+
+    REGION_bCopy(dc->prgnVis, prgn);
+    REGION_bOffsetRgn(dc->prgnVis, -dc->ptlDCOrig.x, -dc->ptlDCOrig.y);
+}
+
+static PREGION FASTCALL
+DceGetVisRgnForUpdate(DCE *Dce, PWND Window, ULONG Flags)
+{
+   PREGION RgnVisible = NULL;
+   ULONG DcxFlags;
+   PWND DesktopWindow;
+
+   if ((Flags & DCX_PARENTCLIP) && Window)
+   {
+      PWND Parent;
+
+      Parent = Window->spwndParent;
+      if (!Parent)
+      {
+         RgnVisible = NULL;
+         goto noparent;
+      }
+
+      if (Parent->style & WS_CLIPSIBLINGS)
+      {
+         DcxFlags = DCX_CLIPSIBLINGS |
+                    (Flags & ~(DCX_CLIPCHILDREN | DCX_WINDOW));
+      }
+      else
+      {
+         DcxFlags = Flags & ~(DCX_CLIPSIBLINGS | DCX_CLIPCHILDREN | DCX_WINDOW);
+      }
+      RgnVisible = DceGetVisRgn(Parent, DcxFlags, UserHMGetHandle(Window), Flags);
+   }
+   else if (Window == NULL)
+   {
+      DesktopWindow = UserGetWindowObject(IntGetDesktopWindow());
+      if (NULL != DesktopWindow)
+      {
+         RgnVisible = IntSysCreateRectpRgnIndirect(&DesktopWindow->rcWindow);
+      }
+      else
+      {
+         RgnVisible = NULL;
+      }
+   }
+   else
+   {
+      RgnVisible = DceGetVisRgn(Window, Flags, 0, 0);
+   }
+
+noparent:
+   if ((Flags & (DCX_INTERSECTRGN | DCX_EXCLUDERGN)) && RgnVisible == NULL)
+   {
+      RgnVisible = IntSysCreateRectpRgn(0, 0, 0, 0);
+   }
+
+   if (Flags & DCX_INTERSECTRGN)
+   {
+      PREGION RgnClip = NULL;
+
+      if (Dce->hrgnClip != NULL)
+          RgnClip = REGION_LockRgn(Dce->hrgnClip);
+
+      if (RgnClip)
+      {
+         IntGdiCombineRgn(RgnVisible, RgnVisible, RgnClip, RGN_AND);
+         REGION_UnlockRgn(RgnClip);
+      }
+      else
+      {
+         if (RgnVisible != NULL)
+         {
+            REGION_Delete(RgnVisible);
+         }
+         RgnVisible = IntSysCreateRectpRgn(0, 0, 0, 0);
+      }
+   }
+   else if ((Flags & DCX_EXCLUDERGN) && Dce->hrgnClip != NULL)
+   {
+       PREGION RgnClip = REGION_LockRgn(Dce->hrgnClip);
+       if (RgnClip)
+       {
+          IntGdiCombineRgn(RgnVisible, RgnVisible, RgnClip, RGN_DIFF);
+          REGION_UnlockRgn(RgnClip);
+       }
+   }
+
+   return RgnVisible;
+}
+
+static VOID FASTCALL
+DceUpdateVisRgnLocked(DCE *Dce, PDC dc, PREGION RgnVisible)
+{
+   Dce->DCXFlags &= ~DCX_DCEDIRTY;
+   DceSelectVisRgn(dc, RgnVisible);
+}
+
 PDCE FASTCALL
 DceAllocDCE(PWND Window OPTIONAL, DCE_TYPE Type)
 {
@@ -191,88 +302,32 @@ VOID
 FASTCALL
 DceUpdateVisRgn(DCE *Dce, PWND Window, ULONG Flags)
 {
-   PREGION RgnVisible = NULL;
-   ULONG DcxFlags;
-   PWND DesktopWindow;
+   PDC dc;
+   PREGION RgnVisible;
 
-   if (Flags & DCX_PARENTCLIP)
-   {
-      PWND Parent;
+   RgnVisible = DceGetVisRgnForUpdate(Dce, Window, Flags);
 
-      Parent = Window->spwndParent;
-      if (!Parent)
-      {
-         RgnVisible = NULL;
-         goto noparent;
-      }
-
-      if (Parent->style & WS_CLIPSIBLINGS)
-      {
-         DcxFlags = DCX_CLIPSIBLINGS |
-                    (Flags & ~(DCX_CLIPCHILDREN | DCX_WINDOW));
-      }
-      else
-      {
-         DcxFlags = Flags & ~(DCX_CLIPSIBLINGS | DCX_CLIPCHILDREN | DCX_WINDOW);
-      }
-      RgnVisible = DceGetVisRgn(Parent, DcxFlags, UserHMGetHandle(Window), Flags);
-   }
-   else if (Window == NULL)
+   if (!GreIsHandleValid(Dce->hDC) ||
+       (dc = DC_LockDc(Dce->hDC)) == NULL)
    {
-      DesktopWindow = UserGetWindowObject(IntGetDesktopWindow());
-      if (NULL != DesktopWindow)
+      if (RgnVisible != NULL)
       {
-         RgnVisible = IntSysCreateRectpRgnIndirect(&DesktopWindow->rcWindow);
+         REGION_Delete(RgnVisible);
       }
-      else
-      {
-         RgnVisible = NULL;
-      }
-   }
-   else
-   {
-      RgnVisible = DceGetVisRgn(Window, Flags, 0, 0);
+      return;
    }
 
-noparent:
-   if (Flags & DCX_INTERSECTRGN)
-   {
-      PREGION RgnClip = NULL;
-
-      if (Dce->hrgnClip != NULL)
-          RgnClip = REGION_LockRgn(Dce->hrgnClip);
-
-      if (RgnClip)
-      {
-         IntGdiCombineRgn(RgnVisible, RgnVisible, RgnClip, RGN_AND);
-         REGION_UnlockRgn(RgnClip);
-      }
-      else
-      {
-         if (RgnVisible != NULL)
-         {
-            REGION_Delete(RgnVisible);
-         }
-         RgnVisible = IntSysCreateRectpRgn(0, 0, 0, 0);
-      }
-   }
-   else if ((Flags & DCX_EXCLUDERGN) && Dce->hrgnClip != NULL)
-   {
-       PREGION RgnClip = REGION_LockRgn(Dce->hrgnClip);
-       IntGdiCombineRgn(RgnVisible, RgnVisible, RgnClip, RGN_DIFF);
-       REGION_UnlockRgn(RgnClip);
-   }
-
-   Dce->DCXFlags &= ~DCX_DCEDIRTY;
-   GdiSelectVisRgn(Dce->hDC, RgnVisible);
-   /* Tell GDI driver */
-   if (Window)
-       IntEngWindowChanged(Window, WOC_RGN_CLIENT);
+   DceUpdateVisRgnLocked(Dce, dc, RgnVisible);
+   DC_UnlockDc(dc);
 
    if (RgnVisible != NULL)
    {
       REGION_Delete(RgnVisible);
    }
+
+   /* Tell GDI driver */
+   if (Window)
+       IntEngWindowChanged(Window, WOC_RGN_CLIENT);
 }
 
 static INT FASTCALL
@@ -821,6 +876,7 @@ DceResetActiveDCEs(PWND Window)
    INT DeltaX;
    INT DeltaY;
    PLIST_ENTRY ListEntry;
+   PREGION RgnVisible;
 
    if (NULL == Window)
    {
@@ -882,9 +938,17 @@ DceResetActiveDCEs(PWND Window)
                NtGdiOffsetRgn(pDCE->hrgnClip, DeltaX, DeltaY);
             }
          }
+         RgnVisible = DceGetVisRgnForUpdate(pDCE, CurrentWindow, pDCE->DCXFlags);
+         DceUpdateVisRgnLocked(pDCE, dc, RgnVisible);
          DC_UnlockDc(dc);
 
-         DceUpdateVisRgn(pDCE, CurrentWindow, pDCE->DCXFlags);
+         if (RgnVisible != NULL)
+         {
+            REGION_Delete(RgnVisible);
+         }
+
+         if (CurrentWindow)
+            IntEngWindowChanged(CurrentWindow, WOC_RGN_CLIENT);
          IntGdiSetHookFlags(pDCE->hDC, DCHF_VALIDATEVISRGN);
       }
    }

@@ -511,6 +511,7 @@ DC_vPrepareDCsForBlit(
     PDC pdcFirst, pdcSecond;
     const RECT *prcFirst, *prcSecond;
     PPALETTE ppalDC = pdcDest->dclevel.ppal;
+    BOOL bSameDevLock = FALSE;
 
     /* If the DC palette entries changed since a brush was realized (e.g. by
      * SetPaletteEntries), any cached PALETTEINDEX color resolution is stale.
@@ -564,6 +565,16 @@ DC_vPrepareDCsForBlit(
 
     if (pdcDest->fs & DC_DIRTY_RAO)
         CLIPPING_UpdateGCRegion(pdcDest);
+    if (pdcSrc && pdcSrc != pdcDest && (pdcSrc->fs & DC_DIRTY_RAO))
+        CLIPPING_UpdateGCRegion(pdcSrc);
+
+    if (pdcSecond &&
+        pdcFirst->dctype == DCTYPE_DIRECT &&
+        pdcSecond->dctype == DCTYPE_DIRECT &&
+        pdcFirst->ppdev->hsemDevLock == pdcSecond->ppdev->hsemDevLock)
+    {
+        bSameDevLock = TRUE;
+    }
 
     /* Lock and update first DC */
     if (pdcFirst->dctype == DCTYPE_DIRECT)
@@ -599,7 +610,8 @@ DC_vPrepareDCsForBlit(
     /* Lock and update second DC */
     if (pdcSecond->dctype == DCTYPE_DIRECT)
     {
-        EngAcquireSemaphore(pdcSecond->ppdev->hsemDevLock);
+        if (!bSameDevLock)
+            EngAcquireSemaphore(pdcSecond->ppdev->hsemDevLock);
 
         /* Update surface if needed */
         if (pdcSecond->ppdev->pSurface != pdcSecond->dclevel.pSurface)
@@ -629,6 +641,43 @@ VOID
 FASTCALL
 DC_vFinishBlit(PDC pdc1, PDC pdc2)
 {
+    if (pdc2 &&
+        pdc1->dctype == DCTYPE_DIRECT &&
+        pdc2->dctype == DCTYPE_DIRECT &&
+        pdc1->ppdev->hsemDevLock == pdc2->ppdev->hsemDevLock)
+    {
+        MouseSafetyOnDrawEnd(pdc2->ppdev);
+#if DBG
+        pdc2->fs &= ~DC_PREPARED;
+#endif
+        MouseSafetyOnDrawEnd(pdc1->ppdev);
+        EngReleaseSemaphore(pdc1->ppdev->hsemDevLock);
+#if DBG
+        pdc1->fs &= ~DC_PREPARED;
+#endif
+        return;
+    }
+
+    if (pdc2 &&
+        pdc1->dctype == DCTYPE_DIRECT &&
+        pdc2->dctype == DCTYPE_DIRECT &&
+        (ULONG_PTR)pdc1->ppdev->hsemDevLock >=
+        (ULONG_PTR)pdc2->ppdev->hsemDevLock)
+    {
+        MouseSafetyOnDrawEnd(pdc2->ppdev);
+        EngReleaseSemaphore(pdc2->ppdev->hsemDevLock);
+#if DBG
+        pdc2->fs &= ~DC_PREPARED;
+#endif
+
+        MouseSafetyOnDrawEnd(pdc1->ppdev);
+        EngReleaseSemaphore(pdc1->ppdev->hsemDevLock);
+#if DBG
+        pdc1->fs &= ~DC_PREPARED;
+#endif
+        return;
+    }
+
     if (pdc1->dctype == DCTYPE_DIRECT)
     {
         MouseSafetyOnDrawEnd(pdc1->ppdev);
@@ -1088,4 +1137,3 @@ IntGdiCreateDisplayDC(HDEV hDev, ULONG DcType, BOOL EmptyDC)
 
     return hDC;
 }
-

@@ -3,137 +3,105 @@
 set S=%SystemRoot%\system32
 set BIN=%SystemRoot%\bin
 
-"%S%\reg.exe" query "HKLM\SYSTEM\CurrentControlSet\Control" /v SystemStartOptions 2>nul | "%S%\findstr.exe" /i "KMTEST" >nul
-if errorlevel 1 goto :eof
+cd /d "%BIN%"
 
-if not exist "%BIN%\kmtest_.exe" goto nodriver
+"%S%\dbgprint.exe" SUITE_BEGIN win32k
 
-"%S%\dbgprint.exe" KMTEST_SUITE_BEGIN arm64
+rem GDI apitests (PATCOPY, EngBitBlt, NtGdiGetPixel, GdiGetClipBox)
+if not exist "%BIN%\gdi32_apitest.exe" goto after_gdi32_apitest
+"%S%\dbgprint.exe" BEGIN gdi32_apitest_GetPixel
+"%S%\dbgprint.exe" --process "%BIN%\gdi32_apitest.exe GetPixel 2>&1"
+"%S%\dbgprint.exe" EXIT gdi32_apitest_GetPixel %ERRORLEVEL%
+"%S%\dbgprint.exe" END gdi32_apitest_GetPixel
+"%S%\dbgprint.exe" BEGIN gdi32_apitest_GetClipBox
+"%S%\dbgprint.exe" --process "%BIN%\gdi32_apitest.exe GetClipBox 2>&1"
+"%S%\dbgprint.exe" EXIT gdi32_apitest_GetClipBox %ERRORLEVEL%
+"%S%\dbgprint.exe" END gdi32_apitest_GetClipBox
+"%S%\dbgprint.exe" BEGIN gdi32_apitest_PatBlt
+"%S%\dbgprint.exe" --process "%BIN%\gdi32_apitest.exe PatBlt 2>&1"
+"%S%\dbgprint.exe" EXIT gdi32_apitest_PatBlt %ERRORLEVEL%
+"%S%\dbgprint.exe" END gdi32_apitest_PatBlt
+"%S%\dbgprint.exe" BEGIN gdi32_apitest_StretchBlt
+"%S%\dbgprint.exe" --process "%BIN%\gdi32_apitest.exe StretchBlt 2>&1"
+"%S%\dbgprint.exe" EXIT gdi32_apitest_StretchBlt %ERRORLEVEL%
+"%S%\dbgprint.exe" END gdi32_apitest_StretchBlt
+"%S%\dbgprint.exe" BEGIN gdi32_apitest_MaskBlt
+"%S%\dbgprint.exe" --process "%BIN%\gdi32_apitest.exe MaskBlt 2>&1"
+"%S%\dbgprint.exe" EXIT gdi32_apitest_MaskBlt %ERRORLEVEL%
+"%S%\dbgprint.exe" END gdi32_apitest_MaskBlt
+:after_gdi32_apitest
 
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64Smp
-"%BIN%\kmtest_.exe" KeArm64Smp
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64Smp %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64Smp
+rem GDI Wine tests (blit, clip, DC, same-device-lock)
+if not exist "%BIN%\gdi32_winetest.exe" goto after_gdi32_winetest
+"%S%\dbgprint.exe" BEGIN gdi32_winetest_bitmap
+"%S%\dbgprint.exe" --process "%BIN%\gdi32_winetest.exe bitmap 2>&1"
+"%S%\dbgprint.exe" EXIT gdi32_winetest_bitmap %ERRORLEVEL%
+"%S%\dbgprint.exe" END gdi32_winetest_bitmap
+"%S%\dbgprint.exe" BEGIN gdi32_winetest_dc
+"%S%\dbgprint.exe" --process "%BIN%\gdi32_winetest.exe dc 2>&1"
+"%S%\dbgprint.exe" EXIT gdi32_winetest_dc %ERRORLEVEL%
+"%S%\dbgprint.exe" END gdi32_winetest_dc
+"%S%\dbgprint.exe" BEGIN gdi32_winetest_clipping
+"%S%\dbgprint.exe" --process "%BIN%\gdi32_winetest.exe clipping 2>&1"
+"%S%\dbgprint.exe" EXIT gdi32_winetest_clipping %ERRORLEVEL%
+"%S%\dbgprint.exe" END gdi32_winetest_clipping
+"%S%\dbgprint.exe" BEGIN gdi32_winetest_dib
+"%S%\dbgprint.exe" --process "%BIN%\gdi32_winetest.exe dib 2>&1"
+"%S%\dbgprint.exe" EXIT gdi32_winetest_dib %ERRORLEVEL%
+"%S%\dbgprint.exe" END gdi32_winetest_dib
+:after_gdi32_winetest
 
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64SmpChurn
-"%BIN%\kmtest_.exe" KeArm64SmpChurn
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64SmpChurn %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64SmpChurn
+rem win32k syscall apitests (BitBlt, visible region)
+if not exist "%BIN%\win32u_apitest.exe" goto after_win32u_apitest
+"%S%\dbgprint.exe" BEGIN win32u_apitest_NtGdiBitBlt
+"%S%\dbgprint.exe" --process "%BIN%\win32u_apitest.exe NtGdiBitBlt 2>&1"
+"%S%\dbgprint.exe" EXIT win32u_apitest_NtGdiBitBlt %ERRORLEVEL%
+"%S%\dbgprint.exe" END win32u_apitest_NtGdiBitBlt
+"%S%\dbgprint.exe" BEGIN win32u_apitest_NtGdiGetRandomRgn
+"%S%\dbgprint.exe" --process "%BIN%\win32u_apitest.exe NtGdiGetRandomRgn 2>&1"
+"%S%\dbgprint.exe" EXIT win32u_apitest_NtGdiGetRandomRgn %ERRORLEVEL%
+"%S%\dbgprint.exe" END win32u_apitest_NtGdiGetRandomRgn
+:after_win32u_apitest
 
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64SubNodeSched
-"%BIN%\kmtest_.exe" KeArm64SubNodeSched
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64SubNodeSched %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64SubNodeSched
+rem USER apitests (window DC visible region, scroll)
+if not exist "%BIN%\user32_apitest.exe" goto after_user32_apitest
+"%S%\dbgprint.exe" BEGIN user32_apitest_GetDCEx
+"%S%\dbgprint.exe" --process "%BIN%\user32_apitest.exe GetDCEx 2>&1"
+"%S%\dbgprint.exe" EXIT user32_apitest_GetDCEx %ERRORLEVEL%
+"%S%\dbgprint.exe" END user32_apitest_GetDCEx
+"%S%\dbgprint.exe" BEGIN user32_apitest_ScrollDC
+"%S%\dbgprint.exe" --process "%BIN%\user32_apitest.exe ScrollDC 2>&1"
+"%S%\dbgprint.exe" EXIT user32_apitest_ScrollDC %ERRORLEVEL%
+"%S%\dbgprint.exe" END user32_apitest_ScrollDC
+"%S%\dbgprint.exe" BEGIN user32_apitest_ScrollWindowEx
+"%S%\dbgprint.exe" --process "%BIN%\user32_apitest.exe ScrollWindowEx 2>&1"
+"%S%\dbgprint.exe" EXIT user32_apitest_ScrollWindowEx %ERRORLEVEL%
+"%S%\dbgprint.exe" END user32_apitest_ScrollWindowEx
+"%S%\dbgprint.exe" BEGIN user32_apitest_RedrawWindow
+"%S%\dbgprint.exe" --process "%BIN%\user32_apitest.exe RedrawWindow 2>&1"
+"%S%\dbgprint.exe" EXIT user32_apitest_RedrawWindow %ERRORLEVEL%
+"%S%\dbgprint.exe" END user32_apitest_RedrawWindow
+:after_user32_apitest
 
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64Smt
-"%BIN%\kmtest_.exe" KeArm64Smt
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64Smt %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64Smt
+rem USER Wine tests (DCE/visregion, DrawFocusRect)
+if not exist "%BIN%\user32_winetest.exe" goto after_user32_winetest
+"%S%\dbgprint.exe" BEGIN user32_winetest_dce
+"%S%\dbgprint.exe" --process "%BIN%\user32_winetest.exe dce 2>&1"
+"%S%\dbgprint.exe" EXIT user32_winetest_dce %ERRORLEVEL%
+"%S%\dbgprint.exe" END user32_winetest_dce
+"%S%\dbgprint.exe" BEGIN user32_winetest_uitools
+"%S%\dbgprint.exe" --process "%BIN%\user32_winetest.exe uitools 2>&1"
+"%S%\dbgprint.exe" EXIT user32_winetest_uitools %ERRORLEVEL%
+"%S%\dbgprint.exe" END user32_winetest_uitools
+:after_user32_winetest
 
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64Numa
-"%BIN%\kmtest_.exe" KeArm64Numa
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64Numa %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64Numa
+rem Common control Wine tests (LISTVIEW_KillFocus)
+if not exist "%BIN%\comctl32_winetest.exe" goto after_comctl32_winetest
+"%S%\dbgprint.exe" BEGIN comctl32_winetest_listview
+"%S%\dbgprint.exe" --process "%BIN%\comctl32_winetest.exe listview 2>&1"
+"%S%\dbgprint.exe" EXIT comctl32_winetest_listview %ERRORLEVEL%
+"%S%\dbgprint.exe" END comctl32_winetest_listview
+:after_comctl32_winetest
 
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64DpcIpi
-"%BIN%\kmtest_.exe" KeArm64DpcIpi
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64DpcIpi %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64DpcIpi
-
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64IpiBroadcast
-"%BIN%\kmtest_.exe" KeArm64IpiBroadcast
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64IpiBroadcast %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64IpiBroadcast
-
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64Irql
-"%BIN%\kmtest_.exe" KeArm64Irql
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64Irql %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64Irql
-
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64SpinLock
-"%BIN%\kmtest_.exe" KeArm64SpinLock
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64SpinLock %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64SpinLock
-
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64
-"%BIN%\kmtest_.exe" KeArm64
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64 %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64
-
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64Dispatcher
-"%BIN%\kmtest_.exe" KeArm64Dispatcher
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64Dispatcher %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64Dispatcher
-
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64Frames
-"%BIN%\kmtest_.exe" KeArm64Frames
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64Frames %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64Frames
-
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64Intrinsics
-"%BIN%\kmtest_.exe" KeArm64Intrinsics
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64Intrinsics %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64Intrinsics
-
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64LoaderCache
-"%BIN%\kmtest_.exe" KeArm64LoaderCache
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64LoaderCache %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64LoaderCache
-
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64PcrPrcb
-"%BIN%\kmtest_.exe" KeArm64PcrPrcb
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64PcrPrcb %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64PcrPrcb
-
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64ThreadProcess
-"%BIN%\kmtest_.exe" KeArm64ThreadProcess
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64ThreadProcess %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64ThreadProcess
-
-"%S%\dbgprint.exe" KMTEST_BEGIN HalArm64Layout
-"%BIN%\kmtest_.exe" HalArm64Layout
-"%S%\dbgprint.exe" KMTEST_EXIT HalArm64Layout %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END HalArm64Layout
-
-"%S%\dbgprint.exe" KMTEST_BEGIN HalArm64Stage1
-"%BIN%\kmtest_.exe" HalArm64Stage1
-"%S%\dbgprint.exe" KMTEST_EXIT HalArm64Stage1 %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END HalArm64Stage1
-
-"%S%\dbgprint.exe" KMTEST_BEGIN HalArm64Stage2
-"%BIN%\kmtest_.exe" HalArm64Stage2
-"%S%\dbgprint.exe" KMTEST_EXIT HalArm64Stage2 %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END HalArm64Stage2
-
-"%S%\dbgprint.exe" KMTEST_BEGIN HalArm64Stage3
-"%BIN%\kmtest_.exe" HalArm64Stage3
-"%S%\dbgprint.exe" KMTEST_EXIT HalArm64Stage3 %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END HalArm64Stage3
-
-"%S%\dbgprint.exe" KMTEST_BEGIN HalArm64Stage4
-"%BIN%\kmtest_.exe" HalArm64Stage4
-"%S%\dbgprint.exe" KMTEST_EXIT HalArm64Stage4 %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END HalArm64Stage4
-
-"%S%\dbgprint.exe" KMTEST_BEGIN HalArm64Stage5
-"%BIN%\kmtest_.exe" HalArm64Stage5
-"%S%\dbgprint.exe" KMTEST_EXIT HalArm64Stage5 %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END HalArm64Stage5
-
-"%S%\dbgprint.exe" KMTEST_BEGIN KdArm64Layout
-"%BIN%\kmtest_.exe" KdArm64Layout
-"%S%\dbgprint.exe" KMTEST_EXIT KdArm64Layout %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KdArm64Layout
-
-"%S%\dbgprint.exe" KMTEST_BEGIN RtlArm64UnwindLayout
-"%BIN%\kmtest_.exe" RtlArm64UnwindLayout
-"%S%\dbgprint.exe" KMTEST_EXIT RtlArm64UnwindLayout %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END RtlArm64UnwindLayout
-
-"%S%\dbgprint.exe" KMTEST_SUITE_END arm64
-"%S%\dbgprint.exe" BOOT_TESTS_DONE
-goto :eof
-
-:nodriver
-"%S%\dbgprint.exe" KMTEST_RUNNER_MISSING
+"%S%\dbgprint.exe" SUITE_END win32k
 "%S%\dbgprint.exe" BOOT_TESTS_DONE

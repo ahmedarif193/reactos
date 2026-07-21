@@ -38,9 +38,11 @@ import re
 import bisect
 import glob
 import socket
+import fcntl
+import json
 
 # Configuration (never change those values)
-LOG_FILE = "/tmp/freeldr_arm64.log"
+LOG_FILE = os.environ.get("ROS_VM_LOG_FILE", "/tmp/freeldr_arm64.log")
 STALL_TIMEOUT = int(os.environ.get("ROS_VM_STALL_TIMEOUT", "15"))
 HARD_TIMEOUT = int(os.environ.get("ROS_VM_HARD_TIMEOUT", "60"))
 VM_NAME = os.environ.get("ROS_VM_NAME", "ROS11")
@@ -48,6 +50,25 @@ ENABLE_GDB_DUMP = os.environ.get("ROS_VM_GDB_DUMP", "1") != "0"
 QEMU_GDB_PORT = int(os.environ.get("ROS_QEMU_GDB_PORT", "1234"))
 QEMU_ARM64_GIC_VERSION = os.environ.get("ROS_QEMU_GIC_VERSION", "auto")
 QEMU_ARM64_MEMORY = os.environ.get("ROS_QEMU_ARM64_MEMORY", "24G")
+QUEUE_DIR = "/tmp/reactos_flash_test_hardware_queue"
+QUEUE_POLL_SECONDS = 2.0
+QUEUE_STATUS_SECONDS = 30.0
+QUEUE_WAIT_MESSAGE = (
+    "wait, another process is testing the hardware should wait a little, "
+    "will let you informed once he finishes, and wait your turn"
+)
+USE_HARDWARE_QUEUE = os.environ.get("ROS_VM_USE_QUEUE", "0") == "1"
+SINGLE_TEST_RUNNERS = (
+    "user32_dynamic_apitest",
+    "gdi32_apitest",
+    "gdi32_winetest",
+    "gdiplus_winetest",
+    "dciman32_apitest",
+    "fontext_apitest",
+    "win32u_apitest",
+    "user32_apitest",
+    "user32_winetest",
+)
 KERNEL_TEXT_ADDRESS = (
     int(os.environ["ROS_KERNEL_TEXT"], 0)
     if "ROS_KERNEL_TEXT" in os.environ else None
@@ -80,9 +101,12 @@ def get_build_dir():
     return cwd
 
 BUILD_DIR = get_build_dir()
+SOURCE_DIR = os.path.realpath(os.path.join(BUILD_DIR, ".."))
+BOOTDATA_DIR = os.path.join(SOURCE_DIR, "boot", "bootdata")
 FAT32_IMG = os.path.join(BUILD_DIR, "fat32.img")
 REACTOS_IMG = os.path.realpath(os.path.join(BUILD_DIR, "ReactOS.img"))
 LIVECD_ISO = os.path.realpath(os.path.join(BUILD_DIR, "livecd.iso"))
+LIVECD_BUILD_LOCK = os.path.join(BUILD_DIR, ".vm_monitor_livecd.lock")
 
 # UEFI firmware paths - architecture dependent
 OVMF_ENV_CODE_VARS = ["REACTOS_OVMF_CODE", "OVMF_CODE"]
@@ -129,6 +153,267 @@ target_arch = "amd64"
 boot_media = "disk"
 boot_image_path = REACTOS_IMG
 vm_cleanup_done = False
+run_tag = None
+generated_cleanup_paths = []
+
+
+class HardwareQueue:
+    def __init__(self, queue_dir=QUEUE_DIR):
+        self.queue_dir = queue_dir
+        self.ticket_path = None
+        self.ticket_name = None
+        self.ticket_number = None
+        self.active_fd = None
+
+    @property
+    def state_lock_path(self):
+        return os.path.join(self.queue_dir, "state.lock")
+
+    @property
+    def active_lock_path(self):
+        return os.path.join(self.queue_dir, "active.lock")
+
+    @property
+    def counter_path(self):
+        return os.path.join(self.queue_dir, "next-ticket")
+
+    def acquire(self):
+        os.makedirs(self.queue_dir, mode=0o700, exist_ok=True)
+
+        with self.lock_state():
+            self.cleanup_stale_tickets()
+            self.ticket_number = self.next_ticket_number()
+            self.ticket_name = f"ticket-{self.ticket_number:020d}-{os.getpid()}"
+            self.ticket_path = os.path.join(self.queue_dir, self.ticket_name)
+            with open(self.ticket_path, "x", encoding="ascii") as f:
+                json.dump(
+                    {
+                        "pid": os.getpid(),
+                        "ticket": self.ticket_number,
+                        "cwd": BUILD_DIR,
+                        "argv": sys.argv,
+                        "created": time.time(),
+                    },
+                    f,
+                    sort_keys=True,
+                )
+                f.write("\n")
+            print(f"[*] Hardware queue ticket {self.ticket_number} registered")
+
+        waiting = False
+        next_status = 0.0
+        try:
+            while True:
+                with self.lock_state():
+                    self.cleanup_stale_tickets()
+                    tickets = self.ticket_names()
+                    if self.ticket_name not in tickets:
+                        print("[!] Hardware queue ticket disappeared", file=sys.stderr)
+                        sys.exit(1)
+
+                    position = tickets.index(self.ticket_name) + 1
+                    if position == 1 and self.try_acquire_active_lock():
+                        if waiting:
+                            print("[*] Previous hardware test finished; your turn now")
+                        else:
+                            print("[*] Hardware queue acquired")
+                        return
+
+                if not waiting:
+                    waiting = True
+                    print(f"[*] {QUEUE_WAIT_MESSAGE}")
+
+                now = time.monotonic()
+                if now >= next_status:
+                    print(f"[*] Hardware queue position {position}; {position - 1} process(es) ahead")
+                    next_status = now + QUEUE_STATUS_SECONDS
+
+                time.sleep(QUEUE_POLL_SECONDS)
+        except BaseException:
+            self.release()
+            raise
+
+    def release(self):
+        if self.ticket_path:
+            try:
+                os.unlink(self.ticket_path)
+            except FileNotFoundError:
+                pass
+            self.ticket_path = None
+
+        if self.active_fd is not None:
+            try:
+                fcntl.flock(self.active_fd, fcntl.LOCK_UN)
+            finally:
+                os.close(self.active_fd)
+                self.active_fd = None
+
+    def lock_state(self):
+        return StateLock(self.state_lock_path)
+
+    def next_ticket_number(self):
+        try:
+            with open(self.counter_path, "r", encoding="ascii") as f:
+                ticket = int(f.read().strip() or "1")
+        except (OSError, ValueError):
+            ticket = 1
+
+        tmp_path = f"{self.counter_path}.{os.getpid()}.tmp"
+        with open(tmp_path, "w", encoding="ascii") as f:
+            f.write(f"{ticket + 1}\n")
+        os.replace(tmp_path, self.counter_path)
+        return ticket
+
+    def ticket_names(self):
+        return sorted(
+            name for name in os.listdir(self.queue_dir)
+            if name.startswith("ticket-")
+        )
+
+    def cleanup_stale_tickets(self):
+        for name in self.ticket_names():
+            path = os.path.join(self.queue_dir, name)
+            try:
+                with open(path, "r", encoding="ascii") as f:
+                    ticket = json.load(f)
+            except (OSError, json.JSONDecodeError):
+                continue
+
+            pid = ticket.get("pid")
+            if isinstance(pid, int) and not pid_is_alive(pid):
+                try:
+                    os.unlink(path)
+                    print(f"[*] Removed stale hardware queue ticket from pid {pid}")
+                except FileNotFoundError:
+                    pass
+
+    def try_acquire_active_lock(self):
+        if self.active_fd is None:
+            self.active_fd = os.open(self.active_lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+
+        try:
+            fcntl.flock(self.active_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            return False
+
+
+class StateLock:
+    def __init__(self, path):
+        self.path = path
+        self.fd = None
+
+    def __enter__(self):
+        self.fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(self.fd, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            fcntl.flock(self.fd, fcntl.LOCK_UN)
+        finally:
+            os.close(self.fd)
+            self.fd = None
+
+
+def pid_is_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def parse_single_test_selector(selector):
+    if not re.fullmatch(r"[A-Za-z0-9_]+", selector):
+        raise ValueError("single test selector may only contain letters, digits, and underscores")
+
+    for runner in sorted(SINGLE_TEST_RUNNERS, key=len, reverse=True):
+        prefix = runner + "_"
+        if selector.startswith(prefix) and len(selector) > len(prefix):
+            return runner, selector[len(prefix):]
+
+    known = ", ".join(f"{runner}_<test>" for runner in SINGLE_TEST_RUNNERS)
+    raise ValueError(f"single test selector must match one of: {known}")
+
+
+def log_file_for_single_test(selector):
+    parse_single_test_selector(selector)
+    tag = run_tag if run_tag else selector
+    return os.path.join("/tmp", f"freeldr_arm64_{tag}.log")
+
+
+def single_test_run_tag(selector):
+    parse_single_test_selector(selector)
+    return f"{selector}.{os.getpid()}"
+
+
+def single_test_iso_path(selector):
+    parse_single_test_selector(selector)
+    tag = run_tag if run_tag else single_test_run_tag(selector)
+    return os.path.realpath(os.path.join(BUILD_DIR, f"livecd.{tag}.iso"))
+
+
+def single_test_cmd(selector):
+    runner, test = parse_single_test_selector(selector)
+    name = f"{runner}_{test}"
+    lines = [
+        "@echo off",
+        "",
+        "set S=%SystemRoot%\\system32",
+        "set BIN=%SystemRoot%\\bin",
+        f"set NAME={name}",
+        "",
+        f'if not exist "%BIN%\\{runner}.exe" goto missing',
+        'cd /d "%BIN%" || goto missing',
+        "",
+        '"%S%\\dbgprint.exe" SUITE_BEGIN win32k',
+        '"%S%\\dbgprint.exe" BEGIN %NAME%',
+        f'"%S%\\dbgprint.exe" --process "%BIN%\\{runner}.exe {test} 2>&1"',
+        "set ERROR=%ERRORLEVEL%",
+        '"%S%\\dbgprint.exe" EXIT %NAME% %ERROR%',
+        '"%S%\\dbgprint.exe" END %NAME%',
+        '"%S%\\dbgprint.exe" SUITE_END win32k',
+        '"%S%\\dbgprint.exe" BOOT_TESTS_DONE',
+        "goto :eof",
+        "",
+        ":missing",
+        '"%S%\\dbgprint.exe" MISSING %NAME%',
+        '"%S%\\dbgprint.exe" BOOT_TESTS_DONE',
+        "goto :eof",
+        "",
+    ]
+    return "\r\n".join(lines)
+
+
+def write_single_test_cmd(selector):
+    script = single_test_cmd(selector)
+    paths = [
+        os.path.join(BOOTDATA_DIR, "livecd_start.cmd"),
+        os.path.join(BOOTDATA_DIR, "cpubench_start.cmd"),
+    ]
+
+    for path in paths:
+        with open(path, "w", encoding="ascii", newline="") as f:
+            f.write(script)
+        print(f"Single-test boot command written: {path}")
+
+
+def prepare_single_test_livecd(selector, iso_path):
+    """Build a single-test livecd and copy it to a private per-run ISO."""
+    print(f"Preparing single-test livecd for {selector}...")
+    with StateLock(LIVECD_BUILD_LOCK):
+        write_single_test_cmd(selector)
+        if not build_ninja_target("livecd"):
+            return False
+        if not os.path.exists(LIVECD_ISO):
+            print(f"Error: livecd build did not produce {LIVECD_ISO}")
+            return False
+        shutil.copy2(LIVECD_ISO, iso_path)
+    print(f"Private single-test ISO: {iso_path}")
+    return True
 
 
 def read_cmake_cache_arch():
@@ -187,16 +472,34 @@ def find_first_existing(paths):
     return None
 
 
+def register_generated_cleanup_path(path):
+    if path and path not in generated_cleanup_paths:
+        generated_cleanup_paths.append(path)
+
+
+def cleanup_generated_paths():
+    while generated_cleanup_paths:
+        path = generated_cleanup_paths.pop()
+        try:
+            os.unlink(path)
+            print(f"Removed generated artifact: {path}")
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            print(f"Warning: failed to remove generated artifact {path}: {e}")
+
+
 def resolve_ovmf_paths(arch):
     """Resolve OVMF CODE and VARS (writable) paths for the given arch."""
     if arch == "i386":
         code_candidates = OVMF_IA32_CODE_CANDIDATES
         vars_candidates = OVMF_IA32_VARS_CANDIDATES
-        vars_local = os.path.join(BUILD_DIR, "OVMF32_VARS.fd")
+        vars_name = f"OVMF32_VARS.{run_tag}.fd" if run_tag else "OVMF32_VARS.fd"
     else:
         code_candidates = OVMF_X64_CODE_CANDIDATES
         vars_candidates = OVMF_X64_VARS_CANDIDATES
-        vars_local = os.path.join(BUILD_DIR, "OVMF_VARS.fd")
+        vars_name = f"OVMF_VARS.{run_tag}.fd" if run_tag else "OVMF_VARS.fd"
+    vars_local = os.path.join(BUILD_DIR, vars_name)
 
     code_env = env_path(OVMF_ENV_CODE_VARS)
     vars_env = env_path(OVMF_ENV_VARS_VARS)
@@ -216,6 +519,8 @@ def resolve_ovmf_paths(arch):
     else:
         ovmf_vars = vars_local
         ovmf_vars_template = find_first_existing(vars_candidates)
+        if run_tag:
+            register_generated_cleanup_path(ovmf_vars)
 
     return ovmf_code, ovmf_vars, ovmf_vars_template, code_candidates, vars_candidates
 
@@ -446,6 +751,7 @@ def force_kill_vm():
                     pass
             qemu_process = None
         kill_qemu_for_image(boot_image_path, "monitor cleanup", quiet_not_found=True)
+        cleanup_generated_paths()
     else:
         try:
             subprocess.run(
@@ -1649,7 +1955,12 @@ def monitor_log():
             if current_size != last_size:
                 last_size = current_size
                 last_change_time = current_time
-                if not crash_dumped and log_has_crash_marker(read_log_tail(LOG_FILE)):
+                log_tail = read_log_tail(LOG_FILE)
+                if "BOOT_TESTS_DONE" in log_tail:
+                    print("BOOT_TESTS_DONE detected in serial log.")
+                    force_kill_vm()
+                    return
+                if not crash_dumped and log_has_crash_marker(log_tail):
                     crash_dumped = True
                     print("Crash/debugger marker detected in serial log.")
                     capture_gdb_dump("serial crash marker")
@@ -1684,7 +1995,9 @@ def signal_handler(sig, frame):
 
 
 def main():
-    global use_qemu, target_arch, boot_media, boot_image_path, QEMU_ARM64_GIC_VERSION
+    global use_qemu, target_arch, boot_media, boot_image_path
+    global QEMU_ARM64_GIC_VERSION, LOG_FILE, run_tag
+    hardware_queue = None
 
     parser = argparse.ArgumentParser(description='VM Monitor Script')
     parser.add_argument('--qemu', action='store_true',
@@ -1699,11 +2012,29 @@ def main():
     parser.add_argument('--gic-version', '--gic', choices=('auto', '2', '3', '4', 'host', 'max'),
                         default=QEMU_ARM64_GIC_VERSION,
                         help='ARM64 QEMU virt GIC version (default: auto; env: ROS_QEMU_GIC_VERSION)')
+    parser.add_argument('single_test', nargs='?',
+                        help='Rewrite boot commands to run only one test, e.g. gdi32_winetest_dib')
     args = parser.parse_args()
     QEMU_ARM64_GIC_VERSION = args.gic_version
 
     # --vbox is explicit but same as default (no --qemu)
     use_qemu = args.qemu and not args.vbox
+
+    if args.single_test:
+        if args.vbox:
+            parser.error("single test selector requires QEMU livecd")
+        if args.img:
+            parser.error("single test selector cannot be combined with --img")
+        if args.iso not in (None, LIVECD_ISO):
+            parser.error("single test selector builds a private livecd; do not pass a custom --iso")
+        try:
+            parse_single_test_selector(args.single_test)
+        except ValueError as e:
+            parser.error(str(e))
+        run_tag = single_test_run_tag(args.single_test)
+        use_qemu = True
+        if "ROS_VM_LOG_FILE" not in os.environ:
+            LOG_FILE = log_file_for_single_test(args.single_test)
 
     if args.img and (args.livecd or args.iso is not None):
         parser.error("--img cannot be combined with --livecd or --iso")
@@ -1715,7 +2046,12 @@ def main():
     boot_media = "disk"
     boot_image_path = REACTOS_IMG
 
-    if args.img:
+    if args.single_test:
+        build_target = "livecd"
+        boot_media = "iso"
+        boot_image_path = single_test_iso_path(args.single_test)
+        register_generated_cleanup_path(boot_image_path)
+    elif args.img:
         build_target = "reactosimg"
         boot_media = "disk"
         boot_image_path = REACTOS_IMG
@@ -1740,6 +2076,11 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
+    if USE_HARDWARE_QUEUE and (use_qemu or args.single_test):
+        hardware_queue = HardwareQueue()
+        hardware_queue.acquire()
+        atexit.register(hardware_queue.release)
+
     vm_type = f"QEMU ({target_arch})" if use_qemu else "VirtualBox"
     if args.rpi:
         vm_type += " - RPI Mode"
@@ -1750,7 +2091,10 @@ def main():
     print(f"Boot image: {boot_image_path}")
     print("="*60 + "\n")
 
-    if build_target:
+    if args.single_test:
+        if not prepare_single_test_livecd(args.single_test, boot_image_path):
+            sys.exit(1)
+    elif build_target:
         if not build_ninja_target(build_target):
             sys.exit(1)
     elif not os.path.exists(boot_image_path):
@@ -1775,6 +2119,8 @@ def main():
     monitor_log()
 
     force_kill_vm()
+    if hardware_queue:
+        hardware_queue.release()
 
 
 if __name__ == "__main__":

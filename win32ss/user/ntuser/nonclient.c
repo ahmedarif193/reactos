@@ -594,8 +594,12 @@ DefWndDoSizeMove(PWND pwnd, WORD wParam)
                     HRGN hrgnNew;
                     HRGN hrgnOrig = GreCreateRectRgnIndirect(&pwnd->rcWindow);
 
-                    if (pwnd->hrgnClip != NULL)
+                    if (hrgnOrig && pwnd->hrgnClip != NULL)
+                    {
+                       NtGdiOffsetRgn(hrgnOrig, -pwnd->rcWindow.left, -pwnd->rcWindow.top);
                        NtGdiCombineRgn(hrgnOrig, hrgnOrig, pwnd->hrgnClip, RGN_AND);
+                       NtGdiOffsetRgn(hrgnOrig, pwnd->rcWindow.left, pwnd->rcWindow.top);
+                    }
 
                     //// This causes the mdi child window to jump up when it is moved.
                     //IntMapWindowPoints( 0, pWndParent, (POINT *)&rect, 2 );
@@ -608,8 +612,12 @@ DefWndDoSizeMove(PWND pwnd, WORD wParam)
                                           SWP_NOACTIVATE | ((hittest == HTCAPTION) ? SWP_NOSIZE : 0));
 
                     hrgnNew = GreCreateRectRgnIndirect(&pwnd->rcWindow);
-                    if (pwnd->hrgnClip != NULL)
+                    if (hrgnNew && pwnd->hrgnClip != NULL)
+                    {
+                       NtGdiOffsetRgn(hrgnNew, -pwnd->rcWindow.left, -pwnd->rcWindow.top);
                        NtGdiCombineRgn(hrgnNew, hrgnNew, pwnd->hrgnClip, RGN_AND);
+                       NtGdiOffsetRgn(hrgnNew, pwnd->rcWindow.left, pwnd->rcWindow.top);
+                    }
 
                     if (hrgnNew)
                     {

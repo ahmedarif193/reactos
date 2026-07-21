@@ -503,6 +503,54 @@ done:
     return Mask;
 }
 
+/*
+ * Map a logical point to device coordinates with round-to-nearest, matching
+ * Windows/Wine's GDI_ROUND (floor(v + 0.5)).  ReactOS's normal IntLPtoDP path
+ * truncates the FLOATOBJ result towards zero, which on builds where FLOATOBJ is
+ * a native double (amd64/arm64) is off-by-one for fractional device coordinates
+ * produced by e.g. MM_ANISOTROPIC scaling.  SetDIBitsToDevice needs the same
+ * rounding as Wine's lp_to_dp to place the destination origin on the correct
+ * pixel.
+ */
+static
+VOID
+IntLPtoDP_RoundOrigin(PDC pdc, PPOINTL ppt)
+{
+    PMATRIX pmx;
+    FLOATOBJ foX, foY, foTmp;
+    LONG lX, lY;
+    LONG x = ppt->x, y = ppt->y;
+
+    pmx = DC_pmxWorldToDevice(pdc);
+
+    /* foX = x * efM11 + y * efM21 + efDx */
+    FLOATOBJ_SetLong(&foX, x);
+    FLOATOBJ_Mul(&foX, &pmx->efM11);
+    foTmp = pmx->efM21;
+    FLOATOBJ_MulLong(&foTmp, y);
+    FLOATOBJ_Add(&foX, &foTmp);
+    FLOATOBJ_Add(&foX, &pmx->efDx);
+
+    /* foY = x * efM12 + y * efM22 + efDy */
+    FLOATOBJ_SetLong(&foY, y);
+    FLOATOBJ_Mul(&foY, &pmx->efM22);
+    foTmp = pmx->efM12;
+    FLOATOBJ_MulLong(&foTmp, x);
+    FLOATOBJ_Add(&foY, &foTmp);
+    FLOATOBJ_Add(&foY, &pmx->efDy);
+
+    /* Round to nearest: floor(v + 0.5) */
+    FLOATOBJ_AddFloat(&foX, 0.5f);
+    FLOATOBJ_AddFloat(&foY, 0.5f);
+    lX = FLOATOBJ_GetLong(&foX);
+    lY = FLOATOBJ_GetLong(&foY);
+    if (FLOATOBJ_LessThanLong(&foX, lX)) lX--;
+    if (FLOATOBJ_LessThanLong(&foY, lY)) lY--;
+
+    ppt->x = lX;
+    ppt->y = lY;
+}
+
 W32KAPI
 INT
 APIENTRY
@@ -596,14 +644,30 @@ NtGdiSetDIBitsToDeviceInternal(
         goto Exit;
     }
 
-    rcDest.left = XDest;
-    rcDest.top = YDest;
-    if (bTransformCoordinates)
+    /* Map the destination origin to device coordinates.  Only the origin is
+     * transformed; Width/Height stay in device units (matching Wine's
+     * nulldrv_SetDIBitsToDevice, which maps the origin via lp_to_dp and keeps
+     * cx/cy unscaled). */
     {
-        IntLPtoDP(pDC, (LPPOINT)&rcDest, 2);
+        POINTL ptDest;
+        ptDest.x = XDest;
+        ptDest.y = YDest;
+        if (bTransformCoordinates)
+        {
+            IntLPtoDP_RoundOrigin(pDC, &ptDest);
+        }
+        ptDest.x += pDC->ptlDCOrig.x;
+        ptDest.y += pDC->ptlDCOrig.y;
+        /* For a right-to-left layout the world-to-device transform mirrors the
+         * origin to the right edge of the destination rectangle; shift it back
+         * to the left edge (Wine: dst.x -= cx - 1). */
+        if (bTransformCoordinates && (pDC->pdcattr->dwLayout & LAYOUT_RTL))
+        {
+            ptDest.x -= (Width - 1);
+        }
+        rcDest.left = ptDest.x;
+        rcDest.top = ptDest.y;
     }
-    rcDest.left += pDC->ptlDCOrig.x;
-    rcDest.top += pDC->ptlDCOrig.y;
     rcDest.right = rcDest.left + Width;
     rcDest.bottom = rcDest.top + Height;
     rcDest.top += StartScan;

@@ -1,54 +1,107 @@
 @echo off
 
-if not "%1" == "" (
-    start %1
-    goto :eof
-)
+set S=%SystemRoot%\system32
+set BIN=%SystemRoot%\bin
 
-if not exist "%SystemRoot%\system32\cpubench.exe" goto :eof
-%SystemRoot%\system32\dbgprint.exe CPUBENCH_BEGIN
-start "ReactOS CPU Benchmark" /wait %SystemRoot%\system32\cpubench.exe
-%SystemRoot%\system32\dbgprint.exe CPUBENCH_END
-goto :eof
-:after_cpubench
+cd /d "%BIN%"
 
-if not exist "%SystemRoot%\system32\cmd_rostest_x64.exe" goto after_cmd_rostest_x64
-echo Running cmd_rostest_x64
-%SystemRoot%\system32\dbgprint.exe FEX_TEST_BEGIN cmd_rostest_x64
-%SystemRoot%\system32\cmd_rostest_x64.exe
-%SystemRoot%\system32\dbgprint.exe FEX_TEST_EXIT cmd_rostest_x64 %ERRORLEVEL%
-%SystemRoot%\system32\dbgprint.exe FEX_TEST_END cmd_rostest_x64
-:after_cmd_rostest_x64
+"%S%\dbgprint.exe" SUITE_BEGIN win32k
 
-if not exist "%SystemRoot%\system32\ntdll_apitest_x64.exe" goto after_ntdll_apitest_x64
-%SystemRoot%\system32\dbgprint.exe FEX_TEST_BEGIN ntdll_apitest_x64 arm64_chpe
-%SystemRoot%\system32\ntdll_apitest_x64.exe arm64_chpe
-%SystemRoot%\system32\dbgprint.exe FEX_TEST_EXIT ntdll_apitest_x64 arm64_chpe %ERRORLEVEL%
-%SystemRoot%\system32\dbgprint.exe FEX_TEST_END ntdll_apitest_x64 arm64_chpe
-:after_ntdll_apitest_x64
+rem GDI apitests (PATCOPY, EngBitBlt, NtGdiGetPixel, GdiGetClipBox)
+if not exist "%BIN%\gdi32_apitest.exe" goto after_gdi32_apitest
+"%S%\dbgprint.exe" BEGIN gdi32_apitest_GetPixel
+"%S%\dbgprint.exe" --process "%BIN%\gdi32_apitest.exe GetPixel 2>&1"
+"%S%\dbgprint.exe" EXIT gdi32_apitest_GetPixel %ERRORLEVEL%
+"%S%\dbgprint.exe" END gdi32_apitest_GetPixel
+"%S%\dbgprint.exe" BEGIN gdi32_apitest_GetClipBox
+"%S%\dbgprint.exe" --process "%BIN%\gdi32_apitest.exe GetClipBox 2>&1"
+"%S%\dbgprint.exe" EXIT gdi32_apitest_GetClipBox %ERRORLEVEL%
+"%S%\dbgprint.exe" END gdi32_apitest_GetClipBox
+"%S%\dbgprint.exe" BEGIN gdi32_apitest_PatBlt
+"%S%\dbgprint.exe" --process "%BIN%\gdi32_apitest.exe PatBlt 2>&1"
+"%S%\dbgprint.exe" EXIT gdi32_apitest_PatBlt %ERRORLEVEL%
+"%S%\dbgprint.exe" END gdi32_apitest_PatBlt
+"%S%\dbgprint.exe" BEGIN gdi32_apitest_StretchBlt
+"%S%\dbgprint.exe" --process "%BIN%\gdi32_apitest.exe StretchBlt 2>&1"
+"%S%\dbgprint.exe" EXIT gdi32_apitest_StretchBlt %ERRORLEVEL%
+"%S%\dbgprint.exe" END gdi32_apitest_StretchBlt
+"%S%\dbgprint.exe" BEGIN gdi32_apitest_MaskBlt
+"%S%\dbgprint.exe" --process "%BIN%\gdi32_apitest.exe MaskBlt 2>&1"
+"%S%\dbgprint.exe" EXIT gdi32_apitest_MaskBlt %ERRORLEVEL%
+"%S%\dbgprint.exe" END gdi32_apitest_MaskBlt
+:after_gdi32_apitest
 
-if not exist "%SystemRoot%\bin\kmtest_.exe" goto :eof
+rem GDI Wine tests (blit, clip, DC, same-device-lock)
+if not exist "%BIN%\gdi32_winetest.exe" goto after_gdi32_winetest
+"%S%\dbgprint.exe" BEGIN gdi32_winetest_bitmap
+"%S%\dbgprint.exe" --process "%BIN%\gdi32_winetest.exe bitmap 2>&1"
+"%S%\dbgprint.exe" EXIT gdi32_winetest_bitmap %ERRORLEVEL%
+"%S%\dbgprint.exe" END gdi32_winetest_bitmap
+"%S%\dbgprint.exe" BEGIN gdi32_winetest_dc
+"%S%\dbgprint.exe" --process "%BIN%\gdi32_winetest.exe dc 2>&1"
+"%S%\dbgprint.exe" EXIT gdi32_winetest_dc %ERRORLEVEL%
+"%S%\dbgprint.exe" END gdi32_winetest_dc
+"%S%\dbgprint.exe" BEGIN gdi32_winetest_clipping
+"%S%\dbgprint.exe" --process "%BIN%\gdi32_winetest.exe clipping 2>&1"
+"%S%\dbgprint.exe" EXIT gdi32_winetest_clipping %ERRORLEVEL%
+"%S%\dbgprint.exe" END gdi32_winetest_clipping
+"%S%\dbgprint.exe" BEGIN gdi32_winetest_dib
+"%S%\dbgprint.exe" --process "%BIN%\gdi32_winetest.exe dib 2>&1"
+"%S%\dbgprint.exe" EXIT gdi32_winetest_dib %ERRORLEVEL%
+"%S%\dbgprint.exe" END gdi32_winetest_dib
+:after_gdi32_winetest
 
-pushd "%SystemRoot%\bin" || goto :eof
+rem win32k syscall apitests (BitBlt, visible region)
+if not exist "%BIN%\win32u_apitest.exe" goto after_win32u_apitest
+"%S%\dbgprint.exe" BEGIN win32u_apitest_NtGdiBitBlt
+"%S%\dbgprint.exe" --process "%BIN%\win32u_apitest.exe NtGdiBitBlt 2>&1"
+"%S%\dbgprint.exe" EXIT win32u_apitest_NtGdiBitBlt %ERRORLEVEL%
+"%S%\dbgprint.exe" END win32u_apitest_NtGdiBitBlt
+"%S%\dbgprint.exe" BEGIN win32u_apitest_NtGdiGetRandomRgn
+"%S%\dbgprint.exe" --process "%BIN%\win32u_apitest.exe NtGdiGetRandomRgn 2>&1"
+"%S%\dbgprint.exe" EXIT win32u_apitest_NtGdiGetRandomRgn %ERRORLEVEL%
+"%S%\dbgprint.exe" END win32u_apitest_NtGdiGetRandomRgn
+:after_win32u_apitest
 
-echo Running kmtest_ MmSelfMap
-kmtest_.exe MmSelfMap
+rem USER apitests (window DC visible region, scroll)
+if not exist "%BIN%\user32_apitest.exe" goto after_user32_apitest
+"%S%\dbgprint.exe" BEGIN user32_apitest_GetDCEx
+"%S%\dbgprint.exe" --process "%BIN%\user32_apitest.exe GetDCEx 2>&1"
+"%S%\dbgprint.exe" EXIT user32_apitest_GetDCEx %ERRORLEVEL%
+"%S%\dbgprint.exe" END user32_apitest_GetDCEx
+"%S%\dbgprint.exe" BEGIN user32_apitest_ScrollDC
+"%S%\dbgprint.exe" --process "%BIN%\user32_apitest.exe ScrollDC 2>&1"
+"%S%\dbgprint.exe" EXIT user32_apitest_ScrollDC %ERRORLEVEL%
+"%S%\dbgprint.exe" END user32_apitest_ScrollDC
+"%S%\dbgprint.exe" BEGIN user32_apitest_ScrollWindowEx
+"%S%\dbgprint.exe" --process "%BIN%\user32_apitest.exe ScrollWindowEx 2>&1"
+"%S%\dbgprint.exe" EXIT user32_apitest_ScrollWindowEx %ERRORLEVEL%
+"%S%\dbgprint.exe" END user32_apitest_ScrollWindowEx
+"%S%\dbgprint.exe" BEGIN user32_apitest_RedrawWindow
+"%S%\dbgprint.exe" --process "%BIN%\user32_apitest.exe RedrawWindow 2>&1"
+"%S%\dbgprint.exe" EXIT user32_apitest_RedrawWindow %ERRORLEVEL%
+"%S%\dbgprint.exe" END user32_apitest_RedrawWindow
+:after_user32_apitest
 
-echo Running kmtest_ arm64 parity suite
-kmtest_.exe HalArm64Layout
-kmtest_.exe KdArm64Layout
-kmtest_.exe KeArm64
-kmtest_.exe KeArm64Dispatcher
-kmtest_.exe KeArm64DpcIpi
-kmtest_.exe KeArm64Frames
-kmtest_.exe KeArm64Intrinsics
-kmtest_.exe KeArm64Irql
-kmtest_.exe KeArm64LoaderCache
-kmtest_.exe KeArm64PcrPrcb
-kmtest_.exe KeArm64Smp
-kmtest_.exe KeArm64SmpChurn
-kmtest_.exe KeArm64SpinLock
-kmtest_.exe KeArm64ThreadProcess
-kmtest_.exe RtlArm64UnwindLayout
+rem USER Wine tests (DCE/visregion, DrawFocusRect)
+if not exist "%BIN%\user32_winetest.exe" goto after_user32_winetest
+"%S%\dbgprint.exe" BEGIN user32_winetest_dce
+"%S%\dbgprint.exe" --process "%BIN%\user32_winetest.exe dce 2>&1"
+"%S%\dbgprint.exe" EXIT user32_winetest_dce %ERRORLEVEL%
+"%S%\dbgprint.exe" END user32_winetest_dce
+"%S%\dbgprint.exe" BEGIN user32_winetest_uitools
+"%S%\dbgprint.exe" --process "%BIN%\user32_winetest.exe uitools 2>&1"
+"%S%\dbgprint.exe" EXIT user32_winetest_uitools %ERRORLEVEL%
+"%S%\dbgprint.exe" END user32_winetest_uitools
+:after_user32_winetest
 
-popd
+rem Common control Wine tests (LISTVIEW_KillFocus)
+if not exist "%BIN%\comctl32_winetest.exe" goto after_comctl32_winetest
+"%S%\dbgprint.exe" BEGIN comctl32_winetest_listview
+"%S%\dbgprint.exe" --process "%BIN%\comctl32_winetest.exe listview 2>&1"
+"%S%\dbgprint.exe" EXIT comctl32_winetest_listview %ERRORLEVEL%
+"%S%\dbgprint.exe" END comctl32_winetest_listview
+:after_comctl32_winetest
+
+"%S%\dbgprint.exe" SUITE_END win32k
+"%S%\dbgprint.exe" BOOT_TESTS_DONE
