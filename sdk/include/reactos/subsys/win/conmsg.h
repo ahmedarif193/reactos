@@ -206,9 +206,73 @@ typedef struct _CONSRV_API_CONNECTINFO
     WCHAR  CurDir[MAX_PATH + 1];
 } CONSRV_API_CONNECTINFO, *PCONSRV_API_CONNECTINFO;
 
+typedef struct _CONSOLE_PROPERTIES32
+{
+    INT IconIndex;
+    ULONG hIcon;
+    ULONG hIconSm;
+    DWORD dwHotKey;
+    DWORD dwStartupFlags;
+    WORD wFillAttribute;
+    WORD wPopupFillAttribute;
+    WORD wShowWindow;
+    WORD wUnknown;
+    COORD dwScreenBufferSize;
+    COORD dwWindowSize;
+    COORD dwWindowOrigin;
+    DWORD nFont;
+    DWORD nInputBufferSize;
+    COORD dwFontSize;
+    UINT uFontFamily;
+    UINT uFontWeight;
+    WCHAR FaceName[LF_FACESIZE];
+    UINT uCursorSize;
+    BOOL bFullScreen;
+    BOOL bQuickEdit;
+    BOOL bInsertMode;
+    BOOL bAutoPosition;
+    UINT uHistoryBufferSize;
+    UINT uNumberOfHistoryBuffers;
+    BOOL bHistoryNoDup;
+    COLORREF ColorTable[16];
+    UINT uCodePage;
+} CONSOLE_PROPERTIES32, *PCONSOLE_PROPERTIES32;
+
+typedef struct _CONSOLE_START_INFO32
+{
+    ULONG ConsoleHandle;
+    ULONG InputWaitHandle;
+    ULONG InputHandle;
+    ULONG OutputHandle;
+    ULONG ErrorHandle;
+    ULONG InitEvents[MAX_INIT_EVENTS];
+    CONSOLE_PROPERTIES32 ConsoleProperties;
+} CONSOLE_START_INFO32, *PCONSOLE_START_INFO32;
+
+typedef struct _CONSRV_API_CONNECTINFO32
+{
+    CONSOLE_START_INFO32 ConsoleStartInfo;
+    BOOLEAN IsConsoleApp;
+    BOOLEAN IsWindowVisible;
+    ULONG CtrlRoutine;
+    ULONG PropRoutine;
+    ULONG ImeRoutine;
+    ULONG TitleLength;
+    WCHAR ConsoleTitle[MAX_PATH + 1];
+    ULONG DesktopLength;
+    ULONG Desktop;
+    ULONG AppNameLength;
+    WCHAR AppName[128];
+    ULONG CurDirLength;
+    WCHAR CurDir[MAX_PATH + 1];
+} CONSRV_API_CONNECTINFO32, *PCONSRV_API_CONNECTINFO32;
+
 #if defined(_M_IX86)
 C_ASSERT(sizeof(CONSRV_API_CONNECTINFO) == 0x638);
 #endif
+C_ASSERT(sizeof(CONSOLE_PROPERTIES32) == 0xE0);
+C_ASSERT(sizeof(CONSOLE_START_INFO32) == 0xFC);
+C_ASSERT(sizeof(CONSRV_API_CONNECTINFO32) == 0x638);
 
 typedef struct _CONSOLE_GETPROCESSLIST
 {

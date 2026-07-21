@@ -91,7 +91,8 @@ typedef enum _CSR_PROCESS_FLAGS
     CsrProcessCreateNewGroup       = 0x100,
     CsrProcessTerminated           = 0x200,
     CsrProcessLastThreadTerminated = 0x400,
-    CsrProcessIsConsoleApp         = 0x800
+    CsrProcessIsConsoleApp         = 0x800,
+    CsrProcessIsWow64              = 0x1000
 } CSR_PROCESS_FLAGS, *PCSR_PROCESS_FLAGS;
 
 #define CsrProcessPriorityFlags (CsrProcessNormalPriority | \
@@ -236,6 +237,7 @@ typedef struct _CSR_SERVER_DLL
     PCSR_DISCONNECT_CALLBACK DisconnectCallback;
     PCSR_HARDERROR_CALLBACK HardErrorCallback;
     PVOID SharedSection;
+    PVOID SharedSection32;
     PCSR_NEWPROCESS_CALLBACK NewProcessCallback;
     PCSR_SHUTDOWNPROCESS_CALLBACK ShutdownProcessCallback;
     ULONG Unknown2[3];

@@ -142,9 +142,51 @@ typedef struct _BASE_STATIC_SERVER_DATA
     ULONG TermsrvClientTimeZoneChangeNum;
 } BASE_STATIC_SERVER_DATA, *PBASE_STATIC_SERVER_DATA;
 
+typedef struct _BASE_SYSTEM_BASIC_INFORMATION32
+{
+    ULONG Reserved;
+    ULONG TimerResolution;
+    ULONG PageSize;
+    ULONG NumberOfPhysicalPages;
+    ULONG LowestPhysicalPageNumber;
+    ULONG HighestPhysicalPageNumber;
+    ULONG AllocationGranularity;
+    ULONG MinimumUserModeAddress;
+    ULONG MaximumUserModeAddress;
+    ULONG ActiveProcessorsAffinityMask;
+    CCHAR NumberOfProcessors;
+} BASE_SYSTEM_BASIC_INFORMATION32, *PBASE_SYSTEM_BASIC_INFORMATION32;
+
+typedef struct _BASE_STATIC_SERVER_DATA32
+{
+    UNICODE_STRING32 WindowsDirectory;
+    UNICODE_STRING32 WindowsSystemDirectory;
+    UNICODE_STRING32 NamedObjectDirectory;
+    USHORT WindowsMajorVersion;
+    USHORT WindowsMinorVersion;
+    USHORT BuildNumber;
+    USHORT CSDNumber;
+    USHORT RCNumber;
+    WCHAR CSDVersion[128];
+    BASE_SYSTEM_BASIC_INFORMATION32 SysInfo;
+    SYSTEM_TIMEOFDAY_INFORMATION TimeOfDay;
+    ULONG IniFileMapping;
+    NLS_USER_INFO NlsUserInfo;
+    BOOLEAN DefaultSeparateVDM;
+    BOOLEAN IsWowTaskReady;
+    UNICODE_STRING32 WindowsSys32x86Directory;
+    BOOLEAN fTermsrvAppInstallMode;
+    TIME_ZONE_INFORMATION tziTermsrvClientTimeZone;
+    KSYSTEM_TIME ktTermsrvClientBias;
+    ULONG TermsrvClientTimeZoneId;
+    BOOLEAN LUIDDeviceMapsEnabled;
+    ULONG TermsrvClientTimeZoneChangeNum;
+} BASE_STATIC_SERVER_DATA32, *PBASE_STATIC_SERVER_DATA32;
+
 #if defined(_M_IX86)
 C_ASSERT(sizeof(BASE_STATIC_SERVER_DATA) == 0x1AC8);
 #endif
+C_ASSERT(sizeof(BASE_STATIC_SERVER_DATA32) == 0x1AC8);
 
 #endif // _BASE_H
 
