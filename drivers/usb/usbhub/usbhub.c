@@ -5880,16 +5880,16 @@ USBH_CreateDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
         goto ErrorExit;
     }
 
-    Status = USBH_SyncResetPort(HubExtension, Port);
-
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT_ENUM("USBH_CreateDevice: USBH_SyncResetPort() failed - %lX\n", Status);
-        goto ErrorExit;
-    }
-
     if (IsWait)
     {
+        Status = USBH_SyncResetPort(HubExtension, Port);
+
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT_ENUM("USBH_CreateDevice: USBH_SyncResetPort() failed - %lX\n", Status);
+            goto ErrorExit;
+        }
+
         USBH_Wait(50);
     }
 
