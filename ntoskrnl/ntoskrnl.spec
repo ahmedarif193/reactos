@@ -3093,7 +3093,7 @@
 @ stub -arch=arm64 RtlQueryProcessPlaceholderCompatibilityMode
 @ stub -arch=arm64 RtlQueryPropertyStore
 @ stub -arch=arm64 RtlQueryRegistryValueWithFallback
-@ stub -arch=arm64 RtlQueryRegistryValuesEx
+@ stdcall -arch=arm64 RtlQueryRegistryValuesEx(long wstr ptr ptr ptr)
 @ stub -arch=arm64 RtlQueryThreadPlaceholderCompatibilityMode
 @ stub -arch=arm64 RtlQueryValidationRunlevel
 @ stub -arch=arm64 RtlRaiseCustomSystemEventTrigger
