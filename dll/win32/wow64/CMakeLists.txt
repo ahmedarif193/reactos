@@ -4,6 +4,7 @@ add_library(wow64 MODULE
     file.c
     process.c
     registry.c
+    rossyscall.c
     security.c
     sync.c
     syscall.c

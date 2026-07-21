@@ -38,6 +38,10 @@ NTSYSAPI DWORD WINAPI RtlRunOnceExecuteOnce(PRTL_RUN_ONCE, PRTL_RUN_ONCE_INIT_FN
 ALL_SYSCALLS32
 #undef SYSCALL_ENTRY
 
+#ifdef __REACTOS__
+#include "rossyscall.h"
+#endif
+
 extern void init_image_mapping( HMODULE module );
 extern void init_file_redirects(void);
 extern BOOL get_file_redirect( OBJECT_ATTRIBUTES *attr );
