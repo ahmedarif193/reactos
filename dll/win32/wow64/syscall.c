@@ -92,6 +92,19 @@ static const struct reactos_syscall reactos_syscalls[] =
 #undef SVC_
 };
 
+/* thunks for ReactOS syscalls that are not in Wine's ALL_SYSCALLS32 list */
+static const struct
+{
+    const char *name;
+    syscall_thunk thunk;
+}
+reactos_extra_syscalls[] =
+{
+#define ROS_SYSCALL_ENTRY(name) { #name, wow64_ ## name },
+    ALL_REACTOS_SYSCALLS
+#undef ROS_SYSCALL_ENTRY
+};
+
 static syscall_thunk reactos_syscall_thunks[ARRAY_SIZE(reactos_syscalls)];
 static BYTE reactos_syscall_args[ARRAY_SIZE(reactos_syscalls)];
 
@@ -170,7 +183,16 @@ static void init_reactos_syscall_table(void)
                 break;
             }
         }
-        if (j == ARRAY_SIZE(syscall_thunks)) ++missing;
+        if (j < ARRAY_SIZE(syscall_thunks)) continue;
+        for (j = 0; j < ARRAY_SIZE(reactos_extra_syscalls); ++j)
+        {
+            if (!strcmp(reactos_syscalls[i].name, reactos_extra_syscalls[j].name))
+            {
+                reactos_syscall_thunks[i] = reactos_extra_syscalls[j].thunk;
+                break;
+            }
+        }
+        if (j == ARRAY_SIZE(reactos_extra_syscalls)) ++missing;
     }
 
     syscall_tables[0].ServiceTable = (ULONG_PTR *)reactos_syscall_thunks;
@@ -227,6 +249,7 @@ void __cdecl DECLSPEC_NORETURN __wine_spec_unimplemented_stub( const char *modul
     for (;;) RtlRaiseException( &record );
 }
 
+#ifndef __REACTOS__
 static void DECLSPEC_NORETURN stub_syscall( const char *name )
 {
     __wine_spec_unimplemented_stub( "ntdll", name );
@@ -234,6 +257,7 @@ static void DECLSPEC_NORETURN stub_syscall( const char *name )
 
 #define SYSCALL_STUB(name) NTSTATUS WINAPI wow64_ ## name( UINT *args ) { stub_syscall( #name ); }
 ALL_SYSCALL_STUBS
+#endif  /* on ReactOS these five have real thunks in rossyscall.c */
 
 static EXCEPTION_RECORD *exception_record_32to64( const EXCEPTION_RECORD32 *rec32 )
 {
