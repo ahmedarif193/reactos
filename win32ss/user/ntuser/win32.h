@@ -280,6 +280,11 @@ typedef struct _PROCESSINFO
     DWORD dwLayout;
     DWORD dwRegisteredClasses;
 
+    /* Win8+ per-process pointer/DPI state (win32u parity) */
+    ULONG DpiContext;             /* NTUSER_DPI_* context; 0 = never set (reads as 0x6010) */
+    BOOLEAN MouseInPointerEnabled;
+    BOOLEAN MouseInPointerSet;
+
     /* ReactOS */
     FAST_MUTEX PrivateFontListLock;
     LIST_ENTRY PrivateFontListHead;
