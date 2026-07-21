@@ -1,0 +1,410 @@
+# ReactOS build option definitions for rosconfig (menuconfig).
+#
+# Parsed by sdk/tools/rosconfig/rosconfig_model.c. The options below mirror the
+# CMake cache options declared in sdk/cmake/config.cmake plus the target
+# selections consumed directly by configure.sh / configure.cmd ("meta"
+# options, which are never emitted to CMake).
+#
+# Syntax (kconfig-inspired, line based):
+#   source "relative/file.def"  include another definition file
+#   menu "Title" ... endmenu     nestable submenu; may have depends lines
+#   config KEY                   starts an option
+#     prompt "Text"              menu label
+#     type bool|choice|string    value kind (bool may also hold "auto")
+#     value VAL "Label"          one selectable value (choice only)
+#     default VAL                default value (bool: y / n / auto)
+#     depends KEY=VAL            only active when the dependency holds
+#     depends KEY!=VAL           (multiple "depends" lines are ANDed)
+#     meta                       consumed by the configure scripts only
+#     var NAME                   CMake variable name (default: KEY)
+#     cmaketype BOOL|STRING      CMake cache type (default by option type)
+#     help                       indented help text block
+#
+# Bool options defaulting to "auto" are tri-state: "auto" means "do not
+# emit to CMake", which keeps the conditional default logic from
+# sdk/cmake/config.cmake (e.g. DBG following CMAKE_BUILD_TYPE) intact.
+
+menu "Target platform"
+
+config ARCH
+    prompt "Target architecture"
+    type choice
+    value amd64 "x86-64 (default)"
+    value i386  "IA-32 / x86"
+    value arm64 "AArch64"
+    default amd64
+    meta
+    help
+      CPU architecture to build ReactOS for. This selects the RosBE
+      cross toolchain and the output directory name; it is passed to
+      CMake by the configure script as -DARCH. A command-line
+      -a/--arch (or /arch=) argument overrides this selection for
+      that configure run.
+
+config SARCH
+    prompt "Platform variant"
+    type choice
+    value pc   "Standard PC (BIOS)"
+    value pc98 "NEC PC-9800 series"
+    value xbox "Original Xbox"
+    default pc
+    depends ARCH=i386
+    help
+      Sub-architecture (platform) to build the i386 port for.
+      Non-PC variants change HAL, bootloader and drivers.
+
+config TOOLCHAIN
+    prompt "Compiler toolchain"
+    type choice
+    value clang "Clang/LLVM (llvm-mingw)"
+    value gcc   "GCC (mingw-gcc)"
+    value msvc  "MSVC (configure.cmd from a VS prompt only)"
+    default clang
+    meta
+    help
+      Which compiler the configure script selects. "clang" uses the
+      RosBE llvm-mingw toolchain, "gcc" the RosBE mingw-gcc one.
+      "msvc" is only honoured by configure.cmd when run from a
+      Visual Studio Developer Command Prompt; configure.sh refuses
+      it. Explicit --clang/--gcc (or /clang, /gcc) arguments
+      override this selection for that configure run.
+
+config BUILD_TYPE
+    prompt "Build type"
+    type choice
+    value Debug   "Debug (default)"
+    value Release "Release"
+    default Debug
+    meta
+    help
+      CMAKE_BUILD_TYPE for the configured tree. Also the default
+      feed for DBG/WITH_DEBUG_SYMBOLS when those are set to "auto".
+      A -r/--release (or /r) argument or an explicit
+      -DCMAKE_BUILD_TYPE overrides this selection for that run.
+
+source "rosconfig/profiles/profiles.def"
+
+endmenu
+
+menu "Modules"
+
+config ENABLE_ROSAPPS
+    prompt "ReactOS extra applications"
+    type bool
+    default n
+    help
+      Build the optional applications from modules/rosapps.
+
+config ENABLE_ROSTESTS
+    prompt "ReactOS test suite and RosAutoTest"
+    type bool
+    default n
+    depends BUILD_TYPE=Debug
+    help
+      Build and package the ReactOS test suite, including the
+      rosautotest runner. Tests are available only in Debug builds.
+
+config ENABLE_WALLPAPERS
+    prompt "ReactOS wallpapers"
+    type bool
+    default n
+    help
+      Integrate the optional wallpapers module into built images.
+
+endmenu
+
+menu "Code generation"
+
+menu "Target CPU code generation"
+
+    depends TOOLCHAIN!=msvc
+
+config OARCH_AMD64
+    prompt "CPU instruction family"
+    type choice
+    var OARCH
+    value k8        "AMD K8"
+    value opteron   "AMD Opteron"
+    value athlon64  "AMD Athlon 64 (default)"
+    value athlon-fx "AMD Athlon FX"
+    default athlon64
+    depends ARCH=amd64
+    help
+      Generate instructions for this CPU type (the OARCH variable).
+
+config OARCH_I386
+    prompt "CPU instruction family"
+    type choice
+    var OARCH
+    value pentium    "Pentium (default)"
+    value pentiumpro "Pentium Pro"
+    default pentium
+    depends ARCH=i386
+    help
+      Generate instructions for this CPU type (the OARCH variable).
+
+config OARCH_ARM64
+    prompt "CPU instruction family"
+    type choice
+    var OARCH
+    value armv8-a   "ARMv8.0-A (default)"
+    value armv8.1-a "ARMv8.1-A"
+    value armv8.2-a "ARMv8.2-A"
+    value armv8.3-a "ARMv8.3-A"
+    value armv8.4-a "ARMv8.4-A"
+    value armv8.5-a "ARMv8.5-A"
+    value armv8.6-a "ARMv8.6-A"
+    default armv8-a
+    depends ARCH=arm64
+    help
+      Generate instructions for this CPU type (the OARCH variable).
+      Do not bump this unless really needed: as of 2021 there are
+      still new designs using original A53 cores with ARMv8.0.
+
+config TUNE
+    prompt "Optimize for CPU"
+    type string
+    default generic
+    help
+      Which CPU ReactOS should be tuned for (the TUNE variable,
+      passed as -mtune / equivalent). "generic" fits all supported
+      architectures.
+
+endmenu
+
+menu "Debug compiler level"
+
+    depends BUILD_TYPE=Debug
+
+config OPTIMIZE
+    prompt "GCC/Clang compiler level"
+    type choice
+    value 0 "Off"
+    value 1 "Optimize for size (-Os) plus extras"
+    value 2 "Optimize for size (-Os)"
+    value 3 "Optimize the debugging experience (-Og)"
+    value 4 "Optimize (-O1)"
+    value 5 "Optimize more (-O2)"
+    value 6 "Optimize yet more (-O3)"
+    value 7 "Disregard strict standards compliance (-Ofast)"
+    default 4
+    depends TOOLCHAIN!=msvc
+    help
+      Custom compiler level used by GCC and Clang for non-Release builds.
+      ReactOS fixes Release builds at -O2, so this selector is deliberately
+      hidden in Release mode.
+
+config OPTIMIZE_MSVC
+    prompt "MSVC compiler level"
+    type choice
+    var OPTIMIZE
+    value 0 "No explicit optimization option"
+    value 1 "Minimize size (/O1)"
+    value 2 "Maximize speed (/O2)"
+    value 3 "Favor fast code (/Ot /Ox, no /GS)"
+    value 4 "Disable optimization (/Od /Ob0)"
+    value 5 "Favor small code (/Os /Ox, no /GS)"
+    default 4
+    depends TOOLCHAIN=msvc
+    help
+      Custom compiler level used by MSVC for non-Release builds. ReactOS
+      fixes Release builds at /Ox /Ob2 /Ot /Oy, so this selector is
+      deliberately hidden in Release mode.
+
+endmenu
+
+menu "Release optimizations"
+
+    depends BUILD_TYPE=Release
+    depends TOOLCHAIN!=msvc
+
+config LTCG
+    prompt "Link-time code generation (LTO)"
+    type bool
+    default n
+    help
+      Whether to build GCC or Clang Release images with link-time code
+      generation. ReactOS does not enable global LTCG through this option
+      for MSVC builds.
+
+endmenu
+
+menu "Toolchain support"
+
+    depends TOOLCHAIN!=msvc
+
+config STACK_PROTECTOR
+    prompt "GCC stack protector"
+    type bool
+    default n
+    depends TOOLCHAIN=gcc
+    help
+      Whether to enable the GCC stack checker while compiling.
+      Only meaningful for GCC builds.
+
+config USE_DUMMY_PSEH
+    prompt "Use the dummy PSEH implementation"
+    type bool
+    default n
+    help
+      Controls the PSEH implementation and exception-handling definitions
+      used by GCC and Clang. MSVC uses compiler-native SEH and ignores this
+      setting, so the entire submenu is hidden for the MSVC toolchain.
+
+endmenu
+
+endmenu
+
+menu "Debugging"
+
+config DBG
+    prompt "Compile for debugging"
+    type bool
+    default auto
+    help
+      Whether to compile for debugging (the DBG variable).
+      "auto" follows the build type: enabled for Debug, disabled
+      for Release, exactly like sdk/cmake/config.cmake.
+
+config WITH_DEBUG_SYMBOLS
+    prompt "Compile debug information"
+    type bool
+    default auto
+    depends TOOLCHAIN!=msvc
+    help
+      Whether to compile debug information. "auto" enables it for
+      Debug/RelWithDebInfo builds or when SEPARATE_DBG is on.
+
+config SEPARATE_DBG
+    prompt "Separate debug symbol files"
+    type bool
+    default y
+    depends TOOLCHAIN!=msvc
+    help
+      Whether to generate separate debug symbol files (instead of
+      keeping symbols inside the binaries).
+
+config KDBG
+    prompt "Integrated kernel debugger (KDBG)"
+    type bool
+    default auto
+    help
+      Whether to compile in the integrated kernel debugger.
+      "auto" enables it for DBG builds with GCC/Clang and disables
+      it for MSVC, like sdk/cmake/config.cmake.
+
+config GDB
+    prompt "Use KDGDB.DLL for GDB remote debugging"
+    type bool
+    default n
+    help
+      Whether to use KDGDB.DLL instead of KDCOM.DLL by default, for
+      debugging with GDB. Mainly used for cloud-based ReactOS
+      development with Gitpod and Docker. If you don't use GDB,
+      don't enable this.
+
+config _WINKD_
+    prompt "KD protocol (WinDbg)"
+    type bool
+    default auto
+    help
+      Whether to compile with the KD protocol for WinDbg.
+      "auto" enables it for MSVC debug builds only, like
+      sdk/cmake/config.cmake.
+
+config RUNTIME_CHECKS
+    prompt "MSVC runtime checks"
+    type bool
+    default auto
+    depends TOOLCHAIN=msvc
+    depends BUILD_TYPE=Debug
+    help
+      Whether to enable runtime checks (/RTC) on MSVC. "auto"
+      enables them for Debug builds; they are incompatible with
+      compiler optimizations.
+
+endmenu
+
+menu "Static analysis (MSVC)"
+
+    depends TOOLCHAIN=msvc
+
+config _PREFAST_
+    prompt "PREFAST analysis"
+    type bool
+    default n
+    help
+      Whether to enable PREFAST while compiling (MSVC only).
+
+config _VS_ANALYZE_
+    prompt "Visual Studio static analysis"
+    type bool
+    default n
+    help
+      Whether to enable static analysis while compiling (MSVC only).
+
+endmenu
+
+menu "Components and features"
+
+config REACTOS_TARGET_NT
+    prompt "Target NT version"
+    type choice
+    value 0x502 "NT 5.2 (Windows Server 2003)"
+    value 0x600 "NT 6.0 (Windows Vista)"
+    value 0x601 "NT 6.1 (Windows 7)"
+    value 0x602 "NT 6.2 (Windows 8)"
+    value 0x603 "NT 6.3 (Windows 8.1)"
+    value 0xA00 "NT 10.0 (Windows 10)"
+    default 0xA00
+    help
+      The NT version ReactOS reports and targets
+      (REACTOS_TARGET_NT). User-mode DLL exports follow this
+      version through DLL_EXPORT_VERSION.
+
+config ISAPNP_ENABLE
+    prompt "ISA Plug-and-Play support"
+    type bool
+    default auto
+    depends ARCH=i386
+    depends SARCH!=xbox
+    help
+      Whether to enable ISA PnP support. "auto" enables it on i386
+      except for the Xbox platform variant, like
+      sdk/cmake/config.cmake.
+
+config ENABLE_FEX_ARM64EC
+    prompt "FEX ARM64EC emulator (run AMD64 binaries)"
+    type bool
+    default n
+    depends ARCH=arm64
+    help
+      Whether to build the optional FEX ARM64EC emulator for
+      running AMD64 binaries on ARM64. Enabling this makes
+      configure.sh sync and patch the (large) FEX submodule.
+
+config ENABLE_WOW64
+    prompt "WoW64 subsystem (run IA-32 binaries)"
+    type bool
+    default n
+    depends ARCH=amd64
+    help
+      Whether to build the native WoW64 support DLLs and the supporting
+      ntdll and kernel paths needed to run 32-bit applications on amd64.
+
+config GENERATE_DEPENDENCY_GRAPH
+    prompt "GraphML DLL dependency graph"
+    type bool
+    default n
+    help
+      Whether to create a GraphML dependency graph of the DLLs.
+
+config ENABLE_CCACHE
+    prompt "Use ccache"
+    type bool
+    default n
+    help
+      Whether to wrap the compiler with ccache. Requires ccache to
+      be installed on the host.
+
+endmenu
