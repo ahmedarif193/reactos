@@ -2702,6 +2702,58 @@ NtUserModifyUserStartupInfoFlags(
     DWORD Unknown0,
     DWORD Unknown1);
 
+/* Win8+ services surfaced through win32u (Wine pair parity) */
+
+LONG
+NTAPI
+NtUserDisplayConfigGetDeviceInfo(
+    _Inout_ PVOID pPacket);
+
+BOOL
+NTAPI
+NtUserEnableMouseInPointer(
+    _In_ BOOL fEnable);
+
+BOOL
+NTAPI
+NtUserGetPointerDeviceRects(
+    _In_opt_ HANDLE hDevice,
+    _Out_ PRECT prcPointerDevice,
+    _Out_ PRECT prcDisplay);
+
+BOOL
+NTAPI
+NtUserGetPointerInfoList(
+    _In_ ULONG PointerId,
+    _In_ ULONG PointerType,
+    _In_ ULONG_PTR SourceDevice,
+    _In_ ULONG_PTR hProcess,
+    _In_ ULONG_PTR EntrySize,
+    _Inout_ PULONG EntriesCount,
+    _Inout_ PULONG PointerCount,
+    _Out_opt_ PVOID PointerInfo);
+
+ULONG
+NTAPI
+NtUserGetProcessDpiAwarenessContext(
+    _In_ HANDLE hProcess);
+
+HANDLE
+NTAPI
+NtUserGetProp(
+    _In_ HWND hWnd,
+    _In_ ULONG_PTR StringOrAtom);
+
+BOOL
+NTAPI
+NtUserIsMouseInPointerEnabled(VOID);
+
+ULONG
+NTAPI
+NtUserSetProcessDpiAwarenessContext(
+    _In_ ULONG DpiContext,
+    _In_ ULONG Flags);
+
 BOOL
 NTAPI
 NtUserMoveWindow(

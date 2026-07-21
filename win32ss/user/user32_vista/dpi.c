@@ -9,14 +9,156 @@
 #define _INC_WINDOWS
 #define COM_NO_WINDOWS_H
 #include <windef.h>
+#include <winbase.h>
 #include <wingdi.h>
 #include <winuser.h>
 
 HDC APIENTRY
 NtUserGetDC(HWND hWnd);
 
+ULONG APIENTRY
+NtUserGetProcessDpiAwarenessContext(HANDLE hProcess);
+
 #define NDEBUG
 #include <debug.h>
+
+/* NTUSER DPI context encoding, shared with the Wine win32u pair:
+   bits 0-3 awareness, 4-7 version, 8-16 DPI, high bits flags. */
+#define NTUSER_DPI_CONTEXT_GET_AWARENESS(ctx)  ((ctx) & 0x0f)
+#define NTUSER_DPI_CONTEXT_GET_VERSION(ctx)    (((ctx) & 0xf0) >> 4)
+#define NTUSER_DPI_CONTEXT_GET_DPI(ctx)        (((ctx) & 0x1ff00) >> 8)
+#define NTUSER_DPI_CONTEXT_GET_FLAGS(ctx)      ((ctx) & 0xfffe0000)
+#define NTUSER_DPI_CONTEXT_FLAG_GDISCALED      0x40000000
+#define NTUSER_DPI_CONTEXT_FLAG_PROCESS        0x80000000
+#define NTUSER_DPI_CONTEXT_FLAG_VALID_MASK \
+    (NTUSER_DPI_CONTEXT_FLAG_PROCESS | NTUSER_DPI_CONTEXT_FLAG_GDISCALED)
+
+#define NTUSER_DPI_UNAWARE              0x00006010
+#define NTUSER_DPI_UNAWARE_GDISCALED    0x40006010
+#define NTUSER_DPI_PER_MONITOR_AWARE    0x00000012
+#define NTUSER_DPI_PER_MONITOR_AWARE_V2 0x00000022
+
+static DWORD ThreadDpiContextTlsIndex = TLS_OUT_OF_INDEXES;
+
+static DWORD
+GetThreadDpiContextTlsIndex(VOID)
+{
+    if (ThreadDpiContextTlsIndex == TLS_OUT_OF_INDEXES)
+    {
+        DWORD Index = TlsAlloc();
+        if (Index != TLS_OUT_OF_INDEXES &&
+            InterlockedCompareExchange((LONG volatile *)&ThreadDpiContextTlsIndex,
+                                       (LONG)Index,
+                                       (LONG)TLS_OUT_OF_INDEXES) != (LONG)TLS_OUT_OF_INDEXES)
+        {
+            /* Another thread won the race */
+            TlsFree(Index);
+        }
+    }
+    return ThreadDpiContextTlsIndex;
+}
+
+/* Map the public abstract handles onto concrete NTUSER context values */
+static UINT
+GetNtUserDpiContext(
+    _In_ DPI_AWARENESS_CONTEXT dpiContext,
+    _In_ UINT SystemDpi)
+{
+    switch ((ULONG_PTR)dpiContext)
+    {
+        case (ULONG_PTR)DPI_AWARENESS_CONTEXT_UNAWARE:
+            return NTUSER_DPI_UNAWARE;
+        case (ULONG_PTR)DPI_AWARENESS_CONTEXT_SYSTEM_AWARE:
+            return 0x11 | (SystemDpi << 8);
+        case (ULONG_PTR)DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE:
+            return NTUSER_DPI_PER_MONITOR_AWARE;
+        case (ULONG_PTR)DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2:
+            return NTUSER_DPI_PER_MONITOR_AWARE_V2;
+        case (ULONG_PTR)DPI_AWARENESS_CONTEXT_UNAWARE_GDISCALED:
+            return NTUSER_DPI_UNAWARE_GDISCALED;
+    }
+    return (UINT)(ULONG_PTR)dpiContext;
+}
+
+static BOOL
+IsValidNtUserDpiContext(
+    _In_ UINT Context,
+    _In_ UINT SystemDpi)
+{
+    switch (NTUSER_DPI_CONTEXT_GET_AWARENESS(Context))
+    {
+        case DPI_AWARENESS_UNAWARE:
+            if (NTUSER_DPI_CONTEXT_GET_FLAGS(Context) & ~NTUSER_DPI_CONTEXT_FLAG_VALID_MASK) return FALSE;
+            if (NTUSER_DPI_CONTEXT_GET_VERSION(Context) != 1) return FALSE;
+            return NTUSER_DPI_CONTEXT_GET_DPI(Context) == 96;
+
+        case DPI_AWARENESS_SYSTEM_AWARE:
+            if (NTUSER_DPI_CONTEXT_GET_FLAGS(Context) & ~NTUSER_DPI_CONTEXT_FLAG_VALID_MASK) return FALSE;
+            if (NTUSER_DPI_CONTEXT_GET_FLAGS(Context) & NTUSER_DPI_CONTEXT_FLAG_GDISCALED) return FALSE;
+            if (NTUSER_DPI_CONTEXT_GET_VERSION(Context) != 1) return FALSE;
+            return !SystemDpi || NTUSER_DPI_CONTEXT_GET_DPI(Context) == SystemDpi;
+
+        case DPI_AWARENESS_PER_MONITOR_AWARE:
+            if (NTUSER_DPI_CONTEXT_GET_FLAGS(Context) & ~NTUSER_DPI_CONTEXT_FLAG_VALID_MASK) return FALSE;
+            if (NTUSER_DPI_CONTEXT_GET_FLAGS(Context) & NTUSER_DPI_CONTEXT_FLAG_GDISCALED) return FALSE;
+            if (NTUSER_DPI_CONTEXT_GET_VERSION(Context) != 1 &&
+                NTUSER_DPI_CONTEXT_GET_VERSION(Context) != 2) return FALSE;
+            return NTUSER_DPI_CONTEXT_GET_DPI(Context) == 0;
+    }
+    return FALSE;
+}
+
+static UINT
+GetThreadNtUserDpiContext(VOID)
+{
+    DWORD Index = GetThreadDpiContextTlsIndex();
+    UINT Context = 0;
+
+    if (Index != TLS_OUT_OF_INDEXES)
+        Context = (UINT)(ULONG_PTR)TlsGetValue(Index);
+    if (!Context)
+        Context = NtUserGetProcessDpiAwarenessContext(GetCurrentProcess()) |
+                  NTUSER_DPI_CONTEXT_FLAG_PROCESS;
+    return Context;
+}
+
+DPI_AWARENESS_CONTEXT
+WINAPI
+GetThreadDpiAwarenessContext(VOID)
+{
+    return (DPI_AWARENESS_CONTEXT)(ULONG_PTR)GetThreadNtUserDpiContext();
+}
+
+DPI_AWARENESS_CONTEXT
+WINAPI
+SetThreadDpiAwarenessContext(
+    _In_ DPI_AWARENESS_CONTEXT dpiContext)
+{
+    UINT SystemDpi = GetDpiForSystem();
+    UINT Context = GetNtUserDpiContext(dpiContext, SystemDpi);
+    DWORD Index;
+    UINT Prev;
+
+    if (!IsValidNtUserDpiContext(Context, SystemDpi))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+
+    Index = GetThreadDpiContextTlsIndex();
+    if (Index == TLS_OUT_OF_INDEXES)
+        return 0;
+
+    Prev = GetThreadNtUserDpiContext();
+
+    /* Setting an inherit-from-process context clears the thread override */
+    if (NTUSER_DPI_CONTEXT_GET_FLAGS(Context) & NTUSER_DPI_CONTEXT_FLAG_PROCESS)
+        TlsSetValue(Index, NULL);
+    else
+        TlsSetValue(Index, (PVOID)(ULONG_PTR)Context);
+
+    return (DPI_AWARENESS_CONTEXT)(ULONG_PTR)Prev;
+}
 
 /*
  * @stub

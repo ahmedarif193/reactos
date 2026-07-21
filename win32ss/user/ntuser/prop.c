@@ -271,4 +271,63 @@ Exit:
     return Ret;
 }
 
+HANDLE
+APIENTRY
+NtUserGetProp(
+    _In_ HWND hWnd,
+    _In_ ULONG_PTR StringOrAtom)
+{
+    PWND Window;
+    ATOM Atom = 0;
+    HANDLE Ret = NULL;
+
+    TRACE("Enter NtUserGetProp\n");
+    UserEnterShared();
+
+    if (StringOrAtom > 0xffff)
+    {
+        /* Resolve the property name against the USER atom table */
+        WCHAR Buffer[256];
+        ULONG i;
+
+        _SEH2_TRY
+        {
+            LPCWSTR Str = (LPCWSTR)StringOrAtom;
+
+            ProbeForRead(Str, sizeof(WCHAR), 1);
+            for (i = 0; i < RTL_NUMBER_OF(Buffer) - 1; i++)
+            {
+                Buffer[i] = Str[i];
+                if (!Buffer[i])
+                    break;
+            }
+            Buffer[RTL_NUMBER_OF(Buffer) - 1] = UNICODE_NULL;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Buffer[0] = UNICODE_NULL;
+        }
+        _SEH2_END;
+
+        if (Buffer[0])
+            RtlLookupAtomInAtomTable(gAtomTable, Buffer, &Atom);
+    }
+    else
+    {
+        Atom = (ATOM)StringOrAtom;
+    }
+
+    if (Atom)
+    {
+        Window = UserGetWindowObject(hWnd);
+        if (Window)
+            Ret = UserGetProp(Window, Atom, FALSE);
+    }
+
+    TRACE("Leave NtUserGetProp, ret=%p\n", Ret);
+    UserLeave();
+
+    return Ret;
+}
+
 /* EOF */

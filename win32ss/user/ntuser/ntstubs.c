@@ -978,4 +978,246 @@ NtDxEngGetRedirectionBitmap(
     return 0;
 }
 
+/*
+ * Win8+ services surfaced through win32u. Semantics follow the Wine win32u
+ * pair; parity is validated by the synced win32u winetest.
+ */
+
+/* NTUSER_DPI_* awareness context values (low word: awareness, bits 8-15: DPI) */
+#define NTUSER_DPI_UNAWARE              0x00006010
+#define NTUSER_DPI_SYSTEM_AWARE         0x00000011
+#define NTUSER_DPI_PER_MONITOR_AWARE    0x00000012
+#define NTUSER_DPI_PER_MONITOR_AWARE_V2 0x00000022
+#define NTUSER_DPI_UNAWARE_GDISCALED    0x40006010
+
+LONG
+APIENTRY
+NtUserDisplayConfigGetDeviceInfo(
+    _Inout_ PVOID pPacket)
+{
+    DISPLAYCONFIG_DEVICE_INFO_HEADER Header;
+
+    _SEH2_TRY
+    {
+        ProbeForRead(pPacket, sizeof(Header), sizeof(ULONG));
+        RtlCopyMemory(&Header, pPacket, sizeof(Header));
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
+    }
+    _SEH2_END;
+
+    /* Every request type carries a payload beyond the bare header */
+    if (Header.size <= sizeof(Header))
+        return STATUS_INVALID_PARAMETER;
+
+    /* No display configuration topology support yet */
+    return STATUS_NOT_SUPPORTED;
+}
+
+BOOL
+APIENTRY
+NtUserEnableMouseInPointer(
+    _In_ BOOL fEnable)
+{
+    PPROCESSINFO ppi;
+    BOOL Ret = FALSE;
+
+    UserEnterExclusive();
+
+    ppi = PsGetCurrentProcessWin32Process();
+    if (ppi->MouseInPointerSet && ppi->MouseInPointerEnabled != !!fEnable)
+    {
+        /* The choice is process-lifetime one-shot, like on Windows */
+        EngSetLastError(ERROR_ACCESS_DENIED);
+    }
+    else
+    {
+        ppi->MouseInPointerEnabled = !!fEnable;
+        ppi->MouseInPointerSet = TRUE;
+        Ret = TRUE;
+    }
+
+    UserLeave();
+    return Ret;
+}
+
+BOOL
+APIENTRY
+NtUserIsMouseInPointerEnabled(VOID)
+{
+    PPROCESSINFO ppi;
+    BOOL Ret;
+
+    UserEnterShared();
+    ppi = PsGetCurrentProcessWin32Process();
+    Ret = ppi->MouseInPointerEnabled;
+    UserLeave();
+
+    return Ret;
+}
+
+BOOL
+APIENTRY
+NtUserGetPointerDeviceRects(
+    _In_opt_ HANDLE hDevice,
+    _Out_ PRECT prcPointerDevice,
+    _Out_ PRECT prcDisplay)
+{
+    RECT rcScreen;
+
+    UNREFERENCED_PARAMETER(hDevice);
+
+    UserEnterShared();
+    rcScreen.left = UserGetSystemMetrics(SM_XVIRTUALSCREEN);
+    rcScreen.top = UserGetSystemMetrics(SM_YVIRTUALSCREEN);
+    rcScreen.right = rcScreen.left + UserGetSystemMetrics(SM_CXVIRTUALSCREEN);
+    rcScreen.bottom = rcScreen.top + UserGetSystemMetrics(SM_CYVIRTUALSCREEN);
+    UserLeave();
+
+    _SEH2_TRY
+    {
+        ProbeForWrite(prcPointerDevice, sizeof(RECT), sizeof(ULONG));
+        *prcPointerDevice = rcScreen;
+        ProbeForWrite(prcDisplay, sizeof(RECT), sizeof(ULONG));
+        *prcDisplay = rcScreen;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        EngSetLastError(ERROR_NOACCESS);
+        _SEH2_YIELD(return FALSE);
+    }
+    _SEH2_END;
+
+    return TRUE;
+}
+
+BOOL
+APIENTRY
+NtUserGetPointerInfoList(
+    _In_ ULONG PointerId,
+    _In_ ULONG PointerType,
+    _In_ ULONG_PTR SourceDevice,
+    _In_ ULONG_PTR hProcess,
+    _In_ ULONG_PTR EntrySize,
+    _Inout_ PULONG EntriesCount,
+    _Inout_ PULONG PointerCount,
+    _Out_opt_ PVOID PointerInfo)
+{
+    UNREFERENCED_PARAMETER(PointerId);
+    UNREFERENCED_PARAMETER(PointerType);
+    UNREFERENCED_PARAMETER(SourceDevice);
+    UNREFERENCED_PARAMETER(hProcess);
+
+    _SEH2_TRY
+    {
+        volatile ULONG *Count;
+
+        ProbeForWrite(EntriesCount, sizeof(ULONG), 1);
+        Count = (volatile ULONG *)EntriesCount;
+        *Count = *Count;
+        ProbeForWrite(PointerCount, sizeof(ULONG), 1);
+        Count = (volatile ULONG *)PointerCount;
+        *Count = *Count;
+        if (PointerInfo && EntrySize)
+            ProbeForWrite(PointerInfo, EntrySize, 1);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        EngSetLastError(ERROR_NOACCESS);
+        _SEH2_YIELD(return FALSE);
+    }
+    _SEH2_END;
+
+    /* No pointer input frame history is recorded yet */
+    EngSetLastError(ERROR_NO_DATA);
+    return FALSE;
+}
+
+ULONG
+APIENTRY
+NtUserGetProcessDpiAwarenessContext(
+    _In_ HANDLE hProcess)
+{
+    ULONG Ret = NTUSER_DPI_UNAWARE;
+    PPROCESSINFO ppi;
+
+    UserEnterShared();
+
+    if (hProcess == NtCurrentProcess())
+    {
+        ppi = PsGetCurrentProcessWin32Process();
+        if (ppi && ppi->DpiContext)
+            Ret = ppi->DpiContext;
+    }
+    else
+    {
+        PEPROCESS Process;
+        NTSTATUS Status;
+
+        Status = ObReferenceObjectByHandle(hProcess,
+                                           PROCESS_QUERY_INFORMATION,
+                                           *PsProcessType,
+                                           UserMode,
+                                           (PVOID *)&Process,
+                                           NULL);
+        if (NT_SUCCESS(Status))
+        {
+            ppi = PsGetProcessWin32Process(Process);
+            if (ppi && ppi->DpiContext)
+                Ret = ppi->DpiContext;
+            ObDereferenceObject(Process);
+        }
+        else
+        {
+            EngSetLastError(ERROR_INVALID_HANDLE);
+            Ret = 0;
+        }
+    }
+
+    UserLeave();
+    return Ret;
+}
+
+ULONG
+APIENTRY
+NtUserSetProcessDpiAwarenessContext(
+    _In_ ULONG DpiContext,
+    _In_ ULONG Flags)
+{
+    PPROCESSINFO ppi;
+    ULONG SystemDpi;
+    ULONG Ret = 0;
+
+    UNREFERENCED_PARAMETER(Flags);
+
+    UserEnterExclusive();
+
+    SystemDpi = gpsi ? gpsi->dmLogPixels : 96;
+
+    /* Only concrete NTUSER contexts are accepted, never the abstract handles */
+    if (DpiContext != NTUSER_DPI_UNAWARE &&
+        DpiContext != NTUSER_DPI_UNAWARE_GDISCALED &&
+        DpiContext != NTUSER_DPI_PER_MONITOR_AWARE &&
+        DpiContext != NTUSER_DPI_PER_MONITOR_AWARE_V2 &&
+        DpiContext != (NTUSER_DPI_SYSTEM_AWARE | (SystemDpi << 8)))
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+    }
+    else
+    {
+        ppi = PsGetCurrentProcessWin32Process();
+        if (!ppi->DpiContext)
+        {
+            /* Process-lifetime one-shot, like on Windows */
+            ppi->DpiContext = DpiContext;
+            Ret = 1;
+        }
+    }
+
+    UserLeave();
+    return Ret;
+}
+
 /* EOF */
