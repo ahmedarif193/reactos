@@ -237,6 +237,13 @@ PsGetProcessWow64Process(
 );
 
 NTKERNELAPI
+struct _PEB32 *
+NTAPI
+PsGetProcessPeb32(
+    _In_ PEPROCESS Process
+);
+
+NTKERNELAPI
 PVOID
 NTAPI
 PsGetCurrentProcessWow64Process(
@@ -393,9 +400,44 @@ NtAlertThreadByThreadId(
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
+NtAlertMultipleThreadByThreadId(
+    _In_reads_(ThreadCount) PHANDLE ThreadIds,
+    _In_ ULONG ThreadCount,
+    _Reserved_ PVOID Reserved1,
+    _Reserved_ PVOID Reserved2
+);
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
 NtWaitForAlertByThreadId(
     _In_ PVOID Address,
     _In_opt_ PLARGE_INTEGER Timeout
+);
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtQueueApcThreadEx(
+    _In_ HANDLE ThreadHandle,
+    _In_opt_ HANDLE UserApcReserveHandle,
+    _In_ PKNORMAL_ROUTINE ApcRoutine,
+    _In_opt_ PVOID NormalContext,
+    _In_opt_ PVOID SystemArgument1,
+    _In_opt_ PVOID SystemArgument2
+);
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtQueueApcThreadEx2(
+    _In_ HANDLE ThreadHandle,
+    _In_opt_ HANDLE UserApcReserveHandle,
+    _In_ ULONG QueueUserApcFlags,
+    _In_ PKNORMAL_ROUTINE ApcRoutine,
+    _In_opt_ PVOID NormalContext,
+    _In_opt_ PVOID SystemArgument1,
+    _In_opt_ PVOID SystemArgument2
 );
 
 NTSYSCALLAPI

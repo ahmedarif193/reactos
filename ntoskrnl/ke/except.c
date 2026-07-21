@@ -213,6 +213,42 @@ NtRaiseException(
 
 NTSTATUS
 NTAPI
+NtContinueEx(
+    _In_ PCONTEXT Context,
+    _In_opt_ PKCONTINUE_ARGUMENT ContinueArgument)
+{
+    KCONTINUE_ARGUMENT CapturedArgument;
+    BOOLEAN TestAlert;
+
+    if ((ULONG_PTR)ContinueArgument <= 0xff)
+    {
+        TestAlert = ContinueArgument != NULL;
+    }
+    else
+    {
+        _SEH2_TRY
+        {
+            if (ExGetPreviousMode() != KernelMode)
+                ProbeForRead(ContinueArgument, sizeof(*ContinueArgument), TYPE_ALIGNMENT(KCONTINUE_ARGUMENT));
+            CapturedArgument = *ContinueArgument;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+
+        if (CapturedArgument.ContinueType >= KCONTINUE_LAST ||
+            (CapturedArgument.ContinueFlags & ~(KCONTINUE_FLAG_TEST_ALERT | KCONTINUE_FLAG_DELIVER_APC)))
+            return STATUS_INVALID_PARAMETER;
+        TestAlert = !!(CapturedArgument.ContinueFlags & (KCONTINUE_FLAG_TEST_ALERT | KCONTINUE_FLAG_DELIVER_APC));
+    }
+
+    return NtContinue(Context, TestAlert);
+}
+
+NTSTATUS
+NTAPI
 NtContinue(
     _In_ PCONTEXT Context,
     _In_ BOOLEAN TestAlert)

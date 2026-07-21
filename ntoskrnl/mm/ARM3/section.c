@@ -3525,6 +3525,7 @@ NtMapViewOfSection(
     NTSTATUS Status;
     ACCESS_MASK DesiredAccess;
     ULONG ProtectionMask;
+    BOOLEAN ZeroBitsMask = FALSE;
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
 #if defined(_M_IX86) || defined(_M_AMD64)
     static const ULONG ValidAllocationType = (MEM_TOP_DOWN | MEM_LARGE_PAGES |
@@ -3613,24 +3614,43 @@ NtMapViewOfSection(
         {
             ZeroBits = 0;
         }
+#ifdef _WIN64
+        else if (ZeroBits >= 32)
+        {
+            ULONG_PTR Mask = ZeroBits;
+
+            ZeroBitsMask = TRUE;
+            if (SafeBaseAddress && ((ULONG_PTR)SafeBaseAddress & ~Mask))
+                return STATUS_INVALID_PARAMETER_4;
+            if (SafeBaseAddress && (((ULONG_PTR)SafeBaseAddress + SafeViewSize) & ~Mask))
+                return STATUS_INVALID_PARAMETER_4;
+
+            ZeroBits = 0;
+            while (!(Mask & ((ULONG_PTR)1 << (sizeof(Mask) * 8 - 1))))
+            {
+                ++ZeroBits;
+                Mask <<= 1;
+            }
+        }
+#endif
         else if (ZeroBits > 21)
         {
             DPRINT1("Invalid zero bits\n");
             return STATUS_INVALID_PARAMETER_4;
         }
-        else if ((SafeBaseAddress == NULL) && (ZeroBits >= 20))
+        else if (!ZeroBitsMask && (SafeBaseAddress == NULL) && (ZeroBits >= 20))
         {
             return STATUS_NO_MEMORY;
         }
 
-        if (ZeroBits &&
+        if (!ZeroBitsMask && ZeroBits &&
             ((((ULONG_PTR)SafeBaseAddress << ZeroBits) >> ZeroBits) != (ULONG_PTR)SafeBaseAddress))
         {
             DPRINT1("Invalid zero bits\n");
             return STATUS_INVALID_PARAMETER_4;
         }
 
-        if (ZeroBits &&
+        if (!ZeroBitsMask && ZeroBits &&
             (((((ULONG_PTR)SafeBaseAddress + SafeViewSize) << ZeroBits) >> ZeroBits) != ((ULONG_PTR)SafeBaseAddress + SafeViewSize)))
         {
             DPRINT1("Invalid zero bits\n");

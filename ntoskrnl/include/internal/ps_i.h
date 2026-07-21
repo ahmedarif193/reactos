@@ -572,7 +572,12 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
     /* ThreadCSwitchPmu */
     IQS_NONE,
     /* ThreadWow64Context */
-    IQS_NONE,
+    IQS_SAME
+    (
+        WOW64_CONTEXT,
+        ULONG,
+        ICIF_QUERY | ICIF_SET
+    ),
     /* ThreadGroupInformation */
     IQS_SAME
     (

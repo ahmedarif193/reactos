@@ -10,6 +10,7 @@
 /* INCLUDES ******************************************************************/
 
 #include <ntoskrnl.h>
+#include <reactos/wow64shared.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -1144,6 +1145,16 @@ PsGetProcessWow64Process(PEPROCESS Process)
 /*
  * @implemented
  */
+struct _PEB32 *
+NTAPI
+PsGetProcessPeb32(PEPROCESS Process)
+{
+    return Process->Wow64Process ? Process->Wow64Process->Peb : NULL;
+}
+
+/*
+ * @implemented
+ */
 PVOID
 NTAPI
 PsGetCurrentProcessWow64Process(VOID)
@@ -1510,6 +1521,245 @@ NtCreateProcess(OUT PHANDLE ProcessHandle,
 }
 
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
+static NTSTATUS
+PspInitializeWow64Process(IN PEPROCESS Process,
+                          IN PSECTION_IMAGE_INFORMATION ImageInformation)
+{
+#ifdef _M_AMD64
+    PWOW64_PROCESS Wow64Process;
+    INITIAL_PEB InitialPeb;
+    NTSTATUS Status;
+
+    if (Process->Wow64Process) return STATUS_SUCCESS;
+    if ((ULONG_PTR)Process->SectionBaseAddress > MAXULONG) return STATUS_INVALID_IMAGE_FORMAT;
+
+    Wow64Process = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Wow64Process), TAG_WOW64_PROCESS);
+    if (!Wow64Process) return STATUS_INSUFFICIENT_RESOURCES;
+
+    RtlZeroMemory(Wow64Process, sizeof(*Wow64Process));
+    RtlZeroMemory(&InitialPeb, sizeof(InitialPeb));
+    InitialPeb.Mutant = (HANDLE)-1;
+    Status = MmCreatePeb32(Process, &InitialPeb, ImageInformation, &Wow64Process->Peb);
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePoolWithTag(Wow64Process, TAG_WOW64_PROCESS);
+        return Status;
+    }
+
+    Wow64Process->Machine = ImageInformation->Machine;
+    Process->Wow64Process = Wow64Process;
+    return STATUS_SUCCESS;
+#else
+    UNREFERENCED_PARAMETER(Process);
+    UNREFERENCED_PARAMETER(ImageInformation);
+    return STATUS_NOT_SUPPORTED;
+#endif
+}
+
+static NTSTATUS
+PspAllocateUserStack(IN HANDLE ProcessHandle,
+                     IN ULONG_PTR ZeroBits,
+                     IN SIZE_T StackReserve,
+                     IN SIZE_T StackCommit,
+                     IN BOOLEAN UseGuardPage,
+                     OUT PINITIAL_TEB InitialTeb)
+{
+    PVOID StackAllocation = NULL;
+    PVOID CommitBase;
+    PVOID GuardBase;
+    SIZE_T ReserveSize;
+    SIZE_T CommitSize;
+    SIZE_T GuardSize = PAGE_SIZE;
+    SIZE_T FreeSize = 0;
+    ULONG_PTR StackTop;
+    ULONG OldProtect;
+    NTSTATUS Status;
+    BOOLEAN HasGuardPage;
+
+    if (!StackReserve) StackReserve = 0x100000;
+    if (!StackCommit) StackCommit = PAGE_SIZE;
+    if (StackCommit > StackReserve || (UseGuardPage && StackCommit == StackReserve)) StackReserve = ROUND_UP(StackCommit, 1024 * 1024);
+
+    StackCommit = ROUND_UP(StackCommit, PAGE_SIZE);
+    StackReserve = ROUND_UP(StackReserve, MM_VIRTMEM_GRANULARITY);
+    ReserveSize = StackReserve;
+    Status = ZwAllocateVirtualMemory(ProcessHandle, &StackAllocation, ZeroBits, &ReserveSize, MEM_RESERVE, PAGE_READWRITE);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    StackTop = (ULONG_PTR)StackAllocation + StackReserve;
+    HasGuardPage = UseGuardPage && StackReserve >= StackCommit + PAGE_SIZE;
+    CommitSize = StackCommit + (HasGuardPage ? PAGE_SIZE : 0);
+    CommitBase = (PVOID)(StackTop - CommitSize);
+    Status = ZwAllocateVirtualMemory(ProcessHandle, &CommitBase, 0, &CommitSize, MEM_COMMIT, PAGE_READWRITE);
+    if (!NT_SUCCESS(Status))
+    {
+        ZwFreeVirtualMemory(ProcessHandle, &StackAllocation, &FreeSize, MEM_RELEASE);
+        return Status;
+    }
+
+    if (HasGuardPage)
+    {
+        GuardBase = CommitBase;
+        Status = ZwProtectVirtualMemory(ProcessHandle, &GuardBase, &GuardSize, PAGE_READWRITE | PAGE_GUARD, &OldProtect);
+        if (!NT_SUCCESS(Status))
+        {
+            ZwFreeVirtualMemory(ProcessHandle, &StackAllocation, &FreeSize, MEM_RELEASE);
+            return Status;
+        }
+    }
+
+    RtlZeroMemory(InitialTeb, sizeof(*InitialTeb));
+    InitialTeb->AllocatedStackBase = StackAllocation;
+    InitialTeb->StackBase = (PVOID)StackTop;
+    InitialTeb->StackLimit = (PVOID)((ULONG_PTR)CommitBase + (HasGuardPage ? PAGE_SIZE : 0));
+    return STATUS_SUCCESS;
+}
+
+#ifdef _M_AMD64
+static NTSTATUS
+PspAppendWow64String(IN PUNICODE_STRING Source,
+                     OUT PWOW64_UNICODE_STRING Destination,
+                     IN PUCHAR Buffer,
+                     IN SIZE_T BufferSize,
+                     IN OUT PSIZE_T Offset)
+{
+    if (!Source->Buffer || !Source->MaximumLength)
+    {
+        RtlZeroMemory(Destination, sizeof(*Destination));
+        return STATUS_SUCCESS;
+    }
+    if (*Offset > BufferSize || Source->MaximumLength > BufferSize - *Offset) return STATUS_INVALID_PARAMETER;
+
+    Destination->Length = Source->Length;
+    Destination->MaximumLength = Source->MaximumLength;
+    Destination->Buffer = (ULONG)*Offset;
+    _SEH2_TRY
+    {
+        RtlCopyMemory(Buffer + *Offset, Source->Buffer, Source->MaximumLength);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+    *Offset += Source->MaximumLength;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+PspCreateWow64ProcessParameters(IN HANDLE ProcessHandle,
+                                IN PRTL_USER_PROCESS_PARAMETERS ProcessParameters,
+                                IN PEB32 *Peb32,
+                                OUT PVOID *ProcessParameters32)
+{
+    RTL_USER_PROCESS_PARAMETERS Captured;
+    PWOW64_USER_PROCESS_PARAMETERS Parameters32;
+    PVOID Target = NULL;
+    SIZE_T TotalSize = sizeof(*Parameters32);
+    SIZE_T RegionSize;
+    SIZE_T Offset;
+    SIZE_T EnvironmentSize;
+    SIZE_T FreeSize = 0;
+    ULONG Target32;
+    NTSTATUS Status;
+
+    *ProcessParameters32 = NULL;
+    _SEH2_TRY
+    {
+        Captured = *ProcessParameters;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+#define ADD_WOW64_STRING_SIZE(Field) do { if (Captured.Field.MaximumLength > MAXULONG - TotalSize) return STATUS_INVALID_PARAMETER; TotalSize += Captured.Field.MaximumLength; } while (0)
+    ADD_WOW64_STRING_SIZE(CurrentDirectory.DosPath);
+    ADD_WOW64_STRING_SIZE(DllPath);
+    ADD_WOW64_STRING_SIZE(ImagePathName);
+    ADD_WOW64_STRING_SIZE(CommandLine);
+    ADD_WOW64_STRING_SIZE(WindowTitle);
+    ADD_WOW64_STRING_SIZE(DesktopInfo);
+    ADD_WOW64_STRING_SIZE(ShellInfo);
+    ADD_WOW64_STRING_SIZE(RuntimeData);
+#undef ADD_WOW64_STRING_SIZE
+
+    EnvironmentSize = Captured.Environment ? Captured.EnvironmentSize : 0;
+    if (EnvironmentSize > MAXULONG - TotalSize) return STATUS_INVALID_PARAMETER;
+    TotalSize += EnvironmentSize;
+    RegionSize = TotalSize;
+    Status = ZwAllocateVirtualMemory(ProcessHandle, &Target, MM_SYSTEM_RANGE_START_WOW64 - 1, &RegionSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    Parameters32 = ExAllocatePoolWithTag(PagedPool, TotalSize, TAG_USTR);
+    if (!Parameters32)
+    {
+        ZwFreeVirtualMemory(ProcessHandle, &Target, &FreeSize, MEM_RELEASE);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    RtlZeroMemory(Parameters32, TotalSize);
+    Parameters32->MaximumLength = (ULONG)RegionSize;
+    Parameters32->Length = (ULONG)TotalSize;
+    Parameters32->Flags = Captured.Flags & ~RTL_USER_PROCESS_PARAMETERS_NORMALIZED;
+    Parameters32->DebugFlags = Captured.DebugFlags;
+    Parameters32->ConsoleHandle = HandleToUlong(Captured.ConsoleHandle);
+    Parameters32->ConsoleFlags = Captured.ConsoleFlags;
+    Parameters32->StandardInput = HandleToUlong(Captured.StandardInput);
+    Parameters32->StandardOutput = HandleToUlong(Captured.StandardOutput);
+    Parameters32->StandardError = HandleToUlong(Captured.StandardError);
+    Parameters32->CurrentDirectory.Handle = HandleToUlong(Captured.CurrentDirectory.Handle);
+    Parameters32->StartingX = Captured.StartingX;
+    Parameters32->StartingY = Captured.StartingY;
+    Parameters32->CountX = Captured.CountX;
+    Parameters32->CountY = Captured.CountY;
+    Parameters32->CountCharsX = Captured.CountCharsX;
+    Parameters32->CountCharsY = Captured.CountCharsY;
+    Parameters32->FillAttribute = Captured.FillAttribute;
+    Parameters32->WindowFlags = Captured.WindowFlags;
+    Parameters32->ShowWindowFlags = Captured.ShowWindowFlags;
+    Parameters32->EnvironmentSize = (ULONG)EnvironmentSize;
+    Parameters32->EnvironmentVersion = (ULONG)Captured.EnvironmentVersion;
+
+    Offset = sizeof(*Parameters32);
+    Status = PspAppendWow64String(&Captured.CurrentDirectory.DosPath, &Parameters32->CurrentDirectory.DosPath, (PUCHAR)Parameters32, TotalSize, &Offset);
+    if (NT_SUCCESS(Status)) Status = PspAppendWow64String(&Captured.DllPath, &Parameters32->DllPath, (PUCHAR)Parameters32, TotalSize, &Offset);
+    if (NT_SUCCESS(Status)) Status = PspAppendWow64String(&Captured.ImagePathName, &Parameters32->ImagePathName, (PUCHAR)Parameters32, TotalSize, &Offset);
+    if (NT_SUCCESS(Status)) Status = PspAppendWow64String(&Captured.CommandLine, &Parameters32->CommandLine, (PUCHAR)Parameters32, TotalSize, &Offset);
+    if (NT_SUCCESS(Status)) Status = PspAppendWow64String(&Captured.WindowTitle, &Parameters32->WindowTitle, (PUCHAR)Parameters32, TotalSize, &Offset);
+    if (NT_SUCCESS(Status)) Status = PspAppendWow64String(&Captured.DesktopInfo, &Parameters32->DesktopInfo, (PUCHAR)Parameters32, TotalSize, &Offset);
+    if (NT_SUCCESS(Status)) Status = PspAppendWow64String(&Captured.ShellInfo, &Parameters32->ShellInfo, (PUCHAR)Parameters32, TotalSize, &Offset);
+    if (NT_SUCCESS(Status)) Status = PspAppendWow64String(&Captured.RuntimeData, &Parameters32->RuntimeData, (PUCHAR)Parameters32, TotalSize, &Offset);
+    if (NT_SUCCESS(Status) && EnvironmentSize)
+    {
+        Parameters32->Environment = PtrToUlong((PUCHAR)Target + Offset);
+        _SEH2_TRY
+        {
+            RtlCopyMemory((PUCHAR)Parameters32 + Offset, Captured.Environment, EnvironmentSize);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+    }
+    if (NT_SUCCESS(Status)) Status = ZwWriteVirtualMemory(ProcessHandle, Target, Parameters32, TotalSize, NULL);
+    Target32 = PtrToUlong(Target);
+    if (NT_SUCCESS(Status)) Status = ZwWriteVirtualMemory(ProcessHandle, &Peb32->ProcessParameters, &Target32, sizeof(Target32), NULL);
+    ExFreePoolWithTag(Parameters32, TAG_USTR);
+
+    if (!NT_SUCCESS(Status))
+    {
+        ZwFreeVirtualMemory(ProcessHandle, &Target, &FreeSize, MEM_RELEASE);
+        return Status;
+    }
+
+    *ProcessParameters32 = Target;
+    return STATUS_SUCCESS;
+}
+#endif
+
 /*
  * @implemented
  *
@@ -1541,6 +1791,10 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
     HANDLE DebugPort = NULL;
     HANDLE ExceptionPort = NULL;
     HANDLE TokenHandle = NULL;
+    PVOID NativeProcessParameters = NULL;
+#ifdef _M_AMD64
+    PVOID Wow64ProcessParameters = NULL;
+#endif
     ULONG PspProcessFlags = 0;
     OBJECT_ATTRIBUTES LocalFileObjectAttributes;
     IO_STATUS_BLOCK IoStatusBlock;
@@ -1555,8 +1809,15 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
     PEPROCESS Process = NULL;
     CLIENT_ID ClientId;
     INITIAL_TEB InitialTeb;
+    PINITIAL_TEB Wow64InitialTebPointer = NULL;
+#ifdef _M_AMD64
+    INITIAL_TEB Wow64InitialTeb;
+#endif
     CONTEXT ThreadContext;
     PROCESS_BASIC_INFORMATION ProcessBasicInfo;
+#ifdef _M_AMD64
+    PEB32 *Wow64Peb = NULL;
+#endif
     PAGED_CODE();
     PSTRACE(PS_PROCESS_DEBUG,
             "ProcessFlags: %lx ThreadFlags: %lx\n", ProcessFlags, ThreadFlags);
@@ -1915,6 +2176,20 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
     {
         PVOID ActualBase = Process->SectionBaseAddress;
 
+#ifdef _M_AMD64
+        if (ImageInformation.Machine == IMAGE_FILE_MACHINE_I386)
+        {
+            Status = PspInitializeWow64Process(Process, &ImageInformation);
+            if (!NT_SUCCESS(Status))
+            {
+                ObDereferenceObject(Process);
+                Process = NULL;
+                goto Cleanup;
+            }
+            Wow64Peb = Process->Wow64Process->Peb;
+        }
+#endif
+
         DPRINT("NtCreateUserProcess: TransferAddress=%p, SectionBaseAddress=%p\n",
                ImageInformation.TransferAddress, ActualBase);
 
@@ -2105,6 +2380,7 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
                                  &BaseAddress,
                                  sizeof(BaseAddress),
                                  NULL);
+            NativeProcessParameters = BaseAddress;
         }
         else
         {
@@ -2114,6 +2390,14 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
         /* Reset Status since parameter writing is not critical */
         Status = STATUS_SUCCESS;
     }
+
+#ifdef _M_AMD64
+    if (Wow64Peb && ProcessParameters)
+    {
+        Status = PspCreateWow64ProcessParameters(hProcess, ProcessParameters, Wow64Peb, &Wow64ProcessParameters);
+        if (!NT_SUCCESS(Status)) goto Cleanup;
+    }
+#endif
 
     /*
      * Step 7: Create the initial thread.
@@ -2127,111 +2411,41 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
      * 3. Call PspCreateThread
      */
 
-    /*
-     * Set up the initial thread stack.
-     *
-     * This mirrors RtlpCreateUserStack: reserve the full stack, then commit
-     * the initial portion plus one guard page at the bottom. The guard page
-     * is included in the committed size so that the usable committed area
-     * equals the requested commit size.
-     */
+    /* WoW64 uses a low 32-bit application stack and a separate emulator stack. */
+#ifdef _M_AMD64
+    if (Wow64Peb)
     {
-        PVOID StackBase = NULL;
-        ULONG_PTR StackTop;
-        SIZE_T StackReserve = ImageInformation.MaximumStackSize;
-        SIZE_T StackCommit = ImageInformation.CommittedStackSize;
-        SIZE_T GuardPageSize = PAGE_SIZE;
-        BOOLEAN UseGuard;
+        WOW64_CPU_INIT CpuInit;
+        ULONG_PTR CpuAddress;
 
-        /* Ensure reasonable defaults */
-        if (StackReserve == 0) StackReserve = 0x100000;  /* 1MB default */
-        if (StackCommit == 0) StackCommit = PAGE_SIZE;
+        Status = PspAllocateUserStack(hProcess, MM_SYSTEM_RANGE_START_WOW64 - 1, ImageInformation.MaximumStackSize, ImageInformation.CommittedStackSize, TRUE, &Wow64InitialTeb);
+        if (!NT_SUCCESS(Status)) goto Cleanup;
+        Status = PspAllocateUserStack(hProcess, MM_SYSTEM_RANGE_START_WOW64 - 1, 0x40000, 0x40000, FALSE, &InitialTeb);
+        if (!NT_SUCCESS(Status)) goto Cleanup;
 
-        /* Ensure commit does not exceed reserve */
-        if (StackCommit >= StackReserve)
-        {
-            StackReserve = ROUND_UP(StackCommit, 1024 * 1024);
-        }
+        RtlZeroMemory(&CpuInit, sizeof(CpuInit));
+        CpuInit.Cpu.Machine = IMAGE_FILE_MACHINE_I386;
+        CpuInit.Context.ContextFlags = WOW64_CONTEXT_FULL;
+        CpuInit.Context.Eip = PtrToUlong(ImageInformation.TransferAddress);
+        CpuInit.Context.Esp = PtrToUlong(Wow64InitialTeb.StackBase);
+        CpuInit.Context.EFlags = EFLAGS_INTERRUPT_MASK;
+        CpuInit.Context.SegCs = KGDT64_R3_CMCODE | RPL_MASK;
+        CpuInit.Context.SegDs = KGDT64_R3_DATA | RPL_MASK;
+        CpuInit.Context.SegEs = KGDT64_R3_DATA | RPL_MASK;
+        CpuInit.Context.SegFs = KGDT64_R3_CMTEB | RPL_MASK;
+        CpuInit.Context.SegGs = KGDT64_R3_DATA | RPL_MASK;
+        CpuInit.Context.SegSs = KGDT64_R3_DATA | RPL_MASK;
 
-        /* Align to page boundaries */
-        StackCommit = ROUND_UP(StackCommit, PAGE_SIZE);
-        StackReserve = ROUND_UP(StackReserve, 64 * 1024); /* 64KB allocation granularity */
-
-        /* Reserve stack memory */
-        Status = ZwAllocateVirtualMemory(hProcess,
-                                         &StackBase,
-                                         0,
-                                         &StackReserve,
-                                         MEM_RESERVE,
-                                         PAGE_READWRITE);
-        if (!NT_SUCCESS(Status))
-        {
-            DPRINT1("NtCreateUserProcess: Failed to reserve stack, Status=0x%lx\n", Status);
-            goto Cleanup;
-        }
-
-        /* Calculate top of stack (highest address) */
-        StackTop = (ULONG_PTR)StackBase + StackReserve;
-
-        /*
-         * Add a guard page if there's room. The guard page is included in the
-         * total commit so the usable committed area stays at StackCommit bytes.
-         */
-        UseGuard = (StackReserve >= StackCommit + PAGE_SIZE);
-        if (UseGuard)
-        {
-            StackCommit += PAGE_SIZE;
-        }
-
-        /* Commit from (StackTop - StackCommit) up to StackTop */
-        {
-            PVOID CommitBase = (PVOID)(StackTop - StackCommit);
-            SIZE_T CommitSize = StackCommit;
-            Status = ZwAllocateVirtualMemory(hProcess,
-                                             &CommitBase,
-                                             0,
-                                             &CommitSize,
-                                             MEM_COMMIT,
-                                             PAGE_READWRITE);
-            if (!NT_SUCCESS(Status))
-            {
-                DPRINT1("NtCreateUserProcess: Failed to commit stack, Status=0x%lx\n", Status);
-                goto Cleanup;
-            }
-        }
-
-        /* Set up a guard page at the bottom of the committed region */
-        if (UseGuard)
-        {
-            PVOID GuardBase = (PVOID)(StackTop - StackCommit);
-            ULONG OldProtect;
-            ZwProtectVirtualMemory(hProcess,
-                                   &GuardBase,
-                                   &GuardPageSize,
-                                   PAGE_READWRITE | PAGE_GUARD,
-                                   &OldProtect);
-        }
-
-        /* Fill in the InitialTeb */
-        RtlZeroMemory(&InitialTeb, sizeof(INITIAL_TEB));
-        InitialTeb.AllocatedStackBase = StackBase;
-        InitialTeb.StackBase = (PVOID)StackTop;
-
-        /*
-         * StackLimit points above the guard page, matching RtlpCreateUserStack.
-         * The guard page sits at StackTop - StackCommit; usable stack starts
-         * one page above that.
-         */
-        if (UseGuard)
-        {
-            InitialTeb.StackLimit = (PVOID)(StackTop - StackCommit + PAGE_SIZE);
-        }
-        else
-        {
-            InitialTeb.StackLimit = (PVOID)(StackTop - StackCommit);
-        }
-        InitialTeb.PreviousStackBase = NULL;
-        InitialTeb.PreviousStackLimit = NULL;
+        CpuAddress = ALIGN_DOWN_BY((ULONG_PTR)InitialTeb.StackBase - sizeof(CpuInit), 16);
+        InitialTeb.StackBase = (PVOID)CpuAddress;
+        Status = ZwWriteVirtualMemory(hProcess, InitialTeb.StackBase, &CpuInit, sizeof(CpuInit), NULL);
+        if (!NT_SUCCESS(Status)) goto Cleanup;
+    }
+    else
+#endif
+    {
+        Status = PspAllocateUserStack(hProcess, 0, ImageInformation.MaximumStackSize, ImageInformation.CommittedStackSize, TRUE, &InitialTeb);
+        if (!NT_SUCCESS(Status)) goto Cleanup;
     }
 
     /* Initialize the thread context */
@@ -2294,17 +2508,10 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
 #endif
 
     /* Create the initial thread via PspCreateThread */
-    Status = PspCreateThread(&hThread,
-                             ThreadDesiredAccess,
-                             ThreadObjectAttributes,
-                             hProcess,
-                             NULL,
-                             &ClientId,
-                             &ThreadContext,
-                             &InitialTeb,
-                             (ThreadFlags & THREAD_CREATE_FLAGS_CREATE_SUSPENDED) ? TRUE : FALSE,
-                             NULL,
-                             NULL);
+#ifdef _M_AMD64
+    Wow64InitialTebPointer = Wow64Peb ? &Wow64InitialTeb : NULL;
+#endif
+    Status = PspCreateThread(&hThread, ThreadDesiredAccess, ThreadObjectAttributes, hProcess, NULL, &ClientId, &ThreadContext, &InitialTeb, Wow64InitialTebPointer, (ThreadFlags & THREAD_CREATE_FLAGS_CREATE_SUSPENDED) ? TRUE : FALSE, NULL, NULL);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("NtCreateUserProcess: PspCreateThread failed, Status=0x%lx\n", Status);
@@ -2328,11 +2535,19 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
         CreateInfo->SuccessState.OutputFlags = 0;
         CreateInfo->SuccessState.FileHandle = hFile;
         CreateInfo->SuccessState.SectionHandle = hSection;
-        CreateInfo->SuccessState.UserProcessParametersNative = 0;
+        CreateInfo->SuccessState.UserProcessParametersNative = (ULONGLONG)(ULONG_PTR)NativeProcessParameters;
+#ifdef _M_AMD64
+        CreateInfo->SuccessState.UserProcessParametersWow64 = PtrToUlong(Wow64ProcessParameters);
+#else
         CreateInfo->SuccessState.UserProcessParametersWow64 = 0;
+#endif
         CreateInfo->SuccessState.CurrentParameterFlags = 0;
         CreateInfo->SuccessState.PebAddressNative = (ULONGLONG)(ULONG_PTR)ProcessBasicInfo.PebBaseAddress;
+#ifdef _M_AMD64
+        CreateInfo->SuccessState.PebAddressWow64 = PtrToUlong(Wow64Peb);
+#else
         CreateInfo->SuccessState.PebAddressWow64 = 0;
+#endif
         CreateInfo->SuccessState.ManifestAddress = 0;
         CreateInfo->SuccessState.ManifestSize = 0;
 

@@ -25,6 +25,7 @@ Author:
 #include <umtypes.h>
 #include <mmtypes.h>
 #include <ldrtypes.h>
+#include <reactos/wow64shared.h>
 
 #ifdef __cplusplus
 extern "C" {

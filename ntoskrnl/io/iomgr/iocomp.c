@@ -602,3 +602,33 @@ NtSetIoCompletion(IN HANDLE IoCompletionPortHandle,
     /* Return status */
     return Status;
 }
+
+NTSTATUS
+NTAPI
+NtSetIoCompletionEx(IN HANDLE IoCompletionPortHandle,
+                    IN HANDLE IoCompletionReserveHandle,
+                    IN ULONG_PTR CompletionKey,
+                    IN ULONG_PTR CompletionContext,
+                    IN NTSTATUS CompletionStatus,
+                    IN SIZE_T CompletionInformation)
+{
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    PEX_RESERVE_OBJECT Reserve;
+    PKQUEUE Queue;
+    NTSTATUS Status;
+    PAGED_CODE();
+
+    Status = ObReferenceObjectByHandle(IoCompletionPortHandle, IO_COMPLETION_MODIFY_STATE, IoCompletionType, PreviousMode, (PVOID *)&Queue, NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = ObReferenceObjectByHandle(IoCompletionReserveHandle, 0, ExIoCompletionReserveObjectType, PreviousMode, (PVOID *)&Reserve, NULL);
+    if (NT_SUCCESS(Status))
+    {
+        Status = IoSetIoCompletion(Queue, (PVOID)CompletionKey, (PVOID)CompletionContext, CompletionStatus, CompletionInformation, TRUE);
+        ObDereferenceObject(Reserve);
+    }
+
+    ObDereferenceObject(Queue);
+    return Status;
+}

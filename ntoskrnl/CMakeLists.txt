@@ -82,3 +82,8 @@ add_asm_files(ntdllsys_nt6_asm ntdll_nt6.S)
 add_library(ntdllsys_nt6 ${ntdllsys_nt6_asm})
 set_target_properties(ntdllsys_nt6 PROPERTIES LINKER_LANGUAGE "C")
 add_dependencies(ntdllsys_nt6 asm)
+
+if(WOW64_I386_RUNTIME AND ARCH STREQUAL "i386")
+    target_compile_definitions(ntdllsys PRIVATE WOW64_I386_RUNTIME)
+    target_compile_definitions(ntdllsys_nt6 PRIVATE WOW64_I386_RUNTIME)
+endif()

@@ -11,8 +11,146 @@
 /* INCLUDES ******************************************************************/
 
 #include <ntoskrnl.h>
+#include <reactos/wow64shared.h>
 #define NDEBUG
 #include <debug.h>
+
+#ifdef _M_AMD64
+static NTSTATUS
+PspCopyThreadWow64Context(IN PETHREAD Thread,
+                          IN OUT PWOW64_CONTEXT Context,
+                          IN BOOLEAN SetContext)
+{
+    PEPROCESS Process = THREAD_TO_PROCESS(Thread);
+    KAPC_STATE ApcState;
+    WOW64_CONTEXT Result;
+    PWOW64_CONTEXT StoredContext;
+    PWOW64_CPURESERVED Cpu;
+    ULONG Flags = Context->ContextFlags & ~WOW64_CONTEXT_i386;
+    BOOLEAN Attached = Process != PsGetCurrentProcess();
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (!Process->Wow64Process || Process->Wow64Process->Machine != IMAGE_FILE_MACHINE_I386) return STATUS_INVALID_PARAMETER;
+    if (!ExAcquireRundownProtection(&Thread->RundownProtect)) return STATUS_THREAD_IS_TERMINATING;
+    if (Attached) KeStackAttachProcess(&Process->Pcb, &ApcState);
+
+    _SEH2_TRY
+    {
+        Cpu = Thread->Tcb.Teb->TlsSlots[WOW64_TLS_CPURESERVED];
+        if (!Cpu || Cpu->Machine != IMAGE_FILE_MACHINE_I386)
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            _SEH2_LEAVE;
+        }
+
+        StoredContext = (PWOW64_CONTEXT)ALIGN_UP_BY((ULONG_PTR)(Cpu + 1), TYPE_ALIGNMENT(WOW64_CONTEXT));
+        if (SetContext)
+        {
+            if (Flags & WOW64_CONTEXT_INTEGER)
+            {
+                StoredContext->Eax = Context->Eax;
+                StoredContext->Ebx = Context->Ebx;
+                StoredContext->Ecx = Context->Ecx;
+                StoredContext->Edx = Context->Edx;
+                StoredContext->Esi = Context->Esi;
+                StoredContext->Edi = Context->Edi;
+            }
+            if (Flags & WOW64_CONTEXT_CONTROL)
+            {
+                StoredContext->Ebp = Context->Ebp;
+                StoredContext->Eip = Context->Eip;
+                StoredContext->Esp = Context->Esp;
+                StoredContext->EFlags = Context->EFlags;
+                StoredContext->SegCs = Context->SegCs;
+                StoredContext->SegSs = Context->SegSs;
+                Cpu->Flags |= WOW64_CPURESERVED_FLAG_RESET_STATE;
+            }
+            if (Flags & WOW64_CONTEXT_SEGMENTS)
+            {
+                StoredContext->SegDs = Context->SegDs;
+                StoredContext->SegEs = Context->SegEs;
+                StoredContext->SegFs = Context->SegFs;
+                StoredContext->SegGs = Context->SegGs;
+            }
+            if (Flags & WOW64_CONTEXT_DEBUG_REGISTERS)
+            {
+                StoredContext->Dr0 = Context->Dr0;
+                StoredContext->Dr1 = Context->Dr1;
+                StoredContext->Dr2 = Context->Dr2;
+                StoredContext->Dr3 = Context->Dr3;
+                StoredContext->Dr6 = Context->Dr6;
+                StoredContext->Dr7 = Context->Dr7;
+            }
+            if (Flags & WOW64_CONTEXT_FLOATING_POINT) StoredContext->FloatSave = Context->FloatSave;
+            if (Flags & WOW64_CONTEXT_EXTENDED_REGISTERS) RtlCopyMemory(StoredContext->ExtendedRegisters, Context->ExtendedRegisters, sizeof(Context->ExtendedRegisters));
+            StoredContext->ContextFlags |= Context->ContextFlags;
+        }
+        else
+        {
+            RtlZeroMemory(&Result, sizeof(Result));
+            Result.ContextFlags = WOW64_CONTEXT_i386;
+            if (Flags & WOW64_CONTEXT_INTEGER)
+            {
+                Result.Eax = StoredContext->Eax;
+                Result.Ebx = StoredContext->Ebx;
+                Result.Ecx = StoredContext->Ecx;
+                Result.Edx = StoredContext->Edx;
+                Result.Esi = StoredContext->Esi;
+                Result.Edi = StoredContext->Edi;
+                Result.ContextFlags |= WOW64_CONTEXT_INTEGER;
+            }
+            if (Flags & WOW64_CONTEXT_CONTROL)
+            {
+                Result.Ebp = StoredContext->Ebp;
+                Result.Eip = StoredContext->Eip;
+                Result.Esp = StoredContext->Esp;
+                Result.EFlags = StoredContext->EFlags;
+                Result.SegCs = StoredContext->SegCs;
+                Result.SegSs = StoredContext->SegSs;
+                Result.ContextFlags |= WOW64_CONTEXT_CONTROL;
+            }
+            if (Flags & WOW64_CONTEXT_SEGMENTS)
+            {
+                Result.SegDs = StoredContext->SegDs;
+                Result.SegEs = StoredContext->SegEs;
+                Result.SegFs = StoredContext->SegFs;
+                Result.SegGs = StoredContext->SegGs;
+                Result.ContextFlags |= WOW64_CONTEXT_SEGMENTS;
+            }
+            if (Flags & WOW64_CONTEXT_DEBUG_REGISTERS)
+            {
+                Result.Dr0 = StoredContext->Dr0;
+                Result.Dr1 = StoredContext->Dr1;
+                Result.Dr2 = StoredContext->Dr2;
+                Result.Dr3 = StoredContext->Dr3;
+                Result.Dr6 = StoredContext->Dr6;
+                Result.Dr7 = StoredContext->Dr7;
+                Result.ContextFlags |= WOW64_CONTEXT_DEBUG_REGISTERS;
+            }
+            if (Flags & WOW64_CONTEXT_FLOATING_POINT)
+            {
+                Result.FloatSave = StoredContext->FloatSave;
+                Result.ContextFlags |= WOW64_CONTEXT_FLOATING_POINT;
+            }
+            if (Flags & WOW64_CONTEXT_EXTENDED_REGISTERS)
+            {
+                RtlCopyMemory(Result.ExtendedRegisters, StoredContext->ExtendedRegisters, sizeof(Result.ExtendedRegisters));
+                Result.ContextFlags |= WOW64_CONTEXT_EXTENDED_REGISTERS;
+            }
+            *Context = Result;
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    if (Attached) KeUnstackDetachProcess(&ApcState);
+    ExReleaseRundownProtection(&Thread->RundownProtect);
+    return Status;
+}
+#endif
 
 /* Debugging Level */
 ULONG PspTraceLevel = 0;
@@ -1277,8 +1415,8 @@ NtQueryInformationProcess(
             /* Make sure the process isn't dying */
             if (ExAcquireRundownProtection(&Process->RundownProtect))
             {
-                /* Get the WOW64 process structure */
-                Wow64 = (ULONG_PTR)Process->Wow64Process;
+                /* Return the user-mode PEB32, not the kernel bookkeeping structure. */
+                if (Process->Wow64Process) Wow64 = (ULONG_PTR)Process->Wow64Process->Peb;
                 /* Release the lock */
                 ExReleaseRundownProtection(&Process->RundownProtect);
             }
@@ -3050,6 +3188,32 @@ NtSetInformationThread(
             break;
         }
 
+        case ThreadWow64Context:
+        {
+#ifdef _M_AMD64
+            WOW64_CONTEXT Wow64Context;
+
+            _SEH2_TRY
+            {
+                Wow64Context = *(PWOW64_CONTEXT)ThreadInformation;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                _SEH2_YIELD(break);
+            }
+            _SEH2_END;
+
+            Status = ObReferenceObjectByHandle(ThreadHandle, THREAD_SET_CONTEXT, PsThreadType, PreviousMode, (PVOID*)&Thread, NULL);
+            if (!NT_SUCCESS(Status)) break;
+            Status = PspCopyThreadWow64Context(Thread, &Wow64Context, TRUE);
+            ObDereferenceObject(Thread);
+#else
+            Status = STATUS_NOT_SUPPORTED;
+#endif
+            break;
+        }
+
         /* Anything else */
         default:
             /* Not yet implemented */
@@ -3821,6 +3985,44 @@ NtQueryInformationThread(
 
             /* Dereference the thread */
             ObDereferenceObject(Thread);
+            break;
+        }
+
+        case ThreadWow64Context:
+        {
+#ifdef _M_AMD64
+            WOW64_CONTEXT Wow64Context;
+
+            Length = sizeof(Wow64Context);
+            _SEH2_TRY
+            {
+                Wow64Context.ContextFlags = ((PWOW64_CONTEXT)ThreadInformation)->ContextFlags;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                _SEH2_YIELD(break);
+            }
+            _SEH2_END;
+
+            Status = ObReferenceObjectByHandle(ThreadHandle, THREAD_GET_CONTEXT, PsThreadType, PreviousMode, (PVOID*)&Thread, NULL);
+            if (!NT_SUCCESS(Status)) break;
+            Status = PspCopyThreadWow64Context(Thread, &Wow64Context, FALSE);
+            ObDereferenceObject(Thread);
+            if (!NT_SUCCESS(Status)) break;
+
+            _SEH2_TRY
+            {
+                *(PWOW64_CONTEXT)ThreadInformation = Wow64Context;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+#else
+            Status = STATUS_NOT_SUPPORTED;
+#endif
             break;
         }
 

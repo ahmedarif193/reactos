@@ -27,6 +27,38 @@ PspQueueApcSpecialApc(IN PKAPC Apc,
     ExFreePool(Apc);
 }
 
+static VOID
+PspReleaseUserApcReserve(IN PKAPC Apc)
+{
+    PEX_RESERVE_OBJECT Reserve = CONTAINING_RECORD(Apc, EX_RESERVE_OBJECT, Apc);
+
+    InterlockedExchange(&Reserve->InUse, 0);
+    ObDereferenceObject(Reserve);
+}
+
+static VOID
+NTAPI
+PspQueueApcReserveApc(IN PKAPC Apc,
+                      IN OUT PKNORMAL_ROUTINE* NormalRoutine,
+                      IN OUT PVOID* NormalContext,
+                      IN OUT PVOID* SystemArgument1,
+                      IN OUT PVOID* SystemArgument2)
+{
+    UNREFERENCED_PARAMETER(NormalRoutine);
+    UNREFERENCED_PARAMETER(NormalContext);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    PspReleaseUserApcReserve(Apc);
+}
+
+static VOID
+NTAPI
+PspQueueApcReserveRundown(IN PKAPC Apc)
+{
+    PspReleaseUserApcReserve(Apc);
+}
+
 NTSTATUS
 NTAPI
 PsResumeThread(IN PETHREAD Thread,
@@ -230,6 +262,70 @@ NtAlertThread(IN HANDLE ThreadHandle)
  * may be targeted; Windows rejects cross-process alerts with STATUS_ACCESS_DENIED
  * and an unknown thread id with STATUS_INVALID_CID.
  */
+NTSTATUS
+NTAPI
+NtAlertMultipleThreadByThreadId(IN PHANDLE ThreadIds,
+                                IN ULONG ThreadCount,
+                                IN PVOID Reserved1,
+                                IN PVOID Reserved2)
+{
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    PETHREAD *Threads;
+    NTSTATUS Status = STATUS_SUCCESS;
+    ULONG Index, Referenced = 0;
+
+    UNREFERENCED_PARAMETER(Reserved1);
+    UNREFERENCED_PARAMETER(Reserved2);
+
+    if (!ThreadCount)
+        return STATUS_SUCCESS;
+    if (ThreadCount > MAXULONG / sizeof(*Threads))
+        return STATUS_INVALID_PARAMETER_2;
+
+    Threads = ExAllocatePoolWithTag(PagedPool, ThreadCount * sizeof(*Threads), 'mAtP');
+    if (!Threads)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    _SEH2_TRY
+    {
+        if (PreviousMode != KernelMode)
+            ProbeForRead(ThreadIds, ThreadCount * sizeof(*ThreadIds), TYPE_ALIGNMENT(HANDLE));
+
+        for (Index = 0; Index < ThreadCount; ++Index)
+        {
+            Status = PsLookupThreadByThreadId(ThreadIds[Index], &Threads[Index]);
+            if (!NT_SUCCESS(Status))
+            {
+                Status = STATUS_INVALID_CID;
+                _SEH2_LEAVE;
+            }
+
+            ++Referenced;
+            if (Threads[Index]->Tcb.Process != KeGetCurrentThread()->Process)
+            {
+                Status = STATUS_ACCESS_DENIED;
+                _SEH2_LEAVE;
+            }
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    if (NT_SUCCESS(Status))
+    {
+        for (Index = 0; Index < ThreadCount; ++Index)
+            KeAlertThreadByThreadId(&Threads[Index]->Tcb);
+    }
+
+    while (Referenced)
+        ObDereferenceObject(Threads[--Referenced]);
+    ExFreePoolWithTag(Threads, 'mAtP');
+    return Status;
+}
+
 NTSTATUS
 NTAPI
 NtAlertThreadByThreadId(IN HANDLE ThreadId)
@@ -579,24 +675,23 @@ NtTestAlert(VOID)
 NTSTATUS
 NTAPI
 NtQueueApcThreadEx(IN HANDLE ThreadHandle,
-                 IN OPTIONAL HANDLE UserApcReserveHandle,
-                 IN PKNORMAL_ROUTINE ApcRoutine,
-                 IN PVOID NormalContext,
-                 IN OPTIONAL PVOID SystemArgument1,
-                 IN OPTIONAL PVOID SystemArgument2)
+                   IN OPTIONAL HANDLE UserApcReserveHandle,
+                   IN PKNORMAL_ROUTINE ApcRoutine,
+                   IN PVOID NormalContext,
+                   IN OPTIONAL PVOID SystemArgument1,
+                   IN OPTIONAL PVOID SystemArgument2)
 {
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    PEX_RESERVE_OBJECT Reserve = NULL;
+    PKRUNDOWN_ROUTINE RundownRoutine = NULL;
+    PKKERNEL_ROUTINE KernelRoutine = PspQueueApcSpecialApc;
     PKAPC Apc;
     PETHREAD Thread;
     NTSTATUS Status = STATUS_SUCCESS;
     PAGED_CODE();
 
     /* Get ETHREAD from Handle */
-    Status = ObReferenceObjectByHandle(ThreadHandle,
-                                       THREAD_SET_CONTEXT,
-                                       PsThreadType,
-                                       ExGetPreviousMode(),
-                                       (PVOID)&Thread,
-                                       NULL);
+    Status = ObReferenceObjectByHandle(ThreadHandle, THREAD_SET_CONTEXT, PsThreadType, PreviousMode, (PVOID)&Thread, NULL);
     if (!NT_SUCCESS(Status)) return Status;
 
     /* Check if this is a System Thread */
@@ -607,36 +702,42 @@ NtQueueApcThreadEx(IN HANDLE ThreadHandle,
         goto Quit;
     }
 
-    /* Allocate an APC */
-    Apc = ExAllocatePoolWithQuotaTag(NonPagedPool |
-                                     POOL_QUOTA_FAIL_INSTEAD_OF_RAISE,
-                                     sizeof(KAPC),
-                                     TAG_PS_APC);
-    if (!Apc)
+    if (UserApcReserveHandle)
     {
-        /* Fail */
-        Status = STATUS_NO_MEMORY;
-        goto Quit;
+        Status = ObReferenceObjectByHandle(UserApcReserveHandle, 0, ExUserApcReserveObjectType, PreviousMode, (PVOID *)&Reserve, NULL);
+        if (!NT_SUCCESS(Status))
+            goto Quit;
+        if (InterlockedCompareExchange(&Reserve->InUse, 1, 0))
+        {
+            ObDereferenceObject(Reserve);
+            Status = STATUS_INVALID_PARAMETER_2;
+            goto Quit;
+        }
+
+        Apc = &Reserve->Apc;
+        KernelRoutine = PspQueueApcReserveApc;
+        RundownRoutine = PspQueueApcReserveRundown;
+    }
+    else
+    {
+        Apc = ExAllocatePoolWithQuotaTag(NonPagedPool | POOL_QUOTA_FAIL_INSTEAD_OF_RAISE, sizeof(KAPC), TAG_PS_APC);
+        if (!Apc)
+        {
+            Status = STATUS_NO_MEMORY;
+            goto Quit;
+        }
     }
 
     /* Initialize the APC */
-    KeInitializeApc(Apc,
-                    &Thread->Tcb,
-                    OriginalApcEnvironment,
-                    PspQueueApcSpecialApc,
-                    NULL,
-                    ApcRoutine,
-                    UserMode,
-                    NormalContext);
+    KeInitializeApc(Apc, &Thread->Tcb, OriginalApcEnvironment, KernelRoutine, RundownRoutine, ApcRoutine, UserMode, NormalContext);
 
     /* Queue it */
-    if (!KeInsertQueueApc(Apc,
-                          SystemArgument1,
-                          SystemArgument2,
-                          IO_NO_INCREMENT))
+    if (!KeInsertQueueApc(Apc, SystemArgument1, SystemArgument2, IO_NO_INCREMENT))
     {
-        /* We failed, free it */
-        ExFreePool(Apc);
+        if (Reserve)
+            PspReleaseUserApcReserve(Apc);
+        else
+            ExFreePool(Apc);
         Status = STATUS_UNSUCCESSFUL;
     }
 
@@ -644,6 +745,26 @@ NtQueueApcThreadEx(IN HANDLE ThreadHandle,
 Quit:
     ObDereferenceObject(Thread);
     return Status;
+}
+
+NTSTATUS
+NTAPI
+NtQueueApcThreadEx2(IN HANDLE ThreadHandle,
+                    IN OPTIONAL HANDLE UserApcReserveHandle,
+                    IN ULONG QueueUserApcFlags,
+                    IN PKNORMAL_ROUTINE ApcRoutine,
+                    IN PVOID NormalContext,
+                    IN OPTIONAL PVOID SystemArgument1,
+                    IN OPTIONAL PVOID SystemArgument2)
+{
+    if (QueueUserApcFlags)
+    {
+        if (QueueUserApcFlags == 1)
+            return STATUS_NOT_SUPPORTED;
+        return STATUS_INVALID_PARAMETER_3;
+    }
+
+    return NtQueueApcThreadEx(ThreadHandle, UserApcReserveHandle, ApcRoutine, NormalContext, SystemArgument1, SystemArgument2);
 }
 
 /*++
