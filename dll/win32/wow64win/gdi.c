@@ -31,6 +31,7 @@
 #include "native_stubs.h"
 
 #ifdef __REACTOS__
+W32KAPI BOOL WINAPI NtGdiInit(void);
 static inline HANDLE get_ros_gdi_handle( UINT **args ) { return ULongToHandle( *(*args)++ ); }
 #define get_handle get_ros_gdi_handle
 #endif
@@ -2542,6 +2543,13 @@ NTSTATUS WINAPI wow64_NtGdiHfontCreate( UINT *args )
 
     return HandleToUlong( NtGdiHfontCreate( logfont, unk2, unk3, unk4, data ));
 }
+
+#ifdef __REACTOS__
+NTSTATUS WINAPI wow64_NtGdiInit( UINT *args )
+{
+    return NtGdiInit();
+}
+#endif
 
 NTSTATUS WINAPI wow64_NtGdiInitSpool( UINT *args )
 {

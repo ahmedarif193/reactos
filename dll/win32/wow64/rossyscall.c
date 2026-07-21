@@ -414,6 +414,8 @@ static void put_pfn_array( ULONG *pfns32, const ULONG_PTR *pfns, ULONG_PTR count
     ULONG_PTR i;
 
     if (!pfns32 || !pfns) return;
+    /* the guest array cannot hold PFNs >= 1 << 32 (physical memory above
+       16TB); the cast truncates them, an inherent 32-bit AWE limitation */
     for (i = 0; i < count; i++) pfns32[i] = (ULONG)pfns[i];
 }
 
@@ -578,8 +580,13 @@ NTSTATUS WINAPI wow64_NtAllocateUserPhysicalPages( UINT *args )
     count = *count32;
     pfns = temp_array_alloc( count, sizeof(*pfns) );
     status = NtAllocateUserPhysicalPages( process, &count, pfns );
-    put_size( count32, count );
-    put_pfn_array( pfns32, pfns, count );
+    /* the temp array holds kernel output only on success; copying it back
+       on failure would expose uninitialized host heap data to the guest */
+    if (NT_SUCCESS(status))
+    {
+        put_size( count32, count );
+        put_pfn_array( pfns32, pfns, count );
+    }
     return status;
 }
 
