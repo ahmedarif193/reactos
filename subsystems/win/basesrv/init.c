@@ -29,6 +29,7 @@ extern UNICODE_STRING BaseSrvKernel32DllPath;
 HANDLE BaseSrvHeap = NULL;          // Our own heap.
 HANDLE BaseSrvSharedHeap = NULL;    // Shared heap with CSR. (CsrSrvSharedSectionHeap)
 PBASE_STATIC_SERVER_DATA BaseStaticServerData = NULL;   // Data that we can share amongst processes. Initialized inside BaseSrvSharedHeap.
+PBASE_STATIC_SERVER_DATA32 BaseStaticServerData32 = NULL;
 
 ULONG SessionId = 0;
 ULONG ProtectionMode = 0;
@@ -148,6 +149,60 @@ PCHAR BaseServerApiNameTable[BasepMaxApiNumber - BASESRV_FIRST_API_NUMBER] =
 #endif
 
 /* FUNCTIONS ******************************************************************/
+
+static VOID
+BasepUnicodeStringTo32(PUNICODE_STRING32 String32, PCUNICODE_STRING String)
+{
+    String32->Length = String->Length;
+    String32->MaximumLength = String->MaximumLength;
+    String32->Buffer = PtrToUlong(String->Buffer);
+}
+
+static VOID
+BasepInitializeStaticServerData32(VOID)
+{
+    PBASE_SYSTEM_BASIC_INFORMATION32 SysInfo32;
+    PSYSTEM_BASIC_INFORMATION SysInfo = &BaseStaticServerData->SysInfo;
+
+    BaseStaticServerData32 = RtlAllocateHeap(BaseSrvSharedHeap, HEAP_ZERO_MEMORY, sizeof(*BaseStaticServerData32));
+    ASSERT(BaseStaticServerData32 != NULL);
+
+    BasepUnicodeStringTo32(&BaseStaticServerData32->WindowsDirectory, &BaseStaticServerData->WindowsDirectory);
+    BasepUnicodeStringTo32(&BaseStaticServerData32->WindowsSystemDirectory, &BaseStaticServerData->WindowsSystemDirectory);
+    BasepUnicodeStringTo32(&BaseStaticServerData32->NamedObjectDirectory, &BaseStaticServerData->NamedObjectDirectory);
+    BaseStaticServerData32->WindowsMajorVersion = BaseStaticServerData->WindowsMajorVersion;
+    BaseStaticServerData32->WindowsMinorVersion = BaseStaticServerData->WindowsMinorVersion;
+    BaseStaticServerData32->BuildNumber = BaseStaticServerData->BuildNumber;
+    BaseStaticServerData32->CSDNumber = BaseStaticServerData->CSDNumber;
+    BaseStaticServerData32->RCNumber = BaseStaticServerData->RCNumber;
+    RtlCopyMemory(BaseStaticServerData32->CSDVersion, BaseStaticServerData->CSDVersion, sizeof(BaseStaticServerData32->CSDVersion));
+
+    SysInfo32 = &BaseStaticServerData32->SysInfo;
+    SysInfo32->Reserved = SysInfo->Reserved;
+    SysInfo32->TimerResolution = SysInfo->TimerResolution;
+    SysInfo32->PageSize = SysInfo->PageSize;
+    SysInfo32->NumberOfPhysicalPages = SysInfo->NumberOfPhysicalPages;
+    SysInfo32->LowestPhysicalPageNumber = SysInfo->LowestPhysicalPageNumber;
+    SysInfo32->HighestPhysicalPageNumber = SysInfo->HighestPhysicalPageNumber;
+    SysInfo32->AllocationGranularity = SysInfo->AllocationGranularity;
+    SysInfo32->MinimumUserModeAddress = PtrToUlong((PVOID)SysInfo->MinimumUserModeAddress);
+    SysInfo32->MaximumUserModeAddress = 0x7ffeffff;
+    SysInfo32->ActiveProcessorsAffinityMask = (ULONG)SysInfo->ActiveProcessorsAffinityMask;
+    SysInfo32->NumberOfProcessors = SysInfo->NumberOfProcessors;
+
+    BaseStaticServerData32->TimeOfDay = BaseStaticServerData->TimeOfDay;
+    BaseStaticServerData32->IniFileMapping = PtrToUlong(BaseStaticServerData->IniFileMapping);
+    BaseStaticServerData32->NlsUserInfo = BaseStaticServerData->NlsUserInfo;
+    BaseStaticServerData32->DefaultSeparateVDM = BaseStaticServerData->DefaultSeparateVDM;
+    BaseStaticServerData32->IsWowTaskReady = BaseStaticServerData->IsWowTaskReady;
+    BasepUnicodeStringTo32(&BaseStaticServerData32->WindowsSys32x86Directory, &BaseStaticServerData->WindowsSys32x86Directory);
+    BaseStaticServerData32->fTermsrvAppInstallMode = BaseStaticServerData->fTermsrvAppInstallMode;
+    BaseStaticServerData32->tziTermsrvClientTimeZone = BaseStaticServerData->tziTermsrvClientTimeZone;
+    BaseStaticServerData32->ktTermsrvClientBias = BaseStaticServerData->ktTermsrvClientBias;
+    BaseStaticServerData32->TermsrvClientTimeZoneId = BaseStaticServerData->TermsrvClientTimeZoneId;
+    BaseStaticServerData32->LUIDDeviceMapsEnabled = BaseStaticServerData->LUIDDeviceMapsEnabled;
+    BaseStaticServerData32->TermsrvClientTimeZoneChangeNum = BaseStaticServerData->TermsrvClientTimeZoneChangeNum;
+}
 
 NTSTATUS
 NTAPI
@@ -652,6 +707,8 @@ BaseInitializeStaticServerData(IN PCSR_SERVER_DLL LoadedServerDll)
 
     /* Finally, set the pointer */
     LoadedServerDll->SharedSection = BaseStaticServerData;
+    BasepInitializeStaticServerData32();
+    LoadedServerDll->SharedSection32 = BaseStaticServerData32;
 }
 
 NTSTATUS
