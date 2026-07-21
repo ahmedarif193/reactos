@@ -144,6 +144,15 @@ NtAddAtom(
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
+NtAllocateReserveObject(
+    _Out_ PHANDLE ReserveHandle,
+    _In_opt_ POBJECT_ATTRIBUTES ObjectAttributes,
+    _In_ MEMORY_RESERVE_OBJECT_TYPE Type
+);
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
 NtCancelTimer(
     _In_ HANDLE TimerHandle,
     _Out_opt_ PBOOLEAN CurrentState
@@ -423,6 +432,16 @@ NtQuerySystemInformationEx(
     _Out_writes_bytes_opt_(SystemInformationLength) PVOID SystemInformation,
     _In_ ULONG SystemInformationLength,
     _Out_opt_ PULONG ReturnLength
+);
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtConvertBetweenAuxiliaryCounterAndPerformanceCounter(
+    _In_ ULONG ConversionType,
+    _In_ PULONGLONG FromValue,
+    _Out_opt_ PULONGLONG ToValue,
+    _Out_opt_ PULONGLONG ConversionError
 );
 
 NTSYSCALLAPI

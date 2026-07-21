@@ -13,7 +13,8 @@ extern "C"
 
 typedef struct _WOW64_PROCESS
 {
-  PVOID Wow64;
+    struct _PEB32 *Peb;
+    USHORT Machine;
 } WOW64_PROCESS, *PWOW64_PROCESS;
 
 typedef struct _KPROFILE_SOURCE_OBJECT

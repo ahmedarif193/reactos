@@ -138,6 +138,7 @@
 #define TAG_SHIM                'MIHS'
 #define TAG_QUOTA_BLOCK         'bQsP'
 #define TAG_THREAD_NAME         'mNhT'
+#define TAG_WOW64_PROCESS       '46WP'
 
 /* Run-Time Library Tags */
 #define TAG_HDTB    'BTDH'

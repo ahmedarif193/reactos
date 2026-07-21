@@ -325,6 +325,37 @@ NtQueryPerformanceCounter(OUT PLARGE_INTEGER PerformanceCounter,
 
 NTSTATUS
 NTAPI
+NtConvertBetweenAuxiliaryCounterAndPerformanceCounter(
+    _In_ ULONG ConversionType,
+    _In_ PULONGLONG FromValue,
+    _Out_opt_ PULONGLONG ToValue,
+    _Out_opt_ PULONGLONG ConversionError)
+{
+    UNREFERENCED_PARAMETER(ConversionType);
+    UNREFERENCED_PARAMETER(ToValue);
+    UNREFERENCED_PARAMETER(ConversionError);
+
+    if (!FromValue)
+        return STATUS_ACCESS_VIOLATION;
+
+    if (ExGetPreviousMode() != KernelMode)
+    {
+        _SEH2_TRY
+        {
+            ProbeForRead(FromValue, sizeof(*FromValue), TYPE_ALIGNMENT(ULONGLONG));
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+    }
+
+    return STATUS_NOT_SUPPORTED;
+}
+
+NTSTATUS
+NTAPI
 NtStartProfile(IN HANDLE ProfileHandle)
 {
     PEPROFILE Profile;

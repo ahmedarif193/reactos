@@ -356,6 +356,14 @@ PspDeleteProcess(IN PVOID ObjectBody)
         MmDeleteProcessAddressSpace(Process);
     }
 
+#ifdef _WIN64
+    if (Process->Wow64Process)
+    {
+        ExFreePoolWithTag(Process->Wow64Process, TAG_WOW64_PROCESS);
+        Process->Wow64Process = NULL;
+    }
+#endif
+
     /* See if we have a PID */
     if (Process->UniqueProcessId)
     {

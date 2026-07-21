@@ -209,6 +209,15 @@ typedef struct _UUID_CACHED_VALUES_STRUCT
 
 C_ASSERT(RTL_FIELD_SIZE(UUID_CACHED_VALUES_STRUCT, GuidInit) == RTL_FIELD_SIZE(UUID, Data4));
 
+typedef struct _EX_RESERVE_OBJECT
+{
+    volatile LONG InUse;
+    KAPC Apc;
+} EX_RESERVE_OBJECT, *PEX_RESERVE_OBJECT;
+
+extern POBJECT_TYPE ExUserApcReserveObjectType;
+extern POBJECT_TYPE ExIoCompletionReserveObjectType;
+
 /* INITIALIZATION FUNCTIONS *************************************************/
 
 CODE_SEG("INIT")
@@ -304,6 +313,11 @@ CODE_SEG("INIT")
 BOOLEAN
 NTAPI
 ExpInitializeEventPairImplementation(VOID);
+
+CODE_SEG("INIT")
+BOOLEAN
+NTAPI
+ExpInitializeReserveObjectTypes(VOID);
 
 CODE_SEG("INIT")
 BOOLEAN

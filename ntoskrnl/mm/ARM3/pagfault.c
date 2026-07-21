@@ -187,6 +187,9 @@ MiCheckForUserStackOverflow(IN PVOID Address,
 {
     PETHREAD CurrentThread = PsGetCurrentThread();
     PTEB Teb = CurrentThread->Tcb.Teb;
+#ifdef _WIN64
+    PTEB32 Wow64Teb = NULL;
+#endif
     PVOID StackBase, DeallocationStack, NextStackAddress;
     SIZE_T GuaranteedSize;
     NTSTATUS Status;
@@ -212,6 +215,22 @@ MiCheckForUserStackOverflow(IN PVOID Address,
     StackBase = Teb->NtTib.StackBase;
     DeallocationStack = Teb->DeallocationStack;
     GuaranteedSize = Teb->GuaranteedStackBytes;
+#ifdef _WIN64
+    if (Teb->WowTebOffset)
+    {
+        Wow64Teb = (PTEB32)((PUCHAR)Teb + Teb->WowTebOffset);
+        if ((Address < ULongToPtr(Wow64Teb->NtTib.StackBase)) && (Address >= ULongToPtr(Wow64Teb->DeallocationStack)))
+        {
+            StackBase = ULongToPtr(Wow64Teb->NtTib.StackBase);
+            DeallocationStack = ULongToPtr(Wow64Teb->DeallocationStack);
+            GuaranteedSize = Wow64Teb->GuaranteedStackBytes;
+        }
+        else
+        {
+            Wow64Teb = NULL;
+        }
+    }
+#endif
     DPRINT("Handling guard page fault with Stacks Addresses 0x%p and 0x%p, guarantee: %lx\n",
             StackBase, DeallocationStack, GuaranteedSize);
 
@@ -271,6 +290,10 @@ MiCheckForUserStackOverflow(IN PVOID Address,
         if (NT_SUCCESS(Status))
         {
             /* Success! */
+#ifdef _WIN64
+            if (Wow64Teb) Wow64Teb->NtTib.StackLimit = PtrToUlong(NextStackAddress);
+            else
+#endif
             Teb->NtTib.StackLimit = NextStackAddress;
         }
         else
@@ -285,6 +308,10 @@ MiCheckForUserStackOverflow(IN PVOID Address,
     ASSERT((PsGetCurrentProcess()->Peb->NtGlobalFlag & FLG_DISABLE_STACK_EXTENSION) == 0);
 
     /* Update the stack limit */
+#ifdef _WIN64
+    if (Wow64Teb) Wow64Teb->NtTib.StackLimit = PtrToUlong((PVOID)((ULONG_PTR)NextStackAddress + GuaranteedSize));
+    else
+#endif
     Teb->NtTib.StackLimit = (PVOID)((ULONG_PTR)NextStackAddress + GuaranteedSize);
 
     /* Now move the guard page to the next page */

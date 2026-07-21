@@ -301,6 +301,14 @@
 #ifndef SYSFUNCS_NT5_ONLY
     SVC_(GetCurrentProcessorNumberEx, 1)
     SVC_(CreateUserProcess, 11)
+    SVC_(CompareObjects, 2)
+    SVC_(AlertMultipleThreadByThreadId, 4)
+    SVC_(AllocateReserveObject, 3)
+    SVC_(ContinueEx, 2)
+    SVC_(ConvertBetweenAuxiliaryCounterAndPerformanceCounter, 4)
+    SVC_(QueueApcThreadEx, 6)
+    SVC_(QueueApcThreadEx2, 7)
+    SVC_(SetIoCompletionEx, 6)
 #if (NTDDI_VERSION >= NTDDI_WIN7)
     SVC_(QuerySystemInformationEx, 6)
 #endif

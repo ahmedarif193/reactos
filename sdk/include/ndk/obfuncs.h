@@ -185,6 +185,14 @@ NtClose(
     _In_ HANDLE Handle
 );
 
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtCompareObjects(
+    _In_ HANDLE FirstObjectHandle,
+    _In_ HANDLE SecondObjectHandle
+);
+
 __kernel_entry
 NTSYSCALLAPI
 NTSTATUS

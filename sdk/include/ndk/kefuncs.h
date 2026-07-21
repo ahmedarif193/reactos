@@ -485,6 +485,14 @@ NtContinue(
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
+NtContinueEx(
+    _In_ PCONTEXT Context,
+    _In_opt_ PKCONTINUE_ARGUMENT ContinueArgument
+);
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
 NtCallbackReturn(
     _In_ PVOID Result,
     _In_ ULONG ResultLength,
