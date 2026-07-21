@@ -34,8 +34,8 @@ int _tmain(int argc, TCHAR ** argv)
 
     if (_tcsstr(argv[1], "--winetest") && (argc == 3))
     {
-        char   psBuffer[128];
-        char   psBuffer2[128];
+        char   psBuffer[512];
+        char   psBuffer2[512];
         char   *nlptr2;
         char   cmd[255];
         char   test[300];
@@ -48,7 +48,7 @@ int _tmain(int argc, TCHAR ** argv)
         pPipe = _tpopen(cmd, "r");
         if (pPipe != NULL)
         {
-            while(fgets(psBuffer, 128, pPipe))
+            while(fgets(psBuffer, sizeof(psBuffer), pPipe))
             {
                 if (psBuffer[0] == ' ')
                 {
@@ -62,7 +62,7 @@ int _tmain(int argc, TCHAR ** argv)
                     pPipe2 = _popen(cmd, "r");
                     if (pPipe2 != NULL)
                     {
-                        while(fgets(psBuffer2, 128, pPipe2))
+                        while(fgets(psBuffer2, sizeof(psBuffer2), pPipe2))
                         {
                             nlptr2 = strchr(psBuffer2, '\n');
                             if (nlptr2)
@@ -81,19 +81,21 @@ int _tmain(int argc, TCHAR ** argv)
     }
     else if (_tcsstr(argv[1], "--process") && (argc == 3))
     {
-        char   psBuffer[128];
+        char   psBuffer[512];
         FILE   *pPipe;
+        int ret = -1;
 
         pPipe = _tpopen(argv[2], "r");
         if (pPipe != NULL)
         {
-            while(fgets(psBuffer, 128, pPipe))
+            while(fgets(psBuffer, sizeof(psBuffer), pPipe))
             {
-                puts(psBuffer);
+                fputs(psBuffer, stdout);
                 OutputDebugStringA(psBuffer);
             }
-            _pclose(pPipe);
+            ret = _pclose(pPipe);
         }
+        return ret;
     }
     else
     {
