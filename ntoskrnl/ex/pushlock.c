@@ -916,6 +916,7 @@ ExfReleasePushLock(PEX_PUSH_LOCK PushLock)
                                                                      NewValue.Ptr,
                                                                      OldValue.Ptr);
                     if (NewValue.Value == OldValue.Value) return;
+                    OldValue = NewValue;
                 }
                 else
                 {
@@ -935,7 +936,11 @@ ExfReleasePushLock(PEX_PUSH_LOCK PushLock)
                     NewValue.Ptr = InterlockedCompareExchangePointer(&PushLock->Ptr,
                                                                      NewValue.Ptr,
                                                                      OldValue.Ptr);
-                    if (NewValue.Value != OldValue.Value) continue;
+                    if (NewValue.Value != OldValue.Value)
+                    {
+                        OldValue = NewValue;
+                        continue;
+                    }
 
                     /* The write was successful. The pushlock is Unlocked and Waking */
                     ExfWakePushLock(PushLock, WakeValue);
@@ -1052,6 +1057,7 @@ ExfReleasePushLockShared(PEX_PUSH_LOCK PushLock)
                                                              NewValue.Ptr,
                                                              OldValue.Ptr);
             if (NewValue.Value == OldValue.Value) return;
+            OldValue = NewValue;
         }
         else
         {
@@ -1071,7 +1077,11 @@ ExfReleasePushLockShared(PEX_PUSH_LOCK PushLock)
             NewValue.Ptr = InterlockedCompareExchangePointer(&PushLock->Ptr,
                                                              NewValue.Ptr,
                                                              OldValue.Ptr);
-            if (NewValue.Value != OldValue.Value) continue;
+            if (NewValue.Value != OldValue.Value)
+            {
+                OldValue = NewValue;
+                continue;
+            }
 
             /* The write was successful. The pushlock is Unlocked and Waking */
             ExfWakePushLock(PushLock, WakeValue);
