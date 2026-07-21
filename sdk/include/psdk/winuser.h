@@ -916,6 +916,13 @@ extern "C" {
 #define USER_TIMER_MAXIMUM  2147483647
 #define USER_TIMER_MINIMUM  10
 
+#if (WINVER >= 0x0601)
+#define TIMERV_DEFAULT_COALESCING 0
+#define TIMERV_NO_COALESCING      0xFFFFFFFF
+#define TIMERV_COALESCING_MIN     1
+#define TIMERV_COALESCING_MAX     0x7FFFFFF5
+#endif
+
 #define MWMO_WAITALL 1
 #define MWMO_ALERTABLE 2
 #define MWMO_INPUTAVAILABLE 4
@@ -4292,6 +4299,29 @@ typedef struct tagPOINTER_TOUCH_INFO {
     UINT32          pressure;
 } POINTER_TOUCH_INFO;
 
+typedef UINT32 PEN_FLAGS;
+#define PEN_FLAG_NONE                   0x00000000
+#define PEN_FLAG_BARREL                 0x00000001
+#define PEN_FLAG_INVERTED               0x00000002
+#define PEN_FLAG_ERASER                 0x00000004
+
+typedef UINT32 PEN_MASK;
+#define PEN_MASK_NONE                   0x00000000
+#define PEN_MASK_PRESSURE               0x00000001
+#define PEN_MASK_ROTATION               0x00000002
+#define PEN_MASK_TILT_X                 0x00000004
+#define PEN_MASK_TILT_Y                 0x00000008
+
+typedef struct tagPOINTER_PEN_INFO {
+    POINTER_INFO    pointerInfo;
+    PEN_FLAGS       penFlags;
+    PEN_MASK        penMask;
+    UINT32          pressure;
+    UINT32          rotation;
+    INT32           tiltX;
+    INT32           tiltY;
+} POINTER_PEN_INFO;
+
 #endif /* WINVER >= 0x0602 */
 
 HKL WINAPI ActivateKeyboardLayout(_In_ HKL, _In_ UINT);
@@ -5545,6 +5575,9 @@ HWND WINAPI SetParent(_In_ HWND, _In_opt_ HWND);
 #if (_WIN32_WINNT >= 0x0500)
 BOOL WINAPI SetProcessDefaultLayout(_In_ DWORD);
 #endif /* (_WIN32_WINNT >= 0x0500) */
+#if (WINVER >= 0x0605)
+BOOL WINAPI SetProcessDpiAwarenessContext(_In_ DPI_AWARENESS_CONTEXT);
+#endif
 BOOL WINAPI SetProcessWindowStation(_In_ HWINSTA);
 BOOL WINAPI SetPropA(_In_ HWND, _In_ LPCSTR, _In_opt_ HANDLE);
 BOOL WINAPI SetPropW(_In_ HWND, _In_ LPCWSTR, _In_opt_ HANDLE);
@@ -5566,6 +5599,9 @@ DWORD_PTR WINAPI SetSysColorsTemp(const COLORREF *, const HBRUSH *, DWORD_PTR);
 BOOL WINAPI SetSystemCursor(_In_ HCURSOR, _In_ DWORD);
 BOOL WINAPI SetSystemMenu(HWND,HMENU);
 BOOL WINAPI SetThreadDesktop(_In_ HDESK);
+#if (WINVER >= 0x0605)
+DPI_AWARENESS_CONTEXT WINAPI SetThreadDpiAwarenessContext(_In_ DPI_AWARENESS_CONTEXT);
+#endif
 UINT_PTR WINAPI SetTimer(_In_opt_ HWND, _In_ UINT_PTR, _In_ UINT, _In_opt_ TIMERPROC);
 UINT_PTR WINAPI SetSystemTimer(HWND,UINT_PTR,UINT,TIMERPROC);
 

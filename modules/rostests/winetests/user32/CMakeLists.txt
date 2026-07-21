@@ -28,7 +28,12 @@ list(APPEND SOURCE
     wsprintf.c)
 
 list(APPEND PCH_SKIP_SOURCE
-    testlist.c)
+    testlist.c
+    monitor.c
+    win.c
+    winstation.c)
+
+set_property(SOURCE win.c APPEND PROPERTY COMPILE_OPTIONS -iquote ${REACTOS_SOURCE_DIR}/sdk/include/wine)
 
 add_executable(user32_winetest
     ${SOURCE}

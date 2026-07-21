@@ -114,6 +114,9 @@ cmake_dependent_option(ISAPNP_ENABLE "Whether to enable the ISA PnP support." ON
 set(GENERATE_DEPENDENCY_GRAPH FALSE CACHE BOOL
 "Whether to create a GraphML dependency graph of DLLs.")
 
+cmake_dependent_option(ENABLE_ROSTESTS "Whether to build the ReactOS test suite." OFF
+                       "CMAKE_BUILD_TYPE STREQUAL Debug" OFF)
+
 set(ENABLE_FEX_ARM64EC FALSE CACHE BOOL
 "Whether to build the optional FEX ARM64EC emulator for running AMD64 binaries on ARM64.")
 
