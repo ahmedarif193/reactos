@@ -54,6 +54,7 @@ LIST_ENTRY LdrpTlsList;
 ULONG LdrpNumberOfTlsEntries;
 ULONG LdrpNumberOfProcessors;
 PVOID NtDllBase;
+SYSTEM_DLL_INIT_BLOCK LdrSystemDllInitBlock = { 0xf0 };
 extern LARGE_INTEGER RtlpTimeout;
 extern BOOLEAN RtlpTimeoutDisable;
 LIST_ENTRY LdrpHashTable[LDR_HASH_TABLE_ENTRIES];
@@ -97,6 +98,7 @@ extern BOOLEAN RtlpUse16ByteSLists;
 
 #ifdef _M_AMD64
 extern ULONG NTAPI RtlGetCurrentDirectory_U_RtlpMsysDecoy(ULONG MaximumLength, PWSTR Buffer);
+extern PVOID LdrpWow64PrepareForException;
 #endif
 
 #ifdef _WIN64
@@ -106,6 +108,137 @@ extern ULONG NTAPI RtlGetCurrentDirectory_U_RtlpMsysDecoy(ULONG MaximumLength, P
 #endif
 
 /* FUNCTIONS *****************************************************************/
+
+#ifdef _M_AMD64
+
+static NTSTATUS
+LdrpGetWow64Export(
+    _In_ PVOID Module,
+    _In_ PCSTR Name,
+    _Out_ PULONG64 Address,
+    _In_ BOOLEAN Required)
+{
+    PVOID Routine;
+
+    Routine = RtlFindExportedRoutineByName(Module, Name);
+    if (!Routine)
+    {
+        *Address = 0;
+        return Required ? STATUS_ENTRYPOINT_NOT_FOUND : STATUS_SUCCESS;
+    }
+
+    if ((ULONG_PTR)Routine > MAXULONG) return STATUS_INVALID_ADDRESS;
+    *Address = (ULONG_PTR)Routine;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+LdrpMapWow64Ntdll(
+    _Out_ PVOID *Module)
+{
+    WCHAR PathBuffer[MAX_PATH];
+    UNICODE_STRING Path, NtPath, SystemRoot;
+    PIMAGE_NT_HEADERS32 NtHeader;
+    HANDLE SectionHandle;
+    PVOID ViewBase;
+    SIZE_T ViewSize;
+    NTSTATUS Status;
+
+    RtlInitEmptyUnicodeString(&Path, PathBuffer, sizeof(PathBuffer));
+    RtlInitUnicodeString(&SystemRoot, SharedUserData->NtSystemRoot);
+    Status = RtlAppendUnicodeStringToString(&Path, &SystemRoot);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = RtlAppendUnicodeToString(&Path, L"\\SysWOW64\\ntdll.dll");
+    if (!NT_SUCCESS(Status)) return Status;
+    if (!RtlDosPathNameToNtPathName_U(Path.Buffer, &NtPath, NULL, NULL)) return STATUS_OBJECT_PATH_SYNTAX_BAD;
+
+    Status = LdrpCreateDllSection(&NtPath, NULL, NULL, &SectionHandle);
+    RtlFreeHeap(RtlGetProcessHeap(), 0, NtPath.Buffer);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    ViewBase = NULL;
+    ViewSize = 0;
+    Status = NtMapViewOfSection(SectionHandle, NtCurrentProcess(), &ViewBase, MAXLONG, 0, NULL, &ViewSize, ViewShare, 0, PAGE_READWRITE);
+    NtClose(SectionHandle);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    NtHeader = (PIMAGE_NT_HEADERS32)RtlImageNtHeader(ViewBase);
+    if (!NtHeader || NtHeader->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC || NtHeader->FileHeader.Machine != IMAGE_FILE_MACHINE_I386 || (ULONG64)(ULONG_PTR)ViewBase + NtHeader->OptionalHeader.SizeOfImage > 0x80000000ULL)
+    {
+        NtUnmapViewOfSection(NtCurrentProcess(), ViewBase);
+        return STATUS_INVALID_IMAGE_FORMAT;
+    }
+
+    if ((ULONG_PTR)ViewBase != NtHeader->OptionalHeader.ImageBase)
+    {
+        Status = LdrpSetProtection(ViewBase, FALSE);
+        if (NT_SUCCESS(Status)) Status = LdrRelocateImageWithBias(ViewBase, 0, NULL, STATUS_SUCCESS, STATUS_CONFLICTING_ADDRESSES, STATUS_INVALID_IMAGE_FORMAT);
+        if (NT_SUCCESS(Status)) Status = LdrpSetProtection(ViewBase, TRUE);
+        if (!NT_SUCCESS(Status))
+        {
+            NtUnmapViewOfSection(NtCurrentProcess(), ViewBase);
+            return Status;
+        }
+    }
+
+    *Module = ViewBase;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+LdrpInitializeWow64(
+    _In_ PCONTEXT Context)
+{
+    WCHAR PathBuffer[MAX_PATH];
+    UNICODE_STRING Path, SystemRoot;
+    PVOID Wow64Ntdll, Wow64Module;
+    VOID (WINAPI *Wow64LdrpInitialize)(PCONTEXT);
+    PVOID Wow64PrepareForException;
+    NTSTATUS Status;
+
+    Status = LdrpMapWow64Ntdll(&Wow64Ntdll);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    RtlZeroMemory(&LdrSystemDllInitBlock, sizeof(LdrSystemDllInitBlock));
+    LdrSystemDllInitBlock.version = 0xf0;
+    LdrSystemDllInitBlock.ntdll_handle = (ULONG_PTR)Wow64Ntdll;
+    Status = LdrpGetWow64Export(Wow64Ntdll, "LdrInitializeThunk", &LdrSystemDllInitBlock.pLdrInitializeThunk, TRUE);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = LdrpGetWow64Export(Wow64Ntdll, "KiUserExceptionDispatcher", &LdrSystemDllInitBlock.pKiUserExceptionDispatcher, TRUE);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = LdrpGetWow64Export(Wow64Ntdll, "KiUserApcDispatcher", &LdrSystemDllInitBlock.pKiUserApcDispatcher, TRUE);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = LdrpGetWow64Export(Wow64Ntdll, "KiUserCallbackDispatcher", &LdrSystemDllInitBlock.pKiUserCallbackDispatcher, TRUE);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = LdrpGetWow64Export(Wow64Ntdll, "RtlUserThreadStart", &LdrSystemDllInitBlock.pRtlUserThreadStart, TRUE);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = LdrpGetWow64Export(Wow64Ntdll, "RtlpQueryProcessDebugInformationRemote", &LdrSystemDllInitBlock.pRtlpQueryProcessDebugInformationRemote, FALSE);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = LdrpGetWow64Export(Wow64Ntdll, "LdrSystemDllInitBlock", &LdrSystemDllInitBlock.pLdrSystemDllInitBlock, TRUE);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = LdrpGetWow64Export(Wow64Ntdll, "RtlpFreezeTimeBias", &LdrSystemDllInitBlock.pRtlpFreezeTimeBias, FALSE);
+    if (!NT_SUCCESS(Status)) return Status;
+    RtlCopyMemory((PVOID)(ULONG_PTR)LdrSystemDllInitBlock.pLdrSystemDllInitBlock, &LdrSystemDllInitBlock, sizeof(LdrSystemDllInitBlock));
+
+    RtlInitEmptyUnicodeString(&Path, PathBuffer, sizeof(PathBuffer));
+    RtlInitUnicodeString(&SystemRoot, SharedUserData->NtSystemRoot);
+    Status = RtlAppendUnicodeStringToString(&Path, &SystemRoot);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = RtlAppendUnicodeToString(&Path, L"\\System32\\wow64.dll");
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = LdrLoadDll(NULL, NULL, &Path, &Wow64Module);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    Wow64LdrpInitialize = RtlFindExportedRoutineByName(Wow64Module, "Wow64LdrpInitialize");
+    Wow64PrepareForException = RtlFindExportedRoutineByName(Wow64Module, "Wow64PrepareForException");
+    if (!Wow64LdrpInitialize || !Wow64PrepareForException) return STATUS_ENTRYPOINT_NOT_FOUND;
+
+    LdrpWow64PrepareForException = Wow64PrepareForException;
+    Wow64LdrpInitialize(Context);
+    return STATUS_SUCCESS;
+}
+
+#endif /* _M_AMD64 */
 
 /*
  * @implemented
@@ -1854,6 +1987,8 @@ LdrpInitializeProcess(IN PCONTEXT Context,
     PWCHAR Current;
     ULONG ExecuteOptions = 0;
     PVOID ViewBase;
+    BOOLEAN IsWow64 = FALSE;
+    SIZE_T HeapReserve, HeapCommit;
 
     /* Set a NULL SEH Filter */
     RtlSetUnhandledExceptionFilter(NULL);
@@ -1875,6 +2010,22 @@ LdrpInitializeProcess(IN PCONTEXT Context,
 
     /* Get the NT Headers */
     NtHeader = RtlImageNtHeader(Peb->ImageBaseAddress);
+
+#ifdef _M_AMD64
+    IsWow64 = Teb->WowTebOffset && NtHeader->FileHeader.Machine == IMAGE_FILE_MACHINE_I386;
+#endif
+
+    if (IsWow64)
+    {
+        PIMAGE_NT_HEADERS32 NtHeader32 = (PIMAGE_NT_HEADERS32)NtHeader;
+        HeapReserve = NtHeader32->OptionalHeader.SizeOfHeapReserve;
+        HeapCommit = NtHeader32->OptionalHeader.SizeOfHeapCommit;
+    }
+    else
+    {
+        HeapReserve = NtHeader->OptionalHeader.SizeOfHeapReserve;
+        HeapCommit = NtHeader->OptionalHeader.SizeOfHeapCommit;
+    }
 
     /* Get the execution options */
     Status = LdrpInitializeExecutionOptions(&ImagePathName, Peb, &OptionsKey);
@@ -1934,10 +2085,15 @@ LdrpInitializeProcess(IN PCONTEXT Context,
     RtlResetRtlTranslations(&NlsTable);
 
     /* Get the Image Config Directory */
-    LoadConfig = RtlImageDirectoryEntryToData(Peb->ImageBaseAddress,
-                                              TRUE,
-                                              IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG,
-                                              &ConfigSize);
+    if (IsWow64)
+    {
+        LoadConfig = NULL;
+        ConfigSize = 0;
+    }
+    else
+    {
+        LoadConfig = RtlImageDirectoryEntryToData(Peb->ImageBaseAddress, TRUE, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG, &ConfigSize);
+    }
 
     /* Setup the Heap Parameters */
     RtlZeroMemory(&HeapParameters, sizeof(HeapParameters));
@@ -2072,12 +2228,7 @@ LdrpInitializeProcess(IN PCONTEXT Context,
 
     /* Setup the Heap */
     RtlInitializeHeapManager();
-    Peb->ProcessHeap = RtlCreateHeap(HeapFlags,
-                                     NULL,
-                                     NtHeader->OptionalHeader.SizeOfHeapReserve,
-                                     NtHeader->OptionalHeader.SizeOfHeapCommit,
-                                     NULL,
-                                     &HeapParameters);
+    Peb->ProcessHeap = RtlCreateHeap(HeapFlags, NULL, HeapReserve, HeapCommit, NULL, &HeapParameters);
 
     if (!Peb->ProcessHeap)
     {
@@ -2137,6 +2288,10 @@ LdrpInitializeProcess(IN PCONTEXT Context,
     RtlAppendUnicodeToString(&FullPath, L"\\System32\\");
 
     /* Open the Known DLLs directory */
+#if defined(_M_IX86)
+    if (Teb->WowTebOffset) RtlInitUnicodeString(&KnownDllString, L"\\KnownDlls32");
+    else
+#endif
     RtlInitUnicodeString(&KnownDllString, L"\\KnownDlls");
     InitializeObjectAttributes(&ObjectAttributes,
                                &KnownDllString,
@@ -2369,6 +2524,18 @@ LdrpInitializeProcess(IN PCONTEXT Context,
     {
         LdrpInitializeDotLocalSupport(ProcessParameters);
     }
+
+#ifdef _M_AMD64
+    if (IsWow64)
+    {
+        LdrpLdrDatabaseIsSetup = TRUE;
+        RtlpInitializeKeyedEvent();
+        RtlpInitializeThreadPooling();
+        Status = LdrpInitializeWow64(Context);
+        if (OptionsKey) NtClose(OptionsKey);
+        return Status;
+    }
+#endif
 
     /* Check if the Application Verifier was enabled */
     if (Peb->NtGlobalFlag & FLG_APPLICATION_VERIFIER)

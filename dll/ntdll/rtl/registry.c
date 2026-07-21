@@ -24,3 +24,20 @@ NtOpenKeyEx(PHANDLE KeyHandle,
 
     return NtOpenKey(KeyHandle, DesiredAccess, ObjectAttributes);
 }
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+NtOpenKeyTransactedEx(PHANDLE KeyHandle,
+                      ACCESS_MASK DesiredAccess,
+                      POBJECT_ATTRIBUTES ObjectAttributes,
+                      ULONG OpenOptions,
+                      HANDLE TransactionHandle)
+{
+    if (TransactionHandle)
+        return STATUS_NOT_SUPPORTED;
+
+    return NtOpenKeyEx(KeyHandle, DesiredAccess, ObjectAttributes, OpenOptions);
+}

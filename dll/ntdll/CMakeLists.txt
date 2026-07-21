@@ -30,6 +30,7 @@ target_link_libraries(etwtrace ${PSEH_LIB})
 add_dependencies(etwtrace psdk)
 
 list(APPEND SOURCE
+    alpc.c
     dbg/dbgui.c
     ldr/ldrapi.c
     ldr/ldrinit.c
@@ -42,6 +43,12 @@ list(APPEND SOURCE
     rtl/virtual.c
     rtl/wait.c
     rtl/xstate.c)
+
+if(ARCH STREQUAL "amd64")
+    list(APPEND SOURCE
+        rtl/xstate_wow64.c
+        wow64.c)
+endif()
 
 if(ARCH STREQUAL "i386")
     list(APPEND ASM_SOURCE dispatch/i386/dispatch.S)
