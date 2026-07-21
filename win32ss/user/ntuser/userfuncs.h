@@ -54,6 +54,7 @@ BOOL APIENTRY IntDdeGetMessageHook(PMSG,LONG_PTR);
 /*************** MAIN.C ***************/
 
 NTSTATUS NTAPI InitThreadCallback(PETHREAD Thread);
+VOID UserSyncWow64ClientInfo(PTHREADINFO pti);
 
 /*************** WINSTA.C ***************/
 

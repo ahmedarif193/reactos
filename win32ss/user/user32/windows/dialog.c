@@ -130,9 +130,28 @@ const struct builtin_class_descr DIALOG_builtin_class =
 */
 DIALOGINFO *DIALOG_get_info( HWND hWnd, BOOL create )
 {
+#ifndef WOW64_I386_RUNTIME
     PWND pWindow;
+#endif
     DIALOGINFO* dlgInfo;
 
+#ifdef WOW64_I386_RUNTIME
+    dlgInfo = (DIALOGINFO *)NtUserCallHwnd(hWnd, HWND_ROUTINE_ROS_GETDIALOGPOINTER);
+
+    if (!dlgInfo && create)
+    {
+        dlgInfo = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*dlgInfo));
+        if (!dlgInfo) return NULL;
+
+        dlgInfo->idResult = IDOK;
+        NtUserxSetDialogPointer(hWnd, dlgInfo);
+        if ((DIALOGINFO *)NtUserCallHwnd(hWnd, HWND_ROUTINE_ROS_GETDIALOGPOINTER) != dlgInfo)
+        {
+            HeapFree(GetProcessHeap(), 0, dlgInfo);
+            return NULL;
+        }
+    }
+#else
     pWindow = ValidateHwnd( hWnd );
     if (!pWindow)
     {
@@ -157,6 +176,7 @@ DIALOGINFO *DIALOG_get_info( HWND hWnd, BOOL create )
        }
     }
 
+#endif
     return dlgInfo;
 }
 
@@ -498,10 +518,14 @@ INT DIALOG_DoDialogBox( HWND hwnd, HWND owner )
     MSG msg;
     INT retval;
     BOOL bFirstEmpty;
+#ifndef WOW64_I386_RUNTIME
     PWND pWnd;
 
     pWnd = ValidateHwnd(hwnd);
     if (!pWnd) return -1;
+#else
+    if (!IsWindow(hwnd)) return -1;
+#endif
 
     if (!(dlgInfo = GETDLGINFO(hwnd))) return -1;
 
@@ -538,7 +562,11 @@ INT DIALOG_DoDialogBox( HWND hwnd, HWND owner )
              * Guido Pola, CORE-4829, Is there another way to check if the Dialog is a MessageBox?
              */
             if (msg.message == WM_KEYDOWN &&
+#ifdef WOW64_I386_RUNTIME
+                NtUserCallHwnd(hwnd, HWND_ROUTINE_ROS_GETWINDOWSTATE) & WNDS_MSGBOX &&
+#else
                 pWnd->state & WNDS_MSGBOX && // Yes!
+#endif
                 GetForegroundWindow() == hwnd)
             {
                 if (msg.wParam == L'C' && GetKeyState(VK_CONTROL) < 0)
@@ -1791,7 +1819,6 @@ DefDlgProcW(
         /* Call dialog procedure */
         result = CallWindowProcW( dlgproc, hDlg, Msg, wParam, lParam );
     }
-
     if (!result && IsWindow(hDlg))
     {
         /* callback didn't process this message */
@@ -2182,6 +2209,10 @@ GetDlgItem(
   HWND hDlg,
   int nIDDlgItem)
 {
+#ifdef WOW64_I386_RUNTIME
+    if (!hDlg) return NULL;
+    return ULongToHandle(NtUserCallHwndParam(hDlg, nIDDlgItem, HWNDPARAM_ROUTINE_ROS_GETDLGITEM));
+#else
     int i;
     HWND *list;
     HWND ret = 0;
@@ -2196,6 +2227,7 @@ GetDlgItem(
     HeapFree(GetProcessHeap(), 0, list);
 //    if (!ret) SetLastError(ERROR_CONTROL_ID_NOT_FOUND);
     return ret;
+#endif
 }
 
 

@@ -1088,6 +1088,9 @@ GetClassWord(
 
 LONG_PTR IntGetWindowLong( HWND hwnd, INT offset, UINT size, BOOL unicode )
 {
+#ifdef WOW64_I386_RUNTIME
+    return (LONG_PTR)NtUserCallHwndParam(hwnd, (DWORD_PTR)offset, unicode ? HWNDPARAM_ROUTINE_ROS_GETWINDOWLONGW : HWNDPARAM_ROUTINE_ROS_GETWINDOWLONGA);
+#else
     LONG_PTR retvalue = 0;
     WND *wndPtr;
 
@@ -1154,6 +1157,7 @@ LONG_PTR IntGetWindowLong( HWND hwnd, INT offset, UINT size, BOOL unicode )
         break;
     }
     return retvalue;
+#endif
 
 }
 /*

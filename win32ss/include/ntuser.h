@@ -349,6 +349,65 @@ typedef struct _CLIENTINFO
 /* Make sure it fits into the TEB */
 C_ASSERT(sizeof(CLIENTINFO) <= sizeof(((PTEB)0)->Win32ClientInfo));
 
+#ifdef _WIN64
+
+typedef struct _CALLBACKWND32
+{
+    ULONG hWnd;
+    ULONG pWnd;
+    ULONG pActCtx;
+} CALLBACKWND32, *PCALLBACKWND32;
+
+typedef struct _CLIENTMSG32
+{
+    ULONG hwnd;
+    ULONG message;
+    ULONG wParam;
+    ULONG lParam;
+    ULONG time;
+    LONG pt_x;
+    LONG pt_y;
+} CLIENTMSG32, *PCLIENTMSG32;
+
+typedef struct _CLIENTINFO32
+{
+    ULONG CI_flags;
+    ULONG cSpins;
+    DWORD dwExpWinVer;
+    DWORD dwCompatFlags;
+    DWORD dwCompatFlags2;
+    DWORD dwTIFlags;
+    ULONG pDeskInfo;
+    ULONG ulClientDelta;
+    ULONG phkCurrent;
+    ULONG fsHooks;
+    CALLBACKWND32 CallbackWnd;
+    DWORD dwHookCurrent;
+    INT cInDDEMLCallback;
+    ULONG pClientThreadInfo;
+    ULONG dwHookData;
+    DWORD dwKeyCache;
+    BYTE afKeyState[8];
+    DWORD dwAsyncKeyCache;
+    BYTE afAsyncKeyState[8];
+    BYTE afAsyncKeyStateRecentDow[8];
+    ULONG hKL;
+    USHORT CodePage;
+    UCHAR achDbcsCF[2];
+    CLIENTMSG32 msgDbcsCB;
+    ULONG lpdwRegisteredClasses;
+    ULONG Win32ClientInfo3[26];
+    ULONG ppi;
+} CLIENTINFO32, *PCLIENTINFO32;
+
+C_ASSERT(offsetof(CLIENTINFO32, pDeskInfo) == 0x18);
+C_ASSERT(offsetof(CLIENTINFO32, pClientThreadInfo) == 0x3c);
+C_ASSERT(offsetof(CLIENTINFO32, msgDbcsCB) == 0x6c);
+C_ASSERT(offsetof(CLIENTINFO32, ppi) == 0xf4);
+C_ASSERT(sizeof(CLIENTINFO32) == sizeof(((PTEB32)0)->Win32ClientInfo));
+
+#endif
+
 #define GetWin32ClientInfo() ((PCLIENTINFO)(NtCurrentTeb()->Win32ClientInfo))
 
 typedef struct tagDDEPACK
@@ -1683,7 +1742,15 @@ enum SimpleCallRoutines
     TWOPARAM_ROUTINE_SETPHYSCURSORPOS,
 #endif
     TWOPARAM_ROUTINE_UNHOOKWINDOWSHOOK,
-    TWOPARAM_ROUTINE_WOWCLEANUP
+    TWOPARAM_ROUTINE_WOWCLEANUP,
+    HWND_ROUTINE_ROS_GETDIALOGPOINTER,
+    HWND_ROUTINE_ROS_ISWINDOW,
+    HWND_ROUTINE_ROS_GETWINDOWSTATE,
+    HWNDPARAM_ROUTINE_ROS_GETWINDOWLONGA,
+    HWNDPARAM_ROUTINE_ROS_GETWINDOWLONGW,
+    HWNDPARAM_ROUTINE_ROS_GETCLIENTRECT,
+    HWNDPARAM_ROUTINE_ROS_GETWINDOWRECT,
+    HWNDPARAM_ROUTINE_ROS_GETDLGITEM
 };
 
 DWORD_PTR

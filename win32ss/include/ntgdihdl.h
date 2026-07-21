@@ -202,7 +202,11 @@
 
 typedef struct _GDI_TABLE_ENTRY
 {
+#ifdef WOW64_I386_RUNTIME
+    ULONG64 KernelData; /* Native win32k pointer, not dereferenced by the i386 client */
+#else
     PVOID KernelData; /* Points to the kernel mode structure */
+#endif
     DWORD ProcessId;  /* process id that created the object, 0 for stock objects */
     union{            /* temp union structure. */
     LONG  Type;       /* the first 16 bit is the object type including the stock obj flag, the last 16 bits is just the object type */
@@ -211,8 +215,17 @@ typedef struct _GDI_TABLE_ENTRY
     UCHAR  ObjectType; /* objt */
     UCHAR  Flags;      /* Flags */
     };};
+#ifdef WOW64_I386_RUNTIME
+    ULONG64 UserData; /* Native entry layout; the mapped user pointer is below 4 GB */
+#else
     PVOID UserData;   /* pUser Points to the user mode structure, usually NULL though */
+#endif
 } GDI_TABLE_ENTRY, *PGDI_TABLE_ENTRY;
+
+#ifdef WOW64_I386_RUNTIME
+C_ASSERT(sizeof(GDI_TABLE_ENTRY) == 24);
+C_ASSERT(FIELD_OFFSET(GDI_TABLE_ENTRY, UserData) == 16);
+#endif
 
 typedef struct _ENTRY
 {

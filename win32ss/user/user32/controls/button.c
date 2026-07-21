@@ -250,6 +250,10 @@ LRESULT WINAPI ButtonWndProc_common(HWND hWnd, UINT uMsg,
     LONG state;
     HANDLE oldHbitmap;
 #ifdef __REACTOS__
+#ifdef WOW64_I386_RUNTIME
+    if (!IsWindow(hWnd)) return 0;
+    if (uMsg == WM_NCCREATE) NtUserSetWindowFNID(hWnd, FNID_BUTTON);
+#else
     PWND pWnd;
 
     pWnd = ValidateHwnd(hWnd);
@@ -270,6 +274,7 @@ LRESULT WINAPI ButtonWndProc_common(HWND hWnd, UINT uMsg,
     }
     else
        return 0;
+#endif
 #else
     if (!IsWindow( hWnd )) return 0;
 #endif

@@ -1436,6 +1436,9 @@ GdiSelectBrush(
     _In_ HDC hdc,
     _In_ HBRUSH hbr)
 {
+#ifdef WOW64_I386_RUNTIME
+    return NtGdiSelectBrush(hdc, hbr);
+#else
     PDC_ATTR pdcattr;
     HBRUSH hbrOld;
 
@@ -1458,6 +1461,7 @@ GdiSelectBrush(
     pdcattr->hbrush = hbr;
     pdcattr->ulDirty_ |= DC_BRUSH_DIRTY;
     return hbrOld;
+#endif
 }
 
 HPEN
