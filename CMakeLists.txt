@@ -402,6 +402,11 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
     add_subdirectory(sdk/tools/wpp)
     add_subdirectory(win32ss)
 
+    # PreLoad.cmake runs apply.cmake only as an initial-cache script, so the
+    # profile package list and validation helper must be (re)loaded here.
+    include(sdk/cmake/rosconfig/profiles/apply.cmake)
+    rosconfig_validate_profile_packages()
+
     # Create the registry hives
     create_registry_hives()
 

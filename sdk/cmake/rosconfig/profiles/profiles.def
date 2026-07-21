@@ -1,0 +1,3 @@
+source "amd64/profiles.def"
+source "i386/profiles.def"
+source "arm64/profiles.def"

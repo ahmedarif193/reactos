@@ -1,5 +1,6 @@
 compile_commands.json
 output-*
+/.rosconfig/
 modules/optional
 modules/bootcd_extras
 modules/livecd_extras

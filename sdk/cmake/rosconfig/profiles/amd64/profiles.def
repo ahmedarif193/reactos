@@ -1,0 +1,10 @@
+config PROFILE_AMD64
+    prompt "Target profile"
+    type choice
+    var ROSCONFIG_PROFILE
+    value generic "Generic AMD64"
+    default generic
+    depends ARCH=amd64
+    help
+      Select the generic AMD64 target profile. Optional modules are selected
+      independently in the Modules submenu.

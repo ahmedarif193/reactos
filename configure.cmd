@@ -16,7 +16,9 @@ if /I "%1" == "/?" (
     echo Available script-options: Codeblocks, Eclipse, Makefiles, clang, VSSolution,
     echo                           /gcc ^(default, RosBE GCC^), /clang ^(RosBE llvm-mingw^),
     echo                           /r or /release ^(Release build^), /d or /debug ^(default^),
-    echo                           /arch=^<amd64^|i386^|arm64^> ^(default amd64^)
+    echo                           /arch=^<amd64^|i386^|arm64^> ^(default amd64^),
+    echo                           menuconfig ^(interactive configuration UI; selections
+    echo                           persist in .rosconfig\config.cache^)
     echo Cmake-options: -DVARIABLE:TYPE=VALUE
     goto quit
 )
@@ -49,6 +51,10 @@ set "_USE_LLVM_MINGW=0"
 set "_BUILD_TYPE=Debug"
 set "_BUILD_TYPE_FROM_USER=0"
 set "_ARCH="
+set "_CC_FROM_FLAG=0"
+set "_BT_FROM_FLAG=0"
+set "_RUN_MENUCONFIG=0"
+set "_MENUCONFIG_RESTART_ARGS="
 set "_PRESCAN_REMAINING=%*"
 
 :prescan_loop
@@ -58,24 +64,58 @@ for /f "tokens=1*" %%a in ("!_PRESCAN_REMAINING!") do (
     set "_PRESCAN_REMAINING=%%b"
 )
 
-if /I "!_PRE_PARAM!" == "/clang"   set "_USE_LLVM_MINGW=1"
-if /I "!_PRE_PARAM!" == "/gcc"     set "_USE_LLVM_MINGW=0"
-if /I "!_PRE_PARAM!" == "/r"       set "_BUILD_TYPE=Release"
-if /I "!_PRE_PARAM!" == "/release" set "_BUILD_TYPE=Release"
-if /I "!_PRE_PARAM!" == "/d"       set "_BUILD_TYPE=Debug"
-if /I "!_PRE_PARAM!" == "/debug"   set "_BUILD_TYPE=Debug"
+if /I not "!_PRE_PARAM!" == "menuconfig" set "_MENUCONFIG_RESTART_ARGS=!_MENUCONFIG_RESTART_ARGS! !_PRE_PARAM!"
+
+if /I "!_PRE_PARAM!" == "/clang"   (set "_USE_LLVM_MINGW=1" & set "_CC_FROM_FLAG=1")
+if /I "!_PRE_PARAM!" == "/gcc"     (set "_USE_LLVM_MINGW=0" & set "_CC_FROM_FLAG=1")
+if /I "!_PRE_PARAM!" == "/r"       (set "_BUILD_TYPE=Release" & set "_BT_FROM_FLAG=1")
+if /I "!_PRE_PARAM!" == "/release" (set "_BUILD_TYPE=Release" & set "_BT_FROM_FLAG=1")
+if /I "!_PRE_PARAM!" == "/d"       (set "_BUILD_TYPE=Debug" & set "_BT_FROM_FLAG=1")
+if /I "!_PRE_PARAM!" == "/debug"   (set "_BUILD_TYPE=Debug" & set "_BT_FROM_FLAG=1")
+if /I "!_PRE_PARAM!" == "menuconfig" set "_RUN_MENUCONFIG=1"
 if /I "!_PRE_PARAM:~0,6!" == "/arch=" set "_ARCH=!_PRE_PARAM:~6!"
 echo !_PRE_PARAM! | findstr /I "CMAKE_BUILD_TYPE" > NUL && set "_BUILD_TYPE_FROM_USER=1"
 
 goto prescan_loop
 :prescan_done
 
+REM rosconfig (menuconfig): a small host tool keeps persistent build options
+REM in the untracked .rosconfig\config.cache and turns them into a CMake
+REM pre-load fragment included by \PreLoad.cmake. Cached target selections
+REM below act as defaults for options not given on the command line.
+set "_ROSCONFIG_DIR=%~dp0.rosconfig"
+set "_ROSCONFIG_CACHE=%_ROSCONFIG_DIR%\config.cache"
+set "_ROSCONFIG_BUILD=%~dp0sdk\tools\rosconfig\build.cmd"
+set "_ROSCONFIG_DEF=%~dp0sdk\cmake\rosconfig.def"
+set "_ROSCONFIG_BIN=%_ROSCONFIG_DIR%\rosconfig.exe"
+set "_ROSCONFIG_OVERRIDES=%_ROSCONFIG_DIR%\overrides.cmake"
+set "_ROSCONFIG_OK=0"
+set "_ROSCONFIG_EXIT_SKIP_CONFIGURE=3"
+if exist "%_ROSCONFIG_CACHE%" (
+    if "%_CC_FROM_FLAG%" == "0" (
+        for /f "tokens=2 delims==" %%v in ('findstr /b /c:"TOOLCHAIN=" "%_ROSCONFIG_CACHE%"') do (
+            if /I "%%v" == "clang" set "_USE_LLVM_MINGW=1"
+            if /I "%%v" == "gcc"   set "_USE_LLVM_MINGW=0"
+        )
+    )
+    if "%_BT_FROM_FLAG%" == "0" if "%_BUILD_TYPE_FROM_USER%" == "0" (
+        for /f "tokens=2 delims==" %%v in ('findstr /b /c:"BUILD_TYPE=" "%_ROSCONFIG_CACHE%"') do (
+            if /I "%%v" == "Release" set "_BUILD_TYPE=Release"
+            if /I "%%v" == "Debug"   set "_BUILD_TYPE=Debug"
+        )
+    )
+)
+
 REM Track whether the user explicitly specified arch via /arch=
 set "_ARCH_FROM_FLAG=0"
 if defined _ARCH set "_ARCH_FROM_FLAG=1"
 
-REM Resolve effective arch: /arch flag wins; otherwise ROS_ARCH; otherwise amd64.
+REM Resolve effective arch: /arch flag wins; otherwise ROS_ARCH; otherwise
+REM the menuconfig cache; otherwise amd64.
 if not defined _ARCH if defined ROS_ARCH set "_ARCH=!ROS_ARCH!"
+if not defined _ARCH if exist "%_ROSCONFIG_CACHE%" (
+    for /f "tokens=2 delims==" %%v in ('findstr /b /c:"ARCH=" "%_ROSCONFIG_CACHE%"') do set "_ARCH=%%v"
+)
 if not defined _ARCH set "_ARCH=amd64"
 
 REM Normalize common arch aliases.
@@ -220,6 +260,48 @@ if not defined ARCH (
 
 set USE_CLANG_CL=0
 
+REM rosconfig: build the host configuration tool (used by menuconfig and to
+REM apply cached selections). Failure to build it is not fatal.
+if exist "%_ROSCONFIG_BUILD%" (
+    call "%_ROSCONFIG_BUILD%" "%_ROSCONFIG_DIR%" "%_ROSCONFIG_BIN%"
+    if !ERRORLEVEL! == 0 (
+        set "_ROSCONFIG_OK=1"
+    ) else (
+        echo Warning: could not build the rosconfig tool; menuconfig selections will not be applied.
+    )
+) else (
+    echo Warning: rosconfig build helper is missing; menuconfig selections will not be applied.
+)
+
+if "%_RUN_MENUCONFIG%" == "1" (
+    if not "!_ROSCONFIG_OK!" == "1" (
+        echo Error: menuconfig requested but the rosconfig tool could not be built.
+        goto quit
+    )
+    "%_ROSCONFIG_BIN%" --def "%_ROSCONFIG_DEF%" --cache "%_ROSCONFIG_CACHE%" --menu --ask-configure
+    set "_ROSCONFIG_MENU_STATUS=!ERRORLEVEL!"
+    if "!_ROSCONFIG_MENU_STATUS!" == "!_ROSCONFIG_EXIT_SKIP_CONFIGURE!" (
+        echo configure.cmd: configuration was not started.
+        endlocal & exit /b 0
+    )
+    if not "!_ROSCONFIG_MENU_STATUS!" == "0" (
+        if "!_ROSCONFIG_MENU_STATUS!" == "130" echo configure.cmd: menuconfig cancelled; build configuration was not started.
+        endlocal & exit /b !_ROSCONFIG_MENU_STATUS!
+    )
+    echo.
+    echo Configuration saved to .rosconfig\config.cache.
+    echo Continuing configuration with the selected target and toolchain.
+    call "%~f0" !_MENUCONFIG_RESTART_ARGS!
+    set "_ROSCONFIG_RESTART_STATUS=!ERRORLEVEL!"
+    endlocal & exit /b !_ROSCONFIG_RESTART_STATUS!
+)
+
+if "!_ROSCONFIG_OK!" == "1" (
+    REM Seed the cache with defaults on first use; merge newly added options.
+    "%_ROSCONFIG_BIN%" --def "%_ROSCONFIG_DEF%" --cache "%_ROSCONFIG_CACHE%" --defaults
+    if not !ERRORLEVEL! == 0 set "_ROSCONFIG_OK=0"
+)
+
 REM Parse command line parameters
 set CMAKE_PARAMS=
 set REMAINING=%*
@@ -258,6 +340,8 @@ set REMAINING=%*
             REM Already handled by the pre-scan above.
         ) else if /I "!PARAM:~0,6!" == "/arch=" (
             REM Already handled by the pre-scan above.
+        ) else if /I "!PARAM!" == "menuconfig" (
+            REM Already handled by the pre-scan above.
         ) else if /I "!PARAM:~0,2!" == "-D" (
             REM User is passing a switch to CMake
             set "CMAKE_PARAMS=%CMAKE_PARAMS% !PARAM!"
@@ -290,6 +374,8 @@ set REMAINING=%*
             REM Already handled by the pre-scan above.
         ) else if /I "!PARAM:~0,6!" == "/arch=" (
             echo. & echo   Warning: /arch is not applicable in a Visual Studio environment; using cl-detected architecture.
+        ) else if /I "!PARAM!" == "menuconfig" (
+            REM Already handled by the pre-scan above.
         ) else if /I "!PARAM!" == "VSSolution" (
             set VS_SOLUTION=1
             REM explicitly set VS version for project generator
@@ -328,6 +414,24 @@ set REMAINING=%*
 REM Inject -DCMAKE_BUILD_TYPE if the user did not pass one explicitly.
 if "%_BUILD_TYPE_FROM_USER%" == "0" (
     set "CMAKE_PARAMS=-DCMAKE_BUILD_TYPE:STRING=%_BUILD_TYPE% %CMAKE_PARAMS%"
+)
+
+REM rosconfig: turn cached selections into a CMake pre-load fragment picked
+REM up by \PreLoad.cmake. Explicit -D arguments still take precedence.
+set "_ROSCONFIG_CCACHE=-DENABLE_CCACHE:BOOL=0"
+if "!_ROSCONFIG_OK!" == "1" (
+    set "_ROSCONFIG_TC=gcc"
+    if "%_USE_LLVM_MINGW%" == "1" set "_ROSCONFIG_TC=clang"
+    if "%BUILD_ENVIRONMENT%" == "VS" set "_ROSCONFIG_TC=msvc"
+    "%_ROSCONFIG_BIN%" --def "%_ROSCONFIG_DEF%" --cache "%_ROSCONFIG_CACHE%" --generate "%_ROSCONFIG_OVERRIDES%" --override "ARCH=%ARCH%" --override "TOOLCHAIN=!_ROSCONFIG_TC!" --override "BUILD_TYPE=%_BUILD_TYPE%"
+    if !ERRORLEVEL! == 0 (
+        REM ENABLE_CCACHE is now controlled by the overrides file.
+        set "_ROSCONFIG_CCACHE="
+    ) else (
+        if exist "%_ROSCONFIG_OVERRIDES%" del /q "%_ROSCONFIG_OVERRIDES%"
+    )
+) else (
+    if exist "%_ROSCONFIG_OVERRIDES%" del /q "%_ROSCONFIG_OVERRIDES%"
 )
 
 REM Inform the user about the default build
@@ -380,7 +484,7 @@ if EXIST CMakeCache.txt (
 )
 
 if "%BUILD_ENVIRONMENT%" == "MinGW" (
-    cmake -G %CMAKE_GENERATOR% -DENABLE_CCACHE:BOOL=0 -DCMAKE_TOOLCHAIN_FILE:FILEPATH=%MINGW_TOOCHAIN_FILE% -DARCH:STRING=%ARCH% %ROSBE_CMAKE_EXTRA% %BUILD_TOOLS_FLAG% %CMAKE_PARAMS% "%REACTOS_SOURCE_DIR%"
+    cmake -G %CMAKE_GENERATOR% %_ROSCONFIG_CCACHE% -DCMAKE_TOOLCHAIN_FILE:FILEPATH=%MINGW_TOOCHAIN_FILE% -DARCH:STRING=%ARCH% %ROSBE_CMAKE_EXTRA% %BUILD_TOOLS_FLAG% %CMAKE_PARAMS% "%REACTOS_SOURCE_DIR%"
 ) else if %USE_CLANG_CL% == 1 (
     cmake -G %CMAKE_GENERATOR% -DCMAKE_TOOLCHAIN_FILE:FILEPATH=toolchain-msvc.cmake -DARCH:STRING=%ARCH% %BUILD_TOOLS_FLAG% -DUSE_CLANG_CL:BOOL=1 %CMAKE_PARAMS% "%REACTOS_SOURCE_DIR%"
 ) else (

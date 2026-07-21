@@ -2,6 +2,18 @@
 
 REACTOS_SOURCE_DIR=$(cd "$(dirname "$0")" && pwd)
 
+# rosconfig (menuconfig) support: a small host tool keeps persistent build
+# options in an untracked cache and turns them into a CMake pre-load file
+# that /PreLoad.cmake includes. See sdk/tools/rosconfig/README.md.
+ROSCONFIG_DIR="$REACTOS_SOURCE_DIR/.rosconfig"
+ROSCONFIG_BIN="$ROSCONFIG_DIR/rosconfig"
+ROSCONFIG_BUILD="$REACTOS_SOURCE_DIR/sdk/tools/rosconfig/build.sh"
+ROSCONFIG_DEF="$REACTOS_SOURCE_DIR/sdk/cmake/rosconfig.def"
+ROSCONFIG_CACHE="$ROSCONFIG_DIR/config.cache"
+ROSCONFIG_OVERRIDES="$ROSCONFIG_DIR/overrides.cmake"
+ROSCONFIG_OK=0
+ROSCONFIG_EXIT_SKIP_CONFIGURE=3
+
 # RosBE installation precedence:
 #   1. ROSBE_DOCKER_ACTIVE=1 (set by `rosbe enable` from the docker bootstrap):
 #      use the rosbe-builder container, paths at /opt/rosbe/*. The output
@@ -45,6 +57,10 @@ BUILD_TYPE=Debug
 BUILD_TYPE_SUFFIX=debug
 ROS_CMAKEOPTS=
 USER_BUILD_TYPE=0
+USER_ARCH=0
+USER_TOOLCHAIN=0
+USER_BUILD_TYPE_FLAG=0
+RUN_MENUCONFIG=0
 
 usage() {
 	echo "Usage: configure.sh [options]"
@@ -53,6 +69,8 @@ usage() {
 	echo "  -a, --arch <arch>    Target architecture: amd64, i386, arm64 (default: amd64)"
 	echo "  -r, --release        Configure a Release build (default: Debug)"
 	echo "  makefiles            Use Unix Makefiles generator (default: Ninja)"
+	echo "  menuconfig           Open the interactive configuration UI first;"
+	echo "                       selections persist in .rosconfig/config.cache"
 	echo "  -D<var>=<val>        Pass option to CMake"
 	exit 1
 }
@@ -62,17 +80,33 @@ fail() {
 	exit 1
 }
 
+# Read one raw value from the rosconfig cache (empty output if absent).
+rosconfig_cache_get() {
+	[ -f "$ROSCONFIG_CACHE" ] || return 0
+	sed -n "s/^$1=//p" "$ROSCONFIG_CACHE" | head -n 1
+}
+
+# Compile the rosconfig host tool if it is missing or outdated.
+rosconfig_build() {
+	[ -x "$ROSCONFIG_BUILD" ] || return 1
+	if ! "$ROSCONFIG_BUILD" "$ROSCONFIG_DIR" "$ROSCONFIG_BIN"; then
+		echo "configure.sh: warning: failed to build the rosconfig tool; menuconfig selections will not be applied." >&2
+		rm -f "$ROSCONFIG_BIN"
+		return 1
+	fi
+}
+
 # FEX ARM64EC is opt-in (default OFF, matching sdk/cmake/config.cmake). It is
-# enabled only when -DENABLE_FEX_ARM64EC=ON (or an equivalent) is passed.
+# enabled when -DENABLE_FEX_ARM64EC=ON (or an equivalent) is passed, or when
+# it has been enabled through menuconfig (rosconfig cache).
 fex_arm64ec_enabled() {
 	case " $ROS_CMAKEOPTS " in
 		*" -DENABLE_FEX_ARM64EC=ON "*|*" -DENABLE_FEX_ARM64EC:BOOL=ON "*|*" -DENABLE_FEX_ARM64EC=TRUE "*|*" -DENABLE_FEX_ARM64EC:BOOL=TRUE "*|*" -DENABLE_FEX_ARM64EC=1 "*|*" -DENABLE_FEX_ARM64EC:BOOL=1 "*)
 			return 0
 			;;
-		*)
-			return 1
-			;;
 	esac
+	[ "$(rosconfig_cache_get ENABLE_FEX_ARM64EC)" = "y" ] && return 0
+	return 1
 }
 
 sync_arm64_submodules() {
@@ -192,24 +226,32 @@ while [ $# -gt 0 ]; do
 			;;
 		--clang|clang|Clang)
 			USE_CLANG=1
+			USER_TOOLCHAIN=1
 			;;
 		--gcc|gcc|GCC)
 			USE_CLANG=0
+			USER_TOOLCHAIN=1
 			;;
 		-a|--arch)
 			shift
 			[ $# -gt 0 ] || fail "missing architecture after -a/--arch"
 			ARCH=$(normalize_arch "$1")
+			USER_ARCH=1
 			;;
 		--arch=*)
 			ARCH=$(normalize_arch "${1#--arch=}")
+			USER_ARCH=1
 			;;
 		-r|--release)
 			BUILD_TYPE=Release
 			BUILD_TYPE_SUFFIX=release
+			USER_BUILD_TYPE_FLAG=1
 			;;
 		makefiles|Makefiles)
 			CMAKE_GENERATOR="Unix Makefiles"
+			;;
+		menuconfig|Menuconfig)
+			RUN_MENUCONFIG=1
 			;;
 		-D)
 			shift
@@ -233,6 +275,69 @@ while [ $# -gt 0 ]; do
 
 	shift
 done
+
+# rosconfig: build the host configurator, optionally run menuconfig, then
+# let the cached selections act as defaults for unspecified options.
+if rosconfig_build; then
+	ROSCONFIG_OK=1
+fi
+
+if [ "$RUN_MENUCONFIG" = "1" ]; then
+	[ "$ROSCONFIG_OK" = "1" ] || fail "menuconfig requested but the rosconfig tool could not be built"
+	"$ROSCONFIG_BIN" --def "$ROSCONFIG_DEF" --cache "$ROSCONFIG_CACHE" --menu --ask-configure
+	menu_status=$?
+	if [ "$menu_status" -ne 0 ]; then
+		if [ "$menu_status" -eq "$ROSCONFIG_EXIT_SKIP_CONFIGURE" ]; then
+			echo "configure.sh: configuration was not started."
+			exit 0
+		fi
+		[ "$menu_status" -eq 130 ] && echo "configure.sh: menuconfig cancelled; build configuration was not started." >&2
+		exit "$menu_status"
+	fi
+fi
+
+if [ "$ROSCONFIG_OK" = "1" ]; then
+	# Seed the cache with defaults on first use; merge in newly added options.
+	"$ROSCONFIG_BIN" --def "$ROSCONFIG_DEF" --cache "$ROSCONFIG_CACHE" --defaults || ROSCONFIG_OK=0
+fi
+
+if [ "$USER_ARCH" = "0" ]; then
+	ROSCONFIG_ARCH=$(rosconfig_cache_get ARCH)
+	case "$ROSCONFIG_ARCH" in
+		"")
+			;;
+		amd64|i386|arm64|arm)
+			ARCH=$ROSCONFIG_ARCH
+			;;
+		*)
+			echo "configure.sh: warning: ignoring unsupported ARCH '$ROSCONFIG_ARCH' from $ROSCONFIG_CACHE" >&2
+			;;
+	esac
+fi
+if [ "$USER_TOOLCHAIN" = "0" ]; then
+	case "$(rosconfig_cache_get TOOLCHAIN)" in
+		gcc)
+			USE_CLANG=0
+			;;
+		clang)
+			USE_CLANG=1
+			;;
+		msvc)
+			echo "configure.sh: warning: TOOLCHAIN=msvc from the config cache is only supported by configure.cmd; using clang." >&2
+			;;
+	esac
+fi
+if [ "$USER_BUILD_TYPE_FLAG" = "0" ] && [ "$USER_BUILD_TYPE" = "0" ]; then
+	case "$(rosconfig_cache_get BUILD_TYPE)" in
+		Release)
+			BUILD_TYPE=Release
+			;;
+		Debug)
+			BUILD_TYPE=Debug
+			;;
+	esac
+	BUILD_TYPE_SUFFIX=$(lower_build_type "$BUILD_TYPE")
+fi
 
 if [ "$USER_BUILD_TYPE" -eq 0 ]; then
 	ROS_CMAKEOPTS=$ROS_CMAKEOPTS" -DCMAKE_BUILD_TYPE:STRING=$BUILD_TYPE"
@@ -267,6 +372,29 @@ else
 	export PATH="$GCC_TOOLCHAIN_ROOT/bin:$PATH"
 fi
 
+# rosconfig: turn the cached selections into a CMake pre-load fragment that
+# /PreLoad.cmake picks up. Explicit -D arguments still take precedence.
+ROSCONFIG_CCACHE_ARG="-DENABLE_CCACHE:BOOL=0"
+if [ "$ROSCONFIG_OK" = "1" ]; then
+	if [ "$USE_CLANG" -eq 1 ]; then
+		ROSCONFIG_TOOLCHAIN=clang
+	else
+		ROSCONFIG_TOOLCHAIN=gcc
+	fi
+	if "$ROSCONFIG_BIN" --def "$ROSCONFIG_DEF" --cache "$ROSCONFIG_CACHE" \
+		--generate "$ROSCONFIG_OVERRIDES" \
+		--override "ARCH=$ARCH" \
+		--override "TOOLCHAIN=$ROSCONFIG_TOOLCHAIN" \
+		--override "BUILD_TYPE=$BUILD_TYPE"; then
+		# ENABLE_CCACHE is now controlled by the overrides file.
+		ROSCONFIG_CCACHE_ARG=
+	else
+		rm -f "$ROSCONFIG_OVERRIDES"
+	fi
+else
+	rm -f "$ROSCONFIG_OVERRIDES"
+fi
+
 REACTOS_OUTPUT_PATH=output-$BUILD_ENVIRONMENT-$ARCH-$BUILD_TYPE_SUFFIX$ROSBE_OUTPUT_SUFFIX
 BUILD_HINT_PATH="$REACTOS_SOURCE_DIR/$REACTOS_OUTPUT_PATH"
 
@@ -282,6 +410,9 @@ echo "Architecture:  $ARCH"
 echo "Build type:    $BUILD_TYPE"
 echo "Generator:     $CMAKE_GENERATOR"
 echo "Output path:   $REACTOS_OUTPUT_PATH"
+if [ "$ROSCONFIG_OK" = "1" ]; then
+	echo "Config cache:  $ROSCONFIG_CACHE (change with: ./menuconfig.sh)"
+fi
 echo
 
 sync_arm64_submodules
@@ -303,7 +434,7 @@ unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS
 unset CPATH LIBRARY_PATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH
 
 cmake -G "$CMAKE_GENERATOR" \
-	-DENABLE_CCACHE:BOOL=0 \
+	$ROSCONFIG_CCACHE_ARG \
 	-DCMAKE_TOOLCHAIN_FILE:FILEPATH="$TOOLCHAIN_FILE" \
 	-DARCH:STRING="$ARCH" \
 	$ROS_CMAKEOPTS \
