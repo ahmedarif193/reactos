@@ -18,7 +18,7 @@
  *              the public Broadcom datasheets ("BCM2835 ARM Peripherals",
  *              section 7, and "BCM2836 ARM-local peripherals / QA7") and
  *              from observation of the ACPI tables shipped by the Raspberry
- *              Pi UEFI firmware (OEM "RPIFDN", table "RPI3").
+ *              Pi UEFI firmware FADT (OEM "BC2836", table "RPI3").
  *
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
@@ -104,7 +104,7 @@
 #define BCM2837_SGI_COUNT                   4
 
 /* ACPI OEM identification used by the Raspberry Pi 3 UEFI firmware */
-#define BCM2837_ACPI_OEM_ID                 "RPIFDN"
+#define BCM2837_ACPI_OEM_ID                 "BC2836"
 #define BCM2837_ACPI_OEM_TABLE_ID           "RPI3"
 
 /* Set when the FADT identifies a Raspberry Pi 3 (BCM2837) platform. */
