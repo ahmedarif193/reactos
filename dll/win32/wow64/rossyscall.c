@@ -362,13 +362,23 @@ NTSYSAPI NTSTATUS WINAPI NtUpdateWnfStateData( const WNF_STATE_NAME *, const voi
  * Conversion helpers
  */
 
+static void *temp_array_alloc( SIZE_T count, SIZE_T size )
+{
+    /* the guest controls count, so the allocation can fail; raising here
+       makes the wow64_syscall SEH handler return the status to the guest */
+    void *ptr = Wow64AllocateTemp( (count ? count : 1) * size );
+
+    if (!ptr) RtlRaiseStatus( STATUS_NO_MEMORY );
+    return ptr;
+}
+
 static OBJECT_TYPE_LIST *object_type_list_32to64( const OBJECT_TYPE_LIST32 *list32, ULONG count )
 {
     OBJECT_TYPE_LIST *list;
     ULONG i;
 
     if (!list32) return NULL;
-    list = Wow64AllocateTemp( (count ? count : 1) * sizeof(*list) );
+    list = temp_array_alloc( count, sizeof(*list) );
     for (i = 0; i < count; i++)
     {
         list[i].Level = list32[i].Level;
@@ -384,7 +394,7 @@ static HANDLE *handle_array_32to64( const ULONG *handles32, ULONG count )
     ULONG i;
 
     if (!handles32) return NULL;
-    handles = Wow64AllocateTemp( (count ? count : 1) * sizeof(*handles) );
+    handles = temp_array_alloc( count, sizeof(*handles) );
     for (i = 0; i < count; i++) handles[i] = LongToHandle( handles32[i] );
     return handles;
 }
@@ -394,7 +404,7 @@ static ULONG_PTR *pfn_array_32to64( const ULONG *pfns32, ULONG_PTR count )
     ULONG_PTR *pfns, i;
 
     if (!pfns32) return NULL;
-    pfns = Wow64AllocateTemp( (count ? count : 1) * sizeof(*pfns) );
+    pfns = temp_array_alloc( count, sizeof(*pfns) );
     for (i = 0; i < count; i++) pfns[i] = pfns32[i];
     return pfns;
 }
@@ -566,7 +576,7 @@ NTSTATUS WINAPI wow64_NtAllocateUserPhysicalPages( UINT *args )
 
     if (!count32 || !pfns32) return STATUS_ACCESS_VIOLATION;
     count = *count32;
-    pfns = Wow64AllocateTemp( (count ? count : 1) * sizeof(*pfns) );
+    pfns = temp_array_alloc( count, sizeof(*pfns) );
     status = NtAllocateUserPhysicalPages( process, &count, pfns );
     put_size( count32, count );
     put_pfn_array( pfns32, pfns, count );
@@ -661,7 +671,7 @@ NTSTATUS WINAPI wow64_NtCreateJobSet( UINT *args )
 
     if (array32)
     {
-        array = Wow64AllocateTemp( (count ? count : 1) * sizeof(*array) );
+        array = temp_array_alloc( count, sizeof(*array) );
         for (i = 0; i < count; i++)
         {
             array[i].JobHandle = LongToHandle( array32[i].JobHandle );
@@ -968,7 +978,7 @@ NTSTATUS WINAPI wow64_NtGetPlugPlayEvent( UINT *args )
     ULONG size;
     NTSTATUS status;
 
-    if (!event32 || size32 < sizeof(*event32))
+    if (!event32 || size32 < sizeof(*event32) || size32 + delta < size32)
         return NtGetPlugPlayEvent( reserved1, reserved2, event32, size32 );
 
     size = size32 + delta;
@@ -1078,7 +1088,7 @@ NTSTATUS WINAPI wow64_NtMapUserPhysicalPagesScatter( UINT *args )
 
     if (addrs32)
     {
-        addrs = Wow64AllocateTemp( (count ? count : 1) * sizeof(*addrs) );
+        addrs = temp_array_alloc( count, sizeof(*addrs) );
         for (i = 0; i < count; i++) addrs[i] = ULongToPtr( addrs32[i] );
     }
     return NtMapUserPhysicalPagesScatter( addrs, count, pfn_array_32to64( pfns32, count ));
@@ -1203,7 +1213,7 @@ NTSTATUS WINAPI wow64_NtPlugPlayControl( UINT *args )
         PLUGPLAY_CONTROL_ENUMERATE_DEVICE_DATA32 *data32 = buf32;
         PLUGPLAY_CONTROL_ENUMERATE_DEVICE_DATA data;
 
-        if (size32 != sizeof(*data32)) return STATUS_INVALID_PARAMETER;
+        if (size32 < sizeof(*data32)) return STATUS_INVALID_PARAMETER;
         unicode_str_32to64( &data.DeviceInstance, &data32->DeviceInstance );
         data.Flags = data32->Flags;
         return NtPlugPlayControl( class, &data, sizeof(data) );
@@ -1220,7 +1230,7 @@ NTSTATUS WINAPI wow64_NtPlugPlayControl( UINT *args )
         PLUGPLAY_CONTROL_DEVICE_CONTROL_DATA32 *data32 = buf32;
         PLUGPLAY_CONTROL_DEVICE_CONTROL_DATA data;
 
-        if (size32 != sizeof(*data32)) return STATUS_INVALID_PARAMETER;
+        if (size32 < sizeof(*data32)) return STATUS_INVALID_PARAMETER;
         unicode_str_32to64( &data.DeviceInstance, &data32->DeviceInstance );
         return NtPlugPlayControl( class, &data, sizeof(data) );
     }
@@ -1230,7 +1240,7 @@ NTSTATUS WINAPI wow64_NtPlugPlayControl( UINT *args )
         PLUGPLAY_CONTROL_QUERY_REMOVE_DATA32 *data32 = buf32;
         PLUGPLAY_CONTROL_QUERY_REMOVE_DATA data;
 
-        if (size32 != sizeof(*data32)) return STATUS_INVALID_PARAMETER;
+        if (size32 < sizeof(*data32)) return STATUS_INVALID_PARAMETER;
         unicode_str_32to64( &data.DeviceInstance, &data32->DeviceInstance );
         data.Flags = data32->Flags;
         data.VetoType = data32->VetoType;
@@ -1251,7 +1261,7 @@ NTSTATUS WINAPI wow64_NtPlugPlayControl( UINT *args )
         PLUGPLAY_CONTROL_INTERFACE_DEVICE_LIST_DATA32 *data32 = buf32;
         PLUGPLAY_CONTROL_INTERFACE_DEVICE_LIST_DATA data;
 
-        if (size32 != sizeof(*data32)) return STATUS_INVALID_PARAMETER;
+        if (size32 < sizeof(*data32)) return STATUS_INVALID_PARAMETER;
         unicode_str_32to64( &data.DeviceInstance, &data32->DeviceInstance );
         data.FilterGuid = ULongToPtr( data32->FilterGuid );
         data.Flags = data32->Flags;
@@ -1267,7 +1277,7 @@ NTSTATUS WINAPI wow64_NtPlugPlayControl( UINT *args )
         PLUGPLAY_CONTROL_PROPERTY_DATA32 *data32 = buf32;
         PLUGPLAY_CONTROL_PROPERTY_DATA data;
 
-        if (size32 != sizeof(*data32)) return STATUS_INVALID_PARAMETER;
+        if (size32 < sizeof(*data32)) return STATUS_INVALID_PARAMETER;
         unicode_str_32to64( &data.DeviceInstance, &data32->DeviceInstance );
         data.Property = data32->Property;
         data.Buffer = ULongToPtr( data32->Buffer );
@@ -1282,7 +1292,7 @@ NTSTATUS WINAPI wow64_NtPlugPlayControl( UINT *args )
         PLUGPLAY_CONTROL_CLASS_ASSOCIATION_DATA32 *data32 = buf32;
         PLUGPLAY_CONTROL_CLASS_ASSOCIATION_DATA data;
 
-        if (size32 != sizeof(*data32)) return STATUS_INVALID_PARAMETER;
+        if (size32 < sizeof(*data32)) return STATUS_INVALID_PARAMETER;
         unicode_str_32to64( &data.DeviceInstance, &data32->DeviceInstance );
         data.InterfaceGuid = ULongToPtr( data32->InterfaceGuid );
         unicode_str_32to64( &data.Reference, &data32->Reference );
@@ -1299,7 +1309,7 @@ NTSTATUS WINAPI wow64_NtPlugPlayControl( UINT *args )
         PLUGPLAY_CONTROL_RELATED_DEVICE_DATA32 *data32 = buf32;
         PLUGPLAY_CONTROL_RELATED_DEVICE_DATA data;
 
-        if (size32 != sizeof(*data32)) return STATUS_INVALID_PARAMETER;
+        if (size32 < sizeof(*data32)) return STATUS_INVALID_PARAMETER;
         unicode_str_32to64( &data.TargetDeviceInstance, &data32->TargetDeviceInstance );
         data.Relation = data32->Relation;
         data.RelatedDeviceInstance = ULongToPtr( data32->RelatedDeviceInstance );
@@ -1314,7 +1324,7 @@ NTSTATUS WINAPI wow64_NtPlugPlayControl( UINT *args )
         PLUGPLAY_CONTROL_INTERFACE_ALIAS_DATA32 *data32 = buf32;
         PLUGPLAY_CONTROL_INTERFACE_ALIAS_DATA data;
 
-        if (size32 != sizeof(*data32)) return STATUS_INVALID_PARAMETER;
+        if (size32 < sizeof(*data32)) return STATUS_INVALID_PARAMETER;
         unicode_str_32to64( &data.SymbolicLinkName, &data32->SymbolicLinkName );
         data.AliasInterfaceClassGuid = ULongToPtr( data32->AliasInterfaceClassGuid );
         data.AliasSymbolicLinkName = ULongToPtr( data32->AliasSymbolicLinkName );
@@ -1329,7 +1339,7 @@ NTSTATUS WINAPI wow64_NtPlugPlayControl( UINT *args )
         PLUGPLAY_CONTROL_STATUS_DATA32 *data32 = buf32;
         PLUGPLAY_CONTROL_STATUS_DATA data;
 
-        if (size32 != sizeof(*data32)) return STATUS_INVALID_PARAMETER;
+        if (size32 < sizeof(*data32)) return STATUS_INVALID_PARAMETER;
         unicode_str_32to64( &data.DeviceInstance, &data32->DeviceInstance );
         data.Operation = data32->Operation;
         data.DeviceStatus = data32->DeviceStatus;
@@ -1345,7 +1355,7 @@ NTSTATUS WINAPI wow64_NtPlugPlayControl( UINT *args )
         PLUGPLAY_CONTROL_DEPTH_DATA32 *data32 = buf32;
         PLUGPLAY_CONTROL_DEPTH_DATA data;
 
-        if (size32 != sizeof(*data32)) return STATUS_INVALID_PARAMETER;
+        if (size32 < sizeof(*data32)) return STATUS_INVALID_PARAMETER;
         unicode_str_32to64( &data.DeviceInstance, &data32->DeviceInstance );
         data.Depth = data32->Depth;
         status = NtPlugPlayControl( class, &data, sizeof(data) );
@@ -1358,7 +1368,7 @@ NTSTATUS WINAPI wow64_NtPlugPlayControl( UINT *args )
         PLUGPLAY_CONTROL_DEVICE_RELATIONS_DATA32 *data32 = buf32;
         PLUGPLAY_CONTROL_DEVICE_RELATIONS_DATA data;
 
-        if (size32 != sizeof(*data32)) return STATUS_INVALID_PARAMETER;
+        if (size32 < sizeof(*data32)) return STATUS_INVALID_PARAMETER;
         unicode_str_32to64( &data.DeviceInstance, &data32->DeviceInstance );
         data.Relations = data32->Relations;
         data.BufferSize = data32->BufferSize;

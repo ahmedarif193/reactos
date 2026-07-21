@@ -34,10 +34,16 @@ WINE_DEFAULT_DEBUG_CHANNEL(wow);
 
 #define WOW64_LPC_MAX_MESSAGE_LENGTH 512
 
+/* Receive buffers are handed to the kernel, which bounds the copy-back only
+   by the port's MaxMessageLength.  That defaults to more than
+   PORT_MAXIMUM_MESSAGE_LENGTH (648 bytes on amd64: LpcpMaxMessageSize minus
+   the LPCP_MESSAGE header), so the buffer must cover the kernel ceiling even
+   though replies above WOW64_LPC_MAX_MESSAGE_LENGTH are never converted back
+   to the guest. */
 typedef union
 {
     ULONGLONG Alignment;
-    BYTE Data[WOW64_LPC_MAX_MESSAGE_LENGTH];
+    BYTE Data[2 * WOW64_LPC_MAX_MESSAGE_LENGTH];
 } WOW64_LPC_BUFFER;
 
 static HANDLE csr_api_port;
