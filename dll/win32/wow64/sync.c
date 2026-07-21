@@ -1483,6 +1483,44 @@ NTSTATUS WINAPI wow64_NtRequestWaitReplyPort( UINT *args )
 
 
 /**********************************************************************
+ *           wow64_NtRequestPort
+ */
+NTSTATUS WINAPI wow64_NtRequestPort( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    CSR_PORT_MESSAGE32 *msg32 = get_ptr( &args );
+
+    WOW64_LPC_BUFFER buffer;
+    CSR_PORT_MESSAGE64 *msg64 = (CSR_PORT_MESSAGE64 *)buffer.Data;
+    NTSTATUS status;
+
+    status = lpc_message_32to64( msg64, msg32 );
+    if (!NT_SUCCESS(status)) return status;
+    return NtRequestPort( handle, (LPC_MESSAGE *)msg64 );
+}
+
+
+/**********************************************************************
+ *           wow64_NtReplyWaitReplyPort
+ */
+NTSTATUS WINAPI wow64_NtReplyWaitReplyPort( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    CSR_PORT_MESSAGE32 *msg32 = get_ptr( &args );
+
+    WOW64_LPC_BUFFER buffer;
+    CSR_PORT_MESSAGE64 *msg64 = (CSR_PORT_MESSAGE64 *)buffer.Data;
+    NTSTATUS status;
+
+    status = lpc_message_32to64( msg64, msg32 );
+    if (!NT_SUCCESS(status)) return status;
+    status = NtReplyWaitReplyPort( handle, (LPC_MESSAGE *)msg64 );
+    if (NT_SUCCESS(status)) status = lpc_message_64to32( msg32, msg64 );
+    return status;
+}
+
+
+/**********************************************************************
  *           wow64_NtResetEvent
  */
 NTSTATUS WINAPI wow64_NtResetEvent( UINT *args )
