@@ -40,6 +40,7 @@ extern ATOM AtomFlashWndState;
 PWND FASTCALL ValidateHwndNoErr(HWND);
 BOOL FASTCALL UserUpdateUiState(PWND Wnd, WPARAM wParam);
 BOOL FASTCALL IntIsWindow(HWND hWnd);
+WNDPROC FASTCALL IntGetWindowProc(PWND pWnd, BOOL Ansi);
 HWND* FASTCALL IntWinListChildren(PWND Window);
 HWND* FASTCALL IntWinListOwnedPopups(PWND Window);
 VOID FASTCALL IntGetClientRect (PWND WindowObject, RECTL *Rect);

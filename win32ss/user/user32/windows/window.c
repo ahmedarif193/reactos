@@ -17,6 +17,13 @@ WINE_DEFAULT_DEBUG_CHANNEL(user32);
 void MDI_CalcDefaultChildPos( HWND hwndClient, INT total, LPPOINT lpPos, INT delta, UINT *id );
 extern LPCWSTR FASTCALL ClassNameToVersion(const void *lpszClass, LPCWSTR lpszMenuName, LPCWSTR *plpLibFileName, HANDLE *pContext, BOOL bAnsi);
 
+#ifdef WOW64_I386_RUNTIME
+static BOOL wow64_is_current_process_window(HWND hWnd)
+{
+    return NtUserQueryWindow(hWnd, QUERY_WINDOW_UNIQUE_PROCESS_ID) == PtrToUlong(NtCurrentTeb()->ClientId.UniqueProcess);
+}
+#endif
+
 /* FUNCTIONS *****************************************************************/
 
 
@@ -964,6 +971,9 @@ GetAncestor(_In_ HWND hwnd, _In_ UINT uType)
 BOOL WINAPI
 GetClientRect(HWND hWnd, LPRECT lpRect)
 {
+#ifdef WOW64_I386_RUNTIME
+    return (BOOL)NtUserCallHwndParam(hWnd, (DWORD_PTR)lpRect, HWNDPARAM_ROUTINE_ROS_GETCLIENTRECT);
+#else
     PWND Wnd = ValidateHwnd(hWnd);
 
     if (!Wnd) return FALSE;
@@ -993,6 +1003,7 @@ GetClientRect(HWND hWnd, LPRECT lpRect)
         lpRect->bottom = GetSystemMetrics(SM_CYSCREEN);
 */    }
     return TRUE;
+#endif
 }
 
 
@@ -1274,6 +1285,9 @@ BOOL WINAPI
 GetWindowRect(HWND hWnd,
               LPRECT lpRect)
 {
+#ifdef WOW64_I386_RUNTIME
+    return (BOOL)NtUserCallHwndParam(hWnd, (DWORD_PTR)lpRect, HWNDPARAM_ROUTINE_ROS_GETWINDOWRECT);
+#else
     PWND Wnd = ValidateHwnd(hWnd);
 
     if (!Wnd) return FALSE;
@@ -1291,6 +1305,7 @@ GetWindowRect(HWND hWnd,
         lpRect->bottom = GetSystemMetrics(SM_CYSCREEN);
 */    }
     return TRUE;
+#endif
 }
 
 /*
@@ -1299,6 +1314,23 @@ GetWindowRect(HWND hWnd,
 int WINAPI
 GetWindowTextA(HWND hWnd, LPSTR lpString, int nMaxCount)
 {
+#ifdef WOW64_I386_RUNTIME
+    WCHAR *Buffer;
+    INT Length;
+
+    if (lpString == NULL || nMaxCount <= 0) return 0;
+    lpString[0] = '\0';
+
+    if (wow64_is_current_process_window(hWnd)) return SendMessageA(hWnd, WM_GETTEXT, nMaxCount, (LPARAM)lpString);
+    if (!(Buffer = HeapAlloc(GetProcessHeap(), 0, nMaxCount * sizeof(*Buffer)))) return 0;
+
+    Buffer[0] = L'\0';
+    NtUserInternalGetWindowText(hWnd, Buffer, nMaxCount);
+    if (!WideCharToMultiByte(CP_ACP, 0, Buffer, -1, lpString, nMaxCount, NULL, NULL)) lpString[nMaxCount - 1] = '\0';
+    Length = strlen(lpString);
+    HeapFree(GetProcessHeap(), 0, Buffer);
+    return Length;
+#else
     PWND Wnd;
     INT Length = 0;
 
@@ -1329,6 +1361,7 @@ GetWindowTextA(HWND hWnd, LPSTR lpString, int nMaxCount)
     }
     //ERR("GWTA Len %d : %s\n",Length,lpString);
     return Length;
+#endif
 }
 
 /*
@@ -1337,6 +1370,13 @@ GetWindowTextA(HWND hWnd, LPSTR lpString, int nMaxCount)
 int WINAPI
 GetWindowTextLengthA(HWND hWnd)
 {
+#ifdef WOW64_I386_RUNTIME
+    CPINFO Info;
+
+    if (wow64_is_current_process_window(hWnd)) return SendMessageA(hWnd, WM_GETTEXTLENGTH, 0, 0);
+    if (!GetCPInfo(CP_ACP, &Info)) return 0;
+    return NtUserInternalGetWindowText(hWnd, NULL, 0) * Info.MaxCharSize;
+#else
     PWND Wnd;
 
     Wnd = ValidateHwnd(hWnd);
@@ -1351,6 +1391,7 @@ GetWindowTextLengthA(HWND hWnd)
     {
         return SendMessageA(hWnd, WM_GETTEXTLENGTH, 0, 0);
     }
+#endif
 }
 
 /*
@@ -1359,6 +1400,10 @@ GetWindowTextLengthA(HWND hWnd)
 int WINAPI
 GetWindowTextLengthW(HWND hWnd)
 {
+#ifdef WOW64_I386_RUNTIME
+    if (wow64_is_current_process_window(hWnd)) return SendMessageW(hWnd, WM_GETTEXTLENGTH, 0, 0);
+    return NtUserInternalGetWindowText(hWnd, NULL, 0);
+#else
     PWND Wnd;
 
     Wnd = ValidateHwnd(hWnd);
@@ -1373,6 +1418,7 @@ GetWindowTextLengthW(HWND hWnd)
     {
         return SendMessageW(hWnd, WM_GETTEXTLENGTH, 0, 0);
     }
+#endif
 }
 
 /*
@@ -1381,6 +1427,12 @@ GetWindowTextLengthW(HWND hWnd)
 int WINAPI
 GetWindowTextW(HWND hWnd, LPWSTR lpString, int nMaxCount)
 {
+#ifdef WOW64_I386_RUNTIME
+    if (lpString == NULL || nMaxCount <= 0) return 0;
+    lpString[0] = L'\0';
+    if (wow64_is_current_process_window(hWnd)) return SendMessageW(hWnd, WM_GETTEXT, nMaxCount, (LPARAM)lpString);
+    return NtUserInternalGetWindowText(hWnd, lpString, nMaxCount);
+#else
     PWND Wnd;
     INT Length = 0;
 
@@ -1411,6 +1463,7 @@ GetWindowTextW(HWND hWnd, LPWSTR lpString, int nMaxCount)
     }
     //ERR("GWTW Len %d : %S\n",Length,lpString);
     return Length;
+#endif
 }
 
 DWORD WINAPI
@@ -1540,6 +1593,9 @@ IsServerSideWindow(
 BOOL WINAPI
 IsWindow(HWND hWnd)
 {
+#ifdef WOW64_I386_RUNTIME
+    return !!NtUserCallHwnd(hWnd, HWND_ROUTINE_ROS_ISWINDOW);
+#else
     PWND Wnd = ValidateHwndNoErr(hWnd);
     if (Wnd != NULL)
     {
@@ -1549,6 +1605,7 @@ IsWindow(HWND hWnd)
     }
 
     return FALSE;
+#endif
 }
 
 
@@ -1725,6 +1782,10 @@ DECLSPEC_HOTPATCH
 SetWindowTextA(HWND hWnd,
                LPCSTR lpString)
 {
+#ifdef WOW64_I386_RUNTIME
+  if (!IsWindow(hWnd)) return FALSE;
+  return (SendMessageA(hWnd, WM_SETTEXT, 0, (LPARAM)lpString) >= 0);
+#else
   PWND pwnd;
 
   pwnd = ValidateHwnd(hWnd);
@@ -1738,6 +1799,7 @@ SetWindowTextA(HWND hWnd,
      return (SendMessageA(hWnd, WM_SETTEXT, 0, (LPARAM)lpString) >= 0);
   }
   return FALSE;
+#endif
 }
 
 
@@ -1750,6 +1812,10 @@ DECLSPEC_HOTPATCH
 SetWindowTextW(HWND hWnd,
                LPCWSTR lpString)
 {
+#ifdef WOW64_I386_RUNTIME
+  if (!IsWindow(hWnd)) return FALSE;
+  return (SendMessageW(hWnd, WM_SETTEXT, 0, (LPARAM)lpString) >= 0);
+#else
   PWND pwnd;
 
   pwnd = ValidateHwnd(hWnd);
@@ -1763,6 +1829,7 @@ SetWindowTextW(HWND hWnd,
      return (SendMessageW(hWnd, WM_SETTEXT, 0, (LPARAM)lpString) >= 0);
   }
   return FALSE;
+#endif
 }
 
 
@@ -2024,4 +2091,3 @@ DisableProcessWindowsGhosting(VOID)
 }
 
 /* EOF */
-

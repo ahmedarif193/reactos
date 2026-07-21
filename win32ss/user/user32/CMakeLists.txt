@@ -81,6 +81,10 @@ add_library(user32 MODULE
     user32.rc
     ${CMAKE_CURRENT_BINARY_DIR}/user32.def)
 
+if(WOW64_I386_RUNTIME AND ARCH STREQUAL "i386")
+    target_compile_definitions(user32 PRIVATE WOW64_I386_RUNTIME)
+endif()
+
 set_module_type(user32 win32dll UNICODE ENTRYPOINT DllMain 12)
 target_link_libraries(user32 user32_vista_static user32_optional_vista user32_wsprintf wine win32ksys ${PSEH_LIB})
 add_dependencies(user32 asm)

@@ -799,6 +799,33 @@ NtUserCallHwnd(
             UserLeave();
             return (DWORD_PTR)pWnd;
         }
+
+        case HWND_ROUTINE_ROS_GETDIALOGPOINTER:
+        {
+            PWND Window;
+            DWORD_PTR DialogPointer = 0;
+
+            UserEnterShared();
+            Window = UserGetWindowObject(hWnd);
+            if (Window && Window->head.pti->ppi == PsGetCurrentProcessWin32Process()) DialogPointer = (DWORD_PTR)Window->DialogPointer;
+            UserLeave();
+            return DialogPointer;
+        }
+
+        case HWND_ROUTINE_ROS_ISWINDOW:
+            return IntIsWindow(hWnd);
+
+        case HWND_ROUTINE_ROS_GETWINDOWSTATE:
+        {
+            PWND Window;
+            DWORD State = 0;
+
+            UserEnterShared();
+            Window = UserGetWindowObject(hWnd);
+            if (Window) State = Window->state;
+            UserLeave();
+            return State;
+        }
     }
 
     STUB;
@@ -816,6 +843,124 @@ NtUserCallHwndParam(
 
     switch (Routine)
     {
+        case HWNDPARAM_ROUTINE_ROS_GETDLGITEM:
+        {
+            PWND Window;
+            PWND Child;
+            HWND Ret = NULL;
+
+            UserEnterShared();
+            Window = UserGetWindowObject(hWnd);
+            if (Window)
+            {
+                for (Child = Window->spwndChild; Child; Child = Child->spwndNext)
+                {
+                    if ((INT_PTR)Child->IDMenu == (INT)Param)
+                    {
+                        Ret = UserHMGetHandle(Child);
+                        break;
+                    }
+                }
+            }
+            UserLeave();
+            return HandleToUlong(Ret);
+        }
+
+        case HWNDPARAM_ROUTINE_ROS_GETCLIENTRECT:
+        case HWNDPARAM_ROUTINE_ROS_GETWINDOWRECT:
+        {
+            PWND Window;
+            RECT Rect;
+            BOOL Ret = FALSE;
+
+            UserEnterShared();
+            Window = UserGetWindowObject(hWnd);
+            if (Window)
+            {
+                if (Routine == HWNDPARAM_ROUTINE_ROS_GETCLIENTRECT)
+                {
+                    Rect.left = Rect.top = 0;
+                    if (Window->style & WS_MINIMIZED)
+                    {
+                        Rect.right = UserGetSystemMetrics(SM_CXMINIMIZED);
+                        Rect.bottom = UserGetSystemMetrics(SM_CYMINIMIZED);
+                    }
+                    else
+                    {
+                        Rect.right = Window->rcClient.right - Window->rcClient.left;
+                        Rect.bottom = Window->rcClient.bottom - Window->rcClient.top;
+                    }
+                }
+                else
+                {
+                    Rect = Window->rcWindow;
+                }
+                Ret = TRUE;
+            }
+            UserLeave();
+
+            if (Ret)
+            {
+                _SEH2_TRY
+                {
+                    ProbeForWrite((PRECT)Param, sizeof(Rect), 1);
+                    *(PRECT)Param = Rect;
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Ret = FALSE;
+                }
+                _SEH2_END;
+            }
+            return Ret;
+        }
+
+        case HWNDPARAM_ROUTINE_ROS_GETWINDOWLONGA:
+        case HWNDPARAM_ROUTINE_ROS_GETWINDOWLONGW:
+        {
+            PWND Window;
+            PWND RelatedWindow;
+            LONG_PTR Ret = 0;
+            INT Index = (INT)Param;
+            BOOL Ansi = Routine == HWNDPARAM_ROUTINE_ROS_GETWINDOWLONGA;
+
+            UserEnterExclusive();
+            Window = UserGetWindowObject(hWnd);
+            if (!Window) goto GetWindowLongExit;
+
+            if (Index >= 0)
+            {
+                if ((ULONG)Index > Window->cbwndExtra || Window->cbwndExtra - (ULONG)Index < sizeof(ULONG))
+                {
+                    EngSetLastError(ERROR_INVALID_INDEX);
+                    goto GetWindowLongExit;
+                }
+                RtlCopyMemory(&Ret, (PUCHAR)(Window + 1) + Index, sizeof(ULONG));
+                goto GetWindowLongExit;
+            }
+
+            switch (Index)
+            {
+                case GWL_EXSTYLE: Ret = (LONG)Window->ExStyle; break;
+                case GWL_STYLE: Ret = (LONG)Window->style; break;
+                case GWLP_ID: Ret = (LONG)Window->IDMenu; break;
+                case GWLP_HINSTANCE: Ret = (LONG_PTR)Window->hModule; break;
+                case GWLP_USERDATA: Ret = Window->dwUserData; break;
+                case GWLP_WNDPROC: Ret = (LONG_PTR)IntGetWindowProc(Window, Ansi); break;
+                case GWLP_HWNDPARENT:
+                    RelatedWindow = (Window->style & WS_CHILD) ? Window->spwndParent : Window->spwndOwner;
+                    Ret = RelatedWindow ? (LONG_PTR)UserHMGetHandle(RelatedWindow) : 0;
+                    break;
+                default:
+                    EngSetLastError(ERROR_INVALID_INDEX);
+                    break;
+            }
+
+GetWindowLongExit:
+            UserLeave();
+            return (DWORD)Ret;
+        }
+
         case HWNDPARAM_ROUTINE_KILLSYSTEMTIMER:
         {
             DWORD ret;

@@ -776,7 +776,11 @@ BOOL GdiGetHandleUserData(HGDIOBJ hGdiObj, DWORD ObjectType, PVOID *UserData)
         return FALSE;
     }
 
+#ifdef WOW64_I386_RUNTIME
+    *UserData = (PVOID)(ULONG_PTR)Entry->UserData;
+#else
     *UserData = Entry->UserData;
+#endif
     return TRUE;
 }
 
@@ -1091,4 +1095,3 @@ GdiAddGlsRecord(HDC hdc,
     SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
     return 0;
 }
-

@@ -473,6 +473,53 @@ UserThreadDestroy(PETHREAD Thread)
     return STATUS_SUCCESS;
 }
 
+VOID
+UserSyncWow64ClientInfo(PTHREADINFO pti)
+{
+#ifdef _WIN64
+    PTEB Teb;
+    PTEB32 Teb32;
+    PCLIENTINFO Source;
+    PCLIENTINFO32 Destination;
+
+    if (!PsGetCurrentProcessWow64Process()) return;
+
+    Teb = NtCurrentTeb();
+    if (!Teb || Teb->WowTebOffset <= 0) return;
+
+    Source = pti->pClientInfo;
+    Teb32 = (PTEB32)((PUCHAR)Teb + Teb->WowTebOffset);
+    Destination = (PCLIENTINFO32)Teb32->Win32ClientInfo;
+
+    Teb32->Win32ThreadInfo = PtrToUlong(pti);
+    Destination->dwExpWinVer = Source->dwExpWinVer;
+    Destination->dwCompatFlags = Source->dwCompatFlags;
+    Destination->dwCompatFlags2 = Source->dwCompatFlags2;
+    Destination->dwTIFlags = Source->dwTIFlags;
+    Destination->pDeskInfo = PtrToUlong(Source->pDeskInfo);
+    Destination->ulClientDelta = (ULONG)Source->ulClientDelta;
+    Destination->phkCurrent = PtrToUlong(Source->phkCurrent);
+    Destination->fsHooks = Source->fsHooks;
+    Destination->CallbackWnd.hWnd = PtrToUlong(Source->CallbackWnd.hWnd);
+    Destination->CallbackWnd.pWnd = PtrToUlong(Source->CallbackWnd.pWnd);
+    Destination->CallbackWnd.pActCtx = PtrToUlong(Source->CallbackWnd.pActCtx);
+    Destination->dwHookCurrent = Source->dwHookCurrent;
+    Destination->cInDDEMLCallback = Source->cInDDEMLCallback;
+    Destination->pClientThreadInfo = PtrToUlong(Source->pClientThreadInfo);
+    Destination->dwKeyCache = Source->dwKeyCache;
+    RtlCopyMemory(Destination->afKeyState, Source->afKeyState, sizeof(Destination->afKeyState));
+    Destination->dwAsyncKeyCache = Source->dwAsyncKeyCache;
+    RtlCopyMemory(Destination->afAsyncKeyState, Source->afAsyncKeyState, sizeof(Destination->afAsyncKeyState));
+    RtlCopyMemory(Destination->afAsyncKeyStateRecentDow, Source->afAsyncKeyStateRecentDow, sizeof(Destination->afAsyncKeyStateRecentDow));
+    Destination->hKL = PtrToUlong(Source->hKL);
+    Destination->CodePage = Source->CodePage;
+    RtlCopyMemory(Destination->achDbcsCF, Source->achDbcsCF, sizeof(Destination->achDbcsCF));
+    Destination->ppi = PtrToUlong(Source->ppi);
+#else
+    UNREFERENCED_PARAMETER(pti);
+#endif
+}
+
 NTSTATUS NTAPI
 InitThreadCallback(PETHREAD Thread)
 {
@@ -707,6 +754,7 @@ InitThreadCallback(PETHREAD Thread)
         ptiCurrent->TIF_flags |= TIF_ALLOWFOREGROUNDACTIVATE;
     }
     ptiCurrent->pClientInfo->dwTIFlags = ptiCurrent->TIF_flags;
+    UserSyncWow64ClientInfo(ptiCurrent);
 
     /* Create the default input context */
     if (IS_IMM_MODE())

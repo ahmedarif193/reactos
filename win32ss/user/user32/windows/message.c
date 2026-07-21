@@ -1902,7 +1902,9 @@ DispatchMessageA(CONST MSG *lpmsg)
 {
     LRESULT Ret = 0;
     MSG UnicodeMsg;
+#ifndef WOW64_I386_RUNTIME
     PWND Wnd;
+#endif
 
     if ( lpmsg->message & ~WM_MAXIMUM )
     {
@@ -1912,11 +1914,17 @@ DispatchMessageA(CONST MSG *lpmsg)
 
     if (lpmsg->hwnd != NULL)
     {
+#ifdef WOW64_I386_RUNTIME
+        if (!IsWindow(lpmsg->hwnd)) return 0;
+#else
         Wnd = ValidateHwnd(lpmsg->hwnd);
         if (!Wnd) return 0;
+#endif
     }
+#ifndef WOW64_I386_RUNTIME
     else
         Wnd = NULL;
+#endif
 
     if (is_pointer_message(lpmsg->message, lpmsg->wParam))
     {
@@ -1950,8 +1958,13 @@ DispatchMessageA(CONST MSG *lpmsg)
        }
        _SEH2_END;
     }
-    else if (Wnd != NULL)
+    else if (lpmsg->hwnd != NULL)
     {
+#ifdef WOW64_I386_RUNTIME
+       if (!MsgiAnsiToUnicodeMessage(lpmsg->hwnd, &UnicodeMsg, (LPMSG)lpmsg)) return FALSE;
+       Ret = NtUserDispatchMessage(&UnicodeMsg);
+       if (!MsgiAnsiToUnicodeReply(&UnicodeMsg, (LPMSG)lpmsg, &Ret)) return FALSE;
+#else
        if ( (lpmsg->message != WM_PAINT) && !(Wnd->state & WNDS_SERVERSIDEWINDOWPROC) )
        {
            Ret = IntCallMessageProc(Wnd,
@@ -1975,6 +1988,7 @@ DispatchMessageA(CONST MSG *lpmsg)
              return FALSE;
           }
        }
+#endif
     }
 
     return Ret;
@@ -1990,7 +2004,9 @@ DECLSPEC_HOTPATCH
 DispatchMessageW(CONST MSG *lpmsg)
 {
     LRESULT Ret = 0;
+#ifndef WOW64_I386_RUNTIME
     PWND Wnd;
+#endif
     BOOL Hit = FALSE;
 
     if ( lpmsg->message & ~WM_MAXIMUM )
@@ -2001,11 +2017,17 @@ DispatchMessageW(CONST MSG *lpmsg)
 
     if (lpmsg->hwnd != NULL)
     {
+#ifdef WOW64_I386_RUNTIME
+        if (!IsWindow(lpmsg->hwnd)) return 0;
+#else
         Wnd = ValidateHwnd(lpmsg->hwnd);
         if (!Wnd) return 0;
+#endif
     }
+#ifndef WOW64_I386_RUNTIME
     else
         Wnd = NULL;
+#endif
 
     if (is_pointer_message(lpmsg->message, lpmsg->wParam))
     {
@@ -2039,8 +2061,11 @@ DispatchMessageW(CONST MSG *lpmsg)
        }
        _SEH2_END;
     }
-    else if (Wnd != NULL)
+    else if (lpmsg->hwnd != NULL)
     {
+#ifdef WOW64_I386_RUNTIME
+       Ret = NtUserDispatchMessage((PMSG)lpmsg);
+#else
        if ( (lpmsg->message != WM_PAINT) && !(Wnd->state & WNDS_SERVERSIDEWINDOWPROC) )
        {
            Ret = IntCallMessageProc(Wnd,
@@ -2052,6 +2077,7 @@ DispatchMessageW(CONST MSG *lpmsg)
        }
        else
          Ret = NtUserDispatchMessage( (PMSG) lpmsg );
+#endif
     }
 
     if (Hit)
@@ -3446,4 +3472,3 @@ BroadcastSystemMessageExW(
 {
   return IntBroadcastSystemMessage( dwflags, lpdwRecipients, uiMessage, wParam, lParam , pBSMInfo, FALSE );
 }
-

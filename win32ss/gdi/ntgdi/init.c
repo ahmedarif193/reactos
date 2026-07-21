@@ -36,10 +36,28 @@ GdiProcessCreate(PEPROCESS Process)
     /* Map the GDI handle table to user land */
     {
         PPEB Peb = PsGetProcessPeb(Process);
+        PVOID MappedTable;
+
         if (Peb)
         {
-            Peb->GdiSharedHandleTable = GDI_MapHandleTable(Process);
+            MappedTable = GDI_MapHandleTable(Process);
+            if (!MappedTable) return STATUS_NO_MEMORY;
+
+            Peb->GdiSharedHandleTable = MappedTable;
             Peb->GdiDCAttributeList = GDI_BATCH_LIMIT;
+
+#ifdef _WIN64
+            {
+                PEB32 *Peb32 = PsGetProcessPeb32(Process);
+
+                if (Peb32)
+                {
+                    if ((ULONG_PTR)MappedTable > MAXULONG) return STATUS_NO_MEMORY;
+                    Peb32->GdiSharedHandleTable = PtrToUlong(MappedTable);
+                    Peb32->GdiDCAttributeList = GDI_BATCH_LIMIT;
+                }
+            }
+#endif
         }
     }
 

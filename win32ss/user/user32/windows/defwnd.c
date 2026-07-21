@@ -806,12 +806,27 @@ RealDefWindowProcA(HWND hWnd,
 
     Wnd = ValidateHwnd(hWnd);
 
-    if ( !Wnd &&
+#ifdef WOW64_I386_RUNTIME
+    if (!Wnd && Msg == WM_SETTEXT)
+    {
+        Result = DefSetText(hWnd, (PCWSTR)lParam, TRUE);
+        if (Result) RedrawWindow(hWnd, NULL, 0, RDW_INVALIDATE | RDW_FRAME | RDW_ERASE);
+        return Result;
+    }
+
+    if (!Wnd && Msg != WM_NCCREATE)
+    {
+        NtUserMessageCall(hWnd, Msg, wParam, lParam, (ULONG_PTR)&Result, FNID_DEFWINDOWPROC, TRUE);
+        return Result;
+    }
+#else
+    if ( !Wnd && Msg != WM_NCCREATE &&
          Msg != WM_CTLCOLORMSGBOX &&
          Msg != WM_CTLCOLORBTN    &&
          Msg != WM_CTLCOLORDLG    &&
          Msg != WM_CTLCOLORSTATIC )
        return 0;
+#endif
 
     SPY_EnterMessage(SPY_DEFWNDPROC, hWnd, Msg, wParam, lParam);
     switch (Msg)
@@ -1030,12 +1045,27 @@ RealDefWindowProcW(HWND hWnd,
 
     Wnd = ValidateHwnd(hWnd);
 
-    if ( !Wnd &&
+#ifdef WOW64_I386_RUNTIME
+    if (!Wnd && Msg == WM_SETTEXT)
+    {
+        Result = DefSetText(hWnd, (PCWSTR)lParam, FALSE);
+        if (Result) RedrawWindow(hWnd, NULL, 0, RDW_INVALIDATE | RDW_FRAME | RDW_ERASE);
+        return Result;
+    }
+
+    if (!Wnd && Msg != WM_NCCREATE)
+    {
+        NtUserMessageCall(hWnd, Msg, wParam, lParam, (ULONG_PTR)&Result, FNID_DEFWINDOWPROC, FALSE);
+        return Result;
+    }
+#else
+    if ( !Wnd && Msg != WM_NCCREATE &&
          Msg != WM_CTLCOLORMSGBOX &&
          Msg != WM_CTLCOLORBTN    &&
          Msg != WM_CTLCOLORDLG    &&
          Msg != WM_CTLCOLORSTATIC )
        return 0;
+#endif
 
     SPY_EnterMessage(SPY_DEFWNDPROC, hWnd, Msg, wParam, lParam);
     switch (Msg)
