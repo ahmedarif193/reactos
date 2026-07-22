@@ -83,6 +83,7 @@
 #define BCMA_CORE_SYS_MEM               0x849
 
 #define CYW43455_RAMBASE                0x198000
+#define CYW43455_RAMSIZE                0x0C8000
 
 #define ARMCR4_BCMA_IOCTL_CPUHALT       0x20
 
@@ -162,14 +163,17 @@ typedef struct _CYW_DLOAD_DATA
 
 #define BRCMF_C_UP                      2
 #define BRCMF_C_DOWN                    3
+#define BRCMF_C_GET_RATE                12
 #define BRCMF_C_SET_INFRA               20
 #define BRCMF_C_GET_BSSID               23
 #define BRCMF_C_SET_SSID                26
+#define BRCMF_C_GET_CHANNEL             29
 #define BRCMF_C_SET_CHANNEL             30
 #define BRCMF_C_SET_PASSIVE_SCAN        49
 #define BRCMF_C_SCAN                    50
 #define BRCMF_C_DISASSOC                52
 #define BRCMF_C_SET_PM                  86
+#define BRCMF_C_GET_RSSI                127
 #define BRCMF_C_SET_WSEC                134
 #define BRCMF_C_SET_BAND                142
 #define BRCMF_C_SET_AUTH                22
@@ -196,6 +200,15 @@ typedef struct _CYW_DLOAD_DATA
 #define CYW_CRYPTO_ALGO_AES_CCM         4
 #define CYW_WSEC_PRIMARY_KEY            2
 
+/* brcmf_wsec_pmk_le flags: key material is a cleartext passphrase (SAE) */
+#define CYW_WSEC_PASSPHRASE             0x0001
+#define CYW_SAE_PASSWORD_MAX            128
+
+/* Firmware-assisted join dwell times (brcmfmac defaults) */
+#define CYW_JOIN_ACTIVE_DWELL_MS        320
+#define CYW_JOIN_PASSIVE_DWELL_MS       400
+#define CYW_JOIN_PROBE_INTERVAL_MS      20
+
 #define CYW_FC0_TYPE_DATA               0x08
 #define CYW_FC1_FROMDS                  0x02
 #define CYW_SNAP_DSAP                   0xAA
@@ -204,6 +217,7 @@ typedef struct _CYW_DLOAD_DATA
 #define ETH_P_EAPOL                     0x888E
 
 #define BRCMF_ESCAN_REQ_VERSION         1
+#define CYW_BSS_INFO_VERSION            109
 #define WL_ESCAN_ACTION_START           1
 #define WL_ESCAN_ACTION_CONTINUE        2
 #define WL_ESCAN_ACTION_ABORT           3
@@ -243,6 +257,9 @@ typedef struct _CYW_DLOAD_DATA
 #define CYW_CONTROL_BUFFER_SIZE         2048
 #define CYW_RX_BUFFER_SIZE              262144
 #define CYW_RX_POOL_COUNT              384
+#define CYW_RX_INDICATE_BATCH           32
+#define CYW_REG_SCRATCH_SIZE            64
+#define CYW_DEFAULT_COUNTRY             "FR"
 #define CYW_ADDRESS_LENGTH              6
 #define CYW_MTU_SIZE                    1500
 #define CYW_MAX_FRAME_SIZE              DOT11_MAX_PDU_SIZE
@@ -340,7 +357,128 @@ typedef struct _CYW_COUNTRY_LE
     LONG Rev;
     CHAR Ccode[4];
 } CYW_COUNTRY_LE, *PCYW_COUNTRY_LE;
+
+/* BCMILCP vendor header between the 802.3 header and the event message
+   (fields are big-endian on the wire) */
+typedef struct _CYW_BCM_ETH_HEADER
+{
+    USHORT Subtype;
+    USHORT Length;
+    UCHAR Version;
+    UCHAR Oui[3];
+    USHORT UsrSubtype;
+} CYW_BCM_ETH_HEADER, *PCYW_BCM_ETH_HEADER;
+
+/* wl_bss_info version 109 as emitted by the 43455 firmware */
+typedef struct _CYW_BSS_INFO_LE
+{
+    ULONG Version;
+    ULONG Length;
+    UCHAR Bssid[6];
+    USHORT BeaconPeriod;
+    USHORT Capability;
+    UCHAR SsidLen;
+    UCHAR Ssid[32];
+    ULONG RatesetCount;
+    UCHAR RatesetRates[16];
+    USHORT Chanspec;
+    USHORT AtimWindow;
+    UCHAR DtimPeriod;
+    SHORT Rssi;
+    CHAR PhyNoise;
+    UCHAR NCap;
+    ULONG NbssCap;
+    UCHAR CtlCh;
+    ULONG Reserved32;
+    UCHAR Flags;
+    UCHAR VhtCap;
+    UCHAR Reserved[2];
+    UCHAR BasicMcs[16];
+    USHORT IeOffset;
+    ULONG IeLength;
+    USHORT Snr;
+} CYW_BSS_INFO_LE, *PCYW_BSS_INFO_LE;
+
+typedef struct _CYW_ESCAN_RESULT_LE
+{
+    ULONG BufLen;
+    ULONG Version;
+    USHORT SyncId;
+    USHORT BssCount;
+    CYW_BSS_INFO_LE BssInfo[1];
+} CYW_ESCAN_RESULT_LE, *PCYW_ESCAN_RESULT_LE;
 #include <poppack.h>
+
+C_ASSERT(sizeof(CYW_BCDC_HEADER) == BCDC_HEADER_LEN);
+C_ASSERT(sizeof(CYW_ETHER_HEADER) == 14);
+C_ASSERT(sizeof(CYW_BCM_ETH_HEADER) == 10);
+C_ASSERT(sizeof(CYW_EVENT_MSG) == 48);
+C_ASSERT(FIELD_OFFSET(CYW_BSS_INFO_LE, SsidLen) == 18);
+C_ASSERT(FIELD_OFFSET(CYW_BSS_INFO_LE, Chanspec) == 71);
+C_ASSERT(FIELD_OFFSET(CYW_BSS_INFO_LE, Rssi) == 76);
+C_ASSERT(FIELD_OFFSET(CYW_BSS_INFO_LE, IeOffset) == 109);
+C_ASSERT(sizeof(CYW_BSS_INFO_LE) == 117);
+C_ASSERT(FIELD_OFFSET(CYW_ESCAN_RESULT_LE, BssInfo) == 12);
+
+/* The join/status structures below deliberately use natural alignment: the
+ * brcmfmac reference declares them without packing, so the firmware ABI
+ * includes the padding the C_ASSERTs below pin down. */
+
+typedef struct _CYW_JOIN_SCAN_PARAMS_LE
+{
+    UCHAR ScanType;
+    LONG NProbes;
+    LONG ActiveTime;
+    LONG PassiveTime;
+    LONG HomeTime;
+} CYW_JOIN_SCAN_PARAMS_LE, *PCYW_JOIN_SCAN_PARAMS_LE;
+
+typedef struct _CYW_ASSOC_PARAMS_LE
+{
+    UCHAR Bssid[6];
+    ULONG ChanspecNum;
+    USHORT ChanspecList[1];
+} CYW_ASSOC_PARAMS_LE, *PCYW_ASSOC_PARAMS_LE;
+
+typedef struct _CYW_JOIN_PARAMS
+{
+    CYW_SSID_LE Ssid;
+    CYW_ASSOC_PARAMS_LE Assoc;
+} CYW_JOIN_PARAMS, *PCYW_JOIN_PARAMS;
+
+typedef struct _CYW_EXT_JOIN_PARAMS_LE
+{
+    CYW_SSID_LE Ssid;
+    CYW_JOIN_SCAN_PARAMS_LE Scan;
+    CYW_ASSOC_PARAMS_LE Assoc;
+} CYW_EXT_JOIN_PARAMS_LE, *PCYW_EXT_JOIN_PARAMS_LE;
+
+typedef struct _CYW_SCB_VAL_LE
+{
+    ULONG Val;
+    UCHAR Ea[6];
+} CYW_SCB_VAL_LE, *PCYW_SCB_VAL_LE;
+
+typedef struct _CYW_CHANNEL_INFO_LE
+{
+    ULONG HwChannel;
+    ULONG TargetChannel;
+    ULONG ScanChannel;
+} CYW_CHANNEL_INFO_LE, *PCYW_CHANNEL_INFO_LE;
+
+typedef struct _CYW_WSEC_PMK_LE
+{
+    USHORT KeyLen;
+    USHORT Flags;
+    UCHAR Key[CYW_SAE_PASSWORD_MAX];
+} CYW_WSEC_PMK_LE, *PCYW_WSEC_PMK_LE;
+
+C_ASSERT(sizeof(CYW_JOIN_SCAN_PARAMS_LE) == 20);
+C_ASSERT(FIELD_OFFSET(CYW_ASSOC_PARAMS_LE, ChanspecNum) == 8);
+C_ASSERT(FIELD_OFFSET(CYW_ASSOC_PARAMS_LE, ChanspecList) == 12);
+C_ASSERT(FIELD_OFFSET(CYW_EXT_JOIN_PARAMS_LE, Assoc) == 56);
+C_ASSERT(sizeof(CYW_SCB_VAL_LE) == 12);
+C_ASSERT(sizeof(CYW_WSEC_PMK_LE) == 132);
 
 typedef struct _CYW_WSEC_KEY
 {
@@ -385,11 +523,21 @@ typedef struct _CYW_RX_BUF
     PMDL Mdl;
 } CYW_RX_BUF, *PCYW_RX_BUF;
 
+/* A persistent nonpaged transfer buffer with a preallocated MDL that is
+   re-pointed at the requested sub-range for each SDIO transfer */
+typedef struct _CYW_DMA_BUF
+{
+    PUCHAR Buffer;
+    ULONG Size;
+    PMDL Mdl;
+} CYW_DMA_BUF, *PCYW_DMA_BUF;
+
+#define CYW_DMA_BUF_COUNT               4
+
 typedef struct _CYW_ADAPTER
 {
     NDIS_HANDLE MiniportAdapterHandle;
     PDEVICE_OBJECT Pdo;
-    PDEVICE_OBJECT NextDeviceObject;
     SDBUS_INTERFACE_STANDARD SdBus;
     BOOLEAN SdBusOpened;
 
@@ -397,33 +545,29 @@ typedef struct _CYW_ADAPTER
     ULONG ChipRev;
     ULONG RamBase;
     ULONG RamSize;
-    ULONG Cr4CoreBase;
     ULONG Cr4WrapBase;
     ULONG SdioCoreBase;
     ULONG RstVec;
-    ULONG ChipCommonBase;
-    ULONG SocramBase;
     ULONG CurrentBackplaneWindow;
-    BOOLEAN ChipUp;
-    BOOLEAN FirmwareReady;
 
     ULONG BcdcRequestId;
     UCHAR TxSeq;
     UCHAR TxMax;
     UCHAR TxFlow;
     PUCHAR ControlBuffer;
-    PMDL ControlMdl;
     PUCHAR TxBuffer;
     PUCHAR RxBuffer;
     PUCHAR RegScratch;
+    CYW_DMA_BUF DmaBufs[CYW_DMA_BUF_COUNT];
+    ULONG DmaBufCount;
     USHORT GlomLens[256];
     ULONG GlomCount;
     KEVENT CtrlEvent;
-    KEVENT RxEvent;
+    KEVENT BusEvent;
     LIST_ENTRY TxQueue;
     KSPIN_LOCK TxLock;
     ULONG CtrlResponseLen;
-    BOOLEAN RxThreadRunning;
+    BOOLEAN BusThreadRunning;
     KMUTEX F2Lock;
     KMUTEX CmdLock;
     NDIS_HANDLE RxNblPool;
@@ -440,6 +584,8 @@ typedef struct _CYW_ADAPTER
 
     NDIS_SPIN_LOCK Lock;
     PNDIS_OID_REQUEST PendingScanOid;
+    ULONG ScanSeq;
+    ULONG ConnectSeq;
     BOOLEAN ScanInProgress;
     CYW_BSS Bss[CYW_MAX_BSS];
     ULONG BssCount;
@@ -451,17 +597,24 @@ typedef struct _CYW_ADAPTER
     ULONG AuthAlgorithm;
     ULONG UnicastCipher;
     ULONG MulticastCipher;
+    ULONG DefaultKeyId;
+    UCHAR SaePassword[CYW_SAE_PASSWORD_MAX];
+    ULONG SaePasswordLen;
     UCHAR ConnectedBssid[CYW_ADDRESS_LENGTH];
     BOOLEAN Associated;
     BOOLEAN LinkUp;
     PNDIS_OID_REQUEST PendingConnectOid;
 
-    HANDLE RxThreadHandle;
-    PVOID RxThread;
-    volatile LONG RxThreadStop;
+    ULONG64 TxOkCount;
+    ULONG64 TxErrCount;
+    ULONG64 RxOkCount;
+
+    PVOID BusThread;
+    volatile LONG BusThreadStop;
 
     NDIS_HANDLE InterruptWorkItem;
-    volatile LONG InterruptPending;
+    NDIS_HANDLE LinkWorkItem;
+    volatile LONG WorkItemsPending;
     BOOLEAN Halting;
     BOOLEAN CardIntRegistered;
 } CYW_ADAPTER, *PCYW_ADAPTER;
@@ -491,6 +644,8 @@ NTSTATUS CywSdioWriteBytes(_In_ PCYW_ADAPTER Adapter, _In_ UCHAR Function, _In_ 
 NTSTATUS CywSdioWriteBlocks(_In_ PCYW_ADAPTER Adapter, _In_ UCHAR Function, _In_ ULONG Address, _In_ PUCHAR Buffer, _In_ ULONG Length, _In_ ULONG BlockSize);
 NTSTATUS CywSdioEnableFunction(_In_ PCYW_ADAPTER Adapter, _In_ UCHAR Function);
 NTSTATUS CywSdioSetBlockSize(_In_ PCYW_ADAPTER Adapter, _In_ UCHAR Function, _In_ ULONG BlockSize);
+NTSTATUS CywRegisterDmaBuf(_In_ PCYW_ADAPTER Adapter, _In_ PUCHAR Buffer, _In_ ULONG Size);
+VOID CywFreeDmaBufs(_In_ PCYW_ADAPTER Adapter);
 
 NTSTATUS CywBackplaneSetWindow(_In_ PCYW_ADAPTER Adapter, _In_ ULONG Address);
 NTSTATUS CywBackplaneReadl(_In_ PCYW_ADAPTER Adapter, _In_ ULONG Address, _Out_ PULONG Value);
@@ -509,20 +664,29 @@ NTSTATUS CywFilIovarSet(_In_ PCYW_ADAPTER Adapter, _In_ PCSTR Name, _In_ PVOID D
 NTSTATUS CywFilIovarGet(_In_ PCYW_ADAPTER Adapter, _In_ PCSTR Name, _Out_ PVOID Data, _In_ ULONG Length);
 NTSTATUS CywFilIovarSetInt(_In_ PCYW_ADAPTER Adapter, _In_ PCSTR Name, _In_ ULONG Value);
 NTSTATUS CywActivateEvents(_In_ PCYW_ADAPTER Adapter);
+NTSTATUS CywQueryRssi(_In_ PCYW_ADAPTER Adapter, _Out_ PLONG Rssi);
+NTSTATUS CywQueryRate(_In_ PCYW_ADAPTER Adapter, _Out_ PULONG RateUnits500Kbps);
 
-NTSTATUS CywScanStart(_In_ PCYW_ADAPTER Adapter, _In_opt_ PDOT11_SCAN_REQUEST_V2 Request);
+NTSTATUS CywScanStart(_In_ PCYW_ADAPTER Adapter, _In_reads_bytes_opt_(RequestLength) PDOT11_SCAN_REQUEST_V2 Request, _In_ ULONG RequestLength);
 VOID CywProcessEvent(_In_ PCYW_ADAPTER Adapter, _In_ PUCHAR Frame, _In_ ULONG Length);
 NTSTATUS CywSdpcmSendData(_In_ PCYW_ADAPTER Adapter, _In_ PUCHAR Eth, _In_ ULONG EthLen);
+NTSTATUS CywSdpcmSendNb(_In_ PCYW_ADAPTER Adapter, _In_ PNET_BUFFER Nb);
+ULONG CywBuildEthFromNbl(_In_ PNET_BUFFER Nb, _Out_writes_(Capacity) PUCHAR Dest, _In_ ULONG Capacity);
+BOOLEAN CywTxAllowed(_In_ PCYW_ADAPTER Adapter, _In_reads_(EthLen) PUCHAR Eth, _In_ ULONG EthLen);
 PNET_BUFFER_LIST CywRxData(_In_ PCYW_ADAPTER Adapter, _In_ PUCHAR Body, _In_ ULONG BodyLen);
-NTSTATUS CywStartRxThread(_In_ PCYW_ADAPTER Adapter);
-VOID CywStopRxThread(_In_ PCYW_ADAPTER Adapter);
+NTSTATUS CywStartBusThread(_In_ PCYW_ADAPTER Adapter);
+VOID CywStopBusThread(_In_ PCYW_ADAPTER Adapter);
 VOID CywDrainTxQueue(_In_ PCYW_ADAPTER Adapter);
 ULONG CywBuildBssList(_In_ PCYW_ADAPTER Adapter, _Out_ PUCHAR Buffer, _In_ ULONG BufferLength, _Out_ PULONG BytesNeeded);
 VOID CywIndicateScanComplete(_In_ PCYW_ADAPTER Adapter, _In_ NDIS_STATUS ScanStatus);
 VOID CywIndicateAssocStart(_In_ PCYW_ADAPTER Adapter);
 VOID CywIndicateAssocComplete(_In_ PCYW_ADAPTER Adapter, _In_ DOT11_ASSOC_STATUS Status);
 VOID CywIndicateConnectComplete(_In_ PCYW_ADAPTER Adapter, _In_ DOT11_ASSOC_STATUS Status);
-VOID CywIndicateLinkState(_In_ PCYW_ADAPTER Adapter, _In_ BOOLEAN Connected);
+VOID CywIndicateLinkState(_In_ PCYW_ADAPTER Adapter, _In_ BOOLEAN Connected, _In_ ULONG64 SpeedBps);
+VOID CywIndicateDisassociation(_In_ PCYW_ADAPTER Adapter);
+VOID CywIndicateLinkQuality(_In_ PCYW_ADAPTER Adapter);
+VOID CywCompletePendingConnect(_In_ PCYW_ADAPTER Adapter, _In_ NDIS_STATUS Status);
+VOID CywQueueLinkUpWork(_In_ PCYW_ADAPTER Adapter);
 NTSTATUS CywConnect(_In_ PCYW_ADAPTER Adapter);
 NTSTATUS CywDisconnect(_In_ PCYW_ADAPTER Adapter);
 NTSTATUS CywSetKey(_In_ PCYW_ADAPTER Adapter, _In_ BOOLEAN Pairwise, _In_opt_ PUCHAR Ea, _In_ PUCHAR Key, _In_ ULONG KeyLen, _In_ ULONG KeyIndex);

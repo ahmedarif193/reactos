@@ -23,6 +23,58 @@
 #define SDIO_F2_FIFO            0x8000
 
 static
+VOID
+CywWriteSdpcmHeader(
+    _Out_writes_bytes_(SDPCM_HEADER_LEN) PUCHAR Frame,
+    _In_ ULONG Total,
+    _In_ UCHAR Channel)
+{
+    RtlZeroMemory(Frame, SDPCM_HEADER_LEN);
+    Frame[0] = (UCHAR)(Total & 0xFF);
+    Frame[1] = (UCHAR)((Total >> 8) & 0xFF);
+    Frame[2] = (UCHAR)(~Frame[0]);
+    Frame[3] = (UCHAR)(~Frame[1]);
+    Frame[SDPCM_CHANNEL_OFFSET] = Channel;
+    Frame[SDPCM_DOFFSET_OFFSET] = SDPCM_HEADER_LEN;
+}
+
+/* Move Length bytes to/from the F2 FIFO as whole blocks plus a ULONG-aligned
+ * byte remainder. Length is expected block-or-ULONG sized by the caller. */
+static
+NTSTATUS
+CywSdpcmF2Fifo(
+    _In_ PCYW_ADAPTER Adapter,
+    _In_ BOOLEAN Write,
+    _In_ PUCHAR Buffer,
+    _In_ ULONG Length)
+{
+    ULONG Blocks = Length / CYW_F2_BLOCKSIZE;
+    ULONG Done = 0;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (Blocks > 0)
+    {
+        ULONG BlockBytes = Blocks * CYW_F2_BLOCKSIZE;
+        Status = Write
+            ? CywSdioWriteBlocks(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO,
+                                 Buffer, BlockBytes, CYW_F2_BLOCKSIZE)
+            : CywSdioReadBlocks(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO,
+                                Buffer, BlockBytes, CYW_F2_BLOCKSIZE);
+        Done = BlockBytes;
+    }
+    if (NT_SUCCESS(Status) && Done < Length)
+    {
+        ULONG Rest = ALIGN_UP(Length - Done, ULONG);
+        Status = Write
+            ? CywSdioWriteBytes(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO,
+                                Buffer + Done, Rest)
+            : CywSdioReadBytes(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO,
+                               Buffer + Done, Rest);
+    }
+    return Status;
+}
+
+static
 NTSTATUS
 CywSdpcmSendCtl(
     _In_ PCYW_ADAPTER Adapter,
@@ -39,13 +91,7 @@ CywSdpcmSendCtl(
         return STATUS_BUFFER_TOO_SMALL;
     }
 
-    RtlZeroMemory(Frame, SDPCM_HEADER_LEN);
-    Frame[0] = (UCHAR)(Total & 0xFF);
-    Frame[1] = (UCHAR)((Total >> 8) & 0xFF);
-    Frame[2] = (UCHAR)(~Frame[0]);
-    Frame[3] = (UCHAR)(~Frame[1]);
-    Frame[5] = SDPCM_CHANNEL_CONTROL;
-    Frame[7] = SDPCM_HEADER_LEN;
+    CywWriteSdpcmHeader(Frame, Total, SDPCM_CHANNEL_CONTROL);
 
     RtlCopyMemory(Frame + SDPCM_HEADER_LEN, Data, Length);
 
@@ -107,37 +153,79 @@ CywSdpcmSendData(
         return STATUS_DEVICE_BUSY;
     }
 
-    RtlZeroMemory(Frame, SDPCM_HEADER_LEN + BCDC_HEADER_LEN);
-    Frame[0] = (UCHAR)(Total & 0xFF);
-    Frame[1] = (UCHAR)((Total >> 8) & 0xFF);
-    Frame[2] = (UCHAR)(~Frame[0]);
-    Frame[3] = (UCHAR)(~Frame[1]);
-    Frame[5] = SDPCM_CHANNEL_DATA;
-    Frame[7] = SDPCM_HEADER_LEN;
+    CywWriteSdpcmHeader(Frame, Total, SDPCM_CHANNEL_DATA);
+    RtlZeroMemory(Frame + SDPCM_HEADER_LEN, BCDC_HEADER_LEN);
     Frame[SDPCM_HEADER_LEN] = (UCHAR)(BCDC_PROTO_VER << 4);
 
     RtlCopyMemory(Frame + SDPCM_HEADER_LEN + BCDC_HEADER_LEN, Eth, EthLen);
 
     Frame[SDPCM_SEQ_OFFSET] = Adapter->TxSeq;
-    {
-        ULONG Blocks = Padded / CYW_F2_BLOCKSIZE;
-        ULONG Done = 0;
-        Status = STATUS_SUCCESS;
-        if (Blocks > 0)
-        {
-            Status = CywSdioWriteBlocks(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO,
-                                        Frame, Blocks * CYW_F2_BLOCKSIZE, CYW_F2_BLOCKSIZE);
-            Done = Blocks * CYW_F2_BLOCKSIZE;
-        }
-        if (NT_SUCCESS(Status) && Done < Padded)
-        {
-            Status = CywSdioWriteBytes(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO,
-                                       Frame + Done, Padded - Done);
-        }
-    }
+    Status = CywSdpcmF2Fifo(Adapter, TRUE, Frame, Padded);
     if (NT_SUCCESS(Status))
     {
         Adapter->TxSeq = (UCHAR)(Adapter->TxSeq + 1);
+        Adapter->TxOkCount++;
+    }
+    else
+    {
+        Adapter->TxErrCount++;
+    }
+    KeReleaseMutex(&Adapter->F2Lock, FALSE);
+    return Status;
+}
+
+/* Immediate transmit: reframe the NET_BUFFER straight into the TX staging
+ * buffer under F2Lock, so the send path needs no intermediate frame copy. */
+NTSTATUS
+CywSdpcmSendNb(
+    _In_ PCYW_ADAPTER Adapter,
+    _In_ PNET_BUFFER Nb)
+{
+    PUCHAR Frame = Adapter->TxBuffer;
+    PUCHAR Dest = Frame + SDPCM_HEADER_LEN + BCDC_HEADER_LEN;
+    ULONG Capacity = CYW_CONTROL_BUFFER_SIZE - SDPCM_HEADER_LEN - BCDC_HEADER_LEN;
+    ULONG EthLen;
+    ULONG Total;
+    UCHAR Avail;
+    NTSTATUS Status;
+
+    Avail = (UCHAR)(Adapter->TxMax - Adapter->TxSeq);
+    if ((Avail & 0x80) || Avail == 0 || Adapter->TxFlow)
+    {
+        return STATUS_DEVICE_BUSY;
+    }
+
+    KeWaitForSingleObject(&Adapter->F2Lock, Executive, KernelMode, FALSE, NULL);
+
+    Avail = (UCHAR)(Adapter->TxMax - Adapter->TxSeq);
+    if ((Avail & 0x80) || Avail == 0 || Adapter->TxFlow)
+    {
+        KeReleaseMutex(&Adapter->F2Lock, FALSE);
+        return STATUS_DEVICE_BUSY;
+    }
+
+    EthLen = CywBuildEthFromNbl(Nb, Dest, Capacity);
+    if (EthLen == 0 || !CywTxAllowed(Adapter, Dest, EthLen))
+    {
+        KeReleaseMutex(&Adapter->F2Lock, FALSE);
+        return (EthLen == 0) ? STATUS_INVALID_PARAMETER : STATUS_INVALID_DEVICE_STATE;
+    }
+
+    Total = SDPCM_HEADER_LEN + BCDC_HEADER_LEN + EthLen;
+    CywWriteSdpcmHeader(Frame, Total, SDPCM_CHANNEL_DATA);
+    RtlZeroMemory(Frame + SDPCM_HEADER_LEN, BCDC_HEADER_LEN);
+    Frame[SDPCM_HEADER_LEN] = (UCHAR)(BCDC_PROTO_VER << 4);
+    Frame[SDPCM_SEQ_OFFSET] = Adapter->TxSeq;
+
+    Status = CywSdpcmF2Fifo(Adapter, TRUE, Frame, ALIGN_UP(Total, ULONG));
+    if (NT_SUCCESS(Status))
+    {
+        Adapter->TxSeq = (UCHAR)(Adapter->TxSeq + 1);
+        Adapter->TxOkCount++;
+    }
+    else
+    {
+        Adapter->TxErrCount++;
     }
     KeReleaseMutex(&Adapter->F2Lock, FALSE);
     return Status;
@@ -250,7 +338,7 @@ CywBcdcXfer(
         RtlCopyMemory(Msg + sizeof(CYW_BCDC_DCMD), Data, Length);
     }
 
-    if (Adapter->RxThreadRunning)
+    if (Adapter->BusThreadRunning)
     {
         LARGE_INTEGER Timeout;
 
@@ -430,15 +518,48 @@ CywActivateEvents(
 }
 
 NTSTATUS
+CywQueryRssi(
+    _In_ PCYW_ADAPTER Adapter,
+    _Out_ PLONG Rssi)
+{
+    CYW_SCB_VAL_LE Scb;
+    NTSTATUS Status;
+
+    RtlZeroMemory(&Scb, sizeof(Scb));
+    Status = CywFilCmdGet(Adapter, BRCMF_C_GET_RSSI, &Scb, sizeof(Scb));
+    if (NT_SUCCESS(Status))
+    {
+        *Rssi = (LONG)Scb.Val;
+    }
+    return Status;
+}
+
+/* Current TX rate in 500 kbit/s units */
+NTSTATUS
+CywQueryRate(
+    _In_ PCYW_ADAPTER Adapter,
+    _Out_ PULONG RateUnits500Kbps)
+{
+    ULONG Value = 0;
+    NTSTATUS Status;
+
+    Status = CywFilCmdGet(Adapter, BRCMF_C_GET_RATE, &Value, sizeof(Value));
+    if (NT_SUCCESS(Status))
+    {
+        *RateUnits500Kbps = Value;
+    }
+    return Status;
+}
+
+NTSTATUS
 CywScanStart(
     _In_ PCYW_ADAPTER Adapter,
-    _In_opt_ PDOT11_SCAN_REQUEST_V2 Request)
+    _In_reads_bytes_opt_(RequestLength) PDOT11_SCAN_REQUEST_V2 Request,
+    _In_ ULONG RequestLength)
 {
     PCYW_ESCAN_PARAMS_LE Params;
     ULONG Size = sizeof(CYW_ESCAN_PARAMS_LE);
     NTSTATUS Status;
-
-    UNREFERENCED_PARAMETER(Request);
 
     Params = CywAllocate(Size);
     if (Params == NULL)
@@ -459,6 +580,35 @@ CywScanStart(
     Params->Params.PassiveTime = -1;
     Params->Params.HomeTime = -1;
     Params->Params.ChannelNum = 0;
+
+    /* Honor the OS scan request: passive scans and directed (SSID) scans,
+     * needed to discover hidden networks */
+    if (Request != NULL &&
+        RequestLength >= FIELD_OFFSET(DOT11_SCAN_REQUEST_V2, ucBuffer))
+    {
+        if (Request->dot11ScanType == dot11_scan_type_passive)
+        {
+            Params->Params.ScanType = BRCMF_SCANTYPE_PASSIVE;
+        }
+        if (Request->uNumOfdot11SSIDs != 0)
+        {
+            ULONG Offset = FIELD_OFFSET(DOT11_SCAN_REQUEST_V2, ucBuffer) +
+                           Request->udot11SSIDsOffset;
+            if (Offset >= Request->udot11SSIDsOffset /* no overflow */ &&
+                Offset <= RequestLength &&
+                RequestLength - Offset >= sizeof(DOT11_SSID))
+            {
+                PDOT11_SSID Ssid = (PDOT11_SSID)((PUCHAR)Request + Offset);
+                if (Ssid->uSSIDLength > 0 &&
+                    Ssid->uSSIDLength <= DOT11_SSID_MAX_LENGTH)
+                {
+                    Params->Params.Ssid.SsidLen = Ssid->uSSIDLength;
+                    RtlCopyMemory(Params->Params.Ssid.Ssid, Ssid->ucSSID,
+                                  Ssid->uSSIDLength);
+                }
+            }
+        }
+    }
 
     NdisAcquireSpinLock(&Adapter->Lock);
     Adapter->BssCount = 0;
@@ -483,10 +633,12 @@ NTSTATUS
 CywConnect(
     _In_ PCYW_ADAPTER Adapter)
 {
-    CYW_SSID_LE Ssid;
+    CYW_EXT_JOIN_PARAMS_LE ExtJoin;
+    CYW_JOIN_PARAMS Join;
     ULONG Value;
     ULONG Wsec;
     ULONG WpaAuth;
+    BOOLEAN Sae = (Adapter->AuthAlgorithm == DOT11_AUTH_ALGO_WPA3_SAE);
     NTSTATUS Status;
 
     switch (Adapter->UnicastCipher)
@@ -495,13 +647,14 @@ CywConnect(
         case DOT11_CIPHER_ALGO_TKIP: Wsec = CYW_WSEC_TKIP; break;
         case DOT11_CIPHER_ALGO_WEP40:
         case DOT11_CIPHER_ALGO_WEP104: Wsec = CYW_WSEC_WEP; break;
-        default: Wsec = CYW_WSEC_NONE; break;
+        default: Wsec = Sae ? CYW_WSEC_AES : CYW_WSEC_NONE; break;
     }
 
     switch (Adapter->AuthAlgorithm)
     {
         case DOT11_AUTH_ALGO_RSNA_PSK: WpaAuth = CYW_WPA2_AUTH_PSK; break;
         case DOT11_AUTH_ALGO_WPA_PSK: WpaAuth = CYW_WPA_AUTH_PSK; break;
+        case DOT11_AUTH_ALGO_WPA3_SAE: WpaAuth = CYW_WPA3_AUTH_SAE_PSK; break;
         default: WpaAuth = CYW_WPA_AUTH_DISABLED; break;
     }
 
@@ -511,7 +664,7 @@ CywConnect(
     Value = 1;
     CywFilCmdSet(Adapter, BRCMF_C_SET_INFRA, &Value, sizeof(Value));
 
-    Value = CYW_AUTH_OPEN;
+    Value = Sae ? CYW_AUTH_SAE : CYW_AUTH_OPEN;
     CywFilCmdSet(Adapter, BRCMF_C_SET_AUTH, &Value, sizeof(Value));
 
     Value = WpaAuth;
@@ -521,8 +674,10 @@ CywConnect(
     {
         UCHAR Ie[22];
         UCHAR Suite = (Wsec == CYW_WSEC_AES) ? 0x04 : 0x02;
+        UCHAR Akm = Sae ? 0x08 : 0x02;      /* 00-0F-AC:8 = SAE, :2 = PSK */
 
-        CywFilIovarSetInt(Adapter, "mfp", CYW_MFP_NONE);
+        /* WPA3 mandates management frame protection capability */
+        CywFilIovarSetInt(Adapter, "mfp", Sae ? CYW_MFP_CAPABLE : CYW_MFP_NONE);
 
         Ie[0] = 0x30; Ie[1] = 0x14;
         Ie[2] = 0x01; Ie[3] = 0x00;
@@ -530,9 +685,23 @@ CywConnect(
         Ie[8] = 0x01; Ie[9] = 0x00;
         Ie[10] = 0x00; Ie[11] = 0x0F; Ie[12] = 0xAC; Ie[13] = Suite;
         Ie[14] = 0x01; Ie[15] = 0x00;
-        Ie[16] = 0x00; Ie[17] = 0x0F; Ie[18] = 0xAC; Ie[19] = 0x02;
-        Ie[20] = 0x00; Ie[21] = 0x00;
+        Ie[16] = 0x00; Ie[17] = 0x0F; Ie[18] = 0xAC; Ie[19] = Akm;
+        Ie[20] = Sae ? 0x80 : 0x00; Ie[21] = 0x00;  /* RSN caps: MFPC */
         CywFilIovarSet(Adapter, "wpaie", Ie, sizeof(Ie));
+
+        /* SAE handshake runs in firmware; hand it the cleartext password
+         * (brcmf_set_wsec with BRCMF_WSEC_PASSPHRASE) */
+        if (Sae && Adapter->SaePasswordLen != 0)
+        {
+            CYW_WSEC_PMK_LE Pmk;
+
+            RtlZeroMemory(&Pmk, sizeof(Pmk));
+            Pmk.KeyLen = (USHORT)Adapter->SaePasswordLen;
+            Pmk.Flags = CYW_WSEC_PASSPHRASE;
+            RtlCopyMemory(Pmk.Key, Adapter->SaePassword, Adapter->SaePasswordLen);
+            CywFilCmdSet(Adapter, BRCMF_C_SET_WSEC_PMK, &Pmk, sizeof(Pmk));
+            RtlSecureZeroMemory(&Pmk, sizeof(Pmk));
+        }
     }
 
     CywFilIovarSetInt(Adapter, "roam_off", 1);
@@ -542,10 +711,35 @@ CywConnect(
         CywFilCmdSet(Adapter, BRCMF_C_SET_PM, &Pm, sizeof(Pm));
     }
 
-    RtlZeroMemory(&Ssid, sizeof(Ssid));
-    Ssid.SsidLen = Adapter->DesiredSsidLength;
-    RtlCopyMemory(Ssid.Ssid, Adapter->DesiredSsid, Adapter->DesiredSsidLength);
-    Status = CywFilCmdSet(Adapter, BRCMF_C_SET_SSID, &Ssid, sizeof(Ssid));
+    /* Preferred: firmware-directed join carrying the target BSSID and tuned
+     * dwell times ("join" iovar); fall back to the plain SET_SSID join. */
+    RtlZeroMemory(&ExtJoin, sizeof(ExtJoin));
+    ExtJoin.Ssid.SsidLen = Adapter->DesiredSsidLength;
+    RtlCopyMemory(ExtJoin.Ssid.Ssid, Adapter->DesiredSsid, Adapter->DesiredSsidLength);
+    ExtJoin.Scan.ScanType = (UCHAR)-1;
+    ExtJoin.Scan.NProbes = CYW_JOIN_ACTIVE_DWELL_MS / CYW_JOIN_PROBE_INTERVAL_MS;
+    ExtJoin.Scan.ActiveTime = CYW_JOIN_ACTIVE_DWELL_MS;
+    ExtJoin.Scan.PassiveTime = CYW_JOIN_PASSIVE_DWELL_MS;
+    ExtJoin.Scan.HomeTime = -1;
+    if (Adapter->HasDesiredBssid)
+        RtlCopyMemory(ExtJoin.Assoc.Bssid, Adapter->DesiredBssid, CYW_ADDRESS_LENGTH);
+    else
+        RtlFillMemory(ExtJoin.Assoc.Bssid, CYW_ADDRESS_LENGTH, 0xFF);
+
+    Status = CywFilIovarSet(Adapter, "join", &ExtJoin,
+                            FIELD_OFFSET(CYW_EXT_JOIN_PARAMS_LE, Assoc) +
+                            FIELD_OFFSET(CYW_ASSOC_PARAMS_LE, ChanspecList));
+    if (!NT_SUCCESS(Status))
+    {
+        RtlZeroMemory(&Join, sizeof(Join));
+        Join.Ssid.SsidLen = Adapter->DesiredSsidLength;
+        RtlCopyMemory(Join.Ssid.Ssid, Adapter->DesiredSsid, Adapter->DesiredSsidLength);
+        if (Adapter->HasDesiredBssid)
+            RtlCopyMemory(Join.Assoc.Bssid, Adapter->DesiredBssid, CYW_ADDRESS_LENGTH);
+        else
+            RtlFillMemory(Join.Assoc.Bssid, CYW_ADDRESS_LENGTH, 0xFF);
+        Status = CywFilCmdSet(Adapter, BRCMF_C_SET_SSID, &Join, sizeof(Join.Ssid));
+    }
 
     return Status;
 }
@@ -568,40 +762,104 @@ static
 VOID
 CywAddEscanResult(
     _In_ PCYW_ADAPTER Adapter,
-    _In_ PUCHAR Bss,
+    _In_reads_(Length) PUCHAR Data,
     _In_ ULONG Length)
 {
+    PCYW_ESCAN_RESULT_LE Result;
+    PCYW_BSS_INFO_LE Bi;
     PCYW_BSS Entry;
+    BOOLEAN NewEntry;
     ULONG SsidLen;
+    ULONG i;
 
-    UNREFERENCED_PARAMETER(Length);
-
-    NdisAcquireSpinLock(&Adapter->Lock);
-    if (Adapter->BssCount >= CYW_MAX_BSS)
+    if (Length < FIELD_OFFSET(CYW_ESCAN_RESULT_LE, BssInfo) + sizeof(CYW_BSS_INFO_LE))
     {
-        NdisReleaseSpinLock(&Adapter->Lock);
+        return;
+    }
+    Result = (PCYW_ESCAN_RESULT_LE)Data;
+    if (Result->BssCount < 1)
+    {
+        return;
+    }
+    Bi = &Result->BssInfo[0];
+    if (Bi->Length < sizeof(CYW_BSS_INFO_LE) ||
+        Bi->Length > Length - FIELD_OFFSET(CYW_ESCAN_RESULT_LE, BssInfo))
+    {
         return;
     }
 
-    Entry = &Adapter->Bss[Adapter->BssCount];
-    RtlZeroMemory(Entry, sizeof(*Entry));
+    NdisAcquireSpinLock(&Adapter->Lock);
 
-    RtlCopyMemory(Entry->Bssid, Bss + 8, 6);
-    SsidLen = Bss[18];
+    /* Refresh in place when this BSSID was already seen on another channel */
+    Entry = NULL;
+    NewEntry = FALSE;
+    for (i = 0; i < Adapter->BssCount; i++)
+    {
+        if (RtlEqualMemory(Adapter->Bss[i].Bssid, Bi->Bssid, CYW_ADDRESS_LENGTH))
+        {
+            Entry = &Adapter->Bss[i];
+            break;
+        }
+    }
+    if (Entry == NULL)
+    {
+        if (Adapter->BssCount >= CYW_MAX_BSS)
+        {
+            NdisReleaseSpinLock(&Adapter->Lock);
+            return;
+        }
+        Entry = &Adapter->Bss[Adapter->BssCount++];
+        RtlZeroMemory(Entry, sizeof(*Entry));
+        NewEntry = TRUE;
+    }
+
+    RtlCopyMemory(Entry->Bssid, Bi->Bssid, CYW_ADDRESS_LENGTH);
+
+    /* A hidden-SSID beacon must not wipe the SSID a probe response gave us */
+    SsidLen = Bi->SsidLen;
     if (SsidLen > DOT11_SSID_MAX_LENGTH)
     {
         SsidLen = DOT11_SSID_MAX_LENGTH;
     }
-    RtlCopyMemory(Entry->Ssid, Bss + 19, SsidLen);
-    Entry->SsidLength = SsidLen;
+    if (NewEntry || SsidLen != 0)
+    {
+        RtlCopyMemory(Entry->Ssid, Bi->Ssid, SsidLen);
+        Entry->SsidLength = SsidLen;
+    }
+
     Entry->BssType = dot11_BSS_type_infrastructure;
-    Entry->Rssi = (LONG)(SHORT)(USHORT)(Bss[76] | (Bss[77] << 8));
+    Entry->Rssi = Bi->Rssi;
     Entry->LinkQuality = (Entry->Rssi >= -50) ? 100 :
                          (Entry->Rssi <= -100) ? 0 : (2 * (Entry->Rssi + 100));
-    Entry->ChannelNumber = Bss[71];
-    Entry->CapabilityInformation = (USHORT)(Bss[16] | (Bss[17] << 8));
+    Entry->ChannelNumber = Bi->CtlCh ? Bi->CtlCh : (Bi->Chanspec & 0xFF);
+    Entry->CapabilityInformation = Bi->Capability;
+    Entry->BeaconPeriod = Bi->BeaconPeriod;
 
-    Adapter->BssCount++;
+    /* Keep the real beacon/probe IEs, truncated at an element boundary */
+    if (Bi->Version == CYW_BSS_INFO_VERSION &&
+        Bi->IeOffset >= sizeof(CYW_BSS_INFO_LE) &&
+        Bi->IeLength <= Bi->Length &&
+        Bi->IeOffset <= Bi->Length - Bi->IeLength)
+    {
+        PUCHAR Ie = (PUCHAR)Bi + Bi->IeOffset;
+        ULONG Take = 0;
+
+        while (Take + 2 <= Bi->IeLength)
+        {
+            ULONG ElemLen = 2 + Ie[Take + 1];
+            if (Take + ElemLen > Bi->IeLength || Take + ElemLen > CYW_MAX_BSS_IE)
+            {
+                break;
+            }
+            Take += ElemLen;
+        }
+        if (Take != 0)
+        {
+            RtlCopyMemory(Entry->IeBlob, Ie, Take);
+            Entry->IeLength = Take;
+        }
+    }
+
     NdisReleaseSpinLock(&Adapter->Lock);
 }
 
@@ -611,55 +869,58 @@ CywProcessEvent(
     _In_ PUCHAR Frame,
     _In_ ULONG Length)
 {
+    PCYW_BCDC_HEADER Bcdc;
     PCYW_ETHER_HEADER Eth;
+    PCYW_BCM_ETH_HEADER Bcm;
     PCYW_EVENT_MSG Msg;
+    ULONG HeaderLen;
     ULONG EventType;
     ULONG EventStatus;
-    ULONG ScanI;
-    ULONG EthAt = 0;
-    BOOLEAN Found = FALSE;
+    ULONG DataLen;
+    ULONG Remaining;
 
-    for (ScanI = 0; ScanI + 1 < Length; ScanI++)
-    {
-        if (Frame[ScanI] == 0x88 && Frame[ScanI + 1] == 0x6C)
-        {
-            EthAt = ScanI;
-            Found = TRUE;
-            break;
-        }
-    }
-    if (!Found)
+    /* BCDC header, then the 802.3 event frame at the encoded data offset */
+    if (Length < BCDC_HEADER_LEN)
     {
         return;
     }
-    if (EthAt < FIELD_OFFSET(CYW_ETHER_HEADER, Type))
-    {
-        return;
-    }
-    Frame += EthAt - FIELD_OFFSET(CYW_ETHER_HEADER, Type);
-    Length -= EthAt - FIELD_OFFSET(CYW_ETHER_HEADER, Type);
-
-    if (Length < sizeof(CYW_ETHER_HEADER) + 10 + sizeof(CYW_EVENT_MSG))
+    Bcdc = (PCYW_BCDC_HEADER)Frame;
+    HeaderLen = BCDC_HEADER_LEN + ((ULONG)Bcdc->DataOffset << 2);
+    if (Length < HeaderLen + sizeof(CYW_ETHER_HEADER) +
+                 sizeof(CYW_BCM_ETH_HEADER) + sizeof(CYW_EVENT_MSG))
     {
         return;
     }
 
-    Eth = (PCYW_ETHER_HEADER)Frame;
-    Msg = (PCYW_EVENT_MSG)(Frame + sizeof(CYW_ETHER_HEADER) + 10);
-    EventType = RtlUlongByteSwap(Msg->EventType);
-    EventStatus = RtlUlongByteSwap(Msg->Status);
-
+    Eth = (PCYW_ETHER_HEADER)(Frame + HeaderLen);
     if (RtlUshortByteSwap(Eth->Type) != ETH_P_LINK_CTL)
     {
         return;
+    }
+
+    Bcm = (PCYW_BCM_ETH_HEADER)(Eth + 1);
+    if (RtlUshortByteSwap(Bcm->UsrSubtype) != BCMILCP_BCM_SUBTYPE_EVENT)
+    {
+        return;
+    }
+
+    Msg = (PCYW_EVENT_MSG)(Bcm + 1);
+    EventType = RtlUlongByteSwap(Msg->EventType);
+    EventStatus = RtlUlongByteSwap(Msg->Status);
+
+    Remaining = Length - HeaderLen - sizeof(CYW_ETHER_HEADER) -
+                sizeof(CYW_BCM_ETH_HEADER) - sizeof(CYW_EVENT_MSG);
+    DataLen = RtlUlongByteSwap(Msg->DataLen);
+    if (Remaining > DataLen)
+    {
+        Remaining = DataLen;
     }
 
     if (EventType == BRCMF_E_ESCAN_RESULT)
     {
         if (EventStatus == BRCMF_E_STATUS_PARTIAL)
         {
-            PUCHAR Result = (PUCHAR)Msg + sizeof(CYW_EVENT_MSG);
-            CywAddEscanResult(Adapter, Result + 12, Length);
+            CywAddEscanResult(Adapter, (PUCHAR)(Msg + 1), Remaining);
         }
         else
         {
@@ -669,20 +930,39 @@ CywProcessEvent(
     else if (EventType == BRCMF_E_LINK)
     {
         USHORT LinkFlags = RtlUshortByteSwap(Msg->Flags);
+        BOOLEAN WasUp;
+
         if (LinkFlags & BRCMF_EVENT_MSG_LINK)
         {
             NdisAcquireSpinLock(&Adapter->Lock);
+            WasUp = Adapter->LinkUp;
             RtlCopyMemory(Adapter->ConnectedBssid, Msg->Addr, CYW_ADDRESS_LENGTH);
             Adapter->Associated = TRUE;
+            Adapter->LinkUp = TRUE;
             NdisReleaseSpinLock(&Adapter->Lock);
             CywIndicateAssocComplete(Adapter, DOT11_ASSOC_STATUS_SUCCESS);
+            CywIndicateConnectComplete(Adapter, DOT11_ASSOC_STATUS_SUCCESS);
+            CywCompletePendingConnect(Adapter, NDIS_STATUS_SUCCESS);
+            if (!WasUp)
+            {
+                /* Link speed and RSSI need firmware round-trips that cannot
+                 * run on the bus thread; a work item indicates link state
+                 * and link quality with live values. */
+                CywQueueLinkUpWork(Adapter);
+            }
         }
         else
         {
             NdisAcquireSpinLock(&Adapter->Lock);
+            WasUp = Adapter->LinkUp;
             Adapter->Associated = FALSE;
             Adapter->LinkUp = FALSE;
             NdisReleaseSpinLock(&Adapter->Lock);
+            if (WasUp)
+            {
+                CywIndicateDisassociation(Adapter);
+                CywIndicateLinkState(Adapter, FALSE, 0);
+            }
         }
     }
     else if (EventType == BRCMF_E_SET_SSID)
@@ -690,6 +970,8 @@ CywProcessEvent(
         if (EventStatus != BRCMF_E_STATUS_SUCCESS)
         {
             CywIndicateAssocComplete(Adapter, DOT11_ASSOC_STATUS_FAILURE);
+            CywIndicateConnectComplete(Adapter, DOT11_ASSOC_STATUS_FAILURE);
+            CywCompletePendingConnect(Adapter, NDIS_STATUS_FAILURE);
         }
     }
 }
@@ -700,6 +982,8 @@ CywRxData(
     _In_ PUCHAR Body,
     _In_ ULONG BodyLen)
 {
+    PCYW_BCDC_HEADER Bcdc;
+    PCYW_ETHER_HEADER EthHdr;
     PUCHAR Pay;
     ULONG Off;
     ULONG PayLen;
@@ -717,7 +1001,8 @@ CywRxData(
         return NULL;
     }
 
-    Off = BCDC_HEADER_LEN + ((ULONG)Body[3] << 2);
+    Bcdc = (PCYW_BCDC_HEADER)Body;
+    Off = BCDC_HEADER_LEN + ((ULONG)Bcdc->DataOffset << 2);
     if (Off + sizeof(CYW_ETHER_HEADER) > BodyLen)
     {
         return NULL;
@@ -725,6 +1010,7 @@ CywRxData(
 
     Pay = Body + Off;
     PayLen = BodyLen - Off;
+    EthHdr = (PCYW_ETHER_HEADER)Pay;
 
     FrameLen = sizeof(CYW_DOT11_HEADER) + sizeof(CYW_SNAP_HEADER) +
                (PayLen - sizeof(CYW_ETHER_HEADER));
@@ -750,7 +1036,7 @@ CywRxData(
     Dot11->FrameControl[1] = CYW_FC1_FROMDS;
     RtlCopyMemory(Dot11->Address1, Adapter->CurrentAddress, CYW_ADDRESS_LENGTH);
     RtlCopyMemory(Dot11->Address2, Adapter->ConnectedBssid, CYW_ADDRESS_LENGTH);
-    RtlCopyMemory(Dot11->Address3, Pay + CYW_ADDRESS_LENGTH, CYW_ADDRESS_LENGTH);
+    RtlCopyMemory(Dot11->Address3, EthHdr->Src, CYW_ADDRESS_LENGTH);
 
     Snap = (PCYW_SNAP_HEADER)(Frame + sizeof(CYW_DOT11_HEADER));
     Snap->Dsap = CYW_SNAP_DSAP;
@@ -759,8 +1045,7 @@ CywRxData(
     Snap->Oui[0] = 0;
     Snap->Oui[1] = 0;
     Snap->Oui[2] = 0;
-    Snap->EtherType[0] = Pay[12];
-    Snap->EtherType[1] = Pay[13];
+    RtlCopyMemory(Snap->EtherType, &EthHdr->Type, sizeof(Snap->EtherType));
 
     RtlCopyMemory(Frame + sizeof(CYW_DOT11_HEADER) + sizeof(CYW_SNAP_HEADER),
                   Pay + sizeof(CYW_ETHER_HEADER),
@@ -783,6 +1068,7 @@ CywRxData(
     NET_BUFFER_LIST_STATUS(Nbl) = NDIS_STATUS_SUCCESS;
     NET_BUFFER_LIST_NEXT_NBL(Nbl) = NULL;
 
+    Adapter->RxOkCount++;
     return Nbl;
 }
 
@@ -825,8 +1111,54 @@ CywClearChipInterrupt(
 
 static
 VOID
+CywRxChainAppend(
+    _Inout_ PNET_BUFFER_LIST *Head,
+    _Inout_ PNET_BUFFER_LIST *Tail,
+    _Inout_ PULONG Count,
+    _In_opt_ PNET_BUFFER_LIST Nbl)
+{
+    if (Nbl == NULL)
+    {
+        return;
+    }
+    if (*Tail != NULL)
+    {
+        NET_BUFFER_LIST_NEXT_NBL(*Tail) = Nbl;
+    }
+    else
+    {
+        *Head = Nbl;
+    }
+    *Tail = Nbl;
+    (*Count)++;
+}
+
+static
+VOID
+CywRxChainFlush(
+    _In_ PCYW_ADAPTER Adapter,
+    _Inout_ PNET_BUFFER_LIST *Head,
+    _Inout_ PNET_BUFFER_LIST *Tail,
+    _Inout_ PULONG Count)
+{
+    if (*Head == NULL)
+    {
+        return;
+    }
+    NdisMIndicateReceiveNetBufferLists(Adapter->MiniportAdapterHandle, *Head,
+                                       NDIS_DEFAULT_PORT_NUMBER, *Count, 0);
+    *Head = NULL;
+    *Tail = NULL;
+    *Count = 0;
+}
+
+/* Single owner of all F2 FIFO traffic: pumps the deferred TX queue, receives
+ * frames, and dispatches control responses, firmware events and RX data.
+ * Woken by the card interrupt, by TX submission, or to exit. */
+static
+VOID
 NTAPI
-CywRxThread(
+CywBusThread(
     _In_ PVOID Context)
 {
     PCYW_ADAPTER Adapter = (PCYW_ADAPTER)Context;
@@ -841,7 +1173,7 @@ CywRxThread(
 
     KeSetPriorityThread(KeGetCurrentThread(), LOW_REALTIME_PRIORITY);
 
-    while (Adapter->RxThreadStop == 0)
+    while (Adapter->BusThreadStop == 0)
     {
         BOOLEAN AnyFrame = FALSE;
         LARGE_INTEGER RxWait;
@@ -852,7 +1184,7 @@ CywRxThread(
 
         CywDrainTxQueue(Adapter);
 
-        while (Adapter->RxThreadStop == 0)
+        while (Adapter->BusThreadStop == 0)
         {
             KeWaitForSingleObject(&Adapter->F2Lock, Executive, KernelMode, FALSE, NULL);
 
@@ -870,22 +1202,8 @@ CywRxThread(
 
             if (FrameLen > SDPCM_HEADER_LEN)
             {
-                ULONG Body = FrameLen - SDPCM_HEADER_LEN;
-                ULONG Blocks = Body / CYW_F2_BLOCKSIZE;
-                ULONG Done = 0;
-                if (Blocks > 0)
-                {
-                    CywSdioReadBlocks(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO,
-                                      Frame + SDPCM_HEADER_LEN, Blocks * CYW_F2_BLOCKSIZE,
-                                      CYW_F2_BLOCKSIZE);
-                    Done = Blocks * CYW_F2_BLOCKSIZE;
-                }
-                if (Done < Body)
-                {
-                    CywSdioReadBytes(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO,
-                                     Frame + SDPCM_HEADER_LEN + Done,
-                                     ALIGN_UP(Body - Done, ULONG));
-                }
+                CywSdpcmF2Fifo(Adapter, FALSE, Frame + SDPCM_HEADER_LEN,
+                               FrameLen - SDPCM_HEADER_LEN);
             }
 
             KeReleaseMutex(&Adapter->F2Lock, FALSE);
@@ -899,7 +1217,7 @@ CywRxThread(
             {
                 ULONG n = 0;
                 ULONG p = DataOffset;
-                while (p + 2 <= FrameLen && n < 256)
+                while (p + 2 <= FrameLen && n < RTL_NUMBER_OF(Adapter->GlomLens))
                 {
                     Adapter->GlomLens[n] = (USHORT)(Frame[p] | (Frame[p + 1] << 8));
                     n++;
@@ -938,29 +1256,16 @@ CywRxThread(
                     if (SubChan == SDPCM_CHANNEL_DATA)
                     {
                         PNET_BUFFER_LIST Nbl = CywRxData(Adapter, Sub + SubDoff, OwnLen - SubDoff);
-                        if (Nbl != NULL)
-                        {
-                            if (ChainTail != NULL)
-                                NET_BUFFER_LIST_NEXT_NBL(ChainTail) = Nbl;
-                            else
-                                ChainHead = Nbl;
-                            ChainTail = Nbl;
-                            ChainCount++;
-                        }
+                        CywRxChainAppend(&ChainHead, &ChainTail, &ChainCount, Nbl);
                     }
                     else if (SubChan == SDPCM_CHANNEL_EVENT)
                     {
                         CywProcessEvent(Adapter, Sub + SubDoff, OwnLen - SubDoff);
                     }
                 }
-                if (ChainCount >= 32)
+                if (ChainCount >= CYW_RX_INDICATE_BATCH)
                 {
-                    NdisMIndicateReceiveNetBufferLists(Adapter->MiniportAdapterHandle,
-                                                       ChainHead, NDIS_DEFAULT_PORT_NUMBER,
-                                                       ChainCount, 0);
-                    ChainHead = NULL;
-                    ChainTail = NULL;
-                    ChainCount = 0;
+                    CywRxChainFlush(Adapter, &ChainHead, &ChainTail, &ChainCount);
                 }
                 continue;
             }
@@ -985,40 +1290,15 @@ CywRxThread(
             {
                 PNET_BUFFER_LIST Nbl = CywRxData(Adapter, Frame + DataOffset,
                                                  FrameLen - DataOffset);
-                if (Nbl != NULL)
+                CywRxChainAppend(&ChainHead, &ChainTail, &ChainCount, Nbl);
+                if (ChainCount >= CYW_RX_INDICATE_BATCH)
                 {
-                    if (ChainTail != NULL)
-                    {
-                        NET_BUFFER_LIST_NEXT_NBL(ChainTail) = Nbl;
-                    }
-                    else
-                    {
-                        ChainHead = Nbl;
-                    }
-                    ChainTail = Nbl;
-                    ChainCount++;
-                }
-                if (ChainCount >= 32)
-                {
-                    NdisMIndicateReceiveNetBufferLists(Adapter->MiniportAdapterHandle,
-                                                       ChainHead, NDIS_DEFAULT_PORT_NUMBER,
-                                                       ChainCount, 0);
-                    ChainHead = NULL;
-                    ChainTail = NULL;
-                    ChainCount = 0;
+                    CywRxChainFlush(Adapter, &ChainHead, &ChainTail, &ChainCount);
                 }
             }
         }
 
-        if (ChainHead != NULL)
-        {
-            NdisMIndicateReceiveNetBufferLists(Adapter->MiniportAdapterHandle,
-                                               ChainHead, NDIS_DEFAULT_PORT_NUMBER,
-                                               ChainCount, 0);
-            ChainHead = NULL;
-            ChainTail = NULL;
-            ChainCount = 0;
-        }
+        CywRxChainFlush(Adapter, &ChainHead, &ChainTail, &ChainCount);
 
         if (AnyFrame)
         {
@@ -1042,7 +1322,7 @@ CywRxThread(
             Adapter->SdBus.AcknowledgeInterrupt(Adapter->SdBus.Context);
         }
         RxWait.QuadPart = -2500;
-        WaitStatus = KeWaitForSingleObject(&Adapter->RxEvent, Executive, KernelMode,
+        WaitStatus = KeWaitForSingleObject(&Adapter->BusEvent, Executive, KernelMode,
                                            FALSE, &RxWait);
         if (WaitStatus == STATUS_TIMEOUT)
         {
@@ -1058,55 +1338,55 @@ CywRxThread(
 }
 
 NTSTATUS
-CywStartRxThread(
+CywStartBusThread(
     _In_ PCYW_ADAPTER Adapter)
 {
     HANDLE Handle;
     NTSTATUS Status;
 
-    Adapter->RxThreadStop = 0;
-    Adapter->RxThread = NULL;
+    Adapter->BusThreadStop = 0;
+    Adapter->BusThread = NULL;
 
     Status = PsCreateSystemThread(&Handle, THREAD_ALL_ACCESS, NULL, NULL, NULL,
-                                  CywRxThread, Adapter);
+                                  CywBusThread, Adapter);
     if (!NT_SUCCESS(Status))
     {
         return Status;
     }
 
     Status = ObReferenceObjectByHandle(Handle, THREAD_ALL_ACCESS, *PsThreadType,
-                                       KernelMode, &Adapter->RxThread, NULL);
+                                       KernelMode, &Adapter->BusThread, NULL);
     ZwClose(Handle);
     if (NT_SUCCESS(Status))
     {
-        Adapter->RxThreadRunning = TRUE;
+        Adapter->BusThreadRunning = TRUE;
     }
     else
     {
-        InterlockedExchange(&Adapter->RxThreadStop, 1);
-        Adapter->RxThread = NULL;
+        InterlockedExchange(&Adapter->BusThreadStop, 1);
+        Adapter->BusThread = NULL;
     }
     return Status;
 }
 
 VOID
-CywStopRxThread(
+CywStopBusThread(
     _In_ PCYW_ADAPTER Adapter)
 {
-    if (!Adapter->RxThreadRunning)
+    if (!Adapter->BusThreadRunning)
     {
         return;
     }
 
-    InterlockedExchange(&Adapter->RxThreadStop, 1);
-    KeSetEvent(&Adapter->RxEvent, IO_NO_INCREMENT, FALSE);
+    InterlockedExchange(&Adapter->BusThreadStop, 1);
+    KeSetEvent(&Adapter->BusEvent, IO_NO_INCREMENT, FALSE);
 
-    if (Adapter->RxThread != NULL)
+    if (Adapter->BusThread != NULL)
     {
-        KeWaitForSingleObject(Adapter->RxThread, Executive, KernelMode, FALSE, NULL);
-        ObDereferenceObject(Adapter->RxThread);
-        Adapter->RxThread = NULL;
+        KeWaitForSingleObject(Adapter->BusThread, Executive, KernelMode, FALSE, NULL);
+        ObDereferenceObject(Adapter->BusThread);
+        Adapter->BusThread = NULL;
     }
 
-    Adapter->RxThreadRunning = FALSE;
+    Adapter->BusThreadRunning = FALSE;
 }

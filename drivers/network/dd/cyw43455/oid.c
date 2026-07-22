@@ -133,7 +133,6 @@ CywBuildBssList(
     _In_ ULONG BufferLength,
     _Out_ PULONG BytesNeeded)
 {
-    UCHAR IeScratch[CYW_MAX_BSS_IE];
     ULONG IeLengths[CYW_MAX_BSS];
     ULONG i;
     ULONG PayloadSize = 0;
@@ -152,7 +151,11 @@ CywBuildBssList(
 
     for (i = 0; i < Count; i++)
     {
-        IeLengths[i] = CywBuildBeaconIes(&Adapter->Bss[i], IeScratch, sizeof(IeScratch));
+        /* Real IEs captured from the scan; else the synthesized fallback of
+         * SSID TLV (2 + len) + rates (6) + DS (3). */
+        IeLengths[i] = Adapter->Bss[i].IeLength != 0
+            ? Adapter->Bss[i].IeLength
+            : Adapter->Bss[i].SsidLength + 11;
         PayloadSize += FIELD_OFFSET(DOT11_BSS_ENTRY, ucBuffer) + IeLengths[i];
     }
 
@@ -198,7 +201,14 @@ CywBuildBssList(
         Entry->usCapabilityInformation = Src->CapabilityInformation;
         Entry->uBufferLength = IeLen;
 
-        (VOID)CywBuildBeaconIes(Src, Entry->ucBuffer, IeLen);
+        if (Src->IeLength != 0)
+        {
+            RtlCopyMemory(Entry->ucBuffer, Src->IeBlob, IeLen);
+        }
+        else
+        {
+            (VOID)CywBuildBeaconIes(Src, Entry->ucBuffer, IeLen);
+        }
 
         Cursor += FIELD_OFFSET(DOT11_BSS_ENTRY, ucBuffer) + IeLen;
     }
@@ -239,7 +249,10 @@ CywIndicateAssocStart(
     Params.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
     Params.Header.Revision = DOT11_ASSOCIATION_START_PARAMETERS_REVISION_1;
     Params.Header.Size = sizeof(DOT11_ASSOCIATION_START_PARAMETERS);
-    RtlCopyMemory(Params.MacAddr, Adapter->ConnectedBssid, CYW_ADDRESS_LENGTH);
+    RtlCopyMemory(Params.MacAddr,
+                  Adapter->HasDesiredBssid ? Adapter->DesiredBssid
+                                           : Adapter->ConnectedBssid,
+                  CYW_ADDRESS_LENGTH);
     Params.SSID.uSSIDLength = Adapter->DesiredSsidLength;
     RtlCopyMemory(Params.SSID.ucSSID, Adapter->DesiredSsid, Adapter->DesiredSsidLength);
 
@@ -295,10 +308,15 @@ CywIndicateConnectComplete(
 VOID
 CywIndicateLinkState(
     _In_ PCYW_ADAPTER Adapter,
-    _In_ BOOLEAN Connected)
+    _In_ BOOLEAN Connected,
+    _In_ ULONG64 SpeedBps)
 {
     NDIS_LINK_STATE LinkState;
-    NDIS_STATUS_INDICATION Indication;
+
+    if (Connected && SpeedBps == 0)
+    {
+        SpeedBps = CYW_LINK_SPEED_BPS;
+    }
 
     RtlZeroMemory(&LinkState, sizeof(LinkState));
     LinkState.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
@@ -308,20 +326,115 @@ CywIndicateLinkState(
         Connected ? MediaConnectStateConnected : MediaConnectStateDisconnected;
     LinkState.MediaDuplexState = MediaDuplexStateFull;
     LinkState.XmitLinkSpeed =
-        Connected ? CYW_LINK_SPEED_BPS : NDIS_LINK_SPEED_UNKNOWN;
+        Connected ? SpeedBps : NDIS_LINK_SPEED_UNKNOWN;
     LinkState.RcvLinkSpeed =
-        Connected ? CYW_LINK_SPEED_BPS : NDIS_LINK_SPEED_UNKNOWN;
+        Connected ? SpeedBps : NDIS_LINK_SPEED_UNKNOWN;
 
-    RtlZeroMemory(&Indication, sizeof(Indication));
-    Indication.Header.Type = NDIS_OBJECT_TYPE_STATUS_INDICATION;
-    Indication.Header.Revision = NDIS_STATUS_INDICATION_REVISION_1;
-    Indication.Header.Size = sizeof(NDIS_STATUS_INDICATION);
-    Indication.SourceHandle = Adapter->MiniportAdapterHandle;
-    Indication.StatusCode = NDIS_STATUS_LINK_STATE;
-    Indication.StatusBuffer = &LinkState;
-    Indication.StatusBufferSize = sizeof(LinkState);
+    CywIndicateDot11Status(Adapter, NDIS_STATUS_LINK_STATE,
+                           &LinkState, sizeof(LinkState));
+}
 
-    NdisMIndicateStatusEx(Adapter->MiniportAdapterHandle, &Indication);
+VOID
+CywIndicateDisassociation(
+    _In_ PCYW_ADAPTER Adapter)
+{
+    DOT11_DISASSOCIATION_PARAMETERS Params;
+
+    RtlZeroMemory(&Params, sizeof(Params));
+    Params.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
+    Params.Header.Revision = DOT11_DISASSOCIATION_PARAMETERS_REVISION_1;
+    Params.Header.Size = sizeof(DOT11_DISASSOCIATION_PARAMETERS);
+    RtlCopyMemory(Params.MacAddr, Adapter->ConnectedBssid, CYW_ADDRESS_LENGTH);
+    Params.uReason = DOT11_ASSOC_STATUS_UNREACHABLE;
+
+    CywIndicateDot11Status(Adapter, NDIS_STATUS_DOT11_DISASSOCIATION,
+                           &Params, sizeof(Params));
+}
+
+VOID
+CywIndicateLinkQuality(
+    _In_ PCYW_ADAPTER Adapter)
+{
+    struct
+    {
+        DOT11_LINK_QUALITY_PARAMETERS Params;
+        DOT11_LINK_QUALITY_ENTRY Entry;
+    } Buf;
+    LONG Rssi;
+
+    if (!NT_SUCCESS(CywQueryRssi(Adapter, &Rssi)))
+    {
+        return;
+    }
+
+    RtlZeroMemory(&Buf, sizeof(Buf));
+    Buf.Params.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
+    Buf.Params.Header.Revision = DOT11_LINK_QUALITY_PARAMETERS_REVISION_1;
+    Buf.Params.Header.Size = sizeof(DOT11_LINK_QUALITY_PARAMETERS);
+    Buf.Params.uLinkQualityListSize = 1;
+    Buf.Params.uLinkQualityListOffset = sizeof(DOT11_LINK_QUALITY_PARAMETERS);
+    RtlCopyMemory(Buf.Entry.PeerMacAddr, Adapter->ConnectedBssid, CYW_ADDRESS_LENGTH);
+    Buf.Entry.ucLinkQuality = (Rssi >= -50) ? 100 :
+                              (Rssi <= -100) ? 0 : (UCHAR)(2 * (Rssi + 100));
+
+    CywIndicateDot11Status(Adapter, NDIS_STATUS_DOT11_LINK_QUALITY,
+                           &Buf, sizeof(Buf));
+}
+
+VOID
+CywCompletePendingConnect(
+    _In_ PCYW_ADAPTER Adapter,
+    _In_ NDIS_STATUS Status)
+{
+    PNDIS_OID_REQUEST Request;
+
+    NdisAcquireSpinLock(&Adapter->Lock);
+    Request = Adapter->PendingConnectOid;
+    Adapter->PendingConnectOid = NULL;
+    NdisReleaseSpinLock(&Adapter->Lock);
+
+    if (Request != NULL)
+    {
+        NdisMOidRequestComplete(Adapter->MiniportAdapterHandle, Request, Status);
+    }
+}
+
+/* Runs at PASSIVE off the bus thread: fetches the live rate and RSSI and
+ * indicates the connected link state and link quality. */
+static
+VOID
+CywLinkUpWorker(
+    _In_ PVOID WorkItemContext,
+    _In_ NDIS_HANDLE NdisIoWorkItemHandle)
+{
+    PCYW_ADAPTER Adapter = (PCYW_ADAPTER)WorkItemContext;
+    ULONG Rate = 0;
+    ULONG64 SpeedBps = 0;
+
+    UNREFERENCED_PARAMETER(NdisIoWorkItemHandle);
+
+    if (Adapter->LinkUp && !Adapter->Halting)
+    {
+        if (NT_SUCCESS(CywQueryRate(Adapter, &Rate)) && Rate != 0)
+        {
+            SpeedBps = (ULONG64)Rate * 500000;  /* firmware units: 500 kbit/s */
+        }
+        CywIndicateLinkState(Adapter, TRUE, SpeedBps);
+        CywIndicateLinkQuality(Adapter);
+    }
+
+    InterlockedDecrement(&Adapter->WorkItemsPending);
+}
+
+VOID
+CywQueueLinkUpWork(
+    _In_ PCYW_ADAPTER Adapter)
+{
+    if (Adapter->LinkWorkItem != NULL && !Adapter->Halting)
+    {
+        InterlockedIncrement(&Adapter->WorkItemsPending);
+        NdisQueueIoWorkItem(Adapter->LinkWorkItem, CywLinkUpWorker, Adapter);
+    }
 }
 
 VOID
@@ -329,13 +442,15 @@ CywIndicateScanComplete(
     _In_ PCYW_ADAPTER Adapter,
     _In_ NDIS_STATUS ScanStatus)
 {
-    NDIS_STATUS_INDICATION Indication;
     DOT11_STATUS_INDICATION Confirm;
+    PNDIS_OID_REQUEST Request;
     BOOLEAN WasInProgress;
 
     NdisAcquireSpinLock(&Adapter->Lock);
     WasInProgress = Adapter->ScanInProgress;
     Adapter->ScanInProgress = FALSE;
+    Request = Adapter->PendingScanOid;
+    Adapter->PendingScanOid = NULL;
     NdisReleaseSpinLock(&Adapter->Lock);
 
     if (!WasInProgress)
@@ -347,18 +462,19 @@ CywIndicateScanComplete(
     Confirm.uStatusType = DOT11_STATUS_SCAN_CONFIRM;
     Confirm.ndisStatus = ScanStatus;
 
-    RtlZeroMemory(&Indication, sizeof(Indication));
-    Indication.Header.Type = NDIS_OBJECT_TYPE_STATUS_INDICATION;
-    Indication.Header.Revision = NDIS_STATUS_INDICATION_REVISION_1;
-    Indication.Header.Size = sizeof(NDIS_STATUS_INDICATION);
-    Indication.SourceHandle = Adapter->MiniportAdapterHandle;
-    Indication.StatusCode = NDIS_STATUS_DOT11_SCAN_CONFIRM;
-    Indication.StatusBuffer = &Confirm;
-    Indication.StatusBufferSize = sizeof(Confirm);
+    CywIndicateDot11Status(Adapter, NDIS_STATUS_DOT11_SCAN_CONFIRM,
+                           &Confirm, sizeof(Confirm));
 
-    NdisMIndicateStatusEx(Adapter->MiniportAdapterHandle, &Indication);
+    if (Request != NULL)
+    {
+        NdisMOidRequestComplete(Adapter->MiniportAdapterHandle, Request,
+                                NDIS_STATUS_SUCCESS);
+    }
 }
 
+/* Timeout fallback: the escan-complete event normally finishes the scan OID
+ * well before this fires. The sequence check keeps a stale fallback from
+ * completing a newer scan early. */
 static
 VOID
 CywScanWorker(
@@ -366,7 +482,7 @@ CywScanWorker(
     _In_ NDIS_HANDLE NdisIoWorkItemHandle)
 {
     PCYW_ADAPTER Adapter = (PCYW_ADAPTER)WorkItemContext;
-    PNDIS_OID_REQUEST Request;
+    ULONG Seq = Adapter->ScanSeq;
     LARGE_INTEGER Delay;
 
     UNREFERENCED_PARAMETER(NdisIoWorkItemHandle);
@@ -374,17 +490,12 @@ CywScanWorker(
     Delay.QuadPart = -40000000;
     KeDelayExecutionThread(KernelMode, FALSE, &Delay);
 
-    NdisAcquireSpinLock(&Adapter->Lock);
-    Request = Adapter->PendingScanOid;
-    Adapter->PendingScanOid = NULL;
-    NdisReleaseSpinLock(&Adapter->Lock);
-
-    CywIndicateScanComplete(Adapter, NDIS_STATUS_SUCCESS);
-
-    if (Request != NULL)
+    if (Adapter->ScanSeq == Seq)
     {
-        NdisMOidRequestComplete(Adapter->MiniportAdapterHandle, Request, NDIS_STATUS_SUCCESS);
+        CywIndicateScanComplete(Adapter, NDIS_STATUS_SUCCESS);
     }
+
+    InterlockedDecrement(&Adapter->WorkItemsPending);
 }
 
 static
@@ -395,6 +506,11 @@ CywOidScanRequest(
 {
     NTSTATUS Status;
 
+    if (!Adapter->RadioOn)
+    {
+        return NDIS_STATUS_DOT11_POWER_STATE_INVALID;
+    }
+
     NdisAcquireSpinLock(&Adapter->Lock);
     if (Adapter->PendingScanOid != NULL)
     {
@@ -402,9 +518,12 @@ CywOidScanRequest(
         return NDIS_STATUS_DOT11_MEDIA_IN_USE;
     }
     Adapter->PendingScanOid = Request;
+    Adapter->ScanSeq++;
     NdisReleaseSpinLock(&Adapter->Lock);
 
-    Status = CywScanStart(Adapter, NULL);
+    Status = CywScanStart(Adapter,
+        (PDOT11_SCAN_REQUEST_V2)Request->DATA.SET_INFORMATION.InformationBuffer,
+        Request->DATA.SET_INFORMATION.InformationBufferLength);
     if (!NT_SUCCESS(Status))
     {
         NdisAcquireSpinLock(&Adapter->Lock);
@@ -413,10 +532,13 @@ CywOidScanRequest(
         return NDIS_STATUS_FAILURE;
     }
 
+    InterlockedIncrement(&Adapter->WorkItemsPending);
     NdisQueueIoWorkItem(Adapter->InterruptWorkItem, CywScanWorker, Adapter);
     return NDIS_STATUS_PENDING;
 }
 
+/* Issues the connect; the link event completes the OID, this worker's delay
+ * is only the timeout fallback (sequence-guarded against newer connects). */
 static
 VOID
 CywConnectWorker(
@@ -424,7 +546,7 @@ CywConnectWorker(
     _In_ NDIS_HANDLE NdisIoWorkItemHandle)
 {
     PCYW_ADAPTER Adapter = (PCYW_ADAPTER)WorkItemContext;
-    PNDIS_OID_REQUEST Request;
+    ULONG Seq = Adapter->ConnectSeq;
     LARGE_INTEGER Delay;
 
     UNREFERENCED_PARAMETER(NdisIoWorkItemHandle);
@@ -435,16 +557,12 @@ CywConnectWorker(
     Delay.QuadPart = -30000000;
     KeDelayExecutionThread(KernelMode, FALSE, &Delay);
 
-    NdisAcquireSpinLock(&Adapter->Lock);
-    Request = Adapter->PendingConnectOid;
-    Adapter->PendingConnectOid = NULL;
-    NdisReleaseSpinLock(&Adapter->Lock);
-
-    if (Request != NULL)
+    if (Adapter->ConnectSeq == Seq)
     {
-        NdisMOidRequestComplete(Adapter->MiniportAdapterHandle, Request,
-                                NDIS_STATUS_SUCCESS);
+        CywCompletePendingConnect(Adapter, NDIS_STATUS_SUCCESS);
     }
+
+    InterlockedDecrement(&Adapter->WorkItemsPending);
 }
 
 static
@@ -453,6 +571,11 @@ CywOidConnectRequest(
     _In_ PCYW_ADAPTER Adapter,
     _In_ PNDIS_OID_REQUEST Request)
 {
+    if (!Adapter->RadioOn)
+    {
+        return NDIS_STATUS_DOT11_POWER_STATE_INVALID;
+    }
+
     NdisAcquireSpinLock(&Adapter->Lock);
     if (Adapter->PendingConnectOid != NULL)
     {
@@ -460,8 +583,10 @@ CywOidConnectRequest(
         return NDIS_STATUS_DOT11_MEDIA_IN_USE;
     }
     Adapter->PendingConnectOid = Request;
+    Adapter->ConnectSeq++;
     NdisReleaseSpinLock(&Adapter->Lock);
 
+    InterlockedIncrement(&Adapter->WorkItemsPending);
     NdisQueueIoWorkItem(Adapter->InterruptWorkItem, CywConnectWorker, Adapter);
     return NDIS_STATUS_PENDING;
 }
@@ -504,9 +629,50 @@ CywOidQuery(
         case OID_GEN_MAXIMUM_LOOKAHEAD:
             return CywOidQueryUlong(Request, DOT11_MAX_PDU_SIZE);
         case OID_GEN_LINK_SPEED:
+        {
+            ULONG Rate = 0;
+            if (Adapter->LinkUp &&
+                NT_SUCCESS(CywQueryRate(Adapter, &Rate)) && Rate != 0)
+            {
+                /* firmware units of 500 kbit/s -> NDIS units of 100 bit/s */
+                return CywOidQueryUlong(Request, Rate * 5000);
+            }
             return CywOidQueryUlong(Request, CYW_LINK_SPEED_BPS / 100);
+        }
+        case OID_GEN_XMIT_OK:
+            return CywOidQueryUlong(Request, (ULONG)Adapter->TxOkCount);
+        case OID_GEN_RCV_OK:
+            return CywOidQueryUlong(Request, (ULONG)Adapter->RxOkCount);
+        case OID_GEN_STATISTICS:
+        {
+            NDIS_STATISTICS_INFO Stats;
+            RtlZeroMemory(&Stats, sizeof(Stats));
+            Stats.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
+            Stats.Header.Revision = NDIS_STATISTICS_INFO_REVISION_1;
+            Stats.Header.Size = NDIS_SIZEOF_STATISTICS_INFO_REVISION_1;
+            Stats.SupportedStatistics =
+                NDIS_STATISTICS_FLAGS_VALID_DIRECTED_FRAMES_RCV |
+                NDIS_STATISTICS_FLAGS_VALID_DIRECTED_FRAMES_XMIT |
+                NDIS_STATISTICS_FLAGS_VALID_XMIT_ERROR;
+            Stats.ifHCInUcastPkts = Adapter->RxOkCount;
+            Stats.ifHCOutUcastPkts = Adapter->TxOkCount;
+            Stats.ifOutErrors = Adapter->TxErrCount;
+            return CywOidQueryBuffer(Request, &Stats, sizeof(Stats));
+        }
+        case OID_DOT11_CURRENT_CHANNEL_NUMBER:
+        {
+            CYW_CHANNEL_INFO_LE Ci;
+            RtlZeroMemory(&Ci, sizeof(Ci));
+            if (NT_SUCCESS(CywFilCmdGet(Adapter, BRCMF_C_GET_CHANNEL,
+                                        &Ci, sizeof(Ci))))
+            {
+                return CywOidQueryUlong(Request, Ci.HwChannel);
+            }
+            return NDIS_STATUS_FAILURE;
+        }
         case OID_GEN_MEDIA_CONNECT_STATUS:
-            return CywOidQueryUlong(Request, MediaConnectStateDisconnected);
+            return CywOidQueryUlong(Request, Adapter->LinkUp
+                ? MediaConnectStateConnected : MediaConnectStateDisconnected);
         case OID_GEN_MAXIMUM_SEND_PACKETS:
             return CywOidQueryUlong(Request, 16);
         case OID_GEN_MAC_OPTIONS:
@@ -573,6 +739,75 @@ CywOidQuery(
             Request->DATA.QUERY_INFORMATION.BytesWritten = Written;
             return NDIS_STATUS_SUCCESS;
         }
+        case OID_DOT11_DESIRED_SSID_LIST:
+        {
+            DOT11_SSID_LIST List;
+            RtlZeroMemory(&List, sizeof(List));
+            List.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
+            List.Header.Revision = DOT11_SSID_LIST_REVISION_1;
+            List.Header.Size = sizeof(List);
+            List.uNumOfEntries = 1;
+            List.uTotalNumOfEntries = 1;
+            NdisAcquireSpinLock(&Adapter->Lock);
+            List.SSIDs[0].uSSIDLength = Adapter->DesiredSsidLength;
+            RtlCopyMemory(List.SSIDs[0].ucSSID, Adapter->DesiredSsid,
+                          Adapter->DesiredSsidLength);
+            NdisReleaseSpinLock(&Adapter->Lock);
+            return CywOidQueryBuffer(Request, &List, sizeof(List));
+        }
+        case OID_DOT11_DESIRED_BSSID_LIST:
+        {
+            DOT11_BSSID_LIST List;
+            RtlZeroMemory(&List, sizeof(List));
+            List.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
+            List.Header.Revision = DOT11_BSSID_LIST_REVISION_1;
+            List.Header.Size = sizeof(List);
+            List.uNumOfEntries = 1;
+            List.uTotalNumOfEntries = 1;
+            NdisAcquireSpinLock(&Adapter->Lock);
+            if (Adapter->HasDesiredBssid)
+            {
+                RtlCopyMemory(List.BSSIDs[0], Adapter->DesiredBssid,
+                              CYW_ADDRESS_LENGTH);
+            }
+            else
+            {
+                RtlFillMemory(List.BSSIDs[0], CYW_ADDRESS_LENGTH, 0xFF);
+            }
+            NdisReleaseSpinLock(&Adapter->Lock);
+            return CywOidQueryBuffer(Request, &List, sizeof(List));
+        }
+        case OID_DOT11_DESIRED_BSS_TYPE:
+            return CywOidQueryUlong(Request, dot11_BSS_type_infrastructure);
+        case OID_DOT11_ENABLED_AUTHENTICATION_ALGORITHM:
+        {
+            DOT11_AUTH_ALGORITHM_LIST List;
+            RtlZeroMemory(&List, sizeof(List));
+            List.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
+            List.Header.Revision = DOT11_AUTH_ALGORITHM_LIST_REVISION_1;
+            List.Header.Size = sizeof(List);
+            List.uNumOfEntries = 1;
+            List.uTotalNumOfEntries = 1;
+            List.AlgorithmIds[0] = Adapter->AuthAlgorithm;
+            return CywOidQueryBuffer(Request, &List, sizeof(List));
+        }
+        case OID_DOT11_ENABLED_UNICAST_CIPHER_ALGORITHM:
+        case OID_DOT11_ENABLED_MULTICAST_CIPHER_ALGORITHM:
+        {
+            DOT11_CIPHER_ALGORITHM_LIST List;
+            RtlZeroMemory(&List, sizeof(List));
+            List.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
+            List.Header.Revision = DOT11_CIPHER_ALGORITHM_LIST_REVISION_1;
+            List.Header.Size = sizeof(List);
+            List.uNumOfEntries = 1;
+            List.uTotalNumOfEntries = 1;
+            List.AlgorithmIds[0] =
+                (Oid == OID_DOT11_ENABLED_UNICAST_CIPHER_ALGORITHM)
+                    ? Adapter->UnicastCipher : Adapter->MulticastCipher;
+            return CywOidQueryBuffer(Request, &List, sizeof(List));
+        }
+        case OID_DOT11_CIPHER_DEFAULT_KEY_ID:
+            return CywOidQueryUlong(Request, Adapter->DefaultKeyId);
         default:
             return NDIS_STATUS_NOT_SUPPORTED;
     }
@@ -618,6 +853,23 @@ CywSetKey(
 
 static
 NDIS_STATUS
+CywOidSetFirstAlgoId(
+    _In_ PVOID Buffer,
+    _In_ ULONG Length,
+    _Out_ PULONG Dest)
+{
+    /* DOT11_AUTH_ALGORITHM_LIST and DOT11_CIPHER_ALGORITHM_LIST share this layout. */
+    PDOT11_AUTH_ALGORITHM_LIST List = (PDOT11_AUTH_ALGORITHM_LIST)Buffer;
+
+    if (Length >= sizeof(DOT11_AUTH_ALGORITHM_LIST) && List->uNumOfEntries >= 1)
+    {
+        *Dest = List->AlgorithmIds[0];
+    }
+    return NDIS_STATUS_SUCCESS;
+}
+
+static
+NDIS_STATUS
 CywOidSet(
     _In_ PCYW_ADAPTER Adapter,
     _In_ PNDIS_OID_REQUEST Request)
@@ -649,7 +901,22 @@ CywOidSet(
         case OID_DOT11_NIC_POWER_STATE:
             if (Length >= sizeof(BOOLEAN))
             {
-                Adapter->RadioOn = *(PBOOLEAN)Buffer;
+                BOOLEAN On = *(PBOOLEAN)Buffer;
+                BOOLEAN WasUp;
+
+                Adapter->RadioOn = On;
+                if (!On)
+                {
+                    NdisAcquireSpinLock(&Adapter->Lock);
+                    WasUp = Adapter->LinkUp;
+                    NdisReleaseSpinLock(&Adapter->Lock);
+                    CywDisconnect(Adapter);
+                    if (WasUp)
+                    {
+                        CywIndicateDisassociation(Adapter);
+                        CywIndicateLinkState(Adapter, FALSE, 0);
+                    }
+                }
             }
             return NDIS_STATUS_SUCCESS;
         case OID_DOT11_FLUSH_BSS_LIST:
@@ -672,36 +939,31 @@ CywOidSet(
                 }
             }
             return NDIS_STATUS_SUCCESS;
+        case OID_DOT11_DESIRED_BSSID_LIST:
+            if (Length >= sizeof(DOT11_BSSID_LIST))
+            {
+                PDOT11_BSSID_LIST List = (PDOT11_BSSID_LIST)Buffer;
+                if (List->uNumOfEntries >= 1)
+                {
+                    static const UCHAR Broadcast[CYW_ADDRESS_LENGTH] =
+                        { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+
+                    NdisAcquireSpinLock(&Adapter->Lock);
+                    RtlCopyMemory(Adapter->DesiredBssid, List->BSSIDs[0],
+                                  CYW_ADDRESS_LENGTH);
+                    Adapter->HasDesiredBssid =
+                        !RtlEqualMemory(List->BSSIDs[0], Broadcast,
+                                        CYW_ADDRESS_LENGTH);
+                    NdisReleaseSpinLock(&Adapter->Lock);
+                }
+            }
+            return NDIS_STATUS_SUCCESS;
         case OID_DOT11_ENABLED_AUTHENTICATION_ALGORITHM:
-            if (Length >= sizeof(DOT11_AUTH_ALGORITHM_LIST))
-            {
-                PDOT11_AUTH_ALGORITHM_LIST List = (PDOT11_AUTH_ALGORITHM_LIST)Buffer;
-                if (List->uNumOfEntries >= 1)
-                {
-                    Adapter->AuthAlgorithm = List->AlgorithmIds[0];
-                }
-            }
-            return NDIS_STATUS_SUCCESS;
+            return CywOidSetFirstAlgoId(Buffer, Length, &Adapter->AuthAlgorithm);
         case OID_DOT11_ENABLED_UNICAST_CIPHER_ALGORITHM:
-            if (Length >= sizeof(DOT11_CIPHER_ALGORITHM_LIST))
-            {
-                PDOT11_CIPHER_ALGORITHM_LIST List = (PDOT11_CIPHER_ALGORITHM_LIST)Buffer;
-                if (List->uNumOfEntries >= 1)
-                {
-                    Adapter->UnicastCipher = List->AlgorithmIds[0];
-                }
-            }
-            return NDIS_STATUS_SUCCESS;
+            return CywOidSetFirstAlgoId(Buffer, Length, &Adapter->UnicastCipher);
         case OID_DOT11_ENABLED_MULTICAST_CIPHER_ALGORITHM:
-            if (Length >= sizeof(DOT11_CIPHER_ALGORITHM_LIST))
-            {
-                PDOT11_CIPHER_ALGORITHM_LIST List = (PDOT11_CIPHER_ALGORITHM_LIST)Buffer;
-                if (List->uNumOfEntries >= 1)
-                {
-                    Adapter->MulticastCipher = List->AlgorithmIds[0];
-                }
-            }
-            return NDIS_STATUS_SUCCESS;
+            return CywOidSetFirstAlgoId(Buffer, Length, &Adapter->MulticastCipher);
         case OID_DOT11_CIPHER_KEY_MAPPING_KEY:
         {
             ULONG Hdr = FIELD_OFFSET(DOT11_BYTE_ARRAY, ucBuffer) +
@@ -729,27 +991,94 @@ CywOidSet(
                     (PDOT11_CIPHER_DEFAULT_KEY_VALUE)Buffer;
                 if (Length >= Hdr + Value->usKeyLength)
                 {
-                    CywSetKey(Adapter, FALSE, NULL, Value->ucKey,
-                              Value->usKeyLength, Value->uKeyIndex);
-                    CywFilCmdSet(Adapter, BRCMF_C_SET_SCB_AUTHORIZE,
-                                 Adapter->ConnectedBssid, CYW_ADDRESS_LENGTH);
+                    if (Value->AlgorithmId == DOT11_CIPHER_ALGO_NONE)
+                    {
+                        /* The nwifi stack seeds passphrases under an
+                         * Algorithm==NONE sentinel; keep it for the
+                         * firmware-offloaded SAE handshake. */
+                        if (Value->usKeyLength <= CYW_SAE_PASSWORD_MAX)
+                        {
+                            RtlCopyMemory(Adapter->SaePassword, Value->ucKey,
+                                          Value->usKeyLength);
+                            Adapter->SaePasswordLen = Value->usKeyLength;
+                        }
+                    }
+                    else
+                    {
+                        CywSetKey(Adapter, FALSE, NULL, Value->ucKey,
+                                  Value->usKeyLength, Value->uKeyIndex);
+                        CywFilCmdSet(Adapter, BRCMF_C_SET_SCB_AUTHORIZE,
+                                     Adapter->ConnectedBssid, CYW_ADDRESS_LENGTH);
+                    }
                 }
             }
             Request->DATA.SET_INFORMATION.BytesRead = Length;
             return NDIS_STATUS_SUCCESS;
         }
         case OID_DOT11_CIPHER_DEFAULT_KEY_ID:
+            if (Length >= sizeof(ULONG))
+            {
+                Adapter->DefaultKeyId = *(PULONG)Buffer;
+            }
             Request->DATA.SET_INFORMATION.BytesRead = Length;
             return NDIS_STATUS_SUCCESS;
         case OID_DOT11_CONNECT_REQUEST:
             return CywOidConnectRequest(Adapter, Request);
         case OID_DOT11_DISCONNECT_REQUEST:
+        {
+            BOOLEAN WasUp;
+
+            NdisAcquireSpinLock(&Adapter->Lock);
+            WasUp = Adapter->LinkUp;
+            NdisReleaseSpinLock(&Adapter->Lock);
+
             CywDisconnect(Adapter);
-            CywIndicateLinkState(Adapter, FALSE);
+            if (WasUp)
+            {
+                CywIndicateDisassociation(Adapter);
+            }
+            CywIndicateLinkState(Adapter, FALSE, 0);
             return NDIS_STATUS_SUCCESS;
+        }
         case OID_DOT11_DESIRED_BSS_TYPE:
-        case OID_DOT11_RESET_REQUEST:
+            /* Only infrastructure STA is supported; accept and ignore */
             return NDIS_STATUS_SUCCESS;
+        case OID_DOT11_RESET_REQUEST:
+        {
+            BOOLEAN WasUp;
+
+            NdisAcquireSpinLock(&Adapter->Lock);
+            WasUp = Adapter->LinkUp;
+            NdisReleaseSpinLock(&Adapter->Lock);
+
+            CywDisconnect(Adapter);
+            if (WasUp)
+            {
+                CywIndicateDisassociation(Adapter);
+                CywIndicateLinkState(Adapter, FALSE, 0);
+            }
+
+            NdisAcquireSpinLock(&Adapter->Lock);
+            Adapter->DesiredSsidLength = 0;
+            Adapter->HasDesiredBssid = FALSE;
+            NdisReleaseSpinLock(&Adapter->Lock);
+            RtlSecureZeroMemory(Adapter->SaePassword, sizeof(Adapter->SaePassword));
+            Adapter->SaePasswordLen = 0;
+            Adapter->DefaultKeyId = 0;
+
+            if (Length >= sizeof(DOT11_RESET_REQUEST) &&
+                ((PDOT11_RESET_REQUEST)Buffer)->bSetDefaultMIB)
+            {
+                NdisAcquireSpinLock(&Adapter->Lock);
+                Adapter->BssCount = 0;
+                NdisReleaseSpinLock(&Adapter->Lock);
+                Adapter->AuthAlgorithm = DOT11_AUTH_ALGO_80211_OPEN;
+                Adapter->UnicastCipher = DOT11_CIPHER_ALGO_NONE;
+                Adapter->MulticastCipher = DOT11_CIPHER_ALGO_NONE;
+            }
+            Request->DATA.SET_INFORMATION.BytesRead = Length;
+            return NDIS_STATUS_SUCCESS;
+        }
         default:
             return NDIS_STATUS_NOT_SUPPORTED;
     }
