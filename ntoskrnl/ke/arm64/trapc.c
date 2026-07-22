@@ -959,7 +959,8 @@ static
 VOID
 KiArm64DeliverPendingUserApc(
     _Inout_ PKEXCEPTION_FRAME ExceptionFrame,
-    _Inout_ PKTRAP_FRAME TrapFrame)
+    _Inout_ PKTRAP_FRAME TrapFrame,
+    _In_ BOOLEAN ClearKernelAlert)
 {
     PKTHREAD Thread;
     KIRQL OldIrql;
@@ -982,7 +983,10 @@ KiArm64DeliverPendingUserApc(
         return;
     }
 
-    Thread->Alerted[KernelMode] = FALSE;
+    if (ClearKernelAlert)
+    {
+        Thread->Alerted[KernelMode] = FALSE;
+    }
 
     if (OldIrql < APC_LEVEL)
     {
@@ -1046,7 +1050,7 @@ KiArm64HandleSystemService(
                                 TrapFrame);
     ExceptionFrame = &Context->ExceptionFrame;
 
-    KiArm64DeliverPendingUserApc(ExceptionFrame, TrapFrame);
+    KiArm64DeliverPendingUserApc(ExceptionFrame, TrapFrame, TRUE);
     KiArm64RestorePreviousModeFromTrap(Thread, TrapFrame);
     Thread->TrapFrame = KiGetLinkedTrapFrame(TrapFrame);
 
@@ -2111,6 +2115,7 @@ HandledExit:
     Context->TrapFramePointer = TrapFrame;
     Context->ExceptionFramePointer = &Context->ExceptionFrame;
     KiArm64ClearTrapActive();
+    KiArm64DeliverPendingUserApc(&Context->ExceptionFrame, TrapFrame, FALSE);
     return TRUE;
 }
 
