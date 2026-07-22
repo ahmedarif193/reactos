@@ -33,16 +33,8 @@ MiArm64ReadUserPtePhysically(
     _In_ PVOID Address,
     _Out_opt_ PULONG64 OutPte);
 
-typedef struct _MI_ARM64_USER_PTE_WALK
-{
-    volatile ULONG64 *PointerPte;
-    ULONG64 PteValue;
-    ULONG Depth;
-    /* Per-level KSEG0 table bases and table-page PFNs (L0..L3) captured
-     * during the walk so release paths never re-walk the hierarchy. */
-    volatile ULONG64 *LevelTable[4];
-    PFN_NUMBER LevelPfn[4];
-} MI_ARM64_USER_PTE_WALK, *PMI_ARM64_USER_PTE_WALK;
+/* MI_ARM64_USER_PTE_WALK lives in internal/arm64/mm.h; the AWE support in
+ * ARM3/awesup.c shares the walk and release helpers. */
 
 /*
  * Sanity-check a table physical address without probing or mapping. The
@@ -96,13 +88,6 @@ MiArm64EnsureTablePageMapped(
 
 static
 BOOLEAN
-MiArm64GetUserPteAddressForProcess(
-    _In_ PEPROCESS Process,
-    _In_ PVOID Address,
-    _Out_ PMI_ARM64_USER_PTE_WALK Walk);
-
-static
-BOOLEAN
 MiArm64GetUserPteAddress(
     _In_ PVOID Address,
     _Out_ PMI_ARM64_USER_PTE_WALK Walk);
@@ -136,14 +121,6 @@ static
 VOID
 MiArm64ReleaseMappedPageReference(
     _In_ PFN_NUMBER PageFrameNumber);
-
-static
-VOID
-MiArm64ReleaseUserPageTableReference(
-    _In_ PEPROCESS Process,
-    _In_ PVOID Address,
-    _In_ BOOLEAN ReleaseLeafShare,
-    _In_ PMI_ARM64_USER_PTE_WALK Walk);
 
 static
 VOID
@@ -245,7 +222,6 @@ MiArm64SyncMappedPfnCacheAttribute(
     }
 }
 
-static
 BOOLEAN
 MiArm64GetUserPteAddressForProcess(
     _In_ PEPROCESS Process,
@@ -1138,26 +1114,41 @@ MiArm64ReleaseMappedPageReference(
 
 static
 VOID
-MiArm64ReleaseUserPageTableReference(
+MiArm64ReleaseUserPageTableReferenceInternal(
     _In_ PEPROCESS Process,
     _In_ PVOID Address,
     _In_ BOOLEAN ReleaseLeafShare,
+    _In_ BOOLEAN ReleaseLeafEntry,
     _In_ PMI_ARM64_USER_PTE_WALK Walk)
 {
     KIRQL OldIrql;
-    ULONG Level;
+    ULONG Level, TopLevel;
     ULONG Index[3];
     ULONG ActualEntries;
     ULONG ActualShareReferences;
     PMMPFN Pfn[4];
+    BOOLEAN DecrementUsedEntry;
 
     ASSERT(Process != NULL);
     UNREFERENCED_PARAMETER(Process);
 
-    /* Nothing to release unless the walk reached the L3 table */
-    if (Walk->Depth < 3)
+    if (ReleaseLeafEntry)
     {
-        return;
+        /* A removed leaf can only be accounted against an L3 table. */
+        if (Walk->Depth < 3)
+        {
+            return;
+        }
+        TopLevel = 3;
+    }
+    else
+    {
+        /* A failed table build may stop at any allocated child level. */
+        if (Walk->Depth == 0)
+        {
+            return;
+        }
+        TopLevel = min(Walk->Depth, 3);
     }
 
     Index[0] = ((ULONG64)(ULONG_PTR)Address >> PXI_SHIFT) & PXI_MASK;
@@ -1166,7 +1157,7 @@ MiArm64ReleaseUserPageTableReference(
 
     OldIrql = MiAcquirePfnLock();
 
-    for (Level = 0; Level < 4; Level++)
+    for (Level = 0; Level <= TopLevel; Level++)
     {
         Pfn[Level] = MiGetPfnEntry(Walk->LevelPfn[Level]);
         if (Pfn[Level] == NULL)
@@ -1182,23 +1173,27 @@ MiArm64ReleaseUserPageTableReference(
     }
 
     /*
-     * Cascade L3 -> L2 -> L1 (the root is never freed). Each iteration
-     * releases one used-entry reference on the level's table; when the
-     * table provably empties, its parent slot is cleared and the table
-     * page is freed, and the cascade continues one level up.
+     * Cascade from the deepest table to L1 (the root is never freed).
+     * Normal unmap starts by releasing the removed leaf's used-entry
+     * reference. Rollback starts with an already-empty table, then releases
+     * parent descriptor references as each child is removed.
      */
-    for (Level = 3; Level >= 1; Level--)
+    DecrementUsedEntry = ReleaseLeafEntry;
+    for (Level = TopLevel; Level >= 1; Level--)
     {
         PMMPFN TablePfn = Pfn[Level];
         PMMPFN ParentPfn = Pfn[Level - 1];
 
-        if (TablePfn->OriginalPte.u.Soft.UsedPageTableEntries > 0)
+        if (DecrementUsedEntry)
         {
-            TablePfn->OriginalPte.u.Soft.UsedPageTableEntries--;
-        }
-        else
-        {
-            break;
+            if (TablePfn->OriginalPte.u.Soft.UsedPageTableEntries > 0)
+            {
+                TablePfn->OriginalPte.u.Soft.UsedPageTableEntries--;
+            }
+            else
+            {
+                break;
+            }
         }
 
         if (TablePfn->OriginalPte.u.Soft.UsedPageTableEntries != 0)
@@ -1228,6 +1223,7 @@ MiArm64ReleaseUserPageTableReference(
         MiDecrementShareCount(ParentPfn, Walk->LevelPfn[Level - 1]);
         MI_SET_PFN_DELETED(TablePfn);
         MiDecrementShareCount(TablePfn, Walk->LevelPfn[Level]);
+        DecrementUsedEntry = TRUE;
 
         if (Level == 1)
         {
@@ -1239,6 +1235,28 @@ MiArm64ReleaseUserPageTableReference(
     }
 
     MiReleasePfnLock(OldIrql);
+}
+
+VOID
+MiArm64ReleaseUserPageTableReference(
+    _In_ PEPROCESS Process,
+    _In_ PVOID Address,
+    _In_ BOOLEAN ReleaseLeafShare,
+    _In_ PMI_ARM64_USER_PTE_WALK Walk)
+{
+    MiArm64ReleaseUserPageTableReferenceInternal(Process, Address, ReleaseLeafShare, TRUE, Walk);
+}
+
+VOID
+MiArm64PruneEmptyUserPageTables(
+    _In_ PEPROCESS Process,
+    _In_ PVOID Address)
+{
+    MI_ARM64_USER_PTE_WALK Walk;
+
+    /* A failed walk still records every table level it reached. */
+    MiArm64GetUserPteAddressForProcess(Process, Address, &Walk);
+    MiArm64ReleaseUserPageTableReferenceInternal(Process, Address, FALSE, FALSE, &Walk);
 }
 
 static

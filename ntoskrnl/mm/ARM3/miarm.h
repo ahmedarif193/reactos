@@ -2493,6 +2493,13 @@ MiDecrementShareCount(
 
 PFN_NUMBER
 NTAPI
+MiRemovePageByColor(
+    IN PFN_NUMBER PageIndex,
+    IN ULONG Color
+);
+
+PFN_NUMBER
+NTAPI
 MiRemoveAnyPage(
     IN ULONG Color
 );
@@ -2884,6 +2891,26 @@ MiMakePdeExistAndMakeValid(
     IN PMMPDE PointerPde,
     IN PEPROCESS TargetProcess,
     IN KIRQL OldIrql
+);
+
+VOID
+NTAPI
+MiZeroPfn(
+    IN PFN_NUMBER PageFrameNumber
+);
+
+VOID
+NTAPI
+MiAweUnmapRange(
+    IN PEPROCESS Process,
+    IN ULONG_PTR Va,
+    IN ULONG_PTR EndingAddress
+);
+
+VOID
+NTAPI
+MiAweProcessCleanup(
+    IN PEPROCESS Process
 );
 
 VOID
