@@ -575,6 +575,34 @@ typedef struct DOT11_DISASSOCIATION_PARAMETERS {
     ULONG uIHVDataOffset, uIHVDataSize;
 } DOT11_DISASSOCIATION_PARAMETERS, *PDOT11_DISASSOCIATION_PARAMETERS;
 
+/* --- Link quality indication (NDIS_STATUS_DOT11_LINK_QUALITY) -------------- */
+
+typedef struct DOT11_LINK_QUALITY_ENTRY {
+    DOT11_MAC_ADDRESS PeerMacAddr;
+    UCHAR ucLinkQuality;
+} DOT11_LINK_QUALITY_ENTRY, *PDOT11_LINK_QUALITY_ENTRY;
+
+typedef struct DOT11_LINK_QUALITY_PARAMETERS {
+#define DOT11_LINK_QUALITY_PARAMETERS_REVISION_1  1
+    NDIS_OBJECT_HEADER Header;
+    ULONG uLinkQualityListSize;
+    ULONG uLinkQualityListOffset;
+} DOT11_LINK_QUALITY_PARAMETERS, *PDOT11_LINK_QUALITY_PARAMETERS;
+
+/* --- MAC/PHY reset request (OID_DOT11_RESET_REQUEST) ----------------------- */
+
+typedef enum _DOT11_RESET_TYPE {
+    dot11_reset_type_phy = 1,
+    dot11_reset_type_mac = 2,
+    dot11_reset_type_phy_and_mac = 3
+} DOT11_RESET_TYPE, *PDOT11_RESET_TYPE;
+
+typedef struct _DOT11_RESET_REQUEST {
+    DOT11_RESET_TYPE dot11ResetType;
+    DOT11_MAC_ADDRESS dot11MacAddress;
+    BOOLEAN bSetDefaultMIB;
+} DOT11_RESET_REQUEST, *PDOT11_RESET_REQUEST;
+
 /* --- Cipher-key set structures (OID_DOT11_CIPHER_DEFAULT_KEY / MAPPING) ---- */
 
 typedef struct DOT11_CIPHER_DEFAULT_KEY_VALUE {
