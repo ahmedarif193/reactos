@@ -108,11 +108,14 @@ static LONGLONG s_prevCpuIdle[64], s_prevCpuKernel[64], s_prevCpuUser[64];
 static ULONGLONG s_prevIoRead, s_prevIoWrite;
 static BOOL s_first = TRUE;
 
-/* selected physical disk; disk 0 is the common ReactOS system disk */
-static HANDLE s_diskHandle = INVALID_HANDLE_VALUE;
-static DISK_PERFORMANCE s_prevDiskPerf;
-static BOOL s_havePrevDiskPerf;
-static BOOL s_diskCountersEnabled;
+struct DiskSampler
+{
+    HANDLE handle;
+    DISK_PERFORMANCE previous;
+    BOOL havePrevious;
+    BOOL countersEnabled;
+};
+static DiskSampler s_diskSamplers[TM_MAX_DISKS];
 
 /* network deltas */
 static DWORD s_netIfIndex = (DWORD)-1;
@@ -439,37 +442,74 @@ static const WCHAR* StorageBusName(STORAGE_BUS_TYPE bus)
     }
 }
 
-static void AppendDiskVolume(const WCHAR* root)
+static int FindDiskIndex(DWORD number)
 {
-    WCHAR name[4] = { root[0], L':', 0, 0 };
-    if (g.diskVolumes[0])
-        StringCchCatW(g.diskVolumes, _countof(g.diskVolumes), L" ");
-    StringCchCatW(g.diskVolumes, _countof(g.diskVolumes), name);
+    for (int i = 0; i < g.diskCount; i++)
+        if (g.disks[i].number == number)
+            return i;
+    return -1;
 }
 
-static void DetectDisk(void)
+static DiskSnapshot* AddDisk(DWORD number)
 {
-    DWORD diskNumber = 0;
-    if (s_winDir[0] && s_winDir[1] == L':')
-        GetVolumeDiskNumber(s_winDir[0], &diskNumber);
-    g.diskNumber = diskNumber;
+    if (g.diskCount >= TM_MAX_DISKS)
+        return NULL;
+    DiskSnapshot* disk = &g.disks[g.diskCount++];
+    ZeroMemory(disk, sizeof(*disk));
+    disk->number = number;
+    return disk;
+}
 
-    WCHAR path[64];
-    StringCchPrintfW(path, _countof(path), L"\\\\.\\PhysicalDrive%lu", diskNumber);
-    s_diskHandle = CreateFileW(path, 0,
-                               FILE_SHARE_READ | FILE_SHARE_WRITE,
-                               NULL, OPEN_EXISTING, 0, NULL);
-    g.diskPresent = s_diskHandle != INVALID_HANDLE_VALUE;
+static void AppendDiskVolume(DiskSnapshot* disk, const WCHAR* root)
+{
+    WCHAR name[4] = { root[0], L':', 0, 0 };
+    if (disk->volumes[0])
+        StringCchCatW(disk->volumes, _countof(disk->volumes), L" ");
+    StringCchCatW(disk->volumes, _countof(disk->volumes), name);
+}
 
-    if (g.diskPresent)
+static BOOL SameDriveLetter(WCHAR first, WCHAR second)
+{
+    if (first >= L'a' && first <= L'z') first -= L'a' - L'A';
+    if (second >= L'a' && second <= L'z') second -= L'a' - L'A';
+    return first == second;
+}
+
+static void SortDisks(void)
+{
+    for (int i = 1; i < g.diskCount; i++)
     {
+        DiskSnapshot disk = g.disks[i];
+        int j = i;
+        while (j > 0 && g.disks[j - 1].number > disk.number)
+        {
+            g.disks[j] = g.disks[j - 1];
+            j--;
+        }
+        g.disks[j] = disk;
+    }
+}
+
+static void DetectDiskDetails(int index)
+{
+    DiskSnapshot* disk = &g.disks[index];
+    DiskSampler* sampler = &s_diskSamplers[index];
+    WCHAR path[64];
+    StringCchPrintfW(path, _countof(path),
+                     L"\\\\.\\PhysicalDrive%lu", disk->number);
+    sampler->handle = CreateFileW(path, 0,
+                                  FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                  NULL, OPEN_EXISTING, 0, NULL);
+    if (sampler->handle != INVALID_HANDLE_VALUE)
+    {
+        disk->present = TRUE;
         DWORD returned = 0;
         GET_LENGTH_INFORMATION length;
-        if (DeviceIoControl(s_diskHandle, IOCTL_DISK_GET_LENGTH_INFO,
+        if (DeviceIoControl(sampler->handle, IOCTL_DISK_GET_LENGTH_INFO,
                             NULL, 0, &length, sizeof(length),
                             &returned, NULL))
         {
-            g.diskCapacity = (ULONGLONG)length.Length.QuadPart;
+            disk->capacity = (ULONGLONG)length.Length.QuadPart;
         }
 
         BYTE descriptorBuffer[1024];
@@ -478,7 +518,7 @@ static void DetectDisk(void)
         ZeroMemory(&query, sizeof(query));
         query.PropertyId = StorageDeviceProperty;
         query.QueryType = PropertyStandardQuery;
-        if (DeviceIoControl(s_diskHandle, IOCTL_STORAGE_QUERY_PROPERTY,
+        if (DeviceIoControl(sampler->handle, IOCTL_STORAGE_QUERY_PROPERTY,
                             &query, sizeof(query),
                             descriptorBuffer, sizeof(descriptorBuffer),
                             &returned, NULL) &&
@@ -498,14 +538,15 @@ static void DetectDisk(void)
                                descriptor->ProductIdOffset,
                                product, _countof(product));
             if (vendor[0])
-                StringCchCopyW(g.diskModel, _countof(g.diskModel), vendor);
+                StringCchCopyW(disk->model, _countof(disk->model), vendor);
             if (product[0])
             {
-                if (g.diskModel[0])
-                    StringCchCatW(g.diskModel, _countof(g.diskModel), L" ");
-                StringCchCatW(g.diskModel, _countof(g.diskModel), product);
+                if (disk->model[0])
+                    StringCchCatW(disk->model, _countof(disk->model), L" ");
+                StringCchCatW(disk->model, _countof(disk->model), product);
             }
-            StringCchCopyW(g.diskInterface, _countof(g.diskInterface),
+            StringCchCopyW(disk->interfaceName,
+                           _countof(disk->interfaceName),
                            StorageBusName(descriptor->BusType));
         }
 
@@ -514,38 +555,84 @@ static void DetectDisk(void)
         ZeroMemory(&query, sizeof(query));
         query.PropertyId = StorageDeviceSeekPenaltyProperty;
         query.QueryType = PropertyStandardQuery;
-        if (DeviceIoControl(s_diskHandle, IOCTL_STORAGE_QUERY_PROPERTY,
+        if (DeviceIoControl(sampler->handle, IOCTL_STORAGE_QUERY_PROPERTY,
                             &query, sizeof(query), &penalty, sizeof(penalty),
                             &returned, NULL))
         {
-            StringCchCopyW(g.diskType, _countof(g.diskType),
+            StringCchCopyW(disk->type, _countof(disk->type),
                            penalty.IncursSeekPenalty ? L"HDD" : L"SSD");
         }
     }
 
+    if (!disk->capacity)
+        disk->capacity = disk->formatted;
+    if (!disk->model[0])
+        StringCchCopyW(disk->model, _countof(disk->model), L"Disk device");
+    if (!disk->type[0])
+        StringCchCopyW(disk->type, _countof(disk->type), L"Unknown");
+    if (!disk->interfaceName[0])
+        StringCchCopyW(disk->interfaceName,
+                       _countof(disk->interfaceName), L"Unknown");
+}
+
+static void DetectDisks(void)
+{
+    g.diskCount = 0;
+    ZeroMemory(g.disks, sizeof(g.disks));
+    ZeroMemory(s_diskSamplers, sizeof(s_diskSamplers));
+    for (int i = 0; i < TM_MAX_DISKS; i++)
+        s_diskSamplers[i].handle = INVALID_HANDLE_VALUE;
+
+    /* Enumerate mounted, accessible local volumes just as Explorer does,
+       then group their drive letters by physical disk number. */
     WCHAR drives[256];
     if (GetLogicalDriveStringsW(_countof(drives), drives))
     {
         for (WCHAR* root = drives; *root; root += lstrlenW(root) + 1)
         {
-            if (GetDriveTypeW(root) != DRIVE_FIXED)
+            UINT driveType = GetDriveTypeW(root);
+            if (driveType == DRIVE_NO_ROOT_DIR || driveType == DRIVE_REMOTE ||
+                driveType == DRIVE_CDROM || driveType == DRIVE_RAMDISK)
+            {
+                continue;
+            }
+
+            ULARGE_INTEGER available, total, freeBytes;
+            if (!GetDiskFreeSpaceExW(root, &available, &total, &freeBytes))
                 continue;
 
             DWORD number;
-            if (!GetVolumeDiskNumber(root[0], &number) || number != diskNumber)
+            if (!GetVolumeDiskNumber(root[0], &number))
                 continue;
 
-            g.diskPresent = TRUE;
-            AppendDiskVolume(root);
-            ULARGE_INTEGER available, total, freeBytes;
-            if (GetDiskFreeSpaceExW(root, &available, &total, &freeBytes))
-                g.diskFormatted += total.QuadPart;
-            if (s_winDir[0] && (root[0] == s_winDir[0] ||
-                                root[0] == s_winDir[0] + (L'a' - L'A') ||
-                                root[0] + (L'a' - L'A') == s_winDir[0]))
-                g.diskSystem = TRUE;
+            int index = FindDiskIndex(number);
+            DiskSnapshot* disk = index >= 0 ? &g.disks[index] : AddDisk(number);
+            if (!disk)
+                continue;
+
+            disk->present = TRUE;
+            AppendDiskVolume(disk, root);
+            disk->formatted += total.QuadPart;
+            if (s_winDir[0] && SameDriveLetter(root[0], s_winDir[0]))
+                disk->system = TRUE;
         }
     }
+
+    /* Preserve the old disk-0 fallback on systems where volume-to-disk
+       mapping is unavailable, so the Performance page still has a disk. */
+    if (!g.diskCount)
+    {
+        DWORD number = 0;
+        if (s_winDir[0] && s_winDir[1] == L':')
+            GetVolumeDiskNumber(s_winDir[0], &number);
+        DiskSnapshot* disk = AddDisk(number);
+        if (disk)
+            disk->system = TRUE;
+    }
+
+    SortDisks();
+    for (int i = 0; i < g.diskCount; i++)
+        DetectDiskDetails(i);
 
     HKEY key;
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
@@ -564,25 +651,17 @@ static void DetectDisk(void)
                 if (entry[1] == L':')
                 {
                     DWORD number;
-                    if (GetVolumeDiskNumber(entry[0], &number) && number == diskNumber)
+                    if (GetVolumeDiskNumber(entry[0], &number))
                     {
-                        g.diskPageFile = TRUE;
-                        break;
+                        int index = FindDiskIndex(number);
+                        if (index >= 0)
+                            g.disks[index].pageFile = TRUE;
                     }
                 }
             }
         }
         RegCloseKey(key);
     }
-
-    if (!g.diskCapacity)
-        g.diskCapacity = g.diskFormatted;
-    if (!g.diskModel[0])
-        StringCchCopyW(g.diskModel, _countof(g.diskModel), L"Disk device");
-    if (!g.diskType[0])
-        StringCchCopyW(g.diskType, _countof(g.diskType), L"Unknown");
-    if (!g.diskInterface[0])
-        StringCchCopyW(g.diskInterface, _countof(g.diskInterface), L"Unknown");
 }
 
 static const WCHAR* NetworkTypeName(DWORD type)
@@ -699,83 +778,119 @@ static void PollDiskPerformance(double dt,
 {
     ULONGLONG ioRead = (ULONGLONG)systemPerformance->IoReadTransferCount.QuadPart;
     ULONGLONG ioWrite = (ULONGLONG)systemPerformance->IoWriteTransferCount.QuadPart;
+    g.diskReadBps = 0;
+    g.diskWriteBps = 0;
     if (!s_first)
     {
-        g.diskReadBps = (double)(ioRead - s_prevIoRead) / dt;
-        g.diskWriteBps = (double)(ioWrite - s_prevIoWrite) / dt;
+        if (ioRead >= s_prevIoRead)
+            g.diskReadBps = (double)(ioRead - s_prevIoRead) / dt;
+        if (ioWrite >= s_prevIoWrite)
+            g.diskWriteBps = (double)(ioWrite - s_prevIoWrite) / dt;
     }
     s_prevIoRead = ioRead;
     s_prevIoWrite = ioWrite;
 
-    g.diskPerfValid = FALSE;
-    if (s_diskHandle == INVALID_HANDLE_VALUE)
-        return;
-
-    DISK_PERFORMANCE current;
-    DWORD returned = 0;
-    ZeroMemory(&current, sizeof(current));
-    if (!DeviceIoControl(s_diskHandle, IOCTL_DISK_PERFORMANCE,
-                         NULL, 0, &current, sizeof(current),
-                         &returned, NULL))
+    int validCount = 0;
+    for (int i = 0; i < g.diskCount; i++)
     {
-        s_havePrevDiskPerf = FALSE;
-        return;
-    }
+        DiskSnapshot* disk = &g.disks[i];
+        DiskSampler* sampler = &s_diskSamplers[i];
+        disk->readBps = 0;
+        disk->writeBps = 0;
+        disk->activePct = 0;
+        disk->responseMs = 0;
+        disk->perfValid = FALSE;
+        if (sampler->handle == INVALID_HANDLE_VALUE)
+            continue;
 
-    /* The first successful request holds the enable reference. Balance each
-       later sampling request; the retained reference is released at exit. */
-    if (s_diskCountersEnabled)
-    {
-        DWORD ignored;
-        DeviceIoControl(s_diskHandle, IOCTL_DISK_PERFORMANCE_OFF,
-                        NULL, 0, NULL, 0, &ignored, NULL);
-    }
-    else
-    {
-        s_diskCountersEnabled = TRUE;
-    }
-
-    if (s_havePrevDiskPerf)
-    {
-        LONGLONG queryDelta = current.QueryTime.QuadPart -
-                              s_prevDiskPerf.QueryTime.QuadPart;
-        LONGLONG readTimeDelta = current.ReadTime.QuadPart -
-                                 s_prevDiskPerf.ReadTime.QuadPart;
-        LONGLONG writeTimeDelta = current.WriteTime.QuadPart -
-                                  s_prevDiskPerf.WriteTime.QuadPart;
-        LONGLONG idleDelta = current.IdleTime.QuadPart -
-                             s_prevDiskPerf.IdleTime.QuadPart;
-        ULONG readCountDelta = current.ReadCount - s_prevDiskPerf.ReadCount;
-        ULONG writeCountDelta = current.WriteCount - s_prevDiskPerf.WriteCount;
-
-        g.diskReadBps = (double)(current.BytesRead.QuadPart -
-                                 s_prevDiskPerf.BytesRead.QuadPart) / dt;
-        g.diskWriteBps = (double)(current.BytesWritten.QuadPart -
-                                  s_prevDiskPerf.BytesWritten.QuadPart) / dt;
-        if (queryDelta > 0)
+        DISK_PERFORMANCE current;
+        DWORD returned = 0;
+        ZeroMemory(&current, sizeof(current));
+        if (!DeviceIoControl(sampler->handle, IOCTL_DISK_PERFORMANCE,
+                             NULL, 0, &current, sizeof(current),
+                             &returned, NULL))
         {
-            LONGLONG activeDelta;
-            if (current.IdleTime.QuadPart || s_prevDiskPerf.IdleTime.QuadPart)
-                activeDelta = queryDelta - idleDelta;
-            else
-                activeDelta = readTimeDelta + writeTimeDelta;
-            if (activeDelta < 0)
-                activeDelta = 0;
-            if (activeDelta > queryDelta)
-                activeDelta = queryDelta;
-            g.diskActivePct = 100.0 * activeDelta / queryDelta;
+            sampler->havePrevious = FALSE;
+            continue;
         }
-        ULONG operationCount = readCountDelta + writeCountDelta;
-        if (operationCount)
-            g.diskResponseMs = (readTimeDelta + writeTimeDelta) /
-                               (10000.0 * operationCount);
+
+        /* The first successful request holds the enable reference. Balance
+           each later request; the retained reference is released at exit. */
+        if (sampler->countersEnabled)
+        {
+            DWORD ignored;
+            DeviceIoControl(sampler->handle, IOCTL_DISK_PERFORMANCE_OFF,
+                            NULL, 0, NULL, 0, &ignored, NULL);
+        }
         else
-            g.diskResponseMs = 0;
-        g.diskPerfValid = TRUE;
+        {
+            sampler->countersEnabled = TRUE;
+        }
+
+        if (sampler->havePrevious)
+        {
+            LONGLONG queryDelta = current.QueryTime.QuadPart -
+                                  sampler->previous.QueryTime.QuadPart;
+            LONGLONG readTimeDelta = current.ReadTime.QuadPart -
+                                     sampler->previous.ReadTime.QuadPart;
+            LONGLONG writeTimeDelta = current.WriteTime.QuadPart -
+                                      sampler->previous.WriteTime.QuadPart;
+            LONGLONG idleDelta = current.IdleTime.QuadPart -
+                                 sampler->previous.IdleTime.QuadPart;
+            ULONG readCountDelta = current.ReadCount -
+                                   sampler->previous.ReadCount;
+            ULONG writeCountDelta = current.WriteCount -
+                                    sampler->previous.WriteCount;
+
+            if (current.BytesRead.QuadPart >=
+                sampler->previous.BytesRead.QuadPart)
+            {
+                disk->readBps = (double)(current.BytesRead.QuadPart -
+                                         sampler->previous.BytesRead.QuadPart) / dt;
+            }
+            if (current.BytesWritten.QuadPart >=
+                sampler->previous.BytesWritten.QuadPart)
+            {
+                disk->writeBps = (double)(current.BytesWritten.QuadPart -
+                                          sampler->previous.BytesWritten.QuadPart) / dt;
+            }
+            if (queryDelta > 0)
+            {
+                LONGLONG activeDelta;
+                if (current.IdleTime.QuadPart ||
+                    sampler->previous.IdleTime.QuadPart)
+                {
+                    activeDelta = queryDelta - idleDelta;
+                }
+                else
+                {
+                    activeDelta = readTimeDelta + writeTimeDelta;
+                }
+                if (activeDelta < 0)
+                    activeDelta = 0;
+                if (activeDelta > queryDelta)
+                    activeDelta = queryDelta;
+                disk->activePct = 100.0 * activeDelta / queryDelta;
+            }
+            ULONG operationCount = readCountDelta + writeCountDelta;
+            LONGLONG serviceTime = readTimeDelta + writeTimeDelta;
+            if (operationCount && serviceTime > 0)
+                disk->responseMs = serviceTime / (10000.0 * operationCount);
+            disk->perfValid = TRUE;
+            validCount++;
+        }
+
+        sampler->previous = current;
+        sampler->havePrevious = TRUE;
     }
 
-    s_prevDiskPerf = current;
-    s_havePrevDiskPerf = TRUE;
+    /* A system-wide transfer delta cannot be split accurately among several
+       disks. Retain the legacy fallback only when there is a single disk. */
+    if (!validCount && g.diskCount == 1)
+    {
+        g.disks[0].readBps = g.diskReadBps;
+        g.disks[0].writeBps = g.diskWriteBps;
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -834,7 +949,7 @@ void Init(void)
 
     DetectCpuTopology();
     DetectMemoryDevices();
-    DetectDisk();
+    DetectDisks();
 
     RefreshServices();
     RefreshStartup();
@@ -857,17 +972,20 @@ void Shutdown(void)
     if (s_netTable) HeapFree(GetProcessHeap(), 0, s_netTable);
     s_netTable = NULL;
     s_netTableSize = 0;
-    if (s_diskHandle != INVALID_HANDLE_VALUE)
+    for (int i = 0; i < g.diskCount; i++)
     {
-        if (s_diskCountersEnabled)
+        DiskSampler* sampler = &s_diskSamplers[i];
+        if (sampler->handle == INVALID_HANDLE_VALUE)
+            continue;
+        if (sampler->countersEnabled)
         {
             DWORD ignored;
-            DeviceIoControl(s_diskHandle, IOCTL_DISK_PERFORMANCE_OFF,
+            DeviceIoControl(sampler->handle, IOCTL_DISK_PERFORMANCE_OFF,
                             NULL, 0, NULL, 0, &ignored, NULL);
-            s_diskCountersEnabled = FALSE;
+            sampler->countersEnabled = FALSE;
         }
-        CloseHandle(s_diskHandle);
-        s_diskHandle = INVALID_HANDLE_VALUE;
+        CloseHandle(sampler->handle);
+        sampler->handle = INVALID_HANDLE_VALUE;
     }
     if (s_wsaStarted)
     {
@@ -1415,6 +1533,11 @@ void Tick(void)
     PollDiskPerformance(dt, &perf);
     if (g.diskReadBps < 0) g.diskReadBps = 0;
     if (g.diskWriteBps < 0) g.diskWriteBps = 0;
+    for (int i = 0; i < g.diskCount; i++)
+    {
+        if (g.disks[i].readBps < 0) g.disks[i].readBps = 0;
+        if (g.disks[i].writeBps < 0) g.disks[i].writeBps = 0;
+    }
 
     /* ---- network ---- */
     {
@@ -1743,9 +1866,13 @@ void Tick(void)
     g.hCpu.Push((float)g.cpuTotalPct);
     g.hCpuKernel.Push((float)g.cpuKernelPct);
     g.hMem.Push(g.memTotal ? (float)(100.0 * g.memInUse / g.memTotal) : 0.0f);
-    g.hDisk.Push((float)(g.diskReadBps + g.diskWriteBps));
-    if (g.diskPerfValid)
-        g.hDiskActive.Push((float)g.diskActivePct);
+    for (int i = 0; i < g.diskCount; i++)
+    {
+        DiskSnapshot* disk = &g.disks[i];
+        disk->hTransfer.Push((float)(disk->readBps + disk->writeBps));
+        if (disk->perfValid)
+            disk->hActive.Push((float)disk->activePct);
+    }
     g.hNetRecv.Push((float)g.netRecvBps);
     g.hNetSend.Push((float)g.netSendBps);
 

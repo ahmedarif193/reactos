@@ -396,6 +396,27 @@ void DrawGlyph(HDC dc, const RECT& r, IconId icon, COLORREF c);
 
 enum ProcCategory { CAT_APP = 0, CAT_BACKGROUND = 1, CAT_WINDOWS = 2 };
 
+/* There can be at most one distinct physical disk per mounted drive letter. */
+#define TM_MAX_DISKS 26
+
+struct DiskSnapshot
+{
+    double    readBps, writeBps;
+    double    activePct, responseMs;
+    WCHAR     model[160];
+    WCHAR     volumes[112];
+    WCHAR     type[24];
+    WCHAR     interfaceName[24];
+    ULONGLONG capacity, formatted;
+    DWORD     number;
+    BOOL      present;
+    BOOL      perfValid;
+    BOOL      system;
+    BOOL      pageFile;
+    HistRing  hTransfer;       /* bytes/s (read + write) */
+    HistRing  hActive;         /* 0..100 or empty        */
+};
+
 struct ProcExtra
 {
     ULONG   pid;
@@ -506,18 +527,10 @@ struct SysSnapshot
     ULONGLONG memTotal, memInUse, memAvail, memCommit, memCommitLimit;
     ULONGLONG memCached, memPagedPool, memNonPagedPool;
 
+    /* System-wide totals used by the Processes page summary. */
     double    diskReadBps, diskWriteBps;
-    double    diskActivePct, diskResponseMs;
-    WCHAR     diskModel[160];
-    WCHAR     diskVolumes[48];
-    WCHAR     diskType[24];
-    WCHAR     diskInterface[24];
-    ULONGLONG diskCapacity, diskFormatted;
-    DWORD     diskNumber;
-    BOOL      diskPresent;
-    BOOL      diskPerfValid;
-    BOOL      diskSystem;
-    BOOL      diskPageFile;
+    int       diskCount;
+    DiskSnapshot disks[TM_MAX_DISKS];
 
     double    netRecvBps, netSendBps;
     WCHAR     netAdapter[160];
@@ -536,8 +549,6 @@ struct SysSnapshot
     HistRing  hCpuLogical[64];
     HistRing  hCpuLogicalKernel[64];
     HistRing  hMem;        /* 0..100 used     */
-    HistRing  hDisk;       /* bytes/s (r+w)   */
-    HistRing  hDiskActive; /* 0..100 or empty */
     HistRing  hNetRecv;    /* bytes/s         */
     HistRing  hNetSend;    /* bytes/s         */
 

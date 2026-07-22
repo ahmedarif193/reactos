@@ -11,26 +11,61 @@
 
 enum { RES_CPU = 0, RES_MEM, RES_DISK, RES_NET, RES_COUNT };
 enum { CPU_GRAPH_OVERALL = 0, CPU_GRAPH_LOGICAL = 1 };
+#define MAX_PERF_TILES (TM_MAX_DISKS + 3)
 
 struct PerformancePage : Page
 {
     int  sel;
     int  hotTile;
+    int  railScroll;
     int  cpuGraphMode;
     BOOL showKernelTimes;
     BOOL trackingMouse;
-    RECT tiles[RES_COUNT];
+    RECT tiles[MAX_PERF_TILES];
+    RECT railClip;
     RECT rcPane;
 
-    PerformancePage() : sel(RES_CPU), hotTile(-1),
+    PerformancePage() : sel(0), hotTile(-1), railScroll(0),
                         cpuGraphMode(CPU_GRAPH_LOGICAL),
                         showKernelTimes(FALSE), trackingMouse(FALSE)
     {
         ZeroMemory(tiles, sizeof(tiles));
+        SetRectEmpty(&railClip);
         SetRectEmpty(&rcPane);
     }
 
     const WCHAR* Title() { return L"Performance"; }
+
+    int TileCount(void) const
+    {
+        return Data::g.diskCount + 3; /* CPU, memory, disks, network */
+    }
+
+    int TileResource(int tile) const
+    {
+        if (tile == 0) return RES_CPU;
+        if (tile == 1) return RES_MEM;
+        if (tile < 2 + Data::g.diskCount) return RES_DISK;
+        return RES_NET;
+    }
+
+    DiskSnapshot* TileDisk(int tile)
+    {
+        int index = tile - 2;
+        if (index < 0 || index >= Data::g.diskCount)
+            return NULL;
+        return &Data::g.disks[index];
+    }
+
+    int SelectedResource(void) const
+    {
+        return TileResource(sel);
+    }
+
+    DiskSnapshot* SelectedDisk(void)
+    {
+        return TileDisk(sel);
+    }
 
     /* ---------- layout ---------- */
 
@@ -39,8 +74,21 @@ struct PerformancePage : Page
         RECT rc;
         GetClientRect(hwnd, &rc);
         int railW = S(252);
-        int y = rc.top + S(6);
-        for (int i = 0; i < RES_COUNT; i++)
+        railClip.left = rc.left;
+        railClip.top = rc.top + S(6);
+        railClip.right = rc.left + railW;
+        railClip.bottom = rc.bottom - S(10);
+
+        int count = TileCount();
+        int totalHeight = count * S(84) - S(6);
+        int viewportHeight = railClip.bottom - railClip.top;
+        int maxScroll = totalHeight > viewportHeight ?
+                        totalHeight - viewportHeight : 0;
+        if (railScroll < 0) railScroll = 0;
+        if (railScroll > maxScroll) railScroll = maxScroll;
+
+        int y = railClip.top - railScroll;
+        for (int i = 0; i < count; i++)
         {
             tiles[i].left = rc.left + S(6);
             tiles[i].right = rc.left + railW - S(6);
@@ -54,16 +102,45 @@ struct PerformancePage : Page
         rcPane.bottom = rc.bottom - S(10);
     }
 
+    void EnsureSelectedVisible(void)
+    {
+        Layout();
+        if (sel < 0 || sel >= TileCount())
+            return;
+        if (tiles[sel].top < railClip.top)
+            railScroll -= railClip.top - tiles[sel].top;
+        else if (tiles[sel].bottom > railClip.bottom)
+            railScroll += tiles[sel].bottom - railClip.bottom;
+        Layout();
+    }
+
+    void ScrollRail(int amount)
+    {
+        int oldScroll = railScroll;
+        railScroll += amount;
+        Layout();
+        if (railScroll != oldScroll)
+        {
+            hotTile = -1;
+            InvalidateRect(hwnd, &railClip, FALSE);
+        }
+    }
+
     /* ---------- data helpers ---------- */
 
-    const HistRing* Ring(int res)
+    const HistRing* Ring(int tile)
     {
+        int res = TileResource(tile);
         switch (res)
         {
         case RES_CPU:  return &Data::g.hCpu;
         case RES_MEM:  return &Data::g.hMem;
         case RES_DISK:
-            return Data::g.hDiskActive.count ? &Data::g.hDiskActive : &Data::g.hDisk;
+        {
+            DiskSnapshot* disk = TileDisk(tile);
+            if (!disk) return NULL;
+            return disk->hActive.count ? &disk->hActive : &disk->hTransfer;
+        }
         case RES_NET:  return &Data::g.hNetRecv;
         }
         return NULL;
@@ -79,9 +156,10 @@ struct PerformancePage : Page
             StringCchPrintfW(buf, cch, L"%.0f Kbps", bitsPerSecond / 1000.0);
     }
 
-    void ResourceName(int res, WCHAR* buf, int cch)
+    void ResourceName(int tile, WCHAR* buf, int cch)
     {
         SysSnapshot& d = Data::g;
+        int res = TileResource(tile);
         switch (res)
         {
         case RES_CPU:
@@ -91,12 +169,20 @@ struct PerformancePage : Page
             StringCchCopyW(buf, cch, L"Memory");
             break;
         case RES_DISK:
-            if (d.diskVolumes[0])
+        {
+            DiskSnapshot* disk = TileDisk(tile);
+            if (!disk)
+            {
+                StringCchCopyW(buf, cch, L"Disk");
+                break;
+            }
+            if (disk->volumes[0])
                 StringCchPrintfW(buf, cch, L"Disk %lu (%s)",
-                                 d.diskNumber, d.diskVolumes);
+                                 disk->number, disk->volumes);
             else
-                StringCchPrintfW(buf, cch, L"Disk %lu", d.diskNumber);
+                StringCchPrintfW(buf, cch, L"Disk %lu", disk->number);
             break;
+        }
         case RES_NET:
             StringCchCopyW(buf, cch, d.netType[0] ? d.netType : L"Network");
             break;
@@ -106,9 +192,10 @@ struct PerformancePage : Page
         }
     }
 
-    void TileValue(int res, WCHAR* buf, int cch)
+    void TileValue(int tile, WCHAR* buf, int cch)
     {
         SysSnapshot& d = Data::g;
+        int res = TileResource(tile);
         switch (res)
         {
         case RES_CPU:
@@ -128,16 +215,17 @@ struct PerformancePage : Page
         }
         case RES_DISK:
         {
-            if (!d.diskPresent)
+            DiskSnapshot* disk = TileDisk(tile);
+            if (!disk || !disk->present)
                 StringCchCopyW(buf, cch, L"Not available");
-            else if (d.diskPerfValid)
+            else if (disk->perfValid)
                 StringCchPrintfW(buf, cch, L"%s  %.0f%%",
-                                 d.diskType, d.diskActivePct);
+                                 disk->type, disk->activePct);
             else
             {
                 WCHAR rate[32];
-                FmtRate(d.diskReadBps + d.diskWriteBps, rate, _countof(rate));
-                StringCchPrintfW(buf, cch, L"%s  %s", d.diskType, rate);
+                FmtRate(disk->readBps + disk->writeBps, rate, _countof(rate));
+                StringCchPrintfW(buf, cch, L"%s  %s", disk->type, rate);
             }
             break;
         }
@@ -159,11 +247,12 @@ struct PerformancePage : Page
 
     /* ---------- painting ---------- */
 
-    void PaintTile(HDC dc, int res)
+    void PaintTile(HDC dc, int tile)
     {
-        RECT r = tiles[res];
-        BOOL isSel = (sel == res);
-        BOOL isHot = (hotTile == res);
+        int res = TileResource(tile);
+        RECT r = tiles[tile];
+        BOOL isSel = (sel == tile);
+        BOOL isHot = (hotTile == tile);
 
         if (isSel)
             FillRoundRect(dc, r, g_t.dark ? Blend(g_t.winBg, RGB(255,255,255), 5)
@@ -186,17 +275,18 @@ struct PerformancePage : Page
         gs.line = g_t.graph[res];
         gs.border = TRUE;
         gs.yMax = (res == RES_CPU || res == RES_MEM ||
-                   (res == RES_DISK && Data::g.hDiskActive.count)) ? 100.0 : 0.0;
-        DrawGraph(dc, gr, Ring(res), gs);
+                   (res == RES_DISK && TileDisk(tile) &&
+                    TileDisk(tile)->hActive.count)) ? 100.0 : 0.0;
+        DrawGraph(dc, gr, Ring(tile), gs);
 
         /* labels */
         RECT tr = { gr.right + S(12), r.top + S(12), r.right - S(6), r.top + S(32) };
-        WCHAR name[96];
-        ResourceName(res, name, _countof(name));
+        WCHAR name[160];
+        ResourceName(tile, name, _countof(name));
         DrawTextClip(dc, name, tr, g_t.fBodySemi, g_t.textMain,
                      DT_LEFT | DT_SINGLELINE);
         WCHAR val[96];
-        TileValue(res, val, _countof(val));
+        TileValue(tile, val, _countof(val));
         RECT vr = { tr.left, r.top + S(34), r.right - S(4), r.bottom - S(8) };
         DrawTextClip(dc, val, vr, g_t.fSmall, g_t.textSec, DT_LEFT | DT_WORDBREAK);
     }
@@ -227,7 +317,7 @@ struct PerformancePage : Page
         int n = 0, rn = 0;
         rightTitle[0] = 0;
 
-        switch (sel)
+        switch (SelectedResource())
         {
         case RES_CPU:
         {
@@ -335,34 +425,37 @@ struct PerformancePage : Page
         }
         case RES_DISK:
         {
-            if (d.diskPerfValid)
-                FmtPct(d.diskActivePct, st[n].value, 64);
+            DiskSnapshot* disk = SelectedDisk();
+            if (!disk)
+                break;
+            if (disk->perfValid)
+                FmtPct(disk->activePct, st[n].value, 64);
             else
                 StringCchCopyW(st[n].value, 64, L"Unavailable");
             st[n++].label = L"Active time";
-            if (d.diskPerfValid)
-                StringCchPrintfW(st[n].value, 64, L"%.1f ms", d.diskResponseMs);
+            if (disk->perfValid)
+                StringCchPrintfW(st[n].value, 64, L"%.1f ms", disk->responseMs);
             else
                 StringCchCopyW(st[n].value, 64, L"Unavailable");
             st[n++].label = L"Average response time";
-            FmtRate(d.diskReadBps, st[n].value, 64);
+            FmtRate(disk->readBps, st[n].value, 64);
             st[n++].label = L"Read speed";
-            FmtRate(d.diskWriteBps, st[n].value, 64);
+            FmtRate(disk->writeBps, st[n].value, 64);
             st[n++].label = L"Write speed";
 
-            FmtBytes(d.diskCapacity, rst[rn].value, 64);
+            FmtBytes(disk->capacity, rst[rn].value, 64);
             rst[rn++].label = L"Capacity:";
-            FmtBytes(d.diskFormatted, rst[rn].value, 64);
+            FmtBytes(disk->formatted, rst[rn].value, 64);
             rst[rn++].label = L"Formatted:";
-            StringCchCopyW(rst[rn].value, 64, d.diskSystem ? L"Yes" : L"No");
+            StringCchCopyW(rst[rn].value, 64, disk->system ? L"Yes" : L"No");
             rst[rn++].label = L"System disk:";
-            StringCchCopyW(rst[rn].value, 64, d.diskPageFile ? L"Yes" : L"No");
+            StringCchCopyW(rst[rn].value, 64, disk->pageFile ? L"Yes" : L"No");
             rst[rn++].label = L"Page file:";
-            StringCchCopyW(rst[rn].value, 64, d.diskType);
+            StringCchCopyW(rst[rn].value, 64, disk->type);
             rst[rn++].label = L"Type:";
-            StringCchCopyW(rst[rn].value, 64, d.diskInterface);
+            StringCchCopyW(rst[rn].value, 64, disk->interfaceName);
             rst[rn++].label = L"Interface:";
-            StringCchCopyW(rightTitle, cchR, d.diskModel);
+            StringCchCopyW(rightTitle, cchR, disk->model);
             break;
         }
         case RES_NET:
@@ -436,7 +529,7 @@ struct PerformancePage : Page
 
         GraphStyle style;
         ZeroMemory(&style, sizeof(style));
-        style.line = g_t.graph[sel];
+        style.line = g_t.graph[SelectedResource()];
         style.secondLine = secondLine;
         style.grid = TRUE;
         style.border = TRUE;
@@ -705,7 +798,9 @@ struct PerformancePage : Page
         SysSnapshot& d = Data::g;
         RECT pane = rcPane;
 
-        WCHAR resource[96];
+        int resourceType = SelectedResource();
+        DiskSnapshot* disk = SelectedDisk();
+        WCHAR resource[160];
         ResourceName(sel, resource, _countof(resource));
         RECT header = { pane.left, pane.top, pane.right, pane.top + S(34) };
         DrawTextClip(dc, resource, header, g_t.fTitle, g_t.textMain,
@@ -713,7 +808,7 @@ struct PerformancePage : Page
 
         const WCHAR* hardware = L"";
         WCHAR hardwareBuffer[160];
-        switch (sel)
+        switch (resourceType)
         {
         case RES_CPU:
             hardware = d.cpuName;
@@ -724,7 +819,7 @@ struct PerformancePage : Page
             hardware = hardwareBuffer;
             break;
         case RES_DISK:
-            hardware = d.diskPresent ? d.diskModel : L"Not available";
+            hardware = disk && disk->present ? disk->model : L"Not available";
             break;
         case RES_NET:
             hardware = d.netPresent ? d.netAdapter : L"Not available";
@@ -734,7 +829,7 @@ struct PerformancePage : Page
                      DT_RIGHT | DT_SINGLELINE | DT_BOTTOM);
 
         int graphTop = pane.top + S(52);
-        if (sel == RES_CPU)
+        if (resourceType == RES_CPU)
         {
             int graphBottom = pane.bottom - S(170);
             if (graphBottom < graphTop + S(90))
@@ -750,7 +845,7 @@ struct PerformancePage : Page
                                   showKernelTimes ? KernelLineColor() : 0);
             PaintCpuStats(dc, pane, graph.bottom + S(24));
         }
-        else if (sel == RES_MEM)
+        else if (resourceType == RES_MEM)
         {
             int graphBottom = pane.bottom - S(225);
             if (graphBottom < graphTop + S(80))
@@ -764,7 +859,7 @@ struct PerformancePage : Page
             PaintMemoryComposition(dc, pane, graph.bottom + S(23), &statsY);
             PaintMemoryStats(dc, pane, statsY);
         }
-        else if (sel == RES_DISK)
+        else if (resourceType == RES_DISK && disk)
         {
             int statsY = pane.bottom - S(125);
             int graphLimit = statsY - S(24);
@@ -779,14 +874,16 @@ struct PerformancePage : Page
             RECT transferGraph = { pane.left, activeGraph.bottom + gap,
                                    pane.right, activeGraph.bottom + gap + secondHeight };
             PaintHistoryGraph(dc, activeGraph, L"Active time", L"100%",
-                              &d.hDiskActive, NULL, 100.0,
-                              !d.diskPerfValid && !d.hDiskActive.count);
+                              &disk->hActive, NULL, 100.0,
+                              !disk->perfValid && !disk->hActive.count);
 
-            double maximum = AutoMaximum(&d.hDisk, NULL, 100.0 * 1024.0);
+            double maximum = AutoMaximum(&disk->hTransfer, NULL,
+                                         100.0 * 1024.0);
             WCHAR maximumLabel[64];
             FmtRate(maximum, maximumLabel, _countof(maximumLabel));
             PaintHistoryGraph(dc, transferGraph, L"Disk transfer rate",
-                              maximumLabel, &d.hDisk, NULL, maximum, FALSE);
+                              maximumLabel, &disk->hTransfer, NULL,
+                              maximum, FALSE);
             PaintDiskStats(dc, pane, transferGraph.bottom + S(24));
         }
         else
@@ -804,12 +901,38 @@ struct PerformancePage : Page
         }
     }
 
+    void PaintRailScrollThumb(HDC dc)
+    {
+        int viewportHeight = railClip.bottom - railClip.top;
+        int totalHeight = TileCount() * S(84) - S(6);
+        if (viewportHeight <= 0 || totalHeight <= viewportHeight)
+            return;
+
+        int thumbHeight = viewportHeight * viewportHeight / totalHeight;
+        if (thumbHeight < S(24)) thumbHeight = S(24);
+        int maxScroll = totalHeight - viewportHeight;
+        int travel = viewportHeight - thumbHeight;
+        int top = railClip.top + (maxScroll ? railScroll * travel / maxScroll : 0);
+        RECT thumb = { railClip.right - S(5), top,
+                       railClip.right - S(2), top + thumbHeight };
+        FillRoundRect(dc, thumb, g_t.scrollThumb, CLR_NONE, S(2));
+    }
+
     void Paint(HDC dc, const RECT& rcPaint)
     {
         FillRect32(dc, rcPaint, g_t.listBg);
         Layout();
-        for (int i = 0; i < RES_COUNT; i++)
-            PaintTile(dc, i);
+        int saved = SaveDC(dc);
+        IntersectClipRect(dc, railClip.left, railClip.top,
+                         railClip.right, railClip.bottom);
+        for (int i = 0; i < TileCount(); i++)
+        {
+            RECT visible;
+            if (IntersectRect(&visible, &tiles[i], &railClip))
+                PaintTile(dc, i);
+        }
+        RestoreDC(dc, saved);
+        PaintRailScrollThumb(dc);
         DrawVLine(dc, tiles[0].right + S(4), rcPane.top, rcPane.bottom, g_t.divider);
         PaintPane(dc);
     }
@@ -818,8 +941,8 @@ struct PerformancePage : Page
 
     void CopyStats()
     {
-        WCHAR buf[1024] = L"";
-        WCHAR resource[96];
+        WCHAR buf[2048] = L"";
+        WCHAR resource[160];
         ResourceName(sel, resource, _countof(resource));
         StringCchPrintfW(buf, _countof(buf), L"%s\r\n", resource);
         Stat st[12], rst[12];
@@ -862,7 +985,7 @@ struct PerformancePage : Page
 
     void ShowContextMenu(POINT screenPoint)
     {
-        if (sel != RES_CPU)
+        if (SelectedResource() != RES_CPU)
         {
             MItem items[] =
             {
@@ -933,6 +1056,8 @@ static PerformancePage* s_page;
 static LRESULT CALLBACK PgPerfProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     PerformancePage* pg = s_page;
+    if (pg && !pg->hwnd)
+        pg->hwnd = hwnd;
     switch (msg)
     {
     case WM_ERASEBKGND:
@@ -949,6 +1074,7 @@ static LRESULT CALLBACK PgPerfProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     }
     case WM_SIZE:
+        pg->EnsureSelectedVisible();
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;
     case WM_MOUSEMOVE:
@@ -965,7 +1091,7 @@ static LRESULT CALLBACK PgPerfProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
         int hot = -1;
-        for (int i = 0; i < RES_COUNT; i++)
+        for (int i = 0; i < pg->TileCount(); i++)
             if (PtInRect(&pg->tiles[i], pt)) { hot = i; break; }
         if (hot != pg->hotTile)
         {
@@ -982,16 +1108,28 @@ static LRESULT CALLBACK PgPerfProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_LBUTTONDOWN:
     {
         POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
-        for (int i = 0; i < RES_COUNT; i++)
+        for (int i = 0; i < pg->TileCount(); i++)
         {
             if (PtInRect(&pg->tiles[i], pt))
             {
                 pg->sel = i;
+                pg->EnsureSelectedVisible();
                 InvalidateRect(hwnd, NULL, FALSE);
                 break;
             }
         }
         SetFocus(hwnd);
+        return 0;
+    }
+    case WM_MOUSEWHEEL:
+    {
+        POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        ScreenToClient(hwnd, &pt);
+        if (pt.x >= pg->railClip.left && pt.x < pg->railClip.right)
+        {
+            int delta = GET_WHEEL_DELTA_WPARAM(wp);
+            pg->ScrollRail(-delta * S(84) / WHEEL_DELTA);
+        }
         return 0;
     }
     case WM_RBUTTONUP:
@@ -1017,11 +1155,13 @@ static LRESULT CALLBACK PgPerfProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (wp == VK_UP && pg->sel > 0)
         {
             pg->sel--;
+            pg->EnsureSelectedVisible();
             InvalidateRect(hwnd, NULL, FALSE);
         }
-        else if (wp == VK_DOWN && pg->sel < RES_COUNT - 1)
+        else if (wp == VK_DOWN && pg->sel < pg->TileCount() - 1)
         {
             pg->sel++;
+            pg->EnsureSelectedVisible();
             InvalidateRect(hwnd, NULL, FALSE);
         }
         else if (wp == 'C' && (GetKeyState(VK_CONTROL) & 0x8000))
