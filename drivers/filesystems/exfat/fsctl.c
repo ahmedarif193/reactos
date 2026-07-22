@@ -1,0 +1,468 @@
+/*
+ * PROJECT:     ReactOS exFAT filesystem driver
+ * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * PURPOSE:     Volume mounting and filesystem controls
+ * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+ */
+
+#include "exfat.h"
+
+#define NDEBUG
+#include <debug.h>
+
+static NTSTATUS
+ExFatMountVolume(
+    PDEVICE_OBJECT DeviceObject,
+    PIRP Irp)
+{
+    PIO_STACK_LOCATION Stack = IoGetCurrentIrpStackLocation(Irp);
+    PDEVICE_OBJECT StorageDevice = Stack->Parameters.MountVolume.DeviceObject;
+    PVPB Vpb = Stack->Parameters.MountVolume.Vpb;
+    PDEVICE_OBJECT VolumeDevice = NULL;
+    PEXFAT_VCB Vcb = NULL;
+    DISK_GEOMETRY Geometry;
+    GET_LENGTH_INFORMATION LengthInformation;
+    ULONG OutputLength;
+    PUCHAR BootSector = NULL;
+    ULONG BootSectorLength;
+    ULONG DriveNumber;
+    BYTE SectorShift;
+    CHAR DrivePath[3];
+    CHAR Label[FF_LFN_BUF + 1];
+    UNICODE_STRING UnicodeLabel;
+    UNICODE_STRING VolumePath = RTL_CONSTANT_STRING(L"");
+    FRESULT Result;
+    NTSTATUS Status;
+    BOOLEAN Registered = FALSE;
+
+    if (DeviceObject != ExFatGlobalData->DeviceObject)
+        return STATUS_INVALID_DEVICE_REQUEST;
+
+    OutputLength = sizeof(Geometry);
+    Status = ExFatDeviceIoControl(StorageDevice,
+                                  IOCTL_DISK_GET_DRIVE_GEOMETRY,
+                                  NULL,
+                                  0,
+                                  &Geometry,
+                                  &OutputLength,
+                                  TRUE);
+    if (!NT_SUCCESS(Status) || Geometry.BytesPerSector < 512)
+        return STATUS_UNRECOGNIZED_VOLUME;
+
+    BootSectorLength = max(Geometry.BytesPerSector, 512UL);
+    BootSector = ExAllocatePoolWithTag(NonPagedPool,
+                                       BootSectorLength,
+                                       TAG_EXFAT_IO);
+    if (!BootSector)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    {
+        LARGE_INTEGER Offset;
+        Offset.QuadPart = 0;
+        Status = ExFatReadWriteDevice(StorageDevice,
+                                      IRP_MJ_READ,
+                                      BootSector,
+                                      BootSectorLength,
+                                      &Offset,
+                                      TRUE);
+    }
+    if (!NT_SUCCESS(Status) ||
+        RtlCompareMemory(&BootSector[EXFAT_NAME_OFFSET],
+                         "EXFAT   ",
+                         EXFAT_NAME_LENGTH) != EXFAT_NAME_LENGTH ||
+        BootSector[EXFAT_BOOT_SIGNATURE_OFFSET] != 0x55 ||
+        BootSector[EXFAT_BOOT_SIGNATURE_OFFSET + 1] != 0xAA)
+    {
+        Status = STATUS_UNRECOGNIZED_VOLUME;
+        goto Failure;
+    }
+
+    SectorShift = BootSector[EXFAT_SECTOR_SHIFT_OFFSET];
+    if (SectorShift < EXFAT_MIN_SECTOR_SHIFT || SectorShift > EXFAT_MAX_SECTOR_SHIFT)
+    {
+        Status = STATUS_UNRECOGNIZED_VOLUME;
+        goto Failure;
+    }
+
+    OutputLength = sizeof(LengthInformation);
+    Status = ExFatDeviceIoControl(StorageDevice,
+                                  IOCTL_DISK_GET_LENGTH_INFO,
+                                  NULL,
+                                  0,
+                                  &LengthInformation,
+                                  &OutputLength,
+                                  TRUE);
+    if (!NT_SUCCESS(Status) || LengthInformation.Length.QuadPart <= 0)
+        goto Failure;
+
+    Status = IoCreateDevice(ExFatGlobalData->DriverObject,
+                            sizeof(EXFAT_VCB),
+                            NULL,
+                            FILE_DEVICE_DISK_FILE_SYSTEM,
+                            0,
+                            FALSE,
+                            &VolumeDevice);
+    if (!NT_SUCCESS(Status))
+        goto Failure;
+
+    Vcb = VolumeDevice->DeviceExtension;
+    RtlZeroMemory(Vcb, sizeof(*Vcb));
+    Vcb->DeviceObject = VolumeDevice;
+    Vcb->StorageDevice = StorageDevice;
+    Vcb->Vpb = Vpb;
+    ExInitializeResourceLite(&Vcb->Resource);
+    InitializeListHead(&Vcb->FcbListHead);
+
+    Vcb->BytesPerSector = 1UL << SectorShift;
+    Vcb->SectorCount = LengthInformation.Length.QuadPart / Vcb->BytesPerSector;
+    if (!Vcb->SectorCount ||
+        LengthInformation.Length.QuadPart % Vcb->BytesPerSector)
+    {
+        Status = STATUS_UNRECOGNIZED_VOLUME;
+        goto Failure;
+    }
+
+    Status = ExFatDeviceIoControl(StorageDevice,
+                                  IOCTL_DISK_IS_WRITABLE,
+                                  NULL,
+                                  0,
+                                  NULL,
+                                  NULL,
+                                  TRUE);
+    Vcb->ReadOnly = (Status == STATUS_MEDIA_WRITE_PROTECTED);
+
+    ExFatAcquireFatFs();
+    for (DriveNumber = 0; DriveNumber < FF_VOLUMES; ++DriveNumber)
+    {
+        if (!ExFatGlobalData->Volumes[DriveNumber])
+            break;
+    }
+    if (DriveNumber == FF_VOLUMES)
+    {
+        ExFatReleaseFatFs();
+        Status = STATUS_TOO_MANY_OPENED_FILES;
+        goto Failure;
+    }
+
+    Vcb->DriveNumber = (BYTE)DriveNumber;
+    Vcb->Mounted = TRUE;
+    ExFatGlobalData->Volumes[DriveNumber] = Vcb;
+    VolToPart[DriveNumber].pd = (BYTE)DriveNumber;
+    VolToPart[DriveNumber].pt = 0;
+    Registered = TRUE;
+
+    DrivePath[0] = '0' + (CHAR)DriveNumber;
+    DrivePath[1] = ':';
+    DrivePath[2] = ANSI_NULL;
+    Result = f_mount(&Vcb->FileSystem, DrivePath, 1);
+    if (Result != FR_OK || Vcb->FileSystem.fs_type != FS_EXFAT)
+    {
+        Status = (Result == FR_OK) ? STATUS_UNRECOGNIZED_VOLUME : ExFatMapResult(Result);
+        f_mount(NULL, DrivePath, 0);
+        ExFatGlobalData->Volumes[DriveNumber] = NULL;
+        Registered = FALSE;
+        ExFatReleaseFatFs();
+        goto Failure;
+    }
+
+    RtlZeroMemory(Label, sizeof(Label));
+    Result = f_getlabel(DrivePath, Label, &Vcb->SerialNumber);
+    ExFatReleaseFatFs();
+    if (Result != FR_OK)
+    {
+        Status = ExFatMapResult(Result);
+        goto Failure;
+    }
+
+    Vcb->VolumeFcb = ExFatCreateFcb(Vcb, &VolumePath, NULL, TRUE);
+    if (!Vcb->VolumeFcb)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Failure;
+    }
+
+    VolumeDevice->Flags |= DO_DIRECT_IO;
+    VolumeDevice->AlignmentRequirement = StorageDevice->AlignmentRequirement;
+    VolumeDevice->SectorSize = (USHORT)Vcb->BytesPerSector;
+    VolumeDevice->StackSize = StorageDevice->StackSize + 1;
+    VolumeDevice->Vpb = Vpb;
+    StorageDevice->Vpb = Vpb;
+
+    Vcb->StreamFileObject = IoCreateStreamFileObject(NULL, StorageDevice);
+    if (!Vcb->StreamFileObject)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Failure;
+    }
+    Vcb->StreamFileObject->FsContext = Vcb->VolumeFcb;
+    Vcb->StreamFileObject->SectionObjectPointer = &Vcb->VolumeFcb->SectionObjectPointers;
+    Vcb->StreamFileObject->PrivateCacheMap = NULL;
+    Vcb->StreamFileObject->Vpb = Vpb;
+
+    StorageDevice->Vpb->DeviceObject = VolumeDevice;
+    StorageDevice->Vpb->RealDevice = StorageDevice;
+    Vpb->SerialNumber = Vcb->SerialNumber;
+    Vpb->VolumeLabelLength = 0;
+    RtlZeroMemory(&UnicodeLabel, sizeof(UnicodeLabel));
+    if (Label[0] && NT_SUCCESS(ExFatUtf8ToUnicode(Label, &UnicodeLabel)))
+    {
+        Vpb->VolumeLabelLength = min(UnicodeLabel.Length,
+                                     (USHORT)sizeof(Vpb->VolumeLabel));
+        RtlCopyMemory(Vpb->VolumeLabel,
+                      UnicodeLabel.Buffer,
+                      Vpb->VolumeLabelLength);
+        ExFatFreeUnicodeString(&UnicodeLabel);
+    }
+    StorageDevice->Vpb->Flags |= VPB_MOUNTED;
+
+    VolumeDevice->Flags &= ~DO_DEVICE_INITIALIZING;
+
+    ExFreePoolWithTag(BootSector, TAG_EXFAT_IO);
+    return STATUS_SUCCESS;
+
+Failure:
+    if (Vcb && Vcb->StreamFileObject)
+    {
+        ObDereferenceObject(Vcb->StreamFileObject);
+        Vcb->StreamFileObject = NULL;
+    }
+    if (Registered)
+    {
+        ExFatAcquireFatFs();
+        DrivePath[0] = '0' + Vcb->DriveNumber;
+        DrivePath[1] = ':';
+        DrivePath[2] = ANSI_NULL;
+        f_mount(NULL, DrivePath, 0);
+        ExFatGlobalData->Volumes[Vcb->DriveNumber] = NULL;
+        Vcb->Mounted = FALSE;
+        ExFatReleaseFatFs();
+    }
+    if (Vcb && Vcb->VolumeFcb)
+        ExFatDereferenceFcb(Vcb->VolumeFcb);
+    if (Vcb)
+        ExDeleteResourceLite(&Vcb->Resource);
+    if (VolumeDevice)
+        IoDeleteDevice(VolumeDevice);
+    if (BootSector)
+        ExFreePoolWithTag(BootSector, TAG_EXFAT_IO);
+    return Status;
+}
+
+static NTSTATUS
+ExFatVerifyVolume(
+    PDEVICE_OBJECT DeviceObject)
+{
+    PEXFAT_VCB Vcb;
+    PUCHAR BootSector;
+    LARGE_INTEGER Offset;
+    NTSTATUS Status;
+
+    if (DeviceObject == ExFatGlobalData->DeviceObject)
+        return STATUS_INVALID_DEVICE_REQUEST;
+
+    Vcb = DeviceObject->DeviceExtension;
+    BootSector = ExAllocatePoolWithTag(NonPagedPool,
+                                       Vcb->BytesPerSector,
+                                       TAG_EXFAT_IO);
+    if (!BootSector)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Offset.QuadPart = 0;
+    Status = ExFatReadWriteDevice(Vcb->StorageDevice,
+                                  IRP_MJ_READ,
+                                  BootSector,
+                                  Vcb->BytesPerSector,
+                                  &Offset,
+                                  TRUE);
+    if (!NT_SUCCESS(Status) ||
+        RtlCompareMemory(&BootSector[EXFAT_NAME_OFFSET],
+                         "EXFAT   ",
+                         EXFAT_NAME_LENGTH) != EXFAT_NAME_LENGTH ||
+        BootSector[EXFAT_BOOT_SIGNATURE_OFFSET] != 0x55 ||
+        BootSector[EXFAT_BOOT_SIGNATURE_OFFSET + 1] != 0xAA)
+    {
+        ExFreePoolWithTag(BootSector, TAG_EXFAT_IO);
+        return STATUS_WRONG_VOLUME;
+    }
+
+    ExFreePoolWithTag(BootSector, TAG_EXFAT_IO);
+    Vcb->StorageDevice->Flags &= ~DO_VERIFY_VOLUME;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+ExFatUserFsRequest(
+    PDEVICE_OBJECT DeviceObject,
+    PIRP Irp)
+{
+    PIO_STACK_LOCATION Stack = IoGetCurrentIrpStackLocation(Irp);
+    PEXFAT_VCB Vcb;
+    PFILE_OBJECT FileObject = Stack->FileObject;
+    NTSTATUS Status;
+
+    if (DeviceObject == ExFatGlobalData->DeviceObject)
+        return STATUS_INVALID_DEVICE_REQUEST;
+    Vcb = DeviceObject->DeviceExtension;
+
+    ExAcquireResourceExclusiveLite(&Vcb->Resource, TRUE);
+    switch (Stack->Parameters.FileSystemControl.FsControlCode)
+    {
+        case FSCTL_LOCK_VOLUME:
+            if (Vcb->Locked && Vcb->LockOwner == FileObject)
+            {
+                Status = STATUS_SUCCESS;
+            }
+            else if (Vcb->Locked || Vcb->OpenHandleCount > 1)
+            {
+                Status = STATUS_ACCESS_DENIED;
+            }
+            else
+            {
+                Vcb->Locked = TRUE;
+                Vcb->LockOwner = FileObject;
+                Status = STATUS_SUCCESS;
+            }
+            break;
+
+        case FSCTL_UNLOCK_VOLUME:
+            if (!Vcb->Locked || Vcb->LockOwner != FileObject)
+            {
+                Status = STATUS_ACCESS_DENIED;
+            }
+            else
+            {
+                Vcb->Locked = FALSE;
+                Vcb->LockOwner = NULL;
+                Status = STATUS_SUCCESS;
+            }
+            break;
+
+        case FSCTL_IS_VOLUME_MOUNTED:
+            Status = Vcb->Mounted ? STATUS_SUCCESS : STATUS_VOLUME_DISMOUNTED;
+            break;
+
+        case FSCTL_IS_VOLUME_DIRTY:
+            if (Stack->Parameters.FileSystemControl.OutputBufferLength < sizeof(ULONG) ||
+                !Irp->AssociatedIrp.SystemBuffer)
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+            }
+            else
+            {
+                *(PULONG)Irp->AssociatedIrp.SystemBuffer = 0;
+                Irp->IoStatus.Information = sizeof(ULONG);
+                Status = STATUS_SUCCESS;
+            }
+            break;
+
+        case FSCTL_ALLOW_EXTENDED_DASD_IO:
+            Status = STATUS_SUCCESS;
+            break;
+
+        default:
+            Status = STATUS_INVALID_DEVICE_REQUEST;
+            break;
+    }
+    ExReleaseResourceLite(&Vcb->Resource);
+    return Status;
+}
+
+NTSTATUS
+ExFatFileSystemControl(
+    PDEVICE_OBJECT DeviceObject,
+    PIRP Irp)
+{
+    PIO_STACK_LOCATION Stack = IoGetCurrentIrpStackLocation(Irp);
+
+    switch (Stack->MinorFunction)
+    {
+        case IRP_MN_MOUNT_VOLUME:
+            return ExFatMountVolume(DeviceObject, Irp);
+        case IRP_MN_VERIFY_VOLUME:
+            return ExFatVerifyVolume(DeviceObject);
+        case IRP_MN_USER_FS_REQUEST:
+            return ExFatUserFsRequest(DeviceObject, Irp);
+        default:
+            return STATUS_INVALID_DEVICE_REQUEST;
+    }
+}
+
+NTSTATUS
+ExFatFlushBuffers(
+    PDEVICE_OBJECT DeviceObject,
+    PIRP Irp)
+{
+    PIO_STACK_LOCATION Stack = IoGetCurrentIrpStackLocation(Irp);
+    PEXFAT_VCB Vcb;
+    PEXFAT_CCB Ccb;
+    FRESULT Result = FR_OK;
+
+    if (DeviceObject == ExFatGlobalData->DeviceObject)
+        return STATUS_SUCCESS;
+    Vcb = DeviceObject->DeviceExtension;
+    Ccb = Stack->FileObject ? Stack->FileObject->FsContext2 : NULL;
+
+    ExFatAcquireFatFs();
+    if (Ccb && Ccb->HandleOpen && !Ccb->IsDirectory)
+        Result = f_sync(&Ccb->Handle.File);
+    if (Result == FR_OK && disk_ioctl(Vcb->DriveNumber, CTRL_SYNC, NULL) != RES_OK)
+        Result = FR_DISK_ERR;
+    ExFatReleaseFatFs();
+    return ExFatMapResult(Result);
+}
+
+NTSTATUS
+ExFatLockControl(
+    PDEVICE_OBJECT DeviceObject,
+    PIRP Irp)
+{
+    PIO_STACK_LOCATION Stack = IoGetCurrentIrpStackLocation(Irp);
+    PEXFAT_FCB Fcb;
+    NTSTATUS Status;
+
+    if (DeviceObject == ExFatGlobalData->DeviceObject || !Stack->FileObject)
+        Status = STATUS_INVALID_DEVICE_REQUEST;
+    else
+    {
+        Fcb = Stack->FileObject->FsContext;
+        if (!Fcb || Fcb->IsDirectory || Fcb->IsVolume)
+            Status = STATUS_INVALID_PARAMETER;
+        else
+            return FsRtlProcessFileLock(&Fcb->FileLock, Irp, NULL);
+    }
+
+    Irp->IoStatus.Status = Status;
+    Irp->IoStatus.Information = 0;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    return Status;
+}
+
+NTSTATUS
+ExFatShutdown(
+    PDEVICE_OBJECT DeviceObject,
+    PIRP Irp)
+{
+    ULONG Index;
+
+    UNREFERENCED_PARAMETER(Irp);
+    if (DeviceObject != ExFatGlobalData->DeviceObject)
+        return STATUS_SUCCESS;
+
+    ExFatAcquireFatFs();
+    for (Index = 0; Index < FF_VOLUMES; ++Index)
+    {
+        PEXFAT_VCB Vcb = ExFatGlobalData->Volumes[Index];
+        CHAR DrivePath[3];
+
+        if (!Vcb || !Vcb->Mounted)
+            continue;
+        disk_ioctl((BYTE)Index, CTRL_SYNC, NULL);
+        DrivePath[0] = '0' + (CHAR)Index;
+        DrivePath[1] = ':';
+        DrivePath[2] = ANSI_NULL;
+        f_mount(NULL, DrivePath, 0);
+        Vcb->Mounted = FALSE;
+    }
+    ExFatReleaseFatFs();
+    return STATUS_SUCCESS;
+}

@@ -159,6 +159,7 @@ add_library(freeldr_common
     ${PCATLDR_BOOTMGR_SOURCE}
 )
 target_compile_definitions(freeldr_common PRIVATE _FRLDRLIB_)
+target_link_libraries(freeldr_common fatfs)
 if(FREELDR_WIM_RAMDISK)
     target_compile_definitions(freeldr_common PRIVATE FREELDR_WIM_RAMDISK=1)
 endif()

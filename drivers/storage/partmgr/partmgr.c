@@ -1154,11 +1154,14 @@ FdoHandleDeviceRelations(
         // now fill the DeviceRelations structure
         TRACE("Reporting %u partitions\n", FdoExtension->EnumeratedPartitionsTotal);
 
+        /* EnumeratedPartitionsTotal can be zero (empty disk, or the last
+         * partition was just deleted), so it must not be decremented here
+         * or the allocation size underflows. */
         PDEVICE_RELATIONS deviceRelations =
             ExAllocatePoolWithTag(PagedPool,
-                                  sizeof(DEVICE_RELATIONS)
+                                  FIELD_OFFSET(DEVICE_RELATIONS, Objects)
                                   + sizeof(PDEVICE_OBJECT)
-                                  * (FdoExtension->EnumeratedPartitionsTotal - 1),
+                                  * FdoExtension->EnumeratedPartitionsTotal,
                                   TAG_PARTMGR);
 
         if (!deviceRelations)
