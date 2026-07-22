@@ -548,6 +548,19 @@ static void DetectDiskDetails(int index)
             StringCchCopyW(disk->interfaceName,
                            _countof(disk->interfaceName),
                            StorageBusName(descriptor->BusType));
+
+            /* SD/MMC media has no mechanical seek penalty, but that does not
+               make it an SSD. Prefer the bus-specific media type over the
+               generic seek-penalty heuristic below. */
+            if (descriptor->BusType == BusTypeSd)
+            {
+                StringCchCopyW(disk->type, _countof(disk->type), L"SD card");
+            }
+            else if (descriptor->BusType == BusTypeMmc)
+            {
+                StringCchCopyW(disk->type, _countof(disk->type),
+                               descriptor->RemovableMedia ? L"MMC card" : L"eMMC");
+            }
         }
 
         DEVICE_SEEK_PENALTY_DESCRIPTOR penalty;
@@ -555,7 +568,8 @@ static void DetectDiskDetails(int index)
         ZeroMemory(&query, sizeof(query));
         query.PropertyId = StorageDeviceSeekPenaltyProperty;
         query.QueryType = PropertyStandardQuery;
-        if (DeviceIoControl(sampler->handle, IOCTL_STORAGE_QUERY_PROPERTY,
+        if (!disk->type[0] &&
+            DeviceIoControl(sampler->handle, IOCTL_STORAGE_QUERY_PROPERTY,
                             &query, sizeof(query), &penalty, sizeof(penalty),
                             &returned, NULL))
         {
