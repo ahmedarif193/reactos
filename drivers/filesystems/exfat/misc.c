@@ -66,17 +66,129 @@ ExFatMapResult(
 }
 
 VOID
-ExFatAcquireFatFs(VOID)
+ExFatAcquireFatFs(
+    PEXFAT_VCB Vcb)
 {
     KeEnterCriticalRegion();
-    ExAcquireResourceExclusiveLite(&ExFatGlobalData->FatFsResource, TRUE);
+    ExAcquireResourceExclusiveLite(&Vcb->FatFsResource, TRUE);
 }
 
 VOID
-ExFatReleaseFatFs(VOID)
+ExFatReleaseFatFs(
+    PEXFAT_VCB Vcb)
 {
-    ExReleaseResourceLite(&ExFatGlobalData->FatFsResource);
+    ExReleaseResourceLite(&Vcb->FatFsResource);
     KeLeaveCriticalRegion();
+}
+
+VOID
+ExFatInvalidateFcbClusterMap(
+    PEXFAT_FCB Fcb)
+{
+#if FF_USE_FASTSEEK
+    Fcb->FatFile.cltbl = NULL;
+#endif
+    if (Fcb->ClusterMap)
+    {
+        ExFreePoolWithTag(Fcb->ClusterMap, TAG_EXFAT_FATFS);
+        Fcb->ClusterMap = NULL;
+    }
+}
+
+FRESULT
+ExFatEnsureFcbFile(
+    PEXFAT_FCB Fcb,
+    BOOLEAN WriteAccess)
+{
+    PCHAR Path;
+    BYTE Mode;
+    FRESULT Result;
+
+    if (Fcb->FatFileOpen && (!WriteAccess || Fcb->FatFileWritable))
+        return FR_OK;
+
+    if (Fcb->FatFileOpen)
+    {
+        ExFatInvalidateFcbClusterMap(Fcb);
+        Result = f_close(&Fcb->FatFile);
+        Fcb->FatFileOpen = FALSE;
+        Fcb->FatFileWritable = FALSE;
+        if (Result != FR_OK)
+            return Result;
+    }
+
+    Path = ExFatBuildFatPath(Fcb->Vcb, &Fcb->PathName);
+    if (!Path)
+        return FR_NOT_ENOUGH_CORE;
+
+    Mode = FA_READ | FA_OPEN_EXISTING;
+    if (WriteAccess)
+        Mode |= FA_WRITE;
+    Result = f_open(&Fcb->FatFile, Path, Mode);
+    ExFreePoolWithTag(Path, TAG_EXFAT_PATH);
+    if (Result == FR_OK)
+    {
+        Fcb->FatFileOpen = TRUE;
+        Fcb->FatFileWritable = WriteAccess;
+    }
+    return Result;
+}
+
+#if FF_USE_FASTSEEK
+static FRESULT
+ExFatBuildClusterMap(
+    PEXFAT_FCB Fcb)
+{
+    DWORD Required = 0;
+    PDWORD ClusterMap;
+    FRESULT Result;
+
+    Fcb->FatFile.cltbl = &Required;
+    Result = f_lseek(&Fcb->FatFile, CREATE_LINKMAP);
+    Fcb->FatFile.cltbl = NULL;
+    if (Result != FR_NOT_ENOUGH_CORE || Required < 2 ||
+        Required > MAXULONG / sizeof(*ClusterMap))
+    {
+        return Result;
+    }
+
+    ClusterMap = ExAllocatePoolWithTag(NonPagedPool,
+                                       Required * sizeof(*ClusterMap),
+                                       TAG_EXFAT_FATFS);
+    if (!ClusterMap)
+        return FR_NOT_ENOUGH_CORE;
+
+    ClusterMap[0] = Required;
+    Fcb->FatFile.cltbl = ClusterMap;
+    Result = f_lseek(&Fcb->FatFile, CREATE_LINKMAP);
+    if (Result != FR_OK)
+    {
+        Fcb->FatFile.cltbl = NULL;
+        ExFreePoolWithTag(ClusterMap, TAG_EXFAT_FATFS);
+        return Result;
+    }
+
+    Fcb->ClusterMap = ClusterMap;
+    return FR_OK;
+}
+#endif
+
+FRESULT
+ExFatSeekFcbFile(
+    PEXFAT_FCB Fcb,
+    FSIZE_t Offset)
+{
+#if FF_USE_FASTSEEK
+    FRESULT Result;
+
+    if (!Fcb->ClusterMap && Offset < f_tell(&Fcb->FatFile) && f_size(&Fcb->FatFile))
+    {
+        Result = ExFatBuildClusterMap(Fcb);
+        if (Result != FR_OK && Result != FR_NOT_ENOUGH_CORE)
+            return Result;
+    }
+#endif
+    return f_lseek(&Fcb->FatFile, Offset);
 }
 
 PVOID
@@ -176,12 +288,33 @@ ExFatReadWriteDevice(
     BOOLEAN OverrideVerify)
 {
     EXFAT_IO_CONTEXT IoContext;
+    PVOID Allocation = NULL;
+    PVOID IoBuffer = Buffer;
     PIO_STACK_LOCATION Stack;
     PIRP Irp;
+    ULONG AlignmentMask;
     NTSTATUS Status;
 
     RtlZeroMemory(&IoContext, sizeof(IoContext));
     KeInitializeEvent(&IoContext.Event, NotificationEvent, FALSE);
+
+    AlignmentMask = DeviceObject->AlignmentRequirement;
+    if (Length != 0 && ((ULONG_PTR)Buffer & AlignmentMask) != 0)
+    {
+        if (Length > MAXULONG - AlignmentMask)
+            return STATUS_INVALID_BUFFER_SIZE;
+
+        Allocation = ExAllocatePoolWithTag(NonPagedPool,
+                                           Length + AlignmentMask,
+                                           TAG_EXFAT_IO);
+        if (!Allocation)
+            return STATUS_INSUFFICIENT_RESOURCES;
+
+        IoBuffer = (PVOID)(((ULONG_PTR)Allocation + AlignmentMask) &
+                           ~(ULONG_PTR)AlignmentMask);
+        if (MajorFunction == IRP_MJ_WRITE)
+            RtlCopyMemory(IoBuffer, Buffer, Length);
+    }
 
     /*
      * FatFs can issue block I/O from a paging fault at APC_LEVEL, where a
@@ -189,12 +322,16 @@ ExFatReadWriteDevice(
      */
     Irp = IoBuildAsynchronousFsdRequest(MajorFunction,
                                         DeviceObject,
-                                        Buffer,
+                                        IoBuffer,
                                         Length,
                                         Offset,
                                         NULL);
     if (!Irp)
+    {
+        if (Allocation)
+            ExFreePoolWithTag(Allocation, TAG_EXFAT_IO);
         return STATUS_INSUFFICIENT_RESOURCES;
+    }
 
     if (OverrideVerify)
     {
@@ -212,6 +349,17 @@ ExFatReadWriteDevice(
     KeWaitForSingleObject(&IoContext.Event, Executive, KernelMode, FALSE, NULL);
 
     Status = IoContext.IoStatus.Status;
+
+    if (Allocation &&
+        MajorFunction == IRP_MJ_READ &&
+        NT_SUCCESS(Status) &&
+        IoContext.IoStatus.Information <= Length)
+    {
+        RtlCopyMemory(Buffer, IoBuffer, IoContext.IoStatus.Information);
+    }
+
+    if (Allocation)
+        ExFreePoolWithTag(Allocation, TAG_EXFAT_IO);
 
     if (NT_SUCCESS(Status) && Length != 0 && IoContext.IoStatus.Information != Length)
         Status = STATUS_DEVICE_DATA_ERROR;
@@ -765,6 +913,19 @@ ExFatDereferenceFcb(
         return;
 
     RemoveEntryList(&Fcb->ListEntry);
+    if (Fcb->FatFileOpen)
+    {
+        ExFatAcquireFatFs(Fcb->Vcb);
+        ExFatInvalidateFcbClusterMap(Fcb);
+        f_close(&Fcb->FatFile);
+        Fcb->FatFileOpen = FALSE;
+        Fcb->FatFileWritable = FALSE;
+        ExFatReleaseFatFs(Fcb->Vcb);
+    }
+    else
+    {
+        ExFatInvalidateFcbClusterMap(Fcb);
+    }
     FsRtlUninitializeFileLock(&Fcb->FileLock);
     ExDeleteResourceLite(&Fcb->PagingIoResource);
     ExDeleteResourceLite(&Fcb->MainResource);
@@ -784,15 +945,99 @@ ExFatFastIoCheckIfPossible(
     PIO_STATUS_BLOCK IoStatus,
     PDEVICE_OBJECT DeviceObject)
 {
-    UNREFERENCED_PARAMETER(FileObject);
-    UNREFERENCED_PARAMETER(FileOffset);
-    UNREFERENCED_PARAMETER(Length);
+    PEXFAT_FCB Fcb = FileObject->FsContext;
+    PEXFAT_CCB Ccb = FileObject->FsContext2;
+    LARGE_INTEGER LargeLength;
+
     UNREFERENCED_PARAMETER(Wait);
-    UNREFERENCED_PARAMETER(LockKey);
-    UNREFERENCED_PARAMETER(CheckForReadOperation);
     UNREFERENCED_PARAMETER(IoStatus);
     UNREFERENCED_PARAMETER(DeviceObject);
-    return FALSE;
+
+    if (!Fcb || !Ccb || Ccb->CleanedUp || !Ccb->HandleOpen ||
+        Fcb->IsDirectory || Fcb->IsVolume || Fcb->DeletePending ||
+        FileOffset->QuadPart < 0 || Length > MAXLONGLONG - FileOffset->QuadPart)
+    {
+        return FALSE;
+    }
+
+    LargeLength.QuadPart = Length;
+    if (CheckForReadOperation)
+    {
+        if (!(Ccb->DesiredAccess & (FILE_READ_DATA | FILE_EXECUTE)))
+            return FALSE;
+        return FsRtlFastCheckLockForRead(&Fcb->FileLock,
+                                         FileOffset,
+                                         &LargeLength,
+                                         LockKey,
+                                         FileObject,
+                                         PsGetCurrentProcess());
+    }
+
+    if (Fcb->Vcb->ReadOnly ||
+        !(Ccb->DesiredAccess & (FILE_WRITE_DATA | FILE_APPEND_DATA)))
+    {
+        return FALSE;
+    }
+    return FsRtlFastCheckLockForWrite(&Fcb->FileLock,
+                                      FileOffset,
+                                      &LargeLength,
+                                      LockKey,
+                                      FileObject,
+                                      PsGetCurrentProcess());
+}
+
+BOOLEAN
+NTAPI
+ExFatAcquireForLazyWrite(
+    PVOID Context,
+    BOOLEAN Wait)
+{
+    PEXFAT_FCB Fcb = Context;
+
+    if (!ExAcquireResourceExclusiveLite(&Fcb->MainResource, Wait))
+        return FALSE;
+    ASSERT(IoGetTopLevelIrp() == NULL);
+    IoSetTopLevelIrp((PIRP)FSRTL_CACHE_TOP_LEVEL_IRP);
+    return TRUE;
+}
+
+VOID
+NTAPI
+ExFatReleaseFromLazyWrite(
+    PVOID Context)
+{
+    PEXFAT_FCB Fcb = Context;
+
+    ASSERT(IoGetTopLevelIrp() == (PIRP)FSRTL_CACHE_TOP_LEVEL_IRP);
+    IoSetTopLevelIrp(NULL);
+    ExReleaseResourceLite(&Fcb->MainResource);
+}
+
+BOOLEAN
+NTAPI
+ExFatAcquireForReadAhead(
+    PVOID Context,
+    BOOLEAN Wait)
+{
+    PEXFAT_FCB Fcb = Context;
+
+    if (!ExAcquireResourceSharedLite(&Fcb->MainResource, Wait))
+        return FALSE;
+    ASSERT(IoGetTopLevelIrp() == NULL);
+    IoSetTopLevelIrp((PIRP)FSRTL_CACHE_TOP_LEVEL_IRP);
+    return TRUE;
+}
+
+VOID
+NTAPI
+ExFatReleaseFromReadAhead(
+    PVOID Context)
+{
+    PEXFAT_FCB Fcb = Context;
+
+    ASSERT(IoGetTopLevelIrp() == (PIRP)FSRTL_CACHE_TOP_LEVEL_IRP);
+    IoSetTopLevelIrp(NULL);
+    ExReleaseResourceLite(&Fcb->MainResource);
 }
 
 VOID

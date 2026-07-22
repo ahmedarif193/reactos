@@ -111,6 +111,7 @@ ExFatMountVolume(
     Vcb->StorageDevice = StorageDevice;
     Vcb->Vpb = Vpb;
     ExInitializeResourceLite(&Vcb->Resource);
+    ExInitializeResourceLite(&Vcb->FatFsResource);
     InitializeListHead(&Vcb->FcbListHead);
 
     Vcb->BytesPerSector = 1UL << SectorShift;
@@ -131,7 +132,8 @@ ExFatMountVolume(
                                   TRUE);
     Vcb->ReadOnly = (Status == STATUS_MEDIA_WRITE_PROTECTED);
 
-    ExFatAcquireFatFs();
+    KeEnterCriticalRegion();
+    ExAcquireResourceExclusiveLite(&ExFatGlobalData->VolumeListResource, TRUE);
     for (DriveNumber = 0; DriveNumber < FF_VOLUMES; ++DriveNumber)
     {
         if (!ExFatGlobalData->Volumes[DriveNumber])
@@ -139,7 +141,8 @@ ExFatMountVolume(
     }
     if (DriveNumber == FF_VOLUMES)
     {
-        ExFatReleaseFatFs();
+        ExReleaseResourceLite(&ExFatGlobalData->VolumeListResource);
+        KeLeaveCriticalRegion();
         Status = STATUS_TOO_MANY_OPENED_FILES;
         goto Failure;
     }
@@ -150,24 +153,31 @@ ExFatMountVolume(
     VolToPart[DriveNumber].pd = (BYTE)DriveNumber;
     VolToPart[DriveNumber].pt = 0;
     Registered = TRUE;
+    ExReleaseResourceLite(&ExFatGlobalData->VolumeListResource);
+    KeLeaveCriticalRegion();
 
     DrivePath[0] = '0' + (CHAR)DriveNumber;
     DrivePath[1] = ':';
     DrivePath[2] = ANSI_NULL;
+    ExFatAcquireFatFs(Vcb);
     Result = f_mount(&Vcb->FileSystem, DrivePath, 1);
     if (Result != FR_OK || Vcb->FileSystem.fs_type != FS_EXFAT)
     {
         Status = (Result == FR_OK) ? STATUS_UNRECOGNIZED_VOLUME : ExFatMapResult(Result);
         f_mount(NULL, DrivePath, 0);
+        ExFatReleaseFatFs(Vcb);
+        KeEnterCriticalRegion();
+        ExAcquireResourceExclusiveLite(&ExFatGlobalData->VolumeListResource, TRUE);
         ExFatGlobalData->Volumes[DriveNumber] = NULL;
         Registered = FALSE;
-        ExFatReleaseFatFs();
+        ExReleaseResourceLite(&ExFatGlobalData->VolumeListResource);
+        KeLeaveCriticalRegion();
         goto Failure;
     }
 
     RtlZeroMemory(Label, sizeof(Label));
     Result = f_getlabel(DrivePath, Label, &Vcb->SerialNumber);
-    ExFatReleaseFatFs();
+    ExFatReleaseFatFs(Vcb);
     if (Result != FR_OK)
     {
         Status = ExFatMapResult(Result);
@@ -228,19 +238,28 @@ Failure:
     }
     if (Registered)
     {
-        ExFatAcquireFatFs();
+        ExFatAcquireFatFs(Vcb);
         DrivePath[0] = '0' + Vcb->DriveNumber;
         DrivePath[1] = ':';
         DrivePath[2] = ANSI_NULL;
         f_mount(NULL, DrivePath, 0);
-        ExFatGlobalData->Volumes[Vcb->DriveNumber] = NULL;
         Vcb->Mounted = FALSE;
-        ExFatReleaseFatFs();
+        ExFatReleaseFatFs(Vcb);
+        KeEnterCriticalRegion();
+        ExAcquireResourceExclusiveLite(&ExFatGlobalData->VolumeListResource, TRUE);
+        ExFatGlobalData->Volumes[Vcb->DriveNumber] = NULL;
+        ExReleaseResourceLite(&ExFatGlobalData->VolumeListResource);
+        KeLeaveCriticalRegion();
     }
     if (Vcb && Vcb->VolumeFcb)
         ExFatDereferenceFcb(Vcb->VolumeFcb);
     if (Vcb)
+    {
+        if (Vcb->SectorCacheAllocation)
+            ExFreePoolWithTag(Vcb->SectorCacheAllocation, TAG_EXFAT_IO);
+        ExDeleteResourceLite(&Vcb->FatFsResource);
         ExDeleteResourceLite(&Vcb->Resource);
+    }
     if (VolumeDevice)
         IoDeleteDevice(VolumeDevice);
     if (BootSector)
@@ -402,12 +421,12 @@ ExFatFlushBuffers(
     Vcb = DeviceObject->DeviceExtension;
     Ccb = Stack->FileObject ? Stack->FileObject->FsContext2 : NULL;
 
-    ExFatAcquireFatFs();
+    ExFatAcquireFatFs(Vcb);
     if (Ccb && Ccb->HandleOpen && !Ccb->IsDirectory)
         Result = f_sync(&Ccb->Handle.File);
     if (Result == FR_OK && disk_ioctl(Vcb->DriveNumber, CTRL_SYNC, NULL) != RES_OK)
         Result = FR_DISK_ERR;
-    ExFatReleaseFatFs();
+    ExFatReleaseFatFs(Vcb);
     return ExFatMapResult(Result);
 }
 
@@ -448,7 +467,8 @@ ExFatShutdown(
     if (DeviceObject != ExFatGlobalData->DeviceObject)
         return STATUS_SUCCESS;
 
-    ExFatAcquireFatFs();
+    KeEnterCriticalRegion();
+    ExAcquireResourceExclusiveLite(&ExFatGlobalData->VolumeListResource, TRUE);
     for (Index = 0; Index < FF_VOLUMES; ++Index)
     {
         PEXFAT_VCB Vcb = ExFatGlobalData->Volumes[Index];
@@ -456,13 +476,16 @@ ExFatShutdown(
 
         if (!Vcb || !Vcb->Mounted)
             continue;
+        ExFatAcquireFatFs(Vcb);
         disk_ioctl((BYTE)Index, CTRL_SYNC, NULL);
         DrivePath[0] = '0' + (CHAR)Index;
         DrivePath[1] = ':';
         DrivePath[2] = ANSI_NULL;
         f_mount(NULL, DrivePath, 0);
         Vcb->Mounted = FALSE;
+        ExFatReleaseFatFs(Vcb);
     }
-    ExFatReleaseFatFs();
+    ExReleaseResourceLite(&ExFatGlobalData->VolumeListResource);
+    KeLeaveCriticalRegion();
     return STATUS_SUCCESS;
 }

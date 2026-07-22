@@ -150,7 +150,19 @@ DriverEntry(
     RtlZeroMemory(ExFatGlobalData, sizeof(*ExFatGlobalData));
     ExFatGlobalData->DriverObject = DriverObject;
     ExFatGlobalData->DeviceObject = DeviceObject;
-    ExInitializeResourceLite(&ExFatGlobalData->FatFsResource);
+    ExInitializeResourceLite(&ExFatGlobalData->VolumeListResource);
+    ExInitializeNPagedLookasideList(&ExFatGlobalData->FatFsNameBufferLookaside,
+                                    NULL,
+                                    NULL,
+                                    0,
+                                    sizeof(EXFAT_FATFS_ALLOCATION_HEADER) + EXFAT_FATFS_NAME_BUFFER_SIZE,
+                                    TAG_EXFAT_FATFS,
+                                    0);
+
+    ExFatGlobalData->CacheManagerCallbacks.AcquireForLazyWrite = ExFatAcquireForLazyWrite;
+    ExFatGlobalData->CacheManagerCallbacks.ReleaseFromLazyWrite = ExFatReleaseFromLazyWrite;
+    ExFatGlobalData->CacheManagerCallbacks.AcquireForReadAhead = ExFatAcquireForReadAhead;
+    ExFatGlobalData->CacheManagerCallbacks.ReleaseFromReadAhead = ExFatReleaseFromReadAhead;
 
     for (Index = 0; Index <= IRP_MJ_MAXIMUM_FUNCTION; ++Index)
         DriverObject->MajorFunction[Index] = ExFatFsdDispatch;
@@ -159,6 +171,12 @@ DriverEntry(
                   sizeof(ExFatGlobalData->FastIoDispatch));
     ExFatGlobalData->FastIoDispatch.SizeOfFastIoDispatch = sizeof(FAST_IO_DISPATCH);
     ExFatGlobalData->FastIoDispatch.FastIoCheckIfPossible = ExFatFastIoCheckIfPossible;
+    ExFatGlobalData->FastIoDispatch.FastIoRead = FsRtlCopyRead;
+    ExFatGlobalData->FastIoDispatch.FastIoWrite = FsRtlCopyWrite;
+    ExFatGlobalData->FastIoDispatch.MdlRead = FsRtlMdlReadDev;
+    ExFatGlobalData->FastIoDispatch.MdlReadComplete = FsRtlMdlReadCompleteDev;
+    ExFatGlobalData->FastIoDispatch.PrepareMdlWrite = FsRtlPrepareMdlWriteDev;
+    ExFatGlobalData->FastIoDispatch.MdlWriteComplete = FsRtlMdlWriteCompleteDev;
     ExFatGlobalData->FastIoDispatch.AcquireFileForNtCreateSection = ExFatAcquireFileForNtCreateSection;
     ExFatGlobalData->FastIoDispatch.ReleaseFileForNtCreateSection = ExFatReleaseFileForNtCreateSection;
     DriverObject->FastIoDispatch = &ExFatGlobalData->FastIoDispatch;

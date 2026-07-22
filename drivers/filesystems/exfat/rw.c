@@ -103,11 +103,11 @@ ExFatRead(
 
         ExAcquireResourceSharedLite(PagingIo ? &Fcb->PagingIoResource : &Fcb->MainResource,
                                     TRUE);
-        ExFatAcquireFatFs();
+        ExFatAcquireFatFs(Vcb);
         Result = f_lseek(&Ccb->Handle.File, (FSIZE_t)Offset.QuadPart);
         if (Result == FR_OK)
             Result = f_read(&Ccb->Handle.File, Buffer, Length, &BytesRead);
-        ExFatReleaseFatFs();
+        ExFatReleaseFatFs(Vcb);
         ExReleaseResourceLite(PagingIo ? &Fcb->PagingIoResource : &Fcb->MainResource);
 
         Status = ExFatMapResult(Result);
@@ -224,7 +224,7 @@ ExFatWrite(
 
         ExAcquireResourceExclusiveLite(PagingIo ? &Fcb->PagingIoResource : &Fcb->MainResource,
                                        TRUE);
-        ExFatAcquireFatFs();
+        ExFatAcquireFatFs(Vcb);
         Result = f_lseek(&Ccb->Handle.File, (FSIZE_t)Offset.QuadPart);
         if (Result == FR_OK)
             Result = f_write(&Ccb->Handle.File, Buffer, Length, &BytesWritten);
@@ -241,7 +241,7 @@ ExFatWrite(
             Fcb->Header.AllocationSize.QuadPart = ExFatRoundUp(f_size(&Ccb->Handle.File),
                                                                ClusterSize);
         }
-        ExFatReleaseFatFs();
+        ExFatReleaseFatFs(Vcb);
         ExReleaseResourceLite(PagingIo ? &Fcb->PagingIoResource : &Fcb->MainResource);
 
         Status = ExFatMapResult(Result);

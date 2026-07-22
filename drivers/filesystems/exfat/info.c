@@ -24,10 +24,10 @@ ExFatRefreshFcb(
     if (!Path)
         return;
     RtlZeroMemory(&Information, sizeof(Information));
-    ExFatAcquireFatFs();
+    ExFatAcquireFatFs(Fcb->Vcb);
     if (f_stat(Path, &Information) == FR_OK)
         ExFatUpdateFcbFromInfo(Fcb, &Information);
-    ExFatReleaseFatFs();
+    ExFatReleaseFatFs(Fcb->Vcb);
     ExFreePoolWithTag(Path, TAG_EXFAT_PATH);
 }
 
@@ -281,7 +281,7 @@ ExFatSetBasicInformation(
         return STATUS_INSUFFICIENT_RESOURCES;
 
     RtlZeroMemory(&FatInformation, sizeof(FatInformation));
-    ExFatAcquireFatFs();
+    ExFatAcquireFatFs(Fcb->Vcb);
     if (Information->FileAttributes)
     {
         Attributes = ExFatNtAttributesToFat(Information->FileAttributes);
@@ -300,7 +300,7 @@ ExFatSetBasicInformation(
         }
         Result = f_utime(Path, &FatInformation);
     }
-    ExFatReleaseFatFs();
+    ExFatReleaseFatFs(Fcb->Vcb);
     ExFreePoolWithTag(Path, TAG_EXFAT_PATH);
 
     if (Result == FR_OK)
@@ -327,7 +327,7 @@ ExFatSetEndOfFile(
         return STATUS_USER_MAPPED_FILE;
     }
 
-    ExFatAcquireFatFs();
+    ExFatAcquireFatFs(Fcb->Vcb);
     Result = f_lseek(&Ccb->Handle.File, (FSIZE_t)EndOfFile->QuadPart);
     if (Result == FR_OK)
         Result = f_truncate(&Ccb->Handle.File);
@@ -341,7 +341,7 @@ ExFatSetEndOfFile(
         Fcb->Header.AllocationSize.QuadPart = ExFatRoundUp(EndOfFile->QuadPart,
                                                            ClusterSize);
     }
-    ExFatReleaseFatFs();
+    ExFatReleaseFatFs(Fcb->Vcb);
     return ExFatMapResult(Result);
 }
 
@@ -461,9 +461,9 @@ ExFatQueryVolumeLabel(
     DrivePath[1] = ':';
     DrivePath[2] = ANSI_NULL;
     RtlZeroMemory(Label, sizeof(Label));
-    ExFatAcquireFatFs();
+    ExFatAcquireFatFs(Vcb);
     Result = f_getlabel(DrivePath, Label, &Vcb->SerialNumber);
-    ExFatReleaseFatFs();
+    ExFatReleaseFatFs(Vcb);
     if (Result != FR_OK)
         return ExFatMapResult(Result);
 
@@ -518,9 +518,9 @@ ExFatQueryVolumeInformation(
             }
             {
                 CHAR DrivePath[3] = { '0' + Vcb->DriveNumber, ':', ANSI_NULL };
-                ExFatAcquireFatFs();
+                ExFatAcquireFatFs(Vcb);
                 Result = f_getfree(DrivePath, &FreeClusters, &FileSystem);
-                ExFatReleaseFatFs();
+                ExFatReleaseFatFs(Vcb);
             }
             if (Result != FR_OK)
             {
@@ -543,9 +543,9 @@ ExFatQueryVolumeInformation(
             }
             {
                 CHAR DrivePath[3] = { '0' + Vcb->DriveNumber, ':', ANSI_NULL };
-                ExFatAcquireFatFs();
+                ExFatAcquireFatFs(Vcb);
                 Result = f_getfree(DrivePath, &FreeClusters, &FileSystem);
-                ExFatReleaseFatFs();
+                ExFatReleaseFatFs(Vcb);
             }
             if (Result != FR_OK)
             {
@@ -660,9 +660,9 @@ ExFatSetVolumeInformation(
     if (!Label.Length)
         FatLabel[2] = ANSI_NULL;
 
-    ExFatAcquireFatFs();
+    ExFatAcquireFatFs(Vcb);
     Result = f_setlabel(FatLabel);
-    ExFatReleaseFatFs();
+    ExFatReleaseFatFs(Vcb);
     ExFreePoolWithTag(FatLabel, TAG_EXFAT_PATH);
     return ExFatMapResult(Result);
 }

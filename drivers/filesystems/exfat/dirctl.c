@@ -211,7 +211,7 @@ ExFatQueryDirectory(
     RtlZeroMemory(Buffer, BufferLength);
 
     ExAcquireResourceSharedLite(&Fcb->MainResource, TRUE);
-    ExFatAcquireFatFs();
+    ExFatAcquireFatFs(Fcb->Vcb);
 
     if ((Stack->Flags & SL_RESTART_SCAN) || !Ccb->SearchPattern.Buffer)
     {
@@ -285,7 +285,7 @@ ExFatQueryDirectory(
         Status = Ccb->DirectoryIndex ? STATUS_NO_MORE_FILES : STATUS_NO_SUCH_FILE;
 
 Done:
-    ExFatReleaseFatFs();
+    ExFatReleaseFatFs(Fcb->Vcb);
     ExReleaseResourceLite(&Fcb->MainResource);
     Irp->IoStatus.Information = Offset;
     return Status;

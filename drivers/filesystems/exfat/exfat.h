@@ -25,6 +25,22 @@
 #define TAG_EXFAT_FATFS  'LfxE'
 #define TAG_EXFAT_IO     'IfxE'
 
+#define EXFAT_READ_AHEAD_GRANULARITY (64 * 1024)
+#define EXFAT_SECTOR_CACHE_SECTORS   16
+#define EXFAT_FATFS_NAME_BUFFER_SIZE \
+    (((FF_MAX_LFN + 1) * sizeof(WCHAR)) + (((FF_MAX_LFN + 44U) / 15) * 32))
+#define EXFAT_FATFS_ALLOCATION_SIGNATURE 'afxE'
+
+typedef union _EXFAT_FATFS_ALLOCATION_HEADER
+{
+    struct
+    {
+        ULONG Signature;
+        BOOLEAN FromLookaside;
+    } Fields;
+    ULONG_PTR Alignment[2];
+} EXFAT_FATFS_ALLOCATION_HEADER, *PEXFAT_FATFS_ALLOCATION_HEADER;
+
 #define EXFAT_FCB_SIGNATURE 0x5846
 #define EXFAT_CCB_SIGNATURE 0x5843
 
@@ -56,6 +72,10 @@ typedef struct _EXFAT_FCB
     ULONG FileAttributes;
     LONG ReferenceCount;
     ULONG OpenHandleCount;
+    FIL FatFile;
+    PDWORD ClusterMap;
+    BOOLEAN FatFileOpen;
+    BOOLEAN FatFileWritable;
     BOOLEAN IsDirectory;
     BOOLEAN IsVolume;
     BOOLEAN DeletePending;
@@ -96,17 +116,25 @@ struct _EXFAT_VCB
     BOOLEAN Locked;
     PFILE_OBJECT LockOwner;
     ERESOURCE Resource;
+    ERESOURCE FatFsResource;
     LIST_ENTRY FcbListHead;
     LONG OpenHandleCount;
     PEXFAT_FCB VolumeFcb;
     PFILE_OBJECT StreamFileObject;
+    PVOID SectorCacheAllocation;
+    PVOID SectorCacheBuffer;
+    LBA_t SectorCacheStart;
+    ULONG SectorCacheCount;
+    BOOLEAN SectorCacheValid;
 };
 
 typedef struct _EXFAT_GLOBAL_DATA
 {
     PDRIVER_OBJECT DriverObject;
     PDEVICE_OBJECT DeviceObject;
-    ERESOURCE FatFsResource;
+    ERESOURCE VolumeListResource;
+    NPAGED_LOOKASIDE_LIST FatFsNameBufferLookaside;
+    CACHE_MANAGER_CALLBACKS CacheManagerCallbacks;
     FAST_IO_DISPATCH FastIoDispatch;
     PEXFAT_VCB Volumes[FF_VOLUMES];
 } EXFAT_GLOBAL_DATA, *PEXFAT_GLOBAL_DATA;
@@ -154,8 +182,17 @@ VOID ExFatUpdateFcbFromInfo(PEXFAT_FCB Fcb, FILINFO* Information);
 NTSTATUS ExFatSetFcbPath(PEXFAT_FCB Fcb, PUNICODE_STRING PathName);
 ULONGLONG ExFatHashPath(PUNICODE_STRING PathName);
 
-VOID ExFatAcquireFatFs(VOID);
-VOID ExFatReleaseFatFs(VOID);
+VOID ExFatAcquireFatFs(PEXFAT_VCB Vcb);
+VOID ExFatReleaseFatFs(PEXFAT_VCB Vcb);
+FRESULT ExFatEnsureFcbFile(PEXFAT_FCB Fcb, BOOLEAN WriteAccess);
+FRESULT ExFatSeekFcbFile(PEXFAT_FCB Fcb, FSIZE_t Offset);
+VOID ExFatInvalidateFcbClusterMap(PEXFAT_FCB Fcb);
+VOID ExFatInvalidateSectorCache(PEXFAT_VCB Vcb);
+
+BOOLEAN NTAPI ExFatAcquireForLazyWrite(PVOID Context, BOOLEAN Wait);
+VOID NTAPI ExFatReleaseFromLazyWrite(PVOID Context);
+BOOLEAN NTAPI ExFatAcquireForReadAhead(PVOID Context, BOOLEAN Wait);
+VOID NTAPI ExFatReleaseFromReadAhead(PVOID Context);
 
 BOOLEAN NTAPI ExFatFastIoCheckIfPossible(PFILE_OBJECT FileObject, PLARGE_INTEGER FileOffset, ULONG Length, BOOLEAN Wait, ULONG LockKey, BOOLEAN CheckForReadOperation, PIO_STATUS_BLOCK IoStatus, PDEVICE_OBJECT DeviceObject);
 VOID NTAPI ExFatAcquireFileForNtCreateSection(PFILE_OBJECT FileObject);

@@ -207,7 +207,7 @@ ExFatCreate(
     }
 
     RtlZeroMemory(&Information, sizeof(Information));
-    ExFatAcquireFatFs();
+    ExFatAcquireFatFs(Vcb);
     if (IsRoot)
     {
         Result = FR_OK;
@@ -217,7 +217,7 @@ ExFatCreate(
     {
         Result = f_stat(FatPath, &Information);
     }
-    ExFatReleaseFatFs();
+    ExFatReleaseFatFs(Vcb);
     Exists = (Result == FR_OK);
     if (!Exists && Result != FR_NO_FILE && Result != FR_NO_PATH)
     {
@@ -282,11 +282,11 @@ ExFatCreate(
     {
         if (!Exists)
         {
-            ExFatAcquireFatFs();
+            ExFatAcquireFatFs(Vcb);
             Result = f_mkdir(FatPath);
             if (Result == FR_OK)
                 Result = f_stat(FatPath, &Information);
-            ExFatReleaseFatFs();
+            ExFatReleaseFatFs(Vcb);
             if (Result != FR_OK)
             {
                 Status = ExFatMapResult(Result);
@@ -299,9 +299,9 @@ ExFatCreate(
             CreateInformation = FILE_OPENED;
         }
 
-        ExFatAcquireFatFs();
+        ExFatAcquireFatFs(Vcb);
         Result = f_opendir(&Ccb->Handle.Directory, FatPath);
-        ExFatReleaseFatFs();
+        ExFatReleaseFatFs(Vcb);
         Ccb->IsDirectory = TRUE;
         Ccb->HandleOpen = (Result == FR_OK);
     }
@@ -346,14 +346,14 @@ ExFatCreate(
                 goto Failure;
         }
 
-        ExFatAcquireFatFs();
+        ExFatAcquireFatFs(Vcb);
         Result = f_open(&Ccb->Handle.File, FatPath, OpenMode);
         if (Result == FR_OK)
         {
             Ccb->HandleOpen = TRUE;
             Result = f_stat(FatPath, &Information);
         }
-        ExFatReleaseFatFs();
+        ExFatReleaseFatFs(Vcb);
     }
 
     if (Result != FR_OK)
@@ -398,12 +398,12 @@ ExFatCreate(
 Failure:
     if (Ccb && Ccb->HandleOpen)
     {
-        ExFatAcquireFatFs();
+        ExFatAcquireFatFs(Vcb);
         if (Ccb->IsDirectory)
             f_closedir(&Ccb->Handle.Directory);
         else
             f_close(&Ccb->Handle.File);
-        ExFatReleaseFatFs();
+        ExFatReleaseFatFs(Vcb);
     }
     if (ShareSet && Fcb)
         IoRemoveShareAccess(FileObject, &Fcb->ShareAccess);
@@ -497,12 +497,12 @@ ExFatClose(
 
     if (Ccb->HandleOpen)
     {
-        ExFatAcquireFatFs();
+        ExFatAcquireFatFs(Vcb);
         if (Ccb->IsDirectory)
             f_closedir(&Ccb->Handle.Directory);
         else
             f_close(&Ccb->Handle.File);
-        ExFatReleaseFatFs();
+        ExFatReleaseFatFs(Vcb);
         Ccb->HandleOpen = FALSE;
     }
 
@@ -511,10 +511,10 @@ ExFatClose(
         FatPath = ExFatBuildFatPath(Vcb, &Fcb->PathName);
         if (FatPath)
         {
-            ExFatAcquireFatFs();
+            ExFatAcquireFatFs(Vcb);
             if (f_unlink(FatPath) == FR_OK)
                 Fcb->DeletePending = TRUE;
-            ExFatReleaseFatFs();
+            ExFatReleaseFatFs(Vcb);
             ExFreePoolWithTag(FatPath, TAG_EXFAT_PATH);
         }
     }
