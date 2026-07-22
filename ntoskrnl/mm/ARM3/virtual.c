@@ -1778,8 +1778,28 @@ MiQueryAddressState(IN PVOID Va,
     ASSERT((Vad->StartingVpn <= ((ULONG_PTR)Va >> PAGE_SHIFT)) &&
            (Vad->EndingVpn >= ((ULONG_PTR)Va >> PAGE_SHIFT)));
 
-    /* Only normal VADs supported */
-    ASSERT(Vad->u.VadFlags.VadType == VadNone);
+    /* Only normal and AWE VADs supported */
+    ASSERT((Vad->u.VadFlags.VadType == VadNone) ||
+           (Vad->u.VadFlags.VadType == VadAwe));
+
+    /* ARM64 user leaves live under TTBR0, not the recursive TTBR1 view used
+       by the generic hierarchy walk below. Handle AWE before touching it. */
+#if defined(_M_ARM64)
+    if (Vad->u.VadFlags.VadType == VadAwe)
+    {
+        PMMPTE AwePte = MiArm64UserPteKseg0(Va);
+
+        *NextVa = (PVOID)((ULONG_PTR)Va + PAGE_SIZE);
+        if ((AwePte != NULL) && (AwePte->u.Hard.Valid != 0))
+        {
+            *ReturnedProtect = PAGE_READWRITE;
+            return MEM_COMMIT;
+        }
+
+        *ReturnedProtect = 0;
+        return MEM_RESERVE;
+    }
+#endif
 
     /* Get the PDE and PTE for the address */
     PointerPde = MiAddressToPde(Va);
@@ -1848,6 +1868,22 @@ MiQueryAddressState(IN PVOID Va,
         ValidPte = TRUE;
 
     } while (FALSE);
+
+    /* An AWE address is committed exactly while a physical page is mapped
+       there; its PTE is only ever zero or valid */
+    if (Vad->u.VadFlags.VadType == VadAwe)
+    {
+        BOOLEAN AweMapped;
+        AweMapped = ((ValidPte) && (PointerPte->u.Hard.Valid != 0));
+        if (AweMapped)
+        {
+            *ReturnedProtect = PAGE_READWRITE;
+            return MEM_COMMIT;
+        }
+
+        *ReturnedProtect = 0;
+        return MEM_RESERVE;
+    }
 
     /* Is it safe to try reading the PTE? */
     if (ValidPte)
@@ -5191,18 +5227,34 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
         Status = STATUS_INVALID_PARAMETER;
         goto FailPathNoLock;
     }
-    if (((AllocationType & MEM_PHYSICAL) == MEM_PHYSICAL) &&
-        ((AllocationType & MEM_RESERVE) == 0))
-    {
-        DPRINT1("MEM_PHYSICAL not supported\n");
-        Status = STATUS_INVALID_PARAMETER;
-        goto FailPathNoLock;
-    }
     if ((AllocationType & MEM_WRITE_WATCH) == MEM_WRITE_WATCH)
     {
         DPRINT1("MEM_WRITE_WATCH not supported\n");
         Status = STATUS_INVALID_PARAMETER;
         goto FailPathNoLock;
+    }
+
+    //
+    // An AWE region must be a plain read/write reservation; MEM_TOP_DOWN is
+    // the only compatible companion flag. This guarantees that a VadAwe VAD
+    // never carries MemCommit, so faults on unmapped AWE addresses always
+    // resolve to no access.
+    //
+    if (AllocationType & MEM_PHYSICAL)
+    {
+        if (((AllocationType & MEM_RESERVE) == 0) ||
+            ((AllocationType & ~(MEM_RESERVE | MEM_PHYSICAL | MEM_TOP_DOWN)) != 0))
+        {
+            DPRINT1("MEM_PHYSICAL must be a plain MEM_RESERVE\n");
+            Status = STATUS_INVALID_PARAMETER_5;
+            goto FailPathNoLock;
+        }
+        if (Protect != PAGE_READWRITE)
+        {
+            DPRINT1("MEM_PHYSICAL requires PAGE_READWRITE\n");
+            Status = STATUS_INVALID_PARAMETER_6;
+            goto FailPathNoLock;
+        }
     }
 
     //
@@ -5299,6 +5351,7 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
 
         RtlZeroMemory(Vad, sizeof(MMVAD_LONG));
         if (AllocationType & MEM_COMMIT) Vad->u.VadFlags.MemCommit = 1;
+        if (AllocationType & MEM_PHYSICAL) Vad->u.VadFlags.VadType = VadAwe;
         Vad->u.VadFlags.Protection = ProtectionMask;
         Vad->u.VadFlags.PrivateMemory = 1;
         Vad->ControlArea = NULL; // For Memory-Area hack
@@ -5387,6 +5440,13 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
 
     if ((AllocationType & MEM_RESET) == MEM_RESET)
     {
+        /* AWE PTEs do not go through the private page reset */
+        if (FoundVad->u.VadFlags.VadType == VadAwe)
+        {
+            Status = STATUS_CONFLICTING_ADDRESSES;
+            goto FailPath;
+        }
+
         if (FoundVad->u.VadFlags.PrivateMemory)
         {
             MiResetPrivatePages(StartingAddress, EndingAddress, Process);
@@ -5841,6 +5901,7 @@ NtFreeVirtualMemory(IN HANDLE ProcessHandle,
     ULONG_PTR StartingAddress, EndingAddress;
     PMMVAD Vad;
     PMMVAD NewVad;
+    BOOLEAN AweVad = FALSE;
     NTSTATUS Status;
     PEPROCESS Process;
     PMMSUPPORT AddressSpace;
@@ -6005,9 +6066,26 @@ NtFreeVirtualMemory(IN HANDLE ProcessHandle,
     if (FreeType & MEM_RELEASE)
     {
         //
-        // ARM3 only supports this VAD in this path
+        // ARM3 only supports these VADs in this path
         //
-        ASSERT(Vad->u.VadFlags.VadType == VadNone);
+        ASSERT((Vad->u.VadFlags.VadType == VadNone) ||
+               (Vad->u.VadFlags.VadType == VadAwe));
+
+        //
+        // An AWE region can only be released as a whole
+        //
+        if (Vad->u.VadFlags.VadType == VadAwe)
+        {
+            AweVad = TRUE;
+            if ((PRegionSize != 0) &&
+                (((StartingAddress >> PAGE_SHIFT) != Vad->StartingVpn) ||
+                 ((EndingAddress >> PAGE_SHIFT) != Vad->EndingVpn)))
+            {
+                DPRINT1("Partial release of an AWE region\n");
+                Status = STATUS_FREE_VM_NOT_AT_BASE;
+                goto FailPath;
+            }
+        }
 
         //
         // Is the caller trying to remove the whole VAD, or remove only a portion
@@ -6205,6 +6283,13 @@ NtFreeVirtualMemory(IN HANDLE ProcessHandle,
                 Vad = NULL;
             }
         }
+
+        //
+        // AWE mappings must be detached first, so that the physical pages
+        // stay granted to the process and the generic delete below only
+        // sweeps empty page tables
+        //
+        if (AweVad) MiAweUnmapRange(Process, StartingAddress, EndingAddress);
 
         //
         // Now we have a range of pages to dereference, so call the right API

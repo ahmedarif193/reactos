@@ -1353,8 +1353,9 @@ MmCleanProcessAddressSpace(IN PEPROCESS Process)
         ASSERT(VadTree->NumberGenericTableElements >= 1);
         MiRemoveNode((PMMADDRESS_NODE)Vad, VadTree);
 
-        /* Only regular VADs supported for now */
-        ASSERT(Vad->u.VadFlags.VadType == VadNone);
+        /* Only regular and AWE VADs supported for now */
+        ASSERT((Vad->u.VadFlags.VadType == VadNone) ||
+               (Vad->u.VadFlags.VadType == VadAwe));
 
         /* Check if this is a section VAD */
         if (!(Vad->u.VadFlags.PrivateMemory) && (Vad->ControlArea))
@@ -1364,6 +1365,13 @@ MmCleanProcessAddressSpace(IN PEPROCESS Process)
         }
         else
         {
+            /* Detach AWE mappings, keeping the pages granted to the process
+               until MiAweProcessCleanup below */
+            if (Vad->u.VadFlags.VadType == VadAwe)
+            {
+                MiAweUnmapRange(Process, Vad->StartingVpn << PAGE_SHIFT, (Vad->EndingVpn << PAGE_SHIFT) | (PAGE_SIZE - 1));
+            }
+
             /* Delete the addresses */
             MiDeleteVirtualAddresses(Vad->StartingVpn << PAGE_SHIFT,
                                      (Vad->EndingVpn << PAGE_SHIFT) | (PAGE_SIZE - 1),
@@ -1392,6 +1400,10 @@ MmCleanProcessAddressSpace(IN PEPROCESS Process)
         /* Return the quota the VAD used */
         PsReturnProcessNonPagedPoolQuota(Process, sizeof(MMVAD_LONG));
     }
+
+    /* All AWE regions are gone; release the physical pages the process
+       still owns */
+    MiAweProcessCleanup(Process);
 
     /* Lock the working set */
     MiLockProcessWorkingSetUnsafe(Process, Thread);
@@ -1491,46 +1503,6 @@ MmDeleteProcessAddressSpace(IN PEPROCESS Process)
 }
 
 
-/* SYSTEM CALLS ***************************************************************/
-
-NTSTATUS
-NTAPI
-NtAllocateUserPhysicalPages(IN HANDLE ProcessHandle,
-                            IN OUT PULONG_PTR NumberOfPages,
-                            IN OUT PULONG_PTR UserPfnArray)
-{
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
-}
-
-NTSTATUS
-NTAPI
-NtMapUserPhysicalPages(IN PVOID VirtualAddresses,
-                       IN ULONG_PTR NumberOfPages,
-                       IN OUT PULONG_PTR UserPfnArray)
-{
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
-}
-
-NTSTATUS
-NTAPI
-NtMapUserPhysicalPagesScatter(IN PVOID *VirtualAddresses,
-                              IN ULONG_PTR NumberOfPages,
-                              IN OUT PULONG_PTR UserPfnArray)
-{
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
-}
-
-NTSTATUS
-NTAPI
-NtFreeUserPhysicalPages(IN HANDLE ProcessHandle,
-                        IN OUT PULONG_PTR NumberOfPages,
-                        IN OUT PULONG_PTR UserPfnArray)
-{
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
-}
+/* The user physical pages (AWE) system calls live in awesup.c */
 
 /* EOF */

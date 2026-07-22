@@ -238,6 +238,25 @@ MiCheckForUserStackOverflow(IN PVOID Address,
     {
         /* We don't -- Trying to make this guard page valid now */
         DPRINT1("Close to our death...\n");
+#if defined(_M_AMD64)
+        {
+            static BOOLEAN DumpedWow64Stack = FALSE;
+            BOOLEAN IsWow64Process = (PsGetCurrentProcessWow64Process() != NULL);
+            PKTRAP_FRAME TrapFrame = NULL;
+            if ((TrapInformation != NULL) &&
+                ((ULONG_PTR)TrapInformation != 0xBADBADA3BADBADA3ULL))
+            {
+                TrapFrame = (PKTRAP_FRAME)TrapInformation;
+            }
+            DPRINT1("STKOVF: wow=%d addr=%p base=%p dealloc=%p size=%Ix eip=%p esp=%p\n", IsWow64Process, Address, StackBase, DeallocationStack, (ULONG_PTR)StackBase - (ULONG_PTR)DeallocationStack, TrapFrame ? (PVOID)TrapFrame->Rip : NULL, TrapFrame ? (PVOID)TrapFrame->Rsp : NULL);
+            if (IsWow64Process && !DumpedWow64Stack)
+            {
+                DumpedWow64Stack = TRUE;
+                DPRINT1("STKOVF: kernel backtrace at wow64 stack overflow:\n");
+                KeRosDumpStackFrames(NULL, 0);
+            }
+        }
+#endif
 
         /* Calculate the next memory address */
         NextStackAddress = (PVOID)((ULONG_PTR)PAGE_ALIGN(DeallocationStack) + GuaranteedSize);
@@ -430,8 +449,14 @@ MiCheckVirtualAddress(IN PVOID VirtualAddress,
         /* Check if it's a section, or just an allocation */
         if (Vad->u.VadFlags.PrivateMemory)
         {
-            /* ReactOS does not handle AWE VADs yet */
-            ASSERT(Vad->u.VadFlags.VadType != VadAwe);
+            /* Mapped AWE pages have valid PTEs and never reach this
+               function; an access to an unmapped address in an AWE region
+               is a plain access violation, never a demand-zero fault */
+            if (Vad->u.VadFlags.VadType == VadAwe)
+            {
+                *ProtectCode = MM_NOACCESS;
+                return NULL;
+            }
 
             /* This must be a TEB/PEB VAD */
             if (Vad->u.VadFlags.MemCommit)
