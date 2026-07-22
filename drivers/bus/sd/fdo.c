@@ -760,7 +760,26 @@ SdBusFdoStartDevice(
     }
 
     {
-        ULONG PresentState = SdBusReadReg32(FdoExtension, SDHCI_PRESENT_STATE);
+        ULONG PresentState;
+        ULONG SettleWait = 100;
+        LARGE_INTEGER SettleDelay;
+
+        do
+        {
+            PresentState = SdBusReadReg32(FdoExtension, SDHCI_PRESENT_STATE);
+            if (PresentState & (SDHCI_PS_CARD_STATE_STABLE | SDHCI_PS_CARD_INSERTED))
+                break;
+            SettleDelay.QuadPart = -50000;
+            KeDelayExecutionThread(KernelMode, FALSE, &SettleDelay);
+        } while (--SettleWait);
+
+        PresentState = SdBusReadReg32(FdoExtension, SDHCI_PRESENT_STATE);
+
+        DPRINT1("SdBusFdoStartDevice: PresentState=0x%08lx HostControl=0x%02x settle=%lu\n",
+                PresentState,
+                SdBusReadReg8(FdoExtension, SDHCI_HOST_CONTROL),
+                SettleWait);
+
         if ((PresentState & SDHCI_PS_CARD_INSERTED) || FdoExtension->NonRemovable)
         {
             Status = SdBusEnumerateInsertedCard(FdoExtension, FALSE, FALSE);
