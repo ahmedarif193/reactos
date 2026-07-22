@@ -173,6 +173,15 @@ ExFatBuildClusterMap(
 }
 #endif
 
+BOOLEAN
+ExFatFileIsContiguous(
+    PEXFAT_FCB Fcb)
+{
+    return Fcb->Vcb->FileSystem.fs_type == FS_EXFAT &&
+           Fcb->FatFile.obj.stat == 2 &&
+           Fcb->FatFile.obj.sclust >= 2;
+}
+
 FRESULT
 ExFatSeekFcbFile(
     PEXFAT_FCB Fcb,
@@ -181,7 +190,9 @@ ExFatSeekFcbFile(
 #if FF_USE_FASTSEEK
     FRESULT Result;
 
-    if (!Fcb->ClusterMap && Offset < f_tell(&Fcb->FatFile) && f_size(&Fcb->FatFile))
+    /* Contiguous chains are computed without FAT access; a map buys nothing. */
+    if (!Fcb->ClusterMap && !ExFatFileIsContiguous(Fcb) &&
+        Offset < f_tell(&Fcb->FatFile) && f_size(&Fcb->FatFile))
     {
         Result = ExFatBuildClusterMap(Fcb);
         if (Result != FR_OK && Result != FR_NOT_ENOUGH_CORE)
@@ -189,6 +200,43 @@ ExFatSeekFcbFile(
     }
 #endif
     return f_lseek(&Fcb->FatFile, Offset);
+}
+
+FRESULT
+ExFatZeroFileRange(
+    PEXFAT_FCB Fcb,
+    FSIZE_t Start,
+    FSIZE_t End)
+{
+    PVOID ZeroBuffer;
+    FSIZE_t Remaining;
+    UINT Chunk;
+    UINT Written;
+    FRESULT Result;
+
+    if (End <= Start)
+        return FR_OK;
+
+    ZeroBuffer = ExAllocatePoolWithTag(NonPagedPool, 64 * 1024, TAG_EXFAT_IO);
+    if (!ZeroBuffer)
+        return FR_NOT_ENOUGH_CORE;
+    RtlZeroMemory(ZeroBuffer, 64 * 1024);
+
+    ExFatInvalidateFcbClusterMap(Fcb);
+    Result = f_lseek(&Fcb->FatFile, Start);
+    Remaining = End - Start;
+    while (Result == FR_OK && Remaining != 0)
+    {
+        Chunk = (UINT)min(Remaining, (FSIZE_t)(64 * 1024));
+        Written = 0;
+        Result = f_write(&Fcb->FatFile, ZeroBuffer, Chunk, &Written);
+        if (Result == FR_OK && Written != Chunk)
+            Result = FR_DISK_ERR;
+        Remaining -= Written;
+    }
+
+    ExFreePoolWithTag(ZeroBuffer, TAG_EXFAT_IO);
+    return Result;
 }
 
 PVOID
@@ -365,6 +413,18 @@ ExFatReadWriteDevice(
         Status = STATUS_DEVICE_DATA_ERROR;
 
     return Status;
+}
+
+NTSTATUS
+ExFatFlushStorageDevice(
+    PEXFAT_VCB Vcb)
+{
+    return ExFatReadWriteDevice(Vcb->StorageDevice,
+                                IRP_MJ_FLUSH_BUFFERS,
+                                NULL,
+                                0,
+                                NULL,
+                                TRUE);
 }
 
 NTSTATUS
@@ -1083,6 +1143,72 @@ disk_status(
     return disk_initialize(PhysicalDrive);
 }
 
+VOID
+ExFatInvalidateSectorCache(
+    PEXFAT_VCB Vcb)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < Vcb->SectorCacheEntries; Index++)
+        Vcb->SectorCacheTags[Index] = EXFAT_SECTOR_CACHE_EMPTY;
+    Vcb->SectorCacheNext = 0;
+}
+
+VOID
+ExFatInvalidateSectorCacheRange(
+    PEXFAT_VCB Vcb,
+    LBA_t Sector,
+    UINT Count)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < Vcb->SectorCacheEntries; Index++)
+    {
+        if (Vcb->SectorCacheTags[Index] >= Sector &&
+            Vcb->SectorCacheTags[Index] - Sector < Count)
+        {
+            Vcb->SectorCacheTags[Index] = EXFAT_SECTOR_CACHE_EMPTY;
+        }
+    }
+}
+
+static BOOLEAN
+ExFatEnsureSectorCache(
+    PEXFAT_VCB Vcb)
+{
+    ULONG AlignmentMask;
+    ULONG Entries;
+    ULONG CacheSize;
+    ULONG TagsSize;
+    ULONG Index;
+
+    if (Vcb->SectorCacheBuffer)
+        return TRUE;
+
+    AlignmentMask = Vcb->StorageDevice->AlignmentRequirement;
+    Entries = EXFAT_SECTOR_CACHE_SIZE / Vcb->BytesPerSector;
+    if (!Entries)
+        return FALSE;
+    CacheSize = Entries * Vcb->BytesPerSector;
+    TagsSize = Entries * sizeof(LBA_t);
+    if (CacheSize > MAXULONG - AlignmentMask - TagsSize)
+        return FALSE;
+
+    Vcb->SectorCacheAllocation = ExAllocatePoolWithTag(NonPagedPool,
+                                                       TagsSize + CacheSize + AlignmentMask,
+                                                       TAG_EXFAT_IO);
+    if (!Vcb->SectorCacheAllocation)
+        return FALSE;
+    Vcb->SectorCacheTags = Vcb->SectorCacheAllocation;
+    for (Index = 0; Index < Entries; Index++)
+        Vcb->SectorCacheTags[Index] = EXFAT_SECTOR_CACHE_EMPTY;
+    Vcb->SectorCacheBuffer = (PVOID)(((ULONG_PTR)Vcb->SectorCacheAllocation + TagsSize +
+                                      AlignmentMask) & ~(ULONG_PTR)AlignmentMask);
+    Vcb->SectorCacheNext = 0;
+    Vcb->SectorCacheEntries = Entries;
+    return TRUE;
+}
+
 DRESULT
 disk_read(
     BYTE PhysicalDrive,
@@ -1092,6 +1218,8 @@ disk_read(
 {
     PEXFAT_VCB Vcb;
     LARGE_INTEGER Offset;
+    PUCHAR CacheSlot;
+    ULONG Index;
     ULONG Length;
 
     if (!ExFatGlobalData || PhysicalDrive >= FF_VOLUMES || !Buffer || !Count)
@@ -1103,6 +1231,38 @@ disk_read(
         Count > MAXULONG / Vcb->BytesPerSector)
     {
         return RES_PARERR;
+    }
+
+    if (Count == 1 && ExFatEnsureSectorCache(Vcb))
+    {
+        /* Cache demanded sectors; speculative runs amplify random metadata I/O. */
+        for (Index = 0; Index < Vcb->SectorCacheEntries; Index++)
+        {
+            if (Vcb->SectorCacheTags[Index] == Sector)
+            {
+                RtlCopyMemory(Buffer,
+                              (PUCHAR)Vcb->SectorCacheBuffer + Index * Vcb->BytesPerSector,
+                              Vcb->BytesPerSector);
+                return RES_OK;
+            }
+        }
+
+        Index = Vcb->SectorCacheNext++ % Vcb->SectorCacheEntries;
+        Vcb->SectorCacheTags[Index] = EXFAT_SECTOR_CACHE_EMPTY;
+        CacheSlot = (PUCHAR)Vcb->SectorCacheBuffer + Index * Vcb->BytesPerSector;
+        Offset.QuadPart = Sector * Vcb->BytesPerSector;
+        if (NT_SUCCESS(ExFatReadWriteDevice(Vcb->StorageDevice,
+                                            IRP_MJ_READ,
+                                            CacheSlot,
+                                            Vcb->BytesPerSector,
+                                            &Offset,
+                                            TRUE)))
+        {
+            Vcb->SectorCacheTags[Index] = Sector;
+            RtlCopyMemory(Buffer, CacheSlot, Vcb->BytesPerSector);
+            return RES_OK;
+        }
+        return RES_ERROR;
     }
 
     Offset.QuadPart = Sector * Vcb->BytesPerSector;
@@ -1124,6 +1284,8 @@ disk_write(
 {
     PEXFAT_VCB Vcb;
     LARGE_INTEGER Offset;
+    PUCHAR CacheSlot;
+    ULONG Index;
     ULONG Length;
 
     if (!ExFatGlobalData || PhysicalDrive >= FF_VOLUMES || !Buffer || !Count)
@@ -1141,12 +1303,26 @@ disk_write(
 
     Offset.QuadPart = Sector * Vcb->BytesPerSector;
     Length = Count * Vcb->BytesPerSector;
-    return NT_SUCCESS(ExFatReadWriteDevice(Vcb->StorageDevice,
-                                           IRP_MJ_WRITE,
-                                           (PVOID)Buffer,
-                                           Length,
-                                           &Offset,
-                                           TRUE)) ? RES_OK : RES_ERROR;
+    ExFatInvalidateSectorCacheRange(Vcb, Sector, Count);
+    if (!NT_SUCCESS(ExFatReadWriteDevice(Vcb->StorageDevice,
+                                         IRP_MJ_WRITE,
+                                         (PVOID)Buffer,
+                                         Length,
+                                         &Offset,
+                                         TRUE)))
+    {
+        return RES_ERROR;
+    }
+
+    if (Count == 1 && ExFatEnsureSectorCache(Vcb))
+    {
+        /* Keep rewritten FAT/bitmap/directory sectors hot instead of evicting. */
+        Index = Vcb->SectorCacheNext++ % Vcb->SectorCacheEntries;
+        CacheSlot = (PUCHAR)Vcb->SectorCacheBuffer + Index * Vcb->BytesPerSector;
+        RtlCopyMemory(CacheSlot, Buffer, Vcb->BytesPerSector);
+        Vcb->SectorCacheTags[Index] = Sector;
+    }
+    return RES_OK;
 }
 
 DRESULT
@@ -1166,12 +1342,14 @@ disk_ioctl(
     switch (Command)
     {
         case CTRL_SYNC:
-            return NT_SUCCESS(ExFatReadWriteDevice(Vcb->StorageDevice,
-                                                   IRP_MJ_FLUSH_BUFFERS,
-                                                   NULL,
-                                                   0,
-                                                   NULL,
-                                                   TRUE)) ? RES_OK : RES_ERROR;
+            /*
+             * FatFs raises this after every metadata update (f_sync, f_close,
+             * f_unlink, f_mkdir, ...). A device cache flush here would cost a
+             * full ATA FLUSH per file operation; NT filesystems only flush the
+             * device on explicit IRP_MJ_FLUSH_BUFFERS and at shutdown, which
+             * ExFatFlushBuffers and ExFatShutdown implement.
+             */
+            return RES_OK;
         case GET_SECTOR_COUNT:
             if (!Buffer)
                 return RES_PARERR;
@@ -1208,13 +1386,45 @@ void*
 ff_memalloc(
     UINT Size)
 {
-    return ExAllocatePoolWithTag(NonPagedPool, Size, TAG_EXFAT_FATFS);
+    PEXFAT_FATFS_ALLOCATION_HEADER Header;
+
+    if (Size > MAXUINT - sizeof(*Header))
+        return NULL;
+
+    if (Size == EXFAT_FATFS_NAME_BUFFER_SIZE)
+    {
+        Header = ExAllocateFromNPagedLookasideList(&ExFatGlobalData->FatFsNameBufferLookaside);
+        if (Header)
+            Header->Fields.FromLookaside = TRUE;
+    }
+    else
+    {
+        Header = ExAllocatePoolWithTag(NonPagedPool,
+                                       sizeof(*Header) + Size,
+                                       TAG_EXFAT_FATFS);
+        if (Header)
+            Header->Fields.FromLookaside = FALSE;
+    }
+
+    if (!Header)
+        return NULL;
+    Header->Fields.Signature = EXFAT_FATFS_ALLOCATION_SIGNATURE;
+    return Header + 1;
 }
 
 void
 ff_memfree(
     void* Allocation)
 {
-    if (Allocation)
-        ExFreePoolWithTag(Allocation, TAG_EXFAT_FATFS);
+    PEXFAT_FATFS_ALLOCATION_HEADER Header;
+
+    if (!Allocation)
+        return;
+
+    Header = (PEXFAT_FATFS_ALLOCATION_HEADER)Allocation - 1;
+    ASSERT(Header->Fields.Signature == EXFAT_FATFS_ALLOCATION_SIGNATURE);
+    if (Header->Fields.FromLookaside)
+        ExFreeToNPagedLookasideList(&ExFatGlobalData->FatFsNameBufferLookaside, Header);
+    else
+        ExFreePoolWithTag(Header, TAG_EXFAT_FATFS);
 }

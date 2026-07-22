@@ -26,7 +26,8 @@
 #define TAG_EXFAT_IO     'IfxE'
 
 #define EXFAT_READ_AHEAD_GRANULARITY (64 * 1024)
-#define EXFAT_SECTOR_CACHE_SECTORS   16
+#define EXFAT_SECTOR_CACHE_SIZE      (128 * 1024)
+#define EXFAT_SECTOR_CACHE_EMPTY     ((LBA_t)~0ULL)
 #define EXFAT_FATFS_NAME_BUFFER_SIZE \
     (((FF_MAX_LFN + 1) * sizeof(WCHAR)) + (((FF_MAX_LFN + 44U) / 15) * 32))
 #define EXFAT_FATFS_ALLOCATION_SIGNATURE 'afxE'
@@ -123,9 +124,9 @@ struct _EXFAT_VCB
     PFILE_OBJECT StreamFileObject;
     PVOID SectorCacheAllocation;
     PVOID SectorCacheBuffer;
-    LBA_t SectorCacheStart;
-    ULONG SectorCacheCount;
-    BOOLEAN SectorCacheValid;
+    LBA_t* SectorCacheTags;
+    ULONG SectorCacheEntries;
+    ULONG SectorCacheNext;
 };
 
 typedef struct _EXFAT_GLOBAL_DATA
@@ -163,6 +164,7 @@ NTSTATUS ExFatMapResult(FRESULT Result);
 PVOID ExFatGetUserBuffer(PIRP Irp, BOOLEAN PagingIo);
 NTSTATUS ExFatLockUserBuffer(PIRP Irp, ULONG Length, LOCK_OPERATION Operation);
 NTSTATUS ExFatReadWriteDevice(PDEVICE_OBJECT DeviceObject, UCHAR MajorFunction, PVOID Buffer, ULONG Length, PLARGE_INTEGER Offset, BOOLEAN OverrideVerify);
+NTSTATUS ExFatFlushStorageDevice(PEXFAT_VCB Vcb);
 NTSTATUS ExFatDeviceIoControl(PDEVICE_OBJECT DeviceObject, ULONG ControlCode, PVOID InputBuffer, ULONG InputLength, PVOID OutputBuffer, PULONG OutputLength, BOOLEAN OverrideVerify);
 PCHAR ExFatBuildFatPath(PEXFAT_VCB Vcb, PUNICODE_STRING PathName);
 NTSTATUS ExFatBuildFullPath(PFILE_OBJECT FileObject, PUNICODE_STRING FullPath);
@@ -186,8 +188,11 @@ VOID ExFatAcquireFatFs(PEXFAT_VCB Vcb);
 VOID ExFatReleaseFatFs(PEXFAT_VCB Vcb);
 FRESULT ExFatEnsureFcbFile(PEXFAT_FCB Fcb, BOOLEAN WriteAccess);
 FRESULT ExFatSeekFcbFile(PEXFAT_FCB Fcb, FSIZE_t Offset);
+FRESULT ExFatZeroFileRange(PEXFAT_FCB Fcb, FSIZE_t Start, FSIZE_t End);
+BOOLEAN ExFatFileIsContiguous(PEXFAT_FCB Fcb);
 VOID ExFatInvalidateFcbClusterMap(PEXFAT_FCB Fcb);
 VOID ExFatInvalidateSectorCache(PEXFAT_VCB Vcb);
+VOID ExFatInvalidateSectorCacheRange(PEXFAT_VCB Vcb, LBA_t Sector, UINT Count);
 
 BOOLEAN NTAPI ExFatAcquireForLazyWrite(PVOID Context, BOOLEAN Wait);
 VOID NTAPI ExFatReleaseFromLazyWrite(PVOID Context);

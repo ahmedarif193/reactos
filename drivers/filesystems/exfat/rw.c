@@ -10,6 +10,195 @@
 #define NDEBUG
 #include <debug.h>
 
+/* ff.c-internal FIL.flag bit: directory entry must be updated on f_sync(). */
+#define EXFAT_FA_MODIFIED 0x40
+
+/*
+ * Transfer whole sectors of a contiguous (exFAT NoFatChain) file with a single
+ * device request instead of FatFs's one-IRP-per-cluster loop. Mirrors the
+ * FF_FS_TINY window coherence rules of f_read()/f_write(). Runs under the
+ * volume's FatFs lock. Returns FALSE to make the caller fall back to FatFs.
+ */
+static BOOLEAN
+ExFatDirectFileIo(
+    PEXFAT_VCB Vcb,
+    PEXFAT_FCB Fcb,
+    UCHAR MajorFunction,
+    PVOID Buffer,
+    ULONGLONG ByteOffset,
+    ULONG Length)
+{
+    FATFS* FileSystem = &Vcb->FileSystem;
+    LARGE_INTEGER DeviceOffset;
+    LBA_t Sector;
+    LBA_t HeapEnd;
+    ULONG Sectors = Length / Vcb->BytesPerSector;
+
+    /* FatFs would reject an aborted file object; keep parity. */
+    if (Fcb->FatFile.err)
+        return FALSE;
+
+    Sector = FileSystem->database +
+             (LBA_t)(Fcb->FatFile.obj.sclust - 2) * FileSystem->csize +
+             (LBA_t)(ByteOffset / Vcb->BytesPerSector);
+    HeapEnd = FileSystem->database +
+              (LBA_t)(FileSystem->n_fatent - 2) * FileSystem->csize;
+    if (Sector < FileSystem->database ||
+        Sector >= HeapEnd ||
+        Sectors > HeapEnd - Sector ||
+        Sector >= Vcb->SectorCount ||
+        Sectors > Vcb->SectorCount - Sector)
+    {
+        return FALSE;
+    }
+
+    if (MajorFunction == IRP_MJ_WRITE)
+        ExFatInvalidateSectorCacheRange(Vcb, Sector, Sectors);
+    DeviceOffset.QuadPart = Sector * Vcb->BytesPerSector;
+    if (!NT_SUCCESS(ExFatReadWriteDevice(Vcb->StorageDevice,
+                                         MajorFunction,
+                                         Buffer,
+                                         Length,
+                                         &DeviceOffset,
+                                         TRUE)))
+    {
+        return FALSE;
+    }
+
+    if (FileSystem->winsect >= Sector && FileSystem->winsect - Sector < Sectors)
+    {
+        PUCHAR WindowCopy = (PUCHAR)Buffer +
+                            (ULONG)(FileSystem->winsect - Sector) * Vcb->BytesPerSector;
+
+        if (MajorFunction == IRP_MJ_READ)
+        {
+            /* The window holds a newer copy of one of the read sectors. */
+            if (FileSystem->wflag)
+                RtlCopyMemory(WindowCopy, FileSystem->win, Vcb->BytesPerSector);
+        }
+        else
+        {
+            /* The direct write superseded the window contents. */
+            RtlCopyMemory(FileSystem->win, WindowCopy, Vcb->BytesPerSector);
+            FileSystem->wflag = 0;
+        }
+    }
+
+    if (MajorFunction == IRP_MJ_WRITE)
+        Fcb->FatFile.flag |= EXFAT_FA_MODIFIED;
+    return TRUE;
+}
+
+static FRESULT
+ExFatReadFileData(
+    PEXFAT_VCB Vcb,
+    PEXFAT_FCB Fcb,
+    PVOID Buffer,
+    ULONGLONG ByteOffset,
+    ULONG Length,
+    PUINT BytesRead)
+{
+    ULONG Aligned;
+    UINT Bytes = 0;
+    FRESULT Result;
+
+    *BytesRead = 0;
+    Result = ExFatEnsureFcbFile(Fcb, FALSE);
+    if (Result != FR_OK)
+        return Result;
+
+    if (ByteOffset >= f_size(&Fcb->FatFile))
+        return FR_OK;
+    if (Length > f_size(&Fcb->FatFile) - ByteOffset)
+        Length = (ULONG)(f_size(&Fcb->FatFile) - ByteOffset);
+
+    if (ExFatFileIsContiguous(Fcb) &&
+        (ByteOffset % Vcb->BytesPerSector) == 0 &&
+        Length >= Vcb->BytesPerSector)
+    {
+        Aligned = Length - (Length % Vcb->BytesPerSector);
+        if (ExFatDirectFileIo(Vcb, Fcb, IRP_MJ_READ, Buffer, ByteOffset, Aligned))
+        {
+            *BytesRead = Aligned;
+            ByteOffset += Aligned;
+            Length -= Aligned;
+            Buffer = (PUCHAR)Buffer + Aligned;
+            if (!Length)
+                return FR_OK;
+        }
+    }
+
+    Result = ExFatSeekFcbFile(Fcb, (FSIZE_t)ByteOffset);
+    if (Result != FR_OK)
+        return Result;
+    Result = f_read(&Fcb->FatFile, Buffer, Length, &Bytes);
+    *BytesRead += Bytes;
+    return Result;
+}
+
+static FRESULT
+ExFatWriteFileData(
+    PEXFAT_VCB Vcb,
+    PEXFAT_FCB Fcb,
+    PVOID Buffer,
+    ULONGLONG ByteOffset,
+    ULONG Length,
+    BOOLEAN CanExtend,
+    PUINT BytesWritten)
+{
+    ULONGLONG InPlace;
+    ULONG Aligned;
+    UINT Bytes = 0;
+    FRESULT Result;
+
+    *BytesWritten = 0;
+    Result = ExFatEnsureFcbFile(Fcb, TRUE);
+    if (Result != FR_OK)
+        return Result;
+
+    if (CanExtend)
+    {
+        ExFatInvalidateFcbClusterMap(Fcb);
+        if ((FSIZE_t)ByteOffset > f_size(&Fcb->FatFile))
+        {
+            Result = ExFatZeroFileRange(Fcb,
+                                        f_size(&Fcb->FatFile),
+                                        (FSIZE_t)ByteOffset);
+            if (Result != FR_OK)
+                return Result;
+        }
+    }
+
+    if (ExFatFileIsContiguous(Fcb) &&
+        (ByteOffset % Vcb->BytesPerSector) == 0 &&
+        ByteOffset < f_size(&Fcb->FatFile))
+    {
+        InPlace = min((ULONGLONG)Length, f_size(&Fcb->FatFile) - ByteOffset);
+        Aligned = (ULONG)(InPlace - (InPlace % Vcb->BytesPerSector));
+        if (Aligned &&
+            ExFatDirectFileIo(Vcb, Fcb, IRP_MJ_WRITE, Buffer, ByteOffset, Aligned))
+        {
+            *BytesWritten = Aligned;
+            ByteOffset += Aligned;
+            Length -= Aligned;
+            Buffer = (PUCHAR)Buffer + Aligned;
+            if (!Length)
+                return FR_OK;
+        }
+    }
+
+    /*
+     * Plain f_lseek: a cluster map must never be active while f_write
+     * extends the chain, or the write is silently truncated.
+     */
+    Result = f_lseek(&Fcb->FatFile, (FSIZE_t)ByteOffset);
+    if (Result != FR_OK)
+        return Result;
+    Result = f_write(&Fcb->FatFile, Buffer, Length, &Bytes);
+    *BytesWritten += Bytes;
+    return Result;
+}
+
 static NTSTATUS
 ExFatReadVolume(
     PEXFAT_VCB Vcb,
@@ -22,6 +211,11 @@ ExFatReadVolume(
 
     if (Offset.QuadPart < 0 || (ULONGLONG)Offset.QuadPart >= VolumeLength)
         return STATUS_END_OF_FILE;
+    if (((ULONGLONG)Offset.QuadPart % Vcb->BytesPerSector) != 0 ||
+        (Length % Vcb->BytesPerSector) != 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
     if (Length > VolumeLength - Offset.QuadPart)
         Length = (ULONG)(VolumeLength - Offset.QuadPart);
 
@@ -58,13 +252,22 @@ ExFatRead(
     FRESULT Result;
     NTSTATUS Status;
     BOOLEAN PagingIo = !!(Irp->Flags & IRP_PAGING_IO);
+    BOOLEAN NoCache;
 
     if (DeviceObject == ExFatGlobalData->DeviceObject || !FileObject)
         return STATUS_INVALID_DEVICE_REQUEST;
+
+    if (Stack->MinorFunction & IRP_MN_COMPLETE)
+    {
+        CcMdlReadComplete(FileObject, Irp->MdlAddress);
+        Irp->MdlAddress = NULL;
+        return STATUS_SUCCESS;
+    }
+
     Vcb = DeviceObject->DeviceExtension;
     Fcb = FileObject->FsContext;
     Ccb = FileObject->FsContext2;
-    if (!Fcb || !Ccb)
+    if (!Fcb || (!PagingIo && !Ccb))
         return STATUS_INVALID_HANDLE;
     if (Fcb->IsDirectory)
         return STATUS_INVALID_DEVICE_REQUEST;
@@ -76,12 +279,23 @@ ExFatRead(
     if (Offset.QuadPart < 0)
         return STATUS_INVALID_PARAMETER;
 
-    Status = ExFatLockUserBuffer(Irp, Length, IoWriteAccess);
-    if (!NT_SUCCESS(Status))
-        return Status;
-    Buffer = ExFatGetUserBuffer(Irp, PagingIo);
-    if (!Buffer)
-        return STATUS_INSUFFICIENT_RESOURCES;
+    NoCache = PagingIo ||
+              !!(Irp->Flags & IRP_NOCACHE) ||
+              !!(FileObject->Flags & FO_NO_INTERMEDIATE_BUFFERING);
+
+    if (!(Stack->MinorFunction & IRP_MN_MDL))
+    {
+        Status = ExFatLockUserBuffer(Irp, Length, IoWriteAccess);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        Buffer = ExFatGetUserBuffer(Irp, PagingIo);
+        if (!Buffer)
+            return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    else
+    {
+        Buffer = NULL;
+    }
 
     if (Fcb->IsVolume)
     {
@@ -89,8 +303,10 @@ ExFatRead(
     }
     else
     {
-        if (!Ccb->HandleOpen || Ccb->IsDirectory)
+        if (!PagingIo && (!Ccb->HandleOpen || Ccb->IsDirectory))
             return STATUS_FILE_CLOSED;
+        if (!PagingIo && !(Ccb->DesiredAccess & (FILE_READ_DATA | FILE_EXECUTE)))
+            return STATUS_ACCESS_DENIED;
         if ((ULONGLONG)Offset.QuadPart >= (ULONGLONG)Fcb->Header.FileSize.QuadPart)
             return STATUS_END_OF_FILE;
         if (Length > (ULONGLONG)Fcb->Header.FileSize.QuadPart - Offset.QuadPart)
@@ -101,18 +317,70 @@ ExFatRead(
             return STATUS_FILE_LOCK_CONFLICT;
         }
 
-        ExAcquireResourceSharedLite(PagingIo ? &Fcb->PagingIoResource : &Fcb->MainResource,
-                                    TRUE);
-        ExFatAcquireFatFs(Vcb);
-        Result = f_lseek(&Ccb->Handle.File, (FSIZE_t)Offset.QuadPart);
-        if (Result == FR_OK)
-            Result = f_read(&Ccb->Handle.File, Buffer, Length, &BytesRead);
-        ExFatReleaseFatFs(Vcb);
-        ExReleaseResourceLite(PagingIo ? &Fcb->PagingIoResource : &Fcb->MainResource);
+        if (!NoCache)
+        {
+            ExAcquireResourceSharedLite(&Fcb->MainResource, TRUE);
+            Status = STATUS_SUCCESS;
+            _SEH2_TRY
+            {
+                if (!FileObject->PrivateCacheMap)
+                {
+                    CcInitializeCacheMap(FileObject,
+                                         (PCC_FILE_SIZES)&Fcb->Header.AllocationSize,
+                                         FALSE,
+                                         &ExFatGlobalData->CacheManagerCallbacks,
+                                         Fcb);
+                    CcSetReadAheadGranularity(FileObject, EXFAT_READ_AHEAD_GRANULARITY);
+                }
 
-        Status = ExFatMapResult(Result);
-        if (NT_SUCCESS(Status))
-            Irp->IoStatus.Information = BytesRead;
+                if (Stack->MinorFunction & IRP_MN_MDL)
+                {
+                    CcMdlRead(FileObject,
+                              &Offset,
+                              Length,
+                              &Irp->MdlAddress,
+                              &Irp->IoStatus);
+                    Status = Irp->IoStatus.Status;
+                }
+                else if (!CcCopyRead(FileObject,
+                                     &Offset,
+                                     Length,
+                                     TRUE,
+                                     Buffer,
+                                     &Irp->IoStatus))
+                {
+                    Status = STATUS_CANT_WAIT;
+                }
+                else
+                {
+                    Status = Irp->IoStatus.Status;
+                }
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            ExReleaseResourceLite(&Fcb->MainResource);
+        }
+        else
+        {
+            ExAcquireResourceSharedLite(PagingIo ? &Fcb->PagingIoResource : &Fcb->MainResource,
+                                        TRUE);
+            ExFatAcquireFatFs(Vcb);
+            Result = ExFatReadFileData(Vcb,
+                                       Fcb,
+                                       Buffer,
+                                       (ULONGLONG)Offset.QuadPart,
+                                       Length,
+                                       &BytesRead);
+            ExFatReleaseFatFs(Vcb);
+            ExReleaseResourceLite(PagingIo ? &Fcb->PagingIoResource : &Fcb->MainResource);
+
+            Status = ExFatMapResult(Result);
+            if (NT_SUCCESS(Status))
+                Irp->IoStatus.Information = BytesRead;
+        }
     }
 
     if (NT_SUCCESS(Status) && !PagingIo && (FileObject->Flags & FO_SYNCHRONOUS_IO))
@@ -135,6 +403,11 @@ ExFatWriteVolume(
         return STATUS_MEDIA_WRITE_PROTECTED;
     if (!Vcb->Locked || Vcb->LockOwner != FileObject)
         return STATUS_ACCESS_DENIED;
+    if (((ULONGLONG)Offset.QuadPart % Vcb->BytesPerSector) != 0 ||
+        (Length % Vcb->BytesPerSector) != 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
     if (Offset.QuadPart < 0 ||
         (ULONGLONG)Offset.QuadPart > VolumeLength ||
         Length > VolumeLength - Offset.QuadPart)
@@ -144,6 +417,8 @@ ExFatWriteVolume(
 
     if (!Length)
         return STATUS_SUCCESS;
+    ExFatAcquireFatFs(Vcb);
+    ExFatInvalidateSectorCache(Vcb);
     if (!NT_SUCCESS(ExFatReadWriteDevice(Vcb->StorageDevice,
                                          IRP_MJ_WRITE,
                                          Buffer,
@@ -151,8 +426,10 @@ ExFatWriteVolume(
                                          &Offset,
                                          FALSE)))
     {
+        ExFatReleaseFatFs(Vcb);
         return STATUS_IO_DEVICE_ERROR;
     }
+    ExFatReleaseFatFs(Vcb);
 
     Irp->IoStatus.Information = Length;
     return STATUS_SUCCESS;
@@ -176,13 +453,27 @@ ExFatWrite(
     FRESULT Result;
     NTSTATUS Status;
     BOOLEAN PagingIo = !!(Irp->Flags & IRP_PAGING_IO);
+    BOOLEAN NoCache;
+    LARGE_INTEGER EndOffset;
+    LARGE_INTEGER OldValidDataLength;
+    IO_STATUS_BLOCK FlushStatus;
 
     if (DeviceObject == ExFatGlobalData->DeviceObject || !FileObject)
         return STATUS_INVALID_DEVICE_REQUEST;
+
+    if (Stack->MinorFunction & IRP_MN_COMPLETE)
+    {
+        CcMdlWriteComplete(FileObject,
+                           &Stack->Parameters.Write.ByteOffset,
+                           Irp->MdlAddress);
+        Irp->MdlAddress = NULL;
+        return STATUS_SUCCESS;
+    }
+
     Vcb = DeviceObject->DeviceExtension;
     Fcb = FileObject->FsContext;
     Ccb = FileObject->FsContext2;
-    if (!Fcb || !Ccb)
+    if (!Fcb || (!PagingIo && !Ccb))
         return STATUS_INVALID_HANDLE;
     if (Fcb->IsDirectory)
         return STATUS_INVALID_DEVICE_REQUEST;
@@ -198,12 +489,24 @@ ExFatWrite(
     if (!Length)
         return STATUS_SUCCESS;
 
-    Status = ExFatLockUserBuffer(Irp, Length, IoReadAccess);
-    if (!NT_SUCCESS(Status))
-        return Status;
-    Buffer = ExFatGetUserBuffer(Irp, PagingIo);
-    if (!Buffer)
-        return STATUS_INSUFFICIENT_RESOURCES;
+    EndOffset.QuadPart = Offset.QuadPart + Length;
+    NoCache = PagingIo ||
+              !!(Irp->Flags & IRP_NOCACHE) ||
+              !!(FileObject->Flags & FO_NO_INTERMEDIATE_BUFFERING);
+
+    if (!(Stack->MinorFunction & IRP_MN_MDL))
+    {
+        Status = ExFatLockUserBuffer(Irp, Length, IoReadAccess);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        Buffer = ExFatGetUserBuffer(Irp, PagingIo);
+        if (!Buffer)
+            return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    else
+    {
+        Buffer = NULL;
+    }
 
     if (Fcb->IsVolume)
     {
@@ -211,9 +514,9 @@ ExFatWrite(
     }
     else
     {
-        if (!Ccb->HandleOpen || Ccb->IsDirectory)
+        if (!PagingIo && (!Ccb->HandleOpen || Ccb->IsDirectory))
             return STATUS_FILE_CLOSED;
-        if (!PagingIo && !ExFatIsWriteAccess(Ccb->DesiredAccess))
+        if (!PagingIo && !(Ccb->DesiredAccess & (FILE_WRITE_DATA | FILE_APPEND_DATA)))
             return STATUS_ACCESS_DENIED;
         if (!PagingIo && !FsRtlCheckLockForWriteAccess(&Fcb->FileLock, Irp))
             return STATUS_FILE_LOCK_CONFLICT;
@@ -222,33 +525,193 @@ ExFatWrite(
         if (PagingIo && Length > (ULONGLONG)Fcb->Header.FileSize.QuadPart - Offset.QuadPart)
             Length = (ULONG)((ULONGLONG)Fcb->Header.FileSize.QuadPart - Offset.QuadPart);
 
-        ExAcquireResourceExclusiveLite(PagingIo ? &Fcb->PagingIoResource : &Fcb->MainResource,
-                                       TRUE);
-        ExFatAcquireFatFs(Vcb);
-        Result = f_lseek(&Ccb->Handle.File, (FSIZE_t)Offset.QuadPart);
-        if (Result == FR_OK)
-            Result = f_write(&Ccb->Handle.File, Buffer, Length, &BytesWritten);
-        if (Result == FR_OK &&
-            ((Stack->Flags & SL_WRITE_THROUGH) || (FileObject->Flags & FO_WRITE_THROUGH)))
-        {
-            Result = f_sync(&Ccb->Handle.File);
-        }
-        if (Result == FR_OK)
-        {
-            Fcb->Header.FileSize.QuadPart = f_size(&Ccb->Handle.File);
-            Fcb->Header.ValidDataLength = Fcb->Header.FileSize;
-            ClusterSize = Vcb->FileSystem.csize * Vcb->BytesPerSector;
-            Fcb->Header.AllocationSize.QuadPart = ExFatRoundUp(f_size(&Ccb->Handle.File),
-                                                               ClusterSize);
-        }
-        ExFatReleaseFatFs(Vcb);
-        ExReleaseResourceLite(PagingIo ? &Fcb->PagingIoResource : &Fcb->MainResource);
+        if (!Length)
+            return STATUS_SUCCESS;
+        EndOffset.QuadPart = Offset.QuadPart + Length;
 
-        Status = ExFatMapResult(Result);
-        if (NT_SUCCESS(Status))
+        if (!NoCache)
         {
-            Irp->IoStatus.Information = BytesWritten;
-            FileObject->Flags |= FO_FILE_MODIFIED;
+            ExAcquireResourceExclusiveLite(&Fcb->MainResource, TRUE);
+            Status = STATUS_SUCCESS;
+            OldValidDataLength = Fcb->Header.ValidDataLength;
+
+            _SEH2_TRY
+            {
+                if (!FileObject->PrivateCacheMap)
+                {
+                    CcInitializeCacheMap(FileObject,
+                                         (PCC_FILE_SIZES)&Fcb->Header.AllocationSize,
+                                         FALSE,
+                                         &ExFatGlobalData->CacheManagerCallbacks,
+                                         Fcb);
+                    CcSetReadAheadGranularity(FileObject, EXFAT_READ_AHEAD_GRANULARITY);
+                }
+
+                if (EndOffset.QuadPart > Fcb->Header.FileSize.QuadPart)
+                {
+                    ExFatAcquireFatFs(Vcb);
+                    Result = ExFatEnsureFcbFile(Fcb, TRUE);
+                    if (Result == FR_OK)
+                    {
+                        ExFatInvalidateFcbClusterMap(Fcb);
+                        Result = f_lseek(&Fcb->FatFile, (FSIZE_t)EndOffset.QuadPart);
+                    }
+                    if (Result == FR_OK)
+                    {
+                        Fcb->Header.FileSize.QuadPart = f_size(&Fcb->FatFile);
+                        ClusterSize = Vcb->FileSystem.csize * Vcb->BytesPerSector;
+                        Fcb->Header.AllocationSize.QuadPart = ExFatRoundUp(f_size(&Fcb->FatFile),
+                                                                          ClusterSize);
+                    }
+                    ExFatReleaseFatFs(Vcb);
+                    Status = ExFatMapResult(Result);
+                    if (!NT_SUCCESS(Status))
+                        _SEH2_LEAVE;
+                    CcSetFileSizes(FileObject,
+                                   (PCC_FILE_SIZES)&Fcb->Header.AllocationSize);
+                }
+
+                if (Offset.QuadPart > OldValidDataLength.QuadPart &&
+                    !CcZeroData(FileObject,
+                                &OldValidDataLength,
+                                &Offset,
+                                TRUE))
+                {
+                    Status = STATUS_CANT_WAIT;
+                    _SEH2_LEAVE;
+                }
+
+                if (Stack->MinorFunction & IRP_MN_MDL)
+                {
+                    CcPrepareMdlWrite(FileObject,
+                                      &Offset,
+                                      Length,
+                                      &Irp->MdlAddress,
+                                      &Irp->IoStatus);
+                    Status = Irp->IoStatus.Status;
+                }
+                else if (!CcCopyWrite(FileObject,
+                                      &Offset,
+                                      Length,
+                                      TRUE,
+                                      Buffer))
+                {
+                    Status = STATUS_CANT_WAIT;
+                }
+                else
+                {
+                    Irp->IoStatus.Information = Length;
+                }
+
+                if (NT_SUCCESS(Status) &&
+                    EndOffset.QuadPart > Fcb->Header.ValidDataLength.QuadPart)
+                {
+                    Fcb->Header.ValidDataLength = EndOffset;
+                    CcSetFileSizes(FileObject,
+                                   (PCC_FILE_SIZES)&Fcb->Header.AllocationSize);
+                }
+
+                if (NT_SUCCESS(Status) &&
+                    ((Stack->Flags & SL_WRITE_THROUGH) ||
+                     (FileObject->Flags & FO_WRITE_THROUGH)))
+                {
+                    if (Offset.QuadPart > OldValidDataLength.QuadPart)
+                    {
+                        CcFlushCache(&Fcb->SectionObjectPointers,
+                                     NULL,
+                                     0,
+                                     &FlushStatus);
+                    }
+                    else
+                    {
+                        CcFlushCache(&Fcb->SectionObjectPointers,
+                                     &Offset,
+                                     Length,
+                                     &FlushStatus);
+                    }
+                    Status = FlushStatus.Status;
+                    if (NT_SUCCESS(Status))
+                    {
+                        ExFatAcquireFatFs(Vcb);
+                        Result = ExFatEnsureFcbFile(Fcb, TRUE);
+                        if (Result == FR_OK)
+                            Result = f_sync(&Fcb->FatFile);
+                        ExFatReleaseFatFs(Vcb);
+                        Status = ExFatMapResult(Result);
+                    }
+                }
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+
+            if (NT_SUCCESS(Status))
+                FileObject->Flags |= FO_FILE_MODIFIED;
+            ExReleaseResourceLite(&Fcb->MainResource);
+        }
+        else
+        {
+            if (PagingIo)
+                /* Cc flush already owns this resource shared. */
+                ExAcquireResourceSharedLite(&Fcb->PagingIoResource, TRUE);
+            else
+                ExAcquireResourceExclusiveLite(&Fcb->MainResource, TRUE);
+            if (!PagingIo && Fcb->SectionObjectPointers.DataSectionObject)
+            {
+                CcFlushCache(&Fcb->SectionObjectPointers,
+                             &Offset,
+                             Length,
+                             &FlushStatus);
+                if (!NT_SUCCESS(FlushStatus.Status) ||
+                    !CcPurgeCacheSection(&Fcb->SectionObjectPointers,
+                                         &Offset,
+                                         Length,
+                                         FALSE))
+                {
+                    Status = NT_SUCCESS(FlushStatus.Status) ?
+                             STATUS_USER_MAPPED_FILE : FlushStatus.Status;
+                    ExReleaseResourceLite(&Fcb->MainResource);
+                    return Status;
+                }
+            }
+
+            ExFatAcquireFatFs(Vcb);
+            Result = ExFatWriteFileData(Vcb,
+                                        Fcb,
+                                        Buffer,
+                                        (ULONGLONG)Offset.QuadPart,
+                                        Length,
+                                        !PagingIo,
+                                        &BytesWritten);
+            if (Result == FR_OK &&
+                ((Stack->Flags & SL_WRITE_THROUGH) || (FileObject->Flags & FO_WRITE_THROUGH)))
+            {
+                Result = f_sync(&Fcb->FatFile);
+            }
+            if (Result == FR_OK && !PagingIo)
+            {
+                Fcb->Header.FileSize.QuadPart = f_size(&Fcb->FatFile);
+                Fcb->Header.ValidDataLength = Fcb->Header.FileSize;
+                ClusterSize = Vcb->FileSystem.csize * Vcb->BytesPerSector;
+                Fcb->Header.AllocationSize.QuadPart = ExFatRoundUp(f_size(&Fcb->FatFile),
+                                                                   ClusterSize);
+            }
+            ExFatReleaseFatFs(Vcb);
+
+            Status = ExFatMapResult(Result);
+            if (NT_SUCCESS(Status))
+            {
+                Irp->IoStatus.Information = BytesWritten;
+                FileObject->Flags |= FO_FILE_MODIFIED;
+                if (!PagingIo && Fcb->SectionObjectPointers.SharedCacheMap)
+                {
+                    CcSetFileSizes(FileObject,
+                                   (PCC_FILE_SIZES)&Fcb->Header.AllocationSize);
+                }
+            }
+            ExReleaseResourceLite(PagingIo ? &Fcb->PagingIoResource : &Fcb->MainResource);
         }
     }
 

@@ -10,27 +10,6 @@
 #define NDEBUG
 #include <debug.h>
 
-static VOID
-ExFatRefreshFcb(
-    PEXFAT_FCB Fcb)
-{
-    PCHAR Path;
-    FILINFO Information;
-
-    if (Fcb->IsVolume)
-        return;
-
-    Path = ExFatBuildFatPath(Fcb->Vcb, &Fcb->PathName);
-    if (!Path)
-        return;
-    RtlZeroMemory(&Information, sizeof(Information));
-    ExFatAcquireFatFs(Fcb->Vcb);
-    if (f_stat(Path, &Information) == FR_OK)
-        ExFatUpdateFcbFromInfo(Fcb, &Information);
-    ExFatReleaseFatFs(Fcb->Vcb);
-    ExFreePoolWithTag(Path, TAG_EXFAT_PATH);
-}
-
 static NTSTATUS
 ExFatQueryNameInformation(
     PEXFAT_FCB Fcb,
@@ -113,7 +92,6 @@ ExFatQueryInformation(
         return STATUS_INVALID_HANDLE;
 
     ExAcquireResourceExclusiveLite(&Fcb->MainResource, TRUE);
-    ExFatRefreshFcb(Fcb);
     RtlZeroMemory(Buffer, Length);
 
     switch (Stack->Parameters.QueryFile.FileInformationClass)
@@ -304,7 +282,18 @@ ExFatSetBasicInformation(
     ExFreePoolWithTag(Path, TAG_EXFAT_PATH);
 
     if (Result == FR_OK)
-        ExFatRefreshFcb(Fcb);
+    {
+        if (Information->FileAttributes)
+            Fcb->FileAttributes = Information->FileAttributes;
+        if (Information->CreationTime.QuadPart)
+            Fcb->CreationTime = Information->CreationTime;
+        if (Information->LastAccessTime.QuadPart)
+            Fcb->LastAccessTime = Information->LastAccessTime;
+        if (Information->LastWriteTime.QuadPart)
+            Fcb->LastWriteTime = Information->LastWriteTime;
+        if (Information->ChangeTime.QuadPart)
+            Fcb->ChangeTime = Information->ChangeTime;
+    }
     return ExFatMapResult(Result);
 }
 
@@ -316,10 +305,13 @@ ExFatSetEndOfFile(
 {
     FRESULT Result;
     ULONG ClusterSize;
+    LARGE_INTEGER OldFileSize;
+    IO_STATUS_BLOCK IoStatus;
 
     if (EndOfFile->QuadPart < 0)
         return STATUS_INVALID_PARAMETER;
-    if (!Ccb->HandleOpen || Ccb->IsDirectory || !ExFatIsWriteAccess(Ccb->DesiredAccess))
+    if (!Ccb->HandleOpen || Ccb->IsDirectory ||
+        !(Ccb->DesiredAccess & (FILE_WRITE_DATA | FILE_APPEND_DATA)))
         return STATUS_ACCESS_DENIED;
     if (EndOfFile->QuadPart < Fcb->Header.FileSize.QuadPart &&
         !MmCanFileBeTruncated(&Fcb->SectionObjectPointers, EndOfFile))
@@ -327,12 +319,34 @@ ExFatSetEndOfFile(
         return STATUS_USER_MAPPED_FILE;
     }
 
+    OldFileSize = Fcb->Header.FileSize;
+    if (Fcb->SectionObjectPointers.DataSectionObject)
+    {
+        CcFlushCache(&Fcb->SectionObjectPointers, NULL, 0, &IoStatus);
+        if (!NT_SUCCESS(IoStatus.Status))
+            return IoStatus.Status;
+    }
+
     ExFatAcquireFatFs(Fcb->Vcb);
-    Result = f_lseek(&Ccb->Handle.File, (FSIZE_t)EndOfFile->QuadPart);
+    Result = ExFatEnsureFcbFile(Fcb, TRUE);
     if (Result == FR_OK)
-        Result = f_truncate(&Ccb->Handle.File);
+    {
+        ExFatInvalidateFcbClusterMap(Fcb);
+        if ((FSIZE_t)EndOfFile->QuadPart > f_size(&Fcb->FatFile))
+        {
+            Result = ExFatZeroFileRange(Fcb,
+                                        f_size(&Fcb->FatFile),
+                                        (FSIZE_t)EndOfFile->QuadPart);
+        }
+        else
+        {
+            Result = f_lseek(&Fcb->FatFile, (FSIZE_t)EndOfFile->QuadPart);
+        }
+    }
     if (Result == FR_OK)
-        Result = f_sync(&Ccb->Handle.File);
+        Result = f_truncate(&Fcb->FatFile);
+    if (Result == FR_OK)
+        Result = f_sync(&Fcb->FatFile);
     if (Result == FR_OK)
     {
         Fcb->Header.FileSize = *EndOfFile;
@@ -342,6 +356,19 @@ ExFatSetEndOfFile(
                                                            ClusterSize);
     }
     ExFatReleaseFatFs(Fcb->Vcb);
+
+    if (Result == FR_OK && Fcb->SectionObjectPointers.SharedCacheMap)
+    {
+        CcSetFileSizes(Ccb->FileObject,
+                       (PCC_FILE_SIZES)&Fcb->Header.AllocationSize);
+        if (EndOfFile->QuadPart < OldFileSize.QuadPart)
+        {
+            CcPurgeCacheSection(&Fcb->SectionObjectPointers,
+                                EndOfFile,
+                                0,
+                                FALSE);
+        }
+    }
     return ExFatMapResult(Result);
 }
 
@@ -446,38 +473,19 @@ ExFatQueryVolumeLabel(
     ULONG Length,
     PULONG Written)
 {
-    CHAR DrivePath[3];
-    CHAR Label[FF_LFN_BUF + 1];
-    UNICODE_STRING UnicodeLabel;
     ULONG HeaderLength = FIELD_OFFSET(FILE_FS_VOLUME_INFORMATION, VolumeLabel);
     ULONG CopyLength;
-    FRESULT Result;
-    NTSTATUS Status;
 
     if (Length < HeaderLength)
         return STATUS_BUFFER_TOO_SMALL;
 
-    DrivePath[0] = '0' + Vcb->DriveNumber;
-    DrivePath[1] = ':';
-    DrivePath[2] = ANSI_NULL;
-    RtlZeroMemory(Label, sizeof(Label));
-    ExFatAcquireFatFs(Vcb);
-    Result = f_getlabel(DrivePath, Label, &Vcb->SerialNumber);
-    ExFatReleaseFatFs(Vcb);
-    if (Result != FR_OK)
-        return ExFatMapResult(Result);
-
-    Status = ExFatUtf8ToUnicode(Label, &UnicodeLabel);
-    if (!NT_SUCCESS(Status))
-        return Status;
-
+    /* The VPB copy is maintained at mount and set-label time. */
     RtlZeroMemory(Information, HeaderLength);
     Information->VolumeSerialNumber = Vcb->SerialNumber;
     Information->SupportsObjects = FALSE;
-    Information->VolumeLabelLength = UnicodeLabel.Length;
-    CopyLength = min((ULONG)UnicodeLabel.Length, Length - HeaderLength);
-    RtlCopyMemory(Information->VolumeLabel, UnicodeLabel.Buffer, CopyLength);
-    ExFatFreeUnicodeString(&UnicodeLabel);
+    Information->VolumeLabelLength = Vcb->Vpb->VolumeLabelLength;
+    CopyLength = min((ULONG)Vcb->Vpb->VolumeLabelLength, Length - HeaderLength);
+    RtlCopyMemory(Information->VolumeLabel, Vcb->Vpb->VolumeLabel, CopyLength);
     *Written = HeaderLength + CopyLength;
     return (CopyLength == Information->VolumeLabelLength) ? STATUS_SUCCESS : STATUS_BUFFER_OVERFLOW;
 }
@@ -664,5 +672,17 @@ ExFatSetVolumeInformation(
     Result = f_setlabel(FatLabel);
     ExFatReleaseFatFs(Vcb);
     ExFreePoolWithTag(FatLabel, TAG_EXFAT_PATH);
+
+    if (Result == FR_OK)
+    {
+        /* Queries read the VPB copy under Vcb->Resource shared. */
+        ExAcquireResourceExclusiveLite(&Vcb->Resource, TRUE);
+        Vcb->Vpb->VolumeLabelLength = min(Label.Length,
+                                          (USHORT)sizeof(Vcb->Vpb->VolumeLabel));
+        RtlCopyMemory(Vcb->Vpb->VolumeLabel,
+                      Label.Buffer,
+                      Vcb->Vpb->VolumeLabelLength);
+        ExReleaseResourceLite(&Vcb->Resource);
+    }
     return ExFatMapResult(Result);
 }

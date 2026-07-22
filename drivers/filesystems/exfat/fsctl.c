@@ -153,8 +153,6 @@ ExFatMountVolume(
     VolToPart[DriveNumber].pd = (BYTE)DriveNumber;
     VolToPart[DriveNumber].pt = 0;
     Registered = TRUE;
-    ExReleaseResourceLite(&ExFatGlobalData->VolumeListResource);
-    KeLeaveCriticalRegion();
 
     DrivePath[0] = '0' + (CHAR)DriveNumber;
     DrivePath[1] = ':';
@@ -166,8 +164,6 @@ ExFatMountVolume(
         Status = (Result == FR_OK) ? STATUS_UNRECOGNIZED_VOLUME : ExFatMapResult(Result);
         f_mount(NULL, DrivePath, 0);
         ExFatReleaseFatFs(Vcb);
-        KeEnterCriticalRegion();
-        ExAcquireResourceExclusiveLite(&ExFatGlobalData->VolumeListResource, TRUE);
         ExFatGlobalData->Volumes[DriveNumber] = NULL;
         Registered = FALSE;
         ExReleaseResourceLite(&ExFatGlobalData->VolumeListResource);
@@ -178,6 +174,8 @@ ExFatMountVolume(
     RtlZeroMemory(Label, sizeof(Label));
     Result = f_getlabel(DrivePath, Label, &Vcb->SerialNumber);
     ExFatReleaseFatFs(Vcb);
+    ExReleaseResourceLite(&ExFatGlobalData->VolumeListResource);
+    KeLeaveCriticalRegion();
     if (Result != FR_OK)
     {
         Status = ExFatMapResult(Result);
@@ -238,6 +236,8 @@ Failure:
     }
     if (Registered)
     {
+        KeEnterCriticalRegion();
+        ExAcquireResourceExclusiveLite(&ExFatGlobalData->VolumeListResource, TRUE);
         ExFatAcquireFatFs(Vcb);
         DrivePath[0] = '0' + Vcb->DriveNumber;
         DrivePath[1] = ':';
@@ -245,8 +245,6 @@ Failure:
         f_mount(NULL, DrivePath, 0);
         Vcb->Mounted = FALSE;
         ExFatReleaseFatFs(Vcb);
-        KeEnterCriticalRegion();
-        ExAcquireResourceExclusiveLite(&ExFatGlobalData->VolumeListResource, TRUE);
         ExFatGlobalData->Volumes[Vcb->DriveNumber] = NULL;
         ExReleaseResourceLite(&ExFatGlobalData->VolumeListResource);
         KeLeaveCriticalRegion();
@@ -413,18 +411,27 @@ ExFatFlushBuffers(
 {
     PIO_STACK_LOCATION Stack = IoGetCurrentIrpStackLocation(Irp);
     PEXFAT_VCB Vcb;
-    PEXFAT_CCB Ccb;
+    PEXFAT_FCB Fcb;
+    IO_STATUS_BLOCK IoStatus;
     FRESULT Result = FR_OK;
 
     if (DeviceObject == ExFatGlobalData->DeviceObject)
         return STATUS_SUCCESS;
     Vcb = DeviceObject->DeviceExtension;
-    Ccb = Stack->FileObject ? Stack->FileObject->FsContext2 : NULL;
+    Fcb = Stack->FileObject ? Stack->FileObject->FsContext : NULL;
+
+    if (Fcb && !Fcb->IsDirectory && !Fcb->IsVolume &&
+        Fcb->SectionObjectPointers.DataSectionObject)
+    {
+        CcFlushCache(&Fcb->SectionObjectPointers, NULL, 0, &IoStatus);
+        if (!NT_SUCCESS(IoStatus.Status))
+            return IoStatus.Status;
+    }
 
     ExFatAcquireFatFs(Vcb);
-    if (Ccb && Ccb->HandleOpen && !Ccb->IsDirectory)
-        Result = f_sync(&Ccb->Handle.File);
-    if (Result == FR_OK && disk_ioctl(Vcb->DriveNumber, CTRL_SYNC, NULL) != RES_OK)
+    if (Fcb && Fcb->FatFileOpen)
+        Result = f_sync(&Fcb->FatFile);
+    if (Result == FR_OK && !NT_SUCCESS(ExFatFlushStorageDevice(Vcb)))
         Result = FR_DISK_ERR;
     ExFatReleaseFatFs(Vcb);
     return ExFatMapResult(Result);
@@ -472,18 +479,30 @@ ExFatShutdown(
     for (Index = 0; Index < FF_VOLUMES; ++Index)
     {
         PEXFAT_VCB Vcb = ExFatGlobalData->Volumes[Index];
+        PLIST_ENTRY Entry;
+        PEXFAT_FCB Fcb;
         CHAR DrivePath[3];
 
         if (!Vcb || !Vcb->Mounted)
             continue;
+        ExAcquireResourceExclusiveLite(&Vcb->Resource, TRUE);
         ExFatAcquireFatFs(Vcb);
-        disk_ioctl((BYTE)Index, CTRL_SYNC, NULL);
+        for (Entry = Vcb->FcbListHead.Flink;
+             Entry != &Vcb->FcbListHead;
+             Entry = Entry->Flink)
+        {
+            Fcb = CONTAINING_RECORD(Entry, EXFAT_FCB, ListEntry);
+            if (Fcb->FatFileOpen)
+                f_sync(&Fcb->FatFile);
+        }
+        ExFatFlushStorageDevice(Vcb);
         DrivePath[0] = '0' + (CHAR)Index;
         DrivePath[1] = ':';
         DrivePath[2] = ANSI_NULL;
         f_mount(NULL, DrivePath, 0);
         Vcb->Mounted = FALSE;
         ExFatReleaseFatFs(Vcb);
+        ExReleaseResourceLite(&Vcb->Resource);
     }
     ExReleaseResourceLite(&ExFatGlobalData->VolumeListResource);
     KeLeaveCriticalRegion();
