@@ -125,9 +125,7 @@ CywChipRecognize(
     NTSTATUS Status;
     ULONG RegData;
 
-    Status = CywClockRequest(Adapter, SBSDIO_ALP_AVAIL_REQ, SBSDIO_ALP_AVAIL);
-
-    Adapter->ChipCommonBase = SI_ENUM_BASE_DEFAULT;
+    CywClockRequest(Adapter, SBSDIO_ALP_AVAIL_REQ, SBSDIO_ALP_AVAIL);
 
     Status = CywBackplaneReadl(Adapter, SI_ENUM_BASE_DEFAULT, &RegData);
     if (!NT_SUCCESS(Status))
@@ -220,7 +218,8 @@ CywDownloadNvram(
     Status = CywRamWrite(Adapter, j, Stripped, OutLen);
     if (NT_SUCCESS(Status))
     {
-        Status = CywRamWrite(Adapter, j + OutLen, (PUCHAR)&Token, sizeof(Token));
+        ((PULONG)Adapter->ControlBuffer)[0] = Token;
+        Status = CywRamWrite(Adapter, j + OutLen, Adapter->ControlBuffer, sizeof(Token));
     }
 
     CywFree(Stripped);
@@ -228,6 +227,7 @@ CywDownloadNvram(
     return Status;
 }
 
+static
 NTSTATUS
 CywDownloadClm(
     _In_ PCYW_ADAPTER Adapter)
@@ -438,7 +438,6 @@ CywChipEnumerateCores(
 
         if (CoreId == BCMA_CORE_ARM_CR4)
         {
-            Adapter->Cr4CoreBase = RegBase;
             Adapter->Cr4WrapBase = WrapBase;
         }
 
@@ -587,7 +586,7 @@ CywChipBringUp(
         return Status;
     }
 
-    Adapter->RamSize = 0x0C8000;
+    Adapter->RamSize = CYW43455_RAMSIZE;
 
     Status = CywChipEnumerateCores(Adapter);
     if (!NT_SUCCESS(Status))
@@ -610,7 +609,7 @@ CywChipBringUp(
 
     CywChipSetActive(Adapter, Adapter->RstVec);
 
-    Status = CywClockRequest(Adapter, SBSDIO_HT_AVAIL_REQ, SBSDIO_HT_AVAIL);
+    CywClockRequest(Adapter, SBSDIO_HT_AVAIL_REQ, SBSDIO_HT_AVAIL);
 
     {
         UCHAR Devctl = 0;
@@ -655,12 +654,9 @@ CywChipBringUp(
                            CYW_HOSTINTMASK);
     }
 
-    Adapter->ChipUp = TRUE;
-    Adapter->FirmwareReady = TRUE;
-
     CywDownloadClm(Adapter);
 
-    CywSetCountry(Adapter, "FR");
+    CywSetCountry(Adapter, CYW_DEFAULT_COUNTRY);
 
     CywFilIovarSetInt(Adapter, "ampdu_rx", 1);
 

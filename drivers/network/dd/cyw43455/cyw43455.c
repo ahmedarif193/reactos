@@ -97,7 +97,7 @@ CywCardInterruptCallback(
     {
         return;
     }
-    KeSetEvent(&Adapter->RxEvent, IO_NETWORK_INCREMENT, FALSE);
+    KeSetEvent(&Adapter->BusEvent, IO_NETWORK_INCREMENT, FALSE);
 }
 
 static
@@ -151,6 +151,34 @@ CywDisableCardInterrupt(
     Adapter->CardIntRegistered = FALSE;
 }
 
+static
+VOID
+CywFreeAdapter(
+    _In_ PCYW_ADAPTER Adapter)
+{
+    CywSdioClose(Adapter);
+    CywFreeDmaBufs(Adapter);
+    CywFree(Adapter->ControlBuffer);
+    CywFree(Adapter->RxBuffer);
+    CywFree(Adapter->TxBuffer);
+    CywFree(Adapter->RegScratch);
+    while (Adapter->RxBufFree != NULL)
+    {
+        PCYW_RX_BUF Rb = Adapter->RxBufFree;
+        Adapter->RxBufFree = Rb->Next;
+        if (Rb->Mdl != NULL)
+            NdisFreeMdl(Rb->Mdl);
+        CywFree(Rb->Buffer);
+        CywFree(Rb);
+    }
+    if (Adapter->RxNblPool != NULL)
+    {
+        NdisFreeNetBufferListPool(Adapter->RxNblPool);
+    }
+    NdisFreeSpinLock(&Adapter->Lock);
+    CywFree(Adapter);
+}
+
 NDIS_STATUS
 NTAPI
 CywMiniportInitializeEx(
@@ -172,10 +200,10 @@ CywMiniportInitializeEx(
     }
 
     Adapter->MiniportAdapterHandle = NdisMiniportHandle;
-    Adapter->RxBufFree = NULL;
     NdisAllocateSpinLock(&Adapter->Lock);
     Adapter->CurrentPhyType = dot11_phy_type_ht;
     Adapter->CurrentOperationMode = DOT11_OPERATION_MODE_EXTENSIBLE_STATION;
+    Adapter->AuthAlgorithm = DOT11_AUTH_ALGO_80211_OPEN;
     Adapter->RadioOn = TRUE;
     Adapter->CurrentBackplaneWindow = 0xFFFFFFFF;
 
@@ -190,9 +218,22 @@ CywMiniportInitializeEx(
     Adapter->ControlBuffer = CywAllocate(CYW_CONTROL_BUFFER_SIZE);
     Adapter->RxBuffer = CywAllocate(CYW_RX_BUFFER_SIZE);
     Adapter->TxBuffer = CywAllocate(CYW_CONTROL_BUFFER_SIZE);
-    Adapter->RegScratch = CywAllocate(64);
+    Adapter->RegScratch = CywAllocate(CYW_REG_SCRATCH_SIZE);
     if (Adapter->ControlBuffer == NULL || Adapter->RxBuffer == NULL ||
         Adapter->TxBuffer == NULL || Adapter->RegScratch == NULL)
+    {
+        Status = NDIS_STATUS_RESOURCES;
+        goto Fail;
+    }
+
+    NtStatus = CywRegisterDmaBuf(Adapter, Adapter->ControlBuffer, CYW_CONTROL_BUFFER_SIZE);
+    if (NT_SUCCESS(NtStatus))
+        NtStatus = CywRegisterDmaBuf(Adapter, Adapter->TxBuffer, CYW_CONTROL_BUFFER_SIZE);
+    if (NT_SUCCESS(NtStatus))
+        NtStatus = CywRegisterDmaBuf(Adapter, Adapter->RxBuffer, CYW_RX_BUFFER_SIZE);
+    if (NT_SUCCESS(NtStatus))
+        NtStatus = CywRegisterDmaBuf(Adapter, Adapter->RegScratch, CYW_REG_SCRATCH_SIZE);
+    if (!NT_SUCCESS(NtStatus))
     {
         Status = NDIS_STATUS_RESOURCES;
         goto Fail;
@@ -200,7 +241,7 @@ CywMiniportInitializeEx(
     KeInitializeMutex(&Adapter->F2Lock, 0);
     KeInitializeMutex(&Adapter->CmdLock, 0);
     KeInitializeEvent(&Adapter->CtrlEvent, NotificationEvent, FALSE);
-    KeInitializeEvent(&Adapter->RxEvent, SynchronizationEvent, FALSE);
+    KeInitializeEvent(&Adapter->BusEvent, SynchronizationEvent, FALSE);
     InitializeListHead(&Adapter->TxQueue);
     KeInitializeSpinLock(&Adapter->TxLock);
 
@@ -253,7 +294,7 @@ CywMiniportInitializeEx(
     NdisMGetDeviceProperty(NdisMiniportHandle,
                            &Adapter->Pdo,
                            NULL,
-                           &Adapter->NextDeviceObject,
+                           NULL,
                            NULL,
                            NULL);
     if (Adapter->Pdo == NULL)
@@ -283,13 +324,14 @@ CywMiniportInitializeEx(
     }
 
     Adapter->InterruptWorkItem = NdisAllocateIoWorkItem(NdisMiniportHandle);
-    if (Adapter->InterruptWorkItem == NULL)
+    Adapter->LinkWorkItem = NdisAllocateIoWorkItem(NdisMiniportHandle);
+    if (Adapter->InterruptWorkItem == NULL || Adapter->LinkWorkItem == NULL)
     {
         Status = NDIS_STATUS_RESOURCES;
         goto Fail;
     }
 
-    NtStatus = CywStartRxThread(Adapter);
+    NtStatus = CywStartBusThread(Adapter);
     if (!NT_SUCCESS(NtStatus))
     {
         Status = NDIS_STATUS_FAILURE;
@@ -301,31 +343,16 @@ CywMiniportInitializeEx(
     return NDIS_STATUS_SUCCESS;
 
 Fail:
-    CywStopRxThread(Adapter);
+    CywStopBusThread(Adapter);
     if (Adapter->InterruptWorkItem != NULL)
     {
         NdisFreeIoWorkItem(Adapter->InterruptWorkItem);
     }
-    CywSdioClose(Adapter);
-    CywFree(Adapter->ControlBuffer);
-    CywFree(Adapter->RxBuffer);
-    CywFree(Adapter->TxBuffer);
-    CywFree(Adapter->RegScratch);
-    while (Adapter->RxBufFree != NULL)
+    if (Adapter->LinkWorkItem != NULL)
     {
-        PCYW_RX_BUF Rb = Adapter->RxBufFree;
-        Adapter->RxBufFree = Rb->Next;
-        if (Rb->Mdl != NULL)
-            NdisFreeMdl(Rb->Mdl);
-        CywFree(Rb->Buffer);
-        CywFree(Rb);
+        NdisFreeIoWorkItem(Adapter->LinkWorkItem);
     }
-    if (Adapter->RxNblPool != NULL)
-    {
-        NdisFreeNetBufferListPool(Adapter->RxNblPool);
-    }
-    NdisFreeSpinLock(&Adapter->Lock);
-    CywFree(Adapter);
+    CywFreeAdapter(Adapter);
     return Status;
 }
 
@@ -341,39 +368,34 @@ CywMiniportHaltEx(
 
     Adapter->Halting = TRUE;
 
-    CywStopRxThread(Adapter);
+    CywStopBusThread(Adapter);
     CywDrainTxQueue(Adapter);
 
     CywDisableCardInterrupt(Adapter);
 
     KeFlushQueuedDpcs();
 
+    /* Outstanding scan/connect/link work items must finish before their
+     * work-item handles can be freed */
+    while (Adapter->WorkItemsPending != 0)
+    {
+        LARGE_INTEGER Delay;
+        Delay.QuadPart = -100000;   /* 10 ms */
+        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+    }
+
     if (Adapter->InterruptWorkItem != NULL)
     {
         NdisFreeIoWorkItem(Adapter->InterruptWorkItem);
         Adapter->InterruptWorkItem = NULL;
     }
+    if (Adapter->LinkWorkItem != NULL)
+    {
+        NdisFreeIoWorkItem(Adapter->LinkWorkItem);
+        Adapter->LinkWorkItem = NULL;
+    }
 
-    CywSdioClose(Adapter);
-    CywFree(Adapter->ControlBuffer);
-    CywFree(Adapter->RxBuffer);
-    CywFree(Adapter->TxBuffer);
-    CywFree(Adapter->RegScratch);
-    while (Adapter->RxBufFree != NULL)
-    {
-        PCYW_RX_BUF Rb = Adapter->RxBufFree;
-        Adapter->RxBufFree = Rb->Next;
-        if (Rb->Mdl != NULL)
-            NdisFreeMdl(Rb->Mdl);
-        CywFree(Rb->Buffer);
-        CywFree(Rb);
-    }
-    if (Adapter->RxNblPool != NULL)
-    {
-        NdisFreeNetBufferListPool(Adapter->RxNblPool);
-    }
-    NdisFreeSpinLock(&Adapter->Lock);
-    CywFree(Adapter);
+    CywFreeAdapter(Adapter);
 }
 
 NDIS_STATUS
@@ -425,29 +447,33 @@ typedef struct _CYW_TX_WORK
     LIST_ENTRY Link;
     PNET_BUFFER_LIST Nbl;
     ULONG EthLen;
-    UCHAR Eth[CYW_MAX_FRAME_SIZE];
+    UCHAR Eth[1];
 } CYW_TX_WORK, *PCYW_TX_WORK;
 
-static
+/* Convert the 802.11+SNAP frame in the NET_BUFFER to an 802.3 frame built at
+ * Dest. Contiguous frames are converted from the NBL data directly; fragmented
+ * ones are gathered into Dest first and converted in place, so no separate
+ * scratch buffer is needed. Dest must hold the full 802.11 frame length. */
 ULONG
 CywBuildEthFromNbl(
     _In_ PNET_BUFFER Nb,
-    _Out_writes_(CYW_MAX_FRAME_SIZE) PUCHAR Scratch,
-    _Out_writes_(CYW_MAX_FRAME_SIZE) PUCHAR Eth)
+    _Out_writes_(Capacity) PUCHAR Dest,
+    _In_ ULONG Capacity)
 {
     ULONG FrameLen = NET_BUFFER_DATA_LENGTH(Nb);
     PUCHAR Frame;
     PCYW_DOT11_HEADER Dot11;
     PCYW_SNAP_HEADER Snap;
+    UCHAR EthHeader[sizeof(CYW_ETHER_HEADER)];
     ULONG PayloadLen;
 
     if (FrameLen < sizeof(CYW_DOT11_HEADER) + sizeof(CYW_SNAP_HEADER) ||
-        FrameLen > CYW_MAX_FRAME_SIZE)
+        FrameLen > Capacity)
     {
         return 0;
     }
 
-    Frame = NdisGetDataBuffer(Nb, FrameLen, Scratch, 1, 0);
+    Frame = NdisGetDataBuffer(Nb, FrameLen, Dest, 1, 0);
     if (Frame == NULL)
     {
         return 0;
@@ -457,14 +483,31 @@ CywBuildEthFromNbl(
     Snap = (PCYW_SNAP_HEADER)(Frame + sizeof(CYW_DOT11_HEADER));
     PayloadLen = FrameLen - sizeof(CYW_DOT11_HEADER) - sizeof(CYW_SNAP_HEADER);
 
-    RtlCopyMemory(Eth, Dot11->Address3, CYW_ADDRESS_LENGTH);
-    RtlCopyMemory(Eth + CYW_ADDRESS_LENGTH, Dot11->Address2, CYW_ADDRESS_LENGTH);
-    Eth[12] = Snap->EtherType[0];
-    Eth[13] = Snap->EtherType[1];
-    RtlCopyMemory(Eth + sizeof(CYW_ETHER_HEADER),
+    RtlCopyMemory(EthHeader, Dot11->Address3, CYW_ADDRESS_LENGTH);
+    RtlCopyMemory(EthHeader + CYW_ADDRESS_LENGTH, Dot11->Address2, CYW_ADDRESS_LENGTH);
+    EthHeader[12] = Snap->EtherType[0];
+    EthHeader[13] = Snap->EtherType[1];
+
+    RtlMoveMemory(Dest + sizeof(CYW_ETHER_HEADER),
                   Frame + sizeof(CYW_DOT11_HEADER) + sizeof(CYW_SNAP_HEADER),
                   PayloadLen);
+    RtlCopyMemory(Dest, EthHeader, sizeof(EthHeader));
     return sizeof(CYW_ETHER_HEADER) + PayloadLen;
+}
+
+BOOLEAN
+CywTxAllowed(
+    _In_ PCYW_ADAPTER Adapter,
+    _In_reads_(EthLen) PUCHAR Eth,
+    _In_ ULONG EthLen)
+{
+    if (Adapter->Associated)
+    {
+        return TRUE;
+    }
+    /* Only EAPOL handshake frames may pass before association completes */
+    return EthLen >= sizeof(CYW_ETHER_HEADER) &&
+           (USHORT)((Eth[12] << 8) | Eth[13]) == ETH_P_EAPOL;
 }
 
 VOID
@@ -498,6 +541,44 @@ CywDrainTxQueue(
     }
 }
 
+/* Defer a frame the immediate path could not take: reframe it into a
+ * right-sized work item and hand it to the bus thread. */
+static
+BOOLEAN
+CywQueueTxWork(
+    _In_ PCYW_ADAPTER Adapter,
+    _In_ PNET_BUFFER_LIST Nbl,
+    _In_ PNET_BUFFER Nb)
+{
+    ULONG FrameLen = NET_BUFFER_DATA_LENGTH(Nb);
+    PCYW_TX_WORK Work;
+    ULONG EthLen;
+
+    if (FrameLen > CYW_MAX_FRAME_SIZE)
+    {
+        return FALSE;
+    }
+
+    Work = CywAllocate(FIELD_OFFSET(CYW_TX_WORK, Eth) + FrameLen);
+    if (Work == NULL)
+    {
+        return FALSE;
+    }
+
+    EthLen = CywBuildEthFromNbl(Nb, Work->Eth, FrameLen);
+    if (EthLen == 0 || !CywTxAllowed(Adapter, Work->Eth, EthLen))
+    {
+        CywFree(Work);
+        return FALSE;
+    }
+
+    Work->EthLen = EthLen;
+    Work->Nbl = Nbl;
+    ExInterlockedInsertTailList(&Adapter->TxQueue, &Work->Link, &Adapter->TxLock);
+    KeSetEvent(&Adapter->BusEvent, IO_NETWORK_INCREMENT, FALSE);
+    return TRUE;
+}
+
 VOID
 NTAPI
 CywMiniportSendNetBufferLists(
@@ -528,40 +609,20 @@ CywMiniportSendNetBufferLists(
 
         if (Nb != NULL)
         {
-            UCHAR Scratch[CYW_MAX_FRAME_SIZE];
-            UCHAR Eth[CYW_MAX_FRAME_SIZE];
-            ULONG EthLen = CywBuildEthFromNbl(Nb, Scratch, Eth);
-            BOOLEAN IsEapol = (EthLen >= 14 && Eth[12] == 0x88 && Eth[13] == 0x8E);
+            NTSTATUS SendStatus = STATUS_DEVICE_BUSY;
 
-            if (EthLen != 0 && (Adapter->Associated || IsEapol))
+            if (KeGetCurrentIrql() == PASSIVE_LEVEL)
             {
-                NTSTATUS SendStatus = STATUS_DEVICE_BUSY;
+                SendStatus = CywSdpcmSendNb(Adapter, Nb);
+            }
 
-                if (KeGetCurrentIrql() == PASSIVE_LEVEL)
-                {
-                    SendStatus = CywSdpcmSendData(Adapter, Eth, EthLen);
-                    if (NT_SUCCESS(SendStatus))
-                    {
-                        NblStatus = NDIS_STATUS_SUCCESS;
-                    }
-                }
-
-                if (SendStatus == STATUS_DEVICE_BUSY)
-                {
-                    PCYW_TX_WORK Work = CywAllocate(sizeof(CYW_TX_WORK));
-
-                    if (Work != NULL)
-                    {
-                        RtlCopyMemory(Work->Eth, Eth, EthLen);
-                        Work->EthLen = EthLen;
-                        Work->Nbl = Nbl;
-                        ExInterlockedInsertTailList(&Adapter->TxQueue,
-                                                    &Work->Link,
-                                                    &Adapter->TxLock);
-                        KeSetEvent(&Adapter->RxEvent, IO_NETWORK_INCREMENT, FALSE);
-                        Deferred = TRUE;
-                    }
-                }
+            if (NT_SUCCESS(SendStatus))
+            {
+                NblStatus = NDIS_STATUS_SUCCESS;
+            }
+            else if (SendStatus == STATUS_DEVICE_BUSY)
+            {
+                Deferred = CywQueueTxWork(Adapter, Nbl, Nb);
             }
         }
 
