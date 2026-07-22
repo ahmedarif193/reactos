@@ -100,13 +100,89 @@ CywSdioWriteByte(
     return SdBusSubmitRequest(Adapter->SdBus.Context, &Packet);
 }
 
+NTSTATUS
+CywRegisterDmaBuf(
+    _In_ PCYW_ADAPTER Adapter,
+    _In_ PUCHAR Buffer,
+    _In_ ULONG Size)
+{
+    PCYW_DMA_BUF Buf;
+    ULONG MdlSize;
+
+    ASSERT(Adapter->DmaBufCount < CYW_DMA_BUF_COUNT);
+    Buf = &Adapter->DmaBufs[Adapter->DmaBufCount];
+
+    MdlSize = sizeof(MDL) +
+              sizeof(PFN_NUMBER) * ADDRESS_AND_SIZE_TO_SPAN_PAGES(Buffer, Size);
+    Buf->Mdl = CywAllocate(MdlSize);
+    if (Buf->Mdl == NULL)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    Buf->Buffer = Buffer;
+    Buf->Size = Size;
+    Adapter->DmaBufCount++;
+    return STATUS_SUCCESS;
+}
+
+VOID
+CywFreeDmaBufs(
+    _In_ PCYW_ADAPTER Adapter)
+{
+    ULONG i;
+
+    for (i = 0; i < Adapter->DmaBufCount; i++)
+    {
+        CywFree(Adapter->DmaBufs[i].Mdl);
+        Adapter->DmaBufs[i].Mdl = NULL;
+    }
+    Adapter->DmaBufCount = 0;
+}
+
+/* Transfers overwhelmingly target one of the persistent adapter buffers, each
+ * of which is serialized by its owning lock. Those reuse a preallocated MDL,
+ * re-pointed at the requested range, instead of allocating one per command. */
+static
+PMDL
+CywAcquireMdl(
+    _In_ PCYW_ADAPTER Adapter,
+    _In_ PUCHAR Buffer,
+    _In_ ULONG Length,
+    _Out_ PBOOLEAN Owned)
+{
+    PMDL Mdl;
+    ULONG i;
+
+    for (i = 0; i < Adapter->DmaBufCount; i++)
+    {
+        PCYW_DMA_BUF Buf = &Adapter->DmaBufs[i];
+
+        if (Buffer >= Buf->Buffer && Buffer + Length <= Buf->Buffer + Buf->Size)
+        {
+            Mdl = Buf->Mdl;
+            MmInitializeMdl(Mdl, Buffer, Length);
+            MmBuildMdlForNonPagedPool(Mdl);
+            *Owned = FALSE;
+            return Mdl;
+        }
+    }
+
+    Mdl = IoAllocateMdl(Buffer, Length, FALSE, FALSE, NULL);
+    if (Mdl != NULL)
+    {
+        MmBuildMdlForNonPagedPool(Mdl);
+    }
+    *Owned = TRUE;
+    return Mdl;
+}
+
 static
 NTSTATUS
 CywSdioRw(
     _In_ PCYW_ADAPTER Adapter,
     _In_ UCHAR Function,
     _In_ BOOLEAN Write,
-    _In_ BOOLEAN Increment,
     _In_ ULONG Address,
     _In_ PUCHAR Buffer,
     _In_ ULONG Length,
@@ -115,20 +191,20 @@ CywSdioRw(
 {
     SDBUS_REQUEST_PACKET Packet;
     PMDL Mdl;
+    BOOLEAN OwnedMdl;
     NTSTATUS Status;
 
-    Mdl = IoAllocateMdl(Buffer, Length, FALSE, FALSE, NULL);
+    Mdl = CywAcquireMdl(Adapter, Buffer, Length, &OwnedMdl);
     if (Mdl == NULL)
     {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
-    MmBuildMdlForNonPagedPool(Mdl);
 
     SD_INIT_REQUEST_PACKET(&Packet, SDRF_IO_RW_EXTENDED);
     Packet.Parameters.IoExtended.Function = Function;
     Packet.Parameters.IoExtended.Write = Write;
     Packet.Parameters.IoExtended.BlockMode = BlockMode;
-    Packet.Parameters.IoExtended.Increment = Increment;
+    Packet.Parameters.IoExtended.Increment = TRUE;
     Packet.Parameters.IoExtended.Address = Address;
     Packet.Parameters.IoExtended.BlockCount = BlockMode ? (Length / BlockSize) : Length;
     Packet.Parameters.IoExtended.BlockSize = BlockSize;
@@ -136,7 +212,10 @@ CywSdioRw(
 
     Status = SdBusSubmitRequest(Adapter->SdBus.Context, &Packet);
 
-    IoFreeMdl(Mdl);
+    if (OwnedMdl)
+    {
+        IoFreeMdl(Mdl);
+    }
     return Status;
 }
 
@@ -148,7 +227,7 @@ CywSdioReadBytes(
     _Out_ PUCHAR Buffer,
     _In_ ULONG Length)
 {
-    return CywSdioRw(Adapter, Function, FALSE, TRUE, Address, Buffer, Length, FALSE, 0);
+    return CywSdioRw(Adapter, Function, FALSE, Address, Buffer, Length, FALSE, 0);
 }
 
 NTSTATUS
@@ -160,7 +239,7 @@ CywSdioReadBlocks(
     _In_ ULONG Length,
     _In_ ULONG BlockSize)
 {
-    return CywSdioRw(Adapter, Function, FALSE, TRUE, Address, Buffer, Length, TRUE, BlockSize);
+    return CywSdioRw(Adapter, Function, FALSE, Address, Buffer, Length, TRUE, BlockSize);
 }
 
 NTSTATUS
@@ -171,7 +250,7 @@ CywSdioWriteBytes(
     _In_ PUCHAR Buffer,
     _In_ ULONG Length)
 {
-    return CywSdioRw(Adapter, Function, TRUE, TRUE, Address, Buffer, Length, FALSE, 0);
+    return CywSdioRw(Adapter, Function, TRUE, Address, Buffer, Length, FALSE, 0);
 }
 
 NTSTATUS
@@ -183,7 +262,7 @@ CywSdioWriteBlocks(
     _In_ ULONG Length,
     _In_ ULONG BlockSize)
 {
-    return CywSdioRw(Adapter, Function, TRUE, TRUE, Address, Buffer, Length, TRUE, BlockSize);
+    return CywSdioRw(Adapter, Function, TRUE, Address, Buffer, Length, TRUE, BlockSize);
 }
 
 NTSTATUS
@@ -278,22 +357,7 @@ CywBackplaneReadl(
     _In_ ULONG Address,
     _Out_ PULONG Value)
 {
-    NTSTATUS Status;
-    ULONG Offset;
-
-    Status = CywBackplaneSetWindow(Adapter, Address);
-    if (!NT_SUCCESS(Status))
-    {
-        return Status;
-    }
-
-    Offset = (Address & SBSDIO_SB_OFT_ADDR_MASK) | SBSDIO_SB_ACCESS_2_4B_FLAG;
-    Status = CywSdioReadBytes(Adapter, CYW_SDIO_FUNC_BACKPLANE, Offset, Adapter->ControlBuffer, 4);
-    if (NT_SUCCESS(Status) && Value != NULL)
-    {
-        *Value = ((PULONG)Adapter->ControlBuffer)[0];
-    }
-    return Status;
+    return CywBackplaneReadlSc(Adapter, Address, Value, Adapter->ControlBuffer);
 }
 
 NTSTATUS
@@ -302,18 +366,7 @@ CywBackplaneWritel(
     _In_ ULONG Address,
     _In_ ULONG Value)
 {
-    NTSTATUS Status;
-    ULONG Offset;
-
-    Status = CywBackplaneSetWindow(Adapter, Address);
-    if (!NT_SUCCESS(Status))
-    {
-        return Status;
-    }
-
-    ((PULONG)Adapter->ControlBuffer)[0] = Value;
-    Offset = (Address & SBSDIO_SB_OFT_ADDR_MASK) | SBSDIO_SB_ACCESS_2_4B_FLAG;
-    return CywSdioWriteBytes(Adapter, CYW_SDIO_FUNC_BACKPLANE, Offset, Adapter->ControlBuffer, 4);
+    return CywBackplaneWritelSc(Adapter, Address, Value, Adapter->ControlBuffer);
 }
 
 NTSTATUS
@@ -398,7 +451,7 @@ CywRamWrite(
                 Blocks = 64;
             }
             Transfer = Blocks * CYW_F1_BLOCKSIZE;
-            Status = CywSdioRw(Adapter, CYW_SDIO_FUNC_BACKPLANE, TRUE, TRUE,
+            Status = CywSdioRw(Adapter, CYW_SDIO_FUNC_BACKPLANE, TRUE,
                                WindowOffset | SBSDIO_SB_ACCESS_2_4B_FLAG,
                                Buffer, Transfer, TRUE, CYW_F1_BLOCKSIZE);
         }
