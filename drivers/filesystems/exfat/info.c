@@ -91,7 +91,7 @@ ExFatQueryInformation(
     if (!Fcb)
         return STATUS_INVALID_HANDLE;
 
-    ExAcquireResourceExclusiveLite(&Fcb->MainResource, TRUE);
+    ExAcquireResourceSharedLite(&Fcb->MainResource, TRUE);
     RtlZeroMemory(Buffer, Length);
 
     switch (Stack->Parameters.QueryFile.FileInformationClass)
@@ -249,21 +249,16 @@ ExFatSetBasicInformation(
     PEXFAT_FCB Fcb,
     PFILE_BASIC_INFORMATION Information)
 {
-    PCHAR Path;
     FILINFO FatInformation;
     BYTE Attributes;
     FRESULT Result = FR_OK;
-
-    Path = ExFatBuildFatPath(Fcb->Vcb, &Fcb->PathName);
-    if (!Path)
-        return STATUS_INSUFFICIENT_RESOURCES;
 
     RtlZeroMemory(&FatInformation, sizeof(FatInformation));
     ExFatAcquireFatFs(Fcb->Vcb);
     if (Information->FileAttributes)
     {
         Attributes = ExFatNtAttributesToFat(Information->FileAttributes);
-        Result = f_chmod(Path, Attributes, AM_RDO | AM_HID | AM_SYS | AM_ARC);
+        Result = f_chmod(Fcb->FatPath, Attributes, AM_RDO | AM_HID | AM_SYS | AM_ARC);
     }
     if (Result == FR_OK && Information->LastWriteTime.QuadPart)
     {
@@ -276,10 +271,9 @@ ExFatSetBasicInformation(
                                      &FatInformation.crdate,
                                      &FatInformation.crtime);
         }
-        Result = f_utime(Path, &FatInformation);
+        Result = f_utime(Fcb->FatPath, &FatInformation);
     }
     ExFatReleaseFatFs(Fcb->Vcb);
-    ExFreePoolWithTag(Path, TAG_EXFAT_PATH);
 
     if (Result == FR_OK)
     {
@@ -304,14 +298,12 @@ ExFatSetEndOfFile(
     PLARGE_INTEGER EndOfFile)
 {
     FRESULT Result;
-    ULONG ClusterSize;
     LARGE_INTEGER OldFileSize;
     IO_STATUS_BLOCK IoStatus;
 
     if (EndOfFile->QuadPart < 0)
         return STATUS_INVALID_PARAMETER;
-    if (!Ccb->HandleOpen || Ccb->IsDirectory ||
-        !(Ccb->DesiredAccess & (FILE_WRITE_DATA | FILE_APPEND_DATA)))
+    if (!(Ccb->DesiredAccess & (FILE_WRITE_DATA | FILE_APPEND_DATA)))
         return STATUS_ACCESS_DENIED;
     if (EndOfFile->QuadPart < Fcb->Header.FileSize.QuadPart &&
         !MmCanFileBeTruncated(&Fcb->SectionObjectPointers, EndOfFile))
@@ -351,9 +343,8 @@ ExFatSetEndOfFile(
     {
         Fcb->Header.FileSize = *EndOfFile;
         Fcb->Header.ValidDataLength = *EndOfFile;
-        ClusterSize = Fcb->Vcb->FileSystem.csize * Fcb->Vcb->BytesPerSector;
         Fcb->Header.AllocationSize.QuadPart = ExFatRoundUp(EndOfFile->QuadPart,
-                                                           ClusterSize);
+                                                           Fcb->Vcb->BytesPerCluster);
     }
     ExFatReleaseFatFs(Fcb->Vcb);
 
@@ -452,8 +443,7 @@ ExFatSetInformation(
                 Status = STATUS_CANNOT_DELETE;
             else
             {
-                Ccb->DeleteOnClose = ((PFILE_DISPOSITION_INFORMATION)Buffer)->DeleteFile;
-                Fcb->DeletePending = Ccb->DeleteOnClose;
+                Fcb->DeletePending = ((PFILE_DISPOSITION_INFORMATION)Buffer)->DeleteFile;
                 Status = STATUS_SUCCESS;
             }
             break;
@@ -464,6 +454,22 @@ ExFatSetInformation(
     }
     ExReleaseResourceLite(&Fcb->MainResource);
     return Status;
+}
+
+static NTSTATUS
+ExFatQueryFreeClusters(
+    PEXFAT_VCB Vcb,
+    DWORD* FreeClusters)
+{
+    CHAR DrivePath[3];
+    FATFS* FileSystem;
+    FRESULT Result;
+
+    ExFatBuildDrivePath(Vcb, DrivePath);
+    ExFatAcquireFatFs(Vcb);
+    Result = f_getfree(DrivePath, FreeClusters, &FileSystem);
+    ExFatReleaseFatFs(Vcb);
+    return ExFatMapResult(Result);
 }
 
 static NTSTATUS
@@ -502,8 +508,6 @@ ExFatQueryVolumeInformation(
     ULONG Length = Stack->Parameters.QueryVolume.Length;
     ULONG Written = 0;
     DWORD FreeClusters;
-    FATFS* FileSystem;
-    FRESULT Result;
     NTSTATUS Status;
 
     if (DeviceObject == ExFatGlobalData->DeviceObject || !Buffer)
@@ -524,23 +528,14 @@ ExFatQueryVolumeInformation(
                 Status = STATUS_BUFFER_TOO_SMALL;
                 break;
             }
-            {
-                CHAR DrivePath[3] = { '0' + Vcb->DriveNumber, ':', ANSI_NULL };
-                ExFatAcquireFatFs(Vcb);
-                Result = f_getfree(DrivePath, &FreeClusters, &FileSystem);
-                ExFatReleaseFatFs(Vcb);
-            }
-            if (Result != FR_OK)
-            {
-                Status = ExFatMapResult(Result);
+            Status = ExFatQueryFreeClusters(Vcb, &FreeClusters);
+            if (!NT_SUCCESS(Status))
                 break;
-            }
-            ((PFILE_FS_SIZE_INFORMATION)Buffer)->TotalAllocationUnits.QuadPart = FileSystem->n_fatent - 2;
+            ((PFILE_FS_SIZE_INFORMATION)Buffer)->TotalAllocationUnits.QuadPart = Vcb->FileSystem.n_fatent - 2;
             ((PFILE_FS_SIZE_INFORMATION)Buffer)->AvailableAllocationUnits.QuadPart = FreeClusters;
-            ((PFILE_FS_SIZE_INFORMATION)Buffer)->SectorsPerAllocationUnit = FileSystem->csize;
+            ((PFILE_FS_SIZE_INFORMATION)Buffer)->SectorsPerAllocationUnit = Vcb->FileSystem.csize;
             ((PFILE_FS_SIZE_INFORMATION)Buffer)->BytesPerSector = Vcb->BytesPerSector;
             Written = sizeof(FILE_FS_SIZE_INFORMATION);
-            Status = STATUS_SUCCESS;
             break;
 
         case FileFsFullSizeInformation:
@@ -549,24 +544,15 @@ ExFatQueryVolumeInformation(
                 Status = STATUS_BUFFER_TOO_SMALL;
                 break;
             }
-            {
-                CHAR DrivePath[3] = { '0' + Vcb->DriveNumber, ':', ANSI_NULL };
-                ExFatAcquireFatFs(Vcb);
-                Result = f_getfree(DrivePath, &FreeClusters, &FileSystem);
-                ExFatReleaseFatFs(Vcb);
-            }
-            if (Result != FR_OK)
-            {
-                Status = ExFatMapResult(Result);
+            Status = ExFatQueryFreeClusters(Vcb, &FreeClusters);
+            if (!NT_SUCCESS(Status))
                 break;
-            }
-            ((PFILE_FS_FULL_SIZE_INFORMATION)Buffer)->TotalAllocationUnits.QuadPart = FileSystem->n_fatent - 2;
+            ((PFILE_FS_FULL_SIZE_INFORMATION)Buffer)->TotalAllocationUnits.QuadPart = Vcb->FileSystem.n_fatent - 2;
             ((PFILE_FS_FULL_SIZE_INFORMATION)Buffer)->CallerAvailableAllocationUnits.QuadPart = FreeClusters;
             ((PFILE_FS_FULL_SIZE_INFORMATION)Buffer)->ActualAvailableAllocationUnits.QuadPart = FreeClusters;
-            ((PFILE_FS_FULL_SIZE_INFORMATION)Buffer)->SectorsPerAllocationUnit = FileSystem->csize;
+            ((PFILE_FS_FULL_SIZE_INFORMATION)Buffer)->SectorsPerAllocationUnit = Vcb->FileSystem.csize;
             ((PFILE_FS_FULL_SIZE_INFORMATION)Buffer)->BytesPerSector = Vcb->BytesPerSector;
             Written = sizeof(FILE_FS_FULL_SIZE_INFORMATION);
-            Status = STATUS_SUCCESS;
             break;
 
         case FileFsDeviceInformation:

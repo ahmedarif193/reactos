@@ -12,11 +12,27 @@
 
 PARTITION VolToPart[FF_VOLUMES] = { { 0, 0 } };
 
+/*
+ * Mirrors of ff.c R0.16 internals (FA_MODIFIED, the FF_FS_TINY win/wflag
+ * direct-transfer coherence rules in f_read()/f_write(), and the FFOBJID.stat
+ * contiguous-chain encoding). On any FatFs upgrade, re-verify each against
+ * ff.c before bumping this assert.
+ */
+C_ASSERT(FFCONF_DEF == 80386);
+#define EXFAT_FA_MODIFIED 0x40 /* ff.c FA_MODIFIED: dir entry needs f_sync() */
+
+#define EXFAT_SECTOR_CACHE_SIZE  (128 * 1024)
+#define EXFAT_SECTOR_CACHE_EMPTY ((LBA_t)~0ULL)
+
 typedef struct _EXFAT_IO_CONTEXT
 {
     KEVENT Event;
     IO_STATUS_BLOCK IoStatus;
+    BOOLEAN UnlockPages;
 } EXFAT_IO_CONTEXT, *PEXFAT_IO_CONTEXT;
+
+static VOID ExFatInvalidateSectorCache(PEXFAT_VCB Vcb);
+static VOID ExFatInvalidateSectorCacheRange(PEXFAT_VCB Vcb, LBA_t Sector, UINT Count);
 
 NTSTATUS
 ExFatMapResult(
@@ -96,36 +112,40 @@ ExFatInvalidateFcbClusterMap(
 }
 
 FRESULT
+ExFatCloseFcbFile(
+    PEXFAT_FCB Fcb)
+{
+    FRESULT Result;
+
+    if (!Fcb->FatFileOpen)
+        return FR_OK;
+
+    ExFatInvalidateFcbClusterMap(Fcb);
+    Result = f_close(&Fcb->FatFile);
+    Fcb->FatFileOpen = FALSE;
+    Fcb->FatFileWritable = FALSE;
+    return Result;
+}
+
+FRESULT
 ExFatEnsureFcbFile(
     PEXFAT_FCB Fcb,
     BOOLEAN WriteAccess)
 {
-    PCHAR Path;
     BYTE Mode;
     FRESULT Result;
 
     if (Fcb->FatFileOpen && (!WriteAccess || Fcb->FatFileWritable))
         return FR_OK;
 
-    if (Fcb->FatFileOpen)
-    {
-        ExFatInvalidateFcbClusterMap(Fcb);
-        Result = f_close(&Fcb->FatFile);
-        Fcb->FatFileOpen = FALSE;
-        Fcb->FatFileWritable = FALSE;
-        if (Result != FR_OK)
-            return Result;
-    }
-
-    Path = ExFatBuildFatPath(Fcb->Vcb, &Fcb->PathName);
-    if (!Path)
-        return FR_NOT_ENOUGH_CORE;
+    Result = ExFatCloseFcbFile(Fcb);
+    if (Result != FR_OK)
+        return Result;
 
     Mode = FA_READ | FA_OPEN_EXISTING;
     if (WriteAccess)
         Mode |= FA_WRITE;
-    Result = f_open(&Fcb->FatFile, Path, Mode);
-    ExFreePoolWithTag(Path, TAG_EXFAT_PATH);
+    Result = f_open(&Fcb->FatFile, Fcb->FatPath, Mode);
     if (Result == FR_OK)
     {
         Fcb->FatFileOpen = TRUE;
@@ -208,7 +228,7 @@ ExFatZeroFileRange(
     FSIZE_t Start,
     FSIZE_t End)
 {
-    PVOID ZeroBuffer;
+    PEXFAT_VCB Vcb = Fcb->Vcb;
     FSIZE_t Remaining;
     UINT Chunk;
     UINT Written;
@@ -217,10 +237,16 @@ ExFatZeroFileRange(
     if (End <= Start)
         return FR_OK;
 
-    ZeroBuffer = ExAllocatePoolWithTag(NonPagedPool, 64 * 1024, TAG_EXFAT_IO);
-    if (!ZeroBuffer)
-        return FR_NOT_ENOUGH_CORE;
-    RtlZeroMemory(ZeroBuffer, 64 * 1024);
+    /* Callers hold the FatFs lock, which also guards this lazy allocation. */
+    if (!Vcb->ZeroBuffer)
+    {
+        Vcb->ZeroBuffer = ExAllocatePoolWithTag(NonPagedPool,
+                                                64 * 1024,
+                                                TAG_EXFAT_IO);
+        if (!Vcb->ZeroBuffer)
+            return FR_NOT_ENOUGH_CORE;
+        RtlZeroMemory(Vcb->ZeroBuffer, 64 * 1024);
+    }
 
     ExFatInvalidateFcbClusterMap(Fcb);
     Result = f_lseek(&Fcb->FatFile, Start);
@@ -229,13 +255,12 @@ ExFatZeroFileRange(
     {
         Chunk = (UINT)min(Remaining, (FSIZE_t)(64 * 1024));
         Written = 0;
-        Result = f_write(&Fcb->FatFile, ZeroBuffer, Chunk, &Written);
+        Result = f_write(&Fcb->FatFile, Vcb->ZeroBuffer, Chunk, &Written);
         if (Result == FR_OK && Written != Chunk)
             Result = FR_DISK_ERR;
         Remaining -= Written;
     }
 
-    ExFreePoolWithTag(ZeroBuffer, TAG_EXFAT_IO);
     return Result;
 }
 
@@ -299,31 +324,145 @@ ExFatReadWriteCompletion(
 
     IoContext->IoStatus = Irp->IoStatus;
 
-    if (Irp->Flags & IRP_BUFFERED_IO)
-    {
-        if ((Irp->Flags & IRP_INPUT_OPERATION) &&
-            Irp->IoStatus.Status != STATUS_VERIFY_REQUIRED &&
-            !NT_ERROR(Irp->IoStatus.Status))
-        {
-            RtlCopyMemory(Irp->UserBuffer,
-                          Irp->AssociatedIrp.SystemBuffer,
-                          Irp->IoStatus.Information);
-        }
-
-        if (Irp->Flags & IRP_DEALLOCATE_BUFFER)
-            ExFreePool(Irp->AssociatedIrp.SystemBuffer);
-    }
-
     while ((Mdl = Irp->MdlAddress) != NULL)
     {
         Irp->MdlAddress = Mdl->Next;
-        MmUnlockPages(Mdl);
+        if (IoContext->UnlockPages)
+            MmUnlockPages(Mdl);
         IoFreeMdl(Mdl);
     }
 
     IoFreeIrp(Irp);
     KeSetEvent(&IoContext->Event, IO_NO_INCREMENT, FALSE);
     return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
+/*
+ * Submit an I/O request built around a caller-prepared MDL and wait for it.
+ * Takes ownership of the MDL (and unlocks its pages if UnlockPages). The IRP
+ * is hand-built and completed via event: FatFs can issue block I/O from a
+ * paging fault at APC_LEVEL, where a synchronous request's completion APC
+ * cannot run.
+ */
+static NTSTATUS
+ExFatSubmitDeviceIo(
+    PDEVICE_OBJECT DeviceObject,
+    UCHAR MajorFunction,
+    PMDL Mdl,
+    BOOLEAN UnlockPages,
+    ULONG Length,
+    PLARGE_INTEGER Offset,
+    BOOLEAN OverrideVerify)
+{
+    EXFAT_IO_CONTEXT IoContext;
+    PIO_STACK_LOCATION Stack;
+    PIRP Irp;
+
+    KeInitializeEvent(&IoContext.Event, NotificationEvent, FALSE);
+    IoContext.IoStatus.Status = STATUS_UNSUCCESSFUL;
+    IoContext.IoStatus.Information = 0;
+    IoContext.UnlockPages = UnlockPages;
+
+    Irp = IoAllocateIrp(DeviceObject->StackSize, FALSE);
+    if (!Irp)
+    {
+        while (Mdl)
+        {
+            PMDL Next = Mdl->Next;
+            if (UnlockPages)
+                MmUnlockPages(Mdl);
+            IoFreeMdl(Mdl);
+            Mdl = Next;
+        }
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    Irp->MdlAddress = Mdl;
+    Irp->Tail.Overlay.Thread = PsGetCurrentThread();
+    Irp->RequestorMode = KernelMode;
+    if (MajorFunction == IRP_MJ_READ)
+        Irp->Flags = IRP_READ_OPERATION;
+    else if (MajorFunction == IRP_MJ_WRITE)
+        Irp->Flags = IRP_WRITE_OPERATION;
+
+    Stack = IoGetNextIrpStackLocation(Irp);
+    Stack->MajorFunction = MajorFunction;
+    if (MajorFunction == IRP_MJ_READ || MajorFunction == IRP_MJ_WRITE)
+    {
+        /* Parameters.Read and Parameters.Write share this layout. */
+        Stack->Parameters.Read.Length = Length;
+        Stack->Parameters.Read.ByteOffset = *Offset;
+    }
+    if (OverrideVerify)
+        Stack->Flags |= SL_OVERRIDE_VERIFY_VOLUME;
+
+    IoSetCompletionRoutine(Irp,
+                           ExFatReadWriteCompletion,
+                           &IoContext,
+                           TRUE,
+                           TRUE,
+                           TRUE);
+    IoCallDriver(DeviceObject, Irp);
+    KeWaitForSingleObject(&IoContext.Event, Executive, KernelMode, FALSE, NULL);
+
+    if (NT_SUCCESS(IoContext.IoStatus.Status) && Length != 0 &&
+        IoContext.IoStatus.Information != Length)
+    {
+        return STATUS_DEVICE_DATA_ERROR;
+    }
+    return IoContext.IoStatus.Status;
+}
+
+/* For buffers known to be nonpaged: no PFN-lock probe/unlock cycle. */
+static NTSTATUS
+ExFatPoolReadWriteDevice(
+    PDEVICE_OBJECT DeviceObject,
+    UCHAR MajorFunction,
+    PVOID PoolBuffer,
+    ULONG Length,
+    PLARGE_INTEGER Offset,
+    BOOLEAN OverrideVerify)
+{
+    PMDL Mdl;
+
+    Mdl = IoAllocateMdl(PoolBuffer, Length, FALSE, FALSE, NULL);
+    if (!Mdl)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    MmBuildMdlForNonPagedPool(Mdl);
+    return ExFatSubmitDeviceIo(DeviceObject,
+                               MajorFunction,
+                               Mdl,
+                               FALSE,
+                               Length,
+                               Offset,
+                               OverrideVerify);
+}
+
+/* For a sub-range of pages already locked by the caller's MDL. */
+static NTSTATUS
+ExFatMdlReadWriteDevice(
+    PDEVICE_OBJECT DeviceObject,
+    UCHAR MajorFunction,
+    PMDL SourceMdl,
+    ULONG MdlOffset,
+    ULONG Length,
+    PLARGE_INTEGER Offset)
+{
+    PVOID PartialVa;
+    PMDL Mdl;
+
+    PartialVa = (PUCHAR)MmGetMdlVirtualAddress(SourceMdl) + MdlOffset;
+    Mdl = IoAllocateMdl(PartialVa, Length, FALSE, FALSE, NULL);
+    if (!Mdl)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    IoBuildPartialMdl(SourceMdl, Mdl, PartialVa, Length);
+    return ExFatSubmitDeviceIo(DeviceObject,
+                               MajorFunction,
+                               Mdl,
+                               FALSE,
+                               Length,
+                               Offset,
+                               TRUE);
 }
 
 NTSTATUS
@@ -335,84 +474,189 @@ ExFatReadWriteDevice(
     PLARGE_INTEGER Offset,
     BOOLEAN OverrideVerify)
 {
-    EXFAT_IO_CONTEXT IoContext;
     PVOID Allocation = NULL;
     PVOID IoBuffer = Buffer;
-    PIO_STACK_LOCATION Stack;
-    PIRP Irp;
+    PMDL Mdl = NULL;
+    BOOLEAN UnlockPages = FALSE;
     ULONG AlignmentMask;
     NTSTATUS Status;
 
-    RtlZeroMemory(&IoContext, sizeof(IoContext));
-    KeInitializeEvent(&IoContext.Event, NotificationEvent, FALSE);
-
-    AlignmentMask = DeviceObject->AlignmentRequirement;
-    if (Length != 0 && ((ULONG_PTR)Buffer & AlignmentMask) != 0)
+    if (Length != 0)
     {
-        if (Length > MAXULONG - AlignmentMask)
-            return STATUS_INVALID_BUFFER_SIZE;
+        AlignmentMask = DeviceObject->AlignmentRequirement;
+        if (((ULONG_PTR)Buffer & AlignmentMask) != 0)
+        {
+            if (Length > MAXULONG - AlignmentMask)
+                return STATUS_INVALID_BUFFER_SIZE;
 
-        Allocation = ExAllocatePoolWithTag(NonPagedPool,
-                                           Length + AlignmentMask,
-                                           TAG_EXFAT_IO);
-        if (!Allocation)
-            return STATUS_INSUFFICIENT_RESOURCES;
+            Allocation = ExAllocatePoolWithTag(NonPagedPool,
+                                               Length + AlignmentMask,
+                                               TAG_EXFAT_IO);
+            if (!Allocation)
+                return STATUS_INSUFFICIENT_RESOURCES;
 
-        IoBuffer = (PVOID)(((ULONG_PTR)Allocation + AlignmentMask) &
-                           ~(ULONG_PTR)AlignmentMask);
-        if (MajorFunction == IRP_MJ_WRITE)
-            RtlCopyMemory(IoBuffer, Buffer, Length);
-    }
+            IoBuffer = ALIGN_UP_POINTER_BY(Allocation, AlignmentMask + 1);
+            if (MajorFunction == IRP_MJ_WRITE)
+                RtlCopyMemory(IoBuffer, Buffer, Length);
+        }
 
-    /*
-     * FatFs can issue block I/O from a paging fault at APC_LEVEL, where a
-     * normal synchronous completion APC cannot run.
-     */
-    Irp = IoBuildAsynchronousFsdRequest(MajorFunction,
-                                        DeviceObject,
-                                        IoBuffer,
-                                        Length,
-                                        Offset,
-                                        NULL);
-    if (!Irp)
-    {
+        Mdl = IoAllocateMdl(IoBuffer, Length, FALSE, FALSE, NULL);
+        if (!Mdl)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Cleanup;
+        }
+
         if (Allocation)
-            ExFreePoolWithTag(Allocation, TAG_EXFAT_IO);
-        return STATUS_INSUFFICIENT_RESOURCES;
+        {
+            MmBuildMdlForNonPagedPool(Mdl);
+        }
+        else
+        {
+            _SEH2_TRY
+            {
+                MmProbeAndLockPages(Mdl,
+                                    KernelMode,
+                                    (MajorFunction == IRP_MJ_READ) ? IoWriteAccess
+                                                                   : IoReadAccess);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                IoFreeMdl(Mdl);
+                Status = _SEH2_GetExceptionCode();
+                _SEH2_YIELD(goto Cleanup);
+            }
+            _SEH2_END;
+            UnlockPages = TRUE;
+        }
     }
 
-    if (OverrideVerify)
-    {
-        Stack = IoGetNextIrpStackLocation(Irp);
-        Stack->Flags |= SL_OVERRIDE_VERIFY_VOLUME;
-    }
+    Status = ExFatSubmitDeviceIo(DeviceObject,
+                                 MajorFunction,
+                                 Mdl,
+                                 UnlockPages,
+                                 Length,
+                                 Offset,
+                                 OverrideVerify);
 
-    IoSetCompletionRoutine(Irp,
-                           ExFatReadWriteCompletion,
-                           &IoContext,
-                           TRUE,
-                           TRUE,
-                           TRUE);
-    IoCallDriver(DeviceObject, Irp);
-    KeWaitForSingleObject(&IoContext.Event, Executive, KernelMode, FALSE, NULL);
-
-    Status = IoContext.IoStatus.Status;
-
-    if (Allocation &&
-        MajorFunction == IRP_MJ_READ &&
-        NT_SUCCESS(Status) &&
-        IoContext.IoStatus.Information <= Length)
-    {
-        RtlCopyMemory(Buffer, IoBuffer, IoContext.IoStatus.Information);
-    }
-
+Cleanup:
     if (Allocation)
+    {
+        if (MajorFunction == IRP_MJ_READ && NT_SUCCESS(Status))
+            RtlCopyMemory(Buffer, IoBuffer, Length);
         ExFreePoolWithTag(Allocation, TAG_EXFAT_IO);
-
-    if (NT_SUCCESS(Status) && Length != 0 && IoContext.IoStatus.Information != Length)
-        Status = STATUS_DEVICE_DATA_ERROR;
-
+    }
     return Status;
+}
+
+/*
+ * Transfer whole sectors of a contiguous (exFAT NoFatChain) file with a single
+ * device request instead of FatFs's one-IRP-per-cluster loop. Mirrors the
+ * FF_FS_TINY window coherence rules of f_read()/f_write() (see the ff.c
+ * internals note at the top of this file). Runs under the volume's FatFs
+ * lock. Returns FALSE to make the caller fall back to FatFs.
+ */
+BOOLEAN
+ExFatDirectFileIo(
+    PEXFAT_VCB Vcb,
+    PEXFAT_FCB Fcb,
+    UCHAR MajorFunction,
+    PVOID Buffer,
+    PMDL SourceMdl,
+    ULONG MdlOffset,
+    ULONGLONG ByteOffset,
+    ULONG Length)
+{
+    FATFS* FileSystem = &Vcb->FileSystem;
+    LARGE_INTEGER DeviceOffset;
+    LBA_t Sector;
+    LBA_t HeapEnd;
+    ULONG Sectors = Length / Vcb->BytesPerSector;
+    NTSTATUS Status;
+
+    /* FatFs would reject an aborted file object; keep parity. */
+    if (Fcb->FatFile.err)
+        return FALSE;
+
+    Sector = FileSystem->database +
+             (LBA_t)(Fcb->FatFile.obj.sclust - 2) * FileSystem->csize +
+             (LBA_t)(ByteOffset / Vcb->BytesPerSector);
+    HeapEnd = FileSystem->database +
+              (LBA_t)(FileSystem->n_fatent - 2) * FileSystem->csize;
+    if (Sector < FileSystem->database ||
+        Sector >= HeapEnd ||
+        Sectors > HeapEnd - Sector ||
+        Sector >= Vcb->SectorCount ||
+        Sectors > Vcb->SectorCount - Sector)
+    {
+        return FALSE;
+    }
+
+    if (MajorFunction == IRP_MJ_WRITE)
+        ExFatInvalidateSectorCacheRange(Vcb, Sector, Sectors);
+    DeviceOffset.QuadPart = Sector * Vcb->BytesPerSector;
+    if (SourceMdl &&
+        MdlOffset <= MmGetMdlByteCount(SourceMdl) &&
+        Length <= MmGetMdlByteCount(SourceMdl) - MdlOffset)
+    {
+        Status = ExFatMdlReadWriteDevice(Vcb->StorageDevice,
+                                         MajorFunction,
+                                         SourceMdl,
+                                         MdlOffset,
+                                         Length,
+                                         &DeviceOffset);
+    }
+    else
+    {
+        Status = ExFatReadWriteDevice(Vcb->StorageDevice,
+                                      MajorFunction,
+                                      Buffer,
+                                      Length,
+                                      &DeviceOffset,
+                                      TRUE);
+    }
+    if (!NT_SUCCESS(Status))
+        return FALSE;
+
+    if (FileSystem->winsect >= Sector && FileSystem->winsect - Sector < Sectors)
+    {
+        PUCHAR WindowCopy = (PUCHAR)Buffer +
+                            (ULONG)(FileSystem->winsect - Sector) * Vcb->BytesPerSector;
+
+        if (MajorFunction == IRP_MJ_READ)
+        {
+            /* The window holds a newer copy of one of the read sectors. */
+            if (FileSystem->wflag)
+                RtlCopyMemory(WindowCopy, FileSystem->win, Vcb->BytesPerSector);
+        }
+        else
+        {
+            /* The direct write superseded the window contents. */
+            RtlCopyMemory(FileSystem->win, WindowCopy, Vcb->BytesPerSector);
+            FileSystem->wflag = 0;
+        }
+    }
+
+    if (MajorFunction == IRP_MJ_WRITE)
+        Fcb->FatFile.flag |= EXFAT_FA_MODIFIED;
+    return TRUE;
+}
+
+NTSTATUS
+ExFatRawWriteDevice(
+    PEXFAT_VCB Vcb,
+    PVOID Buffer,
+    ULONG Length,
+    PLARGE_INTEGER Offset)
+{
+    /* Raw writes bypass disk_write(); keep the LBA cache coherent here. */
+    ExFatInvalidateSectorCache(Vcb);
+    return ExFatReadWriteDevice(Vcb->StorageDevice,
+                                IRP_MJ_WRITE,
+                                Buffer,
+                                Length,
+                                Offset,
+                                FALSE);
 }
 
 NTSTATUS
@@ -434,8 +678,7 @@ ExFatDeviceIoControl(
     PVOID InputBuffer,
     ULONG InputLength,
     PVOID OutputBuffer,
-    PULONG OutputLength,
-    BOOLEAN OverrideVerify)
+    PULONG OutputLength)
 {
     IO_STATUS_BLOCK IoStatus;
     PIO_STACK_LOCATION Stack;
@@ -456,11 +699,8 @@ ExFatDeviceIoControl(
     if (!Irp)
         return STATUS_INSUFFICIENT_RESOURCES;
 
-    if (OverrideVerify)
-    {
-        Stack = IoGetNextIrpStackLocation(Irp);
-        Stack->Flags |= SL_OVERRIDE_VERIFY_VOLUME;
-    }
+    Stack = IoGetNextIrpStackLocation(Irp);
+    Stack->Flags |= SL_OVERRIDE_VERIFY_VOLUME;
 
     Status = IoCallDriver(DeviceObject, Irp);
     if (Status == STATUS_PENDING)
@@ -473,6 +713,16 @@ ExFatDeviceIoControl(
         *OutputLength = (ULONG)IoStatus.Information;
 
     return Status;
+}
+
+VOID
+ExFatBuildDrivePath(
+    PEXFAT_VCB Vcb,
+    CHAR Path[3])
+{
+    Path[0] = '0' + Vcb->DriveNumber;
+    Path[1] = ':';
+    Path[2] = ANSI_NULL;
 }
 
 VOID
@@ -616,118 +866,43 @@ ExFatUtf8ToUnicode(
     PCSTR Source,
     PUNICODE_STRING Destination)
 {
-    const UCHAR* Input;
-    ULONG CodePoint;
-    ULONG Continuations;
-    ULONG CharacterCount = 0;
-    ULONG OutputIndex = 0;
-    ULONG Index;
     ULONG Utf8Length = (ULONG)strlen(Source);
+    ULONG Required = 0;
+    ULONG Written = 0;
+    NTSTATUS Status;
 
     RtlZeroMemory(Destination, sizeof(*Destination));
-    Input = (const UCHAR*)Source;
 
-    for (Index = 0; Index < Utf8Length; )
-    {
-        UCHAR Lead = Input[Index++];
-
-        if (Lead < 0x80)
-        {
-            CodePoint = Lead;
-            Continuations = 0;
-        }
-        else if ((Lead & 0xE0) == 0xC0)
-        {
-            CodePoint = Lead & 0x1F;
-            Continuations = 1;
-        }
-        else if ((Lead & 0xF0) == 0xE0)
-        {
-            CodePoint = Lead & 0x0F;
-            Continuations = 2;
-        }
-        else if ((Lead & 0xF8) == 0xF0)
-        {
-            CodePoint = Lead & 0x07;
-            Continuations = 3;
-        }
-        else
-        {
-            return STATUS_ILLEGAL_CHARACTER;
-        }
-
-        if (Continuations > Utf8Length - Index)
-            return STATUS_ILLEGAL_CHARACTER;
-        for (ULONG Part = 0; Part < Continuations; ++Part)
-        {
-            UCHAR Byte = Input[Index++];
-            if ((Byte & 0xC0) != 0x80)
-                return STATUS_ILLEGAL_CHARACTER;
-            CodePoint = (CodePoint << 6) | (Byte & 0x3F);
-        }
-
-        if ((Continuations == 1 && CodePoint < 0x80) ||
-            (Continuations == 2 && CodePoint < 0x800) ||
-            (Continuations == 3 && CodePoint < 0x10000) ||
-            CodePoint > 0x10FFFF ||
-            (CodePoint >= 0xD800 && CodePoint <= 0xDFFF))
-        {
-            return STATUS_ILLEGAL_CHARACTER;
-        }
-        CharacterCount += (CodePoint >= 0x10000) ? 2 : 1;
-    }
-
-    if (CharacterCount > (MAXUSHORT - sizeof(WCHAR)) / sizeof(WCHAR))
+    Status = RtlUTF8ToUnicodeN(NULL, 0, &Required, Source, Utf8Length);
+    if (Status == STATUS_SOME_NOT_MAPPED)
+        Status = STATUS_ILLEGAL_CHARACTER;
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Required > MAXUSHORT - sizeof(WCHAR))
         return STATUS_NAME_TOO_LONG;
 
     Destination->Buffer = ExAllocatePoolWithTag(NonPagedPool,
-                                                 (CharacterCount + 1) * sizeof(WCHAR),
-                                                 TAG_EXFAT_PATH);
+                                                Required + sizeof(WCHAR),
+                                                TAG_EXFAT_PATH);
     if (!Destination->Buffer)
         return STATUS_INSUFFICIENT_RESOURCES;
 
-    for (Index = 0; Index < Utf8Length; )
+    Status = RtlUTF8ToUnicodeN(Destination->Buffer,
+                               Required,
+                               &Written,
+                               Source,
+                               Utf8Length);
+    if (Status == STATUS_SOME_NOT_MAPPED)
+        Status = STATUS_ILLEGAL_CHARACTER;
+    if (!NT_SUCCESS(Status))
     {
-        UCHAR Lead = Input[Index++];
-
-        if (Lead < 0x80)
-        {
-            CodePoint = Lead;
-            Continuations = 0;
-        }
-        else if ((Lead & 0xE0) == 0xC0)
-        {
-            CodePoint = Lead & 0x1F;
-            Continuations = 1;
-        }
-        else if ((Lead & 0xF0) == 0xE0)
-        {
-            CodePoint = Lead & 0x0F;
-            Continuations = 2;
-        }
-        else
-        {
-            CodePoint = Lead & 0x07;
-            Continuations = 3;
-        }
-        for (ULONG Part = 0; Part < Continuations; ++Part)
-            CodePoint = (CodePoint << 6) | (Input[Index++] & 0x3F);
-
-        if (CodePoint < 0x10000)
-        {
-            Destination->Buffer[OutputIndex++] = (WCHAR)CodePoint;
-        }
-        else
-        {
-            CodePoint -= 0x10000;
-            Destination->Buffer[OutputIndex++] = (WCHAR)(0xD800 | (CodePoint >> 10));
-            Destination->Buffer[OutputIndex++] = (WCHAR)(0xDC00 | (CodePoint & 0x3FF));
-        }
+        ExFatFreeUnicodeString(Destination);
+        return Status;
     }
 
-    Destination->Length = (USHORT)(OutputIndex * sizeof(WCHAR));
-    Destination->MaximumLength = (USHORT)((CharacterCount + 1) * sizeof(WCHAR));
-    Destination->Buffer[OutputIndex] = UNICODE_NULL;
+    Destination->Length = (USHORT)Written;
+    Destination->MaximumLength = (USHORT)(Required + sizeof(WCHAR));
+    Destination->Buffer[Written / sizeof(WCHAR)] = UNICODE_NULL;
     return STATUS_SUCCESS;
 }
 
@@ -844,12 +1019,13 @@ ExFatHashPath(
     return Hash;
 }
 
-NTSTATUS
+static NTSTATUS
 ExFatSetFcbPath(
     PEXFAT_FCB Fcb,
     PUNICODE_STRING PathName)
 {
     PWCHAR Buffer;
+    PCHAR FatPath;
 
     Buffer = ExAllocatePoolWithTag(NonPagedPool,
                                    PathName->Length + sizeof(WCHAR),
@@ -857,13 +1033,23 @@ ExFatSetFcbPath(
     if (!Buffer)
         return STATUS_INSUFFICIENT_RESOURCES;
 
+    FatPath = ExFatBuildFatPath(Fcb->Vcb, PathName);
+    if (!FatPath)
+    {
+        ExFreePoolWithTag(Buffer, TAG_EXFAT_PATH);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
     RtlCopyMemory(Buffer, PathName->Buffer, PathName->Length);
     Buffer[PathName->Length / sizeof(WCHAR)] = UNICODE_NULL;
     if (Fcb->PathName.Buffer)
         ExFreePoolWithTag(Fcb->PathName.Buffer, TAG_EXFAT_PATH);
+    if (Fcb->FatPath)
+        ExFreePoolWithTag(Fcb->FatPath, TAG_EXFAT_PATH);
     Fcb->PathName.Buffer = Buffer;
     Fcb->PathName.Length = PathName->Length;
     Fcb->PathName.MaximumLength = PathName->Length + sizeof(WCHAR);
+    Fcb->FatPath = FatPath;
     Fcb->IndexNumber = ExFatHashPath(PathName);
     return STATUS_SUCCESS;
 }
@@ -873,13 +1059,12 @@ ExFatUpdateFcbFromInfo(
     PEXFAT_FCB Fcb,
     FILINFO* Information)
 {
-    ULONG ClusterSize = Fcb->Vcb->FileSystem.csize * Fcb->Vcb->BytesPerSector;
-
     Fcb->IsDirectory = !!(Information->fattrib & AM_DIR);
     Fcb->FileAttributes = ExFatFatAttributesToNt(Information->fattrib);
     Fcb->Header.FileSize.QuadPart = Fcb->IsDirectory ? 0 : Information->fsize;
     Fcb->Header.ValidDataLength = Fcb->Header.FileSize;
-    Fcb->Header.AllocationSize.QuadPart = Fcb->IsDirectory ? 0 : ExFatRoundUp(Information->fsize, ClusterSize);
+    Fcb->Header.AllocationSize.QuadPart = Fcb->IsDirectory ? 0 :
+        ExFatRoundUp(Information->fsize, Fcb->Vcb->BytesPerCluster);
     Fcb->CreationTime = ExFatFatTimeToSystemTime(Information->crdate, Information->crtime);
     Fcb->LastWriteTime = ExFatFatTimeToSystemTime(Information->fdate, Information->ftime);
     Fcb->LastAccessTime = Fcb->LastWriteTime;
@@ -941,6 +1126,7 @@ ExFatFindFcb(
     PEXFAT_VCB Vcb,
     PUNICODE_STRING PathName)
 {
+    ULONGLONG Hash = ExFatHashPath(PathName);
     PLIST_ENTRY Entry;
     PEXFAT_FCB Fcb;
 
@@ -949,7 +1135,9 @@ ExFatFindFcb(
          Entry = Entry->Flink)
     {
         Fcb = CONTAINING_RECORD(Entry, EXFAT_FCB, ListEntry);
-        if (RtlEqualUnicodeString(&Fcb->PathName, PathName, TRUE))
+        if (Fcb->IndexNumber == Hash &&
+            Fcb->PathName.Length == PathName->Length &&
+            RtlEqualUnicodeString(&Fcb->PathName, PathName, TRUE))
         {
             ExFatReferenceFcb(Fcb);
             return Fcb;
@@ -976,10 +1164,7 @@ ExFatDereferenceFcb(
     if (Fcb->FatFileOpen)
     {
         ExFatAcquireFatFs(Fcb->Vcb);
-        ExFatInvalidateFcbClusterMap(Fcb);
-        f_close(&Fcb->FatFile);
-        Fcb->FatFileOpen = FALSE;
-        Fcb->FatFileWritable = FALSE;
+        ExFatCloseFcbFile(Fcb);
         ExFatReleaseFatFs(Fcb->Vcb);
     }
     else
@@ -990,6 +1175,8 @@ ExFatDereferenceFcb(
     ExDeleteResourceLite(&Fcb->PagingIoResource);
     ExDeleteResourceLite(&Fcb->MainResource);
     ExFatFreeUnicodeString(&Fcb->PathName);
+    if (Fcb->FatPath)
+        ExFreePoolWithTag(Fcb->FatPath, TAG_EXFAT_PATH);
     ExFreePoolWithTag(Fcb, TAG_EXFAT_FCB);
 }
 
@@ -1013,7 +1200,7 @@ ExFatFastIoCheckIfPossible(
     UNREFERENCED_PARAMETER(IoStatus);
     UNREFERENCED_PARAMETER(DeviceObject);
 
-    if (!Fcb || !Ccb || Ccb->CleanedUp || !Ccb->HandleOpen ||
+    if (!Fcb || !Ccb || Ccb->CleanedUp ||
         Fcb->IsDirectory || Fcb->IsVolume || Fcb->DeletePending ||
         FileOffset->QuadPart < 0 || Length > MAXLONGLONG - FileOffset->QuadPart)
     {
@@ -1143,7 +1330,7 @@ disk_status(
     return disk_initialize(PhysicalDrive);
 }
 
-VOID
+static VOID
 ExFatInvalidateSectorCache(
     PEXFAT_VCB Vcb)
 {
@@ -1154,7 +1341,7 @@ ExFatInvalidateSectorCache(
     Vcb->SectorCacheNext = 0;
 }
 
-VOID
+static VOID
 ExFatInvalidateSectorCacheRange(
     PEXFAT_VCB Vcb,
     LBA_t Sector,
@@ -1202,11 +1389,23 @@ ExFatEnsureSectorCache(
     Vcb->SectorCacheTags = Vcb->SectorCacheAllocation;
     for (Index = 0; Index < Entries; Index++)
         Vcb->SectorCacheTags[Index] = EXFAT_SECTOR_CACHE_EMPTY;
-    Vcb->SectorCacheBuffer = (PVOID)(((ULONG_PTR)Vcb->SectorCacheAllocation + TagsSize +
-                                      AlignmentMask) & ~(ULONG_PTR)AlignmentMask);
+    Vcb->SectorCacheBuffer = ALIGN_UP_POINTER_BY((PUCHAR)Vcb->SectorCacheAllocation + TagsSize,
+                                                 AlignmentMask + 1);
     Vcb->SectorCacheNext = 0;
     Vcb->SectorCacheEntries = Entries;
     return TRUE;
+}
+
+VOID
+ExFatFreeSectorCache(
+    PEXFAT_VCB Vcb)
+{
+    if (Vcb->SectorCacheAllocation)
+        ExFreePoolWithTag(Vcb->SectorCacheAllocation, TAG_EXFAT_IO);
+    Vcb->SectorCacheAllocation = NULL;
+    Vcb->SectorCacheBuffer = NULL;
+    Vcb->SectorCacheTags = NULL;
+    Vcb->SectorCacheEntries = 0;
 }
 
 DRESULT
@@ -1251,12 +1450,12 @@ disk_read(
         Vcb->SectorCacheTags[Index] = EXFAT_SECTOR_CACHE_EMPTY;
         CacheSlot = (PUCHAR)Vcb->SectorCacheBuffer + Index * Vcb->BytesPerSector;
         Offset.QuadPart = Sector * Vcb->BytesPerSector;
-        if (NT_SUCCESS(ExFatReadWriteDevice(Vcb->StorageDevice,
-                                            IRP_MJ_READ,
-                                            CacheSlot,
-                                            Vcb->BytesPerSector,
-                                            &Offset,
-                                            TRUE)))
+        if (NT_SUCCESS(ExFatPoolReadWriteDevice(Vcb->StorageDevice,
+                                                IRP_MJ_READ,
+                                                CacheSlot,
+                                                Vcb->BytesPerSector,
+                                                &Offset,
+                                                TRUE)))
         {
             Vcb->SectorCacheTags[Index] = Sector;
             RtlCopyMemory(Buffer, CacheSlot, Vcb->BytesPerSector);
@@ -1304,25 +1503,37 @@ disk_write(
     Offset.QuadPart = Sector * Vcb->BytesPerSector;
     Length = Count * Vcb->BytesPerSector;
     ExFatInvalidateSectorCacheRange(Vcb, Sector, Count);
-    if (!NT_SUCCESS(ExFatReadWriteDevice(Vcb->StorageDevice,
-                                         IRP_MJ_WRITE,
-                                         (PVOID)Buffer,
-                                         Length,
-                                         &Offset,
-                                         TRUE)))
-    {
-        return RES_ERROR;
-    }
 
     if (Count == 1 && ExFatEnsureSectorCache(Vcb))
     {
-        /* Keep rewritten FAT/bitmap/directory sectors hot instead of evicting. */
+        /*
+         * Keep rewritten FAT/bitmap/directory sectors hot instead of
+         * evicting; staging the data in the pool slot first also lets the
+         * device write skip the page probe/lock cycle.
+         */
         Index = Vcb->SectorCacheNext++ % Vcb->SectorCacheEntries;
         CacheSlot = (PUCHAR)Vcb->SectorCacheBuffer + Index * Vcb->BytesPerSector;
+        Vcb->SectorCacheTags[Index] = EXFAT_SECTOR_CACHE_EMPTY;
         RtlCopyMemory(CacheSlot, Buffer, Vcb->BytesPerSector);
+        if (!NT_SUCCESS(ExFatPoolReadWriteDevice(Vcb->StorageDevice,
+                                                 IRP_MJ_WRITE,
+                                                 CacheSlot,
+                                                 Length,
+                                                 &Offset,
+                                                 TRUE)))
+        {
+            return RES_ERROR;
+        }
         Vcb->SectorCacheTags[Index] = Sector;
+        return RES_OK;
     }
-    return RES_OK;
+
+    return NT_SUCCESS(ExFatReadWriteDevice(Vcb->StorageDevice,
+                                           IRP_MJ_WRITE,
+                                           (PVOID)Buffer,
+                                           Length,
+                                           &Offset,
+                                           TRUE)) ? RES_OK : RES_ERROR;
 }
 
 DRESULT

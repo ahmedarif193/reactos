@@ -10,7 +10,7 @@
 #define NDEBUG
 #include <debug.h>
 
-#define EXFAT_ALIGN_DIRECTORY_ENTRY(Size) (((Size) + 7) & ~7UL)
+#define EXFAT_ALIGN_DIRECTORY_ENTRY(Size) ALIGN_UP_BY(Size, sizeof(LONGLONG))
 
 static NTSTATUS
 ExFatSetSearchPattern(
@@ -19,8 +19,8 @@ ExFatSetSearchPattern(
 {
     static const WCHAR MatchAll[] = L"*";
     UNICODE_STRING Source;
-    PWCHAR Buffer;
-    ULONG Index;
+    UNICODE_STRING Upcased;
+    NTSTATUS Status;
 
     if (Pattern && Pattern->Length)
     {
@@ -31,20 +31,13 @@ ExFatSetSearchPattern(
         RtlInitUnicodeString(&Source, MatchAll);
     }
 
-    Buffer = ExAllocatePoolWithTag(NonPagedPool,
-                                   Source.Length + sizeof(WCHAR),
-                                   TAG_EXFAT_PATH);
-    if (!Buffer)
-        return STATUS_INSUFFICIENT_RESOURCES;
-    RtlCopyMemory(Buffer, Source.Buffer, Source.Length);
-    for (Index = 0; Index < Source.Length / sizeof(WCHAR); ++Index)
-        Buffer[Index] = RtlUpcaseUnicodeChar(Buffer[Index]);
-    Buffer[Source.Length / sizeof(WCHAR)] = UNICODE_NULL;
+    /* FsRtlIsNameInExpression(IgnoreCase) requires a pre-upcased pattern. */
+    Status = RtlUpcaseUnicodeString(&Upcased, &Source, TRUE);
+    if (!NT_SUCCESS(Status))
+        return Status;
 
-    ExFatFreeUnicodeString(&Ccb->SearchPattern);
-    Ccb->SearchPattern.Buffer = Buffer;
-    Ccb->SearchPattern.Length = Source.Length;
-    Ccb->SearchPattern.MaximumLength = Source.Length + sizeof(WCHAR);
+    RtlFreeUnicodeString(&Ccb->SearchPattern);
+    Ccb->SearchPattern = Upcased;
     return STATUS_SUCCESS;
 }
 
@@ -96,12 +89,8 @@ ExFatFillDirectoryEntry(
     AllocationSize.QuadPart = (FatInformation->fattrib & AM_DIR) ? 0 :
                               ExFatRoundUp(FatInformation->fsize, ClusterSize);
     Attributes = ExFatFatAttributesToNt(FatInformation->fattrib);
-    FileId = 1469598103934665603ULL;
-    for (ULONG Index = 0; Index < Name->Length / sizeof(WCHAR); ++Index)
-    {
-        FileId ^= RtlUpcaseUnicodeChar(Name->Buffer[Index]);
-        FileId *= 1099511628211ULL;
-    }
+    /* Bare-name hash; Fcb->IndexNumber intentionally hashes the full path. */
+    FileId = ExFatHashPath(Name);
 
 #define FILL_COMMON(Entry) \
     do { \
@@ -181,10 +170,12 @@ ExFatQueryDirectory(
     FILINFO FatInformation;
     DIR SavedDirectory;
     ULONG SavedIndex;
+    WCHAR NameBuffer[FF_LFN_BUF + 1];
     UNICODE_STRING Name;
+    ULONG NameBytes;
+    ULONG Emitted;
     ULONG Required;
     ULONG AlignedRequired;
-    ULONG ClusterSize;
     FRESULT Result;
     NTSTATUS Status = STATUS_SUCCESS;
     BOOLEAN ReturnSingle;
@@ -194,7 +185,7 @@ ExFatQueryDirectory(
         return STATUS_INVALID_PARAMETER;
     Fcb = FileObject->FsContext;
     Ccb = FileObject->FsContext2;
-    if (!Fcb || !Ccb || !Fcb->IsDirectory || !Ccb->IsDirectory || !Ccb->HandleOpen)
+    if (!Fcb || !Ccb || !Fcb->IsDirectory || !Ccb->HandleOpen)
         return STATUS_NOT_A_DIRECTORY;
 
     InformationClass = Stack->Parameters.QueryDirectory.FileInformationClass;
@@ -208,7 +199,6 @@ ExFatQueryDirectory(
     Buffer = ExFatGetUserBuffer(Irp, FALSE);
     if (!Buffer)
         return STATUS_INSUFFICIENT_RESOURCES;
-    RtlZeroMemory(Buffer, BufferLength);
 
     ExAcquireResourceSharedLite(&Fcb->MainResource, TRUE);
     ExFatAcquireFatFs(Fcb->Vcb);
@@ -219,7 +209,7 @@ ExFatQueryDirectory(
                                        Stack->Parameters.QueryDirectory.FileName);
         if (!NT_SUCCESS(Status))
             goto Done;
-        Result = f_rewinddir(&Ccb->Handle.Directory);
+        Result = f_rewinddir(&Ccb->Directory);
         if (Result != FR_OK)
         {
             Status = ExFatMapResult(Result);
@@ -229,13 +219,12 @@ ExFatQueryDirectory(
     }
 
     ReturnSingle = !!(Stack->Flags & SL_RETURN_SINGLE_ENTRY);
-    ClusterSize = Vcb->FileSystem.csize * Vcb->BytesPerSector;
     for (;;)
     {
-        SavedDirectory = Ccb->Handle.Directory;
+        SavedDirectory = Ccb->Directory;
         SavedIndex = Ccb->DirectoryIndex;
         RtlZeroMemory(&FatInformation, sizeof(FatInformation));
-        Result = f_readdir(&Ccb->Handle.Directory, &FatInformation);
+        Result = f_readdir(&Ccb->Directory, &FatInformation);
         if (Result != FR_OK)
         {
             Status = ExFatMapResult(Result);
@@ -245,22 +234,28 @@ ExFatQueryDirectory(
             break;
         Ccb->DirectoryIndex++;
 
-        Status = ExFatUtf8ToUnicode(FatInformation.fname, &Name);
+        Status = RtlUTF8ToUnicodeN(NameBuffer,
+                                   sizeof(NameBuffer) - sizeof(WCHAR),
+                                   &NameBytes,
+                                   FatInformation.fname,
+                                   (ULONG)strlen(FatInformation.fname));
+        if (Status == STATUS_SOME_NOT_MAPPED)
+            Status = STATUS_ILLEGAL_CHARACTER;
         if (!NT_SUCCESS(Status))
             break;
+        Name.Buffer = NameBuffer;
+        Name.Length = (USHORT)NameBytes;
+        Name.MaximumLength = sizeof(NameBuffer);
+
         if (!FsRtlIsNameInExpression(&Ccb->SearchPattern, &Name, TRUE, NULL))
-        {
-            ExFatFreeUnicodeString(&Name);
             continue;
-        }
 
         Required = ExFatDirectoryEntrySize(InformationClass, Name.Length);
         AlignedRequired = EXFAT_ALIGN_DIRECTORY_ENTRY(Required);
         if (Required > BufferLength - Offset)
         {
-            Ccb->Handle.Directory = SavedDirectory;
+            Ccb->Directory = SavedDirectory;
             Ccb->DirectoryIndex = SavedIndex;
-            ExFatFreeUnicodeString(&Name);
             Status = Found ? STATUS_SUCCESS : STATUS_BUFFER_OVERFLOW;
             break;
         }
@@ -268,15 +263,17 @@ ExFatQueryDirectory(
         if (PreviousNextOffset)
             *PreviousNextOffset = Offset - ((PUCHAR)PreviousNextOffset - Buffer);
         PreviousNextOffset = (PULONG)(Buffer + Offset);
+        /* Cover struct padding and the 8-byte inter-entry gap. */
+        Emitted = min(AlignedRequired, BufferLength - Offset);
+        RtlZeroMemory(Buffer + Offset, Emitted);
         ExFatFillDirectoryEntry(InformationClass,
                                 Buffer + Offset,
                                 Ccb->DirectoryIndex,
                                 &FatInformation,
                                 &Name,
-                                ClusterSize);
-        ExFatFreeUnicodeString(&Name);
+                                Vcb->BytesPerCluster);
         Found = TRUE;
-        Offset += min(AlignedRequired, BufferLength - Offset);
+        Offset += Emitted;
         if (ReturnSingle)
             break;
     }

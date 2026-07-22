@@ -10,94 +10,17 @@
 #define NDEBUG
 #include <debug.h>
 
-/* ff.c-internal FIL.flag bit: directory entry must be updated on f_sync(). */
-#define EXFAT_FA_MODIFIED 0x40
-
-/*
- * Transfer whole sectors of a contiguous (exFAT NoFatChain) file with a single
- * device request instead of FatFs's one-IRP-per-cluster loop. Mirrors the
- * FF_FS_TINY window coherence rules of f_read()/f_write(). Runs under the
- * volume's FatFs lock. Returns FALSE to make the caller fall back to FatFs.
- */
-static BOOLEAN
-ExFatDirectFileIo(
-    PEXFAT_VCB Vcb,
-    PEXFAT_FCB Fcb,
-    UCHAR MajorFunction,
-    PVOID Buffer,
-    ULONGLONG ByteOffset,
-    ULONG Length)
-{
-    FATFS* FileSystem = &Vcb->FileSystem;
-    LARGE_INTEGER DeviceOffset;
-    LBA_t Sector;
-    LBA_t HeapEnd;
-    ULONG Sectors = Length / Vcb->BytesPerSector;
-
-    /* FatFs would reject an aborted file object; keep parity. */
-    if (Fcb->FatFile.err)
-        return FALSE;
-
-    Sector = FileSystem->database +
-             (LBA_t)(Fcb->FatFile.obj.sclust - 2) * FileSystem->csize +
-             (LBA_t)(ByteOffset / Vcb->BytesPerSector);
-    HeapEnd = FileSystem->database +
-              (LBA_t)(FileSystem->n_fatent - 2) * FileSystem->csize;
-    if (Sector < FileSystem->database ||
-        Sector >= HeapEnd ||
-        Sectors > HeapEnd - Sector ||
-        Sector >= Vcb->SectorCount ||
-        Sectors > Vcb->SectorCount - Sector)
-    {
-        return FALSE;
-    }
-
-    if (MajorFunction == IRP_MJ_WRITE)
-        ExFatInvalidateSectorCacheRange(Vcb, Sector, Sectors);
-    DeviceOffset.QuadPart = Sector * Vcb->BytesPerSector;
-    if (!NT_SUCCESS(ExFatReadWriteDevice(Vcb->StorageDevice,
-                                         MajorFunction,
-                                         Buffer,
-                                         Length,
-                                         &DeviceOffset,
-                                         TRUE)))
-    {
-        return FALSE;
-    }
-
-    if (FileSystem->winsect >= Sector && FileSystem->winsect - Sector < Sectors)
-    {
-        PUCHAR WindowCopy = (PUCHAR)Buffer +
-                            (ULONG)(FileSystem->winsect - Sector) * Vcb->BytesPerSector;
-
-        if (MajorFunction == IRP_MJ_READ)
-        {
-            /* The window holds a newer copy of one of the read sectors. */
-            if (FileSystem->wflag)
-                RtlCopyMemory(WindowCopy, FileSystem->win, Vcb->BytesPerSector);
-        }
-        else
-        {
-            /* The direct write superseded the window contents. */
-            RtlCopyMemory(FileSystem->win, WindowCopy, Vcb->BytesPerSector);
-            FileSystem->wflag = 0;
-        }
-    }
-
-    if (MajorFunction == IRP_MJ_WRITE)
-        Fcb->FatFile.flag |= EXFAT_FA_MODIFIED;
-    return TRUE;
-}
-
 static FRESULT
 ExFatReadFileData(
     PEXFAT_VCB Vcb,
     PEXFAT_FCB Fcb,
     PVOID Buffer,
+    PMDL SourceMdl,
     ULONGLONG ByteOffset,
     ULONG Length,
     PUINT BytesRead)
 {
+    ULONG MdlOffset = 0;
     ULONG Aligned;
     UINT Bytes = 0;
     FRESULT Result;
@@ -117,7 +40,14 @@ ExFatReadFileData(
         Length >= Vcb->BytesPerSector)
     {
         Aligned = Length - (Length % Vcb->BytesPerSector);
-        if (ExFatDirectFileIo(Vcb, Fcb, IRP_MJ_READ, Buffer, ByteOffset, Aligned))
+        if (ExFatDirectFileIo(Vcb,
+                              Fcb,
+                              IRP_MJ_READ,
+                              Buffer,
+                              SourceMdl,
+                              MdlOffset,
+                              ByteOffset,
+                              Aligned))
         {
             *BytesRead = Aligned;
             ByteOffset += Aligned;
@@ -141,11 +71,13 @@ ExFatWriteFileData(
     PEXFAT_VCB Vcb,
     PEXFAT_FCB Fcb,
     PVOID Buffer,
+    PMDL SourceMdl,
     ULONGLONG ByteOffset,
     ULONG Length,
     BOOLEAN CanExtend,
     PUINT BytesWritten)
 {
+    ULONG MdlOffset = 0;
     ULONGLONG InPlace;
     ULONG Aligned;
     UINT Bytes = 0;
@@ -176,7 +108,14 @@ ExFatWriteFileData(
         InPlace = min((ULONGLONG)Length, f_size(&Fcb->FatFile) - ByteOffset);
         Aligned = (ULONG)(InPlace - (InPlace % Vcb->BytesPerSector));
         if (Aligned &&
-            ExFatDirectFileIo(Vcb, Fcb, IRP_MJ_WRITE, Buffer, ByteOffset, Aligned))
+            ExFatDirectFileIo(Vcb,
+                              Fcb,
+                              IRP_MJ_WRITE,
+                              Buffer,
+                              SourceMdl,
+                              MdlOffset,
+                              ByteOffset,
+                              Aligned))
         {
             *BytesWritten = Aligned;
             ByteOffset += Aligned;
@@ -303,8 +242,6 @@ ExFatRead(
     }
     else
     {
-        if (!PagingIo && (!Ccb->HandleOpen || Ccb->IsDirectory))
-            return STATUS_FILE_CLOSED;
         if (!PagingIo && !(Ccb->DesiredAccess & (FILE_READ_DATA | FILE_EXECUTE)))
             return STATUS_ACCESS_DENIED;
         if ((ULONGLONG)Offset.QuadPart >= (ULONGLONG)Fcb->Header.FileSize.QuadPart)
@@ -371,6 +308,7 @@ ExFatRead(
             Result = ExFatReadFileData(Vcb,
                                        Fcb,
                                        Buffer,
+                                       Irp->MdlAddress,
                                        (ULONGLONG)Offset.QuadPart,
                                        Length,
                                        &BytesRead);
@@ -418,13 +356,7 @@ ExFatWriteVolume(
     if (!Length)
         return STATUS_SUCCESS;
     ExFatAcquireFatFs(Vcb);
-    ExFatInvalidateSectorCache(Vcb);
-    if (!NT_SUCCESS(ExFatReadWriteDevice(Vcb->StorageDevice,
-                                         IRP_MJ_WRITE,
-                                         Buffer,
-                                         Length,
-                                         &Offset,
-                                         FALSE)))
+    if (!NT_SUCCESS(ExFatRawWriteDevice(Vcb, Buffer, Length, &Offset)))
     {
         ExFatReleaseFatFs(Vcb);
         return STATUS_IO_DEVICE_ERROR;
@@ -448,7 +380,6 @@ ExFatWrite(
     LARGE_INTEGER Offset = Stack->Parameters.Write.ByteOffset;
     ULONG Length = Stack->Parameters.Write.Length;
     UINT BytesWritten = 0;
-    ULONG ClusterSize;
     PVOID Buffer;
     FRESULT Result;
     NTSTATUS Status;
@@ -514,8 +445,6 @@ ExFatWrite(
     }
     else
     {
-        if (!PagingIo && (!Ccb->HandleOpen || Ccb->IsDirectory))
-            return STATUS_FILE_CLOSED;
         if (!PagingIo && !(Ccb->DesiredAccess & (FILE_WRITE_DATA | FILE_APPEND_DATA)))
             return STATUS_ACCESS_DENIED;
         if (!PagingIo && !FsRtlCheckLockForWriteAccess(&Fcb->FileLock, Irp))
@@ -559,9 +488,8 @@ ExFatWrite(
                     if (Result == FR_OK)
                     {
                         Fcb->Header.FileSize.QuadPart = f_size(&Fcb->FatFile);
-                        ClusterSize = Vcb->FileSystem.csize * Vcb->BytesPerSector;
                         Fcb->Header.AllocationSize.QuadPart = ExFatRoundUp(f_size(&Fcb->FatFile),
-                                                                          ClusterSize);
+                                                                          Vcb->BytesPerCluster);
                     }
                     ExFatReleaseFatFs(Vcb);
                     Status = ExFatMapResult(Result);
@@ -603,12 +531,11 @@ ExFatWrite(
                     Irp->IoStatus.Information = Length;
                 }
 
+                /* Cc updated itself during CcCopyWrite; only track our VDL. */
                 if (NT_SUCCESS(Status) &&
                     EndOffset.QuadPart > Fcb->Header.ValidDataLength.QuadPart)
                 {
                     Fcb->Header.ValidDataLength = EndOffset;
-                    CcSetFileSizes(FileObject,
-                                   (PCC_FILE_SIZES)&Fcb->Header.AllocationSize);
                 }
 
                 if (NT_SUCCESS(Status) &&
@@ -681,6 +608,7 @@ ExFatWrite(
             Result = ExFatWriteFileData(Vcb,
                                         Fcb,
                                         Buffer,
+                                        Irp->MdlAddress,
                                         (ULONGLONG)Offset.QuadPart,
                                         Length,
                                         !PagingIo,
@@ -694,9 +622,8 @@ ExFatWrite(
             {
                 Fcb->Header.FileSize.QuadPart = f_size(&Fcb->FatFile);
                 Fcb->Header.ValidDataLength = Fcb->Header.FileSize;
-                ClusterSize = Vcb->FileSystem.csize * Vcb->BytesPerSector;
                 Fcb->Header.AllocationSize.QuadPart = ExFatRoundUp(f_size(&Fcb->FatFile),
-                                                                   ClusterSize);
+                                                                   Vcb->BytesPerCluster);
             }
             ExFatReleaseFatFs(Vcb);
 

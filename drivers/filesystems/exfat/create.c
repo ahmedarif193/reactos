@@ -20,6 +20,26 @@ ExFatDispositionCreatesFile(
            Disposition == FILE_SUPERSEDE;
 }
 
+/*
+ * A file or directory FatFs just created/reset is fully determined: empty,
+ * given attributes, stamped now. Rescanning the parent with f_stat() would
+ * only re-read that.
+ */
+static VOID
+ExFatStampNewInfo(
+    FILINFO* Information,
+    BYTE Attributes)
+{
+    DWORD Now = get_fattime();
+
+    RtlZeroMemory(Information, sizeof(*Information));
+    Information->fattrib = Attributes;
+    Information->fdate = (WORD)(Now >> 16);
+    Information->ftime = (WORD)Now;
+    Information->crdate = Information->fdate;
+    Information->crtime = Information->ftime;
+}
+
 static NTSTATUS
 ExFatSetShareAccess(
     PEXFAT_FCB Fcb,
@@ -81,8 +101,6 @@ ExFatOpenVolume(
     if (!Ccb)
         return STATUS_INSUFFICIENT_RESOURCES;
     RtlZeroMemory(Ccb, sizeof(*Ccb));
-    Ccb->NodeTypeCode = EXFAT_CCB_SIGNATURE;
-    Ccb->NodeByteSize = sizeof(*Ccb);
     Ccb->DesiredAccess = DesiredAccess;
 
     ExAcquireResourceExclusiveLite(&Vcb->Resource, TRUE);
@@ -141,6 +159,7 @@ ExFatCreate(
     BOOLEAN IsRoot;
     BOOLEAN IsDirectory;
     BOOLEAN DirectoryRequested;
+    BOOLEAN DeleteOnClose;
     BOOLEAN ShareSet = FALSE;
     BOOLEAN FcbResourceAcquired = FALSE;
     IO_STATUS_BLOCK CacheIoStatus;
@@ -187,11 +206,9 @@ ExFatCreate(
         goto FailureWithoutLock;
     }
     RtlZeroMemory(Ccb, sizeof(*Ccb));
-    Ccb->NodeTypeCode = EXFAT_CCB_SIGNATURE;
-    Ccb->NodeByteSize = sizeof(*Ccb);
     Ccb->DesiredAccess = DesiredAccess;
-    Ccb->DeleteOnClose = !!(Options & FILE_DELETE_ON_CLOSE);
 
+    DeleteOnClose = !!(Options & FILE_DELETE_ON_CLOSE);
     DirectoryRequested = !!(Options & FILE_DIRECTORY_FILE);
     IsRoot = (FullPath.Length == sizeof(WCHAR) && FullPath.Buffer[0] == L'\\');
 
@@ -210,25 +227,35 @@ ExFatCreate(
     }
 
     RtlZeroMemory(&Information, sizeof(Information));
-    ExFatAcquireFatFs(Vcb);
-    if (IsRoot)
+    Result = FR_OK;
+
+    /* A live FCB answers the existence probe without a FatFs path walk. */
+    Fcb = ExFatFindFcb(Vcb, &FullPath);
+    if (Fcb)
     {
-        Result = FR_OK;
+        Exists = TRUE;
+        IsDirectory = Fcb->IsDirectory;
+    }
+    else if (IsRoot)
+    {
+        Exists = TRUE;
+        IsDirectory = TRUE;
         Information.fattrib = AM_DIR;
     }
     else
     {
+        ExFatAcquireFatFs(Vcb);
         Result = f_stat(FatPath, &Information);
-    }
-    ExFatReleaseFatFs(Vcb);
-    Exists = (Result == FR_OK);
-    if (!Exists && Result != FR_NO_FILE && Result != FR_NO_PATH)
-    {
-        Status = ExFatMapResult(Result);
-        goto Failure;
+        ExFatReleaseFatFs(Vcb);
+        Exists = (Result == FR_OK);
+        if (!Exists && Result != FR_NO_FILE && Result != FR_NO_PATH)
+        {
+            Status = ExFatMapResult(Result);
+            goto Failure;
+        }
+        IsDirectory = Exists && !!(Information.fattrib & AM_DIR);
     }
 
-    IsDirectory = Exists && !!(Information.fattrib & AM_DIR);
     if (Exists && IsDirectory && (Options & FILE_NON_DIRECTORY_FILE))
     {
         Status = STATUS_FILE_IS_A_DIRECTORY;
@@ -257,7 +284,6 @@ ExFatCreate(
 
     if (Exists)
     {
-        Fcb = ExFatFindFcb(Vcb, &FullPath);
         if (!Fcb)
             Fcb = ExFatCreateFcb(Vcb, &FullPath, &Information, FALSE);
         if (!Fcb)
@@ -293,18 +319,7 @@ ExFatCreate(
                 Status = ExFatMapResult(Result);
                 goto Failure;
             }
-
-            /* Fresh directory: no need to rescan the parent with f_stat(). */
-            {
-                DWORD Now = get_fattime();
-
-                RtlZeroMemory(&Information, sizeof(Information));
-                Information.fattrib = AM_DIR;
-                Information.fdate = (WORD)(Now >> 16);
-                Information.ftime = (WORD)Now;
-                Information.crdate = Information.fdate;
-                Information.crtime = Information.ftime;
-            }
+            ExFatStampNewInfo(&Information, AM_DIR);
             CreateInformation = FILE_CREATED;
         }
         else
@@ -313,9 +328,8 @@ ExFatCreate(
         }
 
         ExFatAcquireFatFs(Vcb);
-        Result = f_opendir(&Ccb->Handle.Directory, FatPath);
+        Result = f_opendir(&Ccb->Directory, FatPath);
         ExFatReleaseFatFs(Vcb);
-        Ccb->IsDirectory = TRUE;
         Ccb->HandleOpen = (Result == FR_OK);
     }
     else
@@ -359,72 +373,73 @@ ExFatCreate(
                 goto Failure;
         }
 
-        if (Fcb && CreateInformation != FILE_OPENED)
+        /* f_open would refuse FA_WRITE on a read-only entry; keep parity. */
+        if (Exists && (OpenMode & FA_WRITE) &&
+            (Fcb->FileAttributes & FILE_ATTRIBUTE_READONLY))
         {
-            ZeroSize.QuadPart = 0;
-            if (!MmCanFileBeTruncated(&Fcb->SectionObjectPointers, &ZeroSize))
-            {
-                Status = STATUS_USER_MAPPED_FILE;
-                goto Failure;
-            }
+            Status = STATUS_ACCESS_DENIED;
+            goto Failure;
+        }
 
-            ExAcquireResourceExclusiveLite(&Fcb->MainResource, TRUE);
-            FcbResourceAcquired = TRUE;
-            if (Fcb->SectionObjectPointers.DataSectionObject)
+        if (CreateInformation == FILE_OPENED)
+        {
+            /*
+             * Plain open of an existing file: f_stat (or the live FCB)
+             * already validated it. Fcb->FatFile is opened lazily on
+             * first data access.
+             */
+            Result = FR_OK;
+        }
+        else
+        {
+            FIL NewFile;
+
+            if (Fcb)
             {
-                CcFlushCache(&Fcb->SectionObjectPointers, NULL, 0, &CacheIoStatus);
-                if (!NT_SUCCESS(CacheIoStatus.Status) ||
-                    !CcPurgeCacheSection(&Fcb->SectionObjectPointers, NULL, 0, FALSE))
+                ZeroSize.QuadPart = 0;
+                if (!MmCanFileBeTruncated(&Fcb->SectionObjectPointers, &ZeroSize))
                 {
-                    Status = NT_SUCCESS(CacheIoStatus.Status) ?
-                             STATUS_USER_MAPPED_FILE : CacheIoStatus.Status;
-                    ExReleaseResourceLite(&Fcb->MainResource);
-                    FcbResourceAcquired = FALSE;
+                    Status = STATUS_USER_MAPPED_FILE;
                     goto Failure;
                 }
-            }
-        }
 
-        ExFatAcquireFatFs(Vcb);
-        Result = FR_OK;
-        if (Fcb && CreateInformation != FILE_OPENED && Fcb->FatFileOpen)
-        {
-            ExFatInvalidateFcbClusterMap(Fcb);
-            Result = f_close(&Fcb->FatFile);
-            Fcb->FatFileOpen = FALSE;
-            Fcb->FatFileWritable = FALSE;
-        }
-        if (Result == FR_OK)
-            Result = f_open(&Ccb->Handle.File, FatPath, OpenMode);
-        if (Result == FR_OK)
-        {
-            Ccb->HandleOpen = TRUE;
-            if (CreateInformation != FILE_OPENED)
-            {
-                Result = f_sync(&Ccb->Handle.File);
-                if (Result == FR_OK)
+                ExAcquireResourceExclusiveLite(&Fcb->MainResource, TRUE);
+                FcbResourceAcquired = TRUE;
+                if (Fcb->SectionObjectPointers.DataSectionObject)
                 {
-                    /*
-                     * The entry FatFs just wrote is fully determined: empty
-                     * file, archive bit, stamped now. Rescanning the parent
-                     * directory with f_stat() would only re-read that.
-                     */
-                    DWORD Now = get_fattime();
-
-                    RtlZeroMemory(&Information, sizeof(Information));
-                    Information.fattrib = AM_ARC;
-                    Information.fdate = (WORD)(Now >> 16);
-                    Information.ftime = (WORD)Now;
-                    Information.crdate = Information.fdate;
-                    Information.crtime = Information.ftime;
+                    CcFlushCache(&Fcb->SectionObjectPointers, NULL, 0, &CacheIoStatus);
+                    if (!NT_SUCCESS(CacheIoStatus.Status) ||
+                        !CcPurgeCacheSection(&Fcb->SectionObjectPointers, NULL, 0, FALSE))
+                    {
+                        Status = NT_SUCCESS(CacheIoStatus.Status) ?
+                                 STATUS_USER_MAPPED_FILE : CacheIoStatus.Status;
+                        ExReleaseResourceLite(&Fcb->MainResource);
+                        FcbResourceAcquired = FALSE;
+                        goto Failure;
+                    }
                 }
             }
-        }
-        ExFatReleaseFatFs(Vcb);
-        if (FcbResourceAcquired)
-        {
-            ExReleaseResourceLite(&Fcb->MainResource);
-            FcbResourceAcquired = FALSE;
+
+            /*
+             * Create/truncate through a transient FatFs handle; data I/O
+             * goes through Fcb->FatFile, opened lazily later.
+             */
+            ExFatAcquireFatFs(Vcb);
+            Result = Fcb ? ExFatCloseFcbFile(Fcb) : FR_OK;
+            if (Result == FR_OK)
+                Result = f_open(&NewFile, FatPath, OpenMode);
+            if (Result == FR_OK)
+            {
+                Result = f_close(&NewFile);
+                if (Result == FR_OK)
+                    ExFatStampNewInfo(&Information, AM_ARC);
+            }
+            ExFatReleaseFatFs(Vcb);
+            if (FcbResourceAcquired)
+            {
+                ExReleaseResourceLite(&Fcb->MainResource);
+                FcbResourceAcquired = FALSE;
+            }
         }
     }
 
@@ -457,7 +472,7 @@ ExFatCreate(
 
     Fcb->OpenHandleCount++;
     Vcb->OpenHandleCount++;
-    if (Ccb->DeleteOnClose)
+    if (DeleteOnClose)
         Fcb->DeletePending = TRUE;
     ExFatAttachFileObject(Fcb, Ccb, FileObject);
     if (CreateInformation != FILE_OPENED && Fcb->SectionObjectPointers.SharedCacheMap)
@@ -480,10 +495,7 @@ Failure:
     if (Ccb && Ccb->HandleOpen)
     {
         ExFatAcquireFatFs(Vcb);
-        if (Ccb->IsDirectory)
-            f_closedir(&Ccb->Handle.Directory);
-        else
-            f_close(&Ccb->Handle.File);
+        f_closedir(&Ccb->Directory);
         ExFatReleaseFatFs(Vcb);
     }
     if (ShareSet && Fcb)
@@ -558,7 +570,6 @@ ExFatClose(
     PEXFAT_VCB Vcb;
     PEXFAT_FCB Fcb;
     PEXFAT_CCB Ccb;
-    PCHAR FatPath = NULL;
 
     if (DeviceObject == ExFatGlobalData->DeviceObject || !FileObject)
         return STATUS_SUCCESS;
@@ -582,35 +593,20 @@ ExFatClose(
     if (Ccb->HandleOpen)
     {
         ExFatAcquireFatFs(Vcb);
-        if (Ccb->IsDirectory)
-            f_closedir(&Ccb->Handle.Directory);
-        else
-            f_close(&Ccb->Handle.File);
+        f_closedir(&Ccb->Directory);
         ExFatReleaseFatFs(Vcb);
         Ccb->HandleOpen = FALSE;
     }
 
     if (Fcb->DeletePending && !Fcb->IsVolume && Fcb->OpenHandleCount == 0)
     {
-        FatPath = ExFatBuildFatPath(Vcb, &Fcb->PathName);
-        if (FatPath)
-        {
-            ExFatAcquireFatFs(Vcb);
-            if (Fcb->FatFileOpen)
-            {
-                ExFatInvalidateFcbClusterMap(Fcb);
-                f_close(&Fcb->FatFile);
-                Fcb->FatFileOpen = FALSE;
-                Fcb->FatFileWritable = FALSE;
-            }
-            if (f_unlink(FatPath) == FR_OK)
-                Fcb->DeletePending = TRUE;
-            ExFatReleaseFatFs(Vcb);
-            ExFreePoolWithTag(FatPath, TAG_EXFAT_PATH);
-        }
+        ExFatAcquireFatFs(Vcb);
+        ExFatCloseFcbFile(Fcb);
+        f_unlink(Fcb->FatPath);
+        ExFatReleaseFatFs(Vcb);
     }
 
-    ExFatFreeUnicodeString(&Ccb->SearchPattern);
+    RtlFreeUnicodeString(&Ccb->SearchPattern);
     FileObject->FsContext = NULL;
     FileObject->FsContext2 = NULL;
     FileObject->SectionObjectPointer = NULL;

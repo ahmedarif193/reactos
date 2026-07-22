@@ -10,6 +10,17 @@
 #define NDEBUG
 #include <debug.h>
 
+static BOOLEAN
+ExFatIsBootSector(
+    const UCHAR* BootSector)
+{
+    return RtlCompareMemory(&BootSector[EXFAT_NAME_OFFSET],
+                            "EXFAT   ",
+                            EXFAT_NAME_LENGTH) == EXFAT_NAME_LENGTH &&
+           BootSector[EXFAT_BOOT_SIGNATURE_OFFSET] == 0x55 &&
+           BootSector[EXFAT_BOOT_SIGNATURE_OFFSET + 1] == 0xAA;
+}
+
 static NTSTATUS
 ExFatMountVolume(
     PDEVICE_OBJECT DeviceObject,
@@ -44,8 +55,7 @@ ExFatMountVolume(
                                   NULL,
                                   0,
                                   &Geometry,
-                                  &OutputLength,
-                                  TRUE);
+                                  &OutputLength);
     if (!NT_SUCCESS(Status) || Geometry.BytesPerSector < 512)
         return STATUS_UNRECOGNIZED_VOLUME;
 
@@ -66,12 +76,7 @@ ExFatMountVolume(
                                       &Offset,
                                       TRUE);
     }
-    if (!NT_SUCCESS(Status) ||
-        RtlCompareMemory(&BootSector[EXFAT_NAME_OFFSET],
-                         "EXFAT   ",
-                         EXFAT_NAME_LENGTH) != EXFAT_NAME_LENGTH ||
-        BootSector[EXFAT_BOOT_SIGNATURE_OFFSET] != 0x55 ||
-        BootSector[EXFAT_BOOT_SIGNATURE_OFFSET + 1] != 0xAA)
+    if (!NT_SUCCESS(Status) || !ExFatIsBootSector(BootSector))
     {
         Status = STATUS_UNRECOGNIZED_VOLUME;
         goto Failure;
@@ -90,8 +95,7 @@ ExFatMountVolume(
                                   NULL,
                                   0,
                                   &LengthInformation,
-                                  &OutputLength,
-                                  TRUE);
+                                  &OutputLength);
     if (!NT_SUCCESS(Status) || LengthInformation.Length.QuadPart <= 0)
         goto Failure;
 
@@ -128,8 +132,7 @@ ExFatMountVolume(
                                   NULL,
                                   0,
                                   NULL,
-                                  NULL,
-                                  TRUE);
+                                  NULL);
     Vcb->ReadOnly = (Status == STATUS_MEDIA_WRITE_PROTECTED);
 
     KeEnterCriticalRegion();
@@ -154,9 +157,7 @@ ExFatMountVolume(
     VolToPart[DriveNumber].pt = 0;
     Registered = TRUE;
 
-    DrivePath[0] = '0' + (CHAR)DriveNumber;
-    DrivePath[1] = ':';
-    DrivePath[2] = ANSI_NULL;
+    ExFatBuildDrivePath(Vcb, DrivePath);
     ExFatAcquireFatFs(Vcb);
     Result = f_mount(&Vcb->FileSystem, DrivePath, 1);
     if (Result != FR_OK || Vcb->FileSystem.fs_type != FS_EXFAT)
@@ -171,6 +172,7 @@ ExFatMountVolume(
         goto Failure;
     }
 
+    Vcb->BytesPerCluster = Vcb->FileSystem.csize * Vcb->BytesPerSector;
     RtlZeroMemory(Label, sizeof(Label));
     Result = f_getlabel(DrivePath, Label, &Vcb->SerialNumber);
     ExFatReleaseFatFs(Vcb);
@@ -239,9 +241,6 @@ Failure:
         KeEnterCriticalRegion();
         ExAcquireResourceExclusiveLite(&ExFatGlobalData->VolumeListResource, TRUE);
         ExFatAcquireFatFs(Vcb);
-        DrivePath[0] = '0' + Vcb->DriveNumber;
-        DrivePath[1] = ':';
-        DrivePath[2] = ANSI_NULL;
         f_mount(NULL, DrivePath, 0);
         Vcb->Mounted = FALSE;
         ExFatReleaseFatFs(Vcb);
@@ -253,8 +252,7 @@ Failure:
         ExFatDereferenceFcb(Vcb->VolumeFcb);
     if (Vcb)
     {
-        if (Vcb->SectorCacheAllocation)
-            ExFreePoolWithTag(Vcb->SectorCacheAllocation, TAG_EXFAT_IO);
+        ExFatFreeSectorCache(Vcb);
         ExDeleteResourceLite(&Vcb->FatFsResource);
         ExDeleteResourceLite(&Vcb->Resource);
     }
@@ -291,12 +289,7 @@ ExFatVerifyVolume(
                                   Vcb->BytesPerSector,
                                   &Offset,
                                   TRUE);
-    if (!NT_SUCCESS(Status) ||
-        RtlCompareMemory(&BootSector[EXFAT_NAME_OFFSET],
-                         "EXFAT   ",
-                         EXFAT_NAME_LENGTH) != EXFAT_NAME_LENGTH ||
-        BootSector[EXFAT_BOOT_SIGNATURE_OFFSET] != 0x55 ||
-        BootSector[EXFAT_BOOT_SIGNATURE_OFFSET + 1] != 0xAA)
+    if (!NT_SUCCESS(Status) || !ExFatIsBootSector(BootSector))
     {
         ExFreePoolWithTag(BootSector, TAG_EXFAT_IO);
         return STATUS_WRONG_VOLUME;
@@ -496,9 +489,7 @@ ExFatShutdown(
                 f_sync(&Fcb->FatFile);
         }
         ExFatFlushStorageDevice(Vcb);
-        DrivePath[0] = '0' + (CHAR)Index;
-        DrivePath[1] = ':';
-        DrivePath[2] = ANSI_NULL;
+        ExFatBuildDrivePath(Vcb, DrivePath);
         f_mount(NULL, DrivePath, 0);
         Vcb->Mounted = FALSE;
         ExFatReleaseFatFs(Vcb);
