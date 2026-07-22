@@ -247,7 +247,14 @@ SdBusReIdentifyChildren(
 
         CachedCid = PdoExtension->Cid;
 
-        Status = SdBusEnumerateCard(FdoExtension, PdoExtension);
+        Status = SdBusEnumerateCard(FdoExtension, PdoExtension, FALSE);
+        if (Status == STATUS_SD_RETRY_NO_UHS)
+        {
+            DPRINT1("SdBusReIdentifyChildren: voltage switch aborted; "
+                    "retrying at 3.3V without UHS\n");
+            Status = SdBusEnumerateCard(FdoExtension, PdoExtension, TRUE);
+        }
+
         if (!NT_SUCCESS(Status))
         {
             DPRINT1("SdBusReIdentifyChildren: Re-enum failed (0x%08lx); "
