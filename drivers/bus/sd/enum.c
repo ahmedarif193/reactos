@@ -21,6 +21,16 @@
 #define SD_VOLTAGE_SWITCH_CLOCK_SETTLE_MS 1
 #define SD_VOLTAGE_SWITCH_DAT_POLL_MS    2
 
+#define SDBUS_FW_UHS_SDR25   0x01
+#define SDBUS_FW_UHS_DDR50   0x02
+#define SDBUS_FW_UHS_SDR50   0x04
+#define SDBUS_FW_UHS_SDR104  0x08
+
+static NTSTATUS
+SdBusProgramClock(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _In_ ULONG TargetClockKhz);
+
 static NTSTATUS
 SdBusWaitForBusyRelease(
     _In_ PFDO_EXTENSION FdoExtension,
@@ -573,7 +583,11 @@ SdBusEnableSdHighSpeed(
     }
 
     HsSupported = (SwitchStatus[13] & 0x02) ? TRUE : FALSE;
-    DPRINT1("SdBusEnableSdHighSpeed: CMD6 check HS=%u\n", HsSupported);
+    DPRINT1("SdBusEnableSdHighSpeed: CMD6 check HS=%u grp1=%02x%02x (SDR50=%u SDR104=%u DDR50=%u)\n",
+            HsSupported, SwitchStatus[12], SwitchStatus[13],
+            (SwitchStatus[13] & 0x04) ? 1 : 0,
+            (SwitchStatus[13] & 0x08) ? 1 : 0,
+            (SwitchStatus[13] & 0x10) ? 1 : 0);
     if (!HsSupported)
     {
         return STATUS_NOT_SUPPORTED;
@@ -606,6 +620,191 @@ SdBusEnableSdHighSpeed(
 
     DPRINT1("SdBusEnableSdHighSpeed: SD high-speed mode enabled\n");
     return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+SdBusUhsSwitchFunction(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _In_ ULONG SwitchArgument,
+    _In_ UCHAR ExpectedFunction)
+{
+    ULONG SwitchStatusWords[16];
+    PUCHAR SwitchStatus;
+    NTSTATUS Status;
+
+    SwitchStatus = (PUCHAR)SwitchStatusWords;
+    RtlZeroMemory(SwitchStatusWords, sizeof(SwitchStatusWords));
+
+    Status = SdBusSendDataReadCommand(FdoExtension,
+                                      SDCMD_SWITCH_FUNC,
+                                      SwitchArgument,
+                                      SDHCI_CMD_RESP_48 | SDHCI_CMD_CRC_CHECK | SDHCI_CMD_INDEX_CHECK,
+                                      SwitchStatus,
+                                      sizeof(SwitchStatusWords),
+                                      NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("SdBusUhsSwitchFunction: CMD6 switch arg 0x%08lx failed (0x%08lx)\n",
+                SwitchArgument, Status);
+        return Status;
+    }
+
+    if ((SwitchStatus[16] & 0x0F) != ExpectedFunction)
+    {
+        DPRINT1("SdBusUhsSwitchFunction: card selected function %u, expected %u\n",
+                SwitchStatus[16] & 0x0F, ExpectedFunction);
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+SdBusEngageDdr50(
+    _In_ PFDO_EXTENSION FdoExtension)
+{
+    USHORT HostCtrl2;
+    NTSTATUS Status;
+
+    Status = SdBusUhsSwitchFunction(FdoExtension, 0x80FFFFF4, 4);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    HostCtrl2 = SdBusReadReg16(FdoExtension, SDHCI_HOST_CONTROL2);
+    HostCtrl2 &= ~SDHCI_HC2_UHS_MODE_MASK;
+    HostCtrl2 |= SDHCI_HC2_UHS_DDR50;
+    SdBusWriteReg16(FdoExtension, SDHCI_HOST_CONTROL2, HostCtrl2);
+
+    Status = SdBusProgramClock(FdoExtension, SD_UHS_DDR50_KHZ);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("SdBusEngageDdr50: clock program failed (0x%08lx)\n", Status);
+        return Status;
+    }
+
+    DPRINT1("SdBusEnableSdUhs: DDR50 mode engaged (%lu kHz)\n",
+            (ULONG)SD_UHS_DDR50_KHZ);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+SdBusEnableSdUhs(
+    _In_ PFDO_EXTENSION FdoExtension)
+{
+    ULONG SwitchStatusWords[16];
+    PUCHAR SwitchStatus;
+    NTSTATUS Status;
+    USHORT HostCtrl2;
+    BOOLEAN CardSdr104;
+    BOOLEAN CardDdr50;
+    BOOLEAN HostSdr104;
+    BOOLEAN HostDdr50;
+    ULONG FirmwareAllowed;
+    ULONG i;
+
+    SwitchStatus = (PUCHAR)SwitchStatusWords;
+    RtlZeroMemory(SwitchStatusWords, sizeof(SwitchStatusWords));
+
+    Status = SdBusSendDataReadCommand(FdoExtension,
+                                      SDCMD_SWITCH_FUNC,
+                                      0x00FFFFF1,
+                                      SDHCI_CMD_RESP_48 | SDHCI_CMD_CRC_CHECK | SDHCI_CMD_INDEX_CHECK,
+                                      SwitchStatus,
+                                      sizeof(SwitchStatusWords),
+                                      NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("SdBusEnableSdUhs: CMD6 check failed (0x%08lx)\n", Status);
+        return Status;
+    }
+
+    CardSdr104 = (SwitchStatus[13] & 0x08) ? TRUE : FALSE;
+    CardDdr50 = (SwitchStatus[13] & 0x10) ? TRUE : FALSE;
+    HostSdr104 = (FdoExtension->HostCapabilities2 & SDHCI_CAP2_SDR104_SUPPORT) ? TRUE : FALSE;
+    HostDdr50 = (FdoExtension->HostCapabilities2 & SDHCI_CAP2_DDR50_SUPPORT) ? TRUE : FALSE;
+
+    DPRINT1("SdBusEnableSdUhs: card SDR104=%u DDR50=%u, host SDR104=%u DDR50=%u\n",
+            CardSdr104, CardDdr50, HostSdr104, HostDdr50);
+
+    FirmwareAllowed = 0;
+    if (!NT_SUCCESS(SdBusHardwareQueryUhsModes(FdoExtension, &FirmwareAllowed)) ||
+        FirmwareAllowed == 0)
+    {
+        FirmwareAllowed = SDBUS_FW_UHS_DDR50;
+    }
+    DPRINT1("SdBusEnableSdUhs: firmware-allowed UHS bitmap 0x%02lx\n", FirmwareAllowed);
+
+    if ((FirmwareAllowed & SDBUS_FW_UHS_SDR104) && HostSdr104 && CardSdr104)
+    {
+        Status = SdBusUhsSwitchFunction(FdoExtension, 0x80FFFFF3, 3);
+        if (NT_SUCCESS(Status))
+        {
+            HostCtrl2 = SdBusReadReg16(FdoExtension, SDHCI_HOST_CONTROL2);
+            HostCtrl2 &= ~SDHCI_HC2_UHS_MODE_MASK;
+            HostCtrl2 |= SDHCI_HC2_UHS_SDR104;
+            SdBusWriteReg16(FdoExtension, SDHCI_HOST_CONTROL2, HostCtrl2);
+
+            Status = SdBusProgramClock(FdoExtension, SD_UHS_SDR104_KHZ);
+            if (NT_SUCCESS(Status))
+            {
+                HostCtrl2 = SdBusReadReg16(FdoExtension, SDHCI_HOST_CONTROL2);
+                HostCtrl2 |= SDHCI_HC2_EXEC_TUNING;
+                SdBusWriteReg16(FdoExtension, SDHCI_HOST_CONTROL2, HostCtrl2);
+
+                for (i = 0; i < 40; i++)
+                {
+                    ULONG TuningWords[16];
+
+                    (void)SdBusSendDataReadCommand(FdoExtension,
+                                                   SDCMD_SEND_TUNING_BLOCK,
+                                                   0,
+                                                   SDHCI_CMD_RESP_48 | SDHCI_CMD_CRC_CHECK | SDHCI_CMD_INDEX_CHECK,
+                                                   TuningWords,
+                                                   sizeof(TuningWords),
+                                                   NULL);
+
+                    HostCtrl2 = SdBusReadReg16(FdoExtension, SDHCI_HOST_CONTROL2);
+                    if (!(HostCtrl2 & SDHCI_HC2_EXEC_TUNING))
+                    {
+                        break;
+                    }
+                }
+
+                HostCtrl2 = SdBusReadReg16(FdoExtension, SDHCI_HOST_CONTROL2);
+                if ((HostCtrl2 & SDHCI_HC2_SAMPLING_CLK_SELECT) &&
+                    !(HostCtrl2 & SDHCI_HC2_EXEC_TUNING))
+                {
+                    DPRINT1("SdBusEnableSdUhs: SDR104 tuning pass (%lu kHz)\n",
+                            (ULONG)SD_UHS_SDR104_KHZ);
+                    return STATUS_SUCCESS;
+                }
+
+                DPRINT1("SdBusEnableSdUhs: SDR104 tuning fail; DDR50 fallback\n");
+                HostCtrl2 &= ~(SDHCI_HC2_EXEC_TUNING | SDHCI_HC2_SAMPLING_CLK_SELECT);
+                SdBusWriteReg16(FdoExtension, SDHCI_HOST_CONTROL2, HostCtrl2);
+            }
+        }
+    }
+
+    if ((FirmwareAllowed & SDBUS_FW_UHS_DDR50) && HostDdr50 && CardDdr50)
+    {
+        Status = SdBusEngageDdr50(FdoExtension);
+        if (NT_SUCCESS(Status))
+        {
+            return STATUS_SUCCESS;
+        }
+        DPRINT1("SdBusEnableSdUhs: DDR50 engage failed (0x%08lx)\n", Status);
+    }
+
+    DPRINT1("SdBusEnableSdUhs: no UHS mode engaged; using SDR25 high speed\n");
+    HostCtrl2 = SdBusReadReg16(FdoExtension, SDHCI_HOST_CONTROL2);
+    HostCtrl2 &= ~(SDHCI_HC2_UHS_MODE_MASK | SDHCI_HC2_EXEC_TUNING |
+                   SDHCI_HC2_SAMPLING_CLK_SELECT);
+    HostCtrl2 |= SDHCI_HC2_UHS_SDR25;
+    SdBusWriteReg16(FdoExtension, SDHCI_HOST_CONTROL2, HostCtrl2);
+    return SdBusEnableSdHighSpeed(FdoExtension);
 }
 
 static ULONG
@@ -811,6 +1010,17 @@ SdBusPerformVoltageSwitch(
     HostCtrl2 |= SDHCI_HC2_V18_SIGNAL_ENABLE;
     SdBusWriteReg16(FdoExtension, SDHCI_HOST_CONTROL2, HostCtrl2);
 
+    Status = SdBusHardwareVoltageSwitch(FdoExtension, TRUE);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("SdBusPerformVoltageSwitch: external regulator 1.8V switch failed "
+                "(0x%08lx)\n", Status);
+        HostCtrl2 = SdBusReadReg16(FdoExtension, SDHCI_HOST_CONTROL2);
+        HostCtrl2 &= ~SDHCI_HC2_V18_SIGNAL_ENABLE;
+        SdBusWriteReg16(FdoExtension, SDHCI_HOST_CONTROL2, HostCtrl2);
+        return STATUS_SD_VOLTAGE_SWITCH_FAILED;
+    }
+
     Delay.QuadPart = -10000LL * SD_VOLTAGE_SWITCH_REGULATOR_MS;
     KeDelayExecutionThread(KernelMode, FALSE, &Delay);
 
@@ -871,7 +1081,8 @@ SdBusPerformVoltageSwitch(
 NTSTATUS
 SdBusEnumerateCard(
     _In_ PFDO_EXTENSION FdoExtension,
-    _Out_ PPDO_EXTENSION PdoExtension)
+    _Out_ PPDO_EXTENSION PdoExtension,
+    _In_ BOOLEAN ForceNoUhs)
 {
     NTSTATUS Status;
     ULONG Response[4];
@@ -1064,11 +1275,13 @@ SdBusEnumerateCard(
                 AcmdArg |= SD_ACMD41_HCS;
             }
 
-            if (IsV2 &&
+            if (!ForceNoUhs &&
+                IsV2 &&
                 SdBusHostSupportsUhs(FdoExtension) &&
                 SdBusHardwareCanVoltageSwitch(FdoExtension))
             {
                 AcmdArg |= SD_ACMD41_S18R;
+                AcmdArg |= SD_OCR_XPC;
                 RequestedUhs = TRUE;
             }
 
@@ -1182,15 +1395,47 @@ SdBusEnumerateCard(
         Status = SdBusPerformVoltageSwitch(FdoExtension);
         if (!NT_SUCCESS(Status))
         {
-            DPRINT1("SdBusEnumerateCard: voltage switch failed (0x%08lx); "
-                    "continuing at 3.3V\n", Status);
-            CardAcceptedUhs = FALSE;
-            Status = STATUS_SUCCESS;
+            USHORT RecoverHc2;
+            NTSTATUS RestoreStatus;
+            LARGE_INTEGER PowerDelay;
+
+            DPRINT1("SdBusEnumerateCard: voltage switch failed (0x%08lx); best-effort "
+                    "3.3V signaling restore + CMD0 then retry without UHS (card VDD is "
+                    "firmware-owned GIO_AON GPIO4 and cannot be OS-power-cycled)\n",
+                    Status);
+
+            RecoverHc2 = SdBusReadReg16(FdoExtension, SDHCI_HOST_CONTROL2);
+            RecoverHc2 &= ~(SDHCI_HC2_V18_SIGNAL_ENABLE | SDHCI_HC2_UHS_MODE_MASK);
+            SdBusWriteReg16(FdoExtension, SDHCI_HOST_CONTROL2, RecoverHc2);
+
+            RestoreStatus = SdBusHardwareVoltageSwitch(FdoExtension, FALSE);
+            if (!NT_SUCCESS(RestoreStatus))
+            {
+                DPRINT1("SdBusEnumerateCard: 3.3V regulator restore failed (0x%08lx); "
+                        "card VDD (GIO_AON GPIO4) is not OS-controllable, a physical "
+                        "re-insert may be required\n", RestoreStatus);
+            }
+
+            SdBusWriteReg8(FdoExtension, SDHCI_POWER_CONTROL, 0);
+            PowerDelay.QuadPart = -10000LL * SD_POWER_UP_DELAY_MS;
+            KeDelayExecutionThread(KernelMode, FALSE, &PowerDelay);
+
+            SdBusWriteReg8(FdoExtension, SDHCI_POWER_CONTROL,
+                           SDHCI_PC_BUS_VOLTAGE_330 | SDHCI_PC_BUS_POWER_ON);
+            PowerDelay.QuadPart = -10000LL * SD_POWER_UP_DELAY_MS;
+            KeDelayExecutionThread(KernelMode, FALSE, &PowerDelay);
+
+            (void)SdBusProgramClock(FdoExtension, SD_INIT_CLOCK_KHZ);
+            (void)SdBusSendCommand(FdoExtension,
+                                   SDCMD_GO_IDLE_STATE,
+                                   0,
+                                   SDHCI_CMD_RESP_NONE,
+                                   NULL);
+
+            return STATUS_SD_RETRY_NO_UHS;
         }
-        else
-        {
-            DPRINT1("SdBusEnumerateCard: 1.8V signaling active; UHS-I eligible\n");
-        }
+
+        DPRINT1("SdBusEnumerateCard: 1.8V signaling active; UHS-I eligible\n");
     }
 
     /*
@@ -1368,7 +1613,10 @@ SdBusEnumerateCard(
                 if (NT_SUCCESS(Status))
                 {
                     RtlCopyMemory(PdoExtension->Scr, ScrData, 8);
-                    DPRINT1("SdBusEnumerateCard: SCR read successfully\n");
+                    DPRINT1("SdBusEnumerateCard: SCR %02x %02x %02x %02x (SD_SPEC=%u SD_SPEC3=%u SD_SPEC4=%u BUSW=0x%x)\n",
+                            ScrData[0], ScrData[1], ScrData[2], ScrData[3],
+                            ScrData[0] & 0x0F, (ScrData[2] >> 7) & 1,
+                            (ScrData[2] >> 2) & 1, ScrData[1] & 0x0F);
                 }
                 else
                 {
@@ -1411,10 +1659,17 @@ SdBusEnumerateCard(
             DPRINT1("SdBusEnumerateCard: Leaving combo card on 1-bit bus until SDIO bus-width switching is coordinated\n");
         }
 
-        Status = SdBusEnableSdHighSpeed(FdoExtension);
+        if (CardAcceptedUhs)
+        {
+            Status = SdBusEnableSdUhs(FdoExtension);
+        }
+        else
+        {
+            Status = SdBusEnableSdHighSpeed(FdoExtension);
+        }
         if (!NT_SUCCESS(Status))
         {
-            DPRINT1("SdBusEnumerateCard: SD high-speed switch not active (0x%08lx)\n",
+            DPRINT1("SdBusEnumerateCard: speed switch not active (0x%08lx)\n",
                     Status);
             Status = STATUS_SUCCESS;
         }
@@ -1778,6 +2033,39 @@ SdBusSetTransferClock(
     BOOLEAN HighSpeed = FALSE;
     UCHAR HostCtrl;
     NTSTATUS Status;
+
+    if (PdoExtension->CardType != SdCardTypeEmmc &&
+        PdoExtension->CardType != SdCardTypeMmc &&
+        PdoExtension->CardType != SdCardTypeSdio)
+    {
+        USHORT HostCtrl2 = SdBusReadReg16(FdoExtension, SDHCI_HOST_CONTROL2);
+
+        if (HostCtrl2 & SDHCI_HC2_V18_SIGNAL_ENABLE)
+        {
+            ULONG UhsMode = HostCtrl2 & SDHCI_HC2_UHS_MODE_MASK;
+
+            if (UhsMode == SDHCI_HC2_UHS_SDR104 || UhsMode == SDHCI_HC2_UHS_DDR50)
+            {
+                ULONG UhsClock = (UhsMode == SDHCI_HC2_UHS_SDR104) ?
+                                 SD_UHS_SDR104_KHZ : SD_UHS_DDR50_KHZ;
+
+                Status = SdBusProgramClock(FdoExtension, UhsClock);
+                if (NT_SUCCESS(Status))
+                {
+                    Status = SdBusVerifyCardResponds(FdoExtension, PdoExtension);
+                    if (NT_SUCCESS(Status))
+                    {
+                        DPRINT1("SdBusSetTransferClock: UHS mode %lu at %lu kHz\n",
+                                UhsMode, UhsClock);
+                        return STATUS_SUCCESS;
+                    }
+                }
+
+                DPRINT1("SdBusSetTransferClock: UHS clock verify failed (0x%08lx), "
+                        "falling back to standard timing\n", Status);
+            }
+        }
+    }
 
     /* Pick target clock based on card type and host speed mode */
     HostCtrl = SdBusReadReg8(FdoExtension, SDHCI_HOST_CONTROL);

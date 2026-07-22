@@ -17,6 +17,10 @@ typedef struct _SDBUS_HARDWARE_OPS
     VOID (*SelectPins)(_In_ PFDO_EXTENSION FdoExtension,
                        _In_ BOOLEAN MmcTiming);
     BOOLEAN (*CanVoltageSwitch)(_In_ PFDO_EXTENSION FdoExtension);
+    NTSTATUS (*VoltageSwitch)(_In_ PFDO_EXTENSION FdoExtension,
+                              _In_ BOOLEAN To18);
+    NTSTATUS (*QueryUhsModes)(_In_ PFDO_EXTENSION FdoExtension,
+                              _Out_ PULONG Modes);
 } SDBUS_HARDWARE_OPS, *PSDBUS_HARDWARE_OPS;
 
 typedef struct _SDBUS_HARDWARE_EXTENSION
@@ -45,6 +49,20 @@ SdBusHardwareSelectPins(
 
 BOOLEAN
 SdBusHardwareCanVoltageSwitch(
+    _In_ PFDO_EXTENSION FdoExtension);
+
+NTSTATUS
+SdBusHardwareVoltageSwitch(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _In_ BOOLEAN To18);
+
+NTSTATUS
+SdBusHardwareQueryUhsModes(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _Out_ PULONG Modes);
+
+NTSTATUS
+SdBusHardwareAttach(
     _In_ PFDO_EXTENSION FdoExtension);
 
 #endif /* _SDBUS_HARDWARE_H_ */

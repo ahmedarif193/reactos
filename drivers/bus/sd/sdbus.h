@@ -321,7 +321,8 @@ SdBusPdoInternalDeviceControl(
 NTSTATUS
 SdBusEnumerateCard(
     _In_ PFDO_EXTENSION FdoExtension,
-    _Out_ PPDO_EXTENSION PdoExtension);
+    _Out_ PPDO_EXTENSION PdoExtension,
+    _In_ BOOLEAN ForceNoUhs);
 
 /**
  * @brief Raise SDHCI clock from 400 kHz init speed to transfer speed.
