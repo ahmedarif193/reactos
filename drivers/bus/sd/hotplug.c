@@ -260,7 +260,14 @@ SdBusEnumerateInsertedCard(
 
     NewPdo->InsertionGeneration = CurrentGeneration;
 
-    Status = SdBusEnumerateCard(FdoExtension, NewPdo);
+    Status = SdBusEnumerateCard(FdoExtension, NewPdo, FALSE);
+    if (Status == STATUS_SD_RETRY_NO_UHS)
+    {
+        DPRINT1("SdBusEnumerateInsertedCard: voltage switch aborted; "
+                "retrying enumeration at 3.3V without UHS\n");
+        Status = SdBusEnumerateCard(FdoExtension, NewPdo, TRUE);
+    }
+
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("SdBusEnumerateInsertedCard: card enumeration failed "

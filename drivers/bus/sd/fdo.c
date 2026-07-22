@@ -759,6 +759,8 @@ SdBusFdoStartDevice(
                 Status);
     }
 
+    (VOID)SdBusHardwareAttach(FdoExtension);
+
     {
         ULONG PresentState;
         ULONG SettleWait = 100;
