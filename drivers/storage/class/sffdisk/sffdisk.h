@@ -52,6 +52,7 @@ typedef struct _SFFDISK_DEVICE_EXTENSION
     ULONG DiskNumber;                   /**< Disk number from IoGetConfigurationInformation()->DiskCount */
     HANDLE HarddiskDirectory;           /**< Handle to \\Device\\HarddiskN directory object */
     UNICODE_STRING DeviceName;          /**< FDO device name (e.g. \\Device\\Harddisk0\\DR0) */
+    BOOLEAN PhysicalDriveLinkCreated;   /**< TRUE while \\DosDevices\\PhysicalDriveN exists */
     UNICODE_STRING DiskInterfaceName;
     BOOLEAN DiskInterfaceRegistered;
     BOOLEAN DiskInterfaceEnabled;
