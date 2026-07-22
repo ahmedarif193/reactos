@@ -26,6 +26,11 @@
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
+static
+NTSTATUS
+SffdiskCreatePhysicalDriveLink(
+    _Inout_ PSFFDISK_DEVICE_EXTENSION DeviceExtension);
+
 /**
  * @brief Completion routine that signals the event when the lower driver
  *        finishes processing a forwarded IRP.
@@ -521,6 +526,12 @@ SffdiskStartDevice(
         }
     }
 
+    /* Match disk.sys' public naming contract. Opening PhysicalDriveN reaches
+       the top of the attached stack, including partmgr's performance and
+       storage-property handlers. The card remains usable if link creation
+       fails; only raw-disk clients lose the well-known name. */
+    SffdiskCreatePhysicalDriveLink(DeviceExtension);
+
     DPRINT1("SffdiskStartDevice: Card type %d, %I64u sectors, %s, %s\n",
            DeviceExtension->CardType,
            DeviceExtension->TotalSectors,
@@ -536,20 +547,82 @@ CleanupInterface:
     return Status;
 }
 
-/**
- *
- * @param DeviceExtension Our device extension.
- */
+/** Create the well-known raw-disk name used by storage-management clients. */
+static
+NTSTATUS
+SffdiskCreatePhysicalDriveLink(
+    _Inout_ PSFFDISK_DEVICE_EXTENSION DeviceExtension)
+{
+    WCHAR LinkNameBuffer[64];
+    UNICODE_STRING LinkName;
+    NTSTATUS Status;
+
+    if (DeviceExtension->PhysicalDriveLinkCreated)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    if (DeviceExtension->DeviceName.Buffer == NULL)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    swprintf(LinkNameBuffer,
+             RTL_NUMBER_OF(LinkNameBuffer),
+             L"\\DosDevices\\PhysicalDrive%lu",
+             DeviceExtension->DiskNumber);
+    RtlInitUnicodeString(&LinkName, LinkNameBuffer);
+
+    Status = IoCreateSymbolicLink(&LinkName, &DeviceExtension->DeviceName);
+    if (NT_SUCCESS(Status))
+    {
+        DeviceExtension->PhysicalDriveLinkCreated = TRUE;
+        DPRINT1("Sffdisk: Linked %wZ to %wZ\n",
+                &LinkName, &DeviceExtension->DeviceName);
+    }
+    else
+    {
+        DPRINT1("Sffdisk: IoCreateSymbolicLink(%wZ) failed 0x%08lx\n",
+                &LinkName, Status);
+    }
+
+    return Status;
+}
+
+static
+VOID
+SffdiskDeletePhysicalDriveLink(
+    _Inout_ PSFFDISK_DEVICE_EXTENSION DeviceExtension)
+{
+    WCHAR LinkNameBuffer[64];
+    UNICODE_STRING LinkName;
+
+    if (!DeviceExtension->PhysicalDriveLinkCreated)
+    {
+        return;
+    }
+
+    swprintf(LinkNameBuffer,
+             RTL_NUMBER_OF(LinkNameBuffer),
+             L"\\DosDevices\\PhysicalDrive%lu",
+             DeviceExtension->DiskNumber);
+    RtlInitUnicodeString(&LinkName, LinkNameBuffer);
+    IoDeleteSymbolicLink(&LinkName);
+    DeviceExtension->PhysicalDriveLinkCreated = FALSE;
+}
+
 static
 VOID
 SffdiskCleanupDevice(
-    _In_ PSFFDISK_DEVICE_EXTENSION DeviceExtension)
+    _Inout_ PSFFDISK_DEVICE_EXTENSION DeviceExtension)
 {
     if (DeviceExtension->DiskInterfaceEnabled)
     {
         IoSetDeviceInterfaceState(&DeviceExtension->DiskInterfaceName, FALSE);
         DeviceExtension->DiskInterfaceEnabled = FALSE;
     }
+
+    SffdiskDeletePhysicalDriveLink(DeviceExtension);
 
     if (DeviceExtension->HarddiskDirectory != NULL)
     {
