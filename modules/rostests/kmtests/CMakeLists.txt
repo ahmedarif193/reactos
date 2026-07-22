@@ -259,6 +259,7 @@ list(APPEND KMTEST_SOURCE
     ntos_kd/NtSystemDebugControl.c
     ntos_mm/MmMapLockedPagesSpecifyCache_user.c
     ntos_mm/NtCreateSection_user.c
+    ntos_mm/NtUserPhysicalPages.c
     ntos_po/PoIrp_user.c
     tcpip/TcpIp_user.c
     ${COMMON_SOURCE}

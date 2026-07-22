@@ -216,6 +216,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/lpc/port.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/lpc/reply.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/lpc/send.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/ARM3/awesup.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/ARM3/contmem.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/ARM3/drvmgmt.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/ARM3/dynamic.c

@@ -303,6 +303,35 @@ MiArm64EnsureUserPte(
 VOID
 MiArm64IncrementUserPageTableReferences(
     _In_ PVOID Address);
+
+typedef struct _MI_ARM64_USER_PTE_WALK
+{
+    volatile ULONG64 *PointerPte;
+    ULONG64 PteValue;
+    ULONG Depth;
+    /* Per-level KSEG0 table bases and table-page PFNs (L0..L3) captured
+     * during the walk so release paths never re-walk the hierarchy. */
+    volatile ULONG64 *LevelTable[4];
+    PFN_NUMBER LevelPfn[4];
+} MI_ARM64_USER_PTE_WALK, *PMI_ARM64_USER_PTE_WALK;
+
+BOOLEAN
+MiArm64GetUserPteAddressForProcess(
+    _In_ PEPROCESS Process,
+    _In_ PVOID Address,
+    _Out_ PMI_ARM64_USER_PTE_WALK Walk);
+
+VOID
+MiArm64ReleaseUserPageTableReference(
+    _In_ PEPROCESS Process,
+    _In_ PVOID Address,
+    _In_ BOOLEAN ReleaseLeafShare,
+    _In_ PMI_ARM64_USER_PTE_WALK Walk);
+
+VOID
+MiArm64PruneEmptyUserPageTables(
+    _In_ PEPROCESS Process,
+    _In_ PVOID Address);
 #endif
 
 FORCEINLINE
