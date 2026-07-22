@@ -3407,42 +3407,6 @@ XHCI_SetEndpointDequeue(
                             NULL);
 }
 
-static MPSTATUS
-XHCI_ResumeStoppedEndpoint(
-    _In_ PXHCI_EXTENSION Extension,
-    _Inout_ PXHCI_ENDPOINT Endpoint,
-    _Inout_ PXHCI_RING Ring)
-{
-    PVOID DevCtx;
-    PXHCI_ENDPOINT_CONTEXT EpCtx;
-    ULONG EpState;
-    MPSTATUS Status;
-
-    if (!Extension || !Endpoint || !Endpoint->Slot || !Ring || Endpoint->EndpointId == 0)
-        return MP_STATUS_ERROR;
-
-    DevCtx = Endpoint->Slot->DeviceContext.VirtualAddress;
-    if (!DevCtx)
-        return MP_STATUS_ERROR;
-
-    EpCtx = XHCI_GetDeviceEndpointContextVa(Extension,
-                                            DevCtx,
-                                            Endpoint->EndpointId - 1);
-    if (!EpCtx)
-        return MP_STATUS_ERROR;
-
-    EpState = EpCtx->EpInfo & XHCI_EPCTX_STATE_MASK;
-    if (EpState != XHCI_EPCTX_STATE_STOPPED)
-        return MP_STATUS_SUCCESS;
-
-    Status = XHCI_SetEndpointDequeue(Extension,
-                                     Endpoint->Slot,
-                                     Endpoint->EndpointId,
-                                     Ring);
-
-    return Status;
-}
-
 static
 VOID
 XHCI_PerformEndpointResetSequence(
@@ -6167,7 +6131,7 @@ XHCI_FinalizeDisableSlot(
     Slot->Addressed = FALSE;
     Slot->Configured = FALSE;
     Slot->DisablePending = FALSE;
-    Slot->UsbDeviceAddress = 0;
+    InterlockedExchange(&Slot->DetachPending, 0);
     Slot->PortNumber = 0;
     Slot->HighestEndpointId = 1;
     XHCI_UpdateDeviceAddressMap(Extension, Slot, 0);
@@ -6419,7 +6383,6 @@ XHCI_HandlePortChange(
     ULONG PortSc = 0;
     ULONG ChangeMask;
     PXHCI_DEVICE_SLOT Slot;
-    MPSTATUS Status;
 
     if (!Extension || PortId == 0 || PortId > Extension->NumberOfPorts)
         return;
@@ -6432,31 +6395,21 @@ XHCI_HandlePortChange(
            PortId,
            PortSc);
 
-    /* If the device disconnected, proactively disable the slot to avoid stale state */
+    /*
+     * Record the detach, but do not issue Disable Slot from this event-ring/DPC
+     * path. A command sent here is limited to a 5 ms busy-poll and requires
+     * reentrant servicing of the same event ring; slower completions become
+     * orphan events. USBPORT must also drain the device's pipes first.
+     */
     if ((PortSc & XHCI_PORTSC_CCS) == 0)
     {
         Slot = XHCI_FindSlotByPort(Extension, PortId);
-        if (Slot && Slot->InUse && !Slot->DisablePending)
+        if (Slot && Slot->InUse)
         {
-            Slot->DisablePending = TRUE;
-            DPRINT1("usbxhci: port %u disconnect, disabling slot %u\n",
-                    PortId, Slot->SlotId);
-
-            Status = XHCI_SendCommand(Extension,
-                                      XHCI_TRB_TYPE_DISABLE_SLOT,
-                                      0,
-                                      0,
-                                      XHCI_COMMAND_SLOT_FIELD(Slot->SlotId),
-                                      XHCI_COMMAND_TIMEOUT_MS,
-                                      FALSE,
-                                      NULL,
-                                      NULL);
-            if (Status != MP_STATUS_SUCCESS)
-            {
-                DPRINT1("usbxhci: disable slot %u failed status=%lu\n",
-                        Slot->SlotId, Status);
-                Slot->DisablePending = FALSE;
-            }
+            InterlockedExchange(&Slot->DetachPending, 1);
+            DPRINT1("usbxhci: port %u disconnect, deferring disable of slot %u\n",
+                    PortId,
+                    Slot->SlotId);
         }
     }
 
@@ -7599,11 +7552,15 @@ XHCI_AssignSlot(
     if (!Slot)
         return MP_STATUS_ERROR;
 
+    /* Clear any stale address left by an earlier use of this hardware slot. */
+    XHCI_UpdateDeviceAddressMap(Extension, Slot, 0);
+
     Slot->InUse = TRUE;
     Slot->Addressed = FALSE;
     Slot->Configured = FALSE;
     Slot->PortResetSinceAddress = FALSE;
     Slot->DisablePending = FALSE;
+    InterlockedExchange(&Slot->DetachPending, 0);
     Slot->Ep0RingCycleState = 1;
     Slot->Ep0RingEnqueueIndex = 0;
     Slot->Ep0RingDequeueIndex = 0;
@@ -7625,8 +7582,6 @@ XHCI_AssignSlot(
 
     if (Extension->Dcbaa)
         Extension->Dcbaa[SlotId] = Slot->DeviceContext.PhysicalAddress.QuadPart;
-
-    XHCI_UpdateDeviceAddressMap(Extension, Slot, 0);
 
     XHCI_DBG(XHCI_TRACE_COMMANDS,
              "usbxhci: slot %u assigned DCBAA=%I64x\n",
@@ -11570,10 +11525,6 @@ XHCI_SubmitSgTransfer(
     if (!Endpoint->Slot || !Ring || !Ring->Base)
         return MP_STATUS_ERROR;
 
-    Status = XHCI_ResumeStoppedEndpoint(Extension, Endpoint, Ring);
-    if (Status != MP_STATUS_SUCCESS)
-        return Status;
-
     TransferParameters = Transfer->TransferParameters;
     SgList = Transfer->SgList;
     if (TransferParameters)
@@ -12356,13 +12307,17 @@ XHCI_CloseEndpoint(PVOID MiniPortExtension,
                    PVOID Endpoint,
                    BOOLEAN IsDoNotCallMiniport)
 {
+    PXHCI_EXTENSION Extension = MiniPortExtension;
     PXHCI_ENDPOINT XhciEndpoint = Endpoint;
+    PXHCI_DEVICE_SLOT Slot;
+    MPSTATUS Status;
     KIRQL CurrentIrql;
-    UNREFERENCED_PARAMETER(MiniPortExtension);
     UNREFERENCED_PARAMETER(IsDoNotCallMiniport);
 
-    if (!XhciEndpoint)
+    if (!Extension || !XhciEndpoint)
         return;
+
+    Slot = XhciEndpoint->Slot;
 
 #if DBG
     if (XhciEndpoint->SlotId == 1 && (XhciEndpoint->EndpointId == 3 || XhciEndpoint->EndpointId == 4))
@@ -12439,6 +12394,45 @@ XHCI_CloseEndpoint(PVOID MiniPortExtension,
 
     if (XhciEndpoint->StreamsEnabled)
         XHCI_FreeStreamResources(XhciEndpoint);
+
+    /*
+     * Do not disable a slot from the port-status-change event handler. That
+     * handler runs at DISPATCH_LEVEL, where command waits are limited to a 5 ms
+     * busy-poll and require reentrant servicing of the event ring. It also runs
+     * before USBPORT has aborted and closed the device's pipes.
+     *
+     * USBPORT closes the default pipe last during device removal. Disable the
+     * slot here, at PASSIVE_LEVEL, after all other endpoint teardown is done.
+     */
+    if (XhciEndpoint->DefaultControl &&
+        Slot &&
+        Slot->InUse &&
+        InterlockedCompareExchange(&Slot->DetachPending, 0, 0) != 0 &&
+        !Slot->DisablePending)
+    {
+        Slot->DisablePending = TRUE;
+        DPRINT1("usbxhci: closing default endpoint, disabling slot %u\n",
+                Slot->SlotId);
+
+        Status = XHCI_SendCommand(Extension,
+                                  XHCI_TRB_TYPE_DISABLE_SLOT,
+                                  0,
+                                  0,
+                                  XHCI_COMMAND_SLOT_FIELD(Slot->SlotId),
+                                  XHCI_COMMAND_TIMEOUT_MS,
+                                  FALSE,
+                                  NULL,
+                                  NULL);
+        if (Status != MP_STATUS_SUCCESS)
+        {
+            DPRINT1("usbxhci: disable slot %u on default endpoint close failed status=%lu\n",
+                    Slot->SlotId,
+                    Status);
+
+            if (!Extension->FatalError)
+                Slot->DisablePending = FALSE;
+        }
+    }
 
     XhciEndpoint->Slot = NULL;
     {
@@ -13568,10 +13562,6 @@ XHCI_SubmitIsochronousTransfer(
         }
         return MP_STATUS_FAILURE;
     }
-
-    Status = XHCI_ResumeStoppedEndpoint(Extension, Endpoint, Ring);
-    if (Status != MP_STATUS_SUCCESS)
-        return Status;
 
     DataIn = (TransferParameters->TransferFlags & USBD_TRANSFER_DIRECTION_IN) ? TRUE : FALSE;
 

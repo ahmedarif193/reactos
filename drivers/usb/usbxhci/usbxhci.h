@@ -191,6 +191,7 @@ typedef struct _XHCI_DEVICE_SLOT {
     BOOLEAN Configured;
     BOOLEAN PortResetSinceAddress;
     BOOLEAN DisablePending;
+    volatile LONG DetachPending;
     ULONG Ep0ContextErrorCount;
     ULONG Ep0TransactionErrorCount;
     UCHAR UsbDeviceAddress;
