@@ -829,11 +829,27 @@ NwifiMsmIndicateStatus(
             break;
 
         case NDIS_STATUS_DOT11_LINK_QUALITY:
-            if (Buffer != NULL && BufferSize >= sizeof(ULONG))
+            if (Buffer != NULL &&
+                BufferSize >= sizeof(DOT11_LINK_QUALITY_PARAMETERS))
             {
-                NdisAcquireSpinLock(&Msm->Lock);
-                Msm->CurrentRssi = -(LONG)(100 - (*(PULONG)Buffer % 101));
-                NdisReleaseSpinLock(&Msm->Lock);
+                PDOT11_LINK_QUALITY_PARAMETERS Lq =
+                    (PDOT11_LINK_QUALITY_PARAMETERS)Buffer;
+                if (Lq->uLinkQualityListSize >= 1 &&
+                    Lq->uLinkQualityListOffset <= BufferSize &&
+                    BufferSize - Lq->uLinkQualityListOffset >=
+                        sizeof(DOT11_LINK_QUALITY_ENTRY))
+                {
+                    PDOT11_LINK_QUALITY_ENTRY Entry =
+                        (PDOT11_LINK_QUALITY_ENTRY)
+                        ((PUCHAR)Buffer + Lq->uLinkQualityListOffset);
+                    UCHAR Quality = Entry->ucLinkQuality > 100
+                                        ? 100 : Entry->ucLinkQuality;
+
+                    /* Inverse of the quality = 2 * (RSSI + 100) mapping */
+                    NdisAcquireSpinLock(&Msm->Lock);
+                    Msm->CurrentRssi = -100 + (LONG)(Quality / 2);
+                    NdisReleaseSpinLock(&Msm->Lock);
+                }
             }
             break;
 
