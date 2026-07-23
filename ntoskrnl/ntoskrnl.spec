@@ -1878,7 +1878,7 @@
 @ stdcall -arch=arm64 RtlRaiseStatus()
 @ stdcall -arch=arm64 RtlSetControlSecurityDescriptor()
 @ stdcall -arch=arm64 RtlSystemTimeToLocalTime()
-@ stdcall -arch=arm64 RtlUTF8ToUnicodeN()
+@ stdcall RtlUTF8ToUnicodeN(ptr long ptr str long)
 @ stdcall -arch=arm64 RtlValidAcl()
 @ stdcall -arch=arm64 RtlValidateUnicodeString()
 @ stdcall -arch=arm64 SeCaptureSubjectContextEx()
