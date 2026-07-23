@@ -119,6 +119,7 @@ add_library(uefifreeldr_common
 # Keep setjmp before freetype so the archive does not satisfy FreeType's
 # longjmp reference with the vcruntime implementation, which needs RtlUnwind.
 target_link_libraries(uefifreeldr_common setjmp freetype)
+target_link_libraries(uefifreeldr_common fatfs)
 
 target_compile_definitions(uefifreeldr_common PRIVATE _FRLDRLIB_ UEFIBOOT)
 if(FREELDR_WIM_RAMDISK)
