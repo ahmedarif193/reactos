@@ -1828,6 +1828,12 @@ HKLM,"SYSTEM\CurrentControlSet\Services\Ntfs","Start",0x00010001,0x00000003
 HKLM,"SYSTEM\CurrentControlSet\Services\Ntfs","Type",0x00010001,0x00000002
 ; un-comment the line below to enable EXPERIMENTAL write-support on NTFS volumes:
 ;HKLM,"SYSTEM\CurrentControlSet\Services\Ntfs","MyDataDoesNotMatterSoEnableExperimentalWriteSupportForEveryNTFSVolume",0x00010001,0x00000001
+; NTFS-3G filesystem driver
+HKLM,"SYSTEM\CurrentControlSet\Services\Ntfs3g","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\Ntfs3g","Group",0x00000000,"Boot File System"
+HKLM,"SYSTEM\CurrentControlSet\Services\Ntfs3g","ImagePath",0x00020000,"system32\drivers\ntfs3g.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\Ntfs3g","Start",0x00010001,0x00000003
+HKLM,"SYSTEM\CurrentControlSet\Services\Ntfs3g","Type",0x00010001,0x00000002
 
 ; Null device driver
 HKLM,"SYSTEM\CurrentControlSet\Services\Null","ErrorControl",0x00010001,0x00000000
