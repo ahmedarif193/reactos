@@ -22,8 +22,9 @@
 #include <dirent.h>
 #undef DIR
 #endif
-#include "fatfs/ff.h"
-#include "fatfs/diskio.h"
+#include <ff.h>
+#include <diskio.h>
+#include "fatten_diskio.h"
 
 static FATFS g_Filesystem;
 static int isMounted = 0;
@@ -125,9 +126,10 @@ void print_help(const char* name)
 #else
     printf("Commands:\n");
 #endif
-    // printf("    -format <sectors> [<filesystem>] [<custom header label>]\n"
-    printf("    -format <sectors> [<custom header label>]\n"
-           "            Formats the disk image.\n");
+    printf("    -format <sectors> [fat|fat32|exfat] [<volume label>]\n"
+           "            Formats the disk image (defaults to FAT).\n");
+    printf("    -format-vhd <sectors> [fat|fat32|exfat] [<volume label>]\n"
+           "            Creates a fixed VHD with an MBR partition and formats it.\n");
     printf("    -boot <sector file>\n"
            "            Writes a new boot sector.\n");
     printf("    -add <src path> <dst path>\n"
@@ -264,10 +266,10 @@ static int sync_fat32_backup_boot_sector(const BYTE* vbr, const BYTE* extra_sect
     if (backup_sector == 0 || backup_sector == 0xFFFF)
         return 0;
 
-    if (disk_write(0, (BYTE*)vbr, backup_sector, 1))
+    if (disk_write(0, (BYTE*)vbr, g_Filesystem.volbase + backup_sector, 1))
         return 1;
 
-    if (extra_sector && disk_write(0, (BYTE*)extra_sector, backup_sector + FAT32_EXTRA_SECTOR, 1))
+    if (extra_sector && disk_write(0, (BYTE*)extra_sector, g_Filesystem.volbase + backup_sector + FAT32_EXTRA_SECTOR, 1))
         return 1;
 
     return 0;
@@ -278,7 +280,7 @@ static int patch_volume_metadata(void)
     DWORD volume_id;
     size_t volume_id_offset;
 
-    if (disk_read(0, buff, 0, 1))
+    if (disk_read(0, buff, g_Filesystem.volbase, 1))
         return 1;
 
     memcpy(buff + FAT_OEM_NAME_OFFSET, g_MkfsFatOemName, FAT_OEM_NAME_LENGTH);
@@ -287,7 +289,7 @@ static int patch_volume_metadata(void)
     volume_id_offset = (g_Filesystem.fs_type == FS_FAT32) ? FAT32_VOL_ID_OFFSET : FAT12_16_VOL_ID_OFFSET;
     write_le32(buff, volume_id_offset, volume_id);
 
-    if (disk_write(0, buff, 0, 1))
+    if (disk_write(0, buff, g_Filesystem.volbase, 1))
         return 1;
 
     if (g_Filesystem.fs_type == FS_FAT32 && sync_fat32_backup_boot_sector(buff, NULL))
@@ -937,33 +939,79 @@ int main(int oargc, char* oargv[])
         while ((argv[i] != NULL) && !is_command(argv[i++]))
             nargs++;
 
-        if (strcmp(parg, "format") == 0)
+        if (strcmp(parg, "format") == 0 || strcmp(parg, "format-vhd") == 0)
         {
-            // NOTE: The fs driver detects which FAT format fits best based on size
-            int sectors;
+            MKFS_PARM Format = { 0 };
+            unsigned long long ParsedSectors;
+            LBA_t Sectors;
+            const char* VolumeLabel = NULL;
+            char* End;
+            int IsExFat = 0;
+            int IsVhd = strcmp(parg, "format-vhd") == 0;
+            BYTE SuperFloppyFlag = IsVhd ? 0 : FM_SFD;
 
-            NEED_PARAMS(1, 2);
+            NEED_PARAMS(1, 3);
 
             // Arg 1: number of sectors
-            sectors = atoi(argv[0]);
+            errno = 0;
+            ParsedSectors = strtoull(argv[0], &End, 10);
+            Sectors = (LBA_t)ParsedSectors;
 
-            if (sectors <= 0)
+            if (errno != 0 || End == argv[0] || *End != '\0' || ParsedSectors == 0 ||
+                (unsigned long long)Sectors != ParsedSectors)
             {
-                fprintf(stderr, "Error: Sectors must be > 0\n");
+                fprintf(stderr, "Error: Invalid sector count '%s'.\n", argv[0]);
                 ret = 1;
                 goto exit;
             }
 
-            if (disk_ioctl(0, SET_SECTOR_COUNT, &sectors))
+            Format.fmt = FM_FAT | FM_FAT32 | SuperFloppyFlag;
+            Format.n_fat = 2;
+            Format.au_size = (Sectors < 4096 ? 1 : 8) * 512;
+
+            if (nargs > 1)
             {
-                fprintf(stderr, "Error: Failed to set sector count to %d.\n", sectors);
+                if (strcmp(argv[1], "fat") == 0)
+                {
+                    VolumeLabel = nargs > 2 ? argv[2] : NULL;
+                }
+                else if (strcmp(argv[1], "fat32") == 0)
+                {
+                    Format.fmt = FM_FAT32 | SuperFloppyFlag;
+                    Format.au_size = 0;
+                    VolumeLabel = nargs > 2 ? argv[2] : NULL;
+                }
+                else if (strcmp(argv[1], "exfat") == 0)
+                {
+                    Format.fmt = FM_EXFAT | SuperFloppyFlag;
+                    Format.n_fat = 1;
+                    Format.au_size = 0;
+                    VolumeLabel = nargs > 2 ? argv[2] : NULL;
+                    IsExFat = 1;
+                }
+                else if (nargs == 2)
+                {
+                    /* Preserve the historical -format <sectors> <label> form. */
+                    VolumeLabel = argv[1];
+                }
+                else
+                {
+                    fprintf(stderr, "Error: Unknown filesystem '%s'.\n", argv[1]);
+                    ret = 1;
+                    goto exit;
+                }
+            }
+
+            if ((IsVhd ? disk_prepare_vhd(0, Sectors) : disk_set_sector_count(0, Sectors, !IsExFat)) != RES_OK)
+            {
+                fprintf(stderr, "Error: Failed to set sector count to %llu.\n", ParsedSectors);
                 ret = 1;
                 goto exit;
             }
 
             NEED_MOUNT();
 
-            ret = f_mkfs("0:", 1, sectors < 4096 ? 1 : 8);
+            ret = f_mkfs("0:", &Format, buff, sizeof(buff));
             if (ret)
             {
                 fprintf(stderr, "Error: Formatting drive: %d.\n", ret);
@@ -978,23 +1026,62 @@ int main(int oargc, char* oargv[])
                 goto exit;
             }
 
-            if (patch_volume_metadata())
+            if (g_Filesystem.fs_type != FS_EXFAT && patch_volume_metadata())
             {
                 fprintf(stderr, "Error: Unable to patch FAT volume metadata.\n");
                 ret = 1;
                 goto exit;
             }
 
-            // Arg 2: custom header label (optional)
-            if (nargs > 1)
+            if (IsVhd)
+            {
+                BYTE PartitionType;
+
+                if (g_Filesystem.fs_type == FS_EXFAT)
+                    PartitionType = 0x07;
+                else if (g_Filesystem.fs_type == FS_FAT32)
+                    PartitionType = 0x0C;
+                else if (g_Filesystem.fs_type == FS_FAT16)
+                    PartitionType = 0x0E;
+                else
+                    PartitionType = 0x01;
+
+                if (disk_set_partition_type(0, PartitionType) != RES_OK)
+                {
+                    fprintf(stderr, "Error: Unable to update the VHD partition type.\n");
+                    ret = 1;
+                    goto exit;
+                }
+            }
+
+            if (VolumeLabel)
             {
 #define FAT_VOL_LABEL_LEN   11
-                char vol_label[2 + FAT_VOL_LABEL_LEN + 1]; // Null-terminated buffer
+                char vol_label[2 + (FAT_VOL_LABEL_LEN * 4) + 1]; // UTF-8 plus drive prefix
                 char* label = vol_label + 2; // The first two characters are reserved for the drive number "0:"
                 char ch;
 
                 int i, invalid = 0;
-                int len = strlen(argv[1]);
+                int len = strlen(VolumeLabel);
+
+                if (g_Filesystem.fs_type == FS_EXFAT)
+                {
+                    if ((size_t)len > sizeof(vol_label) - 3)
+                    {
+                        fprintf(stderr, "Error: exFAT volume label is too long.\n");
+                        ret = 1;
+                        goto exit;
+                    }
+
+                    memcpy(vol_label, "0:", 2);
+                    memcpy(label, VolumeLabel, len + 1);
+                    ret = f_setlabel(vol_label);
+                    if (ret)
+                        fprintf(stderr, "Error: Unable to set the exFAT volume label (%d).\n", ret);
+                    if (ret)
+                        goto exit;
+                    goto label_complete;
+                }
 
                 if (len <= FAT_VOL_LABEL_LEN)
                 {
@@ -1002,7 +1089,7 @@ int main(int oargc, char* oargv[])
                     // and copy it in uppercase.
                     for (i = 0; i < len; i++)
                     {
-                        ch = toupper(argv[1][i]);
+                        ch = toupper(VolumeLabel[i]);
                         if ((ch < 0x20) || !isprint(ch))
                         {
                             invalid = 1;
@@ -1033,7 +1120,7 @@ int main(int oargc, char* oargv[])
                     goto exit;
                 }
 
-                if (disk_read(0, buff, 0, 1))
+                if (disk_read(0, buff, g_Filesystem.volbase, 1))
                 {
                     fprintf(stderr, "Error: Unable to read existing boot sector from image.");
                     ret = 1;
@@ -1049,7 +1136,7 @@ int main(int oargc, char* oargv[])
                     memcpy(buff + FAT12_16_VOL_LABEL_OFFSET, label, FAT_VOL_LABEL_LEN);
                 }
 
-                if (disk_write(0, buff, 0, 1))
+                if (disk_write(0, buff, g_Filesystem.volbase, 1))
                 {
                     fprintf(stderr, "Error: Unable to write new boot sector to image.");
                     ret = 1;
@@ -1072,6 +1159,9 @@ int main(int oargc, char* oargv[])
                     ret = 1;
                     goto exit;
                 }
+
+label_complete:
+                ;
             }
         }
         else if (strcmp(parg, "boot") == 0)
@@ -1105,7 +1195,14 @@ int main(int oargc, char* oargv[])
 
             NEED_MOUNT();
 
-            if (disk_read(0, temp, 0, 1))
+            if (g_Filesystem.fs_type == FS_EXFAT)
+            {
+                fprintf(stderr, "Error: Replacing an exFAT boot region is not supported yet.\n");
+                ret = 1;
+                goto exit;
+            }
+
+            if (disk_read(0, temp, g_Filesystem.volbase, 1))
             {
                 fprintf(stderr, "Error: Unable to read existing boot sector from image.");
                 ret = 1;
@@ -1128,7 +1225,7 @@ int main(int oargc, char* oargv[])
                 memcpy(buff + 3, temp + 3, FAT12_16_BPB_LENGTH);
             }
 
-            if (disk_write(0, buff, 0, 1))
+            if (disk_write(0, buff, g_Filesystem.volbase, 1))
             {
                 fprintf(stderr, "Error: Unable to write new boot sector to image.");
                 ret = 1;
@@ -1137,7 +1234,7 @@ int main(int oargc, char* oargv[])
 
             if (g_Filesystem.fs_type == FS_FAT32)
             {
-                if (disk_write(0, buff + 512, FAT32_EXTRA_SECTOR, 1))
+                if (disk_write(0, buff + 512, g_Filesystem.volbase + FAT32_EXTRA_SECTOR, 1))
                 {
                     fprintf(stderr, "Error: Unable to write FAT32 extra boot sector to image.");
                     ret = 1;
@@ -1304,7 +1401,6 @@ int main(int oargc, char* oargv[])
             char* root = "/";
             DIR dir = { 0 };
             FILINFO info = { 0 };
-            char lfname[257];
 
             NEED_PARAMS(0, 1);
 
@@ -1326,15 +1422,14 @@ int main(int oargc, char* oargv[])
 
             printf("Listing directory contents of: %s\n", root);
 
-            info.lfname = lfname;
-            info.lfsize = sizeof(lfname)-1;
             while ((!f_readdir(&dir, &info)) && (strlen(info.fname) > 0))
             {
-                if (strlen(info.lfname) > 0)
-                    printf(" - %s (%s)\n", info.lfname, info.fname);
+                if (strlen(info.altname) > 0 && strcmp(info.altname, info.fname) != 0)
+                    printf(" - %s (%s)\n", info.fname, info.altname);
                 else
                     printf(" - %s\n", info.fname);
             }
+            f_closedir(&dir);
         }
         else
         {
@@ -1349,7 +1444,11 @@ int main(int oargc, char* oargv[])
 
 exit:
 
-    disk_cleanup(0);
+    if (disk_cleanup(0) != RES_OK && ret == 0)
+    {
+        fprintf(stderr, "Error: Unable to finalize the disk image.\n");
+        ret = 1;
+    }
 
     return ret;
 }

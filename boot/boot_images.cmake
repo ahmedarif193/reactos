@@ -241,15 +241,13 @@ file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "")
 # Unlike the ISO path lists, fatten -addfiles treats bare entries as
 # in-image directories, so do not prepend the host-side empty path here.
 
-set(_preinstall_partition_file ${CMAKE_CURRENT_BINARY_DIR}/partition.fat32)
+set(_preinstall_boot_partition_file ${CMAKE_CURRENT_BINARY_DIR}/partition.boot.fat)
+set(_preinstall_system_partition_file ${CMAKE_CURRENT_BINARY_DIR}/partition.exfat)
 set(_preinstall_image_file ${REACTOS_BINARY_DIR}/ReactOS.img)
 set(_preinstall_vhd_file ${REACTOS_BINARY_DIR}/ReactOS.vhd)
-set(_preinstall_partition_type 0c)
-if(DEFINED EFI_PLATFORM_ID)
-    # OVMF only auto-discovers MBR-backed FAT volumes as bootable when the
-    # partition is tagged as an EFI System Partition.
-    set(_preinstall_partition_type ef)
-endif()
+# Keep ROSBOOT as an active MBR ESP. UEFI discovers it by type, while the BIOS
+# MBR follows the active flag and loads its FAT32 boot sector.
+set(_preinstall_boot_partition_type ef)
 
 # Create TEMP dir
 file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "reactos/TEMP=${CMAKE_CURRENT_BINARY_DIR}/empty\n")
@@ -288,31 +286,53 @@ else()
 endif()
 file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst
      "reactos/symbols=${_rosprofiler_image_symbol_dir}\n")
-# Partition starts at sector 2048 (1MB alignment), rest is partition
-math(EXPR _preinstall_partition_sectors "(${PREINSTALL_IMAGE_SIZE_MB} - 1) * 2048")
+# Keep a small FAT volume for BIOS/UEFI boot files and use exFAT for ReactOS.
+# Both partitions start on 1-MB boundaries.
+set(_preinstall_boot_partition_size_mb 64)
+math(EXPR _preinstall_boot_partition_sectors "${_preinstall_boot_partition_size_mb} * 2048")
+math(EXPR _preinstall_system_partition_start "(1 + ${_preinstall_boot_partition_size_mb}) * 2048")
+math(EXPR _preinstall_system_partition_size_mb "${PREINSTALL_IMAGE_SIZE_MB} - 1 - ${_preinstall_boot_partition_size_mb}")
+if(_preinstall_system_partition_size_mb LESS 1)
+    message(FATAL_ERROR "PREINSTALL_IMAGE_SIZE_MB must leave room for the 1-MB alignment gap, the ${_preinstall_boot_partition_size_mb}-MB boot partition, and the exFAT system partition")
+endif()
+math(EXPR _preinstall_system_partition_sectors "${_preinstall_system_partition_size_mb} * 2048")
 
-# BIOS boot-sector binaries (x86/x64 only). UEFI-only platforms (e.g. arm64)
-# rely on firmware to discover \EFI\BOOT\boot<arch>.efi inside the EFI System
-# Partition, so neither the FAT32 VBR boot code nor the DOS MBR is needed.
-set(_preinstall_partition_boot_args)
-set(_preinstall_partition_deps native-fatten freeldr)
+# BIOS boot-sector binaries are available on x86/x64. UEFI platforms also put
+# their removable-media loader in the FAT boot partition.
+set(_preinstall_boot_partition_options)
+set(_preinstall_boot_partition_files
+    -add ${REACTOS_SOURCE_DIR}/boot/bootdata/preinstall.ini /freeldr.ini)
+set(_preinstall_partition_deps native-fatten)
 set(_reactosimg_mbr_args)
 set(_reactosimg_deps native-mkdiskimg)
 if(FREELDR_HAS_BIOS_BOOT)
     set(_dosmbr_file ${CMAKE_CURRENT_BINARY_DIR}/freeldr/bootsect/dosmbr.bin)
-    set(_fat32_file  ${CMAKE_CURRENT_BINARY_DIR}/freeldr/bootsect/fat32.bin)
-    list(APPEND _preinstall_partition_boot_args -boot ${_fat32_file})
-    list(APPEND _preinstall_partition_deps fat32)
+    set(_fat32_file ${CMAKE_CURRENT_BINARY_DIR}/freeldr/bootsect/fat32.bin)
+    set(_freeldr_file ${CMAKE_CURRENT_BINARY_DIR}/freeldr/freeldr/freeldr.sys)
+    list(APPEND _preinstall_boot_partition_options -boot ${_fat32_file})
+    list(APPEND _preinstall_boot_partition_files
+        -add ${_freeldr_file} /freeldr.sys
+        -add $<TARGET_FILE:rosload> /rosload.exe)
+    list(APPEND _preinstall_partition_deps fat32 freeldr rosload)
     list(APPEND _reactosimg_mbr_args -mbr ${_dosmbr_file})
     list(APPEND _reactosimg_deps dosmbr)
 endif()
+if(DEFINED EFI_PLATFORM_ID)
+    list(APPEND _preinstall_boot_partition_files
+        -mkdir EFI
+        -mkdir EFI/BOOT
+        -add $<TARGET_FILE:uefildr> EFI/BOOT/boot${EFI_PLATFORM_ID}.efi)
+    list(APPEND _preinstall_partition_deps uefildr)
+endif()
 
 add_custom_target(preinstall_partition
-    COMMAND ${CMAKE_COMMAND} -E rm -f ${_preinstall_partition_file}
+    COMMAND ${CMAKE_COMMAND} -E rm -f
+        ${_preinstall_boot_partition_file}
+        ${_preinstall_system_partition_file}
     COMMAND ${CMAKE_COMMAND}
         -DOUTPUT_DIR=${_rosprofiler_image_symbol_dir}
         -DPREINSTALL_LIST=${CMAKE_CURRENT_BINARY_DIR}/preinstall.$<CONFIG>.lst
-        -DIMAGE_SIZE_MB=${PREINSTALL_IMAGE_SIZE_MB}
+        -DIMAGE_SIZE_MB=${_preinstall_system_partition_size_mb}
         -DRESERVE_MB=${ROSPROFILER_IMAGE_FREE_RESERVE_MB}
         -DFS_OVERHEAD_MB=${ROSPROFILER_IMAGE_FS_OVERHEAD_MB}
         -DMAX_SYMBOL_MB=${ROSPROFILER_IMAGE_PDB_BUDGET_MB}
@@ -320,9 +340,12 @@ add_custom_target(preinstall_partition
         -DPACKAGE_PDBS=${ROSPROFILER_PACKAGE_IMAGE_PDBS}
         -DEMBEDDED_ROSSYM=${_rosprofiler_embedded_rossym}
         -P ${REACTOS_SOURCE_DIR}/boot/pack_rosprofiler_symbols.cmake
-    COMMAND native-fatten ${_preinstall_partition_file}
-        -format ${_preinstall_partition_sectors}
-        ${_preinstall_partition_boot_args}
+    COMMAND native-fatten ${_preinstall_boot_partition_file}
+        -format ${_preinstall_boot_partition_sectors} fat32 ROSBOOT
+        ${_preinstall_boot_partition_options}
+        ${_preinstall_boot_partition_files}
+    COMMAND native-fatten ${_preinstall_system_partition_file}
+        -format ${_preinstall_system_partition_sectors} exfat ReactOS
         -addfiles ${CMAKE_CURRENT_BINARY_DIR}/preinstall.$<CONFIG>.lst
     DEPENDS ${_preinstall_partition_deps}
     VERBATIM)
@@ -332,9 +355,12 @@ add_custom_target(reactosimg
     COMMAND native-mkdiskimg
         -o ${_preinstall_image_file}
         ${_reactosimg_mbr_args}
-        -partition ${_preinstall_partition_file}
+        -partition ${_preinstall_boot_partition_file}
         -start 2048
-        -type ${_preinstall_partition_type}
+        -type ${_preinstall_boot_partition_type}
+        -partition ${_preinstall_system_partition_file}
+        -start ${_preinstall_system_partition_start}
+        -type 07
     DEPENDS ${_reactosimg_deps}
     VERBATIM)
 add_dependencies(reactosimg preinstall_partition)
@@ -344,9 +370,12 @@ add_custom_target(reactosvhd
     COMMAND native-mkdiskimg
         -o ${_preinstall_vhd_file}
         ${_reactosimg_mbr_args}
-        -partition ${_preinstall_partition_file}
+        -partition ${_preinstall_boot_partition_file}
         -start 2048
-        -type ${_preinstall_partition_type}
+        -type ${_preinstall_boot_partition_type}
+        -partition ${_preinstall_system_partition_file}
+        -start ${_preinstall_system_partition_start}
+        -type 07
         -vhd
     DEPENDS ${_reactosimg_deps}
     VERBATIM)
@@ -356,5 +385,5 @@ add_dependencies(reactosvhd preinstall_partition)
 if(DEFINED EFI_PLATFORM_ID)
     # For devices such as USB drives, add also the EFI boot image into efi/boot.
     add_cd_file(TARGET efisys FILE ${CMAKE_CURRENT_BINARY_DIR}/efisys.bin DESTINATION loader NO_CAB FOR bootcd livecd regtest)
-    add_cd_file(TARGET uefildr DESTINATION efi/boot NO_CAB NAME_ON_CD boot${EFI_PLATFORM_ID}.efi FOR bootcd livecd regtest preinstall)
+    add_cd_file(TARGET uefildr DESTINATION efi/boot NO_CAB NAME_ON_CD boot${EFI_PLATFORM_ID}.efi FOR bootcd livecd regtest)
 endif()
