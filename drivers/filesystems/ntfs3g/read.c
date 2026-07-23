@@ -9,10 +9,16 @@
 
 #include "ntfspch.h"
 
+typedef struct _NTFS_READ_WORK_ITEM
+{
+    PIO_WORKITEM WorkItem;
+    PIRP Irp;
+} NTFS_READ_WORK_ITEM, *PNTFS_READ_WORK_ITEM;
+
+static
 NTSTATUS
-NTAPI
-NtfsFsdRead(_In_ PDEVICE_OBJECT DeviceObject,
-            _Inout_ PIRP Irp)
+NtfsReadFile(_In_ PDEVICE_OBJECT DeviceObject,
+             _Inout_ PIRP Irp)
 {
     PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation(Irp);
     PFILE_OBJECT FileObject = IrpSp->FileObject;
@@ -54,4 +60,48 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT DeviceObject,
     if (FileObject->Flags & FO_SYNCHRONOUS_IO)
         FileObject->CurrentByteOffset.QuadPart = ByteOffset.QuadPart + BytesRead;
     return NtfsCompleteRequest(Irp, STATUS_SUCCESS, BytesRead);
+}
+
+static
+VOID
+NTAPI
+NtfsReadWorker(_In_ PDEVICE_OBJECT DeviceObject,
+               _In_opt_ PVOID Context)
+{
+    PNTFS_READ_WORK_ITEM ReadWorkItem = Context;
+
+    NtfsReadFile(DeviceObject, ReadWorkItem->Irp);
+    IoFreeWorkItem(ReadWorkItem->WorkItem);
+    ExFreePoolWithTag(ReadWorkItem, TAG_NTFS);
+}
+
+NTSTATUS
+NTAPI
+NtfsFsdRead(_In_ PDEVICE_OBJECT DeviceObject,
+            _Inout_ PIRP Irp)
+{
+    PNTFS_READ_WORK_ITEM ReadWorkItem;
+
+    if (KeGetCurrentIrql() == PASSIVE_LEVEL)
+        return NtfsReadFile(DeviceObject, Irp);
+
+    ReadWorkItem = ExAllocatePoolWithTag(NonPagedPool,
+                                         sizeof(*ReadWorkItem),
+                                         TAG_NTFS);
+    if (!ReadWorkItem)
+        return NtfsCompleteRequest(Irp, STATUS_INSUFFICIENT_RESOURCES, 0);
+
+    ReadWorkItem->WorkItem = IoAllocateWorkItem(DeviceObject);
+    if (!ReadWorkItem->WorkItem) {
+        ExFreePoolWithTag(ReadWorkItem, TAG_NTFS);
+        return NtfsCompleteRequest(Irp, STATUS_INSUFFICIENT_RESOURCES, 0);
+    }
+
+    ReadWorkItem->Irp = Irp;
+    IoMarkIrpPending(Irp);
+    IoQueueWorkItem(ReadWorkItem->WorkItem,
+                    NtfsReadWorker,
+                    DelayedWorkQueue,
+                    ReadWorkItem);
+    return STATUS_PENDING;
 }

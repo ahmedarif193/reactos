@@ -82,7 +82,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT DeviceObject,
     PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation(Irp);
     PFILE_OBJECT FileObject = IrpSp->FileObject;
     PVolumeContextBlock Volume;
-    PFileContextBlock File = NULL;
+    PFileContextBlock File;
     NTFS3G_ROS_FILE *CoreFile = NULL;
     NTFS3G_ROS_FILE_INFORMATION Information;
     UNICODE_STRING FileName;
@@ -145,18 +145,16 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT DeviceObject,
         goto Failure;
     }
 
-    File = ExAllocatePoolWithTag(NonPagedPool, sizeof(*File), TAG_NTFS);
+    File = ExAllocatePoolZero(NonPagedPool, sizeof(*File), TAG_NTFS);
     if (!File) {
         Status = STATUS_INSUFFICIENT_RESOURCES;
         goto Failure;
     }
-    RtlZeroMemory(File, sizeof(*File));
     FsRtlInitializeFileLock(&File->FileLock, NULL, NULL);
     Status = ExInitializeResourceLite(&File->MainResource);
     if (!NT_SUCCESS(Status)) {
         FsRtlUninitializeFileLock(&File->FileLock);
         ExFreePoolWithTag(File, TAG_NTFS);
-        File = NULL;
         goto Failure;
     }
     Status = ExInitializeResourceLite(&File->PagingIoResource);
@@ -164,7 +162,6 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT DeviceObject,
         ExDeleteResourceLite(&File->MainResource);
         FsRtlUninitializeFileLock(&File->FileLock);
         ExFreePoolWithTag(File, TAG_NTFS);
-        File = NULL;
         goto Failure;
     }
     ExInitializeFastMutex(&File->HeaderMutex);
@@ -180,8 +177,6 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT DeviceObject,
     File->File = CoreFile;
     File->Information = Information;
     File->FileName = FileName;
-    File->CreateOptions = CreateOptions;
-    File->DesiredAccess = DesiredAccess;
 
     FileObject->FsContext = File;
     FileObject->SectionObjectPointer = &File->SectionObjectPointers;
@@ -189,8 +184,6 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT DeviceObject,
     return NtfsCompleteRequest(Irp, STATUS_SUCCESS, FILE_OPENED);
 
 Failure:
-    if (File)
-        ExFreePoolWithTag(File, TAG_NTFS);
     Ntfs3gRosCloseFile(CoreFile);
     ExFreePoolWithTag(FileName.Buffer, TAG_NTFS);
     return NtfsCompleteRequest(Irp, Status,

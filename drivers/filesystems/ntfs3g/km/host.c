@@ -122,6 +122,25 @@ Ntfs3gRosHostLog(int IsError,
 }
 
 static NTSTATUS
+Ntfs3gSubmitSynchronousIrp(PDEVICE_OBJECT DeviceObject,
+                           PIRP Irp,
+                           PKEVENT Event,
+                           PIO_STATUS_BLOCK IoStatus)
+{
+    NTSTATUS Status;
+
+    IoGetNextIrpStackLocation(Irp)->Flags |= SL_OVERRIDE_VERIFY_VOLUME;
+    Status = IoCallDriver(DeviceObject, Irp);
+    if (Status == STATUS_PENDING) {
+        KeWaitForSingleObject(Event, Executive, KernelMode, FALSE, NULL);
+        Status = IoStatus->Status;
+    } else if (NT_SUCCESS(Status)) {
+        Status = IoStatus->Status;
+    }
+    return Status;
+}
+
+static NTSTATUS
 Ntfs3gDeviceControl(PDEVICE_OBJECT DeviceObject,
                     ULONG ControlCode,
                     void *OutputBuffer,
@@ -130,7 +149,6 @@ Ntfs3gDeviceControl(PDEVICE_OBJECT DeviceObject,
     IO_STATUS_BLOCK IoStatus;
     KEVENT Event;
     PIRP Irp;
-    NTSTATUS Status;
 
     KeInitializeEvent(&Event, NotificationEvent, FALSE);
     Irp = IoBuildDeviceIoControlRequest(ControlCode, DeviceObject, NULL, 0,
@@ -138,16 +156,7 @@ Ntfs3gDeviceControl(PDEVICE_OBJECT DeviceObject,
                                         &Event, &IoStatus);
     if (!Irp)
         return STATUS_INSUFFICIENT_RESOURCES;
-    IoGetNextIrpStackLocation(Irp)->Flags |= SL_OVERRIDE_VERIFY_VOLUME;
-
-    Status = IoCallDriver(DeviceObject, Irp);
-    if (Status == STATUS_PENDING) {
-        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
-        Status = IoStatus.Status;
-    } else if (NT_SUCCESS(Status)) {
-        Status = IoStatus.Status;
-    }
-    return Status;
+    return Ntfs3gSubmitSynchronousIrp(DeviceObject, Irp, &Event, &IoStatus);
 }
 
 static int
@@ -173,15 +182,8 @@ Ntfs3gKernelReadChunk(NTFS3G_KERNEL_DEVICE *Context,
                                        &IoStatus);
     if (!Irp)
         return ENOMEM;
-    IoGetNextIrpStackLocation(Irp)->Flags |= SL_OVERRIDE_VERIFY_VOLUME;
-
-    Status = IoCallDriver(Context->DeviceObject, Irp);
-    if (Status == STATUS_PENDING) {
-        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
-        Status = IoStatus.Status;
-    } else if (NT_SUCCESS(Status)) {
-        Status = IoStatus.Status;
-    }
+    Status = Ntfs3gSubmitSynchronousIrp(Context->DeviceObject, Irp,
+                                       &Event, &IoStatus);
     if (!NT_SUCCESS(Status))
         return Ntfs3gStatusToErrno(Status);
     *BytesRead = (uint32_t)IoStatus.Information;

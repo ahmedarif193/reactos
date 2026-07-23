@@ -224,9 +224,7 @@ Ntfs3gRosOpenFileUtf16(NTFS3G_ROS_VOLUME *Volume,
                        NTFS3G_ROS_FILE **File)
 {
     static const char RootPath[] = "/";
-    ntfschar *LittleEndianPath;
     char *Utf8Path = NULL;
-    size_t Index;
     int Error;
     int Result;
 
@@ -236,24 +234,12 @@ Ntfs3gRosOpenFileUtf16(NTFS3G_ROS_VOLUME *Volume,
     }
     if (!PathLength)
         return Ntfs3gRosOpenFile(Volume, RootPath, File);
-    if (PathLength > (SIZE_MAX / sizeof(*LittleEndianPath)) - 1) {
-        errno = ENOMEM;
-        return -ENOMEM;
-    }
-
-    LittleEndianPath = malloc((PathLength + 1) * sizeof(*LittleEndianPath));
-    if (!LittleEndianPath)
-        return -errno;
-    for (Index = 0; Index < PathLength; ++Index)
-        LittleEndianPath[Index] = cpu_to_le16(Path[Index]);
-    LittleEndianPath[PathLength] = 0;
 
     Ntfs3gRosHostAcquire();
-    Result = ntfs_ucstombs(LittleEndianPath, (int)PathLength,
+    Result = ntfs_ucstombs((const ntfschar *)Path, (int)PathLength,
                            &Utf8Path, 0);
     Error = Result < 0 ? errno : 0;
     Ntfs3gRosHostRelease();
-    free(LittleEndianPath);
     if (Result < 0) {
         errno = Error;
         return -Error;
