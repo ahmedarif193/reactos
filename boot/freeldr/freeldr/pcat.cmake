@@ -162,6 +162,7 @@ target_compile_definitions(freeldr_common PRIVATE _FRLDRLIB_)
 if(FREELDR_WIM_RAMDISK)
     target_compile_definitions(freeldr_common PRIVATE FREELDR_WIM_RAMDISK=1)
 endif()
+target_link_libraries(freeldr_common fatfs)
 
 if(MSVC AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
     # We need to reduce the binary size
