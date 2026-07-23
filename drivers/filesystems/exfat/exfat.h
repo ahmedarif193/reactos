@@ -255,7 +255,7 @@ FRESULT ExFatCloseFcbFile(PEXFAT_FCB Fcb);
 FRESULT ExFatSeekFcbFile(PEXFAT_FCB Fcb, FSIZE_t Offset);
 FRESULT ExFatZeroFileRange(PEXFAT_FCB Fcb, FSIZE_t Start, FSIZE_t End);
 BOOLEAN ExFatFileIsContiguous(PEXFAT_FCB Fcb);
-BOOLEAN ExFatDirectFileIo(PEXFAT_VCB Vcb, PEXFAT_FCB Fcb, UCHAR MajorFunction, PIRP OriginalIrp, PVOID Buffer, PMDL SourceMdl, ULONG MdlOffset, ULONGLONG ByteOffset, ULONG Length);
+ULONG ExFatDirectFileIo(PEXFAT_VCB Vcb, PEXFAT_FCB Fcb, UCHAR MajorFunction, PIRP OriginalIrp, PVOID Buffer, PMDL SourceMdl, ULONG MdlOffset, ULONGLONG ByteOffset, ULONG Length);
 VOID ExFatInvalidateFcbClusterMap(PEXFAT_FCB Fcb);
 
 BOOLEAN NTAPI ExFatAcquireForLazyWrite(PVOID Context, BOOLEAN Wait);

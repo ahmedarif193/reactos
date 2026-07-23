@@ -63,5 +63,10 @@ Once the patents above have lapsed (verify against USPTO Patent Center,
 the dates here are Google Patents estimates), the __REACTOS__ blocks can
 simply be removed.
 
+The exFAT driver recovers large-transfer performance without either technique:
+it walks the ordinary FAT chain into an in-memory link map and submits one I/O
+request for each run of adjacent FAT-linked clusters. This does not change the
+on-disk allocation or omit any FAT entry.
+
 The media-access implementation is not kept in this directory. This preserves
 the upstream separation between the filesystem core and platform I/O.

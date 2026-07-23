@@ -165,37 +165,40 @@ ExFatEnsureFcbFile(
 }
 
 #if FF_USE_FASTSEEK
+#define EXFAT_INITIAL_CLUSTER_MAP_ENTRIES 32
+
 static FRESULT
 ExFatBuildClusterMap(
     PEXFAT_FCB Fcb)
 {
-    DWORD Required = 0;
+    DWORD Capacity = EXFAT_INITIAL_CLUSTER_MAP_ENTRIES;
+    DWORD Required;
     PDWORD ClusterMap;
     FRESULT Result;
 
-    Fcb->FatFile.cltbl = &Required;
-    Result = f_lseek(&Fcb->FatFile, CREATE_LINKMAP);
-    Fcb->FatFile.cltbl = NULL;
-    if (Result != FR_NOT_ENOUGH_CORE || Required < 2 ||
-        Required > MAXULONG / sizeof(*ClusterMap))
+    for (;;)
     {
-        return Result;
-    }
+        if (Capacity < 2 || Capacity > MAXULONG / sizeof(*ClusterMap))
+            return FR_NOT_ENOUGH_CORE;
 
-    ClusterMap = ExAllocatePoolWithTag(NonPagedPool,
-                                       Required * sizeof(*ClusterMap),
-                                       TAG_EXFAT_FATFS);
-    if (!ClusterMap)
-        return FR_NOT_ENOUGH_CORE;
+        ClusterMap = ExAllocatePoolWithTag(NonPagedPool,
+                                           Capacity * sizeof(*ClusterMap),
+                                           TAG_EXFAT_FATFS);
+        if (!ClusterMap)
+            return FR_NOT_ENOUGH_CORE;
 
-    ClusterMap[0] = Required;
-    Fcb->FatFile.cltbl = ClusterMap;
-    Result = f_lseek(&Fcb->FatFile, CREATE_LINKMAP);
-    if (Result != FR_OK)
-    {
+        ClusterMap[0] = Capacity;
+        Fcb->FatFile.cltbl = ClusterMap;
+        Result = f_lseek(&Fcb->FatFile, CREATE_LINKMAP);
+        if (Result == FR_OK)
+            break;
+
+        Required = ClusterMap[0];
         Fcb->FatFile.cltbl = NULL;
         ExFreePoolWithTag(ClusterMap, TAG_EXFAT_FATFS);
-        return Result;
+        if (Result != FR_NOT_ENOUGH_CORE || Required <= Capacity)
+            return Result;
+        Capacity = Required;
     }
 
     Fcb->ClusterMap = ClusterMap;
@@ -210,6 +213,90 @@ ExFatFileIsContiguous(
     return Fcb->Vcb->FileSystem.fs_type == FS_EXFAT &&
            Fcb->FatFile.obj.stat == 2 &&
            Fcb->FatFile.obj.sclust >= 2;
+}
+
+static ULONG
+ExFatGetFileRun(
+    PEXFAT_FCB Fcb,
+    ULONGLONG ByteOffset,
+    ULONG Length,
+    LBA_t* Sector)
+{
+    PEXFAT_VCB Vcb = Fcb->Vcb;
+    FATFS* FileSystem = &Vcb->FileSystem;
+    ULONGLONG ClusterIndex;
+    ULONGLONG OffsetInCluster;
+    ULONGLONG RunBytes = 0;
+    DWORD Cluster = 0;
+
+    ClusterIndex = ByteOffset / Vcb->BytesPerCluster;
+    OffsetInCluster = ByteOffset % Vcb->BytesPerCluster;
+
+    if (ExFatFileIsContiguous(Fcb))
+    {
+        if (ClusterIndex > MAXULONG ||
+            Fcb->FatFile.obj.sclust > MAXULONG - (DWORD)ClusterIndex)
+        {
+            return 0;
+        }
+
+        Cluster = Fcb->FatFile.obj.sclust + (DWORD)ClusterIndex;
+        RunBytes = Length;
+    }
+    else
+    {
+#if FF_USE_FASTSEEK
+        PDWORD Entry;
+        PDWORD End;
+        DWORD RunClusters;
+        FRESULT Result;
+
+        if (!Fcb->ClusterMap)
+        {
+            Result = ExFatBuildClusterMap(Fcb);
+            if (Result != FR_OK)
+                return 0;
+        }
+
+        Entry = Fcb->ClusterMap + 1;
+        End = Fcb->ClusterMap + Fcb->ClusterMap[0];
+        while (Entry + 1 < End && Entry[0] != 0)
+        {
+            RunClusters = Entry[0];
+            if (ClusterIndex < RunClusters)
+            {
+                if (Entry[1] > MAXULONG - (DWORD)ClusterIndex)
+                    return 0;
+
+                Cluster = Entry[1] + (DWORD)ClusterIndex;
+                RunBytes = ((ULONGLONG)RunClusters - ClusterIndex) *
+                           Vcb->BytesPerCluster - OffsetInCluster;
+                break;
+            }
+
+            ClusterIndex -= RunClusters;
+            Entry += 2;
+        }
+
+        if (Entry + 1 >= End || Entry[0] == 0)
+            return 0;
+#else
+        return 0;
+#endif
+    }
+
+    if (Cluster < 2 || Cluster >= FileSystem->n_fatent)
+        return 0;
+
+    RunBytes = min(RunBytes, (ULONGLONG)Length);
+    Length = (ULONG)(RunBytes - RunBytes % Vcb->BytesPerSector);
+    if (!Length)
+        return 0;
+
+    *Sector = FileSystem->database +
+              (LBA_t)(Cluster - 2) * FileSystem->csize +
+              (LBA_t)(OffsetInCluster / Vcb->BytesPerSector);
+    return Length;
 }
 
 FRESULT
@@ -644,16 +731,18 @@ Cleanup:
 }
 
 /*
- * Transfer whole sectors of a contiguous (exFAT NoFatChain) file with a single
- * device request instead of FatFs's one-IRP-per-cluster loop. Mirrors the
- * FF_FS_TINY window coherence rules of f_read()/f_write() (see the ff.c
- * internals note at the top of this file). Entered and exited under the
- * volume's FatFs lock, but the lock is dropped across the device wait so
- * concurrent lookups and transfers can proceed; the caller's file resource
- * keeps the cluster mapping stable (truncation takes PagingIoResource
- * exclusive). Returns FALSE to make the caller fall back to FatFs.
+ * Transfer whole sectors from one physically adjacent file run with a single
+ * device request instead of FatFs's one-IRP-per-cluster loop. NoFatChain files
+ * provide that run directly; ordinary files use an in-memory map built by
+ * walking their complete FAT chain. Mirrors the FF_FS_TINY window coherence
+ * rules of f_read()/f_write() (see the ff.c internals note at the top of this
+ * file). Entered and exited under the volume's FatFs lock, but the lock is
+ * dropped across the device wait so concurrent lookups and transfers can
+ * proceed; the caller's file resource keeps the cluster mapping stable
+ * (truncation takes PagingIoResource exclusive). Returns the transferred byte
+ * count, or zero to make the caller fall back to FatFs.
  */
-BOOLEAN
+ULONG
 ExFatDirectFileIo(
     PEXFAT_VCB Vcb,
     PEXFAT_FCB Fcb,
@@ -669,16 +758,17 @@ ExFatDirectFileIo(
     LARGE_INTEGER DeviceOffset;
     LBA_t Sector;
     LBA_t HeapEnd;
-    ULONG Sectors = Length / Vcb->BytesPerSector;
+    ULONG Sectors;
     NTSTATUS Status;
 
     /* FatFs would reject an aborted file object; keep parity. */
     if (Fcb->FatFile.err)
-        return FALSE;
+        return 0;
 
-    Sector = FileSystem->database +
-             (LBA_t)(Fcb->FatFile.obj.sclust - 2) * FileSystem->csize +
-             (LBA_t)(ByteOffset / Vcb->BytesPerSector);
+    Length = ExFatGetFileRun(Fcb, ByteOffset, Length, &Sector);
+    if (!Length)
+        return 0;
+    Sectors = Length / Vcb->BytesPerSector;
     HeapEnd = FileSystem->database +
               (LBA_t)(FileSystem->n_fatent - 2) * FileSystem->csize;
     if (Sector < FileSystem->database ||
@@ -687,11 +777,11 @@ ExFatDirectFileIo(
         Sector >= Vcb->SectorCount ||
         Sectors > Vcb->SectorCount - Sector)
     {
-        return FALSE;
+        return 0;
     }
 
     if (!NT_SUCCESS(ExFatFlushSectorCacheRange(Vcb, Sector, Sectors)))
-        return FALSE;
+        return 0;
     if (MajorFunction == IRP_MJ_WRITE)
         ExFatInvalidateSectorCacheRange(Vcb, Sector, Sectors);
     DeviceOffset.QuadPart = Sector * Vcb->BytesPerSector;
@@ -737,17 +827,22 @@ ExFatDirectFileIo(
         ExFatInvalidateSectorCacheRange(Vcb, Sector, Sectors);
     }
     if (!NT_SUCCESS(Status))
-        return FALSE;
+        return 0;
 
     if (FileSystem->winsect >= Sector && FileSystem->winsect - Sector < Sectors)
     {
+        PVOID IoBuffer = Buffer;
         PUCHAR WindowCopy;
 
-        if (!Buffer && SourceMdl)
-            Buffer = MmGetSystemAddressForMdlSafe(SourceMdl, NormalPagePriority);
-        if (!Buffer)
-            return FALSE;
-        WindowCopy = (PUCHAR)Buffer + MdlOffset +
+        if (SourceMdl)
+        {
+            IoBuffer = MmGetSystemAddressForMdlSafe(SourceMdl, NormalPagePriority);
+            if (IoBuffer)
+                IoBuffer = (PUCHAR)IoBuffer + MdlOffset;
+        }
+        if (!IoBuffer)
+            return 0;
+        WindowCopy = (PUCHAR)IoBuffer +
                      (ULONG)(FileSystem->winsect - Sector) * Vcb->BytesPerSector;
 
         if (MajorFunction == IRP_MJ_READ)
@@ -766,7 +861,7 @@ ExFatDirectFileIo(
 
     if (MajorFunction == IRP_MJ_WRITE)
         Fcb->FatFile.flag |= EXFAT_FA_MODIFIED;
-    return TRUE;
+    return Length;
 }
 
 NTSTATUS

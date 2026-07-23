@@ -21,9 +21,9 @@ ExFatReadFileData(
     ULONG Length,
     PUINT BytesRead)
 {
-    ULONG MdlOffset = 0;
     ULONG BufferOffset = 0;
     ULONG Aligned;
+    ULONG DirectBytes;
     UINT Bytes = 0;
     FRESULT Result;
 
@@ -37,33 +37,40 @@ ExFatReadFileData(
     if (Length > f_size(&Fcb->FatFile) - ByteOffset)
         Length = (ULONG)(f_size(&Fcb->FatFile) - ByteOffset);
 
-    if (ExFatFileIsContiguous(Fcb) &&
-        (ByteOffset % Vcb->BytesPerSector) == 0 &&
+    if ((ByteOffset % Vcb->BytesPerSector) == 0 &&
         Length >= Vcb->BytesPerSector)
     {
         Aligned = Length - (Length % Vcb->BytesPerSector);
-        if (ExFatDirectFileIo(Vcb,
-                              Fcb,
-                              IRP_MJ_READ,
-                              Irp,
-                              Buffer,
-                              SourceMdl,
-                              MdlOffset,
-                              ByteOffset,
-                              Aligned))
+        while (Aligned)
         {
-            *BytesRead = Aligned;
-            ByteOffset += Aligned;
-            Length -= Aligned;
-            BufferOffset += Aligned;
-            if (!Length)
-                return FR_OK;
+            DirectBytes = ExFatDirectFileIo(Vcb,
+                                            Fcb,
+                                            IRP_MJ_READ,
+                                            Irp,
+                                            Buffer ? (PUCHAR)Buffer + BufferOffset : NULL,
+                                            SourceMdl,
+                                            BufferOffset,
+                                            ByteOffset,
+                                            Aligned);
+            if (!DirectBytes)
+                break;
+
+            *BytesRead += DirectBytes;
+            ByteOffset += DirectBytes;
+            Length -= DirectBytes;
+            BufferOffset += DirectBytes;
+            Aligned -= DirectBytes;
         }
+        if (!Length)
+            return FR_OK;
     }
 
     if (!Buffer)
     {
-        Buffer = ExFatGetUserBuffer(Irp, FALSE);
+        if (SourceMdl)
+            Buffer = MmGetSystemAddressForMdlSafe(SourceMdl, NormalPagePriority);
+        else if (Irp)
+            Buffer = ExFatGetUserBuffer(Irp, FALSE);
         if (!Buffer)
             return FR_NOT_ENOUGH_CORE;
     }
@@ -87,60 +94,72 @@ ExFatWriteFileData(
     BOOLEAN CanExtend,
     PUINT BytesWritten)
 {
-    ULONG MdlOffset = 0;
+    ULONG BufferOffset = 0;
     ULONGLONG InPlace;
     ULONG Aligned;
+    ULONG DirectBytes;
     UINT Bytes = 0;
     FRESULT Result;
+    BOOLEAN WillExtend;
 
     *BytesWritten = 0;
     Result = ExFatEnsureFcbFile(Fcb, TRUE);
     if (Result != FR_OK)
         return Result;
 
-    if (CanExtend)
+    WillExtend = CanExtend &&
+                 (ByteOffset > f_size(&Fcb->FatFile) ||
+                  Length > f_size(&Fcb->FatFile) - ByteOffset);
+    if (WillExtend && (FSIZE_t)ByteOffset > f_size(&Fcb->FatFile))
     {
         ExFatInvalidateFcbClusterMap(Fcb);
-        if ((FSIZE_t)ByteOffset > f_size(&Fcb->FatFile))
-        {
-            Result = ExFatZeroFileRange(Fcb,
-                                        f_size(&Fcb->FatFile),
-                                        (FSIZE_t)ByteOffset);
-            if (Result != FR_OK)
-                return Result;
-        }
+        Result = ExFatZeroFileRange(Fcb,
+                                    f_size(&Fcb->FatFile),
+                                    (FSIZE_t)ByteOffset);
+        if (Result != FR_OK)
+            return Result;
     }
 
-    if (ExFatFileIsContiguous(Fcb) &&
-        (ByteOffset % Vcb->BytesPerSector) == 0 &&
+    if ((ByteOffset % Vcb->BytesPerSector) == 0 &&
         ByteOffset < f_size(&Fcb->FatFile))
     {
         InPlace = min((ULONGLONG)Length, f_size(&Fcb->FatFile) - ByteOffset);
         Aligned = (ULONG)(InPlace - (InPlace % Vcb->BytesPerSector));
-        if (Aligned &&
-            ExFatDirectFileIo(Vcb,
-                              Fcb,
-                              IRP_MJ_WRITE,
-                              NULL,
-                              Buffer,
-                              SourceMdl,
-                              MdlOffset,
-                              ByteOffset,
-                              Aligned))
+        while (Aligned)
         {
-            *BytesWritten = Aligned;
-            ByteOffset += Aligned;
-            Length -= Aligned;
-            Buffer = (PUCHAR)Buffer + Aligned;
-            if (!Length)
-                return FR_OK;
+            DirectBytes = ExFatDirectFileIo(Vcb,
+                                            Fcb,
+                                            IRP_MJ_WRITE,
+                                            NULL,
+                                            Buffer ? (PUCHAR)Buffer + BufferOffset : NULL,
+                                            SourceMdl,
+                                            BufferOffset,
+                                            ByteOffset,
+                                            Aligned);
+            if (!DirectBytes)
+                break;
+
+            *BytesWritten += DirectBytes;
+            ByteOffset += DirectBytes;
+            Length -= DirectBytes;
+            BufferOffset += DirectBytes;
+            Aligned -= DirectBytes;
         }
+        if (!Length)
+            return FR_OK;
     }
 
     /*
      * Plain f_lseek: a cluster map must never be active while f_write
      * extends the chain, or the write is silently truncated.
      */
+    if (WillExtend)
+        ExFatInvalidateFcbClusterMap(Fcb);
+    if (!Buffer && SourceMdl)
+        Buffer = MmGetSystemAddressForMdlSafe(SourceMdl, NormalPagePriority);
+    if (!Buffer)
+        return FR_NOT_ENOUGH_CORE;
+    Buffer = (PUCHAR)Buffer + BufferOffset;
     Result = f_lseek(&Fcb->FatFile, (FSIZE_t)ByteOffset);
     if (Result != FR_OK)
         return Result;
