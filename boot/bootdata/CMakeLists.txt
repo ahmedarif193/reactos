@@ -61,7 +61,6 @@ endif()
 # freeldr.ini
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/bootcd.ini DESTINATION root NO_CAB NAME_ON_CD freeldr.ini FOR bootcd livecd)
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/bootcd_regtest.ini DESTINATION root NO_CAB NAME_ON_CD freeldr.ini FOR regtest)
-add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/preinstall.ini DESTINATION root NAME_ON_CD freeldr.ini FOR preinstall)
 
 # Unattend
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/bootcd/unattend.inf DESTINATION reactos NO_CAB FOR bootcd)
