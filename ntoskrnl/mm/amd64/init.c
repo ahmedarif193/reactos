@@ -439,7 +439,7 @@ MiInitializePageTable(VOID)
     TmplPte.u.Flush.Write = 1;
     HyperTemplatePte = TmplPte;
 
-    /* Create PDPTs (72 KB) for shared system address space,
+    /* Create PDPTs for the shared system address space,
      * skip page tables TODO: use global pages. */
 
     /* Map the PXEs for all VA regions */
@@ -448,7 +448,6 @@ MiInitializePageTable(VOID)
         PMI_SYSTEM_VA_ASSIGNMENT Region = &MiSystemVaRegions[i];
 
         if ((Region->BaseAddress == NULL) ||
-            (i == AssignedRegionSystemCache) ||
             (i == AssignedRegionKernelStacks))
         {
             continue;
