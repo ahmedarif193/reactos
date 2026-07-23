@@ -1,0 +1,14 @@
+/*
+ * PROJECT:     ReactOS Kernel
+ * LICENSE:     MIT (https://spdx.org/licenses/MIT)
+ * PURPOSE:     NTFS-3G file-system driver version resource
+ * COPYRIGHT:   Copyright 2024 Carl J. Bialorucki <carl.bialorucki@reactos.org>
+ *              Copyright 2024 Justin Miller <justin.miller@reactos.org>
+ *              Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+ */
+
+#define REACTOS_VERSION_DLL
+#define REACTOS_STR_FILE_DESCRIPTION  "NTFS-3G File System Driver"
+#define REACTOS_STR_INTERNAL_NAME     "ntfs3g"
+#define REACTOS_STR_ORIGINAL_FILENAME "ntfs3g.sys"
+#include <reactos/version.rc>

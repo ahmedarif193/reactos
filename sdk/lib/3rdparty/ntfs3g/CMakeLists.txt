@@ -1,55 +1,57 @@
-set(NTFS3G_UPSTREAM_DIR ${CMAKE_CURRENT_SOURCE_DIR}/upstream)
-set(NTFS3G_SOURCE_DIR ${NTFS3G_UPSTREAM_DIR}/libntfs-3g)
-set(NTFS3G_INCLUDE_DIR ${NTFS3G_UPSTREAM_DIR}/include/ntfs-3g)
+include(${CMAKE_CURRENT_SOURCE_DIR}/sources.cmake)
 
-set(NTFS3G_CORE_SOURCES
-    ${NTFS3G_SOURCE_DIR}/acls.c
-    ${NTFS3G_SOURCE_DIR}/attrib.c
-    ${NTFS3G_SOURCE_DIR}/attrlist.c
-    ${NTFS3G_SOURCE_DIR}/bitmap.c
-    ${NTFS3G_SOURCE_DIR}/bootsect.c
-    ${NTFS3G_SOURCE_DIR}/cache.c
-    ${NTFS3G_SOURCE_DIR}/collate.c
+add_library(ntfs3g_core STATIC
+    ${NTFS3G_PORTABLE_SOURCES}
     ${NTFS3G_SOURCE_DIR}/compat.c
-    ${NTFS3G_SOURCE_DIR}/compress.c
-    ${NTFS3G_SOURCE_DIR}/debug.c
-    ${NTFS3G_SOURCE_DIR}/device.c
-    ${NTFS3G_SOURCE_DIR}/dir.c
-    ${NTFS3G_SOURCE_DIR}/ea.c
-    ${NTFS3G_SOURCE_DIR}/efs.c
-    ${NTFS3G_SOURCE_DIR}/index.c
-    ${NTFS3G_SOURCE_DIR}/inode.c
-    ${NTFS3G_SOURCE_DIR}/ioctl.c
-    ${NTFS3G_SOURCE_DIR}/lcnalloc.c
-    ${NTFS3G_SOURCE_DIR}/logfile.c
-    ${NTFS3G_SOURCE_DIR}/logging.c
-    ${NTFS3G_SOURCE_DIR}/mft.c
     ${NTFS3G_SOURCE_DIR}/misc.c
-    ${NTFS3G_SOURCE_DIR}/mst.c
-    ${NTFS3G_SOURCE_DIR}/object_id.c
-    ${NTFS3G_SOURCE_DIR}/realpath.c
-    ${NTFS3G_SOURCE_DIR}/reparse.c
-    ${NTFS3G_SOURCE_DIR}/runlist.c
-    ${NTFS3G_SOURCE_DIR}/security.c
-    ${NTFS3G_SOURCE_DIR}/unistr.c
-    ${NTFS3G_SOURCE_DIR}/volume.c
-    ${NTFS3G_SOURCE_DIR}/xattrs.c)
+    ${CMAKE_CURRENT_SOURCE_DIR}/reactos/common/device.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/reactos/common/file.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/reactos/common/logging.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/reactos/common/runtime.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/reactos/common/volume.c)
 
-add_library(ntfs3g_um STATIC
-    ${NTFS3G_CORE_SOURCES}
-    ${NTFS3G_SOURCE_DIR}/win32_io.c)
-
-target_compile_definitions(ntfs3g_um PRIVATE HAVE_CONFIG_H)
-target_include_directories(ntfs3g_um
-    PUBLIC ${NTFS3G_INCLUDE_DIR}
-    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/config/um)
+add_dependencies(ntfs3g_core psdk)
+target_compile_definitions(ntfs3g_core PRIVATE
+    HAVE_CONFIG_H
+    NO_NTFS_DEVICE_DEFAULT_IO_OPS
+    _CRT_DECLARE_NONSTDC_NAMES=1
+    _NO_INLINING
+    _errno=ntfs3g_errno_location
+    calloc=ntfs3g_calloc
+    free=ntfs3g_free
+    malloc=ntfs3g_malloc
+    mbstowcs=ntfs3g_mbstowcs
+    mbtowc=ntfs3g_mbtowc
+    realloc=ntfs3g_realloc
+    setlocale=ntfs3g_setlocale
+    strdup=ntfs3g_strdup
+    strerror=ntfs3g_strerror
+    strnlen=ntfs3g_strnlen
+    time=ntfs3g_time
+    wctomb=ntfs3g_wctomb
+    _time64=ntfs3g_time)
+target_include_directories(ntfs3g_core BEFORE
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/config/core
+        ${CMAKE_CURRENT_SOURCE_DIR}/reactos/common
+        ${NTFS3G_INCLUDE_DIR})
 
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
-    target_compile_options(ntfs3g_um PRIVATE
+    target_compile_options(ntfs3g_core PRIVATE
+        -mno-sse
         -Wno-format
+        -Wno-deprecated-declarations
         -Wno-pointer-sign
         -Wno-sign-compare
         -Wno-unused-function
         -Wno-unused-parameter
         -Wno-unused-variable)
 endif()
+
+add_library(ntfs3g_um STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/reactos/um/host.c)
+target_link_libraries(ntfs3g_um PUBLIC ntfs3g_core)
+target_include_directories(ntfs3g_um PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/reactos/common)
