@@ -37,7 +37,6 @@ Irp->UserBuffer
 #define GetCreateOptions(Options) ((Options) & 0x00FFFFFF)
 
 extern PDEVICE_OBJECT NtfsDiskFileSystemDeviceObject;
-extern PDRIVER_OBJECT NtfsDriverObject;
 extern FAST_IO_DISPATCH FastIoDispatch;
 
 #define NTFS3G_FCB_NODE_TYPE 0x3347
@@ -51,19 +50,6 @@ NtfsCompleteRequest(_Inout_ PIRP Irp,
     Irp->IoStatus.Information = Information;
     IoCompleteRequest(Irp, IO_DISK_INCREMENT);
     return Status;
-}
-
-FORCEINLINE BOOLEAN
-NtfsIsVolumeReadOnly(_In_ PDEVICE_OBJECT DeviceObject)
-{
-    PVolumeContextBlock Volume;
-
-    if (!DeviceObject || DeviceObject == NtfsDiskFileSystemDeviceObject ||
-        !DeviceObject->DeviceExtension)
-        return TRUE;
-
-    Volume = (PVolumeContextBlock)DeviceObject->DeviceExtension;
-    return !Volume->Volume || Ntfs3gRosIsReadOnly(Volume->Volume);
 }
 
 #endif // _NTFSPROCS_

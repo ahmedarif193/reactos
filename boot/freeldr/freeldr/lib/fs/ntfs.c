@@ -144,7 +144,7 @@ Ntfs3gFreeLdrRead(void *OpaqueContext,
 static void
 Ntfs3gFreeLdrClose(void *OpaqueContext)
 {
-    FrLdrTempFree(OpaqueContext, TAG_NTFS3G);
+    Ntfs3gRosHostFree(OpaqueContext);
 }
 
 static const NTFS3G_ROS_DEVICE_OPERATIONS Ntfs3gFreeLdrDeviceOperations = {
@@ -186,7 +186,7 @@ NtfsGetFileInformation(ULONG FileId,
     if (Attributes & NTFS3G_ROS_FILE_DIRECTORY)
         Information->Attributes |= DirectoryFile;
 
-    NameLength = min(strlen(Name), sizeof(Information->FileName) - 1);
+    NameLength = strnlen(Name, sizeof(Information->FileName) - 1);
     Information->FileNameLength = (ULONG)NameLength;
     RtlCopyMemory(Information->FileName, Name, NameLength);
     Information->FileName[NameLength] = ANSI_NULL;
@@ -290,7 +290,7 @@ NtfsMount(
 
     DeviceLength = Information.EndingAddress.QuadPart -
                    Information.StartingAddress.QuadPart;
-    Context = FrLdrTempAlloc(sizeof(*Context), TAG_NTFS3G);
+    Context = Ntfs3gRosHostAllocate(sizeof(*Context));
     if (!Context)
         return NULL;
     Context->DeviceId = DeviceId;

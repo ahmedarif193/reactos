@@ -176,7 +176,7 @@ NtfsMountVolume(_In_ PDEVICE_OBJECT TargetDeviceObject,
     if (!NT_SUCCESS(Status))
         return Status;
 
-    Status = IoCreateDevice(NtfsDriverObject,
+    Status = IoCreateDevice(NtfsDiskFileSystemDeviceObject->DriverObject,
                             sizeof(*Volume),
                             NULL,
                             FILE_DEVICE_DISK_FILE_SYSTEM,
@@ -187,7 +187,6 @@ NtfsMountVolume(_In_ PDEVICE_OBJECT TargetDeviceObject,
         goto Failure;
 
     Volume = DeviceObject->DeviceExtension;
-    RtlZeroMemory(Volume, sizeof(*Volume));
     Volume->Volume = CoreVolume;
     Volume->StorageDevice = TargetDeviceObject;
     Volume->StreamFileObject = IoCreateStreamFileObject(NULL,

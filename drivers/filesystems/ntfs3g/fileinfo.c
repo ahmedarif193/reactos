@@ -9,6 +9,14 @@
 
 #include "ntfspch.h"
 
+static ULONG
+NtfsNormalizedAttributes(
+    _In_ const NTFS3G_ROS_FILE_INFORMATION *Information)
+{
+    return Information->Attributes ?
+           Information->Attributes : FILE_ATTRIBUTE_NORMAL;
+}
+
 static VOID
 NtfsFillBasicInformation(_In_ const NTFS3G_ROS_FILE_INFORMATION *Source,
                          _Out_ PFILE_BASIC_INFORMATION Destination)
@@ -17,8 +25,7 @@ NtfsFillBasicInformation(_In_ const NTFS3G_ROS_FILE_INFORMATION *Source,
     Destination->LastAccessTime.QuadPart = Source->LastAccessTime;
     Destination->LastWriteTime.QuadPart = Source->LastWriteTime;
     Destination->ChangeTime.QuadPart = Source->ChangeTime;
-    Destination->FileAttributes = Source->Attributes ?
-                                  Source->Attributes : FILE_ATTRIBUTE_NORMAL;
+    Destination->FileAttributes = NtfsNormalizedAttributes(Source);
 }
 
 static NTSTATUS
@@ -98,9 +105,8 @@ NtfsQueryFileInformation(_In_ PFILE_OBJECT FileObject,
             Network->ChangeTime.QuadPart = File->Information.ChangeTime;
             Network->AllocationSize.QuadPart = File->Information.AllocationSize;
             Network->EndOfFile.QuadPart = File->Information.FileSize;
-            Network->FileAttributes = File->Information.Attributes ?
-                                      File->Information.Attributes :
-                                      FILE_ATTRIBUTE_NORMAL;
+            Network->FileAttributes =
+                NtfsNormalizedAttributes(&File->Information);
             *BytesWritten = sizeof(*Network);
             return STATUS_SUCCESS;
         }
@@ -209,28 +215,21 @@ NtfsDirectoryNameMatches(_In_ PFileContextBlock File,
 }
 
 static ULONG
-NtfsDirectoryEntrySize(_In_ FILE_INFORMATION_CLASS InformationClass,
-                       _In_ ULONG NameLength)
+NtfsDirectoryEntryHeaderSize(
+    _In_ FILE_INFORMATION_CLASS InformationClass)
 {
-    ULONG Size;
-
     switch (InformationClass) {
         case FileDirectoryInformation:
-            Size = FIELD_OFFSET(FILE_DIRECTORY_INFORMATION, FileName);
-            break;
+            return FIELD_OFFSET(FILE_DIRECTORY_INFORMATION, FileName);
         case FileFullDirectoryInformation:
-            Size = FIELD_OFFSET(FILE_FULL_DIR_INFORMATION, FileName);
-            break;
+            return FIELD_OFFSET(FILE_FULL_DIR_INFORMATION, FileName);
         case FileBothDirectoryInformation:
-            Size = FIELD_OFFSET(FILE_BOTH_DIR_INFORMATION, FileName);
-            break;
+            return FIELD_OFFSET(FILE_BOTH_DIR_INFORMATION, FileName);
         case FileNamesInformation:
-            Size = FIELD_OFFSET(FILE_NAMES_INFORMATION, FileName);
-            break;
+            return FIELD_OFFSET(FILE_NAMES_INFORMATION, FileName);
         default:
             return 0;
     }
-    return ALIGN_UP_BY(Size + NameLength, sizeof(ULONGLONG));
 }
 
 static VOID
@@ -258,8 +257,7 @@ NtfsFillDirectoryEntry(_Out_ PVOID Buffer,
         Directory->ChangeTime.QuadPart = Source->ChangeTime;
         Directory->EndOfFile.QuadPart = Source->FileSize;
         Directory->AllocationSize.QuadPart = Source->AllocationSize;
-        Directory->FileAttributes = Source->Attributes ?
-                                    Source->Attributes : FILE_ATTRIBUTE_NORMAL;
+        Directory->FileAttributes = NtfsNormalizedAttributes(Source);
         Directory->FileNameLength = NameLength;
 
         if (InformationClass == FileDirectoryInformation) {
@@ -292,6 +290,7 @@ NtfsFsdDirectoryControl(_In_ PDEVICE_OBJECT DeviceObject,
     NTFS3G_ROS_DIRECTORY_ENTRY Entry;
     PUCHAR Buffer = GetBuffer(Irp);
     ULONG BufferLength = IrpSp->Parameters.QueryDirectory.Length;
+    ULONG EntryHeaderSize;
     ULONG BytesWritten = 0;
     PULONG PreviousNextEntryOffset = NULL;
     BOOLEAN Restart;
@@ -308,7 +307,8 @@ NtfsFsdDirectoryControl(_In_ PDEVICE_OBJECT DeviceObject,
         return NtfsCompleteRequest(Irp, STATUS_INVALID_USER_BUFFER, 0);
 
     InformationClass = IrpSp->Parameters.QueryDirectory.FileInformationClass;
-    if (!NtfsDirectoryEntrySize(InformationClass, 0))
+    EntryHeaderSize = NtfsDirectoryEntryHeaderSize(InformationClass);
+    if (!EntryHeaderSize)
         return NtfsCompleteRequest(Irp, STATUS_INVALID_INFO_CLASS, 0);
 
     Restart = (IrpSp->Flags & SL_RESTART_SCAN) != 0;
@@ -340,8 +340,9 @@ NtfsFsdDirectoryControl(_In_ PDEVICE_OBJECT DeviceObject,
         if (!NtfsDirectoryNameMatches(File, &Entry))
             continue;
 
-        EntrySize = NtfsDirectoryEntrySize(
-            InformationClass, Entry.FileNameLength * sizeof(WCHAR));
+        EntrySize = ALIGN_UP_BY(
+            EntryHeaderSize + Entry.FileNameLength * sizeof(WCHAR),
+            sizeof(ULONGLONG));
         if (EntrySize > BufferLength - BytesWritten) {
             Ntfs3gRosSetDirectoryPosition(File->File, Position);
             if (!BytesWritten)

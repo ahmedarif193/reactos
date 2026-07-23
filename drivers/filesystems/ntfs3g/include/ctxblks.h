@@ -18,7 +18,7 @@ typedef struct _VolumeContextBlock
 
 typedef struct _FileContextBlock
 {
-    FSRTL_COMMON_FCB_HEADER CommonFCBHeader;
+    FSRTL_ADVANCED_FCB_HEADER CommonFCBHeader;
     SECTION_OBJECT_POINTERS SectionObjectPointers;
     FILE_LOCK FileLock;
     ERESOURCE MainResource;
@@ -28,7 +28,5 @@ typedef struct _FileContextBlock
     NTFS3G_ROS_FILE_INFORMATION Information;
     UNICODE_STRING FileName;
     UNICODE_STRING DirectoryPattern;
-    ULONG CreateOptions;
-    ACCESS_MASK DesiredAccess;
     BOOLEAN DirectoryQueryStarted;
 } FileContextBlock, *PFileContextBlock;

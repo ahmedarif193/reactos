@@ -139,7 +139,7 @@ Ntfs3gUserClose(void *OpaqueContext)
     NTFS3G_USER_DEVICE *Context = OpaqueContext;
 
     CloseHandle(Context->Handle);
-    HeapFree(GetProcessHeap(), 0, Context);
+    Ntfs3gRosHostFree(Context);
 }
 
 static const NTFS3G_ROS_DEVICE_OPERATIONS Ntfs3gUserDeviceOperations = {
@@ -180,7 +180,7 @@ Ntfs3gRosMountHandle(void *Handle,
         return -Error;
     }
 
-    Context = HeapAlloc(GetProcessHeap(), 0, sizeof(*Context));
+    Context = Ntfs3gRosHostAllocate(sizeof(*Context));
     if (!Context) {
         CloseHandle(Duplicate);
         errno = ENOMEM;
