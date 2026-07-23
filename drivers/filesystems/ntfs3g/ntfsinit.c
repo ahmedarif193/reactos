@@ -10,7 +10,6 @@
 #include "ntfspch.h"
 
 PDEVICE_OBJECT NtfsDiskFileSystemDeviceObject;
-PDRIVER_OBJECT NtfsDriverObject;
 FAST_IO_DISPATCH FastIoDispatch;
 
 NTSTATUS
@@ -39,7 +38,6 @@ DriverEntry(_In_ PDRIVER_OBJECT DriverObject,
         return Status;
     }
 
-    NtfsDriverObject = DriverObject;
     DriverObject->DriverUnload = NtfsUnload;
     DriverObject->MajorFunction[IRP_MJ_CREATE] = NtfsFsdCreate;
     DriverObject->MajorFunction[IRP_MJ_CLOSE] = NtfsFsdClose;

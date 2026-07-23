@@ -30,6 +30,7 @@
 #define HAVE_SYS_TYPES_H 1
 #define HAVE_TIME_H 1
 #define HAVE_WCHAR_H 1
+#define __timespec_defined 1
 #define IGNORE_MTAB 1
 #define PACKAGE "ntfs-3g"
 #define PACKAGE_NAME "ntfs-3g"
