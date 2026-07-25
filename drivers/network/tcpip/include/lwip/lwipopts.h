@@ -47,9 +47,12 @@
 
 #define LWIP_WND_SCALE                  1
 #define TCP_RCV_SCALE                   3
-#define TCP_WND                         (104 * 1024)
+#define TCP_WND                         (256 * 1024)
 
-#define TCP_SND_BUF                     (64 * 1024)
+#define TCP_SND_BUF                     (256 * 1024)
+
+#define TCP_SNDLOWAT                    (32 * 1024)
+#define TCP_SNDQUEUELOWAT               64
 
 #define TCP_MAXRTX                      8
 
