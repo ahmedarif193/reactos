@@ -1,7 +1,7 @@
 /*
  * PROJECT:     ReactOS NTFS-3G Library
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
- * PURPOSE:     Shared read-only NTFS-3G device implementation
+ * PURPOSE:     Shared NTFS-3G device implementation
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
@@ -11,6 +11,10 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdlib.h>
+
+#ifdef HAVE_LINUX_FS_H
+#include <linux/fs.h>
+#endif
 
 #include "device.h"
 #include "reactos_device.h"
@@ -28,17 +32,22 @@ static int
 Ntfs3gRosDeviceOpen(struct ntfs_device *Device,
                     int Flags)
 {
+    NTFS3G_ROS_DEVICE *Context = Device->d_private;
+
     if (NDevOpen(Device)) {
         errno = EBUSY;
         return -1;
     }
-    if (Flags & O_RDWR) {
+    if ((Flags & O_RDWR) && !Context->Operations.Write) {
         errno = EROFS;
         return -1;
     }
 
     NDevSetBlock(Device);
-    NDevSetReadOnly(Device);
+    if (Flags & O_RDWR)
+        NDevClearReadOnly(Device);
+    else
+        NDevSetReadOnly(Device);
     NDevSetOpen(Device);
     return 0;
 }
@@ -151,15 +160,23 @@ Ntfs3gRosDeviceRead(struct ntfs_device *Device,
 }
 
 static int64_t
+Ntfs3gRosDevicePwrite(struct ntfs_device *Device,
+                      const void *Buffer,
+                      int64_t Count,
+                      int64_t Offset);
+
+static int64_t
 Ntfs3gRosDeviceWrite(struct ntfs_device *Device,
                      const void *Buffer,
                      int64_t Count)
 {
-    (void)Device;
-    (void)Buffer;
-    (void)Count;
-    errno = EROFS;
-    return -1;
+    NTFS3G_ROS_DEVICE *Context = Device->d_private;
+    int64_t Result = Ntfs3gRosDevicePwrite(Device, Buffer, Count,
+                                           Context->Position);
+
+    if (Result > 0)
+        Context->Position += Result;
+    return Result;
 }
 
 static int64_t
@@ -168,14 +185,56 @@ Ntfs3gRosDevicePwrite(struct ntfs_device *Device,
                       int64_t Count,
                       int64_t Offset)
 {
-    (void)Offset;
-    return Ntfs3gRosDeviceWrite(Device, Buffer, Count);
+    NTFS3G_ROS_DEVICE *Context = Device->d_private;
+    uint64_t Total = 0;
+
+    if (!Context->Operations.Write) {
+        errno = EROFS;
+        return -1;
+    }
+    if (Count < 0 || Offset < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    while (Count) {
+        uint32_t Chunk = Count > UINT32_MAX ? UINT32_MAX : (uint32_t)Count;
+        uint32_t Done = 0;
+        int Error;
+
+        Error = Context->Operations.Write(Context->Context,
+                                          (uint64_t)Offset + Total,
+                                          (const char *)Buffer + Total,
+                                          Chunk,
+                                          &Done);
+        if (Error) {
+            errno = Error;
+            return Total ? (int64_t)Total : -1;
+        }
+        Total += Done;
+        Count -= Done;
+        if (Done != Chunk)
+            break;
+    }
+    if (Total)
+        NDevSetDirty(Device);
+    return (int64_t)Total;
 }
 
 static int
 Ntfs3gRosDeviceSync(struct ntfs_device *Device)
 {
-    (void)Device;
+    NTFS3G_ROS_DEVICE *Context = Device->d_private;
+    int Error;
+
+    if (!Context->Operations.Sync)
+        return 0;
+    Error = Context->Operations.Sync(Context->Context);
+    if (Error) {
+        errno = Error;
+        return -1;
+    }
+    NDevClearDirty(Device);
     return 0;
 }
 
