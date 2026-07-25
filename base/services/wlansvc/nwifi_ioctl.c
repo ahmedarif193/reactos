@@ -321,6 +321,12 @@ static VOID
 NwifiDispatchNotification(const NWIFI_NOTIFICATION *pNotif)
 {
     PWLANSVC_INTERFACE iface;
+    PNWIFI_BSS_LIST bssList = NULL;
+    GUID interfaceGuid;
+    DOT11_MAC_ADDRESS macAddress;
+    ULONG interfaceIndex;
+    ULONG64 upperLuid;
+    DWORD dwResult;
 
     EnterCriticalSection(&WlanSvcLock);
 
@@ -331,8 +337,29 @@ NwifiDispatchNotification(const NWIFI_NOTIFICATION *pNotif)
         case NwifiNotifyScanComplete:
             if (iface != NULL)
             {
-                WlanSvcRefreshBssCache(iface);
-                WlanSvcIndicateAcm(iface, wlan_notification_acm_scan_complete);
+                /* Snapshot the driver identity; iface may be freed while the
+                 * service lock is dropped for the blocking IOCTL. */
+                interfaceGuid = iface->InterfaceGuid;
+                interfaceIndex = iface->NwifiIndex;
+                upperLuid = iface->UpperLuid;
+                macAddress = iface->MacAddress;
+
+                LeaveCriticalSection(&WlanSvcLock);
+                dwResult = NwifiGetBssList(interfaceIndex, upperLuid, &macAddress, &bssList);
+                EnterCriticalSection(&WlanSvcLock);
+
+                /* Re-resolve and validate the identity before touching any
+                 * in-process state: removal can free the original iface. */
+                iface = WlanSvcFindInterface(&interfaceGuid);
+                if (iface != NULL && iface->NwifiIndex == interfaceIndex && iface->UpperLuid == upperLuid && memcmp(&iface->MacAddress, &macAddress, sizeof(macAddress)) == 0)
+                {
+                    if (dwResult == ERROR_SUCCESS && bssList != NULL)
+                        WlanSvcApplyBssCache(iface, bssList);
+                    WlanSvcIndicateAcm(iface, wlan_notification_acm_scan_complete);
+                }
+
+                if (bssList != NULL)
+                    HeapFree(GetProcessHeap(), 0, bssList);
             }
             break;
 

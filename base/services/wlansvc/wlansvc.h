@@ -320,6 +320,8 @@ PWLANSVCHANDLE WlanSvcGetHandleEntry(WLANSVC_RPC_HANDLE ClientHandle);
 /* scan.c */
 DWORD WlanSvcDoScan(PWLANSVC_INTERFACE Iface, PDOT11_SSID pSsid);
 DWORD WlanSvcRefreshBssCache(PWLANSVC_INTERFACE Iface);
+DWORD WlanSvcApplyBssCache(PWLANSVC_INTERFACE Iface,
+                           PNWIFI_BSS_LIST Results);
 VOID  WlanSvcFlushBssList(PWLANSVC_INTERFACE Iface);
 DWORD WlanSvcBuildAvailableNetworkList(PWLANSVC_INTERFACE Iface,
                                        DWORD dwFlags,
