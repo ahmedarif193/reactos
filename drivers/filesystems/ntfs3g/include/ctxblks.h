@@ -14,6 +14,14 @@ typedef struct _VolumeContextBlock
     PNTFS3G_ROS_KM_VOLUME Volume;
     PDEVICE_OBJECT StorageDevice;
     PFILE_OBJECT StreamFileObject;
+    struct _FileContextBlock *VolumeFcb;
+    PFILE_OBJECT LockFileObject;
+    ERESOURCE FcbListResource;
+    LIST_ENTRY FcbListHead;
+    BOOLEAN FcbListResourceInitialized;
+    BOOLEAN ShutdownRegistered;
+    BOOLEAN ShutdownStarted;
+    BOOLEAN Dismounted;
 } VolumeContextBlock, *PVolumeContextBlock;
 
 typedef struct _FileContextBlock
@@ -24,9 +32,29 @@ typedef struct _FileContextBlock
     ERESOURCE MainResource;
     ERESOURCE PagingIoResource;
     FAST_MUTEX HeaderMutex;
+    SHARE_ACCESS ShareAccess;
+    LIST_ENTRY ListEntry;
+    PVolumeContextBlock Volume;
+    LONG ReferenceCount;
+    ULONG OpenHandleCount;
+    BOOLEAN DeletePending;
+    BOOLEAN DeleteCompleted;
+    BOOLEAN IsVolume;
     NTFS3G_ROS_FILE *File;
     NTFS3G_ROS_FILE_INFORMATION Information;
     UNICODE_STRING FileName;
+} FileContextBlock, *PFileContextBlock;
+
+typedef struct _HandleContextBlock
+{
+    PFILE_OBJECT FileObject;
+    ACCESS_MASK DesiredAccess;
+    ULONG CreateOptions;
+    BOOLEAN ShareAccessSet;
+    BOOLEAN CleanupComplete;
+    BOOLEAN ExtendedDasdIo;
     UNICODE_STRING DirectoryPattern;
     BOOLEAN DirectoryQueryStarted;
-} FileContextBlock, *PFileContextBlock;
+    ULONG EaIndex;
+    NTFS3G_ROS_FILE *DirectoryFile;
+} HandleContextBlock, *PHandleContextBlock;

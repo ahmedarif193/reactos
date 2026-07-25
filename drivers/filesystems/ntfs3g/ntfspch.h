@@ -21,8 +21,8 @@
 #include <debug.h>
 
 #include <ntfs3g_ros_km.h>
-#include "include/dispatch.h"
 #include "include/ctxblks.h"
+#include "include/dispatch.h"
 
 #define GetUserBuffer(Irp) Irp->MdlAddress ?\
 MmGetSystemAddressForMdlSafe(Irp->MdlAddress, ((Irp->Flags & IRP_PAGING_IO) ? HighPagePriority : NormalPagePriority)) :\
@@ -38,8 +38,15 @@ Irp->UserBuffer
 
 extern PDEVICE_OBJECT NtfsDiskFileSystemDeviceObject;
 extern FAST_IO_DISPATCH FastIoDispatch;
+extern CACHE_MANAGER_CALLBACKS CacheManagerCallbacks;
 
 #define NTFS3G_FCB_NODE_TYPE 0x3347
+#define NTFS3G_READ_AHEAD_GRANULARITY (64 * 1024)
+
+#define NtfsIsWriteAccess(Access)                                      \
+    BooleanFlagOn((Access),                                            \
+                  FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | \
+                  FILE_WRITE_ATTRIBUTES | DELETE)
 
 FORCEINLINE NTSTATUS
 NtfsCompleteRequest(_Inout_ PIRP Irp,
