@@ -2510,7 +2510,7 @@ NtQueryDirectoryFileEx(IN HANDLE FileHandle,
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 NTSTATUS
 NTAPI
@@ -2524,8 +2524,192 @@ NtQueryEaFile(IN HANDLE FileHandle,
               IN PULONG EaIndex OPTIONAL,
               IN BOOLEAN RestartScan)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    PFILE_OBJECT FileObject;
+    PDEVICE_OBJECT DeviceObject;
+    PIO_STACK_LOCATION StackPtr;
+    PIRP Irp;
+    PKEVENT Event = NULL;
+    BOOLEAN LocalEvent = FALSE;
+    BOOLEAN LockedForSync = FALSE;
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    IO_STATUS_BLOCK KernelIosb;
+    volatile PVOID CapturedEaList = NULL;
+    ULONG CapturedEaIndex = 0;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    IOTRACE(IO_API_DEBUG, "FileHandle: %p\n", FileHandle);
+
+    if ((!EaList && EaListLength) ||
+        (EaList && !EaListLength))
+        return STATUS_INVALID_PARAMETER;
+
+    _SEH2_TRY
+    {
+        if (PreviousMode != KernelMode)
+        {
+            ProbeForWriteIoStatusBlock(IoStatusBlock);
+            if (Length)
+                ProbeForWrite(Buffer, Length, sizeof(ULONG));
+            if (EaListLength)
+                ProbeForRead(EaList, EaListLength, sizeof(ULONG));
+            if (EaIndex)
+                ProbeForRead(EaIndex, sizeof(*EaIndex), sizeof(ULONG));
+        }
+
+        if (EaIndex)
+            CapturedEaIndex = *EaIndex;
+        if (EaListLength)
+        {
+            CapturedEaList =
+                ExAllocatePoolWithQuotaTag(NonPagedPool,
+                                           EaListLength,
+                                           TAG_IOBUF);
+            RtlCopyMemory((PVOID)CapturedEaList,
+                          EaList,
+                          EaListLength);
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        if (CapturedEaList)
+            ExFreePoolWithTag((PVOID)CapturedEaList, TAG_IOBUF);
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+    Status = ObReferenceObjectByHandle(FileHandle,
+                                       FILE_READ_EA,
+                                       IoFileObjectType,
+                                       PreviousMode,
+                                       (PVOID *)&FileObject,
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        if (CapturedEaList)
+            ExFreePoolWithTag((PVOID)CapturedEaList, TAG_IOBUF);
+        return Status;
+    }
+
+    if (FileObject->Flags & FO_SYNCHRONOUS_IO)
+    {
+        Status = IopLockFileObject(FileObject, PreviousMode);
+        if (!NT_SUCCESS(Status))
+        {
+            ObDereferenceObject(FileObject);
+            if (CapturedEaList)
+                ExFreePoolWithTag((PVOID)CapturedEaList, TAG_IOBUF);
+            return Status;
+        }
+        LockedForSync = TRUE;
+    }
+    else
+    {
+        Event = ExAllocatePoolWithTag(NonPagedPool,
+                                      sizeof(*Event),
+                                      TAG_IO);
+        if (!Event)
+        {
+            ObDereferenceObject(FileObject);
+            if (CapturedEaList)
+                ExFreePoolWithTag((PVOID)CapturedEaList, TAG_IOBUF);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        KeInitializeEvent(Event, SynchronizationEvent, FALSE);
+        LocalEvent = TRUE;
+    }
+
+    DeviceObject = IoGetRelatedDeviceObject(FileObject);
+    KeClearEvent(&FileObject->Event);
+    Irp = IoAllocateIrp(DeviceObject->StackSize, FALSE);
+    if (!Irp)
+    {
+        if (LockedForSync)
+            IopUnlockFileObject(FileObject);
+        ObDereferenceObject(FileObject);
+        if (Event)
+            ExFreePoolWithTag(Event, TAG_IO);
+        if (CapturedEaList)
+            ExFreePoolWithTag((PVOID)CapturedEaList, TAG_IOBUF);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    Irp->RequestorMode = PreviousMode;
+    Irp->Flags = LocalEvent ? IRP_SYNCHRONOUS_API : 0;
+    Irp->UserIosb = LocalEvent ? &KernelIosb : IoStatusBlock;
+    Irp->UserEvent = LocalEvent ? Event : NULL;
+    Irp->Tail.Overlay.Thread = PsGetCurrentThread();
+    Irp->Tail.Overlay.OriginalFileObject = FileObject;
+    Irp->Overlay.AsynchronousParameters.UserApcRoutine = NULL;
+    Irp->UserBuffer = Buffer;
+    Irp->AssociatedIrp.SystemBuffer = NULL;
+    Irp->MdlAddress = NULL;
+
+    StackPtr = IoGetNextIrpStackLocation(Irp);
+    StackPtr->MajorFunction = IRP_MJ_QUERY_EA;
+    StackPtr->FileObject = FileObject;
+    StackPtr->Parameters.QueryEa.Length = Length;
+    StackPtr->Parameters.QueryEa.EaList =
+        (PVOID)CapturedEaList;
+    StackPtr->Parameters.QueryEa.EaListLength =
+        EaListLength;
+    StackPtr->Parameters.QueryEa.EaIndex =
+        CapturedEaIndex;
+    if (ReturnSingleEntry)
+        StackPtr->Flags |= SL_RETURN_SINGLE_ENTRY;
+    if (RestartScan)
+        StackPtr->Flags |= SL_RESTART_SCAN;
+    if (EaIndex)
+        StackPtr->Flags |= SL_INDEX_SPECIFIED;
+
+    _SEH2_TRY
+    {
+        if (Length)
+        {
+            Irp->AssociatedIrp.SystemBuffer =
+                ExAllocatePoolWithQuotaTag(NonPagedPool,
+                                           Length,
+                                           TAG_IOBUF);
+            RtlZeroMemory(Irp->AssociatedIrp.SystemBuffer,
+                          Length);
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        IopCleanupAfterException(FileObject,
+                                 Irp,
+                                 NULL,
+                                 Event);
+        if (CapturedEaList)
+            ExFreePoolWithTag((PVOID)CapturedEaList, TAG_IOBUF);
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+    Irp->Tail.Overlay.AuxiliaryBuffer =
+        (PVOID)CapturedEaList;
+    Irp->Flags |= IRP_BUFFERED_IO |
+                  IRP_DEALLOCATE_BUFFER |
+                  IRP_INPUT_OPERATION |
+                  IRP_DEFER_IO_COMPLETION;
+
+    Status = IopPerformSynchronousRequest(DeviceObject,
+                                          Irp,
+                                          FileObject,
+                                          TRUE,
+                                          PreviousMode,
+                                          LockedForSync,
+                                          IopOtherTransfer);
+    if (LocalEvent)
+    {
+        Status = IopFinalizeAsynchronousIo(Status,
+                                           Event,
+                                           Irp,
+                                           PreviousMode,
+                                           &KernelIosb,
+                                           IoStatusBlock);
+    }
+    return Status;
 }
 
 /*
@@ -3481,7 +3665,7 @@ NtReadFileScatter(IN HANDLE FileHandle,
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 NTSTATUS
 NTAPI
@@ -3490,8 +3674,130 @@ NtSetEaFile(IN HANDLE FileHandle,
             IN PVOID EaBuffer,
             IN ULONG EaBufferSize)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    PFILE_OBJECT FileObject;
+    PDEVICE_OBJECT DeviceObject;
+    PIO_STACK_LOCATION StackPtr;
+    PIRP Irp;
+    PKEVENT Event = NULL;
+    BOOLEAN LocalEvent = FALSE;
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    IO_STATUS_BLOCK KernelIosb;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    IOTRACE(IO_API_DEBUG, "FileHandle: %p\n", FileHandle);
+
+    if (!EaBuffer || !EaBufferSize)
+        return STATUS_INVALID_PARAMETER;
+    if (PreviousMode != KernelMode)
+    {
+        _SEH2_TRY
+        {
+            ProbeForWriteIoStatusBlock(IoStatusBlock);
+            ProbeForRead(EaBuffer, EaBufferSize, sizeof(ULONG));
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+    }
+
+    Status = ObReferenceObjectByHandle(FileHandle,
+                                       FILE_WRITE_EA,
+                                       IoFileObjectType,
+                                       PreviousMode,
+                                       (PVOID *)&FileObject,
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (FileObject->Flags & FO_SYNCHRONOUS_IO)
+    {
+        Status = IopLockFileObject(FileObject, PreviousMode);
+        if (!NT_SUCCESS(Status))
+        {
+            ObDereferenceObject(FileObject);
+            return Status;
+        }
+    }
+    else
+    {
+        Event = ExAllocatePoolWithTag(NonPagedPool,
+                                      sizeof(*Event),
+                                      TAG_IO);
+        if (!Event)
+        {
+            ObDereferenceObject(FileObject);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        KeInitializeEvent(Event, SynchronizationEvent, FALSE);
+        LocalEvent = TRUE;
+    }
+
+    DeviceObject = IoGetRelatedDeviceObject(FileObject);
+    KeClearEvent(&FileObject->Event);
+    Irp = IoAllocateIrp(DeviceObject->StackSize, FALSE);
+    if (!Irp)
+        return IopCleanupFailedIrp(
+            FileObject, NULL, Event);
+
+    Irp->RequestorMode = PreviousMode;
+    Irp->Flags = LocalEvent ? IRP_SYNCHRONOUS_API : 0;
+    Irp->UserIosb = LocalEvent ? &KernelIosb : IoStatusBlock;
+    Irp->UserEvent = LocalEvent ? Event : NULL;
+    Irp->Tail.Overlay.Thread = PsGetCurrentThread();
+    Irp->Tail.Overlay.OriginalFileObject = FileObject;
+    Irp->Overlay.AsynchronousParameters.UserApcRoutine = NULL;
+    Irp->UserBuffer = EaBuffer;
+    Irp->AssociatedIrp.SystemBuffer = NULL;
+    Irp->MdlAddress = NULL;
+
+    StackPtr = IoGetNextIrpStackLocation(Irp);
+    StackPtr->MajorFunction = IRP_MJ_SET_EA;
+    StackPtr->FileObject = FileObject;
+    StackPtr->Parameters.SetEa.Length = EaBufferSize;
+
+    _SEH2_TRY
+    {
+        Irp->AssociatedIrp.SystemBuffer =
+            ExAllocatePoolWithQuotaTag(NonPagedPool,
+                                       EaBufferSize,
+                                       TAG_IOBUF);
+        RtlCopyMemory(Irp->AssociatedIrp.SystemBuffer,
+                      EaBuffer,
+                      EaBufferSize);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        IopCleanupAfterException(FileObject,
+                                 Irp,
+                                 NULL,
+                                 Event);
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+    Irp->Flags |= IRP_BUFFERED_IO |
+                  IRP_DEALLOCATE_BUFFER;
+    Status = IopPerformSynchronousRequest(
+        DeviceObject,
+        Irp,
+        FileObject,
+        FALSE,
+        PreviousMode,
+        !LocalEvent,
+        IopOtherTransfer);
+    if (LocalEvent)
+    {
+        Status = IopFinalizeAsynchronousIo(Status,
+                                           Event,
+                                           Irp,
+                                           PreviousMode,
+                                           &KernelIosb,
+                                           IoStatusBlock);
+    }
+    return Status;
 }
 
 /*
