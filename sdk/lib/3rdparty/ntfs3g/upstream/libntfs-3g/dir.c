@@ -1313,7 +1313,11 @@ skip_index_root:
 		goto err_out;
 	}
 
-	bmp_buf_pos = 0;
+	/*
+	 * The bitmap buffer starts at the byte containing bmp_pos.  Preserve
+	 * the bit offset when readdir resumes in the middle of that byte.
+	 */
+	bmp_buf_pos = bmp_pos & 7;
 	/* If the index block is not in use find the next one that is. */
 	while (!(bmp[bmp_buf_pos >> 3] & (1 << (bmp_buf_pos & 7)))) {
 find_next_index_buffer:

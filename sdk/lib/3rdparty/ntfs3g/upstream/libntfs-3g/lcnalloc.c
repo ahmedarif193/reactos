@@ -341,7 +341,11 @@ runlist *ntfs_cluster_alloc(ntfs_volume *vol, VCN start_vcn, s64 count,
 			if (has_guess) {
 				if (*byte & bit) {
 					has_guess = 0;
-					break;
+					/*
+					 * Search this bitmap block again for its next
+					 * free range before advancing to the next block.
+					 */
+					continue;
 				}
 			} else {
 				lcn = max_empty_bit_range(buf, br);
