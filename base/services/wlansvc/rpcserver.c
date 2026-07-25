@@ -22,24 +22,23 @@ DWORD WINAPI RpcThreadRoutine(LPVOID lpParameter)
     Status = RpcServerUseProtseqEpW(L"ncalrpc", 20, L"wlansvc", NULL);
     if (Status != RPC_S_OK)
     {
-        DPRINT("RpcServerUseProtseqEpW() failed (Status %lx)\n", Status);
+        DPRINT1("WLANSVC: RpcServerUseProtseqEpW failed (Status %lx)\n", Status);
         return 0;
     }
 
     Status = RpcServerRegisterIf(wlansvc_interface_v1_0_s_ifspec, NULL, NULL);
     if (Status != RPC_S_OK)
     {
-        DPRINT("RpcServerRegisterIf() failed (Status %lx)\n", Status);
+        DPRINT1("WLANSVC: RpcServerRegisterIf failed (Status %lx)\n", Status);
         return 0;
     }
 
     Status = RpcServerListen(1, RPC_C_LISTEN_MAX_CALLS_DEFAULT, 0);
     if (Status != RPC_S_OK)
     {
-        DPRINT("RpcServerListen() failed (Status %lx)\n", Status);
+        DPRINT1("WLANSVC: RpcServerListen failed (Status %lx)\n", Status);
     }
 
-    DPRINT("RpcServerListen finished\n");
     return 0;
 }
 
@@ -974,4 +973,3 @@ void __RPC_USER midl_user_free(void __RPC_FAR * ptr)
 void __RPC_USER WLANSVC_RPC_HANDLE_rundown(WLANSVC_RPC_HANDLE hClientHandle)
 {
 }
-
