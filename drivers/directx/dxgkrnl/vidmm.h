@@ -21,6 +21,10 @@
  */
 #define TAG_VIDMM_SEGMENT   'SVxD'
 
+/* Bound on how long submission admission waits for an allocation's paging
+ * packet to retire before reporting the allocation busy. */
+#define DXGKP_VIDMM_PAGING_ADMISSION_TIMEOUT_MS  2000
+
 /*
  * TAG_VIDMM_ALLOC — per-allocation DXGKVMM_ALLOCATION objects.
  * Displayed as 'DxVA' in pool listings.
@@ -255,6 +259,18 @@ typedef struct _DXGKVMM_ALLOCATION
      */
     volatile LONG       ResidencyReferenceCount;
 
+    /*
+     * Per-device breakdown of the count above.  MakeResident charges the
+     * calling device and Evict may only release what that same device holds,
+     * so one device cannot evict another device's residency, and device
+     * teardown releases exactly its own share.  Protected by ResidencyLock.
+     */
+    LIST_ENTRY          ResidencyReferenceList;
+
+    /* The created-resident reference, owned by Device.  Held separately from
+     * the list because the owner is assigned after lifetime initialization. */
+    BOOLEAN             ImplicitResidencyReference;
+
     /* Separate from user MakeResident/Evict references: each admitted GPU
      * submission pins this exact placement until tracked terminal cleanup. */
     volatile LONG       SubmissionResidencyPinCount;
@@ -273,6 +289,16 @@ typedef struct _DXGKVMM_ALLOCATION
      */
     ULONG               SegmentId;
     ULONGLONG           SegmentOffset;
+
+    /*
+     * Placement a paging packet is still establishing.  Committed placement
+     * above stays authoritative until PagingFenceId retires; scheduler
+     * admission and patch consume the same watermark (paging.c).
+     */
+    BOOLEAN             PendingPlacement;
+    ULONG               PendingSegmentId;
+    ULONGLONG           PendingSegmentOffset;
+    ULONG               PagingFenceId;
 
     /*
      * System-memory backing store.
@@ -426,6 +452,39 @@ NTSTATUS
 DxgkVidMmMakeResident(
     _In_ PDXGKVMM_ALLOCATION    Allocation,
     _In_ PDXGKRNL_ADAPTER       Adapter);
+
+typedef struct _DXGKVMM_RESIDENCY_REF
+{
+    LIST_ENTRY          Entry;
+    PDXGKRNL_DEVICE     Device;
+    LONG                Count;
+} DXGKVMM_RESIDENCY_REF, *PDXGKVMM_RESIDENCY_REF;
+
+NTSTATUS
+DxgkVidMmAcquireDeviceResidencyReference(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_opt_ PDXGKRNL_DEVICE Device);
+
+BOOLEAN
+DxgkVidMmReleaseDeviceResidencyReference(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_opt_ PDXGKRNL_DEVICE Device,
+    _Out_ PBOOLEAN OutReachedZero);
+
+BOOLEAN
+DxgkVidMmDeviceHoldsResidencyReference(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_opt_ PDXGKRNL_DEVICE Device);
+
+LONG
+DxgkVidMmQueryDeviceResidencyReferenceCount(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_opt_ PDXGKRNL_DEVICE Device);
+
+VOID
+DxgkVidMmReleaseAllDeviceResidencyReferences(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_opt_ PDXGKRNL_DEVICE Device);
 
 NTSTATUS
 DxgkVidMmOfferAllocation(
