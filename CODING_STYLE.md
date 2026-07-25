@@ -31,7 +31,7 @@ You should add yourself to the `COPYRIGHT` section of a file if you did a major 
 
 ## Indentation and line width
 
-1. Line width must be at most **100 characters**.
+1. Line width must be at most **200 characters**.
 2. Do not add a space or tab at the end of any line.
 3. Indent with **4 spaces**, don't use tabs!
 4. Indent both a case label and the case statement of a switch statement.
