@@ -110,6 +110,13 @@ typedef struct _LOGICAL_ADAPTER
     EX_RUNDOWN_REF              HangTimerRundown;       /* Keeps adapter alive through queued DPCs */
     BOOLEAN                     HangTimerInitialized;
     BOOLEAN                     HangTimerStopping;
+
+    /* Cached lookahead buffer for the legacy (NDIS_STATUS_RESOURCES) receive
+     * path. Allocated on first use and reused for the life of the adapter so
+     * the per-packet path does not call ExAllocatePool at DISPATCH_LEVEL while
+     * holding NdisMiniportBlock.Lock. Guarded by that same lock. */
+    PVOID                       LookaheadCache;
+    UINT                        LookaheadCacheSize;
 } LOGICAL_ADAPTER, *PLOGICAL_ADAPTER;
 
 #define GET_LOGICAL_ADAPTER(Handle)((PLOGICAL_ADAPTER)Handle)
