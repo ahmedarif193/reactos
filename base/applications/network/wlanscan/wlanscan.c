@@ -64,21 +64,43 @@ SsidToString(const DOT11_SSID *Ssid, WCHAR *Buffer, int cch)
     Buffer[len] = L'\0';
 }
 
+static VOID WINAPI
+ScanNotify(PWLAN_NOTIFICATION_DATA Data, PVOID Context)
+{
+    if (Data != NULL && Data->NotificationSource == WLAN_NOTIFICATION_SOURCE_ACM && (Data->NotificationCode == wlan_notification_acm_scan_complete || Data->NotificationCode == wlan_notification_acm_scan_fail))
+    {
+        SetEvent((HANDLE)Context);
+    }
+}
+
 static DWORD
 ScanInterface(HANDLE hClient, const GUID *pGuid)
 {
     DWORD dwResult, i;
     PWLAN_AVAILABLE_NETWORK_LIST pNetList = NULL;
+    HANDLE ScanDone;
+    DWORD PrevSource = 0;
 
     wprintf(L"  Scanning...\n");
+
+    ScanDone = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (ScanDone != NULL)
+        WlanRegisterNotification(hClient, WLAN_NOTIFICATION_SOURCE_ACM, FALSE, ScanNotify, ScanDone, NULL, &PrevSource);
 
     dwResult = WlanScan(hClient, pGuid, NULL, NULL, NULL);
     if (dwResult != ERROR_SUCCESS)
         wprintf(L"  (WlanScan returned %lu; reading cached results anyway)\n", dwResult);
 
-    /* Give the radio a few seconds to collect beacons.
-     * TODO: wait for the wlan_notification_acm_scan_complete notification. */
-    Sleep(4000);
+    if (ScanDone != NULL)
+    {
+        WaitForSingleObject(ScanDone, 10000);
+        WlanRegisterNotification(hClient, WLAN_NOTIFICATION_SOURCE_NONE, FALSE, NULL, NULL, NULL, &PrevSource);
+        CloseHandle(ScanDone);
+    }
+    else
+    {
+        Sleep(4000);
+    }
 
     dwResult = WlanGetAvailableNetworkList(hClient, pGuid,
                    WLAN_AVAILABLE_NETWORK_INCLUDE_ALL_MANUAL_HIDDEN_PROFILES,
