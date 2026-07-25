@@ -14,6 +14,7 @@
 LIST_ENTRY       WlanSvcInterfaceListHead;
 CRITICAL_SECTION WlanSvcLock;
 static BOOL      WlanSvcInitialized = FALSE;
+static INIT_ONCE WlanSvcInitOnce = INIT_ONCE_STATIC_INIT;
 
 static WLAN_INTERFACE_STATE
 NwifiLinkStatusToWlan(NWIFI_LINK_STATUS Status)
@@ -181,11 +182,20 @@ WlanSvcRefreshInterfaces(VOID)
     WlanSvcPopulateInterfacesLocked();
 }
 
-VOID
-WlanSvcInitialize(VOID)
+/* Runs exactly once even though both the RPC listen thread and every RPC
+ * client open call WlanSvcInitialize(). The previous plain-BOOL guard had a
+ * check-then-act window in which a second thread re-ran
+ * InitializeCriticalSection() on a WlanSvcLock the first thread was already
+ * entering, losing the owner and blocking that thread forever. */
+static BOOL CALLBACK
+WlanSvcInitOnceCallback(
+    PINIT_ONCE InitOnce,
+    PVOID Parameter,
+    PVOID *Context)
 {
-    if (WlanSvcInitialized)
-        return;
+    UNREFERENCED_PARAMETER(InitOnce);
+    UNREFERENCED_PARAMETER(Parameter);
+    UNREFERENCED_PARAMETER(Context);
 
     InitializeCriticalSection(&WlanSvcLock);
     InitializeListHead(&WlanSvcInterfaceListHead);
@@ -199,6 +209,14 @@ WlanSvcInitialize(VOID)
     /* Start receiving asynchronous interface events from nwifi (no-op if the
      * driver is absent). */
     NwifiStartNotifyWorker();
+
+    return TRUE;
+}
+
+VOID
+WlanSvcInitialize(VOID)
+{
+    InitOnceExecuteOnce(&WlanSvcInitOnce, WlanSvcInitOnceCallback, NULL, NULL);
 }
 
 VOID
