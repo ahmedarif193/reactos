@@ -324,8 +324,9 @@ CywMiniportInitializeEx(
     }
 
     Adapter->InterruptWorkItem = NdisAllocateIoWorkItem(NdisMiniportHandle);
+    Adapter->ConnectWorkItem = NdisAllocateIoWorkItem(NdisMiniportHandle);
     Adapter->LinkWorkItem = NdisAllocateIoWorkItem(NdisMiniportHandle);
-    if (Adapter->InterruptWorkItem == NULL || Adapter->LinkWorkItem == NULL)
+    if (Adapter->InterruptWorkItem == NULL || Adapter->ConnectWorkItem == NULL || Adapter->LinkWorkItem == NULL)
     {
         Status = NDIS_STATUS_RESOURCES;
         goto Fail;
@@ -347,6 +348,10 @@ Fail:
     if (Adapter->InterruptWorkItem != NULL)
     {
         NdisFreeIoWorkItem(Adapter->InterruptWorkItem);
+    }
+    if (Adapter->ConnectWorkItem != NULL)
+    {
+        NdisFreeIoWorkItem(Adapter->ConnectWorkItem);
     }
     if (Adapter->LinkWorkItem != NULL)
     {
@@ -388,6 +393,11 @@ CywMiniportHaltEx(
     {
         NdisFreeIoWorkItem(Adapter->InterruptWorkItem);
         Adapter->InterruptWorkItem = NULL;
+    }
+    if (Adapter->ConnectWorkItem != NULL)
+    {
+        NdisFreeIoWorkItem(Adapter->ConnectWorkItem);
+        Adapter->ConnectWorkItem = NULL;
     }
     if (Adapter->LinkWorkItem != NULL)
     {
