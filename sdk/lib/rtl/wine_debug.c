@@ -94,15 +94,21 @@ const char *wine_dbg_vsprintf(const char *format, va_list valist)
 {
     char* buffer;
     int len;
+    va_list valist_copy;
 
-    len = vsnprintf(NULL, 0, format, valist);
+    va_copy(valist_copy, valist);
+    len = vsnprintf(NULL, 0, format, valist_copy);
+    va_end(valist_copy);
+    if (len < 0)
+    {
+        return "<formatting failed>";
+    }
     buffer = alloc_buffer(len + 1);
     if (buffer == NULL)
     {
         return "<allocation failed>";
     }
-    len = vsnprintf(buffer, len, format, valist);
-    buffer[len] = 0;
+    vsnprintf(buffer, len + 1, format, valist);
     return buffer;
 }
 
@@ -146,6 +152,17 @@ static int default_dbg_vprintf( const char *format, va_list args )
     return vDbgPrintExWithPrefix("", -1, 0, format, args);
 }
 
+static int default_dbg_printf( const char *format, ... )
+{
+    int ret;
+    va_list valist;
+
+    va_start(valist, format);
+    ret = default_dbg_vprintf(format, valist);
+    va_end(valist);
+    return ret;
+}
+
 int wine_dbg_printf(const char *format, ... )
 {
 #if DBG
@@ -168,11 +185,14 @@ static int winefmt_default_dbg_vlog( enum __wine_debug_class cls, struct __wine_
 {
     int ret = 0;
 
-    ret += wine_dbg_printf("%04x:", HandleToULong(NtCurrentTeb()->ClientId.UniqueProcess) );
-    ret += wine_dbg_printf("%04x:", HandleToULong(NtCurrentTeb()->ClientId.UniqueThread) );
+    ret += default_dbg_printf("%04x:", HandleToULong(NtCurrentTeb()->ClientId.UniqueProcess) );
+    ret += default_dbg_printf("%04x:", HandleToULong(NtCurrentTeb()->ClientId.UniqueThread) );
 
     if (format)
         ret += default_dbg_vprintf(format, args);
+#if DBG
+    free_buffers();
+#endif
     return ret;
 }
 
