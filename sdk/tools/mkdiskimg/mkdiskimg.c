@@ -29,6 +29,13 @@
 #define FAT16_BOOT_DRIVE_OFFSET 36
 #define FAT32_BOOT_DRIVE_OFFSET 64
 
+/* NTFS BPB fields */
+#define NTFS_NAME_OFFSET 3
+#define NTFS_NAME_LENGTH 8
+#define NTFS_SECTORS_PER_TRACK_OFFSET 24
+#define NTFS_HEADS_OFFSET 26
+#define NTFS_HIDDEN_SECTORS_OFFSET 28
+
 /* exFAT boot-region fields */
 #define EXFAT_NAME_OFFSET 3
 #define EXFAT_NAME_LENGTH 8
@@ -93,7 +100,7 @@ static void print_usage(const char* name)
     printf("  -o <output>         Output image file\n");
     printf("  -mbr <mbr.bin>      MBR boot code binary (first 440 bytes used).\n");
     printf("                      Optional; omit on UEFI-only platforms to leave the boot code area zeroed.\n");
-    printf("  -partition <img>    Raw FAT or exFAT partition image (up to four)\n");
+    printf("  -partition <img>    Raw FAT, exFAT, or NTFS partition image (up to four)\n");
     printf("  -start <sector>     Start sector for the preceding partition (first defaults to %d)\n", DEFAULT_START_SECTOR);
     printf("  -type <hex>         Type ID for the preceding partition (first defaults to 0x%02X)\n", DEFAULT_PARTITION_TYPE);
     printf("  -format <raw|vhd>   Output container format (default: raw)\n");
@@ -173,6 +180,18 @@ static int write_byte_at(FILE* file, long offset, unsigned char value)
     if (fseek(file, offset, SEEK_SET) != 0)
         return -1;
     return fwrite(&value, 1, 1, file) == 1 ? 0 : -1;
+}
+
+static int write_le16_at(FILE* file, long offset, unsigned short value)
+{
+    unsigned char data[2];
+
+    data[0] = (unsigned char)(value & 0xFF);
+    data[1] = (unsigned char)((value >> 8) & 0xFF);
+
+    if (fseek(file, offset, SEEK_SET) != 0)
+        return -1;
+    return fwrite(data, sizeof(data), 1, file) == 1 ? 0 : -1;
 }
 
 static int write_le32_at(FILE* file, long offset, unsigned int value)
@@ -467,6 +486,50 @@ static int patch_exfat_partition(FILE* output, const PARTITION_INPUT* partition)
     return 0;
 }
 
+static int patch_ntfs_partition(FILE* output, const PARTITION_INPUT* partition)
+{
+    long backup_offset;
+    long output_offset;
+
+    if (read_le16(partition->BootSector + FAT_BPB_BYTES_PER_SECTOR_OFFSET) !=
+            SECTOR_SIZE ||
+        partition->BootSector[510] != 0x55 ||
+        partition->BootSector[511] != 0xAA)
+    {
+        fprintf(stderr, "Error: Partition image '%s' has an invalid NTFS BPB.\n",
+                partition->Path);
+        return -1;
+    }
+
+    output_offset = (long)partition->StartSector * SECTOR_SIZE;
+    backup_offset = output_offset + partition->Size - SECTOR_SIZE;
+    if (write_le16_at(output,
+                      output_offset + NTFS_SECTORS_PER_TRACK_OFFSET,
+                      CHS_SECTORS_PER_TRACK) != 0 ||
+        write_le16_at(output,
+                      output_offset + NTFS_HEADS_OFFSET,
+                      CHS_HEADS) != 0 ||
+        write_le32_at(output,
+                      output_offset + NTFS_HIDDEN_SECTORS_OFFSET,
+                      partition->StartSector) != 0 ||
+        write_le16_at(output,
+                      backup_offset + NTFS_SECTORS_PER_TRACK_OFFSET,
+                      CHS_SECTORS_PER_TRACK) != 0 ||
+        write_le16_at(output,
+                      backup_offset + NTFS_HEADS_OFFSET,
+                      CHS_HEADS) != 0 ||
+        write_le32_at(output,
+                      backup_offset + NTFS_HIDDEN_SECTORS_OFFSET,
+                      partition->StartSector) != 0)
+    {
+        fprintf(stderr, "Error: Cannot patch the NTFS BPB in '%s'.\n",
+                partition->Path);
+        return -1;
+    }
+
+    return 0;
+}
+
 static int patch_partition(FILE* output, const PARTITION_INPUT* partition)
 {
     if (memcmp(partition->BootSector + EXFAT_NAME_OFFSET,
@@ -474,6 +537,12 @@ static int patch_partition(FILE* output, const PARTITION_INPUT* partition)
                EXFAT_NAME_LENGTH) == 0)
     {
         return patch_exfat_partition(output, partition);
+    }
+    if (memcmp(partition->BootSector + NTFS_NAME_OFFSET,
+               "NTFS    ",
+               NTFS_NAME_LENGTH) == 0)
+    {
+        return patch_ntfs_partition(output, partition);
     }
 
     return patch_fat_partition(output, partition);

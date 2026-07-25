@@ -2,7 +2,7 @@
 include(ExternalProject)
 
 function(setup_host_tools)
-    list(APPEND HOST_TOOLS asmpp bin2c widl gendib cabman fatten hpp isohybrid mkdiskimg mkhive mkisofs obj2bin spec2def geninc mkshelllink txt2nls utf16le xml2sdb windmc wimage)
+    list(APPEND HOST_TOOLS asmpp bin2c widl gendib cabman fatten ntfsfatten hpp isohybrid mkdiskimg mkhive mkisofs obj2bin spec2def geninc mkshelllink txt2nls utf16le xml2sdb windmc wimage)
     if(NOT MSVC)
         list(APPEND HOST_TOOLS pefixup)
         if (ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64")
