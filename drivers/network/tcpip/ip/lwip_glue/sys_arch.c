@@ -262,6 +262,7 @@ LwipThreadMain(PVOID Context)
     KIRQL OldIrql;
 
     ExInterlockedInsertHeadList(&ThreadListHead, &Container->ListEntry, &ThreadListLock);
+    KeSetPriorityThread(KeGetCurrentThread(), LOW_REALTIME_PRIORITY);
 
     Container->ThreadFunction(Container->ThreadContext);
 
