@@ -117,9 +117,17 @@
 
 #define SOFTGPU_CMD_MAGIC       0x444D4753UL    /* 'SGMD' */
 
-#define SOFTGPU_CMD_OP_NOP      1
-#define SOFTGPU_CMD_OP_BLT      2
-#define SOFTGPU_CMD_OP_FILL     3
+#define SOFTGPU_CMD_OP_NOP          1
+#define SOFTGPU_CMD_OP_BLT          2
+#define SOFTGPU_CMD_OP_FILL         3
+/* Paging: one linear move between the slab and a system-memory backing.
+ * SlabAddress is a slab physical address; SystemAddress is the kernel VA of
+ * the MDL dxgkrnl supplied for the backing.  ToSlab selects the direction. */
+#define SOFTGPU_CMD_OP_PAGE         4
+/* Paging: linear pattern fill of a slab range. */
+#define SOFTGPU_CMD_OP_FILL_LINEAR  5
+
+#define SOFTGPU_CMD_FLAG_TO_SLAB    0x00000001UL
 
 typedef struct _SOFTGPU_CMD
 {
@@ -133,6 +141,11 @@ typedef struct _SOFTGPU_CMD
     ULONG       DstPitch;
     ULONGLONG   SrcAddress;
     ULONGLONG   DstAddress;
+    ULONGLONG   SlabAddress;
+    ULONGLONG   SystemAddress;
+    ULONGLONG   ByteCount;
+    ULONG       Flags;
+    ULONG       Reserved;
 } SOFTGPU_CMD, *PSOFTGPU_CMD;
 
 #define SOFTGPU_SUBMIT_RING_SIZE 1024

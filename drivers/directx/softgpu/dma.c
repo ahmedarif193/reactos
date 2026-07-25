@@ -149,6 +149,51 @@ SoftGpuExecuteFill(
 }
 
 static VOID
+SoftGpuExecutePage(
+    _In_ PSOFTGPU_DEVICE Device,
+    _In_ CONST SOFTGPU_CMD *Cmd)
+{
+    ULONGLONG SlabBase = (ULONGLONG)Device->FrameBufferPhys.QuadPart;
+    PUCHAR SlabVa;
+
+    if (Cmd->ByteCount == 0 || Cmd->ByteCount > Device->FrameBufferSize)
+        return;
+    if (Cmd->SlabAddress < SlabBase ||
+        Cmd->SlabAddress - SlabBase + Cmd->ByteCount > Device->FrameBufferSize)
+        return;
+    if (Cmd->SystemAddress == 0)
+        return;
+
+    SlabVa = (PUCHAR)Device->FrameBuffer + (Cmd->SlabAddress - SlabBase);
+    if ((Cmd->Flags & SOFTGPU_CMD_FLAG_TO_SLAB) != 0)
+        RtlCopyMemory(SlabVa, (PVOID)(ULONG_PTR)Cmd->SystemAddress, (SIZE_T)Cmd->ByteCount);
+    else
+        RtlCopyMemory((PVOID)(ULONG_PTR)Cmd->SystemAddress, SlabVa, (SIZE_T)Cmd->ByteCount);
+}
+
+static VOID
+SoftGpuExecuteFillLinear(
+    _In_ PSOFTGPU_DEVICE Device,
+    _In_ CONST SOFTGPU_CMD *Cmd)
+{
+    ULONGLONG SlabBase = (ULONGLONG)Device->FrameBufferPhys.QuadPart;
+    PULONG SlabVa;
+    SIZE_T Count;
+    SIZE_T Index;
+
+    if (Cmd->ByteCount == 0 || Cmd->ByteCount > Device->FrameBufferSize)
+        return;
+    if (Cmd->SlabAddress < SlabBase ||
+        Cmd->SlabAddress - SlabBase + Cmd->ByteCount > Device->FrameBufferSize)
+        return;
+
+    SlabVa = (PULONG)((PUCHAR)Device->FrameBuffer + (Cmd->SlabAddress - SlabBase));
+    Count = (SIZE_T)(Cmd->ByteCount / sizeof(ULONG));
+    for (Index = 0; Index < Count; Index++)
+        SlabVa[Index] = Cmd->Color;
+}
+
+static VOID
 SoftGpuExecuteDmaBuffer(
     _In_ PSOFTGPU_DEVICE Device,
     _In_ CONST SOFTGPU_SUBMIT *Submit)
@@ -181,6 +226,12 @@ SoftGpuExecuteDmaBuffer(
                 break;
             case SOFTGPU_CMD_OP_FILL:
                 SoftGpuExecuteFill(Device, Cmd);
+                break;
+            case SOFTGPU_CMD_OP_PAGE:
+                SoftGpuExecutePage(Device, Cmd);
+                break;
+            case SOFTGPU_CMD_OP_FILL_LINEAR:
+                SoftGpuExecuteFillLinear(Device, Cmd);
                 break;
             case SOFTGPU_CMD_OP_NOP:
                 break;
@@ -531,27 +582,75 @@ SoftGpuDdiRender(
     _In_    PVOID           hContext,
     _Inout_ DXGKARG_RENDER *pRender)
 {
+    CONST UCHAR *Command;
     UINT CopyLength;
+    UINT Offset;
+    UINT Records = 0;
     UINT i;
 
     UNREFERENCED_PARAMETER(hContext);
 
     if (pRender == NULL || pRender->pCommand == NULL || pRender->pDmaBuffer == NULL)
         return STATUS_INVALID_PARAMETER;
-    if (pRender->CommandLength > pRender->DmaSize)
+    if (pRender->CommandLength == 0 || pRender->CommandLength > pRender->DmaSize)
         return STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
     if (pRender->PatchLocationListInSize > pRender->PatchLocationListOutSize)
         return STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+    if (pRender->PatchLocationListInSize != 0 &&
+        (pRender->pPatchLocationListIn == NULL || pRender->pPatchLocationListOut == NULL))
+        return STATUS_INVALID_PARAMETER;
+
+    /*
+     * Validate the SOFTGPU_CMD stream before it becomes a DMA buffer: the
+     * record chain must tile the command exactly, every opcode must be one
+     * this engine implements, and every patch location must land inside a
+     * record's address field.  A stream that fails here is rejected instead
+     * of being handed to the engine to skip at execution time.
+     */
+    Command = (CONST UCHAR *)pRender->pCommand;
+    for (Offset = 0; Offset < pRender->CommandLength; Records++)
+    {
+        CONST SOFTGPU_CMD *Cmd;
+
+        if (pRender->CommandLength - Offset < sizeof(SOFTGPU_CMD))
+            return STATUS_INVALID_PARAMETER;
+        Cmd = (CONST SOFTGPU_CMD *)(Command + Offset);
+        if (Cmd->Magic != SOFTGPU_CMD_MAGIC || Cmd->Size != sizeof(SOFTGPU_CMD))
+            return STATUS_INVALID_PARAMETER;
+        switch (Cmd->Op)
+        {
+            case SOFTGPU_CMD_OP_NOP:
+            case SOFTGPU_CMD_OP_BLT:
+            case SOFTGPU_CMD_OP_FILL:
+                break;
+            default:
+                /* Paging opcodes are KMD-generated and are not accepted from
+                 * a user-mode command stream. */
+                return STATUS_INVALID_PARAMETER;
+        }
+        Offset += Cmd->Size;
+    }
+    if (Offset != pRender->CommandLength || Records == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    for (i = 0; i < pRender->PatchLocationListInSize; i++)
+    {
+        UINT PatchOffset = pRender->pPatchLocationListIn[i].PatchOffset;
+        UINT RecordOffset = PatchOffset % sizeof(SOFTGPU_CMD);
+
+        if (PatchOffset + sizeof(ULONGLONG) > pRender->CommandLength)
+            return STATUS_INVALID_PARAMETER;
+        if (RecordOffset != FIELD_OFFSET(SOFTGPU_CMD, SrcAddress) &&
+            RecordOffset != FIELD_OFFSET(SOFTGPU_CMD, DstAddress))
+            return STATUS_INVALID_PARAMETER;
+    }
 
     CopyLength = pRender->CommandLength;
     RtlCopyMemory(pRender->pDmaBuffer, pRender->pCommand, CopyLength);
     pRender->pDmaBuffer = (PUCHAR)pRender->pDmaBuffer + CopyLength;
 
     for (i = 0; i < pRender->PatchLocationListInSize; i++)
-    {
         pRender->pPatchLocationListOut[i] = pRender->pPatchLocationListIn[i];
-        pRender->pPatchLocationListOut[i].PatchOffset = pRender->pPatchLocationListIn[i].PatchOffset;
-    }
     pRender->pPatchLocationListOut += pRender->PatchLocationListInSize;
 
     return STATUS_SUCCESS;
@@ -563,12 +662,41 @@ SoftGpuDdiRender(
  * =========================================================================
  */
 
+static PSOFTGPU_CMD
+SoftGpuBeginPagingCommand(
+    _Inout_ PDXGKARG_BUILDPAGINGBUFFER BuildPagingBuffer)
+{
+    PSOFTGPU_CMD Cmd;
+
+    if (BuildPagingBuffer->pDmaBuffer == NULL || BuildPagingBuffer->DmaSize < sizeof(SOFTGPU_CMD))
+        return NULL;
+    Cmd = (PSOFTGPU_CMD)BuildPagingBuffer->pDmaBuffer;
+    RtlZeroMemory(Cmd, sizeof(*Cmd));
+    Cmd->Magic = SOFTGPU_CMD_MAGIC;
+    Cmd->Size = sizeof(*Cmd);
+    Cmd->Op = SOFTGPU_CMD_OP_NOP;
+    return Cmd;
+}
+
+static VOID
+SoftGpuEndPagingCommand(
+    _Inout_ PDXGKARG_BUILDPAGINGBUFFER BuildPagingBuffer)
+{
+    BuildPagingBuffer->pDmaBuffer = (PUCHAR)BuildPagingBuffer->pDmaBuffer + sizeof(SOFTGPU_CMD);
+    BuildPagingBuffer->MultipassOffset = 0;
+}
+
 /*
  * SoftGpuDdiBuildPagingBuffer
  *
- * softgpu has no real paging engine.  Its fixed framebuffer is a memory
- * segment, not an aperture, so accepting a paging operation without moving
- * bytes would publish false completion.
+ * Describes each supported paging operation as one SOFTGPU_CMD record the
+ * engine executes at submission time.  The framebuffer slab is the memory
+ * segment, so a transfer is a linear move between a slab physical address and
+ * the kernel mapping of the backing MDL dxgkrnl supplied.  Operations this
+ * software device genuinely has nothing to execute for (aperture mapping,
+ * discard, residency notification) still emit an ordered no-op record so the
+ * packet retires through the normal fence path rather than reporting false
+ * completion without a packet.
  *
  * IRQL: PASSIVE_LEVEL
  */
@@ -578,12 +706,98 @@ SoftGpuDdiBuildPagingBuffer(
     _In_    PVOID                      MiniportDeviceContext,
     _Inout_ PDXGKARG_BUILDPAGINGBUFFER BuildPagingBuffer)
 {
-    UNREFERENCED_PARAMETER(MiniportDeviceContext);
+    PSOFTGPU_DEVICE Device = (PSOFTGPU_DEVICE)MiniportDeviceContext;
+    PSOFTGPU_CMD Cmd;
+    ULONGLONG SlabBase;
+    ULONGLONG SlabOffset;
+    PVOID SystemVa;
+    PMDL Mdl;
 
-    if (BuildPagingBuffer == NULL)
+    if (Device == NULL || Device->Magic != SOFTGPU_DEVICE_MAGIC || BuildPagingBuffer == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    return STATUS_NOT_SUPPORTED;
+    SlabBase = (ULONGLONG)Device->FrameBufferPhys.QuadPart;
+
+    switch (BuildPagingBuffer->Operation)
+    {
+        case DXGK_OPERATION_TRANSFER:
+        {
+            CONST DXGK_BUILDPAGINGBUFFER_TRANSFER *Transfer = &BuildPagingBuffer->Transfer;
+            BOOLEAN ToSlab;
+
+            if (Transfer->TransferSize == 0)
+                return STATUS_INVALID_PARAMETER;
+            if (Transfer->Source.SegmentId == 0 && Transfer->Destination.SegmentId == SOFTGPU_SEGMENT_ID)
+            {
+                ToSlab = TRUE;
+                Mdl = Transfer->Source.pMdl;
+                SlabOffset = (ULONGLONG)Transfer->Destination.SegmentAddress.QuadPart;
+            }
+            else if (Transfer->Source.SegmentId == SOFTGPU_SEGMENT_ID && Transfer->Destination.SegmentId == 0)
+            {
+                ToSlab = FALSE;
+                Mdl = Transfer->Destination.pMdl;
+                SlabOffset = (ULONGLONG)Transfer->Source.SegmentAddress.QuadPart;
+            }
+            else
+            {
+                return STATUS_NOT_SUPPORTED;
+            }
+            if (Mdl == NULL)
+                return STATUS_INVALID_PARAMETER;
+            if (SlabOffset + Transfer->TransferSize > Device->FrameBufferSize)
+                return STATUS_INVALID_PARAMETER;
+
+            SystemVa = MmGetSystemAddressForMdlSafe(Mdl, NormalPagePriority);
+            if (SystemVa == NULL)
+                return STATUS_INSUFFICIENT_RESOURCES;
+
+            Cmd = SoftGpuBeginPagingCommand(BuildPagingBuffer);
+            if (Cmd == NULL)
+                return STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+            Cmd->Op = SOFTGPU_CMD_OP_PAGE;
+            Cmd->Flags = ToSlab ? SOFTGPU_CMD_FLAG_TO_SLAB : 0;
+            Cmd->SlabAddress = SlabBase + SlabOffset;
+            Cmd->SystemAddress = (ULONGLONG)(ULONG_PTR)SystemVa + Transfer->MdlOffset;
+            Cmd->ByteCount = Transfer->TransferSize;
+            SoftGpuEndPagingCommand(BuildPagingBuffer);
+            return STATUS_SUCCESS;
+        }
+
+        case DXGK_OPERATION_FILL:
+        {
+            CONST DXGK_BUILDPAGINGBUFFER_FILL *Fill = &BuildPagingBuffer->Fill;
+
+            if (Fill->Destination.SegmentId != SOFTGPU_SEGMENT_ID || Fill->FillSize == 0)
+                return STATUS_NOT_SUPPORTED;
+            SlabOffset = (ULONGLONG)Fill->Destination.SegmentAddress.QuadPart;
+            if (SlabOffset + Fill->FillSize > Device->FrameBufferSize)
+                return STATUS_INVALID_PARAMETER;
+
+            Cmd = SoftGpuBeginPagingCommand(BuildPagingBuffer);
+            if (Cmd == NULL)
+                return STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+            Cmd->Op = SOFTGPU_CMD_OP_FILL_LINEAR;
+            Cmd->SlabAddress = SlabBase + SlabOffset;
+            Cmd->ByteCount = Fill->FillSize;
+            Cmd->Color = Fill->FillPattern;
+            SoftGpuEndPagingCommand(BuildPagingBuffer);
+            return STATUS_SUCCESS;
+        }
+
+        case DXGK_OPERATION_DISCARD_CONTENT:
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+        case DXGK_OPERATION_NOTIFY_RESIDENCY:
+#endif
+            Cmd = SoftGpuBeginPagingCommand(BuildPagingBuffer);
+            if (Cmd == NULL)
+                return STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+            SoftGpuEndPagingCommand(BuildPagingBuffer);
+            return STATUS_SUCCESS;
+
+        default:
+            return STATUS_NOT_SUPPORTED;
+    }
 }
 
 

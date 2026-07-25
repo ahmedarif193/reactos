@@ -24,6 +24,7 @@ list(APPEND SOURCE
     legacy.c
     pnp.c
     vidmm.c
+    paging.c
     gpuva.c
     capture.c
     handles.c

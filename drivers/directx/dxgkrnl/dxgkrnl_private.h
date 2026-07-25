@@ -1154,6 +1154,25 @@ struct _DXGKRNL_CONTEXT
     DXGK_CONTEXTINFO            ContextInfo;
 
     /*
+     * Render ring.  dxgkrnl owns the command buffer, allocation list, and
+     * patch-location list that D3DKMTRender consumes, maps them into the
+     * creating process once, and republishes the same mapping after every
+     * submission: DxgkDdiRender has already translated the contents into the
+     * kernel DMA buffer by then, so the ring is free for the next frame.
+     */
+    KMUTEX                      RenderLock;
+    PVOID                       RenderRingKernel;
+    PVOID                       RenderRingUser;
+    PMDL                        RenderRingMdl;
+    SIZE_T                      RenderRingBytes;
+    PEPROCESS                   RenderRingProcess;
+    ULONG                       RenderCommandBufferSize;
+    ULONG                       RenderAllocationListSize;
+    ULONG                       RenderPatchLocationListSize;
+    ULONG                       RenderAllocationListOffset;
+    ULONG                       RenderPatchLocationListOffset;
+
+    /*
      * Linkage in Device->ContextListHead.
      * Protected by Device->DeviceMutex.
      */
@@ -2044,6 +2063,7 @@ NTSTATUS
 DxgkGpuVaEvict(
     _In_    PDXGKRNL_ADAPTER   Adapter,
     _In_    PDXGKRNL_PROCESS   Process,
+    _In_opt_ PDXGKRNL_DEVICE   Device,
     _In_reads_(NumAllocations) CONST D3DKMT_HANDLE *AllocationList,
     _In_    ULONG              NumAllocations,
     _In_    BOOLEAN            EvictOnlyIfNecessary,
@@ -2752,6 +2772,127 @@ typedef struct _DXGKRNL_TRACK_DMA_ARGS
     PDXGKVMM_ALLOCATION const      *AllocationReferences;
     UINT                            AllocationReferenceCount;
 } DXGKRNL_TRACK_DMA_ARGS, *PDXGKRNL_TRACK_DMA_ARGS;
+
+/* ========================================================================
+ * Paging-operation state machine (paging.c)
+ * ====================================================================== */
+
+typedef enum _DXGKRNL_PAGING_OP_TYPE
+{
+    DxgkPagingOpNone = 0,
+    DxgkPagingOpTransfer,
+    DxgkPagingOpFill,
+    DxgkPagingOpDiscardContent,
+    DxgkPagingOpMapAperture,
+    DxgkPagingOpUnmapAperture,
+    DxgkPagingOpUpdatePageTable,
+    DxgkPagingOpFlushTlb,
+    DxgkPagingOpNotifyResidency
+} DXGKRNL_PAGING_OP_TYPE;
+
+typedef struct _DXGKRNL_PAGING_OP
+{
+    DXGKRNL_PAGING_OP_TYPE      Type;
+    ULONG                       NodeOrdinal;
+    ULONG                       EngineOrdinal;
+    HANDLE                      hMiniportDevice;
+    HANDLE                      hMiniportAllocation;
+    HANDLE                      hMiniportProcess;
+
+    /* Transfer / fill / discard placement. A zero SegmentId names the MDL. */
+    ULONG                       SourceSegmentId;
+    LARGE_INTEGER               SourceSegmentAddress;
+    PMDL                        SourceMdl;
+    ULONG                       DestinationSegmentId;
+    LARGE_INTEGER               DestinationSegmentAddress;
+    PMDL                        DestinationMdl;
+    ULONG                       TransferOffset;
+    SIZE_T                      TransferSize;
+    ULONG                       MdlOffset;
+    ULONG                       FillPattern;
+    SIZE_T                      FillSize;
+    BOOLEAN                     AllocationIsIdle;
+
+    /* Aperture map/unmap. */
+    SIZE_T                      OffsetInPages;
+    SIZE_T                      NumberOfPages;
+    PHYSICAL_ADDRESS            DummyPage;
+
+    /* Page-table update and TLB maintenance. */
+    ULONG                       PageTableLevel;
+    DXGK_PAGETABLEUPDATEADDRESS PageTableAddress;
+    DXGK_PTE                   *PageTableEntries;
+    ULONG                       StartIndex;
+    ULONG                       NumPageTableEntries;
+    ULONG64                     AllocationOffsetInBytes;
+    DXGK_PAGETABLEUPDATEMODE    UpdateMode;
+    BOOLEAN                     InitialUpdate;
+    D3DGPU_PHYSICAL_ADDRESS     RootPageTableAddress;
+    D3DGPU_VIRTUAL_ADDRESS      StartVirtualAddress;
+    D3DGPU_VIRTUAL_ADDRESS      EndVirtualAddress;
+
+    /* Residency notification. */
+    D3DGPU_PHYSICAL_ADDRESS     NotifyPhysicalAddress;
+    BOOLEAN                     NotifyResident;
+} DXGKRNL_PAGING_OP, *PDXGKRNL_PAGING_OP;
+
+BOOLEAN
+DxgkPagingOperationSupported(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ DXGKRNL_PAGING_OP_TYPE Type);
+
+NTSTATUS
+DxgkPagingExecute(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ PDXGKRNL_DEVICE Device,
+    _In_ CONST DXGKRNL_PAGING_OP *Op,
+    _In_ D3DKMT_HANDLE hSignalSyncObject,
+    _In_ ULONG64 SignalFenceValue,
+    _Out_opt_ PULONG OutPagingFenceId);
+
+NTSTATUS
+DxgkContextRenderInitialize(
+    _Inout_ PDXGKRNL_CONTEXT Context);
+
+VOID
+DxgkContextRenderTeardown(
+    _Inout_ PDXGKRNL_CONTEXT Context);
+
+NTSTATUS
+DxgkPagingExecuteSynchronous(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ PDXGKRNL_DEVICE Device,
+    _In_ CONST DXGKRNL_PAGING_OP *Op);
+
+NTSTATUS
+DxgkPagingWaitForFence(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG PagingFenceId,
+    _In_ ULONG TimeoutMs);
+
+BOOLEAN
+DxgkPagingFenceCompleted(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG PagingFenceId);
+
+VOID
+DxgkPagingBeginPlacement(
+    _Inout_ struct _DXGKVMM_ALLOCATION *Allocation,
+    _In_ ULONG SegmentId,
+    _In_ ULONGLONG SegmentOffset,
+    _In_ ULONG PagingFenceId);
+
+BOOLEAN
+DxgkPagingSyncPlacement(
+    _Inout_ struct _DXGKVMM_ALLOCATION *Allocation);
+
+VOID
+DxgkPagingAbandonPlacement(
+    _Inout_ struct _DXGKVMM_ALLOCATION *Allocation);
+
+BOOLEAN
+DxgkPagingAllocationReadyForSubmission(
+    _In_ struct _DXGKVMM_ALLOCATION *Allocation);
 
 NTSTATUS
 DxgkDeviceWorkCreate(

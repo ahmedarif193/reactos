@@ -441,6 +441,7 @@ DxgkDereferenceProcessRecord(
 static VOID
 DxgkpInitializeContextStreamState(_Inout_ PDXGKRNL_CONTEXT Context)
 {
+    KeInitializeMutex(&Context->RenderLock, 0);
     KeInitializeMutex(&Context->StreamAdmissionMutex, 0);
     KeInitializeSpinLock(&Context->StreamLock);
     InitializeListHead(&Context->StreamOperationList);
@@ -772,6 +773,8 @@ DxgkpDestroyContextNoLock(
     ASSERT(Context->Mms2ContextStream == NULL);
     ASSERT(IsListEmpty(&Context->StreamOperationList));
     ASSERT(InterlockedCompareExchange(&Context->StreamWorkerQueued, 0, 0) == 0);
+
+    DxgkContextRenderTeardown(Context);
 
 #if DBG
     Context->Handle           = 0xDEADCCCC;
@@ -1444,14 +1447,26 @@ DxgkpCreateContextCaptured(
         DXGKRNL_TRACE("DxgkCreateContext: miniport ctx %p DmaBufferSize=%u AllocationListSize=%u PatchLocationListSize=%u\n", Context->hMiniportContext, CreateContextArg.ContextInfo.DmaBufferSize, CreateContextArg.ContextInfo.AllocationListSize, CreateContextArg.ContextInfo.PatchLocationListSize);
 
         /*
-         * Propagate DMA-buffer geometry to the caller so the UMD can
-         * set up its command-buffer ring.  pCommandBuffer / pAllocationList /
-         * pPatchLocationList (actual mapped addresses) are set by the DMA
-         * submission path in dxgmms1 / dma.c; for now they remain NULL.
+         * Build the render ring dxgkrnl owns and hand its mapped addresses
+         * plus the accepted geometry back, so the UMD writes commands,
+         * allocation entries, and patch locations straight into the memory
+         * D3DKMTRender will translate.
          */
-        pCreateContext->CommandBufferSize = CreateContextArg.ContextInfo.DmaBufferSize;
-        pCreateContext->AllocationListSize = CreateContextArg.ContextInfo.AllocationListSize;
-        pCreateContext->PatchLocationListSize = CreateContextArg.ContextInfo.PatchLocationListSize;
+        Status = DxgkContextRenderInitialize(Context);
+        if (!NT_SUCCESS(Status))
+        {
+            DXGKRNL_ERR("DxgkCreateContext: render ring setup failed 0x%08lX\n", Status);
+            DxgkpRollbackCreatedContext(Context);
+            DxgkEndKmdTransaction(Adapter);
+            DxgkDereferenceAdapter(Adapter);
+            return Status;
+        }
+        pCreateContext->pCommandBuffer = Context->RenderRingUser;
+        pCreateContext->CommandBufferSize = Context->RenderCommandBufferSize;
+        pCreateContext->pAllocationList = (D3DDDI_ALLOCATIONLIST *)((PUCHAR)Context->RenderRingUser + Context->RenderAllocationListOffset);
+        pCreateContext->AllocationListSize = Context->RenderAllocationListSize;
+        pCreateContext->pPatchLocationList = (D3DDDI_PATCHLOCATIONLIST *)((PUCHAR)Context->RenderRingUser + Context->RenderPatchLocationListOffset);
+        pCreateContext->PatchLocationListSize = Context->RenderPatchLocationListSize;
     }
     else
     {
