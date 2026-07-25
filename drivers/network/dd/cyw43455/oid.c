@@ -586,9 +586,18 @@ CywOidConnectRequest(
     Adapter->ConnectSeq++;
     NdisReleaseSpinLock(&Adapter->Lock);
 
+    InterlockedExchange(&Adapter->JoinRetries, 0);
     InterlockedIncrement(&Adapter->WorkItemsPending);
-    NdisQueueIoWorkItem(Adapter->InterruptWorkItem, CywConnectWorker, Adapter);
+    NdisQueueIoWorkItem(Adapter->ConnectWorkItem, CywConnectWorker, Adapter);
     return NDIS_STATUS_PENDING;
+}
+
+VOID
+CywQueueConnectWork(
+    _In_ PCYW_ADAPTER Adapter)
+{
+    InterlockedIncrement(&Adapter->WorkItemsPending);
+    NdisQueueIoWorkItem(Adapter->ConnectWorkItem, CywConnectWorker, Adapter);
 }
 
 static

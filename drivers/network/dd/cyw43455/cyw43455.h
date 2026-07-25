@@ -46,6 +46,10 @@
 #define SBSDIO_FUNC1_CHIPCLKCSR         0x1000E
 #define SBSDIO_FUNC1_WATERMARK          0x10008
 #define SBSDIO_DEVICE_CTL               0x10009
+#define SBSDIO_FUNC1_WFRAMEBCLO         0x10019
+#define SBSDIO_FUNC1_WFRAMEBCHI         0x1001A
+#define SBSDIO_FUNC1_RFRAMEBCLO         0x1001B
+#define SBSDIO_FUNC1_RFRAMEBCHI         0x1001C
 #define SBSDIO_FUNC1_MESBUSYCTRL        0x1001D
 #define SBSDIO_FUNC1_SLEEPCSR           0x1001F
 
@@ -98,7 +102,11 @@
 #define I_HMB_SW_MASK                   0xF0
 #define I_CHIPACTIVE                    0x20000000
 #define CYW_HOSTINTMASK                 (I_HMB_SW_MASK | I_CHIPACTIVE)
+#define SMB_NAK                         0x00000001
 #define SMB_INT_ACK                     0x00000002
+#define CYW_RXFLUSH_RETRIES             0xFFFF
+#define SDPCM_HDRLEN_BASE               12
+#define CYW_RX_TIMER_RES                10000
 
 #define BCM_CORE_REG_BANKIDX            0x40
 #define BCM_CORE_REG_BANKPDA            0x4C
@@ -172,6 +180,7 @@ typedef struct _CYW_DLOAD_DATA
 #define BRCMF_C_SET_PASSIVE_SCAN        49
 #define BRCMF_C_SCAN                    50
 #define BRCMF_C_DISASSOC                52
+#define BRCMF_C_GET_PM                  85
 #define BRCMF_C_SET_PM                  86
 #define BRCMF_C_GET_RSSI                127
 #define BRCMF_C_SET_WSEC                134
@@ -182,6 +191,7 @@ typedef struct _CYW_DLOAD_DATA
 #define BRCMF_C_SET_VAR                 263
 #define BRCMF_C_SET_WSEC_PMK            268
 #define BRCMF_C_SET_SCB_AUTHORIZE       121
+
 
 #define CYW_WSEC_NONE                   0x00
 #define CYW_WSEC_WEP                    0x01
@@ -254,12 +264,18 @@ typedef struct _CYW_DLOAD_DATA
 
 #define CYW_MAX_BSS                     48
 #define CYW_MAX_BSS_IE                  512
-#define CYW_CONTROL_BUFFER_SIZE         2048
+#define CYW_CONTROL_BUFFER_SIZE         8192
 #define CYW_RX_BUFFER_SIZE              262144
 #define CYW_RX_POOL_COUNT              384
 #define CYW_RX_INDICATE_BATCH           32
 #define CYW_REG_SCRATCH_SIZE            64
 #define CYW_DEFAULT_COUNTRY             "FR"
+#define CYW_5G_PREFER_RSSI              (-75)
+#define CYW_CHSPEC_BW_20                0x1000
+#define CYW_CHSPEC_BND_2G               0x0000
+#define CYW_CHSPEC_BND_5G               0xC000
+#define CYW_CHAN_MAX_2G                 14
+#define CYW_CHAN_MAX_5G                 177
 #define CYW_ADDRESS_LENGTH              6
 #define CYW_MTU_SIZE                    1500
 #define CYW_MAX_FRAME_SIZE              DOT11_MAX_PDU_SIZE
@@ -351,6 +367,9 @@ typedef struct _CYW_ESCAN_PARAMS_LE
     CYW_SCAN_PARAMS_LE Params;
 } CYW_ESCAN_PARAMS_LE, *PCYW_ESCAN_PARAMS_LE;
 
+#define CYW_SCAN_PARAMS_FIXED_SIZE   FIELD_OFFSET(CYW_SCAN_PARAMS_LE, ChannelList)
+#define CYW_ESCAN_PARAMS_FIXED_SIZE  (FIELD_OFFSET(CYW_ESCAN_PARAMS_LE, Params) + CYW_SCAN_PARAMS_FIXED_SIZE)
+
 typedef struct _CYW_COUNTRY_LE
 {
     CHAR CountryAbbrev[4];
@@ -379,24 +398,30 @@ typedef struct _CYW_BSS_INFO_LE
     USHORT Capability;
     UCHAR SsidLen;
     UCHAR Ssid[32];
+    UCHAR Pad51;
     ULONG RatesetCount;
     UCHAR RatesetRates[16];
     USHORT Chanspec;
     USHORT AtimWindow;
     UCHAR DtimPeriod;
+    UCHAR Pad77;
     SHORT Rssi;
     CHAR PhyNoise;
     UCHAR NCap;
+    UCHAR Pad82[2];
     ULONG NbssCap;
     UCHAR CtlCh;
+    UCHAR Pad89[3];
     ULONG Reserved32;
     UCHAR Flags;
     UCHAR VhtCap;
     UCHAR Reserved[2];
     UCHAR BasicMcs[16];
     USHORT IeOffset;
+    UCHAR Pad118[2];
     ULONG IeLength;
     USHORT Snr;
+    UCHAR Pad126[2];
 } CYW_BSS_INFO_LE, *PCYW_BSS_INFO_LE;
 
 typedef struct _CYW_ESCAN_RESULT_LE
@@ -414,10 +439,14 @@ C_ASSERT(sizeof(CYW_ETHER_HEADER) == 14);
 C_ASSERT(sizeof(CYW_BCM_ETH_HEADER) == 10);
 C_ASSERT(sizeof(CYW_EVENT_MSG) == 48);
 C_ASSERT(FIELD_OFFSET(CYW_BSS_INFO_LE, SsidLen) == 18);
-C_ASSERT(FIELD_OFFSET(CYW_BSS_INFO_LE, Chanspec) == 71);
-C_ASSERT(FIELD_OFFSET(CYW_BSS_INFO_LE, Rssi) == 76);
-C_ASSERT(FIELD_OFFSET(CYW_BSS_INFO_LE, IeOffset) == 109);
-C_ASSERT(sizeof(CYW_BSS_INFO_LE) == 117);
+C_ASSERT(FIELD_OFFSET(CYW_BSS_INFO_LE, RatesetCount) == 52);
+C_ASSERT(FIELD_OFFSET(CYW_BSS_INFO_LE, Chanspec) == 72);
+C_ASSERT(FIELD_OFFSET(CYW_BSS_INFO_LE, Rssi) == 78);
+C_ASSERT(FIELD_OFFSET(CYW_BSS_INFO_LE, NbssCap) == 84);
+C_ASSERT(FIELD_OFFSET(CYW_BSS_INFO_LE, CtlCh) == 88);
+C_ASSERT(FIELD_OFFSET(CYW_BSS_INFO_LE, IeOffset) == 116);
+C_ASSERT(FIELD_OFFSET(CYW_BSS_INFO_LE, IeLength) == 120);
+C_ASSERT(sizeof(CYW_BSS_INFO_LE) == 128);
 C_ASSERT(FIELD_OFFSET(CYW_ESCAN_RESULT_LE, BssInfo) == 12);
 
 /* The join/status structures below deliberately use natural alignment: the
@@ -508,6 +537,7 @@ typedef struct _CYW_BSS
     ULONG SsidLength;
     ULONG ChannelNumber;
     ULONG ChCenterFrequency;
+    USHORT Chanspec;
     LONG Rssi;
     ULONG LinkQuality;
     USHORT CapabilityInformation;
@@ -554,6 +584,13 @@ typedef struct _CYW_ADAPTER
     UCHAR TxSeq;
     UCHAR TxMax;
     UCHAR TxFlow;
+    UCHAR RxSeq;
+    BOOLEAN RxSeqValid;
+    ULONG RxBadHdrCount;
+    ULONG RxBadSeqCount;
+    ULONG RxFailCount;
+    ULONG RxFlushStuckCount;
+    BOOLEAN TimerResSet;
     PUCHAR ControlBuffer;
     PUCHAR TxBuffer;
     PUCHAR RxBuffer;
@@ -562,6 +599,7 @@ typedef struct _CYW_ADAPTER
     ULONG DmaBufCount;
     USHORT GlomLens[256];
     ULONG GlomCount;
+    volatile LONG JoinRetries;
     KEVENT CtrlEvent;
     KEVENT BusEvent;
     LIST_ENTRY TxQueue;
@@ -613,6 +651,7 @@ typedef struct _CYW_ADAPTER
     volatile LONG BusThreadStop;
 
     NDIS_HANDLE InterruptWorkItem;
+    NDIS_HANDLE ConnectWorkItem;
     NDIS_HANDLE LinkWorkItem;
     volatile LONG WorkItemsPending;
     BOOLEAN Halting;
@@ -667,6 +706,7 @@ NTSTATUS CywActivateEvents(_In_ PCYW_ADAPTER Adapter);
 NTSTATUS CywQueryRssi(_In_ PCYW_ADAPTER Adapter, _Out_ PLONG Rssi);
 NTSTATUS CywQueryRate(_In_ PCYW_ADAPTER Adapter, _Out_ PULONG RateUnits500Kbps);
 
+
 NTSTATUS CywScanStart(_In_ PCYW_ADAPTER Adapter, _In_reads_bytes_opt_(RequestLength) PDOT11_SCAN_REQUEST_V2 Request, _In_ ULONG RequestLength);
 VOID CywProcessEvent(_In_ PCYW_ADAPTER Adapter, _In_ PUCHAR Frame, _In_ ULONG Length);
 NTSTATUS CywSdpcmSendData(_In_ PCYW_ADAPTER Adapter, _In_ PUCHAR Eth, _In_ ULONG EthLen);
@@ -688,6 +728,7 @@ VOID CywIndicateLinkQuality(_In_ PCYW_ADAPTER Adapter);
 VOID CywCompletePendingConnect(_In_ PCYW_ADAPTER Adapter, _In_ NDIS_STATUS Status);
 VOID CywQueueLinkUpWork(_In_ PCYW_ADAPTER Adapter);
 NTSTATUS CywConnect(_In_ PCYW_ADAPTER Adapter);
+VOID CywQueueConnectWork(_In_ PCYW_ADAPTER Adapter);
 NTSTATUS CywDisconnect(_In_ PCYW_ADAPTER Adapter);
 NTSTATUS CywSetKey(_In_ PCYW_ADAPTER Adapter, _In_ BOOLEAN Pairwise, _In_opt_ PUCHAR Ea, _In_ PUCHAR Key, _In_ ULONG KeyLen, _In_ ULONG KeyIndex);
 

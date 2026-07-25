@@ -18,24 +18,42 @@
 #define SDPCM_GLOMDESC_FLAG     0x80
 #define SDPCM_SEQ_OFFSET        4
 #define SDPCM_CHANNEL_OFFSET    5
+#define SDPCM_NEXTLEN_OFFSET    6
 #define SDPCM_DOFFSET_OFFSET    7
+#define CYW_FIRSTREAD           64
+#define CYW_RXBOUND             50
 
 #define SDIO_F2_FIFO            0x8000
 
 static
 VOID
 CywWriteSdpcmHeader(
-    _Out_writes_bytes_(SDPCM_HEADER_LEN) PUCHAR Frame,
+    _In_ PCYW_ADAPTER Adapter,
+    _Out_ PUCHAR Frame,
     _In_ ULONG Total,
-    _In_ UCHAR Channel)
+    _In_ ULONG TailPad,
+    _In_ UCHAR Channel,
+    _In_ ULONG HdrLen)
 {
-    RtlZeroMemory(Frame, SDPCM_HEADER_LEN);
+    PUCHAR Sw = Frame + HdrLen - 8;
+
+    RtlZeroMemory(Frame, HdrLen);
     Frame[0] = (UCHAR)(Total & 0xFF);
     Frame[1] = (UCHAR)((Total >> 8) & 0xFF);
     Frame[2] = (UCHAR)(~Frame[0]);
     Frame[3] = (UCHAR)(~Frame[1]);
-    Frame[SDPCM_CHANNEL_OFFSET] = Channel;
-    Frame[SDPCM_DOFFSET_OFFSET] = SDPCM_HEADER_LEN;
+    if (HdrLen > SDPCM_HEADER_LEN)
+    {
+        ULONG Tag = (Total - 4) | (1ul << 24);
+        Frame[4] = (UCHAR)(Tag & 0xFF);
+        Frame[5] = (UCHAR)((Tag >> 8) & 0xFF);
+        Frame[6] = (UCHAR)((Tag >> 16) & 0xFF);
+        Frame[7] = (UCHAR)((Tag >> 24) & 0xFF);
+        Frame[10] = (UCHAR)(TailPad & 0xFF);
+        Frame[11] = (UCHAR)((TailPad >> 8) & 0xFF);
+    }
+    Sw[1] = Channel;
+    Sw[3] = (UCHAR)HdrLen;
 }
 
 /* Move Length bytes to/from the F2 FIFO as whole blocks plus a ULONG-aligned
@@ -91,12 +109,12 @@ CywSdpcmSendCtl(
         return STATUS_BUFFER_TOO_SMALL;
     }
 
-    CywWriteSdpcmHeader(Frame, Total, SDPCM_CHANNEL_CONTROL);
+    CywWriteSdpcmHeader(Adapter, Frame, Total, Padded - Total, SDPCM_CHANNEL_CONTROL, SDPCM_HEADER_LEN);
 
     RtlCopyMemory(Frame + SDPCM_HEADER_LEN, Data, Length);
 
     KeWaitForSingleObject(&Adapter->F2Lock, Executive, KernelMode, FALSE, NULL);
-    Frame[SDPCM_SEQ_OFFSET] = Adapter->TxSeq;
+    Frame[SDPCM_HEADER_LEN - 8] = Adapter->TxSeq;
     Status = CywSdioWriteBytes(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO, Frame, Padded);
     if (NT_SUCCESS(Status))
     {
@@ -153,13 +171,13 @@ CywSdpcmSendData(
         return STATUS_DEVICE_BUSY;
     }
 
-    CywWriteSdpcmHeader(Frame, Total, SDPCM_CHANNEL_DATA);
+    CywWriteSdpcmHeader(Adapter, Frame, Total, Padded - Total, SDPCM_CHANNEL_DATA, SDPCM_HEADER_LEN);
     RtlZeroMemory(Frame + SDPCM_HEADER_LEN, BCDC_HEADER_LEN);
     Frame[SDPCM_HEADER_LEN] = (UCHAR)(BCDC_PROTO_VER << 4);
 
     RtlCopyMemory(Frame + SDPCM_HEADER_LEN + BCDC_HEADER_LEN, Eth, EthLen);
 
-    Frame[SDPCM_SEQ_OFFSET] = Adapter->TxSeq;
+    Frame[SDPCM_HEADER_LEN - 8] = Adapter->TxSeq;
     Status = CywSdpcmF2Fifo(Adapter, TRUE, Frame, Padded);
     if (NT_SUCCESS(Status))
     {
@@ -185,6 +203,7 @@ CywSdpcmSendNb(
     PUCHAR Dest = Frame + SDPCM_HEADER_LEN + BCDC_HEADER_LEN;
     ULONG Capacity = CYW_CONTROL_BUFFER_SIZE - SDPCM_HEADER_LEN - BCDC_HEADER_LEN;
     ULONG EthLen;
+    ULONG TxPadded;
     ULONG Total;
     UCHAR Avail;
     NTSTATUS Status;
@@ -212,12 +231,13 @@ CywSdpcmSendNb(
     }
 
     Total = SDPCM_HEADER_LEN + BCDC_HEADER_LEN + EthLen;
-    CywWriteSdpcmHeader(Frame, Total, SDPCM_CHANNEL_DATA);
+    TxPadded = ALIGN_UP(Total, ULONG);
+    CywWriteSdpcmHeader(Adapter, Frame, Total, TxPadded - Total, SDPCM_CHANNEL_DATA, SDPCM_HEADER_LEN);
     RtlZeroMemory(Frame + SDPCM_HEADER_LEN, BCDC_HEADER_LEN);
     Frame[SDPCM_HEADER_LEN] = (UCHAR)(BCDC_PROTO_VER << 4);
-    Frame[SDPCM_SEQ_OFFSET] = Adapter->TxSeq;
+    Frame[SDPCM_HEADER_LEN - 8] = Adapter->TxSeq;
 
-    Status = CywSdpcmF2Fifo(Adapter, TRUE, Frame, ALIGN_UP(Total, ULONG));
+    Status = CywSdpcmF2Fifo(Adapter, TRUE, Frame, TxPadded);
     if (NT_SUCCESS(Status))
     {
         Adapter->TxSeq = (UCHAR)(Adapter->TxSeq + 1);
@@ -359,14 +379,14 @@ CywBcdcXfer(
                 RtlCopyMemory(Msg, Adapter->ControlBuffer, RecvLen);
 
                 Dcmd = (PCYW_BCDC_DCMD)Msg;
-                if (RecvLen >= sizeof(CYW_BCDC_DCMD) &&
-                    ((Dcmd->Flags & BCDC_DCMD_ID_MASK) >> BCDC_DCMD_ID_SHIFT) != ReqId)
+                if (RecvLen >= sizeof(CYW_BCDC_DCMD) && ((Dcmd->Flags & BCDC_DCMD_ID_MASK) >> BCDC_DCMD_ID_SHIFT) != (ReqId & (BCDC_DCMD_ID_MASK >> BCDC_DCMD_ID_SHIFT)))
                 {
                     Status = STATUS_UNSUCCESSFUL;
                 }
             }
             else
             {
+                DPRINT1("CYW: BCDC cmd %lu control-response wait failed 0x%08lx (timeout)\n", (ULONG)Cmd, Status);
                 Status = STATUS_IO_TIMEOUT;
             }
         }
@@ -558,7 +578,7 @@ CywScanStart(
     _In_ ULONG RequestLength)
 {
     PCYW_ESCAN_PARAMS_LE Params;
-    ULONG Size = sizeof(CYW_ESCAN_PARAMS_LE);
+    ULONG Size = CYW_ESCAN_PARAMS_FIXED_SIZE;
     NTSTATUS Status;
 
     Params = CywAllocate(Size);
@@ -629,6 +649,72 @@ CywScanStart(
     return Status;
 }
 
+static
+USHORT
+CywSelectJoinChanspec(
+    _In_ PCYW_ADAPTER Adapter)
+{
+    ULONG i;
+    USHORT Best = 0;
+    LONG BestRssi = 0;
+    BOOLEAN BestIs5G = FALSE;
+
+    if (Adapter->DesiredSsidLength == 0)
+    {
+        return 0;
+    }
+
+    for (i = 0; i < Adapter->BssCount; i++)
+    {
+        PCYW_BSS Bss = &Adapter->Bss[i];
+        ULONG Chan = Bss->ChannelNumber;
+        USHORT Chspec;
+        BOOLEAN Is5G;
+        BOOLEAN Better;
+
+        if (Bss->SsidLength != Adapter->DesiredSsidLength || !RtlEqualMemory(Bss->Ssid, Adapter->DesiredSsid, Adapter->DesiredSsidLength))
+        {
+            continue;
+        }
+
+        if (Chan == 0 || Chan > CYW_CHAN_MAX_5G || (Chan > CYW_CHAN_MAX_2G && Chan < 36))
+        {
+            continue;
+        }
+
+        Chspec = (USHORT)(Chan | CYW_CHSPEC_BW_20 | (Chan > CYW_CHAN_MAX_2G ? CYW_CHSPEC_BND_5G : CYW_CHSPEC_BND_2G));
+
+        if (Adapter->HasDesiredBssid && !RtlEqualMemory(Bss->Bssid, Adapter->DesiredBssid, CYW_ADDRESS_LENGTH))
+        {
+            continue;
+        }
+
+        Is5G = (Chan > CYW_CHAN_MAX_2G) && (Bss->Rssi == 0 || Bss->Rssi >= CYW_5G_PREFER_RSSI);
+
+        if (Best == 0)
+        {
+            Better = TRUE;
+        }
+        else if (Is5G != BestIs5G)
+        {
+            Better = Is5G;
+        }
+        else
+        {
+            Better = (Bss->Rssi > BestRssi);
+        }
+
+        if (Better)
+        {
+            Best = Chspec;
+            BestRssi = Bss->Rssi;
+            BestIs5G = Is5G;
+        }
+    }
+
+    return Best;
+}
+
 NTSTATUS
 CywConnect(
     _In_ PCYW_ADAPTER Adapter)
@@ -638,6 +724,8 @@ CywConnect(
     ULONG Value;
     ULONG Wsec;
     ULONG WpaAuth;
+    USHORT JoinChanspec;
+    ULONG JoinSize;
     BOOLEAN Sae = (Adapter->AuthAlgorithm == DOT11_AUTH_ALGO_WPA3_SAE);
     NTSTATUS Status;
 
@@ -711,6 +799,8 @@ CywConnect(
         CywFilCmdSet(Adapter, BRCMF_C_SET_PM, &Pm, sizeof(Pm));
     }
 
+    JoinChanspec = CywSelectJoinChanspec(Adapter);
+
     /* Preferred: firmware-directed join carrying the target BSSID and tuned
      * dwell times ("join" iovar); fall back to the plain SET_SSID join. */
     RtlZeroMemory(&ExtJoin, sizeof(ExtJoin));
@@ -726,9 +816,15 @@ CywConnect(
     else
         RtlFillMemory(ExtJoin.Assoc.Bssid, CYW_ADDRESS_LENGTH, 0xFF);
 
-    Status = CywFilIovarSet(Adapter, "join", &ExtJoin,
-                            FIELD_OFFSET(CYW_EXT_JOIN_PARAMS_LE, Assoc) +
-                            FIELD_OFFSET(CYW_ASSOC_PARAMS_LE, ChanspecList));
+    JoinSize = FIELD_OFFSET(CYW_EXT_JOIN_PARAMS_LE, Assoc) + FIELD_OFFSET(CYW_ASSOC_PARAMS_LE, ChanspecList);
+    if (JoinChanspec != 0)
+    {
+        ExtJoin.Assoc.ChanspecNum = 1;
+        ExtJoin.Assoc.ChanspecList[0] = JoinChanspec;
+        JoinSize += sizeof(USHORT);
+    }
+
+    Status = CywFilIovarSet(Adapter, "join", &ExtJoin, JoinSize);
     if (!NT_SUCCESS(Status))
     {
         RtlZeroMemory(&Join, sizeof(Join));
@@ -832,6 +928,7 @@ CywAddEscanResult(
     Entry->LinkQuality = (Entry->Rssi >= -50) ? 100 :
                          (Entry->Rssi <= -100) ? 0 : (2 * (Entry->Rssi + 100));
     Entry->ChannelNumber = Bi->CtlCh ? Bi->CtlCh : (Bi->Chanspec & 0xFF);
+    Entry->Chanspec = Bi->Chanspec;
     Entry->CapabilityInformation = Bi->Capability;
     Entry->BeaconPeriod = Bi->BeaconPeriod;
 
@@ -969,9 +1066,21 @@ CywProcessEvent(
     {
         if (EventStatus != BRCMF_E_STATUS_SUCCESS)
         {
-            CywIndicateAssocComplete(Adapter, DOT11_ASSOC_STATUS_FAILURE);
-            CywIndicateConnectComplete(Adapter, DOT11_ASSOC_STATUS_FAILURE);
-            CywCompletePendingConnect(Adapter, NDIS_STATUS_FAILURE);
+            if (InterlockedIncrement(&Adapter->JoinRetries) <= 2 && Adapter->DesiredSsidLength != 0 && !Adapter->Halting && Adapter->ConnectWorkItem != NULL)
+            {
+                DPRINT1("CYW: join failed status %lu, retry %ld\n", EventStatus, Adapter->JoinRetries);
+                CywQueueConnectWork(Adapter);
+            }
+            else
+            {
+                CywIndicateAssocComplete(Adapter, DOT11_ASSOC_STATUS_FAILURE);
+                CywIndicateConnectComplete(Adapter, DOT11_ASSOC_STATUS_FAILURE);
+                CywCompletePendingConnect(Adapter, NDIS_STATUS_FAILURE);
+            }
+        }
+        else
+        {
+            InterlockedExchange(&Adapter->JoinRetries, 0);
         }
     }
 }
@@ -1152,6 +1261,61 @@ CywRxChainFlush(
     *Count = 0;
 }
 
+static
+VOID
+CywSdioAbort(
+    _In_ PCYW_ADAPTER Adapter,
+    _In_ UCHAR Function)
+{
+    CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BUS, SDIO_CCCR_IOABORT, Function);
+}
+
+static
+VOID
+CywRxFail(
+    _In_ PCYW_ADAPTER Adapter,
+    _In_ BOOLEAN Abort,
+    _In_ BOOLEAN SendNak)
+{
+    ULONG Retries;
+    UCHAR Hi = 0;
+    UCHAR Lo = 0;
+
+    Adapter->RxFailCount++;
+
+    if (Abort)
+    {
+        CywSdioAbort(Adapter, CYW_SDIO_FUNC_RADIO);
+    }
+
+    CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BACKPLANE, SBSDIO_FUNC1_FRAMECTRL, SFC_RF_TERM);
+
+    for (Retries = CYW_RXFLUSH_RETRIES; Retries > 0; Retries--)
+    {
+        if (!NT_SUCCESS(CywSdioReadByte(Adapter, CYW_SDIO_FUNC_BACKPLANE, SBSDIO_FUNC1_RFRAMEBCHI, &Hi)) || !NT_SUCCESS(CywSdioReadByte(Adapter, CYW_SDIO_FUNC_BACKPLANE, SBSDIO_FUNC1_RFRAMEBCLO, &Lo)))
+        {
+            break;
+        }
+
+        if (Hi == 0 && Lo == 0)
+        {
+            break;
+        }
+    }
+
+    if (Retries == 0)
+    {
+        Adapter->RxFlushStuckCount++;
+    }
+
+    if (SendNak && Adapter->SdioCoreBase != 0)
+    {
+        CywBackplaneWritelSc(Adapter, Adapter->SdioCoreBase + SD_REG_TOSBMAILBOX, SMB_NAK, Adapter->RegScratch);
+    }
+
+    Adapter->RxSeqValid = FALSE;
+}
+
 /* Single owner of all F2 FIFO traffic: pumps the deferred TX queue, receives
  * frames, and dispatches control responses, firmware events and RX data.
  * Woken by the card interrupt, by TX submission, or to exit. */
@@ -1165,6 +1329,9 @@ CywBusThread(
     PUCHAR Frame = Adapter->RxBuffer;
     NTSTATUS Status;
     ULONG FrameLen;
+    ULONG HwLen;
+    ULONG HwCheck;
+    UCHAR RxSeqNum;
     UCHAR Channel;
     ULONG DataOffset;
     PNET_BUFFER_LIST ChainHead = NULL, ChainTail = NULL;
@@ -1178,42 +1345,98 @@ CywBusThread(
         BOOLEAN AnyFrame = FALSE;
         LARGE_INTEGER RxWait;
         NTSTATUS WaitStatus;
+        ULONG NextLen = 0;
+        ULONG FirstRead;
+        ULONG RxLeft = CYW_RXBOUND;
+        ULONG SwOff = 4;
+
 
         if (WasInt)
             CywClearChipInterrupt(Adapter);
 
         CywDrainTxQueue(Adapter);
 
-        while (Adapter->BusThreadStop == 0)
+        while (Adapter->BusThreadStop == 0 && RxLeft-- != 0)
         {
             KeWaitForSingleObject(&Adapter->F2Lock, Executive, KernelMode, FALSE, NULL);
 
-            Status = CywSdioReadBytes(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO,
-                                      Frame, SDPCM_HEADER_LEN);
-            FrameLen = Frame[0] | (Frame[1] << 8);
-            if (!NT_SUCCESS(Status) || ((Frame[0] ^ Frame[2]) != 0xFF) ||
-                FrameLen < SDPCM_HEADER_LEN || FrameLen > CYW_RX_BUFFER_SIZE - CYW_F2_BLOCKSIZE)
+            FirstRead = (NextLen != 0) ? NextLen : CYW_FIRSTREAD;
+            if (FirstRead > CYW_RX_BUFFER_SIZE - CYW_F2_BLOCKSIZE)
             {
+                FirstRead = CYW_FIRSTREAD;
+                NextLen = 0;
+            }
+
+            Status = CywSdioReadBytes(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO, Frame, FirstRead);
+            if (!NT_SUCCESS(Status))
+            {
+                NextLen = 0;
+                CywRxFail(Adapter, TRUE, FALSE);
                 KeReleaseMutex(&Adapter->F2Lock, FALSE);
                 break;
             }
 
+            HwLen = Frame[0] | (Frame[1] << 8);
+            HwCheck = Frame[2] | (Frame[3] << 8);
+
+            if (HwLen == 0 && HwCheck == 0)
+            {
+                NextLen = 0;
+                KeReleaseMutex(&Adapter->F2Lock, FALSE);
+                break;
+            }
+
+            if (((HwLen ^ HwCheck) & 0xFFFF) != 0xFFFF)
+            {
+                Adapter->RxBadHdrCount++;
+                NextLen = 0;
+                CywRxFail(Adapter, FALSE, FALSE);
+                KeReleaseMutex(&Adapter->F2Lock, FALSE);
+                break;
+            }
+
+            FrameLen = HwLen;
+            if (FrameLen < SDPCM_HEADER_LEN || FrameLen > CYW_RX_BUFFER_SIZE - CYW_F2_BLOCKSIZE)
+            {
+                Adapter->RxBadHdrCount++;
+                NextLen = 0;
+                CywRxFail(Adapter, FALSE, FALSE);
+                KeReleaseMutex(&Adapter->F2Lock, FALSE);
+                break;
+            }
+
+            NextLen = (ULONG)Frame[SwOff + 2] << 4;
+
+            RxSeqNum = Frame[SwOff];
+            if (Adapter->RxSeqValid && RxSeqNum != Adapter->RxSeq)
+            {
+                Adapter->RxBadSeqCount++;
+            }
+            Adapter->RxSeq = (UCHAR)(RxSeqNum + 1);
+            Adapter->RxSeqValid = TRUE;
+
             CywUpdateCredits(Adapter, Frame);
 
-            if (FrameLen > SDPCM_HEADER_LEN)
+            if (FrameLen > FirstRead)
             {
-                CywSdpcmF2Fifo(Adapter, FALSE, Frame + SDPCM_HEADER_LEN,
-                               FrameLen - SDPCM_HEADER_LEN);
+                Status = CywSdpcmF2Fifo(Adapter, FALSE, Frame + FirstRead, FrameLen - FirstRead);
+                if (!NT_SUCCESS(Status))
+                {
+                    NextLen = 0;
+                    CywRxFail(Adapter, TRUE, FALSE);
+                    KeReleaseMutex(&Adapter->F2Lock, FALSE);
+                    break;
+                }
             }
 
             KeReleaseMutex(&Adapter->F2Lock, FALSE);
             AnyFrame = TRUE;
             CywDrainTxQueue(Adapter);
 
-            Channel = Frame[SDPCM_CHANNEL_OFFSET] & 0x0F;
-            DataOffset = Frame[SDPCM_DOFFSET_OFFSET];
+            Channel = Frame[SwOff + 1] & 0x0F;
+            DataOffset = Frame[SwOff + 3];
 
-            if (Frame[SDPCM_CHANNEL_OFFSET] & SDPCM_GLOMDESC_FLAG)
+            if (Frame[SwOff + 1] & SDPCM_GLOMDESC_FLAG)
             {
                 ULONG n = 0;
                 ULONG p = DataOffset;
@@ -1230,12 +1453,12 @@ CywBusThread(
             if (Channel == SDPCM_CHANNEL_GLOM)
             {
                 ULONG Cnt = Adapter->GlomCount;
-                ULONG Off = DataOffset;
+                ULONG Off = 0;
                 ULONG i;
                 Adapter->GlomCount = 0;
                 for (i = 0; i < Cnt; i++)
                 {
-                    ULONG HdrAt = Off;
+                    ULONG HdrAt = Off + ((i == 0) ? DataOffset : 0);
                     ULONG SubLen = Adapter->GlomLens[i];
                     PUCHAR Sub;
                     ULONG OwnLen;
@@ -1249,8 +1472,8 @@ CywBusThread(
                     if (OwnLen < SDPCM_HEADER_LEN || HdrAt + OwnLen > FrameLen ||
                         ((Sub[0] ^ Sub[2]) != 0xFF))
                         continue;
-                    SubChan = Sub[SDPCM_CHANNEL_OFFSET] & 0x0F;
-                    SubDoff = Sub[SDPCM_DOFFSET_OFFSET];
+                    SubChan = Sub[SwOff + 1] & 0x0F;
+                    SubDoff = Sub[SwOff + 3];
                     if (SubDoff < SDPCM_HEADER_LEN || SubDoff >= OwnLen)
                         continue;
                     if (SubChan == SDPCM_CHANNEL_DATA)
@@ -1302,7 +1525,7 @@ CywBusThread(
 
         if (AnyFrame)
         {
-            if (WasInt && Adapter->CardIntRegistered && Adapter->SdBus.AcknowledgeInterrupt != NULL)
+            if (Adapter->CardIntRegistered && Adapter->SdBus.AcknowledgeInterrupt != NULL)
             {
                 Adapter->SdBus.AcknowledgeInterrupt(Adapter->SdBus.Context);
             }
@@ -1310,14 +1533,7 @@ CywBusThread(
             continue;
         }
 
-        if (WasInt)
-        {
-            LARGE_INTEGER Bk;
-            Bk.QuadPart = -10000;
-            KeDelayExecutionThread(KernelMode, FALSE, &Bk);
-        }
-
-        if (WasInt && Adapter->CardIntRegistered && Adapter->SdBus.AcknowledgeInterrupt != NULL)
+        if (Adapter->CardIntRegistered && Adapter->SdBus.AcknowledgeInterrupt != NULL)
         {
             Adapter->SdBus.AcknowledgeInterrupt(Adapter->SdBus.Context);
         }
@@ -1347,24 +1563,34 @@ CywStartBusThread(
     Adapter->BusThreadStop = 0;
     Adapter->BusThread = NULL;
 
+    if (!Adapter->TimerResSet)
+    {
+        Adapter->TimerResSet = TRUE;
+        ExSetTimerResolution(CYW_RX_TIMER_RES, TRUE);
+    }
+
+    /* Published before the thread exists: CywBusThread starts draining the F2
+     * FIFO the moment it is created, and any control transfer that still sees
+     * BusThreadRunning == FALSE would take the unlocked CywSdpcmRecvCtl poll
+     * path and read the same FIFO concurrently, desynchronising SDPCM. */
+    Adapter->BusThreadRunning = TRUE;
+
     Status = PsCreateSystemThread(&Handle, THREAD_ALL_ACCESS, NULL, NULL, NULL,
                                   CywBusThread, Adapter);
     if (!NT_SUCCESS(Status))
     {
+        Adapter->BusThreadRunning = FALSE;
         return Status;
     }
 
     Status = ObReferenceObjectByHandle(Handle, THREAD_ALL_ACCESS, *PsThreadType,
                                        KernelMode, &Adapter->BusThread, NULL);
     ZwClose(Handle);
-    if (NT_SUCCESS(Status))
-    {
-        Adapter->BusThreadRunning = TRUE;
-    }
-    else
+    if (!NT_SUCCESS(Status))
     {
         InterlockedExchange(&Adapter->BusThreadStop, 1);
         Adapter->BusThread = NULL;
+        return Status;
     }
     return Status;
 }
@@ -1389,4 +1615,10 @@ CywStopBusThread(
     }
 
     Adapter->BusThreadRunning = FALSE;
+
+    if (Adapter->TimerResSet)
+    {
+        Adapter->TimerResSet = FALSE;
+        ExSetTimerResolution(0, FALSE);
+    }
 }
