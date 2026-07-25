@@ -5,6 +5,8 @@
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
+#ifdef _WIN32
+
 #include <windows.h>
 #include <winioctl.h>
 
@@ -133,6 +135,37 @@ Ntfs3gUserRead(void *OpaqueContext,
     return 0;
 }
 
+static int
+Ntfs3gUserWrite(void *OpaqueContext,
+                uint64_t Offset,
+                const void *Buffer,
+                uint32_t Length,
+                uint32_t *BytesWritten)
+{
+    NTFS3G_USER_DEVICE *Context = OpaqueContext;
+    LARGE_INTEGER Position;
+    DWORD Done;
+
+    if (Offset > INT64_MAX)
+        return EINVAL;
+    Position.QuadPart = Offset;
+    if (!SetFilePointerEx(Context->Handle, Position, NULL, FILE_BEGIN))
+        return Ntfs3gUserErrorToErrno(GetLastError());
+    if (!WriteFile(Context->Handle, Buffer, Length, &Done, NULL))
+        return Ntfs3gUserErrorToErrno(GetLastError());
+    *BytesWritten = Done;
+    return 0;
+}
+
+static int
+Ntfs3gUserSync(void *OpaqueContext)
+{
+    NTFS3G_USER_DEVICE *Context = OpaqueContext;
+
+    return FlushFileBuffers(Context->Handle) ?
+        0 : Ntfs3gUserErrorToErrno(GetLastError());
+}
+
 static void
 Ntfs3gUserClose(void *OpaqueContext)
 {
@@ -142,9 +175,18 @@ Ntfs3gUserClose(void *OpaqueContext)
     Ntfs3gRosHostFree(Context);
 }
 
-static const NTFS3G_ROS_DEVICE_OPERATIONS Ntfs3gUserDeviceOperations = {
+static const NTFS3G_ROS_DEVICE_OPERATIONS Ntfs3gUserReadOnlyOperations = {
     Ntfs3gUserRead,
-    Ntfs3gUserClose
+    Ntfs3gUserClose,
+    NULL,
+    NULL
+};
+
+static const NTFS3G_ROS_DEVICE_OPERATIONS Ntfs3gUserReadWriteOperations = {
+    Ntfs3gUserRead,
+    Ntfs3gUserClose,
+    Ntfs3gUserWrite,
+    Ntfs3gUserSync
 };
 
 int
@@ -163,10 +205,9 @@ Ntfs3gRosMountHandle(void *Handle,
     int Result;
     int Error;
 
-    if (!Handle || !Volume || !ReadOnly) {
-        Error = !ReadOnly ? EOPNOTSUPP : EINVAL;
-        errno = Error;
-        return -Error;
+    if (!Handle || !Volume) {
+        errno = EINVAL;
+        return -EINVAL;
     }
     if (Ntfs3gUserEnsureRuntime()) {
         errno = ENOMEM;
@@ -197,9 +238,242 @@ Ntfs3gRosMountHandle(void *Handle,
     else if (GetFileSizeEx(Duplicate, &FileSize))
         DeviceLength = FileSize.QuadPart;
 
-    Result = Ntfs3gRosMount(Context, &Ntfs3gUserDeviceOperations,
+    Result = Ntfs3gRosMount(Context,
+                            ReadOnly ? &Ntfs3gUserReadOnlyOperations :
+                                       &Ntfs3gUserReadWriteOperations,
                             DeviceLength, SectorSize, Volume);
     Error = Result < 0 ? -Result : 0;
     errno = Error;
     return Result;
 }
+
+int
+Ntfs3gRosMountPath(const char *Path,
+                   int ReadOnly,
+                   NTFS3G_ROS_VOLUME **Volume)
+{
+    HANDLE Handle;
+    int Result;
+    int Error;
+
+    if (!Path || !Volume) {
+        errno = EINVAL;
+        return -EINVAL;
+    }
+
+    Handle = CreateFileA(Path,
+                         GENERIC_READ | (ReadOnly ? 0 : GENERIC_WRITE),
+                         FILE_SHARE_READ,
+                         NULL,
+                         OPEN_EXISTING,
+                         FILE_ATTRIBUTE_NORMAL,
+                         NULL);
+    if (Handle == INVALID_HANDLE_VALUE) {
+        Error = Ntfs3gUserErrorToErrno(GetLastError());
+        errno = Error;
+        return -Error;
+    }
+
+    Result = Ntfs3gRosMountHandle(Handle, ReadOnly, Volume);
+    Error = Result < 0 ? -Result : 0;
+    CloseHandle(Handle);
+    errno = Error;
+    return Result;
+}
+
+#else
+
+#include <errno.h>
+#include <fcntl.h>
+#include <pthread.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
+
+#include "ntfs3g_ros.h"
+
+typedef struct _NTFS3G_USER_DEVICE
+{
+    int FileDescriptor;
+} NTFS3G_USER_DEVICE;
+
+static pthread_mutex_t Ntfs3gUserRuntimeLock = PTHREAD_MUTEX_INITIALIZER;
+
+void *
+Ntfs3gRosHostAllocate(size_t Size)
+{
+    return malloc(Size);
+}
+
+void
+Ntfs3gRosHostFree(void *Buffer)
+{
+    free(Buffer);
+}
+
+void
+Ntfs3gRosHostAcquire(void)
+{
+    pthread_mutex_lock(&Ntfs3gUserRuntimeLock);
+}
+
+void
+Ntfs3gRosHostRelease(void)
+{
+    pthread_mutex_unlock(&Ntfs3gUserRuntimeLock);
+}
+
+int64_t
+Ntfs3gRosHostGetTime(void)
+{
+    return (int64_t)time(NULL);
+}
+
+void
+Ntfs3gRosHostLog(int IsError,
+                 const char *Message)
+{
+    fputs(Message, IsError ? stderr : stdout);
+}
+
+static int
+Ntfs3gUserRead(void *OpaqueContext,
+               uint64_t Offset,
+               void *Buffer,
+               uint32_t Length,
+               uint32_t *BytesRead)
+{
+    NTFS3G_USER_DEVICE *Context = OpaqueContext;
+    ssize_t Result;
+
+    if (Offset > INT64_MAX)
+        return EINVAL;
+    Result = pread(Context->FileDescriptor, Buffer, Length, (off_t)Offset);
+    if (Result < 0)
+        return errno;
+    *BytesRead = (uint32_t)Result;
+    return 0;
+}
+
+static int
+Ntfs3gUserWrite(void *OpaqueContext,
+                uint64_t Offset,
+                const void *Buffer,
+                uint32_t Length,
+                uint32_t *BytesWritten)
+{
+    NTFS3G_USER_DEVICE *Context = OpaqueContext;
+    ssize_t Result;
+
+    if (Offset > INT64_MAX)
+        return EINVAL;
+    Result = pwrite(Context->FileDescriptor, Buffer, Length, (off_t)Offset);
+    if (Result < 0)
+        return errno;
+    *BytesWritten = (uint32_t)Result;
+    return 0;
+}
+
+static int
+Ntfs3gUserSync(void *OpaqueContext)
+{
+    NTFS3G_USER_DEVICE *Context = OpaqueContext;
+
+    return fsync(Context->FileDescriptor) ? errno : 0;
+}
+
+static void
+Ntfs3gUserClose(void *OpaqueContext)
+{
+    NTFS3G_USER_DEVICE *Context = OpaqueContext;
+
+    close(Context->FileDescriptor);
+    free(Context);
+}
+
+static const NTFS3G_ROS_DEVICE_OPERATIONS Ntfs3gUserReadOnlyOperations = {
+    Ntfs3gUserRead,
+    Ntfs3gUserClose,
+    NULL,
+    NULL
+};
+
+static const NTFS3G_ROS_DEVICE_OPERATIONS Ntfs3gUserReadWriteOperations = {
+    Ntfs3gUserRead,
+    Ntfs3gUserClose,
+    Ntfs3gUserWrite,
+    Ntfs3gUserSync
+};
+
+int
+Ntfs3gRosMountHandle(void *Handle,
+                     int ReadOnly,
+                     NTFS3G_ROS_VOLUME **Volume)
+{
+    NTFS3G_USER_DEVICE *Context;
+    struct stat Status;
+    int FileDescriptor;
+    int Result;
+    int Error;
+
+    if (!Volume || (intptr_t)Handle < 0) {
+        errno = EINVAL;
+        return -EINVAL;
+    }
+
+    FileDescriptor = dup((int)(intptr_t)Handle);
+    if (FileDescriptor < 0)
+        return -errno;
+    if (fstat(FileDescriptor, &Status)) {
+        Error = errno;
+        close(FileDescriptor);
+        errno = Error;
+        return -Error;
+    }
+
+    Context = malloc(sizeof(*Context));
+    if (!Context) {
+        close(FileDescriptor);
+        errno = ENOMEM;
+        return -ENOMEM;
+    }
+    Context->FileDescriptor = FileDescriptor;
+
+    Result = Ntfs3gRosMount(Context,
+                            ReadOnly ? &Ntfs3gUserReadOnlyOperations :
+                                       &Ntfs3gUserReadWriteOperations,
+                            (uint64_t)Status.st_size, 512, Volume);
+    Error = Result < 0 ? -Result : 0;
+    errno = Error;
+    return Result;
+}
+
+int
+Ntfs3gRosMountPath(const char *Path,
+                   int ReadOnly,
+                   NTFS3G_ROS_VOLUME **Volume)
+{
+    int FileDescriptor;
+    int Result;
+    int Error;
+
+    if (!Path || !Volume) {
+        errno = EINVAL;
+        return -EINVAL;
+    }
+
+    FileDescriptor = open(Path, ReadOnly ? O_RDONLY : O_RDWR);
+    if (FileDescriptor < 0)
+        return -errno;
+    Result = Ntfs3gRosMountHandle((void *)(intptr_t)FileDescriptor,
+                                  ReadOnly, Volume);
+    Error = Result < 0 ? -Result : 0;
+    close(FileDescriptor);
+    errno = Error;
+    return Result;
+}
+
+#endif

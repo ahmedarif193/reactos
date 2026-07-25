@@ -30,6 +30,22 @@ typedef struct _NTFS3G_ROS_FILE_INFORMATION
     uint32_t LinkCount;
 } NTFS3G_ROS_FILE_INFORMATION;
 
+typedef struct _NTFS3G_ROS_BASIC_INFORMATION
+{
+    uint64_t CreationTime;
+    uint64_t LastAccessTime;
+    uint64_t LastWriteTime;
+    uint64_t ChangeTime;
+    uint32_t Attributes;
+    uint32_t ValidFields;
+} NTFS3G_ROS_BASIC_INFORMATION;
+
+#define NTFS3G_ROS_BASIC_CREATION_TIME   0x00000001
+#define NTFS3G_ROS_BASIC_LAST_ACCESS_TIME 0x00000002
+#define NTFS3G_ROS_BASIC_LAST_WRITE_TIME 0x00000004
+#define NTFS3G_ROS_BASIC_CHANGE_TIME     0x00000008
+#define NTFS3G_ROS_BASIC_ATTRIBUTES      0x00000010
+
 #define NTFS3G_ROS_MAX_NAME_LENGTH 255
 
 typedef struct _NTFS3G_ROS_DIRECTORY_ENTRY
@@ -47,6 +63,12 @@ typedef struct _NTFS3G_ROS_DEVICE_OPERATIONS
                 uint32_t Length,
                 uint32_t *BytesRead);
     void (*Close)(void *Context);
+    int (*Write)(void *Context,
+                 uint64_t Offset,
+                 const void *Buffer,
+                 uint32_t Length,
+                 uint32_t *BytesWritten);
+    int (*Sync)(void *Context);
 } NTFS3G_ROS_DEVICE_OPERATIONS;
 
 #define NTFS3G_ROS_FILE_READONLY  0x00000001
@@ -54,6 +76,9 @@ typedef struct _NTFS3G_ROS_DEVICE_OPERATIONS
 #define NTFS3G_ROS_FILE_SYSTEM    0x00000004
 #define NTFS3G_ROS_FILE_DIRECTORY 0x00000010
 #define NTFS3G_ROS_FILE_ARCHIVE   0x00000020
+#define NTFS3G_ROS_FILE_TEMPORARY 0x00000100
+#define NTFS3G_ROS_FILE_OFFLINE   0x00001000
+#define NTFS3G_ROS_FILE_NOT_CONTENT_INDEXED 0x00002000
 
 #define NTFS3G_ROS_SEEK_SET 0
 #define NTFS3G_ROS_SEEK_CUR 1
@@ -70,6 +95,9 @@ int
 Ntfs3gRosUnmount(NTFS3G_ROS_VOLUME *Volume);
 
 int
+Ntfs3gRosFlushVolume(NTFS3G_ROS_VOLUME *Volume);
+
+int
 Ntfs3gRosOpenFile(NTFS3G_ROS_VOLUME *Volume,
                   const char *Path,
                   NTFS3G_ROS_FILE **File);
@@ -81,7 +109,52 @@ Ntfs3gRosOpenFileUtf16(NTFS3G_ROS_VOLUME *Volume,
                        NTFS3G_ROS_FILE **File);
 
 int
+Ntfs3gRosCreateDirectory(NTFS3G_ROS_VOLUME *Volume,
+                         const char *Path);
+
+int
+Ntfs3gRosCreateDirectoryUtf16(NTFS3G_ROS_VOLUME *Volume,
+                              const uint16_t *Path,
+                              size_t PathLength);
+
+int
+Ntfs3gRosCreateFile(NTFS3G_ROS_VOLUME *Volume,
+                    const char *Path,
+                    int ReplaceExisting,
+                    NTFS3G_ROS_FILE **File);
+
+int
+Ntfs3gRosCreateFileUtf16(NTFS3G_ROS_VOLUME *Volume,
+                         const uint16_t *Path,
+                         size_t PathLength,
+                         int ReplaceExisting,
+                         NTFS3G_ROS_FILE **File);
+
+int
 Ntfs3gRosCloseFile(NTFS3G_ROS_FILE *File);
+
+int
+Ntfs3gRosFlushFile(NTFS3G_ROS_FILE *File);
+
+int
+Ntfs3gRosCanDeleteFile(NTFS3G_ROS_FILE *File);
+
+/*
+ * Delete the directory entry and consume File whether deletion succeeds or
+ * fails.  Call this only after the final host reference has gone away.
+ */
+int
+Ntfs3gRosDeleteFile(NTFS3G_ROS_FILE *File);
+
+int
+Ntfs3gRosRenameFileUtf16(NTFS3G_ROS_FILE *File,
+                         NTFS3G_ROS_FILE *TargetDirectory,
+                         const uint16_t *Name,
+                         size_t NameLength,
+                         int ReplaceExisting);
+
+void
+Ntfs3gRosTrimFile(NTFS3G_ROS_FILE *File);
 
 int
 Ntfs3gRosReadFile(NTFS3G_ROS_FILE *File,
@@ -95,6 +168,23 @@ Ntfs3gRosReadFileAt(NTFS3G_ROS_FILE *File,
                     void *Buffer,
                     size_t Length,
                     size_t *BytesRead);
+
+int
+Ntfs3gRosWriteFile(NTFS3G_ROS_FILE *File,
+                   const void *Buffer,
+                   size_t Length,
+                   size_t *BytesWritten);
+
+int
+Ntfs3gRosWriteFileAt(NTFS3G_ROS_FILE *File,
+                     uint64_t Offset,
+                     const void *Buffer,
+                     size_t Length,
+                     size_t *BytesWritten);
+
+int
+Ntfs3gRosSetFileSize(NTFS3G_ROS_FILE *File,
+                     uint64_t Size);
 
 int
 Ntfs3gRosSeekFile(NTFS3G_ROS_FILE *File,
@@ -116,6 +206,27 @@ Ntfs3gRosGetFileName(const NTFS3G_ROS_FILE *File);
 int
 Ntfs3gRosGetFileInformation(const NTFS3G_ROS_FILE *File,
                             NTFS3G_ROS_FILE_INFORMATION *Information);
+
+int
+Ntfs3gRosSetBasicInformation(
+    NTFS3G_ROS_FILE *File,
+    const NTFS3G_ROS_BASIC_INFORMATION *Information);
+
+int
+Ntfs3gRosGetExtendedAttributes(
+    NTFS3G_ROS_FILE *File,
+    void *Buffer,
+    size_t BufferLength,
+    size_t *AttributeLength);
+
+int
+Ntfs3gRosSetExtendedAttributes(
+    NTFS3G_ROS_FILE *File,
+    const void *Buffer,
+    size_t BufferLength);
+
+int
+Ntfs3gRosRemoveExtendedAttributes(NTFS3G_ROS_FILE *File);
 
 int
 Ntfs3gRosRestartDirectory(NTFS3G_ROS_FILE *File);
@@ -149,6 +260,10 @@ Ntfs3gRosGetFreeClusterCount(const NTFS3G_ROS_VOLUME *Volume);
 uint64_t
 Ntfs3gRosGetVolumeSerialNumber(const NTFS3G_ROS_VOLUME *Volume);
 
+int
+Ntfs3gRosReadVolumeSerialNumber(NTFS3G_ROS_VOLUME *Volume,
+                                uint64_t *SerialNumber);
+
 const char *
 Ntfs3gRosGetVolumeName(const NTFS3G_ROS_VOLUME *Volume);
 
@@ -157,6 +272,11 @@ Ntfs3gRosGetVolumeNameUtf16(const NTFS3G_ROS_VOLUME *Volume,
                             uint16_t *Buffer,
                             size_t BufferLength,
                             size_t *NameLength);
+
+int
+Ntfs3gRosSetVolumeNameUtf16(NTFS3G_ROS_VOLUME *Volume,
+                            const uint16_t *Name,
+                            size_t NameLength);
 
 uint8_t
 Ntfs3gRosGetMajorVersion(const NTFS3G_ROS_VOLUME *Volume);
@@ -175,6 +295,11 @@ int
 Ntfs3gRosMountHandle(void *Handle,
                      int ReadOnly,
                      NTFS3G_ROS_VOLUME **Volume);
+
+int
+Ntfs3gRosMountPath(const char *Path,
+                   int ReadOnly,
+                   NTFS3G_ROS_VOLUME **Volume);
 
 #ifdef __cplusplus
 }
