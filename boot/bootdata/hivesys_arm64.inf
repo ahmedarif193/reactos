@@ -44,13 +44,17 @@ HKLM,"SYSTEM\CurrentControlSet\Services\Nwifi","ImagePath",0x00020000,"system32\
 HKLM,"SYSTEM\CurrentControlSet\Services\Nwifi","Group",0x00000000,"NDIS"
 HKLM,"SYSTEM\CurrentControlSet\Services\Nwifi","DisplayName",0x00000000,"ReactOS Native WiFi Service"
 
-; CYW43455 SDIO WiFi miniport: bound when the SDIO bus enumerates the Broadcom
-; WiFi function (after bcm2712 drives WL_ON). Net-class instance is created at
-; runtime from cyw43455.inf, matching the RP1\GEM pattern.
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\SDIO#VEN_02D0&DEV_A9BF","Service",0x00000000,"cyw43455"
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\SDIO#VEN_02D0&DEV_A9BF","ClassGUID",0x00000000,"{4D36E972-E325-11CE-BFC1-08002BE10318}"
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\SDIO#VEN_02D0&DEV_4345","Service",0x00000000,"cyw43455"
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\SDIO#VEN_02D0&DEV_4345","ClassGUID",0x00000000,"{4D36E972-E325-11CE-BFC1-08002BE10318}"
+; The CYW43455 SDIO WiFi function is intentionally not seeded in the
+; CriticalDeviceDatabase. It is not a boot device, so it must install the
+; ordinary way: umpnpmgr matches SDIO\VEN_02D0&DEV_4345&FUNC_1 against
+; cyw43455.inf and runs the Net class installer (hivesys.inf registers
+; NetCfgx.dll,NetClassInstaller for {4D36E972-...}), which is what creates the
+; NetCfgInstanceId, Linkage, the Control\Network ...\Connection object that
+; Network Connections enumerates, and the Tcpip interface parameters. A
+; CriticalDeviceDatabase entry binds the service at enumeration time, so the
+; device is already started before umpnpmgr runs and the class installer never
+; executes -- leaving the adapter invisible to netshell. This mirrors the
+; RP1\GEM decision above.
 
 HKLM,"SYSTEM\CurrentControlSet\Services\cyw43455","Type",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\cyw43455","Start",0x00010001,0x00000003
