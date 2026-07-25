@@ -373,13 +373,23 @@ MiniIndicateReceivePacket(
 
                 LookAheadSize = TotalBufferLength - HeaderSize;
 
-                LookAheadBuffer = ExAllocatePool(NonPagedPool, LookAheadSize);
-                if (!LookAheadBuffer)
+                if (Adapter->LookaheadCacheSize < LookAheadSize)
                 {
-                    NDIS_DbgPrint(MIN_TRACE, ("Failed to allocate lookahead buffer!\n"));
-                    KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
-                    return;
+                    PVOID NewCache = ExAllocatePool(NonPagedPool, LookAheadSize);
+                    if (!NewCache)
+                    {
+                        NDIS_DbgPrint(MIN_TRACE, ("Failed to allocate lookahead buffer!\n"));
+                        KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
+                        return;
+                    }
+                    if (Adapter->LookaheadCache != NULL)
+                    {
+                        ExFreePool(Adapter->LookaheadCache);
+                    }
+                    Adapter->LookaheadCache = NewCache;
+                    Adapter->LookaheadCacheSize = LookAheadSize;
                 }
+                LookAheadBuffer = Adapter->LookaheadCache;
 
                 CopyBufferChainToBuffer(LookAheadBuffer,
                                         NdisBuffer,
@@ -395,8 +405,6 @@ MiniIndicateReceivePacket(
                      LookAheadBuffer,
                      LookAheadSize,
                      TotalBufferLength - HeaderSize);
-
-                ExFreePool(LookAheadBuffer);
             }
         }
 
@@ -2581,6 +2589,13 @@ NdisIPnPRemoveDevice(
     {
         ExFreePool(Adapter->NdisMiniportBlock.AllocatedResourcesTranslated);
         Adapter->NdisMiniportBlock.AllocatedResourcesTranslated = NULL;
+    }
+
+    if (Adapter->LookaheadCache)
+    {
+        ExFreePool(Adapter->LookaheadCache);
+        Adapter->LookaheadCache = NULL;
+        Adapter->LookaheadCacheSize = 0;
     }
 
     IoDeleteDevice(DeviceObject);

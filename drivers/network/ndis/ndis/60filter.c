@@ -264,12 +264,18 @@ Ndis6FilterDispatchReceive(
         return;
     }
 
-    Bottom->DriverBlock->Characteristics.ReceiveNetBufferListsHandler(
-        Bottom->FilterModuleContext,
-        NetBufferLists,
-        PortNumber,
-        NumberOfNetBufferLists,
-        ReceiveFlags);
+    {
+        PNET_BUFFER_LIST CurrentNbl;
+        PNET_BUFFER_LIST NextNbl;
+
+        for (CurrentNbl = NetBufferLists; CurrentNbl != NULL; CurrentNbl = NextNbl)
+        {
+            NextNbl = NET_BUFFER_LIST_NEXT_NBL(CurrentNbl);
+            NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = NULL;
+
+            Bottom->DriverBlock->Characteristics.ReceiveNetBufferListsHandler(Bottom->FilterModuleContext, CurrentNbl, PortNumber, 1, ReceiveFlags);
+        }
+    }
 }
 
 VOID

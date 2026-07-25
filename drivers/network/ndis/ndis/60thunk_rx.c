@@ -309,14 +309,9 @@ NdisMIndicateReceiveNetBufferLists(
      * The driver may indicate a chain of NBLs in one call. Filters can
      * reorder/drop independently, so we split the chain so each NBL
      * walks the filter stack on its own. */
-    for (CurrentNbl = NetBufferLists; CurrentNbl != NULL; CurrentNbl = NextNbl)
-    {
-        NextNbl = NET_BUFFER_LIST_NEXT_NBL(CurrentNbl);
-        NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = NULL;
-
-        Ndis6FilterDispatchReceive(Adapter, CurrentNbl, PortNumber,
-                                   1, ReceiveFlags);
-    }
+    UNREFERENCED_PARAMETER(NextNbl);
+    UNREFERENCED_PARAMETER(CurrentNbl);
+    Ndis6FilterDispatchReceive(Adapter, NetBufferLists, PortNumber, NumberOfNetBufferLists, ReceiveFlags);
 }
 
 /* ============================================================================
@@ -403,6 +398,48 @@ Ndis6FilterTerminalReceive(
     }
 
     ResourcesFlag = (ReceiveFlags & NDIS_RECEIVE_FLAGS_RESOURCES) != 0;
+
+    if (ResourcesFlag)
+    {
+        PNDIS_PACKET BatchArray[16];
+        UINT         BatchCount = 0;
+        UINT         j;
+
+        for (CurrentNbl = NetBufferLists; CurrentNbl != NULL; CurrentNbl = NET_BUFFER_LIST_NEXT_NBL(CurrentNbl))
+        {
+            PNET_BUFFER Nb;
+
+            for (Nb = NET_BUFFER_LIST_FIRST_NB(CurrentNbl); Nb != NULL; Nb = NET_BUFFER_NEXT_NB(Nb))
+            {
+                PNDIS_PACKET LegacyPacket = Ndis6RxBuildLegacyPacket(Ext, CurrentNbl, Nb, TRUE);
+                if (LegacyPacket == NULL)
+                    continue;
+                BatchArray[BatchCount++] = LegacyPacket;
+                if (BatchCount == ARRAYSIZE(BatchArray))
+                {
+                    MiniIndicateReceivePacket((NDIS_HANDLE)Adapter, BatchArray, BatchCount);
+                    for (j = 0; j < BatchCount; j++)
+                        Ndis6RxFreeLegacyPacket(BatchArray[j]);
+                    BatchCount = 0;
+                }
+            }
+        }
+
+        if (BatchCount != 0)
+        {
+            MiniIndicateReceivePacket((NDIS_HANDLE)Adapter, BatchArray, BatchCount);
+            for (j = 0; j < BatchCount; j++)
+                Ndis6RxFreeLegacyPacket(BatchArray[j]);
+        }
+
+        for (CurrentNbl = NetBufferLists; CurrentNbl != NULL; CurrentNbl = NextNbl)
+        {
+            NextNbl = NET_BUFFER_LIST_NEXT_NBL(CurrentNbl);
+            NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = NULL;
+            Ndis6FilterDispatchReturn(Adapter, CurrentNbl, 0);
+        }
+        return;
+    }
 
     for (CurrentNbl = NetBufferLists; CurrentNbl != NULL; CurrentNbl = NextNbl)
     {
@@ -713,6 +750,7 @@ NdisMIndicateStatusEx(
 #define NDIS6_STATUS_SNAPSHOT_MAX  16
         struct
         {
+            PADAPTER_BINDING     Binding;
             PVOID                Context;
             STATUS_HANDLER       StatusHandler;
             STATUS_COMPLETE_HANDLER StatusCompleteHandler;
@@ -731,6 +769,10 @@ NdisMIndicateStatusEx(
             if (Binding->ProtocolBinding == NULL)
                 continue;
 
+            if (!NdisReferenceAdapterBinding(Binding))
+                continue;
+
+            Snapshot[SnapCount].Binding = Binding;
             Snapshot[SnapCount].Context =
                 Binding->NdisOpenBlock.ProtocolBindingContext;
             Snapshot[SnapCount].StatusHandler =
@@ -755,6 +797,7 @@ NdisMIndicateStatusEx(
             {
                 Snapshot[i].StatusCompleteHandler(Snapshot[i].Context);
             }
+            NdisDereferenceAdapterBinding(Snapshot[i].Binding);
         }
     }
 }
