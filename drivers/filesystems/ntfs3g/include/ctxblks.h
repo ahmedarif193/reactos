@@ -9,6 +9,43 @@
 
 #pragma once
 
+/*
+ * Names a lookup has already proved absent. Path resolution costs a walk of the
+ * MFT and index B-trees even when everything it touches is already in the block
+ * cache, and loaders probe the same missing names repeatedly. Entries are only
+ * written while FcbListResource is held; any namespace change just bumps
+ * NamespaceGeneration, which retires every entry at once.
+ */
+#define NTFS_NEGATIVE_CACHE_SIZE 64
+#define NTFS_NEGATIVE_NAME_MAX   128
+
+typedef struct _NtfsNegativeEntry
+{
+    ULONGLONG Hash;
+    LONG Generation;
+    USHORT Length;
+    WCHAR Name[NTFS_NEGATIVE_NAME_MAX];
+} NtfsNegativeEntry;
+
+/*
+ * Paths whose MFT record is already known. Resolving a path walks the MFT and
+ * the index B-trees with Unicode collation every time, which measurement showed
+ * costs about 25us even when every block it touches is already cached. Entries
+ * are retired wholesale by NamespaceGeneration, which is also what keeps an
+ * entry from surviving into a reused MFT record.
+ */
+#define NTFS_PATH_CACHE_SIZE 64
+
+typedef struct _NtfsPathEntry
+{
+    ULONGLONG Hash;
+    ULONGLONG FileId;
+    LONG Generation;
+    USHORT Length;
+    WCHAR Name[NTFS_NEGATIVE_NAME_MAX];
+} NtfsPathEntry;
+
+
 typedef struct _VolumeContextBlock
 {
     PNTFS3G_ROS_KM_VOLUME Volume;
@@ -22,7 +59,17 @@ typedef struct _VolumeContextBlock
     BOOLEAN ShutdownRegistered;
     BOOLEAN ShutdownStarted;
     BOOLEAN Dismounted;
+    volatile LONG NamespaceGeneration;
+    NtfsNegativeEntry NegativeCache[NTFS_NEGATIVE_CACHE_SIZE];
+    NtfsPathEntry PathCache[NTFS_PATH_CACHE_SIZE];
 } VolumeContextBlock, *PVolumeContextBlock;
+
+/* Any change to the namespace retires every remembered absence at once. */
+FORCEINLINE VOID
+NtfsInvalidateNamespace(_In_ PVolumeContextBlock Volume)
+{
+    InterlockedIncrement(&Volume->NamespaceGeneration);
+}
 
 typedef struct _FileContextBlock
 {
@@ -43,6 +90,12 @@ typedef struct _FileContextBlock
     NTFS3G_ROS_FILE *File;
     NTFS3G_ROS_FILE_INFORMATION Information;
     UNICODE_STRING FileName;
+    /*
+     * Set while the size recorded in the MFT record runs ahead of the real one
+     * because an extending write grew the allocation in advance. Cleanup puts
+     * the exact size back; queries always answer from CommonFCBHeader.
+     */
+    BOOLEAN SizeGrownAhead;
 } FileContextBlock, *PFileContextBlock;
 
 typedef struct _HandleContextBlock

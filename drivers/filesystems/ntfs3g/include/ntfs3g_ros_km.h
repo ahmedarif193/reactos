@@ -35,6 +35,12 @@ NTSTATUS
 Ntfs3gRosStatusFromError(int Error);
 
 NTSTATUS
+Ntfs3gRosOpenUnicodeFileById(PNTFS3G_ROS_KM_VOLUME Volume,
+                             PCUNICODE_STRING Path,
+                             ULONGLONG FileId,
+                             NTFS3G_ROS_FILE **File);
+
+NTSTATUS
 Ntfs3gRosOpenUnicodeFile(PNTFS3G_ROS_KM_VOLUME Volume,
                          PCUNICODE_STRING Path,
                          NTFS3G_ROS_FILE **File);
