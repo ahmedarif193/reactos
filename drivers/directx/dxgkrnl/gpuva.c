@@ -61,9 +61,9 @@
 #define GPUVA_MAX_PROCESS_RANGES    1024UL
 #define GPUVA_MAX_TRANSIENT_RANGES  (GPUVA_MAX_PROCESS_RANGES * 3UL + 2UL)
 
-/* Kept disabled until residency references, paging packets, and allocation
- * destruction share one completion-driven state machine. */
-#define GPUVA_RESIDENCY_END_TO_END  0
+/* Residency references, paging packets, and allocation destruction now share
+ * one completion-driven state machine (paging.c). */
+#define GPUVA_RESIDENCY_END_TO_END  1
 
 /*
  * GPU VA space starts at 64 KB (skip the first 16 pages as a guard region
@@ -2734,25 +2734,24 @@ DxgkGpuVaMakeResident(
     *OutCompleted = 0;
     *OutNumBytesToTrim = 0;
     *OutPagingFenceValue = 0;
-    if (!GPUVA_RESIDENCY_END_TO_END)
-        return STATUS_NOT_SUPPORTED;
 
     /*
-     * Each list entry adds one residency reference on its allocation and, on
-     * the zero-to-one transition of an evicted allocation, performs the
-     * placement synchronously (this adapter set has no asynchronous paging
-     * engine yet, so synchronous completion with no pending fence is the
-     * truthful native contract).  The request is atomic: any failure rolls
-     * back every reference and exactly the placements this call made.
+     * Each list entry adds one residency reference charged to the calling
+     * device and, on the zero-to-one transition of an evicted allocation,
+     * establishes the placement through a real paging packet.  The request is
+     * atomic: any failure rolls back every reference this call took and
+     * exactly the placements it made.
      */
     {
         BOOLEAN *Placed;
+        BOOLEAN *Charged;
         NTSTATUS Status = STATUS_SUCCESS;
 
-        Placed = ExAllocatePoolWithTag(PagedPool, NumAllocations * sizeof(*Placed), TAG_DXGK_GPUVA);
+        Placed = ExAllocatePoolWithTag(PagedPool, NumAllocations * 2 * sizeof(*Placed), TAG_DXGK_GPUVA);
         if (Placed == NULL)
             return STATUS_INSUFFICIENT_RESOURCES;
-        RtlZeroMemory(Placed, NumAllocations * sizeof(*Placed));
+        RtlZeroMemory(Placed, NumAllocations * 2 * sizeof(*Placed));
+        Charged = Placed + NumAllocations;
 
         for (i = 0; i < NumAllocations; i++)
         {
@@ -2761,29 +2760,38 @@ DxgkGpuVaMakeResident(
             Status = DxgkVidMmReferenceProcessAllocation((HANDLE)(ULONG_PTR)AllocationList[i], Adapter, Process, &Alloc);
             if (NT_SUCCESS(Status))
             {
-                InterlockedIncrement(&Alloc->ResidencyReferenceCount);
-                if (!Alloc->Resident)
+                Status = DxgkVidMmAcquireDeviceResidencyReference(Alloc, Device);
+                if (NT_SUCCESS(Status))
                 {
-                    Status = DxgkVidMmMakeResident(Alloc, Adapter);
-                    if (NT_SUCCESS(Status))
-                        Placed[i] = TRUE;
-                    else if (Status == STATUS_NO_MEMORY || Status == STATUS_GRAPHICS_NO_VIDEO_MEMORY)
-                        *OutNumBytesToTrim += Alloc->Size;
-                    if (NT_SUCCESS(Status) && Device != NULL && hPagingSyncObject != 0 && PagingFenceCounter != NULL)
+                    Charged[i] = TRUE;
+                    if (!Alloc->Resident)
                     {
-                        ULONG64 FenceValue = (ULONG64)InterlockedIncrement64(PagingFenceCounter);
-
-                        Status = DxgkVidMmSubmitAperturePagingPacket(Adapter, Device, Alloc, TRUE, hPagingSyncObject, FenceValue);
+                        Status = DxgkVidMmMakeResident(Alloc, Adapter);
                         if (NT_SUCCESS(Status))
+                            Placed[i] = TRUE;
+                        else if (Status == STATUS_NO_MEMORY || Status == STATUS_GRAPHICS_NO_VIDEO_MEMORY)
+                            *OutNumBytesToTrim += Alloc->Size;
+                        if (NT_SUCCESS(Status) && Device != NULL && hPagingSyncObject != 0 && PagingFenceCounter != NULL)
                         {
-                            *OutPagingFenceValue = FenceValue;
-                            PacketsQueued++;
+                            ULONG64 FenceValue = (ULONG64)InterlockedIncrement64(PagingFenceCounter);
+
+                            Status = DxgkVidMmSubmitAperturePagingPacket(Adapter, Device, Alloc, TRUE, hPagingSyncObject, FenceValue);
+                            if (NT_SUCCESS(Status))
+                            {
+                                *OutPagingFenceValue = FenceValue;
+                                PacketsQueued++;
+                            }
+                            else
+                                (VOID)DxgkVidMmEvict(Alloc);
                         }
-                        else
-                            (VOID)DxgkVidMmEvict(Alloc);
                     }
                     if (!NT_SUCCESS(Status))
-                        InterlockedDecrement(&Alloc->ResidencyReferenceCount);
+                    {
+                        BOOLEAN ReachedZero;
+
+                        (VOID)DxgkVidMmReleaseDeviceResidencyReference(Alloc, Device, &ReachedZero);
+                        Charged[i] = FALSE;
+                    }
                 }
                 DxgkVidMmDereferenceAllocation(Alloc);
             }
@@ -2793,10 +2801,12 @@ DxgkGpuVaMakeResident(
                 while (i-- > 0)
                 {
                     PDXGKVMM_ALLOCATION Undo;
+                    BOOLEAN ReachedZero;
 
                     if (!NT_SUCCESS(DxgkVidMmReferenceProcessAllocation((HANDLE)(ULONG_PTR)AllocationList[i], Adapter, Process, &Undo)))
                         continue;
-                    InterlockedDecrement(&Undo->ResidencyReferenceCount);
+                    if (Charged[i])
+                        (VOID)DxgkVidMmReleaseDeviceResidencyReference(Undo, Device, &ReachedZero);
                     if (Placed[i])
                         (VOID)DxgkVidMmEvict(Undo);
                     DxgkVidMmDereferenceAllocation(Undo);
@@ -2827,6 +2837,7 @@ NTSTATUS
 DxgkGpuVaEvict(
     _In_    PDXGKRNL_ADAPTER   Adapter,
     _In_    PDXGKRNL_PROCESS   Process,
+    _In_opt_ PDXGKRNL_DEVICE   Device,
     _In_reads_(NumAllocations) CONST D3DKMT_HANDLE *AllocationList,
     _In_    ULONG              NumAllocations,
     _In_    BOOLEAN            EvictOnlyIfNecessary,
@@ -2842,14 +2853,13 @@ DxgkGpuVaEvict(
         return STATUS_INVALID_PARAMETER;
 
     *OutNumBytesToTrim = 0;
-    if (!GPUVA_RESIDENCY_END_TO_END)
-        return STATUS_NOT_SUPPORTED;
 
     /*
-     * Each list entry removes one residency reference.  The whole request is
-     * validated first so a bad handle or an over-evicted allocation fails the
-     * call before any reference changes; the release pass then drops the
-     * references and evicts each allocation whose count reaches zero.  With
+     * Each list entry removes one residency reference held by the calling
+     * device.  The whole request is validated first so a bad handle, or a
+     * device evicting more than it made resident, fails the call before any
+     * reference changes; the release pass then drops the references and
+     * evicts each allocation whose total reaches zero.  With
      * EvictOnlyIfNecessary the references still drop but the placement stays
      * as a pressure-trim candidate.
      */
@@ -2868,7 +2878,7 @@ DxgkGpuVaEvict(
             if (AllocationList[j] == AllocationList[i])
                 Duplicates++;
         }
-        Outstanding = InterlockedCompareExchange(&Alloc->ResidencyReferenceCount, 0, 0);
+        Outstanding = DxgkVidMmQueryDeviceResidencyReferenceCount(Alloc, Device);
         DxgkVidMmDereferenceAllocation(Alloc);
         if (Outstanding < (LONG)Duplicates)
             return STATUS_INVALID_PARAMETER;
@@ -2878,14 +2888,15 @@ DxgkGpuVaEvict(
     {
         PDXGKVMM_ALLOCATION Alloc;
         NTSTATUS Status = DxgkVidMmReferenceProcessAllocation((HANDLE)(ULONG_PTR)AllocationList[i], Adapter, Process, &Alloc);
+        BOOLEAN ReachedZero = FALSE;
 
         if (!NT_SUCCESS(Status))
             return Status;
-        if (InterlockedDecrement(&Alloc->ResidencyReferenceCount) == 0 &&
-            Alloc->Resident && !EvictOnlyIfNecessary)
-        {
+        (VOID)DxgkVidMmReleaseDeviceResidencyReference(Alloc, Device, &ReachedZero);
+        if (ReachedZero && Alloc->Resident && !EvictOnlyIfNecessary)
             (VOID)DxgkVidMmEvict(Alloc);
-        }
+        else if (ReachedZero && Alloc->Resident)
+            *OutNumBytesToTrim += Alloc->Size;
         DxgkVidMmDereferenceAllocation(Alloc);
     }
 

@@ -527,8 +527,12 @@ DxgkpVidMmInitializeAllocationLifetime(
     Allocation->LogicalReferenceCount = 1;
     Allocation->LogicalHandleReferenceDropped = 0;
     /* Native WDDM 2 allocations begin life resident with one implicit
-     * residency reference; the first Evict removes it. */
+     * residency reference owned by the creating device; that device's first
+     * Evict removes it.  It is tracked as a flag rather than a list entry
+     * because the owning device is assigned after this initializer runs. */
     Allocation->ResidencyReferenceCount = 1;
+    Allocation->ImplicitResidencyReference = TRUE;
+    InitializeListHead(&Allocation->ResidencyReferenceList);
     Allocation->SubmissionResidencyPinCount = 0;
     KeInitializeEvent(&Allocation->ReferencesDrainedEvent, NotificationEvent, FALSE);
     KeInitializeEvent(&Allocation->LogicalReferencesDrainedEvent, NotificationEvent, FALSE);
@@ -6547,6 +6551,181 @@ DxgkpVidMmEvictLocked(
     return STATUS_SUCCESS;
 }
 
+/* ========================================================================
+ * Per-device residency references
+ *
+ * MakeResident charges the calling device; Evict may only release what that
+ * device holds.  The caller owns Allocation->ResidencyLock.
+ * ====================================================================== */
+
+static PDXGKVMM_RESIDENCY_REF
+DxgkpVidMmFindResidencyReferenceLocked(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_opt_ PDXGKRNL_DEVICE Device)
+{
+    PLIST_ENTRY Entry;
+
+    if (Allocation->ResidencyReferenceList.Flink == NULL)
+        return NULL;
+    for (Entry = Allocation->ResidencyReferenceList.Flink;
+         Entry != &Allocation->ResidencyReferenceList;
+         Entry = Entry->Flink)
+    {
+        PDXGKVMM_RESIDENCY_REF Ref = CONTAINING_RECORD(Entry, DXGKVMM_RESIDENCY_REF, Entry);
+
+        if (Ref->Device == Device)
+            return Ref;
+    }
+    return NULL;
+}
+
+static NTSTATUS
+DxgkpVidMmAcquireDeviceResidencyReferenceLocked(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_opt_ PDXGKRNL_DEVICE Device)
+{
+    PDXGKVMM_RESIDENCY_REF Ref;
+
+    if (Allocation->ResidencyReferenceList.Flink == NULL)
+        InitializeListHead(&Allocation->ResidencyReferenceList);
+    Ref = DxgkpVidMmFindResidencyReferenceLocked(Allocation, Device);
+    if (Ref == NULL)
+    {
+        Ref = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Ref), TAG_VIDMM_ALLOC);
+        if (Ref == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+        RtlZeroMemory(Ref, sizeof(*Ref));
+        Ref->Device = Device;
+        InsertTailList(&Allocation->ResidencyReferenceList, &Ref->Entry);
+    }
+    if (Ref->Count == MAXLONG)
+        return STATUS_INTEGER_OVERFLOW;
+    Ref->Count++;
+    InterlockedIncrement(&Allocation->ResidencyReferenceCount);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+DxgkVidMmAcquireDeviceResidencyReference(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_opt_ PDXGKRNL_DEVICE Device)
+{
+    NTSTATUS Status;
+
+    if (Allocation == NULL)
+        return STATUS_INVALID_PARAMETER;
+    (VOID)KeWaitForSingleObject(&Allocation->ResidencyLock, Executive, KernelMode, FALSE, NULL);
+    Status = DxgkpVidMmAcquireDeviceResidencyReferenceLocked(Allocation, Device);
+    KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+    return Status;
+}
+
+LONG
+DxgkVidMmQueryDeviceResidencyReferenceCount(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_opt_ PDXGKRNL_DEVICE Device)
+{
+    PDXGKVMM_RESIDENCY_REF Ref;
+    LONG Count;
+
+    if (Allocation == NULL)
+        return 0;
+    (VOID)KeWaitForSingleObject(&Allocation->ResidencyLock, Executive, KernelMode, FALSE, NULL);
+    Ref = DxgkpVidMmFindResidencyReferenceLocked(Allocation, Device);
+    Count = Ref != NULL ? Ref->Count : 0;
+    if (Allocation->ImplicitResidencyReference && Device == Allocation->Device)
+        Count++;
+    KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+    return Count;
+}
+
+BOOLEAN
+DxgkVidMmDeviceHoldsResidencyReference(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_opt_ PDXGKRNL_DEVICE Device)
+{
+    return DxgkVidMmQueryDeviceResidencyReferenceCount(Allocation, Device) > 0;
+}
+
+static BOOLEAN
+DxgkpVidMmReleaseDeviceResidencyReferenceLocked(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_opt_ PDXGKRNL_DEVICE Device,
+    _Out_ PBOOLEAN OutReachedZero)
+{
+    PDXGKVMM_RESIDENCY_REF Ref;
+
+    if (OutReachedZero != NULL)
+        *OutReachedZero = FALSE;
+    Ref = DxgkpVidMmFindResidencyReferenceLocked(Allocation, Device);
+    if (Ref == NULL || Ref->Count == 0)
+    {
+        /* Fall back to the created-resident reference the owning device
+         * still holds. */
+        if (!Allocation->ImplicitResidencyReference || Device != Allocation->Device)
+            return FALSE;
+        Allocation->ImplicitResidencyReference = FALSE;
+        if (InterlockedDecrement(&Allocation->ResidencyReferenceCount) == 0 && OutReachedZero != NULL)
+            *OutReachedZero = TRUE;
+        return TRUE;
+    }
+    Ref->Count--;
+    if (Ref->Count == 0)
+    {
+        RemoveEntryList(&Ref->Entry);
+        ExFreePoolWithTag(Ref, TAG_VIDMM_ALLOC);
+    }
+    if (InterlockedDecrement(&Allocation->ResidencyReferenceCount) == 0 && OutReachedZero != NULL)
+        *OutReachedZero = TRUE;
+    return TRUE;
+}
+
+BOOLEAN
+DxgkVidMmReleaseDeviceResidencyReference(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_opt_ PDXGKRNL_DEVICE Device,
+    _Out_ PBOOLEAN OutReachedZero)
+{
+    BOOLEAN Released;
+
+    if (OutReachedZero != NULL)
+        *OutReachedZero = FALSE;
+    if (Allocation == NULL)
+        return FALSE;
+    (VOID)KeWaitForSingleObject(&Allocation->ResidencyLock, Executive, KernelMode, FALSE, NULL);
+    Released = DxgkpVidMmReleaseDeviceResidencyReferenceLocked(Allocation, Device, OutReachedZero);
+    KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+    return Released;
+}
+
+VOID
+DxgkVidMmReleaseAllDeviceResidencyReferences(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_opt_ PDXGKRNL_DEVICE Device)
+{
+    PDXGKVMM_RESIDENCY_REF Ref;
+
+    if (Allocation == NULL)
+        return;
+    (VOID)KeWaitForSingleObject(&Allocation->ResidencyLock, Executive, KernelMode, FALSE, NULL);
+    Ref = DxgkpVidMmFindResidencyReferenceLocked(Allocation, Device);
+    if (Ref != NULL)
+    {
+        LONG Count = Ref->Count;
+
+        RemoveEntryList(&Ref->Entry);
+        ExFreePoolWithTag(Ref, TAG_VIDMM_ALLOC);
+        while (Count-- > 0)
+            InterlockedDecrement(&Allocation->ResidencyReferenceCount);
+    }
+    if (Allocation->ImplicitResidencyReference && Device == Allocation->Device)
+    {
+        Allocation->ImplicitResidencyReference = FALSE;
+        InterlockedDecrement(&Allocation->ResidencyReferenceCount);
+    }
+    KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+}
+
 NTSTATUS
 DxgkVidMmEvict(
     _In_ PDXGKVMM_ALLOCATION Allocation)
@@ -7131,6 +7310,71 @@ DxgkVidMmGetAllocationPrimaryAddress(
  * Must be called while the allocation's SegmentId/SegmentOffset placement
  * is still valid.
  */
+/*
+ * DxgkpVidMmSubmitTransferPagingPacket
+ *
+ * Describes the segment<->backing move as a DXGK_OPERATION_TRANSFER paging
+ * packet and runs it through the paging state machine.  The backing side is
+ * named by an MDL (SegmentId 0) exactly as the DDI requires; the segment side
+ * carries the placement offset.  Returns STATUS_NOT_SUPPORTED when the
+ * miniport cannot describe the transfer, so the caller can fall back.
+ */
+static NTSTATUS
+DxgkpVidMmSubmitTransferPagingPacket(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ PDXGKRNL_SEGMENT Segment,
+    _In_ BOOLEAN ToSegment)
+{
+    DXGKRNL_PAGING_OP Op;
+    PMDL Mdl;
+    NTSTATUS Status;
+
+    if (!DxgkPagingOperationSupported(Adapter, DxgkPagingOpTransfer))
+        return STATUS_NOT_SUPPORTED;
+    if (Allocation->SystemMemory == NULL || Allocation->Size == 0 || Allocation->Size > MAXULONG)
+        return STATUS_NOT_SUPPORTED;
+    /* Idle-prepare, quiesce, and TDR recovery run inside the KMD exclusive
+     * boundary with submission already closing; those callers take the CPU
+     * path instead of queueing a packet that can never retire. */
+    if (Adapter->KmdExclusiveOwnerThread == PsGetCurrentThread())
+        return STATUS_NOT_SUPPORTED;
+    if (InterlockedCompareExchange(&Adapter->SubmitDmaStopping, 0, 0) != 0)
+        return STATUS_NOT_SUPPORTED;
+    if (Allocation->SegmentOffset + Allocation->Size > Segment->Size)
+        return STATUS_INVALID_PARAMETER;
+
+    Mdl = IoAllocateMdl(Allocation->SystemMemory, (ULONG)Allocation->Size, FALSE, FALSE, NULL);
+    if (Mdl == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    MmBuildMdlForNonPagedPool(Mdl);
+
+    RtlZeroMemory(&Op, sizeof(Op));
+    Op.Type = DxgkPagingOpTransfer;
+    Op.hMiniportDevice = Allocation->MiniportDeviceHandle;
+    Op.hMiniportAllocation = Allocation->MiniportHandle;
+    Op.TransferOffset = 0;
+    Op.TransferSize = Allocation->Size;
+    if (ToSegment)
+    {
+        Op.SourceSegmentId = 0;
+        Op.SourceMdl = Mdl;
+        Op.DestinationSegmentId = Allocation->SegmentId;
+        Op.DestinationSegmentAddress.QuadPart = (LONGLONG)Allocation->SegmentOffset;
+    }
+    else
+    {
+        Op.SourceSegmentId = Allocation->SegmentId;
+        Op.SourceSegmentAddress.QuadPart = (LONGLONG)Allocation->SegmentOffset;
+        Op.DestinationSegmentId = 0;
+        Op.DestinationMdl = Mdl;
+    }
+
+    Status = DxgkPagingExecuteSynchronous(Adapter, Allocation->Device, &Op);
+    IoFreeMdl(Mdl);
+    return Status;
+}
+
 static NTSTATUS
 DxgkpVidMmTransferAllocationContent(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -7155,6 +7399,21 @@ DxgkpVidMmTransferAllocationContent(
         return STATUS_NOT_SUPPORTED;
     if (VidMmSegmentIsAperture(Segment))
         return STATUS_SUCCESS;
+
+    /*
+     * Preferred path: a real TRANSFER paging packet built by the miniport and
+     * executed by the GPU engine.  The CPU copy below stays as the fallback
+     * for miniports whose BuildPagingBuffer does not describe transfers.
+     */
+    Status = DxgkpVidMmSubmitTransferPagingPacket(Adapter, Allocation, Segment, ToSegment);
+    if (NT_SUCCESS(Status))
+        return Status;
+    if (Status != STATUS_NOT_SUPPORTED)
+    {
+        DPRINT1("DxgkpVidMmTransferAllocationContent: paging transfer failed 0x%08lx alloc=%p\n", Status, Allocation);
+        return Status;
+    }
+    Status = STATUS_NOT_SUPPORTED;
 
     if (VidMmSegmentIsCpuVisible(Segment))
     {
@@ -7394,8 +7653,20 @@ DxgkVidMmAcquireSubmissionResidencyPin(
 
     if (Allocation == NULL || ExpectedAdapter == NULL || Allocation->Adapter != ExpectedAdapter)
         return STATUS_INVALID_PARAMETER;
+    /* Scheduler admission depends on the paging fence: an allocation whose
+     * paging packet has not retired does not yet have the placement this
+     * submission would patch into its DMA buffer. */
+    if (KeGetCurrentIrql() == PASSIVE_LEVEL && !DxgkPagingAllocationReadyForSubmission(Allocation))
+    {
+        Status = DxgkPagingWaitForFence(ExpectedAdapter, Allocation->PagingFenceId, DXGKP_VIDMM_PAGING_ADMISSION_TIMEOUT_MS);
+        if (!NT_SUCCESS(Status))
+            return Status == STATUS_TIMEOUT ? STATUS_GRAPHICS_ALLOCATION_BUSY : Status;
+    }
     (VOID)KeWaitForSingleObject(&Allocation->ResidencyLock, Executive, KernelMode, FALSE, NULL);
-    if (!Allocation->Resident || ExpectedAdapter->Segments == NULL || Allocation->SegmentId == 0 || Allocation->SegmentId > ExpectedAdapter->SegmentCount || Allocation->SegmentId > 31)
+    (VOID)DxgkPagingSyncPlacement(Allocation);
+    if (!DxgkPagingAllocationReadyForSubmission(Allocation))
+        Status = STATUS_GRAPHICS_ALLOCATION_BUSY;
+    else if (!Allocation->Resident || ExpectedAdapter->Segments == NULL || Allocation->SegmentId == 0 || Allocation->SegmentId > ExpectedAdapter->SegmentCount || Allocation->SegmentId > 31)
         Status = STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
     else if (!DxgkSubmissionResidencyPinTryAcquire(&Allocation->SubmissionResidencyPinCount))
         Status = STATUS_INTEGER_OVERFLOW;
