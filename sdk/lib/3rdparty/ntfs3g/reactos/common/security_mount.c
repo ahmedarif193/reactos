@@ -19,11 +19,17 @@
 #endif
 
 #include <errno.h>
+#include <stdint.h>
+#include <stdlib.h>
 
+#include "attrib.h"
+#include "host.h"
 #include "logging.h"
+#include "misc.h"
 #include "volume.h"
 #include "dir.h"
 #include "index.h"
+#include "security.h"
 
 static ntfschar sii_stream[] = {
     const_cpu_to_le16('$'),
@@ -32,6 +38,25 @@ static ntfschar sii_stream[] = {
     const_cpu_to_le16('I'),
     const_cpu_to_le16(0)
 };
+
+void
+ntfs_generate_guid(GUID *Guid)
+{
+    uint64_t State = (uint64_t)Ntfs3gRosHostGetTime();
+    u8 *Bytes = (u8 *)Guid;
+    unsigned int Index;
+
+    if (!State)
+        State = UINT64_C(0x9e3779b97f4a7c15);
+    for (Index = 0; Index < sizeof(*Guid); Index++) {
+        State ^= State << 13;
+        State ^= State >> 7;
+        State ^= State << 17;
+        Bytes[Index] = (u8)State;
+    }
+    Bytes[7] = (Bytes[7] & 0x0f) | 0x40;
+    Bytes[8] = (Bytes[8] & 0x3f) | 0x80;
+}
 
 static ntfschar sdh_stream[] = {
     const_cpu_to_le16('$'),
@@ -99,12 +124,65 @@ ntfs_close_secure(ntfs_volume *vol)
     return result;
 }
 
-/* The ReactOS hosts are intentionally read-only.  Keep the symbol required by
- * dir.c, but never synthesize or write a descriptor from these builds. */
 int
 ntfs_sd_add_everyone(ntfs_inode *ni)
 {
-    (void)ni;
-    errno = EROFS;
-    return -1;
+    SECURITY_DESCRIPTOR_RELATIVE *Descriptor;
+    ACCESS_ALLOWED_ACE *Ace;
+    ACL *Acl;
+    SID *Sid;
+    int DescriptorLength;
+    int Result;
+
+    DescriptorLength = sizeof(SECURITY_DESCRIPTOR_ATTR) +
+                       2 * (sizeof(SID) + sizeof(le32)) +
+                       sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE);
+    Descriptor = ntfs_calloc(DescriptorLength);
+    if (!Descriptor)
+        return -1;
+
+    Descriptor->revision = SECURITY_DESCRIPTOR_REVISION;
+    Descriptor->control = SE_DACL_PRESENT | SE_SELF_RELATIVE;
+
+    Sid = (SID *)((u8 *)Descriptor + sizeof(SECURITY_DESCRIPTOR_ATTR));
+    Sid->revision = SID_REVISION;
+    Sid->sub_authority_count = 2;
+    Sid->sub_authority[0] =
+        const_cpu_to_le32(SECURITY_BUILTIN_DOMAIN_RID);
+    Sid->sub_authority[1] = const_cpu_to_le32(DOMAIN_ALIAS_RID_ADMINS);
+    Sid->identifier_authority.value[5] = 5;
+    Descriptor->owner = cpu_to_le32((u8 *)Sid - (u8 *)Descriptor);
+
+    Sid = (SID *)((u8 *)Sid + sizeof(SID) + sizeof(le32));
+    Sid->revision = SID_REVISION;
+    Sid->sub_authority_count = 2;
+    Sid->sub_authority[0] =
+        const_cpu_to_le32(SECURITY_BUILTIN_DOMAIN_RID);
+    Sid->sub_authority[1] = const_cpu_to_le32(DOMAIN_ALIAS_RID_ADMINS);
+    Sid->identifier_authority.value[5] = 5;
+    Descriptor->group = cpu_to_le32((u8 *)Sid - (u8 *)Descriptor);
+
+    Acl = (ACL *)((u8 *)Sid + sizeof(SID) + sizeof(le32));
+    Acl->revision = ACL_REVISION;
+    Acl->size = const_cpu_to_le16(sizeof(ACL) +
+                                  sizeof(ACCESS_ALLOWED_ACE));
+    Acl->ace_count = const_cpu_to_le16(1);
+    Descriptor->dacl = cpu_to_le32((u8 *)Acl - (u8 *)Descriptor);
+
+    Ace = (ACCESS_ALLOWED_ACE *)((u8 *)Acl + sizeof(ACL));
+    Ace->type = ACCESS_ALLOWED_ACE_TYPE;
+    Ace->flags = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
+    Ace->size = const_cpu_to_le16(sizeof(ACCESS_ALLOWED_ACE));
+    Ace->mask = const_cpu_to_le32(0x1f01ff);
+    Ace->sid.revision = SID_REVISION;
+    Ace->sid.sub_authority_count = 1;
+    Ace->sid.sub_authority[0] = const_cpu_to_le32(0);
+    Ace->sid.identifier_authority.value[5] = 1;
+
+    Result = ntfs_attr_add(ni, AT_SECURITY_DESCRIPTOR, AT_UNNAMED, 0,
+                           (u8 *)Descriptor, DescriptorLength);
+    if (Result)
+        ntfs_log_perror("Failed to add initial SECURITY_DESCRIPTOR");
+    free(Descriptor);
+    return Result;
 }
