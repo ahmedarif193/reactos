@@ -110,6 +110,17 @@ WlanNotifThread(LPVOID lpParameter)
         }
         RpcEndExcept;
 
+        if (dwResult == ERROR_TIMEOUT)
+        {
+            /* Bounded poll expired with nothing queued; keep polling unless
+             * a teardown started meanwhile. */
+            if (pData != NULL)
+                WlanFreeMemory(pData);
+            if (!InterlockedCompareExchange(&reg->Running, 1, 1))
+                break;
+            continue;
+        }
+
         if (dwResult != ERROR_SUCCESS || pData == NULL)
         {
             /* Source set to NONE, handle closed, or RPC failure -> stop. */

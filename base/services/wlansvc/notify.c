@@ -147,8 +147,14 @@ WlanSvcDequeueNotification(PWLANSVCHANDLE Handle, PWLAN_NOTIFICATION_DATA *ppDat
         if (Handle->hNotifyEvent == NULL)
             return ERROR_INVALID_STATE;
 
-        /* Park until an event is queued (or the handle is torn down). */
-        WaitForSingleObject(Handle->hNotifyEvent, INFINITE);
+        /* Bounded park: a synchronous RPC handler must never wait forever,
+         * or it wedges the shared client connection and any call queued
+         * behind it (wlanscan's WlanScan raced its own notification getter
+         * this way). The client re-issues the poll on ERROR_TIMEOUT, so a
+         * queued call drains within one period; a real notification still
+         * completes immediately via the event. */
+        if (WaitForSingleObject(Handle->hNotifyEvent, 250) == WAIT_TIMEOUT)
+            return ERROR_TIMEOUT;
 
         /* Re-validate: the handle may have been closed while we waited. */
         EnterCriticalSection(&WlanSvcLock);
