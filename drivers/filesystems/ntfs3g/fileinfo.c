@@ -932,6 +932,7 @@ ScanFcbs:
         (const uint16_t *)TargetName.Buffer,
         TargetName.Length / sizeof(WCHAR),
         ReplaceIfExists);
+    NtfsInvalidateNamespace(Volume);
     if (Result < 0) {
         DbgPrintEx(DPFLTR_NTFS_ID,
                    DPFLTR_ERROR_LEVEL,

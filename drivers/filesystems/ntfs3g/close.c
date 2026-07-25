@@ -81,6 +81,7 @@ NtfsDereferenceFcb(_Inout_ PFileContextBlock File)
     if (File->File) {
         if (File->DeletePending && !File->DeleteCompleted) {
             Result = Ntfs3gRosDeleteFile(File->File);
+            NtfsInvalidateNamespace(Volume);
             if (Result < 0) {
                 DbgPrintEx(DPFLTR_NTFS_ID,
                            DPFLTR_ERROR_LEVEL,
@@ -115,6 +116,7 @@ NtfsCleanupFileObject(_Inout_ PFILE_OBJECT FileObject,
     IO_STATUS_BLOCK IoStatus;
     BOOLEAN PurgeFile = FALSE;
     BOOLEAN TrimFile = FALSE;
+    BOOLEAN RecordExactSize = FALSE;
     BOOLEAN NotifyUnlock = FALSE;
     KIRQL VpbIrql;
     int DeleteResult;
@@ -194,6 +196,7 @@ NtfsCleanupFileObject(_Inout_ PFILE_OBJECT FileObject,
                  File->SectionObjectPointers.SharedCacheMap ||
                  File->SectionObjectPointers.ImageSectionObject);
     if (!PurgeFile) {
+        RecordExactSize = File->OpenHandleCount == 0 && File->SizeGrownAhead;
         TrimFile = File->OpenHandleCount == 0 &&
                    File->File != NULL &&
                    (File->SectionObjectPointers.DataSectionObject ||
@@ -234,6 +237,7 @@ NtfsCleanupFileObject(_Inout_ PFILE_OBJECT FileObject,
             File->File = NULL;
             File->DeleteCompleted = TRUE;
         }
+        RecordExactSize = File->OpenHandleCount == 0 && File->SizeGrownAhead;
         TrimFile = File->OpenHandleCount == 0 &&
                    File->File != NULL &&
                    (File->SectionObjectPointers.DataSectionObject ||
@@ -246,6 +250,7 @@ NtfsCleanupFileObject(_Inout_ PFILE_OBJECT FileObject,
 
     if (DeleteFile) {
         DeleteResult = Ntfs3gRosDeleteFile(DeleteFile);
+        NtfsInvalidateNamespace(Volume);
         if (DeleteResult < 0) {
             DbgPrintEx(DPFLTR_NTFS_ID,
                        DPFLTR_ERROR_LEVEL,
@@ -258,6 +263,15 @@ NtfsCleanupFileObject(_Inout_ PFILE_OBJECT FileObject,
         Ntfs3gRosCloseFile(DirectoryFile);
     if (DirectoryPattern.Buffer)
         ExFreePoolWithTag(DirectoryPattern.Buffer, TAG_NTFS);
+    if (RecordExactSize && File->File && !File->DeletePending) {
+        /* the attribute was grown past the real size to keep writes cheap */
+        Ntfs3gRosSetFileSize(File->File,
+                             (uint64_t)File->CommonFCBHeader.FileSize.QuadPart);
+        Ntfs3gRosGetFileInformation(File->File, &File->Information);
+        File->CommonFCBHeader.AllocationSize.QuadPart =
+            File->Information.AllocationSize;
+        File->SizeGrownAhead = FALSE;
+    }
     if (TrimFile)
         Ntfs3gRosTrimFile(File->File);
     if (NotifyUnlock)
