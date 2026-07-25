@@ -656,9 +656,28 @@ CywChipBringUp(
 
     CywDownloadClm(Adapter);
 
+    {
+        ULONG Down = 0;
+        NTSTATUS DownStatus = CywFilCmdSet(Adapter, BRCMF_C_DOWN, &Down, sizeof(Down));
+        if (!NT_SUCCESS(DownStatus))
+        {
+            DPRINT1("CYW: BRCMF_C_DOWN failed 0x%08lx\n", DownStatus);
+        }
+    }
+
     CywSetCountry(Adapter, CYW_DEFAULT_COUNTRY);
 
-    CywFilIovarSetInt(Adapter, "ampdu_rx", 1);
+    {
+        ULONG GlomVal = 0xFFFFFFFF;
+
+        CywFilIovarSetInt(Adapter, "ampdu_rx", 1);
+        CywFilIovarSetInt(Adapter, "bus:txglom", 1);
+        if (NT_SUCCESS(CywFilIovarGet(Adapter, "bus:txglom", &GlomVal, sizeof(GlomVal))) && GlomVal == 1)
+        {
+            CywFilIovarSetInt(Adapter, "bus:txglomalign", 4);
+        }
+    }
+
 
     CywFilIovarSetInt(Adapter, "mpc", 0);
 
