@@ -328,6 +328,11 @@ DWORD _RpcScan(
     PWLAN_RAW_DATA pIeData)
 {
     PWLANSVC_INTERFACE iface;
+    PNWIFI_BSS_LIST bssList = NULL;
+    GUID interfaceGuid;
+    DOT11_MAC_ADDRESS macAddress;
+    ULONG interfaceIndex;
+    ULONG64 upperLuid;
     DWORD dwResult;
 
     UNREFERENCED_PARAMETER(pIeData);
@@ -343,15 +348,37 @@ DWORD _RpcScan(
         return ERROR_NOT_FOUND;
     }
 
-    dwResult = WlanSvcDoScan(iface, pDot11Ssid);
-
-    /* Tell subscribers the scan finished (Windows raises this on completion). */
-    if (dwResult == ERROR_SUCCESS)
-        WlanSvcIndicateAcm(iface, wlan_notification_acm_scan_complete);
-    else
-        WlanSvcIndicateAcm(iface, wlan_notification_acm_scan_fail);
-
+    interfaceGuid = iface->InterfaceGuid;
+    interfaceIndex = iface->NwifiIndex;
+    upperLuid = iface->UpperLuid;
+    macAddress = iface->MacAddress;
     LeaveCriticalSection(&WlanSvcLock);
+
+    dwResult = NwifiScan(interfaceIndex, pDot11Ssid, dot11_BSS_type_any);
+    if (dwResult == ERROR_SUCCESS || dwResult == ERROR_NOT_READY)
+    {
+        dwResult = NwifiGetBssList(interfaceIndex, upperLuid, &macAddress, &bssList);
+        if (dwResult == ERROR_SUCCESS && bssList == NULL)
+            dwResult = ERROR_NOT_ENOUGH_MEMORY;
+    }
+
+    EnterCriticalSection(&WlanSvcLock);
+    iface = WlanSvcFindInterface(&interfaceGuid);
+    if (iface == NULL || iface->NwifiIndex != interfaceIndex || iface->UpperLuid != upperLuid || memcmp(&iface->MacAddress, &macAddress, sizeof(macAddress)) != 0)
+    {
+        dwResult = ERROR_NOT_FOUND;
+    }
+    else if (dwResult == ERROR_SUCCESS)
+    {
+        dwResult = WlanSvcApplyBssCache(iface, bssList);
+    }
+    if (iface != NULL && dwResult == ERROR_SUCCESS)
+        WlanSvcIndicateAcm(iface, wlan_notification_acm_scan_complete);
+    LeaveCriticalSection(&WlanSvcLock);
+
+    if (bssList != NULL)
+        HeapFree(GetProcessHeap(), 0, bssList);
+
     return dwResult;
 }
 
@@ -376,11 +403,6 @@ DWORD _RpcGetAvailableNetworkList(
         LeaveCriticalSection(&WlanSvcLock);
         return ERROR_NOT_FOUND;
     }
-
-    /* If nothing has been scanned yet, do an implicit scan so the caller gets
-     * a populated list (matches WlanGetAvailableNetworkList behaviour). */
-    if (iface->BssCount == 0)
-        WlanSvcDoScan(iface, NULL);
 
     dwResult = WlanSvcBuildAvailableNetworkList(iface, dwFlags,
                                                 ppAvailableNetworkList);
@@ -414,9 +436,6 @@ DWORD _RpcGetNetworkBssList(
         LeaveCriticalSection(&WlanSvcLock);
         return ERROR_NOT_FOUND;
     }
-
-    if (iface->BssCount == 0)
-        WlanSvcDoScan(iface, pDot11Ssid);
 
     dwResult = WlanSvcBuildBssList(iface, pDot11Ssid,
                                    (DOT11_BSS_TYPE)dot11BssType,

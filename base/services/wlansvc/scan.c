@@ -160,36 +160,26 @@ WlanSvcImportBss(PNWIFI_BSS_ENTRY src)
     return bss;
 }
 
-/*
- * Rebuild the interface's BSS cache from nwifi's BSS list.  NWIFI_BSS_LIST is
- * variable-length: entries are walked from FirstEntryOffset, each advancing by
- * its own Size.  Lock held by caller.
- */
+/* Apply an already-fetched nwifi BSS list to service state. Lock held. */
 DWORD
-WlanSvcRefreshBssCache(PWLANSVC_INTERFACE Iface)
+WlanSvcApplyBssCache(PWLANSVC_INTERFACE Iface,
+                     PNWIFI_BSS_LIST Results)
 {
-    PNWIFI_BSS_LIST results = NULL;
     PNWIFI_BSS_ENTRY entry;
     ULONG off, i;
-    DWORD dwResult;
-
-    dwResult = NwifiGetBssList(Iface->NwifiIndex, Iface->UpperLuid,
-                               &Iface->MacAddress, &results);
-    if (dwResult != ERROR_SUCCESS || results == NULL)
-        return (dwResult != ERROR_SUCCESS) ? dwResult : ERROR_NOT_ENOUGH_MEMORY;
 
     WlanSvcFlushBssList(Iface);
 
-    off = results->FirstEntryOffset;
-    for (i = 0; i < results->NumberOfItems && i < NWIFI_MAX_BSS_ENTRIES; i++)
+    off = Results->FirstEntryOffset;
+    for (i = 0; i < Results->NumberOfItems && i < NWIFI_MAX_BSS_ENTRIES; i++)
     {
         PWLANSVC_BSS_ENTRY bss;
 
-        if (off + FIELD_OFFSET(NWIFI_BSS_ENTRY, IeOffset) > results->Size)
+        if (off + FIELD_OFFSET(NWIFI_BSS_ENTRY, IeOffset) > Results->Size)
             break;
 
-        entry = (PNWIFI_BSS_ENTRY)((PUCHAR)results + off);
-        if (entry->Size == 0 || off + entry->Size > results->Size)
+        entry = (PNWIFI_BSS_ENTRY)((PUCHAR)Results + off);
+        if (entry->Size == 0 || off + entry->Size > Results->Size)
             break;
 
         bss = WlanSvcImportBss(entry);
@@ -202,8 +192,27 @@ WlanSvcRefreshBssCache(PWLANSVC_INTERFACE Iface)
         off += entry->Size;
     }
 
-    HeapFree(GetProcessHeap(), 0, results);
     return ERROR_SUCCESS;
+}
+
+/*
+ * Rebuild the interface's BSS cache from nwifi's BSS list.  NWIFI_BSS_LIST is
+ * variable-length: entries are walked from FirstEntryOffset, each advancing by
+ * its own Size.  Lock held by caller.
+ */
+DWORD
+WlanSvcRefreshBssCache(PWLANSVC_INTERFACE Iface)
+{
+    PNWIFI_BSS_LIST results = NULL;
+    DWORD dwResult;
+
+    dwResult = NwifiGetBssList(Iface->NwifiIndex, Iface->UpperLuid, &Iface->MacAddress, &results);
+    if (dwResult != ERROR_SUCCESS || results == NULL)
+        return (dwResult != ERROR_SUCCESS) ? dwResult : ERROR_NOT_ENOUGH_MEMORY;
+
+    dwResult = WlanSvcApplyBssCache(Iface, results);
+    HeapFree(GetProcessHeap(), 0, results);
+    return dwResult;
 }
 
 /*
