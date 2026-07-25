@@ -16,6 +16,111 @@ static GENERIC_MAPPING NtfsFileGenericMapping = {
     FILE_ALL_ACCESS
 };
 
+/* Case-insensitive FNV-1a over the path, matching how lookups compare names. */
+static ULONGLONG
+NtfsHashName(_In_ PCUNICODE_STRING Name)
+{
+    ULONGLONG Hash = 1469598103934665603ULL;
+    ULONG Index;
+
+    for (Index = 0; Index < Name->Length / sizeof(WCHAR); Index++) {
+        WCHAR Character = Name->Buffer[Index];
+
+        if (Character >= L'a' && Character <= L'z')
+            Character = Character - (L'a' - L'A');
+        else if (Character > 0x7F)
+            Character = RtlUpcaseUnicodeChar(Character);
+        Hash ^= Character;
+        Hash *= 1099511628211ULL;
+    }
+    return Hash;
+}
+
+/* Caller holds FcbListResource. */
+static BOOLEAN
+NtfsLookupNegative(_In_ PVolumeContextBlock Volume,
+                   _In_ PCUNICODE_STRING Name,
+                   _In_ ULONGLONG Hash)
+{
+    NtfsNegativeEntry *Entry;
+    UNICODE_STRING Cached;
+
+    if (Name->Length > NTFS_NEGATIVE_NAME_MAX * sizeof(WCHAR))
+        return FALSE;
+
+    Entry = &Volume->NegativeCache[Hash % NTFS_NEGATIVE_CACHE_SIZE];
+    if (Entry->Generation != Volume->NamespaceGeneration ||
+        Entry->Hash != Hash || Entry->Length != Name->Length)
+        return FALSE;
+
+    Cached.Buffer = Entry->Name;
+    Cached.Length = Entry->Length;
+    Cached.MaximumLength = Entry->Length;
+    return RtlEqualUnicodeString(&Cached, Name, TRUE);
+}
+
+/* Caller holds FcbListResource. Returns the known MFT record, or 0. */
+static ULONGLONG
+NtfsLookupPath(_In_ PVolumeContextBlock Volume,
+               _In_ PCUNICODE_STRING Name,
+               _In_ ULONGLONG Hash)
+{
+    NtfsPathEntry *Entry;
+    UNICODE_STRING Cached;
+
+    if (Name->Length > NTFS_NEGATIVE_NAME_MAX * sizeof(WCHAR))
+        return 0;
+
+    Entry = &Volume->PathCache[Hash % NTFS_PATH_CACHE_SIZE];
+    if (Entry->Generation != Volume->NamespaceGeneration ||
+        Entry->Hash != Hash || Entry->Length != Name->Length || !Entry->FileId)
+        return 0;
+
+    Cached.Buffer = Entry->Name;
+    Cached.Length = Entry->Length;
+    Cached.MaximumLength = Entry->Length;
+    return RtlEqualUnicodeString(&Cached, Name, TRUE) ? Entry->FileId : 0;
+}
+
+/* Caller holds FcbListResource. */
+static VOID
+NtfsRememberPath(_In_ PVolumeContextBlock Volume,
+                 _In_ PCUNICODE_STRING Name,
+                 _In_ ULONGLONG Hash,
+                 _In_ ULONGLONG FileId)
+{
+    NtfsPathEntry *Entry;
+
+    if (!Name->Length || !FileId ||
+        Name->Length > NTFS_NEGATIVE_NAME_MAX * sizeof(WCHAR))
+        return;
+
+    Entry = &Volume->PathCache[Hash % NTFS_PATH_CACHE_SIZE];
+    RtlCopyMemory(Entry->Name, Name->Buffer, Name->Length);
+    Entry->Length = Name->Length;
+    Entry->Hash = Hash;
+    Entry->FileId = FileId;
+    Entry->Generation = Volume->NamespaceGeneration;
+}
+
+/* Caller holds FcbListResource. */
+static VOID
+NtfsRememberNegative(_In_ PVolumeContextBlock Volume,
+                     _In_ PCUNICODE_STRING Name,
+                     _In_ ULONGLONG Hash)
+{
+    NtfsNegativeEntry *Entry;
+
+    if (!Name->Length || Name->Length > NTFS_NEGATIVE_NAME_MAX * sizeof(WCHAR))
+        return;
+
+    Entry = &Volume->NegativeCache[Hash % NTFS_NEGATIVE_CACHE_SIZE];
+    RtlCopyMemory(Entry->Name, Name->Buffer, Name->Length);
+    Entry->Length = Name->Length;
+    Entry->Hash = Hash;
+    Entry->Generation = Volume->NamespaceGeneration;
+}
+
 static PFileContextBlock
 NtfsFindFcbLocked(_In_ PVolumeContextBlock Volume,
                   _In_ const NTFS3G_ROS_FILE_INFORMATION *Information,
@@ -264,6 +369,8 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT DeviceObject,
     NTFS3G_ROS_FILE *CoreFile = NULL;
     NTFS3G_ROS_FILE_INFORMATION Information;
     UNICODE_STRING FileName;
+    ULONGLONG NameHashValue;
+    ULONGLONG KnownFileId;
     ACCESS_MASK DesiredAccess;
     ULONG ShareAccess;
     ULONG CreateOptions;
@@ -398,7 +505,24 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT DeviceObject,
         Status = STATUS_MEDIA_WRITE_PROTECTED;
         goto FailureLocked;
     }
-    Status = Ntfs3gRosOpenUnicodeFile(Volume->Volume, &FileName, &CoreFile);
+    NameHashValue = NtfsHashName(&FileName);
+    KnownFileId = NtfsLookupPath(Volume, &FileName, NameHashValue);
+    if (NtfsLookupNegative(Volume, &FileName, NameHashValue)) {
+        Status = STATUS_OBJECT_NAME_NOT_FOUND;   /* proved absent already */
+    } else if (KnownFileId) {
+        /* the record is known, so the path does not have to be walked again */
+        Status = Ntfs3gRosOpenUnicodeFileById(Volume->Volume, &FileName,
+                                              KnownFileId, &CoreFile);
+        if (!NT_SUCCESS(Status)) {
+            Status = Ntfs3gRosOpenUnicodeFile(Volume->Volume, &FileName, &CoreFile);
+        }
+    } else {
+        Status = Ntfs3gRosOpenUnicodeFile(Volume->Volume, &FileName, &CoreFile);
+        if (Status == STATUS_OBJECT_NAME_NOT_FOUND ||
+            Status == STATUS_OBJECT_PATH_NOT_FOUND) {
+            NtfsRememberNegative(Volume, &FileName, NameHashValue);
+        }
+    }
     if (!NT_SUCCESS(Status)) {
         if ((Status == STATUS_OBJECT_NAME_NOT_FOUND ||
              Status == STATUS_OBJECT_PATH_NOT_FOUND) &&
@@ -426,8 +550,10 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT DeviceObject,
                 Status = Result < 0 ?
                     Ntfs3gRosStatusFromError(-Result) : STATUS_SUCCESS;
             }
-            if (NT_SUCCESS(Status))
+            if (NT_SUCCESS(Status)) {
                 CreateResult = FILE_CREATED;
+                NtfsInvalidateNamespace(Volume);
+            }
         }
         if (!NT_SUCCESS(Status))
             goto FailureLocked;
@@ -453,6 +579,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT DeviceObject,
         goto FailureLocked;
     }
 
+    NtfsRememberPath(Volume, &FileName, NameHashValue, Information.FileId);
     File = NtfsFindFcbLocked(Volume, &Information, &FileName);
     if (File) {
         NtfsReferenceFcb(File);

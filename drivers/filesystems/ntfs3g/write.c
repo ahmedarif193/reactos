@@ -9,6 +9,14 @@
 
 #include "ntfspch.h"
 
+/*
+ * Growing the attribute ahead of an extending write pays for itself once a file
+ * is being streamed, but a small file would only be paying the correction that
+ * cleanup has to make, so it starts once the file passes this size.
+ */
+#define NTFS3G_EXTEND_AHEAD_MIN (64 * 1024)
+#define NTFS3G_EXTEND_AHEAD_MAX (1024 * 1024)
+
 typedef struct _NTFS_WRITE_WORK_ITEM
 {
     PIO_WORKITEM WorkItem;
@@ -129,22 +137,38 @@ NtfsWriteFile(_In_ PDEVICE_OBJECT DeviceObject,
         _SEH2_TRY {
             if (EndOffset.QuadPart >
                 File->CommonFCBHeader.FileSize.QuadPart) {
-                Result = Ntfs3gRosSetFileSize(
-                    File->File, (uint64_t)EndOffset.QuadPart);
-                if (Result < 0) {
-                    Status = Ntfs3gRosStatusFromError(-Result);
-                    _SEH2_LEAVE;
+                /*
+                 * Growing the attribute is the expensive part of an extending
+                 * write, so grow it ahead of the request — doubling up to a
+                 * megabyte — and let the writes that fit inside the allocation
+                 * just move the cached size. Cleanup records the exact size.
+                 */
+                if (EndOffset.QuadPart >
+                    File->CommonFCBHeader.AllocationSize.QuadPart) {
+                    LONGLONG Ahead = EndOffset.QuadPart;
+
+                    if (Ahead < NTFS3G_EXTEND_AHEAD_MIN)
+                        Ahead = 0;
+                    else if (Ahead > NTFS3G_EXTEND_AHEAD_MAX)
+                        Ahead = NTFS3G_EXTEND_AHEAD_MAX;
+                    Result = Ntfs3gRosSetFileSize(
+                        File->File, (uint64_t)(EndOffset.QuadPart + Ahead));
+                    if (Result < 0) {
+                        Status = Ntfs3gRosStatusFromError(-Result);
+                        _SEH2_LEAVE;
+                    }
+                    Result = Ntfs3gRosGetFileInformation(
+                        File->File, &File->Information);
+                    if (Result < 0) {
+                        Status = Ntfs3gRosStatusFromError(-Result);
+                        _SEH2_LEAVE;
+                    }
+                    File->CommonFCBHeader.AllocationSize.QuadPart =
+                        File->Information.AllocationSize;
+                    if (Ahead)
+                        File->SizeGrownAhead = TRUE;
                 }
-                Result = Ntfs3gRosGetFileInformation(
-                    File->File, &File->Information);
-                if (Result < 0) {
-                    Status = Ntfs3gRosStatusFromError(-Result);
-                    _SEH2_LEAVE;
-                }
-                File->CommonFCBHeader.AllocationSize.QuadPart =
-                    File->Information.AllocationSize;
-                File->CommonFCBHeader.FileSize.QuadPart =
-                    File->Information.FileSize;
+                File->CommonFCBHeader.FileSize.QuadPart = EndOffset.QuadPart;
                 if (File->SectionObjectPointers.SharedCacheMap)
                     CcSetFileSizes(
                         FileObject,

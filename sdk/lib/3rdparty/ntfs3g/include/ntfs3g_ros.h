@@ -103,6 +103,19 @@ Ntfs3gRosOpenFile(NTFS3G_ROS_VOLUME *Volume,
                   NTFS3G_ROS_FILE **File);
 
 int
+Ntfs3gRosOpenFileById(NTFS3G_ROS_VOLUME *Volume,
+                      uint64_t FileId,
+                      const char *Path,
+                      NTFS3G_ROS_FILE **File);
+
+int
+Ntfs3gRosOpenFileByIdUtf16(NTFS3G_ROS_VOLUME *Volume,
+                           uint64_t FileId,
+                           const uint16_t *Path,
+                           size_t PathLength,
+                           NTFS3G_ROS_FILE **File);
+
+int
 Ntfs3gRosOpenFileUtf16(NTFS3G_ROS_VOLUME *Volume,
                        const uint16_t *Path,
                        size_t PathLength,

@@ -358,6 +358,92 @@ error:
     return -Error;
 }
 
+/*
+ * Open a file whose MFT record is already known, skipping the path walk. The
+ * caller is responsible for making sure the number is still valid: the driver
+ * retires its cache on any namespace change, which is what protects against an
+ * MFT record being reused for a different file.
+ */
+int
+Ntfs3gRosOpenFileById(NTFS3G_ROS_VOLUME *Volume,
+                      uint64_t FileId,
+                      const char *Path,
+                      NTFS3G_ROS_FILE **File)
+{
+    NTFS3G_ROS_FILE *HostFile = NULL;
+    ntfs_inode *Inode = NULL;
+    ntfs_attr *Data = NULL;
+    char *Normalized = NULL;
+    int Error;
+
+    if (!Volume || !Path || !File) {
+        errno = EINVAL;
+        return -EINVAL;
+    }
+
+    *File = NULL;
+    Ntfs3gRosHostAcquire();
+    Normalized = Ntfs3gRosNormalizePath(Path);
+    if (!Normalized)
+        goto error;
+
+    Inode = ntfs_inode_open(Volume->Native, (MFT_REF)FileId);
+    if (!Inode)
+        goto error;
+    if (!(Inode->mrec->flags & MFT_RECORD_IS_DIRECTORY)) {
+        Data = ntfs_attr_open(Inode, AT_DATA, AT_UNNAMED, 0);
+        if (!Data)
+            goto error;
+    }
+
+    HostFile = Ntfs3gRosAllocateFile(Inode, Data, Normalized);
+    if (!HostFile)
+        goto error;
+
+    *File = HostFile;
+    Ntfs3gRosHostRelease();
+    errno = 0;
+    return 0;
+
+error:
+    Error = errno;
+    free(HostFile);
+    if (Data)
+        ntfs_attr_close(Data);
+    if (Inode)
+        ntfs_inode_close(Inode);
+    free(Normalized);
+    Ntfs3gRosHostRelease();
+    errno = Error;
+    return -Error;
+}
+
+int
+Ntfs3gRosOpenFileByIdUtf16(NTFS3G_ROS_VOLUME *Volume,
+                           uint64_t FileId,
+                           const uint16_t *Path,
+                           size_t PathLength,
+                           NTFS3G_ROS_FILE **File)
+{
+    char *Utf8Path = NULL;
+    int Error;
+    int Result;
+
+    if (!Volume || (!Path && PathLength) || !File || PathLength > INT_MAX) {
+        errno = EINVAL;
+        return -EINVAL;
+    }
+    Result = Ntfs3gRosUtf16PathToUtf8(Path, PathLength, &Utf8Path);
+    if (Result)
+        return Result;
+
+    Result = Ntfs3gRosOpenFileById(Volume, FileId, Utf8Path, File);
+    Error = Result ? errno : 0;
+    free(Utf8Path);
+    errno = Error;
+    return Result;
+}
+
 int
 Ntfs3gRosOpenFileUtf16(NTFS3G_ROS_VOLUME *Volume,
                        const uint16_t *Path,
