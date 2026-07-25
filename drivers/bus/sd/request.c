@@ -114,6 +114,7 @@ SdBusWaitForInterrupt(
     ULONG RemainingMs;
     ULONG ErrorMask;
     ULONG MatchMask;
+    ULONG Spin;
 
     RemainingMs = TimeoutMs;
     ErrorMask = ErrorBits;
@@ -122,6 +123,8 @@ SdBusWaitForInterrupt(
         ErrorMask |= SDHCI_INT_ERROR;
     }
     MatchMask = WantedBits | ErrorMask;
+
+    Spin = 100;
 
     for (;;)
     {
@@ -148,6 +151,13 @@ SdBusWaitForInterrupt(
                 return STATUS_IO_DEVICE_ERROR;
             }
             return STATUS_SUCCESS;
+        }
+
+        if (Spin != 0)
+        {
+            Spin--;
+            KeStallExecutionProcessor(2);
+            continue;
         }
 
         if (RemainingMs == 0)
