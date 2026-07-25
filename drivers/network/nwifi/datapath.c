@@ -600,6 +600,9 @@ NwifiReceiveFromLower(
     BOOLEAN AtDispatch = (ReceiveFlags & NDIS_RECEIVE_FLAGS_DISPATCH_LEVEL) ? TRUE : FALSE;
     BOOLEAN Running;
     ULONG ReturnFlags = 0;
+    PNET_BUFFER_LIST UpHead = NULL;
+    PNET_BUFFER_LIST UpTail = NULL;
+    ULONG UpCount = 0;
 
     UNREFERENCED_PARAMETER(NumberOfNetBufferLists);
 
@@ -665,13 +668,25 @@ NwifiReceiveFromLower(
             Adapter->RxBytes += NWIFI_NBL_CTX(UpNbl)->DataLength;
             InterlockedIncrement(&Adapter->PendingReceives);
 
-            NdisMIndicateReceiveNetBufferLists(Adapter->MiniportAdapterHandle,
-                                               UpNbl, NDIS_DEFAULT_PORT_NUMBER, 1,
-                                               ReceiveFlags |
-                                               NDIS_RECEIVE_FLAGS_RESOURCES);
+            NET_BUFFER_LIST_NEXT_NBL(UpNbl) = NULL;
+            if (UpTail != NULL)
+            {
+                NET_BUFFER_LIST_NEXT_NBL(UpTail) = UpNbl;
+            }
+            else
+            {
+                UpHead = UpNbl;
+            }
+            UpTail = UpNbl;
+            UpCount++;
         }
 
         Nbl = NextNbl;
+    }
+
+    if (UpHead != NULL)
+    {
+        NdisMIndicateReceiveNetBufferLists(Adapter->MiniportAdapterHandle, UpHead, NDIS_DEFAULT_PORT_NUMBER, UpCount, ReceiveFlags | NDIS_RECEIVE_FLAGS_RESOURCES);
     }
 
     /* With RESOURCES the lower NBL data is only valid during this call and
