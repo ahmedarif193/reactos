@@ -16,8 +16,24 @@
 
 /* Number of worker threads for each Queue */
 #define EX_HYPERCRITICAL_WORK_THREADS               1
-#define EX_DELAYED_WORK_THREADS                     3
 #define EX_CRITICAL_WORK_THREADS                    5
+
+/*
+ * A queue's concurrency limit is its KQUEUE MaximumCount, which
+ * KeInitializeQueue() below sets to the processor count. Static workers must
+ * cover that limit *and* leave a reserve of threads that can sit parked in a
+ * wait, because a worker that blocks stops counting towards concurrency and
+ * only an unblocked spare can drain the queue behind it.
+ *
+ * With no reserve the delayed queue stalls: three workers all blocked during
+ * device enumeration stranded a queued item until ExpDetectWorkerThreadDeadlock
+ * noticed on its next one-second pass, costing ~1.2s of boot. Four workers were
+ * enough to clear it on a uniprocessor, so the reserve is double that measured
+ * floor of three. The total is capped at the same 16 that bounds the
+ * AdditionalDelayedWorkerThreads registry value.
+ */
+#define EX_DELAYED_WORK_RESERVE                     6
+#define EX_MAX_DELAYED_WORK_THREADS                 16
 
 /* Magic flag for dynamic worker threads */
 #define EX_DYNAMIC_WORK_THREAD                      0x80000000
@@ -29,6 +45,7 @@
 
 /* The actual worker queue array */
 EX_WORK_QUEUE ExWorkerQueue[MaximumWorkQueue];
+static ULONG ExpStaticWorkerCounts[MaximumWorkQueue];
 
 /* Accounting of the total threads and registry hacked threads */
 ULONG ExCriticalWorkerThreads;
@@ -50,6 +67,27 @@ PETHREAD ExpWorkerThreadBalanceManagerPtr;
 PETHREAD ExpLastWorkerThread;
 
 /* PRIVATE FUNCTIONS *********************************************************/
+
+static
+BOOLEAN
+ExpNewThreadNecessary(IN WORK_QUEUE_TYPE WorkQueueType)
+{
+    PEX_WORK_QUEUE WorkQueue;
+
+    ASSERT(WorkQueueType < MaximumWorkQueue);
+    WorkQueue = &ExWorkerQueue[WorkQueueType];
+
+    /*
+     * Load-scale queues opt in through MakeThreadsAsNecessary. Other queues
+     * need a replacement only when active capacity falls below their static
+     * worker target. Dynamic replacements must not increase that target.
+     */
+    return ((WorkQueue->Info.MakeThreadsAsNecessary ||
+             (WorkQueue->WorkerQueue.CurrentCount < ExpStaticWorkerCounts[WorkQueueType])) &&
+            !IsListEmpty(&WorkQueue->WorkerQueue.EntryListHead) &&
+            (WorkQueue->WorkerQueue.CurrentCount < WorkQueue->WorkerQueue.MaximumCount) &&
+            (WorkQueue->DynamicThreadCount < 16));
+}
 
 /*++
  * @name ExpWorkerThreadEntryPoint
@@ -339,7 +377,7 @@ ExpDetectWorkerThreadDeadlock(VOID)
     ULONG i;
     PEX_WORK_QUEUE Queue;
 
-    /* Loop the 3 queues */
+    /* Loop over every worker queue */
     for (i = 0; i < MaximumWorkQueue; i++)
     {
         /* Get the queue */
@@ -391,11 +429,7 @@ ExpCheckDynamicThreadCount(VOID)
         Queue = &ExWorkerQueue[i];
 
         /* Check if still need a new thread. See ExQueueWorkItem */
-        if ((Queue->Info.MakeThreadsAsNecessary) &&
-            (!IsListEmpty(&Queue->WorkerQueue.EntryListHead)) &&
-            (Queue->WorkerQueue.CurrentCount <
-             Queue->WorkerQueue.MaximumCount) &&
-            (Queue->DynamicThreadCount < 16))
+        if (ExpNewThreadNecessary((WORK_QUEUE_TYPE)i))
         {
             /* Create a new thread */
             DPRINT1("EX: Creating new dynamic thread as requested\n");
@@ -533,8 +567,9 @@ ExpInitializeWorkerThreads(VOID)
     InitializeListHead(&ExpWorkerListHead);
     ExpWorkersCanSwap = TRUE;
 
-    /* Set the number of critical and delayed threads. We shouldn't hardcode */
-    DelayedThreads = EX_DELAYED_WORK_THREADS;
+    /* Size the delayed pool to the concurrency limit plus a blocking reserve */
+    DelayedThreads = (ULONG)KeNumberProcessors + EX_DELAYED_WORK_RESERVE;
+    DelayedThreads = min(DelayedThreads, EX_MAX_DELAYED_WORK_THREADS);
     CriticalThreads = EX_CRITICAL_WORK_THREADS;
 
     /* Protect against greedy registry modifications */
@@ -547,6 +582,10 @@ ExpInitializeWorkerThreads(VOID)
     DelayedThreads += ExpAdditionalDelayedWorkerThreads;
     CriticalThreads += ExpAdditionalCriticalWorkerThreads;
 
+    ExpStaticWorkerCounts[CriticalWorkQueue] = CriticalThreads;
+    ExpStaticWorkerCounts[DelayedWorkQueue] = DelayedThreads;
+    ExpStaticWorkerCounts[HyperCriticalWorkQueue] = EX_HYPERCRITICAL_WORK_THREADS;
+
     /* Initialize the Array */
     for (WorkQueueType = 0; WorkQueueType < MaximumWorkQueue; WorkQueueType++)
     {
@@ -555,7 +594,7 @@ ExpInitializeWorkerThreads(VOID)
         KeInitializeQueue(&ExWorkerQueue[WorkQueueType].WorkerQueue, 0);
     }
 
-    /* Dynamic threads are only used for the critical queue */
+    /* Only the critical queue uses dynamic threads for load scaling */
     ExWorkerQueue[CriticalWorkQueue].Info.MakeThreadsAsNecessary = TRUE;
 
     /* Initialize the balance set manager events */
@@ -744,21 +783,17 @@ ExQueueWorkItem(IN PWORK_QUEUE_ITEM WorkItem,
 
     /*
      * Check if we need a new thread. Our decision is as follows:
-     *  - This queue type must support Dynamic Threads (duh!)
+     *  - This queue supports load scaling or has an inactive worker
      *  - It actually has to have unprocessed items
      *  - We have CPUs which could be handling another thread
      *  - We haven't abused our usage of dynamic threads.
      */
-    if ((WorkQueue->Info.MakeThreadsAsNecessary) &&
-        (!IsListEmpty(&WorkQueue->WorkerQueue.EntryListHead)) &&
-        (WorkQueue->WorkerQueue.CurrentCount <
-         WorkQueue->WorkerQueue.MaximumCount) &&
-        (WorkQueue->DynamicThreadCount < 16))
+    if (ExpNewThreadNecessary(QueueType))
     {
         /* Let the balance manager know about it */
-        DPRINT1("Requesting a new thread. CurrentCount: %lu. MaxCount: %lu\n",
-                WorkQueue->WorkerQueue.CurrentCount,
-                WorkQueue->WorkerQueue.MaximumCount);
+        DPRINT("Requesting a new thread. CurrentCount: %lu. MaxCount: %lu\n",
+               WorkQueue->WorkerQueue.CurrentCount,
+               WorkQueue->WorkerQueue.MaximumCount);
         KeSetEvent(&ExpThreadSetManagerEvent, 0, FALSE);
     }
 }
