@@ -15,6 +15,16 @@
  * ===========================================================================
  */
 
+#define NWIFI_SYNC_OID_SIGNATURE 0x4F49574EUL /* "NWIO" */
+
+typedef struct _NWIFI_SYNC_OID_CONTEXT
+{
+    ULONG Signature;
+    NDIS_OID_REQUEST Request;
+    NDIS_EVENT Event;
+    NDIS_STATUS Status;
+} NWIFI_SYNC_OID_CONTEXT, *PNWIFI_SYNC_OID_CONTEXT;
+
 /* Synchronous OID round-trip: NdisOidRequest may pend, so wait on an event
  * signalled by the completion callback. */
 NDIS_STATUS
@@ -26,45 +36,51 @@ NwifiProtocolDoRequest(
     _In_ ULONG Length,
     _Out_opt_ PULONG BytesProcessed)
 {
-    NDIS_OID_REQUEST Request;
+    NWIFI_SYNC_OID_CONTEXT Context;
+    PNDIS_OID_REQUEST Request = &Context.Request;
     NDIS_STATUS Status;
 
-    RtlZeroMemory(&Request, sizeof(Request));
-    Request.Header.Type = NDIS_OBJECT_TYPE_OID_REQUEST;
-    Request.Header.Revision = NDIS_OID_REQUEST_REVISION_1;
-    Request.Header.Size = sizeof(NDIS_OID_REQUEST);
-    Request.RequestType = RequestType;
+    RtlZeroMemory(&Context, sizeof(Context));
+    Context.Signature = NWIFI_SYNC_OID_SIGNATURE;
+    Context.Status = NDIS_STATUS_PENDING;
+    NdisInitializeEvent(&Context.Event);
+
+    Request->Header.Type = NDIS_OBJECT_TYPE_OID_REQUEST;
+    Request->Header.Revision = NDIS_OID_REQUEST_REVISION_1;
+    Request->Header.Size = sizeof(NDIS_OID_REQUEST);
+    Request->RequestType = RequestType;
 
     if (RequestType == NdisRequestSetInformation)
     {
-        Request.DATA.SET_INFORMATION.Oid = Oid;
-        Request.DATA.SET_INFORMATION.InformationBuffer = Buffer;
-        Request.DATA.SET_INFORMATION.InformationBufferLength = Length;
+        Request->DATA.SET_INFORMATION.Oid = Oid;
+        Request->DATA.SET_INFORMATION.InformationBuffer = Buffer;
+        Request->DATA.SET_INFORMATION.InformationBufferLength = Length;
     }
     else
     {
-        Request.DATA.QUERY_INFORMATION.Oid = Oid;
-        Request.DATA.QUERY_INFORMATION.InformationBuffer = Buffer;
-        Request.DATA.QUERY_INFORMATION.InformationBufferLength = Length;
+        Request->DATA.QUERY_INFORMATION.Oid = Oid;
+        Request->DATA.QUERY_INFORMATION.InformationBuffer = Buffer;
+        Request->DATA.QUERY_INFORMATION.InformationBufferLength = Length;
     }
 
-    /* RequestId lets the completion callback recognise our private request. */
-    Request.RequestId = (PVOID)(ULONG_PTR)'qNWI';
+    /* Completion routes only to this request's context and event. */
+    Request->RequestId = &Context;
 
-    NdisResetEvent(&Adapter->RequestEvent);
-
-    Status = NdisOidRequest(Adapter->BindingHandle, &Request);
+    Status = NdisOidRequest(Adapter->BindingHandle, Request);
     if (Status == NDIS_STATUS_PENDING)
     {
-        NdisWaitEvent(&Adapter->RequestEvent, 0);
-        Status = Adapter->RequestStatus;
+        /* NdisWaitEvent is alertable in this tree. Do not let an APC return
+         * while the lower miniport still owns the stack request. */
+        while (!NdisWaitEvent(&Context.Event, 0))
+        {
+            /* Wait until this request's completion signals its own event. */
+        }
+        Status = Context.Status;
     }
 
     if (BytesProcessed != NULL)
     {
-        *BytesProcessed = (RequestType == NdisRequestSetInformation)
-            ? Request.DATA.SET_INFORMATION.BytesRead
-            : Request.DATA.QUERY_INFORMATION.BytesWritten;
+        *BytesProcessed = (RequestType == NdisRequestSetInformation) ? Request->DATA.SET_INFORMATION.BytesRead : Request->DATA.QUERY_INFORMATION.BytesWritten;
     }
 
     return Status;
@@ -78,12 +94,13 @@ NwifiProtocolOidRequestComplete(
     _In_ NDIS_STATUS Status)
 {
     PNWIFI_ADAPTER Adapter = (PNWIFI_ADAPTER)ProtocolBindingContext;
+    PNWIFI_SYNC_OID_CONTEXT Context;
 
-    /* Only synchronous NwifiProtocolDoRequest requests carry the 'qNWI' id. */
-    if (OidRequest->RequestId == (PVOID)(ULONG_PTR)'qNWI')
+    Context = CONTAINING_RECORD(OidRequest, NWIFI_SYNC_OID_CONTEXT, Request);
+    if (OidRequest->RequestId == (PVOID)Context && Context->Signature == NWIFI_SYNC_OID_SIGNATURE)
     {
-        Adapter->RequestStatus = Status;
-        NdisSetEvent(&Adapter->RequestEvent);
+        Context->Status = Status;
+        NdisSetEvent(&Context->Event);
         return;
     }
 
@@ -109,8 +126,8 @@ NwifiOpenAdapterCompleteEx(
 {
     PNWIFI_ADAPTER Adapter = (PNWIFI_ADAPTER)ProtocolBindingContext;
 
-    Adapter->RequestStatus = Status;
-    NdisSetEvent(&Adapter->RequestEvent);
+    Adapter->OpenStatus = Status;
+    NdisSetEvent(&Adapter->OpenEvent);
 }
 
 VOID
@@ -211,7 +228,8 @@ NwifiOpenLowerAdapter(
     OpenParameters.FrameTypeArray = NULL;
     OpenParameters.FrameTypeArraySize = 0;
 
-    NdisResetEvent(&Adapter->RequestEvent);
+    Adapter->OpenStatus = NDIS_STATUS_PENDING;
+    NdisResetEvent(&Adapter->OpenEvent);
 
     Status = NdisOpenAdapterEx(gNwifi.ProtocolHandle,
                                (NDIS_HANDLE)Adapter,
@@ -220,8 +238,11 @@ NwifiOpenLowerAdapter(
                                &Adapter->BindingHandle);
     if (Status == NDIS_STATUS_PENDING)
     {
-        NdisWaitEvent(&Adapter->RequestEvent, 0);
-        Status = Adapter->RequestStatus;
+        while (!NdisWaitEvent(&Adapter->OpenEvent, 0))
+        {
+            /* Retry an alertable wait until open completion. */
+        }
+        Status = Adapter->OpenStatus;
     }
 
     return Status;
@@ -262,7 +283,7 @@ NwifiBindAdapterEx(
 
     InitializeListHead(&Adapter->Link);
     NdisAllocateSpinLock(&Adapter->DataLock);
-    NdisInitializeEvent(&Adapter->RequestEvent);
+    NdisInitializeEvent(&Adapter->OpenEvent);
     NdisInitializeEvent(&Adapter->CloseEvent);
     Adapter->State = NwifiStateInitializing;
     Adapter->ProtocolBindContext = BindContext;
@@ -405,7 +426,10 @@ FailAfterOpen:
     NdisResetEvent(&Adapter->CloseEvent);
     if (NdisCloseAdapterEx(Adapter->BindingHandle) == NDIS_STATUS_PENDING)
     {
-        NdisWaitEvent(&Adapter->CloseEvent, 0);
+        while (!NdisWaitEvent(&Adapter->CloseEvent, 0))
+        {
+            /* Retry an alertable wait until close completion. */
+        }
     }
     Adapter->BindingHandle = NULL;
 
@@ -458,7 +482,10 @@ NwifiUnbindAdapterEx(
     Status = NdisCloseAdapterEx(Adapter->BindingHandle);
     if (Status == NDIS_STATUS_PENDING)
     {
-        NdisWaitEvent(&Adapter->CloseEvent, 0);
+        while (!NdisWaitEvent(&Adapter->CloseEvent, 0))
+        {
+            /* Retry an alertable wait until close completion. */
+        }
         Status = NDIS_STATUS_SUCCESS;
     }
     Adapter->BindingHandle = NULL;

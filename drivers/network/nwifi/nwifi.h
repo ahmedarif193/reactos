@@ -215,9 +215,9 @@ typedef struct _NWIFI_ADAPTER
     volatile LONG PendingSends;             /* NBLs sent down, not completed */
     volatile LONG PendingReceives;          /* NBLs indicated up, not returned */
 
-    /* ---- Synchronous request plumbing (protocol OID round-trips) ---- */
-    NDIS_EVENT    RequestEvent;
-    NDIS_STATUS   RequestStatus;
+    /* ---- Lower-binding lifecycle completion ---- */
+    NDIS_EVENT    OpenEvent;
+    NDIS_STATUS   OpenStatus;
     NDIS_EVENT    CloseEvent;
 
     /* ---- Statistics ---- */
