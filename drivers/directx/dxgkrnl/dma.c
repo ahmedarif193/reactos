@@ -18,15 +18,174 @@
 #include "present.h"
 #include "vidmm.h"
 #include "vidpn.h"
+#include "vidsch.h"
+
+/* ========================================================================
+ * Render ring
+ *
+ * The WDDM render contract gives the user-mode driver a command buffer, an
+ * allocation list, and a patch-location list that dxgkrnl owns.  One backing
+ * block holds all three and is mapped into the creating process exactly once;
+ * D3DKMTRender translates its contents into a kernel DMA buffer through
+ * DxgkDdiRender and then republishes the same mapping for the next frame.
+ * ====================================================================== */
+
+#define DXGKP_RENDER_MIN_COMMAND_BYTES  PAGE_SIZE
+#define DXGKP_RENDER_MAX_COMMAND_BYTES  (1024 * 1024)
+
+VOID
+DxgkContextRenderTeardown(
+    _Inout_ PDXGKRNL_CONTEXT Context)
+{
+    KAPC_STATE ApcState;
+    BOOLEAN Attached = FALSE;
+
+    PAGED_CODE();
+    if (Context == NULL || Context->RenderRingKernel == NULL)
+        return;
+
+    if (Context->RenderRingUser != NULL && Context->RenderRingMdl != NULL)
+    {
+        if (Context->RenderRingProcess != NULL && Context->RenderRingProcess != PsGetCurrentProcess())
+        {
+            KeStackAttachProcess(Context->RenderRingProcess, &ApcState);
+            Attached = TRUE;
+        }
+        MmUnmapLockedPages(Context->RenderRingUser, Context->RenderRingMdl);
+        if (Attached)
+            KeUnstackDetachProcess(&ApcState);
+        Context->RenderRingUser = NULL;
+    }
+    if (Context->RenderRingMdl != NULL)
+    {
+        IoFreeMdl(Context->RenderRingMdl);
+        Context->RenderRingMdl = NULL;
+    }
+    if (Context->RenderRingProcess != NULL)
+    {
+        ObDereferenceObject(Context->RenderRingProcess);
+        Context->RenderRingProcess = NULL;
+    }
+    ExFreePoolWithTag(Context->RenderRingKernel, TAG_DXGK_CONTEXT);
+    Context->RenderRingKernel = NULL;
+    Context->RenderRingBytes = 0;
+    Context->RenderCommandBufferSize = 0;
+    Context->RenderAllocationListSize = 0;
+    Context->RenderPatchLocationListSize = 0;
+}
+
+/*
+ * DxgkContextRenderInitialize
+ *
+ * Builds and publishes the render ring for a freshly created context.  The
+ * geometry follows the miniport's DXGK_CONTEXTINFO, clamped to what this
+ * scheduler's inline packet capacity can actually submit, so a request that
+ * is accepted here can always be submitted later.
+ *
+ * IRQL: PASSIVE_LEVEL, in the creating process context.
+ */
+NTSTATUS
+DxgkContextRenderInitialize(
+    _Inout_ PDXGKRNL_CONTEXT Context)
+{
+    SIZE_T TotalBytes;
+    ULONG CommandBytes;
+    ULONG AllocationCount;
+    ULONG PatchCount;
+    PMDL Mdl;
+    PVOID Kernel;
+    PVOID User = NULL;
+
+    PAGED_CODE();
+    if (Context == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    CommandBytes = Context->ContextInfo.DmaBufferSize;
+    if (CommandBytes < DXGKP_RENDER_MIN_COMMAND_BYTES)
+        CommandBytes = DXGKP_RENDER_MIN_COMMAND_BYTES;
+    if (CommandBytes > DXGKP_RENDER_MAX_COMMAND_BYTES)
+        CommandBytes = DXGKP_RENDER_MAX_COMMAND_BYTES;
+    CommandBytes = (ULONG)ROUND_TO_PAGES(CommandBytes);
+
+    AllocationCount = Context->ContextInfo.AllocationListSize;
+    if (AllocationCount == 0 || AllocationCount > VIDSCH_INLINE_ALLOCATIONS)
+        AllocationCount = VIDSCH_INLINE_ALLOCATIONS;
+    PatchCount = Context->ContextInfo.PatchLocationListSize;
+    if (PatchCount == 0 || PatchCount > VIDSCH_INLINE_PATCHES)
+        PatchCount = VIDSCH_INLINE_PATCHES;
+
+    Context->RenderAllocationListOffset = CommandBytes;
+    Context->RenderPatchLocationListOffset = CommandBytes + AllocationCount * (ULONG)sizeof(D3DDDI_ALLOCATIONLIST);
+    TotalBytes = (SIZE_T)Context->RenderPatchLocationListOffset + (SIZE_T)PatchCount * sizeof(D3DDDI_PATCHLOCATIONLIST);
+    TotalBytes = ROUND_TO_PAGES(TotalBytes);
+
+    Kernel = ExAllocatePoolWithTag(NonPagedPool, TotalBytes, TAG_DXGK_CONTEXT);
+    if (Kernel == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    RtlZeroMemory(Kernel, TotalBytes);
+
+    Mdl = IoAllocateMdl(Kernel, (ULONG)TotalBytes, FALSE, FALSE, NULL);
+    if (Mdl == NULL)
+    {
+        ExFreePoolWithTag(Kernel, TAG_DXGK_CONTEXT);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    MmBuildMdlForNonPagedPool(Mdl);
+
+    _SEH2_TRY
+    {
+        User = MmMapLockedPagesSpecifyCache(Mdl, UserMode, MmCached, NULL, FALSE, NormalPagePriority);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        User = NULL;
+    }
+    _SEH2_END;
+    if (User == NULL)
+    {
+        IoFreeMdl(Mdl);
+        ExFreePoolWithTag(Kernel, TAG_DXGK_CONTEXT);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    Context->RenderRingKernel = Kernel;
+    Context->RenderRingUser = User;
+    Context->RenderRingMdl = Mdl;
+    Context->RenderRingBytes = TotalBytes;
+    Context->RenderCommandBufferSize = CommandBytes;
+    Context->RenderAllocationListSize = AllocationCount;
+    Context->RenderPatchLocationListSize = PatchCount;
+    Context->RenderRingProcess = PsGetCurrentProcess();
+    ObReferenceObject(Context->RenderRingProcess);
+    return STATUS_SUCCESS;
+}
+
+static VOID
+DxgkpRenderPublishRing(
+    _In_ PDXGKRNL_CONTEXT Context,
+    _Inout_ D3DKMT_RENDER *pRender)
+{
+    pRender->pNewCommandBuffer = Context->RenderRingUser;
+    pRender->NewCommandBufferSize = Context->RenderCommandBufferSize;
+    pRender->pNewAllocationList = (D3DDDI_ALLOCATIONLIST *)((PUCHAR)Context->RenderRingUser + Context->RenderAllocationListOffset);
+    pRender->NewAllocationListSize = Context->RenderAllocationListSize;
+    pRender->pNewPatchLocationList = (D3DDDI_PATCHLOCATIONLIST *)((PUCHAR)Context->RenderRingUser + Context->RenderPatchLocationListOffset);
+    pRender->NewPatchLocationListSize = Context->RenderPatchLocationListSize;
+    pRender->NewCommandBuffer = 0;
+}
 
 /* ========================================================================
  * DxgkRender
  *
- * D3DKMTRender -- submits a command buffer to the GPU scheduler.
+ * D3DKMTRender -- translates the context's command buffer into a DMA buffer
+ * through DxgkDdiRender and submits it as tracked GPU work.
  *
- * A zero-length render carries no GPU work and is acknowledged after context
- * validation.  Non-empty legacy render streams remain unsupported until the
- * complete Render/Patch/Submit contract is implemented.
+ * Every allocation the request names is referenced and residency-pinned
+ * before translation, so the placement DxgkDdiPatch writes at kick time is
+ * the one that was validated here and cannot be evicted underneath the
+ * packet.  The pins are owned by the submission and released exactly once at
+ * its terminal edge.  A zero-length render carries no GPU work and is
+ * acknowledged after validation.
  *
  * IRQL: PASSIVE_LEVEL
  * ====================================================================== */
@@ -38,7 +197,26 @@ DxgkRender(
     PDXGKRNL_ADAPTER Adapter = NULL;
     PDXGKRNL_DEVICE Device = NULL;
     PDXGKRNL_CONTEXT Context;
+    PDXGKRNL_DMA_BUFFER DmaBuffer = NULL;
+    DXGKARG_RENDER RenderArgs;
+    DXGKRNL_TRACK_DMA_ARGS TrackArgs;
+    D3DDDI_ALLOCATIONLIST *UserAllocationList;
+    D3DDDI_PATCHLOCATIONLIST *UserPatchList;
+    D3DDDI_ALLOCATIONLIST CapturedAllocations[VIDSCH_INLINE_ALLOCATIONS];
+    D3DDDI_PATCHLOCATIONLIST CapturedPatches[VIDSCH_INLINE_PATCHES];
+    D3DDDI_PATCHLOCATIONLIST PatchOut[VIDSCH_INLINE_PATCHES];
+    DXGK_ALLOCATIONLIST KernelAllocations[VIDSCH_INLINE_ALLOCATIONS];
+    PDXGKVMM_ALLOCATION AllocationReferences[VIDSCH_INLINE_ALLOCATIONS];
+    PDXGKVMM_ALLOCATION OpenBindings[VIDSCH_INLINE_ALLOCATIONS];
+    PVOID DmaBufferPrivateData = NULL;
+    UINT ReferencedCount = 0;
+    UINT PatchOutCount = 0;
+    UINT DmaBytesUsed = 0;
+    UINT Index;
+    ULONG VidSchFence = 0;
     NTSTATUS Status;
+    BOOLEAN RingLocked = FALSE;
+    BOOLEAN KmdTransaction = FALSE;
 
     PAGED_CODE();
 
@@ -64,35 +242,262 @@ DxgkRender(
         DxgkDereferenceContext(Context);
         return STATUS_NOT_SUPPORTED;
     }
-
-    Status = STATUS_SUCCESS;
     if (pRender->hDevice != 0 && pRender->hDevice != Device->Handle)
-        Status = STATUS_INVALID_HANDLE;
-    else if (pRender->CommandLength != 0)
-        Status = STATUS_NOT_SUPPORTED;
-
-    if (!NT_SUCCESS(Status))
     {
         DxgkDereferenceContext(Context);
-        return Status;
+        return STATUS_INVALID_HANDLE;
+    }
+    if (Context->VirtualAddressing)
+    {
+        /* Virtual contexts submit through SubmitCommandVirtual, not here. */
+        DxgkDereferenceContext(Context);
+        return STATUS_INVALID_PARAMETER;
     }
 
-    DXGKRNL_TRACE("DxgkRender: hDevice=0x%X hContext=0x%X CmdBufSize=%u\n",
+    DXGKRNL_TRACE("DxgkRender: hDevice=0x%X hContext=0x%X CmdBufSize=%u allocs=%u patches=%u\n",
                   pRender->hDevice,
                   pRender->hContext,
-                  pRender->CommandLength);
+                  pRender->CommandLength,
+                  pRender->AllocationCount,
+                  pRender->PatchLocationCount);
 
-    /* A zero-length render has no GPU work.  Non-empty legacy render streams
-     * stay unsupported until a complete Render/Patch/Submit path exists. */
-    pRender->pNewCommandBuffer = NULL;
-    pRender->NewCommandBufferSize = 0;
-    pRender->pNewAllocationList = NULL;
-    pRender->NewAllocationListSize = 0;
-    pRender->pNewPatchLocationList = NULL;
-    pRender->NewPatchLocationListSize = 0;
+    (VOID)KeWaitForSingleObject(&Context->RenderLock, Executive, KernelMode, FALSE, NULL);
+    RingLocked = TRUE;
 
+    if (Context->RenderRingKernel == NULL || Context->RenderRingUser == NULL)
+    {
+        Status = STATUS_DEVICE_NOT_READY;
+        goto Cleanup;
+    }
+    if (Context->RenderRingProcess != PsGetCurrentProcess())
+    {
+        Status = STATUS_ACCESS_DENIED;
+        goto Cleanup;
+    }
+    if (pRender->AllocationCount > Context->RenderAllocationListSize ||
+        pRender->PatchLocationCount > Context->RenderPatchLocationListSize)
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto Cleanup;
+    }
+    if (pRender->CommandLength > Context->RenderCommandBufferSize ||
+        pRender->CommandOffset > Context->RenderCommandBufferSize ||
+        pRender->CommandOffset + pRender->CommandLength > Context->RenderCommandBufferSize)
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto Cleanup;
+    }
+
+    if (pRender->CommandLength == 0)
+    {
+        DxgkpRenderPublishRing(Context, pRender);
+        pRender->QueuedBufferCount = 0;
+        Status = STATUS_SUCCESS;
+        goto Cleanup;
+    }
+
+    if (DXGK_CB_FULL(Adapter, DxgkDdiRender) == NULL || DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommand) == NULL)
+    {
+        Status = STATUS_NOT_SUPPORTED;
+        goto Cleanup;
+    }
+
+    /* Snapshot the user-writable lists before validating them so no entry can
+     * change between validation and use. */
+    RtlZeroMemory(CapturedAllocations, sizeof(CapturedAllocations));
+    RtlZeroMemory(CapturedPatches, sizeof(CapturedPatches));
+    RtlZeroMemory(KernelAllocations, sizeof(KernelAllocations));
+    RtlZeroMemory(AllocationReferences, sizeof(AllocationReferences));
+    RtlZeroMemory(OpenBindings, sizeof(OpenBindings));
+    UserAllocationList = (D3DDDI_ALLOCATIONLIST *)((PUCHAR)Context->RenderRingKernel + Context->RenderAllocationListOffset);
+    UserPatchList = (D3DDDI_PATCHLOCATIONLIST *)((PUCHAR)Context->RenderRingKernel + Context->RenderPatchLocationListOffset);
+    if (pRender->AllocationCount != 0)
+        RtlCopyMemory(CapturedAllocations, UserAllocationList, pRender->AllocationCount * sizeof(*CapturedAllocations));
+    if (pRender->PatchLocationCount != 0)
+        RtlCopyMemory(CapturedPatches, UserPatchList, pRender->PatchLocationCount * sizeof(*CapturedPatches));
+
+    for (Index = 0; Index < pRender->PatchLocationCount; ++Index)
+    {
+        if (CapturedPatches[Index].AllocationIndex >= pRender->AllocationCount)
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Cleanup;
+        }
+    }
+
+    if (!DxgkBeginKmdTransaction(Adapter))
+    {
+        Status = STATUS_DELETE_PENDING;
+        goto Cleanup;
+    }
+    KmdTransaction = TRUE;
+    if (InterlockedCompareExchange(&Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE ||
+        InterlockedCompareExchange(&Context->Destroying, 0, 0) != 0)
+    {
+        Status = STATUS_DEVICE_REMOVED;
+        goto Cleanup;
+    }
+
+    for (Index = 0; Index < pRender->AllocationCount; ++Index)
+    {
+        PDXGKVMM_ALLOCATION Reference = NULL;
+        PDXGKVMM_ALLOCATION Binding = NULL;
+
+        Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)CapturedAllocations[Index].hAllocation, Adapter, Device, &Reference);
+        if (!NT_SUCCESS(Status))
+        {
+            Status = STATUS_INVALID_HANDLE;
+            goto Cleanup;
+        }
+        Status = DxgkVidMmAcquireSubmissionResidencyPin(Reference, Adapter, &KernelAllocations[Index]);
+        if (!NT_SUCCESS(Status))
+        {
+            DxgkVidMmDereferenceAllocation(Reference);
+            goto Cleanup;
+        }
+        KernelAllocations[Index].WriteOperation = CapturedAllocations[Index].WriteOperation;
+        Status = DxgkVidMmReferenceOpenBinding((HANDLE)(ULONG_PTR)CapturedAllocations[Index].hAllocation, Adapter, Device, &KernelAllocations[Index].hDeviceSpecificAllocation, &Binding);
+        if (!NT_SUCCESS(Status))
+        {
+            DxgkVidMmReleaseSubmissionResidencyPin(Reference);
+            DxgkVidMmDereferenceAllocation(Reference);
+            goto Cleanup;
+        }
+        AllocationReferences[Index] = Reference;
+        OpenBindings[Index] = Binding;
+        ReferencedCount++;
+    }
+
+    Status = DxgkAllocateDmaBuffer(Adapter, max(Context->ContextInfo.DmaBufferSize, pRender->CommandLength), &DmaBuffer);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    RtlZeroMemory(&RenderArgs, sizeof(RenderArgs));
+    RenderArgs.pCommand = (PUCHAR)Context->RenderRingKernel + pRender->CommandOffset;
+    RenderArgs.CommandLength = pRender->CommandLength;
+    RenderArgs.pDmaBuffer = DmaBuffer->VirtualAddress;
+    RenderArgs.DmaSize = DmaBuffer->Capacity;
+    RenderArgs.pDmaBufferPrivateData = &DmaBufferPrivateData;
+    RenderArgs.DmaBufferPrivateDataSize = sizeof(DmaBufferPrivateData);
+    RenderArgs.pAllocationList = KernelAllocations;
+    RenderArgs.AllocationListSize = pRender->AllocationCount;
+    RenderArgs.pPatchLocationListIn = CapturedPatches;
+    RenderArgs.PatchLocationListInSize = pRender->PatchLocationCount;
+    RenderArgs.pPatchLocationListOut = PatchOut;
+    RenderArgs.PatchLocationListOutSize = RTL_NUMBER_OF(PatchOut);
+    RenderArgs.DmaBufferSegmentId = DmaBuffer->SegmentId;
+    RenderArgs.DmaBufferPhysicalAddress = DmaBuffer->SegmentAddress;
+    RtlZeroMemory(PatchOut, sizeof(PatchOut));
+
+    if (!DxgkAcquireKmdCall(Adapter))
+    {
+        Status = STATUS_DELETE_PENDING;
+        goto Cleanup;
+    }
+    _SEH2_TRY
+    {
+        Status = DXGK_CB_FULL(Adapter, DxgkDdiRender)(Context->hMiniportContext != NULL ? Context->hMiniportContext : Device->hMiniportDevice, &RenderArgs);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    DxgkReleaseKmdCall(Adapter);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    if (RenderArgs.pDmaBuffer == NULL ||
+        (PUCHAR)RenderArgs.pDmaBuffer < (PUCHAR)DmaBuffer->VirtualAddress ||
+        (PUCHAR)RenderArgs.pDmaBuffer > (PUCHAR)DmaBuffer->VirtualAddress + DmaBuffer->Capacity)
+    {
+        Status = STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+        goto Cleanup;
+    }
+    DmaBytesUsed = (UINT)((PUCHAR)RenderArgs.pDmaBuffer - (PUCHAR)DmaBuffer->VirtualAddress);
+    if (RenderArgs.pPatchLocationListOut < PatchOut ||
+        (SIZE_T)(RenderArgs.pPatchLocationListOut - PatchOut) > RTL_NUMBER_OF(PatchOut))
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto Cleanup;
+    }
+    PatchOutCount = (UINT)(RenderArgs.pPatchLocationListOut - PatchOut);
+    for (Index = 0; Index < PatchOutCount; ++Index)
+    {
+        if (PatchOut[Index].AllocationIndex >= pRender->AllocationCount)
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Cleanup;
+        }
+    }
+    if (DmaBytesUsed == 0)
+    {
+        /* The miniport translated the stream to no hardware work. */
+        DxgkpRenderPublishRing(Context, pRender);
+        pRender->QueuedBufferCount = 0;
+        Status = STATUS_SUCCESS;
+        goto Cleanup;
+    }
+    DmaBuffer->SubmissionStartOffset = 0;
+    DmaBuffer->SubmissionEndOffset = DmaBytesUsed;
+
+    RtlZeroMemory(&TrackArgs, sizeof(TrackArgs));
+    TrackArgs.Device = Device;
+    TrackArgs.Context = Context;
+    TrackArgs.EnforceSubmissionQuota = TRUE;
+    TrackArgs.AllocationReferences = AllocationReferences;
+    TrackArgs.AllocationReferenceCount = ReferencedCount;
+    TrackArgs.OpenBindingReferences = OpenBindings;
+    TrackArgs.OpenBindingReferenceCount = ReferencedCount;
+
+    Status = VidSchSubmitCommandTracked(Adapter,
+                                        Context->NodeOrdinal,
+                                        0,
+                                        DmaBuffer,
+                                        &DmaBufferPrivateData,
+                                        sizeof(DmaBufferPrivateData),
+                                        KernelAllocations,
+                                        pRender->AllocationCount,
+                                        PatchOut,
+                                        PatchOutCount,
+                                        Adapter->SchedulingCaps.MultiEngineAware ? NULL : Device->hMiniportDevice,
+                                        Adapter->SchedulingCaps.MultiEngineAware ? Context->hMiniportContext : NULL,
+                                        Context->SchedulingPriority,
+                                        &TrackArgs,
+                                        0,
+                                        0,
+                                        &VidSchFence);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    /* The DMA buffer is now owned by the tracked submission, which took its
+     * own allocation references and residency pins; the ones this call holds
+     * are released below either way. */
+    DmaBuffer = NULL;
+
+    DxgkpRenderPublishRing(Context, pRender);
+    pRender->QueuedBufferCount = 1;
+    Status = STATUS_SUCCESS;
+
+Cleanup:
+    for (Index = 0; Index < ReferencedCount; ++Index)
+    {
+        if (OpenBindings[Index] != NULL)
+            DxgkVidMmDereferenceLogicalAllocation(OpenBindings[Index]);
+        if (AllocationReferences[Index] != NULL)
+        {
+            DxgkVidMmReleaseSubmissionResidencyPin(AllocationReferences[Index]);
+            DxgkVidMmDereferenceAllocation(AllocationReferences[Index]);
+        }
+    }
+    if (DmaBuffer != NULL)
+        DxgkFreeDmaBuffer(DmaBuffer);
+    if (KmdTransaction)
+        DxgkEndKmdTransaction(Adapter);
+    if (RingLocked)
+        KeReleaseMutex(&Context->RenderLock, FALSE);
     DxgkDereferenceContext(Context);
-    return STATUS_SUCCESS;
+    return Status;
 }
 
 /* ========================================================================

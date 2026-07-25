@@ -82,8 +82,8 @@ typedef enum _VIDSCH_SCHEDULER_STATE
 
 /* Inline (deep-copied) list capacities; submissions with larger lists are
  * rejected with STATUS_NOT_SUPPORTED and take the caller's fallback path. */
-#define VIDSCH_INLINE_ALLOCATIONS   3
-#define VIDSCH_INLINE_PATCHES       8
+#define VIDSCH_INLINE_ALLOCATIONS   32
+#define VIDSCH_INLINE_PATCHES       64
 #define VIDSCH_MAX_PENDING_PACKETS  512
 
 /* VIDSCH_DMA_PACKET.SubmitFlags uses the DXGK_SUBMITCOMMANDFLAGS layout. */
