@@ -4769,7 +4769,7 @@ DxgkpIsMsixEnabled(
 
 /*
  * DxgkpMarkInterruptResourcesMessageBased — set CM_RESOURCE_INTERRUPT_MESSAGE on
- * every interrupt descriptor in a CM resource list.
+ * the interrupt descriptors that really are messages.
  *
  * The FDO's interrupt resource descriptor can arrive line-based on ROS ARM64 even
  * when MSI-X is in use.  The miniport (viogpudo) reads these resources back via
@@ -4777,6 +4777,18 @@ DxgkpIsMsixEnabled(
  * VirtIO queues for polling (NO_VECTOR) instead of enabling per-queue MSI-X — so
  * the device never raises a completion MSI.  Once we know we are message-based,
  * mark the resources accordingly so the miniport enables queue MSI-X.
+ *
+ * But *only* the ones that are messages.  This used to mark every interrupt
+ * descriptor it found, which included the INTx GSI still present in the list
+ * alongside the MSI-X messages.  A miniport pairing its virtqueues with messages
+ * then counts one more than the device's table holds, and the extra one -- the
+ * line -- is precisely the interrupt that cannot fire while the device is in
+ * MSI-X mode.
+ *
+ * An MSI is edge-triggered by definition: the message is a posted write, and
+ * there is no wire to hold asserted.  A level-sensitive descriptor is therefore
+ * never a message, and that is a property of what MSI *is* rather than a guess
+ * about how this platform happens to build its resource lists.
  */
 static VOID
 DxgkpMarkInterruptResourcesMessageBased(
@@ -4793,8 +4805,17 @@ DxgkpMarkInterruptResourcesMessageBased(
         for (di = 0; di < Partial->Count; di++)
         {
             PCM_PARTIAL_RESOURCE_DESCRIPTOR Desc = &Partial->PartialDescriptors[di];
-            if (Desc->Type == CmResourceTypeInterrupt)
-                Desc->Flags |= CM_RESOURCE_INTERRUPT_MESSAGE;
+
+            if (Desc->Type != CmResourceTypeInterrupt)
+                continue;
+            if ((Desc->Flags & CM_RESOURCE_INTERRUPT_LATCHED) == 0)
+            {
+                /* Level-sensitive: the INTx line, not a message.  Leave it as
+                 * it is so the miniport does not count it among its MSI-X
+                 * messages. */
+                continue;
+            }
+            Desc->Flags |= CM_RESOURCE_INTERRUPT_MESSAGE;
         }
     }
 }
