@@ -3140,3 +3140,4 @@ NTAPI
 DxgkDebugInit(VOID);
 
 #endif /* _DXGKRNL_PRIVATE_H_ */
+#include "keyedmutex.h"

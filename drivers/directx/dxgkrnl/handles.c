@@ -571,8 +571,8 @@ DxgkCreateOwnedHandle(
     _Inout_ volatile LONG *TeardownClaimed,
     _Out_ D3DKMT_HANDLE *OutHandle)
 {
-    if (Type < DxgkHandleTypeSynchronizationObject || Type > DxgkHandleTypeAllocation)
-        return STATUS_OBJECT_TYPE_MISMATCH;
+    if (Type < DxgkHandleTypeSynchronizationObject || Type > DxgkHandleTypeKeyedMutex)
+        return STATUS_INVALID_PARAMETER;
     if (TeardownClaimed == NULL)
         return STATUS_INVALID_PARAMETER;
     return DxgkpCreateHandle(Type, Object, Adapter, OwnerProcess, Destroying, TeardownClaimed, FALSE, OutHandle);
@@ -597,9 +597,9 @@ DxgkReferenceOwnedHandle(
     if (OwnerProcess != NULL)
         Status = DxgkpValidateHandleEntry(Entry, Handle, Type, OwnerProcess);
     else if (DxgkpHandleType(Handle) != Type)
-        Status = STATUS_OBJECT_TYPE_MISMATCH;
+        Status = STATUS_INVALID_PARAMETER;
     else if (Entry == NULL || Entry->Type != Type)
-        Status = STATUS_INVALID_HANDLE;
+        Status = STATUS_INVALID_PARAMETER;
     else
         Status = STATUS_SUCCESS;
     if (NT_SUCCESS(Status) && !ReferenceRoutine(Entry->Object))
