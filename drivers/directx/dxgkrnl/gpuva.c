@@ -34,6 +34,7 @@
 /* INCLUDES *******************************************************************/
 
 #include "dxgkrnl_private.h"
+#include "gpuva_core.h"
 #include "vidmm.h"
 
 #define NDEBUG
@@ -98,7 +99,7 @@ GpuVaRangesOverlap(
     _In_ ULONGLONG StartA, _In_ ULONGLONG SizeA,
     _In_ ULONGLONG StartB, _In_ ULONGLONG SizeB)
 {
-    return (StartA < StartB + SizeB) && (StartB < StartA + SizeA);
+    return DxgkGpuVaCoreRangesOverlap(StartA, SizeA, StartB, SizeB);
 }
 
 /*
@@ -344,11 +345,7 @@ GpuVaGetRangeEnd(
     _In_ ULONGLONG Size,
     _Out_ D3DGPU_VIRTUAL_ADDRESS *EndAddress)
 {
-    if (Size == 0 || Address > MAXULONGLONG - Size)
-        return FALSE;
-
-    *EndAddress = Address + Size;
-    return TRUE;
+    return DxgkGpuVaCoreRangeEnd(Address, Size, EndAddress);
 }
 
 static VOID
