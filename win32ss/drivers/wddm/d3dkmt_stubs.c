@@ -2408,7 +2408,9 @@ APIENTRY
 D3DKMTSetQueuedLimit(
     _In_ CONST D3DKMT_SETQUEUEDLIMIT *pData)
 {
-    return WddmBridgeCaptureFixedIoctl(IOCTL_D3DKMT_SETQUEUEDLIMIT, (PVOID)pData, sizeof(*pData), FALSE);
+    /* D3DKMT_GET_QUEUEDLIMIT_* returns the limit in the same struct, so the
+     * result has to travel back to the caller. */
+    return WddmBridgeCaptureFixedIoctl(IOCTL_D3DKMT_SETQUEUEDLIMIT, (PVOID)pData, sizeof(*pData), TRUE);
 }
 
 NTSTATUS
