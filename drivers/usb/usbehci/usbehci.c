@@ -1237,8 +1237,11 @@ EHCI_InitializeHardware(IN PEHCI_EXTENSION EhciExtension)
     EhciExtension->InterruptMask.AsULONG = 0;
     EhciExtension->InterruptMask.Interrupt = 1;
     EhciExtension->InterruptMask.ErrorInterrupt = 1;
-    /* Enable port-change interrupts by default to reduce polling */
-    EhciExtension->InterruptMask.PortChangeInterrupt = 1;
+    /*
+     * Root-hub PCD interrupts are armed by USBPORT_RootHubSCE after the
+     * status-change endpoint is ready to consume them.
+     */
+    EhciExtension->InterruptMask.PortChangeInterrupt = 0;
     EhciExtension->InterruptMask.FrameListRollover = 1;
     EhciExtension->InterruptMask.HostSystemError = 1;
     EhciExtension->InterruptMask.InterruptOnAsyncAdvance = 1;
@@ -1540,8 +1543,6 @@ EHCI_StartController(IN PVOID ehciExtension,
     Command.InterruptThreshold = 1; // one micro-frame
     WRITE_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG, Command.AsULONG);
 
-    /* Proactively enable interrupts (USBPORT may also call EnableInterrupts) */
-    EHCI_EnableInterrupts(EhciExtension);
     DPRINT_EHCI("EHCI_StartController: HcCommand=0x%08lx (InterruptThreshold=1)\n", Command.AsULONG);
 
     Command.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG);
