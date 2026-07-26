@@ -687,6 +687,14 @@ NtGdiDdDDIGetMultisampleMethodList(_Inout_ D3DKMT_GETMULTISAMPLEMETHODLIST* unna
 /*
  * Wrap a GDI device context around memory the caller already owns.
  *
+ * NOTE ON LAYER: on Windows `D3DKMTCreateDCFromMemory` is a *user-mode* gdi32
+ * function -- CreateDIBSection plus CreateCompatibleDC -- and issues no syscall
+ * of its own.  ReactOS carries a slot for it in w32ksvc64.h because that table
+ * mirrors the full Windows syscall numbering, not because anything dispatches
+ * through it.  These kernel entries are therefore unreachable by design and are
+ * kept only so the DDI has an implementation to grow from if the split ever
+ * changes; the working implementation belongs in gdi32.
+ *
  * The D3D runtime uses this to hand a CPU-accessible surface to code that
  * speaks GDI -- a locked allocation, say, that something wants to BitBlt out
  * of.  The bitmap is created *over* the caller's pointer rather than copying:
