@@ -26,6 +26,13 @@ list(APPEND SOURCE
     vidmm.c
     paging.c
     gpuva.c
+    gpuva_core.c
+    fence_core.c
+    dma_core.c
+    residency_core.c
+    paging_core.c
+    display_core.c
+    object_core.c
     capture.c
     handles.c
     device_work_core.c
