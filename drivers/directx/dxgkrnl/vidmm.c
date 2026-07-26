@@ -3393,6 +3393,23 @@ DxgkVidMmTeardownAdapter(
         }
     }
 
+    /*
+     * Every allocation this adapter held is gone by now, so the owner's
+     * ledger can be retired.  Do it here rather than at provider complete-stop
+     * because the shared primary and this segment table are destroyed after
+     * that point, and retiring early would leave the two sides disagreeing
+     * about who still holds space.
+     */
+    {
+        PDXGMMS2_VIDMM_INTERFACE_V1 VidMm = DxgkpVidMmOwner(Adapter);
+
+        if (VidMm != NULL)
+        {
+            InterlockedExchange(&Adapter->Mms2VidMmValid, 0);
+            VidMm->Stop(VidMm->VidMmHandle);
+        }
+    }
+
     if (Adapter->Segments == NULL)
         return;
 
