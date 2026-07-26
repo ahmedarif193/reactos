@@ -39,11 +39,13 @@ typedef struct _VolumeContextBlock
     /* Paths already known not to exist, most recently used first. */
     FAST_MUTEX MissingNameMutex;
     LIST_ENTRY MissingNameList;
+    LIST_ENTRY MissingNameHash[256];
     ULONG MissingNameCount;
 
     /* Parsed file records kept past their last handle, most recent first. */
     FAST_MUTEX RecordCacheMutex;
     LIST_ENTRY RecordCacheList;
+    LIST_ENTRY RecordCacheHash[256];
     ULONG RecordCacheCount;
 
     /*
@@ -67,7 +69,9 @@ typedef struct _VolumeContextBlock
 } VolumeContextBlock, *PVolumeContextBlock;
 
 #define NTFS_MAX_MISSING_NAMES 256
+#define NTFS_MISSING_NAME_BUCKETS RTL_NUMBER_OF_FIELD(VolumeContextBlock, MissingNameHash)
 #define NTFS_MAX_CACHED_RECORDS 512
+#define NTFS_RECORD_CACHE_BUCKETS RTL_NUMBER_OF_FIELD(VolumeContextBlock, RecordCacheHash)
 #define NTFS_MAX_IDLE_FCBS 64
 
 /* Everything from FileRec onwards describes one open and is reset on reuse;
@@ -77,6 +81,7 @@ typedef struct _VolumeContextBlock
 typedef struct _NtfsCachedRecord
 {
     LIST_ENTRY Link;
+    LIST_ENTRY HashLink;
     ULONG Hash;
     USHORT Length;
     LONG InUse;
@@ -88,6 +93,7 @@ typedef struct _NtfsCachedRecord
 typedef struct _NtfsMissingName
 {
     LIST_ENTRY Link;
+    LIST_ENTRY HashLink;
     ULONG Hash;
     USHORT Length;
     WCHAR Name[1];
