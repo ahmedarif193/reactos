@@ -357,6 +357,12 @@ NtfsMountVolume(IN PDEVICE_OBJECT TargetDeviceObject,
     ExInitializeFastMutex(&VolCB->RecordCacheMutex);
     InitializeListHead(&VolCB->RecordCacheList);
     VolCB->RecordCacheCount = 0;
+    ExInitializeFastMutex(&VolCB->DirCacheMutex);
+    VolCB->CachedDir = NULL;
+    VolCB->CachedDirBusy = FALSE;
+    VolCB->CachedDirPathLength = 0;
+    VolCB->CachedDirGeneration = 0;
+    VolCB->DirGeneration = 0;
     ExInitializeFastMutex(&VolCB->IdleFcbMutex);
     InitializeListHead(&VolCB->IdleFcbList);
     VolCB->IdleFcbCount = 0;

@@ -46,6 +46,20 @@ typedef struct _VolumeContextBlock
     LIST_ENTRY RecordCacheList;
     ULONG RecordCacheCount;
 
+    /*
+     * One loaded directory tree kept for reuse. Building the in-memory
+     * B-tree is nearly the whole cost of listing a directory, and the tree
+     * only goes stale when something in the volume changes; the generation
+     * number says when.
+     */
+    FAST_MUTEX DirCacheMutex;
+    PNtfsDirectory CachedDir;
+    LONG CachedDirGeneration;
+    USHORT CachedDirPathLength;
+    BOOLEAN CachedDirBusy;
+    WCHAR CachedDirPath[128];
+    LONG DirGeneration;
+
     /* Context blocks kept with their resources still initialized. */
     FAST_MUTEX IdleFcbMutex;
     LIST_ENTRY IdleFcbList;
@@ -193,6 +207,16 @@ typedef struct _FCB
     /* Set through FileDispositionInformation or FILE_DELETE_ON_CLOSE;
      * the name is removed when the handle goes away. */
     BOOLEAN DeletePending;
+
+    /* Decided once at open: whether the first data read still owes a
+     * last-access refresh. Checking the record on every read cost more
+     * than the read. */
+    BOOLEAN LastAccessStampPending;
+
+    /* FileDir is on loan from the volume's directory cache. */
+    BOOLEAN FileDirBorrowed;
+    /* First QueryDirectory on this handle must start at the beginning. */
+    BOOLEAN DirScanStarted;
 
     /* Non-NULL when FileRec is on loan from the volume's record cache. */
     struct _NtfsCachedRecord* CachedRecord;
