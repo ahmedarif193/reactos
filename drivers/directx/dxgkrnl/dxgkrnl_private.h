@@ -582,6 +582,14 @@ struct _DXGKRNL_ADAPTER
      * dxgkrnl admits packets through and claims dispatches from. */
     DXGMMS2_SCHEDULER_INTERFACE_V1 Mms2SchedulerInterface;
     volatile LONG               Mms2SchedulerValid;
+    /* Subsystems dxgmms2 reported as fully owned at StartAdapter, and the
+     * highest WDDM version it reported as completely implemented. */
+    ULONGLONG                   Mms2EnabledSubsystems;
+    ULONG                       Mms2HighestCompleteWddmVersion;
+    /* Video-memory ownership contract: the segment commit ledger and every
+     * live placement live in dxgmms2 behind this interface. */
+    DXGMMS2_VIDMM_INTERFACE_V1  Mms2VidMmInterface;
+    volatile LONG               Mms2VidMmValid;
     volatile LONG               Mms2ContextStreamValid;
 
     /* Serializes start against stop, remove, and boot-display handover. */
