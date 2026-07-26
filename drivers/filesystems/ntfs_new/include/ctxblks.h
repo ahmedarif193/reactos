@@ -215,6 +215,8 @@ typedef struct _FCB
 
     /* FileDir is on loan from the volume's directory cache. */
     BOOLEAN FileDirBorrowed;
+    /* FileDir streams INDX entries and borrows FileRec for its lifetime. */
+    BOOLEAN FileDirDirect;
     /* First QueryDirectory on this handle must start at the beginning. */
     BOOLEAN DirScanStarted;
 

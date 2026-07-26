@@ -30,6 +30,11 @@ NtfsDirectoryGetFileBothDirInfo(
     _Inout_ PFILE_BOTH_DIR_INFORMATION Buffer,
     _Inout_ PULONG BufferLength);
 
+NTSTATUS
+NtfsDirectoryLoadForEnumeration(
+    _In_ PNtfsDirectory Dir,
+    _In_ PNtfsFileRecord File);
+
 #ifdef __cplusplus
 }
 #endif
