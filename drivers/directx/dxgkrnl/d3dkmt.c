@@ -6064,6 +6064,23 @@ DxgkpDispatchBufferedIoctl(
             return DxgkPollDisplayChildren(pPoll);
         }
 
+        case IOCTL_D3DKMT_REGISTERTRIMNOTIFICATION:
+        {
+            if (InputLength < sizeof(D3DKMT_REGISTERTRIMNOTIFICATION) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            Status = DxgkRegisterTrimNotification((D3DKMT_REGISTERTRIMNOTIFICATION *)SystemBuffer);
+            if (NT_SUCCESS(Status))
+                Irp->IoStatus.Information = sizeof(D3DKMT_REGISTERTRIMNOTIFICATION);
+            return Status;
+        }
+
+        case IOCTL_D3DKMT_UNREGISTERTRIMNOTIFICATION:
+        {
+            if (InputLength < sizeof(D3DKMT_UNREGISTERTRIMNOTIFICATION) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            return DxgkUnregisterTrimNotification((CONST D3DKMT_UNREGISTERTRIMNOTIFICATION *)SystemBuffer);
+        }
+
         case IOCTL_D3DKMT_CREATEKEYEDMUTEX:
         {
             if (InputLength < sizeof(D3DKMT_CREATEKEYEDMUTEX) || SystemBuffer == NULL)
@@ -6629,6 +6646,8 @@ DxgkDispatchDeviceControl(
         case IOCTL_D3DKMT_OPENKEYEDMUTEX:
         case IOCTL_D3DKMT_ACQUIREKEYEDMUTEX:
         case IOCTL_D3DKMT_RELEASEKEYEDMUTEX:
+        case IOCTL_D3DKMT_REGISTERTRIMNOTIFICATION:
+        case IOCTL_D3DKMT_UNREGISTERTRIMNOTIFICATION:
         case IOCTL_D3DKMT_CREATEKEYEDMUTEX2:
         case IOCTL_D3DKMT_OPENKEYEDMUTEX2:
         case IOCTL_D3DKMT_ACQUIREKEYEDMUTEX2:
