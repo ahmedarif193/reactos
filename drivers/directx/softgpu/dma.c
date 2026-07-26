@@ -427,6 +427,7 @@ SoftGpuDpcRoutine(
     ULONGLONG                    ElapsedUs;
     LONG                         TraceSeq;
     SOFTGPU_SUBMIT               Submit;
+    ULONG                        HeadIndex;
     BOOLEAN                      HaveSubmit;
 
     UNREFERENCED_PARAMETER(Dpc);
@@ -462,8 +463,12 @@ SoftGpuDpcRoutine(
                 KeReleaseSpinLock(&Device->FenceLock, OldIrql);
                 break;
             }
-            Submit = Device->SubmitRing[Device->SubmitRingHead % SOFTGPU_SUBMIT_RING_SIZE];
-            Device->SubmitRingHead++;
+            /* Peek the head without consuming it: a buffer that blocks on a
+             * GPU wait must keep owning its slot, otherwise a producer could
+             * refill it while the engine is parked.  Only this drainer moves
+             * the head, and the full check keeps producers off it. */
+            HeadIndex = Device->SubmitRingHead;
+            Submit = Device->SubmitRing[HeadIndex % SOFTGPU_SUBMIT_RING_SIZE];
             KeReleaseSpinLock(&Device->FenceLock, OldIrql);
             {
                 ULONG ResumeOffset;
@@ -478,15 +483,15 @@ SoftGpuDpcRoutine(
                 }
                 if (!Done)
                 {
-                    /* The engine is blocked on a GPU wait: put the remaining
-                     * records back at the head and stop draining without
-                     * completing the fence.  The refresh timer re-kicks. */
-                    Device->SubmitRingHead--;
-                    Device->SubmitRing[Device->SubmitRingHead % SOFTGPU_SUBMIT_RING_SIZE].StartOffset = ResumeOffset;
+                    /* Blocked on a GPU wait: record where to resume and stop
+                     * draining without completing the fence.  The refresh
+                     * timer re-kicks the engine. */
+                    Device->SubmitRing[HeadIndex % SOFTGPU_SUBMIT_RING_SIZE].StartOffset = ResumeOffset;
                     Device->EngineActive = 0;
                     KeReleaseSpinLock(&Device->FenceLock, OldIrql);
                     break;
                 }
+                Device->SubmitRingHead = HeadIndex + 1;
                 if ((LONG)(Submit.Fence - Device->CompletedFence) > 0)
                     Device->CompletedFence = Submit.Fence;
                 KeReleaseSpinLock(&Device->FenceLock, OldIrql);

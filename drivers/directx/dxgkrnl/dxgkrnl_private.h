@@ -1383,6 +1383,11 @@ struct _DXGKRNL_PROCESS
      */
     HANDLE                      hMiniportProcess;
 
+    /* Miniport device handle used to submit paging packets that belong to
+     * the process rather than to one device (page-table update, TLB flush).
+     * Published by the first device this process creates. */
+    HANDLE                      PagingMiniportDevice;
+
     /*
      * Root page table (a DXGKRNL_GPUVA_PAGE_TABLE, dxgkrnl-managed).
      * Created lazily on the first GPU VA map.
@@ -1515,11 +1520,13 @@ typedef struct _DXGKRNL_SYNC_OBJECT
     LIST_ENTRY                  GlobalShareListEntry;
 
     /*
-     * Periodic monitored fence: the fence advances by one on every vertical
-     * blank of the bound VidPn source rather than on explicit signals.
+     * Periodic monitored fence.  The public contract binds the fence to a
+     * VidPn *target* (the output the compositor watches); this stack maps one
+     * target ordinal to one source ordinal, which is the same mapping the
+     * CRTC_VSYNC interrupt path uses.
      */
     BOOLEAN                     Periodic;
-    D3DDDI_VIDEO_PRESENT_SOURCE_ID PeriodicVidPnSourceId;
+    D3DDDI_VIDEO_PRESENT_TARGET_ID PeriodicVidPnTargetId;
     LIST_ENTRY                  PeriodicListEntry;
 } DXGKRNL_SYNC_OBJECT, *PDXGKRNL_SYNC_OBJECT;
 

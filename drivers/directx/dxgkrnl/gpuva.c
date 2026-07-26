@@ -1119,7 +1119,17 @@ GpuVaEnsureRootPageTable(
  * miniport owns the hardware entry format and the invalidation.
  * Caller MUST hold GpuVaLock.
  */
-static VOID
+/* Paging packets for process-owned page tables are submitted against the
+ * handle the process's first device published. */
+FORCEINLINE
+HANDLE
+GpuVaProcessMiniportDevice(
+    _In_ PDXGKRNL_PROCESS Process)
+{
+    return Process->PagingMiniportDevice;
+}
+
+static NTSTATUS
 GpuVaNotifyPageTableUpdate(
     _In_ PDXGKRNL_PROCESS Process,
     _In_ PDXGKRNL_GPUVA_PAGE_TABLE Table,
@@ -1131,16 +1141,24 @@ GpuVaNotifyPageTableUpdate(
     PDXGKRNL_ADAPTER Adapter = Process->Adapter;
     DXGKRNL_PAGING_OP Op;
     ULONGLONG Coverage;
+    NTSTATUS Status;
 
     if (Adapter == NULL || Count == 0 || Table == NULL)
-        return;
+        return STATUS_INVALID_PARAMETER;
+    /* A miniport that does not describe page-table updates leaves dxgkrnl's
+     * CPU-written tables authoritative, which is a supported configuration. */
     if (!DxgkPagingOperationSupported(Adapter, DxgkPagingOpUpdatePageTable))
-        return;
+        return STATUS_SUCCESS;
     if (StartIndex >= Table->EntryCount || Count > Table->EntryCount - StartIndex)
-        return;
+        return STATUS_INVALID_PARAMETER;
 
+    /* A paging packet is submitted against a miniport device handle; page
+     * tables belong to the process, so borrow one of its devices. */
     RtlZeroMemory(&Op, sizeof(Op));
     Op.Type = DxgkPagingOpUpdatePageTable;
+    Op.hMiniportDevice = GpuVaProcessMiniportDevice(Process);
+    if (Op.hMiniportDevice == NULL)
+        return STATUS_SUCCESS;
     Op.hMiniportProcess = Process->hMiniportProcess;
     Op.PageTableLevel = Table->Level;
     Op.PageTableAddress.CpuVirtual = Table->KernelVa;
@@ -1150,18 +1168,29 @@ GpuVaNotifyPageTableUpdate(
     Op.UpdateMode = Adapter->GpuMmuCaps.PageTableUpdateMode;
     Op.InitialUpdate = InitialUpdate;
     Op.StartVirtualAddress = FirstVirtualAddress;
-    (VOID)DxgkPagingExecuteSynchronous(Adapter, NULL, &Op);
+    Status = DxgkPagingExecuteSynchronous(Adapter, NULL, &Op);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("DxgkGpuVa: page-table update rejected 0x%08lX (level %lu, %lu entries at 0x%I64x)\n", Status, Table->Level, Count, FirstVirtualAddress);
+        return Status;
+    }
 
     if (!DxgkPagingOperationSupported(Adapter, DxgkPagingOpFlushTlb))
-        return;
+        return STATUS_SUCCESS;
     Coverage = (ULONGLONG)Count << GpuVaLevelShift(Adapter, Table->Level);
     RtlZeroMemory(&Op, sizeof(Op));
     Op.Type = DxgkPagingOpFlushTlb;
+    Op.hMiniportDevice = GpuVaProcessMiniportDevice(Process);
+    if (Op.hMiniportDevice == NULL)
+        return STATUS_SUCCESS;
     Op.hMiniportProcess = Process->hMiniportProcess;
     Op.RootPageTableAddress = Process->RootPageTableAddress;
     Op.StartVirtualAddress = FirstVirtualAddress;
     Op.EndVirtualAddress = FirstVirtualAddress + Coverage;
-    (VOID)DxgkPagingExecuteSynchronous(Adapter, NULL, &Op);
+    Status = DxgkPagingExecuteSynchronous(Adapter, NULL, &Op);
+    if (!NT_SUCCESS(Status))
+        DPRINT1("DxgkGpuVa: TLB invalidation rejected 0x%08lX over [0x%I64x,0x%I64x)\n", Status, Op.StartVirtualAddress, Op.EndVirtualAddress);
+    return Status;
 }
 
 /*
@@ -1209,7 +1238,13 @@ GpuVaGetLeafTable(
             Entries[Index].Valid = 1;
             Entries[Index].PageTableAddress =
                 (ULONGLONG)Child->Physical.QuadPart & ~GPUVA_PAGE_MASK;
-            GpuVaNotifyPageTableUpdate(Process, Table, Index, 1, CoverageBase, TRUE);
+            if (!NT_SUCCESS(GpuVaNotifyPageTableUpdate(Process, Table, Index, 1, CoverageBase, TRUE)))
+            {
+                Entries[Index].Flags = 0;
+                Entries[Index].PageTableAddress = 0;
+                Table->Children[Index] = NULL;
+                return NULL;
+            }
         }
         Table = Child;
     }
@@ -1268,7 +1303,7 @@ GpuVaClearPteSpan(
         Entries = (DXGK_PTE *)Leaf->KernelVa;
         Entries[Index].Flags = 0;
         Entries[Index].PageAddress = 0;
-        GpuVaNotifyPageTableUpdate(Process, Leaf, Index, 1, Address + Offset, FALSE);
+        (VOID)GpuVaNotifyPageTableUpdate(Process, Leaf, Index, 1, Address + Offset, FALSE);
     }
 }
 
@@ -1336,7 +1371,13 @@ GpuVaWritePteSpan(
 
             Entries = (DXGK_PTE *)Leaf->KernelVa;
             Entries[Index] = Pte;
-            GpuVaNotifyPageTableUpdate(Process, Leaf, Index, 1, Address + Offset, FALSE);
+            if (!NT_SUCCESS(GpuVaNotifyPageTableUpdate(Process, Leaf, Index, 1, Address + Offset, FALSE)))
+            {
+                Entries[Index].Flags = 0;
+                Entries[Index].PageAddress = 0;
+                GpuVaClearPteSpan(Process, Address, Offset);
+                return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+            }
         }
     }
     return STATUS_SUCCESS;
@@ -1945,6 +1986,15 @@ DxgkGpuVaFree(
             continue;
         if (Range->GpuVirtualAddress >= EndAddress)
             break;
+        /* A system-use range (a monitored fence's value page) is owned by the
+         * kernel object that established it; only that object's teardown may
+         * remove it, otherwise a caller could free the mapping a fence packet
+         * still resolves through. */
+        if (Range->Protection.SystemUseOnly)
+        {
+            ExReleaseFastMutex(&Process->GpuVaLock);
+            return STATUS_INVALID_PARAMETER;
+        }
         if (Range->State == GpuVaStateMapped)
         {
             D3DGPU_VIRTUAL_ADDRESS OverlapStart = max(Range->GpuVirtualAddress, BaseAddress);
@@ -2120,12 +2170,24 @@ DxgkGpuVaMap(
 
     if (BaseAddress != 0)
     {
+        PDXGKRNL_GPUVA_RANGE Existing;
+
         ActualAddress = BaseAddress;
+        /* A system-use range belongs to the kernel object that established
+         * it; remapping over one would retarget a live fence mapping. */
+        Existing = GpuVaFindOverlapping(Process, ActualAddress, SizeInBytes);
+        if (Existing != NULL && Existing->Protection.SystemUseOnly)
+        {
+            ExReleaseFastMutex(&Process->GpuVaLock);
+            if (Binding != NULL)
+                GpuVaDereferenceBinding(Binding);
+            return STATUS_INVALID_PARAMETER;
+        }
         if (GpuVaGetReservationForRange(&Process->GpuVaRangeList, ActualAddress, SizeInBytes, &ReservationBase, &ReservationSize))
         {
             InReservation = TRUE;
         }
-        else if (GpuVaFindOverlapping(Process, ActualAddress, SizeInBytes) != NULL)
+        else if (Existing != NULL)
         {
             ExReleaseFastMutex(&Process->GpuVaLock);
             if (Binding != NULL)
@@ -2365,7 +2427,14 @@ DxgkGpuVaMapFencePage(
         ULONG Index = GpuVaPteIndexFor(Process->Adapter, ActualAddress, 0);
 
         Entries[Index] = Pte;
-        GpuVaNotifyPageTableUpdate(Process, Leaf, Index, 1, ActualAddress, FALSE);
+        if (!NT_SUCCESS(GpuVaNotifyPageTableUpdate(Process, Leaf, Index, 1, ActualAddress, FALSE)))
+        {
+            Entries[Index].Flags = 0;
+            Entries[Index].PageAddress = 0;
+            ExReleaseFastMutex(&Process->GpuVaLock);
+            GpuVaFreeRange(Range);
+            return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+        }
     }
 
     Range->GpuVirtualAddress = ActualAddress;

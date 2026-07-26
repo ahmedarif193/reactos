@@ -31,6 +31,7 @@
  * ====================================================================== */
 
 #define DXGKP_RENDER_MIN_COMMAND_BYTES  PAGE_SIZE
+#define DXGKP_RENDER_MAX_PRIVATE_DATA   (64 * 1024)
 #define DXGKP_RENDER_MAX_COMMAND_BYTES  (1024 * 1024)
 
 VOID
@@ -209,6 +210,7 @@ DxgkRender(
     PDXGKVMM_ALLOCATION AllocationReferences[VIDSCH_INLINE_ALLOCATIONS];
     PDXGKVMM_ALLOCATION OpenBindings[VIDSCH_INLINE_ALLOCATIONS];
     PVOID DmaBufferPrivateData = NULL;
+    ULONG DmaBufferPrivateDataSize = 0;
     UINT ReferencedCount = 0;
     UINT PatchOutCount = 0;
     UINT DmaBytesUsed = 0;
@@ -252,6 +254,13 @@ DxgkRender(
         /* Virtual contexts submit through SubmitCommandVirtual, not here. */
         DxgkDereferenceContext(Context);
         return STATUS_INVALID_PARAMETER;
+    }
+    if (pRender->BroadcastContextCount != 0)
+    {
+        /* Broadcasting one command buffer to additional contexts is not
+         * implemented; refuse rather than silently rendering to one. */
+        DxgkDereferenceContext(Context);
+        return STATUS_NOT_SUPPORTED;
     }
 
     DXGKRNL_TRACE("DxgkRender: hDevice=0x%X hContext=0x%X CmdBufSize=%u allocs=%u patches=%u\n",
@@ -372,13 +381,32 @@ DxgkRender(
     if (!NT_SUCCESS(Status))
         goto Cleanup;
 
+    /* The miniport declares how much DMA-buffer private data it writes per
+     * submission; give it exactly that, not a pointer-sized stack slot. */
+    DmaBufferPrivateDataSize = Context->ContextInfo.DmaBufferPrivateDataSize;
+    if (DmaBufferPrivateDataSize != 0)
+    {
+        if (DmaBufferPrivateDataSize > DXGKP_RENDER_MAX_PRIVATE_DATA)
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Cleanup;
+        }
+        DmaBufferPrivateData = ExAllocatePoolWithTag(NonPagedPool, DmaBufferPrivateDataSize, TAG_DXGK_SUBMITDMA);
+        if (DmaBufferPrivateData == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Cleanup;
+        }
+        RtlZeroMemory(DmaBufferPrivateData, DmaBufferPrivateDataSize);
+    }
+
     RtlZeroMemory(&RenderArgs, sizeof(RenderArgs));
     RenderArgs.pCommand = (PUCHAR)Context->RenderRingKernel + pRender->CommandOffset;
     RenderArgs.CommandLength = pRender->CommandLength;
     RenderArgs.pDmaBuffer = DmaBuffer->VirtualAddress;
     RenderArgs.DmaSize = DmaBuffer->Capacity;
-    RenderArgs.pDmaBufferPrivateData = &DmaBufferPrivateData;
-    RenderArgs.DmaBufferPrivateDataSize = sizeof(DmaBufferPrivateData);
+    RenderArgs.pDmaBufferPrivateData = DmaBufferPrivateData;
+    RenderArgs.DmaBufferPrivateDataSize = DmaBufferPrivateDataSize;
     RenderArgs.pAllocationList = KernelAllocations;
     RenderArgs.AllocationListSize = pRender->AllocationCount;
     RenderArgs.pPatchLocationListIn = CapturedPatches;
@@ -424,7 +452,19 @@ DxgkRender(
     PatchOutCount = (UINT)(RenderArgs.pPatchLocationListOut - PatchOut);
     for (Index = 0; Index < PatchOutCount; ++Index)
     {
-        if (PatchOut[Index].AllocationIndex >= pRender->AllocationCount)
+        UINT AllocationIndex = PatchOut[Index].AllocationIndex;
+
+        if (AllocationIndex >= pRender->AllocationCount)
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Cleanup;
+        }
+        /* DXGK_ALLOCATIONLIST carries no size, so the miniport cannot bound
+         * the offset it will patch.  dxgkrnl owns the allocation and must
+         * refuse an offset that would resolve outside it, otherwise a
+         * user-mode driver could name a neighbouring allocation's memory. */
+        if (AllocationReferences[AllocationIndex] == NULL ||
+            PatchOut[Index].AllocationOffset >= AllocationReferences[AllocationIndex]->Size)
         {
             Status = STATUS_INVALID_PARAMETER;
             goto Cleanup;
@@ -454,8 +494,8 @@ DxgkRender(
                                         Context->NodeOrdinal,
                                         0,
                                         DmaBuffer,
-                                        &DmaBufferPrivateData,
-                                        sizeof(DmaBufferPrivateData),
+                                        DmaBufferPrivateData,
+                                        DmaBufferPrivateDataSize,
                                         KernelAllocations,
                                         pRender->AllocationCount,
                                         PatchOut,
@@ -490,6 +530,8 @@ Cleanup:
             DxgkVidMmDereferenceAllocation(AllocationReferences[Index]);
         }
     }
+    if (DmaBufferPrivateData != NULL)
+        ExFreePoolWithTag(DmaBufferPrivateData, TAG_DXGK_SUBMITDMA);
     if (DmaBuffer != NULL)
         DxgkFreeDmaBuffer(DmaBuffer);
     if (KmdTransaction)

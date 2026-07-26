@@ -4961,8 +4961,11 @@ DxgkpCacheGpuMmuGeometry(
             return FALSE;
         if (Desc->PageTableIndexBitCount == 0 || Desc->PageTableIndexBitCount >= 32)
             return FALSE;
-        if (Desc->PageTableSizeInBytes == 0 || Desc->PageTableAlignmentInBytes == 0)
+        if (Desc->PageTableSizeInBytes == 0)
             return FALSE;
+        /* Zero alignment means the memory segment's page size. */
+        if (Desc->PageTableAlignmentInBytes == 0)
+            Desc->PageTableAlignmentInBytes = PAGE_SIZE;
         if ((Desc->PageTableAlignmentInBytes & (Desc->PageTableAlignmentInBytes - 1)) != 0)
             return FALSE;
         Entries = 1ULL << Desc->PageTableIndexBitCount;

@@ -644,6 +644,30 @@ DxgkpValidateAdapterVidPnSourceForIoctl(
     return STATUS_SUCCESS;
 }
 
+/* A periodic monitored fence names the output it tracks.  This stack maps one
+ * target ordinal onto one source ordinal, the same mapping CRTC_VSYNC uses. */
+static NTSTATUS
+DxgkpValidateAdapterVidPnTargetForIoctl(
+    _In_ D3DKMT_HANDLE hAdapter,
+    _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID VidPnTargetId)
+{
+    PDXGKRNL_ADAPTER Adapter;
+    NTSTATUS LookupStatus;
+
+    LookupStatus = DxgkReferenceAdapterByHandle(hAdapter, PsGetCurrentProcess(), &Adapter);
+    if (!NT_SUCCESS(LookupStatus))
+        return STATUS_INVALID_PARAMETER;
+
+    if (VidPnTargetId >= Adapter->NumberOfVideoPresentSources)
+    {
+        DxgkDereferenceAdapter(Adapter);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    DxgkDereferenceAdapter(Adapter);
+    return STATUS_SUCCESS;
+}
+
 static NTSTATUS
 DxgkpValidateAllocationListForIoctl(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -3858,9 +3882,23 @@ DxgkCreateSynchronizationObject2(
         if (pData->Info.Type == D3DDDI_MONITORED_FENCE &&
             (pData->Info.MonitoredFence.Padding != 0 || (pData->Info.MonitoredFence.EngineAffinity & ~1u) != 0))
             return STATUS_INVALID_PARAMETER;
-        if (pData->Info.Type == D3DDDI_PERIODIC_MONITORED_FENCE &&
-            (pData->Info.PeriodicMonitoredFence.Padding != 0 || (pData->Info.PeriodicMonitoredFence.EngineAffinity & ~1u) != 0))
-            return STATUS_INVALID_PARAMETER;
+        if (pData->Info.Type == D3DDDI_PERIODIC_MONITORED_FENCE)
+        {
+            if (pData->Info.PeriodicMonitoredFence.Padding != 0 || (pData->Info.PeriodicMonitoredFence.EngineAffinity & ~1u) != 0)
+                return STATUS_INVALID_PARAMETER;
+            /* Time is an offset before VSync at which the fence must already
+             * be signaled.  This stack publishes at the VSync pulse itself,
+             * so only the zero offset is honestly supportable. */
+            if (pData->Info.PeriodicMonitoredFence.Time != 0)
+                return STATUS_NOT_SUPPORTED;
+            if (pData->Info.PeriodicMonitoredFence.hAdapter != 0)
+            {
+                Status = DxgkpValidateAdapterVidPnTargetForIoctl(pData->Info.PeriodicMonitoredFence.hAdapter,
+                                                                 pData->Info.PeriodicMonitoredFence.VidPnTargetId);
+                if (!NT_SUCCESS(Status))
+                    return Status;
+            }
+        }
         RtlZeroMemory(&SupportedFlags, sizeof(SupportedFlags));
         SupportedFlags.NoSignal = 1;
         SupportedFlags.NoWait = 1;
