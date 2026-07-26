@@ -46,10 +46,10 @@
 #define TCP_MSS                         1460
 
 #define LWIP_WND_SCALE                  1
-#define TCP_RCV_SCALE                   3
-#define TCP_WND                         (256 * 1024)
+#define TCP_RCV_SCALE                   4
+#define TCP_WND                         (512 * 1024)
 
-#define TCP_SND_BUF                     (256 * 1024)
+#define TCP_SND_BUF                     (512 * 1024)
 
 #define TCP_SNDLOWAT                    (32 * 1024)
 #define TCP_SNDQUEUELOWAT               64
