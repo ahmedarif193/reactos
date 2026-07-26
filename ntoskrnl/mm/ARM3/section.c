@@ -459,24 +459,38 @@ MiAddMappedPtes(IN PMMPTE FirstPte,
     return STATUS_SUCCESS;
 }
 
-VOID
+static
+ULONG
+MiRemoveFromSystemSpace(IN PMMSESSION Session,
+                        IN PVOID Base,
+                        OUT PCONTROL_AREA *ControlArea);
+
+NTSTATUS
 NTAPI
 MiFillSystemPageDirectory(IN PVOID Base,
                           IN SIZE_T NumberOfBytes)
 {
     if (NumberOfBytes == 0)
     {
-        return;
+        return STATUS_SUCCESS;
     }
 
 #if defined(_M_ARM64)
     PETHREAD CurrentThread;
+    BOOLEAN Success;
     PAGED_CODE();
 
     CurrentThread = PsGetCurrentThread();
     MiLockWorkingSet(CurrentThread, &MmSystemCacheWs);
-    MiArm64FillSystemPageDirectory(Base, NumberOfBytes);
+    Success = MiArm64FillSystemPageDirectory(Base, NumberOfBytes);
     MiUnlockWorkingSet(CurrentThread, &MmSystemCacheWs);
+
+    /* The hierarchy could not be committed for the whole range. Report it so
+     * the caller can fail instead of publishing a range that faults on use. */
+    if (!Success)
+    {
+        return STATUS_NO_MEMORY;
+    }
 #elif (_MI_PAGING_LEVELS == 4)
     PMMPDE PointerPde, LastPde;
     PETHREAD CurrentThread;
@@ -558,6 +572,8 @@ MiFillSystemPageDirectory(IN PVOID Base,
         PointerPde++;
     }
 #endif
+
+    return STATUS_SUCCESS;
 }
 
 static
@@ -1011,7 +1027,16 @@ MiSessionCommitPageTables(IN PVOID StartVa,
     DBG_UNREFERENCED_LOCAL_VARIABLE(TempPde);
     DBG_UNREFERENCED_LOCAL_VARIABLE(Pfn1);
     DBG_UNREFERENCED_LOCAL_VARIABLE(PageFrameNumber);
-    MiFillSystemPageDirectory(StartVa, (ULONG_PTR)EndVa - (ULONG_PTR)StartVa);
+    {
+        NTSTATUS FillStatus;
+
+        FillStatus = MiFillSystemPageDirectory(StartVa,
+                                               (ULONG_PTR)EndVa - (ULONG_PTR)StartVa);
+        if (!NT_SUCCESS(FillStatus))
+        {
+            return FillStatus;
+        }
+    }
     ActualPages = PageCount;
 #else
     while (StartPde <= EndPde)
@@ -1089,8 +1114,8 @@ MiMapViewInSystemSpace(
     _Inout_ PLARGE_INTEGER SectionOffset)
 {
     PVOID Base;
-    PCONTROL_AREA ControlArea;
-    ULONG Buckets;
+    PCONTROL_AREA ControlArea, RemovedControlArea;
+    ULONG Buckets, RemovedBuckets;
     LONGLONG SectionSize;
     NTSTATUS Status;
     PAGED_CODE();
@@ -1167,8 +1192,7 @@ MiMapViewInSystemSpace(
     if (Session == &MmSession)
     {
         /* Create the PDEs needed for this mapping, and double-map them if needed */
-        MiFillSystemPageDirectory(Base, Buckets * MI_SYSTEM_VIEW_BUCKET_SIZE);
-        Status = STATUS_SUCCESS;
+        Status = MiFillSystemPageDirectory(Base, Buckets * MI_SYSTEM_VIEW_BUCKET_SIZE);
     }
     else
     {
@@ -1176,7 +1200,25 @@ MiMapViewInSystemSpace(
         Status = MiSessionCommitPageTables(Base,
                                            (PVOID)((ULONG_PTR)Base +
                                            Buckets * MI_SYSTEM_VIEW_BUCKET_SIZE));
-        ASSERT(NT_SUCCESS(Status));
+    }
+
+    /* Without page tables the view would fault on first touch, so give the
+     * system space range back rather than reporting a usable mapping. Undo
+     * exactly what MiInsertInSystemSpace did: drop the hash entry and release
+     * the bitmap buckets, both under the view lock it takes itself. */
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("Could not commit page tables for system view at %p\n", Base);
+
+        KeAcquireGuardedMutex(Session->SystemSpaceViewLockPointer);
+        RemovedBuckets = MiRemoveFromSystemSpace(Session, Base, &RemovedControlArea);
+        RtlClearBits(Session->SystemSpaceBitMap,
+                     (ULONG)(((ULONG_PTR)Base - (ULONG_PTR)Session->SystemSpaceViewStart) >> 16),
+                     RemovedBuckets);
+        KeReleaseGuardedMutex(Session->SystemSpaceViewLockPointer);
+
+        MiDereferenceControlArea(ControlArea);
+        return Status;
     }
 
     /* Create the actual prototype PTEs for this mapping */
