@@ -65,6 +65,8 @@ typedef struct _D3DDDIARG_OPENADAPTER D3DDDIARG_OPENADAPTER;
 
 #define D3DDDI_MAX_MULTIPLANE_OVERLAY_ALLOCATIONS 16
 
+
+
 /* ------------------------------------------------------------------------ *
  * Payload structures, in dependency order.
  *
@@ -75,6 +77,58 @@ typedef struct _D3DDDIARG_OPENADAPTER D3DDDIARG_OPENADAPTER;
  * two translation units end up disagreeing about a layout they both think
  * they know.
  * ------------------------------------------------------------------------ */
+
+typedef enum D3DDDI_MULTIPLANE_OVERLAY_STRETCH_QUALITY
+{
+    D3DDDI_MULTIPLANE_OVERLAY_STRETCH_QUALITY_BILINEAR        = 0x1,  // Bilinear
+    D3DDDI_MULTIPLANE_OVERLAY_STRETCH_QUALITY_HIGH            = 0x2,  // Maximum
+} D3DDDI_MULTIPLANE_OVERLAY_STRETCH_QUALITY;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 typedef enum _D3DDDI_MULTIPLANE_OVERLAY_BLEND
 {
@@ -1762,11 +1816,7 @@ typedef enum D3DDDI_MULTIPLANE_OVERLAY_YCbCr_FLAGS
     D3DDDI_MULTIPLANE_OVERLAY_YCbCr_FLAG_xvYCC         = 0x4, // xvYCC vs. conventional YCbCr
 } D3DDDI_MULTIPLANE_OVERLAY_YCbCr_FLAGS;
 
-typedef enum D3DDDI_MULTIPLANE_OVERLAY_STRETCH_QUALITY
-{
-    D3DDDI_MULTIPLANE_OVERLAY_STRETCH_QUALITY_BILINEAR        = 0x1,  // Bilinear
-    D3DDDI_MULTIPLANE_OVERLAY_STRETCH_QUALITY_HIGH            = 0x2,  // Maximum
-} D3DDDI_MULTIPLANE_OVERLAY_STRETCH_QUALITY;
+
 
 typedef struct _D3DDDIARG_CHECKMULTIPLANEOVERLAYSUPPORT {
     D3DDDI_VIDEO_PRESENT_SOURCE_ID                      VidPnSourceId; // in:

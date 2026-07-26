@@ -45,6 +45,16 @@ HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","Group",0x00000000,"Video"
 HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","ImagePath",0x00020000,"system32\drivers\softgpu.sys"
 HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","Start",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","Type",0x00010001,0x00000001
+
+; The user-mode half.  A WDDM driver is two binaries: softgpu.sys in the kernel
+; and softgpuum.dll loaded into each application's process by the D3D runtime.
+; The runtime finds the second by asking dxgkrnl for KMTQAITYPE_UMDRIVERNAME,
+; which reads this value -- REG_MULTI_SZ indexed by KMTUMDVERSION, so the four
+; entries are the DX9 / DX10 / DX11 / DX12 slots in that order.  Without it the
+; query answers STATUS_OBJECT_NAME_NOT_FOUND and no user-mode driver can ever
+; be loaded, which is exactly the state this stack was in.
+HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","UserModeDriverName",0x00010000,"softgpuum.dll","softgpuum.dll","softgpuum.dll","softgpuum.dll"
+HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","UserModeDriverNameWow",0x00010000,"softgpuum.dll","softgpuum.dll","softgpuum.dll","softgpuum.dll"
 HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","Tag",0x00010001,0x00000003
 HKLM,"SYSTEM\CurrentControlSet\Services\softgpu\Video","Service",0x00000000,"softgpu"
 HKLM,"SYSTEM\CurrentControlSet\Services\softgpu\Device0","InstalledDisplayDrivers",0x00010000,"framebuf"
