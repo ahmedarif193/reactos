@@ -1300,6 +1300,10 @@ NtfsFsdFlushBuffers(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         Status = IoStatus.Status;
     }
 
+    /* Metadata the library is holding back has to reach the disk too. */
+    if (NT_SUCCESS(Status))
+        Status = NtfsDiskFlushKm();
+
     ExReleaseResourceLite(&FileCB->MainResource);
     KeLeaveCriticalRegion();
 

@@ -354,6 +354,12 @@ NtfsMountVolume(IN PDEVICE_OBJECT TargetDeviceObject,
     ExInitializeFastMutex(&VolCB->MissingNameMutex);
     InitializeListHead(&VolCB->MissingNameList);
     VolCB->MissingNameCount = 0;
+    ExInitializeFastMutex(&VolCB->RecordCacheMutex);
+    InitializeListHead(&VolCB->RecordCacheList);
+    VolCB->RecordCacheCount = 0;
+    ExInitializeFastMutex(&VolCB->IdleFcbMutex);
+    InitializeListHead(&VolCB->IdleFcbList);
+    VolCB->IdleFcbCount = 0;
     InitializeListHead(&VolCB->StreamList);
     InitializeListHead(&VolCB->NotifyList);
     FsRtlNotifyInitializeSync(&VolCB->NotifySync);
@@ -568,5 +574,207 @@ NtfsForgetAllMissingNames(_In_ PVolumeContextBlock VolCB)
         PLIST_ENTRY Entry = RemoveHeadList(&Stale);
 
         ExFreePoolWithTag(CONTAINING_RECORD(Entry, NtfsMissingName, Link), TAG_NTFS);
+    }
+}
+
+/* PARSED RECORD CACHE ******************************************************/
+
+/*
+ * Resolving a path parses the directory index and the file record from disk.
+ * Handles come and go far faster than the files behind them change, so a
+ * record is kept after its last handle closes and handed to the next open of
+ * the same name. Entries in use are never freed; eviction only takes idle ones.
+ */
+
+static
+BOOLEAN
+NtfsCachedRecordMatches(_In_ PNtfsCachedRecord Entry,
+                        _In_ ULONG Hash,
+                        _In_reads_(Length) PCWSTR Name,
+                        _In_ USHORT Length)
+{
+    USHORT Index;
+
+    if (Entry->Hash != Hash || Entry->Length != Length)
+        return FALSE;
+
+    for (Index = 0; Index < Length; Index++)
+    {
+        if (RtlUpcaseUnicodeChar(Entry->Name[Index]) !=
+            RtlUpcaseUnicodeChar(Name[Index]))
+        {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+/* Caller must hold RecordCacheMutex. */
+static
+VOID
+NtfsTrimRecordCache(_In_ PVolumeContextBlock VolCB)
+{
+    PLIST_ENTRY Entry = VolCB->RecordCacheList.Blink;
+
+    while (VolCB->RecordCacheCount > NTFS_MAX_CACHED_RECORDS &&
+           Entry != &VolCB->RecordCacheList)
+    {
+        PNtfsCachedRecord Candidate = CONTAINING_RECORD(Entry, NtfsCachedRecord, Link);
+        PLIST_ENTRY Previous = Entry->Blink;
+
+        if (Candidate->InUse == 0)
+        {
+            RemoveEntryList(&Candidate->Link);
+            VolCB->RecordCacheCount--;
+            NtfsFileRecordDestroy(Candidate->Record);
+            ExFreePoolWithTag(Candidate, TAG_NTFS);
+        }
+        Entry = Previous;
+    }
+}
+
+PNtfsCachedRecord
+NtfsAcquireCachedRecord(_In_ PVolumeContextBlock VolCB,
+                        _In_reads_(Length) PCWSTR Name,
+                        _In_ USHORT Length)
+{
+    ULONG Hash;
+    PLIST_ENTRY Entry;
+    PNtfsCachedRecord Found = NULL;
+
+    if (!VolCB || !Name || !Length)
+        return NULL;
+
+    Hash = NtfsHashName(Name, Length);
+    ExAcquireFastMutex(&VolCB->RecordCacheMutex);
+    for (Entry = VolCB->RecordCacheList.Flink;
+         Entry != &VolCB->RecordCacheList;
+         Entry = Entry->Flink)
+    {
+        PNtfsCachedRecord Candidate = CONTAINING_RECORD(Entry, NtfsCachedRecord, Link);
+
+        if (NtfsCachedRecordMatches(Candidate, Hash, Name, Length))
+        {
+            Candidate->InUse++;
+            RemoveEntryList(&Candidate->Link);
+            InsertHeadList(&VolCB->RecordCacheList, &Candidate->Link);
+            Found = Candidate;
+            break;
+        }
+    }
+    ExReleaseFastMutex(&VolCB->RecordCacheMutex);
+    return Found;
+}
+
+PNtfsCachedRecord
+NtfsCacheRecord(_In_ PVolumeContextBlock VolCB,
+                _In_reads_(Length) PCWSTR Name,
+                _In_ USHORT Length,
+                _In_ PNtfsFileRecord Record)
+{
+    ULONG Hash;
+    PNtfsCachedRecord New;
+
+    if (!VolCB || !Name || !Length || !Record)
+        return NULL;
+
+    /*
+     * Directory records go stale: index edits rewrite them through the
+     * library's own instances, which this cache cannot see. Serving a stale
+     * parse of INDEX_ROOT corrupts every later directory load, so only
+     * ordinary file records are kept.
+     */
+    if (NtfsFileRecordGetHeader(Record)->Flags & FR_IS_DIRECTORY)
+        return NULL;
+
+    New = (PNtfsCachedRecord)ExAllocatePoolUninitialized(
+        NonPagedPool,
+        FIELD_OFFSET(NtfsCachedRecord, Name) + Length * sizeof(WCHAR),
+        TAG_NTFS);
+    if (!New)
+        return NULL;
+
+    Hash = NtfsHashName(Name, Length);
+    New->Hash = Hash;
+    New->Length = Length;
+    New->InUse = 1;
+    New->Evicted = FALSE;
+    New->Record = Record;
+    RtlCopyMemory(New->Name, Name, Length * sizeof(WCHAR));
+
+    ExAcquireFastMutex(&VolCB->RecordCacheMutex);
+    InsertHeadList(&VolCB->RecordCacheList, &New->Link);
+    VolCB->RecordCacheCount++;
+    NtfsTrimRecordCache(VolCB);
+    ExReleaseFastMutex(&VolCB->RecordCacheMutex);
+    return New;
+}
+
+VOID
+NtfsReleaseCachedRecord(_In_ PVolumeContextBlock VolCB,
+                        _In_ PNtfsCachedRecord Entry)
+{
+    BOOLEAN Destroy = FALSE;
+
+    if (!VolCB || !Entry)
+        return;
+
+    ExAcquireFastMutex(&VolCB->RecordCacheMutex);
+    Entry->InUse--;
+    /* An evicted entry is off the list already and only waited on its users. */
+    if (Entry->Evicted && Entry->InUse == 0)
+        Destroy = TRUE;
+    ExReleaseFastMutex(&VolCB->RecordCacheMutex);
+
+    if (Destroy)
+    {
+        if (Entry->Record)
+            NtfsFileRecordDestroy(Entry->Record);
+        ExFreePoolWithTag(Entry, TAG_NTFS);
+    }
+}
+
+VOID
+NtfsEvictCachedRecord(_In_ PVolumeContextBlock VolCB,
+                      _In_reads_(Length) PCWSTR Name,
+                      _In_ USHORT Length,
+                      _In_ BOOLEAN RecordAlreadyFreed)
+{
+    ULONG Hash;
+    PLIST_ENTRY Entry;
+    PNtfsCachedRecord Doomed = NULL;
+
+    if (!VolCB || !Name || !Length)
+        return;
+
+    Hash = NtfsHashName(Name, Length);
+    ExAcquireFastMutex(&VolCB->RecordCacheMutex);
+    for (Entry = VolCB->RecordCacheList.Flink;
+         Entry != &VolCB->RecordCacheList;
+         Entry = Entry->Flink)
+    {
+        PNtfsCachedRecord Candidate = CONTAINING_RECORD(Entry, NtfsCachedRecord, Link);
+
+        if (NtfsCachedRecordMatches(Candidate, Hash, Name, Length))
+        {
+            RemoveEntryList(&Candidate->Link);
+            VolCB->RecordCacheCount--;
+            Candidate->Evicted = TRUE;
+            /* Deleting the file frees the record inside the library, so the
+             * pointer must not be used or destroyed again. */
+            if (RecordAlreadyFreed)
+                Candidate->Record = NULL;
+            if (Candidate->InUse == 0)
+                Doomed = Candidate;
+            break;
+        }
+    }
+    ExReleaseFastMutex(&VolCB->RecordCacheMutex);
+
+    if (Doomed)
+    {
+        if (Doomed->Record)
+            NtfsFileRecordDestroy(Doomed->Record);
+        ExFreePoolWithTag(Doomed, TAG_NTFS);
     }
 }
