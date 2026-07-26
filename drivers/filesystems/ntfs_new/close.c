@@ -9,9 +9,6 @@
 
 #include "ntfspch.h"
 
-extern LONG64 NtfsProfClose;
-extern LONG NtfsProfCloseCount;
-
 /* GLOBALS *****************************************************************/
 
 #ifdef ALLOC_PRAGMA
@@ -27,8 +24,6 @@ NTAPI
 NtfsFsdClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
              _Inout_ PIRP Irp)
 {
-    LARGE_INTEGER ProfS = KeQueryPerformanceCounter(NULL);
-
     if (VolumeDeviceObject != NtfsDiskFileSystemDeviceObject)
         NtfsBindVolumeDisk((PVolumeContextBlock)VolumeDeviceObject->DeviceExtension);
     /* Overview:
@@ -113,12 +108,6 @@ NtfsFsdClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             }
             IrpSp->FileObject->FsContext = NULL;
         }
-    }
-
-    {
-        LARGE_INTEGER ProfE = KeQueryPerformanceCounter(NULL);
-        InterlockedAdd64(&NtfsProfClose, ProfE.QuadPart - ProfS.QuadPart);
-        InterlockedIncrement(&NtfsProfCloseCount);
     }
 
     Irp->IoStatus.Information = STATUS_SUCCESS;

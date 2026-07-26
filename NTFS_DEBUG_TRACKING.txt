@@ -6,18 +6,10 @@ Keep the local filesystem benchmark instrumentation identifiable so follow-up
 commits can remove it without touching the functional cache and allocation
 changes.
 
-Driver instrumentation
-----------------------
-drivers/filesystems/ntfs_new/create.c
-  CRACCT and IOACCT output
-  NtfsProfCreates, NtfsProfQuery, NtfsProfDisp, NtfsProfFcb, NtfsProfTail
-  NtfsProfCleanup, NtfsProfClose, and their sample counters
-
-drivers/filesystems/ntfs_new/close.c
-  NtfsProfClose timing
-
-drivers/filesystems/ntfs_new/ntfsinit.c
-  NtfsProfCleanup timing
+Completed removal
+-----------------
+Driver CRACCT and IOACCT output, create-phase counters, close timing, and
+cleanup timing have been removed.
 
 Library instrumentation
 -----------------------
