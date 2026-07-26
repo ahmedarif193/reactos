@@ -481,13 +481,22 @@ static void Test_MonitoredFence_AccessFlags(void)
     Status = pCreate(&Create);
     ok_failed(Status, "NoSignal+NoWait monitored fence create succeeded\n");
 
+    /* Sharing a fence exists so another *device* can wait on it, and a device
+     * waits on the GPU side -- so NoGPUAccess contradicts Shared.  Measured on
+     * Win11: refused. */
+    memset(&Create, 0, sizeof(Create));
+    Create.hDevice = hDevice;
+    Create.Info.Type = D3DDDI_MONITORED_FENCE;
+    Create.Info.Flags.Shared = 1;
+    Create.Info.Flags.NoGPUAccess = 1;
+    ok_failed(pCreate(&Create), "Shared monitored fence with NoGPUAccess was accepted\n");
+
     /* A shared monitored fence publishes a global share handle that another
      * device on the same adapter can open into its own namespace. */
     memset(&Create, 0, sizeof(Create));
     Create.hDevice = hDevice;
     Create.Info.Type = D3DDDI_MONITORED_FENCE;
     Create.Info.Flags.Shared = 1;
-    Create.Info.Flags.NoGPUAccess = 1;
     Status = pCreate(&Create);
     ok_succeeded(Status, "Shared monitored fence create failed 0x%08lX\n", (long)Status);
     if (NT_SUCCESS(Status))
@@ -533,11 +542,19 @@ static void Test_MonitoredFence_AccessFlags(void)
         D3dkmtTestDestroySyncObject(pDestroy, Create.hSyncObject);
     }
 
-    /* A periodic monitored fence advances on its own vertical-blank cadence. */
+    /* A periodic fence is advanced by display hardware, which is a GPU-side
+     * write -- with NoGPUAccess nothing can move it, so it would sit at its
+     * initial value looking healthy.  Measured on Win11: refused. */
     memset(&Create, 0, sizeof(Create));
     Create.hDevice = hDevice;
     Create.Info.Type = D3DDDI_PERIODIC_MONITORED_FENCE;
     Create.Info.Flags.NoGPUAccess = 1;
+    ok_failed(pCreate(&Create), "Periodic monitored fence with NoGPUAccess was accepted\n");
+
+    /* A periodic monitored fence advances on its own vertical-blank cadence. */
+    memset(&Create, 0, sizeof(Create));
+    Create.hDevice = hDevice;
+    Create.Info.Type = D3DDDI_PERIODIC_MONITORED_FENCE;
     Status = pCreate(&Create);
     ok_succeeded(Status, "Periodic monitored fence create failed 0x%08lX\n", (long)Status);
     if (NT_SUCCESS(Status))
@@ -700,10 +717,14 @@ static void Test_MonitoredFence_CpuBatchSemantics(void)
     Status = D3dkmtTestSignalFromCpu(pSignal, hDevice, &Handles[0], &Values[0], 1, FALSE);
     ok_succeeded(Status, "signal fence to 10 failed 0x%08lX\n", (long)Status);
     ok(*FencePages[0] == 10, "fence page should be 10, got %I64u\n", *FencePages[0]);
+    /* Signalling backwards without AllowFenceRewind is refused outright.  It
+     * used to return success and quietly not move, so a caller was told its
+     * signal had landed while the fence never changed -- measured on Win11 as
+     * STATUS_INVALID_PARAMETER. */
     Values[0] = 5;
     Status = D3dkmtTestSignalFromCpu(pSignal, hDevice, &Handles[0], &Values[0], 1, FALSE);
-    ok_succeeded(Status, "default lower signal failed 0x%08lX\n", (long)Status);
-    ok(*FencePages[0] == 10, "default lower signal rewound fence to %I64u\n", *FencePages[0]);
+    ok_failed(Status, "default lower signal was accepted\n");
+    ok(*FencePages[0] == 10, "refused lower signal rewound fence to %I64u\n", *FencePages[0]);
     Status = D3dkmtTestSignalFromCpu(pSignal, hDevice, &Handles[0], &Values[0], 1, TRUE);
     ok_succeeded(Status, "AllowFenceRewind signal failed 0x%08lX\n", (long)Status);
     ok(*FencePages[0] == 5, "AllowFenceRewind should lower fence to 5, got %I64u\n", *FencePages[0]);
