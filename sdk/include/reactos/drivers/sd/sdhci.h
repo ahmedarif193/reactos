@@ -580,6 +580,10 @@ typedef struct _SDHCI_ADMA2_DESCRIPTOR_64 {
 #define SDIO_CCCR_DRIVER_STRENGTH       0x15
 #define SDIO_CCCR_INT_EXTENSION         0x16
 
+#define SDIO_UHS_SDR50                  0x01
+#define SDIO_UHS_SDR104                 0x02
+#define SDIO_UHS_DDR50                  0x04
+
 /* SDIO FBR (Function Basic Registers) base offset per function */
 #define SDIO_FBR_BASE(fn)               ((fn) * 0x100)
 #define SDIO_FBR_STD_INTERFACE          0x00
