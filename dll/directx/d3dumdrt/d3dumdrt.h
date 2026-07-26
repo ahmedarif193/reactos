@@ -25,7 +25,13 @@ D3DUmdRtCreateDeviceCallbacks(
     D3DDDI_DEVICECALLBACKS *pCallbacks,
     HANDLE *phRuntimeDevice);
 
-VOID WINAPI
+/*
+ * Release the runtime device.  Refuses with E_FAIL while contexts or paging
+ * queues created through the table are still open: those are parented to this
+ * device, and releasing it first would leave kernel objects owned by something
+ * that no longer exists.
+ */
+HRESULT WINAPI
 D3DUmdRtDestroyDeviceCallbacks(HANDLE hRuntimeDevice);
 
 /* EOF */
