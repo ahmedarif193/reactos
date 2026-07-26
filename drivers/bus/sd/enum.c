@@ -1927,10 +1927,12 @@ SdBusVerifyCardResponds(
 {
     ULONG Response = 0;
 
-    /* SDIO-only cards have no CMD13 SEND_STATUS; nothing to probe. */
+    /* SDIO-only cards have no CMD13 SEND_STATUS; probe CCCR with CMD52 instead. */
     if (PdoExtension->CardType == SdCardTypeSdio)
     {
-        return STATUS_SUCCESS;
+        UCHAR CccrRev = 0;
+
+        return SdBusSdioReadCccr(FdoExtension, SDIO_CCCR_REVISION, &CccrRev);
     }
 
     return SdBusSendCommand(FdoExtension,
@@ -2096,6 +2098,22 @@ SdBusSetTransferClock(
         }
     }
 
+    /*
+     * An embedded SDIO device that advertises SDR50 runs its High Speed timing
+     * well past the 50 MHz the SD specification guarantees, and the SDR50 clock
+     * is the only faster divider this host offers. 50 MHz x 4 bits caps the bus
+     * at 200 Mbps raw, which is below what the attached radio can carry, so try
+     * the SDR50 clock first and fall back to 50 MHz if the card stops answering.
+     */
+    if (PdoExtension->CardType == SdCardTypeSdio &&
+        HighSpeed &&
+        (PdoExtension->SdioUhsSupport & SDIO_UHS_SDR50) &&
+        (FdoExtension->HostCapabilities2 & SDHCI_CAP2_SDR50_SUPPORT) &&
+        FdoExtension->MaxClockFrequency >= SD_UHS_SDR50_KHZ)
+    {
+        TargetClockKhz = SD_UHS_SDR50_KHZ;
+    }
+
     SdBusHardwareSelectPins(FdoExtension,
                             HighSpeed &&
                             (PdoExtension->CardType == SdCardTypeEmmc ||
@@ -2117,6 +2135,28 @@ SdBusSetTransferClock(
         }
         DPRINT1("SdBusSetTransferClock: card did not respond at %lu kHz (0x%08lx)\n",
                 TargetClockKhz, Status);
+    }
+
+    /* Fallback 0: an SDIO device that would not take the SDR50 clock keeps 50 MHz. */
+    if (PdoExtension->CardType == SdCardTypeSdio &&
+        TargetClockKhz > SD_HIGH_SPEED_KHZ)
+    {
+        TargetClockKhz = SD_HIGH_SPEED_KHZ;
+
+        DPRINT1("SdBusSetTransferClock: SDR50 clock rejected, retrying at %lu kHz\n",
+                TargetClockKhz);
+
+        Status = SdBusProgramClock(FdoExtension, TargetClockKhz);
+        if (NT_SUCCESS(Status))
+        {
+            Status = SdBusVerifyCardResponds(FdoExtension, PdoExtension);
+            if (NT_SUCCESS(Status))
+            {
+                return STATUS_SUCCESS;
+            }
+            DPRINT1("SdBusSetTransferClock: card did not respond at %lu kHz (0x%08lx)\n",
+                    TargetClockKhz, Status);
+        }
     }
 
     /* Fallback 1: drop out of High Speed timing down to Default Speed (25 MHz). */
