@@ -51,6 +51,18 @@ NtfsDirectoryLoadDirectory(
 }
 
 NTSTATUS
+NtfsDirectoryLoadForEnumeration(
+    _In_ PNtfsDirectory Dir,
+    _In_ PNtfsFileRecord File)
+{
+    if (!Dir || !File)
+        return STATUS_INVALID_PARAMETER;
+
+    return reinterpret_cast<PDirectory>(Dir)->LoadDirectoryForEnumeration(
+        reinterpret_cast<PFileRecord>(File));
+}
+
+NTSTATUS
 NtfsDirectoryReadNext(
     _In_ PNtfsDirectory Dir,
     _In_ BOOLEAN RestartScan,

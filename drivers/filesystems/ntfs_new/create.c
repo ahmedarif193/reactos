@@ -698,7 +698,19 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                             STATUS_INSUFFICIENT_RESOURCES);
         }
 
-        Status = NtfsDirectoryLoadDirectory(FileCB->FileDir, FileCB->FileRec);
+        Status = NtfsDirectoryLoadForEnumeration(
+            FileCB->FileDir,
+            FileCB->FileRec);
+        if (Status == STATUS_NOT_IMPLEMENTED)
+        {
+            Status = NtfsDirectoryLoadDirectory(
+                FileCB->FileDir,
+                FileCB->FileRec);
+        }
+        else if (NT_SUCCESS(Status))
+        {
+            FileCB->FileDirDirect = TRUE;
+        }
         if (!NT_SUCCESS(Status))
         {
             return NtfsCompleteFailedCreate(VolumeDeviceObject,
