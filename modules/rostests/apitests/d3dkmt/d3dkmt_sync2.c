@@ -480,21 +480,81 @@ static void Test_MonitoredFence_AccessFlags(void)
     Status = pCreate(&Create);
     ok(!NT_SUCCESS(Status), "NoSignal+NoWait monitored fence create succeeded\n");
 
+    /* A shared monitored fence publishes a global share handle that another
+     * device on the same adapter can open into its own namespace. */
     memset(&Create, 0, sizeof(Create));
     Create.hDevice = hDevice;
     Create.Info.Type = D3DDDI_MONITORED_FENCE;
     Create.Info.Flags.Shared = 1;
     Create.Info.Flags.NoGPUAccess = 1;
     Status = pCreate(&Create);
-    ok_eq_hex(Status, STATUS_NOT_SUPPORTED);
+    ok(NT_SUCCESS(Status), "Shared monitored fence create failed 0x%08lX\n", (long)Status);
+    if (NT_SUCCESS(Status))
+    {
+        PFND3DKMT_OPENSYNCHRONIZATIONOBJECT pOpen =
+            (PFND3DKMT_OPENSYNCHRONIZATIONOBJECT)GetProcAddress(GetModuleHandleW(L"gdi32.dll"), "D3DKMTOpenSynchronizationObject");
 
+        ok(Create.Info.SharedHandle != 0, "Shared monitored fence published a zero share handle\n");
+        if (pOpen != NULL && Create.Info.SharedHandle != 0)
+        {
+            D3DKMT_OPENSYNCHRONIZATIONOBJECT Open;
+
+            memset(&Open, 0, sizeof(Open));
+            Open.hSharedHandle = Create.Info.SharedHandle;
+            Status = pOpen(&Open);
+            ok(NT_SUCCESS(Status), "Open of a shared monitored fence failed 0x%08lX\n", (long)Status);
+            if (NT_SUCCESS(Status))
+            {
+                ok(Open.hSyncObject != 0, "Open returned a zero sync handle\n");
+                ok(Open.hSyncObject != Create.hSyncObject, "Open returned the creator's own handle\n");
+                D3dkmtTestDestroySyncObject(pDestroy, Open.hSyncObject);
+            }
+
+            memset(&Open, 0, sizeof(Open));
+            Open.hSharedHandle = Create.Info.SharedHandle + 0x1000;
+            Status = pOpen(&Open);
+            ok(!NT_SUCCESS(Status), "Open of an unknown share handle succeeded\n");
+        }
+        D3dkmtTestDestroySyncObject(pDestroy, Create.hSyncObject);
+    }
+
+    /* Legacy object types share through the same namespace. */
     memset(&Create, 0, sizeof(Create));
     Create.hDevice = hDevice;
     Create.Info.Type = D3DDDI_SYNCHRONIZATION_MUTEX;
     Create.Info.Flags.Shared = 1;
     Create.Info.SynchronizationMutex.InitialState = FALSE;
     Status = pCreate(&Create);
-    ok_eq_hex(Status, STATUS_NOT_SUPPORTED);
+    ok(NT_SUCCESS(Status), "Shared mutex create failed 0x%08lX\n", (long)Status);
+    if (NT_SUCCESS(Status))
+    {
+        ok(Create.Info.SharedHandle != 0, "Shared mutex published a zero share handle\n");
+        D3dkmtTestDestroySyncObject(pDestroy, Create.hSyncObject);
+    }
+
+    /* A periodic monitored fence advances on its own vertical-blank cadence. */
+    memset(&Create, 0, sizeof(Create));
+    Create.hDevice = hDevice;
+    Create.Info.Type = D3DDDI_PERIODIC_MONITORED_FENCE;
+    Create.Info.Flags.NoGPUAccess = 1;
+    Status = pCreate(&Create);
+    ok(NT_SUCCESS(Status), "Periodic monitored fence create failed 0x%08lX\n", (long)Status);
+    if (NT_SUCCESS(Status))
+    {
+        volatile UINT64 *Value = (volatile UINT64 *)Create.Info.PeriodicMonitoredFence.FenceValueCPUVirtualAddress;
+
+        ok(Value != NULL, "Periodic fence exposed no CPU value mapping\n");
+        if (Value != NULL)
+        {
+            UINT64 First = *Value;
+            UINT Spin;
+
+            for (Spin = 0; Spin < 200 && *Value == First; ++Spin)
+                Sleep(10);
+            ok(*Value > First, "Periodic fence did not advance (stuck at %I64u)\n", First);
+        }
+        D3dkmtTestDestroySyncObject(pDestroy, Create.hSyncObject);
+    }
 
 Cleanup:
     DestroyTestDevice(hDevice);

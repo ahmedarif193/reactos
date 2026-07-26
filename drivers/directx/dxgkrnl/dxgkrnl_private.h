@@ -1502,6 +1502,25 @@ typedef struct _DXGKRNL_SYNC_OBJECT
     /* GPU VA of the value page in the creating process's address space
      * (CPU_VIRTUAL GpuMmu adapters only), 0 when not mapped. */
     D3DGPU_VIRTUAL_ADDRESS      MonitoredValueGpuVa;
+
+    /*
+     * Sharing.  A creator that asked for Shared gets a global share handle
+     * published in the create output; an opener resolves that handle and
+     * becomes an alias whose BackingSyncObject holds the authoritative state,
+     * including the one monitored value page both views observe.
+     */
+    D3DKMT_HANDLE               GlobalShareHandle;
+    BOOLEAN                     Shareable;
+    struct _DXGKRNL_SYNC_OBJECT *BackingSyncObject;
+    LIST_ENTRY                  GlobalShareListEntry;
+
+    /*
+     * Periodic monitored fence: the fence advances by one on every vertical
+     * blank of the bound VidPn source rather than on explicit signals.
+     */
+    BOOLEAN                     Periodic;
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID PeriodicVidPnSourceId;
+    LIST_ENTRY                  PeriodicListEntry;
 } DXGKRNL_SYNC_OBJECT, *PDXGKRNL_SYNC_OBJECT;
 
 #include "context_sync.h"
@@ -2865,6 +2884,23 @@ DxgkPagingExecute(
     _In_ D3DKMT_HANDLE hSignalSyncObject,
     _In_ ULONG64 SignalFenceValue,
     _Out_opt_ PULONG OutPagingFenceId);
+
+BOOLEAN
+DxgkSyncHasPeriodicFences(VOID);
+
+VOID
+DxgkSyncAdvancePeriodicFences(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId);
+
+D3DKMT_HANDLE
+DxgkSyncObjectQueryShareHandle(
+    _In_ D3DKMT_HANDLE hSyncObject);
+
+NTSTATUS
+NTAPI
+DxgkOpenSynchronizationObject(
+    _Inout_ D3DKMT_OPENSYNCHRONIZATIONOBJECT *pData);
 
 NTSTATUS
 DxgkContextRenderInitialize(
