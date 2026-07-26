@@ -46,6 +46,175 @@ NtfsShouldStampLastAccess(_In_ PFileContextBlock FileCB)
     return Now.QuadPart - (LONGLONG)Basic.LastAccessTime >= 36000000000LL;
 }
 
+typedef struct _NTFS_SYNC_READ_CONTEXT
+{
+    KEVENT Event;
+    IO_STATUS_BLOCK IoStatus;
+} NTFS_SYNC_READ_CONTEXT, *PNTFS_SYNC_READ_CONTEXT;
+
+static
+NTSTATUS
+NTAPI
+NtfsDirectReadCompletion(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ PIRP Irp,
+    _In_ PVOID Context)
+{
+    PNTFS_SYNC_READ_CONTEXT ReadContext = (PNTFS_SYNC_READ_CONTEXT)Context;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    ReadContext->IoStatus = Irp->IoStatus;
+    KeSetEvent(&ReadContext->Event, IO_NO_INCREMENT, FALSE);
+    return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
+static
+NTSTATUS
+NtfsSubmitDirectRead(
+    _In_ PVolumeContextBlock VolCB,
+    _Inout_ PIRP Irp,
+    _In_ ULONGLONG DiskOffset,
+    _In_ ULONG Length)
+{
+    NTFS_SYNC_READ_CONTEXT ReadContext;
+    PIO_STACK_LOCATION IoStack;
+    NTSTATUS Status;
+
+    KeInitializeEvent(&ReadContext.Event, NotificationEvent, FALSE);
+    ReadContext.IoStatus.Status = STATUS_PENDING;
+    ReadContext.IoStatus.Information = 0;
+
+    IoStack = IoGetNextIrpStackLocation(Irp);
+    IoStack->MajorFunction = IRP_MJ_READ;
+    IoStack->MinorFunction = 0;
+    IoStack->Flags = SL_OVERRIDE_VERIFY_VOLUME;
+    IoStack->Control = 0;
+    IoStack->FileObject = NULL;
+    IoStack->Parameters.Read.Length = Length;
+    IoStack->Parameters.Read.ByteOffset.QuadPart = DiskOffset;
+    IoSetCompletionRoutine(Irp,
+                           NtfsDirectReadCompletion,
+                           &ReadContext,
+                           TRUE,
+                           TRUE,
+                           TRUE);
+
+    Status = IoCallDriver(VolCB->StorageDevice, Irp);
+    if (Status == STATUS_PENDING)
+    {
+        KeWaitForSingleObject(&ReadContext.Event,
+                              Executive,
+                              KernelMode,
+                              FALSE,
+                              NULL);
+    }
+
+    NT_ASSERT(ReadContext.IoStatus.Status != STATUS_PENDING);
+    Irp->IoStatus = ReadContext.IoStatus;
+    return ReadContext.IoStatus.Status;
+}
+
+static
+NTSTATUS
+NtfsTryDirectRead(
+    _In_ PVolumeContextBlock VolCB,
+    _In_ PFileContextBlock FileCB,
+    _Inout_ PIRP Irp,
+    _In_ ULONGLONG FileOffset,
+    _In_ ULONG Length,
+    _Out_ PBOOLEAN Handled)
+{
+    PAttribute Attribute;
+    NtfsRetrievalExtent Extent;
+    ULONGLONG ReturnedStartingVcn;
+    ULONGLONG StartingVcn;
+    ULONGLONG ClusterSize;
+    ULONGLONG InClusterOffset;
+    ULONGLONG Available;
+    ULONGLONG PhysicalCluster;
+    ULONGLONG DiskOffset;
+    ULONG ExtentCount;
+    NTSTATUS Status;
+
+    *Handled = FALSE;
+    if (!VolCB->StorageDevice ||
+        !VolCB->BytesPerSector ||
+        !Irp->MdlAddress ||
+        Irp->MdlAddress->Next ||
+        MmGetMdlByteCount(Irp->MdlAddress) < Length ||
+        ((ULONG_PTR)MmGetMdlVirtualAddress(Irp->MdlAddress) &
+         VolCB->StorageDevice->AlignmentRequirement) != 0 ||
+        Length % VolCB->BytesPerSector != 0 ||
+        FileOffset % VolCB->BytesPerSector != 0)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    Attribute = NtfsFileRecordGetAttribute(FileCB->FileRec,
+                                           FileCB->RequestedType,
+                                           FileCB->RequestedStream);
+    if (!Attribute ||
+        !Attribute->IsNonResident ||
+        (Attribute->Flags & (ATTR_COMPRESSION_MASK | ATTR_ENCRYPTED)) ||
+        FileOffset > ~(ULONGLONG)0 - Length ||
+        FileOffset + Length > Attribute->NonResident.InitalizedDataSize)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    ClusterSize = (ULONGLONG)VolCB->BytesPerSector *
+                  NtfsVolumeGetSectorsPerCluster(VolCB->DiskVolume);
+    if (!ClusterSize)
+        return STATUS_SUCCESS;
+
+    StartingVcn = FileOffset / ClusterSize;
+    InClusterOffset = FileOffset % ClusterSize;
+    ExtentCount = 1;
+    Status = NtfsFileRecordQueryRetrievalPointers(FileCB->FileRec,
+                                                  FileCB->RequestedType,
+                                                  FileCB->RequestedStream,
+                                                  StartingVcn,
+                                                  &ReturnedStartingVcn,
+                                                  &Extent,
+                                                  &ExtentCount);
+    if ((!NT_SUCCESS(Status) && Status != STATUS_BUFFER_OVERFLOW) ||
+        ExtentCount != 1 ||
+        ReturnedStartingVcn > StartingVcn ||
+        Extent.NextVcn <= StartingVcn ||
+        Extent.Lcn < 0)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    Available = Extent.NextVcn - StartingVcn;
+    if (Available > ~(ULONGLONG)0 / ClusterSize)
+        return STATUS_SUCCESS;
+    Available *= ClusterSize;
+    if (Available < InClusterOffset ||
+        Available - InClusterOffset < Length)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    PhysicalCluster = StartingVcn - ReturnedStartingVcn;
+    if ((ULONGLONG)Extent.Lcn >
+        ~(ULONGLONG)0 - PhysicalCluster)
+    {
+        return STATUS_SUCCESS;
+    }
+    PhysicalCluster += (ULONGLONG)Extent.Lcn;
+    if (PhysicalCluster > ~(ULONGLONG)0 / ClusterSize)
+        return STATUS_SUCCESS;
+    DiskOffset = PhysicalCluster * ClusterSize;
+    if (DiskOffset > ~(ULONGLONG)0 - InClusterOffset)
+        return STATUS_SUCCESS;
+    DiskOffset += InClusterOffset;
+
+    *Handled = TRUE;
+    return NtfsSubmitDirectRead(VolCB, Irp, DiskOffset, Length);
+}
+
 /* FUNCTIONS ****************************************************************/
 _Function_class_(IRP_MJ_READ)
 _Function_class_(DRIVER_DISPATCH)
@@ -74,6 +243,7 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     PFileContextBlock FileCB;
     BOOLEAN ResourceAcquired = FALSE;
     BOOLEAN PagingIo = FALSE;
+    BOOLEAN DirectRead;
 
     IrpSp = IoGetCurrentIrpStackLocation(Irp);
     FileObject = IrpSp->FileObject;
@@ -83,7 +253,7 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             VolumeDeviceObject->DeviceExtension
         : NULL;
     DiskVolume = VolCB ? VolCB->DiskVolume : NULL;
-    Buffer = (PUCHAR)(GetBuffer(Irp));
+    Buffer = NULL;
     ReadOffset = IrpSp->Parameters.Read.ByteOffset;
     RequestedLength = IrpSp->Parameters.Read.Length;
     OriginalLength = RequestedLength;
@@ -95,11 +265,6 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     {
         DPRINT1("NtfsFsdRead(): invalid file or volume context!\n");
         Status = STATUS_INVALID_PARAMETER;
-        goto Complete;
-    }
-    if (RequestedLength != 0 && !Buffer)
-    {
-        Status = STATUS_INVALID_USER_BUFFER;
         goto Complete;
     }
     if (ReadOffset.QuadPart < 0)
@@ -130,6 +295,43 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         goto Complete;
     }
 
+    if (RequestedLength &&
+        FileCB->RequestedType == TypeData &&
+        (PagingIo ||
+         BooleanFlagOn(Irp->Flags, IRP_NOCACHE) ||
+         BooleanFlagOn(FileObject->Flags, FO_NO_INTERMEDIATE_BUFFERING)))
+    {
+        Status = NtfsTryDirectRead(VolCB,
+                                   FileCB,
+                                   Irp,
+                                   (ULONGLONG)ReadOffset.QuadPart,
+                                   RequestedLength,
+                                   &DirectRead);
+        if (DirectRead)
+        {
+            if (NT_SUCCESS(Status))
+            {
+                if (Irp->IoStatus.Information <= OriginalLength)
+                {
+                    RequestedLength = OriginalLength -
+                                      (ULONG)Irp->IoStatus.Information;
+                }
+                else
+                {
+                    Status = STATUS_DATA_ERROR;
+                }
+            }
+            goto ReadDone;
+        }
+    }
+
+    Buffer = (PUCHAR)GetBuffer(Irp);
+    if (RequestedLength != 0 && !Buffer)
+    {
+        Status = STATUS_INVALID_USER_BUFFER;
+        goto Complete;
+    }
+
     /* Open-only and one-page streams should not pay for cache-map setup. */
     if (NtfsCachedReadsEnabled &&
         RequestedLength &&
@@ -149,7 +351,7 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                              &NtfsCacheManagerCallbacks,
                              FileCB);
         CcSetFileSizes(FileObject, FileSizes);
-        CcSetReadAheadGranularity(FileObject, 0x10000);
+        CcSetReadAheadGranularity(FileObject, 0x40000);
         FileObject->Flags |= FO_CACHE_SUPPORTED;
     }
 
@@ -230,6 +432,7 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         Status = STATUS_SUCCESS;
     }
 
+ReadDone:
     ExReleaseResourceLite(PagingIo ? &FileCB->PagingIoResource
                                    : &FileCB->MainResource);
     KeLeaveCriticalRegion();
