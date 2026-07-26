@@ -1608,6 +1608,138 @@ DxgkpBuildHotPlugCandidate(
     return STATUS_SUCCESS;
 }
 
+/*
+ * Ask the miniport for a topology when no functional VidPn could be had.
+ *
+ * These are two different questions and Windows asks both.  A functional VidPn
+ * is a complete configuration -- sources, targets, paths and modes.  A topology
+ * is only the wiring: which source drives which target.  A driver that cannot
+ * produce the former may still know the latter, and on a display-only or
+ * headless adapter that is the usual case.
+ *
+ * The reason code tells the driver *why* it is being asked, which changes what
+ * a sensible answer is: at initialization with no last-known-good configuration
+ * to fall back on, a driver should offer something rather than nothing.
+ *
+ * A refusal is not a failure.  STATUS_GRAPHICS_NO_RECOMMENDED_VIDPN_TOPOLOGY is
+ * the driver saying it has no opinion, and the caller's own default path stands.
+ */
+/*
+ * Tell the miniport that an *already active* path's attributes changed.
+ *
+ * This is not the same event as committing a VidPn, and that is why it is a
+ * separate DDI.  A commit says "this is the new configuration"; this says "the
+ * configuration is unchanged, but the rotation or scaling on a path you are
+ * already driving is different now".  A driver that only ever saw commits would
+ * keep scanning out with the previous transformation, which is visible on
+ * screen and reported by nothing.
+ *
+ * Only called when something actually differs -- announcing an unchanged path
+ * would have a driver reprogram hardware for no reason on every commit.
+ */
+static VOID
+DxgkpNotifyActivePathChanged(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ CONST D3DKMDT_VIDPN_PRESENT_PATH *OldPath,
+    _In_ CONST D3DKMDT_VIDPN_PRESENT_PATH *NewPath)
+{
+    PDXGKDDI_UPDATE_ACTIVE_VIDPN_PRESENT_PATH UpdatePath =
+        DXGK_CB_FULL(Adapter, DxgkDdiUpdateActiveVidPnPresentPath);
+    DXGKARG_UPDATEACTIVEVIDPNPRESENTPATH UpdateArgs;
+    NTSTATUS Status;
+
+    if (UpdatePath == NULL)
+        return;
+    if (OldPath->VidPnSourceId != NewPath->VidPnSourceId ||
+        OldPath->VidPnTargetId != NewPath->VidPnTargetId)
+    {
+        return;
+    }
+    if (OldPath->ContentTransformation.Scaling == NewPath->ContentTransformation.Scaling &&
+        OldPath->ContentTransformation.Rotation == NewPath->ContentTransformation.Rotation &&
+        OldPath->Content == NewPath->Content)
+    {
+        return;
+    }
+
+    RtlZeroMemory(&UpdateArgs, sizeof(UpdateArgs));
+    UpdateArgs.VidPnPresentPathInfo = *NewPath;
+
+    if (!DxgkAcquireKmdCall(Adapter))
+        return;
+    _SEH2_TRY
+    {
+        Status = UpdatePath(Adapter->MiniportDeviceContext, &UpdateArgs);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    DxgkReleaseKmdCall(Adapter);
+
+    /*
+     * Reported, not propagated.  The configuration is already committed and the
+     * driver is already scanning it out; failing the commit here would roll back
+     * a display that is working, to fix an attribute that is merely stale.
+     */
+    if (!NT_SUCCESS(Status))
+    {
+        DXGKRNL_WARN("UpdateActiveVidPnPresentPath refused 0x%08lX for source %u target %u\n",
+                     Status, NewPath->VidPnSourceId, NewPath->VidPnTargetId);
+    }
+}
+
+static NTSTATUS
+DxgkpRecommendTopologyFallback(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKP_VIDPN VidPn,
+    _In_ PDXGKP_HOTPLUG_MONITOR_SNAPSHOT Snapshot,
+    _In_ DXGK_RECOMMENDVIDPNTOPOLOGY_REASON Reason)
+{
+    PDXGKDDI_RECOMMEND_VIDPN_TOPOLOGY RecommendTopology =
+        DXGK_CB_FULL(Adapter, DxgkDdiRecommendVidPnTopology);
+    DXGKARG_RECOMMENDVIDPNTOPOLOGY TopologyArgs;
+    NTSTATUS Status;
+
+    if (RecommendTopology == NULL || !Snapshot->Connected)
+        return STATUS_SUCCESS;
+
+    RtlZeroMemory(&TopologyArgs, sizeof(TopologyArgs));
+    TopologyArgs.hVidPn = (D3DKMDT_HVIDPN)VidPn;
+    TopologyArgs.VidPnSourceId = 0;
+    TopologyArgs.RequestReason = Reason;
+    TopologyArgs.hFallbackTopology = NULL;
+
+    if (!DxgkAcquireKmdCall(Adapter))
+        return STATUS_DELETE_PENDING;
+    _SEH2_TRY
+    {
+        Status = RecommendTopology(Adapter->MiniportDeviceContext, &TopologyArgs);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    DxgkReleaseKmdCall(Adapter);
+
+    if (Status == STATUS_GRAPHICS_NO_RECOMMENDED_VIDPN_TOPOLOGY)
+    {
+        DXGKRNL_TRACE("RecommendVidPnTopology has no opinion for target %u\n", Snapshot->TargetId);
+        return STATUS_SUCCESS;
+    }
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    /* The driver wrote into our VidPn.  Whatever it built has to still be a
+     * VidPn this adapter can drive, or the negotiation continues on something
+     * malformed and fails much later with a less useful status. */
+    if (VidPn->Signature != DXGKP_VIDPN_SIGNATURE || VidPn->NumSources != 1 || VidPn->NumPaths > 1)
+        return STATUS_GRAPHICS_INVALID_VIDPN;
+    return STATUS_SUCCESS;
+}
+
 static NTSTATUS
 DxgkpRecommendHotPlugCandidate(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -1655,7 +1787,8 @@ DxgkpRecommendHotPlugCandidate(
     }
 
     if (RecommendFunctionalVidPn == NULL)
-        return STATUS_SUCCESS;
+        return DxgkpRecommendTopologyFallback(Adapter, VidPn, Snapshot,
+                                              DXGK_RVT_INITIALIZATION_NOLKG);
     RtlZeroMemory(&RecommendArgs, sizeof(RecommendArgs));
     RecommendArgs.NumberOfVidPnTargets = Snapshot->Connected ? 1 : 0;
     RecommendArgs.pVidPnTargetPrioritizationVector = Snapshot->Connected ? &TargetId : NULL;
@@ -1674,7 +1807,13 @@ DxgkpRecommendHotPlugCandidate(
     _SEH2_END;
     DxgkReleaseKmdCall(Adapter);
     if (Status == STATUS_GRAPHICS_NO_RECOMMENDED_FUNCTIONAL_VIDPN)
-        return STATUS_SUCCESS;
+    {
+        /* No complete configuration on offer.  The driver may still know the
+         * wiring, which is a smaller question and often answerable when the
+         * larger one is not. */
+        return DxgkpRecommendTopologyFallback(Adapter, VidPn, Snapshot,
+                                              DXGK_RVT_AUGMENTATION_NOLKG);
+    }
     if (!NT_SUCCESS(Status))
         return Status;
     if (VidPn->Signature != DXGKP_VIDPN_SIGNATURE || VidPn->NumSources != 1 || VidPn->NumPaths > 1)
@@ -1724,6 +1863,9 @@ DxgkpVidPnRebuildForHotPlugGeneration(
     DXGKP_DISPLAY_COMMIT_RESULT RollbackResult;
     ULONG OldCommittedWidth;
     ULONG OldCommittedHeight;
+    D3DKMDT_VIDPN_PRESENT_PATH OldPath;
+    D3DKMDT_VIDPN_PRESENT_PATH NewPath;
+    BOOLEAN PathsComparable = FALSE;
     BOOLEAN KmdTransaction = FALSE;
     BOOLEAN RecoveryRequired = FALSE;
     PDXGK_CHILD_PDO_EXTENSION MatchingChild = NULL;
@@ -1807,6 +1949,19 @@ DxgkpVidPnRebuildForHotPlugGeneration(
         goto Cleanup;
     }
     DetachedVidPn = (D3DKMDT_HVIDPN)Adapter->VidPn;
+    /* Capture the outgoing path before it is replaced, so the comparison below
+     * has something to compare against. */
+    {
+        PDXGKP_VIDPN OutgoingVidPn = (PDXGKP_VIDPN)Adapter->VidPn;
+
+        if (OutgoingVidPn != NULL && OutgoingVidPn->NumPaths == 1 &&
+            CandidateObject != NULL && CandidateObject->NumPaths == 1)
+        {
+            OldPath = OutgoingVidPn->Paths[0];
+            NewPath = CandidateObject->Paths[0];
+            PathsComparable = TRUE;
+        }
+    }
     Adapter->VidPn = Candidate;
     Adapter->CommittedWidth = CommitResult.CommittedWidth;
     Adapter->CommittedHeight = CommitResult.CommittedHeight;
@@ -1821,6 +1976,10 @@ DxgkpVidPnRebuildForHotPlugGeneration(
     KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
     if (CommitResult.CommittedWidth != OldCommittedWidth || CommitResult.CommittedHeight != OldCommittedHeight || !Snapshot.Connected)
         DxgkpDestroySharedPrimaryLocked(Adapter);
+    /* After the new VidPn is published and the VidPn mutex is dropped, but
+     * while the KMD transaction still holds the miniport. */
+    if (PathsComparable)
+        DxgkpNotifyActivePathChanged(Adapter, &OldPath, &NewPath);
     DXGKRNL_TRACE("DxgkVidPnRebuildForHotPlug: atomically published %p replacing %p connected=%u target=%u mode=%ux%u\n", Adapter->VidPn, DetachedVidPn, Snapshot.Connected, Snapshot.TargetId, CommitResult.CommittedWidth, CommitResult.CommittedHeight);
     Status = STATUS_SUCCESS;
 
