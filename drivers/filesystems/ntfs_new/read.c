@@ -19,6 +19,15 @@
  */
 const BOOLEAN NtfsCachedReadsEnabled = TRUE;
 
+/* The cache manager retains this table for the lifetime of every cache map. */
+static CACHE_MANAGER_CALLBACKS NtfsCacheManagerCallbacks =
+{
+    NtfsAcqLazyWrite,
+    NtfsRelLazyWrite,
+    NtfsAcqReadAhead,
+    NtfsRelReadAhead
+};
+
 /*
  * NTFS proper refreshes a file's last-access time at most once per hour; a
  * driver that rewrites the record on every read pays an exclusive lock and a
@@ -119,6 +128,28 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     {
         Status = STATUS_INVALID_DEVICE_REQUEST;
         goto Complete;
+    }
+
+    /* An open/close-only handle should not pay for cache state it never uses. */
+    if (NtfsCachedReadsEnabled &&
+        RequestedLength &&
+        !PagingIo &&
+        !BooleanFlagOn(Irp->Flags, IRP_NOCACHE) &&
+        !BooleanFlagOn(FileObject->Flags, FO_NO_INTERMEDIATE_BUFFERING) &&
+        FileCB->RequestedType == TypeData &&
+        FileObject->PrivateCacheMap == NULL)
+    {
+        PCC_FILE_SIZES FileSizes =
+            (PCC_FILE_SIZES)&FileCB->CommonFCBHeader.AllocationSize;
+
+        CcInitializeCacheMap(FileObject,
+                             FileSizes,
+                             FALSE,
+                             &NtfsCacheManagerCallbacks,
+                             FileCB);
+        CcSetFileSizes(FileObject, FileSizes);
+        CcSetReadAheadGranularity(FileObject, 0x10000);
+        FileObject->Flags |= FO_CACHE_SUPPORTED;
     }
 
     /*

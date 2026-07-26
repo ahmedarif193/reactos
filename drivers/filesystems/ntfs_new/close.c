@@ -117,7 +117,8 @@ NtfsFsdClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                     FileCB->StreamCB);
             }
 
-            if (FileCB->FileName.Buffer)
+            if (FileCB->FileName.Buffer &&
+                FileCB->FileName.Buffer != FileCB->InlineFileName)
                 ExFreePool(FileCB->FileName.Buffer);
 
             /* Keep the block, with its resources, for the next open. */

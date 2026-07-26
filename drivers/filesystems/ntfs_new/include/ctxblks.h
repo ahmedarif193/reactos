@@ -79,6 +79,7 @@ typedef struct _VolumeContextBlock
 #define NTFS_MAX_CACHED_RECORDS 512
 #define NTFS_RECORD_CACHE_BUCKETS RTL_NUMBER_OF_FIELD(VolumeContextBlock, RecordCacheHash)
 #define NTFS_MAX_IDLE_FCBS 64
+#define NTFS_INLINE_FILE_NAME_CHARS 128
 
 /* Everything from FileRec onwards describes one open and is reset on reuse;
  * the header, resources and mutex above it stay initialized. */
@@ -194,6 +195,7 @@ typedef struct _FCB
     ERESOURCE MainResource;
     ERESOURCE PagingIoResource;
     FAST_MUTEX HeaderMutex;
+    WCHAR InlineFileName[NTFS_INLINE_FILE_NAME_CHARS];
 
     PNtfsFileRecord FileRec;
     ULONG CreateOptions;

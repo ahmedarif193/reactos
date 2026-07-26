@@ -241,18 +241,6 @@ NtfsRememberLookupParent(
                   ParentLength * sizeof(WCHAR));
 }
 
-_Function_class_(IRP_MJ_CREATE)
-_Function_class_(DRIVER_DISPATCH)
-/* The cache manager retains this table for the lifetime of every cache map,
- * so it must not live on the stack of the create that installs it. */
-static const CACHE_MANAGER_CALLBACKS NtfsCacheManagerCallbacks =
-{
-    NtfsAcqLazyWrite,
-    NtfsRelLazyWrite,
-    NtfsAcqReadAhead,
-    NtfsRelReadAhead
-};
-
 PStreamContextBlock
 NtfsReferenceStreamContext(
     _In_ PVolumeContextBlock VolCB,
@@ -410,7 +398,8 @@ NtfsCompleteFailedCreate(
         }
         if (FileCB->RequestedStream)
             ExFreePool(FileCB->RequestedStream);
-        if (FileCB->FileName.Buffer)
+        if (FileCB->FileName.Buffer &&
+            FileCB->FileName.Buffer != FileCB->InlineFileName)
             ExFreePool(FileCB->FileName.Buffer);
         if (FileCB->FileRec)
         {
@@ -726,9 +715,18 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     // Set file name
     FileNameLength = IrpSp->FileObject->FileName.Length;
 
-    PWCHAR FileNameBuffer = (PWCHAR)ExAllocatePoolWithTag(PagedPool,
-                                                          FileNameLength * sizeof(WCHAR),
-                                                          TAG_NTFS);
+    PWCHAR FileNameBuffer;
+
+    if (FileNameLength <= sizeof(FileCB->InlineFileName))
+    {
+        FileNameBuffer = FileCB->InlineFileName;
+    }
+    else
+    {
+        FileNameBuffer = (PWCHAR)ExAllocatePoolWithTag(PagedPool,
+                                                       FileNameLength,
+                                                       TAG_NTFS);
+    }
     if (!FileNameBuffer)
     {
         return NtfsCompleteFailedCreate(VolumeDeviceObject,
@@ -744,7 +742,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     FileCB->FileName.Buffer = FileNameBuffer;
     FileCB->FileName.Length = FileNameLength;
     FileCB->FileName.MaximumLength = FileNameLength;
-    // NOTE: FileNameBuffer gets freed when the FileCB is cleaned up.
+    // Non-inline name storage is freed when the FileCB is cleaned up.
 
     // Get ADS Preferences for the file.
     Status = NtfsVolumeGetADSPreference(DiskVolume,
@@ -808,7 +806,8 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         {
             if (FileCB->RequestedStream)
                 ExFreePool(FileCB->RequestedStream);
-            if (FileCB->FileName.Buffer)
+            if (FileCB->FileName.Buffer &&
+                FileCB->FileName.Buffer != FileCB->InlineFileName)
                 ExFreePool(FileCB->FileName.Buffer);
             NtfsFileRecordDestroy(CurrentFile);
             ExDeleteResourceLite(
@@ -908,10 +907,8 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         }
     }
 
-    // Initialize cache map on first open when we have valid sizes
+    // Initialize file sizes and section state.
     {
-        // Use the CommonFCBHeader fields as the canonical CC_FILE_SIZES storage
-        PCC_FILE_SIZES FileSizes = (PCC_FILE_SIZES)&FileCB->CommonFCBHeader.AllocationSize;
         // Initialize the common header sizes from attributes
         PAttribute DataAttr = NtfsFileRecordGetAttribute(
             CurrentFile,
@@ -943,26 +940,9 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             FileCB->CommonFCBHeader.ValidDataLength.QuadPart= 0;
         }
 
-        /*
-         * Mm requires SectionObjectPointer for image and data sections even
-         * when ordinary cached reads are disabled. The cache-read switch only
-         * controls whether this file object gets a private Cache Manager map.
-        */
+        /* Mm requires SectionObjectPointer for image and data sections. */
         FileObject->SectionObjectPointer = &FileCB->StreamCB->SectionObjectPointers;
         FileObject->FsContext = FileCB;
-
-        if (NtfsCachedReadsEnabled &&
-            FileObject->PrivateCacheMap == NULL)
-        {
-            CcInitializeCacheMap(FileObject,
-                                 FileSizes,
-                                 FALSE,
-                                 &NtfsCacheManagerCallbacks,
-                                 FileCB);
-            CcSetFileSizes(FileObject, FileSizes);
-            CcSetReadAheadGranularity(FileObject, 0x10000);
-            FileObject->Flags |= FO_CACHE_SUPPORTED;
-        }
     }
 
     // Open file.
