@@ -1458,7 +1458,10 @@ VidSchSubmitCommandVirtual(
 
     if (Adapter == NULL || Context == NULL || DmaBufferGpuVa == 0 || DmaBufferSize == 0 || OutFenceId == NULL || (DriverPrivateDataSize != 0 && DriverPrivateData == NULL))
         return STATUS_INVALID_PARAMETER;
-    if (!NullRendering)
+    /* A non-null virtual submission needs a miniport that executes GPU
+     * virtual addresses; the caller has already validated the buffer range
+     * against the submitting process's page tables. */
+    if (!NullRendering && DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommandVirtual) == NULL)
         return STATUS_NOT_SUPPORTED;
 
     *OutFenceId = 0;

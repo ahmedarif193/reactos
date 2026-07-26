@@ -205,7 +205,20 @@ SoftGpuDdiSetRootPageTable(
            pSetPageTable->hContext,
            pSetPageTable->Address.SegmentOffset,
            pSetPageTable->NumEntries);
-    /* No hardware MMU to program. */
+
+    /*
+     * The translation walk this device performs starts at the programmed
+     * root, so record it.  SegmentId 0 names a physical address, which is
+     * what the CPU_VIRTUAL model publishes for its tables.
+     */
+    if (pSetPageTable->Address.SegmentId == 0)
+    {
+        KIRQL OldIrql;
+
+        KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
+        Device->ActiveRootPageTablePhysical = pSetPageTable->Address.SegmentOffset;
+        KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+    }
 }
 
 
@@ -324,14 +337,62 @@ SoftGpuDdiSubmitCommandVirtual(
 
     if (pSubmitCommand->NodeOrdinal != 0 || pSubmitCommand->EngineOrdinal != 0)
         return STATUS_INVALID_PARAMETER;
-    if (!pSubmitCommand->Flags.NullRendering)
-        return STATUS_NOT_SUPPORTED;
 
-    DPRINT("SOFTGPU: SubmitCommandVirtual fence=%u node=%u gpuVa=0x%I64x size=%u\n",
+    DPRINT("SOFTGPU: SubmitCommandVirtual fence=%u node=%u gpuVa=0x%I64x size=%u null=%u\n",
            pSubmitCommand->SubmissionFenceId,
            pSubmitCommand->NodeOrdinal,
            pSubmitCommand->DmaBufferVirtualAddress,
-           pSubmitCommand->DmaBufferSize);
+           pSubmitCommand->DmaBufferSize,
+           pSubmitCommand->Flags.NullRendering);
+
+    if (!pSubmitCommand->Flags.NullRendering)
+    {
+        /*
+         * A real virtual submission is executed: translate the buffer's GPU
+         * virtual address through the programmed root page table and queue
+         * the resulting physical range on the engine, exactly as the
+         * physical submission path does.
+         */
+        ULONGLONG RootPhysical;
+        ULONGLONG BufferPhysical;
+
+        KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
+        RootPhysical = Device->ActiveRootPageTablePhysical;
+        KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+        if (RootPhysical == 0)
+            return STATUS_INVALID_DEVICE_STATE;
+        if (pSubmitCommand->DmaBufferSize == 0)
+            return STATUS_INVALID_PARAMETER;
+
+        BufferPhysical = SoftGpuTranslateGpuVa(Device, RootPhysical, pSubmitCommand->DmaBufferVirtualAddress, pSubmitCommand->DmaBufferSize);
+        if (BufferPhysical == 0)
+            return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+
+        KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
+        if (Device->Stopped)
+        {
+            KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+            return STATUS_DELETE_PENDING;
+        }
+        if (Device->SubmitRingTail - Device->SubmitRingHead >= SOFTGPU_SUBMIT_RING_SIZE)
+        {
+            KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+            return STATUS_DEVICE_BUSY;
+        }
+        {
+            PSOFTGPU_SUBMIT Entry = &Device->SubmitRing[Device->SubmitRingTail % SOFTGPU_SUBMIT_RING_SIZE];
+
+            Entry->DmaPhys.QuadPart = (LONGLONG)BufferPhysical;
+            Entry->StartOffset = 0;
+            Entry->EndOffset = pSubmitCommand->DmaBufferSize;
+            Entry->Fence = pSubmitCommand->SubmissionFenceId;
+            Device->SubmitRingTail++;
+        }
+        Device->CurrentFence = pSubmitCommand->SubmissionFenceId;
+        KeInsertQueueDpc(&Device->DpcObject, NULL, NULL);
+        KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+        return STATUS_SUCCESS;
+    }
 
     KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
     if (Device->Stopped)

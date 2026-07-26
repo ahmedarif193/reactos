@@ -4516,12 +4516,6 @@ DxgkSubmitCommand(
         DxgkDereferenceContext(Context);
         return STATUS_NOT_SUPPORTED;
     }
-    if (!SubmitCommand->Flags.NullRendering)
-    {
-        DxgkDereferenceContext(Context);
-        return STATUS_NOT_SUPPORTED;
-    }
-
     if (!DxgkGpuVaPageTableReady(Adapter, Device->ProcessRecord))
     {
         if (!SubmitCommand->Flags.NullRendering || !Context->UserModeCreateFlags.NullRendering)
