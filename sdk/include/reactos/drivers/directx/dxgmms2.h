@@ -620,6 +620,10 @@ typedef struct _DXGMMS2_VIDMM_SEGMENT_STATUS_V1
 } DXGMMS2_VIDMM_SEGMENT_STATUS_V1, *PDXGMMS2_VIDMM_SEGMENT_STATUS_V1;
 
 typedef NTSTATUS (NTAPI *PDXGMMS2_VIDMM_START)(_In_ DXGMMS2_VIDMM_HANDLE VidMm, _In_ ULONG SegmentCount);
+/* Retires the ledger.  The caller states by calling this that it has released
+ * every placement it held; anything still outstanding is reclaimed and
+ * reported, because a survivor means the two sides disagreed. */
+typedef VOID     (NTAPI *PDXGMMS2_VIDMM_STOP)(_In_ DXGMMS2_VIDMM_HANDLE VidMm);
 typedef NTSTATUS (NTAPI *PDXGMMS2_VIDMM_SET_SEGMENT)(_In_ DXGMMS2_VIDMM_HANDLE VidMm, _In_ ULONG SegmentIndex, _In_ const DXGMMS2_VIDMM_SEGMENT_DESC_V1 *Desc);
 typedef NTSTATUS (NTAPI *PDXGMMS2_VIDMM_RESERVE)(_In_ DXGMMS2_VIDMM_HANDLE VidMm, _In_ ULONG SegmentIndex, _In_ const DXGMMS2_VIDMM_RESERVE_INFO_V1 *Info, _Out_ PULONGLONG OutOffset);
 typedef NTSTATUS (NTAPI *PDXGMMS2_VIDMM_RELEASE)(_In_ DXGMMS2_VIDMM_HANDLE VidMm, _In_ ULONG SegmentIndex, _In_ ULONGLONG OwnerCookie);
@@ -634,6 +638,7 @@ typedef struct _DXGMMS2_VIDMM_INTERFACE_V1
     ULONG Version;
     DXGMMS2_VIDMM_HANDLE VidMmHandle;
     PDXGMMS2_VIDMM_START Start;
+    PDXGMMS2_VIDMM_STOP Stop;
     PDXGMMS2_VIDMM_SET_SEGMENT SetSegment;
     PDXGMMS2_VIDMM_RESERVE ReservePlacement;
     PDXGMMS2_VIDMM_RELEASE ReleasePlacement;
