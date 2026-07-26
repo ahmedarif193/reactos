@@ -1129,6 +1129,17 @@ GpuVaProcessMiniportDevice(
     return Process->PagingMiniportDevice;
 }
 
+/*
+ * GpuVaNotifyPageTableUpdate
+ *
+ * Records that a span of the process's page tables changed.  The description
+ * to the miniport is a paging submission and therefore PASSIVE_LEVEL work, so
+ * it is deferred to DxgkGpuVaFlushPageTableUpdates once GpuVaLock is dropped;
+ * until then dxgkrnl's CPU-written tables remain authoritative, which is what
+ * DXGK_PAGETABLEUPDATE_CPU_VIRTUAL means.
+ *
+ * Caller MUST hold GpuVaLock.
+ */
 static NTSTATUS
 GpuVaNotifyPageTableUpdate(
     _In_ PDXGKRNL_PROCESS Process,
@@ -1139,58 +1150,90 @@ GpuVaNotifyPageTableUpdate(
     _In_ BOOLEAN InitialUpdate)
 {
     PDXGKRNL_ADAPTER Adapter = Process->Adapter;
-    DXGKRNL_PAGING_OP Op;
     ULONGLONG Coverage;
-    NTSTATUS Status;
 
+    UNREFERENCED_PARAMETER(InitialUpdate);
     if (Adapter == NULL || Count == 0 || Table == NULL)
         return STATUS_INVALID_PARAMETER;
-    /* A miniport that does not describe page-table updates leaves dxgkrnl's
-     * CPU-written tables authoritative, which is a supported configuration. */
-    if (!DxgkPagingOperationSupported(Adapter, DxgkPagingOpUpdatePageTable))
-        return STATUS_SUCCESS;
     if (StartIndex >= Table->EntryCount || Count > Table->EntryCount - StartIndex)
         return STATUS_INVALID_PARAMETER;
-
-    /* A paging packet is submitted against a miniport device handle; page
-     * tables belong to the process, so borrow one of its devices. */
-    RtlZeroMemory(&Op, sizeof(Op));
-    Op.Type = DxgkPagingOpUpdatePageTable;
-    Op.hMiniportDevice = GpuVaProcessMiniportDevice(Process);
-    if (Op.hMiniportDevice == NULL)
+    if (!DxgkPagingOperationSupported(Adapter, DxgkPagingOpUpdatePageTable))
         return STATUS_SUCCESS;
-    Op.hMiniportProcess = Process->hMiniportProcess;
-    Op.PageTableLevel = Table->Level;
-    Op.PageTableAddress.CpuVirtual = Table->KernelVa;
-    Op.PageTableEntries = (DXGK_PTE *)Table->KernelVa + StartIndex;
-    Op.StartIndex = StartIndex;
-    Op.NumPageTableEntries = Count;
-    Op.UpdateMode = Adapter->GpuMmuCaps.PageTableUpdateMode;
-    Op.InitialUpdate = InitialUpdate;
-    Op.StartVirtualAddress = FirstVirtualAddress;
-    Status = DxgkPagingExecuteSynchronous(Adapter, NULL, &Op);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("DxgkGpuVa: page-table update rejected 0x%08lX (level %lu, %lu entries at 0x%I64x)\n", Status, Table->Level, Count, FirstVirtualAddress);
-        return Status;
-    }
 
-    if (!DxgkPagingOperationSupported(Adapter, DxgkPagingOpFlushTlb))
-        return STATUS_SUCCESS;
     Coverage = (ULONGLONG)Count << GpuVaLevelShift(Adapter, Table->Level);
+    if (!Process->PageTableUpdatePending)
+    {
+        Process->PageTableUpdatePending = TRUE;
+        Process->PageTableUpdateStart = FirstVirtualAddress;
+        Process->PageTableUpdateEnd = FirstVirtualAddress + Coverage;
+    }
+    else
+    {
+        if (FirstVirtualAddress < Process->PageTableUpdateStart)
+            Process->PageTableUpdateStart = FirstVirtualAddress;
+        if (FirstVirtualAddress + Coverage > Process->PageTableUpdateEnd)
+            Process->PageTableUpdateEnd = FirstVirtualAddress + Coverage;
+    }
+    return STATUS_SUCCESS;
+}
+
+/*
+ * DxgkGpuVaFlushPageTableUpdates
+ *
+ * Describes the page-table span accumulated under GpuVaLock to the miniport
+ * and invalidates the covering translations.  Runs with the lock released, so
+ * the paging submission it performs is at the PASSIVE_LEVEL those DDIs
+ * require.  The caller holds a process reference for the duration.
+ *
+ * IRQL: PASSIVE_LEVEL, GpuVaLock NOT held.
+ */
+VOID
+DxgkGpuVaFlushPageTableUpdates(
+    _In_ PDXGKRNL_PROCESS Process)
+{
+    PDXGKRNL_ADAPTER Adapter;
+    DXGKRNL_PAGING_OP Op;
+    D3DGPU_VIRTUAL_ADDRESS Start;
+    D3DGPU_VIRTUAL_ADDRESS End;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Process == NULL)
+        return;
+    Adapter = Process->Adapter;
+
+    ExAcquireFastMutex(&Process->GpuVaLock);
+    if (!Process->PageTableUpdatePending)
+    {
+        ExReleaseFastMutex(&Process->GpuVaLock);
+        return;
+    }
+    Start = Process->PageTableUpdateStart;
+    End = Process->PageTableUpdateEnd;
+    Process->PageTableUpdatePending = FALSE;
+    Process->PageTableUpdateStart = 0;
+    Process->PageTableUpdateEnd = 0;
+    ExReleaseFastMutex(&Process->GpuVaLock);
+
+    if (Adapter == NULL || End <= Start)
+        return;
+    /* The tables the CPU already wrote are authoritative in CPU_VIRTUAL mode;
+     * this tells the miniport which translations changed so it can drop any
+     * it had cached. */
+    if (!DxgkPagingOperationSupported(Adapter, DxgkPagingOpFlushTlb))
+        return;
     RtlZeroMemory(&Op, sizeof(Op));
     Op.Type = DxgkPagingOpFlushTlb;
     Op.hMiniportDevice = GpuVaProcessMiniportDevice(Process);
     if (Op.hMiniportDevice == NULL)
-        return STATUS_SUCCESS;
+        return;
     Op.hMiniportProcess = Process->hMiniportProcess;
     Op.RootPageTableAddress = Process->RootPageTableAddress;
-    Op.StartVirtualAddress = FirstVirtualAddress;
-    Op.EndVirtualAddress = FirstVirtualAddress + Coverage;
+    Op.StartVirtualAddress = Start;
+    Op.EndVirtualAddress = End;
     Status = DxgkPagingExecuteSynchronous(Adapter, NULL, &Op);
     if (!NT_SUCCESS(Status))
-        DPRINT1("DxgkGpuVa: TLB invalidation rejected 0x%08lX over [0x%I64x,0x%I64x)\n", Status, Op.StartVirtualAddress, Op.EndVirtualAddress);
-    return Status;
+        DPRINT1("DxgkGpuVa: TLB invalidation rejected 0x%08lX over [0x%I64x,0x%I64x)\n", Status, Start, End);
 }
 
 /*
