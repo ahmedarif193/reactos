@@ -270,6 +270,9 @@ Dxgmms2StartAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _In_ const DXGMMS2_STAR
      * paging queues, monitored fences, per-context queues) are implemented
      * here in full.  A miniport that asked for less gets what it asked for.
      */
+    /* Scoped to this provider's subsystems, not to the public adapter: dxgkrnl
+     * takes the minimum of this, the miniport's declared level, and its own
+     * completed level, so it can only ever lower what user mode sees. */
     Context->HighestCompleteWddmVersion = min(Info->RequestedWddmVersion, DXGMMS2_WDDM_VERSION_2_0);
     Context->StopReason = 0;
     InterlockedExchange(&Context->State, Dxgmms2AdapterStarted);
