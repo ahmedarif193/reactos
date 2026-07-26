@@ -45,6 +45,7 @@ DxgkpIsListEntryLinked(
 
 static BOOLEAN DxgkpReferenceSyncObject(_In_ PVOID Object);
 static NTSTATUS DxgkpSyncObjectPublishRetiredFence(_In_ PDXGKRNL_SYNC_OBJECT SyncObj, _In_ UINT64 FenceValue);
+static PDXGKRNL_SYNC_OBJECT DxgkpSyncResolveShared(_In_ PDXGKRNL_SYNC_OBJECT SyncObj);
 
 /* ========================================================================
  * Sharing and periodic registries
@@ -184,39 +185,56 @@ DxgkSyncAdvancePeriodicFences(
 {
     PDXGKRNL_SYNC_OBJECT Pending[8];
     ULONGLONG Values[RTL_NUMBER_OF(Pending)];
-    ULONG Count = 0;
+    PLIST_ENTRY Resume = NULL;
+    ULONG Count;
     ULONG Index;
     PLIST_ENTRY Entry;
 
     if (Adapter == NULL || InterlockedCompareExchange(&DxgkSyncShareInitialized, 2, 2) != 2)
         return;
 
-    ExAcquireFastMutex(&DxgkSyncShareLock);
-    for (Entry = DxgkSyncPeriodicListHead.Flink;
-         Entry != &DxgkSyncPeriodicListHead && Count < RTL_NUMBER_OF(Pending);
-         Entry = Entry->Flink)
+    /* Walk the whole list in bounded batches, resuming where the previous
+     * batch stopped, so a target with more registered fences than one batch
+     * holds still advances every one of them on this pulse. */
+    do
     {
-        PDXGKRNL_SYNC_OBJECT SyncObj = CONTAINING_RECORD(Entry, DXGKRNL_SYNC_OBJECT, PeriodicListEntry);
+        Count = 0;
+        ExAcquireFastMutex(&DxgkSyncShareLock);
+        /* A resume point captured without the lock may have been unlinked;
+         * an unlinked entry points at itself, so restart from the head. */
+        Entry = Resume;
+        if (Entry == NULL || Entry->Flink == Entry)
+            Entry = DxgkSyncPeriodicListHead.Flink;
+        Resume = NULL;
+        for (; Entry != &DxgkSyncPeriodicListHead; Entry = Entry->Flink)
+        {
+            PDXGKRNL_SYNC_OBJECT SyncObj = CONTAINING_RECORD(Entry, DXGKRNL_SYNC_OBJECT, PeriodicListEntry);
 
-        if (!SyncObj->Periodic || SyncObj->PeriodicVidPnSourceId != VidPnSourceId)
-            continue;
-        if (SyncObj->Device == NULL || SyncObj->Device->Adapter != Adapter)
-            continue;
-        if (!DxgkpReferenceSyncObject(SyncObj))
-            continue;
-        /* The publish path owns the value update, so name the next value
-         * rather than advancing the field here. */
-        Values[Count] = (ULONGLONG)InterlockedCompareExchange64(&SyncObj->FenceValue, 0, 0) + 1;
-        Pending[Count] = SyncObj;
-        Count++;
-    }
-    ExReleaseFastMutex(&DxgkSyncShareLock);
+            if (Count == RTL_NUMBER_OF(Pending))
+            {
+                Resume = Entry;
+                break;
+            }
+            if (!SyncObj->Periodic || SyncObj->PeriodicVidPnTargetId != VidPnSourceId)
+                continue;
+            if (SyncObj->Device == NULL || SyncObj->Device->Adapter != Adapter)
+                continue;
+            if (!DxgkpReferenceSyncObject(SyncObj))
+                continue;
+            /* The publish path owns the value update, so name the next value
+             * rather than advancing the field here. */
+            Values[Count] = (ULONGLONG)InterlockedCompareExchange64(&SyncObj->FenceValue, 0, 0) + 1;
+            Pending[Count] = SyncObj;
+            Count++;
+        }
+        ExReleaseFastMutex(&DxgkSyncShareLock);
 
-    for (Index = 0; Index < Count; ++Index)
-    {
-        (VOID)DxgkpSyncObjectPublishRetiredFence(Pending[Index], Values[Index]);
-        DxgkpDereferenceSyncObject(Pending[Index]);
-    }
+        for (Index = 0; Index < Count; ++Index)
+        {
+            (VOID)DxgkpSyncObjectPublishRetiredFence(Pending[Index], Values[Index]);
+            DxgkpDereferenceSyncObject(Pending[Index]);
+        }
+    } while (Resume != NULL);
 }
 
 static BOOLEAN
@@ -243,14 +261,38 @@ DxgkpReferenceSyncObjectByHandle(
     _In_opt_ PEPROCESS OwnerProcess,
     _Out_ PDXGKRNL_SYNC_OBJECT *OutSyncObj)
 {
+    PDXGKRNL_SYNC_OBJECT SyncObj;
     PVOID Object;
     NTSTATUS Status;
 
     *OutSyncObj = NULL;
     Status = DxgkReferenceOwnedHandle(Handle, DxgkHandleTypeSynchronizationObject, OwnerProcess, DxgkpReferenceSyncObject, &Object);
-    if (NT_SUCCESS(Status))
-        *OutSyncObj = Object;
-    return Status;
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    /*
+     * An opened alias carries the access flags of the view the caller holds
+     * but none of the fence state: the created object stays authoritative.
+     * Resolve to it and hand back a reference on that object, so every state
+     * operation reads and writes one fence and one value page.  The alias's
+     * own access flags are copied from the creator at open time, so they
+     * still gate this request.
+     */
+    SyncObj = Object;
+    if (SyncObj->BackingSyncObject != NULL)
+    {
+        PDXGKRNL_SYNC_OBJECT Backing = DxgkpSyncResolveShared(SyncObj);
+
+        if (Backing == NULL || !DxgkpReferenceSyncObject(Backing))
+        {
+            DxgkpDereferenceSyncObject(SyncObj);
+            return STATUS_DELETE_PENDING;
+        }
+        DxgkpDereferenceSyncObject(SyncObj);
+        SyncObj = Backing;
+    }
+    *OutSyncObj = SyncObj;
+    return STATUS_SUCCESS;
 }
 
 /*
@@ -642,7 +684,7 @@ DxgkpCreateSynchronizationObjectInternal(
              * instead of on explicit signals, so it starts at zero. */
             SyncObj->FenceValue = 0;
             SyncObj->Periodic = TRUE;
-            SyncObj->PeriodicVidPnSourceId = Info->PeriodicMonitoredFence.VidPnTargetId;
+            SyncObj->PeriodicVidPnTargetId = Info->PeriodicMonitoredFence.VidPnTargetId;
             InitialEventState = FALSE;
             break;
         case D3DDDI_CPU_NOTIFICATION:
@@ -818,7 +860,7 @@ DxgkOpenSynchronizationObject(
     Alias->BackingSyncObject = Backing;
     Alias->SemaphoreLimit = Backing->SemaphoreLimit;
     Alias->Periodic = Backing->Periodic;
-    Alias->PeriodicVidPnSourceId = Backing->PeriodicVidPnSourceId;
+    Alias->PeriodicVidPnTargetId = Backing->PeriodicVidPnTargetId;
     KeInitializeEvent(&Alias->CpuEvent, SynchronizationEvent, FALSE);
     InitializeListHead(&Alias->SyncObjListEntry);
     InitializeListHead(&Alias->DeviceSyncObjListEntry);
@@ -848,6 +890,24 @@ DxgkOpenSynchronizationObject(
 
     pData->hSyncObject = Alias->Handle;
     return STATUS_SUCCESS;
+}
+
+/*
+ * DxgkpSyncResolveShared
+ *
+ * An opened alias holds no fence state of its own: the object created with
+ * the Shared flag remains authoritative, including the single monitored value
+ * page both views observe.  Every state operation therefore runs against the
+ * backing object, while admission still checks the access flags of the view
+ * the caller actually holds.
+ */
+static PDXGKRNL_SYNC_OBJECT
+DxgkpSyncResolveShared(
+    _In_ PDXGKRNL_SYNC_OBJECT SyncObj)
+{
+    while (SyncObj != NULL && SyncObj->BackingSyncObject != NULL)
+        SyncObj = SyncObj->BackingSyncObject;
+    return SyncObj;
 }
 
 NTSTATUS
