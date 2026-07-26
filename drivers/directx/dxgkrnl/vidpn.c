@@ -4467,8 +4467,8 @@ DxgkpSetVidPnSourceOwnerWithFlagsAndAccessMode(
         return STATUS_INVALID_PARAMETER;
     if (pSetVidPnSourceOwner->VidPnSourceCount != 0 && (pSetVidPnSourceOwner->pType == NULL || pSetVidPnSourceOwner->pVidPnSourceId == NULL))
         return STATUS_INVALID_PARAMETER;
-    if (pSetVidPnSourceOwner->VidPnSourceCount == 0 && (pSetVidPnSourceOwner->pType != NULL || pSetVidPnSourceOwner->pVidPnSourceId != NULL))
-        return STATUS_INVALID_PARAMETER;
+    /* A zero count is a release-all request; the arrays are then ignored, not
+     * policed.  Windows 11 accepts it with non-NULL pointers still supplied. */
     if ((OwnerFlags & ~DXGKP_SOURCE_OWNER_FLAG_VALID_MASK) != 0)
         return STATUS_INVALID_PARAMETER;
     if ((OwnerFlags & DXGKP_SOURCE_OWNER_FLAG_ALLOW_OUTPUT_DUPLICATION) != 0)
@@ -4507,7 +4507,9 @@ DxgkpSetVidPnSourceOwnerWithFlagsAndAccessMode(
         {
             if (SourceIds[i] >= DXGKP_MAX_SOURCES || SourceIds[i] >= Adapter->NumberOfVideoPresentSources)
             {
-                Status = STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE;
+                /* Windows 11 rejects an out-of-range source in this array with
+                 * the generic status, not the graphics-specific one. */
+                Status = STATUS_INVALID_PARAMETER;
                 goto Cleanup;
             }
             if (Types[i] < D3DKMT_VIDPNSOURCEOWNER_UNOWNED || Types[i] > D3DKMT_VIDPNSOURCEOWNER_EMULATED)

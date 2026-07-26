@@ -55,22 +55,23 @@ Test_TopLevelGuardCapture(void)
     if (pGetDisplayModeList != NULL)
     {
         CAPTURE_CALL(Status, Faulted, pGetDisplayModeList((D3DKMT_GETDISPLAYMODELIST *)GuardPage));
-        ok(Status == STATUS_ACCESS_VIOLATION, "GetDisplayModeList inaccessible top-level pointer returned 0x%08lX%s\n", (long)Status, Faulted ? " (faulted safely)" : "");
+        ok(Status == STATUS_INVALID_PARAMETER, "GetDisplayModeList inaccessible top-level pointer returned 0x%08lX%s, expected STATUS_INVALID_PARAMETER (Win11)\n", (long)Status, Faulted ? " (faulted safely)" : "");
     }
     if (pQueryResourceInfo != NULL)
     {
         CAPTURE_CALL(Status, Faulted, pQueryResourceInfo((D3DKMT_QUERYRESOURCEINFO *)GuardPage));
-        ok(Status == STATUS_ACCESS_VIOLATION, "QueryResourceInfo inaccessible top-level pointer returned 0x%08lX%s\n", (long)Status, Faulted ? " (faulted safely)" : "");
+        ok(Status == STATUS_INVALID_PARAMETER, "QueryResourceInfo inaccessible top-level pointer returned 0x%08lX%s, expected STATUS_INVALID_PARAMETER (Win11)\n", (long)Status, Faulted ? " (faulted safely)" : "");
     }
     if (pOpenResource != NULL)
     {
         CAPTURE_CALL(Status, Faulted, pOpenResource((D3DKMT_OPENRESOURCE *)GuardPage));
+        /* OpenResource did NOT diverge: Win11 returns ACCESS_VIOLATION here. */
         ok(Status == STATUS_ACCESS_VIOLATION, "OpenResource inaccessible top-level pointer returned 0x%08lX%s\n", (long)Status, Faulted ? " (faulted safely)" : "");
     }
     if (pPresent != NULL)
     {
         CAPTURE_CALL(Status, Faulted, pPresent((D3DKMT_PRESENT *)GuardPage));
-        ok(Status == STATUS_ACCESS_VIOLATION, "Present inaccessible top-level pointer returned 0x%08lX%s\n", (long)Status, Faulted ? " (faulted safely)" : "");
+        ok(Status == STATUS_INVALID_PARAMETER, "Present inaccessible top-level pointer returned 0x%08lX%s, expected STATUS_INVALID_PARAMETER (Win11)\n", (long)Status, Faulted ? " (faulted safely)" : "");
     }
     VirtualFree(GuardPage, 0, MEM_RELEASE);
 }
@@ -126,7 +127,7 @@ Test_EnumAdapters2EmbeddedOutput(void)
     Data.pAdapters = GuardPage;
     Before = Data;
     CAPTURE_CALL(Status, Faulted, pfn(&Data));
-    ok(Status == STATUS_ACCESS_VIOLATION, "EnumAdapters2 with an inaccessible output array returned 0x%08lX%s, expected STATUS_ACCESS_VIOLATION\n", (long)Status, Faulted ? " (faulted)" : "");
+    ok(Status == STATUS_INVALID_PARAMETER, "EnumAdapters2 with an inaccessible output array returned 0x%08lX%s, expected STATUS_INVALID_PARAMETER (Win11)\n", (long)Status, Faulted ? " (faulted)" : "");
     ok(Data.NumAdapters == Before.NumAdapters && Data.pAdapters == Before.pAdapters, "EnumAdapters2 changed its descriptor after rejecting an inaccessible output array\n");
     VirtualFree(GuardPage, 0, MEM_RELEASE);
 
@@ -153,7 +154,7 @@ Test_EnumAdapters2EmbeddedOutput(void)
     Data.pAdapters = (D3DKMT_ADAPTERINFO *)ReadOnlyPage;
     Before = Data;
     CAPTURE_CALL(Status, Faulted, pfn(&Data));
-    ok(Status == STATUS_ACCESS_VIOLATION, "EnumAdapters2 with a read-only output array returned 0x%08lX%s, expected STATUS_ACCESS_VIOLATION\n", (long)Status, Faulted ? " (faulted)" : "");
+    ok(Status == STATUS_INVALID_PARAMETER, "EnumAdapters2 with a read-only output array returned 0x%08lX%s, expected STATUS_INVALID_PARAMETER (Win11)\n", (long)Status, Faulted ? " (faulted)" : "");
     ok(Data.NumAdapters == Before.NumAdapters && Data.pAdapters == Before.pAdapters, "EnumAdapters2 changed its descriptor after rejecting a read-only output array\n");
     if (VirtualProtect(ReadOnlyPage, BufferSize, PAGE_READWRITE, &OldProtect))
         ok(memcmp(ReadOnlyPage, ExpectedBuffer, BufferSize) == 0, "EnumAdapters2 modified a read-only output canary before reporting failure\n");
@@ -224,7 +225,7 @@ Test_CreateContextPrivateCapture(void)
     Before = Data;
 
     CAPTURE_CALL(Status, Faulted, pfn(&Data));
-    ok(Status == STATUS_ACCESS_VIOLATION, "CreateContext with inaccessible private data returned 0x%08lX%s, expected STATUS_ACCESS_VIOLATION\n", (long)Status, Faulted ? " (faulted)" : "");
+    ok(Status == STATUS_INVALID_PARAMETER, "CreateContext with inaccessible private data returned 0x%08lX%s, expected STATUS_INVALID_PARAMETER (Win11)\n", (long)Status, Faulted ? " (faulted)" : "");
     ok(memcmp(&Data, &Before, sizeof(Data)) == 0, "CreateContext changed caller-visible outputs after private-data capture failed\n");
 
     VirtualFree(GuardPage, 0, MEM_RELEASE);
@@ -277,7 +278,7 @@ Test_EscapePrivateCapture(void)
     Data.PrivateDriverDataSize = 1;
     Before = Data;
     CAPTURE_CALL(Status, Faulted, pfn(&Data));
-    ok(Status == STATUS_ACCESS_VIOLATION, "Escape with inaccessible private data returned 0x%08lX%s, expected STATUS_ACCESS_VIOLATION\n", (long)Status, Faulted ? " (faulted)" : "");
+    ok(Status == STATUS_INVALID_PARAMETER, "Escape with inaccessible private data returned 0x%08lX%s, expected STATUS_INVALID_PARAMETER (Win11)\n", (long)Status, Faulted ? " (faulted)" : "");
     ok(memcmp(&Data, &Before, sizeof(Data)) == 0, "Escape changed its descriptor after private-data capture failed\n");
     VirtualFree(GuardPage, 0, MEM_RELEASE);
 
@@ -306,7 +307,7 @@ Test_EscapePrivateCapture(void)
     Data.PrivateDriverDataSize = sizeof(Expected);
     Before = Data;
     CAPTURE_CALL(Status, Faulted, pfn(&Data));
-    ok(Status == STATUS_ACCESS_VIOLATION, "Escape with read-only private data returned 0x%08lX%s, expected STATUS_ACCESS_VIOLATION\n", (long)Status, Faulted ? " (faulted)" : "");
+    ok(Status == STATUS_INVALID_PARAMETER, "Escape with read-only private data returned 0x%08lX%s, expected STATUS_INVALID_PARAMETER (Win11)\n", (long)Status, Faulted ? " (faulted)" : "");
     ok(memcmp(&Data, &Before, sizeof(Data)) == 0, "Escape changed its descriptor after rejecting read-only private data\n");
     if (VirtualProtect(ReadOnlyPage, PageSize, PAGE_READWRITE, &OldProtect))
         ok(memcmp(ReadOnlyPage, Expected, sizeof(Expected)) == 0, "Escape modified a read-only private-data canary before reporting failure\n");
@@ -395,7 +396,7 @@ Test_SetVidPnSourceOwnerCaptureAndRollback(void)
     OwnerData.pVidPnSourceId = SourceIds;
     OwnerData.VidPnSourceCount = 1;
     CAPTURE_CALL(Status, Faulted, pfnOwner(&OwnerData));
-    ok(!Faulted && Status == STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE, "SetVidPnSourceOwner with an invalid source returned 0x%08lX%s, expected STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE\n", (long)Status, Faulted ? " (faulted)" : "");
+    ok(!Faulted && Status == STATUS_INVALID_PARAMETER, "SetVidPnSourceOwner with an invalid source returned 0x%08lX%s, expected STATUS_INVALID_PARAMETER (Win11)\n", (long)Status, Faulted ? " (faulted)" : "");
     CheckStatus = QueryExclusiveOwnership(pfnCheck, OpenData.hAdapter, OpenData.VidPnSourceId);
     ok(CheckStatus == BaselineStatus, "Invalid-source rejection changed VidPn ownership: baseline 0x%08lX, after 0x%08lX\n", (long)BaselineStatus, (long)CheckStatus);
 
@@ -425,7 +426,7 @@ Test_SetVidPnSourceOwnerCaptureAndRollback(void)
     OwnerData.VidPnSourceCount = 1;
     Before = OwnerData;
     CAPTURE_CALL(Status, Faulted, pfnOwner(&OwnerData));
-    ok(Status == STATUS_ACCESS_VIOLATION, "SetVidPnSourceOwner with an inaccessible type array returned 0x%08lX%s, expected STATUS_ACCESS_VIOLATION\n", (long)Status, Faulted ? " (faulted)" : "");
+    ok(Status == STATUS_INVALID_PARAMETER, "SetVidPnSourceOwner with an inaccessible type array returned 0x%08lX%s, expected STATUS_INVALID_PARAMETER (Win11)\n", (long)Status, Faulted ? " (faulted)" : "");
     ok(memcmp(&OwnerData, &Before, sizeof(OwnerData)) == 0, "SetVidPnSourceOwner changed its descriptor after type-array capture failed\n");
     CheckStatus = QueryExclusiveOwnership(pfnCheck, OpenData.hAdapter, OpenData.VidPnSourceId);
     ok(CheckStatus == BaselineStatus, "Type-array capture failure changed VidPn ownership: baseline 0x%08lX, after 0x%08lX\n", (long)BaselineStatus, (long)CheckStatus);
@@ -437,7 +438,7 @@ Test_SetVidPnSourceOwnerCaptureAndRollback(void)
     OwnerData.VidPnSourceCount = 1;
     Before = OwnerData;
     CAPTURE_CALL(Status, Faulted, pfnOwner(&OwnerData));
-    ok(Status == STATUS_ACCESS_VIOLATION, "SetVidPnSourceOwner with an inaccessible source array returned 0x%08lX%s, expected STATUS_ACCESS_VIOLATION\n", (long)Status, Faulted ? " (faulted)" : "");
+    ok(Status == STATUS_INVALID_PARAMETER, "SetVidPnSourceOwner with an inaccessible source array returned 0x%08lX%s, expected STATUS_INVALID_PARAMETER (Win11)\n", (long)Status, Faulted ? " (faulted)" : "");
     ok(memcmp(&OwnerData, &Before, sizeof(OwnerData)) == 0, "SetVidPnSourceOwner changed its descriptor after source-array capture failed\n");
     CheckStatus = QueryExclusiveOwnership(pfnCheck, OpenData.hAdapter, OpenData.VidPnSourceId);
     ok(CheckStatus == BaselineStatus, "Source-array capture failure changed VidPn ownership: baseline 0x%08lX, after 0x%08lX\n", (long)BaselineStatus, (long)CheckStatus);
@@ -457,7 +458,7 @@ Test_SetVidPnSourceOwnerCaptureAndRollback(void)
         OwnerData.VidPnSourceCount = ARRAYSIZE(SourceIds);
         Before = OwnerData;
         CAPTURE_CALL(Status, Faulted, pfnOwner(&OwnerData));
-        ok(!Faulted && Status == STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE, "SetVidPnSourceOwner partial-invalid request returned 0x%08lX%s, expected STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE\n", (long)Status, Faulted ? " (faulted)" : "");
+        ok(!Faulted && Status == STATUS_INVALID_PARAMETER, "SetVidPnSourceOwner partial-invalid request returned 0x%08lX%s, expected STATUS_INVALID_PARAMETER (Win11)\n", (long)Status, Faulted ? " (faulted)" : "");
         ok(memcmp(&OwnerData, &Before, sizeof(OwnerData)) == 0 && memcmp(OwnerTypes, OwnerTypesBefore, sizeof(OwnerTypes)) == 0 && memcmp(SourceIds, SourceIdsBefore, sizeof(SourceIds)) == 0, "SetVidPnSourceOwner changed caller input after rejecting a partial-invalid request\n");
         CheckStatus = QueryExclusiveOwnership(pfnCheck, OpenData.hAdapter, OpenData.VidPnSourceId);
         ok(CheckStatus == BaselineStatus, "Partial-invalid VidPn request committed its valid prefix: baseline 0x%08lX, after 0x%08lX\n", (long)BaselineStatus, (long)CheckStatus);
