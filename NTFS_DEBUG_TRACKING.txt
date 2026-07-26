@@ -1,0 +1,47 @@
+NTFS TEMPORARY DEBUG CODE TRACKING
+
+Purpose
+-------
+Keep the local filesystem benchmark instrumentation identifiable so follow-up
+commits can remove it without touching the functional cache and allocation
+changes.
+
+Driver instrumentation
+----------------------
+drivers/filesystems/ntfs_new/create.c
+  CRACCT and IOACCT output
+  NtfsProfCreates, NtfsProfQuery, NtfsProfDisp, NtfsProfFcb, NtfsProfTail
+  NtfsProfCleanup, NtfsProfClose, and their sample counters
+
+drivers/filesystems/ntfs_new/close.c
+  NtfsProfClose timing
+
+drivers/filesystems/ntfs_new/ntfsinit.c
+  NtfsProfCleanup timing
+
+Library instrumentation
+-----------------------
+sdk/lib/fslib/ntfslib_new/env/km/km.cpp
+  NtfsQueryTicks
+  NtfsIoReadCount, NtfsIoWriteCount, NtfsIoReadTicks, NtfsIoWriteTicks
+
+sdk/lib/fslib/ntfslib_new/include/internal/ntfslib_new_internal.h
+  NtfsQueryTicks declaration
+
+sdk/lib/fslib/ntfslib_new/linux/fuse/ntfslib_fuse.cpp
+  Portable NtfsQueryTicks stub
+
+sdk/lib/fslib/ntfslib_new/src/mft/create.cpp
+  LIBACCT output and create-phase counters
+
+sdk/lib/fslib/ntfslib_new/src/mft/mft.cpp
+  ALLOCACCT output and allocation-phase counters
+
+Debugger-only source
+--------------------
+sdk/lib/fslib/ntfslib_new/src/btree/directory/dbg.cpp
+  DumpFileTree debugger helper; intentionally absent from the CMake source list
+
+Removal check
+-------------
+rg -n "CRACCT|IOACCT|LIBACCT|ALLOCACCT|NtfsProf|NtfsIo(Read|Write)|NtfsQueryTicks" drivers/filesystems/ntfs_new sdk/lib/fslib/ntfslib_new
