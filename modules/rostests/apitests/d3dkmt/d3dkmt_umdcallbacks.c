@@ -231,6 +231,121 @@ static void Test_ContextLifetimeThroughCallbacks(D3DKMT_HANDLE hAdapter, D3DKMT_
     pfnDestroyCallbacks(hRuntimeDevice);
 }
 
+/* ------------------------------------------------------------------ *
+ * The WDDM 2.0 tier: the driver owns its working set and its own GPU
+ * address space, rather than the kernel deciding both at submission.
+ * ------------------------------------------------------------------ */
+static void Test_Wddm2TierIsPopulated(D3DKMT_HANDLE hAdapter, D3DKMT_HANDLE hDevice)
+{
+    D3DDDI_DEVICECALLBACKS Callbacks;
+    HANDLE hRuntimeDevice = NULL;
+
+    if (pfnCreateCallbacks(hAdapter, hDevice, &Callbacks, &hRuntimeDevice) != S_OK)
+    {
+        skip("no callback table\n");
+        return;
+    }
+
+    /* Residency: a WDDM 2.0 driver is told what to give back, not silently
+     * paged behind its back. */
+    ok(Callbacks.pfnMakeResidentCb != NULL, "no pfnMakeResidentCb\n");
+    ok(Callbacks.pfnEvictCb != NULL, "no pfnEvictCb\n");
+    /* Paging queues: how the driver learns a paging operation finished. */
+    ok(Callbacks.pfnCreatePagingQueueCb != NULL, "no pfnCreatePagingQueueCb\n");
+    ok(Callbacks.pfnDestroyPagingQueueCb != NULL, "no pfnDestroyPagingQueueCb\n");
+    /* GPU virtual addressing: the driver places allocations itself. */
+    ok(Callbacks.pfnReserveGpuVirtualAddressCb != NULL, "no pfnReserveGpuVirtualAddressCb\n");
+    ok(Callbacks.pfnMapGpuVirtualAddressCb != NULL, "no pfnMapGpuVirtualAddressCb\n");
+    ok(Callbacks.pfnFreeGpuVirtualAddressCb != NULL, "no pfnFreeGpuVirtualAddressCb\n");
+    /* Virtual-addressing submission. */
+    ok(Callbacks.pfnCreateContextVirtualCb != NULL, "no pfnCreateContextVirtualCb\n");
+    ok(Callbacks.pfnSubmitCommandCb != NULL, "no pfnSubmitCommandCb\n");
+    ok(Callbacks.pfnLock2Cb != NULL, "no pfnLock2Cb\n");
+    ok(Callbacks.pfnUnlock2Cb != NULL, "no pfnUnlock2Cb\n");
+    ok(Callbacks.pfnDeallocate2Cb != NULL, "no pfnDeallocate2Cb\n");
+    /* Monitored fences, from both sides. */
+    ok(Callbacks.pfnCreateSynchronizationObject2Cb != NULL,
+       "no pfnCreateSynchronizationObject2Cb\n");
+    ok(Callbacks.pfnWaitForSynchronizationObjectFromGpuCb != NULL,
+       "no pfnWaitForSynchronizationObjectFromGpuCb\n");
+    ok(Callbacks.pfnSignalSynchronizationObjectFromGpuCb != NULL,
+       "no pfnSignalSynchronizationObjectFromGpuCb\n");
+
+    pfnDestroyCallbacks(hRuntimeDevice);
+}
+
+static void Test_PagingQueueAndGpuVaThroughCallbacks(D3DKMT_HANDLE hAdapter, D3DKMT_HANDLE hDevice)
+{
+    D3DDDI_DEVICECALLBACKS Callbacks;
+    D3DDDICB_CREATEPAGINGQUEUE CreateQueue;
+    D3DDDI_DESTROYPAGINGQUEUE DestroyQueue;
+    D3DDDI_RESERVEGPUVIRTUALADDRESS Reserve;
+    D3DDDICB_FREEGPUVIRTUALADDRESS Free;
+    HANDLE hRuntimeDevice = NULL;
+    HRESULT hr;
+
+    if (pfnCreateCallbacks(hAdapter, hDevice, &Callbacks, &hRuntimeDevice) != S_OK)
+    {
+        skip("no callback table\n");
+        return;
+    }
+
+    memset(&CreateQueue, 0, sizeof(CreateQueue));
+    CreateQueue.Priority = D3DDDI_PAGINGQUEUE_PRIORITY_NORMAL;
+    hr = Callbacks.pfnCreatePagingQueueCb(hRuntimeDevice, &CreateQueue);
+    if (SUCCEEDED(hr))
+    {
+        ok(CreateQueue.hPagingQueue != 0, "paging queue created without a handle\n");
+        /*
+         * The queue arrives with its own monitored fence.  Without it the
+         * driver has no way to learn that a paging operation it asked for has
+         * finished, which makes the queue useless rather than merely limited.
+         */
+        ok(CreateQueue.hSyncObject != 0, "paging queue has no monitored fence\n");
+        ok(CreateQueue.FenceValueCPUVirtualAddress != NULL,
+           "paging queue fence has no readable value\n");
+        trace("paging queue 0x%X, fence 0x%X\n", CreateQueue.hPagingQueue,
+              CreateQueue.hSyncObject);
+
+        memset(&DestroyQueue, 0, sizeof(DestroyQueue));
+        DestroyQueue.hPagingQueue = CreateQueue.hPagingQueue;
+        hr = Callbacks.pfnDestroyPagingQueueCb(hRuntimeDevice, &DestroyQueue);
+        ok(SUCCEEDED(hr), "destroying the paging queue failed 0x%08lX\n", (long)hr);
+    }
+    else
+    {
+        trace("paging queue refused through the callback 0x%08lX\n", (long)hr);
+    }
+
+    /* Reserving GPU address space is how a WDDM 2.0 driver places its own
+     * allocations; the kernel no longer does it at submission time. */
+    memset(&Reserve, 0, sizeof(Reserve));
+    Reserve.hAdapter = hAdapter;
+    Reserve.Size = 0x10000;
+    Reserve.BaseAddress = 0;
+    Reserve.MinimumAddress = 0;
+    Reserve.MaximumAddress = 0;
+    hr = Callbacks.pfnReserveGpuVirtualAddressCb(hRuntimeDevice, &Reserve);
+    if (SUCCEEDED(hr))
+    {
+        ok(Reserve.VirtualAddress != 0, "reserve succeeded without an address\n");
+        trace("reserved GPU VA 0x%I64X\n", (unsigned long long)Reserve.VirtualAddress);
+
+        memset(&Free, 0, sizeof(Free));
+        Free.BaseAddress = Reserve.VirtualAddress;
+        Free.Size = 0x10000;
+        hr = Callbacks.pfnFreeGpuVirtualAddressCb(hRuntimeDevice, &Free);
+        ok(SUCCEEDED(hr), "freeing the reserved range failed 0x%08lX\n", (long)hr);
+    }
+
+    /* A zero-sized free names no range at all. */
+    memset(&Free, 0, sizeof(Free));
+    ok(FAILED(Callbacks.pfnFreeGpuVirtualAddressCb(hRuntimeDevice, &Free)),
+       "a zero-sized GPU VA free was accepted\n");
+
+    pfnDestroyCallbacks(hRuntimeDevice);
+}
+
 START_TEST(umdcallbacks)
 {
     HMODULE Runtime;
@@ -274,6 +389,8 @@ START_TEST(umdcallbacks)
     Test_RefusesMalformedConstruction(hAdapter, hDevice);
     Test_AllocateLockUnlockDeallocate(hAdapter, hDevice);
     Test_ContextLifetimeThroughCallbacks(hAdapter, hDevice);
+    Test_Wddm2TierIsPopulated(hAdapter, hDevice);
+    Test_PagingQueueAndGpuVaThroughCallbacks(hAdapter, hDevice);
 
     DestroyTestDevice(hDevice);
     CloseAdapter(hAdapter);

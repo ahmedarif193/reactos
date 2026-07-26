@@ -67,6 +67,22 @@ static PFND3DKMT_RENDER            pfnRender;
 static PFND3DKMT_CREATECONTEXT     pfnCreateContext;
 static PFND3DKMT_DESTROYCONTEXT    pfnDestroyContext;
 static PFND3DKMT_ESCAPE            pfnEscape;
+/* WDDM 2.0 tier */
+static PFND3DKMT_MAKERESIDENT              pfnMakeResident;
+static PFND3DKMT_EVICT                     pfnEvict;
+static PFND3DKMT_CREATEPAGINGQUEUE         pfnCreatePagingQueue;
+static PFND3DKMT_DESTROYPAGINGQUEUE        pfnDestroyPagingQueue;
+static PFND3DKMT_RESERVEGPUVIRTUALADDRESS  pfnReserveGpuVirtualAddress;
+static PFND3DKMT_MAPGPUVIRTUALADDRESS      pfnMapGpuVirtualAddress;
+static PFND3DKMT_FREEGPUVIRTUALADDRESS     pfnFreeGpuVirtualAddress;
+static PFND3DKMT_CREATECONTEXTVIRTUAL      pfnCreateContextVirtual;
+static PFND3DKMT_SUBMITCOMMAND             pfnSubmitCommand;
+static PFND3DKMT_LOCK2                     pfnLock2;
+static PFND3DKMT_UNLOCK2                   pfnUnlock2;
+static PFND3DKMT_DESTROYALLOCATION2        pfnDestroyAllocation2;
+static PFND3DKMT_CREATESYNCHRONIZATIONOBJECT2 pfnCreateSynchronizationObject2;
+static PFND3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU pfnWaitForSynchronizationObjectFromGpu;
+static PFND3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU  pfnSignalSynchronizationObjectFromGpu;
 static BOOL                        ProcsResolved;
 
 static BOOL D3DUmdRtResolveProcs(VOID)
@@ -91,6 +107,21 @@ static BOOL D3DUmdRtResolveProcs(VOID)
     RESOLVE(CreateContext, CREATECONTEXT);
     RESOLVE(DestroyContext, DESTROYCONTEXT);
     RESOLVE(Escape, ESCAPE);
+    RESOLVE(MakeResident, MAKERESIDENT);
+    RESOLVE(Evict, EVICT);
+    RESOLVE(CreatePagingQueue, CREATEPAGINGQUEUE);
+    RESOLVE(DestroyPagingQueue, DESTROYPAGINGQUEUE);
+    RESOLVE(ReserveGpuVirtualAddress, RESERVEGPUVIRTUALADDRESS);
+    RESOLVE(MapGpuVirtualAddress, MAPGPUVIRTUALADDRESS);
+    RESOLVE(FreeGpuVirtualAddress, FREEGPUVIRTUALADDRESS);
+    RESOLVE(CreateContextVirtual, CREATECONTEXTVIRTUAL);
+    RESOLVE(SubmitCommand, SUBMITCOMMAND);
+    RESOLVE(Lock2, LOCK2);
+    RESOLVE(Unlock2, UNLOCK2);
+    RESOLVE(DestroyAllocation2, DESTROYALLOCATION2);
+    RESOLVE(CreateSynchronizationObject2, CREATESYNCHRONIZATIONOBJECT2);
+    RESOLVE(WaitForSynchronizationObjectFromGpu, WAITFORSYNCHRONIZATIONOBJECTFROMGPU);
+    RESOLVE(SignalSynchronizationObjectFromGpu, SIGNALSYNCHRONIZATIONOBJECTFROMGPU);
 #undef RESOLVE
 
     ProcsResolved = TRUE;
@@ -379,6 +410,349 @@ static HRESULT APIENTRY D3DUmdRtEscapeCb(HANDLE hAdapter, CONST D3DDDICB_ESCAPE 
 }
 
 /* ------------------------------------------------------------------------ *
+ * WDDM 2.0: residency, paging queues, GPU virtual addressing
+ *
+ * These are what a WDDM 2.0 driver uses instead of the WDDM 1.x model where the
+ * kernel decided residency at submission time.  The driver now owns its working
+ * set: it makes allocations resident, is told when it must give memory back, and
+ * places allocations in its own GPU address space itself.
+ * ------------------------------------------------------------------------ */
+
+static HRESULT APIENTRY D3DUmdRtMakeResidentCb(HANDLE hDevice, D3DDDI_MAKERESIDENT *pData)
+{
+    PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hDevice);
+
+    if (Device == NULL || pData == NULL || pfnMakeResident == NULL)
+        return E_INVALIDARG;
+    if (pData->NumAllocations == 0 || pData->AllocationList == NULL)
+        return E_INVALIDARG;
+
+    /*
+     * The DDI and the D3DKMT entry take the same structure -- it is one of the
+     * shared d3dukmdt.h types -- so this forwards rather than translating. The
+     * paging fence and NumBytesToTrim it writes back travel out untouched: a
+     * driver that ignored NumBytesToTrim on failure would retry forever without
+     * freeing the amount it was just told to free.
+     */
+    pData->hPagingQueue = pData->hPagingQueue;
+    return D3DUmdRtStatusToHresult(pfnMakeResident(pData));
+}
+
+static HRESULT APIENTRY D3DUmdRtEvictCb(HANDLE hDevice, D3DDDICB_EVICT *pData)
+{
+    PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hDevice);
+    D3DKMT_EVICT Evict;
+    NTSTATUS Status;
+
+    if (Device == NULL || pData == NULL || pfnEvict == NULL)
+        return E_INVALIDARG;
+    if (pData->NumAllocations == 0 || pData->AllocationList == NULL)
+        return E_INVALIDARG;
+
+    ZeroMemory(&Evict, sizeof(Evict));
+    Evict.hDevice = Device->hDevice;
+    Evict.NumAllocations = pData->NumAllocations;
+    Evict.AllocationList = pData->AllocationList;
+    Evict.Flags = pData->Flags;
+
+    Status = pfnEvict(&Evict);
+    /* NumBytesToTrim is meaningful on both outcomes: it is how much the caller
+     * is over budget, not how much this call freed. */
+    pData->NumBytesToTrim = Evict.NumBytesToTrim;
+    return D3DUmdRtStatusToHresult(Status);
+}
+
+static HRESULT APIENTRY D3DUmdRtCreatePagingQueueCb(HANDLE hDevice, D3DDDICB_CREATEPAGINGQUEUE *pData)
+{
+    PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hDevice);
+    D3DKMT_CREATEPAGINGQUEUE Create;
+    NTSTATUS Status;
+
+    if (Device == NULL || pData == NULL || pfnCreatePagingQueue == NULL)
+        return E_INVALIDARG;
+
+    ZeroMemory(&Create, sizeof(Create));
+    Create.hDevice = Device->hDevice;
+    Create.Priority = pData->Priority;
+    Create.PhysicalAdapterIndex = pData->PhysicalAdapterIndex;
+
+    Status = pfnCreatePagingQueue(&Create);
+    if (Status < 0)
+        return D3DUmdRtStatusToHresult(Status);
+
+    /*
+     * The queue arrives with its own monitored fence.  That fence is how the
+     * driver learns a paging operation finished, so handing back the queue
+     * without it would leave the driver unable to tell when anything it
+     * requested had actually happened.
+     */
+    pData->hPagingQueue = Create.hPagingQueue;
+    pData->hSyncObject = Create.hSyncObject;
+    pData->FenceValueCPUVirtualAddress = Create.FenceValueCPUVirtualAddress;
+    return S_OK;
+}
+
+static HRESULT APIENTRY D3DUmdRtDestroyPagingQueueCb(HANDLE hDevice, CONST D3DDDI_DESTROYPAGINGQUEUE *pData)
+{
+    PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hDevice);
+    D3DDDI_DESTROYPAGINGQUEUE Destroy;
+
+    if (Device == NULL || pData == NULL || pfnDestroyPagingQueue == NULL)
+        return E_INVALIDARG;
+
+    Destroy = *pData;
+    return D3DUmdRtStatusToHresult(pfnDestroyPagingQueue(&Destroy));
+}
+
+static HRESULT APIENTRY D3DUmdRtReserveGpuVirtualAddressCb(HANDLE hDevice,
+                                                           D3DDDI_RESERVEGPUVIRTUALADDRESS *pData)
+{
+    PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hDevice);
+
+    if (Device == NULL || pData == NULL || pfnReserveGpuVirtualAddress == NULL)
+        return E_INVALIDARG;
+    /* Shared structure again: reserve, map, and free all take exactly what
+     * D3DKMT takes, so nothing is translated and nothing can be lost. */
+    return D3DUmdRtStatusToHresult(pfnReserveGpuVirtualAddress(pData));
+}
+
+static HRESULT APIENTRY D3DUmdRtMapGpuVirtualAddressCb(HANDLE hDevice,
+                                                       D3DDDI_MAPGPUVIRTUALADDRESS *pData)
+{
+    PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hDevice);
+
+    if (Device == NULL || pData == NULL || pfnMapGpuVirtualAddress == NULL)
+        return E_INVALIDARG;
+    /*
+     * Mapping is asynchronous: it returns a paging fence value the driver must
+     * wait for before the GPU may touch the range. The fence travels back in
+     * pData, so a driver that used the address immediately would be reading a
+     * page table entry that has not been written yet.
+     */
+    return D3DUmdRtStatusToHresult(pfnMapGpuVirtualAddress(pData));
+}
+
+static HRESULT APIENTRY D3DUmdRtFreeGpuVirtualAddressCb(HANDLE hDevice,
+                                                        CONST D3DDDICB_FREEGPUVIRTUALADDRESS *pData)
+{
+    PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hDevice);
+    D3DKMT_FREEGPUVIRTUALADDRESS Free;
+
+    if (Device == NULL || pData == NULL || pfnFreeGpuVirtualAddress == NULL)
+        return E_INVALIDARG;
+    if (pData->Size == 0)
+        return E_INVALIDARG;
+
+    ZeroMemory(&Free, sizeof(Free));
+    Free.hAdapter = Device->hAdapter;
+    Free.BaseAddress = pData->BaseAddress;
+    Free.Size = pData->Size;
+    return D3DUmdRtStatusToHresult(pfnFreeGpuVirtualAddress(&Free));
+}
+
+/* ------------------------------------------------------------------------ *
+ * WDDM 2.0: virtual-addressing contexts and submission
+ * ------------------------------------------------------------------------ */
+
+static HRESULT APIENTRY D3DUmdRtCreateContextVirtualCb(HANDLE hDevice,
+                                                       D3DDDICB_CREATECONTEXTVIRTUAL *pData)
+{
+    PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hDevice);
+    D3DKMT_CREATECONTEXTVIRTUAL Create;
+    NTSTATUS Status;
+
+    if (Device == NULL || pData == NULL || pfnCreateContextVirtual == NULL)
+        return E_INVALIDARG;
+
+    ZeroMemory(&Create, sizeof(Create));
+    Create.hDevice = Device->hDevice;
+    Create.NodeOrdinal = pData->NodeOrdinal;
+    Create.EngineAffinity = pData->EngineAffinity;
+    Create.Flags = pData->Flags;
+    Create.pPrivateDriverData = pData->pPrivateDriverData;
+    Create.PrivateDriverDataSize = pData->PrivateDriverDataSize;
+
+    Status = pfnCreateContextVirtual(&Create);
+    if (Status < 0)
+        return D3DUmdRtStatusToHresult(Status);
+
+    /*
+     * Unlike CreateContext there is no command buffer here, and that is the
+     * point: a virtual-addressing context submits from buffers the driver
+     * allocated and placed in its own GPU address space, so the kernel has none
+     * to hand out.
+     */
+    pData->hContext = (HANDLE)(ULONG_PTR)Create.hContext;
+    return S_OK;
+}
+
+static HRESULT APIENTRY D3DUmdRtSubmitCommandCb(HANDLE hDevice, CONST D3DDDICB_SUBMITCOMMAND *pData)
+{
+    PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hDevice);
+    D3DKMT_SUBMITCOMMAND Submit;
+    UINT Index;
+
+    if (Device == NULL || pData == NULL || pfnSubmitCommand == NULL)
+        return E_INVALIDARG;
+    if (pData->BroadcastContextCount == 0 ||
+        pData->BroadcastContextCount > D3DDDI_MAX_BROADCAST_CONTEXT)
+    {
+        return E_INVALIDARG;
+    }
+
+    ZeroMemory(&Submit, sizeof(Submit));
+    /* The commands are named by GPU address, not by a kernel buffer handle --
+     * that is what makes this the virtual-addressing submission path. */
+    Submit.Commands = pData->Commands;
+    Submit.CommandLength = pData->CommandLength;
+    Submit.Flags = *(D3DKMT_SUBMITCOMMANDFLAGS *)&pData->Flags;
+    Submit.BroadcastContextCount = pData->BroadcastContextCount;
+    for (Index = 0; Index < pData->BroadcastContextCount; ++Index)
+        Submit.BroadcastContext[Index] = (D3DKMT_HANDLE)(ULONG_PTR)pData->BroadcastContext[Index];
+    Submit.pPrivateDriverData = pData->pPrivateDriverData;
+    Submit.PrivateDriverDataSize = pData->PrivateDriverDataSize;
+    Submit.NumPrimaries = pData->NumPrimaries;
+    for (Index = 0; Index < pData->NumPrimaries && Index < D3DDDI_MAX_WRITTEN_PRIMARIES; ++Index)
+        Submit.WrittenPrimaries[Index] = pData->WrittenPrimaries[Index];
+    return D3DUmdRtStatusToHresult(pfnSubmitCommand(&Submit));
+}
+
+static HRESULT APIENTRY D3DUmdRtLock2Cb(HANDLE hDevice, D3DDDICB_LOCK2 *pData)
+{
+    PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hDevice);
+    D3DKMT_LOCK2 Lock;
+    NTSTATUS Status;
+
+    if (Device == NULL || pData == NULL || pfnLock2 == NULL)
+        return E_INVALIDARG;
+    if (pData->hAllocation == 0)
+        return E_INVALIDARG;
+
+    ZeroMemory(&Lock, sizeof(Lock));
+    Lock.hDevice = Device->hDevice;
+    Lock.hAllocation = pData->hAllocation;
+    Lock.Flags = *(D3DDDICB_LOCK2FLAGS *)&pData->Flags;
+
+    Status = pfnLock2(&Lock);
+    if (Status < 0)
+        return D3DUmdRtStatusToHresult(Status);
+    pData->pData = Lock.pData;
+    return S_OK;
+}
+
+static HRESULT APIENTRY D3DUmdRtUnlock2Cb(HANDLE hDevice, CONST D3DDDICB_UNLOCK2 *pData)
+{
+    PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hDevice);
+    D3DKMT_UNLOCK2 Unlock;
+
+    if (Device == NULL || pData == NULL || pfnUnlock2 == NULL)
+        return E_INVALIDARG;
+    if (pData->hAllocation == 0)
+        return E_INVALIDARG;
+
+    ZeroMemory(&Unlock, sizeof(Unlock));
+    Unlock.hDevice = Device->hDevice;
+    Unlock.hAllocation = pData->hAllocation;
+    return D3DUmdRtStatusToHresult(pfnUnlock2(&Unlock));
+}
+
+static HRESULT APIENTRY D3DUmdRtDeallocate2Cb(HANDLE hDevice, CONST D3DDDICB_DEALLOCATE2 *pData)
+{
+    PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hDevice);
+    D3DKMT_DESTROYALLOCATION2 Destroy;
+
+    if (Device == NULL || pData == NULL || pfnDestroyAllocation2 == NULL)
+        return E_INVALIDARG;
+    if (pData->hResource == NULL && (pData->NumAllocations == 0 || pData->HandleList == NULL))
+        return E_INVALIDARG;
+
+    ZeroMemory(&Destroy, sizeof(Destroy));
+    Destroy.hDevice = Device->hDevice;
+    Destroy.hResource = (D3DKMT_HANDLE)(ULONG_PTR)pData->hResource;
+    if (pData->hResource == NULL)
+    {
+        Destroy.phAllocationList = pData->HandleList;
+        Destroy.AllocationCount = pData->NumAllocations;
+    }
+    Destroy.Flags = *(D3DDDICB_DESTROYALLOCATION2FLAGS *)&pData->Flags;
+    return D3DUmdRtStatusToHresult(pfnDestroyAllocation2(&Destroy));
+}
+
+/* ------------------------------------------------------------------------ *
+ * WDDM 2.0: monitored fences, from both sides
+ * ------------------------------------------------------------------------ */
+
+static HRESULT APIENTRY D3DUmdRtCreateSynchronizationObject2Cb(HANDLE hDevice,
+                                                               D3DDDICB_CREATESYNCHRONIZATIONOBJECT2 *pData)
+{
+    PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hDevice);
+    D3DKMT_CREATESYNCHRONIZATIONOBJECT2 Create;
+    NTSTATUS Status;
+
+    if (Device == NULL || pData == NULL || pfnCreateSynchronizationObject2 == NULL)
+        return E_INVALIDARG;
+
+    ZeroMemory(&Create, sizeof(Create));
+    Create.hDevice = Device->hDevice;
+    Create.Info = pData->Info;
+
+    Status = pfnCreateSynchronizationObject2(&Create);
+    if (Status < 0)
+        return D3DUmdRtStatusToHresult(Status);
+
+    /* Info travels back as well as in: a monitored fence reports the CPU and
+     * GPU addresses of its value there, and without them the driver has a fence
+     * it cannot read. */
+    pData->Info = Create.Info;
+    pData->hSyncObject = Create.hSyncObject;
+    return S_OK;
+}
+
+static HRESULT APIENTRY D3DUmdRtWaitForSynchronizationObjectFromGpuCb(
+    HANDLE hDevice, CONST D3DDDICB_WAITFORSYNCHRONIZATIONOBJECTFROMGPU *pData)
+{
+    PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hDevice);
+    D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU Wait;
+
+    if (Device == NULL || pData == NULL || pfnWaitForSynchronizationObjectFromGpu == NULL)
+        return E_INVALIDARG;
+    if (pData->ObjectCount == 0 || pData->ObjectHandleArray == NULL ||
+        pData->MonitoredFenceValueArray == NULL)
+    {
+        return E_INVALIDARG;
+    }
+
+    ZeroMemory(&Wait, sizeof(Wait));
+    Wait.hContext = (D3DKMT_HANDLE)(ULONG_PTR)pData->hContext;
+    Wait.ObjectCount = pData->ObjectCount;
+    Wait.ObjectHandleArray = pData->ObjectHandleArray;
+    Wait.MonitoredFenceValueArray = pData->MonitoredFenceValueArray;
+    return D3DUmdRtStatusToHresult(pfnWaitForSynchronizationObjectFromGpu(&Wait));
+}
+
+static HRESULT APIENTRY D3DUmdRtSignalSynchronizationObjectFromGpuCb(
+    HANDLE hDevice, CONST D3DDDICB_SIGNALSYNCHRONIZATIONOBJECTFROMGPU *pData)
+{
+    PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hDevice);
+    D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU Signal;
+
+    if (Device == NULL || pData == NULL || pfnSignalSynchronizationObjectFromGpu == NULL)
+        return E_INVALIDARG;
+    if (pData->ObjectCount == 0 || pData->ObjectHandleArray == NULL ||
+        pData->MonitoredFenceValueArray == NULL)
+    {
+        return E_INVALIDARG;
+    }
+
+    ZeroMemory(&Signal, sizeof(Signal));
+    Signal.hContext = (D3DKMT_HANDLE)(ULONG_PTR)pData->hContext;
+    Signal.ObjectCount = pData->ObjectCount;
+    Signal.ObjectHandleArray = pData->ObjectHandleArray;
+    Signal.MonitoredFenceValueArray = pData->MonitoredFenceValueArray;
+    return D3DUmdRtStatusToHresult(pfnSignalSynchronizationObjectFromGpu(&Signal));
+}
+
+/* ------------------------------------------------------------------------ *
  * Building the table
  * ------------------------------------------------------------------------ */
 
@@ -425,6 +799,21 @@ D3DUmdRtCreateDeviceCallbacks(
     pCallbacks->pfnCreateContextCb = D3DUmdRtCreateContextCb;
     pCallbacks->pfnDestroyContextCb = D3DUmdRtDestroyContextCb;
     pCallbacks->pfnEscapeCb = D3DUmdRtEscapeCb;
+    pCallbacks->pfnMakeResidentCb = D3DUmdRtMakeResidentCb;
+    pCallbacks->pfnEvictCb = D3DUmdRtEvictCb;
+    pCallbacks->pfnCreatePagingQueueCb = D3DUmdRtCreatePagingQueueCb;
+    pCallbacks->pfnDestroyPagingQueueCb = D3DUmdRtDestroyPagingQueueCb;
+    pCallbacks->pfnReserveGpuVirtualAddressCb = D3DUmdRtReserveGpuVirtualAddressCb;
+    pCallbacks->pfnMapGpuVirtualAddressCb = D3DUmdRtMapGpuVirtualAddressCb;
+    pCallbacks->pfnFreeGpuVirtualAddressCb = D3DUmdRtFreeGpuVirtualAddressCb;
+    pCallbacks->pfnCreateContextVirtualCb = D3DUmdRtCreateContextVirtualCb;
+    pCallbacks->pfnSubmitCommandCb = D3DUmdRtSubmitCommandCb;
+    pCallbacks->pfnLock2Cb = D3DUmdRtLock2Cb;
+    pCallbacks->pfnUnlock2Cb = D3DUmdRtUnlock2Cb;
+    pCallbacks->pfnDeallocate2Cb = D3DUmdRtDeallocate2Cb;
+    pCallbacks->pfnCreateSynchronizationObject2Cb = D3DUmdRtCreateSynchronizationObject2Cb;
+    pCallbacks->pfnWaitForSynchronizationObjectFromGpuCb = D3DUmdRtWaitForSynchronizationObjectFromGpuCb;
+    pCallbacks->pfnSignalSynchronizationObjectFromGpuCb = D3DUmdRtSignalSynchronizationObjectFromGpuCb;
 
     *phRuntimeDevice = (HANDLE)Device;
     return S_OK;
