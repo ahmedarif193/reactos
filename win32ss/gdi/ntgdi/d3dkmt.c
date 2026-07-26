@@ -380,9 +380,19 @@ NtGdiDdDDIOpenAdapterFromGdiDisplayName(_Inout_ D3DKMT_OPENADAPTERFROMGDIDISPLAY
     RtlInitUnicodeString(&DisplayName, Captured.DeviceName);
     Pdev = EngpGetPDEV(&DisplayName);
     if (Pdev == NULL)
-        return STATUS_INVALID_PARAMETER;
+    {
+        /*
+         * The name is well formed; there is simply no such display.  That is a
+         * lookup that found nothing, not a malformed argument, and the two are
+         * worth telling apart: a caller enumerating displays walks names until
+         * one fails, and INVALID_PARAMETER reads as "you asked wrongly" while
+         * UNSUCCESSFUL reads as "you have run off the end".  Measured on Win11:
+         * STATUS_UNSUCCESSFUL.
+         */
+        return STATUS_UNSUCCESSFUL;
+    }
     if (Pdev->pGraphicsDevice == NULL || Pdev->pGraphicsDevice->szNtDeviceName[0] == L'\0')
-        Status = STATUS_INVALID_PARAMETER;
+        Status = STATUS_UNSUCCESSFUL;
     else
     {
         RtlCopyMemory(NtDeviceName, Pdev->pGraphicsDevice->szNtDeviceName, sizeof(NtDeviceName));
