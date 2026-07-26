@@ -23,6 +23,7 @@ list(APPEND SOURCE
     d3dkmt_enum2.c
     d3dkmt_surface.c
     d3dkmt_adapterinfo.c
+    d3dkmt_adapterid.c
     d3dkmt_sharing.c
     d3dkmt_syncext.c
     d3dkmt_allocext.c

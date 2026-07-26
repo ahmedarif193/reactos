@@ -38,6 +38,7 @@ extern void func_teardown(void);
 extern void func_renderpath(void);
 extern void func_capsaudit(void);
 extern void func_umdabi(void);
+extern void func_adapterid(void);
 extern void func_abifreeze(void);
 extern void func_procstress(void);
 extern void func_umdload(void);
@@ -96,6 +97,7 @@ const struct test winetest_testlist[] =
     { "renderpath",    func_renderpath },
     { "capsaudit",     func_capsaudit },
     { "umdabi",        func_umdabi },
+    { "adapterid",     func_adapterid },
     { "abifreeze",     func_abifreeze },
     { "procstress",    func_procstress },
     { "umdload",       func_umdload },

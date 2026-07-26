@@ -1354,6 +1354,104 @@ DxgkCloseAdapter(
  * IRQL: PASSIVE_LEVEL
  * ====================================================================== */
 
+/*
+ * Where this adapter physically sits.  Both properties come from the PnP
+ * manager, so an adapter whose PDO the bus driver never described reports
+ * NOT_SUPPORTED rather than bus 0 / device 0 -- which is a real location that
+ * some other device occupies.
+ */
+static NTSTATUS
+DxgkpQueryAdapterPciLocation(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Out_ D3DKMT_ADAPTERADDRESS *Address)
+{
+    ULONG BusNumber = 0;
+    ULONG SlotNumber = 0;
+    ULONG ResultLength = 0;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    RtlZeroMemory(Address, sizeof(*Address));
+    if (Adapter->PhysicalDeviceObject == NULL)
+        return STATUS_NOT_SUPPORTED;
+
+    /*
+     * A root-enumerated adapter -- every software one in this tree -- sits on no
+     * bus and the PnP manager has no such property for it.  That is the adapter
+     * truthfully having no location, not an error in asking, so it becomes the
+     * same NOT_SUPPORTED the rest of this switch uses for "cannot answer that".
+     * Any other failure is a real fault and is propagated as itself.
+     */
+    Status = IoGetDeviceProperty(Adapter->PhysicalDeviceObject, DevicePropertyBusNumber,
+                                 sizeof(BusNumber), &BusNumber, &ResultLength);
+    if (Status == STATUS_OBJECT_NAME_NOT_FOUND)
+        return STATUS_NOT_SUPPORTED;
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = IoGetDeviceProperty(Adapter->PhysicalDeviceObject, DevicePropertyAddress,
+                                 sizeof(SlotNumber), &SlotNumber, &ResultLength);
+    if (Status == STATUS_OBJECT_NAME_NOT_FOUND)
+        return STATUS_NOT_SUPPORTED;
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    /* DevicePropertyAddress packs the slot as (device << 16) | function. */
+    Address->BusNumber = BusNumber;
+    Address->DeviceNumber = (SlotNumber >> 16) & 0x1F;
+    Address->FunctionNumber = SlotNumber & 0x7;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * Vendor and device identity out of PCI config space.  A config read that comes
+ * back all-ones is the bus reporting "nothing is there", not a device with
+ * vendor 0xFFFF -- returning it as an ID would name a device that cannot exist.
+ */
+static NTSTATUS
+DxgkpQueryAdapterDeviceIds(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Out_ D3DKMT_DEVICE_IDS *DeviceIds)
+{
+    D3DKMT_ADAPTERADDRESS Address;
+    PCI_SLOT_NUMBER Slot;
+    PCI_COMMON_HEADER Header;
+    NTSTATUS Status;
+    ULONG BytesRead;
+
+    PAGED_CODE();
+
+    RtlZeroMemory(DeviceIds, sizeof(*DeviceIds));
+    Status = DxgkpQueryAdapterPciLocation(Adapter, &Address);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Slot.u.AsULONG = 0;
+    Slot.u.bits.DeviceNumber = Address.DeviceNumber;
+    Slot.u.bits.FunctionNumber = Address.FunctionNumber;
+
+    RtlZeroMemory(&Header, sizeof(Header));
+    BytesRead = HalGetBusDataByOffset(PCIConfiguration, Address.BusNumber, Slot.u.AsULONG,
+                                      &Header, 0, sizeof(Header));
+    if (BytesRead < sizeof(Header))
+        return STATUS_NOT_SUPPORTED;
+    if (Header.VendorID == PCI_INVALID_VENDORID || Header.VendorID == 0)
+        return STATUS_NOT_SUPPORTED;
+
+    DeviceIds->VendorID = Header.VendorID;
+    DeviceIds->DeviceID = Header.DeviceID;
+    DeviceIds->RevisionID = Header.RevisionID;
+    DeviceIds->BusType = PCIBus;
+    /* Subsystem IDs live in the type 0 header only; a bridge has other fields
+     * at those offsets and reading them as a subsystem ID is just wrong. */
+    if (PCI_CONFIGURATION_TYPE(&Header) == PCI_DEVICE_TYPE)
+    {
+        DeviceIds->SubVendorID = Header.u.type0.SubVendorID;
+        DeviceIds->SubSystemID = Header.u.type0.SubSystemID;
+    }
+    return STATUS_SUCCESS;
+}
+
 static NTSTATUS
 NTAPI
 DxgkpQueryAdapterInfoCaptured(
@@ -1922,6 +2020,269 @@ DxgkpQueryAdapterInfoCaptured(
                 DXGKP_QUERY_RETURN(_SEH2_GetExceptionCode());
             }
             _SEH2_END;
+            DXGKP_QUERY_RETURN(STATUS_SUCCESS);
+        }
+
+        /*
+         * Bus location, taken from the PDO rather than invented.  A caller uses
+         * this to pair the D3D adapter it has with the PCI device it found by
+         * some other route, so a plausible-looking wrong answer is worse than
+         * no answer: it silently pairs the wrong two things.
+         */
+        case KMTQAITYPE_ADAPTERADDRESS:
+        {
+            D3DKMT_ADAPTERADDRESS Address;
+            NTSTATUS AddressStatus;
+
+            if (pQueryAdapterInfo->pPrivateDriverData == NULL ||
+                pQueryAdapterInfo->PrivateDriverDataSize < sizeof(Address))
+            {
+                DXGKP_QUERY_RETURN(STATUS_BUFFER_TOO_SMALL);
+            }
+            AddressStatus = DxgkpQueryAdapterPciLocation(Adapter, &Address);
+            if (!NT_SUCCESS(AddressStatus))
+                DXGKP_QUERY_RETURN(AddressStatus);
+            _SEH2_TRY
+            {
+                *(D3DKMT_ADAPTERADDRESS *)pQueryAdapterInfo->pPrivateDriverData = Address;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                DXGKP_QUERY_RETURN(_SEH2_GetExceptionCode());
+            }
+            _SEH2_END;
+            DXGKP_QUERY_RETURN(STATUS_SUCCESS);
+        }
+
+        /*
+         * Vendor/device identity, read straight out of PCI config space for the
+         * same reason.  PhysicalAdapterIndex is an input and is bounds-checked:
+         * this tree has one physical adapter per DXGKRNL_ADAPTER, so any index
+         * past zero names something that does not exist.
+         */
+        case KMTQAITYPE_PHYSICALADAPTERDEVICEIDS:
+        {
+            D3DKMT_QUERY_DEVICE_IDS Query;
+            NTSTATUS IdStatus;
+
+            if (pQueryAdapterInfo->pPrivateDriverData == NULL ||
+                pQueryAdapterInfo->PrivateDriverDataSize < sizeof(Query))
+            {
+                DXGKP_QUERY_RETURN(STATUS_BUFFER_TOO_SMALL);
+            }
+            _SEH2_TRY
+            {
+                Query = *(D3DKMT_QUERY_DEVICE_IDS *)pQueryAdapterInfo->pPrivateDriverData;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                DXGKP_QUERY_RETURN(_SEH2_GetExceptionCode());
+            }
+            _SEH2_END;
+            if (Query.PhysicalAdapterIndex != 0)
+                DXGKP_QUERY_RETURN(STATUS_INVALID_PARAMETER);
+            IdStatus = DxgkpQueryAdapterDeviceIds(Adapter, &Query.DeviceIds);
+            if (!NT_SUCCESS(IdStatus))
+                DXGKP_QUERY_RETURN(IdStatus);
+            _SEH2_TRY
+            {
+                *(D3DKMT_QUERY_DEVICE_IDS *)pQueryAdapterInfo->pPrivateDriverData = Query;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                DXGKP_QUERY_RETURN(_SEH2_GetExceptionCode());
+            }
+            _SEH2_END;
+            DXGKP_QUERY_RETURN(STATUS_SUCCESS);
+        }
+
+        /*
+         * The WDDM 1.2 and 1.3 rungs of the capability staircase.  Every rung
+         * from 2.0 up was already answered here while these two -- the ones a
+         * Win8-era runtime probes first -- returned NOT_SUPPORTED, so a caller
+         * walking the staircase upward fell off at its first step.
+         *
+         * Both are derived from what the miniport reported at start, not from
+         * constants: a bit set here is a claim that a code path exists, and the
+         * only honest source for that claim is the driver that would run it.
+         */
+        case KMTQAITYPE_WDDM_1_2_CAPS:
+        case KMTQAITYPE_WDDM_1_2_CAPS_RENDER:
+        {
+            D3DKMT_WDDM_1_2_CAPS Caps;
+            PDXGK_DRIVERCAPS DriverCaps;
+            NTSTATUS CapsStatus;
+
+            if (pQueryAdapterInfo->pPrivateDriverData == NULL ||
+                pQueryAdapterInfo->PrivateDriverDataSize < sizeof(Caps))
+            {
+                DXGKP_QUERY_RETURN(STATUS_BUFFER_TOO_SMALL);
+            }
+            DriverCaps = ExAllocatePoolWithTag(NonPagedPool, DXGKP_DRIVERCAPS_QUERY_SIZE, TAG_DXGK_CAPTURE);
+            if (DriverCaps == NULL)
+                DXGKP_QUERY_RETURN(STATUS_INSUFFICIENT_RESOURCES);
+            RtlZeroMemory(DriverCaps, DXGKP_DRIVERCAPS_QUERY_SIZE);
+            CapsStatus = DxgkpQueryDriverCaps(Adapter, DriverCaps);
+            if (!NT_SUCCESS(CapsStatus))
+            {
+                ExFreePoolWithTag(DriverCaps, TAG_DXGK_CAPTURE);
+                DXGKP_QUERY_RETURN(CapsStatus);
+            }
+
+            RtlZeroMemory(&Caps, sizeof(Caps));
+            Caps.PreemptionCaps = DriverCaps->PreemptionCaps;
+            Caps.SupportNonVGA = DriverCaps->SupportNonVGA ? 1 : 0;
+            Caps.SupportSmoothRotation = DriverCaps->SupportSmoothRotation ? 1 : 0;
+            Caps.SupportPerEngineTDR = DriverCaps->SupportPerEngineTDR ? 1 : 0;
+            Caps.SupportSurpriseRemovalInHibernation =
+                DriverCaps->SupportSurpriseRemovalInHibernation ? 1 : 0;
+            Caps.SupportGammaRamp = DriverCaps->GammaRampCaps.Gamma_Rgb256x3x16 ? 1 : 0;
+            Caps.SupportHWCursor = (DriverCaps->PointerCaps.Monochrome ||
+                                    DriverCaps->PointerCaps.Color ||
+                                    DriverCaps->PointerCaps.MaskedColor) ? 1 : 0;
+            /* A VSync interrupt this OS can actually observe requires the
+             * miniport to expose interrupt control; without it the notification
+             * never arrives and claiming otherwise strands a waiter. */
+            Caps.SupportHWVSync = DXGK_CB_FULL(Adapter, DxgkDdiControlInterrupt) != NULL ? 1 : 0;
+            /* Kernel-mode command buffers and CCD are unimplemented here; both
+             * stay zero rather than advertising an entry point that is absent. */
+            ExFreePoolWithTag(DriverCaps, TAG_DXGK_CAPTURE);
+
+            _SEH2_TRY
+            {
+                *(D3DKMT_WDDM_1_2_CAPS *)pQueryAdapterInfo->pPrivateDriverData = Caps;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                DXGKP_QUERY_RETURN(_SEH2_GetExceptionCode());
+            }
+            _SEH2_END;
+            DXGKP_QUERY_RETURN(STATUS_SUCCESS);
+        }
+
+        case KMTQAITYPE_WDDM_1_3_CAPS:
+        case KMTQAITYPE_WDDM_1_3_CAPS_RENDER:
+        {
+            D3DKMT_WDDM_1_3_CAPS Caps;
+            PDXGK_DRIVERCAPS DriverCaps;
+            NTSTATUS CapsStatus;
+
+            if (pQueryAdapterInfo->pPrivateDriverData == NULL ||
+                pQueryAdapterInfo->PrivateDriverDataSize < sizeof(Caps))
+            {
+                DXGKP_QUERY_RETURN(STATUS_BUFFER_TOO_SMALL);
+            }
+            DriverCaps = ExAllocatePoolWithTag(NonPagedPool, DXGKP_DRIVERCAPS_QUERY_SIZE, TAG_DXGK_CAPTURE);
+            if (DriverCaps == NULL)
+                DXGKP_QUERY_RETURN(STATUS_INSUFFICIENT_RESOURCES);
+            RtlZeroMemory(DriverCaps, DXGKP_DRIVERCAPS_QUERY_SIZE);
+            CapsStatus = DxgkpQueryDriverCaps(Adapter, DriverCaps);
+            if (!NT_SUCCESS(CapsStatus))
+            {
+                ExFreePoolWithTag(DriverCaps, TAG_DXGK_CAPTURE);
+                DXGKP_QUERY_RETURN(CapsStatus);
+            }
+
+            RtlZeroMemory(&Caps, sizeof(Caps));
+            Caps.IsHybridIntegratedGPU = DriverCaps->HybridIntegrated ? 1 : 0;
+            Caps.IsHybridDiscreteGPU = DriverCaps->HybridDiscrete ? 1 : 0;
+            Caps.SupportPowerManagementPStates =
+                DriverCaps->SupportRuntimePowerManagement ? 1 : 0;
+            /* Kept consistent with KMTQAITYPE_CROSSADAPTERRESOURCE_SUPPORT
+             * above, which reports TIER_NONE.  Two queries answering the same
+             * question differently is how a caller ends up trusting the wrong
+             * one. */
+            Caps.SupportCrossAdapterResource = 0;
+            ExFreePoolWithTag(DriverCaps, TAG_DXGK_CAPTURE);
+
+            _SEH2_TRY
+            {
+                *(D3DKMT_WDDM_1_3_CAPS *)pQueryAdapterInfo->pPrivateDriverData = Caps;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                DXGKP_QUERY_RETURN(_SEH2_GetExceptionCode());
+            }
+            _SEH2_END;
+            DXGKP_QUERY_RETURN(STATUS_SUCCESS);
+        }
+
+        /*
+         * Whether this adapter has a GPU virtual address space at all.  It must
+         * agree with KMTQAITYPE_WDDM_2_0_CAPS.GpuMmuSupported, which is why both
+         * read the same flag: a caller that reserves GPU VA because one query
+         * said yes gets a failure from every later call if the other said no.
+         */
+        case KMTQAITYPE_VIRTUALADDRESSINFO:
+        {
+            D3DKMT_VIRTUALADDRESSINFO Info;
+
+            if (pQueryAdapterInfo->pPrivateDriverData == NULL ||
+                pQueryAdapterInfo->PrivateDriverDataSize < sizeof(Info))
+            {
+                DXGKP_QUERY_RETURN(STATUS_BUFFER_TOO_SMALL);
+            }
+            RtlZeroMemory(&Info, sizeof(Info));
+            Info.VirtualAddressFlags.VirtualAddressSupported = Adapter->GpuMmuCapsValid ? 1 : 0;
+            _SEH2_TRY
+            {
+                *(D3DKMT_VIRTUALADDRESSINFO *)pQueryAdapterInfo->pPrivateDriverData = Info;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                DXGKP_QUERY_RETURN(_SEH2_GetExceptionCode());
+            }
+            _SEH2_END;
+            DXGKP_QUERY_RETURN(STATUS_SUCCESS);
+        }
+
+        /*
+         * The four description strings.  Only the adapter string has a real
+         * source -- the PnP device description -- and the other three are left
+         * empty rather than filled with something invented, because a caller
+         * that displays "BiosString" expects a BIOS to have said it.
+         */
+        case KMTQAITYPE_ADAPTERREGISTRYINFO:
+        case KMTQAITYPE_ADAPTERREGISTRYINFO_RENDER:
+        {
+            D3DKMT_ADAPTERREGISTRYINFO *Info;
+            ULONG ResultLength = 0;
+            NTSTATUS InfoStatus;
+
+            if (pQueryAdapterInfo->pPrivateDriverData == NULL ||
+                pQueryAdapterInfo->PrivateDriverDataSize < sizeof(*Info))
+            {
+                DXGKP_QUERY_RETURN(STATUS_BUFFER_TOO_SMALL);
+            }
+            if (Adapter->PhysicalDeviceObject == NULL)
+                DXGKP_QUERY_RETURN(STATUS_NOT_SUPPORTED);
+
+            Info = ExAllocatePoolWithTag(PagedPool, sizeof(*Info), TAG_DXGK_CAPTURE);
+            if (Info == NULL)
+                DXGKP_QUERY_RETURN(STATUS_INSUFFICIENT_RESOURCES);
+
+            RtlZeroMemory(Info, sizeof(*Info));
+            /* Truncation is not an error here: the field is fixed-width and a
+             * shortened description is still the right adapter's description. */
+            InfoStatus = IoGetDeviceProperty(Adapter->PhysicalDeviceObject,
+                                             DevicePropertyDeviceDescription,
+                                             sizeof(Info->AdapterString) - sizeof(WCHAR),
+                                             Info->AdapterString,
+                                             &ResultLength);
+            if (!NT_SUCCESS(InfoStatus) && InfoStatus != STATUS_BUFFER_TOO_SMALL)
+                RtlZeroMemory(Info->AdapterString, sizeof(Info->AdapterString));
+
+            _SEH2_TRY
+            {
+                *(D3DKMT_ADAPTERREGISTRYINFO *)pQueryAdapterInfo->pPrivateDriverData = *Info;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                ExFreePoolWithTag(Info, TAG_DXGK_CAPTURE);
+                DXGKP_QUERY_RETURN(_SEH2_GetExceptionCode());
+            }
+            _SEH2_END;
+            ExFreePoolWithTag(Info, TAG_DXGK_CAPTURE);
             DXGKP_QUERY_RETURN(STATUS_SUCCESS);
         }
 
