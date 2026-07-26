@@ -713,7 +713,7 @@ Prio_Sweep(void)
         sp.AllocationCount = 1;
         sp.pPriorities = &Levels[i].value;
         st = pSet(&sp);
-        ok(NT_SUCCESS(st), "SetAllocationPriority(%s=0x%08X) failed 0x%08lX\n",
+        ok_succeeded(st, "SetAllocationPriority(%s=0x%08X) failed 0x%08lX\n",
            Levels[i].name, Levels[i].value, (long)st);
     }
 
@@ -732,7 +732,7 @@ Prio_Sweep(void)
             gp.AllocationCount = 1;
             gp.pPriorities = &got;
             st = pGet(&gp);
-            ok(NT_SUCCESS(st), "GetAllocationPriority round-trip failed 0x%08lX\n", (long)st);
+            ok_succeeded(st, "GetAllocationPriority round-trip failed 0x%08lX\n", (long)st);
             if (NT_SUCCESS(st))
                 ok(got == Levels[RTL_NUMBER_OF(Levels) - 1].value, "GetAllocationPriority returned 0x%08X expected 0x%08X\n", got, Levels[RTL_NUMBER_OF(Levels) - 1].value);
         }
@@ -826,7 +826,7 @@ Resid_QueryMulti(void)
     qr.AllocationCount = 2;
     qr.pResidencyStatus = status;
     st = pQuery(&qr);
-    ok(NT_SUCCESS(st), "QueryAllocationResidency(2 allocations) failed 0x%08lX\n",
+    ok_succeeded(st, "QueryAllocationResidency(2 allocations) failed 0x%08lX\n",
        (long)st);
     if (NT_SUCCESS(st))
     {
@@ -987,7 +987,7 @@ QueuedLimit_Positive(void)
         get.hDevice = hDevice;
         get.Type = D3DKMT_GET_QUEUEDLIMIT_PRESENT;
         st = p(&get);
-        ok(NT_SUCCESS(st), "GetQueuedLimit(PRESENT) failed 0x%08lX\n", (long)st);
+        ok_succeeded(st, "GetQueuedLimit(PRESENT) failed 0x%08lX\n", (long)st);
         if (NT_SUCCESS(st))
             ok(get.QueuedPresentLimit == 2, "GetQueuedLimit returned %u, expected 2\n", get.QueuedPresentLimit);
         memset(&ql, 0, sizeof(ql));
@@ -995,7 +995,7 @@ QueuedLimit_Positive(void)
         ql.Type = D3DKMT_SET_QUEUEDLIMIT_PRESENT;
         ql.QueuedPresentLimit = 0;
         st = p(&ql);
-        ok(NT_SUCCESS(st), "SetQueuedLimit(PRESENT, reset default) failed 0x%08lX\n", (long)st);
+        ok_succeeded(st, "SetQueuedLimit(PRESENT, reset default) failed 0x%08lX\n", (long)st);
     }
     else
         skip("SetQueuedLimit(PRESENT) not supported here (0x%08lX)\n", (long)st);
@@ -1159,7 +1159,7 @@ Allocation2_PositiveRoundTrip(void)
     Lock.hDevice = hDevice;
     Lock.hAllocation = AllocationInfo.hAllocation;
     Status = pLock(&Lock);
-    ok(NT_SUCCESS(Status), "Lock2 failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "Lock2 failed 0x%08lX\n", (long)Status);
     if (NT_SUCCESS(Status))
     {
         ok(Lock.pData != NULL, "Lock2 succeeded without returning a mapping\n");
@@ -1167,7 +1167,7 @@ Allocation2_PositiveRoundTrip(void)
         Unlock.hDevice = hDevice;
         Unlock.hAllocation = AllocationInfo.hAllocation;
         Status = pUnlock(&Unlock);
-        ok(NT_SUCCESS(Status), "Unlock2 failed 0x%08lX\n", (long)Status);
+        ok_succeeded(Status, "Unlock2 failed 0x%08lX\n", (long)Status);
     }
 
     memset(&DestroyAllocation, 0, sizeof(DestroyAllocation));
@@ -1175,7 +1175,7 @@ Allocation2_PositiveRoundTrip(void)
     DestroyAllocation.phAllocationList = &AllocationInfo.hAllocation;
     DestroyAllocation.AllocationCount = 1;
     Status = pDestroy(&DestroyAllocation);
-    ok(NT_SUCCESS(Status), "DestroyAllocation2 failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "DestroyAllocation2 failed 0x%08lX\n", (long)Status);
 
 cleanup:
     DestroyTestDevice(hDevice);

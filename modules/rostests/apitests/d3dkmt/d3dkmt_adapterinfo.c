@@ -71,12 +71,12 @@ ExpectRefuseBadBuffers(PFND3DKMT_QUERYADAPTERINFO pfn, D3DKMT_HANDLE hAdapter,
     UCHAR tiny = 0;
 
     st = QueryAI(pfn, hAdapter, Type, NULL, Size);
-    ok(!NT_SUCCESS(st),
+    ok_failed(st,
        "%s: NULL data buffer (size=%u) must be refused, got 0x%08lX\n",
        Name, Size, (long)st);
 
     st = QueryAI(pfn, hAdapter, Type, &tiny, 1);
-    ok(!NT_SUCCESS(st),
+    ok_failed(st,
        "%s: 1-byte (too-small) buffer must be refused, got 0x%08lX\n",
        Name, (long)st);
 }
@@ -91,7 +91,7 @@ ExpectRefuseNullData(PFND3DKMT_QUERYADAPTERINFO pfn, D3DKMT_HANDLE hAdapter,
                      KMTQUERYADAPTERINFOTYPE Type, const char *Name, UINT Size)
 {
     NTSTATUS st = QueryAI(pfn, hAdapter, Type, NULL, Size);
-    ok(!NT_SUCCESS(st),
+    ok_failed(st,
        "%s: NULL data buffer must be refused, got 0x%08lX\n", Name, (long)st);
 }
 
@@ -146,21 +146,21 @@ static void Test_BadHandleAndType(PFND3DKMT_QUERYADAPTERINFO pfn, D3DKMT_HANDLE 
     /* Bogus adapter handle */
     st = QueryAI(pfn, (D3DKMT_HANDLE)0xBAD0CAFE, KMTQAITYPE_ADAPTERTYPE,
                  &type, sizeof(type));
-    ok(!NT_SUCCESS(st),
+    ok_failed(st,
        "QueryAdapterInfo with bogus adapter handle must fail, got 0x%08lX\n",
        (long)st);
 
     /* Zero adapter handle */
     st = QueryAI(pfn, (D3DKMT_HANDLE)0, KMTQAITYPE_ADAPTERTYPE,
                  &type, sizeof(type));
-    ok(!NT_SUCCESS(st),
+    ok_failed(st,
        "QueryAdapterInfo with zero adapter handle must fail, got 0x%08lX\n",
        (long)st);
 
     /* Unsupported selector value on a valid adapter */
     st = QueryAI(pfn, hAdapter, (KMTQUERYADAPTERINFOTYPE)0x7FFFFFFF,
                  &type, sizeof(type));
-    ok(!NT_SUCCESS(st),
+    ok_failed(st,
        "QueryAdapterInfo with unsupported Type must fail, got 0x%08lX\n",
        (long)st);
 }
@@ -1195,7 +1195,7 @@ START_TEST(wddmcaps)
         memset(&meta, 0, sizeof(meta));
         meta.NodeOrdinalAndAdapterIndex = 0xFFFF;
         st = QueryAI(pfn, h, KMTQAITYPE_NODEMETADATA, &meta, sizeof(meta));
-        ok(!NT_SUCCESS(st), "NODEMETADATA accepted bogus node ordinal 0xFFFF\n");
+        ok_failed(st, "NODEMETADATA accepted bogus node ordinal 0xFFFF\n");
     }
 
     CloseAdapter(h);

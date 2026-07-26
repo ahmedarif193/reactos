@@ -1260,7 +1260,7 @@ D3DKMTDestroyAllocation2(
     if (!NT_SUCCESS(Status))
         return Status;
     if (Captured.hDevice == 0)
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
     if ((Captured.Flags.Value & ~0x3u) != 0)
         return STATUS_INVALID_PARAMETER;
     if ((Captured.Flags.Value & 0x2u) != 0)
@@ -1623,7 +1623,7 @@ D3DKMTLock2(
     if (!NT_SUCCESS(Status))
         return Status;
     if (Captured.hDevice == 0 || Captured.hAllocation == 0)
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
     if (Captured.Flags.Value != 0)
         return STATUS_INVALID_PARAMETER;
     Status = WddmBridgeSafeProbeForWrite((PUCHAR)pData + FIELD_OFFSET(D3DKMT_LOCK2, pData), sizeof(Captured.pData));
@@ -1699,7 +1699,7 @@ D3DKMTUnlock2(
     if (!NT_SUCCESS(Status))
         return Status;
     if (Captured.hDevice == 0 || Captured.hAllocation == 0)
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
 
     AllocationHandle = Captured.hAllocation;
     Unlock.hDevice = Captured.hDevice;
@@ -2837,7 +2837,7 @@ D3DKMTCreateSynchronizationObject2(
     if (!NT_SUCCESS(Status))
         return Status;
     if (Captured.hDevice == 0)
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
     if (Captured.Info.Type <= 0 || Captured.Info.Type >= D3DDDI_SYNCHRONIZATION_TYPE_LIMIT)
         return STATUS_INVALID_PARAMETER;
     Status = WddmBridgeSafeProbeForWrite(pData, sizeof(*pData));
