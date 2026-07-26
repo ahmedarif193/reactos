@@ -33,6 +33,7 @@ list(APPEND SOURCE
     d3dkmt_renderpath.c
     d3dkmt_capsaudit.c
     d3dkmt_umdabi.c
+    d3dkmt_abifreeze.c
     d3dkmt_pipeline.c
     d3dkmt_capture.c
     d3dkmt_privateioctl.c
