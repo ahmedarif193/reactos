@@ -59,6 +59,31 @@ add_library(ntfslib_linux STATIC
     "${NTFSLIB_ROOT}/src/util.cpp"
 )
 
+# The formatter is independent of the environment layer, so it builds here as
+# its own target for host-side validation against ntfsprogs.
+add_library(ntfslib_format_host STATIC
+    "${NTFSLIB_ROOT}/src/format/bootsect.cpp"
+    "${NTFSLIB_ROOT}/src/format/format.cpp"
+    "${NTFSLIB_ROOT}/src/format/record.cpp"
+    "${NTFSLIB_ROOT}/src/format/sysfiles.cpp"
+    "${NTFSLIB_ROOT}/src/format/tables.cpp"
+)
+target_compile_features(ntfslib_format_host PUBLIC cxx_std_17)
+target_compile_definitions(ntfslib_format_host PUBLIC
+    NTFSLIB_PORTABLE=1
+    _FILE_OFFSET_BITS=64
+)
+target_compile_options(ntfslib_format_host PUBLIC
+    -fshort-wchar
+    -Wall
+    -Wextra
+    -Wno-multichar
+)
+target_include_directories(ntfslib_format_host PUBLIC
+    "${NTFSLIB_ROOT}/include/public"
+    "${NTFSLIB_ROOT}/src/format"
+)
+
 target_compile_features(ntfslib_linux PUBLIC cxx_std_17)
 target_compile_definitions(ntfslib_linux
     PUBLIC
@@ -89,6 +114,11 @@ if(NTFSLIB_BUILD_FUSE)
 endif()
 
 if(BUILD_TESTING)
+    add_executable(ntfslib_format_image
+        tests/format_image.cpp
+    )
+    target_link_libraries(ntfslib_format_image PRIVATE ntfslib_format_host)
+
     add_executable(ntfslib_posix_bench
         tests/posix_bench.cpp
     )
