@@ -117,6 +117,44 @@ NtfsSubmitDirectRead(
 
 static
 NTSTATUS
+NtfsLockReadBuffer(
+    _Inout_ PIRP Irp,
+    _In_ ULONG Length)
+{
+    PMDL Mdl;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (Irp->MdlAddress)
+        return STATUS_SUCCESS;
+    if (!Irp->UserBuffer)
+        return STATUS_INVALID_USER_BUFFER;
+
+    Mdl = IoAllocateMdl(Irp->UserBuffer, Length, FALSE, FALSE, Irp);
+    if (!Mdl)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    _SEH2_TRY
+    {
+        MmProbeAndLockPages(Mdl, Irp->RequestorMode, IoWriteAccess);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    if (!NT_SUCCESS(Status))
+    {
+        IoFreeMdl(Mdl);
+        Irp->MdlAddress = NULL;
+        if (!FsRtlIsNtstatusExpected(Status))
+            Status = STATUS_INVALID_USER_BUFFER;
+    }
+    return Status;
+}
+
+static
+NTSTATUS
 NtfsTryDirectRead(
     _In_ PVolumeContextBlock VolCB,
     _In_ PFileContextBlock FileCB,
@@ -138,6 +176,16 @@ NtfsTryDirectRead(
     NTSTATUS Status;
 
     *Handled = FALSE;
+    if (!Irp->MdlAddress &&
+        !Irp->AssociatedIrp.SystemBuffer)
+    {
+        Status = NtfsLockReadBuffer(Irp, Length);
+        if (!NT_SUCCESS(Status))
+        {
+            *Handled = TRUE;
+            return Status;
+        }
+    }
     if (!VolCB->StorageDevice ||
         !VolCB->BytesPerSector ||
         !Irp->MdlAddress ||
