@@ -645,6 +645,18 @@ NtfsMasterFileTableGetFileRecordFromQuery(
  * QueryLength is measured in UTF-16 code units. STATUS_REPARSE returns the
  * owning file record and the byte length of the unparsed path suffix.
  */
+/*
+ * Resolves one name inside a directory the caller already has open. Avoids
+ * re-walking the path from the root for every open in the same directory.
+ */
+NTSTATUS
+NtfsMasterFileTableGetFileRecordInDirectory(
+    _In_ PNtfsMasterFileTable Mft,
+    _In_ PNtfsFileRecord ParentDirectory,
+    _In_reads_(NameLength) PWCHAR Name,
+    _In_ ULONG NameLength,
+    _Out_ PNtfsFileRecord* File);
+
 NTSTATUS
 NtfsMasterFileTableGetFileRecordFromQueryEx(
     _In_ PNtfsMasterFileTable Mft,

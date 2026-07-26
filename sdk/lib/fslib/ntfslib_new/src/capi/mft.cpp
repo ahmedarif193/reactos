@@ -22,6 +22,46 @@ NtfsMasterFileTableGetFileRecordFromQuery(
 }
 
 NTSTATUS
+NtfsMasterFileTableGetFileRecordInDirectory(
+    _In_ PNtfsMasterFileTable Mft,
+    _In_ PNtfsFileRecord ParentDirectory,
+    _In_reads_(NameLength) PWCHAR Name,
+    _In_ ULONG NameLength,
+    _Out_ PNtfsFileRecord* File)
+{
+    PWCHAR TerminatedName;
+    NTSTATUS Status;
+
+    if (!Mft || !ParentDirectory || !Name || !File)
+        return STATUS_INVALID_PARAMETER;
+    *File = NULL;
+    if (NameLength == 0 ||
+        NameLength > MAXUSHORT / sizeof(WCHAR))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    TerminatedName =
+        new(PagedPool, TAG_NTFS)
+            WCHAR[(SIZE_T)NameLength + 1];
+    if (!TerminatedName)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    RtlCopyMemory(TerminatedName,
+                  Name,
+                  NameLength * sizeof(WCHAR));
+    TerminatedName[NameLength] = 0;
+
+    Status = reinterpret_cast<PMasterFileTable>(Mft)->
+        GetFileRecordInDirectory(
+            reinterpret_cast<PFileRecord>(ParentDirectory),
+            TerminatedName,
+            reinterpret_cast<PFileRecord*>(File));
+
+    delete[] TerminatedName;
+    return Status;
+}
+
+NTSTATUS
 NtfsMasterFileTableGetFileRecordFromQueryEx(
     _In_ PNtfsMasterFileTable Mft,
     _In_reads_(QueryLength) PWCHAR Query,
