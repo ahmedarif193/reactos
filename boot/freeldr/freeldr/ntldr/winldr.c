@@ -1337,6 +1337,19 @@ LoadAndBootWindows(
         /* Append the remaining path */
         RtlStringCbCatA(BootPath, sizeof(BootPath), FilePath);
     }
+    else if (_strnicmp(BootPath, "partition(", 10) == 0)
+    {
+        PSTR PartitionSpec;
+
+        RtlStringCbCopyA(FilePath, sizeof(FilePath), BootPath);
+        RtlStringCbCopyA(BootPath, sizeof(BootPath), SystemPartition);
+
+        PartitionSpec = strstr(BootPath, "partition(");
+        if (PartitionSpec)
+            *PartitionSpec = ANSI_NULL;
+
+        RtlStringCbCatA(BootPath, sizeof(BootPath), FilePath);
+    }
 
     /* Append a path separator if needed */
     if (!*BootPath || BootPath[strlen(BootPath) - 1] != '\\')
