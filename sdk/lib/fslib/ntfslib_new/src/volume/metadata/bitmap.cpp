@@ -587,6 +587,15 @@ Volume::AllocateClusters(_In_ ULONGLONG PreferredLCN,
     if (PreferredLCN >= ClustersInVolume)
         PreferredLCN = 0;
 
+    /* Callers with no placement preference start where the last allocation
+     * ended; the wrap pass below still covers everything before it. */
+    if (PreferredLCN == 0 &&
+        FreeClusterHint != 0 &&
+        FreeClusterHint < ClustersInVolume)
+    {
+        PreferredLCN = FreeClusterHint;
+    }
+
     /*
      * Prefer one extent. Besides reducing I/O, this keeps mapping pairs
      * small enough to remain in the owning MFT record in the common case.
@@ -666,6 +675,12 @@ Volume::AllocateClusters(_In_ ULONGLONG PreferredLCN,
                                ClustersInVolume);
     if (NT_SUCCESS(Status))
     {
+        PDataRun Last = Head;
+
+        while (Last->NextRun)
+            Last = Last->NextRun;
+        FreeClusterHint = Last->LCN + Last->Length;
+
         *Runs = Head;
         Head = NULL;
     }
@@ -697,6 +712,20 @@ Volume::ReleaseClusters(_In_ PDataRun Runs)
                                Runs,
                                FALSE,
                                ClustersInVolume);
+    if (NT_SUCCESS(Status))
+    {
+        PDataRun Freed = Runs;
+
+        /* Freed space becomes the next best place to look. */
+        for (; Freed; Freed = Freed->NextRun)
+        {
+            if (!Freed->IsSparse &&
+                Freed->LCN < FreeClusterHint)
+            {
+                FreeClusterHint = Freed->LCN;
+            }
+        }
+    }
     delete BitmapFile;
     return Status;
 }
