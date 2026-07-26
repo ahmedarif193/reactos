@@ -491,6 +491,131 @@ static void Test_TwoContextsSubmitIndependently(void)
     RenderPathTeardown(&Ctx);
 }
 
+
+/* ------------------------------------------------------------------ *
+ * Render with a real allocation list and a real patch location, which
+ * is the shape a user-mode driver actually submits.  This is the only
+ * path that reaches DxgkDdiPatch: the patch location names an address
+ * field inside a command record, and the kernel writes the allocation's
+ * placement into it at kick time.  A submission with no allocations
+ * never exercises any of that.
+ * ------------------------------------------------------------------ */
+static void Test_RenderWithAllocationsAndPatches(void)
+{
+    RENDERPATH_CONTEXT Ctx;
+    PFND3DKMT_CREATEALLOCATION pAlloc;
+    PFND3DKMT_DESTROYALLOCATION pFree;
+    D3DKMT_CREATEALLOCATION ca;
+    D3DDDI_ALLOCATIONINFO ai;
+    D3DKMT_RENDER render;
+    TEST_SOFTGPU_CMD *Cmd;
+    NTSTATUS Status;
+
+    pAlloc = (PFND3DKMT_CREATEALLOCATION)LoadD3DKMTProc("D3DKMTCreateAllocation");
+    pFree = (PFND3DKMT_DESTROYALLOCATION)LoadD3DKMTProc("D3DKMTDestroyAllocation");
+    if (!pAlloc)
+    {
+        skip("D3DKMTCreateAllocation not exported\n");
+        return;
+    }
+    if (!RenderPathSetup(&Ctx))
+        return;
+    if (Ctx.pAllocationList == NULL || Ctx.pPatchLocationList == NULL)
+    {
+        skip("context published no allocation or patch list\n");
+        RenderPathTeardown(&Ctx);
+        return;
+    }
+
+    memset(&ca, 0, sizeof(ca));
+    memset(&ai, 0, sizeof(ai));
+    ca.hDevice = Ctx.hDevice;
+    ca.NumAllocations = 1;
+    ca.pAllocationInfo = &ai;
+    Status = pAlloc(&ca);
+    if (!NT_SUCCESS(Status) || ai.hAllocation == 0)
+    {
+        skip("CreateAllocation refused (0x%08lX)\n", (long)Status);
+        RenderPathTeardown(&Ctx);
+        return;
+    }
+    trace("allocation for patching: 0x%08lX\n", (unsigned long)ai.hAllocation);
+
+    /* One BLT-shaped record whose SrcAddress the kernel will patch. */
+    Cmd = (TEST_SOFTGPU_CMD *)Ctx.pCommandBuffer;
+    memset(Cmd, 0, sizeof(*Cmd));
+    Cmd->Magic = SOFTGPU_CMD_MAGIC;
+    Cmd->Op = SOFTGPU_CMD_OP_NOP;
+    Cmd->Size = sizeof(*Cmd);
+
+    memset(&Ctx.pAllocationList[0], 0, sizeof(Ctx.pAllocationList[0]));
+    Ctx.pAllocationList[0].hAllocation = ai.hAllocation;
+
+    memset(&Ctx.pPatchLocationList[0], 0, sizeof(Ctx.pPatchLocationList[0]));
+    Ctx.pPatchLocationList[0].AllocationIndex = 0;
+    Ctx.pPatchLocationList[0].PatchOffset = FIELD_OFFSET(TEST_SOFTGPU_CMD, SrcAddress);
+
+    memset(&render, 0, sizeof(render));
+    render.hContext = Ctx.hContext;
+    render.CommandOffset = 0;
+    render.CommandLength = sizeof(*Cmd);
+    render.AllocationCount = 1;
+    render.PatchLocationCount = 1;
+    Status = pfnRender(&render);
+    ok_succeeded(Status, "Render with one allocation and one patch failed 0x%08lX\n", (long)Status);
+
+    /* A patch that names an allocation outside the list would have the kernel
+     * read past the array it was handed. */
+    if (NT_SUCCESS(Status))
+    {
+        Ctx.pCommandBuffer = render.pNewCommandBuffer;
+        Ctx.pAllocationList = render.pNewAllocationList;
+        Ctx.pPatchLocationList = render.pNewPatchLocationList;
+
+        Cmd = (TEST_SOFTGPU_CMD *)Ctx.pCommandBuffer;
+        memset(Cmd, 0, sizeof(*Cmd));
+        Cmd->Magic = SOFTGPU_CMD_MAGIC;
+        Cmd->Op = SOFTGPU_CMD_OP_NOP;
+        Cmd->Size = sizeof(*Cmd);
+        memset(&Ctx.pAllocationList[0], 0, sizeof(Ctx.pAllocationList[0]));
+        Ctx.pAllocationList[0].hAllocation = ai.hAllocation;
+        memset(&Ctx.pPatchLocationList[0], 0, sizeof(Ctx.pPatchLocationList[0]));
+        Ctx.pPatchLocationList[0].AllocationIndex = 4096;      /* far outside */
+        Ctx.pPatchLocationList[0].PatchOffset = FIELD_OFFSET(TEST_SOFTGPU_CMD, SrcAddress);
+
+        memset(&render, 0, sizeof(render));
+        render.hContext = Ctx.hContext;
+        render.CommandLength = sizeof(*Cmd);
+        render.AllocationCount = 1;
+        render.PatchLocationCount = 1;
+        Status = pfnRender(&render);
+        ok_failed(Status, "Render accepted a patch naming an allocation outside the list (0x%08lX)\n",
+                  (long)Status);
+    }
+
+    /* More allocations than the context published room for. */
+    memset(&render, 0, sizeof(render));
+    render.hContext = Ctx.hContext;
+    render.CommandLength = sizeof(*Cmd);
+    render.AllocationCount = Ctx.AllocationListSize + 1;
+    render.PatchLocationCount = 0;
+    Status = pfnRender(&render);
+    ok_failed(Status, "Render accepted more allocations than the context has room for (0x%08lX)\n",
+              (long)Status);
+
+    if (pFree != NULL)
+    {
+        D3DKMT_DESTROYALLOCATION da;
+
+        memset(&da, 0, sizeof(da));
+        da.hDevice = Ctx.hDevice;
+        da.AllocationCount = 1;
+        da.phAllocationList = &ai.hAllocation;
+        pFree(&da);
+    }
+    RenderPathTeardown(&Ctx);
+}
+
 START_TEST(renderpath)
 {
     pfnRender = (PFND3DKMT_RENDER)LoadD3DKMTProc("D3DKMTRender");
@@ -509,6 +634,7 @@ START_TEST(renderpath)
     Test_RenderAdvancesTheFence();
     Test_MalformedStreamsAreRefusedAtRender();
     Test_TwoContextsSubmitIndependently();
+    Test_RenderWithAllocationsAndPatches();
 }
 
 /* EOF */
