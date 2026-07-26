@@ -3504,6 +3504,7 @@ DxgkGetPresentHistory(
 {
     if (pData == NULL)
         return STATUS_INVALID_PARAMETER;
+
     if (!NT_SUCCESS(DxgkpValidateAdapterOnlyForIoctl(pData->hAdapter)))
         return STATUS_INVALID_PARAMETER;
     if (pData->ProvidedSize != 0 && pData->pTokens == NULL)
