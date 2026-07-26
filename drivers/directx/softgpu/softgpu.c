@@ -41,7 +41,7 @@
 #define SOFTGPU_DEFAULT_WIDTH   1024
 #define SOFTGPU_DEFAULT_HEIGHT  768
 #define SOFTGPU_DEFAULT_FORMAT  D3DDDIFMT_A8R8G8B8  /* 32-bpp ARGB */
-#define SOFTGPU_GPUMMU_END_TO_END 0
+#define SOFTGPU_GPUMMU_END_TO_END 1
 
 /* SOFTGPU_FB_SIZE and SOFTGPU_SEGMENT_ID are defined in softgpu.h */
 
@@ -621,8 +621,42 @@ SoftGpuDdiQueryAdapterInfo(
         GpuMmuCaps->ZeroInPteSupported = 1;
         GpuMmuCaps->CacheCoherentMemorySupported = 1;
         GpuMmuCaps->PageTableUpdateMode = DXGK_PAGETABLEUPDATE_CPU_VIRTUAL;
-        GpuMmuCaps->VirtualAddressBitCount = 48;
-        GpuMmuCaps->PageTableLevelCount = 4;
+        GpuMmuCaps->VirtualAddressBitCount = SOFTGPU_GPUVA_BIT_COUNT;
+        GpuMmuCaps->PageTableLevelCount = SOFTGPU_GPUVA_LEVELS;
+        return STATUS_SUCCESS;
+    }
+
+    case DXGKQAITYPE_PAGETABLELEVELDESC:
+    {
+        /*
+         * Radix geometry this device implements: SOFTGPU_GPUVA_LEVELS levels
+         * of SOFTGPU_GPUVA_INDEX_BITS index bits each over 4 KB pages.  Each
+         * table holds its entries as DXGK_PTE update descriptors and is page
+         * aligned.
+         */
+        CONST DXGK_QUERYPAGETABLELEVELDESCIN *In;
+        DXGK_PAGE_TABLE_LEVEL_DESC *Desc;
+
+        if (!SOFTGPU_GPUMMU_END_TO_END)
+            return STATUS_NOT_SUPPORTED;
+        if (pQueryAdapterInfo->pInputData == NULL ||
+            pQueryAdapterInfo->InputDataSize < sizeof(*In) ||
+            pQueryAdapterInfo->pOutputData == NULL)
+            return STATUS_INVALID_PARAMETER;
+        if (pQueryAdapterInfo->OutputDataSize < sizeof(*Desc))
+            return STATUS_BUFFER_TOO_SMALL;
+
+        In = (CONST DXGK_QUERYPAGETABLELEVELDESCIN *)pQueryAdapterInfo->pInputData;
+        if (In->PhysicalAdapterIndex != 0 || In->LevelIndex >= SOFTGPU_GPUVA_LEVELS)
+            return STATUS_INVALID_PARAMETER;
+
+        Desc = (DXGK_PAGE_TABLE_LEVEL_DESC *)pQueryAdapterInfo->pOutputData;
+        RtlZeroMemory(Desc, sizeof(*Desc));
+        Desc->PageTableIndexBitCount = SOFTGPU_GPUVA_INDEX_BITS;
+        Desc->PageTableSegmentId = 0;
+        Desc->PagingProcessPageTableSegmentId = 0;
+        Desc->PageTableSizeInBytes = (1u << SOFTGPU_GPUVA_INDEX_BITS) * (UINT)sizeof(DXGK_PTE);
+        Desc->PageTableAlignmentInBytes = PAGE_SIZE;
         return STATUS_SUCCESS;
     }
 
