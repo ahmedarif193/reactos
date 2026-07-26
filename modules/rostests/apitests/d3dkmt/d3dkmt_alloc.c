@@ -39,7 +39,7 @@ TestNullD3DKMTCall(const char *Name, FARPROC Proc)
         return;
     }
 
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "%s with a zeroed argument must be refused, got 0x%lx\n", Name, Status);
 }
 
@@ -61,7 +61,7 @@ static void Test_CreateAllocation_NullParam(void)
     ca.NumAllocations = 1;
     ca.pAllocationInfo = &ai;
     Status = pfnD3DKMTCreateAllocation(&ca);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "D3DKMTCreateAllocation(bogus device) must be refused, got 0x%lx\n", Status);
 }
 
@@ -84,7 +84,7 @@ static void Test_DestroyAllocation_InvalidHandle(void)
     DestroyData.AllocationCount = 0;
     DestroyData.phAllocationList = NULL;
     Status = pfnD3DKMTDestroyAllocation(&DestroyData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "D3DKMTDestroyAllocation with invalid device should fail, got 0x%lx\n",
        Status);
 }
@@ -133,7 +133,7 @@ static void Test_CreateDestroyAllocation(void)
         return;
     }
 
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "D3DKMTCreateAllocation with zero allocations returned 0x%lx\n",
        Status);
 
@@ -145,7 +145,7 @@ static void Test_CreateDestroyAllocation(void)
     CreateData.PrivateDriverDataSize = sizeof(PrivateDataSizeOnly);
     CreateData.pPrivateDriverData = NULL;
     Status = pfnD3DKMTCreateAllocation(&CreateData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "D3DKMTCreateAllocation with NULL private driver data returned 0x%lx\n",
        Status);
 
@@ -157,7 +157,7 @@ static void Test_CreateDestroyAllocation(void)
     CreateData.PrivateRuntimeDataSize = sizeof(PrivateDataSizeOnly);
     CreateData.pPrivateRuntimeData = NULL;
     Status = pfnD3DKMTCreateAllocation(&CreateData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "D3DKMTCreateAllocation with NULL private runtime data returned 0x%lx\n",
        Status);
 
@@ -169,7 +169,7 @@ static void Test_CreateDestroyAllocation(void)
     CreateData.NumAllocations = 1;
     CreateData.pAllocationInfo = &AllocationInfo;
     Status = pfnD3DKMTCreateAllocation(&CreateData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "D3DKMTCreateAllocation with NULL allocation private data returned 0x%lx\n",
        Status);
 
@@ -180,7 +180,7 @@ static void Test_CreateDestroyAllocation(void)
     CreateData.NumAllocations = 1;
     CreateData.pAllocationInfo = &AllocationInfo;
     Status = pfnD3DKMTCreateAllocation(&CreateData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "D3DKMTCreateAllocation with invalid device should fail, got 0x%lx\n",
        Status);
 
@@ -211,7 +211,7 @@ static void Test_Lock_InvalidHandle(void)
     LockData.hDevice = 0xBAD0CAFE;
     LockData.hAllocation = 0xDEADBEEF;
     Status = pfnD3DKMTLock(&LockData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "D3DKMTLock with invalid handles should fail, got 0x%lx\n", Status);
 }
 
@@ -228,7 +228,7 @@ static void Test_Unlock_InvalidHandle(void)
     UnlockData.NumAllocations = 1;
     UnlockData.phAllocations = &BadAlloc;
     Status = pfnD3DKMTUnlock(&UnlockData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "D3DKMTUnlock with invalid handles should fail, got 0x%lx\n", Status);
 }
 
@@ -291,7 +291,7 @@ static void Test_GetSharedPrimaryHandle(void)
     Data.hAdapter = 0xBAD0CAFE;
     Data.VidPnSourceId = 0;
     Status = pfnD3DKMTGetSharedPrimaryHandle(&Data);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "GetSharedPrimaryHandle with invalid adapter should fail, got 0x%lx\n",
        Status);
 

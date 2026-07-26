@@ -31,7 +31,7 @@ static void Test_EnumAdapters(void)
         return;
     }
 
-    ok(NT_SUCCESS(Status),
+    ok_succeeded(Status,
        "D3DKMTEnumAdapters failed with 0x%lx\n", Status);
 
     if (!NT_SUCCESS(Status))
@@ -72,7 +72,7 @@ static void Test_OpenAdapterFromHdc(void)
     memset(&OpenData, 0, sizeof(OpenData));
     OpenData.hDc = NULL;
     Status = pfnD3DKMTOpenAdapterFromHdc(&OpenData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "D3DKMTOpenAdapterFromHdc with NULL HDC should fail, got 0x%lx\n", Status);
 
     /* Valid HDC from primary display */
@@ -112,7 +112,7 @@ static void Test_OpenAdapterFromHdc(void)
     memset(&CloseData, 0, sizeof(CloseData));
     CloseData.hAdapter = OpenData.hAdapter;
     Status = pfnD3DKMTCloseAdapter(&CloseData);
-    ok(NT_SUCCESS(Status), "CloseAdapter failed with 0x%lx\n", Status);
+    ok_succeeded(Status, "CloseAdapter failed with 0x%lx\n", Status);
 }
 
 static void Test_OpenAdapterFromGdiDisplayName(void)
@@ -138,7 +138,7 @@ static void Test_OpenAdapterFromGdiDisplayName(void)
         return;
     }
 
-    ok(NT_SUCCESS(Status),
+    ok_succeeded(Status,
        "D3DKMTOpenAdapterFromGdiDisplayName failed with 0x%lx\n", Status);
 
     if (!NT_SUCCESS(Status))
@@ -155,7 +155,7 @@ static void Test_OpenAdapterFromGdiDisplayName(void)
         memset(&BadData, 0, sizeof(BadData));
         wcscpy(BadData.DeviceName, L"\\\\.\\DISPLAY999");
         Status = pfnD3DKMTOpenAdapterFromGdiDisplayName(&BadData);
-        ok(!NT_SUCCESS(Status),
+        ok_failed(Status,
            "D3DKMTOpenAdapterFromGdiDisplayName should fail for DISPLAY999, got 0x%lx\n",
            Status);
     }
@@ -177,7 +177,7 @@ static void Test_OpenAdapterFromDeviceName(void)
     memset(&OpenData, 0, sizeof(OpenData));
     OpenData.pDeviceName = NULL;
     Status = pfnD3DKMTOpenAdapterFromDeviceName(&OpenData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "D3DKMTOpenAdapterFromDeviceName with NULL name should fail, got 0x%lx\n",
        Status);
 }
@@ -197,14 +197,14 @@ static void Test_CloseAdapter(void)
     memset(&CloseData, 0, sizeof(CloseData));
     CloseData.hAdapter = 0xBAD0CAFE;
     Status = pfnD3DKMTCloseAdapter(&CloseData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "D3DKMTCloseAdapter with invalid handle should fail, got 0x%lx\n", Status);
 
     /* Zero handle */
     memset(&CloseData, 0, sizeof(CloseData));
     CloseData.hAdapter = 0;
     Status = pfnD3DKMTCloseAdapter(&CloseData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "D3DKMTCloseAdapter with zero handle should fail, got 0x%lx\n", Status);
 
     /* Valid open + close + double-close */
@@ -214,11 +214,11 @@ static void Test_CloseAdapter(void)
         memset(&CloseData, 0, sizeof(CloseData));
         CloseData.hAdapter = hAdapter;
         Status = pfnD3DKMTCloseAdapter(&CloseData);
-        ok(NT_SUCCESS(Status), "First CloseAdapter failed with 0x%lx\n", Status);
+        ok_succeeded(Status, "First CloseAdapter failed with 0x%lx\n", Status);
 
         /* Second close of same handle should fail */
         Status = pfnD3DKMTCloseAdapter(&CloseData);
-        ok(!NT_SUCCESS(Status),
+        ok_failed(Status,
            "Double CloseAdapter should fail, got 0x%lx\n", Status);
     }
     else
@@ -263,7 +263,7 @@ static void Test_QueryAdapterInfo(void)
         return;
     }
 
-    ok(NT_SUCCESS(Status),
+    ok_succeeded(Status,
        "D3DKMTQueryAdapterInfo(GETSEGMENTSIZE) failed with 0x%lx\n", Status);
 
     if (NT_SUCCESS(Status))
@@ -283,7 +283,7 @@ static void Test_QueryAdapterInfo(void)
     QueryInfo.pPrivateDriverData = &SegInfo;
     QueryInfo.PrivateDriverDataSize = sizeof(SegInfo);
     Status = pfnD3DKMTQueryAdapterInfo(&QueryInfo);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "D3DKMTQueryAdapterInfo with invalid adapter should fail, got 0x%lx\n",
        Status);
 
@@ -311,7 +311,7 @@ static void Test_QueryAdapterInfo(void)
     QueryInfo.pPrivateDriverData = &SegInfo;
     QueryInfo.PrivateDriverDataSize = sizeof(SegInfo);
     Status = pfnD3DKMTQueryAdapterInfo(&QueryInfo);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "D3DKMTQueryAdapterInfo with unsupported type should fail, got 0x%lx\n",
        Status);
 
@@ -322,7 +322,7 @@ static void Test_QueryAdapterInfo(void)
     QueryInfo.pPrivateDriverData = NULL;
     QueryInfo.PrivateDriverDataSize = 0;
     Status = pfnD3DKMTQueryAdapterInfo(&QueryInfo);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "D3DKMTQueryAdapterInfo with NULL data should fail, got 0x%lx\n",
        Status);
 
@@ -333,7 +333,7 @@ static void Test_QueryAdapterInfo(void)
     QueryInfo.pPrivateDriverData = &SegInfo;
     QueryInfo.PrivateDriverDataSize = 1;
     Status = pfnD3DKMTQueryAdapterInfo(&QueryInfo);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "D3DKMTQueryAdapterInfo with too-small buffer should fail, got 0x%lx\n",
        Status);
 

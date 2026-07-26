@@ -103,7 +103,7 @@ static void Test_BasicPresent(void)
     pres.DstRect = pres.SrcRect;
 
     Status = pfnD3DKMTPresent(&pres);
-    ok(NT_SUCCESS(Status),
+    ok_succeeded(Status,
        "Basic present should succeed, got 0x%08lX\n", Status);
 
     DestroySingleAllocation(pfnD3DKMTDestroyAllocation, hDevice, hAlloc);
@@ -151,7 +151,7 @@ static void Test_BltPresent(void)
     pres.DstRect = pres.SrcRect;
 
     Status = pfnD3DKMTPresent(&pres);
-    ok(NT_SUCCESS(Status),
+    ok_succeeded(Status,
        "BLT present should succeed, got 0x%08lX\n", Status);
 
     DestroySingleAllocation(pfnD3DKMTDestroyAllocation, hDevice, hDst);
@@ -180,7 +180,7 @@ static void Test_PresentNullSource(void)
     pres.VidPnSourceId = 0;
 
     Status = pfnD3DKMTPresent(&pres);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "Present with NULL source should fail, got 0x%08lX\n", Status);
 
     DestroyTestDevice(hDevice);

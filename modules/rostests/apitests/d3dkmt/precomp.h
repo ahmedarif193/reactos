@@ -36,6 +36,23 @@
 #endif
 
 /*
+ * Evaluate the status expression once. Some D3DKMT calls mutate their
+ * input, so evaluating an assertion argument twice can test a different
+ * operation.
+ */
+#define ok_failed(StatusExpr, ...)                                            \
+    do {                                                                      \
+        NTSTATUS ok_status_ = (StatusExpr);                                   \
+        ok(!NT_SUCCESS(ok_status_), __VA_ARGS__);                             \
+    } while (0)
+
+#define ok_succeeded(StatusExpr, ...)                                         \
+    do {                                                                      \
+        NTSTATUS ok_status_ = (StatusExpr);                                   \
+        ok(NT_SUCCESS(ok_status_), __VA_ARGS__);                              \
+    } while (0)
+
+/*
  * D3DKMT function typedefs for GetProcAddress loading from gdi32.dll.
  * We load dynamically so the test binary can run on systems where
  * some D3DKMT exports may not exist (pre-Vista, or missing exports).

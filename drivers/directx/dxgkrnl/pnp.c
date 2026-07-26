@@ -329,7 +329,11 @@ DxgkpPollDisplayChildrenRequest(
         return STATUS_INVALID_PARAMETER;
     Status = DxgkReferenceAdapterByHandle(PollRequest->hAdapter, PsGetCurrentProcess(), &RequestedAdapter);
     if (!NT_SUCCESS(Status))
+    {
+        /* The handle lookup already reports an unusable D3DKMT handle as a
+         * bad parameter, which is what Windows 11 returns here. */
         return Status == STATUS_DELETE_PENDING ? STATUS_DEVICE_REMOVED : Status;
+    }
     if (PollRequest->PollAllAdapters)
     {
         AdapterCount = DxgkReferenceStartedAdapters(Adapters, RTL_NUMBER_OF(Adapters));

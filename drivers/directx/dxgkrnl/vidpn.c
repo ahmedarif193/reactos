@@ -3833,7 +3833,7 @@ DxgkSetDisplayMode(
     {
         DXGKRNL_WARN("DxgkSetDisplayMode: invalid device handle 0x%X\n",
                      pSetDisplayMode->hDevice);
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
     }
 
     (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
@@ -3945,7 +3945,7 @@ DxgkGetSharedPrimaryHandle(
     {
         DXGKRNL_WARN("DxgkGetSharedPrimaryHandle: invalid adapter handle 0x%X\n",
                      pGetSharedPrimaryHandle->hAdapter);
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
     }
 
     (VOID)KeWaitForSingleObject(&Adapter->SharedPrimaryMutex, Executive, KernelMode, FALSE, NULL);
@@ -3987,7 +3987,7 @@ DxgkGetShadowSurface(
 
     Adapter = DxgkLookupAdapterByHandle(pGetShadowSurface->hAdapter);
     if (Adapter == NULL)
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
 
     (VOID)KeWaitForSingleObject(&Adapter->SharedPrimaryMutex, Executive, KernelMode, FALSE, NULL);
     Status = DxgkpEnsureSharedPrimaryLocked(Adapter, pGetShadowSurface->VidPnSourceId);
@@ -4047,7 +4047,7 @@ DxgkQueryResourceInfo(
 
     Device = DxgkLookupDeviceByHandle(pQueryResourceInfo->hDevice, &Adapter);
     if (Device == NULL || Adapter == NULL)
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
 
     Status = DxgkVidMmReferenceResource(pQueryResourceInfo->hGlobalShare, TRUE, NULL, &Resource);
     if (!NT_SUCCESS(Status) || Resource->Adapter != Adapter)
@@ -4127,7 +4127,7 @@ DxgkOpenResource(
 
     Device = DxgkLookupDeviceByHandle(pOpenResource->hDevice, &Adapter);
     if (Device == NULL || Adapter == NULL)
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
 
     Status = DxgkVidMmReferenceResource(pOpenResource->hGlobalShare, TRUE, NULL, &Resource);
     if (!NT_SUCCESS(Status) || Resource->Adapter != Adapter)
@@ -4352,7 +4352,7 @@ DxgkGetDisplayModeList(
 
     Adapter = DxgkLookupAdapterByHandle(pGetDisplayModeList->hAdapter);
     if (Adapter == NULL)
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
 
     if (pGetDisplayModeList->VidPnSourceId >= Adapter->NumberOfVideoPresentSources)
     {
@@ -4480,7 +4480,7 @@ DxgkpSetVidPnSourceOwnerWithFlagsAndAccessMode(
 
     Device = DxgkLookupDeviceByHandle(pSetVidPnSourceOwner->hDevice, &Adapter);
     if (Device == NULL)
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
     if (Adapter == NULL)
     {
         DxgkDereferenceDevice(Device);
@@ -4656,7 +4656,7 @@ DxgkCheckVidPnExclusiveOwnership(
 
     Adapter = DxgkLookupAdapterByHandle(pCheckVidPnExclusiveOwnership->hAdapter);
     if (Adapter == NULL)
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
     if (Adapter->State != DxgkAdapterStateStarted)
     {
         Status = STATUS_DEVICE_REMOVED;

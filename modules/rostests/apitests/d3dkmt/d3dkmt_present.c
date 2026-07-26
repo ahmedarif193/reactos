@@ -29,7 +29,7 @@ static void Test_Present_InvalidDevice(void)
     PresentData.hDevice = 0xBAD0CAFE;
     PresentData.Flags.Blt = 1;
     Status = pfnD3DKMTPresent(&PresentData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "Present with invalid device should fail, got 0x%lx\n", Status);
 }
 
@@ -65,7 +65,7 @@ static void Test_Present_NoSourceNoColor(void)
     /* This should fail since no valid operation is specified */
     if (Status != STATUS_PROCEDURE_NOT_FOUND)
     {
-        ok(!NT_SUCCESS(Status),
+        ok_failed(Status,
            "Present with no flags should fail, got 0x%lx\n", Status);
     }
 
@@ -92,7 +92,7 @@ static void Test_Render_InvalidContext(void)
     memset(&RenderData, 0, sizeof(RenderData));
     RenderData.hContext = 0xBAD0CAFE;
     Status = pfnD3DKMTRender(&RenderData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "Render with invalid context should fail, got 0x%lx\n", Status);
 }
 
@@ -115,7 +115,7 @@ static void Test_GetPresentHistory_InvalidDevice(void)
     memset(&HistData, 0, sizeof(HistData));
     HistData.hAdapter = (D3DKMT_HANDLE)0xBAD0CAFE;
     Status = pfnD3DKMTGetPresentHistory(&HistData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "GetPresentHistory with invalid device should fail, got 0x%lx\n",
        Status);
 }

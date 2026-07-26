@@ -69,7 +69,7 @@ START_TEST(renderadapter)
                 memset(&dc, 0, sizeof(dc));
                 dc.hContext = cc.hContext;
                 st = pfnDC(&dc);
-                ok(NT_SUCCESS(st), "DestroyContext on the render adapter failed 0x%08lX\n", (long)st);
+                ok_succeeded(st, "DestroyContext on the render adapter failed 0x%08lX\n", (long)st);
             }
         }
         else
@@ -133,7 +133,7 @@ START_TEST(luidident)
             memset(&ca, 0, sizeof(ca));
             ca.hAdapter = ol.hAdapter;
             st = pfnD3DKMTCloseAdapter(&ca);
-            ok(NT_SUCCESS(st), "CloseAdapter for reopened LUID[%lu] failed 0x%08lX\n", i, (long)st);
+            ok_succeeded(st, "CloseAdapter for reopened LUID[%lu] failed 0x%08lX\n", i, (long)st);
         }
     }
 
@@ -213,7 +213,7 @@ START_TEST(luidident)
                     e2.NumAdapters = Capacity;
                     e2.pAdapters = arr;
                     st = pfn2(&e2);
-                    ok(NT_SUCCESS(st), "EnumAdapters2 enumeration failed 0x%08lX\n", (long)st);
+                    ok_succeeded(st, "EnumAdapters2 enumeration failed 0x%08lX\n", (long)st);
                     if (NT_SUCCESS(st))
                     {
                         ok(e2.NumAdapters <= Capacity, "EnumAdapters2 returned %lu adapters into a %lu-entry array\n", e2.NumAdapters, Capacity);
@@ -240,7 +240,7 @@ START_TEST(luidident)
                                 memset(&ca, 0, sizeof(ca));
                                 ca.hAdapter = arr[i].hAdapter;
                                 st = pfnD3DKMTCloseAdapter(&ca);
-                                ok(NT_SUCCESS(st), "CloseAdapter for EnumAdapters2 handle[%lu] failed 0x%08lX\n", i, (long)st);
+                                ok_succeeded(st, "CloseAdapter for EnumAdapters2 handle[%lu] failed 0x%08lX\n", i, (long)st);
                             }
                         }
                     }
@@ -351,11 +351,11 @@ START_TEST(handletype)
         memset(&dd, 0, sizeof(dd));
         dd.hDevice = hDevice;
         st = pfnD3DKMTDestroyDevice(&dd);
-        ok(NT_SUCCESS(st), "DestroyDevice after wrong-type probes failed 0x%08lX\n", (long)st);
+        ok_succeeded(st, "DestroyDevice after wrong-type probes failed 0x%08lX\n", (long)st);
         memset(&ca, 0, sizeof(ca));
         ca.hAdapter = hAdapter;
         st = pfnD3DKMTCloseAdapter(&ca);
-        ok(NT_SUCCESS(st), "CloseAdapter after wrong-type probes failed 0x%08lX\n", (long)st);
+        ok_succeeded(st, "CloseAdapter after wrong-type probes failed 0x%08lX\n", (long)st);
     }
 }
 
@@ -381,7 +381,7 @@ START_TEST(stalehandle)
             memset(&ca, 0, sizeof(ca));
             ca.hAdapter = hAdapter;
             st = pfnD3DKMTCloseAdapter(&ca);
-            ok(NT_SUCCESS(st), "CloseAdapter for stale-handle probe failed 0x%08lX\n", (long)st);
+            ok_succeeded(st, "CloseAdapter for stale-handle probe failed 0x%08lX\n", (long)st);
             if (NT_SUCCESS(st))
             {
                 memset(&qai, 0, sizeof(qai));
@@ -408,7 +408,7 @@ START_TEST(stalehandle)
             memset(&dd, 0, sizeof(dd));
             dd.hDevice = hDevice;
             st = pfnD3DKMTDestroyDevice(&dd);
-            ok(NT_SUCCESS(st), "DestroyDevice for stale-handle probe failed 0x%08lX\n", (long)st);
+            ok_succeeded(st, "DestroyDevice for stale-handle probe failed 0x%08lX\n", (long)st);
             if (NT_SUCCESS(st))
             {
                 memset(&cc, 0, sizeof(cc));

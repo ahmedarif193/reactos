@@ -116,7 +116,7 @@ TrySyncObjectType(D3DKMT_HANDLE hDevice,
     memset(&dso, 0, sizeof(dso));
     dso.hSyncObject = cso.hSyncObject;
     Status = pDestroy(&dso);
-    ok(NT_SUCCESS(Status),
+    ok_succeeded(Status,
        "DestroySynchronizationObject(%s) failed (0x%08lX)\n", Label, (long)Status);
 }
 
@@ -310,7 +310,7 @@ static void Test_MonitoredFence_CpuSignalWait(void)
         memset(&dso, 0, sizeof(dso));
         dso.hSyncObject = hSync;
         Status = pDestroy(&dso);
-        ok(NT_SUCCESS(Status),
+        ok_succeeded(Status,
            "DestroySynchronizationObject(monitored fence) failed (0x%08lX)\n",
            (long)Status);
     }
@@ -409,7 +409,7 @@ static void Test_OpenSyncObject_Positive(void)
         memset(&dso, 0, sizeof(dso));
         dso.hSyncObject = hSync;
         Status = pDestroy(&dso);
-        ok(NT_SUCCESS(Status),
+        ok_succeeded(Status,
            "DestroySynchronizationObject(shared) failed (0x%08lX)\n", (long)Status);
     }
 
@@ -487,7 +487,7 @@ static void Test_LegacySync_V1_Lifecycle(void)
         memset(&dso, 0, sizeof(dso));
         dso.hSyncObject = cso.hSyncObject;
         Status = pDestroy(&dso);
-        ok(NT_SUCCESS(Status), "v1 mutex destroy failed (0x%08lX)\n", (long)Status);
+        ok_succeeded(Status, "v1 mutex destroy failed (0x%08lX)\n", (long)Status);
     }
     else
     {
@@ -509,7 +509,7 @@ static void Test_LegacySync_V1_Lifecycle(void)
         memset(&dso, 0, sizeof(dso));
         dso.hSyncObject = cso.hSyncObject;
         Status = pDestroy(&dso);
-        ok(NT_SUCCESS(Status), "v1 semaphore destroy failed (0x%08lX)\n", (long)Status);
+        ok_succeeded(Status, "v1 semaphore destroy failed (0x%08lX)\n", (long)Status);
     }
     else
     {
@@ -845,7 +845,7 @@ static void Test_KeyedMutex_V1_Lifecycle(void)
     memset(&destroy, 0, sizeof(destroy));
     destroy.hKeyedMutex = hKM;
     Status = pDestroy(&destroy);
-    ok(NT_SUCCESS(Status), "DestroyKeyedMutex failed (0x%08lX)\n", (long)Status);
+    ok_succeeded(Status, "DestroyKeyedMutex failed (0x%08lX)\n", (long)Status);
 
     /* Double destroy of the same handle must fail. */
     SYNCEXT_TRY(faulted, Status = pDestroy(&destroy));
@@ -939,7 +939,7 @@ static void Test_KeyedMutex_V2_Lifecycle(void)
     memset(&destroy, 0, sizeof(destroy));
     destroy.hKeyedMutex = hKM;
     Status = pDestroy(&destroy);
-    ok(NT_SUCCESS(Status), "DestroyKeyedMutex (v2 object) failed (0x%08lX)\n",
+    ok_succeeded(Status, "DestroyKeyedMutex (v2 object) failed (0x%08lX)\n",
        (long)Status);
 
     SYNCEXT_TRY(faulted, Status = pDestroy(&destroy));

@@ -547,7 +547,7 @@ static void Test_TrimNotification_Lifecycle(void)
         memset(&unreg, 0, sizeof(unreg));
         unreg.Handle = reg.Handle;
         Status = pUnreg(&unreg);
-        ok(NT_SUCCESS(Status),
+        ok_succeeded(Status,
            "UnregisterTrimNotification(valid handle) failed 0x%08lX\n",
            (long)Status);
     }
@@ -639,7 +639,7 @@ static void Test_BudgetChangeNotification_Lifecycle(void)
         memset(&unreg, 0, sizeof(unreg));
         unreg.Handle = reg.Handle;
         Status = pUnreg(&unreg);
-        ok(NT_SUCCESS(Status),
+        ok_succeeded(Status,
            "UnregisterBudgetChangeNotification(valid handle) failed 0x%08lX\n",
            (long)Status);
     }

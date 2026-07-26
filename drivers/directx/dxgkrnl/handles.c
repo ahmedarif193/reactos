@@ -162,12 +162,20 @@ DxgkpValidateHandleEntry(
     _In_ DXGKRNL_HANDLE_TYPE Type,
     _In_ PEPROCESS OwnerProcess)
 {
+    /*
+     * A D3DKMT_HANDLE is a private handle-table index, not an NT handle, and
+     * Windows 11 rejects one that names nothing -- or names the wrong kind of
+     * object -- as a bad *parameter*.  Measured across the whole D3DKMT surface
+     * against the reference VM; a bad NT handle (hProcess) still yields
+     * STATUS_INVALID_HANDLE, which is why that conversion does not belong in
+     * the callers.
+     */
     if (DxgkpHandleType(Handle) != Type)
-        return STATUS_OBJECT_TYPE_MISMATCH;
+        return STATUS_INVALID_PARAMETER;
     if (Entry == NULL)
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
     if (Entry->Type != Type)
-        return STATUS_OBJECT_TYPE_MISMATCH;
+        return STATUS_INVALID_PARAMETER;
     if (Entry->OwnerProcess != OwnerProcess)
         return STATUS_ACCESS_DENIED;
     if (Entry->Destroying != NULL && InterlockedCompareExchange(Entry->Destroying, 0, 0) != 0)
