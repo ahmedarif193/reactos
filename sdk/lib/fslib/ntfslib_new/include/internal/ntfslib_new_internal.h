@@ -1173,6 +1173,8 @@ public:
     ~Directory();
     NTSTATUS
     LoadDirectory(_In_ PFileRecord File);
+    NTSTATUS
+    LoadDirectoryForEnumeration(_In_ PFileRecord File);
 
     // ./find.cpp
     NTSTATUS
@@ -1206,10 +1208,27 @@ public:
         _In_ PUNICODE_STRING Name);
 
 private:
+    struct DirectEnumerationFrame
+    {
+        ULONGLONG VCN;
+        ULONG EntryOffset;
+        BOOLEAN IsRoot;
+        BOOLEAN ChildVisited;
+    };
+
     PVolume DiskVolume;
     PUCHAR IndexAllocationData = NULL;
     ULONG IndexAllocationLength = 0;
     PDIRECTORY_KEY_BLOCK KeyBlocks = NULL;
+    PFileRecord EnumerationFile = NULL;
+    PAttribute EnumerationRoot = NULL;
+    PAttribute EnumerationAllocation = NULL;
+    PAttribute EnumerationBitmap = NULL;
+    DirectEnumerationFrame EnumerationStack[64] = {};
+    ULONG EnumerationDepth = 0;
+    LONG EnumerationLoadedDepth = -1;
+    ULONGLONG EnumerationLoadedVCN = ~(ULONGLONG)0;
+    BOOLEAN DirectEnumeration = FALSE;
 
     // ./editdir.cpp
     static NTSTATUS
@@ -1259,12 +1278,39 @@ private:
     DoesFileNameMatch(PUNICODE_STRING NameFilter,
                       PBTreeKey Key,
                       BOOLEAN IgnoreCase = TRUE);
+    BOOLEAN
+    DoesFileNameMatch(PUNICODE_STRING NameFilter,
+                      PIndexEntry Entry,
+                      BOOLEAN IgnoreCase = TRUE);
     PBTreeKey
     GetShortNameKey(_In_ PBTreeKey Key);
 
     // ./get.cpp
+    NTSTATUS
+    ResetDirectEnumeration();
+    NTSTATUS
+    LoadDirectNode(_In_ ULONG Depth,
+                   _Out_ PIndexNodeHeader* Header,
+                   _Out_ PULONG HeaderBytes);
+    NTSTATUS
+    GetNextDirectEntry(_Out_ PIndexEntry* Entry);
+    NTSTATUS
+    FindDirectShortName(
+        _In_ ULONGLONG FileReference,
+        _Out_ PWCHAR ShortName,
+        _Out_ PUCHAR ShortNameLength);
+    NTSTATUS
+    GetFileBothDirInfoDirect(
+        _In_ BOOLEAN ReturnSingleEntry,
+        _In_ BOOLEAN RestartScan,
+        _In_ PUNICODE_STRING FileNameFilter,
+        _Inout_ PFILE_BOTH_DIR_INFORMATION Buffer,
+        _Inout_ PULONG BufferLength);
     BOOLEAN
     IsEligibleForFileDir(PBTreeKey Key,
+                         PUNICODE_STRING FileNameFilter);
+    BOOLEAN
+    IsEligibleForFileDir(PIndexEntry Entry,
                          PUNICODE_STRING FileNameFilter);
 
 } *PDirectory;

@@ -62,31 +62,34 @@ NtfsFsdClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                     (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
                 PNtfsDirectory Doomed = FileCB->FileDir;
 
-                ExAcquireFastMutex(&Vol->DirCacheMutex);
-                if (FileCB->FileDirBorrowed)
+                if (!FileCB->FileDirDirect)
                 {
-                    Vol->CachedDirBusy = FALSE;
-                    Doomed = NULL;
-                }
-                else if ((!Vol->CachedDir ||
-                          (!Vol->CachedDirBusy &&
-                           Vol->CachedDirGeneration != Vol->DirGeneration)) &&
-                         FileCB->FileName.Length != 0 &&
-                         FileCB->FileName.Length <= sizeof(Vol->CachedDirPath))
-                {
-                    PNtfsDirectory Evicted = Vol->CachedDir;
+                    ExAcquireFastMutex(&Vol->DirCacheMutex);
+                    if (FileCB->FileDirBorrowed)
+                    {
+                        Vol->CachedDirBusy = FALSE;
+                        Doomed = NULL;
+                    }
+                    else if ((!Vol->CachedDir ||
+                              (!Vol->CachedDirBusy &&
+                               Vol->CachedDirGeneration != Vol->DirGeneration)) &&
+                             FileCB->FileName.Length != 0 &&
+                             FileCB->FileName.Length <= sizeof(Vol->CachedDirPath))
+                    {
+                        PNtfsDirectory Evicted = Vol->CachedDir;
 
-                    Vol->CachedDir = FileCB->FileDir;
-                    Vol->CachedDirBusy = FALSE;
-                    Vol->CachedDirGeneration = Vol->DirGeneration;
-                    Vol->CachedDirPathLength =
-                        (USHORT)(FileCB->FileName.Length / sizeof(WCHAR));
-                    RtlCopyMemory(Vol->CachedDirPath,
-                                  FileCB->FileName.Buffer,
-                                  FileCB->FileName.Length);
-                    Doomed = Evicted;
+                        Vol->CachedDir = FileCB->FileDir;
+                        Vol->CachedDirBusy = FALSE;
+                        Vol->CachedDirGeneration = Vol->DirGeneration;
+                        Vol->CachedDirPathLength =
+                            (USHORT)(FileCB->FileName.Length / sizeof(WCHAR));
+                        RtlCopyMemory(Vol->CachedDirPath,
+                                      FileCB->FileName.Buffer,
+                                      FileCB->FileName.Length);
+                        Doomed = Evicted;
+                    }
+                    ExReleaseFastMutex(&Vol->DirCacheMutex);
                 }
-                ExReleaseFastMutex(&Vol->DirCacheMutex);
 
                 if (Doomed)
                     NtfsDirectoryDestroy(Doomed);

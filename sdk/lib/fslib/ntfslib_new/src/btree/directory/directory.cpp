@@ -548,16 +548,24 @@ Directory::DoesFileNameMatch(PUNICODE_STRING NameFilter,
                              PBTreeKey Key,
                              BOOLEAN IgnoreCase)
 {
+    return DoesFileNameMatch(NameFilter, Key->Entry, IgnoreCase);
+}
+
+BOOLEAN
+Directory::DoesFileNameMatch(PUNICODE_STRING NameFilter,
+                             PIndexEntry Entry,
+                             BOOLEAN IgnoreCase)
+{
     UNICODE_STRING FileNameString;
     PFileNameEx FileNameData;
 
-    if (Key->Entry->Flags & INDEX_ENTRY_END)
+    if (Entry->Flags & INDEX_ENTRY_END)
     {
         // This is a dummy key, it will not match with any file.
         return FALSE;
     }
 
-    FileNameData = GetFileName(Key);
+    FileNameData = (PFileNameEx)Entry->IndexStream;
     FileNameString = NtfsMakeCountedUnicodeString(
         FileNameData->Name,
         FileNameData->NameLength * sizeof(WCHAR));
