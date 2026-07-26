@@ -294,6 +294,7 @@ NtfsMountVolume(IN PDEVICE_OBJECT TargetDeviceObject,
     PVolumeContextBlock VolCB;
     LARGE_INTEGER FilesystemSize;
     DISK_GEOMETRY DiskGeometry;
+    ULONG Index;
     ULONG Size;
 
     // Get disk geometry.
@@ -353,9 +354,13 @@ NtfsMountVolume(IN PDEVICE_OBJECT TargetDeviceObject,
     ExInitializeFastMutex(&VolCB->StreamListMutex);
     ExInitializeFastMutex(&VolCB->MissingNameMutex);
     InitializeListHead(&VolCB->MissingNameList);
+    for (Index = 0; Index < NTFS_MISSING_NAME_BUCKETS; Index++)
+        InitializeListHead(&VolCB->MissingNameHash[Index]);
     VolCB->MissingNameCount = 0;
     ExInitializeFastMutex(&VolCB->RecordCacheMutex);
     InitializeListHead(&VolCB->RecordCacheList);
+    for (Index = 0; Index < NTFS_RECORD_CACHE_BUCKETS; Index++)
+        InitializeListHead(&VolCB->RecordCacheHash[Index]);
     VolCB->RecordCacheCount = 0;
     ExInitializeFastMutex(&VolCB->DirCacheMutex);
     VolCB->CachedDir = NULL;
@@ -455,11 +460,14 @@ NtfsIsNameKnownMissing(_In_ PVolumeContextBlock VolCB,
 
     Hash = NtfsHashName(Name, Length);
     ExAcquireFastMutex(&VolCB->MissingNameMutex);
-    for (Entry = VolCB->MissingNameList.Flink;
-         Entry != &VolCB->MissingNameList;
+    for (Entry = VolCB->MissingNameHash[
+             Hash & (NTFS_MISSING_NAME_BUCKETS - 1)].Flink;
+         Entry != &VolCB->MissingNameHash[
+             Hash & (NTFS_MISSING_NAME_BUCKETS - 1)];
          Entry = Entry->Flink)
     {
-        PNtfsMissingName Missing = CONTAINING_RECORD(Entry, NtfsMissingName, Link);
+        PNtfsMissingName Missing =
+            CONTAINING_RECORD(Entry, NtfsMissingName, HashLink);
 
         if (NtfsMissingNameMatches(Missing, Hash, Name, Length))
         {
@@ -499,11 +507,14 @@ NtfsRecordNameMissing(_In_ PVolumeContextBlock VolCB,
     RtlCopyMemory(Missing->Name, Name, Length * sizeof(WCHAR));
 
     ExAcquireFastMutex(&VolCB->MissingNameMutex);
-    for (Entry = VolCB->MissingNameList.Flink;
-         Entry != &VolCB->MissingNameList;
+    for (Entry = VolCB->MissingNameHash[
+             Hash & (NTFS_MISSING_NAME_BUCKETS - 1)].Flink;
+         Entry != &VolCB->MissingNameHash[
+             Hash & (NTFS_MISSING_NAME_BUCKETS - 1)];
          Entry = Entry->Flink)
     {
-        if (NtfsMissingNameMatches(CONTAINING_RECORD(Entry, NtfsMissingName, Link),
+        if (NtfsMissingNameMatches(
+                CONTAINING_RECORD(Entry, NtfsMissingName, HashLink),
                                    Hash, Name, Length))
         {
             ExReleaseFastMutex(&VolCB->MissingNameMutex);
@@ -513,13 +524,20 @@ NtfsRecordNameMissing(_In_ PVolumeContextBlock VolCB,
     }
 
     InsertHeadList(&VolCB->MissingNameList, &Missing->Link);
+    InsertHeadList(
+        &VolCB->MissingNameHash[
+            Hash & (NTFS_MISSING_NAME_BUCKETS - 1)],
+        &Missing->HashLink);
     VolCB->MissingNameCount++;
     while (VolCB->MissingNameCount > NTFS_MAX_MISSING_NAMES)
     {
         PLIST_ENTRY Oldest = RemoveTailList(&VolCB->MissingNameList);
+        PNtfsMissingName Evicted =
+            CONTAINING_RECORD(Oldest, NtfsMissingName, Link);
 
+        RemoveEntryList(&Evicted->HashLink);
         VolCB->MissingNameCount--;
-        ExFreePoolWithTag(CONTAINING_RECORD(Oldest, NtfsMissingName, Link), TAG_NTFS);
+        ExFreePoolWithTag(Evicted, TAG_NTFS);
     }
     ExReleaseFastMutex(&VolCB->MissingNameMutex);
 }
@@ -537,15 +555,19 @@ NtfsForgetMissingName(_In_ PVolumeContextBlock VolCB,
 
     Hash = NtfsHashName(Name, Length);
     ExAcquireFastMutex(&VolCB->MissingNameMutex);
-    for (Entry = VolCB->MissingNameList.Flink;
-         Entry != &VolCB->MissingNameList;
+    for (Entry = VolCB->MissingNameHash[
+             Hash & (NTFS_MISSING_NAME_BUCKETS - 1)].Flink;
+         Entry != &VolCB->MissingNameHash[
+             Hash & (NTFS_MISSING_NAME_BUCKETS - 1)];
          Entry = Entry->Flink)
     {
-        PNtfsMissingName Missing = CONTAINING_RECORD(Entry, NtfsMissingName, Link);
+        PNtfsMissingName Missing =
+            CONTAINING_RECORD(Entry, NtfsMissingName, HashLink);
 
         if (NtfsMissingNameMatches(Missing, Hash, Name, Length))
         {
             RemoveEntryList(&Missing->Link);
+            RemoveEntryList(&Missing->HashLink);
             VolCB->MissingNameCount--;
             ExReleaseFastMutex(&VolCB->MissingNameMutex);
             ExFreePoolWithTag(Missing, TAG_NTFS);
@@ -559,6 +581,7 @@ VOID
 NtfsForgetAllMissingNames(_In_ PVolumeContextBlock VolCB)
 {
     LIST_ENTRY Stale;
+    ULONG Index;
 
     if (!VolCB)
         return;
@@ -572,6 +595,8 @@ NtfsForgetAllMissingNames(_In_ PVolumeContextBlock VolCB)
         Stale.Blink->Flink = &Stale;
         InitializeListHead(&VolCB->MissingNameList);
     }
+    for (Index = 0; Index < NTFS_MISSING_NAME_BUCKETS; Index++)
+        InitializeListHead(&VolCB->MissingNameHash[Index]);
     VolCB->MissingNameCount = 0;
     ExReleaseFastMutex(&VolCB->MissingNameMutex);
 
@@ -631,6 +656,7 @@ NtfsTrimRecordCache(_In_ PVolumeContextBlock VolCB)
         if (Candidate->InUse == 0)
         {
             RemoveEntryList(&Candidate->Link);
+            RemoveEntryList(&Candidate->HashLink);
             VolCB->RecordCacheCount--;
             NtfsFileRecordDestroy(Candidate->Record);
             ExFreePoolWithTag(Candidate, TAG_NTFS);
@@ -653,11 +679,14 @@ NtfsAcquireCachedRecord(_In_ PVolumeContextBlock VolCB,
 
     Hash = NtfsHashName(Name, Length);
     ExAcquireFastMutex(&VolCB->RecordCacheMutex);
-    for (Entry = VolCB->RecordCacheList.Flink;
-         Entry != &VolCB->RecordCacheList;
+    for (Entry = VolCB->RecordCacheHash[
+             Hash & (NTFS_RECORD_CACHE_BUCKETS - 1)].Flink;
+         Entry != &VolCB->RecordCacheHash[
+             Hash & (NTFS_RECORD_CACHE_BUCKETS - 1)];
          Entry = Entry->Flink)
     {
-        PNtfsCachedRecord Candidate = CONTAINING_RECORD(Entry, NtfsCachedRecord, Link);
+        PNtfsCachedRecord Candidate =
+            CONTAINING_RECORD(Entry, NtfsCachedRecord, HashLink);
 
         if (NtfsCachedRecordMatches(Candidate, Hash, Name, Length))
         {
@@ -710,6 +739,10 @@ NtfsCacheRecord(_In_ PVolumeContextBlock VolCB,
 
     ExAcquireFastMutex(&VolCB->RecordCacheMutex);
     InsertHeadList(&VolCB->RecordCacheList, &New->Link);
+    InsertHeadList(
+        &VolCB->RecordCacheHash[
+            Hash & (NTFS_RECORD_CACHE_BUCKETS - 1)],
+        &New->HashLink);
     VolCB->RecordCacheCount++;
     NtfsTrimRecordCache(VolCB);
     ExReleaseFastMutex(&VolCB->RecordCacheMutex);
@@ -755,15 +788,19 @@ NtfsEvictCachedRecord(_In_ PVolumeContextBlock VolCB,
 
     Hash = NtfsHashName(Name, Length);
     ExAcquireFastMutex(&VolCB->RecordCacheMutex);
-    for (Entry = VolCB->RecordCacheList.Flink;
-         Entry != &VolCB->RecordCacheList;
+    for (Entry = VolCB->RecordCacheHash[
+             Hash & (NTFS_RECORD_CACHE_BUCKETS - 1)].Flink;
+         Entry != &VolCB->RecordCacheHash[
+             Hash & (NTFS_RECORD_CACHE_BUCKETS - 1)];
          Entry = Entry->Flink)
     {
-        PNtfsCachedRecord Candidate = CONTAINING_RECORD(Entry, NtfsCachedRecord, Link);
+        PNtfsCachedRecord Candidate =
+            CONTAINING_RECORD(Entry, NtfsCachedRecord, HashLink);
 
         if (NtfsCachedRecordMatches(Candidate, Hash, Name, Length))
         {
             RemoveEntryList(&Candidate->Link);
+            RemoveEntryList(&Candidate->HashLink);
             VolCB->RecordCacheCount--;
             Candidate->Evicted = TRUE;
             /* Deleting the file frees the record inside the library, so the
