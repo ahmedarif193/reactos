@@ -873,6 +873,8 @@ DxgkContextInit(VOID)
     Status = DxgkHandleManagerInitialize();
     if (NT_SUCCESS(Status))
         Status = DxgkKeyedMutexInitialize();
+    if (NT_SUCCESS(Status))
+        Status = DxgkTrimNotificationInitialize();
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -881,6 +883,7 @@ DxgkContextInit(VOID)
     {
         DXGKRNL_ERR("DxgkContextInit: PsSetCreateProcessNotifyRoutineEx "
                     "failed 0x%08lX\n", Status);
+        DxgkTrimNotificationUninitialize();
         DxgkKeyedMutexUninitialize();
         DxgkHandleManagerUninitialize();
         return Status;
@@ -909,6 +912,7 @@ DxgkContextUninit(VOID)
         DxgkProcessNotifyRegistered = FALSE;
         DXGKRNL_TRACE("DxgkContextUninit: process notify deregistered\n");
     }
+    DxgkTrimNotificationUninitialize();
     DxgkKeyedMutexUninitialize();
     DxgkHandleManagerUninitialize();
 }
@@ -1855,6 +1859,7 @@ DxgkProcessCleanup(
     DxgkVidMmProcessCleanup(Process);
     DxgkD3dkmtProcessCleanup(Process);
     DxgkKeyedMutexProcessCleanup(Process);
+    DxgkTrimNotificationProcessCleanup(Process);
     DxgkPurgeProcessHandles(Process);
     Count = DxgkReferenceStartedAdapters(Snapshot, DXGK_MAX_ADAPTERS);
 
