@@ -1719,7 +1719,10 @@ DxgkpQueryAdapterInfoCaptured(
             {
                 DXGKP_QUERY_RETURN(STATUS_BUFFER_TOO_SMALL);
             }
-            /* Native fences require hardware scheduling: truthfully absent. */
+            /* Native fences are a hardware-scheduling feature.  This stack
+             * schedules in software and does not report hardware queues, so
+             * the bit stays clear -- which is also what the native WARP
+             * adapter reports at this level. */
             RtlZeroMemory(&Caps, sizeof(Caps));
             _SEH2_TRY
             {
@@ -3838,20 +3841,35 @@ DxgkCreateSynchronizationObject2(
         return STATUS_INVALID_PARAMETER;
     if (pData->Info.Type == D3DDDI_MONITORED_FENCE && pData->Info.Flags.NoSignal && pData->Info.Flags.NoWait)
         return STATUS_INVALID_PARAMETER;
-    if (pData->Info.Type != D3DDDI_MONITORED_FENCE && pData->Info.Flags.Value != 0)
-        return STATUS_NOT_SUPPORTED;
-    if (pData->Info.Type == D3DDDI_MONITORED_FENCE)
+    if (pData->Info.Type != D3DDDI_MONITORED_FENCE && pData->Info.Type != D3DDDI_PERIODIC_MONITORED_FENCE)
+    {
+        /* Legacy object types share only through the same global namespace;
+         * no other flag applies to them. */
+        RtlZeroMemory(&SupportedFlags, sizeof(SupportedFlags));
+        SupportedFlags.Shared = 1;
+        if ((pData->Info.Flags.Value & ~SupportedFlags.Value) != 0)
+            return STATUS_NOT_SUPPORTED;
+    }
+    else
     {
         /* This stack currently exposes one physical adapter per logical
          * adapter. Zero means all physical adapters; bit zero selects the
          * sole physical adapter explicitly. */
-        if (pData->Info.MonitoredFence.Padding != 0 || (pData->Info.MonitoredFence.EngineAffinity & ~1u) != 0)
+        if (pData->Info.Type == D3DDDI_MONITORED_FENCE &&
+            (pData->Info.MonitoredFence.Padding != 0 || (pData->Info.MonitoredFence.EngineAffinity & ~1u) != 0))
+            return STATUS_INVALID_PARAMETER;
+        if (pData->Info.Type == D3DDDI_PERIODIC_MONITORED_FENCE &&
+            (pData->Info.PeriodicMonitoredFence.Padding != 0 || (pData->Info.PeriodicMonitoredFence.EngineAffinity & ~1u) != 0))
             return STATUS_INVALID_PARAMETER;
         RtlZeroMemory(&SupportedFlags, sizeof(SupportedFlags));
         SupportedFlags.NoSignal = 1;
         SupportedFlags.NoWait = 1;
         SupportedFlags.NoSignalMaxValueOnTdr = 1;
         SupportedFlags.NoGPUAccess = 1;
+        SupportedFlags.Shared = 1;
+        /* Top-of-pipeline publishes at submission instead of completion; the
+         * ordered scheduler already carries that timing. */
+        SupportedFlags.TopOfPipeline = 1;
         if ((pData->Info.Flags.Value & ~SupportedFlags.Value) != 0)
             return STATUS_NOT_SUPPORTED;
     }
@@ -3863,6 +3881,7 @@ DxgkCreateSynchronizationObject2(
         case D3DDDI_FENCE:
         case D3DDDI_CPU_NOTIFICATION:
         case D3DDDI_MONITORED_FENCE:
+        case D3DDDI_PERIODIC_MONITORED_FENCE:
             break;
         default:
             return STATUS_NOT_SUPPORTED;
@@ -3871,15 +3890,17 @@ DxgkCreateSynchronizationObject2(
     Status = DxgkCreateSynchronizationObject2Core(pData->hDevice, &pData->Info, &pData->hSyncObject);
     if (NT_SUCCESS(Status))
     {
-        pData->Info.SharedHandle = 0;
+        pData->Info.SharedHandle = pData->Info.Flags.Shared ? DxgkSyncObjectQueryShareHandle(pData->hSyncObject) : 0;
 
-        if (pData->Info.Type == D3DDDI_MONITORED_FENCE)
+        if (pData->Info.Type == D3DDDI_MONITORED_FENCE || pData->Info.Type == D3DDDI_PERIODIC_MONITORED_FENCE)
         {
             PVOID UserVa = NULL;
             D3DGPU_VIRTUAL_ADDRESS FenceGpuVa = 0;
             NTSTATUS PageStatus;
 
-            PageStatus = DxgkSyncObjectAttachMonitoredPage(pData->hSyncObject, pData->Info.MonitoredFence.InitialFenceValue, pData->Info.Flags, &UserVa, &FenceGpuVa);
+            UINT64 InitialValue = pData->Info.Type == D3DDDI_MONITORED_FENCE ? pData->Info.MonitoredFence.InitialFenceValue : 0;
+
+            PageStatus = DxgkSyncObjectAttachMonitoredPage(pData->hSyncObject, InitialValue, pData->Info.Flags, &UserVa, &FenceGpuVa);
             if (!NT_SUCCESS(PageStatus))
             {
                 D3DKMT_DESTROYSYNCHRONIZATIONOBJECT DestroySync;
@@ -3891,8 +3912,16 @@ DxgkCreateSynchronizationObject2(
                 return PageStatus;
             }
 
-            pData->Info.MonitoredFence.FenceValueCPUVirtualAddress = UserVa;
-            pData->Info.MonitoredFence.FenceValueGPUVirtualAddress = FenceGpuVa;
+            if (pData->Info.Type == D3DDDI_MONITORED_FENCE)
+            {
+                pData->Info.MonitoredFence.FenceValueCPUVirtualAddress = UserVa;
+                pData->Info.MonitoredFence.FenceValueGPUVirtualAddress = FenceGpuVa;
+            }
+            else
+            {
+                pData->Info.PeriodicMonitoredFence.FenceValueCPUVirtualAddress = UserVa;
+                pData->Info.PeriodicMonitoredFence.FenceValueGPUVirtualAddress = FenceGpuVa;
+            }
         }
     }
 
@@ -6076,6 +6105,17 @@ DxgkpDispatchBufferedIoctl(
             return Status;
         }
 
+        case IOCTL_D3DKMT_OPENSYNCHRONIZATIONOBJECT:
+        {
+            if (InputLength < sizeof(D3DKMT_OPENSYNCHRONIZATIONOBJECT) || OutputLength < sizeof(D3DKMT_OPENSYNCHRONIZATIONOBJECT) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+
+            Status = DxgkOpenSynchronizationObject((D3DKMT_OPENSYNCHRONIZATIONOBJECT *)SystemBuffer);
+            if (NT_SUCCESS(Status))
+                Irp->IoStatus.Information = sizeof(D3DKMT_OPENSYNCHRONIZATIONOBJECT);
+            return Status;
+        }
+
         case IOCTL_D3DKMT_WAITFORSYNCHRONIZATIONOBJECT2:
         {
             if (InputLength < sizeof(D3DKMT_WAITFORSYNCHRONIZATIONOBJECT2) || SystemBuffer == NULL)
@@ -6178,6 +6218,8 @@ DxgkpDispatchBufferedIoctl(
                 InterfaceSize = DXGKRNL_INTERFACE_VERSION_3_SIZE;
             else if (Version == DXGKRNL_INTERFACE_VERSION_4)
                 InterfaceSize = DXGKRNL_INTERFACE_VERSION_4_SIZE;
+            else if (Version == DXGKRNL_INTERFACE_VERSION_5)
+                InterfaceSize = DXGKRNL_INTERFACE_VERSION_5_SIZE;
             else
             {
                 DXGKRNL_WARN("IOCTL_DXGKRNL_EXCHANGE_INTERFACE: "
@@ -6270,6 +6312,8 @@ DxgkpDispatchBufferedIoctl(
                 pInterface->RxgkIntPfnCreateAllocation2 = (PDXGADAPTER_CREATEALLOCATION2)DxgkCreateAllocation2;
             if (Version >= DXGKRNL_INTERFACE_VERSION_4)
                 pInterface->RxgkIntPfnGetAllocationPriority = (PDXGADAPTER_GETALLOCATIONPRIORITY)DxgkGetAllocationPriority;
+            if (Version >= DXGKRNL_INTERFACE_VERSION_5)
+                pInterface->RxgkIntPfnOpenSynchronizationObject = (PDXGADAPTER_OPENSYNCHRONIZATIONOBJECT)DxgkOpenSynchronizationObject;
 
             Irp->IoStatus.Information = InterfaceSize;
 
@@ -6453,6 +6497,7 @@ DxgkDispatchDeviceControl(
         case IOCTL_D3DKMT_SETVIDPNSOURCEOWNER2:
         case IOCTL_D3DKMT_WAITFORVERTICALBLANKEVENT2:
         case IOCTL_D3DKMT_CREATESYNCHRONIZATIONOBJECT2:
+        case IOCTL_D3DKMT_OPENSYNCHRONIZATIONOBJECT:
         case IOCTL_D3DKMT_WAITFORSYNCHRONIZATIONOBJECT2:
         case IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECT2:
         /* WDDM 2.0 paging queue / video memory */

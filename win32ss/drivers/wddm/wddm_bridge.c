@@ -302,7 +302,7 @@ WddmBridgeInit(VOID)
      * IRP_MJ_INTERNAL_DEVICE_CONTROL for kernel-to-kernel communication.
      */
     ExchangeIn.Version = DXGKRNL_INTERFACE_VERSION_CURRENT;
-    ExchangeIn.Size = DXGKRNL_INTERFACE_VERSION_4_SIZE;
+    ExchangeIn.Size = DXGKRNL_INTERFACE_VERSION_5_SIZE;
     RtlZeroMemory(&ExchangeOut, sizeof(ExchangeOut));
     Status = WddmBridgeSendIoctlToDevice(DeviceObject, IOCTL_DXGKRNL_EXCHANGE_INTERFACE, &ExchangeIn, sizeof(ExchangeIn), &ExchangeOut, sizeof(ExchangeOut), &Information);
 
@@ -339,7 +339,7 @@ WddmBridgeInit(VOID)
     if (NT_SUCCESS(Status) && Information != ExchangeIn.Size)
         Status = STATUS_INFO_LENGTH_MISMATCH;
 
-    if (NT_SUCCESS(Status) && (ExchangeOut.RxgkIntPfnCreateDevice == NULL || ExchangeOut.RxgkIntPfnPresent == NULL || ExchangeOut.RxgkIntPfnQueryAdapterInfo == NULL || (ExchangeIn.Version >= DXGKRNL_INTERFACE_VERSION_2 && (ExchangeOut.RxgkIntPfnCreateContextVirtual == NULL || ExchangeOut.RxgkIntPfnSubmitCommand == NULL)) || (ExchangeIn.Version >= DXGKRNL_INTERFACE_VERSION_3 && ExchangeOut.RxgkIntPfnCreateAllocation2 == NULL) || (ExchangeIn.Version >= DXGKRNL_INTERFACE_VERSION_4 && ExchangeOut.RxgkIntPfnGetAllocationPriority == NULL)))
+    if (NT_SUCCESS(Status) && (ExchangeOut.RxgkIntPfnCreateDevice == NULL || ExchangeOut.RxgkIntPfnPresent == NULL || ExchangeOut.RxgkIntPfnQueryAdapterInfo == NULL || (ExchangeIn.Version >= DXGKRNL_INTERFACE_VERSION_2 && (ExchangeOut.RxgkIntPfnCreateContextVirtual == NULL || ExchangeOut.RxgkIntPfnSubmitCommand == NULL)) || (ExchangeIn.Version >= DXGKRNL_INTERFACE_VERSION_3 && ExchangeOut.RxgkIntPfnCreateAllocation2 == NULL) || (ExchangeIn.Version >= DXGKRNL_INTERFACE_VERSION_4 && ExchangeOut.RxgkIntPfnGetAllocationPriority == NULL) || (ExchangeIn.Version >= DXGKRNL_INTERFACE_VERSION_5 && ExchangeOut.RxgkIntPfnOpenSynchronizationObject == NULL)))
         Status = STATUS_INVALID_DEVICE_STATE;
 
     if (!NT_SUCCESS(Status))

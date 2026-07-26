@@ -2367,7 +2367,9 @@ DxgkpNotifyVSync(
     KeAcquireSpinLock(&Queue->QueueLock, &OldIrql);
     HasEntries = Queue->Count != 0;
     KeReleaseSpinLock(&Queue->QueueLock, OldIrql);
-    if (!HasEntries)
+    /* A periodic monitored fence owes an advance on every pulse even when no
+     * present is queued, and that advance runs at PASSIVE_LEVEL. */
+    if (!HasEntries && !DxgkSyncHasPeriodicFences())
     {
         DxgkpReleasePresentQueues(Adapter);
         return;
@@ -2403,6 +2405,8 @@ DxgkpVSyncWorker(
     ASSERT(Work != NULL && Work->Queue != NULL && Work->Queue->Adapter != NULL);
     Queue = Work->Queue;
     Adapter = Queue->Adapter;
+
+    DxgkSyncAdvancePeriodicFences(Adapter, Queue->VidPnSourceId);
 
     for (;;)
     {
