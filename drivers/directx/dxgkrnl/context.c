@@ -1059,6 +1059,11 @@ DxgkCreateDevice(
          * and to DxgkDdiCreateContext (as MiniportDeviceContext per-device).
          */
         Device->hMiniportDevice = CreateDeviceArg.hDevice;
+        /* Paging packets that belong to the process rather than to one device
+         * (page-table updates, TLB invalidation) are submitted against this
+         * handle; publish the first one the process establishes. */
+        if (Device->ProcessRecord != NULL && Device->ProcessRecord->PagingMiniportDevice == NULL)
+            Device->ProcessRecord->PagingMiniportDevice = CreateDeviceArg.hDevice;
 
         DXGKRNL_TRACE("DxgkCreateDevice: miniport device handle %p\n", Device->hMiniportDevice);
     }

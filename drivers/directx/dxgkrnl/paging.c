@@ -48,12 +48,17 @@ DxgkpPagingBufferBytes(
 static VOID
 DxgkpPagingFillBuildArgs(
     _In_ CONST DXGKRNL_PAGING_OP *Op,
+    _In_ BOOLEAN FirstPass,
     _Inout_ DXGKARG_BUILDPAGINGBUFFER *BuildArgs)
 {
     switch (Op->Type)
     {
         case DxgkPagingOpTransfer:
             BuildArgs->Operation = DXGK_OPERATION_TRANSFER;
+            /* The first pass of a multipass transfer is its start boundary;
+             * the miniport reports the end by completing the build. */
+            BuildArgs->Transfer.Flags.TransferStart = FirstPass ? 1 : 0;
+            BuildArgs->Transfer.Flags.AllocationIsIdle = Op->AllocationIsIdle ? 1 : 0;
             BuildArgs->Transfer.hAllocation = Op->hMiniportAllocation;
             BuildArgs->Transfer.TransferOffset = Op->TransferOffset;
             BuildArgs->Transfer.TransferSize = Op->TransferSize;
@@ -235,7 +240,7 @@ DxgkPagingExecute(
         BuildArgs.pDmaBuffer = DmaBuffer->VirtualAddress;
         BuildArgs.DmaSize = DmaBuffer->Capacity;
         BuildArgs.MultipassOffset = MultipassOffset;
-        DxgkpPagingFillBuildArgs(Op, &BuildArgs);
+        DxgkpPagingFillBuildArgs(Op, Pass == 0, &BuildArgs);
 
         if (!DxgkAcquireKmdCall(Adapter))
         {
