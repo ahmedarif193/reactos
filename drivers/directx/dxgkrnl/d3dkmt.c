@@ -122,6 +122,11 @@ typedef struct _DXGKRNL_FILE_CONTEXT
  * reporting stays at the last ABI- and behavior-complete level until the full
  * initialization-data layout, non-empty render path, scheduler, VidMm,
  * synchronization, teardown, and native comparison contracts are complete.
+ *
+ * The scheduler and VidMm halves of that list are now owned and complete in
+ * dxgmms2, which reports its own ceiling; this constant covers everything
+ * else (display, presentation, protected content, native comparison), and
+ * DxgkpGetReportedDriverVersion takes the minimum of the two.
  */
 #define DXGKP_OS_COMPLETED_WDDM_LEVEL KMT_DRIVERVERSION_WDDM_1_3
 
@@ -169,6 +174,7 @@ DxgkpGetReportedDriverVersion(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
     D3DKMT_DRIVERVERSION Declared;
+    D3DKMT_DRIVERVERSION Provider;
 
     if (Adapter == NULL || Adapter->MiniportContext == NULL)
         return KMT_DRIVERVERSION_WDDM_1_0;
@@ -176,7 +182,16 @@ DxgkpGetReportedDriverVersion(
     Declared = DxgkpMiniportDeclaredWddmLevel(Adapter->MiniportContext->InitData.s.Version);
     if (Declared < KMT_DRIVERVERSION_WDDM_2_0)
         return Declared;
-    return min(Declared, DXGKP_OS_COMPLETED_WDDM_LEVEL);
+
+    /*
+     * Two independent ceilings, and the public number is the lower of both:
+     * what this OS implements end to end, and what the memory-manager and
+     * scheduler provider reports as complete.  The provider's number is not
+     * decoration — a provider that owns less than it does today would lower
+     * the version the public path reports.
+     */
+    Provider = DxgkpMiniportDeclaredWddmLevel(Adapter->Mms2HighestCompleteWddmVersion);
+    return min(min(Declared, DXGKP_OS_COMPLETED_WDDM_LEVEL), Provider);
 }
 
 static BOOLEAN

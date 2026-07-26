@@ -6,7 +6,6 @@
 
 #include "vidmm_core.h"
 
-#define NDEBUG
 #include <debug.h>
 
 static BOOLEAN
@@ -187,8 +186,18 @@ Dxgmms2VidMmCoreReserve(
         return STATUS_NO_MEMORY;
     if (Segment->UsedSize > Limit || AlignedSize > Limit - Segment->UsedSize)
         return STATUS_NO_MEMORY;
+    /*
+     * An exhausted range pool means no segment can take another placement
+     * right now.  Report it as a space failure so the caller's eviction pass
+     * is the recovery — evicting anywhere returns a record here — but say so
+     * out loud, because "no memory" from a full metadata pool is a different
+     * condition from a full segment and should not be diagnosed as one.
+     */
     if (IsListEmpty(&Core->FreeRangeList))
-        return STATUS_INSUFFICIENT_RESOURCES;
+    {
+        DPRINT1("Dxgmms2VidMmCoreReserve: placement-record pool exhausted (%lu live)\n", Core->LiveRangeCount);
+        return STATUS_NO_MEMORY;
+    }
 
     if (Dxgmms2VidMmAlignUp(Segment->BumpOffset, Info->Alignment, &Aligned) &&
         Aligned <= Limit && AlignedSize <= Limit - Aligned)

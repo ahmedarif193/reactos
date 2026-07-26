@@ -321,7 +321,6 @@ Dxgmms2BeginStopAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _In_ const DXGMMS2_
             return Status;
         }
         Dxgmms2SchedulerStopAdapter(Context);
-        Dxgmms2VidMmStopAdapter(Context);
         Status = Dxgmms2ContextStreamManagerBeginStop(&Context->ContextStreamManager, Info->Reason);
         if (!NT_SUCCESS(Status))
         {

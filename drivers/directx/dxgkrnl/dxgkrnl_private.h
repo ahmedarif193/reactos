@@ -1296,6 +1296,13 @@ typedef struct _DXGKRNL_GPUVA_RANGE
     ULONGLONG                   ReservationSize;
 
     /*
+     * Number of submitted-but-unretired command buffers executing out of this
+     * range.  A pinned range cannot be unmapped or freed: the miniport is
+     * holding its GPU virtual address.  Protected by GpuVaLock.
+     */
+    ULONG                       SubmissionPinCount;
+
+    /*
      * Linkage in DXGKRNL_PROCESS->GpuVaRangeList (ascending VA order).
      * Protected by DXGKRNL_PROCESS->GpuVaLock.
      */
@@ -2072,6 +2079,19 @@ DxgkGpuVaPageTableReady(
 BOOLEAN
 DxgkGpuVaValidateRange(
     _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_ D3DGPU_VIRTUAL_ADDRESS Address,
+    _In_ ULONGLONG Size);
+
+BOOLEAN
+DxgkGpuVaPinRange(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_ D3DGPU_VIRTUAL_ADDRESS Address,
+    _In_ ULONGLONG Size);
+
+VOID
+DxgkGpuVaUnpinRange(
     _In_ PDXGKRNL_PROCESS Process,
     _In_ D3DGPU_VIRTUAL_ADDRESS Address,
     _In_ ULONGLONG Size);

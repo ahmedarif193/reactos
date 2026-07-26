@@ -121,6 +121,8 @@ typedef struct _VIDSCH_DMA_PACKET
     /* Physical DMA descriptor, or GPU VA geometry for virtual submits. */
     PDXGKRNL_DMA_BUFFER         DmaBuffer;
     D3DGPU_VIRTUAL_ADDRESS      DmaBufferGpuVa;
+    /* Process whose GPU VA range this packet pinned, released once. */
+    struct _DXGKRNL_PROCESS    *GpuVaPinProcess;
     ULONG                       VirtualDmaBufferSize;
 
     /* Private driver data passed through to DxgkDdiSubmitCommand. */
