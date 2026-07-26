@@ -38,7 +38,11 @@ extern "C" {
 
 #if defined(FF_USE_REACTOS_TYPES)
 #define FF_INTDEF 2
+#ifdef __REACTOS__
+#include <minwindef.h>
+#else
 #include <windef.h>
+#endif
 typedef ULONGLONG QWORD;
 
 #elif defined(_WIN32)		/* Windows VC++ (for development only) */
