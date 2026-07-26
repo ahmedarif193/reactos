@@ -114,6 +114,51 @@ NtfsSplitParentName(
     return TRUE;
 }
 
+static
+BOOLEAN
+NtfsTakeCachedLookupParent(
+    _In_ PVolumeContextBlock VolCB,
+    _In_ PUNICODE_STRING Name,
+    _Out_ PNtfsFileRecord* File)
+{
+    USHORT CachedLength;
+    USHORT NameLength;
+
+    *File = NULL;
+    if (VolCB->CachedLookupParent &&
+        VolCB->CachedLookupParentGeneration != VolCB->DirGeneration)
+    {
+        NtfsFileRecordDestroy(VolCB->CachedLookupParent);
+        VolCB->CachedLookupParent = NULL;
+        VolCB->CachedLookupParentPathLength = 0;
+    }
+    if (!VolCB->CachedLookupParent ||
+        !Name ||
+        !Name->Buffer)
+    {
+        return FALSE;
+    }
+
+    /* Directory opens may retain one trailing separator in the object name. */
+    NameLength = Name->Length / sizeof(WCHAR);
+    CachedLength = VolCB->CachedLookupParentPathLength;
+    if (!((NameLength == CachedLength) ||
+          (NameLength == CachedLength + 1 &&
+           Name->Buffer[NameLength - 1] == L'\\')) ||
+        RtlCompareMemory(VolCB->CachedLookupParentPath,
+                         Name->Buffer,
+                         CachedLength * sizeof(WCHAR)) !=
+            CachedLength * sizeof(WCHAR))
+    {
+        return FALSE;
+    }
+
+    *File = VolCB->CachedLookupParent;
+    VolCB->CachedLookupParent = NULL;
+    VolCB->CachedLookupParentPathLength = 0;
+    return TRUE;
+}
+
 /*
  * A cold miss in one directory should not resolve that directory from the
  * root again. Directory edits advance DirGeneration, making this parsed
@@ -524,6 +569,14 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         CurrentFile = CachedRecord->Record;
         Status = STATUS_SUCCESS;
     }
+    else if (Disposition == FILE_OPEN &&
+             NtfsTakeCachedLookupParent(
+                 VolCB,
+                 &FileObject->FileName,
+                 &CurrentFile))
+    {
+        Status = STATUS_SUCCESS;
+    }
     else
     {
         BOOLEAN ParentLookup =
@@ -583,6 +636,20 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         NtfsRecordNameMissing(VolCB,
                               FileObject->FileName.Buffer,
                               FileObject->FileName.Length / sizeof(WCHAR));
+    }
+
+    if (NT_SUCCESS(Status) &&
+        Disposition == FILE_OPEN &&
+        !(IrpSp->Parameters.Create.SecurityContext->DesiredAccess & DELETE) &&
+        !(IrpSp->Parameters.Create.Options & FILE_DELETE_ON_CLOSE) &&
+        !(NtfsFileRecordGetHeader(CurrentFile)->Flags & FR_IS_DIRECTORY) &&
+        (!VolCB->CachedLookupParent ||
+         VolCB->CachedLookupParentGeneration != VolCB->DirGeneration))
+    {
+        NtfsRememberLookupParent(
+            VolCB,
+            Mft,
+            &FileObject->FileName);
     }
 
     /* What we do here depends on the CreateDisposition value.
@@ -824,24 +891,25 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         }
     }
 
-    /* Assume that this is the first file stream request.
+    /* Data streams share section and lock state across their open handles.
      * For more details see:
      * https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_section_object_pointers
-     *
-     * TODO: Handle multiple opened files pointing to the same stream properly.
      */
-    FileCB->StreamCB = NtfsReferenceStreamContext(VolCB,
-                                                  CurrentFile,
-                                                  FileCB->RequestedType,
-                                                  FileCB->RequestedStream);
-    if (!FileCB->StreamCB)
+    if (!(NtfsFileRecordGetHeader(CurrentFile)->Flags & FR_IS_DIRECTORY))
     {
-        return NtfsCompleteFailedCreate(VolumeDeviceObject,
-                                        Irp,
-                                        FileCB,
-                                        CurrentFile,
-                                        CachedRecord,
-                                        STATUS_INSUFFICIENT_RESOURCES);
+        FileCB->StreamCB = NtfsReferenceStreamContext(VolCB,
+                                                      CurrentFile,
+                                                      FileCB->RequestedType,
+                                                      FileCB->RequestedStream);
+        if (!FileCB->StreamCB)
+        {
+            return NtfsCompleteFailedCreate(VolumeDeviceObject,
+                                            Irp,
+                                            FileCB,
+                                            CurrentFile,
+                                            CachedRecord,
+                                            STATUS_INSUFFICIENT_RESOURCES);
+        }
     }
 
     if (!!(NtfsFileRecordGetHeader(CurrentFile)->Flags & FR_IS_DIRECTORY))
@@ -940,8 +1008,12 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             FileCB->CommonFCBHeader.ValidDataLength.QuadPart= 0;
         }
 
-        /* Mm requires SectionObjectPointer for image and data sections. */
-        FileObject->SectionObjectPointer = &FileCB->StreamCB->SectionObjectPointers;
+        if (FileCB->StreamCB)
+        {
+            /* Mm requires SectionObjectPointer for image and data sections. */
+            FileObject->SectionObjectPointer =
+                &FileCB->StreamCB->SectionObjectPointers;
+        }
         FileObject->FsContext = FileCB;
     }
 

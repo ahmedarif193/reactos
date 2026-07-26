@@ -717,7 +717,11 @@ NtfsFsdQueryInformation(_In_    PDEVICE_OBJECT VolumeDeviceObject,
         goto Done;
     }
 
-    FileObject->SectionObjectPointer = &FileCB->StreamCB->SectionObjectPointers;
+    if (FileCB->StreamCB)
+    {
+        FileObject->SectionObjectPointer =
+            &FileCB->StreamCB->SectionObjectPointers;
+    }
     SystemBuffer = GetBuffer(Irp);
     BufferLength = IoStack->Parameters.QueryFile.Length;
 
