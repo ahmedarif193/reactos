@@ -1389,6 +1389,16 @@ struct _DXGKRNL_PROCESS
     HANDLE                      PagingMiniportDevice;
 
     /*
+     * Page-table writes are made under GpuVaLock, but describing them to the
+     * miniport means a paging submission, which is PASSIVE_LEVEL work and
+     * must not run while the lock raises IRQL.  The span touched under the
+     * lock is accumulated here and flushed once the lock is released.
+     */
+    BOOLEAN                     PageTableUpdatePending;
+    D3DGPU_VIRTUAL_ADDRESS      PageTableUpdateStart;
+    D3DGPU_VIRTUAL_ADDRESS      PageTableUpdateEnd;
+
+    /*
      * Root page table (a DXGKRNL_GPUVA_PAGE_TABLE, dxgkrnl-managed).
      * Created lazily on the first GPU VA map.
      */
@@ -2891,6 +2901,10 @@ DxgkPagingExecute(
     _In_ D3DKMT_HANDLE hSignalSyncObject,
     _In_ ULONG64 SignalFenceValue,
     _Out_opt_ PULONG OutPagingFenceId);
+
+VOID
+DxgkGpuVaFlushPageTableUpdates(
+    _In_ PDXGKRNL_PROCESS Process);
 
 BOOLEAN
 DxgkSyncHasPeriodicFences(VOID);

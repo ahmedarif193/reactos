@@ -5374,6 +5374,7 @@ DxgkpDispatchBufferedIoctl(
                 Protection.Value = pMap->Protection.Value;
                 Status = PrepareOnly ? DxgkGpuVaPlanMap(Adapter, Device->ProcessRecord, Allocation, MapOffset, pMap->BaseAddress, pMap->MinimumAddress, pMap->MaximumAddress, MapSize, Protection, &pMap->VirtualAddress) : DxgkGpuVaMap(Adapter, Device->ProcessRecord, Allocation, pMap->hAllocation, MapOffset, pMap->BaseAddress, pMap->MinimumAddress, pMap->MaximumAddress, MapSize, Protection, pMap->DriverProtection, &pMap->VirtualAddress);
             }
+            DxgkGpuVaFlushPageTableUpdates(Device->ProcessRecord);
             if (Allocation != NULL)
                 DxgkVidMmDereferenceAllocation(Allocation);
             DxgkDereferenceDevice(Device);
@@ -5474,6 +5475,7 @@ DxgkpDispatchBufferedIoctl(
                 return Status;
             }
             Status = DxgkGpuVaFree(ProcessRecord, pFree->BaseAddress, pFree->Size);
+            DxgkGpuVaFlushPageTableUpdates(ProcessRecord);
             DxgkDereferenceProcessRecord(ProcessRecord);
             DxgkDereferenceAdapter(Adapter);
             return Status;
@@ -5531,6 +5533,7 @@ DxgkpDispatchBufferedIoctl(
 
             if (NT_SUCCESS(Status))
                 Status = DxgkGpuVaApplyUpdate(Adapter, Device->ProcessRecord, Operations, pUpdate->NumOperations);
+            DxgkGpuVaFlushPageTableUpdates(Device->ProcessRecord);
             ExFreePoolWithTag(Operations, TAG_DXGK_GPUVA);
             DxgkDereferenceContext(VirtualContext);
             return Status;
