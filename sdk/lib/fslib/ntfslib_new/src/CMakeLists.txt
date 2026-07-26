@@ -41,3 +41,5 @@ target_sources(ntfslib_new PRIVATE
     volume/volume.cpp
     util.cpp
 )
+
+add_subdirectory(format)
