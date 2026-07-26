@@ -5931,10 +5931,13 @@ DxgkpDispatchBufferedIoctl(
                 return STATUS_BUFFER_TOO_SMALL;
 
             pQueuedLimit = (D3DKMT_SETQUEUEDLIMIT *)SystemBuffer;
-            if (!NT_SUCCESS(DxgkpValidateDeviceHandleForIoctl(pQueuedLimit->hDevice, NULL, NULL)))
-                return STATUS_INVALID_PARAMETER;
-
-            return STATUS_NOT_SUPPORTED;
+            /* The callback entry has served the real implementation all along;
+             * only this ioctl path was still answering "not supported". */
+            Status = DxgkSetQueuedLimit(pQueuedLimit);
+            /* D3DKMT_GET_QUEUEDLIMIT_* answers in the same buffer. */
+            if (NT_SUCCESS(Status))
+                Irp->IoStatus.Information = sizeof(D3DKMT_SETQUEUEDLIMIT);
+            return Status;
         }
 
         case IOCTL_D3DKMT_SETGAMMARAMP:
