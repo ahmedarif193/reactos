@@ -305,7 +305,7 @@ static void Test_SetVidPnSourceOwner(void)
         OwnerData.pVidPnSourceId = NULL;
         OwnerData.VidPnSourceCount = 0;
         Status = pfnD3DKMTSetVidPnSourceOwner(&OwnerData);
-        ok(NT_SUCCESS(Status),
+        ok_succeeded(Status,
            "SetVidPnSourceOwner release failed 0x%lx\n", Status);
     }
     else
@@ -498,7 +498,7 @@ static void Test_GetDeviceState(void)
     DevState.StateType = D3DKMT_DEVICESTATE_EXECUTION;
 
     Status = pfnD3DKMTGetDeviceState(&DevState);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "GetDeviceState with invalid device should fail, got 0x%lx\n", Status);
 
     DestroyTestDevice(hDevice);

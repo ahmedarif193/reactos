@@ -41,7 +41,7 @@ static void Test_DestroySyncObject_InvalidHandle(void)
     memset(&DestroyData, 0, sizeof(DestroyData));
     DestroyData.hSyncObject = 0xBAD0CAFE;
     Status = pfnD3DKMTDestroySynchronizationObject(&DestroyData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "DestroySyncObject with invalid handle should fail, got 0x%lx\n", Status);
 }
 
@@ -86,7 +86,7 @@ static void Test_CreateDestroySyncObject_Mutex(void)
         return;
     }
 
-    ok(NT_SUCCESS(Status),
+    ok_succeeded(Status,
        "CreateSyncObject(Mutex) failed with 0x%lx\n", Status);
 
     if (!NT_SUCCESS(Status))
@@ -103,11 +103,11 @@ static void Test_CreateDestroySyncObject_Mutex(void)
     memset(&DestroyData, 0, sizeof(DestroyData));
     DestroyData.hSyncObject = CreateData.hSyncObject;
     Status = pfnD3DKMTDestroySynchronizationObject(&DestroyData);
-    ok(NT_SUCCESS(Status), "DestroySyncObject failed with 0x%lx\n", Status);
+    ok_succeeded(Status, "DestroySyncObject failed with 0x%lx\n", Status);
 
     /* Double destroy */
     Status = pfnD3DKMTDestroySynchronizationObject(&DestroyData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "Double DestroySyncObject should fail, got 0x%lx\n", Status);
 
     DestroyTestDevice(hDevice);
@@ -173,7 +173,7 @@ static void Test_CreateSyncObject_Semaphore(void)
     CreateData.Info.Semaphore.MaxCount = 1;
     CreateData.Info.Semaphore.InitialCount = 0;
     Status = pfnD3DKMTCreateSynchronizationObject(&CreateData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "CreateSyncObject with invalid device should fail, got 0x%lx\n", Status);
 
     DestroyTestDevice(hDevice);
@@ -217,7 +217,7 @@ static void Test_WaitForIdle_InvalidHandle(void)
     memset(&WaitData, 0, sizeof(WaitData));
     WaitData.hDevice = 0xBAD0CAFE;
     Status = pfnD3DKMTWaitForIdle(&WaitData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "WaitForIdle with invalid device should fail, got 0x%lx\n", Status);
 }
 

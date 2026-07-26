@@ -41,7 +41,7 @@ START_TEST(vc4kmt_smoke)
     }
 
     Status = vc4kmt_bo_create(Device, 4096, &ClBo);
-    ok(NT_SUCCESS(Status), "vc4kmt_bo_create failed 0x%08lX\n", Status);
+    ok_succeeded(Status, "vc4kmt_bo_create failed 0x%08lX\n", Status);
     if (!NT_SUCCESS(Status))
         goto cleanup;
 
@@ -49,7 +49,7 @@ START_TEST(vc4kmt_smoke)
     ok(vc4kmt_bo_gpuva(&ClBo) != 0, "CL GPU VA is zero\n");
 
     Status = vc4kmt_bo_map(Device, &ClBo, &CpuVa);
-    ok(NT_SUCCESS(Status), "vc4kmt_bo_map failed 0x%08lX\n", Status);
+    ok_succeeded(Status, "vc4kmt_bo_map failed 0x%08lX\n", Status);
     if (!NT_SUCCESS(Status) || CpuVa == NULL)
         goto cleanup;
 
@@ -71,14 +71,14 @@ START_TEST(vc4kmt_smoke)
     Submit.RclEnd = vc4kmt_bo_gpuva(&ClBo);
 
     Status = vc4kmt_submit_cl(Device, &Submit, &Fence);
-    ok(NT_SUCCESS(Status),
+    ok_succeeded(Status,
        "vc4kmt_submit_cl failed 0x%08lX -- allocation-relative transport broken?\n",
        Status);
     if (!NT_SUCCESS(Status))
         goto cleanup;
 
     Status = vc4kmt_wait(Device, &Fence, INFINITE);
-    ok(NT_SUCCESS(Status), "vc4kmt_wait failed 0x%08lX\n", Status);
+    ok_succeeded(Status, "vc4kmt_wait failed 0x%08lX\n", Status);
     if (Fence.CpuValue != NULL)
     {
         ok(*Fence.CpuValue >= Fence.Value,

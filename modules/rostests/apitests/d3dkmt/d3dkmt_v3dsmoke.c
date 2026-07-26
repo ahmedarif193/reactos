@@ -382,7 +382,7 @@ SmokePhaseB(
                 Status = pfnEscape(&Escape);
             }
 
-            ok(NT_SUCCESS(Status),
+            ok_succeeded(Status,
                "PhaseB submission failed 0x%08lX\n", Status);
             V3dProof("V3DSMOKE: clear-job submit status=0x%08lX\n", Status);
 
@@ -401,7 +401,7 @@ SmokePhaseB(
                 Wait.FenceValueArray = Values;
 
                 Status = pfnWaitCpu(&Wait);
-                ok(NT_SUCCESS(Status),
+                ok_succeeded(Status,
                    "PhaseB completion wait failed 0x%08lX — GPU-"
                    "completion signal chain broken?\n", Status);
                 V3dProof("V3DSMOKE: fence wait status=0x%08lX\n", Status);
@@ -437,7 +437,7 @@ SmokePhaseB(
             LockData.hDevice = hDevice;
             LockData.hAllocation = hAllocs[ALLOC_DST];
             Status = pfnLock(&LockData);
-            ok(NT_SUCCESS(Status), "PhaseB dst Lock failed 0x%08lX\n",
+            ok_succeeded(Status, "PhaseB dst Lock failed 0x%08lX\n",
                Status);
             if (NT_SUCCESS(Status) && LockData.pData != NULL)
             {
@@ -570,7 +570,7 @@ START_TEST(v3dsmoke)
     LockData.hDevice = hDevice;
     LockData.hAllocation = AllocationInfo.hAllocation;
     Status = pfnLock(&LockData);
-    ok(NT_SUCCESS(Status), "Lock failed 0x%08lX\n", Status);
+    ok_succeeded(Status, "Lock failed 0x%08lX\n", Status);
 
     if (NT_SUCCESS(Status) && LockData.pData != NULL)
     {
@@ -628,7 +628,7 @@ START_TEST(v3dsmoke)
         Escape.PrivateDriverDataSize = sizeof(Submit);
 
         Status = pfnEscape(&Escape);
-        ok(NT_SUCCESS(Status),
+        ok_succeeded(Status,
            "allocation-relative submission failed 0x%08lX — relocation "
            "chain (Render patch emission / kick Patch) broken?\n", Status);
         V3dProof("V3DSMOKE: alloc-relative submit status=0x%08lX\n", Status);
@@ -648,7 +648,7 @@ START_TEST(v3dsmoke)
         DestroyData.phAllocationList = &hAlloc;
         DestroyData.AllocationCount = 1;
         Status = pfnDestroyAlloc(&DestroyData);
-        ok(NT_SUCCESS(Status), "DestroyAllocation failed 0x%08lX\n", Status);
+        ok_succeeded(Status, "DestroyAllocation failed 0x%08lX\n", Status);
     }
 
 cleanup_device:

@@ -44,7 +44,7 @@ static void Test_CreateDestroyDevice(void)
         return;
     }
 
-    ok(NT_SUCCESS(Status),
+    ok_succeeded(Status,
        "D3DKMTCreateDevice failed with 0x%lx\n", Status);
 
     if (!NT_SUCCESS(Status))
@@ -61,11 +61,11 @@ static void Test_CreateDestroyDevice(void)
     memset(&DestroyData, 0, sizeof(DestroyData));
     DestroyData.hDevice = CreateData.hDevice;
     Status = pfnD3DKMTDestroyDevice(&DestroyData);
-    ok(NT_SUCCESS(Status), "DestroyDevice failed with 0x%lx\n", Status);
+    ok_succeeded(Status, "DestroyDevice failed with 0x%lx\n", Status);
 
     /* Double destroy should fail */
     Status = pfnD3DKMTDestroyDevice(&DestroyData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "Double DestroyDevice should fail, got 0x%lx\n", Status);
 
     CloseAdapter(hAdapter);
@@ -82,14 +82,14 @@ static void Test_CreateDeviceInvalidAdapter(void)
     memset(&CreateData, 0, sizeof(CreateData));
     CreateData.hAdapter = 0xDEADBEEF;
     Status = pfnD3DKMTCreateDevice(&CreateData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "D3DKMTCreateDevice with invalid adapter should fail, got 0x%lx\n", Status);
 
     /* Zero adapter handle */
     memset(&CreateData, 0, sizeof(CreateData));
     CreateData.hAdapter = 0;
     Status = pfnD3DKMTCreateDevice(&CreateData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "D3DKMTCreateDevice with zero adapter should fail, got 0x%lx\n", Status);
 }
 
@@ -104,14 +104,14 @@ static void Test_DestroyDeviceInvalidHandle(void)
     memset(&DestroyData, 0, sizeof(DestroyData));
     DestroyData.hDevice = 0xBAD0CAFE;
     Status = pfnD3DKMTDestroyDevice(&DestroyData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "D3DKMTDestroyDevice with invalid handle should fail, got 0x%lx\n", Status);
 
     /* Zero handle */
     memset(&DestroyData, 0, sizeof(DestroyData));
     DestroyData.hDevice = 0;
     Status = pfnD3DKMTDestroyDevice(&DestroyData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "D3DKMTDestroyDevice with zero handle should fail, got 0x%lx\n", Status);
 }
 
@@ -169,7 +169,7 @@ static void Test_MultipleDevices(void)
     {
         DestroyData.hDevice = Devices[i];
         Status = pfnD3DKMTDestroyDevice(&DestroyData);
-        ok(NT_SUCCESS(Status), "DestroyDevice[%lu] failed\n", i);
+        ok_succeeded(Status, "DestroyDevice[%lu] failed\n", i);
     }
 
     CloseAdapter(hAdapter);
@@ -226,7 +226,7 @@ static void Test_GetDeviceState(void)
     StateData.hDevice = 0xBAD0CAFE;
     StateData.StateType = D3DKMT_DEVICESTATE_EXECUTION;
     Status = pfnD3DKMTGetDeviceState(&StateData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "GetDeviceState with invalid device should fail, got 0x%lx\n", Status);
 
     memset(&StateData, 0, sizeof(StateData));
@@ -304,11 +304,11 @@ static void Test_CreateDestroyContext(void)
         memset(&DestroyCtx, 0, sizeof(DestroyCtx));
         DestroyCtx.hContext = CreateCtx.hContext;
         Status = pfnD3DKMTDestroyContext(&DestroyCtx);
-        ok(NT_SUCCESS(Status), "DestroyContext failed with 0x%lx\n", Status);
+        ok_succeeded(Status, "DestroyContext failed with 0x%lx\n", Status);
 
         /* Double destroy */
         Status = pfnD3DKMTDestroyContext(&DestroyCtx);
-        ok(!NT_SUCCESS(Status),
+        ok_failed(Status,
            "Double DestroyContext should fail, got 0x%lx\n", Status);
     }
 
@@ -316,14 +316,14 @@ static void Test_CreateDestroyContext(void)
     memset(&CreateCtx, 0, sizeof(CreateCtx));
     CreateCtx.hDevice = 0xDEADBEEF;
     Status = pfnD3DKMTCreateContext(&CreateCtx);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "CreateContext with invalid device should fail, got 0x%lx\n", Status);
 
     /* Invalid context handle for destroy */
     memset(&DestroyCtx, 0, sizeof(DestroyCtx));
     DestroyCtx.hContext = 0xBAD0CAFE;
     Status = pfnD3DKMTDestroyContext(&DestroyCtx);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "DestroyContext with invalid handle should fail, got 0x%lx\n", Status);
 
     DestroyTestDevice(hDevice);

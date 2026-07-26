@@ -37,7 +37,7 @@ static void Test_QueryVideoMemoryInfo_BadHandle(void)
     qvm.MemorySegmentGroup = D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL;
 
     Status = p(&qvm);
-    ok(!NT_SUCCESS(Status), "QueryVideoMemoryInfo with a bogus adapter should fail, got 0x%08lX\n", (long)Status);
+    ok_failed(Status, "QueryVideoMemoryInfo with a bogus adapter should fail, got 0x%08lX\n", (long)Status);
 }
 
 static NTSTATUS QueryVideoMemoryInfo(PFND3DKMT_QUERYVIDEOMEMORYINFO pfn, HANDLE hProcess, D3DKMT_HANDLE hAdapter, D3DKMT_MEMORY_SEGMENT_GROUP Group, UINT PhysicalAdapterIndex, D3DKMT_QUERYVIDEOMEMORYINFO *Info)
@@ -72,28 +72,28 @@ static void Test_QueryVideoMemoryInfo_RealAdapter(void)
     if (!hAdapter) { skip("No adapter on \\\\.\\DISPLAY1\n"); return; }
 
     Status = QueryVideoMemoryInfo(p, NULL, hAdapter, D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL, 0, &LocalInfo);
-    ok(NT_SUCCESS(Status), "QueryVideoMemoryInfo(LOCAL) failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "QueryVideoMemoryInfo(LOCAL) failed 0x%08lX\n", (long)Status);
     if (NT_SUCCESS(Status)) CheckVideoMemoryInfo("LOCAL", &LocalInfo);
 
     Status = QueryVideoMemoryInfo(p, NULL, hAdapter, D3DKMT_MEMORY_SEGMENT_GROUP_NON_LOCAL, 0, &NonLocalInfo);
-    ok(NT_SUCCESS(Status), "QueryVideoMemoryInfo(NON_LOCAL) failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "QueryVideoMemoryInfo(NON_LOCAL) failed 0x%08lX\n", (long)Status);
     if (NT_SUCCESS(Status)) CheckVideoMemoryInfo("NON_LOCAL", &NonLocalInfo);
 
     Status = QueryVideoMemoryInfo(p, NULL, hAdapter, (D3DKMT_MEMORY_SEGMENT_GROUP)2, 0, &ExplicitInfo);
-    ok(!NT_SUCCESS(Status), "QueryVideoMemoryInfo accepted invalid segment group 2\n");
+    ok_failed(Status, "QueryVideoMemoryInfo accepted invalid segment group 2\n");
 
     Status = QueryVideoMemoryInfo(p, NULL, hAdapter, D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL, 1, &ExplicitInfo);
-    ok(!NT_SUCCESS(Status), "QueryVideoMemoryInfo accepted unsupported physical adapter index 1\n");
+    ok_failed(Status, "QueryVideoMemoryInfo accepted unsupported physical adapter index 1\n");
 
     Status = QueryVideoMemoryInfo(p, (HANDLE)(ULONG_PTR)0xDEAD5002, hAdapter, D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL, 0, &ExplicitInfo);
-    ok(!NT_SUCCESS(Status), "QueryVideoMemoryInfo accepted a bogus process handle\n");
+    ok_failed(Status, "QueryVideoMemoryInfo accepted a bogus process handle\n");
 
     hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, GetCurrentProcessId());
     ok(hProcess != NULL, "OpenProcess(PROCESS_QUERY_INFORMATION) failed, error %lu\n", GetLastError());
     if (hProcess != NULL)
     {
         Status = QueryVideoMemoryInfo(p, hProcess, hAdapter, D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL, 0, &ExplicitInfo);
-        ok(NT_SUCCESS(Status), "QueryVideoMemoryInfo with an explicit current-process handle failed 0x%08lX\n", (long)Status);
+        ok_succeeded(Status, "QueryVideoMemoryInfo with an explicit current-process handle failed 0x%08lX\n", (long)Status);
         if (NT_SUCCESS(Status) && NT_SUCCESS(QueryVideoMemoryInfo(p, NULL, hAdapter, D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL, 0, &LocalInfo)))
         {
             ok(ExplicitInfo.Budget == LocalInfo.Budget, "Explicit-process budget %llu differs from implicit-process budget %llu\n", (unsigned long long)ExplicitInfo.Budget, (unsigned long long)LocalInfo.Budget);

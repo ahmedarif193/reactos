@@ -234,7 +234,7 @@ DxgkRender(
 
     Context = DxgkLookupContextByHandle(pRender->hContext, &Adapter, &Device);
     if (Context == NULL)
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
     if (Adapter == NULL || Device == NULL)
     {
         DxgkDereferenceContext(Context);

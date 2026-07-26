@@ -493,7 +493,7 @@ static void Test_SharedPrimary_OpenRoundTrip(void)
     Query.hDevice = hDevice1;
     Query.hGlobalShare = hGlobalShare;
     Status = pQuery(&Query);
-    ok(NT_SUCCESS(Status), "QueryResourceInfo(shared primary) failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "QueryResourceInfo(shared primary) failed 0x%08lX\n", (long)Status);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
     ok(Query.NumAllocations != 0 && Query.NumAllocations <= MAX_TEST_SHARED_ALLOCATIONS, "QueryResourceInfo returned invalid allocation count %u\n", Query.NumAllocations);
@@ -519,7 +519,7 @@ static void Test_SharedPrimary_OpenRoundTrip(void)
     }
 
     Status = pOpen(&FirstOpen.Request);
-    ok(NT_SUCCESS(Status), "First OpenResource failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "First OpenResource failed 0x%08lX\n", (long)Status);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
     ok(FirstOpen.Request.hResource != 0, "First OpenResource returned a zero resource handle\n");
@@ -527,7 +527,7 @@ static void Test_SharedPrimary_OpenRoundTrip(void)
         ok(FirstOpen.AllocationInfo[Index].hAllocation != 0, "First OpenResource allocation %u has a zero handle\n", Index);
 
     Status = pOpen(&SecondOpen.Request);
-    ok(NT_SUCCESS(Status), "Second OpenResource failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "Second OpenResource failed 0x%08lX\n", (long)Status);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
     ok(SecondOpen.Request.hResource != 0 && SecondOpen.Request.hResource != FirstOpen.Request.hResource, "Per-device resource handles are not distinct: 0x%08lX / 0x%08lX\n", (unsigned long)FirstOpen.Request.hResource, (unsigned long)SecondOpen.Request.hResource);
@@ -537,7 +537,7 @@ static void Test_SharedPrimary_OpenRoundTrip(void)
     memset(&DestroyDevice, 0, sizeof(DestroyDevice));
     DestroyDevice.hDevice = hDevice1;
     Status = pDestroyDevice(&DestroyDevice);
-    ok(NT_SUCCESS(Status), "DestroyDevice with first shared alias failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "DestroyDevice with first shared alias failed 0x%08lX\n", (long)Status);
     if (NT_SUCCESS(Status))
     {
         hDevice1 = 0;
@@ -548,7 +548,7 @@ static void Test_SharedPrimary_OpenRoundTrip(void)
     QueryAfterDestroy.hDevice = hDevice2;
     QueryAfterDestroy.hGlobalShare = hGlobalShare;
     Status = pQuery(&QueryAfterDestroy);
-    ok(NT_SUCCESS(Status), "Shared resource did not survive first alias-device teardown: 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "Shared resource did not survive first alias-device teardown: 0x%08lX\n", (long)Status);
     if (NT_SUCCESS(Status))
     {
         ok(QueryAfterDestroy.NumAllocations == Query.NumAllocations, "Post-teardown allocation count %u, expected %u\n", QueryAfterDestroy.NumAllocations, Query.NumAllocations);
@@ -556,7 +556,7 @@ static void Test_SharedPrimary_OpenRoundTrip(void)
     }
 
     Status = DestroyOpenedResource(pDestroyAllocation, hDevice2, SecondOpen.Request.hResource);
-    ok(NT_SUCCESS(Status), "DestroyAllocation(second opened resource) failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "DestroyAllocation(second opened resource) failed 0x%08lX\n", (long)Status);
     if (NT_SUCCESS(Status))
         SecondOpen.Request.hResource = 0;
 
@@ -667,7 +667,7 @@ static void Test_SharedResource_MultiAllocationRoundTrip(void)
     Append.NumAllocations = 1;
     Append.pAllocationInfo = &AppendedAllocationInfo;
     Status = pCreate(&Append);
-    ok(NT_SUCCESS(Status), "Appending an allocation to an existing resource failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "Appending an allocation to an existing resource failed 0x%08lX\n", (long)Status);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
     ok(Append.hResource == Create.hResource, "Existing-resource CreateAllocation changed hResource from 0x%08lX to 0x%08lX\n", (unsigned long)Create.hResource, (unsigned long)Append.hResource);
@@ -683,13 +683,13 @@ static void Test_SharedResource_MultiAllocationRoundTrip(void)
     DestroyList.phAllocationList = DuplicateList;
     DestroyList.AllocationCount = ARRAYSIZE(DuplicateList);
     Status = pDestroy(&DestroyList);
-    ok(!NT_SUCCESS(Status), "DestroyAllocation accepted a duplicate allocation list: 0x%08lX\n", (long)Status);
+    ok_failed(Status, "DestroyAllocation accepted a duplicate allocation list: 0x%08lX\n", (long)Status);
 
     memset(&Query, 0, sizeof(Query));
     Query.hDevice = hOpenerDevice;
     Query.hGlobalShare = Create.hGlobalShare;
     Status = pQuery(&Query);
-    ok(NT_SUCCESS(Status), "QueryResourceInfo null-buffer discovery failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "QueryResourceInfo null-buffer discovery failed 0x%08lX\n", (long)Status);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
     ok(Query.NumAllocations == ARRAYSIZE(AllocationPrivate), "QueryResourceInfo returned %u allocations, expected %u\n", Query.NumAllocations, (unsigned)ARRAYSIZE(AllocationPrivate));
@@ -705,7 +705,7 @@ static void Test_SharedResource_MultiAllocationRoundTrip(void)
     }
 
     Status = pOpen(&Opened.Request);
-    ok(NT_SUCCESS(Status), "OpenResource multi-allocation round trip failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "OpenResource multi-allocation round trip failed 0x%08lX\n", (long)Status);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
     ok(Opened.Request.hResource != 0, "OpenResource returned a zero resource handle\n");
@@ -728,7 +728,7 @@ static void Test_SharedResource_MultiAllocationRoundTrip(void)
     DestroyList.phAllocationList = MixedDeviceList;
     DestroyList.AllocationCount = ARRAYSIZE(MixedDeviceList);
     Status = pDestroy(&DestroyList);
-    ok(!NT_SUCCESS(Status), "DestroyAllocation accepted a mixed-device allocation list: 0x%08lX\n", (long)Status);
+    ok_failed(Status, "DestroyAllocation accepted a mixed-device allocation list: 0x%08lX\n", (long)Status);
     if (!NT_SUCCESS(Status))
     {
         D3DKMT_LOCK Lock;
@@ -738,7 +738,7 @@ static void Test_SharedResource_MultiAllocationRoundTrip(void)
         Lock.hAllocation = AllocationInfo[0].hAllocation;
         Lock.Flags.LockEntire = 1;
         Status = pLock(&Lock);
-        ok(NT_SUCCESS(Status), "Valid member of rejected mixed-device list did not survive: 0x%08lX\n", (long)Status);
+        ok_succeeded(Status, "Valid member of rejected mixed-device list did not survive: 0x%08lX\n", (long)Status);
         if (NT_SUCCESS(Status))
         {
             D3DKMT_UNLOCK Unlock;
@@ -749,7 +749,7 @@ static void Test_SharedResource_MultiAllocationRoundTrip(void)
             Unlock.NumAllocations = 1;
             Unlock.phAllocations = &Allocation;
             Status = pUnlock(&Unlock);
-            ok(NT_SUCCESS(Status), "Unlock after rejected mixed-device list failed 0x%08lX\n", (long)Status);
+            ok_succeeded(Status, "Unlock after rejected mixed-device list failed 0x%08lX\n", (long)Status);
         }
     }
 
@@ -759,7 +759,7 @@ static void Test_SharedResource_MultiAllocationRoundTrip(void)
     DestroyList.phAllocationList = &Opened.AllocationInfo[0].hAllocation;
     DestroyList.AllocationCount = 1;
     Status = pDestroy(&DestroyList);
-    ok(NT_SUCCESS(Status), "DestroyAllocation rejected a legal OpenResource alias subset: 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "DestroyAllocation rejected a legal OpenResource alias subset: 0x%08lX\n", (long)Status);
     if (NT_SUCCESS(Status))
     {
         D3DKMT_LOCK Lock;
@@ -769,7 +769,7 @@ static void Test_SharedResource_MultiAllocationRoundTrip(void)
         Lock.hAllocation = DestroyedAlias;
         Lock.Flags.LockEntire = 1;
         Status = pLock(&Lock);
-        ok(!NT_SUCCESS(Status), "Destroyed opened alias remained lockable after subset destruction: 0x%08lX\n", (long)Status);
+        ok_failed(Status, "Destroyed opened alias remained lockable after subset destruction: 0x%08lX\n", (long)Status);
         if (NT_SUCCESS(Status))
         {
             D3DKMT_UNLOCK Unlock;
@@ -797,7 +797,7 @@ static void Test_SharedResource_MultiAllocationRoundTrip(void)
             Unlock.NumAllocations = 1;
             Unlock.phAllocations = &Allocation;
             Status = pUnlock(&Unlock);
-            ok(NT_SUCCESS(Status), "Unlock of surviving alias after subset destruction failed 0x%08lX\n", (long)Status);
+            ok_succeeded(Status, "Unlock of surviving alias after subset destruction failed 0x%08lX\n", (long)Status);
         }
     }
 
@@ -808,7 +808,7 @@ static void Test_SharedResource_MultiAllocationRoundTrip(void)
     DestroyList.phAllocationList = CreatorSubset;
     DestroyList.AllocationCount = ARRAYSIZE(CreatorSubset);
     Status = pDestroy(&DestroyList);
-    ok(NT_SUCCESS(Status), "DestroyAllocation rejected a legal resource-owned allocation subset: 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "DestroyAllocation rejected a legal resource-owned allocation subset: 0x%08lX\n", (long)Status);
     if (NT_SUCCESS(Status))
     {
         AllocationInfo[0].hAllocation = 0;
@@ -817,7 +817,7 @@ static void Test_SharedResource_MultiAllocationRoundTrip(void)
         QueryAfterSubset.hDevice = hOpenerDevice;
         QueryAfterSubset.hGlobalShare = Create.hGlobalShare;
         Status = pQuery(&QueryAfterSubset);
-        ok(NT_SUCCESS(Status), "QueryResourceInfo after subset destruction failed 0x%08lX\n", (long)Status);
+        ok_succeeded(Status, "QueryResourceInfo after subset destruction failed 0x%08lX\n", (long)Status);
         if (NT_SUCCESS(Status))
         {
             ok(QueryAfterSubset.NumAllocations == 1, "Subset destruction left %u source allocations, expected 1\n", QueryAfterSubset.NumAllocations);
@@ -826,7 +826,7 @@ static void Test_SharedResource_MultiAllocationRoundTrip(void)
     }
 
     Status = DestroyOpenedResource(pDestroy, hCreatorDevice, Create.hResource);
-    ok(NT_SUCCESS(Status), "Destroying creator resource with a live alias failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "Destroying creator resource with a live alias failed 0x%08lX\n", (long)Status);
     if (NT_SUCCESS(Status))
         Create.hResource = 0;
     if (NT_SUCCESS(Status))
@@ -849,7 +849,7 @@ static void Test_SharedResource_MultiAllocationRoundTrip(void)
             Unlock.NumAllocations = 1;
             Unlock.phAllocations = &Allocation;
             Status = pUnlock(&Unlock);
-            ok(NT_SUCCESS(Status), "Unlock of surviving opened alias failed 0x%08lX\n", (long)Status);
+            ok_succeeded(Status, "Unlock of surviving opened alias failed 0x%08lX\n", (long)Status);
         }
     }
 

@@ -64,7 +64,7 @@ static void Test_EnumAdapters2_TwoPass(void)
     ea.pAdapters = pAdapters;
     ea.NumAdapters = Count;
     Status = p(&ea);
-    ok(NT_SUCCESS(Status), "EnumAdapters2 enumerate failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "EnumAdapters2 enumerate failed 0x%08lX\n", (long)Status);
 
     if (NT_SUCCESS(Status))
     {
@@ -91,7 +91,7 @@ static void Test_EnumAdapters2_TwoPass(void)
                 memset(&CloseData, 0, sizeof(CloseData));
                 CloseData.hAdapter = OpenData.hAdapter;
                 Status = pfnD3DKMTCloseAdapter(&CloseData);
-                ok(NT_SUCCESS(Status), "CloseAdapter for reopened EnumAdapters2 LUID[%lu] failed 0x%08lX\n", i, (long)Status);
+                ok_succeeded(Status, "CloseAdapter for reopened EnumAdapters2 LUID[%lu] failed 0x%08lX\n", i, (long)Status);
             }
 
             /* EnumAdapters2 itself opens each adapter; close that handle too. */
@@ -101,7 +101,7 @@ static void Test_EnumAdapters2_TwoPass(void)
                 memset(&ca, 0, sizeof(ca));
                 ca.hAdapter = pAdapters[i].hAdapter;
                 Status = pfnD3DKMTCloseAdapter(&ca);
-                ok(NT_SUCCESS(Status), "CloseAdapter for EnumAdapters2 handle[%lu] failed 0x%08lX\n", i, (long)Status);
+                ok_succeeded(Status, "CloseAdapter for EnumAdapters2 handle[%lu] failed 0x%08lX\n", i, (long)Status);
             }
         }
     }
@@ -168,7 +168,7 @@ static void CloseAdapterArray(PFN_D3DKMTCloseAdapter pfnClose, D3DKMT_ADAPTERINF
         memset(&CloseData, 0, sizeof(CloseData));
         CloseData.hAdapter = pAdapters[i].hAdapter;
         Status = pfnClose(&CloseData);
-        ok(NT_SUCCESS(Status), "CloseAdapter for EnumAdapters3 handle[%lu] failed 0x%08lX\n", i, (long)Status);
+        ok_succeeded(Status, "CloseAdapter for EnumAdapters3 handle[%lu] failed 0x%08lX\n", i, (long)Status);
     }
 }
 
@@ -201,7 +201,7 @@ static void Test_EnumAdapters3_Filters(void)
         skip("D3DKMTEnumAdapters3 is unavailable on this WDDM 2.0 runtime (0x%08lX)\n", (long)Status);
         return;
     }
-    ok(NT_SUCCESS(Status), "EnumAdapters3 default-filter enumeration failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "EnumAdapters3 default-filter enumeration failed 0x%08lX\n", (long)Status);
     if (!NT_SUCCESS(Status))
         return;
     ok(DefaultCount > 0, "EnumAdapters3 default filter returned no adapters\n");
@@ -210,7 +210,7 @@ static void Test_EnumAdapters3_Filters(void)
     Filter.IncludeComputeOnly = 1;
     Filter.IncludeDisplayOnly = 1;
     Status = EnumAdapters3Filtered(pfn3, Filter, &pInclusive, &InclusiveCount);
-    ok(NT_SUCCESS(Status), "EnumAdapters3 inclusive-filter enumeration failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "EnumAdapters3 inclusive-filter enumeration failed 0x%08lX\n", (long)Status);
     if (NT_SUCCESS(Status))
     {
         ok(InclusiveCount >= DefaultCount, "EnumAdapters3 inclusive count %lu is smaller than default count %lu\n", InclusiveCount, DefaultCount);

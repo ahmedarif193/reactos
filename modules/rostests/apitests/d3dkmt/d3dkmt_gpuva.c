@@ -60,7 +60,7 @@ static void Test_ReserveGpuVa_BadHandle(void)
     rsv.Size = 0x10000;                         /* 64 KiB */
 
     Status = p(&rsv);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "ReserveGpuVirtualAddress with a bogus adapter should fail, got 0x%08lX\n",
        (long)Status);
 }
@@ -132,7 +132,7 @@ static void Test_GpuVa_MapCycle(void)
         skip("MapGpuVirtualAddress not supported on this adapter\n");
         goto cleanup_reservation;
     }
-    ok(NT_SUCCESS(Status), "Map into the reservation failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "Map into the reservation failed 0x%08lX\n", (long)Status);
     if (NT_SUCCESS(Status))
     {
         ok(map.VirtualAddress == rsv.VirtualAddress,
@@ -149,7 +149,7 @@ static void Test_GpuVa_MapCycle(void)
     map.SizeInPages = 1;
     map.Protection.Write = 1;
     Status = pMap(&map);
-    ok(NT_SUCCESS(Status), "Map at a kernel-chosen VA failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "Map at a kernel-chosen VA failed 0x%08lX\n", (long)Status);
     if (NT_SUCCESS(Status))
     {
         FreshVa = map.VirtualAddress;
@@ -164,7 +164,7 @@ static void Test_GpuVa_MapCycle(void)
         fre.BaseAddress = FreshVa;
         fre.Size = 0x1000;
         Status = pFree(&fre);
-        ok(NT_SUCCESS(Status), "Free of the fresh mapping failed 0x%08lX\n", (long)Status);
+        ok_succeeded(Status, "Free of the fresh mapping failed 0x%08lX\n", (long)Status);
     }
 
 cleanup_reservation:
@@ -173,7 +173,7 @@ cleanup_reservation:
     fre.BaseAddress = rsv.VirtualAddress;
     fre.Size = 0x10000;
     Status = pFree(&fre);
-    ok(NT_SUCCESS(Status), "Free of the reservation failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "Free of the reservation failed 0x%08lX\n", (long)Status);
 
 cleanup_alloc:
     memset(&da, 0, sizeof(da));
@@ -181,12 +181,12 @@ cleanup_alloc:
     da.phAllocationList = &hAlloc;
     da.AllocationCount = 1;
     Status = pDestroyAlloc(&da);
-    ok(NT_SUCCESS(Status), "DestroyAllocation failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "DestroyAllocation failed 0x%08lX\n", (long)Status);
 cleanup_queue:
     memset(&dpq, 0, sizeof(dpq));
     dpq.hPagingQueue = cpq.hPagingQueue;
     Status = pDestroyQueue(&dpq);
-    ok(NT_SUCCESS(Status), "DestroyPagingQueue failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "DestroyPagingQueue failed 0x%08lX\n", (long)Status);
 cleanup_device:
     DestroyTestDevice(hDevice);
     CloseAdapter(hAdapter);

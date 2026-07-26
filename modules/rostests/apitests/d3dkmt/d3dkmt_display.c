@@ -69,7 +69,7 @@ static void Test_GetDisplayModeList(void)
                 ModeList.ModeCount = Count;
 
                 Status = pfnD3DKMTGetDisplayModeList(&ModeList);
-                ok(NT_SUCCESS(Status),
+                ok_succeeded(Status,
                    "D3DKMTGetDisplayModeList with buffer failed 0x%lx\n", Status);
 
                 if (NT_SUCCESS(Status) && ModeList.ModeCount > 0)
@@ -94,7 +94,7 @@ static void Test_GetDisplayModeList(void)
     ModeList.hAdapter = 0xBAD0CAFE;
     ModeList.VidPnSourceId = 0;
     Status = pfnD3DKMTGetDisplayModeList(&ModeList);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "GetDisplayModeList with invalid adapter should fail, got 0x%lx\n",
        Status);
 
@@ -137,7 +137,7 @@ static void Test_SetVidPnSourceOwner(void)
     /* Releasing with no prior ownership is fine */
     if (Status != STATUS_PROCEDURE_NOT_FOUND)
     {
-        ok(NT_SUCCESS(Status),
+        ok_succeeded(Status,
            "SetVidPnSourceOwner (release) failed with 0x%lx\n", Status);
     }
 
@@ -146,7 +146,7 @@ static void Test_SetVidPnSourceOwner(void)
     OwnerData.hDevice = 0xBAD0CAFE;
     OwnerData.VidPnSourceCount = 0;
     Status = pfnD3DKMTSetVidPnSourceOwner(&OwnerData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "SetVidPnSourceOwner with invalid device should fail, got 0x%lx\n",
        Status);
 
@@ -207,7 +207,7 @@ static void Test_GetScanLine(void)
     memset(&ScanData, 0, sizeof(ScanData));
     ScanData.hAdapter = 0xBAD0CAFE;
     Status = pfnD3DKMTGetScanLine(&ScanData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "GetScanLine with invalid adapter should fail, got 0x%lx\n", Status);
 
     CloseAdapter(hAdapter);
@@ -227,7 +227,7 @@ static void Test_PollDisplayChildren(void)
     memset(&PollData, 0, sizeof(PollData));
     PollData.hAdapter = 0xBAD0CAFE;
     Status = pfnD3DKMTPollDisplayChildren(&PollData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "PollDisplayChildren with invalid adapter should fail, got 0x%lx\n",
        Status);
 
@@ -235,7 +235,7 @@ static void Test_PollDisplayChildren(void)
     PollData.hAdapter = 0xBAD0CAFE;
     PollData.PollAllAdapters = 1;
     Status = pfnD3DKMTPollDisplayChildren(&PollData);
-    ok(!NT_SUCCESS(Status), "PollDisplayChildren PollAllAdapters accepted an invalid anchor adapter, status 0x%lx\n", Status);
+    ok_failed(Status, "PollDisplayChildren PollAllAdapters accepted an invalid anchor adapter, status 0x%lx\n", Status);
 
     /* Reserved flag bits are rejected before adapter selection. */
     memset(&PollData, 0, sizeof(PollData));
@@ -304,7 +304,7 @@ static void Test_Escape(void)
     EscapeData.hAdapter = 0xBAD0CAFE;
     EscapeData.Type = D3DKMT_ESCAPE_DRIVERPRIVATE;
     Status = pfnD3DKMTEscape(&EscapeData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "Escape with invalid adapter should fail, got 0x%lx\n", Status);
 
     CloseAdapter(hAdapter);
