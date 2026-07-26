@@ -4381,8 +4381,166 @@ DxgkWaitForSynchronizationObject2(
     if (!NT_SUCCESS(Status))
         return Status;
     ASSERT(Context->Device == Device && Device->Adapter == Adapter);
-    Status = DxgkContextOrderAdmitWait(Context, DxgkContextSyncOperationWait2, pData->ObjectHandleArray, pData->ObjectCount, pData->Fence.FenceValue, UserMode);
+    Status = DxgkContextOrderAdmitWait(Context, DxgkContextSyncOperationWait2, pData->ObjectHandleArray, pData->ObjectCount, pData->Fence.FenceValue, NULL, UserMode);
     DxgkDereferenceContext(Context);
+    return Status;
+}
+
+/*
+ * The GPU-side monitored-fence operations.
+ *
+ * These differ from the ...Object2 forms above in one way that matters: each
+ * object carries its own fence value, so a single call can wait for fence A to
+ * reach 7 while fence B reaches 12.  The Object2 forms apply one value to the
+ * whole batch and cannot express that, which is why a monitored fence needs
+ * these and not those.
+ *
+ * The arrays arrive already captured into kernel memory by the bridge, so they
+ * are safe to read here and cannot change underneath the scheduler.
+ */
+static NTSTATUS
+NTAPI
+DxgkWaitForSynchronizationObjectFromGpu(
+    _In_ CONST D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU *pData)
+{
+    PDXGKRNL_ADAPTER Adapter;
+    PDXGKRNL_DEVICE Device;
+    PDXGKRNL_CONTEXT Context;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (pData->ObjectCount == 0 || pData->ObjectCount > D3DDDI_MAX_OBJECT_WAITED_ON)
+        return STATUS_INVALID_PARAMETER;
+    if (pData->ObjectHandleArray == NULL || pData->MonitoredFenceValueArray == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = DxgkReferenceContextByHandle(pData->hContext, PsGetCurrentProcess(), &Adapter, &Device, &Context);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    ASSERT(Context->Device == Device && Device->Adapter == Adapter);
+    Status = DxgkContextOrderAdmitWait(Context, DxgkContextSyncOperationWait2,
+                                       pData->ObjectHandleArray, pData->ObjectCount,
+                                       0, pData->MonitoredFenceValueArray, KernelMode);
+    DxgkDereferenceContext(Context);
+    return Status;
+}
+
+static NTSTATUS
+NTAPI
+DxgkSignalSynchronizationObjectFromGpu(
+    _In_ CONST D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU *pData)
+{
+    PDXGKRNL_CONTEXT Contexts[1];
+    PDXGKRNL_ADAPTER Adapter;
+    PDXGKRNL_DEVICE Device;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (pData->ObjectCount == 0 || pData->ObjectCount > D3DDDI_MAX_OBJECT_SIGNALED)
+        return STATUS_INVALID_PARAMETER;
+    if (pData->ObjectHandleArray == NULL || pData->MonitoredFenceValueArray == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = DxgkReferenceContextByHandle(pData->hContext, PsGetCurrentProcess(), &Adapter, &Device, &Contexts[0]);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    ASSERT(Contexts[0]->Device == Device && Device->Adapter == Adapter);
+    Status = DxgkContextOrderAdmitSignal(Contexts, 1, DxgkContextSyncOperationSignal2,
+                                         pData->ObjectHandleArray, pData->ObjectCount,
+                                         0, 0, pData->MonitoredFenceValueArray, KernelMode);
+    DxgkDereferenceContext(Contexts[0]);
+    return Status;
+}
+
+static NTSTATUS
+NTAPI
+DxgkSignalSynchronizationObjectFromGpu2(
+    _In_ CONST D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2 *pData)
+{
+    PDXGKRNL_CONTEXT Contexts[D3DDDI_MAX_BROADCAST_CONTEXT];
+    PDXGKRNL_ADAPTER Adapter;
+    PDXGKRNL_DEVICE Device;
+    ULONG ContextCount = 0;
+    ULONG SignalFlags = 0;
+    ULONG Index;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+    /*
+     * This form carries no hContext: the contexts it signals on are exactly the
+     * broadcast array, so an empty one names nothing to signal on.
+     */
+    if (pData->BroadcastContextCount == 0 ||
+        pData->BroadcastContextCount > D3DDDI_MAX_BROADCAST_CONTEXT ||
+        pData->BroadcastContextArray == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    for (Index = 0; Index < pData->BroadcastContextCount; ++Index)
+    {
+        PDXGKRNL_ADAPTER ContextAdapter;
+        PDXGKRNL_DEVICE ContextDevice;
+
+        Status = DxgkReferenceContextByHandle(pData->BroadcastContextArray[Index],
+                                              PsGetCurrentProcess(),
+                                              &ContextAdapter, &ContextDevice, &Contexts[Index]);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+        /* Every context in one broadcast must belong to the same adapter; a
+         * signal spanning adapters has no single ordering to be placed in. */
+        if (Index == 0)
+        {
+            Adapter = ContextAdapter;
+            Device = ContextDevice;
+        }
+        else if (ContextAdapter != Adapter)
+        {
+            ++ContextCount;
+            Status = STATUS_INVALID_PARAMETER;
+            goto Cleanup;
+        }
+        ++ContextCount;
+    }
+
+    if (pData->Flags.EnqueueCpuEvent)
+    {
+        /* Signalling a CPU event and signalling fences are alternatives, not a
+         * combination: the value union holds the event handle in this case. */
+        if (pData->ObjectCount != 0)
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Cleanup;
+        }
+        SignalFlags = DXGK_CONTEXT_SYNC_ENQUEUE_CPU_EVENT;
+        Status = DxgkContextOrderAdmitSignal(Contexts, ContextCount, DxgkContextSyncOperationSignal2,
+                                             NULL, 0, SignalFlags,
+                                             (UINT64)(ULONG_PTR)pData->CpuEventHandle, NULL, KernelMode);
+        goto Cleanup;
+    }
+
+    if (pData->ObjectCount == 0 || pData->ObjectCount > D3DDDI_MAX_OBJECT_SIGNALED ||
+        pData->ObjectHandleArray == NULL || pData->MonitoredFenceValueArray == NULL)
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto Cleanup;
+    }
+    if (pData->Flags.AllowFenceRewind)
+        SignalFlags |= DXGK_CONTEXT_SYNC_ALLOW_FENCE_REWIND;
+
+    Status = DxgkContextOrderAdmitSignal(Contexts, ContextCount, DxgkContextSyncOperationSignal2,
+                                         pData->ObjectHandleArray, pData->ObjectCount,
+                                         SignalFlags, 0, pData->MonitoredFenceValueArray, KernelMode);
+
+Cleanup:
+    for (Index = 0; Index < ContextCount; ++Index)
+        DxgkDereferenceContext(Contexts[Index]);
     return Status;
 }
 
@@ -4444,7 +4602,7 @@ DxgkSignalSynchronizationObject2(
         }
     }
     PayloadValue = (SignalFlags & DXGK_CONTEXT_SYNC_ENQUEUE_CPU_EVENT) != 0 ? (UINT64)(ULONG_PTR)pData->CpuEventHandle : pData->Fence.FenceValue;
-    Status = DxgkContextOrderAdmitSignal(Contexts, ContextCount, DxgkContextSyncOperationSignal2, pData->ObjectHandleArray, pData->ObjectCount, SignalFlags, PayloadValue, UserMode);
+    Status = DxgkContextOrderAdmitSignal(Contexts, ContextCount, DxgkContextSyncOperationSignal2, pData->ObjectHandleArray, pData->ObjectCount, SignalFlags, PayloadValue, NULL, UserMode);
 
 Cleanup:
     while (ContextCount != 0)
@@ -7102,6 +7260,30 @@ DxgkpDispatchBufferedIoctl(
             return DxgkSignalSynchronizationObjectFromCpu((CONST D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU *)SystemBuffer, EmbeddedBufferMode);
         }
 
+        case IOCTL_D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU:
+        {
+            if (InputLength < sizeof(D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+
+            return DxgkWaitForSynchronizationObjectFromGpu((CONST D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU *)SystemBuffer);
+        }
+
+        case IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU:
+        {
+            if (InputLength < sizeof(D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+
+            return DxgkSignalSynchronizationObjectFromGpu((CONST D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU *)SystemBuffer);
+        }
+
+        case IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2:
+        {
+            if (InputLength < sizeof(D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+
+            return DxgkSignalSynchronizationObjectFromGpu2((CONST D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2 *)SystemBuffer);
+        }
+
         case IOCTL_D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU:
         {
             if (InputLength < sizeof(D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU) || SystemBuffer == NULL)
@@ -7150,6 +7332,8 @@ DxgkpDispatchBufferedIoctl(
                 InterfaceSize = DXGKRNL_INTERFACE_VERSION_4_SIZE;
             else if (Version == DXGKRNL_INTERFACE_VERSION_5)
                 InterfaceSize = DXGKRNL_INTERFACE_VERSION_5_SIZE;
+            else if (Version == DXGKRNL_INTERFACE_VERSION_6)
+                InterfaceSize = DXGKRNL_INTERFACE_VERSION_6_SIZE;
             else
             {
                 DXGKRNL_WARN("IOCTL_DXGKRNL_EXCHANGE_INTERFACE: "
@@ -7244,6 +7428,12 @@ DxgkpDispatchBufferedIoctl(
                 pInterface->RxgkIntPfnGetAllocationPriority = (PDXGADAPTER_GETALLOCATIONPRIORITY)DxgkGetAllocationPriority;
             if (Version >= DXGKRNL_INTERFACE_VERSION_5)
                 pInterface->RxgkIntPfnOpenSynchronizationObject = (PDXGADAPTER_OPENSYNCHRONIZATIONOBJECT)DxgkOpenSynchronizationObject;
+            if (Version >= DXGKRNL_INTERFACE_VERSION_6)
+            {
+                pInterface->RxgkIntPfnWaitForSynchronizationObjectFromGpu = (PDXGADAPTER_WAITFORSYNCHRONIZATIONOBJECTFROMGPU)DxgkWaitForSynchronizationObjectFromGpu;
+                pInterface->RxgkIntPfnSignalSynchronizationObjectFromGpu = (PDXGADAPTER_SIGNALSYNCHRONIZATIONOBJECTFROMGPU)DxgkSignalSynchronizationObjectFromGpu;
+                pInterface->RxgkIntPfnSignalSynchronizationObjectFromGpu2 = (PDXGADAPTER_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2)DxgkSignalSynchronizationObjectFromGpu2;
+            }
 
             Irp->IoStatus.Information = InterfaceSize;
 
@@ -7447,6 +7637,9 @@ DxgkDispatchDeviceControl(
         case IOCTL_D3DKMT_QUERYVIDEOMEMORYINFO:
         case IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU:
         case IOCTL_D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU:
+        case IOCTL_D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU:
+        case IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU:
+        case IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2:
         case IOCTL_DXGKRNL_EXCHANGE_INTERFACE:
         {
             if (Stack->MajorFunction == IRP_MJ_DEVICE_CONTROL && Irp->RequestorMode == UserMode)

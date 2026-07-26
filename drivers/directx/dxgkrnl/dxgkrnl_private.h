@@ -1880,6 +1880,22 @@ DxgkpQueryGpuMmuCaps(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _Out_ DXGK_GPUMMUCAPS *Caps);
 
+/*
+ * Publish new values for a batch of monitored fences and wake anything waiting
+ * on them.  A GPU-side signal must go through here rather than writing the
+ * fence values itself: the shared value page and the CPU-side wait registry are
+ * both updated here, and a signal that skipped it would leave a
+ * WaitForSynchronizationObjectFromCpu waiter asleep on a fence that had already
+ * reached its value.
+ */
+NTSTATUS
+DxgkSyncPublishFenceBatch(
+    _In_reads_(ObjectCount) PDXGKRNL_SYNC_OBJECT *Objects,
+    _In_reads_(ObjectCount) CONST UINT64 *FenceValues,
+    _In_ ULONG ObjectCount,
+    _In_ BOOLEAN AllowFenceRewind,
+    _In_ BOOLEAN PublicCpuSignal);
+
 NTSTATUS
 DxgkpQueryDriverCaps(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -2242,6 +2258,7 @@ DxgkContextOrderAdmitWait(
     _In_reads_(ObjectCount) const D3DKMT_HANDLE *ObjectHandles,
     _In_ ULONG ObjectCount,
     _In_ UINT64 FenceValue,
+    _In_reads_opt_(ObjectCount) CONST UINT64 *FenceValueArray,
     _In_ KPROCESSOR_MODE AccessMode);
 
 NTSTATUS
@@ -2253,6 +2270,7 @@ DxgkContextOrderAdmitSignal(
     _In_ ULONG ObjectCount,
     _In_ ULONG SignalFlags,
     _In_ UINT64 PayloadValue,
+    _In_reads_opt_(ObjectCount) CONST UINT64 *PayloadValueArray,
     _In_ KPROCESSOR_MODE AccessMode);
 
 VOID
