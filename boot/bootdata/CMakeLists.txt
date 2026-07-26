@@ -71,6 +71,7 @@ add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/preinstall/unattend.inf DESTINATION
 
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/livecd_start.cmd DESTINATION "Profiles/Default User/My Documents" FOR livecd)
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/cpubench_start.cmd DESTINATION "Profiles/Default User/My Documents" FOR preinstall)
+add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/ethbench_start.cmd DESTINATION "Profiles/Default User/My Documents" FOR preinstall)
 
 
 # LiveImage shortcuts
