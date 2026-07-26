@@ -29,6 +29,7 @@ list(APPEND SOURCE
     d3dkmt_displayext.c
     d3dkmt_presentext.c
     d3dkmt_misc.c
+    d3dkmt_teardown.c
     d3dkmt_pipeline.c
     d3dkmt_capture.c
     d3dkmt_privateioctl.c

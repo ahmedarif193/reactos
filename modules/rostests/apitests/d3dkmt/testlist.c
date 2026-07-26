@@ -34,6 +34,7 @@ extern void func_allocdestroy2(void);
 extern void func_displayext(void);
 extern void func_presentext(void);
 extern void func_misc(void);
+extern void func_teardown(void);
 extern void func_renderadapter(void);
 extern void func_luidident(void);
 extern void func_handletype(void);
@@ -85,6 +86,7 @@ const struct test winetest_testlist[] =
     { "displayext",    func_displayext },
     { "presentext",    func_presentext },
     { "misc",          func_misc },
+    { "teardown",      func_teardown },
     { "renderadapter", func_renderadapter },
     { "luidident",     func_luidident },
     { "handletype",    func_handletype },
