@@ -579,6 +579,7 @@ DxgkSyncObjectAttachMonitoredPage(
         D3DGPU_VIRTUAL_ADDRESS FenceGpuVa = 0;
 
         Status = DxgkGpuVaMapFencePage(SyncObj->Device->Adapter, SyncObj->Device->ProcessRecord, SyncObj->MonitoredValueKernelVa, &FenceGpuVa);
+        DxgkGpuVaFlushPageTableUpdates(SyncObj->Device->ProcessRecord);
         if (NT_SUCCESS(Status))
             SyncObj->MonitoredValueGpuVa = FenceGpuVa;
         else
