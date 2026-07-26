@@ -1240,7 +1240,7 @@ ExpQuerySystemProcessInformation(
                         ThreadInfoEx->StackBase = CurrentThread->Tcb.StackBase;
                         ThreadInfoEx->StackLimit = (PVOID)CurrentThread->Tcb.StackLimit;
                         ThreadInfoEx->Win32StartAddress = (CurrentThread->Win32StartAddress ?
-                            CurrentThread->Win32StartAddress : CurrentThread->StartAddress);
+                            CurrentThread->Win32StartAddress : (PVOID)CurrentThread->StartAddress);
                         ThreadInfoEx->TebBase = CurrentThread->Tcb.Teb;
                     }
 

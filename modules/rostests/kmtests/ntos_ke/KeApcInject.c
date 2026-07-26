@@ -165,7 +165,7 @@ TestApcRundown(VOID)
     Apc = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Apc), 'cApK');
     if (Apc != NULL && ApcTargetThread != NULL)
     {
-        KeInitializeApc(Apc, ApcTargetThread, OriginalApcEnvironment, RundownApcRoutine, NULL, NoopNormalRoutine, KernelMode, NULL);
+        KeInitializeApc(Apc, ApcTargetThread, OriginalApcEnvironment, NormalApcRoutine, RundownApcRoutine, NoopNormalRoutine, KernelMode, NULL);
         if (!KeInsertQueueApc(Apc, NULL, NULL, IO_NO_INCREMENT))
             ExFreePoolWithTag(Apc, 'cApK');
     }

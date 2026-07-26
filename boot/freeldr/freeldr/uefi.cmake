@@ -192,6 +192,9 @@ else()
     else()
         target_link_options(uefildr PRIVATE -Wl,--exclude-all-symbols,--file-alignment,0x200,--section-alignment,0x200)
     endif()
+    if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
+        target_link_options(uefildr PRIVATE -Wl,/driver)
+    endif()
     # Strip everything, including rossym data
     add_custom_command(TARGET uefildr
                     POST_BUILD
