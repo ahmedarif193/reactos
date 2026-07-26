@@ -780,8 +780,15 @@ static void Test_QueryVideoMemoryInfo_HighPhysAdapterIndex(void)
  * the caller's pointer rather than copied, which is the whole point: a copy
  * would defeat having locked the surface at all.
  *
- * Both exports existed with a syscall slot and nothing behind them until now,
- * which from the caller's side is indistinguishable from a working one.
+ * Both exports existed with a syscall slot and nothing behind them.  win32k now
+ * implements them, but **the calls do not reach it**: instrumenting every
+ * rejection branch produced no output at all, so gdi32's export and win32k's
+ * implementation are still not connected.
+ *
+ * That makes the refusals below vacuous as coverage -- they would pass for any
+ * error, including one raised before the validation they are supposed to be
+ * checking.  They are kept because they will become real the moment the call
+ * lands, and left honest in the meantime rather than read as proof.
  */
 static void Test_DCFromMemory(void)
 {
