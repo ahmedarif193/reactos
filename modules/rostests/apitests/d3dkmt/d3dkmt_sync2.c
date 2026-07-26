@@ -98,7 +98,7 @@ static void Test_MonitoredFence_Lifecycle(void)
         memset(&dso, 0, sizeof(dso));
         dso.hSyncObject = cso.hSyncObject;
         Status = pfnD3DKMTDestroySynchronizationObject(&dso);
-        ok(NT_SUCCESS(Status),
+        ok_succeeded(Status,
            "DestroySynchronizationObject(monitored fence) failed 0x%08lX\n", (long)Status);
     }
 
@@ -179,7 +179,7 @@ static void Test_MonitoredFence_CpuValuePage(void)
             sig.FenceValueArray = Values;
 
             Status = pSignal(&sig);
-            ok(NT_SUCCESS(Status),
+            ok_succeeded(Status,
                "SignalSynchronizationObjectFromCpu failed 0x%08lX\n",
                (long)Status);
 
@@ -201,7 +201,7 @@ static void Test_MonitoredFence_CpuValuePage(void)
                 wait.FenceValueArray = Values;
 
                 Status = pWait(&wait);
-                ok(NT_SUCCESS(Status),
+                ok_succeeded(Status,
                    "WaitForSynchronizationObjectFromCpu(42) failed "
                    "0x%08lX\n", (long)Status);
             }
@@ -213,7 +213,7 @@ static void Test_MonitoredFence_CpuValuePage(void)
         memset(&dso, 0, sizeof(dso));
         dso.hSyncObject = cso.hSyncObject;
         Status = pDestroy(&dso);
-        ok(NT_SUCCESS(Status),
+        ok_succeeded(Status,
            "DestroySynchronizationObject failed 0x%08lX\n", (long)Status);
     }
 
@@ -259,7 +259,7 @@ static void D3dkmtTestDestroySyncObject(_In_ PFND3DKMT_DESTROYSYNCHRONIZATIONOBJ
     memset(&Arguments, 0, sizeof(Arguments));
     Arguments.hSyncObject = Handle;
     Status = Destroy(&Arguments);
-    ok(NT_SUCCESS(Status), "DestroySynchronizationObject(0x%08lX) failed 0x%08lX\n", (unsigned long)Handle, (long)Status);
+    ok_succeeded(Status, "DestroySynchronizationObject(0x%08lX) failed 0x%08lX\n", (unsigned long)Handle, (long)Status);
 }
 
 static void Test_CreateSyncObject2_NormalizedState(void)
@@ -298,7 +298,7 @@ static void Test_CreateSyncObject2_NormalizedState(void)
     Create.Info.Type = D3DDDI_FENCE;
     Create.Info.Fence.FenceValue = 0x100000002ULL;
     Status = pCreate(&Create);
-    ok(NT_SUCCESS(Status), "CreateSynchronizationObject2(fence) failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "CreateSynchronizationObject2(fence) failed 0x%08lX\n", (long)Status);
     D3dkmtTestDestroySyncObject(pDestroy, Create.hSyncObject);
 
     memset(&Create, 0, sizeof(Create));
@@ -327,7 +327,7 @@ static void Test_CreateSyncObject2_NormalizedState(void)
         Create.Info.Type = D3DDDI_CPU_NOTIFICATION;
         Create.Info.CPUNotification.Event = Event;
         Status = pCreate(&Create);
-        ok(NT_SUCCESS(Status), "CreateSynchronizationObject2(CPU_NOTIFICATION) failed 0x%08lX\n", (long)Status);
+        ok_succeeded(Status, "CreateSynchronizationObject2(CPU_NOTIFICATION) failed 0x%08lX\n", (long)Status);
         CloseHandle(Event);
         Event = NULL;
         D3dkmtTestDestroySyncObject(pDestroy, Create.hSyncObject);
@@ -406,9 +406,9 @@ static void Test_MonitoredFence_AccessFlags(void)
         ok(*FencePage == 11, "NoGPUAccess initial fence is %I64u, expected 11\n", *FencePage);
     Value = 12;
     Status = D3dkmtTestSignalFromCpu(pSignal, hDevice, &Handle, &Value, 1, FALSE);
-    ok(NT_SUCCESS(Status), "NoGPUAccess CPU signal failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "NoGPUAccess CPU signal failed 0x%08lX\n", (long)Status);
     Status = D3dkmtTestWaitFromCpu(pWait, hDevice, &Handle, &Value, 1, NULL, FALSE);
-    ok(NT_SUCCESS(Status), "NoGPUAccess CPU wait failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "NoGPUAccess CPU wait failed 0x%08lX\n", (long)Status);
     D3dkmtTestDestroySyncObject(pDestroy, Handle);
 
     memset(&Create, 0, sizeof(Create));
@@ -434,7 +434,7 @@ static void Test_MonitoredFence_AccessFlags(void)
     Create.Info.Flags.NoSignal = 1;
     Create.Info.MonitoredFence.InitialFenceValue = 3;
     Status = pCreate(&Create);
-    ok(NT_SUCCESS(Status), "NoSignal monitored fence create failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "NoSignal monitored fence create failed 0x%08lX\n", (long)Status);
     if (NT_SUCCESS(Status))
     {
         Handle = Create.hSyncObject;
@@ -454,7 +454,7 @@ static void Test_MonitoredFence_AccessFlags(void)
     Create.Info.Flags.NoWait = 1;
     Create.Info.MonitoredFence.InitialFenceValue = 5;
     Status = pCreate(&Create);
-    ok(NT_SUCCESS(Status), "NoWait monitored fence create failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "NoWait monitored fence create failed 0x%08lX\n", (long)Status);
     if (NT_SUCCESS(Status))
     {
         Handle = Create.hSyncObject;
@@ -479,7 +479,7 @@ static void Test_MonitoredFence_AccessFlags(void)
     Create.Info.Flags.NoSignal = 1;
     Create.Info.Flags.NoWait = 1;
     Status = pCreate(&Create);
-    ok(!NT_SUCCESS(Status), "NoSignal+NoWait monitored fence create succeeded\n");
+    ok_failed(Status, "NoSignal+NoWait monitored fence create succeeded\n");
 
     /* A shared monitored fence publishes a global share handle that another
      * device on the same adapter can open into its own namespace. */
@@ -489,7 +489,7 @@ static void Test_MonitoredFence_AccessFlags(void)
     Create.Info.Flags.Shared = 1;
     Create.Info.Flags.NoGPUAccess = 1;
     Status = pCreate(&Create);
-    ok(NT_SUCCESS(Status), "Shared monitored fence create failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "Shared monitored fence create failed 0x%08lX\n", (long)Status);
     if (NT_SUCCESS(Status))
     {
         PFND3DKMT_OPENSYNCHRONIZATIONOBJECT pOpen =
@@ -503,7 +503,7 @@ static void Test_MonitoredFence_AccessFlags(void)
             memset(&Open, 0, sizeof(Open));
             Open.hSharedHandle = Create.Info.SharedHandle;
             Status = pOpen(&Open);
-            ok(NT_SUCCESS(Status), "Open of a shared monitored fence failed 0x%08lX\n", (long)Status);
+            ok_succeeded(Status, "Open of a shared monitored fence failed 0x%08lX\n", (long)Status);
             if (NT_SUCCESS(Status))
             {
                 ok(Open.hSyncObject != 0, "Open returned a zero sync handle\n");
@@ -514,7 +514,7 @@ static void Test_MonitoredFence_AccessFlags(void)
             memset(&Open, 0, sizeof(Open));
             Open.hSharedHandle = Create.Info.SharedHandle + 0x1000;
             Status = pOpen(&Open);
-            ok(!NT_SUCCESS(Status), "Open of an unknown share handle succeeded\n");
+            ok_failed(Status, "Open of an unknown share handle succeeded\n");
         }
         D3dkmtTestDestroySyncObject(pDestroy, Create.hSyncObject);
     }
@@ -526,7 +526,7 @@ static void Test_MonitoredFence_AccessFlags(void)
     Create.Info.Flags.Shared = 1;
     Create.Info.SynchronizationMutex.InitialState = FALSE;
     Status = pCreate(&Create);
-    ok(NT_SUCCESS(Status), "Shared mutex create failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "Shared mutex create failed 0x%08lX\n", (long)Status);
     if (NT_SUCCESS(Status))
     {
         ok(Create.Info.SharedHandle != 0, "Shared mutex published a zero share handle\n");
@@ -539,7 +539,7 @@ static void Test_MonitoredFence_AccessFlags(void)
     Create.Info.Type = D3DDDI_PERIODIC_MONITORED_FENCE;
     Create.Info.Flags.NoGPUAccess = 1;
     Status = pCreate(&Create);
-    ok(NT_SUCCESS(Status), "Periodic monitored fence create failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "Periodic monitored fence create failed 0x%08lX\n", (long)Status);
     if (NT_SUCCESS(Status))
     {
         volatile UINT64 *Value = (volatile UINT64 *)Create.Info.PeriodicMonitoredFence.FenceValueCPUVirtualAddress;
@@ -639,7 +639,7 @@ static void Test_MonitoredFence_CpuBatchSemantics(void)
     Values[0] = 1;
     Values[1] = 1;
     Status = D3dkmtTestSignalFromCpu(pSignal, hDevice, Handles, Values, ARRAYSIZE(Handles), FALSE);
-    ok(!NT_SUCCESS(Status), "signal batch with a bad later handle succeeded\n");
+    ok_failed(Status, "signal batch with a bad later handle succeeded\n");
     ok(*FencePages[0] == 0, "failed signal batch mutated the first fence to %I64u\n", *FencePages[0]);
     Handles[1] = FenceCreate[1].hSyncObject;
 
@@ -649,13 +649,13 @@ static void Test_MonitoredFence_CpuBatchSemantics(void)
     if (Event == NULL)
         goto Cleanup;
     Status = D3dkmtTestWaitFromCpu(pWait, hDevice, Handles, Values, ARRAYSIZE(Handles), Event, FALSE);
-    ok(NT_SUCCESS(Status), "register WaitAll failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "register WaitAll failed 0x%08lX\n", (long)Status);
             { DWORD Waited = WaitForSingleObject(Event, 0); ok_eq_ulong(Waited, (DWORD)WAIT_TIMEOUT); }
     Status = D3dkmtTestSignalFromCpu(pSignal, hDevice, &Handles[0], &Values[0], 1, FALSE);
-    ok(NT_SUCCESS(Status), "signal first WaitAll fence failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "signal first WaitAll fence failed 0x%08lX\n", (long)Status);
             { DWORD Waited = WaitForSingleObject(Event, 0); ok_eq_ulong(Waited, (DWORD)WAIT_TIMEOUT); }
     Status = D3dkmtTestSignalFromCpu(pSignal, hDevice, &Handles[1], &Values[1], 1, FALSE);
-    ok(NT_SUCCESS(Status), "signal second WaitAll fence failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "signal second WaitAll fence failed 0x%08lX\n", (long)Status);
     { DWORD Waited = WaitForSingleObject(Event, 2000); ok_eq_ulong(Waited, (DWORD)WAIT_OBJECT_0); }
     CloseHandle(Event);
     Event = NULL;
@@ -668,10 +668,10 @@ static void Test_MonitoredFence_CpuBatchSemantics(void)
     if (Event == NULL)
         goto Cleanup;
     Status = D3dkmtTestWaitFromCpu(pWait, hDevice, Handles, Values, ARRAYSIZE(Handles), Event, TRUE);
-    ok(NT_SUCCESS(Status), "register WaitAny failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "register WaitAny failed 0x%08lX\n", (long)Status);
             { DWORD Waited = WaitForSingleObject(Event, 0); ok_eq_ulong(Waited, (DWORD)WAIT_TIMEOUT); }
     Status = D3dkmtTestSignalFromCpu(pSignal, hDevice, &Handles[0], &Values[0], 1, FALSE);
-    ok(NT_SUCCESS(Status), "signal WaitAny fence failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "signal WaitAny fence failed 0x%08lX\n", (long)Status);
     { DWORD Waited = WaitForSingleObject(Event, 2000); ok_eq_ulong(Waited, (DWORD)WAIT_OBJECT_0); }
     CloseHandle(Event);
     Event = NULL;
@@ -686,11 +686,11 @@ static void Test_MonitoredFence_CpuBatchSemantics(void)
         goto Cleanup;
     Values[1] = 2;
     Status = D3dkmtTestWaitFromCpu(pWait, hDevice, &Handles[1], &Values[1], 1, Event, FALSE);
-    ok(NT_SUCCESS(Status), "register close-handle wait failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "register close-handle wait failed 0x%08lX\n", (long)Status);
     CloseHandle(Event);
     Event = NULL;
     Status = D3dkmtTestSignalFromCpu(pSignal, hDevice, &Handles[1], &Values[1], 1, FALSE);
-    ok(NT_SUCCESS(Status), "signal close-handle wait failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "signal close-handle wait failed 0x%08lX\n", (long)Status);
     { DWORD Waited = WaitForSingleObject(DuplicateEvent, 2000); ok_eq_ulong(Waited, (DWORD)WAIT_OBJECT_0); }
     CloseHandle(DuplicateEvent);
     DuplicateEvent = NULL;
@@ -698,14 +698,14 @@ static void Test_MonitoredFence_CpuBatchSemantics(void)
     /* Default publication is monotonic; AllowFenceRewind explicitly lowers it. */
     Values[0] = 10;
     Status = D3dkmtTestSignalFromCpu(pSignal, hDevice, &Handles[0], &Values[0], 1, FALSE);
-    ok(NT_SUCCESS(Status), "signal fence to 10 failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "signal fence to 10 failed 0x%08lX\n", (long)Status);
     ok(*FencePages[0] == 10, "fence page should be 10, got %I64u\n", *FencePages[0]);
     Values[0] = 5;
     Status = D3dkmtTestSignalFromCpu(pSignal, hDevice, &Handles[0], &Values[0], 1, FALSE);
-    ok(NT_SUCCESS(Status), "default lower signal failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "default lower signal failed 0x%08lX\n", (long)Status);
     ok(*FencePages[0] == 10, "default lower signal rewound fence to %I64u\n", *FencePages[0]);
     Status = D3dkmtTestSignalFromCpu(pSignal, hDevice, &Handles[0], &Values[0], 1, TRUE);
-    ok(NT_SUCCESS(Status), "AllowFenceRewind signal failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "AllowFenceRewind signal failed 0x%08lX\n", (long)Status);
     ok(*FencePages[0] == 5, "AllowFenceRewind should lower fence to 5, got %I64u\n", *FencePages[0]);
 
     /* A denied second object rejects the whole signal batch before the first
@@ -716,7 +716,7 @@ static void Test_MonitoredFence_CpuBatchSemantics(void)
     AccessCreate.Info.Flags.NoGPUAccess = 1;
     AccessCreate.Info.Flags.NoSignal = 1;
     Status = pCreate(&AccessCreate);
-    ok(NT_SUCCESS(Status), "NoSignal batch fence create failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "NoSignal batch fence create failed 0x%08lX\n", (long)Status);
     if (NT_SUCCESS(Status))
     {
         Handles[0] = FenceCreate[0].hSyncObject;
@@ -738,7 +738,7 @@ static void Test_MonitoredFence_CpuBatchSemantics(void)
     AccessCreate.Info.Flags.NoGPUAccess = 1;
     AccessCreate.Info.Flags.NoWait = 1;
     Status = pCreate(&AccessCreate);
-    ok(NT_SUCCESS(Status), "NoWait batch fence create failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "NoWait batch fence create failed 0x%08lX\n", (long)Status);
     if (NT_SUCCESS(Status))
     {
         Handles[0] = FenceCreate[0].hSyncObject;
@@ -793,7 +793,7 @@ static void Test_MonitoredFence_CpuBatchSemantics(void)
         UINT64 LegacyValue = 1;
 
         Status = D3dkmtTestSignalFromCpu(pSignal, hDevice, &LegacyHandle, &LegacyValue, 1, FALSE);
-        ok(!NT_SUCCESS(Status), "SignalSynchronizationObjectFromCpu accepted a legacy mutex\n");
+        ok_failed(Status, "SignalSynchronizationObjectFromCpu accepted a legacy mutex\n");
         D3dkmtTestDestroySyncObject(pDestroy, LegacyHandle);
     }
     else

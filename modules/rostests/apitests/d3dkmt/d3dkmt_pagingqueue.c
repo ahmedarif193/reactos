@@ -46,7 +46,7 @@ static void Test_PagingQueue_BadDevice(void)
     cpq.hDevice = (D3DKMT_HANDLE)0xDEAD0001;   /* never a valid device */
 
     Status = pCreate(&cpq);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "CreatePagingQueue with a bogus device should fail, got 0x%08lX\n",
        (long)Status);
 }
@@ -87,7 +87,7 @@ static void Test_PagingQueue_Lifecycle(void)
     memset(&dpq, 0, sizeof(dpq));
     dpq.hPagingQueue = cpq.hPagingQueue;
     Status = pDestroy(&dpq);
-    ok(NT_SUCCESS(Status), "DestroyPagingQueue failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "DestroyPagingQueue failed 0x%08lX\n", (long)Status);
 
 cleanup:
     DestroyTestDevice(hDevice);

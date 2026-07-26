@@ -61,7 +61,7 @@ static void Test_MakeResident_BadHandle(void)
     mr.AllocationList = &bogusAlloc;
 
     Status = p(&mr);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "MakeResident with a bogus paging queue should fail, got 0x%08lX\n",
        (long)Status);
 }
@@ -104,7 +104,7 @@ cleanup_queue:
     memset(&dpq, 0, sizeof(dpq));
     dpq.hPagingQueue = cpq.hPagingQueue;
     Status = pDestroy(&dpq);
-    ok(NT_SUCCESS(Status), "DestroyPagingQueue failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "DestroyPagingQueue failed 0x%08lX\n", (long)Status);
 cleanup_device:
     DestroyTestDevice(hDevice);
     CloseAdapter(hAdapter);
@@ -124,7 +124,7 @@ static void Test_Evict_BadHandle(void)
     ev.AllocationList = &bogusAlloc;
 
     Status = p(&ev);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "Evict with a bogus device should fail, got 0x%08lX\n", (long)Status);
 }
 
@@ -187,7 +187,7 @@ static void Test_ResidencyCycle_EvictMakeResidentWait(void)
         ev.AllocationList = &hAlloc;
         Status = pEvict(&ev);
         if (Status == STATUS_NOT_SUPPORTED) { skip("Evict is safely gated until residency accounting is implemented\n"); break; }
-        ok(NT_SUCCESS(Status), "Evict pass %u failed 0x%08lX\n", Pass, (long)Status);
+        ok_succeeded(Status, "Evict pass %u failed 0x%08lX\n", Pass, (long)Status);
         if (!NT_SUCCESS(Status))
             break;
 
@@ -197,7 +197,7 @@ static void Test_ResidencyCycle_EvictMakeResidentWait(void)
         mr.AllocationList = &hAlloc;
         Status = pMakeResident(&mr);
         if (Status == STATUS_NOT_SUPPORTED) { skip("MakeResident is safely gated until residency accounting is implemented\n"); break; }
-        ok(NT_SUCCESS(Status), "MakeResident pass %u failed 0x%08lX\n", Pass, (long)Status);
+        ok_succeeded(Status, "MakeResident pass %u failed 0x%08lX\n", Pass, (long)Status);
         if (!NT_SUCCESS(Status))
             break;
         ok(mr.NumAllocations == 1, "MakeResident pass %u completed %u of 1\n", Pass, mr.NumAllocations);
@@ -217,7 +217,7 @@ static void Test_ResidencyCycle_EvictMakeResidentWait(void)
                 wait.ObjectHandleArray = &hFence;
                 wait.FenceValueArray = &FenceValue;
                 Status = pWaitCpu(&wait);
-                ok(NT_SUCCESS(Status), "CPU wait on the paging fence failed 0x%08lX\n", (long)Status);
+                ok_succeeded(Status, "CPU wait on the paging fence failed 0x%08lX\n", (long)Status);
             }
             if (cpq.FenceValueCPUVirtualAddress != NULL)
             {
@@ -241,13 +241,13 @@ static void Test_ResidencyCycle_EvictMakeResidentWait(void)
     da.phAllocationList = &hAlloc;
     da.AllocationCount = 1;
     Status = pDestroyAlloc(&da);
-    ok(NT_SUCCESS(Status), "DestroyAllocation failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "DestroyAllocation failed 0x%08lX\n", (long)Status);
 
 cleanup_queue:
     memset(&dpq, 0, sizeof(dpq));
     dpq.hPagingQueue = cpq.hPagingQueue;
     Status = pDestroyQueue(&dpq);
-    ok(NT_SUCCESS(Status), "DestroyPagingQueue failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "DestroyPagingQueue failed 0x%08lX\n", (long)Status);
 cleanup_device:
     DestroyTestDevice(hDevice);
     CloseAdapter(hAdapter);

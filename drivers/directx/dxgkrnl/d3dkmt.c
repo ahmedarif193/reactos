@@ -581,7 +581,7 @@ DxgkpValidateAdapterOnlyForIoctl(
 
     Adapter = DxgkpValidateAdapterHandle(Handle);
     if (Adapter == NULL)
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
     DxgkDereferenceAdapter(Adapter);
     return STATUS_SUCCESS;
 }
@@ -595,7 +595,7 @@ DxgkpValidateGlobalShareForIoctl(
 
     Status = DxgkVidMmReferenceResource(Handle, TRUE, NULL, &Resource);
     if (!NT_SUCCESS(Status))
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
     DxgkVidMmDereferenceResource(Resource);
     return STATUS_SUCCESS;
 }
@@ -613,9 +613,14 @@ DxgkpValidateDeviceHandleForIoctl(
     if (OutAdapter != NULL && OutDevice == NULL)
         return STATUS_INVALID_PARAMETER;
 
+    /* Pass the lookup's own answer through rather than flattening every
+     * refusal to one status: Windows distinguishes a bad handle from one owned
+     * by another process, and flattening hid that difference. */
     Status = DxgkReferenceOwnedDeviceByHandle(hDevice, PsGetCurrentProcess(), &Adapter, &Device);
-    if (!NT_SUCCESS(Status) || Device == NULL || Adapter == NULL)
-        return STATUS_INVALID_HANDLE;
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Device == NULL || Adapter == NULL)
+        return STATUS_INVALID_PARAMETER;
 
     if (OutAdapter != NULL)
         *OutAdapter = Adapter;
@@ -3008,7 +3013,7 @@ DxgkGetContextSchedulingPriority(
 
     Context = DxgkLookupContextByHandle(pData->hContext, NULL, NULL);
     if (Context == NULL)
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
 
     pData->Priority = Context->SchedulingPriority;
     DxgkDereferenceContext(Context);
@@ -3031,7 +3036,7 @@ DxgkSetContextSchedulingPriority(
 
     Context = DxgkLookupContextByHandle(pData->hContext, NULL, NULL);
     if (Context == NULL)
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
 
     Context->SchedulingPriority = pData->Priority;
     DxgkDereferenceContext(Context);
@@ -4453,7 +4458,7 @@ DxgkQueryVideoMemoryInfo(
 
     Adapter = DxgkLookupAdapterByHandle(pData->hAdapter);
     if (Adapter == NULL)
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
 
     if (pData->hProcess != NULL)
     {
@@ -5422,7 +5427,9 @@ DxgkpDispatchBufferedIoctl(
             Status = DxgkpReferencePagingQueueDevice(pReserve->hPagingQueue, PsGetCurrentProcess(), &Adapter, &Device);
             if (NT_SUCCESS(Status))
                 ProcessRecord = Device->ProcessRecord;
-            else if (Status == STATUS_OBJECT_TYPE_MISMATCH)
+            /* Not a paging queue: the other accepted form reserves against
+             * an adapter.  The lookup reports that as a bad parameter. */
+            else if (Status == STATUS_INVALID_PARAMETER)
             {
                 Status = DxgkReferenceAdapterByHandle(pReserve->hAdapter, PsGetCurrentProcess(), &Adapter);
                 if (!NT_SUCCESS(Status))
@@ -5474,7 +5481,7 @@ DxgkpDispatchBufferedIoctl(
             pFree = (D3DKMT_FREEGPUVIRTUALADDRESS_LOCAL *)SystemBuffer;
             Adapter = DxgkLookupAdapterByHandle(pFree->hAdapter);
             if (Adapter == NULL)
-                return STATUS_INVALID_HANDLE;
+                return STATUS_INVALID_PARAMETER;
             if (!Adapter->GpuMmuCapsValid || Adapter->GpuMmuCaps.PageTableUpdateMode != DXGK_PAGETABLEUPDATE_CPU_VIRTUAL)
             {
                 DxgkDereferenceAdapter(Adapter);

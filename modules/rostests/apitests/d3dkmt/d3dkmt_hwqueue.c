@@ -57,7 +57,7 @@ static void Test_CreateHwQueue_BadHandle(void)
     chq.hHwContext = (D3DKMT_HANDLE)0xDEAD4001;   /* never a valid context */
 
     Status = p(&chq);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "CreateHwQueue with a bogus context should fail, got 0x%08lX\n",
        (long)Status);
 }

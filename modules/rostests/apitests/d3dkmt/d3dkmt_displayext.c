@@ -232,7 +232,7 @@ static void Test_SetVidPnSourceOwner_AllTypes(void)
     OwnerData.hDevice = hDevice;
     OwnerData.VidPnSourceCount = 0;
     Status = pfn(&OwnerData);
-    ok(NT_SUCCESS(Status),
+    ok_succeeded(Status,
        "SetVidPnSourceOwner empty release must succeed, got 0x%08lx\n",
        (unsigned long)Status);
 
@@ -345,7 +345,7 @@ static void Test_ReleaseProcessVidPnSourceOwners(void)
     if (SetProcess == NULL)
         return;
     Status = pfn(SetProcess);
-    ok(NT_SUCCESS(Status), "ReleaseProcessVidPnSourceOwners(current process) failed with 0x%08lx\n", (unsigned long)Status);
+    ok_succeeded(Status, "ReleaseProcessVidPnSourceOwners(current process) failed with 0x%08lx\n", (unsigned long)Status);
     CloseHandle(SetProcess);
 }
 
@@ -387,7 +387,7 @@ static void Test_CheckVidPnExclusiveOwnership(void)
     CheckData.hAdapter = (D3DKMT_HANDLE)0xBAD0CAFE;
     CheckData.VidPnSourceId = 0;
     Status = pfn(&CheckData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "CheckVidPnExclusiveOwnership(invalid adapter) must fail, got 0x%08lx\n",
        (unsigned long)Status);
 
@@ -552,7 +552,7 @@ static void Test_GetDisplayModeList_Deep(void)
     ModeList.hAdapter = (D3DKMT_HANDLE)0xBAD0CAFE;
     ModeList.VidPnSourceId = 0;
     Status = pfn(&ModeList);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "GetDisplayModeList(invalid adapter) must fail, got 0x%08lx\n",
        (unsigned long)Status);
 
@@ -650,7 +650,7 @@ static void Test_SetDisplayMode_CrossDeviceAllocation(void)
     DestroyAllocation.phAllocationList = &AllocationInfo.hAllocation;
     DestroyAllocation.AllocationCount = 1;
     Status = pDestroy(&DestroyAllocation);
-    ok(NT_SUCCESS(Status), "DestroyAllocation after SetDisplayMode cross-device rejection failed 0x%08lx\n", (unsigned long)Status);
+    ok_succeeded(Status, "DestroyAllocation after SetDisplayMode cross-device rejection failed 0x%08lx\n", (unsigned long)Status);
 
 Cleanup:
     if (hOtherDevice != 0)
@@ -793,7 +793,7 @@ static void Test_CheckMonitorPowerState(void)
     PowerData.hAdapter = (D3DKMT_HANDLE)0xBAD0CAFE;
     PowerData.VidPnSourceId = 0;
     Status = pfn(&PowerData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "CheckMonitorPowerState(invalid adapter) must fail, got 0x%08lx\n",
        (unsigned long)Status);
 
@@ -911,7 +911,7 @@ static void Test_GetScanLine_Deep(void)
     ScanData.hAdapter = (D3DKMT_HANDLE)0xBAD0CAFE;
     ScanData.VidPnSourceId = 0;
     Status = pfn(&ScanData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "GetScanLine(invalid adapter) must fail, got 0x%08lx\n",
        (unsigned long)Status);
 
@@ -934,7 +934,7 @@ static void Test_PollDisplayChildren(void)
     memset(&PollData, 0, sizeof(PollData));
     PollData.hAdapter = (D3DKMT_HANDLE)0xBAD0CAFE;
     Status = pfn(&PollData);
-    ok(!NT_SUCCESS(Status),
+    ok_failed(Status,
        "PollDisplayChildren(invalid adapter) must fail, got 0x%08lx\n",
        (unsigned long)Status);
 
@@ -949,7 +949,7 @@ static void Test_PollDisplayChildren(void)
     PollData.hAdapter = hAdapter;
     PollData.Reserved = 1;
     Status = pfn(&PollData);
-    ok(NT_SUCCESS(Status), "PollDisplayChildren does not police reserved flag bits on Win11, got 0x%08lx\n", (unsigned long)Status);
+    ok_succeeded(Status, "PollDisplayChildren does not police reserved flag bits on Win11, got 0x%08lx\n", (unsigned long)Status);
 
     memset(&PollData, 0, sizeof(PollData));
     PollData.hAdapter = hAdapter;
