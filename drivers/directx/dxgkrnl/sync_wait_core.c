@@ -172,16 +172,35 @@ DxgkSyncWaitCorePublishBatch(
             return Status;
         }
     }
+    /*
+     * A monitored fence only moves forward unless the caller says otherwise.
+     * Refuse the request rather than dropping it: this used to skip the update
+     * and still report success, so a caller that signalled backwards was told
+     * its signal had taken effect while the value never moved -- and it has no
+     * way to find out, because the fence reads back as whatever it already was.
+     * Windows returns STATUS_INVALID_PARAMETER here, and that is measurably
+     * what a caller needs to see.
+     *
+     * Checked across the whole batch before anything is written, because a
+     * batch that is refused must not have applied part of itself.
+     */
+    if (!AllowFenceRewind)
+    {
+        for (Index = 0; Index < UpdateCount; ++Index)
+        {
+            if (Updates[Index].NewValue <= (UINT64)*Updates[Index].FenceValue)
+            {
+                KeReleaseSpinLock(&Registry->Lock, OldIrql);
+                return STATUS_INVALID_PARAMETER;
+            }
+        }
+    }
+
     for (Index = 0; Index < UpdateCount; ++Index)
     {
-        UINT64 CurrentValue = (UINT64)*Updates[Index].FenceValue;
-
-        if (AllowFenceRewind || Updates[Index].NewValue > CurrentValue)
-        {
-            InterlockedExchange64(Updates[Index].FenceValue, (LONG64)Updates[Index].NewValue);
-            if (Updates[Index].PublishedValue != NULL)
-                InterlockedExchange64((volatile LONG64 *)Updates[Index].PublishedValue, (LONG64)Updates[Index].NewValue);
-        }
+        InterlockedExchange64(Updates[Index].FenceValue, (LONG64)Updates[Index].NewValue);
+        if (Updates[Index].PublishedValue != NULL)
+            InterlockedExchange64((volatile LONG64 *)Updates[Index].PublishedValue, (LONG64)Updates[Index].NewValue);
     }
     KeMemoryBarrier();
     DxgkpSyncWaitCollectSatisfiedLocked(Registry, &CompletionList);

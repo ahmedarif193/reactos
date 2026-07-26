@@ -638,6 +638,31 @@ DxgkpCreateSynchronizationObjectInternal(
         return STATUS_INVALID_PARAMETER;
     if (Info->Type == D3DDDI_CPU_NOTIFICATION && Info->CPUNotification.Event == NULL && !AllowMissingCpuNotificationEvent)
         return STATUS_INVALID_PARAMETER;
+    /*
+     * NoGPUAccess says the fence value gets no GPU-visible address, so nothing
+     * on the GPU can read or write it.  Two combinations that asks for are
+     * contradictory, and Windows refuses both:
+     *
+     *   Shared -- a shared fence exists so another device can wait on it, and a
+     *   device waits on the GPU side.  Sharing a fence no GPU can see hands the
+     *   opener something it can only ever poll from the CPU, which is not what
+     *   the caller asked for and not what it will get told.
+     *
+     *   Periodic -- a periodic fence is advanced by the display hardware on its
+     *   own vblank cadence.  That advance is a GPU-side write, so a periodic
+     *   fence with no GPU access has nothing to move it and would sit at its
+     *   initial value forever while looking healthy.
+     *
+     * Both used to be accepted here, which is worse than refusing: the caller
+     * gets an object that behaves plausibly until something waits on it.
+     */
+    if (Info->Flags.NoGPUAccess)
+    {
+        if (Info->Type == D3DDDI_PERIODIC_MONITORED_FENCE)
+            return STATUS_INVALID_PARAMETER;
+        if (Info->Type == D3DDDI_MONITORED_FENCE && Info->Flags.Shared)
+            return STATUS_INVALID_PARAMETER;
+    }
     Status = DxgkReferenceOwnedDeviceByHandle(hDevice, PsGetCurrentProcess(), &Adapter, &Device);
     if (!NT_SUCCESS(Status))
         return Status;

@@ -131,6 +131,51 @@ static VOID DxgkSyncWaitTestWaitAllAtomicBatch(VOID)
     ok(FenceValues[0] == 2 && FenceValues[1] == 1, "batch fence values are %I64d and %I64d\n", FenceValues[0], FenceValues[1]);
     ok(PublishedValues[0] == 2 && PublishedValues[1] == 1, "batch published values are %I64u and %I64u\n", PublishedValues[0], PublishedValues[1]);
     ok_bool_true(DxgkSyncWaitCoreIsEmpty(&Registry), "WaitAll completion removes request");
+
+    /*
+     * A monitored fence only moves forward unless the caller asks for a rewind.
+     *
+     * This used to skip the update and still return SUCCESS, so a caller that
+     * signalled backwards was told the signal had taken effect while the value
+     * never moved -- and it could not tell, because the fence reads back as
+     * whatever it already was.  Win11 returns STATUS_INVALID_PARAMETER; a
+     * differential run against it is what surfaced this, since every assertion
+     * on this side passed either way.
+     */
+    DxgkSyncWaitTestInitializeUpdate(&Updates[0], &Objects[0], &FenceValues[0], &PublishedValues[0], 1);
+    Status = DxgkSyncWaitCorePublishBatch(&Registry, &Updates[0], 1, FALSE, NULL, NULL);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    ok(FenceValues[0] == 2 && PublishedValues[0] == 2,
+       "a refused rewind moved the fence to %I64d/%I64u\n", FenceValues[0], PublishedValues[0]);
+
+    /* Signalling the value it already holds is a rewind too: it does not move
+     * forward, so it does not satisfy anything waiting for progress. */
+    DxgkSyncWaitTestInitializeUpdate(&Updates[0], &Objects[0], &FenceValues[0], &PublishedValues[0], 2);
+    Status = DxgkSyncWaitCorePublishBatch(&Registry, &Updates[0], 1, FALSE, NULL, NULL);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+
+    /* With permission it rewinds, and both the kernel value and the page the
+     * caller reads move together. */
+    DxgkSyncWaitTestInitializeUpdate(&Updates[0], &Objects[0], &FenceValues[0], &PublishedValues[0], 1);
+    Status = DxgkSyncWaitCorePublishBatch(&Registry, &Updates[0], 1, TRUE, NULL, NULL);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok(FenceValues[0] == 1 && PublishedValues[0] == 1,
+       "permitted rewind left %I64d/%I64u\n", FenceValues[0], PublishedValues[0]);
+
+    /*
+     * A refused batch must not have applied part of itself.  Here the first
+     * entry moves forward and the second rewinds: the whole batch is rejected,
+     * so the *first* one must not have landed either.
+     */
+    DxgkSyncWaitTestInitializeUpdate(&Updates[0], &Objects[0], &FenceValues[0], &PublishedValues[0], 9);
+    DxgkSyncWaitTestInitializeUpdate(&Updates[1], &Objects[1], &FenceValues[1], &PublishedValues[1], 1);
+    FenceValues[1] = 5; PublishedValues[1] = 5;
+    Status = DxgkSyncWaitCorePublishBatch(&Registry, Updates, RTL_NUMBER_OF(Updates), FALSE, NULL, NULL);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    ok(FenceValues[0] == 1 && PublishedValues[0] == 1,
+       "a refused batch applied its first entry: %I64d/%I64u\n", FenceValues[0], PublishedValues[0]);
+    ok(FenceValues[1] == 5 && PublishedValues[1] == 5,
+       "a refused batch disturbed its second entry: %I64d/%I64u\n", FenceValues[1], PublishedValues[1]);
 }
 
 static VOID DxgkSyncWaitTestWaitAnyAndImmediate(VOID)
@@ -202,8 +247,14 @@ static VOID DxgkSyncWaitTestAdmissionAndRewind(VOID)
     Context.AdmissionStatus = STATUS_SUCCESS;
     Updates[0].NewValue = 5;
     Updates[1].NewValue = 15;
+    /*
+     * Re-measured against Win11: a disallowed rewind is *refused*, not dropped.
+     * This assertion used to expect SUCCESS with the values left alone, which
+     * is what this kernel did and what a caller could not distinguish from its
+     * signal having been applied.
+     */
     Status = DxgkSyncWaitCorePublishBatch(&Registry, Updates, RTL_NUMBER_OF(Updates), FALSE, DxgkSyncWaitTestPublishAdmission, &Context);
-    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
     ok(FenceValues[0] == 10 && FenceValues[1] == 20, "monotonic publish rewound fences\n");
     Status = DxgkSyncWaitCorePublishBatch(&Registry, Updates, RTL_NUMBER_OF(Updates), TRUE, DxgkSyncWaitTestPublishAdmission, &Context);
     ok_eq_hex(Status, STATUS_SUCCESS);
