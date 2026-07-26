@@ -14,6 +14,7 @@
 #include <reactos/drivers/directx/dxgmms2.h>
 #include "timeline_core.h"
 #include "context_stream_core.h"
+#include "scheduler_core.h"
 
 #define DXGMMS2_REGISTRATION_TAG 'R2mG'
 #define DXGMMS2_ADAPTER_TAG      'A2mG'
@@ -62,8 +63,20 @@ typedef struct _DXGMMS2_ADAPTER_CONTEXT
     ULONGLONG EnabledSubsystems;
     ULONG HighestCompleteWddmVersion;
     ULONG StopReason;
+    ULONG Generation;
     DXGMMS2_TIMELINE_CONTEXT Timeline;
     DXGMMS2_CONTEXT_STREAM_MANAGER ContextStreamManager;
+
+    /* Scheduler ownership: dxgmms2 holds the run queues, their packet slots,
+     * and the retirement records dxgkrnl drains.  Guarded by SchedulerLock,
+     * which is never held across a dxgkrnl or miniport call. */
+    KSPIN_LOCK SchedulerLock;
+    DXGMMS2_SCHED_CORE SchedulerCore;
+    DXGMMS2_SCHED_PACKET SchedulerPackets[DXGMMS2_SCHED_MAX_PACKETS];
+    DXGMMS2_SCHED_RETIREMENT SchedulerRetirements[DXGMMS2_SCHED_MAX_PACKETS];
+    LIST_ENTRY SchedulerPacketFreeList;
+    LIST_ENTRY SchedulerRetirementList;
+    LIST_ENTRY SchedulerRetirementFreeList;
 } DXGMMS2_ADAPTER_CONTEXT, *PDXGMMS2_ADAPTER_CONTEXT;
 
 extern KMUTEX Dxgmms2GlobalMutex;
@@ -81,6 +94,10 @@ NTSTATUS NTAPI Dxgmms2BeginStopAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _In_
 NTSTATUS NTAPI Dxgmms2CompleteStopAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _In_ const DXGMMS2_STOP_ADAPTER_INFO_V1 *Info);
 NTSTATUS NTAPI Dxgmms2DestroyAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Adapter);
 NTSTATUS NTAPI Dxgmms2QuerySchedulerTimelineInterface(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _Inout_ DXGMMS2_SCHEDULER_TIMELINE_INTERFACE_V1 *TimelineInterface);
+VOID Dxgmms2SchedulerInitializeContext(_Inout_ PDXGMMS2_ADAPTER_CONTEXT Context);
+NTSTATUS Dxgmms2SchedulerStartAdapter(_Inout_ PDXGMMS2_ADAPTER_CONTEXT Context, _In_ ULONG NodeCount);
+VOID Dxgmms2SchedulerStopAdapter(_Inout_ PDXGMMS2_ADAPTER_CONTEXT Context);
+NTSTATUS NTAPI Dxgmms2QuerySchedulerInterface(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _Inout_ DXGMMS2_SCHEDULER_INTERFACE_V1 *SchedulerInterface);
 NTSTATUS NTAPI Dxgmms2QueryContextStreamInterface(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _Inout_ DXGMMS2_CONTEXT_STREAM_INTERFACE_V1 *ContextStreamInterface);
 PDXGMMS2_ADAPTER_CONTEXT Dxgmms2ReferenceAdapterContext(_In_ DXGMMS2_ADAPTER_HANDLE Adapter);
 VOID Dxgmms2DereferenceAdapterContext(_In_ PDXGMMS2_ADAPTER_CONTEXT Context);
