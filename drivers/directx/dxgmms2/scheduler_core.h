@@ -69,13 +69,16 @@ NTSTATUS Dxgmms2SchedCorePublishDispatch(_Inout_ PDXGMMS2_SCHED_CORE Core, _In_ 
 NTSTATUS Dxgmms2SchedCoreCompleteDispatch(_Inout_ PDXGMMS2_SCHED_CORE Core, _In_ ULONG EngineOrdinal, _In_ ULONGLONG ClaimToken, _In_ NTSTATUS DispatchStatus, _Outptr_result_maybenull_ PDXGMMS2_SCHED_PACKET *OutFailed);
 ULONG Dxgmms2SchedCoreNotifyCompletion(_Inout_ PDXGMMS2_SCHED_CORE Core, _In_ ULONG EngineOrdinal, _In_ ULONG CompletedFenceId, _Out_writes_to_(Capacity, return) PDXGMMS2_SCHED_PACKET *Retired, _In_ ULONG Capacity);
 ULONG Dxgmms2SchedCoreCancelOwner(_Inout_ PDXGMMS2_SCHED_CORE Core, _In_ ULONGLONG OwnerCookie, _Out_writes_to_(Capacity, return) PDXGMMS2_SCHED_PACKET *Cancelled, _In_ ULONG Capacity);
-ULONG Dxgmms2SchedCoreAbortAll(_Inout_ PDXGMMS2_SCHED_CORE Core, _Out_writes_to_(Capacity, return) PDXGMMS2_SCHED_PACKET *Aborted, _In_ ULONG Capacity);
+ULONG Dxgmms2SchedCoreAbortAll(_Inout_ PDXGMMS2_SCHED_CORE Core, _In_ BOOLEAN IncludeDispatched, _Out_writes_to_(Capacity, return) PDXGMMS2_SCHED_PACKET *Aborted, _In_ ULONG Capacity);
 BOOLEAN Dxgmms2SchedCoreIsIdle(_In_ PDXGMMS2_SCHED_CORE Core);
 NTSTATUS Dxgmms2SchedCoreQueryEngine(_In_ PDXGMMS2_SCHED_CORE Core, _In_ ULONG EngineOrdinal, _Inout_ DXGMMS2_SCHEDULER_ENGINE_STATUS_V1 *Status);
-NTSTATUS Dxgmms2SchedCoreSetEngineState(_Inout_ PDXGMMS2_SCHED_CORE Core, _In_ ULONG EngineOrdinal, _In_ ULONG NewState);
+BOOLEAN Dxgmms2SchedCoreIsValidTransition(_In_ ULONG OldState, _In_ ULONG NewState);
+NTSTATUS Dxgmms2SchedCoreSetEngineState(_Inout_ PDXGMMS2_SCHED_CORE Core, _In_ ULONG EngineOrdinal, _In_ ULONG ExpectedState, _In_ ULONG NewState, _Out_opt_ PULONG OutPreviousState);
 NTSTATUS Dxgmms2SchedCoreReserve(_Inout_ PDXGMMS2_SCHED_CORE Core, _In_ ULONG EngineOrdinal);
 VOID Dxgmms2SchedCoreUnreserve(_Inout_ PDXGMMS2_SCHED_CORE Core, _In_ ULONG EngineOrdinal);
 ULONG Dxgmms2SchedCoreResetDispatched(_Inout_ PDXGMMS2_SCHED_CORE Core, _In_ ULONG EngineOrdinal, _Out_writes_to_(Capacity, return) PDXGMMS2_SCHED_PACKET *Packets, _In_ ULONG Capacity);
+BOOLEAN Dxgmms2SchedCorePeekNext(_In_ PDXGMMS2_SCHED_CORE Core, _In_ ULONG EngineOrdinal, _Out_ PULONGLONG OutPacketCookie);
+NTSTATUS Dxgmms2SchedCoreStop(_Inout_ PDXGMMS2_SCHED_CORE Core);
 BOOLEAN Dxgmms2SchedCoreGetOldestDispatched(_In_ PDXGMMS2_SCHED_CORE Core, _Out_ PULONG EngineOrdinal, _Out_ PULONG FenceId, _Out_ PULONGLONG PacketCookie);
 
 /* EOF */

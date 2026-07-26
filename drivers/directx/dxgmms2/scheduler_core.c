@@ -57,6 +57,7 @@ Dxgmms2SchedCoreStart(
         return STATUS_INVALID_PARAMETER;
     if (Core->Started)
         return STATUS_INVALID_DEVICE_STATE;
+    Core->NextFenceId = 0;
     Core->EngineCount = EngineCount;
     Core->Started = TRUE;
     Core->AdmissionOpen = TRUE;
@@ -97,6 +98,15 @@ Dxgmms2SchedCoreAdmit(
         return STATUS_INVALID_PARAMETER;
     if (Core->TotalPackets >= DXGMMS2_SCHED_MAX_PACKETS)
         return STATUS_DEVICE_BUSY;
+    if ((Info->Flags & DXGMMS2_SCHEDULER_ADMIT_CONSUME_RESERVATION) != 0)
+    {
+        if (Engine->ReservedPacketCount == 0)
+            return STATUS_INVALID_DEVICE_STATE;
+    }
+    else if (Engine->PendingPacketCount + Engine->ReservedPacketCount >= DXGMMS2_SCHED_MAX_PACKETS)
+    {
+        return STATUS_DEVICE_BUSY;
+    }
     if (Engine->State == Dxgmms2EngineError || Engine->State == Dxgmms2EngineResetting)
         return STATUS_DEVICE_NOT_READY;
 
@@ -130,7 +140,7 @@ Dxgmms2SchedCoreAdmit(
 
     InsertTailList(&Engine->RunQueue, &Packet->Entry);
     Engine->PendingPacketCount++;
-    if (Engine->ReservedPacketCount != 0)
+    if ((Info->Flags & DXGMMS2_SCHEDULER_ADMIT_CONSUME_RESERVATION) != 0)
         Engine->ReservedPacketCount--;
     Engine->LastSubmittedFenceId = FenceId;
     Core->TotalPackets++;
@@ -259,10 +269,15 @@ Dxgmms2SchedCoreCompleteDispatch(
         Core->TotalPackets--;
         Packet->Dispatched = FALSE;
         *OutFailed = Packet;
-        Engine->State = IsListEmpty(&Engine->RunQueue) ? Dxgmms2EngineIdle : Dxgmms2EngineRunning;
+        /* Only the dispatch's own state may be retired here.  Reset, preempt
+         * and suspend take the engine away from the submitter, and committing
+         * a claim must not put it back. */
+        if (Engine->State == Dxgmms2EngineSubmitting)
+            Engine->State = IsListEmpty(&Engine->RunQueue) ? Dxgmms2EngineIdle : Dxgmms2EngineRunning;
         return STATUS_SUCCESS;
     }
-    Engine->State = Dxgmms2EngineRunning;
+    if (Engine->State == Dxgmms2EngineSubmitting)
+        Engine->State = Dxgmms2EngineRunning;
     return STATUS_SUCCESS;
 }
 
@@ -284,10 +299,20 @@ Dxgmms2SchedCoreNotifyCompletion(
     PDXGMMS2_SCHED_ENGINE Engine = Dxgmms2SchedCoreEngine(Core, EngineOrdinal);
     ULONG Count = 0;
 
-    if (Engine == NULL || CompletedFenceId == 0)
+    if (Engine == NULL)
         return 0;
-    if ((LONG)(CompletedFenceId - Engine->LastCompletedFenceId) > 0)
+    /*
+     * A zero watermark means "re-evaluate against what was already reported".
+     * The hardware can complete a packet while its dispatch claim is still
+     * outstanding, in which case that notification could not retire it; the
+     * claim's committer replays the sweep so the packet is not stranded.
+     */
+    if (CompletedFenceId == 0)
+        CompletedFenceId = Engine->LastCompletedFenceId;
+    else if ((LONG)(CompletedFenceId - Engine->LastCompletedFenceId) > 0)
         Engine->LastCompletedFenceId = CompletedFenceId;
+    if (CompletedFenceId == 0)
+        return 0;
 
     while (Count < Capacity && !IsListEmpty(&Engine->RunQueue))
     {
@@ -313,6 +338,7 @@ Dxgmms2SchedCoreRemoveMatching(
     _Inout_ PDXGMMS2_SCHED_CORE Core,
     _In_ ULONGLONG OwnerCookie,
     _In_ BOOLEAN MatchAll,
+    _In_ BOOLEAN IncludeDispatched,
     _Out_writes_to_(Capacity, return) PDXGMMS2_SCHED_PACKET *Removed,
     _In_ ULONG Capacity)
 {
@@ -331,7 +357,7 @@ Dxgmms2SchedCoreRemoveMatching(
 
             /* A packet the miniport already owns cannot be pulled back here;
              * it terminalizes through completion or reset instead. */
-            if ((MatchAll || Packet->OwnerCookie == OwnerCookie) && !Packet->Dispatched && !Packet->Claimed)
+            if ((MatchAll || Packet->OwnerCookie == OwnerCookie) && (IncludeDispatched || (!Packet->Dispatched && !Packet->Claimed)))
             {
                 RemoveEntryList(&Packet->Entry);
                 InitializeListHead(&Packet->Entry);
@@ -354,16 +380,17 @@ Dxgmms2SchedCoreCancelOwner(
     _Out_writes_to_(Capacity, return) PDXGMMS2_SCHED_PACKET *Cancelled,
     _In_ ULONG Capacity)
 {
-    return Dxgmms2SchedCoreRemoveMatching(Core, OwnerCookie, FALSE, Cancelled, Capacity);
+    return Dxgmms2SchedCoreRemoveMatching(Core, OwnerCookie, FALSE, FALSE, Cancelled, Capacity);
 }
 
 ULONG
 Dxgmms2SchedCoreAbortAll(
     _Inout_ PDXGMMS2_SCHED_CORE Core,
+    _In_ BOOLEAN IncludeDispatched,
     _Out_writes_to_(Capacity, return) PDXGMMS2_SCHED_PACKET *Aborted,
     _In_ ULONG Capacity)
 {
-    return Dxgmms2SchedCoreRemoveMatching(Core, 0, TRUE, Aborted, Capacity);
+    return Dxgmms2SchedCoreRemoveMatching(Core, 0, TRUE, IncludeDispatched, Aborted, Capacity);
 }
 
 BOOLEAN
@@ -467,6 +494,27 @@ Dxgmms2SchedCoreResetDispatched(
 }
 
 BOOLEAN
+Dxgmms2SchedCorePeekNext(
+    _In_ PDXGMMS2_SCHED_CORE Core,
+    _In_ ULONG EngineOrdinal,
+    _Out_ PULONGLONG OutPacketCookie)
+{
+    PDXGMMS2_SCHED_ENGINE Engine = Dxgmms2SchedCoreEngine((PDXGMMS2_SCHED_CORE)Core, EngineOrdinal);
+    PDXGMMS2_SCHED_PACKET Packet;
+
+    *OutPacketCookie = 0;
+    if (Engine == NULL || IsListEmpty(&Engine->RunQueue))
+        return FALSE;
+    if (Engine->State != Dxgmms2EngineIdle && Engine->State != Dxgmms2EngineRunning)
+        return FALSE;
+    Packet = CONTAINING_RECORD(Engine->RunQueue.Flink, DXGMMS2_SCHED_PACKET, Entry);
+    if (Packet->Claimed || Packet->Dispatched)
+        return FALSE;
+    *OutPacketCookie = Packet->PacketCookie;
+    return TRUE;
+}
+
+BOOLEAN
 Dxgmms2SchedCoreGetOldestDispatched(
     _In_ PDXGMMS2_SCHED_CORE Core,
     _Out_ PULONG EngineOrdinal,
@@ -500,17 +548,115 @@ Dxgmms2SchedCoreGetOldestDispatched(
     return *FenceId != 0;
 }
 
+/*
+ * Dxgmms2SchedCoreIsValidTransition
+ *
+ * The engine state machine.  Every move an engine may make lives here, so a
+ * caller cannot drive an engine into a state the scheduler does not model.
+ */
+BOOLEAN
+Dxgmms2SchedCoreIsValidTransition(
+    _In_ ULONG OldState,
+    _In_ ULONG NewState)
+{
+    if (OldState >= Dxgmms2EngineStateCount || NewState >= Dxgmms2EngineStateCount)
+        return FALSE;
+    if (OldState == NewState)
+        return TRUE;
+    if (NewState == Dxgmms2EngineResetting)
+        return (OldState != Dxgmms2EngineResetComplete);
+
+    switch (OldState)
+    {
+        case Dxgmms2EngineIdle:
+            return (NewState == Dxgmms2EngineBudgetComputed || NewState == Dxgmms2EngineSubmitting || NewState == Dxgmms2EngineSuspended || NewState == Dxgmms2EngineFlipPending || NewState == Dxgmms2EngineError);
+        case Dxgmms2EngineBudgetComputed:
+            return (NewState == Dxgmms2EngineIdle || NewState == Dxgmms2EngineSubmitting || NewState == Dxgmms2EngineSuspended || NewState == Dxgmms2EngineError);
+        case Dxgmms2EngineSubmitting:
+            return (NewState == Dxgmms2EngineRunning || NewState == Dxgmms2EngineIdle || NewState == Dxgmms2EngineError);
+        case Dxgmms2EngineRunning:
+            /* Submitting is reachable from Running: the scheduler pipelines,
+             * claiming the next packet while the previous one is in flight. */
+            return (NewState == Dxgmms2EngineCompleting || NewState == Dxgmms2EnginePreempting || NewState == Dxgmms2EngineSubmitting || NewState == Dxgmms2EngineIdle || NewState == Dxgmms2EngineError);
+        case Dxgmms2EnginePreempting:
+            return (NewState == Dxgmms2EnginePreempted || NewState == Dxgmms2EngineRunning || NewState == Dxgmms2EngineError);
+        case Dxgmms2EnginePreempted:
+            return (NewState == Dxgmms2EngineIdle || NewState == Dxgmms2EngineSubmitting || NewState == Dxgmms2EngineSuspended || NewState == Dxgmms2EngineError);
+        case Dxgmms2EngineResetting:
+            return (NewState == Dxgmms2EngineResetComplete || NewState == Dxgmms2EngineError);
+        case Dxgmms2EngineResetComplete:
+            return (NewState == Dxgmms2EngineIdle || NewState == Dxgmms2EngineSuspended || NewState == Dxgmms2EngineError);
+        case Dxgmms2EngineSuspended:
+            return (NewState == Dxgmms2EngineResuming || NewState == Dxgmms2EngineError);
+        case Dxgmms2EngineResuming:
+            return (NewState == Dxgmms2EngineIdle || NewState == Dxgmms2EngineSuspended || NewState == Dxgmms2EngineError);
+        case Dxgmms2EngineFlipPending:
+            return (NewState == Dxgmms2EngineFlipExecuting || NewState == Dxgmms2EngineIdle || NewState == Dxgmms2EngineError);
+        case Dxgmms2EngineFlipExecuting:
+            return (NewState == Dxgmms2EngineCompleting || NewState == Dxgmms2EngineIdle || NewState == Dxgmms2EngineError);
+        case Dxgmms2EngineCompleting:
+            return (NewState == Dxgmms2EngineIdle || NewState == Dxgmms2EngineRunning || NewState == Dxgmms2EngineError);
+        default:
+            return FALSE;
+    }
+}
+
 NTSTATUS
 Dxgmms2SchedCoreSetEngineState(
     _Inout_ PDXGMMS2_SCHED_CORE Core,
     _In_ ULONG EngineOrdinal,
-    _In_ ULONG NewState)
+    _In_ ULONG ExpectedState,
+    _In_ ULONG NewState,
+    _Out_opt_ PULONG OutPreviousState)
 {
     PDXGMMS2_SCHED_ENGINE Engine = Dxgmms2SchedCoreEngine(Core, EngineOrdinal);
 
-    if (Engine == NULL || NewState > Dxgmms2EngineError)
+    if (OutPreviousState != NULL)
+        *OutPreviousState = Dxgmms2EngineError;
+    if (Engine == NULL || NewState >= Dxgmms2EngineStateCount)
         return STATUS_INVALID_PARAMETER;
+    if (ExpectedState != DXGMMS2_ENGINE_STATE_ANY && ExpectedState >= Dxgmms2EngineStateCount)
+        return STATUS_INVALID_PARAMETER;
+    if (OutPreviousState != NULL)
+        *OutPreviousState = Engine->State;
+    if (ExpectedState != DXGMMS2_ENGINE_STATE_ANY && Engine->State != ExpectedState)
+        return STATUS_INVALID_DEVICE_STATE;
+    if (!Dxgmms2SchedCoreIsValidTransition(Engine->State, NewState))
+        return STATUS_INVALID_DEVICE_STATE;
     Engine->State = NewState;
+    return STATUS_SUCCESS;
+}
+
+/* EOF */
+
+/*
+ * Dxgmms2SchedCoreStop
+ *
+ * Returns the core to its pre-start state so the same adapter can be started
+ * again after a PnP stop.  The caller must have drained every queue first.
+ */
+NTSTATUS
+Dxgmms2SchedCoreStop(
+    _Inout_ PDXGMMS2_SCHED_CORE Core)
+{
+    ULONG Index;
+
+    if (!Core->Started)
+        return STATUS_SUCCESS;
+    if (Core->TotalPackets != 0)
+        return STATUS_DEVICE_BUSY;
+    for (Index = 0; Index < Core->EngineCount; ++Index)
+    {
+        PDXGMMS2_SCHED_ENGINE Engine = &Core->Engines[Index];
+
+        if (!IsListEmpty(&Engine->RunQueue))
+            return STATUS_DEVICE_BUSY;
+        RtlZeroMemory(Engine, sizeof(*Engine));
+        InitializeListHead(&Engine->RunQueue);
+    }
+    Core->EngineCount = 0;
+    Core->AdmissionOpen = FALSE;
+    Core->Started = FALSE;
     return STATUS_SUCCESS;
 }
 

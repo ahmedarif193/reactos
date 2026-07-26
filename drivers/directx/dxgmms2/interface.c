@@ -21,6 +21,8 @@ C_ASSERT(FIELD_OFFSET(DXGMMS2_PROVIDER_INTERFACE_V2, QuerySchedulerTimelineInter
 C_ASSERT(FIELD_OFFSET(DXGMMS2_PROVIDER_INTERFACE_V3, QueryContextStreamInterface) == 72);
 C_ASSERT(sizeof(DXGMMS2_PROVIDER_INTERFACE_V4) == 88);
 C_ASSERT(FIELD_OFFSET(DXGMMS2_PROVIDER_INTERFACE_V4, QuerySchedulerInterface) == 80);
+C_ASSERT(sizeof(DXGMMS2_PROVIDER_INTERFACE_V5) == 96);
+C_ASSERT(FIELD_OFFSET(DXGMMS2_PROVIDER_INTERFACE_V5, QueryVidMmInterface) == 88);
 #endif
 
 NTSTATUS
@@ -61,6 +63,8 @@ DxgkMms2Register(_In_ const DXGMMS2_DXGKRNL_INTERFACE_V1 *DxgkrnlInterface, _Ino
         ProviderRequiredSize = DXGMMS2_PROVIDER_INTERFACE_V3_SIZE;
     else if (ProviderVersion == DXGMMS2_ABI_VERSION_4)
         ProviderRequiredSize = DXGMMS2_PROVIDER_INTERFACE_V4_SIZE;
+    else if (ProviderVersion == DXGMMS2_ABI_VERSION_5)
+        ProviderRequiredSize = DXGMMS2_PROVIDER_INTERFACE_V5_SIZE;
     else
         return STATUS_REVISION_MISMATCH;
     if (ProviderCapacity < ProviderRequiredSize)
@@ -105,12 +109,14 @@ DxgkMms2Register(_In_ const DXGMMS2_DXGKRNL_INTERFACE_V1 *DxgkrnlInterface, _Ino
     ProviderInterface->BeginStopAdapter = Dxgmms2BeginStopAdapter;
     ProviderInterface->CompleteStopAdapter = Dxgmms2CompleteStopAdapter;
     ProviderInterface->DestroyAdapter = Dxgmms2DestroyAdapter;
-    if (ProviderVersion == DXGMMS2_ABI_VERSION_2 || ProviderVersion == DXGMMS2_ABI_VERSION_3 || ProviderVersion == DXGMMS2_ABI_VERSION_4)
+    if (ProviderVersion >= DXGMMS2_ABI_VERSION_2)
         ((PDXGMMS2_PROVIDER_INTERFACE_V2)ProviderInterface)->QuerySchedulerTimelineInterface = Dxgmms2QuerySchedulerTimelineInterface;
-    if (ProviderVersion == DXGMMS2_ABI_VERSION_3 || ProviderVersion == DXGMMS2_ABI_VERSION_4)
+    if (ProviderVersion >= DXGMMS2_ABI_VERSION_3)
         ((PDXGMMS2_PROVIDER_INTERFACE_V3)ProviderInterface)->QueryContextStreamInterface = Dxgmms2QueryContextStreamInterface;
-    if (ProviderVersion == DXGMMS2_ABI_VERSION_4)
+    if (ProviderVersion >= DXGMMS2_ABI_VERSION_4)
         ((PDXGMMS2_PROVIDER_INTERFACE_V4)ProviderInterface)->QuerySchedulerInterface = Dxgmms2QuerySchedulerInterface;
+    if (ProviderVersion >= DXGMMS2_ABI_VERSION_5)
+        ((PDXGMMS2_PROVIDER_INTERFACE_V5)ProviderInterface)->QueryVidMmInterface = Dxgmms2QueryVidMmInterface;
     KeMemoryBarrier();
     Dxgmms2ActiveRegistration = Registration;
     Dxgmms2ReleaseMutex(&Dxgmms2GlobalMutex);

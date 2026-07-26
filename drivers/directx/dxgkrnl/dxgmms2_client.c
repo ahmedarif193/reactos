@@ -12,7 +12,7 @@
 
 typedef struct _DXGKP_MMS2_PROVIDER_BUFFER
 {
-    DXGMMS2_PROVIDER_INTERFACE_V4 Interface;
+    DXGMMS2_PROVIDER_INTERFACE_V5 Interface;
     ULONGLONG Canary;
 } DXGKP_MMS2_PROVIDER_BUFFER;
 
@@ -38,14 +38,16 @@ C_ASSERT(FIELD_OFFSET(DXGMMS2_PROVIDER_INTERFACE_V3, QueryContextStreamInterface
 C_ASSERT(FIELD_OFFSET(DXGMMS2_CONTEXT_STREAM_INTERFACE_V1, AdapterHandle) == 16);
 C_ASSERT(FIELD_OFFSET(DXGMMS2_CONTEXT_STREAM_INTERFACE_V1, QueryContextStream) == 112);
 C_ASSERT(FIELD_OFFSET(DXGMMS2_CONTEXT_STREAM_INTERFACE_V1, DrainRetirements) == 120);
-C_ASSERT(sizeof(DXGMMS2_PROVIDER_INTERFACE_V4) == 88);
-C_ASSERT(FIELD_OFFSET(DXGMMS2_PROVIDER_INTERFACE_V4, QuerySchedulerInterface) == 80);
-C_ASSERT(FIELD_OFFSET(DXGKP_MMS2_PROVIDER_BUFFER, Canary) == DXGMMS2_PROVIDER_INTERFACE_V4_SIZE);
+C_ASSERT(sizeof(DXGMMS2_PROVIDER_INTERFACE_V5) == 96);
+C_ASSERT(DXGMMS2_WDDM_VERSION_2_0 == DXGKDDI_INTERFACE_VERSION_WDDM2_0);
+C_ASSERT(FIELD_OFFSET(DXGMMS2_PROVIDER_INTERFACE_V5, QuerySchedulerInterface) == 80);
+C_ASSERT(FIELD_OFFSET(DXGMMS2_PROVIDER_INTERFACE_V5, QueryVidMmInterface) == 88);
+C_ASSERT(FIELD_OFFSET(DXGKP_MMS2_PROVIDER_BUFFER, Canary) == DXGMMS2_PROVIDER_INTERFACE_V5_SIZE);
 C_ASSERT(FIELD_OFFSET(DXGKP_MMS2_START_RESULT_BUFFER, Canary) == DXGMMS2_START_ADAPTER_RESULT_V1_SIZE);
 #endif
 
 static volatile LONG DxgkpMms2ClientState = 0;
-static DXGMMS2_PROVIDER_INTERFACE_V4 DxgkpMms2Provider;
+static DXGMMS2_PROVIDER_INTERFACE_V5 DxgkpMms2Provider;
 static EX_RUNDOWN_REF DxgkpMms2CallRundown;
 
 static BOOLEAN
@@ -113,8 +115,8 @@ DxgkpMms2Initialize(VOID)
     ClientInterface.DereferenceAdapter = DxgkpMms2DereferenceAdapter;
 
     RtlZeroMemory(&ProviderBuffer, sizeof(ProviderBuffer));
-    ProviderBuffer.Interface.Size = DXGMMS2_PROVIDER_INTERFACE_V4_SIZE;
-    ProviderBuffer.Interface.Version = DXGMMS2_ABI_VERSION_4;
+    ProviderBuffer.Interface.Size = DXGMMS2_PROVIDER_INTERFACE_V5_SIZE;
+    ProviderBuffer.Interface.Version = DXGMMS2_ABI_VERSION_5;
     ProviderBuffer.Canary = DXGKP_MMS2_CANARY;
     Status = DxgkMms2Register(&ClientInterface, (PDXGMMS2_PROVIDER_INTERFACE_V1)&ProviderBuffer.Interface);
     if (ProviderBuffer.Canary != DXGKP_MMS2_CANARY)
@@ -128,7 +130,7 @@ DxgkpMms2Initialize(VOID)
         return Status;
     }
 
-    if (ProviderBuffer.Canary != DXGKP_MMS2_CANARY || ProviderBuffer.Interface.Size != DXGMMS2_PROVIDER_INTERFACE_V4_SIZE || ProviderBuffer.Interface.Version != DXGMMS2_ABI_VERSION_4 || ProviderBuffer.Interface.ProviderFlags != 0 || ProviderBuffer.Interface.Reserved != 0 || ProviderBuffer.Interface.RegistrationHandle == NULL || ProviderBuffer.Interface.CreateAdapter == NULL || ProviderBuffer.Interface.StartAdapter == NULL || ProviderBuffer.Interface.BeginStopAdapter == NULL || ProviderBuffer.Interface.CompleteStopAdapter == NULL || ProviderBuffer.Interface.DestroyAdapter == NULL || ProviderBuffer.Interface.QuerySchedulerTimelineInterface == NULL || ProviderBuffer.Interface.QueryContextStreamInterface == NULL || ProviderBuffer.Interface.QuerySchedulerInterface == NULL)
+    if (ProviderBuffer.Canary != DXGKP_MMS2_CANARY || ProviderBuffer.Interface.Size != DXGMMS2_PROVIDER_INTERFACE_V5_SIZE || ProviderBuffer.Interface.Version != DXGMMS2_ABI_VERSION_5 || ProviderBuffer.Interface.ProviderFlags != 0 || ProviderBuffer.Interface.Reserved != 0 || ProviderBuffer.Interface.RegistrationHandle == NULL || ProviderBuffer.Interface.CreateAdapter == NULL || ProviderBuffer.Interface.StartAdapter == NULL || ProviderBuffer.Interface.BeginStopAdapter == NULL || ProviderBuffer.Interface.CompleteStopAdapter == NULL || ProviderBuffer.Interface.DestroyAdapter == NULL || ProviderBuffer.Interface.QuerySchedulerTimelineInterface == NULL || ProviderBuffer.Interface.QueryContextStreamInterface == NULL || ProviderBuffer.Interface.QuerySchedulerInterface == NULL || ProviderBuffer.Interface.QueryVidMmInterface == NULL)
     {
         if (ProviderBuffer.Interface.RegistrationHandle != NULL)
             (VOID)DxgkMms2Unregister(ProviderBuffer.Interface.RegistrationHandle);
@@ -228,7 +230,10 @@ NTSTATUS DxgkpMms2QuerySchedulerInterface(_In_ DXGMMS2_ADAPTER_HANDLE Mms2Adapte
         Buffer.Interface.NotifyCompletion == NULL || Buffer.Interface.DrainRetirements == NULL ||
         Buffer.Interface.CancelOwnerPackets == NULL || Buffer.Interface.AbortAllPackets == NULL ||
         Buffer.Interface.SetAdmission == NULL || Buffer.Interface.QueryEngineStatus == NULL ||
-        Buffer.Interface.SetEngineState == NULL || Buffer.Interface.IsIdle == NULL)
+        Buffer.Interface.SetEngineState == NULL || Buffer.Interface.IsIdle == NULL ||
+        Buffer.Interface.ReserveSlot == NULL || Buffer.Interface.ReleaseSlot == NULL ||
+        Buffer.Interface.ResetDispatched == NULL || Buffer.Interface.GetOldestDispatched == NULL ||
+        Buffer.Interface.PeekNextPacket == NULL)
         return STATUS_REVISION_MISMATCH;
     *SchedulerInterface = Buffer.Interface;
     return STATUS_SUCCESS;
@@ -311,7 +316,7 @@ DxgkpMms2StartAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Mms2Adapter, _In_ ULONG Minipo
         return STATUS_REVISION_MISMATCH;
     if (!NT_SUCCESS(Status))
         return Status;
-    if (ResultBuffer.Result.Size != DXGMMS2_START_ADAPTER_RESULT_V1_SIZE || ResultBuffer.Result.Version != DXGMMS2_ABI_VERSION_1 || ResultBuffer.Result.EnabledSubsystems != 0 || ResultBuffer.Result.HighestCompleteWddmVersion != 0 || ResultBuffer.Result.Reserved != 0)
+    if (ResultBuffer.Result.Size != DXGMMS2_START_ADAPTER_RESULT_V1_SIZE || ResultBuffer.Result.Version != DXGMMS2_ABI_VERSION_1 || (ResultBuffer.Result.EnabledSubsystems & ~DXGMMS2_SUBSYSTEM_VALID_MASK) != 0 || ResultBuffer.Result.HighestCompleteWddmVersion == 0 || ResultBuffer.Result.HighestCompleteWddmVersion > RequestedWddmVersion || ResultBuffer.Result.HighestCompleteWddmVersion > DXGMMS2_WDDM_VERSION_2_0 || ResultBuffer.Result.Reserved != 0)
         return STATUS_REVISION_MISMATCH;
     *EnabledSubsystems = ResultBuffer.Result.EnabledSubsystems;
     *HighestCompleteWddmVersion = ResultBuffer.Result.HighestCompleteWddmVersion;
@@ -367,3 +372,38 @@ DxgkpMms2DestroyAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Mms2Adapter)
     DxgkpMms2ReleaseProviderCall();
     return Status;
 }
+
+NTSTATUS DxgkpMms2QueryVidMmInterface(_In_ DXGMMS2_ADAPTER_HANDLE Mms2Adapter, _Out_ DXGMMS2_VIDMM_INTERFACE_V1 *VidMmInterface)
+{
+    typedef struct _DXGKP_MMS2_VIDMM_BUFFER { DXGMMS2_VIDMM_INTERFACE_V1 Interface; ULONGLONG Canary; } DXGKP_MMS2_VIDMM_BUFFER;
+    DXGKP_MMS2_VIDMM_BUFFER Buffer;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Mms2Adapter == NULL || VidMmInterface == NULL)
+        return STATUS_INVALID_PARAMETER;
+    RtlZeroMemory(VidMmInterface, sizeof(*VidMmInterface));
+    if (!DxgkpMms2AcquireProviderCall())
+        return STATUS_DEVICE_NOT_READY;
+    RtlZeroMemory(&Buffer, sizeof(Buffer));
+    Buffer.Interface.Size = DXGMMS2_VIDMM_INTERFACE_V1_SIZE;
+    Buffer.Interface.Version = DXGMMS2_VIDMM_VERSION_1;
+    Buffer.Canary = DXGKP_MMS2_CANARY;
+    Status = DxgkpMms2Provider.QueryVidMmInterface(Mms2Adapter, &Buffer.Interface);
+    DxgkpMms2ReleaseProviderCall();
+    if (Buffer.Canary != DXGKP_MMS2_CANARY)
+        return STATUS_REVISION_MISMATCH;
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Buffer.Interface.Size != DXGMMS2_VIDMM_INTERFACE_V1_SIZE || Buffer.Interface.Version != DXGMMS2_VIDMM_VERSION_1 ||
+        Buffer.Interface.VidMmHandle == NULL ||
+        Buffer.Interface.Start == NULL || Buffer.Interface.SetSegment == NULL ||
+        Buffer.Interface.ReservePlacement == NULL || Buffer.Interface.ReleasePlacement == NULL ||
+        Buffer.Interface.SetPlacementState == NULL || Buffer.Interface.QuerySegmentStatus == NULL ||
+        Buffer.Interface.FindEvictionCandidate == NULL || Buffer.Interface.ReleaseAllPlacements == NULL)
+        return STATUS_REVISION_MISMATCH;
+    *VidMmInterface = Buffer.Interface;
+    return STATUS_SUCCESS;
+}
+
+/* EOF */

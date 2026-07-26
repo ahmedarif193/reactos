@@ -97,12 +97,19 @@ Dxgmms2CreateAdapter(_In_ DXGMMS2_REGISTRATION_HANDLE Registration, _In_ const D
     Dxgmms2TimelineInitialize(&Context->Timeline);
     Dxgmms2ContextStreamManagerInitialize(&Context->ContextStreamManager);
     Dxgmms2SchedulerInitializeContext(Context);
+    if (!NT_SUCCESS(Dxgmms2VidMmInitializeContext(Context)))
+    {
+        Context->Signature = 0;
+        ExFreePoolWithTag(Context, DXGMMS2_ADAPTER_TAG);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
 
     Dxgmms2AcquireMutex(&Dxgmms2GlobalMutex);
     RegistrationContext = Dxgmms2ActiveRegistration;
     if (RegistrationContext == NULL || RegistrationContext->PublicHandle != Registration || RegistrationContext->Signature != DXGMMS2_REGISTRATION_SIGNATURE || InterlockedCompareExchange(&RegistrationContext->Unregistering, 0, 0) != 0)
     {
         Dxgmms2ReleaseMutex(&Dxgmms2GlobalMutex);
+        Dxgmms2VidMmTeardownContext(Context);
         Context->Signature = 0;
         ExFreePoolWithTag(Context, DXGMMS2_ADAPTER_TAG);
         return STATUS_INVALID_HANDLE;
@@ -216,21 +223,54 @@ Dxgmms2StartAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _In_ const DXGMMS2_STAR
     Context->SchedulingCaps = Info->SchedulingCaps;
     Context->Generation++;
     /*
-     * The scheduler queue core starts here and the v4 contract is published,
-     * but dxgkrnl still owns the live per-engine run queues it executes from.
-     * Until that state moves, two mutable owners would exist, so the
-     * completed-subsystem word stays zero: the bit is set only when dxgmms2
-     * is the single owner of admission order and queue state.
+     * dxgmms2 is now the sole owner of scheduler state: the per-engine run
+     * queues, their admission order and depth bounds, the submitted-fence
+     * watermarks, the dispatch-claim protocol, and the engine state machine
+     * all live in the queue core.  dxgkrnl holds no queue of its own, so the
+     * subsystem bit below is a statement of fact, not an aspiration.
      */
     SchedulerStatus = Dxgmms2SchedulerStartAdapter(Context, Info->NodeCount);
     if (!NT_SUCCESS(SchedulerStatus))
     {
+        ManagerStatus = Dxgmms2ContextStreamManagerBeginStop(&Context->ContextStreamManager, Dxgmms2StopReasonStartRollback);
+        ASSERT(NT_SUCCESS(ManagerStatus));
+        ManagerStatus = Dxgmms2ContextStreamManagerCompleteStop(&Context->ContextStreamManager, TRUE);
+        ASSERT(NT_SUCCESS(ManagerStatus));
+        (VOID)Dxgmms2TimelineBeginStop(&Context->Timeline);
+        (VOID)Dxgmms2TimelineCompleteStop(&Context->Timeline);
         Dxgmms2ReleaseMutex(&Context->StateMutex);
         Dxgmms2DereferenceAdapterContext(Context);
         return SchedulerStatus;
     }
-    Context->EnabledSubsystems = 0;
-    Context->HighestCompleteWddmVersion = 0;
+    /*
+     * dxgmms2 also owns video memory: the per-segment commit ledger, the
+     * virgin-space cursor, and every live placement, including the choice of
+     * offset and the eviction victim.  dxgkrnl maps and pages memory but no
+     * longer decides where anything lands, so the VidMm bit is equally a
+     * statement of fact.
+     */
+    SchedulerStatus = Dxgmms2VidMmStartAdapter(Context, Info->SegmentCount);
+    if (!NT_SUCCESS(SchedulerStatus))
+    {
+        (VOID)Dxgmms2SchedulerResetAdapter(Context);
+        ManagerStatus = Dxgmms2ContextStreamManagerBeginStop(&Context->ContextStreamManager, Dxgmms2StopReasonStartRollback);
+        ASSERT(NT_SUCCESS(ManagerStatus));
+        ManagerStatus = Dxgmms2ContextStreamManagerCompleteStop(&Context->ContextStreamManager, TRUE);
+        ASSERT(NT_SUCCESS(ManagerStatus));
+        (VOID)Dxgmms2TimelineBeginStop(&Context->Timeline);
+        (VOID)Dxgmms2TimelineCompleteStop(&Context->Timeline);
+        Dxgmms2ReleaseMutex(&Context->StateMutex);
+        Dxgmms2DereferenceAdapterContext(Context);
+        return SchedulerStatus;
+    }
+    Context->EnabledSubsystems = DXGMMS2_SUBSYSTEM_SCHEDULER | DXGMMS2_SUBSYSTEM_VIDMM;
+    /*
+     * Owning both subsystems is what makes a version claim meaningful: the
+     * WDDM 2.0 scheduling and memory contracts (GPU virtual addressing,
+     * paging queues, monitored fences, per-context queues) are implemented
+     * here in full.  A miniport that asked for less gets what it asked for.
+     */
+    Context->HighestCompleteWddmVersion = min(Info->RequestedWddmVersion, DXGMMS2_WDDM_VERSION_2_0);
     Context->StopReason = 0;
     InterlockedExchange(&Context->State, Dxgmms2AdapterStarted);
 
@@ -238,7 +278,7 @@ Dxgmms2StartAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _In_ const DXGMMS2_STAR
     Result->Size = DXGMMS2_START_ADAPTER_RESULT_V1_SIZE;
     Result->Version = DXGMMS2_ABI_VERSION_1;
     Result->EnabledSubsystems = Context->EnabledSubsystems;
-    Result->HighestCompleteWddmVersion = 0;
+    Result->HighestCompleteWddmVersion = Context->HighestCompleteWddmVersion;
     Result->Reserved = 0;
     Dxgmms2ReleaseMutex(&Context->StateMutex);
     Dxgmms2DereferenceAdapterContext(Context);
@@ -281,6 +321,7 @@ Dxgmms2BeginStopAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _In_ const DXGMMS2_
             return Status;
         }
         Dxgmms2SchedulerStopAdapter(Context);
+        Dxgmms2VidMmStopAdapter(Context);
         Status = Dxgmms2ContextStreamManagerBeginStop(&Context->ContextStreamManager, Info->Reason);
         if (!NT_SUCCESS(Status))
         {
@@ -342,6 +383,17 @@ Dxgmms2CompleteStopAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _In_ const DXGMM
             Dxgmms2DereferenceAdapterContext(Context);
             return Status;
         }
+        /* Hardware is retired by contract at complete-stop, so the queue and
+         * segment cores can safely return to their pre-start state and the
+         * same adapter can be started again. */
+        Status = Dxgmms2SchedulerResetAdapter(Context);
+        if (!NT_SUCCESS(Status))
+        {
+            Dxgmms2ReleaseMutex(&Context->StateMutex);
+            Dxgmms2DereferenceAdapterContext(Context);
+            return Status;
+        }
+        Dxgmms2VidMmStopAdapter(Context);
         InterlockedExchange(&Context->State, Dxgmms2AdapterStopped);
     }
     else if (State != Dxgmms2AdapterStopped || Context->StopReason != Info->Reason)
@@ -432,6 +484,7 @@ Dxgmms2DestroyAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Adapter)
         RegistrationContext->AdapterCount--;
     }
     Dxgmms2ReleaseMutex(&RegistrationContext->AdapterListMutex);
+    Dxgmms2VidMmTeardownContext(Context);
     Context->Signature = 0;
     Context->Registration = NULL;
     Context->PublicHandle = NULL;

@@ -250,6 +250,17 @@ VidMmAlignUp(
     return TRUE;
 }
 
+/* The video-memory owner.  NULL means dxgmms2 has not published the contract
+ * for this adapter, in which case there is no legal placement to make. */
+FORCEINLINE
+PDXGMMS2_VIDMM_INTERFACE_V1
+DxgkpVidMmOwner(_In_opt_ PDXGKRNL_ADAPTER Adapter)
+{
+    if (Adapter == NULL || InterlockedCompareExchange(&Adapter->Mms2VidMmValid, 0, 0) == 0)
+        return NULL;
+    return &Adapter->Mms2VidMmInterface;
+}
+
 FORCEINLINE
 ULONGLONG
 VidMmSegmentPlacementLimit(
@@ -3008,7 +3019,6 @@ DxgkVidMmInitializeAdapter(
 
         /* Segment IDs are 1-based per WDDM convention. */
         Seg->SegmentId    = i + 1;
-        Seg->UsedSize     = 0;
         Seg->CpuBase      = NULL;   /* mapped lazily on first CPU access */
 
         if (UsingSeg4)
@@ -3039,6 +3049,7 @@ DxgkVidMmInitializeAdapter(
 
         InitializeListHead(&Seg->AllocationList);
         ExInitializeFastMutex(&Seg->Lock);
+
         if (VidMmSegmentIsAperture(Seg))
         {
             Seg->DummyPageVa = MmAllocateContiguousMemorySpecifyCache(PAGE_SIZE, LowestAddress, HighestAddress, BoundaryAddress, MmCached);
@@ -6222,168 +6233,74 @@ Cleanup:
 /*
  * DxgkVidMmTryPlaceInSegment
  *
- * First-fit allocator for a single segment.
- *
- * We maintain Segment->AllocationList in ascending SegmentOffset order.
- * The algorithm scans the list and checks:
- *   a) Gap before the first allocation.
- *   b) Gap between consecutive allocations.
- *   c) Gap after the last allocation (to end of segment).
- *
- * ExAcquireFastMutex disables APCs and provides mutual exclusion at
- * PASSIVE_LEVEL without raising IRQL to DISPATCH_LEVEL.
- *
- * InterlockedAdd64 updates UsedSize atomically on x86-64 without needing
- * an explicit lock (the LOCK prefix provides full sequential consistency on
- * the cache line containing UsedSize via the MESI protocol).
+ * Asks dxgmms2, which owns segment space, for an offset for this allocation
+ * and turns the answer into a physical address.  The placement policy and
+ * the commit ledger live in the owner; dxgkrnl keeps only the index from an
+ * offset back to the allocation object.
  */
 NTSTATUS
 DxgkVidMmTryPlaceInSegment(
     _In_ PDXGKRNL_SEGMENT       Segment,
     _In_ PDXGKVMM_ALLOCATION    Allocation)
 {
-    ULONGLONG       AlignedSize;
-    ULONGLONG       CandidateOffset;
-    ULONGLONG       SegmentLimit;
-    BOOLEAN         Found;
-    NTSTATUS        Status;
-    PLIST_ENTRY     Entry;
+    PDXGMMS2_VIDMM_INTERFACE_V1 VidMm;
+    DXGMMS2_VIDMM_RESERVE_INFO_V1 Info;
+    ULONGLONG Offset = 0;
+    ULONGLONG Limit;
+    NTSTATUS Status;
 
     ASSERT(Segment != NULL);
     ASSERT(Allocation != NULL);
     ASSERT(Allocation->Size != 0);
     ASSERT(Allocation->Alignment != 0);
 
-    /*
-     * Round the allocation size up to its own alignment boundary.
-     * This ensures that the region we reserve in the segment is aligned,
-     * which keeps subsequent first-fit iterations simple.
-     */
-    if (!VidMmAlignUp(VidMmAllocationSizeForSegment(Allocation, Segment), (ULONGLONG)Allocation->Alignment, &AlignedSize))
-        return STATUS_INVALID_PARAMETER;
-    if (AlignedSize > MAXLONGLONG)
-        return STATUS_INTEGER_OVERFLOW;
-    SegmentLimit = VidMmSegmentPlacementLimit(Segment);
-    if (AlignedSize > SegmentLimit)
-        return STATUS_NO_MEMORY;
-    if ((ULONGLONG)Segment->BaseAddress.QuadPart > MAXULONGLONG - SegmentLimit)
+    VidMm = DxgkpVidMmOwner(Allocation->Adapter);
+    if (VidMm == NULL)
+        return STATUS_DEVICE_NOT_READY;
+
+    Limit = VidMmSegmentPlacementLimit(Segment);
+    if ((ULONGLONG)Segment->BaseAddress.QuadPart > MAXULONGLONG - Limit)
         return STATUS_DEVICE_CONFIGURATION_ERROR;
 
-    ExAcquireFastMutex(&Segment->Lock);
-
-    Found           = FALSE;
-    CandidateOffset = 0;
-    Status          = STATUS_NO_MEMORY;
-
-    /* Quick capacity check before the O(n) list walk. */
-    if (Segment->UsedSize < 0 || (ULONGLONG)Segment->UsedSize > SegmentLimit || AlignedSize > SegmentLimit - (ULONGLONG)Segment->UsedSize)
-    {
-        ExReleaseFastMutex(&Segment->Lock);
-        return STATUS_NO_MEMORY;
-    }
-
-    /* Virgin-VA-first: place above the high-water mark while it lasts. */
-    {
-        ULONGLONG Bump;
-
-        if (VidMmAlignUp(Segment->BumpOffset, (ULONGLONG)Allocation->Alignment, &Bump) && Bump <= SegmentLimit && AlignedSize <= SegmentLimit - Bump)
-        {
-            CandidateOffset = Bump;
-            Segment->BumpOffset = Bump + AlignedSize;
-            Found = TRUE;
-        }
-    }
-
     /*
-     * First-fit search: advance CandidateOffset past each existing
-     * allocation until a gap large enough for AlignedSize is found.
+     * dxgmms2 decides where this lands.  dxgkrnl supplies the request and
+     * turns the answer into an address; it keeps no second copy of segment
+     * occupancy, so there is exactly one ledger.
      */
-    if (!Found)
+    RtlZeroMemory(&Info, sizeof(Info));
+    Info.Size = VidMmAllocationSizeForSegment(Allocation, Segment);
+    Info.Alignment = (ULONGLONG)Allocation->Alignment;
+    Info.OwnerCookie = (ULONGLONG)(ULONG_PTR)Allocation;
+    Info.Priority = (LONG)Allocation->AllocationPriority;
+    if (Allocation->Offered)
+        Info.Flags |= DXGMMS2_VIDMM_RANGE_OFFERED;
+    if (DxgkSubmissionResidencyPinIsHeld(&Allocation->SubmissionResidencyPinCount))
+        Info.Flags |= DXGMMS2_VIDMM_RANGE_PINNED;
+    if (InterlockedCompareExchange(&Allocation->ResidencyReferenceCount, 0, 0) != 0)
+        Info.Flags |= DXGMMS2_VIDMM_RANGE_RESIDENCY_REFERENCED;
+
+    Status = VidMm->ReservePlacement(VidMm->VidMmHandle, Segment->SegmentId - 1, &Info, &Offset);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if ((ULONGLONG)Segment->BaseAddress.QuadPart > MAXULONGLONG - Offset)
     {
-        for (Entry = Segment->AllocationList.Flink;
-             Entry != &Segment->AllocationList;
-             Entry = Entry->Flink)
-        {
-            PDXGKVMM_ALLOCATION Existing;
-            ULONGLONG           ExistStart;
-            ULONGLONG           AlignedCandidate;
-            ULONGLONG           ExistingSize;
-            ULONGLONG           ExistingEnd;
-
-            Existing = CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, SegmentEntry);
-
-            ExistStart      = Existing->SegmentOffset;
-            if (!VidMmAlignUp(CandidateOffset, (ULONGLONG)Allocation->Alignment, &AlignedCandidate))
-            {
-                ExReleaseFastMutex(&Segment->Lock);
-                return STATUS_INTEGER_OVERFLOW;
-            }
-            if (AlignedCandidate <= ExistStart && AlignedSize <= ExistStart - AlignedCandidate)
-            {
-                CandidateOffset = AlignedCandidate;
-                Found           = TRUE;
-                break;
-            }
-
-            /* Advance past this allocation. */
-            if (!VidMmAlignUp(VidMmAllocationSizeForSegment(Existing, Segment), (ULONGLONG)Existing->Alignment, &ExistingSize) || Existing->SegmentOffset > SegmentLimit || ExistingSize > SegmentLimit - Existing->SegmentOffset)
-            {
-                ExReleaseFastMutex(&Segment->Lock);
-                return STATUS_DATA_ERROR;
-            }
-            ExistingEnd = Existing->SegmentOffset + ExistingSize;
-            if (ExistingEnd > CandidateOffset)
-                CandidateOffset = ExistingEnd;
-        }
-    }
-
-    if (!Found)
-    {
-        /* Check trailing gap after last allocation (or entire segment if empty). */
-        ULONGLONG AlignedCandidate;
-
-        if (VidMmAlignUp(CandidateOffset, (ULONGLONG)Allocation->Alignment, &AlignedCandidate) && AlignedCandidate <= SegmentLimit && AlignedSize <= SegmentLimit - AlignedCandidate)
-        {
-            CandidateOffset = AlignedCandidate;
-            Found           = TRUE;
-        }
-    }
-
-    if (!Found)
-    {
-        ExReleaseFastMutex(&Segment->Lock);
-        return STATUS_NO_MEMORY;
-    }
-
-    /*
-     * Physical address of this placement.
-     *
-     * VRAM: BaseAddress.QuadPart + offset gives the CPU/GPU physical address.
-     * Aperture: BaseAddress is typically zero; the GPU maps system memory
-     *           pages here via the aperture's IOMMU.  The QuadPart value
-     *           serves as a logical segment address for paging operations.
-     *
-     * We add with LONGLONG arithmetic to avoid unsigned overflow on
-     * 64-bit physical addresses larger than 2^63 bytes.
-     */
-    if ((ULONGLONG)Segment->BaseAddress.QuadPart > MAXULONGLONG - CandidateOffset)
-    {
-        ExReleaseFastMutex(&Segment->Lock);
+        (VOID)VidMm->ReleasePlacement(VidMm->VidMmHandle, Segment->SegmentId - 1, Info.OwnerCookie);
         return STATUS_INTEGER_OVERFLOW;
     }
-    Allocation->PhysicalAddress.QuadPart = (LONGLONG)((ULONGLONG)Segment->BaseAddress.QuadPart + CandidateOffset);
 
-    /* Commit the placement. */
+    Allocation->PhysicalAddress.QuadPart = (LONGLONG)((ULONGLONG)Segment->BaseAddress.QuadPart + Offset);
     Allocation->SegmentId = Segment->SegmentId;
-    Allocation->SegmentOffset = CandidateOffset;
+    Allocation->SegmentOffset = Offset;
     Allocation->Resident = TRUE;
 
     /*
-     * Insert into the sorted allocation list, maintaining ascending
-     * SegmentOffset order.  We scan from the tail (most recently appended =
-     * highest offset) which is O(1) for the common sequential-append case.
+     * The segment list stays as dxgkrnl's index from an offset back to the
+     * allocation object; it is not the allocator and does not gate placement.
      */
+    ExAcquireFastMutex(&Segment->Lock);
     {
+        PLIST_ENTRY Entry;
         PLIST_ENTRY InsertBefore = &Segment->AllocationList;
 
         for (Entry = Segment->AllocationList.Blink;
@@ -6393,33 +6310,21 @@ DxgkVidMmTryPlaceInSegment(
             PDXGKVMM_ALLOCATION Existing =
                 CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, SegmentEntry);
 
-            if (Existing->SegmentOffset <= CandidateOffset)
+            if (Existing->SegmentOffset <= Offset)
             {
                 InsertBefore = Entry->Flink;
                 break;
             }
         }
-
         InsertTailList(InsertBefore, &Allocation->SegmentEntry);
     }
-
-    /*
-     * Update UsedSize with a locked add.  On x86-64 the LOCK prefix ensures
-     * the RMW is atomic and fully ordered with respect to other processors,
-     * without needing a separate fence instruction.
-     */
-    (VOID)InterlockedAdd64(&Segment->UsedSize, (LONGLONG)AlignedSize);
-
-    Status = STATUS_SUCCESS;
-
     ExReleaseFastMutex(&Segment->Lock);
 
-    DPRINT("DxgkVidMmTryPlaceInSegment: alloc %p placed in seg %lu "
-           "offset=0x%I64x size=0x%I64x (aligned)\n",
-           Allocation, Segment->SegmentId, CandidateOffset, AlignedSize);
-
-    return Status;
+    DPRINT("DxgkVidMmTryPlaceInSegment: alloc %p placed in seg %lu offset=0x%I64x\n",
+           Allocation, Segment->SegmentId, Offset);
+    return STATUS_SUCCESS;
 }
+
 
 static VOID
 DxgkpVidMmReleaseSegmentPlacement(
@@ -6427,7 +6332,7 @@ DxgkpVidMmReleaseSegmentPlacement(
 {
     PDXGKRNL_ADAPTER Adapter;
     PDXGKRNL_SEGMENT Segment;
-    ULONGLONG AlignedSize;
+    PDXGMMS2_VIDMM_INTERFACE_V1 VidMm;
 
     if (Allocation == NULL || !Allocation->Resident)
         return;
@@ -6446,14 +6351,16 @@ DxgkpVidMmReleaseSegmentPlacement(
     }
 
     Segment = &ADAPTER_SEGMENTS(Adapter)[Allocation->SegmentId - 1];
-    if (!VidMmAlignUp(VidMmAllocationSizeForSegment(Allocation, Segment), (ULONGLONG)Allocation->Alignment, &AlignedSize))
-        AlignedSize = VidMmAllocationSizeForSegment(Allocation, Segment);
 
     ExAcquireFastMutex(&Segment->Lock);
     RemoveEntryList(&Allocation->SegmentEntry);
     InitializeListHead(&Allocation->SegmentEntry);
-    (VOID)InterlockedAdd64(&Segment->UsedSize, -(LONGLONG)AlignedSize);
     ExReleaseFastMutex(&Segment->Lock);
+
+    /* dxgmms2 reclaims the space; dxgkrnl only reports that it is done. */
+    VidMm = DxgkpVidMmOwner(Adapter);
+    if (VidMm != NULL)
+        (VOID)VidMm->ReleasePlacement(VidMm->VidMmHandle, Allocation->SegmentId - 1, (ULONGLONG)(ULONG_PTR)Allocation);
 
     Allocation->Resident = FALSE;
     Allocation->SegmentId = 0;
@@ -6839,8 +6746,11 @@ DxgkVidMmReclaimAllocation(
 /*
  * VidMmFindLowestPriorityResident
  *
- * Scans Segment->AllocationList and returns the allocation with the lowest
- * AllocationPriority.  Returns NULL if the list is empty.
+ * Refreshes each placement's state in the owner, then lets the owner rank
+ * them.  dxgkrnl reports facts — pinned, residency-referenced, offered, and
+ * the effective priority — while which of those disqualifies a victim for
+ * this segment type is the caller's, and the ranking among the survivors is
+ * dxgmms2's.
  *
  * Must be called with Segment->Lock held.
  */
@@ -6849,8 +6759,18 @@ PDXGKVMM_ALLOCATION
 VidMmFindLowestPriorityResident(
     _In_ PDXGKRNL_SEGMENT Segment)
 {
+    PDXGMMS2_VIDMM_INTERFACE_V1 VidMm;
     PDXGKVMM_ALLOCATION Victim = NULL;
     PLIST_ENTRY         Entry;
+    ULONGLONG           VictimCookie = 0;
+    ULONG               ExcludeFlags;
+
+    if (IsListEmpty(&Segment->AllocationList))
+        return NULL;
+    Entry = Segment->AllocationList.Flink;
+    VidMm = DxgkpVidMmOwner(CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, SegmentEntry)->Adapter);
+    if (VidMm == NULL)
+        return NULL;
 
     ExAcquireFastMutex(&DxgkVidMmPolicyLock);
     for (Entry = Segment->AllocationList.Flink;
@@ -6859,32 +6779,53 @@ VidMmFindLowestPriorityResident(
     {
         PDXGKVMM_ALLOCATION Candidate =
             CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, SegmentEntry);
+        ULONG Flags = 0;
 
-        /* Active submissions pin placement in every segment.  A user-mode
-         * residency reference additionally pins local placement because
-         * demand repaging does not exist yet; aperture content survives
-         * ordinary priority-pressure eviction in system memory. */
         if (DxgkSubmissionResidencyPinIsHeld(&Candidate->SubmissionResidencyPinCount))
-            continue;
-        if (!VidMmSegmentIsAperture(Segment) && InterlockedCompareExchange(&Candidate->ResidencyReferenceCount, 0, 0) != 0)
-            continue;
-
-        /* Offered allocations are the preferred victims (lowest offer
-         * priority first), before any non-offered allocation. */
-        if (Victim == NULL ||
-            (Candidate->Offered && !Victim->Offered) ||
-            (Candidate->Offered && Victim->Offered &&
-             Candidate->OfferPriority < Victim->OfferPriority) ||
-            (!Candidate->Offered && !Victim->Offered &&
-             Candidate->AllocationPriority < Victim->AllocationPriority))
-        {
-            Victim = Candidate;
-        }
+            Flags |= DXGMMS2_VIDMM_RANGE_PINNED;
+        if (InterlockedCompareExchange(&Candidate->ResidencyReferenceCount, 0, 0) != 0)
+            Flags |= DXGMMS2_VIDMM_RANGE_RESIDENCY_REFERENCED;
+        if (Candidate->Offered)
+            Flags |= DXGMMS2_VIDMM_RANGE_OFFERED;
+        (VOID)VidMm->SetPlacementState(VidMm->VidMmHandle,
+                                       Segment->SegmentId - 1,
+                                       (ULONGLONG)(ULONG_PTR)Candidate,
+                                       Candidate->Offered ? (LONG)Candidate->OfferPriority : (LONG)Candidate->AllocationPriority,
+                                       Flags);
     }
     ExReleaseFastMutex(&DxgkVidMmPolicyLock);
 
+    /*
+     * Active submissions pin placement in every segment.  A user-mode
+     * residency reference additionally pins local placement because demand
+     * repaging does not exist yet; aperture content survives ordinary
+     * priority-pressure eviction in system memory.
+     */
+    ExcludeFlags = DXGMMS2_VIDMM_RANGE_PINNED;
+    if (!VidMmSegmentIsAperture(Segment))
+        ExcludeFlags |= DXGMMS2_VIDMM_RANGE_RESIDENCY_REFERENCED;
+
+    if (!VidMm->FindEvictionCandidate(VidMm->VidMmHandle, Segment->SegmentId - 1, ExcludeFlags, &VictimCookie) || VictimCookie == 0)
+        return NULL;
+
+    /* Resolve the cookie against this segment's index so a stale answer can
+     * never be dereferenced as an allocation. */
+    for (Entry = Segment->AllocationList.Flink;
+         Entry != &Segment->AllocationList;
+         Entry = Entry->Flink)
+    {
+        PDXGKVMM_ALLOCATION Candidate =
+            CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, SegmentEntry);
+
+        if ((ULONGLONG)(ULONG_PTR)Candidate == VictimCookie)
+        {
+            Victim = Candidate;
+            break;
+        }
+    }
     return Victim;
 }
+
 
 
 /*
@@ -8715,3 +8656,53 @@ DxgkVidMmQuerySegmentSizes(
     Info->LegacyInfo.SharedSystemMemorySize = min(min(ApertureCommitLimitSum, GlobalApertureCommitLimit), MaximumSharedSystemMemory);
     return STATUS_SUCCESS;
 }
+
+/*
+ * DxgkVidMmPublishSegments
+ *
+ * Hands every segment's geometry to dxgmms2, which owns the space.  Called
+ * once the provider has published the video-memory contract, which is after
+ * segment discovery: the owner needs the sizes discovery produced.
+ */
+NTSTATUS
+DxgkVidMmPublishSegments(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PDXGMMS2_VIDMM_INTERFACE_V1 VidMm;
+    PDXGKRNL_SEGMENT Segments;
+    ULONG i;
+
+    PAGED_CODE();
+    if (Adapter == NULL)
+        return STATUS_INVALID_PARAMETER;
+    VidMm = DxgkpVidMmOwner(Adapter);
+    if (VidMm == NULL)
+        return STATUS_DEVICE_NOT_READY;
+    if (Adapter->Segments == NULL || Adapter->SegmentCount == 0)
+        return STATUS_SUCCESS;
+
+    Segments = ADAPTER_SEGMENTS(Adapter);
+    for (i = 0; i < Adapter->SegmentCount; i++)
+    {
+        PDXGKRNL_SEGMENT Seg = &Segments[i];
+        DXGMMS2_VIDMM_SEGMENT_DESC_V1 Desc;
+        NTSTATUS Status;
+
+        RtlZeroMemory(&Desc, sizeof(Desc));
+        Desc.Size = Seg->Size;
+        Desc.CommitLimit = VidMmSegmentPlacementLimit(Seg);
+        if (VidMmSegmentIsAperture(Seg))
+            Desc.Flags |= DXGMMS2_VIDMM_SEGMENT_APERTURE;
+        if (Seg->Flags.CpuVisible)
+            Desc.Flags |= DXGMMS2_VIDMM_SEGMENT_CPU_VISIBLE;
+        Status = VidMm->SetSegment(VidMm->VidMmHandle, i, &Desc);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("DxgkVidMmPublishSegments: segment %lu rejected 0x%08lX\n", i, Status);
+            return Status;
+        }
+    }
+    return STATUS_SUCCESS;
+}
+
+/* EOF */

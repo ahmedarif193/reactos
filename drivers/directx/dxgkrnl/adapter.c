@@ -5193,12 +5193,29 @@ DxgkpMms2StartAdministrativeAdapter(_In_ PDXGKRNL_ADAPTER Adapter, _Out_ PBOOLEA
     Status = DxgkpMms2StartAdapter(Adapter->Mms2Adapter, Adapter->MiniportContext->InitData.s.Version, RequestedWddmVersion, Adapter->NodeCount, Adapter->SegmentCount, DxgkpMms2GetAdapterFlags(Adapter), Adapter->SchedulingCaps.Value, &EnabledSubsystems, &HighestCompleteWddmVersion, ProviderStarted);
     if (NT_SUCCESS(Status))
     {
-        /* dxgmms2 reports which subsystems it actually owns.  Both words stay
-         * zero until the run queues themselves migrate; the v4 scheduler
-         * contract is acquired regardless so the queue core is reachable. */
-        ASSERT(EnabledSubsystems == 0);
-        ASSERT(HighestCompleteWddmVersion == 0);
-        Status = DxgkpMms2QuerySchedulerInterface(Adapter->Mms2Adapter, &Adapter->Mms2SchedulerInterface);
+        /* dxgmms2 reports which subsystems it actually owns.  The scheduler
+         * bit is required: dxgkrnl has no run queue of its own to fall back
+         * on, so a provider that does not own scheduling cannot drive it. */
+        if ((EnabledSubsystems & (DXGMMS2_SUBSYSTEM_SCHEDULER | DXGMMS2_SUBSYSTEM_VIDMM)) != (DXGMMS2_SUBSYSTEM_SCHEDULER | DXGMMS2_SUBSYSTEM_VIDMM))
+        {
+            DXGKRNL_ERR("dxgmms2 does not own the scheduler and VidMm subsystems (0x%I64X)\n", EnabledSubsystems);
+            Status = STATUS_REVISION_MISMATCH;
+        }
+        Adapter->Mms2EnabledSubsystems = EnabledSubsystems;
+        Adapter->Mms2HighestCompleteWddmVersion = HighestCompleteWddmVersion;
+        if (NT_SUCCESS(Status))
+            Status = DxgkpMms2QueryVidMmInterface(Adapter->Mms2Adapter, &Adapter->Mms2VidMmInterface);
+        if (NT_SUCCESS(Status))
+        {
+            InterlockedExchange(&Adapter->Mms2VidMmValid, 1);
+            /* Segment geometry is discovered before the provider starts, so
+             * it is published here, once the owner exists. */
+            Status = DxgkVidMmPublishSegments(Adapter);
+            if (!NT_SUCCESS(Status))
+                InterlockedExchange(&Adapter->Mms2VidMmValid, 0);
+        }
+        if (NT_SUCCESS(Status))
+            Status = DxgkpMms2QuerySchedulerInterface(Adapter->Mms2Adapter, &Adapter->Mms2SchedulerInterface);
         if (NT_SUCCESS(Status))
         {
             InterlockedExchange(&Adapter->Mms2SchedulerValid, 1);

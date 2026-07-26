@@ -56,17 +56,10 @@ typedef struct _DXGKRNL_SEGMENT
     ULONGLONG           CommitLimit;
 
     /*
-     * Bytes currently committed to resident allocations.  Updated with
-     * InterlockedAdd64 under Segment->Lock for atomic RMW semantics.
-     * On x86-64 (TSO) this is sufficient for correct visibility without
-     * an explicit fence — LOCK ADD is fully ordered.
+     * Committed bytes and the virgin-space cursor are dxgmms2's; read them
+     * through DXGMMS2_VIDMM_INTERFACE_V1::QuerySegmentStatus rather than
+     * keeping a second copy that could disagree with the owner.
      */
-    LONGLONG            UsedSize;
-
-    /* Monotone high-water placement cursor: virgin-VA-first allocation
-     * (GPU VA recycling wedges the V3D vertex pipe — see rpi5vc4 P0.3);
-     * first-fit is the fallback once the segment tail is exhausted. */
-    ULONGLONG           BumpOffset;
 
     /* GPU logical base address of the segment. */
     PHYSICAL_ADDRESS    BaseAddress;
@@ -86,8 +79,9 @@ typedef struct _DXGKRNL_SEGMENT
     DXGK_SEGMENTFLAGS   Flags;
 
     /*
-     * Ordered list of resident DXGKVMM_ALLOCATION objects.
-     * Sorted by ascending SegmentOffset for the first-fit allocator.
+     * Index from a placement back to its DXGKVMM_ALLOCATION, kept in
+     * ascending SegmentOffset order.  This is a lookup aid, not the
+     * allocator: placement decisions belong to dxgmms2.
      * Protected by Lock.
      */
     LIST_ENTRY          AllocationList;
@@ -757,3 +751,5 @@ VOID
 DxgkVidMmReleaseHandleData(
     _In_ DXGK_HANDLE_TYPE Type,
     _In_ DXGKARG_RELEASE_HANDLE ReleaseHandle);
+
+NTSTATUS DxgkVidMmPublishSegments(_In_ PDXGKRNL_ADAPTER Adapter);
