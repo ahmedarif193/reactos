@@ -108,6 +108,12 @@
 #define SDPCM_HDRLEN_BASE               12
 #define CYW_RX_TIMER_RES                10000
 
+/* brcmfmac arms BRCMF_ESCAN_TIMER_INTERVAL_MS (10 s) for a full sweep; a
+ * shorter fallback completes the scan while the firmware is still reporting
+ * the 5 GHz half, which the DFS passive dwells push to the end. */
+#define CYW_ESCAN_TIMEOUT_SLICE         -5000000LL
+#define CYW_ESCAN_TIMEOUT_SLICES        20
+
 #define BCM_CORE_REG_BANKIDX            0x40
 #define BCM_CORE_REG_BANKPDA            0x4C
 
@@ -651,6 +657,7 @@ typedef struct _CYW_ADAPTER
     volatile LONG BusThreadStop;
 
     NDIS_HANDLE InterruptWorkItem;
+    volatile LONG ScanWorkQueued;
     NDIS_HANDLE ConnectWorkItem;
     NDIS_HANDLE LinkWorkItem;
     volatile LONG WorkItemsPending;

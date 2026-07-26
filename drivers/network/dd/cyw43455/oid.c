@@ -482,19 +482,46 @@ CywScanWorker(
     _In_ NDIS_HANDLE NdisIoWorkItemHandle)
 {
     PCYW_ADAPTER Adapter = (PCYW_ADAPTER)WorkItemContext;
-    ULONG Seq = Adapter->ScanSeq;
+    ULONG Seq;
     LARGE_INTEGER Delay;
 
     UNREFERENCED_PARAMETER(NdisIoWorkItemHandle);
 
-    Delay.QuadPart = -40000000;
-    KeDelayExecutionThread(KernelMode, FALSE, &Delay);
-
-    if (Adapter->ScanSeq == Seq)
+    for (;;)
     {
-        CywIndicateScanComplete(Adapter, NDIS_STATUS_SUCCESS);
+        ULONG Slice;
+
+        Seq = Adapter->ScanSeq;
+
+        for (Slice = 0; Slice < CYW_ESCAN_TIMEOUT_SLICES; Slice++)
+        {
+            Delay.QuadPart = CYW_ESCAN_TIMEOUT_SLICE;
+            KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+
+            if (Adapter->Halting || (Adapter->ScanSeq != Seq))
+            {
+                break;
+            }
+        }
+
+        if (Adapter->Halting)
+        {
+            break;
+        }
+
+        if (Adapter->ScanSeq == Seq)
+        {
+            CywIndicateScanComplete(Adapter, NDIS_STATUS_SUCCESS);
+            break;
+        }
+
+        if (Adapter->PendingScanOid == NULL)
+        {
+            break;
+        }
     }
 
+    InterlockedExchange(&Adapter->ScanWorkQueued, 0);
     InterlockedDecrement(&Adapter->WorkItemsPending);
 }
 
@@ -532,8 +559,11 @@ CywOidScanRequest(
         return NDIS_STATUS_FAILURE;
     }
 
-    InterlockedIncrement(&Adapter->WorkItemsPending);
-    NdisQueueIoWorkItem(Adapter->InterruptWorkItem, CywScanWorker, Adapter);
+    if (InterlockedCompareExchange(&Adapter->ScanWorkQueued, 1, 0) == 0)
+    {
+        InterlockedIncrement(&Adapter->WorkItemsPending);
+        NdisQueueIoWorkItem(Adapter->InterruptWorkItem, CywScanWorker, Adapter);
+    }
     return NDIS_STATUS_PENDING;
 }
 
