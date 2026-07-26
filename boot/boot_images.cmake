@@ -303,8 +303,17 @@ math(EXPR _preinstall_system_partition_sectors "${_preinstall_system_partition_s
 # BIOS boot-sector binaries are available on x86/x64. UEFI platforms also put
 # their removable-media loader in the FAT boot partition.
 set(_preinstall_boot_partition_options)
+set(_preinstall_boot_partition_fs fat)
 set(_preinstall_boot_partition_files
     -add ${REACTOS_SOURCE_DIR}/boot/bootdata/preinstall.ini freeldr.ini)
+file(GLOB _preinstall_rpi_firmware ${REACTOS_SOURCE_DIR}/media/boot/rpi/*)
+foreach(_rpi_firmware_file ${_preinstall_rpi_firmware})
+    if(NOT IS_DIRECTORY ${_rpi_firmware_file})
+        get_filename_component(_rpi_firmware_name ${_rpi_firmware_file} NAME)
+        list(APPEND _preinstall_boot_partition_files
+            -add ${_rpi_firmware_file} ${_rpi_firmware_name})
+    endif()
+endforeach()
 set(_preinstall_partition_deps native-fatten native-ntfsimg)
 set(_reactosimg_mbr_args)
 set(_reactosimg_deps native-mkdiskimg)
@@ -312,6 +321,7 @@ if(FREELDR_HAS_BIOS_BOOT)
     set(_dosmbr_file ${CMAKE_CURRENT_BINARY_DIR}/freeldr/bootsect/dosmbr.bin)
     set(_fat32_file ${CMAKE_CURRENT_BINARY_DIR}/freeldr/bootsect/fat32.bin)
     set(_freeldr_file ${CMAKE_CURRENT_BINARY_DIR}/freeldr/freeldr/freeldr.sys)
+    set(_preinstall_boot_partition_fs fat32)
     list(APPEND _preinstall_boot_partition_options -boot ${_fat32_file})
     list(APPEND _preinstall_boot_partition_files
         -add ${_freeldr_file} freeldr.sys
@@ -344,7 +354,7 @@ add_custom_target(preinstall_partition
         -DEMBEDDED_ROSSYM=${_rosprofiler_embedded_rossym}
         -P ${REACTOS_SOURCE_DIR}/boot/pack_rosprofiler_symbols.cmake
     COMMAND native-fatten ${_preinstall_boot_partition_file}
-        -format ${_preinstall_boot_partition_sectors} fat32 ROSBOOT
+        -format ${_preinstall_boot_partition_sectors} ${_preinstall_boot_partition_fs} ROSBOOT
         ${_preinstall_boot_partition_options}
         ${_preinstall_boot_partition_files}
     COMMAND native-ntfsimg
