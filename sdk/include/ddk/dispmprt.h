@@ -109,6 +109,28 @@ typedef struct _LINKED_DEVICE         *PLINKED_DEVICE;
 #define DXGKDDI_INTERFACE_VERSION_WDDM1_3      0x4002
 /* Windows 10 (WDDM 2.0) */
 #define DXGKDDI_INTERFACE_VERSION_WDDM2_0      0x5023
+/*
+ * WDDM 2.1 .. 3.2.  These are the values Windows itself uses -- a miniport
+ * puts one of them in DRIVER_INITIALIZATION_DATA.Version and the port driver
+ * reads it to decide how much of the structure it may interpret, so an
+ * invented number is rejected outright.
+ *
+ * Confirmed against a shipping Win11 ARM64 miniport: the genuine viogpudo.sys
+ * declares 0xF003 (WDDM 3.0), and Win11's dxgkrnl accepts it.
+ */
+#define DXGKDDI_INTERFACE_VERSION_WDDM2_1      0x6002
+#define DXGKDDI_INTERFACE_VERSION_WDDM2_1_5    0x6005
+#define DXGKDDI_INTERFACE_VERSION_WDDM2_2      0x7006
+#define DXGKDDI_INTERFACE_VERSION_WDDM2_3      0x8001
+#define DXGKDDI_INTERFACE_VERSION_WDDM2_4      0x9006
+#define DXGKDDI_INTERFACE_VERSION_WDDM2_5      0xA00B
+#define DXGKDDI_INTERFACE_VERSION_WDDM2_6      0xB004
+#define DXGKDDI_INTERFACE_VERSION_WDDM2_7      0xC004
+#define DXGKDDI_INTERFACE_VERSION_WDDM2_8      0xD001
+#define DXGKDDI_INTERFACE_VERSION_WDDM2_9      0xE005
+#define DXGKDDI_INTERFACE_VERSION_WDDM3_0      0xF003
+#define DXGKDDI_INTERFACE_VERSION_WDDM3_1     0x10003
+#define DXGKDDI_INTERFACE_VERSION_WDDM3_2     0x11005
 #endif /* !DXGKDDI_INTERFACE_VERSION_VISTA */
 
 /* =========================================================================

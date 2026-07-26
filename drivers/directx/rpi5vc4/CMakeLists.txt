@@ -13,7 +13,12 @@ add_definitions(-D_WIN32_WINNT=0x0601 -DWINVER=0x0601)
 add_definitions(-DNTDDI_VERSION=0x06010000)    # NTDDI_WIN7
 
 remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
-add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x11007)
+# WDDM 3.0 (0xF003), not 0x11007.  0x11007 is not a value Windows uses -- the
+# real WDDM 3.2 selector is 0x11005 -- and a miniport declaring an unknown
+# version is rejected by the port driver before anything else is looked at.
+# 0xF003 is what the shipping Win11 ARM64 viogpudo.sys declares, so it is known
+# to be accepted by a real dxgkrnl.
+add_definitions(-DDXGKDDI_INTERFACE_VERSION=0xF003)
 
 list(APPEND SOURCE
     rpi5vc4.c
@@ -28,6 +33,13 @@ list(APPEND SOURCE
 add_library(rpi5vc4 MODULE ${SOURCE} rpi5vc4.rc)
 set_module_type(rpi5vc4 kernelmodedriver)
 target_link_libraries(rpi5vc4 displib libcntpr)
+# Deliberately NOT importing dxgkrnl.sys.  Measured on Win11 ARM64:
+# dxgkrnl.sys exports 325 symbols and not one of them is DxgkInitialize --
+# on Windows that entry comes from displib.lib, a *static* library the
+# miniport links in, which finds dxgkrnl at run time and calls into it.
+# The genuine viogpudo.sys confirms the resulting shape: it imports only
+# ntoskrnl.exe and HAL.dll.  Linking dxgkrnl as an import library would
+# make this binary less Win11-portable, not more.
 add_importlibs(rpi5vc4 ntoskrnl hal)
 add_pch(rpi5vc4 rpi5vc4.h "${SOURCE}")
 add_cd_file(TARGET rpi5vc4 DESTINATION reactos/system32/drivers FOR all)
