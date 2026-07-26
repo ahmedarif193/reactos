@@ -115,7 +115,7 @@ CywSdpcmSendCtl(
 
     KeWaitForSingleObject(&Adapter->F2Lock, Executive, KernelMode, FALSE, NULL);
     Frame[SDPCM_HEADER_LEN - 8] = Adapter->TxSeq;
-    Status = CywSdioWriteBytes(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO, Frame, Padded);
+    Status = CywSdpcmF2Fifo(Adapter, TRUE, Frame, Padded);
     if (NT_SUCCESS(Status))
     {
         Adapter->TxSeq++;
@@ -282,9 +282,9 @@ CywSdpcmRecvCtl(
                     UCHAR Channel = Frame[SDPCM_CHANNEL_OFFSET] & 0x0F;
                     if (FrameLen > SDPCM_HEADER_LEN)
                     {
-                        Status = CywSdioReadBytes(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO,
-                                                  Frame + SDPCM_HEADER_LEN,
-                                                  ALIGN_UP(FrameLen - SDPCM_HEADER_LEN, ULONG));
+                        Status = CywSdpcmF2Fifo(Adapter, FALSE,
+                                                Frame + SDPCM_HEADER_LEN,
+                                                ALIGN_UP(FrameLen - SDPCM_HEADER_LEN, ULONG));
                         if (!NT_SUCCESS(Status))
                         {
                             KeStallExecutionProcessor(500);
@@ -1367,7 +1367,7 @@ CywBusThread(
                 NextLen = 0;
             }
 
-            Status = CywSdioReadBytes(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO, Frame, FirstRead);
+            Status = CywSdpcmF2Fifo(Adapter, FALSE, Frame, FirstRead);
             if (!NT_SUCCESS(Status))
             {
                 NextLen = 0;
