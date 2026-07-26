@@ -1619,6 +1619,41 @@ DxgkpRecommendHotPlugCandidate(
     D3DDDI_VIDEO_PRESENT_TARGET_ID TargetId = Snapshot->TargetId;
     NTSTATUS Status;
 
+    /*
+     * Offer the driver its chance to add monitor modes first.  A monitor's mode
+     * set starts from what its EDID advertises, and a driver often knows modes
+     * the EDID does not list -- scaled, interlaced, or panel-native timings it
+     * can drive.  Windows asks before building the functional VidPn for exactly
+     * that reason, so a driver that only implements this DDI is not silently
+     * limited to its EDID.  A refusal costs nothing: the EDID modes stand.
+     */
+    if (Snapshot->Connected && DXGK_CB(Adapter, DxgkDdiRecommendMonitorModes) != NULL)
+    {
+        DXGKARG_RECOMMENDMONITORMODES MonitorArgs;
+        NTSTATUS MonitorStatus;
+
+        RtlZeroMemory(&MonitorArgs, sizeof(MonitorArgs));
+        MonitorArgs.VideoPresentTargetId = Snapshot->TargetId;
+        MonitorArgs.hMonitorSourceModeSet = (D3DKMDT_HMONITORSOURCEMODESET)VidPn;
+        MonitorArgs.pMonitorSourceModeSetInterface = &g_MonitorSourceModeSetInterface;
+        if (DxgkAcquireKmdCall(Adapter))
+        {
+            _SEH2_TRY
+            {
+                MonitorStatus = DXGK_CB(Adapter, DxgkDdiRecommendMonitorModes)(Adapter->MiniportDeviceContext, &MonitorArgs);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                MonitorStatus = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            DxgkReleaseKmdCall(Adapter);
+            if (!NT_SUCCESS(MonitorStatus))
+                DXGKRNL_TRACE("RecommendMonitorModes declined 0x%08lX for target %u\n",
+                              MonitorStatus, Snapshot->TargetId);
+        }
+    }
+
     if (RecommendFunctionalVidPn == NULL)
         return STATUS_SUCCESS;
     RtlZeroMemory(&RecommendArgs, sizeof(RecommendArgs));
