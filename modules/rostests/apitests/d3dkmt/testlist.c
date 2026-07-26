@@ -40,6 +40,7 @@ extern void func_capsaudit(void);
 extern void func_umdabi(void);
 extern void func_adapterid(void);
 extern void func_gpusync(void);
+extern void func_umdcallbacks(void);
 extern void func_abifreeze(void);
 extern void func_procstress(void);
 extern void func_umdload(void);
@@ -100,6 +101,7 @@ const struct test winetest_testlist[] =
     { "umdabi",        func_umdabi },
     { "adapterid",     func_adapterid },
     { "gpusync",       func_gpusync },
+    { "umdcallbacks",  func_umdcallbacks },
     { "abifreeze",     func_abifreeze },
     { "procstress",    func_procstress },
     { "umdload",       func_umdload },
