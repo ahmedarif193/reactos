@@ -2,8 +2,9 @@
 #
 # The module owns administrative registration, adapter lifecycle, and the live
 # fence-identity timeline plus the isolated logical context-stream core.
-# Hardware dispatch, public scheduler policy, sync-object binding, and all
-# VidMm ownership remain in dxgkrnl until later capability-gated integration.
+# The scheduler run queues and the video-memory segment ledger are owned here;
+# dxgkrnl builds packets, calls the miniport DDIs, and maps memory, but decides
+# neither dispatch order nor placement.
 
 spec2def(dxgmms2.sys dxgmms2.spec ADD_IMPORTLIB)
 
@@ -16,7 +17,9 @@ list(APPEND SOURCE
     context_stream.c
     context_stream_core.c
     scheduler.c
-    scheduler_core.c)
+    scheduler_core.c
+    vidmm.c
+    vidmm_core.c)
 
 add_library(dxgmms2 MODULE
     ${SOURCE}

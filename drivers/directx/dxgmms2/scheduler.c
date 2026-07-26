@@ -163,8 +163,11 @@ Dxgmms2SchedulerCompleteDispatch(
 {
     PDXGMMS2_ADAPTER_CONTEXT Context = Dxgmms2SchedulerContext(Scheduler);
     PDXGMMS2_SCHED_PACKET Failed = NULL;
+    PDXGMMS2_SCHED_PACKET Retired[DXGMMS2_SCHEDULER_MAX_RETIREMENTS];
     KIRQL OldIrql;
     NTSTATUS Status;
+    ULONG Count;
+    ULONG Index;
 
     if (Context == NULL)
         return STATUS_INVALID_HANDLE;
@@ -173,6 +176,23 @@ Dxgmms2SchedulerCompleteDispatch(
     if (NT_SUCCESS(Status) && Failed != NULL)
         Dxgmms2SchedulerQueueRetirementLocked(Context, Failed, Dxgmms2RetireAborted, DispatchStatus);
     KeReleaseSpinLock(&Context->SchedulerLock, OldIrql);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    /*
+     * The hardware may have signalled this packet's fence while the claim was
+     * still outstanding, so the completion notification could not retire it.
+     * Replay the sweep against the reported watermark now that the claim is
+     * released; otherwise that packet would sit in the queue forever.
+     */
+    do
+    {
+        KeAcquireSpinLock(&Context->SchedulerLock, &OldIrql);
+        Count = Dxgmms2SchedCoreNotifyCompletion(&Context->SchedulerCore, EngineOrdinal, 0, Retired, RTL_NUMBER_OF(Retired));
+        for (Index = 0; Index < Count; ++Index)
+            Dxgmms2SchedulerQueueRetirementLocked(Context, Retired[Index], Dxgmms2RetireCompleted, STATUS_SUCCESS);
+        KeReleaseSpinLock(&Context->SchedulerLock, OldIrql);
+    } while (Count == RTL_NUMBER_OF(Retired));
     return Status;
 }
 
@@ -191,11 +211,16 @@ Dxgmms2SchedulerNotifyCompletion(
 
     if (Context == NULL)
         return STATUS_INVALID_HANDLE;
-    KeAcquireSpinLock(&Context->SchedulerLock, &OldIrql);
-    Count = Dxgmms2SchedCoreNotifyCompletion(&Context->SchedulerCore, EngineOrdinal, CompletedFenceId, Retired, RTL_NUMBER_OF(Retired));
-    for (Index = 0; Index < Count; ++Index)
-        Dxgmms2SchedulerQueueRetirementLocked(Context, Retired[Index], Dxgmms2RetireCompleted, STATUS_SUCCESS);
-    KeReleaseSpinLock(&Context->SchedulerLock, OldIrql);
+    /* One watermark can retire more packets than a single batch holds; keep
+     * going until the queue stops yielding, so nothing is left un-retired. */
+    do
+    {
+        KeAcquireSpinLock(&Context->SchedulerLock, &OldIrql);
+        Count = Dxgmms2SchedCoreNotifyCompletion(&Context->SchedulerCore, EngineOrdinal, CompletedFenceId, Retired, RTL_NUMBER_OF(Retired));
+        for (Index = 0; Index < Count; ++Index)
+            Dxgmms2SchedulerQueueRetirementLocked(Context, Retired[Index], Dxgmms2RetireCompleted, STATUS_SUCCESS);
+        KeReleaseSpinLock(&Context->SchedulerLock, OldIrql);
+    } while (Count == RTL_NUMBER_OF(Retired));
     return STATUS_SUCCESS;
 }
 
@@ -261,6 +286,7 @@ static NTSTATUS
 NTAPI
 Dxgmms2SchedulerAbortAllPackets(
     _In_ DXGMMS2_SCHEDULER_HANDLE Scheduler,
+    _In_ ULONG Flags,
     _In_ NTSTATUS AbortStatus)
 {
     PDXGMMS2_ADAPTER_CONTEXT Context = Dxgmms2SchedulerContext(Scheduler);
@@ -274,7 +300,7 @@ Dxgmms2SchedulerAbortAllPackets(
     do
     {
         KeAcquireSpinLock(&Context->SchedulerLock, &OldIrql);
-        Count = Dxgmms2SchedCoreAbortAll(&Context->SchedulerCore, Aborted, RTL_NUMBER_OF(Aborted));
+        Count = Dxgmms2SchedCoreAbortAll(&Context->SchedulerCore, (Flags & DXGMMS2_SCHEDULER_ABORT_INCLUDE_DISPATCHED) != 0, Aborted, RTL_NUMBER_OF(Aborted));
         for (Index = 0; Index < Count; ++Index)
             Dxgmms2SchedulerQueueRetirementLocked(Context, Aborted[Index], Dxgmms2RetireAborted, AbortStatus);
         KeReleaseSpinLock(&Context->SchedulerLock, OldIrql);
@@ -325,16 +351,20 @@ NTAPI
 Dxgmms2SchedulerSetEngineState(
     _In_ DXGMMS2_SCHEDULER_HANDLE Scheduler,
     _In_ ULONG EngineOrdinal,
-    _In_ ULONG NewState)
+    _In_ ULONG ExpectedState,
+    _In_ ULONG NewState,
+    _Out_opt_ PULONG OutPreviousState)
 {
     PDXGMMS2_ADAPTER_CONTEXT Context = Dxgmms2SchedulerContext(Scheduler);
     KIRQL OldIrql;
     NTSTATUS Status;
 
+    if (OutPreviousState != NULL)
+        *OutPreviousState = Dxgmms2EngineError;
     if (Context == NULL)
         return STATUS_INVALID_HANDLE;
     KeAcquireSpinLock(&Context->SchedulerLock, &OldIrql);
-    Status = Dxgmms2SchedCoreSetEngineState(&Context->SchedulerCore, EngineOrdinal, NewState);
+    Status = Dxgmms2SchedCoreSetEngineState(&Context->SchedulerCore, EngineOrdinal, ExpectedState, NewState, OutPreviousState);
     KeReleaseSpinLock(&Context->SchedulerLock, OldIrql);
     return Status;
 }
@@ -447,6 +477,28 @@ Dxgmms2SchedulerGetOldestDispatched(
     return Found;
 }
 
+static BOOLEAN
+NTAPI
+Dxgmms2SchedulerPeekNextPacket(
+    _In_ DXGMMS2_SCHEDULER_HANDLE Scheduler,
+    _In_ ULONG EngineOrdinal,
+    _Out_ PULONGLONG OutPacketCookie)
+{
+    PDXGMMS2_ADAPTER_CONTEXT Context = Dxgmms2SchedulerContext(Scheduler);
+    KIRQL OldIrql;
+    BOOLEAN Found;
+
+    if (OutPacketCookie == NULL)
+        return FALSE;
+    *OutPacketCookie = 0;
+    if (Context == NULL)
+        return FALSE;
+    KeAcquireSpinLock(&Context->SchedulerLock, &OldIrql);
+    Found = Dxgmms2SchedCorePeekNext(&Context->SchedulerCore, EngineOrdinal, OutPacketCookie);
+    KeReleaseSpinLock(&Context->SchedulerLock, OldIrql);
+    return Found;
+}
+
 NTSTATUS
 Dxgmms2SchedulerStartAdapter(
     _Inout_ PDXGMMS2_ADAPTER_CONTEXT Context,
@@ -465,8 +517,32 @@ VOID
 Dxgmms2SchedulerStopAdapter(
     _Inout_ PDXGMMS2_ADAPTER_CONTEXT Context)
 {
+    /*
+     * Closing admission is all a begin-stop may do.  Pulling a packet the
+     * miniport already owns would invalidate a dispatch claim that is still
+     * in flight, so dispatched work is left for dxgkrnl to abort once it has
+     * established the stop/reset ownership boundary.
+     */
     (VOID)Dxgmms2SchedulerSetAdmission((DXGMMS2_SCHEDULER_HANDLE)Context, FALSE);
-    (VOID)Dxgmms2SchedulerAbortAllPackets((DXGMMS2_SCHEDULER_HANDLE)Context, STATUS_DEVICE_REMOVED);
+    (VOID)Dxgmms2SchedulerAbortAllPackets((DXGMMS2_SCHEDULER_HANDLE)Context, 0, STATUS_DEVICE_REMOVED);
+}
+
+/*
+ * Dxgmms2SchedulerResetAdapter — return the queue core to its pre-start state
+ * so the same adapter can be started again after a PnP stop.
+ */
+NTSTATUS
+Dxgmms2SchedulerResetAdapter(
+    _Inout_ PDXGMMS2_ADAPTER_CONTEXT Context)
+{
+    KIRQL OldIrql;
+    NTSTATUS Status;
+
+    (VOID)Dxgmms2SchedulerAbortAllPackets((DXGMMS2_SCHEDULER_HANDLE)Context, DXGMMS2_SCHEDULER_ABORT_INCLUDE_DISPATCHED, STATUS_DEVICE_REMOVED);
+    KeAcquireSpinLock(&Context->SchedulerLock, &OldIrql);
+    Status = Dxgmms2SchedCoreStop(&Context->SchedulerCore);
+    KeReleaseSpinLock(&Context->SchedulerLock, OldIrql);
+    return Status;
 }
 
 VOID
@@ -540,6 +616,7 @@ Dxgmms2QuerySchedulerInterface(
     SchedulerInterface->ReleaseSlot = Dxgmms2SchedulerReleaseSlot;
     SchedulerInterface->ResetDispatched = Dxgmms2SchedulerResetDispatched;
     SchedulerInterface->GetOldestDispatched = Dxgmms2SchedulerGetOldestDispatched;
+    SchedulerInterface->PeekNextPacket = Dxgmms2SchedulerPeekNextPacket;
 
     Dxgmms2DereferenceAdapterContext(Context);
     return STATUS_SUCCESS;
