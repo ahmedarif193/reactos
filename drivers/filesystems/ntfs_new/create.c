@@ -492,6 +492,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     ULONG FileAttributes;
     USHORT FileNameLength;
     BOOLEAN ExternalBackingDeleted = FALSE;
+    BOOLEAN CachedParentLookup = FALSE;
 
     if (VolumeDeviceObject == NtfsDiskFileSystemDeviceObject)
     {
@@ -579,8 +580,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     }
     else
     {
-        BOOLEAN ParentLookup =
-            Disposition == FILE_OPEN &&
+        CachedParentLookup =
             !(IrpSp->Parameters.Create.Options &
               FILE_OPEN_REPARSE_POINT) &&
             NtfsLookupInCachedParent(
@@ -591,7 +591,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 &Status,
                 &CurrentFile);
 
-        if (!ParentLookup)
+        if (!CachedParentLookup)
         {
             Status =
                 NtfsMasterFileTableGetFileRecordFromQueryEx(
@@ -682,6 +682,12 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             case FILE_CREATE:
             case FILE_OPEN_IF:
             case FILE_OVERWRITE_IF:
+            {
+                BOOLEAN CreatedWithCachedParent = FALSE;
+                PWCHAR LeafName;
+                USHORT LeafLength;
+                USHORT ParentLength;
+
                 /* In these cases, create the file and open it.
                  * Algorithm will probably be something like:
                  *     - Call MFT to allocate a new file record.
@@ -689,20 +695,74 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                  *     - Set new file record to CurrentFile to open it.
                  * MFT will handle finding a free RecordID and calling LFS.
                  */
-                Status = NtfsMasterFileTableCreateFile(
-                    Mft,
-                    FileObject->FileName.Buffer,
-                    FileObject->FileName.Length / sizeof(WCHAR),
-                    !!(IrpSp->Parameters.Create.Options & FILE_DIRECTORY_FILE),
-                    FileAttributes,
-                    &CurrentFile);
+                if (NtfsSplitParentName(
+                        &FileObject->FileName,
+                        &ParentLength,
+                        &LeafName,
+                        &LeafLength))
+                {
+                    NtfsRememberLookupParent(
+                        VolCB,
+                        Mft,
+                        &FileObject->FileName);
+                    if (VolCB->CachedLookupParent &&
+                        VolCB->CachedLookupParentGeneration ==
+                            VolCB->DirGeneration &&
+                        VolCB->CachedLookupParentPathLength ==
+                            ParentLength &&
+                        RtlCompareMemory(
+                            VolCB->CachedLookupParentPath,
+                            FileObject->FileName.Buffer,
+                            ParentLength * sizeof(WCHAR)) ==
+                            ParentLength * sizeof(WCHAR))
+                    {
+                        CreatedWithCachedParent = TRUE;
+                        Status =
+                            NtfsMasterFileTableCreateFileInDirectory(
+                                Mft,
+                                VolCB->CachedLookupParent,
+                                LeafName,
+                                LeafLength,
+                                !!(IrpSp->Parameters.Create.Options &
+                                   FILE_DIRECTORY_FILE),
+                                FileAttributes,
+                                TRUE,
+                                &CurrentFile);
+                    }
+                }
+                if (!CreatedWithCachedParent)
+                {
+                    Status = NtfsMasterFileTableCreateFile(
+                        Mft,
+                        FileObject->FileName.Buffer,
+                        FileObject->FileName.Length / sizeof(WCHAR),
+                        !!(IrpSp->Parameters.Create.Options &
+                           FILE_DIRECTORY_FILE),
+                        FileAttributes,
+                        &CurrentFile);
+                }
                 /* The name exists now, so any cached miss for it is wrong. */
                 if (NT_SUCCESS(Status))
                 {
-                    InterlockedIncrement(&VolCB->DirGeneration);
+                    LONG Generation =
+                        InterlockedIncrement(
+                            &VolCB->DirGeneration);
+
+                    if (CreatedWithCachedParent)
+                    {
+                        VolCB->CachedLookupParentGeneration =
+                            Generation;
+                    }
                     NtfsForgetMissingName(VolCB,
                                           FileObject->FileName.Buffer,
                                           FileObject->FileName.Length / sizeof(WCHAR));
+                }
+                else if (CreatedWithCachedParent)
+                {
+                    NtfsFileRecordDestroy(
+                        VolCB->CachedLookupParent);
+                    VolCB->CachedLookupParent = NULL;
+                    VolCB->CachedLookupParentPathLength = 0;
                 }
                 if (!NT_SUCCESS(Status))
                 {
@@ -714,6 +774,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                     return Status;
                 }
                 break;
+            }
             case FILE_OPEN:
             case FILE_OVERWRITE:
             default:
