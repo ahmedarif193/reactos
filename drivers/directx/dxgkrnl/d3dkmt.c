@@ -3195,10 +3195,8 @@ DxgkPollDisplayChildren(
 {
     if (pData == NULL)
         return STATUS_INVALID_PARAMETER;
-    if (pData->Reserved != 0)
-        return STATUS_INVALID_PARAMETER;
-    if (pData->DisableModeReset && !pData->SynchronousPolling)
-        return STATUS_INVALID_PARAMETER;
+    /* Windows 11 polices neither the reserved flag bits nor a DisableModeReset
+     * without SynchronousPolling; both are accepted. */
     return DxgkpPollDisplayChildrenRequest(pData);
 }
 

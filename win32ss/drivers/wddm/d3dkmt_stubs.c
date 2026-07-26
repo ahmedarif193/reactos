@@ -181,6 +181,20 @@ C_ASSERT(sizeof(D3DKMT_UNLOCK2) == 8);
 #define D3DKMT_BRIDGE_MAX_PRIVATE_BYTES RXGK_WDDM_MAX_PRIVATE_DRIVER_DATA
 #define D3DKMT_BRIDGE_MAX_FIXED_BYTES 65536U
 
+/*
+ * Windows 11 reports an unreadable or unwritable caller buffer as
+ * STATUS_INVALID_PARAMETER on most D3DKMT entry points rather than letting the
+ * access violation reach the caller.  The rule is not uniform -- OpenResource
+ * still surfaces STATUS_ACCESS_VIOLATION -- so this is applied at the entry
+ * points measured to diverge, never inside the shared capture helpers.
+ */
+static NTSTATUS
+WddmBridgeRejectBadBuffer(
+    _In_ NTSTATUS Status)
+{
+    return (Status == STATUS_ACCESS_VIOLATION) ? STATUS_INVALID_PARAMETER : Status;
+}
+
 static NTSTATUS
 WddmBridgeSafeCopyFrom(
     _Out_writes_bytes_(Size) PVOID Destination,
@@ -1282,6 +1296,7 @@ D3DKMTQueryResourceInfo(
     if (pData == NULL)
         return STATUS_INVALID_PARAMETER;
     Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    Status = WddmBridgeRejectBadBuffer(Status);
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -1522,7 +1537,7 @@ APIENTRY
 D3DKMTPresent(
     _Inout_ D3DKMT_PRESENT *pData)
 {
-    return WddmBridgeCaptureFixedIoctl(IOCTL_D3DKMT_PRESENT, pData, sizeof(*pData), TRUE);
+    return WddmBridgeRejectBadBuffer(WddmBridgeCaptureFixedIoctl(IOCTL_D3DKMT_PRESENT, pData, sizeof(*pData), TRUE));
 }
 
 /* ---- Memory locking ------------------------------------------------------ */
@@ -1729,6 +1744,7 @@ D3DKMTGetDisplayModeList(
     if (pData == NULL)
         return STATUS_INVALID_PARAMETER;
     Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    Status = WddmBridgeRejectBadBuffer(Status);
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -1799,6 +1815,7 @@ D3DKMTCreateContext(
 
     UserPrivateDriverData = Captured.pPrivateDriverData;
     Status = WddmBridgeCaptureArray(UserPrivateDriverData, Captured.PrivateDriverDataSize, sizeof(UCHAR), D3DKMT_BRIDGE_MAX_PRIVATE_BYTES, TRUE, FALSE, &PrivateDriverData, &PrivateDriverDataSize);
+    Status = WddmBridgeRejectBadBuffer(Status);
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -1920,6 +1937,7 @@ D3DKMTEscape(
 
     UserPrivateDriverData = Captured.pPrivateDriverData;
     Status = WddmBridgeCaptureArray(UserPrivateDriverData, Captured.PrivateDriverDataSize, sizeof(UCHAR), D3DKMT_BRIDGE_MAX_PRIVATE_BYTES, TRUE, TRUE, &PrivateDriverData, &PrivateDriverDataSize);
+    Status = WddmBridgeRejectBadBuffer(Status);
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -1952,8 +1970,8 @@ D3DKMTSetVidPnSourceOwner(
     if (!NT_SUCCESS(Status))
         return Status;
 
+    /* A zero count is a release-all request; the arrays are then ignored. */
     if (Captured.VidPnSourceCount > D3DKMT_BRIDGE_MAX_ALLOCATIONS ||
-        (Captured.VidPnSourceCount == 0 && (Captured.pType != NULL || Captured.pVidPnSourceId != NULL)) ||
         (Captured.VidPnSourceCount != 0 && (Captured.pType == NULL || Captured.pVidPnSourceId == NULL)))
     {
         return STATUS_INVALID_PARAMETER;
@@ -1961,9 +1979,11 @@ D3DKMTSetVidPnSourceOwner(
     if (Captured.VidPnSourceCount != 0 && Captured.pType != NULL && Captured.pVidPnSourceId != NULL)
     {
         Status = WddmBridgeCaptureArray(Captured.pType, Captured.VidPnSourceCount, sizeof(*OwnerTypes), D3DKMT_BRIDGE_MAX_ALLOCATIONS, TRUE, FALSE, (PVOID *)&OwnerTypes, &OwnerTypesSize);
+        Status = WddmBridgeRejectBadBuffer(Status);
         if (!NT_SUCCESS(Status))
             goto Cleanup;
         Status = WddmBridgeCaptureArray(Captured.pVidPnSourceId, Captured.VidPnSourceCount, sizeof(*SourceIds), D3DKMT_BRIDGE_MAX_ALLOCATIONS, TRUE, FALSE, (PVOID *)&SourceIds, &SourceIdsSize);
+        Status = WddmBridgeRejectBadBuffer(Status);
         if (!NT_SUCCESS(Status))
             goto Cleanup;
         Captured.pType = OwnerTypes;
@@ -2529,6 +2549,7 @@ D3DKMTEnumAdapters2(
         return Status;
 
     Status = WddmBridgeSafeProbeForWrite(UserAdapters, BufSize);
+    Status = WddmBridgeRejectBadBuffer(Status);
     if (!NT_SUCCESS(Status))
         return Status;
     Status = WddmBridgeSafeProbeForWrite((PUCHAR)pData + FIELD_OFFSET(D3DKMT_ENUMADAPTERS2, NumAdapters), sizeof(Captured.NumAdapters));
@@ -2694,8 +2715,8 @@ D3DKMTSetVidPnSourceOwner1(
     Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
     if (!NT_SUCCESS(Status))
         return Status;
+    /* A zero count is a release-all request; the arrays are then ignored. */
     if (Captured.Version0.VidPnSourceCount > D3DKMT_BRIDGE_MAX_ALLOCATIONS ||
-        (Captured.Version0.VidPnSourceCount == 0 && (Captured.Version0.pType != NULL || Captured.Version0.pVidPnSourceId != NULL)) ||
         (Captured.Version0.VidPnSourceCount != 0 && (Captured.Version0.pType == NULL || Captured.Version0.pVidPnSourceId == NULL)))
     {
         return STATUS_INVALID_PARAMETER;

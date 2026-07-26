@@ -1368,13 +1368,12 @@ DxgkSyncObjectCpuWaitBatch(
     RtlZeroMemory(Request, sizeof(*Request));
     Request->ReferenceCount = 1;
     Request->Device = Device;
-    Status = DxgkpReferenceMonitoredFenceArray(Device, ObjectHandles, ObjectCount, Request->Objects);
-    if (!NT_SUCCESS(Status))
-    {
-        ExFreePoolWithTag(Request, TAG_DXGK_SYNC);
-        return Status;
-    }
-    Request->ObjectCount = ObjectCount;
+    /*
+     * The event is taken first so a refused batch can still signal it: Windows
+     * 11 wakes the caller's event even when it rejects the wait request, and an
+     * application that waits on the event after a failed call would otherwise
+     * hang here while it proceeds there.
+     */
     if (AsyncEventHandle != NULL)
     {
         Status = ObReferenceObjectByHandle(AsyncEventHandle, EVENT_MODIFY_STATE, *ExEventObjectType, UserMode, (PVOID *)&Request->CompletionEvent, NULL);
@@ -1390,6 +1389,15 @@ DxgkSyncObjectCpuWaitBatch(
         KeInitializeEvent(&Request->SynchronousEvent, NotificationEvent, FALSE);
         Request->CompletionEvent = &Request->SynchronousEvent;
     }
+    Status = DxgkpReferenceMonitoredFenceArray(Device, ObjectHandles, ObjectCount, Request->Objects);
+    if (!NT_SUCCESS(Status))
+    {
+        if (Request->EventObjectReferenced)
+            KeSetEvent(Request->CompletionEvent, IO_NO_INCREMENT, FALSE);
+        DxgkpCpuWaitRequestDereference(Request);
+        return Status;
+    }
+    Request->ObjectCount = ObjectCount;
     for (Index = 0; Index < ObjectCount; ++Index)
     {
         Request->Targets[Index].Object = Request->Objects[Index];
@@ -1402,6 +1410,8 @@ DxgkSyncObjectCpuWaitBatch(
     Status = DxgkSyncWaitCoreRegister(&Device->SyncWaitRegistry, &Request->CoreRequest);
     if (!NT_SUCCESS(Status))
     {
+        if (Request->EventObjectReferenced)
+            KeSetEvent(Request->CompletionEvent, IO_NO_INCREMENT, FALSE);
         DxgkpCpuWaitRequestDereference(Request);
         DxgkpCpuWaitRequestDereference(Request);
         return Status;
