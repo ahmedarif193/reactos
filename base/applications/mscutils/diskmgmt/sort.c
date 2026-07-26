@@ -261,9 +261,11 @@ DmSortApplyToListView(
     if (hListView == NULL || Context == NULL)
         return;
 
-    ListView_SortItemsEx(hListView,
-                         DmSortCompareItems,
-                         (LPARAM)Context);
+    /* ListView_SortItems passes item lParams (volume pointers) to the
+       comparator; ListView_SortItemsEx would pass item indices instead. */
+    ListView_SortItems(hListView,
+                       DmSortCompareItems,
+                       (LPARAM)Context);
 }
 
 VOID

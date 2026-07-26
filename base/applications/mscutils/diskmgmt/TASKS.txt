@@ -73,9 +73,11 @@ Phase 3 - Basic Disk Operations
 [x] Make the create dialog instruction text and size label follow the selected partition kind.
 [x] Prefill more Windows-like default sizes for special GPT partition kinds in the create dialog.
 [x] Allow `Create Logical Drive` from top-level free MBR space by creating the extended partition container and first logical drive together.
-[ ] Extend Create Volume beyond simple primary/basic-data creation to cover logical/extended MBR, richer partition-type choices, and more Windows-like creation flows.
+[x] Extend Create Volume beyond simple primary/basic-data creation to cover logical/extended MBR, richer partition-type choices, and more Windows-like creation flows.
 [x] Implement Delete Partition / Delete Volume.
 [x] Implement first-pass Delete Volume / Delete Partition for GPT and non-logical MBR partitions.
+[x] Implement Delete Partition for MBR logical drives by rebuilding the logical partition table without the deleted entry.
+[x] Implement Delete Partition for an empty extended partition by deleting its remaining free space, like Windows.
 [x] Implement Format workflow (filesystem, label, quick/full).
 [x] Implement first-pass Format workflow via the shell format dialog for writable drive-letter volumes.
 [x] Implement Assign Drive Letter / Remove Drive Letter.
@@ -91,8 +93,9 @@ Phase 3 - Basic Disk Operations
 
 Phase 4 - Advanced Basic-Disk Operations
 ----------------------------------------
-[ ] Implement Extend Volume.
-[ ] Implement Shrink Volume.
+[x] Implement Extend Volume.
+[x] Implement Shrink Volume.
+[x] Extend resize to formatted single-extent basic volumes: FSCTL_SHRINK_VOLUME prepare/commit before shrinking the partition, FSCTL_EXTEND_VOLUME after growing it, with clear errors when the installed file system driver lacks online resize support.
 [x] Expose Extend / Shrink Volume in the menu and context menus with backend-aligned availability.
 [x] Implement first-pass Extend Volume for single-extent RAW volumes with right-adjacent free space.
 [x] Implement first-pass Shrink Volume for single-extent RAW volumes by reducing the partition length and creating free space to the right.
@@ -111,7 +114,7 @@ Phase 5 - Architecture and Parity Work
 --------------------------------------
 [x] Replace heuristic disk scan with robust device enumeration.
 [x] Reuse or factor shared storage logic with diskpart where appropriate.
-[ ] Handle multi-extent and dynamic-disk semantics explicitly.
+[x] Handle multi-extent and dynamic-disk semantics explicitly.
 [x] Stop inferring dynamic volume status from extent count alone; track multi-extent explicitly.
 [x] Bind every matching extent of a multi-extent volume to its corresponding region instead of only the first one.
 [x] Surface multi-extent / dynamic membership more explicitly in the top list and bottom disk map status text.
@@ -139,6 +142,86 @@ Phase 5 - Architecture and Parity Work
 [x] Decide whether to keep a standalone EXE model or grow toward MMC / compmgmt integration later.
 [x] Record the standalone-vs-MMC decision in `INTEGRATION.txt`.
 
+Phase 6 - Hardening and UI Refresh (2026-07-22)
+-----------------------------------------------
+[x] Fix the duplicate string-resource ID (183/184) that made llvm-windres fail the whole build.
+[x] Restore the lost build integration; keep diskmgmt out of regular builds behind -DDISKMGMT_DEV=1 until finished.
+[x] Fix the volume-list sort callback crash: ListView_SortItemsEx passes item indices, not lParam volume pointers.
+[x] Fix the empty title bar: WM_NCCREATE must reach DefWindowProc so the caption is stored.
+[x] Fix the black toolbar band: WM_ERASEBKGND must actually paint for flat-toolbar background delegation.
+[x] Use the system message font across the toolbar, volume list, status bar, and disk map instead of DEFAULT_GUI_FONT, with font-metric line spacing.
+[x] Redraw all toolbar and volume-list bitmaps as clean 16x16 flat glyphs.
+[x] Measure legend item widths instead of using fixed offsets so localized labels fit.
+[x] Show `Not Initialized` for RAW disks in the disk card like Windows.
+[x] Fix singular/plural wording in the status-bar summary.
+[x] Verify the shell end-to-end under Wine with screenshots.
+[x] Fix context menus dropping every enabled item: MF_STRING is 0, so the "flags == 0 means hidden" convention hid all visible-and-enabled entries; visible items now carry an explicit DM_MENU_VISIBLE marker. Found while driving the app inside a ReactOS VM.
+
+Phase 7 - ReactOS-Native Mutation Validation (2026-07-22)
+---------------------------------------------------------
+[x] Fix Create Partition failing with "No free primary MBR slot" on an empty
+    MBR disk: ReactOS partmgr reports only the used entries, so the layout is
+    now expanded to the four real primary slots before the slot search.
+[x] Fix kernel partmgr allocation-size underflow (EnumeratedPartitionsTotal-1
+    with zero partitions asked paged pool for 34 GB), which broke PnP
+    re-enumeration whenever the last partition of a disk was deleted.
+[x] Fix volume-to-region binding never working: the snapshot opened the
+    \\?\Volume{...}\ path form (the filesystem root directory), which fails
+    outright on RAW volumes; it now opens the volume device itself, so
+    extents, device numbers, and capacities resolve (also fixed 0 B CDFS
+    capacities).
+[x] Replace the blocking wait for the created volume with a deferred
+    pending-create record: the create action returns immediately and a timer
+    applies the requested drive letter and format as soon as the volume
+    device arrives (ReactOS installs it asynchronously, 3 s to minutes).
+[x] Add automatic view refresh after mutating actions and WM_DEVICECHANGE,
+    polling for a while because ReactOS finishes partition/volume arrivals
+    and removals asynchronously and does not broadcast a completion.
+[x] Fix the background timers never running after the first context menu:
+    ReactOS does not always deliver WM_MENUSELECT's close notification for
+    tracked popups, so bInMenuLoop stayed TRUE forever; it is now also
+    cleared via WM_ENTERMENULOOP/WM_EXITMENULOOP and after TrackPopupMenuEx.
+[x] Fix deleting an empty extended partition wiping the whole MBR: with the
+    container gone but a stale >4 PartitionCount, the kernel's legacy table
+    writer walked to a nonexistent EBR with a zero offset and rewrote sector
+    0 with the empty logical table. The app now clamps the count to the four
+    primary slots, and xHalIoWritePartitionTable stops when there is no next
+    EBR offset (kernel hardening).
+[x] Validate on ReactOS (livecd VM, AHCI disk): create primary FAT (auto
+    letter + quick format), create logical drive with auto-created extended
+    container (auto letter + format), delete primary, delete logical, delete
+    empty extended via its free space with the primary surviving, and
+    automatic view healing after every operation without manual refresh.
+
+Phase 8 - Kernel Follow-Up Fixes (2026-07-23)
+---------------------------------------------
+[x] Fix kernel bugcheck 0xCA (PNP_DETECTED_FATAL_ERROR, duplicate PDO) when
+    a partition is re-created with the same disk/offset/length identity as
+    one removed earlier in the same boot: removed devnodes linger in the
+    tree as phantoms, and PiInitializeDevNode treated the phantom as a live
+    duplicate. It now retires the phantom (IopFreeDeviceNode) and lets the
+    re-arrived device take over the instance path; validated with a
+    same-boot create -> delete -> identical re-create completing end to end.
+[x] Fix partmgr SET drive-layout handlers: free the layout copy on the
+    super-floppy rejection and write-failure paths (leaks), and propagate
+    the real write status instead of always returning STATUS_SUCCESS.
+
+Phase 9 - Windows UI Geometry Follow-Up (2026-07-23)
+----------------------------------------------------
+[x] Match the Windows reference's compact default window height instead of
+    opening a 680-pixel-tall window with large empty top and bottom panes.
+[x] Reserve Windows-like minimum widths for small partitions and unallocated
+    regions so EFI, recovery, and other small regions remain legible.
+[x] Narrow the lower-pane disk label card against the reference screenshot.
+[x] Remove the extra per-volume usage bar from the bottom of each partition;
+    Windows Disk Management renders only the partition-type stripe at the top.
+[x] Keep Create, Delete, Extend, and Shrink visible through the Action and
+    context menus, with accurate hints for formatted basic volumes; route
+    Extend and Shrink through the main window instead of leaving them inert.
+
 Current Phase
 -------------
-Phase 3 backend work and Phase 5 storage semantics work are active.
+Feature work for basic disks is complete and validated natively on ReactOS;
+the app is registered in the regular build again. Remaining follow-ups are
+dynamic/LDM mutation support, non-empty MBR/GPT conversion, and file-system
+online resize support in the FS drivers themselves.

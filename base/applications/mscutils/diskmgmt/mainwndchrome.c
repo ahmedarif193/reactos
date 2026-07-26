@@ -16,6 +16,8 @@ static const MENU_HINT DmMainMenuHintTable[] =
     { IDM_ACTION_CONVERT_MBR,      IDS_HINT_ACTION_CONVERT_MBR },
     { IDM_ACTION_CREATE_PARTITION, IDS_HINT_ACTION_CREATE_PARTITION },
     { IDM_ACTION_DELETE_VOLUME,    IDS_HINT_ACTION_DELETE_VOLUME },
+    { IDM_ACTION_EXTEND_VOLUME,    IDS_HINT_ACTION_EXTEND_VOLUME },
+    { IDM_ACTION_SHRINK_VOLUME,    IDS_HINT_ACTION_SHRINK_VOLUME },
     { IDM_ACTION_FORMAT,           IDS_HINT_ACTION_FORMAT },
     { IDM_ACTION_ASSIGN_LETTER,    IDS_HINT_ACTION_ASSIGN_LETTER },
     { IDM_ACTION_REMOVE_LETTER,    IDS_HINT_ACTION_REMOVE_LETTER },
@@ -221,9 +223,6 @@ DmMainWndBuildDynamicHintText(
 
     Buffer[0] = UNICODE_NULL;
 
-    if (CommandId != IDM_ACTION_DELETE_VOLUME)
-        return FALSE;
-
     DmMainWndBuildActionContext(Info, &ActionContext);
     DmActionBuildVerbText(&ActionContext, CommandId, Verb, ARRAYSIZE(Verb));
     switch (CommandId)
@@ -356,8 +355,9 @@ DmMainWndShowAboutDialog(
                      L"- Read-only disk and volume enumeration\n"
                      L"- Windows-style top list and bottom disk map\n"
                      L"- Selection sync, refresh, rescan, and properties\n"
-                     L"- First-pass initialize, empty-disk MBR/GPT conversion, create, delete, format, drive-letter, mount-path, and disk online/read-only operations\n"
-                     L"- First-pass RAW-only extend/shrink for single-extent basic volumes\n"
+                     L"- Initialize, empty-disk MBR/GPT conversion, create, delete, format, drive-letter, mount-path, and disk online/read-only operations\n"
+                     L"- Primary, extended, and logical MBR partition create/delete, including removing an empty extended partition via its free space\n"
+                     L"- Extend/shrink for single-extent basic volumes; the file system is resized online when its driver supports FSCTL extend/shrink\n"
                      L"- MBR active/inactive changes for supported primary partitions\n\n"
                      L"Dynamic/LDM status:\n"
                      L"- Dynamic disks and LDM volumes are detected and labeled\n"
@@ -366,7 +366,7 @@ DmMainWndShowAboutDialog(
                      L"- `diskmgmt.exe` remains a standalone tool for now\n"
                      L"- MMC / Computer Management integration is deferred until the MMC host grows real `.msc` support\n\n"
                      L"Not implemented yet:\n"
-                     L"- General formatted-volume extend/shrink and advanced partition workflows\n"
+                     L"- Formatted-volume resize where the installed file system driver lacks online FSCTL extend/shrink support\n"
                      L"- Non-empty conversion flows and dynamic-disk / LDM mutation support\n"
                      L"- Full multi-extent layout classification\n\n"
                      L"%s",

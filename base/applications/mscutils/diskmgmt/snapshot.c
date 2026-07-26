@@ -1252,7 +1252,11 @@ DmPopulateVolume(
         StringCchCopyW(Volume->FileSystem, ARRAYSIZE(Volume->FileSystem), L"RAW");
     }
 
-    Handle = CreateFileW(VolumeName,
+    /* Open the volume device itself (TempName has no trailing backslash);
+       the path form would open the filesystem root directory instead,
+       which fails outright on RAW volumes and would leave them without
+       extent and device-number information. */
+    Handle = CreateFileW(TempName,
                          0,
                          FILE_SHARE_READ | FILE_SHARE_WRITE,
                          NULL,

@@ -15,6 +15,11 @@ typedef struct _DM_MENU_COMMAND
     PCWSTR Text;
 } DM_MENU_COMMAND, *PDM_MENU_COMMAND;
 
+/* MF_STRING is 0, so a plain flags value cannot distinguish "visible and
+   enabled" from "hidden". Every visible item carries this marker bit, which
+   is stripped before the flags reach AppendMenuW. */
+#define DM_MENU_VISIBLE 0x80000000U
+
 static BOOL DmIsPartitionRegion(_In_opt_ const DM_REGION *Region);
 static BOOL DmIsFreeRegion(_In_opt_ const DM_REGION *Region);
 static BOOL DmCanRunCommand(_In_ UINT CommandId,
@@ -51,10 +56,10 @@ DmAppendCommandIfVisible(
     UINT Flags;
 
     Flags = DmGetCommandFlags(Kind, CommandId, Disk, Region, Volume);
-    if (Flags == 0)
+    if ((Flags & DM_MENU_VISIBLE) == 0)
         return;
 
-    AppendMenuW(Menu, Flags, CommandId, Text);
+    AppendMenuW(Menu, Flags & ~DM_MENU_VISIBLE, CommandId, Text);
 }
 
 static VOID
@@ -142,106 +147,113 @@ DmGetCommandFlags(
     switch (CommandId)
     {
         case IDM_ACTION_REFRESH:
-            return MF_STRING;
+            return (DM_MENU_VISIBLE | MF_STRING);
 
         case IDM_ACTION_RESCAN:
-            return (Kind == DmContextMenuBackground || Kind == DmContextMenuDisk) ? MF_STRING : 0;
+            return (Kind == DmContextMenuBackground || Kind == DmContextMenuDisk) ? (DM_MENU_VISIBLE | MF_STRING) : 0;
 
         case IDM_ACTION_INITIALIZE_DISK:
-            return (Kind == DmContextMenuDisk && DmCanRunCommand(CommandId, Disk, Region, Volume)) ? MF_STRING : (Kind == DmContextMenuDisk ? (MF_STRING | MF_GRAYED) : 0);
+            return (Kind == DmContextMenuDisk && DmCanRunCommand(CommandId, Disk, Region, Volume)) ? (DM_MENU_VISIBLE | MF_STRING) : (Kind == DmContextMenuDisk ? ((DM_MENU_VISIBLE | MF_STRING) | MF_GRAYED) : 0);
 
         case IDM_ACTION_CONVERT_GPT:
         case IDM_ACTION_CONVERT_MBR:
-            return (Kind == DmContextMenuDisk && DmCanRunCommand(CommandId, Disk, Region, Volume)) ? MF_STRING : (Kind == DmContextMenuDisk ? (MF_STRING | MF_GRAYED) : 0);
+            return (Kind == DmContextMenuDisk && DmCanRunCommand(CommandId, Disk, Region, Volume)) ? (DM_MENU_VISIBLE | MF_STRING) : (Kind == DmContextMenuDisk ? ((DM_MENU_VISIBLE | MF_STRING) | MF_GRAYED) : 0);
 
         case IDM_ACTION_CREATE_PARTITION:
-            return (Kind == DmContextMenuUnallocated && DmCanRunCommand(CommandId, Disk, Region, Volume)) ? MF_STRING : 0;
+            return (Kind == DmContextMenuUnallocated && DmCanRunCommand(CommandId, Disk, Region, Volume)) ? (DM_MENU_VISIBLE | MF_STRING) : 0;
 
         case IDM_ACTION_DELETE_VOLUME:
             if (Kind == DmContextMenuPartition)
             {
-                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? MF_STRING : (MF_STRING | MF_GRAYED);
+                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? (DM_MENU_VISIBLE | MF_STRING) : ((DM_MENU_VISIBLE | MF_STRING) | MF_GRAYED);
             }
 
             if (Kind == DmContextMenuVolume)
             {
-                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? MF_STRING : (MF_STRING | MF_GRAYED);
+                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? (DM_MENU_VISIBLE | MF_STRING) : ((DM_MENU_VISIBLE | MF_STRING) | MF_GRAYED);
+            }
+
+            if (Kind == DmContextMenuUnallocated)
+            {
+                /* Free space of an empty extended partition: deleting it
+                   removes the extended partition container. */
+                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? (DM_MENU_VISIBLE | MF_STRING) : 0;
             }
 
             return 0;
 
         case IDM_ACTION_EXTEND_VOLUME:
             if (Kind == DmContextMenuPartition)
-                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? MF_STRING : (MF_STRING | MF_GRAYED);
+                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? (DM_MENU_VISIBLE | MF_STRING) : ((DM_MENU_VISIBLE | MF_STRING) | MF_GRAYED);
             if (Kind == DmContextMenuVolume)
-                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? MF_STRING : (MF_STRING | MF_GRAYED);
+                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? (DM_MENU_VISIBLE | MF_STRING) : ((DM_MENU_VISIBLE | MF_STRING) | MF_GRAYED);
             return 0;
 
         case IDM_ACTION_SHRINK_VOLUME:
             if (Kind == DmContextMenuPartition)
-                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? MF_STRING : (MF_STRING | MF_GRAYED);
+                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? (DM_MENU_VISIBLE | MF_STRING) : ((DM_MENU_VISIBLE | MF_STRING) | MF_GRAYED);
             if (Kind == DmContextMenuVolume)
-                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? MF_STRING : (MF_STRING | MF_GRAYED);
+                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? (DM_MENU_VISIBLE | MF_STRING) : ((DM_MENU_VISIBLE | MF_STRING) | MF_GRAYED);
             return 0;
 
         case IDM_ACTION_FORMAT:
             if (Kind == DmContextMenuPartition)
-                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? MF_STRING : (MF_STRING | MF_GRAYED);
+                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? (DM_MENU_VISIBLE | MF_STRING) : ((DM_MENU_VISIBLE | MF_STRING) | MF_GRAYED);
             if (Kind == DmContextMenuVolume)
-                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? MF_STRING : (MF_STRING | MF_GRAYED);
+                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? (DM_MENU_VISIBLE | MF_STRING) : ((DM_MENU_VISIBLE | MF_STRING) | MF_GRAYED);
             return 0;
 
         case IDM_ACTION_ASSIGN_LETTER:
             if (Kind == DmContextMenuVolume)
-                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? MF_STRING : (MF_STRING | MF_GRAYED);
+                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? (DM_MENU_VISIBLE | MF_STRING) : ((DM_MENU_VISIBLE | MF_STRING) | MF_GRAYED);
             return 0;
 
         case IDM_ACTION_REMOVE_LETTER:
             if (Kind == DmContextMenuVolume)
-                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? MF_STRING : (MF_STRING | MF_GRAYED);
+                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? (DM_MENU_VISIBLE | MF_STRING) : ((DM_MENU_VISIBLE | MF_STRING) | MF_GRAYED);
             return 0;
 
         case IDM_ACTION_CHANGE_MOUNT_PATH:
             if (Kind == DmContextMenuPartition || Kind == DmContextMenuVolume)
-                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? MF_STRING : (MF_STRING | MF_GRAYED);
+                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? (DM_MENU_VISIBLE | MF_STRING) : ((DM_MENU_VISIBLE | MF_STRING) | MF_GRAYED);
             return 0;
 
         case IDM_ACTION_REMOVE_MOUNT_PATH:
             if (Kind == DmContextMenuPartition || Kind == DmContextMenuVolume)
-                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? MF_STRING : (MF_STRING | MF_GRAYED);
+                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? (DM_MENU_VISIBLE | MF_STRING) : ((DM_MENU_VISIBLE | MF_STRING) | MF_GRAYED);
             return 0;
 
         case IDM_ACTION_ONLINE:
-            return (Kind == DmContextMenuDisk && DmCanRunCommand(CommandId, Disk, Region, Volume)) ? MF_STRING : (Kind == DmContextMenuDisk ? (MF_STRING | MF_GRAYED) : 0);
+            return (Kind == DmContextMenuDisk && DmCanRunCommand(CommandId, Disk, Region, Volume)) ? (DM_MENU_VISIBLE | MF_STRING) : (Kind == DmContextMenuDisk ? ((DM_MENU_VISIBLE | MF_STRING) | MF_GRAYED) : 0);
 
         case IDM_ACTION_OFFLINE:
-            return (Kind == DmContextMenuDisk && DmCanRunCommand(CommandId, Disk, Region, Volume)) ? MF_STRING : (Kind == DmContextMenuDisk ? (MF_STRING | MF_GRAYED) : 0);
+            return (Kind == DmContextMenuDisk && DmCanRunCommand(CommandId, Disk, Region, Volume)) ? (DM_MENU_VISIBLE | MF_STRING) : (Kind == DmContextMenuDisk ? ((DM_MENU_VISIBLE | MF_STRING) | MF_GRAYED) : 0);
 
         case IDM_ACTION_SET_READ_ONLY:
-            return (Kind == DmContextMenuDisk && DmCanRunCommand(CommandId, Disk, Region, Volume)) ? MF_STRING : (Kind == DmContextMenuDisk ? (MF_STRING | MF_GRAYED) : 0);
+            return (Kind == DmContextMenuDisk && DmCanRunCommand(CommandId, Disk, Region, Volume)) ? (DM_MENU_VISIBLE | MF_STRING) : (Kind == DmContextMenuDisk ? ((DM_MENU_VISIBLE | MF_STRING) | MF_GRAYED) : 0);
 
         case IDM_ACTION_CLEAR_READ_ONLY:
-            return (Kind == DmContextMenuDisk && DmCanRunCommand(CommandId, Disk, Region, Volume)) ? MF_STRING : (Kind == DmContextMenuDisk ? (MF_STRING | MF_GRAYED) : 0);
+            return (Kind == DmContextMenuDisk && DmCanRunCommand(CommandId, Disk, Region, Volume)) ? (DM_MENU_VISIBLE | MF_STRING) : (Kind == DmContextMenuDisk ? ((DM_MENU_VISIBLE | MF_STRING) | MF_GRAYED) : 0);
 
         case IDM_ACTION_MARK_ACTIVE:
             if (Kind == DmContextMenuPartition)
-                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? MF_STRING : (MF_STRING | MF_GRAYED);
+                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? (DM_MENU_VISIBLE | MF_STRING) : ((DM_MENU_VISIBLE | MF_STRING) | MF_GRAYED);
             if (Kind == DmContextMenuVolume)
-                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? MF_STRING : (MF_STRING | MF_GRAYED);
+                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? (DM_MENU_VISIBLE | MF_STRING) : ((DM_MENU_VISIBLE | MF_STRING) | MF_GRAYED);
             return 0;
 
         case IDM_ACTION_MARK_INACTIVE:
             if (Kind == DmContextMenuPartition)
-                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? MF_STRING : (MF_STRING | MF_GRAYED);
+                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? (DM_MENU_VISIBLE | MF_STRING) : ((DM_MENU_VISIBLE | MF_STRING) | MF_GRAYED);
             if (Kind == DmContextMenuVolume)
-                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? MF_STRING : (MF_STRING | MF_GRAYED);
+                return DmCanRunCommand(CommandId, Disk, Region, Volume) ? (DM_MENU_VISIBLE | MF_STRING) : ((DM_MENU_VISIBLE | MF_STRING) | MF_GRAYED);
             return 0;
 
         case IDM_ACTION_PROPERTIES:
-            return (Kind == DmContextMenuBackground || Kind == DmContextMenuUnallocated) ? 0 : MF_STRING;
+            return (Kind == DmContextMenuBackground || Kind == DmContextMenuUnallocated) ? 0 : (DM_MENU_VISIBLE | MF_STRING);
 
         case IDM_HELP_ABOUT:
-            return (Kind == DmContextMenuBackground) ? MF_STRING : 0;
+            return (Kind == DmContextMenuBackground) ? (DM_MENU_VISIBLE | MF_STRING) : 0;
 
         default:
             return 0;
@@ -343,7 +355,11 @@ DmBuildPartitionMenu(
                              Disk,
                              Region,
                              Volume);
-    if (!IsFreeRegion)
+    if (IsFreeRegion)
+    {
+        DmAppendCommandIfVisible(Menu, DmContextMenuUnallocated, IDM_ACTION_DELETE_VOLUME, L"Delete &Partition", Disk, Region, NULL);
+    }
+    else
     {
         DmAppendCommandIfVisible(Menu, DmContextMenuPartition, IDM_ACTION_EXTEND_VOLUME, L"E&xtend Volume...", Disk, Region, Volume);
         DmAppendCommandIfVisible(Menu, DmContextMenuPartition, IDM_ACTION_SHRINK_VOLUME, L"Sh&rink Volume...", Disk, Region, Volume);
