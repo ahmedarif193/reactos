@@ -48,6 +48,12 @@ typedef struct _VolumeContextBlock
     LIST_ENTRY RecordCacheHash[256];
     ULONG RecordCacheCount;
 
+    /* One stable parent record for repeated leaf lookups in a directory. */
+    PNtfsFileRecord CachedLookupParent;
+    LONG CachedLookupParentGeneration;
+    USHORT CachedLookupParentPathLength;
+    WCHAR CachedLookupParentPath[128];
+
     /*
      * One loaded directory tree kept for reuse. Building the in-memory
      * B-tree is nearly the whole cost of listing a directory, and the tree

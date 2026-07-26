@@ -29,7 +29,8 @@ NtfsMasterFileTableGetFileRecordInDirectory(
     _In_ ULONG NameLength,
     _Out_ PNtfsFileRecord* File)
 {
-    PWCHAR TerminatedName;
+    WCHAR InlineName[NTFS_MAX_FILE_NAME_LENGTH + 1];
+    PWCHAR TerminatedName = InlineName;
     NTSTATUS Status;
 
     if (!Mft || !ParentDirectory || !Name || !File)
@@ -41,11 +42,14 @@ NtfsMasterFileTableGetFileRecordInDirectory(
         return STATUS_INVALID_PARAMETER;
     }
 
-    TerminatedName =
-        new(PagedPool, TAG_NTFS)
-            WCHAR[(SIZE_T)NameLength + 1];
-    if (!TerminatedName)
-        return STATUS_INSUFFICIENT_RESOURCES;
+    if (NameLength >= RTL_NUMBER_OF(InlineName))
+    {
+        TerminatedName =
+            new(PagedPool, TAG_NTFS)
+                WCHAR[(SIZE_T)NameLength + 1];
+        if (!TerminatedName)
+            return STATUS_INSUFFICIENT_RESOURCES;
+    }
     RtlCopyMemory(TerminatedName,
                   Name,
                   NameLength * sizeof(WCHAR));
@@ -57,7 +61,8 @@ NtfsMasterFileTableGetFileRecordInDirectory(
             TerminatedName,
             reinterpret_cast<PFileRecord*>(File));
 
-    delete[] TerminatedName;
+    if (TerminatedName != InlineName)
+        delete[] TerminatedName;
     return Status;
 }
 
