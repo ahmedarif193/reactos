@@ -323,7 +323,9 @@ DxgkpPollDisplayChildrenRequest(
     ULONG Index;
 
     PAGED_CODE();
-    if (PollRequest == NULL || PollRequest->Reserved != 0 || (PollRequest->DisableModeReset && !PollRequest->SynchronousPolling))
+    /* Windows 11 polices neither the reserved flag bits nor a DisableModeReset
+     * without SynchronousPolling; both are accepted. */
+    if (PollRequest == NULL)
         return STATUS_INVALID_PARAMETER;
     Status = DxgkReferenceAdapterByHandle(PollRequest->hAdapter, PsGetCurrentProcess(), &RequestedAdapter);
     if (!NT_SUCCESS(Status))
