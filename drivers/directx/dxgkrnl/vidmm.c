@@ -1116,13 +1116,13 @@ DxgkVidMmReferenceAllocation(
 {
     PDXGKVMM_ALLOCATION Allocation;
     PDXGKVMM_ALLOCATION ReferencedAllocation;
-    NTSTATUS Status = STATUS_INVALID_HANDLE;
+    NTSTATUS Status = STATUS_INVALID_PARAMETER;
 
     if (OutAllocation == NULL)
         return STATUS_INVALID_PARAMETER;
     *OutAllocation = NULL;
     if (Handle == NULL)
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
 
     DxgkpVidMmEnsureGlobalsInitialized();
     ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
@@ -1147,7 +1147,7 @@ DxgkVidMmReferenceProcessAllocation(
 {
     PDXGKVMM_ALLOCATION Allocation;
     PDXGKVMM_ALLOCATION ReferencedAllocation;
-    NTSTATUS Status = STATUS_INVALID_HANDLE;
+    NTSTATUS Status = STATUS_INVALID_PARAMETER;
 
     if (Handle == NULL || ExpectedAdapter == NULL || ExpectedProcess == NULL || ExpectedProcess->Adapter != ExpectedAdapter || OutAllocation == NULL)
         return STATUS_INVALID_PARAMETER;
@@ -1181,7 +1181,7 @@ DxgkVidMmReferenceOpenBinding(
     _Out_ PDXGKVMM_ALLOCATION *OutBindingReference)
 {
     PDXGKVMM_ALLOCATION Allocation;
-    NTSTATUS Status = STATUS_INVALID_HANDLE;
+    NTSTATUS Status = STATUS_INVALID_PARAMETER;
 
     if (Handle == NULL || ExpectedAdapter == NULL || ExpectedDevice == NULL || ExpectedDevice->Adapter != ExpectedAdapter || OutOpenBindingHandle == NULL || OutBindingReference == NULL)
         return STATUS_INVALID_PARAMETER;
@@ -1347,7 +1347,7 @@ NTSTATUS DxgkVidMmCreatePresentBinding(_In_ PDXGKRNL_DEVICE Device, _In_ PDXGKVM
         goto RollbackPublished;
     if (OpenInfo.hDeviceSpecificAllocation == NULL)
     {
-        Status = STATUS_INVALID_HANDLE;
+        Status = STATUS_INVALID_PARAMETER;
         goto RollbackPublished;
     }
 
@@ -1441,7 +1441,7 @@ NTSTATUS DxgkVidMmDestroyPresentBinding(_In_ PDXGKRNL_DEVICE Device, _In_ PDXGKV
     Adapter = Device->Adapter;
     BindingHandle = (HANDLE)(ULONG_PTR)BindingReference->Handle;
     if (BindingHandle == NULL)
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
     DxgkVidMmDereferenceLogicalAllocation(BindingReference);
     return DxgkpVidMmDestroyAllocation(Adapter, Device, NULL, BindingHandle);
 }
@@ -1456,7 +1456,7 @@ DxgkVidMmAcquireGpuVaBindingReferences(
 {
     PDXGKVMM_ALLOCATION LogicalAllocation;
     PDXGKVMM_ALLOCATION BackingAllocation;
-    NTSTATUS Status = STATUS_INVALID_HANDLE;
+    NTSTATUS Status = STATUS_INVALID_PARAMETER;
 
     if (Handle == NULL || ExpectedAdapter == NULL || ExpectedProcess == NULL || ExpectedProcess->Adapter != ExpectedAdapter || OutLogicalAllocation == NULL || OutBackingAllocation == NULL)
         return STATUS_INVALID_PARAMETER;
@@ -1645,13 +1645,13 @@ DxgkVidMmReferenceResource(
     _Out_ PDXGKVMM_RESOURCE *OutResource)
 {
     PDXGKVMM_RESOURCE Resource;
-    NTSTATUS Status = STATUS_INVALID_HANDLE;
+    NTSTATUS Status = STATUS_INVALID_PARAMETER;
 
     if (OutResource == NULL)
         return STATUS_INVALID_PARAMETER;
     *OutResource = NULL;
     if (Handle == 0)
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
 
     DxgkpVidMmEnsureGlobalsInitialized();
     ExAcquireFastMutex(&DxgkVidMmResourceListLock);
@@ -1712,7 +1712,7 @@ DxgkVidMmSnapshotResourceAllocations(
         if (Resource->Adapter != ExpectedAdapter || InterlockedCompareExchange(&Resource->Destroying, 0, 0) != 0 || InterlockedCompareExchange(&Resource->CloseUncertain, 0, 0) != 0 || InterlockedCompareExchange(&Resource->DestroyFailureUncertain, 0, 0) != 0 || Resource->AllocationCount == 0)
         {
             ExReleaseFastMutex(&DxgkVidMmResourceListLock);
-            return STATUS_INVALID_HANDLE;
+            return STATUS_INVALID_PARAMETER;
         }
         Capacity = Resource->AllocationCount;
         ExReleaseFastMutex(&DxgkVidMmResourceListLock);
@@ -1944,7 +1944,7 @@ DxgkVidMmCreateOpenResource(
     {
         if (OpenInfo[Index].hDeviceSpecificAllocation == NULL)
         {
-            Status = STATUS_INVALID_HANDLE;
+            Status = STATUS_INVALID_PARAMETER;
             goto Cleanup;
         }
         Resource->OpenBindingScratch[CloseCount++] = OpenInfo[Index].hDeviceSpecificAllocation;
@@ -2337,7 +2337,7 @@ DxgkVidMmAttachAllocationToResource(
 
     ExAcquireFastMutex(&DxgkVidMmResourceListLock);
     if (Resource->Adapter == NULL || Allocation->Adapter != Resource->Adapter || Allocation->Resource != NULL || InterlockedCompareExchange(&Resource->Destroying, 0, 0) != 0)
-        Status = STATUS_INVALID_HANDLE;
+        Status = STATUS_INVALID_PARAMETER;
     else
     {
         InterlockedIncrement(&Resource->ReferenceCount);
@@ -2547,13 +2547,13 @@ DxgkpVidMmDestroyResourceWrapper(
 
     ExAcquireFastMutex(&DxgkVidMmResourceListLock);
     if (InterlockedCompareExchange(&Resource->Destroying, 0, 0) != 0)
-        Status = STATUS_INVALID_HANDLE;
+        Status = STATUS_INVALID_PARAMETER;
     else
     {
         for (Entry = DxgkVidMmResourceListHead.Flink; Entry != &DxgkVidMmResourceListHead && CONTAINING_RECORD(Entry, DXGKVMM_RESOURCE, GlobalResourceEntry) != Resource; Entry = Entry->Flink)
             NOTHING;
         if (Entry == &DxgkVidMmResourceListHead)
-            Status = STATUS_INVALID_HANDLE;
+            Status = STATUS_INVALID_PARAMETER;
         else
         {
             InterlockedIncrement(&Resource->ReferenceCount);
@@ -2586,7 +2586,7 @@ DxgkpVidMmDestroyResourceWrapper(
         ExAcquireFastMutex(&DxgkVidMmResourceListLock);
         ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
         if (InterlockedCompareExchange(&Resource->Destroying, 0, 0) != 0)
-            Status = STATUS_INVALID_HANDLE;
+            Status = STATUS_INVALID_PARAMETER;
         else
             Status = STATUS_SUCCESS;
         AllocationCount = NT_SUCCESS(Status) ? Resource->AllocationCount : 0;
@@ -4027,7 +4027,7 @@ DxgkpVidMmDestroyAllocation(
     else
         Allocation = NULL;
     ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
-    Status = Allocation != NULL ? DxgkpVidMmDestroyAllocationList(Adapter, Device, &Handle, 1, FALSE) : STATUS_INVALID_HANDLE;
+    Status = Allocation != NULL ? DxgkpVidMmDestroyAllocationList(Adapter, Device, &Handle, 1, FALSE) : STATUS_INVALID_PARAMETER;
     if (!NT_SUCCESS(Status))
         DPRINT1("DxgkVidMmDestroyAllocation: invalid handle %p\n", AllocationHandle);
     return Status;
@@ -4292,7 +4292,7 @@ DxgkpVidMmCloseReadyBindingGroup(
 
         if (Allocation == NULL || Allocation->OpenBindingGroup != Group || Group->OpenHandles[Index] == NULL)
         {
-            Status = STATUS_INVALID_HANDLE;
+            Status = STATUS_INVALID_PARAMETER;
             break;
         }
         if (InterlockedCompareExchange(&Allocation->Destroying, 0, 0) != 0)
@@ -4628,11 +4628,11 @@ DxgkpVidMmDestroyAllocationList(
     for (Index = 0; Index < AllocationCount; ++Index)
     {
         if (AllocationHandles[Index] == 0)
-            return STATUS_INVALID_HANDLE;
+            return STATUS_INVALID_PARAMETER;
         for (OtherIndex = 0; OtherIndex < Index; ++OtherIndex)
         {
             if (AllocationHandles[OtherIndex] == AllocationHandles[Index])
-                return STATUS_INVALID_HANDLE;
+                return STATUS_INVALID_PARAMETER;
         }
     }
 
@@ -4649,14 +4649,14 @@ DxgkpVidMmDestroyAllocationList(
 
         if (Allocation == NULL || Allocation->Adapter != Adapter || (Device != NULL && Allocation->Device != Device) || Allocation->Initializing || InterlockedCompareExchange(&Allocation->Destroying, 0, 0) != 0 || InterlockedCompareExchange(&Allocation->FinalizeQueued, 0, 0) != 0 || InterlockedCompareExchange(&Allocation->HandleReferenceDropped, 0, 0) != 0 || InterlockedCompareExchange(&Allocation->LogicalHandleReferenceDropped, 0, 0) != 0 || Allocation->DestroyBatch != NULL)
         {
-            Status = STATUS_INVALID_HANDLE;
+            Status = STATUS_INVALID_PARAMETER;
             break;
         }
         if (Index == 0)
             Resource = Allocation->Resource;
         else if (Allocation->Resource != Resource)
         {
-            Status = STATUS_INVALID_HANDLE;
+            Status = STATUS_INVALID_PARAMETER;
             break;
         }
         Batch->Allocations[Index] = Allocation;
@@ -4664,7 +4664,7 @@ DxgkpVidMmDestroyAllocationList(
             Batch->MiniportDeviceHandle = Allocation->MiniportDeviceHandle;
     }
     if (NT_SUCCESS(Status) && Resource != NULL && (Resource->Adapter != Adapter || (Device != NULL && Resource->Device != Device) || InterlockedCompareExchange(&Resource->Destroying, 0, 0) != 0 || Resource->AllocationCount < AllocationCount))
-        Status = STATUS_INVALID_HANDLE;
+        Status = STATUS_INVALID_PARAMETER;
     for (Index = 0; NT_SUCCESS(Status) && Index < AllocationCount; ++Index)
     {
         PDXGKVMM_ALLOCATION Allocation = Batch->Allocations[Index];
@@ -4672,14 +4672,14 @@ DxgkpVidMmDestroyAllocationList(
 
         if ((Allocation->OpenBindingHandle == NULL) != (Group == NULL))
         {
-            Status = STATUS_INVALID_HANDLE;
+            Status = STATUS_INVALID_PARAMETER;
             break;
         }
         if (Group == NULL)
             continue;
         if (Group->AllocationCount == 0)
         {
-            Status = STATUS_INVALID_HANDLE;
+            Status = STATUS_INVALID_PARAMETER;
             break;
         }
     }
@@ -4725,12 +4725,12 @@ DxgkpVidMmDestroyAllocationList(
 
         if (Allocation != Batch->Allocations[Index] || Allocation->Adapter != Adapter || (Device != NULL && Allocation->Device != Device) || Allocation->Resource != Resource || Allocation->Initializing || InterlockedCompareExchange(&Allocation->Destroying, 0, 0) != 0 || InterlockedCompareExchange(&Allocation->FinalizeQueued, 0, 0) != 0 || InterlockedCompareExchange(&Allocation->HandleReferenceDropped, 0, 0) != 0 || InterlockedCompareExchange(&Allocation->LogicalHandleReferenceDropped, 0, 0) != 0 || Allocation->DestroyBatch != NULL || IsListEmpty(&Allocation->GlobalAllocationEntry) || (Resource != NULL && IsListEmpty(&Allocation->ResourceEntry)))
         {
-            Status = STATUS_INVALID_HANDLE;
+            Status = STATUS_INVALID_PARAMETER;
             break;
         }
     }
     if (NT_SUCCESS(Status) && Resource != NULL && (Resource->Adapter != Adapter || (Device != NULL && Resource->Device != Device) || InterlockedCompareExchange(&Resource->Destroying, 0, 0) != 0 || Resource->AllocationCount < AllocationCount))
-        Status = STATUS_INVALID_HANDLE;
+        Status = STATUS_INVALID_PARAMETER;
     if (NT_SUCCESS(Status))
     {
         DxgkpVidMmRegisterDestroyBatch(Batch);
@@ -5200,7 +5200,7 @@ DxgkpVidMmOpenCreatorAllocations(
         Status = DxgkpVidMmReferenceInitializingAllocation(AllocationHandle, Adapter, Device, &Allocations[Index]);
         if (!NT_SUCCESS(Status) || Allocations[Index]->BackingAllocation != NULL || Allocations[Index]->PrivateDriverDataSize != AllocationInfo.PrivateDriverDataSize)
         {
-            Status = STATUS_INVALID_HANDLE;
+            Status = STATUS_INVALID_PARAMETER;
             goto Cleanup;
         }
         OpenInfo[Index].hAllocation = AllocationInfo.hAllocation;
@@ -5234,7 +5234,7 @@ DxgkpVidMmOpenCreatorAllocations(
     {
         if (OpenInfo[Index].hDeviceSpecificAllocation == NULL)
         {
-            Status = STATUS_INVALID_HANDLE;
+            Status = STATUS_INVALID_PARAMETER;
             goto RollbackOpen;
         }
     }
@@ -5244,7 +5244,7 @@ DxgkpVidMmOpenCreatorAllocations(
     {
         if (DxgkpVidMmLookupAllocationLocked(OpenInfo[Index].hAllocation) != Allocations[Index] || InterlockedCompareExchange(&Allocations[Index]->Destroying, 0, 0) != 0 || Allocations[Index]->OpenBindingHandle != NULL || Allocations[Index]->OpenBindingGroup != NULL)
         {
-            Status = STATUS_INVALID_HANDLE;
+            Status = STATUS_INVALID_PARAMETER;
             break;
         }
     }
@@ -5359,7 +5359,7 @@ DxgkpVidMmReferenceInitializingAllocation(
     _Out_ PDXGKVMM_ALLOCATION *OutAllocation)
 {
     PDXGKVMM_ALLOCATION Allocation;
-    NTSTATUS Status = STATUS_INVALID_HANDLE;
+    NTSTATUS Status = STATUS_INVALID_PARAMETER;
 
     if (Handle == NULL || Adapter == NULL || Device == NULL || Device->Adapter != Adapter || OutAllocation == NULL)
         return STATUS_INVALID_PARAMETER;
@@ -5396,7 +5396,7 @@ DxgkpVidMmCommitInitializingAllocations(
         Allocation = DxgkpVidMmLookupAllocationLocked(AllocationInfo.hAllocation);
         if (Allocation == NULL || Allocation->Adapter != Adapter || Allocation->Device != Device || !Allocation->Initializing || InterlockedCompareExchange(&Allocation->Destroying, 0, 0) != 0)
         {
-            Status = STATUS_INVALID_HANDLE;
+            Status = STATUS_INVALID_PARAMETER;
             break;
         }
     }
@@ -5489,7 +5489,7 @@ DxgkpCreateAllocationCaptured(
 
     Device = DxgkpVidMmFindDeviceByHandle(pCreateAllocation->hDevice, &Adapter);
     if (Device == NULL)
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
     CreateRollbackAllocations = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)pCreateAllocation->NumAllocations * sizeof(*CreateRollbackAllocations), TAG_VIDMM_ALLOC);
     CreateRollbackBatch = DxgkpVidMmAllocateDestroyBatch(Adapter, pCreateAllocation->NumAllocations);
     if (CreateRollbackAllocations == NULL || CreateRollbackBatch == NULL)
@@ -5515,13 +5515,13 @@ DxgkpCreateAllocationCaptured(
         Status = DxgkVidMmReferenceResource(pCreateAllocation->hResource, FALSE, Device, &Resource);
         if (!NT_SUCCESS(Status))
         {
-            Status = STATUS_INVALID_HANDLE;
+            Status = STATUS_INVALID_PARAMETER;
             goto Cleanup;
         }
         ResourceReferenced = TRUE;
         if (Resource->BackingResource != NULL)
         {
-            Status = STATUS_INVALID_HANDLE;
+            Status = STATUS_INVALID_PARAMETER;
             goto Cleanup;
         }
         (VOID)KeWaitForSingleObject(&Resource->ResourceOperationLock, Executive, KernelMode, FALSE, NULL);
@@ -6038,21 +6038,21 @@ DxgkpCreateAllocationWithAccessModeVariant(
     }
     if (Captured.hDevice != InputDevice || Captured.NumAllocations != InputAllocationCount || (InputCreatesResource && Captured.hResource == 0) || (!InputCreatesResource && Captured.hResource != InputResource))
     {
-        Status = STATUS_INVALID_HANDLE;
+        Status = STATUS_INVALID_PARAMETER;
         goto Rollback;
     }
     for (i = 0; i < InputAllocationCount; ++i)
     {
         if (CreatedHandles[i] == 0)
         {
-            Status = STATUS_INVALID_HANDLE;
+            Status = STATUS_INVALID_PARAMETER;
             goto Rollback;
         }
         for (j = 0; j < i; ++j)
         {
             if (CreatedHandles[j] == CreatedHandles[i])
             {
-                Status = STATUS_INVALID_HANDLE;
+                Status = STATUS_INVALID_PARAMETER;
                 goto Rollback;
             }
         }
@@ -6223,7 +6223,7 @@ DxgkDestroyAllocation(
     Device = DxgkpVidMmFindDeviceByHandle(pDestroyAllocation->hDevice, &Adapter);
     if (Device == NULL)
     {
-        Status = STATUS_INVALID_HANDLE;
+        Status = STATUS_INVALID_PARAMETER;
         goto Cleanup;
     }
     if (!DxgkBeginKmdTransaction(Adapter))
@@ -6238,7 +6238,7 @@ DxgkDestroyAllocation(
         Status = DxgkVidMmReferenceResource(pDestroyAllocation->hResource, FALSE, Device, &Resource);
         if (!NT_SUCCESS(Status))
         {
-            Status = STATUS_INVALID_HANDLE;
+            Status = STATUS_INVALID_PARAMETER;
             goto Cleanup;
         }
     }
@@ -6709,7 +6709,7 @@ DxgkVidMmOfferAllocation(
 
     Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)Handle, Adapter, Device, &Allocation);
     if (!NT_SUCCESS(Status))
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
 
     (VOID)KeWaitForSingleObject(&Allocation->ResidencyLock, Executive, KernelMode, FALSE, NULL);
     ExAcquireFastMutex(&DxgkVidMmPolicyLock);
@@ -6736,7 +6736,7 @@ DxgkVidMmReclaimAllocation(
     *Discarded = FALSE;
     Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)Handle, Adapter, Device, &Allocation);
     if (!NT_SUCCESS(Status))
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
 
     (VOID)KeWaitForSingleObject(&Allocation->ResidencyLock, Executive, KernelMode, FALSE, NULL);
     ExAcquireFastMutex(&DxgkVidMmPolicyLock);

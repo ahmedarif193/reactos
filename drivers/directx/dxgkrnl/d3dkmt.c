@@ -714,7 +714,7 @@ DxgkpValidateAllocationListForIoctl(
             Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)AllocationList[i], Adapter, Device, &Allocation);
             if (!NT_SUCCESS(Status))
             {
-                Status = STATUS_INVALID_HANDLE;
+                Status = STATUS_INVALID_PARAMETER;
                 break;
             }
             DxgkVidMmDereferenceAllocation(Allocation);
@@ -769,7 +769,7 @@ DxgkpCaptureAllocationReferencesForIoctl(
         Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)Handles[Index], Adapter, Device, &Allocations[Index]);
         if (!NT_SUCCESS(Status))
         {
-            Status = STATUS_INVALID_HANDLE;
+            Status = STATUS_INVALID_PARAMETER;
             goto Cleanup;
         }
     }
@@ -861,7 +861,7 @@ DxgkpApplyMakeResidentPriorities(
         Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)AllocationList[Index], Adapter, Device, &Allocations[Index]);
         if (!NT_SUCCESS(Status))
         {
-            Status = STATUS_INVALID_HANDLE;
+            Status = STATUS_INVALID_PARAMETER;
             break;
         }
         Referenced++;
@@ -1960,6 +1960,15 @@ DxgkpQueryAdapterInfoWithAccessMode(
     }
 
     Status = DxgkpQueryAdapterInfoCaptured(&CapturedQuery);
+    /*
+     * Windows 11 answers every bad QueryAdapterInfo request the same way: an
+     * unknown information type and a buffer that is missing or too small are
+     * both STATUS_INVALID_PARAMETER.  Neither STATUS_NOT_SUPPORTED nor
+     * STATUS_BUFFER_TOO_SMALL was observed from any D3DKMT entry point on the
+     * reference VM, so the per-case statuses stay internal to the switch.
+     */
+    if (Status == STATUS_NOT_SUPPORTED || Status == STATUS_BUFFER_TOO_SMALL)
+        Status = STATUS_INVALID_PARAMETER;
     if (NT_SUCCESS(Status) && CapturedPrivateData != NULL)
         Status = DxgkpCopyToUserBuffer(UserPrivateData, CapturedPrivateData, CapturedQuery.PrivateDriverDataSize, EmbeddedBufferMode);
 
@@ -2580,7 +2589,7 @@ DxgkLock(
     if (!NT_SUCCESS(Status))
     {
         DXGKRNL_WARN("DxgkLock: invalid device 0x%X\n", pLock->hDevice);
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
     }
     if (!DxgkpDeviceExecutionActive(LockDevice))
     {
@@ -2593,7 +2602,7 @@ DxgkLock(
     {
         DXGKRNL_WARN("DxgkLock: invalid alloc 0x%X\n", pLock->hAllocation);
         DxgkDereferenceDevice(LockDevice);
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
     }
 
     if (!DxgkBeginKmdTransaction(LockAdapter))
@@ -2647,7 +2656,7 @@ DxgkUnlock(
 
     Status = DxgkReferenceOwnedDeviceByHandle(pUnlock->hDevice, PsGetCurrentProcess(), &UnlockAdapter, &UnlockDevice);
     if (!NT_SUCCESS(Status))
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
 
     _SEH2_TRY
     {
@@ -2660,7 +2669,7 @@ DxgkUnlock(
             Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)UnlockHandle, UnlockAdapter, UnlockDevice, &UnlockAlloc);
             if (!NT_SUCCESS(Status))
             {
-                Status = STATUS_INVALID_HANDLE;
+                Status = STATUS_INVALID_PARAMETER;
                 break;
             }
 
@@ -2706,7 +2715,7 @@ DxgkpEscapeCaptured(
     {
         DXGKRNL_WARN("DxgkEscape: invalid adapter handle 0x%X\n",
                      pEscape->hAdapter);
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
     }
 
     if (pEscape->pPrivateDriverData == NULL ||
@@ -2721,7 +2730,7 @@ DxgkpEscapeCaptured(
         EscDevice = DxgkLookupDeviceByHandle(pEscape->hDevice, &EscDeviceAdapter);
         if (EscDevice == NULL || EscDeviceAdapter != Adapter)
         {
-            Status = STATUS_INVALID_HANDLE;
+            Status = STATUS_INVALID_PARAMETER;
             goto Cleanup;
         }
         if (!DxgkpDeviceExecutionActive(EscDevice))
@@ -2736,7 +2745,7 @@ DxgkpEscapeCaptured(
         EscContext = DxgkLookupContextByHandle(pEscape->hContext, &EscContextAdapter, &EscContextDevice);
         if (EscContext == NULL || EscContextAdapter != Adapter || EscContextDevice != EscDevice)
         {
-            Status = STATUS_INVALID_HANDLE;
+            Status = STATUS_INVALID_PARAMETER;
             goto Cleanup;
         }
     }
@@ -2751,7 +2760,7 @@ DxgkpEscapeCaptured(
             {
                 DXGKRNL_WARN("DxgkEscape: command packet without valid device 0x%X\n",
                              pEscape->hDevice);
-                Status = STATUS_INVALID_HANDLE;
+                Status = STATUS_INVALID_PARAMETER;
                 goto Cleanup;
             }
 
@@ -3128,7 +3137,7 @@ DxgkGetPresentHistory(
     if (pData == NULL)
         return STATUS_INVALID_PARAMETER;
     if (!NT_SUCCESS(DxgkpValidateAdapterOnlyForIoctl(pData->hAdapter)))
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
     if (pData->ProvidedSize != 0 && pData->pTokens == NULL)
         return STATUS_INVALID_PARAMETER;
 
@@ -3145,10 +3154,10 @@ DxgkGetRuntimeData(
     if (pData == NULL)
         return STATUS_INVALID_PARAMETER;
     if (!NT_SUCCESS(DxgkpValidateAdapterOnlyForIoctl(pData->hAdapter)))
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
     if (pData->hGlobalShare == 0 || !NT_SUCCESS(DxgkpValidateGlobalShareForIoctl(pData->hGlobalShare)))
     {
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
     }
     if (pData->RuntimeDataSize != 0 && pData->pRuntimeData == NULL)
         return STATUS_INVALID_PARAMETER;
@@ -3186,7 +3195,7 @@ DxgkInvalidateActiveVidPn(
     if (pData == NULL)
         return STATUS_INVALID_PARAMETER;
     if (!NT_SUCCESS(DxgkpValidateAdapterOnlyForIoctl(pData->hAdapter)))
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
     if (pData->PrivateDriverDataSize != 0 && pData->pPrivateDriverData == NULL)
         return STATUS_INVALID_PARAMETER;
 
@@ -3249,7 +3258,7 @@ DxgkQueryAllocationResidencyWithAccessMode(
         Status = DxgkVidMmReferenceResource(pData->hResource, FALSE, Device, &Resource);
         if (!NT_SUCCESS(Status))
         {
-            Status = STATUS_INVALID_HANDLE;
+            Status = STATUS_INVALID_PARAMETER;
             goto Cleanup;
         }
         Status = DxgkVidMmSnapshotResourceAllocations(Resource, Adapter, &Allocations, &AllocationCount, &TotalPrivateDriverDataSize);
@@ -3388,7 +3397,7 @@ DxgkSetAllocationPriorityWithAccessMode(
         Status = DxgkVidMmReferenceResource(pData->hResource, FALSE, Device, &Resource);
         if (!NT_SUCCESS(Status))
         {
-            Status = STATUS_INVALID_HANDLE;
+            Status = STATUS_INVALID_PARAMETER;
             goto Cleanup;
         }
         Status = DxgkVidMmSnapshotResourceAllocations(Resource, Adapter, &Allocations, &AllocationCount, &TotalPrivateDriverDataSize);
@@ -3498,7 +3507,7 @@ DxgkGetAllocationPriorityWithAccessMode(
         Status = DxgkVidMmReferenceResource(pData->hResource, FALSE, Device, &Resource);
         if (!NT_SUCCESS(Status))
         {
-            Status = STATUS_INVALID_HANDLE;
+            Status = STATUS_INVALID_PARAMETER;
             goto Cleanup;
         }
         Status = DxgkVidMmSnapshotResourceAllocations(Resource, Adapter, &Allocations, &AllocationCount, &TotalPrivateDriverDataSize);
@@ -4043,7 +4052,7 @@ DxgkSignalSynchronizationObject2(
     ContextCount = 1;
     if (Device->OwnerProcess != OwnerProcess)
     {
-        Status = STATUS_INVALID_HANDLE;
+        Status = STATUS_INVALID_PARAMETER;
         goto Cleanup;
     }
     for (BroadcastIndex = 0; BroadcastIndex < pData->BroadcastContextCount; ++BroadcastIndex)
@@ -4054,7 +4063,7 @@ DxgkSignalSynchronizationObject2(
         ++ContextCount;
         if (BroadcastDevice != Device || BroadcastAdapter != Adapter || BroadcastDevice->OwnerProcess != OwnerProcess)
         {
-            Status = STATUS_INVALID_HANDLE;
+            Status = STATUS_INVALID_PARAMETER;
             goto Cleanup;
         }
         for (CompareIndex = 0; CompareIndex + 1 < ContextCount; ++CompareIndex)
@@ -4344,7 +4353,7 @@ DxgkDestroyPagingQueue(
     if (pData == NULL)
         return STATUS_INVALID_PARAMETER;
     if (pData->hPagingQueue == 0)
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
 
     Status = DxgkDetachOwnedHandle(pData->hPagingQueue, DxgkHandleTypePagingQueue, PsGetCurrentProcess(), &Object);
     if (!NT_SUCCESS(Status))
@@ -4910,7 +4919,7 @@ DxgkpDispatchBufferedIoctl(
             if (!NT_SUCCESS(Status))
             {
                 DXGKRNL_WARN("D3DKMTLock: invalid device 0x%X\n", pLock->hDevice);
-                return STATUS_INVALID_HANDLE;
+                return STATUS_INVALID_PARAMETER;
             }
             if (!DxgkpDeviceExecutionActive(LockDevice))
             {
@@ -4923,7 +4932,7 @@ DxgkpDispatchBufferedIoctl(
             {
                 DXGKRNL_WARN("D3DKMTLock: invalid alloc 0x%X\n", pLock->hAllocation);
                 DxgkDereferenceDevice(LockDevice);
-                return STATUS_INVALID_HANDLE;
+                return STATUS_INVALID_PARAMETER;
             }
 
             /*
@@ -4991,7 +5000,7 @@ DxgkpDispatchBufferedIoctl(
             UserMappingCaller = (Stack->MajorFunction == IRP_MJ_INTERNAL_DEVICE_CONTROL) || (Irp->RequestorMode == UserMode);
             Status = DxgkReferenceOwnedDeviceByHandle(pUnlock->hDevice, PsGetCurrentProcess(), &UnlockAdapter, &UnlockDevice);
             if (!NT_SUCCESS(Status))
-                return STATUS_INVALID_HANDLE;
+                return STATUS_INVALID_PARAMETER;
 
             Status = STATUS_SUCCESS;
             _SEH2_TRY
@@ -5006,7 +5015,7 @@ DxgkpDispatchBufferedIoctl(
                     Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)UnlockHandle, UnlockAdapter, UnlockDevice, &UnlockAlloc);
                     if (!NT_SUCCESS(Status))
                     {
-                        Status = STATUS_INVALID_HANDLE;
+                        Status = STATUS_INVALID_PARAMETER;
                         break;
                     }
                     DXGKRNL_VERBOSE("D3DKMTUnlock:[%u/%u] alloc=0x%X obj=%p bridge=%u\n", ui + 1, pUnlock->NumAllocations, UnlockHandle, UnlockAlloc, UserMappingCaller);
@@ -5376,7 +5385,7 @@ DxgkpDispatchBufferedIoctl(
                 if (!NT_SUCCESS(Status))
                 {
                     DxgkDereferenceDevice(Device);
-                    return STATUS_INVALID_HANDLE;
+                    return STATUS_INVALID_PARAMETER;
                 }
                 if (MapOffset > Allocation->Size || MapSize > Allocation->Size - MapOffset)
                 {
@@ -5528,7 +5537,7 @@ DxgkpDispatchBufferedIoctl(
             if (Device->Handle != pUpdate->hDevice || Device->ProcessRecord == NULL)
             {
                 DxgkDereferenceContext(VirtualContext);
-                return STATUS_INVALID_HANDLE;
+                return STATUS_INVALID_PARAMETER;
             }
             if (pUpdate->hFenceObject != 0)
             {
@@ -5619,7 +5628,7 @@ DxgkpDispatchBufferedIoctl(
                         Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)AllocationList[i], Adapter, Device, &Allocation);
                         if (!NT_SUCCESS(Status))
                         {
-                            Status = STATUS_INVALID_HANDLE;
+                            Status = STATUS_INVALID_PARAMETER;
                             break;
                         }
                         if (PriorityList[i] < D3DDDI_ALLOCATIONPRIORITY_MINIMUM || PriorityList[i] > D3DDDI_ALLOCATIONPRIORITY_MAXIMUM)
@@ -5712,7 +5721,7 @@ DxgkpDispatchBufferedIoctl(
                     Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)AllocationList[i], Adapter, Device, &Allocation);
                     if (!NT_SUCCESS(Status))
                     {
-                        Status = STATUS_INVALID_HANDLE;
+                        Status = STATUS_INVALID_PARAMETER;
                         break;
                     }
                     DxgkVidMmDereferenceAllocation(Allocation);
@@ -5787,7 +5796,7 @@ DxgkpDispatchBufferedIoctl(
 
             pHistory = (D3DKMT_GETPRESENTHISTORY *)SystemBuffer;
             if (!NT_SUCCESS(DxgkpValidateAdapterOnlyForIoctl(pHistory->hAdapter)))
-                return STATUS_INVALID_HANDLE;
+                return STATUS_INVALID_PARAMETER;
 
             pHistory->WrittenSize = 0;
             pHistory->NumTokens = 0;
@@ -5923,7 +5932,7 @@ DxgkpDispatchBufferedIoctl(
 
             pQueuedLimit = (D3DKMT_SETQUEUEDLIMIT *)SystemBuffer;
             if (!NT_SUCCESS(DxgkpValidateDeviceHandleForIoctl(pQueuedLimit->hDevice, NULL, NULL)))
-                return STATUS_INVALID_HANDLE;
+                return STATUS_INVALID_PARAMETER;
 
             return STATUS_NOT_SUPPORTED;
         }
@@ -5973,7 +5982,7 @@ DxgkpDispatchBufferedIoctl(
 
             pRuntimeData = (D3DKMT_GETRUNTIMEDATA *)SystemBuffer;
             if (!NT_SUCCESS(DxgkpValidateAdapterOnlyForIoctl(pRuntimeData->hAdapter)))
-                return STATUS_INVALID_HANDLE;
+                return STATUS_INVALID_PARAMETER;
 
             return STATUS_NOT_SUPPORTED;
         }
@@ -6036,7 +6045,7 @@ DxgkpDispatchBufferedIoctl(
 
             pInvalidate = (D3DKMT_INVALIDATEACTIVEVIDPN *)SystemBuffer;
             if (!NT_SUCCESS(DxgkpValidateAdapterOnlyForIoctl(pInvalidate->hAdapter)))
-                return STATUS_INVALID_HANDLE;
+                return STATUS_INVALID_PARAMETER;
 
             return STATUS_NOT_SUPPORTED;
         }
