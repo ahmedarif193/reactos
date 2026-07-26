@@ -1161,6 +1161,13 @@ USBPORT_InvalidateRootHub(PVOID MiniPortExtension)
 
     Packet->RH_DisableIrq(FdoExtension->MiniPortExt);
 
+    /*
+     * Keep the root-hub interrupt masked until the SCE worker has drained
+     * the current port changes. EHCI port-change interrupts are level
+     * triggered and re-enabling them while a PORTSC change bit is still set
+     * can continuously reassert the interrupt and starve that worker.
+     * USBPORT_RootHubSCE rearms the interrupt after it observes no changes.
+     */
     PdoDevice = FdoExtension->RootHubPdo;
     PdoExtension = USBPORT_GetRootHubExtension(FdoExtension);
 
@@ -1168,8 +1175,6 @@ USBPORT_InvalidateRootHub(PVOID MiniPortExtension)
     {
         DPRINT1("USBPORT_InvalidateRootHub: RootHubPdo=%p has NULL extension\n",
                 PdoDevice);
-        /* Keep port-change interrupts armed even if PDO is not ready yet */
-        Packet->RH_EnableIrq(FdoExtension->MiniPortExt);
         return 0;
     }
 
@@ -1178,7 +1183,6 @@ USBPORT_InvalidateRootHub(PVOID MiniPortExtension)
         DPRINT1("USBPORT_InvalidateRootHub: invalid RootHubExt=%p (pdo=%p)\n",
                 PdoExtension,
                 PdoDevice);
-        Packet->RH_EnableIrq(FdoExtension->MiniPortExt);
         return 0;
     }
 
@@ -1195,7 +1199,6 @@ USBPORT_InvalidateRootHub(PVOID MiniPortExtension)
             }
 
             USBPORT_DumpDeviceHandleList(FdoExtension);
-            Packet->RH_EnableIrq(FdoExtension->MiniPortExt);
             return 0;
         }
 
@@ -1203,9 +1206,7 @@ USBPORT_InvalidateRootHub(PVOID MiniPortExtension)
 
         if (!Endpoint)
         {
-            /* No SCE pipe yet; keep port-change interrupts armed */
             DPRINT1("USBPORT_InvalidateRootHub: no SCE endpoint registered\n");
-            Packet->RH_EnableIrq(FdoExtension->MiniPortExt);
             return 0;
         }
 
@@ -1215,15 +1216,6 @@ USBPORT_InvalidateRootHub(PVOID MiniPortExtension)
             USBPORT_InvalidateEndpointHandler(FdoDevice,
                                               Endpoint,
                                               INVALIDATE_ENDPOINT_WORKER_THREAD);
-            /*
-             * Re-enable IRQs after queuing the endpoint worker. The worker will
-             * process the current port changes. If new port changes occur while
-             * the worker is processing, they will trigger new interrupts that
-             * call InvalidateRootHub again. Without this, RhIrqEnabled stays
-             * FALSE after processing changes, causing subsequent port events
-             * to be deferred indefinitely (the re-plug detection bug).
-             */
-            Packet->RH_EnableIrq(FdoExtension->MiniPortExt);
         }
         else if (Endpoint)
         {
@@ -1232,13 +1224,7 @@ USBPORT_InvalidateRootHub(PVOID MiniPortExtension)
                     PdoDevice,
                     FdoDevice);
             PdoExtension->Endpoint = NULL;
-            Packet->RH_EnableIrq(FdoExtension->MiniPortExt);
         }
-    }
-    else
-    {
-        /* No PDO yet, keep interrupts unmasked so we can catch the next change */
-        Packet->RH_EnableIrq(FdoExtension->MiniPortExt);
     }
 
     return 0;
