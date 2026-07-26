@@ -1621,6 +1621,7 @@ const DEVVTBL* FatMount(ULONG DeviceId)
     //
     if (!RtlEqualMemory(BootSector->FileSystemType, "FAT12   ", 8) &&
         !RtlEqualMemory(BootSector->FileSystemType, "FAT16   ", 8) &&
+        !RtlEqualMemory(BootSector->FileSystemType, "FAT     ", 8) &&
         !RtlEqualMemory(BootSector32->FileSystemType, "FAT32   ", 8) &&
         !RtlEqualMemory(BootSectorX->FileSystemType, "FATX", 4))
     {
