@@ -1800,6 +1800,7 @@ Directory::AddFileToDirectory(
     {
         return STATUS_INVALID_PARAMETER;
     }
+    DiskVolume->IndexWorkBufferValid = FALSE;
 
     Status = BuildIndexEntry(
         FileReference,
@@ -2517,6 +2518,7 @@ Directory::RemoveFileFromDirectory(
     {
         return STATUS_INVALID_PARAMETER;
     }
+    DiskVolume->IndexWorkBufferValid = FALSE;
 
     IndexRootAttribute =
         DirectoryFile->GetAttribute(

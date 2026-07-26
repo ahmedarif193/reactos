@@ -79,6 +79,168 @@ NtfsReturnCreateReparse(
     return STATUS_REPARSE;
 }
 
+static
+BOOLEAN
+NtfsSplitParentName(
+    _In_ PUNICODE_STRING Name,
+    _Out_ PUSHORT ParentLength,
+    _Out_ PWCHAR* LeafName,
+    _Out_ PUSHORT LeafLength)
+{
+    ULONG CharacterCount;
+    ULONG Index;
+    ULONG Separator = 0;
+    BOOLEAN FoundSeparator = FALSE;
+
+    if (!Name || !Name->Buffer || !Name->Length)
+        return FALSE;
+
+    CharacterCount = Name->Length / sizeof(WCHAR);
+    for (Index = CharacterCount; Index != 0; Index--)
+    {
+        if (Name->Buffer[Index - 1] == L'\\')
+        {
+            Separator = Index - 1;
+            FoundSeparator = TRUE;
+            break;
+        }
+    }
+    if (!FoundSeparator || Separator + 1 >= CharacterCount)
+        return FALSE;
+
+    *ParentLength = (USHORT)(Separator == 0 ? 1 : Separator);
+    *LeafName = &Name->Buffer[Separator + 1];
+    *LeafLength = (USHORT)(CharacterCount - Separator - 1);
+    return TRUE;
+}
+
+/*
+ * A cold miss in one directory should not resolve that directory from the
+ * root again. Directory edits advance DirGeneration, making this parsed
+ * parent unusable before a later lookup can observe it.
+ */
+static
+BOOLEAN
+NtfsLookupInCachedParent(
+    _In_ PVolumeContextBlock VolCB,
+    _In_ PNtfsMasterFileTable Mft,
+    _In_ PUNICODE_STRING Name,
+    _In_ BOOLEAN OpenFinalReparsePoint,
+    _Out_ PNTSTATUS LookupStatus,
+    _Out_ PNtfsFileRecord* File)
+{
+    PWCHAR LeafName;
+    USHORT LeafLength;
+    USHORT ParentLength;
+    NTSTATUS Status;
+
+    *File = NULL;
+    if (!NtfsSplitParentName(Name,
+                             &ParentLength,
+                             &LeafName,
+                             &LeafLength))
+    {
+        return FALSE;
+    }
+
+    if (VolCB->CachedLookupParent &&
+        VolCB->CachedLookupParentGeneration != VolCB->DirGeneration)
+    {
+        NtfsFileRecordDestroy(VolCB->CachedLookupParent);
+        VolCB->CachedLookupParent = NULL;
+        VolCB->CachedLookupParentPathLength = 0;
+    }
+    if (!VolCB->CachedLookupParent ||
+        VolCB->CachedLookupParentPathLength != ParentLength ||
+        RtlCompareMemory(VolCB->CachedLookupParentPath,
+                         Name->Buffer,
+                         ParentLength * sizeof(WCHAR)) !=
+            ParentLength * sizeof(WCHAR))
+    {
+        return FALSE;
+    }
+
+    Status = NtfsMasterFileTableGetFileRecordInDirectory(
+        Mft,
+        VolCB->CachedLookupParent,
+        LeafName,
+        LeafLength,
+        File);
+    if (NT_SUCCESS(Status) &&
+        !OpenFinalReparsePoint &&
+        NtfsFileRecordGetAttribute(
+            *File,
+            TypeReparsePoint,
+            NULL))
+    {
+        Status = STATUS_REPARSE;
+    }
+    *LookupStatus = Status;
+    return TRUE;
+}
+
+static
+VOID
+NtfsRememberLookupParent(
+    _In_ PVolumeContextBlock VolCB,
+    _In_ PNtfsMasterFileTable Mft,
+    _In_ PUNICODE_STRING Name)
+{
+    PNtfsFileRecord Parent = NULL;
+    PWCHAR LeafName;
+    USHORT LeafLength;
+    USHORT ParentLength;
+    ULONG RemainingNameLength;
+    NTSTATUS Status;
+
+    if (!NtfsSplitParentName(Name,
+                             &ParentLength,
+                             &LeafName,
+                             &LeafLength) ||
+        ParentLength > RTL_NUMBER_OF(VolCB->CachedLookupParentPath))
+    {
+        return;
+    }
+    UNREFERENCED_PARAMETER(LeafName);
+    UNREFERENCED_PARAMETER(LeafLength);
+
+    if (VolCB->CachedLookupParent &&
+        VolCB->CachedLookupParentGeneration == VolCB->DirGeneration &&
+        VolCB->CachedLookupParentPathLength == ParentLength &&
+        RtlCompareMemory(VolCB->CachedLookupParentPath,
+                         Name->Buffer,
+                         ParentLength * sizeof(WCHAR)) ==
+            ParentLength * sizeof(WCHAR))
+    {
+        return;
+    }
+
+    Status = NtfsMasterFileTableGetFileRecordFromQueryEx(
+        Mft,
+        Name->Buffer,
+        ParentLength,
+        FALSE,
+        &RemainingNameLength,
+        &Parent);
+    if (!NT_SUCCESS(Status) ||
+        !Parent ||
+        !(NtfsFileRecordGetHeader(Parent)->Flags & FR_IS_DIRECTORY))
+    {
+        if (Parent)
+            NtfsFileRecordDestroy(Parent);
+        return;
+    }
+
+    if (VolCB->CachedLookupParent)
+        NtfsFileRecordDestroy(VolCB->CachedLookupParent);
+    VolCB->CachedLookupParent = Parent;
+    VolCB->CachedLookupParentGeneration = VolCB->DirGeneration;
+    VolCB->CachedLookupParentPathLength = ParentLength;
+    RtlCopyMemory(VolCB->CachedLookupParentPath,
+                  Name->Buffer,
+                  ParentLength * sizeof(WCHAR));
+}
+
 _Function_class_(IRP_MJ_CREATE)
 _Function_class_(DRIVER_DISPATCH)
 /* The cache manager retains this table for the lifetime of every cache map,
@@ -374,16 +536,33 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         Status = STATUS_SUCCESS;
     }
     else
-    Status =
-        NtfsMasterFileTableGetFileRecordFromQueryEx(
-            Mft,
-            FileObject->FileName.Buffer,
-            FileObject->FileName.Length /
-                sizeof(WCHAR),
-            !!(IrpSp->Parameters.Create.Options &
-               FILE_OPEN_REPARSE_POINT),
-            &RemainingNameLength,
-            &CurrentFile);
+    {
+        BOOLEAN ParentLookup =
+            Disposition == FILE_OPEN &&
+            !(IrpSp->Parameters.Create.Options &
+              FILE_OPEN_REPARSE_POINT) &&
+            NtfsLookupInCachedParent(
+                VolCB,
+                Mft,
+                &FileObject->FileName,
+                FALSE,
+                &Status,
+                &CurrentFile);
+
+        if (!ParentLookup)
+        {
+            Status =
+                NtfsMasterFileTableGetFileRecordFromQueryEx(
+                    Mft,
+                    FileObject->FileName.Buffer,
+                    FileObject->FileName.Length /
+                        sizeof(WCHAR),
+                    !!(IrpSp->Parameters.Create.Options &
+                       FILE_OPEN_REPARSE_POINT),
+                    &RemainingNameLength,
+                    &CurrentFile);
+        }
+    }
 
     if (Status == STATUS_REPARSE)
     {
@@ -405,6 +584,13 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
          Status == STATUS_OBJECT_PATH_NOT_FOUND) &&
         !(IrpSp->Parameters.Create.Options & FILE_OPEN_REPARSE_POINT))
     {
+        if (Disposition == FILE_OPEN)
+        {
+            NtfsRememberLookupParent(
+                VolCB,
+                Mft,
+                &FileObject->FileName);
+        }
         NtfsRecordNameMissing(VolCB,
                               FileObject->FileName.Buffer,
                               FileObject->FileName.Length / sizeof(WCHAR));

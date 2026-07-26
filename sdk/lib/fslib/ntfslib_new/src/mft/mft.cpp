@@ -429,6 +429,7 @@ MasterFileTable::GetFileRecordInDirectory(
     _Out_ PFileRecord* File)
 {
     Directory ParentIndex(DiskVolume);
+    PFileRecord FoundFile;
     ULONGLONG FileReference;
     NTSTATUS Status;
 
@@ -443,9 +444,21 @@ MasterFileTable::GetFileRecordInDirectory(
         return Status;
 
     /* The high 16 bits are the sequence number, not part of the ordinal. */
-    return GetFileRecord(
+    Status = GetFileRecord(
         (ULONG)(FileReference & 0xFFFFFFFFFFFFULL),
-        File);
+        &FoundFile);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (GetSequenceFromFileRef(FileReference) != 0 &&
+        FoundFile->Header->SequenceNumber !=
+            GetSequenceFromFileRef(FileReference))
+    {
+        delete FoundFile;
+        return STATUS_FILE_CORRUPT_ERROR;
+    }
+
+    *File = FoundFile;
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS

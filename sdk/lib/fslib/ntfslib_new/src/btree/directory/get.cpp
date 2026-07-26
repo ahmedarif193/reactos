@@ -285,6 +285,7 @@ Directory::LoadDirectNode(_In_ ULONG Depth,
                 new(PagedPool, TAG_NTFS) UCHAR[IndexRecordSize];
             DiskVolume->IndexWorkBufferSize =
                 DiskVolume->IndexWorkBuffer ? IndexRecordSize : 0;
+            DiskVolume->IndexWorkBufferValid = FALSE;
         }
         if (!DiskVolume->IndexWorkBuffer)
             return STATUS_INSUFFICIENT_RESOURCES;
@@ -292,6 +293,7 @@ Directory::LoadDirectNode(_In_ ULONG Depth,
         if (EnumerationLoadedDepth != (LONG)Depth ||
             EnumerationLoadedVCN != Frame->VCN)
         {
+            DiskVolume->IndexWorkBufferValid = FALSE;
             BitmapLength =
                 GetAttributeDataSize(EnumerationBitmap);
             if ((IndexRecordNumber >> 3) >= BitmapLength)

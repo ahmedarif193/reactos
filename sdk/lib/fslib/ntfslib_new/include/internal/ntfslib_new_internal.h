@@ -499,6 +499,9 @@ public:
      * name resolution was a fifth of the lookup. Descents never nest. */
     PUCHAR IndexWorkBuffer = NULL;
     ULONG IndexWorkBufferSize = 0;
+    ULONGLONG IndexWorkFileReference = 0;
+    ULONGLONG IndexWorkVCN = 0;
+    BOOLEAN IndexWorkBufferValid = FALSE;
 
     /* Free list of record-sized buffers. Every parsed record allocated and
      * freed 1 KB of pool; recycling them needs its own lock because records

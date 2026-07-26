@@ -131,6 +131,7 @@ Directory::FindNextFile(_In_  PFileRecord File,
     ULONG IndexRecordSize;
     ULONGLONG BitmapLength;
     ULONGLONG ChildVCN;
+    ULONGLONG DirectoryReference;
     ULONGLONG VisitedVCNs[64];
     ULONG VisitedCount = 0;
     BOOLEAN Descend;
@@ -139,6 +140,7 @@ Directory::FindNextFile(_In_  PFileRecord File,
 
     if (!File || !(File->Header->Flags & FR_IS_DIRECTORY))
         return STATUS_NOT_FOUND;
+    DirectoryReference = MakeFileReference(File->Header);
 
     ElementLength = PathElementLength(FileName);
     if (ElementLength == 0)
@@ -208,6 +210,7 @@ Directory::FindNextFile(_In_  PFileRecord File,
             new(PagedPool, TAG_NTFS) UCHAR[IndexRecordSize];
         DiskVolume->IndexWorkBufferSize =
             DiskVolume->IndexWorkBuffer ? IndexRecordSize : 0;
+        DiskVolume->IndexWorkBufferValid = FALSE;
     }
     IndexBufferData = DiskVolume->IndexWorkBuffer;
     if (!IndexBufferData)
@@ -267,46 +270,56 @@ Directory::FindNextFile(_In_  PFileRecord File,
             goto Done;
         }
 
-        BitmapByte = IndexRecordNumber >> 3;
-        BitmapMask = (UCHAR)(1 << (IndexRecordNumber & 7));
-        Status = File->CopyData(BitmapAttribute,
-                                &BitmapValue,
-                                &BitmapBytesRemaining,
-                                BitmapByte);
-        if (!NT_SUCCESS(Status) ||
-            BitmapBytesRemaining != 0 ||
-            !(BitmapValue & BitmapMask))
+        if (!DiskVolume->IndexWorkBufferValid ||
+            DiskVolume->IndexWorkFileReference != DirectoryReference ||
+            DiskVolume->IndexWorkVCN != ChildVCN)
         {
-            if (NT_SUCCESS(Status))
-                Status = STATUS_FILE_CORRUPT_ERROR;
-            goto Done;
-        }
+            BitmapByte = IndexRecordNumber >> 3;
+            BitmapMask = (UCHAR)(1 << (IndexRecordNumber & 7));
+            Status = File->CopyData(BitmapAttribute,
+                                    &BitmapValue,
+                                    &BitmapBytesRemaining,
+                                    BitmapByte);
+            if (!NT_SUCCESS(Status) ||
+                BitmapBytesRemaining != 0 ||
+                !(BitmapValue & BitmapMask))
+            {
+                if (NT_SUCCESS(Status))
+                    Status = STATUS_FILE_CORRUPT_ERROR;
+                goto Done;
+            }
 
-        Status = File->CopyData(IndexAllocationAttribute,
-                                IndexBufferData,
-                                &BytesRemaining,
-                                AllocationOffset);
-        if (!NT_SUCCESS(Status) || BytesRemaining != 0)
-        {
-            if (NT_SUCCESS(Status))
-                Status = STATUS_END_OF_FILE;
-            goto Done;
+            Status = File->CopyData(IndexAllocationAttribute,
+                                    IndexBufferData,
+                                    &BytesRemaining,
+                                    AllocationOffset);
+            if (!NT_SUCCESS(Status) || BytesRemaining != 0)
+            {
+                if (NT_SUCCESS(Status))
+                    Status = STATUS_END_OF_FILE;
+                goto Done;
+            }
+
+            NodeBuffer = (PIndexBuffer)IndexBufferData;
+            Status = NtfsApplyFixup(&NodeBuffer->RecordHeader,
+                                    IndexRecordSize,
+                                    DiskVolume->BytesPerSector);
+            if (!NT_SUCCESS(Status) ||
+                RtlCompareMemory(NodeBuffer->RecordHeader.TypeID,
+                                 "INDX",
+                                 4) != 4 ||
+                NodeBuffer->VCN != ChildVCN)
+            {
+                Status = STATUS_FILE_CORRUPT_ERROR;
+                goto Done;
+            }
+
+            DiskVolume->IndexWorkFileReference = DirectoryReference;
+            DiskVolume->IndexWorkVCN = ChildVCN;
+            DiskVolume->IndexWorkBufferValid = TRUE;
         }
 
         NodeBuffer = (PIndexBuffer)IndexBufferData;
-        Status = NtfsApplyFixup(&NodeBuffer->RecordHeader,
-                                IndexRecordSize,
-                                DiskVolume->BytesPerSector);
-        if (!NT_SUCCESS(Status) ||
-            RtlCompareMemory(NodeBuffer->RecordHeader.TypeID,
-                             "INDX",
-                             4) != 4 ||
-            NodeBuffer->VCN != ChildVCN)
-        {
-            Status = STATUS_FILE_CORRUPT_ERROR;
-            goto Done;
-        }
-
         Descend = FALSE;
         Status = FindEntryInNode(
             DiskVolume,
