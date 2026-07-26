@@ -473,6 +473,14 @@ public:
     BOOLEAN IsReadOnly = FALSE;
     BOOLEAN ShowMetadataFiles = FALSE;
 
+    /*
+     * Where to begin the free-cluster search. Without it every allocation
+     * scans the volume bitmap from cluster zero, so creating or extending N
+     * files costs N^2. Only a hint: the search still wraps to the start, and
+     * releasing clusters pulls it back so space is never stranded.
+     */
+    ULONGLONG FreeClusterHint = 0;
+
     ~Volume();
 
     /**
@@ -1239,6 +1247,19 @@ typedef class MasterFileTable
 public:
     ULONG FileRecordSize;
 
+    /*
+     * Where to begin looking for a free record. Scanning the whole bitmap from
+     * the start on every allocation makes creating N files cost N^2; the hint
+     * keeps a run of creates linear. It is only a hint: allocation still falls
+     * back to a scan from the beginning, and freeing a record moves it back so
+     * nothing is stranded.
+     */
+    ULONGLONG FreeRecordHint = 0;
+
+    /* Scratch for the allocation bitmap scan; allocating and freeing 64 KB
+     * of pool per created file cost more than the allocation itself. */
+    PUCHAR AllocationScanBuffer = NULL;
+
     // ./ mft.cpp
     MasterFileTable(_In_ PVolume TargetVolume,
                     _In_ UINT64 MFTLCN,
@@ -1266,6 +1287,14 @@ public:
     NTSTATUS
     GetFileRecord(_In_   ULONG FileRecordNumber,
                   _Out_  PFileRecord* File);
+
+    /* Resolves one component inside a directory whose record the caller
+     * already holds, so a repeat open in a known directory does not walk the
+     * path from the root again. */
+    NTSTATUS
+    GetFileRecordInDirectory(_In_  PFileRecord ParentDirectory,
+                             _In_  PWCHAR Name,
+                             _Out_ PFileRecord* File);
 
     NTSTATUS
     GetFileRecordFromMFTMirr(_In_  ULONG FileRecordNumber,

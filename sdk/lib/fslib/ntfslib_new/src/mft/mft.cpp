@@ -194,6 +194,9 @@ MasterFileTable::MasterFileTable(_In_ PVolume TargetVolume,
 
 MasterFileTable::~MasterFileTable()
 {
+    delete[] AllocationScanBuffer;
+    AllocationScanBuffer = NULL;
+
     delete MFTFile;
     delete MFTMirrFile;
 }
@@ -420,6 +423,32 @@ MasterFileTable::AllocateBaseFileRecord(
 }
 
 NTSTATUS
+MasterFileTable::GetFileRecordInDirectory(
+    _In_  PFileRecord ParentDirectory,
+    _In_  PWCHAR Name,
+    _Out_ PFileRecord* File)
+{
+    Directory ParentIndex(DiskVolume);
+    ULONGLONG FileReference;
+    NTSTATUS Status;
+
+    if (!ParentDirectory || !Name || !File)
+        return STATUS_INVALID_PARAMETER;
+    *File = NULL;
+
+    Status = ParentIndex.FindNextFile(ParentDirectory,
+                                      Name,
+                                      &FileReference);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    /* The high 16 bits are the sequence number, not part of the ordinal. */
+    return GetFileRecord(
+        (ULONG)(FileReference & 0xFFFFFFFFFFFFULL),
+        File);
+}
+
+NTSTATUS
 MasterFileTable::AllocateFileRecord(
     _In_ ULONGLONG BaseFileReference,
     _In_ BOOLEAN IsDirectory,
@@ -490,15 +519,34 @@ MasterFileTable::AllocateFileRecord(
         (RecordCount + 7) / 8;
     if (BitmapDataLength < BitmapByteCount)
         return STATUS_FILE_CORRUPT_ERROR;
-    BitmapBuffer =
-        new(PagedPool, TAG_MFT)
-            UCHAR[MFT_ALLOCATION_BITMAP_CHUNK_SIZE];
+    if (!AllocationScanBuffer)
+    {
+        AllocationScanBuffer =
+            new(PagedPool, TAG_MFT)
+                UCHAR[MFT_ALLOCATION_BITMAP_CHUNK_SIZE];
+    }
+    BitmapBuffer = AllocationScanBuffer;
     if (!BitmapBuffer)
         return STATUS_INSUFFICIENT_RESOURCES;
 
-    ByteOffset =
-        MFT_FIRST_ORDINARY_FILE_RECORD / 8;
-    while (ByteOffset < BitmapByteCount)
+    /*
+     * Start where the last allocation left off. If that finds nothing, the
+     * second pass covers the skipped region, so a full bitmap is still
+     * detected and freed records are still reused.
+     */
+    ULONGLONG ScanStart = MFT_FIRST_ORDINARY_FILE_RECORD / 8;
+    ULONGLONG ScanLimit = BitmapByteCount;
+    BOOLEAN SecondPass = FALSE;
+
+    if (FreeRecordHint / 8 > ScanStart &&
+        FreeRecordHint / 8 < BitmapByteCount)
+    {
+        ScanStart = FreeRecordHint / 8;
+    }
+
+ScanAgain:
+    ByteOffset = ScanStart;
+    while (ByteOffset < ScanLimit)
     {
         ChunkLength = (ULONG)min(
             BitmapByteCount - ByteOffset,
@@ -558,6 +606,19 @@ MasterFileTable::AllocateFileRecord(
             break;
         ByteOffset += ChunkLength;
     }
+
+    if (!Found && !SecondPass &&
+        ScanStart > MFT_FIRST_ORDINARY_FILE_RECORD / 8)
+    {
+        /* Cover the region the hint skipped over. */
+        SecondPass = TRUE;
+        ScanLimit = ScanStart;
+        ScanStart = MFT_FIRST_ORDINARY_FILE_RECORD / 8;
+        goto ScanAgain;
+    }
+
+    if (Found)
+        FreeRecordHint = Candidate + 1;
 
     if (!Found)
     {
@@ -773,7 +834,7 @@ Done:
         (void)WriteFileRecordToMFT(NewFile);
     }
     delete NewFile;
-    delete[] BitmapBuffer;
+    /* BitmapBuffer is the table's persistent scratch; it stays. */
     return Status;
 }
 
@@ -826,6 +887,10 @@ MasterFileTable::DeallocateFileRecord(
 
     FileRecordNumber =
         File->Header->MFTRecordNumber;
+
+    /* The slot is free again, so let the next allocation see it. */
+    if (File->Header->MFTRecordNumber < FreeRecordHint)
+        FreeRecordHint = File->Header->MFTRecordNumber;
     BitmapAttribute =
         MFTFile->GetAttribute(TypeBitmap, NULL);
     if (!BitmapAttribute)
