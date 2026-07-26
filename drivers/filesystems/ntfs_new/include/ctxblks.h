@@ -40,9 +40,36 @@ typedef struct _VolumeContextBlock
     FAST_MUTEX MissingNameMutex;
     LIST_ENTRY MissingNameList;
     ULONG MissingNameCount;
+
+    /* Parsed file records kept past their last handle, most recent first. */
+    FAST_MUTEX RecordCacheMutex;
+    LIST_ENTRY RecordCacheList;
+    ULONG RecordCacheCount;
+
+    /* Context blocks kept with their resources still initialized. */
+    FAST_MUTEX IdleFcbMutex;
+    LIST_ENTRY IdleFcbList;
+    ULONG IdleFcbCount;
 } VolumeContextBlock, *PVolumeContextBlock;
 
 #define NTFS_MAX_MISSING_NAMES 256
+#define NTFS_MAX_CACHED_RECORDS 512
+#define NTFS_MAX_IDLE_FCBS 64
+
+/* Everything from FileRec onwards describes one open and is reset on reuse;
+ * the header, resources and mutex above it stay initialized. */
+#define NTFS_FCB_PER_OPEN_OFFSET FIELD_OFFSET(FileContextBlock, FileRec)
+
+typedef struct _NtfsCachedRecord
+{
+    LIST_ENTRY Link;
+    ULONG Hash;
+    USHORT Length;
+    LONG InUse;
+    BOOLEAN Evicted;
+    PNtfsFileRecord Record;
+    WCHAR Name[1];
+} NtfsCachedRecord, *PNtfsCachedRecord;
 
 typedef struct _NtfsMissingName
 {
@@ -85,6 +112,27 @@ NtfsForgetMissingName(_In_ PVolumeContextBlock VolCB,
 
 VOID
 NtfsForgetAllMissingNames(_In_ PVolumeContextBlock VolCB);
+
+PNtfsCachedRecord
+NtfsAcquireCachedRecord(_In_ PVolumeContextBlock VolCB,
+                        _In_reads_(Length) PCWSTR Name,
+                        _In_ USHORT Length);
+
+PNtfsCachedRecord
+NtfsCacheRecord(_In_ PVolumeContextBlock VolCB,
+                _In_reads_(Length) PCWSTR Name,
+                _In_ USHORT Length,
+                _In_ PNtfsFileRecord Record);
+
+VOID
+NtfsReleaseCachedRecord(_In_ PVolumeContextBlock VolCB,
+                        _In_ PNtfsCachedRecord Entry);
+
+VOID
+NtfsEvictCachedRecord(_In_ PVolumeContextBlock VolCB,
+                      _In_reads_(Length) PCWSTR Name,
+                      _In_ USHORT Length,
+                      _In_ BOOLEAN RecordAlreadyFreed);
 
 /*
  * The library keeps the disk it reads through in one process-global slot, so
@@ -145,6 +193,12 @@ typedef struct _FCB
     /* Set through FileDispositionInformation or FILE_DELETE_ON_CLOSE;
      * the name is removed when the handle goes away. */
     BOOLEAN DeletePending;
+
+    /* Non-NULL when FileRec is on loan from the volume's record cache. */
+    struct _NtfsCachedRecord* CachedRecord;
+
+    /* Links this block into the volume's idle list while it is not in use. */
+    LIST_ENTRY IdleLink;
 
 } FileContextBlock, *PFileContextBlock;
 

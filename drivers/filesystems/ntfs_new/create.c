@@ -207,8 +207,21 @@ NtfsCompleteFailedCreate(
     _Inout_ PIRP Irp,
     _In_opt_ PFileContextBlock FileCB,
     _In_opt_ PNtfsFileRecord FileRecord,
+    _In_opt_ PNtfsCachedRecord CachedRecord,
     _In_ NTSTATUS Status)
 {
+    /* A record on loan from the cache is returned, never destroyed here. */
+    if (CachedRecord)
+    {
+        if (FileCB && FileCB->FileRec == CachedRecord->Record)
+            FileCB->FileRec = NULL;
+        if (FileRecord == CachedRecord->Record)
+            FileRecord = NULL;
+        NtfsReleaseCachedRecord(
+            (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension,
+            CachedRecord);
+    }
+
     if (FileCB)
     {
         if (FileCB->FileDir)
@@ -260,6 +273,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     PFILE_OBJECT FileObject;
     BOOLEAN PerformAccessChecks;
     PNtfsFileRecord CurrentFile = NULL;
+    PNtfsCachedRecord CachedRecord = NULL;
     UINT8 Disposition;
     PVolumeContextBlock VolCB;
     PNtfsVolume DiskVolume;
@@ -327,6 +341,25 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     KeEnterCriticalRegion();
     ExAcquireResourceExclusiveLite(&VolCB->MetadataResource, TRUE);
 
+    /*
+     * Parsing the path and the file record is by far the most expensive part
+     * of an open, so reuse the record left behind by an earlier open of the
+     * same name when there is one.
+     */
+    if (Disposition == FILE_OPEN || Disposition == FILE_OPEN_IF)
+    {
+        CachedRecord = NtfsAcquireCachedRecord(
+            VolCB,
+            FileObject->FileName.Buffer,
+            (USHORT)(FileObject->FileName.Length / sizeof(WCHAR)));
+    }
+
+    if (CachedRecord)
+    {
+        CurrentFile = CachedRecord->Record;
+        Status = STATUS_SUCCESS;
+    }
+    else
     Status =
         NtfsMasterFileTableGetFileRecordFromQueryEx(
             Mft,
@@ -443,23 +476,48 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     KeLeaveCriticalRegion();
 
     // Create file context block.
-    FileCB = (PFileContextBlock)ExAllocatePoolZero(NonPagedPool,
-                                                   sizeof(FileContextBlock),
-                                                   TAG_NTFS);
-    if (!FileCB)
+    /*
+     * Initializing two ERESOURCEs costs more than the rest of an open put
+     * together, so a block whose handles have all closed is kept with its
+     * header, resources and mutex intact and only its per-open half reset.
+     */
+    FileCB = NULL;
+    ExAcquireFastMutex(&VolCB->IdleFcbMutex);
+    if (!IsListEmpty(&VolCB->IdleFcbList))
     {
-        return NtfsCompleteFailedCreate(VolumeDeviceObject,
-                                        Irp,
-                                        NULL,
-                                        CurrentFile,
-                                        STATUS_INSUFFICIENT_RESOURCES);
-    }
+        PLIST_ENTRY Idle = RemoveHeadList(&VolCB->IdleFcbList);
 
-    // Initialize the NT required FCB header and resources
-    ExInitializeResourceLite(&FileCB->MainResource);
-    ExInitializeResourceLite(&FileCB->PagingIoResource);
-    ExInitializeFastMutex(&FileCB->HeaderMutex);
-    FsRtlSetupAdvancedHeader(&FileCB->CommonFCBHeader, &FileCB->HeaderMutex);
+        VolCB->IdleFcbCount--;
+        FileCB = CONTAINING_RECORD(Idle, FileContextBlock, IdleLink);
+    }
+    ExReleaseFastMutex(&VolCB->IdleFcbMutex);
+
+    if (FileCB)
+    {
+        RtlZeroMemory((PUCHAR)FileCB + NTFS_FCB_PER_OPEN_OFFSET,
+                      sizeof(FileContextBlock) - NTFS_FCB_PER_OPEN_OFFSET);
+    }
+    else
+    {
+        FileCB = (PFileContextBlock)ExAllocatePoolZero(NonPagedPool,
+                                                       sizeof(FileContextBlock),
+                                                       TAG_NTFS);
+        if (!FileCB)
+        {
+            return NtfsCompleteFailedCreate(VolumeDeviceObject,
+                                            Irp,
+                                            NULL,
+                                            CurrentFile,
+                                            CachedRecord,
+                                            STATUS_INSUFFICIENT_RESOURCES);
+        }
+
+        // Initialize the NT required FCB header and resources
+        ExInitializeResourceLite(&FileCB->MainResource);
+        ExInitializeResourceLite(&FileCB->PagingIoResource);
+        ExInitializeFastMutex(&FileCB->HeaderMutex);
+        FsRtlSetupAdvancedHeader(&FileCB->CommonFCBHeader, &FileCB->HeaderMutex);
+    }
     FileCB->CommonFCBHeader.Resource = &FileCB->MainResource;
     FileCB->CommonFCBHeader.PagingIoResource = &FileCB->PagingIoResource;
     FileCB->CommonFCBHeader.IsFastIoPossible = FastIoIsPossible;
@@ -476,6 +534,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                         Irp,
                                         FileCB,
                                         CurrentFile,
+                                        CachedRecord,
                                         STATUS_INSUFFICIENT_RESOURCES);
     }
     RtlCopyMemory(FileNameBuffer,
@@ -498,9 +557,20 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                         Irp,
                                         FileCB,
                                         CurrentFile,
+                                        CachedRecord,
                                         Status);
     }
 
+    if (!CachedRecord && CurrentFile)
+    {
+        CachedRecord = NtfsCacheRecord(
+            VolCB,
+            FileObject->FileName.Buffer,
+            (USHORT)(FileObject->FileName.Length / sizeof(WCHAR)),
+            CurrentFile);
+    }
+
+    FileCB->CachedRecord = CachedRecord;
     FileCB->FileRec = CurrentFile;
     FileCB->CreateOptions = IrpSp->Parameters.Create.Options;
     FileCB->DesiredAccess = IrpSp->Parameters.Create.SecurityContext->DesiredAccess;
@@ -569,6 +639,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                         Irp,
                                         FileCB,
                                         CurrentFile,
+                                        CachedRecord,
                                         STATUS_INSUFFICIENT_RESOURCES);
     }
 
@@ -582,6 +653,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                             Irp,
                                             FileCB,
                                             CurrentFile,
+                                            CachedRecord,
                                             STATUS_INSUFFICIENT_RESOURCES);
         }
 
@@ -592,6 +664,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                             Irp,
                                             FileCB,
                                             CurrentFile,
+                                            CachedRecord,
                                             Status);
         }
     }
