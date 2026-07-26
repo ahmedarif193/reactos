@@ -80,33 +80,9 @@ MiArchCreateProcessAddressSpace(
     MI_MAKE_DIRTY_PAGE(&MapPte);
     MI_WRITE_VALID_PTE(MappingPte, MapPte);
 
-    /* Copy kernel half from the master table */
+    /* Leave the user half empty until the process starts building user mappings. */
     Index = PXE_PER_PAGE / 2;
     RtlZeroMemory(PageTable, Index * sizeof(MMPTE));
-    RtlCopyMemory(PageTable + Index,
-                  MiAddressToPxe(0) + Index,
-                  PAGE_SIZE - Index * sizeof(MMPTE));
-
-    /*
-     * Install kernel recursive entry and hyperspace pointer.
-     *
-     * ARM64 FIX: Use ValidKernelPde (table descriptor template) instead of
-     * ValidKernelPte (page descriptor template). On ARM64, table descriptors
-     * (L0/L1/L2) have different attribute layouts than page descriptors (L3).
-     * ValidKernelPte has Writable=1 at bit 55, which is reserved in table
-     * descriptors and can cause translation faults.
-     */
-    TempPte.u.Long = ValidKernelPde.u.Long;
-    TempPte.u.Hard.PageFrameNumber = RootPfn;
-    Index = MiAddressToPxi((PVOID)PXE_SELFMAP);
-    PageTable[Index] = TempPte;
-
-    TempPte.u.Long = ValidKernelPde.u.Long;
-    TempPte.u.Hard.PageFrameNumber = HyperPfn;
-    Index = MiAddressToPxi((PVOID)HYPER_SPACE);
-    PageTable[Index] = TempPte;
-
-    MiArm64CleanPageToPoC((PVOID)PageTable);
 
     /* Map hyperspace PDPT (deliberate remap: the PFN changes, so this must
      * not go through MI_UPDATE_VALID_PTE, which asserts PFN equality) */
@@ -154,6 +130,12 @@ MiArchCreateProcessAddressSpace(
     PageTable[Index] = TempPte;
 
     MiArm64CleanPageToPoC((PVOID)PageTable);
+
+    /*
+     * Copy the current kernel half, install the private root entries and
+     * publish this process while serialized against new system L0 entries.
+     */
+    MiArm64FinalizeProcessAddressSpace(Process, RootPfn, HyperPfn);
 
     MiReleaseSystemPtes(MappingPte, 1, SystemPteSpace);
 

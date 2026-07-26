@@ -19,6 +19,54 @@ VOID
 MiArm64InitializeSystemPageDirectoryLock(VOID)
 {
     KeInitializeSpinLock(&MiArm64SystemPageDirectoryLock);
+    InitializeListHead(&MmProcessList);
+    InsertTailList(&MmProcessList, &PsGetCurrentProcess()->MmProcessLinks);
+}
+
+static
+VOID
+MiArm64ReplicateTopLevelEntry(
+    _In_ PFN_NUMBER SourceRootPage,
+    _In_ ULONG Index,
+    _In_ ULONG64 Descriptor)
+{
+    PLIST_ENTRY ListEntry;
+
+    for (ListEntry = MmProcessList.Flink;
+         ListEntry != &MmProcessList;
+         ListEntry = ListEntry->Flink)
+    {
+        PEPROCESS Process;
+        PFN_NUMBER TargetRootPage;
+        volatile ULONG64 *TargetRoot;
+        ULONG64 TargetDescriptor;
+
+        Process = CONTAINING_RECORD(ListEntry, EPROCESS, MmProcessLinks);
+        TargetRootPage = (KPROCESS_DTB0(&Process->Pcb) & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT;
+        if ((TargetRootPage == 0) || (TargetRootPage == SourceRootPage))
+        {
+            continue;
+        }
+
+        TargetRoot = (volatile ULONG64 *)MI_ARM64_PFN_TO_VA(TargetRootPage);
+        TargetDescriptor = TargetRoot[Index];
+        if (TargetDescriptor == Descriptor)
+        {
+            continue;
+        }
+
+        if ((TargetDescriptor & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_INVALID)
+        {
+            KeBugCheckEx(MEMORY_MANAGEMENT,
+                         (ULONG_PTR)&TargetRoot[Index],
+                         TargetDescriptor,
+                         Descriptor,
+                         Index);
+        }
+
+        TargetRoot[Index] = Descriptor;
+        MiArm64CleanEntryToPoC(&TargetRoot[Index]);
+    }
 }
 
 static
@@ -96,16 +144,25 @@ MiArm64EnsureKernelHierarchy(
     PMMPTE KernelPxe, KernelPpe, KernelPde;
     PULONG64 Table;
     PFN_NUMBER PpePage, PdePage, PageFrameIndex;
+    BOOLEAN PxeCreated;
 
     Table = (PULONG64)MI_ARM64_PFN_TO_VA(RootPage);
     KernelPxe = (PMMPTE)&Table[((ULONG_PTR)TargetAddress >> PXI_SHIFT) & PXI_MASK];
-    *FlushHierarchy |= MiArm64EnsureSystemTableEntry(KernelPxe,
-                                                     MiAddressToPxe(TargetAddress),
-                                                     RootPage,
-                                                     &PpePage);
+    PxeCreated = MiArm64EnsureSystemTableEntry(KernelPxe,
+                                               MiAddressToPxe(TargetAddress),
+                                               RootPage,
+                                               &PpePage);
+    *FlushHierarchy |= PxeCreated;
     if (PpePage == 0)
     {
         return 0;
+    }
+
+    if (PxeCreated)
+    {
+        MiArm64ReplicateTopLevelEntry(RootPage,
+                                      ((ULONG_PTR)TargetAddress >> PXI_SHIFT) & PXI_MASK,
+                                      KernelPxe->u.Long);
     }
 
     Table = (PULONG64)MI_ARM64_PFN_TO_VA(PpePage);
@@ -138,8 +195,9 @@ MiArm64ReadTtbr1RootPage(VOID)
     return (PFN_NUMBER)((Ttbr1 & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
 }
 
+static
 VOID
-MiArm64FillSystemPageDirectory(
+MiArm64FillSystemPageDirectoryLocked(
     _In_ PVOID Base,
     _In_ SIZE_T NumberOfBytes)
 {
@@ -170,6 +228,99 @@ FlushAndReturn:
             "dsb ish\n\t"
             "isb" ::: "memory");
     }
+}
+
+VOID
+MiArm64FillSystemPageDirectory(
+    _In_ PVOID Base,
+    _In_ SIZE_T NumberOfBytes)
+{
+    KIRQL OldIrql;
+
+    if (NumberOfBytes == 0)
+    {
+        return;
+    }
+
+    KeAcquireSpinLock(&MiArm64SystemPageDirectoryLock, &OldIrql);
+    MiArm64FillSystemPageDirectoryLocked(Base, NumberOfBytes);
+    KeReleaseSpinLock(&MiArm64SystemPageDirectoryLock, OldIrql);
+}
+
+VOID
+MiArm64FinalizeProcessAddressSpace(
+    _Inout_ PEPROCESS Process,
+    _In_ PFN_NUMBER RootPfn,
+    _In_ PFN_NUMBER HyperPfn)
+{
+    KIRQL OldIrql;
+    PFN_NUMBER CurrentRootPfn;
+    PMMPTE CurrentRoot, NewRoot;
+    MMPTE TempPte;
+    ULONG Index;
+
+    NewRoot = (PMMPTE)MI_ARM64_PFN_TO_VA(RootPfn);
+
+    KeAcquireSpinLock(&MiArm64SystemPageDirectoryLock, &OldIrql);
+
+    CurrentRootPfn = MiArm64ReadTtbr1RootPage();
+    CurrentRoot = (PMMPTE)MI_ARM64_PFN_TO_VA(CurrentRootPfn);
+    Index = PXE_PER_PAGE / 2;
+    RtlCopyMemory(NewRoot + Index,
+                  CurrentRoot + Index,
+                  PAGE_SIZE - Index * sizeof(MMPTE));
+
+    TempPte.u.Long = ValidKernelPde.u.Long;
+    TempPte.u.Hard.PageFrameNumber = RootPfn;
+    NewRoot[MiAddressToPxi((PVOID)PXE_SELFMAP)] = TempPte;
+
+    TempPte.u.Long = ValidKernelPde.u.Long;
+    TempPte.u.Hard.PageFrameNumber = HyperPfn;
+    NewRoot[MiAddressToPxi((PVOID)HYPER_SPACE)] = TempPte;
+
+    MiArm64CleanPageToPoC(NewRoot);
+
+    if ((Process->MmProcessLinks.Flink != NULL) ||
+        (Process->MmProcessLinks.Blink != NULL))
+    {
+        KeBugCheckEx(MEMORY_MANAGEMENT,
+                     (ULONG_PTR)Process,
+                     (ULONG_PTR)Process->MmProcessLinks.Flink,
+                     (ULONG_PTR)Process->MmProcessLinks.Blink,
+                     RootPfn);
+    }
+
+    KPROCESS_DTB0(&Process->Pcb) = RootPfn << PAGE_SHIFT;
+    InsertTailList(&MmProcessList, &Process->MmProcessLinks);
+
+    KeReleaseSpinLock(&MiArm64SystemPageDirectoryLock, OldIrql);
+}
+
+VOID
+MiArm64RemoveProcessAddressSpace(
+    _Inout_ PEPROCESS Process)
+{
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&MiArm64SystemPageDirectoryLock, &OldIrql);
+
+    if (Process->MmProcessLinks.Flink != NULL)
+    {
+        if (Process->MmProcessLinks.Blink == NULL)
+        {
+            KeBugCheckEx(MEMORY_MANAGEMENT,
+                         (ULONG_PTR)Process,
+                         (ULONG_PTR)Process->MmProcessLinks.Flink,
+                         0,
+                         KPROCESS_DTB0(&Process->Pcb));
+        }
+
+        RemoveEntryList(&Process->MmProcessLinks);
+        Process->MmProcessLinks.Flink = NULL;
+        Process->MmProcessLinks.Blink = NULL;
+    }
+
+    KeReleaseSpinLock(&MiArm64SystemPageDirectoryLock, OldIrql);
 }
 
 static
@@ -222,7 +373,7 @@ MiArm64EnsureSystemPdeRangeBacked(
     Backed = TRUE;
 
     KeAcquireSpinLock(&MiArm64SystemPageDirectoryLock, &OldIrql);
-    MiArm64FillSystemPageDirectory(BaseVa, NumberOfBytes);
+    MiArm64FillSystemPageDirectoryLocked(BaseVa, NumberOfBytes);
 
     PointerPde = MiAddressToPde(BaseVa);
     while (PointerPde <= LastPde)
