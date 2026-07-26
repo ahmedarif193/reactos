@@ -3356,6 +3356,19 @@ DxgkpVidMmForceLocalAdapterBackings(
     return ProcessedCount;
 }
 
+static VOID
+DxgkpVidMmRetireOwnerLedger(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PDXGMMS2_VIDMM_INTERFACE_V1 VidMm = DxgkpVidMmOwner(Adapter);
+
+    if (VidMm == NULL)
+        return;
+    /* Clear validity first so nothing can place into a ledger being retired. */
+    InterlockedExchange(&Adapter->Mms2VidMmValid, 0);
+    VidMm->Stop(VidMm->VidMmHandle);
+}
+
 VOID
 DxgkVidMmTeardownAdapter(
     _In_ PDXGKRNL_ADAPTER Adapter)
@@ -3393,37 +3406,45 @@ DxgkVidMmTeardownAdapter(
         }
     }
 
-    /*
-     * Every allocation this adapter held is gone by now, so the owner's
-     * ledger can be retired.  Do it here rather than at provider complete-stop
-     * because the shared primary and this segment table are destroyed after
-     * that point, and retiring early would leave the two sides disagreeing
-     * about who still holds space.
-     */
-    {
-        PDXGMMS2_VIDMM_INTERFACE_V1 VidMm = DxgkpVidMmOwner(Adapter);
-
-        if (VidMm != NULL)
-        {
-            InterlockedExchange(&Adapter->Mms2VidMmValid, 0);
-            VidMm->Stop(VidMm->VidMmHandle);
-        }
-    }
-
     if (Adapter->Segments == NULL)
+    {
+        DxgkpVidMmRetireOwnerLedger(Adapter);
         return;
+    }
 
     Segments = ADAPTER_SEGMENTS(Adapter);
 
+    /*
+     * Release anything still placed before the ledger is retired.  Callers
+     * are expected to have destroyed every allocation by now, but a teardown
+     * step earlier in the sequence can fail (a closed KMD transaction will
+     * fail the shared-primary destroy, for instance), and the retire must be
+     * correct regardless of who got there first.
+     */
     for (i = 0; i < Adapter->SegmentCount; i++)
     {
         PDXGKRNL_SEGMENT Seg = &Segments[i];
 
-        if (!IsListEmpty(&Seg->AllocationList))
+        for (;;)
         {
-            DPRINT1("DxgkVidMmTeardownAdapter: segment %lu still has "
-                    "allocations at teardown!\n", Seg->SegmentId);
+            PDXGKVMM_ALLOCATION Straggler = NULL;
+
+            ExAcquireFastMutex(&Seg->Lock);
+            if (!IsListEmpty(&Seg->AllocationList))
+                Straggler = CONTAINING_RECORD(Seg->AllocationList.Flink, DXGKVMM_ALLOCATION, SegmentEntry);
+            ExReleaseFastMutex(&Seg->Lock);
+            if (Straggler == NULL)
+                break;
+            DPRINT1("DxgkVidMmTeardownAdapter: releasing allocation %p still placed in segment %lu\n", Straggler, Seg->SegmentId);
+            DxgkpVidMmReleaseSegmentPlacement(Straggler);
         }
+    }
+
+    DxgkpVidMmRetireOwnerLedger(Adapter);
+
+    for (i = 0; i < Adapter->SegmentCount; i++)
+    {
+        PDXGKRNL_SEGMENT Seg = &Segments[i];
 
         if (Seg->CpuBase != NULL)
         {
