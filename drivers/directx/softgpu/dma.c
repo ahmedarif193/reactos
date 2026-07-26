@@ -148,6 +148,78 @@ SoftGpuExecuteFill(
     }
 }
 
+/*
+ * SoftGpuTranslateGpuVa
+ *
+ * Walks the page tables from the programmed root and returns the physical
+ * address backing SizeInBytes at Va, or zero when the range is not mapped or
+ * is not physically contiguous.  Table pages are the contiguous blocks
+ * dxgkrnl published to this device, and the entries are the DXGK_PTE update
+ * descriptors this device declared it consumes directly.
+ *
+ * IRQL: <= DISPATCH_LEVEL
+ */
+ULONGLONG
+SoftGpuTranslateGpuVa(
+    _In_ PSOFTGPU_DEVICE Device,
+    _In_ ULONGLONG RootPhysical,
+    _In_ ULONGLONG Va,
+    _In_ ULONGLONG SizeInBytes)
+{
+    ULONGLONG TablePhysical = RootPhysical;
+    ULONGLONG FirstPage = 0;
+    ULONGLONG Offset;
+    LONG Level;
+
+    UNREFERENCED_PARAMETER(Device);
+
+    if (SizeInBytes == 0)
+        return 0;
+
+    for (Offset = 0; ; Offset += PAGE_SIZE)
+    {
+        ULONGLONG PageVa = (Va + Offset) & ~(ULONGLONG)(PAGE_SIZE - 1);
+        ULONGLONG Page = 0;
+
+        TablePhysical = RootPhysical;
+        for (Level = SOFTGPU_GPUVA_LEVELS - 1; Level >= 0; Level--)
+        {
+            PHYSICAL_ADDRESS TableAddress;
+            DXGK_PTE *Entries;
+            ULONG Index;
+            ULONG Shift = 12 + SOFTGPU_GPUVA_INDEX_BITS * (ULONG)Level;
+            DXGK_PTE Entry;
+
+            if (TablePhysical == 0)
+                return 0;
+            TableAddress.QuadPart = (LONGLONG)TablePhysical;
+            Entries = (DXGK_PTE *)MmMapIoSpace(TableAddress, (1u << SOFTGPU_GPUVA_INDEX_BITS) * sizeof(DXGK_PTE), MmCached);
+            if (Entries == NULL)
+                return 0;
+            Index = (ULONG)((PageVa >> Shift) & ((1u << SOFTGPU_GPUVA_INDEX_BITS) - 1u));
+            Entry = Entries[Index];
+            MmUnmapIoSpace(Entries, (1u << SOFTGPU_GPUVA_INDEX_BITS) * sizeof(DXGK_PTE));
+
+            if (!Entry.Valid)
+                return 0;
+            if (Level == 0)
+                Page = Entry.PageAddress & ~(ULONGLONG)(PAGE_SIZE - 1);
+            else
+                TablePhysical = Entry.PageTableAddress & ~(ULONGLONG)(PAGE_SIZE - 1);
+        }
+
+        if (Offset == 0)
+            FirstPage = Page;
+        else if (Page != FirstPage + Offset)
+            return 0;   /* not contiguous: this engine cannot execute it */
+
+        if (Offset + PAGE_SIZE >= SizeInBytes + (Va & (PAGE_SIZE - 1)))
+            break;
+    }
+
+    return FirstPage + (Va & (PAGE_SIZE - 1));
+}
+
 static VOID
 SoftGpuExecutePage(
     _In_ PSOFTGPU_DEVICE Device,

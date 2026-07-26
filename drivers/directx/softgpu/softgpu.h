@@ -221,6 +221,10 @@ typedef struct _SOFTGPU_DEVICE
     ULONG               SubmitRingTail;
     LONG                EngineActive;
 
+    /* Root page table of the process whose context most recently ran; the
+     * virtual submission path translates through it. */
+    ULONGLONG           ActiveRootPageTablePhysical;
+
     /*
      * dxgkrnl callback vtable.  Copied from the PDXGK_INTERFACE argument
      * to DxgkDdiStartDevice (full WDDM2 dispmprt.h layout).
@@ -298,6 +302,10 @@ typedef struct _SOFTGPU_PROCESS
 {
     ULONG   Magic;                  /* must equal SOFTGPU_PROCESS_MAGIC     */
     HANDLE  hDxgkProcess;           /* opaque dxgkrnl process handle (in)   */
+    /* Root page-table physical address programmed by SetRootPageTable; the
+     * translation walk starts here. Zero until the root is programmed. */
+    ULONGLONG RootPageTablePhysical;
+    ULONG     RootPageTableEntries;
 } SOFTGPU_PROCESS, *PSOFTGPU_PROCESS;
 
 
@@ -472,6 +480,13 @@ APIENTRY
 SoftGpuDdiPresent(
     _In_    PVOID            hContext,
     _Inout_ DXGKARG_PRESENT *pPresent);
+
+ULONGLONG
+SoftGpuTranslateGpuVa(
+    _In_ struct _SOFTGPU_DEVICE *Device,
+    _In_ ULONGLONG RootPhysical,
+    _In_ ULONGLONG Va,
+    _In_ ULONGLONG SizeInBytes);
 
 NTSTATUS
 APIENTRY
