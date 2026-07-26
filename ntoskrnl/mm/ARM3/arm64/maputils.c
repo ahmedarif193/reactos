@@ -18,9 +18,23 @@ static KSPIN_LOCK MiArm64SystemPageDirectoryLock;
 VOID
 MiArm64InitializeSystemPageDirectoryLock(VOID)
 {
+    PEPROCESS Process = PsGetCurrentProcess();
+
     KeInitializeSpinLock(&MiArm64SystemPageDirectoryLock);
     InitializeListHead(&MmProcessList);
-    InsertTailList(&MmProcessList, &PsGetCurrentProcess()->MmProcessLinks);
+
+    /*
+     * The replication walk identifies each root through its translation base,
+     * so a root published without one would silently never receive any new
+     * kernel L0 descriptor. Every later root is published with its base set
+     * under the lock; assert the same for the one seeded here.
+     */
+    if (KPROCESS_DTB0(&Process->Pcb) == 0)
+    {
+        KeBugCheckEx(MEMORY_MANAGEMENT, (ULONG_PTR)Process, 0, 0, 0);
+    }
+
+    InsertTailList(&MmProcessList, &Process->MmProcessLinks);
 }
 
 static
@@ -31,6 +45,21 @@ MiArm64ReplicateTopLevelEntry(
     _In_ ULONG64 Descriptor)
 {
     PLIST_ENTRY ListEntry;
+
+    /*
+     * The self-map and hyperspace top-level descriptors are per-process: each
+     * root points at its own tables there, installed by
+     * MiArm64FinalizeProcessAddressSpace. Replicating one would stamp a single
+     * process's private mappings over every other root, so leave those slots
+     * alone. Hyperspace covers the mapping range, dummy PTE, VAD bitmap and
+     * working set list, which all share its top-level slot. This mirrors the
+     * PTE_BASE..HYPER_SPACE_END exclusion in MiArm64SyncKernelHierarchyEntryWrite.
+     */
+    if ((Index == MiAddressToPxi((PVOID)PXE_SELFMAP)) ||
+        (Index == MiAddressToPxi((PVOID)HYPER_SPACE)))
+    {
+        return;
+    }
 
     for (ListEntry = MmProcessList.Flink;
          ListEntry != &MmProcessList;
@@ -43,7 +72,23 @@ MiArm64ReplicateTopLevelEntry(
 
         Process = CONTAINING_RECORD(ListEntry, EPROCESS, MmProcessLinks);
         TargetRootPage = (KPROCESS_DTB0(&Process->Pcb) & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT;
-        if ((TargetRootPage == 0) || (TargetRootPage == SourceRootPage))
+        if (TargetRootPage == 0)
+        {
+            /*
+             * A published root always carries its translation base: it is set
+             * under this lock before the process joins the list, and the
+             * process leaves the list before the base is torn down. Skipping
+             * one would leave that root missing this descriptor and reproduce
+             * the exact fault this replication exists to prevent.
+             */
+            KeBugCheckEx(MEMORY_MANAGEMENT,
+                         (ULONG_PTR)Process,
+                         Index,
+                         Descriptor,
+                         0);
+        }
+
+        if (TargetRootPage == SourceRootPage)
         {
             continue;
         }
@@ -196,7 +241,7 @@ MiArm64ReadTtbr1RootPage(VOID)
 }
 
 static
-VOID
+BOOLEAN
 MiArm64FillSystemPageDirectoryLocked(
     _In_ PVOID Base,
     _In_ SIZE_T NumberOfBytes)
@@ -204,6 +249,7 @@ MiArm64FillSystemPageDirectoryLocked(
     PMMPDE PointerPde, LastPde;
     PFN_NUMBER RootPage;
     BOOLEAN FlushHierarchy = FALSE;
+    BOOLEAN Success = TRUE;
 
     RootPage = MiArm64ReadTtbr1RootPage();
     PointerPde = MiAddressToPde(Base);
@@ -215,6 +261,10 @@ MiArm64FillSystemPageDirectoryLocked(
 
         if (MiArm64EnsureKernelHierarchy(RootPage, TargetAddress, FALSE, &FlushHierarchy) == 0)
         {
+            /* Out of pages for the hierarchy. Flush whatever was committed,
+             * then report the shortfall: a caller that treats this range as
+             * mapped would fault on first touch. */
+            Success = FALSE;
             goto FlushAndReturn;
         }
 
@@ -228,23 +278,28 @@ FlushAndReturn:
             "dsb ish\n\t"
             "isb" ::: "memory");
     }
+
+    return Success;
 }
 
-VOID
+BOOLEAN
 MiArm64FillSystemPageDirectory(
     _In_ PVOID Base,
     _In_ SIZE_T NumberOfBytes)
 {
     KIRQL OldIrql;
+    BOOLEAN Success;
 
     if (NumberOfBytes == 0)
     {
-        return;
+        return TRUE;
     }
 
     KeAcquireSpinLock(&MiArm64SystemPageDirectoryLock, &OldIrql);
-    MiArm64FillSystemPageDirectoryLocked(Base, NumberOfBytes);
+    Success = MiArm64FillSystemPageDirectoryLocked(Base, NumberOfBytes);
     KeReleaseSpinLock(&MiArm64SystemPageDirectoryLock, OldIrql);
+
+    return Success;
 }
 
 VOID
