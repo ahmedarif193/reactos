@@ -40,6 +40,7 @@ extern void func_capsaudit(void);
 extern void func_umdabi(void);
 extern void func_abifreeze(void);
 extern void func_procstress(void);
+extern void func_umdload(void);
 extern void func_renderadapter(void);
 extern void func_luidident(void);
 extern void func_handletype(void);
@@ -97,6 +98,7 @@ const struct test winetest_testlist[] =
     { "umdabi",        func_umdabi },
     { "abifreeze",     func_abifreeze },
     { "procstress",    func_procstress },
+    { "umdload",       func_umdload },
     { "renderadapter", func_renderadapter },
     { "luidident",     func_luidident },
     { "handletype",    func_handletype },
