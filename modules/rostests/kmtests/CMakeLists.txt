@@ -70,7 +70,9 @@ list(APPEND KMTEST_DRV_SOURCE
     directx/DxgkTrackedWork.c
     directx/DxgkVidMmWorkerDrain.c
     directx/Dxgmms2ContextStream.c
+    directx/Dxgmms2Scheduler.c
     directx/Dxgmms2Timeline.c
+    directx/Dxgmms2VidMm.c
     example/Example.c
     example/KernelType.c
     hal/HalSystemInfo.c
@@ -206,7 +208,9 @@ list(APPEND KMTEST_DRV_SOURCE
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/tracked_work_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/vidmm_worker_drain_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgmms2/context_stream_core.c
+    ${REACTOS_SOURCE_DIR}/drivers/directx/dxgmms2/scheduler_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgmms2/timeline_core.c
+    ${REACTOS_SOURCE_DIR}/drivers/directx/dxgmms2/vidmm_core.c
     kmtest_drv/kmtest_drv.rc)
 
 if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
