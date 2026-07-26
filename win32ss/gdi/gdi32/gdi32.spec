@@ -640,7 +640,7 @@
 @ stdcall -version=0x600+ D3DKMTInvalidateActiveVidPn(ptr) NtGdiDdDDIInvalidateActiveVidPn
 @ stdcall -version=0x600+ D3DKMTLock(ptr) NtGdiDdDDILock
 @ stdcall -version=0x600+ D3DKMTOpenAdapterFromDeviceName(ptr) NtGdiDdDDIOpenAdapterFromDeviceName
-@ stdcall -version=0x600+ D3DKMTOpenAdapterFromGdiDisplayName(ptr)
+@ stdcall -version=0x600+ D3DKMTOpenAdapterFromGdiDisplayName(ptr) NtGdiDdDDIOpenAdapterFromGdiDisplayName
 @ stdcall -version=0x600+ D3DKMTOpenAdapterFromHdc(ptr) NtGdiDdDDIOpenAdapterFromHdc
 @ stdcall -version=0x600+ D3DKMTOpenResource(ptr) NtGdiDdDDIOpenResource
 @ stdcall -version=0x600+ D3DKMTPollDisplayChildren(ptr) NtGdiDdDDIPollDisplayChildren
