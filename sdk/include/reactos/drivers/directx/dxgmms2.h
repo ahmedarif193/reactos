@@ -16,8 +16,10 @@ extern "C" {
 #define DXGMMS2_ABI_VERSION_1                         0x00010000UL
 #define DXGMMS2_ABI_VERSION_2                         0x00020000UL
 #define DXGMMS2_ABI_VERSION_3                         0x00030000UL
+#define DXGMMS2_ABI_VERSION_4                         0x00040000UL
 #define DXGMMS2_SCHEDULER_TIMELINE_VERSION_1          0x00010000UL
 #define DXGMMS2_CONTEXT_STREAM_VERSION_1              0x00010000UL
+#define DXGMMS2_SCHEDULER_VERSION_1                   0x00010000UL
 
 #define DXGMMS2_TIMELINE_FEATURE_FENCE_IDENTITIES     0x00000001UL
 #define DXGMMS2_TIMELINE_FEATURE_VALID_MASK           0x00000001UL
@@ -361,6 +363,164 @@ typedef struct _DXGMMS2_PROVIDER_INTERFACE_V3
     PDXGMMS2_QUERY_SCHEDULER_TIMELINE_INTERFACE QuerySchedulerTimelineInterface;
     PDXGMMS2_QUERY_CONTEXT_STREAM_INTERFACE QueryContextStreamInterface;
 } DXGMMS2_PROVIDER_INTERFACE_V3, *PDXGMMS2_PROVIDER_INTERFACE_V3;
+
+/* ========================================================================
+ * Scheduler ownership (v4)
+ *
+ * dxgmms2 owns the per-engine run queues, their admission order, the engine
+ * state machines, and the exactly-once retirement of every admitted packet.
+ * dxgkrnl owns packet content and the miniport DDI calls: it admits an opaque
+ * packet cookie, claims the next runnable one, publishes the dispatch, calls
+ * the miniport outside every dxgmms2 lock, then reports the outcome.
+ *
+ * Invariants this contract preserves:
+ *   - fence order equals queue order equals kick order on a node;
+ *   - work that was never dispatched is never retired as completed;
+ *   - no dxgmms2 lock is held across a miniport DDI;
+ *   - every successful admission produces exactly one retirement record.
+ * ====================================================================== */
+
+typedef PVOID DXGMMS2_SCHEDULER_HANDLE;
+
+#define DXGMMS2_SCHEDULER_MAX_ENGINES                 8UL
+#define DXGMMS2_SCHEDULER_MAX_RETIREMENTS             64UL
+
+/* Admission flags mirror the submission kinds the queue must order. */
+#define DXGMMS2_SCHEDULER_ADMIT_PAGING                0x00000001UL
+#define DXGMMS2_SCHEDULER_ADMIT_PRESENT               0x00000002UL
+#define DXGMMS2_SCHEDULER_ADMIT_VIRTUAL               0x00000004UL
+#define DXGMMS2_SCHEDULER_ADMIT_PREFENCED             0x00000008UL
+#define DXGMMS2_SCHEDULER_ADMIT_VALID_MASK            0x0000000FUL
+
+typedef enum _DXGMMS2_SCHEDULER_ENGINE_STATE
+{
+    Dxgmms2EngineIdle       = 0,
+    Dxgmms2EngineRunning    = 1,
+    Dxgmms2EngineSubmitting = 2,
+    Dxgmms2EnginePreempting = 3,
+    Dxgmms2EnginePreempted  = 4,
+    Dxgmms2EngineResetting  = 5,
+    Dxgmms2EngineSuspended  = 6,
+    Dxgmms2EngineError      = 7
+} DXGMMS2_SCHEDULER_ENGINE_STATE;
+
+typedef enum _DXGMMS2_SCHEDULER_RETIRE_REASON
+{
+    Dxgmms2RetireCompleted = 1,
+    Dxgmms2RetireCancelled = 2,
+    Dxgmms2RetireAborted   = 3
+} DXGMMS2_SCHEDULER_RETIRE_REASON;
+
+typedef struct _DXGMMS2_SCHEDULER_ADMIT_INFO_V1
+{
+    ULONG     Size;
+    ULONG     Version;
+    ULONG     NodeOrdinal;
+    ULONG     EngineOrdinal;
+    ULONG     Flags;
+    LONG      Priority;
+    ULONGLONG PacketCookie;      /* opaque dxgkrnl packet identity */
+    ULONGLONG OwnerCookie;       /* opaque dxgkrnl context identity, or zero */
+    ULONG     SubmissionFenceId; /* nonzero when the caller pre-assigned it */
+    ULONG     Reserved;
+} DXGMMS2_SCHEDULER_ADMIT_INFO_V1, *PDXGMMS2_SCHEDULER_ADMIT_INFO_V1;
+
+typedef struct _DXGMMS2_SCHEDULER_CLAIM_V1
+{
+    ULONG     Size;
+    ULONG     Version;
+    ULONG     NodeOrdinal;
+    ULONG     EngineOrdinal;
+    ULONGLONG PacketCookie;
+    ULONGLONG ClaimToken;
+    ULONG     SubmissionFenceId;
+    ULONG     Flags;
+} DXGMMS2_SCHEDULER_CLAIM_V1, *PDXGMMS2_SCHEDULER_CLAIM_V1;
+
+typedef struct _DXGMMS2_SCHEDULER_RETIREMENT_V1
+{
+    ULONGLONG PacketCookie;
+    ULONGLONG OwnerCookie;
+    ULONG     SubmissionFenceId;
+    ULONG     Reason;
+    NTSTATUS  TerminalStatus;
+    ULONG     Reserved;
+} DXGMMS2_SCHEDULER_RETIREMENT_V1, *PDXGMMS2_SCHEDULER_RETIREMENT_V1;
+
+typedef struct _DXGMMS2_SCHEDULER_ENGINE_STATUS_V1
+{
+    ULONG Size;
+    ULONG Version;
+    ULONG State;
+    ULONG PendingPacketCount;
+    ULONG LastSubmittedFenceId;
+    ULONG LastCompletedFenceId;
+    ULONG OldestKickedFenceId;
+    ULONG Reserved;
+} DXGMMS2_SCHEDULER_ENGINE_STATUS_V1, *PDXGMMS2_SCHEDULER_ENGINE_STATUS_V1;
+
+typedef NTSTATUS (NTAPI *PDXGMMS2_SCHEDULER_START)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _In_ ULONG EngineCount);
+typedef NTSTATUS (NTAPI *PDXGMMS2_SCHEDULER_ADMIT_PACKET)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _In_ const DXGMMS2_SCHEDULER_ADMIT_INFO_V1 *Info, _Out_ PULONG OutFenceId);
+typedef NTSTATUS (NTAPI *PDXGMMS2_SCHEDULER_CLAIM_PACKET)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _In_ ULONG EngineOrdinal, _Inout_ DXGMMS2_SCHEDULER_CLAIM_V1 *Claim);
+typedef NTSTATUS (NTAPI *PDXGMMS2_SCHEDULER_PUBLISH_DISPATCH)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _In_ ULONG EngineOrdinal, _In_ ULONGLONG ClaimToken);
+typedef NTSTATUS (NTAPI *PDXGMMS2_SCHEDULER_COMPLETE_DISPATCH)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _In_ ULONG EngineOrdinal, _In_ ULONGLONG ClaimToken, _In_ NTSTATUS DispatchStatus);
+typedef NTSTATUS (NTAPI *PDXGMMS2_SCHEDULER_NOTIFY_COMPLETION)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _In_ ULONG EngineOrdinal, _In_ ULONG CompletedFenceId);
+typedef NTSTATUS (NTAPI *PDXGMMS2_SCHEDULER_DRAIN_RETIREMENTS)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _Out_writes_to_(Capacity, *RetiredCount) DXGMMS2_SCHEDULER_RETIREMENT_V1 *Records, _In_ ULONG Capacity, _Out_ PULONG RetiredCount);
+typedef NTSTATUS (NTAPI *PDXGMMS2_SCHEDULER_CANCEL_OWNER)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _In_ ULONGLONG OwnerCookie, _In_ NTSTATUS CancelStatus);
+typedef NTSTATUS (NTAPI *PDXGMMS2_SCHEDULER_ABORT_ALL)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _In_ NTSTATUS AbortStatus);
+typedef NTSTATUS (NTAPI *PDXGMMS2_SCHEDULER_SET_ADMISSION)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _In_ BOOLEAN Open);
+typedef NTSTATUS (NTAPI *PDXGMMS2_SCHEDULER_QUERY_ENGINE)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _In_ ULONG EngineOrdinal, _Inout_ DXGMMS2_SCHEDULER_ENGINE_STATUS_V1 *Status);
+typedef NTSTATUS (NTAPI *PDXGMMS2_SCHEDULER_SET_ENGINE_STATE)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _In_ ULONG EngineOrdinal, _In_ ULONG NewState);
+typedef BOOLEAN  (NTAPI *PDXGMMS2_SCHEDULER_IS_IDLE)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler);
+
+typedef struct _DXGMMS2_SCHEDULER_INTERFACE_V1
+{
+    ULONG Size;
+    ULONG Version;
+    ULONG InterfaceFlags;
+    ULONG Generation;
+    DXGMMS2_SCHEDULER_HANDLE SchedulerHandle;
+    ULONG MaximumEngines;
+    ULONG Reserved;
+    PDXGMMS2_SCHEDULER_START Start;
+    PDXGMMS2_SCHEDULER_ADMIT_PACKET AdmitPacket;
+    PDXGMMS2_SCHEDULER_CLAIM_PACKET ClaimNextPacket;
+    PDXGMMS2_SCHEDULER_PUBLISH_DISPATCH PublishDispatch;
+    PDXGMMS2_SCHEDULER_COMPLETE_DISPATCH CompleteDispatch;
+    PDXGMMS2_SCHEDULER_NOTIFY_COMPLETION NotifyCompletion;
+    PDXGMMS2_SCHEDULER_DRAIN_RETIREMENTS DrainRetirements;
+    PDXGMMS2_SCHEDULER_CANCEL_OWNER CancelOwnerPackets;
+    PDXGMMS2_SCHEDULER_ABORT_ALL AbortAllPackets;
+    PDXGMMS2_SCHEDULER_SET_ADMISSION SetAdmission;
+    PDXGMMS2_SCHEDULER_QUERY_ENGINE QueryEngineStatus;
+    PDXGMMS2_SCHEDULER_SET_ENGINE_STATE SetEngineState;
+    PDXGMMS2_SCHEDULER_IS_IDLE IsIdle;
+} DXGMMS2_SCHEDULER_INTERFACE_V1, *PDXGMMS2_SCHEDULER_INTERFACE_V1;
+
+typedef NTSTATUS (NTAPI *PDXGMMS2_QUERY_SCHEDULER_INTERFACE)(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _Inout_ DXGMMS2_SCHEDULER_INTERFACE_V1 *SchedulerInterface);
+
+typedef struct _DXGMMS2_PROVIDER_INTERFACE_V4
+{
+    ULONG Size;
+    ULONG Version;
+    ULONG ProviderFlags;
+    ULONG Reserved;
+    DXGMMS2_REGISTRATION_HANDLE RegistrationHandle;
+    PDXGMMS2_CREATE_ADAPTER CreateAdapter;
+    PDXGMMS2_START_ADAPTER StartAdapter;
+    PDXGMMS2_BEGIN_STOP_ADAPTER BeginStopAdapter;
+    PDXGMMS2_COMPLETE_STOP_ADAPTER CompleteStopAdapter;
+    PDXGMMS2_DESTROY_ADAPTER DestroyAdapter;
+    PDXGMMS2_QUERY_SCHEDULER_TIMELINE_INTERFACE QuerySchedulerTimelineInterface;
+    PDXGMMS2_QUERY_CONTEXT_STREAM_INTERFACE QueryContextStreamInterface;
+    PDXGMMS2_QUERY_SCHEDULER_INTERFACE QuerySchedulerInterface;
+} DXGMMS2_PROVIDER_INTERFACE_V4, *PDXGMMS2_PROVIDER_INTERFACE_V4;
+
+#define DXGMMS2_PROVIDER_INTERFACE_V4_SIZE              ((ULONG)sizeof(DXGMMS2_PROVIDER_INTERFACE_V4))
+#define DXGMMS2_SCHEDULER_INTERFACE_V1_SIZE             ((ULONG)sizeof(DXGMMS2_SCHEDULER_INTERFACE_V1))
+#define DXGMMS2_SCHEDULER_ADMIT_INFO_V1_SIZE            ((ULONG)sizeof(DXGMMS2_SCHEDULER_ADMIT_INFO_V1))
+#define DXGMMS2_SCHEDULER_CLAIM_V1_SIZE                 ((ULONG)sizeof(DXGMMS2_SCHEDULER_CLAIM_V1))
+#define DXGMMS2_SCHEDULER_ENGINE_STATUS_V1_SIZE         ((ULONG)sizeof(DXGMMS2_SCHEDULER_ENGINE_STATUS_V1))
 
 #define DXGMMS2_DXGKRNL_INTERFACE_V1_SIZE             ((ULONG)sizeof(DXGMMS2_DXGKRNL_INTERFACE_V1))
 #define DXGMMS2_CREATE_ADAPTER_INFO_V1_SIZE            ((ULONG)sizeof(DXGMMS2_CREATE_ADAPTER_INFO_V1))

@@ -14,7 +14,9 @@ list(APPEND SOURCE
     timeline.c
     timeline_core.c
     context_stream.c
-    context_stream_core.c)
+    context_stream_core.c
+    scheduler.c
+    scheduler_core.c)
 
 add_library(dxgmms2 MODULE
     ${SOURCE}
