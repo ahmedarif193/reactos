@@ -3831,8 +3831,8 @@ FileRecord::PromoteResidentData(
     }
 
     RecordBackup =
-        new(PagedPool, TAG_FILE_RECORD)
-            UCHAR[RecordBufferSize];
+        NtfsAcquireRecordScratch(DiskVolume,
+                                 RecordBufferSize);
     if (!RecordBackup)
     {
         Status = STATUS_INSUFFICIENT_RESOURCES;
