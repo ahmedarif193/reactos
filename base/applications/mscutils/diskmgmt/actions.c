@@ -472,6 +472,81 @@ DmActionCollectMbrLogicalEntries(
 }
 
 static BOOL
+DmActionWriteMbrLogicalLayout(
+    _Inout_ PDRIVE_LAYOUT_INFORMATION_EX *Layout,
+    _In_ const DM_ACTION_CONTEXT *Context,
+    _In_ ULONGLONG ExtendedStartOffset,
+    _In_reads_(EntryCount) DM_MBR_LOGICAL_LAYOUT_ENTRY *Entries,
+    _In_ ULONG EntryCount)
+{
+    ULONG TargetPartitionCount;
+    ULONG Index;
+    ULONGLONG BytesPerSector;
+    ULONGLONG AlignmentSectors;
+    ULONGLONG ExtendedStartSector;
+
+    if (Layout == NULL || *Layout == NULL || Context == NULL || Context->Disk == NULL)
+        return FALSE;
+
+    if (EntryCount != 0)
+    {
+        qsort(Entries,
+              EntryCount,
+              sizeof(*Entries),
+              DmActionCompareMbrLogicalLayoutEntries);
+    }
+
+    TargetPartitionCount = 4 + (EntryCount * 4);
+    if ((*Layout)->PartitionCount < TargetPartitionCount &&
+        !DmActionExpandLayout(Layout, TargetPartitionCount))
+    {
+        return FALSE;
+    }
+
+    BytesPerSector = max(Context->Disk->BytesPerSector, 512ULL);
+    AlignmentSectors = max((ULONGLONG)Context->Disk->SectorAlignment, 1ULL);
+    ExtendedStartSector = ExtendedStartOffset / BytesPerSector;
+
+    for (Index = 4; Index < (*Layout)->PartitionCount; Index++)
+    {
+        ZeroMemory(&(*Layout)->PartitionEntry[Index], sizeof((*Layout)->PartitionEntry[Index]));
+        (*Layout)->PartitionEntry[Index].PartitionStyle = PARTITION_STYLE_MBR;
+        (*Layout)->PartitionEntry[Index].RewritePartition = TRUE;
+    }
+
+    for (Index = 0; Index < EntryCount; Index++)
+    {
+        ULONG EntryIndex;
+
+        EntryIndex = 4 + (Index * 4);
+        DmActionInitializeMbrLayoutEntry(&(*Layout)->PartitionEntry[EntryIndex],
+                                         Entries[Index].StartOffset,
+                                         Entries[Index].PartitionLength,
+                                         (ULONG)AlignmentSectors,
+                                         Entries[Index].PartitionType,
+                                         IsRecognizedPartition(Entries[Index].PartitionType));
+        (*Layout)->PartitionEntry[EntryIndex].PartitionNumber = Entries[Index].PartitionNumber;
+
+        if (Index + 1 < EntryCount)
+        {
+            ULONGLONG NextStartSector;
+            ULONGLONG HiddenSectors;
+
+            NextStartSector = Entries[Index + 1].StartOffset / BytesPerSector;
+            HiddenSectors = NextStartSector - AlignmentSectors - ExtendedStartSector;
+            DmActionInitializeMbrLayoutEntry(&(*Layout)->PartitionEntry[EntryIndex + 1],
+                                             (NextStartSector - AlignmentSectors) * BytesPerSector,
+                                             (NextStartSector + AlignmentSectors) * BytesPerSector,
+                                             (ULONG)HiddenSectors,
+                                             PARTITION_EXTENDED,
+                                             FALSE);
+        }
+    }
+
+    return TRUE;
+}
+
+static BOOL
 DmActionRewriteMbrLogicalEntries(
     _Inout_ PDRIVE_LAYOUT_INFORMATION_EX *Layout,
     _In_ const DM_ACTION_CONTEXT *Context,
@@ -482,12 +557,7 @@ DmActionRewriteMbrLogicalEntries(
 {
     DM_MBR_LOGICAL_LAYOUT_ENTRY *Entries;
     ULONG ExistingCount;
-    ULONG NewCount;
-    ULONG TargetPartitionCount;
-    ULONG Index;
-    ULONGLONG BytesPerSector;
-    ULONGLONG AlignmentSectors;
-    ULONGLONG ExtendedStartSector;
+    BOOL Success;
 
     if (Layout == NULL || *Layout == NULL || Context == NULL || Context->Disk == NULL)
         return FALSE;
@@ -516,63 +586,124 @@ DmActionRewriteMbrLogicalEntries(
     Entries[ExistingCount].PartitionLength = PartitionLength;
     Entries[ExistingCount].PartitionNumber = 0;
     Entries[ExistingCount].PartitionType = PartitionType;
-    NewCount = ExistingCount + 1;
 
-    qsort(Entries,
-          NewCount,
-          sizeof(*Entries),
-          DmActionCompareMbrLogicalLayoutEntries);
+    Success = DmActionWriteMbrLogicalLayout(Layout,
+                                            Context,
+                                            ExtendedStartOffset,
+                                            Entries,
+                                            ExistingCount + 1);
+    HeapFree(ProcessHeap, 0, Entries);
+    return Success;
+}
 
-    TargetPartitionCount = 4 + (NewCount * 4);
-    if ((*Layout)->PartitionCount < TargetPartitionCount &&
-        !DmActionExpandLayout(Layout, TargetPartitionCount))
+static BOOL
+DmActionRemoveMbrLogicalEntry(
+    _Inout_ PDRIVE_LAYOUT_INFORMATION_EX *Layout,
+    _In_ const DM_ACTION_CONTEXT *Context,
+    _In_ ULONGLONG ExtendedStartOffset,
+    _In_ ULONGLONG StartOffset,
+    _In_ ULONGLONG PartitionLength)
+{
+    DM_MBR_LOGICAL_LAYOUT_ENTRY *Entries;
+    ULONG ExistingCount;
+    ULONG KeptCount;
+    ULONG Index;
+    BOOL Success;
+
+    if (Layout == NULL || *Layout == NULL || Context == NULL || Context->Disk == NULL)
+        return FALSE;
+
+    ExistingCount = DmActionCountMbrLogicalEntries(*Layout);
+    if (ExistingCount == 0)
     {
-        HeapFree(ProcessHeap, 0, Entries);
+        SetLastError(ERROR_NOT_FOUND);
         return FALSE;
     }
 
-    BytesPerSector = max(Context->Disk->BytesPerSector, 512ULL);
-    AlignmentSectors = max((ULONGLONG)Context->Disk->SectorAlignment, 1ULL);
-    ExtendedStartSector = ExtendedStartOffset / BytesPerSector;
-
-    for (Index = 4; Index < (*Layout)->PartitionCount; Index++)
+    Entries = HeapAlloc(ProcessHeap,
+                        HEAP_ZERO_MEMORY,
+                        sizeof(*Entries) * ExistingCount);
+    if (Entries == NULL)
     {
-        ZeroMemory(&(*Layout)->PartitionEntry[Index], sizeof((*Layout)->PartitionEntry[Index]));
-        (*Layout)->PartitionEntry[Index].PartitionStyle = PARTITION_STYLE_MBR;
-        (*Layout)->PartitionEntry[Index].RewritePartition = TRUE;
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return FALSE;
     }
 
-    for (Index = 0; Index < NewCount; Index++)
+    if (!DmActionCollectMbrLogicalEntries(*Layout,
+                                          Entries,
+                                          ExistingCount,
+                                          &ExistingCount))
     {
-        ULONG EntryIndex;
+        HeapFree(ProcessHeap, 0, Entries);
+        SetLastError(ERROR_INVALID_DATA);
+        return FALSE;
+    }
 
-        EntryIndex = 4 + (Index * 4);
-        DmActionInitializeMbrLayoutEntry(&(*Layout)->PartitionEntry[EntryIndex],
-                                         Entries[Index].StartOffset,
-                                         Entries[Index].PartitionLength,
-                                         (ULONG)AlignmentSectors,
-                                         Entries[Index].PartitionType,
-                                         IsRecognizedPartition(Entries[Index].PartitionType));
-        (*Layout)->PartitionEntry[EntryIndex].PartitionNumber = Entries[Index].PartitionNumber;
-
-        if (Index + 1 < NewCount)
+    KeptCount = 0;
+    for (Index = 0; Index < ExistingCount; Index++)
+    {
+        if (Entries[Index].StartOffset == StartOffset &&
+            Entries[Index].PartitionLength == PartitionLength)
         {
-            ULONGLONG NextStartSector;
-            ULONGLONG HiddenSectors;
+            continue;
+        }
 
-            NextStartSector = Entries[Index + 1].StartOffset / BytesPerSector;
-            HiddenSectors = NextStartSector - AlignmentSectors - ExtendedStartSector;
-            DmActionInitializeMbrLayoutEntry(&(*Layout)->PartitionEntry[EntryIndex + 1],
-                                             (NextStartSector - AlignmentSectors) * BytesPerSector,
-                                             (NextStartSector + AlignmentSectors) * BytesPerSector,
-                                             (ULONG)HiddenSectors,
-                                             PARTITION_EXTENDED,
-                                             FALSE);
+        Entries[KeptCount] = Entries[Index];
+        KeptCount++;
+    }
+
+    if (KeptCount == ExistingCount)
+    {
+        HeapFree(ProcessHeap, 0, Entries);
+        SetLastError(ERROR_NOT_FOUND);
+        return FALSE;
+    }
+
+    Success = DmActionWriteMbrLogicalLayout(Layout,
+                                            Context,
+                                            ExtendedStartOffset,
+                                            Entries,
+                                            KeptCount);
+    HeapFree(ProcessHeap, 0, Entries);
+    return Success;
+}
+
+static ULONG
+DmActionCountDiskLogicalRegions(
+    _In_opt_ const DM_DISK *Disk)
+{
+    ULONG Index;
+    ULONG Count;
+
+    if (Disk == NULL)
+        return 0;
+
+    Count = 0;
+    for (Index = 0; Index < Disk->RegionCount; Index++)
+    {
+        if (Disk->Regions[Index].Type == DmRegionPartition &&
+            Disk->Regions[Index].IsLogical &&
+            !Disk->Regions[Index].IsContainer)
+        {
+            Count++;
         }
     }
 
-    HeapFree(ProcessHeap, 0, Entries);
-    return TRUE;
+    return Count;
+}
+
+static BOOL
+DmActionIsEmptyExtendedDelete(
+    _In_opt_ const DM_ACTION_CONTEXT *Context)
+{
+    return (Context != NULL &&
+            Context->Disk != NULL &&
+            Context->Region != NULL &&
+            Context->Region->Type == DmRegionFree &&
+            Context->Region->IsLogical &&
+            Context->Disk->PartitionStyle == PARTITION_STYLE_MBR &&
+            Context->Disk->HasExtendedPartition &&
+            DmActionCountDiskLogicalRegions(Context->Disk) == 0);
 }
 
 static BOOL
@@ -744,7 +875,11 @@ DmActionExpandLayout(
     if (NewPartitionCount > OldPartitionCount)
     {
         for (Index = OldPartitionCount; Index < NewPartitionCount; Index++)
+        {
+            ZeroMemory(&NewLayout->PartitionEntry[Index],
+                       sizeof(NewLayout->PartitionEntry[Index]));
             NewLayout->PartitionEntry[Index].RewritePartition = TRUE;
+        }
     }
     *Layout = NewLayout;
     return TRUE;
@@ -860,13 +995,68 @@ DmActionAlignedBytesFromSizeMb(
     return min(RequestedBytes, MaxBytes);
 }
 
+/* File-system online resize FSCTLs; not exposed by the psdk winioctl.h yet. */
+#ifndef FSCTL_EXTEND_VOLUME
+#define FSCTL_EXTEND_VOLUME \
+    CTL_CODE(FILE_DEVICE_FILE_SYSTEM, 60, METHOD_BUFFERED, FILE_SPECIAL_ACCESS)
+#endif
+
+#ifndef FSCTL_SHRINK_VOLUME
+#define FSCTL_SHRINK_VOLUME \
+    CTL_CODE(FILE_DEVICE_FILE_SYSTEM, 130, METHOD_BUFFERED, FILE_SPECIAL_ACCESS)
+
+typedef enum _DM_SHRINK_VOLUME_REQUEST_TYPES
+{
+    DmShrinkPrepare = 1,
+    DmShrinkCommit = 2,
+    DmShrinkAbort = 3
+} DM_SHRINK_VOLUME_REQUEST_TYPES;
+
+typedef struct _DM_SHRINK_VOLUME_INFORMATION
+{
+    DM_SHRINK_VOLUME_REQUEST_TYPES ShrinkRequestType;
+    ULONGLONG Flags;
+    LONGLONG NewNumberOfSectors;
+} DM_SHRINK_VOLUME_INFORMATION;
+#else
+typedef SHRINK_VOLUME_REQUEST_TYPES DM_SHRINK_VOLUME_REQUEST_TYPES;
+typedef SHRINK_VOLUME_INFORMATION DM_SHRINK_VOLUME_INFORMATION;
+#define DmShrinkPrepare ShrinkPrepare
+#define DmShrinkCommit ShrinkCommit
+#define DmShrinkAbort ShrinkAbort
+#endif
+
 static BOOL
 DmActionIsRawVolume(
     _In_opt_ const DM_VOLUME *Volume)
 {
-    return (Volume != NULL &&
-            Volume->FileSystem[0] != UNICODE_NULL &&
+    return (Volume == NULL ||
+            Volume->FileSystem[0] == UNICODE_NULL ||
             _wcsicmp(Volume->FileSystem, L"RAW") == 0);
+}
+
+static HANDLE
+DmActionOpenVolumeHandle(
+    _In_ const DM_VOLUME *Volume)
+{
+    WCHAR VolumePath[MAX_PATH];
+    SIZE_T Length;
+
+    if (Volume == NULL || Volume->VolumeName[0] == UNICODE_NULL)
+        return INVALID_HANDLE_VALUE;
+
+    StringCchCopyW(VolumePath, ARRAYSIZE(VolumePath), Volume->VolumeName);
+    Length = wcslen(VolumePath);
+    if (Length > 0 && VolumePath[Length - 1] == L'\\')
+        VolumePath[Length - 1] = UNICODE_NULL;
+
+    return CreateFileW(VolumePath,
+                       GENERIC_READ | GENERIC_WRITE,
+                       FILE_SHARE_READ | FILE_SHARE_WRITE,
+                       NULL,
+                       OPEN_EXISTING,
+                       0,
+                       NULL);
 }
 
 static const DM_REGION *
@@ -901,7 +1091,7 @@ DmActionFindRightAdjacentFreeRegion(
 }
 
 static BOOL
-DmActionCanResizeRawVolume(
+DmActionCanResizeVolume(
     _In_ const DM_ACTION_CONTEXT *Context,
     _In_ BOOL Extend)
 {
@@ -922,8 +1112,7 @@ DmActionCanResizeRawVolume(
         Context->Region->IsBoot ||
         Context->Region->IsSystem ||
         Context->Volume->IsBoot ||
-        Context->Volume->IsSystem ||
-        !DmActionIsRawVolume(Context->Volume))
+        Context->Volume->IsSystem)
     {
         return FALSE;
     }
@@ -2871,7 +3060,9 @@ DmActionWaitForDriveRoot(
     if (DriveRoot == NULL || DriveRoot[0] == UNICODE_NULL)
         return FALSE;
 
-    for (Attempt = 0; Attempt < 20; Attempt++)
+    /* Device installation for a fresh partition can take a long time on
+     * ReactOS, so allow up to two minutes before giving up. */
+    for (Attempt = 0; Attempt < 120; Attempt++)
     {
         UINT DriveType;
 
@@ -2879,7 +3070,7 @@ DmActionWaitForDriveRoot(
         if (DriveType != DRIVE_UNKNOWN && DriveType != DRIVE_NO_ROOT_DIR)
             return TRUE;
 
-        Sleep(200);
+        Sleep(1000);
     }
 
     return FALSE;
@@ -2935,42 +3126,6 @@ DmActionFindCreatedVolumeInSnapshot(
     return NULL;
 }
 
-static BOOL
-DmActionWaitForCreatedVolume(
-    _In_ ULONG DiskNumber,
-    _In_ ULONGLONG StartOffset,
-    _In_ ULONGLONG PartitionLength,
-    _Out_ PDM_SNAPSHOT Snapshot,
-    _Outptr_ PDM_VOLUME *Volume)
-{
-    ULONG Attempt;
-    NTSTATUS Status;
-
-    if (Snapshot == NULL || Volume == NULL)
-        return FALSE;
-
-    DmSnapshotInitialize(Snapshot);
-    *Volume = NULL;
-
-    for (Attempt = 0; Attempt < 20; Attempt++)
-    {
-        Status = DmSnapshotRefresh(Snapshot);
-        if (NT_SUCCESS(Status))
-        {
-            *Volume = DmActionFindCreatedVolumeInSnapshot(Snapshot,
-                                                          DiskNumber,
-                                                          StartOffset,
-                                                          PartitionLength);
-            if (*Volume != NULL)
-                return TRUE;
-        }
-
-        Sleep(200);
-    }
-
-    return FALSE;
-}
-
 static VOID
 DmActionShowCreateVolumeWarning(
     _In_opt_ HWND hWnd,
@@ -2981,6 +3136,265 @@ DmActionShowCreateVolumeWarning(
                 Message,
                 Title,
                 MB_OK | MB_ICONWARNING);
+}
+
+/* A freshly created partition's volume device is installed asynchronously
+ * and can take minutes to become enumerable on ReactOS. Drive letter and
+ * format settings from the create dialog are therefore remembered here and
+ * applied by the pending-create timer once the volume arrives, instead of
+ * blocking the UI thread in a long modal wait. */
+#define DM_PENDING_CREATE_TIMEOUT_MS (10ULL * 60ULL * 1000ULL)
+
+typedef struct _DM_PENDING_CREATE
+{
+    BOOL Active;
+    ULONG DiskNumber;
+    ULONGLONG StartOffset;
+    ULONGLONG PartitionLength;
+    BOOL AssignLetter;
+    WCHAR Letter;
+    BOOL FormatVolume;
+    BOOL QuickFormat;
+    WCHAR FileSystem[32];
+    WCHAR Label[MAX_PATH];
+    ULONGLONG DeadlineTick;
+} DM_PENDING_CREATE;
+
+static DM_PENDING_CREATE DmPendingCreate;
+
+BOOL
+DmActionHasPendingCreate(VOID)
+{
+    return DmPendingCreate.Active;
+}
+
+BOOL
+DmActionProcessPendingCreate(
+    _In_opt_ HWND hWnd,
+    _In_opt_ HWND hStatusBar)
+{
+    static BOOL InProgress;
+    DM_SNAPSHOT Snapshot;
+    PDM_VOLUME Volume;
+    DM_ACTION_CONTEXT FormatContext;
+    DM_FORMAT_ERROR FormatError;
+    WCHAR DriveRoot[4];
+    WCHAR Message[512];
+    NTSTATUS Status;
+
+    if (!DmPendingCreate.Active || InProgress)
+        return FALSE;
+
+    if (GetTickCount64() > DmPendingCreate.DeadlineTick)
+    {
+        DmPendingCreate.Active = FALSE;
+        DmActionShowCreateVolumeWarning(hWnd,
+                                        L"Create Partition",
+                                        L"The volume was created, but Disk Management could not find it in time to apply the requested drive letter or format settings.");
+        return TRUE;
+    }
+
+    InProgress = TRUE;
+    DmSnapshotInitialize(&Snapshot);
+    Status = DmSnapshotRefresh(&Snapshot);
+    if (!NT_SUCCESS(Status))
+    {
+        DmSnapshotClear(&Snapshot);
+        InProgress = FALSE;
+        return FALSE;
+    }
+
+    Volume = DmActionFindCreatedVolumeInSnapshot(&Snapshot,
+                                                 DmPendingCreate.DiskNumber,
+                                                 DmPendingCreate.StartOffset,
+                                                 DmPendingCreate.PartitionLength);
+    if (Volume == NULL)
+    {
+        DmSnapshotClear(&Snapshot);
+        InProgress = FALSE;
+        return FALSE;
+    }
+
+    /* The volume arrived: apply the deferred settings now. */
+    DmPendingCreate.Active = FALSE;
+
+    if (DmPendingCreate.AssignLetter &&
+        !StorageUtilAssignDriveLetter(Volume->DeviceName, DmPendingCreate.Letter))
+    {
+        DmActionFormatErrorMessage(Message,
+                                   ARRAYSIZE(Message),
+                                   L"The volume was created, but assigning the requested drive letter failed.",
+                                   GetLastError());
+        MessageBoxW(hWnd, Message, L"Create Partition", MB_OK | MB_ICONWARNING);
+        DmSnapshotClear(&Snapshot);
+        InProgress = FALSE;
+        return TRUE;
+    }
+
+    DmSnapshotClear(&Snapshot);
+
+    if (DmPendingCreate.FormatVolume)
+    {
+        DriveRoot[0] = towupper(DmPendingCreate.Letter);
+        DriveRoot[1] = L':';
+        DriveRoot[2] = L'\\';
+        DriveRoot[3] = UNICODE_NULL;
+
+        if (!DmActionWaitForDriveRoot(DriveRoot))
+        {
+            DmActionShowCreateVolumeWarning(hWnd,
+                                            L"Create Partition",
+                                            L"The volume was created, but the new drive letter did not become ready in time for formatting.");
+            InProgress = FALSE;
+            return TRUE;
+        }
+
+        if (hStatusBar != NULL)
+            SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"Formatting the new volume...");
+
+        ZeroMemory(&FormatContext, sizeof(FormatContext));
+        FormatContext.hWnd = hWnd;
+        FormatContext.hStatusBar = hStatusBar;
+        if (!DmActionRunFormat(&FormatContext,
+                               DriveRoot,
+                               DmPendingCreate.FileSystem,
+                               DmPendingCreate.Label,
+                               DmPendingCreate.QuickFormat,
+                               FALSE,
+                               &FormatError))
+        {
+            StringCchPrintfW(Message,
+                             ARRAYSIZE(Message),
+                             L"The volume was created and drive letter %C: was assigned, but formatting it failed.\r\n\r\n%s",
+                             towupper(DmPendingCreate.Letter),
+                             DmActionGetFormatFailureText(FormatError));
+            MessageBoxW(hWnd, Message, L"Create Partition", MB_OK | MB_ICONWARNING);
+        }
+    }
+
+    InProgress = FALSE;
+    return TRUE;
+}
+
+static BOOL
+DmActionShrinkFileSystem(
+    _In_ const DM_ACTION_CONTEXT *Context,
+    _In_ ULONGLONG DeltaBytes)
+{
+    HANDLE VolumeHandle;
+    DM_SHRINK_VOLUME_INFORMATION ShrinkInfo;
+    ULONGLONG BytesPerSector;
+    DWORD BytesReturned;
+    DWORD Error;
+
+    VolumeHandle = DmActionOpenVolumeHandle(Context->Volume);
+    if (VolumeHandle == INVALID_HANDLE_VALUE)
+    {
+        DmActionShowWin32Error(Context->hWnd,
+                               L"Unable to open the selected volume for shrinking.",
+                               GetLastError());
+        return FALSE;
+    }
+
+    BytesPerSector = max(Context->Disk->BytesPerSector, 512ULL);
+    ZeroMemory(&ShrinkInfo, sizeof(ShrinkInfo));
+    ShrinkInfo.ShrinkRequestType = DmShrinkPrepare;
+    ShrinkInfo.NewNumberOfSectors =
+        (LONGLONG)((Context->Region->Length - DeltaBytes) / BytesPerSector);
+
+    BytesReturned = 0;
+    if (!DeviceIoControl(VolumeHandle,
+                         FSCTL_SHRINK_VOLUME,
+                         &ShrinkInfo,
+                         sizeof(ShrinkInfo),
+                         NULL,
+                         0,
+                         &BytesReturned,
+                         NULL))
+    {
+        Error = GetLastError();
+        CloseHandle(VolumeHandle);
+        DmActionShowWin32Error(Context->hWnd,
+                               L"The file system on the selected volume does not support online shrinking.\r\n"
+                               L"The partition was not changed.",
+                               Error);
+        return FALSE;
+    }
+
+    ShrinkInfo.ShrinkRequestType = DmShrinkCommit;
+    if (!DeviceIoControl(VolumeHandle,
+                         FSCTL_SHRINK_VOLUME,
+                         &ShrinkInfo,
+                         sizeof(ShrinkInfo),
+                         NULL,
+                         0,
+                         &BytesReturned,
+                         NULL))
+    {
+        Error = GetLastError();
+        ShrinkInfo.ShrinkRequestType = DmShrinkAbort;
+        DeviceIoControl(VolumeHandle,
+                        FSCTL_SHRINK_VOLUME,
+                        &ShrinkInfo,
+                        sizeof(ShrinkInfo),
+                        NULL,
+                        0,
+                        &BytesReturned,
+                        NULL);
+        CloseHandle(VolumeHandle);
+        DmActionShowWin32Error(Context->hWnd,
+                               L"Shrinking the file system failed.\r\n"
+                               L"The partition was not changed.",
+                               Error);
+        return FALSE;
+    }
+
+    CloseHandle(VolumeHandle);
+    return TRUE;
+}
+
+static VOID
+DmActionExtendFileSystem(
+    _In_ const DM_ACTION_CONTEXT *Context,
+    _In_ ULONGLONG DeltaBytes)
+{
+    HANDLE VolumeHandle;
+    LONGLONG NewSectorCount;
+    ULONGLONG BytesPerSector;
+    DWORD BytesReturned;
+    DWORD Error;
+
+    VolumeHandle = DmActionOpenVolumeHandle(Context->Volume);
+    if (VolumeHandle == INVALID_HANDLE_VALUE)
+        Error = GetLastError();
+    else
+    {
+        BytesPerSector = max(Context->Disk->BytesPerSector, 512ULL);
+        NewSectorCount = (LONGLONG)((Context->Region->Length + DeltaBytes) / BytesPerSector);
+        BytesReturned = 0;
+        if (DeviceIoControl(VolumeHandle,
+                            FSCTL_EXTEND_VOLUME,
+                            &NewSectorCount,
+                            sizeof(NewSectorCount),
+                            NULL,
+                            0,
+                            &BytesReturned,
+                            NULL))
+        {
+            CloseHandle(VolumeHandle);
+            return;
+        }
+
+        Error = GetLastError();
+        CloseHandle(VolumeHandle);
+    }
+
+    DmActionShowWin32Error(Context->hWnd,
+                           L"The partition was extended, but the file system could not be "
+                           L"extended to fill it.\r\n"
+                           L"The additional space stays unused until the volume is reformatted "
+                           L"or the file system driver supports online extension.",
+                           Error);
 }
 
 static BOOL
@@ -2999,6 +3413,7 @@ DmActionResizeVolume(
     ULONGLONG DeltaBytes;
     ULONGLONG MaxDeltaBytes;
     PCWSTR Title;
+    BOOL RawVolume;
 
     if (Context == NULL || Context->Disk == NULL || Context->Volume == NULL || Context->Region == NULL)
         return FALSE;
@@ -3006,16 +3421,18 @@ DmActionResizeVolume(
     if (!DmActionEnsureBasicDiskLayout(Context, Extend ? L"Extend Volume" : L"Shrink Volume"))
         return FALSE;
 
-    if (!DmActionCanResizeRawVolume(Context, Extend))
+    if (!DmActionCanResizeVolume(Context, Extend))
     {
         MessageBoxW(Context->hWnd,
                     Extend
-                        ? L"Only single-extent RAW volumes with right-adjacent free space can be extended here right now."
-                        : L"Only single-extent RAW volumes can be shrunk here right now.",
+                        ? L"Only single-extent basic volumes with right-adjacent free space can be extended."
+                        : L"Only single-extent basic volumes can be shrunk.",
                     L"Disk Management",
                     MB_OK | MB_ICONINFORMATION);
         return FALSE;
     }
+
+    RawVolume = DmActionIsRawVolume(Context->Volume);
 
     FreeRegion = DmActionFindRightAdjacentFreeRegion(Context);
     MaxDeltaBytes = Extend ? (FreeRegion != NULL ? FreeRegion->Length : 0) :
@@ -3031,8 +3448,8 @@ DmActionResizeVolume(
     StringCchPrintfW(Prompt,
                      ARRAYSIZE(Prompt),
                      Extend
-                         ? L"Extend %s by %I64u MB now?\r\n\r\nThis first-pass implementation is limited to single-extent RAW volumes with right-adjacent free space."
-                         : L"Shrink %s by %I64u MB now?\r\n\r\nThis first-pass implementation is limited to single-extent RAW volumes.",
+                         ? L"Extend %s by %I64u MB now?"
+                         : L"Shrink %s by %I64u MB now?",
                      (TargetText[0] != UNICODE_NULL) ? TargetText : L"the selected volume",
                      DmActionRegionMaxSizeMb(DeltaBytes));
     if (MessageBoxW(Context->hWnd,
@@ -3043,8 +3460,16 @@ DmActionResizeVolume(
         return FALSE;
     }
 
-    if (!DmActionDismountVolume(Context->hWnd, Context->Volume))
+    /* A formatted volume must agree to give up the space before the
+       partition is reduced underneath it. */
+    if (!Extend && !RawVolume && !DmActionShrinkFileSystem(Context, DeltaBytes))
         return FALSE;
+
+    if (RawVolume &&
+        !DmActionDismountVolume(Context->hWnd, Context->Volume))
+    {
+        return FALSE;
+    }
 
     Handle = CreateFileW(Context->Disk->DeviceName,
                          GENERIC_READ | GENERIC_WRITE,
@@ -3128,6 +3553,11 @@ DmActionResizeVolume(
                     NULL);
     HeapFree(ProcessHeap, 0, Layout);
     CloseHandle(Handle);
+
+    /* Grow the file system into the enlarged partition. */
+    if (Extend && !RawVolume)
+        DmActionExtendFileSystem(Context, DeltaBytes);
+
     return TRUE;
 }
 
@@ -3851,11 +4281,7 @@ DmActionCreatePartition(
     _In_ const DM_ACTION_CONTEXT *Context)
 {
     DM_CREATE_PARTITION_DIALOG Dialog;
-    DM_SNAPSHOT CreatedSnapshot;
-    PDM_VOLUME CreatedVolume;
     WCHAR Prompt[384];
-    WCHAR DriveRoot[4];
-    WCHAR Message[512];
     HANDLE Handle;
     PDRIVE_LAYOUT_INFORMATION_EX Layout;
     PPARTITION_INFORMATION_EX Entry;
@@ -3868,7 +4294,6 @@ DmActionCreatePartition(
     BOOL Created;
     BOOL CreatesVolume;
     BOOL AutoCreateExtendedLogical;
-    DM_FORMAT_ERROR FormatError;
     ULONGLONG AlignmentBytes;
     ULONGLONG ExtendedLength;
     ULONGLONG ExtendedStartOffset;
@@ -3944,6 +4369,20 @@ DmActionCreatePartition(
     Entry = NULL;
     if (Context->Disk->PartitionStyle == PARTITION_STYLE_MBR)
     {
+        /* The partition manager reports only the used entries for an MBR
+         * disk, so an empty table can come back with fewer than the four
+         * primary slots that actually exist on disk. */
+        if (Layout->PartitionCount < 4 &&
+            !DmActionExpandLayout(&Layout, 4))
+        {
+            HeapFree(ProcessHeap, 0, Layout);
+            CloseHandle(Handle);
+            DmActionShowWin32Error(Context->hWnd,
+                                   L"Unable to prepare the disk layout for the new partition.",
+                                   GetLastError());
+            return FALSE;
+        }
+
         Entry = DmActionFindFreePrimaryMbrSlot(Layout);
         switch (Dialog.PartitionKind)
         {
@@ -4209,76 +4648,28 @@ DmActionCreatePartition(
     if (!CreatesVolume || (!Dialog.AssignLetter && !Dialog.FormatVolume))
         return TRUE;
 
-    CreatedVolume = NULL;
-    if (!DmActionWaitForCreatedVolume(Context->Disk->DiskNumber,
-                                      RegionStartOffset,
-                                      PartitionLength,
-                                      &CreatedSnapshot,
-                                      &CreatedVolume))
-    {
-        DmActionShowCreateVolumeWarning(Context->hWnd,
-                                        CreateTitle,
-                                        L"The volume was created, but Disk Management could not find it in time to apply the requested drive letter or format settings.");
-        DmSnapshotClear(&CreatedSnapshot);
-        return Created;
-    }
+    /* The new volume can take minutes to become enumerable, so do not block
+     * here: remember the requested settings and let the pending-create
+     * timer apply them as soon as the volume arrives. */
+    ZeroMemory(&DmPendingCreate, sizeof(DmPendingCreate));
+    DmPendingCreate.DiskNumber = Context->Disk->DiskNumber;
+    DmPendingCreate.StartOffset = RegionStartOffset;
+    DmPendingCreate.PartitionLength = PartitionLength;
+    DmPendingCreate.AssignLetter = Dialog.AssignLetter;
+    DmPendingCreate.Letter = Dialog.SelectedLetter;
+    DmPendingCreate.FormatVolume = Dialog.FormatVolume;
+    DmPendingCreate.QuickFormat = Dialog.QuickFormat;
+    StringCchCopyW(DmPendingCreate.FileSystem,
+                   ARRAYSIZE(DmPendingCreate.FileSystem),
+                   Dialog.SelectedFileSystem);
+    StringCchCopyW(DmPendingCreate.Label,
+                   ARRAYSIZE(DmPendingCreate.Label),
+                   Dialog.Label);
+    DmPendingCreate.DeadlineTick = GetTickCount64() + DM_PENDING_CREATE_TIMEOUT_MS;
+    DmPendingCreate.Active = TRUE;
 
-    if (Dialog.AssignLetter)
-    {
-        if (!StorageUtilAssignDriveLetter(CreatedVolume->DeviceName, Dialog.SelectedLetter))
-        {
-            DmActionFormatErrorMessage(Message,
-                                       ARRAYSIZE(Message),
-                                       L"The volume was created, but assigning the requested drive letter failed.",
-                                       GetLastError());
-            MessageBoxW(Context->hWnd,
-                        Message,
-                        CreateTitle,
-                        MB_OK | MB_ICONWARNING);
-            DmSnapshotClear(&CreatedSnapshot);
-            return Created;
-        }
-    }
-
-    if (Dialog.FormatVolume)
-    {
-        DriveRoot[0] = towupper(Dialog.SelectedLetter);
-        DriveRoot[1] = L':';
-        DriveRoot[2] = L'\\';
-        DriveRoot[3] = UNICODE_NULL;
-
-        if (!DmActionWaitForDriveRoot(DriveRoot))
-        {
-            DmActionShowCreateVolumeWarning(Context->hWnd,
-                                            CreateTitle,
-                                            L"The volume was created, but the new drive letter did not become ready in time for formatting.");
-            DmSnapshotClear(&CreatedSnapshot);
-            return Created;
-        }
-
-        if (!DmActionRunFormat(Context,
-                               DriveRoot,
-                               Dialog.SelectedFileSystem,
-                               Dialog.Label,
-                               Dialog.QuickFormat,
-                               FALSE,
-                               &FormatError))
-        {
-            StringCchPrintfW(Message,
-                             ARRAYSIZE(Message),
-                             L"The volume was created and drive letter %C: was assigned, but formatting it failed.\r\n\r\n%s",
-                             towupper(Dialog.SelectedLetter),
-                             DmActionGetFormatFailureText(FormatError));
-            MessageBoxW(Context->hWnd,
-                        Message,
-                        CreateTitle,
-                        MB_OK | MB_ICONWARNING);
-            DmSnapshotClear(&CreatedSnapshot);
-            return Created;
-        }
-    }
-
-    DmSnapshotClear(&CreatedSnapshot);
+    /* Apply immediately when the volume is already enumerable. */
+    DmActionProcessPendingCreate(Context->hWnd, Context->hStatusBar);
     return Created;
 }
 
@@ -4722,6 +5113,8 @@ DmActionDeleteVolume(
     PPARTITION_INFORMATION_EX Entry;
     DWORD BytesReturned;
     DWORD LayoutSize;
+    BOOL DeleteLogical;
+    BOOL DeleteEmptyExtended;
 
     if (Context == NULL || Context->Disk == NULL || Context->Region == NULL)
         return FALSE;
@@ -4731,8 +5124,16 @@ DmActionDeleteVolume(
     if (!DmActionEnsureBasicDiskLayout(Context, Verb))
         return FALSE;
 
-    if (Context->Region->Type != DmRegionPartition)
+    /* Deleting the free space of an empty extended partition removes the
+       extended partition container itself, like Windows does. */
+    DeleteEmptyExtended = DmActionIsEmptyExtendedDelete(Context);
+    if (Context->Region->Type != DmRegionPartition && !DeleteEmptyExtended)
         return FALSE;
+
+    DeleteLogical = (Context->Region->Type == DmRegionPartition &&
+                     Context->Region->PartitionStyle == PARTITION_STYLE_MBR &&
+                     Context->Region->IsLogical &&
+                     !Context->Region->IsContainer);
 
     if (Context->Volume != NULL &&
         !DmActionEnsureSingleExtentVolume(Context, Verb))
@@ -4750,17 +5151,29 @@ DmActionDeleteVolume(
         return FALSE;
     }
 
-    if (Context->Region->PartitionStyle == PARTITION_STYLE_MBR &&
-        (Context->Region->IsLogical || Context->Region->IsContainer))
+    if (Context->Region->Type == DmRegionPartition &&
+        Context->Region->PartitionStyle == PARTITION_STYLE_MBR &&
+        Context->Region->IsContainer)
     {
         MessageBoxW(Context->hWnd,
-                    L"Deleting logical or extended MBR partitions is not implemented yet.",
+                    L"Delete all logical drives inside the extended partition first, "
+                    L"then delete its remaining free space to remove the extended partition.",
                     L"Disk Management",
                     MB_OK | MB_ICONINFORMATION);
         return FALSE;
     }
 
-    DmActionBuildDeleteTargetText(Context, TargetText, ARRAYSIZE(TargetText));
+    if (DeleteEmptyExtended)
+    {
+        StringCchPrintfW(TargetText,
+                         ARRAYSIZE(TargetText),
+                         L"the extended partition on Disk %lu",
+                         Context->Disk->DiskNumber);
+    }
+    else
+    {
+        DmActionBuildDeleteTargetText(Context, TargetText, ARRAYSIZE(TargetText));
+    }
     StringCchPrintfW(Prompt,
                      ARRAYSIZE(Prompt),
                      L"Delete %s now?\r\n\r\nThis operation removes the partition entry and cannot be undone.",
@@ -4803,20 +5216,34 @@ DmActionDeleteVolume(
         return FALSE;
     }
 
-    Entry = DmActionFindLayoutPartition(Layout, Context->Region);
-    if (Entry == NULL)
+    if (DeleteEmptyExtended)
     {
-        HeapFree(ProcessHeap, 0, Layout);
-        CloseHandle(Handle);
-        MessageBoxW(Context->hWnd,
-                    L"The selected partition could not be matched to the current disk layout.",
-                    L"Disk Management",
-                    MB_OK | MB_ICONERROR);
-        return FALSE;
-    }
+        ULONG Index;
 
-    if (Context->Region->PartitionStyle == PARTITION_STYLE_MBR)
-    {
+        Entry = NULL;
+        for (Index = 0; Index < min(Layout->PartitionCount, 4UL); Index++)
+        {
+            PPARTITION_INFORMATION_EX Candidate;
+
+            Candidate = &Layout->PartitionEntry[Index];
+            if (IsContainerPartition(Candidate->Mbr.PartitionType))
+            {
+                Entry = Candidate;
+                break;
+            }
+        }
+
+        if (Entry == NULL)
+        {
+            HeapFree(ProcessHeap, 0, Layout);
+            CloseHandle(Handle);
+            MessageBoxW(Context->hWnd,
+                        L"The extended partition could not be matched to the current disk layout.",
+                        L"Disk Management",
+                        MB_OK | MB_ICONERROR);
+            return FALSE;
+        }
+
         Entry->PartitionStyle = PARTITION_STYLE_MBR;
         Entry->StartingOffset.QuadPart = 0;
         Entry->PartitionLength.QuadPart = 0;
@@ -4826,21 +5253,82 @@ DmActionDeleteVolume(
         Entry->Mbr.RecognizedPartition = FALSE;
         Entry->Mbr.HiddenSectors = 0;
         Entry->RewritePartition = TRUE;
+
+        /* Drop any stale logical-section entries along with the container. */
+        for (Index = 4; Index < Layout->PartitionCount; Index++)
+        {
+            ZeroMemory(&Layout->PartitionEntry[Index], sizeof(Layout->PartitionEntry[Index]));
+            Layout->PartitionEntry[Index].PartitionStyle = PARTITION_STYLE_MBR;
+            Layout->PartitionEntry[Index].RewritePartition = TRUE;
+        }
+
+        /* With the container gone only the four primary slots remain
+           meaningful. A larger count would make the partition-table writer
+           walk to an extended boot record that no longer exists and, with
+           no container to seed the next offset, rewrite sector 0 with the
+           empty logical table - wiping the whole MBR. */
+        Layout->PartitionCount = min(Layout->PartitionCount, 4UL);
     }
-    else if (Context->Region->PartitionStyle == PARTITION_STYLE_GPT)
+    else if (DeleteLogical)
     {
-        ZeroMemory(Entry, sizeof(*Entry));
-        Entry->RewritePartition = TRUE;
+        if (!DmActionRemoveMbrLogicalEntry(&Layout,
+                                           Context,
+                                           Context->Disk->ExtendedPartitionOffset,
+                                           Context->Region->StartOffset,
+                                           Context->Region->Length))
+        {
+            DWORD Error;
+
+            Error = GetLastError();
+            HeapFree(ProcessHeap, 0, Layout);
+            CloseHandle(Handle);
+            DmActionShowWin32Error(Context->hWnd,
+                                   L"Rebuilding the MBR logical partition table for the delete failed.",
+                                   Error);
+            return FALSE;
+        }
     }
     else
     {
-        HeapFree(ProcessHeap, 0, Layout);
-        CloseHandle(Handle);
-        MessageBoxW(Context->hWnd,
-                    L"The selected partition style is not supported for deletion.",
-                    L"Disk Management",
-                    MB_OK | MB_ICONERROR);
-        return FALSE;
+        Entry = DmActionFindLayoutPartition(Layout, Context->Region);
+        if (Entry == NULL)
+        {
+            HeapFree(ProcessHeap, 0, Layout);
+            CloseHandle(Handle);
+            MessageBoxW(Context->hWnd,
+                        L"The selected partition could not be matched to the current disk layout.",
+                        L"Disk Management",
+                        MB_OK | MB_ICONERROR);
+            return FALSE;
+        }
+
+        if (Context->Region->PartitionStyle == PARTITION_STYLE_MBR)
+        {
+            Entry->PartitionStyle = PARTITION_STYLE_MBR;
+            Entry->StartingOffset.QuadPart = 0;
+            Entry->PartitionLength.QuadPart = 0;
+            Entry->PartitionNumber = 0;
+            Entry->Mbr.PartitionType = PARTITION_ENTRY_UNUSED;
+            Entry->Mbr.BootIndicator = FALSE;
+            Entry->Mbr.RecognizedPartition = FALSE;
+            Entry->Mbr.HiddenSectors = 0;
+            Entry->RewritePartition = TRUE;
+        }
+        else if (Context->Region->PartitionStyle == PARTITION_STYLE_GPT)
+        {
+            ZeroMemory(Entry, sizeof(*Entry));
+            Entry->RewritePartition = TRUE;
+        }
+        else
+        {
+            HeapFree(ProcessHeap, 0, Layout);
+            CloseHandle(Handle);
+            MessageBoxW(Context->hWnd,
+                        L"The selected partition style is not supported for deletion.",
+                        L"Disk Management",
+                        MB_OK | MB_ICONERROR);
+            return FALSE;
+        }
     }
 
     LayoutSize = sizeof(DRIVE_LAYOUT_INFORMATION_EX) +
@@ -5213,6 +5701,18 @@ DmActionIsAvailable(
                     !Context->Disk->IsReadOnly);
 
         case IDM_ACTION_DELETE_VOLUME:
+            if (Context != NULL &&
+                Context->Disk != NULL &&
+                !Context->Disk->IsDynamic &&
+                !Context->Disk->IsOffline &&
+                !Context->Disk->IsReadOnly &&
+                DmActionIsEmptyExtendedDelete(Context))
+            {
+                /* Free space of an empty extended partition: deleting it
+                   removes the extended partition container. */
+                return TRUE;
+            }
+
             return (Context != NULL &&
                     Context->Disk != NULL &&
                     Context->Region != NULL &&
@@ -5226,15 +5726,15 @@ DmActionIsAvailable(
                     (Context->Volume == NULL ||
                      (!Context->Volume->IsBoot && !Context->Volume->IsSystem)) &&
                     (Context->Region->PartitionStyle != PARTITION_STYLE_MBR ||
-                     (!Context->Region->IsLogical && !Context->Region->IsContainer)) &&
+                     !Context->Region->IsContainer) &&
                     !Context->Disk->IsOffline &&
                     !Context->Disk->IsReadOnly);
 
         case IDM_ACTION_EXTEND_VOLUME:
-            return DmActionCanResizeRawVolume(Context, TRUE);
+            return DmActionCanResizeVolume(Context, TRUE);
 
         case IDM_ACTION_SHRINK_VOLUME:
-            return DmActionCanResizeRawVolume(Context, FALSE);
+            return DmActionCanResizeVolume(Context, FALSE);
 
         case IDM_ACTION_FORMAT:
             return (DmActionCanMutateSimpleBasicVolume(Context) &&

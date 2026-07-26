@@ -134,14 +134,25 @@ DmMainWndUpdateVolumeSelectionFromDiskViewPoint(
         return;
     }
 
-    UNREFERENCED_PARAMETER(Disk);
+    Info->SelectedDisk = Disk;
+    Info->SelectedRegion = Region;
+    Info->FocusTarget = DmViewTargetBottom;
     Volume = (Region != NULL) ? Region->Volume : NULL;
-    if (Volume != NULL && DmVolumeListSelectVolume(Info->hVolumeView, Volume))
+    if (Volume != NULL)
     {
-        DmMainWndCacheSelectedVolumeName(Info);
-        DmMainWndUpdateMenuState(Info);
-        InvalidateRect(Info->hDiskView, NULL, TRUE);
+        DmVolumeListSelectVolume(Info->hVolumeView, Volume);
     }
+    else
+    {
+        ListView_SetItemState(Info->hVolumeView,
+                              -1,
+                              0,
+                              LVIS_SELECTED | LVIS_FOCUSED);
+    }
+
+    DmMainWndCacheSelectedVolumeName(Info);
+    DmMainWndUpdateMenuState(Info);
+    InvalidateRect(Info->hDiskView, NULL, TRUE);
 }
 
 static
@@ -218,13 +229,18 @@ OnContextMenu(
     if (Menu == NULL)
         return 0;
 
-    DmMenuStateApplyMenu(&Info->MenuState, Menu);
+    /* The context menu already encodes enabled/grayed for the clicked
+       target; WM_INITMENUPOPUP must not clobber it with the volume-list
+       selection context, so mark it as the active context menu. */
+    Info->hActiveContextMenu = Menu;
     CommandId = TrackPopupMenuEx(Menu,
                                  TPM_RETURNCMD | TPM_RIGHTBUTTON,
                                  Point.x,
                                  Point.y,
                                  Info->hMainWnd,
                                  NULL);
+    Info->hActiveContextMenu = NULL;
+    Info->bInMenuLoop = FALSE;
     DmDestroyContextMenu(Menu);
 
     if (CommandId != 0)
@@ -402,6 +418,8 @@ OnNotify(
         switch (NmHdr->code)
         {
             case NM_SETFOCUS:
+                Info->SelectedDisk = NULL;
+                Info->SelectedRegion = NULL;
                 DmMainWndSetFocusTarget(Info, DmViewTargetTop);
                 break;
 
@@ -460,6 +478,18 @@ OnCreate(
     OutputDebugStringW(L"[DISKMGMT] OnCreate: ENTER\n");
 
     Info->hMenu = GetMenu(Info->hMainWnd);
+
+    /* Use the system message font (Tahoma / Segoe UI class) everywhere
+       instead of the legacy bitmap DEFAULT_GUI_FONT. */
+    {
+        NONCLIENTMETRICSW ncm;
+
+        ZeroMemory(&ncm, sizeof(ncm));
+        ncm.cbSize = sizeof(ncm);
+        if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0))
+            Info->hUiFont = CreateFontIndirectW(&ncm.lfMessageFont);
+    }
+
     DmSnapshotInitialize(&Info->Snapshot);
     DmVolumeListInitializeContext(&Info->VolumeListContext);
     DmMenuStateInitialize(&Info->MenuState);
@@ -502,6 +532,13 @@ OnCreate(
     }
     OutputDebugStringW(L"[DISKMGMT] DiskView OK\n");
 
+    if (Info->hUiFont != NULL)
+    {
+        SendMessageW(Info->hToolbar, WM_SETFONT, (WPARAM)Info->hUiFont, TRUE);
+        SendMessageW(Info->hVolumeView, WM_SETFONT, (WPARAM)Info->hUiFont, TRUE);
+        SendMessageW(Info->hStatusBar, WM_SETFONT, (WPARAM)Info->hUiFont, TRUE);
+    }
+
     DmMainWndLayoutMainWindow(Info);
     OutputDebugStringW(L"[DISKMGMT] Layout done, starting refresh\n");
 
@@ -540,6 +577,8 @@ OnCommand(
         case IDM_ACTION_CONVERT_MBR:
         case IDM_ACTION_CREATE_PARTITION:
         case IDM_ACTION_DELETE_VOLUME:
+        case IDM_ACTION_EXTEND_VOLUME:
+        case IDM_ACTION_SHRINK_VOLUME:
         case IDM_ACTION_FORMAT:
         case IDM_ACTION_ASSIGN_LETTER:
         case IDM_ACTION_REMOVE_LETTER:
@@ -597,7 +636,8 @@ DmMainWndProc(
             Info = (PMAIN_WND_INFO)CreateInfo->lpCreateParams;
             Info->hMainWnd = hwnd;
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)Info);
-            return TRUE;
+            /* DefWindowProc stores the window caption on WM_NCCREATE. */
+            return DefWindowProcW(hwnd, uMsg, wParam, lParam);
 
         case WM_CREATE:
             return OnCreate(Info);
@@ -607,7 +647,18 @@ DmMainWndProc(
             return 0;
 
         case WM_ERASEBKGND:
+        {
+            /* Flat toolbars delegate their background erase to the parent,
+               so this must really paint instead of just claiming success. */
+            RECT rcErase;
+
+            GetClientRect(hwnd, &rcErase);
+            FillRect((HDC)wParam, &rcErase, GetSysColorBrush(COLOR_BTNFACE));
             return TRUE;
+        }
+
+        case WM_GETFONT:
+            return (LRESULT)(Info != NULL ? Info->hUiFont : NULL);
 
         case WM_PAINT:
             return DmMainWndOnPaint(Info, hwnd);
@@ -673,6 +724,13 @@ DmMainWndProc(
             break;
 
         case WM_INITMENUPOPUP:
+            /* Context menus carry their own per-target item state. */
+            if (Info->hActiveContextMenu != NULL &&
+                (HMENU)wParam == Info->hActiveContextMenu)
+            {
+                return 0;
+            }
+
             DmMainWndUpdateMenuState(Info);
             DmMenuStateApplyMenu(&Info->MenuState, (HMENU)wParam);
             return 0;
@@ -688,6 +746,20 @@ DmMainWndProc(
 
         case WM_NOTIFY:
             return OnNotify(Info, lParam);
+
+        case WM_ENTERMENULOOP:
+            Info->bInMenuLoop = TRUE;
+            DmMainWndUpdateStatusBarMode(Info);
+            return 0;
+
+        case WM_EXITMENULOOP:
+            /* WM_MENUSELECT's close notification is not always delivered
+               for tracked popups, so the menu-loop flag must be cleared
+               here or the background timers stay disabled forever. */
+            Info->bInMenuLoop = FALSE;
+            DmMainWndUpdateStatusBarMode(Info);
+            StatusBarLoadString(Info->hStatusBar, 1, hInstance, IDS_STATUS_READY);
+            return 0;
 
         case WM_MENUSELECT:
         {
@@ -731,7 +803,64 @@ DmMainWndProc(
             return 0;
         }
 
+        case WM_TIMER:
+            if (wParam == IDT_PENDING_CREATE)
+            {
+                if (Info->bInMenuLoop || Info->bInCommand)
+                    return 0;
+
+                if (!DmActionHasPendingCreate())
+                {
+                    KillTimer(hwnd, IDT_PENDING_CREATE);
+                    return 0;
+                }
+
+                if (DmActionProcessPendingCreate(hwnd, Info->hStatusBar))
+                {
+                    if (!DmActionHasPendingCreate())
+                        KillTimer(hwnd, IDT_PENDING_CREATE);
+                    DmMainWndExecuteCommand(Info, IDM_ACTION_REFRESH);
+                }
+                return 0;
+            }
+            if (wParam == IDT_DEVICE_CHANGE)
+            {
+                /* Partition/volume device arrivals and removals can take
+                   minutes to fully settle, so keep refreshing for a while
+                   instead of a single shot. */
+                if (!Info->bInMenuLoop && !Info->bInCommand)
+                    DmMainWndExecuteCommand(Info, IDM_ACTION_REFRESH);
+
+                Info->DeviceChangeShot++;
+                if (Info->DeviceChangeShot >= DISKMGMT_DEVICE_CHANGE_SHOTS)
+                    KillTimer(hwnd, IDT_DEVICE_CHANGE);
+                return 0;
+            }
+            break;
+
+        case WM_DEVICECHANGE:
+            /* Storage arrivals and removals complete asynchronously, so
+               refresh once the burst of change notifications settles. */
+            if (wParam == DBT_DEVNODES_CHANGED ||
+                wParam == DBT_DEVICEARRIVAL ||
+                wParam == DBT_DEVICEREMOVECOMPLETE)
+            {
+                Info->DeviceChangeShot = 0;
+                SetTimer(hwnd,
+                         IDT_DEVICE_CHANGE,
+                         DISKMGMT_DEVICE_CHANGE_POLL_MS,
+                         NULL);
+            }
+            return TRUE;
+
         case WM_DESTROY:
+            KillTimer(hwnd, IDT_PENDING_CREATE);
+            KillTimer(hwnd, IDT_DEVICE_CHANGE);
+            if (Info->hUiFont != NULL)
+            {
+                DeleteObject(Info->hUiFont);
+                Info->hUiFont = NULL;
+            }
             if (Info->hToolbarImageList != NULL)
             {
                 ImageList_Destroy(Info->hToolbarImageList);

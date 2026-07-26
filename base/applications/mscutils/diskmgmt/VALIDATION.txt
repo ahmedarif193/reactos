@@ -5,6 +5,9 @@ Legend:
 [ ] Not run
 [x] Pass
 [!] Fail
+[w] Pass under Wine host run (2026-07-22); re-verify on ReactOS
+[x] entries dated 2026-07-22 were exercised natively on a ReactOS livecd VM
+    (amd64 UEFI/OVMF, q35, AHCI, 4 GB blank qcow2 data disk); see Notes.
 
 Environment
 -----------
@@ -19,22 +22,22 @@ Environment
 
 Phase 1 - Read Only
 -------------------
-[ ] Launch `diskmgmt.exe`
-[ ] Main window opens without crash
-[ ] Title, menu bar, toolbar, and icon load correctly
+[x] Launch `diskmgmt.exe`
+[x] Main window opens without crash
+[x] Title, menu bar, toolbar, and icon load correctly
 [ ] Toolbar remains usable when standard common-control images are unavailable
-[ ] Toolbar uses app-owned diskmgmt image resources instead of relying on shared commctrl art
-[ ] Top volume list shows deterministic row icons for mounted volumes and hidden partitions
-[ ] Standalone full-width layout renders without a fake left navigation pane
-[ ] Top volume list renders
-[ ] Bottom disk map renders
-[ ] Refresh updates disk and volume data
+[w] Toolbar uses app-owned diskmgmt image resources instead of relying on shared commctrl art
+[w] Top volume list shows deterministic row icons for mounted volumes and hidden partitions
+[w] Standalone full-width layout renders without a fake left navigation pane
+[x] Top volume list renders
+[x] Bottom disk map renders
+[x] Refresh updates disk and volume data
 [ ] Rescan updates disk and volume data
 [ ] Selection persists across Refresh
 [ ] Selection persists across Rescan
 [ ] Top list selection highlights matching disk map region
 [ ] Disk map selection changes when list selection changes
-[ ] F5 triggers Refresh
+[x] F5 triggers Refresh
 [ ] Delete key does not crash on read-only selections
 [ ] Volume list sorting works on text columns
 [ ] Volume list sorting works on numeric columns
@@ -132,25 +135,25 @@ Phase 3 - Basic Disk Operations
 [ ] Initialize Disk prompt offers GPT vs MBR
 [ ] Initializing a RAW disk updates the UI after refresh
 [ ] Initialize Disk reports backend errors clearly
-[ ] Create Partition prompts before consuming the selected unallocated region
-[ ] Create flow titles and confirmation summaries follow the selected partition kind as `Create Partition`, `Create Logical Drive`, or `Create Volume`
-[ ] Create dialog instruction text and size label update when the selected partition kind changes
+[x] Create Partition prompts before consuming the selected unallocated region
+[x] Create flow titles and confirmation summaries follow the selected partition kind as `Create Partition`, `Create Logical Drive`, or `Create Volume`
+[x] Create dialog instruction text and size label update when the selected partition kind changes
 [ ] Special GPT partition kinds prefill more Windows-like default sizes in the create dialog
-[ ] Create Volume dialog offers size, drive letter, filesystem, label, and quick-format controls
+[x] Create Volume dialog offers size, drive letter, filesystem, label, and quick-format controls
 [ ] Create Volume dialog offers GPT partition-type choices for basic data, EFI system, Microsoft reserved, and recovery partitions
 [ ] Create Partition works for GPT basic data on an initialized GPT disk
-[ ] Create Partition works for simple primary MBR creation
+[x] Create Partition works for simple primary MBR creation
 [ ] Create Partition can create an extended MBR partition from top-level free space
 [ ] Create Partition can create the first logical drive inside free space within an extended MBR partition
 [ ] Create Partition can create an additional logical drive in later free space within an existing extended MBR partition
-[ ] Create Logical Drive can be selected from top-level free MBR space and creates the extended container plus first logical drive together
-[ ] MBR create chooses FAT/NTFS/Linux partition types from the requested filesystem instead of always writing `0x07`
-[ ] Create Volume can assign the selected drive letter during creation
-[ ] Create Volume can format the new volume with the requested initial settings
-[ ] Delete Volume prompts before rewriting the selected partition entry
+[x] Create Logical Drive can be selected from top-level free MBR space and creates the extended container plus first logical drive together
+[x] MBR create chooses FAT/NTFS/Linux partition types from the requested filesystem instead of always writing `0x07` (FAT 2 GB partition got type 0x0B)
+[x] Create Volume can assign the selected drive letter during creation (applied asynchronously once the volume device arrives)
+[x] Create Volume can format the new volume with the requested initial settings (FAT quick format via FMIFS, applied asynchronously)
+[x] Delete Volume prompts before rewriting the selected partition entry
 [ ] Delete Volume works for GPT partitions that are not boot/system
-[ ] Delete Volume works for non-logical MBR primary partitions
-[ ] Unsupported logical / extended MBR delete paths fail clearly
+[x] Delete Volume works for non-logical MBR primary partitions
+[x] Delete works for MBR logical drives and rebuilds the logical table; deleting an empty extended partition's free space removes the container while the primary partition survives
 [ ] Format dialog offers filesystem, label, and quick/full choices for writable drive-letter volumes
 [ ] Format uses the native FMIFS formatting path instead of the shell shortcut
 [ ] Format blocks boot, system, offline, read-only, and no-letter volumes clearly
@@ -199,7 +202,38 @@ Phase 4 - Advanced Basic-Disk Operations
 
 Notes
 -----
-[ ] Record device topology used for this test run
+[x] Record device topology used for this test run
 [ ] Record any unexpected GPT or MBR classification
 [ ] Record any refresh/rescan regressions
 [ ] Record any selection/highlight mismatches
+
+2026-07-22 ReactOS run notes
+----------------------------
+Topology: QEMU q35 + KVM, amd64 livecd (UEFI/OVMF), ich9-ahci with the
+livecd ISO and a 4 GB blank qcow2 data disk (Disk 0), xHCI keyboard/mouse.
+
+Validated natively end to end on the data disk: create primary 2048 MB FAT
+(auto drive letter + quick format -> E: FAT32, 99% free), create logical
+drive in the remaining space with auto-created extended container (-> F:
+FAT32), delete primary, delete logical (free space reappears inside the
+container), delete empty extended via its free space (primary survives),
+automatic view healing after every operation with no manual refresh.
+
+ReactOS issues found and fixed during this run (outside the app):
+- partmgr.sys: DEVICE_RELATIONS allocation underflowed with 0 partitions
+  (EnumeratedPartitionsTotal - 1), asking for 34 GB of paged pool and
+  breaking PnP re-enumeration after deleting a disk's last partition.
+- ntoskrnl xHalIoWritePartitionTable: with a >4-entry layout but no
+  container partition, the EBR walk continued with a zero offset and
+  rewrote sector 0 with an empty table, wiping the MBR (hardened; the app
+  also clamps PartitionCount to 4 when it removes the container).
+
+2026-07-23 follow-up: re-creating a partition with the same disk-signature/
+offset/length identity as one removed earlier in the same boot session
+bugchecked the kernel (PNP_DETECTED_FATAL_ERROR 0xCA, duplicate device
+instance) once removal processing worked. Fixed in ntoskrnl
+PiInitializeDevNode: the leftover phantom (DeviceNodeRemoved) devnode is
+now retired so the re-arrived device takes over its identity; validated
+in-VM with create -> delete -> identical re-create completing end to end
+(letter + FAT32 quick format) in one boot. partmgr's SET-layout handlers
+also got leak fixes and now propagate write failures to the caller.

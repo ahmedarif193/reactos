@@ -9,6 +9,51 @@ Reference
 Audit Date
 ----------
 - 2026-04-09
+- 2026-07-22 (Wine screenshot pass; findings and fixes below)
+- 2026-07-23 (Windows-reference geometry pass)
+
+2026-07-23 Windows-Reference Geometry Pass
+------------------------------------------
+Found and fixed:
+- The standalone window opened at `980 x 680`, while the supplied Windows
+  reference is approximately `980 x 520` at the same display scaling. The
+  default height now matches the compact reference and removes most of the
+  empty vertical gap.
+- Small partitions used a 112-pixel minimum and unallocated regions used a
+  72-pixel minimum. The Windows screenshot reserves approximately 200 and
+  140 logical pixels respectively, keeping EFI, recovery, and tiny
+  unallocated regions readable without making the large data region vanish.
+- The lower disk-label card was wider than the reference; it is now 112
+  logical pixels.
+- Partition cards drew a second capacity-usage bar along the bottom. Windows
+  Disk Management does not draw this bar, so it was removed; the top
+  partition-type stripe remains.
+- Extend and Shrink now participate in the Action-menu hint table, and the
+  hints describe the formatted basic-volume implementation rather than the
+  earlier RAW-only first pass.
+- Extend and Shrink were omitted from the main window's command router, so
+  selecting either visible verb did nothing. Both now reach the resize
+  backend.
+
+2026-07-22 Wine Screenshot Pass
+-------------------------------
+Found and fixed:
+- Empty title bar: WM_NCCREATE returned TRUE without DefWindowProc, so the
+  caption was never stored. Fixed.
+- Solid black band behind the flat toolbar: WM_ERASEBKGND claimed success
+  without painting; flat toolbars delegate their erase to the parent. Fixed.
+- Crash (c0000005) during every populate with two or more volumes: the sort
+  comparator received item indices from ListView_SortItemsEx but cast them to
+  DM_VOLUME pointers. Switched to ListView_SortItems. This also left the
+  status bar stuck on "Refreshing disk information..." because the populate
+  path never completed.
+- Crude toolbar and list glyphs replaced with redrawn 16x16 flat bitmaps.
+- Legend items used fixed pixel offsets that overlap with localized text;
+  now measured from the actual text width.
+- All panes now use the system message font instead of DEFAULT_GUI_FONT,
+  with line spacing derived from font metrics.
+- RAW disks now show "Not Initialized" in the disk card like Windows.
+- Status-bar summary uses singular/plural wording correctly.
 
 Areas That Match Reasonably Well
 --------------------------------
@@ -26,7 +71,9 @@ Areas Still Visibly Different From Windows
 - Toolbar button set and spacing are close but not pixel-identical to Windows MMC.
 - Top-list typography, row height, and exact column proportions still differ.
 - Lower-pane partition caption wrapping and clipping are still approximate.
-- Disk-map proportional sizing is functionally correct but still not a pixel match.
+- Disk-map proportional sizing now follows the reference's minimum-width
+  behavior, but needs a final ReactOS screenshot check across mixed GPT and
+  MBR layouts.
 - Classic theme details such as divider thickness and some border tones still differ.
 - Empty-state messaging and spacing are closer now, but still not a perfect Windows clone.
 
@@ -41,6 +88,6 @@ Recommended Next UI Parity Order
 --------------------------------
 1. Do a live side-by-side screenshot comparison after the next runtime test pass.
 2. Tighten top-list metrics: row height, column widths, and text truncation.
-3. Tighten lower-pane metrics: left disk card width, partition caption padding, and bar height.
+3. Tighten partition caption padding against mixed GPT and MBR screenshots.
 4. Review toolbar button order, separators, and fallback text/icon behavior against Windows.
 5. Re-check classic-theme rendering on actual ReactOS and not only on host-side captures.

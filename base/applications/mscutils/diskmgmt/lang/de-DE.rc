@@ -210,8 +210,8 @@ BEGIN
     IDS_HINT_HELP_ABOUT "Versionsinformationen anzeigen"
     IDS_HINT_ACTION_CHANGE_MOUNT_PATH "Einen Ordner-Bereitstellungspfad fuer das ausgewaehlte Volume zuweisen oder ersetzen"
     IDS_HINT_ACTION_REMOVE_MOUNT_PATH "Den Ordner-Bereitstellungspfad vom ausgewaehlten Volume entfernen"
-    IDS_HINT_ACTION_EXTEND_VOLUME "Das ausgewaehlte RAW-Volume in angrenzenden freien Speicher erweitern"
-    IDS_HINT_ACTION_SHRINK_VOLUME "Das ausgewaehlte RAW-Volume verkleinern und rechts freien Speicher erstellen"
+    IDS_HINT_ACTION_EXTEND_VOLUME "Das ausgewaehlte Basisvolume in angrenzenden freien Speicher erweitern"
+    IDS_HINT_ACTION_SHRINK_VOLUME "Das ausgewaehlte Basisvolume verkleinern und rechts freien Speicher erstellen"
 
     IDS_COL_VOLUME "Volume"
     IDS_COL_LAYOUT "Layout"
