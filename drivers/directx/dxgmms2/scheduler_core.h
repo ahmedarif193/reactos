@@ -33,6 +33,7 @@ typedef struct _DXGMMS2_SCHED_ENGINE
 {
     LIST_ENTRY RunQueue;
     ULONG      PendingPacketCount;
+    ULONG      ReservedPacketCount;
     ULONG      State;
     ULONG      LastSubmittedFenceId;
     ULONG      LastCompletedFenceId;
@@ -72,5 +73,9 @@ ULONG Dxgmms2SchedCoreAbortAll(_Inout_ PDXGMMS2_SCHED_CORE Core, _Out_writes_to_
 BOOLEAN Dxgmms2SchedCoreIsIdle(_In_ PDXGMMS2_SCHED_CORE Core);
 NTSTATUS Dxgmms2SchedCoreQueryEngine(_In_ PDXGMMS2_SCHED_CORE Core, _In_ ULONG EngineOrdinal, _Inout_ DXGMMS2_SCHEDULER_ENGINE_STATUS_V1 *Status);
 NTSTATUS Dxgmms2SchedCoreSetEngineState(_Inout_ PDXGMMS2_SCHED_CORE Core, _In_ ULONG EngineOrdinal, _In_ ULONG NewState);
+NTSTATUS Dxgmms2SchedCoreReserve(_Inout_ PDXGMMS2_SCHED_CORE Core, _In_ ULONG EngineOrdinal);
+VOID Dxgmms2SchedCoreUnreserve(_Inout_ PDXGMMS2_SCHED_CORE Core, _In_ ULONG EngineOrdinal);
+ULONG Dxgmms2SchedCoreResetDispatched(_Inout_ PDXGMMS2_SCHED_CORE Core, _In_ ULONG EngineOrdinal, _Out_writes_to_(Capacity, return) PDXGMMS2_SCHED_PACKET *Packets, _In_ ULONG Capacity);
+BOOLEAN Dxgmms2SchedCoreGetOldestDispatched(_In_ PDXGMMS2_SCHED_CORE Core, _Out_ PULONG EngineOrdinal, _Out_ PULONG FenceId, _Out_ PULONGLONG PacketCookie);
 
 /* EOF */
