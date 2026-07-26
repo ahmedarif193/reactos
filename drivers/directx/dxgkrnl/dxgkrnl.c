@@ -835,6 +835,26 @@ TdrResetFromTimeout(
         Status = _SEH2_GetExceptionCode();
     }
     _SEH2_END;
+
+    /*
+     * A miniport that cannot reset itself from a timeout has left the engine in
+     * an unknown state, and restarting into that is worse than not restarting
+     * at all.  DxgkDdiResetDevice is the escalation the driver supplies for
+     * exactly this: put the device back to a known state before we go on.  It
+     * returns nothing, so the only report is that we tried.
+     */
+    if (!NT_SUCCESS(Status) && DXGK_CB_FULL(Adapter, DxgkDdiResetDevice) != NULL)
+    {
+        _SEH2_TRY
+        {
+            DXGK_CB_FULL(Adapter, DxgkDdiResetDevice)(Adapter->MiniportDeviceContext);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            DXGKRNL_WARN("TDR: DxgkDdiResetDevice raised 0x%08lX\n", _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+    }
     DxgkReleaseMiniportCallback(Adapter);
 
     if (!NT_SUCCESS(Status))
