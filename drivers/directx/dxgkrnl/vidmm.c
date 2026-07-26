@@ -8437,6 +8437,147 @@ DxgkVidMmCleanupAdapterAllocations(
         DxgkpVidMmCleanupAllocations(Adapter, NULL);
 }
 
+/*
+ * A reservation is a process's claim on video memory that VidMm honours before
+ * handing budget to anyone else.  It is per process and per segment group, and
+ * it must survive until the process exits -- a reservation that outlived its
+ * process would permanently shrink everyone else's budget.
+ */
+typedef struct _DXGKVMM_PROCESS_RESERVATION
+{
+    LIST_ENTRY Link;
+    PEPROCESS Process;
+    PDXGKRNL_ADAPTER Adapter;
+    UINT64 Local;
+    UINT64 NonLocal;
+} DXGKVMM_PROCESS_RESERVATION, *PDXGKVMM_PROCESS_RESERVATION;
+
+static LIST_ENTRY DxgkVidMmReservationListHead = { &DxgkVidMmReservationListHead, &DxgkVidMmReservationListHead };
+static FAST_MUTEX DxgkVidMmReservationLock;
+static volatile LONG DxgkVidMmReservationLockReady;
+
+static VOID
+DxgkpVidMmEnsureReservationLock(VOID)
+{
+    if (InterlockedCompareExchange(&DxgkVidMmReservationLockReady, 1, 0) == 0)
+        ExInitializeFastMutex(&DxgkVidMmReservationLock);
+    else
+        while (InterlockedCompareExchange(&DxgkVidMmReservationLockReady, 1, 1) != 1)
+            YieldProcessor();
+}
+
+static UINT64
+DxgkpVidMmGetReservation(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PEPROCESS Process,
+    _In_ D3DKMT_MEMORY_SEGMENT_GROUP Group)
+{
+    PLIST_ENTRY Entry;
+    UINT64 Value = 0;
+
+    DxgkpVidMmEnsureReservationLock();
+    ExAcquireFastMutex(&DxgkVidMmReservationLock);
+    for (Entry = DxgkVidMmReservationListHead.Flink; Entry != &DxgkVidMmReservationListHead; Entry = Entry->Flink)
+    {
+        PDXGKVMM_PROCESS_RESERVATION Record = CONTAINING_RECORD(Entry, DXGKVMM_PROCESS_RESERVATION, Link);
+
+        if (Record->Process != Process || Record->Adapter != Adapter)
+            continue;
+        Value = (Group == D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL) ? Record->Local : Record->NonLocal;
+        break;
+    }
+    ExReleaseFastMutex(&DxgkVidMmReservationLock);
+    return Value;
+}
+
+NTSTATUS
+DxgkVidMmSetProcessReservation(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PEPROCESS Process,
+    _In_ D3DKMT_MEMORY_SEGMENT_GROUP Group,
+    _In_ UINT64 Reservation)
+{
+    PDXGKVMM_PROCESS_RESERVATION Record = NULL;
+    PLIST_ENTRY Entry;
+    UINT64 Budget = 0, Usage = 0, Current = 0, Available = 0;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Adapter == NULL || Process == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (Group != D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL && Group != D3DKMT_MEMORY_SEGMENT_GROUP_NON_LOCAL)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = DxgkVidMmQueryProcessBudget(Adapter, Process, Group, &Budget, &Usage, &Current, &Available);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    /* Reserving more than the group can ever hold is not a request that can be
+     * honoured later; refusing it now is better than silently capping it. */
+    if (Reservation > Available)
+        return STATUS_INVALID_PARAMETER;
+
+    DxgkpVidMmEnsureReservationLock();
+    ExAcquireFastMutex(&DxgkVidMmReservationLock);
+    for (Entry = DxgkVidMmReservationListHead.Flink; Entry != &DxgkVidMmReservationListHead; Entry = Entry->Flink)
+    {
+        PDXGKVMM_PROCESS_RESERVATION Existing = CONTAINING_RECORD(Entry, DXGKVMM_PROCESS_RESERVATION, Link);
+
+        if (Existing->Process == Process && Existing->Adapter == Adapter)
+        {
+            Record = Existing;
+            break;
+        }
+    }
+    if (Record == NULL)
+    {
+        ExReleaseFastMutex(&DxgkVidMmReservationLock);
+        Record = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Record), TAG_VIDMM_ALLOC);
+        if (Record == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+        RtlZeroMemory(Record, sizeof(*Record));
+        Record->Process = Process;
+        Record->Adapter = Adapter;
+        ExAcquireFastMutex(&DxgkVidMmReservationLock);
+        InsertTailList(&DxgkVidMmReservationListHead, &Record->Link);
+    }
+    if (Group == D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL)
+        Record->Local = Reservation;
+    else
+        Record->NonLocal = Reservation;
+    ExReleaseFastMutex(&DxgkVidMmReservationLock);
+    return STATUS_SUCCESS;
+}
+
+VOID
+DxgkVidMmReleaseProcessReservations(
+    _In_ PEPROCESS Process)
+{
+    LIST_ENTRY Removed;
+    PLIST_ENTRY Entry;
+    PLIST_ENTRY Next;
+
+    if (InterlockedCompareExchange(&DxgkVidMmReservationLockReady, 1, 1) != 1)
+        return;
+    InitializeListHead(&Removed);
+    ExAcquireFastMutex(&DxgkVidMmReservationLock);
+    for (Entry = DxgkVidMmReservationListHead.Flink; Entry != &DxgkVidMmReservationListHead; Entry = Next)
+    {
+        PDXGKVMM_PROCESS_RESERVATION Record = CONTAINING_RECORD(Entry, DXGKVMM_PROCESS_RESERVATION, Link);
+
+        Next = Entry->Flink;
+        if (Record->Process != Process)
+            continue;
+        RemoveEntryList(&Record->Link);
+        InsertTailList(&Removed, &Record->Link);
+    }
+    ExReleaseFastMutex(&DxgkVidMmReservationLock);
+    while (!IsListEmpty(&Removed))
+    {
+        Entry = RemoveHeadList(&Removed);
+        ExFreePoolWithTag(CONTAINING_RECORD(Entry, DXGKVMM_PROCESS_RESERVATION, Link), TAG_VIDMM_ALLOC);
+    }
+}
+
 NTSTATUS
 DxgkVidMmQueryProcessBudget(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -8514,8 +8655,10 @@ DxgkVidMmQueryProcessBudget(
     while (SegmentCount != 0)
         ExReleaseFastMutex(&Segments[--SegmentCount].Lock);
 
-    /* Reservation changes are not implemented, so advertising zero is the
-     * only truthful AvailableForReservation value. */
+    /* Everything the group can hold is reservable; what this process has
+     * already claimed is reported separately. */
+    *AvailableForReservation = *Budget;
+    *CurrentReservation = DxgkpVidMmGetReservation(Adapter, Process, MemorySegmentGroup);
     return STATUS_SUCCESS;
 }
 

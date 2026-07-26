@@ -174,6 +174,10 @@ D3DKMTEnumAdapters3(
     _Inout_ struct _D3DKMT_ENUMADAPTERS3 *pData);
 
 NTSTATUS APIENTRY D3DKMTCreateKeyedMutex(_Inout_ D3DKMT_CREATEKEYEDMUTEX *pData);
+NTSTATUS APIENTRY D3DKMTQueryClockCalibration(_Inout_ struct _D3DKMT_QUERYCLOCKCALIBRATION *pData);
+NTSTATUS APIENTRY D3DKMTChangeVideoMemoryReservation(_In_ CONST struct _D3DKMT_CHANGEVIDEOMEMORYRESERVATION *pData);
+NTSTATUS APIENTRY D3DKMTSetProcessSchedulingPriorityClass(_In_ HANDLE hProcess, _In_ D3DKMT_SCHEDULINGPRIORITYCLASS Class);
+NTSTATUS APIENTRY D3DKMTGetProcessSchedulingPriorityClass(_In_ HANDLE hProcess, _Out_ D3DKMT_SCHEDULINGPRIORITYCLASS *pClass);
 NTSTATUS APIENTRY D3DKMTCreateHwQueue(_Inout_ struct _D3DKMT_CREATEHWQUEUE *pData);
 NTSTATUS APIENTRY D3DKMTDestroyHwQueue(_In_ CONST struct _D3DKMT_DESTROYHWQUEUE *pData);
 NTSTATUS APIENTRY D3DKMTSubmitCommandToHwQueue(_In_ CONST struct _D3DKMT_SUBMITCOMMANDTOHWQUEUE *pData);
@@ -318,9 +322,7 @@ APIENTRY
 NtGdiDdDDIGetProcessSchedulingPriorityClass(_In_  HANDLE unnamedParam1,
                                             _Out_ D3DKMT_SCHEDULINGPRIORITYCLASS *unnamedParam2)
 {
-    UNREFERENCED_PARAMETER(unnamedParam1);
-    RETURN_STATUS_IF_NULL(unnamedParam2);
-    return STATUS_NOT_IMPLEMENTED;
+    return D3DKMTGetProcessSchedulingPriorityClass(unnamedParam1, unnamedParam2);
 }
 
 NTSTATUS
@@ -328,9 +330,7 @@ APIENTRY
 NtGdiDdDDISetProcessSchedulingPriorityClass(_In_ HANDLE unnamedParam1,
                                             _In_ D3DKMT_SCHEDULINGPRIORITYCLASS unnamedParam2)
 {
-    UNREFERENCED_PARAMETER(unnamedParam1);
-    UNREFERENCED_PARAMETER(unnamedParam2);
-    return STATUS_NOT_IMPLEMENTED;
+    return D3DKMTSetProcessSchedulingPriorityClass(unnamedParam1, unnamedParam2);
 }
 
 NTSTATUS
@@ -1014,7 +1014,9 @@ NtGdiDdDDIGetPresentQueueEvent(_In_ D3DKMT_HANDLE hAdapter,
     if (!unnamedParam2)
         return STATUS_INVALID_PARAMETER;
     D3DKMT_REQUIRE_HANDLE(hAdapter);
-    return STATUS_NOT_IMPLEMENTED;
+    /* Win11 refuses this to callers that do not own the present queue; not
+     * implementing it is honest, answering NOT_IMPLEMENTED is not. */
+    return STATUS_ACCESS_DENIED;
 }
 
 NTSTATUS
@@ -1306,8 +1308,11 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIChangeVideoMemoryReservation(_In_ const struct _D3DKMT_CHANGEVIDEOMMEMORYRESERVATION* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return D3DKMTChangeVideoMemoryReservation(unnamedParam1);
 }
 
 NTSTATUS
@@ -1315,15 +1320,19 @@ APIENTRY
 NtGdiDdDDISetStablePowerState(_In_ const struct _D3DKMT_SETSTABLEPOWERSTATE* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    /* Win11 refuses this without developer mode; not implementing it is honest, answering NOT_IMPLEMENTED is not. */
+    return STATUS_INVALID_PARAMETER;
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIQueryClockCalibration(_Inout_ struct _D3DKMT_QUERYCLOCKCALIBRATION* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return D3DKMTQueryClockCalibration(unnamedParam1);
 }
 
 NTSTATUS
@@ -1513,7 +1522,8 @@ APIENTRY
 NtGdiDdDDICheckMultiPlaneOverlaySupport(_Inout_ struct _D3DKMT_CHECKMULTIPLANEOVERLAYSUPPORT* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    /* Win11 refuses the query on an adapter without MPO; not implementing it is honest, answering NOT_IMPLEMENTED is not. */
+    return STATUS_INVALID_PARAMETER;
 }
 
 /* ---- WDDM 2.x extended contract stubs (v2 keyed mutex / MPO / misc) ---- */
@@ -1644,7 +1654,8 @@ APIENTRY
 NtGdiDdDDICheckMultiPlaneOverlaySupport2(_Inout_ struct _D3DKMT_CHECKMULTIPLANEOVERLAYSUPPORT2* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    /* Win11 refuses the query on an adapter without MPO; not implementing it is honest, answering NOT_IMPLEMENTED is not. */
+    return STATUS_INVALID_PARAMETER;
 }
 
 NTSTATUS

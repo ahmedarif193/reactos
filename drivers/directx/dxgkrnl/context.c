@@ -1860,6 +1860,8 @@ DxgkProcessCleanup(
     DxgkD3dkmtProcessCleanup(Process);
     DxgkKeyedMutexProcessCleanup(Process);
     DxgkTrimNotificationProcessCleanup(Process);
+    DxgkProcessPriorityCleanup(Process);
+    DxgkVidMmReleaseProcessReservations(Process);
     DxgkPurgeProcessHandles(Process);
     Count = DxgkReferenceStartedAdapters(Snapshot, DXGK_MAX_ADAPTERS);
 
