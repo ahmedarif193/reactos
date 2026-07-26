@@ -125,7 +125,7 @@ static VOID DxgkPresentQueueTestLimits(VOID)
     ok_bool_true(DxgkPresentLimitCoreIsReached(&State), "third reservation reaches default limit");
     ok_bool_false(DxgkPresentLimitCoreTryReserve(&State), "fourth reservation is rejected");
     ok_eq_ulong(DxgkPresentLimitCoreGetReserved(&State), 3);
-    ok_eq_hex(DxgkPresentLimitCoreSet(&State, 2, 3, 16), STATUS_SUCCESS);
+    { NTSTATUS Observed = DxgkPresentLimitCoreSet(&State, 2, 3, 16); ok_eq_hex(Observed, STATUS_SUCCESS); }
     ok_eq_ulong(DxgkPresentLimitCoreGetLimit(&State), 2);
     ok_bool_true(DxgkPresentLimitCoreIsReached(&State), "lowering below current reservations remains reached");
     DxgkPresentLimitCoreRelease(&State);
@@ -133,9 +133,9 @@ static VOID DxgkPresentQueueTestLimits(VOID)
     DxgkPresentLimitCoreRelease(&State);
     ok_bool_false(DxgkPresentLimitCoreIsReached(&State), "release below limit reopens admission");
     ok_bool_true(DxgkPresentLimitCoreTryReserve(&State), "admission resumes below the lowered limit");
-    ok_eq_hex(DxgkPresentLimitCoreSet(&State, 0, 3, 16), STATUS_SUCCESS);
+    { NTSTATUS Observed = DxgkPresentLimitCoreSet(&State, 0, 3, 16); ok_eq_hex(Observed, STATUS_SUCCESS); }
     ok_eq_ulong(DxgkPresentLimitCoreGetLimit(&State), 3);
-    ok_eq_hex(DxgkPresentLimitCoreSet(&State, 17, 3, 16), STATUS_INVALID_PARAMETER);
+    { NTSTATUS Observed = DxgkPresentLimitCoreSet(&State, 17, 3, 16); ok_eq_hex(Observed, STATUS_INVALID_PARAMETER); }
     ok_eq_ulong(DxgkPresentLimitCoreGetLimit(&State), 3);
     DxgkPresentLimitCoreRelease(&State);
     DxgkPresentLimitCoreRelease(&State);

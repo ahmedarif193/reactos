@@ -248,6 +248,12 @@ VOID KmtFreeGuarded(PVOID Pointer);
 #ifdef KMT_KERNEL_MODE
 #define ok_irql(irql)                       ok(KeGetCurrentIrql() == irql, "IRQL is %d, expected %d\n", KeGetCurrentIrql(), irql)
 #endif /* defined KMT_KERNEL_MODE */
+/*
+ * NOTE: value is evaluated TWICE (once compared, once printed).  Never pass an
+ * expression with side effects: a mutating call runs twice, and a wait on a
+ * synchronization event consumes two signals and then blocks.  Assign to a
+ * local first and compare that.
+ */
 #define ok_eq_print(value, expected, spec)  ok((value) == (expected), #value " = " spec ", expected " spec "\n", value, expected)
 #define ok_eq_pointer(value, expected)      ok_eq_print(value, expected, "%p")
 #define ok_eq_int(value, expected)          ok_eq_print(value, expected, "%d")

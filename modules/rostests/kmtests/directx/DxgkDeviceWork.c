@@ -232,9 +232,9 @@ static VOID DxgkDeviceWorkTestOutOfOrderCompletion(VOID)
     DxgkDeviceWorkCoreInitializeItem(&First, &Owner.Ledger);
     DxgkDeviceWorkCoreInitializeItem(&Second, &Owner.Ledger);
     DxgkDeviceWorkCoreInitializeItem(&Third, &Owner.Ledger);
-    ok_eq_hex(DxgkDeviceWorkCoreActivate(&First), STATUS_SUCCESS);
-    ok_eq_hex(DxgkDeviceWorkCoreActivate(&Second), STATUS_SUCCESS);
-    ok_eq_hex(DxgkDeviceWorkCoreActivate(&Third), STATUS_SUCCESS);
+    { NTSTATUS Observed = DxgkDeviceWorkCoreActivate(&First); ok_eq_hex(Observed, STATUS_SUCCESS); }
+    { NTSTATUS Observed = DxgkDeviceWorkCoreActivate(&Second); ok_eq_hex(Observed, STATUS_SUCCESS); }
+    { NTSTATUS Observed = DxgkDeviceWorkCoreActivate(&Third); ok_eq_hex(Observed, STATUS_SUCCESS); }
     ok(First.Sequence == 1 && Second.Sequence == 2 && Third.Sequence == 3, "work order is %I64u/%I64u/%I64u\n", First.Sequence, Second.Sequence, Third.Sequence);
     Status = DxgkDeviceWorkTestStartWait(&Wait, &Owner.Ledger, NULL, &Thread);
     ok_eq_hex(Status, STATUS_SUCCESS);
@@ -243,10 +243,10 @@ static VOID DxgkDeviceWorkTestOutOfOrderCompletion(VOID)
     Status = DxgkDeviceWorkTestWaitForEvent(&Wait.ArmedEvent);
     ok_eq_hex(Status, STATUS_SUCCESS);
     DxgkDeviceWorkCoreComplete(&Second);
-    ok_eq_hex(DxgkDeviceWorkTestWaitForEvent(&Wait.ArmedEvent), STATUS_SUCCESS);
+    { NTSTATUS Observed = DxgkDeviceWorkTestWaitForEvent(&Wait.ArmedEvent); ok_eq_hex(Observed, STATUS_SUCCESS); }
     ok_eq_long(KeReadStateEvent(&Wait.DoneEvent), 0);
     DxgkDeviceWorkCoreComplete(&Third);
-    ok_eq_hex(DxgkDeviceWorkTestWaitForEvent(&Wait.ArmedEvent), STATUS_SUCCESS);
+    { NTSTATUS Observed = DxgkDeviceWorkTestWaitForEvent(&Wait.ArmedEvent); ok_eq_hex(Observed, STATUS_SUCCESS); }
     ok_eq_long(KeReadStateEvent(&Wait.DoneEvent), 0);
     DxgkDeviceWorkCoreComplete(&First);
     Status = DxgkDeviceWorkTestWaitForEvent(&Wait.DoneEvent);
@@ -275,14 +275,14 @@ static VOID DxgkDeviceWorkTestLaterSubmitExclusion(VOID)
     DxgkDeviceWorkTestInitializeOwner(&Owner);
     DxgkDeviceWorkCoreInitializeItem(&Initial, &Owner.Ledger);
     DxgkDeviceWorkCoreInitializeItem(&Later, &Owner.Ledger);
-    ok_eq_hex(DxgkDeviceWorkCoreActivate(&Initial), STATUS_SUCCESS);
+    { NTSTATUS Observed = DxgkDeviceWorkCoreActivate(&Initial); ok_eq_hex(Observed, STATUS_SUCCESS); }
     Status = DxgkDeviceWorkTestStartWait(&Wait, &Owner.Ledger, NULL, &Thread);
     ok_eq_hex(Status, STATUS_SUCCESS);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
     Status = DxgkDeviceWorkTestWaitForEvent(&Wait.ArmedEvent);
     ok_eq_hex(Status, STATUS_SUCCESS);
-    ok_eq_hex(DxgkDeviceWorkCoreActivate(&Later), STATUS_SUCCESS);
+    { NTSTATUS Observed = DxgkDeviceWorkCoreActivate(&Later); ok_eq_hex(Observed, STATUS_SUCCESS); }
     ok(Initial.Sequence == 1 && Later.Sequence == 2, "later-submit sequences are %I64u/%I64u\n", Initial.Sequence, Later.Sequence);
     DxgkDeviceWorkCoreComplete(&Initial);
     Status = DxgkDeviceWorkTestWaitForEvent(&Wait.DoneEvent);
@@ -312,7 +312,7 @@ static VOID DxgkDeviceWorkTestConcurrentWaiters(VOID)
 
     DxgkDeviceWorkTestInitializeOwner(&Owner);
     DxgkDeviceWorkCoreInitializeItem(&Work, &Owner.Ledger);
-    ok_eq_hex(DxgkDeviceWorkCoreActivate(&Work), STATUS_SUCCESS);
+    { NTSTATUS Observed = DxgkDeviceWorkCoreActivate(&Work); ok_eq_hex(Observed, STATUS_SUCCESS); }
     Status = DxgkDeviceWorkTestStartWait(&FirstWait, &Owner.Ledger, NULL, &FirstThread);
     ok_eq_hex(Status, STATUS_SUCCESS);
     if (!NT_SUCCESS(Status))
@@ -321,13 +321,13 @@ static VOID DxgkDeviceWorkTestConcurrentWaiters(VOID)
     ok_eq_hex(Status, STATUS_SUCCESS);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
-    ok_eq_hex(DxgkDeviceWorkTestWaitForEvent(&FirstWait.ArmedEvent), STATUS_SUCCESS);
-    ok_eq_hex(DxgkDeviceWorkTestWaitForEvent(&SecondWait.ArmedEvent), STATUS_SUCCESS);
+    { NTSTATUS Observed = DxgkDeviceWorkTestWaitForEvent(&FirstWait.ArmedEvent); ok_eq_hex(Observed, STATUS_SUCCESS); }
+    { NTSTATUS Observed = DxgkDeviceWorkTestWaitForEvent(&SecondWait.ArmedEvent); ok_eq_hex(Observed, STATUS_SUCCESS); }
     ok_eq_long(KeReadStateEvent(&FirstWait.DoneEvent), 0);
     ok_eq_long(KeReadStateEvent(&SecondWait.DoneEvent), 0);
     DxgkDeviceWorkCoreComplete(&Work);
-    ok_eq_hex(DxgkDeviceWorkTestWaitForEvent(&FirstWait.DoneEvent), STATUS_SUCCESS);
-    ok_eq_hex(DxgkDeviceWorkTestWaitForEvent(&SecondWait.DoneEvent), STATUS_SUCCESS);
+    { NTSTATUS Observed = DxgkDeviceWorkTestWaitForEvent(&FirstWait.DoneEvent); ok_eq_hex(Observed, STATUS_SUCCESS); }
+    { NTSTATUS Observed = DxgkDeviceWorkTestWaitForEvent(&SecondWait.DoneEvent); ok_eq_hex(Observed, STATUS_SUCCESS); }
     ok_eq_hex((NTSTATUS)InterlockedCompareExchange(&FirstWait.Status, 0, 0), STATUS_SUCCESS);
     ok_eq_hex((NTSTATUS)InterlockedCompareExchange(&SecondWait.Status, 0, 0), STATUS_SUCCESS);
 
@@ -351,12 +351,12 @@ static VOID DxgkDeviceWorkTestTerminalWake(_In_ DXGK_DEVICE_WORK_TERMINAL_CASE T
 
     DxgkDeviceWorkTestInitializeOwner(&Owner);
     DxgkDeviceWorkCoreInitializeItem(&Work, &Owner.Ledger);
-    ok_eq_hex(DxgkDeviceWorkCoreActivate(&Work), STATUS_SUCCESS);
+    { NTSTATUS Observed = DxgkDeviceWorkCoreActivate(&Work); ok_eq_hex(Observed, STATUS_SUCCESS); }
     Status = DxgkDeviceWorkTestStartWait(&Wait, &Owner.Ledger, NULL, &Thread);
     ok_eq_hex(Status, STATUS_SUCCESS);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
-    ok_eq_hex(DxgkDeviceWorkTestWaitForEvent(&Wait.ArmedEvent), STATUS_SUCCESS);
+    { NTSTATUS Observed = DxgkDeviceWorkTestWaitForEvent(&Wait.ArmedEvent); ok_eq_hex(Observed, STATUS_SUCCESS); }
     if (TerminalCase == DxgkDeviceWorkTerminalStopped)
         DxgkDeviceWorkCoreTransitionTerminal(&Owner.Ledger, &Owner.ExecutionState, DxgkDeviceWorkTestStopped);
     else if (TerminalCase == DxgkDeviceWorkTerminalReset)
@@ -399,22 +399,22 @@ static VOID DxgkDeviceWorkTestSnapshotAndIsolation(VOID)
     DxgkDeviceWorkCoreInitializeItem(&FirstWork, &FirstOwner.Ledger);
     DxgkDeviceWorkCoreInitializeItem(&LaterWork, &FirstOwner.Ledger);
     DxgkDeviceWorkCoreInitializeItem(&IsolatedWork, &SecondOwner.Ledger);
-    ok_eq_hex(DxgkDeviceWorkCoreActivate(&FirstWork), STATUS_SUCCESS);
-    ok_eq_hex(DxgkDeviceWorkCoreActivate(&IsolatedWork), STATUS_SUCCESS);
+    { NTSTATUS Observed = DxgkDeviceWorkCoreActivate(&FirstWork); ok_eq_hex(Observed, STATUS_SUCCESS); }
+    { NTSTATUS Observed = DxgkDeviceWorkCoreActivate(&IsolatedWork); ok_eq_hex(Observed, STATUS_SUCCESS); }
     Status = DxgkDeviceWorkCoreCaptureSnapshot(&FirstOwner.Ledger, &Snapshot);
     ok_eq_hex(Status, STATUS_SUCCESS);
-    ok_eq_hex(DxgkDeviceWorkCoreWaitForSnapshot(&SecondOwner.Ledger, &Snapshot, NULL), STATUS_INVALID_PARAMETER);
-    ok_eq_hex(DxgkDeviceWorkCoreActivate(&LaterWork), STATUS_SUCCESS);
+    { NTSTATUS Observed = DxgkDeviceWorkCoreWaitForSnapshot(&SecondOwner.Ledger, &Snapshot, NULL); ok_eq_hex(Observed, STATUS_INVALID_PARAMETER); }
+    { NTSTATUS Observed = DxgkDeviceWorkCoreActivate(&LaterWork); ok_eq_hex(Observed, STATUS_SUCCESS); }
     Status = DxgkDeviceWorkTestStartWait(&Wait, &FirstOwner.Ledger, &Snapshot, &Thread);
     ok_eq_hex(Status, STATUS_SUCCESS);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
-    ok_eq_hex(DxgkDeviceWorkTestWaitForEvent(&Wait.ArmedEvent), STATUS_SUCCESS);
+    { NTSTATUS Observed = DxgkDeviceWorkTestWaitForEvent(&Wait.ArmedEvent); ok_eq_hex(Observed, STATUS_SUCCESS); }
     DxgkDeviceWorkCoreComplete(&IsolatedWork);
     DxgkDeviceWorkCoreNotifyStateChange(&SecondOwner.Ledger);
     ok_eq_long(KeReadStateEvent(&Wait.DoneEvent), 0);
     DxgkDeviceWorkCoreComplete(&FirstWork);
-    ok_eq_hex(DxgkDeviceWorkTestWaitForEvent(&Wait.DoneEvent), STATUS_SUCCESS);
+    { NTSTATUS Observed = DxgkDeviceWorkTestWaitForEvent(&Wait.DoneEvent); ok_eq_hex(Observed, STATUS_SUCCESS); }
     ok_eq_hex((NTSTATUS)InterlockedCompareExchange(&Wait.Status, 0, 0), STATUS_SUCCESS);
     ok_eq_long(InterlockedCompareExchange(&LaterWork.State, 0, 0), DxgkDeviceWorkItemActive);
     ok_bool_true(DxgkDeviceWorkCoreIsEmpty(&SecondOwner.Ledger), "second ledger empty");

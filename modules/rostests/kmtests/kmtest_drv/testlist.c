@@ -16,7 +16,9 @@ KMT_TESTFUNC Test_DxgkSyncWait;
 KMT_TESTFUNC Test_DxgkTrackedWork;
 KMT_TESTFUNC Test_DxgkVidMmWorkerDrain;
 KMT_TESTFUNC Test_Dxgmms2ContextStream;
+KMT_TESTFUNC Test_Dxgmms2Scheduler;
 KMT_TESTFUNC Test_Dxgmms2Timeline;
+KMT_TESTFUNC Test_Dxgmms2VidMm;
 KMT_TESTFUNC Test_Example;
 KMT_TESTFUNC Test_ExCallback;
 KMT_TESTFUNC Test_ExDoubleList;
@@ -202,7 +204,9 @@ const KMT_TEST TestList[] =
     { "DxgkTrackedWork",                   Test_DxgkTrackedWork },
     { "DxgkVidMmWorkerDrain",              Test_DxgkVidMmWorkerDrain },
     { "Dxgmms2ContextStream",              Test_Dxgmms2ContextStream },
+    { "Dxgmms2Scheduler",                  Test_Dxgmms2Scheduler },
     { "Dxgmms2Timeline",                   Test_Dxgmms2Timeline },
+    { "Dxgmms2VidMm",                      Test_Dxgmms2VidMm },
     { "ExCallback",                         Test_ExCallback },
     { "ExDoubleList",                       Test_ExDoubleList },
     { "ExFastMutex",                        Test_ExFastMutex },

@@ -49,7 +49,22 @@ KmtUserCallbackThread(
     {
         if (!DeviceIoControl(LocalKmtHandle, IOCTL_KMTEST_USERMODE_AWAIT_REQ, NULL, 0, &RequestPacket, sizeof(RequestPacket), &BytesReturned, NULL))
             error_goto(Error, cleanup);
-        ASSERT(BytesReturned == sizeof(RequestPacket));
+
+        /*
+         * The await is an idle wait, not a promise of work: the driver returns
+         * STATUS_TIMEOUT with an empty buffer when no request arrived before
+         * its window expired.  A test that spends longer than that window in
+         * kernel mode without calling back is perfectly legal, so re-arm
+         * rather than treating the empty reply as a protocol violation.
+         */
+        if (BytesReturned == 0)
+            continue;
+        if (BytesReturned != sizeof(RequestPacket))
+        {
+            DPRINT1("Short user-mode callback request: %lu of %Iu bytes\n", BytesReturned, sizeof(RequestPacket));
+            Error = ERROR_INVALID_DATA;
+            goto cleanup;
+        }
 
         switch (RequestPacket.OperationClass)
         {
