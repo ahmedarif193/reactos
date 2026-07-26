@@ -484,6 +484,30 @@ public:
      */
     ULONGLONG FreeClusterHint = 0;
 
+    /* Parsed $Bitmap record, built once: its layout never changes and its
+     * data is served through the block cache, so re-parsing it for every
+     * cluster allocate/release only burned CPU. */
+    class FileRecord* CachedBitmapFile = NULL;
+    struct _ATTRIBUTE* CachedBitmapData = NULL;
+
+    /* Scratch for volume-bitmap scans and edits; allocating 64 KB of pool
+     * per cluster operation cost more than the operation. All users run
+     * under the caller's metadata serialization. */
+    PUCHAR BitmapWorkBuffer = NULL;
+
+    /* Scratch for index-block reads during lookups; a pool allocation per
+     * name resolution was a fifth of the lookup. Descents never nest. */
+    PUCHAR IndexWorkBuffer = NULL;
+    ULONG IndexWorkBufferSize = 0;
+
+    /* Free list of record-sized buffers. Every parsed record allocated and
+     * freed 1 KB of pool; recycling them needs its own lock because records
+     * are destroyed outside the metadata serialization. */
+    FAST_MUTEX RecordPoolMutex;
+    PUCHAR RecordPoolHead = NULL;
+    ULONG RecordPoolCount = 0;
+    ULONG RecordPoolBufferSize = 0;
+
     ~Volume();
 
     /**

@@ -1975,9 +1975,16 @@ Directory::AddFileToDirectory(
         goto Done;
     }
 
-    IndexBufferData =
-        new(PagedPool, TAG_BTREE)
-            UCHAR[IndexRecordSize];
+    if (!DiskVolume->IndexWorkBuffer ||
+        DiskVolume->IndexWorkBufferSize < IndexRecordSize)
+    {
+        delete[] DiskVolume->IndexWorkBuffer;
+        DiskVolume->IndexWorkBuffer =
+            new(PagedPool, TAG_BTREE) UCHAR[IndexRecordSize];
+        DiskVolume->IndexWorkBufferSize =
+            DiskVolume->IndexWorkBuffer ? IndexRecordSize : 0;
+    }
+    IndexBufferData = DiskVolume->IndexWorkBuffer;
     if (!IndexBufferData)
     {
         Status = STATUS_INSUFFICIENT_RESOURCES;
@@ -2107,7 +2114,7 @@ TouchDirectory:
     }
 
 Done:
-    delete[] IndexBufferData;
+    /* Volume-owned scratch. */
     delete[] NewRootData;
     if (NewEntry)
         NtfsFreePool(NewEntry);

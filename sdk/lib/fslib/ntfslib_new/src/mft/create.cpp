@@ -57,21 +57,6 @@ NtfsValidateComponentName(
     return STATUS_SUCCESS;
 }
 
-extern "C" {
-extern long NtfsIoReadCount;
-extern long NtfsIoWriteCount;
-extern long long NtfsIoReadTicks;
-extern long long NtfsIoWriteTicks;
-}
-
-static long NtfsLibCreates = 0;
-static unsigned long long NtfsLibResolve = 0;
-static unsigned long long NtfsLibCollide = 0;
-static unsigned long long NtfsLibAlloc = 0;
-static unsigned long long NtfsLibInit = 0;
-static unsigned long long NtfsLibWrite = 0;
-static unsigned long long NtfsLibIndex = 0;
-
 NTSTATUS
 MasterFileTable::CreateFile(
     _Inout_ PWCHAR Query,
@@ -88,7 +73,6 @@ MasterFileTable::CreateFile(
     ULONGLONG ExistingReference;
     ULONGLONG FileReference;
     BOOLEAN RecordPublished = FALSE;
-    unsigned long long LT0 = 0, LT1 = 0, LT2 = 0, LT3 = 0, LT4 = 0, LT5 = 0, LT6 = 0;
     NTSTATUS RollbackStatus;
     NTSTATUS Status;
 
@@ -107,14 +91,12 @@ MasterFileTable::CreateFile(
         return STATUS_INVALID_PARAMETER;
     }
 
-    LT0 = NtfsQueryTicks();
     Status = SplitAndResolveParent(
         Query,
         TRUE,
         &Parent,
         &Name,
         &NameLength);
-    LT1 = NtfsQueryTicks();
     if (!NT_SUCCESS(Status))
         goto Done;
 
@@ -128,7 +110,6 @@ MasterFileTable::CreateFile(
         Status = STATUS_OBJECT_NAME_COLLISION;
         goto Done;
     }
-    LT2 = NtfsQueryTicks();
     if (Status != STATUS_NOT_FOUND)
         goto Done;
 
@@ -138,7 +119,6 @@ MasterFileTable::CreateFile(
     Status = AllocateBaseFileRecord(
         IsDirectory,
         &NewFile);
-    LT3 = NtfsQueryTicks();
     if (!NT_SUCCESS(Status))
         goto Done;
 
@@ -149,12 +129,10 @@ MasterFileTable::CreateFile(
         IsDirectory,
         FileAttributes,
         &FileName);
-    LT4 = NtfsQueryTicks();
     if (!NT_SUCCESS(Status))
         goto Rollback;
 
     Status = WriteFileRecordToMFT(NewFile);
-    LT5 = NtfsQueryTicks();
     if (!NT_SUCCESS(Status))
         goto Rollback;
 
@@ -164,26 +142,9 @@ MasterFileTable::CreateFile(
         Parent,
         FileReference,
         FileName);
-    LT6 = NtfsQueryTicks();
     if (!NT_SUCCESS(Status))
         goto Rollback;
     RecordPublished = TRUE;
-
-    NtfsLibResolve += LT1 - LT0;
-    NtfsLibCollide += LT2 - LT1;
-    NtfsLibAlloc += LT3 - LT2;
-    NtfsLibInit += LT4 - LT3;
-    NtfsLibWrite += LT5 - LT4;
-    NtfsLibIndex += LT6 - LT5;
-    if ((++NtfsLibCreates & 0x1F) == 0)
-    {
-        DPRINT1("LIBACCT n=%ld res=%I64u col=%I64u alloc=%I64u init=%I64u wr=%I64u idx=%I64u rd(%ld)=%I64d wrio(%ld)=%I64d\n",
-                NtfsLibCreates, NtfsLibResolve, NtfsLibCollide,
-                NtfsLibAlloc, NtfsLibInit, NtfsLibWrite, NtfsLibIndex,
-                NtfsIoReadCount, NtfsIoReadTicks,
-                NtfsIoWriteCount, NtfsIoWriteTicks);
-    }
-
 
     *File = NewFile;
     NewFile = NULL;

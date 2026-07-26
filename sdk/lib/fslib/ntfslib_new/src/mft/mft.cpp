@@ -422,15 +422,6 @@ MasterFileTable::AllocateBaseFileRecord(
         File);
 }
 
-static long NtfsAllocN = 0;
-static unsigned long long NtfsAllocScan = 0;
-static unsigned long long NtfsAllocExt = 0;
-static unsigned long long NtfsAllocSeq = 0;
-static unsigned long long NtfsAllocInit = 0;
-static unsigned long long NtfsAllocGrow = 0;
-static unsigned long long NtfsAllocWr = 0;
-static unsigned long long NtfsAllocBit = 0;
-
 NTSTATUS
 MasterFileTable::GetFileRecordInDirectory(
     _In_  PFileRecord ParentDirectory,
@@ -538,9 +529,6 @@ MasterFileTable::AllocateFileRecord(
     if (!BitmapBuffer)
         return STATUS_INSUFFICIENT_RESOURCES;
 
-    unsigned long long AT0 = NtfsQueryTicks();
-    unsigned long long AT1 = 0, AT2 = 0, AT3 = 0, AT4 = 0, AT5 = 0, AT6 = 0, AT7 = 0;
-
     /*
      * Start where the last allocation left off. If that finds nothing, the
      * second pass covers the skipped region, so a full bitmap is still
@@ -631,7 +619,6 @@ ScanAgain:
 
     if (Found)
         FreeRecordHint = Candidate + 1;
-    AT1 = NtfsQueryTicks();
 
     if (!Found)
     {
@@ -691,12 +678,25 @@ ScanAgain:
         }
     }
 
-    AT2 = NtfsQueryTicks();
     if (Candidate < RecordCount)
     {
-        PUCHAR RawRecord =
-            new(PagedPool, TAG_MFT)
-                UCHAR[FileRecordSize];
+        PUCHAR RawRecord = NULL;
+
+        /* Record-sized scratch comes from the volume's free list; a pool
+         * round trip per create costs more than the sequence check. */
+        ExAcquireFastMutex(&DiskVolume->RecordPoolMutex);
+        if (DiskVolume->RecordPoolHead &&
+            DiskVolume->RecordPoolBufferSize == FileRecordSize)
+        {
+            RawRecord = DiskVolume->RecordPoolHead;
+            DiskVolume->RecordPoolHead = *(PUCHAR*)RawRecord;
+            DiskVolume->RecordPoolCount--;
+        }
+        ExReleaseFastMutex(&DiskVolume->RecordPoolMutex);
+        if (!RawRecord)
+        {
+            RawRecord = new(PagedPool, TAG_MFT) UCHAR[FileRecordSize];
+        }
         if (!RawRecord)
         {
             Status = STATUS_INSUFFICIENT_RESOURCES;
@@ -725,7 +725,24 @@ ScanAgain:
                     OldHeader->SequenceNumber;
             }
         }
-        delete[] RawRecord;
+        {
+            BOOLEAN Pooled = FALSE;
+
+            ExAcquireFastMutex(&DiskVolume->RecordPoolMutex);
+            if (DiskVolume->RecordPoolCount < 512 &&
+                (DiskVolume->RecordPoolCount == 0 ||
+                 DiskVolume->RecordPoolBufferSize == FileRecordSize))
+            {
+                *(PUCHAR*)RawRecord = DiskVolume->RecordPoolHead;
+                DiskVolume->RecordPoolHead = RawRecord;
+                DiskVolume->RecordPoolBufferSize = FileRecordSize;
+                DiskVolume->RecordPoolCount++;
+                Pooled = TRUE;
+            }
+            ExReleaseFastMutex(&DiskVolume->RecordPoolMutex);
+            if (!Pooled)
+                delete[] RawRecord;
+        }
         if (!NT_SUCCESS(Status) ||
             ReadLength != 0)
         {
@@ -735,7 +752,6 @@ ScanAgain:
         }
     }
 
-    AT3 = NtfsQueryTicks();
     NewFile = new(PagedPool, TAG_MFT)
         FileRecord(DiskVolume, FileRecordSize);
     if (!NewFile)
@@ -755,7 +771,6 @@ ScanAgain:
         goto Done;
     if (IsDirectory)
         NewFile->Header->Flags |= FR_IS_DIRECTORY;
-    AT4 = NtfsQueryTicks();
 
     /*
      * Growing $MFT one record at a time interleaves its clusters with
@@ -798,9 +813,7 @@ ScanAgain:
         }
     }
 
-    AT5 = NtfsQueryTicks();
     Status = WriteFileRecordToMFT(NewFile);
-    AT6 = NtfsQueryTicks();
     if (!NT_SUCCESS(Status))
         goto Done;
     RecordWritten = TRUE;
@@ -832,21 +845,6 @@ ScanAgain:
         (UCHAR)(BitmapByte | BitMask));
     if (!NT_SUCCESS(Status))
         goto Done;
-
-    AT7 = NtfsQueryTicks();
-    NtfsAllocScan += AT1 - AT0;
-    NtfsAllocExt += AT2 - AT1;
-    NtfsAllocSeq += AT3 - AT2;
-    NtfsAllocInit += AT4 - AT3;
-    NtfsAllocGrow += AT5 - AT4;
-    NtfsAllocWr += AT6 - AT5;
-    NtfsAllocBit += AT7 - AT6;
-    if ((++NtfsAllocN & 0x1F) == 0)
-    {
-        DPRINT1("ALLOCACCT n=%ld scan=%I64u ext=%I64u seq=%I64u init=%I64u grow=%I64u wr=%I64u bit=%I64u\n",
-                NtfsAllocN, NtfsAllocScan, NtfsAllocExt, NtfsAllocSeq,
-                NtfsAllocInit, NtfsAllocGrow, NtfsAllocWr, NtfsAllocBit);
-    }
 
     *File = NewFile;
     NewFile = NULL;

@@ -14,12 +14,30 @@
  */
 #define BITMAP_CHUNK_SIZE 0x10000 // 64KB, always a multiple of sizeof(ULONG)
 
+/* One persistent scratch per volume; see Volume::BitmapWorkBuffer. */
+static
+PUCHAR
+AcquireBitmapWorkBuffer(_In_ PVolume DiskVolume)
+{
+    if (!DiskVolume->BitmapWorkBuffer)
+    {
+        DiskVolume->BitmapWorkBuffer =
+            new(PagedPool, TAG_NTFS) UCHAR[BITMAP_CHUNK_SIZE];
+    }
+    return DiskVolume->BitmapWorkBuffer;
+}
+
+
 typedef struct _NTFS_BITMAP_UNDO
 {
     struct _NTFS_BITMAP_UNDO* Next;
     ULONGLONG Offset;
     ULONG Length;
     PUCHAR Data;
+    /* Small undos live inline; short-lived entries live on the caller's
+     * stack. Two pool round trips per bit flip cost more than the flip. */
+    UCHAR InlineData[32];
+    BOOLEAN StackEntry;
 } NTFS_BITMAP_UNDO, *PNTFS_BITMAP_UNDO;
 
 static NTSTATUS
@@ -32,6 +50,14 @@ GetVolumeBitmap(_In_ PVolume DiskVolume,
 
     *BitmapFile = NULL;
     *BitmapData = NULL;
+
+    if (DiskVolume->CachedBitmapFile)
+    {
+        *BitmapFile = DiskVolume->CachedBitmapFile;
+        *BitmapData = (PAttribute)DiskVolume->CachedBitmapData;
+        return STATUS_SUCCESS;
+    }
+
     Status = DiskVolume->MFT->GetFileAttributeFromFileRecordNumber(
         TypeData,
         NULL,
@@ -58,6 +84,9 @@ GetVolumeBitmap(_In_ PVolume DiskVolume,
         *BitmapData = NULL;
         return STATUS_FILE_CORRUPT_ERROR;
     }
+
+    DiskVolume->CachedBitmapFile = *BitmapFile;
+    DiskVolume->CachedBitmapData = (struct _ATTRIBUTE*)*BitmapData;
 
     return STATUS_SUCCESS;
 }
@@ -109,8 +138,10 @@ FreeBitmapUndo(_In_opt_ PNTFS_BITMAP_UNDO Undo)
     {
         PNTFS_BITMAP_UNDO Next = Undo->Next;
 
-        delete[] Undo->Data;
-        delete Undo;
+        if (Undo->Data != Undo->InlineData)
+            delete[] Undo->Data;
+        if (!Undo->StackEntry)
+            delete Undo;
         Undo = Next;
     }
 }
@@ -134,17 +165,20 @@ RestoreBitmapUndo(_In_ PFileRecord BitmapFile,
 }
 
 static NTSTATUS
-SetClusterRunBits(_In_ PFileRecord BitmapFile,
+SetClusterRunBits(_In_ PVolume DiskVolume,
+                  _In_ PFileRecord BitmapFile,
                   _In_ PAttribute BitmapData,
                   _In_ PDataRun Runs,
                   _In_ BOOLEAN Allocate,
                   _In_ ULONGLONG ClusterLimit)
 {
     PNTFS_BITMAP_UNDO Undo = NULL;
+    NTFS_BITMAP_UNDO StackUndo[4];
+    ULONG StackUsed = 0;
     PUCHAR Buffer = NULL;
     NTSTATUS Status = STATUS_SUCCESS;
 
-    Buffer = new(PagedPool, TAG_NTFS) UCHAR[BITMAP_CHUNK_SIZE];
+    Buffer = AcquireBitmapWorkBuffer(DiskVolume);
     if (!Buffer)
         return STATUS_INSUFFICIENT_RESOURCES;
 
@@ -205,17 +239,28 @@ SetClusterRunBits(_In_ PFileRecord BitmapFile,
                 }
             }
 
-            Entry = new(PagedPool, TAG_NTFS) NTFS_BITMAP_UNDO();
+            if (StackUsed < RTL_NUMBER_OF(StackUndo))
+            {
+                Entry = &StackUndo[StackUsed++];
+                RtlZeroMemory(Entry, sizeof(*Entry));
+                Entry->StackEntry = TRUE;
+            }
+            else
+            {
+                Entry = new(PagedPool, TAG_NTFS) NTFS_BITMAP_UNDO();
+            }
             if (!Entry)
             {
                 Status = STATUS_INSUFFICIENT_RESOURCES;
                 goto Rollback;
             }
-            Entry->Data =
-                new(PagedPool, TAG_NTFS) UCHAR[ByteLength];
+            Entry->Data = ByteLength <= sizeof(Entry->InlineData)
+                ? Entry->InlineData
+                : new(PagedPool, TAG_NTFS) UCHAR[ByteLength];
             if (!Entry->Data)
             {
-                delete Entry;
+                if (!Entry->StackEntry)
+                    delete Entry;
                 Status = STATUS_INSUFFICIENT_RESOURCES;
                 goto Rollback;
             }
@@ -257,12 +302,13 @@ Rollback:
 
 Done:
     FreeBitmapUndo(Undo);
-    delete[] Buffer;
+    /* Buffer is the volume's shared scratch. */
     return Status;
 }
 
 static NTSTATUS
 FindContiguousFreeClusters(
+    _In_ PVolume DiskVolume,
     _In_ PFileRecord BitmapFile,
     _In_ PAttribute BitmapData,
     _In_ ULONGLONG StartCluster,
@@ -276,7 +322,7 @@ FindContiguousFreeClusters(
     ULONG StreakLength = 0;
     NTSTATUS Status = STATUS_NOT_FOUND;
 
-    Buffer = new(PagedPool, TAG_NTFS) UCHAR[BITMAP_CHUNK_SIZE];
+    Buffer = AcquireBitmapWorkBuffer(DiskVolume);
     if (!Buffer)
         return STATUS_INSUFFICIENT_RESOURCES;
 
@@ -331,12 +377,13 @@ FindContiguousFreeClusters(
     Status = STATUS_NOT_FOUND;
 
 Done:
-    delete[] Buffer;
+    /* Buffer is the volume's shared scratch. */
     return Status;
 }
 
 static NTSTATUS
 AppendFreeClustersFromRange(
+    _In_ PVolume DiskVolume,
     _In_ PFileRecord BitmapFile,
     _In_ PAttribute BitmapData,
     _In_ ULONGLONG StartCluster,
@@ -351,7 +398,7 @@ AppendFreeClustersFromRange(
     ULONGLONG Cluster = StartCluster;
     NTSTATUS Status = STATUS_SUCCESS;
 
-    Buffer = new(PagedPool, TAG_NTFS) UCHAR[BITMAP_CHUNK_SIZE];
+    Buffer = AcquireBitmapWorkBuffer(DiskVolume);
     if (!Buffer)
         return STATUS_INSUFFICIENT_RESOURCES;
 
@@ -424,7 +471,7 @@ AppendFreeClustersFromRange(
     }
 
 Done:
-    delete[] Buffer;
+    /* Buffer is the volume's shared scratch. */
     return Status;
 }
 
@@ -451,7 +498,7 @@ Volume::GetFreeClusters(_Out_ PLARGE_INTEGER FreeClusters)
     BitmapBuffer = new(NonPagedPool) UCHAR[BITMAP_CHUNK_SIZE];
     if (!BitmapBuffer)
     {
-        delete BitmapFile;
+        /* Owned by the volume's bitmap-record cache. */
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -492,7 +539,7 @@ Volume::GetFreeClusters(_Out_ PLARGE_INTEGER FreeClusters)
 Done:
     // We're done! Time to cleanup.
     delete[] BitmapBuffer;
-    delete BitmapFile;
+    /* Owned by the volume's bitmap-record cache. */
     return Status;
 }
 
@@ -555,7 +602,7 @@ Volume::ReadBitmap(_In_ ULONGLONG StartingLcn,
             : STATUS_BUFFER_OVERFLOW;
 
 Done:
-    delete BitmapFile;
+    /* Owned by the volume's bitmap-record cache. */
     return Status;
 }
 
@@ -600,7 +647,8 @@ Volume::AllocateClusters(_In_ ULONGLONG PreferredLCN,
      * Prefer one extent. Besides reducing I/O, this keeps mapping pairs
      * small enough to remain in the owning MFT record in the common case.
      */
-    Status = FindContiguousFreeClusters(BitmapFile,
+    Status = FindContiguousFreeClusters(this,
+                                        BitmapFile,
                                         BitmapData,
                                         PreferredLCN,
                                         ClustersInVolume,
@@ -608,7 +656,8 @@ Volume::AllocateClusters(_In_ ULONGLONG PreferredLCN,
                                         &ContiguousLCN);
     if (Status == STATUS_NOT_FOUND && PreferredLCN != 0)
     {
-        Status = FindContiguousFreeClusters(BitmapFile,
+        Status = FindContiguousFreeClusters(this,
+                                            BitmapFile,
                                             BitmapData,
                                             0,
                                             PreferredLCN,
@@ -635,7 +684,8 @@ Volume::AllocateClusters(_In_ ULONGLONG PreferredLCN,
          * the caller's mapping-pairs capacity.
          */
         ClustersNeeded = ClusterCount;
-        Status = AppendFreeClustersFromRange(BitmapFile,
+        Status = AppendFreeClustersFromRange(this,
+                                             BitmapFile,
                                              BitmapData,
                                              PreferredLCN,
                                              ClustersInVolume,
@@ -648,7 +698,8 @@ Volume::AllocateClusters(_In_ ULONGLONG PreferredLCN,
             ClustersNeeded != 0 &&
             PreferredLCN != 0)
         {
-            Status = AppendFreeClustersFromRange(BitmapFile,
+            Status = AppendFreeClustersFromRange(this,
+                                                 BitmapFile,
                                                  BitmapData,
                                                  0,
                                                  PreferredLCN,
@@ -668,7 +719,8 @@ Volume::AllocateClusters(_In_ ULONGLONG PreferredLCN,
         goto Done;
     }
 
-    Status = SetClusterRunBits(BitmapFile,
+    Status = SetClusterRunBits(this,
+                               BitmapFile,
                                BitmapData,
                                Head,
                                TRUE,
@@ -687,7 +739,7 @@ Volume::AllocateClusters(_In_ ULONGLONG PreferredLCN,
 
 Done:
     FreeDataRun(Head);
-    delete BitmapFile;
+    /* Owned by the volume's bitmap-record cache. */
     return Status;
 }
 
@@ -707,7 +759,8 @@ Volume::ReleaseClusters(_In_ PDataRun Runs)
     if (!NT_SUCCESS(Status))
         return Status;
 
-    Status = SetClusterRunBits(BitmapFile,
+    Status = SetClusterRunBits(this,
+                               BitmapFile,
                                BitmapData,
                                Runs,
                                FALSE,
@@ -726,6 +779,6 @@ Volume::ReleaseClusters(_In_ PDataRun Runs)
             }
         }
     }
-    delete BitmapFile;
+    /* Owned by the volume's bitmap-record cache. */
     return Status;
 }
