@@ -258,7 +258,7 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
                     -D_WIN32_WINDOWS=${REACTOS_TARGET_NT}
                     -D_SETUPAPI_VER=${REACTOS_TARGET_NT}
                     -DMINGW_HAS_SECURE_API=1
-                    -DD3D_UMD_INTERFACE_VERSION=0x000C # Vista
+                    -DD3D_UMD_INTERFACE_VERSION=0x5002 # WDDM 2.0
                     -DDXGKDDI_INTERFACE_VERSION=0x1052 # Vista
                     -DDLL_EXPORT_VERSION=${DLL_EXPORT_VERSION}
                     -DVER_PRODUCTMAJORVERSION=${_NT_MAJOR}

@@ -35,14 +35,14 @@ C_ASSERT(FIELD_OFFSET(D3DDDIARG_OPENADAPTER, hAdapter) == 0);
 static void Test_TableSlotCounts(void)
 {
     /*
-     * Frozen at D3D_UMD_INTERFACE_VERSION_WDDM2_0.  These are the *WDDM 2.0
-     * slice* of each table -- the post-2.0 tails are guarded out, which is the
-     * whole point of the guards.  If one is added or removed these numbers
-     * move, and every driver built against the old count is misaligned from
-     * that slot onwards.
+     * Frozen at D3D_UMD_INTERFACE_VERSION_WDDM2_0, which the tree now compiles
+     * at.  These were 99 and 22 while it was pinned to Vista -- the guards were
+     * cutting both tables down to their Vista slice, so a driver built against
+     * the WDDM 2.0 contract disagreed with the runtime about where every entry
+     * past the Vista tail lived.  Raising the version is what moved them.
      */
-    ok_eq_ulong((ULONG)UMD_DEVICEFUNC_SLOTS, 99UL);
-    ok_eq_ulong((ULONG)UMD_DEVICECALLBACK_SLOTS, 22UL);
+    ok_eq_ulong((ULONG)UMD_DEVICEFUNC_SLOTS, 140UL);
+    ok_eq_ulong((ULONG)UMD_DEVICECALLBACK_SLOTS, 50UL);
     /* These are the slice the *effective* version selects, traced below. */
     ok_eq_ulong((ULONG)(sizeof(D3DDDI_ADAPTERFUNCS) / sizeof(void *)), 3UL);
     ok_eq_ulong((ULONG)(sizeof(D3DDDI_ADAPTERCALLBACKS) / sizeof(void *)), 2UL);
