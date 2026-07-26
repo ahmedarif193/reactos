@@ -107,13 +107,15 @@ DxgkContextSyncCoreValidate(
     _In_ ULONG ObjectCount,
     _In_ ULONG SignalFlags,
     _In_ UINT64 PayloadValue,
+    _In_reads_opt_(ObjectCount) CONST UINT64 *PayloadValueArray,
     _In_ BOOLEAN EventReferenced);
 
 NTSTATUS
 DxgkContextSyncCoreExecuteWait(
     _In_reads_(ObjectCount) PDXGK_CONTEXT_SYNC_CORE_OBJECT Objects,
     _In_ ULONG ObjectCount,
-    _In_ UINT64 FenceValue);
+    _In_ UINT64 FenceValue,
+    _In_reads_opt_(ObjectCount) CONST UINT64 *FenceValueArray);
 
 NTSTATUS
 DxgkContextSyncCoreExecuteSignal(
@@ -121,4 +123,5 @@ DxgkContextSyncCoreExecuteSignal(
     _In_ ULONG ObjectCount,
     _In_ ULONG SignalFlags,
     _In_ UINT64 FenceValue,
+    _In_reads_opt_(ObjectCount) CONST UINT64 *FenceValueArray,
     _In_opt_ PKEVENT EnqueueEvent);

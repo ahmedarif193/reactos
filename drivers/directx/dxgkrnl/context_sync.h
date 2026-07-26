@@ -19,6 +19,11 @@ typedef struct _DXGKRNL_CONTEXT_SYNC_CAPTURE
     ULONG ObjectCount;
     ULONG SignalFlags;
     UINT64 PayloadValue;
+    /* Captured by value: the caller's array lives in user memory and must not
+     * be re-read once the batch is queued, or a caller that rewrites it after
+     * the call changes what the scheduler will do. */
+    BOOLEAN PerObjectValues;
+    UINT64 PayloadValues[D3DDDI_MAX_OBJECT_SIGNALED];
     PKEVENT EnqueueEvent;
     PDXGKRNL_SYNC_OBJECT Objects[D3DDDI_MAX_OBJECT_SIGNALED];
     DXGK_CONTEXT_SYNC_CORE_OBJECT CoreObjects[D3DDDI_MAX_OBJECT_SIGNALED];
@@ -37,6 +42,7 @@ DxgkContextSyncCapture(
     _In_ ULONG ObjectCount,
     _In_ ULONG SignalFlags,
     _In_ UINT64 PayloadValue,
+    _In_reads_opt_(ObjectCount) CONST UINT64 *PayloadValueArray,
     _Out_ PDXGKRNL_CONTEXT_SYNC_CAPTURE Capture);
 
 NTSTATUS

@@ -850,3 +850,5 @@
     SVC_(GdiDdDDIPresentMultiPlaneOverlay3, 1)
     SVC_(GdiDdDDIGetPresentQueueEvent, 2)
     SVC_(GdiDdDDIShareObjects, 5)
+    SVC_(GdiDdDDIWaitForSynchronizationObjectFromGpu, 1)
+    SVC_(GdiDdDDISignalSynchronizationObjectFromGpu2, 1)

@@ -150,6 +150,9 @@ NTSTATUS APIENTRY D3DKMTFreeGpuVirtualAddress(CONST D3DKMT_FREEGPUVIRTUALADDRESS
 NTSTATUS APIENTRY D3DKMTUpdateGpuVirtualAddress(CONST D3DKMT_UPDATEGPUVIRTUALADDRESS *pData);
 NTSTATUS APIENTRY D3DKMTWaitForSynchronizationObjectFromCpu(CONST D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU *pData);
 NTSTATUS APIENTRY D3DKMTSignalSynchronizationObjectFromCpu(CONST D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU *pData);
+NTSTATUS APIENTRY D3DKMTWaitForSynchronizationObjectFromGpu(CONST D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU *pData);
+NTSTATUS APIENTRY D3DKMTSignalSynchronizationObjectFromGpu(CONST D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU *pData);
+NTSTATUS APIENTRY D3DKMTSignalSynchronizationObjectFromGpu2(CONST D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2 *pData);
 NTSTATUS APIENTRY D3DKMTCreateContextVirtual(D3DKMT_CREATECONTEXTVIRTUAL *pData);
 NTSTATUS APIENTRY D3DKMTSubmitCommand(CONST D3DKMT_SUBMITCOMMAND *pData);
 
@@ -606,6 +609,21 @@ DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeSignalSynchronizationObjectFromCpu,
                             _In_,
                             CONST D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU)
 
+DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeWaitForSynchronizationObjectFromGpu,
+                            D3DKMTWaitForSynchronizationObjectFromGpu,
+                            _In_,
+                            CONST D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU)
+
+DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeSignalSynchronizationObjectFromGpu,
+                            D3DKMTSignalSynchronizationObjectFromGpu,
+                            _In_,
+                            CONST D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU)
+
+DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeSignalSynchronizationObjectFromGpu2,
+                            D3DKMTSignalSynchronizationObjectFromGpu2,
+                            _In_,
+                            CONST D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2)
+
 DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeCreateContextVirtual, D3DKMTCreateContextVirtual, _Inout_, D3DKMT_CREATECONTEXTVIRTUAL)
 
 DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeSubmitCommand, D3DKMTSubmitCommand, _In_, CONST D3DKMT_SUBMITCOMMAND)
@@ -738,6 +756,9 @@ WddmBridgeInitCallbacks(
     Interface->RxgkIntPfnUpdateGpuVirtualAddress = DxgBridgeUpdateGpuVirtualAddress;
     Interface->RxgkIntPfnWaitForSynchronizationObjectFromCpu = DxgBridgeWaitForSynchronizationObjectFromCpu;
     Interface->RxgkIntPfnSignalSynchronizationObjectFromCpu = DxgBridgeSignalSynchronizationObjectFromCpu;
+    Interface->RxgkIntPfnWaitForSynchronizationObjectFromGpu = DxgBridgeWaitForSynchronizationObjectFromGpu;
+    Interface->RxgkIntPfnSignalSynchronizationObjectFromGpu = DxgBridgeSignalSynchronizationObjectFromGpu;
+    Interface->RxgkIntPfnSignalSynchronizationObjectFromGpu2 = DxgBridgeSignalSynchronizationObjectFromGpu2;
 
     if (WddmBridgeGetInterfaceVersion() >= DXGKRNL_INTERFACE_VERSION_2)
     {

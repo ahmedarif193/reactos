@@ -1645,8 +1645,21 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDISignalSynchronizationObjectFromGpu(_In_ const struct _D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    D3DKMT_CALL_CALLBACK(RxgkIntPfnSignalSynchronizationObjectFromGpu, unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDIWaitForSynchronizationObjectFromGpu(_In_ const struct _D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU* unnamedParam1)
+{
+    D3DKMT_CALL_CALLBACK(RxgkIntPfnWaitForSynchronizationObjectFromGpu, unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDISignalSynchronizationObjectFromGpu2(_In_ const struct _D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2* unnamedParam1)
+{
+    D3DKMT_CALL_CALLBACK(RxgkIntPfnSignalSynchronizationObjectFromGpu2, unnamedParam1);
 }
 
 NTSTATUS

@@ -126,6 +126,21 @@ DxgkContextSyncCoreRelease(
         DxgkContextSyncCoreReleaseClaimed(Retention);
 }
 
+/*
+ * A monitored fence carries its own value per object: one call signals fence A
+ * to 7 and fence B to 12.  The single-value form is the legacy contract, where
+ * every object in the batch shares one value, so the array simply overrides it
+ * per index when present.
+ */
+static UINT64
+DxgkpContextSyncValueAt(
+    _In_ UINT64 FenceValue,
+    _In_reads_opt_(Index + 1) CONST UINT64 *FenceValueArray,
+    _In_ ULONG Index)
+{
+    return FenceValueArray != NULL ? FenceValueArray[Index] : FenceValue;
+}
+
 NTSTATUS
 DxgkContextSyncCoreValidate(
     _In_ DXGK_CONTEXT_SYNC_OPERATION Operation,
@@ -133,6 +148,7 @@ DxgkContextSyncCoreValidate(
     _In_ ULONG ObjectCount,
     _In_ ULONG SignalFlags,
     _In_ UINT64 PayloadValue,
+    _In_reads_opt_(ObjectCount) CONST UINT64 *PayloadValueArray,
     _In_ BOOLEAN EventReferenced)
 {
     BOOLEAN FencePresent = FALSE;
@@ -191,12 +207,22 @@ DxgkContextSyncCoreValidate(
                     return STATUS_INVALID_PARAMETER;
                 break;
             case DXGK_CONTEXT_SYNC_TYPE_MONITORED_FENCE:
-                return STATUS_NOT_SUPPORTED;
+                /*
+                 * A monitored fence carries its own target value, so unlike a
+                 * legacy fence it can appear alongside others in one batch --
+                 * that is the whole point of the GPU-side entry points.  It
+                 * does require the per-object array: with a single shared value
+                 * there would be nothing to distinguish the objects.
+                 */
+                if (!IsSecondGeneration || PayloadValueArray == NULL)
+                    return STATUS_INVALID_PARAMETER;
+                FencePresent = TRUE;
+                break;
             default:
                 return STATUS_NOT_SUPPORTED;
         }
     }
-    if (!FencePresent && PayloadValue != 0)
+    if (!FencePresent && PayloadValueArray == NULL && PayloadValue != 0)
         return STATUS_INVALID_PARAMETER;
     if ((SignalFlags & DXGK_CONTEXT_SYNC_ALLOW_FENCE_REWIND) != 0 && !FencePresent)
         return STATUS_INVALID_PARAMETER;
@@ -207,7 +233,8 @@ NTSTATUS
 DxgkContextSyncCoreExecuteWait(
     _In_reads_(ObjectCount) PDXGK_CONTEXT_SYNC_CORE_OBJECT Objects,
     _In_ ULONG ObjectCount,
-    _In_ UINT64 FenceValue)
+    _In_ UINT64 FenceValue,
+    _In_reads_opt_(ObjectCount) CONST UINT64 *FenceValueArray)
 {
     ULONG Index;
 
@@ -225,7 +252,9 @@ DxgkContextSyncCoreExecuteWait(
             return STATUS_PENDING;
         if (Object->Type == D3DDDI_SEMAPHORE && (UINT64)InterlockedCompareExchange64(Object->SemaphoreCount, 0, 0) < Demand)
             return STATUS_PENDING;
-        if (Object->Type == D3DDDI_FENCE && (UINT64)InterlockedCompareExchange64(Object->FenceValue, 0, 0) < FenceValue)
+        if ((Object->Type == D3DDDI_FENCE || Object->Type == DXGK_CONTEXT_SYNC_TYPE_MONITORED_FENCE) &&
+            (UINT64)InterlockedCompareExchange64(Object->FenceValue, 0, 0) <
+                DxgkpContextSyncValueAt(FenceValue, FenceValueArray, Index))
             return STATUS_PENDING;
     }
     for (Index = 0; Index < ObjectCount; ++Index)
@@ -262,6 +291,7 @@ DxgkContextSyncCoreExecuteSignal(
     _In_ ULONG ObjectCount,
     _In_ ULONG SignalFlags,
     _In_ UINT64 FenceValue,
+    _In_reads_opt_(ObjectCount) CONST UINT64 *FenceValueArray,
     _In_opt_ PKEVENT EnqueueEvent)
 {
     ULONG Index;
@@ -313,9 +343,10 @@ DxgkContextSyncCoreExecuteSignal(
         else if (Object->Type == D3DDDI_FENCE)
         {
             UINT64 CurrentValue = (UINT64)InterlockedCompareExchange64(Object->FenceValue, 0, 0);
+            UINT64 TargetValue = DxgkpContextSyncValueAt(FenceValue, FenceValueArray, Index);
 
-            if ((SignalFlags & DXGK_CONTEXT_SYNC_ALLOW_FENCE_REWIND) != 0 || FenceValue > CurrentValue)
-                InterlockedExchange64(Object->FenceValue, (LONG64)FenceValue);
+            if ((SignalFlags & DXGK_CONTEXT_SYNC_ALLOW_FENCE_REWIND) != 0 || TargetValue > CurrentValue)
+                InterlockedExchange64(Object->FenceValue, (LONG64)TargetValue);
             KeSetEvent(Object->StateEvent, IO_NO_INCREMENT, FALSE);
         }
         else if (Object->Type == D3DDDI_CPU_NOTIFICATION)

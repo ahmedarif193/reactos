@@ -73,6 +73,7 @@ DxgkContextSyncTestValidation(VOID)
     DXGK_CONTEXT_SYNC_TEST_OBJECT MonitoredFence;
     DXGK_CONTEXT_SYNC_CORE_OBJECT Batch[2];
     NTSTATUS Status;
+    UINT64 MonitoredValues[1];
 
     DxgkContextSyncTestInitializeObject(&Mutex, D3DDDI_SYNCHRONIZATION_MUTEX, 1, 0);
     DxgkContextSyncTestInitializeObject(&Semaphore, D3DDDI_SEMAPHORE, 1, 3);
@@ -81,42 +82,59 @@ DxgkContextSyncTestValidation(VOID)
     DxgkContextSyncTestInitializeObject(&MonitoredFence, DXGK_CONTEXT_SYNC_TYPE_MONITORED_FENCE, 7, 0);
     Batch[0] = Mutex.Core;
     Batch[1] = Semaphore.Core;
-    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationLegacyWait, Batch, RTL_NUMBER_OF(Batch), 0, 0, FALSE);
+    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationLegacyWait, Batch, RTL_NUMBER_OF(Batch), 0, 0, NULL, FALSE);
     ok_eq_hex(Status, STATUS_SUCCESS);
-    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationWait2, &Fence.Core, 1, 0, 7, FALSE);
+    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationWait2, &Fence.Core, 1, 0, 7, NULL, FALSE);
     ok_eq_hex(Status, STATUS_SUCCESS);
     Batch[0] = Fence.Core;
     Batch[1] = Fence.Core;
-    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationWait2, Batch, RTL_NUMBER_OF(Batch), 0, 7, FALSE);
+    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationWait2, Batch, RTL_NUMBER_OF(Batch), 0, 7, NULL, FALSE);
     ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
-    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationLegacyWait, &Fence.Core, 1, 0, 0, FALSE);
+    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationLegacyWait, &Fence.Core, 1, 0, 0, NULL, FALSE);
     ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
-    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationWait2, &CpuNotification.Core, 1, 0, 0, FALSE);
+    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationWait2, &CpuNotification.Core, 1, 0, 0, NULL, FALSE);
     ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
-    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationWait2, &MonitoredFence.Core, 1, 0, 7, FALSE);
-    ok_eq_hex(Status, STATUS_NOT_SUPPORTED);
-    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationSignal2, NULL, 0, DXGK_CONTEXT_SYNC_ENQUEUE_CPU_EVENT, 0, TRUE);
+    /*
+     * A monitored fence used to be refused outright here.  It is now accepted,
+     * because the GPU-side entry points exist to batch them -- but only with a
+     * per-object value array: every monitored fence in a batch has its own
+     * target, so a single shared value has nothing to say about which object it
+     * belongs to.  Without the array the request is malformed, not unsupported.
+     */
+    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationWait2, &MonitoredFence.Core, 1, 0, 7, NULL, FALSE);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    MonitoredValues[0] = 7;
+    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationWait2, &MonitoredFence.Core, 1, 0, 0, MonitoredValues, FALSE);
     ok_eq_hex(Status, STATUS_SUCCESS);
-    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationSignal2, NULL, 0, DXGK_CONTEXT_SYNC_ENQUEUE_CPU_EVENT, 0, FALSE);
+    /* The legacy operation has no per-object values at all, so a monitored
+     * fence remains out of reach from it however it is called. */
+    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationLegacyWait, &MonitoredFence.Core, 1, 0, 0, MonitoredValues, FALSE);
     ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
-    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationSignal2, &Mutex.Core, 1, DXGK_CONTEXT_SYNC_ENQUEUE_CPU_EVENT, 0, TRUE);
-    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
-    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationSignal2, &Fence.Core, 1, DXGK_CONTEXT_SYNC_ALLOW_FENCE_REWIND, 5, FALSE);
+    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationSignal2, NULL, 0, DXGK_CONTEXT_SYNC_ENQUEUE_CPU_EVENT, 0, NULL, TRUE);
     ok_eq_hex(Status, STATUS_SUCCESS);
-    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationSignal2, &Mutex.Core, 1, DXGK_CONTEXT_SYNC_ALLOW_FENCE_REWIND, 0, FALSE);
+    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationSignal2, NULL, 0, DXGK_CONTEXT_SYNC_ENQUEUE_CPU_EVENT, 0, NULL, FALSE);
     ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
-    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationSignal2, &Mutex.Core, 1, 0x00000008UL, 0, FALSE);
+    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationSignal2, &Mutex.Core, 1, DXGK_CONTEXT_SYNC_ENQUEUE_CPU_EVENT, 0, NULL, TRUE);
     ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
-    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationSignal2, &Mutex.Core, 1, 0x80000000UL, 0, FALSE);
+    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationSignal2, &Fence.Core, 1, DXGK_CONTEXT_SYNC_ALLOW_FENCE_REWIND, 5, NULL, FALSE);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationSignal2, &Mutex.Core, 1, DXGK_CONTEXT_SYNC_ALLOW_FENCE_REWIND, 0, NULL, FALSE);
     ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
-    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationLegacySignal, &Mutex.Core, 1, DXGK_CONTEXT_SYNC_ENQUEUE_CPU_EVENT, 0, FALSE);
+    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationSignal2, &Mutex.Core, 1, 0x00000008UL, 0, NULL, FALSE);
     ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
-    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationSignal2, &Semaphore.Core, 1, 0, 1, FALSE);
+    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationSignal2, &Mutex.Core, 1, 0x80000000UL, 0, NULL, FALSE);
     ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
-    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationSignal2, &MonitoredFence.Core, 1, 0, 0, FALSE);
-    ok_eq_hex(Status, STATUS_NOT_SUPPORTED);
+    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationLegacySignal, &Mutex.Core, 1, DXGK_CONTEXT_SYNC_ENQUEUE_CPU_EVENT, 0, NULL, FALSE);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationSignal2, &Semaphore.Core, 1, 0, 1, NULL, FALSE);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationSignal2, &MonitoredFence.Core, 1, 0, 0, NULL, FALSE);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    MonitoredValues[0] = 12;
+    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationSignal2, &MonitoredFence.Core, 1, 0, 0, MonitoredValues, FALSE);
+    ok_eq_hex(Status, STATUS_SUCCESS);
     CpuNotification.Core.ObjectFlags = DXGK_CONTEXT_SYNC_OBJECT_SIGNAL_BY_KMD;
-    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationSignal2, &CpuNotification.Core, 1, 0, 0, FALSE);
+    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationSignal2, &CpuNotification.Core, 1, 0, 0, NULL, FALSE);
     ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
 }
 
@@ -132,7 +150,7 @@ DxgkContextSyncTestWaitAtomicity(VOID)
     DxgkContextSyncTestInitializeObject(&Semaphore, D3DDDI_SEMAPHORE, 1, 3);
     Batch[0] = Mutex.Core;
     Batch[1] = Semaphore.Core;
-    Status = DxgkContextSyncCoreExecuteWait(Batch, RTL_NUMBER_OF(Batch), 0);
+    Status = DxgkContextSyncCoreExecuteWait(Batch, RTL_NUMBER_OF(Batch), 0, NULL);
     ok_eq_hex(Status, STATUS_SUCCESS);
     ok_eq_long(Mutex.MutexOwned, 1);
     ok(Mutex.FenceValue == 0, "mutex state was not consumed\n");
@@ -144,18 +162,18 @@ DxgkContextSyncTestWaitAtomicity(VOID)
     Mutex.FenceValue = 0;
     Semaphore.SemaphoreCount = 1;
     Semaphore.FenceValue = 1;
-    Status = DxgkContextSyncCoreExecuteWait(Batch, RTL_NUMBER_OF(Batch), 0);
+    Status = DxgkContextSyncCoreExecuteWait(Batch, RTL_NUMBER_OF(Batch), 0, NULL);
     ok_eq_hex(Status, STATUS_PENDING);
     ok(Semaphore.SemaphoreCount == 1 && Semaphore.FenceValue == 1, "pending batch partially consumed its semaphore\n");
 
     Batch[0] = Semaphore.Core;
     Batch[1] = Semaphore.Core;
-    Status = DxgkContextSyncCoreExecuteWait(Batch, RTL_NUMBER_OF(Batch), 0);
+    Status = DxgkContextSyncCoreExecuteWait(Batch, RTL_NUMBER_OF(Batch), 0, NULL);
     ok_eq_hex(Status, STATUS_PENDING);
     ok(Semaphore.SemaphoreCount == 1, "duplicate pending wait consumed a token\n");
     Semaphore.SemaphoreCount = 2;
     Semaphore.FenceValue = 2;
-    Status = DxgkContextSyncCoreExecuteWait(Batch, RTL_NUMBER_OF(Batch), 0);
+    Status = DxgkContextSyncCoreExecuteWait(Batch, RTL_NUMBER_OF(Batch), 0, NULL);
     ok_eq_hex(Status, STATUS_SUCCESS);
     ok(Semaphore.SemaphoreCount == 0, "duplicate semaphore wait did not consume both tokens\n");
 }
@@ -175,36 +193,36 @@ DxgkContextSyncTestSignalAtomicity(VOID)
     DxgkContextSyncTestInitializeObject(&Semaphore, D3DDDI_SEMAPHORE, 2, 2);
     Batch[0] = Mutex.Core;
     Batch[1] = Semaphore.Core;
-    Status = DxgkContextSyncCoreExecuteSignal(Batch, RTL_NUMBER_OF(Batch), 0, 0, NULL);
+    Status = DxgkContextSyncCoreExecuteSignal(Batch, RTL_NUMBER_OF(Batch), 0, 0, NULL, NULL);
     ok_eq_hex(Status, STATUS_SEMAPHORE_LIMIT_EXCEEDED);
     ok_eq_long(Mutex.MutexOwned, 1);
     ok(Mutex.FenceValue == 0, "overflowing signal batch partially released mutex\n");
     Semaphore.SemaphoreCount = 1;
     Semaphore.FenceValue = 1;
-    Status = DxgkContextSyncCoreExecuteSignal(Batch, RTL_NUMBER_OF(Batch), 0, 0, NULL);
+    Status = DxgkContextSyncCoreExecuteSignal(Batch, RTL_NUMBER_OF(Batch), 0, 0, NULL, NULL);
     ok_eq_hex(Status, STATUS_SUCCESS);
     ok_eq_long(Mutex.MutexOwned, 0);
     ok(Mutex.FenceValue == 1 && Semaphore.SemaphoreCount == 2, "successful signal did not publish all state\n");
 
     DxgkContextSyncTestInitializeObject(&Fence, D3DDDI_FENCE, 10, 0);
-    Status = DxgkContextSyncCoreExecuteSignal(&Fence.Core, 1, 0, 5, NULL);
+    Status = DxgkContextSyncCoreExecuteSignal(&Fence.Core, 1, 0, 5, NULL, NULL);
     ok_eq_hex(Status, STATUS_SUCCESS);
     ok(Fence.FenceValue == 10, "fence rewound without AllowFenceRewind\n");
-    Status = DxgkContextSyncCoreExecuteSignal(&Fence.Core, 1, DXGK_CONTEXT_SYNC_ALLOW_FENCE_REWIND, 5, NULL);
+    Status = DxgkContextSyncCoreExecuteSignal(&Fence.Core, 1, DXGK_CONTEXT_SYNC_ALLOW_FENCE_REWIND, 5, NULL, NULL);
     ok_eq_hex(Status, STATUS_SUCCESS);
     ok(Fence.FenceValue == 5, "AllowFenceRewind did not publish lower value\n");
-    Status = DxgkContextSyncCoreExecuteSignal(&Fence.Core, 1, 0, 15, NULL);
+    Status = DxgkContextSyncCoreExecuteSignal(&Fence.Core, 1, 0, 15, NULL, NULL);
     ok_eq_hex(Status, STATUS_SUCCESS);
     ok(Fence.FenceValue == 15, "monotonic fence signal did not advance\n");
 
     DxgkContextSyncTestInitializeObject(&CpuNotification, D3DDDI_CPU_NOTIFICATION, 0, 0);
     ok_eq_long(KeReadStateEvent(&CpuNotification.NotificationEvent), 0);
-    Status = DxgkContextSyncCoreExecuteSignal(&CpuNotification.Core, 1, 0, 0, NULL);
+    Status = DxgkContextSyncCoreExecuteSignal(&CpuNotification.Core, 1, 0, 0, NULL, NULL);
     ok_eq_hex(Status, STATUS_SUCCESS);
     ok_eq_long(KeReadStateEvent(&CpuNotification.NotificationEvent), 1);
     KeInitializeEvent(&EnqueueEvent, NotificationEvent, FALSE);
     ok_eq_long(KeReadStateEvent(&EnqueueEvent), 0);
-    Status = DxgkContextSyncCoreExecuteSignal(NULL, 0, DXGK_CONTEXT_SYNC_ENQUEUE_CPU_EVENT, 0, &EnqueueEvent);
+    Status = DxgkContextSyncCoreExecuteSignal(NULL, 0, DXGK_CONTEXT_SYNC_ENQUEUE_CPU_EVENT, 0, NULL, &EnqueueEvent);
     ok_eq_hex(Status, STATUS_SUCCESS);
     ok_eq_long(KeReadStateEvent(&EnqueueEvent), 1);
 }
@@ -220,7 +238,7 @@ DxgkContextSyncTestDestroyAndRelease(VOID)
 
     DxgkContextSyncTestInitializeObject(&Semaphore, D3DDDI_SEMAPHORE, 1, 2);
     Semaphore.Destroying = 1;
-    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationLegacyWait, &Semaphore.Core, 1, 0, 0, FALSE);
+    Status = DxgkContextSyncCoreValidate(DxgkContextSyncOperationLegacyWait, &Semaphore.Core, 1, 0, 0, NULL, FALSE);
     ok_eq_hex(Status, STATUS_DELETE_PENDING);
     ok(Semaphore.SemaphoreCount == 1, "destroying wait object was consumed\n");
     RtlZeroMemory(&ReleaseTest, sizeof(ReleaseTest));
