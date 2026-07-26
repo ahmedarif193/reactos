@@ -57,7 +57,40 @@ NtfsFsdClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
              * in create. They are only torn down when it is really freed. */
 
             if (FileCB->FileDir)
-                NtfsDirectoryDestroy(FileCB->FileDir);
+            {
+                PVolumeContextBlock Vol =
+                    (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
+                PNtfsDirectory Doomed = FileCB->FileDir;
+
+                ExAcquireFastMutex(&Vol->DirCacheMutex);
+                if (FileCB->FileDirBorrowed)
+                {
+                    Vol->CachedDirBusy = FALSE;
+                    Doomed = NULL;
+                }
+                else if ((!Vol->CachedDir ||
+                          (!Vol->CachedDirBusy &&
+                           Vol->CachedDirGeneration != Vol->DirGeneration)) &&
+                         FileCB->FileName.Length != 0 &&
+                         FileCB->FileName.Length <= sizeof(Vol->CachedDirPath))
+                {
+                    PNtfsDirectory Evicted = Vol->CachedDir;
+
+                    Vol->CachedDir = FileCB->FileDir;
+                    Vol->CachedDirBusy = FALSE;
+                    Vol->CachedDirGeneration = Vol->DirGeneration;
+                    Vol->CachedDirPathLength =
+                        (USHORT)(FileCB->FileName.Length / sizeof(WCHAR));
+                    RtlCopyMemory(Vol->CachedDirPath,
+                                  FileCB->FileName.Buffer,
+                                  FileCB->FileName.Length);
+                    Doomed = Evicted;
+                }
+                ExReleaseFastMutex(&Vol->DirCacheMutex);
+
+                if (Doomed)
+                    NtfsDirectoryDestroy(Doomed);
+            }
 
             /* A cached record outlives this handle and is freed by the cache. */
             if (FileCB->CachedRecord)

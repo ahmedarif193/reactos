@@ -1,6 +1,11 @@
 /* Set in read.c; gates cache-manager and section participation. */
 extern const BOOLEAN NtfsCachedReadsEnabled;
 
+struct _FCB;
+
+BOOLEAN
+NtfsShouldStampLastAccess(_In_ struct _FCB* FileCB);
+
 // io/ntfsinit.cpp
 
 _Function_class_(DRIVER_UNLOAD)

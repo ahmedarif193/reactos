@@ -225,7 +225,21 @@ NtfsCompleteFailedCreate(
     if (FileCB)
     {
         if (FileCB->FileDir)
-            NtfsDirectoryDestroy(FileCB->FileDir);
+        {
+            if (FileCB->FileDirBorrowed)
+            {
+                PVolumeContextBlock Vol =
+                    (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
+
+                ExAcquireFastMutex(&Vol->DirCacheMutex);
+                Vol->CachedDirBusy = FALSE;
+                ExReleaseFastMutex(&Vol->DirCacheMutex);
+            }
+            else
+            {
+                NtfsDirectoryDestroy(FileCB->FileDir);
+            }
+        }
         if (FileCB->StreamCB)
         {
             NtfsDereferenceStreamContext(
@@ -443,6 +457,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 /* The name exists now, so any cached miss for it is wrong. */
                 if (NT_SUCCESS(Status))
                 {
+                    InterlockedIncrement(&VolCB->DirGeneration);
                     NtfsForgetMissingName(VolCB,
                                           FileObject->FileName.Buffer,
                                           FileObject->FileName.Length / sizeof(WCHAR));
@@ -572,6 +587,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
     FileCB->CachedRecord = CachedRecord;
     FileCB->FileRec = CurrentFile;
+    FileCB->LastAccessStampPending = NtfsShouldStampLastAccess(FileCB);
     FileCB->CreateOptions = IrpSp->Parameters.Create.Options;
     FileCB->DesiredAccess = IrpSp->Parameters.Create.SecurityContext->DesiredAccess;
     FileCB->AutomaticTimestampMask =
@@ -644,6 +660,31 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     }
 
     if (!!(NtfsFileRecordGetHeader(CurrentFile)->Flags & FR_IS_DIRECTORY))
+    {
+        /* Reuse the previous tree when nothing on the volume changed. */
+        USHORT PathChars =
+            (USHORT)(FileObject->FileName.Length / sizeof(WCHAR));
+
+        ExAcquireFastMutex(&VolCB->DirCacheMutex);
+        if (VolCB->CachedDir &&
+            !VolCB->CachedDirBusy &&
+            VolCB->CachedDirGeneration == VolCB->DirGeneration &&
+            VolCB->CachedDirPathLength == PathChars &&
+            PathChars != 0 &&
+            RtlCompareMemory(VolCB->CachedDirPath,
+                             FileObject->FileName.Buffer,
+                             PathChars * sizeof(WCHAR)) ==
+                PathChars * sizeof(WCHAR))
+        {
+            FileCB->FileDir = VolCB->CachedDir;
+            FileCB->FileDirBorrowed = TRUE;
+            VolCB->CachedDirBusy = TRUE;
+        }
+        ExReleaseFastMutex(&VolCB->DirCacheMutex);
+    }
+
+    if (!FileCB->FileDir &&
+        !!(NtfsFileRecordGetHeader(CurrentFile)->Flags & FR_IS_DIRECTORY))
     {
         // Set up btree for this file
         FileCB->FileDir = NtfsDirectoryCreate(DiskVolume);

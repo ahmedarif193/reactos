@@ -458,6 +458,13 @@ GetFileBothDirectoryInformation(_In_    PFileContextBlock FileCB,
 
     FileDir = FileCB->FileDir;
     RestartScan = !!(IrpFlags & SL_RESTART_SCAN);
+    /* A fresh handle starts at the beginning even without the flag; the
+     * shared directory tree may hold another handle's cursor. */
+    if (!FileCB->DirScanStarted)
+    {
+        RestartScan = TRUE;
+        FileCB->DirScanStarted = TRUE;
+    }
 
     if (!FileDir)
         return STATUS_NOT_FOUND;
@@ -515,6 +522,13 @@ GetFileDirectoryInformation(_In_ PFileContextBlock FileCB,
         return STATUS_INSUFFICIENT_RESOURCES;
 
     RestartScan = !!(IrpFlags & SL_RESTART_SCAN);
+    /* A fresh handle starts at the beginning even without the flag; the
+     * shared directory tree may hold another handle's cursor. */
+    if (!FileCB->DirScanStarted)
+    {
+        RestartScan = TRUE;
+        FileCB->DirScanStarted = TRUE;
+    }
     if (FileNameFilter &&
         !ContainsWildcard(FileNameFilter))
     {

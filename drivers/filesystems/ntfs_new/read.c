@@ -19,6 +19,24 @@
  */
 const BOOLEAN NtfsCachedReadsEnabled = TRUE;
 
+/*
+ * NTFS proper refreshes a file's last-access time at most once per hour; a
+ * driver that rewrites the record on every read pays an exclusive lock and a
+ * metadata update per I/O that Windows does not.
+ */
+BOOLEAN
+NtfsShouldStampLastAccess(_In_ PFileContextBlock FileCB)
+{
+    NtfsFileBasicInformation Basic;
+    LARGE_INTEGER Now;
+
+    if (!NT_SUCCESS(NtfsFileRecordGetBasicInformation(FileCB->FileRec, &Basic)))
+        return TRUE;
+
+    KeQuerySystemTime(&Now);
+    return Now.QuadPart - (LONGLONG)Basic.LastAccessTime >= 36000000000LL;
+}
+
 /* FUNCTIONS ****************************************************************/
 _Function_class_(IRP_MJ_READ)
 _Function_class_(DRIVER_DISPATCH)
@@ -45,7 +63,6 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     ULONG RequestedLength;
     ULONG BytesRead;
     PFileContextBlock FileCB;
-    PStandardInformationEx StdInfo;
     BOOLEAN ResourceAcquired = FALSE;
     BOOLEAN PagingIo = FALSE;
 
@@ -97,20 +114,6 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         PagingIo ? &FileCB->PagingIoResource : &FileCB->MainResource,
         TRUE);
     ResourceAcquired = TRUE;
-
-    // Ensure the file has a valid resident StandardInformation attribute
-    Status = NtfsFileRecordGetAttributeData(FileCB->FileRec,
-                                            TypeStandardInformation,
-                                            NULL,
-                                            (PUCHAR*)&StdInfo);
-
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("NtfsFsdRead(): Missing or corrupt $STANDARD_INFORMATION attribute!\n");
-        goto Complete;
-    }
-
-    ASSERT(!(StdInfo->FilePermissions & FILE_PERM_ENCRYPTED));
 
     if (IrpSp->MinorFunction == IRP_MN_COMPLETE)
     {
@@ -206,8 +209,10 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         if (BytesRead != 0 &&
             !PagingIo &&
             FileCB->RequestedType == TypeData &&
-            !NtfsVolumeIsReadOnly(DiskVolume))
+            !NtfsVolumeIsReadOnly(DiskVolume) &&
+            FileCB->LastAccessStampPending)
         {
+            FileCB->LastAccessStampPending = FALSE;
             /*
              * Last-access is metadata, so serialize its MFT update after the
              * shared data read. A timestamp failure must not discard bytes
