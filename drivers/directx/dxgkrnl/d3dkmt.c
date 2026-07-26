@@ -4571,6 +4571,278 @@ DxgkWaitForSynchronizationObjectFromCpu(
 }
 
 /*
+ * The scheduling priority class a process's GPU work runs at.  It is process
+ * state, not adapter state -- a process keeps it across every adapter it opens
+ * -- so it lives in one registry keyed by the process, released on exit.
+ */
+typedef struct _DXGKRNL_PROCESS_PRIORITY
+{
+    LIST_ENTRY Link;
+    PEPROCESS Process;
+    D3DKMT_SCHEDULINGPRIORITYCLASS Class;
+} DXGKRNL_PROCESS_PRIORITY, *PDXGKRNL_PROCESS_PRIORITY;
+
+static LIST_ENTRY DxgkProcessPriorityList = { &DxgkProcessPriorityList, &DxgkProcessPriorityList };
+static FAST_MUTEX DxgkProcessPriorityLock;
+static volatile LONG DxgkProcessPriorityLockReady;
+
+static VOID
+DxgkpEnsureProcessPriorityLock(VOID)
+{
+    if (InterlockedCompareExchange(&DxgkProcessPriorityLockReady, 1, 0) == 0)
+        ExInitializeFastMutex(&DxgkProcessPriorityLock);
+    else
+        while (InterlockedCompareExchange(&DxgkProcessPriorityLockReady, 1, 1) != 1)
+            YieldProcessor();
+}
+
+/* NULL means the calling process, which is the only one a caller without
+ * PROCESS_SET_INFORMATION can name. */
+static NTSTATUS
+DxgkpResolvePriorityProcess(
+    _In_opt_ HANDLE hProcess,
+    _Out_ PEPROCESS *OutProcess,
+    _Out_ BOOLEAN *OutReferenced)
+{
+    *OutProcess = NULL;
+    *OutReferenced = FALSE;
+    if (hProcess == NULL)
+    {
+        *OutProcess = PsGetCurrentProcess();
+        return STATUS_SUCCESS;
+    }
+    if (hProcess == NtCurrentProcess())
+    {
+        *OutProcess = PsGetCurrentProcess();
+        return STATUS_SUCCESS;
+    }
+    {
+        NTSTATUS Status = ObReferenceObjectByHandle(hProcess, PROCESS_SET_INFORMATION, *PsProcessType,
+                                                    ExGetPreviousMode(), (PVOID *)OutProcess, NULL);
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+    *OutReferenced = TRUE;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+NTAPI
+DxgkSetProcessSchedulingPriorityClass(
+    _In_opt_ HANDLE hProcess,
+    _In_ D3DKMT_SCHEDULINGPRIORITYCLASS Class)
+{
+    PDXGKRNL_PROCESS_PRIORITY Record = NULL;
+    PLIST_ENTRY Entry;
+    PEPROCESS Process;
+    BOOLEAN Referenced;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (Class < D3DKMT_SCHEDULINGPRIORITYCLASS_IDLE || Class > D3DKMT_SCHEDULINGPRIORITYCLASS_REALTIME)
+        return STATUS_INVALID_PARAMETER;
+    Status = DxgkpResolvePriorityProcess(hProcess, &Process, &Referenced);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    DxgkpEnsureProcessPriorityLock();
+    ExAcquireFastMutex(&DxgkProcessPriorityLock);
+    for (Entry = DxgkProcessPriorityList.Flink; Entry != &DxgkProcessPriorityList; Entry = Entry->Flink)
+    {
+        PDXGKRNL_PROCESS_PRIORITY Existing = CONTAINING_RECORD(Entry, DXGKRNL_PROCESS_PRIORITY, Link);
+
+        if (Existing->Process == Process)
+        {
+            Record = Existing;
+            break;
+        }
+    }
+    if (Record == NULL)
+    {
+        ExReleaseFastMutex(&DxgkProcessPriorityLock);
+        Record = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Record), TAG_DXGK_CAPTURE);
+        if (Record == NULL)
+        {
+            if (Referenced)
+                ObDereferenceObject(Process);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        RtlZeroMemory(Record, sizeof(*Record));
+        Record->Process = Process;
+        ExAcquireFastMutex(&DxgkProcessPriorityLock);
+        InsertTailList(&DxgkProcessPriorityList, &Record->Link);
+    }
+    Record->Class = Class;
+    ExReleaseFastMutex(&DxgkProcessPriorityLock);
+
+    if (Referenced)
+        ObDereferenceObject(Process);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+NTAPI
+DxgkGetProcessSchedulingPriorityClass(
+    _In_opt_ HANDLE hProcess,
+    _Out_ D3DKMT_SCHEDULINGPRIORITYCLASS *OutClass)
+{
+    PLIST_ENTRY Entry;
+    PEPROCESS Process;
+    BOOLEAN Referenced;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (OutClass == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Status = DxgkpResolvePriorityProcess(hProcess, &Process, &Referenced);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    /* A process that never set one runs at NORMAL, so that is what it reads
+     * back rather than an error. */
+    *OutClass = D3DKMT_SCHEDULINGPRIORITYCLASS_NORMAL;
+    DxgkpEnsureProcessPriorityLock();
+    ExAcquireFastMutex(&DxgkProcessPriorityLock);
+    for (Entry = DxgkProcessPriorityList.Flink; Entry != &DxgkProcessPriorityList; Entry = Entry->Flink)
+    {
+        PDXGKRNL_PROCESS_PRIORITY Record = CONTAINING_RECORD(Entry, DXGKRNL_PROCESS_PRIORITY, Link);
+
+        if (Record->Process == Process)
+        {
+            *OutClass = Record->Class;
+            break;
+        }
+    }
+    ExReleaseFastMutex(&DxgkProcessPriorityLock);
+
+    if (Referenced)
+        ObDereferenceObject(Process);
+    return STATUS_SUCCESS;
+}
+
+VOID
+DxgkProcessPriorityCleanup(
+    _In_ PEPROCESS Process)
+{
+    LIST_ENTRY Removed;
+    PLIST_ENTRY Entry;
+    PLIST_ENTRY Next;
+
+    if (InterlockedCompareExchange(&DxgkProcessPriorityLockReady, 1, 1) != 1)
+        return;
+    InitializeListHead(&Removed);
+    ExAcquireFastMutex(&DxgkProcessPriorityLock);
+    for (Entry = DxgkProcessPriorityList.Flink; Entry != &DxgkProcessPriorityList; Entry = Next)
+    {
+        PDXGKRNL_PROCESS_PRIORITY Record = CONTAINING_RECORD(Entry, DXGKRNL_PROCESS_PRIORITY, Link);
+
+        Next = Entry->Flink;
+        if (Record->Process != Process)
+            continue;
+        RemoveEntryList(&Record->Link);
+        InsertTailList(&Removed, &Record->Link);
+    }
+    ExReleaseFastMutex(&DxgkProcessPriorityLock);
+    while (!IsListEmpty(&Removed))
+    {
+        Entry = RemoveHeadList(&Removed);
+        ExFreePoolWithTag(CONTAINING_RECORD(Entry, DXGKRNL_PROCESS_PRIORITY, Link), TAG_DXGK_CAPTURE);
+    }
+}
+
+/*
+ * Correlates the engine's clock with the CPU's so a profiler can put GPU
+ * timestamps on the same timeline as CPU ones.  Every engine in this tree is
+ * executed by the CPU, so the two counters are the same counter -- reporting
+ * one performance-counter reading for both is the honest answer, and it is what
+ * the reference VM's display-only adapter reports too.
+ */
+static NTSTATUS
+NTAPI
+DxgkQueryClockCalibration(
+    _Inout_ D3DKMT_QUERYCLOCKCALIBRATION *pData)
+{
+    PDXGKRNL_ADAPTER Adapter;
+    LARGE_INTEGER Counter;
+    LARGE_INTEGER Frequency;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Status = DxgkReferenceAdapterByHandle(pData->hAdapter, PsGetCurrentProcess(), &Adapter);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (pData->PhysicalAdapterIndex != 0 || pData->NodeOrdinal >= Adapter->NodeCount)
+    {
+        DxgkDereferenceAdapter(Adapter);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Counter = KeQueryPerformanceCounter(&Frequency);
+    RtlZeroMemory(&pData->ClockData, sizeof(pData->ClockData));
+    pData->ClockData.GpuFrequency = (ULONGLONG)Frequency.QuadPart;
+    pData->ClockData.GpuClockCounter = (ULONGLONG)Counter.QuadPart;
+    pData->ClockData.CpuClockCounter = (ULONGLONG)Counter.QuadPart;
+
+    DxgkDereferenceAdapter(Adapter);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+NTAPI
+DxgkChangeVideoMemoryReservation(
+    _In_ CONST D3DKMT_CHANGEVIDEOMEMORYRESERVATION *pData)
+{
+    PDXGKRNL_ADAPTER Adapter;
+    PEPROCESS Process;
+    BOOLEAN Referenced = FALSE;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (pData->PhysicalAdapterIndex != 0)
+        return STATUS_INVALID_PARAMETER;
+    if (pData->MemorySegmentGroup != D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL &&
+        pData->MemorySegmentGroup != D3DKMT_MEMORY_SEGMENT_GROUP_NON_LOCAL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = DxgkReferenceAdapterByHandle(pData->hAdapter, PsGetCurrentProcess(), &Adapter);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (pData->hProcess == NULL)
+    {
+        Process = PsGetCurrentProcess();
+    }
+    else
+    {
+        Status = ObReferenceObjectByHandle(pData->hProcess, PROCESS_SET_INFORMATION, *PsProcessType,
+                                           ExGetPreviousMode(), (PVOID *)&Process, NULL);
+        if (!NT_SUCCESS(Status))
+        {
+            DxgkDereferenceAdapter(Adapter);
+            return Status;
+        }
+        Referenced = TRUE;
+    }
+
+    Status = DxgkVidMmSetProcessReservation(Adapter, Process, pData->MemorySegmentGroup, pData->Reservation);
+
+    if (Referenced)
+        ObDereferenceObject(Process);
+    DxgkDereferenceAdapter(Adapter);
+    return Status;
+}
+
+/*
  * Hardware queues bypass the software scheduler: work is written straight to a
  * queue the GPU consumes, and progress is reported through a monitored fence
  * the queue owns.  That only exists if the miniport schedules in hardware, and
@@ -5991,7 +6263,17 @@ DxgkpDispatchBufferedIoctl(
         case IOCTL_D3DKMT_SETPROCESSSCHEDULINGPRIORITYCLASS:
         case IOCTL_D3DKMT_GETPROCESSSCHEDULINGPRIORITYCLASS:
         {
-            return STATUS_NOT_SUPPORTED;
+            DXGKP_PROCESS_PRIORITY_REQUEST *pRequest;
+
+            if (InputLength < sizeof(DXGKP_PROCESS_PRIORITY_REQUEST) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            pRequest = (DXGKP_PROCESS_PRIORITY_REQUEST *)SystemBuffer;
+            if (IoControlCode == IOCTL_D3DKMT_SETPROCESSSCHEDULINGPRIORITYCLASS)
+                return DxgkSetProcessSchedulingPriorityClass(pRequest->hProcess, pRequest->Class);
+            Status = DxgkGetProcessSchedulingPriorityClass(pRequest->hProcess, &pRequest->Class);
+            if (NT_SUCCESS(Status))
+                Irp->IoStatus.Information = sizeof(DXGKP_PROCESS_PRIORITY_REQUEST);
+            return Status;
         }
 
         case IOCTL_D3DKMT_RELEASEPROCESSVIDPNSOURCEOWNERS:
@@ -6140,6 +6422,23 @@ DxgkpDispatchBufferedIoctl(
 
             pPoll = (D3DKMT_POLLDISPLAYCHILDREN *)SystemBuffer;
             return DxgkPollDisplayChildren(pPoll);
+        }
+
+        case IOCTL_D3DKMT_QUERYCLOCKCALIBRATION:
+        {
+            if (InputLength < sizeof(D3DKMT_QUERYCLOCKCALIBRATION) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            Status = DxgkQueryClockCalibration((D3DKMT_QUERYCLOCKCALIBRATION *)SystemBuffer);
+            if (NT_SUCCESS(Status))
+                Irp->IoStatus.Information = sizeof(D3DKMT_QUERYCLOCKCALIBRATION);
+            return Status;
+        }
+
+        case IOCTL_D3DKMT_CHANGEVIDEOMEMORYRESERVATION:
+        {
+            if (InputLength < sizeof(D3DKMT_CHANGEVIDEOMEMORYRESERVATION) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            return DxgkChangeVideoMemoryReservation((CONST D3DKMT_CHANGEVIDEOMEMORYRESERVATION *)SystemBuffer);
         }
 
         case IOCTL_D3DKMT_CREATEHWQUEUE:
@@ -6748,6 +7047,8 @@ DxgkDispatchDeviceControl(
         case IOCTL_D3DKMT_OPENKEYEDMUTEX:
         case IOCTL_D3DKMT_ACQUIREKEYEDMUTEX:
         case IOCTL_D3DKMT_RELEASEKEYEDMUTEX:
+        case IOCTL_D3DKMT_QUERYCLOCKCALIBRATION:
+        case IOCTL_D3DKMT_CHANGEVIDEOMEMORYRESERVATION:
         case IOCTL_D3DKMT_CREATEHWQUEUE:
         case IOCTL_D3DKMT_DESTROYHWQUEUE:
         case IOCTL_D3DKMT_SUBMITCOMMANDTOHWQUEUE:
