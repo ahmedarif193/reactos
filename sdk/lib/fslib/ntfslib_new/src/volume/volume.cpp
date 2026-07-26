@@ -196,6 +196,22 @@ Done:
 
 Volume::~Volume()
 {
+    delete CachedBitmapFile;
+    CachedBitmapFile = NULL;
+    CachedBitmapData = NULL;
+    delete[] BitmapWorkBuffer;
+    BitmapWorkBuffer = NULL;
+    while (RecordPoolHead)
+    {
+        PUCHAR Next = *(PUCHAR*)RecordPoolHead;
+
+        delete[] RecordPoolHead;
+        RecordPoolHead = Next;
+    }
+    RecordPoolCount = 0;
+    delete[] IndexWorkBuffer;
+    IndexWorkBuffer = NULL;
+
     delete MFT;
     delete LFS;
     delete[] AttrDefCache;
@@ -205,6 +221,8 @@ Volume::~Volume()
 NTSTATUS
 Volume::Initialize(_In_ PUCHAR BootSectorData)
 {
+    ExInitializeFastMutex(&RecordPoolMutex);
+
     BootSector* PartitionBootSector;
     PVolumeInformationEx VolumeInfo;
     PAttribute VolumeInfoAttribute;

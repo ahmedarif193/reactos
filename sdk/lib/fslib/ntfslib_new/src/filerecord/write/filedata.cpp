@@ -9,6 +9,61 @@
 #include "ntfslib_new.h"
 #include "ntfslib_new_internal.h"
 
+/*
+ * Rollback snapshots are record-sized and taken on nearly every metadata
+ * update; they draw on the same free list as record buffers so a snapshot
+ * does not cost a pool round trip. All records on a volume share one size.
+ */
+static
+PUCHAR
+NtfsAcquireRecordScratch(_In_ PVolume DiskVolume, _In_ ULONG Size)
+{
+    PUCHAR Buffer = NULL;
+
+    if (DiskVolume && Size >= sizeof(PUCHAR))
+    {
+        ExAcquireFastMutex(&DiskVolume->RecordPoolMutex);
+        if (DiskVolume->RecordPoolHead &&
+            DiskVolume->RecordPoolBufferSize == Size)
+        {
+            Buffer = DiskVolume->RecordPoolHead;
+            DiskVolume->RecordPoolHead = *(PUCHAR*)Buffer;
+            DiskVolume->RecordPoolCount--;
+        }
+        ExReleaseFastMutex(&DiskVolume->RecordPoolMutex);
+    }
+    if (!Buffer)
+        Buffer = new(PagedPool, TAG_FILE_RECORD) UCHAR[Size];
+    return Buffer;
+}
+
+static
+void
+NtfsReleaseRecordScratch(_In_ PVolume DiskVolume, _In_opt_ PUCHAR Buffer, _In_ ULONG Size)
+{
+    BOOLEAN Pooled = FALSE;
+
+    if (!Buffer)
+        return;
+    if (DiskVolume && Size >= sizeof(PUCHAR))
+    {
+        ExAcquireFastMutex(&DiskVolume->RecordPoolMutex);
+        if (DiskVolume->RecordPoolCount < 512 &&
+            (DiskVolume->RecordPoolCount == 0 ||
+             DiskVolume->RecordPoolBufferSize == Size))
+        {
+            *(PUCHAR*)Buffer = DiskVolume->RecordPoolHead;
+            DiskVolume->RecordPoolHead = Buffer;
+            DiskVolume->RecordPoolBufferSize = Size;
+            DiskVolume->RecordPoolCount++;
+            Pooled = TRUE;
+        }
+        ExReleaseFastMutex(&DiskVolume->RecordPoolMutex);
+    }
+    if (!Pooled)
+        delete[] Buffer;
+}
+
 #define IsOffsetEndOfFile(Offset) \
 Offset->HighPart == -1 && Offset->LowPart == FILE_WRITE_TO_END_OF_FILE
 
@@ -988,7 +1043,7 @@ FileRecord::CreateNamedDataStream(
             reinterpret_cast<PFileRecordHeader>(
                 Data);
         ClearDataRunCache();
-        delete[] RecordBackup;
+        NtfsReleaseRecordScratch(DiskVolume, RecordBackup, RecordBufferSize);
         RecordBackup = NULL;
 
         Status = CreateInitialAttributeList();
@@ -1030,7 +1085,7 @@ FileRecord::CreateNamedDataStream(
                 reinterpret_cast<PFileRecordHeader>(
                     Data);
             ClearDataRunCache();
-            delete[] RecordBackup;
+            NtfsReleaseRecordScratch(DiskVolume, RecordBackup, RecordBufferSize);
             RecordBackup = NULL;
             Inserted = FALSE;
 
@@ -1073,7 +1128,7 @@ Done:
             reinterpret_cast<PFileRecordHeader>(Data);
         ClearDataRunCache();
     }
-    delete[] RecordBackup;
+    NtfsReleaseRecordScratch(DiskVolume, RecordBackup, RecordBufferSize);
     return Status;
 }
 
@@ -1716,7 +1771,7 @@ Done:
     FreeDataRun(OldBackingRuns);
     FreeDataRun(OldReparseRuns);
     FreeDataRun(NewRuns);
-    delete[] RecordBackup;
+    NtfsReleaseRecordScratch(DiskVolume, RecordBackup, RecordBufferSize);
     delete[] ResidentData;
     delete[] Buffer;
     return Status;
@@ -1869,8 +1924,7 @@ FileRecord::WriteFileData(_In_     AttributeType AttrType,
     if (!(TargetAttribute->IsNonResident))
     {
         RecordBackup =
-            new(PagedPool, TAG_FILE_RECORD)
-                UCHAR[AttributeOwner->RecordBufferSize];
+            NtfsAcquireRecordScratch(DiskVolume, AttributeOwner->RecordBufferSize);
         if (!RecordBackup)
             return STATUS_INSUFFICIENT_RESOURCES;
         RtlCopyMemory(RecordBackup,
@@ -1893,7 +1947,7 @@ FileRecord::WriteFileData(_In_     AttributeType AttrType,
             AttributeOwner->Header =
                 reinterpret_cast<PFileRecordHeader>(
                     AttributeOwner->Data);
-            delete[] RecordBackup;
+            NtfsReleaseRecordScratch(DiskVolume, RecordBackup, RecordBufferSize);
             RecordBackup = NULL;
 
             if ((AttrType != TypeData &&
@@ -1974,7 +2028,7 @@ RestoreResident:
                     AttributeOwner->Data);
             AttributeOwner->ClearDataRunCache();
         }
-        delete[] RecordBackup;
+        NtfsReleaseRecordScratch(DiskVolume, RecordBackup, RecordBufferSize);
         if (NT_SUCCESS(Status) &&
             AttributeOwner != this &&
             TimestampFields != 0)
@@ -2143,8 +2197,7 @@ RestoreResident:
         if (MetadataChanged || TimestampUpdate)
         {
             RecordBackup =
-                new(PagedPool, TAG_FILE_RECORD)
-                    UCHAR[AttributeOwner->RecordBufferSize];
+                NtfsAcquireRecordScratch(DiskVolume, AttributeOwner->RecordBufferSize);
             if (!RecordBackup)
                 return STATUS_INSUFFICIENT_RESOURCES;
             RtlCopyMemory(RecordBackup,
@@ -2159,7 +2212,7 @@ RestoreResident:
 
         if (!NT_SUCCESS(Status))
         {
-            delete[] RecordBackup;
+            NtfsReleaseRecordScratch(DiskVolume, RecordBackup, RecordBufferSize);
             return Status;
         }
 
@@ -2176,7 +2229,7 @@ RestoreResident:
             TargetAttribute->NonResident.DataSize = OldDataSize;
             TargetAttribute->NonResident.InitalizedDataSize =
                 OldInitializedSize;
-            delete[] RecordBackup;
+            NtfsReleaseRecordScratch(DiskVolume, RecordBackup, RecordBufferSize);
             return STATUS_FILE_CORRUPT_ERROR;
         }
 
@@ -2218,7 +2271,7 @@ RestoreResident:
                         AttributeOwner->Data);
                 AttributeOwner->ClearDataRunCache();
             }
-            delete[] RecordBackup;
+            NtfsReleaseRecordScratch(DiskVolume, RecordBackup, RecordBufferSize);
             if (!NT_SUCCESS(Status))
                 return Status;
         }
@@ -2361,8 +2414,7 @@ FileRecord::SetFileDataSize(_In_ AttributeType AttrType,
         return STATUS_SUCCESS;
 
     RecordBackup =
-        new(PagedPool, TAG_FILE_RECORD)
-            UCHAR[AttributeOwner->RecordBufferSize];
+        NtfsAcquireRecordScratch(DiskVolume, AttributeOwner->RecordBufferSize);
     if (!RecordBackup)
         return STATUS_INSUFFICIENT_RESOURCES;
     RtlCopyMemory(RecordBackup,
@@ -2384,7 +2436,7 @@ FileRecord::SetFileDataSize(_In_ AttributeType AttrType,
             reinterpret_cast<PFileRecordHeader>(
                 AttributeOwner->Data);
         AttributeOwner->ClearDataRunCache();
-        delete[] RecordBackup;
+        NtfsReleaseRecordScratch(DiskVolume, RecordBackup, RecordBufferSize);
         Status = AttributeOwner->PromoteResidentData(
             TargetAttribute,
             NULL,
@@ -2426,7 +2478,7 @@ FileRecord::SetFileDataSize(_In_ AttributeType AttrType,
         AttributeOwner);
     if (NT_SUCCESS(Status))
     {
-        delete[] RecordBackup;
+        NtfsReleaseRecordScratch(DiskVolume, RecordBackup, RecordBufferSize);
         if (AttributeOwner != this)
         {
             Status = UpdateAutomaticTimestamps(
@@ -2445,7 +2497,7 @@ RestoreResident:
         reinterpret_cast<PFileRecordHeader>(
             AttributeOwner->Data);
     AttributeOwner->ClearDataRunCache();
-    delete[] RecordBackup;
+    NtfsReleaseRecordScratch(DiskVolume, RecordBackup, RecordBufferSize);
     return Status;
 }
 
@@ -2975,7 +3027,7 @@ Done:
     FreeDataRun(CombinedRuns);
     FreeDataRun(AllocatedRuns);
     FreeDataRun(ExistingRuns);
-    delete[] RecordBackup;
+    NtfsReleaseRecordScratch(DiskVolume, RecordBackup, RecordBufferSize);
     return Status;
 }
 
@@ -3124,7 +3176,7 @@ FileRecord::SetZeroData(
                     Data);
             ClearDataRunCache();
         }
-        delete[] RecordBackup;
+        NtfsReleaseRecordScratch(DiskVolume, RecordBackup, RecordBufferSize);
         return Status;
     }
 
@@ -3426,7 +3478,7 @@ Done:
     FreeDataRun(ReleasedRuns);
     FreeDataRun(ResultRuns);
     FreeDataRun(ExistingRuns);
-    delete[] RecordBackup;
+    NtfsReleaseRecordScratch(DiskVolume, RecordBackup, RecordBufferSize);
     return Status;
 }
 
@@ -3867,7 +3919,7 @@ Rollback:
 
 Done:
     FreeDataRun(AllocatedRuns);
-    delete[] RecordBackup;
+    NtfsReleaseRecordScratch(DiskVolume, RecordBackup, RecordBufferSize);
     delete[] OldData;
     return Status;
 }
@@ -4319,7 +4371,7 @@ Done:
     FreeDataRun(ExpandedRuns);
     FreeDataRun(ExistingRuns);
     delete[] OwnerRecordBackup;
-    delete[] RecordBackup;
+    NtfsReleaseRecordScratch(DiskVolume, RecordBackup, RecordBufferSize);
     return Status;
 }
 
@@ -4584,7 +4636,7 @@ Done:
     FreeDataRun(RetainedRuns);
     FreeDataRun(CombinedRuns);
     FreeDataRun(AddedRuns);
-    delete[] RecordBackup;
+    NtfsReleaseRecordScratch(DiskVolume, RecordBackup, RecordBufferSize);
     return Status;
 }
 
@@ -4784,7 +4836,7 @@ Rollback:
 Done:
     FreeDataRun(CombinedRuns);
     FreeDataRun(AddedRuns);
-    delete[] RecordBackup;
+    NtfsReleaseRecordScratch(DiskVolume, RecordBackup, RecordBufferSize);
     return Status;
 }
 
@@ -5299,7 +5351,7 @@ Done:
     FreeDataRun(AllocatedRuns);
     FreeDataRun(ExistingRuns);
     delete[] OwnerRecordBackup;
-    delete[] RecordBackup;
+    NtfsReleaseRecordScratch(DiskVolume, RecordBackup, RecordBufferSize);
     return Status;
 }
 
@@ -5565,7 +5617,7 @@ Done:
     FreeDataRun(OldPhysicalRuns);
     FreeDataRun(NewPhysicalRuns);
     FreeDataRun(CompositeRuns);
-    delete[] RecordBackup;
+    NtfsReleaseRecordScratch(DiskVolume, RecordBackup, RecordBufferSize);
     delete[] Plain;
     delete[] Stored;
     return Status;
