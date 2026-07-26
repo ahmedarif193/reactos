@@ -270,6 +270,16 @@ MiArm64FillSystemPageDirectory(
     _In_ PVOID Base,
     _In_ SIZE_T NumberOfBytes);
 
+VOID
+MiArm64FinalizeProcessAddressSpace(
+    _Inout_ PEPROCESS Process,
+    _In_ PFN_NUMBER RootPfn,
+    _In_ PFN_NUMBER HyperPfn);
+
+VOID
+MiArm64RemoveProcessAddressSpace(
+    _Inout_ PEPROCESS Process);
+
 /*
  * Per-CPU PFN-lock recursion depth (writer: ke/arm64/spinlock.c on every
  * PFN-lock acquire/release; reader: MiArm64AllocatePageTablePage, own CPU

@@ -1599,7 +1599,9 @@ MmDeleteProcessAddressSpace(IN PEPROCESS Process)
     KIRQL OldIrql;
     PFN_NUMBER PageFrameIndex;
 
-#if !defined(_M_AMD64) && !defined(_M_ARM64)
+#if defined(_M_ARM64)
+    MiArm64RemoveProcessAddressSpace(Process);
+#elif !defined(_M_AMD64)
     OldIrql = MiAcquireExpansionLock();
     RemoveEntryList(&Process->MmProcessLinks);
     MiReleaseExpansionLock(OldIrql);
