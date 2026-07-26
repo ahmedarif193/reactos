@@ -17,6 +17,7 @@ extern "C" {
 #define DXGMMS2_ABI_VERSION_2                         0x00020000UL
 #define DXGMMS2_ABI_VERSION_3                         0x00030000UL
 #define DXGMMS2_ABI_VERSION_4                         0x00040000UL
+#define DXGMMS2_ABI_VERSION_5                         0x00050000UL
 #define DXGMMS2_SCHEDULER_TIMELINE_VERSION_1          0x00010000UL
 #define DXGMMS2_CONTEXT_STREAM_VERSION_1              0x00010000UL
 #define DXGMMS2_SCHEDULER_VERSION_1                   0x00010000UL
@@ -30,6 +31,13 @@ extern "C" {
 #define DXGMMS2_ADAPTER_FLAG_PHYSICAL_ADDRESSING      0x00000002UL
 #define DXGMMS2_ADAPTER_FLAG_VIRTUAL_ADDRESSING       0x00000004UL
 #define DXGMMS2_ADAPTER_FLAG_VALID_MASK               0x00000007UL
+
+/*
+ * The highest WDDM DDI version whose scheduling and video-memory contracts
+ * dxgmms2 implements completely, reported back as HighestCompleteWddmVersion.
+ * Must equal DXGKDDI_INTERFACE_VERSION_WDDM2_0; dxgkrnl asserts that.
+ */
+#define DXGMMS2_WDDM_VERSION_2_0                      0x5023UL
 
 #define DXGMMS2_SUBSYSTEM_SCHEDULER                   0x0000000000000001ULL
 #define DXGMMS2_SUBSYSTEM_VIDMM                       0x0000000000000002ULL
@@ -390,18 +398,28 @@ typedef PVOID DXGMMS2_SCHEDULER_HANDLE;
 #define DXGMMS2_SCHEDULER_ADMIT_PRESENT               0x00000002UL
 #define DXGMMS2_SCHEDULER_ADMIT_VIRTUAL               0x00000004UL
 #define DXGMMS2_SCHEDULER_ADMIT_PREFENCED             0x00000008UL
-#define DXGMMS2_SCHEDULER_ADMIT_VALID_MASK            0x0000000FUL
+/* The caller holds a ReserveSlot reservation on this engine; admission
+ * consumes it instead of taking a second slot against the depth bound. */
+#define DXGMMS2_SCHEDULER_ADMIT_CONSUME_RESERVATION   0x00000010UL
+#define DXGMMS2_SCHEDULER_ADMIT_VALID_MASK            0x0000001FUL
 
 typedef enum _DXGMMS2_SCHEDULER_ENGINE_STATE
 {
-    Dxgmms2EngineIdle       = 0,
-    Dxgmms2EngineRunning    = 1,
-    Dxgmms2EngineSubmitting = 2,
-    Dxgmms2EnginePreempting = 3,
-    Dxgmms2EnginePreempted  = 4,
-    Dxgmms2EngineResetting  = 5,
-    Dxgmms2EngineSuspended  = 6,
-    Dxgmms2EngineError      = 7
+    Dxgmms2EngineIdle           = 0,
+    Dxgmms2EngineRunning        = 1,
+    Dxgmms2EngineBudgetComputed = 2,
+    Dxgmms2EngineSubmitting     = 3,
+    Dxgmms2EnginePreempting     = 4,
+    Dxgmms2EnginePreempted      = 5,
+    Dxgmms2EngineResetting      = 6,
+    Dxgmms2EngineResetComplete  = 7,
+    Dxgmms2EngineSuspended      = 8,
+    Dxgmms2EngineResuming       = 9,
+    Dxgmms2EngineFlipPending    = 10,
+    Dxgmms2EngineFlipExecuting  = 11,
+    Dxgmms2EngineCompleting     = 12,
+    Dxgmms2EngineError          = 13,
+    Dxgmms2EngineStateCount     = 14
 } DXGMMS2_SCHEDULER_ENGINE_STATE;
 
 typedef enum _DXGMMS2_SCHEDULER_RETIRE_REASON
@@ -467,11 +485,28 @@ typedef NTSTATUS (NTAPI *PDXGMMS2_SCHEDULER_COMPLETE_DISPATCH)(_In_ DXGMMS2_SCHE
 typedef NTSTATUS (NTAPI *PDXGMMS2_SCHEDULER_NOTIFY_COMPLETION)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _In_ ULONG EngineOrdinal, _In_ ULONG CompletedFenceId);
 typedef NTSTATUS (NTAPI *PDXGMMS2_SCHEDULER_DRAIN_RETIREMENTS)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _Out_writes_to_(Capacity, *RetiredCount) DXGMMS2_SCHEDULER_RETIREMENT_V1 *Records, _In_ ULONG Capacity, _Out_ PULONG RetiredCount);
 typedef NTSTATUS (NTAPI *PDXGMMS2_SCHEDULER_CANCEL_OWNER)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _In_ ULONGLONG OwnerCookie, _In_ NTSTATUS CancelStatus);
-typedef NTSTATUS (NTAPI *PDXGMMS2_SCHEDULER_ABORT_ALL)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _In_ NTSTATUS AbortStatus);
+/* Teardown must be able to reclaim packets the miniport already owns, once
+ * the caller has quiesced hardware; ordinary aborts leave them alone. */
+#define DXGMMS2_SCHEDULER_ABORT_INCLUDE_DISPATCHED  0x00000001UL
+
+typedef NTSTATUS (NTAPI *PDXGMMS2_SCHEDULER_ABORT_ALL)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _In_ ULONG Flags, _In_ NTSTATUS AbortStatus);
 typedef NTSTATUS (NTAPI *PDXGMMS2_SCHEDULER_SET_ADMISSION)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _In_ BOOLEAN Open);
 typedef NTSTATUS (NTAPI *PDXGMMS2_SCHEDULER_QUERY_ENGINE)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _In_ ULONG EngineOrdinal, _Inout_ DXGMMS2_SCHEDULER_ENGINE_STATUS_V1 *Status);
-typedef NTSTATUS (NTAPI *PDXGMMS2_SCHEDULER_SET_ENGINE_STATE)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _In_ ULONG EngineOrdinal, _In_ ULONG NewState);
+/*
+ * SetEngineState is a validated compare-and-set.  The transition table is
+ * dxgmms2's, so an out-of-contract move is rejected rather than applied; pass
+ * DXGMMS2_ENGINE_STATE_ANY as ExpectedState for an unconditional set.  On
+ * STATUS_INVALID_DEVICE_STATE the engine did not match ExpectedState, and
+ * OutPreviousState reports the state that was observed either way.
+ */
+#define DXGMMS2_ENGINE_STATE_ANY    0xFFFFFFFFUL
+
+typedef NTSTATUS (NTAPI *PDXGMMS2_SCHEDULER_SET_ENGINE_STATE)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _In_ ULONG EngineOrdinal, _In_ ULONG ExpectedState, _In_ ULONG NewState, _Out_opt_ PULONG OutPreviousState);
 typedef BOOLEAN  (NTAPI *PDXGMMS2_SCHEDULER_IS_IDLE)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler);
+/* Reports the packet a claim would hand out next, without taking the claim.
+ * A caller that must authorise a specific packet before dispatching it asks
+ * this rather than inferring order from engine state. */
+typedef BOOLEAN  (NTAPI *PDXGMMS2_SCHEDULER_PEEK_NEXT)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _In_ ULONG EngineOrdinal, _Out_ PULONGLONG OutPacketCookie);
 typedef NTSTATUS (NTAPI *PDXGMMS2_SCHEDULER_RESERVE)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _In_ ULONG EngineOrdinal);
 typedef VOID     (NTAPI *PDXGMMS2_SCHEDULER_UNRESERVE)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _In_ ULONG EngineOrdinal);
 typedef NTSTATUS (NTAPI *PDXGMMS2_SCHEDULER_RESET_DISPATCHED)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _In_ ULONG EngineOrdinal, _Out_writes_to_(Capacity, *Count) ULONGLONG *PacketCookies, _In_ ULONG Capacity, _Out_ PULONG Count);
@@ -503,6 +538,7 @@ typedef struct _DXGMMS2_SCHEDULER_INTERFACE_V1
     PDXGMMS2_SCHEDULER_UNRESERVE ReleaseSlot;
     PDXGMMS2_SCHEDULER_RESET_DISPATCHED ResetDispatched;
     PDXGMMS2_SCHEDULER_OLDEST_DISPATCHED GetOldestDispatched;
+    PDXGMMS2_SCHEDULER_PEEK_NEXT PeekNextPacket;
 } DXGMMS2_SCHEDULER_INTERFACE_V1, *PDXGMMS2_SCHEDULER_INTERFACE_V1;
 
 typedef NTSTATUS (NTAPI *PDXGMMS2_QUERY_SCHEDULER_INTERFACE)(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _Inout_ DXGMMS2_SCHEDULER_INTERFACE_V1 *SchedulerInterface);
@@ -523,6 +559,105 @@ typedef struct _DXGMMS2_PROVIDER_INTERFACE_V4
     PDXGMMS2_QUERY_CONTEXT_STREAM_INTERFACE QueryContextStreamInterface;
     PDXGMMS2_QUERY_SCHEDULER_INTERFACE QuerySchedulerInterface;
 } DXGMMS2_PROVIDER_INTERFACE_V4, *PDXGMMS2_PROVIDER_INTERFACE_V4;
+
+
+/* ------------------------------------------------------------------------
+ * Video memory ownership contract (v1)
+ *
+ * dxgmms2 owns segment space: the commit ledger, the virgin-space cursor,
+ * and the placement decision.  dxgkrnl asks for an offset and reports when a
+ * placement is gone; it does not decide where anything lands and does not
+ * keep a second copy of segment occupancy.
+ * ------------------------------------------------------------------------ */
+
+#define DXGMMS2_VIDMM_VERSION_1                       0x00000001UL
+#define DXGMMS2_VIDMM_MAX_SEGMENTS                    32
+#define DXGMMS2_VIDMM_MAX_RELEASE_BATCH               64
+
+/* Segment descriptor flags mirror what the miniport reported. */
+#define DXGMMS2_VIDMM_SEGMENT_APERTURE                0x00000001UL
+#define DXGMMS2_VIDMM_SEGMENT_CPU_VISIBLE             0x00000002UL
+
+/* Per-placement state dxgkrnl publishes so eviction policy can run here. */
+#define DXGMMS2_VIDMM_RANGE_PINNED                    0x00000001UL
+#define DXGMMS2_VIDMM_RANGE_OFFERED                   0x00000002UL
+#define DXGMMS2_VIDMM_RANGE_RESIDENCY_REFERENCED      0x00000004UL
+
+typedef PVOID DXGMMS2_VIDMM_HANDLE;
+
+typedef struct _DXGMMS2_VIDMM_SEGMENT_DESC
+{
+    ULONGLONG Size;
+    ULONGLONG CommitLimit;
+    ULONG     Flags;
+    ULONG     Reserved;
+} DXGMMS2_VIDMM_SEGMENT_DESC_V1, *PDXGMMS2_VIDMM_SEGMENT_DESC_V1;
+
+typedef struct _DXGMMS2_VIDMM_RESERVE_INFO_V1
+{
+    ULONGLONG Size;
+    ULONGLONG Alignment;
+    ULONGLONG OwnerCookie;
+    LONG      Priority;
+    ULONG     Flags;
+} DXGMMS2_VIDMM_RESERVE_INFO_V1, *PDXGMMS2_VIDMM_RESERVE_INFO_V1;
+
+typedef struct _DXGMMS2_VIDMM_SEGMENT_STATUS_V1
+{
+    ULONGLONG Size;
+    ULONGLONG CommitLimit;
+    ULONGLONG UsedSize;
+    ULONGLONG BumpOffset;
+    ULONG     PlacementCount;
+    ULONG     Flags;
+} DXGMMS2_VIDMM_SEGMENT_STATUS_V1, *PDXGMMS2_VIDMM_SEGMENT_STATUS_V1;
+
+typedef NTSTATUS (NTAPI *PDXGMMS2_VIDMM_START)(_In_ DXGMMS2_VIDMM_HANDLE VidMm, _In_ ULONG SegmentCount);
+typedef NTSTATUS (NTAPI *PDXGMMS2_VIDMM_SET_SEGMENT)(_In_ DXGMMS2_VIDMM_HANDLE VidMm, _In_ ULONG SegmentIndex, _In_ const DXGMMS2_VIDMM_SEGMENT_DESC_V1 *Desc);
+typedef NTSTATUS (NTAPI *PDXGMMS2_VIDMM_RESERVE)(_In_ DXGMMS2_VIDMM_HANDLE VidMm, _In_ ULONG SegmentIndex, _In_ const DXGMMS2_VIDMM_RESERVE_INFO_V1 *Info, _Out_ PULONGLONG OutOffset);
+typedef NTSTATUS (NTAPI *PDXGMMS2_VIDMM_RELEASE)(_In_ DXGMMS2_VIDMM_HANDLE VidMm, _In_ ULONG SegmentIndex, _In_ ULONGLONG OwnerCookie);
+typedef NTSTATUS (NTAPI *PDXGMMS2_VIDMM_SET_RANGE_STATE)(_In_ DXGMMS2_VIDMM_HANDLE VidMm, _In_ ULONG SegmentIndex, _In_ ULONGLONG OwnerCookie, _In_ LONG Priority, _In_ ULONG Flags);
+typedef NTSTATUS (NTAPI *PDXGMMS2_VIDMM_QUERY_SEGMENT)(_In_ DXGMMS2_VIDMM_HANDLE VidMm, _In_ ULONG SegmentIndex, _Inout_ DXGMMS2_VIDMM_SEGMENT_STATUS_V1 *Status);
+typedef BOOLEAN  (NTAPI *PDXGMMS2_VIDMM_FIND_VICTIM)(_In_ DXGMMS2_VIDMM_HANDLE VidMm, _In_ ULONG SegmentIndex, _In_ ULONG ExcludeFlags, _Out_ PULONGLONG OutOwnerCookie);
+typedef NTSTATUS (NTAPI *PDXGMMS2_VIDMM_RELEASE_ALL)(_In_ DXGMMS2_VIDMM_HANDLE VidMm, _Out_writes_to_(Capacity, *Count) PULONGLONG OwnerCookies, _In_ ULONG Capacity, _Out_ PULONG Count);
+
+typedef struct _DXGMMS2_VIDMM_INTERFACE_V1
+{
+    ULONG Size;
+    ULONG Version;
+    DXGMMS2_VIDMM_HANDLE VidMmHandle;
+    PDXGMMS2_VIDMM_START Start;
+    PDXGMMS2_VIDMM_SET_SEGMENT SetSegment;
+    PDXGMMS2_VIDMM_RESERVE ReservePlacement;
+    PDXGMMS2_VIDMM_RELEASE ReleasePlacement;
+    PDXGMMS2_VIDMM_SET_RANGE_STATE SetPlacementState;
+    PDXGMMS2_VIDMM_QUERY_SEGMENT QuerySegmentStatus;
+    PDXGMMS2_VIDMM_FIND_VICTIM FindEvictionCandidate;
+    PDXGMMS2_VIDMM_RELEASE_ALL ReleaseAllPlacements;
+} DXGMMS2_VIDMM_INTERFACE_V1, *PDXGMMS2_VIDMM_INTERFACE_V1;
+
+typedef NTSTATUS (NTAPI *PDXGMMS2_QUERY_VIDMM_INTERFACE)(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _Inout_ DXGMMS2_VIDMM_INTERFACE_V1 *VidMmInterface);
+
+typedef struct _DXGMMS2_PROVIDER_INTERFACE_V5
+{
+    ULONG Size;
+    ULONG Version;
+    ULONG ProviderFlags;
+    ULONG Reserved;
+    DXGMMS2_REGISTRATION_HANDLE RegistrationHandle;
+    PDXGMMS2_CREATE_ADAPTER CreateAdapter;
+    PDXGMMS2_START_ADAPTER StartAdapter;
+    PDXGMMS2_BEGIN_STOP_ADAPTER BeginStopAdapter;
+    PDXGMMS2_COMPLETE_STOP_ADAPTER CompleteStopAdapter;
+    PDXGMMS2_DESTROY_ADAPTER DestroyAdapter;
+    PDXGMMS2_QUERY_SCHEDULER_TIMELINE_INTERFACE QuerySchedulerTimelineInterface;
+    PDXGMMS2_QUERY_CONTEXT_STREAM_INTERFACE QueryContextStreamInterface;
+    PDXGMMS2_QUERY_SCHEDULER_INTERFACE QuerySchedulerInterface;
+    PDXGMMS2_QUERY_VIDMM_INTERFACE QueryVidMmInterface;
+} DXGMMS2_PROVIDER_INTERFACE_V5, *PDXGMMS2_PROVIDER_INTERFACE_V5;
+
+#define DXGMMS2_PROVIDER_INTERFACE_V5_SIZE              ((ULONG)sizeof(DXGMMS2_PROVIDER_INTERFACE_V5))
+#define DXGMMS2_VIDMM_INTERFACE_V1_SIZE                 ((ULONG)sizeof(DXGMMS2_VIDMM_INTERFACE_V1))
 
 #define DXGMMS2_PROVIDER_INTERFACE_V4_SIZE              ((ULONG)sizeof(DXGMMS2_PROVIDER_INTERFACE_V4))
 #define DXGMMS2_SCHEDULER_INTERFACE_V1_SIZE             ((ULONG)sizeof(DXGMMS2_SCHEDULER_INTERFACE_V1))

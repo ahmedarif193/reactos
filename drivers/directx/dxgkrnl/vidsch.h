@@ -102,8 +102,12 @@ typedef enum _VIDSCH_SCHEDULER_STATE
 
 typedef struct _VIDSCH_DMA_PACKET
 {
-    /* Linkage in VIDSCH_ENGINE->RunQueueHead. */
-    LIST_ENTRY                  RunQueueEntry;
+    /* Retained while dxgmms2 holds this packet: the scheduler stores the
+     * packet pointer as its opaque cookie, and dxgkrnl keeps one reference
+     * from admission until it processes the retirement record. */
+    ULONGLONG                   SchedulerCookie;
+    /* Dispatch claim dxgmms2 issued for this packet, committed exactly once. */
+    ULONGLONG                   SchedulerClaimToken;
 
     /* Monotonically increasing fence ID assigned at submit time. */
     ULONG                       SubmissionFenceId;
@@ -207,28 +211,16 @@ typedef struct _VIDSCH_ENGINE
     /* Zero-based engine ordinal within the adapter. */
     ULONG                       EngineOrdinal;
 
-    /*
-     * Atomic engine state machine field.
-     * All transitions use InterlockedCompareExchange.
-     * Read with InterlockedCompareExchange(field, 0, 0) or volatile read.
-     */
-    volatile LONG               State;
+    /* The engine state machine lives in dxgmms2; dxgkrnl reads it through
+     * the scheduler interface and never caches it. */
 
     /*
-     * SpinLock protecting RunQueueHead and packet counters.
-     * Acquired at DISPATCH_LEVEL from thread context and from the DPC path.
+     * Serializes this engine's dxgkrnl-side execution state only: the
+     * preemption fields and the DPC/worker handshake.  The run queue, its
+     * order, the pending/reserved counts, and the engine state machine are
+     * owned by dxgmms2 and reached through Adapter->Mms2SchedulerInterface.
      */
     KSPIN_LOCK                  QueueLock;
-
-    /*
-     * Run queue: FIFO list of VIDSCH_DMA_PACKET entries awaiting submission.
-     * Head = next packet to submit; packets appended at tail.
-     */
-    LIST_ENTRY                  RunQueueHead;
-
-    /* Number of packets currently in the run queue. */
-    ULONG                       PendingPacketCount;
-    ULONG                       ReservedPacketCount;
 
     /* Set by the ISR when a DMA_PREEMPTED notification must be consumed. */
     volatile LONG               PreemptionInterruptPending;
@@ -241,17 +233,15 @@ typedef struct _VIDSCH_ENGINE
     KEVENT                      PreemptionCompletedEvent;
 
     /*
-     * Fence tracking.
-     *   NextFenceId      — next fence ID to assign (monotonic, per-engine).
-     *   LastSubmittedFence — fence of the most recently submitted command.
+     * Fence tracking.  dxgmms2 owns the submitted watermark; dxgkrnl keeps
+     * only what the ISR reports back.
+     *   NextFenceId        — next fence ID to assign (monotonic, per-engine).
      *   LastCompletedFence — fence of the most recently HW-completed command.
      *
      * NextFenceId is bumped via InterlockedIncrement.
-     * LastSubmittedFence is set under QueueLock.
      * LastCompletedFence is set from ISR context via InterlockedExchange.
      */
     volatile LONG               NextFenceId;
-    volatile LONG               LastSubmittedFence;
     volatile LONG               LastCompletedFence;
 
     /*
