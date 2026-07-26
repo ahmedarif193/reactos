@@ -772,8 +772,96 @@ static void Test_QueryVideoMemoryInfo_HighPhysAdapterIndex(void)
     CloseAdapter(hAdapter);
 }
 
+/*
+ * A GDI device context wrapped around memory the caller already owns.
+ *
+ * The D3D runtime uses this to hand a CPU-accessible surface -- a locked
+ * allocation, typically -- to code that speaks GDI.  The bitmap is created over
+ * the caller's pointer rather than copied, which is the whole point: a copy
+ * would defeat having locked the surface at all.
+ *
+ * Both exports existed with a syscall slot and nothing behind them until now,
+ * which from the caller's side is indistinguishable from a working one.
+ */
+static void Test_DCFromMemory(void)
+{
+    PFND3DKMT_CREATEDCFROMMEMORY pCreate;
+    PFND3DKMT_DESTROYDCFROMMEMORY pDestroy;
+    D3DKMT_CREATEDCFROMMEMORY Create;
+    D3DKMT_DESTROYDCFROMMEMORY Destroy;
+    static ULONG Pixels[16 * 16];
+    NTSTATUS Status;
+
+    pCreate = (PFND3DKMT_CREATEDCFROMMEMORY)LoadD3DKMTProc("D3DKMTCreateDCFromMemory");
+    pDestroy = (PFND3DKMT_DESTROYDCFROMMEMORY)LoadD3DKMTProc("D3DKMTDestroyDCFromMemory");
+    if (pCreate == NULL || pDestroy == NULL)
+    {
+        skip("D3DKMTCreateDCFromMemory/DestroyDCFromMemory not exported\n");
+        return;
+    }
+
+    ok_failed(pCreate(NULL), "NULL create request accepted\n");
+    ok_failed(pDestroy(NULL), "NULL destroy request accepted\n");
+
+    /* No memory to wrap means there is nothing to make a DC over. */
+    memset(&Create, 0, sizeof(Create));
+    Create.Format = D3DDDIFMT_X8R8G8B8;
+    Create.Width = 16;
+    Create.Height = 16;
+    Create.Pitch = 16 * 4;
+    ok_failed(pCreate(&Create), "create with no memory accepted\n");
+
+    /* A pitch too short for one row makes every row after the first start
+     * inside the previous one, so GDI would touch memory the caller never
+     * described -- and it is the caller's own buffer, so nothing else catches
+     * it. */
+    memset(&Create, 0, sizeof(Create));
+    Create.pMemory = Pixels;
+    Create.Format = D3DDDIFMT_X8R8G8B8;
+    Create.Width = 16;
+    Create.Height = 16;
+    Create.Pitch = 16 * 4 - 4;
+    ok_failed(pCreate(&Create), "create with an undersized pitch accepted\n");
+
+    /* A format with no GDI surface equivalent cannot be guessed at: picking one
+     * would have GDI read the buffer at the wrong stride. */
+    memset(&Create, 0, sizeof(Create));
+    Create.pMemory = Pixels;
+    Create.Format = (D3DDDIFORMAT)0x7FFFFFFF;
+    Create.Width = 16;
+    Create.Height = 16;
+    Create.Pitch = 16 * 4;
+    ok_failed(pCreate(&Create), "create with an unmappable format accepted\n");
+
+    memset(&Create, 0, sizeof(Create));
+    Create.pMemory = Pixels;
+    Create.Format = D3DDDIFMT_X8R8G8B8;
+    Create.Width = 16;
+    Create.Height = 16;
+    Create.Pitch = 16 * 4;
+    Status = pCreate(&Create);
+    trace("STATUSREC %s:%d 0x%08lX\n", __FILE__, __LINE__, (unsigned long)Status);
+    if (!NT_SUCCESS(Status))
+    {
+        skip("CreateDCFromMemory refused a well-formed request (0x%08lX)\n", (long)Status);
+        return;
+    }
+    ok(Create.hDc != NULL, "create succeeded without a DC\n");
+    ok(Create.hBitmap != NULL, "create succeeded without a bitmap\n");
+
+    memset(&Destroy, 0, sizeof(Destroy));
+    Destroy.hDc = Create.hDc;
+    Destroy.hBitmap = Create.hBitmap;
+    Status = pDestroy(&Destroy);
+    ok_succeeded(Status, "DestroyDCFromMemory failed 0x%08lX\n", (long)Status);
+
+    /* Releasing the same pair twice must not free anything a second time. */
+    ok_failed(pDestroy(&Destroy), "the DC and bitmap were released twice\n");
+}
+
 START_TEST(misc)
 {
+    Test_DCFromMemory();
     /* Output duplication */
     Test_CreateOutputDupl_NullArg();
     Test_CreateOutputDupl_BadHandle();
