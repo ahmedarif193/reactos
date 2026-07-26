@@ -124,6 +124,24 @@ C_ASSERT(sizeof(D3DKMT_UNLOCK2) == 8);
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x111, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_D3DKMT_OPENADAPTERFROMDEVICENAME \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x112, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_CREATEKEYEDMUTEX \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x190, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_DESTROYKEYEDMUTEX \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x191, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_OPENKEYEDMUTEX \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x192, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_ACQUIREKEYEDMUTEX \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x193, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_RELEASEKEYEDMUTEX \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x194, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_CREATEKEYEDMUTEX2 \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x195, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_OPENKEYEDMUTEX2 \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x196, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_ACQUIREKEYEDMUTEX2 \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x197, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_RELEASEKEYEDMUTEX2 \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x198, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_D3DKMT_CLOSEADAPTER \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x103, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_D3DKMT_QUERYADAPTERINFO \
@@ -3731,3 +3749,150 @@ Cleanup:
     ExFreePoolWithTag(Packet, TAG_WDDM_BRIDGE);
     return Status;
 }
+
+/* ---- Keyed mutexes ------------------------------------------------------- */
+
+NTSTATUS
+APIENTRY
+D3DKMTCreateKeyedMutex(
+    _Inout_ D3DKMT_CREATEKEYEDMUTEX *pData)
+{
+    return WddmBridgeRejectBadBuffer(WddmBridgeCaptureFixedIoctl(IOCTL_D3DKMT_CREATEKEYEDMUTEX, pData, sizeof(*pData), TRUE));
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTCreateKeyedMutex2(
+    _Inout_ D3DKMT_CREATEKEYEDMUTEX2 *pData)
+{
+    return WddmBridgeRejectBadBuffer(WddmBridgeCaptureFixedIoctl(IOCTL_D3DKMT_CREATEKEYEDMUTEX2, pData, sizeof(*pData), TRUE));
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTOpenKeyedMutex(
+    _Inout_ D3DKMT_OPENKEYEDMUTEX *pData)
+{
+    return WddmBridgeRejectBadBuffer(WddmBridgeCaptureFixedIoctl(IOCTL_D3DKMT_OPENKEYEDMUTEX, pData, sizeof(*pData), TRUE));
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTOpenKeyedMutex2(
+    _Inout_ D3DKMT_OPENKEYEDMUTEX2 *pData)
+{
+    return WddmBridgeRejectBadBuffer(WddmBridgeCaptureFixedIoctl(IOCTL_D3DKMT_OPENKEYEDMUTEX2, pData, sizeof(*pData), TRUE));
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTDestroyKeyedMutex(
+    _In_ CONST D3DKMT_DESTROYKEYEDMUTEX *pData)
+{
+    return WddmBridgeRejectBadBuffer(WddmBridgeCaptureFixedIoctl(IOCTL_D3DKMT_DESTROYKEYEDMUTEX, (PVOID)pData, sizeof(*pData), FALSE));
+}
+
+/*
+ * Acquire can block for as long as the caller's timeout allows, so the timeout
+ * pointer must not be dereferenced in the kernel through a user address: it is
+ * captured here and the captured copy travels with the request.
+ */
+NTSTATUS
+APIENTRY
+D3DKMTAcquireKeyedMutex(
+    _Inout_ D3DKMT_ACQUIREKEYEDMUTEX *pData)
+{
+    D3DKMT_ACQUIREKEYEDMUTEX Captured;
+    LARGE_INTEGER Timeout;
+    ULONG_PTR Information = 0;
+    NTSTATUS Status;
+
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Status = WddmBridgeRejectBadBuffer(WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured)));
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Captured.pTimeout != NULL)
+    {
+        Status = WddmBridgeRejectBadBuffer(WddmBridgeSafeCopyFrom(&Timeout, Captured.pTimeout, sizeof(Timeout)));
+        if (!NT_SUCCESS(Status))
+            return Status;
+        Captured.pTimeout = &Timeout;
+    }
+
+    Status = WddmBridgeSendIoctlWithInformation(IOCTL_D3DKMT_ACQUIREKEYEDMUTEX, &Captured, sizeof(Captured), &Captured, sizeof(Captured), &Information);
+    if (NT_SUCCESS(Status) && Status != STATUS_TIMEOUT && Information != sizeof(Captured))
+        return STATUS_INFO_LENGTH_MISMATCH;
+    if (NT_SUCCESS(Status) && Status != STATUS_TIMEOUT)
+    {
+        NTSTATUS CopyStatus = WddmBridgeSafeCopyTo((PUCHAR)pData + FIELD_OFFSET(D3DKMT_ACQUIREKEYEDMUTEX, FenceValue),
+                                                   &Captured.FenceValue, sizeof(Captured.FenceValue));
+        if (!NT_SUCCESS(CopyStatus))
+            Status = CopyStatus;
+    }
+    return Status;
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTAcquireKeyedMutex2(
+    _Inout_ D3DKMT_ACQUIREKEYEDMUTEX2 *pData)
+{
+    D3DKMT_ACQUIREKEYEDMUTEX2 Captured;
+    LARGE_INTEGER Timeout;
+    ULONG_PTR Information = 0;
+    NTSTATUS Status;
+
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Status = WddmBridgeRejectBadBuffer(WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured)));
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Captured.PrivateRuntimeDataSize != 0 && Captured.pPrivateRuntimeData == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (Captured.PrivateRuntimeDataSize > D3DKMT_BRIDGE_MAX_PRIVATE_BYTES)
+        return STATUS_INVALID_PARAMETER;
+    if (Captured.pTimeout != NULL)
+    {
+        Status = WddmBridgeRejectBadBuffer(WddmBridgeSafeCopyFrom(&Timeout, Captured.pTimeout, sizeof(Timeout)));
+        if (!NT_SUCCESS(Status))
+            return Status;
+        Captured.pTimeout = &Timeout;
+    }
+    if (Captured.PrivateRuntimeDataSize != 0)
+    {
+        Status = WddmBridgeRejectBadBuffer(WddmBridgeSafeProbeForWrite(Captured.pPrivateRuntimeData, Captured.PrivateRuntimeDataSize));
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+
+    Status = WddmBridgeSendIoctlWithInformation(IOCTL_D3DKMT_ACQUIREKEYEDMUTEX2, &Captured, sizeof(Captured), &Captured, sizeof(Captured), &Information);
+    if (NT_SUCCESS(Status) && Status != STATUS_TIMEOUT)
+    {
+        NTSTATUS CopyStatus = WddmBridgeSafeCopyTo((PUCHAR)pData + FIELD_OFFSET(D3DKMT_ACQUIREKEYEDMUTEX2, FenceValue),
+                                                   &Captured.FenceValue, sizeof(Captured.FenceValue));
+        if (!NT_SUCCESS(CopyStatus))
+            Status = CopyStatus;
+    }
+    return Status;
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTReleaseKeyedMutex(
+    _Inout_ D3DKMT_RELEASEKEYEDMUTEX *pData)
+{
+    return WddmBridgeRejectBadBuffer(WddmBridgeCaptureFixedIoctl(IOCTL_D3DKMT_RELEASEKEYEDMUTEX, pData, sizeof(*pData), FALSE));
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTReleaseKeyedMutex2(
+    _Inout_ D3DKMT_RELEASEKEYEDMUTEX2 *pData)
+{
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+    return WddmBridgeRejectBadBuffer(WddmBridgeCaptureFixedIoctl(IOCTL_D3DKMT_RELEASEKEYEDMUTEX2, pData, sizeof(*pData), FALSE));
+}
+
+/* EOF */

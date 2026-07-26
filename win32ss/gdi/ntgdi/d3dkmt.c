@@ -173,6 +173,17 @@ APIENTRY
 D3DKMTEnumAdapters3(
     _Inout_ struct _D3DKMT_ENUMADAPTERS3 *pData);
 
+NTSTATUS APIENTRY D3DKMTCreateKeyedMutex(_Inout_ D3DKMT_CREATEKEYEDMUTEX *pData);
+NTSTATUS APIENTRY D3DKMTCreateKeyedMutex2(_Inout_ struct _D3DKMT_CREATEKEYEDMUTEX2 *pData);
+NTSTATUS APIENTRY D3DKMTOpenKeyedMutex(_Inout_ D3DKMT_OPENKEYEDMUTEX *pData);
+NTSTATUS APIENTRY D3DKMTOpenKeyedMutex2(_Inout_ struct _D3DKMT_OPENKEYEDMUTEX2 *pData);
+NTSTATUS APIENTRY D3DKMTDestroyKeyedMutex(_In_ CONST D3DKMT_DESTROYKEYEDMUTEX *pData);
+NTSTATUS APIENTRY D3DKMTAcquireKeyedMutex(_Inout_ D3DKMT_ACQUIREKEYEDMUTEX *pData);
+NTSTATUS APIENTRY D3DKMTAcquireKeyedMutex2(_Inout_ struct _D3DKMT_ACQUIREKEYEDMUTEX2 *pData);
+NTSTATUS APIENTRY D3DKMTReleaseKeyedMutex(_Inout_ D3DKMT_RELEASEKEYEDMUTEX *pData);
+NTSTATUS APIENTRY D3DKMTReleaseKeyedMutex2(_Inout_ struct _D3DKMT_RELEASEKEYEDMUTEX2 *pData);
+
+
 NTSTATUS
 APIENTRY
 D3DKMTOpenAdapterFromLuid(
@@ -915,40 +926,55 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDICreateKeyedMutex(_Inout_ D3DKMT_CREATEKEYEDMUTEX* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return D3DKMTCreateKeyedMutex(unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIOpenKeyedMutex(_Inout_ D3DKMT_OPENKEYEDMUTEX* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return D3DKMTOpenKeyedMutex(unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIDestroyKeyedMutex(_In_ const D3DKMT_DESTROYKEYEDMUTEX* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return D3DKMTDestroyKeyedMutex(unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIAcquireKeyedMutex(_Inout_ D3DKMT_ACQUIREKEYEDMUTEX* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return D3DKMTAcquireKeyedMutex(unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIReleaseKeyedMutex(_Inout_ D3DKMT_RELEASEKEYEDMUTEX* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return D3DKMTReleaseKeyedMutex(unnamedParam1);
 }
 
 NTSTATUS
@@ -1487,32 +1513,44 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIAcquireKeyedMutex2(_Inout_ struct _D3DKMT_ACQUIREKEYEDMUTEX2* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return D3DKMTAcquireKeyedMutex2(unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDICreateKeyedMutex2(_Inout_ struct _D3DKMT_CREATEKEYEDMUTEX2* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return D3DKMTCreateKeyedMutex2(unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIOpenKeyedMutex2(_Inout_ struct _D3DKMT_OPENKEYEDMUTEX2* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return D3DKMTOpenKeyedMutex2(unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIReleaseKeyedMutex2(_Inout_ struct _D3DKMT_RELEASEKEYEDMUTEX2* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return D3DKMTReleaseKeyedMutex2(unnamedParam1);
 }
 
 NTSTATUS

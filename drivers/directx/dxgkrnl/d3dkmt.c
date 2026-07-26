@@ -6065,13 +6065,84 @@ DxgkpDispatchBufferedIoctl(
         }
 
         case IOCTL_D3DKMT_CREATEKEYEDMUTEX:
-        case IOCTL_D3DKMT_DESTROYKEYEDMUTEX:
+        {
+            if (InputLength < sizeof(D3DKMT_CREATEKEYEDMUTEX) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            Status = DxgkCreateKeyedMutex((D3DKMT_CREATEKEYEDMUTEX *)SystemBuffer);
+            if (NT_SUCCESS(Status))
+                Irp->IoStatus.Information = sizeof(D3DKMT_CREATEKEYEDMUTEX);
+            return Status;
+        }
+
+        case IOCTL_D3DKMT_CREATEKEYEDMUTEX2:
+        {
+            if (InputLength < sizeof(D3DKMT_CREATEKEYEDMUTEX2) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            Status = DxgkCreateKeyedMutex2((D3DKMT_CREATEKEYEDMUTEX2 *)SystemBuffer, EmbeddedBufferMode);
+            if (NT_SUCCESS(Status))
+                Irp->IoStatus.Information = sizeof(D3DKMT_CREATEKEYEDMUTEX2);
+            return Status;
+        }
+
         case IOCTL_D3DKMT_OPENKEYEDMUTEX:
+        {
+            if (InputLength < sizeof(D3DKMT_OPENKEYEDMUTEX) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            Status = DxgkOpenKeyedMutex((D3DKMT_OPENKEYEDMUTEX *)SystemBuffer);
+            if (NT_SUCCESS(Status))
+                Irp->IoStatus.Information = sizeof(D3DKMT_OPENKEYEDMUTEX);
+            return Status;
+        }
+
+        case IOCTL_D3DKMT_OPENKEYEDMUTEX2:
+        {
+            if (InputLength < sizeof(D3DKMT_OPENKEYEDMUTEX2) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            Status = DxgkOpenKeyedMutex2((D3DKMT_OPENKEYEDMUTEX2 *)SystemBuffer, EmbeddedBufferMode);
+            if (NT_SUCCESS(Status))
+                Irp->IoStatus.Information = sizeof(D3DKMT_OPENKEYEDMUTEX2);
+            return Status;
+        }
+
+        case IOCTL_D3DKMT_DESTROYKEYEDMUTEX:
+        {
+            if (InputLength < sizeof(D3DKMT_DESTROYKEYEDMUTEX) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            return DxgkDestroyKeyedMutex((CONST D3DKMT_DESTROYKEYEDMUTEX *)SystemBuffer);
+        }
+
         case IOCTL_D3DKMT_ACQUIREKEYEDMUTEX:
+        {
+            if (InputLength < sizeof(D3DKMT_ACQUIREKEYEDMUTEX) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            Status = DxgkAcquireKeyedMutex((D3DKMT_ACQUIREKEYEDMUTEX *)SystemBuffer);
+            if (NT_SUCCESS(Status))
+                Irp->IoStatus.Information = sizeof(D3DKMT_ACQUIREKEYEDMUTEX);
+            return Status;
+        }
+
+        case IOCTL_D3DKMT_ACQUIREKEYEDMUTEX2:
+        {
+            if (InputLength < sizeof(D3DKMT_ACQUIREKEYEDMUTEX2) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            Status = DxgkAcquireKeyedMutex2((D3DKMT_ACQUIREKEYEDMUTEX2 *)SystemBuffer, EmbeddedBufferMode);
+            if (NT_SUCCESS(Status))
+                Irp->IoStatus.Information = sizeof(D3DKMT_ACQUIREKEYEDMUTEX2);
+            return Status;
+        }
+
         case IOCTL_D3DKMT_RELEASEKEYEDMUTEX:
         {
-            /* Keyed mutex: not yet implemented */
-            return STATUS_NOT_SUPPORTED;
+            if (InputLength < sizeof(D3DKMT_RELEASEKEYEDMUTEX) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            return DxgkReleaseKeyedMutex((D3DKMT_RELEASEKEYEDMUTEX *)SystemBuffer);
+        }
+
+        case IOCTL_D3DKMT_RELEASEKEYEDMUTEX2:
+        {
+            if (InputLength < sizeof(D3DKMT_RELEASEKEYEDMUTEX2) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            return DxgkReleaseKeyedMutex2((D3DKMT_RELEASEKEYEDMUTEX2 *)SystemBuffer, EmbeddedBufferMode);
         }
 
         case IOCTL_D3DKMT_CREATEOVERLAY:
@@ -6558,6 +6629,10 @@ DxgkDispatchDeviceControl(
         case IOCTL_D3DKMT_OPENKEYEDMUTEX:
         case IOCTL_D3DKMT_ACQUIREKEYEDMUTEX:
         case IOCTL_D3DKMT_RELEASEKEYEDMUTEX:
+        case IOCTL_D3DKMT_CREATEKEYEDMUTEX2:
+        case IOCTL_D3DKMT_OPENKEYEDMUTEX2:
+        case IOCTL_D3DKMT_ACQUIREKEYEDMUTEX2:
+        case IOCTL_D3DKMT_RELEASEKEYEDMUTEX2:
         case IOCTL_D3DKMT_CREATEOVERLAY:
         case IOCTL_D3DKMT_DESTROYOVERLAY:
         case IOCTL_D3DKMT_FLIPOVERLAY:

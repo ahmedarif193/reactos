@@ -33,6 +33,7 @@ list(APPEND SOURCE
     paging_core.c
     display_core.c
     object_core.c
+    keyedmutex_core.c
     capture.c
     handles.c
     device_work_core.c
@@ -47,6 +48,7 @@ list(APPEND SOURCE
     dma.c
     present.c
     sync.c
+    keyedmutex.c
     sync_wait_core.c
     vidsch.c
     vidpn.c
