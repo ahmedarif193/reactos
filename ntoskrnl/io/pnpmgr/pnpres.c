@@ -58,7 +58,7 @@ IopGetNextResourceList(
         &ResourceList->Descriptors[ResourceList->Count]);
 }
 
-#if defined(_M_IX86) || defined(_M_AMD64)
+#if defined(_M_IX86) || defined(_M_AMD64) || defined(_M_ARM64)
 /* Consolidate interrupt descriptors in a device's CM_RESOURCE_LIST
  * so that only the interrupt class the device will actually use
  * survives. This runs after the PnP arbiter has picked an
@@ -66,8 +66,8 @@ IopGetNextResourceList(
  *
  * Two classes of garbage are removed:
  *
- *   1. Ghost line IRQs planted by firmware with a Vector already
- *      inside the MSI pool (Vector >= IOP_APIC_MSI_VECTOR_MIN).
+ *   1. On x86, ghost line IRQs planted by firmware with a Vector
+ *      already inside the MSI pool (Vector >= IOP_APIC_MSI_VECTOR_MIN).
  *      A legal legacy IRQ must never land there; such descriptors
  *      are leftover artifacts from boot routing tables and confuse
  *      drivers that iterate the list.
@@ -76,8 +76,8 @@ IopGetNextResourceList(
  *      MSI-X descriptor in the same partial list. When the arbiter
  *      grants MSI, the PCI bus driver sets PCI_COMMAND_INTX_DISABLE
  *      and the line IRQ is electrically disconnected from the
- *      IOAPIC. Leaving the legacy descriptor in the resource list
- *      makes Device Manager display the obsolete INTx line instead
+ *      interrupt controller. Leaving the legacy descriptor in the
+ *      resource list makes Device Manager display the obsolete INTx line instead
  *      of the MSI vector, breaks any driver that iterates the list
  *      assuming only one interrupt per class, and produces resource
  *      ownership claims on an IRQ the device no longer uses.
@@ -124,6 +124,7 @@ IopConsolidateInterruptDescriptors(
             if (Desc->Type == CmResourceTypeInterrupt &&
                 !(Desc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE))
             {
+#if defined(_M_IX86) || defined(_M_AMD64)
                 if (Desc->u.Interrupt.Vector >= IOP_APIC_MSI_VECTOR_MIN)
                 {
                     DPRINT1("IopConsolidateInterruptDescriptors: dropping ghost "
@@ -132,7 +133,8 @@ IopConsolidateInterruptDescriptors(
                             Desc->u.Interrupt.Vector, Desc->u.Interrupt.Level);
                     Drop = TRUE;
                 }
-                else if (HasMessageInterrupt)
+#endif
+                if (!Drop && HasMessageInterrupt)
                 {
                     DPRINT1("IopConsolidateInterruptDescriptors: dropping obsolete "
                             "legacy interrupt vec=0x%x level=%lu "
@@ -1496,7 +1498,7 @@ IopAssignDeviceResources(
    Status = IopFixupResourceListWithRequirements(DeviceNode->ResourceRequirements,
                                                  &DeviceNode->ResourceList);
 
-#if defined(_M_IX86) || defined(_M_AMD64)
+#if defined(_M_IX86) || defined(_M_AMD64) || defined(_M_ARM64)
    /* Second consolidation pass: now that arbitration has finished
     * and the MSI/MSI-X descriptor (if any) has been added, drop the
     * obsolete legacy line descriptor that came from BootResources.
