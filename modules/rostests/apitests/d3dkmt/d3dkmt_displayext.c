@@ -204,7 +204,7 @@ static void Test_SetVidPnSourceOwner_AllTypes(void)
         _SEH2_TRY { Status = pfn(&OwnerData); }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) { faulted = TRUE; }
         _SEH2_END;
-        ok(faulted || !NT_SUCCESS(Status), "SetVidPnSourceOwner(count=0, non-NULL arrays) must be refused, got 0x%08lx%s\n", (unsigned long)Status, faulted ? " (faulted)" : "");
+        ok(!faulted && NT_SUCCESS(Status), "SetVidPnSourceOwner(count=0) is a release-all request Win11 accepts, got 0x%08lx%s\n", (unsigned long)Status, faulted ? " (faulted)" : "");
     }
 
     /* Param validation: bogus device handle must be refused. */
@@ -300,7 +300,7 @@ static void Test_SetVidPnSourceOwner1(void)
     _SEH2_TRY { Status = pfn(&Owner1); }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) { faulted = TRUE; }
     _SEH2_END;
-    ok(faulted || !NT_SUCCESS(Status), "SetVidPnSourceOwner1(count=0, non-NULL arrays) must be refused, got 0x%08lx%s\n", (unsigned long)Status, faulted ? " (faulted)" : "");
+    ok(!faulted && NT_SUCCESS(Status), "SetVidPnSourceOwner1(count=0) is a release-all request Win11 accepts, got 0x%08lx%s\n", (unsigned long)Status, faulted ? " (faulted)" : "");
 
     DestroyTestDevice(hDevice);
     CloseAdapter(hAdapter);
@@ -949,13 +949,14 @@ static void Test_PollDisplayChildren(void)
     PollData.hAdapter = hAdapter;
     PollData.Reserved = 1;
     Status = pfn(&PollData);
-    ok(!NT_SUCCESS(Status), "PollDisplayChildren must reject reserved flag bits, got 0x%08lx\n", (unsigned long)Status);
+    ok(NT_SUCCESS(Status), "PollDisplayChildren does not police reserved flag bits on Win11, got 0x%08lx\n", (unsigned long)Status);
 
     memset(&PollData, 0, sizeof(PollData));
     PollData.hAdapter = hAdapter;
     PollData.DisableModeReset = 1;
     Status = pfn(&PollData);
-    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    /* Win11 accepts DisableModeReset rather than refusing it. */
+    ok_eq_hex(Status, STATUS_SUCCESS);
 
     /* Non-destructive poll; a user-mode caller may be refused on Win11. */
     memset(&PollData, 0, sizeof(PollData));
