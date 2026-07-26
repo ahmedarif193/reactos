@@ -2031,11 +2031,10 @@ PrepareImageFile(NtfsFuseState* State,
 static NTSTATUS
 CopyHostFileToImage(NtfsFuseState* State,
                     const std::string& ImagePath,
-                    const std::string& SourcePath)
+                    const std::string& SourcePath,
+                    std::vector<UCHAR>& Buffer)
 {
-    static const size_t CopyBufferSize = 1024 * 1024;
     PNtfsFileRecord File = NULL;
-    std::vector<UCHAR> Buffer(CopyBufferSize);
     LARGE_INTEGER Offset = {};
     FILE* Source;
     NTSTATUS Status;
@@ -2093,6 +2092,7 @@ static int
 AddFilesFromList(NtfsFuseState* State,
                  const char* ListPath)
 {
+    static const size_t CopyBufferSize = 1024 * 1024;
     FILE* List = fopen(ListPath, "rb");
     char* Line = NULL;
     size_t Capacity = 0;
@@ -2104,6 +2104,10 @@ AddFilesFromList(NtfsFuseState* State,
         fprintf(stderr, "%s: %s\n", ListPath, strerror(errno));
         return 1;
     }
+
+    // Unoptimized libc++ builds may initialize and destroy vector elements
+    // individually, so reuse this large buffer for the whole import.
+    std::vector<UCHAR> CopyBuffer(CopyBufferSize);
 
     for (;;)
     {
@@ -2186,7 +2190,8 @@ AddFilesFromList(NtfsFuseState* State,
                 Status = CopyHostFileToImage(
                     State,
                     Destination,
-                    Source);
+                    Source,
+                    CopyBuffer);
             }
         }
         else
