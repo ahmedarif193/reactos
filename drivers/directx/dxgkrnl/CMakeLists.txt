@@ -49,6 +49,7 @@ list(APPEND SOURCE
     present.c
     sync.c
     keyedmutex.c
+    trimnotify.c
     sync_wait_core.c
     vidsch.c
     vidpn.c
