@@ -170,6 +170,11 @@ D3DKMTEnumAdapters2(
 
 NTSTATUS
 APIENTRY
+D3DKMTEnumAdapters3(
+    _Inout_ struct _D3DKMT_ENUMADAPTERS3 *pData);
+
+NTSTATUS
+APIENTRY
 D3DKMTOpenAdapterFromLuid(
     _Inout_ CONST D3DKMT_OPENADAPTERFROMLUID *pData);
 
@@ -1471,8 +1476,11 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIEnumAdapters3(_Inout_ struct _D3DKMT_ENUMADAPTERS3* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return D3DKMTEnumAdapters3(unnamedParam1);
 }
 
 NTSTATUS
