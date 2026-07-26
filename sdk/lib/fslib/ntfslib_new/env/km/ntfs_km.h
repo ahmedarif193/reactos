@@ -14,6 +14,10 @@ NtfsDiskInitializeKm(
     _In_ PDEVICE_OBJECT DeviceObject,
     _In_ ULONG SectorBytes);
 
+/* Writes out metadata held back by the block cache. */
+NTSTATUS
+NtfsDiskFlushKm(VOID);
+
 /* Declared here rather than in the public header because
  * FILE_BOTH_DIR_INFORMATION is a kernel-mode type.
  */
