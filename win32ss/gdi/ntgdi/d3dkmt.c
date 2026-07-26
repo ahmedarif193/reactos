@@ -412,11 +412,13 @@ NtGdiDdDDIOpenAdapterFromHdc(_Inout_ D3DKMT_OPENADAPTERFROMHDC* unnamedParam1)
         _SEH2_YIELD(return _SEH2_GetExceptionCode());
     }
     _SEH2_END;
+    /* Windows 11 refuses a D3DKMT open with an unusable HDC as a bad
+     * parameter, the same way it treats a bad D3DKMT handle. */
     if (Captured.hDc == NULL)
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
     Dc = DC_LockDc(Captured.hDc);
     if (Dc == NULL)
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
     if (Dc->dctype != DCTYPE_DIRECT || Dc->ppdev == NULL || (Dc->ppdev->flFlags & PDEV_DISPLAY) == 0 || Dc->ppdev->pGraphicsDevice == NULL || Dc->ppdev->pGraphicsDevice->szNtDeviceName[0] == L'\0')
         Status = STATUS_INVALID_HANDLE;
     else
