@@ -5193,9 +5193,21 @@ DxgkpMms2StartAdministrativeAdapter(_In_ PDXGKRNL_ADAPTER Adapter, _Out_ PBOOLEA
     Status = DxgkpMms2StartAdapter(Adapter->Mms2Adapter, Adapter->MiniportContext->InitData.s.Version, RequestedWddmVersion, Adapter->NodeCount, Adapter->SegmentCount, DxgkpMms2GetAdapterFlags(Adapter), Adapter->SchedulingCaps.Value, &EnabledSubsystems, &HighestCompleteWddmVersion, ProviderStarted);
     if (NT_SUCCESS(Status))
     {
+        /* dxgmms2 reports which subsystems it actually owns.  Both words stay
+         * zero until the run queues themselves migrate; the v4 scheduler
+         * contract is acquired regardless so the queue core is reachable. */
         ASSERT(EnabledSubsystems == 0);
         ASSERT(HighestCompleteWddmVersion == 0);
-        Status = DxgkpMms2QuerySchedulerTimeline(Adapter->Mms2Adapter, &Timeline);
+        Status = DxgkpMms2QuerySchedulerInterface(Adapter->Mms2Adapter, &Adapter->Mms2SchedulerInterface);
+        if (NT_SUCCESS(Status))
+        {
+            InterlockedExchange(&Adapter->Mms2SchedulerValid, 1);
+            Status = Adapter->Mms2SchedulerInterface.Start(Adapter->Mms2SchedulerInterface.SchedulerHandle, Adapter->NodeCount != 0 ? Adapter->NodeCount : 1);
+            if (Status == STATUS_INVALID_DEVICE_STATE)
+                Status = STATUS_SUCCESS;   /* already started by StartAdapter */
+        }
+        if (NT_SUCCESS(Status))
+            Status = DxgkpMms2QuerySchedulerTimeline(Adapter->Mms2Adapter, &Timeline);
         if (NT_SUCCESS(Status) && Timeline.NodeCount != Adapter->NodeCount)
             Status = STATUS_REVISION_MISMATCH;
         if (NT_SUCCESS(Status))

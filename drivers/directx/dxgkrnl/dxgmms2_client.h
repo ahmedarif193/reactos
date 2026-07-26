@@ -17,6 +17,7 @@ NTSTATUS DxgkpMms2BeginStopAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Mms2Adapter, _In_
 NTSTATUS DxgkpMms2CompleteStopAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Mms2Adapter, _In_ DXGMMS2_STOP_REASON Reason);
 NTSTATUS DxgkpMms2DestroyAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Mms2Adapter);
 NTSTATUS DxgkpMms2QuerySchedulerTimeline(_In_ DXGMMS2_ADAPTER_HANDLE Mms2Adapter, _Out_ DXGMMS2_SCHEDULER_TIMELINE_INTERFACE_V1 *TimelineInterface);
+NTSTATUS DxgkpMms2QuerySchedulerInterface(_In_ DXGMMS2_ADAPTER_HANDLE Mms2Adapter, _Out_ DXGMMS2_SCHEDULER_INTERFACE_V1 *SchedulerInterface);
 NTSTATUS DxgkpMms2QueryContextStreamInterface(_In_ DXGMMS2_ADAPTER_HANDLE Mms2Adapter, _Out_ DXGMMS2_CONTEXT_STREAM_INTERFACE_V1 *ContextStreamInterface);
 
 #endif /* _DXGKRNL_DXGMMS2_CLIENT_H_ */
