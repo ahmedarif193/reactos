@@ -21,9 +21,6 @@
 
 PDEVICE_OBJECT NtfsDiskFileSystemDeviceObject;
 
-extern LONG64 NtfsProfCleanup;
-extern LONG NtfsProfCleanupCount;
-
 #define TAG_IRP_CTXT 'iftN'
 #define TAG_ATT_CTXT 'aftN'
 #define TAG_FILE_REC 'rftN'
@@ -214,7 +211,6 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
      */
     PIO_STACK_LOCATION IrpSp;
     PFileContextBlock FileCB;
-    LARGE_INTEGER ProfS = KeQueryPerformanceCounter(NULL);
 
     if (VolumeDeviceObject == NtfsDiskFileSystemDeviceObject)
     {
@@ -307,12 +303,6 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     }
 
     // TODO: How do we determine when the volume needs to get cleaned up?
-
-    {
-        LARGE_INTEGER ProfE = KeQueryPerformanceCounter(NULL);
-        InterlockedAdd64(&NtfsProfCleanup, ProfE.QuadPart - ProfS.QuadPart);
-        InterlockedIncrement(&NtfsProfCleanupCount);
-    }
 
     Irp->IoStatus.Information = STATUS_SUCCESS;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
