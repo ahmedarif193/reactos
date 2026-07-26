@@ -38,6 +38,7 @@ extern void func_teardown(void);
 extern void func_renderpath(void);
 extern void func_capsaudit(void);
 extern void func_umdabi(void);
+extern void func_abifreeze(void);
 extern void func_renderadapter(void);
 extern void func_luidident(void);
 extern void func_handletype(void);
@@ -93,6 +94,7 @@ const struct test winetest_testlist[] =
     { "renderpath",    func_renderpath },
     { "capsaudit",     func_capsaudit },
     { "umdabi",        func_umdabi },
+    { "abifreeze",     func_abifreeze },
     { "renderadapter", func_renderadapter },
     { "luidident",     func_luidident },
     { "handletype",    func_handletype },
