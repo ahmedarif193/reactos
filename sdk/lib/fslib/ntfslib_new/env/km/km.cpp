@@ -47,6 +47,9 @@ NtfsQuerySystemTime(_Out_ PULONGLONG NtfsTime)
 #endif
 
 
+static NTSTATUS WriteDisk(_In_ PDEVICE_OBJECT DeviceObject, _In_ ULONGLONG Offset,
+                          _In_ ULONG Length, _In_ PUCHAR Buffer);
+
 /* METADATA BLOCK CACHE *****************************************************/
 
 /*
@@ -65,9 +68,18 @@ typedef struct _NTFS_CACHE_SLOT
 {
     ULONGLONG Tag;
     PUCHAR Data;
+    PDEVICE_OBJECT Owner;
+    BOOLEAN Dirty;
 } NTFS_CACHE_SLOT;
 
 static NTFS_CACHE_SLOT NtfsCacheSlots[NTFS_CACHE_SLOTS];
+static ULONG NtfsCacheDirtyCount = 0;
+
+/* Above this many blocks held back, write some out before taking on more.
+ * Only a slice is committed at a time so no single write pays for the whole
+ * backlog. */
+#define NTFS_CACHE_DIRTY_LIMIT 384
+#define NTFS_CACHE_DIRTY_SLICE 128
 static FAST_MUTEX NtfsCacheMutex;
 static BOOLEAN NtfsCacheReady = FALSE;
 
@@ -80,7 +92,11 @@ NtfsCacheDiscardAll(VOID)
     ULONG Index;
 
     for (Index = 0; Index < NTFS_CACHE_SLOTS; Index++)
+    {
         NtfsCacheSlots[Index].Tag = NTFS_CACHE_EMPTY;
+        NtfsCacheSlots[Index].Dirty = FALSE;
+    }
+    NtfsCacheDirtyCount = 0;
 }
 
 static
@@ -91,11 +107,9 @@ NtfsCacheInitialize(VOID)
     {
         ExInitializeFastMutex(&NtfsCacheMutex);
         RtlZeroMemory(NtfsCacheSlots, sizeof(NtfsCacheSlots));
+        NtfsCacheDiscardAll();
         NtfsCacheReady = TRUE;
     }
-    ExAcquireFastMutex(&NtfsCacheMutex);
-    NtfsCacheDiscardAll();
-    ExReleaseFastMutex(&NtfsCacheMutex);
 }
 
 /* Drops every block overlapping [Offset, Offset + Length). */
@@ -117,10 +131,215 @@ NtfsCacheInvalidateRange(_In_ ULONGLONG Offset, _In_ ULONG Length)
     {
         NTFS_CACHE_SLOT* Slot = &NtfsCacheSlots[Block & NTFS_CACHE_SLOT_MASK];
 
-        if (Slot->Tag == Block)
+        if (Slot->Tag == Block && Slot->Owner == PartDeviceObj)
+        {
+            if (Slot->Dirty)
+            {
+                Slot->Dirty = FALSE;
+                NtfsCacheDirtyCount--;
+            }
             Slot->Tag = NTFS_CACHE_EMPTY;
+        }
     }
     ExReleaseFastMutex(&NtfsCacheMutex);
+}
+
+/*
+ * Writes go to the volume, so the blocks we already hold can simply take the
+ * same bytes instead of being dropped. Discarding them would make every
+ * metadata update cost a re-read of the surrounding index and MFT blocks.
+ */
+static
+VOID
+NtfsCacheUpdateRange(_In_ ULONGLONG Offset, _In_ ULONG Length,
+                     _In_reads_bytes_(Length) PUCHAR Data)
+{
+    ULONG Remaining = Length;
+    ULONGLONG Current = Offset;
+    PUCHAR In = Data;
+
+    if (!NtfsCacheReady || !Length)
+        return;
+
+    ExAcquireFastMutex(&NtfsCacheMutex);
+    while (Remaining)
+    {
+        ULONGLONG Block = Current >> NTFS_CACHE_BLOCK_SHIFT;
+        ULONG BlockOffset = (ULONG)(Current & (NTFS_CACHE_BLOCK_SIZE - 1));
+        ULONG Chunk = min(Remaining, NTFS_CACHE_BLOCK_SIZE - BlockOffset);
+        NTFS_CACHE_SLOT* Slot = &NtfsCacheSlots[Block & NTFS_CACHE_SLOT_MASK];
+
+        if (Slot->Tag == Block && Slot->Data && Slot->Owner == PartDeviceObj)
+            RtlCopyMemory(Slot->Data + BlockOffset, In, Chunk);
+
+        In += Chunk;
+        Current += Chunk;
+        Remaining -= Chunk;
+    }
+    ExReleaseFastMutex(&NtfsCacheMutex);
+}
+
+/*
+ * Metadata is rewritten constantly and usually overwritten again moments
+ * later, so updates are held in the cache and committed in batches. Reads are
+ * served from the same blocks, so a held-back write is never invisible to the
+ * code that reads it back; callers that bypass the cache flush first.
+ *
+ * The disk transfer must happen with the mutex dropped: it waits on an IRP,
+ * and the fast mutex holds APC_LEVEL where that completion could never run.
+ */
+static
+NTSTATUS
+NtfsCacheWriteBackOne(_In_ ULONGLONG Block)
+{
+    PUCHAR Staged;
+    BOOLEAN Pending = FALSE;
+    NTSTATUS Status = STATUS_SUCCESS;
+    NTFS_CACHE_SLOT* Slot;
+    PDEVICE_OBJECT Target = NULL;
+
+    Staged = (PUCHAR)ExAllocatePoolUninitialized(NonPagedPool,
+                                                 NTFS_CACHE_BLOCK_SIZE,
+                                                 'CftN');
+    if (!Staged)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    ExAcquireFastMutex(&NtfsCacheMutex);
+    Slot = &NtfsCacheSlots[Block & NTFS_CACHE_SLOT_MASK];
+    if (Slot->Tag == Block && Slot->Dirty && Slot->Data)
+    {
+        RtlCopyMemory(Staged, Slot->Data, NTFS_CACHE_BLOCK_SIZE);
+        Target = Slot->Owner;
+        Slot->Dirty = FALSE;
+        NtfsCacheDirtyCount--;
+        Pending = TRUE;
+    }
+    ExReleaseFastMutex(&NtfsCacheMutex);
+
+    if (Pending)
+    {
+        Status = WriteDisk(Target,
+                           Block << NTFS_CACHE_BLOCK_SHIFT,
+                           NTFS_CACHE_BLOCK_SIZE,
+                           Staged);
+        if (!NT_SUCCESS(Status))
+        {
+            /* Put it back so the data is not simply lost. */
+            ExAcquireFastMutex(&NtfsCacheMutex);
+            Slot = &NtfsCacheSlots[Block & NTFS_CACHE_SLOT_MASK];
+            if (Slot->Tag == Block && !Slot->Dirty)
+            {
+                Slot->Dirty = TRUE;
+                NtfsCacheDirtyCount++;
+            }
+            ExReleaseFastMutex(&NtfsCacheMutex);
+        }
+    }
+
+    ExFreePoolWithTag(Staged, 'CftN');
+    return Status;
+}
+
+static
+NTSTATUS
+NtfsCacheFlushSome(_In_ ULONG Budget)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+    ULONG Index;
+    ULONG Written = 0;
+
+    if (!NtfsCacheReady)
+        return STATUS_SUCCESS;
+
+    for (Index = 0; Index < NTFS_CACHE_SLOTS && Written < Budget; Index++)
+    {
+        ULONGLONG Block;
+        BOOLEAN Dirty;
+
+        ExAcquireFastMutex(&NtfsCacheMutex);
+        Block = NtfsCacheSlots[Index].Tag;
+        Dirty = NtfsCacheSlots[Index].Dirty;
+        ExReleaseFastMutex(&NtfsCacheMutex);
+
+        if (Dirty && Block != NTFS_CACHE_EMPTY)
+        {
+            NTSTATUS One = NtfsCacheWriteBackOne(Block);
+
+            if (!NT_SUCCESS(One))
+                Status = One;
+            Written++;
+        }
+    }
+    return Status;
+}
+
+static
+NTSTATUS
+NtfsCacheFlushAll(VOID)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+    ULONG Index;
+
+    if (!NtfsCacheReady)
+        return STATUS_SUCCESS;
+
+    for (Index = 0; Index < NTFS_CACHE_SLOTS; Index++)
+    {
+        ULONGLONG Block;
+        BOOLEAN Dirty;
+
+        ExAcquireFastMutex(&NtfsCacheMutex);
+        Block = NtfsCacheSlots[Index].Tag;
+        Dirty = NtfsCacheSlots[Index].Dirty;
+        ExReleaseFastMutex(&NtfsCacheMutex);
+
+        if (Dirty && Block != NTFS_CACHE_EMPTY)
+        {
+            NTSTATUS One = NtfsCacheWriteBackOne(Block);
+
+            if (!NT_SUCCESS(One))
+                Status = One;
+        }
+    }
+    return Status;
+}
+
+/* Commits anything held for [Offset, Offset + Length) so the caller may read
+ * or write those bytes on the disk directly. */
+static
+NTSTATUS
+NtfsCacheFlushRange(_In_ ULONGLONG Offset, _In_ ULONG Length)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+    ULONGLONG Block;
+    ULONGLONG LastBlock;
+
+    if (!NtfsCacheReady || !Length || NtfsCacheDirtyCount == 0)
+        return STATUS_SUCCESS;
+
+
+    Block = Offset >> NTFS_CACHE_BLOCK_SHIFT;
+    LastBlock = (Offset + Length - 1) >> NTFS_CACHE_BLOCK_SHIFT;
+
+    for (; Block <= LastBlock; Block++)
+    {
+        NTSTATUS One;
+        BOOLEAN Dirty;
+
+        /* Nearly every block a large transfer walks is clean, and committing
+         * one costs a staging buffer, so look before paying for it. */
+        ExAcquireFastMutex(&NtfsCacheMutex);
+        Dirty = (NtfsCacheSlots[Block & NTFS_CACHE_SLOT_MASK].Tag == Block &&
+                 NtfsCacheSlots[Block & NTFS_CACHE_SLOT_MASK].Dirty);
+        ExReleaseFastMutex(&NtfsCacheMutex);
+        if (!Dirty)
+            continue;
+
+        One = NtfsCacheWriteBackOne(Block);
+        if (!NT_SUCCESS(One))
+            Status = One;
+    }
+    return Status;
 }
 
 /* TRUE when the whole block was served from memory. */
@@ -137,7 +356,7 @@ NtfsCacheCopyOut(_In_ ULONGLONG Block, _In_ ULONG BlockOffset,
 
     ExAcquireFastMutex(&NtfsCacheMutex);
     Slot = &NtfsCacheSlots[Block & NTFS_CACHE_SLOT_MASK];
-    if (Slot->Tag == Block && Slot->Data)
+    if (Slot->Tag == Block && Slot->Data && Slot->Owner == PartDeviceObj)
     {
         RtlCopyMemory(Buffer, Slot->Data + BlockOffset, Length);
         Hit = TRUE;
@@ -155,8 +374,18 @@ NtfsCacheInstall(_In_ ULONGLONG Block, _In_reads_bytes_(NTFS_CACHE_BLOCK_SIZE) P
     if (!NtfsCacheReady)
         return;
 
+    /* Never lose an update by dropping the block that is being replaced. */
     ExAcquireFastMutex(&NtfsCacheMutex);
     Slot = &NtfsCacheSlots[Block & NTFS_CACHE_SLOT_MASK];
+    if (Slot->Dirty && (Slot->Tag != Block || Slot->Owner != PartDeviceObj))
+    {
+        ULONGLONG Victim = Slot->Tag;
+
+        ExReleaseFastMutex(&NtfsCacheMutex);
+        NtfsCacheWriteBackOne(Victim);
+        ExAcquireFastMutex(&NtfsCacheMutex);
+        Slot = &NtfsCacheSlots[Block & NTFS_CACHE_SLOT_MASK];
+    }
     if (!Slot->Data)
     {
         Slot->Data = (PUCHAR)ExAllocatePoolUninitialized(NonPagedPool,
@@ -170,6 +399,8 @@ NtfsCacheInstall(_In_ ULONGLONG Block, _In_reads_bytes_(NTFS_CACHE_BLOCK_SIZE) P
     }
     RtlCopyMemory(Slot->Data, Data, NTFS_CACHE_BLOCK_SIZE);
     Slot->Tag = Block;
+    Slot->Owner = PartDeviceObj;
+    Slot->Dirty = FALSE;
     ExReleaseFastMutex(&NtfsCacheMutex);
 }
 
@@ -184,14 +415,13 @@ NtfsDiskInitializeKm(
         return STATUS_INVALID_PARAMETER;
     }
 
-    /* Mount probes re-point the library at other volumes, so anything held
-     * from the previous device must go. */
-    if (PartDeviceObj != DeviceObject || BytesPerSector != SectorBytes)
-    {
-        PartDeviceObj = DeviceObject;
-        BytesPerSector = SectorBytes;
-        NtfsCacheInitialize();
-    }
+    /* Mount probes re-point the library at other volumes constantly. Blocks
+     * remember which device they came from, so switching device keeps them
+     * and simply stops them matching; nothing is discarded and no write is
+     * lost. */
+    NtfsCacheInitialize();
+    PartDeviceObj = DeviceObject;
+    BytesPerSector = SectorBytes;
     return STATUS_SUCCESS;
 }
 
@@ -450,6 +680,9 @@ NtfsReadVolume(_In_    ULONGLONG Offset,
         /* Anything left over falls through to a plain read below. */
     }
 
+    /* This read goes to the disk, so anything held back for it must be there. */
+    NtfsCacheFlushRange(Offset, Length);
+
     SectorAlignedOffset = Offset - (Offset % BytesPerSector);
     SectorAlignedLength = ALIGN_UP_BY((Offset - SectorAlignedOffset) + Length,
                                       BytesPerSector);
@@ -495,8 +728,106 @@ NtfsWriteVolume(_In_    ULONGLONG Offset,
                 _In_    ULONG Length,
                 _Inout_ PUCHAR Buffer)
 {
-    /* The volume is about to change under these blocks. */
-    NtfsCacheInvalidateRange(Offset, Length);
+    /*
+     * Metadata is rewritten constantly and usually superseded moments later,
+     * so a write that fits inside one block is held in the cache and
+     * committed in batches. Reads come from those same blocks, so a held-back
+     * write is never invisible; anything reaching the volume another way
+     * flushes first.
+     */
+    if (NtfsCacheReady && Length <= NTFS_CACHE_BLOCK_SIZE)
+    {
+        ULONGLONG Block = Offset >> NTFS_CACHE_BLOCK_SHIFT;
+        ULONG BlockOffset = (ULONG)(Offset & (NTFS_CACHE_BLOCK_SIZE - 1));
+
+        if (BlockOffset + Length <= NTFS_CACHE_BLOCK_SIZE)
+        {
+            NTFS_CACHE_SLOT* Slot;
+            BOOLEAN Absorbed = FALSE;
+
+            ExAcquireFastMutex(&NtfsCacheMutex);
+            Slot = &NtfsCacheSlots[Block & NTFS_CACHE_SLOT_MASK];
+            if (Slot->Tag == Block && Slot->Data && Slot->Owner == PartDeviceObj)
+            {
+                RtlCopyMemory(Slot->Data + BlockOffset, Buffer, Length);
+                if (!Slot->Dirty)
+                {
+                    Slot->Dirty = TRUE;
+                    NtfsCacheDirtyCount++;
+                }
+                Absorbed = TRUE;
+            }
+            ExReleaseFastMutex(&NtfsCacheMutex);
+
+            /*
+             * First touch of a metadata block: bring it in once so this
+             * update and every later one to the same block stay in memory.
+             * A fresh MFT record block otherwise costs a synchronous disk
+             * write per record, and installs nothing, so its neighbours all
+             * miss too. Only sub-block writes qualify -- those are the
+             * record-sized metadata updates; whole-block writes are bulk
+             * data and keep their existing path.
+             */
+            if (!Absorbed)
+            {
+                PUCHAR Staged = (PUCHAR)ExAllocatePoolUninitialized(
+                    NonPagedPool, NTFS_CACHE_BLOCK_SIZE, 'CftN');
+
+                if (Staged)
+                {
+                    NTSTATUS FillStatus;
+
+                    if (Length == NTFS_CACHE_BLOCK_SIZE)
+                    {
+                        /* The write covers the whole block, so there is
+                         * nothing on the disk worth fetching first. */
+                        FillStatus = STATUS_SUCCESS;
+                    }
+                    else
+                    {
+                        FillStatus = ReadDisk(
+                            PartDeviceObj,
+                            Block << NTFS_CACHE_BLOCK_SHIFT,
+                            NTFS_CACHE_BLOCK_SIZE,
+                            Staged);
+                    }
+
+                    if (NT_SUCCESS(FillStatus))
+                    {
+                        RtlCopyMemory(Staged + BlockOffset, Buffer, Length);
+                        NtfsCacheInstall(Block, Staged);
+
+                        /* Mark it held-back; if the slot was lost meanwhile,
+                         * fall through and write through instead. */
+                        ExAcquireFastMutex(&NtfsCacheMutex);
+                        Slot = &NtfsCacheSlots[Block & NTFS_CACHE_SLOT_MASK];
+                        if (Slot->Tag == Block && Slot->Data &&
+                            Slot->Owner == PartDeviceObj)
+                        {
+                            if (!Slot->Dirty)
+                            {
+                                Slot->Dirty = TRUE;
+                                NtfsCacheDirtyCount++;
+                            }
+                            Absorbed = TRUE;
+                        }
+                        ExReleaseFastMutex(&NtfsCacheMutex);
+                    }
+                    ExFreePoolWithTag(Staged, 'CftN');
+                }
+            }
+
+            if (Absorbed)
+            {
+                if (NtfsCacheDirtyCount > NTFS_CACHE_DIRTY_LIMIT)
+                    NtfsCacheFlushSome(NTFS_CACHE_DIRTY_SLICE);
+                return STATUS_SUCCESS;
+            }
+        }
+    }
+
+    /* Going to the disk directly: commit anything held for these bytes. */
+    NtfsCacheFlushRange(Offset, Length);
 
     NTSTATUS Status;
     PUCHAR WriteBuffer;
@@ -546,6 +877,12 @@ NtfsWriteVolume(_In_    ULONGLONG Offset,
         delete[] WriteBuffer;
     }
 
+    /* Keep whatever we still hold in step with what just went to the disk. */
+    if (NT_SUCCESS(Status))
+        NtfsCacheUpdateRange(Offset, Length, Buffer);
+    else
+        NtfsCacheInvalidateRange(Offset, Length);
+
     return Status;
 }
 
@@ -564,3 +901,10 @@ NtfsIsNameInExpression(_In_     PUNICODE_STRING Expression,
 #ifdef __cplusplus
 }
 #endif
+
+extern "C"
+NTSTATUS
+NtfsDiskFlushKm(VOID)
+{
+    return NtfsCacheFlushAll();
+}
