@@ -70,7 +70,8 @@ NtfsMasterFileTableGetFileRecordFromQueryEx(
     _Out_ PULONG RemainingNameLength,
     _Out_ PNtfsFileRecord* File)
 {
-    PWCHAR TerminatedQuery;
+    WCHAR InlineQuery[260];
+    PWCHAR TerminatedQuery = InlineQuery;
     NTSTATUS Status;
 
     if (!Mft || !Query ||
@@ -84,11 +85,14 @@ NtfsMasterFileTableGetFileRecordFromQueryEx(
         return STATUS_NAME_TOO_LONG;
     }
 
-    TerminatedQuery =
-        new(PagedPool, TAG_NTFS)
-            WCHAR[(SIZE_T)QueryLength + 1];
-    if (!TerminatedQuery)
-        return STATUS_INSUFFICIENT_RESOURCES;
+    if (QueryLength >= RTL_NUMBER_OF(InlineQuery))
+    {
+        TerminatedQuery =
+            new(PagedPool, TAG_NTFS)
+                WCHAR[(SIZE_T)QueryLength + 1];
+        if (!TerminatedQuery)
+            return STATUS_INSUFFICIENT_RESOURCES;
+    }
     RtlCopyMemory(TerminatedQuery,
                   Query,
                   QueryLength * sizeof(WCHAR));
@@ -101,7 +105,8 @@ NtfsMasterFileTableGetFileRecordFromQueryEx(
             TRUE,
             OpenFinalReparsePoint,
             RemainingNameLength);
-    delete[] TerminatedQuery;
+    if (TerminatedQuery != InlineQuery)
+        delete[] TerminatedQuery;
     return Status;
 }
 
