@@ -85,6 +85,8 @@ list(APPEND KMTEST_DRV_SOURCE
     directx/DxgkAdapterCaps.c
     directx/DxgkNodeAffinity.c
     directx/DxgkTdrPolicy.c
+    directx/DxgkFenceConcurrency.c
+    directx/DxgkCoreConcurrency.c
     directx/DxgkContextSync.c
     directx/DxgkPresentQueue.c
     directx/DxgkSyncWait.c
