@@ -71,7 +71,7 @@ const GUID GUID_DISPLAY_DEVICE_ARRIVAL =
 #define DXGKP_BUGCHECK_VIDEO_DXGKRNL_FATAL_ERROR 0x113
 #define DXGKP_FATAL_SURPRISE_REMOVAL_SUBTYPE 0x19
 #define DXGKP_FATAL_MMS2_LIFECYCLE_SUBTYPE 0x1A
-#define DXGKP_GPUMMU_END_TO_END 0
+#define DXGKP_GPUMMU_END_TO_END 1
 #define DXGKP_MMS2_FAILURE_ADD_ROLLBACK 1
 #define DXGKP_MMS2_FAILURE_ATTACH_ROLLBACK 2
 #define DXGKP_MMS2_FAILURE_FINAL_RETIREMENT 3
@@ -4879,6 +4879,107 @@ DxgkpQueryGpuMmuCaps(
     return Status;
 }
 
+/*
+ * DxgkpQueryPageTableLevelDesc
+ *
+ * Reads one level of the miniport's page-table geometry.  Level 0 is the leaf.
+ */
+NTSTATUS
+DxgkpQueryPageTableLevelDesc(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG LevelIndex,
+    _Out_ DXGK_PAGE_TABLE_LEVEL_DESC *Desc)
+{
+    PDXGKDDI_QUERY_ADAPTER_INFO PfnQueryAdapterInfo;
+    DXGKARG_QUERYADAPTERINFO QueryArgs;
+    DXGK_QUERYPAGETABLELEVELDESCIN Input;
+    NTSTATUS Status;
+
+    if (Desc == NULL)
+        return STATUS_INVALID_PARAMETER;
+    RtlZeroMemory(Desc, sizeof(*Desc));
+    if (Adapter == NULL || Adapter->MiniportContext == NULL || LevelIndex > MAXUSHORT)
+        return STATUS_INVALID_PARAMETER;
+
+    PfnQueryAdapterInfo = DXGK_CB(Adapter, DxgkDdiQueryAdapterInfo);
+    if (PfnQueryAdapterInfo == NULL)
+        return STATUS_NOT_SUPPORTED;
+    if (!DxgkAcquireKmdCall(Adapter))
+        return STATUS_DELETE_PENDING;
+
+    RtlZeroMemory(&Input, sizeof(Input));
+    Input.LevelIndex = (WORD)LevelIndex;
+    Input.PhysicalAdapterIndex = 0;
+    RtlZeroMemory(&QueryArgs, sizeof(QueryArgs));
+    QueryArgs.Type = DXGKQAITYPE_PAGETABLELEVELDESC;
+    QueryArgs.pInputData = &Input;
+    QueryArgs.InputDataSize = sizeof(Input);
+    QueryArgs.pOutputData = Desc;
+    QueryArgs.OutputDataSize = sizeof(*Desc);
+
+    _SEH2_TRY
+    {
+        Status = PfnQueryAdapterInfo(Adapter->MiniportDeviceContext, &QueryArgs);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    DxgkReleaseKmdCall(Adapter);
+    return Status;
+}
+
+/*
+ * DxgkpCacheGpuMmuGeometry
+ *
+ * Validates and caches every page-table level the miniport declares.  A level
+ * whose index bit count, size, or alignment is inconsistent disables the whole
+ * GPU virtual-memory model rather than leaving a partially-derived geometry
+ * that later code would have to guess about.
+ */
+static BOOLEAN
+DxgkpCacheGpuMmuGeometry(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    ULONG TotalIndexBits = 0;
+    ULONG Level;
+
+    if (Adapter->GpuMmuCaps.PageTableLevelCount == 0 ||
+        Adapter->GpuMmuCaps.PageTableLevelCount > DXGK_MAX_PAGE_TABLE_LEVELS)
+    {
+        return FALSE;
+    }
+
+    for (Level = 0; Level < Adapter->GpuMmuCaps.PageTableLevelCount; ++Level)
+    {
+        DXGK_PAGE_TABLE_LEVEL_DESC *Desc = &Adapter->PageTableLevels[Level];
+        ULONGLONG Entries;
+
+        if (!NT_SUCCESS(DxgkpQueryPageTableLevelDesc(Adapter, Level, Desc)))
+            return FALSE;
+        if (Desc->PageTableIndexBitCount == 0 || Desc->PageTableIndexBitCount >= 32)
+            return FALSE;
+        if (Desc->PageTableSizeInBytes == 0 || Desc->PageTableAlignmentInBytes == 0)
+            return FALSE;
+        if ((Desc->PageTableAlignmentInBytes & (Desc->PageTableAlignmentInBytes - 1)) != 0)
+            return FALSE;
+        Entries = 1ULL << Desc->PageTableIndexBitCount;
+        if (Entries * sizeof(DXGK_PTE) > Desc->PageTableSizeInBytes)
+            return FALSE;
+        TotalIndexBits += Desc->PageTableIndexBitCount;
+    }
+
+    /* Every VA bit above the page offset must be covered by exactly the
+     * declared levels, otherwise a translation would be ambiguous. */
+    if (TotalIndexBits + 12 != Adapter->GpuMmuCaps.VirtualAddressBitCount)
+        return FALSE;
+
+    Adapter->PageTableLevelsValid = TRUE;
+    return TRUE;
+}
+
 /* ========================================================================
  * Adapter lifecycle functions
  * ====================================================================== */
@@ -5594,18 +5695,22 @@ DxgkAdapterStart(
 
     /* Cache the GPU MMU declaration while the miniport is callable. */
     Adapter->GpuMmuCapsValid = FALSE;
+    Adapter->PageTableLevelsValid = FALSE;
     RtlZeroMemory(&Adapter->GpuMmuCaps, sizeof(Adapter->GpuMmuCaps));
+    RtlZeroMemory(Adapter->PageTableLevels, sizeof(Adapter->PageTableLevels));
     if (DXGKP_GPUMMU_END_TO_END &&
         !Adapter->MiniportContext->IsDisplayOnlyDriver &&
         Adapter->MiniportContext->InitData.s.Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_0 &&
         NT_SUCCESS(DxgkpQueryGpuMmuCaps(Adapter, &Adapter->GpuMmuCaps)) &&
         Adapter->GpuMmuCaps.VirtualAddressBitCount != 0 &&
-        Adapter->GpuMmuCaps.PageTableLevelCount != 0)
+        Adapter->GpuMmuCaps.PageTableLevelCount != 0 &&
+        DxgkpCacheGpuMmuGeometry(Adapter))
     {
         Adapter->GpuMmuCapsValid = TRUE;
-        DXGKRNL_TRACE("DxgkAdapterStart: GpuMmu %u-bit, %u level(s)\n",
+        DXGKRNL_TRACE("DxgkAdapterStart: GpuMmu %u-bit, %u level(s), leaf %u entry bits\n",
                       Adapter->GpuMmuCaps.VirtualAddressBitCount,
-                      Adapter->GpuMmuCaps.PageTableLevelCount);
+                      Adapter->GpuMmuCaps.PageTableLevelCount,
+                      Adapter->PageTableLevels[0].PageTableIndexBitCount);
     }
 
     {

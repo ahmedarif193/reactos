@@ -785,10 +785,53 @@ SoftGpuDdiBuildPagingBuffer(
             return STATUS_SUCCESS;
         }
 
-        case DXGK_OPERATION_DISCARD_CONTENT:
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+        case DXGK_OPERATION_UPDATE_PAGE_TABLE:
+        {
+            /*
+             * CPU_VIRTUAL mode: dxgkrnl already wrote the generic DXGK_PTE
+             * descriptors into the table this device handed it, and this
+             * device's translation reads exactly that format, so the update
+             * needs validation rather than a format conversion.
+             */
+            CONST DXGK_BUILDPAGINGBUFFER_UPDATEPAGETABLE *Update = &BuildPagingBuffer->UpdatePageTable;
+
+            if (Update->UpdateMode != DXGK_PAGETABLEUPDATE_CPU_VIRTUAL)
+                return STATUS_NOT_SUPPORTED;
+            if (Update->PageTableLevel >= SOFTGPU_GPUVA_LEVELS)
+                return STATUS_INVALID_PARAMETER;
+            if (Update->pPageTableEntries == NULL || Update->NumPageTableEntries == 0)
+                return STATUS_INVALID_PARAMETER;
+            if (Update->StartIndex >= (1u << SOFTGPU_GPUVA_INDEX_BITS) ||
+                Update->NumPageTableEntries > (1u << SOFTGPU_GPUVA_INDEX_BITS) - Update->StartIndex)
+                return STATUS_INVALID_PARAMETER;
+            if (Update->PageTableAddress.CpuVirtual == NULL)
+                return STATUS_INVALID_PARAMETER;
+            Cmd = SoftGpuBeginPagingCommand(BuildPagingBuffer);
+            if (Cmd == NULL)
+                return STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+            SoftGpuEndPagingCommand(BuildPagingBuffer);
+            return STATUS_SUCCESS;
+        }
+
+        case DXGK_OPERATION_FLUSH_TLB:
+        {
+            /* No translation cache exists behind the CPU-written tables, so
+             * the invalidation is ordered rather than executed. */
+            CONST DXGK_BUILDPAGINGBUFFER_FLUSHTLB *Flush = &BuildPagingBuffer->FlushTlb;
+
+            if (Flush->EndVirtualAddress < Flush->StartVirtualAddress)
+                return STATUS_INVALID_PARAMETER;
+            Cmd = SoftGpuBeginPagingCommand(BuildPagingBuffer);
+            if (Cmd == NULL)
+                return STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+            SoftGpuEndPagingCommand(BuildPagingBuffer);
+            return STATUS_SUCCESS;
+        }
+
         case DXGK_OPERATION_NOTIFY_RESIDENCY:
 #endif
+        case DXGK_OPERATION_DISCARD_CONTENT:
             Cmd = SoftGpuBeginPagingCommand(BuildPagingBuffer);
             if (Cmd == NULL)
                 return STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;

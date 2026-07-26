@@ -105,6 +105,12 @@
 /* Framebuffer size: 16 MB (sufficient for 1920x1080x32bpp = ~8 MB) */
 #define SOFTGPU_FB_SIZE         (16 * 1024 * 1024)
 
+/* GPU virtual-memory geometry this device declares: a 4-level radix of 9
+ * index bits per level over 4 KB pages, i.e. a 48-bit address space. */
+#define SOFTGPU_GPUVA_INDEX_BITS 9
+#define SOFTGPU_GPUVA_LEVELS     4
+#define SOFTGPU_GPUVA_BIT_COUNT  (12 + SOFTGPU_GPUVA_INDEX_BITS * SOFTGPU_GPUVA_LEVELS)
+
 /* =========================================================================
  * SOFTGPU_CMD — the KMD DMA command stream format
  *

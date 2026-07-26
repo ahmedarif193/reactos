@@ -469,6 +469,9 @@ typedef struct _DXGKRNL_SUBMIT_DMA_BUFFER
 /* Per-node completed-fence tracking cap (independent GPU engine queues
  * can complete out of global fence order). */
 #define DXGK_MAX_TRACKED_NODES 8
+
+/* Upper bound on miniport-declared GPU page-table levels. */
+#define DXGK_MAX_PAGE_TABLE_LEVELS 6
 #define DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY 8192
 #define DXGK_SUBMITTED_FENCE_PUBLISHED_BIT 0x8000000000000000ULL
 #define DXGK_SUBMITTED_FENCE_TOMBSTONE ((LONG64)-1)
@@ -663,6 +666,10 @@ struct _DXGKRNL_ADAPTER
      * mapping path stays truthfully refused. */
     DXGK_GPUMMUCAPS             GpuMmuCaps;
     BOOLEAN                     GpuMmuCapsValid;
+
+    /* Miniport-declared page-table geometry, index 0 = leaf level. */
+    DXGK_PAGE_TABLE_LEVEL_DESC  PageTableLevels[DXGK_MAX_PAGE_TABLE_LEVELS];
+    BOOLEAN                     PageTableLevelsValid;
 
     /* Cached while hardware is present.  A running-device surprise-removal
      * IRP must not query capabilities after the adapter has disappeared. */
@@ -1304,12 +1311,15 @@ typedef struct _DXGKRNL_GPUVA_PAGE_TABLE
     /* First GPU VA covered by this table. */
     ULONGLONG                   CoverageBase;
 
-    /* One software table of DXGK_PTE entries and its first physical address. */
+    /* One table of DXGK_PTE update descriptors and its first physical
+     * address.  Bytes is the miniport-declared size for this level. */
     PVOID                       KernelVa;
+    ULONG                       Bytes;
+    ULONG                       EntryCount;
     MEMORY_CACHING_TYPE         CacheType;
     PHYSICAL_ADDRESS            Physical;
 
-    /* Child table pointers (non-leaf only, 512 entries), else NULL. */
+    /* Child table pointers (non-leaf only, EntryCount entries), else NULL. */
     struct _DXGKRNL_GPUVA_PAGE_TABLE **Children;
 
 } DXGKRNL_GPUVA_PAGE_TABLE, *PDXGKRNL_GPUVA_PAGE_TABLE;
@@ -1802,6 +1812,12 @@ DxgkUnblockInterruptCallbacks(
  * be interpreted.
  */
 #define DXGKP_DRIVERCAPS_QUERY_SIZE 1024
+
+NTSTATUS
+DxgkpQueryPageTableLevelDesc(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG LevelIndex,
+    _Out_ DXGK_PAGE_TABLE_LEVEL_DESC *Desc);
 
 NTSTATUS
 DxgkpQueryGpuMmuCaps(
