@@ -124,6 +124,22 @@ C_ASSERT(sizeof(D3DKMT_UNLOCK2) == 8);
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x111, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_D3DKMT_OPENADAPTERFROMDEVICENAME \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x112, METHOD_BUFFERED, FILE_ANY_ACCESS)
+/* Must match DXGKP_PROCESS_PRIORITY_REQUEST in dxgkrnl's d3dkmt.h: the two
+ * sides only ever see this through the ioctl buffer. */
+typedef struct _DXGKP_PROCESS_PRIORITY_REQUEST
+{
+    HANDLE hProcess;
+    D3DKMT_SCHEDULINGPRIORITYCLASS Class;
+} DXGKP_PROCESS_PRIORITY_REQUEST;
+
+#define IOCTL_D3DKMT_SETPROCESSSCHEDULINGPRIORITYCLASS \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x127, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_GETPROCESSSCHEDULINGPRIORITYCLASS \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x128, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_QUERYCLOCKCALIBRATION \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x19E, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_CHANGEVIDEOMEMORYRESERVATION \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x19F, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_D3DKMT_CREATEHWQUEUE \
     CTL_CODE(FILE_DEVICE_VIDEO, 0x19B, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_D3DKMT_DESTROYHWQUEUE \
@@ -3949,6 +3965,63 @@ D3DKMTSubmitCommandToHwQueue(
     _In_ CONST D3DKMT_SUBMITCOMMANDTOHWQUEUE *pData)
 {
     return WddmBridgeRejectBadBuffer(WddmBridgeCaptureFixedIoctl(IOCTL_D3DKMT_SUBMITCOMMANDTOHWQUEUE, (PVOID)pData, sizeof(*pData), FALSE));
+}
+
+
+/* ---- Clock calibration, reservation, process priority -------------------- */
+
+NTSTATUS
+APIENTRY
+D3DKMTQueryClockCalibration(
+    _Inout_ D3DKMT_QUERYCLOCKCALIBRATION *pData)
+{
+    return WddmBridgeRejectBadBuffer(WddmBridgeCaptureFixedIoctl(IOCTL_D3DKMT_QUERYCLOCKCALIBRATION, pData, sizeof(*pData), TRUE));
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTChangeVideoMemoryReservation(
+    _In_ CONST D3DKMT_CHANGEVIDEOMEMORYRESERVATION *pData)
+{
+    return WddmBridgeRejectBadBuffer(WddmBridgeCaptureFixedIoctl(IOCTL_D3DKMT_CHANGEVIDEOMEMORYRESERVATION, (PVOID)pData, sizeof(*pData), FALSE));
+}
+
+/* These two take loose arguments, so the request is packed here rather than
+ * pointing the kernel at anything of the caller's. */
+NTSTATUS
+APIENTRY
+D3DKMTSetProcessSchedulingPriorityClass(
+    _In_ HANDLE hProcess,
+    _In_ D3DKMT_SCHEDULINGPRIORITYCLASS Class)
+{
+    DXGKP_PROCESS_PRIORITY_REQUEST Request;
+
+    Request.hProcess = hProcess;
+    Request.Class = Class;
+    return WddmBridgeSendIoctl(IOCTL_D3DKMT_SETPROCESSSCHEDULINGPRIORITYCLASS, &Request, sizeof(Request), NULL, 0);
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTGetProcessSchedulingPriorityClass(
+    _In_ HANDLE hProcess,
+    _Out_ D3DKMT_SCHEDULINGPRIORITYCLASS *pClass)
+{
+    DXGKP_PROCESS_PRIORITY_REQUEST Request;
+    ULONG_PTR Information = 0;
+    NTSTATUS Status;
+
+    if (pClass == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Request.hProcess = hProcess;
+    Request.Class = D3DKMT_SCHEDULINGPRIORITYCLASS_NORMAL;
+    Status = WddmBridgeSendIoctlWithInformation(IOCTL_D3DKMT_GETPROCESSSCHEDULINGPRIORITYCLASS,
+                                                &Request, sizeof(Request), &Request, sizeof(Request), &Information);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Information != sizeof(Request))
+        return STATUS_INFO_LENGTH_MISMATCH;
+    return WddmBridgeRejectBadBuffer(WddmBridgeSafeCopyTo(pClass, &Request.Class, sizeof(*pClass)));
 }
 
 /* EOF */

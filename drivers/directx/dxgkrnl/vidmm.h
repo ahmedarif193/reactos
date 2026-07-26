@@ -533,6 +533,17 @@ DxgkVidMmCleanupAdapterAllocations(
     _In_ PDXGKRNL_ADAPTER Adapter);
 
 NTSTATUS
+DxgkVidMmSetProcessReservation(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PEPROCESS Process,
+    _In_ D3DKMT_MEMORY_SEGMENT_GROUP Group,
+    _In_ UINT64 Reservation);
+
+VOID
+DxgkVidMmReleaseProcessReservations(
+    _In_ PEPROCESS Process);
+
+NTSTATUS
 DxgkVidMmQueryProcessBudget(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ PEPROCESS Process,
