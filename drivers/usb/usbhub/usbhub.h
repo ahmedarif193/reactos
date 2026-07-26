@@ -246,6 +246,8 @@ typedef struct _USBHUB_FDO_EXTENSION {
   USB_PORT_STATUS_AND_CHANGE PortStatus;
   PIRP PowerIrp;
   ULONG DebugBusNumber;
+  LONG EnumWorkerQueued;
+  LONG EnumWorkerRerun;
 } USBHUB_FDO_EXTENSION, *PUSBHUB_FDO_EXTENSION;
 
 typedef struct _USBHUB_PORT_PDO_EXTENSION {
@@ -443,6 +445,27 @@ USBH_PortDebounce(
   IN PUSBHUB_FDO_EXTENSION HubExtension,
   IN USHORT Port,
   OUT PUSB_PORT_STATUS_AND_CHANGE PortStatus);
+
+typedef struct _USBHUB_DEBOUNCE_ENTRY {
+  USHORT Port;
+  BOOLEAN Done;
+  BOOLEAN LastConnected;
+  ULONG StableMs;
+  NTSTATUS Status;
+  USB_PORT_STATUS_AND_CHANGE PortStatus;
+} USBHUB_DEBOUNCE_ENTRY, *PUSBHUB_DEBOUNCE_ENTRY;
+
+NTSTATUS
+NTAPI
+USBH_PortDebounceMulti(
+  IN PUSBHUB_FDO_EXTENSION HubExtension,
+  IN OUT PUSBHUB_DEBOUNCE_ENTRY Entries,
+  IN ULONG EntryCount);
+
+VOID
+NTAPI
+USBH_QueueHubEnumeration(
+  IN PUSBHUB_FDO_EXTENSION HubExtension);
 
 VOID
 NTAPI

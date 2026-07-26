@@ -219,6 +219,139 @@ USBH_PortDebounce(IN PUSBHUB_FDO_EXTENSION HubExtension,
     return STATUS_UNSUCCESSFUL;
 }
 
+/*
+ * Debounce several ports at once: one shared polling loop tracks the
+ * stability of every entry, so N ports cost one 100 ms window (USB 2.0
+ * TATTDB) instead of N serial windows. Per-port semantics are identical
+ * to USBH_PortDebounce; each entry gets its own verdict in Entry->Status
+ * and its last observed status in Entry->PortStatus.
+ */
+NTSTATUS
+NTAPI
+USBH_PortDebounceMulti(IN PUSBHUB_FDO_EXTENSION HubExtension,
+                       IN OUT PUSBHUB_DEBOUNCE_ENTRY Entries,
+                       IN ULONG EntryCount)
+{
+    NTSTATUS Status;
+    ULONG TotalMs = 0;
+    ULONG DoneCount = 0;
+    ULONG ix;
+    BOOLEAN Connected;
+    PUSBHUB_DEBOUNCE_ENTRY Entry;
+
+    DPRINT("USBH_PortDebounceMulti: EntryCount - %lu\n", EntryCount);
+
+    for (ix = 0; ix < EntryCount; ix++)
+    {
+        Entry = &Entries[ix];
+
+        Entry->Done = FALSE;
+        Entry->StableMs = 0;
+        Entry->Status = STATUS_SUCCESS;
+
+        Status = USBH_SyncGetPortStatus(HubExtension,
+                                        Entry->Port,
+                                        &Entry->PortStatus,
+                                        sizeof(USB_PORT_STATUS_AND_CHANGE));
+
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("USBH_PortDebounceMulti: initial GetPortStatus failed "
+                    "on port %u (0x%08lx)\n",
+                    Entry->Port, Status);
+            Entry->Status = Status;
+            Entry->Done = TRUE;
+            DoneCount++;
+            continue;
+        }
+
+        Entry->LastConnected = USBH_PortStatusIsConnected(&Entry->PortStatus);
+
+        /* Clear any pending connection-change bit from the initial read. */
+        if (USBH_PortChangeHasConnect(&Entry->PortStatus))
+        {
+            USBH_SyncClearPortStatus(HubExtension,
+                                     Entry->Port,
+                                     USBHUB_FEATURE_C_PORT_CONNECTION);
+        }
+    }
+
+    while (DoneCount < EntryCount && TotalMs < USBHUB_DEBOUNCE_TIMEOUT)
+    {
+        USBH_Wait(USBHUB_DEBOUNCE_STEP);
+        TotalMs += USBHUB_DEBOUNCE_STEP;
+
+        for (ix = 0; ix < EntryCount; ix++)
+        {
+            Entry = &Entries[ix];
+
+            if (Entry->Done)
+            {
+                continue;
+            }
+
+            Status = USBH_SyncGetPortStatus(HubExtension,
+                                            Entry->Port,
+                                            &Entry->PortStatus,
+                                            sizeof(USB_PORT_STATUS_AND_CHANGE));
+
+            if (!NT_SUCCESS(Status))
+            {
+                DPRINT1("USBH_PortDebounceMulti: GetPortStatus failed "
+                        "on port %u (0x%08lx)\n",
+                        Entry->Port, Status);
+                Entry->Status = Status;
+                Entry->Done = TRUE;
+                DoneCount++;
+                continue;
+            }
+
+            /* Clear the connection-change bit if the hub set it during this
+             * polling interval so it does not accumulate for later processing. */
+            if (USBH_PortChangeHasConnect(&Entry->PortStatus))
+            {
+                USBH_SyncClearPortStatus(HubExtension,
+                                         Entry->Port,
+                                         USBHUB_FEATURE_C_PORT_CONNECTION);
+            }
+
+            Connected = USBH_PortStatusIsConnected(&Entry->PortStatus);
+
+            if (Connected == Entry->LastConnected)
+            {
+                Entry->StableMs += USBHUB_DEBOUNCE_STEP;
+
+                if (Entry->StableMs >= USBHUB_DEBOUNCE_STABLE)
+                {
+                    DPRINT("USBH_PortDebounceMulti: Port %u stable for %lu ms "
+                           "(connected=%u, total=%lu ms)\n",
+                           Entry->Port, Entry->StableMs, Connected, TotalMs);
+                    Entry->Done = TRUE;
+                    DoneCount++;
+                }
+            }
+            else
+            {
+                /* Connection state changed -- reset the stability counter. */
+                Entry->StableMs = 0;
+                Entry->LastConnected = Connected;
+            }
+        }
+    }
+
+    for (ix = 0; ix < EntryCount; ix++)
+    {
+        if (!Entries[ix].Done)
+        {
+            DPRINT1("USBH_PortDebounceMulti: Port %u timed out after %lu ms\n",
+                    Entries[ix].Port, TotalMs);
+            Entries[ix].Status = STATUS_UNSUCCESSFUL;
+        }
+    }
+
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 NTAPI
 USBH_GetConfigValue(IN PWSTR ValueName,
