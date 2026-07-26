@@ -1259,16 +1259,53 @@ PciPdoGetMsixTableAddress(
         return FALSE;
     }
 
-    BarValue = Device->PciConfig.u.type0.BaseAddresses[Device->MsixTableBir];
+    /*
+     * Read the base address out of config space *now*, not out of
+     * Device->PciConfig.
+     *
+     * That structure is the config as it was at enumeration.  The PnP manager
+     * assigns BARs afterwards, and on a machine where it moves one, the cached
+     * value is the address the device used to live at.  Programming the MSI-X
+     * table through it writes the message address and data into whatever
+     * occupies that physical range now, and returns success: the device's own
+     * table is left masked, so it never raises an interrupt and nothing reports
+     * an error.  usbport carries its own MSI-X programming precisely because of
+     * this, computing the table address from the resource it was actually
+     * given.
+     */
+    {
+        ULONG BarOffset =
+            FIELD_OFFSET(PCI_COMMON_CONFIG, u.type0.BaseAddresses[Device->MsixTableBir]);
+        ULONG LowPart = 0;
+
+        if (PciReadDeviceConfig(DeviceExtension->PciDevice,
+                                &LowPart,
+                                BarOffset,
+                                sizeof(LowPart)) != sizeof(LowPart))
+        {
+            return FALSE;
+        }
+        BarValue = LowPart;
+    }
     if (BarValue == 0 || (BarValue & PCI_ADDRESS_IO_SPACE))
         return FALSE;
 
     if ((BarValue & PCI_ADDRESS_MEMORY_TYPE_MASK) == PCI_TYPE_64BIT)
     {
-        ULONGLONG HighPart;
+        ULONG HighOffset =
+            FIELD_OFFSET(PCI_COMMON_CONFIG, u.type0.BaseAddresses[Device->MsixTableBir + 1]);
+        ULONG HighPart = 0;
 
-        HighPart = Device->PciConfig.u.type0.BaseAddresses[Device->MsixTableBir + 1];
-        BarValue = (HighPart << 32) | (BarValue & PCI_ADDRESS_MEMORY_ADDRESS_MASK_64);
+        if (Device->MsixTableBir + 1 >= PCI_TYPE0_ADDRESSES)
+            return FALSE;
+        if (PciReadDeviceConfig(DeviceExtension->PciDevice,
+                                &HighPart,
+                                HighOffset,
+                                sizeof(HighPart)) != sizeof(HighPart))
+        {
+            return FALSE;
+        }
+        BarValue = ((ULONGLONG)HighPart << 32) | (BarValue & PCI_ADDRESS_MEMORY_ADDRESS_MASK_64);
     }
     else
     {
