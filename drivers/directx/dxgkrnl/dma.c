@@ -227,7 +227,7 @@ DxgkRender(
         return STATUS_INVALID_PARAMETER;
 
     if (pRender->hContext == 0)
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
 
     if (pRender->Flags.RenderKm || pRender->Flags.RenderKmReadback)
         return STATUS_NOT_SUPPORTED;
@@ -238,18 +238,20 @@ DxgkRender(
     if (Adapter == NULL || Device == NULL)
     {
         DxgkDereferenceContext(Context);
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
     }
     if (Adapter->MiniportContext == NULL || Adapter->MiniportContext->UseDodLayout || Adapter->MiniportContext->IsDisplayOnlyDriver)
     {
         DxgkDereferenceContext(Context);
         return STATUS_NOT_SUPPORTED;
     }
-    if (pRender->hDevice != 0 && pRender->hDevice != Device->Handle)
-    {
-        DxgkDereferenceContext(Context);
-        return STATUS_INVALID_HANDLE;
-    }
+    /*
+     * There is no separate device handle to cross-check: hDevice and hContext
+     * are the same union member, so this field is the context handle we just
+     * resolved.  Comparing it against Device->Handle compared a context handle
+     * with a device handle, which never matches -- every legitimate render was
+     * refused, and only negative tests existed to notice.
+     */
     if (Context->VirtualAddressing)
     {
         /* Virtual contexts submit through SubmitCommandVirtual, not here. */
@@ -356,7 +358,7 @@ DxgkRender(
         Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)CapturedAllocations[Index].hAllocation, Adapter, Device, &Reference);
         if (!NT_SUCCESS(Status))
         {
-            Status = STATUS_INVALID_HANDLE;
+            Status = STATUS_INVALID_PARAMETER;
             goto Cleanup;
         }
         Status = DxgkVidMmAcquireSubmissionResidencyPin(Reference, Adapter, &KernelAllocations[Index]);
@@ -578,7 +580,7 @@ DxgkPresent(
         return STATUS_INVALID_PARAMETER;
 
     if (pPresent->hDevice == 0)
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
 
     if (pPresent->Flags.Value == 0 && pPresent->hSource == 0)
         return STATUS_INVALID_PARAMETER;
@@ -602,7 +604,7 @@ DxgkPresent(
         if (Adapter->SchedulingCaps.MultiEngineAware)
         {
             DxgkDereferenceDevice(Device);
-            return STATUS_INVALID_HANDLE;
+            return STATUS_INVALID_PARAMETER;
         }
     }
 
