@@ -549,7 +549,7 @@ START_TEST(Dxgmms2Timeline)
 
     Status = Dxgmms2TimelineBeginStop(Timeline);
     ok_eq_hex(Status, STATUS_SUCCESS);
-    ok_eq_ulong(Dxgmms2TimelineAllocateFence(Timeline, FirstGeneration), 0);
+    { ULONG Observed = Dxgmms2TimelineAllocateFence(Timeline, FirstGeneration); ok_eq_ulong(Observed, 0); }
     ok_bool_false(Dxgmms2TimelineReserveFence(Timeline, FirstGeneration, 0, PendingFence + 1), "reserve while stopping");
     ok_bool_true(Dxgmms2TimelineIsFencePublished(Timeline, FirstGeneration, 1, PendingFence), "lookup while stopping");
     Status = Dxgmms2TimelineCompleteStop(Timeline);

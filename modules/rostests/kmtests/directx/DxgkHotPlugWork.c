@@ -13,11 +13,11 @@ static VOID DxgkHotPlugWorkTestCoalescing(VOID)
     volatile LONG Active = 0;
     LONG64 ObservedGeneration;
 
-    ok_eq_longlong(DxgkHotPlugWorkCorePublishLocked(&Generation), 1);
+    { LONGLONG Observed = DxgkHotPlugWorkCorePublishLocked(&Generation); ok_eq_longlong(Observed, 1); }
     ok_bool_true(DxgkHotPlugWorkCoreTryActivateLocked(&Active), "idle publication activates the worker");
     ok_bool_false(DxgkHotPlugWorkCoreTryActivateLocked(&Active), "an active worker cannot be queued twice");
     ObservedGeneration = Generation;
-    ok_eq_longlong(DxgkHotPlugWorkCorePublishLocked(&Generation), 2);
+    { LONGLONG Observed = DxgkHotPlugWorkCorePublishLocked(&Generation); ok_eq_longlong(Observed, 2); }
     ok_bool_false(DxgkHotPlugWorkCoreCompleteLocked(&Generation, &Active, ObservedGeneration, TRUE), "publication during rebuild keeps the worker active");
     ok_eq_long(Active, 1);
     ObservedGeneration = Generation;
@@ -31,7 +31,7 @@ static VOID DxgkHotPlugWorkTestLifecycleClose(VOID)
     volatile LONG Active = 0;
 
     ok_bool_true(DxgkHotPlugWorkCoreTryActivateLocked(&Active), "worker activates before stop");
-    ok_eq_longlong(DxgkHotPlugWorkCorePublishLocked(&Generation), 8);
+    { LONGLONG Observed = DxgkHotPlugWorkCorePublishLocked(&Generation); ok_eq_longlong(Observed, 8); }
     ok_bool_true(DxgkHotPlugWorkCoreCompleteLocked(&Generation, &Active, 7, FALSE), "stop retires the worker even when a generation is pending");
     ok_eq_long(Active, 0);
     ok_bool_true(DxgkHotPlugWorkCoreTryActivateLocked(&Active), "restart can activate the retained generation");
@@ -48,13 +48,13 @@ static VOID DxgkHotPlugWorkTestEnumerationEpoch(VOID)
     FirstEpoch = DxgkHotPlugWorkCoreBeginEnumerationEpochLocked(&Epoch, &Enumerated);
     ok_eq_longlong(FirstEpoch, 1);
     ok_eq_long(Enumerated, 0);
-    ok_eq_hex(DxgkHotPlugWorkCoreValidateEnumerationLocked(&Epoch, &Enumerated, FirstEpoch), STATUS_DEVICE_NOT_READY);
+    { NTSTATUS Observed = DxgkHotPlugWorkCoreValidateEnumerationLocked(&Epoch, &Enumerated, FirstEpoch); ok_eq_hex(Observed, STATUS_DEVICE_NOT_READY); }
     ok_bool_true(DxgkHotPlugWorkCorePublishEnumerationLocked(&Epoch, &Enumerated, FirstEpoch), "the current start epoch publishes once");
-    ok_eq_hex(DxgkHotPlugWorkCoreValidateEnumerationLocked(&Epoch, &Enumerated, FirstEpoch), STATUS_SUCCESS);
+    { NTSTATUS Observed = DxgkHotPlugWorkCoreValidateEnumerationLocked(&Epoch, &Enumerated, FirstEpoch); ok_eq_hex(Observed, STATUS_SUCCESS); }
     ok_bool_false(DxgkHotPlugWorkCorePublishEnumerationLocked(&Epoch, &Enumerated, FirstEpoch), "an enumeration epoch cannot publish twice");
     SecondEpoch = DxgkHotPlugWorkCoreBeginEnumerationEpochLocked(&Epoch, &Enumerated);
     ok_eq_longlong(SecondEpoch, 2);
-    ok_eq_hex(DxgkHotPlugWorkCoreValidateEnumerationLocked(&Epoch, &Enumerated, FirstEpoch), STATUS_RETRY);
+    { NTSTATUS Observed = DxgkHotPlugWorkCoreValidateEnumerationLocked(&Epoch, &Enumerated, FirstEpoch); ok_eq_hex(Observed, STATUS_RETRY); }
     ok_bool_false(DxgkHotPlugWorkCorePublishEnumerationLocked(&Epoch, &Enumerated, FirstEpoch), "a stale start cannot publish observations");
 }
 
@@ -64,7 +64,7 @@ static VOID DxgkHotPlugWorkTestZeroPresentEnumeration(VOID)
     volatile LONG Enumerated = 0;
 
     ok_bool_true(DxgkHotPlugWorkCorePublishEnumerationLocked(&Epoch, &Enumerated, Epoch), "an empty but completed child enumeration is publishable");
-    ok_eq_hex(DxgkHotPlugWorkCoreValidateEnumerationLocked(&Epoch, &Enumerated, Epoch), STATUS_SUCCESS);
+    { NTSTATUS Observed = DxgkHotPlugWorkCoreValidateEnumerationLocked(&Epoch, &Enumerated, Epoch); ok_eq_hex(Observed, STATUS_SUCCESS); }
 }
 
 static VOID DxgkHotPlugWorkTestStopRecoveryOrdering(VOID)
