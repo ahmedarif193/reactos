@@ -505,25 +505,20 @@ typedef struct _D3DKMT_SETVIDPNSOURCEOWNER1
  * marshalling between win32k (WDDM3_0 public structs) and dxgkrnl is binary
  * compatible.
  */
-#ifndef _D3DKMT_WDDM2_FALLBACK_DEFINED
-#define _D3DKMT_WDDM2_FALLBACK_DEFINED
-
+/*
+ * Two guard classes, and they are not the same one.  <d3dkmthk.h> gates the
+ * D3DDDI_* types below on D3D_UMD_INTERFACE_VERSION and the D3DKMT_* ones on
+ * DXGKDDI_INTERFACE_VERSION.  A single guard over both means raising either
+ * version duplicates half of this block and leaves the other half missing,
+ * which is exactly what happens with one #ifndef around the lot.
+ */
+#if (D3D_UMD_INTERFACE_VERSION < D3D_UMD_INTERFACE_VERSION_WDDM2_0)
 typedef enum D3DDDI_PAGINGQUEUE_PRIORITY
 {
     D3DDDI_PAGINGQUEUE_PRIORITY_BELOW_NORMAL = -1,
     D3DDDI_PAGINGQUEUE_PRIORITY_NORMAL       = 0,
     D3DDDI_PAGINGQUEUE_PRIORITY_ABOVE_NORMAL = 1,
 } D3DDDI_PAGINGQUEUE_PRIORITY;
-
-typedef struct _D3DKMT_CREATEPAGINGQUEUE
-{
-    D3DKMT_HANDLE               hDevice;
-    D3DDDI_PAGINGQUEUE_PRIORITY Priority;
-    D3DKMT_HANDLE               hPagingQueue;
-    D3DKMT_HANDLE               hSyncObject;
-    VOID                       *FenceValueCPUVirtualAddress;
-    UINT                        PhysicalAdapterIndex;
-} D3DKMT_CREATEPAGINGQUEUE;
 
 typedef struct D3DDDI_DESTROYPAGINGQUEUE
 {
@@ -534,18 +529,6 @@ typedef struct D3DDDI_DESTROYPAGINGQUEUE
  * D3DKMT_MEMORY_SEGMENT_GROUP is declared unconditionally in d3dkmthk.h
  * (no interface-version guard), so it is always available — do not redefine it.
  */
-
-typedef struct _D3DKMT_QUERYVIDEOMEMORYINFO
-{
-    HANDLE                      hProcess;
-    D3DKMT_HANDLE               hAdapter;
-    D3DKMT_MEMORY_SEGMENT_GROUP MemorySegmentGroup;
-    UINT64                      Budget;
-    UINT64                      CurrentUsage;
-    UINT64                      CurrentReservation;
-    UINT64                      AvailableForReservation;
-    UINT                        PhysicalAdapterIndex;
-} D3DKMT_QUERYVIDEOMEMORYINFO;
 
 typedef struct D3DDDI_MAKERESIDENT_FLAGS
 {
@@ -586,21 +569,6 @@ typedef struct D3DDDI_EVICT_FLAGS
     };
 } D3DDDI_EVICT_FLAGS;
 
-typedef struct _D3DKMT_EVICT
-{
-    D3DKMT_HANDLE               hDevice;
-    UINT                        NumAllocations;
-    CONST D3DKMT_HANDLE        *AllocationList;
-    D3DDDI_EVICT_FLAGS          Flags;
-    UINT64                      NumBytesToTrim;
-} D3DKMT_EVICT;
-
-/*
- * GPU virtual addressing.  Layouts are byte-for-byte identical to the public
- * (_WIN32) WDDM 2.0 structures and to the dxgkrnl-private *_LOCAL copies, so
- * the win32k <-> dxgkrnl IOCTL marshalling is binary compatible.  Bitfield
- * protection/flags fields are represented by their backing scalar.
- */
 typedef struct _D3DDDI_RESERVEGPUVIRTUALADDRESS
 {
     union
@@ -635,6 +603,46 @@ typedef struct _D3DDDI_MAPGPUVIRTUALADDRESS
     UINT64                      PagingFenceValue;
 } D3DDDI_MAPGPUVIRTUALADDRESS;
 
+#endif /* D3D_UMD_INTERFACE_VERSION < WDDM2_0 */
+
+#if (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+typedef struct _D3DKMT_CREATEPAGINGQUEUE
+{
+    D3DKMT_HANDLE               hDevice;
+    D3DDDI_PAGINGQUEUE_PRIORITY Priority;
+    D3DKMT_HANDLE               hPagingQueue;
+    D3DKMT_HANDLE               hSyncObject;
+    VOID                       *FenceValueCPUVirtualAddress;
+    UINT                        PhysicalAdapterIndex;
+} D3DKMT_CREATEPAGINGQUEUE;
+
+typedef struct _D3DKMT_QUERYVIDEOMEMORYINFO
+{
+    HANDLE                      hProcess;
+    D3DKMT_HANDLE               hAdapter;
+    D3DKMT_MEMORY_SEGMENT_GROUP MemorySegmentGroup;
+    UINT64                      Budget;
+    UINT64                      CurrentUsage;
+    UINT64                      CurrentReservation;
+    UINT64                      AvailableForReservation;
+    UINT                        PhysicalAdapterIndex;
+} D3DKMT_QUERYVIDEOMEMORYINFO;
+
+typedef struct _D3DKMT_EVICT
+{
+    D3DKMT_HANDLE               hDevice;
+    UINT                        NumAllocations;
+    CONST D3DKMT_HANDLE        *AllocationList;
+    D3DDDI_EVICT_FLAGS          Flags;
+    UINT64                      NumBytesToTrim;
+} D3DKMT_EVICT;
+
+/*
+ * GPU virtual addressing.  Layouts are byte-for-byte identical to the public
+ * (_WIN32) WDDM 2.0 structures and to the dxgkrnl-private *_LOCAL copies, so
+ * the win32k <-> dxgkrnl IOCTL marshalling is binary compatible.  Bitfield
+ * protection/flags fields are represented by their backing scalar.
+ */
 typedef struct _D3DKMT_FREEGPUVIRTUALADDRESS
 {
     D3DKMT_HANDLE               hAdapter;
@@ -687,7 +695,9 @@ typedef struct _D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU
     UINT                        Flags;
 } D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU;
 
-#endif /* _D3DKMT_WDDM2_FALLBACK_DEFINED */
+#endif /* DXGKDDI_INTERFACE_VERSION < WDDM2_0 */
+
+
 
 #endif /* WDDM 1.2 type fallbacks */
 
