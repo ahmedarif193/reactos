@@ -1647,8 +1647,15 @@ DxgkpQueryAdapterInfoCaptured(
         {
             D3DKMT_QUERY_GPUMMU_CAPS Query;
 
-            if (DxgkpGetReportedDriverVersion(Adapter) < KMT_DRIVERVERSION_WDDM_2_0)
-                DXGKP_QUERY_RETURN(STATUS_INVALID_PARAMETER);
+            /*
+             * Not gated on the reported version.  Windows answers this query
+             * from what the adapter actually has -- the reference VM reports
+             * GpuMmuSupported=0 and refuses it, consistently.  Gating on the
+             * version made us advertise GpuMmuSupported=1 in the WDDM 2.0 caps
+             * while refusing the geometry behind it, which is a capability no
+             * runtime could act on.  The real condition is GpuMmuCapsValid,
+             * checked below, and it is the same one the bit is derived from.
+             */
             if (pQueryAdapterInfo->pPrivateDriverData == NULL ||
                 pQueryAdapterInfo->PrivateDriverDataSize < sizeof(Query))
             {
