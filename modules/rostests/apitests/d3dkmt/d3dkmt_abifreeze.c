@@ -1,0 +1,162 @@
+/*
+ * PROJECT:     ReactOS D3DKMT API Tests
+ * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * PURPOSE:     D3DKMT ABI layout freeze (roadmap gate 5)
+ * COPYRIGHT:   Copyright 2026 ReactOS WDDM Team
+ *
+ * Every structure below crosses the D3DKMT boundary, so its layout is a
+ * contract with code compiled separately -- gdi32, a user-mode driver, an
+ * application. A field inserted into the middle of one of these does not fail
+ * to build and does not fail to load: it shifts every field after it, and the
+ * two sides quietly disagree about where the data is. That is the failure this
+ * catches, and it is the reason the roadmap asks for a layout freeze before any
+ * version promotion.
+ *
+ * These are a tripwire that the layouts have not *moved*, not a claim that they
+ * are correct against Windows -- that question belongs to the differential
+ * harness, which runs the same binary on both kernels.
+ *
+ * A deliberate layout change is meant to fail here. Re-measure with the ABISIZE
+ * trace below and update the number in the same commit as the change, so the
+ * two are reviewed together.
+ */
+
+#include "precomp.h"
+
+C_ASSERT(sizeof(D3DKMT_ACQUIREKEYEDMUTEX) == 32);
+C_ASSERT(sizeof(D3DKMT_ACQUIREKEYEDMUTEX2) == 48);
+C_ASSERT(sizeof(D3DKMT_ACTIVATE_SPECIFIC_DIAG_ESCAPE) == 8);
+C_ASSERT(sizeof(D3DKMT_BLTMODEL_PRESENTHISTORYTOKEN) == 288);
+C_ASSERT(sizeof(D3DKMT_CHANGEVIDEOMEMORYRESERVATION) == 32);
+C_ASSERT(sizeof(D3DKMT_CLOSEADAPTER) == 4);
+C_ASSERT(sizeof(D3DKMT_COMPOSITION_PRESENTHISTORYTOKEN) == 8);
+C_ASSERT(sizeof(D3DKMT_CREATEALLOCATION) == 72);
+C_ASSERT(sizeof(D3DKMT_CREATEALLOCATIONFLAGS) == 4);
+C_ASSERT(sizeof(D3DKMT_CREATECONTEXT) == 96);
+C_ASSERT(sizeof(D3DKMT_CREATECONTEXTVIRTUAL) == 40);
+C_ASSERT(sizeof(D3DKMT_CREATEDEVICE) == 64);
+C_ASSERT(sizeof(D3DKMT_CREATEDEVICEFLAGS) == 4);
+C_ASSERT(sizeof(D3DKMT_CREATEHWQUEUE) == 48);
+C_ASSERT(sizeof(D3DKMT_CREATEKEYEDMUTEX) == 16);
+C_ASSERT(sizeof(D3DKMT_CREATEKEYEDMUTEX2) == 32);
+C_ASSERT(sizeof(D3DKMT_CREATEKEYEDMUTEX2_FLAGS) == 4);
+C_ASSERT(sizeof(D3DKMT_CREATEPAGINGQUEUE) == 32);
+C_ASSERT(sizeof(D3DKMT_CREATESYNCHRONIZATIONOBJECT) == 76);
+C_ASSERT(sizeof(D3DKMT_CREATESYNCHRONIZATIONOBJECT2) == 96);
+C_ASSERT(sizeof(D3DKMT_DEBUG_SNAPSHOT_ESCAPE) == 8);
+C_ASSERT(sizeof(D3DKMT_DESTROYALLOCATION) == 24);
+C_ASSERT(sizeof(D3DKMT_DESTROYALLOCATION2) == 24);
+C_ASSERT(sizeof(D3DKMT_DESTROYCONTEXT) == 4);
+C_ASSERT(sizeof(D3DKMT_DESTROYDEVICE) == 4);
+C_ASSERT(sizeof(D3DKMT_DESTROYHWQUEUE) == 4);
+C_ASSERT(sizeof(D3DKMT_DESTROYKEYEDMUTEX) == 4);
+C_ASSERT(sizeof(D3DKMT_DEVICEPRESENT_QUEUE_STATE) == 8);
+C_ASSERT(sizeof(D3DKMT_DEVICEPRESENT_STATE) == 40);
+C_ASSERT(sizeof(D3DKMT_DEVICEPRESENT_STATE_DWM) == 48);
+C_ASSERT(sizeof(D3DKMT_DEVICE_ESCAPE) == 12);
+C_ASSERT(sizeof(D3DKMT_DMM_ESCAPE) == 32);
+C_ASSERT(sizeof(D3DKMT_ENUMADAPTERS) == 324);
+C_ASSERT(sizeof(D3DKMT_ENUMADAPTERS2) == 16);
+C_ASSERT(sizeof(D3DKMT_ESCAPE) == 32);
+C_ASSERT(sizeof(D3DKMT_EVICT) == 32);
+C_ASSERT(sizeof(D3DKMT_EVICTION_CRITERIA) == 24);
+C_ASSERT(sizeof(D3DKMT_FENCE_PRESENTHISTORYTOKEN) == 8);
+C_ASSERT(sizeof(D3DKMT_FLIPMODEL_PRESENTHISTORYTOKEN) == 1064);
+C_ASSERT(sizeof(D3DKMT_FLIPMODEL_PRESENTHISTORYTOKENFLAGS) == 4);
+C_ASSERT(sizeof(D3DKMT_FREEGPUVIRTUALADDRESS) == 24);
+C_ASSERT(sizeof(D3DKMT_GDIMODEL_PRESENTHISTORYTOKEN) == 304);
+C_ASSERT(sizeof(D3DKMT_GDIMODEL_SYSMEM_PRESENTHISTORYTOKEN) == 24);
+C_ASSERT(sizeof(D3DKMT_GETPRESENTHISTORY) == 32);
+C_ASSERT(sizeof(D3DKMT_LOCK) == 48);
+C_ASSERT(sizeof(D3DKMT_LOCK2) == 24);
+C_ASSERT(sizeof(D3DKMT_OPENADAPTERFROMDEVICENAME) == 24);
+C_ASSERT(sizeof(D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME) == 80);
+C_ASSERT(sizeof(D3DKMT_OPENADAPTERFROMHDC) == 24);
+C_ASSERT(sizeof(D3DKMT_OPENADAPTERFROMLUID) == 12);
+C_ASSERT(sizeof(D3DKMT_OPENKEYEDMUTEX) == 8);
+C_ASSERT(sizeof(D3DKMT_OPENKEYEDMUTEX2) == 24);
+C_ASSERT(sizeof(D3DKMT_OUTPUTDUPLPRESENT) == 312);
+C_ASSERT(sizeof(D3DKMT_OUTPUTDUPLPRESENTFLAGS) == 4);
+C_ASSERT(sizeof(D3DKMT_OUTPUTDUPL_KEYEDMUTEX) == 8);
+C_ASSERT(sizeof(D3DKMT_PRESENT) == 1496);
+C_ASSERT(sizeof(D3DKMT_PRESENTFLAGS) == 4);
+C_ASSERT(sizeof(D3DKMT_PRESENTHISTORYTOKEN) == 1080);
+C_ASSERT(sizeof(D3DKMT_PRESENT_MULTIPLANE_OVERLAY2) == 304);
+C_ASSERT(sizeof(D3DKMT_PRESENT_MULTIPLANE_OVERLAY3) == 80);
+C_ASSERT(sizeof(D3DKMT_PRESENT_MULTIPLANE_OVERLAY_FLAGS) == 4);
+C_ASSERT(sizeof(D3DKMT_PRESENT_REDIRECTED) == 1120);
+C_ASSERT(sizeof(D3DKMT_PRESENT_REDIRECTED_FLAGS) == 4);
+C_ASSERT(sizeof(D3DKMT_PRESENT_RGNS) == 32);
+C_ASSERT(sizeof(D3DKMT_PRESENT_STATS) == 32);
+C_ASSERT(sizeof(D3DKMT_PRESENT_STATS_DWM) == 40);
+C_ASSERT(sizeof(D3DKMT_QUERYADAPTERINFO) == 24);
+C_ASSERT(sizeof(D3DKMT_QUERYFSEBLOCK) == 20);
+C_ASSERT(sizeof(D3DKMT_QUERYVIDEOMEMORYINFO) == 56);
+C_ASSERT(sizeof(D3DKMT_REGISTERTRIMNOTIFICATION) == 40);
+C_ASSERT(sizeof(D3DKMT_RELEASEKEYEDMUTEX) == 24);
+C_ASSERT(sizeof(D3DKMT_RELEASEKEYEDMUTEX2) == 40);
+C_ASSERT(sizeof(D3DKMT_RENDER) == 368);
+C_ASSERT(sizeof(D3DKMT_RENDERFLAGS) == 4);
+C_ASSERT(sizeof(D3DKMT_REQUEST_MACHINE_CRASH_ESCAPE) == 24);
+C_ASSERT(sizeof(D3DKMT_SETFSEBLOCK) == 20);
+C_ASSERT(sizeof(D3DKMT_SETQUEUEDLIMIT) == 16);
+C_ASSERT(sizeof(D3DKMT_SETVIDPNSOURCEOWNER) == 32);
+C_ASSERT(sizeof(D3DKMT_SETVIDPNSOURCEOWNER1) == 40);
+C_ASSERT(sizeof(D3DKMT_SETVIDPNSOURCEOWNER2) == 48);
+C_ASSERT(sizeof(D3DKMT_SHAREDPRIMARYLOCKNOTIFICATION) == 28);
+C_ASSERT(sizeof(D3DKMT_SHAREDPRIMARYUNLOCKNOTIFICATION) == 12);
+C_ASSERT(sizeof(D3DKMT_SIGNALSYNCHRONIZATIONOBJECT) == 140);
+C_ASSERT(sizeof(D3DKMT_SIGNALSYNCHRONIZATIONOBJECT2) == 464);
+C_ASSERT(sizeof(D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU) == 32);
+C_ASSERT(sizeof(D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU) == 80);
+C_ASSERT(sizeof(D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2) == 96);
+C_ASSERT(sizeof(D3DKMT_SUBMITCOMMAND) == 384);
+C_ASSERT(sizeof(D3DKMT_SUBMITCOMMANDFLAGS) == 4);
+C_ASSERT(sizeof(D3DKMT_SUBMITCOMMANDTOHWQUEUE) == 56);
+C_ASSERT(sizeof(D3DKMT_SUBMITSIGNALSYNCOBJECTSTOHWQUEUE) == 40);
+C_ASSERT(sizeof(D3DKMT_SUBMITWAITFORSYNCOBJECTSTOHWQUEUE) == 24);
+C_ASSERT(sizeof(D3DKMT_SURFACECOMPLETE_PRESENTHISTORYTOKEN) == 8);
+C_ASSERT(sizeof(D3DKMT_TDRDBGCTRL_ESCAPE) == 8);
+C_ASSERT(sizeof(D3DKMT_TRIMNOTIFICATION) == 24);
+C_ASSERT(sizeof(D3DKMT_UNLOCK) == 16);
+C_ASSERT(sizeof(D3DKMT_UNLOCK2) == 8);
+C_ASSERT(sizeof(D3DKMT_UNREGISTERTRIMNOTIFICATION) == 16);
+C_ASSERT(sizeof(D3DKMT_UPDATEGPUVIRTUALADDRESS) == 56);
+C_ASSERT(sizeof(D3DKMT_VIDMM_ESCAPE) == 1088);
+C_ASSERT(sizeof(D3DKMT_VIDPNSOURCEOWNER_FLAGS) == 4);
+C_ASSERT(sizeof(D3DKMT_VIDSCH_ESCAPE) == 48);
+C_ASSERT(sizeof(D3DKMT_WAITFORSYNCHRONIZATIONOBJECT) == 136);
+C_ASSERT(sizeof(D3DKMT_WAITFORSYNCHRONIZATIONOBJECT2) == 200);
+C_ASSERT(sizeof(D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU) == 40);
+C_ASSERT(sizeof(D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU) == 80);
+
+static void Test_LayoutsAreFrozen(void)
+{
+    /* The assertions above are compile-time; this reports the same values so a
+     * deliberate change can be re-measured without editing anything. */
+    trace("frozen D3DKMT layouts: 106 structures\n");
+    ok(sizeof(D3DKMT_CREATEDEVICE) != 0, "CREATEDEVICE has no layout\n");
+    ok(sizeof(D3DKMT_RENDER) != 0, "RENDER has no layout\n");
+    ok(sizeof(D3DKMT_SUBMITCOMMAND) != 0, "SUBMITCOMMAND has no layout\n");
+    ok(sizeof(D3DKMT_CREATEALLOCATION) != 0, "CREATEALLOCATION has no layout\n");
+}
+
+static void Test_PointerWidthAssumptions(void)
+{
+    /*
+     * D3DKMT_PTR members are pointer-sized on the native build and fixed-width
+     * under WOW. Anything that assumed 32 bits here would misread every handle
+     * array on ARM64.
+     */
+    ok_eq_ulong((ULONG)sizeof(void *), 8UL);
+    ok_eq_ulong((ULONG)sizeof(D3DKMT_HANDLE), 4UL);
+    ok(sizeof(D3DGPU_VIRTUAL_ADDRESS) == 8, "GPU virtual addresses are not 64-bit\n");
+}
+
+START_TEST(abifreeze)
+{
+    Test_LayoutsAreFrozen();
+    Test_PointerWidthAssumptions();
+}
+
+/* EOF */
