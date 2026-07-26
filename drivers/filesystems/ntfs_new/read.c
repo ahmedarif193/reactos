@@ -130,13 +130,14 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         goto Complete;
     }
 
-    /* An open/close-only handle should not pay for cache state it never uses. */
+    /* Open-only and one-page streams should not pay for cache-map setup. */
     if (NtfsCachedReadsEnabled &&
         RequestedLength &&
         !PagingIo &&
         !BooleanFlagOn(Irp->Flags, IRP_NOCACHE) &&
         !BooleanFlagOn(FileObject->Flags, FO_NO_INTERMEDIATE_BUFFERING) &&
         FileCB->RequestedType == TypeData &&
+        FileCB->CommonFCBHeader.FileSize.QuadPart > PAGE_SIZE &&
         FileObject->PrivateCacheMap == NULL)
     {
         PCC_FILE_SIZES FileSizes =
