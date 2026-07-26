@@ -31,6 +31,8 @@ KMT_TESTFUNC Test_DxgkHandleTable;
 KMT_TESTFUNC Test_DxgkAdapterCaps;
 KMT_TESTFUNC Test_DxgkNodeAffinity;
 KMT_TESTFUNC Test_DxgkTdrPolicy;
+KMT_TESTFUNC Test_DxgkFenceConcurrency;
+KMT_TESTFUNC Test_DxgkCoreConcurrency;
 KMT_TESTFUNC Test_DxgkContextSync;
 KMT_TESTFUNC Test_DxgkPresentQueue;
 KMT_TESTFUNC Test_DxgkSyncWait;
@@ -240,6 +242,8 @@ const KMT_TEST TestList[] =
     { "DxgkAdapterCaps",                    Test_DxgkAdapterCaps },
     { "DxgkNodeAffinity",                   Test_DxgkNodeAffinity },
     { "DxgkTdrPolicy",                      Test_DxgkTdrPolicy },
+    { "DxgkFenceConcurrency",               Test_DxgkFenceConcurrency },
+    { "DxgkCoreConcurrency",                Test_DxgkCoreConcurrency },
     { "DxgkContextSync",                   Test_DxgkContextSync },
     { "DxgkPresentQueue",                  Test_DxgkPresentQueue },
     { "DxgkSyncWait",                      Test_DxgkSyncWait },

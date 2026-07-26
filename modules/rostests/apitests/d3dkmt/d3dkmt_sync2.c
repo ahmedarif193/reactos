@@ -465,7 +465,7 @@ static void Test_MonitoredFence_AccessFlags(void)
         {
             Status = D3dkmtTestWaitFromCpu(pWait, hDevice, &Handle, &Value, 1, Event, FALSE);
             ok_eq_hex(Status, STATUS_ACCESS_DENIED);
-            ok_eq_ulong(WaitForSingleObject(Event, 0), (DWORD)WAIT_TIMEOUT);
+            { DWORD Waited = WaitForSingleObject(Event, 0); ok_eq_ulong(Waited, (DWORD)WAIT_TIMEOUT); }
             CloseHandle(Event);
         }
         D3dkmtTestDestroySyncObject(pDestroy, Handle);
@@ -649,13 +649,13 @@ static void Test_MonitoredFence_CpuBatchSemantics(void)
         goto Cleanup;
     Status = D3dkmtTestWaitFromCpu(pWait, hDevice, Handles, Values, ARRAYSIZE(Handles), Event, FALSE);
     ok(NT_SUCCESS(Status), "register WaitAll failed 0x%08lX\n", (long)Status);
-    ok_eq_ulong(WaitForSingleObject(Event, 0), (DWORD)WAIT_TIMEOUT);
+    { DWORD Waited = WaitForSingleObject(Event, 0); ok_eq_ulong(Waited, (DWORD)WAIT_TIMEOUT); }
     Status = D3dkmtTestSignalFromCpu(pSignal, hDevice, &Handles[0], &Values[0], 1, FALSE);
     ok(NT_SUCCESS(Status), "signal first WaitAll fence failed 0x%08lX\n", (long)Status);
-    ok_eq_ulong(WaitForSingleObject(Event, 0), (DWORD)WAIT_TIMEOUT);
+    { DWORD Waited = WaitForSingleObject(Event, 0); ok_eq_ulong(Waited, (DWORD)WAIT_TIMEOUT); }
     Status = D3dkmtTestSignalFromCpu(pSignal, hDevice, &Handles[1], &Values[1], 1, FALSE);
     ok(NT_SUCCESS(Status), "signal second WaitAll fence failed 0x%08lX\n", (long)Status);
-    ok_eq_ulong(WaitForSingleObject(Event, 2000), (DWORD)WAIT_OBJECT_0);
+    { DWORD Waited = WaitForSingleObject(Event, 2000); ok_eq_ulong(Waited, (DWORD)WAIT_OBJECT_0); }
     CloseHandle(Event);
     Event = NULL;
 
@@ -668,10 +668,10 @@ static void Test_MonitoredFence_CpuBatchSemantics(void)
         goto Cleanup;
     Status = D3dkmtTestWaitFromCpu(pWait, hDevice, Handles, Values, ARRAYSIZE(Handles), Event, TRUE);
     ok(NT_SUCCESS(Status), "register WaitAny failed 0x%08lX\n", (long)Status);
-    ok_eq_ulong(WaitForSingleObject(Event, 0), (DWORD)WAIT_TIMEOUT);
+    { DWORD Waited = WaitForSingleObject(Event, 0); ok_eq_ulong(Waited, (DWORD)WAIT_TIMEOUT); }
     Status = D3dkmtTestSignalFromCpu(pSignal, hDevice, &Handles[0], &Values[0], 1, FALSE);
     ok(NT_SUCCESS(Status), "signal WaitAny fence failed 0x%08lX\n", (long)Status);
-    ok_eq_ulong(WaitForSingleObject(Event, 2000), (DWORD)WAIT_OBJECT_0);
+    { DWORD Waited = WaitForSingleObject(Event, 2000); ok_eq_ulong(Waited, (DWORD)WAIT_OBJECT_0); }
     CloseHandle(Event);
     Event = NULL;
 
@@ -690,7 +690,7 @@ static void Test_MonitoredFence_CpuBatchSemantics(void)
     Event = NULL;
     Status = D3dkmtTestSignalFromCpu(pSignal, hDevice, &Handles[1], &Values[1], 1, FALSE);
     ok(NT_SUCCESS(Status), "signal close-handle wait failed 0x%08lX\n", (long)Status);
-    ok_eq_ulong(WaitForSingleObject(DuplicateEvent, 2000), (DWORD)WAIT_OBJECT_0);
+    { DWORD Waited = WaitForSingleObject(DuplicateEvent, 2000); ok_eq_ulong(Waited, (DWORD)WAIT_OBJECT_0); }
     CloseHandle(DuplicateEvent);
     DuplicateEvent = NULL;
 
@@ -750,7 +750,7 @@ static void Test_MonitoredFence_CpuBatchSemantics(void)
         {
             Status = D3dkmtTestWaitFromCpu(pWait, hDevice, Handles, Values, ARRAYSIZE(Handles), Event, FALSE);
             ok_eq_hex(Status, STATUS_ACCESS_DENIED);
-            ok_eq_ulong(WaitForSingleObject(Event, 0), (DWORD)WAIT_TIMEOUT);
+            { DWORD Waited = WaitForSingleObject(Event, 0); ok_eq_ulong(Waited, (DWORD)WAIT_TIMEOUT); }
             CloseHandle(Event);
             Event = NULL;
         }
@@ -771,7 +771,7 @@ static void Test_MonitoredFence_CpuBatchSemantics(void)
             Values[0] = 6;
             Status = D3dkmtTestWaitFromCpu(pWait, hDevice, Handles, Values, 1, DuplicateEvent, FALSE);
             ok_eq_hex(Status, STATUS_ACCESS_DENIED);
-            ok_eq_ulong(WaitForSingleObject(Event, 0), (DWORD)WAIT_TIMEOUT);
+            { DWORD Waited = WaitForSingleObject(Event, 0); ok_eq_ulong(Waited, (DWORD)WAIT_TIMEOUT); }
             CloseHandle(DuplicateEvent);
             DuplicateEvent = NULL;
         }
