@@ -684,6 +684,170 @@ NtGdiDdDDIGetMultisampleMethodList(_Inout_ D3DKMT_GETMULTISAMPLEMETHODLIST* unna
     D3DKMT_CALL_CALLBACK(RxgkIntPfnGetMultisampleMethodList, unnamedParam1);
 }
 
+/*
+ * Wrap a GDI device context around memory the caller already owns.
+ *
+ * The D3D runtime uses this to hand a CPU-accessible surface to code that
+ * speaks GDI -- a locked allocation, say, that something wants to BitBlt out
+ * of.  The bitmap is created *over* the caller's pointer rather than copying:
+ * that is the entire point, since a copy would defeat having locked the
+ * surface in the first place.
+ *
+ * Both exports existed with a syscall slot and no implementation behind them.
+ */
+static ULONG
+D3dkmtBitmapFormatFromDdi(
+    _In_ D3DDDIFORMAT Format)
+{
+    switch (Format)
+    {
+        case D3DDDIFMT_A8R8G8B8:
+        case D3DDDIFMT_X8R8G8B8:
+            return BMF_32BPP;
+        case D3DDDIFMT_R5G6B5:
+        case D3DDDIFMT_X1R5G5B5:
+        case D3DDDIFMT_A1R5G5B5:
+            return BMF_16BPP;
+        case D3DDDIFMT_R8G8B8:
+            return BMF_24BPP;
+        case D3DDDIFMT_P8:
+            return BMF_8BPP;
+        default:
+            /* Anything else has no GDI surface format to be, and guessing one
+             * would have GDI read the memory with the wrong stride. */
+            return 0;
+    }
+}
+
+__kernel_entry
+DWORD
+APIENTRY
+NtGdiDdDDICreateDCFromMemory(_Inout_ D3DKMT_CREATEDCFROMMEMORY* unnamedParam1)
+{
+    D3DKMT_CREATEDCFROMMEMORY Captured;
+    ULONG BitmapFormat;
+    ULONG MinimumPitch;
+    HBITMAP hBitmap;
+    HBITMAP hOldBitmap;
+    HDC hDc;
+    NTSTATUS Status;
+
+    RETURN_STATUS_IF_NULL(unnamedParam1);
+
+    _SEH2_TRY
+    {
+        ProbeForWrite(unnamedParam1, sizeof(Captured), 1);
+        Captured = *unnamedParam1;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+    if (Captured.pMemory == NULL || Captured.Width == 0 || Captured.Height == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    BitmapFormat = D3dkmtBitmapFormatFromDdi(Captured.Format);
+    if (BitmapFormat == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    /*
+     * The pitch has to cover a row at this format and width.  A pitch shorter
+     * than that makes every row after the first start inside the previous one,
+     * so GDI would read and write memory the caller never described -- and it
+     * is the caller's own buffer, so nothing else would catch it.
+     */
+    MinimumPitch = Captured.Width * (BitmapFormat == BMF_32BPP ? 4 :
+                                     BitmapFormat == BMF_24BPP ? 3 :
+                                     BitmapFormat == BMF_16BPP ? 2 : 1);
+    if (Captured.Pitch < MinimumPitch)
+        return STATUS_INVALID_PARAMETER;
+
+    hDc = GreCreateCompatibleDC(Captured.hDeviceDc, FALSE);
+    if (hDc == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    hBitmap = GreCreateBitmapEx(Captured.Width,
+                                Captured.Height,
+                                Captured.Pitch,
+                                BitmapFormat,
+                                0,
+                                Captured.Pitch * Captured.Height,
+                                Captured.pMemory,
+                                0);
+    if (hBitmap == NULL)
+    {
+        GreDeleteObject(hDc);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    hOldBitmap = NtGdiSelectBitmap(hDc, hBitmap);
+    if (hOldBitmap == NULL)
+    {
+        GreDeleteObject(hBitmap);
+        GreDeleteObject(hDc);
+        return STATUS_UNSUCCESSFUL;
+    }
+
+    Status = STATUS_SUCCESS;
+    _SEH2_TRY
+    {
+        unnamedParam1->hDc = hDc;
+        unnamedParam1->hBitmap = hBitmap;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    if (!NT_SUCCESS(Status))
+    {
+        /* The caller never received the handles, so nothing else can free
+         * them -- they would leak for the life of the process. */
+        NtGdiSelectBitmap(hDc, hOldBitmap);
+        GreDeleteObject(hBitmap);
+        GreDeleteObject(hDc);
+    }
+    return Status;
+}
+
+__kernel_entry
+DWORD
+APIENTRY
+NtGdiDdDDIDestroyDCFromMemory(_In_ CONST D3DKMT_DESTROYDCFROMMEMORY* unnamedParam1)
+{
+    D3DKMT_DESTROYDCFROMMEMORY Captured;
+
+    RETURN_STATUS_IF_NULL(unnamedParam1);
+
+    _SEH2_TRY
+    {
+        ProbeForRead(unnamedParam1, sizeof(Captured), 1);
+        Captured = *unnamedParam1;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+    if (Captured.hDc == NULL || Captured.hBitmap == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    /*
+     * Only the DC and the bitmap are ours to release.  The pixels belong to the
+     * caller and were never copied, so freeing them here would destroy memory
+     * that is still in use.
+     */
+    if (!GreDeleteObject(Captured.hBitmap))
+        return STATUS_INVALID_PARAMETER;
+    if (!GreDeleteObject(Captured.hDc))
+        return STATUS_INVALID_PARAMETER;
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 APIENTRY
 NtGdiDdDDIGetPresentHistory(_Inout_ D3DKMT_GETPRESENTHISTORY* unnamedParam1)
