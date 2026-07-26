@@ -142,6 +142,10 @@ typedef struct _FCB
     // Consider moving, multiple files can point to the same stream in NTFS.
     PStreamContextBlock StreamCB;
 
+    /* Set through FileDispositionInformation or FILE_DELETE_ON_CLOSE;
+     * the name is removed when the handle goes away. */
+    BOOLEAN DeletePending;
+
 } FileContextBlock, *PFileContextBlock;
 
 PStreamContextBlock
