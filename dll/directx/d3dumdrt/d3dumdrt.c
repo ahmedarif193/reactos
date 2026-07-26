@@ -41,6 +41,13 @@ typedef struct _D3DUMDRT_DEVICE
     ULONG                    Magic;
     D3DKMT_HANDLE            hAdapter;
     D3DKMT_HANDLE            hDevice;
+    /*
+     * Objects this device handed the driver and has not been given back.
+     * Teardown is ordered -- contexts and paging queues before the device that
+     * owns them -- and a driver that skips a step must be told rather than
+     * quietly leaving kernel objects parented to a device that is gone.
+     */
+    volatile LONG            LiveObjectCount;
     struct _D3DUMDRT_DEVICE *Next;
 } D3DUMDRT_DEVICE, *PD3DUMDRT_DEVICE;
 
@@ -83,6 +90,7 @@ static PFND3DKMT_DESTROYALLOCATION2        pfnDestroyAllocation2;
 static PFND3DKMT_CREATESYNCHRONIZATIONOBJECT2 pfnCreateSynchronizationObject2;
 static PFND3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU pfnWaitForSynchronizationObjectFromGpu;
 static PFND3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU  pfnSignalSynchronizationObjectFromGpu;
+static PFND3DKMT_PRESENT                   pfnPresent;
 static BOOL                        ProcsResolved;
 
 static BOOL D3DUmdRtResolveProcs(VOID)
@@ -122,6 +130,7 @@ static BOOL D3DUmdRtResolveProcs(VOID)
     RESOLVE(CreateSynchronizationObject2, CREATESYNCHRONIZATIONOBJECT2);
     RESOLVE(WaitForSynchronizationObjectFromGpu, WAITFORSYNCHRONIZATIONOBJECTFROMGPU);
     RESOLVE(SignalSynchronizationObjectFromGpu, SIGNALSYNCHRONIZATIONOBJECTFROMGPU);
+    RESOLVE(Present, PRESENT);
 #undef RESOLVE
 
     ProcsResolved = TRUE;
@@ -321,6 +330,7 @@ static HRESULT APIENTRY D3DUmdRtCreateContextCb(HANDLE hDevice, D3DDDICB_CREATEC
      * here.  All three come back from the kernel together and are useless
      * apart -- a buffer with no allocation list cannot name what it touches.
      */
+    InterlockedIncrement(&Device->LiveObjectCount);
     pData->hContext = (HANDLE)(ULONG_PTR)Create.hContext;
     pData->pCommandBuffer = Create.pCommandBuffer;
     pData->CommandBufferSize = Create.CommandBufferSize;
@@ -335,13 +345,17 @@ static HRESULT APIENTRY D3DUmdRtDestroyContextCb(HANDLE hDevice, CONST D3DDDICB_
 {
     PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hDevice);
     D3DKMT_DESTROYCONTEXT Destroy;
+    NTSTATUS Status;
 
     if (Device == NULL || pData == NULL || pfnDestroyContext == NULL)
         return E_INVALIDARG;
 
     ZeroMemory(&Destroy, sizeof(Destroy));
     Destroy.hContext = (D3DKMT_HANDLE)(ULONG_PTR)pData->hContext;
-    return D3DUmdRtStatusToHresult(pfnDestroyContext(&Destroy));
+    Status = pfnDestroyContext(&Destroy);
+    if (Status >= 0)
+        InterlockedDecrement(&Device->LiveObjectCount);
+    return D3DUmdRtStatusToHresult(Status);
 }
 
 static HRESULT APIENTRY D3DUmdRtRenderCb(HANDLE hDevice, D3DDDICB_RENDER *pData)
@@ -382,6 +396,51 @@ static HRESULT APIENTRY D3DUmdRtRenderCb(HANDLE hDevice, D3DDDICB_RENDER *pData)
     pData->pNewPatchLocationList = Render.pNewPatchLocationList;
     pData->NewPatchLocationListSize = Render.NewPatchLocationListSize;
     pData->QueuedBufferCount = Render.QueuedBufferCount;
+    return S_OK;
+}
+
+/* ------------------------------------------------------------------------ *
+ * Present
+ * ------------------------------------------------------------------------ */
+
+static HRESULT APIENTRY D3DUmdRtPresentCb(HANDLE hDevice, D3DDDICB_PRESENT *pData)
+{
+    PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hDevice);
+    D3DKMT_PRESENT Present;
+    NTSTATUS Status;
+    UINT Index;
+
+    if (Device == NULL || pData == NULL || pfnPresent == NULL)
+        return E_INVALIDARG;
+    /* There is nothing to present without a source. */
+    if (pData->hSrcAllocation == 0)
+        return E_INVALIDARG;
+
+    ZeroMemory(&Present, sizeof(Present));
+    Present.hContext = (D3DKMT_HANDLE)(ULONG_PTR)pData->hContext;
+    Present.hSource = pData->hSrcAllocation;
+    Present.hDestination = pData->hDstAllocation;
+    Present.BroadcastContextCount = pData->BroadcastContextCount;
+    for (Index = 0; Index < pData->BroadcastContextCount &&
+                    Index < D3DDDI_MAX_BROADCAST_CONTEXT; ++Index)
+    {
+        Present.BroadcastContext[Index] = (D3DKMT_HANDLE)(ULONG_PTR)pData->BroadcastContext[Index];
+    }
+    Present.BroadcastSrcAllocation = pData->BroadcastSrcAllocation;
+    Present.BroadcastDstAllocation = pData->BroadcastDstAllocation;
+    Present.pPrivateDriverData = pData->pPrivateDriverData;
+    Present.PrivateDriverDataSize = pData->PrivateDriverDataSize;
+
+    Status = pfnPresent(&Present);
+    if (Status < 0)
+        return D3DUmdRtStatusToHresult(Status);
+
+    /*
+     * Whether a compositor owns the screen changes what the driver should do
+     * next -- it can skip work that will never be seen -- so this is reported
+     * back rather than dropped.
+     */
+    pData->bOptimizeForComposition = Present.Flags.Flip ? FALSE : TRUE;
     return S_OK;
 }
 
@@ -486,6 +545,7 @@ static HRESULT APIENTRY D3DUmdRtCreatePagingQueueCb(HANDLE hDevice, D3DDDICB_CRE
      * without it would leave the driver unable to tell when anything it
      * requested had actually happened.
      */
+    InterlockedIncrement(&Device->LiveObjectCount);
     pData->hPagingQueue = Create.hPagingQueue;
     pData->hSyncObject = Create.hSyncObject;
     pData->FenceValueCPUVirtualAddress = Create.FenceValueCPUVirtualAddress;
@@ -496,12 +556,16 @@ static HRESULT APIENTRY D3DUmdRtDestroyPagingQueueCb(HANDLE hDevice, CONST D3DDD
 {
     PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hDevice);
     D3DDDI_DESTROYPAGINGQUEUE Destroy;
+    NTSTATUS Status;
 
     if (Device == NULL || pData == NULL || pfnDestroyPagingQueue == NULL)
         return E_INVALIDARG;
 
     Destroy = *pData;
-    return D3DUmdRtStatusToHresult(pfnDestroyPagingQueue(&Destroy));
+    Status = pfnDestroyPagingQueue(&Destroy);
+    if (Status >= 0)
+        InterlockedDecrement(&Device->LiveObjectCount);
+    return D3DUmdRtStatusToHresult(Status);
 }
 
 static HRESULT APIENTRY D3DUmdRtReserveGpuVirtualAddressCb(HANDLE hDevice,
@@ -582,6 +646,7 @@ static HRESULT APIENTRY D3DUmdRtCreateContextVirtualCb(HANDLE hDevice,
      * allocated and placed in its own GPU address space, so the kernel has none
      * to hand out.
      */
+    InterlockedIncrement(&Device->LiveObjectCount);
     pData->hContext = (HANDLE)(ULONG_PTR)Create.hContext;
     return S_OK;
 }
@@ -799,6 +864,7 @@ D3DUmdRtCreateDeviceCallbacks(
     pCallbacks->pfnCreateContextCb = D3DUmdRtCreateContextCb;
     pCallbacks->pfnDestroyContextCb = D3DUmdRtDestroyContextCb;
     pCallbacks->pfnEscapeCb = D3DUmdRtEscapeCb;
+    pCallbacks->pfnPresentCb = D3DUmdRtPresentCb;
     pCallbacks->pfnMakeResidentCb = D3DUmdRtMakeResidentCb;
     pCallbacks->pfnEvictCb = D3DUmdRtEvictCb;
     pCallbacks->pfnCreatePagingQueueCb = D3DUmdRtCreatePagingQueueCb;
@@ -819,14 +885,14 @@ D3DUmdRtCreateDeviceCallbacks(
     return S_OK;
 }
 
-VOID WINAPI
+HRESULT WINAPI
 D3DUmdRtDestroyDeviceCallbacks(HANDLE hRuntimeDevice)
 {
     PD3DUMDRT_DEVICE Device;
     PD3DUMDRT_DEVICE *Link;
 
     if (hRuntimeDevice == NULL || !D3DUmdRtDeviceLockReady)
-        return;
+        return E_INVALIDARG;
 
     /* Unlink and free under one lock: a handle released twice must find
      * nothing to unlink the second time rather than free the memory again. */
@@ -837,14 +903,26 @@ D3DUmdRtDestroyDeviceCallbacks(HANDLE hRuntimeDevice)
             break;
     }
     Device = *Link;
+    /*
+     * Teardown is ordered: contexts and paging queues are parented to this
+     * device, so releasing it first would leave kernel objects owned by
+     * something that no longer exists.  Refuse and say so, rather than freeing
+     * the bookkeeping and letting the driver find out later.
+     */
+    if (Device != NULL && InterlockedCompareExchange(&Device->LiveObjectCount, 0, 0) != 0)
+    {
+        LeaveCriticalSection(&D3DUmdRtDeviceLock);
+        return E_FAIL;
+    }
     if (Device != NULL)
         *Link = Device->Next;
     LeaveCriticalSection(&D3DUmdRtDeviceLock);
 
     if (Device == NULL)
-        return;
+        return E_INVALIDARG;
     Device->Magic = 0;
     HeapFree(GetProcessHeap(), 0, Device);
+    return S_OK;
 }
 
 BOOL WINAPI DllMain(HINSTANCE hInstance, DWORD Reason, LPVOID Reserved)
