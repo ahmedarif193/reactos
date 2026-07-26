@@ -397,6 +397,89 @@ static void Test_TeardownIsOrdered(D3DKMT_HANDLE hAdapter, D3DKMT_HANDLE hDevice
        "the device was released a second time\n");
 }
 
+/*
+ * A driver fills its command buffer and submits.  The buffer it just handed
+ * over now belongs to the GPU, so render must give it a different one to write
+ * into -- and it must be usable immediately, because the driver has more
+ * commands to emit right now.  A runtime that returned the same buffer would
+ * have the driver overwrite work already in flight, and one that returned none
+ * would strand it.
+ */
+static void Test_RenderHandsBackAUsableBuffer(D3DKMT_HANDLE hAdapter, D3DKMT_HANDLE hDevice)
+{
+    D3DDDI_DEVICECALLBACKS Callbacks;
+    D3DDDICB_CREATECONTEXT Create;
+    D3DDDICB_DESTROYCONTEXT Destroy;
+    D3DDDICB_RENDER Render;
+    HANDLE hRuntimeDevice = NULL;
+    VOID *FirstBuffer;
+    UINT FirstSize;
+    HRESULT hr;
+    int Round;
+
+    if (pfnCreateCallbacks(hAdapter, hDevice, &Callbacks, &hRuntimeDevice) != S_OK)
+    {
+        skip("no callback table\n");
+        return;
+    }
+
+    memset(&Create, 0, sizeof(Create));
+    hr = Callbacks.pfnCreateContextCb(hRuntimeDevice, &Create);
+    if (FAILED(hr))
+    {
+        skip("no context to submit from (0x%08lX)\n", (long)hr);
+        pfnDestroyCallbacks(hRuntimeDevice);
+        return;
+    }
+    FirstBuffer = Create.pCommandBuffer;
+    FirstSize = Create.CommandBufferSize;
+
+    /*
+     * Submit repeatedly, as a driver emitting more than one buffer's worth of
+     * commands does.  Each round must come back with somewhere to write.
+     */
+    for (Round = 0; Round < 3; ++Round)
+    {
+        memset(&Render, 0, sizeof(Render));
+        Render.hContext = Create.hContext;
+        Render.CommandOffset = 0;
+        Render.CommandLength = 0;
+        Render.NumAllocations = 0;
+        Render.NumPatchLocations = 0;
+        Render.NewCommandBufferSize = FirstSize;
+        Render.NewAllocationListSize = Create.AllocationListSize;
+        Render.NewPatchLocationListSize = Create.PatchLocationListSize;
+        Render.BroadcastContextCount = 0;
+
+        hr = Callbacks.pfnRenderCb(hRuntimeDevice, &Render);
+        if (FAILED(hr))
+        {
+            trace("render round %d refused 0x%08lX\n", Round, (long)hr);
+            break;
+        }
+
+        ok(Render.pNewCommandBuffer != NULL,
+           "round %d: render succeeded but handed back no buffer -- the driver has nowhere to "
+           "write its next command\n", Round);
+        ok(Render.NewCommandBufferSize != 0,
+           "round %d: the next command buffer is zero bytes\n", Round);
+        /* The lists come back with the buffer and are useless apart: a buffer
+         * with no allocation list cannot name what it touches. */
+        ok(Render.pNewAllocationList != NULL, "round %d: no allocation list handed back\n", Round);
+        ok(Render.pNewPatchLocationList != NULL, "round %d: no patch list handed back\n", Round);
+        trace("round %d: buffer %p (%u bytes), %lu queued\n", Round,
+              Render.pNewCommandBuffer, Render.NewCommandBufferSize,
+              (unsigned long)Render.QueuedBufferCount);
+    }
+
+    UNREFERENCED_PARAMETER(FirstBuffer);
+
+    memset(&Destroy, 0, sizeof(Destroy));
+    Destroy.hContext = Create.hContext;
+    Callbacks.pfnDestroyContextCb(hRuntimeDevice, &Destroy);
+    pfnDestroyCallbacks(hRuntimeDevice);
+}
+
 START_TEST(umdcallbacks)
 {
     HMODULE Runtime;
@@ -442,6 +525,7 @@ START_TEST(umdcallbacks)
     Test_ContextLifetimeThroughCallbacks(hAdapter, hDevice);
     Test_Wddm2TierIsPopulated(hAdapter, hDevice);
     Test_PagingQueueAndGpuVaThroughCallbacks(hAdapter, hDevice);
+    Test_RenderHandsBackAUsableBuffer(hAdapter, hDevice);
     Test_TeardownIsOrdered(hAdapter, hDevice);
 
     DestroyTestDevice(hDevice);
