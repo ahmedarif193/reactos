@@ -301,7 +301,7 @@ math(EXPR _preinstall_system_partition_sectors "${_preinstall_system_partition_s
 # their removable-media loader in the FAT boot partition.
 set(_preinstall_boot_partition_options)
 set(_preinstall_boot_partition_files
-    -add ${REACTOS_SOURCE_DIR}/boot/bootdata/preinstall.ini /freeldr.ini)
+    -add ${REACTOS_SOURCE_DIR}/boot/bootdata/preinstall.ini freeldr.ini)
 set(_preinstall_partition_deps native-fatten)
 set(_reactosimg_mbr_args)
 set(_reactosimg_deps native-mkdiskimg)
@@ -311,8 +311,8 @@ if(FREELDR_HAS_BIOS_BOOT)
     set(_freeldr_file ${CMAKE_CURRENT_BINARY_DIR}/freeldr/freeldr/freeldr.sys)
     list(APPEND _preinstall_boot_partition_options -boot ${_fat32_file})
     list(APPEND _preinstall_boot_partition_files
-        -add ${_freeldr_file} /freeldr.sys
-        -add $<TARGET_FILE:rosload> /rosload.exe)
+        -add ${_freeldr_file} freeldr.sys
+        -add $<TARGET_FILE:rosload> rosload.exe)
     list(APPEND _preinstall_partition_deps fat32 freeldr rosload)
     list(APPEND _reactosimg_mbr_args -mbr ${_dosmbr_file})
     list(APPEND _reactosimg_deps dosmbr)
