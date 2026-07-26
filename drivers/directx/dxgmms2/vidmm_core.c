@@ -143,6 +143,14 @@ Dxgmms2VidMmCoreStop(
 
     if (!Core->Started)
         return;
+    /*
+     * By contract the owner is stopped only after dxgkrnl has released every
+     * placement.  Reclaim whatever is left so no record leaks, but say so:
+     * a survivor means the two sides disagreed about who still holds space,
+     * and that must not be silent.
+     */
+    if (Core->LiveRangeCount != 0)
+        DPRINT1("Dxgmms2VidMmCoreStop: %lu placement(s) still held at stop\n", Core->LiveRangeCount);
     for (Index = 0; Index < Core->SegmentCount; ++Index)
     {
         PDXGMMS2_VIDMM_SEGMENT Segment = &Core->Segments[Index];

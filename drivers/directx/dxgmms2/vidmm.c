@@ -42,6 +42,18 @@ Dxgmms2VidMmStart(
     return Status;
 }
 
+static VOID
+NTAPI
+Dxgmms2VidMmStop(
+    _In_ DXGMMS2_VIDMM_HANDLE VidMm)
+{
+    PDXGMMS2_ADAPTER_CONTEXT Context = Dxgmms2VidMmContext(VidMm);
+
+    if (Context == NULL)
+        return;
+    Dxgmms2VidMmStopAdapter(Context);
+}
+
 static NTSTATUS
 NTAPI
 Dxgmms2VidMmSetSegment(
@@ -215,6 +227,7 @@ Dxgmms2QueryVidMmInterface(
 
     VidMmInterface->VidMmHandle = (DXGMMS2_VIDMM_HANDLE)Context;
     VidMmInterface->Start = Dxgmms2VidMmStart;
+    VidMmInterface->Stop = Dxgmms2VidMmStop;
     VidMmInterface->SetSegment = Dxgmms2VidMmSetSegment;
     VidMmInterface->ReservePlacement = Dxgmms2VidMmReservePlacement;
     VidMmInterface->ReleasePlacement = Dxgmms2VidMmReleasePlacement;

@@ -397,7 +397,7 @@ NTSTATUS DxgkpMms2QueryVidMmInterface(_In_ DXGMMS2_ADAPTER_HANDLE Mms2Adapter, _
         return Status;
     if (Buffer.Interface.Size != DXGMMS2_VIDMM_INTERFACE_V1_SIZE || Buffer.Interface.Version != DXGMMS2_VIDMM_VERSION_1 ||
         Buffer.Interface.VidMmHandle == NULL ||
-        Buffer.Interface.Start == NULL || Buffer.Interface.SetSegment == NULL ||
+        Buffer.Interface.Start == NULL || Buffer.Interface.Stop == NULL || Buffer.Interface.SetSegment == NULL ||
         Buffer.Interface.ReservePlacement == NULL || Buffer.Interface.ReleasePlacement == NULL ||
         Buffer.Interface.SetPlacementState == NULL || Buffer.Interface.QuerySegmentStatus == NULL ||
         Buffer.Interface.FindEvictionCandidate == NULL || Buffer.Interface.ReleaseAllPlacements == NULL)

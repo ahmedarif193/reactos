@@ -395,7 +395,10 @@ Dxgmms2CompleteStopAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _In_ const DXGMM
             Dxgmms2DereferenceAdapterContext(Context);
             return Status;
         }
-        Dxgmms2VidMmStopAdapter(Context);
+        /* The segment ledger is deliberately NOT retired here: dxgkrnl frees
+         * the shared primary and its own segment table after this call, so it
+         * retires the ledger itself through the interface once it truly holds
+         * no placements. */
         InterlockedExchange(&Context->State, Dxgmms2AdapterStopped);
     }
     else if (State != Dxgmms2AdapterStopped || Context->StopReason != Info->Reason)
