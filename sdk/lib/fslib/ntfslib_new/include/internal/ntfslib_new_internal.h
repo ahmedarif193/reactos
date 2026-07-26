@@ -1401,6 +1401,16 @@ public:
         _In_ ULONG FileAttributes,
         _Out_ PFileRecord* File);
 
+    NTSTATUS
+    CreateFileInDirectory(
+        _In_ PFileRecord Parent,
+        _In_reads_(NameLength) PWCHAR Name,
+        _In_ ULONG NameLength,
+        _In_ BOOLEAN IsDirectory,
+        _In_ ULONG FileAttributes,
+        _In_ BOOLEAN NameKnownMissing,
+        _Out_ PFileRecord* File);
+
     // ./namespace.cpp
     NTSTATUS
     DeleteFile(
