@@ -429,6 +429,13 @@ typedef enum _DXGMMS2_SCHEDULER_RETIRE_REASON
     Dxgmms2RetireAborted   = 3
 } DXGMMS2_SCHEDULER_RETIRE_REASON;
 
+/*
+ * Admission is strictly FIFO per engine, and deliberately so: dxgkrnl's
+ * tracked-DMA retirement requires fence order to equal queue order to equal
+ * kick order, so reordering by Priority would let a later fence retire work
+ * that has not executed.  Priority is recorded because it ranks eviction
+ * victims, not because it reorders dispatch.
+ */
 typedef struct _DXGMMS2_SCHEDULER_ADMIT_INFO_V1
 {
     ULONG     Size;

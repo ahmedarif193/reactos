@@ -271,8 +271,10 @@ Dxgmms2VidMmStartAdapter(
 
     if (SegmentCount == 0)
         SegmentCount = 1;
+    /* Silently clamping would leave the segments past the bound unowned and
+     * fail later at publish time with a misleading error. */
     if (SegmentCount > DXGMMS2_VIDMM_MAX_SEGMENTS)
-        SegmentCount = DXGMMS2_VIDMM_MAX_SEGMENTS;
+        return STATUS_INVALID_PARAMETER;
     KeAcquireSpinLock(&Context->VidMmLock, &OldIrql);
     Status = Dxgmms2VidMmCoreStart(&Context->VidMmCore, SegmentCount);
     if (Status == STATUS_INVALID_DEVICE_STATE)
