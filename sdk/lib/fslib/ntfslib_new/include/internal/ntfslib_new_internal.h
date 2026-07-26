@@ -132,6 +132,9 @@ NtfsIsNameInExpression(_In_     PUNICODE_STRING Expression,
 NTSTATUS
 NtfsQuerySystemTime(_Out_ PULONGLONG NtfsTime);
 
+unsigned long long
+NtfsQueryTicks(void);
+
 /* Default copied into each volume when it is initialized. */
 extern BOOLEAN NtfsDefaultShowMetadataFiles;
 extern BOOLEAN NtfsDefaultReadOnlyMode;

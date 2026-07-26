@@ -28,6 +28,12 @@ void NtfsFreePool(void* pObject)
     ExFreePool(pObject);
 }
 
+unsigned long long
+NtfsQueryTicks(void)
+{
+    return (unsigned long long)KeQueryPerformanceCounter(NULL).QuadPart;
+}
+
 NTSTATUS
 NtfsQuerySystemTime(_Out_ PULONGLONG NtfsTime)
 {
@@ -74,6 +80,13 @@ typedef struct _NTFS_CACHE_SLOT
 
 static NTFS_CACHE_SLOT NtfsCacheSlots[NTFS_CACHE_SLOTS];
 static ULONG NtfsCacheDirtyCount = 0;
+
+/* How much of the workload still reaches the disk, and what it costs. */
+LONG NtfsIoReadCount = 0;
+LONG NtfsIoWriteCount = 0;
+LONG64 NtfsIoReadTicks = 0;
+LONG64 NtfsIoWriteTicks = 0;
+
 
 /* Above this many blocks held back, write some out before taking on more.
  * Only a slice is committed at a time so no single write pays for the whole
@@ -589,11 +602,19 @@ ReadDisk(_In_ PDEVICE_OBJECT DeviceObject,
          _In_ ULONG Length,
          _Out_ PUCHAR Buffer)
 {
-    return NtfsPerformDiskIo(IRP_MJ_READ,
+    NTSTATUS IoStatus;
+    LARGE_INTEGER IoT0 = KeQueryPerformanceCounter(NULL);
+
+    IoStatus = NtfsPerformDiskIo(IRP_MJ_READ,
                              DeviceObject,
                              Offset,
                              Length,
                              Buffer);
+    InterlockedIncrement(&NtfsIoReadCount);
+    InterlockedAdd64(&NtfsIoReadTicks,
+                     KeQueryPerformanceCounter(NULL).QuadPart - IoT0.QuadPart);
+    return IoStatus;
+
 }
 
 NTSTATUS
@@ -602,11 +623,19 @@ WriteDisk(_In_ PDEVICE_OBJECT DeviceObject,
           _In_ ULONG Length,
           _In_ PUCHAR Buffer)
 {
-    return NtfsPerformDiskIo(IRP_MJ_WRITE,
+    NTSTATUS IoStatus;
+    LARGE_INTEGER IoT0 = KeQueryPerformanceCounter(NULL);
+
+    IoStatus = NtfsPerformDiskIo(IRP_MJ_WRITE,
                              DeviceObject,
                              Offset,
                              Length,
                              Buffer);
+    InterlockedIncrement(&NtfsIoWriteCount);
+    InterlockedAdd64(&NtfsIoWriteTicks,
+                     KeQueryPerformanceCounter(NULL).QuadPart - IoT0.QuadPart);
+    return IoStatus;
+
 }
 
 #ifdef __cplusplus
@@ -768,29 +797,18 @@ NtfsWriteVolume(_In_    ULONGLONG Offset,
              * record-sized metadata updates; whole-block writes are bulk
              * data and keep their existing path.
              */
-            if (!Absorbed)
+            if (!Absorbed && Length < NTFS_CACHE_BLOCK_SIZE)
             {
                 PUCHAR Staged = (PUCHAR)ExAllocatePoolUninitialized(
                     NonPagedPool, NTFS_CACHE_BLOCK_SIZE, 'CftN');
 
                 if (Staged)
                 {
-                    NTSTATUS FillStatus;
-
-                    if (Length == NTFS_CACHE_BLOCK_SIZE)
-                    {
-                        /* The write covers the whole block, so there is
-                         * nothing on the disk worth fetching first. */
-                        FillStatus = STATUS_SUCCESS;
-                    }
-                    else
-                    {
-                        FillStatus = ReadDisk(
-                            PartDeviceObj,
-                            Block << NTFS_CACHE_BLOCK_SHIFT,
-                            NTFS_CACHE_BLOCK_SIZE,
-                            Staged);
-                    }
+                    NTSTATUS FillStatus = ReadDisk(
+                        PartDeviceObj,
+                        Block << NTFS_CACHE_BLOCK_SHIFT,
+                        NTFS_CACHE_BLOCK_SIZE,
+                        Staged);
 
                     if (NT_SUCCESS(FillStatus))
                     {

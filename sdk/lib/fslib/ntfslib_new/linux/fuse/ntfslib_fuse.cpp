@@ -37,6 +37,14 @@
 
 typedef std::vector<std::string> NtfsDirectoryListing;
 
+
+extern "C" unsigned long long
+NtfsQueryTicks(void)
+{
+    /* Diagnostics only; the host build has no use for it. */
+    return 0;
+}
+
 #if NTFSLIB_HAVE_FUSE
 #define FUSE_USE_VERSION 31
 #include <fuse.h>

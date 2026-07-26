@@ -79,6 +79,21 @@ NtfsReturnCreateReparse(
     return STATUS_REPARSE;
 }
 
+/* Whole-dispatch accounting: where does an open or create actually go. */
+static LONG NtfsProfCreates = 0;
+static LONG64 NtfsProfQuery = 0;     /* path resolution */
+static LONG64 NtfsProfDisp = 0;      /* disposition incl. library create */
+static LONG64 NtfsProfFcb = 0;       /* context-block build */
+static LONG64 NtfsProfTail = 0;      /* dir load, sizes, cache map, open */
+LONG64 NtfsProfCleanup = 0;
+LONG64 NtfsProfClose = 0;
+LONG NtfsProfCleanupCount = 0;
+LONG NtfsProfCloseCount = 0;
+extern LONG NtfsIoReadCount;
+extern LONG NtfsIoWriteCount;
+extern LONG64 NtfsIoReadTicks;
+extern LONG64 NtfsIoWriteTicks;
+
 _Function_class_(IRP_MJ_CREATE)
 _Function_class_(DRIVER_DISPATCH)
 /* The cache manager retains this table for the lifetime of every cache map,
@@ -270,6 +285,9 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     PIO_STACK_LOCATION IrpSp;
     PFileContextBlock FileCB;
     NTSTATUS Status;
+    LARGE_INTEGER ProfT0, ProfT1, ProfT2, ProfT3, ProfT4;
+    ProfT0.QuadPart = 0; ProfT1.QuadPart = 0; ProfT2.QuadPart = 0; ProfT3.QuadPart = 0; ProfT4.QuadPart = 0;
+    ProfT0 = KeQueryPerformanceCounter(NULL);
     PFILE_OBJECT FileObject;
     BOOLEAN PerformAccessChecks;
     PNtfsFileRecord CurrentFile = NULL;
@@ -386,6 +404,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         return Status;
     }
 
+    ProfT1 = KeQueryPerformanceCounter(NULL);
     if ((Status == STATUS_NOT_FOUND ||
          Status == STATUS_OBJECT_NAME_NOT_FOUND ||
          Status == STATUS_OBJECT_PATH_NOT_FOUND) &&
@@ -475,6 +494,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     ExReleaseResourceLite(&VolCB->MetadataResource);
     KeLeaveCriticalRegion();
 
+    ProfT2 = KeQueryPerformanceCounter(NULL);
     // Create file context block.
     /*
      * Initializing two ERESOURCEs costs more than the rest of an open put
@@ -570,6 +590,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             CurrentFile);
     }
 
+    ProfT3 = KeQueryPerformanceCounter(NULL);
     FileCB->CachedRecord = CachedRecord;
     FileCB->FileRec = CurrentFile;
     FileCB->CreateOptions = IrpSp->Parameters.Create.Options;
@@ -733,6 +754,26 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             FO_FILE_MODIFIED |
             FO_FILE_SIZE_CHANGED;
     }
+    ProfT4 = KeQueryPerformanceCounter(NULL);
+    if (ProfT1.QuadPart && ProfT3.QuadPart)
+    {
+        InterlockedAdd64(&NtfsProfQuery, ProfT1.QuadPart - ProfT0.QuadPart);
+        InterlockedAdd64(&NtfsProfDisp, ProfT2.QuadPart - ProfT1.QuadPart);
+        InterlockedAdd64(&NtfsProfFcb, ProfT3.QuadPart - ProfT2.QuadPart);
+        InterlockedAdd64(&NtfsProfTail, ProfT4.QuadPart - ProfT3.QuadPart);
+        if ((InterlockedIncrement(&NtfsProfCreates) & 0x3F) == 0)
+        {
+            DPRINT1("CRACCT n=%ld query=%I64d disp=%I64d fcb=%I64d tail=%I64d clean(%ld)=%I64d close(%ld)=%I64d\n",
+                    NtfsProfCreates, NtfsProfQuery, NtfsProfDisp,
+                    NtfsProfFcb, NtfsProfTail,
+                    NtfsProfCleanupCount, NtfsProfCleanup,
+                    NtfsProfCloseCount, NtfsProfClose);
+            DPRINT1("IOACCT rd(%ld)=%I64d wr(%ld)=%I64d\n",
+                    NtfsIoReadCount, NtfsIoReadTicks,
+                    NtfsIoWriteCount, NtfsIoWriteTicks);
+        }
+    }
+
     Irp->IoStatus.Information = FILE_OPENED;
     Irp->IoStatus.Status = STATUS_SUCCESS;
     IoCompleteRequest(Irp, IO_DISK_INCREMENT);
