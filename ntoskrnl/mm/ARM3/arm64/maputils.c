@@ -14,6 +14,7 @@
 #include <mm/ARM3/miarm.h>
 
 static KSPIN_LOCK MiArm64SystemPageDirectoryLock;
+static PFN_NUMBER MiArm64KernelRootPage;
 
 VOID
 MiArm64InitializeSystemPageDirectoryLock(VOID)
@@ -24,12 +25,20 @@ MiArm64InitializeSystemPageDirectoryLock(VOID)
     InitializeListHead(&MmProcessList);
 
     /*
-     * The replication walk identifies each root through its translation base,
-     * so a root published without one would silently never receive any new
-     * kernel L0 descriptor. Every later root is published with its base set
-     * under the lock; assert the same for the one seeded here.
+     * Keep one permanent root as the owner of the shared kernel hierarchy.
+     * Charging a new kernel L0 descriptor to whichever process happens to be
+     * current would add a reference to that process's private root. The
+     * descriptor is then replicated to every root, so that reference cannot be
+     * released when the transient process exits.
+     *
+     * The process active during ARM64 MM initialization owns the original
+     * kernel root and remains alive for the lifetime of the system. All later
+     * roots clone their kernel half from this root, and all kernel hierarchy
+     * growth is performed against it under the lock below.
      */
-    if (KPROCESS_DTB0(&Process->Pcb) == 0)
+    MiArm64KernelRootPage =
+        (KPROCESS_DTB0(&Process->Pcb) & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT;
+    if (MiArm64KernelRootPage == 0)
     {
         KeBugCheckEx(MEMORY_MANAGEMENT, (ULONG_PTR)Process, 0, 0, 0);
     }
@@ -230,16 +239,6 @@ MiArm64EnsureKernelHierarchy(
     return PageFrameIndex;
 }
 
-FORCEINLINE
-PFN_NUMBER
-MiArm64ReadTtbr1RootPage(VOID)
-{
-    ULONG64 Ttbr1;
-
-    __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
-    return (PFN_NUMBER)((Ttbr1 & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
-}
-
 static
 BOOLEAN
 MiArm64FillSystemPageDirectoryLocked(
@@ -251,7 +250,7 @@ MiArm64FillSystemPageDirectoryLocked(
     BOOLEAN FlushHierarchy = FALSE;
     BOOLEAN Success = TRUE;
 
-    RootPage = MiArm64ReadTtbr1RootPage();
+    RootPage = MiArm64KernelRootPage;
     PointerPde = MiAddressToPde(Base);
     LastPde = MiAddressToPde((PVOID)((ULONG_PTR)Base + NumberOfBytes - 1));
 
@@ -309,8 +308,7 @@ MiArm64FinalizeProcessAddressSpace(
     _In_ PFN_NUMBER HyperPfn)
 {
     KIRQL OldIrql;
-    PFN_NUMBER CurrentRootPfn;
-    PMMPTE CurrentRoot, NewRoot;
+    PMMPTE KernelRoot, NewRoot;
     MMPTE TempPte;
     ULONG Index;
 
@@ -318,11 +316,10 @@ MiArm64FinalizeProcessAddressSpace(
 
     KeAcquireSpinLock(&MiArm64SystemPageDirectoryLock, &OldIrql);
 
-    CurrentRootPfn = MiArm64ReadTtbr1RootPage();
-    CurrentRoot = (PMMPTE)MI_ARM64_PFN_TO_VA(CurrentRootPfn);
+    KernelRoot = (PMMPTE)MI_ARM64_PFN_TO_VA(MiArm64KernelRootPage);
     Index = PXE_PER_PAGE / 2;
     RtlCopyMemory(NewRoot + Index,
-                  CurrentRoot + Index,
+                  KernelRoot + Index,
                   PAGE_SIZE - Index * sizeof(MMPTE));
 
     TempPte.u.Long = ValidKernelPde.u.Long;
@@ -509,7 +506,7 @@ MiArm64EnsureSessionPageDirectoryPages(
      * MiMapPPEs premap with on-demand backing, like AMD64.
      */
     {
-        PFN_NUMBER RootPage = MiArm64ReadTtbr1RootPage();
+        PFN_NUMBER RootPage = MiArm64KernelRootPage;
 
         for (Va = (ULONG_PTR)BaseVa & ~((1ULL << PPI_SHIFT) - 1);
              Va <= EndVa;
