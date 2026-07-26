@@ -173,6 +173,9 @@ NTAPI
 NtfsFsdShutdown (_In_ PDEVICE_OBJECT VolumeDeviceObject,
                  _Inout_ PIRP Irp)
 {
+    /* Last chance to commit metadata the library is still holding. */
+    NtfsDiskFlushKm();
+
     /* Overview:
      * Occurs when the system is being shutdown.
      * Do any cleanup needed and return STATUS_SUCCESS.
@@ -285,6 +288,14 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 IsDirectory);
             ExReleaseResourceLite(&VolCB->MetadataResource);
             KeLeaveCriticalRegion();
+
+            /* On success the library has already released the record set. */
+            NtfsEvictCachedRecord(VolCB,
+                                  FileCB->FileName.Buffer,
+                                  (USHORT)(FileCB->FileName.Length / sizeof(WCHAR)),
+                                  NT_SUCCESS(DeleteStatus));
+            if (NT_SUCCESS(DeleteStatus))
+                FileCB->FileRec = NULL;
 
             if (!NT_SUCCESS(DeleteStatus))
                 DPRINT1("NtfsFsdCleanup: delete failed 0x%08lx\n", DeleteStatus);

@@ -53,14 +53,23 @@ NtfsFsdClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 CcUninitializeCacheMap(IrpSp->FileObject, NULL, NULL);
             }
 
-            ExDeleteResourceLite(&FileCB->MainResource);
-            ExDeleteResourceLite(&FileCB->PagingIoResource);
+            /* Resources are kept alive with the block; see the reuse path
+             * in create. They are only torn down when it is really freed. */
 
             if (FileCB->FileDir)
                 NtfsDirectoryDestroy(FileCB->FileDir);
 
-            if (FileCB->FileRec)
+            /* A cached record outlives this handle and is freed by the cache. */
+            if (FileCB->CachedRecord)
+            {
+                NtfsReleaseCachedRecord(
+                    (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension,
+                    FileCB->CachedRecord);
+            }
+            else if (FileCB->FileRec)
+            {
                 NtfsFileRecordDestroy(FileCB->FileRec);
+            }
 
             if (FileCB->RequestedStream)
                 ExFreePool(FileCB->RequestedStream);
@@ -75,7 +84,28 @@ NtfsFsdClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             if (FileCB->FileName.Buffer)
                 ExFreePool(FileCB->FileName.Buffer);
 
-            ExFreePool(FileCB);
+            /* Keep the block, with its resources, for the next open. */
+            {
+                PVolumeContextBlock Vol =
+                    (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
+                BOOLEAN Kept = FALSE;
+
+                ExAcquireFastMutex(&Vol->IdleFcbMutex);
+                if (Vol->IdleFcbCount < NTFS_MAX_IDLE_FCBS)
+                {
+                    InsertHeadList(&Vol->IdleFcbList, &FileCB->IdleLink);
+                    Vol->IdleFcbCount++;
+                    Kept = TRUE;
+                }
+                ExReleaseFastMutex(&Vol->IdleFcbMutex);
+
+                if (!Kept)
+                {
+                    ExDeleteResourceLite(&FileCB->MainResource);
+                    ExDeleteResourceLite(&FileCB->PagingIoResource);
+                    ExFreePool(FileCB);
+                }
+            }
             IrpSp->FileObject->FsContext = NULL;
         }
     }
