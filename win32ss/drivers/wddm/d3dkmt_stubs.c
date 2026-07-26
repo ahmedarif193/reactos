@@ -59,7 +59,7 @@ C_ASSERT(FIELD_OFFSET(RXGK_SUBMITCOMMAND_PACKET, Reserved) == 44);
 C_ASSERT(DXGKRNL_INTERFACE_VERSION_1_SIZE == FIELD_OFFSET(REACTOS_WIN32K_DXGKRNL_INTERFACE, RxgkIntPfnCreateContextVirtual));
 C_ASSERT(DXGKRNL_INTERFACE_VERSION_2_SIZE == FIELD_OFFSET(REACTOS_WIN32K_DXGKRNL_INTERFACE, RxgkIntPfnCreateAllocation2));
 C_ASSERT(DXGKRNL_INTERFACE_VERSION_3_SIZE == FIELD_OFFSET(REACTOS_WIN32K_DXGKRNL_INTERFACE, RxgkIntPfnGetAllocationPriority));
-C_ASSERT(DXGKRNL_INTERFACE_VERSION_5_SIZE == sizeof(REACTOS_WIN32K_DXGKRNL_INTERFACE));
+C_ASSERT(DXGKRNL_INTERFACE_VERSION_6_SIZE == sizeof(REACTOS_WIN32K_DXGKRNL_INTERFACE));
 C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, hAllocation) == 0);
 C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, hAllocation) == 0);
 #if defined(_WIN64)
@@ -68,6 +68,7 @@ C_ASSERT(DXGKRNL_INTERFACE_VERSION_2_SIZE == 552);
 C_ASSERT(DXGKRNL_INTERFACE_VERSION_3_SIZE == 560);
 C_ASSERT(DXGKRNL_INTERFACE_VERSION_4_SIZE == 568);
 C_ASSERT(DXGKRNL_INTERFACE_VERSION_5_SIZE == 576);
+C_ASSERT(DXGKRNL_INTERFACE_VERSION_6_SIZE == 600);
 C_ASSERT(sizeof(D3DDDI_ALLOCATIONINFO) == 40);
 C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, pSystemMem) == 8);
 C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, pPrivateDriverData) == 16);
@@ -2112,6 +2113,12 @@ D3DKMTGetDeviceState(
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x185, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x189, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1B9, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1BA, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2 \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1BB, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x18A, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_DXGKRNL_PREPAREMAPGPUVIRTUALADDRESS \
@@ -3570,6 +3577,177 @@ D3DKMTSignalSynchronizationObjectFromCpu(
     Captured.ObjectHandleArray = ObjectHandles;
     Captured.FenceValueArray = FenceValues;
     return WddmBridgeSendIoctl(IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU, &Captured, sizeof(Captured), NULL, 0);
+}
+
+/*
+ * The GPU-side half of the monitored-fence contract.  Its CPU-side counterparts
+ * above have existed all along; these are what a context uses to make the *GPU*
+ * wait for or signal a fence, which is how one engine's work is ordered against
+ * another's without a round trip through the CPU.
+ *
+ * The value array is what distinguishes these from the ...Object2 forms: each
+ * object carries its own fence value, so one call can wait for fence A to reach
+ * 7 while fence B reaches 12.  The Object2 forms apply a single value to every
+ * object in the batch, which cannot express that at all.
+ *
+ * Both arrays are captured by value before anything is queued.  They live in
+ * user memory, and a caller that rewrote them after the call would otherwise
+ * change what the scheduler goes on to do.
+ */
+NTSTATUS
+APIENTRY
+D3DKMTWaitForSynchronizationObjectFromGpu(
+    _In_ CONST D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU *pData)
+{
+    D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU Captured;
+    D3DKMT_HANDLE ObjectHandles[D3DDDI_MAX_OBJECT_WAITED_ON];
+    UINT64 FenceValues[D3DDDI_MAX_OBJECT_WAITED_ON];
+    SIZE_T HandleArraySize;
+    SIZE_T FenceArraySize;
+    NTSTATUS Status;
+
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Captured.ObjectCount == 0 || Captured.ObjectCount > D3DDDI_MAX_OBJECT_WAITED_ON ||
+        Captured.ObjectHandleArray == NULL || Captured.MonitoredFenceValueArray == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = WddmBridgeSizeForCount(Captured.ObjectCount, sizeof(ObjectHandles[0]), &HandleArraySize);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = WddmBridgeSizeForCount(Captured.ObjectCount, sizeof(FenceValues[0]), &FenceArraySize);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = WddmBridgeSafeCopyFrom(ObjectHandles, Captured.ObjectHandleArray, HandleArraySize);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = WddmBridgeSafeCopyFrom(FenceValues, Captured.MonitoredFenceValueArray, FenceArraySize);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Captured.ObjectHandleArray = ObjectHandles;
+    Captured.MonitoredFenceValueArray = FenceValues;
+    return WddmBridgeSendIoctl(IOCTL_D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU, &Captured, sizeof(Captured), NULL, 0);
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTSignalSynchronizationObjectFromGpu(
+    _In_ CONST D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU *pData)
+{
+    D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU Captured;
+    D3DKMT_HANDLE ObjectHandles[D3DDDI_MAX_OBJECT_SIGNALED];
+    UINT64 FenceValues[D3DDDI_MAX_OBJECT_SIGNALED];
+    SIZE_T HandleArraySize;
+    SIZE_T FenceArraySize;
+    NTSTATUS Status;
+
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Captured.ObjectCount == 0 || Captured.ObjectCount > D3DDDI_MAX_OBJECT_SIGNALED ||
+        Captured.ObjectHandleArray == NULL || Captured.MonitoredFenceValueArray == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = WddmBridgeSizeForCount(Captured.ObjectCount, sizeof(ObjectHandles[0]), &HandleArraySize);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = WddmBridgeSizeForCount(Captured.ObjectCount, sizeof(FenceValues[0]), &FenceArraySize);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = WddmBridgeSafeCopyFrom(ObjectHandles, Captured.ObjectHandleArray, HandleArraySize);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = WddmBridgeSafeCopyFrom(FenceValues, Captured.MonitoredFenceValueArray, FenceArraySize);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Captured.ObjectHandleArray = ObjectHandles;
+    Captured.MonitoredFenceValueArray = FenceValues;
+    return WddmBridgeSendIoctl(IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU, &Captured, sizeof(Captured), NULL, 0);
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTSignalSynchronizationObjectFromGpu2(
+    _In_ CONST D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2 *pData)
+{
+    D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2 Captured;
+    D3DKMT_HANDLE ObjectHandles[D3DDDI_MAX_OBJECT_SIGNALED];
+    D3DKMT_HANDLE BroadcastContexts[D3DDDI_MAX_BROADCAST_CONTEXT];
+    UINT64 FenceValues[D3DDDI_MAX_OBJECT_SIGNALED];
+    SIZE_T HandleArraySize;
+    SIZE_T ContextArraySize;
+    SIZE_T FenceArraySize;
+    NTSTATUS Status;
+
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    /*
+     * This form has no hContext of its own: the contexts it signals on are
+     * exactly the broadcast array, so an empty array names nothing to signal on
+     * and is a malformed request rather than a no-op.
+     */
+    if (Captured.BroadcastContextCount == 0 ||
+        Captured.BroadcastContextCount > D3DDDI_MAX_BROADCAST_CONTEXT ||
+        Captured.BroadcastContextArray == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    Status = WddmBridgeSizeForCount(Captured.BroadcastContextCount, sizeof(BroadcastContexts[0]), &ContextArraySize);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = WddmBridgeSafeCopyFrom(BroadcastContexts, Captured.BroadcastContextArray, ContextArraySize);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Captured.BroadcastContextArray = BroadcastContexts;
+
+    /*
+     * Signalling a CPU event instead of fences is the one case with no objects:
+     * the two are alternatives, so carrying objects as well is contradictory
+     * and is refused rather than half-honoured.
+     */
+    if (Captured.Flags.EnqueueCpuEvent)
+    {
+        if (Captured.ObjectCount != 0)
+            return STATUS_INVALID_PARAMETER;
+        return WddmBridgeSendIoctl(IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2, &Captured, sizeof(Captured), NULL, 0);
+    }
+
+    if (Captured.ObjectCount == 0 || Captured.ObjectCount > D3DDDI_MAX_OBJECT_SIGNALED ||
+        Captured.ObjectHandleArray == NULL || Captured.MonitoredFenceValueArray == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    Status = WddmBridgeSizeForCount(Captured.ObjectCount, sizeof(ObjectHandles[0]), &HandleArraySize);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = WddmBridgeSizeForCount(Captured.ObjectCount, sizeof(FenceValues[0]), &FenceArraySize);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = WddmBridgeSafeCopyFrom(ObjectHandles, Captured.ObjectHandleArray, HandleArraySize);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = WddmBridgeSafeCopyFrom(FenceValues, Captured.MonitoredFenceValueArray, FenceArraySize);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Captured.ObjectHandleArray = ObjectHandles;
+    Captured.MonitoredFenceValueArray = FenceValues;
+    return WddmBridgeSendIoctl(IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2, &Captured, sizeof(Captured), NULL, 0);
 }
 
 NTSTATUS

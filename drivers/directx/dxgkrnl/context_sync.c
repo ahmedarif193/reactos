@@ -75,6 +75,7 @@ DxgkContextSyncCapture(
     _In_ ULONG ObjectCount,
     _In_ ULONG SignalFlags,
     _In_ UINT64 PayloadValue,
+    _In_reads_opt_(ObjectCount) CONST UINT64 *PayloadValueArray,
     _Out_ PDXGKRNL_CONTEXT_SYNC_CAPTURE Capture)
 {
     NTSTATUS Status;
@@ -97,6 +98,14 @@ DxgkContextSyncCapture(
     Capture->ObjectCount = ObjectCount;
     Capture->SignalFlags = SignalFlags;
     Capture->PayloadValue = PayloadValue;
+    Capture->PerObjectValues = FALSE;
+    if (PayloadValueArray != NULL)
+    {
+        if (ObjectCount > RTL_NUMBER_OF(Capture->PayloadValues))
+            return STATUS_INVALID_PARAMETER;
+        RtlCopyMemory(Capture->PayloadValues, PayloadValueArray, ObjectCount * sizeof(UINT64));
+        Capture->PerObjectValues = TRUE;
+    }
     if (!DxgkReferenceDevice(Device))
         return STATUS_DELETE_PENDING;
     Capture->Device = Device;
@@ -151,7 +160,7 @@ DxgkContextSyncCapture(
         }
         DxgkpContextSyncInitializeCoreObject(&Capture->CoreObjects[Index], Capture->Objects[Index]);
     }
-    Status = DxgkContextSyncCoreValidate(Operation, Capture->CoreObjects, ObjectCount, SignalFlags, (SignalFlags & DXGK_CONTEXT_SYNC_ENQUEUE_CPU_EVENT) != 0 ? 0 : PayloadValue, Capture->EnqueueEvent != NULL);
+    Status = DxgkContextSyncCoreValidate(Operation, Capture->CoreObjects, ObjectCount, SignalFlags, (SignalFlags & DXGK_CONTEXT_SYNC_ENQUEUE_CPU_EVENT) != 0 ? 0 : PayloadValue, Capture->PerObjectValues ? Capture->PayloadValues : NULL, Capture->EnqueueEvent != NULL);
     if (!NT_SUCCESS(Status))
         goto Failure;
     return STATUS_SUCCESS;
@@ -163,6 +172,35 @@ Failure:
     Capture->EnqueueEvent = NULL;
     Capture->ObjectCount = 0;
     return Status;
+}
+
+/*
+ * A signal batch made entirely of monitored fences.  These cannot be completed
+ * the way the legacy types are: their value lives in a page shared with user
+ * mode, and anything blocked in WaitForSynchronizationObjectFromCpu is parked
+ * in the device's wait registry.  Both are updated by DxgkSyncPublishFenceBatch,
+ * which takes that registry's lock itself -- so this batch has to run outside
+ * the lock DxgkContextSyncExecute otherwise holds, not merely differently under
+ * it.
+ */
+static BOOLEAN
+DxgkpContextSyncIsMonitoredFenceSignal(
+    _In_ PDXGKRNL_CONTEXT_SYNC_CAPTURE Capture)
+{
+    ULONG Index;
+
+    if (Capture->Operation != DxgkContextSyncOperationSignal2)
+        return FALSE;
+    if (Capture->ObjectCount == 0 || !Capture->PerObjectValues || Capture->EnqueueEvent != NULL)
+        return FALSE;
+    if ((Capture->SignalFlags & DXGK_CONTEXT_SYNC_ENQUEUE_CPU_EVENT) != 0)
+        return FALSE;
+    for (Index = 0; Index < Capture->ObjectCount; ++Index)
+    {
+        if (Capture->CoreObjects[Index].Type != DXGK_CONTEXT_SYNC_TYPE_MONITORED_FENCE)
+            return FALSE;
+    }
+    return TRUE;
 }
 
 NTSTATUS
@@ -183,15 +221,48 @@ DxgkContextSyncExecute(
         return STATUS_DELETE_PENDING;
     }
     Device = Capture->Device;
+
+    if (DxgkpContextSyncIsMonitoredFenceSignal(Capture))
+    {
+        if (Capture->Executed != 0)
+        {
+            KeReleaseSpinLock(&Capture->Lock, CaptureOldIrql);
+            return STATUS_ALREADY_COMPLETE;
+        }
+        if (InterlockedCompareExchange(&Device->Destroying, 0, 0) != 0 ||
+            InterlockedCompareExchange(&Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE)
+        {
+            KeReleaseSpinLock(&Capture->Lock, CaptureOldIrql);
+            return STATUS_DEVICE_REMOVED;
+        }
+        /* Claim the batch before dropping the lock so a second drainer cannot
+         * publish the same values twice; hand it back only if the publish is
+         * refused, which leaves nothing behind to have completed. */
+        Capture->Executed = 1;
+        KeReleaseSpinLock(&Capture->Lock, CaptureOldIrql);
+
+        Status = DxgkSyncPublishFenceBatch(Capture->Objects, Capture->PayloadValues,
+                                           Capture->ObjectCount,
+                                           (Capture->SignalFlags & DXGK_CONTEXT_SYNC_ALLOW_FENCE_REWIND) != 0,
+                                           FALSE);
+        if (!NT_SUCCESS(Status) && Status != STATUS_PENDING)
+        {
+            KeAcquireSpinLock(&Capture->Lock, &CaptureOldIrql);
+            Capture->Executed = 0;
+            KeReleaseSpinLock(&Capture->Lock, CaptureOldIrql);
+        }
+        return Status;
+    }
+
     KeAcquireSpinLock(&Device->SyncWaitRegistry.Lock, &OldIrql);
     if (Capture->Executed != 0)
         Status = STATUS_ALREADY_COMPLETE;
     else if (InterlockedCompareExchange(&Device->Destroying, 0, 0) != 0 || InterlockedCompareExchange(&Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE)
         Status = STATUS_DEVICE_REMOVED;
     else if (Capture->Operation == DxgkContextSyncOperationLegacyWait || Capture->Operation == DxgkContextSyncOperationWait2)
-        Status = DxgkContextSyncCoreExecuteWait(Capture->CoreObjects, Capture->ObjectCount, Capture->PayloadValue);
+        Status = DxgkContextSyncCoreExecuteWait(Capture->CoreObjects, Capture->ObjectCount, Capture->PayloadValue, Capture->PerObjectValues ? Capture->PayloadValues : NULL);
     else
-        Status = DxgkContextSyncCoreExecuteSignal(Capture->CoreObjects, Capture->ObjectCount, Capture->SignalFlags, Capture->PayloadValue, Capture->EnqueueEvent);
+        Status = DxgkContextSyncCoreExecuteSignal(Capture->CoreObjects, Capture->ObjectCount, Capture->SignalFlags, Capture->PayloadValue, Capture->PerObjectValues ? Capture->PayloadValues : NULL, Capture->EnqueueEvent);
     if (Status != STATUS_PENDING && Status != STATUS_ALREADY_COMPLETE)
         Capture->Executed = 1;
     KeReleaseSpinLock(&Device->SyncWaitRegistry.Lock, OldIrql);

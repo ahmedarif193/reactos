@@ -34,7 +34,8 @@
 #define DXGKRNL_INTERFACE_VERSION_3        3
 #define DXGKRNL_INTERFACE_VERSION_4        4
 #define DXGKRNL_INTERFACE_VERSION_5        5
-#define DXGKRNL_INTERFACE_VERSION_CURRENT  DXGKRNL_INTERFACE_VERSION_5
+#define DXGKRNL_INTERFACE_VERSION_6        6
+#define DXGKRNL_INTERFACE_VERSION_CURRENT  DXGKRNL_INTERFACE_VERSION_6
 
 typedef struct _DXGKRNL_INTERFACE_EXCHANGE_IN
 {
@@ -695,6 +696,55 @@ typedef struct _D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU
     UINT                        Flags;
 } D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU;
 
+/*
+ * The GPU-side counterparts.  These cross the bridge between a win32ss compiled
+ * at the tree default and a dxgkrnl compiled at WDDM 3.2, so the layout here is
+ * not a convenience -- it must match <d3dkmthk.h> field for field, including the
+ * trailing Reserved[8], which is what fixes the union at 64 bytes.  A shorter
+ * union here would put every following byte of the request somewhere dxgkrnl
+ * does not look.
+ */
+typedef struct _D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU
+{
+    D3DKMT_HANDLE               hContext;
+    UINT                        ObjectCount;
+    CONST D3DKMT_HANDLE        *ObjectHandleArray;
+    union
+    {
+        CONST UINT64           *MonitoredFenceValueArray;
+        UINT64                  FenceValue;
+        UINT64                  Reserved[8];
+    };
+} D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU;
+
+typedef struct _D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU
+{
+    D3DKMT_HANDLE               hContext;
+    UINT                        ObjectCount;
+    CONST D3DKMT_HANDLE        *ObjectHandleArray;
+    union
+    {
+        CONST UINT64           *MonitoredFenceValueArray;
+        UINT64                  Reserved[8];
+    };
+} D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU;
+
+typedef struct _D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2
+{
+    UINT                        ObjectCount;
+    CONST D3DKMT_HANDLE        *ObjectHandleArray;
+    D3DDDICB_SIGNALFLAGS        Flags;
+    ULONG                       BroadcastContextCount;
+    CONST D3DKMT_HANDLE        *BroadcastContextArray;
+    union
+    {
+        UINT64                  FenceValue;
+        HANDLE                  CpuEventHandle;
+        CONST UINT64           *MonitoredFenceValueArray;
+        UINT64                  Reserved[8];
+    };
+} D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2;
+
 #endif /* DXGKDDI_INTERFACE_VERSION < WDDM2_0 */
 
 
@@ -836,6 +886,26 @@ DXGADAPTER_SIGNALSYNCHRONIZATIONOBJECTFROMCPU(_In_ const D3DKMT_SIGNALSYNCHRONIZ
 
 typedef DXGADAPTER_SIGNALSYNCHRONIZATIONOBJECTFROMCPU *PDXGADAPTER_SIGNALSYNCHRONIZATIONOBJECTFROMCPU;
 
+/* The GPU-side monitored-fence operations.  Each object carries its own fence
+ * value, which is what the ...Object2 forms cannot express. */
+typedef
+NTSTATUS
+DXGADAPTER_WAITFORSYNCHRONIZATIONOBJECTFROMGPU(_In_ const D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU* unnamedParam1);
+
+typedef DXGADAPTER_WAITFORSYNCHRONIZATIONOBJECTFROMGPU *PDXGADAPTER_WAITFORSYNCHRONIZATIONOBJECTFROMGPU;
+
+typedef
+NTSTATUS
+DXGADAPTER_SIGNALSYNCHRONIZATIONOBJECTFROMGPU(_In_ const D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU* unnamedParam1);
+
+typedef DXGADAPTER_SIGNALSYNCHRONIZATIONOBJECTFROMGPU *PDXGADAPTER_SIGNALSYNCHRONIZATIONOBJECTFROMGPU;
+
+typedef
+NTSTATUS
+DXGADAPTER_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2(_In_ const D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2* unnamedParam1);
+
+typedef DXGADAPTER_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2 *PDXGADAPTER_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2;
+
 /* Version 2 additions. */
 
 /* Keep these tags visible even in builds whose public D3DKMT header target is
@@ -950,6 +1020,13 @@ typedef struct _REACTOS_WIN32K_DXGKRNL_INTERFACE
 
     /* Private interface version 5 additions; append-only ABI. */
     PDXGADAPTER_OPENSYNCHRONIZATIONOBJECT RxgkIntPfnOpenSynchronizationObject;
+
+    /* Version 6 additions.  Appended, never inserted: every slot before these
+     * keeps its offset, which is what lets an older caller negotiate a lower
+     * version and still find each entry where it expects it. */
+    PDXGADAPTER_WAITFORSYNCHRONIZATIONOBJECTFROMGPU RxgkIntPfnWaitForSynchronizationObjectFromGpu;
+    PDXGADAPTER_SIGNALSYNCHRONIZATIONOBJECTFROMGPU RxgkIntPfnSignalSynchronizationObjectFromGpu;
+    PDXGADAPTER_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2 RxgkIntPfnSignalSynchronizationObjectFromGpu2;
 } REACTOS_WIN32K_DXGKRNL_INTERFACE, *PREACTOS_WIN32K_DXGKRNL_INTERFACE;
 
 /* Sizes used to negotiate the append-only callback table. */
@@ -962,4 +1039,15 @@ typedef struct _REACTOS_WIN32K_DXGKRNL_INTERFACE
 #define DXGKRNL_INTERFACE_VERSION_4_SIZE \
     FIELD_OFFSET(REACTOS_WIN32K_DXGKRNL_INTERFACE, RxgkIntPfnOpenSynchronizationObject)
 #define DXGKRNL_INTERFACE_VERSION_5_SIZE \
+    FIELD_OFFSET(REACTOS_WIN32K_DXGKRNL_INTERFACE, RxgkIntPfnWaitForSynchronizationObjectFromGpu)
+#define DXGKRNL_INTERFACE_VERSION_6_SIZE \
     sizeof(REACTOS_WIN32K_DXGKRNL_INTERFACE)
+
+/*
+ * The size that goes with DXGKRNL_INTERFACE_VERSION_CURRENT.  A caller must
+ * send these two as a pair: advertising one version's number with another
+ * version's size makes dxgkrnl reject the buffer as too small, and the bridge
+ * then fails to attach at all -- there is no adapter after that.  Keeping the
+ * pair in one place is what stops the two from drifting apart again.
+ */
+#define DXGKRNL_INTERFACE_VERSION_CURRENT_SIZE  DXGKRNL_INTERFACE_VERSION_6_SIZE

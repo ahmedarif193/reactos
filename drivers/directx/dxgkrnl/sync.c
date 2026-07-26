@@ -1023,7 +1023,7 @@ DxgkSignalSynchronizationObject(
     if (!NT_SUCCESS(Status))
         return Status;
     ASSERT(Context->Device == Device && Device->Adapter == Adapter);
-    Status = DxgkContextOrderAdmitSignal(&Context, 1, DxgkContextSyncOperationLegacySignal, pSignalSyncObject->ObjectHandleArray, pSignalSyncObject->ObjectCount, pSignalSyncObject->Flags.Value, 0, UserMode);
+    Status = DxgkContextOrderAdmitSignal(&Context, 1, DxgkContextSyncOperationLegacySignal, pSignalSyncObject->ObjectHandleArray, pSignalSyncObject->ObjectCount, pSignalSyncObject->Flags.Value, 0, NULL, UserMode);
     DxgkDereferenceContext(Context);
     return Status;
 }
@@ -1057,7 +1057,7 @@ DxgkWaitForSynchronizationObject(
     if (!NT_SUCCESS(Status))
         return Status;
     ASSERT(Context->Device == Device && Device->Adapter == Adapter);
-    Status = DxgkContextOrderAdmitWait(Context, DxgkContextSyncOperationLegacyWait, pWaitSyncObject->ObjectHandleArray, pWaitSyncObject->ObjectCount, 0, UserMode);
+    Status = DxgkContextOrderAdmitWait(Context, DxgkContextSyncOperationLegacyWait, pWaitSyncObject->ObjectHandleArray, pWaitSyncObject->ObjectCount, 0, NULL, UserMode);
     DxgkDereferenceContext(Context);
     return Status;
 }
@@ -1098,8 +1098,8 @@ DxgkpSyncPublishAdmission(
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS
-DxgkpSyncPublishFenceBatch(
+NTSTATUS
+DxgkSyncPublishFenceBatch(
     _In_reads_(ObjectCount) PDXGKRNL_SYNC_OBJECT *Objects,
     _In_reads_(ObjectCount) CONST UINT64 *FenceValues,
     _In_ ULONG ObjectCount,
@@ -1147,7 +1147,7 @@ DxgkpSyncObjectPublishRetiredFence(
 
     Objects[0] = SyncObj;
     FenceValues[0] = FenceValue;
-    return DxgkpSyncPublishFenceBatch(Objects, FenceValues, RTL_NUMBER_OF(Objects), FALSE, FALSE);
+    return DxgkSyncPublishFenceBatch(Objects, FenceValues, RTL_NUMBER_OF(Objects), FALSE, FALSE);
 }
 
 VOID
@@ -1217,7 +1217,7 @@ DxgkSyncObjectCpuSignal(
     }
     Objects[0] = SyncObj;
     FenceValues[0] = FenceValue;
-    Status = DxgkpSyncPublishFenceBatch(Objects, FenceValues, RTL_NUMBER_OF(Objects), FALSE, TRUE);
+    Status = DxgkSyncPublishFenceBatch(Objects, FenceValues, RTL_NUMBER_OF(Objects), FALSE, TRUE);
     DxgkpDereferenceSyncObject(SyncObj);
     return Status;
 }
@@ -1242,7 +1242,7 @@ DxgkSyncObjectCpuSignalBatch(
     Status = DxgkpReferenceMonitoredFenceArray(Device, ObjectHandles, ObjectCount, Objects);
     if (!NT_SUCCESS(Status))
         return Status;
-    Status = DxgkpSyncPublishFenceBatch(Objects, FenceValues, ObjectCount, Flags.AllowFenceRewind != 0, TRUE);
+    Status = DxgkSyncPublishFenceBatch(Objects, FenceValues, ObjectCount, Flags.AllowFenceRewind != 0, TRUE);
     DxgkpReleaseSyncObjectArray(Objects, ObjectCount);
     return Status;
 }
