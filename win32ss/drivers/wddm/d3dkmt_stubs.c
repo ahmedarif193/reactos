@@ -3632,7 +3632,14 @@ D3DKMTCreateContextVirtual(
     if (!NT_SUCCESS(Status))
         return Status;
 
-    if ((Captured.Flags.Value & ~RXGK_CREATECONTEXTVIRTUAL_SUPPORTED_FLAGS) != 0 || (Captured.Flags.Value & RXGK_CREATECONTEXTVIRTUAL_FLAG_NULL_RENDERING) == 0)
+    /*
+     * Only the flag set is policed here.  Requiring NullRendering as well made
+     * every virtual context that actually renders unreachable: the request was
+     * refused at the bridge, so dxgkrnl -- which already gates a rendering
+     * virtual context on the process's GPU page tables being ready -- never got
+     * to make that decision. The narrower check belongs to the kernel.
+     */
+    if ((Captured.Flags.Value & ~RXGK_CREATECONTEXTVIRTUAL_SUPPORTED_FLAGS) != 0)
         return STATUS_NOT_SUPPORTED;
 
     if (Captured.hDevice == 0 ||
@@ -3723,12 +3730,18 @@ D3DKMTSubmitCommand(
         return STATUS_INVALID_PARAMETER;
     }
 
+    /*
+     * As with CreateContextVirtual, NullRendering is not required here.  The
+     * bridge polices what it can see -- one context, no primaries, no present
+     * history, a known flag set -- and leaves "may this context actually
+     * execute?" to dxgkrnl, which answers it from the context's own creation
+     * flags and the process's page tables.
+     */
     if (Captured.BroadcastContextCount != 1 ||
         Captured.NumPrimaries != 0 ||
         Captured.NumHistoryBuffers != 0 ||
         Captured.PresentHistoryToken != 0 ||
-        (FlagsValue & ~RXGK_SUBMITCOMMAND_SUPPORTED_FLAGS) != 0 ||
-        (FlagsValue & RXGK_SUBMITCOMMAND_FLAG_NULL_RENDERING) == 0)
+        (FlagsValue & ~RXGK_SUBMITCOMMAND_SUPPORTED_FLAGS) != 0)
     {
         return STATUS_NOT_SUPPORTED;
     }
