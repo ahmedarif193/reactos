@@ -7,13 +7,14 @@
 
 #include <windef.h>
 #include <winbase.h>
-#include <winuser.h>
 #include <wingdi.h>
+#include <winuser.h>
 #include <wincon.h>
 #include <winerror.h>
 #include <windowsx.h>
 
 #include <commctrl.h>
+#include <dbt.h>
 #include <shlobj.h>
 #include <uxtheme.h>
 #include <strsafe.h>
@@ -49,6 +50,19 @@
 #define IDC_VOLUMEVIEW   1003
 #define IDC_DISKVIEW     1004
 
+/* Polls for the volume of a freshly created partition so deferred drive
+   letter / format settings can be applied once it arrives. */
+#define IDT_PENDING_CREATE    1
+/* Refreshes the snapshot after WM_DEVICECHANGE or a mutating action.
+   ReactOS completes partition/volume arrivals and removals asynchronously
+   (and does not broadcast a completion), so the refresh is repeated on a
+   decaying schedule until the PnP dust has settled. */
+#define IDT_DEVICE_CHANGE     2
+
+#define DISKMGMT_PENDING_CREATE_POLL_MS  2500
+#define DISKMGMT_DEVICE_CHANGE_POLL_MS   10000
+#define DISKMGMT_DEVICE_CHANGE_SHOTS     30
+
 #define DISKMGMT_MIN_LEFT_PANE    160
 #define DISKMGMT_LEFT_PANE_WIDTH  180
 #define DISKMGMT_TOP_PANE_PERCENT 33
@@ -64,6 +78,7 @@ typedef struct _MAIN_WND_INFO
 {
     HWND hMainWnd;
     HWND hToolbar;
+    HFONT hUiFont;
     HIMAGELIST hToolbarImageList;
     HIMAGELIST hVolumeImageList;
     HWND hStatusBar;
@@ -71,15 +86,20 @@ typedef struct _MAIN_WND_INFO
     HWND hVolumeView;
     HWND hDiskView;
     HMENU hMenu;
+    HMENU hActiveContextMenu;
     int nCmdShow;
     BOOL bInMenuLoop;
+    BOOL bInCommand;
     BOOL bStatusBarVisible;
+    UINT DeviceChangeShot;
     DM_VOLUME_LIST_CONTEXT VolumeListContext;
     DM_MENU_STATE MenuState;
     DM_LAYOUT_METRICS LayoutMetrics;
     DM_SORT_CONTEXT SortContext;
     DM_SPLITTER_STATE SplitterState;
     INT DiskViewScrollPos;
+    const DM_DISK *SelectedDisk;
+    const DM_REGION *SelectedRegion;
     const DM_DISK *CommandDiskOverride;
     const DM_REGION *CommandRegionOverride;
     const DM_VOLUME *CommandVolumeOverride;

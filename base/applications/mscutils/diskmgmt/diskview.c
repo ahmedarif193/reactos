@@ -7,7 +7,19 @@
 
 #include "precomp.h"
 
-static VOID
+static INT
+DmDiskViewGetLineHeight(
+    _In_ HDC hdc)
+{
+    TEXTMETRICW tm;
+
+    if (GetTextMetricsW(hdc, &tm))
+        return tm.tmHeight + tm.tmExternalLeading + 2;
+
+    return 18;
+}
+
+static INT
 DmDiskViewPaintLegendItem(
     _In_ HDC hdc,
     _In_ INT X,
@@ -18,6 +30,7 @@ DmDiskViewPaintLegendItem(
     RECT BoxRect;
     RECT TextRect;
     HBRUSH Brush;
+    SIZE TextSize;
 
     SetRect(&BoxRect, X, Y, X + 14, Y + 14);
     Brush = CreateSolidBrush(Color);
@@ -25,12 +38,19 @@ DmDiskViewPaintLegendItem(
     FrameRect(hdc, &BoxRect, GetStockObject(BLACK_BRUSH));
     DeleteObject(Brush);
 
-    SetRect(&TextRect, BoxRect.right + 6, Y - 1, BoxRect.right + 140, Y + 16);
+    TextSize.cx = 120;
+    TextSize.cy = 16;
+    GetTextExtentPoint32W(hdc, Text, lstrlenW(Text), &TextSize);
+
+    SetRect(&TextRect, BoxRect.right + 6, Y - 1, BoxRect.right + 6 + TextSize.cx + 4, Y + 16);
     DrawTextW(hdc,
               Text,
               -1,
               &TextRect,
               DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+    /* Advance to the next legend item. */
+    return 14 + 6 + TextSize.cx + 20;
 }
 
 static VOID
@@ -121,11 +141,11 @@ DmDiskViewPaintLegend(
     X = Rect->left + 8;
     Y = Rect->top + 5;
 
-    DmDiskViewPaintLegendItem(hdc, X,       Y, RGB(0, 0, 0),     L"Unallocated");
-    DmDiskViewPaintLegendItem(hdc, X + 120, Y, RGB(0, 0, 160),   L"Primary partition");
-    DmDiskViewPaintLegendItem(hdc, X + 266, Y, RGB(0, 128, 0),   L"Extended partition");
-    DmDiskViewPaintLegendItem(hdc, X + 414, Y, RGB(0, 128, 128), L"Logical drive");
-    DmDiskViewPaintLegendItem(hdc, X + 530, Y, RGB(0, 192, 0),   L"Free space");
+    X += DmDiskViewPaintLegendItem(hdc, X, Y, RGB(0, 0, 0),     L"Unallocated");
+    X += DmDiskViewPaintLegendItem(hdc, X, Y, RGB(0, 0, 160),   L"Primary partition");
+    X += DmDiskViewPaintLegendItem(hdc, X, Y, RGB(0, 128, 0),   L"Extended partition");
+    X += DmDiskViewPaintLegendItem(hdc, X, Y, RGB(0, 128, 128), L"Logical drive");
+    DmDiskViewPaintLegendItem(hdc, X, Y, RGB(0, 192, 0),   L"Free space");
 }
 
 static VOID
@@ -364,6 +384,7 @@ DmDiskViewDrawRegion(
     WCHAR Status[128];
     HGDIOBJ OldFont;
     BOOL HasTitle;
+    INT LineHeight;
 
     FillBrush = CreateSolidBrush(RGB(255, 255, 255));
     BarBrush = CreateSolidBrush(DmDiskViewGetRegionBarColor(Region));
@@ -406,6 +427,7 @@ DmDiskViewDrawRegion(
         BoldFont = Font;
 
     OldFont = SelectObject(hdc, Font);
+    LineHeight = DmDiskViewGetLineHeight(hdc);
     if (HasTitle)
     {
         SelectObject(hdc, BoldFont);
@@ -415,7 +437,7 @@ DmDiskViewDrawRegion(
                   &TextRect,
                   DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
         SelectObject(hdc, Font);
-        TextRect.top += 18;
+        TextRect.top += LineHeight;
     }
 
     DrawTextW(hdc,
@@ -426,54 +448,12 @@ DmDiskViewDrawRegion(
 
     if (Status[0] != UNICODE_NULL)
     {
-        TextRect.top += 18;
+        TextRect.top += LineHeight;
         DrawTextW(hdc,
                   Status,
                   -1,
                   &TextRect,
                   DT_LEFT | DT_TOP | DT_WORDBREAK | DT_END_ELLIPSIS);
-    }
-
-    /* Draw capacity usage bar at the bottom of the region */
-    if (Region->Volume != NULL &&
-        Region->Volume->Size.QuadPart > 0 &&
-        Region->Type != DmRegionFree)
-    {
-        RECT UsageRect;
-        RECT UsedRect;
-        INT UsedWidth;
-        ULONGLONG TotalSize;
-        ULONGLONG FreeSize;
-        ULONGLONG UsedSize;
-        HBRUSH UsedBrush;
-
-        TotalSize = Region->Volume->Size.QuadPart;
-        FreeSize = Region->Volume->FreeBytes.QuadPart;
-        UsedSize = (TotalSize > FreeSize) ? (TotalSize - FreeSize) : 0;
-
-        UsageRect.left = Rect->left + 4;
-        UsageRect.right = Rect->right - 4;
-        UsageRect.bottom = Rect->bottom - 4;
-        UsageRect.top = UsageRect.bottom - 6;
-
-        if (UsageRect.right > UsageRect.left + 10 &&
-            UsageRect.top > BarRect.bottom + 20)
-        {
-            FillRect(hdc, &UsageRect, GetSysColorBrush(COLOR_WINDOW));
-            FrameRect(hdc, &UsageRect, GetSysColorBrush(COLOR_3DSHADOW));
-
-            UsedWidth = (INT)(((ULONGLONG)(UsageRect.right - UsageRect.left - 2) * UsedSize) /
-                              max(TotalSize, 1ULL));
-            if (UsedWidth > 0)
-            {
-                UsedRect = UsageRect;
-                InflateRect(&UsedRect, -1, -1);
-                UsedRect.right = min(UsedRect.left + UsedWidth, UsageRect.right - 1);
-                UsedBrush = CreateSolidBrush(DmDiskViewGetRegionBarColor(Region));
-                FillRect(hdc, &UsedRect, UsedBrush);
-                DeleteObject(UsedBrush);
-            }
-        }
     }
 
     SelectObject(hdc, OldFont);
@@ -579,6 +559,7 @@ DmDiskViewDrawDiskLabel(
     WCHAR Line3[48];
     WCHAR Line4[48];
     HGDIOBJ OldFont;
+    INT LineHeight;
 
     UNREFERENCED_PARAMETER(Selected);
 
@@ -598,13 +579,14 @@ DmDiskViewDrawDiskLabel(
         BoldFont = Font;
 
     OldFont = SelectObject(hdc, BoldFont);
+    LineHeight = DmDiskViewGetLineHeight(hdc);
     DrawTextW(hdc, Line1, -1, &TextRect, DT_LEFT | DT_TOP | DT_SINGLELINE);
     SelectObject(hdc, Font);
-    TextRect.top += 18;
+    TextRect.top += LineHeight;
     DrawTextW(hdc, Line2, -1, &TextRect, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
-    TextRect.top += 18;
+    TextRect.top += LineHeight;
     DrawTextW(hdc, Line4, -1, &TextRect, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
-    TextRect.top += 18;
+    TextRect.top += LineHeight;
     DrawTextW(hdc, Line3, -1, &TextRect, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
     SelectObject(hdc, OldFont);
 }
@@ -734,6 +716,12 @@ DmDiskViewBuildDiskStatus(
     else if (Disk->IsRemovable && Disk->Size == 0)
     {
         AccessState = DmAccessNoMedia;
+    }
+    else if (Disk->PartitionStyle == PARTITION_STYLE_RAW)
+    {
+        /* Match Windows wording for uninitialized disks. */
+        StringCchCopyW(Buffer, cchBuffer, L"Not Initialized");
+        return;
     }
     else
     {

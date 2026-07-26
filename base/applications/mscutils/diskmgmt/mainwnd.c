@@ -66,7 +66,7 @@ CreateMainWindow(
                            CW_USEDEFAULT,
                            CW_USEDEFAULT,
                            980,
-                           680,
+                           520,
                            NULL,
                            NULL,
                            hInstance,

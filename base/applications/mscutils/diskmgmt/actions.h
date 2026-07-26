@@ -71,6 +71,14 @@ DmActionShowStubMessage(
     _In_ const DM_ACTION_CONTEXT *Context,
     _In_ UINT CommandId);
 
+BOOL
+DmActionHasPendingCreate(VOID);
+
+BOOL
+DmActionProcessPendingCreate(
+    _In_opt_ HWND hWnd,
+    _In_opt_ HWND hStatusBar);
+
 #ifdef __cplusplus
 }
 #endif
