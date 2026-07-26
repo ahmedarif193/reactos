@@ -356,6 +356,97 @@ Dxgmms2SchedulerIsIdle(
     return Idle;
 }
 
+
+static NTSTATUS
+NTAPI
+Dxgmms2SchedulerReserveSlot(
+    _In_ DXGMMS2_SCHEDULER_HANDLE Scheduler,
+    _In_ ULONG EngineOrdinal)
+{
+    PDXGMMS2_ADAPTER_CONTEXT Context = Dxgmms2SchedulerContext(Scheduler);
+    KIRQL OldIrql;
+    NTSTATUS Status;
+
+    if (Context == NULL)
+        return STATUS_INVALID_HANDLE;
+    KeAcquireSpinLock(&Context->SchedulerLock, &OldIrql);
+    Status = Dxgmms2SchedCoreReserve(&Context->SchedulerCore, EngineOrdinal);
+    KeReleaseSpinLock(&Context->SchedulerLock, OldIrql);
+    return Status;
+}
+
+static VOID
+NTAPI
+Dxgmms2SchedulerReleaseSlot(
+    _In_ DXGMMS2_SCHEDULER_HANDLE Scheduler,
+    _In_ ULONG EngineOrdinal)
+{
+    PDXGMMS2_ADAPTER_CONTEXT Context = Dxgmms2SchedulerContext(Scheduler);
+    KIRQL OldIrql;
+
+    if (Context == NULL)
+        return;
+    KeAcquireSpinLock(&Context->SchedulerLock, &OldIrql);
+    Dxgmms2SchedCoreUnreserve(&Context->SchedulerCore, EngineOrdinal);
+    KeReleaseSpinLock(&Context->SchedulerLock, OldIrql);
+}
+
+static NTSTATUS
+NTAPI
+Dxgmms2SchedulerResetDispatched(
+    _In_ DXGMMS2_SCHEDULER_HANDLE Scheduler,
+    _In_ ULONG EngineOrdinal,
+    _Out_writes_to_(Capacity, *Count) ULONGLONG *PacketCookies,
+    _In_ ULONG Capacity,
+    _Out_ PULONG Count)
+{
+    PDXGMMS2_ADAPTER_CONTEXT Context = Dxgmms2SchedulerContext(Scheduler);
+    PDXGMMS2_SCHED_PACKET Packets[DXGMMS2_SCHEDULER_MAX_RETIREMENTS];
+    KIRQL OldIrql;
+    ULONG Found;
+    ULONG Index;
+
+    if (Count == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *Count = 0;
+    if (Context == NULL || (Capacity != 0 && PacketCookies == NULL))
+        return STATUS_INVALID_HANDLE;
+
+    KeAcquireSpinLock(&Context->SchedulerLock, &OldIrql);
+    Found = Dxgmms2SchedCoreResetDispatched(&Context->SchedulerCore, EngineOrdinal, Packets,
+                                            min(Capacity, (ULONG)RTL_NUMBER_OF(Packets)));
+    for (Index = 0; Index < Found; ++Index)
+        PacketCookies[Index] = Packets[Index]->PacketCookie;
+    KeReleaseSpinLock(&Context->SchedulerLock, OldIrql);
+    *Count = Found;
+    return STATUS_SUCCESS;
+}
+
+static BOOLEAN
+NTAPI
+Dxgmms2SchedulerGetOldestDispatched(
+    _In_ DXGMMS2_SCHEDULER_HANDLE Scheduler,
+    _Out_ PULONG EngineOrdinal,
+    _Out_ PULONG FenceId,
+    _Out_ PULONGLONG PacketCookie)
+{
+    PDXGMMS2_ADAPTER_CONTEXT Context = Dxgmms2SchedulerContext(Scheduler);
+    KIRQL OldIrql;
+    BOOLEAN Found;
+
+    if (EngineOrdinal == NULL || FenceId == NULL || PacketCookie == NULL)
+        return FALSE;
+    *EngineOrdinal = 0;
+    *FenceId = 0;
+    *PacketCookie = 0;
+    if (Context == NULL)
+        return FALSE;
+    KeAcquireSpinLock(&Context->SchedulerLock, &OldIrql);
+    Found = Dxgmms2SchedCoreGetOldestDispatched(&Context->SchedulerCore, EngineOrdinal, FenceId, PacketCookie);
+    KeReleaseSpinLock(&Context->SchedulerLock, OldIrql);
+    return Found;
+}
+
 NTSTATUS
 Dxgmms2SchedulerStartAdapter(
     _Inout_ PDXGMMS2_ADAPTER_CONTEXT Context,
@@ -445,6 +536,10 @@ Dxgmms2QuerySchedulerInterface(
     SchedulerInterface->QueryEngineStatus = Dxgmms2SchedulerQueryEngineStatus;
     SchedulerInterface->SetEngineState = Dxgmms2SchedulerSetEngineState;
     SchedulerInterface->IsIdle = Dxgmms2SchedulerIsIdle;
+    SchedulerInterface->ReserveSlot = Dxgmms2SchedulerReserveSlot;
+    SchedulerInterface->ReleaseSlot = Dxgmms2SchedulerReleaseSlot;
+    SchedulerInterface->ResetDispatched = Dxgmms2SchedulerResetDispatched;
+    SchedulerInterface->GetOldestDispatched = Dxgmms2SchedulerGetOldestDispatched;
 
     Dxgmms2DereferenceAdapterContext(Context);
     return STATUS_SUCCESS;

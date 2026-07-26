@@ -130,6 +130,8 @@ Dxgmms2SchedCoreAdmit(
 
     InsertTailList(&Engine->RunQueue, &Packet->Entry);
     Engine->PendingPacketCount++;
+    if (Engine->ReservedPacketCount != 0)
+        Engine->ReservedPacketCount--;
     Engine->LastSubmittedFenceId = FenceId;
     Core->TotalPackets++;
     *OutFenceId = FenceId;
@@ -394,6 +396,108 @@ Dxgmms2SchedCoreQueryEngine(
             Status->OldestKickedFenceId = Packet->SubmissionFenceId;
     }
     return STATUS_SUCCESS;
+}
+
+/*
+ * Dxgmms2SchedCoreReserve / Unreserve
+ *
+ * A caller that must build a packet before it can admit it reserves its queue
+ * slot first, so the depth bound is enforced against work in preparation as
+ * well as work already queued and a build cannot fail admission afterwards.
+ */
+NTSTATUS
+Dxgmms2SchedCoreReserve(
+    _Inout_ PDXGMMS2_SCHED_CORE Core,
+    _In_ ULONG EngineOrdinal)
+{
+    PDXGMMS2_SCHED_ENGINE Engine = Dxgmms2SchedCoreEngine(Core, EngineOrdinal);
+
+    if (Engine == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (!Core->AdmissionOpen)
+        return STATUS_DEVICE_NOT_READY;
+    if (Engine->PendingPacketCount + Engine->ReservedPacketCount >= DXGMMS2_SCHED_MAX_PACKETS)
+        return STATUS_DEVICE_BUSY;
+    Engine->ReservedPacketCount++;
+    return STATUS_SUCCESS;
+}
+
+VOID
+Dxgmms2SchedCoreUnreserve(
+    _Inout_ PDXGMMS2_SCHED_CORE Core,
+    _In_ ULONG EngineOrdinal)
+{
+    PDXGMMS2_SCHED_ENGINE Engine = Dxgmms2SchedCoreEngine(Core, EngineOrdinal);
+
+    if (Engine != NULL && Engine->ReservedPacketCount != 0)
+        Engine->ReservedPacketCount--;
+}
+
+/*
+ * Dxgmms2SchedCoreResetDispatched
+ *
+ * Preemption interrupts every packet the miniport had accepted but not
+ * completed.  Those packets stay queued in the same order with the same fence
+ * identity -- changing it would orphan the reservation -- and are marked
+ * undispatched so the next kick resubmits them.
+ */
+ULONG
+Dxgmms2SchedCoreResetDispatched(
+    _Inout_ PDXGMMS2_SCHED_CORE Core,
+    _In_ ULONG EngineOrdinal,
+    _Out_writes_to_(Capacity, return) PDXGMMS2_SCHED_PACKET *Packets,
+    _In_ ULONG Capacity)
+{
+    PDXGMMS2_SCHED_ENGINE Engine = Dxgmms2SchedCoreEngine(Core, EngineOrdinal);
+    PLIST_ENTRY Entry;
+    ULONG Count = 0;
+
+    if (Engine == NULL)
+        return 0;
+    for (Entry = Engine->RunQueue.Flink; Entry != &Engine->RunQueue && Count < Capacity; Entry = Entry->Flink)
+    {
+        PDXGMMS2_SCHED_PACKET Packet = CONTAINING_RECORD(Entry, DXGMMS2_SCHED_PACKET, Entry);
+
+        if (!Packet->Dispatched || Packet->Claimed)
+            continue;
+        Packet->Dispatched = FALSE;
+        Packets[Count++] = Packet;
+    }
+    return Count;
+}
+
+BOOLEAN
+Dxgmms2SchedCoreGetOldestDispatched(
+    _In_ PDXGMMS2_SCHED_CORE Core,
+    _Out_ PULONG EngineOrdinal,
+    _Out_ PULONG FenceId,
+    _Out_ PULONGLONG PacketCookie)
+{
+    ULONG Index;
+
+    *EngineOrdinal = 0;
+    *FenceId = 0;
+    *PacketCookie = 0;
+    for (Index = 0; Index < Core->EngineCount; ++Index)
+    {
+        const DXGMMS2_SCHED_ENGINE *Engine = &Core->Engines[Index];
+
+        if (IsListEmpty(&Engine->RunQueue))
+            continue;
+        {
+            PDXGMMS2_SCHED_PACKET Packet = CONTAINING_RECORD(Engine->RunQueue.Flink, DXGMMS2_SCHED_PACKET, Entry);
+
+            if (!Packet->Dispatched)
+                continue;
+            if (*FenceId == 0 || (LONG)(Packet->SubmissionFenceId - *FenceId) < 0)
+            {
+                *EngineOrdinal = Index;
+                *FenceId = Packet->SubmissionFenceId;
+                *PacketCookie = Packet->PacketCookie;
+            }
+        }
+    }
+    return *FenceId != 0;
 }
 
 NTSTATUS
