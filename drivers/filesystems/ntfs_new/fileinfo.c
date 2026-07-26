@@ -1037,6 +1037,33 @@ NtfsFsdSetInformation(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             }
             goto Complete;
 
+        case FileDispositionInformation:
+        {
+            PFILE_DISPOSITION_INFORMATION Disposition =
+                (PFILE_DISPOSITION_INFORMATION)SystemBuffer;
+
+            if (BufferLength < sizeof(FILE_DISPOSITION_INFORMATION))
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                goto Complete;
+            }
+            if (!(FileCB->DesiredAccess & DELETE))
+            {
+                Status = STATUS_ACCESS_DENIED;
+                goto Complete;
+            }
+            if (NtfsVolumeIsReadOnly(VolCB->DiskVolume))
+            {
+                Status = STATUS_MEDIA_WRITE_PROTECTED;
+                goto Complete;
+            }
+
+            /* The name is only removed once the last handle is gone. */
+            FileCB->DeletePending = !!Disposition->DeleteFile;
+            Status = STATUS_SUCCESS;
+            goto Complete;
+        }
+
         case FileEndOfFileInformation:
             if (BufferLength <
                 sizeof(FILE_END_OF_FILE_INFORMATION))

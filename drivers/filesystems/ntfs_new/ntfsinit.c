@@ -244,6 +244,51 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                IoGetRequestorProcess(Irp),
                                NULL);
         }
+
+        /* The handle is going away, so a requested delete happens now. */
+        if ((FileCB->DeletePending ||
+             (FileCB->CreateOptions & FILE_DELETE_ON_CLOSE)) &&
+            VolCB->DiskVolume &&
+            !NtfsVolumeIsReadOnly(VolCB->DiskVolume) &&
+            FileCB->FileName.Length != 0)
+        {
+            BOOLEAN IsDirectory =
+                !!(NtfsFileRecordGetHeader(FileCB->FileRec)->Flags & FR_IS_DIRECTORY);
+            NTSTATUS DeleteStatus;
+
+            /*
+             * Cached pages of a file that is about to stop existing must go
+             * before it does, or the cache manager keeps trying to write them
+             * back to a record that has been freed.
+             */
+            if (IrpSp->FileObject->SectionObjectPointer)
+            {
+                IrpSp->FileObject->SectionObjectPointer->ImageSectionObject = NULL;
+                if (IrpSp->FileObject->PrivateCacheMap)
+                {
+                    LARGE_INTEGER Empty = { { 0, 0 } };
+
+                    CcUninitializeCacheMap(IrpSp->FileObject, &Empty, NULL);
+                }
+                /* TRUE also tears down the shared map, which outlives the
+                 * private one and is what keeps retrying the write-back. */
+                CcPurgeCacheSection(IrpSp->FileObject->SectionObjectPointer,
+                                    NULL, 0, TRUE);
+            }
+
+            KeEnterCriticalRegion();
+            ExAcquireResourceExclusiveLite(&VolCB->MetadataResource, TRUE);
+            DeleteStatus = NtfsMasterFileTableDeleteFile(
+                NtfsVolumeGetMft(VolCB->DiskVolume),
+                FileCB->FileName.Buffer,
+                FileCB->FileName.Length / sizeof(WCHAR),
+                IsDirectory);
+            ExReleaseResourceLite(&VolCB->MetadataResource);
+            KeLeaveCriticalRegion();
+
+            if (!NT_SUCCESS(DeleteStatus))
+                DPRINT1("NtfsFsdCleanup: delete failed 0x%08lx\n", DeleteStatus);
+        }
     }
 
     // TODO: How do we determine when the volume needs to get cleaned up?
