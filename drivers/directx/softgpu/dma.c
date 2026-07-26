@@ -265,22 +265,103 @@ SoftGpuExecuteFillLinear(
         SlabVa[Index] = Cmd->Color;
 }
 
+/*
+ * SoftGpuMapFenceValue
+ *
+ * Maps a monitored fence's GPU-visible value page through the active root
+ * page table.  Returns NULL when the fence is not mapped for this process.
+ */
+static volatile UINT64 *
+SoftGpuMapFenceValue(
+    _In_ PSOFTGPU_DEVICE Device,
+    _In_ ULONGLONG FenceGpuVa,
+    _Out_ PVOID *OutMapping)
+{
+    ULONGLONG RootPhysical;
+    ULONGLONG Physical;
+    PHYSICAL_ADDRESS Address;
+    PUCHAR Mapping;
+    KIRQL OldIrql;
+
+    *OutMapping = NULL;
+    KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
+    RootPhysical = Device->ActiveRootPageTablePhysical;
+    KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+    if (RootPhysical == 0 || FenceGpuVa == 0)
+        return NULL;
+    if ((FenceGpuVa & (sizeof(UINT64) - 1)) != 0)
+        return NULL;
+
+    Physical = SoftGpuTranslateGpuVa(Device, RootPhysical, FenceGpuVa, sizeof(UINT64));
+    if (Physical == 0)
+        return NULL;
+    Address.QuadPart = (LONGLONG)(Physical & ~(ULONGLONG)(PAGE_SIZE - 1));
+    Mapping = MmMapIoSpace(Address, PAGE_SIZE, MmCached);
+    if (Mapping == NULL)
+        return NULL;
+    *OutMapping = Mapping;
+    return (volatile UINT64 *)(Mapping + (Physical & (PAGE_SIZE - 1)));
+}
+
 static VOID
+SoftGpuExecuteSignalFence(
+    _In_ PSOFTGPU_DEVICE Device,
+    _In_ CONST SOFTGPU_CMD *Cmd)
+{
+    PVOID Mapping;
+    volatile UINT64 *Value = SoftGpuMapFenceValue(Device, Cmd->FenceGpuVa, &Mapping);
+
+    if (Value == NULL)
+        return;
+    *Value = Cmd->FenceValue;
+    KeMemoryBarrier();
+    MmUnmapIoSpace(Mapping, PAGE_SIZE);
+}
+
+static BOOLEAN
+SoftGpuFenceWaitSatisfied(
+    _In_ PSOFTGPU_DEVICE Device,
+    _In_ CONST SOFTGPU_CMD *Cmd)
+{
+    PVOID Mapping;
+    volatile UINT64 *Value = SoftGpuMapFenceValue(Device, Cmd->FenceGpuVa, &Mapping);
+    BOOLEAN Satisfied;
+
+    /* An unmapped fence cannot block the engine forever. */
+    if (Value == NULL)
+        return TRUE;
+    Satisfied = *Value >= Cmd->FenceValue;
+    MmUnmapIoSpace(Mapping, PAGE_SIZE);
+    return Satisfied;
+}
+
+/*
+ * SoftGpuExecuteDmaBuffer
+ *
+ * Executes one submitted DMA buffer.  Returns FALSE when execution stopped on
+ * an unsatisfied GPU wait, with *OutResumeOffset holding the record to resume
+ * from: the caller re-queues the remainder rather than completing the fence,
+ * which is the engine-blocking semantic a real wait packet has.
+ */
+static BOOLEAN
 SoftGpuExecuteDmaBuffer(
     _In_ PSOFTGPU_DEVICE Device,
-    _In_ CONST SOFTGPU_SUBMIT *Submit)
+    _In_ CONST SOFTGPU_SUBMIT *Submit,
+    _Out_ PULONG OutResumeOffset)
 {
     PUCHAR MapVa;
     ULONG Offset;
+    BOOLEAN Completed = TRUE;
 
+    *OutResumeOffset = Submit->StartOffset;
     if (Submit->EndOffset <= Submit->StartOffset ||
         Submit->EndOffset - Submit->StartOffset < sizeof(SOFTGPU_CMD) ||
         Submit->DmaPhys.QuadPart == 0)
-        return;
+        return TRUE;
 
     MapVa = MmMapIoSpace(Submit->DmaPhys, Submit->EndOffset, MmCached);
     if (MapVa == NULL)
-        return;
+        return TRUE;
 
     Offset = Submit->StartOffset;
     while (Offset + sizeof(SOFTGPU_CMD) <= Submit->EndOffset)
@@ -291,6 +372,12 @@ SoftGpuExecuteDmaBuffer(
             Cmd->Size < sizeof(SOFTGPU_CMD) ||
             Offset + Cmd->Size > Submit->EndOffset)
             break;
+        if (Cmd->Op == SOFTGPU_CMD_OP_WAIT_FENCE && !SoftGpuFenceWaitSatisfied(Device, Cmd))
+        {
+            *OutResumeOffset = Offset;
+            Completed = FALSE;
+            break;
+        }
         switch (Cmd->Op)
         {
             case SOFTGPU_CMD_OP_BLT:
@@ -305,6 +392,10 @@ SoftGpuExecuteDmaBuffer(
             case SOFTGPU_CMD_OP_FILL_LINEAR:
                 SoftGpuExecuteFillLinear(Device, Cmd);
                 break;
+            case SOFTGPU_CMD_OP_SIGNAL_FENCE:
+                SoftGpuExecuteSignalFence(Device, Cmd);
+                break;
+            case SOFTGPU_CMD_OP_WAIT_FENCE:
             case SOFTGPU_CMD_OP_NOP:
                 break;
             default:
@@ -317,6 +408,7 @@ SoftGpuExecuteDmaBuffer(
     }
 
     MmUnmapIoSpace(MapVa, Submit->EndOffset);
+    return Completed;
 }
 
 VOID
@@ -373,21 +465,43 @@ SoftGpuDpcRoutine(
             Submit = Device->SubmitRing[Device->SubmitRingHead % SOFTGPU_SUBMIT_RING_SIZE];
             Device->SubmitRingHead++;
             KeReleaseSpinLock(&Device->FenceLock, OldIrql);
-            SoftGpuExecuteDmaBuffer(Device, &Submit);
-            KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
-            if (!Device->Stopped && (LONG)(Submit.Fence - Device->CompletedFence) > 0)
-                Device->CompletedFence = Submit.Fence;
-            KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+            {
+                ULONG ResumeOffset;
+                BOOLEAN Done = SoftGpuExecuteDmaBuffer(Device, &Submit, &ResumeOffset);
+
+                KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
+                if (Device->Stopped)
+                {
+                    Device->EngineActive = 0;
+                    KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+                    break;
+                }
+                if (!Done)
+                {
+                    /* The engine is blocked on a GPU wait: put the remaining
+                     * records back at the head and stop draining without
+                     * completing the fence.  The refresh timer re-kicks. */
+                    Device->SubmitRingHead--;
+                    Device->SubmitRing[Device->SubmitRingHead % SOFTGPU_SUBMIT_RING_SIZE].StartOffset = ResumeOffset;
+                    Device->EngineActive = 0;
+                    KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+                    break;
+                }
+                if ((LONG)(Submit.Fence - Device->CompletedFence) > 0)
+                    Device->CompletedFence = Submit.Fence;
+                KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+            }
         }
     }
 
     KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
-    if (Device->Stopped)
+    if (Device->Stopped || Device->CompletedFence == Device->NotifiedFence)
     {
         KeReleaseSpinLock(&Device->FenceLock, OldIrql);
         return;
     }
     CompletedFence = Device->CompletedFence;
+    Device->NotifiedFence = CompletedFence;
     KeReleaseSpinLock(&Device->FenceLock, OldIrql);
 
     /* Step 4: notify dxgkrnl of DMA completion (in "interrupt context"). */
@@ -452,6 +566,11 @@ SoftGpuVsyncDpcRoutine(
     KeReleaseSpinLock(&Device->FenceLock, OldIrql);
     if (!Deliver)
         return;
+
+    /* Re-kick the engine: a buffer parked on an unsatisfied GPU wait retries
+     * on this cadence, so a fence signaled by another engine or by the CPU
+     * always unblocks it. */
+    KeInsertQueueDpc(&Device->DpcObject, NULL, NULL);
 
     RtlZeroMemory(&NotifyData, sizeof(NotifyData));
     NotifyData.InterruptType = DXGK_INTERRUPT_CRTC_VSYNC;
@@ -694,6 +813,15 @@ SoftGpuDdiRender(
             case SOFTGPU_CMD_OP_NOP:
             case SOFTGPU_CMD_OP_BLT:
             case SOFTGPU_CMD_OP_FILL:
+                break;
+            case SOFTGPU_CMD_OP_SIGNAL_FENCE:
+            case SOFTGPU_CMD_OP_WAIT_FENCE:
+                /* GPU synchronization against a monitored fence the caller
+                 * mapped into its own GPU address space; the engine resolves
+                 * the address through that process's page tables, so an
+                 * unmapped or foreign fence simply cannot be reached. */
+                if (Cmd->FenceGpuVa == 0 || (Cmd->FenceGpuVa & (sizeof(ULONGLONG) - 1)) != 0)
+                    return STATUS_INVALID_PARAMETER;
                 break;
             default:
                 /* Paging opcodes are KMD-generated and are not accepted from

@@ -132,6 +132,11 @@
 #define SOFTGPU_CMD_OP_PAGE         4
 /* Paging: linear pattern fill of a slab range. */
 #define SOFTGPU_CMD_OP_FILL_LINEAR  5
+/* GPU synchronization executed by the engine against a monitored fence's
+ * GPU-visible value page.  FenceGpuVa is the address the fence reported to
+ * the user-mode driver; FenceValue is the value to publish or wait for. */
+#define SOFTGPU_CMD_OP_SIGNAL_FENCE 6
+#define SOFTGPU_CMD_OP_WAIT_FENCE   7
 
 #define SOFTGPU_CMD_FLAG_TO_SLAB    0x00000001UL
 
@@ -152,6 +157,8 @@ typedef struct _SOFTGPU_CMD
     ULONGLONG   ByteCount;
     ULONG       Flags;
     ULONG       Reserved;
+    ULONGLONG   FenceGpuVa;
+    ULONGLONG   FenceValue;
 } SOFTGPU_CMD, *PSOFTGPU_CMD;
 
 #define SOFTGPU_SUBMIT_RING_SIZE 1024
@@ -200,6 +207,10 @@ typedef struct _SOFTGPU_DEVICE
      */
     ULONG               CurrentFence;
     ULONG               CompletedFence;
+    /* Last value reported through DxgkCbNotifyInterrupt.  A completion
+     * interrupt is raised only when the completed fence advances, so the
+     * refresh-timer kick cannot replay a stale completion. */
+    ULONG               NotifiedFence;
     KSPIN_LOCK          FenceLock;
 
     /*
