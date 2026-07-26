@@ -25,7 +25,7 @@
 
 typedef HRESULT (WINAPI *PFN_D3DUmdRtCreateDeviceCallbacks)(D3DKMT_HANDLE, D3DKMT_HANDLE,
                                                             D3DDDI_DEVICECALLBACKS *, HANDLE *);
-typedef VOID (WINAPI *PFN_D3DUmdRtDestroyDeviceCallbacks)(HANDLE);
+typedef HRESULT (WINAPI *PFN_D3DUmdRtDestroyDeviceCallbacks)(HANDLE);
 
 static PFN_D3DUmdRtCreateDeviceCallbacks pfnCreateCallbacks;
 static PFN_D3DUmdRtDestroyDeviceCallbacks pfnDestroyCallbacks;
@@ -63,6 +63,7 @@ static void Test_TableIsPopulated(D3DKMT_HANDLE hAdapter, D3DKMT_HANDLE hDevice)
     ok(Callbacks.pfnCreateContextCb != NULL, "no pfnCreateContextCb\n");
     ok(Callbacks.pfnDestroyContextCb != NULL, "no pfnDestroyContextCb\n");
     ok(Callbacks.pfnEscapeCb != NULL, "no pfnEscapeCb\n");
+    ok(Callbacks.pfnPresentCb != NULL, "no pfnPresentCb -- a driver cannot show anything\n");
 
     /*
      * Unimplemented entries stay NULL.  A driver tests for NULL before calling,
@@ -346,6 +347,56 @@ static void Test_PagingQueueAndGpuVaThroughCallbacks(D3DKMT_HANDLE hAdapter, D3D
     pfnDestroyCallbacks(hRuntimeDevice);
 }
 
+/*
+ * Teardown is ordered.  Contexts and paging queues are parented to the device,
+ * so releasing the device while they are open would leave kernel objects owned
+ * by something that no longer exists.
+ */
+static void Test_TeardownIsOrdered(D3DKMT_HANDLE hAdapter, D3DKMT_HANDLE hDevice)
+{
+    D3DDDI_DEVICECALLBACKS Callbacks;
+    D3DDDICB_CREATECONTEXT Create;
+    D3DDDICB_DESTROYCONTEXT Destroy;
+    HANDLE hRuntimeDevice = NULL;
+    HRESULT hr;
+
+    if (pfnCreateCallbacks(hAdapter, hDevice, &Callbacks, &hRuntimeDevice) != S_OK)
+    {
+        skip("no callback table\n");
+        return;
+    }
+
+    memset(&Create, 0, sizeof(Create));
+    hr = Callbacks.pfnCreateContextCb(hRuntimeDevice, &Create);
+    if (FAILED(hr))
+    {
+        skip("no context to hold the device open (0x%08lX)\n", (long)hr);
+        pfnDestroyCallbacks(hRuntimeDevice);
+        return;
+    }
+
+    /* Out of order: the context is still open. */
+    hr = pfnDestroyCallbacks(hRuntimeDevice);
+    ok(FAILED(hr),
+       "the device was released with a context still open (0x%08lX) -- that context is parented "
+       "to it and would outlive its owner\n", (long)hr);
+
+    /* The device must still work after refusing, not be half torn down. */
+    memset(&Destroy, 0, sizeof(Destroy));
+    Destroy.hContext = Create.hContext;
+    hr = Callbacks.pfnDestroyContextCb(hRuntimeDevice, &Destroy);
+    ok(SUCCEEDED(hr),
+       "the device stopped working after refusing an out-of-order release (0x%08lX)\n", (long)hr);
+
+    /* In order now. */
+    hr = pfnDestroyCallbacks(hRuntimeDevice);
+    ok(SUCCEEDED(hr), "in-order device release failed 0x%08lX\n", (long)hr);
+
+    /* Releasing twice must find nothing to release rather than free again. */
+    ok(FAILED(pfnDestroyCallbacks(hRuntimeDevice)),
+       "the device was released a second time\n");
+}
+
 START_TEST(umdcallbacks)
 {
     HMODULE Runtime;
@@ -391,6 +442,7 @@ START_TEST(umdcallbacks)
     Test_ContextLifetimeThroughCallbacks(hAdapter, hDevice);
     Test_Wddm2TierIsPopulated(hAdapter, hDevice);
     Test_PagingQueueAndGpuVaThroughCallbacks(hAdapter, hDevice);
+    Test_TeardownIsOrdered(hAdapter, hDevice);
 
     DestroyTestDevice(hDevice);
     CloseAdapter(hAdapter);
