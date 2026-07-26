@@ -1088,91 +1088,39 @@ USBH_FdoStartDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
     return Status;
 }
 
-NTSTATUS
-NTAPI
-USBH_FdoQueryBusRelations(IN PUSBHUB_FDO_EXTENSION HubExtension,
-                          IN PIRP Irp)
+
+/*
+ * Perform the actual port enumeration for a hub: debounce, reset and
+ * create a PDO for every port with a (possibly latched) connect change.
+ *
+ * This code historically ran inside USBH_FdoQueryBusRelations on the PnP
+ * enumeration thread, which serialized the USB 2.0 debounce/reset timing
+ * (several hundred ms per device) into every boot-time BusRelations query.
+ * It now runs detached on a hub work item (USBH_HubEnumWorker):
+ * USBH_FdoQueryBusRelations only queues the worker and reports snapshots
+ * of the PDOs published here through PortData[].DeviceObject.
+ */
+static
+VOID
+USBH_EnumerateHubPorts(
+    IN PUSBHUB_FDO_EXTENSION HubExtension)
 {
     PDEVICE_RELATIONS DeviceRelations = NULL;
     NTSTATUS Status = STATUS_SUCCESS;
-    LIST_ENTRY GhostPdoList;
-    KIRQL OldIrql;
-    PLIST_ENTRY PdoList;
     UCHAR NumberPorts;
     USHORT Port;
-    USHORT GhostPort;
     PUSBHUB_PORT_DATA PortData;
     PDEVICE_OBJECT PdoDevice;
     PUSBHUB_PORT_PDO_EXTENSION PdoExtension;
-    PUSBHUB_PORT_PDO_EXTENSION pdoExtension;
     NTSTATUS NtStatus;
     PVOID SerialNumber;
     PVOID DeviceHandle;
     USB_PORT_STATUS UsbPortStatus;
-    PLIST_ENTRY Entry;
     ULONG Length;
-
-    DPRINT("USBH_FdoQueryBusRelations: HubFlags - %lX\n",
-           HubExtension->HubFlags);
-
-    ASSERT(Irp->IoStatus.Information == 0);
-
-    if (!(HubExtension->HubFlags & USBHUB_FDO_FLAG_DEVICE_STARTED))
-    {
-       Status = STATUS_INVALID_DEVICE_STATE;
-       goto RelationsWorker;
-    }
-
-    if (!HubExtension->HubDescriptor)
-    {
-        Status = STATUS_UNSUCCESSFUL;
-        goto RelationsWorker;
-    }
-
-    if (!(HubExtension->HubFlags & USBHUB_FDO_FLAG_DO_ENUMERATION))
-    {
-        /*
-         * No new enumeration requested. Return a snapshot of the
-         * currently known child PDOs without touching port state or
-         * PdoList/ghost bookkeeping.
-         */
-        NumberPorts = HubExtension->HubDescriptor->bNumberOfPorts;
-
-        Length = FIELD_OFFSET(DEVICE_RELATIONS, Objects) +
-                 NumberPorts * sizeof(PDEVICE_OBJECT);
-
-        DeviceRelations = ExAllocatePoolWithTag(NonPagedPool, Length, USB_HUB_TAG);
-        if (!DeviceRelations)
-        {
-            Status = STATUS_INSUFFICIENT_RESOURCES;
-            goto RelationsWorker;
-        }
-
-        RtlZeroMemory(DeviceRelations, Length);
-
-        KeAcquireSpinLock(&HubExtension->RelationsWorkerSpinLock, &OldIrql);
-
-        for (Port = 0; Port < NumberPorts; Port++)
-        {
-            PdoDevice = HubExtension->PortData[Port].DeviceObject;
-
-            if (PdoDevice)
-            {
-                ObReferenceObject(PdoDevice);
-                DeviceRelations->Objects[DeviceRelations->Count++] = PdoDevice;
-            }
-        }
-
-        KeReleaseSpinLock(&HubExtension->RelationsWorkerSpinLock, OldIrql);
-
-        DPRINT("USBH_FdoQueryBusRelations: snapshot only, Count=%lu\n",
-               DeviceRelations->Count);
-
-        Irp->IoStatus.Status = STATUS_SUCCESS;
-        Irp->IoStatus.Information = (ULONG_PTR)DeviceRelations;
-
-        return USBH_PassIrp(HubExtension->LowerDevice, Irp);
-    }
+    ULONG RelIdx;
+    PUSBHUB_DEBOUNCE_ENTRY DebounceEntries = NULL;
+    ULONG DebounceCount;
+    UCHAR DebounceMap[256];
 
     InterlockedIncrement(&HubExtension->PendingRequestCount);
 
@@ -1187,7 +1135,7 @@ USBH_FdoQueryBusRelations(IN PUSBHUB_FDO_EXTENSION HubExtension,
                           NULL);
 
     NumberPorts = HubExtension->HubDescriptor->bNumberOfPorts;
-    DPRINT_ENUM("USBH_FdoQueryBusRelations: NumberPorts - %x\n", NumberPorts);
+    DPRINT_ENUM("USBH_EnumerateHubPorts: NumberPorts - %x\n", NumberPorts);
 
     Length = FIELD_OFFSET(DEVICE_RELATIONS, Objects) +
              NumberPorts * sizeof(PDEVICE_OBJECT);
@@ -1208,10 +1156,8 @@ USBH_FdoQueryBusRelations(IN PUSBHUB_FDO_EXTENSION HubExtension,
             KeSetEvent(&HubExtension->PendingRequestEvent, EVENT_INCREMENT, FALSE);
         }
 
-        Status = STATUS_INSUFFICIENT_RESOURCES;
-        goto RelationsWorker;
+        return;
     }
-
     RtlZeroMemory(DeviceRelations, Length);
 
     DeviceRelations->Count = 0;
@@ -1227,6 +1173,71 @@ EnumStart:
     else
     {
         HubExtension->HubFlags &= ~USBHUB_FDO_FLAG_ENUM_POST_RECOVER;
+    }
+
+    /*
+     * Pipelined debounce pre-pass: debounce every port that will need
+     * enumeration in one shared polling loop, so their 100 ms stability
+     * windows (USB 2.0 TATTDB) overlap instead of accumulating serially
+     * per port. The per-port loop below consumes the recorded verdicts;
+     * ports without a verdict (e.g. state changed while this pass ran)
+     * fall back to the serial debounce.
+     */
+    RtlFillMemory(DebounceMap, sizeof(DebounceMap), 0xFF);
+    DebounceCount = 0;
+
+    if (!DebounceEntries)
+    {
+        DebounceEntries = ExAllocatePoolWithTag(NonPagedPool,
+                                                NumberPorts * sizeof(USBHUB_DEBOUNCE_ENTRY),
+                                                USB_HUB_TAG);
+    }
+
+    if (DebounceEntries)
+    {
+        for (Port = 1; Port <= NumberPorts; Port++)
+        {
+            USB_PORT_STATUS_AND_CHANGE ProbeStatus;
+
+            PortData = &HubExtension->PortData[Port - 1];
+
+            if (PortData->DeviceObject)
+            {
+                continue;
+            }
+
+            if (PortData->ConnectionStatus == DeviceFailedEnumeration ||
+                PortData->ConnectionStatus == DeviceGeneralFailure)
+            {
+                continue;
+            }
+
+            if (PortData->ConnectionStatus != DeviceConnected)
+            {
+                /* Not latched: only debounce ports with a live connect. */
+                if (!NT_SUCCESS(USBH_SyncGetPortStatus(HubExtension,
+                                                       Port,
+                                                       &ProbeStatus,
+                                                       sizeof(ProbeStatus))) ||
+                    !USBH_PortStatusIsConnected(&ProbeStatus))
+                {
+                    continue;
+                }
+            }
+
+            RtlZeroMemory(&DebounceEntries[DebounceCount],
+                          sizeof(USBHUB_DEBOUNCE_ENTRY));
+            DebounceEntries[DebounceCount].Port = Port;
+            DebounceMap[Port] = (UCHAR)DebounceCount;
+            DebounceCount++;
+        }
+
+        if (DebounceCount != 0)
+        {
+            DPRINT_ENUM("USBH_EnumerateHubPorts: pipelined debounce of %lu port(s)\n",
+                        DebounceCount);
+            USBH_PortDebounceMulti(HubExtension, DebounceEntries, DebounceCount);
+        }
     }
 
     for (Port = 1; Port <= NumberPorts; Port++)
@@ -1256,7 +1267,7 @@ EnumStart:
             USBH_PortStatusForceConnected(&PortData->PortStatus);
             USBH_PortChangeMarkConnect(&PortData->PortStatus);
 
-            DPRINT_ENUM("USBH_FdoQueryBusRelations: cached connect (no PDO) port %u (ConnStatus=%u)\n",
+            DPRINT_ENUM("USBH_EnumerateHubPorts: cached connect (no PDO) port %u (ConnStatus=%u)\n",
                         Port,
                         PortData->ConnectionStatus);
         }
@@ -1275,7 +1286,7 @@ EnumStart:
             USBH_PortStatusForceConnected(&PortData->PortStatus);
             USBH_PortChangeMarkConnect(&PortData->PortStatus);
             UseCachedStatus = TRUE;
-            DPRINT_ENUM("USBH_FdoQueryBusRelations: honoring cached connect for port %u\n", Port);
+            DPRINT_ENUM("USBH_EnumerateHubPorts: honoring cached connect for port %u\n", Port);
         }
 
         if (NT_SUCCESS(Status) &&
@@ -1286,7 +1297,7 @@ EnumStart:
             /* Preserve a cached connect for ports we already marked as present. */
             USBH_PortStatusForceConnected(&PortData->PortStatus);
 
-            DPRINT_ENUM("USBH_FdoQueryBusRelations: forcing connect on port %u\n",
+            DPRINT_ENUM("USBH_EnumerateHubPorts: forcing connect on port %u\n",
                         Port);
             UseCachedStatus = TRUE;
         }
@@ -1298,19 +1309,19 @@ EnumStart:
             PortData->ConnectionStatus = DeviceConnected;
             USBH_PortChangeMarkConnect(&PortData->PortStatus);
             USBH_PortStatusForceConnected(&PortData->PortStatus);
-            DPRINT_ENUM("USBH_FdoQueryBusRelations: forcing PDO creation from cached state on port %u\n",
+            DPRINT_ENUM("USBH_EnumerateHubPorts: forcing PDO creation from cached state on port %u\n",
                         Port);
         }
 
         if (!NT_SUCCESS(Status))
         {
-            DPRINT_ENUM("USBH_FdoQueryBusRelations: Status - %X\n", Status);
+            DPRINT_ENUM("USBH_EnumerateHubPorts: Status - %X\n", Status);
             HubExtension->HubFlags |= USBHUB_FDO_FLAG_DEVICE_FAILED;
             DeviceRelations->Count = 0;
             goto EnumStart;
         }
 
-        DPRINT("USBH_FdoQueryBusRelations: Port - %x, ConnectStatus - %x\n",
+        DPRINT("USBH_EnumerateHubPorts: Port - %x, ConnectStatus - %x\n",
                Port,
                USBH_PortStatusIsConnected(&PortData->PortStatus));
 
@@ -1325,7 +1336,7 @@ EnumStart:
             USBH_PortStatusForceConnected(&PortData->PortStatus);
             USBH_PortChangeMarkConnect(&PortData->PortStatus);
 
-            DPRINT_ENUM("USBH_FdoQueryBusRelations: forcing PDO creation from cached state on port %u\n",
+            DPRINT_ENUM("USBH_EnumerateHubPorts: forcing PDO creation from cached state on port %u\n",
                         Port);
         }
 
@@ -1334,7 +1345,7 @@ EnumStart:
             PdoDevice == NULL)
         {
             USBH_PortStatusForceConnected(&PortData->PortStatus);
-            DPRINT_ENUM("USBH_FdoQueryBusRelations: using cached connect for port %u\n",
+            DPRINT_ENUM("USBH_EnumerateHubPorts: using cached connect for port %u\n",
                         Port);
         }
 
@@ -1350,7 +1361,7 @@ EnumStart:
 
         if (HubExtension->HubFlags & USBHUB_FDO_FLAG_DEVICE_FAILED)
         {
-            DPRINT1("USBH_FdoQueryBusRelations: hub is marked failed\n");
+            DPRINT1("USBH_EnumerateHubPorts: hub is marked failed\n");
         }
 
         if (!USBH_PortStatusIsConnected(&PortData->PortStatus) &&
@@ -1368,7 +1379,7 @@ EnumStart:
             {
                 USBH_PortStatusForceConnected(&PortData->PortStatus);
                 USBH_PortChangeMarkConnect(&PortData->PortStatus);
-                DPRINT_ENUM("USBH_FdoQueryBusRelations: honoring latched connect on port %u\n",
+                DPRINT_ENUM("USBH_EnumerateHubPorts: honoring latched connect on port %u\n",
                             Port);
             }
             else
@@ -1426,11 +1437,19 @@ EnumStart:
          * been stable for USBHUB_DEBOUNCE_STABLE ms (USB 2.0 TATTDB), or
          * give up after USBHUB_DEBOUNCE_TIMEOUT ms of bouncing.
          */
-        NtStatus = USBH_PortDebounce(HubExtension, Port, &PortData->PortStatus);
+        if (DebounceMap[Port] != 0xFF)
+        {
+            /* Verdict recorded by the pipelined debounce pre-pass. */
+            NtStatus = DebounceEntries[DebounceMap[Port]].Status;
+        }
+        else
+        {
+            NtStatus = USBH_PortDebounce(HubExtension, Port, &PortData->PortStatus);
+        }
 
         if (!NT_SUCCESS(NtStatus))
         {
-            DPRINT_ENUM("USBH_FdoQueryBusRelations: debounce failed on port %u (0x%08lx)\n",
+            DPRINT_ENUM("USBH_EnumerateHubPorts: debounce failed on port %u (0x%08lx)\n",
                         Port,
                         NtStatus);
             PortData->DeviceObject = NULL;
@@ -1443,7 +1462,7 @@ EnumStart:
         NtStatus = USBH_SyncResetPort(HubExtension, Port);
         if (!NT_SUCCESS(NtStatus))
         {
-            DPRINT_ENUM("USBH_FdoQueryBusRelations: reset failed on port %u (0x%08lx)\n",
+            DPRINT_ENUM("USBH_EnumerateHubPorts: reset failed on port %u (0x%08lx)\n",
                         Port,
                         NtStatus);
             ResetFailed = TRUE;
@@ -1465,7 +1484,7 @@ EnumStart:
 
         if (!NT_SUCCESS(NtStatus))
         {
-            DPRINT_ENUM("USBH_FdoQueryBusRelations: get status failed after reset (port %u)\n",
+            DPRINT_ENUM("USBH_EnumerateHubPorts: get status failed after reset (port %u)\n",
                         Port);
             ResetFailed = TRUE;
             goto PortEnumerationFailure;
@@ -1574,7 +1593,7 @@ PortEnumerationFailure:
         if (PendingConnect)
         {
             HubExtension->HubFlags |= USBHUB_FDO_FLAG_DO_ENUMERATION;
-            DPRINT_ENUM("USBH_FdoQueryBusRelations: latched connect pending, scheduling re-enumeration\n");
+            DPRINT_ENUM("USBH_EnumerateHubPorts: latched connect pending, scheduling re-enumeration\n");
         }
     }
 
@@ -1582,7 +1601,7 @@ PortEnumerationFailure:
     {
         ULONG idx;
 
-        DPRINT("USBH_FdoQueryBusRelations: re-enumeration requested mid-run (Flags=%lX) – restarting\n",
+        DPRINT("USBH_EnumerateHubPorts: re-enumeration requested mid-run (Flags=%lX) – restarting\n",
                HubExtension->HubFlags);
 
         HubExtension->HubFlags &= ~USBHUB_FDO_FLAG_DO_ENUMERATION;
@@ -1600,7 +1619,7 @@ PortEnumerationFailure:
 
     HubExtension->HubFlags &= ~USBHUB_FDO_FLAG_NOT_ENUMERATED;
 
-    DPRINT("USBH_FdoQueryBusRelations: done Flags=%lX Count=%lu\n",
+    DPRINT("USBH_EnumerateHubPorts: done Flags=%lX Count=%lu\n",
            HubExtension->HubFlags,
            DeviceRelations ? DeviceRelations->Count : 0);
 
@@ -1613,6 +1632,204 @@ PortEnumerationFailure:
     {
         KeSetEvent(&HubExtension->PendingRequestEvent, EVENT_INCREMENT, FALSE);
     }
+
+    /*
+     * This pass runs detached from any QueryBusRelations IRP: drop the
+     * references taken while building the relations set above. PnP gets
+     * the fresh set from the snapshot path on the BusRelations query the
+     * enum worker triggers when this pass is done.
+     */
+    for (RelIdx = 0; RelIdx < DeviceRelations->Count; RelIdx++)
+    {
+        ObDereferenceObject(DeviceRelations->Objects[RelIdx]);
+    }
+
+    ExFreePoolWithTag(DeviceRelations, USB_HUB_TAG);
+
+    if (DebounceEntries)
+    {
+        ExFreePoolWithTag(DebounceEntries, USB_HUB_TAG);
+    }
+}
+
+static
+VOID
+NTAPI
+USBH_HubEnumWorker(
+    IN PUSBHUB_FDO_EXTENSION HubExtension,
+    IN PVOID Context)
+{
+    UNREFERENCED_PARAMETER(Context);
+
+    InterlockedExchange(&HubExtension->EnumWorkerRerun, 0);
+
+    if ((HubExtension->HubFlags & USBHUB_FDO_FLAG_DEVICE_STARTED) &&
+        !(HubExtension->HubFlags & USBHUB_FDO_FLAG_DEVICE_STOPPING) &&
+        HubExtension->HubDescriptor &&
+        HubExtension->PortData)
+    {
+        USBH_EnumerateHubPorts(HubExtension);
+    }
+
+    InterlockedExchange(&HubExtension->EnumWorkerQueued, 0);
+
+    /*
+     * Publish the results: PnP re-queries the bus relations and the
+     * snapshot path reports the PDOs created (or dropped) by this pass.
+     */
+    IoInvalidateDeviceRelations(HubExtension->LowerPDO, BusRelations);
+
+    /*
+     * An enumeration request that raced the Queued reset above marked
+     * Rerun but found the worker still queued; pick it up now so the
+     * request is not lost.
+     */
+    if (InterlockedCompareExchange(&HubExtension->EnumWorkerRerun, 0, 0))
+    {
+        USBH_QueueHubEnumeration(HubExtension);
+    }
+}
+
+/*
+ * Request an asynchronous enumeration pass for this hub. Coalesces
+ * concurrent requests: one worker runs at a time and a request that
+ * arrives while it runs makes it re-queue itself on exit.
+ */
+VOID
+NTAPI
+USBH_QueueHubEnumeration(
+    IN PUSBHUB_FDO_EXTENSION HubExtension)
+{
+    PUSBHUB_IO_WORK_ITEM HubIoWorkItem;
+    NTSTATUS Status;
+
+    /* Mark the request first so a running worker picks it up on exit. */
+    InterlockedExchange(&HubExtension->EnumWorkerRerun, 1);
+
+    if (InterlockedCompareExchange(&HubExtension->EnumWorkerQueued, 1, 0))
+    {
+        /* Worker already queued or running. */
+        return;
+    }
+
+    if (HubExtension->HubFlags & USBHUB_FDO_FLAG_DEVICE_STOPPING)
+    {
+        InterlockedExchange(&HubExtension->EnumWorkerQueued, 0);
+        return;
+    }
+
+    Status = USBH_AllocateWorkItem(HubExtension,
+                                   &HubIoWorkItem,
+                                   USBH_HubEnumWorker,
+                                   0,
+                                   NULL,
+                                   DelayedWorkQueue);
+
+    if (!NT_SUCCESS(Status))
+    {
+        /* Leave Rerun set: the next invalidation retries the queueing. */
+        InterlockedExchange(&HubExtension->EnumWorkerQueued, 0);
+        return;
+    }
+
+    USBH_QueueWorkItem(HubExtension, HubIoWorkItem);
+}
+
+NTSTATUS
+NTAPI
+USBH_FdoQueryBusRelations(IN PUSBHUB_FDO_EXTENSION HubExtension,
+                          IN PIRP Irp)
+{
+    PDEVICE_RELATIONS DeviceRelations = NULL;
+    NTSTATUS Status = STATUS_SUCCESS;
+    LIST_ENTRY GhostPdoList;
+    KIRQL OldIrql;
+    PLIST_ENTRY PdoList;
+    UCHAR NumberPorts;
+    USHORT Port;
+    USHORT GhostPort;
+    PDEVICE_OBJECT PdoDevice;
+    PUSBHUB_PORT_PDO_EXTENSION PdoExtension;
+    PUSBHUB_PORT_PDO_EXTENSION pdoExtension;
+    PLIST_ENTRY Entry;
+    ULONG Length;
+
+    DPRINT("USBH_FdoQueryBusRelations: HubFlags - %lX\n",
+           HubExtension->HubFlags);
+
+    ASSERT(Irp->IoStatus.Information == 0);
+
+    if (!(HubExtension->HubFlags & USBHUB_FDO_FLAG_DEVICE_STARTED))
+    {
+       Status = STATUS_INVALID_DEVICE_STATE;
+       goto RelationsWorker;
+    }
+
+    if (!HubExtension->HubDescriptor)
+    {
+        Status = STATUS_UNSUCCESSFUL;
+        goto RelationsWorker;
+    }
+
+    if (HubExtension->HubFlags & USBHUB_FDO_FLAG_DO_ENUMERATION)
+    {
+        /*
+         * Port state changed: run the (slow) debounce/reset/create-device
+         * sequence on a work item instead of blocking the PnP enumeration
+         * thread for hundreds of milliseconds. The worker invalidates the
+         * bus relations again once it is done and the snapshot below then
+         * reports the newly created PDOs.
+         */
+        HubExtension->HubFlags &= ~USBHUB_FDO_FLAG_DO_ENUMERATION;
+        USBH_QueueHubEnumeration(HubExtension);
+    }
+
+    /*
+     * Return a snapshot of the currently known child PDOs without touching
+     * port state. Any enumeration work runs detached on the enum worker.
+     */
+    NumberPorts = HubExtension->HubDescriptor->bNumberOfPorts;
+
+    Length = FIELD_OFFSET(DEVICE_RELATIONS, Objects) +
+             NumberPorts * sizeof(PDEVICE_OBJECT);
+
+    DeviceRelations = ExAllocatePoolWithTag(NonPagedPool, Length, USB_HUB_TAG);
+
+    if (!DeviceRelations)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto RelationsWorker;
+    }
+
+    RtlZeroMemory(DeviceRelations, Length);
+
+    KeAcquireSpinLock(&HubExtension->RelationsWorkerSpinLock, &OldIrql);
+
+    for (Port = 0; Port < NumberPorts; Port++)
+    {
+        PdoDevice = HubExtension->PortData[Port].DeviceObject;
+
+        if (!PdoDevice)
+        {
+            continue;
+        }
+
+        ObReferenceObject(PdoDevice);
+
+        PdoDevice->Flags |= DO_POWER_PAGABLE;
+        PdoDevice->Flags &= ~DO_DEVICE_INITIALIZING;
+
+        PdoExtension = PdoDevice->DeviceExtension;
+        PdoExtension->PortPdoFlags &= ~USBHUB_PDO_FLAG_POWER_D1_OR_D2;
+
+        DeviceRelations->Objects[DeviceRelations->Count++] = PdoDevice;
+    }
+
+    KeReleaseSpinLock(&HubExtension->RelationsWorkerSpinLock, OldIrql);
+
+    DPRINT("USBH_FdoQueryBusRelations: snapshot Count=%lu Flags=%lX\n",
+           DeviceRelations->Count,
+           HubExtension->HubFlags);
 
 RelationsWorker:
 
