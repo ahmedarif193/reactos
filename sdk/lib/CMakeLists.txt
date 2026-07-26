@@ -68,7 +68,6 @@ add_subdirectory(wdmguid)
 
 else()
 
-add_subdirectory(3rdparty/ntfs3g)
 add_subdirectory(3rdparty/zlib)
 
 endif()

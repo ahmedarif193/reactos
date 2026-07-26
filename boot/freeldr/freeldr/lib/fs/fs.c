@@ -592,7 +592,7 @@ FsGetVolumeSize(
         pFsGetVolumeSize = BtrFsGetVolumeSize;
     else
 #ifndef _M_ARM
-    if (!_wcsicmp(ServiceName, L"ntfs3g"))
+    if (!_wcsicmp(ServiceName, L"ntfs"))
         pFsGetVolumeSize = NtfsGetVolumeSize;
     else
     if (!_wcsicmp(ServiceName, L"ext2fs"))
