@@ -200,7 +200,7 @@ MiMapViewInSystemSpace(IN PVOID Section,
                        IN OUT PSIZE_T ViewSize,
                        IN PLARGE_INTEGER SectionOffset);
 
-VOID
+NTSTATUS
 NTAPI
 MiFillSystemPageDirectory(IN PVOID Base,
                           IN SIZE_T NumberOfBytes);
@@ -4866,7 +4866,15 @@ MmMapViewInSystemSpaceEx (
 
     MmUnlockAddressSpace(AddressSpace);
 
-    MiFillSystemPageDirectory(*MappedBase, *ViewSize);
+    /* Commit the page-table hierarchy for the view. If this cannot be done,
+     * fail rather than hand back a base whose first touch would fault. */
+    Status = MiFillSystemPageDirectory(*MappedBase, *ViewSize);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("Could not commit page tables for system view at %p\n", *MappedBase);
+        *MappedBase = NULL;
+        return Status;
+    }
 
     MmLockAddressSpace(AddressSpace);
 

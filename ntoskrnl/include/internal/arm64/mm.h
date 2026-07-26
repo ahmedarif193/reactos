@@ -265,7 +265,8 @@ VOID
 MiArm64MapKseg0Page(
     _In_ PFN_NUMBER PageFrameNumber);
 
-VOID
+_Must_inspect_result_
+BOOLEAN
 MiArm64FillSystemPageDirectory(
     _In_ PVOID Base,
     _In_ SIZE_T NumberOfBytes);
