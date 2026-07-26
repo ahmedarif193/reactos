@@ -290,6 +290,7 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             KeLeaveCriticalRegion();
 
             /* On success the library has already released the record set. */
+            InterlockedIncrement(&VolCB->DirGeneration);
             NtfsEvictCachedRecord(VolCB,
                                   FileCB->FileName.Buffer,
                                   (USHORT)(FileCB->FileName.Length / sizeof(WCHAR)),
