@@ -180,6 +180,7 @@ C_ASSERT(sizeof(D3DKMT_UNLOCK2) == 8);
 #define D3DKMT_BRIDGE_MAX_ALLOCATIONS 4096U
 #define D3DKMT_BRIDGE_MAX_PRIVATE_BYTES RXGK_WDDM_MAX_PRIVATE_DRIVER_DATA
 #define D3DKMT_BRIDGE_MAX_FIXED_BYTES 65536U
+#define D3DKMT_BRIDGE_MAX_ENUM_ADAPTERS 256U
 
 /*
  * Windows 11 reports an unreadable or unwritable caller buffer as
@@ -2595,6 +2596,179 @@ D3DKMTEnumAdapters2(
         }
     }
 
+    ExFreePoolWithTag(KernelAdapters, TAG_WDDM_BRIDGE);
+    return Status;
+}
+
+/*
+ * D3DKMTEnumAdapters3 -- WDDM 2.7 filtered enumeration.
+ *
+ * EnumAdapters2 reports every adapter.  The filter here removes the two classes
+ * Windows leaves out of a default enumeration so that older applications do not
+ * trip over adapters they cannot use: compute-only adapters, and display-only
+ * adapters (display support without render support).  An adapter that is
+ * filtered out still had a handle opened for it by the enumeration, so it must
+ * be closed here rather than leaked back to the caller.
+ */
+static BOOLEAN
+WddmBridgeAdapterPassesFilter(
+    _In_ D3DKMT_HANDLE hAdapter,
+    _In_ D3DKMT_ENUMADAPTERS_FILTER Filter)
+{
+    D3DKMT_QUERYADAPTERINFO Query;
+    D3DKMT_ADAPTERTYPE AdapterType;
+    ULONG_PTR Information = 0;
+    NTSTATUS Status;
+
+    RtlZeroMemory(&AdapterType, sizeof(AdapterType));
+    RtlZeroMemory(&Query, sizeof(Query));
+    Query.hAdapter = hAdapter;
+    Query.Type = KMTQAITYPE_ADAPTERTYPE;
+    Query.pPrivateDriverData = &AdapterType;
+    Query.PrivateDriverDataSize = sizeof(AdapterType);
+
+    Status = WddmBridgeSendIoctlWithInformation(IOCTL_D3DKMT_QUERYADAPTERINFO, &Query, sizeof(Query), &Query, sizeof(Query), &Information);
+    /* An adapter that cannot describe itself is not one of the classes the
+     * filter excludes, so keep it rather than silently dropping it. */
+    if (!NT_SUCCESS(Status))
+        return TRUE;
+
+    if (AdapterType.ComputeOnly && !Filter.IncludeComputeOnly)
+        return FALSE;
+    if (AdapterType.DisplaySupported && !AdapterType.RenderSupported && !Filter.IncludeDisplayOnly)
+        return FALSE;
+    return TRUE;
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTEnumAdapters3(
+    _Inout_ D3DKMT_ENUMADAPTERS3 *pData)
+{
+    D3DKMT_ENUMADAPTERS3 Captured;
+    D3DKMT_ENUMADAPTERS2 Query;
+    D3DKMT_ADAPTERINFO *KernelAdapters = NULL;
+    D3DKMT_ADAPTERINFO *UserAdapters;
+    D3DKMT_CLOSEADAPTER CloseAdapter;
+    SIZE_T BufSize;
+    ULONG_PTR Information = 0;
+    ULONG Capacity;
+    ULONG Enumerated;
+    ULONG Kept = 0;
+    ULONG Index;
+    NTSTATUS Status;
+
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    Status = WddmBridgeRejectBadBuffer(Status);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if ((Captured.Filter.Value & ~(ULONGLONG)0x3) != 0)
+        return STATUS_INVALID_PARAMETER;
+
+    UserAdapters = Captured.pAdapters;
+    Capacity = Captured.NumAdapters;
+
+    /*
+     * Enumerate into a kernel array first even for a count-only query: the
+     * count the caller wants is the count *after* filtering, which cannot be
+     * known without looking at each adapter.
+     */
+    Status = WddmBridgeSizeForCount(D3DKMT_BRIDGE_MAX_ENUM_ADAPTERS, sizeof(D3DKMT_ADAPTERINFO), &BufSize);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    KernelAdapters = ExAllocatePoolWithTag(NonPagedPool, BufSize, TAG_WDDM_BRIDGE);
+    if (KernelAdapters == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    RtlZeroMemory(KernelAdapters, BufSize);
+
+    RtlZeroMemory(&Query, sizeof(Query));
+    Query.NumAdapters = D3DKMT_BRIDGE_MAX_ENUM_ADAPTERS;
+    Query.pAdapters = KernelAdapters;
+    Status = WddmBridgeSendIoctlWithInformation(IOCTL_D3DKMT_ENUMADAPTERS2, &Query, sizeof(Query), &Query, sizeof(Query), &Information);
+    if (Status == STATUS_BUFFER_OVERFLOW)
+        Status = STATUS_BUFFER_TOO_SMALL;
+    if (NT_SUCCESS(Status) && Information != sizeof(Query))
+        Status = STATUS_INFO_LENGTH_MISMATCH;
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    Enumerated = Query.NumAdapters;
+    if (Enumerated > D3DKMT_BRIDGE_MAX_ENUM_ADAPTERS)
+    {
+        Status = STATUS_INFO_LENGTH_MISMATCH;
+        goto Cleanup;
+    }
+
+    /* Compact the survivors to the front and close what the filter removed. */
+    for (Index = 0; Index < Enumerated; ++Index)
+    {
+        if (KernelAdapters[Index].hAdapter == 0)
+            continue;
+        if (WddmBridgeAdapterPassesFilter(KernelAdapters[Index].hAdapter, Captured.Filter))
+        {
+            KernelAdapters[Kept++] = KernelAdapters[Index];
+            continue;
+        }
+        CloseAdapter.hAdapter = KernelAdapters[Index].hAdapter;
+        WddmBridgeSendIoctl(IOCTL_D3DKMT_CLOSEADAPTER, &CloseAdapter, sizeof(CloseAdapter), NULL, 0);
+    }
+
+    if (UserAdapters == NULL || Capacity == 0)
+    {
+        /* Count-only query: nothing is handed out, so nothing may stay open. */
+        Status = WddmBridgeSafeProbeForWrite((PUCHAR)pData + FIELD_OFFSET(D3DKMT_ENUMADAPTERS3, NumAdapters), sizeof(Captured.NumAdapters));
+        Status = WddmBridgeRejectBadBuffer(Status);
+        if (NT_SUCCESS(Status))
+        {
+            Captured.NumAdapters = Kept;
+            Status = WddmBridgeSafeCopyTo((PUCHAR)pData + FIELD_OFFSET(D3DKMT_ENUMADAPTERS3, NumAdapters), &Captured.NumAdapters, sizeof(Captured.NumAdapters));
+        }
+        for (Index = 0; Index < Kept; ++Index)
+        {
+            CloseAdapter.hAdapter = KernelAdapters[Index].hAdapter;
+            WddmBridgeSendIoctl(IOCTL_D3DKMT_CLOSEADAPTER, &CloseAdapter, sizeof(CloseAdapter), NULL, 0);
+        }
+        goto Cleanup;
+    }
+
+    if (Capacity < Kept)
+    {
+        Status = STATUS_BUFFER_TOO_SMALL;
+        goto CloseKept;
+    }
+
+    Status = WddmBridgeSizeForCount(Kept, sizeof(D3DKMT_ADAPTERINFO), &BufSize);
+    if (!NT_SUCCESS(Status))
+        goto CloseKept;
+    Status = WddmBridgeSafeProbeForWrite(UserAdapters, BufSize);
+    Status = WddmBridgeRejectBadBuffer(Status);
+    if (!NT_SUCCESS(Status))
+        goto CloseKept;
+    Status = WddmBridgeSafeProbeForWrite((PUCHAR)pData + FIELD_OFFSET(D3DKMT_ENUMADAPTERS3, NumAdapters), sizeof(Captured.NumAdapters));
+    Status = WddmBridgeRejectBadBuffer(Status);
+    if (!NT_SUCCESS(Status))
+        goto CloseKept;
+
+    Status = WddmBridgeSafeCopyTo(UserAdapters, KernelAdapters, BufSize);
+    if (!NT_SUCCESS(Status))
+        goto CloseKept;
+    Captured.NumAdapters = Kept;
+    Status = WddmBridgeSafeCopyTo((PUCHAR)pData + FIELD_OFFSET(D3DKMT_ENUMADAPTERS3, NumAdapters), &Captured.NumAdapters, sizeof(Captured.NumAdapters));
+    if (NT_SUCCESS(Status))
+        goto Cleanup;
+
+CloseKept:
+    /* The caller never received these handles, so it can never close them. */
+    for (Index = 0; Index < Kept; ++Index)
+    {
+        CloseAdapter.hAdapter = KernelAdapters[Index].hAdapter;
+        WddmBridgeSendIoctl(IOCTL_D3DKMT_CLOSEADAPTER, &CloseAdapter, sizeof(CloseAdapter), NULL, 0);
+    }
+
+Cleanup:
     ExFreePoolWithTag(KernelAdapters, TAG_WDDM_BRIDGE);
     return Status;
 }
