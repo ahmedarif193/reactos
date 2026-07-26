@@ -440,7 +440,7 @@ static VOID DxgkpContextOrderSortContexts(_Out_writes_(ContextCount) PDXGKRNL_CO
     }
 }
 
-NTSTATUS DxgkContextOrderAdmitWait(_Inout_ PDXGKRNL_CONTEXT Context, _In_ DXGK_CONTEXT_SYNC_OPERATION SyncOperation, _In_reads_(ObjectCount) const D3DKMT_HANDLE *ObjectHandles, _In_ ULONG ObjectCount, _In_ UINT64 FenceValue, _In_ KPROCESSOR_MODE AccessMode)
+NTSTATUS DxgkContextOrderAdmitWait(_Inout_ PDXGKRNL_CONTEXT Context, _In_ DXGK_CONTEXT_SYNC_OPERATION SyncOperation, _In_reads_(ObjectCount) const D3DKMT_HANDLE *ObjectHandles, _In_ ULONG ObjectCount, _In_ UINT64 FenceValue, _In_reads_opt_(ObjectCount) CONST UINT64 *FenceValueArray, _In_ KPROCESSOR_MODE AccessMode)
 {
     PDXGKRNL_CONTEXT_SYNC_CAPTURE Capture;
     PDXGK_CONTEXT_ORDER_OPERATION Operation;
@@ -455,7 +455,7 @@ NTSTATUS DxgkContextOrderAdmitWait(_Inout_ PDXGKRNL_CONTEXT Context, _In_ DXGK_C
     Capture = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Capture), DXGK_CONTEXT_ORDER_OPERATION_TAG);
     if (Capture == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
-    Status = DxgkContextSyncCapture(Context->Device, Context->Device->OwnerProcess, AccessMode, SyncOperation, ObjectHandles, ObjectCount, 0, FenceValue, Capture);
+    Status = DxgkContextSyncCapture(Context->Device, Context->Device->OwnerProcess, AccessMode, SyncOperation, ObjectHandles, ObjectCount, 0, FenceValue, FenceValueArray, Capture);
     if (!NT_SUCCESS(Status))
     {
         ExFreePoolWithTag(Capture, DXGK_CONTEXT_ORDER_OPERATION_TAG);
@@ -503,7 +503,7 @@ Failure:
     return Status;
 }
 
-NTSTATUS DxgkContextOrderAdmitSignal(_In_reads_(ContextCount) PDXGKRNL_CONTEXT const *Contexts, _In_ ULONG ContextCount, _In_ DXGK_CONTEXT_SYNC_OPERATION SyncOperation, _In_reads_opt_(ObjectCount) const D3DKMT_HANDLE *ObjectHandles, _In_ ULONG ObjectCount, _In_ ULONG SignalFlags, _In_ UINT64 PayloadValue, _In_ KPROCESSOR_MODE AccessMode)
+NTSTATUS DxgkContextOrderAdmitSignal(_In_reads_(ContextCount) PDXGKRNL_CONTEXT const *Contexts, _In_ ULONG ContextCount, _In_ DXGK_CONTEXT_SYNC_OPERATION SyncOperation, _In_reads_opt_(ObjectCount) const D3DKMT_HANDLE *ObjectHandles, _In_ ULONG ObjectCount, _In_ ULONG SignalFlags, _In_ UINT64 PayloadValue, _In_reads_opt_(ObjectCount) CONST UINT64 *PayloadValueArray, _In_ KPROCESSOR_MODE AccessMode)
 {
     PDXGKRNL_CONTEXT SortedContexts[DXGMMS2_CONTEXT_STREAM_MAX_BROADCAST_CONTEXTS];
     DXGMMS2_CONTEXT_STREAM_HANDLE StreamHandles[DXGMMS2_CONTEXT_STREAM_MAX_BROADCAST_CONTEXTS];
@@ -537,7 +537,7 @@ NTSTATUS DxgkContextOrderAdmitSignal(_In_reads_(ContextCount) PDXGKRNL_CONTEXT c
     Capture = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Capture), DXGK_CONTEXT_ORDER_OPERATION_TAG);
     if (Capture == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
-    Status = DxgkContextSyncCapture(Device, Device->OwnerProcess, AccessMode, SyncOperation, ObjectHandles, ObjectCount, SignalFlags, PayloadValue, Capture);
+    Status = DxgkContextSyncCapture(Device, Device->OwnerProcess, AccessMode, SyncOperation, ObjectHandles, ObjectCount, SignalFlags, PayloadValue, PayloadValueArray, Capture);
     if (!NT_SUCCESS(Status))
     {
         ExFreePoolWithTag(Capture, DXGK_CONTEXT_ORDER_OPERATION_TAG);
