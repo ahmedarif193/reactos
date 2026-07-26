@@ -70,6 +70,7 @@ list(APPEND KMTEST_DRV_SOURCE
     directx/DxgkAdapterCaps.c
     directx/DxgkNodeAffinity.c
     directx/DxgkTdrPolicy.c
+    directx/DxgkKeyedMutex.c
     directx/DxgkFenceConcurrency.c
     directx/DxgkCoreConcurrency.c
     directx/DxgkContextSync.c
@@ -212,6 +213,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/paging_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/display_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/object_core.c
+    ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/keyedmutex_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/device_work_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/present_queue_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/submit_reservation_core.c
