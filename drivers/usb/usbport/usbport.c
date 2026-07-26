@@ -194,6 +194,16 @@ USBPORT_SetupTransferBounceBuffer(IN PDEVICE_OBJECT FdoDevice,
         return STATUS_SUCCESS;
 
     /*
+     * Root-hub transfers are serviced in software and never reach the host
+     * controller's DMA engine.
+     */
+    if (Transfer->Endpoint &&
+        (Transfer->Endpoint->Flags & ENDPOINT_FLAG_ROOTHUB_EP0))
+    {
+        return STATUS_SUCCESS;
+    }
+
+    /*
      * On amd64/q35, nonpaged allocations routinely land above 4GB. xHCI
      * controllers are expected to handle 64-bit DMA, so avoid forcing bounce
      * buffering (and copy-back) for xHCI miniports.
@@ -4273,6 +4283,8 @@ USBPORT_AllocateTransfer(IN PDEVICE_OBJECT FdoDevice,
 
         if (!NT_SUCCESS(BounceStatus))
         {
+            Urb->UrbControlTransfer.hca.Reserved8[0] = NULL;
+            Urb->UrbHeader.UsbdFlags &= ~USBD_FLAG_ALLOCATED_TRANSFER;
             ExFreePoolWithTag(Transfer, USB_PORT_TAG);
             return USBD_STATUS_INSUFFICIENT_RESOURCES;
         }
