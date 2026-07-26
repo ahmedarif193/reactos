@@ -64,12 +64,51 @@ MasterFileTable::CreateFile(
     _In_ ULONG FileAttributes,
     _Out_ PFileRecord* File)
 {
-    Directory ParentIndex(DiskVolume);
     PFileRecord Parent = NULL;
-    PFileRecord NewFile = NULL;
-    PFileNameEx FileName = NULL;
     PWCHAR Name;
     ULONG NameLength;
+    NTSTATUS Status;
+
+    if (!File)
+        return STATUS_INVALID_PARAMETER;
+    *File = NULL;
+    if (!Query || !DiskVolume)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = SplitAndResolveParent(
+        Query,
+        TRUE,
+        &Parent,
+        &Name,
+        &NameLength);
+    if (NT_SUCCESS(Status))
+    {
+        Status = CreateFileInDirectory(
+            Parent,
+            Name,
+            NameLength,
+            IsDirectory,
+            FileAttributes,
+            FALSE,
+            File);
+    }
+    delete Parent;
+    return Status;
+}
+
+NTSTATUS
+MasterFileTable::CreateFileInDirectory(
+    _In_ PFileRecord Parent,
+    _In_reads_(NameLength) PWCHAR Name,
+    _In_ ULONG NameLength,
+    _In_ BOOLEAN IsDirectory,
+    _In_ ULONG FileAttributes,
+    _In_ BOOLEAN NameKnownMissing,
+    _Out_ PFileRecord* File)
+{
+    Directory ParentIndex(DiskVolume);
+    PFileRecord NewFile = NULL;
+    PFileNameEx FileName = NULL;
     ULONGLONG ExistingReference;
     ULONGLONG FileReference;
     BOOLEAN RecordPublished = FALSE;
@@ -79,8 +118,12 @@ MasterFileTable::CreateFile(
     if (!File)
         return STATUS_INVALID_PARAMETER;
     *File = NULL;
-    if (!Query || !DiskVolume)
+    if (!DiskVolume || !Parent ||
+        !Parent->Header ||
+        !(Parent->Header->Flags & FR_IS_DIRECTORY))
+    {
         return STATUS_INVALID_PARAMETER;
+    }
     if (DiskVolume->IsReadOnly)
         return STATUS_ACCESS_DENIED;
     if ((FileAttributes &
@@ -91,27 +134,26 @@ MasterFileTable::CreateFile(
         return STATUS_INVALID_PARAMETER;
     }
 
-    Status = SplitAndResolveParent(
-        Query,
-        TRUE,
-        &Parent,
-        &Name,
-        &NameLength);
+    Status = NtfsValidateComponentName(Name,
+                                       NameLength);
     if (!NT_SUCCESS(Status))
         goto Done;
 
 
-    Status = ParentIndex.FindNextFile(
-        Parent,
-        Name,
-        &ExistingReference);
-    if (NT_SUCCESS(Status))
+    if (!NameKnownMissing)
     {
-        Status = STATUS_OBJECT_NAME_COLLISION;
-        goto Done;
+        Status = ParentIndex.FindNextFile(
+            Parent,
+            Name,
+            &ExistingReference);
+        if (NT_SUCCESS(Status))
+        {
+            Status = STATUS_OBJECT_NAME_COLLISION;
+            goto Done;
+        }
+        if (Status != STATUS_NOT_FOUND)
+            goto Done;
     }
-    if (Status != STATUS_NOT_FOUND)
-        goto Done;
 
     /* Windows marks only new ordinary files as unarchived content. */
     if (FileAttributes == 0 && !IsDirectory)
@@ -170,6 +212,5 @@ Rollback:
 
 Done:
     delete NewFile;
-    delete Parent;
     return Status;
 }

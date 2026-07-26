@@ -697,6 +697,23 @@ NtfsMasterFileTableCreateFile(
     _Out_ PNtfsFileRecord* File);
 
 /*
+ * Creates one entry in a directory whose record the caller already holds.
+ * Name is one counted path component. NameKnownMissing may be TRUE only when
+ * the caller has just checked the same parent while serializing namespace
+ * changes. The parent record is updated in place and remains caller-owned.
+ */
+NTSTATUS
+NtfsMasterFileTableCreateFileInDirectory(
+    _In_ PNtfsMasterFileTable Mft,
+    _In_ PNtfsFileRecord Parent,
+    _In_reads_(NameLength) PWCHAR Name,
+    _In_ ULONG NameLength,
+    _In_ BOOLEAN IsDirectory,
+    _In_ ULONG FileAttributes,
+    _In_ BOOLEAN NameKnownMissing,
+    _Out_ PNtfsFileRecord* File);
+
+/*
  * Removes one name at a counted UTF-16 path. RemoveDirectory selects
  * Win32 RemoveDirectory semantics: it deletes only empty directories,
  * while FALSE deletes only ordinary files. Dropping the last name
