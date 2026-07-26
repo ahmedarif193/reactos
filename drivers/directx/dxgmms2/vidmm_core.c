@@ -28,6 +28,50 @@ Dxgmms2VidMmAlignUp(
     return TRUE;
 }
 
+/*
+ * A placement record.  The pre-allocated pool is the fast path; when it is
+ * empty the core allocates one, because a full record pool is a property of
+ * this bookkeeping and must never be reported as a full segment — the caller
+ * would then evict from a segment that has space, or fail with space free
+ * elsewhere.
+ */
+static PDXGMMS2_VIDMM_RANGE
+Dxgmms2VidMmAcquireRange(
+    _Inout_ PDXGMMS2_VIDMM_CORE Core)
+{
+    PDXGMMS2_VIDMM_RANGE Range;
+
+    if (!IsListEmpty(&Core->FreeRangeList))
+    {
+        Range = CONTAINING_RECORD(RemoveHeadList(&Core->FreeRangeList), DXGMMS2_VIDMM_RANGE, Entry);
+        Range->Overflow = FALSE;
+        return Range;
+    }
+    Range = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Range), DXGMMS2_VIDMM_RANGE_TAG);
+    if (Range == NULL)
+        return NULL;
+    RtlZeroMemory(Range, sizeof(*Range));
+    Range->Overflow = TRUE;
+    Core->OverflowRangeCount++;
+    return Range;
+}
+
+static VOID
+Dxgmms2VidMmReleaseRange(
+    _Inout_ PDXGMMS2_VIDMM_CORE Core,
+    _Inout_ PDXGMMS2_VIDMM_RANGE Range)
+{
+    if (Range->Overflow)
+    {
+        ASSERT(Core->OverflowRangeCount != 0);
+        Core->OverflowRangeCount--;
+        ExFreePoolWithTag(Range, DXGMMS2_VIDMM_RANGE_TAG);
+        return;
+    }
+    RtlZeroMemory(Range, sizeof(*Range));
+    InsertTailList(&Core->FreeRangeList, &Range->Entry);
+}
+
 static PDXGMMS2_VIDMM_SEGMENT
 Dxgmms2VidMmSegment(
     _In_ PDXGMMS2_VIDMM_CORE Core,
@@ -108,8 +152,7 @@ Dxgmms2VidMmCoreStop(
             PLIST_ENTRY Entry = RemoveHeadList(&Segment->RangeList);
             PDXGMMS2_VIDMM_RANGE Range = CONTAINING_RECORD(Entry, DXGMMS2_VIDMM_RANGE, Entry);
 
-            RtlZeroMemory(Range, sizeof(*Range));
-            InsertTailList(&Core->FreeRangeList, &Range->Entry);
+            Dxgmms2VidMmReleaseRange(Core, Range);
         }
         Segment->UsedSize = 0;
         Segment->BumpOffset = 0;
@@ -186,19 +229,6 @@ Dxgmms2VidMmCoreReserve(
         return STATUS_NO_MEMORY;
     if (Segment->UsedSize > Limit || AlignedSize > Limit - Segment->UsedSize)
         return STATUS_NO_MEMORY;
-    /*
-     * An exhausted range pool means no segment can take another placement
-     * right now.  Report it as a space failure so the caller's eviction pass
-     * is the recovery — evicting anywhere returns a record here — but say so
-     * out loud, because "no memory" from a full metadata pool is a different
-     * condition from a full segment and should not be diagnosed as one.
-     */
-    if (IsListEmpty(&Core->FreeRangeList))
-    {
-        DPRINT1("Dxgmms2VidMmCoreReserve: placement-record pool exhausted (%lu live)\n", Core->LiveRangeCount);
-        return STATUS_NO_MEMORY;
-    }
-
     if (Dxgmms2VidMmAlignUp(Segment->BumpOffset, Info->Alignment, &Aligned) &&
         Aligned <= Limit && AlignedSize <= Limit - Aligned)
     {
@@ -241,7 +271,15 @@ Dxgmms2VidMmCoreReserve(
     if (!Found)
         return STATUS_NO_MEMORY;
 
-    Range = CONTAINING_RECORD(RemoveHeadList(&Core->FreeRangeList), DXGMMS2_VIDMM_RANGE, Entry);
+    Range = Dxgmms2VidMmAcquireRange(Core);
+    if (Range == NULL)
+    {
+        /* Only a genuine system pool failure reaches here, and it is not a
+         * segment-space condition: say so rather than reporting NO_MEMORY,
+         * which would send the caller off to evict something. */
+        DPRINT1("Dxgmms2VidMmCoreReserve: no pool for a placement record (%lu live, %lu overflow)\n", Core->LiveRangeCount, Core->OverflowRangeCount);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
     Range->Offset = Candidate;
     Range->AlignedSize = AlignedSize;
     Range->OwnerCookie = Info->OwnerCookie;
@@ -296,8 +334,7 @@ Dxgmms2VidMmCoreRelease(
         Segment->UsedSize -= Range->AlignedSize;
         Segment->RangeCount--;
         Core->LiveRangeCount--;
-        RtlZeroMemory(Range, sizeof(*Range));
-        InsertTailList(&Core->FreeRangeList, &Range->Entry);
+        Dxgmms2VidMmReleaseRange(Core, Range);
         return STATUS_SUCCESS;
     }
     return STATUS_NOT_FOUND;
@@ -417,8 +454,7 @@ Dxgmms2VidMmCoreReleaseAll(
             Segment->UsedSize -= Range->AlignedSize;
             Segment->RangeCount--;
             Core->LiveRangeCount--;
-            RtlZeroMemory(Range, sizeof(*Range));
-            InsertTailList(&Core->FreeRangeList, &Range->Entry);
+            Dxgmms2VidMmReleaseRange(Core, Range);
         }
     }
     return Count;
