@@ -238,11 +238,11 @@ endif()
 ## ReactOSImg
 # Create the file list
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "")
-# Unlike the ISO path lists, fatten -addfiles treats bare entries as
+# Unlike the ISO path lists, the preinstall image importers treat bare entries as
 # in-image directories, so do not prepend the host-side empty path here.
 
 set(_preinstall_boot_partition_file ${CMAKE_CURRENT_BINARY_DIR}/partition.boot.fat)
-set(_preinstall_system_partition_file ${CMAKE_CURRENT_BINARY_DIR}/partition.exfat)
+set(_preinstall_system_partition_file ${CMAKE_CURRENT_BINARY_DIR}/partition.ntfs)
 set(_preinstall_image_file ${REACTOS_BINARY_DIR}/ReactOS.img)
 set(_preinstall_vhd_file ${REACTOS_BINARY_DIR}/ReactOS.vhd)
 # Keep ROSBOOT as an active MBR ESP. UEFI discovers it by type, while the BIOS
@@ -257,7 +257,7 @@ add_allusers_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "Prof
 add_user_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "Profiles" "Default User")
 
 # Disk image size configuration (in MB)
-set(_preinstall_image_size_default 512)
+set(_preinstall_image_size_default 1024)
 set(PREINSTALL_IMAGE_SIZE_MB ${_preinstall_image_size_default} CACHE STRING "Pre-installed disk image size in MB")
 set(_rosprofiler_package_pdbs_default OFF)
 if(MSVC AND (CMAKE_BUILD_TYPE MATCHES "^[Dd]ebug$" OR
@@ -272,7 +272,7 @@ set(ROSPROFILER_IMAGE_PDB_BUDGET_MB 160 CACHE STRING
 set(ROSPROFILER_IMAGE_FREE_RESERVE_MB 32 CACHE STRING
     "Free-space reserve kept after adding profiler PDBs")
 set(ROSPROFILER_IMAGE_FS_OVERHEAD_MB 4 CACHE STRING
-    "Conservative FAT and directory overhead reserved for profiler symbols")
+    "Conservative filesystem and directory overhead reserved for profiler symbols")
 set(_rosprofiler_image_symbol_dir
     ${CMAKE_CURRENT_BINARY_DIR}/rosprofiler-image-symbols)
 set(_rosprofiler_embedded_rossym OFF)
@@ -286,14 +286,17 @@ else()
 endif()
 file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst
      "reactos/symbols=${_rosprofiler_image_symbol_dir}\n")
-# Keep a small FAT volume for BIOS/UEFI boot files and use exFAT for ReactOS.
+# Keep a small FAT volume for BIOS/UEFI boot files and use NTFS for ReactOS.
 # Both partitions start on 1-MB boundaries.
 set(_preinstall_boot_partition_size_mb 64)
 math(EXPR _preinstall_boot_partition_sectors "${_preinstall_boot_partition_size_mb} * 2048")
 math(EXPR _preinstall_system_partition_start "(1 + ${_preinstall_boot_partition_size_mb}) * 2048")
+# Keep the boot-tested 4-KB NTFS allocation unit instead of the formatter's
+# automatic 1-KB choice for a volume of this size.
+set(_preinstall_ntfs_sectors_per_cluster 8)
 math(EXPR _preinstall_system_partition_size_mb "${PREINSTALL_IMAGE_SIZE_MB} - 1 - ${_preinstall_boot_partition_size_mb}")
 if(_preinstall_system_partition_size_mb LESS 1)
-    message(FATAL_ERROR "PREINSTALL_IMAGE_SIZE_MB must leave room for the 1-MB alignment gap, the ${_preinstall_boot_partition_size_mb}-MB boot partition, and the exFAT system partition")
+    message(FATAL_ERROR "PREINSTALL_IMAGE_SIZE_MB must leave room for the 1-MB alignment gap, the ${_preinstall_boot_partition_size_mb}-MB boot partition, and the NTFS system partition")
 endif()
 math(EXPR _preinstall_system_partition_sectors "${_preinstall_system_partition_size_mb} * 2048")
 
@@ -302,7 +305,7 @@ math(EXPR _preinstall_system_partition_sectors "${_preinstall_system_partition_s
 set(_preinstall_boot_partition_options)
 set(_preinstall_boot_partition_files
     -add ${REACTOS_SOURCE_DIR}/boot/bootdata/preinstall.ini freeldr.ini)
-set(_preinstall_partition_deps native-fatten)
+set(_preinstall_partition_deps native-fatten native-ntfsimg)
 set(_reactosimg_mbr_args)
 set(_reactosimg_deps native-mkdiskimg)
 if(FREELDR_HAS_BIOS_BOOT)
@@ -344,9 +347,17 @@ add_custom_target(preinstall_partition
         -format ${_preinstall_boot_partition_sectors} fat32 ROSBOOT
         ${_preinstall_boot_partition_options}
         ${_preinstall_boot_partition_files}
-    COMMAND native-fatten ${_preinstall_system_partition_file}
-        -format ${_preinstall_system_partition_sectors} exfat ReactOS
-        -addfiles ${CMAKE_CURRENT_BINARY_DIR}/preinstall.$<CONFIG>.lst
+    COMMAND native-ntfsimg
+        --format
+        ${_preinstall_system_partition_file}
+        ${_preinstall_system_partition_sectors}
+        ${_preinstall_system_partition_start}
+        ${_preinstall_ntfs_sectors_per_cluster}
+        ReactOS
+    COMMAND native-ntfsimg
+        --addfiles
+        ${_preinstall_system_partition_file}
+        ${CMAKE_CURRENT_BINARY_DIR}/preinstall.$<CONFIG>.lst
     DEPENDS ${_preinstall_partition_deps}
     VERBATIM)
 
