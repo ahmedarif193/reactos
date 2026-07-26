@@ -4113,6 +4113,88 @@ DxgkCbQueryServices(
      * miniports that need these services will fall back gracefully.
      */
     UNREFERENCED_PARAMETER(DeviceHandle);
+
+    /*
+     * DxgkServicesBusInterface is how a miniport reaches BUS_INTERFACE_STANDARD,
+     * and that interface carries GetDmaAdapter.  Refusing it does not degrade a
+     * driver gracefully: without a DMA adapter it cannot allocate a common
+     * buffer, so a VirtIO miniport cannot build the virtqueue rings its device
+     * needs before it will do anything at all.  It gives up and returns
+     * STATUS_INSUFFICIENT_RESOURCES, which is what "I could not get memory the
+     * device can reach" looks like from the outside.
+     *
+     * The interface belongs to the PCI bus driver, so it is fetched from the
+     * device stack rather than invented here -- the miniport gets the same
+     * BUS_INTERFACE_STANDARD any other driver on this stack would get.
+     */
+    if (ServicesType == 1 /* DxgkServicesBusInterface */ && Interface != NULL)
+    {
+        PDXGKRNL_ADAPTER Adapter = DxgkpHandleToAdapter(DeviceHandle);
+        PBUS_INTERFACE_STANDARD BusInterface = (PBUS_INTERFACE_STANDARD)Interface;
+        KEVENT Event;
+        IO_STATUS_BLOCK IoStatus;
+        PIRP Irp;
+        PIO_STACK_LOCATION Stack;
+        PDEVICE_OBJECT TargetDevice;
+        NTSTATUS Status;
+
+        if (Adapter == NULL)
+            return STATUS_INVALID_HANDLE;
+        if (Adapter->PhysicalDeviceObject == NULL)
+        {
+            ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+            return STATUS_NOT_SUPPORTED;
+        }
+
+        TargetDevice = IoGetAttachedDeviceReference(Adapter->PhysicalDeviceObject);
+        KeInitializeEvent(&Event, NotificationEvent, FALSE);
+        Irp = IoBuildSynchronousFsdRequest(IRP_MJ_PNP, TargetDevice, NULL, 0, NULL,
+                                           &Event, &IoStatus);
+        if (Irp == NULL)
+        {
+            ObDereferenceObject(TargetDevice);
+            ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        /* A PnP IRP must start as NOT_SUPPORTED: a driver that does not handle
+         * it leaves the status alone, and the default of STATUS_SUCCESS would
+         * be read as a filled-in interface that nobody wrote. */
+        Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
+        Stack = IoGetNextIrpStackLocation(Irp);
+        Stack->MajorFunction = IRP_MJ_PNP;
+        Stack->MinorFunction = IRP_MN_QUERY_INTERFACE;
+        /* Defined here rather than pulled from <wdmguid.h>: that header is
+         * already included further up without INITGUID, so its guard makes a
+         * later INITGUID include a no-op and the symbol never gets a body. */
+        static const GUID DxgkpBusInterfaceStandardGuid =
+            { 0x496B8280, 0x6F25, 0x11D0, { 0xBE, 0xAF, 0x08, 0x00, 0x2B, 0xE2, 0x09, 0x2F } };
+
+        Stack->Parameters.QueryInterface.InterfaceType = &DxgkpBusInterfaceStandardGuid;
+        Stack->Parameters.QueryInterface.Size = sizeof(BUS_INTERFACE_STANDARD);
+        Stack->Parameters.QueryInterface.Version = 1;
+        Stack->Parameters.QueryInterface.Interface = (PINTERFACE)BusInterface;
+        Stack->Parameters.QueryInterface.InterfaceSpecificData = NULL;
+
+        Status = IoCallDriver(TargetDevice, Irp);
+        if (Status == STATUS_PENDING)
+        {
+            KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+            Status = IoStatus.Status;
+        }
+        ObDereferenceObject(TargetDevice);
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+
+        if (!NT_SUCCESS(Status))
+        {
+            DXGKRNL_ERR("DxgkCbQueryServices: BUS_INTERFACE_STANDARD refused 0x%08lX\n", Status);
+            return Status;
+        }
+        DXGKRNL_ERR("DxgkCbQueryServices: BUS_INTERFACE_STANDARD acquired, GetDmaAdapter=%p\n",
+                    BusInterface->GetDmaAdapter);
+        return STATUS_SUCCESS;
+    }
+
     UNREFERENCED_PARAMETER(Interface);
 
     return STATUS_NOT_SUPPORTED;
