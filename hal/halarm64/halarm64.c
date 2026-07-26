@@ -5183,6 +5183,104 @@ HalGetBusData(
  *     the necessary memory barriers.
  *   - The full 4KB PCIe extended configuration space is accessible.
  */
+/*
+ * Cache of ACPI _PRT interrupt-routing answers.
+ *
+ * The fix-up below runs on every full-header config read, and a display
+ * miniport issues hundreds of those during StartDevice alone.  Each one was
+ * walking the ACPI namespace to evaluate _PRT, which dominated the cost of a
+ * config read -- around a millisecond each, turning driver start-up into
+ * seconds of nothing but interrupt-routing lookups it had already done.
+ *
+ * PCI interrupt routing is fixed by firmware before the OS runs and cannot
+ * change while it is running, so the same (segment, bus, device, function, pin)
+ * always resolves to the same GSI.  Caching it is not an optimisation that
+ * risks staleness; there is nothing that could go stale.
+ *
+ * Negative answers are cached too.  A device with no _PRT entry is the case
+ * that costs the most -- the walk searches the whole table and finds nothing --
+ * and repeating it is pure waste.
+ */
+#define HALP_PRT_CACHE_MAX 64
+
+typedef struct _HALP_PRT_CACHE_ENTRY
+{
+    USHORT Segment;
+    UCHAR  Bus;
+    UCHAR  Device;
+    UCHAR  Function;
+    UCHAR  Pin;
+    BOOLEAN Valid;      /* this slot holds an answer */
+    BOOLEAN Found;      /* ...and that answer is "there is a _PRT entry" */
+    ULONG  Gsi;
+    UCHAR  Polarity;
+    UCHAR  Trigger;
+} HALP_PRT_CACHE_ENTRY;
+
+static HALP_PRT_CACHE_ENTRY HalpArm64PrtCache[HALP_PRT_CACHE_MAX];
+static ULONG HalpArm64PrtCacheCount;
+
+static BOOLEAN
+HalpArm64QueryPciRouteCached(
+    _In_ USHORT Segment,
+    _In_ UCHAR Bus,
+    _In_ UCHAR Device,
+    _In_ UCHAR Function,
+    _In_ UCHAR Pin,
+    _Out_ PULONG Gsi,
+    _Out_ PUCHAR Polarity,
+    _Out_ PUCHAR Trigger)
+{
+    HALP_PRT_CACHE_ENTRY *Entry;
+    BOOLEAN Found;
+    ULONG Index;
+
+    for (Index = 0; Index < HalpArm64PrtCacheCount; ++Index)
+    {
+        Entry = &HalpArm64PrtCache[Index];
+        if (Entry->Valid && Entry->Segment == Segment && Entry->Bus == Bus &&
+            Entry->Device == Device && Entry->Function == Function && Entry->Pin == Pin)
+        {
+            if (!Entry->Found)
+                return FALSE;
+            *Gsi = Entry->Gsi;
+            *Polarity = Entry->Polarity;
+            *Trigger = Entry->Trigger;
+            return TRUE;
+        }
+    }
+
+    Found = HalpArm64PciRouteQueryCallback(Segment, Bus, Device, Function, Pin,
+                                           Gsi, Polarity, Trigger);
+
+    /*
+     * Record it if there is room.  A full cache simply stops caching rather
+     * than evicting: the table is sized well past the number of interrupt-using
+     * PCI functions any real machine presents, so reaching the end means
+     * something is enumerating far more than expected and silently discarding
+     * earlier answers would only hide that.
+     */
+    if (HalpArm64PrtCacheCount < HALP_PRT_CACHE_MAX)
+    {
+        Entry = &HalpArm64PrtCache[HalpArm64PrtCacheCount];
+        Entry->Segment = Segment;
+        Entry->Bus = Bus;
+        Entry->Device = Device;
+        Entry->Function = Function;
+        Entry->Pin = Pin;
+        Entry->Found = Found;
+        if (Found)
+        {
+            Entry->Gsi = *Gsi;
+            Entry->Polarity = *Polarity;
+            Entry->Trigger = *Trigger;
+        }
+        Entry->Valid = TRUE;
+        HalpArm64PrtCacheCount++;
+    }
+    return Found;
+}
+
 ULONG
 NTAPI
 HalGetPciConfigDataByOffset(
@@ -5268,8 +5366,9 @@ HalGetPciConfigDataByOffset(
                 RouteSegment = (Segment == HALP_ACPI_SEGMENT_ANY) ?
                     HalpArm64ResolvePciSegment((UCHAR)BusNumber) : Segment;
 
-                /* Query ACPI _PRT for the correct GSI */
-                if (HalpArm64PciRouteQueryCallback(
+                /* Query ACPI _PRT for the correct GSI, answering from the
+                 * cache when this function's routing has been resolved before. */
+                if (HalpArm64QueryPciRouteCached(
                         RouteSegment,
                         (UCHAR)BusNumber,
                         (UCHAR)PciSlot.u.bits.DeviceNumber,

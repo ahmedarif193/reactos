@@ -948,22 +948,43 @@ typedef struct _DXGK_MAPMEM_ENTRY
     PMDL       Mdl;
 } DXGK_MAPMEM_ENTRY, *PDXGK_MAPMEM_ENTRY;
 
+/*
+ * Timing for the traces below.
+ *
+ * KeQueryInterruptTime only advances on a clock interrupt -- a 1 ms tick here --
+ * so anything shorter than that measures as either zero or exactly one tick.
+ * Used for short operations it does not report a duration at all: it reports
+ * whether a tick happened to land inside the call.  That is how every one of
+ * six "slow config read" warnings came out at exactly 1000 us with no spread,
+ * which was read as a millisecond-long PCI read and is nothing of the kind.
+ *
+ * The performance counter runs off the ARM64 generic timer and has resolution
+ * far below a microsecond, so a duration measured with it is a duration.
+ */
 FORCEINLINE ULONGLONG
 DxgkpTraceNow100ns(VOID)
 {
-    return KeQueryInterruptTime();
+    LARGE_INTEGER Counter;
+
+    Counter = KeQueryPerformanceCounter(NULL);
+    return (ULONGLONG)Counter.QuadPart;
 }
 
 FORCEINLINE ULONGLONG
 DxgkpTraceElapsedUs(
-    _In_ ULONGLONG Start100ns)
+    _In_ ULONGLONG StartTicks)
 {
-    ULONGLONG End100ns = KeQueryInterruptTime();
+    LARGE_INTEGER Frequency;
+    LARGE_INTEGER Counter;
+    ULONGLONG EndTicks;
 
-    if (End100ns <= Start100ns)
+    Counter = KeQueryPerformanceCounter(&Frequency);
+    EndTicks = (ULONGLONG)Counter.QuadPart;
+
+    if (EndTicks <= StartTicks || Frequency.QuadPart <= 0)
         return 0;
 
-    return (End100ns - Start100ns) / 10ULL;
+    return ((EndTicks - StartTicks) * 1000000ULL) / (ULONGLONG)Frequency.QuadPart;
 }
 
 FORCEINLINE ULONGLONG
