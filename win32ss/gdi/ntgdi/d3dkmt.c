@@ -174,6 +174,9 @@ D3DKMTEnumAdapters3(
     _Inout_ struct _D3DKMT_ENUMADAPTERS3 *pData);
 
 NTSTATUS APIENTRY D3DKMTCreateKeyedMutex(_Inout_ D3DKMT_CREATEKEYEDMUTEX *pData);
+NTSTATUS APIENTRY D3DKMTCreateHwQueue(_Inout_ struct _D3DKMT_CREATEHWQUEUE *pData);
+NTSTATUS APIENTRY D3DKMTDestroyHwQueue(_In_ CONST struct _D3DKMT_DESTROYHWQUEUE *pData);
+NTSTATUS APIENTRY D3DKMTSubmitCommandToHwQueue(_In_ CONST struct _D3DKMT_SUBMITCOMMANDTOHWQUEUE *pData);
 NTSTATUS APIENTRY D3DKMTRegisterTrimNotification(_Inout_ struct _D3DKMT_REGISTERTRIMNOTIFICATION *pData);
 NTSTATUS APIENTRY D3DKMTUnregisterTrimNotification(_Inout_ struct _D3DKMT_UNREGISTERTRIMNOTIFICATION *pData);
 NTSTATUS APIENTRY D3DKMTCreateKeyedMutex2(_Inout_ struct _D3DKMT_CREATEKEYEDMUTEX2 *pData);
@@ -1246,24 +1249,33 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDICreateHwQueue(_Inout_ struct _D3DKMT_CREATEHWQUEUE* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return D3DKMTCreateHwQueue(unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIDestroyHwQueue(_In_ const struct _D3DKMT_DESTROYHWQUEUE* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return D3DKMTDestroyHwQueue(unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDISubmitCommandToHwQueue(_In_ const struct _D3DKMT_SUBMITCOMMANDTOHWQUEUE* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return D3DKMTSubmitCommandToHwQueue(unnamedParam1);
 }
 
 NTSTATUS
