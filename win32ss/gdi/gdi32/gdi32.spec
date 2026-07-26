@@ -616,13 +616,13 @@
 @ stdcall -version=0x600+ D3DKMTCloseAdapter(ptr) NtGdiDdDDICloseAdapter
 @ stdcall -version=0x600+ D3DKMTCreateAllocation(ptr) NtGdiDdDDICreateAllocation
 @ stdcall -version=0x600+ D3DKMTCreateContext(ptr) NtGdiDdDDICreateContext
-@ stdcall -version=0x600+ D3DKMTCreateDCFromMemory(ptr) NtGdiDdDDICreateDCFromMemory
+@ stdcall -version=0x600+ D3DKMTCreateDCFromMemory(ptr)
 @ stdcall -version=0x600+ D3DKMTCreateDevice(ptr) NtGdiDdDDICreateDevice
 @ stdcall -version=0x600+ D3DKMTCreateOverlay(ptr) NtGdiDdDDICreateOverlay
 @ stdcall -version=0x600+ D3DKMTCreateSynchronizationObject(ptr) NtGdiDdDDICreateSynchronizationObject
 @ stdcall -version=0x600+ D3DKMTDestroyAllocation(ptr) NtGdiDdDDIDestroyAllocation
 @ stdcall -version=0x600+ D3DKMTDestroyContext(ptr) NtGdiDdDDIDestroyContext
-@ stdcall -version=0x600+ D3DKMTDestroyDCFromMemory(ptr) NtGdiDdDDIDestroyDCFromMemory
+@ stdcall -version=0x600+ D3DKMTDestroyDCFromMemory(ptr)
 @ stdcall -version=0x600+ D3DKMTDestroyDevice(ptr) NtGdiDdDDIDestroyDevice
 @ stdcall -version=0x600+ D3DKMTDestroyOverlay(ptr) NtGdiDdDDIDestroyOverlay
 @ stdcall -version=0x600+ D3DKMTDestroySynchronizationObject(ptr) NtGdiDdDDIDestroySynchronizationObject
