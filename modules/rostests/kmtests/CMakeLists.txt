@@ -49,6 +49,27 @@ list(APPEND KMTEST_DRV_SOURCE
 
     directx/DxgkDeviceWork.c
     directx/DxgkHotPlugWork.c
+    directx/DxgkGpuVaAddress.c
+    directx/DxgkGpuVaPageTable.c
+    directx/DxgkGpuVaPte.c
+    directx/DxgkFenceOrdering.c
+    directx/DxgkMonitoredFence.c
+    directx/DxgkPeriodicFence.c
+    directx/DxgkPagingOperation.c
+    directx/DxgkPagingMultipass.c
+    directx/DxgkResidencyBudget.c
+    directx/DxgkResidencyReference.c
+    directx/DxgkOfferReclaim.c
+    directx/DxgkAllocationList.c
+    directx/DxgkPatchLocation.c
+    directx/DxgkDmaRing.c
+    directx/DxgkVidPnTopology.c
+    directx/DxgkVidPnModeSet.c
+    directx/DxgkFlipQueue.c
+    directx/DxgkHandleTable.c
+    directx/DxgkAdapterCaps.c
+    directx/DxgkNodeAffinity.c
+    directx/DxgkTdrPolicy.c
     directx/DxgkContextSync.c
     directx/DxgkPresentQueue.c
     directx/DxgkSyncWait.c
@@ -182,6 +203,13 @@ list(APPEND KMTEST_DRV_SOURCE
     win32ss/CddDisplay.c
     ${COMMON_SOURCE}
 
+    ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/gpuva_core.c
+    ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/fence_core.c
+    ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/dma_core.c
+    ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/residency_core.c
+    ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/paging_core.c
+    ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/display_core.c
+    ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/object_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/device_work_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/present_queue_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/submit_reservation_core.c

@@ -10,6 +10,27 @@ KMT_TESTFUNC Test_CddDisplay;
 KMT_TESTFUNC Test_CmSecurity;
 KMT_TESTFUNC Test_DxgkDeviceWork;
 KMT_TESTFUNC Test_DxgkHotPlugWork;
+KMT_TESTFUNC Test_DxgkGpuVaAddress;
+KMT_TESTFUNC Test_DxgkGpuVaPageTable;
+KMT_TESTFUNC Test_DxgkGpuVaPte;
+KMT_TESTFUNC Test_DxgkFenceOrdering;
+KMT_TESTFUNC Test_DxgkMonitoredFence;
+KMT_TESTFUNC Test_DxgkPeriodicFence;
+KMT_TESTFUNC Test_DxgkPagingOperation;
+KMT_TESTFUNC Test_DxgkPagingMultipass;
+KMT_TESTFUNC Test_DxgkResidencyBudget;
+KMT_TESTFUNC Test_DxgkResidencyReference;
+KMT_TESTFUNC Test_DxgkOfferReclaim;
+KMT_TESTFUNC Test_DxgkAllocationList;
+KMT_TESTFUNC Test_DxgkPatchLocation;
+KMT_TESTFUNC Test_DxgkDmaRing;
+KMT_TESTFUNC Test_DxgkVidPnTopology;
+KMT_TESTFUNC Test_DxgkVidPnModeSet;
+KMT_TESTFUNC Test_DxgkFlipQueue;
+KMT_TESTFUNC Test_DxgkHandleTable;
+KMT_TESTFUNC Test_DxgkAdapterCaps;
+KMT_TESTFUNC Test_DxgkNodeAffinity;
+KMT_TESTFUNC Test_DxgkTdrPolicy;
 KMT_TESTFUNC Test_DxgkContextSync;
 KMT_TESTFUNC Test_DxgkPresentQueue;
 KMT_TESTFUNC Test_DxgkSyncWait;
@@ -198,6 +219,27 @@ const KMT_TEST TestList[] =
     { "CmSecurity",                         Test_CmSecurity },
     { "DxgkDeviceWork",                    Test_DxgkDeviceWork },
     { "DxgkHotPlugWork",                   Test_DxgkHotPlugWork },
+    { "DxgkGpuVaAddress",                   Test_DxgkGpuVaAddress },
+    { "DxgkGpuVaPageTable",                 Test_DxgkGpuVaPageTable },
+    { "DxgkGpuVaPte",                       Test_DxgkGpuVaPte },
+    { "DxgkFenceOrdering",                  Test_DxgkFenceOrdering },
+    { "DxgkMonitoredFence",                 Test_DxgkMonitoredFence },
+    { "DxgkPeriodicFence",                  Test_DxgkPeriodicFence },
+    { "DxgkPagingOperation",                Test_DxgkPagingOperation },
+    { "DxgkPagingMultipass",                Test_DxgkPagingMultipass },
+    { "DxgkResidencyBudget",                Test_DxgkResidencyBudget },
+    { "DxgkResidencyReference",             Test_DxgkResidencyReference },
+    { "DxgkOfferReclaim",                   Test_DxgkOfferReclaim },
+    { "DxgkAllocationList",                 Test_DxgkAllocationList },
+    { "DxgkPatchLocation",                  Test_DxgkPatchLocation },
+    { "DxgkDmaRing",                        Test_DxgkDmaRing },
+    { "DxgkVidPnTopology",                  Test_DxgkVidPnTopology },
+    { "DxgkVidPnModeSet",                   Test_DxgkVidPnModeSet },
+    { "DxgkFlipQueue",                      Test_DxgkFlipQueue },
+    { "DxgkHandleTable",                    Test_DxgkHandleTable },
+    { "DxgkAdapterCaps",                    Test_DxgkAdapterCaps },
+    { "DxgkNodeAffinity",                   Test_DxgkNodeAffinity },
+    { "DxgkTdrPolicy",                      Test_DxgkTdrPolicy },
     { "DxgkContextSync",                   Test_DxgkContextSync },
     { "DxgkPresentQueue",                  Test_DxgkPresentQueue },
     { "DxgkSyncWait",                      Test_DxgkSyncWait },
