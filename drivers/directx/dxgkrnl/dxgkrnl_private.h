@@ -577,6 +577,11 @@ struct _DXGKRNL_ADAPTER
     volatile LONG               Mms2TimelineCallsOpen;
     volatile LONG               Mms2TimelineActiveCalls;
     DXGMMS2_CONTEXT_STREAM_INTERFACE_V1 Mms2ContextStreamInterface;
+
+    /* dxgmms2 owns the scheduler run queues; this is the typed contract
+     * dxgkrnl admits packets through and claims dispatches from. */
+    DXGMMS2_SCHEDULER_INTERFACE_V1 Mms2SchedulerInterface;
+    volatile LONG               Mms2SchedulerValid;
     volatile LONG               Mms2ContextStreamValid;
 
     /* Serializes start against stop, remove, and boot-display handover. */

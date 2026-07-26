@@ -12,7 +12,7 @@
 
 typedef struct _DXGKP_MMS2_PROVIDER_BUFFER
 {
-    DXGMMS2_PROVIDER_INTERFACE_V3 Interface;
+    DXGMMS2_PROVIDER_INTERFACE_V4 Interface;
     ULONGLONG Canary;
 } DXGKP_MMS2_PROVIDER_BUFFER;
 
@@ -38,12 +38,14 @@ C_ASSERT(FIELD_OFFSET(DXGMMS2_PROVIDER_INTERFACE_V3, QueryContextStreamInterface
 C_ASSERT(FIELD_OFFSET(DXGMMS2_CONTEXT_STREAM_INTERFACE_V1, AdapterHandle) == 16);
 C_ASSERT(FIELD_OFFSET(DXGMMS2_CONTEXT_STREAM_INTERFACE_V1, QueryContextStream) == 112);
 C_ASSERT(FIELD_OFFSET(DXGMMS2_CONTEXT_STREAM_INTERFACE_V1, DrainRetirements) == 120);
-C_ASSERT(FIELD_OFFSET(DXGKP_MMS2_PROVIDER_BUFFER, Canary) == DXGMMS2_PROVIDER_INTERFACE_V3_SIZE);
+C_ASSERT(sizeof(DXGMMS2_PROVIDER_INTERFACE_V4) == 88);
+C_ASSERT(FIELD_OFFSET(DXGMMS2_PROVIDER_INTERFACE_V4, QuerySchedulerInterface) == 80);
+C_ASSERT(FIELD_OFFSET(DXGKP_MMS2_PROVIDER_BUFFER, Canary) == DXGMMS2_PROVIDER_INTERFACE_V4_SIZE);
 C_ASSERT(FIELD_OFFSET(DXGKP_MMS2_START_RESULT_BUFFER, Canary) == DXGMMS2_START_ADAPTER_RESULT_V1_SIZE);
 #endif
 
 static volatile LONG DxgkpMms2ClientState = 0;
-static DXGMMS2_PROVIDER_INTERFACE_V3 DxgkpMms2Provider;
+static DXGMMS2_PROVIDER_INTERFACE_V4 DxgkpMms2Provider;
 static EX_RUNDOWN_REF DxgkpMms2CallRundown;
 
 static BOOLEAN
@@ -111,8 +113,8 @@ DxgkpMms2Initialize(VOID)
     ClientInterface.DereferenceAdapter = DxgkpMms2DereferenceAdapter;
 
     RtlZeroMemory(&ProviderBuffer, sizeof(ProviderBuffer));
-    ProviderBuffer.Interface.Size = DXGMMS2_PROVIDER_INTERFACE_V3_SIZE;
-    ProviderBuffer.Interface.Version = DXGMMS2_ABI_VERSION_3;
+    ProviderBuffer.Interface.Size = DXGMMS2_PROVIDER_INTERFACE_V4_SIZE;
+    ProviderBuffer.Interface.Version = DXGMMS2_ABI_VERSION_4;
     ProviderBuffer.Canary = DXGKP_MMS2_CANARY;
     Status = DxgkMms2Register(&ClientInterface, (PDXGMMS2_PROVIDER_INTERFACE_V1)&ProviderBuffer.Interface);
     if (ProviderBuffer.Canary != DXGKP_MMS2_CANARY)
@@ -126,7 +128,7 @@ DxgkpMms2Initialize(VOID)
         return Status;
     }
 
-    if (ProviderBuffer.Canary != DXGKP_MMS2_CANARY || ProviderBuffer.Interface.Size != DXGMMS2_PROVIDER_INTERFACE_V3_SIZE || ProviderBuffer.Interface.Version != DXGMMS2_ABI_VERSION_3 || ProviderBuffer.Interface.ProviderFlags != 0 || ProviderBuffer.Interface.Reserved != 0 || ProviderBuffer.Interface.RegistrationHandle == NULL || ProviderBuffer.Interface.CreateAdapter == NULL || ProviderBuffer.Interface.StartAdapter == NULL || ProviderBuffer.Interface.BeginStopAdapter == NULL || ProviderBuffer.Interface.CompleteStopAdapter == NULL || ProviderBuffer.Interface.DestroyAdapter == NULL || ProviderBuffer.Interface.QuerySchedulerTimelineInterface == NULL || ProviderBuffer.Interface.QueryContextStreamInterface == NULL)
+    if (ProviderBuffer.Canary != DXGKP_MMS2_CANARY || ProviderBuffer.Interface.Size != DXGMMS2_PROVIDER_INTERFACE_V4_SIZE || ProviderBuffer.Interface.Version != DXGMMS2_ABI_VERSION_4 || ProviderBuffer.Interface.ProviderFlags != 0 || ProviderBuffer.Interface.Reserved != 0 || ProviderBuffer.Interface.RegistrationHandle == NULL || ProviderBuffer.Interface.CreateAdapter == NULL || ProviderBuffer.Interface.StartAdapter == NULL || ProviderBuffer.Interface.BeginStopAdapter == NULL || ProviderBuffer.Interface.CompleteStopAdapter == NULL || ProviderBuffer.Interface.DestroyAdapter == NULL || ProviderBuffer.Interface.QuerySchedulerTimelineInterface == NULL || ProviderBuffer.Interface.QueryContextStreamInterface == NULL || ProviderBuffer.Interface.QuerySchedulerInterface == NULL)
     {
         if (ProviderBuffer.Interface.RegistrationHandle != NULL)
             (VOID)DxgkMms2Unregister(ProviderBuffer.Interface.RegistrationHandle);
@@ -193,6 +195,42 @@ NTSTATUS DxgkpMms2QueryContextStreamInterface(_In_ DXGMMS2_ADAPTER_HANDLE Mms2Ad
     if (Buffer.Interface.Size != DXGMMS2_CONTEXT_STREAM_INTERFACE_V1_SIZE || Buffer.Interface.Version != DXGMMS2_CONTEXT_STREAM_VERSION_1 || Buffer.Interface.InterfaceFlags != 0 || Buffer.Interface.Generation == 0 || Buffer.Interface.AdapterHandle != Mms2Adapter || Buffer.Interface.MaximumQueueDepth < DXGMMS2_CONTEXT_STREAM_DEFAULT_QUEUE_DEPTH || Buffer.Interface.MaximumQueueDepth > DXGMMS2_CONTEXT_STREAM_MAX_QUEUE_DEPTH || Buffer.Interface.MaximumBroadcastContexts == 0 || Buffer.Interface.MaximumBroadcastContexts > DXGMMS2_CONTEXT_STREAM_MAX_BROADCAST_CONTEXTS || Buffer.Interface.CreateContextStream == NULL || Buffer.Interface.DestroyContextStream == NULL || Buffer.Interface.AdmitWork == NULL || Buffer.Interface.AdmitWait == NULL || Buffer.Interface.AdmitSignal == NULL || Buffer.Interface.ResolveWait == NULL || Buffer.Interface.ClaimNextAction == NULL || Buffer.Interface.CommitAction == NULL || Buffer.Interface.CompleteWork == NULL || Buffer.Interface.CancelContextStream == NULL || Buffer.Interface.QueryContextStream == NULL || Buffer.Interface.DrainRetirements == NULL)
         return STATUS_REVISION_MISMATCH;
     *ContextStreamInterface = Buffer.Interface;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS DxgkpMms2QuerySchedulerInterface(_In_ DXGMMS2_ADAPTER_HANDLE Mms2Adapter, _Out_ DXGMMS2_SCHEDULER_INTERFACE_V1 *SchedulerInterface)
+{
+    typedef struct _DXGKP_MMS2_SCHEDULER_BUFFER { DXGMMS2_SCHEDULER_INTERFACE_V1 Interface; ULONGLONG Canary; } DXGKP_MMS2_SCHEDULER_BUFFER;
+    DXGKP_MMS2_SCHEDULER_BUFFER Buffer;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Mms2Adapter == NULL || SchedulerInterface == NULL)
+        return STATUS_INVALID_PARAMETER;
+    RtlZeroMemory(SchedulerInterface, sizeof(*SchedulerInterface));
+    if (!DxgkpMms2AcquireProviderCall())
+        return STATUS_DEVICE_NOT_READY;
+    RtlZeroMemory(&Buffer, sizeof(Buffer));
+    Buffer.Interface.Size = DXGMMS2_SCHEDULER_INTERFACE_V1_SIZE;
+    Buffer.Interface.Version = DXGMMS2_SCHEDULER_VERSION_1;
+    Buffer.Canary = DXGKP_MMS2_CANARY;
+    Status = DxgkpMms2Provider.QuerySchedulerInterface(Mms2Adapter, &Buffer.Interface);
+    DxgkpMms2ReleaseProviderCall();
+    if (Buffer.Canary != DXGKP_MMS2_CANARY)
+        return STATUS_REVISION_MISMATCH;
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Buffer.Interface.Size != DXGMMS2_SCHEDULER_INTERFACE_V1_SIZE || Buffer.Interface.Version != DXGMMS2_SCHEDULER_VERSION_1 ||
+        Buffer.Interface.InterfaceFlags != 0 || Buffer.Interface.SchedulerHandle == NULL ||
+        Buffer.Interface.MaximumEngines == 0 || Buffer.Interface.MaximumEngines > DXGMMS2_SCHEDULER_MAX_ENGINES ||
+        Buffer.Interface.Start == NULL || Buffer.Interface.AdmitPacket == NULL || Buffer.Interface.ClaimNextPacket == NULL ||
+        Buffer.Interface.PublishDispatch == NULL || Buffer.Interface.CompleteDispatch == NULL ||
+        Buffer.Interface.NotifyCompletion == NULL || Buffer.Interface.DrainRetirements == NULL ||
+        Buffer.Interface.CancelOwnerPackets == NULL || Buffer.Interface.AbortAllPackets == NULL ||
+        Buffer.Interface.SetAdmission == NULL || Buffer.Interface.QueryEngineStatus == NULL ||
+        Buffer.Interface.SetEngineState == NULL || Buffer.Interface.IsIdle == NULL)
+        return STATUS_REVISION_MISMATCH;
+    *SchedulerInterface = Buffer.Interface;
     return STATUS_SUCCESS;
 }
 

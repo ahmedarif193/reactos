@@ -96,6 +96,7 @@ Dxgmms2CreateAdapter(_In_ DXGMMS2_REGISTRATION_HANDLE Registration, _In_ const D
     ExInitializeRundownProtection(&Context->RundownRef);
     Dxgmms2TimelineInitialize(&Context->Timeline);
     Dxgmms2ContextStreamManagerInitialize(&Context->ContextStreamManager);
+    Dxgmms2SchedulerInitializeContext(Context);
 
     Dxgmms2AcquireMutex(&Dxgmms2GlobalMutex);
     RegistrationContext = Dxgmms2ActiveRegistration;
@@ -141,6 +142,7 @@ Dxgmms2StartAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _In_ const DXGMMS2_STAR
     LONG State;
     NTSTATUS ManagerStatus;
     NTSTATUS TimelineStatus;
+    NTSTATUS SchedulerStatus;
 
     PAGED_CODE();
     if (Info == NULL || Result == NULL)
@@ -212,6 +214,21 @@ Dxgmms2StartAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _In_ const DXGMMS2_STAR
     Context->SegmentCount = Info->SegmentCount;
     Context->AdapterFlags = Info->AdapterFlags;
     Context->SchedulingCaps = Info->SchedulingCaps;
+    Context->Generation++;
+    /*
+     * The scheduler queue core starts here and the v4 contract is published,
+     * but dxgkrnl still owns the live per-engine run queues it executes from.
+     * Until that state moves, two mutable owners would exist, so the
+     * completed-subsystem word stays zero: the bit is set only when dxgmms2
+     * is the single owner of admission order and queue state.
+     */
+    SchedulerStatus = Dxgmms2SchedulerStartAdapter(Context, Info->NodeCount);
+    if (!NT_SUCCESS(SchedulerStatus))
+    {
+        Dxgmms2ReleaseMutex(&Context->StateMutex);
+        Dxgmms2DereferenceAdapterContext(Context);
+        return SchedulerStatus;
+    }
     Context->EnabledSubsystems = 0;
     Context->HighestCompleteWddmVersion = 0;
     Context->StopReason = 0;
@@ -220,7 +237,7 @@ Dxgmms2StartAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _In_ const DXGMMS2_STAR
     RtlZeroMemory(Result, DXGMMS2_START_ADAPTER_RESULT_V1_SIZE);
     Result->Size = DXGMMS2_START_ADAPTER_RESULT_V1_SIZE;
     Result->Version = DXGMMS2_ABI_VERSION_1;
-    Result->EnabledSubsystems = 0;
+    Result->EnabledSubsystems = Context->EnabledSubsystems;
     Result->HighestCompleteWddmVersion = 0;
     Result->Reserved = 0;
     Dxgmms2ReleaseMutex(&Context->StateMutex);
@@ -263,6 +280,7 @@ Dxgmms2BeginStopAdapter(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _In_ const DXGMMS2_
             Dxgmms2DereferenceAdapterContext(Context);
             return Status;
         }
+        Dxgmms2SchedulerStopAdapter(Context);
         Status = Dxgmms2ContextStreamManagerBeginStop(&Context->ContextStreamManager, Info->Reason);
         if (!NT_SUCCESS(Status))
         {
