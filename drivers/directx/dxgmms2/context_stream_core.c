@@ -166,11 +166,11 @@ static VOID Dxgmms2ContextStreamNormalizeLocked(_Inout_ PDXGMMS2_CONTEXT_STREAM_
     Dxgmms2ContextStreamAdvanceCompletedLocked(Manager, Context);
 }
 
-static VOID Dxgmms2ContextStreamCancelTransactionLocked(_Inout_ PDXGMMS2_CONTEXT_TRANSACTION Transaction)
+static VOID Dxgmms2ContextStreamCancelTransactionLocked(_Inout_ PDXGMMS2_CONTEXT_TRANSACTION Transaction, _In_ BOOLEAN CancelClaimed)
 {
     ULONG MemberIndex;
 
-    if (Transaction->Claimed)
+    if (Transaction->Claimed && !CancelClaimed)
         return;
     Transaction->CancelRequested = TRUE;
     for (MemberIndex = 0; MemberIndex < Transaction->MemberCount; ++MemberIndex)
@@ -185,6 +185,7 @@ static VOID Dxgmms2ContextStreamCancelTransactionLocked(_Inout_ PDXGMMS2_CONTEXT
 
 static VOID Dxgmms2ContextStreamCancelContextLocked(_Inout_ PDXGMMS2_CONTEXT_STREAM_MANAGER Manager, _Inout_ PDXGMMS2_CONTEXT_STREAM_CONTEXT Context, _In_ ULONG Flags, _In_ ULONG Reason)
 {
+    CONST BOOLEAN CancelClaimed = ((Flags & DXGMMS2_CONTEXT_CANCEL_TDR) != 0);
     ULONG Offset;
 
     Context->State = Dxgmms2ContextStreamPublicClosing;
@@ -194,12 +195,19 @@ static VOID Dxgmms2ContextStreamCancelContextLocked(_Inout_ PDXGMMS2_CONTEXT_STR
         ULONG Index = (Context->HeadIndex + Offset) % Context->QueueDepth;
         PDXGMMS2_CONTEXT_ENTRY Entry = &Context->Entries[Index];
 
-        if (!Entry->Claimed)
-        {
+        /*
+         * A TDR says the engine was reset, so work the miniport still holds
+         * did NOT run: mark it even though it is claimed, and its commit will
+         * terminalize as cancelled instead of reporting the success it was
+         * about to report.  A claimed entry is never pulled out from under
+         * its claimant — the normalize pass stops at it — and an orderly stop
+         * (hardware retired) leaves claims alone so they report what really
+         * happened.
+         */
+        if (!Entry->Claimed || CancelClaimed)
             Entry->CancelRequested = TRUE;
-            if (Entry->Transaction != NULL)
-                Dxgmms2ContextStreamCancelTransactionLocked(Entry->Transaction);
-        }
+        if (Entry->Transaction != NULL)
+            Dxgmms2ContextStreamCancelTransactionLocked(Entry->Transaction, CancelClaimed);
         if ((Flags & DXGMMS2_CONTEXT_CANCEL_FORCE_SUBMITTED) != 0 && Entry->Submitted && !Entry->Claimed)
         {
             Entry->Terminal = TRUE;
@@ -364,11 +372,15 @@ NTSTATUS Dxgmms2ContextStreamManagerCompleteStop(_Inout_ PDXGMMS2_CONTEXT_STREAM
             goto Exit;
         }
     }
-    if (Manager->ContextCount != 0)
-    {
-        Status = STATUS_DEVICE_BUSY;
-        goto Exit;
-    }
+    /*
+     * Completing a stop is a statement about work, not about object lifetime:
+     * every entry is terminal and no claim is outstanding.  Contexts are
+     * client objects that outlive the stop and are destroyed when their
+     * handles close; requiring them to be gone here would make a stop
+     * impossible to complete while any client still held one.  Destruction
+     * ordering is enforced by ManagerPrepareDestroy, which does require an
+     * empty context list.
+     */
     ASSERT(Manager->TransactionCount == 0);
     Manager->State = Dxgmms2ContextManagerStopped;
 
