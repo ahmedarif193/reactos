@@ -486,6 +486,78 @@ GpuVaListCoversRange(
     return Cursor == EndAddress;
 }
 
+/*
+ * GpuVaListAdjustPin — add Delta to SubmissionPinCount on every range that
+ * covers [Address, Address+Size).  Caller holds GpuVaLock and has already
+ * verified coverage, so every step of the walk must land on a covering range.
+ */
+static VOID
+GpuVaListAdjustPin(
+    _In_ PLIST_ENTRY ListHead,
+    _In_ D3DGPU_VIRTUAL_ADDRESS Address,
+    _In_ ULONGLONG Size,
+    _In_ LONG Delta)
+{
+    D3DGPU_VIRTUAL_ADDRESS EndAddress;
+    D3DGPU_VIRTUAL_ADDRESS Cursor;
+    PLIST_ENTRY Entry;
+
+    if (!GpuVaGetRangeEnd(Address, Size, &EndAddress))
+        return;
+
+    Cursor = Address;
+    for (Entry = ListHead->Flink; Entry != ListHead && Cursor < EndAddress; Entry = Entry->Flink)
+    {
+        PDXGKRNL_GPUVA_RANGE Range = CONTAINING_RECORD(Entry, DXGKRNL_GPUVA_RANGE, RangeListEntry);
+        D3DGPU_VIRTUAL_ADDRESS RangeEnd;
+
+        if (!GpuVaGetRangeEnd(Range->GpuVirtualAddress, Range->SizeInBytes, &RangeEnd))
+            return;
+        if (RangeEnd <= Cursor)
+            continue;
+        if (Range->GpuVirtualAddress > Cursor)
+            return;
+        if (Delta > 0)
+        {
+            Range->SubmissionPinCount += (ULONG)Delta;
+        }
+        else
+        {
+            ASSERT(Range->SubmissionPinCount >= (ULONG)(-Delta));
+            if (Range->SubmissionPinCount >= (ULONG)(-Delta))
+                Range->SubmissionPinCount -= (ULONG)(-Delta);
+        }
+        Cursor = min(RangeEnd, EndAddress);
+    }
+}
+
+/* TRUE if any range covering [Address, Address+Size) has live submissions. */
+static BOOLEAN
+GpuVaListRangeIsPinned(
+    _In_ PLIST_ENTRY ListHead,
+    _In_ D3DGPU_VIRTUAL_ADDRESS Address,
+    _In_ ULONGLONG Size)
+{
+    D3DGPU_VIRTUAL_ADDRESS EndAddress;
+    PLIST_ENTRY Entry;
+
+    if (!GpuVaGetRangeEnd(Address, Size, &EndAddress))
+        return FALSE;
+    for (Entry = ListHead->Flink; Entry != ListHead; Entry = Entry->Flink)
+    {
+        PDXGKRNL_GPUVA_RANGE Range = CONTAINING_RECORD(Entry, DXGKRNL_GPUVA_RANGE, RangeListEntry);
+        D3DGPU_VIRTUAL_ADDRESS RangeEnd;
+
+        if (Range->SubmissionPinCount == 0)
+            continue;
+        if (!GpuVaGetRangeEnd(Range->GpuVirtualAddress, Range->SizeInBytes, &RangeEnd))
+            continue;
+        if (Range->GpuVirtualAddress < EndAddress && Address < RangeEnd)
+            return TRUE;
+    }
+    return FALSE;
+}
+
 static BOOLEAN
 GpuVaGetReservationForRange(
     _In_ PLIST_ENTRY ListHead,
@@ -2038,6 +2110,13 @@ DxgkGpuVaFree(
             ExReleaseFastMutex(&Process->GpuVaLock);
             return STATUS_INVALID_PARAMETER;
         }
+        /* A submitted command buffer executes out of this address; the
+         * miniport still holds it, so it cannot be taken away yet. */
+        if (Range->SubmissionPinCount != 0)
+        {
+            ExReleaseFastMutex(&Process->GpuVaLock);
+            return STATUS_DEVICE_BUSY;
+        }
         if (Range->State == GpuVaStateMapped)
         {
             D3DGPU_VIRTUAL_ADDRESS OverlapStart = max(Range->GpuVirtualAddress, BaseAddress);
@@ -2225,6 +2304,15 @@ DxgkGpuVaMap(
             if (Binding != NULL)
                 GpuVaDereferenceBinding(Binding);
             return STATUS_INVALID_PARAMETER;
+        }
+        /* Remapping over a range a submitted buffer executes from would
+         * retarget the address the miniport is already running. */
+        if (GpuVaListRangeIsPinned(&Process->GpuVaRangeList, ActualAddress, SizeInBytes))
+        {
+            ExReleaseFastMutex(&Process->GpuVaLock);
+            if (Binding != NULL)
+                GpuVaDereferenceBinding(Binding);
+            return STATUS_DEVICE_BUSY;
         }
         if (GpuVaGetReservationForRange(&Process->GpuVaRangeList, ActualAddress, SizeInBytes, &ReservationBase, &ReservationSize))
         {
@@ -2612,6 +2700,50 @@ DxgkGpuVaValidateRange(
     Valid = GpuVaListCoversRange(&Process->GpuVaRangeList, Address, Size, GpuVaStateMapped);
     ExReleaseFastMutex(&Process->GpuVaLock);
     return Valid;
+}
+
+/*
+ * DxgkGpuVaPinRange
+ *
+ * Validates and pins in one step under GpuVaLock.  Validating and then
+ * submitting without a pin is a time-of-check/time-of-use hole: the range
+ * could be unmapped or remapped before the miniport reads the address.
+ */
+BOOLEAN
+DxgkGpuVaPinRange(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_ D3DGPU_VIRTUAL_ADDRESS Address,
+    _In_ ULONGLONG Size)
+{
+    BOOLEAN Valid;
+
+    PAGED_CODE();
+
+    if (Process == NULL || Address == 0 || Size == 0)
+        return FALSE;
+    if (!DxgkGpuVaPageTableReady(Adapter, Process))
+        return FALSE;
+
+    ExAcquireFastMutex(&Process->GpuVaLock);
+    Valid = GpuVaListCoversRange(&Process->GpuVaRangeList, Address, Size, GpuVaStateMapped);
+    if (Valid)
+        GpuVaListAdjustPin(&Process->GpuVaRangeList, Address, Size, 1);
+    ExReleaseFastMutex(&Process->GpuVaLock);
+    return Valid;
+}
+
+VOID
+DxgkGpuVaUnpinRange(
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_ D3DGPU_VIRTUAL_ADDRESS Address,
+    _In_ ULONGLONG Size)
+{
+    if (Process == NULL || Address == 0 || Size == 0)
+        return;
+    ExAcquireFastMutex(&Process->GpuVaLock);
+    GpuVaListAdjustPin(&Process->GpuVaRangeList, Address, Size, -1);
+    ExReleaseFastMutex(&Process->GpuVaLock);
 }
 
 static NTSTATUS

@@ -561,6 +561,13 @@ VidSchpDereferencePacket(
         DxgkCancelTrackedDmaBuffer(Packet->TrackerReservation);
     if (Packet->DmaBuffer != NULL && !Packet->TrackerOwnsDmaBuffer)
         DxgkFreeDmaBuffer(Packet->DmaBuffer);
+    /* The miniport is done with this command buffer's address; the range it
+     * executes from may be unmapped again. */
+    if (Packet->GpuVaPinProcess != NULL)
+    {
+        DxgkGpuVaUnpinRange(Packet->GpuVaPinProcess, Packet->DmaBufferGpuVa, Packet->VirtualDmaBufferSize);
+        Packet->GpuVaPinProcess = NULL;
+    }
     if (Packet->OwnedDriverPrivateData != NULL)
         ExFreePoolWithTag(Packet->OwnedDriverPrivateData, TAG_VIDSCH);
     if (Packet->VirtualSubmitWorkItem != NULL)
@@ -1568,7 +1575,26 @@ VidSchSubmitCommandVirtual(
     }
     Packet->FenceIdentityReserved = TRUE;
     Packet->DmaBufferGpuVa = DmaBufferGpuVa;
+    /* Set before the pin so the unpin on teardown always sees the same span. */
     Packet->VirtualDmaBufferSize = DmaBufferSize;
+    /*
+     * Real submissions execute out of this GPU virtual address after this
+     * call returns, so pin it now: validating it at entry and reading it in
+     * the worker would leave a window to unmap or remap it in between.
+     */
+    if (!NullRendering)
+    {
+        PDXGKRNL_DEVICE PinDevice = (PDXGKRNL_DEVICE)Context->Device;
+
+        if (PinDevice == NULL || PinDevice->ProcessRecord == NULL ||
+            !DxgkGpuVaPinRange(Adapter, PinDevice->ProcessRecord, DmaBufferGpuVa, DmaBufferSize))
+        {
+            VidSchpDereferencePacket(Packet);
+            VidSchpReleaseCall(Adapter);
+            return STATUS_INVALID_PARAMETER;
+        }
+        Packet->GpuVaPinProcess = PinDevice->ProcessRecord;
+    }
     Packet->Context = Context;
     Packet->VirtualAddressing = TRUE;
     Packet->SubmitFlags = NullRendering ? VIDSCH_SUBMITFLAG_NULLRENDERING : 0u;
