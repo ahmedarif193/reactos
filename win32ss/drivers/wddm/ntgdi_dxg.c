@@ -134,6 +134,7 @@ NTSTATUS APIENTRY D3DKMTReclaimAllocations(CONST D3DKMT_RECLAIMALLOCATIONS *pDat
 NTSTATUS APIENTRY D3DKMTSetVidPnSourceOwner1(CONST D3DKMT_SETVIDPNSOURCEOWNER1 *pData);
 NTSTATUS APIENTRY D3DKMTWaitForVerticalBlankEvent2(CONST D3DKMT_WAITFORVERTICALBLANKEVENT2 *pData);
 NTSTATUS APIENTRY D3DKMTCreateSynchronizationObject2(D3DKMT_CREATESYNCHRONIZATIONOBJECT2 *pData);
+NTSTATUS APIENTRY D3DKMTOpenSynchronizationObject(D3DKMT_OPENSYNCHRONIZATIONOBJECT *pData);
 NTSTATUS APIENTRY D3DKMTWaitForSynchronizationObject2(CONST D3DKMT_WAITFORSYNCHRONIZATIONOBJECT2 *pData);
 NTSTATUS APIENTRY D3DKMTSignalSynchronizationObject2(CONST D3DKMT_SIGNALSYNCHRONIZATIONOBJECT2 *pData);
 
@@ -538,6 +539,11 @@ DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeWaitForSynchronizationObject2,
                             _In_,
                             CONST D3DKMT_WAITFORSYNCHRONIZATIONOBJECT2)
 
+DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeOpenSynchronizationObject,
+                            D3DKMTOpenSynchronizationObject,
+                            _Inout_,
+                            D3DKMT_OPENSYNCHRONIZATIONOBJECT)
+
 DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeSignalSynchronizationObject2,
                             D3DKMTSignalSynchronizationObject2,
                             _In_,
@@ -742,4 +748,6 @@ WddmBridgeInitCallbacks(
         Interface->RxgkIntPfnCreateAllocation2 = DxgBridgeCreateAllocation2;
     if (WddmBridgeGetInterfaceVersion() >= DXGKRNL_INTERFACE_VERSION_4)
         Interface->RxgkIntPfnGetAllocationPriority = DxgBridgeGetAllocationPriority;
+    if (WddmBridgeGetInterfaceVersion() >= DXGKRNL_INTERFACE_VERSION_5)
+        Interface->RxgkIntPfnOpenSynchronizationObject = DxgBridgeOpenSynchronizationObject;
 }
