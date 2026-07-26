@@ -68,6 +68,7 @@ NtfsReleaseRecordScratch(_In_ PVolume DiskVolume, _In_opt_ PUCHAR Buffer, _In_ U
 Offset->HighPart == -1 && Offset->LowPart == FILE_WRITE_TO_END_OF_FILE
 
 #define NTFS_ZERO_CHUNK_SIZE 0x10000
+#define NTFS_FILE_ALLOCATION_GROWTH 0x100000
 
 static UINT32
 AutomaticTimestampFieldsForAttribute(
@@ -4661,7 +4662,9 @@ FileRecord::ExtendNonResidentData(
     ULONGLONG OldInitializedSize;
     ULONGLONG PreferredLCN;
     ULONGLONG RequiredClusters;
+    ULONGLONG MinimumRequiredClusters;
     ULONGLONG ExistingClusters;
+    ULONGLONG GrowthClusters;
     ULONG AddedClusterCount;
     ULONG MaxRuns;
     NTSTATUS Status;
@@ -4728,6 +4731,28 @@ FileRecord::ExtendNonResidentData(
     {
         return STATUS_FILE_TOO_LARGE;
     }
+    MinimumRequiredClusters = RequiredClusters;
+    if (TargetAttribute->AttributeType == TypeData &&
+        TargetAttribute->NameLength == 0 &&
+        Header->MFTRecordNumber > NTFS_LAST_RESERVED_FILE_RECORD &&
+        Offset == TargetAttribute->NonResident.DataSize)
+    {
+        GrowthClusters =
+            NTFS_FILE_ALLOCATION_GROWTH / ClusterSize +
+            (NTFS_FILE_ALLOCATION_GROWTH % ClusterSize != 0);
+        if (GrowthClusters != 0 &&
+            ExistingClusters <=
+                ~(ULONGLONG)0 - GrowthClusters &&
+            ExistingClusters + GrowthClusters >
+                RequiredClusters &&
+            ExistingClusters + GrowthClusters <=
+                DiskVolume->ClustersInVolume &&
+            ExistingClusters + GrowthClusters <= MAXULONG)
+        {
+            RequiredClusters =
+                ExistingClusters + GrowthClusters;
+        }
+    }
     AddedClusterCount =
         (ULONG)(RequiredClusters - ExistingClusters);
     NewAllocatedSize = RequiredClusters * ClusterSize;
@@ -4760,6 +4785,19 @@ FileRecord::ExtendNonResidentData(
         AddedClusterCount,
         MaxRuns,
         &AddedRuns);
+    if (Status == STATUS_DISK_FULL &&
+        RequiredClusters != MinimumRequiredClusters)
+    {
+        RequiredClusters = MinimumRequiredClusters;
+        AddedClusterCount =
+            (ULONG)(RequiredClusters - ExistingClusters);
+        NewAllocatedSize = RequiredClusters * ClusterSize;
+        Status = DiskVolume->AllocateClusters(
+            PreferredLCN,
+            AddedClusterCount,
+            MaxRuns,
+            &AddedRuns);
+    }
     if (!NT_SUCCESS(Status))
         goto Done;
 
