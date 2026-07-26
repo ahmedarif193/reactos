@@ -616,6 +616,172 @@ static void Test_RenderWithAllocationsAndPatches(void)
     RenderPathTeardown(&Ctx);
 }
 
+
+/* ------------------------------------------------------------------ *
+ * Virtual-addressing submission.  A virtual context does not use the
+ * render ring at all: the command buffer lives in GPU address space and
+ * D3DKMTSubmitCommand names it by GPU VA.  This is the path a WDDM 2.0
+ * user-mode driver actually uses, and nothing else in this suite gets
+ * near it -- the existing gpuva subtest maps addresses but never submits
+ * against one.
+ * ------------------------------------------------------------------ */
+static void Test_VirtualAddressingSubmission(void)
+{
+    PFND3DKMT_CREATECONTEXTVIRTUAL pCreateVirtual;
+    PFND3DKMT_SUBMITCOMMAND pSubmit;
+    PFND3DKMT_CREATEPAGINGQUEUE pCreateQueue;
+    PFND3DKMT_DESTROYPAGINGQUEUE pDestroyQueue;
+    PFND3DKMT_CREATEALLOCATION pAlloc;
+    PFND3DKMT_MAPGPUVIRTUALADDRESS pMap;
+    D3DKMT_HANDLE hAdapter = 0, hDevice = 0, hContext = 0, hAlloc = 0, hQueue = 0;
+    D3DKMT_CREATEDEVICE cd;
+    D3DKMT_CREATECONTEXTVIRTUAL ccv;
+    D3DKMT_CREATEPAGINGQUEUE cpq;
+    D3DKMT_CREATEALLOCATION ca;
+    D3DDDI_ALLOCATIONINFO ai;
+    D3DDDI_MAPGPUVIRTUALADDRESS map;
+    D3DKMT_SUBMITCOMMAND submit;
+    D3DGPU_VIRTUAL_ADDRESS CommandVa = 0;
+    NTSTATUS Status;
+
+    pCreateVirtual = (PFND3DKMT_CREATECONTEXTVIRTUAL)LoadD3DKMTProc("D3DKMTCreateContextVirtual");
+    pSubmit = (PFND3DKMT_SUBMITCOMMAND)LoadD3DKMTProc("D3DKMTSubmitCommand");
+    pCreateQueue = (PFND3DKMT_CREATEPAGINGQUEUE)LoadD3DKMTProc("D3DKMTCreatePagingQueue");
+    pDestroyQueue = (PFND3DKMT_DESTROYPAGINGQUEUE)LoadD3DKMTProc("D3DKMTDestroyPagingQueue");
+    pAlloc = (PFND3DKMT_CREATEALLOCATION)LoadD3DKMTProc("D3DKMTCreateAllocation");
+    pMap = (PFND3DKMT_MAPGPUVIRTUALADDRESS)LoadD3DKMTProc("D3DKMTMapGpuVirtualAddress");
+    if (!pCreateVirtual || !pSubmit || !pCreateQueue || !pAlloc || !pMap)
+    {
+        skip("virtual-submission entry points not exported\n");
+        return;
+    }
+
+    hAdapter = OpenAdapterFromDisplay1();
+    if (!hAdapter) { skip("No adapter on \\\\.\\DISPLAY1\n"); return; }
+
+    memset(&cd, 0, sizeof(cd));
+    cd.hAdapter = hAdapter;
+    Status = pfnCreateDevice(&cd);
+    if (!NT_SUCCESS(Status)) { skip("CreateDevice refused (0x%08lX)\n", (long)Status); goto cleanup; }
+    hDevice = cd.hDevice;
+
+    memset(&cpq, 0, sizeof(cpq));
+    cpq.hDevice = hDevice;
+    cpq.Priority = D3DDDI_PAGINGQUEUE_PRIORITY_NORMAL;
+    Status = pCreateQueue(&cpq);
+    if (!NT_SUCCESS(Status) || cpq.hPagingQueue == 0)
+    {
+        skip("CreatePagingQueue refused (0x%08lX)\n", (long)Status);
+        goto cleanup;
+    }
+    hQueue = cpq.hPagingQueue;
+
+    memset(&ca, 0, sizeof(ca));
+    memset(&ai, 0, sizeof(ai));
+    ca.hDevice = hDevice;
+    ca.NumAllocations = 1;
+    ca.pAllocationInfo = &ai;
+    Status = pAlloc(&ca);
+    if (!NT_SUCCESS(Status) || ai.hAllocation == 0)
+    {
+        skip("CreateAllocation refused (0x%08lX)\n", (long)Status);
+        goto cleanup;
+    }
+    hAlloc = ai.hAllocation;
+
+    memset(&map, 0, sizeof(map));
+    map.hPagingQueue = hQueue;
+    map.hAllocation = hAlloc;
+    map.OffsetInPages = 0;
+    map.SizeInPages = 1;
+    map.Protection.Write = 1;
+    Status = pMap(&map);
+    if (!NT_SUCCESS(Status) || map.VirtualAddress == 0)
+    {
+        skip("MapGpuVirtualAddress refused (0x%08lX)\n", (long)Status);
+        goto cleanup;
+    }
+    CommandVa = map.VirtualAddress;
+    trace("command buffer mapped at GPU VA 0x%I64x\n", CommandVa);
+
+    /*
+     * Only now can the virtual context be created: dxgkrnl establishes the
+     * process's GPU root page table lazily, on the first address-space
+     * operation, and refuses a virtual context until it exists.  A user-mode
+     * driver maps its command buffer before submitting anyway, so this is the
+     * order that occurs in practice -- but it *is* an ordering constraint, and
+     * a context created before any mapping is refused.
+     */
+    memset(&ccv, 0, sizeof(ccv));
+    ccv.hDevice = hDevice;
+    ccv.NodeOrdinal = 0;
+    ccv.EngineAffinity = 0;
+    Status = pCreateVirtual(&ccv);
+    if (!NT_SUCCESS(Status))
+    {
+        skip("CreateContextVirtual refused after mapping (0x%08lX)\n", (long)Status);
+        goto cleanup;
+    }
+    hContext = ccv.hContext;
+    trace("virtual context 0x%08lX\n", (unsigned long)hContext);
+
+    /* A submission naming a mapped range must be accepted. */
+    memset(&submit, 0, sizeof(submit));
+    submit.BroadcastContextCount = 1;
+    submit.BroadcastContext[0] = hContext;
+    submit.Commands = CommandVa;
+    submit.CommandLength = sizeof(TEST_SOFTGPU_CMD);
+    Status = pSubmit(&submit);
+    ok_succeeded(Status, "SubmitCommand against a mapped GPU VA failed 0x%08lX\n", (long)Status);
+
+    /* A submission naming an address nothing is mapped at must not be: the
+     * engine would dereference a GPU address with no page table entry. */
+    memset(&submit, 0, sizeof(submit));
+    submit.BroadcastContextCount = 1;
+    submit.BroadcastContext[0] = hContext;
+    submit.Commands = CommandVa + 0x40000000ULL;
+    submit.CommandLength = sizeof(TEST_SOFTGPU_CMD);
+    Status = pSubmit(&submit);
+    ok_failed(Status, "SubmitCommand accepted an unmapped GPU VA (0x%08lX)\n", (long)Status);
+
+    /* And a length that runs off the end of the mapping. */
+    memset(&submit, 0, sizeof(submit));
+    submit.BroadcastContextCount = 1;
+    submit.BroadcastContext[0] = hContext;
+    submit.Commands = CommandVa;
+    submit.CommandLength = 0x10000000;
+    Status = pSubmit(&submit);
+    ok_failed(Status, "SubmitCommand accepted a length past its mapping (0x%08lX)\n", (long)Status);
+
+cleanup:
+    if (hQueue && pDestroyQueue)
+    {
+        D3DDDI_DESTROYPAGINGQUEUE dpq;
+
+        memset(&dpq, 0, sizeof(dpq));
+        dpq.hPagingQueue = hQueue;
+        pDestroyQueue(&dpq);
+    }
+    if (hContext && pfnDestroyContext)
+    {
+        D3DKMT_DESTROYCONTEXT dc;
+
+        memset(&dc, 0, sizeof(dc));
+        dc.hContext = hContext;
+        pfnDestroyContext(&dc);
+    }
+    if (hDevice && pfnDestroyDevice)
+    {
+        D3DKMT_DESTROYDEVICE dd;
+
+        memset(&dd, 0, sizeof(dd));
+        dd.hDevice = hDevice;
+        pfnDestroyDevice(&dd);
+    }
+    if (hAdapter)
+        CloseAdapter(hAdapter);
+}
+
 START_TEST(renderpath)
 {
     pfnRender = (PFND3DKMT_RENDER)LoadD3DKMTProc("D3DKMTRender");
@@ -635,6 +801,7 @@ START_TEST(renderpath)
     Test_MalformedStreamsAreRefusedAtRender();
     Test_TwoContextsSubmitIndependently();
     Test_RenderWithAllocationsAndPatches();
+    Test_VirtualAddressingSubmission();
 }
 
 /* EOF */
