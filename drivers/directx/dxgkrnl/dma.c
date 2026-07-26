@@ -4,7 +4,8 @@
  * PURPOSE:     GPU command buffer / DMA submission
  * COPYRIGHT:   Copyright 2024-2026 ReactOS WDDM Team
  *
- * DxgkRender — validates the legacy render entry point without faking work.
+ * DxgkRender — translates a context command buffer through DxgkDdiRender
+ *              and submits it as tracked GPU work.
  * DxgkPresent — present surface to display via the present queue.
  *
  * The present path validates parameters, builds a DXGKRNL_PRESENT_ENTRY

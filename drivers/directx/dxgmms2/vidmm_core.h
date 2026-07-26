@@ -14,7 +14,11 @@
 #include <ntddk.h>
 #include <reactos/drivers/directx/dxgmms2.h>
 
+/* Records pre-allocated with the adapter.  Beyond this the core allocates on
+ * demand: a placement must never fail because the ledger ran out of records
+ * while the segments still have space. */
 #define DXGMMS2_VIDMM_MAX_RANGES    2048
+#define DXGMMS2_VIDMM_RANGE_TAG     'RMXD'
 
 typedef struct _DXGMMS2_VIDMM_RANGE
 {
@@ -25,6 +29,7 @@ typedef struct _DXGMMS2_VIDMM_RANGE
     ULONG      SegmentIndex;
     LONG       Priority;
     ULONG      Flags;
+    BOOLEAN    Overflow;        /* allocated on demand, not from the pool */
 } DXGMMS2_VIDMM_RANGE, *PDXGMMS2_VIDMM_RANGE;
 
 typedef struct _DXGMMS2_VIDMM_SEGMENT
@@ -47,6 +52,7 @@ typedef struct _DXGMMS2_VIDMM_CORE
     PDXGMMS2_VIDMM_RANGE  RangePool;
     ULONG                 RangePoolCount;
     ULONG                 LiveRangeCount;
+    ULONG                 OverflowRangeCount;
     BOOLEAN               Started;
 } DXGMMS2_VIDMM_CORE, *PDXGMMS2_VIDMM_CORE;
 
