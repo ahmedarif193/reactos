@@ -22,7 +22,7 @@ struct BootSector
     UCHAR  Reserved1[2];           // Offset 0x16, Size 2
     UINT16 SectorsPerTrack;        // Offset 0x18, Size 2
     UINT16 NumberOfHeads;          // Offset 0x1A, Size 2
-    UCHAR  Reserved2[4];           // Offset 0x1C, Size 4
+    UINT32 HiddenSectors;          // Offset 0x1C, Size 4
     UCHAR  Reserved3[4];           // Offset 0x20, Size 4
     UINT32 Unknown;                // Offset 0x24, Size 4
     UINT64 SectorsInVolume;        // Offset 0x28, Size 8

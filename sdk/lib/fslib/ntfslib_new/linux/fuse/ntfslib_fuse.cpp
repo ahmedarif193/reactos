@@ -33,6 +33,7 @@
 #include <vector>
 
 #include <ntfslib_new.h>
+#include <ntfsformat.h>
 #include <ntfs_linux.h>
 
 typedef std::vector<std::string> NtfsDirectoryListing;
@@ -1632,6 +1633,148 @@ ParseUnsigned(const char* Text,
     }
     *Value = Parsed;
     return true;
+}
+
+struct NtfsFormatHostContext
+{
+    int Descriptor;
+};
+
+static NTSTATUS
+WriteFormattedImage(void* Context,
+                    ULONGLONG Offset,
+                    ULONG Length,
+                    const void* Buffer)
+{
+    NtfsFormatHostContext* Host =
+        static_cast<NtfsFormatHostContext*>(Context);
+    const UCHAR* Bytes = static_cast<const UCHAR*>(Buffer);
+    ULONG Completed = 0;
+
+    while (Completed < Length)
+    {
+        ssize_t Written;
+
+        do
+        {
+            Written = pwrite(Host->Descriptor,
+                             Bytes + Completed,
+                             Length - Completed,
+                             static_cast<off_t>(Offset + Completed));
+        } while (Written < 0 && errno == EINTR);
+
+        if (Written <= 0)
+        {
+            if (Written == 0)
+                errno = EIO;
+            perror("pwrite");
+            return STATUS_INVALID_DEVICE_STATE;
+        }
+        Completed += static_cast<ULONG>(Written);
+    }
+    return STATUS_SUCCESS;
+}
+
+static void*
+AllocateFormatBuffer(void* Context, ULONG Length)
+{
+    UNREFERENCED_PARAMETER(Context);
+    return malloc(Length);
+}
+
+static void
+FreeFormatBuffer(void* Context, void* Buffer)
+{
+    UNREFERENCED_PARAMETER(Context);
+    free(Buffer);
+}
+
+static int
+FormatImage(const char* Path,
+            ULONGLONG SectorCount,
+            ULONG HiddenSectors,
+            ULONG SectorsPerCluster,
+            const char* Label)
+{
+    static const ULONGLONG BytesPerSector = 512;
+    static const ULONGLONG NtEpochOffset = 11644473600ULL;
+    NtfsFormatHostContext Host = {};
+    NtfsFormatParameters Parameters = {};
+    std::vector<WCHAR> LabelBuffer;
+    NTSTATUS Status;
+    time_t CurrentTime;
+    int Result = 1;
+
+    if (SectorCount > INT64_MAX / BytesPerSector ||
+        !Utf8ToNtfsString(Label, false, true, LabelBuffer) ||
+        LabelBuffer.size() > 33)
+    {
+        fprintf(stderr, "invalid NTFS format parameters\n");
+        return 2;
+    }
+
+    Host.Descriptor = open(Path, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    if (Host.Descriptor < 0)
+    {
+        fprintf(stderr, "%s: %s\n", Path, strerror(errno));
+        return 1;
+    }
+
+    if (ftruncate(Host.Descriptor,
+                  static_cast<off_t>(SectorCount * BytesPerSector)) != 0)
+    {
+        fprintf(stderr, "%s: %s\n", Path, strerror(errno));
+        close(Host.Descriptor);
+        return 1;
+    }
+
+    CurrentTime = time(NULL);
+    if (CurrentTime == static_cast<time_t>(-1))
+    {
+        fprintf(stderr, "time: %s\n", strerror(errno));
+        close(Host.Descriptor);
+        return 1;
+    }
+
+    Parameters.TotalSectors = SectorCount;
+    Parameters.BytesPerSector = BytesPerSector;
+    Parameters.SectorsPerCluster = SectorsPerCluster;
+    Parameters.SectorsPerTrack = 63;
+    Parameters.NumberOfHeads = 255;
+    Parameters.HiddenSectors = HiddenSectors;
+    Parameters.MediaDescriptor = 0xF8;
+    Parameters.CurrentTime =
+        (static_cast<ULONGLONG>(CurrentTime) + NtEpochOffset) * 10000000ULL;
+    Parameters.VolumeLabel = LabelBuffer.data();
+    Parameters.QuickFormat = TRUE;
+    Parameters.IoContext = &Host;
+    Parameters.Write = WriteFormattedImage;
+    Parameters.Allocate = AllocateFormatBuffer;
+    Parameters.Free = FreeFormatBuffer;
+
+    Status = NtfsVolumeFormat(&Parameters);
+    if (!NT_SUCCESS(Status))
+    {
+        fprintf(stderr,
+                "%s: NtfsVolumeFormat failed: 0x%08" PRIx32 "\n",
+                Path,
+                static_cast<uint32_t>(Status));
+    }
+    else if (fsync(Host.Descriptor) != 0)
+    {
+        fprintf(stderr, "%s: %s\n", Path, strerror(errno));
+    }
+    else
+    {
+        Result = 0;
+    }
+
+    if (close(Host.Descriptor) != 0 && Result == 0)
+    {
+        fprintf(stderr, "%s: %s\n", Path, strerror(errno));
+        Result = 1;
+    }
+    return Result;
 }
 
 static bool
@@ -3872,6 +4015,7 @@ PrintUsage(const char* Program)
 {
     fprintf(stderr,
             "Usage:\n"
+            "  %s --format IMAGE SECTORS HIDDEN_SECTORS SECTORS_PER_CLUSTER LABEL\n"
             "  %s [--show-metadata] --probe IMAGE\n"
             "  %s [--show-metadata] --list IMAGE [PATH]\n"
             "  %s [--show-metadata] --list-info IMAGE [PATH]\n"
@@ -3946,6 +4090,7 @@ PrintUsage(const char* Program)
             Program,
             Program,
             Program,
+            Program,
             Program);
 }
 
@@ -3968,6 +4113,34 @@ main(int Argc, char** Argv)
     {
         PrintUsage(Argv[0]);
         return 2;
+    }
+
+    if (strcmp(Argv[First], "--format") == 0)
+    {
+        ULONGLONG SectorCount;
+        ULONGLONG HiddenSectors;
+        ULONGLONG SectorsPerCluster;
+
+        if (First + 6 != Argc ||
+            ShowMetadata ||
+            !ParseUnsigned(Argv[First + 2],
+                           INT64_MAX / 512,
+                           &SectorCount) ||
+            !ParseUnsigned(Argv[First + 3],
+                           MAXULONG,
+                           &HiddenSectors) ||
+            !ParseUnsigned(Argv[First + 4],
+                           128,
+                           &SectorsPerCluster))
+        {
+            PrintUsage(Argv[0]);
+            return 2;
+        }
+        return FormatImage(Argv[First + 1],
+                           SectorCount,
+                           static_cast<ULONG>(HiddenSectors),
+                           static_cast<ULONG>(SectorsPerCluster),
+                           Argv[First + 5]);
     }
 
     if (strcmp(Argv[First], "--probe") == 0)

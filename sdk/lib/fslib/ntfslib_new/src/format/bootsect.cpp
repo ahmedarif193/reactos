@@ -60,12 +60,7 @@ FormatBuildBootSector(_In_ PFormatContext Ctx,
                                 : NTFS_DEFAULT_MEDIA_DESCRIPTOR;
     Boot->SectorsPerTrack = Ctx->Params->SectorsPerTrack;
     Boot->NumberOfHeads = Ctx->Params->NumberOfHeads;
-
-    /* Reserved3 carries the hidden sector count in the NTFS BPB. */
-    Boot->Reserved3[0] = (UCHAR)Ctx->Params->HiddenSectors;
-    Boot->Reserved3[1] = (UCHAR)(Ctx->Params->HiddenSectors >> 8);
-    Boot->Reserved3[2] = (UCHAR)(Ctx->Params->HiddenSectors >> 16);
-    Boot->Reserved3[3] = (UCHAR)(Ctx->Params->HiddenSectors >> 24);
+    Boot->HiddenSectors = Ctx->Params->HiddenSectors;
 
     /* Windows writes 0x00800080 here; it is not interpreted. */
     Boot->Unknown = 0x00800080;

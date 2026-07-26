@@ -1807,6 +1807,8 @@ FileRecord::EnsureAttributeListForMappingGrowth(
     _Inout_ FileRecord** AttributeOwner,
     _Out_ PBOOLEAN Created)
 {
+    PAttribute ListAttribute;
+    ULONG ListLength;
     NTSTATUS Status;
 
     *Created = FALSE;
@@ -1824,6 +1826,30 @@ FileRecord::EnsureAttributeListForMappingGrowth(
         return STATUS_SUCCESS;
     if (!NT_SUCCESS(Status))
         return Status;
+
+    ListAttribute =
+        GetAttribute(TypeAttributeList, NULL);
+    if (!ListAttribute)
+        return STATUS_FILE_CORRUPT_ERROR;
+    if (!ListAttribute->IsNonResident)
+    {
+        Status = ValidateResidentAttributeForUpdate(
+            ListAttribute,
+            &ListLength);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        if (ListLength == 0)
+            return STATUS_FILE_CORRUPT_ERROR;
+        Status = PromoteResidentData(
+            ListAttribute,
+            NULL,
+            0,
+            0,
+            ListLength,
+            ListLength);
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
 
     *TargetAttribute = GetAttribute(AttrType, StreamName);
     if (!*TargetAttribute)
