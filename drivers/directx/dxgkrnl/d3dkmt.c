@@ -4570,6 +4570,84 @@ DxgkWaitForSynchronizationObjectFromCpu(
     return Status;
 }
 
+/*
+ * Hardware queues bypass the software scheduler: work is written straight to a
+ * queue the GPU consumes, and progress is reported through a monitored fence
+ * the queue owns.  That only exists if the miniport schedules in hardware, and
+ * KMTQAITYPE_WDDM_2_0_CAPS reports truthfully that none in this tree does.
+ *
+ * The parameter contract is still real, and is what callers actually depend on:
+ * a handle that names nothing is refused as a bad parameter before the
+ * capability question is ever reached, exactly as Windows 11 answers it.
+ */
+static BOOLEAN
+DxgkpAdapterSchedulesInHardware(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    UNREFERENCED_PARAMETER(Adapter);
+    return FALSE;
+}
+
+static NTSTATUS
+NTAPI
+DxgkCreateHwQueue(
+    _Inout_ D3DKMT_CREATEHWQUEUE *pData)
+{
+    PDXGKRNL_ADAPTER Adapter = NULL;
+    PDXGKRNL_DEVICE Device = NULL;
+    PDXGKRNL_CONTEXT Context = NULL;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (pData->PrivateDriverDataSize > RXGK_WDDM_MAX_PRIVATE_DRIVER_DATA)
+        return STATUS_INVALID_PARAMETER;
+    if (pData->PrivateDriverDataSize != 0 && pData->pPrivateDriverData == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = DxgkReferenceContextByHandle(pData->hHwContext, PsGetCurrentProcess(), &Adapter, &Device, &Context);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = DxgkpAdapterSchedulesInHardware(Adapter) ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
+    DxgkDereferenceContext(Context);
+    return Status;
+}
+
+static NTSTATUS
+NTAPI
+DxgkDestroyHwQueue(
+    _In_ CONST D3DKMT_DESTROYHWQUEUE *pData)
+{
+    PAGED_CODE();
+
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+    /* No queue can exist while no adapter schedules in hardware, so every
+     * handle offered here names nothing. */
+    return STATUS_INVALID_PARAMETER;
+}
+
+static NTSTATUS
+NTAPI
+DxgkSubmitCommandToHwQueue(
+    _In_ CONST D3DKMT_SUBMITCOMMANDTOHWQUEUE *pData)
+{
+    PAGED_CODE();
+
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (pData->PrivateDriverDataSize > RXGK_WDDM_MAX_PRIVATE_DRIVER_DATA)
+        return STATUS_INVALID_PARAMETER;
+    if (pData->PrivateDriverDataSize != 0 && pData->pPrivateDriverData == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (pData->NumPrimaries != 0 && pData->WrittenPrimaries == NULL)
+        return STATUS_INVALID_PARAMETER;
+    return STATUS_INVALID_PARAMETER;
+}
+
 static NTSTATUS
 NTAPI
 DxgkSubmitCommand(
@@ -6064,6 +6142,30 @@ DxgkpDispatchBufferedIoctl(
             return DxgkPollDisplayChildren(pPoll);
         }
 
+        case IOCTL_D3DKMT_CREATEHWQUEUE:
+        {
+            if (InputLength < sizeof(D3DKMT_CREATEHWQUEUE) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            Status = DxgkCreateHwQueue((D3DKMT_CREATEHWQUEUE *)SystemBuffer);
+            if (NT_SUCCESS(Status))
+                Irp->IoStatus.Information = sizeof(D3DKMT_CREATEHWQUEUE);
+            return Status;
+        }
+
+        case IOCTL_D3DKMT_DESTROYHWQUEUE:
+        {
+            if (InputLength < sizeof(D3DKMT_DESTROYHWQUEUE) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            return DxgkDestroyHwQueue((CONST D3DKMT_DESTROYHWQUEUE *)SystemBuffer);
+        }
+
+        case IOCTL_D3DKMT_SUBMITCOMMANDTOHWQUEUE:
+        {
+            if (InputLength < sizeof(D3DKMT_SUBMITCOMMANDTOHWQUEUE) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            return DxgkSubmitCommandToHwQueue((CONST D3DKMT_SUBMITCOMMANDTOHWQUEUE *)SystemBuffer);
+        }
+
         case IOCTL_D3DKMT_REGISTERTRIMNOTIFICATION:
         {
             if (InputLength < sizeof(D3DKMT_REGISTERTRIMNOTIFICATION) || SystemBuffer == NULL)
@@ -6646,6 +6748,9 @@ DxgkDispatchDeviceControl(
         case IOCTL_D3DKMT_OPENKEYEDMUTEX:
         case IOCTL_D3DKMT_ACQUIREKEYEDMUTEX:
         case IOCTL_D3DKMT_RELEASEKEYEDMUTEX:
+        case IOCTL_D3DKMT_CREATEHWQUEUE:
+        case IOCTL_D3DKMT_DESTROYHWQUEUE:
+        case IOCTL_D3DKMT_SUBMITCOMMANDTOHWQUEUE:
         case IOCTL_D3DKMT_REGISTERTRIMNOTIFICATION:
         case IOCTL_D3DKMT_UNREGISTERTRIMNOTIFICATION:
         case IOCTL_D3DKMT_CREATEKEYEDMUTEX2:
