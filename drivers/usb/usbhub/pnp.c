@@ -956,7 +956,8 @@ USBH_StartHubFdoDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
     {
         USHORT Port;
 
-        HubExtension->HubFlags |= USBHUB_FDO_FLAG_DEVICE_STARTED;
+        HubExtension->HubFlags |= (USBHUB_FDO_FLAG_DEVICE_STARTED |
+                                   USBHUB_FDO_FLAG_NOT_ENUMERATED);
 
         for (Port = 1;
              Port <= HubExtension->HubDescriptor->bNumberOfPorts;
@@ -1093,12 +1094,10 @@ USBH_FdoStartDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
  * Perform the actual port enumeration for a hub: debounce, reset and
  * create a PDO for every port with a (possibly latched) connect change.
  *
- * This code historically ran inside USBH_FdoQueryBusRelations on the PnP
- * enumeration thread, which serialized the USB 2.0 debounce/reset timing
- * (several hundred ms per device) into every boot-time BusRelations query.
- * It now runs detached on a hub work item (USBH_HubEnumWorker):
- * USBH_FdoQueryBusRelations only queues the worker and reports snapshots
- * of the PDOs published here through PortData[].DeviceObject.
+ * The first pass runs synchronously with the initial BusRelations query so
+ * PnP cannot finish boot-device discovery before the hub publishes its child
+ * PDOs. Later change-driven passes run detached on USBH_HubEnumWorker and are
+ * published by invalidating BusRelations when the worker completes.
  */
 static
 VOID
@@ -1634,10 +1633,9 @@ PortEnumerationFailure:
     }
 
     /*
-     * This pass runs detached from any QueryBusRelations IRP: drop the
-     * references taken while building the relations set above. PnP gets
-     * the fresh set from the snapshot path on the BusRelations query the
-     * enum worker triggers when this pass is done.
+     * Drop the temporary references taken while building the relations set.
+     * The caller publishes a fresh snapshot, either in the current initial
+     * BusRelations query or in the query triggered by the enum worker.
      */
     for (RelIdx = 0; RelIdx < DeviceRelations->Count; RelIdx++)
     {
@@ -1771,7 +1769,19 @@ USBH_FdoQueryBusRelations(IN PUSBHUB_FDO_EXTENSION HubExtension,
         goto RelationsWorker;
     }
 
-    if (HubExtension->HubFlags & USBHUB_FDO_FLAG_DO_ENUMERATION)
+    if (HubExtension->HubFlags & USBHUB_FDO_FLAG_NOT_ENUMERATED)
+    {
+        /*
+         * The initial BusRelations query is a discovery barrier. Returning an
+         * empty snapshot while enumeration runs on a work item lets the PnP
+         * tree walk complete before a USB boot disk exists, so the I/O manager
+         * cannot create the loader's signature-based ARC link. Enumerate the
+         * initial topology synchronously; no device type or boot-path special
+         * case is required.
+         */
+        USBH_EnumerateHubPorts(HubExtension);
+    }
+    else if (HubExtension->HubFlags & USBHUB_FDO_FLAG_DO_ENUMERATION)
     {
         /*
          * Port state changed: run the (slow) debounce/reset/create-device
@@ -1784,10 +1794,7 @@ USBH_FdoQueryBusRelations(IN PUSBHUB_FDO_EXTENSION HubExtension,
         USBH_QueueHubEnumeration(HubExtension);
     }
 
-    /*
-     * Return a snapshot of the currently known child PDOs without touching
-     * port state. Any enumeration work runs detached on the enum worker.
-     */
+    /* Return a snapshot of the child PDOs published by the enumeration pass. */
     NumberPorts = HubExtension->HubDescriptor->bNumberOfPorts;
 
     Length = FIELD_OFFSET(DEVICE_RELATIONS, Objects) +
