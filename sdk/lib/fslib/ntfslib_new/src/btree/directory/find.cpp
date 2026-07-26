@@ -200,7 +200,16 @@ Directory::FindNextFile(_In_  PFileRecord File,
     if (BitmapLength == 0)
         return STATUS_FILE_CORRUPT_ERROR;
 
-    IndexBufferData = new(PagedPool, TAG_NTFS) UCHAR[IndexRecordSize];
+    if (!DiskVolume->IndexWorkBuffer ||
+        DiskVolume->IndexWorkBufferSize < IndexRecordSize)
+    {
+        delete[] DiskVolume->IndexWorkBuffer;
+        DiskVolume->IndexWorkBuffer =
+            new(PagedPool, TAG_NTFS) UCHAR[IndexRecordSize];
+        DiskVolume->IndexWorkBufferSize =
+            DiskVolume->IndexWorkBuffer ? IndexRecordSize : 0;
+    }
+    IndexBufferData = DiskVolume->IndexWorkBuffer;
     if (!IndexBufferData)
     {
         Status = STATUS_INSUFFICIENT_RESOURCES;
@@ -312,6 +321,6 @@ Directory::FindNextFile(_In_  PFileRecord File,
     }
 
 Done:
-    delete[] IndexBufferData;
+    /* Volume-owned scratch. */
     return Status;
 }

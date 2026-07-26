@@ -75,6 +75,16 @@ typedef enum _POOL_TYPE
     PagedPool = 1
 } POOL_TYPE;
 
+/* Host tools are single threaded; the lock only has to exist. */
+typedef struct _FAST_MUTEX
+{
+    int Unused;
+} FAST_MUTEX, *PFAST_MUTEX;
+
+static inline void ExInitializeFastMutex(FAST_MUTEX* Mutex) { (void)Mutex; }
+static inline void ExAcquireFastMutex(FAST_MUTEX* Mutex) { (void)Mutex; }
+static inline void ExReleaseFastMutex(FAST_MUTEX* Mutex) { (void)Mutex; }
+
 typedef struct _RTL_BITMAP
 {
     ULONG SizeOfBitMap;

@@ -17,7 +17,21 @@ FileRecord::FileRecord(_In_ PVolume DiskVolume,
     RecordBufferSize = FileRecordSize;
 
     // Initialize data buffer and header pointer.
-    Data = new(PagedPool, TAG_FILE_RECORD) UCHAR[FileRecordSize];
+    Data = NULL;
+    if (DiskVolume && FileRecordSize >= sizeof(PUCHAR))
+    {
+        ExAcquireFastMutex(&DiskVolume->RecordPoolMutex);
+        if (DiskVolume->RecordPoolHead &&
+            DiskVolume->RecordPoolBufferSize == FileRecordSize)
+        {
+            Data = DiskVolume->RecordPoolHead;
+            DiskVolume->RecordPoolHead = *(PUCHAR*)Data;
+            DiskVolume->RecordPoolCount--;
+        }
+        ExReleaseFastMutex(&DiskVolume->RecordPoolMutex);
+    }
+    if (!Data)
+        Data = new(PagedPool, TAG_FILE_RECORD) UCHAR[FileRecordSize];
     Header = (PFileRecordHeader)Data;
 }
 
@@ -30,5 +44,25 @@ FileRecord::~FileRecord()
     if (AttributeListData)
         delete[] AttributeListData;
     if (Data)
-        delete[] Data;
+    {
+        BOOLEAN Pooled = FALSE;
+
+        if (DiskVolume && RecordBufferSize >= sizeof(PUCHAR))
+        {
+            ExAcquireFastMutex(&DiskVolume->RecordPoolMutex);
+            if (DiskVolume->RecordPoolCount < 512 &&
+                (DiskVolume->RecordPoolCount == 0 ||
+                 DiskVolume->RecordPoolBufferSize == RecordBufferSize))
+            {
+                *(PUCHAR*)Data = DiskVolume->RecordPoolHead;
+                DiskVolume->RecordPoolHead = Data;
+                DiskVolume->RecordPoolBufferSize = RecordBufferSize;
+                DiskVolume->RecordPoolCount++;
+                Pooled = TRUE;
+            }
+            ExReleaseFastMutex(&DiskVolume->RecordPoolMutex);
+        }
+        if (!Pooled)
+            delete[] Data;
+    }
 }
