@@ -28,6 +28,14 @@ static int s_trayPct = -1;
 static int  s_hotRail = -1;       /* index into rail items, 100 = hamburger */
 static BOOL s_tracking;
 static BOOL s_wasMinimized;
+static BOOL s_smpDiag;
+static ULONGLONG s_smpDiagOriginTick;
+static ULONGLONG s_smpDiagTickStart;
+static ULONGLONG s_smpDiagLastTick;
+static ULONGLONG s_smpDiagSampleTick;
+static ULONGLONG s_smpDiagLastPaintTick;
+static ULONG s_smpDiagSequence;
+static ULONG s_smpDiagPaintedSequence;
 
 /* nav rail items */
 struct RailItem { int page; IconId icon; const WCHAR* label; };
@@ -213,6 +221,66 @@ static void RearmTimer(HWND hwnd)
     UINT milliseconds = EffectiveTimerMs(hwnd);
     if (milliseconds)
         SetTimer(hwnd, TIMER_TICK, milliseconds, NULL);
+}
+
+static void SmpDiagInitialize(void)
+{
+    CHAR Buffer[128];
+
+    s_smpDiagOriginTick = GetTickCount64();
+    StringCchPrintfA(Buffer, _countof(Buffer), "TASKMGR11_DIAG_BEGIN period_ms=500 tick_ms=%I64u page=performance graph=logical\n", s_smpDiagOriginTick);
+    OutputDebugStringA(Buffer);
+}
+
+static void SmpDiagTickBegin(void)
+{
+    if (s_smpDiag)
+        s_smpDiagTickStart = GetTickCount64();
+}
+
+static void SmpDiagTickEnd(void)
+{
+    ULONGLONG Now;
+    ULONGLONG AtMs, DeltaMs, LateMs, QueryMs;
+    CHAR Buffer[256];
+
+    if (!s_smpDiag || !s_smpDiagTickStart)
+        return;
+
+    Now = GetTickCount64();
+    AtMs = s_smpDiagTickStart - s_smpDiagOriginTick;
+    DeltaMs = s_smpDiagLastTick ? s_smpDiagTickStart - s_smpDiagLastTick : 0;
+    LateMs = DeltaMs > App_TimerMs() ? DeltaMs - App_TimerMs() : 0;
+    QueryMs = Now - s_smpDiagTickStart;
+    s_smpDiagSequence++;
+    s_smpDiagSampleTick = Now;
+    s_smpDiagLastTick = s_smpDiagTickStart;
+    StringCchPrintfA(Buffer, _countof(Buffer), "TASKMGR11_SAMPLE seq=%lu tick_ms=%I64u at_ms=%I64u delta_ms=%I64u late_ms=%I64u query_ms=%I64u cpu_pct=%.1f\n", s_smpDiagSequence, s_smpDiagTickStart, AtMs, DeltaMs, LateMs, QueryMs, Data::g.cpuTotalPct);
+    OutputDebugStringA(Buffer);
+}
+
+void App_SmpDiagGraphPaint(void)
+{
+    ULONGLONG Now;
+    ULONGLONG AtMs, DeltaMs, SampleToPaintMs;
+    float Cpu0, Cpu1, Cpu2, Cpu3;
+    CHAR Buffer[384];
+
+    if (!s_smpDiag || !s_smpDiagSequence || (s_smpDiagPaintedSequence == s_smpDiagSequence))
+        return;
+
+    Now = GetTickCount64();
+    AtMs = Now - s_smpDiagOriginTick;
+    DeltaMs = s_smpDiagLastPaintTick ? Now - s_smpDiagLastPaintTick : 0;
+    SampleToPaintMs = Now - s_smpDiagSampleTick;
+    Cpu0 = Data::g.nCpu > 0 ? Data::g.hCpuLogical[0].Last() : 0.0f;
+    Cpu1 = Data::g.nCpu > 1 ? Data::g.hCpuLogical[1].Last() : 0.0f;
+    Cpu2 = Data::g.nCpu > 2 ? Data::g.hCpuLogical[2].Last() : 0.0f;
+    Cpu3 = Data::g.nCpu > 3 ? Data::g.hCpuLogical[3].Last() : 0.0f;
+    StringCchPrintfA(Buffer, _countof(Buffer), "TASKMGR11_GRAPH seq=%lu tick_ms=%I64u at_ms=%I64u delta_ms=%I64u sample_to_paint_ms=%I64u cpu_pct=%.1f cpu0_pct=%.1f cpu1_pct=%.1f cpu2_pct=%.1f cpu3_pct=%.1f\n", s_smpDiagSequence, Now, AtMs, DeltaMs, SampleToPaintMs, Data::g.cpuTotalPct, Cpu0, Cpu1, Cpu2, Cpu3);
+    OutputDebugStringA(Buffer);
+    s_smpDiagPaintedSequence = s_smpDiagSequence;
+    s_smpDiagLastPaintTick = Now;
 }
 
 /* ------------------------------------------------------------------ */
@@ -475,7 +543,9 @@ void Frame_SwitchToServices(void)
 
 static void DoTick(HWND hwnd)
 {
+    SmpDiagTickBegin();
     Data::Tick();
+    SmpDiagTickEnd();
     BOOL visible = IsWindowVisible(hwnd) && !IsIconic(hwnd);
     if (visible)
     {
@@ -847,7 +917,7 @@ typedef BOOL (WINAPI *PFN_SetProcessDPIAware)(void);
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPWSTR lpCmdLine, int nCmdShow)
 {
-    (void)hPrev; (void)lpCmdLine;
+    (void)hPrev;
 
     /* single instance */
     HANDLE mutex = CreateMutexW(NULL, TRUE, L"Local\\ROS_TaskMgr11");
@@ -883,6 +953,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPWSTR lpCmdLine, int 
     Gdiplus::GdiplusStartup(&s_gdiplusToken, &gsi, NULL);
 
     Settings_Load();
+    s_smpDiag = StrStrIW(lpCmdLine, L"/smpdiag") != NULL;
+    if (s_smpDiag)
+    {
+        g_app.st.startPage = PG_PERFORMANCE;
+        g_app.st.speed = SPD_HIGH;
+        SmpDiagInitialize();
+    }
     App_ApplyTheme();
 
     g_app.hAppIcon = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_TASKMGR11),

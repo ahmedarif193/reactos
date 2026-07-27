@@ -64,6 +64,11 @@ CRASH_LOG_MARKERS = (
     "Entered debugger on last-chance exception",
     "Break repeatedly, break Once",
 )
+SUCCESS_LOG_MARKER = "BOOT_TESTS_DONE"
+KERNEL_LOG_MARKERS = (
+    "Command Line: HAL=",
+    "SMPSTAT reporter started",
+)
 
 def get_build_dir():
     """
@@ -1605,10 +1610,24 @@ SMPSTAT_DELTA_FIELDS = (
     "drdpc",
     "dsched",
     "ddpc",
+    "dtb",
+    "dgen",
+    "dplace",
+    "didle",
+    "dquant",
+    "dperiod",
+    "dstandby",
+    "dcharge",
+    "dcycles",
+    "dreset",
     "dsrc0",
     "dsrc1",
     "dsrc2",
     "dsrc3",
+    "dbsrc0",
+    "dbsrc1",
+    "dbsrc2",
+    "dbsrc3",
     "dcsw",
     "dpcq",
     "dpcact",
@@ -1677,7 +1696,7 @@ def format_smpstat_table(sample, max_elapsed_ms):
     header = (
         f"{'CPU':>5} {'state':<5} {'tick':>5} {'qreq':>5} {'qend':>5} "
         f"{'disp':>5} {'ipi':>5} {'rdpc':>5} {'ctxsw':>6} {'ready':>7} "
-        f"{'qf':>3} {'dpc(q/a/p)':>10} {'current':>16} {'next':>16}"
+        f"{'rdy#':>5} {'qf':>3} {'dpc(q/a/p)':>10} {'current':>16} {'next':>16}"
     )
     lines = [title, header, "-" * len(header)]
     totals = {field: 0 for field in SMPSTAT_DELTA_FIELDS}
@@ -1698,7 +1717,8 @@ def format_smpstat_table(sample, max_elapsed_ms):
             f"{smpstat_int(row, 'dqreq'):>5} {smpstat_int(row, 'dqend'):>5} "
             f"{smpstat_int(row, 'ddisp'):>5} {smpstat_int(row, 'dipi'):>5} "
             f"{smpstat_int(row, 'drdpc'):>5} {smpstat_int(row, 'dcsw'):>6} "
-            f"{row.get('ready', '0x0'):>7} {smpstat_int(row, 'qflag'):>3} "
+            f"{row.get('ready', '0x0'):>7} {smpstat_int(row, 'rdycnt'):>5} "
+            f"{smpstat_int(row, 'qflag'):>3} "
             f"{dpc:>10} {smpstat_pointer(row.get('cur', '0')):>16} "
             f"{smpstat_pointer(row.get('next', '0')):>16}"
         )
@@ -1711,12 +1731,81 @@ def format_smpstat_table(sample, max_elapsed_ms):
         f"{'TOTAL':>5} {'':<5} {totals['dtick']:>5} {totals['dqreq']:>5} "
         f"{totals['dqend']:>5} {totals['ddisp']:>5} {totals['dipi']:>5} "
         f"{totals['drdpc']:>5} {totals['dcsw']:>6} {ready_total:#7x} "
+        f"{sum(smpstat_int(row, 'rdycnt') for row in rows.values()):>5} "
         f"{sum(smpstat_int(row, 'qflag') for row in rows.values()):>3} "
         f"{total_dpc:>10} {'-':>16} {'-':>16}",
     ])
 
+    quantum_header = (
+        f"{'CPU':>5} {'pri':>4} {'base':>5} {'state':>5} {'reset':>5} "
+        f"{'left':>5} {'unit':>10} {'charge#':>8} {'charged cycles':>18} "
+        f"{'base resets':>11} {'remaining cycles':>18} {'cycle':>18} "
+        f"{'target':>18} {'start cycle':>18}"
+    )
+    lines.extend(["", "SMPSTAT QUANTUM STATE", quantum_header, "-" * len(quantum_header)])
+    for cpu, row in sorted(rows.items()):
+        cycle = smpstat_int(row, "cycle")
+        target = smpstat_int(row, "qtarget")
+        lines.append(
+            f"{cpu:>5} {smpstat_int(row, 'curpri'):>4} "
+            f"{smpstat_int(row, 'curbase'):>5} "
+            f"{smpstat_int(row, 'curstate'):>5} "
+            f"{smpstat_int(row, 'qreset'):>5} "
+            f"{smpstat_int(row, 'qleft'):>5} "
+            f"{smpstat_int(row, 'qunit'):>10} "
+            f"{smpstat_int(row, 'dcharge'):>8} "
+            f"{smpstat_int(row, 'dcycles'):>18} "
+            f"{smpstat_int(row, 'dreset'):>11} "
+            f"{target - cycle:>18} {cycle:>18} {target:>18} "
+            f"{smpstat_int(row, 'startcyc'):>18}"
+        )
+
+    ownership_header = (
+        f"{'CPU':>5} {'current image':<16} {'pid':>8} {'tid':>8} "
+        f"{'pri':>4} {'affinity':>10} {'ideal':>5} {'cpu':>4} "
+        f"{'next image':<16} {'pid':>8} {'tid':>8} {'pri':>4} "
+        f"{'affinity':>10} {'ideal':>5} {'cpu':>4}"
+    )
+    lines.extend(["", "SMPSTAT DISPATCH OWNERSHIP", ownership_header, "-" * len(ownership_header)])
+    for cpu, row in sorted(rows.items()):
+        lines.append(
+            f"{cpu:>5} {row.get('curimg', '-'):<16.16} "
+            f"{row.get('curpid', '0'):>8} {row.get('curtid', '0'):>8} "
+            f"{smpstat_int(row, 'curpri'):>4} "
+            f"{row.get('curaff', '0x0'):>10} "
+            f"{smpstat_int(row, 'curideal'):>5} "
+            f"{smpstat_int(row, 'curcpu'):>4} "
+            f"{row.get('nextimg', '-'):<16.16} "
+            f"{row.get('nextpid', '0'):>8} {row.get('nexttid', '0'):>8} "
+            f"{smpstat_int(row, 'nextpri'):>4} "
+            f"{row.get('nextaff', '0x0'):>10} "
+            f"{smpstat_int(row, 'nextideal'):>5} "
+            f"{smpstat_int(row, 'nextcpu'):>4}"
+        )
+
+    ready_header = (
+        f"{'CPU':>5} {'ready':>7} {'rdy#':>5} {'head':>16} "
+        f"{'head image':<16} {'pid':>8} {'tid':>8} {'pri':>4} "
+        f"{'state':>5} {'age':>10} {'affinity':>10} {'ideal':>5} {'cpu':>4}"
+    )
+    lines.extend(["", "SMPSTAT READY HEAD", ready_header, "-" * len(ready_header)])
+    for cpu, row in sorted(rows.items()):
+        lines.append(
+            f"{cpu:>5} {row.get('ready', '0x0'):>7} "
+            f"{smpstat_int(row, 'rdycnt'):>5} "
+            f"{smpstat_pointer(row.get('rdythr', '0')):>16} "
+            f"{row.get('rdyimg', '-'):<16.16} "
+            f"{row.get('rdypid', '0'):>8} {row.get('rdytid', '0'):>8} "
+            f"{smpstat_int(row, 'rdypri'):>4} "
+            f"{smpstat_int(row, 'rdystate'):>5} "
+            f"{smpstat_int(row, 'rdyage'):>10} "
+            f"{row.get('rdyaff', '0x0'):>10} "
+            f"{smpstat_int(row, 'rdyideal'):>5} "
+            f"{smpstat_int(row, 'rdycpu'):>4}"
+        )
+
     ipi_header = (
-        f"{'CPU':>5} {'sched':>7} {'dpcq_ipi':>8} "
+        f"{'CPU':>5} {'sched':>7} {'dpcq_ipi':>8} {'tb':>7} {'generic':>7} "
         f"{'from0':>7} {'from1':>7} {'from2':>7} {'from3':>7} "
         f"{'last image':<16} {'pid':>8} {'tid':>8} {'src':>4} "
         f"{'pri':>4} {'ideal':>5} {'cause':>5}"
@@ -1726,6 +1815,8 @@ def format_smpstat_table(sample, max_elapsed_ms):
         lines.append(
             f"{cpu:>5} {smpstat_int(row, 'dsched'):>7} "
             f"{smpstat_int(row, 'ddpc'):>8} "
+            f"{smpstat_int(row, 'dtb'):>7} "
+            f"{smpstat_int(row, 'dgen'):>7} "
             f"{smpstat_int(row, 'dsrc0'):>7} "
             f"{smpstat_int(row, 'dsrc1'):>7} "
             f"{smpstat_int(row, 'dsrc2'):>7} "
@@ -1740,8 +1831,34 @@ def format_smpstat_table(sample, max_elapsed_ms):
     lines.extend([
         "-" * len(ipi_header),
         f"{'TOTAL':>5} {totals['dsched']:>7} {totals['ddpc']:>8} "
+        f"{totals['dtb']:>7} {totals['dgen']:>7} "
         f"{totals['dsrc0']:>7} {totals['dsrc1']:>7} "
         f"{totals['dsrc2']:>7} {totals['dsrc3']:>7}",
+    ])
+
+    balance_header = (
+        f"{'CPU':>5} {'place':>8} {'idle':>8} {'quantum':>8} {'periodic':>9} {'standby':>9} "
+        f"{'from0':>8} {'from1':>8} {'from2':>8} {'from3':>8}"
+    )
+    lines.extend(["", "SMPSTAT LOAD BALANCE", balance_header, "-" * len(balance_header)])
+    for cpu, row in sorted(rows.items()):
+        lines.append(
+            f"{cpu:>5} {smpstat_int(row, 'dplace'):>8} "
+            f"{smpstat_int(row, 'didle'):>8} "
+            f"{smpstat_int(row, 'dquant'):>8} "
+            f"{smpstat_int(row, 'dperiod'):>9} "
+            f"{smpstat_int(row, 'dstandby'):>9} "
+            f"{smpstat_int(row, 'dbsrc0'):>8} "
+            f"{smpstat_int(row, 'dbsrc1'):>8} "
+            f"{smpstat_int(row, 'dbsrc2'):>8} "
+            f"{smpstat_int(row, 'dbsrc3'):>8}"
+        )
+    lines.extend([
+        "-" * len(balance_header),
+        f"{'TOTAL':>5} {totals['dplace']:>8} {totals['didle']:>8} "
+        f"{totals['dquant']:>8} {totals['dperiod']:>9} {totals['dstandby']:>9} "
+        f"{totals['dbsrc0']:>8} {totals['dbsrc1']:>8} "
+        f"{totals['dbsrc2']:>8} {totals['dbsrc3']:>8}",
     ])
     return "\n".join(lines)
 
@@ -1758,6 +1875,12 @@ class SmpStatTablePrinter:
         self.finished = False
 
     def feed(self, line):
+        markers = list(re.finditer(r"\bSMPSTAT\s+(?:sample|cpu)=", line))
+        for index, marker in enumerate(markers):
+            end = markers[index + 1].start() if index + 1 < len(markers) else len(line)
+            self._feed_record(line[marker.start():end])
+
+    def _feed_record(self, line):
         kind, data = parse_smpstat_line(line)
         if kind == "sample":
             self.flush()
@@ -1853,8 +1976,24 @@ class SmpStatTablePrinter:
                 f"{rates[6]:>9.1f} {totals['max_ctxsw']:>6} "
                 f"{totals['last_ready']:>7}"
             )
+        quantum_header = (
+            f"{'CPU':>5} {'charges/s':>11} {'charged cycles/s':>18} "
+            f"{'baseline resets':>15} {'qreq/charge':>12} {'qend/charge':>12}"
+        )
+        lines.extend(["", "SMPSTAT QUANTUM ACCOUNTING SUMMARY", quantum_header, "-" * len(quantum_header)])
+        for cpu, totals in sorted(self.cpu_totals.items()):
+            seconds = totals["elapsed_ms"] / 1000.0
+            charges = totals["dcharge"]
+            lines.append(
+                f"{cpu:>5} "
+                f"{(charges / seconds if seconds else 0.0):>11.1f} "
+                f"{(totals['dcycles'] / seconds if seconds else 0.0):>18.1f} "
+                f"{totals['dreset']:>15} "
+                f"{(totals['dqreq'] / charges if charges else 0.0):>12.3f} "
+                f"{(totals['dqend'] / charges if charges else 0.0):>12.3f}"
+            )
         ipi_header = (
-            f"{'CPU':>5} {'sched/s':>9} {'dpcq_ipi/s':>11} "
+            f"{'CPU':>5} {'sched/s':>9} {'dpcq_ipi/s':>11} {'tb/s':>9} {'generic/s':>11} "
             f"{'from0/s':>9} {'from1/s':>9} {'from2/s':>9} {'from3/s':>9}"
         )
         lines.extend(["", "SMPSTAT IPI ATTRIBUTION SUMMARY", ipi_header, "-" * len(ipi_header)])
@@ -1863,13 +2002,35 @@ class SmpStatTablePrinter:
             rates = [
                 totals[field] / seconds if seconds else 0.0
                 for field in (
-                    "dsched", "ddpc", "dsrc0", "dsrc1", "dsrc2", "dsrc3"
+                    "dsched", "ddpc", "dtb", "dgen", "dsrc0", "dsrc1", "dsrc2", "dsrc3"
                 )
             ]
             lines.append(
                 f"{cpu:>5} {rates[0]:>9.1f} {rates[1]:>11.1f} "
-                f"{rates[2]:>9.1f} {rates[3]:>9.1f} "
-                f"{rates[4]:>9.1f} {rates[5]:>9.1f}"
+                f"{rates[2]:>9.1f} {rates[3]:>11.1f} "
+                f"{rates[4]:>9.1f} {rates[5]:>9.1f} "
+                f"{rates[6]:>9.1f} {rates[7]:>9.1f}"
+            )
+        balance_header = (
+            f"{'CPU':>5} {'place/s':>10} {'idle/s':>10} {'quantum/s':>10} {'periodic/s':>11} {'standby/s':>11} "
+            f"{'from0/s':>10} {'from1/s':>10} {'from2/s':>10} {'from3/s':>10}"
+        )
+        lines.extend(["", "SMPSTAT LOAD BALANCE SUMMARY", balance_header, "-" * len(balance_header)])
+        for cpu, totals in sorted(self.cpu_totals.items()):
+            seconds = totals["elapsed_ms"] / 1000.0
+            rates = [
+                totals[field] / seconds if seconds else 0.0
+                for field in (
+                    "dplace", "didle", "dquant", "dperiod", "dstandby",
+                    "dbsrc0", "dbsrc1", "dbsrc2", "dbsrc3"
+                )
+            ]
+            lines.append(
+                f"{cpu:>5} {rates[0]:>10.1f} {rates[1]:>10.1f} "
+                f"{rates[2]:>10.1f} {rates[3]:>11.1f} "
+                f"{rates[4]:>11.1f} {rates[5]:>10.1f} "
+                f"{rates[6]:>10.1f} {rates[7]:>10.1f} "
+                f"{rates[8]:>10.1f}"
             )
         return "\n".join(lines)
 
@@ -1878,6 +2039,217 @@ class SmpStatTablePrinter:
             return
         self.finished = True
         self.flush()
+        summary = self.format_summary()
+        if summary:
+            self.output(summary)
+
+
+SERIAL_TIMESTAMP_RE = re.compile(r"\[\s*(\d+\.\d+)\]\s*")
+TASKMGR11_BEGIN_RE = re.compile(r"\bTASKMGR11_DIAG_BEGIN\b")
+TASKMGR11_SAMPLE_RE = re.compile(r"\bTASKMGR11_SAMPLE\b")
+TASKMGR11_GRAPH_RE = re.compile(r"\bTASKMGR11_GRAPH\b")
+CPUBENCH_BEGIN_RE = re.compile(r"\[cpubench\]\s+(.+?)\s+SMP_BEGIN\b")
+CPUBENCH_END_RE = re.compile(r"\[cpubench\]\s+(.+?)\s+SMP_END\b")
+
+
+class TaskMgrCadencePrinter:
+    """Summarize Taskmgr11 data and graph cadence around each all-core burst."""
+
+    def __init__(self, output=print):
+        self.output = output
+        self.period_ms = 0
+        self.origin_qpc = 0
+        self.frequency = 0
+        self.origin_tick_ms = 0
+        self.origin_serial_s = None
+        self.samples = []
+        self.graphs = {}
+        self.pending_benchmarks = {}
+        self.benchmarks = []
+        self.finished = False
+
+    @staticmethod
+    def _serial_seconds(line, marker_position):
+        timestamps = list(SERIAL_TIMESTAMP_RE.finditer(line, 0, marker_position))
+        return float(timestamps[-1].group(1)) if timestamps else None
+
+    def feed(self, line):
+        match = TASKMGR11_BEGIN_RE.search(line)
+        if match:
+            fields = dict(SMPSTAT_FIELD_RE.findall(line[match.start():]))
+            self.period_ms = int(fields.get("period_ms", "0"))
+            self.origin_qpc = int(fields.get("qpc", "0"))
+            self.frequency = int(fields.get("qpc_hz", "0"))
+            self.origin_tick_ms = int(fields.get("tick_ms", "0"))
+            self.origin_serial_s = self._serial_seconds(line, match.start())
+            return
+
+        match = TASKMGR11_SAMPLE_RE.search(line)
+        if match:
+            fields = dict(SMPSTAT_FIELD_RE.findall(line[match.start():]))
+            self.samples.append({
+                "seq": int(fields["seq"]),
+                "qpc": int(fields.get("qpc", "0")),
+                "tick_ms": int(fields.get("tick_ms", "0")),
+                "serial_s": self._serial_seconds(line, match.start()),
+                "at_ms": int(fields["at_ms"]),
+                "delta_ms": int(fields["delta_ms"]),
+                "late_ms": int(fields["late_ms"]),
+                "query_ms": int(fields["query_ms"]),
+                "cpu_pct": float(fields["cpu_pct"]),
+            })
+            return
+
+        match = TASKMGR11_GRAPH_RE.search(line)
+        if match:
+            fields = dict(SMPSTAT_FIELD_RE.findall(line[match.start():]))
+            sequence = int(fields["seq"])
+            self.graphs[sequence] = {
+                "seq": sequence,
+                "qpc": int(fields.get("qpc", "0")),
+                "tick_ms": int(fields.get("tick_ms", "0")),
+                "serial_s": self._serial_seconds(line, match.start()),
+                "at_ms": int(fields["at_ms"]),
+                "delta_ms": int(fields["delta_ms"]),
+                "sample_to_paint_ms": int(fields["sample_to_paint_ms"]),
+                "cpu_pct": float(fields["cpu_pct"]),
+                "cpu0_pct": float(fields["cpu0_pct"]),
+                "cpu1_pct": float(fields["cpu1_pct"]),
+                "cpu2_pct": float(fields["cpu2_pct"]),
+                "cpu3_pct": float(fields["cpu3_pct"]),
+            }
+            return
+
+        match = CPUBENCH_BEGIN_RE.search(line)
+        if match:
+            fields = dict(SMPSTAT_FIELD_RE.findall(line[match.start():]))
+            name = match.group(1)
+            self.pending_benchmarks.setdefault(name, []).append({
+                "name": name,
+                "cores": int(fields["cores"]),
+                "target_s": int(fields["target_s"]),
+                "start_qpc": int(fields.get("qpc", "0")),
+                "start_tick_ms": int(fields.get("tick_ms", "0")),
+                "start_serial_s": self._serial_seconds(line, match.start()),
+            })
+            return
+
+        match = CPUBENCH_END_RE.search(line)
+        if match:
+            fields = dict(SMPSTAT_FIELD_RE.findall(line[match.start():]))
+            name = match.group(1)
+            pending = self.pending_benchmarks.get(name, [])
+            if pending:
+                benchmark = pending.pop(0)
+                benchmark["end_qpc"] = int(fields.get("qpc", "0"))
+                benchmark["end_tick_ms"] = int(fields.get("tick_ms", "0"))
+                benchmark["end_serial_s"] = self._serial_seconds(line, match.start())
+                benchmark["elapsed_ms"] = int(fields["elapsed_ms"])
+                self.benchmarks.append(benchmark)
+
+    def _window(self, name, start, end, clock):
+        samples = [sample for sample in self.samples if sample[clock] is not None and start <= sample[clock] <= end]
+        graphs = [self.graphs[sample["seq"]] for sample in samples if sample["seq"] in self.graphs]
+        sample_times = sorted(sample[clock] for sample in samples)
+        gaps = [(current - previous) * 1000.0 for previous, current in zip(sample_times, sample_times[1:])]
+        paint_lags = [(graph[clock] - sample[clock]) * 1000.0 for sample in samples for graph in [self.graphs.get(sample["seq"])] if graph and graph[clock] is not None]
+        duration_ms = (end - start) * 1000.0
+        expected = int(duration_ms / self.period_ms) if self.period_ms else 0
+        return {
+            "name": name,
+            "duration_ms": duration_ms,
+            "expected": expected,
+            "samples": len(samples),
+            "graphs": len(graphs),
+            "avg_gap": sum(gaps) / len(gaps) if gaps else 0.0,
+            "max_gap": max(gaps, default=0),
+            "over_750": sum(gap > 750 for gap in gaps),
+            "over_1000": sum(gap > 1000 for gap in gaps),
+            "max_paint": max(paint_lags, default=0.0),
+            "missing": len(samples) - len(graphs),
+            "cpu_pct": sum((graph["cpu_pct"] for graph in graphs), 0.0) / len(graphs) if graphs else 0.0,
+            "cpu0_pct": sum((graph["cpu0_pct"] for graph in graphs), 0.0) / len(graphs) if graphs else 0.0,
+            "cpu1_pct": sum((graph["cpu1_pct"] for graph in graphs), 0.0) / len(graphs) if graphs else 0.0,
+            "cpu2_pct": sum((graph["cpu2_pct"] for graph in graphs), 0.0) / len(graphs) if graphs else 0.0,
+            "cpu3_pct": sum((graph["cpu3_pct"] for graph in graphs), 0.0) / len(graphs) if graphs else 0.0,
+        }
+
+    def format_summary(self):
+        if not self.samples:
+            return ""
+
+        serial_clock = self.origin_serial_s is not None and all(sample["serial_s"] is not None for sample in self.samples) and all(benchmark["start_serial_s"] is not None and benchmark["end_serial_s"] is not None for benchmark in self.benchmarks)
+        if serial_clock:
+            clock = "serial_s"
+            origin = self.origin_serial_s
+            benchmarks = sorted(self.benchmarks, key=lambda row: row["start_serial_s"])
+            last = max([sample["serial_s"] for sample in self.samples] + [graph["serial_s"] for graph in self.graphs.values() if graph["serial_s"] is not None])
+            benchmark_start = "start_serial_s"
+            benchmark_end = "end_serial_s"
+            clock_name = "serial"
+        elif self.origin_tick_ms and all(sample["tick_ms"] for sample in self.samples):
+            clock = "tick_ms"
+            origin = self.origin_tick_ms
+            benchmarks = sorted(self.benchmarks, key=lambda row: row["start_tick_ms"])
+            last = max([sample["tick_ms"] for sample in self.samples] + [graph["tick_ms"] for graph in self.graphs.values()])
+            benchmark_start = "start_tick_ms"
+            benchmark_end = "end_tick_ms"
+            clock_name = "tick"
+        elif self.frequency and self.origin_qpc:
+            clock = "qpc"
+            origin = self.origin_qpc / self.frequency
+            benchmarks = sorted(self.benchmarks, key=lambda row: row["start_qpc"])
+            last = max([sample["qpc"] for sample in self.samples] + [graph["qpc"] for graph in self.graphs.values()]) / self.frequency
+            for sample in self.samples:
+                sample["qpc"] /= self.frequency
+            for graph in self.graphs.values():
+                graph["qpc"] /= self.frequency
+            benchmark_start = "start_qpc_seconds"
+            benchmark_end = "end_qpc_seconds"
+            for benchmark in benchmarks:
+                benchmark[benchmark_start] = benchmark["start_qpc"] / self.frequency
+                benchmark[benchmark_end] = benchmark["end_qpc"] / self.frequency
+            clock_name = "qpc"
+        else:
+            return ""
+
+        if clock == "tick_ms":
+            origin /= 1000.0
+            last /= 1000.0
+            for sample in self.samples:
+                sample[clock] /= 1000.0
+            for graph in self.graphs.values():
+                graph[clock] /= 1000.0
+            for benchmark in benchmarks:
+                benchmark[benchmark_start] /= 1000.0
+                benchmark[benchmark_end] /= 1000.0
+
+        windows = [self._window("whole run", origin, last, clock)]
+        if benchmarks:
+            windows.append(self._window("baseline", origin, benchmarks[0][benchmark_start], clock))
+            for benchmark in benchmarks:
+                windows.append(self._window(benchmark["name"], benchmark[benchmark_start], benchmark[benchmark_end], clock))
+            windows.append(self._window("recovery", benchmarks[-1][benchmark_end], last, clock))
+
+        cadence_header = f"{'window':<16} {'wall_s':>7} {'expect':>6} {'sample':>6} {'paint':>6} {'avg_gap':>8} {'max_gap':>8} {'>750':>5} {'>1000':>6} {'draw':>6} {'miss':>5}"
+        lines = [
+            f"TASKMGR11 CADENCE SUMMARY clock={clock_name} target={self.period_ms}ms samples={len(self.samples)} paints={len(self.graphs)}",
+            cadence_header,
+            "-" * len(cadence_header),
+        ]
+        for row in windows:
+            lines.append(f"{row['name']:<16.16} {row['duration_ms'] / 1000.0:>7.2f} {row['expected']:>6} {row['samples']:>6} {row['graphs']:>6} {row['avg_gap']:>8.1f} {row['max_gap']:>8.1f} {row['over_750']:>5} {row['over_1000']:>6} {row['max_paint']:>6.1f} {row['missing']:>5}")
+
+        cpu_header = f"{'window':<16} {'total%':>8} {'cpu0%':>8} {'cpu1%':>8} {'cpu2%':>8} {'cpu3%':>8}"
+        lines.extend(["", "TASKMGR11 CPU GRAPH SUMMARY", cpu_header, "-" * len(cpu_header)])
+        for row in windows:
+            lines.append(f"{row['name']:<16.16} {row['cpu_pct']:>8.1f} {row['cpu0_pct']:>8.1f} {row['cpu1_pct']:>8.1f} {row['cpu2_pct']:>8.1f} {row['cpu3_pct']:>8.1f}")
+        return "\n".join(lines)
+
+    def finish(self):
+        if self.finished:
+            return
+        self.finished = True
         summary = self.format_summary()
         if summary:
             self.output(summary)
@@ -1963,10 +2335,17 @@ def monitor_log():
     last_size = get_file_size(LOG_FILE)
     last_change_time = time.time()
     crash_dumped = False
+    kernel_started = any(marker in read_log_tail(LOG_FILE) for marker in KERNEL_LOG_MARKERS)
     smp_tables = SmpStatTablePrinter()
-    log_follower = SerialLogFollower(LOG_FILE, smp_tables.feed)
-    if ENABLE_SMP_TABLE:
-        log_follower.read_available()
+    taskmgr_cadence = TaskMgrCadencePrinter()
+
+    def feed_runtime_line(line):
+        if ENABLE_SMP_TABLE:
+            smp_tables.feed(line)
+        taskmgr_cadence.feed(line)
+
+    log_follower = SerialLogFollower(LOG_FILE, feed_runtime_line)
+    log_follower.read_available()
 
     try:
         while True:
@@ -1996,9 +2375,15 @@ def monitor_log():
             if current_size != last_size:
                 last_size = current_size
                 last_change_time = current_time
-                if ENABLE_SMP_TABLE:
-                    log_follower.read_available()
-                if not crash_dumped and log_has_crash_marker(read_log_tail(LOG_FILE)):
+                log_follower.read_available()
+                log_tail = read_log_tail(LOG_FILE)
+                if not kernel_started:
+                    kernel_started = any(marker in log_tail for marker in KERNEL_LOG_MARKERS)
+                if SUCCESS_LOG_MARKER in log_tail:
+                    print(f"Runtime matrix completed: {SUCCESS_LOG_MARKER}")
+                    force_kill_vm()
+                    return
+                if not crash_dumped and log_has_crash_marker(log_tail):
                     crash_dumped = True
                     print("Crash/debugger marker detected in serial log.")
                     capture_gdb_dump("serial crash marker")
@@ -2008,7 +2393,7 @@ def monitor_log():
             else:
                 stall_duration = current_time - last_change_time
 
-                if stall_duration >= STALL_TIMEOUT:
+                if kernel_started and stall_duration >= STALL_TIMEOUT:
                     print(f"STALL DETECTED! Log unchanged for {stall_duration:.1f} seconds")
 
                     capture_gdb_dump("serial stall")
@@ -2026,9 +2411,10 @@ def monitor_log():
     except KeyboardInterrupt:
         print("\nMonitoring interrupted.")
     finally:
+        log_follower.finish()
         if ENABLE_SMP_TABLE:
-            log_follower.finish()
             smp_tables.finish()
+        taskmgr_cadence.finish()
 
 
 def signal_handler(sig, frame):

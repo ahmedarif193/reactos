@@ -229,6 +229,8 @@ KiIpiProcessRequests(VOID)
 
         if (Requests & KI_IPI_TB_FLUSH)
         {
+            if (SmpDbgEnabled)
+                SmpDbgTbFlushIpi(Prcb->Number);
             ASSERT(Packet->Outstanding & Prcb->SetMember);
             KiFlushLocalTb(Packet->BaseAddress, Packet->PageCount);
             InterlockedBitTestAndResetAffinity(&Packet->Outstanding,
@@ -236,7 +238,11 @@ KiIpiProcessRequests(VOID)
         }
 
         if (Requests & KI_IPI_GENERIC_CALL)
+        {
+            if (SmpDbgEnabled)
+                SmpDbgGenericCallIpi(Prcb->Number);
             KiIpiParticipateInGenericCall(Prcb);
+        }
 
         if (Requests & IPI_DPC)
         {

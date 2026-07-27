@@ -36,11 +36,17 @@ KiChargeThreadCycleTime(
 
     /* Reset the baseline after an uninitialized or backwards sample. */
     if ((StartCycles == 0) || (CurrentCycles < StartCycles))
+    {
+        if (SmpDbgEnabled)
+            SmpDbgCycleCharge(Prcb->Number, 0, TRUE);
         return;
+    }
 
     Delta = CurrentCycles - StartCycles;
     Thread->CycleTime += Delta;
     Prcb->CycleTime += Delta;
+    if (SmpDbgEnabled)
+        SmpDbgCycleCharge(Prcb->Number, Delta, FALSE);
 }
 #endif
 
