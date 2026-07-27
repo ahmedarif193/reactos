@@ -301,11 +301,29 @@ VOID
 FASTCALL
 KiQueueThreadForReaping(IN PKTHREAD Thread);
 
+_Requires_lock_held_(Prcb->PrcbLock)
 PKTHREAD
 FASTCALL
 KiIdleSchedule(
     IN PKPRCB Prcb
 );
+
+typedef enum _KI_BALANCE_REASON
+{
+    KiBalanceWakePlacement = 1,
+    KiBalanceIdle,
+    KiBalanceQuantum
+} KI_BALANCE_REASON;
+
+#ifdef CONFIG_SMP
+_Requires_lock_not_held_(Target->PrcbLock)
+BOOLEAN
+FASTCALL
+KiBalanceReadyQueues(
+    IN PKPRCB Target,
+    IN KI_BALANCE_REASON Reason
+);
+#endif
 
 VOID
 FASTCALL
@@ -360,6 +378,15 @@ NTAPI
 KeStartAllProcessors(
     VOID
 );
+
+#ifdef CONFIG_SMP
+CODE_SEG("INIT")
+VOID
+NTAPI
+KiExpandInitialProcessAffinities(
+    VOID
+);
+#endif
 
 /* gmutex.c ********************************************************************/
 

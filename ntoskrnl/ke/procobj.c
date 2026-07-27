@@ -30,6 +30,51 @@ PVOID KeRaiseUserExceptionDispatcher;
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
+#ifdef CONFIG_SMP
+CODE_SEG("INIT")
+VOID
+NTAPI
+KiExpandInitialProcessAffinities(VOID)
+{
+    KAFFINITY FullAffinity, OldAffinity;
+    KLOCK_QUEUE_HANDLE LockHandle;
+    PLIST_ENTRY Entry;
+    PKTHREAD Thread;
+
+    FullAffinity = KeActiveProcessors;
+    if ((KeNumberProcessors <= 1) || (FullAffinity == 0))
+        return;
+
+    if (PsIdleProcess != NULL)
+        PsIdleProcess->Pcb.Affinity = FullAffinity;
+
+    if (PsInitialSystemProcess == NULL)
+        return;
+
+    KiAcquireProcessLockRaiseToSynch(&PsInitialSystemProcess->Pcb, &LockHandle);
+
+    OldAffinity = PsInitialSystemProcess->Pcb.Affinity;
+    PsInitialSystemProcess->Pcb.Affinity = FullAffinity;
+
+    for (Entry = PsInitialSystemProcess->Pcb.ThreadListHead.Flink;
+         Entry != &PsInitialSystemProcess->Pcb.ThreadListHead;
+         Entry = Entry->Flink)
+    {
+        Thread = CONTAINING_RECORD(Entry, KTHREAD, ThreadListEntry);
+        KiAcquireThreadLock(Thread);
+        if ((KiThreadAffinityMask(Thread) == OldAffinity) &&
+            (KiThreadUserAffinityMask(Thread) == OldAffinity))
+        {
+            KiThreadAffinityMask(Thread) = FullAffinity;
+            KiThreadUserAffinityMask(Thread) = FullAffinity;
+        }
+        KiReleaseThreadLock(Thread);
+    }
+
+    KiReleaseProcessLock(&LockHandle);
+}
+#endif
+
 VOID
 NTAPI
 KiAttachProcess(IN PKTHREAD Thread,

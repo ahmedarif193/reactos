@@ -170,9 +170,15 @@ KiIdleLoop(VOID)
             Prcb->NextThread = NULL;
         }
 #ifdef CONFIG_SMP
-        else if (Prcb->ReadySummary)
+        else
         {
-            NewThread = KiSelectReadyThread(0, Prcb);
+            NewThread = KiIdleSchedule(Prcb);
+            if (NewThread == Prcb->IdleThread)
+            {
+                NewThread = Prcb->NextThread;
+                if (NewThread != NULL)
+                    Prcb->NextThread = NULL;
+            }
         }
 #endif
 

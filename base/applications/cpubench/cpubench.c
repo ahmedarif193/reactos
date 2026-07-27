@@ -348,11 +348,11 @@ static void RunBench(const char *Name, int Kind, unsigned long Unit, LONGLONG Fr
     WORK W[MAX_CPUS];
     HANDLE Th[MAX_CPUS];
     LARGE_INTEGER WallA, WallB;
+    DWORD_PTR PreviousAffinity;
     unsigned i;
 
-    SetThreadAffinityMask(GetCurrentThread(), (DWORD_PTR)1);
+    PreviousAffinity = SetThreadAffinityMask(GetCurrentThread(), (DWORD_PTR)1);
     Ticks = (Kind == 0) ? DhryRun(Count) : FpRun(Count);
-    SetThreadAffinityMask(GetCurrentThread(), (DWORD_PTR)(((NumCpus >= 64) ? ~0ULL : ((1ULL << NumCpus) - 1))));
     Single = RateFromTicks(Count, Unit, Freq, Ticks);
 
     emit("[cpubench] %s: cores=%u runs/core=%lu qpc=%I64u Hz\n", Name, NumCpus, Count, (ULONGLONG)Freq);
@@ -387,6 +387,8 @@ static void RunBench(const char *Name, int Kind, unsigned long Unit, LONGLONG Fr
         Th[i] = CreateThread(NULL, 0, Worker, &W[i], 0, NULL);
     WaitForMultipleObjects(NumCpus, Th, TRUE, INFINITE);
     QueryPerformanceCounter(&WallB);
+    if (PreviousAffinity != 0)
+        SetThreadAffinityMask(GetCurrentThread(), PreviousAffinity);
 
     AggSum = 0;
     for (i = 0; i < NumCpus; ++i)

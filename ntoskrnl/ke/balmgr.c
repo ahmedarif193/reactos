@@ -14,11 +14,13 @@
 
 /* GLOBALS *******************************************************************/
 
-#define THREAD_BOOST_PRIORITY (LOW_REALTIME_PRIORITY - 1)
+#define READY_SCAN_PRIORITY_MIN 8
+#define READY_SCAN_PRIORITY_MAX 9
+#define THREAD_BOOST_PRIORITY 11
 #define READY_SCAN_PROCESSORS 8
 #define READY_SCAN_CANDIDATES 16
-#define READY_SCAN_BOOSTS 8
-#define READY_SCAN_WAIT_TICKS 300
+#define READY_SCAN_BOOSTS 1
+#define READY_SCAN_WAIT_TICKS 6
 ULONG KiReadyScanLast;
 
 /* PRIVATE FUNCTIONS *********************************************************/
@@ -41,13 +43,13 @@ KiScanReadyQueuesOnPrcb(IN PKPRCB Prcb,
     Index = Prcb->QueueIndex;
 
     /* Check if there's any thread that need help */
-    Summary = Prcb->ReadySummary & ((1 << THREAD_BOOST_PRIORITY) - 2);
+    Summary = Prcb->ReadySummary & (PRIORITY_MASK(READY_SCAN_PRIORITY_MIN) | PRIORITY_MASK(READY_SCAN_PRIORITY_MAX));
     while (Summary &&
            (CandidatesScanned < CandidateQuota) &&
            (ThreadsBoosted < BoostQuota))
     {
         /* Normalize the index */
-        if (Index > (THREAD_BOOST_PRIORITY - 1)) Index = 1;
+        if ((Index < READY_SCAN_PRIORITY_MIN) || (Index > READY_SCAN_PRIORITY_MAX)) Index = READY_SCAN_PRIORITY_MIN;
 
         /* Loop for ready threads */
         if (Summary & PRIORITY_MASK(Index))
@@ -118,7 +120,7 @@ KiScanReadyQueuesOnPrcb(IN PKPRCB Prcb,
         Index++;
     }
 
-    Prcb->QueueIndex = Summary ? Index : 1;
+    Prcb->QueueIndex = Summary ? Index : READY_SCAN_PRIORITY_MIN;
     KiReleasePrcbLock(Prcb);
 }
 
@@ -144,8 +146,8 @@ KiScanReadyQueues(IN PKDPC Dpc,
     ProcessorCount = min((ULONG)KeNumberProcessors,
                          (ULONG)READY_SCAN_PROCESSORS);
     ASSERT(ProcessorCount != 0);
-    CandidateQuota = READY_SCAN_CANDIDATES / ProcessorCount;
-    BoostQuota = READY_SCAN_BOOSTS / ProcessorCount;
+    CandidateQuota = READY_SCAN_CANDIDATES;
+    BoostQuota = READY_SCAN_BOOSTS;
     OldIrql = KeRaiseIrqlToSynchLevel();
 
     for (Processor = 0; Processor < ProcessorCount; Processor++)

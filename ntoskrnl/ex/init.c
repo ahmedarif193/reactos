@@ -1751,6 +1751,8 @@ Phase1InitializationDiscard(IN PVOID Context)
 
     /* Start Application Processors */
     KeStartAllProcessors();
+
+    KiExpandInitialProcessAffinities();
 #endif
 
     /* Initialize all processors */
