@@ -164,6 +164,7 @@ KiIpiServiceRoutine(
 
         if (InterlockedBitTestAndReset((PLONG)&Prcb->RequestSummary, IPI_DPC))
         {
+            SmpDbgRemoteDpc(Prcb->Number, SMPDBG_SOURCE_UNKNOWN);
             Prcb->DpcInterruptRequested = TRUE;
             HalRequestSoftwareInterrupt(DISPATCH_LEVEL);
         }

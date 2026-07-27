@@ -33,6 +33,9 @@ typedef struct _SMPDBG_CPU
     volatile ULONG GicPend; /* timer PPI pending          */
     volatile ULONG GicAct;  /* timer PPI active           */
     volatile ULONG IdleStreak; /* consecutive all-idle ticks seen by this CPU */
+    volatile ULONG RemoteDpc;
+    volatile ULONG SchedulerIpi;
+    volatile ULONG QueuedDpcIpi;
 } SMPDBG_CPU;
 
 static SMPDBG_CPU SmpDbgCpu[SMPDBG_MAXCPU];
@@ -68,6 +71,29 @@ VOID NTAPI SmpDbgIpi(ULONG Cpu)
 {
     if (SmpDbgEnabled && (Cpu < SMPDBG_MAXCPU))
         SmpDbgCpu[Cpu].Ipi++;
+}
+
+VOID NTAPI SmpDbgRemoteDpc(ULONG Cpu, ULONG SourceCpu)
+{
+    UNREFERENCED_PARAMETER(SourceCpu);
+
+    if (SmpDbgEnabled && (Cpu < SMPDBG_MAXCPU))
+        InterlockedIncrement((PLONG)&SmpDbgCpu[Cpu].RemoteDpc);
+}
+
+VOID NTAPI SmpDbgSchedulerIpi(ULONG Cpu, PVOID Thread, ULONG Cause)
+{
+    UNREFERENCED_PARAMETER(Thread);
+    UNREFERENCED_PARAMETER(Cause);
+
+    if (SmpDbgEnabled && (Cpu < SMPDBG_MAXCPU))
+        InterlockedIncrement((PLONG)&SmpDbgCpu[Cpu].SchedulerIpi);
+}
+
+VOID NTAPI SmpDbgQueuedDpcIpi(ULONG Cpu)
+{
+    if (SmpDbgEnabled && (Cpu < SMPDBG_MAXCPU))
+        InterlockedIncrement((PLONG)&SmpDbgCpu[Cpu].QueuedDpcIpi);
 }
 
 VOID NTAPI SmpDbgPark(ULONG Cpu)
@@ -129,12 +155,14 @@ VOID NTAPI SmpDbgHeartbeat(ULONG Cpu)
             {
                 PKPRCB P = KiProcessorBlock[i];
                 if (P != NULL)
-                    DbgPrint("SMPWEDGE   cpu%lu next=%p ready=0x%lx defer=%p cur=%p sleep=%u tick=%lu treq=%p dpcq=%lu dpcact=%u dpcint=%u\n",
+                    DbgPrint("SMPWEDGE   cpu%lu next=%p ready=0x%lx defer=%p cur=%p sleep=%u tick=%lu treq=%p dpcq=%lu dpcact=%u dpcint=%u rdpc=%lu schedipi=%lu dpcipi=%lu\n",
                              i, P->NextThread, (ULONG)P->ReadySummary,
                              P->DeferredReadyListHead.Next, P->CurrentThread,
                              (ULONG)P->Sleeping, SmpDbgCpu[i].Tick,
                              (PVOID)P->TimerRequest, (ULONG)P->DpcData[0].DpcQueueDepth,
-                             (ULONG)P->DpcRoutineActive, (ULONG)P->DpcInterruptRequested);
+                             (ULONG)P->DpcRoutineActive, (ULONG)P->DpcInterruptRequested,
+                             SmpDbgCpu[i].RemoteDpc, SmpDbgCpu[i].SchedulerIpi,
+                             SmpDbgCpu[i].QueuedDpcIpi);
             }
         }
     }

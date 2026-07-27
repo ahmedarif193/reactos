@@ -241,7 +241,7 @@ KiIpiProcessRequests(VOID)
         if (Requests & IPI_DPC)
         {
             if (SmpDbgEnabled)
-                SmpDbgRemoteDpc(Prcb->Number);
+                SmpDbgRemoteDpc(Prcb->Number, Source);
             DpcRequest = TRUE;
         }
 
