@@ -1,10 +1,9 @@
 /*
  * PROJECT:     ReactOS Kernel
- * PURPOSE:     ARM64 SMP boot diagnostics (smpdbg).
+ * PURPOSE:     Architecture-specific SMP boot and runtime diagnostics.
  *
- * Per-CPU counters/state live in ke/arm64/smpdbg.c and are recorded from both
- * ntoskrnl and the HAL (which imports the recorder exports). All output is gated
- * at runtime by SmpDbgEnabled, set when the /SMPDIAG boot option is present.
+ * All output is gated at runtime by SmpDbgEnabled, set when the /SMPDIAG boot
+ * option is present.
  */
 
 #ifndef _REACTOS_SMPDBG_H
@@ -48,7 +47,31 @@ VOID NTAPI HalArm64DbgGicState(ULONG IntId, ULONG *Prio, ULONG *Enable, ULONG *P
 #define SMPDBG_TIMER_EOI(c, i)    SmpDbgTimerEoi((c), (i))
 #define SMPDBG_TIMER_REJECT(c, i) SmpDbgTimerReject((c), (i))
 
-#else /* !_M_ARM64 */
+#elif defined(_M_AMD64)
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+extern BOOLEAN SmpDbgEnabled; /* set by the /SMPDIAG boot option */
+
+VOID NTAPI SmpDbgRuntimeTick(ULONG Cpu);
+VOID NTAPI SmpDbgQuantumRequest(ULONG Cpu);
+VOID NTAPI SmpDbgDispatchInterrupt(ULONG Cpu);
+VOID NTAPI SmpDbgQuantumEnd(ULONG Cpu);
+VOID NTAPI SmpDbgIpi(ULONG Cpu);
+VOID NTAPI SmpDbgRemoteDpc(ULONG Cpu);
+VOID NTAPI SmpDbgStartWatchdog(VOID);
+
+#ifdef __cplusplus
+}
+#endif
+
+#define SMPDBG_TIMER_BEGIN(c, i)
+#define SMPDBG_TIMER_EOI(c, i)
+#define SMPDBG_TIMER_REJECT(c, i)
+
+#else
 
 #define SMPDBG_TIMER_BEGIN(c, i)
 #define SMPDBG_TIMER_EOI(c, i)

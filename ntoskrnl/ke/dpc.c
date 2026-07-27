@@ -11,6 +11,7 @@
 /* INCLUDES ******************************************************************/
 
 #include <ntoskrnl.h>
+#include <reactos/smpdbg.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -478,6 +479,11 @@ KiQuantumEnd(VOID)
 {
     PKPRCB Prcb = KeGetCurrentPrcb();
     PKTHREAD NextThread, Thread = Prcb->CurrentThread;
+
+#if defined(_M_AMD64)
+    if (SmpDbgEnabled)
+        SmpDbgQuantumEnd(Prcb->Number);
+#endif
 
     /* Check if a DPC Event was requested to be signaled */
     if (InterlockedExchange(&Prcb->DpcSetEventRequest, 0))

@@ -1742,8 +1742,8 @@ Phase1InitializationDiscard(IN PVOID Context)
         if (strstr(CommandLine, "MAXPROC"))
             KeMaximumProcessors = MAXIMUM_PROCESSORS;
 
-#if defined(_M_ARM64)
-        /* Check for SMPDIAG: enable verbose ARM64 SMP boot diagnostics (smpdbg) */
+#if defined(_M_ARM64) || defined(_M_AMD64)
+        /* Check for SMPDIAG: enable architecture-specific SMP diagnostics. */
         if (strstr(CommandLine, "SMPDIAG"))
             SmpDbgEnabled = TRUE;
 #endif
@@ -2143,8 +2143,8 @@ Phase1InitializationDiscard(IN PVOID Context)
 
     /* Initialize the Process Manager at Phase 1 */
     if (!PsInitSystem(LoaderBlock)) KeBugCheck(PROCESS1_INITIALIZATION_FAILED);
-#if defined(_M_ARM64)
-    /* DIAG: start the all-idle deadlock watchdog now that Ps can create threads. */
+#if defined(_M_ARM64) || defined(_M_AMD64)
+    /* Start gated SMP diagnostics now that Ps can create system threads. */
     SmpDbgStartWatchdog();
 #endif
 

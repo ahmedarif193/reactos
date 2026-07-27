@@ -364,8 +364,7 @@ static void RunBench(const char *Name, int Kind, unsigned long Unit, LONGLONG Fr
 
     if (NumCpus < 2)
     {
-        emit("[cpubench] %s uniprocessor -- no SMP scaling\n", Name);
-        return;
+        emit("[cpubench] %s sustained single-worker control\n", Name);
     }
 
     SmpCount = (Ticks > 0) ?
