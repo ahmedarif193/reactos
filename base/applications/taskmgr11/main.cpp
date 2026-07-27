@@ -934,6 +934,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPWSTR lpCmdLine, int 
 
     g_app.hInst = hInstance;
 
+    /* Match Windows Task Manager's process priority. */
+    SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
+
     /* dpi awareness (dynamic; ancient user32 may lack it) */
     {
         PFN_SetProcessDPIAware pAware = (PFN_SetProcessDPIAware)
