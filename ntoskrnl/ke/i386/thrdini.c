@@ -285,38 +285,46 @@ KiIdleLoop(VOID)
             KiRetireDpcList(Prcb);
         }
 
-        /* Check if a new thread is scheduled for execution */
-        if (Prcb->NextThread)
+        KiAcquirePrcbLock(Prcb);
+        NewThread = Prcb->NextThread;
+        if (NewThread != NULL)
         {
-            /* Enable interrupts */
-            _enable();
-
-            /* Capture current thread data */
-            OldThread = Prcb->CurrentThread;
-            NewThread = Prcb->NextThread;
-
-            /* Set new thread data */
             Prcb->NextThread = NULL;
-            Prcb->CurrentThread = NewThread;
-
-            /* The thread is now running */
-            NewThread->State = Running;
-
+        }
 #ifdef CONFIG_SMP
-            /* Do the swap at SYNCH_LEVEL */
-            KfRaiseIrql(SYNCH_LEVEL);
+        else
+        {
+            NewThread = KiIdleSchedule(Prcb);
+            if (NewThread == Prcb->IdleThread)
+            {
+                NewThread = Prcb->NextThread;
+                if (NewThread != NULL)
+                    Prcb->NextThread = NULL;
+            }
+        }
 #endif
 
-            /* Switch away from the idle thread */
+        if (NewThread != NULL)
+        {
+            OldThread = Prcb->CurrentThread;
+#ifdef CONFIG_SMP
+            KfRaiseIrql(SYNCH_LEVEL);
+            InterlockedBitTestAndResetAffinity(&KiIdleSummary, Prcb->Number);
+#endif
+            Prcb->CurrentThread = NewThread;
+            NewThread->State = Running;
+            KiReleasePrcbLock(Prcb);
+
+            _enable();
             KiSwapContext(APC_LEVEL, OldThread);
 
 #ifdef CONFIG_SMP
-            /* Go back to DISPATCH_LEVEL */
             KeLowerIrql(DISPATCH_LEVEL);
 #endif
         }
         else
         {
+            KiReleasePrcbLock(Prcb);
             /* Continue staying idle. Note the HAL returns with interrupts on */
             Prcb->PowerState.IdleFunction(&Prcb->PowerState);
         }

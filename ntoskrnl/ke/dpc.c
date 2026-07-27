@@ -494,6 +494,10 @@ KiQuantumEnd(VOID)
 
     /* Raise to synchronization level and lock the PRCB and thread */
     KeRaiseIrqlToSynchLevel();
+#ifdef CONFIG_SMP
+    if (Prcb->NextThread == NULL)
+        KiBalanceReadyQueues(Prcb, KiBalanceQuantum);
+#endif
     KiAcquireThreadLock(Thread);
     KiAcquirePrcbLock(Prcb);
 
