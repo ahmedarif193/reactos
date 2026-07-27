@@ -431,12 +431,12 @@ UiIndicateProgress(VOID)
                        UiProgressBar.Indicator.Expected;
     Percentage = min(Percentage, 99);
 
-    if (Percentage != UiProgressBar.Indicator.Percentage)
-    {
-        /* Percentage has changed, update the progress bar */
-        UiProgressBar.Indicator.Percentage = Percentage;
-        UiUpdateProgressBar(Percentage, NULL);
-    }
+    /*
+     * Always redraw so a caller-updated progress label remains visible
+     * after the indeterminate percentage reaches its 99-percent ceiling.
+     */
+    UiProgressBar.Indicator.Percentage = Percentage;
+    UiUpdateProgressBar(Percentage, NULL);
 }
 
 VOID
