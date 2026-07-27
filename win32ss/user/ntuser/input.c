@@ -541,7 +541,7 @@ UserAttachThreadInput(PTHREADINFO ptiFrom, PTHREADINFO ptiTo, BOOL fAttach)
                             sizeof(ptiTo->MessageQueue->CaretInfo));
               IntSetFocusMessageQueue(NULL);
               IntSetFocusMessageQueue(ptiTo->MessageQueue);
-              gptiForeground = ptiTo;
+              IntSetForegroundThread(ptiTo);
            }
            else
            {
@@ -624,7 +624,7 @@ UserAttachThreadInput(PTHREADINFO ptiFrom, PTHREADINFO ptiTo, BOOL fAttach)
            {
               ERR("ptiTo is now pti FG.\n");
               // MessageQueue foreground is set so switch threads.
-              gptiForeground = ptiTo;
+              IntSetForegroundThread(ptiTo);
            }
            ptiTo->MessageQueue->cThreads--;
            ERR("ptiTo E Share count %u\n", ptiTo->MessageQueue->cThreads);
