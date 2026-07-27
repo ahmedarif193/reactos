@@ -62,85 +62,6 @@ typedef struct _XHCI_ISO_PACKET_CONTEXT XHCI_ISO_PACKET_CONTEXT, *PXHCI_ISO_PACK
 #define XHCI_BOUNCE_POOL_SLOTS 32
 #define XHCI_BOUNCE_BUFFER_SIZE 0x10000
 
-/*
- * ACPI _OSC (Operating System Capabilities) definitions
- * Per ACPI 6.5 Section 6.2.11 and USB Controller _OSC specification
- */
-
-/* USB _OSC UUID: CE2EE385-00E6-48CB-9F05-2EDB927C4899 (wire format in osc.c) */
-#define USB_OSC_UUID_BYTES \
-    { 0x85, 0xE3, 0x2E, 0xCE, 0xE6, 0x00, 0xCB, 0x48, \
-      0x9F, 0x05, 0x2E, 0xDB, 0x92, 0x7C, 0x48, 0x99 }
-
-/* _OSC Support Capabilities (DWORD 1) - what OS supports */
-#define USB_OSC_SUPPORT_USB20           0x0001
-#define USB_OSC_SUPPORT_USB30           0x0002
-#define USB_OSC_SUPPORT_USB31_GEN2      0x0004
-#define USB_OSC_SUPPORT_USB4            0x0008
-#define USB_OSC_SUPPORT_XHCI_PM         0x0010
-#define USB_OSC_SUPPORT_RTD3            0x0020
-#define USB_OSC_SUPPORT_USBC_PD         0x0040
-#define USB_OSC_SUPPORT_LPM             0x0080
-
-/* _OSC Control Capabilities (DWORD 2) - what OS requests to control */
-#define USB_OSC_CTRL_PORT_POWER         0x0001
-#define USB_OSC_CTRL_LINK_STATE         0x0002
-#define USB_OSC_CTRL_USBC_MUX           0x0004
-#define USB_OSC_CTRL_POWER_STATE        0x0008
-#define USB_OSC_CTRL_COMPLIANCE         0x0010
-#define USB_OSC_CTRL_U1U2_ENTRY         0x0020
-
-/* _OSC Status Flags (DWORD 0 return) */
-#define USB_OSC_STATUS_QUERY            0x0001  /* Query flag (input/output) */
-#define USB_OSC_STATUS_FAILURE          0x0002  /* General failure */
-#define USB_OSC_STATUS_UUID_UNKNOWN     0x0004  /* UUID not recognized */
-#define USB_OSC_STATUS_REV_UNKNOWN      0x0008  /* Revision not recognized */
-#define USB_OSC_STATUS_MASKED           0x0010  /* Capabilities were masked */
-
-/* PCI Root Bridge _OSC Control bits (for prerequisite check) */
-#define PCI_OSC_CTRL_NATIVE_HOTPLUG     0x0001
-#define PCI_OSC_CTRL_SHPC_HOTPLUG       0x0002
-#define PCI_OSC_CTRL_PCIE_NATIVE        0x0010
-
-/**
- * XHCI_OSC_CONTEXT - Tracks _OSC negotiation state and results
- *
- * This structure is populated during XHCI_EvaluateOsc() and used
- * throughout the driver's lifetime to determine what operations
- * are permitted by the firmware.
- */
-typedef struct _XHCI_OSC_CONTEXT {
-    /* Evaluation state */
-    BOOLEAN Evaluated;              /* TRUE if _OSC was successfully evaluated */
-    BOOLEAN QueryCompleted;         /* TRUE if Query phase completed */
-    BOOLEAN CommitCompleted;        /* TRUE if Commit phase completed */
-    BOOLEAN FirmwareFirst;          /* TRUE if firmware retained all control */
-
-    /* Prerequisite state */
-    BOOLEAN PciOscChecked;          /* TRUE if PCI Root Bridge _OSC was verified */
-    BOOLEAN PciOscGrantedNative;    /* TRUE if PCIe Native Control was granted */
-
-    /* Capability tracking */
-    ULONG SupportCapabilities;      /* What OS advertised */
-    ULONG ControlRequested;         /* What OS requested in Commit */
-    ULONG ControlAvailable;         /* What firmware indicated in Query */
-    ULONG ControlGranted;           /* What firmware granted in Commit */
-
-    /* Derived feature flags (set after successful Commit) */
-    BOOLEAN OsControlsPortPower;
-    BOOLEAN OsControlsLinkState;
-    BOOLEAN OsControlsUsbcMux;
-    BOOLEAN OsManagesPowerStates;
-    BOOLEAN OsControlsCompliance;
-    BOOLEAN OsControlsU1U2;
-
-    /* Capability flags */
-    BOOLEAN LpmSupported;
-    BOOLEAN Rtd3Supported;
-    BOOLEAN Usb4Supported;
-
-} XHCI_OSC_CONTEXT, *PXHCI_OSC_CONTEXT;
-
 typedef struct DECLSPEC_ALIGN(PAGE_SIZE) _XHCI_SCRATCHPAD_PAGE {
     UCHAR Buffer[PAGE_SIZE];
 } XHCI_SCRATCHPAD_PAGE, *PXHCI_SCRATCHPAD_PAGE;
@@ -338,8 +259,6 @@ typedef struct _XHCI_EXTENSION {
   /* TRUE if we raised the system clock resolution via ExSetTimerResolution
    * during StartController and must restore it on StopController. */
   BOOLEAN TimerResolutionRaised;
-  /* ACPI _OSC (Operating System Capabilities) context */
-  XHCI_OSC_CONTEXT OscContext;
 } XHCI_EXTENSION, *PXHCI_EXTENSION;
 
 typedef struct _XHCI_COMMAND_CONTEXT {
@@ -453,80 +372,3 @@ NTAPI
 DriverEntry(
     _In_ PDRIVER_OBJECT DriverObject,
     _In_ PUNICODE_STRING RegistryPath);
-
-/*
- * ACPI _OSC (Operating System Capabilities) functions
- * Defined in osc.c
- */
-
-/**
- * @brief Performs full two-phase _OSC negotiation (Query then Commit).
- *
- * This function implements the mandatory Query-then-Commit protocol
- * per ACPI 6.5 Section 6.2.11 to negotiate USB controller capabilities
- * with platform firmware.
- *
- * IRQL: PASSIVE_LEVEL only (calls ACPI interpreter)
- *
- * @param Extension Pointer to the XHCI extension
- *
- * @return NTSTATUS
- */
-NTSTATUS
-XHCI_EvaluateOsc(
-    _In_ PXHCI_EXTENSION Extension);
-
-/**
- * @brief Updates extension flags based on _OSC results.
- *
- * Called after successful _OSC evaluation to set the derived
- * feature flags in the OSC context.
- *
- * IRQL: Any (no ACPI calls)
- *
- * @param Extension Pointer to the XHCI extension
- * @param OscContext Pointer to the OSC context to update
- */
-VOID
-XHCI_ApplyOscPolicy(
-    _In_ PXHCI_EXTENSION Extension,
-    _Inout_ PXHCI_OSC_CONTEXT OscContext);
-
-/**
- * @brief Returns TRUE if OS has been granted port power control.
- *
- * IRQL: Any
- *
- * @param Extension Pointer to the XHCI extension
- *
- * @return TRUE if OS controls port power, FALSE if firmware does
- */
-BOOLEAN
-XHCI_ShouldControlPortPower(
-    _In_ PXHCI_EXTENSION Extension);
-
-/**
- * @brief Returns TRUE if OS has been granted U1/U2 LPM control.
- *
- * IRQL: Any
- *
- * @param Extension Pointer to the XHCI extension
- *
- * @return TRUE if OS controls U1/U2, FALSE if firmware does
- */
-BOOLEAN
-XHCI_ShouldManageU1U2(
-    _In_ PXHCI_EXTENSION Extension);
-
-/**
- * @brief Returns TRUE if OS is allowed to manage power states.
- *
- * IRQL: Any
- *
- * @param Extension Pointer to the XHCI extension
- *
- * @return TRUE if OS manages power states, FALSE if firmware does
- */
-BOOLEAN
-XHCI_ShouldManagePowerStates(
-    _In_ PXHCI_EXTENSION Extension);
