@@ -186,12 +186,10 @@ KiArm64IdleDispatchNextThread(_In_ PKPRCB Prcb, _In_ BOOLEAN AdvertiseIdle)
 
     KiAcquirePrcbLock(Prcb);
 
-    /* Passive consumer: don't run the scheduler here, only drain a thread that
-     * KiDeferredReadyThread left on this core's local ready list (no NextThread/IPI). */
-    if (!Prcb->NextThread && Prcb->ReadySummary)
+    if (!Prcb->NextThread)
     {
-        PKTHREAD Ready = KiSelectReadyThread(0, Prcb);
-        if (Ready != NULL)
+        PKTHREAD Ready = KiIdleSchedule(Prcb);
+        if (Ready != Prcb->IdleThread)
         {
             Ready->State = Standby;
             Prcb->NextThread = Ready;
