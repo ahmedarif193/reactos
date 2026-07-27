@@ -56,18 +56,23 @@ Rs232PortInitialize(
     if (!PortAddress)
     {
         /*
-         * Enumerate COM ports from the last to the first one, and stop
-         * when we find a valid port. If we reach the first list element
-         * (the undefined COM port), no valid port was found.
+         * Enumerate COM ports from the first to the last one, and stop
+         * when we find a valid port. If we go past the last list element,
+         * no valid port was found.
+         *
+         * NOTE: The scan must go upwards: machines exposing several UARTs
+         * (e.g. industrial boards with four physical COM connectors) would
+         * otherwise bind to the highest-numbered port, leaving the usual
+         * COM1 debug cable silent.
          */
         ULONG ComPort;
-        for (ComPort = MAX_COM_PORTS; ComPort > 0; ComPort--)
+        for (ComPort = 1; ComPort <= MAX_COM_PORTS; ComPort++)
         {
             PortAddress = UlongToPtr(BaseArray[ComPort]);
             if (CpDoesPortExist(PortAddress))
                 break;
         }
-        if (ComPort == 0 || PortAddress == NULL)
+        if (ComPort > MAX_COM_PORTS || PortAddress == NULL)
             return FALSE;
     }
     else
