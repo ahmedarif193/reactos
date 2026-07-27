@@ -113,8 +113,8 @@ USBPORT_ProgramMsixTable(
 
     if (MsixCapOffset == 0)
     {
-        DPRINT1("USBPORT_ProgramMsixTable: MSI-X capability not found\n");
-        return STATUS_NOT_SUPPORTED;
+        DPRINT("USBPORT_ProgramMsixTable: controller does not support MSI-X\n");
+        return STATUS_NOT_FOUND;
     }
 
     /* Read MSI-X control and table info */
@@ -1930,8 +1930,15 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
             {
                 NTSTATUS MsiStatus;
 
-                DPRINT1("USBPORT_StartDevice: MSI-X table programming failed (0x%lx), trying MSI fallback\n",
-                        MsixStatus);
+                if (MsixStatus == STATUS_NOT_FOUND)
+                {
+                    DPRINT("USBPORT_StartDevice: MSI-X unavailable, trying MSI\n");
+                }
+                else
+                {
+                    DPRINT1("USBPORT_StartDevice: MSI-X table programming failed (0x%lx), trying MSI fallback\n",
+                            MsixStatus);
+                }
 
                 /*
                  * MSI-X programming failed - try MSI as intermediate fallback.
@@ -1944,7 +1951,10 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
 
                 if (NT_SUCCESS(MsiStatus))
                 {
-                    DPRINT1("USBPORT_StartDevice: MSI fallback successful\n");
+                    if (MsixStatus == STATUS_NOT_FOUND)
+                        DPRINT("USBPORT_StartDevice: using MSI\n");
+                    else
+                        DPRINT1("USBPORT_StartDevice: MSI fallback successful\n");
                     /* Keep the message-based interrupt connected, MSI is now active */
                 }
                 else
