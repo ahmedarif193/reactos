@@ -18,6 +18,63 @@ ULONG guSFWLockCount = 0; // Rule #8, No menus are active. So should be zero.
 PTHREADINFO ptiLastInput = NULL;
 HWND ghwndOldFullscreen = NULL;
 
+static VOID FASTCALL
+IntSetForegroundPriorityProcess(PPROCESSINFO ppi, PTHREADINFO pti, BOOL Foreground)
+{
+   PEPROCESS Process;
+   ULONG PriorityClass = 0;
+   BOOL IdleScreenSaver;
+
+   if (!ppi || !ppi->peProcess || (ppi->W32PF_flags & W32PF_TERMINATED))
+      return;
+
+   Process = ppi->peProcess;
+   IdleScreenSaver = !!(ppi->W32PF_flags & W32PF_IDLESCREENSAVER);
+   if (IdleScreenSaver)
+   {
+      PriorityClass = PsGetProcessPriorityClass(Process);
+      PsSetProcessPriorityClass(Process, PROCESS_PRIORITY_CLASS_IDLE);
+      Foreground = FALSE;
+   }
+
+   if (ppi->W32PF_flags & W32PF_FORCEBACKGROUNDPRIORITY)
+   {
+      if (pti && !(pti->TIF_flags & TIF_SPINNING))
+         PsSetProcessPriorityByClass(Process, PsProcessPrioritySpinning);
+   }
+   else if (Foreground)
+   {
+      PsSetProcessPriorityByClass(Process, PsProcessPriorityForeground);
+   }
+   else if (pti && !(pti->TIF_flags & TIF_SPINNING))
+   {
+      PsSetProcessPriorityByClass(Process, PsProcessPriorityBackground);
+   }
+
+   if (IdleScreenSaver)
+      PsSetProcessPriorityClass(Process, PriorityClass);
+}
+
+VOID FASTCALL
+IntSetForegroundThread(PTHREADINFO pti)
+{
+   PTHREADINFO ptiOld = gptiForeground;
+
+   if (ptiOld == pti)
+      return;
+
+   if (!ptiOld || !pti || ptiOld->ppi != pti->ppi)
+   {
+      if (ptiOld && !(ptiOld->TIF_flags & (TIF_SYSTEMTHREAD | TIF_CSRSSTHREAD)))
+         IntSetForegroundPriorityProcess(ptiOld->ppi, ptiOld, FALSE);
+
+      if (pti && !(pti->TIF_flags & (TIF_SYSTEMTHREAD | TIF_CSRSSTHREAD)))
+         IntSetForegroundPriorityProcess(pti->ppi, pti, TRUE);
+   }
+
+   gptiForeground = pti;
+}
+
 /*
  * Check locking of a process or one or more menus are active.
  */
@@ -787,14 +844,14 @@ co_IntSetForegroundMessageQueue(
    {
       ptiChg = Wnd->head.pti;
       IntSetFocusMessageQueue(Wnd->head.pti->MessageQueue);
-      gptiForeground = Wnd->head.pti;
+      IntSetForegroundThread(Wnd->head.pti);
       //ERR("Set Foreground pti 0x%p Q 0x%p hWnd 0x%p\n", Wnd->head.pti, Wnd->head.pti->MessageQueue, UserHMGetHandle(Wnd));
    }
    else
    {
       ptiChg = NULL;
       IntSetFocusMessageQueue(NULL);
-      gptiForeground = NULL;
+      IntSetForegroundThread(NULL);
       //ERR("Set Foreground pti 0x0 Q 0x0 hWnd 0x0\n");
    }
 
