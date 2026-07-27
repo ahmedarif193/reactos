@@ -1112,6 +1112,8 @@ AcpiOsReadPciConfiguration (
     UINT32                  Width)
 {
     PCI_SLOT_NUMBER slot;
+    UINT64 AllOnes;
+    ULONG BytesRead;
 
     slot.u.AsULONG = 0;
     slot.u.bits.DeviceNumber = PciId->Device;
@@ -1119,16 +1121,28 @@ AcpiOsReadPciConfiguration (
 
     DPRINT("AcpiOsReadPciConfiguration, slot=0x%X, func=0x%X\n", slot.u.AsULONG, Reg);
 
+    AllOnes = (Width >= 64) ? ~(UINT64)0 : (((UINT64)1 << Width) - 1);
+
+    /*
+     * An absent device is NOT an error. PCI master-abort semantics require a
+     * config read of a non-existent function to return all ones, and AML probes
+     * for devices exactly that way: it reads the vendor ID and tests it against
+     * 0xFFFF. Failing the read instead aborts the calling AML method - and when
+     * that method runs as module-level code during table load, ACPICA aborts the
+     * whole table. That is what killed the DSDT on this hardware:
+     * \_SB.PCI0.RP01.PXSX.WIST probes an empty PCIe root port, so the DSDT load
+     * failed and the entire PCI0 namespace (and thus all PCI enumeration) was lost.
+     */
     if (!OslIsPciDevicePresent(PciId->Bus, slot.u.AsULONG))
-        return AE_NOT_FOUND;
+    {
+        *Value = AllOnes;
+        return AE_OK;
+    }
 
     /* Width is in BITS */
-    HalGetBusDataByOffset(PCIConfiguration,
-        PciId->Bus,
-        slot.u.AsULONG,
-        Value,
-        Reg,
-        (Width >> 3));
+    *Value = 0;
+    BytesRead = HalGetBusDataByOffset(PCIConfiguration, PciId->Bus, slot.u.AsULONG, Value, Reg, (Width >> 3));
+    if (BytesRead != (Width >> 3)) *Value = AllOnes;
 
     return AE_OK;
 }
@@ -1148,8 +1162,11 @@ AcpiOsWritePciConfiguration (
     slot.u.bits.FunctionNumber = PciId->Function;
 
     DPRINT("AcpiOsWritePciConfiguration, slot=0x%x\n", slot.u.AsULONG);
+
+    /* Writes to an absent device are dropped, matching master-abort behaviour.
+     * See AcpiOsReadPciConfiguration: failing here aborts the calling AML method. */
     if (!OslIsPciDevicePresent(PciId->Bus, slot.u.AsULONG))
-        return AE_NOT_FOUND;
+        return AE_OK;
 
     /* Width is in BITS */
     HalSetBusDataByOffset(PCIConfiguration,
