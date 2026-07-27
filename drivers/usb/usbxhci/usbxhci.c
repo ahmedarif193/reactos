@@ -1246,10 +1246,6 @@ XHCI_PowerOnAllPorts(
     if (!Extension->PortPowerControl)
         return;
 
-    /* Check ACPI _OSC policy - firmware may control port power */
-    if (!XHCI_ShouldControlPortPower(Extension))
-        return;
-
     for (Port = 1; Port <= Extension->NumberOfPorts; Port++)
     {
         XHCI_RH_SetFeaturePortPower(Extension, Port);
@@ -1312,10 +1308,6 @@ XHCI_ConfigurePortLpm(
     if (Extension->Quirks & XHCI_QUIRK_LIMIT_U1U2)
         return;
 
-    /* Enforce ACPI _OSC policy: only manage U1/U2 if firmware granted control. */
-    if (!XHCI_ShouldManageU1U2(Extension))
-        return;
-
     /* Only SuperSpeed ports implement the U1/U2 timeout fields. */
     if (!XHCI_PortIsSuperSpeed(Extension, Port))
         return;
@@ -1367,9 +1359,6 @@ XHCI_SuspendPorts(
     ULONG SlotId;
 
     if (!Extension)
-        return;
-
-    if (!XHCI_ShouldManagePowerStates(Extension))
         return;
 
     /*
@@ -1424,9 +1413,6 @@ XHCI_ResumePorts(
     USHORT Port;
 
     if (!Extension)
-        return;
-
-    if (!XHCI_ShouldManagePowerStates(Extension))
         return;
 
     for (Port = 1; Port <= Extension->NumberOfPorts; Port++)
@@ -12548,53 +12534,6 @@ XHCI_StartController(PVOID MiniPortExtension,
 
     XHCI_GetRegistryParameters(Extension);
 
-    /*
-     * Evaluate USB _OSC before any hardware configuration.
-     * This must be done at PASSIVE_LEVEL (StartController is called during
-     * PnP IRP_MN_START_DEVICE which runs at PASSIVE_LEVEL).
-     *
-     * _OSC negotiation determines what controls the OS is allowed to exercise:
-     * - Port power switching
-     * - Link state management
-     * - USB-C mux control
-     * - Power state transitions
-     * - Compliance mode recovery
-     * - U1/U2 LPM entry
-     *
-     * If _OSC is not present (legacy platform) or fails, we assume full OS
-     * control to maintain backwards compatibility.
-     */
-    {
-        NTSTATUS OscStatus;
-
-        DPRINT("usbxhci: Evaluating USB _OSC for capability negotiation\n");
-        OscStatus = XHCI_EvaluateOsc(Extension);
-
-        if (NT_SUCCESS(OscStatus))
-        {
-            DPRINT("usbxhci: _OSC negotiation complete - Granted=0x%lX, Requested=0x%lX, Available=0x%lX\n",
-                    Extension->OscContext.ControlGranted,
-                    Extension->OscContext.ControlRequested,
-                    Extension->OscContext.ControlAvailable);
-
-            if (Extension->OscContext.FirmwareFirst)
-            {
-                DPRINT1("usbxhci: Running in Firmware First mode (firmware controls USB)\n");
-            }
-        }
-        else if (OscStatus == STATUS_NOT_FOUND ||
-                 OscStatus == STATUS_OBJECT_NAME_NOT_FOUND)
-        {
-            /* _OSC not present - legacy platform with full OS control */
-            DPRINT("usbxhci: No USB _OSC method (legacy platform), assuming full OS control\n");
-        }
-        else
-        {
-            DPRINT1("usbxhci: _OSC evaluation failed: 0x%lX, assuming full OS control\n",
-                    OscStatus);
-        }
-    }
-
     Status = XHCI_DisableLegacySupport(Extension);
     if (Status != MP_STATUS_SUCCESS)
     {
@@ -15139,10 +15078,6 @@ XHCI_RH_SetFeaturePortPower(
     if (!Extension->PortPowerControl)
         return MP_STATUS_SUCCESS;
 
-    /* Check ACPI _OSC policy - firmware may control port power */
-    if (!XHCI_ShouldControlPortPower(Extension))
-        return MP_STATUS_SUCCESS;
-
     return XHCI_ModifyPortBits(Extension, Port, XHCI_PORTSC_PP, 0, 0);
 }
 
@@ -15160,10 +15095,6 @@ XHCI_RH_ClearFeaturePortPower(
 
     /* No-op on controllers that do not implement per-port power. */
     if (!Extension->PortPowerControl)
-        return MP_STATUS_SUCCESS;
-
-    /* Check ACPI _OSC policy - firmware may control port power */
-    if (!XHCI_ShouldControlPortPower(Extension))
         return MP_STATUS_SUCCESS;
 
     return XHCI_ModifyPortBits(Extension, Port, 0, XHCI_PORTSC_PP, 0);
