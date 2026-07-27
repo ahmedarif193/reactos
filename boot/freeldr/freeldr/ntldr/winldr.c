@@ -61,22 +61,16 @@ NtLdrOutputLoadMsg(
     _In_ PCSTR FileName,
     _In_opt_ PCSTR Description)
 {
-    if (SosEnabled)
-    {
-        printf("  %s\n", FileName);
-    }
-    else
-    {
-        /* Inform the user we load a file */
-        CHAR ProgressString[256];
+    CHAR ProgressString[256];
 
-        RtlStringCbPrintfA(ProgressString, sizeof(ProgressString),
-                           "Loading %s...",
-                           (Description ? Description : FileName));
-        // UiSetProgressBarText(ProgressString);
-        // UiIndicateProgress();
-        UiDrawStatusText(ProgressString);
-    }
+    if (SosEnabled)
+        return;
+
+    /* Inform the user we load a file */
+    RtlStringCbPrintfA(ProgressString, sizeof(ProgressString),
+                       "Loading %s...",
+                       (Description ? Description : FileName));
+    UiDrawStatusText(ProgressString);
 }
 
 // Init "phase 0"
@@ -453,6 +447,7 @@ WinLdrLoadBootDrivers(PLOADER_PARAMETER_BLOCK LoaderBlock,
     PBOOT_DRIVER_LIST_ENTRY BootDriver;
     BOOLEAN Success;
     BOOLEAN ret = TRUE;
+    CHAR ProgressString[256];
 
     /* Walk through the boot drivers list */
     NextBd = LoaderBlock->BootDriverListHead.Flink;
@@ -473,6 +468,11 @@ WinLdrLoadBootDrivers(PLOADER_PARAMETER_BLOCK LoaderBlock,
         // Paths are relative (FIXME: Are they always relative?)
 
         /* Load it */
+        if (SosEnabled)
+        {
+            RtlStringCbPrintfA(ProgressString, sizeof(ProgressString), "Loading: %wZ", &BootDriver->FilePath);
+            UiSetProgressBarText(ProgressString);
+        }
         UiIndicateProgress();
         Success = WinLdrLoadDeviceDriver(&LoaderBlock->LoadOrderListHead,
                                          BootPath,
@@ -1432,8 +1432,6 @@ LoadAndBootWindows(
 
     /* Handle the SOS option */
     SosEnabled = !!NtLdrGetOption(BootOptions, "SOS");
-    if (SosEnabled)
-        UiResetForSOS();
 
     /* Allocate and minimally-initialize the Loader Parameter Block */
     AllocateAndInitLPB(OperatingSystemVersion, &LoaderBlock);

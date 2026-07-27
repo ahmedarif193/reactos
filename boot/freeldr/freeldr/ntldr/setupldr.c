@@ -708,8 +708,6 @@ LoadReactOSSetup(
 
     /* Handle the SOS option */
     SosEnabled = !!NtLdrGetOption(BootOptions, "SOS");
-    if (SosEnabled)
-        UiResetForSOS();
 
     /* Allocate and minimally-initialize the Loader Parameter Block */
     AllocateAndInitLPB(OperatingSystemVersion, &LoaderBlock);
