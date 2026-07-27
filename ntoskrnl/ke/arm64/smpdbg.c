@@ -36,6 +36,14 @@ typedef struct _SMPDBG_CPU
     volatile ULONG RemoteDpc;
     volatile ULONG SchedulerIpi;
     volatile ULONG QueuedDpcIpi;
+    volatile ULONG TbFlushIpi;
+    volatile ULONG GenericCallIpi;
+    volatile ULONG BalanceWake;
+    volatile ULONG BalanceIdle;
+    volatile ULONG BalanceQuantum;
+    volatile ULONG BalancePeriodic;
+    volatile ULONG StandbySteals;
+    volatile ULONG BalanceSources[SMPDBG_MAXCPU];
 } SMPDBG_CPU;
 
 static SMPDBG_CPU SmpDbgCpu[SMPDBG_MAXCPU];
@@ -94,6 +102,51 @@ VOID NTAPI SmpDbgQueuedDpcIpi(ULONG Cpu)
 {
     if (SmpDbgEnabled && (Cpu < SMPDBG_MAXCPU))
         InterlockedIncrement((PLONG)&SmpDbgCpu[Cpu].QueuedDpcIpi);
+}
+
+VOID NTAPI SmpDbgTbFlushIpi(ULONG Cpu)
+{
+    if (SmpDbgEnabled && (Cpu < SMPDBG_MAXCPU))
+        InterlockedIncrement((PLONG)&SmpDbgCpu[Cpu].TbFlushIpi);
+}
+
+VOID NTAPI SmpDbgGenericCallIpi(ULONG Cpu)
+{
+    if (SmpDbgEnabled && (Cpu < SMPDBG_MAXCPU))
+        InterlockedIncrement((PLONG)&SmpDbgCpu[Cpu].GenericCallIpi);
+}
+
+VOID NTAPI SmpDbgBalanceEvent(ULONG TargetCpu, ULONG SourceCpu, ULONG Reason)
+{
+    if (!SmpDbgEnabled || (TargetCpu >= SMPDBG_MAXCPU))
+        return;
+
+    switch (Reason)
+    {
+        case SMPDBG_BALANCE_WAKE_PLACEMENT:
+            InterlockedIncrement((PLONG)&SmpDbgCpu[TargetCpu].BalanceWake);
+            break;
+        case SMPDBG_BALANCE_IDLE:
+            InterlockedIncrement((PLONG)&SmpDbgCpu[TargetCpu].BalanceIdle);
+            break;
+        case SMPDBG_BALANCE_QUANTUM:
+            InterlockedIncrement((PLONG)&SmpDbgCpu[TargetCpu].BalanceQuantum);
+            break;
+        case SMPDBG_BALANCE_PERIODIC:
+            InterlockedIncrement((PLONG)&SmpDbgCpu[TargetCpu].BalancePeriodic);
+            break;
+        default:
+            return;
+    }
+
+    if (SourceCpu < SMPDBG_MAXCPU)
+        InterlockedIncrement((PLONG)&SmpDbgCpu[TargetCpu].BalanceSources[SourceCpu]);
+}
+
+VOID NTAPI SmpDbgStandbySteal(ULONG TargetCpu)
+{
+    if (SmpDbgEnabled && (TargetCpu < SMPDBG_MAXCPU))
+        InterlockedIncrement((PLONG)&SmpDbgCpu[TargetCpu].StandbySteals);
 }
 
 VOID NTAPI SmpDbgPark(ULONG Cpu)
@@ -155,14 +208,20 @@ VOID NTAPI SmpDbgHeartbeat(ULONG Cpu)
             {
                 PKPRCB P = KiProcessorBlock[i];
                 if (P != NULL)
-                    DbgPrint("SMPWEDGE   cpu%lu next=%p ready=0x%lx defer=%p cur=%p sleep=%u tick=%lu treq=%p dpcq=%lu dpcact=%u dpcint=%u rdpc=%lu schedipi=%lu dpcipi=%lu\n",
+                    DbgPrint("SMPWEDGE   cpu%lu next=%p ready=0x%lx defer=%p cur=%p sleep=%u tick=%lu treq=%p dpcq=%lu dpcact=%u dpcint=%u rdpc=%lu schedipi=%lu dpcipi=%lu tbipi=%lu genipi=%lu place=%lu idlebal=%lu quantbal=%lu periodbal=%lu standbybal=%lu from0=%lu from1=%lu from2=%lu from3=%lu\n",
                              i, P->NextThread, (ULONG)P->ReadySummary,
                              P->DeferredReadyListHead.Next, P->CurrentThread,
                              (ULONG)P->Sleeping, SmpDbgCpu[i].Tick,
                              (PVOID)P->TimerRequest, (ULONG)P->DpcData[0].DpcQueueDepth,
                              (ULONG)P->DpcRoutineActive, (ULONG)P->DpcInterruptRequested,
                              SmpDbgCpu[i].RemoteDpc, SmpDbgCpu[i].SchedulerIpi,
-                             SmpDbgCpu[i].QueuedDpcIpi);
+                             SmpDbgCpu[i].QueuedDpcIpi, SmpDbgCpu[i].TbFlushIpi,
+                             SmpDbgCpu[i].GenericCallIpi, SmpDbgCpu[i].BalanceWake,
+                             SmpDbgCpu[i].BalanceIdle, SmpDbgCpu[i].BalanceQuantum,
+                             SmpDbgCpu[i].BalancePeriodic,
+                             SmpDbgCpu[i].StandbySteals,
+                             SmpDbgCpu[i].BalanceSources[0], SmpDbgCpu[i].BalanceSources[1],
+                             SmpDbgCpu[i].BalanceSources[2], SmpDbgCpu[i].BalanceSources[3]);
             }
         }
     }
