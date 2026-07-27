@@ -51,7 +51,7 @@ ULONG DebugPort = RS232;
 /* Serial debug connection */
 #include <cportlib/uartinfo.h>
 ULONG ComPortBaudRate = DEFAULT_DEBUG_BAUD_RATE;
-// The COM port initializer chooses the first available port starting from COM4 down to COM1.
+// The COM port initializer chooses the first available port starting from COM1 up to COM4.
 PUCHAR ComPortAddress = NULL;
 
 BOOLEAN DebugStartOfLine = TRUE;
