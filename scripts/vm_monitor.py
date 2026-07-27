@@ -772,7 +772,7 @@ def start_qemu(rpi_mode=False, smp=4):
                 # UEFI boot for amd64 (non-macOS defaults)
                 qemu_cmd = [
                     qemu_binary,
-                    "-smp", "1",
+                    "-smp", smp_arg, *numa_args,
                     "-m", "3G",
                     "-M", "q35",
                     "-drive", f"if=pflash,format=raw,readonly=on,file={ovmf_code}",
@@ -1603,6 +1603,12 @@ SMPSTAT_DELTA_FIELDS = (
     "ddisp",
     "dipi",
     "drdpc",
+    "dsched",
+    "ddpc",
+    "dsrc0",
+    "dsrc1",
+    "dsrc2",
+    "dsrc3",
     "dcsw",
     "dpcq",
     "dpcact",
@@ -1707,6 +1713,35 @@ def format_smpstat_table(sample, max_elapsed_ms):
         f"{totals['drdpc']:>5} {totals['dcsw']:>6} {ready_total:#7x} "
         f"{sum(smpstat_int(row, 'qflag') for row in rows.values()):>3} "
         f"{total_dpc:>10} {'-':>16} {'-':>16}",
+    ])
+
+    ipi_header = (
+        f"{'CPU':>5} {'sched':>7} {'dpcq_ipi':>8} "
+        f"{'from0':>7} {'from1':>7} {'from2':>7} {'from3':>7} "
+        f"{'last image':<16} {'pid':>8} {'tid':>8} {'src':>4} "
+        f"{'pri':>4} {'ideal':>5} {'cause':>5}"
+    )
+    lines.extend(["", "SMPSTAT IPI ATTRIBUTION", ipi_header, "-" * len(ipi_header)])
+    for cpu, row in sorted(rows.items()):
+        lines.append(
+            f"{cpu:>5} {smpstat_int(row, 'dsched'):>7} "
+            f"{smpstat_int(row, 'ddpc'):>8} "
+            f"{smpstat_int(row, 'dsrc0'):>7} "
+            f"{smpstat_int(row, 'dsrc1'):>7} "
+            f"{smpstat_int(row, 'dsrc2'):>7} "
+            f"{smpstat_int(row, 'dsrc3'):>7} "
+            f"{row.get('lastimg', '-'):<16.16} "
+            f"{row.get('lastpid', '0'):>8} {row.get('lasttid', '0'):>8} "
+            f"{smpstat_int(row, 'lastsrc'):>4} "
+            f"{smpstat_int(row, 'lastpri'):>4} "
+            f"{smpstat_int(row, 'lastideal'):>5} "
+            f"{smpstat_int(row, 'lastcause'):>5}"
+        )
+    lines.extend([
+        "-" * len(ipi_header),
+        f"{'TOTAL':>5} {totals['dsched']:>7} {totals['ddpc']:>8} "
+        f"{totals['dsrc0']:>7} {totals['dsrc1']:>7} "
+        f"{totals['dsrc2']:>7} {totals['dsrc3']:>7}",
     ])
     return "\n".join(lines)
 
@@ -1817,6 +1852,24 @@ class SmpStatTablePrinter:
                 f"{rates[3]:>8.1f} {rates[4]:>8.1f} {rates[5]:>8.1f} "
                 f"{rates[6]:>9.1f} {totals['max_ctxsw']:>6} "
                 f"{totals['last_ready']:>7}"
+            )
+        ipi_header = (
+            f"{'CPU':>5} {'sched/s':>9} {'dpcq_ipi/s':>11} "
+            f"{'from0/s':>9} {'from1/s':>9} {'from2/s':>9} {'from3/s':>9}"
+        )
+        lines.extend(["", "SMPSTAT IPI ATTRIBUTION SUMMARY", ipi_header, "-" * len(ipi_header)])
+        for cpu, totals in sorted(self.cpu_totals.items()):
+            seconds = totals["elapsed_ms"] / 1000.0
+            rates = [
+                totals[field] / seconds if seconds else 0.0
+                for field in (
+                    "dsched", "ddpc", "dsrc0", "dsrc1", "dsrc2", "dsrc3"
+                )
+            ]
+            lines.append(
+                f"{cpu:>5} {rates[0]:>9.1f} {rates[1]:>11.1f} "
+                f"{rates[2]:>9.1f} {rates[3]:>9.1f} "
+                f"{rates[4]:>9.1f} {rates[5]:>9.1f}"
             )
         return "\n".join(lines)
 
