@@ -8,6 +8,7 @@
 /* INCLUDES *******************************************************************/
 
 #include <ntoskrnl.h>
+#include <reactos/smpdbg.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -238,7 +239,11 @@ KiIpiProcessRequests(VOID)
             KiIpiParticipateInGenericCall(Prcb);
 
         if (Requests & IPI_DPC)
+        {
+            if (SmpDbgEnabled)
+                SmpDbgRemoteDpc(Prcb->Number);
             DpcRequest = TRUE;
+        }
 
         ASSERT((Requests & ~(KI_IPI_TB_FLUSH |
                              KI_IPI_GENERIC_CALL |
