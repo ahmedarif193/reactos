@@ -194,7 +194,7 @@ LpcpDestroyPortQueue(IN PLPCP_PORT_OBJECT Port,
 
             /* Release the semaphore and reset message id count */
             Thread->LpcReplyMessageId = 0;
-            KeReleaseSemaphore(&Thread->LpcReplySemaphore, 0, 1, FALSE);
+            KeReleaseSemaphore(&Thread->LpcReplySemaphore, 1, 1, FALSE);
         }
     }
 
