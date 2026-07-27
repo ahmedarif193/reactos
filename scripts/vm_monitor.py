@@ -5,6 +5,10 @@ Builds the selected boot image, starts VM (VirtualBox or QEMU) and monitors for 
 If log stops updating for more than 15 seconds, or total runtime exceeds 60 seconds,
 forcefully stops the VM.
 
+When the kernel is booted with /SMPDIAG, the monitor turns each one-second
+SMPSTAT block into a live per-CPU table and prints a normalized run summary on
+exit. Set ROS_VM_SMP_TABLE=0 to suppress these tables.
+
 Usage:
 	  # Run from within your build directory (e.g., output-arm64)
 	  python3 ../vm_monitor.py
@@ -48,6 +52,7 @@ ENABLE_GDB_DUMP = os.environ.get("ROS_VM_GDB_DUMP", "1") != "0"
 QEMU_GDB_PORT = int(os.environ.get("ROS_QEMU_GDB_PORT", "1234"))
 QEMU_ARM64_GIC_VERSION = os.environ.get("ROS_QEMU_GIC_VERSION", "auto")
 QEMU_ARM64_MEMORY = os.environ.get("ROS_QEMU_ARM64_MEMORY", "24G")
+ENABLE_SMP_TABLE = os.environ.get("ROS_VM_SMP_TABLE", "1") != "0"
 KERNEL_TEXT_ADDRESS = (
     int(os.environ["ROS_KERNEL_TEXT"], 0)
     if "ROS_KERNEL_TEXT" in os.environ else None
@@ -1585,6 +1590,289 @@ def capture_gdb_dump(reason):
         return False
 
 
+SMPSTAT_HEADER_RE = re.compile(
+    r"\bSMPSTAT\s+sample=(\d+)\s+elapsed_ms=(\d+)\s+"
+    r"active=(\S+)\s+idle=(\S+)"
+)
+SMPSTAT_CPU_RE = re.compile(r"\bSMPSTAT\s+cpu=(\d+)\b")
+SMPSTAT_FIELD_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9_]*)=(\S+)")
+SMPSTAT_DELTA_FIELDS = (
+    "dtick",
+    "dqreq",
+    "dqend",
+    "ddisp",
+    "dipi",
+    "drdpc",
+    "dcsw",
+    "dpcq",
+    "dpcact",
+    "dpcpend",
+)
+
+
+def parse_smpstat_line(line):
+    """Parse one SMPSTAT line into a sample header or per-CPU row."""
+    line = sanitize_log_content(line)
+    match = SMPSTAT_HEADER_RE.search(line)
+    if match:
+        try:
+            active = int(match.group(3), 0)
+            idle = int(match.group(4), 0)
+        except ValueError:
+            return None, None
+        return "sample", {
+            "sample": int(match.group(1)),
+            "elapsed_ms": int(match.group(2)),
+            "active": active,
+            "idle": idle,
+            "cpus": {},
+        }
+
+    match = SMPSTAT_CPU_RE.search(line)
+    if not match:
+        return None, None
+
+    fields = dict(SMPSTAT_FIELD_RE.findall(line))
+    fields["cpu"] = int(match.group(1))
+    return "cpu", fields
+
+
+def smpstat_int(row, field):
+    """Return an integer SMPSTAT field, treating a missing/bad field as zero."""
+    try:
+        return int(row.get(field, "0"), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def smpstat_pointer(value):
+    """Keep useful pointer identity while displaying a zero pointer compactly."""
+    try:
+        if int(value, 0) == 0:
+            return "-"
+    except (TypeError, ValueError):
+        pass
+    return str(value)
+
+
+def format_smpstat_table(sample, max_elapsed_ms):
+    """Render one SMPSTAT sample as a compact table with one row per CPU."""
+    rows = sample["cpus"]
+    expected = bin(sample["active"]).count("1")
+    completeness = ""
+    if expected and len(rows) != expected:
+        completeness = f" rows={len(rows)}/{expected}"
+
+    title = (
+        f"SMPSTAT sample={sample['sample']} elapsed={sample['elapsed_ms']}ms "
+        f"max={max_elapsed_ms}ms active={sample['active']:#x} "
+        f"idle={sample['idle']:#x}{completeness}"
+    )
+    header = (
+        f"{'CPU':>5} {'state':<5} {'tick':>5} {'qreq':>5} {'qend':>5} "
+        f"{'disp':>5} {'ipi':>5} {'rdpc':>5} {'ctxsw':>6} {'ready':>7} "
+        f"{'qf':>3} {'dpc(q/a/p)':>10} {'current':>16} {'next':>16}"
+    )
+    lines = [title, header, "-" * len(header)]
+    totals = {field: 0 for field in SMPSTAT_DELTA_FIELDS}
+    ready_total = 0
+
+    for cpu, row in sorted(rows.items()):
+        for field in SMPSTAT_DELTA_FIELDS:
+            totals[field] += smpstat_int(row, field)
+        ready_total |= smpstat_int(row, "ready")
+        state = "idle" if sample["idle"] & (1 << cpu) else "run"
+        dpc = (
+            f"{smpstat_int(row, 'dpcq')}/"
+            f"{smpstat_int(row, 'dpcact')}/"
+            f"{smpstat_int(row, 'dpcpend')}"
+        )
+        lines.append(
+            f"{cpu:>5} {state:<5} {smpstat_int(row, 'dtick'):>5} "
+            f"{smpstat_int(row, 'dqreq'):>5} {smpstat_int(row, 'dqend'):>5} "
+            f"{smpstat_int(row, 'ddisp'):>5} {smpstat_int(row, 'dipi'):>5} "
+            f"{smpstat_int(row, 'drdpc'):>5} {smpstat_int(row, 'dcsw'):>6} "
+            f"{row.get('ready', '0x0'):>7} {smpstat_int(row, 'qflag'):>3} "
+            f"{dpc:>10} {smpstat_pointer(row.get('cur', '0')):>16} "
+            f"{smpstat_pointer(row.get('next', '0')):>16}"
+        )
+
+    total_dpc = (
+        f"{totals['dpcq']}/{totals['dpcact']}/{totals['dpcpend']}"
+    )
+    lines.extend([
+        "-" * len(header),
+        f"{'TOTAL':>5} {'':<5} {totals['dtick']:>5} {totals['dqreq']:>5} "
+        f"{totals['dqend']:>5} {totals['ddisp']:>5} {totals['dipi']:>5} "
+        f"{totals['drdpc']:>5} {totals['dcsw']:>6} {ready_total:#7x} "
+        f"{sum(smpstat_int(row, 'qflag') for row in rows.values()):>3} "
+        f"{total_dpc:>10} {'-':>16} {'-':>16}",
+    ])
+    return "\n".join(lines)
+
+
+class SmpStatTablePrinter:
+    """Collect SMPSTAT blocks and print live and whole-run tables."""
+
+    def __init__(self, output=print):
+        self.output = output
+        self.pending = None
+        self.max_elapsed_ms = 0
+        self.sample_count = 0
+        self.cpu_totals = {}
+        self.finished = False
+
+    def feed(self, line):
+        kind, data = parse_smpstat_line(line)
+        if kind == "sample":
+            self.flush()
+            self.pending = data
+            self.max_elapsed_ms = max(
+                self.max_elapsed_ms, data["elapsed_ms"]
+            )
+            if data["active"] == 0:
+                self.flush()
+            return
+
+        if kind != "cpu" or self.pending is None:
+            return
+
+        self.pending["cpus"][data["cpu"]] = data
+        expected = bin(self.pending["active"]).count("1")
+        if expected and len(self.pending["cpus"]) >= expected:
+            self.flush()
+
+    def flush(self):
+        if self.pending is None:
+            return
+
+        sample = self.pending
+        self.pending = None
+        if not sample["cpus"]:
+            return
+
+        self._record(sample)
+        self.output(format_smpstat_table(sample, self.max_elapsed_ms))
+        self.output("")
+
+    def _record(self, sample):
+        self.sample_count += 1
+        elapsed_ms = sample["elapsed_ms"]
+        for cpu, row in sample["cpus"].items():
+            totals = self.cpu_totals.setdefault(cpu, {
+                "samples": 0,
+                "elapsed_ms": 0,
+                "idle_samples": 0,
+                "max_ctxsw": 0,
+                "last_ready": "0x0",
+                **{field: 0 for field in SMPSTAT_DELTA_FIELDS},
+            })
+            totals["samples"] += 1
+            totals["elapsed_ms"] += elapsed_ms
+            totals["idle_samples"] += bool(sample["idle"] & (1 << cpu))
+            totals["max_ctxsw"] = max(
+                totals["max_ctxsw"], smpstat_int(row, "dcsw")
+            )
+            totals["last_ready"] = row.get("ready", "0x0")
+            for field in SMPSTAT_DELTA_FIELDS:
+                totals[field] += smpstat_int(row, field)
+
+    def format_summary(self):
+        if not self.cpu_totals:
+            return ""
+
+        header = (
+            f"{'CPU':>5} {'samples':>7} {'idle_snap%':>10} {'tick/s':>8} "
+            f"{'qreq/s':>8} {'qend/s':>8} {'disp/s':>8} {'ipi/s':>8} "
+            f"{'rdpc/s':>8} {'ctxsw/s':>9} {'maxsw':>6} {'ready':>7}"
+        )
+        lines = [
+            f"SMPSTAT RUN SUMMARY samples={self.sample_count} "
+            f"worst_interval={self.max_elapsed_ms}ms",
+            header,
+            "-" * len(header),
+        ]
+        rate_fields = (
+            "dtick",
+            "dqreq",
+            "dqend",
+            "ddisp",
+            "dipi",
+            "drdpc",
+            "dcsw",
+        )
+        for cpu, totals in sorted(self.cpu_totals.items()):
+            seconds = totals["elapsed_ms"] / 1000.0
+            rates = [
+                totals[field] / seconds if seconds else 0.0
+                for field in rate_fields
+            ]
+            idle_pct = (
+                100.0 * totals["idle_samples"] / totals["samples"]
+                if totals["samples"] else 0.0
+            )
+            lines.append(
+                f"{cpu:>5} {totals['samples']:>7} {idle_pct:>9.1f}% "
+                f"{rates[0]:>8.1f} {rates[1]:>8.1f} {rates[2]:>8.1f} "
+                f"{rates[3]:>8.1f} {rates[4]:>8.1f} {rates[5]:>8.1f} "
+                f"{rates[6]:>9.1f} {totals['max_ctxsw']:>6} "
+                f"{totals['last_ready']:>7}"
+            )
+        return "\n".join(lines)
+
+    def finish(self):
+        if self.finished:
+            return
+        self.finished = True
+        self.flush()
+        summary = self.format_summary()
+        if summary:
+            self.output(summary)
+
+
+class SerialLogFollower:
+    """Feed complete lines appended to a serial log to a callback."""
+
+    def __init__(self, filepath, callback):
+        self.filepath = filepath
+        self.callback = callback
+        self.position = 0
+        self.inode = None
+        self.fragment = ""
+
+    def read_available(self):
+        try:
+            stat = os.stat(self.filepath)
+            if self.inode != stat.st_ino or stat.st_size < self.position:
+                self.inode = stat.st_ino
+                self.position = 0
+                self.fragment = ""
+
+            with open(self.filepath, "rb") as logfile:
+                logfile.seek(self.position)
+                chunk = logfile.read()
+                self.position = logfile.tell()
+        except OSError:
+            return
+
+        if not chunk:
+            return
+
+        text = self.fragment + chunk.decode(errors="replace")
+        self.fragment = ""
+        for line in text.splitlines(keepends=True):
+            if line.endswith(("\n", "\r")):
+                self.callback(line.rstrip("\r\n"))
+            else:
+                self.fragment = line
+
+    def finish(self):
+        self.read_available()
+        if self.fragment:
+            self.callback(self.fragment)
+            self.fragment = ""
+
+
 def monitor_log():
     """Monitor log file for stalls and enforce hard timeout."""
     global qemu_process, use_qemu
@@ -1598,6 +1886,8 @@ def monitor_log():
     print(f"Monitoring log file: {LOG_FILE}")
     print(f"Stall timeout: {STALL_TIMEOUT} seconds")
     print(f"Hard timeout: {HARD_TIMEOUT} seconds")
+    if ENABLE_SMP_TABLE:
+        print("SMPSTAT live tables: enabled")
 
     wait_count = 0
     while get_file_size(LOG_FILE) <= 0:
@@ -1620,6 +1910,10 @@ def monitor_log():
     last_size = get_file_size(LOG_FILE)
     last_change_time = time.time()
     crash_dumped = False
+    smp_tables = SmpStatTablePrinter()
+    log_follower = SerialLogFollower(LOG_FILE, smp_tables.feed)
+    if ENABLE_SMP_TABLE:
+        log_follower.read_available()
 
     try:
         while True:
@@ -1649,6 +1943,8 @@ def monitor_log():
             if current_size != last_size:
                 last_size = current_size
                 last_change_time = current_time
+                if ENABLE_SMP_TABLE:
+                    log_follower.read_available()
                 if not crash_dumped and log_has_crash_marker(read_log_tail(LOG_FILE)):
                     crash_dumped = True
                     print("Crash/debugger marker detected in serial log.")
@@ -1676,6 +1972,10 @@ def monitor_log():
 
     except KeyboardInterrupt:
         print("\nMonitoring interrupted.")
+    finally:
+        if ENABLE_SMP_TABLE:
+            log_follower.finish()
+            smp_tables.finish()
 
 
 def signal_handler(sig, frame):

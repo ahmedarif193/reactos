@@ -9,6 +9,7 @@
 /* INCLUDES *******************************************************************/
 
 #include <ntoskrnl.h>
+#include <reactos/smpdbg.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -156,6 +157,11 @@ KeUpdateRunTime(IN PKTRAP_FRAME TrapFrame,
     PKTHREAD Thread = KeGetCurrentThread();
     PKPRCB Prcb = KeGetCurrentPrcb();
 
+#if defined(_M_AMD64)
+    if (SmpDbgEnabled)
+        SmpDbgRuntimeTick(Prcb->Number);
+#endif
+
     /* Check if this tick is being skipped */
     if (Prcb->SkipTick)
     {
@@ -264,6 +270,11 @@ KeUpdateRunTime(IN PKTRAP_FRAME TrapFrame,
     /* Check if the time expired */
     if (KiIsThreadQuantumExpired(Thread) && (Thread != Prcb->IdleThread))
     {
+#if defined(_M_AMD64)
+        if (SmpDbgEnabled)
+            SmpDbgQuantumRequest(Prcb->Number);
+#endif
+
         /* Schedule a quantum end */
         Prcb->QuantumEnd = 1;
         HalRequestSoftwareInterrupt(DISPATCH_LEVEL);

@@ -8,6 +8,7 @@
 /* INCLUDES ******************************************************************/
 
 #include <ntoskrnl.h>
+#include <reactos/smpdbg.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -29,6 +30,9 @@ KiDpcInterruptHandler(VOID)
     PKPRCB Prcb = KeGetCurrentPrcb();
     PKTHREAD NewThread, OldThread;
     KIRQL OldIrql;
+
+    if (SmpDbgEnabled)
+        SmpDbgDispatchInterrupt(Prcb->Number);
 
     /* Raise to DISPATCH_LEVEL */
     OldIrql = KfRaiseIrql(DISPATCH_LEVEL);
@@ -118,6 +122,8 @@ KiIpiInterruptHandler(VOID)
     OldIrql = KfRaiseIrql(IPI_LEVEL);
     KiSendEOI();
 
+    if (SmpDbgEnabled)
+        SmpDbgIpi(KeGetCurrentProcessorNumber());
     KiIpiProcessRequests();
 
     KeLowerIrql(OldIrql);
