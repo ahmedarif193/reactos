@@ -936,7 +936,7 @@ ExitThreadCallback(PETHREAD Thread)
 //       IntNotifyWinEvent(EVENT_OBJECT_FOCUS, NULL, OBJID_CLIENT, CHILDID_SELF, 0);
 //       IntNotifyWinEvent(EVENT_SYSTEM_FOREGROUND, NULL, OBJID_WINDOW, CHILDID_SELF, 0);
 
-       gptiForeground = NULL;
+       IntSetForegroundThread(NULL);
     }
 
     /* Restore display mode when we are the last thread, and we changed the display mode */

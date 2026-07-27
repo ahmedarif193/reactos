@@ -661,8 +661,8 @@ typedef enum _THREADINFOCLASS
 
 typedef enum _PSPROCESSPRIORITYMODE
 {
-    PsProcessPriorityForeground,
     PsProcessPriorityBackground,
+    PsProcessPriorityForeground,
     PsProcessPrioritySpinning
 } PSPROCESSPRIORITYMODE;
 

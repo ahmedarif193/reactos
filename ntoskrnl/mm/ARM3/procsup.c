@@ -519,6 +519,7 @@ NTAPI
 MmSetMemoryPriorityProcess(IN PEPROCESS Process,
                            IN UCHAR MemoryPriority)
 {
+    KIRQL OldIrql;
     UCHAR OldPriority;
 
     //
@@ -536,8 +537,10 @@ MmSetMemoryPriorityProcess(IN PEPROCESS Process,
     //
     // Save the old priority and update it
     //
+    OldIrql = MiAcquireExpansionLock();
     OldPriority = (UCHAR)Process->Vm.Flags.MemoryPriority;
     Process->Vm.Flags.MemoryPriority = MemoryPriority;
+    MiReleaseExpansionLock(OldIrql);
 
     //
     // Return the old priority

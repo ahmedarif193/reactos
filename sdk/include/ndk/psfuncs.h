@@ -202,6 +202,19 @@ PsIsSystemProcess(
     _In_ PEPROCESS Process
 );
 
+ULONG
+NTAPI
+PsGetProcessPriorityClass(
+    _In_ PEPROCESS Process
+);
+
+VOID
+NTAPI
+PsSetProcessPriorityClass(
+    _In_ PEPROCESS Process,
+    _In_ ULONG PriorityClass
+);
+
 VOID
 NTAPI
 PsSetProcessPriorityByClass(

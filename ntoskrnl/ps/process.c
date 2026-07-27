@@ -1415,6 +1415,7 @@ PsSetProcessPriorityByClass(IN PEPROCESS Process,
 {
     UCHAR Quantum;
     ULONG Priority;
+    PAGED_CODE();
     PSTRACE(PS_PROCESS_DEBUG, "Process: %p Type: %lx\n", Process, Type);
 
     /* Compute quantum and priority */
