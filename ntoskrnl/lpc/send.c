@@ -153,7 +153,7 @@ LpcRequestPort(IN PVOID PortObject,
         if (QueuePort->Flags & LPCP_WAITABLE_PORT)
         {
             /* Wake it */
-            KeSetEvent(&QueuePort->WaitEvent, IO_NO_INCREMENT, FALSE);
+            KeSetEvent(&QueuePort->WaitEvent, 1, FALSE);
         }
 
         KeLeaveCriticalRegion();
@@ -347,7 +347,7 @@ LpcRequestWaitReplyPort(IN PVOID PortObject,
         if (QueuePort->Flags & LPCP_WAITABLE_PORT)
         {
             /* Wake it */
-            KeSetEvent(&QueuePort->WaitEvent, IO_NO_INCREMENT, FALSE);
+            KeSetEvent(&QueuePort->WaitEvent, 1, FALSE);
         }
     }
 
@@ -618,7 +618,7 @@ NtRequestPort(IN HANDLE PortHandle,
         if (QueuePort->Flags & LPCP_WAITABLE_PORT)
         {
             /* Wake it */
-            KeSetEvent(&QueuePort->WaitEvent, IO_NO_INCREMENT, FALSE);
+            KeSetEvent(&QueuePort->WaitEvent, 1, FALSE);
         }
 
         KeLeaveCriticalRegion();
@@ -955,7 +955,7 @@ NtRequestWaitReplyPort(IN HANDLE PortHandle,
         if (QueuePort->Flags & LPCP_WAITABLE_PORT)
         {
             /* Wake it */
-            KeSetEvent(&QueuePort->WaitEvent, IO_NO_INCREMENT, FALSE);
+            KeSetEvent(&QueuePort->WaitEvent, 1, FALSE);
         }
     }
 
