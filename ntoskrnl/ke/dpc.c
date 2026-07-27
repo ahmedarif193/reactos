@@ -958,6 +958,10 @@ KeInsertQueueDpc(IN PKDPC Dpc,
         if (Prcb != CurrentPrcb)
         {
             /* It was, request and IPI */
+#if defined(_M_AMD64) || defined(_M_ARM64)
+            if (SmpDbgEnabled)
+                SmpDbgQueuedDpcIpi(Cpu);
+#endif
             KiIpiSend(AFFINITY_MASK(Cpu), IPI_DPC);
         }
         else

@@ -10,6 +10,14 @@
 #define _REACTOS_SMPDBG_H
 
 #define SMPDBG_MAXCPU 8
+#define SMPDBG_SOURCE_UNKNOWN ((ULONG)-1)
+
+#define SMPDBG_SCHED_REPLACE_STANDBY 1
+#define SMPDBG_SCHED_PREEMPT_CURRENT 2
+#define SMPDBG_SCHED_IDLE_REQUEST    3
+#define SMPDBG_SCHED_PRIORITY        4
+#define SMPDBG_SCHED_AFFINITY        5
+#define SMPDBG_SCHED_RESCHEDULE      6
 
 #if defined(_M_ARM64)
 
@@ -27,6 +35,9 @@ VOID NTAPI SmpDbgTimerReject(ULONG Cpu, ULONG IntId);
 /* Kernel-side recorders / dump. */
 VOID NTAPI SmpDbgTimerTick(ULONG Cpu);
 VOID NTAPI SmpDbgIpi(ULONG Cpu);
+VOID NTAPI SmpDbgRemoteDpc(ULONG Cpu, ULONG SourceCpu);
+VOID NTAPI SmpDbgSchedulerIpi(ULONG Cpu, PVOID Thread, ULONG Cause);
+VOID NTAPI SmpDbgQueuedDpcIpi(ULONG Cpu);
 VOID NTAPI SmpDbgPark(ULONG Cpu);
 VOID NTAPI SmpDbgWake(ULONG Cpu);
 VOID NTAPI SmpDbgHeartbeat(ULONG Cpu);
@@ -60,7 +71,9 @@ VOID NTAPI SmpDbgQuantumRequest(ULONG Cpu);
 VOID NTAPI SmpDbgDispatchInterrupt(ULONG Cpu);
 VOID NTAPI SmpDbgQuantumEnd(ULONG Cpu);
 VOID NTAPI SmpDbgIpi(ULONG Cpu);
-VOID NTAPI SmpDbgRemoteDpc(ULONG Cpu);
+VOID NTAPI SmpDbgRemoteDpc(ULONG Cpu, ULONG SourceCpu);
+VOID NTAPI SmpDbgSchedulerIpi(ULONG Cpu, PVOID Thread, ULONG Cause);
+VOID NTAPI SmpDbgQueuedDpcIpi(ULONG Cpu);
 VOID NTAPI SmpDbgStartWatchdog(VOID);
 
 #ifdef __cplusplus
