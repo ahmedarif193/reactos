@@ -18,6 +18,12 @@
 #define SMPDBG_SCHED_PRIORITY        4
 #define SMPDBG_SCHED_AFFINITY        5
 #define SMPDBG_SCHED_RESCHEDULE      6
+#define SMPDBG_SCHED_STANDBY_REPAIR  7
+
+#define SMPDBG_BALANCE_WAKE_PLACEMENT 1
+#define SMPDBG_BALANCE_IDLE           2
+#define SMPDBG_BALANCE_QUANTUM        3
+#define SMPDBG_BALANCE_PERIODIC       4
 
 #if defined(_M_ARM64)
 
@@ -38,6 +44,10 @@ VOID NTAPI SmpDbgIpi(ULONG Cpu);
 VOID NTAPI SmpDbgRemoteDpc(ULONG Cpu, ULONG SourceCpu);
 VOID NTAPI SmpDbgSchedulerIpi(ULONG Cpu, PVOID Thread, ULONG Cause);
 VOID NTAPI SmpDbgQueuedDpcIpi(ULONG Cpu);
+VOID NTAPI SmpDbgTbFlushIpi(ULONG Cpu);
+VOID NTAPI SmpDbgGenericCallIpi(ULONG Cpu);
+VOID NTAPI SmpDbgBalanceEvent(ULONG TargetCpu, ULONG SourceCpu, ULONG Reason);
+VOID NTAPI SmpDbgStandbySteal(ULONG TargetCpu);
 VOID NTAPI SmpDbgPark(ULONG Cpu);
 VOID NTAPI SmpDbgWake(ULONG Cpu);
 VOID NTAPI SmpDbgHeartbeat(ULONG Cpu);
@@ -74,6 +84,11 @@ VOID NTAPI SmpDbgIpi(ULONG Cpu);
 VOID NTAPI SmpDbgRemoteDpc(ULONG Cpu, ULONG SourceCpu);
 VOID NTAPI SmpDbgSchedulerIpi(ULONG Cpu, PVOID Thread, ULONG Cause);
 VOID NTAPI SmpDbgQueuedDpcIpi(ULONG Cpu);
+VOID NTAPI SmpDbgTbFlushIpi(ULONG Cpu);
+VOID NTAPI SmpDbgGenericCallIpi(ULONG Cpu);
+VOID NTAPI SmpDbgBalanceEvent(ULONG TargetCpu, ULONG SourceCpu, ULONG Reason);
+VOID NTAPI SmpDbgStandbySteal(ULONG TargetCpu);
+VOID NTAPI SmpDbgCycleCharge(ULONG Cpu, ULONG64 Cycles, BOOLEAN Reset);
 VOID NTAPI SmpDbgStartWatchdog(VOID);
 
 #ifdef __cplusplus

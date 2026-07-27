@@ -21,6 +21,10 @@ KAFFINITY KiIdleSMTSummary;
 #ifdef CONFIG_SMP
 #define KI_BALANCE_QUEUE_LIMIT 64
 
+C_ASSERT(KiBalanceWakePlacement == SMPDBG_BALANCE_WAKE_PLACEMENT);
+C_ASSERT(KiBalanceIdle == SMPDBG_BALANCE_IDLE);
+C_ASSERT(KiBalanceQuantum == SMPDBG_BALANCE_QUANTUM);
+
 typedef struct DECLSPEC_CACHEALIGN _KI_BALANCE_STATE
 {
     volatile LONG SourceCursor;
@@ -376,10 +380,10 @@ KiBalanceReadyQueues(
 {
     PKPRCB Source;
     PKTHREAD CurrentThread, DisplacedThread, SourceReplacement, Thread;
-    ULONG LocalPriority, ProcessorCount, Scanned;
+    ULONG IpiCause, LocalPriority, ProcessorCount, Scanned;
     ULONG StandbyCpu, Start, Offset, SourceCpu, TargetCpu, TargetTick;
     LONG MinimumPriority, Priority, StandbyPriority;
-    BOOLEAN Preempted, RequestIpi, RequestSourceIpi, TargetIdle;
+    BOOLEAN Preempted, RequestIpi, RequestSourceIpi, StandbySteal, TargetIdle;
 
     ASSERT(KeGetCurrentIrql() >= DISPATCH_LEVEL);
     ASSERT((Reason >= KiBalanceIdle) && (Reason <= KiBalanceQuantum));
@@ -428,6 +432,7 @@ KiBalanceReadyQueues(
     Source = NULL;
     SourceReplacement = NULL;
     RequestSourceIpi = FALSE;
+    StandbySteal = FALSE;
     StandbyCpu = KiFindBestStandbySource(TargetCpu, MinimumPriority, Start, ProcessorCount, &StandbyPriority);
 
     for (Priority = HIGH_PRIORITY;
@@ -442,6 +447,7 @@ KiBalanceReadyQueues(
             Thread = KiTryStealStandbyThreadLocked(Source, TargetCpu, (KPRIORITY)Priority, &Preempted, &SourceReplacement);
             if (Thread != NULL)
             {
+                StandbySteal = TRUE;
                 RequestSourceIpi = (SourceReplacement != NULL) && (Source != KeGetCurrentPrcb());
                 KiReleasePrcbLock(Source);
                 goto ThreadFound;
@@ -496,6 +502,7 @@ KiBalanceReadyQueues(
 
 ThreadFound:
     DisplacedThread = NULL;
+    IpiCause = SMPDBG_SCHED_IDLE_REQUEST;
     RequestIpi = FALSE;
     KiAcquirePrcbLock(Target);
     CurrentThread = Target->CurrentThread;
@@ -507,6 +514,7 @@ ThreadFound:
         DisplacedThread->State = DeferredReady;
         Thread->State = Standby;
         Target->NextThread = Thread;
+        IpiCause = SMPDBG_SCHED_REPLACE_STANDBY;
         RequestIpi = (Target != KeGetCurrentPrcb());
     }
     else if ((Target->NextThread == NULL) &&
@@ -517,6 +525,7 @@ ThreadFound:
             CurrentThread->Preempted = TRUE;
         Thread->State = Standby;
         Target->NextThread = Thread;
+        IpiCause = SMPDBG_SCHED_PREEMPT_CURRENT;
         RequestIpi = (Target != KeGetCurrentPrcb());
     }
     else
@@ -532,19 +541,36 @@ ThreadFound:
     if (CurrentThread == Target->IdleThread)
     {
         InterlockedBitTestAndResetAffinity(&KiIdleSummary, TargetCpu);
+        IpiCause = SMPDBG_SCHED_IDLE_REQUEST;
         RequestIpi = (Target != KeGetCurrentPrcb());
     }
     KiReleasePrcbLock(Target);
 
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    if (SmpDbgEnabled)
+    {
+        SmpDbgBalanceEvent(TargetCpu, SourceCpu, Reason);
+        if (StandbySteal)
+            SmpDbgStandbySteal(TargetCpu);
+    }
+#endif
     KiReleaseThreadLock(Thread);
 
     if (RequestSourceIpi)
     {
+#if defined(_M_AMD64) || defined(_M_ARM64)
+        if (SmpDbgEnabled)
+            SmpDbgSchedulerIpi(SourceCpu, SourceReplacement, SMPDBG_SCHED_STANDBY_REPAIR);
+#endif
         KiIpiSend(Source->SetMember, IPI_DPC);
     }
 
     if (RequestIpi)
     {
+#if defined(_M_AMD64) || defined(_M_ARM64)
+        if (SmpDbgEnabled)
+            SmpDbgSchedulerIpi(TargetCpu, Thread, IpiCause);
+#endif
         KiIpiSend(Target->SetMember, IPI_DPC);
     }
 
@@ -656,6 +682,10 @@ KiSelectNextProcessor(
     }
 
     ASSERT(BestProcessor < (ULONG)KeNumberProcessors);
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    if (SmpDbgEnabled)
+        SmpDbgBalanceEvent(BestProcessor, Thread->NextProcessor, KiBalanceWakePlacement);
+#endif
     return BestProcessor;
 }
 #else

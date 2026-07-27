@@ -1071,6 +1071,8 @@ static LRESULT CALLBACK PgPerfProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         pg->Paint(dc, ps.rcPaint);
         bp.End();
         EndPaint(hwnd, &ps);
+        if (pg->SelectedResource() == RES_CPU)
+            App_SmpDiagGraphPaint();
         return 0;
     }
     case WM_SIZE:

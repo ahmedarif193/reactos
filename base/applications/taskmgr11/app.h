@@ -238,6 +238,7 @@ void App_ApplyTheme(void);       /* re-derive g_t from settings+dpi, repaint all
 void App_SetPage(int pg);
 void App_UpdateNow(void);        /* force a data tick + refresh */
 UINT App_TimerMs(void);          /* 0 = paused */
+void App_SmpDiagGraphPaint(void);
 
 /* frame -> pages notification messages */
 #define WM_APP_SEARCH      (WM_APP + 1)   /* search text changed          */

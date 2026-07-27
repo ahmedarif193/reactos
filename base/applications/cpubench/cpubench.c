@@ -13,7 +13,7 @@
 #define VAX_DHRY_PER_SEC 1757
 #define FP_FLOPS_PER_ITER 11
 #define MAX_CPUS 64
-#define SMP_TARGET_SECONDS 10U
+#define SMP_TARGET_SECONDS 15U
 
 static volatile long gDhrySink;
 static volatile double gFpSink;
@@ -348,6 +348,7 @@ static void RunBench(const char *Name, int Kind, unsigned long Unit, LONGLONG Fr
     WORK W[MAX_CPUS];
     HANDLE Th[MAX_CPUS];
     LARGE_INTEGER WallA, WallB;
+    ULONGLONG WallBeginMs, WallEndMs;
     DWORD_PTR PreviousAffinity;
     unsigned i;
 
@@ -383,10 +384,14 @@ static void RunBench(const char *Name, int Kind, unsigned long Unit, LONGLONG Fr
         W[i].Ticks = 0;
     }
     QueryPerformanceCounter(&WallA);
+    WallBeginMs = GetTickCount64();
+    emit("[cpubench] %s SMP_BEGIN cores=%u target_s=%u qpc=%I64d tick_ms=%I64u\n", Name, NumCpus, SMP_TARGET_SECONDS, WallA.QuadPart, WallBeginMs);
     for (i = 0; i < NumCpus; ++i)
         Th[i] = CreateThread(NULL, 0, Worker, &W[i], 0, NULL);
     WaitForMultipleObjects(NumCpus, Th, TRUE, INFINITE);
     QueryPerformanceCounter(&WallB);
+    WallEndMs = GetTickCount64();
+    emit("[cpubench] %s SMP_END cores=%u qpc=%I64d tick_ms=%I64u elapsed_ms=%I64u\n", Name, NumCpus, WallB.QuadPart, WallEndMs, (ULONGLONG)((WallB.QuadPart - WallA.QuadPart) * 1000 / Freq));
     if (PreviousAffinity != 0)
         SetThreadAffinityMask(GetCurrentThread(), PreviousAffinity);
 

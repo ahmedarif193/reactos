@@ -174,6 +174,7 @@ KiIpiServiceRoutine(
             PKIPI_BROADCAST_WORKER Function = KiArm64IpiPacket.Function;
             ULONG_PTR Argument = KiArm64IpiPacket.Argument;
 
+            SmpDbgGenericCallIpi(Prcb->Number);
             if (Function != NULL)
             {
                 /*
