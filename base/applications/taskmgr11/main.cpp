@@ -136,7 +136,7 @@ void Settings_Load(void)
 {
     Settings& st = g_app.st;
     ZeroMemory(&st, sizeof(st));
-    st.theme = TM_SYSTEM;
+    st.theme = TM_DARK;
     st.startPage = PG_PROCESSES;
     st.speed = SPD_NORMAL;
     st.navExpanded = TRUE;
@@ -161,7 +161,7 @@ void Settings_Load(void)
             st.wp.length = 0;
         RegCloseKey(hk);
     }
-    if (st.theme > TM_DARK) st.theme = TM_SYSTEM;
+    if (st.theme > TM_DARK) st.theme = TM_DARK;
     if (st.startPage >= PG_SETTINGS) st.startPage = PG_PROCESSES;
     if (st.speed > SPD_PAUSED) st.speed = SPD_NORMAL;
 }
@@ -199,7 +199,7 @@ UINT App_TimerMs(void)
 {
     switch (g_app.st.speed)
     {
-    case SPD_HIGH:   return 500;
+    case SPD_HIGH:   return 1000;
     case SPD_NORMAL: return 1000;
     case SPD_LOW:    return 4000;
     default:         return 0;
@@ -228,7 +228,7 @@ static void SmpDiagInitialize(void)
     CHAR Buffer[128];
 
     s_smpDiagOriginTick = GetTickCount64();
-    StringCchPrintfA(Buffer, _countof(Buffer), "TASKMGR11_DIAG_BEGIN period_ms=500 tick_ms=%I64u page=performance graph=logical\n", s_smpDiagOriginTick);
+    StringCchPrintfA(Buffer, _countof(Buffer), "TASKMGR11_DIAG_BEGIN period_ms=1000 tick_ms=%I64u page=performance graph=logical\n", s_smpDiagOriginTick);
     OutputDebugStringA(Buffer);
 }
 
