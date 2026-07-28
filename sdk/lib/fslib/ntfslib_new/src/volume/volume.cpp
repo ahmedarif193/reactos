@@ -69,7 +69,13 @@ NtfsProbePartition(
     // Check if OEM_ID is "NTFS    ".
     if (RtlCompareMemory(PartitionBootSector->OEM_ID, "NTFS    ", 8) != 8)
     {
-        DPRINT1("Failed with NTFS identifier: [%.8s]\n", PartitionBootSector->OEM_ID);
+        char OemId[9];
+
+        /* Raw boot-sector bytes are not printable text (mkfs.fat volumes,
+         * x86 jump opcodes, even newlines); sanitize before logging. */
+        for (i = 0; i < 8; i++) OemId[i] = ((PartitionBootSector->OEM_ID[i] >= 0x20) && (PartitionBootSector->OEM_ID[i] < 0x7F)) ? (char)PartitionBootSector->OEM_ID[i] : '.';
+        OemId[8] = '\0';
+        DPRINT1("Failed with NTFS identifier: [%s]\n", OemId);
         return STATUS_UNRECOGNIZED_VOLUME;
     }
 
@@ -78,7 +84,7 @@ NtfsProbePartition(
     {
         if (PartitionBootSector->Reserved0[i] != 0)
         {
-            DPRINT1("Failed in field Reserved0: [%.7s]\n", PartitionBootSector->Reserved0);
+            DPRINT1("Failed in field Reserved0: byte %lu is 0x%02x\n", (unsigned long)i, (unsigned int)(unsigned char)PartitionBootSector->Reserved0[i]);
             return STATUS_UNRECOGNIZED_VOLUME;
         }
     }
