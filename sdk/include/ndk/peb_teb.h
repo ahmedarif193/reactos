@@ -462,7 +462,7 @@ typedef struct STRUCT(_TEB)
     BOOLEAN BooleanSpare[3];
 #endif
 
-#if (NTDDI_VERSION >= NTDDI_WIN10) // since 10.0.10041.0
+#if (NTDDI_VERSION >= NTDDI_WIN10) || defined(__REACTOS__) // since 10.0.10041.0
     LONG WowTebOffset;
 #elif (NTDDI_VERSION >= NTDDI_WIN7)
     ULONG SpareUlong0;

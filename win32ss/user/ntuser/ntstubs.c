@@ -990,12 +990,20 @@ NtDxEngGetRedirectionBitmap(
 #define NTUSER_DPI_PER_MONITOR_AWARE_V2 0x00000022
 #define NTUSER_DPI_UNAWARE_GDISCALED    0x40006010
 
+typedef struct _NTUSER_DISPLAYCONFIG_DEVICE_INFO_HEADER
+{
+    ULONG Type;
+    ULONG Size;
+    LUID AdapterId;
+    ULONG Id;
+} NTUSER_DISPLAYCONFIG_DEVICE_INFO_HEADER;
+
 LONG
 APIENTRY
 NtUserDisplayConfigGetDeviceInfo(
     _Inout_ PVOID pPacket)
 {
-    DISPLAYCONFIG_DEVICE_INFO_HEADER Header;
+    NTUSER_DISPLAYCONFIG_DEVICE_INFO_HEADER Header;
 
     _SEH2_TRY
     {
@@ -1009,7 +1017,7 @@ NtUserDisplayConfigGetDeviceInfo(
     _SEH2_END;
 
     /* Every request type carries a payload beyond the bare header */
-    if (Header.size <= sizeof(Header))
+    if (Header.Size <= sizeof(Header))
         return STATUS_INVALID_PARAMETER;
 
     /* No display configuration topology support yet */

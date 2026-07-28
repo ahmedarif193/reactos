@@ -820,6 +820,12 @@ NTAPI
 KeQueryRuntimeProcess(IN PKPROCESS Process,
                       OUT PULONG UserTime);
 
+ULONG64
+NTAPI
+KeQueryTotalCycleTimeThread(
+    IN OUT PKTHREAD Thread,
+    OUT PULONG64 CycleTimeStamp);
+
 VOID
 NTAPI
 KeQueryValuesProcess(IN PKPROCESS Process,

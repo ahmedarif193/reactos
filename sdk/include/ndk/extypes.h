@@ -395,7 +395,7 @@ typedef enum _SYSTEM_INFORMATION_CLASS
     SystemEdidInformation                                 = 156, // 0x9C
 #endif // (NTDDI_VERSION >= NTDDI_WINBLUE)
 
-#if (NTDDI_VERSION >= NTDDI_WIN10)
+#if (NTDDI_VERSION >= NTDDI_WIN10) || defined(__REACTOS__)
     SystemManufacturingInformation                        = 157, // 0x9D
     SystemEnergyEstimationConfigInformation               = 158, // 0x9E
     SystemHypervisorDetailInformation                     = 159, // 0x9F
@@ -469,7 +469,7 @@ typedef enum _SYSTEM_INFORMATION_CLASS
     SystemPoolZeroingInformation                          = 227, // 0xE3
 #endif // (NTDDI_VERSION >= NTDDI_WIN10)
 
-#if (NTDDI_VERSION >= NTDDI_WIN11)
+#if (NTDDI_VERSION >= NTDDI_WIN11) || defined(__REACTOS__)
     SystemDpcWatchdogInformation                          = 228, // 0xE4
     SystemDpcWatchdogInformation2                         = 229, // 0xE5
     SystemSupportedProcessorArchitectures2                = 230, // 0xE6

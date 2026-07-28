@@ -699,7 +699,6 @@ NtfsFsdQueryInformation(_In_    PDEVICE_OBJECT VolumeDeviceObject,
 
     PIO_STACK_LOCATION IoStack;
     FILE_INFORMATION_CLASS FileInfoRequest;
-    PVolumeContextBlock VolCB;
     PFileContextBlock FileCB;
     NTSTATUS Status;
     PVOID SystemBuffer;
@@ -709,7 +708,6 @@ NtfsFsdQueryInformation(_In_    PDEVICE_OBJECT VolumeDeviceObject,
     IoStack = IoGetCurrentIrpStackLocation(Irp);
     FileInfoRequest = IoStack->Parameters.QueryFile.FileInformationClass;
     FileObject = IoStack->FileObject;
-    VolCB = (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
     FileCB = (PFileContextBlock)FileObject->FsContext;
     if (!FileCB)
     {
