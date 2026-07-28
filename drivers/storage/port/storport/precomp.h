@@ -31,6 +31,11 @@
 #define TAG_ADDRESS_MAPPING 'MAtS'
 #define TAG_INQUIRY_DATA    'QItS'
 #define TAG_SENSE_DATA      'NStS'
+#define TAG_SRB_CONTEXT     'CStS'
+#define TAG_SRB_EXTENSION   'EStS'
+#define TAG_SGL             'GStS'
+#define TAG_DEVICE_RELATION 'RDtS'
+#define TAG_PNP_ID          'IPtS'
 
 typedef enum
 {
@@ -98,6 +103,7 @@ typedef struct _FDO_DEVICE_EXTENSION
     DEVICE_STATE PnpState;
     LIST_ENTRY AdapterListEntry;
     MINIPORT Miniport;
+    ULONG PortNumber;
     ULONG BusNumber;
     ULONG SlotNumber;
     PCM_RESOURCE_LIST AllocatedResources;
@@ -112,9 +118,20 @@ typedef struct _FDO_DEVICE_EXTENSION
     PKINTERRUPT Interrupt;
     ULONG InterruptIrql;
 
+    /*
+     * Legacy miniports get one port-owned timer through
+     * StorPortNotification(RequestTimerCall).
+     */
+    KTIMER MiniportTimer;
+    KDPC MiniportTimerDpc;
+    KSPIN_LOCK MiniportTimerLock;
+    PHW_TIMER MiniportTimerRoutine;
+    BOOLEAN MiniportTimerArmed;
+
     KSPIN_LOCK PdoListLock;
     LIST_ENTRY PdoListHead;
     ULONG PdoCount;
+    BOOLEAN BusScanned;
 } FDO_DEVICE_EXTENSION, *PFDO_DEVICE_EXTENSION;
 
 
@@ -130,10 +147,34 @@ typedef struct _PDO_DEVICE_EXTENSION
     ULONG Bus;
     ULONG Target;
     ULONG Lun;
+    ULONG QueueDepth;
+    BOOLEAN DeviceClaimed;
     PINQUIRYDATA InquiryBuffer;
 
 
 } PDO_DEVICE_EXTENSION, *PPDO_DEVICE_EXTENSION;
+
+
+/*
+ * Per-request state owned by the port driver for the lifetime of one SRB.
+ * It is anchored in the IRP so the completion path (which only receives the
+ * SRB) can find and release it again.
+ */
+typedef struct _STOR_SRB_CONTEXT
+{
+    PVOID SrbExtensionAllocation;
+    PSTOR_SCATTER_GATHER_LIST Sgl;
+    ULONG SglAllocationSize;
+    ULONG SrbExtensionSize;
+} STOR_SRB_CONTEXT, *PSTOR_SRB_CONTEXT;
+
+#define PortGetSrbContext(Irp)  ((PSTOR_SRB_CONTEXT)((Irp)->Tail.Overlay.DriverContext[0]))
+
+/* pdo.c */
+
+VOID PortFreeSrbContext(_In_ PIRP Irp);
+
+NTSTATUS PortSrbStatusToNtStatus(_In_ UCHAR SrbStatus);
 
 
 /* fdo.c */

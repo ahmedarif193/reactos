@@ -55,6 +55,7 @@
 @ stdcall HalProcessorIdle()
 @ stdcall HalQueryDisplayParameters(ptr ptr ptr ptr)
 @ stdcall -arch=arm64 HalQueryPciMsiSupport(long long ptr ptr ptr ptr ptr)
+@ stdcall -arch=i386,x86_64 HalQueryPciRoutedInterrupt(long long long long long ptr)
 @ stdcall HalQueryRealTimeClock(ptr)
 @ stdcall HalReadDmaCounter(ptr)
 @ stdcall HalReportResourceUsage()
