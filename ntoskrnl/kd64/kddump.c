@@ -486,6 +486,24 @@ Exit:
     return Status;
 }
 
+#else
+
+/*
+ * Crash dump writing is only implemented for amd64 so far. The callers in
+ * Io/Ke are architecture independent, so provide the two entry points here
+ * rather than making every call site test for the architecture.
+ */
+BOOLEAN NTAPI KdpInitializeCrashDump(_In_ HANDLE PageFileHandle)
+{
+    UNREFERENCED_PARAMETER(PageFileHandle);
+    return FALSE;
+}
+
+NTSTATUS NTAPI KdpWriteCrashDump(VOID)
+{
+    return STATUS_NOT_SUPPORTED;
+}
+
 #endif
 
 #if (NTDDI_VERSION >= NTDDI_WINBLUE)
