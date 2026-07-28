@@ -622,25 +622,8 @@ WskDeregister(
 /*  line 328 so it is not repeated here.                              */
 /* ------------------------------------------------------------------ */
 
-/* Buffer list used by WskSendMessages (declared before the typedef
- * that references it) */
-typedef struct _WSK_BUF_LIST {
-    struct _WSK_BUF_LIST* Next;
-    WSK_BUF Buffer;
-} WSK_BUF_LIST, *PWSK_BUF_LIST;
-
-/* PFN_WSK_SEND_MESSAGES — send multiple datagrams in one call (Vista+) */
-typedef
-_Must_inspect_result_
-NTSTATUS
-(WSKAPI * PFN_WSK_SEND_MESSAGES)(
-    _In_ PWSK_SOCKET Socket,
-    _In_ PWSK_BUF_LIST BufferList,
-    _In_ ULONG Flags,
-    _In_opt_ PSOCKADDR RemoteAddress,
-    _In_ ULONG ControlInfoLength,
-    _In_reads_bytes_opt_(ControlInfoLength) PVOID ControlInfo,
-    _Inout_ PIRP Irp);
+/* WSK_BUF_LIST and PFN_WSK_SEND_MESSAGES are declared with the rest of the
+ * core surface above, under the NTDDI_WIN8 guard. */
 
 /* PFN_WSK_CONNECT_EX — Win7 addition: connect with initial send data */
 typedef
