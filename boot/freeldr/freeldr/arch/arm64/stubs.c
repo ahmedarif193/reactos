@@ -100,13 +100,5 @@ PVOID PaToVa(PVOID Pa)
     return (PVOID)(value + ARM64_KSEG0_BASE);
 }
 
-VOID
-RtlFillMemoryUlong(
-    _Out_writes_bytes_all_(Length) PVOID Destination,
-    _In_ SIZE_T Length,
-    _In_ ULONG Fill)
-{
-    ULONG *p = (ULONG*)Destination;
-    SIZE_T n = Length / sizeof(ULONG);
-    for (SIZE_T i = 0; i < n; ++i) p[i] = Fill;
-}
+/* RtlFillMemoryUlong is provided by sdk/lib/rtl/mem.c, which blrtl now
+ * compiles for arm64 as well. */
