@@ -29,6 +29,9 @@ Revision History:
 #include <process.h>
 #include <devpkey.h>
 #include <ntiologc.h>
+#ifdef __REACTOS__
+#include <reactos/drivers/dumpstor.h>
+#endif
 
 
 #ifdef DEBUG_USE_WPP
@@ -7581,6 +7584,13 @@ ClassDeviceControl(
 
             break;
         }
+
+#ifdef __REACTOS__
+        case IOCTL_REACTOS_STORAGE_GET_DUMP_INTERFACE:
+            IoCopyCurrentIrpStackLocationToNext(Irp);
+            ClassReleaseRemoveLock(DeviceObject, Irp);
+            return IoCallDriver(commonExtension->LowerDeviceObject, Irp);
+#endif
 
         default:
             status = STATUS_PENDING;

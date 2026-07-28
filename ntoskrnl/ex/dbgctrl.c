@@ -381,6 +381,29 @@ NtSystemDebugControl(
                 Status = STATUS_NOT_IMPLEMENTED;
                 break;
 
+#if (NTDDI_VERSION >= NTDDI_WINBLUE)
+            case SysDbgGetLiveKernelDump:
+#if (NTDDI_VERSION >= NTDDI_WIN11)
+#define SYSDBG_LIVEDUMP_CONTROL_V1_SIZE FIELD_OFFSET(SYSDBG_LIVEDUMP_CONTROL, SelectiveControl)
+                if ((InputBufferLength != SYSDBG_LIVEDUMP_CONTROL_V1_SIZE && InputBufferLength != sizeof(SYSDBG_LIVEDUMP_CONTROL)) || OutputBufferLength != 0 || OutputBuffer != NULL)
+#else
+                if (InputBufferLength != sizeof(SYSDBG_LIVEDUMP_CONTROL) || OutputBufferLength != 0 || OutputBuffer != NULL)
+#endif
+                {
+                    Status = STATUS_INFO_LENGTH_MISMATCH;
+                }
+                else
+                {
+                    SYSDBG_LIVEDUMP_CONTROL Control = {0};
+                    RtlCopyMemory(&Control, InputBuffer, InputBufferLength);
+                    Status = KdpWriteLiveKernelDump(&Control, PreviousMode);
+                }
+#if (NTDDI_VERSION >= NTDDI_WIN11)
+#undef SYSDBG_LIVEDUMP_CONTROL_V1_SIZE
+#endif
+                break;
+#endif
+
             case SysDbgGetKdBlockEnable:
                 if (OutputBufferLength != sizeof(BOOLEAN))
                 {

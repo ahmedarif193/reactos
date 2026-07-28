@@ -966,6 +966,11 @@ typedef struct _KPRCB
     // On Win 8.1+ the FeatureBits field is extended to 64 bits
     ULONG FeatureBitsHigh;
 #endif
+    /*
+     * Windows dump readers obtain the saved processor context through
+     * the OffsetPrcbContext member of KDDEBUGGER_DATA64.
+     */
+    PCONTEXT CrashDumpContext;
 #endif
 } KPRCB, *PKPRCB;
 

@@ -103,6 +103,8 @@ PortDeletePdo(
         PdoExtension->InquiryBuffer = NULL;
     }
 
+    PortFreeDumpContext(PdoExtension->DumpContext);
+    PdoExtension->DumpContext = NULL;
 
     // FIXME: More uninitialization
 
@@ -217,6 +219,177 @@ NTSTATUS PortSrbStatusToNtStatus(_In_ UCHAR SrbStatus)
     }
 }
 
+static NTSTATUS PortDumpSubmit(_In_ PPORT_DUMP_CONTEXT DumpContext, _In_ UCHAR Function, _In_ ULONG64 DiskByteOffset, _In_ PHYSICAL_ADDRESS Buffer, _In_ ULONG Length)
+{
+    PFDO_DEVICE_EXTENSION FdoExtension;
+    ULONG64 BlockAddress;
+    ULONG BlockCount;
+    ULONG Timeout;
+
+    FdoExtension = DumpContext->PdoExtension->FdoExtension;
+    if ((Function == SRB_FUNCTION_EXECUTE_SCSI) && (((DiskByteOffset | Length) % DumpContext->BytesPerSector) != 0 || (Length == 0) || (Length > PAGE_SIZE)))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    RtlZeroMemory(&DumpContext->Srb, sizeof(DumpContext->Srb));
+    if (DumpContext->SrbExtension != NULL)
+    {
+        RtlZeroMemory(DumpContext->SrbExtension, FdoExtension->Miniport.PortConfig.SrbExtensionSize);
+    }
+
+    DumpContext->Srb.Length = sizeof(SCSI_REQUEST_BLOCK);
+    DumpContext->Srb.Function = Function;
+    DumpContext->Srb.PathId = (UCHAR)DumpContext->PdoExtension->Bus;
+    DumpContext->Srb.TargetId = (UCHAR)DumpContext->PdoExtension->Target;
+    DumpContext->Srb.Lun = (UCHAR)DumpContext->PdoExtension->Lun;
+    DumpContext->Srb.SrbExtension = DumpContext->SrbExtension;
+    DumpContext->Srb.OriginalRequest = DumpContext->Irp;
+    DumpContext->Srb.TimeOutValue = 10;
+
+    if (Function == SRB_FUNCTION_EXECUTE_SCSI)
+    {
+        DumpContext->Srb.SrbFlags = SRB_FLAGS_DATA_OUT | SRB_FLAGS_DISABLE_SYNCH_TRANSFER | SRB_FLAGS_NO_QUEUE_FREEZE;
+        DumpContext->Srb.DataTransferLength = Length;
+        DumpContext->Srb.DataBuffer = MmGetVirtualForPhysical(Buffer);
+
+        DumpContext->Sgl.NumberOfElements = 1;
+        DumpContext->Sgl.List[0].PhysicalAddress = Buffer;
+        DumpContext->Sgl.List[0].Length = Length;
+
+        BlockAddress = DiskByteOffset / DumpContext->BytesPerSector;
+        BlockCount = Length / DumpContext->BytesPerSector;
+        DumpContext->Srb.CdbLength = RosDumpBuildWriteCdb((PCDB)&DumpContext->Srb.Cdb, BlockAddress, BlockCount);
+    }
+
+    DumpContext->Status = STATUS_PENDING;
+    InterlockedExchange(&DumpContext->Completed, 0);
+    KeMemoryBarrier();
+
+    if (!MiniportStartIo(&FdoExtension->Miniport, &DumpContext->Srb))
+        return STATUS_DEVICE_BUSY;
+
+    for (Timeout = 0; Timeout < ROS_DUMP_POLL_ITERATIONS; Timeout++)
+    {
+        MiniportHwInterrupt(&FdoExtension->Miniport);
+        if (InterlockedCompareExchange(&DumpContext->Completed, 0, 0) != 0)
+            return DumpContext->Status;
+
+        KeStallExecutionProcessor(1);
+    }
+
+    return STATUS_IO_TIMEOUT;
+}
+
+static NTSTATUS NTAPI PortDumpPrepare(_In_ PVOID Context)
+{
+    PPORT_DUMP_CONTEXT DumpContext = Context;
+    PFDO_DEVICE_EXTENSION FdoExtension;
+
+    FdoExtension = DumpContext->PdoExtension->FdoExtension;
+    FdoExtension->DumpMode = TRUE;
+    KeMemoryBarrier();
+
+    if ((FdoExtension->Miniport.InitData->HwResetBus == NULL) || !FdoExtension->Miniport.InitData->HwResetBus(&FdoExtension->Miniport.MiniportExtension->HwDeviceExtension, DumpContext->PdoExtension->Bus))
+    {
+        return STATUS_IO_DEVICE_ERROR;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS NTAPI PortDumpWrite(_In_ PVOID Context, _In_ ULONG64 DiskByteOffset, _In_ PHYSICAL_ADDRESS Buffer, _In_ ULONG Length)
+{
+    return PortDumpSubmit(Context, SRB_FUNCTION_EXECUTE_SCSI, DiskByteOffset, Buffer, Length);
+}
+
+static NTSTATUS NTAPI PortDumpFlush(_In_ PVOID Context)
+{
+    PHYSICAL_ADDRESS Buffer = {{0}};
+
+    return PortDumpSubmit(Context, SRB_FUNCTION_FLUSH, 0, Buffer, 0);
+}
+
+VOID PortFreeDumpContext(_In_opt_ PPORT_DUMP_CONTEXT DumpContext)
+{
+    if (DumpContext == NULL)
+        return;
+
+    if (DumpContext->Irp != NULL)
+        IoFreeIrp(DumpContext->Irp);
+    if (DumpContext->SrbExtension != NULL)
+        MmFreeContiguousMemory(DumpContext->SrbExtension);
+
+    ExFreePoolWithTag(DumpContext, TAG_DUMP_CONTEXT);
+}
+
+NTSTATUS PortGetDumpInterface(_In_ PPDO_DEVICE_EXTENSION PdoExtension, _Out_ PROS_STORAGE_DUMP_INTERFACE Interface)
+{
+    PFDO_DEVICE_EXTENSION FdoExtension;
+    PPORT_DUMP_CONTEXT DumpContext;
+    PHYSICAL_ADDRESS HighestAddress;
+    ULONG SrbExtensionSize;
+    ULONG BytesPerSector;
+
+    FdoExtension = PdoExtension->FdoExtension;
+    BytesPerSector = Interface->BytesPerSector;
+    if (!RosDumpIsValidSectorSize(BytesPerSector))
+        return STATUS_INVALID_PARAMETER;
+
+    DumpContext = PdoExtension->DumpContext;
+    if (DumpContext == NULL)
+    {
+        DumpContext = ExAllocatePoolWithTag(NonPagedPool, sizeof(*DumpContext), TAG_DUMP_CONTEXT);
+        if (DumpContext == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+
+        RtlZeroMemory(DumpContext, sizeof(*DumpContext));
+        DumpContext->PdoExtension = PdoExtension;
+        DumpContext->BytesPerSector = BytesPerSector;
+
+        DumpContext->Irp = IoAllocateIrp(1, FALSE);
+        if (DumpContext->Irp == NULL)
+            goto Failure;
+
+        SrbExtensionSize = FdoExtension->Miniport.PortConfig.SrbExtensionSize;
+        if (SrbExtensionSize != 0)
+        {
+            HighestAddress.QuadPart = MAXULONGLONG;
+            DumpContext->SrbExtension = MmAllocateContiguousMemory(SrbExtensionSize, HighestAddress);
+            if (DumpContext->SrbExtension == NULL)
+                goto Failure;
+        }
+
+        DumpContext->SrbContext.SrbExtensionAllocation = DumpContext->SrbExtension;
+        DumpContext->SrbContext.Sgl = (PSTOR_SCATTER_GATHER_LIST)&DumpContext->Sgl;
+        DumpContext->SrbContext.SglAllocationSize = sizeof(DumpContext->Sgl);
+        DumpContext->SrbContext.SrbExtensionSize = SrbExtensionSize;
+        DumpContext->Irp->Tail.Overlay.DriverContext[0] = &DumpContext->SrbContext;
+        DumpContext->Irp->Tail.Overlay.DriverContext[2] = DumpContext;
+        DumpContext->Irp->Tail.Overlay.DriverContext[3] = PORT_DUMP_IRP_MARKER;
+
+        PdoExtension->DumpContext = DumpContext;
+    }
+    else if (DumpContext->BytesPerSector != BytesPerSector)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    RtlZeroMemory(Interface, sizeof(*Interface));
+    Interface->Version = ROS_STORAGE_DUMP_INTERFACE_VERSION;
+    Interface->Size = sizeof(*Interface);
+    Interface->Context = DumpContext;
+    Interface->BytesPerSector = DumpContext->BytesPerSector;
+    Interface->MaximumTransferLength = PAGE_SIZE;
+    Interface->Prepare = PortDumpPrepare;
+    Interface->Write = PortDumpWrite;
+    Interface->Flush = PortDumpFlush;
+    return STATUS_SUCCESS;
+
+Failure:
+    PortFreeDumpContext(DumpContext);
+    return STATUS_INSUFFICIENT_RESOURCES;
+}
 
 VOID PortFreeSrbContext(_In_ PIRP Irp)
 {

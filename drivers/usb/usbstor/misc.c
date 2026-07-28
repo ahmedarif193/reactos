@@ -117,6 +117,31 @@ USBSTOR_SyncUrbRequest(
     return Status;
 }
 
+NTSTATUS USBSTOR_SyncInternalRequest(IN PDEVICE_OBJECT DeviceObject, IN ULONG IoControlCode, IN PVOID Argument)
+{
+    PIO_STACK_LOCATION IoStack;
+    IO_STATUS_BLOCK IoStatus;
+    KEVENT Event;
+    PIRP Irp;
+    NTSTATUS Status;
+
+    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+    Irp = IoBuildDeviceIoControlRequest(IoControlCode, DeviceObject, NULL, 0, NULL, 0, TRUE, &Event, &IoStatus);
+    if (Irp == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    IoStack = IoGetNextIrpStackLocation(Irp);
+    IoStack->Parameters.Others.Argument1 = Argument;
+    Status = IoCallDriver(DeviceObject, Irp);
+    if (Status == STATUS_PENDING)
+    {
+        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+        Status = IoStatus.Status;
+    }
+
+    return Status;
+}
+
 PVOID
 AllocateItem(
     IN POOL_TYPE PoolType,

@@ -6,6 +6,31 @@
 
 #include "usbxhci.h"
 
+/*
+ * The bugcheck writer enters the miniport at HIGH_LEVEL after the other
+ * processors and controller interrupts have been stopped. The live xHCI state
+ * consequently has a single owner, and lowering IRQL to take an ordinary
+ * spinlock is illegal. Keep normal locking before bugcheck, but make accesses
+ * from the frozen crash owner lockless.
+ */
+static VOID XHCI_AcquireSpinLock(_Inout_ PKSPIN_LOCK SpinLock, _Out_ PKIRQL OldIrql)
+{
+    *OldIrql = KeGetCurrentIrql();
+    if (*OldIrql < HIGH_LEVEL)
+        KeAcquireSpinLock(SpinLock, OldIrql);
+}
+
+static VOID XHCI_ReleaseSpinLock(_Inout_ PKSPIN_LOCK SpinLock, _In_ KIRQL OldIrql)
+{
+    if (OldIrql < HIGH_LEVEL)
+        KeReleaseSpinLock(SpinLock, OldIrql);
+}
+
+#undef KeAcquireSpinLock
+#undef KeReleaseSpinLock
+#define KeAcquireSpinLock XHCI_AcquireSpinLock
+#define KeReleaseSpinLock XHCI_ReleaseSpinLock
+
 #if defined(__GNUC__) && !defined(__cplusplus)
 #undef __forceinline
 #define __forceinline inline __attribute__((__always_inline__))
@@ -847,11 +872,7 @@ DriverEntry(
     RtlZeroMemory(&XhciRegPacket, sizeof(XhciRegPacket));
 
     XhciRegPacket.MiniPortVersion = USB_MINIPORT_VERSION_XHCI;
-    XhciRegPacket.MiniPortFlags = USB_MINIPORT_FLAGS_INTERRUPT |
-                                  USB_MINIPORT_FLAGS_MEMORY_IO |
-                                  USB_MINIPORT_FLAGS_USB3 |
-                                  USB_MINIPORT_FLAGS_WAKE_SUPPORT |
-                                  USB_MINIPORT_FLAGS_CLOSE_AT_PASSIVE;
+    XhciRegPacket.MiniPortFlags = USB_MINIPORT_FLAGS_INTERRUPT | USB_MINIPORT_FLAGS_MEMORY_IO | USB_MINIPORT_FLAGS_USB3 | USB_MINIPORT_FLAGS_WAKE_SUPPORT | USB_MINIPORT_FLAGS_CLOSE_AT_PASSIVE | USB_MINIPORT_FLAGS_DUMP_POLLING;
 
     /*
      * USBPORT's legacy periodic scheduler is used only for non-SuperSpeed
@@ -11421,7 +11442,10 @@ XHCI_SubmitControlTransfer(
             SetupTrbDeferred->Control |= SetupCycleBitDeferred;
         }
 
-        XHCI_ArmTransferPoll(Extension, Transfer);
+        if (!(TransferParameters->TransferFlags & USBPORT_TRANSFER_FLAG_DUMP))
+        {
+            XHCI_ArmTransferPoll(Extension, Transfer);
+        }
         KeMemoryBarrier();
         XHCI_RingEndpointDoorbell(Extension,
                                    Endpoint->SlotId,
@@ -11635,7 +11659,10 @@ XHCI_SubmitSgTransfer(
             KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
             XHCI_InsertActiveTransferLocked(Endpoint, Transfer);
             KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
-            XHCI_ArmTransferPoll(Extension, Transfer);
+            if (!(TransferParameters->TransferFlags & USBPORT_TRANSFER_FLAG_DUMP))
+            {
+                XHCI_ArmTransferPoll(Extension, Transfer);
+            }
             KeMemoryBarrier();
             XHCI_RingEndpointDoorbell(Extension,
                                        Endpoint->SlotId,
@@ -11882,7 +11909,10 @@ XHCI_SubmitSgTransfer(
         KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
         XHCI_InsertActiveTransferLocked(Endpoint, Transfer);
         KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
-        XHCI_ArmTransferPoll(Extension, Transfer);
+        if (!(TransferParameters->TransferFlags & USBPORT_TRANSFER_FLAG_DUMP))
+        {
+            XHCI_ArmTransferPoll(Extension, Transfer);
+        }
         KeMemoryBarrier();
         XHCI_RingEndpointDoorbell(Extension,
                                    Endpoint->SlotId,

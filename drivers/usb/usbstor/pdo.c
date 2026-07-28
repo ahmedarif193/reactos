@@ -606,6 +606,12 @@ USBSTOR_PdoHandlePnp(
        {
            DPRINT("IRP_MN_REMOVE_DEVICE\n");
 
+           if (DeviceExtension->DumpContext != NULL)
+           {
+               ExFreePoolWithTag(DeviceExtension->DumpContext, USBSTOR_DUMP_CONTEXT_TAG);
+               DeviceExtension->DumpContext = NULL;
+           }
+
            if(*DeviceExtension->PDODeviceObject != NULL)
            {
                *DeviceExtension->PDODeviceObject = NULL;

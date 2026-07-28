@@ -13,6 +13,178 @@
 #define NDEBUG
 #include <debug.h>
 
+static NTSTATUS SpiDumpSubmit(_In_ PSCSIPORT_DUMP_CONTEXT DumpContext, _In_ UCHAR Function, _In_ ULONG64 DiskByteOffset, _In_ PHYSICAL_ADDRESS Buffer, _In_ ULONG Length)
+{
+    PSCSI_PORT_DEVICE_EXTENSION PortExtension;
+    ULONG64 BlockAddress;
+    ULONG BlockCount;
+    ULONG Timeout;
+
+    PortExtension = DumpContext->PortExtension;
+    if ((Function == SRB_FUNCTION_EXECUTE_SCSI) && (((DiskByteOffset | Length) % DumpContext->BytesPerSector) != 0 || (Length == 0) || (Length > PAGE_SIZE)))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    RtlZeroMemory(&DumpContext->Srb, sizeof(DumpContext->Srb));
+    if (DumpContext->SrbExtension != NULL)
+    {
+        RtlZeroMemory(DumpContext->SrbExtension, PortExtension->SrbExtensionSize);
+    }
+
+    DumpContext->Srb.Length = sizeof(SCSI_REQUEST_BLOCK);
+    DumpContext->Srb.Function = Function;
+    DumpContext->Srb.PathId = DumpContext->LunExtension->PathId;
+    DumpContext->Srb.TargetId = DumpContext->LunExtension->TargetId;
+    DumpContext->Srb.Lun = DumpContext->LunExtension->Lun;
+    DumpContext->Srb.QueueTag = SP_UNTAGGED;
+    DumpContext->Srb.SrbExtension = DumpContext->SrbExtension;
+    DumpContext->Srb.TimeOutValue = 10;
+    DumpContext->Srb.SrbStatus = SRB_STATUS_PENDING;
+    DumpContext->Srb.SrbFlags = SRB_FLAGS_IS_ACTIVE;
+
+    if (Function == SRB_FUNCTION_EXECUTE_SCSI)
+    {
+        DumpContext->Srb.SrbFlags |= SRB_FLAGS_DATA_OUT | SRB_FLAGS_DISABLE_DISCONNECT | SRB_FLAGS_NO_QUEUE_FREEZE;
+        DumpContext->Srb.DataTransferLength = Length;
+        DumpContext->Srb.DataBuffer = MmGetVirtualForPhysical(Buffer);
+        DumpContext->DataPhysicalAddress = Buffer;
+        DumpContext->DataLength = Length;
+
+        BlockAddress = DiskByteOffset / DumpContext->BytesPerSector;
+        BlockCount = Length / DumpContext->BytesPerSector;
+        DumpContext->Srb.CdbLength = RosDumpBuildWriteCdb((PCDB)&DumpContext->Srb.Cdb, BlockAddress, BlockCount);
+    }
+    else
+    {
+        DumpContext->DataPhysicalAddress.QuadPart = 0;
+        DumpContext->DataLength = 0;
+    }
+
+    DumpContext->Status = STATUS_PENDING;
+    InterlockedExchange(&DumpContext->Completed, 0);
+    KeMemoryBarrier();
+
+    if (!PortExtension->HwStartIo(&PortExtension->MiniPortDeviceExtension, &DumpContext->Srb))
+    {
+        return STATUS_DEVICE_BUSY;
+    }
+
+    for (Timeout = 0; Timeout < ROS_DUMP_POLL_ITERATIONS; Timeout++)
+    {
+        PortExtension->HwInterrupt(&PortExtension->MiniPortDeviceExtension);
+        if (InterlockedCompareExchange(&DumpContext->Completed, 0, 0) != 0)
+        {
+            return DumpContext->Status;
+        }
+
+        KeStallExecutionProcessor(1);
+    }
+
+    return STATUS_IO_TIMEOUT;
+}
+
+static NTSTATUS NTAPI SpiDumpPrepare(_In_ PVOID Context)
+{
+    PSCSIPORT_DUMP_CONTEXT DumpContext = Context;
+    PSCSI_PORT_DEVICE_EXTENSION PortExtension;
+
+    PortExtension = DumpContext->PortExtension;
+    PortExtension->DumpContext = DumpContext;
+    PortExtension->DumpMode = TRUE;
+    KeMemoryBarrier();
+
+    if ((PortExtension->HwResetBus == NULL) || !PortExtension->HwResetBus(&PortExtension->MiniPortDeviceExtension, DumpContext->LunExtension->PathId))
+    {
+        return STATUS_IO_DEVICE_ERROR;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS NTAPI SpiDumpWrite(_In_ PVOID Context, _In_ ULONG64 DiskByteOffset, _In_ PHYSICAL_ADDRESS Buffer, _In_ ULONG Length)
+{
+    return SpiDumpSubmit(Context, SRB_FUNCTION_EXECUTE_SCSI, DiskByteOffset, Buffer, Length);
+}
+
+static NTSTATUS NTAPI SpiDumpFlush(_In_ PVOID Context)
+{
+    PHYSICAL_ADDRESS Buffer = {{0}};
+
+    return SpiDumpSubmit(Context, SRB_FUNCTION_FLUSH, 0, Buffer, 0);
+}
+
+VOID SpiFreeDumpContext(_In_opt_ PSCSIPORT_DUMP_CONTEXT DumpContext)
+{
+    if (DumpContext == NULL)
+        return;
+
+    if (DumpContext->SrbExtension != NULL)
+        MmFreeContiguousMemory(DumpContext->SrbExtension);
+    ExFreePoolWithTag(DumpContext, SCSIPORT_DUMP_CONTEXT_TAG);
+}
+
+static NTSTATUS SpiGetDumpInterface(_In_ PSCSI_PORT_LUN_EXTENSION LunExtension, _Out_ PROS_STORAGE_DUMP_INTERFACE Interface)
+{
+    PSCSI_PORT_DEVICE_EXTENSION PortExtension;
+    PSCSIPORT_DUMP_CONTEXT DumpContext;
+    PHYSICAL_ADDRESS HighestAddress;
+    ULONG MaximumTransferLength;
+    ULONG BytesPerSector;
+
+    PortExtension = LunExtension->Common.LowerDevice->DeviceExtension;
+    BytesPerSector = Interface->BytesPerSector;
+    if (!RosDumpIsValidSectorSize(BytesPerSector))
+        return STATUS_INVALID_PARAMETER;
+
+    DumpContext = LunExtension->DumpContext;
+    if (DumpContext == NULL)
+    {
+        DumpContext = ExAllocatePoolWithTag(NonPagedPool, sizeof(*DumpContext), SCSIPORT_DUMP_CONTEXT_TAG);
+        if (DumpContext == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+
+        RtlZeroMemory(DumpContext, sizeof(*DumpContext));
+        DumpContext->PortExtension = PortExtension;
+        DumpContext->LunExtension = LunExtension;
+        DumpContext->BytesPerSector = BytesPerSector;
+
+        if (PortExtension->SrbExtensionSize != 0)
+        {
+            HighestAddress.QuadPart = MAXULONG;
+            DumpContext->SrbExtension = MmAllocateContiguousMemory(PortExtension->SrbExtensionSize, HighestAddress);
+            if (DumpContext->SrbExtension == NULL)
+            {
+                SpiFreeDumpContext(DumpContext);
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+        }
+
+        LunExtension->DumpContext = DumpContext;
+    }
+    else if (DumpContext->BytesPerSector != BytesPerSector)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    MaximumTransferLength = min(PortExtension->PortCapabilities.MaximumTransferLength, PAGE_SIZE);
+    if (MaximumTransferLength < DumpContext->BytesPerSector)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    MaximumTransferLength = ALIGN_DOWN_BY(MaximumTransferLength, DumpContext->BytesPerSector);
+
+    RtlZeroMemory(Interface, sizeof(*Interface));
+    Interface->Version = ROS_STORAGE_DUMP_INTERFACE_VERSION;
+    Interface->Size = sizeof(*Interface);
+    Interface->Context = DumpContext;
+    Interface->BytesPerSector = DumpContext->BytesPerSector;
+    Interface->MaximumTransferLength = MaximumTransferLength;
+    Interface->Prepare = SpiDumpPrepare;
+    Interface->Write = SpiDumpWrite;
+    Interface->Flush = SpiDumpFlush;
+    return STATUS_SUCCESS;
+}
 
 static
 NTSTATUS
@@ -471,6 +643,27 @@ ScsiPortDeviceControl(
 
     switch (IoControlCode)
     {
+        case IOCTL_REACTOS_STORAGE_GET_DUMP_INTERFACE:
+        {
+            if (comExt->IsFDO)
+            {
+                status = STATUS_INVALID_DEVICE_REQUEST;
+                break;
+            }
+            if (!VerifyIrpOutBufferSize(Irp, sizeof(ROS_STORAGE_DUMP_INTERFACE)))
+            {
+                status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+
+            lunExt = DeviceObject->DeviceExtension;
+            status = SpiGetDumpInterface(lunExt, Irp->AssociatedIrp.SystemBuffer);
+            if (NT_SUCCESS(status))
+            {
+                Irp->IoStatus.Information = sizeof(ROS_STORAGE_DUMP_INTERFACE);
+            }
+            break;
+        }
         case IOCTL_STORAGE_QUERY_PROPERTY:
         {
             DPRINT("  IOCTL_STORAGE_QUERY_PROPERTY\n");
