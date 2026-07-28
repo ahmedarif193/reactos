@@ -668,8 +668,7 @@ BOOLEAN
 NTAPI
 IoInitializeCrashDump(IN HANDLE PageFileHandle)
 {
-    UNIMPLEMENTED;
-    return FALSE;
+    return KdpInitializeCrashDump(PageFileHandle);
 }
 
 /* EOF */

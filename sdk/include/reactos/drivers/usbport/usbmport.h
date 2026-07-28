@@ -146,6 +146,8 @@ typedef struct _USBPORT_TRANSFER_PARAMETERS {
   USB_DEFAULT_PIPE_SETUP_PACKET SetupPacket;
 } USBPORT_TRANSFER_PARAMETERS, *PUSBPORT_TRANSFER_PARAMETERS;
 
+#define USBPORT_TRANSFER_FLAG_DUMP 0x80000000
+
 C_ASSERT(sizeof(USBPORT_TRANSFER_PARAMETERS) == 28);
 
 typedef struct _USBPORT_SCATTER_GATHER_ELEMENT {
@@ -624,6 +626,8 @@ typedef VOID
  * without MiniportSpinLock held (e.g. xHCI frees ring/common-buffer DMA
  * via MmFreeContiguousMemory). */
 #define USB_MINIPORT_FLAGS_CLOSE_AT_PASSIVE 0x0800
+/* Miniport can submit and poll dump transfers after a HIGH_LEVEL bugcheck. */
+#define USB_MINIPORT_FLAGS_DUMP_POLLING 0x1000
 
 #define TOTAL_USB11_BUS_BANDWIDTH        12000
 #define TOTAL_USB20_BUS_BANDWIDTH       400000

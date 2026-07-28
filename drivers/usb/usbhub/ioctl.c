@@ -13,6 +13,49 @@
 #define NDEBUG_USBHUB_IOCTL
 #include "dbg_uhub.h"
 
+static NTSTATUS USBH_GetDumpInterface(_In_ PUSBHUB_PORT_PDO_EXTENSION PortExtension, _Inout_ PROS_USB_DUMP_INTERFACE Interface)
+{
+    PUSBHUB_FDO_EXTENSION RootHubExtension;
+    PDEVICE_OBJECT LowerDevice;
+    PIO_STACK_LOCATION IoStack;
+    IO_STATUS_BLOCK IoStatus;
+    KEVENT Event;
+    PIRP Irp;
+    NTSTATUS Status;
+
+    if ((Interface == NULL) || (Interface->Version != ROS_USB_DUMP_INTERFACE_VERSION) || (Interface->Size < sizeof(*Interface)) || (PortExtension->DeviceHandle == NULL))
+    {
+        DPRINT1("USBHUB: dump interface validation failed: interface %p version %lu size %lu device %p\n", Interface, Interface != NULL ? Interface->Version : 0, Interface != NULL ? Interface->Size : 0, PortExtension->DeviceHandle);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    RootHubExtension = PortExtension->RootHubExtension;
+    if ((RootHubExtension == NULL) || (RootHubExtension->LowerDevice == NULL))
+    {
+        return STATUS_DEVICE_NOT_READY;
+    }
+
+    Interface->DeviceHandle = PortExtension->DeviceHandle;
+    LowerDevice = RootHubExtension->LowerDevice;
+    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+    Irp = IoBuildDeviceIoControlRequest(IOCTL_INTERNAL_REACTOS_USB_GET_DUMP_INTERFACE, LowerDevice, NULL, 0, NULL, 0, TRUE, &Event, &IoStatus);
+    if (Irp == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    IoStack = IoGetNextIrpStackLocation(Irp);
+    IoStack->Parameters.Others.Argument1 = Interface;
+    Status = IoCallDriver(LowerDevice, Irp);
+    if (Status == STATUS_PENDING)
+    {
+        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+        Status = IoStatus.Status;
+    }
+    if (!NT_SUCCESS(Status))
+        DPRINT1("USBHUB: USBPORT dump interface request failed (0x%08lx)\n", Status);
+
+    return Status;
+}
+
 static
 NTSTATUS
 USBH_GetMsOsVendorCode(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
@@ -1848,6 +1891,10 @@ USBH_PdoInternalControl(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
 
     switch (ControlCode)
     {
+        case IOCTL_INTERNAL_REACTOS_USB_GET_DUMP_INTERFACE:
+            Status = USBH_GetDumpInterface(PortExtension, IoStack->Parameters.Others.Argument1);
+            break;
+
         case IOCTL_INTERNAL_USB_SUBMIT_URB:
             return USBH_PdoIoctlSubmitUrb(PortExtension, Irp);
 

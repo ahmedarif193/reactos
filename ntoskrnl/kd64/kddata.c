@@ -719,7 +719,25 @@ KDDEBUGGER_DATA64 KdDebuggerDataBlock =
     PtrToUL64(IopTriageDumpDataBlocks),
 
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
-    /* TODO: KdDebuggerDataBlock needs additional fields for Vista+/Win7.
-     * For now, the block is zero-padded. */
+    PtrToUL64(0),
+    PtrToUL64(0),
+    PtrToUL64(0),
+#endif
+
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    PtrToUL64(0),
+#if defined(_M_AMD64)
+    FIELD_OFFSET(KPRCB, CrashDumpContext),
+#else
+    0,
+#endif
 #endif
 };
+
+C_ASSERT(FIELD_OFFSET(KDDEBUGGER_DATA64, Header.OwnerTag) == 0x10);
+C_ASSERT(FIELD_OFFSET(KDDEBUGGER_DATA64, KiBugcheckData) == 0x88);
+C_ASSERT(FIELD_OFFSET(KDDEBUGGER_DATA64, MmPfnDatabase) == 0xC0);
+C_ASSERT(FIELD_OFFSET(KDDEBUGGER_DATA64, KiProcessorBlock) == 0x218);
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+C_ASSERT(FIELD_OFFSET(KDDEBUGGER_DATA64, OffsetPrcbContext) == 0x338);
+#endif

@@ -17,6 +17,167 @@
 // See CORE-10515 and CORE-10755
 #define USBSTOR_DEFAULT_MAX_PHYS_PAGES    (USBSTOR_DEFAULT_MAX_TRANSFER_LENGTH / PAGE_SIZE + 1)
 
+static NTSTATUS USBSTOR_DumpCommand(_In_ PUSBSTOR_DUMP_CONTEXT DumpContext, _In_reads_bytes_(CdbLength) PUCHAR Cdb, _In_ UCHAR CdbLength, _Inout_updates_bytes_opt_(DataLength) PVOID DataBuffer, _In_ PHYSICAL_ADDRESS DataPhysicalAddress, _In_ BOOLEAN DataIsPhysical, _In_ ULONG DataLength, _In_ BOOLEAN DataIn)
+{
+    NTSTATUS Status;
+
+    RtlZeroMemory(&DumpContext->Cbw, sizeof(DumpContext->Cbw));
+    RtlZeroMemory(&DumpContext->Csw, sizeof(DumpContext->Csw));
+    DumpContext->Cbw.Signature = CBW_SIGNATURE;
+    DumpContext->Cbw.Tag = ++DumpContext->Tag;
+    DumpContext->Cbw.DataTransferLength = DataLength;
+    DumpContext->Cbw.Flags = DataIn ? 0x80 : 0;
+    DumpContext->Cbw.LUN = DumpContext->PdoExtension->LUN & MAX_LUN;
+    DumpContext->Cbw.CommandBlockLength = CdbLength;
+    RtlCopyMemory(DumpContext->Cbw.CommandBlock, Cdb, CdbLength);
+
+    Status = DumpContext->UsbInterface.Transfer(DumpContext->UsbInterface.Context, FALSE, &DumpContext->Cbw, sizeof(DumpContext->Cbw));
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (DataLength != 0)
+    {
+        if (DataIsPhysical)
+        {
+            if (DataIn)
+                return STATUS_INVALID_PARAMETER;
+            Status = DumpContext->UsbInterface.TransferPhysical(DumpContext->UsbInterface.Context, DataPhysicalAddress, DataLength);
+        }
+        else
+        {
+            Status = DumpContext->UsbInterface.Transfer(DumpContext->UsbInterface.Context, DataIn, DataBuffer, DataLength);
+        }
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+
+    Status = DumpContext->UsbInterface.Transfer(DumpContext->UsbInterface.Context, TRUE, &DumpContext->Csw, sizeof(DumpContext->Csw));
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if ((DumpContext->Csw.Signature != CSW_SIGNATURE) || (DumpContext->Csw.Tag != DumpContext->Cbw.Tag) || (DumpContext->Csw.DataResidue != 0) || (DumpContext->Csw.Status != CSW_STATUS_COMMAND_PASSED))
+    {
+        return STATUS_IO_DEVICE_ERROR;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS NTAPI USBSTOR_DumpPrepare(_In_ PVOID Context)
+{
+    PUSBSTOR_DUMP_CONTEXT DumpContext = Context;
+
+    DumpContext->Tag = 0;
+    return DumpContext->UsbInterface.Prepare(DumpContext->UsbInterface.Context);
+}
+
+static NTSTATUS NTAPI USBSTOR_DumpWrite(_In_ PVOID Context, _In_ ULONG64 DiskByteOffset, _In_ PHYSICAL_ADDRESS Buffer, _In_ ULONG Length)
+{
+    PUSBSTOR_DUMP_CONTEXT DumpContext = Context;
+    ULONG64 BlockAddress;
+    ULONG BlockCount;
+    CDB Cdb;
+    UCHAR CdbLength;
+
+    if ((((DiskByteOffset | Length) % DumpContext->BytesPerSector) != 0) || (Length == 0) || (Length > PAGE_SIZE))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    BlockAddress = DiskByteOffset / DumpContext->BytesPerSector;
+    BlockCount = Length / DumpContext->BytesPerSector;
+    RtlZeroMemory(&Cdb, sizeof(Cdb));
+    CdbLength = RosDumpBuildWriteCdb(&Cdb, BlockAddress, BlockCount);
+
+    return USBSTOR_DumpCommand(DumpContext, (PUCHAR)&Cdb, CdbLength, NULL, Buffer, TRUE, Length, FALSE);
+}
+
+static NTSTATUS NTAPI USBSTOR_DumpFlush(_In_ PVOID Context)
+{
+    PUSBSTOR_DUMP_CONTEXT DumpContext = Context;
+    CDB Cdb;
+    PHYSICAL_ADDRESS PhysicalAddress;
+
+    RtlZeroMemory(&Cdb, sizeof(Cdb));
+    PhysicalAddress.QuadPart = 0;
+    Cdb.CDB10.OperationCode = SCSIOP_SYNCHRONIZE_CACHE;
+    return USBSTOR_DumpCommand(DumpContext, (PUCHAR)&Cdb, 10, NULL, PhysicalAddress, FALSE, 0, FALSE);
+}
+
+static NTSTATUS USBSTOR_GetDumpInterface(_In_ PPDO_DEVICE_EXTENSION PdoExtension, _Inout_ PROS_STORAGE_DUMP_INTERFACE Interface)
+{
+    PFDO_DEVICE_EXTENSION FdoExtension;
+    PUSBSTOR_DUMP_CONTEXT DumpContext;
+    ROS_USB_DUMP_INTERFACE UsbInterface;
+    PUSBD_PIPE_INFORMATION BulkInPipe;
+    PUSBD_PIPE_INFORMATION BulkOutPipe;
+    ULONG BytesPerSector;
+    NTSTATUS Status;
+
+    BytesPerSector = Interface->BytesPerSector;
+    if (!RosDumpIsValidSectorSize(BytesPerSector))
+    {
+        DPRINT1("USBSTOR: dump interface rejected sector size %lu\n", BytesPerSector);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    DumpContext = PdoExtension->DumpContext;
+    if (DumpContext == NULL)
+    {
+        FdoExtension = PdoExtension->LowerDeviceObject->DeviceExtension;
+        if ((FdoExtension->InterfaceInformation == NULL) || (FdoExtension->LowerDeviceObject == NULL))
+        {
+            return STATUS_DEVICE_NOT_READY;
+        }
+
+        BulkInPipe = &FdoExtension->InterfaceInformation->Pipes[FdoExtension->BulkInPipeIndex];
+        BulkOutPipe = &FdoExtension->InterfaceInformation->Pipes[FdoExtension->BulkOutPipeIndex];
+        RtlZeroMemory(&UsbInterface, sizeof(UsbInterface));
+        UsbInterface.Version = ROS_USB_DUMP_INTERFACE_VERSION;
+        UsbInterface.Size = sizeof(UsbInterface);
+        UsbInterface.BulkInPipe = BulkInPipe->PipeHandle;
+        UsbInterface.BulkOutPipe = BulkOutPipe->PipeHandle;
+        UsbInterface.InterfaceNumber = FdoExtension->InterfaceInformation->InterfaceNumber;
+        UsbInterface.BulkInEndpointAddress = BulkInPipe->EndpointAddress;
+        UsbInterface.BulkOutEndpointAddress = BulkOutPipe->EndpointAddress;
+        Status = USBSTOR_SyncInternalRequest(FdoExtension->LowerDeviceObject, IOCTL_INTERNAL_REACTOS_USB_GET_DUMP_INTERFACE, &UsbInterface);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("USBSTOR: USB dump interface request failed (0x%08lx)\n", Status);
+            return Status;
+        }
+        if ((UsbInterface.Version != ROS_USB_DUMP_INTERFACE_VERSION) || (UsbInterface.Size < sizeof(UsbInterface)) || (UsbInterface.Context == NULL) || (UsbInterface.Prepare == NULL) || (UsbInterface.Transfer == NULL) || (UsbInterface.TransferPhysical == NULL))
+        {
+            return STATUS_REVISION_MISMATCH;
+        }
+
+        DumpContext = ExAllocatePoolWithTag(NonPagedPool, sizeof(*DumpContext), USBSTOR_DUMP_CONTEXT_TAG);
+        if (DumpContext == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+        RtlZeroMemory(DumpContext, sizeof(*DumpContext));
+        DumpContext->FdoExtension = FdoExtension;
+        DumpContext->PdoExtension = PdoExtension;
+        DumpContext->UsbInterface = UsbInterface;
+        DumpContext->BytesPerSector = BytesPerSector;
+        PdoExtension->DumpContext = DumpContext;
+    }
+    else if (DumpContext->BytesPerSector != BytesPerSector)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    RtlZeroMemory(Interface, sizeof(*Interface));
+    Interface->Version = ROS_STORAGE_DUMP_INTERFACE_VERSION;
+    Interface->Size = sizeof(*Interface);
+    Interface->Context = DumpContext;
+    Interface->BytesPerSector = DumpContext->BytesPerSector;
+    Interface->MaximumTransferLength = PAGE_SIZE;
+    Interface->Prepare = USBSTOR_DumpPrepare;
+    Interface->Write = USBSTOR_DumpWrite;
+    Interface->Flush = USBSTOR_DumpFlush;
+    return STATUS_SUCCESS;
+}
+
 static
 BOOLEAN
 IsRequestValid(PIRP Irp)
@@ -427,6 +588,26 @@ USBSTOR_HandleDeviceControl(
 
     switch (IoStack->Parameters.DeviceIoControl.IoControlCode)
     {
+        case IOCTL_REACTOS_STORAGE_GET_DUMP_INTERFACE:
+            PDODeviceExtension = DeviceObject->DeviceExtension;
+            if (PDODeviceExtension->Common.IsFDO)
+            {
+                Status = STATUS_INVALID_DEVICE_REQUEST;
+                break;
+            }
+            if ((Irp->AssociatedIrp.SystemBuffer == NULL) || (IoStack->Parameters.DeviceIoControl.OutputBufferLength < sizeof(ROS_STORAGE_DUMP_INTERFACE)))
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+
+            Status = USBSTOR_GetDumpInterface(PDODeviceExtension, Irp->AssociatedIrp.SystemBuffer);
+            if (NT_SUCCESS(Status))
+            {
+                Irp->IoStatus.Information = sizeof(ROS_STORAGE_DUMP_INTERFACE);
+            }
+            break;
+
         case IOCTL_STORAGE_QUERY_PROPERTY:
             Status = USBSTOR_HandleQueryProperty(DeviceObject, Irp);
             break;

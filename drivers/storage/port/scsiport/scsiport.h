@@ -13,6 +13,8 @@
 #include <ntddscsi.h>
 #include <ntdddisk.h>
 #include <mountdev.h>
+#include <reactos/drivers/dumpstor.h>
+#include <reactos/drivers/dumpscsi.h>
 
 #ifdef DBG
 #include <debug/driverdbg.h>
@@ -174,11 +176,27 @@ typedef struct _SCSI_PORT_LUN_EXTENSION
     SCSI_REQUEST_BLOCK_INFO SrbInfo;
 
     HANDLE RegistryMapKey;
+    struct _SCSIPORT_DUMP_CONTEXT *DumpContext;
 
     /* More data? */
 
     UCHAR MiniportLunExtension[1]; /* must be the last entry */
 } SCSI_PORT_LUN_EXTENSION, *PSCSI_PORT_LUN_EXTENSION;
+
+#define SCSIPORT_DUMP_CONTEXT_TAG 'pDcS'
+
+typedef struct _SCSIPORT_DUMP_CONTEXT
+{
+    struct _SCSI_PORT_DEVICE_EXTENSION *PortExtension;
+    PSCSI_PORT_LUN_EXTENSION LunExtension;
+    SCSI_REQUEST_BLOCK Srb;
+    PVOID SrbExtension;
+    PHYSICAL_ADDRESS DataPhysicalAddress;
+    ULONG DataLength;
+    volatile LONG Completed;
+    NTSTATUS Status;
+    ULONG BytesPerSector;
+} SCSIPORT_DUMP_CONTEXT, *PSCSIPORT_DUMP_CONTEXT;
 
 /* Structures for inquiries support */
 
@@ -316,6 +334,8 @@ typedef struct _SCSI_PORT_DEVICE_EXTENSION
     UNICODE_STRING DeviceName;
     UNICODE_STRING InterfaceName;
     BOOLEAN DeviceStarted;
+    volatile BOOLEAN DumpMode;
+    PSCSIPORT_DUMP_CONTEXT DumpContext;
     UINT8 TotalLUCount;
 
     // use the pointer alignment here, some miniport drivers rely on this
@@ -373,6 +393,12 @@ NTAPI
 ScsiPortDeviceControl(
     _In_ PDEVICE_OBJECT DeviceObject,
     _In_ PIRP Irp);
+
+VOID SpiFreeDumpContext(_In_opt_ PSCSIPORT_DUMP_CONTEXT DumpContext);
+
+// scsi.c
+
+NTSTATUS SpiStatusSrbToNt(_In_ UCHAR SrbStatus);
 
 // fdo.c
 

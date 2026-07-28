@@ -572,6 +572,12 @@ PdoDispatchPnp(
             break;
         }
         case IRP_MN_REMOVE_DEVICE:
+        {
+            SpiFreeDumpContext(lunExt->DumpContext);
+            lunExt->DumpContext = NULL;
+            status = STATUS_SUCCESS;
+            break;
+        }
         case IRP_MN_QUERY_CAPABILITIES:
         case IRP_MN_QUERY_REMOVE_DEVICE:
         case IRP_MN_QUERY_STOP_DEVICE:

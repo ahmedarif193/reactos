@@ -88,6 +88,14 @@ KdUpdateDataBlock(
     VOID
 );
 
+BOOLEAN NTAPI KdpInitializeCrashDump(_In_ HANDLE PageFileHandle);
+
+NTSTATUS NTAPI KdpWriteCrashDump(VOID);
+
+#if (NTDDI_VERSION >= NTDDI_WINBLUE)
+NTSTATUS NTAPI KdpWriteLiveKernelDump(_In_ PSYSDBG_LIVEDUMP_CONTROL Control, _In_ KPROCESSOR_MODE PreviousMode);
+#endif
+
 //
 // Determines if the kernel debugger must handle a particular trap
 //

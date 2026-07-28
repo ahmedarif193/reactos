@@ -2682,6 +2682,9 @@ Exit:
             DPRINT("USBPORT_FdoPnP: IRP_MN_REMOVE_DEVICE\n");
             FdoCommonExtension->PnpStateFlags |= USBPORT_PNP_STATE_FAILED;
 
+            USBPORT_FreeDumpContext(FdoExtension->Aux.DumpContext);
+            FdoExtension->Aux.DumpContext = NULL;
+
             if (FdoCommonExtension->PnpStateFlags & USBPORT_PNP_STATE_STARTED &&
                !(FdoCommonExtension->PnpStateFlags & USBPORT_PNP_STATE_NOT_INIT))
             {

@@ -560,8 +560,7 @@ SmpCreatePagingFileOnFixedDrive(IN PSMP_PAGEFILE_DESCRIPTOR Descriptor,
         if (!(Descriptor->Flags & SMP_PAGEFILE_DUMP_PROCESSED))
         {
             /* Try to find a crash dump and extract it */
-            DPRINT("SMSS:PFILE: Checking for crash dump in `%wZ' on boot volume\n",
-                    &Descriptor->Name);
+            DPRINT("SMSS:PFILE: Checking for crash dump in `%wZ' on boot volume\n", &Descriptor->Name);
             SmpCheckForCrashDump(&Descriptor->Name);
 
             /* Update how much free space we have now that we extracted a dump */
