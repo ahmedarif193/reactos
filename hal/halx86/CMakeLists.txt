@@ -71,7 +71,8 @@ if(ARCH STREQUAL "i386")
 elseif(ARCH STREQUAL "amd64")
     include(pcidata.cmake)
 
+    # The amd64 hal.dll is already an SMP APIC HAL, so there is no separate
+    # halmp.dll -- it was a byte-for-byte duplicate of this target.
     add_hal(hal SOURCES ${HAL_SOURCE} COMPONENTS generic acpi smp apic)
-    add_hal(halmp SOURCES ${HAL_SOURCE} COMPONENTS generic acpi smp apic)
 
 endif()
