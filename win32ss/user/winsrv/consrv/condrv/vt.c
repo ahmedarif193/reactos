@@ -873,19 +873,25 @@ VtTranslateGlyphSlot(PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
     {
         {NULL, 0},                                                                  /* VtCharsetAscii */
         {NULL, 0},                                                                  /* VtCharsetDecSpecial, handled above */
-        {VtNrcsBritishOverrides, ARRAYSIZE(VtNrcsBritishOverrides)},
-        {VtNrcsDutchOverrides, ARRAYSIZE(VtNrcsDutchOverrides)},
-        {VtNrcsFinnishOverrides, ARRAYSIZE(VtNrcsFinnishOverrides)},
-        {VtNrcsFrenchOverrides, ARRAYSIZE(VtNrcsFrenchOverrides)},
-        {VtNrcsFrenchCanadianOverrides, ARRAYSIZE(VtNrcsFrenchCanadianOverrides)},
-        {VtNrcsGermanOverrides, ARRAYSIZE(VtNrcsGermanOverrides)},
-        {VtNrcsItalianOverrides, ARRAYSIZE(VtNrcsItalianOverrides)},
-        {VtNrcsNorwegianDanishOverrides, ARRAYSIZE(VtNrcsNorwegianDanishOverrides)},
-        {VtNrcsSpanishOverrides, ARRAYSIZE(VtNrcsSpanishOverrides)},
-        {VtNrcsSwedishOverrides, ARRAYSIZE(VtNrcsSwedishOverrides)},
-        {VtNrcsSwissOverrides, ARRAYSIZE(VtNrcsSwissOverrides)},
-        {VtNrcsPortugueseOverrides, ARRAYSIZE(VtNrcsPortugueseOverrides)},
-        {VtDecTechnicalOverrides, ARRAYSIZE(VtDecTechnicalOverrides)},
+        /*
+         * _ARRAYSIZE (RTL_NUMBER_OF_V1) rather than ARRAYSIZE: under GCC the
+         * latter expands to a statement expression for its array type check,
+         * which is not a constant expression and so cannot initialize a
+         * static object.
+         */
+        {VtNrcsBritishOverrides, _ARRAYSIZE(VtNrcsBritishOverrides)},
+        {VtNrcsDutchOverrides, _ARRAYSIZE(VtNrcsDutchOverrides)},
+        {VtNrcsFinnishOverrides, _ARRAYSIZE(VtNrcsFinnishOverrides)},
+        {VtNrcsFrenchOverrides, _ARRAYSIZE(VtNrcsFrenchOverrides)},
+        {VtNrcsFrenchCanadianOverrides, _ARRAYSIZE(VtNrcsFrenchCanadianOverrides)},
+        {VtNrcsGermanOverrides, _ARRAYSIZE(VtNrcsGermanOverrides)},
+        {VtNrcsItalianOverrides, _ARRAYSIZE(VtNrcsItalianOverrides)},
+        {VtNrcsNorwegianDanishOverrides, _ARRAYSIZE(VtNrcsNorwegianDanishOverrides)},
+        {VtNrcsSpanishOverrides, _ARRAYSIZE(VtNrcsSpanishOverrides)},
+        {VtNrcsSwedishOverrides, _ARRAYSIZE(VtNrcsSwedishOverrides)},
+        {VtNrcsSwissOverrides, _ARRAYSIZE(VtNrcsSwissOverrides)},
+        {VtNrcsPortugueseOverrides, _ARRAYSIZE(VtNrcsPortugueseOverrides)},
+        {VtDecTechnicalOverrides, _ARRAYSIZE(VtDecTechnicalOverrides)},
     };
 
     if ((ULONG)Charset >= ARRAYSIZE(NrcsTables) || NrcsTables[Charset].Table == NULL)
