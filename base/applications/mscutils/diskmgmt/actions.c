@@ -3218,17 +3218,30 @@ DmActionProcessPendingCreate(
     /* The volume arrived: apply the deferred settings now. */
     DmPendingCreate.Active = FALSE;
 
-    if (DmPendingCreate.AssignLetter &&
-        !StorageUtilAssignDriveLetter(Volume->DeviceName, DmPendingCreate.Letter))
+    if (DmPendingCreate.AssignLetter)
     {
-        DmActionFormatErrorMessage(Message,
-                                   ARRAYSIZE(Message),
-                                   L"The volume was created, but assigning the requested drive letter failed.",
-                                   GetLastError());
-        MessageBoxW(hWnd, Message, L"Create Partition", MB_OK | MB_ICONWARNING);
-        DmSnapshotClear(&Snapshot);
-        InProgress = FALSE;
-        return TRUE;
+        WCHAR ExistingLetter = L'\0';
+        BOOL AssignFailed = FALSE;
+
+        /* Mount manager auto-assigns a drive letter when the new volume
+         * arrives, and IOCTL_MOUNTMGR_CREATE_POINT rejects a device that
+         * already has one with STATUS_INVALID_PARAMETER (error 87).
+         * Replace the existing letter instead of blindly creating one. */
+        StorageUtilGetDriveLetter(Volume->DeviceName, &ExistingLetter);
+        if (ExistingLetter != (WCHAR)towupper(DmPendingCreate.Letter))
+        {
+            if (ExistingLetter != L'\0') StorageUtilDeleteDriveLetter(ExistingLetter);
+            AssignFailed = !StorageUtilAssignDriveLetter(Volume->DeviceName, DmPendingCreate.Letter);
+        }
+
+        if (AssignFailed)
+        {
+            DmActionFormatErrorMessage(Message, ARRAYSIZE(Message), L"The volume was created, but assigning the requested drive letter failed.", GetLastError());
+            MessageBoxW(hWnd, Message, L"Create Partition", MB_OK | MB_ICONWARNING);
+            DmSnapshotClear(&Snapshot);
+            InProgress = FALSE;
+            return TRUE;
+        }
     }
 
     DmSnapshotClear(&Snapshot);

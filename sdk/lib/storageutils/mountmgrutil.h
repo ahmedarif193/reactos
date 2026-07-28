@@ -24,6 +24,11 @@ StorageUtilAssignNextDriveLetter(
     _Out_ PWCHAR DriveLetter);
 
 BOOL
+StorageUtilGetDriveLetter(
+    _In_z_ PCWSTR DeviceName,
+    _Out_ PWCHAR DriveLetter);
+
+BOOL
 StorageUtilDeleteDriveLetter(
     _In_ WCHAR DriveLetter);
 

@@ -149,6 +149,90 @@ StorageUtilAssignNextDriveLetter(
 }
 
 BOOL
+StorageUtilGetDriveLetter(
+    _In_z_ PCWSTR DeviceName,
+    _Out_ PWCHAR DriveLetter)
+{
+    ULONG DeviceNameLength;
+    ULONG InputBufferLength;
+    ULONG OutputBufferLength;
+    PMOUNTMGR_MOUNT_POINT InputBuffer;
+    PMOUNTMGR_MOUNT_POINTS OutputBuffer;
+    PMOUNTMGR_MOUNT_POINT Point;
+    PWCHAR LinkName;
+    ULONG LinkChars;
+    ULONG Index;
+    HANDLE MountMgrHandle;
+    DWORD BytesReturned;
+    BOOL Success;
+
+    if (DeviceName == NULL || DriveLetter == NULL)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    *DriveLetter = UNICODE_NULL;
+    DeviceNameLength = (ULONG)(wcslen(DeviceName) * sizeof(WCHAR));
+    InputBufferLength = sizeof(MOUNTMGR_MOUNT_POINT) + DeviceNameLength;
+    OutputBufferLength = 0x1000;
+
+    InputBuffer = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, InputBufferLength);
+    OutputBuffer = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, OutputBufferLength);
+    if (InputBuffer == NULL || OutputBuffer == NULL)
+    {
+        HeapFree(GetProcessHeap(), 0, InputBuffer);
+        HeapFree(GetProcessHeap(), 0, OutputBuffer);
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return FALSE;
+    }
+
+    InputBuffer->DeviceNameOffset = sizeof(MOUNTMGR_MOUNT_POINT);
+    InputBuffer->DeviceNameLength = (USHORT)DeviceNameLength;
+    CopyMemory((PBYTE)InputBuffer + InputBuffer->DeviceNameOffset, DeviceName, DeviceNameLength);
+
+    MountMgrHandle = StorageUtilOpenMountManager();
+    if (MountMgrHandle == INVALID_HANDLE_VALUE)
+    {
+        HeapFree(GetProcessHeap(), 0, InputBuffer);
+        HeapFree(GetProcessHeap(), 0, OutputBuffer);
+        return FALSE;
+    }
+
+    BytesReturned = 0;
+    Success = DeviceIoControl(MountMgrHandle,
+                              IOCTL_MOUNTMGR_QUERY_POINTS,
+                              InputBuffer,
+                              InputBufferLength,
+                              OutputBuffer,
+                              OutputBufferLength,
+                              &BytesReturned,
+                              NULL);
+    CloseHandle(MountMgrHandle);
+
+    if (Success)
+    {
+        for (Index = 0; Index < OutputBuffer->NumberOfMountPoints; Index++)
+        {
+            Point = &OutputBuffer->MountPoints[Index];
+            LinkName = (PWCHAR)((PBYTE)OutputBuffer + Point->SymbolicLinkNameOffset);
+            LinkChars = Point->SymbolicLinkNameLength / sizeof(WCHAR);
+
+            /* Mount manager writes drive letters exactly as \DosDevices\X: */
+            if ((LinkChars == 14) && (wcsncmp(LinkName, L"\\DosDevices\\", 12) == 0) && (LinkName[13] == L':'))
+            {
+                *DriveLetter = towupper(LinkName[12]);
+                break;
+            }
+        }
+    }
+
+    HeapFree(GetProcessHeap(), 0, InputBuffer);
+    HeapFree(GetProcessHeap(), 0, OutputBuffer);
+    return Success;
+}
+
+BOOL
 StorageUtilDeleteDriveLetter(
     _In_ WCHAR DriveLetter)
 {
