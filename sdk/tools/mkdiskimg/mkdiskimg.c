@@ -232,12 +232,7 @@ static void write_le64(unsigned char* ptr, unsigned long long value)
 static int patch_fat_partition(FILE* output, const PARTITION_INPUT* partition)
 {
     const unsigned char* vbr = partition->BootSector;
-    static const unsigned char fat32_reserved_entries[12] =
-    {
-        0xF8, 0xFF, 0xFF, 0x0F,
-        0xFF, 0xFF, 0xFF, 0x0F,
-        0xF8, 0xFF, 0xFF, 0x0F
-    };
+    static const unsigned char fat32_reserved_entries[8] = {0xF8, 0xFF, 0xFF, 0x0F, 0xFF, 0xFF, 0xFF, 0x0F};
     unsigned short bytes_per_sector;
     unsigned short reserved_sectors;
     unsigned short backup_boot_sector = 0;
