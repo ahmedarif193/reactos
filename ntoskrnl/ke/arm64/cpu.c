@@ -15,6 +15,12 @@
 #define READ_SYSREG64(_var, _reg) __asm__ __volatile__("mrs %0, " #_reg : "=r"(_var))
 #define WRITE_SYSREG64(_reg, _val) __asm__ __volatile__("msr " #_reg ", %0" :: "r"(_val))
 
+#define ARM64_MDSCR_SS             (1ULL << 0)
+#define ARM64_MDSCR_KDE            (1ULL << 13)
+#define ARM64_MDSCR_MDE            (1ULL << 15)
+#define ARM64_PSTATE_SS            (1ULL << 21)
+#define ARM64_DEBUG_CONTROL_ENABLE 1UL
+
 #define READ_DBG_SLOT(_array, _slot, _name)                          \
     do                                                               \
     {                                                                \
@@ -278,10 +284,35 @@ KiSaveProcessorControlState(_Out_ PKPROCESSOR_STATE ProcessorState)
                   sizeof(ProcessorState->ArchState.Pmxevtyper_El0));
 }
 
+static
+BOOLEAN
+KiArm64DebugRegistersEnabled(
+    _In_ const KSPECIAL_REGISTERS* Registers,
+    _In_ ULONG BreakpointCount,
+    _In_ ULONG WatchpointCount)
+{
+    ULONG Slot;
+
+    for (Slot = 0; Slot < BreakpointCount; Slot++)
+    {
+        if (Registers->KernelBcr[Slot] & ARM64_DEBUG_CONTROL_ENABLE)
+            return TRUE;
+    }
+
+    for (Slot = 0; Slot < WatchpointCount; Slot++)
+    {
+        if (Registers->KernelWcr[Slot] & ARM64_DEBUG_CONTROL_ENABLE)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
 VOID
 NTAPI
 KiRestoreProcessorControlState(_In_ PKPROCESSOR_STATE ProcessorState)
 {
+    ULONGLONG Mdscr;
     ULONG NumBps, NumWps;
 
     if (ProcessorState == NULL)
@@ -315,6 +346,32 @@ KiRestoreProcessorControlState(_In_ PKPROCESSOR_STATE ProcessorState)
 
     if (NumWps > 0) { WRITE_DBG_SLOT(KernelWvr, 0, "dbgwvr"); WRITE_DBG_SLOT(KernelWcr, 0, "dbgwcr"); }
     if (NumWps > 1) { WRITE_DBG_SLOT(KernelWvr, 1, "dbgwvr"); WRITE_DBG_SLOT(KernelWcr, 1, "dbgwcr"); }
+
+    /*
+     * The debug registers above only take effect once MDSCR_EL1 enables monitor
+     * debug events (MDE) and debug exceptions at EL1 (KDE). Preserve unrelated
+     * MDSCR state and derive the bits owned here from the state being restored.
+     *
+     * ContextFrame is authoritative for exception return: a debugger can modify
+     * its CPSR after KiSaveProcessorControlState captured Spsr_El1, and
+     * KiTrapReturn later copies that CPSR to SPSR_EL1.
+     */
+    READ_SYSREG64(Mdscr, mdscr_el1);
+    Mdscr &= ~(ARM64_MDSCR_SS | ARM64_MDSCR_KDE | ARM64_MDSCR_MDE);
+
+    if (KiArm64DebugRegistersEnabled(&ProcessorState->SpecialRegisters,
+                                     NumBps,
+                                     NumWps))
+    {
+        Mdscr |= ARM64_MDSCR_MDE | ARM64_MDSCR_KDE;
+    }
+
+    if (ProcessorState->ContextFrame.Cpsr & ARM64_PSTATE_SS)
+        Mdscr |= ARM64_MDSCR_SS | ARM64_MDSCR_KDE;
+
+    WRITE_SYSREG64(mdscr_el1, Mdscr);
+    /* Synchronize the new debug state before returning from the exception. */
+    __asm__ __volatile__("isb");
 
     WRITE_SYSREG64(tcr_el1, ProcessorState->ArchState.Tcr_El1);
     WRITE_SYSREG64(ttbr0_el1, ProcessorState->ArchState.Ttbr0_El1);

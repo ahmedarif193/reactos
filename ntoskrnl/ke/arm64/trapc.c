@@ -1807,6 +1807,57 @@ KiArm64HandleSynchronousException(
             KeBugCheckEx(UNEXPECTED_KERNEL_MODE_TRAP, 0x2F, 0, 0, 0);
         }
 
+        case 0x30: /* Hardware breakpoint, lower EL */
+        case 0x31: /* Hardware breakpoint, same EL */
+        case 0x32: /* Software step, lower EL */
+        case 0x33: /* Software step, same EL */
+        case 0x34: /* Watchpoint, lower EL */
+        case 0x35: /* Watchpoint, same EL */
+        {
+            EXCEPTION_RECORD ExceptionRecord;
+            KPROCESSOR_MODE Mode;
+            BOOLEAN IsWatchpoint = (EsrClass == 0x34) || (EsrClass == 0x35);
+            ULONG64 WatchpointAddress = 0;
+
+            TrapFrame = &Context->TrapFrame;
+            KiArm64InitializeTrapFrame(Context, TrapFrame);
+
+            Mode = KiArm64PreviousModeFromContext(Context->State.Spsr, Context->State.Elr);
+
+            /*
+             * A watchpoint reports the accessed data address in FAR_EL1, which
+             * is needed to identify the closest watchpoint. Preserve it and
+             * ESR.WnR in the exception record for the debugger backend.
+             */
+            if (IsWatchpoint)
+            {
+                __asm__ __volatile__("mrs %0, far_el1" : "=r"(WatchpointAddress));
+            }
+
+            /*
+             * All three arrive as a single step exception, matching what the
+             * debug registers raise on x86, so that KD and the GDB stub can
+             * treat every debug register event the same way.
+             */
+            RtlZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
+            ExceptionRecord.ExceptionCode = STATUS_SINGLE_STEP;
+            ExceptionRecord.ExceptionAddress = (PVOID)(ULONG_PTR)Context->State.Elr;
+            if (IsWatchpoint)
+            {
+                ExceptionRecord.NumberParameters = 2;
+                ExceptionRecord.ExceptionInformation[0] = (ULONG_PTR)WatchpointAddress;
+                ExceptionRecord.ExceptionInformation[1] = (Esr >> 6) & 1;
+            }
+
+            KiDispatchException(&ExceptionRecord,
+                                Context->ExceptionFramePointer,
+                                TrapFrame,
+                                Mode,
+                                TRUE);
+
+            goto HandledExit;
+        }
+
         case 0x3C: /* BRK instruction */
         {
             KPROCESSOR_MODE Mode = KiArm64PreviousModeFromContext(Context->State.Spsr, Context->State.Elr);
