@@ -786,6 +786,8 @@ public:
                     _In_opt_ PWSTR StreamName,
                     _In_ ULONGLONG NewSize);
 
+    NTSTATUS SetFileValidDataLength(_In_ AttributeType AttrType, _In_opt_ PWSTR StreamName, _In_ ULONGLONG NewValidDataLength);
+
     NTSTATUS
     SetFileAllocationSize(
         _In_ AttributeType AttrType,

@@ -545,6 +545,8 @@ NtfsFileRecordSetFileDataSize(
     _In_opt_ PWSTR StreamName,
     _In_ ULONGLONG NewSize);
 
+NTSTATUS NtfsFileRecordSetFileValidDataLength(_In_ NtfsFileRecord *FileRecord, _In_ AttributeType AttrType, _In_opt_ PWSTR StreamName, _In_ ULONGLONG NewValidDataLength);
+
 /*
  * Changes allocation independently of EOF. Requests below EOF truncate the
  * stream first; larger requests reserve rounded whole clusters without

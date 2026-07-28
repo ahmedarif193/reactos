@@ -1097,6 +1097,32 @@ NtfsFsdSetInformation(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                     SystemBuffer)->EndOfFile;
             break;
 
+        case FileValidDataLengthInformation:
+            if (BufferLength < sizeof(FILE_VALID_DATA_LENGTH_INFORMATION))
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                goto Complete;
+            }
+            if (!(FileCB->DesiredAccess & FILE_WRITE_DATA))
+            {
+                Status = STATUS_ACCESS_DENIED;
+                goto Complete;
+            }
+
+            RequestedSize = ((PFILE_VALID_DATA_LENGTH_INFORMATION)SystemBuffer)->ValidDataLength;
+            if (RequestedSize.QuadPart < 0)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                goto Complete;
+            }
+            Status = NtfsFileRecordSetFileValidDataLength(FileCB->FileRec, FileCB->RequestedType, FileCB->RequestedStream, (ULONGLONG)RequestedSize.QuadPart);
+            if (NT_SUCCESS(Status))
+            {
+                NtfsRefreshFileSizes(FileCB, FileObject);
+                FileObject->Flags |= FO_FILE_MODIFIED;
+            }
+            goto Complete;
+
         case FileAllocationInformation:
             if (BufferLength <
                 sizeof(FILE_ALLOCATION_INFORMATION))
