@@ -72,10 +72,35 @@ format_gdb_tid(
 
 FORCEINLINE ULONG_PTR KdpGetDirectoryTableBase(PKPROCESS Process)
 {
-#if (NTDDI_VERSION >= NTDDI_LONGHORN)
-    return Process->DirectoryTableBase;
-#else
+#if defined(_M_ARM64) || (NTDDI_VERSION < NTDDI_LONGHORN)
+    /*
+     * An array on pre-Longhorn targets, and on ARM64 whatever the version:
+     * entry zero is the TTBR0 user translation root.
+     */
     return Process->DirectoryTableBase[0];
+#else
+    return Process->DirectoryTableBase;
+#endif
+}
+
+/* Switch the translation base so another process' memory becomes readable */
+FORCEINLINE VOID KdpSwitchAddressSpace(ULONG_PTR DirectoryTableBase)
+{
+#if defined(_M_ARM64)
+    /*
+     * Only TTBR0 (the user half) is switched; TTBR1 keeps mapping the kernel.
+     * The TLB must be invalidated because the ASID is not being changed.
+     */
+    __asm__ __volatile__(
+        "dsb ishst\n"
+        "msr ttbr0_el1, %0\n"
+        "isb\n"
+        "tlbi vmalle1\n"
+        "dsb ish\n"
+        "isb\n"
+        :: "r"(DirectoryTableBase) : "memory");
+#else
+    __writecr3(DirectoryTableBase);
 #endif
 }
 
@@ -105,8 +130,10 @@ typedef KDSTATUS (*KDP_MANIPULATESTATE_HANDLER)(
 );
 
 /*
- * Hardware debug support. GDB numbers the Z packet types this way; the
- * architecture backend owns the mapping to its hardware debug registers.
+ * Hardware debug support. GDB numbers the Z packet types this way, and the
+ * architectures differ in how many of each they can serve: x86 has a single
+ * pool of four debug registers usable for either purpose, while ARM64 has
+ * eight instruction breakpoints and two, separate, data watchpoints.
  */
 #define GDB_HW_EXECUTE 1
 #define GDB_HW_WRITE   2
@@ -120,6 +147,9 @@ typedef struct _GDB_HARDWARE_BREAKPOINT
     UCHAR Type;
     BOOLEAN Active;
 } GDB_HARDWARE_BREAKPOINT;
+
+/* Enough slots for the largest supported debug register file (ARM64: 8 + 2) */
+#define GDB_MAX_HARDWARE_BREAKPOINTS 10
 
 /* gdb_input.c */
 extern UINT_PTR gdb_dbg_tid;
@@ -219,6 +249,7 @@ extern BOOLEAN gdb_write_registers(_In_reads_(Length) const CHAR* Value, _In_ UL
  */
 extern const ULONG gdb_hw_breakpoint_count;
 extern BOOLEAN gdb_arch_hw_breakpoint_valid(_In_ const GDB_HARDWARE_BREAKPOINT* Breakpoint);
+extern BOOLEAN gdb_arch_hw_slot_usable(_In_ ULONG Slot, _In_ UCHAR Type);
 extern VOID gdb_arch_program_hw_breakpoints(
     _Inout_ PKSPECIAL_REGISTERS Registers,
     _In_ const GDB_HARDWARE_BREAKPOINT* Breakpoints);
@@ -226,6 +257,9 @@ extern VOID gdb_arch_report_hw_breakpoints(_In_ const GDB_HARDWARE_BREAKPOINT* B
 extern BOOLEAN gdb_arch_hw_breakpoint_hit(
     _In_ const GDB_HARDWARE_BREAKPOINT* Breakpoints,
     _In_ ULONG Slot);
+extern BOOLEAN gdb_arch_prepare_resume(
+    _Inout_ CONTEXT* Context,
+    _In_ const GDB_HARDWARE_BREAKPOINT* Breakpoints);
 extern VOID gdb_arch_set_continue_control(
     _Inout_ DBGKD_MANIPULATE_STATE64* State,
     _In_ const GDB_HARDWARE_BREAKPOINT* Breakpoints);
@@ -254,6 +288,8 @@ extern const SIZE_T gdb_target_xml_length;
     ((Context)->EFlags |= EFLAGS_TF)
 #  define KdpClearSingleStep(Context) \
     ((Context)->EFlags &= ~EFLAGS_TF)
+#  define KdpIsSingleStep(Context) \
+    (((Context)->EFlags & EFLAGS_TF) != 0)
 #elif defined(_M_AMD64)
 #  define KdpGetContextPc(Context) \
     ((Context)->Rip)
@@ -267,6 +303,25 @@ extern const SIZE_T gdb_target_xml_length;
     ((Context)->EFlags |= EFLAGS_TF)
 #  define KdpClearSingleStep(Context) \
     ((Context)->EFlags &= ~EFLAGS_TF)
+#  define KdpIsSingleStep(Context) \
+    (((Context)->EFlags & EFLAGS_TF) != 0)
+#elif defined(_M_ARM64)
+#  define KdpGetContextPc(Context) \
+    ((Context)->Pc)
+#  define KdpSetContextPc(Context, ProgramCounter) \
+    ((Context)->Pc = (ProgramCounter))
+#  define KD_BREAKPOINT_TYPE        ULONG
+#  define KD_BREAKPOINT_SIZE        sizeof(ULONG)
+#  define KD_BREAKPOINT_VALUE       0xD43E0000
+/* Single step mode. The kernel derives MDSCR_EL1.SS from this saved PSTATE. */
+#  define ARM64_PSTATE_D            (1UL << 9)
+#  define ARM64_PSTATE_SS           (1UL << 21)
+#  define KdpSetSingleStep(Context) \
+    ((Context)->Cpsr |= ARM64_PSTATE_SS)
+#  define KdpClearSingleStep(Context) \
+    ((Context)->Cpsr &= ~ARM64_PSTATE_SS)
+#  define KdpIsSingleStep(Context) \
+    (((Context)->Cpsr & ARM64_PSTATE_SS) != 0)
 #else
 #  error "Please define relevant macros for your architecture"
 #endif
