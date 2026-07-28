@@ -21,6 +21,8 @@
 #include <ntdddisk.h>
 #include <mountdev.h>
 #include <wdmguid.h>
+#include <reactos/drivers/dumpstor.h>
+#include <reactos/drivers/dumpscsi.h>
 
 /* Memory Tags */
 #define TAG_GLOBAL_DATA     'DGtS'
@@ -36,6 +38,7 @@
 #define TAG_SGL             'GStS'
 #define TAG_DEVICE_RELATION 'RDtS'
 #define TAG_PNP_ID          'IPtS'
+#define TAG_DUMP_CONTEXT    'CptS'
 
 typedef enum
 {
@@ -137,6 +140,7 @@ typedef struct _FDO_DEVICE_EXTENSION
     LIST_ENTRY PdoListHead;
     ULONG PdoCount;
     BOOLEAN BusScanned;
+    volatile BOOLEAN DumpMode;
 } FDO_DEVICE_EXTENSION, *PFDO_DEVICE_EXTENSION;
 
 
@@ -155,7 +159,7 @@ typedef struct _PDO_DEVICE_EXTENSION
     ULONG QueueDepth;
     BOOLEAN DeviceClaimed;
     PINQUIRYDATA InquiryBuffer;
-
+    struct _PORT_DUMP_CONTEXT *DumpContext;
 
 } PDO_DEVICE_EXTENSION, *PPDO_DEVICE_EXTENSION;
 
@@ -174,6 +178,37 @@ typedef struct _STOR_SRB_CONTEXT
 } STOR_SRB_CONTEXT, *PSTOR_SRB_CONTEXT;
 
 #define PortGetSrbContext(Irp)  ((PSTOR_SRB_CONTEXT)((Irp)->Tail.Overlay.DriverContext[0]))
+#define PORT_DUMP_IRP_MARKER     ((PVOID)(ULONG_PTR)'pruD')
+
+/*
+ * STOR_SCATTER_GATHER_LIST ends in a flexible array, so it cannot be embedded
+ * by value. This mirrors it with room for the single element a dump write
+ * needs; the miniport reads it back through the real type, so the layout must
+ * stay identical.
+ */
+typedef struct _PORT_DUMP_SGL
+{
+    ULONG NumberOfElements;
+    ULONG_PTR Reserved;
+    STOR_SCATTER_GATHER_ELEMENT List[1];
+} PORT_DUMP_SGL, *PPORT_DUMP_SGL;
+
+C_ASSERT(FIELD_OFFSET(PORT_DUMP_SGL, NumberOfElements) == FIELD_OFFSET(STOR_SCATTER_GATHER_LIST, NumberOfElements));
+C_ASSERT(FIELD_OFFSET(PORT_DUMP_SGL, Reserved) == FIELD_OFFSET(STOR_SCATTER_GATHER_LIST, Reserved));
+C_ASSERT(FIELD_OFFSET(PORT_DUMP_SGL, List) == FIELD_OFFSET(STOR_SCATTER_GATHER_LIST, List));
+
+typedef struct _PORT_DUMP_CONTEXT
+{
+    PPDO_DEVICE_EXTENSION PdoExtension;
+    PIRP Irp;
+    SCSI_REQUEST_BLOCK Srb;
+    STOR_SRB_CONTEXT SrbContext;
+    PORT_DUMP_SGL Sgl;
+    PVOID SrbExtension;
+    volatile LONG Completed;
+    NTSTATUS Status;
+    ULONG BytesPerSector;
+} PORT_DUMP_CONTEXT, *PPORT_DUMP_CONTEXT;
 
 /* pdo.c */
 
@@ -181,6 +216,9 @@ VOID PortFreeSrbContext(_In_ PIRP Irp);
 
 NTSTATUS PortSrbStatusToNtStatus(_In_ UCHAR SrbStatus);
 
+VOID PortFreeDumpContext(_In_opt_ PPORT_DUMP_CONTEXT DumpContext);
+
+NTSTATUS PortGetDumpInterface(_In_ PPDO_DEVICE_EXTENSION PdoExtension, _Out_ PROS_STORAGE_DUMP_INTERFACE Interface);
 
 /* fdo.c */
 

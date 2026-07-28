@@ -104,6 +104,7 @@ KiInitializePcr(
     /* Set pointers to ourselves */
     Pcr->Self = (PKPCR)Pcr;
     Pcr->CurrentPrcb = &Pcr->Prcb;
+    Pcr->Prcb.CrashDumpContext = &Pcr->Prcb.ProcessorState.ContextFrame;
 
     /* Set the PCR Version */
     Pcr->MajorVersion = PCR_MAJOR_VERSION;

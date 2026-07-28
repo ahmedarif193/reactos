@@ -535,6 +535,38 @@ ScsiPortGetPhysicalAddress(IN PVOID HwDeviceExtension,
                                         SCSI_PORT_DEVICE_EXTENSION,
                                         MiniPortDeviceExtension);
 
+    if (DeviceExtension->DumpMode && DeviceExtension->DumpContext != NULL)
+    {
+        PSCSIPORT_DUMP_CONTEXT DumpContext = DeviceExtension->DumpContext;
+        ULONG_PTR Address = (ULONG_PTR)VirtualAddress;
+        ULONG_PTR DataStart = (ULONG_PTR)DumpContext->Srb.DataBuffer;
+        ULONG_PTR ExtensionStart = (ULONG_PTR)DumpContext->SrbExtension;
+
+        if ((Srb == &DumpContext->Srb) && (Address >= DataStart) && (Address - DataStart < DumpContext->DataLength))
+        {
+            Offset = Address - DataStart;
+            BufferLength = DumpContext->DataLength - Offset;
+            PhysicalAddress.QuadPart = DumpContext->DataPhysicalAddress.QuadPart + Offset;
+            *Length = (ULONG)BufferLength;
+            return PhysicalAddress;
+        }
+
+        if ((DumpContext->SrbExtension != NULL) && (Address >= ExtensionStart) && (Address - ExtensionStart < DeviceExtension->SrbExtensionSize))
+        {
+            PhysicalAddress = MmGetPhysicalAddress(VirtualAddress);
+            BufferLength = min(DeviceExtension->SrbExtensionSize - (Address - ExtensionStart), PAGE_SIZE - BYTE_OFFSET(VirtualAddress));
+            *Length = (ULONG)BufferLength;
+            return PhysicalAddress;
+        }
+
+        if (Srb == &DumpContext->Srb)
+        {
+            PhysicalAddress.QuadPart = (LONGLONG)SP_UNINITIALIZED_VALUE;
+            *Length = 0;
+            return PhysicalAddress;
+        }
+    }
+
     if (Srb == NULL || Srb->SenseInfoBuffer == VirtualAddress)
     {
         /* Simply look it up in the allocated common buffer */
@@ -1443,6 +1475,14 @@ ScsiPortMoveMemory(OUT PVOID Destination,
         Length);
 }
 
+static NTSTATUS SpiDumpSrbStatusToNtStatus(_In_ UCHAR SrbStatus)
+{
+    /* SpiStatusSrbToNt covers only the failure codes. */
+    if (SRB_STATUS(SrbStatus) == SRB_STATUS_SUCCESS)
+        return STATUS_SUCCESS;
+
+    return SpiStatusSrbToNt(SrbStatus);
+}
 
 /*
  * @implemented
@@ -1461,6 +1501,28 @@ ScsiPortNotification(IN SCSI_NOTIFICATION_TYPE NotificationType, IN PVOID HwDevi
     DPRINT("DeviceExtension %p\n", DeviceExtension);
 
     va_start(ap, HwDeviceExtension);
+
+    if (DeviceExtension->DumpMode)
+    {
+        if (NotificationType == RequestComplete)
+        {
+            PSCSI_REQUEST_BLOCK Srb;
+            PSCSIPORT_DUMP_CONTEXT DumpContext;
+
+            Srb = (PSCSI_REQUEST_BLOCK)va_arg(ap, PSCSI_REQUEST_BLOCK);
+            Srb->SrbFlags &= ~SRB_FLAGS_IS_ACTIVE;
+            DumpContext = DeviceExtension->DumpContext;
+            if ((DumpContext != NULL) && (Srb == &DumpContext->Srb))
+            {
+                DumpContext->Status = SpiDumpSrbStatusToNtStatus(Srb->SrbStatus);
+                KeMemoryBarrier();
+                InterlockedExchange(&DumpContext->Completed, 1);
+            }
+        }
+
+        va_end(ap);
+        return;
+    }
 
     switch (NotificationType)
     {

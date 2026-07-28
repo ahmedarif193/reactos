@@ -22,6 +22,7 @@
 #include <usbdlib.h>
 #include <ks.h>
 #include <drivers/usbport/usbmport.h>
+#include <reactos/drivers/dumpstor.h>
 
 #define USB_HUB_TAG 'BUHU'
 

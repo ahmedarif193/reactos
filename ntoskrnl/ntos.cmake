@@ -177,6 +177,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/kdapi.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/kdbreak.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/kddata.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/kddump.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/kdinit.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/kdlock.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/kdprint.c

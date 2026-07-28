@@ -2866,6 +2866,7 @@ USBPORT_MiniportCompleteTransfer(IN PVOID MiniPortExtension,
     PUSBPORT_TRANSFER Transfer;
     PUSBPORT_TRANSFER ParentTransfer;
     PUSBPORT_TRANSFER SplitTransfer;
+    PUSBPORT_DUMP_CONTEXT DumpContext;
     PLIST_ENTRY SplitHead;
     PLIST_ENTRY Entry;
     KIRQL OldIrql;
@@ -2893,6 +2894,28 @@ USBPORT_MiniportCompleteTransfer(IN PVOID MiniPortExtension,
     Transfer = CONTAINING_RECORD(TransferParameters,
                                  USBPORT_TRANSFER,
                                  TransferParameters);
+
+    if (Transfer->Flags & TRANSFER_FLAG_DUMP)
+    {
+        DumpContext = Transfer->DumpContext;
+        if (DumpContext != NULL)
+        {
+            DumpContext->TransferStatus = USBDStatus;
+            DumpContext->CompletedLength = TransferLength;
+            KeMemoryBarrier();
+            InterlockedExchange(&DumpContext->Completed, 1);
+        }
+        return;
+    }
+
+    /*
+     * Once the bugcheck owner has entered USB dump mode, normal transfer
+     * owners can no longer run. Let the miniport retire their descriptors,
+     * but never queue a completion that depends on frozen DPC/worker state.
+     */
+    DumpContext = ((PUSBPORT_DEVICE_EXTENSION)Transfer->FdoDevice->DeviceExtension)->Aux.DumpContext;
+    if ((DumpContext != NULL) && DumpContext->DumpMode)
+        return;
 
     Transfer->CompletedTransferLen = TransferLength;
 

@@ -22,6 +22,7 @@
 #include <usbdlib.h>
 #include <usbuser.h>
 #include <drivers/usbport/usbmport.h>
+#include <reactos/drivers/dumpstor.h>
 
 #if DBG
 #define USBPORT_LOG_IRQL(Tag)                                                      \
@@ -199,6 +200,7 @@ typedef struct _USBPORT_TIMESYNC_CONTEXT {
 #define TRANSFER_FLAG_BOUNCE     0x00000800
 #define TRANSFER_FLAG_REUSABLE   0x00001000
 #define TRANSFER_FLAG_ALLOCATED_MDL 0x00002000
+#define TRANSFER_FLAG_DUMP       0x00004000
 
 extern KSPIN_LOCK USBPORT_SpinLock;
 extern LIST_ENTRY USBPORT_MiniPortDrivers;
@@ -365,6 +367,7 @@ typedef struct _USBPORT_TRANSFER {
   ULONG Period;
   PUSBPORT_ISO_BLOCK IsoBlockPtr; // pointer on IsoBlock
   LIST_ENTRY DoneLink; // separate link for DoneTransferList (avoids conflict with TransferLink)
+  PVOID DumpContext;
   // SgList should be LAST field
   USBPORT_SCATTER_GATHER_LIST SgList; // variable length
   //USBPORT_ISO_BLOCK IsoBlock; // variable length
@@ -540,6 +543,7 @@ typedef struct _USBPORT_DEVICE_EXTENSION {
       LIST_ENTRY TimeSyncTrackingList;
       KSPIN_LOCK TimeSyncSpinLock;
       ULONG NextTimeSyncId;
+      PVOID DumpContext;
     } Aux;
   };
 #else
@@ -551,11 +555,33 @@ typedef struct _USBPORT_DEVICE_EXTENSION {
       LIST_ENTRY TimeSyncTrackingList;
       KSPIN_LOCK TimeSyncSpinLock;
       ULONG NextTimeSyncId;
+      PVOID DumpContext;
     } Aux;
   };
 #endif
 
 } USBPORT_DEVICE_EXTENSION, *PUSBPORT_DEVICE_EXTENSION;
+
+#define USBPORT_DUMP_CONTEXT_TAG 'pDsU'
+
+typedef struct _USBPORT_DUMP_CONTEXT {
+  PUSBPORT_DEVICE_EXTENSION FdoExtension;
+  PUSBPORT_DEVICE_HANDLE DeviceHandle;
+  PUSBPORT_ENDPOINT ControlEndpoint;
+  PUSBPORT_ENDPOINT BulkInEndpoint;
+  PUSBPORT_ENDPOINT BulkOutEndpoint;
+  PUSBPORT_TRANSFER Transfer;
+  SIZE_T TransferAllocationSize;
+  PVOID BounceBuffer;
+  PHYSICAL_ADDRESS BouncePhysicalAddress;
+  UCHAR InterfaceNumber;
+  UCHAR BulkInEndpointAddress;
+  UCHAR BulkOutEndpointAddress;
+  volatile BOOLEAN DumpMode;
+  volatile LONG Completed;
+  USBD_STATUS TransferStatus;
+  ULONG CompletedLength;
+} USBPORT_DUMP_CONTEXT, *PUSBPORT_DUMP_CONTEXT;
 
 typedef struct _USBPORT_RH_DESCRIPTORS {
   USB_DEVICE_DESCRIPTOR DeviceDescriptor;
@@ -1300,6 +1326,8 @@ NTAPI
 USBPORT_PdoInternalDeviceControl(
   IN PDEVICE_OBJECT FdoDevice,
   IN PIRP Irp);
+
+VOID USBPORT_FreeDumpContext(_In_opt_ PUSBPORT_DUMP_CONTEXT DumpContext);
 
 NTSTATUS
 NTAPI

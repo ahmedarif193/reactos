@@ -13,7 +13,6 @@
 #include <debug.h>
 
 
-static
 NTSTATUS
 SpiStatusSrbToNt(
     _In_ UCHAR SrbStatus)

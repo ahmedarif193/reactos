@@ -8,6 +8,7 @@
 
 /* INCLUDES ******************************************************************/
 
+#include <internal/dump.h>
 #include <ntoskrnl.h>
 
 #ifdef KDBG
@@ -16,6 +17,8 @@
 
 #define NDEBUG
 #include <debug.h>
+/* miarm.h uses DPRINT, so it must follow debug.h. */
+#include <mm/ARM3/miarm.h>
 
 /* GLOBALS *******************************************************************/
 
@@ -1181,7 +1184,13 @@ KeBugCheckWithTf(IN ULONG BugCheckCode,
 
         /* FIXME: Support Triage Dump */
 
-        /* FIXME: Write the crash dump */
+        /*
+         * The crash target, physical file layout, and transport resources
+         * were prepared when the boot-volume pagefile was created. The other
+         * processors are frozen now, and this path does not depend on KD.
+         */
+        KdpWriteCrashDump();
+
         // TODO: The crash-dump helper must set the Reboot variable.
         Reboot = !!IopAutoReboot;
     }
@@ -1244,19 +1253,86 @@ KiHandleNmi(VOID)
 
 /* PUBLIC FUNCTIONS **********************************************************/
 
-/*
- * @unimplemented
- */
 NTSTATUS
 NTAPI
-KeInitializeCrashDumpHeader(IN ULONG Type,
-                            IN ULONG Flags,
-                            OUT PVOID Buffer,
-                            IN ULONG BufferSize,
-                            OUT ULONG BufferNeeded OPTIONAL)
+KeInitializeCrashDumpHeader(IN ULONG Type, IN ULONG Flags, OUT PVOID Buffer, IN ULONG BufferSize, OUT PULONG BufferNeeded OPTIONAL)
 {
-    UNIMPLEMENTED;
-    return STATUS_UNSUCCESSFUL;
+#if defined(_M_AMD64)
+    PDUMP_HEADER64 Header;
+    ULONG Index;
+    SIZE_T DescriptorSize;
+
+    if (BufferNeeded)
+        *BufferNeeded = DUMP_HEADER64_SIZE;
+
+    if (Type != DUMP_TYPE_FULL)
+        return STATUS_INVALID_PARAMETER_1;
+
+    if (Flags != 0)
+        return STATUS_INVALID_PARAMETER_2;
+
+    if (!Buffer)
+        return STATUS_INVALID_PARAMETER_3;
+
+    if (BufferSize < DUMP_HEADER64_SIZE)
+        return STATUS_INVALID_PARAMETER_4;
+
+    if (!MmPhysicalMemoryBlock)
+        return STATUS_UNSUCCESSFUL;
+
+    DescriptorSize = FIELD_OFFSET(DUMP_PHYSICAL_MEMORY_DESCRIPTOR64, Run[MmPhysicalMemoryBlock->NumberOfRuns]);
+    if (DescriptorSize > DUMP_PHYSICAL_MEMORY_BLOCK_SIZE64)
+        return STATUS_BUFFER_TOO_SMALL;
+
+    RtlZeroMemory(Buffer, DUMP_HEADER64_SIZE);
+    Header = Buffer;
+
+    Header->Signature = DUMP_SIGNATURE64;
+    Header->ValidDump = DUMP_VALID_DUMP64;
+    Header->MajorVersion = KdVersionBlock.MajorVersion;
+    Header->MinorVersion = KdVersionBlock.MinorVersion;
+    Header->DirectoryTableBase = PsInitialSystemProcess ? PsInitialSystemProcess->Pcb.DirectoryTableBase : __readcr3();
+    Header->PfnDataBase = (ULONG64)(ULONG_PTR)MmPfnDatabase;
+    Header->PsLoadedModuleList = (ULONG64)(ULONG_PTR)&PsLoadedModuleList;
+    Header->PsActiveProcessHead = (ULONG64)(ULONG_PTR)&PsActiveProcessHead;
+    Header->MachineImageType = IMAGE_FILE_MACHINE_AMD64;
+    Header->NumberProcessors = KeNumberProcessors;
+    Header->BugCheckCode = (ULONG)KiBugCheckData[0];
+    Header->BugCheckParameter1 = KiBugCheckData[1];
+    Header->BugCheckParameter2 = KiBugCheckData[2];
+    Header->BugCheckParameter3 = KiBugCheckData[3];
+    Header->BugCheckParameter4 = KiBugCheckData[4];
+    RtlCopyMemory(Header->VersionUser, "ReactOS", sizeof("ReactOS"));
+    Header->KdDebuggerDataBlock = (ULONG64)(ULONG_PTR)&KdDebuggerDataBlock;
+
+    Header->PhysicalMemoryBlock.NumberOfRuns = MmPhysicalMemoryBlock->NumberOfRuns;
+    Header->PhysicalMemoryBlock.NumberOfPages = MmPhysicalMemoryBlock->NumberOfPages;
+    for (Index = 0; Index < MmPhysicalMemoryBlock->NumberOfRuns; Index++)
+    {
+        Header->PhysicalMemoryBlock.Run[Index].BasePage = MmPhysicalMemoryBlock->Run[Index].BasePage;
+        Header->PhysicalMemoryBlock.Run[Index].PageCount = MmPhysicalMemoryBlock->Run[Index].PageCount;
+    }
+
+    RtlCopyMemory(Header->ContextRecord, &KeGetCurrentPrcb()->ProcessorState.ContextFrame, sizeof(CONTEXT));
+    Header->DumpType = DUMP_TYPE_FULL;
+    Header->RequiredDumpSpace.QuadPart = DUMP_HEADER64_SIZE + (MmPhysicalMemoryBlock->NumberOfPages << PAGE_SHIFT);
+    KeQuerySystemTime(&Header->SystemTime);
+    Header->SystemUpTime.QuadPart = KeQueryInterruptTime();
+    Header->ProductType = SharedUserData->NtProductType;
+    Header->SuiteMask = SharedUserData->SuiteMask;
+    Header->WriterStatus = STATUS_SUCCESS;
+    Header->KdSecondaryVersion = KdVersionBlock.KdSecondaryVersion;
+    return STATUS_SUCCESS;
+#else
+    if (BufferNeeded)
+        *BufferNeeded = DUMP_HEADER32_SIZE;
+
+    UNREFERENCED_PARAMETER(Type);
+    UNREFERENCED_PARAMETER(Flags);
+    UNREFERENCED_PARAMETER(Buffer);
+    UNREFERENCED_PARAMETER(BufferSize);
+    return STATUS_NOT_SUPPORTED;
+#endif
 }
 
 /*

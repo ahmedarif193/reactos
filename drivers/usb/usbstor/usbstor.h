@@ -2,11 +2,14 @@
 #define _USBSTOR_H_
 
 #include <wdm.h>
+#include <ntddk.h>
 #include <ntstrsafe.h>
 #include <usbdi.h>
 #include <usbbusif.h>
 #include <usbdlib.h>
 #include <classpnp.h>
+#include <reactos/drivers/dumpstor.h>
+#include <reactos/drivers/dumpscsi.h>
 
 #define USB_STOR_TAG 'sbsu'
 
@@ -160,9 +163,23 @@ typedef struct
     PDEVICE_OBJECT LowerDeviceObject;                                                    // points to FDO
     PDEVICE_OBJECT *PDODeviceObject;                                                     // entry in pdo list
     PDEVICE_OBJECT Self;                                                                 // self
+    struct _USBSTOR_DUMP_CONTEXT *DumpContext;
     // the whole structure is not stored
     UCHAR InquiryData[INQUIRYDATABUFFERSIZE];                                            // USB SCSI inquiry data
 }PDO_DEVICE_EXTENSION, *PPDO_DEVICE_EXTENSION;
+
+#define USBSTOR_DUMP_CONTEXT_TAG 'pDsB'
+
+typedef struct _USBSTOR_DUMP_CONTEXT
+{
+    PFDO_DEVICE_EXTENSION FdoExtension;
+    PPDO_DEVICE_EXTENSION PdoExtension;
+    ROS_USB_DUMP_INTERFACE UsbInterface;
+    CBW Cbw;
+    CSW Csw;
+    ULONG BytesPerSector;
+    ULONG Tag;
+} USBSTOR_DUMP_CONTEXT, *PUSBSTOR_DUMP_CONTEXT;
 
 typedef struct _ERRORHANDLER_WORKITEM_DATA
 {
@@ -238,6 +255,8 @@ NTSTATUS
 USBSTOR_SyncUrbRequest(
     IN PDEVICE_OBJECT DeviceObject,
     OUT PURB UrbRequest);
+
+NTSTATUS USBSTOR_SyncInternalRequest(IN PDEVICE_OBJECT DeviceObject, IN ULONG IoControlCode, IN PVOID Argument);
 
 NTSTATUS
 USBSTOR_GetMaxLUN(

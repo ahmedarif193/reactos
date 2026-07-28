@@ -112,6 +112,11 @@ PortAcquireSpinLock(
            DeviceExtension, SpinLock, LockContext, LockHandle);
 
     LockHandle->Lock = SpinLock;
+    if (DeviceExtension->DumpMode)
+    {
+        LockHandle->Context.OldIrql = KeGetCurrentIrql();
+        return;
+    }
 
     switch (SpinLock)
     {
@@ -142,6 +147,9 @@ PortReleaseSpinLock(
 {
     DPRINT("PortReleaseSpinLock(%p %p)\n",
            DeviceExtension, LockHandle);
+
+    if (DeviceExtension->DumpMode)
+        return;
 
     switch (LockHandle->Lock)
     {
@@ -630,6 +638,7 @@ PortDispatchDeviceControl(
     PPDO_DEVICE_EXTENSION PdoDeviceExtension;
     PIO_STACK_LOCATION Stack;
     PSTORAGE_PROPERTY_QUERY Query;
+    PROS_STORAGE_DUMP_INTERFACE DumpInterface;
     PSCSI_ADDRESS Address;
     EXTENSION_TYPE ExtensionType;
     ULONG IoControlCode;
@@ -712,6 +721,26 @@ PortDispatchDeviceControl(
             Address->Lun = (UCHAR)PdoDeviceExtension->Lun;
             Irp->IoStatus.Information = sizeof(*Address);
             Status = STATUS_SUCCESS;
+            break;
+
+        case IOCTL_REACTOS_STORAGE_GET_DUMP_INTERFACE:
+            if (ExtensionType != PdoExtension)
+            {
+                Status = STATUS_INVALID_DEVICE_REQUEST;
+                break;
+            }
+
+            if ((Irp->AssociatedIrp.SystemBuffer == NULL) || (Stack->Parameters.DeviceIoControl.OutputBufferLength < sizeof(ROS_STORAGE_DUMP_INTERFACE)))
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+
+            PdoDeviceExtension = DeviceObject->DeviceExtension;
+            DumpInterface = Irp->AssociatedIrp.SystemBuffer;
+            Status = PortGetDumpInterface(PdoDeviceExtension, DumpInterface);
+            if (NT_SUCCESS(Status))
+                Irp->IoStatus.Information = sizeof(*DumpInterface);
             break;
 
         default:
@@ -1538,6 +1567,20 @@ StorPortNotification(
             if ((Srb != NULL) && (Srb->OriginalRequest != NULL))
             {
                 PIRP Irp = (PIRP)Srb->OriginalRequest;
+                if (Irp->Tail.Overlay.DriverContext[3] == PORT_DUMP_IRP_MARKER)
+                {
+                    PPORT_DUMP_CONTEXT DumpContext = Irp->Tail.Overlay.DriverContext[2];
+
+                    DumpContext->Status = PortSrbStatusToNtStatus(Srb->SrbStatus);
+                    KeMemoryBarrier();
+                    InterlockedExchange(&DumpContext->Completed, 1);
+                    break;
+                }
+
+                if ((DeviceExtension != NULL) && DeviceExtension->DumpMode)
+                {
+                    break;
+                }
 
                 /*
                  * The miniport is done with this request. Translate the SRB
@@ -1568,9 +1611,19 @@ StorPortNotification(
 
             if (Dpc != NULL)
             {
-                BOOLEAN Queued = KeInsertQueueDpc((PRKDPC)&Dpc->Dpc, SystemArgument1, SystemArgument2);
-                if (DpcResult != NULL)
-                    *DpcResult = (LONG)Queued;
+                if ((DeviceExtension != NULL) && DeviceExtension->DumpMode)
+                {
+                    HwDpcRoutine = (PHW_DPC_ROUTINE)Dpc->Dpc.DeferredRoutine;
+                    HwDpcRoutine(Dpc, HwDeviceExtension, SystemArgument1, SystemArgument2);
+                    if (DpcResult != NULL)
+                        *DpcResult = TRUE;
+                }
+                else
+                {
+                    BOOLEAN Queued = KeInsertQueueDpc((PRKDPC)&Dpc->Dpc, SystemArgument1, SystemArgument2);
+                    if (DpcResult != NULL)
+                        *DpcResult = (LONG)Queued;
+                }
             }
             break;
 
