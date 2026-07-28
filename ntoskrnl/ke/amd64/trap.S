@@ -836,10 +836,16 @@ PUBLIC KiIpiInterrupt
 .ENDP
 
 
+EXTERN KiUnexpectedInterruptHandler:PROC
+
 PUBLIC KiUnexpectedInterrupt
 FUNC KiUnexpectedInterrupt
-    /* The error code is the vector */
+    /* The error code is the vector minus 128 (sign-extended imm8 push in the stub) */
     EnterTrap (TF_HAS_ERROR_CODE OR TF_SAVE_ALL)
+
+    /* Report the stray vector so misrouted interrupts are visible */
+    mov rcx, [rbp + KTRAP_FRAME_ErrorCode]
+    call KiUnexpectedInterruptHandler
 
 #if 0
     /* Set bugcheck parameters */
@@ -856,8 +862,8 @@ FUNC KiUnexpectedInterrupt
 9:  jmp 9b
 #endif
 #endif
-    /* Return */
-    ExitTrap TF_SAVE_ALL
+    /* Return with an EOI: the LAPIC accepted this vector, so leaving without EOI would keep it in-service and mask its whole priority class on this CPU forever (wedges APC/DPC delivery below it) */
+    ExitTrap (TF_SAVE_ALL OR TF_SEND_EOI)
 ENDFUNC
 
 PUBLIC KiInterruptDispatch

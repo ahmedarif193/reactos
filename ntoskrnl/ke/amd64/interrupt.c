@@ -24,6 +24,17 @@ void KiInterruptDispatch(void);
 
 /* FUNCTIONS ****************************************************************/
 
+/* Called from KiUnexpectedInterrupt (trap.S) with the stub's raw error code (vector - 128). Reports stray vectors so misrouted interrupts are visible instead of being silently swallowed. */
+VOID
+NTAPI
+KiUnexpectedInterruptHandler(IN ULONG64 ErrorCode)
+{
+    static LONG KiUnexpectedInterruptCount = 0;
+    ULONG Vector = (ULONG)((ErrorCode + 128) & 0xFF);
+    LONG Count = InterlockedIncrement(&KiUnexpectedInterruptCount);
+    if (Count <= 32) DbgPrint("STRAYINT: unexpected vector 0x%02lx on CPU %u (#%ld) - sending EOI to prevent ISR/PPR wedge\n", Vector, KeGetCurrentPrcb()->Number, Count);
+}
+
 VOID
 NTAPI
 KeInitializeInterrupt(

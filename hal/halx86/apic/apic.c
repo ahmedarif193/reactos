@@ -375,10 +375,10 @@ HalpAllocateSystemInterrupt(
     ASSERT(Irq < APIC_MAX_IRQ);
     ASSERT(HalpVectorToIndex[Vector] == APIC_FREE_VECTOR);
 
-    /* Setup a redirection entry */
+    /* Setup a redirection entry. Use fixed physical delivery: lowest-priority logical delivery can land the vector on a CPU whose IDT was never patched by KeConnectInterrupt, where it would be swallowed by KiUnexpectedInterrupt. */
     ReDirReg.Vector = Vector;
-    ReDirReg.MessageType = APIC_MT_LowestPriority;
-    ReDirReg.DestinationMode = APIC_DM_Logical;
+    ReDirReg.MessageType = APIC_MT_Fixed;
+    ReDirReg.DestinationMode = APIC_DM_Physical;
     ReDirReg.DeliveryStatus = 0;
     ReDirReg.Polarity = 0;
     ReDirReg.RemoteIRR = 0;
@@ -717,9 +717,19 @@ HalEnableSystemInterrupt(
     /* Check if the interrupt is already enabled */
     if (ReDirReg.Mask == FALSE)
     {
-        /* If the vector matches, there is nothing more to do,
-           otherwise something is wrong. */
-        return (ReDirReg.Vector == Vector);
+        /* If the vector does not match, something is wrong */
+        if (ReDirReg.Vector != Vector) return FALSE;
+
+        /* Repair stale routing: anything but fixed physical delivery can hit a CPU without the IDT handler, where the vector is swallowed without EOI and wedges that CPU's ISR/PPR */
+        if ((ReDirReg.MessageType != APIC_MT_Fixed) || (ReDirReg.DestinationMode != APIC_DM_Physical))
+        {
+            DPRINT1("HalEnableSystemInterrupt: repairing RTE[%u] vector 0x%lx routing (was MT %u DM %u dest 0x%x)\n", Index, Vector, ReDirReg.MessageType, ReDirReg.DestinationMode, ReDirReg.Destination);
+            ReDirReg.MessageType = APIC_MT_Fixed;
+            ReDirReg.DestinationMode = APIC_DM_Physical;
+            ReDirReg.Destination = ApicRead(APIC_ID) >> 24;
+            ApicWriteIORedirectionEntry(Index, ReDirReg);
+        }
+        return TRUE;
     }
 
     /* Set up the redirection entry */
@@ -733,6 +743,8 @@ HalEnableSystemInterrupt(
 
     /* Write back the entry */
     ApicWriteIORedirectionEntry(Index, ReDirReg);
+
+    DPRINT1("HalEnableSystemInterrupt: RTE[%u] vector 0x%lx -> phys APIC 0x%x (%s)\n", Index, Vector, ReDirReg.Destination, ReDirReg.TriggerMode ? "level" : "edge");
 
     return TRUE;
 }
