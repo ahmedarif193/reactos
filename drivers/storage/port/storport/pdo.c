@@ -57,6 +57,10 @@ PortCreatePdo(
     DeviceExtension->Device = Pdo;
     DeviceExtension->FdoExtension = FdoDeviceExtension;
     DeviceExtension->PnpState = dsStopped;
+    DeviceExtension->Bus = Bus;
+    DeviceExtension->Target = Target;
+    DeviceExtension->Lun = Lun;
+    DeviceExtension->QueueDepth = 1;
 
     /* Add the PDO to the PDO list*/
     KeAcquireInStackQueuedSpinLock(&FdoDeviceExtension->PdoListLock,
@@ -65,11 +69,6 @@ PortCreatePdo(
                    &DeviceExtension->PdoListEntry);
     FdoDeviceExtension->PdoCount++;
     KeReleaseInStackQueuedSpinLock(&LockHandle);
-
-    DeviceExtension->Bus = Bus;
-    DeviceExtension->Target = Target;
-    DeviceExtension->Lun = Lun;
-
 
     // FIXME: More initialization
 
@@ -115,17 +114,510 @@ PortDeletePdo(
 }
 
 
+/*
+ * Build a scatter gather list describing the request buffer.
+ *
+ * The miniport is a bus master and asks for the list through
+ * StorPortGetScatterGatherList(), so the physical layout has to be derived
+ * from the MDL the I/O manager built for the transfer. Physically adjacent
+ * pages are coalesced so the list stays short.
+ */
+static PSTOR_SCATTER_GATHER_LIST PortBuildScatterGatherList(_In_ PMDL Mdl, _In_ ULONG TransferLength, _Out_ PULONG AllocationSize)
+{
+    PSTOR_SCATTER_GATHER_LIST Sgl;
+    STOR_PHYSICAL_ADDRESS Address;
+    PPFN_NUMBER Pfn;
+    ULONG PageCount, Index, Offset, Remaining, Length, Elements, Size;
+
+    *AllocationSize = 0;
+
+    if ((Mdl == NULL) || (TransferLength == 0))
+        return NULL;
+
+    Offset = MmGetMdlByteOffset(Mdl);
+    PageCount = ADDRESS_AND_SIZE_TO_SPAN_PAGES(MmGetMdlVirtualAddress(Mdl), TransferLength);
+    Pfn = MmGetMdlPfnArray(Mdl);
+
+    /* Worst case is one element per page. */
+    Size = FIELD_OFFSET(STOR_SCATTER_GATHER_LIST, List) + PageCount * sizeof(STOR_SCATTER_GATHER_ELEMENT);
+
+    Sgl = ExAllocatePoolWithTag(NonPagedPool, Size, TAG_SGL);
+    if (Sgl == NULL)
+        return NULL;
+
+    RtlZeroMemory(Sgl, Size);
+
+    Elements = 0;
+    Remaining = TransferLength;
+
+    for (Index = 0; (Index < PageCount) && (Remaining > 0); Index++)
+    {
+        Length = PAGE_SIZE - Offset;
+        if (Length > Remaining)
+            Length = Remaining;
+
+        Address.QuadPart = ((ULONGLONG)Pfn[Index] << PAGE_SHIFT) + Offset;
+
+        if ((Elements > 0) && ((Sgl->List[Elements - 1].PhysicalAddress.QuadPart + Sgl->List[Elements - 1].Length) == Address.QuadPart))
+        {
+            Sgl->List[Elements - 1].Length += Length;
+        }
+        else
+        {
+            Sgl->List[Elements].PhysicalAddress = Address;
+            Sgl->List[Elements].Length = Length;
+            Elements++;
+        }
+
+        Remaining -= Length;
+        Offset = 0;
+    }
+
+    Sgl->NumberOfElements = Elements;
+    *AllocationSize = Size;
+
+    DPRINT("PortBuildScatterGatherList: %lu bytes -> %lu element(s)\n", TransferLength, Elements);
+
+    return Sgl;
+}
+
+
+NTSTATUS PortSrbStatusToNtStatus(_In_ UCHAR SrbStatus)
+{
+    switch (SRB_STATUS(SrbStatus))
+    {
+        case SRB_STATUS_SUCCESS:
+        case SRB_STATUS_DATA_OVERRUN:
+            return STATUS_SUCCESS;
+
+        case SRB_STATUS_INVALID_LUN:
+        case SRB_STATUS_INVALID_TARGET_ID:
+        case SRB_STATUS_NO_DEVICE:
+        case SRB_STATUS_NO_HBA:
+            return STATUS_DEVICE_DOES_NOT_EXIST;
+
+        case SRB_STATUS_SELECTION_TIMEOUT:
+        case SRB_STATUS_COMMAND_TIMEOUT:
+        case SRB_STATUS_TIMEOUT:
+            return STATUS_IO_TIMEOUT;
+
+        case SRB_STATUS_BAD_FUNCTION:
+        case SRB_STATUS_BAD_SRB_BLOCK_LENGTH:
+        case SRB_STATUS_INVALID_REQUEST:
+            return STATUS_INVALID_DEVICE_REQUEST;
+
+        case SRB_STATUS_INVALID_PATH_ID:
+            return STATUS_NO_SUCH_DEVICE;
+
+        case SRB_STATUS_BUSY:
+            return STATUS_DEVICE_BUSY;
+
+        default:
+            return STATUS_IO_DEVICE_ERROR;
+    }
+}
+
+
+VOID PortFreeSrbContext(_In_ PIRP Irp)
+{
+    PSTOR_SRB_CONTEXT SrbContext;
+
+    SrbContext = PortGetSrbContext(Irp);
+    if (SrbContext == NULL)
+        return;
+
+    if (SrbContext->Sgl != NULL)
+        ExFreePoolWithTag(SrbContext->Sgl, TAG_SGL);
+
+    if (SrbContext->SrbExtensionAllocation != NULL)
+        MmFreeContiguousMemory(SrbContext->SrbExtensionAllocation);
+
+    ExFreePoolWithTag(SrbContext, TAG_SRB_CONTEXT);
+
+    Irp->Tail.Overlay.DriverContext[0] = NULL;
+}
+
+
 NTSTATUS
 NTAPI
 PortPdoScsi(
     _In_ PDEVICE_OBJECT DeviceObject,
     _In_ PIRP Irp)
 {
-    DPRINT1("PortPdoScsi(%p %p)\n", DeviceObject, Irp);
+    PPDO_DEVICE_EXTENSION PdoExtension;
+    PFDO_DEVICE_EXTENSION FdoExtension;
+    PIO_STACK_LOCATION Stack;
+    PSTOR_SRB_CONTEXT SrbContext;
+    PSCSI_REQUEST_BLOCK Srb;
+    PHYSICAL_ADDRESS HighestAddress;
+    ULONG SrbExtensionSize;
+    NTSTATUS Status;
+    KIRQL Irql;
+    KLOCK_QUEUE_HANDLE LockHandle;
+
+    DPRINT("PortPdoScsi(%p %p)\n", DeviceObject, Irp);
+
+    PdoExtension = (PPDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
+    FdoExtension = PdoExtension->FdoExtension;
+
+    Stack = IoGetCurrentIrpStackLocation(Irp);
+    Srb = Stack->Parameters.Scsi.Srb;
+
+    if (Srb == NULL)
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto Fail;
+    }
+
+    /* Address the request at the logical unit this PDO represents. */
+    Srb->PathId = (UCHAR)PdoExtension->Bus;
+    Srb->TargetId = (UCHAR)PdoExtension->Target;
+    Srb->Lun = (UCHAR)PdoExtension->Lun;
+    Srb->OriginalRequest = Irp;
+    Srb->SrbStatus = SRB_STATUS_PENDING;
+
+    /*
+     * Device claiming is a port-driver operation; it must not be sent to the
+     * hardware miniport as if it were an ATA command.
+     */
+    if ((Srb->Function == SRB_FUNCTION_CLAIM_DEVICE) ||
+        (Srb->Function == SRB_FUNCTION_ATTACH_DEVICE) ||
+        (Srb->Function == SRB_FUNCTION_RELEASE_DEVICE))
+    {
+        KeAcquireInStackQueuedSpinLock(&FdoExtension->PdoListLock, &LockHandle);
+
+        if (Srb->Function == SRB_FUNCTION_RELEASE_DEVICE)
+        {
+            PdoExtension->DeviceClaimed = FALSE;
+            Srb->SrbStatus = SRB_STATUS_SUCCESS;
+            Status = STATUS_SUCCESS;
+        }
+        else if (PdoExtension->DeviceClaimed)
+        {
+            Srb->SrbStatus = SRB_STATUS_BUSY;
+            Status = STATUS_DEVICE_BUSY;
+        }
+        else
+        {
+            if (Srb->Function == SRB_FUNCTION_CLAIM_DEVICE)
+            {
+                PdoExtension->DeviceClaimed = TRUE;
+            }
+
+            Srb->DataBuffer = DeviceObject;
+            Srb->SrbStatus = SRB_STATUS_SUCCESS;
+            Status = STATUS_SUCCESS;
+        }
+
+        KeReleaseInStackQueuedSpinLock(&LockHandle);
+
+        Irp->IoStatus.Information = 0;
+        Irp->IoStatus.Status = Status;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return Status;
+    }
+
+    SrbContext = ExAllocatePoolWithTag(NonPagedPool, sizeof(STOR_SRB_CONTEXT), TAG_SRB_CONTEXT);
+    if (SrbContext == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Fail;
+    }
+
+    RtlZeroMemory(SrbContext, sizeof(STOR_SRB_CONTEXT));
+    Irp->Tail.Overlay.DriverContext[0] = SrbContext;
+
+    /*
+     * The miniport keeps its per-request hardware state (for AHCI, the command
+     * table that the controller DMAs from) in the SRB extension, so it must be
+     * physically contiguous and its physical address must be resolvable.
+     */
+    SrbExtensionSize = FdoExtension->Miniport.PortConfig.SrbExtensionSize;
+    if (SrbExtensionSize != 0)
+    {
+        HighestAddress.QuadPart = MAXULONGLONG;
+
+        SrbContext->SrbExtensionAllocation = MmAllocateContiguousMemory(SrbExtensionSize, HighestAddress);
+        if (SrbContext->SrbExtensionAllocation == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Fail;
+        }
+
+        RtlZeroMemory(SrbContext->SrbExtensionAllocation, SrbExtensionSize);
+        SrbContext->SrbExtensionSize = SrbExtensionSize;
+        Srb->SrbExtension = SrbContext->SrbExtensionAllocation;
+    }
+
+    /* Data-bearing requests need a scatter gather list for the bus master. */
+    if ((Srb->DataTransferLength != 0) && (Irp->MdlAddress != NULL))
+    {
+        if (Srb->DataTransferLength > MmGetMdlByteCount(Irp->MdlAddress))
+        {
+            Status = STATUS_INVALID_BUFFER_SIZE;
+            goto Fail;
+        }
+
+        SrbContext->Sgl = PortBuildScatterGatherList(Irp->MdlAddress, Srb->DataTransferLength, &SrbContext->SglAllocationSize);
+        if (SrbContext->Sgl == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Fail;
+        }
+    }
+
+    /*
+     * Hand the request to the miniport. HwStartIo is contractually called at
+     * DISPATCH_LEVEL, and it completes the request asynchronously through
+     * StorPortNotification(RequestComplete), which completes this IRP.
+     */
+    IoMarkIrpPending(Irp);
+
+    KeRaiseIrql(DISPATCH_LEVEL, &Irql);
+    MiniportStartIo(&FdoExtension->Miniport, Srb);
+    KeLowerIrql(Irql);
+
+    return STATUS_PENDING;
+
+Fail:
+    DPRINT1("PortPdoScsi: failing request (0x%08lx)\n", Status);
+
+    if (Srb != NULL)
+        Srb->SrbStatus = SRB_STATUS_ERROR;
+
+    PortFreeSrbContext(Irp);
 
     Irp->IoStatus.Information = 0;
-    Irp->IoStatus.Status = STATUS_SUCCESS;
+    Irp->IoStatus.Status = Status;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
+
+    return Status;
+}
+
+
+static PCSTR
+PortPdoGetDeviceType(
+    _In_ PINQUIRYDATA InquiryData)
+{
+    switch (InquiryData->DeviceType)
+    {
+        case DIRECT_ACCESS_DEVICE:
+            return "Disk";
+
+        case READ_ONLY_DIRECT_ACCESS_DEVICE:
+            return "CdRom";
+
+        case SEQUENTIAL_ACCESS_DEVICE:
+            return "Sequential";
+
+        case OPTICAL_DEVICE:
+            return "Optical";
+
+        default:
+            return "Other";
+    }
+}
+
+
+static PCSTR
+PortPdoGetGenericType(
+    _In_ PINQUIRYDATA InquiryData)
+{
+    switch (InquiryData->DeviceType)
+    {
+        case DIRECT_ACCESS_DEVICE:
+            return "GenDisk";
+
+        case READ_ONLY_DIRECT_ACCESS_DEVICE:
+            return "GenCdRom";
+
+        case SEQUENTIAL_ACCESS_DEVICE:
+            return "GenSequential";
+
+        case OPTICAL_DEVICE:
+            return "GenOptical";
+
+        default:
+            return "ScsiOther";
+    }
+}
+
+
+static VOID
+PortPdoCopyIdField(
+    _Out_writes_(Length + 1) PCHAR Destination,
+    _In_reads_(Length) PUCHAR Source,
+    _In_ ULONG Length)
+{
+    ULONG Index;
+    UCHAR Character;
+
+    for (Index = 0; Index < Length; Index++)
+    {
+        Character = Source[Index];
+        if ((Character <= ' ') || (Character >= 0x7F) || (Character == ','))
+        {
+            Character = '_';
+        }
+
+        Destination[Index] = (CHAR)Character;
+    }
+
+    Destination[Length] = ANSI_NULL;
+}
+
+
+static PWSTR
+PortPdoAllocateId(
+    _In_ PCSTR FirstId,
+    _In_opt_ PCSTR SecondId,
+    _In_ BOOLEAN MultiString)
+{
+    ULONG Index, Offset, CharacterCount;
+    PWSTR Buffer;
+
+    CharacterCount = strlen(FirstId) + 1;
+    if (SecondId != NULL)
+    {
+        CharacterCount += strlen(SecondId) + 1;
+    }
+    if (MultiString)
+    {
+        CharacterCount++;
+    }
+
+    Buffer = ExAllocatePoolWithTag(PagedPool,
+                                   CharacterCount * sizeof(WCHAR),
+                                   TAG_PNP_ID);
+    if (Buffer == NULL)
+    {
+        return NULL;
+    }
+
+    Offset = 0;
+    for (Index = 0; FirstId[Index] != ANSI_NULL; Index++)
+    {
+        Buffer[Offset++] = (WCHAR)(UCHAR)FirstId[Index];
+    }
+    Buffer[Offset++] = UNICODE_NULL;
+
+    if (SecondId != NULL)
+    {
+        for (Index = 0; SecondId[Index] != ANSI_NULL; Index++)
+        {
+            Buffer[Offset++] = (WCHAR)(UCHAR)SecondId[Index];
+        }
+        Buffer[Offset++] = UNICODE_NULL;
+    }
+
+    if (MultiString)
+    {
+        Buffer[Offset++] = UNICODE_NULL;
+    }
+
+    NT_ASSERT(Offset == CharacterCount);
+    return Buffer;
+}
+
+
+static NTSTATUS
+PortPdoQueryId(
+    _In_ PPDO_DEVICE_EXTENSION PdoExtension,
+    _In_ BUS_QUERY_ID_TYPE IdType,
+    _Out_ PULONG_PTR Information)
+{
+    CHAR DeviceId[128];
+    CHAR InstanceId[32];
+    CHAR Product[17];
+    CHAR Revision[5];
+    CHAR Vendor[9];
+    PCSTR GenericType;
+    PCSTR DeviceType;
+    PWSTR Buffer;
+
+    if (PdoExtension->InquiryBuffer == NULL)
+    {
+        return STATUS_NO_SUCH_DEVICE;
+    }
+
+    DeviceType = PortPdoGetDeviceType(PdoExtension->InquiryBuffer);
+    GenericType = PortPdoGetGenericType(PdoExtension->InquiryBuffer);
+
+    PortPdoCopyIdField(Vendor,
+                       PdoExtension->InquiryBuffer->VendorId,
+                       sizeof(PdoExtension->InquiryBuffer->VendorId));
+    PortPdoCopyIdField(Product,
+                       PdoExtension->InquiryBuffer->ProductId,
+                       sizeof(PdoExtension->InquiryBuffer->ProductId));
+    PortPdoCopyIdField(Revision,
+                       PdoExtension->InquiryBuffer->ProductRevisionLevel,
+                       sizeof(PdoExtension->InquiryBuffer->ProductRevisionLevel));
+
+    sprintf(DeviceId,
+            "SCSI\\%s&Ven_%s&Prod_%s&Rev_%s",
+            DeviceType,
+            Vendor,
+            Product,
+            Revision);
+
+    Buffer = NULL;
+    switch (IdType)
+    {
+        case BusQueryDeviceID:
+            Buffer = PortPdoAllocateId(DeviceId, NULL, FALSE);
+            break;
+
+        case BusQueryHardwareIDs:
+            Buffer = PortPdoAllocateId(DeviceId, GenericType, TRUE);
+            break;
+
+        case BusQueryCompatibleIDs:
+            Buffer = PortPdoAllocateId(GenericType, NULL, TRUE);
+            break;
+
+        case BusQueryInstanceID:
+            sprintf(InstanceId,
+                    "%lx.%lx.%lx",
+                    PdoExtension->Bus,
+                    PdoExtension->Target,
+                    PdoExtension->Lun);
+            Buffer = PortPdoAllocateId(InstanceId, NULL, FALSE);
+            break;
+
+        default:
+            return STATUS_NOT_SUPPORTED;
+    }
+
+    if (Buffer == NULL)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    *Information = (ULONG_PTR)Buffer;
+    return STATUS_SUCCESS;
+}
+
+
+static NTSTATUS
+PortPdoQueryTargetRelations(
+    _In_ PPDO_DEVICE_EXTENSION PdoExtension,
+    _Out_ PULONG_PTR Information)
+{
+    PDEVICE_RELATIONS Relations;
+
+    Relations = ExAllocatePoolWithTag(PagedPool,
+                                      sizeof(DEVICE_RELATIONS),
+                                      TAG_DEVICE_RELATION);
+    if (Relations == NULL)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    Relations->Count = 1;
+    Relations->Objects[0] = PdoExtension->Device;
+    ObReferenceObject(PdoExtension->Device);
+
+    *Information = (ULONG_PTR)Relations;
     return STATUS_SUCCESS;
 }
 
@@ -136,12 +628,96 @@ PortPdoPnp(
     _In_ PDEVICE_OBJECT DeviceObject,
     _In_ PIRP Irp)
 {
-    DPRINT1("PortPdoPnp(%p %p)\n", DeviceObject, Irp);
+    NTSTATUS Status;
+    ULONG_PTR Information;
+    PIO_STACK_LOCATION Stack;
+    PPDO_DEVICE_EXTENSION PdoExtension;
 
-    Irp->IoStatus.Information = 0;
-    Irp->IoStatus.Status = STATUS_SUCCESS;
+    DPRINT("PortPdoPnp(%p %p)\n", DeviceObject, Irp);
+
+    PdoExtension = (PPDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
+    Stack = IoGetCurrentIrpStackLocation(Irp);
+    Status = Irp->IoStatus.Status;
+    Information = Irp->IoStatus.Information;
+
+    switch (Stack->MinorFunction)
+    {
+        case IRP_MN_START_DEVICE:
+            PdoExtension->PnpState = dsStarted;
+            Status = STATUS_SUCCESS;
+            break;
+
+        case IRP_MN_STOP_DEVICE:
+            PdoExtension->PnpState = dsStopped;
+            Status = STATUS_SUCCESS;
+            break;
+
+        case IRP_MN_QUERY_STOP_DEVICE:
+        case IRP_MN_CANCEL_STOP_DEVICE:
+        case IRP_MN_QUERY_REMOVE_DEVICE:
+        case IRP_MN_CANCEL_REMOVE_DEVICE:
+            Status = STATUS_SUCCESS;
+            break;
+
+        case IRP_MN_SURPRISE_REMOVAL:
+            PdoExtension->PnpState = dsSurpriseRemoved;
+            Status = STATUS_SUCCESS;
+            break;
+
+        case IRP_MN_REMOVE_DEVICE:
+            PdoExtension->PnpState = dsRemoved;
+            Status = STATUS_SUCCESS;
+            break;
+
+        case IRP_MN_QUERY_ID:
+            Information = 0;
+            Status = PortPdoQueryId(PdoExtension,
+                                    Stack->Parameters.QueryId.IdType,
+                                    &Information);
+            break;
+
+        case IRP_MN_QUERY_DEVICE_RELATIONS:
+            if (Stack->Parameters.QueryDeviceRelations.Type == TargetDeviceRelation)
+            {
+                Information = 0;
+                Status = PortPdoQueryTargetRelations(PdoExtension,
+                                                     &Information);
+            }
+            break;
+
+        case IRP_MN_QUERY_CAPABILITIES:
+            if (Stack->Parameters.DeviceCapabilities.Capabilities != NULL)
+            {
+                PDEVICE_CAPABILITIES Capabilities;
+
+                Capabilities = Stack->Parameters.DeviceCapabilities.Capabilities;
+                Capabilities->Removable = PdoExtension->InquiryBuffer->RemovableMedia;
+                Capabilities->SurpriseRemovalOK = FALSE;
+                Capabilities->UniqueID = FALSE;
+                Capabilities->Address = PdoExtension->Target;
+                Capabilities->UINumber = PdoExtension->Target;
+                Status = STATUS_SUCCESS;
+            }
+            else
+            {
+                Status = STATUS_INVALID_PARAMETER;
+            }
+            break;
+
+        case IRP_MN_QUERY_RESOURCES:
+        case IRP_MN_QUERY_RESOURCE_REQUIREMENTS:
+            Information = 0;
+            Status = STATUS_SUCCESS;
+            break;
+
+        default:
+            break;
+    }
+
+    Irp->IoStatus.Information = Information;
+    Irp->IoStatus.Status = Status;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
-    return STATUS_SUCCESS;
+    return Status;
 }
 
 /* EOF */

@@ -165,6 +165,20 @@ HalQueryPciMsiSupport(
     _Out_opt_ PULONG OscMaskedControls
     );
 
+#if defined(_M_IX86) || defined(_M_AMD64)
+NTHALAPI
+BOOLEAN
+NTAPI
+HalQueryPciRoutedInterrupt(
+    _In_ ULONG Segment,
+    _In_ ULONG Bus,
+    _In_ ULONG Device,
+    _In_ ULONG Function,
+    _In_ ULONG Pin,
+    _Out_ PULONG Gsi
+    );
+#endif
+
 NTHALAPI
 BOOLEAN
 NTAPI

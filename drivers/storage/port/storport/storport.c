@@ -108,23 +108,23 @@ PortAcquireSpinLock(
     PVOID LockContext,
     PSTOR_LOCK_HANDLE LockHandle)
 {
-    DPRINT1("PortAcquireSpinLock(%p %lu %p %p)\n",
-            DeviceExtension, SpinLock, LockContext, LockHandle);
+    DPRINT("PortAcquireSpinLock(%p %lu %p %p)\n",
+           DeviceExtension, SpinLock, LockContext, LockHandle);
 
     LockHandle->Lock = SpinLock;
 
     switch (SpinLock)
     {
         case DpcLock: /* 1, */
-            DPRINT1("DpcLock\n");
+            DPRINT("DpcLock\n");
             break;
 
         case StartIoLock: /* 2 */
-            DPRINT1("StartIoLock\n");
+            DPRINT("StartIoLock\n");
             break;
 
         case InterruptLock: /* 3 */
-            DPRINT1("InterruptLock\n");
+            DPRINT("InterruptLock\n");
             if (DeviceExtension->Interrupt == NULL)
                 LockHandle->Context.OldIrql = 0;
             else
@@ -140,25 +140,108 @@ PortReleaseSpinLock(
     PFDO_DEVICE_EXTENSION DeviceExtension,
     PSTOR_LOCK_HANDLE LockHandle)
 {
-    DPRINT1("PortReleaseSpinLock(%p %p)\n",
-            DeviceExtension, LockHandle);
+    DPRINT("PortReleaseSpinLock(%p %p)\n",
+           DeviceExtension, LockHandle);
 
     switch (LockHandle->Lock)
     {
         case DpcLock: /* 1, */
-            DPRINT1("DpcLock\n");
+            DPRINT("DpcLock\n");
             break;
 
         case StartIoLock: /* 2 */
-            DPRINT1("StartIoLock\n");
+            DPRINT("StartIoLock\n");
             break;
 
         case InterruptLock: /* 3 */
-            DPRINT1("InterruptLock\n");
+            DPRINT("InterruptLock\n");
             if (DeviceExtension->Interrupt != NULL)
                 KeReleaseInterruptSpinLock(DeviceExtension->Interrupt,
                                            LockHandle->Context.OldIrql);
             break;
+    }
+}
+
+static
+KIRQL
+PortAcquireTimerLock(
+    _In_ PFDO_DEVICE_EXTENSION DeviceExtension)
+{
+    KIRQL CurrentIrql, OldIrql, TargetIrql;
+
+    CurrentIrql = KeGetCurrentIrql();
+    TargetIrql = DISPATCH_LEVEL;
+
+    /*
+     * RequestTimerCall is valid from a miniport interrupt callback. Raise the
+     * timer DPC to the adapter interrupt IRQL before taking this lock so an
+     * interrupt on the same CPU cannot preempt the lock owner and deadlock.
+     */
+    if ((DeviceExtension->Interrupt != NULL) &&
+        (DeviceExtension->InterruptIrql > TargetIrql))
+    {
+        TargetIrql = (KIRQL)DeviceExtension->InterruptIrql;
+    }
+
+    OldIrql = CurrentIrql;
+    if (CurrentIrql < TargetIrql)
+    {
+        KeRaiseIrql(TargetIrql, &OldIrql);
+    }
+
+    KeAcquireSpinLockAtDpcLevel(&DeviceExtension->MiniportTimerLock);
+    return OldIrql;
+}
+
+static
+VOID
+PortReleaseTimerLock(
+    _In_ PFDO_DEVICE_EXTENSION DeviceExtension,
+    _In_ KIRQL OldIrql)
+{
+    KIRQL CurrentIrql;
+
+    KeReleaseSpinLockFromDpcLevel(&DeviceExtension->MiniportTimerLock);
+
+    CurrentIrql = KeGetCurrentIrql();
+    if (CurrentIrql != OldIrql)
+    {
+        KeLowerIrql(OldIrql);
+    }
+}
+
+static
+VOID
+NTAPI
+PortMiniportTimerDpc(
+    _In_ PKDPC Dpc,
+    _In_opt_ PVOID DeferredContext,
+    _In_opt_ PVOID SystemArgument1,
+    _In_opt_ PVOID SystemArgument2)
+{
+    PFDO_DEVICE_EXTENSION DeviceExtension;
+    PHW_TIMER TimerRoutine;
+    KIRQL OldIrql;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    DeviceExtension = (PFDO_DEVICE_EXTENSION)DeferredContext;
+    TimerRoutine = NULL;
+
+    OldIrql = PortAcquireTimerLock(DeviceExtension);
+    if (DeviceExtension->MiniportTimerArmed)
+    {
+        DeviceExtension->MiniportTimerArmed = FALSE;
+        TimerRoutine = DeviceExtension->MiniportTimerRoutine;
+    }
+    PortReleaseTimerLock(DeviceExtension, OldIrql);
+
+    if ((TimerRoutine != NULL) &&
+        (DeviceExtension->Miniport.MiniportExtension != NULL))
+    {
+        TimerRoutine(&DeviceExtension->Miniport.MiniportExtension->HwDeviceExtension);
     }
 }
 
@@ -220,8 +303,15 @@ PortAddDevice(
 
     DeviceExtension->Device = Fdo;
     DeviceExtension->PhysicalDevice = PhysicalDeviceObject;
+    DeviceExtension->PortNumber = PortNumber - 1;
 
     DeviceExtension->PnpState = dsStopped;
+
+    KeInitializeTimer(&DeviceExtension->MiniportTimer);
+    KeInitializeDpc(&DeviceExtension->MiniportTimerDpc,
+                    PortMiniportTimerDpc,
+                    DeviceExtension);
+    KeInitializeSpinLock(&DeviceExtension->MiniportTimerLock);
 
     KeInitializeSpinLock(&DeviceExtension->PdoListLock);
     InitializeListHead(&DeviceExtension->PdoListHead);
@@ -289,8 +379,7 @@ PortDispatchCreate(
     IN PDEVICE_OBJECT DeviceObject,
     IN PIRP Irp)
 {
-    DPRINT1("PortDispatchCreate(%p %p)\n",
-            DeviceObject, Irp);
+    DPRINT("PortDispatchCreate(%p %p)\n", DeviceObject, Irp);
 
     Irp->IoStatus.Status = STATUS_SUCCESS;
     Irp->IoStatus.Information = FILE_OPENED;
@@ -308,8 +397,7 @@ PortDispatchClose(
     IN PDEVICE_OBJECT DeviceObject,
     IN PIRP Irp)
 {
-    DPRINT1("PortDispatchClose(%p %p)\n",
-            DeviceObject, Irp);
+    DPRINT("PortDispatchClose(%p %p)\n", DeviceObject, Irp);
 
     Irp->IoStatus.Status = STATUS_SUCCESS;
     Irp->IoStatus.Information = 0;
@@ -322,20 +410,249 @@ PortDispatchClose(
 
 static
 NTSTATUS
+PortQueryDeviceProperty(
+    _In_ PPDO_DEVICE_EXTENSION PdoExtension,
+    _Inout_ PIRP Irp,
+    _In_ PSTORAGE_PROPERTY_QUERY Query,
+    _In_ ULONG OutputLength)
+{
+    PINQUIRYDATA InquiryData;
+    PSTORAGE_DESCRIPTOR_HEADER Header;
+    PSTORAGE_DEVICE_DESCRIPTOR Descriptor;
+    PUCHAR Buffer;
+    ULONG DescriptorLength;
+
+    if ((Query->PropertyId != StorageDeviceProperty) ||
+        (PdoExtension->InquiryBuffer == NULL))
+    {
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
+    if (Query->QueryType == PropertyExistsQuery)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    if (Query->QueryType != PropertyStandardQuery)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    DescriptorLength = FIELD_OFFSET(STORAGE_DEVICE_DESCRIPTOR, RawDeviceProperties) +
+                       8 + 1 + 16 + 1 + 4 + 1;
+
+    if (OutputLength < sizeof(STORAGE_DESCRIPTOR_HEADER))
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    Header = Irp->AssociatedIrp.SystemBuffer;
+    Header->Version = sizeof(STORAGE_DEVICE_DESCRIPTOR);
+    Header->Size = DescriptorLength;
+    Irp->IoStatus.Information = sizeof(STORAGE_DESCRIPTOR_HEADER);
+
+    if (OutputLength < DescriptorLength)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    InquiryData = PdoExtension->InquiryBuffer;
+    Descriptor = Irp->AssociatedIrp.SystemBuffer;
+    RtlZeroMemory(Descriptor, DescriptorLength);
+
+    Descriptor->Version = sizeof(STORAGE_DEVICE_DESCRIPTOR);
+    Descriptor->Size = DescriptorLength;
+    Descriptor->DeviceType = InquiryData->DeviceType;
+    Descriptor->DeviceTypeModifier = InquiryData->DeviceTypeModifier;
+    Descriptor->RemovableMedia = InquiryData->RemovableMedia;
+    Descriptor->CommandQueueing = InquiryData->CommandQueue;
+    Descriptor->BusType = BusTypeSata;
+
+    Buffer = Descriptor->RawDeviceProperties;
+    Descriptor->VendorIdOffset = (ULONG)(Buffer - (PUCHAR)Descriptor);
+    RtlCopyMemory(Buffer, InquiryData->VendorId, 8);
+    Buffer += 8 + 1;
+
+    Descriptor->ProductIdOffset = (ULONG)(Buffer - (PUCHAR)Descriptor);
+    RtlCopyMemory(Buffer, InquiryData->ProductId, 16);
+    Buffer += 16 + 1;
+
+    Descriptor->ProductRevisionOffset = (ULONG)(Buffer - (PUCHAR)Descriptor);
+    RtlCopyMemory(Buffer, InquiryData->ProductRevisionLevel, 4);
+    Descriptor->SerialNumberOffset = 0;
+    Descriptor->RawPropertiesLength = DescriptorLength -
+                                      FIELD_OFFSET(STORAGE_DEVICE_DESCRIPTOR, RawDeviceProperties);
+
+    Irp->IoStatus.Information = DescriptorLength;
+    return STATUS_SUCCESS;
+}
+
+
+static
+NTSTATUS
+PortQueryAdapterProperty(
+    _In_ PFDO_DEVICE_EXTENSION FdoExtension,
+    _Inout_ PIRP Irp,
+    _In_ PSTORAGE_PROPERTY_QUERY Query,
+    _In_ ULONG OutputLength)
+{
+    PSTORAGE_ADAPTER_DESCRIPTOR Descriptor;
+    PSTORAGE_DESCRIPTOR_HEADER Header;
+
+    if (Query->PropertyId != StorageAdapterProperty)
+    {
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
+    if (Query->QueryType == PropertyExistsQuery)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    if (Query->QueryType != PropertyStandardQuery)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (OutputLength < sizeof(STORAGE_DESCRIPTOR_HEADER))
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    Header = Irp->AssociatedIrp.SystemBuffer;
+    Header->Version = sizeof(STORAGE_ADAPTER_DESCRIPTOR);
+    Header->Size = sizeof(STORAGE_ADAPTER_DESCRIPTOR);
+    Irp->IoStatus.Information = sizeof(STORAGE_DESCRIPTOR_HEADER);
+
+    if (OutputLength < sizeof(STORAGE_ADAPTER_DESCRIPTOR))
+    {
+        return STATUS_SUCCESS;
+    }
+
+    Descriptor = Irp->AssociatedIrp.SystemBuffer;
+    RtlZeroMemory(Descriptor, sizeof(*Descriptor));
+    Descriptor->Version = sizeof(*Descriptor);
+    Descriptor->Size = sizeof(*Descriptor);
+    Descriptor->MaximumTransferLength = FdoExtension->Miniport.PortConfig.MaximumTransferLength;
+    Descriptor->MaximumPhysicalPages = FdoExtension->Miniport.PortConfig.NumberOfPhysicalBreaks + 1;
+    Descriptor->AlignmentMask = 0;
+    Descriptor->AdapterUsesPio = FALSE;
+    Descriptor->AdapterScansDown = FALSE;
+    Descriptor->CommandQueueing = FdoExtension->Miniport.PortConfig.TaggedQueuing;
+    Descriptor->AcceleratedTransfer = TRUE;
+    Descriptor->BusType = BusTypeSata;
+    Descriptor->BusMajorVersion = 1;
+    Descriptor->BusMinorVersion = 0;
+
+    Irp->IoStatus.Information = sizeof(*Descriptor);
+    return STATUS_SUCCESS;
+}
+
+
+static
+NTSTATUS
 NTAPI
 PortDispatchDeviceControl(
     IN PDEVICE_OBJECT DeviceObject,
     IN PIRP Irp)
 {
-    DPRINT1("PortDispatchDeviceControl(%p %p)\n",
-            DeviceObject, Irp);
+    PFDO_DEVICE_EXTENSION FdoDeviceExtension;
+    PPDO_DEVICE_EXTENSION PdoDeviceExtension;
+    PIO_STACK_LOCATION Stack;
+    PSTORAGE_PROPERTY_QUERY Query;
+    PSCSI_ADDRESS Address;
+    EXTENSION_TYPE ExtensionType;
+    ULONG IoControlCode;
+    NTSTATUS Status;
 
-    Irp->IoStatus.Status = STATUS_SUCCESS;
+    Stack = IoGetCurrentIrpStackLocation(Irp);
+    IoControlCode = Stack->Parameters.DeviceIoControl.IoControlCode;
+    ExtensionType = *(EXTENSION_TYPE *)DeviceObject->DeviceExtension;
+
+    DPRINT("PortDispatchDeviceControl(%p %p) ioctl 0x%08lx extension %u\n",
+           DeviceObject, Irp, IoControlCode, ExtensionType);
+
     Irp->IoStatus.Information = 0;
 
+    switch (IoControlCode)
+    {
+        case IOCTL_STORAGE_QUERY_PROPERTY:
+            if ((Irp->AssociatedIrp.SystemBuffer == NULL) ||
+                (Stack->Parameters.DeviceIoControl.InputBufferLength <
+                 sizeof(STORAGE_PROPERTY_QUERY)))
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+
+            Query = Irp->AssociatedIrp.SystemBuffer;
+            if (ExtensionType == PdoExtension)
+            {
+                PdoDeviceExtension = DeviceObject->DeviceExtension;
+                if (Query->PropertyId == StorageAdapterProperty)
+                {
+                    Status = PortQueryAdapterProperty(PdoDeviceExtension->FdoExtension,
+                                                      Irp,
+                                                      Query,
+                                                      Stack->Parameters.DeviceIoControl.OutputBufferLength);
+                }
+                else
+                {
+                    Status = PortQueryDeviceProperty(PdoDeviceExtension,
+                                                     Irp,
+                                                     Query,
+                                                     Stack->Parameters.DeviceIoControl.OutputBufferLength);
+                }
+            }
+            else if (ExtensionType == FdoExtension)
+            {
+                FdoDeviceExtension = DeviceObject->DeviceExtension;
+                Status = PortQueryAdapterProperty(FdoDeviceExtension,
+                                                  Irp,
+                                                  Query,
+                                                  Stack->Parameters.DeviceIoControl.OutputBufferLength);
+            }
+            else
+            {
+                Status = STATUS_INVALID_DEVICE_REQUEST;
+            }
+            break;
+
+        case IOCTL_SCSI_GET_ADDRESS:
+            if (ExtensionType != PdoExtension)
+            {
+                Status = STATUS_INVALID_DEVICE_REQUEST;
+                break;
+            }
+
+            if ((Irp->AssociatedIrp.SystemBuffer == NULL) ||
+                (Stack->Parameters.DeviceIoControl.OutputBufferLength <
+                 sizeof(SCSI_ADDRESS)))
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+
+            PdoDeviceExtension = DeviceObject->DeviceExtension;
+            Address = Irp->AssociatedIrp.SystemBuffer;
+            Address->Length = sizeof(*Address);
+            Address->PortNumber = PdoDeviceExtension->FdoExtension->PortNumber;
+            Address->PathId = (UCHAR)PdoDeviceExtension->Bus;
+            Address->TargetId = (UCHAR)PdoDeviceExtension->Target;
+            Address->Lun = (UCHAR)PdoDeviceExtension->Lun;
+            Irp->IoStatus.Information = sizeof(*Address);
+            Status = STATUS_SUCCESS;
+            break;
+
+        default:
+            Status = STATUS_NOT_SUPPORTED;
+            break;
+    }
+
+    Irp->IoStatus.Status = Status;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
 
-    return STATUS_SUCCESS;
+    return Status;
 }
 
 
@@ -348,11 +665,10 @@ PortDispatchScsi(
 {
     PFDO_DEVICE_EXTENSION DeviceExtension;
 
-    DPRINT1("PortDispatchScsi(%p %p)\n",
-            DeviceObject, Irp);
+    DPRINT("PortDispatchScsi(%p %p)\n", DeviceObject, Irp);
 
     DeviceExtension = (PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
-    DPRINT1("ExtensionType: %u\n", DeviceExtension->ExtensionType);
+    DPRINT("ExtensionType: %u\n", DeviceExtension->ExtensionType);
 
     switch (DeviceExtension->ExtensionType)
     {
@@ -403,11 +719,10 @@ PortDispatchPnp(
 {
     PFDO_DEVICE_EXTENSION DeviceExtension;
 
-    DPRINT1("PortDispatchPnp(%p %p)\n",
-            DeviceObject, Irp);
+    DPRINT("PortDispatchPnp(%p %p)\n", DeviceObject, Irp);
 
     DeviceExtension = (PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
-    DPRINT1("ExtensionType: %u\n", DeviceExtension->ExtensionType);
+    DPRINT("ExtensionType: %u\n", DeviceExtension->ExtensionType);
 
     switch (DeviceExtension->ExtensionType)
     {
@@ -480,7 +795,7 @@ StorPortAllocateRegistryBuffer(
 
 
 /*
- * @unimplemented
+ * @implemented
  */
 STORPORT_API
 BOOLEAN
@@ -799,21 +1114,21 @@ StorPortGetPhysicalAddress(
     STOR_PHYSICAL_ADDRESS PhysicalAddress;
     ULONG_PTR Offset;
 
-    DPRINT1("StorPortGetPhysicalAddress(%p %p %p %p)\n",
-            HwDeviceExtension, Srb, VirtualAddress, Length);
+    DPRINT("StorPortGetPhysicalAddress(%p %p %p %p)\n",
+           HwDeviceExtension, Srb, VirtualAddress, Length);
 
     /* Get the miniport extension */
     MiniportExtension = CONTAINING_RECORD(HwDeviceExtension,
                                           MINIPORT_DEVICE_EXTENSION,
                                           HwDeviceExtension);
-    DPRINT1("HwDeviceExtension %p  MiniportExtension %p\n",
-            HwDeviceExtension, MiniportExtension);
+    DPRINT("HwDeviceExtension %p  MiniportExtension %p\n",
+           HwDeviceExtension, MiniportExtension);
 
     DeviceExtension = MiniportExtension->Miniport->DeviceExtension;
 
     /* Inside of the uncached extension? */
     if (((ULONG_PTR)VirtualAddress >= (ULONG_PTR)DeviceExtension->UncachedExtensionVirtualBase) &&
-        ((ULONG_PTR)VirtualAddress <= (ULONG_PTR)DeviceExtension->UncachedExtensionVirtualBase + DeviceExtension->UncachedExtensionSize))
+        ((ULONG_PTR)VirtualAddress < (ULONG_PTR)DeviceExtension->UncachedExtensionVirtualBase + DeviceExtension->UncachedExtensionSize))
     {
         Offset = (ULONG_PTR)VirtualAddress - (ULONG_PTR)DeviceExtension->UncachedExtensionVirtualBase;
 
@@ -823,15 +1138,14 @@ StorPortGetPhysicalAddress(
         return PhysicalAddress;
     }
 
-    // FIXME
-
-
+    /*
+     * Driver-owned nonpaged buffers are valid DMA sources as well.  Report
+     * the physically contiguous remainder of the current page so a miniport
+     * can construct an SG list without assuming that virtual contiguity also
+     * means physical contiguity.
+     */
     PhysicalAddress = MmGetPhysicalAddress(VirtualAddress);
-    *Length = 1;
-//    UNIMPLEMENTED;
-
-//    *Length = 0;
-//    PhysicalAddress.QuadPart = (LONGLONG)0;
+    *Length = PAGE_SIZE - BYTE_OFFSET(VirtualAddress);
 
     return PhysicalAddress;
 }
@@ -847,9 +1161,23 @@ StorPortGetScatterGatherList(
     _In_ PVOID DeviceExtension,
     _In_ PSCSI_REQUEST_BLOCK Srb)
 {
-    DPRINT1("StorPortGetScatterGatherList()\n");
-    UNIMPLEMENTED;
-    return NULL;
+    PSTOR_SRB_CONTEXT SrbContext;
+    PIRP Irp;
+
+    UNREFERENCED_PARAMETER(DeviceExtension);
+
+    /* The list was built for this request in PortPdoScsi and lives in the
+     * per-request context anchored on the IRP. */
+    if ((Srb == NULL) || (Srb->OriginalRequest == NULL))
+        return NULL;
+
+    Irp = (PIRP)Srb->OriginalRequest;
+
+    SrbContext = PortGetSrbContext(Irp);
+    if (SrbContext == NULL)
+        return NULL;
+
+    return SrbContext->Sgl;
 }
 
 
@@ -1098,6 +1426,7 @@ StorPortNotification(
     PMINIPORT_DEVICE_EXTENSION MiniportExtension = NULL;
     PFDO_DEVICE_EXTENSION DeviceExtension = NULL;
     PHW_PASSIVE_INITIALIZE_ROUTINE HwPassiveInitRoutine;
+    PHW_TIMER HwTimerRoutine;
     PSTORPORT_EXTENDED_FUNCTIONS *ppExtendedFunctions;
     PBOOLEAN Result;
     PSTOR_DPC Dpc;
@@ -1108,9 +1437,15 @@ StorPortNotification(
     PVOID LockContext;
     PSTOR_LOCK_HANDLE LockHandle;
     PSCSI_REQUEST_BLOCK Srb;
+    PVOID SystemArgument1;
+    PVOID SystemArgument2;
+    PLONG DpcResult;
+    ULONG TimerValue;
+    LARGE_INTEGER DueTime;
+    KIRQL OldIrql;
 
-    DPRINT1("StorPortNotification(%x %p)\n",
-            NotificationType, HwDeviceExtension);
+    DPRINT("StorPortNotification(%x %p)\n",
+           NotificationType, HwDeviceExtension);
 
     /* Get the miniport extension */
     if (HwDeviceExtension != NULL)
@@ -1118,8 +1453,8 @@ StorPortNotification(
         MiniportExtension = CONTAINING_RECORD(HwDeviceExtension,
                                               MINIPORT_DEVICE_EXTENSION,
                                               HwDeviceExtension);
-        DPRINT1("HwDeviceExtension %p  MiniportExtension %p\n",
-                HwDeviceExtension, MiniportExtension);
+        DPRINT("HwDeviceExtension %p  MiniportExtension %p\n",
+               HwDeviceExtension, MiniportExtension);
 
         DeviceExtension = MiniportExtension->Miniport->DeviceExtension;
     }
@@ -1129,14 +1464,74 @@ StorPortNotification(
     switch (NotificationType)
     {
         case RequestComplete:
-            DPRINT1("RequestComplete\n");
+            DPRINT("RequestComplete\n");
             Srb = (PSCSI_REQUEST_BLOCK)va_arg(ap, PSCSI_REQUEST_BLOCK);
-            DPRINT1("Srb %p\n", Srb);
-            if (Srb->OriginalRequest != NULL)
+            if ((Srb != NULL) && (Srb->OriginalRequest != NULL))
             {
-                DPRINT1("Need to complete the IRP!\n");
+                PIRP Irp = (PIRP)Srb->OriginalRequest;
 
+                /*
+                 * The miniport is done with this request. Translate the SRB
+                 * status, release the per-request state the port driver
+                 * allocated in PortPdoScsi and complete the IRP.
+                 */
+                Irp->IoStatus.Status = PortSrbStatusToNtStatus(Srb->SrbStatus);
+                Irp->IoStatus.Information = NT_SUCCESS(Irp->IoStatus.Status) ? Srb->DataTransferLength : 0;
+
+                Srb->SrbExtension = NULL;
+
+                PortFreeSrbContext(Irp);
+
+                IoCompleteRequest(Irp, IO_NO_INCREMENT);
             }
+            break;
+
+        case IssueDpc:
+            DPRINT("IssueDpc\n");
+            Dpc = (PSTOR_DPC)va_arg(ap, PSTOR_DPC);
+            SystemArgument1 = (PVOID)va_arg(ap, PVOID);
+            SystemArgument2 = (PVOID)va_arg(ap, PVOID);
+            DpcResult = (PLONG)va_arg(ap, PLONG);
+
+            /* Without this the miniport's completion DPC never runs. */
+            if (DpcResult != NULL)
+                *DpcResult = FALSE;
+
+            if (Dpc != NULL)
+            {
+                BOOLEAN Queued = KeInsertQueueDpc((PRKDPC)&Dpc->Dpc, SystemArgument1, SystemArgument2);
+                if (DpcResult != NULL)
+                    *DpcResult = (LONG)Queued;
+            }
+            break;
+
+        case RequestTimerCall:
+            HwTimerRoutine = (PHW_TIMER)va_arg(ap, PHW_TIMER);
+            TimerValue = (ULONG)va_arg(ap, ULONG);
+
+            if (DeviceExtension == NULL)
+                break;
+
+            OldIrql = PortAcquireTimerLock(DeviceExtension);
+
+            if ((TimerValue == 0) || (HwTimerRoutine == NULL))
+            {
+                DeviceExtension->MiniportTimerArmed = FALSE;
+                DeviceExtension->MiniportTimerRoutine = NULL;
+                KeCancelTimer(&DeviceExtension->MiniportTimer);
+            }
+            else
+            {
+                DeviceExtension->MiniportTimerRoutine = HwTimerRoutine;
+                DeviceExtension->MiniportTimerArmed = TRUE;
+
+                DueTime.QuadPart = -((LONGLONG)TimerValue * 10);
+                KeSetTimer(&DeviceExtension->MiniportTimer,
+                           DueTime,
+                           &DeviceExtension->MiniportTimerDpc);
+            }
+
+            PortReleaseTimerLock(DeviceExtension, OldIrql);
             break;
 
         case GetExtendedFunctionTable:
@@ -1169,20 +1564,22 @@ StorPortNotification(
             HwDpcRoutine = (PHW_DPC_ROUTINE)va_arg(ap, PHW_DPC_ROUTINE);
             DPRINT1("HwDpcRoutine %p\n", HwDpcRoutine);
 
+            /* The miniport's DPC routine receives its own HwDeviceExtension as
+             * the deferred context, not the port driver's FDO extension. */
             KeInitializeDpc((PRKDPC)&Dpc->Dpc,
                             (PKDEFERRED_ROUTINE)HwDpcRoutine,
-                            (PVOID)DeviceExtension);
+                            HwDeviceExtension);
             KeInitializeSpinLock(&Dpc->Lock);
             break;
 
         case AcquireSpinLock:
-            DPRINT1("AcquireSpinLock\n");
+            DPRINT("AcquireSpinLock\n");
             SpinLock = (STOR_SPINLOCK)va_arg(ap, STOR_SPINLOCK);
-            DPRINT1("SpinLock %lu\n", SpinLock);
+            DPRINT("SpinLock %lu\n", SpinLock);
             LockContext = (PVOID)va_arg(ap, PVOID);
-            DPRINT1("LockContext %p\n", LockContext);
+            DPRINT("LockContext %p\n", LockContext);
             LockHandle = (PSTOR_LOCK_HANDLE)va_arg(ap, PSTOR_LOCK_HANDLE);
-            DPRINT1("LockHandle %p\n", LockHandle);
+            DPRINT("LockHandle %p\n", LockHandle);
             PortAcquireSpinLock(DeviceExtension,
                                 SpinLock,
                                 LockContext,
@@ -1190,9 +1587,9 @@ StorPortNotification(
             break;
 
         case ReleaseSpinLock:
-            DPRINT1("ReleaseSpinLock\n");
+            DPRINT("ReleaseSpinLock\n");
             LockHandle = (PSTOR_LOCK_HANDLE)va_arg(ap, PSTOR_LOCK_HANDLE);
-            DPRINT1("LockHandle %p\n", LockHandle);
+            DPRINT("LockHandle %p\n", LockHandle);
             PortReleaseSpinLock(DeviceExtension,
                                 LockHandle);
             break;
@@ -1402,9 +1799,54 @@ StorPortSetDeviceQueueDepth(
     _In_ UCHAR Lun,
     _In_ ULONG Depth)
 {
-    DPRINT1("StorPortSetDeviceQueueDepth()\n");
-    UNIMPLEMENTED;
-    return FALSE;
+    BOOLEAN Found;
+    PLIST_ENTRY Entry;
+    KLOCK_QUEUE_HANDLE LockHandle;
+    PPDO_DEVICE_EXTENSION PdoExtension;
+    PFDO_DEVICE_EXTENSION FdoExtension;
+    PMINIPORT_DEVICE_EXTENSION MiniportExtension;
+
+    if ((HwDeviceExtension == NULL) || (Depth == 0))
+    {
+        return FALSE;
+    }
+
+    MiniportExtension = CONTAINING_RECORD(HwDeviceExtension,
+                                          MINIPORT_DEVICE_EXTENSION,
+                                          HwDeviceExtension);
+    FdoExtension = MiniportExtension->Miniport->DeviceExtension;
+    Found = FALSE;
+
+    KeAcquireInStackQueuedSpinLock(&FdoExtension->PdoListLock, &LockHandle);
+
+    for (Entry = FdoExtension->PdoListHead.Flink;
+         Entry != &FdoExtension->PdoListHead;
+         Entry = Entry->Flink)
+    {
+        PdoExtension = CONTAINING_RECORD(Entry,
+                                         PDO_DEVICE_EXTENSION,
+                                         PdoListEntry);
+
+        if ((PdoExtension->Bus == PathId) &&
+            (PdoExtension->Target == TargetId) &&
+            (PdoExtension->Lun == Lun))
+        {
+            PdoExtension->QueueDepth = Depth;
+            Found = TRUE;
+            break;
+        }
+    }
+
+    KeReleaseInStackQueuedSpinLock(&LockHandle);
+
+    DPRINT("StorPortSetDeviceQueueDepth(%u:%u:%u) depth %lu: %s\n",
+           PathId,
+           TargetId,
+           Lun,
+           Depth,
+           Found ? "set" : "device not found");
+
+    return Found;
 }
 
 

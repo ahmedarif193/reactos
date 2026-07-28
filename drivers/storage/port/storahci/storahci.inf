@@ -44,6 +44,19 @@ CopyFiles = storahci_CopyFiles
 ; Enables Storport IPM for this adapter
 HKR, "StorPort", "EnableIdlePowerManagement", %REG_DWORD%, 0x01
 
+; Ask for a message signaled interrupt. AHCI controllers on modern chipsets
+; are meant to be driven with MSI (this is what Windows' storahci and Linux's
+; ahci both do); the INTx line is a legacy fallback and is frequently
+; mis-routed by firmware, which leaves the adapter with an interrupt that
+; never fires and every command hanging.
+; pci.sys reads this policy from the device's hardware key.
+; The controller implements a single MSI message (MSI Count=1/1), so the
+; message number limit is 1. It has no MSI-X capability.
+HKR, "Interrupt Management",, 0x00000010
+HKR, "Interrupt Management\MessageSignaledInterruptProperties",, 0x00000010
+HKR, "Interrupt Management\MessageSignaledInterruptProperties", "MSISupported", %REG_DWORD%, 0x00000001
+HKR, "Interrupt Management\MessageSignaledInterruptProperties", "MessageNumberLimit", %REG_DWORD%, 0x00000001
+
 [storahci_Inst.Services]
 AddService = storahci, %SPSVCINST_ASSOCSERVICE%, storahci_Service_Inst, Miniport_EventLog_Inst
 
