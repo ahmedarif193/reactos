@@ -1522,11 +1522,11 @@ NtCreateProcess(OUT PHANDLE ProcessHandle,
 }
 
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
+#ifdef _M_AMD64
 static NTSTATUS
 PspInitializeWow64Process(IN PEPROCESS Process,
                           IN PSECTION_IMAGE_INFORMATION ImageInformation)
 {
-#ifdef _M_AMD64
     PWOW64_PROCESS Wow64Process;
     INITIAL_PEB InitialPeb;
     NTSTATUS Status;
@@ -1550,12 +1550,8 @@ PspInitializeWow64Process(IN PEPROCESS Process,
     Wow64Process->Machine = ImageInformation->Machine;
     Process->Wow64Process = Wow64Process;
     return STATUS_SUCCESS;
-#else
-    UNREFERENCED_PARAMETER(Process);
-    UNREFERENCED_PARAMETER(ImageInformation);
-    return STATUS_NOT_SUPPORTED;
-#endif
 }
+#endif
 
 static NTSTATUS
 PspAllocateUserStack(IN HANDLE ProcessHandle,

@@ -19,6 +19,9 @@ NtUserGetDC(HWND hWnd);
 ULONG APIENTRY
 NtUserGetProcessDpiAwarenessContext(HANDLE hProcess);
 
+UINT WINAPI
+GetDpiForSystem(VOID);
+
 #define NDEBUG
 #include <debug.h>
 
@@ -274,4 +277,3 @@ LogicalToPhysicalPoint(
     UNIMPLEMENTED;
     return TRUE;
 }
-
