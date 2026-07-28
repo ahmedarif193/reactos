@@ -85,17 +85,11 @@ add_library(hal MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/hal.def)
 reactos_hal_setup(hal 0)
 
-# Ship halmacpi.dll on ARM64 to match livecd.ini LiveCD_Macpi boot option
+# Ship halmacpi.dll on ARM64 to match the livecd_wim.ini LiveCD_Wim_Macpi boot option
 add_library(halmacpi MODULE
     ${SOURCES}
     ${CMAKE_CURRENT_BINARY_DIR}/hal.def)
 reactos_hal_setup(halmacpi 0)
-
-# Ship halmp.dll on ARM64 so the shared bootcd.ini SMP entry (/HAL=halmp.dll) resolves
-add_library(halmp MODULE
-    ${SOURCES}
-    ${CMAKE_CURRENT_BINARY_DIR}/hal.def)
-reactos_hal_setup(halmp 0)
 
 # Ensure the PCI data headers are generated before compiling halacpi.c
 set_source_files_properties(${HAL_ARM64_SOURCE_DIR}/acpi/halacpi.c PROPERTIES
