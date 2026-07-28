@@ -60,6 +60,16 @@ gdb_arch_hw_breakpoint_valid(
             (Breakpoint->Address & (Breakpoint->Kind - 1)) == 0);
 }
 
+BOOLEAN
+gdb_arch_hw_slot_usable(
+    _In_ ULONG Slot,
+    _In_ UCHAR Type)
+{
+    /* Any debug register serves any type */
+    UNREFERENCED_PARAMETER(Type);
+    return Slot < gdb_hw_breakpoint_count;
+}
+
 static
 ULONG64
 hardware_breakpoint_dr7(
@@ -118,6 +128,16 @@ gdb_arch_hw_breakpoint_hit(
 
     /* DR6 reports the slots that fired as a bitmask */
     return (CurrentStateChange.ControlReport.Dr6 & (1ULL << Slot)) != 0;
+}
+
+BOOLEAN
+gdb_arch_prepare_resume(
+    _Inout_ CONTEXT* Context,
+    _In_ const GDB_HARDWARE_BREAKPOINT* Breakpoints)
+{
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(Breakpoints);
+    return FALSE;
 }
 
 VOID

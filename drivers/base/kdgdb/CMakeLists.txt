@@ -11,11 +11,13 @@ list(APPEND SOURCE
     utils.c
     kdgdb.h)
 
-# TODO: ARM...
+# TODO: ARM (32-bit)...
 if(ARCH STREQUAL "i386")
     list(APPEND SOURCE i386_sup.c hwbp_x86.c)
 elseif(ARCH STREQUAL "amd64")
     list(APPEND SOURCE amd64_sup.c hwbp_x86.c)
+elseif(ARCH STREQUAL "arm64")
+    list(APPEND SOURCE arm64_sup.c hwbp_arm64.c)
 endif()
 
 add_library(kdgdb MODULE

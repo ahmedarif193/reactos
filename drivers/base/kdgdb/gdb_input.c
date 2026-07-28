@@ -14,7 +14,7 @@ static struct
     ULONG_PTR Address;
     ULONG Handle;
 } BreakPointHandles[32];
-static GDB_HARDWARE_BREAKPOINT HardwareBreakpoints[4];
+static GDB_HARDWARE_BREAKPOINT HardwareBreakpoints[GDB_MAX_HARDWARE_BREAKPOINTS];
 static LIST_ENTRY* ThreadInfoProcessEntry;
 static LIST_ENTRY* ThreadInfoThreadEntry;
 static UINT_PTR ThreadInfoInitialTid;
@@ -1022,7 +1022,7 @@ SearchMemorySendHandler(_In_ ULONG PacketType, _In_ PSTRING MessageHeader, _In_ 
 #endif
     {
         if (ps_initialized())
-            __writecr3(KdpGetDirectoryTableBase(&PsGetCurrentProcess()->Pcb));
+            KdpSwitchAddressSpace(KdpGetDirectoryTableBase(&PsGetCurrentProcess()->Pcb));
     }
 
     return TRUE;
@@ -1073,7 +1073,7 @@ handle_gdb_search_memory(_Out_ DBGKD_MANIPULATE_STATE64* State, _Out_ PSTRING Me
         if (AttachedThread == NULL || AttachedThread->Tcb.Process == NULL)
             return LOOP_IF_SUCCESS(send_gdb_packet("E03"));
         AttachedProcess = AttachedThread->Tcb.Process;
-        __writecr3(KdpGetDirectoryTableBase(AttachedProcess));
+        KdpSwitchAddressSpace(KdpGetDirectoryTableBase(AttachedProcess));
     }
 #else
     if ((gdb_dbg_pid != 0) && gdb_pid_to_handle(gdb_dbg_pid) != PsGetCurrentProcessId())
@@ -1083,7 +1083,7 @@ handle_gdb_search_memory(_Out_ DBGKD_MANIPULATE_STATE64* State, _Out_ PSTRING Me
         if (AttachedProcess == NULL)
             return LOOP_IF_SUCCESS(send_gdb_packet("E03"));
         if (ps_initialized())
-            __writecr3(KdpGetDirectoryTableBase(&AttachedProcess->Pcb));
+            KdpSwitchAddressSpace(KdpGetDirectoryTableBase(&AttachedProcess->Pcb));
     }
 #endif
 
@@ -1138,7 +1138,7 @@ ReadMemorySendHandler(
     {
         /* Only do this if Ps is initialized */
         if (ps_initialized())
-            __writecr3(KdpGetDirectoryTableBase(&PsGetCurrentProcess()->Pcb));
+            KdpSwitchAddressSpace(KdpGetDirectoryTableBase(&PsGetCurrentProcess()->Pcb));
     }
 
     return TRUE;
@@ -1195,7 +1195,7 @@ handle_gdb_read_mem(
             KDDBGPRINT("The current GDB debug thread is invalid!");
             return LOOP_IF_SUCCESS(send_gdb_packet("E03"));
         }
-        __writecr3(KdpGetDirectoryTableBase(AttachedProcess));
+        KdpSwitchAddressSpace(KdpGetDirectoryTableBase(AttachedProcess));
     }
 #else
     if ((gdb_dbg_pid != 0) && gdb_pid_to_handle(gdb_dbg_pid) != PsGetCurrentProcessId())
@@ -1208,7 +1208,7 @@ handle_gdb_read_mem(
         }
         /* Only do this if Ps is initialized */
         if (ps_initialized())
-            __writecr3(KdpGetDirectoryTableBase(&AttachedProcess->Pcb));
+            KdpSwitchAddressSpace(KdpGetDirectoryTableBase(&AttachedProcess->Pcb));
     }
 #endif
 
@@ -1260,7 +1260,7 @@ WriteMemorySendHandler(
     {
         /* Only do this if Ps is initialized */
         if (ps_initialized())
-            __writecr3(KdpGetDirectoryTableBase(&PsGetCurrentProcess()->Pcb));
+            KdpSwitchAddressSpace(KdpGetDirectoryTableBase(&PsGetCurrentProcess()->Pcb));
     }
     return TRUE;
 }
@@ -1338,7 +1338,7 @@ handle_gdb_write_mem(
             KDDBGPRINT("The current GDB debug thread is invalid!");
             return LOOP_IF_SUCCESS(send_gdb_packet("E03"));
         }
-        __writecr3(KdpGetDirectoryTableBase(AttachedProcess));
+        KdpSwitchAddressSpace(KdpGetDirectoryTableBase(AttachedProcess));
     }
 #else
     if ((gdb_dbg_pid != 0) && gdb_pid_to_handle(gdb_dbg_pid) != PsGetCurrentProcessId())
@@ -1351,7 +1351,7 @@ handle_gdb_write_mem(
         }
         /* Only do this if Ps is initialized */
         if (ps_initialized())
-            __writecr3(KdpGetDirectoryTableBase(&AttachedProcess->Pcb));
+            KdpSwitchAddressSpace(KdpGetDirectoryTableBase(&AttachedProcess->Pcb));
     }
 #endif
 
@@ -1498,8 +1498,12 @@ handle_gdb_insert_hardware_breakpoint(_In_ ULONG Type, _In_ ULONG64 Address, _In
         return LOOP_IF_SUCCESS(send_gdb_packet("E01"));
 #endif
 
+    /* Slots are not interchangeable: ask the architecture which ones can serve */
     for (Slot = 0; Slot < gdb_hw_breakpoint_count; Slot++)
     {
+        if (!gdb_arch_hw_slot_usable(Slot, (UCHAR)Type))
+            continue;
+
         if (HardwareBreakpoints[Slot].Active &&
             HardwareBreakpoints[Slot].Type == Type &&
             HardwareBreakpoints[Slot].Address == Address &&
@@ -1833,14 +1837,19 @@ handle_gdb_c(
     _Inout_ PKD_CONTEXT KdContext)
 {
     BOOLEAN HasAddress;
+    BOOLEAN ContextChanged;
     BOOLEAN WasSingleStepping;
     ULONG64 Address;
 
     if (!parse_resume_address(&HasAddress, &Address))
         return LOOP_IF_SUCCESS(send_gdb_packet("E01"));
 
-    WasSingleStepping = (CurrentContext.EFlags & EFLAGS_TF) != 0;
+    WasSingleStepping = KdpIsSingleStep(&CurrentContext);
     KdpClearSingleStep(&CurrentContext);
+    ContextChanged = WasSingleStepping;
+    if (gdb_arch_prepare_resume(&CurrentContext, gdb_hardware_breakpoints()))
+        ContextChanged = TRUE;
+
     if (HasAddress)
     {
         KdpSetContextPc(&CurrentContext, (ULONG_PTR)Address);
@@ -1868,7 +1877,7 @@ handle_gdb_c(
     }
 #endif
 
-    if (WasSingleStepping)
+    if (ContextChanged)
         return set_context_then_continue(State, MessageData, MessageLength, KdContext);
 
     return ContinueManipulateStateHandler(State, MessageData, MessageLength, KdContext);
@@ -1896,6 +1905,7 @@ handle_gdb_s(
 
     /* Set CPU single step mode and continue */
     KdpSetSingleStep(&CurrentContext);
+    gdb_arch_prepare_resume(&CurrentContext, gdb_hardware_breakpoints());
     return set_context_then_continue(State, MessageData, MessageLength, KdContext);
 }
 
