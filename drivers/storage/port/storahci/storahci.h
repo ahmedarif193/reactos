@@ -32,6 +32,15 @@
 
 #define DEVICE_ATA_BLOCK_SIZE               512
 
+#define AHCI_SENSE_ERRORCODE_FIXED_CURRENT  0x70
+#define AHCI_ADSENSE_NO_SENSE               0x00
+#define AHCI_ADSENSE_LUN_COMMUNICATION      0x08
+#define AHCI_ADSENSE_UNRECOVERED_ERROR      0x11
+#define AHCI_ADSENSE_ILLEGAL_BLOCK          0x21
+#define AHCI_ADSENSE_WRITE_PROTECT          0x27
+#define AHCI_ADSENSE_INTERNAL_TARGET_FAILURE 0x44
+#define AHCI_SENSEQ_COMM_CRC_ERROR          0x03
+
 /* Largest sector count expressible in a 48-bit command (16-bit count field);
  * a 28-bit command uses an 8-bit count where 0 means 256. */
 #define MAXIMUM_LBA28_SECTORS               256
@@ -49,6 +58,7 @@ typedef enum _AHCI_PORT_RECOVERY_STATE
 {
     AhciRecoveryIdle = 0,
     AhciRecoveryWaitCommandEngine,
+    AhciRecoveryWaitNcqLog,
     AhciRecoveryComresetAsserted,
     AhciRecoveryWaitLink,
     AhciRecoveryWaitReady,
@@ -495,7 +505,11 @@ typedef struct _AHCI_PORT_EXTENSION
     ULONG ErrorLogCount;
     ULONG RecoveryState;
     ULONG RecoveryTicks;
+    ULONG RecoveryNcqActiveSlots;
+    ULONG RecoveryInternalSlot;
     BOOLEAN RecoveryIsCommandError;
+    BOOLEAN RecoveryIsNcqError;
+    BOOLEAN RecoveryNcqLogError;
 
     struct
     {
@@ -528,6 +542,10 @@ typedef struct _AHCI_PORT_EXTENSION
     STOR_DEVICE_POWER_STATE DevicePowerState;           // Device Power State
     PIDENTIFY_DEVICE_DATA IdentifyDeviceData;
     STOR_PHYSICAL_ADDRESS IdentifyDeviceDataPhysicalAddress;
+    PGP_LOG_NCQ_COMMAND_ERROR NcqErrorLog;
+    STOR_PHYSICAL_ADDRESS NcqErrorLogPhysicalAddress;
+    PAHCI_COMMAND_TABLE NcqErrorCommandTable;
+    STOR_PHYSICAL_ADDRESS NcqErrorCommandTablePhysicalAddress;
     struct _AHCI_ADAPTER_EXTENSION* AdapterExtension;   // Port's Adapter Information
 } AHCI_PORT_EXTENSION, *PAHCI_PORT_EXTENSION;
 

@@ -245,6 +245,73 @@ PortMiniportTimerDpc(
     }
 }
 
+static
+VOID
+NTAPI
+PortMiniportTimerRequestDpc(
+    _In_ PKDPC Dpc,
+    _In_opt_ PVOID DeferredContext,
+    _In_opt_ PVOID SystemArgument1,
+    _In_opt_ PVOID SystemArgument2)
+{
+    LARGE_INTEGER DueTime;
+    PFDO_DEVICE_EXTENSION DeviceExtension;
+    PHW_TIMER TimerRoutine;
+    ULONG TimerValue;
+    KIRQL OldIrql;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    DeviceExtension = (PFDO_DEVICE_EXTENSION)DeferredContext;
+
+    /*
+     * KeSetTimer is only valid through DISPATCH_LEVEL, whereas a miniport may
+     * request its timer while running at the adapter interrupt IRQL. Keep the
+     * request fields synchronized at that IRQL, but apply each request from
+     * this DPC after dropping the lock.
+     */
+    for (;;)
+    {
+        OldIrql = PortAcquireTimerLock(DeviceExtension);
+        if (!DeviceExtension->MiniportTimerRequestPending)
+        {
+            DeviceExtension->MiniportTimerRequestDpcActive = FALSE;
+            PortReleaseTimerLock(DeviceExtension, OldIrql);
+            break;
+        }
+
+        TimerRoutine = DeviceExtension->MiniportTimerRequestedRoutine;
+        TimerValue = DeviceExtension->MiniportTimerRequestedValue;
+        DeviceExtension->MiniportTimerRequestPending = FALSE;
+
+        if ((TimerValue == 0) || (TimerRoutine == NULL))
+        {
+            DeviceExtension->MiniportTimerArmed = FALSE;
+            DeviceExtension->MiniportTimerRoutine = NULL;
+        }
+        else
+        {
+            DeviceExtension->MiniportTimerRoutine = TimerRoutine;
+            DeviceExtension->MiniportTimerArmed = TRUE;
+        }
+        PortReleaseTimerLock(DeviceExtension, OldIrql);
+
+        if ((TimerValue == 0) || (TimerRoutine == NULL))
+        {
+            KeCancelTimer(&DeviceExtension->MiniportTimer);
+        }
+        else
+        {
+            DueTime.QuadPart = -((LONGLONG)TimerValue * 10);
+            KeSetTimer(&DeviceExtension->MiniportTimer,
+                       DueTime,
+                       &DeviceExtension->MiniportTimerDpc);
+        }
+    }
+}
+
 
 static
 NTSTATUS
@@ -310,6 +377,9 @@ PortAddDevice(
     KeInitializeTimer(&DeviceExtension->MiniportTimer);
     KeInitializeDpc(&DeviceExtension->MiniportTimerDpc,
                     PortMiniportTimerDpc,
+                    DeviceExtension);
+    KeInitializeDpc(&DeviceExtension->MiniportTimerRequestDpc,
+                    PortMiniportTimerRequestDpc,
                     DeviceExtension);
     KeInitializeSpinLock(&DeviceExtension->MiniportTimerLock);
 
@@ -1441,7 +1511,6 @@ StorPortNotification(
     PVOID SystemArgument2;
     PLONG DpcResult;
     ULONG TimerValue;
-    LARGE_INTEGER DueTime;
     KIRQL OldIrql;
 
     DPRINT("StorPortNotification(%x %p)\n",
@@ -1506,33 +1575,36 @@ StorPortNotification(
             break;
 
         case RequestTimerCall:
+        {
+            BOOLEAN QueueRequestDpc;
+
             HwTimerRoutine = (PHW_TIMER)va_arg(ap, PHW_TIMER);
             TimerValue = (ULONG)va_arg(ap, ULONG);
 
             if (DeviceExtension == NULL)
                 break;
 
+            QueueRequestDpc = FALSE;
             OldIrql = PortAcquireTimerLock(DeviceExtension);
-
-            if ((TimerValue == 0) || (HwTimerRoutine == NULL))
+            DeviceExtension->MiniportTimerArmed = FALSE;
+            DeviceExtension->MiniportTimerRequestedRoutine = HwTimerRoutine;
+            DeviceExtension->MiniportTimerRequestedValue = TimerValue;
+            DeviceExtension->MiniportTimerRequestPending = TRUE;
+            if (!DeviceExtension->MiniportTimerRequestDpcActive)
             {
-                DeviceExtension->MiniportTimerArmed = FALSE;
-                DeviceExtension->MiniportTimerRoutine = NULL;
-                KeCancelTimer(&DeviceExtension->MiniportTimer);
+                DeviceExtension->MiniportTimerRequestDpcActive = TRUE;
+                QueueRequestDpc = TRUE;
             }
-            else
-            {
-                DeviceExtension->MiniportTimerRoutine = HwTimerRoutine;
-                DeviceExtension->MiniportTimerArmed = TRUE;
-
-                DueTime.QuadPart = -((LONGLONG)TimerValue * 10);
-                KeSetTimer(&DeviceExtension->MiniportTimer,
-                           DueTime,
-                           &DeviceExtension->MiniportTimerDpc);
-            }
-
             PortReleaseTimerLock(DeviceExtension, OldIrql);
+
+            if (QueueRequestDpc)
+            {
+                KeInsertQueueDpc(&DeviceExtension->MiniportTimerRequestDpc,
+                                 NULL,
+                                 NULL);
+            }
             break;
+        }
 
         case GetExtendedFunctionTable:
             DPRINT1("GetExtendedFunctionTable\n");

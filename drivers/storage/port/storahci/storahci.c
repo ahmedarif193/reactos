@@ -146,6 +146,27 @@ BOOLEAN NTAPI AhciPortInitialize(__in PVOID DeviceExtension)
                                                                                   PortExtension->IdentifyDeviceData,
                                                                                   &mappedLength);
 
+    PortExtension->NcqErrorLogPhysicalAddress = StorPortGetPhysicalAddress(adapterExtension,
+                                                                           NULL,
+                                                                           PortExtension->NcqErrorLog,
+                                                                           &mappedLength);
+    if (mappedLength < sizeof(*PortExtension->NcqErrorLog))
+    {
+        AhciDebugPrint("\tNCQ error log mappedLength:%u\n", mappedLength);
+        return FALSE;
+    }
+
+    PortExtension->NcqErrorCommandTablePhysicalAddress = StorPortGetPhysicalAddress(adapterExtension,
+                                                                                    NULL,
+                                                                                    PortExtension->NcqErrorCommandTable,
+                                                                                    &mappedLength);
+    if ((mappedLength < sizeof(*PortExtension->NcqErrorCommandTable)) ||
+        ((PortExtension->NcqErrorCommandTablePhysicalAddress.LowPart % 128) != 0))
+    {
+        AhciDebugPrint("\tNCQ error command table mappedLength:%u\n", mappedLength);
+        return FALSE;
+    }
+
     // set device power state flag to D0
     PortExtension->DevicePowerState = StorPowerDeviceD0;
 
@@ -171,8 +192,10 @@ BOOLEAN NTAPI AhciPortInitialize(__in PVOID DeviceExtension)
  */
 BOOLEAN AhciAllocateResourceForAdapter(__in PAHCI_ADAPTER_EXTENSION AdapterExtension, __in PPORT_CONFIGURATION_INFORMATION ConfigInfo)
 {
-    PCHAR nonCachedExtension, tmp;
+    PCHAR nonCachedExtension;
     ULONG index, NCS, AlignedNCS;
+    ULONG commandListSize, receivedFisOffset, identifyDataOffset;
+    ULONG ncqErrorLogOffset, ncqErrorCommandTableOffset;
     ULONG portCount, portImplemented, nonCachedExtensionSize;
     PAHCI_PORT_EXTENSION PortExtension;
 
@@ -194,11 +217,18 @@ BOOLEAN AhciAllocateResourceForAdapter(__in PAHCI_ADAPTER_EXTENSION AdapterExten
     AhciDebugPrint("\tPort Count: %d\n", portCount);
 
     AdapterExtension->PortCount = portCount;
-    nonCachedExtensionSize =    sizeof(AHCI_COMMAND_HEADER) * AlignedNCS + //should be 1K aligned
-                                sizeof(AHCI_RECEIVED_FIS) +
-                                sizeof(IDENTIFY_DEVICE_DATA);
+    commandListSize = sizeof(AHCI_COMMAND_HEADER) * AlignedNCS;
+    receivedFisOffset = commandListSize;
+    identifyDataOffset = receivedFisOffset + sizeof(AHCI_RECEIVED_FIS);
+    ncqErrorLogOffset = identifyDataOffset + sizeof(IDENTIFY_DEVICE_DATA);
+    ncqErrorCommandTableOffset = ROUND_UP(ncqErrorLogOffset + sizeof(GP_LOG_NCQ_COMMAND_ERROR), 128);
+    nonCachedExtensionSize = ncqErrorCommandTableOffset + sizeof(AHCI_COMMAND_TABLE);
 
-    // align nonCachedExtensionSize to 1024
+    /*
+     * Each port block starts on a 1 KB boundary for PxCLB. The received-FIS
+     * area remains 256-byte aligned, and the internal recovery table is
+     * explicitly rounded to AHCI's 128-byte command-table alignment.
+     */
     nonCachedExtensionSize = ROUND_UP(nonCachedExtensionSize, 1024);
 
     AdapterExtension->NonCachedExtension = StorPortGetUncachedExtension(AdapterExtension,
@@ -225,11 +255,10 @@ BOOLEAN AhciAllocateResourceForAdapter(__in PAHCI_ADAPTER_EXTENSION AdapterExten
             PortExtension->DeviceParams.IsActive = TRUE;
             PortExtension->AdapterExtension = AdapterExtension;
             PortExtension->CommandList = (PAHCI_COMMAND_HEADER)nonCachedExtension;
-
-            tmp = (PCHAR)(nonCachedExtension + sizeof(AHCI_COMMAND_HEADER) * AlignedNCS);
-
-            PortExtension->ReceivedFIS = (PAHCI_RECEIVED_FIS)tmp;
-            PortExtension->IdentifyDeviceData = (PIDENTIFY_DEVICE_DATA)(tmp + sizeof(AHCI_RECEIVED_FIS));
+            PortExtension->ReceivedFIS = (PAHCI_RECEIVED_FIS)(nonCachedExtension + receivedFisOffset);
+            PortExtension->IdentifyDeviceData = (PIDENTIFY_DEVICE_DATA)(nonCachedExtension + identifyDataOffset);
+            PortExtension->NcqErrorLog = (PGP_LOG_NCQ_COMMAND_ERROR)(nonCachedExtension + ncqErrorLogOffset);
+            PortExtension->NcqErrorCommandTable = (PAHCI_COMMAND_TABLE)(nonCachedExtension + ncqErrorCommandTableOffset);
             /* Until IDENTIFY confirms NCQ support, serialize commands. */
             PortExtension->MaxPortQueueDepth = 1;
             nonCachedExtension += nonCachedExtensionSize;
@@ -682,8 +711,20 @@ VOID AhciCompleteIssuedSrb(__in PAHCI_PORT_EXTENSION PortExtension, __in ULONG C
 
 #define AHCI_RECOVERY_POLL_INTERVAL_US       10000
 #define AHCI_RECOVERY_ENGINE_TIMEOUT_TICKS   50
+#define AHCI_RECOVERY_LOG_TIMEOUT_TICKS      300
 #define AHCI_RECOVERY_LINK_TIMEOUT_TICKS     100
 #define AHCI_RECOVERY_READY_TIMEOUT_TICKS    3000
+
+static
+VOID
+AhciResetNcqRecoveryContext(
+    __in PAHCI_PORT_EXTENSION PortExtension)
+{
+    PortExtension->RecoveryNcqActiveSlots = 0;
+    PortExtension->RecoveryInternalSlot = 0;
+    PortExtension->RecoveryIsNcqError = FALSE;
+    PortExtension->RecoveryNcqLogError = FALSE;
+}
 
 static
 VOID
@@ -706,6 +747,7 @@ AhciClearIssuedCommands(
     PortExtension->NcqIssuedSlots = 0;
     PortExtension->NcqQueueSlots = 0;
     StorPortWriteRegisterUlong(AdapterExtension, &PortExtension->Port->SACT, 0);
+    AhciResetNcqRecoveryContext(PortExtension);
 }
 
 static
@@ -740,6 +782,354 @@ AhciFailQueuedRequests(
     {
         StorPortIssueDpc(AdapterExtension, &PortExtension->CommandCompletion, PortExtension, NULL);
     }
+}
+
+static
+VOID
+AhciSetFixedSenseData(
+    __in PSCSI_REQUEST_BLOCK Srb,
+    __in UCHAR SenseKey,
+    __in UCHAR AdditionalSenseCode,
+    __in UCHAR AdditionalSenseCodeQualifier,
+    __in ULONGLONG Lba)
+{
+    ULONG CopyLength;
+    SENSE_DATA SenseData;
+
+    Srb->SrbStatus = SRB_STATUS_ERROR;
+    Srb->ScsiStatus = SCSISTAT_CHECK_CONDITION;
+
+    if ((Srb->SenseInfoBuffer == NULL) || (Srb->SenseInfoBufferLength == 0))
+    {
+        return;
+    }
+
+    AhciZeroMemory((PCHAR)&SenseData, sizeof(SenseData));
+    SenseData.Valid = 1;
+    SenseData.ErrorCode = AHCI_SENSE_ERRORCODE_FIXED_CURRENT;
+    SenseData.SenseKey = SenseKey;
+    SenseData.Information[0] = (UCHAR)(Lba >> 24);
+    SenseData.Information[1] = (UCHAR)(Lba >> 16);
+    SenseData.Information[2] = (UCHAR)(Lba >> 8);
+    SenseData.Information[3] = (UCHAR)Lba;
+    SenseData.AdditionalSenseLength =
+        sizeof(SenseData) - RTL_SIZEOF_THROUGH_FIELD(SENSE_DATA, AdditionalSenseLength);
+    SenseData.AdditionalSenseCode = AdditionalSenseCode;
+    SenseData.AdditionalSenseCodeQualifier = AdditionalSenseCodeQualifier;
+
+    CopyLength = Srb->SenseInfoBufferLength;
+    if (CopyLength > sizeof(SenseData))
+    {
+        CopyLength = sizeof(SenseData);
+    }
+
+    StorPortCopyMemory(Srb->SenseInfoBuffer, &SenseData, CopyLength);
+    Srb->SrbStatus |= SRB_STATUS_AUTOSENSE_VALID;
+}
+
+static
+VOID
+AhciSetNcqErrorSense(
+    __in PAHCI_PORT_EXTENSION PortExtension,
+    __in PSCSI_REQUEST_BLOCK Srb)
+{
+    UCHAR SenseKey, Asc, Ascq;
+    ULONGLONG Lba;
+    PGP_LOG_NCQ_COMMAND_ERROR LogPage;
+    PAHCI_SRB_EXTENSION SrbExtension;
+
+    LogPage = PortExtension->NcqErrorLog;
+    SrbExtension = GetSrbExtension(Srb);
+    NT_ASSERT(SrbExtension != NULL);
+
+    Lba = ((ULONGLONG)LogPage->LBA7_0) |
+          ((ULONGLONG)LogPage->LBA15_8 << 8) |
+          ((ULONGLONG)LogPage->LBA23_16 << 16) |
+          ((ULONGLONG)LogPage->LBA31_24 << 24) |
+          ((ULONGLONG)LogPage->LBA39_32 << 32) |
+          ((ULONGLONG)LogPage->LBA47_40 << 40);
+
+    if ((LogPage->Status & IDE_STATUS_DEVICE_FAULT) &&
+        (LogPage->SenseKey != 0) &&
+        AtaDevHasNcqAutosense(PortExtension->IdentifyDeviceData))
+    {
+        PUCHAR LogBytes = (PUCHAR)LogPage;
+
+        SenseKey = LogPage->SenseKey;
+        Asc = LogPage->ASC;
+        Ascq = LogPage->ASCQ;
+        Lba = ((ULONGLONG)LogBytes[17]) |
+              ((ULONGLONG)LogBytes[18] << 8) |
+              ((ULONGLONG)LogBytes[19] << 16) |
+              ((ULONGLONG)LogBytes[20] << 24) |
+              ((ULONGLONG)LogBytes[21] << 32) |
+              ((ULONGLONG)LogBytes[22] << 40);
+    }
+    else if (LogPage->Status & IDE_STATUS_DEVICE_FAULT)
+    {
+        SenseKey = SCSI_SENSE_HARDWARE_ERROR;
+        Asc = AHCI_ADSENSE_INTERNAL_TARGET_FAILURE;
+        Ascq = 0;
+    }
+    else if (LogPage->Error & IDE_ERROR_DATA_ERROR)
+    {
+        if (SrbExtension->Flags & ATA_FLAGS_DATA_OUT)
+        {
+            SenseKey = SCSI_SENSE_DATA_PROTECT;
+            Asc = AHCI_ADSENSE_WRITE_PROTECT;
+            Ascq = 0;
+        }
+        else
+        {
+            SenseKey = SCSI_SENSE_MEDIUM_ERROR;
+            Asc = AHCI_ADSENSE_UNRECOVERED_ERROR;
+            Ascq = 0;
+        }
+    }
+    else if (LogPage->Error & IDE_ERROR_ID_NOT_FOUND)
+    {
+        SenseKey = SCSI_SENSE_ILLEGAL_REQUEST;
+        Asc = AHCI_ADSENSE_ILLEGAL_BLOCK;
+        Ascq = 0;
+    }
+    else if (LogPage->Error & IDE_ERROR_CRC_ERROR)
+    {
+        SenseKey = SCSI_SENSE_HARDWARE_ERROR;
+        Asc = AHCI_ADSENSE_LUN_COMMUNICATION;
+        Ascq = AHCI_SENSEQ_COMM_CRC_ERROR;
+    }
+    else
+    {
+        SenseKey = SCSI_SENSE_ABORTED_COMMAND;
+        Asc = AHCI_ADSENSE_NO_SENSE;
+        Ascq = 0;
+    }
+
+    AhciSetFixedSenseData(Srb, SenseKey, Asc, Ascq, Lba);
+}
+
+static
+BOOLEAN
+AhciIssueNcqErrorLog(
+    __in PAHCI_PORT_EXTENSION PortExtension)
+{
+    ULONG NCS, SlotIndex;
+    AHCI_PORT_CMD Cmd;
+    PAHCI_PRDT Prdt;
+    PAHCI_COMMAND_HEADER CommandHeader;
+    PAHCI_COMMAND_TABLE CommandTable;
+    PAHCI_ADAPTER_EXTENSION AdapterExtension;
+
+    AdapterExtension = PortExtension->AdapterExtension;
+    CommandTable = PortExtension->NcqErrorCommandTable;
+    if ((CommandTable == NULL) || (PortExtension->NcqErrorLog == NULL))
+    {
+        return FALSE;
+    }
+
+    NCS = AHCI_Global_Port_CAP_NCS(AdapterExtension->CAP);
+    if (NCS == 0)
+    {
+        return FALSE;
+    }
+
+    /*
+     * Clearing PxCMD.ST reset every PxCI/PxSACT bit, so slot zero is free
+     * even when it still carries the software pointer for an aborted SRB.
+     * Recovery owns the command header until the internal command finishes.
+     */
+    SlotIndex = 0;
+    CommandHeader = &PortExtension->CommandList[SlotIndex];
+
+    AhciZeroMemory((PCHAR)PortExtension->NcqErrorLog, sizeof(*PortExtension->NcqErrorLog));
+    AhciZeroMemory((PCHAR)CommandTable, sizeof(*CommandTable));
+    AhciZeroMemory((PCHAR)CommandHeader, sizeof(*CommandHeader));
+
+    CommandTable->CFIS[AHCI_ATA_CFIS_FisType] = FIS_TYPE_REG_H2D;
+    CommandTable->CFIS[AHCI_ATA_CFIS_PMPort_C] = (1 << 7);
+    CommandTable->CFIS[AHCI_ATA_CFIS_CommandReg] = IDE_COMMAND_READ_LOG_EXT;
+    CommandTable->CFIS[AHCI_ATA_CFIS_LBA0] = IDE_GP_LOG_NCQ_COMMAND_ERROR_ADDRESS;
+    CommandTable->CFIS[AHCI_ATA_CFIS_SectorCountLow] = 1;
+
+    Prdt = &CommandTable->PRDT[0];
+    Prdt->DBA = PortExtension->NcqErrorLogPhysicalAddress.LowPart;
+    if (IsAdapterCAPS64(AdapterExtension->CAP))
+    {
+        Prdt->DBAU = PortExtension->NcqErrorLogPhysicalAddress.HighPart;
+    }
+    Prdt->DBC = IDE_GP_LOG_SECTOR_SIZE - 1;
+
+    CommandHeader->DI.CFL = 5;
+    CommandHeader->DI.PRDTL = 1;
+    CommandHeader->CTBA = PortExtension->NcqErrorCommandTablePhysicalAddress.LowPart;
+    if (IsAdapterCAPS64(AdapterExtension->CAP))
+    {
+        CommandHeader->CTBA_U = PortExtension->NcqErrorCommandTablePhysicalAddress.HighPart;
+    }
+
+    Cmd.Status = StorPortReadRegisterUlong(AdapterExtension, &PortExtension->Port->CMD);
+    Cmd.ST = 1;
+    StorPortWriteRegisterUlong(AdapterExtension, &PortExtension->Port->CMD, Cmd.Status);
+    Cmd.Status = StorPortReadRegisterUlong(AdapterExtension, &PortExtension->Port->CMD);
+    if (Cmd.ST == 0)
+    {
+        return FALSE;
+    }
+
+    PortExtension->RecoveryInternalSlot = SlotIndex;
+    PortExtension->RecoveryNcqLogError = FALSE;
+    PortExtension->RecoveryTicks = 0;
+    PortExtension->RecoveryState = AhciRecoveryWaitNcqLog;
+
+    KeMemoryBarrier();
+    StorPortWriteRegisterUlong(AdapterExtension, &PortExtension->Port->CI, 1UL << SlotIndex);
+    return TRUE;
+}
+
+static
+BOOLEAN
+AhciCompleteNcqErrorRecovery(
+    __in PAHCI_PORT_EXTENSION PortExtension)
+{
+    UCHAR Checksum;
+    ULONG i, NCS, FailedSlot, FailedMask;
+    ULONG ActiveSlots, IssuedSlots, QueuedSlots, RetrySlots, SuccessSlots;
+    PSCSI_REQUEST_BLOCK Srb;
+    PGP_LOG_NCQ_COMMAND_ERROR LogPage;
+    PAHCI_ADAPTER_EXTENSION AdapterExtension;
+
+    AdapterExtension = PortExtension->AdapterExtension;
+    LogPage = PortExtension->NcqErrorLog;
+    IssuedSlots = PortExtension->NcqIssuedSlots;
+    QueuedSlots = PortExtension->QueueSlots;
+    NCS = AHCI_Global_Port_CAP_NCS(AdapterExtension->CAP);
+
+    /*
+     * Page 10h identifies one failed command from an NCQ batch. Do not
+     * interpret it if a non-NCQ command was mixed into either software mask;
+     * the conservative reset path can safely complete that inconsistent state.
+     */
+    if ((PortExtension->CommandIssuedSlots != IssuedSlots) ||
+        (PortExtension->NcqQueueSlots != QueuedSlots))
+    {
+        return FALSE;
+    }
+
+    Checksum = 0;
+    for (i = 0; i < IDE_GP_LOG_SECTOR_SIZE; i++)
+    {
+        Checksum = (UCHAR)(Checksum + ((PUCHAR)LogPage)[i]);
+    }
+
+    FailedSlot = LogPage->NcqTag;
+    if ((Checksum != 0) ||
+        LogPage->NonQueuedCmd ||
+        (FailedSlot >= NCS) ||
+        ((IssuedSlots & (1UL << FailedSlot)) == 0) ||
+        (PortExtension->Slot[FailedSlot] == NULL))
+    {
+        return FALSE;
+    }
+
+    FailedMask = 1UL << FailedSlot;
+    ActiveSlots = PortExtension->RecoveryNcqActiveSlots & IssuedSlots;
+    RetrySlots = (ActiveSlots & ~FailedMask) | QueuedSlots;
+    SuccessSlots = IssuedSlots & ~(ActiveSlots | FailedMask);
+
+    for (i = 0; i < NCS; i++)
+    {
+        ULONG SlotMask = 1UL << i;
+
+        Srb = PortExtension->Slot[i];
+        if (Srb == NULL)
+        {
+            continue;
+        }
+
+        if (SlotMask & FailedMask)
+        {
+            AhciSetNcqErrorSense(PortExtension, Srb);
+        }
+        else if (SlotMask & RetrySlots)
+        {
+            Srb->SrbStatus = SRB_STATUS_BUSY;
+            Srb->ScsiStatus = SCSISTAT_BUSY;
+        }
+        else if (SlotMask & SuccessSlots)
+        {
+            Srb->SrbStatus = SRB_STATUS_PENDING;
+            Srb->ScsiStatus = SCSISTAT_GOOD;
+        }
+    }
+
+    if (PortExtension->ErrorLogCount < 4)
+    {
+        AhciDebugPrint("\tPort %u NCQ error: tag=%u status=%02x error=%02x retry=%08x\n",
+                       PortExtension->PortNumber,
+                       FailedSlot,
+                       LogPage->Status,
+                       LogPage->Error,
+                       RetrySlots);
+    }
+    else if (PortExtension->ErrorLogCount == 4)
+    {
+        AhciDebugPrint("\tPort %u: suppressing repeated NCQ error diagnostics\n",
+                       PortExtension->PortNumber);
+    }
+    PortExtension->ErrorLogCount++;
+
+    PortExtension->CommandIssuedSlots = 0;
+    PortExtension->QueueSlots = 0;
+    PortExtension->NcqIssuedSlots = 0;
+    PortExtension->NcqQueueSlots = 0;
+    PortExtension->RecoveryState = AhciRecoveryIdle;
+    PortExtension->RecoveryTicks = 0;
+    PortExtension->RecoveryIsCommandError = FALSE;
+    AhciResetNcqRecoveryContext(PortExtension);
+
+    StorPortWriteRegisterUlong(AdapterExtension, &PortExtension->Port->SACT, 0);
+    StorPortWriteRegisterUlong(AdapterExtension, &PortExtension->Port->SERR, (ULONG)~0);
+    StorPortWriteRegisterUlong(AdapterExtension, &PortExtension->Port->IS, (ULONG)~0);
+
+    AhciCompleteIssuedSrb(PortExtension, IssuedSlots | QueuedSlots, FALSE);
+    AhciSchedulePort(PortExtension);
+    AhciActivatePort(PortExtension);
+    return TRUE;
+}
+
+static
+VOID
+AhciFallbackNcqErrorRecovery(
+    __in PAHCI_PORT_EXTENSION PortExtension,
+    __in PCSTR Reason)
+{
+    AHCI_PORT_CMD Cmd;
+    PAHCI_ADAPTER_EXTENSION AdapterExtension;
+
+    AdapterExtension = PortExtension->AdapterExtension;
+
+    if (PortExtension->ErrorLogCount < 4)
+    {
+        AhciDebugPrint("\tPort %u NCQ log recovery failed: %s\n",
+                       PortExtension->PortNumber,
+                       Reason);
+    }
+    else if (PortExtension->ErrorLogCount == 4)
+    {
+        AhciDebugPrint("\tPort %u: suppressing repeated NCQ recovery diagnostics\n",
+                       PortExtension->PortNumber);
+    }
+    PortExtension->ErrorLogCount++;
+
+    Cmd.Status = StorPortReadRegisterUlong(AdapterExtension, &PortExtension->Port->CMD);
+    Cmd.ST = 0;
+    StorPortWriteRegisterUlong(AdapterExtension, &PortExtension->Port->CMD, Cmd.Status);
+
+    PortExtension->RecoveryTicks = 0;
+    PortExtension->RecoveryIsCommandError = FALSE;
+    PortExtension->RecoveryIsNcqError = FALSE;
+    PortExtension->RecoveryNcqLogError = FALSE;
+    PortExtension->RecoveryState = AhciRecoveryWaitCommandEngine;
 }
 
 static
@@ -950,6 +1340,21 @@ AhciPortRecoveryStep(
             StorPortWriteRegisterUlong(AdapterExtension, &PortExtension->Port->IS, (ULONG)~0);
 
             tfd.Status = StorPortReadRegisterUlong(AdapterExtension, &PortExtension->Port->TFD);
+            if (PortExtension->RecoveryIsNcqError &&
+                HadNcq &&
+                !tfd.STS.BSY &&
+                !tfd.STS.DRQ)
+            {
+                if (AhciIssueNcqErrorLog(PortExtension))
+                {
+                    return TRUE;
+                }
+
+                AhciFallbackNcqErrorRecovery(PortExtension,
+                                             "could not issue READ LOG EXT");
+                return TRUE;
+            }
+
             if (PortExtension->RecoveryIsCommandError &&
                 !HadNcq &&
                 !tfd.STS.BSY &&
@@ -963,6 +1368,7 @@ AhciPortRecoveryStep(
                 PortExtension->RecoveryState = AhciRecoveryIdle;
                 PortExtension->RecoveryTicks = 0;
                 PortExtension->RecoveryIsCommandError = FALSE;
+                AhciResetNcqRecoveryContext(PortExtension);
                 AhciActivatePort(PortExtension);
                 return FALSE;
             }
@@ -991,6 +1397,79 @@ AhciPortRecoveryStep(
             AhciSchedulePort(PortExtension);
             AhciActivatePort(PortExtension);
             return FALSE;
+
+        case AhciRecoveryWaitNcqLog:
+        {
+            ULONG Ci, PxIs, SlotMask;
+
+            PxIs = StorPortReadRegisterUlong(AdapterExtension, &PortExtension->Port->IS);
+            if (PxIs != 0)
+            {
+                AHCI_INTERRUPT_STATUS InterruptStatus;
+
+                InterruptStatus.Status = PxIs;
+                if (InterruptStatus.HBFS ||
+                    InterruptStatus.HBDS ||
+                    InterruptStatus.IFS ||
+                    InterruptStatus.TFES)
+                {
+                    PortExtension->RecoveryNcqLogError = TRUE;
+                }
+
+                StorPortWriteRegisterUlong(AdapterExtension, &PortExtension->Port->IS, PxIs);
+                StorPortWriteRegisterUlong(AdapterExtension,
+                                           AdapterExtension->IS,
+                                           (1 << PortExtension->PortNumber));
+            }
+
+            SlotMask = 1UL << PortExtension->RecoveryInternalSlot;
+            Ci = StorPortReadRegisterUlong(AdapterExtension, &PortExtension->Port->CI);
+            tfd.Status = StorPortReadRegisterUlong(AdapterExtension, &PortExtension->Port->TFD);
+
+            if (PortExtension->RecoveryNcqLogError)
+            {
+                AhciFallbackNcqErrorRecovery(PortExtension,
+                                             "READ LOG EXT command failed");
+                return TRUE;
+            }
+
+            if (Ci & SlotMask)
+            {
+                if (++PortExtension->RecoveryTicks < AHCI_RECOVERY_LOG_TIMEOUT_TICKS)
+                {
+                    return TRUE;
+                }
+
+                AhciFallbackNcqErrorRecovery(PortExtension,
+                                             "READ LOG EXT command timed out");
+                return TRUE;
+            }
+
+            if (tfd.STS.ERR)
+            {
+                AhciFallbackNcqErrorRecovery(PortExtension,
+                                             "READ LOG EXT command failed");
+                return TRUE;
+            }
+
+            KeMemoryBarrier();
+            if (PortExtension->CommandList[PortExtension->RecoveryInternalSlot].PRDBC <
+                IDE_GP_LOG_SECTOR_SIZE)
+            {
+                AhciFallbackNcqErrorRecovery(PortExtension,
+                                             "READ LOG EXT returned a short page");
+                return TRUE;
+            }
+
+            if (!AhciCompleteNcqErrorRecovery(PortExtension))
+            {
+                AhciFallbackNcqErrorRecovery(PortExtension,
+                                             "invalid READ LOG EXT page 0x10");
+                return TRUE;
+            }
+
+            return FALSE;
+        }
 
         case AhciRecoveryComresetAsserted:
             /* The timer interval is longer than AHCI's one millisecond minimum. */
@@ -1063,6 +1542,7 @@ AhciPortRecoveryStep(
             PortExtension->RecoveryState = AhciRecoveryIdle;
             PortExtension->RecoveryTicks = 0;
             PortExtension->RecoveryIsCommandError = FALSE;
+            AhciResetNcqRecoveryContext(PortExtension);
             AhciSchedulePort(PortExtension);
             AhciActivatePort(PortExtension);
             return FALSE;
@@ -1161,7 +1641,7 @@ VOID AhciPortErrorRecovery(__in PAHCI_PORT_EXTENSION PortExtension)
  */
 VOID AhciInterruptHandler(__in PAHCI_PORT_EXTENSION PortExtension)
 {
-    BOOLEAN NonQueuedCommandError;
+    BOOLEAN CommandError, NcqCommandError;
     ULONG ci, sact;
     ULONG completed, ncqCompleted, nonNcqCompleted, nonNcqIssued;
     AHCI_INTERRUPT_STATUS PxIS;
@@ -1189,6 +1669,12 @@ VOID AhciInterruptHandler(__in PAHCI_PORT_EXTENSION PortExtension)
 
     if (PortExtension->RecoveryState != AhciRecoveryIdle)
     {
+        if (PortExtension->RecoveryState == AhciRecoveryWaitNcqLog &&
+            (PxIS.HBFS || PxIS.HBDS || PxIS.IFS || PxIS.TFES))
+        {
+            PortExtension->RecoveryNcqLogError = TRUE;
+        }
+
         StorPortWriteRegisterUlong(AdapterExtension, &PortExtension->Port->IS, PxIS.Status);
         StorPortWriteRegisterUlong(AdapterExtension, AdapterExtension->IS, (1 << PortExtension->PortNumber));
         return;
@@ -1210,22 +1696,39 @@ VOID AhciInterruptHandler(__in PAHCI_PORT_EXTENSION PortExtension)
         StorPortWriteRegisterUlong(AdapterExtension, &PortExtension->Port->IS, PxIS.Status);
         StorPortWriteRegisterUlong(AdapterExtension, AdapterExtension->IS, (1 << PortExtension->PortNumber));
 
-        NonQueuedCommandError = PxIS.TFES &&
-                                !PxIS.HBFS &&
-                                !PxIS.HBDS &&
-                                !PxIS.IFS &&
-                                (PortExtension->NcqIssuedSlots == 0);
-        PortExtension->RecoveryIsCommandError = NonQueuedCommandError;
+        CommandError = PxIS.TFES &&
+                       !PxIS.HBFS &&
+                       !PxIS.HBDS &&
+                       !PxIS.IFS &&
+                       !PxIS.INFS &&
+                       !PxIS.OFS &&
+                       !PxIS.IPMS &&
+                       !PxIS.PRCS &&
+                       !PxIS.PCS &&
+                       !PxIS.UFS;
+        NcqCommandError = CommandError &&
+                          (PortExtension->NcqIssuedSlots != 0);
 
-        if (!NonQueuedCommandError && (PortExtension->ErrorLogCount < 4))
+        PortExtension->RecoveryIsCommandError = CommandError;
+        PortExtension->RecoveryIsNcqError = NcqCommandError;
+        PortExtension->RecoveryNcqLogError = FALSE;
+        PortExtension->RecoveryNcqActiveSlots = 0;
+        if (NcqCommandError)
+        {
+            sact = StorPortReadRegisterUlong(AdapterExtension, &PortExtension->Port->SACT);
+            PortExtension->RecoveryNcqActiveSlots =
+                sact & PortExtension->NcqIssuedSlots;
+        }
+
+        if (!CommandError && (PortExtension->ErrorLogCount < 4))
         {
             AhciDebugPrint("\tFatal transport error on port %u: IS=%08x TFD=%08x SERR=%08x\n", PortExtension->PortNumber, PxIS.Status, StorPortReadRegisterUlong(AdapterExtension, &PortExtension->Port->TFD), StorPortReadRegisterUlong(AdapterExtension, &PortExtension->Port->SERR));
         }
-        else if (!NonQueuedCommandError && (PortExtension->ErrorLogCount == 4))
+        else if (!CommandError && (PortExtension->ErrorLogCount == 4))
         {
             AhciDebugPrint("\tPort %u: suppressing repeated transport-error diagnostics\n", PortExtension->PortNumber);
         }
-        if (!NonQueuedCommandError)
+        if (!CommandError)
         {
             PortExtension->ErrorLogCount++;
         }
@@ -1588,6 +2091,7 @@ BOOLEAN NTAPI AhciHwResetBus(__in PVOID AdapterExtension, __in ULONG PathId)
     PortExtension->RecoveryState = AhciRecoveryIdle;
     PortExtension->RecoveryTicks = 0;
     PortExtension->RecoveryIsCommandError = FALSE;
+    AhciResetNcqRecoveryContext(PortExtension);
 
     /* A bus reset also completes requests that had not obtained a slot yet. */
     while ((Srb = RemoveQueue(&PortExtension->SrbQueue)) != NULL)
@@ -3314,6 +3818,7 @@ BOOLEAN AhciAdapterReset(__in PAHCI_ADAPTER_EXTENSION AdapterExtension)
     }
 
     // HR -- Very first bit (lowest significant)
+    ghc.Status = StorPortReadRegisterUlong(AdapterExtension, &abar->GHC);
     ghc.HR = 1;
     StorPortWriteRegisterUlong(AdapterExtension, &abar->GHC, ghc.Status);
 
