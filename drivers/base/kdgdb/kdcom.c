@@ -13,6 +13,9 @@
 
 #include <cportlib/cportlib.h>
 #include <cportlib/uartinfo.h>
+#if defined(_M_ARM64)
+#include <reactos/arm64/early_uart.h>
+#endif
 
 /* GLOBALS ********************************************************************/
 
@@ -20,6 +23,25 @@ CPPORT KdComPort;
 BOOLEAN gdb_vctrlc_pending;
 #ifdef KDDEBUG
 CPPORT KdDebugComPort;
+#endif
+
+#if defined(_M_ARM64)
+/*
+ * The early-UART helpers are header-only and keep their small amount of
+ * transport state in these globals. KDGDB is a separate kernel DLL, so it owns
+ * a private copy initialized from the loader block below.
+ *
+ * EarlyUartBaseAddress holds the already-mapped address in this module. Unlike
+ * ntoskrnl, a kernel DLL does not define _NTOS_, so EarlyUartPhysToVa() is an
+ * identity operation here.
+ */
+volatile UINT64 EarlyUartBaseAddress;
+volatile ARM64_PLATFORM_ID EarlyUartPlatformId;
+volatile ARM64_UART_INTERFACE EarlyUartInterface;
+volatile BOOLEAN EarlyUartInitialized;
+volatile BOOLEAN EarlyUartHardwareInitialized;
+volatile UINT32 EarlyUartRxCachedBytes;
+volatile UINT32 EarlyUartRxCachedByteCount;
 #endif
 
 typedef enum _GDB_POLL_STATE
@@ -117,7 +139,43 @@ KdpPortInitialize(
 {
     NTSTATUS Status;
 
+#if defined(_M_ARM64)
+    if (PortAddress == NULL ||
+        BaudRate == 0 ||
+        EarlyUartInterface == Arm64UartUnknown ||
+        EarlyUartInterface >= Arm64UartMax)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    KdComPort.Address = PortAddress;
+    KdComPort.BaudRate = BaudRate;
+    KdComPort.Flags = CPPORT_FLAG_KEEP_BAUD;
+
+    EarlyUartBaseAddress = (UINT64)(ULONG_PTR)PortAddress;
+    EarlyUartPlatformId = Arm64PlatformGenericAcpi;
+    EarlyUartHardwareInitialized = FALSE;
+    EarlyUartRxCachedBytes = 0;
+    EarlyUartRxCachedByteCount = 0;
+    EarlyUartInitialized = TRUE;
+
+    /*
+     * GENI has a discoverable protocol identity and needs explicit FIFO-mode
+     * setup. The other supported interfaces retain their firmware setup and
+     * use polling-only data paths.
+     */
+    if (EarlyUartInterface == Arm64UartQcomGeni &&
+        !EarlyUartQcomGeniInitialize())
+    {
+        EarlyUartInitialized = FALSE;
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    EarlyUartDrainReceiveFifo();
+    Status = STATUS_SUCCESS;
+#else
     Status = CpInitialize(&KdComPort, PortAddress, BaudRate);
+#endif
     if (!NT_SUCCESS(Status))
         return STATUS_INVALID_PARAMETER;
 
@@ -214,8 +272,22 @@ KdDebuggerInitialize0(IN PLOADER_PARAMETER_BLOCK LoaderBlock OPTIONAL)
         }
     }
 
+#if defined(_M_ARM64)
+    if (LoaderBlock == NULL ||
+        LoaderBlock->u.Arm64.EarlyUartAddress == 0 ||
+        LoaderBlock->u.Arm64.EarlyUartInterface >= Arm64UartMax)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    EarlyUartInterface =
+        (ARM64_UART_INTERFACE)LoaderBlock->u.Arm64.EarlyUartInterface;
+    ComPortAddress = (PUCHAR)(ULONG_PTR)
+        (ARM64_PHYS_MAP_BASE_VA + LoaderBlock->u.Arm64.EarlyUartAddress);
+#else
     if (!ComPortAddress)
         ComPortAddress = UlongToPtr(BaseArray[ComPortNumber]);
+#endif
 
 #ifdef KDDEBUG
     /*
@@ -265,7 +337,11 @@ NTAPI
 KdpSendByte(IN UCHAR Byte)
 {
     /* Send the byte */
+#if defined(_M_ARM64)
+    EarlyUartPutc((CHAR)Byte);
+#else
     CpPutByte(&KdComPort, Byte);
+#endif
 }
 
 KDSTATUS
@@ -273,7 +349,11 @@ NTAPI
 KdpPollByte(OUT PUCHAR OutByte)
 {
     /* Poll the byte */
+#if defined(_M_ARM64)
+    if (EarlyUartGetc(OutByte))
+#else
     if (CpGetByte(&KdComPort, OutByte, FALSE, FALSE) == CP_GET_SUCCESS)
+#endif
     {
         return KdPacketReceived;
     }
@@ -287,6 +367,12 @@ KDSTATUS
 NTAPI
 KdpReceiveByte(OUT PUCHAR OutByte)
 {
+#if defined(_M_ARM64)
+    while (!EarlyUartGetc(OutByte))
+        __asm__ __volatile__("yield");
+
+    return KdPacketReceived;
+#else
     USHORT CpStatus;
 
     do
@@ -301,6 +387,7 @@ KdpReceiveByte(OUT PUCHAR OutByte)
     }
 
     return KdPacketTimedOut;
+#endif
 }
 
 KDSTATUS
