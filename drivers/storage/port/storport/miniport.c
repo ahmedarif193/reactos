@@ -355,11 +355,10 @@ MiniportHwInterrupt(
 {
     BOOLEAN Result;
 
-    DPRINT1("MiniportHwInterrupt(%p)\n",
-            Miniport);
+    DPRINT("MiniportHwInterrupt(%p)\n", Miniport);
 
     Result = Miniport->InitData->HwInterrupt(&Miniport->MiniportExtension->HwDeviceExtension);
-    DPRINT1("HwInterrupt() returned %u\n", Result);
+    DPRINT("HwInterrupt() returned %u\n", Result);
 
     return Result;
 }
@@ -372,11 +371,10 @@ MiniportStartIo(
 {
     BOOLEAN Result;
 
-    DPRINT1("MiniportHwStartIo(%p %p)\n",
-            Miniport, Srb);
+    DPRINT("MiniportHwStartIo(%p %p)\n", Miniport, Srb);
 
     Result = Miniport->InitData->HwStartIo(&Miniport->MiniportExtension->HwDeviceExtension, Srb);
-    DPRINT1("HwStartIo() returned %u\n", Result);
+    DPRINT("HwStartIo() returned %u\n", Result);
 
     return Result;
 }

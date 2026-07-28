@@ -1343,6 +1343,35 @@ HalpRegisterPciRouteQuery(
     HalpPciRouteQueryCallback = Provider;
 }
 
+BOOLEAN
+NTAPI
+HalQueryPciRoutedInterrupt(
+    _In_ ULONG Segment,
+    _In_ ULONG Bus,
+    _In_ ULONG Device,
+    _In_ ULONG Function,
+    _In_ ULONG Pin,
+    _Out_ PULONG Gsi)
+{
+    if (!Gsi)
+        return FALSE;
+
+    *Gsi = 0;
+
+    if (HalpPciRouteQueryCallback == NULL || Pin == 0)
+        return FALSE;
+
+    return HalpPciRouteQueryCallback((USHORT)Segment,
+                                     (UCHAR)Bus,
+                                     (UCHAR)Device,
+                                     (UCHAR)Function,
+                                     (UCHAR)Pin,
+                                     Gsi,
+                                     NULL,
+                                     NULL) &&
+           *Gsi != 0;
+}
+
 VOID
 NTAPI
 HalpSetPciRoutingMap(

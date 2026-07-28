@@ -24,8 +24,7 @@ PortFdoInterruptRoutine(
 {
     PFDO_DEVICE_EXTENSION DeviceExtension;
 
-    DPRINT1("PortFdoInterruptRoutine(%p %p)\n",
-            Interrupt, ServiceContext);
+    DPRINT("PortFdoInterruptRoutine(%p %p)\n", Interrupt, ServiceContext);
 
     DeviceExtension = (PFDO_DEVICE_EXTENSION)ServiceContext;
 
@@ -347,7 +346,7 @@ PortSendInquiry(
         /* Wait for it to complete */
         if (Status == STATUS_PENDING)
         {
-            DPRINT1("PortSendInquiry(): Waiting for the driver to process request...\n");
+            DPRINT("PortSendInquiry(): Waiting for the driver to process request...\n");
             KeWaitForSingleObject(&Event,
                                   Executive,
                                   KernelMode,
@@ -526,18 +525,66 @@ PortFdoQueryBusRelations(
     _In_ PFDO_DEVICE_EXTENSION DeviceExtension,
     _Out_ PULONG_PTR Information)
 {
-    NTSTATUS Status = STATUS_SUCCESS;;
+    ULONG Count, Index, Size;
+    PLIST_ENTRY Entry;
+    NTSTATUS Status;
+    KLOCK_QUEUE_HANDLE LockHandle;
+    PDEVICE_RELATIONS Relations;
+    PPDO_DEVICE_EXTENSION PdoExtension;
 
     DPRINT1("PortFdoQueryBusRelations(%p %p)\n",
             DeviceExtension, Information);
 
-    Status = PortFdoScanBus(DeviceExtension);
+    if (!DeviceExtension->BusScanned)
+    {
+        Status = PortFdoScanBus(DeviceExtension);
+        if (!NT_SUCCESS(Status))
+        {
+            *Information = 0;
+            return Status;
+        }
 
-    DPRINT1("Units found: %lu\n", DeviceExtension->PdoCount);
+        DeviceExtension->BusScanned = TRUE;
+    }
 
-    *Information = 0;
+    KeAcquireInStackQueuedSpinLock(&DeviceExtension->PdoListLock, &LockHandle);
+    Count = DeviceExtension->PdoCount;
+    KeReleaseInStackQueuedSpinLock(&LockHandle);
 
-    return Status;
+    Size = FIELD_OFFSET(DEVICE_RELATIONS, Objects) +
+           Count * sizeof(PDEVICE_OBJECT);
+    Relations = ExAllocatePoolWithTag(PagedPool,
+                                      Size,
+                                      TAG_DEVICE_RELATION);
+    if (Relations == NULL)
+    {
+        *Information = 0;
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    Relations->Count = 0;
+    Index = 0;
+
+    KeAcquireInStackQueuedSpinLock(&DeviceExtension->PdoListLock, &LockHandle);
+    for (Entry = DeviceExtension->PdoListHead.Flink;
+         (Entry != &DeviceExtension->PdoListHead) && (Index < Count);
+         Entry = Entry->Flink)
+    {
+        PdoExtension = CONTAINING_RECORD(Entry,
+                                         PDO_DEVICE_EXTENSION,
+                                         PdoListEntry);
+        Relations->Objects[Index] = PdoExtension->Device;
+        ObReferenceObject(PdoExtension->Device);
+        Index++;
+    }
+    KeReleaseInStackQueuedSpinLock(&LockHandle);
+
+    Relations->Count = Index;
+    *Information = (ULONG_PTR)Relations;
+
+    DPRINT1("Units reported: %lu\n", Index);
+
+    return STATUS_SUCCESS;
 }
 
 
@@ -661,6 +708,10 @@ PortFdoPnp(
                     return ForwardIrpAndForget(DeviceExtension->LowerDevice, Irp);
             }
             break;
+
+        case IRP_MN_QUERY_CAPABILITIES: /* 0x09 */
+            DPRINT1("IRP_MJ_PNP / IRP_MN_QUERY_CAPABILITIES\n");
+            return ForwardIrpAndForget(DeviceExtension->LowerDevice, Irp);
 
         case IRP_MN_FILTER_RESOURCE_REQUIREMENTS: /* 0x0d */
             DPRINT1("IRP_MJ_PNP / IRP_MN_FILTER_RESOURCE_REQUIREMENTS\n");

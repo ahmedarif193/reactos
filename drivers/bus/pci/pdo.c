@@ -391,13 +391,19 @@ PciPdoShouldUseDefaultMessageInterrupts(
     PciConfig = &DeviceExtension->PciDevice->PciConfig;
 
     /*
-     * xHCI can be boot-critical before an INF policy is installed, and many
-     * controllers rely on message interrupts. Preserve that default policy
-     * and prefer MSI-X when the controller exposes it.
+     * xHCI and AHCI can be boot-critical before an INF policy is installed,
+     * and both controller classes are designed to use message interrupts.
      */
-    return (PciConfig->BaseClass == PCI_CLASS_SERIAL_BUS_CTLR &&
-            PciConfig->SubClass == PCI_SUBCLASS_SB_USB &&
-            PciConfig->ProgIf == PCI_PROGIF_USB_XHCI);
+    if ((PciConfig->BaseClass == PCI_CLASS_SERIAL_BUS_CTLR) &&
+        (PciConfig->SubClass == PCI_SUBCLASS_SB_USB) &&
+        (PciConfig->ProgIf == PCI_PROGIF_USB_XHCI))
+    {
+        return TRUE;
+    }
+
+    return ((PciConfig->BaseClass == PCI_CLASS_MASS_STORAGE_CTLR) &&
+            (PciConfig->SubClass == PCI_SUBCLASS_MSC_AHCI_CTLR) &&
+            (PciConfig->ProgIf == 0x01));
 }
 
 #define PCI_ADDRESS_MEMORY_ADDRESS_MASK_64     0xfffffffffffffff0ull
@@ -1882,6 +1888,44 @@ PdoGetRangeLength(PPDO_DEVICE_EXTENSION DeviceExtension,
 }
 
 
+static UCHAR
+PciPdoRoutedInterruptLine(
+    _In_ PPDO_DEVICE_EXTENSION DeviceExtension,
+    _In_ UCHAR InterruptPin,
+    _In_ UCHAR InterruptLine)
+{
+#if defined(_M_IX86) || defined(_M_AMD64)
+    ULONG Gsi = 0;
+
+    if (InterruptPin != 0 &&
+        HalQueryPciRoutedInterrupt(PciPdoGetSegment(DeviceExtension),
+                                   DeviceExtension->PciDevice->BusNumber,
+                                   DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
+                                   DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber,
+                                   InterruptPin,
+                                   &Gsi) &&
+        Gsi != 0 &&
+        Gsi < 0xFF)
+    {
+        if ((UCHAR)Gsi != InterruptLine)
+        {
+            DPRINT1("PCI PDO: _PRT routes %02x:%02x.%u INT%c# to GSI %lu (line was %u)\n",
+                    (UCHAR)DeviceExtension->PciDevice->BusNumber,
+                    DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
+                    DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber,
+                    'A' + InterruptPin - 1,
+                    Gsi,
+                    InterruptLine);
+        }
+
+        return (UCHAR)Gsi;
+    }
+#endif
+
+    return InterruptLine;
+}
+
+
 static NTSTATUS
 PdoQueryResourceRequirements(
     IN PDEVICE_OBJECT DeviceObject,
@@ -2442,6 +2486,8 @@ PdoQueryResources(
     ULONGLONG Length;
     ULONG Flags;
     USHORT Segment;
+    UCHAR ExposableRoutedLine = 0;
+    BOOLEAN ExposeInterrupt = FALSE;
 
     Segment = PciPdoGetSegment((PPDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension);
     DPRINT("PdoQueryResources() called (seg %u)\n", Segment);
@@ -2482,9 +2528,16 @@ PdoQueryResources(
         }
 
         if (PciPdoShouldExposeInterruptResources(&PciConfig) &&
-            (PciConfig.u.type0.InterruptPin != 0) &&
-            (PciConfig.u.type0.InterruptLine != 0) &&
-            (PciConfig.u.type0.InterruptLine != 0xFF))
+            PciConfig.u.type0.InterruptPin != 0)
+        {
+            ExposableRoutedLine = PciPdoRoutedInterruptLine(DeviceExtension,
+                                                            PciConfig.u.type0.InterruptPin,
+                                                            PciConfig.u.type0.InterruptLine);
+            ExposeInterrupt = ExposableRoutedLine != 0 &&
+                              ExposableRoutedLine != 0xFF;
+        }
+
+        if (ExposeInterrupt)
             ResCount++;
     }
     else if (PCI_CONFIGURATION_TYPE(&PciConfig) == PCI_BRIDGE_TYPE)
@@ -2635,16 +2688,13 @@ PdoQueryResources(
         }
 
         /* Add interrupt resource */
-        if (PciPdoShouldExposeInterruptResources(&PciConfig) &&
-            (PciConfig.u.type0.InterruptPin != 0) &&
-            (PciConfig.u.type0.InterruptLine != 0) &&
-            (PciConfig.u.type0.InterruptLine != 0xFF))
+        if (ExposeInterrupt)
         {
             Descriptor->Type = CmResourceTypeInterrupt;
             Descriptor->ShareDisposition = CmResourceShareShared;
             Descriptor->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
-            Descriptor->u.Interrupt.Level = PciConfig.u.type0.InterruptLine;
-            Descriptor->u.Interrupt.Vector = PciConfig.u.type0.InterruptLine;
+            Descriptor->u.Interrupt.Level = ExposableRoutedLine;
+            Descriptor->u.Interrupt.Vector = ExposableRoutedLine;
             Descriptor->u.Interrupt.Affinity = 0xFFFFFFFF;
         }
 
