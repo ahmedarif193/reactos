@@ -109,8 +109,8 @@ else()
 endif()
 
 if(GDB)
-    if(NOT (ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64"))
-        message(FATAL_ERROR "KDGDB is only supported on i386 and amd64")
+    if(NOT (ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64"))
+        message(FATAL_ERROR "KDGDB is only supported on i386, amd64 and arm64")
     endif()
     # KDGDB speaks the KD protocol and replaces the integrated debugger.
     # These deliberately shadow the cache entries set above, so that turning
