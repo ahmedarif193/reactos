@@ -199,7 +199,13 @@ MmDbgCopyMemory(IN ULONG64 Address,
         }
 
 #if defined(_M_ARM64)
-        if (!MiArm64ProbeForAccess(TargetAddress, (Flags & MMDBG_COPY_WRITE) != 0))
+        /*
+         * Probe for a readable translation even for debugger writes. Code
+         * pages are normally read-only; the write path below deliberately
+         * detects that PTE and patches the backing page through the debugger's
+         * writable physical mapping.
+         */
+        if (!MiArm64ProbeForAccess(TargetAddress, FALSE))
         {
             KdpDprintf("MmDbgCopyMemory: Failing %s for unprobed Virtual Address 0x%p\n",
                        Flags & MMDBG_COPY_WRITE ? "write" : "read",
