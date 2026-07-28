@@ -124,6 +124,10 @@ cmake_dependent_option(ENABLE_FEX_ARM64EC
 cmake_dependent_option(ENABLE_WOW64 "Whether to build the amd64 WoW64 subsystem." OFF
                        "ARCH STREQUAL amd64" OFF)
 
+cmake_dependent_option(ENABLE_ROSV
+                       "Whether to build the ROSV VMX hypervisor driver and its user-mode tools." OFF
+                       "ARCH STREQUAL amd64" OFF)
+
 # Set by the nested build that wow64.cmake configures: marks this i386 tree
 # as the 32-bit guest half of an amd64 WoW64 build.
 cmake_dependent_option(WOW64_I386_RUNTIME
