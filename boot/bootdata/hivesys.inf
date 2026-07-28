@@ -1935,10 +1935,6 @@ HKLM,"SYSTEM\CurrentControlSet\Services\storport","Tag",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\storahci","ErrorControl",0x00010001,0x00000003
 HKLM,"SYSTEM\CurrentControlSet\Services\storahci","Group",0x00000000,"SCSI Miniport"
 HKLM,"SYSTEM\CurrentControlSet\Services\storahci","ImagePath",0x00020000,"system32\drivers\storahci.sys"
-HKLM,"SYSTEM\CurrentControlSet\Services\storahci\Interrupt Management",,0x00000010
-HKLM,"SYSTEM\CurrentControlSet\Services\storahci\Interrupt Management\MessageSignaledInterruptProperties",,0x00000010
-HKLM,"SYSTEM\CurrentControlSet\Services\storahci\Interrupt Management\MessageSignaledInterruptProperties","MSISupported",0x00010001,1
-HKLM,"SYSTEM\CurrentControlSet\Services\storahci\Interrupt Management\MessageSignaledInterruptProperties","MessageNumberLimit",0x00010001,1
 HKLM,"SYSTEM\CurrentControlSet\Services\storahci","Start",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\storahci","Type",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\storahci","Tag",0x00010001,0x00000005
