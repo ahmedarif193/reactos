@@ -73,20 +73,27 @@ NTAPI
 KdpSetContextState(_Inout_ PDBGKD_ANY_WAIT_STATE_CHANGE WaitStateChange,
                    _Inout_ PCONTEXT Context)
 {
-    PKPRCB Prcb;
+    PEXCEPTION_RECORD64 ExceptionRecord;
 
-    /* Report selected ARM64 debug state via control report */
-    Prcb = KeGetCurrentPrcb();
-    if (Prcb != NULL)
+    /*
+     * Report which debug event actually fired, so the debugger can tell the
+     * slots apart. For an instruction breakpoint the program counter is the
+     * matched address. A watchpoint's FAR_EL1 travels with its exception
+     * record, avoiding shared state between processors.
+     */
+    WaitStateChange->ControlReport.Bvr = Context->Pc;
+    WaitStateChange->ControlReport.Wvr = 0;
+
+    if (WaitStateChange->NewState != DbgKdExceptionStateChange)
+        return;
+
+    ExceptionRecord = &WaitStateChange->u.Exception.ExceptionRecord;
+    if (ExceptionRecord->ExceptionCode == STATUS_SINGLE_STEP &&
+        ExceptionRecord->NumberParameters != 0)
     {
-        /* Expose first breakpoint/watchpoint registers for visibility */
-        WaitStateChange->ControlReport.Bvr =
-            Prcb->ProcessorState.SpecialRegisters.KernelBvr[0];
         WaitStateChange->ControlReport.Wvr =
-            Prcb->ProcessorState.SpecialRegisters.KernelWvr[0];
+            ExceptionRecord->ExceptionInformation[0];
     }
-
-    UNREFERENCED_PARAMETER(Context);
 }
 
 NTSTATUS
