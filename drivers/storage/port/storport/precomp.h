@@ -124,9 +124,14 @@ typedef struct _FDO_DEVICE_EXTENSION
      */
     KTIMER MiniportTimer;
     KDPC MiniportTimerDpc;
+    KDPC MiniportTimerRequestDpc;
     KSPIN_LOCK MiniportTimerLock;
     PHW_TIMER MiniportTimerRoutine;
+    PHW_TIMER MiniportTimerRequestedRoutine;
+    ULONG MiniportTimerRequestedValue;
     BOOLEAN MiniportTimerArmed;
+    BOOLEAN MiniportTimerRequestPending;
+    BOOLEAN MiniportTimerRequestDpcActive;
 
     KSPIN_LOCK PdoListLock;
     LIST_ENTRY PdoListHead;
