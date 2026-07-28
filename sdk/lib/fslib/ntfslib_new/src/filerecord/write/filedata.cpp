@@ -2528,6 +2528,57 @@ RestoreResident:
     return Status;
 }
 
+NTSTATUS FileRecord::SetFileValidDataLength(_In_ AttributeType AttrType, _In_opt_ PWSTR StreamName, _In_ ULONGLONG NewValidDataLength)
+{
+    PAttribute TargetAttribute;
+    PFileRecord AttributeOwner;
+    PUCHAR RecordBackup;
+    NTSTATUS Status;
+
+    if (!DiskVolume)
+        return STATUS_INVALID_DEVICE_STATE;
+    if (DiskVolume->IsReadOnly)
+        return STATUS_ACCESS_DENIED;
+    if (AttrType != TypeData)
+        return STATUS_INVALID_PARAMETER;
+
+    TargetAttribute = GetAttribute(AttrType, StreamName);
+    if (!TargetAttribute)
+        return STATUS_NOT_FOUND;
+    AttributeOwner = GetAttributeOwner(TargetAttribute);
+    if (!AttributeOwner)
+        return STATUS_FILE_CORRUPT_ERROR;
+    if (!TargetAttribute->IsNonResident || TargetAttribute->Flags != 0 || NewValidDataLength > TargetAttribute->NonResident.DataSize)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (NewValidDataLength < TargetAttribute->NonResident.InitalizedDataSize)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (NewValidDataLength == TargetAttribute->NonResident.InitalizedDataSize)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    RecordBackup = NtfsAcquireRecordScratch(DiskVolume, AttributeOwner->RecordBufferSize);
+    if (!RecordBackup)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    RtlCopyMemory(RecordBackup, AttributeOwner->Data, AttributeOwner->RecordBufferSize);
+
+    TargetAttribute->NonResident.InitalizedDataSize = NewValidDataLength;
+    Status = DiskVolume->MFT->WriteFileRecordToMFT(AttributeOwner);
+    if (!NT_SUCCESS(Status))
+    {
+        RtlCopyMemory(AttributeOwner->Data, RecordBackup, AttributeOwner->RecordBufferSize);
+        AttributeOwner->Header = reinterpret_cast<PFileRecordHeader>(AttributeOwner->Data);
+        AttributeOwner->ClearDataRunCache();
+    }
+
+    NtfsReleaseRecordScratch(DiskVolume, RecordBackup, RecordBufferSize);
+    return Status;
+}
+
 NTSTATUS
 FileRecord::SetFileAllocationSize(
     _In_ AttributeType AttrType,
