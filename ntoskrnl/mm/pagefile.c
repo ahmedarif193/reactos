@@ -694,6 +694,16 @@ EarlyQuit:
         return Status;
     }
 
+    Status = ZwSetInformationFile(FileHandle, &IoStatus, &SafeMinimumSize, sizeof(LARGE_INTEGER), FileValidDataLengthInformation);
+    if (NT_SUCCESS(Status))
+        Status = IoStatus.Status;
+    if (!NT_SUCCESS(Status))
+    {
+        ZwClose(FileHandle);
+        ExFreePoolWithTag(Buffer, TAG_MM);
+        return Status;
+    }
+
     Status = ObReferenceObjectByHandle(FileHandle,
                                        FILE_READ_DATA | FILE_WRITE_DATA,
                                        IoFileObjectType,

@@ -290,6 +290,13 @@ NtfsFileRecordSetFileDataSize(
         NewSize);
 }
 
+NTSTATUS NtfsFileRecordSetFileValidDataLength(_In_ PNtfsFileRecord Fr, _In_ AttributeType AttrType, _In_opt_ PWSTR StreamName, _In_ ULONGLONG NewValidDataLength)
+{
+    if (!Fr)
+        return STATUS_INVALID_PARAMETER;
+    return reinterpret_cast<PFileRecord>(Fr)->SetFileValidDataLength(AttrType, StreamName, NewValidDataLength);
+}
+
 NTSTATUS
 NtfsFileRecordSetFileAllocationSize(
     _In_ PNtfsFileRecord Fr,
