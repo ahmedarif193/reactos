@@ -1619,7 +1619,7 @@ typedef struct _RTL_USER_PROCESS_PARAMETERS
 #if (NTDDI_VERSION >= NTDDI_LONGHORN) || defined(__REACTOS__)
     SIZE_T EnvironmentSize;
 #endif
-#if (NTDDI_VERSION >= NTDDI_WIN7)
+#if (NTDDI_VERSION >= NTDDI_WIN7) || defined(__REACTOS__)
     SIZE_T EnvironmentVersion;
 #endif
 } RTL_USER_PROCESS_PARAMETERS, *PRTL_USER_PROCESS_PARAMETERS;

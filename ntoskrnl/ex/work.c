@@ -420,14 +420,10 @@ NTAPI
 ExpCheckDynamicThreadCount(VOID)
 {
     ULONG i;
-    PEX_WORK_QUEUE Queue;
 
     /* Loop the 3 queues */
     for (i = 0; i < MaximumWorkQueue; i++)
     {
-        /* Get the queue */
-        Queue = &ExWorkerQueue[i];
-
         /* Check if still need a new thread. See ExQueueWorkItem */
         if (ExpNewThreadNecessary((WORK_QUEUE_TYPE)i))
         {

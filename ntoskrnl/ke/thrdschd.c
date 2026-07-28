@@ -577,6 +577,11 @@ ThreadFound:
     if (DisplacedThread != NULL)
         KiDeferredReadyThread(DisplacedThread);
 
+#if !defined(_M_AMD64) && !defined(_M_ARM64)
+    DBG_UNREFERENCED_LOCAL_VARIABLE(IpiCause);
+    DBG_UNREFERENCED_LOCAL_VARIABLE(StandbySteal);
+#endif
+
     return TRUE;
 }
 

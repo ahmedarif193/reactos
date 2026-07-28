@@ -481,7 +481,6 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     PFileContextBlock FileCB;
     NTSTATUS Status;
     PFILE_OBJECT FileObject;
-    BOOLEAN PerformAccessChecks;
     PNtfsFileRecord CurrentFile = NULL;
     PNtfsCachedRecord CachedRecord = NULL;
     UINT8 Disposition;
@@ -515,10 +514,6 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     VolCB = (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
     DiskVolume = VolCB->DiskVolume;
     Mft = NtfsVolumeGetMft(DiskVolume);
-
-    // Determine if we should check access rights
-    PerformAccessChecks = (Irp->RequestorMode == UserMode) ||
-                          (IrpSp->Flags & SL_FORCE_ACCESS_CHECK);
 
     // TODO: Check if we have rights to access file.
 
