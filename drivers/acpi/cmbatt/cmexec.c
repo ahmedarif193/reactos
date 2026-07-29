@@ -165,7 +165,8 @@ CmBattCallAcpiPackage(
     _In_ ULONG PackageName,
     _In_ ULONG OutputBufferSize,
     _In_ PACPI_PACKAGE_FIELD PackageFields,
-    _In_ ULONG PackageFieldCount)
+    _In_ ULONG PackageFieldCount,
+    _In_ ULONG MinPackageFieldCount)
 {
     NTSTATUS Status;
     PACPI_EVAL_OUTPUT_BUFFER OutputBuffer;
@@ -208,17 +209,19 @@ CmBattCallAcpiPackage(
     }
 
     /* Check if we got the right number of elements */
-    if (OutputBuffer->Count != PackageFieldCount)
+    if (OutputBuffer->Count < MinPackageFieldCount ||
+        OutputBuffer->Count > PackageFieldCount)
     {
         if (CmBattDebug & (CMBATT_ACPI_ASSERT | CMBATT_ACPI_ENTRY_EXIT | CMBATT_ACPI_WARNING | CMBATT_GENERIC_WARNING))
-            DbgPrint("%s: 0x%08x method returned %d elements (requires %d)\n",
-                     FunctionName, PackageName, OutputBuffer->Count, PackageFieldCount);
+            DbgPrint("%s: 0x%08x method returned %d elements (requires %d to %d)\n",
+                     FunctionName, PackageName, OutputBuffer->Count,
+                     MinPackageFieldCount, PackageFieldCount);
         ExFreePoolWithTag(OutputBuffer, 'MtaB');
         return STATUS_ACPI_INVALID_DATA;
     }
 
     Argument = OutputBuffer->Argument;
-    for (i = 0; i < PackageFieldCount && NT_SUCCESS(Status); i++)
+    for (i = 0; i < OutputBuffer->Count && NT_SUCCESS(Status); i++)
     {
         if (PackageFields[i].IsString)
             Status = GetStringElement(Argument, PackageFields[i].Data);
@@ -439,8 +442,9 @@ CmBattGetBifData(PCMBATT_DEVICE_EXTENSION DeviceExtension,
     return CmBattCallAcpiPackage("CmBattGetBifData",
                                  DeviceExtension,
                                  'FIB_',
-                                 512,
+                                 1024,
                                  BifFields,
+                                 RTL_NUMBER_OF(BifFields),
                                  RTL_NUMBER_OF(BifFields));
 }
 
@@ -499,13 +503,16 @@ CmBattGetBixData(
                  BixData, DeviceExtension->DeviceId, KeGetCurrentThread());
     }
 
+    BixData->SwapCapability = 0;
+
     /* Request the ACPI driver to get the _BIX data for us */
     return CmBattCallAcpiPackage("CmBattGetBifData",
                                  DeviceExtension,
                                  'XIB_',
-                                 512,
+                                 2048,
                                  BixFields,
-                                 RTL_NUMBER_OF(BixFields));
+                                 RTL_NUMBER_OF(BixFields),
+                                 RTL_NUMBER_OF(BixFields) - 1);
 }
 
 NTSTATUS
@@ -531,6 +538,7 @@ CmBattGetBstData(PCMBATT_DEVICE_EXTENSION DeviceExtension,
                                  'TSB_',
                                  512,
                                  BstFields,
+                                 RTL_NUMBER_OF(BstFields),
                                  RTL_NUMBER_OF(BstFields));
 }
 

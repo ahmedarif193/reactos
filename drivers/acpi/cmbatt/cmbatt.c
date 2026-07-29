@@ -96,11 +96,10 @@ CmBattWakeDpc(IN PKDPC Dpc,
         if (DeviceExtension->FdoType == CmBattAcAdapter)
         {
             /* Was there a pending notify? */
-            if (DeviceExtension->ArFlag & CMBATT_AR_NOTIFY)
+            if (InterlockedExchange(&DeviceExtension->ArFlag, 0) & CMBATT_AR_NOTIFY)
             {
                 /* We'll send a notify on the next pass */
                 AcNotify = TRUE;
-                DeviceExtension->ArFlag = 0;
                 if (CmBattDebug & 0x20)
                     DbgPrint("CmBattWakeDpc: AC adapter notified\n");
             }
@@ -117,7 +116,7 @@ CmBattWakeDpc(IN PKDPC Dpc,
         if (DeviceExtension->FdoType == CmBattBattery)
         {
             /* Check what ARs are pending */
-            ArFlag = DeviceExtension->ArFlag;
+            ArFlag = InterlockedExchange(&DeviceExtension->ArFlag, 0);
             if (CmBattDebug & 0x20)
                 DbgPrint("CmBattWakeDpc: Performing delayed ARs: %01x\n", ArFlag);
 
@@ -125,7 +124,11 @@ CmBattWakeDpc(IN PKDPC Dpc,
             if (ArFlag & CMBATT_AR_INSERT) InterlockedExchange(&DeviceExtension->ArLockValue, 0);
 
             /* Removal, clear the battery tag */
-            if (ArFlag & CMBATT_AR_REMOVE) DeviceExtension->Tag = 0;
+            if (ArFlag & CMBATT_AR_REMOVE)
+            {
+                DeviceExtension->Tag = 0;
+                DeviceExtension->CachedInfoTag = BATTERY_TAG_INVALID;
+            }
 
             /* Notification (or AC/DC adapter change from first pass above) */
             if ((ArFlag & CMBATT_AR_NOTIFY) || (AcNotify))
@@ -160,7 +163,7 @@ CmBattNotifyHandler(IN PCMBATT_DEVICE_EXTENSION DeviceExtension,
         case ACPI_BUS_CHECK:
 
             /* We treat it as possible physical change */
-            DeviceExtension->ArFlag |= (CMBATT_AR_NOTIFY | CMBATT_AR_INSERT);
+            InterlockedOr(&DeviceExtension->ArFlag, CMBATT_AR_NOTIFY | CMBATT_AR_INSERT);
             if ((DeviceExtension->Tag) &&
                 (CmBattDebug & (CMBATT_ACPI_WARNING | CMBATT_GENERIC_WARNING)))
                 DbgPrint("CmBattNotifyHandler: Received battery #%x insertion, but tag was not invalid.\n",
@@ -171,7 +174,7 @@ CmBattNotifyHandler(IN PCMBATT_DEVICE_EXTENSION DeviceExtension,
         case ACPI_BATT_NOTIFY_STATUS:
 
             /* All we'll do is notify the class driver */
-            DeviceExtension->ArFlag |= CMBATT_AR_NOTIFY;
+            InterlockedOr(&DeviceExtension->ArFlag, CMBATT_AR_NOTIFY);
             break;
 
         /* Information on the battery has changed, such as physical presence */
@@ -179,9 +182,9 @@ CmBattNotifyHandler(IN PCMBATT_DEVICE_EXTENSION DeviceExtension,
         case ACPI_BATT_NOTIFY_INFO:
 
             /* Reset all state and let the class driver re-evaluate it all */
-            DeviceExtension->ArFlag |= (CMBATT_AR_NOTIFY |
-                                        CMBATT_AR_INSERT |
-                                        CMBATT_AR_REMOVE);
+            InterlockedOr(&DeviceExtension->ArFlag, CMBATT_AR_NOTIFY |
+                                                    CMBATT_AR_INSERT |
+                                                    CMBATT_AR_REMOVE);
             break;
 
         default:
@@ -201,17 +204,16 @@ CmBattNotifyHandler(IN PCMBATT_DEVICE_EXTENSION DeviceExtension,
     }
 
     /* We're going to handle this now */
+    ArFlag = InterlockedExchange(&DeviceExtension->ArFlag, 0);
+
     if (CmBattDebug & CMBATT_PNP_INFO)
-        DbgPrint("CmBattNotifyHandler: Performing ARs: %01x\n", DeviceExtension->ArFlag);
+        DbgPrint("CmBattNotifyHandler: Performing ARs: %01x\n", ArFlag);
 
     /* Check if this is a battery or AC adapter notification */
     if (DeviceExtension->FdoType == CmBattBattery)
     {
         /* Reset the current trip point */
         DeviceExtension->TripPointValue = BATTERY_UNKNOWN_CAPACITY;
-
-        /* Check what ARs have to be done */
-        ArFlag = DeviceExtension->ArFlag;
 
         /* New battery inserted, reset lock value */
         if (ArFlag & CMBATT_AR_INSERT) InterlockedExchange(&DeviceExtension->ArLockValue, 0);
@@ -227,7 +229,7 @@ CmBattNotifyHandler(IN PCMBATT_DEVICE_EXTENSION DeviceExtension,
             BatteryClassStatusNotify(DeviceExtension->ClassData);
         }
     }
-    else if (DeviceExtension->ArFlag & CMBATT_AR_NOTIFY)
+    else if (ArFlag & CMBATT_AR_NOTIFY)
     {
         /* The only known notification is AC/DC change. Loop device objects. */
         for (DeviceObject = DeviceExtension->FdoDeviceObject->DriverObject->DeviceObject;
@@ -244,9 +246,6 @@ CmBattNotifyHandler(IN PCMBATT_DEVICE_EXTENSION DeviceExtension,
             }
         }
     }
-
-    /* ARs have been processed */
-    DeviceExtension->ArFlag = 0;
 }
 
 VOID
@@ -518,7 +517,13 @@ CmBattVerifyStaticInfo(
     PBATTERY_INFORMATION Info = &DeviceExtension->BatteryInformation;
 
     /* FIXME: This function is not fully implemented, more checks need to be implemented */
-    UNREFERENCED_PARAMETER(BatteryTag);
+
+    /* The static data only changes when the battery itself does, which yields a new tag */
+    if ((BatteryTag != BATTERY_TAG_INVALID) &&
+        (DeviceExtension->CachedInfoTag == BatteryTag))
+    {
+        return STATUS_SUCCESS;
+    }
 
     /* Retrieve the battery static info */
     Status = CmBattGetBattStaticInfo(DeviceExtension, &UseBix, &BattInfo);
@@ -543,6 +548,8 @@ CmBattVerifyStaticInfo(
 
         /* Free the static information buffer as we already copied it */
         ExFreePoolWithTag(BattInfo, CMBATT_BATT_STATIC_INFO_TAG);
+
+        DeviceExtension->CachedInfoTag = BatteryTag;
     }
 
     return Status;

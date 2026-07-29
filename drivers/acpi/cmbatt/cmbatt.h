@@ -172,13 +172,14 @@ typedef struct _CMBATT_DEVICE_EXTENSION
     PUNICODE_STRING DeviceName;
     ACPI_INTERFACE_STANDARD AcpiInterface;
     BOOLEAN DelayNotification;
-    BOOLEAN ArFlag;
+    volatile LONG ArFlag;
     PVOID ClassData;
     BOOLEAN Started;
     BOOLEAN NotifySent;
     LONG ArLockValue;
     ULONG TagData;
     ULONG Tag;
+    ULONG CachedInfoTag;
     ACPI_BST_DATA BstData;
     ACPI_BATT_STATIC_INFO BattInfo;
     ULONG Id;
