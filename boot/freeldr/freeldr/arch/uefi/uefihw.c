@@ -447,7 +447,7 @@ DetectDisplayController(
     FramebufData = (PCM_FRAMEBUF_DEVICE_DATA)(PartialDescriptor + 1);
     RtlCopyMemory(FramebufData, FrameBufferData, sizeof(*FrameBufferData));
     FramebufData->Version  = 1;
-    FramebufData->Revision = 3;
+    FramebufData->Revision = 4;
     FramebufData->VideoClock = 0; // FIXME: Use EDID
 
     FldrCreateComponentKey(BusKey,

@@ -41,8 +41,10 @@ ULONG  SerialPortNumber = DEFAULT_DEBUG_PORT;
 CPPORT SerialPortInfo   = {0, DEFAULT_DEBUG_BAUD_RATE, 0};
 
 #define KdpScreenLineLengthDefault 80
-static CHAR KdpScreenLineBuffer[KdpScreenLineLengthDefault + 1] = "";
+#define KdpScreenLineLengthMaximum 2048
+static CHAR KdpScreenLineBuffer[KdpScreenLineLengthMaximum + 1] = "";
 static ULONG KdpScreenLineBufferPos = 0, KdpScreenLineLength = 0;
+static ULONG KdpScreenLineCapacity = KdpScreenLineLengthDefault;
 static BOOLEAN KdpScreenInitialized = FALSE;
 
 KDP_DEBUG_MODE KdpDebugMode;
@@ -460,9 +462,18 @@ KdpScreenAcquire(VOID)
 {
     BOOLEAN DisplayAcquired = FALSE;
     BOOLEAN InitializeDisplay;
+    VID_DISPLAY_INFO DisplayInfo;
 
     if (InbvIsBootDriverInstalled())
     {
+        InbvQueryDisplayInfo(&DisplayInfo);
+        if (DisplayInfo.CharacterWidth)
+        {
+            KdpScreenLineCapacity = min(DisplayInfo.Width / DisplayInfo.CharacterWidth, KdpScreenLineLengthMaximum);
+        }
+        if (!KdpScreenLineCapacity)
+            KdpScreenLineCapacity = KdpScreenLineLengthDefault;
+
         DisplayAcquired = (InbvGetDisplayState() != INBV_DISPLAY_STATE_OWNED);
         InitializeDisplay = DisplayAcquired || !KdpScreenInitialized;
 
@@ -471,14 +482,16 @@ KdpScreenAcquire(VOID)
         if (InitializeDisplay)
         {
             InbvResetDisplay();
-            InbvSolidColorFill(0, 0, SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1, BV_COLOR_BLACK);
+            InbvSolidColorFill(0, 0, DisplayInfo.Width - 1, DisplayInfo.Height - 1, BV_COLOR_BLACK);
         }
 
         InbvSetTextColor(BV_COLOR_WHITE);
         InbvInstallDisplayStringFilter(NULL);
         InbvEnableDisplayString(TRUE);
         if (InitializeDisplay)
-            InbvSetScrollRegion(0, 0, SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1);
+        {
+            InbvSetScrollRegion(0, 0, DisplayInfo.Width - 1, DisplayInfo.Height - 1);
+        }
 
         KdpScreenInitialized = TRUE;
     }
@@ -532,7 +545,7 @@ KdpScreenPrint(
             KdpScreenLineBuffer[KdpScreenLineLength] = '\0';
         }
 
-        if (*pch == '\n' || KdpScreenLineLength == KdpScreenLineLengthDefault)
+        if (*pch == '\n' || KdpScreenLineLength >= KdpScreenLineCapacity)
         {
             /* Print buffered characters */
             if (KdpScreenLineBufferPos != KdpScreenLineLength)

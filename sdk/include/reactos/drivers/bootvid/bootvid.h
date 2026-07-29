@@ -12,10 +12,30 @@
 
 #include "display.h"
 
+/*
+ * Bootvid drawing coordinates are expressed in Width x Height logical pixels.
+ * PhysicalWidth x PhysicalHeight describes the underlying scanout. Legacy
+ * backends report identical logical and physical 640x480 dimensions.
+ */
+typedef struct _VID_DISPLAY_INFO
+{
+    ULONG Width;
+    ULONG Height;
+    ULONG PhysicalWidth;
+    ULONG PhysicalHeight;
+    ULONG CharacterWidth;
+    ULONG CharacterHeight;
+    ULONG Dpi;
+} VID_DISPLAY_INFO, *PVID_DISPLAY_INFO;
+
 BOOLEAN
 NTAPI
 VidInitialize(
     _In_ BOOLEAN SetMode);
+
+BOOLEAN
+NTAPI
+VidQueryDisplayInfo(_Out_ PVID_DISPLAY_INFO DisplayInfo);
 
 VOID
 NTAPI

@@ -112,6 +112,7 @@ KdpUpdateTerminalSize(
     CHAR c;
     LONG NumberOfCols = -1; // Or initialize to TermSize->cx ??
     LONG NumberOfRows = -1; // Or initialize to TermSize->cy ??
+    VID_DISPLAY_INFO DisplayInfo;
 
     /* Retrieve the size of the controlling terminal only when it is serial */
     if (KdTermConnected && KdTermSerial && KdTermReportsSize)
@@ -169,7 +170,10 @@ KdpUpdateTerminalSize(
     {
         /* Set the number of columns to the default */
         if (KdpDebugMode.Screen && !KdTermSerial)
-            NumberOfCols = (SCREEN_WIDTH / 8 /*BOOTCHAR_WIDTH*/);
+        {
+            InbvQueryDisplayInfo(&DisplayInfo);
+            NumberOfCols = DisplayInfo.CharacterWidth ? DisplayInfo.Width / DisplayInfo.CharacterWidth : 80;
+        }
         else
             NumberOfCols = 80;
     }
@@ -177,7 +181,10 @@ KdpUpdateTerminalSize(
     {
         /* Set the number of rows to the default */
         if (KdpDebugMode.Screen && !KdTermSerial)
-            NumberOfRows = (SCREEN_HEIGHT / (13 /*BOOTCHAR_HEIGHT*/ + 1));
+        {
+            InbvQueryDisplayInfo(&DisplayInfo);
+            NumberOfRows = DisplayInfo.CharacterHeight ? DisplayInfo.Height / DisplayInfo.CharacterHeight : 34;
+        }
         else
             NumberOfRows = 24;
     }

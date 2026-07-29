@@ -385,6 +385,7 @@ WinLdrInitializePhase1(
             Extension->GopFramebuffer.BlueMask = FrameBufferData->PixelMasks.BlueMask;
             Extension->GopFramebuffer.Reserved = FrameBufferData->PixelMasks.ReservedMask;
             Extension->GopFramebuffer.Dpi = WinLdrGetSystemDpi();
+            FrameBufferData->Dpi = Extension->GopFramebuffer.Dpi;
 
             TRACE("Passing UEFI framebuffer to kernel:\n");
             TRACE("  BaseAddress: 0x%llx\n", Extension->GopFramebuffer.FrameBufferBase.QuadPart);
@@ -865,8 +866,7 @@ NtLdrDetectBootVid(
             }
 
             /* Check whether the resource describes framebuffer information */
-            if (DeviceSpecific &&
-                (DeviceSpecific->u.DeviceSpecificData.DataSize >= sizeof(CM_FRAMEBUF_DEVICE_DATA)))
+            if (DeviceSpecific && (DeviceSpecific->u.DeviceSpecificData.DataSize >= CM_FRAMEBUF_DEVICE_DATA_V3_SIZE))
             {
                 /* It does, use the Linear FrameBuffer Boot Video Driver instead */
                 RtlStringCbCopyA(BootVidName, BootVidNameSize, "lfbbvid.dll");

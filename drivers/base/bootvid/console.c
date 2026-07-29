@@ -14,11 +14,33 @@
 UCHAR VidpTextColor = BV_COLOR_WHITE;
 ULONG VidpCurrentX = 0;
 ULONG VidpCurrentY = 0;
+ULONG VidpDisplayWidth = SCREEN_WIDTH;
+ULONG VidpDisplayHeight = SCREEN_HEIGHT;
+ULONG VidpPhysicalWidth = SCREEN_WIDTH;
+ULONG VidpPhysicalHeight = SCREEN_HEIGHT;
+ULONG VidpDisplayDpi = 96;
 URECT VidpScrollRegion = {0, 0, SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1};
 
 static BOOLEAN ClearRow = FALSE;
 
 /* PUBLIC FUNCTIONS ***********************************************************/
+
+BOOLEAN
+NTAPI
+VidQueryDisplayInfo(_Out_ PVID_DISPLAY_INFO DisplayInfo)
+{
+    if (!DisplayInfo)
+        return FALSE;
+
+    DisplayInfo->Width = VidpDisplayWidth;
+    DisplayInfo->Height = VidpDisplayHeight;
+    DisplayInfo->PhysicalWidth = VidpPhysicalWidth;
+    DisplayInfo->PhysicalHeight = VidpPhysicalHeight;
+    DisplayInfo->CharacterWidth = BOOTCHAR_WIDTH;
+    DisplayInfo->CharacterHeight = BOOTCHAR_HEIGHT + 1;
+    DisplayInfo->Dpi = VidpDisplayDpi;
+    return TRUE;
+}
 
 VOID
 NTAPI
@@ -28,6 +50,7 @@ VidResetDisplay(
     /* Clear the current position */
     VidpCurrentX = 0;
     VidpCurrentY = 0;
+    ClearRow = FALSE;
 
     /* Invoke the hardware-specific routine */
     ResetDisplay(SetMode);
@@ -57,6 +80,15 @@ VidSetScrollRegion(
     /* Assert alignment */
     ASSERT((Left % BOOTCHAR_WIDTH) == 0);
     ASSERT((Right % BOOTCHAR_WIDTH) == BOOTCHAR_WIDTH - 1);
+    ASSERT(Left <= Right);
+    ASSERT(Top <= Bottom);
+    ASSERT(Right < VidpDisplayWidth);
+    ASSERT(Bottom < VidpDisplayHeight);
+
+    if ((Left > Right) || (Top > Bottom) || (Right >= VidpDisplayWidth) || (Bottom >= VidpDisplayHeight))
+    {
+        return;
+    }
 
     /* Set the scroll region */
     VidpScrollRegion.Left = Left;
@@ -86,7 +118,10 @@ VidDisplayStringXY(
     BackColor = Transparent ? BV_COLOR_NONE : BV_COLOR_LIGHT_CYAN;
 
     /* Loop every character and adjust the position */
-    for (; *String; ++String, Left += BOOTCHAR_WIDTH)
+    if (Top >= VidpDisplayHeight)
+        return;
+
+    for (; *String && (Left + BOOTCHAR_WIDTH <= VidpDisplayWidth); ++String, Left += BOOTCHAR_WIDTH)
     {
         /* Display a character */
         DisplayCharacter(*String, Left, Top, BV_COLOR_LIGHT_BLUE, BackColor);

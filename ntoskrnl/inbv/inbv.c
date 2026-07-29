@@ -386,6 +386,26 @@ InbvGetDisplayState(VOID)
 
 BOOLEAN
 NTAPI
+InbvQueryDisplayInfo(_Out_ PVID_DISPLAY_INFO DisplayInfo)
+{
+    if (!DisplayInfo)
+        return FALSE;
+
+    if (InbvBootDriverInstalled && VidQueryDisplayInfo(DisplayInfo))
+        return TRUE;
+
+    DisplayInfo->Width = SCREEN_WIDTH;
+    DisplayInfo->Height = SCREEN_HEIGHT;
+    DisplayInfo->PhysicalWidth = SCREEN_WIDTH;
+    DisplayInfo->PhysicalHeight = SCREEN_HEIGHT;
+    DisplayInfo->CharacterWidth = 8;
+    DisplayInfo->CharacterHeight = 14;
+    DisplayInfo->Dpi = 96;
+    return FALSE;
+}
+
+BOOLEAN
+NTAPI
 InbvDisplayString(
     _In_ PCSTR String)
 {
