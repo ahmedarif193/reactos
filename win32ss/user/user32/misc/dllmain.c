@@ -575,6 +575,8 @@ DllMain(
                 return FALSE;
             }
 
+            User32InitializeDpiAwareness();
+
             if (!gfServerProcess)
             {
                 HINSTANCE hImm32 = NULL;

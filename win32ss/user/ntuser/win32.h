@@ -1,5 +1,19 @@
 #pragma once
 
+#define NTUSER_DPI_UNAWARE              0x00006010
+#define NTUSER_DPI_SYSTEM_AWARE         0x00000011
+#define NTUSER_DPI_PER_MONITOR_AWARE    0x00000012
+#define NTUSER_DPI_PER_MONITOR_AWARE_V2 0x00000022
+#define NTUSER_DPI_UNAWARE_GDISCALED    0x40006010
+#define NTUSER_DPI_CONTEXT_GET_AWARENESS(Context) ((Context) & 0x0f)
+#define NTUSER_DPI_CONTEXT_GET_VERSION(Context)   (((Context) & 0xf0) >> 4)
+#define NTUSER_DPI_CONTEXT_GET_DPI(Context)       (((Context) & 0x1ff00) >> 8)
+#define NTUSER_DPI_CONTEXT_GET_FLAGS(Context)     ((Context) & 0xfffe0000)
+#define NTUSER_DPI_CONTEXT_FLAG_GDISCALED 0x40000000
+#define NTUSER_DPI_CONTEXT_FLAG_PROCESS 0x80000000
+#define NTUSER_DPI_CONTEXT_FLAG_VALID_MASK \
+    (NTUSER_DPI_CONTEXT_FLAG_PROCESS | NTUSER_DPI_CONTEXT_FLAG_GDISCALED)
+
 /* W32PROCESS flags */
 #define W32PF_CONSOLEAPPLICATION      0x00000001
 #define W32PF_FORCEOFFFEEDBACK        0x00000002
@@ -131,6 +145,7 @@ typedef struct _THREADINFO
     struct _WND*        spwndDefaultIme;
     struct tagIMC*      spDefaultImc;
     HKL                 hklPrev;
+    ULONG               DpiContext; /* 0 inherits the process context */
 
     INT                 cEnterCount;
     /* Queue of messages posted to the queue. */
@@ -281,7 +296,7 @@ typedef struct _PROCESSINFO
     DWORD dwRegisteredClasses;
 
     /* Win8+ per-process pointer/DPI state (win32u parity) */
-    ULONG DpiContext;             /* NTUSER_DPI_* context; 0 = never set (reads as 0x6010) */
+    ULONG DpiContext;             /* NTUSER_DPI_* context; 0 = never set (reads as unaware) */
     BOOLEAN MouseInPointerEnabled;
     BOOLEAN MouseInPointerSet;
 

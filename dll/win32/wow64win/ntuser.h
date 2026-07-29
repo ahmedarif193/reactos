@@ -901,6 +901,7 @@ W32KAPI BOOL    WINAPI NtUserGetScrollBarInfo( HWND hwnd, LONG id, SCROLLBARINFO
 W32KAPI ULONG   WINAPI NtUserGetSystemDpiForProcess( HANDLE process );
 W32KAPI HMENU   WINAPI NtUserGetSystemMenu( HWND hwnd, BOOL revert );
 W32KAPI HDESK   WINAPI NtUserGetThreadDesktop( DWORD thread );
+W32KAPI ULONG   WINAPI NtUserGetThreadDpiAwarenessContext(void);
 W32KAPI ULONG_PTR WINAPI NtUserGetThreadState( USERTHREADSTATECLASS cls );
 W32KAPI BOOL    WINAPI NtUserGetTitleBarInfo( HWND hwnd, TITLEBARINFO *info );
 W32KAPI INT     WINAPI NtUserGetUpdateRgn( HWND hwnd, HRGN hrgn, BOOL erase );
@@ -908,6 +909,7 @@ W32KAPI BOOL    WINAPI NtUserGetUpdatedClipboardFormats( UINT *formats, UINT siz
 W32KAPI BOOL    WINAPI NtUserGetUpdateRect( HWND hwnd, RECT *rect, BOOL erase );
 W32KAPI DWORD   WINAPI NtUserGetWindowContextHelpId( HWND hwnd );
 W32KAPI HDC     WINAPI NtUserGetWindowDC( HWND hwnd );
+W32KAPI ULONG   WINAPI NtUserGetWindowDpiAwarenessContext( HWND hwnd );
 W32KAPI BOOL    WINAPI NtUserGetWindowDisplayAffinity( HWND hwnd, DWORD *affinity );
 W32KAPI BOOL    WINAPI NtUserGetWindowPlacement( HWND hwnd, WINDOWPLACEMENT *placement );
 W32KAPI int     WINAPI NtUserGetWindowRgnEx( HWND hwnd, HRGN hrgn, UINT unk );
@@ -1014,6 +1016,7 @@ W32KAPI BOOL    WINAPI NtUserSetSystemMenu( HWND hwnd, HMENU menu );
 W32KAPI UINT_PTR WINAPI NtUserSetSystemTimer( HWND hwnd, UINT_PTR id, UINT timeout );
 W32KAPI HWND    WINAPI NtUserSetTaskmanWindow( HWND hwnd );
 W32KAPI BOOL    WINAPI NtUserSetThreadDesktop( HDESK handle );
+W32KAPI ULONG   WINAPI NtUserSetThreadDpiAwarenessContext( ULONG context );
 W32KAPI UINT_PTR WINAPI NtUserSetTimer( HWND hwnd, UINT_PTR id, UINT timeout, TIMERPROC proc, ULONG tolerance );
 W32KAPI BOOL    WINAPI NtUserSetWindowContextHelpId( HWND hwnd, DWORD id );
 W32KAPI BOOL    WINAPI NtUserSetWindowFNID( HWND hwnd, WORD fnid );
@@ -1189,11 +1192,6 @@ static inline INT NtUserGetSystemMetrics( INT index )
     return NtUserCallOneParam( index, NtUserCallOneParam_GetSystemMetrics );
 }
 
-static inline UINT NtUserSetThreadDpiAwarenessContext( UINT context )
-{
-    return NtUserCallOneParam( context, NtUserCallOneParam_SetThreadDpiAwarenessContext );
-}
-
 typedef struct _D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME;
 
 static inline NTSTATUS NtUserD3DKMTOpenAdapterFromGdiDisplayName( D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME *desc )
@@ -1353,11 +1351,6 @@ static inline void *NtUserGetMDIClientInfo( HWND hwnd )
 static inline HWND NtUserGetParent( HWND hwnd )
 {
     return UlongToHandle( NtUserCallHwnd( hwnd, NtUserCallHwnd_GetParent ));
-}
-
-static inline UINT NtUserGetWindowDpiAwarenessContext( HWND hwnd )
-{
-    return NtUserCallHwnd( hwnd, NtUserCallHwnd_GetWindowDpiAwarenessContext );
 }
 
 static inline HIMC NtUserGetWindowInputContext( HWND hwnd )

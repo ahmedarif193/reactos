@@ -752,3 +752,6 @@
     SVC_(UserGetProp, 2)
     SVC_(UserIsMouseInPointerEnabled, 0)
     SVC_(UserSetProcessDpiAwarenessContext, 2)
+    SVC_(UserGetThreadDpiAwarenessContext, 0)
+    SVC_(UserGetWindowDpiAwarenessContext, 1)
+    SVC_(UserSetThreadDpiAwarenessContext, 1)

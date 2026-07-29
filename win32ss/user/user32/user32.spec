@@ -3,6 +3,7 @@
 @ stdcall -version=0x600+ AddClipboardFormatListener(ptr)
 @ stdcall AdjustWindowRect(ptr long long)
 @ stdcall AdjustWindowRectEx(ptr long long long)
+@ stdcall -version=0xA00+ AdjustWindowRectExForDpi(ptr long long long long)
 @ stdcall AlignRects(ptr long long long)
 @ stdcall AllowForegroundActivation()
 @ stdcall AllowSetForegroundWindow(long)
@@ -10,6 +11,7 @@
 @ stdcall AnyPopup()
 @ stdcall AppendMenuA(long long long ptr)
 @ stdcall AppendMenuW(long long long ptr)
+@ stdcall -version=0xA00+ AreDpiAwarenessContextsEqual(long long)
 @ stdcall ArrangeIconicWindows(long)
 @ stdcall AttachThreadInput(long long long) NtUserAttachThreadInput
 @ stdcall BeginDeferWindowPos(long)
@@ -249,6 +251,7 @@
 @ stdcall GetAltTabInfo(long long ptr ptr long) GetAltTabInfoA
 @ stdcall GetAltTabInfoA(long long ptr ptr long)
 @ stdcall GetAltTabInfoW(long long ptr ptr long)
+@ stdcall -version=0xA00+ GetAwarenessFromDpiAwarenessContext(long)
 @ stdcall GetAncestor(ptr long) ; Direct call NtUserGetAncestor
 @ stdcall GetAppCompatFlags(long)
 @ stdcall GetAppCompatFlags2(long)
@@ -293,9 +296,11 @@
 @ stdcall GetDlgItemTextA(long long ptr long)
 @ stdcall GetDlgItemTextW(long long ptr long)
 @ stdcall GetDoubleClickTime() NtUserGetDoubleClickTime
+@ stdcall -version=0xA00+ GetDpiAwarenessContextForProcess(long)
 @ stdcall -version=0x601+ GetDpiForMonitorInternal(ptr long ptr ptr)
 @ stdcall -version=0xA00+ GetDpiForSystem()
 @ stdcall -version=0xA00+ GetDpiForWindow(ptr)
+@ stdcall -version=0xA00+ GetDpiFromDpiAwarenessContext(long)
 @ stdcall GetFocus()
 @ stdcall GetForegroundWindow() NtUserGetForegroundWindow
 @ stdcall GetGUIThreadInfo(long ptr) NtUserGetGUIThreadInfo
@@ -378,6 +383,7 @@
 @ stdcall GetSysColorBrush(long)
 @ stdcall GetSystemMenu(long long) ; NtUserGetSystemMenu
 @ stdcall GetSystemMetrics(long)
+@ stdcall -version=0xA00+ GetSystemMetricsForDpi(long long)
 @ stdcall GetTabbedTextExtentA(long str long long ptr)
 @ stdcall GetTabbedTextExtentW(long wstr long long ptr)
 @ stdcall GetTaskmanWindow ()
@@ -393,6 +399,7 @@
 @ stdcall GetUserObjectSecurity (long ptr ptr long ptr)
 @ stdcall GetWinStationInfo(ptr)
 @ stdcall GetWindow(long long)
+@ stdcall -version=0xA00+ GetWindowDpiAwarenessContext(ptr)
 @ stdcall GetWindowContextHelpId(long)
 @ stdcall GetWindowDC(long) NtUserGetWindowDC
 @ stdcall -version=0x601+ GetWindowDisplayAffinity(long ptr)
@@ -464,7 +471,7 @@
 @ stdcall IsSETEnabled()
 @ stdcall IsServerSideWindow(long)
 @ stdcall -version=0x601+ IsTouchWindow(long ptr)
-@ stdcall -stub -version=0xA00+ IsValidDpiAwarenessContext(long)
+@ stdcall -version=0xA00+ IsValidDpiAwarenessContext(long)
 @ stdcall IsWinEventHookInstalled(long)
 @ stdcall IsWindow(long)
 @ stdcall IsWindowEnabled(long)
@@ -734,6 +741,7 @@
 @ stdcall SwitchToThisWindow(long long)
 @ stdcall SystemParametersInfoA(long long ptr long)
 @ stdcall SystemParametersInfoW(long long ptr long)
+@ stdcall -version=0xA00+ SystemParametersInfoForDpi(long long ptr long long)
 @ stdcall TabbedTextOutA(long long long str long long ptr long)
 @ stdcall TabbedTextOutW(long long long wstr long long ptr long)
 @ stdcall TileChildWindows(long long)

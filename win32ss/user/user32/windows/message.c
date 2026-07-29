@@ -12,6 +12,8 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(user32);
 
+#define DPI_CONTEXT_FLAG_PROCESS 0x80000000UL
+
 #ifdef __i386__
 /* For bad applications which provide bad (non stdcall) WndProc */
 extern
@@ -1421,6 +1423,26 @@ SetMessageExtraInfo(
   return NtUserxSetMessageExtraInfo(lParam);
 }
 
+static ULONG
+IntSetWindowDpiContext(PWND pWnd, PBOOL Changed)
+{
+  ULONG Current;
+
+  *Changed = FALSE;
+  if (!pWnd || !pWnd->DpiContext)
+      return 0;
+
+  Current = NtUserGetThreadDpiAwarenessContext();
+  if ((Current & ~DPI_CONTEXT_FLAG_PROCESS) == (pWnd->DpiContext & ~DPI_CONTEXT_FLAG_PROCESS))
+      return 0;
+
+  Current = NtUserSetThreadDpiAwarenessContext(pWnd->DpiContext);
+  if (Current)
+      *Changed = TRUE;
+
+  return Current;
+}
+
 LRESULT FASTCALL
 IntCallWindowProcW(BOOL IsAnsiProc,
                    WNDPROC WndProc,
@@ -1433,7 +1455,9 @@ IntCallWindowProcW(BOOL IsAnsiProc,
   MSG AnsiMsg;
   MSG UnicodeMsg;
   BOOL Hook = FALSE, MsgOverride = FALSE, Dialog, DlgOverride = FALSE;
+  BOOL DpiContextChanged;
   LRESULT Result = 0, PreResult = 0;
+  ULONG PreviousDpiContext;
   DWORD Data = 0;
 
   if (WndProc == NULL)
@@ -1441,6 +1465,8 @@ IntCallWindowProcW(BOOL IsAnsiProc,
       WARN("IntCallWindowsProcW() called with WndProc = NULL!\n");
       return FALSE;
   }
+
+  PreviousDpiContext = IntSetWindowDpiContext(pWnd, &DpiContextChanged);
 
   if (pWnd)
      Dialog = (pWnd->fnid == FNID_DIALOG);
@@ -1577,6 +1603,8 @@ IntCallWindowProcW(BOOL IsAnsiProc,
 
 Exit:
   if (Hook) EndUserApiHook();
+  if (DpiContextChanged)
+      NtUserSetThreadDpiAwarenessContext(PreviousDpiContext);
   return Result;
 }
 
@@ -1592,7 +1620,9 @@ IntCallWindowProcA(BOOL IsAnsiProc,
   MSG AnsiMsg;
   MSG UnicodeMsg;
   BOOL Hook = FALSE, MsgOverride = FALSE, Dialog, DlgOverride = FALSE;
+  BOOL DpiContextChanged;
   LRESULT Result = 0, PreResult = 0;
+  ULONG PreviousDpiContext;
   DWORD Data = 0;
 
   TRACE("IntCallWindowProcA: IsAnsiProc : %s, WndProc %p, pWnd %p, hWnd %p, Msg %u, wParam %Iu, lParam %Iu.\n",
@@ -1603,6 +1633,8 @@ IntCallWindowProcA(BOOL IsAnsiProc,
       WARN("IntCallWindowsProcA() called with WndProc = NULL!\n");
       return FALSE;
   }
+
+  PreviousDpiContext = IntSetWindowDpiContext(pWnd, &DpiContextChanged);
 
   if (pWnd)
      Dialog = (pWnd->fnid == FNID_DIALOG);
@@ -1739,6 +1771,8 @@ IntCallWindowProcA(BOOL IsAnsiProc,
 
 Exit:
   if (Hook) EndUserApiHook();
+  if (DpiContextChanged)
+      NtUserSetThreadDpiAwarenessContext(PreviousDpiContext);
   return Result;
 }
 

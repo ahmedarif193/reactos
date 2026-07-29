@@ -40,6 +40,15 @@ WINE_DEFAULT_DEBUG_CHANNEL(shcore);
 static DWORD shcore_tls;
 static IUnknown *process_ref;
 
+BOOL WINAPI
+GetProcessDpiAwarenessInternal(HANDLE Process, DPI_AWARENESS *Awareness);
+
+BOOL WINAPI
+SetProcessDpiAwarenessInternal(DPI_AWARENESS Awareness);
+
+BOOL WINAPI
+GetDpiForMonitorInternal(HMONITOR Monitor, UINT Type, UINT *DpiX, UINT *DpiY);
+
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
 {
     TRACE("%p, %lu, %p.\n", instance, reason, reserved);
@@ -60,9 +69,9 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
     return TRUE;
 }
 
-#ifndef __REACTOS__
 HRESULT WINAPI GetProcessDpiAwareness(HANDLE process, PROCESS_DPI_AWARENESS *value)
 {
+    if (!value) return E_INVALIDARG;
     if (GetProcessDpiAwarenessInternal( process, (DPI_AWARENESS *)value )) return S_OK;
     return HRESULT_FROM_WIN32( GetLastError() );
 }
@@ -75,24 +84,122 @@ HRESULT WINAPI SetProcessDpiAwareness(PROCESS_DPI_AWARENESS value)
 
 HRESULT WINAPI GetDpiForMonitor(HMONITOR monitor, MONITOR_DPI_TYPE type, UINT *x, UINT *y)
 {
+    DWORD error;
+
+    if (!x || !y || type < MDT_EFFECTIVE_DPI || type > MDT_RAW_DPI)
+        return E_INVALIDARG;
+
     if (GetDpiForMonitorInternal( monitor, type, x, y )) return S_OK;
-    return HRESULT_FROM_WIN32( GetLastError() );
+
+    error = GetLastError();
+    if (error == ERROR_BAD_ARGUMENTS || error == ERROR_INVALID_ADDRESS || error == ERROR_INVALID_MONITOR_HANDLE)
+    {
+        return E_INVALIDARG;
+    }
+    return HRESULT_FROM_WIN32( error );
 }
-#endif /* __REACTOS__ */
+
+static DEVICE_SCALE_FACTOR
+ScaleFactorFromDpi(UINT dpi)
+{
+    static const DEVICE_SCALE_FACTOR Factors[] =
+    {
+        SCALE_100_PERCENT,
+        SCALE_120_PERCENT,
+        SCALE_125_PERCENT,
+        SCALE_140_PERCENT,
+        SCALE_150_PERCENT,
+        SCALE_160_PERCENT,
+        SCALE_175_PERCENT,
+        SCALE_180_PERCENT,
+        SCALE_200_PERCENT,
+        SCALE_225_PERCENT,
+        SCALE_250_PERCENT,
+        SCALE_300_PERCENT,
+        SCALE_350_PERCENT,
+        SCALE_400_PERCENT,
+        SCALE_450_PERCENT,
+        SCALE_500_PERCENT
+    };
+    UINT percent;
+    UINT best_delta = ~0u;
+    DEVICE_SCALE_FACTOR best = SCALE_100_PERCENT;
+    unsigned int i;
+
+    if (!dpi)
+        return DEVICE_SCALE_FACTOR_INVALID;
+
+    percent = (UINT)(((ULONGLONG)dpi * 100 + USER_DEFAULT_SCREEN_DPI / 2) / USER_DEFAULT_SCREEN_DPI);
+
+    for (i = 0; i < sizeof(Factors) / sizeof(Factors[0]); ++i)
+    {
+        UINT factor = Factors[i];
+        UINT delta = (factor > percent) ? factor - percent : percent - factor;
+
+        if (delta < best_delta)
+        {
+            best_delta = delta;
+            best = Factors[i];
+        }
+    }
+
+    return best;
+}
 
 HRESULT WINAPI GetScaleFactorForMonitor(HMONITOR monitor, DEVICE_SCALE_FACTOR *scale)
 {
-    FIXME("(%p %p): stub\n", monitor, scale);
+    UINT dpi_x, dpi_y;
+    HRESULT hr;
 
+    if (!scale)
+        return E_INVALIDARG;
+
+    /*
+     * The API contract requires a usable fallback even on failure so callers
+     * can continue with 100-percent resources.
+     */
     *scale = SCALE_100_PERCENT;
+    hr = GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &dpi_x, &dpi_y);
+    if (FAILED(hr))
+        return hr;
+
+    *scale = ScaleFactorFromDpi(dpi_y);
     return S_OK;
 }
 
 DEVICE_SCALE_FACTOR WINAPI GetScaleFactorForDevice(DISPLAY_DEVICE_TYPE device_type)
 {
-    FIXME("%d\n", device_type);
+    POINT origin = { 0, 0 };
+    HMONITOR monitor;
+    DEVICE_SCALE_FACTOR scale;
 
-    return SCALE_100_PERCENT;
+    if (device_type != DEVICE_PRIMARY && device_type != DEVICE_IMMERSIVE)
+        return SCALE_100_PERCENT;
+
+    monitor = MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY);
+    if (FAILED(GetScaleFactorForMonitor(monitor, &scale)))
+        return SCALE_100_PERCENT;
+
+    return scale;
+}
+
+UINT WINAPI GetDpiForShellUIComponent(SHELL_UI_COMPONENT component)
+{
+    POINT origin = { 0, 0 };
+    HMONITOR monitor;
+    UINT dpi_x, dpi_y;
+
+    if (component < SHELL_UI_COMPONENT_TASKBARS || component > SHELL_UI_COMPONENT_DESKBAND)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+
+    monitor = MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY);
+    if (FAILED(GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &dpi_x, &dpi_y)))
+        return USER_DEFAULT_SCREEN_DPI;
+
+    return dpi_y;
 }
 
 HRESULT WINAPI _IStream_Read(IStream *stream, void *dest, ULONG size)

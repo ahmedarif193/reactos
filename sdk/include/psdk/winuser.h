@@ -4327,6 +4327,10 @@ typedef struct tagPOINTER_PEN_INFO {
 HKL WINAPI ActivateKeyboardLayout(_In_ HKL, _In_ UINT);
 BOOL WINAPI AdjustWindowRect(_Inout_ LPRECT, _In_ DWORD, _In_ BOOL);
 BOOL WINAPI AdjustWindowRectEx(_Inout_ LPRECT, _In_ DWORD, _In_ BOOL, _In_ DWORD);
+#if (_WIN32_WINNT >= 0x0605)
+BOOL WINAPI AdjustWindowRectExForDpi(_Inout_ LPRECT, _In_ DWORD, _In_ BOOL, _In_ DWORD, _In_ UINT);
+BOOL WINAPI AreDpiAwarenessContextsEqual(_In_ DPI_AWARENESS_CONTEXT, _In_ DPI_AWARENESS_CONTEXT);
+#endif
 #if (_WIN32_WINNT >= 0x0500)
 BOOL WINAPI AnimateWindow(_In_ HWND, _In_ DWORD, _In_ DWORD);
 #endif /* (_WIN32_WINNT >= 0x0500) */
@@ -5201,11 +5205,20 @@ BOOL WINAPI GetMonitorInfoW(_In_ HMONITOR, _Inout_ LPMONITORINFO);
 
 #if (_WIN32_WINNT >= _WIN32_WINNT_VISTA)
 #define USER_DEFAULT_SCREEN_DPI 96
+BOOL WINAPI IsProcessDPIAware(VOID);
+BOOL WINAPI SetProcessDPIAware(VOID);
 #endif /* _WIN32_WINNT >= _WIN32_WINNT_VISTA */
 
 #if (_WIN32_WINNT >= 0x0605) /* Windows 10 pre-Threshold */
+DPI_AWARENESS WINAPI GetAwarenessFromDpiAwarenessContext(_In_ DPI_AWARENESS_CONTEXT);
+DPI_AWARENESS_CONTEXT WINAPI GetDpiAwarenessContextForProcess(_In_opt_ HANDLE);
 UINT WINAPI GetDpiForSystem(VOID);
 UINT WINAPI GetDpiForWindow(_In_ HWND hwnd);
+UINT WINAPI GetDpiFromDpiAwarenessContext(_In_ DPI_AWARENESS_CONTEXT);
+INT WINAPI GetSystemMetricsForDpi(_In_ INT, _In_ UINT);
+DPI_AWARENESS_CONTEXT WINAPI GetThreadDpiAwarenessContext(VOID);
+DPI_AWARENESS_CONTEXT WINAPI GetWindowDpiAwarenessContext(_In_ HWND);
+BOOL WINAPI IsValidDpiAwarenessContext(_In_ DPI_AWARENESS_CONTEXT);
 #endif /* _WIN32_WINNT >= 0x0605 */
 
 UINT
@@ -5659,6 +5672,9 @@ VOID WINAPI SwitchToThisWindow(_In_ HWND, _In_ BOOL);
 #endif /* (_WIN32_WINNT >= 0x0500) */
 BOOL WINAPI SystemParametersInfoA(_In_ UINT uiAction, _In_ UINT uiParam, _Inout_opt_ PVOID pvParam, _In_ UINT fWinIni);
 BOOL WINAPI SystemParametersInfoW(_In_ UINT uiAction, _In_ UINT uiParam, _Inout_opt_ PVOID pvParam, _In_ UINT fWinIni);
+#if (_WIN32_WINNT >= 0x0605)
+BOOL WINAPI SystemParametersInfoForDpi(_In_ UINT uiAction, _In_ UINT uiParam, _Inout_opt_ PVOID pvParam, _In_ UINT fWinIni, _In_ UINT dpi);
+#endif
 
 LONG
 WINAPI

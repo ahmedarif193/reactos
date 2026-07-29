@@ -545,6 +545,11 @@ EnumObjects(HDC hdc,
  * @implemented
  *
  */
+ULONG APIENTRY
+NtUserGetThreadDpiAwarenessContext(VOID);
+
+#define GDI_UNAWARE_DPI 96
+
 int
 WINAPI
 GetDeviceCaps(
@@ -611,9 +616,17 @@ GetDeviceCaps(
         return pDevCaps->ulVertRes;
 
     case LOGPIXELSX:
+        if (pDevCaps == GdiDevCaps && (NtUserGetThreadDpiAwarenessContext() & 0x0f) == DPI_AWARENESS_UNAWARE)
+        {
+            return GDI_UNAWARE_DPI;
+        }
         return pDevCaps->ulLogPixelsX;
 
     case LOGPIXELSY:
+        if (pDevCaps == GdiDevCaps && (NtUserGetThreadDpiAwarenessContext() & 0x0f) == DPI_AWARENESS_UNAWARE)
+        {
+            return GDI_UNAWARE_DPI;
+        }
         return pDevCaps->ulLogPixelsY;
 
     case BITSPIXEL:

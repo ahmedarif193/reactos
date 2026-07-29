@@ -56,6 +56,24 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(explorernew);
 
+static inline INT
+ShellScaleForDpi(INT Value)
+{
+    HDC hdc = GetDC(NULL);
+    INT dpi = 96;
+
+    if (hdc)
+    {
+        dpi = GetDeviceCaps(hdc, LOGPIXELSY);
+        ReleaseDC(NULL, hdc);
+    }
+
+    if (dpi <= 0)
+        dpi = 96;
+
+    return MulDiv(Value, dpi, 96);
+}
+
 #define ASSERT(cond) \
     do if (!(cond)) { \
         Win32DbgPrint(__FILE__, __LINE__, "ASSERTION %s FAILED!\n", #cond); \

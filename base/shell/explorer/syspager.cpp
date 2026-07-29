@@ -1280,17 +1280,17 @@ void CNotifyToolbar::RefreshToolbarMetrics(BOOL bForceRefresh = FALSE)
     {
         TBMETRICS tbm = {sizeof(tbm)};
         tbm.dwMask = TBMF_BARPAD | TBMF_BUTTONSPACING | TBMF_PAD;
-        tbm.cxPad = 1;
-        tbm.cyPad = 1;
+        tbm.cxPad = ShellScaleForDpi(1);
+        tbm.cyPad = ShellScaleForDpi(1);
         if (!g_TaskbarSettings.UseCompactTrayIcons())
         {
             tbm.cxPad = GetSystemMetrics(SM_CXSMICON) / 2;
             tbm.cyPad = GetSystemMetrics(SM_CYSMICON) / 2;
         }
-        tbm.cxBarPad = 1;
-        tbm.cyBarPad = 1;
-        tbm.cxButtonSpacing = 1;
-        tbm.cyButtonSpacing = 1;
+        tbm.cxBarPad = ShellScaleForDpi(1);
+        tbm.cyBarPad = ShellScaleForDpi(1);
+        tbm.cxButtonSpacing = ShellScaleForDpi(1);
+        tbm.cyButtonSpacing = ShellScaleForDpi(1);
         SetMetrics(&tbm);
     }
 }
@@ -1429,8 +1429,8 @@ void CSysPagerWnd::GetSize(IN BOOL IsHorizontal, IN PSIZE size)
 #else
     INT rows = 0;
     INT columns = 0;
-    INT cyButton = GetSystemMetrics(SM_CYSMICON) + 2;
-    INT cxButton = GetSystemMetrics(SM_CXSMICON) + 2;
+    INT cyButton = GetSystemMetrics(SM_CYSMICON) + ShellScaleForDpi(2);
+    INT cxButton = GetSystemMetrics(SM_CXSMICON) + ShellScaleForDpi(2);
     if (!g_TaskbarSettings.UseCompactTrayIcons())
     {
         cyButton = MulDiv(GetSystemMetrics(SM_CYSMICON), 3, 2);
