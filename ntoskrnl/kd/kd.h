@@ -47,11 +47,12 @@ KdbpReleaseLock(
     _In_ KIRQL OldIrql,
     _In_ BOOLEAN LockAcquired);
 
-VOID
+BOOLEAN
 KdpScreenAcquire(VOID);
 
 VOID
-KdpScreenRelease(VOID);
+KdpScreenRelease(
+    _In_ BOOLEAN DisplayAcquired);
 
 NTSTATUS
 NTAPI

@@ -42,6 +42,35 @@ UNICODE_STRING KeRosVideoBiosDate, KeRosVideoBiosVersion;
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
+static
+BOOLEAN
+KiIsScreenDebuggingEnabled(VOID)
+{
+    static const CHAR ScreenOption[] = "DEBUGPORT=SCREEN";
+    PCSTR Current;
+    SIZE_T OptionLength;
+
+    if (!KeLoaderBlock || !KeLoaderBlock->LoadOptions)
+        return FALSE;
+
+    Current = KeLoaderBlock->LoadOptions;
+    while (*Current)
+    {
+        Current += strspn(Current, " \t/");
+        OptionLength = strcspn(Current, " \t/");
+
+        if ((OptionLength == sizeof(ScreenOption) - sizeof(ANSI_NULL)) &&
+            (_strnicmp(Current, ScreenOption, OptionLength) == 0))
+        {
+            return TRUE;
+        }
+
+        Current += OptionLength;
+    }
+
+    return FALSE;
+}
+
 PVOID
 NTAPI
 KiPcToFileHeader(IN PVOID Pc,
@@ -664,16 +693,30 @@ KiDisplayBlueScreen(IN ULONG MessageId,
     /* Check if bootvid is installed */
     if (InbvIsBootDriverInstalled())
     {
-        /* Acquire ownership and reset the display */
-        InbvAcquireDisplayOwnership();
-        InbvResetDisplay();
+        if (KiIsScreenDebuggingEnabled() &&
+            (InbvGetDisplayState() == INBV_DISPLAY_STATE_OWNED))
+        {
+            /*
+             * Preserve the screen-debug log and its cursor. The crash report
+             * will append through the existing bootvid scrolling path.
+             */
+            InbvSetTextColor(BV_COLOR_WHITE);
+            InbvInstallDisplayStringFilter(NULL);
+            InbvEnableDisplayString(TRUE);
+        }
+        else
+        {
+            /* Acquire ownership and reset the display */
+            InbvAcquireDisplayOwnership();
+            InbvResetDisplay();
 
-        /* Display blue screen */
-        InbvSolidColorFill(0, 0, SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1, BV_COLOR_BLUE);
-        InbvSetTextColor(BV_COLOR_WHITE);
-        InbvInstallDisplayStringFilter(NULL);
-        InbvEnableDisplayString(TRUE);
-        InbvSetScrollRegion(0, 0, SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1);
+            /* Display blue screen */
+            InbvSolidColorFill(0, 0, SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1, BV_COLOR_BLUE);
+            InbvSetTextColor(BV_COLOR_WHITE);
+            InbvInstallDisplayStringFilter(NULL);
+            InbvEnableDisplayString(TRUE);
+            InbvSetScrollRegion(0, 0, SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1);
+        }
     }
 
     /* Check if this is a hard error */
