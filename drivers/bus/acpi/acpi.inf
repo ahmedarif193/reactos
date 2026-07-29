@@ -52,7 +52,7 @@ AddService = compbatt, 0x00000002, compbatt_Service_Inst
 
 [compbatt_Service_Inst]
 ServiceType   = 1
-StartType     = 0
+StartType     = 3
 ErrorControl  = 1
 ServiceBinary = %12%\compbatt.sys
 LoadOrderGroup = System Bus Extender
