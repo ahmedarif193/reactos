@@ -37,6 +37,10 @@ add_library(softgpu MODULE
     softgpu.rc
     ${CMAKE_CURRENT_BINARY_DIR}/softgpu.def)
 
+target_compile_definitions(softgpu PRIVATE
+    REACTOS_WDDM_TARGET_LEVEL=${REACTOS_WDDM_TARGET_LEVEL}
+    REACTOS_WDDM_TARGET_INTERFACE_VERSION=${REACTOS_WDDM_TARGET_INTERFACE_VERSION})
+
 set_module_type(softgpu kernelmodedriver)
 target_link_libraries(softgpu displib)
 add_importlibs(softgpu ntoskrnl hal)

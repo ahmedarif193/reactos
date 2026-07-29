@@ -210,20 +210,13 @@ DriverEntry(
 
     RtlZeroMemory(&InitData, sizeof(InitData));
     /*
-     * Declare the version this file is *compiled* at, not a lower one.
-     *
-     * The port driver reads Version first and uses it to decide how many bytes
-     * of DRIVER_INITIALIZATION_DATA it may read.  This used to say WDDM 2.0
-     * while the file compiles at DXGKDDI_INTERFACE_VERSION (see CMakeLists),
-     * so the structure had the newer layout and the declared version told the
-     * port driver to interpret it with the older one -- every field past the
-     * WDDM 2.0 tail then sits at an offset nobody agrees on.
-     *
-     * Measured on Win11 ARM64: loading this driver there returned
-     * STATUS_REVISION_MISMATCH from the real dxgkrnl, which is what that
-     * disagreement looks like from the other side.
+     * The compile-time selector exposes declarations; it does not promote the
+     * miniport's implemented contract. DRIVER_INITIALIZATION_DATA is
+     * append-only, so compiling with later declarations does not move any
+     * WDDM 2.0 member. DxgkInitialize uses Version to copy exactly the prefix
+     * the miniport promises to implement.
      */
-    InitData.Version = DXGKDDI_INTERFACE_VERSION;
+    InitData.Version = DXGKDDI_INTERFACE_VERSION_WDDM2_0;
 
     /* PnP / power lifecycle */
     InitData.DxgkDdiAddDevice             = Rpi5Vc4DdiAddDevice;

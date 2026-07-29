@@ -58,7 +58,9 @@ extern void func_capture(void);
 extern void func_privateioctl(void);
 extern void func_cle(void);
 extern void func_v3dsmoke(void);
+#ifdef REACTOS_D3DKMT_VC4KMT_TEST
 extern void func_vc4kmt_smoke(void);
+#endif
 
 const struct test winetest_testlist[] =
 {
@@ -119,6 +121,8 @@ const struct test winetest_testlist[] =
     { "privateioctl",  func_privateioctl },
     { "cle",           func_cle },
     { "v3dsmoke",      func_v3dsmoke },
+#ifdef REACTOS_D3DKMT_VC4KMT_TEST
     { "vc4kmt_smoke",  func_vc4kmt_smoke },
+#endif
     { 0, 0 }
 };

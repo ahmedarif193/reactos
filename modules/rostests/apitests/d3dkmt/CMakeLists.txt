@@ -58,12 +58,15 @@ list(APPEND SOURCE
     d3dkmt_privateioctl.c
     d3dkmt_cle.c
     d3dkmt_v3dsmoke.c
-    d3dkmt_vc4kmt_smoke.c
     d3dkmt_parity.c
     vidmm_test.c
     present_test.c
     dwm_test.c
     display_test.c)
+
+if(REACTOS_USE_WDDM AND (REACTOS_WDDM_TARGET_LEVEL GREATER_EQUAL 2000))
+    list(APPEND SOURCE d3dkmt_vc4kmt_smoke.c)
+endif()
 
 list(APPEND PCH_SKIP_SOURCE
     testlist.c)
@@ -74,7 +77,11 @@ add_executable(d3dkmt_apitest
 
 target_compile_definitions(d3dkmt_apitest PRIVATE
     REACTOS_EXPECTED_UMD_INTERFACE_VERSION=${REACTOS_EXPECTED_UMD_INTERFACE_VERSION})
-target_link_libraries(d3dkmt_apitest wine ${PSEH_LIB} vc4kmt)
+target_link_libraries(d3dkmt_apitest wine ${PSEH_LIB})
+if(REACTOS_USE_WDDM AND (REACTOS_WDDM_TARGET_LEVEL GREATER_EQUAL 2000))
+    target_link_libraries(d3dkmt_apitest vc4kmt)
+    target_compile_definitions(d3dkmt_apitest PRIVATE REACTOS_D3DKMT_VC4KMT_TEST)
+endif()
 set_module_type(d3dkmt_apitest win32cui)
 add_importlibs(d3dkmt_apitest gdi32 user32 msvcrt kernel32 ntdll)
 add_pch(d3dkmt_apitest precomp.h "${PCH_SKIP_SOURCE}")

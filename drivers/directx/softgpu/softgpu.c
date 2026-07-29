@@ -37,6 +37,35 @@
 #define DXGKDDI_INTERFACE_VERSION_WDDM2_0 0x5023
 #endif
 
+#ifndef REACTOS_WDDM_TARGET_LEVEL
+#define REACTOS_WDDM_TARGET_LEVEL 2000
+#endif
+#ifndef REACTOS_WDDM_TARGET_INTERFACE_VERSION
+#define REACTOS_WDDM_TARGET_INTERFACE_VERSION DXGKDDI_INTERFACE_VERSION_WDDM2_0
+#endif
+
+/*
+ * softgpu is the compatibility fallback for every selectable WDDM build.
+ * Its implementation ceiling is WDDM 2.0.  Below 2.0 it registers the exact
+ * selected DDI prefix; above 2.0 it continues to advertise only what it
+ * implements.
+ */
+#if (REACTOS_WDDM_TARGET_LEVEL < 2000)
+#define SOFTGPU_DECLARED_INTERFACE_VERSION REACTOS_WDDM_TARGET_INTERFACE_VERSION
+#else
+#define SOFTGPU_DECLARED_INTERFACE_VERSION DXGKDDI_INTERFACE_VERSION_WDDM2_0
+#endif
+
+#if (REACTOS_WDDM_TARGET_LEVEL < 1200)
+#define SOFTGPU_DECLARED_WDDM_VERSION DXGKDDI_WDDMv1_ENUM
+#elif (REACTOS_WDDM_TARGET_LEVEL < 1300)
+#define SOFTGPU_DECLARED_WDDM_VERSION DXGKDDI_WDDMv1_2_ENUM
+#elif (REACTOS_WDDM_TARGET_LEVEL < 2000)
+#define SOFTGPU_DECLARED_WDDM_VERSION DXGKDDI_WDDMv1_3_ENUM
+#else
+#define SOFTGPU_DECLARED_WDDM_VERSION DXGKDDI_WDDMv2_ENUM
+#endif
+
 /* Default display geometry */
 #define SOFTGPU_DEFAULT_WIDTH   1024
 #define SOFTGPU_DEFAULT_HEIGHT  768
@@ -77,7 +106,7 @@ static const DXGK_DRIVERCAPS SOFTGPU_DRIVER_CAPS =
     .SchedulingCaps.Value       = 0,
     .MemoryManagementCaps.Value = 0,
     .GpuEngineTopology.NbAsymetricProcessingNodes = 1,
-    .WDDMVersion                = DXGKDDI_WDDMv2_ENUM,
+    .WDDMVersion                = SOFTGPU_DECLARED_WDDM_VERSION,
 };
 
 
@@ -109,8 +138,7 @@ DriverEntry(
 
     RtlZeroMemory(&InitData, sizeof(InitData));
 
-    /* Keep the declared miniport contract at WDDM 2.0; compiling against the newer shared header does not advertise later DDIs. */
-    InitData.Version = DXGKDDI_INTERFACE_VERSION_WDDM2_0;
+    InitData.Version = SOFTGPU_DECLARED_INTERFACE_VERSION;
 
     /* --- Adapter lifecycle ----------------------------------------------- */
     InitData.DxgkDdiAddDevice                       = SoftGpuDdiAddDevice;
@@ -183,6 +211,7 @@ DriverEntry(
      * software/null GPU and not called by dxgkrnl).  Hardware-queue,
      * MapGpuVirtualAddresses, and monitored-fence DDIs are not part of the
      * declared WDDM 2.0 contract and remain intentionally unwired. */
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
     InitData.DxgkDdiCreateProcess                   = SoftGpuDdiCreateProcess;
     InitData.DxgkDdiDestroyProcess                  = SoftGpuDdiDestroyProcess;
     InitData.DxgkDdiGetRootPageTableSize            = SoftGpuDdiGetRootPageTableSize;
@@ -191,6 +220,7 @@ DriverEntry(
     InitData.DxgkDdiUnmapCpuHostAperture           = SoftGpuDdiUnmapCpuHostAperture;
     InitData.DxgkDdiSubmitCommandVirtual           = SoftGpuDdiSubmitCommandVirtual;
     InitData.DxgkDdiRenderGdi                      = SoftGpuDdiRenderGdi;
+#endif
 
     Status = DxgkInitialize(DriverObject, RegistryPath, &InitData);
 
