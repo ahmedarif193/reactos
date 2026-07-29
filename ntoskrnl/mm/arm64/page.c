@@ -461,38 +461,10 @@ MiArm64AccountUserLeafPte(
     MiReleasePfnLock(OldIrql);
 }
 
-/* Batched form: one PFN-lock section accounts a whole run of new PTEs
- * installed in the same L3 table (used by the ARM64 commit loop). */
 VOID
-MiArm64AccountUserLeafPteCount(
-    _In_ PFN_NUMBER PteFrame,
-    _In_ ULONG NewUsedEntries)
+MiArm64IncrementUserLeafPteCount(
+    _In_ PFN_NUMBER PteFrame)
 {
-    KIRQL OldIrql;
-    PMMPFN Pfn;
-
-    OldIrql = MiAcquirePfnLock();
-
-    Pfn = MiGetPfnEntry(PteFrame);
-    ASSERT(Pfn != NULL);
-
-    Pfn->OriginalPte.u.Soft.UsedPageTableEntries += NewUsedEntries;
-    ASSERT(Pfn->OriginalPte.u.Soft.UsedPageTableEntries <= PTE_PER_PAGE);
-
-    MiReleasePfnLock(OldIrql);
-}
-
-VOID
-MiArm64IncrementUserPageTableReferences(
-    _In_ PVOID Address)
-{
-    PFN_NUMBER PteFrame;
-
-    if (MiArm64UserPteKseg0ForPfn(Address, &PteFrame) == NULL)
-    {
-        return;
-    }
-
     MiArm64AccountUserLeafPte(PteFrame, FALSE, TRUE);
 }
 
