@@ -18,6 +18,14 @@
 
 #include <d3dkmdt.h>
 
+#ifndef _Function_class_DXGK_
+#ifdef ENABLE_DXGK_SAL
+#define _Function_class_DXGK_(param) _Function_class_(param)
+#else
+#define _Function_class_DXGK_(param)
+#endif
+#endif
+
 #pragma warning(push)
 #pragma warning(disable:4201) /* nameless struct/union */
 #pragma warning(disable:4200) /* zero-sized array     */
@@ -320,6 +328,14 @@ typedef enum _DXGK_INTERRUPT_TYPE
     DXGK_INTERRUPT_HWCONTEXTLIST_SWITCH_COMPLETED = 13,
     DXGK_INTERRUPT_PERIODIC_MONITORED_FENCE_SIGNALED = 14,
 #endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
+    DXGK_INTERRUPT_SCHEDULING_LOG_INTERRUPT = 15,
+    DXGK_INTERRUPT_GPU_ENGINE_TIMEOUT = 16,
+    DXGK_INTERRUPT_SUSPEND_CONTEXT_COMPLETED = 17,
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+    DXGK_INTERRUPT_CRTC_VSYNC_WITH_MULTIPLANE_OVERLAY3 = 18,
+#endif
 } DXGK_INTERRUPT_TYPE;
 
 #define DXGK_INTERRUPT_TYPE_DMA_COMPLETED DXGK_INTERRUPT_DMA_COMPLETED
@@ -427,6 +443,58 @@ C_ASSERT(DXGKQAITYPE_PAGINGPROCESSGPUVASIZE == 48);
 C_ASSERT(DXGKQAITYPE_DIRTYBITTRACKINGCAPS == 39);
 C_ASSERT(DXGKQAITYPE_QUERYMMUS == 46);
 #endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+
+typedef struct _DXGK_PHYSICAL_MEMORY_CAPS
+{
+    PHYSICAL_ADDRESS HighestVisibleAddress;
+} DXGK_PHYSICAL_MEMORY_CAPS;
+
+typedef struct _DXGK_IOMMU_CAPS
+{
+    union
+    {
+        struct
+        {
+            UINT32 IommuIsolationSupported   : 1;
+            UINT32 IommuIsolationRequired    : 1;
+            UINT32 DmaRemappingSupported     : 1;
+            UINT32 GpuVaIommuRequired        : 1;
+            UINT32 GpuVaIommuGlobalRequired  : 1;
+            UINT32 Reserved                  : 27;
+        };
+        UINT32 Value;
+    };
+} DXGK_IOMMU_CAPS;
+
+typedef UINT_PTR DXGK_PAGE_NUMBER;
+
+typedef struct _DXGK_ADL_FLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT32 Contiguous : 1;
+            UINT32 Reserved   : 31;
+        };
+        UINT32 Value;
+    };
+} DXGK_ADL_FLAGS;
+
+typedef struct _DXGK_ADL
+{
+    UINT32         PageCount;
+    DXGK_ADL_FLAGS Flags;
+    union
+    {
+        DXGK_PAGE_NUMBER        BasePageNumber;
+        const DXGK_PAGE_NUMBER *Pages;
+    };
+} DXGK_ADL;
+
+#endif /* DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9 */
 
 
 /* =========================================================================
@@ -695,6 +763,7 @@ typedef struct _DXGK_GPUENGINETOPOLOGY
     UINT Reserved[DXGK_MAX_ASYMETRICAL_PROCESSING_NODES];
 } DXGK_GPUENGINETOPOLOGY, *PDXGK_GPUENGINETOPOLOGY;
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
 typedef struct _DXGK_HWQUEUEDFLIP_CAPS
 {
     union
@@ -706,6 +775,7 @@ typedef struct _DXGK_HWQUEUEDFLIP_CAPS
         UINT Value;
     };
 } DXGK_HWQUEUEDFLIP_CAPS;
+#endif
 
 
 /* =========================================================================
@@ -2517,6 +2587,22 @@ typedef struct _DXGKARG_CONTROLINTERRUPT
     BOOLEAN                         EnableInterrupt;
 } DXGKARG_CONTROLINTERRUPT, *PDXGKARG_CONTROLINTERRUPT;
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM1_3)
+
+typedef enum _DXGK_INTERRUPT_STATE
+{
+    DXGK_INTERRUPT_ENABLE = 0,
+    DXGK_INTERRUPT_DISABLE = 1
+} DXGK_INTERRUPT_STATE;
+
+typedef enum _DXGK_CRTC_VSYNC_STATE
+{
+    DXGK_VSYNC_ENABLE = 0,
+    DXGK_VSYNC_DISABLE_KEEP_PHASE = 1,
+    DXGK_VSYNC_DISABLE_NO_PHASE = 2
+} DXGK_CRTC_VSYNC_STATE;
+
+#endif /* DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM1_3 */
 
 /* =========================================================================
  * DXGKARG_CREATECONTEXT
@@ -2536,7 +2622,12 @@ typedef struct _DXGK_CREATECONTEXTFLAGS
             UINT    SystemProtectedContext   : 1;
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_3)
             UINT    HwQueueSupported         : 1;
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+            UINT    TestContext             : 1;
+            UINT    Reserved                : 26;
+#else
             UINT    Reserved                 : 27;
+#endif
 #else
             UINT    Reserved                 : 28;
 #endif
@@ -2702,6 +2793,8 @@ typedef struct _DXGKARG_PRESENT
     PVOID                       pPrivateDriverData;
 #endif
 } DXGKARG_PRESENT, *PDXGKARG_PRESENT;
+
+typedef _Inout_ DXGKARG_PRESENT *INOUT_PDXGKARG_PRESENT;
 
 typedef struct _DXGKARG_RENDER
 {
@@ -2892,6 +2985,14 @@ typedef struct _DXGK_MULTIPLANE_OVERLAY_VSYNC_INFO2
 } DXGK_MULTIPLANE_OVERLAY_VSYNC_INFO2;
 #endif
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+typedef struct _DXGK_MULTIPLANE_OVERLAY_VSYNC_INFO3
+{
+    DWORD LayerIndex;
+    ULONG FirstFreeFlipQueueLogEntryIndex;
+} DXGK_MULTIPLANE_OVERLAY_VSYNC_INFO3;
+#endif
+
 typedef struct _DXGKARGCB_NOTIFY_INTERRUPT_DATA
 {
     DXGK_INTERRUPT_TYPE InterruptType;
@@ -3011,6 +3112,19 @@ typedef struct _DXGKARGCB_NOTIFY_INTERRUPT_DATA
             UINT                           NotificationID;
         } PeriodicMonitoredFenceSignaled;
 #endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+        struct
+        {
+            D3DDDI_VIDEO_PRESENT_TARGET_ID VidPnTargetId;
+            UINT                           PhysicalAdapterMask;
+            UINT                           MultiPlaneOverlayVsyncInfoCount;
+            _Field_size_(MultiPlaneOverlayVsyncInfoCount)
+            DXGK_MULTIPLANE_OVERLAY_VSYNC_INFO3
+                *pMultiPlaneOverlayVsyncInfo;
+            ULONGLONG GpuFrequency;
+            ULONGLONG GpuClockCounter;
+        } CrtcVsyncWithMultiPlaneOverlay3;
+#endif
         struct
         {
             UINT Reserved[16];
@@ -3021,12 +3135,12 @@ typedef struct _DXGKARGCB_NOTIFY_INTERRUPT_DATA
 
 
 /*
- * DXGKARGCB_ALLOCATECONTIGUOUSMEMORY, DXGKARGCB_FREECONTIGUOUSMEMORY,
- * DXGKARGCB_MAPPHYSICALMEMORY, DXGKARGCB_UNMAP_PHYSICAL_MEMORY
+ * DXGKARGCB_ALLOCATECONTIGUOUSMEMORY, DXGKARGCB_FREECONTIGUOUSMEMORY
+ * and DXGKARGCB_MAPPHYSICALMEMORY
  *
- * These structures are internal to dxgkrnl.sys and are defined in
- * dxgkrnl_private.h (which matches the Vista WDK / dispmprt.h layout).
- * They are not part of the public DDI and should not be defined here.
+ * These legacy helper structures are internal to dxgkrnl.sys and are
+ * defined in dxgkrnl_private.h.  They are distinct from the public WDDM
+ * 2.9 physical-memory-object callback arguments declared below.
  */
 
 
@@ -3110,6 +3224,25 @@ typedef struct _DXGK_DISPLAY_DRIVERCAPS_EXTENSION
 #if (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WDDM2_1)
             UINT Reserved             : 29;
             UINT NonSpecificPrimarySupport : 1;
+#elif (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_5)
+            UINT HdrFP16ScanoutSupport   : 1;
+            UINT HdrARGB10ScanoutSupport : 1;
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_7)
+            UINT Hdr10MetadataSupport : 1;
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+            UINT VirtualRefreshRateSupport : 1;
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
+            UINT SupportUsb4Targets : 1;
+            UINT Reserved           : 25;
+#else
+            UINT Reserved           : 26;
+#endif
+#else
+            UINT Reserved           : 27;
+#endif
+#else
+            UINT Reserved           : 28;
+#endif
 #else
             UINT Reserved             : 30;
 #endif
@@ -3134,6 +3267,7 @@ C_ASSERT(sizeof(DXGK_DISPLAY_DRIVERCAPS_EXTENSION) == sizeof(UINT));
  */
 
 typedef _In_ CONST HANDLE IN_CONST_HANDLE;
+typedef _In_ CONST PVOID IN_CONST_PVOID;
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
 
@@ -3362,6 +3496,76 @@ typedef
     (APIENTRY *PDXGKDDI_UNMAPCPUHOSTAPERTURE)(
         IN_CONST_HANDLE                          hAdapter,
         IN_CONST_PDXGKARG_UNMAPCPUHOSTAPERTURE   pArgs);
+
+/* --- WDDM 2.0 power and video-protected-region callbacks --------------- */
+
+typedef
+    _Check_return_
+    NTSTATUS
+    APIENTRY
+    DXGKDDI_POWERRUNTIMESETDEVICEHANDLE(
+        IN_CONST_HANDLE DriverContext,
+        _In_ HANDLE     PoDeviceHandle);
+
+typedef struct DXGKARG_SETSTABLEPOWERSTATE
+{
+    BOOL Enabled;
+} DXGKARG_SETSTABLEPOWERSTATE;
+
+typedef _In_ CONST DXGKARG_SETSTABLEPOWERSTATE*
+    IN_CONST_PDXGKARG_SETSTABLEPOWERSTATE;
+
+typedef
+    VOID
+    APIENTRY
+    DXGKDDI_SETSTABLEPOWERSTATE(
+        IN_CONST_HANDLE                       hAdapter,
+        IN_CONST_PDXGKARG_SETSTABLEPOWERSTATE pArgs);
+
+typedef struct _DXGKARG_SETVIDEOPROTECTEDREGION
+{
+    UINT   PhysicalAdapterIndex;
+    UINT   SegmentIndex;
+    UINT   VprIndex;
+    SIZE_T CurrentStartOffset;
+    SIZE_T CurrentSize;
+    SIZE_T NewStartOffset;
+    SIZE_T NewSize;
+} DXGKARG_SETVIDEOPROTECTEDREGION;
+
+typedef _In_ CONST DXGKARG_SETVIDEOPROTECTEDREGION*
+    IN_CONST_PDXGKARG_SETVIDEOPROTECTEDREGION;
+
+typedef
+    _Check_return_
+    NTSTATUS
+    APIENTRY
+    DXGKDDI_SETVIDEOPROTECTEDREGION(
+        IN_CONST_HANDLE                            hAdapter,
+        IN_CONST_PDXGKARG_SETVIDEOPROTECTEDREGION pArgs);
+
+typedef DXGKDDI_POWERRUNTIMESETDEVICEHANDLE *PDXGKDDI_POWERRUNTIMESETDEVICEHANDLE;
+typedef DXGKDDI_SETSTABLEPOWERSTATE         *PDXGKDDI_SETSTABLEPOWERSTATE;
+typedef DXGKDDI_SETVIDEOPROTECTEDREGION     *PDXGKDDI_SETVIDEOPROTECTEDREGION;
+
+C_ASSERT(sizeof(DXGKARG_SETSTABLEPOWERSTATE) == 0x4);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETSTABLEPOWERSTATE, Enabled) == 0x0);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETVIDEOPROTECTEDREGION, PhysicalAdapterIndex) == 0x0);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETVIDEOPROTECTEDREGION, SegmentIndex) == 0x4);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETVIDEOPROTECTEDREGION, VprIndex) == 0x8);
+#ifdef _WIN64
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETVIDEOPROTECTEDREGION, CurrentStartOffset) == 0x10);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETVIDEOPROTECTEDREGION, CurrentSize) == 0x18);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETVIDEOPROTECTEDREGION, NewStartOffset) == 0x20);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETVIDEOPROTECTEDREGION, NewSize) == 0x28);
+C_ASSERT(sizeof(DXGKARG_SETVIDEOPROTECTEDREGION) == 0x30);
+#else
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETVIDEOPROTECTEDREGION, CurrentStartOffset) == 0xC);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETVIDEOPROTECTEDREGION, CurrentSize) == 0x10);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETVIDEOPROTECTEDREGION, NewStartOffset) == 0x14);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETVIDEOPROTECTEDREGION, NewSize) == 0x18);
+C_ASSERT(sizeof(DXGKARG_SETVIDEOPROTECTEDREGION) == 0x1C);
+#endif
 
 #endif /* DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0 */
 
@@ -3915,6 +4119,3330 @@ C_ASSERT(FIELD_OFFSET(DXGKARG_CHECKMULTIPLANEOVERLAYSUPPORT3, ppPostComposition)
 #endif
 
 #endif /* DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_1 */
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
+
+/*
+ * WDDM 2.2 hardware scheduling and display contracts.
+ * Layout and signatures match the Windows 10 16299 and Windows 11 26100 WDKs.
+ */
+
+typedef struct _DXGK_HWCONTEXT_CAPS
+{
+    union
+    {
+        struct
+        {
+            UINT UseIoMmu : 1;
+            UINT Reserved : 31;
+        };
+        UINT Value;
+    };
+} DXGK_HWCONTEXT_CAPS;
+
+typedef struct _DXGKARG_CREATEHWCONTEXT
+{
+    HANDLE                      hHwContext;
+    UINT                        NodeOrdinal;
+    UINT                        EngineAffinity;
+    D3DDDI_CREATEHWCONTEXTFLAGS Flags;
+    UINT                        PrivateDriverDataSize;
+    _Inout_
+    _Field_size_bytes_(PrivateDriverDataSize)
+    PVOID                       pPrivateDriverData;
+    DXGK_HWCONTEXT_CAPS         ContextCaps;
+} DXGKARG_CREATEHWCONTEXT;
+
+typedef _Inout_ DXGKARG_CREATEHWCONTEXT *INOUT_PDXGKARG_CREATEHWCONTEXT;
+
+typedef struct _DXGKARG_CREATEHWQUEUE
+{
+    HANDLE                     hHwQueue;
+    D3DDDI_CREATEHWQUEUEFLAGS  Flags;
+    UINT                       PrivateDriverDataSize;
+    _Inout_
+    _Field_size_bytes_(PrivateDriverDataSize)
+    PVOID                      pPrivateDriverData;
+    D3DKMT_HANDLE              hHwQueueProgressFence;
+    PVOID                      HwQueueProgressFenceCPUVirtualAddress;
+    D3DGPU_VIRTUAL_ADDRESS     HwQueueProgressFenceGPUVirtualAddress;
+} DXGKARG_CREATEHWQUEUE;
+
+typedef _Inout_ DXGKARG_CREATEHWQUEUE *INOUT_PDXGKARG_CREATEHWQUEUE;
+
+typedef struct _DXGKARG_SUBMITCOMMANDTOHWQUEUE
+{
+    HANDLE                     hHwQueue;
+    UINT64                     HwQueueProgressFenceId;
+    D3DGPU_VIRTUAL_ADDRESS     DmaBufferVirtualAddress;
+    UINT                       DmaBufferSize;
+    UINT                       DmaBufferPrivateDataSize;
+    _Field_size_bytes_(DmaBufferPrivateDataSize) PVOID pDmaBufferPrivateData;
+    DXGK_SUBMITCOMMANDFLAGS    Flags;
+    D3DGPU_VIRTUAL_ADDRESS     HwQueueProgressFenceGpuVa;
+    PVOID                      HwQueueProgressFenceCpuVa;
+} DXGKARG_SUBMITCOMMANDTOHWQUEUE;
+
+typedef _In_ CONST DXGKARG_SUBMITCOMMANDTOHWQUEUE
+    *IN_CONST_PDXGKARG_SUBMITCOMMANDTOHWQUEUE;
+
+typedef struct _DXGKARG_SWITCHTOHWCONTEXTLIST
+{
+    HANDLE hHwContextFirst;
+    HANDLE hHwContextSecond;
+    UINT   NodeOrdinal;
+    UINT   EngineOrdinal;
+} DXGKARG_SWITCHTOHWCONTEXTLIST;
+
+typedef _In_ CONST DXGKARG_SWITCHTOHWCONTEXTLIST
+    *IN_CONST_PDXGKARG_SWITCHTOHWCONTEXTLIST;
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_3)
+typedef struct _DXGK_UPDATEHWCONTEXTSTATE_FLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT Suspended                   : 1;
+            UINT InterruptOnSwitchCompletion : 1;
+            UINT Reserved                    : 30;
+        };
+        UINT Value;
+    };
+} DXGK_UPDATEHWCONTEXTSTATE_FLAGS;
+
+typedef struct _DXGKARG_UPDATEHWCONTEXTSTATE
+{
+    HANDLE                          hHwContext;
+    UINT64                          ContextSwitchFence;
+    UINT                            Priority;
+    DXGK_UPDATEHWCONTEXTSTATE_FLAGS Flags;
+} DXGKARG_UPDATEHWCONTEXTSTATE;
+
+typedef _In_ CONST DXGKARG_UPDATEHWCONTEXTSTATE
+    *IN_CONST_PDXGKARG_UPDATEHWCONTEXTSTATE;
+#endif
+
+typedef struct _DXGKARG_RESETHWENGINE
+{
+    UINT NodeOrdinal;
+    UINT EngineOrdinal;
+} DXGKARG_RESETHWENGINE;
+
+typedef _Inout_ DXGKARG_RESETHWENGINE *INOUT_PDXGKARG_RESETHWENGINE;
+
+typedef struct _DXGKARG_CREATEPERIODICFRAMENOTIFICATION
+{
+    HANDLE                         hAdapter;
+    D3DDDI_VIDEO_PRESENT_TARGET_ID VidPnTargetId;
+    UINT64                         Time;
+    UINT                           NotificationID;
+    HANDLE                         hNotification;
+} DXGKARG_CREATEPERIODICFRAMENOTIFICATION;
+
+typedef _Inout_ DXGKARG_CREATEPERIODICFRAMENOTIFICATION
+    *INOUT_PDXGKARG_CREATEPERIODICFRAMENOTIFICATION;
+
+typedef struct _DXGKARG_DESTROYPERIODICFRAMENOTIFICATION
+{
+    HANDLE hNotification;
+    HANDLE hAdapter;
+} DXGKARG_DESTROYPERIODICFRAMENOTIFICATION;
+
+typedef _In_ CONST DXGKARG_DESTROYPERIODICFRAMENOTIFICATION
+    *IN_CONST_PDXGKARG_DESTROYPERIODICFRAMENOTIFICATION;
+
+typedef struct _DXGK_MULTIPLANEOVERLAYCAPS
+{
+    union
+    {
+        struct
+        {
+            UINT Rotation                       : 1;
+            UINT RotationWithoutIndependentFlip : 1;
+            UINT VerticalFlip                   : 1;
+            UINT HorizontalFlip                 : 1;
+            UINT StretchRGB                     : 1;
+            UINT StretchYUV                     : 1;
+            UINT BilinearFilter                 : 1;
+            UINT HighFilter                     : 1;
+            UINT Shared                         : 1;
+            UINT Immediate                      : 1;
+            UINT Plane0ForVirtualModeOnly       : 1;
+            UINT Reserved                       : 21;
+        };
+        UINT Value;
+    };
+} DXGK_MULTIPLANEOVERLAYCAPS;
+
+typedef struct _DXGKARG_GETMULTIPLANEOVERLAYCAPS
+{
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId;
+    UINT                           MaxPlanes;
+    UINT                           MaxRGBPlanes;
+    UINT                           MaxYUVPlanes;
+    DXGK_MULTIPLANEOVERLAYCAPS     OverlayCaps;
+    float                          MaxStretchFactor;
+    float                          MaxShrinkFactor;
+} DXGKARG_GETMULTIPLANEOVERLAYCAPS;
+
+typedef _Inout_ DXGKARG_GETMULTIPLANEOVERLAYCAPS
+    *IN_OUT_PDXGKARG_GETMULTIPLANEOVERLAYCAPS;
+
+typedef struct _DXGKARG_GETPOSTCOMPOSITIONCAPS
+{
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId;
+    float                          MaxStretchFactor;
+    float                          MaxShrinkFactor;
+} DXGKARG_GETPOSTCOMPOSITIONCAPS;
+
+typedef _Inout_ DXGKARG_GETPOSTCOMPOSITIONCAPS
+    *IN_OUT_PDXGKARG_GETPOSTCOMPOSITIONCAPS;
+
+typedef union _DXGK_STANDARD_COLORIMETRY_FLAGS
+{
+    struct
+    {
+        UINT BT2020YCC : 1;
+        UINT BT2020RGB : 1;
+        UINT ST2084    : 1;
+        UINT Reserved  : 29;
+    };
+    ULONG Value;
+} DXGK_STANDARD_COLORIMETRY_FLAGS, *PDXGK_STANDARD_COLORIMETRY_FLAGS;
+
+typedef struct _DXGK_COLORIMETRY
+{
+    D3DKMDT_2DOFFSET                   RedPoint;
+    D3DKMDT_2DOFFSET                   GreenPoint;
+    D3DKMDT_2DOFFSET                   BluePoint;
+    D3DKMDT_2DOFFSET                   WhitePoint;
+    ULONG                              MinLuminance;
+    ULONG                              MaxLuminance;
+    ULONG                              MaxFullFrameLuminance;
+    D3DKMDT_WIRE_FORMAT_AND_PREFERENCE FormatBitDepths;
+    DXGK_STANDARD_COLORIMETRY_FLAGS    StandardColorimetryFlags;
+} DXGK_COLORIMETRY, *PDXGK_COLORIMETRY;
+
+#if defined(__cplusplus) && !defined(SORTPP_PASS)
+typedef enum _DXGK_CONNECTION_STATUS : UINT
+{
+    ConnectionStatusUninitialized = 0,
+    TargetStatusDisconnected      = 4,
+    TargetStatusConnected         = 5,
+    TargetStatusJoined            = 6,
+    MonitorStatusDisconnected     = 8,
+    MonitorStatusUnknown          = 9,
+    MonitorStatusConnected        = 10,
+    LinkConfigurationStarted      = 12,
+    LinkConfigurationFailed       = 13,
+    LinkConfigurationSucceeded    = 14
+} DXGK_CONNECTION_STATUS, *PDXGK_CONNECTION_STATUS;
+#else
+typedef UINT DXGK_CONNECTION_STATUS;
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
+typedef struct _DXGK_CONNECTION_MONITOR_CONNECT_FLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT Usb4DisplayPortMonitor : 1;
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+            UINT DisplayMuxConnectionChange : 1;
+            UINT Reserved                   : 30;
+#else
+            UINT Reserved                   : 31;
+#endif
+        };
+        UINT Value;
+    };
+} DXGK_CONNECTION_MONITOR_CONNECT_FLAGS;
+
+typedef struct _DXGK_CONNECTION_USB4_INFO
+{
+    UINT Dpcd_DP_IN_Adapter_Number;
+    UINT Dpcd_USB4_Driver_ID;
+    BYTE Dpcd_USB4_ROUTER_TOPOLOGY_ID[5];
+} DXGK_CONNECTION_USB4_INFO, *PDXGK_CONNECTION_USB4_INFO;
+#endif
+
+typedef struct _DXGK_CONNECTION_CHANGE
+{
+    ULONGLONG                      ConnectionChangeId;
+    D3DDDI_VIDEO_PRESENT_TARGET_ID TargetId         : 24;
+    DXGK_CONNECTION_STATUS         ConnectionStatus : 4;
+    UINT                           Reserved         : 4;
+    union
+    {
+        struct
+        {
+            D3DKMDT_VIDEO_OUTPUT_TECHNOLOGY LinkTargetType;
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
+            DXGK_CONNECTION_MONITOR_CONNECT_FLAGS MonitorConnectFlags;
+#endif
+        } MonitorConnect;
+        struct
+        {
+            D3DKMDT_VIDEO_OUTPUT_TECHNOLOGY BaseTargetType;
+            D3DDDI_VIDEO_PRESENT_TARGET_ID  NewTargetId;
+        } TargetConnect;
+        struct
+        {
+            D3DKMDT_VIDEO_OUTPUT_TECHNOLOGY BaseTargetType;
+            D3DDDI_VIDEO_PRESENT_TARGET_ID  NewTargetId;
+        } TargetJoin;
+    };
+} DXGK_CONNECTION_CHANGE, *PDXGK_CONNECTION_CHANGE;
+
+typedef struct _DXGK_SET_TIMING_FLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT Reserved;
+        };
+        UINT Value;
+    };
+} DXGK_SET_TIMING_FLAGS;
+
+typedef struct _DXGK_SET_TIMING_RESULTS
+{
+    union
+    {
+        struct
+        {
+            UINT ConnectionStatusChanges : 1;
+            UINT Reserved                : 31;
+        };
+        UINT Value;
+    };
+} DXGK_SET_TIMING_RESULTS, *PDXGK_SET_TIMING_RESULTS;
+
+#if defined(__cplusplus) && !defined(SORTPP_PASS)
+typedef enum _DXGK_PATH_UPDATE : UINT
+{
+    DXGK_PATH_UPDATE_UNMODIFIED = 0,
+    DXGK_PATH_UPDATE_ADDED      = 1,
+    DXGK_PATH_UPDATE_MODIFIED   = 2,
+    DXGK_PATH_UPDATE_REMOVED    = 3
+} DXGK_PATH_UPDATE;
+
+typedef enum _DXGK_SYNC_LOCK_STYLE : UINT
+{
+    DXGK_SYNC_LOCK_STYLE_NONE      = 0,
+    DXGK_SYNC_LOCK_STYLE_IDENTICAL = 1
+} DXGK_SYNC_LOCK_STYLE;
+
+typedef enum _DXGK_GLITCH_CAUSE : UINT8
+{
+    DXGK_GLITCH_CAUSE_DRIVER_ERROR        = 0,
+    DXGK_GLITCH_CAUSE_TIMING_CHANGE       = 1,
+    DXGK_GLITCH_CAUSE_PIPELINE_CHANGE     = 2,
+    DXGK_GLITCH_CAUSE_MEMORY_TIMING       = 3,
+    DXGK_GLITCH_CAUSE_ENCODER_RECONFIG    = 4,
+    DXGK_GLITCH_CAUSE_MODIFIED_WIRE_USAGE = 5,
+    DXGK_GLITCH_CAUSE_METADATA_CHANGE     = 6,
+    DXGK_GLITCH_CAUSE_NONE                = 255
+} DXGK_GLITCH_CAUSE;
+
+typedef enum _DXGK_GLITCH_EFFECT : UINT8
+{
+    DXGK_GLITCH_EFFECT_SYNC_LOSS        = 0,
+    DXGK_GLITCH_EFFECT_GARBAGE_CONTENT  = 1,
+    DXGK_GLITCH_EFFECT_STALE_CONTENT    = 2,
+    DXGK_GLITCH_EFFECT_BLACK_CONTENT    = 3,
+    DXGK_GLITCH_EFFECT_DEGRADED_CONTENT = 4,
+    DXGK_GLITCH_EFFECT_SEAMLESS         = 255
+} DXGK_GLITCH_EFFECT;
+
+typedef enum _DXGK_GLITCH_DURATION : UINT8
+{
+    DXGK_GLITCH_DURATION_INDEFINITE  = 0,
+    DXGK_GLITCH_DURATION_MULTI_FRAME = 1,
+    DXGK_GLITCH_DURATION_SINGLE_FRAME = 2,
+    DXGK_GLITCH_DURATION_MULTI_LINE  = 3,
+    DXGK_GLITCH_DURATION_SINGLE_LINE = 4,
+    DXGK_GLITCH_DURATION_NONE        = 255
+} DXGK_GLITCH_DURATION;
+#else
+typedef UINT  DXGK_PATH_UPDATE;
+typedef UINT  DXGK_SYNC_LOCK_STYLE;
+typedef UINT8 DXGK_GLITCH_CAUSE;
+typedef UINT8 DXGK_GLITCH_EFFECT;
+typedef UINT8 DXGK_GLITCH_DURATION;
+#endif
+
+typedef struct _DXGK_SET_TIMING_PATH_INFO
+{
+    D3DDDI_VIDEO_PRESENT_TARGET_ID VidPnTargetId;
+    union
+    {
+        D3DDDI_COLOR_SPACE_TYPE             OutputColorSpace;
+        D3DDDI_OUTPUT_WIRE_COLOR_SPACE_TYPE OutputWireColorSpace;
+    };
+    D3DKMDT_WIRE_FORMAT_AND_PREFERENCE SelectedWireFormat;
+    union
+    {
+        struct
+        {
+            DXGK_PATH_UPDATE VidPnPathUpdates   : 2;
+            UINT             Active             : 1;
+            UINT             IgnoreConnectivity : 1;
+            UINT             PreserveInherited  : 1;
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
+            UINT                 SyncLockGroup : 3;
+            DXGK_SYNC_LOCK_STYLE SyncLockStyle : 4;
+            UINT                 Reserved      : 20;
+#else
+            UINT Reserved : 27;
+#endif
+        } Input;
+        UINT InputFlags;
+    };
+    union
+    {
+        struct
+        {
+            UINT RecheckMPO : 1;
+            UINT Reserved   : 31;
+        } Output;
+        UINT OutputFlags;
+    };
+    DXGK_CONNECTION_CHANGE TargetState;
+    union
+    {
+        struct
+        {
+            DXGK_GLITCH_CAUSE    GlitchCause;
+            DXGK_GLITCH_EFFECT   GlitchEffect;
+            DXGK_GLITCH_DURATION GlitchDuration;
+            UINT8                Reserved;
+        };
+        UINT DiagnosticInfo;
+    };
+} DXGK_SET_TIMING_PATH_INFO;
+
+typedef struct _DXGKARG_SETTIMINGSFROMVIDPN
+{
+    D3DKMDT_HVIDPN              hFunctionalVidPn;
+    DXGK_SET_TIMING_FLAGS       SetFlags;
+    PDXGK_SET_TIMING_RESULTS    pResultsFlags;
+    UINT                        PathCount;
+    _Field_size_(PathCount) DXGK_SET_TIMING_PATH_INFO *pSetTimingPathInfo;
+} DXGKARG_SETTIMINGSFROMVIDPN;
+
+typedef _Inout_ DXGKARG_SETTIMINGSFROMVIDPN *IN_OUT_PDXGKARG_SETTIMINGSFROMVIDPN;
+
+typedef struct _DXGKARG_SETTARGETGAMMA
+{
+    D3DDDI_VIDEO_PRESENT_TARGET_ID TargetId;
+    D3DKMDT_GAMMA_RAMP             GammaRamp;
+} DXGKARG_SETTARGETGAMMA;
+
+typedef _In_ CONST DXGKARG_SETTARGETGAMMA *IN_CONST_PDXGKARG_SETTARGETGAMMA;
+
+typedef struct _DXGKARG_SETTARGETCONTENTTYPE
+{
+    D3DDDI_VIDEO_PRESENT_TARGET_ID TargetId;
+    D3DKMDT_VIDPN_PRESENT_PATH_CONTENT ContentType;
+} DXGKARG_SETTARGETCONTENTTYPE;
+
+typedef _In_ CONST DXGKARG_SETTARGETCONTENTTYPE
+    *IN_CONST_PDXGKARG_SETTARGETCONTENTTYPE;
+
+typedef struct _DXGKARG_SETTARGETANALOGCOPYPROTECTION
+{
+    D3DDDI_VIDEO_PRESENT_TARGET_ID                TargetId;
+    D3DKMDT_VIDPN_PRESENT_PATH_COPYPROTECTION_TYPE CopyProtectionType;
+    UINT                                           APSTriggerBits;
+    D3DKMDT_VIDPN_PRESENT_PATH_COPYPROTECTION_SUPPORT CopyProtectionSupport;
+} DXGKARG_SETTARGETANALOGCOPYPROTECTION;
+
+typedef _In_ CONST DXGKARG_SETTARGETANALOGCOPYPROTECTION
+    *IN_CONST_PDXGKARG_SETTARGETANALOGCOPYPROTECTION;
+
+#if defined(__cplusplus) && !defined(SORTPP_PASS)
+typedef enum _DXGK_DISPLAYDETECTCONTROLTYPE : UINT
+{
+    DXGK_DDCT_UNINITIALIZED = 0,
+    DXGK_DDCT_POLLONE       = 1,
+    DXGK_DDCT_POLLALL       = 2,
+    DXGK_DDCT_ENABLEHPD     = 3,
+    DXGK_DDCT_DISABLEHPD    = 4
+} DXGK_DISPLAYDETECTCONTROLTYPE;
+#else
+typedef UINT DXGK_DISPLAYDETECTCONTROLTYPE;
+#endif
+
+typedef struct _DXGKARG_DISPLAYDETECTCONTROL
+{
+    D3DDDI_VIDEO_PRESENT_TARGET_ID TargetId           : 24;
+    DXGK_DISPLAYDETECTCONTROLTYPE  Type               : 4;
+    UINT                           NonDestructiveOnly : 1;
+    UINT                           Reserved           : 3;
+} DXGKARG_DISPLAYDETECTCONTROL;
+
+typedef _In_ CONST DXGKARG_DISPLAYDETECTCONTROL
+    *IN_CONST_PDXGKARG_DISPLAYDETECTCONTROL;
+
+typedef struct _DXGKARG_QUERYCONNECTIONCHANGE
+{
+    DXGK_CONNECTION_CHANGE ConnectionChange;
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
+    DXGK_CONNECTION_USB4_INFO Usb4MonitorInfo;
+#endif
+} DXGKARG_QUERYCONNECTIONCHANGE;
+
+typedef _In_ DXGKARG_QUERYCONNECTIONCHANGE *IN_PDXGKARG_QUERYCONNECTIONCHANGE;
+
+typedef struct _DXGK_INHERITED_TIMING_INFO
+{
+    union
+    {
+        D3DDDI_COLOR_SPACE_TYPE             OutputColorSpace;
+        D3DDDI_OUTPUT_WIRE_COLOR_SPACE_TYPE OutputWireColorSpace;
+    };
+    D3DKMDT_WIRE_FORMAT_AND_PREFERENCE SelectedWireFormat;
+    union
+    {
+        struct
+        {
+            DXGK_GLITCH_CAUSE    GlitchCause;
+            DXGK_GLITCH_EFFECT   GlitchEffect;
+            DXGK_GLITCH_DURATION GlitchDuration;
+            UINT8                Reserved;
+        };
+        UINT DiagnosticInfo;
+    };
+} DXGK_INHERITED_TIMING_INFO, *PDXGK_INHERITED_TIMING_INFO;
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_3)
+typedef struct _DXGKARG_CREATEPROTECTEDSESSION
+{
+    HANDLE hProtectedSession;
+    PVOID  pPrivateDriverData;
+    UINT   PrivateDriverDataSize;
+} DXGKARG_CREATEPROTECTEDSESSION;
+
+typedef _Inout_ DXGKARG_CREATEPROTECTEDSESSION
+    *INOUT_PDXGKARG_CREATEPROTECTEDSESSION;
+
+typedef enum _DXGK_PROTECTED_SESSION_STATUS
+{
+    DXGK_PROTECTED_SESSION_STATUS_OK      = 0,
+    DXGK_PROTECTED_SESSION_STATUS_INVALID = 1
+} DXGK_PROTECTED_SESSION_STATUS;
+
+typedef struct _DXGKARGCB_PROTECTEDSESSIONSTATUS
+{
+    HANDLE                        hProtectedSession;
+    DXGK_PROTECTED_SESSION_STATUS Status;
+} DXGKARGCB_PROTECTEDSESSIONSTATUS;
+
+typedef _In_ CONST DXGKARGCB_PROTECTEDSESSIONSTATUS
+    *IN_CONST_PDXGKARGCB_PROTECTEDSESSIONSTATUS;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKCB_SETPROTECTEDSESSIONSTATUS)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY CALLBACK *DXGKCB_SETPROTECTEDSESSIONSTATUS)(
+    IN_CONST_PDXGKARGCB_PROTECTEDSESSIONSTATUS pProtectedSessionStatus);
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
+typedef enum _DXGK_MEMORY_CACHING_TYPE
+{
+    DXGK_MEMORY_CACHING_TYPE_NON_CACHED,
+    DXGK_MEMORY_CACHING_TYPE_CACHED,
+    DXGK_MEMORY_CACHING_TYPE_WRITE_COMBINED
+} DXGK_MEMORY_CACHING_TYPE;
+#endif
+
+typedef struct _DXGK_PRE_START_INFO
+{
+    union
+    {
+        struct
+        {
+            UINT ReservedIn;
+        };
+        UINT Input;
+    };
+    union
+    {
+        struct
+        {
+            UINT SupportPreserveBootDisplay                    : 1;
+            UINT IsUEFIFrameBufferCpuAccessibleDuringStartup    : 1;
+            UINT ReservedOut                                   : 30;
+        };
+        UINT Output;
+    };
+} DXGK_PRE_START_INFO, *PDXGK_PRE_START_INFO;
+
+typedef _Inout_ PDXGK_PRE_START_INFO IN_OUT_PDXGK_PRE_START_INFO;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_CREATEHWCONTEXT)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS APIENTRY
+DXGKDDI_CREATEHWCONTEXT(
+    IN_CONST_HANDLE hDevice,
+    INOUT_PDXGKARG_CREATEHWCONTEXT pCreateContext);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_DESTROYHWCONTEXT)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS APIENTRY
+DXGKDDI_DESTROYHWCONTEXT(
+    IN_CONST_HANDLE hHwContext);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_CREATEHWQUEUE)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS APIENTRY
+DXGKDDI_CREATEHWQUEUE(
+    IN_CONST_HANDLE hHwContext,
+    INOUT_PDXGKARG_CREATEHWQUEUE pCreateHwQueue);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_DESTROYHWQUEUE)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS APIENTRY
+DXGKDDI_DESTROYHWQUEUE(
+    IN_CONST_HANDLE hHwQueue);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_SUBMITCOMMANDTOHWQUEUE)
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS APIENTRY
+DXGKDDI_SUBMITCOMMANDTOHWQUEUE(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARG_SUBMITCOMMANDTOHWQUEUE pSubmitCommandToHwQueue);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_SWITCHTOHWCONTEXTLIST)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS APIENTRY
+DXGKDDI_SWITCHTOHWCONTEXTLIST(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARG_SWITCHTOHWCONTEXTLIST pHwContextList);
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_3)
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_UPDATEHWCONTEXTSTATE)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS APIENTRY
+DXGKDDI_UPDATEHWCONTEXTSTATE(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARG_UPDATEHWCONTEXTSTATE pUpdateHwContextState);
+#endif
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_RESETHWENGINE)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS APIENTRY
+DXGKDDI_RESETHWENGINE(
+    IN_CONST_HANDLE hAdapter,
+    INOUT_PDXGKARG_RESETHWENGINE pResetHwEngine);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKARG_CREATEPERIODICFRAMENOTIFICATION)
+    _IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS APIENTRY
+DXGKDDI_CREATEPERIODICFRAMENOTIFICATION(
+    INOUT_PDXGKARG_CREATEPERIODICFRAMENOTIFICATION pCreatePeriodicFrameNotification);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKARG_DESTROYPERIODICFRAMENOTIFICATION)
+    _IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS APIENTRY
+DXGKDDI_DESTROYPERIODICFRAMENOTIFICATION(
+    IN_CONST_PDXGKARG_DESTROYPERIODICFRAMENOTIFICATION pDestroyPeriodicFrameNotification);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_SETTIMINGSFROMVIDPN)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS APIENTRY
+DXGKDDI_SETTIMINGSFROMVIDPN(
+    IN_CONST_HANDLE hAdapter,
+    IN_OUT_PDXGKARG_SETTIMINGSFROMVIDPN pSetTimings);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_SETTARGETGAMMA)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS APIENTRY
+DXGKDDI_SETTARGETGAMMA(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARG_SETTARGETGAMMA pSetTargetGammaArg);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_SETTARGETCONTENTTYPE)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS APIENTRY
+DXGKDDI_SETTARGETCONTENTTYPE(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARG_SETTARGETCONTENTTYPE pSetTargetContentTypeArg);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_SETTARGETANALOGCOPYPROTECTION)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS APIENTRY
+DXGKDDI_SETTARGETANALOGCOPYPROTECTION(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARG_SETTARGETANALOGCOPYPROTECTION pSetTargetAnalogCopyProtectionArg);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_SETTARGETADJUSTEDCOLORIMETRY)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS APIENTRY
+DXGKDDI_SETTARGETADJUSTEDCOLORIMETRY(
+    IN_CONST_HANDLE hAdapter,
+    IN D3DDDI_VIDEO_PRESENT_TARGET_ID TargetId,
+    IN DXGK_COLORIMETRY AdjustedColorimetry);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_DISPLAYDETECTCONTROL)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS APIENTRY
+DXGKDDI_DISPLAYDETECTCONTROL(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARG_DISPLAYDETECTCONTROL pDisplayDetectControl);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_QUERYCONNECTIONCHANGE)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS APIENTRY
+DXGKDDI_QUERYCONNECTIONCHANGE(
+    IN_CONST_HANDLE hAdapter,
+    IN_PDXGKARG_QUERYCONNECTIONCHANGE pQueryConnectionChange);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_EXCHANGEPRESTARTINFO)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+DXGKDDI_EXCHANGEPRESTARTINFO(
+    IN_CONST_HANDLE hAdapter,
+    IN_OUT_PDXGK_PRE_START_INFO pPreStartInfo);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_GETMULTIPLANEOVERLAYCAPS)
+    _IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS APIENTRY
+DXGKDDI_GETMULTIPLANEOVERLAYCAPS(
+    IN_CONST_HANDLE hAdapter,
+    IN_OUT_PDXGKARG_GETMULTIPLANEOVERLAYCAPS pGetMultiPlaneOverlayCaps);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_GETPOSTCOMPOSITIONCAPS)
+    _IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS APIENTRY
+DXGKDDI_GETPOSTCOMPOSITIONCAPS(
+    IN_CONST_HANDLE hAdapter,
+    IN_OUT_PDXGKARG_GETPOSTCOMPOSITIONCAPS pGetPostCompositionCaps);
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_3)
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_CREATEPROTECTEDSESSION)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS APIENTRY
+DXGKDDI_CREATEPROTECTEDSESSION(
+    IN_CONST_HANDLE hAdapter,
+    INOUT_PDXGKARG_CREATEPROTECTEDSESSION pCreateProtectedSession);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_DESTROYPROTECTEDSESSION)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS APIENTRY
+DXGKDDI_DESTROYPROTECTEDSESSION(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_HANDLE hProtectedSession);
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
+
+typedef enum _DXGK_SCHEDULING_LOG_OPERATION
+{
+    DXGK_SCHEDULING_LOG_OPERATION_CONTEXT_STATE_CHANGE = 0
+} DXGK_SCHEDULING_LOG_OPERATION;
+
+typedef enum _DXGK_SCHEDULING_LOG_CONTEXT_STATE
+{
+    DXGK_SCHEDULING_LOG_CONTEXT_STATE_IDLE = 0,
+    DXGK_SCHEDULING_LOG_CONTEXT_STATE_RUNNING = 1,
+    DXGK_SCHEDULING_LOG_CONTEXT_STATE_READY = 2,
+    DXGK_SCHEDULING_LOG_CONTEXT_STATE_READY_STANDBY = 3,
+} DXGK_SCHEDULING_LOG_CONTEXT_STATE;
+
+typedef struct _DXGK_SCHEDULING_LOG_CONTEXT_STATE_CHANGE
+{
+    HANDLE                            hKmdContext;
+    DXGK_SCHEDULING_LOG_CONTEXT_STATE newContextState;
+} DXGK_SCHEDULING_LOG_CONTEXT_STATE_CHANGE;
+
+typedef struct _DXGK_SCHEDULING_LOG_HEADER
+{
+    union
+    {
+        struct
+        {
+            UINT32 FirstFreeEntryIndex;
+            UINT32 WraparoundCount;
+        };
+        ULARGE_INTEGER AtomicWraparoundAndEntryIndex;
+    };
+    UINT64 NumberOfEntries;
+    UINT64 Reserved[2];
+} DXGK_SCHEDULING_LOG_HEADER;
+
+typedef struct _DXGK_SCHEDULING_LOG_ENTRY
+{
+    UINT64 GpuTimeStamp;
+    UINT   OperationType : 32;
+    UINT   ReservedOperationTypeBits : 32;
+    union
+    {
+        DXGK_SCHEDULING_LOG_CONTEXT_STATE_CHANGE ContextStateChange;
+        UINT64                                   ReservedOperationData[2];
+    };
+} DXGK_SCHEDULING_LOG_ENTRY;
+
+typedef struct _DXGK_SCHEDULING_LOG_BUFFER
+{
+    DXGK_SCHEDULING_LOG_HEADER Header;
+    _Field_size_(Header.NumberOfEntries)
+    DXGK_SCHEDULING_LOG_ENTRY Entries[1];
+} DXGK_SCHEDULING_LOG_BUFFER;
+
+typedef struct _DXGKARG_SETSCHEDULINGLOGBUFFER
+{
+    UINT NodeOrdinal;
+    UINT EngineOrdinal;
+    UINT NumberOfEntries;
+    _Field_size_bytes_(32 + 32 * NumberOfEntries)
+    DXGK_SCHEDULING_LOG_BUFFER *LogBufferCpuVa;
+    D3DGPU_VIRTUAL_ADDRESS LogBufferGpuVa;
+    _Field_range_(0, NumberOfEntries - 1)
+    UINT InterruptEntry;
+} DXGKARG_SETSCHEDULINGLOGBUFFER;
+
+typedef _In_ CONST DXGKARG_SETSCHEDULINGLOGBUFFER
+    *IN_CONST_PDXGKARG_SETSCHEDULINGLOGBUFFER;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_SETSCHEDULINGLOGBUFFER)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_SETSCHEDULINGLOGBUFFER(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARG_SETSCHEDULINGLOGBUFFER pSetSchedulingLogBuffer);
+
+typedef enum _DXGK_SCHEDULING_PRIORITY_BAND
+{
+    DXGK_SCHEDULING_PRIORITY_BAND_IDLE = 0,
+    DXGK_SCHEDULING_PRIORITY_BAND_NORMAL = 1,
+    DXGK_SCHEDULING_PRIORITY_BAND_FOCUS = 2,
+    DXGK_SCHEDULING_PRIORITY_BAND_REALTIME = 3,
+    DXGK_SCHEDULING_PRIORITY_BAND_COUNT = 4
+} DXGK_SCHEDULING_PRIORITY_BAND;
+
+typedef struct _DXGKARG_SETUPPRIORITYBANDS
+{
+    UINT64 gracePeriodForBand[DXGK_SCHEDULING_PRIORITY_BAND_COUNT];
+    UINT64 processQuantumForBand[DXGK_SCHEDULING_PRIORITY_BAND_COUNT];
+    UINT64 processGracePeriodForBand[DXGK_SCHEDULING_PRIORITY_BAND_COUNT];
+    UINT   targetNormalBandPercentage;
+} DXGKARG_SETUPPRIORITYBANDS;
+
+typedef _In_ CONST DXGKARG_SETUPPRIORITYBANDS
+    *IN_CONST_PDXGKARG_SETUPPRIORITYBANDS;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_SETUPPRIORITYBANDS)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_SETUPPRIORITYBANDS(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARG_SETUPPRIORITYBANDS pSetupPriorityBands);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_NOTIFYFOCUSPRESENT)
+    _IRQL_requires_min_(PASSIVE_LEVEL)
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_NOTIFYFOCUSPRESENT(
+    IN_CONST_HANDLE hAdapter);
+
+typedef struct _DXGKARG_SETCONTEXTSCHEDULINGPROPERTIES
+{
+    HANDLE                        hContext;
+    DXGK_SCHEDULING_PRIORITY_BAND priorityBand;
+    INT                           realtimeBandPriorityLevel;
+    INT                           inProcessPriority;
+    UINT64                        quantum;
+    UINT64                        gracePeriodSamePriority;
+    UINT64                        gracePeriodLowerPriority;
+} DXGKARG_SETCONTEXTSCHEDULINGPROPERTIES;
+
+typedef _In_ CONST DXGKARG_SETCONTEXTSCHEDULINGPROPERTIES
+    *IN_CONST_PDXGKARG_SETCONTEXTSCHEDULINGPROPERTIES;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_SETCONTEXTSCHEDULINGPROPERTIES)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_SETCONTEXTSCHEDULINGPROPERTIES(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARG_SETCONTEXTSCHEDULINGPROPERTIES
+        pSetContextSchedulingProperties);
+
+typedef struct _DXGKARG_SUSPENDCONTEXT
+{
+    HANDLE hContext;
+    UINT64 contextSuspendFence;
+} DXGKARG_SUSPENDCONTEXT;
+
+typedef _In_ CONST DXGKARG_SUSPENDCONTEXT
+    *IN_CONST_PDXGKARG_SUSPENDCONTEXT;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_SUSPENDCONTEXT)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_SUSPENDCONTEXT(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARG_SUSPENDCONTEXT pSuspendContext);
+
+typedef struct _DXGKARG_RESUMECONTEXT
+{
+    HANDLE hContext;
+} DXGKARG_RESUMECONTEXT;
+
+typedef _In_ CONST DXGKARG_RESUMECONTEXT
+    *IN_CONST_PDXGKARG_RESUMECONTEXT;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_RESUMECONTEXT)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_RESUMECONTEXT(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARG_RESUMECONTEXT pResumeContext);
+
+typedef struct _DXGK_VIRTUALMACHINEDATAFLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT SecureVirtualMachine : 1;
+            UINT LinuxVirtualMachine  : 1;
+        };
+        UINT Value;
+    };
+} DXGK_VIRTUALMACHINEDATAFLAGS;
+
+typedef struct _DXGKARG_SETVIRTUALMACHINEDATA
+{
+    HANDLE                       hKmdVmWorkerProcess;
+    GUID                        *pVmGuid;
+    DXGK_VIRTUALMACHINEDATAFLAGS Flags;
+} DXGKARG_SETVIRTUALMACHINEDATA;
+
+typedef _In_ CONST DXGKARG_SETVIRTUALMACHINEDATA
+    *IN_CONST_PDXGKARG_SETVIRTUALMACHINEDATA;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_SETVIRTUALMACHINEDATA)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_SETVIRTUALMACHINEDATA(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARG_SETVIRTUALMACHINEDATA Args);
+
+typedef struct _DXGKARG_BEGINEXCLUSIVEACCESS
+{
+    UINT Reserved;
+} DXGKARG_BEGINEXCLUSIVEACCESS;
+
+typedef struct _DXGKARG_ENDEXCLUSIVEACCESS
+{
+    UINT Reserved;
+} DXGKARG_ENDEXCLUSIVEACCESS;
+
+typedef _In_ DXGKARG_BEGINEXCLUSIVEACCESS
+    *IN_PDXGKARG_BEGINEXCLUSIVEACCESS;
+typedef _In_ DXGKARG_ENDEXCLUSIVEACCESS
+    *IN_PDXGKARG_ENDEXCLUSIVEACCESS;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_BEGINEXCLUSIVEACCESS)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_BEGINEXCLUSIVEACCESS(
+    IN_CONST_HANDLE hAdapter,
+    IN_PDXGKARG_BEGINEXCLUSIVEACCESS pBeginExclusiveAccess);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_ENDEXCLUSIVEACCESS)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_ENDEXCLUSIVEACCESS(
+    IN_CONST_HANDLE hAdapter,
+    IN_PDXGKARG_ENDEXCLUSIVEACCESS pEndExclusiveAccess);
+
+typedef struct _DXGKARG_RESUMEHWENGINE
+{
+    UINT NodeOrdinal;
+    UINT EngineOrdinal;
+} DXGKARG_RESUMEHWENGINE;
+
+typedef _Inout_ DXGKARG_RESUMEHWENGINE
+    *INOUT_PDXGKARG_RESUMEHWENGINE;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_RESUMEHWENGINE)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_RESUMEHWENGINE(
+    IN_CONST_HANDLE hAdapter,
+    INOUT_PDXGKARG_RESUMEHWENGINE pResumeHwEngine);
+
+typedef DXGKDDI_SETSCHEDULINGLOGBUFFER
+    *PDXGKDDI_SETSCHEDULINGLOGBUFFER;
+typedef DXGKDDI_SETUPPRIORITYBANDS
+    *PDXGKDDI_SETUPPRIORITYBANDS;
+typedef DXGKDDI_NOTIFYFOCUSPRESENT
+    *PDXGKDDI_NOTIFYFOCUSPRESENT;
+typedef DXGKDDI_SETCONTEXTSCHEDULINGPROPERTIES
+    *PDXGKDDI_SETCONTEXTSCHEDULINGPROPERTIES;
+typedef DXGKDDI_SUSPENDCONTEXT
+    *PDXGKDDI_SUSPENDCONTEXT;
+typedef DXGKDDI_RESUMECONTEXT
+    *PDXGKDDI_RESUMECONTEXT;
+typedef DXGKDDI_SETVIRTUALMACHINEDATA
+    *PDXGKDDI_SETVIRTUALMACHINEDATA;
+typedef DXGKDDI_BEGINEXCLUSIVEACCESS
+    *PDXGKDDI_BEGINEXCLUSIVEACCESS;
+typedef DXGKDDI_ENDEXCLUSIVEACCESS
+    *PDXGKDDI_ENDEXCLUSIVEACCESS;
+typedef DXGKDDI_RESUMEHWENGINE
+    *PDXGKDDI_RESUMEHWENGINE;
+
+C_ASSERT(sizeof(DXGK_SCHEDULING_LOG_HEADER) == 0x20);
+C_ASSERT(FIELD_OFFSET(DXGK_SCHEDULING_LOG_HEADER, NumberOfEntries) == 0x8);
+C_ASSERT(FIELD_OFFSET(DXGK_SCHEDULING_LOG_HEADER, Reserved) == 0x10);
+C_ASSERT(sizeof(DXGK_SCHEDULING_LOG_ENTRY) == 0x20);
+C_ASSERT(FIELD_OFFSET(DXGK_SCHEDULING_LOG_ENTRY, GpuTimeStamp) == 0x0);
+C_ASSERT(FIELD_OFFSET(DXGK_SCHEDULING_LOG_ENTRY, ContextStateChange) == 0x10);
+C_ASSERT(sizeof(DXGK_SCHEDULING_LOG_BUFFER) == 0x40);
+C_ASSERT(FIELD_OFFSET(DXGK_SCHEDULING_LOG_BUFFER, Entries) == 0x20);
+C_ASSERT(sizeof(DXGKARG_SETUPPRIORITYBANDS) == 0x68);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETUPPRIORITYBANDS, processQuantumForBand) == 0x20);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETUPPRIORITYBANDS, processGracePeriodForBand) == 0x40);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETUPPRIORITYBANDS, targetNormalBandPercentage) == 0x60);
+C_ASSERT(sizeof(DXGKARG_SUSPENDCONTEXT) == 0x10);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SUSPENDCONTEXT, contextSuspendFence) == 0x8);
+C_ASSERT(sizeof(DXGK_VIRTUALMACHINEDATAFLAGS) == 0x4);
+C_ASSERT(sizeof(DXGKARG_BEGINEXCLUSIVEACCESS) == 0x4);
+C_ASSERT(sizeof(DXGKARG_ENDEXCLUSIVEACCESS) == 0x4);
+C_ASSERT(sizeof(DXGKARG_RESUMEHWENGINE) == 0x8);
+C_ASSERT(FIELD_OFFSET(DXGKARG_RESUMEHWENGINE, EngineOrdinal) == 0x4);
+
+#ifdef _WIN64
+C_ASSERT(sizeof(DXGK_SCHEDULING_LOG_CONTEXT_STATE_CHANGE) == 0x10);
+C_ASSERT(FIELD_OFFSET(DXGK_SCHEDULING_LOG_CONTEXT_STATE_CHANGE, newContextState) == 0x8);
+C_ASSERT(sizeof(DXGKARG_SETSCHEDULINGLOGBUFFER) == 0x28);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETSCHEDULINGLOGBUFFER, LogBufferCpuVa) == 0x10);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETSCHEDULINGLOGBUFFER, LogBufferGpuVa) == 0x18);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETSCHEDULINGLOGBUFFER, InterruptEntry) == 0x20);
+C_ASSERT(sizeof(DXGKARG_SETCONTEXTSCHEDULINGPROPERTIES) == 0x30);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETCONTEXTSCHEDULINGPROPERTIES, priorityBand) == 0x8);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETCONTEXTSCHEDULINGPROPERTIES, quantum) == 0x18);
+C_ASSERT(sizeof(DXGKARG_RESUMECONTEXT) == 0x8);
+C_ASSERT(sizeof(DXGKARG_SETVIRTUALMACHINEDATA) == 0x18);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETVIRTUALMACHINEDATA, pVmGuid) == 0x8);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETVIRTUALMACHINEDATA, Flags) == 0x10);
+#else
+C_ASSERT(sizeof(DXGK_SCHEDULING_LOG_CONTEXT_STATE_CHANGE) == 0x8);
+C_ASSERT(FIELD_OFFSET(DXGK_SCHEDULING_LOG_CONTEXT_STATE_CHANGE, newContextState) == 0x4);
+C_ASSERT(sizeof(DXGKARG_SETSCHEDULINGLOGBUFFER) == 0x20);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETSCHEDULINGLOGBUFFER, LogBufferCpuVa) == 0xC);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETSCHEDULINGLOGBUFFER, LogBufferGpuVa) == 0x10);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETSCHEDULINGLOGBUFFER, InterruptEntry) == 0x18);
+C_ASSERT(sizeof(DXGKARG_SETCONTEXTSCHEDULINGPROPERTIES) == 0x28);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETCONTEXTSCHEDULINGPROPERTIES, priorityBand) == 0x4);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETCONTEXTSCHEDULINGPROPERTIES, quantum) == 0x10);
+C_ASSERT(sizeof(DXGKARG_RESUMECONTEXT) == 0x4);
+C_ASSERT(sizeof(DXGKARG_SETVIRTUALMACHINEDATA) == 0xC);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETVIRTUALMACHINEDATA, pVmGuid) == 0x4);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETVIRTUALMACHINEDATA, Flags) == 0x8);
+#endif
+
+#endif /* DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4 */
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_5)
+
+typedef enum _DXGK_KERNEL_SUBMISSION_TYPE
+{
+    DXGK_KERNEL_SUBMISSION_BUILD_PAGING_BUFFER = 0,
+    DXGK_KERNEL_SUBMISSION_RENDERGDI = 1,
+    DXGK_KERNEL_SUBMISSION_PRESENTBLT = 2
+} DXGK_KERNEL_SUBMISSION_TYPE;
+
+typedef struct _DXGKARG_SIGNALMONITOREDFENCE
+{
+    DXGK_KERNEL_SUBMISSION_TYPE KernelSubmissionType;
+    VOID                       *pDmaBuffer;
+    D3DGPU_VIRTUAL_ADDRESS      DmaBufferGpuVirtualAddress;
+    UINT                        DmaSize;
+    VOID                       *pDmaBufferPrivateData;
+    UINT                        DmaBufferPrivateDataSize;
+    UINT                        MultipassOffset;
+    D3DGPU_VIRTUAL_ADDRESS      MonitoredFenceGpuVa;
+    UINT64                      MonitoredFenceValue;
+    VOID                       *MonitoredFenceCpuVa;
+    HANDLE                      hHwQueue;
+} DXGKARG_SIGNALMONITOREDFENCE;
+
+typedef _Inout_ DXGKARG_SIGNALMONITOREDFENCE
+    *INOUT_PDXGKARG_SIGNALMONITOREDFENCE;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_SIGNALMONITOREDFENCE)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_SIGNALMONITOREDFENCE(
+    IN_CONST_HANDLE hContext,
+    INOUT_PDXGKARG_SIGNALMONITOREDFENCE pSignalMonitoredFence);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_PRESENTTOHWQUEUE)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_PRESENTTOHWQUEUE(
+    IN_CONST_HANDLE hHwQueue,
+    INOUT_PDXGKARG_PRESENT pPresent);
+
+typedef struct _DXGK_VALIDATESUBMITCOMMANDFLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT HardwareQueueSubmission : 1;
+            UINT Reserved                : 31;
+        };
+        UINT Value;
+    };
+} DXGK_VALIDATESUBMITCOMMANDFLAGS;
+
+typedef struct _DXGKARG_VALIDATESUBMITCOMMAND
+{
+    D3DGPU_VIRTUAL_ADDRESS          Commands;
+    UINT                            CommandLength;
+    DXGK_VALIDATESUBMITCOMMANDFLAGS Flags;
+    UINT                            ContextCount;
+    HANDLE                          Context[D3DDDI_MAX_BROADCAST_CONTEXT];
+    VOID                           *pPrivateDriverData;
+    UINT                            PrivateDriverDataSize;
+    UINT                            UmdPrivateDataSize;
+    UINT64                          HwQueueProgressFenceId;
+} DXGKARG_VALIDATESUBMITCOMMAND;
+
+typedef _Inout_ DXGKARG_VALIDATESUBMITCOMMAND
+    *INOUT_PDXGKARG_VALIDATESUBMITCOMMAND;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_VALIDATESUBMITCOMMAND)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_VALIDATESUBMITCOMMAND(
+    IN_CONST_HANDLE hContext,
+    INOUT_PDXGKARG_VALIDATESUBMITCOMMAND pArgs);
+
+typedef struct _DXGK_TRACKEDWORKLOAD_STATE_FLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT Saturated    : 1;
+            UINT OptimalLevel : 1;
+            UINT Reserved     : 30;
+        };
+        UINT Value;
+    };
+} DXGK_TRACKEDWORKLOAD_STATE_FLAGS;
+
+typedef struct _DXGKARG_SETTRACKEDWORKLOADPOWERLEVEL
+{
+    UINT                             PowerLevel;
+    UINT                             EffectivePowerLevel;
+    DXGK_TRACKEDWORKLOAD_STATE_FLAGS Flags;
+} DXGKARG_SETTRACKEDWORKLOADPOWERLEVEL;
+
+typedef _Inout_ DXGKARG_SETTRACKEDWORKLOADPOWERLEVEL
+    *INOUT_PDXGKARG_SETTRACKEDWORKLOADPOWERLEVEL;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_SETTRACKEDWORKLOADPOWERLEVEL)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_SETTRACKEDWORKLOADPOWERLEVEL(
+    IN_CONST_HANDLE hContext,
+    INOUT_PDXGKARG_SETTRACKEDWORKLOADPOWERLEVEL
+        pTrackedWorkloadPowerLevel);
+
+typedef struct _DXGKARGCB_SIGNALEVENT
+{
+    HANDLE hDxgkProcess;
+    HANDLE hEvent;
+    union
+    {
+        struct
+        {
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
+            UINT CpuEventObject : 1;
+            UINT Reserved       : 31;
+#else
+            UINT Reserved       : 32;
+#endif
+        };
+        UINT Flags;
+    };
+} DXGKARGCB_SIGNALEVENT;
+
+typedef _In_ CONST DXGKARGCB_SIGNALEVENT
+    *IN_CONST_PDXGKARGCB_SIGNALEVENT;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKCB_SIGNALEVENT)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY CALLBACK *DXGKCB_SIGNALEVENT)(
+    IN_CONST_PDXGKARGCB_SIGNALEVENT pArgs);
+
+typedef DXGKDDI_SIGNALMONITOREDFENCE
+    *PDXGKDDI_SIGNALMONITOREDFENCE;
+typedef DXGKDDI_PRESENTTOHWQUEUE
+    *PDXGKDDI_PRESENTTOHWQUEUE;
+typedef DXGKDDI_VALIDATESUBMITCOMMAND
+    *PDXGKDDI_VALIDATESUBMITCOMMAND;
+typedef DXGKDDI_SETTRACKEDWORKLOADPOWERLEVEL
+    *PDXGKDDI_SETTRACKEDWORKLOADPOWERLEVEL;
+
+C_ASSERT(sizeof(DXGK_KERNEL_SUBMISSION_TYPE) == 0x4);
+C_ASSERT(sizeof(DXGK_VALIDATESUBMITCOMMANDFLAGS) == 0x4);
+C_ASSERT(sizeof(DXGK_TRACKEDWORKLOAD_STATE_FLAGS) == 0x4);
+C_ASSERT(sizeof(DXGKARG_SETTRACKEDWORKLOADPOWERLEVEL) == 0xC);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETTRACKEDWORKLOADPOWERLEVEL, EffectivePowerLevel) == 0x4);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETTRACKEDWORKLOADPOWERLEVEL, Flags) == 0x8);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_SIGNALEVENT, Flags) == (2 * sizeof(HANDLE)));
+
+#ifdef _WIN64
+C_ASSERT(sizeof(DXGKARGCB_SIGNALEVENT) == 0x18);
+C_ASSERT(sizeof(DXGKARG_SIGNALMONITOREDFENCE) == 0x50);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SIGNALMONITOREDFENCE, pDmaBuffer) == 0x8);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SIGNALMONITOREDFENCE, DmaBufferGpuVirtualAddress) == 0x10);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SIGNALMONITOREDFENCE, pDmaBufferPrivateData) == 0x20);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SIGNALMONITOREDFENCE, MonitoredFenceGpuVa) == 0x30);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SIGNALMONITOREDFENCE, MonitoredFenceValue) == 0x38);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SIGNALMONITOREDFENCE, MonitoredFenceCpuVa) == 0x40);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SIGNALMONITOREDFENCE, hHwQueue) == 0x48);
+C_ASSERT(sizeof(DXGKARG_VALIDATESUBMITCOMMAND) == 0x230);
+C_ASSERT(FIELD_OFFSET(DXGKARG_VALIDATESUBMITCOMMAND, Context) == 0x18);
+C_ASSERT(FIELD_OFFSET(DXGKARG_VALIDATESUBMITCOMMAND, pPrivateDriverData) == 0x218);
+C_ASSERT(FIELD_OFFSET(DXGKARG_VALIDATESUBMITCOMMAND, HwQueueProgressFenceId) == 0x228);
+#else
+C_ASSERT(sizeof(DXGKARGCB_SIGNALEVENT) == 0xC);
+C_ASSERT(sizeof(DXGKARG_SIGNALMONITOREDFENCE) == 0x38);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SIGNALMONITOREDFENCE, pDmaBuffer) == 0x4);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SIGNALMONITOREDFENCE, DmaBufferGpuVirtualAddress) == 0x8);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SIGNALMONITOREDFENCE, pDmaBufferPrivateData) == 0x14);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SIGNALMONITOREDFENCE, MonitoredFenceGpuVa) == 0x20);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SIGNALMONITOREDFENCE, MonitoredFenceValue) == 0x28);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SIGNALMONITOREDFENCE, MonitoredFenceCpuVa) == 0x30);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SIGNALMONITOREDFENCE, hHwQueue) == 0x34);
+C_ASSERT(sizeof(DXGKARG_VALIDATESUBMITCOMMAND) == 0x128);
+C_ASSERT(FIELD_OFFSET(DXGKARG_VALIDATESUBMITCOMMAND, Context) == 0x14);
+C_ASSERT(FIELD_OFFSET(DXGKARG_VALIDATESUBMITCOMMAND, pPrivateDriverData) == 0x114);
+C_ASSERT(FIELD_OFFSET(DXGKARG_VALIDATESUBMITCOMMAND, HwQueueProgressFenceId) == 0x120);
+#endif
+
+#endif /* DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_5 */
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_6)
+
+typedef struct _DXGK_KSR_MEMORY_RANGE
+{
+    ULONGLONG MemoryRangeDesc;
+} DXGK_KSR_MEMORY_RANGE, *PDXGK_KSR_MEMORY_RANGE;
+
+typedef struct _DXGKARGCB_SAVEMEMORYFORHOTUPDATE
+{
+    UINT                    NumDataMemoryRanges;
+    _Field_size_(NumDataMemoryRanges)
+    DXGK_KSR_MEMORY_RANGE  *pDataMemoryRanges;
+    PMDL                    pDataMdl;
+    UINT                    DataSize;
+    _Field_size_(DataSize)
+    PVOID                   pData;
+    UINT                    MetaDataSize;
+    _Field_size_(MetaDataSize)
+    BYTE                   *pMetaData;
+} DXGKARGCB_SAVEMEMORYFORHOTUPDATE;
+
+typedef _In_ CONST DXGKARGCB_SAVEMEMORYFORHOTUPDATE
+    *IN_CONST_PDXGKARGCB_SAVEMEMORYFORHOTUPDATE;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKCB_SAVEMEMORYFORHOTUPDATE)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY CALLBACK *DXGKCB_SAVEMEMORYFORHOTUPDATE)(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARGCB_SAVEMEMORYFORHOTUPDATE pArgs);
+
+typedef struct _DXGK_SAVEMEMORYFORHOTUPDATEFLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT CancelHotUpdate : 1;
+            UINT Reserved        : 31;
+        };
+        UINT Value;
+    };
+} DXGK_SAVEMEMORYFORHOTUPDATEFLAGS;
+
+typedef struct _DXGKARG_SAVEMEMORYFORHOTUPDATE
+{
+    DXGK_SAVEMEMORYFORHOTUPDATEFLAGS Flags;
+} DXGKARG_SAVEMEMORYFORHOTUPDATE;
+
+typedef _In_ CONST DXGKARG_SAVEMEMORYFORHOTUPDATE
+    *IN_CONST_PDXGKARG_SAVEMEMORYFORHOTUPDATE;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_SAVEMEMORYFORHOTUPDATE)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_SAVEMEMORYFORHOTUPDATE(
+    IN_CONST_HANDLE hContext,
+    IN_CONST_PDXGKARG_SAVEMEMORYFORHOTUPDATE pArgs);
+
+typedef struct _DXGK_RESTOREMEMORYFORHOTUPDATEFLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT RestoreComplete : 1;
+            UINT Reserved        : 31;
+        };
+        UINT Value;
+    };
+} DXGK_RESTOREMEMORYFORHOTUPDATEFLAGS;
+
+typedef struct _DXGKARG_RESTOREMEMORYFORHOTUPDATE
+{
+    DXGK_RESTOREMEMORYFORHOTUPDATEFLAGS Flags;
+    PMDL                                pDataMdl;
+    UINT                                MetaDataSize;
+    _Field_size_(MetaDataSize)
+    PVOID                               pMetaData;
+} DXGKARG_RESTOREMEMORYFORHOTUPDATE;
+
+typedef _In_ CONST DXGKARG_RESTOREMEMORYFORHOTUPDATE
+    *IN_CONST_PDXGKARG_RESTOREMEMORYFORHOTUPDATE;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_RESTOREMEMORYFORHOTUPDATE)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_RESTOREMEMORYFORHOTUPDATE(
+    IN_CONST_HANDLE hContext,
+    IN_CONST_PDXGKARG_RESTOREMEMORYFORHOTUPDATE pArgs);
+
+typedef DXGKDDI_SAVEMEMORYFORHOTUPDATE
+    *PDXGKDDI_SAVEMEMORYFORHOTUPDATE;
+typedef DXGKDDI_RESTOREMEMORYFORHOTUPDATE
+    *PDXGKDDI_RESTOREMEMORYFORHOTUPDATE;
+
+C_ASSERT(sizeof(DXGK_KSR_MEMORY_RANGE) == 0x8);
+C_ASSERT(sizeof(DXGK_SAVEMEMORYFORHOTUPDATEFLAGS) == 0x4);
+C_ASSERT(sizeof(DXGKARG_SAVEMEMORYFORHOTUPDATE) == 0x4);
+C_ASSERT(sizeof(DXGK_RESTOREMEMORYFORHOTUPDATEFLAGS) == 0x4);
+
+#ifdef _WIN64
+C_ASSERT(sizeof(DXGKARGCB_SAVEMEMORYFORHOTUPDATE) == 0x38);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_SAVEMEMORYFORHOTUPDATE, pDataMemoryRanges) == 0x8);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_SAVEMEMORYFORHOTUPDATE, pDataMdl) == 0x10);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_SAVEMEMORYFORHOTUPDATE, DataSize) == 0x18);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_SAVEMEMORYFORHOTUPDATE, pData) == 0x20);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_SAVEMEMORYFORHOTUPDATE, MetaDataSize) == 0x28);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_SAVEMEMORYFORHOTUPDATE, pMetaData) == 0x30);
+C_ASSERT(sizeof(DXGKARG_RESTOREMEMORYFORHOTUPDATE) == 0x20);
+C_ASSERT(FIELD_OFFSET(DXGKARG_RESTOREMEMORYFORHOTUPDATE, pDataMdl) == 0x8);
+C_ASSERT(FIELD_OFFSET(DXGKARG_RESTOREMEMORYFORHOTUPDATE, MetaDataSize) == 0x10);
+C_ASSERT(FIELD_OFFSET(DXGKARG_RESTOREMEMORYFORHOTUPDATE, pMetaData) == 0x18);
+#else
+C_ASSERT(sizeof(DXGKARGCB_SAVEMEMORYFORHOTUPDATE) == 0x1C);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_SAVEMEMORYFORHOTUPDATE, pDataMemoryRanges) == 0x4);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_SAVEMEMORYFORHOTUPDATE, pDataMdl) == 0x8);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_SAVEMEMORYFORHOTUPDATE, DataSize) == 0xC);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_SAVEMEMORYFORHOTUPDATE, pData) == 0x10);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_SAVEMEMORYFORHOTUPDATE, MetaDataSize) == 0x14);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_SAVEMEMORYFORHOTUPDATE, pMetaData) == 0x18);
+C_ASSERT(sizeof(DXGKARG_RESTOREMEMORYFORHOTUPDATE) == 0x10);
+C_ASSERT(FIELD_OFFSET(DXGKARG_RESTOREMEMORYFORHOTUPDATE, pDataMdl) == 0x4);
+C_ASSERT(FIELD_OFFSET(DXGKARG_RESTOREMEMORYFORHOTUPDATE, MetaDataSize) == 0x8);
+C_ASSERT(FIELD_OFFSET(DXGKARG_RESTOREMEMORYFORHOTUPDATE, pMetaData) == 0xC);
+#endif
+
+#endif /* DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_6 */
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_7)
+
+typedef struct _DXGKARG_CONTROLINTERRUPT3
+{
+    DXGK_INTERRUPT_TYPE InterruptType;
+    union
+    {
+        DXGK_INTERRUPT_STATE  InterruptState;
+        DXGK_CRTC_VSYNC_STATE CrtcVsyncState;
+    };
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId;
+} DXGKARG_CONTROLINTERRUPT3;
+
+typedef _In_ CONST DXGKARG_CONTROLINTERRUPT3
+    *IN_CONST_PDXGKARG_CONTROLINTERRUPT3;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_CONTROLINTERRUPT3)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_CONTROLINTERRUPT3(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARG_CONTROLINTERRUPT3 InterruptControl);
+
+typedef DXGKDDI_CONTROLINTERRUPT3
+    *PDXGKDDI_CONTROLINTERRUPT3;
+
+C_ASSERT(sizeof(DXGK_INTERRUPT_STATE) == 0x4);
+C_ASSERT(sizeof(DXGK_CRTC_VSYNC_STATE) == 0x4);
+C_ASSERT(sizeof(DXGKARG_CONTROLINTERRUPT3) == 0xC);
+C_ASSERT(FIELD_OFFSET(DXGKARG_CONTROLINTERRUPT3, InterruptType) == 0x0);
+C_ASSERT(FIELD_OFFSET(DXGKARG_CONTROLINTERRUPT3, InterruptState) == 0x4);
+C_ASSERT(FIELD_OFFSET(DXGKARG_CONTROLINTERRUPT3, CrtcVsyncState) == 0x4);
+C_ASSERT(FIELD_OFFSET(DXGKARG_CONTROLINTERRUPT3, VidPnSourceId) == 0x8);
+
+#endif /* DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_7 */
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_8)
+
+typedef struct _DXGKARGCB_NOTIFYCURSORSUPPORTCHANGE
+{
+    HANDLE                         DeviceHandle;
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId;
+} DXGKARGCB_NOTIFYCURSORSUPPORTCHANGE;
+
+typedef _In_ CONST DXGKARGCB_NOTIFYCURSORSUPPORTCHANGE
+    *IN_CONST_PDXGKARGCB_NOTIFYCURSORSUPPORTCHANGE;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKCB_NOTIFYCURSORSUPPORTCHANGE)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY CALLBACK *DXGKCB_NOTIFYCURSORSUPPORTCHANGE)(
+    IN_CONST_PDXGKARGCB_NOTIFYCURSORSUPPORTCHANGE pArgs);
+
+#ifdef _WIN64
+C_ASSERT(sizeof(DXGKARGCB_NOTIFYCURSORSUPPORTCHANGE) == 0x10);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_NOTIFYCURSORSUPPORTCHANGE, VidPnSourceId) == 0x8);
+#if (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+C_ASSERT(sizeof(DXGK_DRIVERCAPS) == 0x248);
+C_ASSERT(FIELD_OFFSET(DXGK_DRIVERCAPS, MiscCaps) == 0x240);
+#endif
+#else
+C_ASSERT(sizeof(DXGKARGCB_NOTIFYCURSORSUPPORTCHANGE) == 0x8);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_NOTIFYCURSORSUPPORTCHANGE, VidPnSourceId) == 0x4);
+#if (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+C_ASSERT(sizeof(DXGK_DRIVERCAPS) == 0x240);
+C_ASSERT(FIELD_OFFSET(DXGK_DRIVERCAPS, MiscCaps) == 0x238);
+#endif
+#endif
+
+#endif /* DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_8 */
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+
+typedef struct _DXGK_FLIPQUEUE_LOG_ENTRY
+{
+    ULONGLONG PresentId;
+    ULONGLONG PresentTimestamp;
+} DXGK_FLIPQUEUE_LOG_ENTRY;
+
+typedef struct _DXGKARG_SETFLIPQUEUELOGBUFFER
+{
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId;
+    UINT                           LayerIndex;
+    UINT                           NumberOfEntries;
+    _Field_size_(NumberOfEntries)
+    _Maybenull_
+    DXGK_FLIPQUEUE_LOG_ENTRY      *LogBufferAddress;
+} DXGKARG_SETFLIPQUEUELOGBUFFER;
+
+typedef _In_ CONST DXGKARG_SETFLIPQUEUELOGBUFFER
+    *IN_CONST_PDXGKARG_SETFLIPQUEUELOGBUFFER;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_SETFLIPQUEUELOGBUFFER)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_SETFLIPQUEUELOGBUFFER(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARG_SETFLIPQUEUELOGBUFFER pSetFlipQueueLogBuffer);
+
+typedef struct _DXGKARG_UPDATEFLIPQUEUELOG
+{
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId;
+    UINT                           LayerIndex;
+    ULONG                          FirstFreeFlipQueueLogEntryIndex;
+} DXGKARG_UPDATEFLIPQUEUELOG;
+
+typedef _Inout_ DXGKARG_UPDATEFLIPQUEUELOG
+    *INOUT_PDXGKARG_UPDATEFLIPQUEUELOG;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_UPDATEFLIPQUEUELOG)
+    _IRQL_requires_max_(PROFILE_LEVEL - 1)
+NTSTATUS
+APIENTRY
+DXGKDDI_UPDATEFLIPQUEUELOG(
+    IN_CONST_HANDLE hAdapter,
+    INOUT_PDXGKARG_UPDATEFLIPQUEUELOG pUpdateFlipQueueLog);
+
+typedef struct _DXGKARG_CANCELQUEUEDFLIPS
+{
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId;
+    UINT                           LayerIndex;
+    ULONGLONG                      PresentIdCancelRequested;
+    ULONGLONG                      PresentIdCancelled;
+} DXGKARG_CANCELQUEUEDFLIPS;
+
+typedef _Inout_ DXGKARG_CANCELQUEUEDFLIPS
+    *INOUT_PDXGKARG_CANCELQUEUEDFLIPS;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_CANCELQUEUEDFLIPS)
+    _IRQL_requires_max_(PROFILE_LEVEL - 1)
+NTSTATUS
+APIENTRY
+DXGKDDI_CANCELQUEUEDFLIPS(
+    IN_CONST_HANDLE hAdapter,
+    INOUT_PDXGKARG_CANCELQUEUEDFLIPS pCancelQueuedFlips);
+
+typedef struct _DXGK_CANCELFLIPS_PLANE
+{
+    ULONGLONG PresentIdCancelRequested;
+    ULONGLONG PresentIdCancelled;
+    UINT      LayerIndex;
+} DXGK_CANCELFLIPS_PLANE;
+
+typedef struct _DXGKARG_CANCELFLIPS
+{
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId;
+    UINT                           PlaneCount;
+    _Field_size_(PlaneCount)
+    DXGK_CANCELFLIPS_PLANE       **ppPlanes;
+} DXGKARG_CANCELFLIPS;
+
+typedef _Inout_ DXGKARG_CANCELFLIPS
+    *INOUT_PDXGKARG_CANCELFLIPS;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_CANCELFLIPS)
+    _IRQL_requires_max_(PROFILE_LEVEL - 1)
+NTSTATUS
+APIENTRY
+DXGKDDI_CANCELFLIPS(
+    IN_CONST_HANDLE hAdapter,
+    INOUT_PDXGKARG_CANCELFLIPS pCancelFlips);
+
+typedef struct _DXGKARG_SETINTERRUPTTARGETPRESENTID
+{
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId;
+    UINT                           LayerIndex;
+    ULONGLONG                      InterruptTargetPresentId;
+} DXGKARG_SETINTERRUPTTARGETPRESENTID;
+
+typedef _In_ CONST DXGKARG_SETINTERRUPTTARGETPRESENTID
+    *IN_CONST_PDXGKARG_SETINTERRUPTTARGETPRESENTID;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_SETINTERRUPTTARGETPRESENTID)
+    _IRQL_requires_max_(PROFILE_LEVEL - 1)
+NTSTATUS
+APIENTRY
+DXGKDDI_SETINTERRUPTTARGETPRESENTID(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARG_SETINTERRUPTTARGETPRESENTID
+        pSetInterruptTargetPresentId);
+
+typedef DXGKDDI_SETFLIPQUEUELOGBUFFER
+    *PDXGKDDI_SETFLIPQUEUELOGBUFFER;
+typedef DXGKDDI_UPDATEFLIPQUEUELOG
+    *PDXGKDDI_UPDATEFLIPQUEUELOG;
+typedef DXGKDDI_CANCELQUEUEDFLIPS
+    *PDXGKDDI_CANCELQUEUEDFLIPS;
+typedef DXGKDDI_SETINTERRUPTTARGETPRESENTID
+    *PDXGKDDI_SETINTERRUPTTARGETPRESENTID;
+
+typedef enum _DXGK_PHYSICAL_MEMORY_TYPE
+{
+    DXGK_PHYSICAL_MEMORY_TYPE_MDL,
+    DXGK_PHYSICAL_MEMORY_TYPE_CONTIGUOUS_MEMORY,
+    DXGK_PHYSICAL_MEMORY_TYPE_SECTION,
+    DXGK_PHYSICAL_MEMORY_TYPE_IO_SPACE
+} DXGK_PHYSICAL_MEMORY_TYPE;
+
+typedef enum _DXGK_ACCESS_MODE
+{
+    DXGK_ACCESS_MODE_KERNEL_MODE,
+    DXGK_ACCESS_MODE_USER_MODE
+} DXGK_ACCESS_MODE;
+
+typedef struct _OBJECT_ATTRIBUTES *POBJECT_ATTRIBUTES;
+
+typedef struct _DXGKARGCB_CREATE_PHYSICAL_MEMORY_OBJECT
+{
+    _In_opt_ HANDLE                    hAdapter;
+    _In_     SIZE_T                    Size;
+    _In_opt_ ULONG_PTR                 Context;
+    _In_     DXGK_PHYSICAL_MEMORY_TYPE Type;
+    _In_     DXGK_MEMORY_CACHING_TYPE  CacheType;
+    union
+    {
+        struct
+        {
+            _In_ PHYSICAL_ADDRESS LowAddress;
+            _In_ PHYSICAL_ADDRESS HighAddress;
+            _In_ PHYSICAL_ADDRESS SkipBytes;
+            _In_ UINT             Flags;
+        } Mdl;
+        struct
+        {
+            _In_ PHYSICAL_ADDRESS LowestAcceptableAddress;
+            _In_ PHYSICAL_ADDRESS HighestAcceptableAddress;
+            _In_ PHYSICAL_ADDRESS BoundaryAddressMultiple;
+        } ContiguousMemory;
+        struct
+        {
+            _In_ ACCESS_MASK        DesiredAccess;
+            _In_ POBJECT_ATTRIBUTES ObjectAttributes;
+            _In_ ULONG              PageProtection;
+            _In_ ULONG              AllocationAttributes;
+        } Section;
+        struct
+        {
+            _In_ PHYSICAL_ADDRESS BaseAddress;
+        } IOSpace;
+    };
+    _Out_ HANDLE hPhysicalMemoryObject;
+    _Out_ HANDLE hAdapterMemoryObject;
+} DXGKARGCB_CREATE_PHYSICAL_MEMORY_OBJECT;
+
+typedef struct _DXGKARGCB_DESTROY_PHYSICAL_MEMORY_OBJECT
+{
+    _In_     HANDLE hPhysicalMemoryObject;
+    _In_opt_ HANDLE hAdapterMemoryObject;
+} DXGKARGCB_DESTROY_PHYSICAL_MEMORY_OBJECT;
+
+typedef _Inout_ DXGKARGCB_CREATE_PHYSICAL_MEMORY_OBJECT
+    *IN_OUT_PDXGKARGCB_CREATE_PHYSICAL_MEMORY_OBJECT;
+typedef _In_ CONST DXGKARGCB_DESTROY_PHYSICAL_MEMORY_OBJECT
+    *IN_CONST_PDXGKARGCB_DESTROY_PHYSICAL_MEMORY_OBJECT;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKCB_CREATEPHYSICALMEMORYOBJECT)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY CALLBACK *DXGKCB_CREATEPHYSICALMEMORYOBJECT)(
+    IN_OUT_PDXGKARGCB_CREATE_PHYSICAL_MEMORY_OBJECT pArgs);
+
+typedef
+    _Function_class_DXGK_(DXGKCB_DESTROYPHYSICALMEMORYOBJECT)
+    _IRQL_requires_(PASSIVE_LEVEL)
+VOID
+(APIENTRY CALLBACK *DXGKCB_DESTROYPHYSICALMEMORYOBJECT)(
+    IN_CONST_PDXGKARGCB_DESTROY_PHYSICAL_MEMORY_OBJECT pArgs);
+
+typedef struct _DXGKARGCB_MAP_PHYSICAL_MEMORY
+{
+    _In_  HANDLE           hPhysicalMemoryObject;
+    _In_  DXGK_ACCESS_MODE AccessMode;
+    _In_  SIZE_T           Offset;
+    _In_  SIZE_T           Size;
+    _Out_ void            *pMappedAddress;
+} DXGKARGCB_MAP_PHYSICAL_MEMORY;
+
+typedef struct _DXGKARGCB_UNMAP_PHYSICAL_MEMORY
+{
+    _In_ HANDLE hPhysicalMemoryObject;
+    _In_ void  *pBaseAddress;
+    _In_ SIZE_T Size;
+} DXGKARGCB_UNMAP_PHYSICAL_MEMORY;
+
+typedef _Inout_ DXGKARGCB_MAP_PHYSICAL_MEMORY
+    *IN_OUT_PDXGKARGCB_MAP_PHYSICAL_MEMORY;
+typedef _In_ CONST DXGKARGCB_UNMAP_PHYSICAL_MEMORY
+    *IN_CONST_PDXGKARGCB_UNMAP_PHYSICAL_MEMORY;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKCB_MAPPHYSICALMEMORY)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY CALLBACK *DXGKCB_MAPPHYSICALMEMORY)(
+    IN_OUT_PDXGKARGCB_MAP_PHYSICAL_MEMORY pArgs);
+
+typedef
+    _Function_class_DXGK_(DXGKCB_UNMAPPHYSICALMEMORY)
+    _IRQL_requires_(PASSIVE_LEVEL)
+VOID
+(APIENTRY CALLBACK *DXGKCB_UNMAPPHYSICALMEMORY)(
+    IN_CONST_PDXGKARGCB_UNMAP_PHYSICAL_MEMORY pArgs);
+
+typedef struct _DXGKARGCB_ALLOCATE_ADL
+{
+    _In_ HANDLE hAdapterMemoryObject;
+    _In_ SIZE_T Offset;
+    _In_ SIZE_T Size;
+    union
+    {
+        struct
+        {
+            UINT32 RequireContiguous : 1;
+            UINT32 PreferContiguous  : 1;
+            UINT32 Reserved          : 30;
+        };
+        UINT32 Value;
+    } Flags;
+    _Out_ DXGK_ADL *pAdl;
+} DXGKARGCB_ALLOCATE_ADL;
+
+typedef struct _DXGKARGCB_FREE_ADL
+{
+    _In_ HANDLE    hAdapterMemoryObject;
+    _In_ DXGK_ADL *pAdl;
+} DXGKARGCB_FREE_ADL;
+
+typedef _Inout_ DXGKARGCB_ALLOCATE_ADL
+    *IN_OUT_PDXGKARGCB_ALLOCATE_ADL;
+typedef _In_ CONST DXGKARGCB_FREE_ADL
+    *IN_CONST_PDXGKARGCB_FREE_ADL;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKCB_ALLOCATEADL)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY CALLBACK *DXGKCB_ALLOCATEADL)(
+    IN_OUT_PDXGKARGCB_ALLOCATE_ADL pArgs);
+
+typedef
+    _Function_class_DXGK_(DXGKCB_FREEADL)
+    _IRQL_requires_(PASSIVE_LEVEL)
+VOID
+(APIENTRY CALLBACK *DXGKCB_FREEADL)(
+    IN_CONST_PDXGKARGCB_FREE_ADL pArgs);
+
+typedef struct _DXGKARGCB_OPEN_PHYSICAL_MEMORY_OBJECT
+{
+    _In_  HANDLE hPhysicalMemoryObject;
+    _In_  HANDLE hAdapter;
+    _Out_ HANDLE hAdapterMemoryObject;
+} DXGKARGCB_OPEN_PHYSICAL_MEMORY_OBJECT;
+
+typedef struct _DXGKARGCB_CLOSE_PHYSICAL_MEMORY_OBJECT
+{
+    _In_ HANDLE hAdapterMemoryObject;
+} DXGKARGCB_CLOSE_PHYSICAL_MEMORY_OBJECT;
+
+typedef _Inout_ DXGKARGCB_OPEN_PHYSICAL_MEMORY_OBJECT
+    *IN_OUT_PDXGKARGCB_OPEN_PHYSICAL_MEMORY_OBJECT;
+typedef _In_ CONST DXGKARGCB_CLOSE_PHYSICAL_MEMORY_OBJECT
+    *IN_CONST_PDXGKARGCB_CLOSE_PHYSICAL_MEMORY_OBJECT;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKCB_OPENPHYSICALMEMORYOBJECT)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY CALLBACK *DXGKCB_OPENPHYSICALMEMORYOBJECT)(
+    IN_OUT_PDXGKARGCB_OPEN_PHYSICAL_MEMORY_OBJECT pArgs);
+
+typedef
+    _Function_class_DXGK_(DXGKCB_CLOSEPHYSICALMEMORYOBJECT)
+    _IRQL_requires_(PASSIVE_LEVEL)
+VOID
+(APIENTRY CALLBACK *DXGKCB_CLOSEPHYSICALMEMORYOBJECT)(
+    IN_CONST_PDXGKARGCB_CLOSE_PHYSICAL_MEMORY_OBJECT pArgs);
+
+typedef struct _DXGKARGCB_QUERYFEATURESUPPORT
+{
+    HANDLE          DeviceHandle;
+    DXGK_FEATURE_ID FeatureId;
+    _Field_range_(DXGK_FEATURE_SUPPORT_ALWAYS_OFF,
+                  DXGK_FEATURE_SUPPORT_ALWAYS_ON)
+    UINT            DriverSupportState;
+    BOOLEAN         Enabled;
+} DXGKARGCB_QUERYFEATURESUPPORT;
+
+typedef _Inout_ DXGKARGCB_QUERYFEATURESUPPORT
+    *INOUT_PDXGKARGCB_QUERYFEATURESUPPORT;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKCB_QUERYFEATURESUPPORT)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY CALLBACK *DXGKCB_QUERYFEATURESUPPORT)(
+    INOUT_PDXGKARGCB_QUERYFEATURESUPPORT pArgs);
+
+typedef struct _DXGKARGCB_PINFRAMEBUFFERFORSAVE2
+{
+    _In_ UINT   PhysicalAdapterIndex;
+    _In_ SIZE_T CommitSize;
+    union
+    {
+        struct
+        {
+            UINT PreferContiguous : 1;
+            UINT Reserved         : 31;
+        };
+        UINT Value;
+    } Flags;
+    _Out_ DXGK_ADL *pAdl;
+} DXGKARGCB_PINFRAMEBUFFERFORSAVE2;
+
+typedef _Inout_ DXGKARGCB_PINFRAMEBUFFERFORSAVE2
+    *INOUT_PDXGKARGCB_PINFRAMEBUFFERFORSAVE2;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKCB_PINFRAMEBUFFERFORSAVE2)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY CALLBACK *DXGKCB_PINFRAMEBUFFERFORSAVE2)(
+    IN_CONST_HANDLE hAdapter,
+    INOUT_PDXGKARGCB_PINFRAMEBUFFERFORSAVE2 pPinFrameBufferForSave2);
+
+C_ASSERT(DXGK_INTERRUPT_CRTC_VSYNC_WITH_MULTIPLANE_OVERLAY3 == 18);
+C_ASSERT(sizeof(DXGK_FLIPQUEUE_LOG_ENTRY) == 0x10);
+C_ASSERT(sizeof(DXGKARG_UPDATEFLIPQUEUELOG) == 0xC);
+C_ASSERT(sizeof(DXGKARG_CANCELQUEUEDFLIPS) == 0x18);
+C_ASSERT(sizeof(DXGK_CANCELFLIPS_PLANE) == 0x18);
+C_ASSERT(FIELD_OFFSET(DXGK_CANCELFLIPS_PLANE, LayerIndex) == 0x10);
+C_ASSERT(sizeof(DXGKARG_SETINTERRUPTTARGETPRESENTID) == 0x10);
+C_ASSERT(sizeof(DXGK_PHYSICAL_MEMORY_CAPS) == 0x8);
+C_ASSERT(sizeof(DXGK_IOMMU_CAPS) == 0x4);
+C_ASSERT(sizeof(DXGK_MEMORY_CACHING_TYPE) == 0x4);
+C_ASSERT(sizeof(DXGK_PHYSICAL_MEMORY_TYPE) == 0x4);
+C_ASSERT(sizeof(DXGK_ACCESS_MODE) == 0x4);
+C_ASSERT(sizeof(DXGK_ADL_FLAGS) == 0x4);
+C_ASSERT(FIELD_OFFSET(DXGK_ADL, Flags) == 0x4);
+C_ASSERT(FIELD_OFFSET(DXGK_ADL, BasePageNumber) == 0x8);
+C_ASSERT(FIELD_OFFSET(DXGK_ADL, Pages) == 0x8);
+
+#ifdef _WIN64
+C_ASSERT(sizeof(DXGKARG_SETFLIPQUEUELOGBUFFER) == 0x18);
+C_ASSERT(sizeof(DXGKARG_CANCELFLIPS) == 0x10);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETFLIPQUEUELOGBUFFER,
+                      LogBufferAddress) == 0x10);
+C_ASSERT(sizeof(DXGK_ADL) == 0x10);
+C_ASSERT(sizeof(DXGKARGCB_CREATE_PHYSICAL_MEMORY_OBJECT) == 0x50);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_CREATE_PHYSICAL_MEMORY_OBJECT,
+                      hPhysicalMemoryObject) == 0x40);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_CREATE_PHYSICAL_MEMORY_OBJECT,
+                      hAdapterMemoryObject) == 0x48);
+C_ASSERT(sizeof(DXGKARGCB_DESTROY_PHYSICAL_MEMORY_OBJECT) == 0x10);
+C_ASSERT(sizeof(DXGKARGCB_MAP_PHYSICAL_MEMORY) == 0x28);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_MAP_PHYSICAL_MEMORY,
+                      pMappedAddress) == 0x20);
+C_ASSERT(sizeof(DXGKARGCB_UNMAP_PHYSICAL_MEMORY) == 0x18);
+C_ASSERT(sizeof(DXGKARGCB_ALLOCATE_ADL) == 0x28);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_ALLOCATE_ADL, pAdl) == 0x20);
+C_ASSERT(sizeof(DXGKARGCB_FREE_ADL) == 0x10);
+C_ASSERT(sizeof(DXGKARGCB_OPEN_PHYSICAL_MEMORY_OBJECT) == 0x18);
+C_ASSERT(sizeof(DXGKARGCB_CLOSE_PHYSICAL_MEMORY_OBJECT) == 0x8);
+C_ASSERT(sizeof(DXGKARGCB_QUERYFEATURESUPPORT) == 0x18);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_QUERYFEATURESUPPORT, Enabled) == 0x10);
+C_ASSERT(sizeof(DXGKARGCB_PINFRAMEBUFFERFORSAVE2) == 0x20);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_PINFRAMEBUFFERFORSAVE2, pAdl) == 0x18);
+#else
+C_ASSERT(sizeof(DXGKARG_SETFLIPQUEUELOGBUFFER) == 0x10);
+C_ASSERT(sizeof(DXGKARG_CANCELFLIPS) == 0xC);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETFLIPQUEUELOGBUFFER,
+                      LogBufferAddress) == 0xC);
+C_ASSERT(sizeof(DXGK_ADL) == 0xC);
+C_ASSERT(sizeof(DXGKARGCB_CREATE_PHYSICAL_MEMORY_OBJECT) == 0x40);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_CREATE_PHYSICAL_MEMORY_OBJECT,
+                      hPhysicalMemoryObject) == 0x38);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_CREATE_PHYSICAL_MEMORY_OBJECT,
+                      hAdapterMemoryObject) == 0x3C);
+C_ASSERT(sizeof(DXGKARGCB_DESTROY_PHYSICAL_MEMORY_OBJECT) == 0x8);
+C_ASSERT(sizeof(DXGKARGCB_MAP_PHYSICAL_MEMORY) == 0x14);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_MAP_PHYSICAL_MEMORY,
+                      pMappedAddress) == 0x10);
+C_ASSERT(sizeof(DXGKARGCB_UNMAP_PHYSICAL_MEMORY) == 0xC);
+C_ASSERT(sizeof(DXGKARGCB_ALLOCATE_ADL) == 0x14);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_ALLOCATE_ADL, pAdl) == 0x10);
+C_ASSERT(sizeof(DXGKARGCB_FREE_ADL) == 0x8);
+C_ASSERT(sizeof(DXGKARGCB_OPEN_PHYSICAL_MEMORY_OBJECT) == 0xC);
+C_ASSERT(sizeof(DXGKARGCB_CLOSE_PHYSICAL_MEMORY_OBJECT) == 0x4);
+C_ASSERT(sizeof(DXGKARGCB_QUERYFEATURESUPPORT) == 0x10);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_QUERYFEATURESUPPORT, Enabled) == 0xC);
+C_ASSERT(sizeof(DXGKARGCB_PINFRAMEBUFFERFORSAVE2) == 0x10);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_PINFRAMEBUFFERFORSAVE2, pAdl) == 0xC);
+#endif
+
+#endif /* DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9 */
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
+
+typedef struct _DXGKARG_SETALLOCATIONBACKINGSTORE
+{
+    HANDLE hDriverAllocation;
+    VOID  *pBackingStore;
+} DXGKARG_SETALLOCATIONBACKINGSTORE;
+
+typedef _In_ CONST DXGKARG_SETALLOCATIONBACKINGSTORE
+    *IN_CONST_PDXGKARG_SETALLOCATIONBACKINGSTORE;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_SETALLOCATIONBACKINGSTORE)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_SETALLOCATIONBACKINGSTORE(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARG_SETALLOCATIONBACKINGSTORE pArgs);
+
+typedef struct _DXGK_CREATECPUEVENTFLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT Reserved : 32;
+        };
+        UINT Value;
+    };
+} DXGK_CREATECPUEVENTFLAGS;
+
+typedef struct _DXGKARG_CREATECPUEVENT
+{
+    HANDLE                    hKmdDevice;
+    HANDLE                    hDxgCpuEvent;
+    DXGK_CREATECPUEVENTFLAGS Flags;
+    HANDLE                    hKmdCpuEvent;
+} DXGKARG_CREATECPUEVENT;
+
+typedef _Inout_ DXGKARG_CREATECPUEVENT
+    *INOUT_PDXGKARG_CREATECPUEVENT;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_CREATECPUEVENT)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_CREATECPUEVENT(
+    IN_CONST_HANDLE hAdapter,
+    INOUT_PDXGKARG_CREATECPUEVENT pArgs);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_DESTROYCPUEVENT)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_DESTROYCPUEVENT(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_HANDLE hKmdCpuEvent);
+
+typedef DXGKDDI_SETALLOCATIONBACKINGSTORE
+    *PDXGKDDI_SETALLOCATIONBACKINGSTORE;
+typedef DXGKDDI_CREATECPUEVENT
+    *PDXGKDDI_CREATECPUEVENT;
+typedef DXGKDDI_DESTROYCPUEVENT
+    *PDXGKDDI_DESTROYCPUEVENT;
+typedef DXGKDDI_CANCELFLIPS
+    *PDXGKDDI_CANCELFLIPS;
+
+DEFINE_GUID(GUID_DEVINTERFACE_WDDM3_ON_VB,
+            0xe922004d, 0xeb9c, 0x4de1,
+            0x92, 0x24, 0xa9, 0xce, 0xaa, 0x95, 0x9b, 0xce);
+
+#if !defined(_WDMDDK_) && !defined(_WDM_INCLUDED_) && \
+    !defined(_NTDDK_) && !defined(_NTIFS_)
+typedef VOID (*PINTERFACE_REFERENCE)(PVOID Context);
+typedef VOID (*PINTERFACE_DEREFERENCE)(PVOID Context);
+#endif
+
+typedef struct _DXGK_WDDM3_ON_VB_INTERFACE
+{
+    IN  USHORT                              Size;
+    IN  USHORT                              Version;
+    OUT PVOID                               Context;
+    OUT PINTERFACE_REFERENCE                InterfaceReference;
+    OUT PINTERFACE_DEREFERENCE              InterfaceDereference;
+    OUT PDXGKDDI_SETALLOCATIONBACKINGSTORE DxgkDdiSetAllocationBackingStore;
+    OUT PDXGKDDI_CREATECPUEVENT            DxgkDdiCreateCpuEvent;
+    OUT PDXGKDDI_DESTROYCPUEVENT           DxgkDdiDestroyCpuEvent;
+} DXGK_WDDM3_ON_VB_INTERFACE, *PDXGK_WDDM3_ON_VB_INTERFACE;
+
+#define DXGK_WDDM3_ON_VB_INTERFACE_VERSION_1 1
+
+C_ASSERT(sizeof(DXGK_CREATECPUEVENTFLAGS) == 0x4);
+C_ASSERT(FIELD_OFFSET(DXGKARG_CREATECPUEVENT, Flags) == (2 * sizeof(HANDLE)));
+#ifdef _WIN64
+C_ASSERT(sizeof(DXGKARG_SETALLOCATIONBACKINGSTORE) == 0x10);
+C_ASSERT(sizeof(DXGKARG_CREATECPUEVENT) == 0x20);
+C_ASSERT(FIELD_OFFSET(DXGKARG_CREATECPUEVENT, hKmdCpuEvent) == 0x18);
+C_ASSERT(sizeof(DXGK_WDDM3_ON_VB_INTERFACE) == 0x38);
+C_ASSERT(FIELD_OFFSET(DXGK_WDDM3_ON_VB_INTERFACE,
+                      DxgkDdiSetAllocationBackingStore) == 0x20);
+#else
+C_ASSERT(sizeof(DXGKARG_SETALLOCATIONBACKINGSTORE) == 0x8);
+C_ASSERT(sizeof(DXGKARG_CREATECPUEVENT) == 0x10);
+C_ASSERT(FIELD_OFFSET(DXGKARG_CREATECPUEVENT, hKmdCpuEvent) == 0xC);
+C_ASSERT(sizeof(DXGK_WDDM3_ON_VB_INTERFACE) == 0x1C);
+C_ASSERT(FIELD_OFFSET(DXGK_WDDM3_ON_VB_INTERFACE,
+                      DxgkDdiSetAllocationBackingStore) == 0x10);
+#endif
+
+#endif /* DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0 */
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
+
+typedef struct _DXGK_NATIVE_FENCE_CAPS
+{
+    UINT MonitoredValueStride;
+    BOOLEAN MapToGpuSystemProcess;
+    D3DGPU_VIRTUAL_ADDRESS MinimumAddress;
+    D3DGPU_VIRTUAL_ADDRESS MaximumAddress;
+    BYTE Reserved[28];
+} DXGK_NATIVE_FENCE_CAPS;
+
+typedef struct _DXGKARG_CREATENATIVEFENCE_FLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT Reserved : 32;
+        };
+        UINT Value;
+    };
+} DXGKARG_CREATENATIVEFENCE_FLAGS;
+
+typedef struct _DXGKARG_CREATENATIVEFENCE
+{
+    HANDLE hGlobalNativeFence;
+    D3DDDI_NATIVEFENCE_TYPE Type;
+    D3DGPU_VIRTUAL_ADDRESS CurrentValueSystemProcessGpuVa;
+    D3DGPU_VIRTUAL_ADDRESS MonitoredValueSystemProcessGpuVa;
+    BYTE pPrivateDriverData[D3DDDI_NATIVE_FENCE_PDD_SIZE];
+    DXGKARG_CREATENATIVEFENCE_FLAGS Flags;
+    BYTE Reserved[32];
+} DXGKARG_CREATENATIVEFENCE;
+
+typedef _Inout_ DXGKARG_CREATENATIVEFENCE
+    *INOUT_PDXGKARG_CREATENATIVEFENCE;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_CREATENATIVEFENCE)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_CREATENATIVEFENCE(
+    IN_CONST_HANDLE hAdapter,
+    INOUT_PDXGKARG_CREATENATIVEFENCE pCreateNativeFence);
+
+typedef struct _DXGK_OPENNATIVEFENCE_FLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT Reserved : 32;
+        };
+        UINT Value;
+    };
+} DXGK_OPENNATIVEFENCE_FLAGS;
+
+typedef struct _DXGKARG_OPENNATIVEFENCE
+{
+    HANDLE hGlobalNativeFence;
+    HANDLE hLocalNativeFence;
+    HANDLE hDevice;
+    D3DGPU_VIRTUAL_ADDRESS CurrentValueGpuVa;
+    D3DGPU_VIRTUAL_ADDRESS MonitoredValueGpuVa;
+    DXGK_OPENNATIVEFENCE_FLAGS Flags;
+    BYTE Reserved[32];
+} DXGKARG_OPENNATIVEFENCE;
+
+typedef _Inout_ DXGKARG_OPENNATIVEFENCE
+    *INOUT_PDXGKARG_OPENNATIVEFENCE;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_OPENNATIVEFENCE)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_OPENNATIVEFENCE(
+    IN_CONST_HANDLE hAdapter,
+    INOUT_PDXGKARG_OPENNATIVEFENCE pOpenNativeFence);
+
+typedef struct _DXGK_CLOSENATIVEFENCE_FLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT Reserved : 32;
+        };
+        UINT Value;
+    };
+} DXGK_CLOSENATIVEFENCE_FLAGS;
+
+typedef struct _DXGKARG_CLOSENATIVEFENCE
+{
+    HANDLE hLocalNativeFence;
+    DXGK_CLOSENATIVEFENCE_FLAGS Flags;
+    BYTE Reserved[32];
+} DXGKARG_CLOSENATIVEFENCE;
+
+typedef _Inout_ DXGKARG_CLOSENATIVEFENCE
+    *INOUT_PDXGKARG_CLOSENATIVEFENCE;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_CLOSENATIVEFENCE)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_CLOSENATIVEFENCE(
+    IN_CONST_HANDLE hAdapter,
+    INOUT_PDXGKARG_CLOSENATIVEFENCE pCloseNativeFence);
+
+typedef struct _DXGK_DESTROYNATIVEFENCE_FLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT Reserved : 32;
+        };
+        UINT Value;
+    };
+} DXGK_DESTROYNATIVEFENCE_FLAGS;
+
+typedef struct _DXGKARG_DESTROYNATIVEFENCE
+{
+    HANDLE hGlobalNativeFence;
+    DXGK_DESTROYNATIVEFENCE_FLAGS Flags;
+    BYTE Reserved[32];
+} DXGKARG_DESTROYNATIVEFENCE;
+
+typedef _Inout_ DXGKARG_DESTROYNATIVEFENCE
+    *INOUT_PDXGKARG_DESTROYNATIVEFENCE;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_DESTROYNATIVEFENCE)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_DESTROYNATIVEFENCE(
+    INOUT_PDXGKARG_DESTROYNATIVEFENCE pDestroyNativeFence);
+
+typedef struct _DXGKARG_UPDATEMONITOREDVALUES_FLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT Reserved : 32;
+        };
+        UINT Value;
+    };
+} DXGKARG_UPDATEMONITOREDVALUES_FLAGS;
+
+typedef struct _DXGKARG_UPDATEMONITOREDVALUES
+{
+    _Field_size_(NumFences) HANDLE *NativeFenceArray;
+    _Field_size_(NumFences) UINT64 *UpdatedValueArray;
+    _Field_size_(NumFences) VOID **MonitoredValueKernelCpuVa;
+    UINT NumFences;
+    DXGKARG_UPDATEMONITOREDVALUES_FLAGS Flags;
+    BYTE Reserved[28];
+} DXGKARG_UPDATEMONITOREDVALUES;
+
+typedef _In_ CONST DXGKARG_UPDATEMONITOREDVALUES
+    *IN_CONST_PDXGKARG_UPDATEMONITOREDVALUES;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_UPDATEMONITOREDVALUES)
+    _IRQL_requires_(PROFILE_LEVEL - 1)
+NTSTATUS
+APIENTRY
+DXGKDDI_UPDATEMONITOREDVALUES(
+    IN_CONST_PDXGKARG_UPDATEMONITOREDVALUES pUpdateMonitoredValues);
+
+typedef struct _DXGK_UPDATECURRENTVALUESFROMCPU_FLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT AlwaysSignaled : 1;
+            UINT NotificationOnly : 1;
+            UINT Reserved : 30;
+        };
+        UINT Value;
+    };
+} DXGK_UPDATECURRENTVALUESFROMCPU_FLAGS;
+
+typedef struct _DXGKARG_UPDATECURRENTVALUESFROMCPU
+{
+    _Field_size_(NumFences) HANDLE *NativeFenceArray;
+    _Field_size_(NumFences) UINT64 *UpdatedValueArray;
+    _Field_size_(NumFences) VOID **CurrentValueKernelCpuVa;
+    UINT NumFences;
+    DXGK_UPDATECURRENTVALUESFROMCPU_FLAGS Flags;
+    BYTE Reserved[28];
+} DXGKARG_UPDATECURRENTVALUESFROMCPU;
+
+typedef _In_ CONST DXGKARG_UPDATECURRENTVALUESFROMCPU
+    *IN_CONST_PDXGKARG_UPDATECURRENTVALUESFROMCPU;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_UPDATECURRENTVALUESFROMCPU)
+    _IRQL_requires_(DISPATCH_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_UPDATECURRENTVALUESFROMCPU(
+    IN_CONST_PDXGKARG_UPDATECURRENTVALUESFROMCPU pUpdateCurrentValuesFromCpu);
+
+typedef struct _DXGKARG_SETNATIVEFENCELOGBUFFER_FLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT Reserved : 32;
+        };
+        UINT Value;
+    };
+} DXGKARG_SETNATIVEFENCELOGBUFFER_FLAGS;
+
+typedef struct _DXGKARG_SETNATIVEFENCELOGBUFFER
+{
+    HANDLE hHwQueue;
+    UINT NumberOfEntries;
+    _Field_size_bytes_(32 + 32 * NumberOfEntries)
+    DXGK_NATIVE_FENCE_LOG_BUFFER *LogBufferCpuVa;
+    D3DGPU_VIRTUAL_ADDRESS LogBufferGpuVa;
+    D3DGPU_VIRTUAL_ADDRESS LogBufferSystemProcessGpuVa;
+    DXGKARG_SETNATIVEFENCELOGBUFFER_FLAGS Flags;
+    BYTE Reserved[32];
+} DXGKARG_SETNATIVEFENCELOGBUFFER;
+
+typedef _In_ CONST DXGKARG_SETNATIVEFENCELOGBUFFER
+    *IN_CONST_PDXGKARG_SETNATIVEFENCELOGBUFFER;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_SETNATIVEFENCELOGBUFFER)
+    _IRQL_requires_(DISPATCH_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_SETNATIVEFENCELOGBUFFER(
+    IN_CONST_PDXGKARG_SETNATIVEFENCELOGBUFFER pSetNativeFenceLogBuffer);
+
+typedef struct _DXGKARG_UPDATENATIVEFENCELOGS_FLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT Reserved : 32;
+        };
+        UINT Value;
+    };
+} DXGKARG_UPDATENATIVEFENCELOGS_FLAGS;
+
+typedef struct _DXGKARG_UPDATENATIVEFENCELOGS
+{
+    UINT NumberOfQueues;
+    HANDLE *hHWQueue;
+    DXGKARG_UPDATENATIVEFENCELOGS_FLAGS Flags;
+    BYTE Reserved[32];
+} DXGKARG_UPDATENATIVEFENCELOGS;
+
+typedef _In_ CONST DXGKARG_UPDATENATIVEFENCELOGS
+    *IN_CONST_PDXGKARG_UPDATENATIVEFENCELOGS;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_UPDATENATIVEFENCELOGS)
+    _IRQL_requires_(DISPATCH_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_UPDATENATIVEFENCELOGS(
+    IN_CONST_PDXGKARG_UPDATENATIVEFENCELOGS pUpdateNativeFenceLog);
+
+#define DXGK_MAX_DOORBELL_SIZE_BYTES 16384
+
+typedef struct _DXGK_USERMODESUBMISSION_CAPS
+{
+    union
+    {
+        struct
+        {
+            UINT SecondaryDoorbellSupported : 1;
+            UINT Reserved : 31;
+        };
+        UINT Value;
+    } Flags;
+    UINT DoorbellSizeInBytes;
+    UINT SecondaryDoorbellSizeInBytes;
+    UCHAR Reserved[16];
+} DXGK_USERMODESUBMISSION_CAPS;
+
+typedef struct _DXGKARG_CREATEDOORBELL_FLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT ResizeRingBufferOperation : 1;
+            UINT Reserved : 31;
+        };
+        UINT Value;
+    };
+} DXGKARG_CREATEDOORBELL_FLAGS;
+
+typedef struct _DXGKARG_CREATEDOORBELL
+{
+    HANDLE hHwQueue;
+    HANDLE hDoorbell;
+    _Field_range_(0, D3DDDI_DOORBELL_PRIVATEDATA_MAX_BYTES_WDDM3_1)
+    UINT PrivateDriverDataSize;
+    _Field_size_(PrivateDriverDataSize) VOID *PrivateDriverData;
+    HANDLE hRingBuffer;
+    HANDLE hRingBufferControl;
+    DXGKARG_CREATEDOORBELL_FLAGS Flags;
+} DXGKARG_CREATEDOORBELL;
+
+typedef _Inout_ DXGKARG_CREATEDOORBELL *INOUT_PDXGKARG_CREATEDOORBELL;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_CREATEDOORBELL)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_CREATEDOORBELL(
+    INOUT_PDXGKARG_CREATEDOORBELL pArgs);
+
+typedef struct _DXGKARG_CONNECTDOORBELL_FLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT RequireSecondaryAddress : 1;
+            UINT Reserved : 31;
+        };
+        UINT Value;
+    };
+} DXGKARG_CONNECTDOORBELL_FLAGS;
+
+typedef struct _DXGKARG_CONNECTDOORBELL
+{
+    HANDLE hDoorbell;
+    DXGKARG_CONNECTDOORBELL_FLAGS Flags;
+    VOID *KernelCpuVirtualAddress;
+    VOID *SecondaryKernelCpuVirtualAddress;
+    D3DDDI_DOORBELLSTATUS Status;
+} DXGKARG_CONNECTDOORBELL;
+
+typedef _Inout_ DXGKARG_CONNECTDOORBELL *INOUT_PDXGKARG_CONNECTDOORBELL;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_CONNECTDOORBELL)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_CONNECTDOORBELL(
+    INOUT_PDXGKARG_CONNECTDOORBELL pArgs);
+
+typedef struct _DXGKARG_DISCONNECTDOORBELL_FLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT Reserved : 32;
+        };
+        UINT Value;
+    };
+} DXGKARG_DISCONNECTDOORBELL_FLAGS;
+
+typedef struct _DXGKARG_DISCONNECTDOORBELL
+{
+    HANDLE hDoorbell;
+    DXGKARG_DISCONNECTDOORBELL_FLAGS Flags;
+} DXGKARG_DISCONNECTDOORBELL;
+
+typedef _Inout_ DXGKARG_DISCONNECTDOORBELL
+    *INOUT_PDXGKARG_DISCONNECTDOORBELL;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_DISCONNECTDOORBELL)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_DISCONNECTDOORBELL(
+    INOUT_PDXGKARG_DISCONNECTDOORBELL pArgs);
+
+typedef struct _DXGKARG_DESTROYDOORBELL
+{
+    HANDLE hDoorbell;
+} DXGKARG_DESTROYDOORBELL;
+
+typedef _Inout_ DXGKARG_DESTROYDOORBELL
+    *INOUT_PDXGKARG_DESTROYDOORBELL;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_DESTROYDOORBELL)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_DESTROYDOORBELL(
+    INOUT_PDXGKARG_DESTROYDOORBELL pArgs);
+
+typedef struct _DXGKARG_NOTIFYWORKSUBMISSION_FLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT Reserved : 32;
+        };
+        UINT Value;
+    };
+} DXGKARG_NOTIFYWORKSUBMISSION_FLAGS;
+
+typedef struct _DXGKARG_NOTIFYWORKSUBMISSION
+{
+    HANDLE hHwQueue;
+    DXGKARG_NOTIFYWORKSUBMISSION_FLAGS Flags;
+} DXGKARG_NOTIFYWORKSUBMISSION;
+
+typedef _Inout_ DXGKARG_NOTIFYWORKSUBMISSION
+    *INOUT_PDXGKARG_NOTIFYWORKSUBMISSION;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_NOTIFYWORKSUBMISSION)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_NOTIFYWORKSUBMISSION(
+    INOUT_PDXGKARG_NOTIFYWORKSUBMISSION pArgs);
+
+typedef struct _DXGKARGCB_DISCONNECTDOORBELL_FLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT Reserved : 32;
+        };
+        UINT Value;
+    };
+} DXGKARGCB_DISCONNECTDOORBELL_FLAGS;
+
+typedef struct _DXGKARGCB_DISCONNECTDOORBELL
+{
+    HANDLE hHwQueue;
+    HANDLE hDoorbell;
+    DXGKARGCB_DISCONNECTDOORBELL_FLAGS Flags;
+    D3DDDI_DOORBELLSTATUS DisconnectReason;
+} DXGKARGCB_DISCONNECTDOORBELL;
+
+typedef _Inout_ DXGKARGCB_DISCONNECTDOORBELL
+    *INOUT_PDXGKARGCB_DISCONNECTDOORBELL;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKCB_DISCONNECTDOORBELL)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY CALLBACK *DXGKCB_DISCONNECTDOORBELL)(
+    INOUT_PDXGKARGCB_DISCONNECTDOORBELL pArgs);
+
+typedef DXGKDDI_CREATENATIVEFENCE          *PDXGKDDI_CREATENATIVEFENCE;
+typedef DXGKDDI_OPENNATIVEFENCE            *PDXGKDDI_OPENNATIVEFENCE;
+typedef DXGKDDI_CLOSENATIVEFENCE           *PDXGKDDI_CLOSENATIVEFENCE;
+typedef DXGKDDI_DESTROYNATIVEFENCE         *PDXGKDDI_DESTROYNATIVEFENCE;
+typedef DXGKDDI_UPDATEMONITOREDVALUES      *PDXGKDDI_UPDATEMONITOREDVALUES;
+typedef DXGKDDI_UPDATECURRENTVALUESFROMCPU *PDXGKDDI_UPDATECURRENTVALUESFROMCPU;
+typedef DXGKDDI_SETNATIVEFENCELOGBUFFER    *PDXGKDDI_SETNATIVEFENCELOGBUFFER;
+typedef DXGKDDI_UPDATENATIVEFENCELOGS      *PDXGKDDI_UPDATENATIVEFENCELOGS;
+typedef DXGKDDI_CREATEDOORBELL             *PDXGKDDI_CREATEDOORBELL;
+typedef DXGKDDI_CONNECTDOORBELL            *PDXGKDDI_CONNECTDOORBELL;
+typedef DXGKDDI_DISCONNECTDOORBELL         *PDXGKDDI_DISCONNECTDOORBELL;
+typedef DXGKDDI_DESTROYDOORBELL            *PDXGKDDI_DESTROYDOORBELL;
+typedef DXGKDDI_NOTIFYWORKSUBMISSION       *PDXGKDDI_NOTIFYWORKSUBMISSION;
+
+C_ASSERT(sizeof(D3DDDI_NATIVEFENCEMAPPING) == 0x38);
+C_ASSERT(sizeof(D3DDDI_NATIVEFENCEINFO) == 0x70);
+C_ASSERT(sizeof(DXGK_NATIVE_FENCE_LOG_HEADER) == 0x28);
+C_ASSERT(sizeof(DXGK_NATIVE_FENCE_LOG_ENTRY) == 0x30);
+C_ASSERT(sizeof(DXGK_NATIVE_FENCE_LOG_BUFFER) == 0x58);
+C_ASSERT(sizeof(DXGK_NATIVE_FENCE_CAPS) == 0x38);
+C_ASSERT(sizeof(DXGK_USERMODESUBMISSION_CAPS) == 0x1C);
+#ifdef _WIN64
+C_ASSERT(sizeof(DXGKARG_CREATENATIVEFENCE) == 0x88);
+C_ASSERT(sizeof(DXGKARG_OPENNATIVEFENCE) == 0x50);
+C_ASSERT(sizeof(DXGKARG_CLOSENATIVEFENCE) == 0x30);
+C_ASSERT(sizeof(DXGKARG_DESTROYNATIVEFENCE) == 0x30);
+C_ASSERT(sizeof(DXGKARG_UPDATEMONITOREDVALUES) == 0x40);
+C_ASSERT(sizeof(DXGKARG_UPDATECURRENTVALUESFROMCPU) == 0x40);
+C_ASSERT(sizeof(DXGKARG_SETNATIVEFENCELOGBUFFER) == 0x50);
+C_ASSERT(sizeof(DXGKARG_UPDATENATIVEFENCELOGS) == 0x38);
+C_ASSERT(sizeof(DXGKARG_CREATEDOORBELL) == 0x38);
+C_ASSERT(sizeof(DXGKARG_CONNECTDOORBELL) == 0x28);
+C_ASSERT(sizeof(DXGKARG_DISCONNECTDOORBELL) == 0x10);
+C_ASSERT(sizeof(DXGKARG_DESTROYDOORBELL) == 0x8);
+C_ASSERT(sizeof(DXGKARG_NOTIFYWORKSUBMISSION) == 0x10);
+C_ASSERT(sizeof(DXGKARGCB_DISCONNECTDOORBELL) == 0x18);
+#else
+C_ASSERT(sizeof(DXGKARG_CREATENATIVEFENCE) == 0x80);
+C_ASSERT(sizeof(DXGKARG_OPENNATIVEFENCE) == 0x48);
+C_ASSERT(sizeof(DXGKARG_CLOSENATIVEFENCE) == 0x28);
+C_ASSERT(sizeof(DXGKARG_DESTROYNATIVEFENCE) == 0x28);
+C_ASSERT(sizeof(DXGKARG_UPDATEMONITOREDVALUES) == 0x30);
+C_ASSERT(sizeof(DXGKARG_UPDATECURRENTVALUESFROMCPU) == 0x30);
+C_ASSERT(sizeof(DXGKARG_SETNATIVEFENCELOGBUFFER) == 0x48);
+C_ASSERT(sizeof(DXGKARG_UPDATENATIVEFENCELOGS) == 0x2C);
+C_ASSERT(sizeof(DXGKARG_CREATEDOORBELL) == 0x1C);
+C_ASSERT(sizeof(DXGKARG_CONNECTDOORBELL) == 0x14);
+C_ASSERT(sizeof(DXGKARG_DISCONNECTDOORBELL) == 0x8);
+C_ASSERT(sizeof(DXGKARG_DESTROYDOORBELL) == 0x4);
+C_ASSERT(sizeof(DXGKARG_NOTIFYWORKSUBMISSION) == 0x8);
+C_ASSERT(sizeof(DXGKARGCB_DISCONNECTDOORBELL) == 0x10);
+#endif
+
+#endif /* DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1 */
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+
+typedef struct _DXGK_DIRTY_BIT_TRACKING_CAPS
+{
+    union
+    {
+        struct
+        {
+            UINT32 DirtyBitTrackingSupported  : 1;
+            UINT32 DirtyBitTrackingPerformant : 1;
+            UINT32 Reserved                   : 30;
+        };
+        UINT32 Value;
+    };
+} DXGK_DIRTY_BIT_TRACKING_CAPS;
+
+typedef struct _DXGK_DIRTY_BIT_TRACKING_SEGMENT_CAPS
+{
+    UINT32 PageSize;
+} DXGK_DIRTY_BIT_TRACKING_SEGMENT_CAPS;
+
+typedef struct _DXGKARG_CREATEMEMORYBASIS
+{
+    UINT SegmentId;
+    UINT64 RangeCount;
+    _Field_size_(RangeCount)
+    DXGK_MEMORYRANGE Ranges[1];
+} DXGKARG_CREATEMEMORYBASIS;
+
+typedef _In_ CONST DXGKARG_CREATEMEMORYBASIS
+    *IN_CONST_PDXGKARG_CREATEMEMORYBASIS;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_CREATEMEMORYBASIS)
+    _IRQL_requires_(PASSIVE_LEVEL)
+HANDLE
+APIENTRY
+DXGKDDI_CREATEMEMORYBASIS(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARG_CREATEMEMORYBASIS pArgs);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_DESTROYMEMORYBASIS)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_DESTROYMEMORYBASIS(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_HANDLE hMemoryBasis);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_STARTDIRTYTRACKING)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_STARTDIRTYTRACKING(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_HANDLE hMemoryBasis);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_STOPDIRTYTRACKING)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_STOPDIRTYTRACKING(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_HANDLE hMemoryBasis);
+
+typedef enum _DXGKARG_QUERYDIRTYBITDATAFLAGS
+{
+    DXGKARG_QUERYDIRTYBITDATAFLAGS_CLEARDATA = 1,
+} DXGKARG_QUERYDIRTYBITDATAFLAGS;
+
+typedef struct _DXGKARG_QUERYDIRTYBITDATA
+{
+    HANDLE MemoryBasis;
+    UINT64 SubrangeIndex;
+    UINT64 SubrangeOffset;
+    UINT64 SubrangeSize;
+    _Field_size_bytes_(BufferSize)
+    PVOID Buffer;
+    SIZE_T BufferSize;
+    UINT Flags;
+} DXGKARG_QUERYDIRTYBITDATA;
+
+typedef _Inout_ DXGKARG_QUERYDIRTYBITDATA
+    *INOUT_PDXGKARG_QUERYDIRTYBITDATA;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_QUERYDIRTYBITDATA)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_QUERYDIRTYBITDATA(
+    IN_CONST_HANDLE hAdapter,
+    INOUT_PDXGKARG_QUERYDIRTYBITDATA pArgs);
+
+typedef struct _DXGK_QUERYSCATTERRESERVEIN
+{
+    UINT SegmentId;
+} DXGK_QUERYSCATTERRESERVEIN;
+
+typedef struct _DXGK_QUERYSCATTERRESERVEOUT
+{
+    UINT64 SetVGPUResourcesPageSize;
+} DXGK_QUERYSCATTERRESERVEOUT;
+
+typedef enum _DXGK_GPUP_MIGRATIONTYPE
+{
+    DXGK_GPUP_MIGRATIONTYPE_SOURCE = 0,
+    DXGK_GPUP_MIGRATIONTYPE_TARGET
+} DXGK_GPUP_MIGRATIONTYPE;
+
+typedef struct _DXGKARG_GPUP_PREPARE_LIVE_MIGRATION
+{
+    UINT vfIndex;
+    DXGK_GPUP_MIGRATIONTYPE MigrationType;
+} DXGKARG_GPUP_PREPARE_LIVE_MIGRATION;
+
+typedef _In_ CONST DXGKARG_GPUP_PREPARE_LIVE_MIGRATION
+    *IN_CONST_PDXGKARG_GPUP_PREPARE_LIVE_MIGRATION;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_PREPARELIVEMIGRATION)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_PREPARELIVEMIGRATION(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARG_GPUP_PREPARE_LIVE_MIGRATION pArgs);
+
+typedef struct _DXGKARG_GPUP_SAVE_IMMUTABLE_MIGRATION_DATA
+{
+    UINT vfIndex;
+    UINT64 *DataSize;
+    BYTE *Data;
+} DXGKARG_GPUP_SAVE_IMMUTABLE_MIGRATION_DATA;
+
+typedef _Inout_ DXGKARG_GPUP_SAVE_IMMUTABLE_MIGRATION_DATA
+    *INOUT_PDXGKARG_GPUP_SAVE_IMMUTABLE_MIGRATION_DATA;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_SAVEIMMUTABLEMIGRATIONDATA)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_SAVEIMMUTABLEMIGRATIONDATA(
+    IN_CONST_HANDLE hAdapter,
+    INOUT_PDXGKARG_GPUP_SAVE_IMMUTABLE_MIGRATION_DATA pArgs);
+
+typedef struct _DXGKARG_GPUP_SAVE_MUTABLE_MIGRATION_DATA
+{
+    UINT vfIndex;
+    UINT64 *DataSize;
+    BYTE *Data;
+} DXGKARG_GPUP_SAVE_MUTABLE_MIGRATION_DATA;
+
+typedef _Inout_ DXGKARG_GPUP_SAVE_MUTABLE_MIGRATION_DATA
+    *INOUT_PDXGKARG_GPUP_SAVE_MUTABLE_MIGRATION_DATA;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_SAVEMUTABLEMIGRATIONDATA)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_SAVEMUTABLEMIGRATIONDATA(
+    IN_CONST_HANDLE hAdapter,
+    INOUT_PDXGKARG_GPUP_SAVE_MUTABLE_MIGRATION_DATA pArgs);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_ENDLIVEMIGRATION)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_ENDLIVEMIGRATION(
+    IN_CONST_HANDLE hAdapter,
+    UINT vfIndex);
+
+typedef struct _DXGKARG_GPUP_RESTORE_IMMUTABLE_MIGRATION_DATA
+{
+    UINT vfIndex;
+    UINT64 DataSize;
+    BYTE *Data;
+} DXGKARG_GPUP_RESTORE_IMMUTABLE_MIGRATION_DATA;
+
+typedef _In_ CONST DXGKARG_GPUP_RESTORE_IMMUTABLE_MIGRATION_DATA
+    *IN_CONST_PDXGKARG_GPUP_RESTORE_IMMUTABLE_MIGRATION_DATA;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_RESTOREIMMUTABLEMIGRATIONDATA)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_RESTOREIMMUTABLEMIGRATIONDATA(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARG_GPUP_RESTORE_IMMUTABLE_MIGRATION_DATA pArgs);
+
+typedef struct _DXGKARG_GPUP_RESTORE_MUTABLE_MIGRATION_DATA
+{
+    UINT vfIndex;
+    UINT64 DataSize;
+    BYTE *Data;
+} DXGKARG_GPUP_RESTORE_MUTABLE_MIGRATION_DATA;
+
+typedef _In_ CONST DXGKARG_GPUP_RESTORE_MUTABLE_MIGRATION_DATA
+    *IN_CONST_PDXGKARG_GPUP_RESTORE_MUTABLE_MIGRATION_DATA;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_RESTOREMUTABLEMIGRATIONDATA)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_RESTOREMUTABLEMIGRATIONDATA(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARG_GPUP_RESTORE_MUTABLE_MIGRATION_DATA pArgs);
+
+typedef struct _DXGK_INTERRUPT_TABLE_ENTRY
+{
+    UINT64 MessageAddress;
+    UINT32 MessageData;
+    UINT32 VectorControl;
+} DXGK_INTERRUPT_TABLE_ENTRY;
+
+typedef struct _DXGKARG_GPUP_WRITE_VIRTUALIZED_MSIX
+{
+    UINT vfIndex;
+    INT16 InterruptTableIndex;
+    DXGK_INTERRUPT_TABLE_ENTRY WriteValue;
+} DXGKARG_GPUP_WRITE_VIRTUALIZED_MSIX;
+
+typedef _In_ CONST DXGKARG_GPUP_WRITE_VIRTUALIZED_MSIX
+    *IN_CONST_PDXGKARG_GPUP_WRITE_VIRTUALIZED_MSIX;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_WRITEVIRTUALIZEDINTERRUPT)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_WRITEVIRTUALIZEDINTERRUPT(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARG_GPUP_WRITE_VIRTUALIZED_MSIX pArgs);
+
+typedef struct _DXGK_GPU_PHYSICAL_RESERVE_DESCRIPTOR
+{
+    HANDLE DriverAllocationHandle;
+    HANDLE MemoryBasis;
+} DXGK_GPU_PHYSICAL_RESERVE_DESCRIPTOR;
+
+typedef struct _DXGKARG_SETVIRTUALGPURESOURCES2
+{
+    ULONG vfIndex;
+    ULONG SegmentCount;
+    _Field_size_(SegmentCount)
+    DXGK_GPU_PHYSICAL_RESERVE_DESCRIPTOR SegmentDescriptors[1];
+} DXGKARG_SETVIRTUALGPURESOURCES2;
+
+typedef _In_ CONST DXGKARG_SETVIRTUALGPURESOURCES2
+    *IN_CONST_PDXGKARG_SETVIRTUALGPURESOURCES2;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_SETVIRTUALGPURESOURCES2)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_SETVIRTUALGPURESOURCES2(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARG_SETVIRTUALGPURESOURCES2 pArgs);
+
+typedef struct _DXGKARG_SETVIRTUALFUNCTIONPAUSESTATE
+{
+    ULONG vfIndex;
+    BOOLEAN bPause;
+} DXGKARG_SETVIRTUALFUNCTIONPAUSESTATE;
+
+typedef _In_ CONST DXGKARG_SETVIRTUALFUNCTIONPAUSESTATE
+    *IN_CONST_PDXGKARG_SETVIRTUALFUNCTIONPAUSESTATE;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_SETVIRTUALFUNCTIONPAUSESTATE)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_SETVIRTUALFUNCTIONPAUSESTATE(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARG_SETVIRTUALFUNCTIONPAUSESTATE pArgs);
+
+typedef enum _DXGK_TDR_TYPE
+{
+    DXGK_TDR_TYPE_UNKNOWN = 0,
+    DXGK_TDR_TYPE_FORCED = 1,
+    DXGK_TDR_TYPE_PREEMPT_TIMEOUT = 2,
+    DXGK_TDR_TYPE_VSYNC_TIMEOUT = 3,
+    DXGK_TDR_TYPE_DOD_PRESENT_FORCED = 4,
+    DXGK_TDR_TYPE_DOD_PRESENT_TIMEOUT = 5,
+    DXGK_TDR_TYPE_ENGINE_TIMEOUT = 6,
+    DXGK_TDR_TYPE_DOD_VSYNC_FORCED = 7,
+    DXGK_TDR_TYPE_DOD_VSYNC_TIMEOUT = 8,
+    DXGK_TDR_TYPE_ENGINE_TIMEOUT_PROMOTED = 9,
+    DXGK_TDR_TYPE_PAGE_FAULT = 10,
+    DXGK_TDR_TYPE_INVALID_FENCE = 11,
+    DXGK_TDR_TYPE_ENGINE_PAGE_FAULT = 12,
+    DXGK_TDR_TYPE_DISPLAY_ENGINE_FAULT = 13,
+} DXGK_TDR_TYPE;
+
+typedef struct _DXGK_TDR_PAYLOAD_ENGINE_TIMEOUT
+{
+    UINT NodeOrdinal;
+    UINT EngineOrdinal;
+    ULONGLONG LastHwCompletedFenceId;
+    ULONGLONG LastHwSubmittedFenceId;
+    ULONG NumberOfPendingSuspendRequests;
+    ULONG NumberOfReadyInteractiveHwQueues;
+    HANDLE hContext;
+} DXGK_TDR_PAYLOAD_ENGINE_TIMEOUT;
+
+typedef struct _DXGK_TDR_PAYLOAD_VSYNC_TIMEOUT
+{
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId;
+    UINT LayerIndex;
+    ULONGLONG PresentId;
+} DXGK_TDR_PAYLOAD_VSYNC_TIMEOUT;
+
+typedef struct _DXGKARG_COLLECTDBGINFO2
+{
+    UINT Reason;
+    VOID *pBuffer;
+    SIZE_T BufferSize;
+    DXGKARG_COLLECTDBGINFO_EXT *pExtension;
+    DXGK_TDR_TYPE TdrType;
+    UINT TdrPayloadSize;
+    _Field_size_opt_(TdrPayloadSize)
+    VOID *TdrPayload;
+} DXGKARG_COLLECTDBGINFO2;
+
+typedef _Inout_ DXGKARG_COLLECTDBGINFO2
+    *INOUT_PDXGKARG_COLLECTDBGINFO2;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_COLLECTDBGINFO2)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_COLLECTDBGINFO2(
+    IN_CONST_HANDLE hAdapter,
+    INOUT_PDXGKARG_COLLECTDBGINFO2 pCollectDbgInfo2);
+
+typedef struct _DXGK_QUERYPAGINGBUFFERINFOIN
+{
+    UINT16 PhysicalAdapterIndex;
+    UINT16 Reserved;
+} DXGK_QUERYPAGINGBUFFERINFOIN;
+
+typedef struct _DXGK_QUERYPAGINGBUFFERINFOOUT
+{
+    UINT32 PagingBufferSize;
+    UINT32 PagingBufferPrivateDataSize;
+} DXGK_QUERYPAGINGBUFFERINFOOUT;
+
+typedef struct _DXGK_QUERYSEGMENTCOUNTIN
+{
+    UINT16 PhysicalAdapterIndex;
+    UINT16 Padding;
+    UINT32 Reserved;
+} DXGK_QUERYSEGMENTCOUNTIN;
+
+typedef struct _DXGK_QUERYSEGMENTCOUNTOUT
+{
+    UINT16 SegmentCount;
+    UINT16 Padding;
+    UINT32 Reserved;
+} DXGK_QUERYSEGMENTCOUNTOUT;
+
+typedef enum _DXGK_SEGMENTTYPE
+{
+    DXGK_SEGMENTTYPE_SYSMEM,
+    DXGK_SEGMENTTYPE_LOCAL,
+} DXGK_SEGMENTTYPE;
+
+typedef enum _DXGK_PAGESIZE
+{
+    DXGK_PAGESIZE_4KB = 0,
+    DXGK_PAGESIZE_8KB = 1,
+    DXGK_PAGESIZE_16KB = 2,
+    DXGK_PAGESIZE_32KB = 3,
+    DXGK_PAGESIZE_64KB = 4,
+    DXGK_PAGESIZE_128KB = 5,
+    DXGK_PAGESIZE_256KB = 6,
+    DXGK_PAGESIZE_512KB = 7,
+    DXGK_PAGESIZE_1MB = 8,
+    DXGK_PAGESIZE_2MB = 9,
+    DXGK_PAGESIZE_4MB = 10,
+    DXGK_PAGESIZE_8MB = 11,
+    DXGK_PAGESIZE_16MB = 12,
+    DXGK_PAGESIZE_32MB = 13,
+    DXGK_PAGESIZE_64MB = 14,
+    DXGK_PAGESIZE_128MB = 15
+} DXGK_PAGESIZE;
+
+typedef struct _DXGK_SEGMENTDESCRIPTOR5
+{
+    DXGK_SEGMENTTYPE SegmentType;
+    DXGK_SEGMENTFLAGS Flags;
+    PHYSICAL_ADDRESS BaseAddress;
+    UINT64 Size;
+    SIZE_T SystemMemoryEndAddress;
+    union
+    {
+        PHYSICAL_ADDRESS CpuTranslatedAddress;
+        DXGK_CPUHOSTAPERTURE CpuHostAperture;
+    };
+    SIZE_T VprRangeStartOffset;
+    SIZE_T VprRangeSize;
+    UINT32 VprAlignment;
+    UINT32 NumInvalidMemoryRanges;
+    UINT32 NumVprSupported;
+    UINT32 VprReserveSize;
+    UINT32 NumUEFIFrameBufferRanges;
+    DXGK_PAGESIZE SlabSize;
+} DXGK_SEGMENTDESCRIPTOR5;
+
+typedef struct _DXGK_QUERYSEGMENTIN5
+{
+    UINT16 PhysicalAdapterIndex;
+    UINT16 Padding;
+    UINT32 Reserved;
+} DXGK_QUERYSEGMENTIN5;
+
+typedef struct _DXGK_QUERYSEGMENTOUT5
+{
+    DXGK_SEGMENTDESCRIPTOR5 *SegmentDescriptors;
+    UINT32 Reserved[4];
+} DXGK_QUERYSEGMENTOUT5;
+
+#define DXGK_MAX_MMUS 16
+
+typedef struct _DXGK_QUERYMMUCOUNTIN
+{
+    UINT16 PhysicalAdapterIndex;
+    UINT16 Padding;
+    UINT32 Reserved;
+} DXGK_QUERYMMUCOUNTIN;
+
+typedef struct _DXGK_QUERYMMUCOUNTOUT
+{
+    UINT16 MmuCount;
+    UINT16 Padding;
+    UINT32 Reserved;
+} DXGK_QUERYMMUCOUNTOUT;
+
+#define DXGK_INVALID_MMU_ID 0xFFFF
+
+typedef union _DXGK_MMUFLAGS
+{
+    struct
+    {
+        UINT32 Reserved : 32;
+    };
+    UINT32 Value;
+} DXGK_MMUFLAGS;
+
+typedef struct _DXGK_MMUDESCRIPTOR
+{
+    DXGK_MMUFLAGS Flags;
+    UINT64 Size;
+} DXGK_MMUDESCRIPTOR;
+
+typedef struct _DXGK_QUERYMMUSIN
+{
+    UINT16 PhysicalAdapterIndex;
+} DXGK_QUERYMMUSIN;
+
+typedef struct _DXGK_QUERYMMUSOUT
+{
+    DXGK_MMUDESCRIPTOR *MmuDescriptors;
+    UINT16 DisplayMmuId;
+    UINT16 Reserved0;
+    UINT32 Reserved[4];
+} DXGK_QUERYMMUSOUT;
+
+typedef struct _DXGKARG_NOTIFYCONTEXTPRIORITYCHANGE
+{
+    HANDLE hContext;
+    INT SchedulingPriority;
+    INT InProcessPriority;
+} DXGKARG_NOTIFYCONTEXTPRIORITYCHANGE;
+
+typedef _In_ CONST DXGKARG_NOTIFYCONTEXTPRIORITYCHANGE
+    *IN_CONST_PDXGKARG_NOTIFYCONTEXTPRIORITYCHANGE;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_NOTIFYCONTEXTPRIORITYCHANGE)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_NOTIFYCONTEXTPRIORITYCHANGE(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARG_NOTIFYCONTEXTPRIORITYCHANGE pNotifyContextPriorityChange);
+
+typedef struct _DXGKARG_RESETDISPLAYENGINE
+{
+    UINT64 InputFlags;
+    UINT64 OutputFlags;
+} DXGKARG_RESETDISPLAYENGINE;
+
+typedef _Inout_ DXGKARG_RESETDISPLAYENGINE
+    *INOUT_PDXGKARG_RESETDISPLAYENGINE;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_RESETDISPLAYENGINE)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_RESETDISPLAYENGINE(
+    IN_CONST_HANDLE hAdapter,
+    INOUT_PDXGKARG_RESETDISPLAYENGINE pResetDisplayEngine);
+
+typedef DXGKDDI_CREATEMEMORYBASIS             *PDXGKDDI_CREATEMEMORYBASIS;
+typedef DXGKDDI_DESTROYMEMORYBASIS            *PDXGKDDI_DESTROYMEMORYBASIS;
+typedef DXGKDDI_STARTDIRTYTRACKING            *PDXGKDDI_STARTDIRTYTRACKING;
+typedef DXGKDDI_STOPDIRTYTRACKING             *PDXGKDDI_STOPDIRTYTRACKING;
+typedef DXGKDDI_QUERYDIRTYBITDATA             *PDXGKDDI_QUERYDIRTYBITDATA;
+typedef DXGKDDI_PREPARELIVEMIGRATION          *PDXGKDDI_PREPARELIVEMIGRATION;
+typedef DXGKDDI_SAVEIMMUTABLEMIGRATIONDATA    *PDXGKDDI_SAVEIMMUTABLEMIGRATIONDATA;
+typedef DXGKDDI_SAVEMUTABLEMIGRATIONDATA      *PDXGKDDI_SAVEMUTABLEMIGRATIONDATA;
+typedef DXGKDDI_ENDLIVEMIGRATION              *PDXGKDDI_ENDLIVEMIGRATION;
+typedef DXGKDDI_RESTOREIMMUTABLEMIGRATIONDATA *PDXGKDDI_RESTOREIMMUTABLEMIGRATIONDATA;
+typedef DXGKDDI_RESTOREMUTABLEMIGRATIONDATA   *PDXGKDDI_RESTOREMUTABLEMIGRATIONDATA;
+typedef DXGKDDI_WRITEVIRTUALIZEDINTERRUPT     *PDXGKDDI_WRITEVIRTUALIZEDINTERRUPT;
+typedef DXGKDDI_SETVIRTUALGPURESOURCES2       *PDXGKDDI_SETVIRTUALGPURESOURCES2;
+typedef DXGKDDI_SETVIRTUALFUNCTIONPAUSESTATE  *PDXGKDDI_SETVIRTUALFUNCTIONPAUSESTATE;
+typedef DXGKDDI_COLLECTDBGINFO2               *PDXGKDDI_COLLECTDBGINFO2;
+typedef DXGKDDI_NOTIFYCONTEXTPRIORITYCHANGE   *PDXGKDDI_NOTIFYCONTEXTPRIORITYCHANGE;
+typedef DXGKDDI_RESETDISPLAYENGINE            *PDXGKDDI_RESETDISPLAYENGINE;
+
+C_ASSERT(sizeof(DXGK_DIRTY_BIT_TRACKING_CAPS) == 0x4);
+C_ASSERT(sizeof(DXGK_DIRTY_BIT_TRACKING_SEGMENT_CAPS) == 0x4);
+C_ASSERT(sizeof(DXGKARG_CREATEMEMORYBASIS) == 0x20);
+C_ASSERT(sizeof(DXGK_QUERYSCATTERRESERVEIN) == 0x4);
+C_ASSERT(sizeof(DXGK_QUERYSCATTERRESERVEOUT) == 0x8);
+C_ASSERT(sizeof(DXGKARG_GPUP_PREPARE_LIVE_MIGRATION) == 0x8);
+C_ASSERT(sizeof(DXGK_INTERRUPT_TABLE_ENTRY) == 0x10);
+C_ASSERT(sizeof(DXGKARG_GPUP_WRITE_VIRTUALIZED_MSIX) == 0x18);
+C_ASSERT(sizeof(DXGKARG_SETVIRTUALFUNCTIONPAUSESTATE) == 0x8);
+C_ASSERT(sizeof(DXGK_TDR_PAYLOAD_VSYNC_TIMEOUT) == 0x10);
+C_ASSERT(sizeof(DXGK_QUERYPAGINGBUFFERINFOIN) == 0x4);
+C_ASSERT(sizeof(DXGK_QUERYPAGINGBUFFERINFOOUT) == 0x8);
+C_ASSERT(sizeof(DXGK_QUERYSEGMENTCOUNTIN) == 0x8);
+C_ASSERT(sizeof(DXGK_QUERYSEGMENTCOUNTOUT) == 0x8);
+C_ASSERT(sizeof(DXGK_QUERYSEGMENTIN5) == 0x8);
+C_ASSERT(sizeof(DXGK_QUERYMMUCOUNTIN) == 0x8);
+C_ASSERT(sizeof(DXGK_QUERYMMUCOUNTOUT) == 0x8);
+C_ASSERT(sizeof(DXGK_MMUDESCRIPTOR) == 0x10);
+C_ASSERT(sizeof(DXGK_QUERYMMUSIN) == 0x2);
+C_ASSERT(sizeof(DXGKARG_RESETDISPLAYENGINE) == 0x10);
+#ifdef _WIN64
+C_ASSERT(sizeof(DXGKARG_QUERYDIRTYBITDATA) == 0x38);
+C_ASSERT(sizeof(DXGKARG_GPUP_SAVE_IMMUTABLE_MIGRATION_DATA) == 0x18);
+C_ASSERT(sizeof(DXGKARG_GPUP_SAVE_MUTABLE_MIGRATION_DATA) == 0x18);
+C_ASSERT(sizeof(DXGKARG_GPUP_RESTORE_IMMUTABLE_MIGRATION_DATA) == 0x18);
+C_ASSERT(sizeof(DXGKARG_GPUP_RESTORE_MUTABLE_MIGRATION_DATA) == 0x18);
+C_ASSERT(sizeof(DXGK_GPU_PHYSICAL_RESERVE_DESCRIPTOR) == 0x10);
+C_ASSERT(sizeof(DXGKARG_SETVIRTUALGPURESOURCES2) == 0x18);
+C_ASSERT(sizeof(DXGK_TDR_PAYLOAD_ENGINE_TIMEOUT) == 0x28);
+C_ASSERT(sizeof(DXGKARG_COLLECTDBGINFO2) == 0x30);
+C_ASSERT(sizeof(DXGK_SEGMENTDESCRIPTOR5) == 0x58);
+C_ASSERT(sizeof(DXGK_QUERYSEGMENTOUT5) == 0x18);
+C_ASSERT(sizeof(DXGK_QUERYMMUSOUT) == 0x20);
+C_ASSERT(sizeof(DXGKARG_NOTIFYCONTEXTPRIORITYCHANGE) == 0x10);
+#else
+C_ASSERT(sizeof(DXGKARG_QUERYDIRTYBITDATA) == 0x30);
+C_ASSERT(sizeof(DXGKARG_GPUP_SAVE_IMMUTABLE_MIGRATION_DATA) == 0xC);
+C_ASSERT(sizeof(DXGKARG_GPUP_SAVE_MUTABLE_MIGRATION_DATA) == 0xC);
+C_ASSERT(sizeof(DXGKARG_GPUP_RESTORE_IMMUTABLE_MIGRATION_DATA) == 0x18);
+C_ASSERT(sizeof(DXGKARG_GPUP_RESTORE_MUTABLE_MIGRATION_DATA) == 0x18);
+C_ASSERT(sizeof(DXGK_GPU_PHYSICAL_RESERVE_DESCRIPTOR) == 0x8);
+C_ASSERT(sizeof(DXGKARG_SETVIRTUALGPURESOURCES2) == 0x10);
+C_ASSERT(sizeof(DXGK_TDR_PAYLOAD_ENGINE_TIMEOUT) == 0x28);
+C_ASSERT(sizeof(DXGKARG_COLLECTDBGINFO2) == 0x1C);
+C_ASSERT(sizeof(DXGK_SEGMENTDESCRIPTOR5) == 0x50);
+C_ASSERT(sizeof(DXGK_QUERYSEGMENTOUT5) == 0x14);
+C_ASSERT(sizeof(DXGK_QUERYMMUSOUT) == 0x18);
+C_ASSERT(sizeof(DXGKARG_NOTIFYCONTEXTPRIORITYCHANGE) == 0xC);
+#endif
+
+#endif /* DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2 */
+
+typedef struct _DXGK_64_BIT_ONLY_CAPS
+{
+    union
+    {
+        struct
+        {
+            UINT32 SupportsOnly64Bit : 1;
+            UINT32 Reserved          : 31;
+        };
+        UINT32 Value;
+    };
+} DXGK_64_BIT_ONLY_CAPS;
+
+C_ASSERT(sizeof(DXGK_64_BIT_ONLY_CAPS) == 0x4);
+
+typedef DXGKDDI_CREATEHWCONTEXT                    *PDXGKDDI_CREATEHWCONTEXT;
+typedef DXGKDDI_DESTROYHWCONTEXT                   *PDXGKDDI_DESTROYHWCONTEXT;
+typedef DXGKDDI_CREATEHWQUEUE                      *PDXGKDDI_CREATEHWQUEUE;
+typedef DXGKDDI_DESTROYHWQUEUE                     *PDXGKDDI_DESTROYHWQUEUE;
+typedef DXGKDDI_SUBMITCOMMANDTOHWQUEUE             *PDXGKDDI_SUBMITCOMMANDTOHWQUEUE;
+typedef DXGKDDI_SWITCHTOHWCONTEXTLIST              *PDXGKDDI_SWITCHTOHWCONTEXTLIST;
+typedef DXGKDDI_RESETHWENGINE                      *PDXGKDDI_RESETHWENGINE;
+typedef DXGKDDI_CREATEPERIODICFRAMENOTIFICATION    *PDXGKDDI_CREATEPERIODICFRAMENOTIFICATION;
+typedef DXGKDDI_DESTROYPERIODICFRAMENOTIFICATION   *PDXGKDDI_DESTROYPERIODICFRAMENOTIFICATION;
+typedef DXGKDDI_SETTIMINGSFROMVIDPN                *PDXGKDDI_SETTIMINGSFROMVIDPN;
+typedef DXGKDDI_SETTARGETGAMMA                     *PDXGKDDI_SETTARGETGAMMA;
+typedef DXGKDDI_SETTARGETCONTENTTYPE               *PDXGKDDI_SETTARGETCONTENTTYPE;
+typedef DXGKDDI_SETTARGETANALOGCOPYPROTECTION      *PDXGKDDI_SETTARGETANALOGCOPYPROTECTION;
+typedef DXGKDDI_SETTARGETADJUSTEDCOLORIMETRY       *PDXGKDDI_SETTARGETADJUSTEDCOLORIMETRY;
+typedef DXGKDDI_DISPLAYDETECTCONTROL               *PDXGKDDI_DISPLAYDETECTCONTROL;
+typedef DXGKDDI_QUERYCONNECTIONCHANGE              *PDXGKDDI_QUERYCONNECTIONCHANGE;
+typedef DXGKDDI_EXCHANGEPRESTARTINFO               *PDXGKDDI_EXCHANGEPRESTARTINFO;
+typedef DXGKDDI_GETMULTIPLANEOVERLAYCAPS           *PDXGKDDI_GETMULTIPLANEOVERLAYCAPS;
+typedef DXGKDDI_GETPOSTCOMPOSITIONCAPS             *PDXGKDDI_GETPOSTCOMPOSITIONCAPS;
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_3)
+typedef DXGKDDI_UPDATEHWCONTEXTSTATE                *PDXGKDDI_UPDATEHWCONTEXTSTATE;
+typedef DXGKDDI_CREATEPROTECTEDSESSION              *PDXGKDDI_CREATEPROTECTEDSESSION;
+typedef DXGKDDI_DESTROYPROTECTEDSESSION             *PDXGKDDI_DESTROYPROTECTEDSESSION;
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WDDM2_3)
+C_ASSERT(sizeof(DXGK_HWCONTEXT_CAPS) == 0x4);
+C_ASSERT(sizeof(DXGK_MULTIPLANEOVERLAYCAPS) == 0x4);
+C_ASSERT(sizeof(DXGK_COLORIMETRY) == 0x34);
+C_ASSERT(sizeof(DXGK_CONNECTION_CHANGE) == 0x18);
+C_ASSERT(sizeof(DXGK_SET_TIMING_PATH_INFO) == 0x38);
+C_ASSERT(sizeof(DXGK_INHERITED_TIMING_INFO) == 0xC);
+C_ASSERT(sizeof(DXGKARG_RESETHWENGINE) == 0x8);
+C_ASSERT(sizeof(DXGKARG_SETTARGETCONTENTTYPE) == 0x8);
+C_ASSERT(sizeof(DXGKARG_SETTARGETANALOGCOPYPROTECTION) == 0x10);
+C_ASSERT(sizeof(DXGKARG_DISPLAYDETECTCONTROL) == 0x4);
+C_ASSERT(sizeof(DXGKARG_QUERYCONNECTIONCHANGE) == 0x18);
+C_ASSERT(sizeof(DXGK_PRE_START_INFO) == 0x8);
+C_ASSERT(sizeof(DXGKARG_GETMULTIPLANEOVERLAYCAPS) == 0x1C);
+C_ASSERT(sizeof(DXGKARG_GETPOSTCOMPOSITIONCAPS) == 0xC);
+#ifdef _WIN64
+C_ASSERT(sizeof(DXGKARG_CREATEHWCONTEXT) == 0x28);
+C_ASSERT(FIELD_OFFSET(DXGKARG_CREATEHWCONTEXT, pPrivateDriverData) == 0x18);
+C_ASSERT(sizeof(DXGKARG_CREATEHWQUEUE) == 0x30);
+C_ASSERT(FIELD_OFFSET(DXGKARG_CREATEHWQUEUE, HwQueueProgressFenceCPUVirtualAddress) == 0x20);
+C_ASSERT(sizeof(DXGKARG_SUBMITCOMMANDTOHWQUEUE) == 0x40);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SUBMITCOMMANDTOHWQUEUE, HwQueueProgressFenceGpuVa) == 0x30);
+C_ASSERT(sizeof(DXGKARG_SWITCHTOHWCONTEXTLIST) == 0x18);
+C_ASSERT(sizeof(DXGKARG_CREATEPERIODICFRAMENOTIFICATION) == 0x28);
+C_ASSERT(sizeof(DXGKARG_DESTROYPERIODICFRAMENOTIFICATION) == 0x10);
+C_ASSERT(sizeof(DXGKARG_SETTIMINGSFROMVIDPN) == 0x28);
+C_ASSERT(sizeof(DXGKARG_SETTARGETGAMMA) == 0x20);
+#else
+C_ASSERT(sizeof(DXGKARG_CREATEHWCONTEXT) == 0x1C);
+C_ASSERT(FIELD_OFFSET(DXGKARG_CREATEHWCONTEXT, pPrivateDriverData) == 0x14);
+C_ASSERT(sizeof(DXGKARG_CREATEHWQUEUE) == 0x20);
+C_ASSERT(FIELD_OFFSET(DXGKARG_CREATEHWQUEUE, HwQueueProgressFenceCPUVirtualAddress) == 0x14);
+C_ASSERT(sizeof(DXGKARG_SUBMITCOMMANDTOHWQUEUE) == 0x38);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SUBMITCOMMANDTOHWQUEUE, HwQueueProgressFenceGpuVa) == 0x28);
+C_ASSERT(sizeof(DXGKARG_SWITCHTOHWCONTEXTLIST) == 0x10);
+C_ASSERT(sizeof(DXGKARG_CREATEPERIODICFRAMENOTIFICATION) == 0x18);
+C_ASSERT(sizeof(DXGKARG_DESTROYPERIODICFRAMENOTIFICATION) == 0x8);
+C_ASSERT(sizeof(DXGKARG_SETTIMINGSFROMVIDPN) == 0x14);
+C_ASSERT(sizeof(DXGKARG_SETTARGETGAMMA) == 0x10);
+#endif
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_3)
+C_ASSERT(sizeof(DXGK_UPDATEHWCONTEXTSTATE_FLAGS) == 0x4);
+C_ASSERT(sizeof(DXGKARG_UPDATEHWCONTEXTSTATE) == 0x18);
+C_ASSERT(FIELD_OFFSET(DXGKARG_UPDATEHWCONTEXTSTATE, ContextSwitchFence) == 0x8);
+C_ASSERT(FIELD_OFFSET(DXGKARG_UPDATEHWCONTEXTSTATE, Flags) == 0x14);
+#ifdef _WIN64
+C_ASSERT(sizeof(DXGKARG_CREATEPROTECTEDSESSION) == 0x18);
+C_ASSERT(FIELD_OFFSET(DXGKARG_CREATEPROTECTEDSESSION, pPrivateDriverData) == 0x8);
+C_ASSERT(FIELD_OFFSET(DXGKARG_CREATEPROTECTEDSESSION, PrivateDriverDataSize) == 0x10);
+C_ASSERT(sizeof(DXGKARGCB_PROTECTEDSESSIONSTATUS) == 0x10);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_PROTECTEDSESSIONSTATUS, Status) == 0x8);
+#else
+C_ASSERT(sizeof(DXGKARG_CREATEPROTECTEDSESSION) == 0xC);
+C_ASSERT(FIELD_OFFSET(DXGKARG_CREATEPROTECTEDSESSION, pPrivateDriverData) == 0x4);
+C_ASSERT(FIELD_OFFSET(DXGKARG_CREATEPROTECTEDSESSION, PrivateDriverDataSize) == 0x8);
+C_ASSERT(sizeof(DXGKARGCB_PROTECTEDSESSIONSTATUS) == 0x8);
+C_ASSERT(FIELD_OFFSET(DXGKARGCB_PROTECTEDSESSIONSTATUS, Status) == 0x4);
+#endif
+#endif
+
+#endif /* DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2 */
 
 #if defined(_WIN64) && (DXGKDDI_INTERFACE_VERSION == DXGKDDI_INTERFACE_VERSION_VISTA)
 C_ASSERT(sizeof(DXGKARGCB_NOTIFY_INTERRUPT_DATA) == 80);

@@ -570,7 +570,7 @@ typedef struct D3DDDI_EVICT_FLAGS
     };
 } D3DDDI_EVICT_FLAGS;
 
-typedef struct _D3DDDI_RESERVEGPUVIRTUALADDRESS
+typedef struct D3DDDI_RESERVEGPUVIRTUALADDRESS
 {
     union
     {
@@ -587,7 +587,7 @@ typedef struct _D3DDDI_RESERVEGPUVIRTUALADDRESS
     UINT64                      PagingFenceValue;
 } D3DDDI_RESERVEGPUVIRTUALADDRESS;
 
-typedef struct _D3DDDI_MAPGPUVIRTUALADDRESS
+typedef struct D3DDDI_MAPGPUVIRTUALADDRESS
 {
     D3DKMT_HANDLE               hPagingQueue;
     D3DGPU_VIRTUAL_ADDRESS      BaseAddress;
