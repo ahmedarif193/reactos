@@ -39,6 +39,12 @@ gdb_receive_packet(_Inout_ PKD_CONTEXT KdContext)
     char HighNibble, LowNibble;
 
 wait_for_packet:
+    if (gdb_packet_start_pending)
+    {
+        gdb_packet_start_pending = FALSE;
+        goto get_packet;
+    }
+
     do
     {
         Status = KdpReceiveByte(&Byte);
