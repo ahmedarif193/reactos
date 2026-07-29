@@ -142,18 +142,22 @@ gdb_thread_to_reg(
     _In_ PETHREAD Thread,
     _In_ ULONG Register)
 {
-    enum reg_name reg_name = (enum reg_name)Register;
-    static const void* NullValue = NULL;
+    enum reg_name name = (enum reg_name)Register;
+    PKSWITCH_FRAME SwitchFrame;
+    PKARM64_VFP_STATE VfpState;
+    static const ULONG64 NullValue = 0;
+    static ULONG64 ScalarValue;
 
     if (!Thread->Tcb.InitialStack)
     {
         /* Terminated thread? */
-        switch (reg_name)
+        switch (name)
         {
             case SP:
             case X29:
+            case X30:
             case PC:
-                KDDBGPRINT("Returning NULL for register %d.\n", reg_name);
+                KDDBGPRINT("Returning NULL for register %d.\n", name);
                 return &NullValue;
             default:
                 return NULL;
@@ -161,11 +165,46 @@ gdb_thread_to_reg(
     }
 
     /*
-     * The thread is switched out. Only its stack pointer can be recovered
-     * without decoding the switch frame; the rest is reported unavailable.
+     * KiSwapContext publishes KernelStack at the base of KSWITCH_FRAME. This
+     * is the same saved context decoded by KDBG for a switched-out thread.
      */
-    if (reg_name == SP)
-        return &Thread->Tcb.KernelStack;
+    SwitchFrame = (PKSWITCH_FRAME)Thread->Tcb.KernelStack;
+    if (SwitchFrame == NULL)
+        return NULL;
 
+    VfpState = (PKARM64_VFP_STATE)Thread->Tcb.VfpState;
+    if (name >= V0 && name <= V31)
+        return VfpState ? &VfpState->V[name - V0] : NULL;
+
+    switch (name)
+    {
+        case X19: return &SwitchFrame->X19;
+        case X20: return &SwitchFrame->X20;
+        case X21: return &SwitchFrame->X21;
+        case X22: return &SwitchFrame->X22;
+        case X23: return &SwitchFrame->X23;
+        case X24: return &SwitchFrame->X24;
+        case X25: return &SwitchFrame->X25;
+        case X26: return &SwitchFrame->X26;
+        case X27: return &SwitchFrame->X27;
+        case X28: return &SwitchFrame->X28;
+        case X29: return &SwitchFrame->Fp;
+        case X30:
+        case PC:
+            return &SwitchFrame->ReturnAddress;
+        case SP:
+            ScalarValue = (ULONG64)(ULONG_PTR)(SwitchFrame + 1);
+            return &ScalarValue;
+        case CPSR:
+            /* A switched-out kernel thread resumes in EL1h. */
+            ScalarValue = 0x5;
+            return &ScalarValue;
+        case FPSR: return VfpState ? &VfpState->Fpsr : NULL;
+        case FPCR: return VfpState ? &VfpState->Fpcr : NULL;
+        default:
+            break;
+    }
+
+    /* X0-X18 are caller-saved and do not exist in KSWITCH_FRAME. */
     return NULL;
 }
