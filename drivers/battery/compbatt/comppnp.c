@@ -449,6 +449,18 @@ CompBattPnpDispatch(
                              Status);
             }
              break;
+        case IRP_MN_REMOVE_DEVICE:
+
+            /* Stop new battery arrivals reaching a device extension that is going away */
+            if (DeviceExtension->NotificationEntry)
+            {
+                IoUnregisterPlugPlayNotification(DeviceExtension->NotificationEntry);
+                DeviceExtension->NotificationEntry = NULL;
+            }
+
+            Status = STATUS_SUCCESS;
+            break;
+
         case IRP_MN_CANCEL_STOP_DEVICE:
 
             /* Explicitly say ok */
