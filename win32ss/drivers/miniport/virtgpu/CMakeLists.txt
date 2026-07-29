@@ -12,8 +12,12 @@ add_importlibs(virtgpu ntoskrnl videoprt hal)
 target_link_libraries(virtgpu virtio libcntpr)
 add_pch(virtgpu virtgpu.h SOURCE)
 add_cd_file(TARGET virtgpu DESTINATION reactos/system32/drivers FOR all)
-add_registry_inf(virtgpu_reg.inf)
-add_driver_inf(virtgpu virtgpu.inf)
+
+# The native virtgpu miniport belongs to the XPDM display stack.
+if(REACTOS_USE_XPDM)
+    add_registry_inf(virtgpu_reg.inf)
+    add_driver_inf(virtgpu virtgpu.inf)
+endif()
 
 list(APPEND DISPLAY_SOURCE
     display.c

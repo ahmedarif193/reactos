@@ -20,6 +20,10 @@ if(ENABLE_EXPERIMENTAL_EARLY_SPLASH)
     add_registry_inf(hiveearlysplash.inf)
 endif()
 
+if(REACTOS_USE_XPDM)
+    add_registry_inf(hivesys_xpdm.inf)
+endif()
+
 if(ARCH STREQUAL "arm64")
     add_registry_inf(hivesys_arm64.inf)
 elseif(ARCH STREQUAL "amd64")
