@@ -1658,7 +1658,7 @@ acpi_bus_init (void)
 	 * by looking for the ECDT table, and getting the EC parameters out
 	 * of that.
 	 */
-	//result = acpi_ec_ecdt_probe();
+	acpi_ec_ecdt_probe();
 	/* Ignore result. Not having an ECDT is not fatal. */
 
 	status = AcpiInitializeObjects(ACPI_FULL_INITIALIZATION);
@@ -1828,7 +1828,7 @@ acpi_init (void)
 	acpi_system_init();	/* ACPI System */
 	acpi_power_init();	/* ACPI Bus Power Management */
 	acpi_button_init();
-	//acpi_ec_init();		/* ACPI Embedded Controller */
+	acpi_ec_init();		/* ACPI Embedded Controller */
 #ifdef CONFIG_ACPI_PCI
 	acpi_pci_link_init();	/* ACPI PCI Interrupt Link */
 	acpi_pci_root_init();	/* ACPI PCI Root Bridge */
