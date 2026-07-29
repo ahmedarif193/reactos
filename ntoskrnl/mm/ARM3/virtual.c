@@ -33,6 +33,7 @@ VOID
 NTAPI
 MiFlushTbAndCapture(IN PMMVAD FoundVad,
                     IN PMMPTE PointerPte,
+                    IN PVOID VirtualAddress,
                     IN ULONG ProtectionMask,
                     IN PMMPFN Pfn1,
                     IN BOOLEAN CaptureDirtyBit,
@@ -2629,12 +2630,18 @@ MiProtectVirtualMemory(IN PEPROCESS Process,
 {
     PMMVAD Vad;
     PMMSUPPORT AddressSpace;
-    ULONG_PTR StartingAddress, EndingAddress;
-    PMMPTE PointerPte, LastPte;
+    ULONG_PTR StartingAddress, EndingAddress, CurrentAddress;
+    PMMPTE PointerPte;
+#if !defined(_M_ARM64)
+    PMMPTE LastPte;
     PMMPDE PointerPde;
+#endif
     MMPTE PteContents;
     PMMPFN Pfn1;
     PFN_NUMBER PageFrameIndex;
+#if defined(_M_ARM64)
+    PFN_NUMBER L3Pfn;
+#endif
     ULONG ProtectionMask, OldProtect;
     BOOLEAN Committed;
     NTSTATUS Status = STATUS_SUCCESS;
@@ -2801,20 +2808,34 @@ MiProtectVirtualMemory(IN PEPROCESS Process,
             goto FailPath;
         }
 
-        /* Compute starting and ending PTE and PDE addresses */
+        /* Resolve the first PTE in the architecture's authoritative view. */
+#if defined(_M_ARM64)
+        Status = MiArm64EnsureUserPte(Process,
+                                      (PVOID)StartingAddress,
+                                      &PointerPte,
+                                      &L3Pfn);
+        if (!NT_SUCCESS(Status))
+        {
+            MiUnlockProcessWorkingSetUnsafe(Process, Thread);
+            goto FailPath;
+        }
+#else
         PointerPde = MiAddressToPde(StartingAddress);
         PointerPte = MiAddressToPte(StartingAddress);
         LastPte = MiAddressToPte(EndingAddress);
 
         /* Make this PDE valid */
         MiMakePdeExistAndMakeValid(PointerPde, Process, MM_NOIRQL);
+#endif
 
         /* Save protection of the first page */
         if (PointerPte->u.Long != 0)
         {
             /* Capture the page protection and make the PDE valid */
             OldProtect = MiGetPageProtection(PointerPte);
+#if !defined(_M_ARM64)
             MiMakePdeExistAndMakeValid(PointerPde, Process, MM_NOIRQL);
+#endif
         }
         else
         {
@@ -2823,14 +2844,39 @@ MiProtectVirtualMemory(IN PEPROCESS Process,
         }
 
         /* Loop all the PTEs now */
+        CurrentAddress = StartingAddress;
+#if defined(_M_ARM64)
+        while (CurrentAddress <= EndingAddress)
+#else
         while (PointerPte <= LastPte)
+#endif
         {
+#if defined(_M_ARM64)
+            /*
+             * KSEG0 table pages are not guaranteed to be physically adjacent.
+             * Re-walk at each L3 boundary, then advance linearly within it.
+             */
+            if ((CurrentAddress != StartingAddress) &&
+                (((ULONG_PTR)PointerPte & (PAGE_SIZE - 1)) == 0))
+            {
+                Status = MiArm64EnsureUserPte(Process,
+                                              (PVOID)CurrentAddress,
+                                              &PointerPte,
+                                              &L3Pfn);
+                if (!NT_SUCCESS(Status))
+                {
+                    MiUnlockProcessWorkingSetUnsafe(Process, Thread);
+                    goto FailPath;
+                }
+            }
+#else
             /* Check if we've crossed a PDE boundary and make the new PDE valid too */
             if (MiIsPteOnPdeBoundary(PointerPte))
             {
                 PointerPde = MiPteToPde(PointerPte);
                 MiMakePdeExistAndMakeValid(PointerPde, Process, MM_NOIRQL);
             }
+#endif
 
             /* Capture the PTE and check if it was empty */
             PteContents = *PointerPte;
@@ -2838,7 +2884,11 @@ MiProtectVirtualMemory(IN PEPROCESS Process,
             {
                 /* This used to be a zero PTE and it no longer is, so we must add a
                    reference to the pagetable. */
+#if defined(_M_ARM64)
+                MiArm64IncrementUserLeafPteCount(L3Pfn);
+#else
                 MiIncrementPageTableReferences(MiPteToAddress(PointerPte));
+#endif
             }
 
             /* Check what kind of PTE we are dealing with */
@@ -2865,7 +2915,7 @@ MiProtectVirtualMemory(IN PEPROCESS Process,
                     MI_WRITE_INVALID_PTE(PointerPte, PteContents);
                     /* Invalidate this mapping on every CPU before releasing the
                        PFN lock and making the page available for reuse. */
-                    MiFlushTbForAddress(MiPteToAddress(PointerPte));
+                    MiFlushTbForAddress((PVOID)CurrentAddress);
 
                     /* We are done for this PTE */
                     MiReleasePfnLock(OldIrql);
@@ -2875,10 +2925,22 @@ MiProtectVirtualMemory(IN PEPROCESS Process,
                     /* Write the protection mask and write it with a TLB flush */
                     Pfn1->OriginalPte.u.Soft.Protection = ProtectionMask;
 #if defined(_M_AMD64) || defined(_M_ARM64)
-                    MiFlushTbAndCapture(Vad, PointerPte, ProtectionMask, Pfn1, TRUE, FALSE);
+                    MiFlushTbAndCapture(Vad,
+                                        PointerPte,
+                                        (PVOID)CurrentAddress,
+                                        ProtectionMask,
+                                        Pfn1,
+                                        TRUE,
+                                        FALSE);
                     FlushRange = TRUE;
 #else
-                    MiFlushTbAndCapture(Vad, PointerPte, ProtectionMask, Pfn1, TRUE, TRUE);
+                    MiFlushTbAndCapture(Vad,
+                                        PointerPte,
+                                        (PVOID)CurrentAddress,
+                                        ProtectionMask,
+                                        Pfn1,
+                                        TRUE,
+                                        TRUE);
 #endif
                 }
             }
@@ -2896,6 +2958,7 @@ MiProtectVirtualMemory(IN PEPROCESS Process,
 
             /* Move to the next PTE */
             PointerPte++;
+            CurrentAddress += PAGE_SIZE;
         }
 
 #if defined(_M_AMD64) || defined(_M_ARM64)
