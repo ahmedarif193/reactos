@@ -23,6 +23,7 @@ typedef struct _FENCE_ALLOC_STRESS
     volatile LONG NextFenceId;
     volatile LONG StartGate;
     volatile LONG ZeroSeen;
+    volatile LONG SlotClaimed[FENCE_STRESS_THREADS];
     KEVENT DoneEvent[FENCE_STRESS_THREADS];
     ULONG Fences[FENCE_STRESS_THREADS][FENCE_STRESS_ROUNDS];
 } FENCE_ALLOC_STRESS, *PFENCE_ALLOC_STRESS;
@@ -58,11 +59,15 @@ static VOID NTAPI FenceAllocThread(_In_ PVOID Parameter)
     ULONG Index;
     ULONG Slot;
 
-    /* The caller stores the thread's slot in the low bits of its own event. */
+    /*
+     * Slot ownership must not share storage with the results.  The old
+     * sentinel lived in Fences[Slot][0], and the owning thread overwrote it
+     * with its first fence while peers were still claiming slots, allowing a
+     * second thread to take the same slot and corrupt the evidence.
+     */
     for (Slot = 0; Slot < FENCE_STRESS_THREADS; ++Slot)
     {
-        if (KeReadStateEvent(&Stress->DoneEvent[Slot]) == 0 &&
-            InterlockedCompareExchange((volatile LONG *)&Stress->Fences[Slot][0], -1, 0) == 0)
+        if (InterlockedCompareExchange(&Stress->SlotClaimed[Slot], 1, 0) == 0)
             break;
     }
     if (Slot >= FENCE_STRESS_THREADS)

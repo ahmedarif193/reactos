@@ -38,11 +38,11 @@
  * which is serialised by the I/O manager.  No additional barriers are needed
  * for State.
  *
- * InterruptLock is a KSPIN_LOCK that may be acquired at DIRQL; the ISR path
- * uses it at that level.  The DPC path acquires it at DISPATCH_LEVEL via
- * KeAcquireSpinLockAtDpcLevel.  On x86-64 the TSO memory model guarantees
- * store visibility ordering across cores; LOCK XCHG (implicit in spinlock
- * acquire) provides the full fence semantics required here.
+ * InterruptLock is shared with the ISR at its synchronize IRQL.  A DPC or
+ * PASSIVE_LEVEL lifecycle path raises to that IRQL before acquiring the lock;
+ * taking it at plain DISPATCH_LEVEL would let the ISR preempt the owner and
+ * deadlock on the same lock.  The spinlock acquire/release barriers provide
+ * the required cross-architecture visibility.
  *
  * The one-time init guard (DxgkpInitialized) uses InterlockedCompareExchange
  * which on x86-64 compiles to LOCK CMPXCHG — a fully-ordered instruction.
@@ -2678,11 +2678,16 @@ DxgkDrainVidSchCallbacks(
 }
 
 static VOID
+DxgkpDisablePeriodicInterruptHandoff(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
+static VOID
 DxgkpDisconnectAdapterInterrupt(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
     PAGED_CODE();
     DxgkBlockInterruptCallbacks(Adapter);
+    DxgkpDisablePeriodicInterruptHandoff(Adapter);
     if (Adapter->InterruptMessageTable != NULL)
     {
         IO_DISCONNECT_INTERRUPT_PARAMETERS DisconnectParams;
@@ -2698,6 +2703,165 @@ DxgkpDisconnectAdapterInterrupt(
     {
         IoDisconnectInterrupt(Adapter->InterruptObject);
         Adapter->InterruptObject = NULL;
+    }
+}
+
+/*
+ * InterruptLock is also taken by DxgkCbNotifyInterrupt at the device's
+ * synchronize IRQL.  Non-ISR users must raise to at least that IRQL before
+ * acquiring it; KeAcquireSpinLock would raise only to DISPATCH_LEVEL.
+ */
+static KIRQL
+DxgkpAcquireAdapterInterruptLock(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    KIRQL CurrentIrql;
+    KIRQL LockIrql;
+    KIRQL OldIrql;
+
+    CurrentIrql = KeGetCurrentIrql();
+    LockIrql = Adapter->InterruptLevel;
+    if (LockIrql < DISPATCH_LEVEL)
+        LockIrql = DISPATCH_LEVEL;
+
+    OldIrql = CurrentIrql;
+    if (CurrentIrql < LockIrql)
+        KeRaiseIrql(LockIrql, &OldIrql);
+    KeAcquireSpinLockAtDpcLevel(&Adapter->InterruptLock);
+    return OldIrql;
+}
+
+static VOID
+DxgkpReleaseAdapterInterruptLock(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ KIRQL OldIrql)
+{
+    KIRQL LockIrql = KeGetCurrentIrql();
+
+    KeReleaseSpinLockFromDpcLevel(&Adapter->InterruptLock);
+    if (LockIrql != OldIrql)
+        KeLowerIrql(OldIrql);
+}
+
+static BOOLEAN
+DxgkpPeriodicInterruptHandoffSupported(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
+    return Adapter != NULL &&
+           REACTOS_WDDM_TARGET_LEVEL >=
+               DXGK_CAPS_CORE_LEVEL_WDDM_2_2 &&
+           Adapter->MiniportContext != NULL &&
+           !Adapter->MiniportContext->UseDodLayout &&
+           DxgkCapsCoreInterfaceVersionAtLeast(
+               Adapter->MiniportContext->InitData.s.Version,
+               DXGK_CAPS_CORE_LEVEL_WDDM_2_2) &&
+           DXGK_CB_FULL(
+               Adapter,
+               DxgkDdiCreatePeriodicFrameNotification) != NULL &&
+           DXGK_CB_FULL(
+               Adapter,
+               DxgkDdiDestroyPeriodicFrameNotification) != NULL;
+#else
+    UNREFERENCED_PARAMETER(Adapter);
+    return FALSE;
+#endif
+}
+
+static VOID
+DxgkpEnablePeriodicInterruptHandoff(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    KIRQL OldIrql;
+
+    OldIrql = DxgkpAcquireAdapterInterruptLock(Adapter);
+    if (DxgkpPeriodicInterruptHandoffSupported(Adapter))
+    {
+        DxgkPeriodicInterruptCoreEnableLocked(
+            &Adapter->PeriodicInterruptCore);
+    }
+    else
+    {
+        DxgkPeriodicInterruptCoreDisableLocked(
+            &Adapter->PeriodicInterruptCore);
+    }
+    Adapter->PeriodicInterruptOverflowReported = FALSE;
+    DxgkpReleaseAdapterInterruptLock(Adapter, OldIrql);
+}
+
+static VOID
+DxgkpDisablePeriodicInterruptHandoff(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    KIRQL OldIrql;
+
+    OldIrql = DxgkpAcquireAdapterInterruptLock(Adapter);
+    DxgkPeriodicInterruptCoreDisableLocked(
+        &Adapter->PeriodicInterruptCore);
+    DxgkpReleaseAdapterInterruptLock(Adapter, OldIrql);
+}
+
+/*
+ * Drain the fixed ISR handoff without carrying InterruptLock into the sync
+ * registry.  The empty transition and DpcActive update happen under the same
+ * lock as enqueue, so a later ISR either joins this drain or queues a new one.
+ */
+static VOID
+DxgkpDrainPeriodicInterruptHandoff(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    for (;;)
+    {
+        DXGK_PERIODIC_INTERRUPT_CORE_ENTRY Entry;
+        ULONGLONG OverflowCount = 0;
+        BOOLEAN HaveEntry;
+        BOOLEAN ReportOverflow = FALSE;
+        KIRQL OldIrql;
+        NTSTATUS Status;
+
+        OldIrql = DxgkpAcquireAdapterInterruptLock(Adapter);
+        HaveEntry = DxgkPeriodicInterruptCoreDequeueLocked(
+            &Adapter->PeriodicInterruptCore,
+            &Entry);
+        if (!HaveEntry &&
+            Adapter->PeriodicInterruptCore.State ==
+                DxgkPeriodicInterruptOverflowed &&
+            !Adapter->PeriodicInterruptOverflowReported)
+        {
+            Adapter->PeriodicInterruptOverflowReported = TRUE;
+            OverflowCount =
+                Adapter->PeriodicInterruptCore.OverflowCount;
+            ReportOverflow = TRUE;
+        }
+        DxgkpReleaseAdapterInterruptLock(Adapter, OldIrql);
+
+        if (ReportOverflow)
+        {
+            DXGKRNL_ERR(
+                "DXGKRNL: periodic interrupt handoff disabled after "
+                "%I64u protocol/overflow failure(s)\n",
+                OverflowCount);
+        }
+        if (!HaveEntry)
+            break;
+
+        Status = DxgkSyncNotifyPeriodicFenceCount(
+            Adapter,
+            Entry.VidPnTargetId,
+            Entry.NotificationId,
+            Entry.PendingCount);
+        if (!NT_SUCCESS(Status) &&
+            Status != STATUS_NOT_FOUND &&
+            Status != STATUS_DELETE_PENDING)
+        {
+            DXGKRNL_WARN(
+                "DXGKRNL: periodic notification %lu target %lu "
+                "count %I64u was rejected (0x%08lX)\n",
+                Entry.NotificationId,
+                Entry.VidPnTargetId,
+                Entry.PendingCount,
+                Status);
+        }
     }
 }
 
@@ -2767,6 +2931,8 @@ DxgkpAdapterDpcRoutine(
         DXGKRNL_TRACE("DxgkpAdapterDpcRoutine: seq=%ld no miniport DPC routine\n",
                       Sequence);
     }
+
+    DxgkpDrainPeriodicInterruptHandoff(Adapter);
 
     /* A target bit maps one-to-one to the implemented source ordinal. */
     {
@@ -3358,6 +3524,33 @@ DxgkCbNotifyInterrupt(
     {
         static LONG NotifyCount = 0;
         LONG c = InterlockedIncrement(&NotifyCount);
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
+        if (NotifyInterruptData->InterruptType ==
+            DXGK_INTERRUPT_PERIODIC_MONITORED_FENCE_SIGNALED)
+        {
+            BOOLEAN QueueDpc;
+            KIRQL OldIrql;
+
+            if (!DxgkpPeriodicInterruptHandoffSupported(Adapter))
+            {
+                Status = STATUS_NOT_SUPPORTED;
+            }
+            else
+            {
+                OldIrql =
+                    DxgkpAcquireAdapterInterruptLock(Adapter);
+                Status = DxgkPeriodicInterruptCoreEnqueueLocked(
+                    &Adapter->PeriodicInterruptCore,
+                    NotifyInterruptData->PeriodicMonitoredFenceSignaled
+                        .VidPnTargetId,
+                    NotifyInterruptData->PeriodicMonitoredFenceSignaled
+                        .NotificationID,
+                    1,
+                    &QueueDpc);
+                DxgkpReleaseAdapterInterruptLock(Adapter, OldIrql);
+            }
+        }
+#endif
         if (NotifyInterruptData->InterruptType == DXGK_INTERRUPT_CRTC_VSYNC)
         {
             ULONG TargetId = NotifyInterruptData->CrtcVsync.VidPnTargetId;
@@ -5913,6 +6106,7 @@ DxgkAdapterStart(
         return Status;
     }
 
+    DxgkpEnablePeriodicInterruptHandoff(Adapter);
     DxgkEndKmdExclusive(Adapter, TRUE);
     DxgkUnblockInterruptCallbacks(Adapter);
     DxgkReleaseLevel3Transition(Adapter);
@@ -6688,6 +6882,7 @@ DxgkpAdapterStopInternal(
     /* Completion or ResetFromTimeout is the DMA ownership boundary. Close
      * every late ISR/DPC path before releasing tracker or scheduler state. */
     VidSchPrepareForStop(Adapter);
+    DxgkpDisablePeriodicInterruptHandoff(Adapter);
     KeRemoveQueueDpc(&Adapter->DpcObject);
     KeFlushQueuedDpcs();
     if (InterlockedCompareExchange(&Adapter->TdrOwnershipUncertain, 0, 0) != 0)
@@ -6884,6 +7079,7 @@ DxgkAdapterRemove(
         DxgkpStopTdrWatchdog(Adapter);
         DxgkPresentTeardown(Adapter);
         VidSchPrepareForStop(Adapter);
+        DxgkpDisablePeriodicInterruptHandoff(Adapter);
         KeRemoveQueueDpc(&Adapter->DpcObject);
         KeFlushQueuedDpcs();
         DxgkWaitForSubmitDmaReservations(Adapter);
@@ -8011,6 +8207,8 @@ DxgkpAddDeviceRegistered(
 
     /* Initialise synchronisation primitives. */
     KeInitializeSpinLock(&Adapter->InterruptLock);
+    DxgkPeriodicInterruptCoreInitialize(
+        &Adapter->PeriodicInterruptCore);
     KeInitializeSpinLock(&Adapter->ChildListLock);
     KeInitializeSpinLock(&Adapter->SubmitDmaLock);
     KeInitializeSpinLock(&Adapter->TdrHistoryLock);

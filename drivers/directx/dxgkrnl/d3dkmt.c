@@ -792,7 +792,8 @@ DxgkpValidateAdapterVidPnSourceForIoctl(
 static NTSTATUS
 DxgkpValidateAdapterVidPnTargetForIoctl(
     _In_ D3DKMT_HANDLE hAdapter,
-    _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID VidPnTargetId)
+    _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID VidPnTargetId,
+    _In_opt_ PDXGKRNL_ADAPTER ExpectedAdapter)
 {
     PDXGKRNL_ADAPTER Adapter;
     NTSTATUS LookupStatus;
@@ -801,7 +802,8 @@ DxgkpValidateAdapterVidPnTargetForIoctl(
     if (!NT_SUCCESS(LookupStatus))
         return STATUS_INVALID_PARAMETER;
 
-    if (VidPnTargetId >= Adapter->NumberOfVideoPresentSources)
+    if ((ExpectedAdapter != NULL && Adapter != ExpectedAdapter) ||
+        VidPnTargetId >= Adapter->NumberOfVideoPresentSources)
     {
         DxgkDereferenceAdapter(Adapter);
         return STATUS_INVALID_PARAMETER;
@@ -4523,13 +4525,83 @@ NTAPI
 DxgkCreateSynchronizationObject2(
     _Inout_ D3DKMT_CREATESYNCHRONIZATIONOBJECT2 *pData)
 {
+    PDXGKRNL_ADAPTER Adapter;
+    PDXGKRNL_DEVICE Device;
     D3DDDI_SYNCHRONIZATIONOBJECT_FLAGS SupportedFlags;
+    ULONG MinimumLevel;
     NTSTATUS Status;
 
     if (pData == NULL)
         return STATUS_INVALID_PARAMETER;
-    if (pData->Info.Type == D3DDDI_MONITORED_FENCE && pData->Info.Flags.NoSignal && pData->Info.Flags.NoWait)
+
+    /*
+     * CreateSynchronizationObject2 is a WDDM 1.1 entry point, but the union
+     * grew independently.  Gate the selected discriminator against both the
+     * configured OS level and the miniport's declared interface version.
+     */
+    switch (pData->Info.Type)
+    {
+        case D3DDDI_SYNCHRONIZATION_MUTEX:
+        case D3DDDI_SEMAPHORE:
+        case D3DDDI_FENCE:
+        case D3DDDI_CPU_NOTIFICATION:
+            MinimumLevel = DXGK_CAPS_CORE_LEVEL_WDDM_1_1;
+            break;
+        case D3DDDI_MONITORED_FENCE:
+            MinimumLevel = DXGK_CAPS_CORE_LEVEL_WDDM_2_0;
+            break;
+        case D3DDDI_PERIODIC_MONITORED_FENCE:
+            MinimumLevel = DXGK_CAPS_CORE_LEVEL_WDDM_2_2;
+            break;
+        default:
+            return STATUS_NOT_SUPPORTED;
+    }
+
+    if (REACTOS_WDDM_TARGET_LEVEL < MinimumLevel)
+        return STATUS_NOT_SUPPORTED;
+
+    Status = DxgkpValidateDeviceHandleForIoctl(
+        pData->hDevice, &Adapter, &Device);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (Adapter->MiniportContext == NULL ||
+        !DxgkCapsCoreInterfaceVersionAtLeast(
+            Adapter->MiniportContext->InitData.s.Version,
+            MinimumLevel))
+    {
+        DxgkDereferenceDevice(Device);
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    if (pData->Info.Type == D3DDDI_PERIODIC_MONITORED_FENCE)
+    {
+        /*
+         * hAdapter is mandatory for the periodic contract and must identify
+         * the same adapter as hDevice.  Accepting zero or another adapter
+         * would bind a fence page and its VSync producer to different
+         * lifetime domains.
+         */
+        Status = DxgkpValidateAdapterVidPnTargetForIoctl(
+            pData->Info.PeriodicMonitoredFence.hAdapter,
+            pData->Info.PeriodicMonitoredFence.VidPnTargetId,
+            Adapter);
+        if (!NT_SUCCESS(Status))
+        {
+            DxgkDereferenceDevice(Device);
+            return Status;
+        }
+    }
+
+    DxgkDereferenceDevice(Device);
+
+    if ((pData->Info.Type == D3DDDI_MONITORED_FENCE ||
+         pData->Info.Type == D3DDDI_PERIODIC_MONITORED_FENCE) &&
+        pData->Info.Flags.NoSignal &&
+        pData->Info.Flags.NoWait)
+    {
         return STATUS_INVALID_PARAMETER;
+    }
     if (pData->Info.Type != D3DDDI_MONITORED_FENCE && pData->Info.Type != D3DDDI_PERIODIC_MONITORED_FENCE)
     {
         /* Legacy object types share only through the same global namespace;
@@ -4551,42 +4623,19 @@ DxgkCreateSynchronizationObject2(
         {
             if (pData->Info.PeriodicMonitoredFence.Padding != 0 || (pData->Info.PeriodicMonitoredFence.EngineAffinity & ~1u) != 0)
                 return STATUS_INVALID_PARAMETER;
-            /* Time is an offset before VSync at which the fence must already
-             * be signaled.  This stack publishes at the VSync pulse itself,
-             * so only the zero offset is honestly supportable. */
-            if (pData->Info.PeriodicMonitoredFence.Time != 0)
-                return STATUS_NOT_SUPPORTED;
-            if (pData->Info.PeriodicMonitoredFence.hAdapter != 0)
-            {
-                Status = DxgkpValidateAdapterVidPnTargetForIoctl(pData->Info.PeriodicMonitoredFence.hAdapter,
-                                                                 pData->Info.PeriodicMonitoredFence.VidPnTargetId);
-                if (!NT_SUCCESS(Status))
-                    return Status;
-            }
         }
         RtlZeroMemory(&SupportedFlags, sizeof(SupportedFlags));
         SupportedFlags.NoSignal = 1;
         SupportedFlags.NoWait = 1;
         SupportedFlags.NoSignalMaxValueOnTdr = 1;
         SupportedFlags.NoGPUAccess = 1;
-        SupportedFlags.Shared = 1;
-        /* Top-of-pipeline publishes at submission instead of completion; the
-         * ordered scheduler already carries that timing. */
-        SupportedFlags.TopOfPipeline = 1;
+        /*
+         * TopOfPipeline needs a real submission-boundary action; the current
+         * ordered stream retires signals only at software completion. Shared
+         * monitored fences likewise require the NT-security handle path.
+         * Leave both bits out until those contracts exist end to end.
+         */
         if ((pData->Info.Flags.Value & ~SupportedFlags.Value) != 0)
-            return STATUS_NOT_SUPPORTED;
-    }
-
-    switch (pData->Info.Type)
-    {
-        case D3DDDI_SYNCHRONIZATION_MUTEX:
-        case D3DDDI_SEMAPHORE:
-        case D3DDDI_FENCE:
-        case D3DDDI_CPU_NOTIFICATION:
-        case D3DDDI_MONITORED_FENCE:
-        case D3DDDI_PERIODIC_MONITORED_FENCE:
-            break;
-        default:
             return STATUS_NOT_SUPPORTED;
     }
 
