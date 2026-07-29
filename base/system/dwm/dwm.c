@@ -249,6 +249,11 @@ DwmComposeLoop(void)
     NtUserCallOneParam((DWORD_PTR)&att, DWM_ROUTINE_ATTACH);
     hWake = att.hWake;
     hVblank = att.hVblank;
+    if (hWake == NULL)
+    {
+        DwmLog("DWM: attach refused (no composition on this display stack)\n");
+        return;
+    }
     DwmLog("DWM: attached\n");
 
     for (;;)

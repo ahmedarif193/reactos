@@ -24,4 +24,7 @@ add_library(dxg MODULE
 set_module_type(dxg kernelmodedriver)
 add_importlibs(dxg dxgthk ntoskrnl)
 add_pch(dxg dxg_int.h SOURCE)
-add_cd_file(TARGET dxg DESTINATION reactos/system32/drivers FOR all)
+# dxg.sys left Windows in 8; only the XPDM image delivers it.
+if(REACTOS_USE_XPDM)
+    add_cd_file(TARGET dxg DESTINATION reactos/system32/drivers FOR all)
+endif()
