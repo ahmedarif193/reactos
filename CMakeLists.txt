@@ -258,17 +258,20 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
                     -D_WIN32_WINDOWS=${REACTOS_TARGET_NT}
                     -D_SETUPAPI_VER=${REACTOS_TARGET_NT}
                     -DMINGW_HAS_SECURE_API=1
-                    -DD3D_UMD_INTERFACE_VERSION=0x5002 # WDDM 2.0
                     -DDXGKDDI_INTERFACE_VERSION=0x1052 # Vista
                     -DDLL_EXPORT_VERSION=${DLL_EXPORT_VERSION}
                     -DVER_PRODUCTMAJORVERSION=${_NT_MAJOR}
                     -DVER_PRODUCTMINORVERSION=${_NT_MINOR})
 
     if(REACTOS_USE_WDDM)
+        add_definitions(
+            -DD3D_UMD_INTERFACE_VERSION=${REACTOS_WDDM_EFFECTIVE_UMD_INTERFACE_VERSION})
         add_compile_definitions(REACTOS_GRAPHICS_DRIVER_MODEL_WDDM=1)
         message(STATUS
-            "Display driver model: WDDM ${REACTOS_WDDM_LEVEL} compatibility ceiling")
+            "Display driver model: WDDM ${REACTOS_WDDM_LEVEL} compatibility ceiling "
+            "(UMD ABI ${REACTOS_WDDM_EFFECTIVE_UMD_INTERFACE_VERSION})")
     else()
+        add_definitions(-DD3D_UMD_INTERFACE_VERSION=0x000C) # Vista
         add_compile_definitions(REACTOS_GRAPHICS_DRIVER_MODEL_XPDM=1)
         message(STATUS "Display driver model: XPDM")
     endif()
