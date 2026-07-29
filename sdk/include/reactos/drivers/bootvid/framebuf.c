@@ -207,6 +207,8 @@ GetFramebufferVideoData(
     _In_ PVOID ConfigurationData,
     _In_ ULONG ConfigurationDataLength)
 {
+    RtlZeroMemory(VideoConfigData, sizeof(*VideoConfigData));
+
     if (!ConfigurationData ||
         (ConfigurationDataLength < sizeof(CM_PARTIAL_RESOURCE_LIST)))
     {
@@ -246,15 +248,19 @@ GetFramebufferVideoData(
             *VideoRamSize = 0;
         }
 
-        if (Descriptor &&
-            (Descriptor->u.DeviceSpecificData.DataSize >= sizeof(CM_FRAMEBUF_DEVICE_DATA)))
+        if (Descriptor && (Descriptor->u.DeviceSpecificData.DataSize >= CM_FRAMEBUF_DEVICE_DATA_V3_SIZE))
         {
             /* NOTE: This descriptor *MUST* be the last one.
              * The actual device data follows the descriptor. */
             PCM_FRAMEBUF_DEVICE_DATA VideoData = (PCM_FRAMEBUF_DEVICE_DATA)(Descriptor + 1);
+            ULONG DataSize = min(Descriptor->u.DeviceSpecificData.DataSize, sizeof(*VideoConfigData));
 
-            /* Just copy the data */
-            *VideoConfigData = *VideoData;
+            /*
+             * Revision 3 producers do not have the trailing DPI member.
+             * Keep the zero default in that case and copy every field they
+             * did provide.
+             */
+            RtlCopyMemory(VideoConfigData, VideoData, DataSize);
 
             DPRINT_TRACE("**  FbBVid: Framebuffer at: 0x%I64X\n",
                 VideoRamAddress->QuadPart + VideoData->FrameBufferOffset);
@@ -487,7 +493,7 @@ FindBootDisplayFromLoaderGop(
 
     RtlZeroMemory(VideoConfigData, sizeof(*VideoConfigData));
     VideoConfigData->Version = 1;
-    VideoConfigData->Revision = 3;
+    VideoConfigData->Revision = 4;
     VideoConfigData->FrameBufferOffset = 0;
     VideoConfigData->ScreenWidth = Framebuffer->HorizontalResolution;
     VideoConfigData->ScreenHeight = Framebuffer->VerticalResolution;
@@ -497,6 +503,7 @@ FindBootDisplayFromLoaderGop(
     VideoConfigData->PixelMasks.GreenMask = Framebuffer->GreenMask;
     VideoConfigData->PixelMasks.BlueMask = Framebuffer->BlueMask;
     VideoConfigData->PixelMasks.ReservedMask = Framebuffer->Reserved;
+    VideoConfigData->Dpi = Framebuffer->Dpi;
 
     if (Interface)
         *Interface = Internal;
@@ -688,6 +695,7 @@ FindBootDisplay(
     DbgPrint("    ScreenHeight      : %lu\n", VideoConfigData->ScreenHeight);
     DbgPrint("    PixelsPerScanLine : %lu\n", VideoConfigData->PixelsPerScanLine);
     DbgPrint("    BitsPerPixel      : %lu\n", VideoConfigData->BitsPerPixel);
+    DbgPrint("    LogicalDpi        : %lu\n", VideoConfigData->Dpi);
     DbgPrint("    ARGB masks:       : %08x/%08x/%08x/%08x\n",
              VideoConfigData->PixelMasks.ReservedMask,
              VideoConfigData->PixelMasks.RedMask,

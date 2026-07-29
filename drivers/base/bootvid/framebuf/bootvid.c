@@ -14,22 +14,12 @@
 /* Include the Boot-time (POST) display discovery helper functions */
 #include <drivers/bootvid/framebuf.c>
 
-/* Scaling of the bootvid 640x480 default virtual screen to the larger video framebuffer */
-#define SCALING_SUPPORT
-#define SCALING_PROPORTIONAL
-
-/* Keep borders black or controlled with palette */
-// #define COLORED_BORDERS
-
-
 /* GLOBALS ********************************************************************/
 
-#define BB_PIXEL(x, y) \
-    ((PUCHAR)BackBuffer + (y) * SCREEN_WIDTH + (x))
+#define TAG_BOOTVID_BACKBUFFER 'bdiV'
 
-#define FB_PIXEL(x, y) \
-    ((PUCHAR)FrameBufferStart + (PanV + VidpYScale * (y)) * BytesPerScanLine \
-                              + (PanH + VidpXScale * (x)) * BytesPerPixel)
+#define BB_PIXEL(x, y) \
+    (BackBuffer + (ULONG_PTR)(y) * VidpDisplayWidth + (x))
 
 static ULONG_PTR FrameBufferStart = 0;
 static ULONG FrameBufferSize;
@@ -38,19 +28,28 @@ static UCHAR BytesPerPixel;
 static PUCHAR BackBuffer = NULL;
 static SIZE_T BackBufferSize;
 
-#ifdef SCALING_SUPPORT
-static USHORT VidpXScale = 1;
-static USHORT VidpYScale = 1;
-#else
-#define VidpXScale 1
-#define VidpYScale 1
-#endif
-static ULONG PanH, PanV;
-
 static RGBQUAD CachedPalette[BV_MAX_COLORS];
 
 
 /* PRIVATE FUNCTIONS *********************************************************/
+
+static __inline ULONG
+LogicalToPhysicalX(_In_ ULONG X)
+{
+    return (ULONG)(((ULONGLONG)X * ScreenWidth) / VidpDisplayWidth);
+}
+
+static __inline ULONG
+LogicalToPhysicalY(_In_ ULONG Y)
+{
+    return (ULONG)(((ULONGLONG)Y * ScreenHeight) / VidpDisplayHeight);
+}
+
+static __inline PULONG
+FramePixel(_In_ ULONG X, _In_ ULONG Y)
+{
+    return (PULONG)(FrameBufferStart + (ULONG_PTR)Y * BytesPerScanLine + (ULONG_PTR)X * BytesPerPixel);
+}
 
 static VOID
 FlushBackBufferRect(
@@ -59,24 +58,40 @@ FlushBackBufferRect(
     _In_ ULONG Width,
     _In_ ULONG Height)
 {
-    ULONG y;
+    ULONG x, y;
+    ULONG NativeLeft, NativeRight;
 
-    if (!Width || !Height)
+    if (!Width || !Height || (Left >= VidpDisplayWidth) || (Top >= VidpDisplayHeight))
+    {
         return;
+    }
+
+    Width = min(Width, VidpDisplayWidth - Left);
+    Height = min(Height, VidpDisplayHeight - Top);
+    NativeLeft = LogicalToPhysicalX(Left);
+    NativeRight = LogicalToPhysicalX(Left + Width);
 
     for (y = Top; y < Top + Height; ++y)
     {
         PUCHAR Back = BB_PIXEL(Left, y);
+        ULONG NativeTop = LogicalToPhysicalY(y);
+        ULONG NativeBottom = LogicalToPhysicalY(y + 1);
+        ULONG NativeY;
 
-        for (ULONG i = 0; i < VidpYScale; ++i)
+        for (NativeY = NativeTop; NativeY < NativeBottom; ++NativeY)
         {
-            PULONG Pixel = (PULONG)((ULONG_PTR)FB_PIXEL(Left, y) +
-                                     i * BytesPerScanLine);
+            PULONG Pixel = FramePixel(NativeLeft, NativeY);
+            ULONG NativeX = NativeLeft;
 
-            for (ULONG x = 0; x < Width; ++x)
+            for (x = 0; x < Width; ++x)
             {
-                for (ULONG j = VidpXScale; j > 0; --j)
+                ULONG NextNativeX = (x + 1 == Width) ? NativeRight : LogicalToPhysicalX(Left + x + 1);
+
+                while (NativeX < NextNativeX)
+                {
                     *Pixel++ = CachedPalette[Back[x]];
+                    ++NativeX;
+                }
             }
         }
     }
@@ -85,51 +100,8 @@ FlushBackBufferRect(
 static VOID
 ApplyPalette(VOID)
 {
-#ifdef COLORED_BORDERS
-    PULONG Frame = (PULONG)FrameBufferStart;
-    ULONG x, y;
-
-    /* Top border */
-    for (x = 0; x < PanV * ScreenWidth; ++x)
-    {
-        *Frame++ = CachedPalette[BV_COLOR_BLACK];
-    }
-
-    /* Left border */
-    for (y = 0; y < VidpYScale * SCREEN_HEIGHT; ++y)
-    {
-        // Frame = (PULONG)(FrameBufferStart + FB_OFFSET(-(LONG)PanH, y));
-        Frame = (PULONG)(FrameBufferStart + (PanV + y) * BytesPerScanLine);
-        for (x = 0; x < PanH; ++x)
-        {
-            *Frame++ = CachedPalette[BV_COLOR_BLACK];
-        }
-    }
-#endif // COLORED_BORDERS
-
     /* Screen redraw */
-    FlushBackBufferRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
-
-#ifdef COLORED_BORDERS
-    /* Right border */
-    for (y = 0; y < VidpYScale * SCREEN_HEIGHT; ++y)
-    {
-        // Frame = (PULONG)(FrameBufferStart + FB_OFFSET(SCREEN_WIDTH, y));
-        Frame = (PULONG)(FrameBufferStart + (PanV + y) * BytesPerScanLine + (PanH + VidpXScale * SCREEN_WIDTH) * BytesPerPixel);
-        for (x = 0; x < PanH; ++x)
-        {
-            *Frame++ = CachedPalette[BV_COLOR_BLACK];
-        }
-    }
-
-    /* Bottom border */
-    // Frame = (PULONG)(FrameBufferStart + FB_OFFSET(-(LONG)PanH, SCREEN_HEIGHT));
-    Frame = (PULONG)(FrameBufferStart + (PanV + VidpYScale * SCREEN_HEIGHT) * BytesPerScanLine);
-    for (x = 0; x < PanV * ScreenWidth; ++x)
-    {
-        *Frame++ = CachedPalette[BV_COLOR_BLACK];
-    }
-#endif // COLORED_BORDERS
+    FlushBackBufferRect(0, 0, VidpDisplayWidth, VidpDisplayHeight);
 }
 
 /* PUBLIC FUNCTIONS **********************************************************/
@@ -145,6 +117,9 @@ VidInitialize(
     CM_FRAMEBUF_DEVICE_DATA VideoConfigData; /* Configuration data from hardware tree */
     INTERFACE_TYPE Interface;
     ULONG BusNumber;
+    ULONG Dpi, MaximumDpi;
+    ULONG LogicalWidth, LogicalHeight;
+    SIZE_T BackBufferHeight;
     NTSTATUS Status;
 
     /* Find boot-time framebuffer display information from the LoaderBlock */
@@ -188,10 +163,16 @@ VidInitialize(
     }
 
     ASSERT(ScreenWidth <= VideoConfigData.PixelsPerScanLine);
-    BytesPerScanLine = VideoConfigData.PixelsPerScanLine * BytesPerPixel;
-    if (BytesPerScanLine < 1)
+    if ((VideoConfigData.PixelsPerScanLine < ScreenWidth) || (VideoConfigData.PixelsPerScanLine > MAXULONG / BytesPerPixel))
     {
-        DPRINT1("Invalid BytesPerScanLine = %lu\n", BytesPerScanLine);
+        DPRINT1("Invalid PixelsPerScanLine = %lu\n", VideoConfigData.PixelsPerScanLine);
+        return FALSE;
+    }
+
+    BytesPerScanLine = VideoConfigData.PixelsPerScanLine * BytesPerPixel;
+    if ((BytesPerScanLine < 1) || (ScreenHeight > MAXULONG / BytesPerScanLine))
+    {
+        DPRINT1("Invalid framebuffer stride or height\n");
         return FALSE;
     }
 
@@ -199,11 +180,50 @@ VidInitialize(
     FrameBufferSize = ScreenHeight * BytesPerScanLine;
 
     /* Verify that the framebuffer actually fits inside the video RAM */
-    if (FrameBuffer.QuadPart + FrameBufferSize > VramAddress.QuadPart + VramSize)
+    if ((VideoConfigData.FrameBufferOffset > VramSize) || (FrameBufferSize > VramSize - VideoConfigData.FrameBufferOffset))
     {
         DPRINT1("The framebuffer exceeds video memory bounds!\n");
         return FALSE;
     }
+
+    /*
+     * Expose a 96-DPI logical coordinate space. The configured DPI controls
+     * the physical size of text and legacy boot graphics, while the native
+     * resolution controls how many logical pixels, columns and rows fit.
+     *
+     * Keep at least the historical 640x480 canvas so old boot resources and
+     * their fixed coordinates remain valid even at very high configured DPI.
+     */
+    Dpi = VideoConfigData.Dpi;
+    if ((Dpi < LOADER_PARAMETER_FRAMEBUFFER_DPI_MIN) || (Dpi > LOADER_PARAMETER_FRAMEBUFFER_DPI_MAX))
+    {
+        Dpi = LOADER_PARAMETER_FRAMEBUFFER_DPI_DEFAULT;
+    }
+
+    MaximumDpi = min((ULONG)(((ULONGLONG)ScreenWidth * LOADER_PARAMETER_FRAMEBUFFER_DPI_DEFAULT) / SCREEN_WIDTH), (ULONG)(((ULONGLONG)ScreenHeight * LOADER_PARAMETER_FRAMEBUFFER_DPI_DEFAULT) / SCREEN_HEIGHT));
+    Dpi = min(Dpi, MaximumDpi);
+
+    LogicalWidth = (ULONG)(((ULONGLONG)ScreenWidth * LOADER_PARAMETER_FRAMEBUFFER_DPI_DEFAULT + Dpi / 2) / Dpi);
+    LogicalHeight = (ULONG)(((ULONGLONG)ScreenHeight * LOADER_PARAMETER_FRAMEBUFFER_DPI_DEFAULT + Dpi / 2) / Dpi);
+    LogicalWidth = max(LogicalWidth, SCREEN_WIDTH);
+    LogicalHeight = max(LogicalHeight, SCREEN_HEIGHT);
+
+    /* A full-width scroll region must end on an 8-pixel character boundary. */
+    LogicalWidth = ALIGN_DOWN_BY(LogicalWidth, BOOTCHAR_WIDTH);
+
+    VidpDisplayWidth = LogicalWidth;
+    VidpDisplayHeight = LogicalHeight;
+    VidpPhysicalWidth = ScreenWidth;
+    VidpPhysicalHeight = ScreenHeight;
+    VidpDisplayDpi = Dpi;
+    VidpScrollRegion.Left = 0;
+    VidpScrollRegion.Top = 0;
+    VidpScrollRegion.Right = LogicalWidth - 1;
+    VidpScrollRegion.Bottom = LogicalHeight - 1;
+    VidpCurrentX = 0;
+    VidpCurrentY = 0;
+
+    DPRINT1("Display: native %lux%lu, logical %lux%lu at %lu DPI\n", ScreenWidth, ScreenHeight, VidpDisplayWidth, VidpDisplayHeight, VidpDisplayDpi);
 
     /* Translate the framebuffer from bus-relative to physical address */
     PHYSICAL_ADDRESS TranslatedAddress;
@@ -253,23 +273,22 @@ VidInitialize(
      * Reserve off-screen area for the backbuffer that contains
      * 8-bit indexed color screen image, plus preserved row data.
      */
-    BackBufferSize = SCREEN_WIDTH * (SCREEN_HEIGHT + (BOOTCHAR_HEIGHT + 1));
+    BackBufferHeight = (SIZE_T)VidpDisplayHeight + (BOOTCHAR_HEIGHT + 1);
+    if ((BackBufferHeight < VidpDisplayHeight) || ((SIZE_T)VidpDisplayWidth > MAXULONG_PTR / BackBufferHeight))
+    {
+        DPRINT1("Logical framebuffer dimensions are too large\n");
+        goto Failure;
+    }
+    BackBufferSize = (SIZE_T)VidpDisplayWidth * BackBufferHeight;
 
     /*
      * Keep the backbuffer in cached system RAM. Reading from the GOP
      * framebuffer is often extremely slow, even when writes are combined.
+     * It does not need to be physically contiguous.
      */
-    {
-        PHYSICAL_ADDRESS NullAddress = {{0, 0}};
-        PHYSICAL_ADDRESS HighestAddress = {{-1, -1}};
-        BackBuffer = MmAllocateContiguousMemorySpecifyCache(
-                        BackBufferSize, NullAddress, HighestAddress,
-                        NullAddress, MmCached);
-    }
+    BackBuffer = ExAllocatePoolWithTag(NonPagedPool, BackBufferSize, TAG_BOOTVID_BACKBUFFER);
 
-    if (!BackBuffer &&
-        VideoConfigData.FrameBufferOffset + FrameBufferSize + BackBufferSize
-            <= ((AddressSpace == 0) ? MappedSize : VramSize))
+    if (!BackBuffer && (BackBufferSize <= MAXULONG) && (VideoConfigData.FrameBufferOffset <= VramSize) && (FrameBufferSize <= VramSize - VideoConfigData.FrameBufferOffset) && ((ULONG)BackBufferSize <= VramSize - VideoConfigData.FrameBufferOffset - FrameBufferSize) && ((AddressSpace != 0) || (FrameBufferSize + BackBufferSize <= MappedSize)))
     {
         /* Backbuffer placed following the framebuffer in the hidden part */
         BackBuffer = (PUCHAR)(FrameBufferStart + FrameBufferSize);
@@ -283,25 +302,6 @@ VidInitialize(
     }
 
     RtlZeroMemory(BackBuffer, BackBufferSize);
-
-#ifdef SCALING_SUPPORT
-    /* Compute autoscaling; only integer (not fractional) scaling is supported */
-    VidpXScale = ScreenWidth / SCREEN_WIDTH;
-    VidpYScale = ScreenHeight / SCREEN_HEIGHT;
-    ASSERT(VidpXScale >= 1);
-    ASSERT(VidpYScale >= 1);
-#ifdef SCALING_PROPORTIONAL
-    VidpXScale = min(VidpXScale, VidpYScale);
-    VidpYScale = VidpXScale;
-#endif
-    DPRINT1("Scaling X = %hu, Y = %hu\n", VidpXScale, VidpYScale);
-#endif // SCALING_SUPPORT
-
-    /* Calculate left/right and top/bottom border values
-     * to keep the displayed area centered on the screen */
-    PanH = (ScreenWidth - VidpXScale * SCREEN_WIDTH) / 2;
-    PanV = (ScreenHeight - VidpYScale * SCREEN_HEIGHT) / 2;
-    DPRINT1("Borders X = %lu, Y = %lu\n", PanH, PanV);
 
     /* Reset the video mode if requested */
     if (SetMode)
@@ -322,7 +322,7 @@ NTAPI
 VidCleanUp(VOID)
 {
     /* Just fill the screen black */
-    VidSolidColorFill(0, 0, SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1, BV_COLOR_BLACK);
+    VidSolidColorFill(0, 0, VidpDisplayWidth - 1, VidpDisplayHeight - 1, BV_COLOR_BLACK);
 }
 
 VOID
@@ -334,7 +334,7 @@ ResetDisplay(
 
     /* Re-initialize the palette and fill the screen black */
     InitializePalette();
-    VidSolidColorFill(0, 0, SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1, BV_COLOR_BLACK);
+    VidSolidColorFill(0, 0, VidpDisplayWidth - 1, VidpDisplayHeight - 1, BV_COLOR_BLACK);
 }
 
 VOID
@@ -363,17 +363,13 @@ SetPixel(
     _In_ ULONG Top,
     _In_ UCHAR Color)
 {
-    PUCHAR Back = BB_PIXEL(Left, Top);
-    PULONG Frame = (PULONG)FB_PIXEL(Left, Top);
-
-    *Back = Color;
-    for (ULONG i = VidpYScale; i > 0; --i)
+    if ((Left >= VidpDisplayWidth) || (Top >= VidpDisplayHeight) || (Color >= BV_MAX_COLORS))
     {
-        PULONG Pixel = Frame;
-        for (ULONG j = VidpXScale; j > 0; --j)
-            *Pixel++ = CachedPalette[Color];
-        Frame = (PULONG)((ULONG_PTR)Frame + BytesPerScanLine);
+        return;
     }
+
+    *BB_PIXEL(Left, Top) = Color;
+    FlushBackBufferRect(Left, Top, 1, 1);
 }
 
 BOOLEAN
@@ -408,9 +404,7 @@ VidBufferToScreenBltNative(
     for (y = 0; y < Height; ++y)
     {
         PUCHAR Src = Buffer + y * Delta;
-        PUCHAR Dst = (PUCHAR)FrameBufferStart +
-                     (Top + y) * BytesPerScanLine +
-                     Left * BytesPerPixel;
+        PUCHAR Dst = (PUCHAR)FrameBufferStart + (ULONG_PTR)(Top + y) * BytesPerScanLine + (ULONG_PTR)Left * BytesPerPixel;
 
         RtlCopyMemory(Dst, Src, Width * sizeof(ULONG));
     }
@@ -425,29 +419,36 @@ PreserveRow(
     _In_ BOOLEAN Restore)
 {
     PUCHAR NewPosition, OldPosition;
+    SIZE_T Count;
+
+    if ((CurrentTop >= VidpDisplayHeight) || !Height)
+        return;
+
+    Height = min(Height, VidpDisplayHeight - CurrentTop);
+    Height = min(Height, (ULONG)(BOOTCHAR_HEIGHT + 1));
 
     /* Calculate the position in memory for the row */
     if (Restore)
     {
         /* Restore the row by copying back the contents saved off-screen */
         NewPosition = BB_PIXEL(0, CurrentTop);
-        OldPosition = BB_PIXEL(0, SCREEN_HEIGHT);
+        OldPosition = BB_PIXEL(0, VidpDisplayHeight);
     }
     else
     {
         /* Preserve the row by saving its contents off-screen */
-        NewPosition = BB_PIXEL(0, SCREEN_HEIGHT);
+        NewPosition = BB_PIXEL(0, VidpDisplayHeight);
         OldPosition = BB_PIXEL(0, CurrentTop);
     }
 
     /* Set the count and copy the pixel data back to the other position in the backbuffer */
-    ULONG Count = Height * SCREEN_WIDTH;
+    Count = (SIZE_T)Height * VidpDisplayWidth;
     RtlCopyMemory(NewPosition, OldPosition, Count);
 
     /* On restore, mirror the backbuffer changes to the framebuffer */
     if (Restore)
     {
-        FlushBackBufferRect(0, CurrentTop, SCREEN_WIDTH, Height);
+        FlushBackBufferRect(0, CurrentTop, VidpDisplayWidth, Height);
     }
 }
 
@@ -457,22 +458,27 @@ DoScroll(
 {
     ULONG RowSize = VidpScrollRegion.Right - VidpScrollRegion.Left + 1;
     ULONG Height = VidpScrollRegion.Bottom - VidpScrollRegion.Top + 1;
+    ULONG RowsToMove;
+    PUCHAR OldPosition, NewPosition;
 
-    if (!Scroll || Scroll >= Height)
+    if (!Scroll || Scroll >= Height || (VidpScrollRegion.Right >= VidpDisplayWidth) || (VidpScrollRegion.Bottom >= VidpDisplayHeight))
+    {
         return;
+    }
 
     /* Calculate the position in memory for the row */
-    PUCHAR OldPosition = BB_PIXEL(VidpScrollRegion.Left, VidpScrollRegion.Top + Scroll);
-    PUCHAR NewPosition = BB_PIXEL(VidpScrollRegion.Left, VidpScrollRegion.Top);
+    OldPosition = BB_PIXEL(VidpScrollRegion.Left, VidpScrollRegion.Top + Scroll);
+    NewPosition = BB_PIXEL(VidpScrollRegion.Left, VidpScrollRegion.Top);
+    RowsToMove = Height - Scroll;
 
     /* Start loop */
-    for (ULONG Top = VidpScrollRegion.Top; Top <= VidpScrollRegion.Bottom; ++Top)
+    while (RowsToMove--)
     {
         /* Scroll the row */
         RtlCopyMemory(NewPosition, OldPosition, RowSize);
 
-        OldPosition += SCREEN_WIDTH;
-        NewPosition += SCREEN_WIDTH;
+        OldPosition += VidpDisplayWidth;
+        NewPosition += VidpDisplayWidth;
     }
 
     FlushBackBufferRect(VidpScrollRegion.Left,
@@ -492,62 +498,31 @@ DisplayCharacter(
     /* Get the font line for this character */
     const UCHAR* FontChar = GetFontPtr(Character);
     const BOOLEAN Opaque = (BackColor < BV_COLOR_NONE);
+    ULONG Width, Height, y;
+
+    if ((Left >= VidpDisplayWidth) || (Top >= VidpDisplayHeight))
+        return;
+
+    Width = min((ULONG)BOOTCHAR_WIDTH, VidpDisplayWidth - Left);
+    Height = min((ULONG)BOOTCHAR_HEIGHT, VidpDisplayHeight - Top);
 
     /* Loop each pixel height */
-    for (ULONG y = Top; y < Top + BOOTCHAR_HEIGHT; ++y, FontChar += FONT_PTR_DELTA)
+    for (y = 0; y < Height; ++y, FontChar += FONT_PTR_DELTA)
     {
-        PUCHAR Back = BB_PIXEL(Left, y);
+        PUCHAR Back = BB_PIXEL(Left, Top + y);
+        UCHAR bit = 1 << (BOOTCHAR_WIDTH - 1);
+        ULONG x;
 
-        if (Opaque)
+        for (x = 0; x < Width; ++x, bit >>= 1)
         {
-            /* Loop each pixel width */
-            for (UCHAR bit = 1 << (BOOTCHAR_WIDTH - 1); bit > 0; bit >>= 1)
-            {
-                UCHAR Color = (*FontChar & bit) ? (UCHAR)TextColor : (UCHAR)BackColor;
-
-                *Back++ = Color;
-            }
-
-            for (ULONG i = 0; i < VidpYScale; ++i)
-            {
-                PULONG Pixel = (PULONG)((ULONG_PTR)FB_PIXEL(Left, y) +
-                                         i * BytesPerScanLine);
-
-                for (UCHAR bit = 1 << (BOOTCHAR_WIDTH - 1); bit > 0; bit >>= 1)
-                {
-                    UCHAR Color = (*FontChar & bit) ? (UCHAR)TextColor : (UCHAR)BackColor;
-
-                    for (ULONG j = VidpXScale; j > 0; --j)
-                        *Pixel++ = CachedPalette[Color];
-                }
-            }
-        }
-        else
-        {
-            ULONG x = Left;
-
-            /* Loop each pixel width */
-            for (UCHAR bit = 1 << (BOOTCHAR_WIDTH - 1); bit > 0; bit >>= 1, ++x)
-            {
-                if (!(*FontChar & bit))
-                {
-                    ++Back;
-                    continue;
-                }
-
-                *Back++ = (UCHAR)TextColor;
-
-                PULONG Frame = (PULONG)FB_PIXEL(x, y);
-                for (ULONG i = VidpYScale; i > 0; --i)
-                {
-                    PULONG Pixel = Frame;
-                    for (ULONG j = VidpXScale; j > 0; --j)
-                        *Pixel++ = CachedPalette[(UCHAR)TextColor];
-                    Frame = (PULONG)((ULONG_PTR)Frame + BytesPerScanLine);
-                }
-            }
+            if (*FontChar & bit)
+                Back[x] = (UCHAR)TextColor;
+            else if (Opaque)
+                Back[x] = (UCHAR)BackColor;
         }
     }
+
+    FlushBackBufferRect(Left, Top, Width, Height);
 }
 
 VOID
@@ -559,22 +534,37 @@ VidSolidColorFill(
     _In_ ULONG Bottom,
     _In_ UCHAR Color)
 {
-    ULONG Width = Right - Left + 1;
-    ULONG NativeWidth = Width * VidpXScale * BytesPerPixel;
-    ULONG NativeColor = CachedPalette[Color];
+    ULONG Width, NativeLeft, NativeRight, NativeTop, NativeBottom;
+    ULONG NativeWidth;
+    ULONG NativeColor;
+    ULONG y;
 
-    for (; Top <= Bottom; ++Top)
+    if ((Left > Right) || (Top > Bottom) || (Left >= VidpDisplayWidth) || (Top >= VidpDisplayHeight) || (Color >= BV_MAX_COLORS))
     {
-        PUCHAR Back = BB_PIXEL(Left, Top);
+        return;
+    }
+
+    NativeColor = CachedPalette[Color];
+    Right = min(Right, VidpDisplayWidth - 1);
+    Bottom = min(Bottom, VidpDisplayHeight - 1);
+    Width = Right - Left + 1;
+
+    for (y = Top; y <= Bottom; ++y)
+    {
+        PUCHAR Back = BB_PIXEL(Left, y);
 
         RtlFillMemory(Back, Width, Color);
+    }
 
-        for (ULONG i = 0; i < VidpYScale; ++i)
-        {
-            PULONG Frame = (PULONG)((ULONG_PTR)FB_PIXEL(Left, Top) +
-                                     i * BytesPerScanLine);
-            RtlFillMemoryUlong(Frame, NativeWidth, NativeColor);
-        }
+    NativeLeft = LogicalToPhysicalX(Left);
+    NativeRight = LogicalToPhysicalX(Right + 1);
+    NativeTop = LogicalToPhysicalY(Top);
+    NativeBottom = LogicalToPhysicalY(Bottom + 1);
+    NativeWidth = (NativeRight - NativeLeft) * BytesPerPixel;
+
+    for (y = NativeTop; y < NativeBottom; ++y)
+    {
+        RtlFillMemoryUlong(FramePixel(NativeLeft, y), NativeWidth, NativeColor);
     }
 }
 
@@ -588,24 +578,31 @@ VidScreenToBufferBlt(
     _In_ ULONG Height,
     _In_ ULONG Stride)
 {
-    ULONG x, y;
+    ULONG x, y, CopyWidth, CopyHeight;
 
     /* Clear the destination buffer */
     RtlZeroMemory(Buffer, Height * Stride);
 
+    if ((Left >= VidpDisplayWidth) || (Top >= VidpDisplayHeight))
+        return;
+
+    CopyWidth = min(Width, VidpDisplayWidth - Left);
+    CopyHeight = min(Height, VidpDisplayHeight - Top);
+
     /* Start the outer Y height loop */
-    for (y = 0; y < Height; ++y)
+    for (y = 0; y < CopyHeight; ++y)
     {
         /* Set current scanline */
         PUCHAR Back = BB_PIXEL(Left, Top + y);
         PUCHAR Buf = Buffer + y * Stride;
 
         /* Start the X inner loop */
-        for (x = 0; x < Width; x += sizeof(USHORT))
+        for (x = 0; (x < CopyWidth) && (x / 2 < Stride); x += 2)
         {
             /* Read the current value */
             *Buf = (*Back++ & 0xF) << 4;
-            *Buf |= *Back++ & 0xF;
+            if (x + 1 < CopyWidth)
+                *Buf |= *Back++ & 0xF;
             Buf++;
         }
     }

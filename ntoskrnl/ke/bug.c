@@ -1327,6 +1327,7 @@ KiDisplayBlueScreen(IN ULONG MessageId,
     ULONG BugCheckCode = (ULONG)KiBugCheckData[0];
     BOOLEAN Enable = TRUE;
     CHAR AnsiName[107];
+    VID_DISPLAY_INFO DisplayInfo;
 
     /* Enable headless support for bugcheck */
     HeadlessDispatch(HeadlessCmdStartBugCheck,
@@ -1341,6 +1342,8 @@ KiDisplayBlueScreen(IN ULONG MessageId,
     /* Check if bootvid is installed */
     if (InbvIsBootDriverInstalled())
     {
+        InbvQueryDisplayInfo(&DisplayInfo);
+
         if (KiIsScreenDebuggingEnabled() &&
             (InbvGetDisplayState() == INBV_DISPLAY_STATE_OWNED))
         {
@@ -1359,11 +1362,11 @@ KiDisplayBlueScreen(IN ULONG MessageId,
             InbvResetDisplay();
 
             /* Display blue screen */
-            InbvSolidColorFill(0, 0, SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1, BV_COLOR_BLUE);
+            InbvSolidColorFill(0, 0, DisplayInfo.Width - 1, DisplayInfo.Height - 1, BV_COLOR_BLUE);
             InbvSetTextColor(BV_COLOR_WHITE);
             InbvInstallDisplayStringFilter(NULL);
             InbvEnableDisplayString(TRUE);
-            InbvSetScrollRegion(0, 0, SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1);
+            InbvSetScrollRegion(0, 0, DisplayInfo.Width - 1, DisplayInfo.Height - 1);
         }
     }
 
