@@ -65,6 +65,7 @@
 #include <ntddk.h>
 #include <wdm.h>
 #include "device_work_core.h"
+#include "fence_core.h"
 #include "present_queue_core.h"
 #include "submit_reservation_core.h"
 #include "sync_wait_core.h"
@@ -478,6 +479,14 @@ typedef struct _DXGKRNL_SUBMIT_DMA_BUFFER
 #define DXGK_SUBMITTED_FENCE_PUBLISHED_BIT 0x8000000000000000ULL
 #define DXGK_SUBMITTED_FENCE_TOMBSTONE ((LONG64)-1)
 
+/*
+ * One pending-count slot per live WDDM 2.2 periodic notification makes the
+ * fixed ISR-to-DPC table lossless for distinct NotificationIDs.  Repeated
+ * interrupts for one ID coalesce into that slot's 64-bit count.
+ */
+#define DXGKRNL_PERIODIC_NOTIFICATION_CAPACITY \
+    DXGK_PERIODIC_INTERRUPT_CORE_CAPACITY
+
 #define DXGKP_TDR_LEVEL_OFF 0
 #define DXGKP_TDR_LEVEL_BUGCHECK 1
 #define DXGKP_TDR_LEVEL_RECOVER_VGA 2
@@ -714,6 +723,13 @@ struct _DXGKRNL_ADAPTER
      * in any code that touches interrupt-sensitive fields.
      */
     KSPIN_LOCK                  InterruptLock;
+    /*
+     * Lossless bounded handoff for interrupt type 14.  One slot exists per
+     * allowed live periodic NotificationID and repeated pulses coalesce into
+     * PendingCount.  All fields are protected by InterruptLock.
+     */
+    DXGK_PERIODIC_INTERRUPT_CORE PeriodicInterruptCore;
+    BOOLEAN                     PeriodicInterruptOverflowReported;
 
     /*
      * DPC object queued by the ISR to defer miniport DPC work.
@@ -1541,10 +1557,10 @@ typedef struct _DXGKRNL_SYNC_OBJECT
     D3DGPU_VIRTUAL_ADDRESS      MonitoredValueGpuVa;
 
     /*
-     * Sharing.  A creator that asked for Shared gets a global share handle
-     * published in the create output; an opener resolves that handle and
-     * becomes an alias whose BackingSyncObject holds the authoritative state,
-     * including the one monitored value page both views observe.
+     * Legacy sharing.  A supported legacy object that asked for Shared gets
+     * a private global share handle and an alias to the authoritative state.
+     * Monitored-fence sharing is refused: it requires the native NT
+     * synchronization-object lifetime, access, and security contract.
      */
     D3DKMT_HANDLE               GlobalShareHandle;
     BOOLEAN                     Shareable;
@@ -1552,13 +1568,16 @@ typedef struct _DXGKRNL_SYNC_OBJECT
     LIST_ENTRY                  GlobalShareListEntry;
 
     /*
-     * Periodic monitored fence.  The public contract binds the fence to a
-     * VidPn *target* (the output the compositor watches); this stack maps one
-     * target ordinal to one source ordinal, which is the same mapping the
-     * CRTC_VSYNC interrupt path uses.
+     * WDDM 2.2 periodic monitored fence.  The KMD owns one notification
+     * handle for the requested target/time; interrupt 14 resolves the stable
+     * NotificationID through the protected registry below.
      */
     BOOLEAN                     Periodic;
     D3DDDI_VIDEO_PRESENT_TARGET_ID PeriodicVidPnTargetId;
+    UINT64                      PeriodicTime;
+    DXGK_PERIODIC_NOTIFICATION_CORE PeriodicNotification;
+    EX_RUNDOWN_REF              PeriodicNotificationRundown;
+    KSPIN_LOCK                  PeriodicSignalLock;
     LIST_ENTRY                  PeriodicListEntry;
 } DXGKRNL_SYNC_OBJECT, *PDXGKRNL_SYNC_OBJECT;
 
@@ -2966,6 +2985,21 @@ VOID
 DxgkSyncAdvancePeriodicFences(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS
+DxgkSyncNotifyPeriodicFence(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID VidPnTargetId,
+    _In_ UINT NotificationId);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS
+DxgkSyncNotifyPeriodicFenceCount(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID VidPnTargetId,
+    _In_ UINT NotificationId,
+    _In_ UINT64 NotificationCount);
 
 D3DKMT_HANDLE
 DxgkSyncObjectQueryShareHandle(

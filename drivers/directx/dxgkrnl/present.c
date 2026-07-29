@@ -2406,8 +2406,6 @@ DxgkpVSyncWorker(
     Queue = Work->Queue;
     Adapter = Queue->Adapter;
 
-    DxgkSyncAdvancePeriodicFences(Adapter, Queue->VidPnSourceId);
-
     for (;;)
     {
         LONG Pulses = InterlockedExchange(&Queue->PendingVBlanks, 0);
@@ -2416,6 +2414,12 @@ DxgkpVSyncWorker(
         {
             NTSTATUS Status;
 
+            /*
+             * PendingVBlanks deliberately coalesces DPCs into one worker.
+             * A periodic monitored fence is a pulse counter, so advance it
+             * once for every coalesced VBlank rather than once per worker.
+             */
+            DxgkSyncAdvancePeriodicFences(Adapter, Queue->VidPnSourceId);
             do
             {
                 Status = DxgkpProcessPresentQueue(Adapter, Queue->VidPnSourceId);
