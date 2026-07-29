@@ -83,7 +83,7 @@ MiArm64EnsureTablePageMapped(
     }
 
     MiArm64MapKseg0Page(Pfn);
-    return TRUE;
+    return MiArm64ProbeForAccess((PVOID)MI_ARM64_PFN_TO_VA(Pfn), FALSE);
 }
 
 static
