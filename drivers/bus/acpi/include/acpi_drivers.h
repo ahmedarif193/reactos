@@ -33,6 +33,10 @@
 #define CONFIG_ACPI_PCI 1
 #endif
 
+#ifndef CONFIG_ACPI_EC
+#define CONFIG_ACPI_EC 1
+#endif
+
 
 /* --------------------------------------------------------------------------
                                     ACPI Bus
