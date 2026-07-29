@@ -2172,7 +2172,7 @@ typedef struct D3DDDI_MULTIPLANE_OVERLAY_ALLOCATION_INFO
 
 typedef struct D3DDDICB_LOGUMDMARKER
 {
-    HANDLE hContext;    
+    HANDLE hContext;
     UINT64 APISequenceNumber;
     INT Index;
     INT StringIndex;
@@ -2905,13 +2905,13 @@ typedef struct _D3DDDICB_SUBMITCOMMAND
     UINT                        PrivateDriverDataSize;
     UINT                        NumPrimaries;
     D3DKMT_HANDLE               WrittenPrimaries[D3DDDI_MAX_WRITTEN_PRIMARIES];
-    D3DDDI_MARKERLOGTYPE        MarkerLogType;              
-    UINT                        RenderCBSequence;           
-    UINT                        FirstAPISequenceNumberHigh; 
-    UINT                        CompletedAPISequenceNumberLow0Size; 
-    UINT                        CompletedAPISequenceNumberLow1Size; 
-    UINT                        BegunAPISequenceNumberLow0Size; 
-    UINT                        BegunAPISequenceNumberLow1Size; 
+    D3DDDI_MARKERLOGTYPE        MarkerLogType;
+    UINT                        RenderCBSequence;
+    UINT                        FirstAPISequenceNumberHigh;
+    UINT                        CompletedAPISequenceNumberLow0Size;
+    UINT                        CompletedAPISequenceNumberLow1Size;
+    UINT                        BegunAPISequenceNumberLow0Size;
+    UINT                        BegunAPISequenceNumberLow1Size;
     CONST UINT*                 pCompletedAPISequenceNumberLow0;
     CONST UINT*                 pCompletedAPISequenceNumberLow1;
     CONST UINT*                 pBegunAPISequenceNumberLow0;

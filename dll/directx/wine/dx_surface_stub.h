@@ -18,4 +18,3 @@ static inline void dx_zero_pointer(void **object)
     if (object)
         *object = NULL;
 }
-
