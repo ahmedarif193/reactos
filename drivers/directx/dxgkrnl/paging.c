@@ -169,10 +169,250 @@ DxgkPagingOperationSupported(
         case DxgkPagingOpFlushTlb:
         case DxgkPagingOpNotifyResidency:
             return Adapter->MiniportContext != NULL &&
-                   Adapter->MiniportContext->InitData.s.Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_0;
+                   DxgkCapsCoreInterfaceVersionAtLeast(
+                       Adapter->MiniportContext->InitData.s.Version,
+                       DXGK_CAPS_CORE_LEVEL_WDDM_2_0);
         default:
             return FALSE;
     }
+}
+
+/*
+ * DxgkPagingExecuteBatch
+ *
+ * Build an entire set of paging operations before admitting any packet to
+ * the scheduler.  Every operation and every multipass fragment is packed into
+ * one DMA buffer.  A build failure therefore frees an unsubmitted buffer; it
+ * can never leave the caller trying to cancel an earlier packet from the same
+ * residency transaction.
+ *
+ * All operations must target the same paging engine and miniport device,
+ * because the scheduler metadata is attached once to the combined buffer.
+ *
+ * IRQL: PASSIVE_LEVEL
+ */
+NTSTATUS
+DxgkPagingExecuteBatch(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ PDXGKRNL_DEVICE Device,
+    _In_reads_(OperationCount) CONST DXGKRNL_PAGING_OP *Operations,
+    _In_ ULONG OperationCount,
+    _In_reads_opt_(LifetimeAllocationReferenceCount)
+        PDXGKVMM_ALLOCATION const *LifetimeAllocationReferences,
+    _In_ UINT LifetimeAllocationReferenceCount,
+    _In_ D3DKMT_HANDLE hSignalSyncObject,
+    _In_ ULONG64 SignalFenceValue,
+    _Out_opt_ PULONG OutPagingFenceId,
+    _Out_opt_ PBOOLEAN OutQueued)
+{
+    PDXGKRNL_DMA_BUFFER DmaBuffer = NULL;
+    DXGKRNL_TRACK_DMA_ARGS TrackArgs;
+    PUCHAR FinalCursor = NULL;
+    ULONG BufferBytes;
+    ULONG LastFenceId = 0;
+    ULONG OperationIndex;
+    ULONG BytesUsed;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (OutPagingFenceId != NULL)
+        *OutPagingFenceId = 0;
+    if (OutQueued != NULL)
+        *OutQueued = FALSE;
+    if (Adapter == NULL ||
+        Operations == NULL ||
+        OperationCount == 0 ||
+        (LifetimeAllocationReferenceCount != 0 &&
+         LifetimeAllocationReferences == NULL) ||
+        (SIZE_T)LifetimeAllocationReferenceCount >
+            MAXULONG_PTR / sizeof(*LifetimeAllocationReferences))
+        return STATUS_INVALID_PARAMETER;
+    if (Adapter->MiniportDeviceContext == NULL)
+        return STATUS_DEVICE_NOT_READY;
+
+    for (OperationIndex = 0; OperationIndex < OperationCount; ++OperationIndex)
+    {
+        if (!DxgkPagingOperationSupported(Adapter,
+                                          Operations[OperationIndex].Type))
+        {
+            return STATUS_NOT_SUPPORTED;
+        }
+        if (Operations[OperationIndex].NodeOrdinal != Operations[0].NodeOrdinal ||
+            Operations[OperationIndex].EngineOrdinal != Operations[0].EngineOrdinal ||
+            Operations[OperationIndex].hMiniportDevice != Operations[0].hMiniportDevice)
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+    }
+
+    BufferBytes = DxgkpPagingBufferBytes(Adapter);
+    if (OperationCount <= DXGKP_PAGING_MAX_BUFFER_BYTES / PAGE_SIZE)
+    {
+        ULONG Estimate = OperationCount * PAGE_SIZE;
+
+        if (Estimate > BufferBytes)
+            BufferBytes = Estimate;
+    }
+    else
+    {
+        BufferBytes = DXGKP_PAGING_MAX_BUFFER_BYTES;
+    }
+
+    for (;;)
+    {
+        PUCHAR Cursor;
+        PUCHAR End;
+        BOOLEAN RetryLarger = FALSE;
+
+        Status = DxgkAllocateDmaBuffer(Adapter, BufferBytes, &DmaBuffer);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        Cursor = (PUCHAR)DmaBuffer->VirtualAddress;
+        End = Cursor + DmaBuffer->Capacity;
+
+        for (OperationIndex = 0;
+             OperationIndex < OperationCount && !RetryLarger;
+             ++OperationIndex)
+        {
+            ULONG MultipassOffset = 0;
+            ULONG Pass;
+            BOOLEAN Complete = FALSE;
+
+            for (Pass = 0; Pass < DXGKP_PAGING_MAX_PASSES; ++Pass)
+            {
+                DXGKARG_BUILDPAGINGBUFFER BuildArgs;
+                ULONG PreviousMultipassOffset = MultipassOffset;
+                PUCHAR PreviousCursor = Cursor;
+                NTSTATUS BuildStatus;
+
+                RtlZeroMemory(&BuildArgs, sizeof(BuildArgs));
+                BuildArgs.pDmaBuffer = Cursor;
+                BuildArgs.DmaSize = (UINT)(End - Cursor);
+                BuildArgs.MultipassOffset = MultipassOffset;
+                DxgkpPagingFillBuildArgs(&Operations[OperationIndex],
+                                         Pass == 0,
+                                         &BuildArgs);
+
+                if (!DxgkAcquireKmdCall(Adapter))
+                {
+                    Status = STATUS_DELETE_PENDING;
+                    goto Cleanup;
+                }
+                _SEH2_TRY
+                {
+                    BuildStatus =
+                        DXGK_CB_FULL(Adapter, DxgkDdiBuildPagingBuffer)(
+                            Adapter->MiniportDeviceContext,
+                            &BuildArgs);
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    BuildStatus = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+                DxgkReleaseKmdCall(Adapter);
+
+                if (!NT_SUCCESS(BuildStatus) &&
+                    BuildStatus != STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER)
+                {
+                    Status = BuildStatus;
+                    goto Cleanup;
+                }
+                if (BuildArgs.pDmaBuffer == NULL ||
+                    (PUCHAR)BuildArgs.pDmaBuffer < PreviousCursor ||
+                    (PUCHAR)BuildArgs.pDmaBuffer > End)
+                {
+                    Status = STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+                    goto Cleanup;
+                }
+
+                Cursor = (PUCHAR)BuildArgs.pDmaBuffer;
+                MultipassOffset = BuildArgs.MultipassOffset;
+                Complete = NT_SUCCESS(BuildStatus);
+                if (Complete)
+                    break;
+
+                if (Cursor == PreviousCursor &&
+                    MultipassOffset == PreviousMultipassOffset)
+                {
+                    RetryLarger = TRUE;
+                    break;
+                }
+            }
+
+            if (!RetryLarger && !Complete)
+            {
+                Status = STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+                goto Cleanup;
+            }
+        }
+
+        if (!RetryLarger)
+        {
+            FinalCursor = Cursor;
+            break;
+        }
+        DxgkFreeDmaBuffer(DmaBuffer);
+        DmaBuffer = NULL;
+        if (BufferBytes >= DXGKP_PAGING_MAX_BUFFER_BYTES)
+            return STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+        BufferBytes = min(BufferBytes * 2,
+                          (ULONG)DXGKP_PAGING_MAX_BUFFER_BYTES);
+    }
+
+    ASSERT(FinalCursor != NULL);
+    BytesUsed = (ULONG)(FinalCursor - (PUCHAR)DmaBuffer->VirtualAddress);
+    if (BytesUsed == 0)
+    {
+        Status = hSignalSyncObject != 0
+                   ? DxgkSyncObjectGpuRetireSignal(hSignalSyncObject,
+                                                   SignalFenceValue)
+                   : STATUS_SUCCESS;
+        goto Cleanup;
+    }
+
+    DmaBuffer->SubmissionStartOffset = 0;
+    DmaBuffer->SubmissionEndOffset = BytesUsed;
+    RtlZeroMemory(&TrackArgs, sizeof(TrackArgs));
+    TrackArgs.Device = Device;
+    TrackArgs.hSignalSyncObject = hSignalSyncObject;
+    TrackArgs.SignalFenceValue = SignalFenceValue;
+    TrackArgs.LifetimeAllocationReferences =
+        LifetimeAllocationReferences;
+    TrackArgs.LifetimeAllocationReferenceCount =
+        LifetimeAllocationReferenceCount;
+    Status = VidSchSubmitCommandTracked(Adapter,
+                                        Operations[0].NodeOrdinal,
+                                        Operations[0].EngineOrdinal,
+                                        DmaBuffer,
+                                        NULL,
+                                        0,
+                                        NULL,
+                                        0,
+                                        NULL,
+                                        0,
+                                        Operations[0].hMiniportDevice,
+                                        NULL,
+                                        0,
+                                        &TrackArgs,
+                                        VIDSCH_SUBMITFLAG_PAGING,
+                                        0,
+                                        &LastFenceId);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    DmaBuffer = NULL;
+    if (OutPagingFenceId != NULL)
+        *OutPagingFenceId = LastFenceId;
+    if (OutQueued != NULL)
+        *OutQueued = TRUE;
+    return STATUS_SUCCESS;
+
+Cleanup:
+    if (DmaBuffer != NULL)
+        DxgkFreeDmaBuffer(DmaBuffer);
+    return Status;
 }
 
 /*
