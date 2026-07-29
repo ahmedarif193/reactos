@@ -342,6 +342,7 @@
 @ stdcall InbvInstallDisplayStringFilter(ptr)
 @ stdcall InbvIsBootDriverInstalled()
 @ stdcall InbvNotifyDisplayOwnershipLost(ptr)
+@ stdcall InbvQueryDisplayInfo(ptr)
 @ stdcall InbvResetDisplay()
 @ stdcall InbvSetScrollRegion(long long long long)
 @ stdcall InbvSetTextColor(long)
