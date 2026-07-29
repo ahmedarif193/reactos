@@ -20,6 +20,7 @@
 /* GLOBALS ********************************************************************/
 
 CPPORT KdComPort;
+BOOLEAN gdb_breakin_pending;
 BOOLEAN gdb_vctrlc_pending;
 #ifdef KDDEBUG
 CPPORT KdDebugComPort;
@@ -363,28 +364,46 @@ KdpPollByte(OUT PUCHAR OutByte)
     }
 }
 
+#define GDB_RECEIVE_TIMEOUT_US 250000
+
 KDSTATUS
 NTAPI
 KdpReceiveByte(OUT PUCHAR OutByte)
 {
 #if defined(_M_ARM64)
-    while (!EarlyUartGetc(OutByte))
-        __asm__ __volatile__("yield");
+    ULONG64 CounterFrequency;
+    ULONG64 Start;
+    ULONG64 TimeoutTicks;
+    ULONG64 Now;
 
-    return KdPacketReceived;
-#else
-    USHORT CpStatus;
+    /*
+     * Use the architectural counter instead of an MMIO-poll count. The cost
+     * of one UART poll varies greatly between hardware and QEMU, while the
+     * acknowledgement deadline must remain finite in both environments.
+     */
+    __asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(CounterFrequency));
+    __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(Start));
+    TimeoutTicks = (CounterFrequency * GDB_RECEIVE_TIMEOUT_US) / 1000000;
 
     do
     {
-        CpStatus = CpGetByte(&KdComPort, OutByte, TRUE, FALSE);
-    } while (CpStatus == CP_GET_NODATA);
+        if (EarlyUartGetc(OutByte))
+            return KdPacketReceived;
 
-    /* Get the byte */
-    if (CpStatus == CP_GET_SUCCESS)
-    {
+        __asm__ __volatile__("yield");
+        __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(Now));
+    } while ((Now - Start) < TimeoutTicks);
+
+    return KdPacketTimedOut;
+#else
+    /*
+     * A waiting CpGetByte already spins for a bounded time before reporting
+     * that no data arrived, so retrying it here would wait forever whenever no
+     * debugger is listening, and the boot would appear to hang on the very
+     * first packet waiting for an acknowledgement.
+     */
+    if (CpGetByte(&KdComPort, OutByte, TRUE, FALSE) == CP_GET_SUCCESS)
         return KdPacketReceived;
-    }
 
     return KdPacketTimedOut;
 #endif
@@ -397,6 +416,18 @@ KdpPollBreakIn(VOID)
     static const CHAR VCtrlCPayload[] = "vCtrlC";
     ULONG EmptyPolls = 0;
     UCHAR Byte;
+
+    /*
+     * A raw interrupt may arrive while an outgoing packet is waiting for its
+     * acknowledgement. finish_gdb_packet preserves it here instead of losing
+     * the break request as an invalid acknowledgement.
+     */
+    if (gdb_breakin_pending)
+    {
+        gdb_breakin_pending = FALSE;
+        KD_DEBUGGER_NOT_PRESENT = FALSE;
+        return KdPacketReceived;
+    }
 
     while (TRUE)
     {
@@ -412,6 +443,7 @@ KdpPollBreakIn(VOID)
         if (Byte == 0x03)
         {
             GdbPollState = GdbPollIdle;
+            KD_DEBUGGER_NOT_PRESENT = FALSE;
             KDDBGPRINT("BreakIn Polled.\n");
             return KdPacketReceived;
         }
@@ -465,6 +497,7 @@ KdpPollBreakIn(VOID)
                 if (!gdb_no_ack_mode)
                     KdpSendByte('+');
                 gdb_vctrlc_pending = TRUE;
+                KD_DEBUGGER_NOT_PRESENT = FALSE;
                 KDDBGPRINT("vCtrlC BreakIn Polled.\n");
                 return KdPacketReceived;
             }

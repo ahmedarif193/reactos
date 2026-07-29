@@ -15,6 +15,7 @@ FirstSendHandler(
     _In_ PSTRING MessageHeader,
     _In_ PSTRING MessageData);
 static BOOLEAN InException = FALSE;
+static BOOLEAN ReportInitialState;
 
 /* GLOBALS ********************************************************************/
 DBGKD_GET_VERSION64 KdVersion;
@@ -42,6 +43,7 @@ GetContextSendHandler(
 {
     DBGKD_MANIPULATE_STATE64* State = (DBGKD_MANIPULATE_STATE64*)MessageHeader->Buffer;
     const CONTEXT* Context = (const CONTEXT*)MessageData->Buffer;
+    KDSTATUS Status;
 
     if ((PacketType != PACKET_TYPE_KD_STATE_MANIPULATE)
             || (State->ApiNumber != DbgKdGetContextApi)
@@ -54,6 +56,21 @@ GetContextSendHandler(
     /* Just copy it */
     RtlCopyMemory(&CurrentContext, Context, sizeof(*Context));
     KdpSendPacketHandler = NULL;
+
+    /*
+     * The first KD state change bootstraps KDGDB's version and context data.
+     * Report it once that data is complete so an attached RSP client has an
+     * explicit stopped state. If no client acknowledges the report, continue
+     * the KD exchange internally and leave unattended boot unblocked.
+     */
+    if (ReportInitialState)
+    {
+        ReportInitialState = FALSE;
+        Status = gdb_send_exception();
+        if (Status != KdPacketReceived)
+            KdpManipulateStateHandler = ContinueManipulateStateHandler;
+    }
+
     return TRUE;
 }
 
@@ -377,6 +394,7 @@ FirstSendHandler(
     KDDBGPRINT("Pid Tid of the first message: %" PRIxPTR", %" PRIxPTR ".\n", gdb_dbg_pid, gdb_dbg_tid);
 
     /* The next receive call will be asking for the version data */
+    ReportInitialState = TRUE;
     KdpSendPacketHandler = NULL;
     KdpManipulateStateHandler = GetVersionManipulateStateHandler;
     return TRUE;
@@ -412,15 +430,13 @@ KdReceivePacket(
 
     if (PacketType == PACKET_TYPE_KD_POLL_BREAKIN)
     {
-        static BOOLEAN firstTime = TRUE;
+        /*
+         * Only report a break-in when one was really requested. KD decides
+         * whether to stop after loading symbols from the result of this poll,
+         * so claiming one unconditionally would halt every boot waiting for a
+         * debugger that may not be there.
+         */
         KDDBGPRINT("Polling break in.\n");
-        if (firstTime)
-        {
-            /* Force debug break on init */
-            firstTime = FALSE;
-            return KdPacketReceived;
-        }
-
         return KdpPollBreakIn();
     }
 
