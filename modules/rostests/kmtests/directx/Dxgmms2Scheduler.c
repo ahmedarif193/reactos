@@ -287,6 +287,69 @@ TestCompletionDuringOutstandingClaim(
     ok_bool_true(Dxgmms2SchedCoreIsIdle(&State->Core), "the engine drains");
 }
 
+/*
+ * The scheduler packet cookie is opaque caller state.  Watchdog users may
+ * consume the engine/fence snapshot after the provider lock is released, but
+ * must not infer that the returned cookie still names live storage.
+ */
+static VOID
+TestOldestDispatchedOpaqueCookie(
+    _Inout_ PDXGMMS2_SCHED_TEST_STATE State)
+{
+    const ULONGLONG OpaqueCookie = 0xDEADC0DEBAADF00DULL;
+    DXGMMS2_SCHEDULER_ADMIT_INFO_V1 Info;
+    DXGMMS2_SCHEDULER_CLAIM_V1 Claim;
+    PDXGMMS2_SCHED_PACKET Packet;
+    PDXGMMS2_SCHED_PACKET Failed = NULL;
+    PDXGMMS2_SCHED_PACKET Batch[DXGMMS2_SCHED_TEST_BATCH];
+    ULONGLONG OldestCookie = 0;
+    ULONG OldestEngine = 0xFFFFFFFF;
+    ULONG OldestFence = 0;
+    ULONG Fence = 0;
+    NTSTATUS Status;
+
+    Packet = AllocateTestPacket(State);
+    ok(Packet != NULL, "packet pool exhausted\n");
+    if (Packet == NULL)
+        return;
+
+    InitAdmitInfo(&Info, 1, OpaqueCookie, 250);
+    Status = Dxgmms2SchedCoreAdmit(&State->Core, &Info, Packet, &Fence);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    InitClaim(&Claim);
+    ok_bool_true(Dxgmms2SchedCoreClaim(&State->Core, 1, &Claim), "claim opaque-cookie packet");
+    Status = Dxgmms2SchedCorePublishDispatch(&State->Core, 1, Claim.ClaimToken);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = Dxgmms2SchedCoreCompleteDispatch(
+                 &State->Core,
+                 1,
+                 Claim.ClaimToken,
+                 STATUS_SUCCESS,
+                 &Failed);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_pointer(Failed, NULL);
+
+    ok_bool_true(
+        Dxgmms2SchedCoreGetOldestDispatched(
+            &State->Core,
+            &OldestEngine,
+            &OldestFence,
+            &OldestCookie),
+        "provider reports scalar watchdog identity");
+    ok_eq_ulong(OldestEngine, 1UL);
+    ok_eq_ulong(OldestFence, Fence);
+    ok_eq_ulonglong(OldestCookie, OpaqueCookie);
+
+    (VOID)Dxgmms2SchedCoreAbortAll(
+        &State->Core,
+        TRUE,
+        Batch,
+        RTL_NUMBER_OF(Batch));
+}
+
 static VOID
 TestFailedDispatchAndCancellation(
     _Inout_ PDXGMMS2_SCHED_TEST_STATE State)
@@ -622,6 +685,7 @@ START_TEST(Dxgmms2Scheduler)
     TestStartAndAdmissionGate(State);
     TestFifoOrderAndClaimProtocol(State);
     TestCompletionDuringOutstandingClaim(State);
+    TestOldestDispatchedOpaqueCookie(State);
     TestFailedDispatchAndCancellation(State);
     TestAbortRespectsDispatchOwnership(State);
     TestPreemptionResetsDispatchOnly(State);
