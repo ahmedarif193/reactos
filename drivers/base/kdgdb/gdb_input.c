@@ -257,6 +257,35 @@ stream_xfer_data(
 
 static
 VOID
+stream_xml_character(
+    _Inout_ GDB_XFER_STREAM* Stream,
+    _In_ CHAR Character)
+{
+    switch (Character)
+    {
+        case '&':
+            STREAM_XFER_LITERAL(Stream, "&amp;");
+            break;
+        case '<':
+            STREAM_XFER_LITERAL(Stream, "&lt;");
+            break;
+        case '>':
+            STREAM_XFER_LITERAL(Stream, "&gt;");
+            break;
+        case '"':
+            STREAM_XFER_LITERAL(Stream, "&quot;");
+            break;
+        case '\'':
+            STREAM_XFER_LITERAL(Stream, "&apos;");
+            break;
+        default:
+            stream_xfer_data(Stream, &Character, sizeof(Character));
+            break;
+    }
+}
+
+static
+VOID
 stream_library_name(
     _Inout_ GDB_XFER_STREAM* Stream,
     _In_ const UNICODE_STRING* Name)
@@ -282,27 +311,23 @@ stream_library_name(
         }
 
         Character = (CHAR)WideCharacter;
-        switch (Character)
-        {
-            case '&':
-                STREAM_XFER_LITERAL(Stream, "&amp;");
-                break;
-            case '<':
-                STREAM_XFER_LITERAL(Stream, "&lt;");
-                break;
-            case '>':
-                STREAM_XFER_LITERAL(Stream, "&gt;");
-                break;
-            case '"':
-                STREAM_XFER_LITERAL(Stream, "&quot;");
-                break;
-            case '\'':
-                STREAM_XFER_LITERAL(Stream, "&apos;");
-                break;
-            default:
-                stream_xfer_data(Stream, &Character, sizeof(Character));
-                break;
-        }
+        stream_xml_character(Stream, Character);
+    }
+}
+
+static
+VOID
+stream_process_name(
+    _Inout_ GDB_XFER_STREAM* Stream,
+    _In_ PEPROCESS Process)
+{
+    SIZE_T i;
+
+    for (i = 0;
+         i < RTL_NUMBER_OF(Process->ImageFileName) && Process->ImageFileName[i] != ANSI_NULL;
+         i++)
+    {
+        stream_xml_character(Stream, Process->ImageFileName[i]);
     }
 }
 
@@ -350,6 +375,7 @@ VOID
 stream_thread_xml(
     _Inout_ GDB_XFER_STREAM* Stream,
     _In_ PETHREAD Thread,
+    _In_ PEPROCESS Process,
     _In_ BOOLEAN Current)
 {
     CHAR ThreadId[40];
@@ -362,16 +388,24 @@ stream_thread_xml(
                            handle_to_gdb_tid(PsGetThreadId(Thread)));
     if (Length > 0)
         stream_xfer_data(Stream, ThreadId, Length);
+    STREAM_XFER_LITERAL(Stream, "\"");
     if (Current)
     {
         CHAR Core[2 + sizeof(ULONG) * 2 + 1];
 
-        STREAM_XFER_LITERAL(Stream, "\" core=\"");
+        STREAM_XFER_LITERAL(Stream, " core=\"");
         Length = _snprintf(Core, sizeof(Core), "%x", CurrentStateChange.Processor);
         if (Length > 0)
             stream_xfer_data(Stream, Core, Length);
+        STREAM_XFER_LITERAL(Stream, "\"");
     }
-    STREAM_XFER_LITERAL(Stream, "\"/>");
+    if (Process != NULL)
+    {
+        STREAM_XFER_LITERAL(Stream, " name=\"");
+        stream_process_name(Stream, Process);
+        STREAM_XFER_LITERAL(Stream, "\"");
+    }
+    STREAM_XFER_LITERAL(Stream, "/>");
 }
 
 static
@@ -380,14 +414,18 @@ stream_threads_xml(
     _Inout_ GDB_XFER_STREAM* Stream)
 {
     PETHREAD CurrentThread = (PETHREAD)(ULONG_PTR)CurrentStateChange.Thread;
+    PEPROCESS CurrentProcess;
     LIST_ENTRY* ProcessEntry;
 
     STREAM_XFER_LITERAL(Stream, "<?xml version=\"1.0\"?>");
     STREAM_XFER_LITERAL(Stream, "<threads>");
-    stream_thread_xml(Stream, CurrentThread, TRUE);
+    CurrentProcess = CurrentThread->Tcb.Process != NULL
+                         ? CONTAINING_RECORD(CurrentThread->Tcb.Process, EPROCESS, Pcb)
+                         : NULL;
+    stream_thread_xml(Stream, CurrentThread, CurrentProcess, TRUE);
 
     if (TheIdleThread && TheIdleThread != CurrentThread)
-        stream_thread_xml(Stream, TheIdleThread, FALSE);
+        stream_thread_xml(Stream, TheIdleThread, TheIdleProcess, FALSE);
 
     if (ps_initialized())
     {
@@ -411,7 +449,7 @@ stream_threads_xml(
                                            ETHREAD,
                                            ThreadListEntry);
                 if (Thread != CurrentThread && Thread != TheIdleThread)
-                    stream_thread_xml(Stream, Thread, FALSE);
+                    stream_thread_xml(Stream, Thread, Process, FALSE);
             }
         }
     }
