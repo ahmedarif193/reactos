@@ -12,9 +12,7 @@
 #if defined(_M_IX86) || defined(_M_AMD64)
 #include <arch/pc/pcbios.h>
 #endif
-#if defined(_M_ARM) || defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
 #include <reactos/arc/loaderblk.h>
-#endif
 
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(HWDETECT);
@@ -37,6 +35,35 @@ BOOLEAN AcpiPresent = FALSE;
 static EFI_EVENT IdleTimerEvent = NULL;
 
 /* FUNCTIONS *****************************************************************/
+
+PVOID
+UefiGetSmbiosEpsPointer(VOID)
+{
+    EFI_GUID Smbios3Guid = SMBIOS3_TABLE_GUID;
+    UINTN Index;
+
+    if (!GlobalSystemTable)
+        return NULL;
+
+    for (Index = 0; Index < GlobalSystemTable->NumberOfTableEntries; ++Index)
+    {
+        EFI_CONFIGURATION_TABLE *Entry = &GlobalSystemTable->ConfigurationTable[Index];
+
+        if (!memcmp(&Entry->VendorGuid, &Smbios3Guid, sizeof(EFI_GUID)))
+        {
+            PSMBIOS3_ENTRY_POINT Entry3 = (PSMBIOS3_ENTRY_POINT)Entry->VendorTable;
+
+            if (Entry3 &&
+                (memcmp(Entry3->Anchor, "_SM3_", sizeof(Entry3->Anchor)) == 0) &&
+                (Entry3->TableAddress != 0))
+            {
+                return Entry->VendorTable;
+            }
+        }
+    }
+
+    return NULL;
+}
 
 #if defined(_M_ARM) || defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
 
@@ -93,35 +120,6 @@ UefiSmbiosNextStructure(
         return NULL;
 
     return (PSMBIOS_HEADER)(String + 2);
-}
-
-PVOID
-UefiGetSmbiosEpsPointer(VOID)
-{
-    EFI_GUID Smbios3Guid = SMBIOS3_TABLE_GUID;
-    UINTN Index;
-
-    if (!GlobalSystemTable)
-        return NULL;
-
-    for (Index = 0; Index < GlobalSystemTable->NumberOfTableEntries; ++Index)
-    {
-        EFI_CONFIGURATION_TABLE *Entry = &GlobalSystemTable->ConfigurationTable[Index];
-
-        if (!memcmp(&Entry->VendorGuid, &Smbios3Guid, sizeof(EFI_GUID)))
-        {
-            PSMBIOS3_ENTRY_POINT Entry3 = (PSMBIOS3_ENTRY_POINT)Entry->VendorTable;
-
-            if (Entry3 &&
-                (memcmp(Entry3->Anchor, "_SM3_", sizeof(Entry3->Anchor)) == 0) &&
-                (Entry3->TableAddress != 0))
-            {
-                return Entry->VendorTable;
-            }
-        }
-    }
-
-    return NULL;
 }
 
 static
