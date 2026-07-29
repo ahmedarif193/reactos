@@ -12,6 +12,7 @@ add_subdirectory(dxgmms1)
 add_subdirectory(dxgmms2)
 add_subdirectory(dxgkrnl)
 add_subdirectory(softgpu)   # basic-display fallback WDDM miniport (yields to real drivers, drives dxgkrnl)
-if((ARCH STREQUAL "arm64") AND RPI_SUPPORT)
+if((REACTOS_WDDM_TARGET_LEVEL GREATER_EQUAL 2000) AND
+   (ARCH STREQUAL "arm64") AND RPI_SUPPORT)
     add_subdirectory(rpi5vc4)  # Raspberry Pi 5 (BCM2712 HVS) WDDM2 display-only miniport
 endif()

@@ -22,6 +22,11 @@ endif()
 
 if(ARCH STREQUAL "arm64")
     add_registry_inf(hivesys_arm64.inf)
+    if(RPI_SUPPORT AND
+       (REACTOS_USE_XPDM OR
+        (REACTOS_USE_WDDM AND (REACTOS_WDDM_TARGET_LEVEL GREATER_EQUAL 2000))))
+        add_registry_inf(hivesys_rpi5.inf)
+    endif()
 elseif(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
     add_registry_inf(hivesys_x86.inf)
 endif()

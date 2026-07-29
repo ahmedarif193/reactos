@@ -13,11 +13,9 @@ add_definitions(-D_WIN32_WINNT=0x0601 -DWINVER=0x0601)
 add_definitions(-DNTDDI_VERSION=0x06010000)    # NTDDI_WIN7
 
 remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
-# WDDM 3.0 (0xF003), not 0x11007.  0x11007 is not a value Windows uses -- the
-# real WDDM 3.2 selector is 0x11005 -- and a miniport declaring an unknown
-# version is rejected by the port driver before anything else is looked at.
-# 0xF003 is what the shipping Win11 ARM64 viogpudo.sys declares, so it is known
-# to be accepted by a real dxgkrnl.
+# Compile with WDDM 3.0 declarations needed by the source. This is a header
+# surface, not the miniport's advertised level: DriverEntry deliberately
+# declares only the WDDM 2.0 callback/behavior contract it implements.
 add_definitions(-DDXGKDDI_INTERFACE_VERSION=0xF003)
 
 list(APPEND SOURCE
