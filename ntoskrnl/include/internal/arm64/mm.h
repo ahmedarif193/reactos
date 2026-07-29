@@ -295,9 +295,8 @@ typedef struct DECLSPEC_CACHEALIGN _MI_ARM64_PFN_LOCK_DEPTH
 extern MI_ARM64_PFN_LOCK_DEPTH MiArm64PfnLockDepth[];
 
 VOID
-MiArm64AccountUserLeafPteCount(
-    _In_ PFN_NUMBER PteFrame,
-    _In_ ULONG NewUsedEntries);
+MiArm64IncrementUserLeafPteCount(
+    _In_ PFN_NUMBER PteFrame);
 
 NTSTATUS
 MiArm64AllocateCleanPage(
@@ -310,10 +309,6 @@ MiArm64EnsureUserPte(
     _In_ PVOID Address,
     _Outptr_ PMMPTE *PointerPte,
     _Out_opt_ PPFN_NUMBER L3TablePfn);
-
-VOID
-MiArm64IncrementUserPageTableReferences(
-    _In_ PVOID Address);
 
 typedef struct _MI_ARM64_USER_PTE_WALK
 {

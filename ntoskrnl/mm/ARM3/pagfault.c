@@ -2133,6 +2133,9 @@ MmArmAccessFault(IN ULONG FaultCode,
     ULONG ProtectionCode;
     PMMVAD Vad = NULL;
     PFN_NUMBER PageFrameIndex;
+#if defined(_M_ARM64)
+    PFN_NUMBER Arm64UserPteFrame = 0;
+#endif
     ULONG Color;
     BOOLEAN IsSessionAddress;
     PMMPFN Pfn1;
@@ -2576,7 +2579,8 @@ UserFault:
 #if defined(_M_ARM64)
     if ((ULONG_PTR)Address < (ULONG_PTR)MmSystemRangeStart)
     {
-        PMMPTE Arm64PointerPte = MiArm64UserPteKseg0(Address);
+        PMMPTE Arm64PointerPte = MiArm64UserPteKseg0ForPfn(Address,
+                                                          &Arm64UserPteFrame);
         if (Arm64PointerPte == NULL)
         {
             ProtoPte = MiCheckVirtualAddress(Address, &ProtectionCode, &Vad);
@@ -2586,7 +2590,10 @@ UserFault:
                 return STATUS_ACCESS_VIOLATION;
             }
 
-            Status = MiArm64EnsureUserPte(CurrentProcess, Address, &Arm64PointerPte, NULL);
+            Status = MiArm64EnsureUserPte(CurrentProcess,
+                                          Address,
+                                          &Arm64PointerPte,
+                                          &Arm64UserPteFrame);
             if (!NT_SUCCESS(Status))
             {
                 goto ExitUser;
@@ -2907,7 +2914,8 @@ Arm64UserLeafReady:
         {
             /* Add an additional page table reference */
 #if defined(_M_ARM64)
-            MiArm64IncrementUserPageTableReferences(Address);
+            ASSERT(Arm64UserPteFrame != 0);
+            MiArm64IncrementUserLeafPteCount(Arm64UserPteFrame);
 #else
             MiIncrementPageTableReferences(Address);
 #endif
