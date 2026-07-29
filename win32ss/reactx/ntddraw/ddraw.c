@@ -44,6 +44,20 @@ DxDdStartupDxGraphics(  ULONG ulc1,
 
     NTSTATUS Status = STATUS_PROCEDURE_NOT_FOUND;
 
+#if defined(REACTOS_GRAPHICS_DRIVER_MODEL_WDDM)
+    /* The XDDM DirectX kernel (dxg.sys) was removed in Windows 8; a WDDM
+     * build keeps gpDxFuncs empty so every legacy Dd DDI reports
+     * DDHAL_DRIVER_NOTHANDLED and user mode stays on the D3DKMT path. */
+    UNREFERENCED_PARAMETER(ulc1);
+    UNREFERENCED_PARAMETER(DxEngDrvOld);
+    UNREFERENCED_PARAMETER(ulc2);
+    UNREFERENCED_PARAMETER(DxgDrvOld);
+    UNREFERENCED_PARAMETER(DirectDrawContext);
+    UNREFERENCED_PARAMETER(Proc);
+    DPRINT("DxDdStartupDxGraphics: WDDM build, legacy dxg.sys path disabled\n");
+    return STATUS_SUCCESS;
+#else
+
     /* FIXME: Setup of gaEngFuncs driver export list
      * but not in this api, we can add it here tempary until we figout where
      * no code have been writen for it yet
@@ -115,6 +129,7 @@ DxDdStartupDxGraphics(  ULONG ulc1,
 
     /* Return the status */
     return Status;
+#endif
 }
 
 /************************************************************************/

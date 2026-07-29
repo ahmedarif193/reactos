@@ -356,6 +356,10 @@ PDEVOBJ_bEnableDirectDraw(
     PGD_DXDDENABLEDIRECTDRAW pfnDdEnableDirectDraw = (PGD_DXDDENABLEDIRECTDRAW)gpDxFuncs[DXG_INDEX_DxDdEnableDirectDraw].pfn;
     BOOL Success;
 
+    /* Without the legacy DirectX kernel there is nothing to enable. */
+    if (pfnDdEnableDirectDraw == NULL)
+        return TRUE;
+
     /* Enable DirectDraw */
     TRACE("DxDdEnableDirectDraw(ppdev %p)\n", ppdev);
     Success = pfnDdEnableDirectDraw((HDEV)ppdev, TRUE);
@@ -370,6 +374,9 @@ PDEVOBJ_vResumeDirectDraw(
 {
     PGD_DXDDRESUMEDIRECTDRAW pfnDdResumeDirectDraw = (PGD_DXDDRESUMEDIRECTDRAW)gpDxFuncs[DXG_INDEX_DxDdResumeDirectDraw].pfn;
 
+    if (pfnDdResumeDirectDraw == NULL)
+        return;
+
     /* Resume DirectDraw after mode change */
     TRACE("DxDdResumeDirectDraw(ppdev %p)\n", ppdev);
     pfnDdResumeDirectDraw((HDEV)ppdev, 0);
@@ -380,6 +387,9 @@ PDEVOBJ_vSuspendDirectDraw(
     _Inout_ PPDEVOBJ ppdev)
 {
     PGD_DXDDSUSPENDDIRECTDRAW pfnDdSuspendDirectDraw = (PGD_DXDDSUSPENDDIRECTDRAW)gpDxFuncs[DXG_INDEX_DxDdSuspendDirectDraw].pfn;
+
+    if (pfnDdSuspendDirectDraw == NULL)
+        return;
 
     /* Suspend DirectDraw for mode change */
     TRACE("DxDdSuspendDirectDraw(ppdev %p)\n", ppdev);
@@ -392,6 +402,9 @@ PDEVOBJ_vSwitchDirectDraw(
     _Inout_ PPDEVOBJ ppdev2)
 {
     PGD_DXDDDYNAMICMODECHANGE pfnDdDynamicModeChange = (PGD_DXDDDYNAMICMODECHANGE)gpDxFuncs[DXG_INDEX_DxDdDynamicModeChange].pfn;
+
+    if (pfnDdDynamicModeChange == NULL)
+        return;
 
     /* Switch DirectDraw instances between the PDEVs */
     TRACE("DxDdDynamicModeChange(ppdev %p, ppdev2 %p)\n", ppdev, ppdev2);
