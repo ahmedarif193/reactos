@@ -10,19 +10,23 @@ spec2def(kernel32_vista.dll kernel32_vista.spec ADD_IMPORTLIB)
 list(APPEND SOURCE
     EnumSystemLocalesEx.c
     firmware.c
+    GetActiveProcessorCount.c
     GetLocaleInfoEx.c
     GetFileInformationByHandleEx.c
     GetFinalPathNameByHandle.c
     GetLogicalProcessorInformationEx.c
     GetNamedPipeClientProcessId.c
+    GetProcessGroupAffinity.c
     GetTickCount64.c
     GetUserDefaultLocaleName.c
     InitOnce.c
     IsValidLocaleName.c
     LCIDToLocaleName.c
     LocaleNameToLCID.c
+    SetFileInformationByHandle.c
     sync.c
     ThreadDescription.c
+    ThreadGroupAffinity.c
     threadpool.c
     vista.c)
 
