@@ -51,6 +51,7 @@
 
 #include "dxgkrnl_private.h"
 #include "handles.h"
+#include "residency_core.h"
 #include "vidmm.h"
 #include "vidmm_worker_drain_core.h"
 #include "vidsch.h"
@@ -71,7 +72,9 @@
 
 /* Forward declaration — defined later in this file. */
 static NTSTATUS DxgkpVidMmReleaseApertureMapping(_In_ PDXGKVMM_ALLOCATION Allocation, _In_ BOOLEAN ForceInvalidate);
-static NTSTATUS DxgkpVidMmEnsureAllocationApertureMappedLocked(_In_ PDXGKVMM_ALLOCATION Allocation);
+static NTSTATUS DxgkpVidMmPrepareAllocationApertureMappingOwned(_In_ PDXGKVMM_ALLOCATION Allocation);
+static NTSTATUS DxgkpVidMmFillAperturePagingOperation(_In_ PDXGKVMM_ALLOCATION Allocation, _In_ BOOLEAN Map, _Out_ PDXGKRNL_PAGING_OP Op);
+static NTSTATUS DxgkpVidMmLockResidencyForExternalOperation(_In_ PDXGKVMM_ALLOCATION Allocation);
 static VOID DxgkpVidMmReleaseSegmentPlacement(_In_ PDXGKVMM_ALLOCATION Allocation);
 static VOID DxgkpVidMmFinalizeAllocation(_In_ PDXGKVMM_ALLOCATION Allocation);
 static VOID DxgkpVidMmFinalizeResource(_In_ PDXGKVMM_RESOURCE Resource);
@@ -296,7 +299,9 @@ FORCEINLINE
 VIDMM_BUDGET_GROUP
 VidMmSegmentBudgetGroup(_In_ PDXGKRNL_ADAPTER Adapter, _In_ CONST PDXGKRNL_SEGMENT Segment)
 {
-    if (Adapter->MiniportContext->InitData.s.Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+    if (DxgkCapsCoreInterfaceVersionAtLeast(
+            Adapter->MiniportContext->InitData.s.Version,
+            DXGK_CAPS_CORE_LEVEL_WDDM_2_0))
     {
         if (Segment->Flags.LocalBudgetGroup)
             return VidMmBudgetGroupLocal;
@@ -406,6 +411,7 @@ DxgkpVidMmReleaseAllocationSnapshot(
 static NTSTATUS
 DxgkpVidMmCaptureAdapterAllocations(
     _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ BOOLEAN IncludeDestroyBatches,
     _Out_ PDXGKVMM_ALLOCATION_SNAPSHOT Snapshot)
 {
     PLIST_ENTRY Entry;
@@ -428,22 +434,25 @@ DxgkpVidMmCaptureAdapterAllocations(
     }
     ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
 
-    ExAcquireFastMutex(&DxgkVidMmDestroyBatchListLock);
-    for (Entry = DxgkVidMmDestroyBatchListHead.Flink; Entry != &DxgkVidMmDestroyBatchListHead; Entry = Entry->Flink)
+    if (IncludeDestroyBatches)
     {
-        PDXGKVMM_DESTROY_BATCH Batch = CONTAINING_RECORD(Entry, DXGKVMM_DESTROY_BATCH, QuarantineEntry);
-        UINT Index;
-
-        if (Batch->Adapter != Adapter || InterlockedCompareExchange(&Batch->Listed, 0, 0) == 0)
-            continue;
-        BatchCapacity++;
-        for (Index = 0; Index < Batch->AllocationCount; ++Index)
+        ExAcquireFastMutex(&DxgkVidMmDestroyBatchListLock);
+        for (Entry = DxgkVidMmDestroyBatchListHead.Flink; Entry != &DxgkVidMmDestroyBatchListHead; Entry = Entry->Flink)
         {
-            if (Batch->Allocations[Index] != NULL && Batch->Allocations[Index]->BackingAllocation == NULL)
-                EntryCapacity++;
+            PDXGKVMM_DESTROY_BATCH Batch = CONTAINING_RECORD(Entry, DXGKVMM_DESTROY_BATCH, QuarantineEntry);
+            UINT Index;
+
+            if (Batch->Adapter != Adapter || InterlockedCompareExchange(&Batch->Listed, 0, 0) == 0)
+                continue;
+            BatchCapacity++;
+            for (Index = 0; Index < Batch->AllocationCount; ++Index)
+            {
+                if (Batch->Allocations[Index] != NULL && Batch->Allocations[Index]->BackingAllocation == NULL)
+                    EntryCapacity++;
+            }
         }
+        ExReleaseFastMutex(&DxgkVidMmDestroyBatchListLock);
     }
-    ExReleaseFastMutex(&DxgkVidMmDestroyBatchListLock);
 
     if (EntryCapacity > MAXULONG_PTR / sizeof(*Snapshot->Entries) || BatchCapacity > MAXULONG_PTR / sizeof(*Snapshot->Batches))
         return STATUS_INTEGER_OVERFLOW;
@@ -489,40 +498,43 @@ DxgkpVidMmCaptureAdapterAllocations(
         return Status;
     }
 
-    ExAcquireFastMutex(&DxgkVidMmDestroyBatchListLock);
-    for (Entry = DxgkVidMmDestroyBatchListHead.Flink; Entry != &DxgkVidMmDestroyBatchListHead; Entry = Entry->Flink)
+    if (IncludeDestroyBatches)
     {
-        PDXGKVMM_DESTROY_BATCH Batch = CONTAINING_RECORD(Entry, DXGKVMM_DESTROY_BATCH, QuarantineEntry);
-        UINT Index;
-
-        if (Batch->Adapter != Adapter || InterlockedCompareExchange(&Batch->Listed, 0, 0) == 0)
-            continue;
-        if (Snapshot->BatchCount == BatchCapacity)
+        ExAcquireFastMutex(&DxgkVidMmDestroyBatchListLock);
+        for (Entry = DxgkVidMmDestroyBatchListHead.Flink; Entry != &DxgkVidMmDestroyBatchListHead; Entry = Entry->Flink)
         {
-            Status = STATUS_RETRY;
-            break;
-        }
-        InterlockedIncrement(&Batch->LifetimeReferenceCount);
-        Snapshot->Batches[Snapshot->BatchCount++] = Batch;
-        for (Index = 0; Index < Batch->AllocationCount; ++Index)
-        {
-            PDXGKVMM_ALLOCATION Allocation = Batch->Allocations[Index];
+            PDXGKVMM_DESTROY_BATCH Batch = CONTAINING_RECORD(Entry, DXGKVMM_DESTROY_BATCH, QuarantineEntry);
+            UINT Index;
 
-            if (Allocation == NULL || Allocation->BackingAllocation != NULL || DxgkpVidMmSnapshotContains(Snapshot, Allocation))
+            if (Batch->Adapter != Adapter || InterlockedCompareExchange(&Batch->Listed, 0, 0) == 0)
                 continue;
-            if (Snapshot->EntryCount == EntryCapacity)
+            if (Snapshot->BatchCount == BatchCapacity)
             {
                 Status = STATUS_RETRY;
                 break;
             }
-            Snapshot->Entries[Snapshot->EntryCount].Allocation = Allocation;
-            Snapshot->Entries[Snapshot->EntryCount].ReferenceHeld = FALSE;
-            Snapshot->EntryCount++;
+            InterlockedIncrement(&Batch->LifetimeReferenceCount);
+            Snapshot->Batches[Snapshot->BatchCount++] = Batch;
+            for (Index = 0; Index < Batch->AllocationCount; ++Index)
+            {
+                PDXGKVMM_ALLOCATION Allocation = Batch->Allocations[Index];
+
+                if (Allocation == NULL || Allocation->BackingAllocation != NULL || DxgkpVidMmSnapshotContains(Snapshot, Allocation))
+                    continue;
+                if (Snapshot->EntryCount == EntryCapacity)
+                {
+                    Status = STATUS_RETRY;
+                    break;
+                }
+                Snapshot->Entries[Snapshot->EntryCount].Allocation = Allocation;
+                Snapshot->Entries[Snapshot->EntryCount].ReferenceHeld = FALSE;
+                Snapshot->EntryCount++;
+            }
+            if (!NT_SUCCESS(Status))
+                break;
         }
-        if (!NT_SUCCESS(Status))
-            break;
+        ExReleaseFastMutex(&DxgkVidMmDestroyBatchListLock);
     }
-    ExReleaseFastMutex(&DxgkVidMmDestroyBatchListLock);
     if (!NT_SUCCESS(Status))
         DxgkpVidMmReleaseAllocationSnapshot(Snapshot);
     return Status;
@@ -545,8 +557,10 @@ DxgkpVidMmInitializeAllocationLifetime(
     Allocation->ImplicitResidencyReference = TRUE;
     InitializeListHead(&Allocation->ResidencyReferenceList);
     Allocation->SubmissionResidencyPinCount = 0;
+    Allocation->ResidencyTransactionOwner = NULL;
     KeInitializeEvent(&Allocation->ReferencesDrainedEvent, NotificationEvent, FALSE);
     KeInitializeEvent(&Allocation->LogicalReferencesDrainedEvent, NotificationEvent, FALSE);
+    KeInitializeEvent(&Allocation->ResidencyTransactionEvent, NotificationEvent, TRUE);
 }
 
 static VOID
@@ -817,19 +831,22 @@ DxgkpVidMmCreateSystemAllocation(
     _In_      PDXGKRNL_ADAPTER     Adapter,
     _In_opt_  PDXGKRNL_DEVICE      Device,
     _In_      DXGK_ALLOCATIONINFO *AllocInfo,
-    _Out_     PHANDLE              OutHandle)
+    _Out_     PHANDLE              OutHandle,
+    _Out_     PDXGKVMM_ALLOCATION *OutAllocation)
 {
     PDXGKVMM_ALLOCATION Alloc;
     SIZE_T AllocSize;
     SIZE_T PitchAlignedSize = 0;
 
     if (Adapter == NULL || AllocInfo == NULL || OutHandle == NULL ||
+        OutAllocation == NULL ||
         AllocInfo->Size == 0)
     {
         return STATUS_INVALID_PARAMETER;
     }
 
     *OutHandle = NULL;
+    *OutAllocation = NULL;
 
     DxgkpVidMmEnsureGlobalsInitialized();
 
@@ -920,6 +937,8 @@ DxgkpVidMmCreateSystemAllocation(
     DxgkpVidMmTrackBacking(Adapter);
     ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
     InsertTailList(&DxgkVidMmAllocationListHead, &Alloc->GlobalAllocationEntry);
+    InterlockedIncrement(&Alloc->ReferenceCount);
+    *OutAllocation = Alloc;
     ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
 
     AllocInfo->hAllocation = NULL;
@@ -1620,7 +1639,9 @@ DxgkVidMmQueryAllocationResidencyStates(
 
         if (Allocation == NULL)
             return STATUS_INVALID_PARAMETER;
-        (VOID)KeWaitForSingleObject(&Allocation->ResidencyLock, Executive, KernelMode, FALSE, NULL);
+        Status = DxgkpVidMmLockResidencyForExternalOperation(Allocation);
+        if (!NT_SUCCESS(Status))
+            break;
         Adapter = Allocation->Adapter;
         if (!Allocation->Resident)
             ResidencyStates[Index] = D3DKMT_ALLOCATIONRESIDENCYSTATUS_NOTRESIDENT;
@@ -2416,6 +2437,29 @@ DxgkpVidMmReleaseSystemBacking(
 }
 
 static VOID
+DxgkpVidMmDrainResidencyReferences(
+    _In_ PDXGKVMM_ALLOCATION Allocation)
+{
+    PLIST_ENTRY Entry;
+    NTSTATUS Status;
+
+    Status = DxgkpVidMmLockResidencyForExternalOperation(Allocation);
+    if (!NT_SUCCESS(Status))
+        return;
+    while (!IsListEmpty(&Allocation->ResidencyReferenceList))
+    {
+        PDXGKVMM_RESIDENCY_REF Ref;
+
+        Entry = RemoveHeadList(&Allocation->ResidencyReferenceList);
+        Ref = CONTAINING_RECORD(Entry, DXGKVMM_RESIDENCY_REF, Entry);
+        ExFreePoolWithTag(Ref, TAG_VIDMM_ALLOC);
+    }
+    Allocation->ImplicitResidencyReference = FALSE;
+    InterlockedExchange(&Allocation->ResidencyReferenceCount, 0);
+    KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+}
+
+static VOID
 DxgkpVidMmFinalizeAllocation(
     _In_ PDXGKVMM_ALLOCATION Allocation)
 {
@@ -2427,6 +2471,17 @@ DxgkpVidMmFinalizeAllocation(
     ASSERT(InterlockedCompareExchange(&Allocation->ReferenceCount, 0, 0) == 0);
     ASSERT(InterlockedCompareExchange(&Allocation->LogicalReferenceCount, 0, 0) == 0);
     ASSERT(!DxgkSubmissionResidencyPinIsHeld(&Allocation->SubmissionResidencyPinCount));
+    ASSERT(InterlockedCompareExchangePointer(
+               &Allocation->ResidencyTransactionOwner,
+               NULL,
+               NULL) == NULL);
+
+    /*
+     * Destroy is legal even if user mode did not balance every MakeResident
+     * with Evict.  Residency entries contain raw device identities, so neither
+     * their storage nor those identities may survive allocation finalization.
+     */
+    DxgkpVidMmDrainResidencyReferences(Allocation);
 
     if (Allocation->BackingAllocation != NULL)
     {
@@ -2815,8 +2870,13 @@ DxgkVidMmInitializeAdapter(
      * zeroed AGP aperture input because the AGP/GART service is unavailable;
      * pSegmentDescriptor == NULL tells the miniport to write only NbSegment.
      * ----------------------------------------------------------------------- */
-    UsingSeg4 = (Adapter->MiniportContext->InitData.s.Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_0);
-    UsingSeg3 = (!UsingSeg4 && Adapter->MiniportContext->InitData.s.Version >= DXGKDDI_INTERFACE_VERSION_WIN8);
+    UsingSeg4 = DxgkCapsCoreInterfaceVersionAtLeast(
+        Adapter->MiniportContext->InitData.s.Version,
+        DXGK_CAPS_CORE_LEVEL_WDDM_2_0);
+    UsingSeg3 = !UsingSeg4 &&
+                DxgkCapsCoreInterfaceVersionAtLeast(
+                    Adapter->MiniportContext->InitData.s.Version,
+                    DXGK_CAPS_CORE_LEVEL_WDDM_1_2);
 
     RtlZeroMemory(&SegOut, sizeof(SegOut));
     RtlZeroMemory(&SegOut3, sizeof(SegOut3));
@@ -3028,7 +3088,7 @@ DxgkVidMmInitializeAdapter(
         else
             VIDMM_READ_SEGMENT_DESC(DXGK_SEGMENTDESCRIPTOR);
 
-        if (Seg->Size == 0 || (VidMmSegmentIsAperture(Seg) ? (Seg->CommitLimit > Seg->Size || Seg->Flags.PopulatedFromSystemMemory) : Seg->CommitLimit != Seg->Size) || (Seg->Flags.LocalBudgetGroup && Seg->Flags.NonLocalBudgetGroup) || (Seg->Flags.Agp && Seg->Flags.Value != (1UL << 1)) || (Adapter->MiniportContext->InitData.s.Version <= DXGKDDI_INTERFACE_VERSION_WDDM2_0 && Seg->Flags.Reserved != 0))
+        if (Seg->Size == 0 || (VidMmSegmentIsAperture(Seg) ? (Seg->CommitLimit > Seg->Size || Seg->Flags.PopulatedFromSystemMemory) : Seg->CommitLimit != Seg->Size) || (Seg->Flags.LocalBudgetGroup && Seg->Flags.NonLocalBudgetGroup) || (Seg->Flags.Agp && Seg->Flags.Value != (1UL << 1)) || (DxgkCapsCoreInterfaceVersionInRange(Adapter->MiniportContext->InitData.s.Version, DXGK_CAPS_CORE_LEVEL_WDDM_1_0, DXGK_CAPS_CORE_LEVEL_WDDM_2_0) && Seg->Flags.Reserved != 0))
         {
             DPRINT1("DxgkVidMmInitializeAdapter: invalid segment %lu size=0x%I64x commit=0x%I64x flags=0x%lx\n", i, Seg->Size, Seg->CommitLimit, Seg->Flags.Value);
             Status = STATUS_DEVICE_CONFIGURATION_ERROR;
@@ -3517,8 +3577,8 @@ DxgkpVidMmRollbackMiniportAllocation(
     return Status;
 }
 
-NTSTATUS
-DxgkVidMmCreateAllocation(
+static NTSTATUS
+DxgkpVidMmCreateAllocationTracked(
     _In_      PDXGKRNL_ADAPTER         Adapter,
     _In_opt_  PDXGKRNL_DEVICE          Device,
     _In_      DXGK_ALLOCATIONINFO     *AllocInfo,
@@ -3527,7 +3587,8 @@ DxgkVidMmCreateAllocation(
     _In_opt_  HANDLE                   ResourceHandle,
     _In_      DXGK_CREATEALLOCATIONFLAGS CreateFlags,
     _Out_     PHANDLE                  OutHandle,
-    _Out_opt_ PHANDLE                  OutResourceHandle)
+    _Out_opt_ PHANDLE                  OutResourceHandle,
+    _Out_opt_ PDXGKVMM_ALLOCATION     *OutAllocation)
 {
     NTSTATUS                    Status;
     DXGKARG_CREATEALLOCATION    CreateArgs;
@@ -3546,6 +3607,8 @@ DxgkVidMmCreateAllocation(
            AllocInfo ? AllocInfo->Size : 0,
            AllocInfo ? AllocInfo->Alignment : 0);
 
+    if (OutAllocation != NULL)
+        *OutAllocation = NULL;
     if (Adapter == NULL || AllocInfo == NULL || OutHandle == NULL)
         return STATUS_INVALID_PARAMETER;
     *OutHandle = NULL;
@@ -3867,6 +3930,11 @@ DxgkVidMmCreateAllocation(
     DxgkpVidMmTrackBacking(Adapter);
     ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
     InsertTailList(&DxgkVidMmAllocationListHead, &Alloc->GlobalAllocationEntry);
+    if (OutAllocation != NULL)
+    {
+        InterlockedIncrement(&Alloc->ReferenceCount);
+        *OutAllocation = Alloc;
+    }
     ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
 
     *OutHandle = (HANDLE)(ULONG_PTR)Alloc->Handle;
@@ -3921,6 +3989,30 @@ FailMiniportAllocation:
     if (KmdTransactionStarted)
         DxgkEndKmdTransaction(Adapter);
     return Status;
+}
+
+NTSTATUS
+DxgkVidMmCreateAllocation(
+    _In_      PDXGKRNL_ADAPTER         Adapter,
+    _In_opt_  PDXGKRNL_DEVICE          Device,
+    _In_      DXGK_ALLOCATIONINFO     *AllocInfo,
+    _In_opt_  CONST VOID              *CreatePrivateDriverData,
+    _In_      UINT                     CreatePrivateDriverDataSize,
+    _In_opt_  HANDLE                   ResourceHandle,
+    _In_      DXGK_CREATEALLOCATIONFLAGS CreateFlags,
+    _Out_     PHANDLE                  OutHandle,
+    _Out_opt_ PHANDLE                  OutResourceHandle)
+{
+    return DxgkpVidMmCreateAllocationTracked(Adapter,
+                                             Device,
+                                             AllocInfo,
+                                             CreatePrivateDriverData,
+                                             CreatePrivateDriverDataSize,
+                                             ResourceHandle,
+                                             CreateFlags,
+                                             OutHandle,
+                                             OutResourceHandle,
+                                             NULL);
 }
 
 
@@ -4556,6 +4648,18 @@ DxgkpVidMmForceQuarantinedDestroyBatches(
         PDXGKVMM_DESTROY_BATCH Batch = CONTAINING_RECORD(Entry, DXGKVMM_DESTROY_BATCH, QuarantineEntry);
         UINT Index;
 
+        /*
+         * A GPUVA flush failure deliberately retains the logical handle
+         * references so its backing cannot be recycled while stale hardware
+         * translations may exist.  This force path runs at the adapter-stop
+         * boundary; dropping the references here is therefore the first safe
+         * point at which those tombstones may proceed to local finalization.
+         * The drop is idempotent for all other quarantined batches.
+         */
+        for (Index = 0; Index < Batch->AllocationCount; ++Index)
+            DxgkpVidMmDropLogicalHandleReference(Batch->Allocations[Index]);
+        for (Index = 0; Index < Batch->AllocationCount; ++Index)
+            KeWaitForSingleObject(&Batch->Allocations[Index]->LogicalReferencesDrainedEvent, Executive, KernelMode, FALSE, NULL);
         if (!DxgkpVidMmTryCommitDestroyBatch(Batch))
             continue;
         Batch->ForceLocalRelease = TRUE;
@@ -4774,14 +4878,61 @@ DxgkpVidMmDestroyAllocationList(
         return Status;
     }
 
+    /*
+     * Clear every GPUVA binding before dropping the logical handle references.
+     * GpuVaInvalidateAllocation batches page-table notifications while it owns
+     * GpuVaLock; flush each distinct process after the full batch is invalidated
+     * and before any allocation backing can reach finalization.  A failed
+     * hardware invalidation leaves the batch as registered tombstones with its
+     * logical handle references intact.  Only the adapter-stop force path may
+     * release those references, after hardware access has ceased.
+     */
     for (Index = 0; Index < AllocationCount; ++Index)
     {
         PDXGKRNL_PROCESS Process = Batch->Allocations[Index]->Device != NULL ? Batch->Allocations[Index]->Device->ProcessRecord : NULL;
 
         if (Process != NULL)
             DxgkGpuVaInvalidateAllocation(Adapter, Process, Batch->Allocations[Index]);
-        DxgkpVidMmDropLogicalHandleReference(Batch->Allocations[Index]);
     }
+    for (Index = 0; Index < AllocationCount; ++Index)
+    {
+        PDXGKRNL_PROCESS Process = Batch->Allocations[Index]->Device != NULL ? Batch->Allocations[Index]->Device->ProcessRecord : NULL;
+
+        if (Process != NULL)
+        {
+            for (OtherIndex = 0; OtherIndex < Index; ++OtherIndex)
+            {
+                PDXGKRNL_DEVICE OtherDevice = Batch->Allocations[OtherIndex]->Device;
+
+                if (OtherDevice != NULL && OtherDevice->ProcessRecord == Process)
+                    break;
+            }
+            if (OtherIndex == Index)
+            {
+                Status = DxgkGpuVaFlushPageTableUpdates(Process);
+                if (!NT_SUCCESS(Status))
+                    break;
+            }
+        }
+    }
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("DxgkDestroyAllocation: GPUVA invalidation failed with 0x%08lx; retaining backing until adapter stop\n", Status);
+        Batch->CompletionStatus = Status;
+        DxgkpVidMmPoisonDestroyBatchResource(Batch);
+        InterlockedExchange(&Batch->CompletionWaiter, 0);
+        Batch->AwaitingStopBoundary = TRUE;
+        DxgkpVidMmQuarantineDestroyBatch(Batch);
+        if (ResourceOperationLockAcquired)
+        {
+            KeReleaseMutex(&Resource->ResourceOperationLock, FALSE);
+            ResourceOperationLockAcquired = FALSE;
+        }
+        DxgkpVidMmFreeDestroyBatch(Batch);
+        return Status;
+    }
+    for (Index = 0; Index < AllocationCount; ++Index)
+        DxgkpVidMmDropLogicalHandleReference(Batch->Allocations[Index]);
     for (Index = 0; Index < AllocationCount; ++Index)
     {
         KeWaitForSingleObject(&Batch->Allocations[Index]->LogicalReferencesDrainedEvent, Executive, KernelMode, FALSE, NULL);
@@ -4970,7 +5121,14 @@ C_ASSERT(sizeof(D3DKMT_CREATEALLOCATIONFLAGS) == sizeof(UINT));
 #define DXGKP_CA_FLAG_CROSS_ADAPTER         0x00000800U
 #define DXGKP_CA_FLAG_STANDARD_ALLOCATION   0x00010000U
 #define DXGKP_CA_FLAG_EXISTING_SECTION      0x00020000U
-#define DXGKP_CA_KNOWN_FLAGS_MASK           0x003FFFFFU
+#define DXGKP_CA_KNOWN_FLAGS_WDDM_1_0       0x0000003FU
+#define DXGKP_CA_KNOWN_FLAGS_WDDM_1_2       0x000007FFU
+#define DXGKP_CA_KNOWN_FLAGS_WDDM_1_3       0x0000FFFFU
+#define DXGKP_CA_KNOWN_FLAGS_WDDM_2_3       0x0003FFFFU
+#define DXGKP_CA_KNOWN_FLAGS_WDDM_2_6       0x0007FFFFU
+#define DXGKP_CA_KNOWN_FLAGS_WDDM_2_7       0x001FFFFFU
+#define DXGKP_CA_KNOWN_FLAGS_WDDM_3_0       0x003FFFFFU
+#define DXGKP_CA_KNOWN_FLAGS_WDDM_3_2       0x007FFFFFU
 /* Keep documented-but-unimplemented inputs out of this mask so they reach the
  * STATUS_NOT_SUPPORTED gate instead of being misclassified as malformed. */
 #define DXGKP_CA_INVALID_INPUT_FLAGS_MASK   0x00001308U
@@ -4978,17 +5136,61 @@ C_ASSERT(sizeof(D3DKMT_CREATEALLOCATIONFLAGS) == sizeof(UINT));
 #define DXGKP_CA_STANDARD_REQUIRED_MASK     (DXGKP_CA_FLAG_CREATE_SHARED | DXGKP_CA_FLAG_CROSS_ADAPTER | DXGKP_CA_FLAG_STANDARD_ALLOCATION)
 #define DXGKP_CA_STANDARD_SOURCE_MASK       (DXGKP_CA_FLAG_EXISTING_SYSMEM | DXGKP_CA_FLAG_EXISTING_SECTION)
 
+#ifndef REACTOS_WDDM_TARGET_LEVEL
+#define REACTOS_WDDM_TARGET_LEVEL DXGK_CAPS_CORE_LEVEL_WDDM_2_0
+#endif
+
+static UINT
+DxgkpCreateAllocationKnownFlagsMask(
+    _In_ ULONG WddmLevel)
+{
+    if (WddmLevel >= DXGK_CAPS_CORE_LEVEL_WDDM_3_2)
+        return DXGKP_CA_KNOWN_FLAGS_WDDM_3_2;
+    if (WddmLevel >= DXGK_CAPS_CORE_LEVEL_WDDM_3_0)
+        return DXGKP_CA_KNOWN_FLAGS_WDDM_3_0;
+    if (WddmLevel >= DXGK_CAPS_CORE_LEVEL_WDDM_2_7)
+        return DXGKP_CA_KNOWN_FLAGS_WDDM_2_7;
+    if (WddmLevel >= DXGK_CAPS_CORE_LEVEL_WDDM_2_6)
+        return DXGKP_CA_KNOWN_FLAGS_WDDM_2_6;
+    if (WddmLevel >= DXGK_CAPS_CORE_LEVEL_WDDM_2_3)
+        return DXGKP_CA_KNOWN_FLAGS_WDDM_2_3;
+    if (WddmLevel >= DXGK_CAPS_CORE_LEVEL_WDDM_1_3)
+        return DXGKP_CA_KNOWN_FLAGS_WDDM_1_3;
+    if (WddmLevel >= DXGK_CAPS_CORE_LEVEL_WDDM_1_2)
+        return DXGKP_CA_KNOWN_FLAGS_WDDM_1_2;
+    return DXGKP_CA_KNOWN_FLAGS_WDDM_1_0;
+}
+
+static ULONG
+DxgkpVidMmEffectiveWddmLevel(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    ULONG MiniportLevel;
+
+    if (Adapter == NULL || Adapter->MiniportContext == NULL)
+        return 0;
+    MiniportLevel = DxgkCapsCoreInterfaceVersionToLevel(
+        Adapter->MiniportContext->InitData.s.Version);
+    if (MiniportLevel == 0)
+        return 0;
+    return min(MiniportLevel, (ULONG)REACTOS_WDDM_TARGET_LEVEL);
+}
+
 static NTSTATUS
 DxgkpValidateCreateAllocationFlags(
     _In_ CONST D3DKMT_CREATEALLOCATIONFLAGS *Flags,
+    _In_ ULONG WddmLevel,
+    _In_ BOOLEAN CheckImplemented,
     _Out_ PBOOLEAN StandardAllocation)
 {
     UINT RawFlags;
+    UINT KnownFlags;
     UINT StandardSources;
 
     RtlCopyMemory(&RawFlags, Flags, sizeof(RawFlags));
+    KnownFlags = DxgkpCreateAllocationKnownFlagsMask(WddmLevel);
     *StandardAllocation = (RawFlags & DXGKP_CA_FLAG_STANDARD_ALLOCATION) != 0;
-    if ((RawFlags & ~DXGKP_CA_KNOWN_FLAGS_MASK) != 0 || (RawFlags & DXGKP_CA_INVALID_INPUT_FLAGS_MASK) != 0)
+    if ((RawFlags & ~KnownFlags) != 0 || (RawFlags & DXGKP_CA_INVALID_INPUT_FLAGS_MASK) != 0)
         return STATUS_INVALID_PARAMETER;
     if ((RawFlags & DXGKP_CA_FLAG_CREATE_SHARED) != 0 && (RawFlags & DXGKP_CA_FLAG_CREATE_RESOURCE) == 0)
         return STATUS_INVALID_PARAMETER;
@@ -4997,10 +5199,14 @@ DxgkpValidateCreateAllocationFlags(
         StandardSources = RawFlags & DXGKP_CA_STANDARD_SOURCE_MASK;
         if ((RawFlags & DXGKP_CA_STANDARD_REQUIRED_MASK) != DXGKP_CA_STANDARD_REQUIRED_MASK || StandardSources == 0 || StandardSources == DXGKP_CA_STANDARD_SOURCE_MASK)
             return STATUS_INVALID_PARAMETER;
+        if (!CheckImplemented)
+            return STATUS_SUCCESS;
         return STATUS_SUCCESS;
     }
     if ((RawFlags & DXGKP_CA_STANDARD_SOURCE_MASK) != 0)
         return STATUS_INVALID_PARAMETER;
+    if (!CheckImplemented)
+        return STATUS_SUCCESS;
     if ((RawFlags & ~DXGKP_CA_SUPPORTED_BASE_FLAGS_MASK) != 0)
         return STATUS_NOT_SUPPORTED;
     return STATUS_SUCCESS;
@@ -5067,34 +5273,48 @@ DxgkpSetAllocationPrivateData(
 
 static NTSTATUS
 DxgkpValidateAllocationInfo(
-    _In_ CONST D3DDDI_ALLOCATIONINFO *Info)
+    _In_ CONST D3DDDI_ALLOCATIONINFO *Info,
+    _In_ ULONG WddmLevel,
+    _In_ BOOLEAN CheckImplemented)
 {
-    if ((Info->Flags.Value & ~0x3U) != 0 || ((Info->Flags.Value & 0x2U) != 0 && (Info->Flags.Value & 0x1U) == 0))
+    UINT KnownFlags = WddmLevel >= DXGK_CAPS_CORE_LEVEL_WDDM_1_2 ? 0x3U : 0x1U;
+
+    if ((Info->Flags.Value & ~KnownFlags) != 0 ||
+        ((Info->Flags.Value & 0x2U) != 0 && (Info->Flags.Value & 0x1U) == 0))
         return STATUS_INVALID_PARAMETER;
-    if ((Info->Flags.Value & 0x3U) != 0)
+    if (CheckImplemented && (Info->Flags.Value & KnownFlags) != 0)
         return STATUS_NOT_SUPPORTED;
     return STATUS_SUCCESS;
 }
 
 static NTSTATUS
 DxgkpValidateAllocationInfo2(
-    _Inout_ D3DDDI_ALLOCATIONINFO2 *Info)
+    _Inout_ D3DDDI_ALLOCATIONINFO2 *Info,
+    _In_ ULONG WddmLevel,
+    _In_ BOOLEAN CheckImplemented)
 {
     CONST ULONG_PTR *Tail = (CONST ULONG_PTR *)((CONST UCHAR *)Info + sizeof(*Info) - (6 * sizeof(ULONG_PTR)));
+    UINT KnownFlags = 0x1U;
     UINT Index;
 
-    if ((Info->Flags.Value & ~0x7U) != 0)
+    if (WddmLevel >= DXGK_CAPS_CORE_LEVEL_WDDM_1_2)
+        KnownFlags |= 0x2U;
+    if (WddmLevel >= DXGK_CAPS_CORE_LEVEL_WDDM_2_2)
+        KnownFlags |= 0x4U;
+    if ((Info->Flags.Value & ~KnownFlags) != 0)
         return STATUS_INVALID_PARAMETER;
     for (Index = 1; Index < 6; ++Index)
     {
         if (Tail[Index] != 0)
             return STATUS_INVALID_PARAMETER;
     }
-    if ((Info->Flags.Value & 0x4U) == 0 && Tail[0] != 0)
+    if ((WddmLevel < DXGK_CAPS_CORE_LEVEL_WDDM_2_2 ||
+         (Info->Flags.Value & 0x4U) == 0) &&
+        Tail[0] != 0)
         return STATUS_INVALID_PARAMETER;
     if ((Info->Flags.Value & 0x2U) != 0 && (Info->Flags.Value & 0x1U) == 0)
         return STATUS_INVALID_PARAMETER;
-    if ((Info->Flags.Value & 0x7U) != 0)
+    if (CheckImplemented && (Info->Flags.Value & KnownFlags) != 0)
         return STATUS_NOT_SUPPORTED;
     /* CreateAllocation2 is also valid for physical-addressing adapters. Zero
      * records that common-prefix result; it is not a process GPUVA mapping. */
@@ -5434,6 +5654,7 @@ DxgkpCreateAllocationCaptured(
     PDXGKVMM_DESTROY_BATCH CreateRollbackBatch = NULL;
     UINT CreatedAllocationCount = 0;
     BOOLEAN StandardAllocation;
+    ULONG EffectiveWddmLevel;
     NTSTATUS Status = STATUS_SUCCESS;
     UINT i;
 
@@ -5446,18 +5667,35 @@ DxgkpCreateAllocationCaptured(
     {
         return STATUS_INVALID_PARAMETER;
     }
+    if (InfoVersion == DxgkpAllocationInfoVersion2 &&
+        REACTOS_WDDM_TARGET_LEVEL < DXGK_CAPS_CORE_LEVEL_WDDM_1_1)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
 
     InputResourceHandle = pCreateAllocation->hResource;
     if (pCreateAllocation->Flags.CreateResource && InputResourceHandle != 0)
         return STATUS_INVALID_PARAMETER;
 
-    Status = DxgkpValidateCreateAllocationFlags(&pCreateAllocation->Flags, &StandardAllocation);
+    Status = DxgkpValidateCreateAllocationFlags(
+        &pCreateAllocation->Flags,
+        REACTOS_WDDM_TARGET_LEVEL,
+        FALSE,
+        &StandardAllocation);
     if (!NT_SUCCESS(Status))
         return Status;
 
     for (i = 0; i < pCreateAllocation->NumAllocations; ++i)
     {
-        Status = InfoVersion == DxgkpAllocationInfoVersion2 ? DxgkpValidateAllocationInfo2(&pCreateAllocation->pAllocationInfo2[i]) : DxgkpValidateAllocationInfo(&pCreateAllocation->pAllocationInfo[i]);
+        Status = InfoVersion == DxgkpAllocationInfoVersion2 ?
+            DxgkpValidateAllocationInfo2(
+                &pCreateAllocation->pAllocationInfo2[i],
+                REACTOS_WDDM_TARGET_LEVEL,
+                FALSE) :
+            DxgkpValidateAllocationInfo(
+                &pCreateAllocation->pAllocationInfo[i],
+                REACTOS_WDDM_TARGET_LEVEL,
+                FALSE);
         if (!NT_SUCCESS(Status))
             return Status;
     }
@@ -5490,6 +5728,34 @@ DxgkpCreateAllocationCaptured(
     Device = DxgkpVidMmFindDeviceByHandle(pCreateAllocation->hDevice, &Adapter);
     if (Device == NULL)
         return STATUS_INVALID_PARAMETER;
+    EffectiveWddmLevel = DxgkpVidMmEffectiveWddmLevel(Adapter);
+    if (InfoVersion == DxgkpAllocationInfoVersion2 &&
+        EffectiveWddmLevel < DXGK_CAPS_CORE_LEVEL_WDDM_1_1)
+    {
+        Status = STATUS_NOT_SUPPORTED;
+        goto Cleanup;
+    }
+    Status = DxgkpValidateCreateAllocationFlags(
+        &pCreateAllocation->Flags,
+        EffectiveWddmLevel,
+        TRUE,
+        &StandardAllocation);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    for (i = 0; i < pCreateAllocation->NumAllocations; ++i)
+    {
+        Status = InfoVersion == DxgkpAllocationInfoVersion2 ?
+            DxgkpValidateAllocationInfo2(
+                &pCreateAllocation->pAllocationInfo2[i],
+                EffectiveWddmLevel,
+                TRUE) :
+            DxgkpValidateAllocationInfo(
+                &pCreateAllocation->pAllocationInfo[i],
+                EffectiveWddmLevel,
+                TRUE);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+    }
     CreateRollbackAllocations = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)pCreateAllocation->NumAllocations * sizeof(*CreateRollbackAllocations), TAG_VIDMM_ALLOC);
     CreateRollbackBatch = DxgkpVidMmAllocateDestroyBatch(Adapter, pCreateAllocation->NumAllocations);
     if (CreateRollbackAllocations == NULL || CreateRollbackBatch == NULL)
@@ -5545,7 +5811,7 @@ DxgkpCreateAllocationCaptured(
         DXGK_ALLOCATIONINFO DxgkAllocInfo;
         HANDLE AllocationHandle = NULL;
         HANDLE MiniportResourceHandle = NULL;
-        PDXGKVMM_ALLOCATION TrackedAlloc;
+        PDXGKVMM_ALLOCATION TrackedAlloc = NULL;
         BOOLEAN UseSystemAllocation = FALSE;
 
         RtlZeroMemory(&DxgkAllocInfo, sizeof(DxgkAllocInfo));
@@ -5642,7 +5908,11 @@ DxgkpCreateAllocationCaptured(
              DXGK_CB_FULL(Adapter, DxgkDdiCreateAllocation) == NULL))
         {
             DxgkAllocInfo.Flags.CpuVisible = 1;
-            Status = DxgkpVidMmCreateSystemAllocation(Adapter, Device, &DxgkAllocInfo, &AllocationHandle);
+            Status = DxgkpVidMmCreateSystemAllocation(Adapter,
+                                                      Device,
+                                                      &DxgkAllocInfo,
+                                                      &AllocationHandle,
+                                                      &TrackedAlloc);
             MiniportResourceHandle = NULL;
         }
         else
@@ -5655,21 +5925,45 @@ DxgkpCreateAllocationCaptured(
             if (Resource != NULL)
             {
                 (VOID)KeWaitForSingleObject(&Resource->MiniportResourceLock, Executive, KernelMode, FALSE, NULL);
-                Status = DxgkVidMmCreateAllocation(Adapter, Device, &DxgkAllocInfo, pCreateAllocation->pPrivateDriverData, pCreateAllocation->PrivateDriverDataSize, Resource->MiniportHandle, CreateFlags, &AllocationHandle, &MiniportResourceHandle);
+                Status = DxgkpVidMmCreateAllocationTracked(Adapter,
+                                                           Device,
+                                                           &DxgkAllocInfo,
+                                                           pCreateAllocation->pPrivateDriverData,
+                                                           pCreateAllocation->PrivateDriverDataSize,
+                                                           Resource->MiniportHandle,
+                                                           CreateFlags,
+                                                           &AllocationHandle,
+                                                           &MiniportResourceHandle,
+                                                           &TrackedAlloc);
                 Resource->MiniportHandle = MiniportResourceHandle;
                 KeReleaseMutex(&Resource->MiniportResourceLock, FALSE);
             }
             else
-                Status = DxgkVidMmCreateAllocation(Adapter, Device, &DxgkAllocInfo, pCreateAllocation->pPrivateDriverData, pCreateAllocation->PrivateDriverDataSize, NULL, CreateFlags, &AllocationHandle, &MiniportResourceHandle);
+                Status = DxgkpVidMmCreateAllocationTracked(Adapter,
+                                                           Device,
+                                                           &DxgkAllocInfo,
+                                                           pCreateAllocation->pPrivateDriverData,
+                                                           pCreateAllocation->PrivateDriverDataSize,
+                                                           NULL,
+                                                           CreateFlags,
+                                                           &AllocationHandle,
+                                                           &MiniportResourceHandle,
+                                                           &TrackedAlloc);
         }
         if (!NT_SUCCESS(Status))
             break;
 
-        Status = DxgkpVidMmReferenceInitializingAllocation(AllocationHandle, Adapter, Device, &TrackedAlloc);
-        if (!NT_SUCCESS(Status))
+        /*
+         * The create helpers return the initializing object with a transient
+         * reference in the same transaction that publishes its handle.  This
+         * makes rollback ownership unconditional: there is no second lookup
+         * whose unexpected failure could strand an initializing allocation
+         * that normal public destroy intentionally refuses to touch.
+         */
+        ASSERT(TrackedAlloc != NULL);
+        if (TrackedAlloc == NULL)
         {
             Status = STATUS_INTERNAL_ERROR;
-            DxgkpVidMmDestroyAllocation(Adapter, Device, NULL, AllocationHandle);
             break;
         }
         CreateRollbackAllocations[CreatedAllocationCount++] = TrackedAlloc;
@@ -5880,7 +6174,16 @@ DxgkpCreateAllocationWithAccessModeVariant(
     Captured = *CreateAllocation;
     if (InfoVersion != DxgkpAllocationInfoVersion1 && InfoVersion != DxgkpAllocationInfoVersion2)
         return STATUS_INVALID_PARAMETER;
-    Status = DxgkpValidateCreateAllocationFlags(&Captured.Flags, &StandardAllocation);
+    if (InfoVersion == DxgkpAllocationInfoVersion2 &&
+        REACTOS_WDDM_TARGET_LEVEL < DXGK_CAPS_CORE_LEVEL_WDDM_1_1)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+    Status = DxgkpValidateCreateAllocationFlags(
+        &Captured.Flags,
+        REACTOS_WDDM_TARGET_LEVEL,
+        FALSE,
+        &StandardAllocation);
     if (!NT_SUCCESS(Status))
         return Status;
     UserAllocationInfo = InfoVersion == DxgkpAllocationInfoVersion2 ? (PVOID)Captured.pAllocationInfo2 : (PVOID)Captured.pAllocationInfo;
@@ -5923,7 +6226,15 @@ DxgkpCreateAllocationWithAccessModeVariant(
         Captured.pAllocationInfo = (D3DDDI_ALLOCATIONINFO *)CapturedAllocationInfo;
     for (i = 0; i < InputAllocationCount; ++i)
     {
-        Status = InfoVersion == DxgkpAllocationInfoVersion2 ? DxgkpValidateAllocationInfo2(&Captured.pAllocationInfo2[i]) : DxgkpValidateAllocationInfo(&Captured.pAllocationInfo[i]);
+        Status = InfoVersion == DxgkpAllocationInfoVersion2 ?
+            DxgkpValidateAllocationInfo2(
+                &Captured.pAllocationInfo2[i],
+                REACTOS_WDDM_TARGET_LEVEL,
+                FALSE) :
+            DxgkpValidateAllocationInfo(
+                &Captured.pAllocationInfo[i],
+                REACTOS_WDDM_TARGET_LEVEL,
+                FALSE);
         if (!NT_SUCCESS(Status))
             goto Cleanup;
     }
@@ -6423,14 +6734,16 @@ DxgkpVidMmReleaseSegmentPlacement(
  * allocation (guaranteed by the caller through fence/sync completion).
  */
 static NTSTATUS
-DxgkpVidMmEvictLocked(
-    _In_ PDXGKVMM_ALLOCATION Allocation)
+DxgkpVidMmPrepareEvictionOwned(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _Out_ PBOOLEAN OutApertureUnmapRequired)
 {
     PDXGKRNL_ADAPTER Adapter;
     PDXGKRNL_SEGMENT Segment;
-    NTSTATUS Status;
     SIZE_T BackingSize;
+    NTSTATUS Status;
 
+    *OutApertureUnmapRequired = FALSE;
     DPRINT("DxgkVidMmEvict: Alloc=%p seg=%lu offset=0x%I64x\n", Allocation, Allocation->SegmentId, Allocation->SegmentOffset);
 
     if (!Allocation->Resident)
@@ -6464,13 +6777,11 @@ DxgkpVidMmEvictLocked(
 
     if (VidMmSegmentIsAperture(Segment))
     {
-        Status = DxgkpVidMmReleaseApertureMapping(Allocation, FALSE);
-        if (!NT_SUCCESS(Status))
-            return Status;
+        if (Allocation->SystemMemory == NULL)
+            return STATUS_INVALID_DEVICE_STATE;
+        *OutApertureUnmapRequired = Allocation->ApertureMapped;
+        return STATUS_SUCCESS;
     }
-
-    if (Allocation->CpuAddress != NULL && Allocation->CpuAddress != Allocation->SystemMemory)
-        DxgkVidMmUnmapAllocationCpu(Allocation);
 
     if (Allocation->SystemMemory == NULL)
     {
@@ -6486,13 +6797,78 @@ DxgkpVidMmEvictLocked(
     }
 
     Status = DxgkpVidMmTransferAllocationContent(Adapter, Allocation, FALSE);
-    if (!NT_SUCCESS(Status))
-        return Status;
+    return Status;
+}
+
+static VOID
+DxgkpVidMmCommitPreparedEvictionOwned(
+    _In_ PDXGKVMM_ALLOCATION Allocation)
+{
+    if (Allocation->ApertureMdl != NULL)
+    {
+        IoFreeMdl(Allocation->ApertureMdl);
+        Allocation->ApertureMdl = NULL;
+    }
+    Allocation->ApertureMapped = FALSE;
+    if (Allocation->CpuAddress != NULL &&
+        Allocation->CpuAddress != Allocation->SystemMemory)
+    {
+        DxgkVidMmUnmapAllocationCpu(Allocation);
+    }
 
     DxgkpVidMmReleaseSegmentPlacement(Allocation);
     Allocation->PhysicalAddress = MmGetPhysicalAddress(Allocation->SystemMemory);
     Allocation->ContentLost = FALSE;
     DPRINT("DxgkVidMmEvict: alloc %p evicted to VA=%p PA=0x%I64x\n", Allocation, Allocation->SystemMemory, Allocation->PhysicalAddress.QuadPart);
+}
+
+static NTSTATUS
+DxgkpVidMmEvictOwned(
+    _In_ PDXGKVMM_ALLOCATION Allocation)
+{
+    DXGKRNL_PAGING_OP Op;
+    ULONG PagingFenceId = 0;
+    BOOLEAN ApertureUnmapRequired;
+    BOOLEAN Queued = FALSE;
+    NTSTATUS Status;
+
+    Status = DxgkpVidMmPrepareEvictionOwned(
+                 Allocation,
+                 &ApertureUnmapRequired);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (ApertureUnmapRequired)
+    {
+        Status = DxgkpVidMmFillAperturePagingOperation(Allocation,
+                                                      FALSE,
+                                                      &Op);
+        if (NT_SUCCESS(Status))
+        {
+            Status = DxgkPagingExecuteBatch(Allocation->Adapter,
+                                            Allocation->Device,
+                                            &Op,
+                                            1,
+                                            &Allocation,
+                                            1,
+                                            0,
+                                            0,
+                                            &PagingFenceId,
+                                            &Queued);
+        }
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+
+    DxgkpVidMmCommitPreparedEvictionOwned(Allocation);
+    /*
+     * Admission is the transaction's commit point.  The tracked packet owns a
+     * lifetime-only allocation reference, so the miniport handle survives
+     * until terminal cleanup.  Keep the newest paging fence on the allocation
+     * as compensating state instead of returning a timeout after an unmap that
+     * can no longer be withdrawn.
+     */
+    if (ApertureUnmapRequired && Queued)
+        DxgkPagingBeginPlacement(Allocation, 0, 0, PagingFenceId);
     return STATUS_SUCCESS;
 }
 
@@ -6500,8 +6876,192 @@ DxgkpVidMmEvictLocked(
  * Per-device residency references
  *
  * MakeResident charges the calling device; Evict may only release what that
- * device holds.  The caller owns Allocation->ResidencyLock.
+ * device holds.  Short mutations own Allocation->ResidencyLock.  Operations
+ * that must call the miniport or wait for paging instead publish a stable
+ * transaction owner, release the lock, and clear/signal the owner at their
+ * single terminal edge.
  * ====================================================================== */
+
+static NTSTATUS
+DxgkpVidMmBeginResidencyTransaction(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ PVOID Owner)
+{
+    NTSTATUS Status;
+
+    if (Allocation == NULL || Owner == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    for (;;)
+    {
+        Status = KeWaitForSingleObject(&Allocation->ResidencyLock,
+                                       Executive,
+                                       KernelMode,
+                                       FALSE,
+                                       NULL);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        if (Allocation->ResidencyTransactionOwner == NULL)
+        {
+            BOOLEAN Acquired;
+
+            if (InterlockedCompareExchange(&Allocation->Destroying, 0, 0) != 0)
+            {
+                KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+                return STATUS_DELETE_PENDING;
+            }
+            Acquired = DxgkResidencyCoreTransactionTryAcquire(
+                           &Allocation->ResidencyTransactionOwner,
+                           Owner);
+            ASSERT(Acquired);
+            if (!Acquired)
+            {
+                KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+                continue;
+            }
+            KeClearEvent(&Allocation->ResidencyTransactionEvent);
+            KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+            return STATUS_SUCCESS;
+        }
+        if (Allocation->ResidencyTransactionOwner == Owner)
+        {
+            KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+            return STATUS_SUCCESS;
+        }
+        KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+
+        Status = KeWaitForSingleObject(&Allocation->ResidencyTransactionEvent,
+                                       Executive,
+                                       KernelMode,
+                                       FALSE,
+                                       NULL);
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+}
+
+/*
+ * Victim selection is opportunistic.  Never wait for a victim transaction
+ * while this MakeResident transaction owns another allocation: a concurrent
+ * sorted batch can own the victim and be waiting for ours.  Failing the
+ * zero-time claim simply makes this candidate unavailable for this pass.
+ */
+static NTSTATUS
+DxgkpVidMmTryBeginResidencyTransaction(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ PVOID Owner)
+{
+    LARGE_INTEGER ZeroTimeout;
+    BOOLEAN Acquired;
+    NTSTATUS Status;
+
+    if (Allocation == NULL || Owner == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    ZeroTimeout.QuadPart = 0;
+    Status = KeWaitForSingleObject(&Allocation->ResidencyLock,
+                                   Executive,
+                                   KernelMode,
+                                   FALSE,
+                                   &ZeroTimeout);
+    if (Status == STATUS_TIMEOUT)
+        return STATUS_DEVICE_BUSY;
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (InterlockedCompareExchange(&Allocation->Destroying, 0, 0) != 0)
+    {
+        KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+        return STATUS_DELETE_PENDING;
+    }
+    if (Allocation->ResidencyTransactionOwner != NULL)
+    {
+        KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+        return STATUS_DEVICE_BUSY;
+    }
+
+    Acquired = DxgkResidencyCoreTransactionTryAcquire(
+                   &Allocation->ResidencyTransactionOwner,
+                   Owner);
+    ASSERT(Acquired);
+    if (!Acquired)
+    {
+        KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+        return STATUS_DEVICE_BUSY;
+    }
+    KeClearEvent(&Allocation->ResidencyTransactionEvent);
+    KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+    return STATUS_SUCCESS;
+}
+
+static VOID
+DxgkpVidMmEndResidencyTransaction(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ PVOID Owner)
+{
+    NTSTATUS Status;
+
+    ASSERT(Allocation != NULL);
+    ASSERT(Owner != NULL);
+    Status = KeWaitForSingleObject(&Allocation->ResidencyLock,
+                                   Executive,
+                                   KernelMode,
+                                   FALSE,
+                                   NULL);
+    ASSERT(NT_SUCCESS(Status));
+    if (!NT_SUCCESS(Status))
+        return;
+    ASSERT(Allocation->ResidencyTransactionOwner == Owner);
+    if (Allocation->ResidencyTransactionOwner == Owner)
+    {
+        BOOLEAN Released =
+            DxgkResidencyCoreTransactionRelease(
+                &Allocation->ResidencyTransactionOwner,
+                Owner);
+
+        ASSERT(Released);
+        if (Released)
+        {
+            KeSetEvent(&Allocation->ResidencyTransactionEvent,
+                       IO_NO_INCREMENT,
+                       FALSE);
+        }
+    }
+    KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+}
+
+/*
+ * Return with ResidencyLock owned at a point where no callback-spanning
+ * transaction is active.  The event is notification-style, and it is cleared
+ * while ResidencyLock is held, so a waiter cannot miss the terminal signal.
+ */
+static NTSTATUS
+DxgkpVidMmLockResidencyForExternalOperation(
+    _In_ PDXGKVMM_ALLOCATION Allocation)
+{
+    NTSTATUS Status;
+
+    for (;;)
+    {
+        Status = KeWaitForSingleObject(&Allocation->ResidencyLock,
+                                       Executive,
+                                       KernelMode,
+                                       FALSE,
+                                       NULL);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        if (Allocation->ResidencyTransactionOwner == NULL)
+            return STATUS_SUCCESS;
+        KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+
+        Status = KeWaitForSingleObject(&Allocation->ResidencyTransactionEvent,
+                                       Executive,
+                                       KernelMode,
+                                       FALSE,
+                                       NULL);
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+}
 
 static PDXGKVMM_RESIDENCY_REF
 DxgkpVidMmFindResidencyReferenceLocked(
@@ -6530,6 +7090,8 @@ DxgkpVidMmAcquireDeviceResidencyReferenceLocked(
     _In_opt_ PDXGKRNL_DEVICE Device)
 {
     PDXGKVMM_RESIDENCY_REF Ref;
+    LONG TotalReferences;
+    BOOLEAN CreatedRef = FALSE;
 
     if (Allocation->ResidencyReferenceList.Flink == NULL)
         InitializeListHead(&Allocation->ResidencyReferenceList);
@@ -6542,12 +7104,113 @@ DxgkpVidMmAcquireDeviceResidencyReferenceLocked(
         RtlZeroMemory(Ref, sizeof(*Ref));
         Ref->Device = Device;
         InsertTailList(&Allocation->ResidencyReferenceList, &Ref->Entry);
+        CreatedRef = TRUE;
     }
-    if (Ref->Count == MAXLONG)
+    TotalReferences = InterlockedCompareExchange(&Allocation->ResidencyReferenceCount, 0, 0);
+    if (Ref->Count == MAXLONG || TotalReferences < 0 || TotalReferences == MAXLONG)
+    {
+        if (CreatedRef)
+        {
+            RemoveEntryList(&Ref->Entry);
+            ExFreePoolWithTag(Ref, TAG_VIDMM_ALLOC);
+        }
         return STATUS_INTEGER_OVERFLOW;
+    }
     Ref->Count++;
     InterlockedIncrement(&Allocation->ResidencyReferenceCount);
     return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+DxgkpVidMmAcquireDeviceResidencyReferencesLocked(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_opt_ PDXGKRNL_DEVICE Device,
+    _In_ ULONG Count)
+{
+    PDXGKVMM_RESIDENCY_REF Ref;
+    LONG TotalReferences;
+    BOOLEAN CreatedRef = FALSE;
+
+    if (Count == 0 || Count > MAXLONG)
+        return STATUS_INVALID_PARAMETER;
+    if (Allocation->ResidencyReferenceList.Flink == NULL)
+        InitializeListHead(&Allocation->ResidencyReferenceList);
+    Ref = DxgkpVidMmFindResidencyReferenceLocked(Allocation, Device);
+    if (Ref == NULL)
+    {
+        Ref = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Ref), TAG_VIDMM_ALLOC);
+        if (Ref == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+        RtlZeroMemory(Ref, sizeof(*Ref));
+        Ref->Device = Device;
+        InsertTailList(&Allocation->ResidencyReferenceList, &Ref->Entry);
+        CreatedRef = TRUE;
+    }
+
+    TotalReferences = InterlockedCompareExchange(&Allocation->ResidencyReferenceCount, 0, 0);
+    if (Ref->Count < 0 ||
+        TotalReferences < 0 ||
+        Count > (ULONG)(MAXLONG - Ref->Count) ||
+        Count > (ULONG)(MAXLONG - TotalReferences))
+    {
+        if (CreatedRef)
+        {
+            RemoveEntryList(&Ref->Entry);
+            ExFreePoolWithTag(Ref, TAG_VIDMM_ALLOC);
+        }
+        return STATUS_INTEGER_OVERFLOW;
+    }
+
+    Ref->Count += (LONG)Count;
+    InterlockedExchangeAdd(&Allocation->ResidencyReferenceCount, (LONG)Count);
+    return STATUS_SUCCESS;
+}
+
+static LONG
+DxgkpVidMmQueryDeviceResidencyReferenceCountLocked(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_opt_ PDXGKRNL_DEVICE Device)
+{
+    PDXGKVMM_RESIDENCY_REF Ref;
+    LONG Count;
+
+    Ref = DxgkpVidMmFindResidencyReferenceLocked(Allocation, Device);
+    Count = Ref != NULL ? Ref->Count : 0;
+    if (Allocation->ImplicitResidencyReference && Device == Allocation->Device)
+        Count++;
+    return Count;
+}
+
+static BOOLEAN
+DxgkpVidMmReleaseExplicitResidencyReferencesLocked(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_opt_ PDXGKRNL_DEVICE Device,
+    _In_ ULONG Count,
+    _Out_opt_ PBOOLEAN OutReachedZero)
+{
+    PDXGKVMM_RESIDENCY_REF Ref;
+    LONG PreviousTotal;
+
+    if (OutReachedZero != NULL)
+        *OutReachedZero = FALSE;
+    if (Count == 0 || Count > MAXLONG)
+        return FALSE;
+    Ref = DxgkpVidMmFindResidencyReferenceLocked(Allocation, Device);
+    if (Ref == NULL || Ref->Count < (LONG)Count)
+        return FALSE;
+
+    Ref->Count -= (LONG)Count;
+    if (Ref->Count == 0)
+    {
+        RemoveEntryList(&Ref->Entry);
+        ExFreePoolWithTag(Ref, TAG_VIDMM_ALLOC);
+    }
+    PreviousTotal = InterlockedExchangeAdd(&Allocation->ResidencyReferenceCount,
+                                           -(LONG)Count);
+    ASSERT(PreviousTotal >= (LONG)Count);
+    if (OutReachedZero != NULL && PreviousTotal == (LONG)Count)
+        *OutReachedZero = TRUE;
+    return TRUE;
 }
 
 NTSTATUS
@@ -6559,7 +7222,9 @@ DxgkVidMmAcquireDeviceResidencyReference(
 
     if (Allocation == NULL)
         return STATUS_INVALID_PARAMETER;
-    (VOID)KeWaitForSingleObject(&Allocation->ResidencyLock, Executive, KernelMode, FALSE, NULL);
+    Status = DxgkpVidMmLockResidencyForExternalOperation(Allocation);
+    if (!NT_SUCCESS(Status))
+        return Status;
     Status = DxgkpVidMmAcquireDeviceResidencyReferenceLocked(Allocation, Device);
     KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
     return Status;
@@ -6570,16 +7235,15 @@ DxgkVidMmQueryDeviceResidencyReferenceCount(
     _In_ PDXGKVMM_ALLOCATION Allocation,
     _In_opt_ PDXGKRNL_DEVICE Device)
 {
-    PDXGKVMM_RESIDENCY_REF Ref;
     LONG Count;
+    NTSTATUS Status;
 
     if (Allocation == NULL)
         return 0;
-    (VOID)KeWaitForSingleObject(&Allocation->ResidencyLock, Executive, KernelMode, FALSE, NULL);
-    Ref = DxgkpVidMmFindResidencyReferenceLocked(Allocation, Device);
-    Count = Ref != NULL ? Ref->Count : 0;
-    if (Allocation->ImplicitResidencyReference && Device == Allocation->Device)
-        Count++;
+    Status = DxgkpVidMmLockResidencyForExternalOperation(Allocation);
+    if (!NT_SUCCESS(Status))
+        return 0;
+    Count = DxgkpVidMmQueryDeviceResidencyReferenceCountLocked(Allocation, Device);
     KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
     return Count;
 }
@@ -6637,7 +7301,8 @@ DxgkVidMmReleaseDeviceResidencyReference(
         *OutReachedZero = FALSE;
     if (Allocation == NULL)
         return FALSE;
-    (VOID)KeWaitForSingleObject(&Allocation->ResidencyLock, Executive, KernelMode, FALSE, NULL);
+    if (!NT_SUCCESS(DxgkpVidMmLockResidencyForExternalOperation(Allocation)))
+        return FALSE;
     Released = DxgkpVidMmReleaseDeviceResidencyReferenceLocked(Allocation, Device, OutReachedZero);
     KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
     return Released;
@@ -6649,24 +7314,31 @@ DxgkVidMmReleaseAllDeviceResidencyReferences(
     _In_opt_ PDXGKRNL_DEVICE Device)
 {
     PDXGKVMM_RESIDENCY_REF Ref;
+    NTSTATUS Status;
 
     if (Allocation == NULL)
         return;
-    (VOID)KeWaitForSingleObject(&Allocation->ResidencyLock, Executive, KernelMode, FALSE, NULL);
+    Status = DxgkpVidMmLockResidencyForExternalOperation(Allocation);
+    if (!NT_SUCCESS(Status))
+        return;
     Ref = DxgkpVidMmFindResidencyReferenceLocked(Allocation, Device);
     if (Ref != NULL)
     {
         LONG Count = Ref->Count;
+        LONG PreviousCount;
 
         RemoveEntryList(&Ref->Entry);
         ExFreePoolWithTag(Ref, TAG_VIDMM_ALLOC);
-        while (Count-- > 0)
-            InterlockedDecrement(&Allocation->ResidencyReferenceCount);
+        PreviousCount = InterlockedExchangeAdd(&Allocation->ResidencyReferenceCount, -Count);
+        ASSERT(Count >= 0 && PreviousCount >= Count);
     }
     if (Allocation->ImplicitResidencyReference && Device == Allocation->Device)
     {
+        LONG References;
+
         Allocation->ImplicitResidencyReference = FALSE;
-        InterlockedDecrement(&Allocation->ResidencyReferenceCount);
+        References = InterlockedDecrement(&Allocation->ResidencyReferenceCount);
+        ASSERT(References >= 0);
     }
     KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
 }
@@ -6675,17 +7347,20 @@ NTSTATUS
 DxgkVidMmEvict(
     _In_ PDXGKVMM_ALLOCATION Allocation)
 {
+    ULONG OwnerToken;
     NTSTATUS Status;
 
     if (Allocation == NULL)
         return STATUS_INVALID_PARAMETER;
-    (VOID)KeWaitForSingleObject(&Allocation->ResidencyLock, Executive, KernelMode, FALSE, NULL);
-    Status = DxgkpVidMmEvictLocked(Allocation);
+    Status = DxgkpVidMmBeginResidencyTransaction(Allocation, &OwnerToken);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = DxgkpVidMmEvictOwned(Allocation);
     ExAcquireFastMutex(&DxgkVidMmPolicyLock);
     if (NT_SUCCESS(Status) && Allocation->Offered)
         Allocation->OfferDiscarded = TRUE;
     ExReleaseFastMutex(&DxgkVidMmPolicyLock);
-    KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+    DxgkpVidMmEndResidencyTransaction(Allocation, &OwnerToken);
     return Status;
 }
 
@@ -6711,7 +7386,12 @@ DxgkVidMmOfferAllocation(
     if (!NT_SUCCESS(Status))
         return STATUS_INVALID_PARAMETER;
 
-    (VOID)KeWaitForSingleObject(&Allocation->ResidencyLock, Executive, KernelMode, FALSE, NULL);
+    Status = DxgkpVidMmLockResidencyForExternalOperation(Allocation);
+    if (!NT_SUCCESS(Status))
+    {
+        DxgkVidMmDereferenceAllocation(Allocation);
+        return Status;
+    }
     ExAcquireFastMutex(&DxgkVidMmPolicyLock);
     Allocation->Offered = TRUE;
     Allocation->OfferPriority = Priority;
@@ -6738,7 +7418,12 @@ DxgkVidMmReclaimAllocation(
     if (!NT_SUCCESS(Status))
         return STATUS_INVALID_PARAMETER;
 
-    (VOID)KeWaitForSingleObject(&Allocation->ResidencyLock, Executive, KernelMode, FALSE, NULL);
+    Status = DxgkpVidMmLockResidencyForExternalOperation(Allocation);
+    if (!NT_SUCCESS(Status))
+    {
+        DxgkVidMmDereferenceAllocation(Allocation);
+        return Status;
+    }
     ExAcquireFastMutex(&DxgkVidMmPolicyLock);
     OfferDiscarded = Allocation->OfferDiscarded;
     ExReleaseFastMutex(&DxgkVidMmPolicyLock);
@@ -6819,7 +7504,11 @@ VidMmFindLowestPriorityResident(
             CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, SegmentEntry);
         ULONG Flags = 0;
 
-        if (DxgkSubmissionResidencyPinIsHeld(&Candidate->SubmissionResidencyPinCount))
+        if (DxgkSubmissionResidencyPinIsHeld(&Candidate->SubmissionResidencyPinCount) ||
+            InterlockedCompareExchangePointer(
+                &Candidate->ResidencyTransactionOwner,
+                NULL,
+                NULL) != NULL)
             Flags |= DXGMMS2_VIDMM_RANGE_PINNED;
         if (InterlockedCompareExchange(&Candidate->ResidencyReferenceCount, 0, 0) != 0)
             Flags |= DXGMMS2_VIDMM_RANGE_RESIDENCY_REFERENCED;
@@ -6877,24 +7566,54 @@ VidMmFindLowestPriorityResident(
  *           (if its priority is lower than ours) and retry placement.
  */
 static NTSTATUS
-DxgkpVidMmCompleteResidencyLocked(
+DxgkpVidMmCompleteResidencyOwned(
     _In_ PDXGKVMM_ALLOCATION Allocation,
-    _In_ PDXGKRNL_ADAPTER Adapter)
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ BOOLEAN DeferAperturePaging,
+    _Out_opt_ PBOOLEAN OutAperturePagingRequired)
 {
     PDXGKRNL_SEGMENT Segment;
     NTSTATUS Status = STATUS_SUCCESS;
 
+    if (OutAperturePagingRequired != NULL)
+        *OutAperturePagingRequired = FALSE;
     if (!Allocation->Resident || Allocation->SegmentId < 1 || Allocation->SegmentId > Adapter->SegmentCount)
         return STATUS_INVALID_DEVICE_STATE;
     Segment = &ADAPTER_SEGMENTS(Adapter)[Allocation->SegmentId - 1];
     if (VidMmSegmentIsAperture(Segment))
-        Status = DxgkpVidMmEnsureAllocationApertureMappedLocked(Allocation);
+    {
+        Status = DxgkpVidMmPrepareAllocationApertureMappingOwned(Allocation);
+        if (NT_SUCCESS(Status) && DeferAperturePaging)
+        {
+            if (OutAperturePagingRequired != NULL)
+                *OutAperturePagingRequired = !Allocation->ApertureMapped;
+        }
+        else if (NT_SUCCESS(Status) && !Allocation->ApertureMapped)
+        {
+            DXGKRNL_PAGING_OP Op;
+
+            Status = DxgkpVidMmFillAperturePagingOperation(Allocation,
+                                                          TRUE,
+                                                          &Op);
+            if (NT_SUCCESS(Status))
+                Status = DxgkPagingExecuteSynchronous(Adapter,
+                                                      Allocation->Device,
+                                                      &Op);
+            if (NT_SUCCESS(Status))
+                Allocation->ApertureMapped = TRUE;
+        }
+    }
     else if (Allocation->SystemMemory != NULL)
         Status = DxgkpVidMmTransferAllocationContent(Adapter, Allocation, TRUE);
     if (NT_SUCCESS(Status) && !VidMmSegmentIsAperture(Segment) && Allocation->CpuAddress == Allocation->SystemMemory)
         Allocation->CpuAddress = NULL;
     if (!NT_SUCCESS(Status))
     {
+        if (!Allocation->ApertureMapped && Allocation->ApertureMdl != NULL)
+        {
+            IoFreeMdl(Allocation->ApertureMdl);
+            Allocation->ApertureMdl = NULL;
+        }
         DxgkpVidMmReleaseSegmentPlacement(Allocation);
         if (Allocation->SystemMemory != NULL)
             Allocation->PhysicalAddress = MmGetPhysicalAddress(Allocation->SystemMemory);
@@ -6927,10 +7646,12 @@ DxgkpVidMmTryReferencePhysicalAllocation(
     return TRUE;
 }
 
-NTSTATUS
-DxgkVidMmMakeResident(
+static NTSTATUS
+DxgkpVidMmMakeResidentOwned(
     _In_ PDXGKVMM_ALLOCATION Allocation,
-    _In_ PDXGKRNL_ADAPTER Adapter)
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ BOOLEAN DeferAperturePaging,
+    _Out_opt_ PBOOLEAN OutAperturePagingRequired)
 {
     PDXGKRNL_SEGMENT Segments;
     NTSTATUS Status = STATUS_SUCCESS;
@@ -6939,8 +7660,9 @@ DxgkVidMmMakeResident(
 
     if (Allocation == NULL || Adapter == NULL)
         return STATUS_INVALID_PARAMETER;
+    if (OutAperturePagingRequired != NULL)
+        *OutAperturePagingRequired = FALSE;
     DPRINT("DxgkVidMmMakeResident: Alloc=%p size=%Iu\n", Allocation, Allocation->Size);
-    (VOID)KeWaitForSingleObject(&Allocation->ResidencyLock, Executive, KernelMode, FALSE, NULL);
     if (Allocation->Resident)
     {
         DPRINT1("DxgkVidMmMakeResident: alloc %p is already resident\n", Allocation);
@@ -6983,7 +7705,10 @@ DxgkVidMmMakeResident(
 
     if (Placed)
     {
-        Status = DxgkpVidMmCompleteResidencyLocked(Allocation, Adapter);
+        Status = DxgkpVidMmCompleteResidencyOwned(Allocation,
+                                                 Adapter,
+                                                 DeferAperturePaging,
+                                                 OutAperturePagingRequired);
         goto Cleanup;
     }
 
@@ -6994,6 +7719,7 @@ DxgkVidMmMakeResident(
         BOOLEAN VictimOffered;
         ULONG VictimPriority;
         ULONG AllocationPriority;
+        ULONG VictimOwnerToken;
 
         if (!VidMmAllocationSupportsSegment(Allocation, Seg->SegmentId))
             continue;
@@ -7018,7 +7744,19 @@ DxgkVidMmMakeResident(
             continue;
         }
         DPRINT("DxgkVidMmMakeResident: evicting victim %p (priority %lu) from seg %lu to make room\n", Victim, VictimPriority, Seg->SegmentId);
-        Status = DxgkVidMmEvict(Victim);
+        Status = DxgkpVidMmTryBeginResidencyTransaction(
+                     Victim,
+                     &VictimOwnerToken);
+        if (NT_SUCCESS(Status))
+        {
+            Status = DxgkpVidMmEvictOwned(Victim);
+            ExAcquireFastMutex(&DxgkVidMmPolicyLock);
+            if (NT_SUCCESS(Status) && Victim->Offered)
+                Victim->OfferDiscarded = TRUE;
+            ExReleaseFastMutex(&DxgkVidMmPolicyLock);
+            DxgkpVidMmEndResidencyTransaction(Victim,
+                                             &VictimOwnerToken);
+        }
         if (!NT_SUCCESS(Status))
         {
             DPRINT1("DxgkVidMmMakeResident: eviction of victim %p failed 0x%08lx\n", Victim, Status);
@@ -7040,10 +7778,666 @@ DxgkVidMmMakeResident(
         Status = STATUS_NO_MEMORY;
         goto Cleanup;
     }
-    Status = DxgkpVidMmCompleteResidencyLocked(Allocation, Adapter);
+    Status = DxgkpVidMmCompleteResidencyOwned(Allocation,
+                                             Adapter,
+                                             DeferAperturePaging,
+                                             OutAperturePagingRequired);
 
 Cleanup:
+    return Status;
+}
+
+NTSTATUS
+DxgkVidMmMakeResident(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    ULONG OwnerToken;
+    NTSTATUS Status;
+
+    if (Allocation == NULL || Adapter == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Status = DxgkpVidMmBeginResidencyTransaction(Allocation, &OwnerToken);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = DxgkpVidMmMakeResidentOwned(Allocation,
+                                        Adapter,
+                                        FALSE,
+                                        NULL);
+    DxgkpVidMmEndResidencyTransaction(Allocation, &OwnerToken);
+    return Status;
+}
+
+typedef struct _DXGKP_VIDMM_BATCH_ENTRY
+{
+    PDXGKVMM_ALLOCATION Allocation;
+    ULONG RequestReferenceCount;
+    BOOLEAN TransactionOwned;
+    BOOLEAN ReferencesAcquired;
+    BOOLEAN WasResident;
+    BOOLEAN PlacementOwned;
+    BOOLEAN AperturePagingRequired;
+    BOOLEAN EvictionRequired;
+    BOOLEAN ApertureUnmapRequired;
+} DXGKP_VIDMM_BATCH_ENTRY, *PDXGKP_VIDMM_BATCH_ENTRY;
+
+static ULONG
+DxgkpVidMmBuildSortedBatchEntries(
+    _Out_writes_(AllocationCount) PDXGKP_VIDMM_BATCH_ENTRY Entries,
+    _In_reads_(AllocationCount) PDXGKVMM_ALLOCATION const *Allocations,
+    _In_ ULONG AllocationCount)
+{
+    ULONG Gap;
+    ULONG Index;
+    ULONG UniqueCount = 0;
+
+    RtlZeroMemory(Entries,
+                  (SIZE_T)AllocationCount * sizeof(*Entries));
+    for (Index = 0; Index < AllocationCount; ++Index)
+    {
+        Entries[Index].Allocation = Allocations[Index];
+        Entries[Index].RequestReferenceCount = 1;
+    }
+
+    /* A deterministic pointer order prevents two overlapping batches from
+     * claiming A/B and B/A and then waiting forever on each other. */
+    for (Gap = AllocationCount / 2; Gap != 0; Gap /= 2)
+    {
+        for (Index = Gap; Index < AllocationCount; ++Index)
+        {
+            DXGKP_VIDMM_BATCH_ENTRY Value = Entries[Index];
+            ULONG Position = Index;
+
+            while (Position >= Gap &&
+                   (ULONG_PTR)Entries[Position - Gap].Allocation >
+                       (ULONG_PTR)Value.Allocation)
+            {
+                Entries[Position] = Entries[Position - Gap];
+                Position -= Gap;
+            }
+            Entries[Position] = Value;
+        }
+    }
+
+    for (Index = 0; Index < AllocationCount; ++Index)
+    {
+        if (UniqueCount != 0 &&
+            Entries[UniqueCount - 1].Allocation == Entries[Index].Allocation)
+        {
+            Entries[UniqueCount - 1].RequestReferenceCount++;
+        }
+        else
+        {
+            if (UniqueCount != Index)
+                Entries[UniqueCount] = Entries[Index];
+            Entries[UniqueCount].RequestReferenceCount = 1;
+            UniqueCount++;
+        }
+    }
+    return UniqueCount;
+}
+
+static VOID
+DxgkpVidMmRollbackMakeResidentBatchEntry(
+    _Inout_ PDXGKP_VIDMM_BATCH_ENTRY Entry,
+    _In_opt_ PDXGKRNL_DEVICE Device,
+    _In_ PVOID Owner)
+{
+    PDXGKVMM_ALLOCATION Allocation = Entry->Allocation;
+    BOOLEAN ReachedZero = FALSE;
+    NTSTATUS Status;
+
+    if (!Entry->ReferencesAcquired)
+        return;
+    Status = KeWaitForSingleObject(&Allocation->ResidencyLock,
+                                   Executive,
+                                   KernelMode,
+                                   FALSE,
+                                   NULL);
+    ASSERT(NT_SUCCESS(Status));
+    if (!NT_SUCCESS(Status))
+        return;
+    ASSERT(Allocation->ResidencyTransactionOwner == Owner);
+    {
+        BOOLEAN Released =
+            DxgkpVidMmReleaseExplicitResidencyReferencesLocked(
+                Allocation,
+                Device,
+                Entry->RequestReferenceCount,
+                &ReachedZero);
+
+        ASSERT(Released);
+    }
+    Entry->ReferencesAcquired = FALSE;
     KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+
+    /*
+     * Only this request's zero-to-one placement may be undone, and only if
+     * releasing this request's references left no pre-existing owner.  No
+     * render packet can have used it while the transaction owner was
+     * published, so the original system backing remains authoritative and no
+     * transfer-back callback is needed.
+     */
+    if (DxgkResidencyCoreShouldRollbackPlacement(
+            Entry->PlacementOwned,
+            ReachedZero))
+    {
+        if (!Allocation->ApertureMapped && Allocation->ApertureMdl != NULL)
+        {
+            IoFreeMdl(Allocation->ApertureMdl);
+            Allocation->ApertureMdl = NULL;
+        }
+        if (Allocation->CpuAddress != NULL &&
+            Allocation->CpuAddress != Allocation->SystemMemory)
+        {
+            Allocation->CpuAddress = NULL;
+        }
+        DxgkpVidMmReleaseSegmentPlacement(Allocation);
+        if (Allocation->SystemMemory != NULL)
+            Allocation->PhysicalAddress =
+                MmGetPhysicalAddress(Allocation->SystemMemory);
+    }
+}
+
+NTSTATUS
+DxgkVidMmMakeResidentBatch(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ PDXGKRNL_DEVICE Device,
+    _In_reads_(AllocationCount) PDXGKVMM_ALLOCATION const *Allocations,
+    _In_ ULONG AllocationCount,
+    _In_ D3DKMT_HANDLE hPagingSyncObject,
+    _Inout_opt_ volatile LONG64 *PagingFenceCounter,
+    _Out_ PULONGLONG OutNumBytesToTrim,
+    _Out_ PULONGLONG OutPagingFenceValue,
+    _Out_ PBOOLEAN OutPagingQueued)
+{
+    DXGKP_VIDMM_BATCH_ENTRY *Entries = NULL;
+    DXGKRNL_PAGING_OP *PagingOperations = NULL;
+    PDXGKVMM_ALLOCATION *PagingAllocations = NULL;
+    ULONG OwnerToken;
+    ULONG UniqueCount;
+    ULONG EntryIndex;
+    ULONG PagingOperationCount = 0;
+    ULONG PagingFenceId = 0;
+    ULONG64 PagingFenceValue = 0;
+    BOOLEAN PagingQueued = FALSE;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    PAGED_CODE();
+    if (OutNumBytesToTrim != NULL)
+        *OutNumBytesToTrim = 0;
+    if (OutPagingFenceValue != NULL)
+        *OutPagingFenceValue = 0;
+    if (OutPagingQueued != NULL)
+        *OutPagingQueued = FALSE;
+    if (Adapter == NULL ||
+        Allocations == NULL ||
+        AllocationCount == 0 ||
+        AllocationCount > MAXLONG ||
+        OutNumBytesToTrim == NULL ||
+        OutPagingFenceValue == NULL ||
+        OutPagingQueued == NULL ||
+        (SIZE_T)AllocationCount >
+            MAXULONG_PTR / sizeof(*Entries))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Entries = ExAllocatePoolWithTag(PagedPool,
+                                    (SIZE_T)AllocationCount *
+                                        sizeof(*Entries),
+                                    TAG_VIDMM_ALLOC);
+    if (Entries == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    UniqueCount = DxgkpVidMmBuildSortedBatchEntries(Entries,
+                                                   Allocations,
+                                                   AllocationCount);
+
+    for (EntryIndex = 0; EntryIndex < UniqueCount; ++EntryIndex)
+    {
+        PDXGKVMM_ALLOCATION Allocation = Entries[EntryIndex].Allocation;
+
+        if (Allocation == NULL || Allocation->Adapter != Adapter)
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Rollback;
+        }
+        Status = DxgkpVidMmBeginResidencyTransaction(Allocation,
+                                                    &OwnerToken);
+        if (!NT_SUCCESS(Status))
+            goto Rollback;
+        Entries[EntryIndex].TransactionOwned = TRUE;
+    }
+
+    for (EntryIndex = 0; EntryIndex < UniqueCount; ++EntryIndex)
+    {
+        PDXGKVMM_ALLOCATION Allocation = Entries[EntryIndex].Allocation;
+
+        Status = KeWaitForSingleObject(&Allocation->ResidencyLock,
+                                       Executive,
+                                       KernelMode,
+                                       FALSE,
+                                       NULL);
+        if (!NT_SUCCESS(Status))
+            goto Rollback;
+        ASSERT(Allocation->ResidencyTransactionOwner == &OwnerToken);
+        Entries[EntryIndex].WasResident = Allocation->Resident;
+        Status = DxgkpVidMmAcquireDeviceResidencyReferencesLocked(
+                     Allocation,
+                     Device,
+                     Entries[EntryIndex].RequestReferenceCount);
+        if (NT_SUCCESS(Status))
+            Entries[EntryIndex].ReferencesAcquired = TRUE;
+        KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+        if (!NT_SUCCESS(Status))
+            goto Rollback;
+    }
+
+    for (EntryIndex = 0; EntryIndex < UniqueCount; ++EntryIndex)
+    {
+        if (Entries[EntryIndex].WasResident)
+            continue;
+        Status = DxgkpVidMmMakeResidentOwned(
+                     Entries[EntryIndex].Allocation,
+                     Adapter,
+                     TRUE,
+                     &Entries[EntryIndex].AperturePagingRequired);
+        if (!NT_SUCCESS(Status))
+        {
+            if (Status == STATUS_NO_MEMORY ||
+                Status == STATUS_GRAPHICS_NO_VIDEO_MEMORY)
+            {
+                DxgkpVidMmSaturatingAdd(
+                    OutNumBytesToTrim,
+                    Entries[EntryIndex].Allocation->Size);
+            }
+            goto Rollback;
+        }
+        Entries[EntryIndex].PlacementOwned = TRUE;
+        if (Entries[EntryIndex].AperturePagingRequired)
+            PagingOperationCount++;
+    }
+
+    if (PagingOperationCount != 0)
+    {
+        ULONG OperationIndex = 0;
+
+        if (Device == NULL ||
+            hPagingSyncObject == 0 ||
+            PagingFenceCounter == NULL ||
+            Device->hMiniportDevice == NULL ||
+            (SIZE_T)PagingOperationCount >
+                MAXULONG_PTR / sizeof(*PagingOperations))
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Rollback;
+        }
+        PagingOperations = ExAllocatePoolWithTag(
+                               PagedPool,
+                               (SIZE_T)PagingOperationCount *
+                                   sizeof(*PagingOperations),
+                               TAG_VIDMM_ALLOC);
+        if (PagingOperations == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Rollback;
+        }
+        PagingAllocations = ExAllocatePoolWithTag(
+                                PagedPool,
+                                (SIZE_T)PagingOperationCount *
+                                    sizeof(*PagingAllocations),
+                                TAG_VIDMM_ALLOC);
+        if (PagingAllocations == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Rollback;
+        }
+
+        for (EntryIndex = 0; EntryIndex < UniqueCount; ++EntryIndex)
+        {
+            if (!Entries[EntryIndex].AperturePagingRequired)
+                continue;
+            Status = DxgkpVidMmFillAperturePagingOperation(
+                         Entries[EntryIndex].Allocation,
+                         TRUE,
+                         &PagingOperations[OperationIndex]);
+            if (!NT_SUCCESS(Status))
+                goto Rollback;
+            PagingOperations[OperationIndex].hMiniportDevice =
+                Device->hMiniportDevice;
+            PagingAllocations[OperationIndex] =
+                Entries[EntryIndex].Allocation;
+            OperationIndex++;
+        }
+
+        PagingFenceValue =
+            (ULONG64)InterlockedIncrement64(PagingFenceCounter);
+        Status = DxgkPagingExecuteBatch(Adapter,
+                                        Device,
+                                        PagingOperations,
+                                        PagingOperationCount,
+                                        PagingAllocations,
+                                        PagingOperationCount,
+                                        hPagingSyncObject,
+                                        PagingFenceValue,
+                                        &PagingFenceId,
+                                        &PagingQueued);
+        if (!NT_SUCCESS(Status))
+            goto Rollback;
+
+        for (EntryIndex = 0; EntryIndex < UniqueCount; ++EntryIndex)
+        {
+            PDXGKVMM_ALLOCATION Allocation =
+                Entries[EntryIndex].Allocation;
+
+            if (!Entries[EntryIndex].AperturePagingRequired)
+                continue;
+            Allocation->ApertureMapped = TRUE;
+            if (PagingQueued)
+            {
+                DxgkPagingBeginPlacement(Allocation,
+                                         Allocation->SegmentId,
+                                         Allocation->SegmentOffset,
+                                         PagingFenceId);
+            }
+        }
+        *OutPagingFenceValue = PagingFenceValue;
+        *OutPagingQueued = PagingQueued;
+    }
+
+    goto Cleanup;
+
+Rollback:
+    for (EntryIndex = UniqueCount; EntryIndex != 0; --EntryIndex)
+    {
+        DxgkpVidMmRollbackMakeResidentBatchEntry(
+            &Entries[EntryIndex - 1],
+            Device,
+            &OwnerToken);
+    }
+
+Cleanup:
+    if (Entries != NULL)
+    {
+        for (EntryIndex = UniqueCount; EntryIndex != 0; --EntryIndex)
+        {
+            if (Entries[EntryIndex - 1].TransactionOwned)
+            {
+                DxgkpVidMmEndResidencyTransaction(
+                    Entries[EntryIndex - 1].Allocation,
+                    &OwnerToken);
+            }
+        }
+    }
+    if (PagingOperations != NULL)
+        ExFreePoolWithTag(PagingOperations, TAG_VIDMM_ALLOC);
+    if (PagingAllocations != NULL)
+        ExFreePoolWithTag(PagingAllocations, TAG_VIDMM_ALLOC);
+    if (Entries != NULL)
+        ExFreePoolWithTag(Entries, TAG_VIDMM_ALLOC);
+    return Status;
+}
+
+NTSTATUS
+DxgkVidMmEvictBatch(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ PDXGKRNL_DEVICE Device,
+    _In_reads_(AllocationCount) PDXGKVMM_ALLOCATION const *Allocations,
+    _In_ ULONG AllocationCount,
+    _In_ BOOLEAN EvictOnlyIfNecessary,
+    _Out_ PULONGLONG OutNumBytesToTrim)
+{
+    DXGKP_VIDMM_BATCH_ENTRY *Entries = NULL;
+    DXGKRNL_PAGING_OP *PagingOperations = NULL;
+    PDXGKVMM_ALLOCATION *PagingAllocations = NULL;
+    ULONG OwnerToken;
+    ULONG UniqueCount;
+    ULONG EntryIndex;
+    ULONG PagingOperationCount = 0;
+    ULONG PagingFenceId = 0;
+    BOOLEAN PagingQueued = FALSE;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    PAGED_CODE();
+    if (OutNumBytesToTrim != NULL)
+        *OutNumBytesToTrim = 0;
+    if (Adapter == NULL ||
+        Allocations == NULL ||
+        AllocationCount == 0 ||
+        AllocationCount > MAXLONG ||
+        OutNumBytesToTrim == NULL ||
+        (SIZE_T)AllocationCount >
+            MAXULONG_PTR / sizeof(*Entries))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Entries = ExAllocatePoolWithTag(PagedPool,
+                                    (SIZE_T)AllocationCount *
+                                        sizeof(*Entries),
+                                    TAG_VIDMM_ALLOC);
+    if (Entries == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    UniqueCount = DxgkpVidMmBuildSortedBatchEntries(Entries,
+                                                   Allocations,
+                                                   AllocationCount);
+
+    for (EntryIndex = 0; EntryIndex < UniqueCount; ++EntryIndex)
+    {
+        PDXGKVMM_ALLOCATION Allocation = Entries[EntryIndex].Allocation;
+
+        if (Allocation == NULL || Allocation->Adapter != Adapter)
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Cleanup;
+        }
+        Status = DxgkpVidMmBeginResidencyTransaction(Allocation,
+                                                    &OwnerToken);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+        Entries[EntryIndex].TransactionOwned = TRUE;
+    }
+
+    /*
+     * Validate every duplicate count while all unique physical allocations
+     * are transaction-owned.  No concurrent MakeResident, Evict, or device
+     * teardown can consume a reference between this pass and the commit.
+     */
+    for (EntryIndex = 0; EntryIndex < UniqueCount; ++EntryIndex)
+    {
+        PDXGKVMM_ALLOCATION Allocation = Entries[EntryIndex].Allocation;
+        LONG DeviceReferences;
+        LONG TotalReferences;
+
+        Status = KeWaitForSingleObject(&Allocation->ResidencyLock,
+                                       Executive,
+                                       KernelMode,
+                                       FALSE,
+                                       NULL);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+        ASSERT(Allocation->ResidencyTransactionOwner == &OwnerToken);
+        DeviceReferences =
+            DxgkpVidMmQueryDeviceResidencyReferenceCountLocked(Allocation,
+                                                               Device);
+        TotalReferences = InterlockedCompareExchange(
+                              &Allocation->ResidencyReferenceCount,
+                              0,
+                              0);
+        {
+            BOOLEAN TrimCandidate;
+
+            /* The core decision consumes the exact duplicate-collapsed
+             * request count while this allocation is transaction-owned. */
+            Status = DxgkResidencyCorePlanEvict(
+                         DeviceReferences,
+                         TotalReferences,
+                         Entries[EntryIndex].RequestReferenceCount,
+                         Allocation->Resident,
+                         EvictOnlyIfNecessary,
+                         &Entries[EntryIndex].EvictionRequired,
+                         &TrimCandidate);
+            if (NT_SUCCESS(Status) && TrimCandidate)
+                DxgkpVidMmSaturatingAdd(OutNumBytesToTrim,
+                                        Allocation->Size);
+        }
+        KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+    }
+
+    /*
+     * Prepare every fallible physical operation before changing any
+     * residency reference or placement.  Local-memory downloads may update
+     * the allocation's existing system cache, but remain invisible while the
+     * committed placement stays resident.
+     */
+    for (EntryIndex = 0; EntryIndex < UniqueCount; ++EntryIndex)
+    {
+        if (!Entries[EntryIndex].EvictionRequired)
+            continue;
+        Status = DxgkpVidMmPrepareEvictionOwned(
+                     Entries[EntryIndex].Allocation,
+                     &Entries[EntryIndex].ApertureUnmapRequired);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+        if (Entries[EntryIndex].ApertureUnmapRequired)
+            PagingOperationCount++;
+    }
+
+    if (PagingOperationCount != 0)
+    {
+        ULONG OperationIndex = 0;
+
+        if (Device == NULL ||
+            Device->hMiniportDevice == NULL ||
+            (SIZE_T)PagingOperationCount >
+                MAXULONG_PTR / sizeof(*PagingOperations))
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Cleanup;
+        }
+        PagingOperations = ExAllocatePoolWithTag(
+                               PagedPool,
+                               (SIZE_T)PagingOperationCount *
+                                   sizeof(*PagingOperations),
+                               TAG_VIDMM_ALLOC);
+        if (PagingOperations == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Cleanup;
+        }
+        PagingAllocations = ExAllocatePoolWithTag(
+                                PagedPool,
+                                (SIZE_T)PagingOperationCount *
+                                    sizeof(*PagingAllocations),
+                                TAG_VIDMM_ALLOC);
+        if (PagingAllocations == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Cleanup;
+        }
+        for (EntryIndex = 0; EntryIndex < UniqueCount; ++EntryIndex)
+        {
+            if (!Entries[EntryIndex].ApertureUnmapRequired)
+                continue;
+            Status = DxgkpVidMmFillAperturePagingOperation(
+                         Entries[EntryIndex].Allocation,
+                         FALSE,
+                         &PagingOperations[OperationIndex]);
+            if (!NT_SUCCESS(Status))
+                goto Cleanup;
+            PagingOperations[OperationIndex].hMiniportDevice =
+                Device->hMiniportDevice;
+            PagingAllocations[OperationIndex] =
+                Entries[EntryIndex].Allocation;
+            OperationIndex++;
+        }
+        Status = DxgkPagingExecuteBatch(Adapter,
+                                        Device,
+                                        PagingOperations,
+                                        PagingOperationCount,
+                                        PagingAllocations,
+                                        PagingOperationCount,
+                                        0,
+                                        0,
+                                        &PagingFenceId,
+                                        &PagingQueued);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+    }
+
+    /* All remaining work is infallible bookkeeping. */
+    for (EntryIndex = 0; EntryIndex < UniqueCount; ++EntryIndex)
+    {
+        PDXGKVMM_ALLOCATION Allocation = Entries[EntryIndex].Allocation;
+        ULONG ReleaseIndex;
+        BOOLEAN ReachedZero = FALSE;
+
+        Status = KeWaitForSingleObject(&Allocation->ResidencyLock,
+                                       Executive,
+                                       KernelMode,
+                                       FALSE,
+                                       NULL);
+        ASSERT(NT_SUCCESS(Status));
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+        ASSERT(Allocation->ResidencyTransactionOwner == &OwnerToken);
+        for (ReleaseIndex = 0;
+             ReleaseIndex < Entries[EntryIndex].RequestReferenceCount;
+             ++ReleaseIndex)
+        {
+            BOOLEAN Released =
+                DxgkpVidMmReleaseDeviceResidencyReferenceLocked(
+                    Allocation,
+                    Device,
+                    &ReachedZero);
+
+            ASSERT(Released);
+        }
+        KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+
+        if (Entries[EntryIndex].EvictionRequired)
+        {
+            ASSERT(ReachedZero);
+            DxgkpVidMmCommitPreparedEvictionOwned(Allocation);
+            if (Entries[EntryIndex].ApertureUnmapRequired &&
+                PagingQueued)
+            {
+                DxgkPagingBeginPlacement(Allocation,
+                                         0,
+                                         0,
+                                         PagingFenceId);
+            }
+            ExAcquireFastMutex(&DxgkVidMmPolicyLock);
+            if (Allocation->Offered)
+                Allocation->OfferDiscarded = TRUE;
+            ExReleaseFastMutex(&DxgkVidMmPolicyLock);
+        }
+    }
+    Status = STATUS_SUCCESS;
+
+Cleanup:
+    if (!NT_SUCCESS(Status))
+        *OutNumBytesToTrim = 0;
+    if (Entries != NULL)
+    {
+        for (EntryIndex = UniqueCount; EntryIndex != 0; --EntryIndex)
+        {
+            if (Entries[EntryIndex - 1].TransactionOwned)
+            {
+                DxgkpVidMmEndResidencyTransaction(
+                    Entries[EntryIndex - 1].Allocation,
+                    &OwnerToken);
+            }
+        }
+    }
+    if (PagingOperations != NULL)
+        ExFreePoolWithTag(PagingOperations, TAG_VIDMM_ALLOC);
+    if (PagingAllocations != NULL)
+        ExFreePoolWithTag(PagingAllocations, TAG_VIDMM_ALLOC);
+    if (Entries != NULL)
+        ExFreePoolWithTag(Entries, TAG_VIDMM_ALLOC);
     return Status;
 }
 
@@ -7155,96 +8549,93 @@ DxgkpVidMmReleaseApertureMapping(
 }
 
 static NTSTATUS
-DxgkpVidMmEnsureAllocationApertureMappedLocked(
+DxgkpVidMmPrepareAllocationApertureMappingOwned(
     _In_ PDXGKVMM_ALLOCATION Allocation)
 {
     PDXGKRNL_ADAPTER Adapter;
     PDXGKRNL_SEGMENT Segment;
-    DXGKARG_BUILDPAGINGBUFFER BuildArgs;
-    SIZE_T NumberOfPages;
     PMDL Mdl;
-    NTSTATUS Status;
 
     if (Allocation == NULL)
         return STATUS_INVALID_PARAMETER;
     if (Allocation->ContentLost)
         return STATUS_GRAPHICS_ALLOCATION_CONTENT_LOST;
-
     if (!Allocation->Resident)
         return STATUS_SUCCESS;
 
     Adapter = Allocation->Adapter;
-    if (Adapter == NULL || Adapter->Segments == NULL)
-        return STATUS_INVALID_PARAMETER;
-
-    if (Allocation->SegmentId < 1 ||
+    if (Adapter == NULL ||
+        Adapter->Segments == NULL ||
+        Allocation->SegmentId < 1 ||
         Allocation->SegmentId > Adapter->SegmentCount)
     {
         return STATUS_INVALID_PARAMETER;
     }
-
     Segment = &ADAPTER_SEGMENTS(Adapter)[Allocation->SegmentId - 1];
     if (!VidMmSegmentIsAperture(Segment))
         return STATUS_SUCCESS;
     if (Segment->Flags.PitchAlignment)
         return STATUS_NOT_SUPPORTED;
-
-    if (Allocation->ApertureMapped)
+    if (Allocation->ApertureMapped || Allocation->ApertureMdl != NULL)
         return STATUS_SUCCESS;
-
     if (Allocation->SystemMemory == NULL)
         return STATUS_INVALID_PARAMETER;
-
-    if (((ULONG_PTR)Allocation->SystemMemory & (PAGE_SIZE - 1)) != 0)
-    {
-        DPRINT1("DxgkVidMmEnsureAllocationApertureMapped: non page-aligned backing %p\n",
-                Allocation->SystemMemory);
-    }
-
-    NumberOfPages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(Allocation->SystemMemory, Allocation->Size);
     if (Allocation->Size > MAXULONG)
         return STATUS_INVALID_BUFFER_SIZE;
-    Mdl = IoAllocateMdl(Allocation->SystemMemory, (ULONG)Allocation->Size, FALSE, FALSE, NULL);
+
+    Mdl = IoAllocateMdl(Allocation->SystemMemory,
+                        (ULONG)Allocation->Size,
+                        FALSE,
+                        FALSE,
+                        NULL);
     if (Mdl == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
-
     MmBuildMdlForNonPagedPool(Mdl);
-
-    RtlZeroMemory(&BuildArgs, sizeof(BuildArgs));
-    BuildArgs.Operation = DXGK_OPERATION_MAP_APERTURE_SEGMENT;
-    BuildArgs.MapApertureSegment.hDevice = Allocation->MiniportDeviceHandle;
-    BuildArgs.MapApertureSegment.hAllocation = Allocation->MiniportHandle;
-    BuildArgs.MapApertureSegment.SegmentId = Allocation->SegmentId;
-    BuildArgs.MapApertureSegment.OffsetInPages = (SIZE_T)(Allocation->SegmentOffset / PAGE_SIZE);
-    BuildArgs.MapApertureSegment.NumberOfPages = NumberOfPages;
-    BuildArgs.MapApertureSegment.pMdl = Mdl;
-    BuildArgs.MapApertureSegment.MdlOffset = 0;
-
-    DXGKRNL_VERBOSE("EnsureApertureMapped: calling BuildPagingBuffer MAP_APERTURE "
-                    "hAlloc=%p SegId=%u Pages=%Iu\n",
-                    Allocation->MiniportHandle, Allocation->SegmentId, NumberOfPages);
-
-    if (!DxgkAcquireMiniportCallback(Adapter))
-    {
-        IoFreeMdl(Mdl);
-        return STATUS_DEVICE_NOT_READY;
-    }
-    if (DXGK_CB_FULL(Adapter, DxgkDdiBuildPagingBuffer) != NULL)
-        Status = DXGK_CB_FULL(Adapter, DxgkDdiBuildPagingBuffer)(Adapter->MiniportDeviceContext, &BuildArgs);
-    else
-        Status = STATUS_NOT_SUPPORTED;
-    DxgkReleaseMiniportCallback(Adapter);
-
-    DXGKRNL_VERBOSE("EnsureApertureMapped: BuildPagingBuffer returned 0x%08lX\n", Status);
-
-    if (!NT_SUCCESS(Status))
-    {
-        IoFreeMdl(Mdl);
-        return Status;
-    }
-
     Allocation->ApertureMdl = Mdl;
-    Allocation->ApertureMapped = TRUE;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+DxgkpVidMmFillAperturePagingOperation(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ BOOLEAN Map,
+    _Out_ PDXGKRNL_PAGING_OP Op)
+{
+    PDXGKRNL_ADAPTER Adapter;
+    PDXGKRNL_SEGMENT Segment;
+
+    if (Allocation == NULL || Op == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Adapter = Allocation->Adapter;
+    if (Adapter == NULL ||
+        Adapter->Segments == NULL ||
+        Allocation->SegmentId < 1 ||
+        Allocation->SegmentId > Adapter->SegmentCount)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    Segment = &ADAPTER_SEGMENTS(Adapter)[Allocation->SegmentId - 1];
+    if (!VidMmSegmentIsAperture(Segment) ||
+        Allocation->SystemMemory == NULL ||
+        (Map && Allocation->ApertureMdl == NULL))
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    RtlZeroMemory(Op, sizeof(*Op));
+    Op->Type = Map ? DxgkPagingOpMapAperture
+                   : DxgkPagingOpUnmapAperture;
+    Op->hMiniportDevice = Allocation->MiniportDeviceHandle;
+    Op->hMiniportAllocation = Allocation->MiniportHandle;
+    Op->DestinationSegmentId = Allocation->SegmentId;
+    Op->OffsetInPages = (SIZE_T)(Allocation->SegmentOffset / PAGE_SIZE);
+    Op->NumberOfPages =
+        ADDRESS_AND_SIZE_TO_SPAN_PAGES(Allocation->SystemMemory,
+                                       Allocation->Size);
+    if (Map)
+        Op->SourceMdl = Allocation->ApertureMdl;
+    else
+        Op->DummyPage = Segment->DummyPage;
     return STATUS_SUCCESS;
 }
 
@@ -7252,13 +8643,31 @@ NTSTATUS
 DxgkVidMmEnsureAllocationApertureMapped(
     _In_ PDXGKVMM_ALLOCATION Allocation)
 {
+    ULONG OwnerToken;
+    DXGKRNL_PAGING_OP Op;
     NTSTATUS Status;
 
     if (Allocation == NULL)
         return STATUS_INVALID_PARAMETER;
-    (VOID)KeWaitForSingleObject(&Allocation->ResidencyLock, Executive, KernelMode, FALSE, NULL);
-    Status = DxgkpVidMmEnsureAllocationApertureMappedLocked(Allocation);
-    KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+    Status = DxgkpVidMmBeginResidencyTransaction(Allocation, &OwnerToken);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = DxgkpVidMmPrepareAllocationApertureMappingOwned(Allocation);
+    if (NT_SUCCESS(Status) &&
+        Allocation->Resident &&
+        !Allocation->ApertureMapped &&
+        Allocation->ApertureMdl != NULL)
+    {
+        Status = DxgkpVidMmFillAperturePagingOperation(Allocation, TRUE, &Op);
+        if (NT_SUCCESS(Status))
+            Status = DxgkPagingExecuteSynchronous(Allocation->Adapter,
+                                                  Allocation->Device,
+                                                  &Op);
+        if (NT_SUCCESS(Status))
+            Allocation->ApertureMapped = TRUE;
+    }
+    DxgkpVidMmEndResidencyTransaction(Allocation, &OwnerToken);
     return Status;
 }
 
@@ -7467,7 +8876,7 @@ DxgkpVidMmForceUnmapUserMapping(
 }
 
 static NTSTATUS
-DxgkpVidMmRecoverAllocationLocked(
+DxgkpVidMmRecoverAllocationOwned(
     _In_ PDXGKVMM_ALLOCATION Allocation)
 {
     PDXGKRNL_ADAPTER Adapter = Allocation->Adapter;
@@ -7529,7 +8938,7 @@ DxgkVidMmPrepareForIdle(
         return STATUS_INVALID_PARAMETER;
     if (InterlockedCompareExchange(&Adapter->VidMmDestroyQueuesBlocked, 0, 0) == 0 || Adapter->KmdExclusiveOwnerThread != PsGetCurrentThread())
         return STATUS_INVALID_DEVICE_STATE;
-    Status = DxgkpVidMmCaptureAdapterAllocations(Adapter, &Snapshot);
+    Status = DxgkpVidMmCaptureAdapterAllocations(Adapter, TRUE, &Snapshot);
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -7537,7 +8946,12 @@ DxgkVidMmPrepareForIdle(
     {
         PDXGKVMM_ALLOCATION Allocation = Snapshot.Entries[Index].Allocation;
 
-        (VOID)KeWaitForSingleObject(&Allocation->ResidencyLock, Executive, KernelMode, FALSE, NULL);
+        Status = DxgkpVidMmLockResidencyForExternalOperation(Allocation);
+        if (!NT_SUCCESS(Status))
+        {
+            FirstFailure = Status;
+            break;
+        }
         if (DxgkSubmissionResidencyPinIsHeld(&Allocation->SubmissionResidencyPinCount))
             FirstFailure = STATUS_DEVICE_BUSY;
         else if (Allocation->Resident && Adapter->Segments != NULL && Allocation->SegmentId >= 1 && Allocation->SegmentId <= Adapter->SegmentCount && !VidMmSegmentIsAperture(&ADAPTER_SEGMENTS(Adapter)[Allocation->SegmentId - 1]) && Allocation->UserModeAddress != NULL)
@@ -7552,15 +8966,43 @@ DxgkVidMmPrepareForIdle(
         for (Index = 0; Index < Snapshot.EntryCount; ++Index)
         {
             PDXGKVMM_ALLOCATION Allocation = Snapshot.Entries[Index].Allocation;
+            BOOLEAN Resident;
+            BOOLEAN ReleaseAperture;
+            ULONG OwnerToken;
 
-            (VOID)KeWaitForSingleObject(&Allocation->ResidencyLock, Executive, KernelMode, FALSE, NULL);
-            if (Allocation->Resident)
-                Status = DxgkpVidMmEvictLocked(Allocation);
-            else if (Allocation->ApertureMapped || Allocation->ApertureMdl != NULL)
-                Status = DxgkpVidMmReleaseApertureMapping(Allocation, FALSE);
-            else
-                Status = STATUS_SUCCESS;
+            Status = DxgkpVidMmLockResidencyForExternalOperation(Allocation);
+            if (!NT_SUCCESS(Status))
+            {
+                if (NT_SUCCESS(FirstFailure))
+                    FirstFailure = Status;
+                continue;
+            }
+            Resident = Allocation->Resident;
+            ReleaseAperture =
+                Allocation->ApertureMapped ||
+                Allocation->ApertureMdl != NULL;
             KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+            if (Resident)
+            {
+                Status = DxgkVidMmEvict(Allocation);
+            }
+            else if (ReleaseAperture)
+            {
+                Status = DxgkpVidMmBeginResidencyTransaction(
+                             Allocation,
+                             &OwnerToken);
+                if (NT_SUCCESS(Status))
+                {
+                    Status = DxgkpVidMmReleaseApertureMapping(Allocation,
+                                                             FALSE);
+                    DxgkpVidMmEndResidencyTransaction(Allocation,
+                                                     &OwnerToken);
+                }
+            }
+            else
+            {
+                Status = STATUS_SUCCESS;
+            }
             if (NT_SUCCESS(FirstFailure) && !NT_SUCCESS(Status))
                 FirstFailure = Status;
         }
@@ -7584,17 +9026,22 @@ DxgkVidMmRecoverFromTimeout(
         return STATUS_INVALID_PARAMETER;
     if (InterlockedCompareExchange(&Adapter->VidMmDestroyQueuesBlocked, 0, 0) == 0 || Adapter->KmdExclusiveOwnerThread != PsGetCurrentThread())
         return STATUS_INVALID_DEVICE_STATE;
-    Status = DxgkpVidMmCaptureAdapterAllocations(Adapter, &Snapshot);
+    Status = DxgkpVidMmCaptureAdapterAllocations(Adapter, TRUE, &Snapshot);
     if (!NT_SUCCESS(Status))
         return Status;
 
     for (Index = 0; Index < Snapshot.EntryCount; ++Index)
     {
         PDXGKVMM_ALLOCATION Allocation = Snapshot.Entries[Index].Allocation;
+        ULONG OwnerToken;
 
-        (VOID)KeWaitForSingleObject(&Allocation->ResidencyLock, Executive, KernelMode, FALSE, NULL);
-        Status = DxgkpVidMmRecoverAllocationLocked(Allocation);
-        KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+        Status = DxgkpVidMmBeginResidencyTransaction(Allocation,
+                                                    &OwnerToken);
+        if (NT_SUCCESS(Status))
+        {
+            Status = DxgkpVidMmRecoverAllocationOwned(Allocation);
+            DxgkpVidMmEndResidencyTransaction(Allocation, &OwnerToken);
+        }
         if (NT_SUCCESS(FirstFailure) && !NT_SUCCESS(Status))
             FirstFailure = Status;
     }
@@ -7641,7 +9088,9 @@ DxgkVidMmAcquireSubmissionResidencyPin(
         if (!NT_SUCCESS(Status))
             return Status == STATUS_TIMEOUT ? STATUS_GRAPHICS_ALLOCATION_BUSY : Status;
     }
-    (VOID)KeWaitForSingleObject(&Allocation->ResidencyLock, Executive, KernelMode, FALSE, NULL);
+    Status = DxgkpVidMmLockResidencyForExternalOperation(Allocation);
+    if (!NT_SUCCESS(Status))
+        return Status;
     (VOID)DxgkPagingSyncPlacement(Allocation);
     if (!DxgkPagingAllocationReadyForSubmission(Allocation))
         Status = STATUS_GRAPHICS_ALLOCATION_BUSY;
@@ -8325,6 +9774,37 @@ DxgkpVidMmCleanupAllocations(
     }
 }
 
+static NTSTATUS
+DxgkpVidMmReleaseDeviceResidencyReferencesForCleanup(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device)
+{
+    DXGKVMM_ALLOCATION_SNAPSHOT Snapshot;
+    NTSTATUS Status;
+    SIZE_T Index;
+
+    /*
+     * Explicit residency is charged to the physical backing, including when
+     * the caller used an opened/shared allocation.  Device teardown removes
+     * all of that device's handles before freeing the device object, so purge
+     * its charges from every still-published physical backing first.
+     *
+     * Do not include destroy-batch entries here.  They are no longer
+     * published to callers and their finalizers drain residency state; unlike
+     * global entries, a batch lifetime reference does not itself hold each
+     * allocation object alive while a worker finalizes the batch.
+     */
+    Status = DxgkpVidMmCaptureAdapterAllocations(Adapter, FALSE, &Snapshot);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    for (Index = 0; Index < Snapshot.EntryCount; ++Index)
+        DxgkVidMmReleaseAllDeviceResidencyReferences(Snapshot.Entries[Index].Allocation, Device);
+
+    DxgkpVidMmReleaseAllocationSnapshot(&Snapshot);
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 DxgkVidMmCleanupDeviceAllocations(
     _In_ PDXGKRNL_DEVICE Device)
@@ -8332,6 +9812,7 @@ DxgkVidMmCleanupDeviceAllocations(
     PDXGKRNL_ADAPTER Adapter;
     HANDLE MiniportDeviceHandle;
     PLIST_ENTRY Entry;
+    NTSTATUS Status;
     BOOLEAN RetainedObjects = FALSE;
 
     PAGED_CODE();
@@ -8343,6 +9824,14 @@ DxgkVidMmCleanupDeviceAllocations(
     {
         if (!Adapter->MiniportDeviceStopped || InterlockedCompareExchange(&Adapter->MiniportCallbacksValid, 0, 0) != 0 || InterlockedCompareExchange(&Adapter->VidMmDestroyQueuesBlocked, 0, 0) == 0)
             return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    Status = DxgkpVidMmReleaseDeviceResidencyReferencesForCleanup(Adapter, Device);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (Adapter->MiniportRemoveDeviceComplete)
+    {
         ExAcquireFastMutex(&DxgkVidMmDestroyBatchListLock);
         for (Entry = DxgkVidMmDestroyBatchListHead.Flink; Entry != &DxgkVidMmDestroyBatchListHead; Entry = Entry->Flink)
         {
