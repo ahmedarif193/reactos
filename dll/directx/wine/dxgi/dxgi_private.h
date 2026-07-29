@@ -192,7 +192,7 @@ HRESULT d3d12_swapchain_create(IWineDXGIFactory *factory, ID3D12CommandQueue *qu
         const DXGI_SWAP_CHAIN_DESC1 *swapchain_desc, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *fullscreen_desc,
         IDXGISwapChain1 **swapchain);
 
-#ifdef __REACTOS__
+#ifdef REACTOS_DXGI_D3DKMT_ADAPTER_ORDER
 HRESULT dxgi_get_wddm_adapter_index(struct wined3d *wined3d, UINT wddm_adapter_idx, UINT *wined3d_adapter_idx);
 #endif
 

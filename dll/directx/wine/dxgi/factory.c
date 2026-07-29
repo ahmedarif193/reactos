@@ -129,7 +129,7 @@ static HRESULT STDMETHODCALLTYPE dxgi_factory_EnumAdapters1(IWineDXGIFactory *if
 {
     struct dxgi_factory *factory = impl_from_IWineDXGIFactory(iface);
     struct dxgi_adapter *adapter_object;
-#ifndef __REACTOS__
+#ifndef REACTOS_DXGI_D3DKMT_ADAPTER_ORDER
     UINT adapter_count;
 #endif
     HRESULT hr;
@@ -139,7 +139,7 @@ static HRESULT STDMETHODCALLTYPE dxgi_factory_EnumAdapters1(IWineDXGIFactory *if
     if (!adapter)
         return DXGI_ERROR_INVALID_CALL;
 
-#ifdef __REACTOS__
+#ifdef REACTOS_DXGI_D3DKMT_ADAPTER_ORDER
     if (FAILED(hr = dxgi_get_wddm_adapter_index(factory->wined3d, adapter_idx, &adapter_idx)))
 #else
     wined3d_mutex_lock();
@@ -149,7 +149,7 @@ static HRESULT STDMETHODCALLTYPE dxgi_factory_EnumAdapters1(IWineDXGIFactory *if
 #endif
     {
         *adapter = NULL;
-#ifdef __REACTOS__
+#ifdef REACTOS_DXGI_D3DKMT_ADAPTER_ORDER
         return hr;
 #else
         return DXGI_ERROR_NOT_FOUND;
