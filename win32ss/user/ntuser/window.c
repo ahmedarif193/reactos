@@ -1229,6 +1229,8 @@ co_IntSetParent(PWND Wnd, PWND WndNewParent)
 
    /* Set the new parent */
    WndSetParent(Wnd, WndNewParent);
+   if (WndNewParent && !UserIsDesktopWindow(WndNewParent) && !UserIsMessageWindow(WndNewParent))
+      Wnd->DpiContext = WndNewParent->DpiContext;
 
    if (Wnd->style & WS_CHILD &&
        Wnd->spwndOwner &&
@@ -1971,6 +1973,16 @@ PWND FASTCALL IntCreateWindow(CREATESTRUCTW* Cs,
    WndSetParent(pWnd, ParentWindow);
    WndSetOwner(pWnd, OwnerWindow);
    pWnd->fnid = 0;
+   if (pdeskCreated)
+      pWnd->DpiContext = NTUSER_DPI_PER_MONITOR_AWARE;
+   else if (ParentWindow && !UserIsDesktopWindow(ParentWindow) && !UserIsMessageWindow(ParentWindow))
+      pWnd->DpiContext = ParentWindow->DpiContext;
+   else if (pti->DpiContext)
+      pWnd->DpiContext = pti->DpiContext;
+   else if (pti->ppi && pti->ppi->DpiContext)
+      pWnd->DpiContext = pti->ppi->DpiContext;
+   else
+      pWnd->DpiContext = NTUSER_DPI_UNAWARE;
    WndSetLastActive(pWnd, pWnd);
    // Ramp up compatible version sets.
    if ( dwVer >= WINVER_WIN31 )

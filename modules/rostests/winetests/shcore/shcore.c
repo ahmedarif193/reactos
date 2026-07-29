@@ -23,6 +23,7 @@
 #include <windows.h>
 #include "initguid.h"
 #include "objidl.h"
+#include "shellscalingapi.h"
 #include "shlwapi.h"
 
 #include "wine/test.h"
@@ -43,6 +44,12 @@ static DWORD (WINAPI *pSHRegGetPathA)(HKEY, const char *, const char *, char *, 
 static DWORD (WINAPI *pSHCopyKeyA)(HKEY, const char *, HKEY, DWORD);
 static HRESULT (WINAPI *pSHCreateStreamOnFileA)(const char *path, DWORD mode, IStream **stream);
 static HRESULT (WINAPI *pIStream_Size)(IStream *stream, ULARGE_INTEGER *size);
+static HRESULT (WINAPI *pGetDpiForMonitor)(HMONITOR, MONITOR_DPI_TYPE, UINT *, UINT *);
+static UINT (WINAPI *pGetDpiForShellUIComponent)(SHELL_UI_COMPONENT);
+static HRESULT (WINAPI *pGetProcessDpiAwareness)(HANDLE, PROCESS_DPI_AWARENESS *);
+static DEVICE_SCALE_FACTOR (WINAPI *pGetScaleFactorForDevice)(DISPLAY_DEVICE_TYPE);
+static HRESULT (WINAPI *pGetScaleFactorForMonitor)(HMONITOR, DEVICE_SCALE_FACTOR *);
+static HRESULT (WINAPI *pSetProcessDpiAwareness)(PROCESS_DPI_AWARENESS);
 
 /* Keys used for testing */
 #define REG_TEST_KEY        "Software\\Wine\\Test"
@@ -77,7 +84,122 @@ static void init(HMODULE hshcore)
     X(SHCopyKeyA);
     X(SHCreateStreamOnFileA);
     X(IStream_Size);
+    X(GetDpiForMonitor);
+    X(GetDpiForShellUIComponent);
+    X(GetProcessDpiAwareness);
+    X(GetScaleFactorForDevice);
+    X(GetScaleFactorForMonitor);
+    X(SetProcessDpiAwareness);
 #undef X
+}
+
+static BOOL is_valid_scale_factor(DEVICE_SCALE_FACTOR scale)
+{
+    switch (scale)
+    {
+    case SCALE_100_PERCENT:
+    case SCALE_120_PERCENT:
+    case SCALE_125_PERCENT:
+    case SCALE_140_PERCENT:
+    case SCALE_150_PERCENT:
+    case SCALE_160_PERCENT:
+    case SCALE_175_PERCENT:
+    case SCALE_180_PERCENT:
+    case SCALE_200_PERCENT:
+    case SCALE_225_PERCENT:
+    case SCALE_250_PERCENT:
+    case SCALE_300_PERCENT:
+    case SCALE_350_PERCENT:
+    case SCALE_400_PERCENT:
+    case SCALE_450_PERCENT:
+    case SCALE_500_PERCENT:
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
+static void test_dpi_scaling(void)
+{
+    PROCESS_DPI_AWARENESS awareness, awareness2;
+    DEVICE_SCALE_FACTOR scale;
+    HMONITOR monitor;
+    POINT origin = {0, 0};
+    UINT dpi_x, dpi_y, component_dpi;
+    HRESULT hr;
+    unsigned int i;
+
+    if (!pGetDpiForMonitor || !pGetScaleFactorForMonitor)
+    {
+        win_skip("DPI monitor scaling APIs are not available.\n");
+        return;
+    }
+
+    monitor = MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY);
+    ok(!!monitor, "Failed to get the primary monitor.\n");
+
+    dpi_x = dpi_y = 0;
+    hr = pGetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &dpi_x, &dpi_y);
+    ok(hr == S_OK, "GetDpiForMonitor failed, hr %#lx.\n", hr);
+    ok(dpi_x && dpi_y && dpi_x == dpi_y, "Unexpected monitor DPI %u x %u.\n", dpi_x, dpi_y);
+
+    hr = pGetDpiForMonitor(NULL, MDT_EFFECTIVE_DPI, &dpi_x, &dpi_y);
+    ok(hr == E_INVALIDARG, "Unexpected invalid-monitor hr %#lx.\n", hr);
+    hr = pGetDpiForMonitor(monitor, (MONITOR_DPI_TYPE)3, &dpi_x, &dpi_y);
+    ok(hr == E_INVALIDARG, "Unexpected invalid-type hr %#lx.\n", hr);
+    hr = pGetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, NULL, &dpi_y);
+    ok(hr == E_INVALIDARG, "Unexpected null-output hr %#lx.\n", hr);
+
+    scale = DEVICE_SCALE_FACTOR_INVALID;
+    hr = pGetScaleFactorForMonitor(monitor, &scale);
+    ok(hr == S_OK, "GetScaleFactorForMonitor failed, hr %#lx.\n", hr);
+    ok(is_valid_scale_factor(scale), "Unexpected scale factor %u.\n", scale);
+
+    scale = DEVICE_SCALE_FACTOR_INVALID;
+    hr = pGetScaleFactorForMonitor(NULL, &scale);
+    ok(FAILED(hr), "GetScaleFactorForMonitor unexpectedly succeeded.\n");
+    ok(is_valid_scale_factor(scale), "Failure did not provide a fallback scale, got %u.\n", scale);
+    hr = pGetScaleFactorForMonitor(monitor, NULL);
+    ok(hr == E_INVALIDARG, "Unexpected null-scale hr %#lx.\n", hr);
+
+    if (pGetScaleFactorForDevice)
+    {
+        scale = pGetScaleFactorForDevice(DEVICE_PRIMARY);
+        ok(is_valid_scale_factor(scale), "Unexpected primary-device scale %u.\n", scale);
+    }
+
+    if (pGetDpiForShellUIComponent)
+    {
+        for (i = SHELL_UI_COMPONENT_TASKBARS; i <= SHELL_UI_COMPONENT_DESKBAND; ++i)
+        {
+            component_dpi = pGetDpiForShellUIComponent((SHELL_UI_COMPONENT)i);
+            ok(component_dpi != 0, "Component %u returned zero DPI.\n", i);
+        }
+    }
+
+    if (pGetProcessDpiAwareness)
+    {
+        awareness = PROCESS_DPI_UNAWARE;
+        hr = pGetProcessDpiAwareness(NULL, &awareness);
+        ok(hr == S_OK, "GetProcessDpiAwareness failed, hr %#lx.\n", hr);
+        ok(awareness >= PROCESS_DPI_UNAWARE &&
+           awareness <= PROCESS_PER_MONITOR_DPI_AWARE,
+           "Unexpected process awareness %u.\n", awareness);
+
+        awareness2 = PROCESS_DPI_UNAWARE;
+        hr = pGetProcessDpiAwareness(GetCurrentProcess(), &awareness2);
+        ok(hr == S_OK, "Explicit GetProcessDpiAwareness failed, hr %#lx.\n", hr);
+        ok(awareness2 == awareness, "Awareness values differ, %u and %u.\n", awareness, awareness2);
+
+        hr = pGetProcessDpiAwareness(NULL, NULL);
+        ok(hr == E_INVALIDARG, "Unexpected null-awareness hr %#lx.\n", hr);
+    }
+
+    if (pSetProcessDpiAwareness)
+    {
+        hr = pSetProcessDpiAwareness((PROCESS_DPI_AWARENESS)-1);
+        ok(hr == E_INVALIDARG, "Unexpected invalid-awareness hr %#lx.\n", hr);
+    }
 }
 
 static HRESULT WINAPI unk_QI(IUnknown *iface, REFIID riid, void **obj)
@@ -802,4 +924,5 @@ START_TEST(shcore)
     test_SHRegGetPath();
     test_SHCopyKey();
     test_stream_size();
+    test_dpi_scaling();
 }

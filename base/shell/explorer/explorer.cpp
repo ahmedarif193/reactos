@@ -264,6 +264,13 @@ _tWinMain(IN HINSTANCE hInstance,
           IN INT nCmdShow)
 {
     /*
+     * The shell consumes physical system metrics and must opt out of
+     * DPI-unaware metric virtualization before creating any windows.
+     */
+    if (!IsProcessDPIAware())
+        SetProcessDPIAware();
+
+    /*
     * Set our shutdown parameters: we want to shutdown the very last,
     * but before any TaskMgr instance (which has a shutdown level of 1).
     */

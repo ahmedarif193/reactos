@@ -627,6 +627,7 @@ BOOL WINAPI IsWindowUnicode( HWND hwnd )
 /***********************************************************************
  *		GetWindowDpiAwarenessContext  (USER32.@)
  */
+#ifndef __REACTOS__
 DPI_AWARENESS_CONTEXT WINAPI GetWindowDpiAwarenessContext( HWND hwnd )
 {
     return LongToHandle( NtUserGetWindowDpiAwarenessContext( hwnd ) );
@@ -639,6 +640,7 @@ DPI_AWARENESS_CONTEXT WINAPI GetDpiAwarenessContextForProcess(HANDLE process)
 {
     return LongToHandle( NtUserGetProcessDpiAwarenessContext( process ) );
 }
+#endif
 
 /***********************************************************************
  *		GetWindowDpiHostingBehavior  (USER32.@)
@@ -676,10 +678,12 @@ static LONG_PTR set_dialog_proc( HWND hwnd, LONG_PTR newval, BOOL ansi )
 /***********************************************************************
  *              GetDpiForWindow   (USER32.@)
  */
+#ifndef __REACTOS__
 UINT WINAPI GetDpiForWindow( HWND hwnd )
 {
     return NtUserGetDpiForWindow( hwnd );
 }
+#endif
 
 
 /***********************************************************************
