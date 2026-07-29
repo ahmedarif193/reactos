@@ -8,12 +8,21 @@
 
 #include <win32k.h>
 
+__kernel_entry
 DWORD
 APIENTRY
-NtGdiDdDDICreateDCFromMemory(D3DKMT_CREATEDCFROMMEMORY *desc)
+NtGdiDdDDICreateDCFromMemory(
+    _Inout_ D3DKMT_CREATEDCFROMMEMORY *desc)
 {
+    D3DKMT_CREATEDCFROMMEMORY Captured;
+    PALETTEENTRY PaletteEntries[256];
+    ULONG BufferSize, MinimumPitch;
+    ULONGLONG RowBits;
+    PPALETTE ppal;
     PSURFACE psurf;
+    HBITMAP hBitmap, hOldBitmap;
     HDC hDC;
+    NTSTATUS Status;
 
     const struct d3dddi_format_info
     {
@@ -38,15 +47,31 @@ NtGdiDdDDICreateDCFromMemory(D3DKMT_CREATEDCFROMMEMORY *desc)
         { D3DDDIFMT_P8,       8,  BI_RGB,       256, 0x00000000, 0x00000000, 0x00000000 },
     };
 
-    if (!desc)
+    if (desc == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    if (!desc->pMemory)
+    _SEH2_TRY
+    {
+        ProbeForWrite(desc, sizeof(Captured), 1);
+        Captured = *desc;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+    if (Captured.pMemory == NULL ||
+        Captured.Width == 0 || Captured.Width > MAXLONG ||
+        Captured.Height == 0 || Captured.Height > MAXLONG ||
+        Captured.Pitch == 0 || Captured.Pitch > MAXLONG)
+    {
         return STATUS_INVALID_PARAMETER;
+    }
 
     for (i = 0; i < sizeof(format_info) / sizeof(*format_info); ++i)
     {
-        if (format_info[i].format == desc->Format)
+        if (format_info[i].format == Captured.Format)
         {
             format = &format_info[i];
             break;
@@ -56,67 +81,199 @@ NtGdiDdDDICreateDCFromMemory(D3DKMT_CREATEDCFROMMEMORY *desc)
     if (!format)
         return STATUS_INVALID_PARAMETER;
 
-    if (desc->Width > (UINT_MAX & ~3) / (format->bit_count / 8) ||
-        !desc->Pitch || desc->Pitch < (((desc->Width * format->bit_count + 31) >> 3) & ~3) ||
-        !desc->Height || desc->Height > UINT_MAX / desc->Pitch)
+    RowBits = (ULONGLONG)Captured.Width * format->bit_count;
+    if (RowBits > MAXULONG - 31)
+        return STATUS_INVALID_PARAMETER;
+
+    MinimumPitch = (ULONG)(((RowBits + 31) >> 5) << 2);
+    if (Captured.Pitch < MinimumPitch ||
+        !NT_SUCCESS(RtlULongMult(Captured.Pitch,
+                                Captured.Height,
+                                &BufferSize)))
     {
         return STATUS_INVALID_PARAMETER;
     }
 
-    if (!desc->hDeviceDc || !(hDC = NtGdiCreateCompatibleDC(desc->hDeviceDc)))
+    if (Captured.pColorTable != NULL && format->palette_size != 0)
+    {
+        _SEH2_TRY
+        {
+            ProbeForRead(Captured.pColorTable,
+                         format->palette_size * sizeof(PALETTEENTRY),
+                         1);
+            RtlCopyMemory(PaletteEntries,
+                          Captured.pColorTable,
+                          format->palette_size * sizeof(PALETTEENTRY));
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+    }
+
+    _SEH2_TRY
+    {
+        ProbeForWrite(Captured.pMemory, BufferSize, 1);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+    if (Captured.hDeviceDc == NULL ||
+        !(hDC = NtGdiCreateCompatibleDC(Captured.hDeviceDc)))
     {
         return STATUS_INVALID_PARAMETER;
     }
 
     /* Allocate a surface */
     psurf = SURFACE_AllocSurface(STYPE_BITMAP,
-                                 desc->Width,
-                                 desc->Height,
+                                 Captured.Width,
+                                 Captured.Height,
                                  BitmapFormat(format->bit_count, format->compression),
                                  BMF_TOPDOWN | BMF_NOZEROINIT,
-                                 desc->Pitch,
-                                 0,
-                                 desc->pMemory);
+                                 Captured.Pitch,
+                                 BufferSize,
+                                 Captured.pMemory);
+    if (psurf == NULL)
+    {
+        NtGdiDeleteObjectApp(hDC);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    /*
+     * SURFACE_AllocSurface normalizes a supplied stride to a DWORD-aligned
+     * bitmap width.  This API's Pitch is the caller's actual row spacing, so
+     * retain it exactly after the allocation has validated the buffer size.
+     */
+    psurf->SurfObj.lDelta = Captured.Pitch;
+    psurf->SurfObj.cjBits = BufferSize;
 
     /* Mark as API bitmap */
     psurf->flags |= (DDB_SURFACE | API_BITMAP);
 
-    desc->hDc = hDC;
     /* Get the handle for the bitmap */
-    desc->hBitmap = (HBITMAP)psurf->SurfObj.hsurf;
+    hBitmap = (HBITMAP)psurf->SurfObj.hsurf;
 
     /* Allocate a palette for this surface */
-    if (format->bit_count <= 8)
+    ppal = NULL;
+    if (format->palette_size != 0)
     {
-        PPALETTE palette = PALETTE_AllocPalette(PAL_INDEXED, 1 << format->bit_count, NULL, 0, 0, 0);
-        if (palette)
-        {
-            SURFACE_vSetPalette(psurf, palette);
-            PALETTE_ShareUnlockPalette(palette);
-        }
+        ppal = PALETTE_AllocPalette(
+            PAL_INDEXED | PAL_DIBSECTION,
+            format->palette_size,
+            Captured.pColorTable != NULL ? PaletteEntries : NULL,
+            0,
+            0,
+            0);
+    }
+    else if (format->compression == BI_BITFIELDS)
+    {
+        ppal = PALETTE_AllocPalette(
+            PAL_BITFIELDS | PAL_DIBSECTION,
+            0,
+            NULL,
+            format->mask_r,
+            format->mask_g,
+            format->mask_b);
+    }
+
+    if ((format->palette_size != 0 ||
+         format->compression == BI_BITFIELDS) &&
+        ppal == NULL)
+    {
+        SURFACE_UnlockSurface(psurf);
+        NtGdiDeleteObjectApp(hBitmap);
+        NtGdiDeleteObjectApp(hDC);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    if (ppal != NULL)
+    {
+        SURFACE_vSetPalette(psurf, ppal);
+        PALETTE_ShareUnlockPalette(ppal);
     }
 
     /* Unlock the surface and return */
     SURFACE_UnlockSurface(psurf);
 
-    NtGdiSelectBitmap(desc->hDc, desc->hBitmap);
+    hOldBitmap = NtGdiSelectBitmap(hDC, hBitmap);
+    if (hOldBitmap == NULL)
+    {
+        NtGdiDeleteObjectApp(hBitmap);
+        NtGdiDeleteObjectApp(hDC);
+        return STATUS_UNSUCCESSFUL;
+    }
 
-    return STATUS_SUCCESS;
+    Status = STATUS_SUCCESS;
+    _SEH2_TRY
+    {
+        desc->hDc = hDC;
+        desc->hBitmap = hBitmap;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    if (!NT_SUCCESS(Status))
+    {
+        NtGdiSelectBitmap(hDC, hOldBitmap);
+        NtGdiDeleteObjectApp(hBitmap);
+        NtGdiDeleteObjectApp(hDC);
+    }
+
+    return Status;
 }
 
+__kernel_entry
 DWORD
 APIENTRY
-NtGdiDdDDIDestroyDCFromMemory(const D3DKMT_DESTROYDCFROMMEMORY *desc)
+NtGdiDdDDIDestroyDCFromMemory(
+    _In_ CONST D3DKMT_DESTROYDCFROMMEMORY *desc)
 {
-    if (!desc)
+    D3DKMT_DESTROYDCFROMMEMORY Captured;
+    PDC Dc;
+    BOOL ValidPair;
+
+    if (desc == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    if (GDI_HANDLE_GET_TYPE(desc->hDc) != GDI_OBJECT_TYPE_DC ||
-        GDI_HANDLE_GET_TYPE(desc->hBitmap) != GDI_OBJECT_TYPE_BITMAP)
+    _SEH2_TRY
+    {
+        ProbeForRead(desc, sizeof(Captured), 1);
+        Captured = *desc;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+    if (GDI_HANDLE_GET_TYPE(Captured.hDc) != GDI_OBJECT_TYPE_DC ||
+        GDI_HANDLE_GET_TYPE(Captured.hBitmap) != GDI_OBJECT_TYPE_BITMAP)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Dc = DC_LockDc(Captured.hDc);
+    if (Dc == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    NtGdiDeleteObjectApp(desc->hBitmap);
-    NtGdiDeleteObjectApp(desc->hDc);
+    ValidPair = (Dc->dctype == DCTYPE_MEMORY &&
+                 Dc->dclevel.pSurface != NULL &&
+                 Dc->dclevel.pSurface->SurfObj.hsurf == Captured.hBitmap);
+    DC_UnlockDc(Dc);
+
+    if (!ValidPair ||
+        !NtGdiDeleteObjectApp(Captured.hBitmap) ||
+        !NtGdiDeleteObjectApp(Captured.hDc))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
     return STATUS_SUCCESS;
 }
