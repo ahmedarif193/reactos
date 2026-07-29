@@ -1914,6 +1914,7 @@ VOID
 NTAPI
 MiFlushTbAndCapture(IN PMMVAD FoundVad,
                     IN PMMPTE PointerPte,
+                    IN PVOID VirtualAddress,
                     IN ULONG ProtectionMask,
                     IN PMMPFN Pfn1,
                     IN BOOLEAN UpdateDirty,
@@ -1931,10 +1932,17 @@ MiFlushTbAndCapture(IN PMMVAD FoundVad,
     //
     // Build the PTE and acquire the PFN lock
     //
+#if defined(_M_ARM64)
+    MI_MAKE_HARDWARE_PTE_USER(&TempPte,
+                              MiAddressToPte(VirtualAddress),
+                              ProtectionMask,
+                              PreviousPte.u.Hard.PageFrameNumber);
+#else
     MI_MAKE_HARDWARE_PTE_USER(&TempPte,
                               PointerPte,
                               ProtectionMask,
                               PreviousPte.u.Hard.PageFrameNumber);
+#endif
     OldIrql = MiAcquirePfnLock();
 
     //
@@ -1972,10 +1980,17 @@ MiFlushTbAndCapture(IN PMMVAD FoundVad,
 
     if (RebuildPte)
     {
+#if defined(_M_ARM64)
+        MI_MAKE_HARDWARE_PTE_USER(&TempPte,
+                                  MiAddressToPte(VirtualAddress),
+                                  ProtectionMask,
+                                  PreviousPte.u.Hard.PageFrameNumber);
+#else
         MI_MAKE_HARDWARE_PTE_USER(&TempPte,
                                   PointerPte,
                                   ProtectionMask,
                                   PreviousPte.u.Hard.PageFrameNumber);
+#endif
     }
 
     //
@@ -1989,7 +2004,7 @@ MiFlushTbAndCapture(IN PMMVAD FoundVad,
     ASSERT(PreviousPte.u.Hard.Valid == 1);
     if (FlushTb)
     {
-        MiFlushTbForAddress(MiPteToAddress(PointerPte));
+        MiFlushTbForAddress(VirtualAddress);
     }
     ASSERT(PreviousPte.u.Hard.Valid == 1);
 
