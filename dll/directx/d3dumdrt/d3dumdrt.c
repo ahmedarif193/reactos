@@ -279,7 +279,9 @@ static HRESULT APIENTRY D3DUmdRtLockCb(HANDLE hDevice, D3DDDICB_LOCK *pData)
     }
 
     pData->pData = Lock.pData;
+#if (D3D_UMD_INTERFACE_VERSION >= D3D_UMD_INTERFACE_VERSION_WIN7)
     pData->GpuVirtualAddress = Lock.GpuVirtualAddress;
+#endif
     return S_OK;
 }
 
@@ -426,21 +428,25 @@ static HRESULT APIENTRY D3DUmdRtPresentCb(HANDLE hDevice, D3DDDICB_PRESENT *pDat
     {
         Present.BroadcastContext[Index] = (D3DKMT_HANDLE)(ULONG_PTR)pData->BroadcastContext[Index];
     }
+#if (D3D_UMD_INTERFACE_VERSION >= D3D_UMD_INTERFACE_VERSION_WDDM2_0)
     Present.BroadcastSrcAllocation = pData->BroadcastSrcAllocation;
     Present.BroadcastDstAllocation = pData->BroadcastDstAllocation;
     Present.pPrivateDriverData = pData->pPrivateDriverData;
     Present.PrivateDriverDataSize = pData->PrivateDriverDataSize;
+#endif
 
     Status = pfnPresent(&Present);
     if (Status < 0)
         return D3DUmdRtStatusToHresult(Status);
 
+#if (D3D_UMD_INTERFACE_VERSION >= D3D_UMD_INTERFACE_VERSION_WDDM2_0)
     /*
      * Whether a compositor owns the screen changes what the driver should do
      * next -- it can skip work that will never be seen -- so this is reported
      * back rather than dropped.
      */
     pData->bOptimizeForComposition = Present.Flags.Flip ? FALSE : TRUE;
+#endif
     return S_OK;
 }
 
@@ -865,6 +871,10 @@ D3DUmdRtCreateDeviceCallbacks(
     pCallbacks->pfnDestroyContextCb = D3DUmdRtDestroyContextCb;
     pCallbacks->pfnEscapeCb = D3DUmdRtEscapeCb;
     pCallbacks->pfnPresentCb = D3DUmdRtPresentCb;
+#if (D3D_UMD_INTERFACE_VERSION >= D3D_UMD_INTERFACE_VERSION_WIN8)
+    pCallbacks->pfnCreateSynchronizationObject2Cb = D3DUmdRtCreateSynchronizationObject2Cb;
+#endif
+#if (D3D_UMD_INTERFACE_VERSION >= D3D_UMD_INTERFACE_VERSION_WDDM2_0)
     pCallbacks->pfnMakeResidentCb = D3DUmdRtMakeResidentCb;
     pCallbacks->pfnEvictCb = D3DUmdRtEvictCb;
     pCallbacks->pfnCreatePagingQueueCb = D3DUmdRtCreatePagingQueueCb;
@@ -877,9 +887,9 @@ D3DUmdRtCreateDeviceCallbacks(
     pCallbacks->pfnLock2Cb = D3DUmdRtLock2Cb;
     pCallbacks->pfnUnlock2Cb = D3DUmdRtUnlock2Cb;
     pCallbacks->pfnDeallocate2Cb = D3DUmdRtDeallocate2Cb;
-    pCallbacks->pfnCreateSynchronizationObject2Cb = D3DUmdRtCreateSynchronizationObject2Cb;
     pCallbacks->pfnWaitForSynchronizationObjectFromGpuCb = D3DUmdRtWaitForSynchronizationObjectFromGpuCb;
     pCallbacks->pfnSignalSynchronizationObjectFromGpuCb = D3DUmdRtSignalSynchronizationObjectFromGpuCb;
+#endif
 
     *phRuntimeDevice = (HANDLE)Device;
     return S_OK;

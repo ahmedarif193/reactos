@@ -1,7 +1,7 @@
-# The runtime half of the user-mode driver contract is compiled at the same
-# WDDM interface version as the drivers it serves: the callback table is
-# version-guarded, and a runtime that built a shorter table than the driver
-# reads would have the driver walk off its end.
+# The runtime half is compiled at the same effective UMD interface version as
+# the drivers it serves. Lower WDDM configurations therefore get the native
+# shorter callback table; higher configurations retain the honest WDDM 2.0
+# implementation ceiling instead of exposing zero-filled newer tails.
 remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
 add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x11007)
 
