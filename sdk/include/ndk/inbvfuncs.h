@@ -27,6 +27,8 @@ Author:
 #include <section_attribs.h>
 
 #ifndef NTOS_MODE_USER
+struct _VID_DISPLAY_INFO;
+
 //
 // Ownership Functions
 //
@@ -76,6 +78,12 @@ BOOLEAN
 NTAPI
 InbvDisplayString(
     _In_ PCSTR String
+);
+
+BOOLEAN
+NTAPI
+InbvQueryDisplayInfo(
+    _Out_ struct _VID_DISPLAY_INFO *DisplayInfo
 );
 
 BOOLEAN

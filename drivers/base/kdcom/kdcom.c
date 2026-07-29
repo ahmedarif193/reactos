@@ -15,7 +15,7 @@
 
 #include <cportlib/cportlib.h>
 #include <cportlib/uartinfo.h>
-#include <reactos/drivers/bootvid/display.h>
+#include <reactos/drivers/bootvid/bootvid.h>
 
 /* GLOBALS ********************************************************************/
 
@@ -27,10 +27,12 @@ CPPORT KdDebugComPort;
 
 /* LOCALS *********************************************************************/
 
-#define KDP_SCREEN_LINE_LENGTH 80
-static CHAR KdpScreenLineBuffer[KDP_SCREEN_LINE_LENGTH + 1];
+#define KDP_SCREEN_LINE_LENGTH_DEFAULT 80
+#define KDP_SCREEN_LINE_LENGTH_MAXIMUM 2048
+static CHAR KdpScreenLineBuffer[KDP_SCREEN_LINE_LENGTH_MAXIMUM + 1];
 static ULONG KdpScreenLineBufferPosition;
 static ULONG KdpScreenLineLength;
+static ULONG KdpScreenLineCapacity = KDP_SCREEN_LINE_LENGTH_DEFAULT;
 
 /* DEBUGGING ******************************************************************/
 
@@ -145,7 +147,7 @@ KdpScreenPrint(
         }
 
         if ((*Character == '\n') ||
-            (KdpScreenLineLength == KDP_SCREEN_LINE_LENGTH))
+            (KdpScreenLineLength >= KdpScreenLineCapacity))
         {
             if (KdpScreenLineBufferPosition != KdpScreenLineLength)
             {
@@ -305,17 +307,27 @@ NTSTATUS
 NTAPI
 KdDebuggerInitialize1(IN PLOADER_PARAMETER_BLOCK LoaderBlock OPTIONAL)
 {
+    VID_DISPLAY_INFO DisplayInfo;
+
     UNREFERENCED_PARAMETER(LoaderBlock);
 
     if (KdpScreenMode && InbvIsBootDriverInstalled())
     {
+        InbvQueryDisplayInfo(&DisplayInfo);
+        if (DisplayInfo.CharacterWidth)
+        {
+            KdpScreenLineCapacity = min(DisplayInfo.Width / DisplayInfo.CharacterWidth, KDP_SCREEN_LINE_LENGTH_MAXIMUM);
+        }
+        if (!KdpScreenLineCapacity)
+            KdpScreenLineCapacity = KDP_SCREEN_LINE_LENGTH_DEFAULT;
+
         InbvAcquireDisplayOwnership();
         InbvResetDisplay();
-        InbvSolidColorFill(0, 0, SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1, BV_COLOR_BLACK);
+        InbvSolidColorFill(0, 0, DisplayInfo.Width - 1, DisplayInfo.Height - 1, BV_COLOR_BLACK);
         InbvSetTextColor(BV_COLOR_WHITE);
         InbvInstallDisplayStringFilter(NULL);
         InbvEnableDisplayString(TRUE);
-        InbvSetScrollRegion(0, 0, SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1);
+        InbvSetScrollRegion(0, 0, DisplayInfo.Width - 1, DisplayInfo.Height - 1);
         HalDisplayString("   Screen debugging enabled\r\n");
     }
 
