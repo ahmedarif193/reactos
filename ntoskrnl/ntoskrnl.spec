@@ -1512,6 +1512,7 @@
 @ stdcall ZwAddDriverEntry(ptr long)
 @ stdcall ZwAdjustPrivilegesToken(ptr long ptr long ptr ptr)
 @ stdcall ZwAlertThread(ptr)
+@ stdcall -version=0x600+ ZwAllocateReserveObject(ptr ptr long)
 @ stdcall ZwAllocateVirtualMemory(ptr ptr long ptr long long)
 @ stdcall ZwAssignProcessToJobObject(ptr ptr)
 @ stdcall ZwCancelIoFile(ptr ptr)
@@ -1615,6 +1616,7 @@
 @ stdcall ZwSetInformationObject(ptr long ptr long)
 @ stdcall ZwSetInformationProcess(ptr long ptr long)
 @ stdcall ZwSetInformationThread(ptr long ptr long)
+@ stdcall -version=0x600+ ZwSetIoCompletionEx(ptr ptr long long long long)
 @ stdcall ZwSetSecurityObject(ptr long ptr)
 @ stdcall ZwSetSystemInformation(long ptr long)
 @ stdcall ZwSetSystemTime(ptr ptr)
@@ -3313,7 +3315,6 @@
 @ stub -arch=arm64 WheaUnconfigureErrorSource
 @ stub -arch=arm64 WheaUnregisterErrorSourceOverride
 @ stdcall -arch=arm64 ZwAlertThreadByThreadId(ptr)
-@ stub -arch=arm64 ZwAllocateReserveObject
 @ stub -arch=arm64 ZwAllocateVirtualMemoryEx
 @ stub -arch=arm64 ZwAlpcAcceptConnectPort
 @ stub -arch=arm64 ZwAlpcCancelMessage
@@ -3411,7 +3412,6 @@
 @ stub -arch=arm64 ZwSetInformationResourceManager
 @ stub -arch=arm64 ZwSetInformationTransaction
 @ stub -arch=arm64 ZwSetInformationVirtualMemory
-@ stub -arch=arm64 ZwSetIoCompletionEx
 @ stub -arch=arm64 ZwSetTimerEx
 @ stub -arch=arm64 ZwTraceControl
 @ stdcall -version=0x602+ -arch=arm64 ZwUpdateWnfStateData(ptr ptr long ptr ptr long long)
