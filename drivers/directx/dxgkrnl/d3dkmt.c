@@ -130,6 +130,10 @@ typedef struct _DXGKRNL_FILE_CONTEXT
  */
 #define DXGKP_OS_COMPLETED_WDDM_LEVEL KMT_DRIVERVERSION_WDDM_1_3
 
+#ifndef REACTOS_WDDM_TARGET_LEVEL
+#define REACTOS_WDDM_TARGET_LEVEL KMT_DRIVERVERSION_WDDM_2_0
+#endif
+
 static D3DKMT_DRIVERVERSION
 DxgkpMiniportDeclaredWddmLevel(
     _In_ ULONG Version)
@@ -191,7 +195,8 @@ DxgkpGetReportedDriverVersion(
      * the version the public path reports.
      */
     Provider = DxgkpMiniportDeclaredWddmLevel(Adapter->Mms2HighestCompleteWddmVersion);
-    return min(min(Declared, DXGKP_OS_COMPLETED_WDDM_LEVEL), Provider);
+    return min(min(min(Declared, DXGKP_OS_COMPLETED_WDDM_LEVEL), Provider),
+               REACTOS_WDDM_TARGET_LEVEL);
 }
 
 static BOOLEAN
