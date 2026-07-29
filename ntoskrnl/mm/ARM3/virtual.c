@@ -5688,13 +5688,11 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
 #if defined(_M_ARM64)
     {
         PFN_NUMBER L3Pfn = 0;
-        ULONG NewUsedEntries = 0;
 
         /*
-         * Resolve the L3 slot once per 2MB chunk (KSEG0 slots advance
-         * linearly within the table page) and batch the used-entry
-         * accounting into one PFN-lock section per chunk, instead of a
-         * full walk plus lock round-trips per page.
+         * Resolve the L3 slot once per 2MB chunk. KSEG0 slots advance
+         * linearly within a table page, but the next table is not required
+         * to be physically adjacent.
          */
         PointerPte = NULL;
         for (ULONG_PTR CurrentAddress = StartingAddress;
@@ -5703,12 +5701,6 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
         {
             if ((PointerPte == NULL) || (((ULONG_PTR)PointerPte & (PAGE_SIZE - 1)) == 0))
             {
-                if (NewUsedEntries != 0)
-                {
-                    MiArm64AccountUserLeafPteCount(L3Pfn, NewUsedEntries);
-                    NewUsedEntries = 0;
-                }
-
                 Status = MiArm64EnsureUserPte(Process, (PVOID)CurrentAddress, &PointerPte, &L3Pfn);
                 if (!NT_SUCCESS(Status))
                 {
@@ -5719,7 +5711,12 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
 
             if (PointerPte->u.Long == 0)
             {
-                NewUsedEntries++;
+                /*
+                 * Account the slot before publishing it. Delaying this until
+                 * the end of the chunk leaves a populated table temporarily
+                 * indistinguishable from an empty one to release paths.
+                 */
+                MiArm64IncrementUserLeafPteCount(L3Pfn);
                 MI_WRITE_SOFTWARE_PTE(PointerPte, TempPte);
             }
             else if (PointerPte->u.Long == MmDecommittedPte.u.Long)
@@ -5737,11 +5734,6 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
             }
 
             PointerPte++;
-        }
-
-        if (NewUsedEntries != 0)
-        {
-            MiArm64AccountUserLeafPteCount(L3Pfn, NewUsedEntries);
         }
     }
 #else
