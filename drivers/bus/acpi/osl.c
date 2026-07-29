@@ -560,6 +560,7 @@ OslInitializeExecQueue(VOID)
     InitializeSListHead(&OslExecFreeList);
     InitializeSListHead(&OslExecPendingList);
     KeInitializeDpc(&OslExecDpc, OslExecDpcRoutine, NULL);
+    InterlockedExchange(&OslExecOutstanding, 0);
     KeInitializeEvent(&OslExecIdleEvent, NotificationEvent, TRUE);
 
     for (i = 0; i < OSL_EXEC_ENTRY_COUNT; i++)
@@ -600,8 +601,12 @@ AcpiOsExecute (
     Entry->Function = Function;
     Entry->Context = Context;
 
-    if (InterlockedIncrement(&OslExecOutstanding) == 1)
-        KeClearEvent(&OslExecIdleEvent);
+    /*
+     * The outstanding count is authoritative. The waiter clears and
+     * rechecks the event before sleeping, so a completion from an older
+     * generation cannot make a later generation appear idle.
+     */
+    InterlockedIncrement(&OslExecOutstanding);
 
     InterlockedPushEntrySList(&OslExecPendingList, &Entry->SListEntry);
     KeInsertQueueDpc(&OslExecDpc, NULL, NULL);
@@ -612,8 +617,20 @@ AcpiOsExecute (
 void
 AcpiOsSleep (UINT64 milliseconds)
 {
-    DPRINT("AcpiOsSleep %d\n", milliseconds);
-    KeStallExecutionProcessor(milliseconds*1000);
+    LARGE_INTEGER Interval;
+    UINT64 Chunk;
+
+    DPRINT("AcpiOsSleep %I64u\n", milliseconds);
+
+    ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
+
+    while (milliseconds != 0)
+    {
+        Chunk = min(milliseconds, (UINT64)MAXLONGLONG / 10000);
+        Interval.QuadPart = -((LONGLONG)Chunk * 10000);
+        KeDelayExecutionThread(KernelMode, FALSE, &Interval);
+        milliseconds -= Chunk;
+    }
 }
 
 void
@@ -1303,11 +1320,27 @@ AcpiOsWaitEventsComplete(void)
     if (!OslExecInitialized || KeGetCurrentIrql() != PASSIVE_LEVEL)
         return;
 
-    KeWaitForSingleObject(&OslExecIdleEvent,
-                          Executive,
-                          KernelMode,
-                          FALSE,
-                          NULL);
+    for (;;)
+    {
+        if (InterlockedCompareExchange(&OslExecOutstanding, 0, 0) == 0)
+            return;
+
+        /*
+         * Arm the wait before checking the count again. If the final
+         * completion races this clear, it either sets the event afterwards
+         * or its zero count is observed by the second check.
+         */
+        KeClearEvent(&OslExecIdleEvent);
+
+        if (InterlockedCompareExchange(&OslExecOutstanding, 0, 0) != 0)
+        {
+            KeWaitForSingleObject(&OslExecIdleEvent,
+                                  Executive,
+                                  KernelMode,
+                                  FALSE,
+                                  NULL);
+        }
+    }
 }
 
 ACPI_STATUS
