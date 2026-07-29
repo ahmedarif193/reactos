@@ -3085,6 +3085,7 @@ MiMakePdeExistAndMakeValid(IN PMMPDE PointerPde,
 VOID
 NTAPI
 MiProcessValidPteList(IN PMMPTE *ValidPteList,
+                      IN PVOID *ValidAddressList,
                       IN ULONG Count)
 {
     KIRQL OldIrql;
@@ -3092,6 +3093,10 @@ MiProcessValidPteList(IN PMMPTE *ValidPteList,
     MMPTE TempPte;
     PFN_NUMBER PageFrameIndex;
     PMMPFN Pfn1, Pfn2;
+
+#if !defined(_M_ARM64)
+    UNREFERENCED_PARAMETER(ValidAddressList);
+#endif
 
     //
     // Acquire the PFN lock and loop all the PTEs in the list
@@ -3139,7 +3144,7 @@ MiProcessValidPteList(IN PMMPTE *ValidPteList,
     {
         for (i = 0; i != Count; i++)
         {
-            ULONG_PTR Va = ((ULONG_PTR)MiPteToAddress(ValidPteList[i]) >> PAGE_SHIFT) &
+            ULONG_PTR Va = ((ULONG_PTR)ValidAddressList[i] >> PAGE_SHIFT) &
                            KI_ARM64_TLBI_VA_MASK;
             __asm__ __volatile__("tlbi vaae1is, %0" :: "r"(Va) : "memory");
         }
@@ -3159,10 +3164,19 @@ MiDecommitPages(IN PVOID StartingAddress,
                 IN PEPROCESS Process,
                 IN PMMVAD Vad)
 {
-    PMMPTE PointerPte, CommitPte = NULL;
+    PMMPTE PointerPte;
+#if defined(_M_ARM64)
+    ULONG_PTR EndingAddress;
+    ULONG_PTR CommitEndingAddress = 0;
+    PFN_NUMBER L3Pfn;
+    NTSTATUS Status;
+#else
+    PMMPTE CommitPte = NULL;
     PMMPDE PointerPde;
+#endif
     ULONG CommitReduction = 0;
     PMMPTE ValidPteList[256];
+    PVOID ValidAddressList[RTL_NUMBER_OF(ValidPteList)];
     ULONG PteCount = 0;
     PMMPFN Pfn1;
     MMPTE PteContents;
@@ -3173,17 +3187,61 @@ MiDecommitPages(IN PVOID StartingAddress,
     // If this was a VAD for a MEM_COMMIT allocation, also figure out where the
     // commited range ends so that we can do the right accounting.
     //
+#if defined(_M_ARM64)
+    EndingAddress = (ULONG_PTR)MiPteToAddress(EndingPte);
+    if (Vad->u.VadFlags.MemCommit)
+    {
+        CommitEndingAddress = Vad->EndingVpn << PAGE_SHIFT;
+    }
+    PointerPte = NULL;
+#else
     PointerPde = MiAddressToPde(StartingAddress);
     PointerPte = MiAddressToPte(StartingAddress);
-    if (Vad->u.VadFlags.MemCommit) CommitPte = MiAddressToPte(Vad->EndingVpn << PAGE_SHIFT);
+    if (Vad->u.VadFlags.MemCommit)
+    {
+        CommitPte = MiAddressToPte(Vad->EndingVpn << PAGE_SHIFT);
+    }
+#endif
     MiLockProcessWorkingSetUnsafe(Process, CurrentThread);
 
     //
     // Make the PDE valid, and now loop through each page's worth of data
     //
+#if !defined(_M_ARM64)
     MiMakePdeExistAndMakeValid(PointerPde, Process, MM_NOIRQL);
-    while (PointerPte <= EndingPte)
+#endif
+    while (
+#if defined(_M_ARM64)
+           (ULONG_PTR)StartingAddress <= EndingAddress
+#else
+           PointerPte <= EndingPte
+#endif
+          )
     {
+#if defined(_M_ARM64)
+        if ((PointerPte == NULL) ||
+            (((ULONG_PTR)PointerPte & (PAGE_SIZE - 1)) == 0))
+        {
+            if (PteCount)
+            {
+                MiProcessValidPteList(ValidPteList, ValidAddressList, PteCount);
+                PteCount = 0;
+            }
+
+            Status = MiArm64EnsureUserPte(Process,
+                                          StartingAddress,
+                                          &PointerPte,
+                                          &L3Pfn);
+            if (!NT_SUCCESS(Status))
+            {
+                KeBugCheckEx(MEMORY_MANAGEMENT,
+                             0xA642,
+                             Status,
+                             (ULONG_PTR)StartingAddress,
+                             (ULONG_PTR)Process);
+            }
+        }
+#else
         //
         // Check if we've crossed a PDE boundary
         //
@@ -3199,7 +3257,7 @@ MiDecommitPages(IN PVOID StartingAddress,
             PointerPde = MiAddressToPde(StartingAddress);
             if (PteCount)
             {
-                MiProcessValidPteList(ValidPteList, PteCount);
+                MiProcessValidPteList(ValidPteList, ValidAddressList, PteCount);
                 PteCount = 0;
             }
 
@@ -3208,6 +3266,7 @@ MiDecommitPages(IN PVOID StartingAddress,
             //
             MiMakePdeExistAndMakeValid(PointerPde, Process, MM_NOIRQL);
         }
+#endif
 
         //
         // Read this PTE. It might be active or still demand-zero.
@@ -3248,10 +3307,12 @@ MiDecommitPages(IN PVOID StartingAddress,
                     //
                     if (PteCount == 256)
                     {
-                        MiProcessValidPteList(ValidPteList, PteCount);
+                        MiProcessValidPteList(ValidPteList, ValidAddressList, PteCount);
                         PteCount = 0;
                     }
-                    ValidPteList[PteCount++] = PointerPte;
+                    ValidPteList[PteCount] = PointerPte;
+                    ValidAddressList[PteCount] = StartingAddress;
+                    PteCount++;
                 }
                 else
                 {
@@ -3278,12 +3339,20 @@ MiDecommitPages(IN PVOID StartingAddress,
             // This used to be a zero PTE and it no longer is, so we must add a
             // reference to the pagetable.
             //
+#if defined(_M_ARM64)
+            MiArm64IncrementUserLeafPteCount(L3Pfn);
+#else
             MiIncrementPageTableReferences(StartingAddress);
+#endif
 
             //
             // Next, we account for decommitted PTEs and make the PTE as such
             //
+#if defined(_M_ARM64)
+            if ((ULONG_PTR)StartingAddress > CommitEndingAddress) CommitReduction++;
+#else
             if (PointerPte > CommitPte) CommitReduction++;
+#endif
             MI_WRITE_SOFTWARE_PTE(PointerPte, MmDecommittedPte);
         }
 
@@ -3298,7 +3367,10 @@ MiDecommitPages(IN PVOID StartingAddress,
     // Flush any dangling PTEs from the loop in the last page table, and then
     // release the working set and return the commit reduction accounting.
     //
-    if (PteCount) MiProcessValidPteList(ValidPteList, PteCount);
+    if (PteCount)
+    {
+        MiProcessValidPteList(ValidPteList, ValidAddressList, PteCount);
+    }
     MiUnlockProcessWorkingSetUnsafe(Process, CurrentThread);
     return CommitReduction;
 }
