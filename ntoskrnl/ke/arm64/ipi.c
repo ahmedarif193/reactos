@@ -204,6 +204,24 @@ KiIpiServiceRoutine(
     return TRUE;
 }
 
+static
+VOID
+KiArm64ServicePendingIpi(VOID)
+{
+    PKPRCB Prcb = KeGetCurrentPrcb();
+    KIRQL OldIrql;
+
+    if ((Prcb->RequestSummary == 0) &&
+        (Prcb->IpiFrozen != IPI_FROZEN_STATE_TARGET_FREEZE))
+    {
+        return;
+    }
+
+    OldIrql = KfRaiseIrql(IPI_LEVEL);
+    KiIpiServiceRoutine(NULL, NULL);
+    KfLowerIrql(OldIrql);
+}
+
 ULONG_PTR
 NTAPI
 KeIpiGenericCall(
@@ -211,26 +229,38 @@ KeIpiGenericCall(
     _In_ ULONG_PTR Argument)
 {
 #ifdef CONFIG_SMP
-    KIRQL OldIrql;
+    KIRQL OldIrql, ExecuteIrql;
     ULONG_PTR Result;
     KAFFINITY Targets;
     LONG TargetCount;
+    ULONG64 Daif;
+    BOOLEAN InterruptsEnabled;
 
     if (Function == NULL)
     {
         return 0;
     }
 
+    ASSERT(KeGetCurrentIrql() < IPI_LEVEL);
+
+    __asm__ __volatile__("mrs %0, daif" : "=r"(Daif));
+    InterruptsEnabled = ((Daif & ARM64_PSTATE_IRQ_MASK) == 0);
+
     /*
-     * Raise to IPI_LEVEL (not SYNCH_LEVEL) so the initiator cannot be preempted
-     * by clock/DPC interrupts while it owns the rendezvous and runs the
-     * broadcast routine. The debugger freeze SGI sits above IPI_LEVEL and is
-     * still deliverable.
+     * Serialize packet ownership below IPI_LEVEL. A processor waiting for an
+     * owner may itself be a target of that owner's generic call and must remain
+     * able to service the SGI. If the caller entered with IRQs masked, process
+     * the request summary directly while waiting, as the AMD64 packet path does.
      */
-    OldIrql = KfRaiseIrql(IPI_LEVEL);
+    OldIrql = KfRaiseIrql(SYNCH_LEVEL);
 
     while (InterlockedCompareExchange(&KiArm64IpiPacket.Busy, 1, 0) != 0)
     {
+        if (!InterruptsEnabled)
+        {
+            KiArm64ServicePendingIpi();
+        }
+
         YieldProcessor();
         KeMemoryBarrier();
     }
@@ -247,6 +277,7 @@ KeIpiGenericCall(
     KiArm64IpiPacket.Arrived = 0;
     KiArm64IpiPacket.Release = 0;
     InterlockedExchange(&KiArm64IpiPacket.TargetCount, TargetCount);
+    KeMemoryBarrier();
 
     if (Targets != 0)
     {
@@ -284,6 +315,7 @@ KeIpiGenericCall(
      * on Release == 0 -> deadlock. The phase-1 quiesce above already guarantees
      * every target is parked, so releasing first does not lose the rendezvous.
      */
+    ExecuteIrql = KfRaiseIrql(IPI_LEVEL);
     InterlockedExchange(&KiArm64IpiPacket.Release, 1);
 
     Result = Function(Argument);
@@ -314,8 +346,8 @@ KeIpiGenericCall(
     }
 
     KiArm64IpiPacket.Function = NULL;
+    KfLowerIrql(ExecuteIrql);
     InterlockedExchange(&KiArm64IpiPacket.Busy, 0);
-
     KfLowerIrql(OldIrql);
     return Result;
 #else
