@@ -9,4 +9,7 @@ set_module_type(vga kernelmodedriver)
 add_importlibs(vga videoprt)
 add_pch(vga vgamp.h SOURCE)
 add_cd_file(TARGET vga DESTINATION reactos/system32/drivers FOR all)
-add_registry_inf(vga_reg.inf)
+
+if(REACTOS_USE_XPDM)
+    add_registry_inf(vga_reg.inf)
+endif()
