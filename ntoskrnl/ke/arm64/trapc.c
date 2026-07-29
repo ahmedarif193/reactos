@@ -1971,40 +1971,6 @@ KiArm64HandleSynchronousException(
             TrapFrame = &Context->TrapFrame;
             KiArm64InitializeTrapFrame(Context, TrapFrame);
 
-            /*
-             * DIAG (bug #0): a kernel-mode brk #0xF000 (DbgBreakPoint / failed
-             * ASSERT / RtlpBreakWithStatusInstruction) reaching here escapes to
-             * bugcheck 0x7E in a system thread. DbgBreakPointWithStatus is a leaf
-             * (brk; ret), so X29 is already the caller's frame and X30 is the
-             * return into the immediate caller. Walk the FP chain to print the
-             * real culprit (the ASSERT / DbgBreakPoint site). MmIsAddressValid
-             * guards every dereference so the walk itself can never fault.
-             */
-            if (Mode == KernelMode && BrkImm == 0xF000)
-            {
-                ULONG_PTR Fp = (ULONG_PTR)Context->State.Registers.X[29];
-                ULONG i;
-                DPRINT1("[BRKBT] kernel brk #0xF000 elr=%p lr=%p cpu=%lu thr=%p irql=%u\n",
-                        (PVOID)(ULONG_PTR)Context->State.Elr,
-                        (PVOID)(ULONG_PTR)Context->State.Registers.X[30],
-                        KeGetCurrentProcessorNumber(), KeGetCurrentThread(),
-                        (ULONG)KeGetCurrentIrql());
-                for (i = 0; i < 16; i++)
-                {
-                    ULONG_PTR Next, RetAddr;
-                    if (Fp < (ULONG_PTR)0xFFFF000000000000ULL || (Fp & 0xF) != 0)
-                        break;
-                    if (!MmIsAddressValid((PVOID)Fp))
-                        break;
-                    Next = ((const ULONG_PTR *)Fp)[0];
-                    RetAddr = ((const ULONG_PTR *)Fp)[1];
-                    DPRINT1("[BRKBT]   #%lu fp=%p ret=%p\n", i, (PVOID)Fp, (PVOID)RetAddr);
-                    if (Next <= Fp)
-                        break;
-                    Fp = Next;
-                }
-            }
-
             {
                 EXCEPTION_RECORD ExceptionRecord;
 
