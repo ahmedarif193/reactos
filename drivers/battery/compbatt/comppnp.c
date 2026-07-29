@@ -169,17 +169,17 @@ CompBattAddNewBattery(
                     IoSetNextIrpStackLocation(Irp);
                     Irp->IoStatus.Status = STATUS_DEVICE_NOT_CONNECTED;
 
-                    /* Insert this battery in the list */
-                    ExAcquireFastMutex(&DeviceExtension->Lock);
-                    InsertTailList(&DeviceExtension->BatteryList,
-                                   &BatteryData->BatteryLink);
-                    ExReleaseFastMutex(&DeviceExtension->Lock);
-
                     /* Initialize the work item and delete lock */
                     IoInitializeRemoveLock(&BatteryData->RemoveLock, COMPBATT_TAG, 0, 0);
                     ExInitializeWorkItem(&BatteryData->WorkItem,
                                          (PVOID)CompBattMonitorIrpCompleteWorker,
                                          BatteryData);
+
+                    /* Insert this battery in the list */
+                    ExAcquireFastMutex(&DeviceExtension->Lock);
+                    InsertTailList(&DeviceExtension->BatteryList,
+                                   &BatteryData->BatteryLink);
+                    ExReleaseFastMutex(&DeviceExtension->Lock);
 
                     /* Setup the IRP work entry */
                     CompBattMonitorIrpComplete(BatteryData->DeviceObject, Irp, NULL);
@@ -272,7 +272,7 @@ CompBattGetBatteries(
 
             /* Add this battery and move on */
             Status = CompBattAddNewBattery(&LinkString, DeviceExtension);
-            p += (LinkString.Length / sizeof(WCHAR)) + sizeof(UNICODE_NULL);
+            p += (LinkString.Length / sizeof(WCHAR)) + 1;
         }
 
         /* Parsing complete, clean up buffer */
