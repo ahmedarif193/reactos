@@ -85,7 +85,10 @@ finish_gdb_packet(void)
     KdpSendByte(hex_chars[currentChecksum & 0xf]);
 
     if (gdb_no_ack_mode)
+    {
+        KD_DEBUGGER_NOT_PRESENT = FALSE;
         return KdPacketReceived;
+    }
 
     /* Wait for acknowledgement */
     Status = KdpReceiveByte(&ack);
@@ -96,9 +99,26 @@ finish_gdb_packet(void)
         return Status;
     }
 
-    if (ack != '+')
-        return KdPacketNeedsResend;
+    if (ack == 0x03)
+    {
+        gdb_breakin_pending = TRUE;
+        KD_DEBUGGER_NOT_PRESENT = FALSE;
+        return KdPacketReceived;
+    }
 
+    if (ack == '-')
+    {
+        KD_DEBUGGER_NOT_PRESENT = FALSE;
+        return KdPacketNeedsResend;
+    }
+
+    if (ack != '+')
+    {
+        KD_DEBUGGER_NOT_PRESENT = TRUE;
+        return KdPacketTimedOut;
+    }
+
+    KD_DEBUGGER_NOT_PRESENT = FALSE;
     return KdPacketReceived;
 }
 
