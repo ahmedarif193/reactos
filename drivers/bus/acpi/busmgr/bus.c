@@ -1667,6 +1667,11 @@ acpi_bus_init (void)
 		goto error1;
 	}
 
+	status = AcpiUpdateAllGpes();
+	if (ACPI_FAILURE(status)) {
+		DPRINT1("Unable to enable runtime GPEs: %s\n", AcpiFormatException(status));
+	}
+
 	/*
 	 * Inform the firmware that the OS is using the IOAPIC. This switches
 	 * the _PRT routing returned by Link objects from PIC-mode legacy ISA
