@@ -3383,28 +3383,61 @@ MiResetPrivatePages(
     _In_ PEPROCESS Process)
 {
     ULONG_PTR CurrentAddress;
-    PMMPTE PointerPte, LastPte;
+    PMMPTE PointerPte;
+#if defined(_M_ARM64)
+    NTSTATUS Status;
+#else
+    PMMPTE LastPte;
     PMMPDE PointerPde;
+#endif
     MMPTE TempPte;
     KIRQL OldIrql;
     PETHREAD CurrentThread = PsGetCurrentThread();
 
     MiLockProcessWorkingSetUnsafe(Process, CurrentThread);
 
+    CurrentAddress = StartingAddress;
+#if defined(_M_ARM64)
+    PointerPte = NULL;
+#else
     PointerPde = MiAddressToPde(StartingAddress);
     MiMakePdeExistAndMakeValid(PointerPde, Process, MM_NOIRQL);
-
-    CurrentAddress = StartingAddress;
     PointerPte = MiAddressToPte(StartingAddress);
     LastPte = MiAddressToPte(EndingAddress);
+#endif
 
-    while (PointerPte <= LastPte)
+    while (
+#if defined(_M_ARM64)
+           CurrentAddress <= EndingAddress
+#else
+           PointerPte <= LastPte
+#endif
+          )
     {
+#if defined(_M_ARM64)
+        if ((PointerPte == NULL) ||
+            (((ULONG_PTR)PointerPte & (PAGE_SIZE - 1)) == 0))
+        {
+            Status = MiArm64EnsureUserPte(Process,
+                                          (PVOID)CurrentAddress,
+                                          &PointerPte,
+                                          NULL);
+            if (!NT_SUCCESS(Status))
+            {
+                KeBugCheckEx(MEMORY_MANAGEMENT,
+                             0xA643,
+                             Status,
+                             CurrentAddress,
+                             (ULONG_PTR)Process);
+            }
+        }
+#else
         if (MiIsPteOnPdeBoundary(PointerPte))
         {
             PointerPde = MiPteToPde(PointerPte);
             MiMakePdeExistAndMakeValid(PointerPde, Process, MM_NOIRQL);
         }
+#endif
 
         if (PointerPte->u.Hard.Valid)
         {
@@ -3420,7 +3453,9 @@ MiResetPrivatePages(
                         TRUE);
             MiReleasePfnLock(OldIrql);
 
+#if !defined(_M_ARM64)
             MiIncrementPageTableReferences((PVOID)CurrentAddress);
+#endif
             MI_WRITE_SOFTWARE_PTE(PointerPte, TempPte);
         }
 
