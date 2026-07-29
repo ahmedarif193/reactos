@@ -95,10 +95,9 @@ KiArm64ReadCcsidr(
 #define KD_ASSERT_BREAKPOINT_SIZE KD_BREAKPOINT_SIZE
 #define MM_SYSTEM_RANGE_START         MmSystemRangeStart
 
-// Interrupt state helper. The DAIF.I bit (bit 7) mirrors the PSR interrupt
-// mask, but for now treat trap frames as having interrupts disabled until the
-// real trap exit code is in place.
-#define KeGetTrapFrameInterruptState(TrapFrame) 0
+// The saved PSTATE.I bit is set when IRQs were masked at the trap boundary.
+#define KeGetTrapFrameInterruptState(TrapFrame) \
+    (((TrapFrame)->Spsr & ARM64_PSTATE_IRQ_MASK) == 0)
 #define KeGetContextSwitches(Prcb)  ((Prcb)->KeContextSwitches)
 
 // HAL DMA entry points are not declared by MinGW for arm64. Mirror the
