@@ -12,6 +12,10 @@
 
 #define SPIF_PROTECT 0x80000
 
+#define USER_SYSTEM_DPI_DEFAULT 96
+#define USER_SYSTEM_DPI_MIN     96
+#define USER_SYSTEM_DPI_MAX     480
+
 typedef enum _USERPREFMASKS
 {
     UPM_ACTIVEWINDOWTRACKING = 0x01,
@@ -48,6 +52,7 @@ typedef enum
 typedef struct _SPIVALUES
 {
     /* Metrics */
+    UINT uiSystemDpi;
     NONCLIENTMETRICSW ncm;
     MINIMIZEDMETRICS mm;
     ICONMETRICSW im;
@@ -201,4 +206,7 @@ extern SPIVALUES gspv;
 extern BOOL g_PaintDesktopVersion;
 
 BOOL InitSysParams();
+UINT UserGetSystemDpi(VOID);
+INT UserScaleForDpi(INT Value, UINT Dpi);
+INT UserScaleForSystemDpi(INT Value);
 #define SPITESTPREF(x) (gspv.dwUserPrefMask & x ? 1 : 0)

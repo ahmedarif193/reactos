@@ -823,6 +823,7 @@ typedef struct _WND
     LIST_ENTRY ThreadListEntry;
 
     PVOID DialogPointer;
+    ULONG DpiContext; /* Awareness context captured from the creating thread. */
 } WND, *PWND;
 
 #define PWND_BOTTOM ((PWND)1)
@@ -2815,6 +2816,14 @@ NTAPI
 NtUserGetProcessDpiAwarenessContext(
     _In_ HANDLE hProcess);
 
+ULONG
+NTAPI
+NtUserGetThreadDpiAwarenessContext(VOID);
+
+ULONG
+NTAPI
+NtUserGetWindowDpiAwarenessContext(_In_ HWND hWnd);
+
 HANDLE
 NTAPI
 NtUserGetProp(
@@ -2830,6 +2839,10 @@ NTAPI
 NtUserSetProcessDpiAwarenessContext(
     _In_ ULONG DpiContext,
     _In_ ULONG Flags);
+
+ULONG
+NTAPI
+NtUserSetThreadDpiAwarenessContext(_In_ ULONG DpiContext);
 
 BOOL
 NTAPI

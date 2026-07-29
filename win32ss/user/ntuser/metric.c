@@ -75,16 +75,16 @@ InitMetrics(VOID)
     piSysMet[SM_CYVIRTUALSCREEN] = Height;
 
     /* NC area sizes */
-    piSysMet[SM_CYCAPTION] = gspv.ncm.iCaptionHeight + 1;       // 19
-    piSysMet[SM_CYSMCAPTION] = gspv.ncm.iSmCaptionHeight + 1;   // 15;
+    piSysMet[SM_CYCAPTION] = gspv.ncm.iCaptionHeight + 1;
+    piSysMet[SM_CYSMCAPTION] = gspv.ncm.iSmCaptionHeight + 1;
     piSysMet[SM_CXSIZE] = gspv.ncm.iCaptionHeight;              // 18;
     piSysMet[SM_CYSIZE] = gspv.ncm.iCaptionHeight;              // 18;
     piSysMet[SM_CXSMSIZE] = gspv.ncm.iSmCaptionWidth;   // 12; XP: piSysMet(SM_CYSMCAPTION) - 1
     piSysMet[SM_CYSMSIZE] = gspv.ncm.iSmCaptionHeight;  // 14;
-    piSysMet[SM_CXBORDER] = 1; // Seems to be hardcoded
-    piSysMet[SM_CYBORDER] = 1; // Seems to be hardcoded
-    piSysMet[SM_CXFOCUSBORDER] = 1;
-    piSysMet[SM_CYFOCUSBORDER] = 1;
+    piSysMet[SM_CXBORDER] = 1;
+    piSysMet[SM_CYBORDER] = 1;
+    piSysMet[SM_CXFOCUSBORDER] = gspv.uiFocusBorderWidth;
+    piSysMet[SM_CYFOCUSBORDER] = gspv.uiFocusBorderHeight;
     piSysMet[SM_CXDLGFRAME] = 3;
     piSysMet[SM_CYDLGFRAME] = 3;
     piSysMet[SM_CXEDGE] = 2;
@@ -92,14 +92,14 @@ InitMetrics(VOID)
     piSysMet[SM_CXFRAME] = piSysMet[SM_CXDLGFRAME] + gspv.ncm.iBorderWidth; // 4
     piSysMet[SM_CYFRAME] = piSysMet[SM_CYDLGFRAME] + gspv.ncm.iBorderWidth; // 4
 #if (_WIN32_WINNT >= 0x0600)
-    piSysMet[SM_CXPADDEDBORDER] = 0;
+    piSysMet[SM_CXPADDEDBORDER] = gspv.ncm.iPaddedBorderWidth;
 #endif
 
     /* Window sizes */
     TRACE("ncm.iCaptionWidth=%d,GetSystemMetrics(SM_CYSIZE)=%d,GetSystemMetrics(SM_CXFRAME)=%d,avcwCaption=%d \n",
            gspv.ncm.iCaptionWidth, piSysMet[SM_CYSIZE],piSysMet[SM_CXFRAME], gspv.tmCaptionFont.tmAveCharWidth);
 
-    piSysMet[SM_CXMIN] = 3 * max(gspv.ncm.iCaptionWidth, 8) // 112
+    piSysMet[SM_CXMIN] = 3 * max(gspv.ncm.iCaptionWidth, 8)
                          + piSysMet[SM_CYSIZE] + 4
                          + 4 * gspv.tmCaptionFont.tmAveCharWidth
                          + 2 * piSysMet[SM_CXFRAME];
@@ -125,22 +125,28 @@ InitMetrics(VOID)
     piSysMet[SM_CXHTHUMB] = gspv.ncm.iScrollHeight;     // 16;
     piSysMet[SM_CYVSCROLL] = gspv.ncm.iScrollHeight;    // 16
     piSysMet[SM_CXHSCROLL] = gspv.ncm.iScrollHeight;    // 16;
-    piSysMet[SM_CXICON] = 32;
-    piSysMet[SM_CYICON] = 32;
-    piSysMet[SM_CXSMICON] = 16;
-    piSysMet[SM_CYSMICON] = 16;
+    piSysMet[SM_CXICON] = UserScaleForSystemDpi(32);
+    piSysMet[SM_CYICON] = UserScaleForSystemDpi(32);
+    piSysMet[SM_CXSMICON] = UserScaleForSystemDpi(16) & ~1;
+    piSysMet[SM_CYSMICON] = UserScaleForSystemDpi(16) & ~1;
     piSysMet[SM_CXICONSPACING] = gspv.im.iHorzSpacing;  // 64;
     piSysMet[SM_CYICONSPACING] = gspv.im.iVertSpacing;  // 64;
-    piSysMet[SM_CXCURSOR] = 32;
-    piSysMet[SM_CYCURSOR] = 32;
+    piSysMet[SM_CXCURSOR] = UserScaleForSystemDpi(32);
+    if (piSysMet[SM_CXCURSOR] >= 64)
+        piSysMet[SM_CXCURSOR] = 64;
+    else if (piSysMet[SM_CXCURSOR] >= 48)
+        piSysMet[SM_CXCURSOR] = 48;
+    else
+        piSysMet[SM_CXCURSOR] = 32;
+    piSysMet[SM_CYCURSOR] = piSysMet[SM_CXCURSOR];
     piSysMet[SM_CXMINTRACK] = piSysMet[SM_CXMIN];       // 117
     piSysMet[SM_CYMINTRACK] = piSysMet[SM_CYMIN];       // 27
-    piSysMet[SM_CXDRAG] = 4;
-    piSysMet[SM_CYDRAG] = 4;
+    piSysMet[SM_CXDRAG] = gspv.iDragWidth;
+    piSysMet[SM_CYDRAG] = gspv.iDragHeight;
     piSysMet[SM_ARRANGE] = gspv.mm.iArrange;            // 8;
 
     /* Menu */
-    piSysMet[SM_CYMENU] = gspv.ncm.iMenuHeight + 1;     // 19;
+    piSysMet[SM_CYMENU] = gspv.ncm.iMenuHeight + 1;
     piSysMet[SM_MENUDROPALIGNMENT] = gspv.bMenuDropAlign;
     piSysMet[SM_CXMENUCHECK] = ((1 + gspv.tmMenuFont.tmHeight +
                                  gspv.tmMenuFont.tmExternalLeading) & ~1) - 1; // 13;

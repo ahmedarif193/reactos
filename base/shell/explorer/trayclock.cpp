@@ -152,8 +152,8 @@ public:
 #define ID_TRAYCLOCK_TIMER  0
 #define ID_TRAYCLOCK_TIMER_INIT 1
 
-#define TRAY_CLOCK_WND_SPACING_X    5
-#define TRAY_CLOCK_WND_SPACING_Y    0
+#define TRAY_CLOCK_WND_SPACING_X    ShellScaleForDpi(5)
+#define TRAY_CLOCK_WND_SPACING_Y    ShellScaleForDpi(0)
 
 CTrayClockWnd::CTrayClockWnd() :
         hFont(NULL),

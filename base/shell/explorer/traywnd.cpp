@@ -254,7 +254,8 @@ public:
                                            IMAGE_BITMAP,
                                            LR_LOADTRANSPARENT | LR_CREATEDIBSECTION);
 
-        BUTTON_IMAGELIST bil = {m_ImageList, {1,1,1,1}, BUTTON_IMAGELIST_ALIGN_LEFT};
+        const INT Margin = ShellScaleForDpi(1);
+        BUTTON_IMAGELIST bil = {m_ImageList, {Margin, Margin, Margin, Margin}, BUTTON_IMAGELIST_ALIGN_LEFT};
         SendMessageW(BCM_SETIMAGELIST, 0, (LPARAM) &bil);
         UpdateSize();
     }

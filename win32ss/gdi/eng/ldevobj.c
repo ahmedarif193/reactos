@@ -622,6 +622,10 @@ LDEVOBJ_bBuildDevmodeList(
             /* Some drivers like the VBox driver don't fill the dmDeviceName
                with the name of the display driver. So fix that here. */
             RtlStringCbCopyW(pdm->dmDeviceName, sizeof(pdm->dmDeviceName), pwsz);
+
+            /* Logical DPI is common to all modes of this desktop. */
+            pdm->dmLogPixels = (WORD)UserGetSystemDpi();
+            pdm->dmFields |= DM_LOGPIXELS;
         }
     }
 

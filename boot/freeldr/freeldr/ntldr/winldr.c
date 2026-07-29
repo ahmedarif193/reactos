@@ -73,6 +73,88 @@ NtLdrOutputLoadMsg(
     UiDrawStatusText(ProgressString);
 }
 
+#ifdef UEFIBOOT
+static BOOLEAN
+WinLdrQuerySystemDpi(_In_z_ PCWSTR KeyPath, _Out_ PULONG Dpi)
+{
+    HKEY FontKey;
+    ULONG Value;
+    ULONG Type = REG_NONE;
+    ULONG DataSize = sizeof(Value);
+
+    if (RegOpenKey(CurrentControlSetKey, KeyPath, &FontKey) != ERROR_SUCCESS)
+        return FALSE;
+
+    if (RegQueryValue(FontKey,
+                      L"LogPixels",
+                      &Type,
+                      (PUCHAR)&Value,
+                      &DataSize) != ERROR_SUCCESS ||
+        Type != REG_DWORD ||
+        DataSize != sizeof(Value) ||
+        Value < LOADER_PARAMETER_FRAMEBUFFER_DPI_MIN ||
+        Value > LOADER_PARAMETER_FRAMEBUFFER_DPI_MAX)
+    {
+        RegCloseKey(FontKey);
+        return FALSE;
+    }
+
+    RegCloseKey(FontKey);
+    *Dpi = Value;
+    return TRUE;
+}
+
+static ULONG
+WinLdrGetSystemDpi(VOID)
+{
+    WCHAR ProfilePath[80];
+    HKEY ConfigKey;
+    ULONG Profile = 0;
+    ULONG Dpi = LOADER_PARAMETER_FRAMEBUFFER_DPI_DEFAULT;
+    ULONG Type = REG_NONE;
+    ULONG DataSize = sizeof(Profile);
+
+    if (!CurrentControlSetKey)
+        return Dpi;
+
+    if (WinLdrQuerySystemDpi(L"Hardware Profiles\\Current\\Software\\Fonts", &Dpi))
+    {
+        return Dpi;
+    }
+
+    /*
+     * The live Configuration Manager exposes "Current" as a registry link.
+     * FreeLdr walks the hive directly and cannot resolve such links, so fall
+     * back to the numbered profile stored by IDConfigDB.
+     */
+    if (RegOpenKey(CurrentControlSetKey, L"Control\\IDConfigDB", &ConfigKey) == ERROR_SUCCESS)
+    {
+        if (RegQueryValue(ConfigKey,
+                          L"CurrentConfig",
+                          &Type,
+                          (PUCHAR)&Profile,
+                          &DataSize) != ERROR_SUCCESS ||
+            Type != REG_DWORD ||
+            DataSize != sizeof(Profile))
+        {
+            Profile = 0;
+        }
+        RegCloseKey(ConfigKey);
+    }
+
+    if (NT_SUCCESS(RtlStringCbPrintfW(
+            ProfilePath,
+            sizeof(ProfilePath),
+            L"Hardware Profiles\\%04lu\\Software\\Fonts",
+            Profile)))
+    {
+        WinLdrQuerySystemDpi(ProfilePath, &Dpi);
+    }
+
+    return Dpi;
+}
+#endif
+
 // Init "phase 0"
 VOID
 AllocateAndInitLPB(
@@ -325,6 +407,7 @@ WinLdrInitializePhase1(
             Extension->GopFramebuffer.GreenMask = FrameBufferData->PixelMasks.GreenMask;
             Extension->GopFramebuffer.BlueMask = FrameBufferData->PixelMasks.BlueMask;
             Extension->GopFramebuffer.Reserved = FrameBufferData->PixelMasks.ReservedMask;
+            Extension->GopFramebuffer.Dpi = WinLdrGetSystemDpi();
 
             TRACE("Passing UEFI framebuffer to kernel:\n");
             TRACE("  BaseAddress: 0x%llx\n", Extension->GopFramebuffer.FrameBufferBase.QuadPart);
@@ -334,6 +417,7 @@ WinLdrInitializePhase1(
                   Extension->GopFramebuffer.VerticalResolution);
             TRACE("  PixelsPerScanLine: %lu\n", Extension->GopFramebuffer.PixelsPerScanLine);
             TRACE("  BitsPerPixel: %lu\n", Extension->GopFramebuffer.PixelFormat);
+            TRACE("  LogicalDpi: %lu\n", Extension->GopFramebuffer.Dpi);
         }
     }
 #endif

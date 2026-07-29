@@ -293,3 +293,9 @@ AddReg = Font.CJK.Reg
 [Font Sizes]
 Small Fonts = 96
 Large Fonts = 120
+150% = 144
+200% = 192
+250% = 240
+300% = 288
+400% = 384
+500% = 480

@@ -4353,6 +4353,7 @@ BOOL WINAPI AdjustWindowRect(_Inout_ LPRECT, _In_ DWORD, _In_ BOOL);
 BOOL WINAPI AdjustWindowRectEx(_Inout_ LPRECT, _In_ DWORD, _In_ BOOL, _In_ DWORD);
 #if (WINVER >= 0x0605)
 BOOL WINAPI AdjustWindowRectExForDpi(_Inout_ LPRECT, _In_ DWORD, _In_ BOOL, _In_ DWORD, _In_ UINT);
+BOOL WINAPI AreDpiAwarenessContextsEqual(_In_ DPI_AWARENESS_CONTEXT, _In_ DPI_AWARENESS_CONTEXT);
 #endif
 #if (_WIN32_WINNT >= 0x0500)
 BOOL WINAPI AnimateWindow(_In_ HWND, _In_ DWORD, _In_ DWORD);
@@ -5259,8 +5260,14 @@ BOOL WINAPI GetProcessDpiAwarenessInternal(_In_opt_ HANDLE, _Out_ DPI_AWARENESS*
 #endif
 
 #if (WINVER >= 0x0605) /* Windows 10 pre-Threshold */
+DPI_AWARENESS WINAPI GetAwarenessFromDpiAwarenessContext(_In_ DPI_AWARENESS_CONTEXT);
+DPI_AWARENESS_CONTEXT WINAPI GetDpiAwarenessContextForProcess(_In_opt_ HANDLE);
 UINT WINAPI GetDpiForSystem(VOID);
 UINT WINAPI GetDpiForWindow(_In_ HWND hwnd);
+UINT WINAPI GetDpiFromDpiAwarenessContext(_In_ DPI_AWARENESS_CONTEXT);
+INT WINAPI GetSystemMetricsForDpi(_In_ INT, _In_ UINT);
+DPI_AWARENESS_CONTEXT WINAPI GetThreadDpiAwarenessContext(VOID);
+DPI_AWARENESS_CONTEXT WINAPI GetWindowDpiAwarenessContext(_In_ HWND);
 BOOL WINAPI IsValidDpiAwarenessContext(_In_ DPI_AWARENESS_CONTEXT);
 #endif /* WINVER >= 0x0605 */
 

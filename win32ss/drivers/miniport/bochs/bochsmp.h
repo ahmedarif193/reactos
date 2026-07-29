@@ -81,6 +81,7 @@ typedef struct _BOCHSMP_GOP_INFO
     ULONG            GreenMask;
     ULONG            BlueMask;
     ULONG            Reserved;
+    ULONG            Dpi;
 } BOCHSMP_GOP_INFO, *PBOCHSMP_GOP_INFO;
 
 BOOLEAN

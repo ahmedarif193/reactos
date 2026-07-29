@@ -24,9 +24,9 @@
 
 static const WCHAR szTrayNotifyWndClass[] = L"TrayNotifyWnd";
 
-#define TRAY_NOTIFY_WND_SPACING_X   1
-#define TRAY_NOTIFY_WND_SPACING_Y   1
-#define CLOCK_TEXT_HACK             4
+#define TRAY_NOTIFY_WND_SPACING_X   ShellScaleForDpi(1)
+#define TRAY_NOTIFY_WND_SPACING_Y   ShellScaleForDpi(1)
+#define CLOCK_TEXT_HACK             ShellScaleForDpi(4)
 
 /*
  * TrayNotifyWnd
@@ -93,10 +93,10 @@ public:
         {
             SetWindowExStyle(m_hWnd, WS_EX_STATICEDGE, WS_EX_STATICEDGE);
 
-            ContentMargin.cxLeftWidth = 2;
-            ContentMargin.cxRightWidth = 2;
-            ContentMargin.cyTopHeight = 2;
-            ContentMargin.cyBottomHeight = 2;
+            ContentMargin.cxLeftWidth = ShellScaleForDpi(2);
+            ContentMargin.cxRightWidth = ShellScaleForDpi(2);
+            ContentMargin.cyTopHeight = ShellScaleForDpi(2);
+            ContentMargin.cyBottomHeight = ShellScaleForDpi(2);
         }
 
         return TRUE;

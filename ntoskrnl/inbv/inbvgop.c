@@ -18,10 +18,11 @@ extern BOOLEAN ShowProgressBar;
 #ifndef BI_RGB
 #define BI_RGB 0
 #endif
-#ifndef BI_RLE4
-#define BI_RLE4 2
+#ifndef BI_BITFIELDS
+#define BI_BITFIELDS 3
 #endif
-#define INBV_WORDMARK_SCALE         0.40f
+#define INBV_WORDMARK_SCALE_NUM     2
+#define INBV_WORDMARK_SCALE_DEN     5
 #define INBV_WORDMARK_TOP_VPOS      0.08f
 #define INBV_WORDMARK_BGRT_SAFE_TOP 0.35f
 #define INBV_CENTERMARK_VPOS        0.625f
@@ -46,7 +47,10 @@ typedef struct _INBV_GOP_RECT
     ULONG Height;
 } INBV_GOP_RECT, *PINBV_GOP_RECT;
 
-#define INBV_SPINNER_BBOX_SIZE     (INBV_SPINNER_BBOX_HALF * 2)
+#define INBV_SPINNER_MAX_BBOX_HALF \
+    (INBV_SPINNER_BBOX_HALF * LOADER_PARAMETER_FRAMEBUFFER_DPI_MAX / \
+     LOADER_PARAMETER_FRAMEBUFFER_DPI_DEFAULT)
+#define INBV_SPINNER_BBOX_SIZE     (INBV_SPINNER_MAX_BBOX_HALF * 2)
 #define INBV_SPINNER_FB_CAPACITY   (INBV_SPINNER_BBOX_SIZE * INBV_SPINNER_BBOX_SIZE)
 
 typedef struct _INBV_SPINNER_STATE
@@ -54,6 +58,8 @@ typedef struct _INBV_SPINNER_STATE
     LONG  DestCX, DestCY;
     ULONG BBoxHalf;
     ULONG BBoxSize;
+    LONG  RingRadiusQ8;
+    LONG  StrokeHalfQ8;
 
     ULONG RedMask, GreenMask, BlueMask;
     ULONG RedShift, GreenShift, BlueShift;
@@ -151,25 +157,67 @@ InbvIsqrt(ULONG n)
     return x;
 }
 
+static ULONG
+InbvGopNormalizeDpi(ULONG Dpi)
+{
+    if (Dpi < LOADER_PARAMETER_FRAMEBUFFER_DPI_MIN || Dpi > LOADER_PARAMETER_FRAMEBUFFER_DPI_MAX)
+    {
+        return LOADER_PARAMETER_FRAMEBUFFER_DPI_DEFAULT;
+    }
+
+    return Dpi;
+}
+
+static ULONG
+InbvGopScaleForDpi(ULONG Value, ULONG Dpi)
+{
+    return (ULONG)(((ULONGLONG)Value * InbvGopNormalizeDpi(Dpi) +
+                    LOADER_PARAMETER_FRAMEBUFFER_DPI_DEFAULT / 2) /
+                   LOADER_PARAMETER_FRAMEBUFFER_DPI_DEFAULT);
+}
+
+static BOOLEAN
+InbvGopValidateWordmarkHeader(_In_ const BITMAPINFOHEADER *Header)
+{
+    if (!Header ||
+        Header->biSize < sizeof(BITMAPINFOHEADER) ||
+        Header->biPlanes != 1 ||
+        Header->biWidth <= 0 ||
+        Header->biHeight == 0 ||
+        Header->biHeight == (LONG)MINLONG)
+    {
+        return FALSE;
+    }
+
+    if (Header->biBitCount == 4)
+        return Header->biCompression == BI_RGB;
+
+    if (Header->biBitCount == 32)
+    {
+        return Header->biCompression == BI_RGB || Header->biCompression == BI_BITFIELDS;
+    }
+
+    return FALSE;
+}
+
 static
 BOOLEAN
 InbvGopComputeWordmarkRect(
     _In_ ULONG ScreenWidth,
     _In_ ULONG ScreenHeight,
+    _In_ ULONG Dpi,
     _Out_ PINBV_GOP_RECT Rect)
 {
     PBITMAPINFOHEADER Header;
     ULONG SrcWidth, SrcHeight;
     ULONG DstWidth, DstHeight;
+    ULONG MaxWidth, SafeBottom;
 
     if (!Rect)
         return FALSE;
 
     Header = (PBITMAPINFOHEADER)InbvGetResourceAddress(IDB_REACTOS_GOP_LOGO);
-    if (!Header || Header->biPlanes != 1 || Header->biBitCount != 4)
-        return FALSE;
-
-    if (Header->biCompression != BI_RGB && Header->biCompression != BI_RLE4)
+    if (!InbvGopValidateWordmarkHeader(Header))
         return FALSE;
 
     SrcWidth = (ULONG)Header->biWidth;
@@ -177,13 +225,36 @@ InbvGopComputeWordmarkRect(
     if (!SrcWidth || !SrcHeight)
         return FALSE;
 
-    DstWidth = (ULONG)(SrcWidth * INBV_WORDMARK_SCALE + 0.5f);
+    DstWidth = (ULONG)(((ULONGLONG)SrcWidth * INBV_WORDMARK_SCALE_NUM +
+                        INBV_WORDMARK_SCALE_DEN / 2) /
+                       INBV_WORDMARK_SCALE_DEN);
+    DstWidth = InbvGopScaleForDpi(DstWidth, Dpi);
     if (DstWidth == 0)
         DstWidth = 1;
 
-    DstHeight = (ULONG)(SrcHeight * INBV_WORDMARK_SCALE + 0.5f);
+    DstHeight = (ULONG)(((ULONGLONG)SrcHeight * INBV_WORDMARK_SCALE_NUM +
+                         INBV_WORDMARK_SCALE_DEN / 2) /
+                        INBV_WORDMARK_SCALE_DEN);
+    DstHeight = InbvGopScaleForDpi(DstHeight, Dpi);
     if (DstHeight == 0)
         DstHeight = 1;
+
+    /*
+     * Preserve the logo aspect ratio if an extreme configured scale would
+     * overlap the display edge or the firmware-logo safe area.
+     */
+    MaxWidth = max((ScreenWidth * 9) / 10, 1UL);
+    SafeBottom = max((ULONG)(ScreenHeight * INBV_WORDMARK_BGRT_SAFE_TOP), 1UL);
+    if (DstWidth > MaxWidth)
+    {
+        DstHeight = max((ULONG)(((ULONGLONG)DstHeight * MaxWidth) / DstWidth), 1UL);
+        DstWidth = MaxWidth;
+    }
+    if (DstHeight > SafeBottom)
+    {
+        DstWidth = max((ULONG)(((ULONGLONG)DstWidth * SafeBottom) / DstHeight), 1UL);
+        DstHeight = SafeBottom;
+    }
 
     Rect->Width = DstWidth;
     Rect->Height = DstHeight;
@@ -191,7 +262,6 @@ InbvGopComputeWordmarkRect(
 
     {
         ULONG TopMargin = (ULONG)(ScreenHeight * INBV_WORDMARK_TOP_VPOS + 0.5f);
-        ULONG SafeBottom = (ULONG)(ScreenHeight * INBV_WORDMARK_BGRT_SAFE_TOP);
         if (TopMargin + DstHeight > SafeBottom)
             TopMargin = (SafeBottom > DstHeight) ? (SafeBottom - DstHeight) : 0;
         if (TopMargin + DstHeight > ScreenHeight)
@@ -276,7 +346,7 @@ InbvGopSpinnerRasterizeFrame(
     float span_deg = (trim_end - trim_start) * 360.0f;
     BOOLEAN arc_visible = (span_deg > 0.0f);
 
-    const float R_f = (float)INBV_SPINNER_RING_RADIUS;
+    const float R_f = (float)S->RingRadiusQ8 / 256.0f;
     const LONG  cap1_cx_q8 = (LONG)(cos_start * R_f * 256.0f);
     const LONG  cap1_cy_q8 = (LONG)(sin_start * R_f * 256.0f);
     const LONG  cap2_cx_q8 = (LONG)(cos_end   * R_f * 256.0f);
@@ -287,8 +357,8 @@ InbvGopSpinnerRasterizeFrame(
     const LONG  sin_end_q8   = (LONG)(sin_end   * 256.0f);
     const LONG  cos_end_q8   = (LONG)(cos_end   * 256.0f);
 
-    const LONG  ring_q8      = INBV_SPINNER_RING_RADIUS * 256;
-    const LONG  stroke_q8    = INBV_SPINNER_STROKE_HALF_Q8;
+    const LONG  ring_q8      = S->RingRadiusQ8;
+    const LONG  stroke_q8    = S->StrokeHalfQ8;
     const LONG  stroke_in    = (stroke_q8 > 128) ? (stroke_q8 - 128) : 0;
     const LONG  stroke_out   = stroke_q8 + 128;
 
@@ -439,8 +509,15 @@ InbvGopSpinnerSetup(
 
     RtlZeroMemory(S, sizeof(*S));
 
-    S->BBoxHalf = INBV_SPINNER_BBOX_HALF;
+    if (!InbvGopQueryInfo(&FbInfo))
+        return FALSE;
+
+    FbInfo.Dpi = InbvGopNormalizeDpi(FbInfo.Dpi);
+    S->BBoxHalf = InbvGopScaleForDpi(INBV_SPINNER_BBOX_HALF, FbInfo.Dpi);
+    S->RingRadiusQ8 = (LONG)InbvGopScaleForDpi(INBV_SPINNER_RING_RADIUS * 256, FbInfo.Dpi);
+    S->StrokeHalfQ8 = (LONG)InbvGopScaleForDpi(INBV_SPINNER_STROKE_HALF_Q8, FbInfo.Dpi);
     if (S->BBoxHalf == 0 ||
+        S->BBoxHalf > INBV_SPINNER_MAX_BBOX_HALF ||
         (S->BBoxHalf * 2) > ScreenWidth ||
         (S->BBoxHalf * 2) > ScreenHeight)
     {
@@ -458,9 +535,6 @@ InbvGopSpinnerSetup(
     if (DestY < S->BBoxHalf)
         DestY = S->BBoxHalf;
     S->DestCY = (LONG)DestY;
-
-    if (!InbvGopQueryInfo(&FbInfo))
-        return FALSE;
 
     S->RedMask    = FbInfo.RedMask;
     S->GreenMask  = FbInfo.GreenMask;
@@ -526,6 +600,84 @@ InbvGopSpinnerStop(VOID)
     g_SpinnerReady = FALSE;
 }
 
+typedef struct _INBV_GOP_RGB
+{
+    ULONG Red;
+    ULONG Green;
+    ULONG Blue;
+} INBV_GOP_RGB, *PINBV_GOP_RGB;
+
+static UCHAR
+InbvGopExtractChannel(ULONG Pixel, ULONG Mask)
+{
+    ULONG Shift;
+    ULONG MaxValue;
+    ULONG Value;
+
+    if (!Mask)
+        return 0;
+
+    Shift = InbvMaskShift(Mask);
+    MaxValue = InbvMaskMax(Mask >> Shift);
+    if (!MaxValue)
+        return 0;
+
+    Value = (Pixel & Mask) >> Shift;
+    return (UCHAR)(((ULONGLONG)Value * 255 + MaxValue / 2) / MaxValue);
+}
+
+static VOID
+InbvGopReadWordmarkPixel(
+    _In_reads_bytes_(Stride * SrcHeight) const UCHAR *Bits,
+    ULONG Stride,
+    ULONG BitCount,
+    BOOLEAN TopDown,
+    ULONG SrcHeight,
+    ULONG X,
+    ULONG Y,
+    _In_reads_opt_(PaletteCount) const RGBQUAD *Palette,
+    ULONG PaletteCount,
+    ULONG RedMask,
+    ULONG GreenMask,
+    ULONG BlueMask,
+    ULONG AlphaMask,
+    _Out_ PINBV_GOP_RGB Color)
+{
+    const UCHAR *Row;
+
+    Row = Bits + (SIZE_T)(TopDown ? Y : (SrcHeight - 1 - Y)) * Stride;
+    if (BitCount == 4)
+    {
+        UCHAR Value = Row[X / 2];
+        ULONG Index = (X & 1) ? (Value & 0x0f) : (Value >> 4);
+
+        if (Index >= PaletteCount)
+            Index = 0;
+
+        Color->Red = Palette[Index].rgbRed;
+        Color->Green = Palette[Index].rgbGreen;
+        Color->Blue = Palette[Index].rgbBlue;
+    }
+    else
+    {
+        ULONG Pixel;
+        ULONG Alpha = 255;
+
+        RtlCopyMemory(&Pixel, Row + (SIZE_T)X * sizeof(Pixel), sizeof(Pixel));
+        Color->Red = InbvGopExtractChannel(Pixel, RedMask);
+        Color->Green = InbvGopExtractChannel(Pixel, GreenMask);
+        Color->Blue = InbvGopExtractChannel(Pixel, BlueMask);
+
+        if (AlphaMask)
+            Alpha = InbvGopExtractChannel(Pixel, AlphaMask);
+
+        /* The boot background is black, so premultiply transparent pixels. */
+        Color->Red = (Color->Red * Alpha + 127) / 255;
+        Color->Green = (Color->Green * Alpha + 127) / 255;
+        Color->Blue = (Color->Blue * Alpha + 127) / 255;
+    }
+}
+
 static
 BOOLEAN
 InbvGopDrawWordmark(
@@ -535,10 +687,17 @@ InbvGopDrawWordmark(
 {
     PUCHAR Bitmap;
     PBITMAPINFOHEADER Header;
-    ULONG SrcWidth, SrcHeight;
+    ULONG SrcWidth, SrcHeight, SrcDelta;
     INBV_GOP_RECT WordmarkRect;
     ULONG DstWidth, DstHeight, DestX, DestY;
     BOOLEAN TopDown = FALSE;
+    PUCHAR Bits;
+    LPRGBQUAD Palette = NULL;
+    ULONG PaletteCount = 0;
+    ULONG SourceRedMask = 0x00ff0000;
+    ULONG SourceGreenMask = 0x0000ff00;
+    ULONG SourceBlueMask = 0x000000ff;
+    ULONG SourceAlphaMask = 0;
 
     LOADER_PARAMETER_FRAMEBUFFER FbInfo;
     ULONG RedMask = 0, GreenMask = 0, BlueMask = 0;
@@ -547,10 +706,7 @@ InbvGopDrawWordmark(
 
     Bitmap = InbvGetResourceAddress(IDB_REACTOS_GOP_LOGO);
     Header = (PBITMAPINFOHEADER)Bitmap;
-    if (!Header || Header->biPlanes != 1 || Header->biBitCount != 4)
-        return FALSE;
-
-    if (Header->biCompression != BI_RGB && Header->biCompression != BI_RLE4)
+    if (!InbvGopValidateWordmarkHeader(Header))
         return FALSE;
 
     SrcWidth = (ULONG)Header->biWidth;
@@ -559,13 +715,16 @@ InbvGopDrawWordmark(
     if (!SrcWidth || !SrcHeight)
         return FALSE;
 
+    if (!InbvGopQueryInfo(&FbInfo))
+        return FALSE;
+
     if (WordmarkRectOverride)
     {
         WordmarkRect = *WordmarkRectOverride;
     }
     else
     {
-        if (!InbvGopComputeWordmarkRect(ScreenWidth, ScreenHeight, &WordmarkRect))
+        if (!InbvGopComputeWordmarkRect(ScreenWidth, ScreenHeight, FbInfo.Dpi, &WordmarkRect))
             return FALSE;
     }
 
@@ -574,42 +733,56 @@ InbvGopDrawWordmark(
     DestX = WordmarkRect.X;
     DestY = WordmarkRect.Y;
 
-    if (!InbvGopQueryInfo(&FbInfo))
+    if (!DstWidth || !DstHeight || DestX >= ScreenWidth || DestY >= ScreenHeight)
+    {
         return FALSE;
+    }
+
+    DstWidth = min(DstWidth, ScreenWidth - DestX);
+    DstHeight = min(DstHeight, ScreenHeight - DestY);
 
     RedMask = FbInfo.RedMask; GreenMask = FbInfo.GreenMask; BlueMask = FbInfo.BlueMask;
     RedShift = InbvMaskShift(RedMask); GreenShift = InbvMaskShift(GreenMask); BlueShift = InbvMaskShift(BlueMask);
     RedMax = InbvMaskMax(RedMask >> RedShift); GreenMax = InbvMaskMax(GreenMask >> GreenShift); BlueMax = InbvMaskMax(BlueMask >> BlueShift);
 
-    ULONG PaletteCount = Header->biClrUsed ? Header->biClrUsed : 16;
-    if (PaletteCount == 0)
-        PaletteCount = 16;
-    if (PaletteCount > 16)
-        PaletteCount = 16;
-    typedef struct _BMP_RGBQUAD { UCHAR b,g,r,a; } BMP_RGBQUAD;
-    BMP_RGBQUAD* Pal = (BMP_RGBQUAD*)(Bitmap + Header->biSize);
-    ULONG Palette32[16] = {0};
-    for (ULONG i = 0; i < 16; i++)
+    Bits = Bitmap + Header->biSize;
+    if (Header->biBitCount == 4)
     {
-        UCHAR r = (i < PaletteCount) ? Pal[i].r : Pal[0].r;
-        UCHAR g = (i < PaletteCount) ? Pal[i].g : Pal[0].g;
-        UCHAR b = (i < PaletteCount) ? Pal[i].b : Pal[0].b;
-        Palette32[i] = InbvPackColor(RedMask,GreenMask,BlueMask,RedShift,GreenShift,BlueShift,RedMax,GreenMax,BlueMax,r,g,b);
+        PaletteCount = Header->biClrUsed ? min(Header->biClrUsed, 16UL) : 16;
+        Palette = (LPRGBQUAD)Bits;
+        Bits += PaletteCount * sizeof(*Palette);
+    }
+    else if (Header->biCompression == BI_BITFIELDS)
+    {
+        const ULONG *Masks = (const ULONG *)(Bitmap + sizeof(BITMAPINFOHEADER));
+
+        SourceRedMask = Masks[0];
+        SourceGreenMask = Masks[1];
+        SourceBlueMask = Masks[2];
+
+        /*
+         * V4/V5 headers embed four masks after the common 40-byte header.
+         * A 40-byte BITMAPINFOHEADER stores three masks immediately before
+         * the pixel array instead.
+         */
+        if (Header->biSize >= sizeof(BITMAPINFOHEADER) + 4 * sizeof(ULONG))
+            SourceAlphaMask = Masks[3];
+        else
+            Bits += 3 * sizeof(*Masks);
+
+        if (!SourceRedMask || !SourceGreenMask || !SourceBlueMask)
+            return FALSE;
     }
 
-    PUCHAR Bits = Bitmap + Header->biSize + PaletteCount * sizeof(BMP_RGBQUAD);
-    LONG SrcDelta = ((SrcWidth + 1) / 2);
-    SrcDelta = (SrcDelta + 3) & ~3;
-
-#define INBV_EXTRACT(C,Mask,Shift,Maxv) \
-    ((Mask) ? ((Maxv) ? ((((((C) & (Mask)) >> (Shift)) * 255) + ((Maxv)/2)) / (Maxv)) : 0) : 0)
+    SrcDelta = (ULONG)((((ULONGLONG)SrcWidth * Header->biBitCount + 31) / 32) * 4);
+    if (!SrcDelta)
+        return FALSE;
 
     for (ULONG dy = 0; dy < DstHeight; dy++)
     {
         ULONG sy = (ULONG)min((ULONGLONG)SrcHeight - 1,
-                              (ULONGLONG)(dy / INBV_WORDMARK_SCALE));
-        ULONG effRow = TopDown ? sy : (SrcHeight - 1 - sy);
-        PUCHAR Row = Bits + effRow * SrcDelta;
+                              ((ULONGLONG)dy * SrcHeight) / DstHeight);
+        ULONG sy1 = (DstHeight < SrcHeight) ? min(sy + 1, SrcHeight - 1) : sy;
 
         static ULONG LineBuf[1024];
         ULONG produced = 0;
@@ -618,44 +791,37 @@ InbvGopDrawWordmark(
             ULONG toDo = min((ULONG)1024, DstWidth - produced);
             for (ULONG dx = 0; dx < toDo; dx++)
             {
-
                 ULONG sx0 = (ULONG)min((ULONGLONG)SrcWidth - 1,
-                                       (ULONGLONG)((produced + dx) / INBV_WORDMARK_SCALE));
-                ULONG sy0 = sy;
-                ULONG sx1 = min(sx0 + 1, SrcWidth  - 1);
-                ULONG sy1 = min(sy0 + 1, SrcHeight - 1);
+                                       ((ULONGLONG)(produced + dx) * SrcWidth) /
+                                       DstWidth);
+                ULONG sx1 = (DstWidth < SrcWidth) ? min(sx0 + 1, SrcWidth - 1) : sx0;
+                INBV_GOP_RGB C00, C10, C01, C11;
+                ULONG r, g, b;
 
-                UCHAR b00 = Row[sx0 / 2];
-                UCHAR i00 = (sx0 & 1) ? (b00 & 0x0F) : ((b00 >> 4) & 0x0F);
+                InbvGopReadWordmarkPixel(Bits, SrcDelta, Header->biBitCount,
+                                         TopDown, SrcHeight, sx0, sy,
+                                         Palette, PaletteCount,
+                                         SourceRedMask, SourceGreenMask,
+                                         SourceBlueMask, SourceAlphaMask, &C00);
+                InbvGopReadWordmarkPixel(Bits, SrcDelta, Header->biBitCount,
+                                         TopDown, SrcHeight, sx1, sy,
+                                         Palette, PaletteCount,
+                                         SourceRedMask, SourceGreenMask,
+                                         SourceBlueMask, SourceAlphaMask, &C10);
+                InbvGopReadWordmarkPixel(Bits, SrcDelta, Header->biBitCount,
+                                         TopDown, SrcHeight, sx0, sy1,
+                                         Palette, PaletteCount,
+                                         SourceRedMask, SourceGreenMask,
+                                         SourceBlueMask, SourceAlphaMask, &C01);
+                InbvGopReadWordmarkPixel(Bits, SrcDelta, Header->biBitCount,
+                                         TopDown, SrcHeight, sx1, sy1,
+                                         Palette, PaletteCount,
+                                         SourceRedMask, SourceGreenMask,
+                                         SourceBlueMask, SourceAlphaMask, &C11);
 
-                UCHAR b10 = Row[sx1 / 2];
-                UCHAR i10 = (sx1 & 1) ? (b10 & 0x0F) : ((b10 >> 4) & 0x0F);
-
-                ULONG effRow1 = TopDown ? sy1 : (SrcHeight - 1 - sy1);
-                PUCHAR Row1 = Bits + effRow1 * SrcDelta;
-
-                UCHAR b01 = Row1[sx0 / 2];
-                UCHAR i01 = (sx0 & 1) ? (b01 & 0x0F) : ((b01 >> 4) & 0x0F);
-                UCHAR b11 = Row1[sx1 / 2];
-                UCHAR i11 = (sx1 & 1) ? (b11 & 0x0F) : ((b11 >> 4) & 0x0F);
-
-                ULONG c00 = Palette32[i00];
-                ULONG c10 = Palette32[i10];
-                ULONG c01 = Palette32[i01];
-                ULONG c11 = Palette32[i11];
-
-                ULONG r = (INBV_EXTRACT(c00, RedMask,   RedShift,   RedMax)   +
-                           INBV_EXTRACT(c10, RedMask,   RedShift,   RedMax)   +
-                           INBV_EXTRACT(c01, RedMask,   RedShift,   RedMax)   +
-                           INBV_EXTRACT(c11, RedMask,   RedShift,   RedMax)) / 4;
-                ULONG g = (INBV_EXTRACT(c00, GreenMask, GreenShift, GreenMax) +
-                           INBV_EXTRACT(c10, GreenMask, GreenShift, GreenMax) +
-                           INBV_EXTRACT(c01, GreenMask, GreenShift, GreenMax) +
-                           INBV_EXTRACT(c11, GreenMask, GreenShift, GreenMax)) / 4;
-                ULONG b = (INBV_EXTRACT(c00, BlueMask,  BlueShift,  BlueMax)  +
-                           INBV_EXTRACT(c10, BlueMask,  BlueShift,  BlueMax)  +
-                           INBV_EXTRACT(c01, BlueMask,  BlueShift,  BlueMax)  +
-                           INBV_EXTRACT(c11, BlueMask,  BlueShift,  BlueMax)) / 4;
+                r = (C00.Red + C10.Red + C01.Red + C11.Red) / 4;
+                g = (C00.Green + C10.Green + C01.Green + C11.Green) / 4;
+                b = (C00.Blue + C10.Blue + C01.Blue + C11.Blue) / 4;
 
                 LineBuf[dx] = InbvPackColor(RedMask,GreenMask,BlueMask,
                                              RedShift,GreenShift,BlueShift,

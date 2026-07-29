@@ -22,12 +22,6 @@ BOOL gbSpiInitialized = FALSE;
 BOOL g_PaintDesktopVersion = FALSE;
 BOOL g_bWindowSnapEnabled = TRUE;
 
-// HACK! We initialize SPI before we have a proper surface to get this from.
-#define dpi 96
-//(pPrimarySurface->GDIInfo.ulLogPixelsY)
-#define REG2METRIC(reg) (reg > 0 ? reg : ((-(reg) * dpi + 720) / 1440))
-#define METRIC2REG(met) (-((((met) * 1440)- 0) / dpi))
-
 #define REQ_INTERACTIVE_WINSTA(err) \
 do { \
     if (GetW32ProcessInfo()->prpwinsta != InputWindowStation) \
@@ -88,6 +82,8 @@ static const WCHAR* VAL_SNAP_DOCKMOVING = L"DockMoving";
 static const WCHAR* KEY_MDALIGN = L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Windows";
 static const WCHAR* VAL_MDALIGN = L"MenuDropAlignment";
 
+static const WCHAR* KEY_SYSTEM_DPI =
+    L"\\Registry\\Machine\\System\\CurrentControlSet\\Hardware Profiles\\Current\\Software\\Fonts";
 static const WCHAR* KEY_METRIC = L"Control Panel\\Desktop\\WindowMetrics";
 static const WCHAR* VAL_BORDER = L"BorderWidth";
 static const WCHAR* VAL_ICONSPC = L"IconSpacing";
@@ -115,6 +111,96 @@ static const WCHAR* VAL_MOUSEKEYS_MAX = L"MaximumSpeed";
 static const WCHAR* VAL_MOUSEKEYS_TIMETOMAX = L"TimeToMaximumSpeed";
 
 /** Loading the settings ******************************************************/
+
+UINT
+UserGetSystemDpi(VOID)
+{
+    if (gspv.uiSystemDpi >= USER_SYSTEM_DPI_MIN && gspv.uiSystemDpi <= USER_SYSTEM_DPI_MAX)
+    {
+        return gspv.uiSystemDpi;
+    }
+
+    return USER_SYSTEM_DPI_DEFAULT;
+}
+
+INT
+UserScaleForDpi(INT Value, UINT Dpi)
+{
+    LONGLONG Magnitude;
+
+    if (Dpi < USER_SYSTEM_DPI_MIN || Dpi > USER_SYSTEM_DPI_MAX)
+        Dpi = USER_SYSTEM_DPI_DEFAULT;
+
+    if (Value >= 0)
+        return (INT)(((LONGLONG)Value * Dpi + USER_SYSTEM_DPI_DEFAULT / 2) / USER_SYSTEM_DPI_DEFAULT);
+
+    Magnitude = -(LONGLONG)Value;
+    return -(INT)((Magnitude * Dpi + USER_SYSTEM_DPI_DEFAULT / 2) / USER_SYSTEM_DPI_DEFAULT);
+}
+
+INT
+UserScaleForSystemDpi(INT Value)
+{
+    return UserScaleForDpi(Value, UserGetSystemDpi());
+}
+
+static
+INT
+SpiUnscaleFromSystemDpi(INT Value)
+{
+    UINT Dpi = UserGetSystemDpi();
+    LONGLONG Magnitude;
+
+    if (Value >= 0)
+        return (INT)(((LONGLONG)Value * USER_SYSTEM_DPI_DEFAULT + Dpi / 2) / Dpi);
+
+    Magnitude = -(LONGLONG)Value;
+    return -(INT)((Magnitude * USER_SYSTEM_DPI_DEFAULT + Dpi / 2) / Dpi);
+}
+
+static
+UINT
+SpiLoadSystemDpi(VOID)
+{
+    HKEY hKey;
+    DWORD Dpi;
+
+    if (NT_SUCCESS(RegOpenKey(KEY_SYSTEM_DPI, &hKey)))
+    {
+        if (!RegReadDWORD(hKey, L"LogPixels", &Dpi))
+            Dpi = USER_SYSTEM_DPI_DEFAULT;
+        ZwClose(hKey);
+    }
+    else
+    {
+        Dpi = USER_SYSTEM_DPI_DEFAULT;
+    }
+
+    if (Dpi < USER_SYSTEM_DPI_MIN || Dpi > USER_SYSTEM_DPI_MAX)
+    {
+        WARN("Ignoring invalid system DPI %lu\n", Dpi);
+        Dpi = USER_SYSTEM_DPI_DEFAULT;
+    }
+
+    return Dpi;
+}
+
+static
+INT
+SpiMetricFromRegistry(INT RegistryValue)
+{
+    if (RegistryValue > 0)
+        return UserScaleForSystemDpi(RegistryValue);
+
+    return (INT)((-(LONGLONG)RegistryValue * UserGetSystemDpi() + 720) / 1440);
+}
+
+static
+INT
+SpiMetricToRegistry(INT Metric)
+{
+    return -(INT)(((LONGLONG)Metric * 1440 + UserGetSystemDpi() / 2) / UserGetSystemDpi());
+}
 
 static
 INT
@@ -181,11 +267,15 @@ INT
 SpiLoadMetric(PCWSTR pwszValue, INT iValue)
 {
     INT iRegVal;
+    INT iDefaultReg;
 
-    iRegVal = SpiLoadInt(KEY_METRIC, pwszValue, METRIC2REG(iValue));
+    /* Defaults and positive legacy values are 96-DPI design pixels. */
+    iDefaultReg = -(INT)(((LONGLONG)iValue * 1440 + USER_SYSTEM_DPI_DEFAULT / 2) / USER_SYSTEM_DPI_DEFAULT);
+    iRegVal = SpiLoadInt(KEY_METRIC, pwszValue, iDefaultReg);
     TRACE("Loaded metric setting '%S', iValue=%d(reg:%d), ret=%d(reg:%d)\n",
-           pwszValue, iValue, METRIC2REG(iValue), REG2METRIC(iRegVal), iRegVal);
-    return REG2METRIC(iRegVal);
+           pwszValue, iValue, iDefaultReg,
+           SpiMetricFromRegistry(iRegVal), iRegVal);
+    return SpiMetricFromRegistry(iRegVal);
 }
 
 static
@@ -201,6 +291,20 @@ SpiLoadFont(PLOGFONTW plfOut, LPWSTR pwszValueName, PLOGFONTW plfDefault)
                                  sizeof(LOGFONTW));
     if (!bResult)
         *plfOut = *plfDefault;
+
+    /*
+     * Negative heights are 96-DPI design pixels in the registry. Positive
+     * heights denote points; convert those to a negative pixel height first.
+     * Width is stored verbatim, matching native SPI persistence semantics.
+     */
+    if (plfOut->lfHeight > 0)
+    {
+        plfOut->lfHeight = -(INT)(((LONGLONG)plfOut->lfHeight * UserGetSystemDpi() + 36) / 72);
+    }
+    else
+    {
+        plfOut->lfHeight = UserScaleForSystemDpi(plfOut->lfHeight);
+    }
 }
 
 static
@@ -219,11 +323,11 @@ SpiFixupValues(VOID)
     if (gspv.iDblClickTime == 0) gspv.iDblClickTime = 500;
 
     // FIXME: Hack!!!
-    gspv.tmMenuFont.tmHeight = 11;
-    gspv.tmMenuFont.tmExternalLeading = 2;
+    gspv.tmMenuFont.tmHeight = UserScaleForSystemDpi(11);
+    gspv.tmMenuFont.tmExternalLeading = UserScaleForSystemDpi(2);
 
-    gspv.tmCaptionFont.tmHeight = 11;
-    gspv.tmCaptionFont.tmExternalLeading = 2;
+    gspv.tmCaptionFont.tmHeight = UserScaleForSystemDpi(11);
+    gspv.tmCaptionFont.tmExternalLeading = UserScaleForSystemDpi(2);
 
 }
 
@@ -281,6 +385,11 @@ SpiUpdatePerUserSystemParameters(VOID)
     }
 #endif
 
+    /* DPI is machine-wide and must be known before loading pixel metrics. */
+    gspv.uiSystemDpi = SpiLoadSystemDpi();
+    if (gpsi)
+        gpsi->dmLogPixels = (USHORT)gspv.uiSystemDpi;
+
     /* Load mouse settings */
     gspv.caiMouse.FirstThreshold = SpiLoadMouse(VAL_MOUSE1, 6);
     gspv.caiMouse.SecondThreshold = SpiLoadMouse(VAL_MOUSE2, 10);
@@ -295,6 +404,8 @@ SpiUpdatePerUserSystemParameters(VOID)
     gspv.iMouseHoverTime = SpiLoadMouse(VAL_HOVERTIME, 400);
     gspv.iMouseHoverWidth = SpiLoadMouse(VAL_HOVERWIDTH, 4);
     gspv.iMouseHoverHeight = SpiLoadMouse(VAL_HOVERHEIGHT, 4);
+    gspv.iDragWidth = SpiLoadInt(KEY_DESKTOP, VAL_DRAGWIDTH, 4);
+    gspv.iDragHeight = SpiLoadInt(KEY_DESKTOP, VAL_DRAGHEIGHT, 4);
 
     /* Load keyboard settings */
     gspv.dwKbdSpeed = SpiLoadInt(KEY_KBD, VAL_KBDSPD, 31);
@@ -312,7 +423,7 @@ SpiUpdatePerUserSystemParameters(VOID)
     gspv.ncm.iMenuWidth = SpiLoadMetric(L"MenuWidth", 18);
     gspv.ncm.iMenuHeight = SpiLoadMetric(L"MenuHeight", 18);
 #if (WINVER >= 0x0600)
-    gspv.ncm.iPaddedBorderWidth = SpiLoadMetric(L"PaddedBorderWidth", 18);
+    gspv.ncm.iPaddedBorderWidth = SpiLoadMetric(L"PaddedBorderWidth", 0);
 #endif
     SpiLoadFont(&gspv.ncm.lfCaptionFont, L"CaptionFont", &lf2);
     SpiLoadFont(&gspv.ncm.lfSmCaptionFont, L"SmCaptionFont", &lf1);
@@ -331,7 +442,7 @@ SpiUpdatePerUserSystemParameters(VOID)
     gspv.im.cbSize = sizeof(ICONMETRICSW);
     gspv.im.iHorzSpacing = SpiLoadMetric(VAL_ICONSPC, 64);
     gspv.im.iVertSpacing = SpiLoadMetric(VAL_ICONVSPC, 64);
-    gspv.im.iTitleWrap = SpiLoadMetric(VAL_ITWRAP, 1);
+    gspv.im.iTitleWrap = SpiLoadInt(KEY_METRIC, VAL_ITWRAP, 1);
     SpiLoadFont(&gspv.im.lfFont, L"IconFont", &lf1);
 
     /* Load desktop settings */
@@ -354,10 +465,10 @@ SpiUpdatePerUserSystemParameters(VOID)
 
     /* Some hardcoded values for now */
 
-    gspv.tmCaptionFont.tmAveCharWidth = 6;
+    gspv.tmCaptionFont.tmAveCharWidth = UserScaleForSystemDpi(6);
     gspv.bBeep = TRUE;
-    gspv.uiFocusBorderWidth = 1;
-    gspv.uiFocusBorderHeight = 1;
+    gspv.uiFocusBorderWidth = SpiLoadDWord(KEY_DESKTOP, L"FocusBorderWidth", 1);
+    gspv.uiFocusBorderHeight = SpiLoadDWord(KEY_DESKTOP, L"FocusBorderHeight", 1);
     gspv.bMenuDropAlign = 0;
     gspv.dwMenuShowDelay = SpiLoadInt(KEY_DESKTOP, L"MenuShowDelay", 400);
     gspv.dwForegroundFlashCount = 3;
@@ -481,17 +592,23 @@ static
 VOID
 SpiStoreMetric(LPCWSTR pwszValue, INT iValue)
 {
-    SpiStoreSzInt(KEY_METRIC, pwszValue, METRIC2REG(iValue));
+    SpiStoreSzInt(KEY_METRIC, pwszValue, SpiMetricToRegistry(iValue));
 }
 
 static
 VOID
 SpiStoreFont(PCWSTR pwszValue, LOGFONTW* plogfont)
 {
+    LOGFONTW LogFont = *plogfont;
+
+    /* Keep the registry representation independent of the active DPI. */
+    if (LogFont.lfHeight < 0)
+        LogFont.lfHeight = SpiUnscaleFromSystemDpi(LogFont.lfHeight);
+
     RegWriteUserSetting(KEY_METRIC,
                         pwszValue,
                         REG_BINARY,
-                        plogfont,
+                        &LogFont,
                         sizeof(LOGFONTW));
 }
 
@@ -1001,8 +1118,8 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
             return SpiGetInt(pvParam, &gspv.ncm.iBorderWidth, fl);
 
         case SPI_SETBORDER:
-            uiParam = max(uiParam, 1);
-            return SpiSetInt(&gspv.ncm.iBorderWidth, uiParam, KEY_METRIC, VAL_BORDER, fl);
+            uiParam = max(uiParam, 1U);
+            return SpiSetMetric(&gspv.ncm.iBorderWidth, uiParam, VAL_BORDER, fl);
 
         case SPI_GETKEYBOARDSPEED:
             return SpiGetInt(pvParam, &gspv.dwKbdSpeed, fl);
@@ -1059,7 +1176,7 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
             {
                 return SpiGetInt(pvParam, &gspv.im.iHorzSpacing, fl);
             }
-            uiParam = max(uiParam, 32);
+            uiParam = max(uiParam, (UINT)UserScaleForSystemDpi(32));
             return SpiSetMetric(&gspv.im.iHorzSpacing, uiParam, VAL_ICONSPC, fl);
 
         case SPI_ICONVERTICALSPACING:
@@ -1067,7 +1184,7 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
             {
                 return SpiGetInt(pvParam, &gspv.im.iVertSpacing, fl);
             }
-            uiParam = max(uiParam, 32);
+            uiParam = max(uiParam, (UINT)UserScaleForSystemDpi(32));
             return SpiSetMetric(&gspv.im.iVertSpacing, uiParam, VAL_ICONVSPC, fl);
 
         case SPI_GETICONTITLEWRAP:
@@ -1186,7 +1303,7 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
                 SpiStoreMetric(L"MinWidth", gspv.mm.iWidth);
                 SpiStoreMetric(L"MinHorzGap", gspv.mm.iHorzGap);
                 SpiStoreMetric(L"MinVertGap", gspv.mm.iVertGap);
-                SpiStoreMetric(L"MinArrange", gspv.mm.iArrange);
+                SpiStoreSzInt(KEY_METRIC, L"MinArrange", gspv.mm.iArrange);
             }
 
             return (UINT_PTR)KEY_METRIC;
@@ -1211,7 +1328,7 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
             {
                 SpiStoreMetric(VAL_ICONSPC, gspv.im.iHorzSpacing);
                 SpiStoreMetric(VAL_ICONVSPC, gspv.im.iVertSpacing);
-                SpiStoreMetric(VAL_ITWRAP, gspv.im.iTitleWrap);
+                SpiStoreSzInt(KEY_METRIC, VAL_ITWRAP, gspv.im.iTitleWrap);
                 SpiStoreFont(L"IconFont", &gspv.im.lfFont);
             }
             return (UINT_PTR)KEY_METRIC;
@@ -1945,13 +2062,13 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
             return SpiGetInt(pvParam, &gspv.uiFocusBorderWidth, fl);
 
         case SPI_SETFOCUSBORDERWIDTH:
-            return SpiSetInt(&gspv.uiFocusBorderWidth, uiParam, KEY_MOUSE, L"", fl);
+            return SpiSetDWord(&gspv.uiFocusBorderWidth, uiParam, KEY_DESKTOP, L"FocusBorderWidth", fl);
 
         case SPI_GETFOCUSBORDERHEIGHT:
             return SpiGetInt(pvParam, &gspv.uiFocusBorderHeight, fl);
 
         case SPI_SETFOCUSBORDERHEIGHT:
-            return SpiSetInt(&gspv.uiFocusBorderHeight, uiParam, KEY_MOUSE, L"", fl);
+            return SpiSetDWord(&gspv.uiFocusBorderHeight, uiParam, KEY_DESKTOP, L"FocusBorderHeight", fl);
 
         case SPI_GETFONTSMOOTHINGORIENTATION:
             return SpiGetInt(pvParam, &gspv.uiFontSmoothingOrientation, fl);

@@ -991,13 +991,6 @@ NtDxEngGetRedirectionBitmap(
  * pair; parity is validated by the synced win32u winetest.
  */
 
-/* NTUSER_DPI_* awareness context values (low word: awareness, bits 8-15: DPI) */
-#define NTUSER_DPI_UNAWARE              0x00006010
-#define NTUSER_DPI_SYSTEM_AWARE         0x00000011
-#define NTUSER_DPI_PER_MONITOR_AWARE    0x00000012
-#define NTUSER_DPI_PER_MONITOR_AWARE_V2 0x00000022
-#define NTUSER_DPI_UNAWARE_GDISCALED    0x40006010
-
 typedef struct _NTUSER_DISPLAYCONFIG_DEVICE_INFO_HEADER
 {
     ULONG Type;
@@ -1304,6 +1297,52 @@ NtUserGetPointerInfoList(
     return TRUE;
 }
 
+static BOOL
+IntIsValidDpiContext(_In_ ULONG Context, _In_ ULONG SystemDpi)
+{
+    switch (NTUSER_DPI_CONTEXT_GET_AWARENESS(Context))
+    {
+        case DPI_AWARENESS_UNAWARE:
+            if (NTUSER_DPI_CONTEXT_GET_FLAGS(Context) & ~NTUSER_DPI_CONTEXT_FLAG_VALID_MASK)
+            {
+                return FALSE;
+            }
+            if (NTUSER_DPI_CONTEXT_GET_VERSION(Context) != 1)
+                return FALSE;
+            return NTUSER_DPI_CONTEXT_GET_DPI(Context) == 96;
+
+        case DPI_AWARENESS_SYSTEM_AWARE:
+            if (NTUSER_DPI_CONTEXT_GET_FLAGS(Context) & ~NTUSER_DPI_CONTEXT_FLAG_VALID_MASK)
+            {
+                return FALSE;
+            }
+            if (NTUSER_DPI_CONTEXT_GET_FLAGS(Context) & NTUSER_DPI_CONTEXT_FLAG_GDISCALED)
+            {
+                return FALSE;
+            }
+            if (NTUSER_DPI_CONTEXT_GET_VERSION(Context) != 1)
+                return FALSE;
+            return !SystemDpi || NTUSER_DPI_CONTEXT_GET_DPI(Context) == SystemDpi;
+
+        case DPI_AWARENESS_PER_MONITOR_AWARE:
+            if (NTUSER_DPI_CONTEXT_GET_FLAGS(Context) & ~NTUSER_DPI_CONTEXT_FLAG_VALID_MASK)
+            {
+                return FALSE;
+            }
+            if (NTUSER_DPI_CONTEXT_GET_FLAGS(Context) & NTUSER_DPI_CONTEXT_FLAG_GDISCALED)
+            {
+                return FALSE;
+            }
+            if (NTUSER_DPI_CONTEXT_GET_VERSION(Context) != 1 && NTUSER_DPI_CONTEXT_GET_VERSION(Context) != 2)
+            {
+                return FALSE;
+            }
+            return NTUSER_DPI_CONTEXT_GET_DPI(Context) == 0;
+    }
+
+    return FALSE;
+}
+
 ULONG
 APIENTRY
 NtUserGetProcessDpiAwarenessContext(
@@ -1351,6 +1390,49 @@ NtUserGetProcessDpiAwarenessContext(
 
 ULONG
 APIENTRY
+NtUserGetThreadDpiAwarenessContext(VOID)
+{
+    PTHREADINFO pti;
+    ULONG Context = NTUSER_DPI_UNAWARE;
+
+    UserEnterShared();
+
+    pti = PsGetCurrentThreadWin32Thread();
+    if (pti)
+    {
+        if (pti->DpiContext)
+        {
+            Context = pti->DpiContext;
+        }
+        else if (pti->ppi && pti->ppi->DpiContext)
+        {
+            Context = pti->ppi->DpiContext;
+        }
+    }
+
+    UserLeave();
+    return Context;
+}
+
+ULONG
+APIENTRY
+NtUserGetWindowDpiAwarenessContext(_In_ HWND hWnd)
+{
+    PWND Window;
+    ULONG Context = 0;
+
+    UserEnterShared();
+
+    Window = UserGetWindowObject(hWnd);
+    if (Window)
+        Context = Window->DpiContext;
+
+    UserLeave();
+    return Context;
+}
+
+ULONG
+APIENTRY
 NtUserSetProcessDpiAwarenessContext(
     _In_ ULONG DpiContext,
     _In_ ULONG Flags)
@@ -1364,16 +1446,10 @@ NtUserSetProcessDpiAwarenessContext(
 
     UserEnterExclusive();
 
-    SystemDpi = gpsi ? gpsi->dmLogPixels : 96;
+    SystemDpi = (gpsi && gpsi->dmLogPixels) ? gpsi->dmLogPixels : 96;
 
-    /* Only concrete NTUSER contexts are accepted, never the abstract handles.
-     * The 0x80000000 process-default flag composes with each of them. */
-    BaseContext = DpiContext & ~0x80000000;
-    if (BaseContext != NTUSER_DPI_UNAWARE &&
-        BaseContext != NTUSER_DPI_UNAWARE_GDISCALED &&
-        BaseContext != NTUSER_DPI_PER_MONITOR_AWARE &&
-        BaseContext != NTUSER_DPI_PER_MONITOR_AWARE_V2 &&
-        BaseContext != (NTUSER_DPI_SYSTEM_AWARE | (SystemDpi << 8)))
+    /* Only valid concrete NTUSER contexts are accepted, never abstract handles. */
+    if (!IntIsValidDpiContext(DpiContext, SystemDpi))
     {
         EngSetLastError(ERROR_INVALID_PARAMETER);
     }
@@ -1398,6 +1474,52 @@ NtUserSetProcessDpiAwarenessContext(
 
     UserLeave();
     return Ret;
+}
+
+ULONG
+APIENTRY
+NtUserSetThreadDpiAwarenessContext(_In_ ULONG DpiContext)
+{
+    PTHREADINFO pti;
+    ULONG SystemDpi;
+    ULONG Previous = 0;
+
+    UserEnterExclusive();
+
+    pti = PsGetCurrentThreadWin32Thread();
+    SystemDpi = (gpsi && gpsi->dmLogPixels) ? gpsi->dmLogPixels : 96;
+
+    if (!IntIsValidDpiContext(DpiContext, SystemDpi))
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+    }
+    else if (!pti)
+    {
+        EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
+    }
+    else
+    {
+        if (pti->DpiContext)
+        {
+            Previous = pti->DpiContext;
+        }
+        else if (pti->ppi && pti->ppi->DpiContext)
+        {
+            Previous = pti->ppi->DpiContext | NTUSER_DPI_CONTEXT_FLAG_PROCESS;
+        }
+        else
+        {
+            Previous = NTUSER_DPI_UNAWARE | NTUSER_DPI_CONTEXT_FLAG_PROCESS;
+        }
+
+        if (DpiContext & NTUSER_DPI_CONTEXT_FLAG_PROCESS)
+            pti->DpiContext = 0;
+        else
+            pti->DpiContext = DpiContext;
+    }
+
+    UserLeave();
+    return Previous;
 }
 
 /* EOF */
