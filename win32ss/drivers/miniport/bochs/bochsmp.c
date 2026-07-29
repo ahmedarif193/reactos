@@ -222,6 +222,7 @@ BochsGetControllerInfo(
     _Inout_ PBOCHS_DEVICE_EXTENSION DeviceExtension)
 {
     USHORT Version;
+    USHORT Enable;
     WCHAR ChipType[5];
     ULONG SizeInBytes;
 
@@ -251,10 +252,11 @@ BochsGetControllerInfo(
     }
     else
     {
-        BochsWriteDispI(DeviceExtension, VBE_DISPI_INDEX_ENABLE, VBE_DISPI_GETCAPS);
+        Enable = BochsReadDispI(DeviceExtension, VBE_DISPI_INDEX_ENABLE);
+        BochsWriteDispI(DeviceExtension, VBE_DISPI_INDEX_ENABLE, Enable | VBE_DISPI_GETCAPS);
         DeviceExtension->MaxXResolution = BochsReadDispI(DeviceExtension, VBE_DISPI_INDEX_XRES);
         DeviceExtension->MaxYResolution = BochsReadDispI(DeviceExtension, VBE_DISPI_INDEX_YRES);
-        BochsWriteDispI(DeviceExtension, VBE_DISPI_INDEX_ENABLE, VBE_DISPI_DISABLED);
+        BochsWriteDispI(DeviceExtension, VBE_DISPI_INDEX_ENABLE, Enable);
         /* Workaround bug in QEMU bochs-display */
         if (DeviceExtension->MaxXResolution == 0 && DeviceExtension->MaxYResolution == 0)
         {
