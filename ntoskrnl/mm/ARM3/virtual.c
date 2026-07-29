@@ -566,6 +566,7 @@ MiDeletePte(IN PMMPTE PointerPte,
     MMPTE TempPte;
     PFN_NUMBER PageFrameIndex;
     PMMPDE PointerPde;
+    PMMPTE PteAddress;
 
     /* PFN lock must be held */
     MI_ASSERT_PFN_LOCK_HELD();
@@ -575,6 +576,19 @@ MiDeletePte(IN PMMPTE PointerPte,
 
     /* This must be current process. */
     ASSERT(CurrentProcess == PsGetCurrentProcess());
+
+    /*
+     * ARM64 accesses user PTE storage through the physical TTBR0 walk. PFN
+     * metadata still uses the canonical recursive-map address as the mapping
+     * identity, so keep the two concepts separate.
+     */
+#if defined(_M_ARM64)
+    PteAddress = (VirtualAddress < MmSystemRangeStart) ?
+                     MiAddressToPte(VirtualAddress) :
+                     PointerPte;
+#else
+    PteAddress = PointerPte;
+#endif
 
     /* Capture the PTE */
     TempPte = *PointerPte;
@@ -595,7 +609,7 @@ MiDeletePte(IN PMMPTE PointerPte,
             DPRINT("Pte %p is transitional!\n", PointerPte);
 
             /* Make sure the saved PTE address is valid */
-            ASSERT((PMMPTE)((ULONG_PTR)Pfn1->PteAddress & ~0x1) == PointerPte);
+            ASSERT((PMMPTE)((ULONG_PTR)Pfn1->PteAddress & ~0x1) == PteAddress);
 
             /* Destroy the PTE */
             MI_ERASE_SOFTWARE_PTE(PointerPte);
@@ -637,34 +651,66 @@ MiDeletePte(IN PMMPTE PointerPte,
     if (Pfn1->u3.e1.PrototypePte == 1)
     {
         /* Get the PDE and make sure it's faulted in */
-        PointerPde = MiPteToPde(PointerPte);
-        if (PointerPde->u.Hard.Valid == 0)
+#if defined(_M_ARM64)
+        if (VirtualAddress >= MmSystemRangeStart)
+#endif
         {
-#if (_MI_PAGING_LEVELS == 2)
-            /* Could be paged pool access from a new process -- synchronize the page directories */
-            if (!NT_SUCCESS(MiCheckPdeForPagedPool(VirtualAddress)))
+            PointerPde = MiPteToPde(PointerPte);
+            if (PointerPde->u.Hard.Valid == 0)
             {
-#endif
-                /* The PDE must be valid at this point */
-                KeBugCheckEx(MEMORY_MANAGEMENT,
-                             0x61940,
-                             (ULONG_PTR)PointerPte,
-                             PointerPte->u.Long,
-                             (ULONG_PTR)VirtualAddress);
-            }
 #if (_MI_PAGING_LEVELS == 2)
-        }
+                /* Could be paged pool access from a new process -- synchronize the page directories */
+                if (!NT_SUCCESS(MiCheckPdeForPagedPool(VirtualAddress)))
+                {
 #endif
+                    /* The PDE must be valid at this point */
+                    KeBugCheckEx(MEMORY_MANAGEMENT,
+                                 0x61940,
+                                 (ULONG_PTR)PointerPte,
+                                 PointerPte->u.Long,
+                                 (ULONG_PTR)VirtualAddress);
+                }
+#if (_MI_PAGING_LEVELS == 2)
+            }
+#endif
+        }
+
         /* Drop the share count on the page table */
-        PointerPde = MiPteToPde(PointerPte);
-        MiDecrementShareCount(MiGetPfnEntry(PointerPde->u.Hard.PageFrameNumber),
-            PointerPde->u.Hard.PageFrameNumber);
+#if defined(_M_ARM64)
+        if (VirtualAddress < MmSystemRangeStart)
+        {
+            MI_ARM64_USER_PTE_WALK Walk;
+            BOOLEAN Found;
+            PFN_NUMBER PageTableFrame;
+
+            Found = MiArm64GetUserPteAddressForProcess(CurrentProcess,
+                                                       VirtualAddress,
+                                                       &Walk);
+            if (!Found || (Walk.Depth < 3))
+            {
+                KeBugCheckEx(MEMORY_MANAGEMENT,
+                             0xA641,
+                             (ULONG_PTR)VirtualAddress,
+                             PointerPte->u.Long,
+                             Walk.Depth);
+            }
+            PageTableFrame = Walk.LevelPfn[3];
+            MiDecrementShareCount(MiGetPfnEntry(PageTableFrame),
+                                  PageTableFrame);
+        }
+        else
+#endif
+        {
+            PointerPde = MiPteToPde(PointerPte);
+            MiDecrementShareCount(MiGetPfnEntry(PointerPde->u.Hard.PageFrameNumber),
+                                  PointerPde->u.Hard.PageFrameNumber);
+        }
 
         /* Drop the share count */
         MiDecrementShareCount(Pfn1, PageFrameIndex);
 
         /* Either a fork, or this is the shared user data page */
-        if ((PointerPte <= MiHighestUserPte) && (PrototypePte != Pfn1->PteAddress))
+        if ((PteAddress <= MiHighestUserPte) && (PrototypePte != Pfn1->PteAddress))
         {
             /* If it's not the shared user page, then crash, since there's no fork() yet */
             if ((PAGE_ALIGN(VirtualAddress) != (PVOID)USER_SHARED_DATA) ||
@@ -673,7 +719,7 @@ MiDeletePte(IN PMMPTE PointerPte,
                 /* Must be some sort of memory corruption */
                 KeBugCheckEx(MEMORY_MANAGEMENT,
                              0x400,
-                             (ULONG_PTR)PointerPte,
+                             (ULONG_PTR)PteAddress,
                              (ULONG_PTR)PrototypePte,
                              (ULONG_PTR)Pfn1->PteAddress);
             }
@@ -685,12 +731,12 @@ MiDeletePte(IN PMMPTE PointerPte,
     else
     {
         /* Make sure the saved PTE address is valid */
-        if ((PMMPTE)((ULONG_PTR)Pfn1->PteAddress & ~0x1) != PointerPte)
+        if ((PMMPTE)((ULONG_PTR)Pfn1->PteAddress & ~0x1) != PteAddress)
         {
             /* The PFN entry is illegal, or invalid */
             KeBugCheckEx(MEMORY_MANAGEMENT,
                          0x401,
-                         (ULONG_PTR)PointerPte,
+                         (ULONG_PTR)PteAddress,
                          PointerPte->u.Long,
                          (ULONG_PTR)Pfn1->PteAddress);
         }
@@ -728,12 +774,14 @@ MiDeleteVirtualAddresses(
     _In_opt_ PMMVAD Vad)
 {
     PMMPTE PointerPte, PrototypePte, LastPrototypePte;
+#if !defined(_M_ARM64)
     PMMPDE PointerPde;
 #if (_MI_PAGING_LEVELS >= 3)
     PMMPPE PointerPpe;
 #endif
 #if (_MI_PAGING_LEVELS >= 4)
     PMMPPE PointerPxe;
+#endif
 #endif
     MMPTE TempPte;
     PEPROCESS CurrentProcess;
@@ -743,6 +791,9 @@ MiDeleteVirtualAddresses(
     PSUBSECTION Subsection;
 #if defined(_M_AMD64) || defined(_M_ARM64)
     ULONG_PTR FlushStart;
+#endif
+#if defined(_M_ARM64)
+    MI_ARM64_USER_PTE_WALK Arm64Walk;
 #endif
 
     /* We should never get RosMm memory areas here */
@@ -770,6 +821,7 @@ MiDeleteVirtualAddresses(
     /* Loop the PTE for each VA (EndingAddress is inclusive!) */
     while (Va <= EndingAddress)
     {
+#if !defined(_M_ARM64)
 #if (_MI_PAGING_LEVELS >= 4)
         /* Get the PXE and check if it's valid */
         PointerPxe = MiAddressToPxe((PVOID)Va);
@@ -833,6 +885,7 @@ MiDeleteVirtualAddresses(
         /* Now we should have a valid PDE, mapped in, and still have some VA */
         ASSERT(PointerPde->u.Hard.Valid == 1);
         ASSERT(Va <= EndingAddress);
+#endif
 
         /* Check if this is a section VAD with gaps in it */
         if ((AddressGap) && (LastPrototypePte))
@@ -858,18 +911,42 @@ MiDeleteVirtualAddresses(
 #if defined(_M_AMD64) || defined(_M_ARM64)
         FlushStart = Va;
 #endif
+#if defined(_M_ARM64)
+        if (!MiArm64GetUserPteAddressForProcess(CurrentProcess,
+                                                (PVOID)Va,
+                                                &Arm64Walk) ||
+            (Arm64Walk.PointerPte == NULL))
+        {
+            AddressGap = TRUE;
+            Va = (Va & ~((ULONG_PTR)PDE_MAPPED_VA - 1)) + PDE_MAPPED_VA;
+            continue;
+        }
+
+        AddressGap = FALSE;
+#endif
         OldIrql = MiAcquirePfnLock();
         FlushTb = FALSE;
+#if defined(_M_ARM64)
+        PointerPte = (PMMPTE)Arm64Walk.PointerPte;
+#else
         PointerPte = MiAddressToPte(Va);
+#endif
         do
         {
             /* Making sure the PDE is still valid */
+#if !defined(_M_ARM64)
             ASSERT(PointerPde->u.Hard.Valid == 1);
+#endif
 
             /* Capture the PDE and make sure it exists */
             TempPte = *PointerPte;
             if (TempPte.u.Long)
             {
+#if defined(_M_ARM64)
+                Arm64Walk.PointerPte = (volatile ULONG64 *)PointerPte;
+                Arm64Walk.PteValue = TempPte.u.Long;
+#endif
+
                 /* Check if the PTE is actually mapped in */
                 if (MI_IS_MAPPED_PTE(&TempPte))
                 {
@@ -917,6 +994,25 @@ MiDeleteVirtualAddresses(
                     MI_ERASE_SOFTWARE_PTE(PointerPte);
                 }
 
+#if defined(_M_ARM64)
+                if (MiArm64ReleaseUserPageTableReferenceLocked(CurrentProcess,
+                                                               (PVOID)Va,
+                                                               FALSE,
+                                                               &Arm64Walk))
+                {
+                    FlushTb = TRUE;
+
+                    /* The rest of this L3 range disappeared with the table. */
+                    AddressGap = TRUE;
+                    Va = (Va & ~((ULONG_PTR)PDE_MAPPED_VA - 1)) + PDE_MAPPED_VA;
+
+                    /* Use this to detect address gaps */
+                    PointerPte++;
+
+                    PrototypePte++;
+                    break;
+                }
+#else
                 if (MiDecrementPageTableReferences((PVOID)Va) == 0)
                 {
                     ASSERT(PointerPde->u.Long != 0);
@@ -934,6 +1030,7 @@ MiDeleteVirtualAddresses(
                     PrototypePte++;
                     break;
                 }
+#endif
             }
 
             /* Update the address and PTE for it */
@@ -960,7 +1057,9 @@ MiDeleteVirtualAddresses(
         if (Va > EndingAddress) return;
 
         /* Check if we exited the loop regularly */
+#if !defined(_M_ARM64)
         AddressGap = (PointerPte != MiAddressToPte(Va));
+#endif
     }
 }
 
