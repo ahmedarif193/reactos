@@ -235,6 +235,23 @@ static void Test_GetDeviceState(void)
     Status = pfnD3DKMTGetDeviceState(&StateData);
     ok(Status == STATUS_INVALID_PARAMETER, "GetDeviceState with invalid state type returned 0x%lx, expected STATUS_INVALID_PARAMETER\n", Status);
 
+    /* StateType starts at one; both neighboring holes must fail closed. */
+    memset(&StateData, 0, sizeof(StateData));
+    StateData.hDevice = hDevice;
+    StateData.StateType = (D3DKMT_DEVICESTATE_TYPE)0;
+    Status = pfnD3DKMTGetDeviceState(&StateData);
+    ok(Status == STATUS_INVALID_PARAMETER,
+       "GetDeviceState with StateType 0 returned 0x%lx, expected STATUS_INVALID_PARAMETER\n",
+       Status);
+
+    memset(&StateData, 0, sizeof(StateData));
+    StateData.hDevice = hDevice;
+    StateData.StateType = (D3DKMT_DEVICESTATE_TYPE)7;
+    Status = pfnD3DKMTGetDeviceState(&StateData);
+    ok(Status == STATUS_INVALID_PARAMETER,
+       "GetDeviceState with StateType 7 returned 0x%lx, expected STATUS_INVALID_PARAMETER\n",
+       Status);
+
     DestroyTestDevice(hDevice);
     CloseAdapter(hAdapter);
 }

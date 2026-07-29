@@ -37,30 +37,30 @@ static VOID DisplibInitializeServiceName(_Out_ PUNICODE_STRING ServiceName)
 
 static BOOLEAN DisplibIsSupportedDodVersion(_In_ ULONG Version)
 {
-    if (Version >= 0x11007)
-        return TRUE;
     switch (Version)
     {
-        case 0x10004:
-        case 0x0F003:
-        case 0x0E003:
-        case 0x0D001:
-        case 0x0C004:
-        case 0x0B004:
-        case 0x0A00B:
-        case 0x09006:
-        case 0x08001:
-        case 0x0700A:
-        case 0x06011:
-        case 0x06010:
-        case 0x06003:
-        case 0x05023:
-        case 0x04003:
-        case 0x04002:
-        case 0x0300E:
-        case 0x02005:
-        case 0x01053:
-        case 0x01052:
+        case DXGKDDI_INTERFACE_VERSION_WDDM3_2:
+        case DXGKDDI_INTERFACE_VERSION_WDDM3_1:
+        case DXGKDDI_INTERFACE_VERSION_WDDM3_0:
+        case DXGKDDI_INTERFACE_VERSION_WDDM2_9:
+        case DXGKDDI_INTERFACE_VERSION_WDDM2_8:
+        case DXGKDDI_INTERFACE_VERSION_WDDM2_7:
+        case DXGKDDI_INTERFACE_VERSION_WDDM2_6:
+        case DXGKDDI_INTERFACE_VERSION_WDDM2_5:
+        case DXGKDDI_INTERFACE_VERSION_WDDM2_4:
+        case DXGKDDI_INTERFACE_VERSION_WDDM2_3:
+        case DXGKDDI_INTERFACE_VERSION_WDDM2_2:
+        case DXGKDDI_INTERFACE_VERSION_WDDM2_1_6:
+        case DXGKDDI_INTERFACE_VERSION_WDDM2_1_5:
+        case DXGKDDI_INTERFACE_VERSION_WDDM2_1:
+        case DXGKDDI_INTERFACE_VERSION_WDDM2_0:
+        case 0x5022: /* Windows 10 10240 WDDM 2.0 */
+        case DXGKDDI_INTERFACE_VERSION_WDDM1_3_PATH_INDEPENDENT_ROTATION:
+        case DXGKDDI_INTERFACE_VERSION_WDDM1_3:
+        case DXGKDDI_INTERFACE_VERSION_WIN8:
+        case DXGKDDI_INTERFACE_VERSION_WIN7:
+        case DXGKDDI_INTERFACE_VERSION_VISTA_SP1:
+        case DXGKDDI_INTERFACE_VERSION_VISTA:
             return TRUE;
         default:
             return FALSE;

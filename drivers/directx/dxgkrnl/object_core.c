@@ -135,13 +135,113 @@ ULONG
 DxgkCapsCoreReportedVersion(
     _In_ const DXGK_CAPS_INPUT *Input)
 {
-    ULONG Reported = Input->MiniportDeclaredVersion;
+    ULONG Reported = Input->MiniportDeclaredLevel;
 
-    if (Input->OsCompletedVersion != 0 && Input->OsCompletedVersion < Reported)
-        Reported = Input->OsCompletedVersion;
-    if (Input->ProviderCompletedVersion != 0 && Input->ProviderCompletedVersion < Reported)
-        Reported = Input->ProviderCompletedVersion;
+    if (Input->OsCompletedLevel != 0 && Input->OsCompletedLevel < Reported)
+        Reported = Input->OsCompletedLevel;
+    if (Input->ProviderCompletedLevel != 0 && Input->ProviderCompletedLevel < Reported)
+        Reported = Input->ProviderCompletedLevel;
+    if (Input->ConfiguredLevel != 0 && Input->ConfiguredLevel < Reported)
+        Reported = Input->ConfiguredLevel;
     return Reported;
+}
+
+ULONG
+DxgkCapsCoreInterfaceVersionToLevel(
+    _In_ ULONG InterfaceVersion)
+{
+    /*
+     * Do not accept a whole high-nibble family. The low bits identify a DDI
+     * revision and may imply a different append-only table prefix. List every
+     * selector for which we have WDK evidence, including both Windows 10
+     * 10240's 0x5022 and later kits' 0x5023 WDDM 2.0 revisions.
+     */
+    switch (InterfaceVersion)
+    {
+        case 0x1052:
+        case 0x1053:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_1_0;
+        case 0x2005:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_1_1;
+        case 0x300E:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_1_2;
+        case 0x4002:
+        case 0x4003:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_1_3;
+        case 0x5022:
+        case 0x5023:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_2_0;
+        case 0x6003:
+        case 0x6010:
+        case 0x6011:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_2_1;
+        case 0x700A:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_2_2;
+        case 0x8001:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_2_3;
+        case 0x9006:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_2_4;
+        case 0xA00B:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_2_5;
+        case 0xB004:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_2_6;
+        case 0xC004:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_2_7;
+        case 0xD001:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_2_8;
+        case 0xE003:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_2_9;
+        case 0xF003:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_3_0;
+        case 0x10004:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_3_1;
+        case 0x11007:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_3_2;
+        default:
+            return 0;
+    }
+}
+
+BOOLEAN
+DxgkCapsCoreInterfaceVersionAtLeast(
+    _In_ ULONG InterfaceVersion,
+    _In_ ULONG MinimumLevel)
+{
+    ULONG InterfaceLevel;
+
+    InterfaceLevel = DxgkCapsCoreInterfaceVersionToLevel(InterfaceVersion);
+    return MinimumLevel != 0 &&
+           InterfaceLevel >= MinimumLevel;
+}
+
+BOOLEAN
+DxgkCapsCoreInterfaceVersionInRange(
+    _In_ ULONG InterfaceVersion,
+    _In_ ULONG MinimumLevel,
+    _In_ ULONG MaximumLevel)
+{
+    ULONG InterfaceLevel;
+
+    if (MinimumLevel == 0 ||
+        (MaximumLevel != 0 && MaximumLevel < MinimumLevel))
+    {
+        return FALSE;
+    }
+
+    InterfaceLevel = DxgkCapsCoreInterfaceVersionToLevel(InterfaceVersion);
+    return InterfaceLevel >= MinimumLevel &&
+           (MaximumLevel == 0 || InterfaceLevel <= MaximumLevel);
+}
+
+BOOLEAN
+DxgkCapsCoreInterfaceVersionPermitted(
+    _In_ ULONG InterfaceVersion,
+    _In_ ULONG ConfiguredLevel)
+{
+    return DxgkCapsCoreInterfaceVersionInRange(
+        InterfaceVersion,
+        DXGK_CAPS_CORE_LEVEL_WDDM_1_0,
+        ConfiguredLevel);
 }
 
 BOOLEAN
@@ -160,7 +260,26 @@ DxgkCapsCoreFeatureAvailable(
     _In_ const DXGK_CAPS_INPUT *Input,
     _In_ ULONG RequiredVersion)
 {
-    return DxgkCapsCoreReportedVersion(Input) >= RequiredVersion;
+    return DxgkCapsCoreFeatureAvailableInRange(Input, RequiredVersion, 0);
+}
+
+BOOLEAN
+DxgkCapsCoreFeatureAvailableInRange(
+    _In_ const DXGK_CAPS_INPUT *Input,
+    _In_ ULONG MinimumVersion,
+    _In_ ULONG MaximumVersion)
+{
+    ULONG Reported;
+
+    if (MinimumVersion == 0 ||
+        (MaximumVersion != 0 && MaximumVersion < MinimumVersion))
+    {
+        return FALSE;
+    }
+
+    Reported = DxgkCapsCoreReportedVersion(Input);
+    return Reported >= MinimumVersion &&
+           (MaximumVersion == 0 || Reported <= MaximumVersion);
 }
 
 /* --- node / engine affinity ------------------------------------------- */

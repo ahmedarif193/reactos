@@ -69,6 +69,7 @@
 #include "submit_reservation_core.h"
 #include "sync_wait_core.h"
 #include "tracked_work_core.h"
+#include "caps_core.h"
 
 /* ---- WDDM DDI interface version selection ------------------------------ */
 /*
@@ -292,11 +293,12 @@ typedef struct _DXGKARGCB_MAPPHYSICALMEMORY
  *
  * Argument structure for DxgkCbUnmapPhysicalMemory.
  */
-typedef struct _DXGKARGCB_UNMAP_PHYSICAL_MEMORY
+typedef struct _DXGKRNL_LEGACY_ARGCB_UNMAP_PHYSICAL_MEMORY
 {
     PVOID   pVirtualAddress;    /* in: kernel VA returned by MapPhysicalMemory */
     SIZE_T  NumberOfBytes;      /* in: byte count                              */
-} DXGKARGCB_UNMAP_PHYSICAL_MEMORY, *PDXGKARGCB_UNMAP_PHYSICAL_MEMORY;
+} DXGKRNL_LEGACY_ARGCB_UNMAP_PHYSICAL_MEMORY,
+ *PDXGKARGCB_UNMAP_PHYSICAL_MEMORY;
 
 /*
  * PDXGKCB_* callback typedefs and DXGK_INTERFACE are defined in dispmprt.h
