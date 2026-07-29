@@ -7,6 +7,20 @@
 remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
 add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x11007)
 
+# Keep the ABI-freeze test on the in-tree UMD implementation ceiling while
+# separately telling runtime-load tests which lower version this image must
+# advertise. The KMT surface above remains compiled at the 3.2 header ceiling.
+if(REACTOS_USE_WDDM)
+    remove_definitions(
+        -DD3D_UMD_INTERFACE_VERSION=${REACTOS_WDDM_EFFECTIVE_UMD_INTERFACE_VERSION})
+    set(REACTOS_EXPECTED_UMD_INTERFACE_VERSION
+        ${REACTOS_WDDM_EFFECTIVE_UMD_INTERFACE_VERSION})
+else()
+    remove_definitions(-DD3D_UMD_INTERFACE_VERSION=0x000C)
+    set(REACTOS_EXPECTED_UMD_INTERFACE_VERSION 0x000C)
+endif()
+add_definitions(-DD3D_UMD_INTERFACE_VERSION=0x5002)
+
 list(APPEND SOURCE
     d3dkmt_adapter.c
     d3dkmt_device.c
@@ -58,6 +72,8 @@ add_executable(d3dkmt_apitest
     ${SOURCE}
     ${PCH_SKIP_SOURCE})
 
+target_compile_definitions(d3dkmt_apitest PRIVATE
+    REACTOS_EXPECTED_UMD_INTERFACE_VERSION=${REACTOS_EXPECTED_UMD_INTERFACE_VERSION})
 target_link_libraries(d3dkmt_apitest wine ${PSEH_LIB} vc4kmt)
 set_module_type(d3dkmt_apitest win32cui)
 add_importlibs(d3dkmt_apitest gdi32 user32 msvcrt kernel32 ntdll)

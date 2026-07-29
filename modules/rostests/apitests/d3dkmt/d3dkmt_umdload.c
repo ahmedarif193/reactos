@@ -111,8 +111,8 @@ static void Test_LoadUserModeDriver(void)
     memset(&AdapterCallbacks, 0, sizeof(AdapterCallbacks));
     memset(&Open, 0, sizeof(Open));
     Open.hAdapter = (HANDLE)(ULONG_PTR)hAdapter;
-    Open.Interface = D3D_UMD_INTERFACE_VERSION;
-    Open.Version = D3D_UMD_INTERFACE_VERSION;
+    Open.Interface = REACTOS_EXPECTED_UMD_INTERFACE_VERSION;
+    Open.Version = REACTOS_EXPECTED_UMD_INTERFACE_VERSION;
     Open.pAdapterCallbacks = &AdapterCallbacks;
     Open.pAdapterFuncs = &AdapterFuncs;
 
@@ -147,11 +147,12 @@ static void Test_LoadUserModeDriver(void)
      * driver into the runtime, and no field in the DDI carries a size to catch
      * it -- the version *is* the size contract.
      */
-    if (Open.DriverVersion != D3D_UMD_INTERFACE_VERSION)
+    if (Open.DriverVersion != REACTOS_EXPECTED_UMD_INTERFACE_VERSION)
     {
         skip("driver built at interface 0x%04X, this caller at 0x%04X -- a runtime refuses "
              "the mismatch rather than exchanging a table whose length they disagree on\n",
-             (unsigned)Open.DriverVersion, (unsigned)D3D_UMD_INTERFACE_VERSION);
+             (unsigned)Open.DriverVersion,
+             (unsigned)REACTOS_EXPECTED_UMD_INTERFACE_VERSION);
         AdapterFuncs.pfnCloseAdapter(Open.hAdapter);
         FreeLibrary(Umd);
         CloseAdapter(hAdapter);
@@ -168,8 +169,8 @@ static void Test_LoadUserModeDriver(void)
         memset(&DeviceCallbacks, 0, sizeof(DeviceCallbacks));
         memset(&Create, 0, sizeof(Create));
         Create.hDevice = (HANDLE)(ULONG_PTR)0x1234;   /* the runtime's handle */
-        Create.Interface = D3D_UMD_INTERFACE_VERSION;
-        Create.Version = D3D_UMD_INTERFACE_VERSION;
+        Create.Interface = REACTOS_EXPECTED_UMD_INTERFACE_VERSION;
+        Create.Version = REACTOS_EXPECTED_UMD_INTERFACE_VERSION;
         Create.pCallbacks = &DeviceCallbacks;
         Create.pDeviceFuncs = &DeviceFuncs;
 

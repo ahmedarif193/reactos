@@ -35,11 +35,11 @@ C_ASSERT(FIELD_OFFSET(D3DDDIARG_OPENADAPTER, hAdapter) == 0);
 static void Test_TableSlotCounts(void)
 {
     /*
-     * Frozen at D3D_UMD_INTERFACE_VERSION_WDDM2_0, which the tree now compiles
-     * at.  These were 99 and 22 while it was pinned to Vista -- the guards were
-     * cutting both tables down to their Vista slice, so a driver built against
-     * the WDDM 2.0 contract disagreed with the runtime about where every entry
-     * past the Vista tail lived.  Raising the version is what moved them.
+     * This ABI-freeze target is deliberately compiled at
+     * D3D_UMD_INTERFACE_VERSION_WDDM2_0, the current in-tree implementation
+     * ceiling.  Lower configured images compile their runtime and UMD at their
+     * exact shorter contract; higher images continue to advertise this 2.0
+     * table until their newer callback tails are implemented.
      */
     ok_eq_ulong((ULONG)UMD_DEVICEFUNC_SLOTS, 140UL);
     ok_eq_ulong((ULONG)UMD_DEVICECALLBACK_SLOTS, 50UL);
@@ -54,8 +54,10 @@ static void Test_TablesAreAllPointers(void)
 {
     /* A non-pointer member would break the size/pointer identity the slot count
      * rests on, and misalign everything after it. */
-    ok_eq_ulong((ULONG)(sizeof(D3DDDI_DEVICEFUNCS) % sizeof(void *)), 0UL);
-    ok_eq_ulong((ULONG)(sizeof(D3DDDI_DEVICECALLBACKS) % sizeof(void *)), 0UL);
+    ok((sizeof(D3DDDI_DEVICEFUNCS) % sizeof(void *)) == 0,
+       "D3DDDI_DEVICEFUNCS is not pointer-sized\n");
+    ok((sizeof(D3DDDI_DEVICECALLBACKS) % sizeof(void *)) == 0,
+       "D3DDDI_DEVICECALLBACKS is not pointer-sized\n");
 }
 
 static void Test_EntrySurfaceShape(void)
@@ -73,12 +75,9 @@ static void Test_EntrySurfaceShape(void)
     ok_eq_ulong((ULONG)D3D_UMD_INTERFACE_VERSION_WDDM2_0, 0x5002UL);
 
     /*
-     * Reported, not asserted, and deliberately so.  <d3dukmdt.h> intends
-     * D3D_UMD_INTERFACE_VERSION to default to WDDM 3.2 (0x11000), but it
-     * resolves to 0x000C -- Vista -- in this build, which is what guards the
-     * tables down to their Vista slice below.  Pinning a number here would
-     * freeze whichever of those two is currently winning; the useful thing is
-     * to surface the value so the discrepancy is visible in every run.
+     * Report the compile-time contract as well as pinning its table shape.
+     * CMake selects 0x5002 specifically for this ABI-freeze test; runtime-load
+     * coverage separately receives the configured image's expected version.
      */
     trace("effective D3D_UMD_INTERFACE_VERSION = 0x%04X (WDDM2_0 = 0x%04X, WDDM3_2 = 0x%04X)\n",
           (unsigned)D3D_UMD_INTERFACE_VERSION,
