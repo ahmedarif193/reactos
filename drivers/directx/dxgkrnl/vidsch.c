@@ -498,9 +498,7 @@ BOOLEAN VidSchDispatchContextOrderPacketResubmission(_Inout_ PVIDSCH_DMA_PACKET 
 VOID VidSchDispatchClaimedContextOrderPacket(_Inout_ PVIDSCH_DMA_PACKET Packet)
 {
     PVIDSCH_ENGINE Engine;
-    KIRQL OldIrql;
     BOOLEAN Dispatched;
-    BOOLEAN Removed = FALSE;
 
     if (Packet == NULL || Packet->OwnerEngine == NULL)
         return;
@@ -525,15 +523,16 @@ VOID VidSchDispatchClaimedContextOrderPacket(_Inout_ PVIDSCH_DMA_PACKET Packet)
             {
                 (VOID)Sched->CancelOwnerPackets(Sched->SchedulerHandle, (ULONGLONG)(ULONG_PTR)Packet->Context, STATUS_CANCELLED);
                 VidSchpDrainRetirements(Engine->Adapter);
-                Removed = TRUE;
             }
         }
+        /*
+         * The provider retirement owns the scheduler reference and terminal
+         * device-work completion.  The context-stream operation keeps its
+         * separate packet reference until that stream retires; consuming it
+         * here would complete the same work twice and leave the stream with a
+         * dangling payload.
+         */
         DxgkContextOrderCommitPacket(Packet, STATUS_CANCELLED);
-        if (Removed)
-        {
-            DxgkDeviceWorkComplete(Packet->DeviceWork);
-            VidSchpDereferencePacket(Packet);
-        }
     }
     VidSchpReleaseCall(Engine->Adapter);
 }
@@ -686,23 +685,27 @@ VidSchpCompletionDpcRoutine(
     if (PreemptionCompleted && Sched != NULL)
     {
         ULONGLONG Cookies[DXGMMS2_SCHEDULER_MAX_RETIREMENTS];
-        ULONG ResetCount = 0;
-        ULONG ResetIndex;
+        ULONG ResetCount;
+        NTSTATUS ResetStatus;
 
-        if (NT_SUCCESS(Sched->ResetDispatched(Sched->SchedulerHandle, Engine->EngineOrdinal, Cookies, RTL_NUMBER_OF(Cookies), &ResetCount)))
+        /*
+         * ResetDispatched changes provider ownership under its scheduler lock.
+         * Its returned cookies are diagnostic only: once that lock drops an
+         * owner cancellation may retire the packet, so dereferencing a cookie
+         * here would race terminal cleanup.  Kicked remains set as the durable
+         * local reset marker and is consumed only after the provider grants a
+         * new claim below.
+         */
+        do
         {
-            for (ResetIndex = 0; ResetIndex < ResetCount; ++ResetIndex)
-            {
-                PVIDSCH_DMA_PACKET Preempted = VidSchpPacketFromCookie(Cookies[ResetIndex]);
-
-                if (Preempted == NULL)
-                    continue;
-                Preempted->Kicked = FALSE;
-                InterlockedExchange(&Preempted->ContextOrderResubmissionPending, 1);
-                if (Engine->Adapter->MiniportContext->InitData.s.Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
-                    Preempted->SubmitFlags |= VIDSCH_SUBMITFLAG_RESUBMISSION;
-            }
-        }
+            ResetCount = 0;
+            ResetStatus = Sched->ResetDispatched(Sched->SchedulerHandle,
+                                                 Engine->EngineOrdinal,
+                                                 Cookies,
+                                                 RTL_NUMBER_OF(Cookies),
+                                                 &ResetCount);
+        } while (NT_SUCCESS(ResetStatus) &&
+                 ResetCount == RTL_NUMBER_OF(Cookies));
         VidSchpTryTransitionEngine(Engine, VidSchEnginePreempted, VidSchEngineIdle);
     }
     else if (!PreemptionCompleted && VidSchpEngineState(Engine->Adapter, Engine->EngineOrdinal) == VidSchEnginePreempting &&
@@ -920,6 +923,25 @@ VidSchpKickEngine(
         Packet->SchedulerClaimToken = ClaimToken;
         if (Packet->SubmissionFenceId == 0)
             Packet->SubmissionFenceId = Claim.SubmissionFenceId;
+
+        /*
+         * A provider claim cannot name an ordinarily dispatched packet.
+         * Therefore Kicked on a newly claimed packet is the preemption reset
+         * marker left by the completion DPC.  Consume it while the claim keeps
+         * cancellation from removing the packet, before deciding whether the
+         * context stream must authorize a resubmission.
+         */
+        KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
+        if (Packet->Kicked)
+        {
+            Packet->Kicked = FALSE;
+            InterlockedExchange(&Packet->ContextOrderResubmissionPending, 1);
+            if (DxgkCapsCoreInterfaceVersionAtLeast(
+                    Adapter->MiniportContext->InitData.s.Version,
+                    DXGK_CAPS_CORE_LEVEL_WDDM_2_0))
+                Packet->SubmitFlags |= VIDSCH_SUBMITFLAG_RESUBMISSION;
+        }
+        KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
 
         /* Ordered context work may only run for its authorised claimant and
          * only at PASSIVE_LEVEL; hand the claim back otherwise. */
@@ -1249,21 +1271,28 @@ VOID VidSchCancelContextPackets(_In_ PDXGKRNL_ADAPTER Adapter, _In_ PDXGKRNL_CON
     PAGED_CODE();
     if (Adapter == NULL || Context == NULL || CompletionStatus == STATUS_PENDING || NT_SUCCESS(CompletionStatus))
         return;
+    /*
+     * Cancellation touches both the provider interface and engine storage.
+     * Join the scheduler lifecycle before reading either so stop cannot pass
+     * its active-call drain and free them underneath this path.
+     */
+    if (!VidSchpAcquireCall(Adapter))
+        return;
     Ctx = (PVIDSCH_CONTEXT)Adapter->VidSchContext;
     if (Ctx == NULL)
+    {
+        VidSchpReleaseCall(Adapter);
         return;
+    }
     Sched = VidSchpScheduler(Adapter);
     if (Sched != NULL)
     {
         (VOID)Sched->CancelOwnerPackets(Sched->SchedulerHandle, (ULONGLONG)(ULONG_PTR)Context, CompletionStatus);
         VidSchpDrainRetirements(Adapter);
     }
-    if (VidSchpAcquireCall(Adapter))
-    {
-        for (i = 0; i < Ctx->EngineCount; ++i)
-            (VOID)VidSchpKickEngine(&Ctx->Engines[i], NULL);
-        VidSchpReleaseCall(Adapter);
-    }
+    for (i = 0; i < Ctx->EngineCount; ++i)
+        (VOID)VidSchpKickEngine(&Ctx->Engines[i], NULL);
+    VidSchpReleaseCall(Adapter);
 }
 
 VOID VidSchAbortAllPackets(_In_ PDXGKRNL_ADAPTER Adapter, _In_ NTSTATUS CompletionStatus)
@@ -2068,6 +2097,8 @@ VidSchWaitForIdle(
     PVIDSCH_CONTEXT Ctx;
     ULONG i;
     LARGE_INTEGER Timeout;
+    ULONGLONG Deadline;
+    ULONGLONG Now;
     NTSTATUS Status;
 
     PAGED_CODE();
@@ -2084,8 +2115,12 @@ VidSchWaitForIdle(
         return STATUS_NOT_SUPPORTED;
     }
 
-    /* Convert milliseconds to 100ns units (negative = relative). */
-    Timeout.QuadPart = -(LONGLONG)TimeoutMs * 10000LL;
+    /*
+     * One deadline covers every wakeup and every engine.  Reusing the full
+     * relative interval after each progress event can otherwise turn a
+     * bounded suspend/teardown wait into an unbounded one.
+     */
+    Deadline = KeQueryInterruptTime() + (ULONGLONG)TimeoutMs * 10000ULL;
 
     for (i = 0; i < Ctx->EngineCount; i++)
     {
@@ -2099,7 +2134,18 @@ VidSchWaitForIdle(
             SchedulerState = VidSchpReadSchedulerState(Ctx);
             if (VidSchpEnginePendingCount(Adapter, Engine->EngineOrdinal) == 0 && (EngineState == VidSchEngineIdle || (EngineState == VidSchEngineSuspended && (SchedulerState == VidSchSchedulerSuspending || SchedulerState == VidSchSchedulerSuspended))))
                 break;
-            Status = KeWaitForSingleObject(&Engine->CompletionEvent, Executive, KernelMode, FALSE, &Timeout);
+            Now = KeQueryInterruptTime();
+            if (Now >= Deadline)
+                Status = STATUS_TIMEOUT;
+            else
+            {
+                Timeout.QuadPart = -(LONGLONG)(Deadline - Now);
+                Status = KeWaitForSingleObject(&Engine->CompletionEvent,
+                                               Executive,
+                                               KernelMode,
+                                               FALSE,
+                                               &Timeout);
+            }
             if (Status == STATUS_TIMEOUT)
             {
                 DXGKRNL_WARN("VidSch: WaitForIdle timeout on engine %lu "
@@ -2108,6 +2154,11 @@ VidSchWaitForIdle(
                              VidSchpEnginePendingCount(Adapter, Engine->EngineOrdinal));
                 VidSchpReleaseCall(Adapter);
                 return STATUS_TIMEOUT;
+            }
+            if (!NT_SUCCESS(Status))
+            {
+                VidSchpReleaseCall(Adapter);
+                return Status;
             }
         }
     }
@@ -3167,7 +3218,6 @@ VidSchGetOldestKickedPacket(
 {
     PVIDSCH_CONTEXT Ctx;
     BOOLEAN Found = FALSE;
-    ULONG Index;
 
     if (Adapter == NULL || FenceId == NULL || NodeOrdinal == NULL || EngineOrdinal == NULL)
         return FALSE;
@@ -3184,16 +3234,19 @@ VidSchGetOldestKickedPacket(
         ULONG OldestFence = 0;
         ULONGLONG OldestCookie = 0;
 
-        UNREFERENCED_PARAMETER(Index);
         if (Sched != NULL && Sched->GetOldestDispatched(Sched->SchedulerHandle, &OldestEngine, &OldestFence, &OldestCookie))
         {
-            PVIDSCH_DMA_PACKET Packet = VidSchpPacketFromCookie(OldestCookie);
-
-            if (Packet != NULL && OldestFence != 0)
+            /*
+             * GetOldestDispatched drops the provider lock before returning.
+             * The packet cookie is opaque and may already have been retired
+             * and freed at that point; only copy the scalar values captured
+             * while the provider lock was held.
+             */
+            if (OldestFence != 0 && OldestEngine < Ctx->EngineCount)
             {
                 *FenceId = OldestFence;
-                *NodeOrdinal = Packet->NodeOrdinal;
-                *EngineOrdinal = Packet->EngineOrdinal;
+                *NodeOrdinal = OldestEngine;
+                *EngineOrdinal = OldestEngine;
                 Found = TRUE;
             }
         }
