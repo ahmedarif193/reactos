@@ -43,6 +43,7 @@ CPPORT SerialPortInfo   = {0, DEFAULT_DEBUG_BAUD_RATE, 0};
 #define KdpScreenLineLengthDefault 80
 static CHAR KdpScreenLineBuffer[KdpScreenLineLengthDefault + 1] = "";
 static ULONG KdpScreenLineBufferPos = 0, KdpScreenLineLength = 0;
+static BOOLEAN KdpScreenInitialized = FALSE;
 
 KDP_DEBUG_MODE KdpDebugMode;
 LIST_ENTRY KdProviders = {&KdProviders, &KdProviders};
@@ -454,29 +455,45 @@ KdpSerialInit(
 
 /* SCREEN FUNCTIONS **********************************************************/
 
-VOID
+BOOLEAN
 KdpScreenAcquire(VOID)
 {
-    if (InbvIsBootDriverInstalled() /* &&
-        !InbvCheckDisplayOwnership() */)
+    BOOLEAN DisplayAcquired = FALSE;
+    BOOLEAN InitializeDisplay;
+
+    if (InbvIsBootDriverInstalled())
     {
-        /* Acquire ownership and reset the display */
+        DisplayAcquired = (InbvGetDisplayState() != INBV_DISPLAY_STATE_OWNED);
+        InitializeDisplay = DisplayAcquired || !KdpScreenInitialized;
+
+        /* Acquire ownership and initialize a new screen session */
         InbvAcquireDisplayOwnership();
-        InbvResetDisplay();
-        InbvSolidColorFill(0, 0, SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1, BV_COLOR_BLACK);
+        if (InitializeDisplay)
+        {
+            InbvResetDisplay();
+            InbvSolidColorFill(0, 0, SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1, BV_COLOR_BLACK);
+        }
+
         InbvSetTextColor(BV_COLOR_WHITE);
         InbvInstallDisplayStringFilter(NULL);
         InbvEnableDisplayString(TRUE);
-        InbvSetScrollRegion(0, 0, SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1);
+        if (InitializeDisplay)
+            InbvSetScrollRegion(0, 0, SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1);
+
+        KdpScreenInitialized = TRUE;
     }
+
+    return DisplayAcquired;
 }
 
 // extern VOID NTAPI InbvSetDisplayOwnership(IN BOOLEAN DisplayOwned);
 
 VOID
-KdpScreenRelease(VOID)
+KdpScreenRelease(
+    _In_ BOOLEAN DisplayAcquired)
 {
-    if (InbvIsBootDriverInstalled()&&
+    if (DisplayAcquired &&
+        InbvIsBootDriverInstalled() &&
         InbvCheckDisplayOwnership())
     {
         /* Release the display */
@@ -558,7 +575,7 @@ KdpScreenInit(
     else if (BootPhase == 1)
     {
         /* Take control of the display */
-        KdpScreenAcquire();
+        (VOID)KdpScreenAcquire();
 
         /* Announce ourselves */
         HalDisplayString("   Screen debugging enabled\r\n");
