@@ -846,12 +846,12 @@ PopQueryBatteryState(
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Failed to query battery information: Status: 0x%08lX\n", Status);
+        goto Exit;
     }
 
     /* Query the battery status */
     BATTERY_WAIT_STATUS BatteryWait = {0};
     BatteryWait.BatteryTag = BatteryQueryInfo.BatteryTag;
-    BatteryWait.PowerState = 0xF ; // Wait for all power states
     BatteryWait.HighCapacity = MAXULONG;
     Status = ZwDeviceIoControlFile(CompBattHandle,
                                    NULL,
@@ -874,17 +874,31 @@ PopQueryBatteryState(
     BatteryState->AcOnLine = BooleanFlagOn(BatteryStatus.PowerState, BATTERY_POWER_ON_LINE);
     BatteryState->Charging = BooleanFlagOn(BatteryStatus.PowerState, BATTERY_CHARGING);
     BatteryState->Discharging = BooleanFlagOn(BatteryStatus.PowerState, BATTERY_DISCHARGING);
-    BatteryState->MaxCapacity = BatteryInfo.FullChargedCapacity;
-    BatteryState->RemainingCapacity = BatteryStatus.Capacity;
-    BatteryState->Rate = BatteryStatus.Rate;
-    if (BatteryState->Discharging && BatteryStatus.Rate < 0)
+    BatteryState->Tag = (BYTE)BatteryQueryInfo.BatteryTag;
+
+    if (BatteryInfo.FullChargedCapacity != BATTERY_UNKNOWN_CAPACITY)
+        BatteryState->MaxCapacity = BatteryInfo.FullChargedCapacity;
+
+    if (BatteryStatus.Capacity != BATTERY_UNKNOWN_CAPACITY)
+        BatteryState->RemainingCapacity = BatteryStatus.Capacity;
+
+    if (BatteryStatus.Rate != (LONG)BATTERY_UNKNOWN_RATE)
+        BatteryState->Rate = BatteryStatus.Rate;
+
+    BatteryState->DefaultAlert1 = BatteryInfo.DefaultAlert1;
+    BatteryState->DefaultAlert2 = BatteryInfo.DefaultAlert2;
+
+    if (BatteryState->Discharging &&
+        BatteryStatus.Rate != (LONG)BATTERY_UNKNOWN_RATE &&
+        BatteryStatus.Rate < 0 &&
+        BatteryStatus.Capacity != BATTERY_UNKNOWN_CAPACITY)
     {
         BatteryState->EstimatedTime =
-            3600 * BatteryInfo.FullChargedCapacity / -BatteryStatus.Rate;
+            (ULONG)((3600ULL * BatteryStatus.Capacity) / (ULONG)(-BatteryStatus.Rate));
     }
     else
     {
-        BatteryState->EstimatedTime = 0;
+        BatteryState->EstimatedTime = MAXULONG;
     }
 
 Exit:
