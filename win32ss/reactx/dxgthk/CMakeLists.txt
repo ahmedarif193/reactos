@@ -9,4 +9,7 @@ list(APPEND SOURCE
 add_library(dxgthk MODULE ${SOURCE})
 set_module_type(dxgthk kernelmodedriver)
 add_importlibs(dxgthk win32k)
-add_cd_file(TARGET dxgthk DESTINATION reactos/system32/drivers FOR all)
+# dxgthk.sys left Windows in 8; only the XPDM image delivers it.
+if(REACTOS_USE_XPDM)
+    add_cd_file(TARGET dxgthk DESTINATION reactos/system32/drivers FOR all)
+endif()

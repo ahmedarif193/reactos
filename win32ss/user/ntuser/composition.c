@@ -978,6 +978,11 @@ IntCompositionDwmTeardown(VOID)
 NTSTATUS
 IntCompositionDwmAttach(_In_ PVOID pUser)
 {
+#if defined(REACTOS_GRAPHICS_DRIVER_MODEL_XPDM)
+    /* No composition on the legacy model: XPDM drivers draw direct. */
+    UNREFERENCED_PARAMETER(pUser);
+    return STATUS_NOT_SUPPORTED;
+#else
     DWM_ATTACH req;
     HANDLE hWake = NULL, hVblank = NULL;
     NTSTATUS Status = STATUS_SUCCESS;
@@ -1040,6 +1045,7 @@ IntCompositionDwmAttach(_In_ PVOID pUser)
     _SEH2_END;
 
     return Status;
+#endif
 }
 
 /*
