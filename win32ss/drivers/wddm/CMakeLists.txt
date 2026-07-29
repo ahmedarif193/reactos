@@ -5,21 +5,24 @@
 # PURPOSE:     Build rules for the static WDDM bridge library
 # COPYRIGHT:   Copyright 2025 ReactOS Contributors
 #
-# This library is linked statically into win32k.sys. It owns:
-#   wddm_bridge.c   - kernel-to-kernel channel to \Device\DxgKrnl
-#   d3dkmt_stubs.c  - D3DKMT* wrapper functions that will route through
-#                     WddmBridgeSendIoctl once the IOCTL interface is defined
-#   ntgdi_dxg.c     - NtGdiDdDDI* -> D3DKMT* thin adapters, documenting the
-#                     full call path from user-mode syscall to bridge
+# This library is linked statically into win32k.sys. WDDM builds own the full
+# bridge and use the selected WDDM DDI layouts. XPDM builds retain only the
+# link surface needed by the always-built win32k thunk source; those entry
+# points truthfully report that WDDM is unavailable.
 #
 
-remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
-add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x11007)
+if(REACTOS_USE_WDDM)
+    remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
+    add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x11007)
 
-list(APPEND SOURCE
-    wddm_bridge.c
-    d3dkmt_stubs.c
-    ntgdi_dxg.c)
+    list(APPEND SOURCE
+        wddm_bridge.c
+        d3dkmt_stubs.c
+        ntgdi_dxg.c)
+else()
+    list(APPEND SOURCE
+        xpdm_stubs.c)
+endif()
 
 add_library(wddm_bridge STATIC ${SOURCE})
 add_dependencies(wddm_bridge bugcodes xdk)

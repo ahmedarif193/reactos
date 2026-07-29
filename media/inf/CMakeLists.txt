@@ -33,6 +33,10 @@ list(APPEND INF_FILES
     wdmaudio.inf
     wmiacpi.inf)
 
+if(REACTOS_USE_XPDM)
+    list(APPEND INF_FILES display_xpdm.inf)
+endif()
+
 list(APPEND UTF8_INF_FILES
     defltwk.inf
     font.inf

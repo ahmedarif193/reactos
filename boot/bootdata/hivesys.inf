@@ -102,18 +102,6 @@ HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\HID_DEVICE_SYSTEM_
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\HID_DEVICE_SYSTEM_MOUSE","Service",0x00000000,"mouhid"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\HID_DEVICE_SYSTEM_MOUSE","ClassGUID",0x00000000,"{4D36E96F-E325-11CE-BFC1-08002BE10318}"
 
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0000","Service",0x00000000,"vga"
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0000","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
-
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0001","Service",0x00000000,"vga"
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0001","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
-
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0300","Service",0x00000000,"vga"
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0300","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
-
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0301","Service",0x00000000,"vga"
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0301","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
-
 ; SD Host Controller support (PCI Class 08, Subclass 05)
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0805","Service",0x00000000,"sdbus"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0805","ClassGUID",0x00000000,"{a0a588a4-c46f-4b37-b7ea-c82fe89870c6}"
@@ -198,8 +186,6 @@ HKLM,"SYSTEM\CurrentControlSet\Control\SafeBoot\Minimal\sermouse.sys","",0x00000
 HKLM,"SYSTEM\CurrentControlSet\Control\SafeBoot\Minimal\sr.sys","",0x00000000,"FSFilter System Recovery"
 HKLM,"SYSTEM\CurrentControlSet\Control\SafeBoot\Minimal\SRService","",0x00000000,"Service"
 HKLM,"SYSTEM\CurrentControlSet\Control\SafeBoot\Minimal\System Bus Extender","",0x00000000,"Driver Group"
-HKLM,"SYSTEM\CurrentControlSet\Control\SafeBoot\Minimal\vga.sys","",0x00000000,"Driver"
-HKLM,"SYSTEM\CurrentControlSet\Control\SafeBoot\Minimal\vgasave.sys","",0x00000000,"Driver"
 HKLM,"SYSTEM\CurrentControlSet\Control\SafeBoot\Minimal\WinMgmt","",0x00000000,"Service"
 HKLM,"SYSTEM\CurrentControlSet\Control\SafeBoot\Minimal\{36FC9E60-C465-11CF-8056-444553540000}","",0x00000000,"Universal Serial Bus controllers"
 HKLM,"SYSTEM\CurrentControlSet\Control\SafeBoot\Minimal\{4D36E965-E325-11CE-BFC1-08002BE10318}","",0x00000000,"CD-ROM Drive"
@@ -274,8 +260,6 @@ HKLM,"SYSTEM\CurrentControlSet\Control\SafeBoot\Network\TDI","",0x00000000,"Driv
 HKLM,"SYSTEM\CurrentControlSet\Control\SafeBoot\Network\tdpipe.sys","",0x00000000,"Driver"
 HKLM,"SYSTEM\CurrentControlSet\Control\SafeBoot\Network\tdtcp.sys","",0x00000000,"Driver"
 HKLM,"SYSTEM\CurrentControlSet\Control\SafeBoot\Network\termservice","",0x00000000,"Service"
-HKLM,"SYSTEM\CurrentControlSet\Control\SafeBoot\Network\vga.sys","",0x00000000,"Driver"
-HKLM,"SYSTEM\CurrentControlSet\Control\SafeBoot\Network\vgasave.sys","",0x00000000,"Driver"
 HKLM,"SYSTEM\CurrentControlSet\Control\SafeBoot\Network\WinMgmt","",0x00000000,"Service"
 HKLM,"SYSTEM\CurrentControlSet\Control\SafeBoot\Network\WZCSVC","",0x00000000,"Service"
 HKLM,"SYSTEM\CurrentControlSet\Control\SafeBoot\Network\{36FC9E60-C465-11CF-8056-444553540000}","",0x00000000,"Universal Serial Bus controllers"
