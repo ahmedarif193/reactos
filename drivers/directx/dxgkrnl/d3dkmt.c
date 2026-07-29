@@ -6601,11 +6601,17 @@ DxgkpDispatchBufferedIoctl(
 
             {
                 D3DDDIGPUVIRTUALADDRESS_PROTECTION_TYPE Protection;
+                NTSTATUS FlushStatus;
 
                 Protection.Value = pMap->Protection.Value;
                 Status = PrepareOnly ? DxgkGpuVaPlanMap(Adapter, Device->ProcessRecord, Allocation, MapOffset, pMap->BaseAddress, pMap->MinimumAddress, pMap->MaximumAddress, MapSize, Protection, &pMap->VirtualAddress) : DxgkGpuVaMap(Adapter, Device->ProcessRecord, Allocation, pMap->hAllocation, MapOffset, pMap->BaseAddress, pMap->MinimumAddress, pMap->MaximumAddress, MapSize, Protection, pMap->DriverProtection, &pMap->VirtualAddress);
+                if (!PrepareOnly)
+                {
+                    FlushStatus = DxgkGpuVaFlushPageTableUpdates(Device->ProcessRecord);
+                    if (NT_SUCCESS(Status) && !NT_SUCCESS(FlushStatus))
+                        Status = FlushStatus;
+                }
             }
-            DxgkGpuVaFlushPageTableUpdates(Device->ProcessRecord);
             if (Allocation != NULL)
                 DxgkVidMmDereferenceAllocation(Allocation);
             DxgkDereferenceDevice(Device);
@@ -6708,7 +6714,12 @@ DxgkpDispatchBufferedIoctl(
                 return Status;
             }
             Status = DxgkGpuVaFree(ProcessRecord, pFree->BaseAddress, pFree->Size);
-            DxgkGpuVaFlushPageTableUpdates(ProcessRecord);
+            {
+                NTSTATUS FlushStatus = DxgkGpuVaFlushPageTableUpdates(ProcessRecord);
+
+                if (NT_SUCCESS(Status) && !NT_SUCCESS(FlushStatus))
+                    Status = FlushStatus;
+            }
             DxgkDereferenceProcessRecord(ProcessRecord);
             DxgkDereferenceAdapter(Adapter);
             return Status;
@@ -6765,8 +6776,15 @@ DxgkpDispatchBufferedIoctl(
             Status = DxgkpCopyFromUserBuffer(Operations, pUpdate->Operations, OperationsSize, EmbeddedBufferMode);
 
             if (NT_SUCCESS(Status))
+            {
                 Status = DxgkGpuVaApplyUpdate(Adapter, Device->ProcessRecord, Operations, pUpdate->NumOperations);
-            DxgkGpuVaFlushPageTableUpdates(Device->ProcessRecord);
+                {
+                    NTSTATUS FlushStatus = DxgkGpuVaFlushPageTableUpdates(Device->ProcessRecord);
+
+                    if (NT_SUCCESS(Status) && !NT_SUCCESS(FlushStatus))
+                        Status = FlushStatus;
+                }
+            }
             ExFreePoolWithTag(Operations, TAG_DXGK_GPUVA);
             DxgkDereferenceContext(VirtualContext);
             return Status;

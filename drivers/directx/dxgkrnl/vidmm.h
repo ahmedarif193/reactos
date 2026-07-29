@@ -188,6 +188,15 @@ typedef struct _DXGKVMM_ALLOCATION
     KEVENT              ReferencesDrainedEvent;
     WORK_QUEUE_ITEM     FinalizeWorkItem;
     KMUTEX              ResidencyLock;
+    /*
+     * A residency transaction may release ResidencyLock while it builds or
+     * waits for paging work.  The stable owner token keeps every competing
+     * reference/placement mutation out until that transaction either commits
+     * or rolls back.  ResidencyTransactionEvent is signaled exactly when the
+     * owner is NULL.
+     */
+    PVOID volatile      ResidencyTransactionOwner;
+    KEVENT              ResidencyTransactionEvent;
 
     /* Back-pointer to the owning adapter. */
     PDXGKRNL_ADAPTER    Adapter;
@@ -285,9 +294,10 @@ typedef struct _DXGKVMM_ALLOCATION
     ULONGLONG           SegmentOffset;
 
     /*
-     * Placement a paging packet is still establishing.  Committed placement
-     * above stays authoritative until PagingFenceId retires; scheduler
-     * admission and patch consume the same watermark (paging.c).
+     * Newest admitted paging transition.  This covers both a placement being
+     * established and an eviction whose aperture unmap is still retiring.
+     * The committed residency fields above stay authoritative; scheduler
+     * admission consumes the same watermark before patching (paging.c).
      */
     BOOLEAN             PendingPlacement;
     ULONG               PendingSegmentId;
@@ -446,6 +456,27 @@ NTSTATUS
 DxgkVidMmMakeResident(
     _In_ PDXGKVMM_ALLOCATION    Allocation,
     _In_ PDXGKRNL_ADAPTER       Adapter);
+
+NTSTATUS
+DxgkVidMmMakeResidentBatch(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ PDXGKRNL_DEVICE Device,
+    _In_reads_(AllocationCount) PDXGKVMM_ALLOCATION const *Allocations,
+    _In_ ULONG AllocationCount,
+    _In_ D3DKMT_HANDLE hPagingSyncObject,
+    _Inout_opt_ volatile LONG64 *PagingFenceCounter,
+    _Out_ PULONGLONG OutNumBytesToTrim,
+    _Out_ PULONGLONG OutPagingFenceValue,
+    _Out_ PBOOLEAN OutPagingQueued);
+
+NTSTATUS
+DxgkVidMmEvictBatch(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ PDXGKRNL_DEVICE Device,
+    _In_reads_(AllocationCount) PDXGKVMM_ALLOCATION const *Allocations,
+    _In_ ULONG AllocationCount,
+    _In_ BOOLEAN EvictOnlyIfNecessary,
+    _Out_ PULONGLONG OutNumBytesToTrim);
 
 typedef struct _DXGKVMM_RESIDENCY_REF
 {

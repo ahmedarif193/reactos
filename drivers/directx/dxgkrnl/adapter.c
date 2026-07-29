@@ -1639,7 +1639,7 @@ DxgkPrepareTrackedDmaBuffer(
     if (OutEntry == NULL)
         return STATUS_INVALID_PARAMETER;
     *OutEntry = NULL;
-    if (Adapter == NULL || Args == NULL || Args->DmaBuffer == NULL || Args->SubmissionFenceId == 0 || Args->NodeOrdinal >= Adapter->NodeCount || Args->NodeOrdinal >= DXGK_MAX_TRACKED_NODES || Args->DmaBuffer->VirtualAddress == NULL || Args->DmaBuffer->SubmissionStartOffset > Args->DmaBuffer->SubmissionEndOffset || Args->DmaBuffer->SubmissionEndOffset > Args->DmaBuffer->Capacity || (Args->PresentBindingReferenceCount != 0 && (Args->PresentBindingReferences == NULL || Args->Device == NULL)) || (Args->OpenBindingReferenceCount != 0 && Args->OpenBindingReferences == NULL) || (Args->AllocationReferenceCount != 0 && Args->AllocationReferences == NULL) || (SIZE_T)Args->PresentBindingReferenceCount > MAXULONG_PTR / sizeof(PDXGKVMM_ALLOCATION) || (SIZE_T)Args->OpenBindingReferenceCount > MAXULONG_PTR / sizeof(PDXGKVMM_ALLOCATION) || (SIZE_T)Args->AllocationReferenceCount > MAXULONG_PTR / sizeof(PDXGKVMM_ALLOCATION))
+    if (Adapter == NULL || Args == NULL || Args->DmaBuffer == NULL || Args->SubmissionFenceId == 0 || Args->NodeOrdinal >= Adapter->NodeCount || Args->NodeOrdinal >= DXGK_MAX_TRACKED_NODES || Args->DmaBuffer->VirtualAddress == NULL || Args->DmaBuffer->SubmissionStartOffset > Args->DmaBuffer->SubmissionEndOffset || Args->DmaBuffer->SubmissionEndOffset > Args->DmaBuffer->Capacity || (Args->PresentBindingReferenceCount != 0 && (Args->PresentBindingReferences == NULL || Args->Device == NULL)) || (Args->OpenBindingReferenceCount != 0 && Args->OpenBindingReferences == NULL) || (Args->AllocationReferenceCount != 0 && Args->AllocationReferences == NULL) || (Args->LifetimeAllocationReferenceCount != 0 && Args->LifetimeAllocationReferences == NULL) || (SIZE_T)Args->PresentBindingReferenceCount > MAXULONG_PTR / sizeof(PDXGKVMM_ALLOCATION) || (SIZE_T)Args->OpenBindingReferenceCount > MAXULONG_PTR / sizeof(PDXGKVMM_ALLOCATION) || (SIZE_T)Args->AllocationReferenceCount > MAXULONG_PTR / sizeof(PDXGKVMM_ALLOCATION) || (SIZE_T)Args->LifetimeAllocationReferenceCount > MAXULONG_PTR / sizeof(PDXGKVMM_ALLOCATION))
         return STATUS_INVALID_PARAMETER;
     if (!DxgkpAcquireSubmitDmaReservation(Adapter))
         return STATUS_DELETE_PENDING;
@@ -1812,6 +1812,8 @@ DxgkPrepareTrackedDmaBuffer(
     Entry->OpenBindingReferenceList = NULL;
     Entry->AllocationReferenceCount = 0;
     Entry->AllocationReferenceList = NULL;
+    Entry->LifetimeAllocationReferenceCount = 0;
+    Entry->LifetimeAllocationReferenceList = NULL;
 
     if (Args->PresentBindingReferenceCount != 0)
     {
@@ -1881,6 +1883,40 @@ DxgkPrepareTrackedDmaBuffer(
                 return Status;
             }
             Entry->AllocationReferenceCount++;
+        }
+    }
+
+    if (Args->LifetimeAllocationReferenceCount != 0)
+    {
+        Entry->LifetimeAllocationReferenceList =
+            ExAllocatePoolWithTag(
+                NonPagedPool,
+                (SIZE_T)Args->LifetimeAllocationReferenceCount *
+                    sizeof(*Entry->LifetimeAllocationReferenceList),
+                TAG_DXGK_SUBMITDMA);
+        if (Entry->LifetimeAllocationReferenceList == NULL)
+        {
+            DxgkCancelTrackedDmaBuffer(Entry);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        RtlZeroMemory(
+            Entry->LifetimeAllocationReferenceList,
+            (SIZE_T)Args->LifetimeAllocationReferenceCount *
+                sizeof(*Entry->LifetimeAllocationReferenceList));
+        for (Index = 0;
+             Index < Args->LifetimeAllocationReferenceCount;
+             ++Index)
+        {
+            Status = DxgkpReferenceTrackedAllocation(
+                         Adapter,
+                         Args->LifetimeAllocationReferences[Index],
+                         &Entry->LifetimeAllocationReferenceList[Index]);
+            if (!NT_SUCCESS(Status))
+            {
+                DxgkCancelTrackedDmaBuffer(Entry);
+                return Status;
+            }
+            Entry->LifetimeAllocationReferenceCount++;
         }
     }
 
@@ -2315,6 +2351,20 @@ DxgkpFreeTrackedDmaBufferEntry(
             DxgkVidMmDereferenceAllocation(Entry->AllocationReferenceList[Index]);
         }
         ExFreePoolWithTag(Entry->AllocationReferenceList, TAG_DXGK_SUBMITDMA);
+    }
+    if (Entry->LifetimeAllocationReferenceList != NULL)
+    {
+        UINT Index;
+
+        for (Index = 0;
+             Index < Entry->LifetimeAllocationReferenceCount;
+             ++Index)
+        {
+            DxgkVidMmDereferenceAllocation(
+                Entry->LifetimeAllocationReferenceList[Index]);
+        }
+        ExFreePoolWithTag(Entry->LifetimeAllocationReferenceList,
+                          TAG_DXGK_SUBMITDMA);
     }
 
     if (FreeDmaBuffer)

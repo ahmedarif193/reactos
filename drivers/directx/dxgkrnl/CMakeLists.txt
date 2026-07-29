@@ -67,6 +67,7 @@ target_compile_definitions(dxgkrnl PRIVATE
     REACTOS_WDDM_TARGET_LEVEL=${REACTOS_WDDM_TARGET_LEVEL})
 
 set_module_type(dxgkrnl kernelmodedriver)
+target_link_libraries(dxgkrnl ${PSEH_LIB})
 add_importlibs(dxgkrnl dxgmms2 ntoskrnl hal)
 add_pch(dxgkrnl dxgkrnl_private.h "${SOURCE}")
 add_cd_file(TARGET dxgkrnl DESTINATION reactos/system32/drivers FOR all)
