@@ -46,7 +46,11 @@
  */
 PFILE_OBJECT   g_DxgkrnlFileObject   = NULL;
 PDEVICE_OBJECT g_DxgkrnlDeviceObject = NULL;
+#if defined(REACTOS_GRAPHICS_DRIVER_MODEL_XPDM)
+static NTSTATUS g_WddmBridgeStatus = STATUS_NOT_SUPPORTED;
+#else
 static NTSTATUS g_WddmBridgeStatus = STATUS_DEVICE_NOT_CONNECTED;
+#endif
 static REACTOS_WIN32K_DXGKRNL_INTERFACE g_DxgkrnlInterface;
 static BOOLEAN g_DxgkrnlInterfaceValid = FALSE;
 static ULONG g_DxgkrnlInterfaceVersion = 0;

@@ -837,6 +837,7 @@ IntVideoPortAddDevice(
     /* Get the initialization data we saved in VideoPortInitialize. */
     DriverExtension = IoGetDriverObjectExtension(DriverObject, DriverObject);
 
+#if defined(REACTOS_GRAPHICS_DRIVER_MODEL_WDDM)
     /*
      * WDDM coexistence guard #1: if dxgkrnl already created an FDO above
      * this PDO, do not attach a second FDO.  Return STATUS_DEVICE_ALREADY_ATTACHED
@@ -861,6 +862,7 @@ IntVideoPortAddDevice(
               DriverObject);
         return VidPortHandoffToWddm(NULL);
     }
+#endif
 
     /* Create adapter device object. */
     Status = IntVideoPortCreateAdapterDeviceObject(DriverObject,

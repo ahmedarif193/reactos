@@ -31,6 +31,7 @@ BOOLEAN
 VideoPortIsPciBusInRange(
     _In_ ULONG BusNumber)
 {
+#ifdef _ARM64_
     ULONG MinBus, MaxBus;
 
     if (!HalQueryPciBusRange(&MinBus, &MaxBus))
@@ -50,6 +51,10 @@ VideoPortIsPciBusInRange(
     }
 
     return TRUE;
+#else
+    UNREFERENCED_PARAMETER(BusNumber);
+    return TRUE;
+#endif
 }
 
 /* PRIVATE FUNCTIONS **********************************************************/

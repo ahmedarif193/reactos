@@ -22,7 +22,7 @@ list(APPEND SOURCE
     ntgdi_dxg.c)
 
 add_library(wddm_bridge STATIC ${SOURCE})
-add_dependencies(wddm_bridge xdk)
+add_dependencies(wddm_bridge bugcodes xdk)
 
 # The bridge participates in the win32k build environment: it needs the same
 # include paths and definitions as the rest of win32k.

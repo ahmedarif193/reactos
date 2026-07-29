@@ -62,6 +62,9 @@ add_library(dxgkrnl MODULE
     dxgkrnl.rc
     ${CMAKE_CURRENT_BINARY_DIR}/dxgkrnl.def)
 
+target_compile_definitions(dxgkrnl PRIVATE
+    REACTOS_WDDM_TARGET_LEVEL=${REACTOS_WDDM_TARGET_LEVEL})
+
 set_module_type(dxgkrnl kernelmodedriver)
 add_importlibs(dxgkrnl dxgmms2 ntoskrnl hal)
 add_pch(dxgkrnl dxgkrnl_private.h "${SOURCE}")

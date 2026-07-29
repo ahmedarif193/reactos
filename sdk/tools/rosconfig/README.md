@@ -201,6 +201,20 @@ Visibility follows the build path that actually consumes each setting:
 | ReactOS test suite | Debug builds only. |
 | FEX ARM64EC submodule | ARM64 builds only. |
 | WoW64 subsystem | AMD64 builds only. |
+| WDDM compatibility level | WDDM display-model builds only. |
+
+## Graphics driver model
+
+The `Components and features -> Graphics stack` menu selects either the legacy
+XPDM/VideoPort path or the experimental WDDM/dxgkrnl path. XPDM restores the
+UEFI framebuffer registration and, for the Raspberry Pi 5 profile, builds the
+preserved VC4 XPDM miniport. WDDM builds the DirectX graphics kernel stack and
+selects the WDDM VC4 miniport instead.
+
+The WDDM level is a compatibility ceiling, not a capability assertion.
+WDDM targets compile against the highest audited shared header layout, while
+runtime reporting is capped by the selected level and by the subsystems that
+are actually implemented end to end.
 
 ## Tool CLI (used by the scripts)
 
