@@ -98,6 +98,9 @@ VOID
 UefiGetExtendedBIOSData(PULONG ExtendedBIOSDataArea,
                         PULONG ExtendedBIOSDataSize);
 
+PVOID
+UefiGetSmbiosEpsPointer(VOID);
+
 UCHAR
 UefiGetFloppyCount(VOID);
 
