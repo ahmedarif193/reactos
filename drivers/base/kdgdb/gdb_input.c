@@ -1330,6 +1330,7 @@ ReadMemorySendHandler(
     else if (ReadMemoryBinary)
     {
         start_gdb_packet();
+        send_gdb_partial_packet("b");
         send_gdb_partial_binary(MessageData->Buffer, MessageData->Length);
         finish_gdb_packet();
     }
