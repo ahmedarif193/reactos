@@ -128,7 +128,7 @@ PowerMeterInfo_UpdateBatteryStats(
                             &bqi, sizeof(bqi), ppmi->Name, sizeof(ppmi->Name),
                             &dwReceived, NULL))
         {
-            ppmi->Name[dwReceived / sizeof(WCHAR)] = UNICODE_NULL;
+            ppmi->Name[min(dwReceived / sizeof(WCHAR), ARRAYSIZE(ppmi->Name) - 1)] = UNICODE_NULL;
         }
         else
         {
@@ -140,7 +140,7 @@ PowerMeterInfo_UpdateBatteryStats(
                             &bqi, sizeof(bqi), ppmi->UniqueID, sizeof(ppmi->UniqueID),
                             &dwReceived, NULL))
         {
-            ppmi->UniqueID[dwReceived / sizeof(WCHAR)] = UNICODE_NULL;
+            ppmi->UniqueID[min(dwReceived / sizeof(WCHAR), ARRAYSIZE(ppmi->UniqueID) - 1)] = UNICODE_NULL;
         }
         else
         {
@@ -168,7 +168,16 @@ PowerMeterInfo_UpdateBatteryStats(
             ppmi->ACOnline = !!(bs.PowerState & BATTERY_POWER_ON_LINE);
             ppmi->Charging = (bs.PowerState & BATTERY_CHARGING) && !(bs.PowerState & BATTERY_DISCHARGING);
             ppmi->Critical = !!(bs.PowerState & BATTERY_CRITICAL);
-            ppmi->BatteryLifePercent = 100 * bs.Capacity / bi.FullChargedCapacity;
+            if (bi.FullChargedCapacity != 0 &&
+                bi.FullChargedCapacity != BATTERY_UNKNOWN_CAPACITY &&
+                bs.Capacity != BATTERY_UNKNOWN_CAPACITY)
+            {
+                ppmi->BatteryLifePercent = min(100 * bs.Capacity / bi.FullChargedCapacity, 100);
+            }
+            else
+            {
+                ppmi->BatteryLifePercent = BATTERY_PERCENTAGE_UNKNOWN;
+            }
             ppmi->BatteryLifeTime = BATTERY_LIFE_UNKNOWN;
         }
 
@@ -185,7 +194,7 @@ PowerMeterInfo_UpdateBatteryStats(
                             &bqi, sizeof(bqi), ppmi->Manufacturer, sizeof(ppmi->Manufacturer),
                             &dwReceived, NULL))
         {
-            ppmi->Manufacturer[dwReceived / sizeof(WCHAR)] = UNICODE_NULL;
+            ppmi->Manufacturer[min(dwReceived / sizeof(WCHAR), ARRAYSIZE(ppmi->Manufacturer) - 1)] = UNICODE_NULL;
         }
         else
         {
