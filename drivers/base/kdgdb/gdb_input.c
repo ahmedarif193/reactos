@@ -491,6 +491,46 @@ flush_monitor_output(VOID)
 
 static
 KDSTATUS
+send_monitor_data(
+    _In_reads_bytes_(Length) const VOID* Buffer,
+    _In_ SIZE_T Length)
+{
+    const UCHAR* Data = Buffer;
+
+    while (Length != 0)
+    {
+        SIZE_T Available;
+        SIZE_T ChunkLength;
+        KDSTATUS Status;
+
+        if (MonitorPacketLength == 0)
+        {
+            start_gdb_packet();
+            send_gdb_partial_packet("O");
+            MonitorPacketLength = 1;
+        }
+
+        Available = (GDB_MEMORY_MAX_SIZE - MonitorPacketLength) / 2;
+        if (Available == 0)
+        {
+            Status = flush_monitor_output();
+            if (Status != KdPacketReceived)
+                return Status;
+            continue;
+        }
+
+        ChunkLength = min(Length, Available);
+        send_gdb_partial_memory(Data, ChunkLength);
+        MonitorPacketLength += (ULONG)ChunkLength * 2;
+        Data += ChunkLength;
+        Length -= ChunkLength;
+    }
+
+    return KdPacketReceived;
+}
+
+static
+KDSTATUS
 send_monitor_output(
     _In_z_ _Printf_format_string_ const CHAR* Format,
     ...)
@@ -525,6 +565,145 @@ send_monitor_output(
     send_gdb_partial_memory(Buffer, Length);
     MonitorPacketLength += Length * 2;
     return KdPacketReceived;
+}
+
+typedef struct _GDB_KDLOG_SNAPSHOT
+{
+    const CHAR* Buffer;
+    ULONG BufferSize;
+    ULONG WriteOffset;
+    ULONG RolloverCount;
+    ULONG Length;
+} GDB_KDLOG_SNAPSHOT;
+
+static
+ULONG_PTR
+debugger_data_pointer(
+    _In_ ULPTR64 Pointer)
+{
+#if defined(_M_IX86) && (defined(__GNUC__) || defined(__clang__))
+    return Pointer.ptr;
+#else
+    return (ULONG_PTR)Pointer;
+#endif
+}
+
+static
+BOOLEAN
+get_kdlog_snapshot(
+    _Out_ GDB_KDLOG_SNAPSHOT* Snapshot)
+{
+    const PCHAR* BufferPointer;
+    const PCHAR* WritePointer;
+    const ULONG* BufferSize;
+    const ULONG* RolloverCount;
+    const CHAR* Buffer;
+    const CHAR* Write;
+    ULONG_PTR BufferAddress;
+    ULONG_PTR WriteAddress;
+    ULONG_PTR BufferEnd;
+    ULONG Size;
+    ULONG Rollovers;
+
+    if (KdDebuggerDataBlock == NULL ||
+        KdDebuggerDataBlock->Header.Size <
+            RTL_SIZEOF_THROUGH_FIELD(KDDEBUGGER_DATA64, KdPrintBufferSize))
+    {
+        return FALSE;
+    }
+
+    BufferPointer = (const PCHAR*)debugger_data_pointer(
+        KdDebuggerDataBlock->KdPrintCircularBufferPtr);
+    WritePointer = (const PCHAR*)debugger_data_pointer(
+        KdDebuggerDataBlock->KdPrintWritePointer);
+    BufferSize = (const ULONG*)debugger_data_pointer(
+        KdDebuggerDataBlock->KdPrintBufferSize);
+    RolloverCount = (const ULONG*)debugger_data_pointer(
+        KdDebuggerDataBlock->KdPrintRolloverCount);
+    if (BufferPointer == NULL ||
+        WritePointer == NULL ||
+        BufferSize == NULL ||
+        RolloverCount == NULL)
+    {
+        return FALSE;
+    }
+
+    /*
+     * Monitor commands execute while KD has stopped the other processors.
+     * Do not acquire KdpPrintSpinLock here: a frozen processor may own it.
+     * The writer publishes its new pointer only after copying the bytes, so
+     * these stable metadata values describe the committed part of the ring.
+     */
+    Buffer = *BufferPointer;
+    Write = *WritePointer;
+    Size = *BufferSize;
+    Rollovers = *RolloverCount;
+    BufferAddress = (ULONG_PTR)Buffer;
+    WriteAddress = (ULONG_PTR)Write;
+    BufferEnd = BufferAddress + Size;
+
+    if (Buffer == NULL ||
+        Size == 0 ||
+        BufferEnd < BufferAddress ||
+        WriteAddress < BufferAddress ||
+        WriteAddress >= BufferEnd)
+    {
+        return FALSE;
+    }
+
+    Snapshot->Buffer = Buffer;
+    Snapshot->BufferSize = Size;
+    Snapshot->WriteOffset = (ULONG)(WriteAddress - BufferAddress);
+    Snapshot->RolloverCount = Rollovers;
+    Snapshot->Length = Rollovers ? Size : Snapshot->WriteOffset;
+    return TRUE;
+}
+
+static
+KDSTATUS
+send_kdlog(VOID)
+{
+    GDB_KDLOG_SNAPSHOT Snapshot;
+    KDSTATUS Status;
+
+    if (!get_kdlog_snapshot(&Snapshot))
+        return send_monitor_output("KDGDB KD log is unavailable.\n");
+
+    Status = send_monitor_output(
+        "KDGDB KD log: bytes=%lu buffer=%lu rollovers=%lu wrapped=%s\n",
+        Snapshot.Length,
+        Snapshot.BufferSize,
+        Snapshot.RolloverCount,
+        Snapshot.RolloverCount ? "yes" : "no");
+    if (Status != KdPacketReceived)
+        return Status;
+
+    if (Snapshot.Length != 0)
+    {
+        if (Snapshot.RolloverCount)
+        {
+            Status = send_monitor_data(
+                Snapshot.Buffer + Snapshot.WriteOffset,
+                Snapshot.BufferSize - Snapshot.WriteOffset);
+            if (Status != KdPacketReceived)
+                return Status;
+
+            Status = send_monitor_data(
+                Snapshot.Buffer,
+                Snapshot.WriteOffset);
+        }
+        else
+        {
+            Status = send_monitor_data(
+                Snapshot.Buffer,
+                Snapshot.WriteOffset);
+        }
+
+        if (Status != KdPacketReceived)
+            return Status;
+    }
+
+    return send_monitor_output("\nKDGDB KD log: end\n");
 }
 
 #define MONITOR_PRINT(...) \
@@ -602,6 +781,7 @@ handle_gdb_monitor_command(VOID)
         MONITOR_PRINT("  processes  active process list\n");
         MONITOR_PRINT("  threads    active thread list\n");
         MONITOR_PRINT("  modules    loaded kernel module list\n");
+        MONITOR_PRINT("  kdlog      buffered kernel debug log\n");
     }
     else if (strcmp(Command, "version") == 0)
     {
@@ -699,6 +879,10 @@ handle_gdb_monitor_command(VOID)
                               Name);
             }
         }
+    }
+    else if (strcmp(Command, "kdlog") == 0)
+    {
+        Status = send_kdlog();
     }
     else
     {
