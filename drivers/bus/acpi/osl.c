@@ -856,14 +856,8 @@ AcpiOsAcquireLock(
 {
     KIRQL OldIrql;
 
-    if ((OldIrql = KeGetCurrentIrql()) >= DISPATCH_LEVEL)
-    {
-        KeAcquireSpinLockAtDpcLevel((PKSPIN_LOCK)Handle);
-    }
-    else
-    {
-        KeAcquireSpinLock((PKSPIN_LOCK)Handle, &OldIrql);
-    }
+    KeRaiseIrql(HIGH_LEVEL, &OldIrql);
+    KeAcquireSpinLockAtDpcLevel((PKSPIN_LOCK)Handle);
 
     return (ACPI_CPU_FLAGS)OldIrql;
 }
@@ -873,16 +867,8 @@ AcpiOsReleaseLock(
     ACPI_SPINLOCK Handle,
     ACPI_CPU_FLAGS Flags)
 {
-    KIRQL OldIrql = (KIRQL)Flags;
-
-    if (OldIrql >= DISPATCH_LEVEL)
-    {
-        KeReleaseSpinLockFromDpcLevel((PKSPIN_LOCK)Handle);
-    }
-    else
-    {
-        KeReleaseSpinLock((PKSPIN_LOCK)Handle, OldIrql);
-    }
+    KeReleaseSpinLockFromDpcLevel((PKSPIN_LOCK)Handle);
+    KeLowerIrql((KIRQL)Flags);
 }
 
 BOOLEAN NTAPI
