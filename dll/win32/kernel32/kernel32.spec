@@ -345,6 +345,7 @@
 @ stdcall FreeUserPhysicalPages(long long long)
 @ stdcall GenerateConsoleCtrlEvent(long long)
 @ stdcall GetACP()
+@ stdcall -version=0x601+ GetActiveProcessorCount(long)
 @ stdcall -version=0x600+ GetApplicationRecoveryCallback(ptr ptr ptr ptr ptr)
 @ stub -version=0x600+ GetApplicationRestartSettings
 @ stdcall GetAtomNameA(long ptr long)
@@ -562,6 +563,7 @@
 @ stdcall GetPrivateProfileStructW(wstr wstr ptr long wstr)
 @ stdcall GetProcAddress(long str)
 @ stdcall GetProcessAffinityMask(long ptr ptr)
+@ stdcall -version=0x601+ GetProcessGroupAffinity(long ptr ptr)
 @ stub -version=0x600+ GetProcessDEPPolicy
 @ stdcall GetProcessHandleCount(long ptr)
 @ stdcall -norelay GetProcessHeap()
@@ -625,6 +627,7 @@
 @ stdcall GetTempPathW(long ptr)
 @ stdcall GetThreadContext(long ptr)
 @ stdcall -stub -version=0x600+ GetThreadErrorMode()
+@ stdcall -version=0x601+ GetThreadGroupAffinity(long ptr)
 @ stdcall GetThreadIOPendingFlag(long ptr)
 @ stdcall GetThreadId(ptr)
 @ stdcall GetThreadLocale()
@@ -1059,7 +1062,7 @@
 @ stdcall SetFileAttributesW(wstr long)
 @ stdcall -version=0x600+ SetFileBandwidthReservation(ptr long long long ptr ptr)
 @ stdcall SetFileCompletionNotificationModes(ptr long)
-@ stub -version=0x600+ SetFileInformationByHandle
+@ stdcall -version=0x600+ SetFileInformationByHandle(ptr long ptr long)
 @ stub -version=0x600+ SetFileIoOverlappedRange
 @ stdcall SetFilePointer(long long ptr long)
 @ stdcall SetFilePointerEx(long double ptr long)
@@ -1104,6 +1107,7 @@
 @ stdcall SetTapePosition(ptr long long long long long)
 @ stdcall SetTermsrvAppInstallMode(long)
 @ stdcall SetThreadAffinityMask(long long)
+@ stdcall -version=0x601+ SetThreadGroupAffinity(long ptr ptr)
 @ stdcall SetThreadContext(long ptr)
 @ stdcall -version=0xA00+ SetThreadDescription(ptr wstr)
 @ stdcall -stub -version=0x600+ SetThreadErrorMode(long ptr)
