@@ -648,26 +648,14 @@ MiArm64MapLoaderProcessorState(
 
 
 /*
- * MiArm64BuildPfnDatabaseFromPages - Initialize PFN entries for boot-loaded modules
+ * MiArm64BuildPfnDatabaseFromPages - Initialize data PFNs for boot-loaded modules
  *
- * Walk the TTBR1 recursive self-map to initialize PFN entries for both data
- * pages and page-table pages of boot-loaded kernel modules.
+ * MiArm64AdoptBootPageTables has already initialized every page-table PFN from
+ * the complete shared TTBR0/TTBR1 root. Walk boot-loaded images here only to
+ * initialize their mapped data pages and validate the adopted table parentage.
  *
- * On amd64, MiBuildPfnDatabaseFromPages walks all valid PDEs in the self-map and
- * initializes each page table PFN with ShareCount = 1 + N (one per valid PTE).
- * On ARM64, the self-map may not be fully valid at this early stage, and the
- * previous implementation only initialized data page PFNs (not page table PFNs).
- *
- * Without page table PFN initialization:
- * - Page table PFNs have RefCount=0, get inserted into the free list
- * - MiDeleteSystemPageableVm (INIT section discard) calls MiDecrementShareCount
- *   on the page table PFN → PageLocation=FreePageList → PFN_LIST_CORRUPT 0x4E/0x99
- *
- * Without proper ShareCount tracking:
- * - Page table PFNs have ShareCount=1 (from MiBuildPfnDatabaseFromLoaderBlock default case)
- * - MiDeleteSystemPageableVm decrements ShareCount N times (once per INIT PTE)
- * - If N > 1, ShareCount underflows → MiDecrementShareCount frees the page table
- *   prematurely → subsequent PTE decrements crash
+ * Table ShareCount and UsedPageTableEntries are not changed here: the adoption
+ * walk derives both from each complete table exactly once.
  */
 CODE_SEG("INIT")
 VOID
@@ -723,18 +711,20 @@ MiArm64BuildPfnDatabaseFromPages(_In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                     PrevL1Idx = ~0U;
                     PrevL2Idx = ~0U;
 
-                    /* Initialize L1 page table PFN */
+                    /* Validate the adopted L1 page-table PFN. */
                     if (L1Pfn <= MmHighestPhysicalPage)
                     {
                         Pfn = MiGetPfnEntry(L1Pfn);
-                        if (Pfn->u3.e2.ReferenceCount == 0)
+                        if ((Pfn->u3.e1.PageLocation != ActiveAndValid) ||
+                            (Pfn->u3.e2.ReferenceCount == 0) ||
+                            (Pfn->PteAddress != PointerPxe) ||
+                            (Pfn->u4.PteFrame != L0Pfn))
                         {
-                            Pfn->u3.e2.ReferenceCount = 1;
-                            Pfn->u2.ShareCount = 1;
-                            Pfn->u3.e1.PageLocation = ActiveAndValid;
-                            Pfn->u3.e1.CacheAttribute = MiNonCached;
-                            Pfn->u4.PteFrame = L0Pfn;
-                            Pfn->PteAddress = PointerPxe;
+                            KeBugCheckEx(MEMORY_MANAGEMENT,
+                                         0xA645,
+                                         L1Pfn,
+                                         (ULONG_PTR)PointerPxe,
+                                         1);
                         }
                     }
                 }
@@ -755,18 +745,20 @@ MiArm64BuildPfnDatabaseFromPages(_In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                     PrevL1Idx = L1Idx;
                     PrevL2Idx = ~0U;
 
-                    /* Initialize L2 page table PFN */
+                    /* Validate the adopted L2 page-table PFN. */
                     if (L2Pfn <= MmHighestPhysicalPage)
                     {
                         Pfn = MiGetPfnEntry(L2Pfn);
-                        if (Pfn->u3.e2.ReferenceCount == 0)
+                        if ((Pfn->u3.e1.PageLocation != ActiveAndValid) ||
+                            (Pfn->u3.e2.ReferenceCount == 0) ||
+                            (Pfn->PteAddress != PointerPpe) ||
+                            (Pfn->u4.PteFrame != L1Pfn))
                         {
-                            Pfn->u3.e2.ReferenceCount = 1;
-                            Pfn->u2.ShareCount = 1;
-                            Pfn->u3.e1.PageLocation = ActiveAndValid;
-                            Pfn->u3.e1.CacheAttribute = MiNonCached;
-                            Pfn->u4.PteFrame = L1Pfn;
-                            Pfn->PteAddress = PointerPpe;
+                            KeBugCheckEx(MEMORY_MANAGEMENT,
+                                         0xA645,
+                                         L2Pfn,
+                                         (ULONG_PTR)PointerPpe,
+                                         2);
                         }
                     }
                 }
@@ -785,19 +777,21 @@ MiArm64BuildPfnDatabaseFromPages(_In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                     L3Pfn = PFN_FROM_PTE(PointerPde);
                     PrevL2Idx = L2Idx;
 
-                    /* Initialize L3 page table PFN */
+                    /* Validate the adopted L3 page-table PFN. */
                     PfnL3 = NULL;
                     if (L3Pfn <= MmHighestPhysicalPage)
                     {
                         PfnL3 = MiGetPfnEntry(L3Pfn);
-                        if (PfnL3->u3.e2.ReferenceCount == 0)
+                        if ((PfnL3->u3.e1.PageLocation != ActiveAndValid) ||
+                            (PfnL3->u3.e2.ReferenceCount == 0) ||
+                            (PfnL3->PteAddress != (PMMPTE)PointerPde) ||
+                            (PfnL3->u4.PteFrame != L2Pfn))
                         {
-                            PfnL3->u3.e2.ReferenceCount = 1;
-                            PfnL3->u2.ShareCount = 1; /* baseline for L2→L3 entry */
-                            PfnL3->u3.e1.PageLocation = ActiveAndValid;
-                            PfnL3->u3.e1.CacheAttribute = MiNonCached;
-                            PfnL3->u4.PteFrame = L2Pfn;
-                            PfnL3->PteAddress = (PMMPTE)PointerPde;
+                            KeBugCheckEx(MEMORY_MANAGEMENT,
+                                         0xA645,
+                                         L3Pfn,
+                                         (ULONG_PTR)PointerPde,
+                                         3);
                         }
                     }
                 }
@@ -810,17 +804,6 @@ MiArm64BuildPfnDatabaseFromPages(_In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
                 DataPfn = PFN_FROM_PTE(PointerPte);
                 if (DataPfn > MmHighestPhysicalPage) continue;
-
-                /*
-                 * Increment L3 page table ShareCount for this data page PTE.
-                 * This mirrors the amd64 inner loop in MiBuildPfnDatabaseFromPages
-                 * (mminit.c line 1015: Pfn1->u2.ShareCount++) which increments the
-                 * PDE page's ShareCount for each valid PTE.
-                 *
-                 * MiDeleteSystemPageableVm decrements L3 ShareCount once per valid
-                 * PTE it frees. Without this increment, ShareCount underflows.
-                 */
-                if (PfnL3) PfnL3->u2.ShareCount++;
 
                 /* Initialize data page PFN */
                 Pfn = MiGetPfnEntry(DataPfn);
@@ -1375,21 +1358,66 @@ PVOID MiSessionViewEnd;
 
 static
 CODE_SEG("INIT")
+ULONG
+MiArm64CountBootTableEntries(
+    _In_reads_(PTE_PER_PAGE) volatile UINT64 *Table,
+    _In_ ULONG Level,
+    _Out_ PULONG ShareReferences)
+{
+    ULONG Index;
+    ULONG UsedEntries = 0;
+    ULONG SharedEntries = 0;
+
+    for (Index = 0; Index < PTE_PER_PAGE; Index++)
+    {
+        MMPTE Entry;
+
+        Entry.u.Long = Table[Index];
+        if (Entry.u.Long == 0)
+        {
+            continue;
+        }
+
+        UsedEntries++;
+        if (Level < 3)
+        {
+            if ((Entry.u.Long & 1ULL) != 0)
+            {
+                SharedEntries++;
+            }
+        }
+        else if (Entry.u.Hard.Valid || Entry.u.Soft.Transition)
+        {
+            SharedEntries++;
+        }
+    }
+
+    *ShareReferences = SharedEntries;
+    return UsedEntries;
+}
+
+static
+CODE_SEG("INIT")
 VOID
-MiArm64RegisterPageTablePfn(
+MiArm64AdoptBootTablePfn(
     _In_ PFN_NUMBER PageTablePfn,
     _In_ PVOID PteAddress,
-    _In_ PFN_NUMBER PteFrame)
+    _In_ PFN_NUMBER PteFrame,
+    _In_reads_(PTE_PER_PAGE) volatile UINT64 *Table,
+    _In_ ULONG Level)
 {
     KIRQL OldIrql;
     BOOLEAN UsePfnLock;
     PMMPFN PfnEntry;
-    PMMPFN ParentPfn;
+    ULONG UsedEntries;
+    ULONG ShareReferences;
 
     if (PageTablePfn > MmHighestPhysicalPage)
     {
         return;
     }
+
+    UsedEntries = MiArm64CountBootTableEntries(Table, Level, &ShareReferences);
 
     UsePfnLock = MiArm64PfnDatabaseReady || MiArm64PfnFreeListsReady;
     if (UsePfnLock)
@@ -1400,6 +1428,16 @@ MiArm64RegisterPageTablePfn(
     PfnEntry = MI_PFN_ELEMENT(PageTablePfn);
     if (PfnEntry->u3.e1.PageLocation == ActiveAndValid)
     {
+        if ((PfnEntry->PteAddress != PteAddress) ||
+            ((PteFrame != 0) && (PfnEntry->u4.PteFrame != PteFrame)))
+        {
+            KeBugCheckEx(MEMORY_MANAGEMENT,
+                         0xA644,
+                         PageTablePfn,
+                         (ULONG_PTR)PfnEntry->PteAddress,
+                         (ULONG_PTR)PteAddress);
+        }
+
         if (UsePfnLock) MiReleasePfnLock(OldIrql);
         return;
     }
@@ -1424,22 +1462,14 @@ MiArm64RegisterPageTablePfn(
 
     PfnEntry->PteAddress = PteAddress;
     MI_MAKE_SOFTWARE_PTE(&PfnEntry->OriginalPte, MM_READWRITE);
+    PfnEntry->OriginalPte.u.Soft.UsedPageTableEntries = UsedEntries;
     PfnEntry->u1.Flink = 0;
-    PfnEntry->u2.ShareCount = 1;
+    PfnEntry->u2.ShareCount = ShareReferences + 1;
     PfnEntry->u3.e2.ReferenceCount = 1;
     PfnEntry->u3.e1.PageLocation = ActiveAndValid;
     PfnEntry->u3.e1.Modified = TRUE;
     PfnEntry->u4.EntireFrame = 0;
     PfnEntry->u4.PteFrame = PteFrame;
-
-    if (PteFrame != 0)
-    {
-        if (PteFrame <= MmHighestPhysicalPage)
-        {
-            ParentPfn = MI_PFN_ELEMENT(PteFrame);
-            ParentPfn->u2.ShareCount++;
-        }
-    }
 
     if (UsePfnLock) MiReleasePfnLock(OldIrql);
 }
@@ -1447,33 +1477,52 @@ MiArm64RegisterPageTablePfn(
 static
 CODE_SEG("INIT")
 VOID
-MiArm64RegisterFreeLdrPageTables(VOID)
+MiArm64AdoptBootPageTables(VOID)
 {
     UINT64 Ttbr1;
     UINT64 RootPa;
     PFN_NUMBER RootPfn;
+    volatile UINT64 *RootTable;
 
     __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
 
     RootPa = MI_ARM64_TTBR_TO_PA(Ttbr1);
     RootPfn = (PFN_NUMBER)(RootPa >> PAGE_SHIFT);
+    RootTable = (volatile UINT64 *)PXE_BASE;
 
-    MiArm64RegisterPageTablePfn(RootPfn, (PVOID)(ULONG_PTR)RootPa, 0);
+    MiArm64AdoptBootTablePfn(RootPfn,
+                             (PVOID)(ULONG_PTR)RootPa,
+                             0,
+                             RootTable,
+                             0);
 
-    for (ULONG L0Index = 256; L0Index < 512; L0Index++)
+    for (ULONG L0Index = 0; L0Index < 512; L0Index++)
     {
         PVOID L0Va = MiArm64CanonicalVaFromIndexes(L0Index, 0, 0, 0);
         PMMPTE PointerPxe = MiAddressToPxe(L0Va);
         UINT64 L0Entry = PointerPxe->u.Long;
         UINT64 L1TablePa;
         PFN_NUMBER L1Pfn;
+        volatile UINT64 *L1Table;
 
         if ((L0Entry & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
             continue;
 
+        /*
+         * The recursive slot references the root itself. Count that descriptor
+         * in the root PFN, but never descend through it as a second hierarchy.
+         */
+        if (L0Index == PXE_SELFMAP_INDEX)
+            continue;
+
         L1TablePa = L0Entry & ARM64_PTE_ADDR_MASK;
         L1Pfn = (PFN_NUMBER)(L1TablePa >> PAGE_SHIFT);
-        MiArm64RegisterPageTablePfn(L1Pfn, PointerPxe, RootPfn);
+        L1Table = (volatile UINT64 *)MiAddressToPpe(L0Va);
+        MiArm64AdoptBootTablePfn(L1Pfn,
+                                 PointerPxe,
+                                 RootPfn,
+                                 L1Table,
+                                 1);
 
         for (ULONG L1Index = 0; L1Index < 512; L1Index++)
         {
@@ -1482,13 +1531,19 @@ MiArm64RegisterFreeLdrPageTables(VOID)
             UINT64 L1Entry = PointerPpe->u.Long;
             UINT64 L2TablePa;
             PFN_NUMBER L2Pfn;
+            volatile UINT64 *L2Table;
 
             if ((L1Entry & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
                 continue;
 
             L2TablePa = L1Entry & ARM64_PTE_ADDR_MASK;
             L2Pfn = (PFN_NUMBER)(L2TablePa >> PAGE_SHIFT);
-            MiArm64RegisterPageTablePfn(L2Pfn, PointerPpe, L1Pfn);
+            L2Table = (volatile UINT64 *)MiAddressToPde(L1Va);
+            MiArm64AdoptBootTablePfn(L2Pfn,
+                                     PointerPpe,
+                                     L1Pfn,
+                                     L2Table,
+                                     2);
 
             for (ULONG L2Index = 0; L2Index < 512; L2Index++)
             {
@@ -1497,13 +1552,19 @@ MiArm64RegisterFreeLdrPageTables(VOID)
                 UINT64 L2Entry = PointerPde->u.Long;
                 UINT64 L3TablePa;
                 PFN_NUMBER L3Pfn;
+                volatile UINT64 *L3Table;
 
                 if ((L2Entry & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
                     continue;
 
                 L3TablePa = L2Entry & ARM64_PTE_ADDR_MASK;
                 L3Pfn = (PFN_NUMBER)(L3TablePa >> PAGE_SHIFT);
-                MiArm64RegisterPageTablePfn(L3Pfn, (PMMPTE)PointerPde, L2Pfn);
+                L3Table = (volatile UINT64 *)MiAddressToPte(L2Va);
+                MiArm64AdoptBootTablePfn(L3Pfn,
+                                         (PMMPTE)PointerPde,
+                                         L2Pfn,
+                                         L3Table,
+                                         3);
             }
         }
     }
@@ -1879,7 +1940,7 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             }
         }
 
-        MiArm64RegisterFreeLdrPageTables();
+        MiArm64AdoptBootPageTables();
 
         MiInitializePfnDatabase(LoaderBlock);
 
