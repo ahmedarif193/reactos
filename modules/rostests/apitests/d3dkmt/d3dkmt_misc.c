@@ -780,15 +780,10 @@ static void Test_QueryVideoMemoryInfo_HighPhysAdapterIndex(void)
  * the caller's pointer rather than copied, which is the whole point: a copy
  * would defeat having locked the surface at all.
  *
- * Both exports existed with a syscall slot and nothing behind them.  win32k now
- * implements them, but **the calls do not reach it**: instrumenting every
- * rejection branch produced no output at all, so gdi32's export and win32k's
- * implementation are still not connected.
- *
- * That makes the refusals below vacuous as coverage -- they would pass for any
- * error, including one raised before the validation they are supposed to be
- * checking.  They are kept because they will become real the moment the call
- * lands, and left honest in the meantime rather than read as proof.
+ * ReactOS gdi32 implements these exports through gdi32_vista and forwards them
+ * to their win32k syscall slots.  Keep both the rejection checks and a complete
+ * create/destroy round trip here so a broken export or syscall mapping cannot
+ * turn the negative cases into vacuous coverage.
  */
 static void Test_DCFromMemory(void)
 {
@@ -846,11 +841,16 @@ static void Test_DCFromMemory(void)
     Create.Width = 16;
     Create.Height = 16;
     Create.Pitch = 16 * 4;
+    Create.hDeviceDc = CreateCompatibleDC(NULL);
+    ok(Create.hDeviceDc != NULL, "CreateCompatibleDC failed\n");
+    if (Create.hDeviceDc == NULL)
+        return;
+
     Status = pCreate(&Create);
-    trace("STATUSREC %s:%d 0x%08lX\n", __FILE__, __LINE__, (unsigned long)Status);
+    ok_succeeded(Status, "CreateDCFromMemory failed 0x%08lX\n", (long)Status);
     if (!NT_SUCCESS(Status))
     {
-        skip("CreateDCFromMemory refused a well-formed request (0x%08lX)\n", (long)Status);
+        DeleteDC(Create.hDeviceDc);
         return;
     }
     ok(Create.hDc != NULL, "create succeeded without a DC\n");
@@ -864,6 +864,7 @@ static void Test_DCFromMemory(void)
 
     /* Releasing the same pair twice must not free anything a second time. */
     ok_failed(pDestroy(&Destroy), "the DC and bitmap were released twice\n");
+    ok(DeleteDC(Create.hDeviceDc), "DeleteDC failed\n");
 }
 
 START_TEST(misc)
