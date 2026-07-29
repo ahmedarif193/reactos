@@ -44,13 +44,6 @@ HKLM,"SYSTEM\CurrentControlSet\Services\usbdwc2","Type",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BRCM5D12","Service",0x00000000,"sdbus"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BRCM5D12","ClassGUID",0x00000000,"{a0a588a4-c46f-4b37-b7ea-c82fe89870c6}"
 
-; Raspberry Pi 5 VideoCore VII GPU and display pipeline. Bind the selected
-; rpi5vc4 miniport (XPDM/VideoPort or WDDM/dxgkrnl) to the firmware GPU0 child
-; so its resources come from ACPI _CRS. The build includes exactly one provider
-; under this shared service identity and creates no synthetic duplicate.
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2712","Service",0x00000000,"rpi5vc4"
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2712","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
-
 ; Raspberry Pi 5 RP1 xHCI USB host controllers (XHC0/XHC1) are exposed by the
 ; UEFI firmware as ACPI devices with _HID "PNP0D10" (ACPI\PNP0D10), not as PCI
 ; functions. The USB stack is the boot path (the boot disk hangs off USB behind
