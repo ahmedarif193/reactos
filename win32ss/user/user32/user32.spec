@@ -594,6 +594,7 @@
 @ stdcall RegisterRawInputDevices(ptr long long)
 @ stdcall RegisterServicesProcess(long)
 @ stdcall RegisterShellHookWindow(long)
+@ stdcall -version=0x602+ RegisterSuspendResumeNotification(long long)
 @ stdcall RegisterSystemThread(long long)
 @ stdcall RegisterTasklist(long) NtUserRegisterTasklist
 @ stdcall -version=0x602+ RegisterTouchHitTestingWindow(long long)
