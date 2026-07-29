@@ -1010,9 +1010,9 @@ handle_gdb_query(void)
         (strncmp(gdb_input, "qSupported:", 11) == 0))
     {
 #if MONOPROCESS
-        return send_gdb_packet("PacketSize=1000;QStartNoAckMode+;binary-upload+;qXfer:exec-file:read+;qXfer:features:read+;qXfer:libraries:read+;qXfer:memory-map:read+;qXfer:threads:read+;vContSupported+;");
+        return send_gdb_packet("PacketSize=1000;QStartNoAckMode+;binary-upload+;qXfer:exec-file:read+;qXfer:features:read+;qXfer:libraries:read+;qXfer:threads:read+;vContSupported+;");
 #else
-        return send_gdb_packet("PacketSize=1000;QStartNoAckMode+;binary-upload+;multiprocess+;qXfer:exec-file:read+;qXfer:features:read+;qXfer:libraries:read+;qXfer:memory-map:read+;qXfer:threads:read+;vContSupported+;");
+        return send_gdb_packet("PacketSize=1000;QStartNoAckMode+;binary-upload+;multiprocess+;qXfer:exec-file:read+;qXfer:features:read+;qXfer:libraries:read+;qXfer:threads:read+;vContSupported+;");
 #endif
     }
 
@@ -1168,19 +1168,6 @@ handle_gdb_query(void)
         }
 
         return send_xfer_stream(stream_libraries_xml, Window[0], Window[1]);
-    }
-
-    if (strncmp(gdb_input, "qXfer:memory-map:read::", 23) == 0)
-    {
-        static const CHAR MemoryMap[] = "<?xml version=\"1.0\"?><memory-map></memory-map>";
-        const char* End = &gdb_input[gdb_input_length];
-        const char* Rest;
-        ULONG64 Window[2];
-
-        if (!parse_hex_fields(&gdb_input[23], End, ",", Window, RTL_NUMBER_OF(Window), &Rest) || Rest != End)
-            return send_gdb_packet("E01");
-
-        return send_xfer_buffer(MemoryMap, sizeof(MemoryMap) - 1, Window[0], Window[1]);
     }
 
     if (strncmp(gdb_input, "qXfer:threads:read::", 20) == 0)
