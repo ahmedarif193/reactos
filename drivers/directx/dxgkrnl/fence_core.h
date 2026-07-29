@@ -52,20 +52,126 @@ BOOLEAN DxgkMonitoredFenceCoreIsSatisfied(_In_ const DXGK_MONITORED_FENCE *Fence
 NTSTATUS DxgkMonitoredFenceCoreCanWait(_In_ const DXGK_MONITORED_FENCE *Fence);
 NTSTATUS DxgkMonitoredFenceCoreCanSignal(_In_ const DXGK_MONITORED_FENCE *Fence);
 
-/* --- periodic monitored fences --------------------------------------- */
+/* --- periodic monitored-fence notification lifetime ----------------- */
 
-typedef struct _DXGK_PERIODIC_FENCE
+typedef enum _DXGK_PERIODIC_NOTIFICATION_STATE
 {
-    ULONGLONG CurrentValue;
-    ULONG     VidPnTargetId;
-    ULONG     PeriodInVSyncs;
-    ULONG     VSyncsSinceAdvance;
-    BOOLEAN   Bound;
-} DXGK_PERIODIC_FENCE, *PDXGK_PERIODIC_FENCE;
+    DxgkPeriodicNotificationNone = 0,
+    DxgkPeriodicNotificationCreating,
+    DxgkPeriodicNotificationActive,
+    DxgkPeriodicNotificationDestroyed
+} DXGK_PERIODIC_NOTIFICATION_STATE;
 
-NTSTATUS DxgkPeriodicFenceCoreBind(_Out_ PDXGK_PERIODIC_FENCE Fence, _In_ ULONG VidPnTargetId, _In_ ULONG PeriodInVSyncs, _In_ ULONGLONG InitialValue);
-/* Reports one vsync on a target; returns TRUE if this vsync advanced the
- * fence.  A vsync for another target must not advance it. */
-BOOLEAN DxgkPeriodicFenceCoreNotifyVSync(_Inout_ PDXGK_PERIODIC_FENCE Fence, _In_ ULONG VidPnTargetId);
+/*
+ * The WDDM 2.2 periodic-fence DDI is a two-phase publication:
+ *
+ *   1. dxgkrnl reserves a stable, nonzero NotificationID and calls
+ *      DxgkDdiCreatePeriodicFrameNotification.
+ *   2. Only a successful callback that returns a non-NULL hNotification may
+ *      become visible to DXGK_INTERRUPT_PERIODIC_MONITORED_FENCE_SIGNALED.
+ *
+ * The owner serializes these helpers with its notification-registry lock.
+ */
+typedef struct _DXGK_PERIODIC_NOTIFICATION_CORE
+{
+    volatile LONG State;
+    ULONG VidPnTargetId;
+    ULONG NotificationId;
+    PVOID NotificationHandle;
+} DXGK_PERIODIC_NOTIFICATION_CORE, *PDXGK_PERIODIC_NOTIFICATION_CORE;
+
+VOID
+DxgkPeriodicNotificationCoreInitialize(
+    _Out_ PDXGK_PERIODIC_NOTIFICATION_CORE Notification);
+
+NTSTATUS
+DxgkPeriodicNotificationCoreBeginCreate(
+    _Inout_ PDXGK_PERIODIC_NOTIFICATION_CORE Notification,
+    _In_ ULONG VidPnTargetId,
+    _In_ ULONG NotificationId);
+
+NTSTATUS
+DxgkPeriodicNotificationCoreCompleteCreate(
+    _Inout_ PDXGK_PERIODIC_NOTIFICATION_CORE Notification,
+    _In_ PVOID NotificationHandle);
+
+BOOLEAN
+DxgkPeriodicNotificationCoreCancelCreate(
+    _Inout_ PDXGK_PERIODIC_NOTIFICATION_CORE Notification);
+
+BOOLEAN
+DxgkPeriodicNotificationCoreMatches(
+    _In_ const DXGK_PERIODIC_NOTIFICATION_CORE *Notification,
+    _In_ ULONG VidPnTargetId,
+    _In_ ULONG NotificationId);
+
+BOOLEAN
+DxgkPeriodicNotificationCoreClaimDestroy(
+    _Inout_ PDXGK_PERIODIC_NOTIFICATION_CORE Notification,
+    _Out_ PVOID *NotificationHandle);
+
+/* --- periodic interrupt ISR-to-DPC handoff ---------------------------- */
+
+/*
+ * The sync registry enforces the same per-adapter live-notification bound.
+ * Consequently a pending-count slot exists for every valid distinct
+ * NotificationID, while repeated pulses consume only the slot's 64-bit count.
+ */
+#define DXGK_PERIODIC_INTERRUPT_CORE_CAPACITY 64
+
+typedef enum _DXGK_PERIODIC_INTERRUPT_CORE_STATE
+{
+    DxgkPeriodicInterruptDisabled = 0,
+    DxgkPeriodicInterruptAccepting,
+    DxgkPeriodicInterruptOverflowed
+} DXGK_PERIODIC_INTERRUPT_CORE_STATE;
+
+typedef struct _DXGK_PERIODIC_INTERRUPT_CORE_ENTRY
+{
+    ULONG VidPnTargetId;
+    ULONG NotificationId;
+    ULONGLONG PendingCount;
+    BOOLEAN InUse;
+} DXGK_PERIODIC_INTERRUPT_CORE_ENTRY,
+ *PDXGK_PERIODIC_INTERRUPT_CORE_ENTRY;
+
+typedef struct _DXGK_PERIODIC_INTERRUPT_CORE
+{
+    volatile LONG State;
+    BOOLEAN DpcActive;
+    ULONGLONG OverflowCount;
+    DXGK_PERIODIC_INTERRUPT_CORE_ENTRY
+        Entries[DXGK_PERIODIC_INTERRUPT_CORE_CAPACITY];
+} DXGK_PERIODIC_INTERRUPT_CORE, *PDXGK_PERIODIC_INTERRUPT_CORE;
+
+/*
+ * Callers serialize every helper below with the adapter interrupt lock.  The
+ * ISR holds it at DIRQL; the DPC must raise to the interrupt synchronize IRQL
+ * before taking the same lock.
+ */
+VOID
+DxgkPeriodicInterruptCoreInitialize(
+    _Out_ PDXGK_PERIODIC_INTERRUPT_CORE Core);
+
+VOID
+DxgkPeriodicInterruptCoreEnableLocked(
+    _Inout_ PDXGK_PERIODIC_INTERRUPT_CORE Core);
+
+VOID
+DxgkPeriodicInterruptCoreDisableLocked(
+    _Inout_ PDXGK_PERIODIC_INTERRUPT_CORE Core);
+
+NTSTATUS
+DxgkPeriodicInterruptCoreEnqueueLocked(
+    _Inout_ PDXGK_PERIODIC_INTERRUPT_CORE Core,
+    _In_ ULONG VidPnTargetId,
+    _In_ ULONG NotificationId,
+    _In_ ULONGLONG NotificationCount,
+    _Out_ PBOOLEAN QueueDpc);
+
+BOOLEAN
+DxgkPeriodicInterruptCoreDequeueLocked(
+    _Inout_ PDXGK_PERIODIC_INTERRUPT_CORE Core,
+    _Out_ PDXGK_PERIODIC_INTERRUPT_CORE_ENTRY Entry);
 
 #endif /* _DXGK_FENCE_CORE_H_ */

@@ -131,43 +131,315 @@ DxgkMonitoredFenceCoreCanSignal(
     return STATUS_SUCCESS;
 }
 
-/* --- periodic monitored fences --------------------------------------- */
+/* --- periodic monitored-fence notification lifetime ----------------- */
+
+VOID
+DxgkPeriodicNotificationCoreInitialize(
+    _Out_ PDXGK_PERIODIC_NOTIFICATION_CORE Notification)
+{
+    RtlZeroMemory(Notification, sizeof(*Notification));
+}
 
 NTSTATUS
-DxgkPeriodicFenceCoreBind(
-    _Out_ PDXGK_PERIODIC_FENCE Fence,
+DxgkPeriodicNotificationCoreBeginCreate(
+    _Inout_ PDXGK_PERIODIC_NOTIFICATION_CORE Notification,
     _In_ ULONG VidPnTargetId,
-    _In_ ULONG PeriodInVSyncs,
-    _In_ ULONGLONG InitialValue)
+    _In_ ULONG NotificationId)
 {
-    RtlZeroMemory(Fence, sizeof(*Fence));
-    /* A zero period would advance the fence on nothing at all. */
-    if (PeriodInVSyncs == 0)
+    if (Notification == NULL || NotificationId == 0)
         return STATUS_INVALID_PARAMETER;
-    Fence->VidPnTargetId = VidPnTargetId;
-    Fence->PeriodInVSyncs = PeriodInVSyncs;
-    Fence->CurrentValue = InitialValue;
-    Fence->Bound = TRUE;
+    if (InterlockedCompareExchange(&Notification->State,
+                                   DxgkPeriodicNotificationCreating,
+                                   DxgkPeriodicNotificationNone) !=
+        DxgkPeriodicNotificationNone)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    Notification->VidPnTargetId = VidPnTargetId;
+    Notification->NotificationId = NotificationId;
+    Notification->NotificationHandle = NULL;
+    KeMemoryBarrier();
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+DxgkPeriodicNotificationCoreCompleteCreate(
+    _Inout_ PDXGK_PERIODIC_NOTIFICATION_CORE Notification,
+    _In_ PVOID NotificationHandle)
+{
+    if (Notification == NULL || NotificationHandle == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (InterlockedCompareExchange(&Notification->State,
+                                   DxgkPeriodicNotificationCreating,
+                                   DxgkPeriodicNotificationCreating) !=
+        DxgkPeriodicNotificationCreating)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    Notification->NotificationHandle = NotificationHandle;
+    KeMemoryBarrier();
+    if (InterlockedCompareExchange(&Notification->State,
+                                   DxgkPeriodicNotificationActive,
+                                   DxgkPeriodicNotificationCreating) !=
+        DxgkPeriodicNotificationCreating)
+    {
+        Notification->NotificationHandle = NULL;
+        return STATUS_INVALID_DEVICE_STATE;
+    }
     return STATUS_SUCCESS;
 }
 
 BOOLEAN
-DxgkPeriodicFenceCoreNotifyVSync(
-    _Inout_ PDXGK_PERIODIC_FENCE Fence,
-    _In_ ULONG VidPnTargetId)
+DxgkPeriodicNotificationCoreCancelCreate(
+    _Inout_ PDXGK_PERIODIC_NOTIFICATION_CORE Notification)
 {
-    if (!Fence->Bound)
+    if (Notification == NULL ||
+        InterlockedCompareExchange(&Notification->State,
+                                   DxgkPeriodicNotificationNone,
+                                   DxgkPeriodicNotificationCreating) !=
+        DxgkPeriodicNotificationCreating)
+    {
         return FALSE;
-    /* A periodic fence tracks one display target; another target's vsync is
-     * not its clock. */
-    if (Fence->VidPnTargetId != VidPnTargetId)
-        return FALSE;
-    Fence->VSyncsSinceAdvance++;
-    if (Fence->VSyncsSinceAdvance < Fence->PeriodInVSyncs)
-        return FALSE;
-    Fence->VSyncsSinceAdvance = 0;
-    Fence->CurrentValue++;
+    }
+    Notification->NotificationHandle = NULL;
+    Notification->NotificationId = 0;
+    Notification->VidPnTargetId = 0;
     return TRUE;
+}
+
+BOOLEAN
+DxgkPeriodicNotificationCoreMatches(
+    _In_ const DXGK_PERIODIC_NOTIFICATION_CORE *Notification,
+    _In_ ULONG VidPnTargetId,
+    _In_ ULONG NotificationId)
+{
+    if (Notification == NULL || NotificationId == 0)
+        return FALSE;
+    if (InterlockedCompareExchange(
+            (volatile LONG *)&Notification->State,
+            DxgkPeriodicNotificationActive,
+            DxgkPeriodicNotificationActive) !=
+        DxgkPeriodicNotificationActive)
+    {
+        return FALSE;
+    }
+    return Notification->VidPnTargetId == VidPnTargetId &&
+           Notification->NotificationId == NotificationId;
+}
+
+BOOLEAN
+DxgkPeriodicNotificationCoreClaimDestroy(
+    _Inout_ PDXGK_PERIODIC_NOTIFICATION_CORE Notification,
+    _Out_ PVOID *NotificationHandle)
+{
+    PVOID Handle;
+
+    if (NotificationHandle == NULL)
+        return FALSE;
+    *NotificationHandle = NULL;
+    if (Notification == NULL ||
+        InterlockedCompareExchange(&Notification->State,
+                                   DxgkPeriodicNotificationDestroyed,
+                                   DxgkPeriodicNotificationActive) !=
+        DxgkPeriodicNotificationActive)
+    {
+        return FALSE;
+    }
+    KeMemoryBarrier();
+    Handle = Notification->NotificationHandle;
+    ASSERT(Handle != NULL);
+    Notification->NotificationHandle = NULL;
+    *NotificationHandle = Handle;
+    return Handle != NULL;
+}
+
+/* --- periodic interrupt ISR-to-DPC handoff ---------------------------- */
+
+VOID
+DxgkPeriodicInterruptCoreInitialize(
+    _Out_ PDXGK_PERIODIC_INTERRUPT_CORE Core)
+{
+    RtlZeroMemory(Core, sizeof(*Core));
+}
+
+VOID
+DxgkPeriodicInterruptCoreEnableLocked(
+    _Inout_ PDXGK_PERIODIC_INTERRUPT_CORE Core)
+{
+    RtlZeroMemory(Core->Entries, sizeof(Core->Entries));
+    Core->DpcActive = FALSE;
+    Core->OverflowCount = 0;
+    InterlockedExchange(
+        &Core->State,
+        DxgkPeriodicInterruptAccepting);
+}
+
+VOID
+DxgkPeriodicInterruptCoreDisableLocked(
+    _Inout_ PDXGK_PERIODIC_INTERRUPT_CORE Core)
+{
+    InterlockedExchange(
+        &Core->State,
+        DxgkPeriodicInterruptDisabled);
+    Core->DpcActive = FALSE;
+    RtlZeroMemory(Core->Entries, sizeof(Core->Entries));
+}
+
+static NTSTATUS
+DxgkpPeriodicInterruptCoreOverflowLocked(
+    _Inout_ PDXGK_PERIODIC_INTERRUPT_CORE Core,
+    _Out_ PBOOLEAN QueueDpc,
+    _In_ NTSTATUS Status)
+{
+    if (Core->OverflowCount != (ULONGLONG)-1)
+        ++Core->OverflowCount;
+    InterlockedExchange(
+        &Core->State,
+        DxgkPeriodicInterruptOverflowed);
+    if (!Core->DpcActive)
+    {
+        Core->DpcActive = TRUE;
+        *QueueDpc = TRUE;
+    }
+    return Status;
+}
+
+NTSTATUS
+DxgkPeriodicInterruptCoreEnqueueLocked(
+    _Inout_ PDXGK_PERIODIC_INTERRUPT_CORE Core,
+    _In_ ULONG VidPnTargetId,
+    _In_ ULONG NotificationId,
+    _In_ ULONGLONG NotificationCount,
+    _Out_ PBOOLEAN QueueDpc)
+{
+    PDXGK_PERIODIC_INTERRUPT_CORE_ENTRY FreeEntry = NULL;
+    ULONG Index;
+    LONG State;
+
+    if (Core == NULL || QueueDpc == NULL ||
+        NotificationId == 0 || NotificationCount == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    *QueueDpc = FALSE;
+    State = InterlockedCompareExchange(
+        &Core->State,
+        DxgkPeriodicInterruptDisabled,
+        DxgkPeriodicInterruptDisabled);
+    if (State == DxgkPeriodicInterruptDisabled)
+        return STATUS_DEVICE_NOT_READY;
+    if (State == DxgkPeriodicInterruptOverflowed)
+        return STATUS_BUFFER_OVERFLOW;
+
+    for (Index = 0;
+         Index < DXGK_PERIODIC_INTERRUPT_CORE_CAPACITY;
+         ++Index)
+    {
+        PDXGK_PERIODIC_INTERRUPT_CORE_ENTRY Candidate =
+            &Core->Entries[Index];
+
+        if (!Candidate->InUse)
+        {
+            if (FreeEntry == NULL)
+                FreeEntry = Candidate;
+            continue;
+        }
+        if (Candidate->NotificationId != NotificationId)
+            continue;
+        if (Candidate->VidPnTargetId != VidPnTargetId)
+        {
+            return DxgkpPeriodicInterruptCoreOverflowLocked(
+                Core,
+                QueueDpc,
+                STATUS_INVALID_PARAMETER);
+        }
+        if (NotificationCount >
+            (ULONGLONG)-1 - Candidate->PendingCount)
+        {
+            return DxgkpPeriodicInterruptCoreOverflowLocked(
+                Core,
+                QueueDpc,
+                STATUS_INTEGER_OVERFLOW);
+        }
+        Candidate->PendingCount += NotificationCount;
+        if (!Core->DpcActive)
+        {
+            Core->DpcActive = TRUE;
+            *QueueDpc = TRUE;
+        }
+        return STATUS_SUCCESS;
+    }
+
+    if (FreeEntry == NULL)
+    {
+        return DxgkpPeriodicInterruptCoreOverflowLocked(
+            Core,
+            QueueDpc,
+            STATUS_BUFFER_OVERFLOW);
+    }
+
+    FreeEntry->VidPnTargetId = VidPnTargetId;
+    FreeEntry->NotificationId = NotificationId;
+    FreeEntry->PendingCount = NotificationCount;
+    KeMemoryBarrier();
+    FreeEntry->InUse = TRUE;
+    if (!Core->DpcActive)
+    {
+        Core->DpcActive = TRUE;
+        *QueueDpc = TRUE;
+    }
+    return STATUS_SUCCESS;
+}
+
+BOOLEAN
+DxgkPeriodicInterruptCoreDequeueLocked(
+    _Inout_ PDXGK_PERIODIC_INTERRUPT_CORE Core,
+    _Out_ PDXGK_PERIODIC_INTERRUPT_CORE_ENTRY Entry)
+{
+    ULONG Index;
+
+    if (Core == NULL || Entry == NULL)
+        return FALSE;
+    RtlZeroMemory(Entry, sizeof(*Entry));
+    if (InterlockedCompareExchange(
+            &Core->State,
+            DxgkPeriodicInterruptDisabled,
+            DxgkPeriodicInterruptDisabled) !=
+        DxgkPeriodicInterruptAccepting)
+    {
+        /*
+         * Overflow means at least one count was lost or malformed.  Do not
+         * publish the retained subset as though the stream were complete.
+         * The sticky state remains for the adapter DPC to report/recover.
+         */
+        Core->DpcActive = FALSE;
+        RtlZeroMemory(Core->Entries, sizeof(Core->Entries));
+        return FALSE;
+    }
+
+    for (Index = 0;
+         Index < DXGK_PERIODIC_INTERRUPT_CORE_CAPACITY;
+         ++Index)
+    {
+        PDXGK_PERIODIC_INTERRUPT_CORE_ENTRY Candidate =
+            &Core->Entries[Index];
+
+        if (!Candidate->InUse)
+            continue;
+        *Entry = *Candidate;
+        RtlZeroMemory(Candidate, sizeof(*Candidate));
+        return TRUE;
+    }
+
+    /*
+     * Exit handshake: clear DpcActive only while the ISR-visible table is
+     * proven empty under the shared interrupt lock.  A later ISR observes
+     * FALSE, changes it to TRUE, and queues a fresh DPC; an earlier ISR was
+     * already visible to this scan and is drained by this invocation.
+     */
+    Core->DpcActive = FALSE;
+    return FALSE;
 }
 
 /* EOF */

@@ -46,24 +46,24 @@ DxgkpIsListEntryLinked(
 static BOOLEAN DxgkpReferenceSyncObject(_In_ PVOID Object);
 static NTSTATUS DxgkpSyncObjectPublishRetiredFence(_In_ PDXGKRNL_SYNC_OBJECT SyncObj, _In_ UINT64 FenceValue);
 static PDXGKRNL_SYNC_OBJECT DxgkpSyncResolveShared(_In_ PDXGKRNL_SYNC_OBJECT SyncObj);
+static VOID DxgkpSyncDestroyPeriodicNotification(_Inout_ PDXGKRNL_SYNC_OBJECT SyncObj);
 
 /* ========================================================================
  * Sharing and periodic registries
  *
  * A shareable sync object is published in one global namespace keyed by its
  * share handle; an opener resolves that handle and creates an alias bound to
- * the same authoritative object.  Periodic monitored fences are registered
- * per adapter so the vertical-blank path can advance them.
+ * the same authoritative object.  WDDM 2.2 periodic monitored fences use a
+ * separate DISPATCH-safe registry keyed by the stable KMD NotificationID.
  * ====================================================================== */
 
 static LONG DxgkSyncShareInitialized = 0;
 static FAST_MUTEX DxgkSyncShareLock;
+static KSPIN_LOCK DxgkSyncPeriodicLock;
 static LIST_ENTRY DxgkSyncShareListHead;
 static LIST_ENTRY DxgkSyncPeriodicListHead;
 static volatile LONG DxgkSyncNextShareHandle = 0;
-/* Read from the vertical-blank DPC to decide whether a periodic advance is
- * owed; the list itself is only walked at PASSIVE_LEVEL. */
-static volatile LONG DxgkSyncPeriodicCount = 0;
+static volatile LONG DxgkSyncNextPeriodicNotificationId = 0;
 static CONST ULONG DxgkSyncShareHandleCookie = 0x4E595353; /* "SSYN" */
 
 static VOID
@@ -74,6 +74,7 @@ DxgkpSyncShareInitialize(VOID)
     if (State == 0)
     {
         ExInitializeFastMutex(&DxgkSyncShareLock);
+        KeInitializeSpinLock(&DxgkSyncPeriodicLock);
         InitializeListHead(&DxgkSyncShareListHead);
         InitializeListHead(&DxgkSyncPeriodicListHead);
         InterlockedExchange(&DxgkSyncShareInitialized, 2);
@@ -139,102 +140,485 @@ DxgkpSyncUnpublishShare(
     }
     SyncObj->Shareable = FALSE;
     SyncObj->GlobalShareHandle = 0;
-    if (SyncObj->Periodic && DxgkpIsListEntryLinked(&SyncObj->PeriodicListEntry))
-    {
-        RemoveEntryList(&SyncObj->PeriodicListEntry);
-        InitializeListHead(&SyncObj->PeriodicListEntry);
-        InterlockedDecrement(&DxgkSyncPeriodicCount);
-    }
     ExReleaseFastMutex(&DxgkSyncShareLock);
 }
 
 BOOLEAN
 DxgkSyncHasPeriodicFences(VOID)
 {
-    return InterlockedCompareExchange(&DxgkSyncPeriodicCount, 0, 0) != 0;
-}
-
-static VOID
-DxgkpSyncRegisterPeriodic(
-    _Inout_ PDXGKRNL_SYNC_OBJECT SyncObj)
-{
-    DxgkpSyncShareInitialize();
-    ExAcquireFastMutex(&DxgkSyncShareLock);
-    if (!DxgkpIsListEntryLinked(&SyncObj->PeriodicListEntry))
-    {
-        InsertTailList(&DxgkSyncPeriodicListHead, &SyncObj->PeriodicListEntry);
-        InterlockedIncrement(&DxgkSyncPeriodicCount);
-    }
-    ExReleaseFastMutex(&DxgkSyncShareLock);
+    /*
+     * Native WDDM 2.2 periodic fences are advanced only by interrupt type 14.
+     * Reporting them to the generic VSync worker would make that worker also
+     * advance them and double-signal one physical notification.
+     */
+    return FALSE;
 }
 
 /*
- * DxgkSyncAdvancePeriodicFences
- *
- * Advances every periodic monitored fence bound to a source that just
- * completed a vertical blank.  The value page is published so a user-mode or
- * GPU reader observes the new value, and CPU waiters are released through the
- * same registry ordinary signals use.
- *
- * IRQL: PASSIVE_LEVEL
+ * The old software VSync surrogate is deliberately inert.  A KMD-created
+ * periodic notification can fire at a requested pre-VSync offset and carries
+ * its exact NotificationID; a generic CRTC_VSYNC pulse proves neither.
  */
 VOID
 DxgkSyncAdvancePeriodicFences(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId)
 {
-    PDXGKRNL_SYNC_OBJECT Pending[8];
-    ULONGLONG Values[RTL_NUMBER_OF(Pending)];
-    PLIST_ENTRY Resume = NULL;
-    ULONG Count;
-    ULONG Index;
+    UNREFERENCED_PARAMETER(Adapter);
+    UNREFERENCED_PARAMETER(VidPnSourceId);
+}
+
+static BOOLEAN
+DxgkpSyncPeriodicCallbacksSupported(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    if (Adapter == NULL ||
+        Adapter->MiniportContext == NULL ||
+        Adapter->MiniportContext->UseDodLayout ||
+        REACTOS_WDDM_TARGET_LEVEL < DXGK_CAPS_CORE_LEVEL_WDDM_2_2 ||
+        !DxgkCapsCoreInterfaceVersionAtLeast(
+            Adapter->MiniportContext->InitData.s.Version,
+            DXGK_CAPS_CORE_LEVEL_WDDM_2_2))
+    {
+        return FALSE;
+    }
+    return DXGK_CB_FULL(
+               Adapter,
+               DxgkDdiCreatePeriodicFrameNotification) != NULL &&
+           DXGK_CB_FULL(
+               Adapter,
+               DxgkDdiDestroyPeriodicFrameNotification) != NULL;
+}
+
+/*
+ * Reserve a globally unique nonzero ID before calling the KMD.  CREATING
+ * entries participate in collision detection but are not resolvable by the
+ * interrupt path, so callback failure cannot publish a half-created object.
+ */
+static NTSTATUS
+DxgkpSyncReservePeriodicNotification(
+    _Inout_ PDXGKRNL_SYNC_OBJECT SyncObj)
+{
+    KIRQL OldIrql;
     PLIST_ENTRY Entry;
 
-    if (Adapter == NULL || InterlockedCompareExchange(&DxgkSyncShareInitialized, 2, 2) != 2)
+    DxgkpSyncShareInitialize();
+    for (;;)
+    {
+        ULONG NotificationId;
+        BOOLEAN Collision = FALSE;
+        NTSTATUS Status;
+        ULONG AdapterNotificationCount = 0;
+
+        do
+        {
+            NotificationId =
+                (ULONG)InterlockedIncrement(
+                    &DxgkSyncNextPeriodicNotificationId);
+        } while (NotificationId == 0);
+
+        KeAcquireSpinLock(&DxgkSyncPeriodicLock, &OldIrql);
+        if (DxgkpIsListEntryLinked(&SyncObj->PeriodicListEntry) ||
+            InterlockedCompareExchange(
+                &SyncObj->PeriodicNotification.State,
+                DxgkPeriodicNotificationNone,
+                DxgkPeriodicNotificationNone) !=
+            DxgkPeriodicNotificationNone)
+        {
+            KeReleaseSpinLock(&DxgkSyncPeriodicLock, OldIrql);
+            return STATUS_INVALID_DEVICE_STATE;
+        }
+        for (Entry = DxgkSyncPeriodicListHead.Flink;
+             Entry != &DxgkSyncPeriodicListHead;
+             Entry = Entry->Flink)
+        {
+            PDXGKRNL_SYNC_OBJECT Candidate =
+                CONTAINING_RECORD(
+                    Entry,
+                    DXGKRNL_SYNC_OBJECT,
+                    PeriodicListEntry);
+
+            if (Candidate->PeriodicNotification.NotificationId ==
+                NotificationId)
+            {
+                Collision = TRUE;
+            }
+            if (Candidate->Device != NULL &&
+                SyncObj->Device != NULL &&
+                Candidate->Device->Adapter ==
+                    SyncObj->Device->Adapter)
+            {
+                ++AdapterNotificationCount;
+            }
+        }
+        if (AdapterNotificationCount >=
+            DXGKRNL_PERIODIC_NOTIFICATION_CAPACITY)
+        {
+            KeReleaseSpinLock(&DxgkSyncPeriodicLock, OldIrql);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        if (!Collision)
+        {
+            Status = DxgkPeriodicNotificationCoreBeginCreate(
+                &SyncObj->PeriodicNotification,
+                SyncObj->PeriodicVidPnTargetId,
+                NotificationId);
+            if (NT_SUCCESS(Status))
+                InsertTailList(
+                    &DxgkSyncPeriodicListHead,
+                    &SyncObj->PeriodicListEntry);
+            KeReleaseSpinLock(&DxgkSyncPeriodicLock, OldIrql);
+            return Status;
+        }
+        KeReleaseSpinLock(&DxgkSyncPeriodicLock, OldIrql);
+    }
+}
+
+static VOID
+DxgkpSyncCancelPeriodicReservation(
+    _Inout_ PDXGKRNL_SYNC_OBJECT SyncObj)
+{
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&DxgkSyncPeriodicLock, &OldIrql);
+    if (InterlockedCompareExchange(
+            &SyncObj->PeriodicNotification.State,
+            DxgkPeriodicNotificationCreating,
+            DxgkPeriodicNotificationCreating) ==
+        DxgkPeriodicNotificationCreating)
+    {
+        if (DxgkpIsListEntryLinked(&SyncObj->PeriodicListEntry))
+        {
+            RemoveEntryList(&SyncObj->PeriodicListEntry);
+            InitializeListHead(&SyncObj->PeriodicListEntry);
+        }
+        (VOID)DxgkPeriodicNotificationCoreCancelCreate(
+            &SyncObj->PeriodicNotification);
+    }
+    KeReleaseSpinLock(&DxgkSyncPeriodicLock, OldIrql);
+}
+
+static NTSTATUS
+DxgkpSyncCallDestroyPeriodicNotification(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ HANDLE NotificationHandle)
+{
+    DXGKARG_DESTROYPERIODICFRAMENOTIFICATION DestroyArgs;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Adapter == NULL ||
+        Adapter->MiniportContext == NULL ||
+        NotificationHandle == NULL ||
+        DXGK_CB_FULL(
+            Adapter,
+            DxgkDdiDestroyPeriodicFrameNotification) == NULL)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+    if (!DxgkAcquireKmdCall(Adapter))
+        return STATUS_DELETE_PENDING;
+
+    RtlZeroMemory(&DestroyArgs, sizeof(DestroyArgs));
+    DestroyArgs.hNotification = NotificationHandle;
+    DestroyArgs.hAdapter = Adapter->MiniportDeviceContext;
+    _SEH2_TRY
+    {
+        Status =
+            DXGK_CB_FULL(
+                Adapter,
+                DxgkDdiDestroyPeriodicFrameNotification)(&DestroyArgs);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    DxgkReleaseKmdCall(Adapter);
+    return Status;
+}
+
+static VOID
+DxgkpSyncDestroyPeriodicNotification(
+    _Inout_ PDXGKRNL_SYNC_OBJECT SyncObj)
+{
+    PDXGKRNL_ADAPTER Adapter;
+    PVOID NotificationHandle = NULL;
+    KIRQL OldIrql;
+    BOOLEAN Claimed;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (SyncObj == NULL || !SyncObj->Periodic)
         return;
 
-    /* Walk the whole list in bounded batches, resuming where the previous
-     * batch stopped, so a target with more registered fences than one batch
-     * holds still advances every one of them on this pulse. */
-    do
+    KeAcquireSpinLock(&DxgkSyncPeriodicLock, &OldIrql);
+    Claimed = DxgkPeriodicNotificationCoreClaimDestroy(
+        &SyncObj->PeriodicNotification,
+        &NotificationHandle);
+    if (Claimed &&
+        DxgkpIsListEntryLinked(&SyncObj->PeriodicListEntry))
     {
-        Count = 0;
-        ExAcquireFastMutex(&DxgkSyncShareLock);
-        /* A resume point captured without the lock may have been unlinked;
-         * an unlinked entry points at itself, so restart from the head. */
-        Entry = Resume;
-        if (Entry == NULL || Entry->Flink == Entry)
-            Entry = DxgkSyncPeriodicListHead.Flink;
-        Resume = NULL;
-        for (; Entry != &DxgkSyncPeriodicListHead; Entry = Entry->Flink)
-        {
-            PDXGKRNL_SYNC_OBJECT SyncObj = CONTAINING_RECORD(Entry, DXGKRNL_SYNC_OBJECT, PeriodicListEntry);
+        RemoveEntryList(&SyncObj->PeriodicListEntry);
+        InitializeListHead(&SyncObj->PeriodicListEntry);
+    }
+    KeReleaseSpinLock(&DxgkSyncPeriodicLock, OldIrql);
+    if (!Claimed)
+        return;
 
-            if (Count == RTL_NUMBER_OF(Pending))
+    /*
+     * An interrupt DPC that resolved the entry before removal owns this
+     * rundown reference.  Drain it before telling the KMD to destroy the
+     * notification or releasing the monitored page.
+     */
+    ExWaitForRundownProtectionRelease(
+        &SyncObj->PeriodicNotificationRundown);
+    Adapter =
+        SyncObj->Device != NULL ? SyncObj->Device->Adapter : NULL;
+    Status = DxgkpSyncCallDestroyPeriodicNotification(
+        Adapter,
+        (HANDLE)NotificationHandle);
+    if (!NT_SUCCESS(Status))
+    {
+        DXGKRNL_ERR(
+            "DXGKRNL: periodic notification %lu destroy failed 0x%08lX\n",
+            SyncObj->PeriodicNotification.NotificationId,
+            Status);
+    }
+}
+
+static NTSTATUS
+DxgkpSyncCreatePeriodicNotification(
+    _Inout_ PDXGKRNL_SYNC_OBJECT SyncObj)
+{
+    DXGKARG_CREATEPERIODICFRAMENOTIFICATION CreateArgs;
+    PDXGKRNL_ADAPTER Adapter;
+    PVOID RollbackHandle = NULL;
+    KIRQL OldIrql;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (SyncObj == NULL ||
+        !SyncObj->Periodic ||
+        SyncObj->Device == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    Adapter = SyncObj->Device->Adapter;
+    if (!DxgkpSyncPeriodicCallbacksSupported(Adapter))
+        return STATUS_NOT_SUPPORTED;
+
+    Status = DxgkpSyncReservePeriodicNotification(SyncObj);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlZeroMemory(&CreateArgs, sizeof(CreateArgs));
+    CreateArgs.hAdapter = Adapter->MiniportDeviceContext;
+    CreateArgs.VidPnTargetId = SyncObj->PeriodicVidPnTargetId;
+    CreateArgs.Time = SyncObj->PeriodicTime;
+    CreateArgs.NotificationID =
+        SyncObj->PeriodicNotification.NotificationId;
+    if (!DxgkAcquireKmdCall(Adapter))
+    {
+        DxgkpSyncCancelPeriodicReservation(SyncObj);
+        return STATUS_DELETE_PENDING;
+    }
+    _SEH2_TRY
+    {
+        Status =
+            DXGK_CB_FULL(
+                Adapter,
+                DxgkDdiCreatePeriodicFrameNotification)(&CreateArgs);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    DxgkReleaseKmdCall(Adapter);
+    if (!NT_SUCCESS(Status))
+    {
+        DxgkpSyncCancelPeriodicReservation(SyncObj);
+        return Status;
+    }
+    if (CreateArgs.hNotification == NULL)
+    {
+        DxgkpSyncCancelPeriodicReservation(SyncObj);
+        return STATUS_DRIVER_INTERNAL_ERROR;
+    }
+
+    /*
+     * Complete and publish under the registry lock.  Device teardown can set
+     * Destroying while the KMD callback runs; in that case claim the newly
+     * created handle for immediate rollback without ever exposing it to an
+     * interrupt lookup.
+     */
+    KeAcquireSpinLock(&DxgkSyncPeriodicLock, &OldIrql);
+    Status = DxgkPeriodicNotificationCoreCompleteCreate(
+        &SyncObj->PeriodicNotification,
+        CreateArgs.hNotification);
+    if (NT_SUCCESS(Status) &&
+        (InterlockedCompareExchange(
+             &SyncObj->Destroying, 0, 0) != 0 ||
+         InterlockedCompareExchange(
+             &SyncObj->Device->Destroying, 0, 0) != 0 ||
+         InterlockedCompareExchange(
+             &SyncObj->Device->ExecutionState, 0, 0) !=
+             D3DKMT_DEVICEEXECUTION_ACTIVE))
+    {
+        if (DxgkPeriodicNotificationCoreClaimDestroy(
+                &SyncObj->PeriodicNotification,
+                &RollbackHandle))
+        {
+            if (DxgkpIsListEntryLinked(
+                    &SyncObj->PeriodicListEntry))
             {
-                Resume = Entry;
-                break;
+                RemoveEntryList(&SyncObj->PeriodicListEntry);
+                InitializeListHead(
+                    &SyncObj->PeriodicListEntry);
             }
-            if (!SyncObj->Periodic || SyncObj->PeriodicVidPnTargetId != VidPnSourceId)
-                continue;
-            if (SyncObj->Device == NULL || SyncObj->Device->Adapter != Adapter)
-                continue;
-            if (!DxgkpReferenceSyncObject(SyncObj))
-                continue;
-            /* The publish path owns the value update, so name the next value
-             * rather than advancing the field here. */
-            Values[Count] = (ULONGLONG)InterlockedCompareExchange64(&SyncObj->FenceValue, 0, 0) + 1;
-            Pending[Count] = SyncObj;
-            Count++;
         }
-        ExReleaseFastMutex(&DxgkSyncShareLock);
-
-        for (Index = 0; Index < Count; ++Index)
+        Status = STATUS_DELETE_PENDING;
+    }
+    else if (!NT_SUCCESS(Status))
+    {
+        if (DxgkpIsListEntryLinked(&SyncObj->PeriodicListEntry))
         {
-            (VOID)DxgkpSyncObjectPublishRetiredFence(Pending[Index], Values[Index]);
-            DxgkpDereferenceSyncObject(Pending[Index]);
+            RemoveEntryList(&SyncObj->PeriodicListEntry);
+            InitializeListHead(&SyncObj->PeriodicListEntry);
         }
-    } while (Resume != NULL);
+        (VOID)DxgkPeriodicNotificationCoreCancelCreate(
+            &SyncObj->PeriodicNotification);
+    }
+    KeReleaseSpinLock(&DxgkSyncPeriodicLock, OldIrql);
+
+    if (!NT_SUCCESS(Status))
+    {
+        if (RollbackHandle == NULL)
+            RollbackHandle = CreateArgs.hNotification;
+        (VOID)DxgkpSyncCallDestroyPeriodicNotification(
+            Adapter,
+            (HANDLE)RollbackHandle);
+    }
+    return Status;
+}
+
+/*
+ * Resolve one DXGK_INTERRUPT_PERIODIC_MONITORED_FENCE_SIGNALED payload.
+ * The adapter DPC calls this after copying the ISR payload into stable
+ * storage.  Registry lookup and fence publication are nonpaged and safe at
+ * DISPATCH_LEVEL; destruction removes the entry and drains the rundown.
+ */
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS
+DxgkSyncNotifyPeriodicFence(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID VidPnTargetId,
+    _In_ UINT NotificationId)
+{
+    return DxgkSyncNotifyPeriodicFenceCount(
+        Adapter,
+        VidPnTargetId,
+        NotificationId,
+        1);
+}
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS
+DxgkSyncNotifyPeriodicFenceCount(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID VidPnTargetId,
+    _In_ UINT NotificationId,
+    _In_ UINT64 NotificationCount)
+{
+    PDXGKRNL_SYNC_OBJECT SyncObj = NULL;
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+    NTSTATUS Status = STATUS_NOT_FOUND;
+
+    if (Adapter == NULL ||
+        NotificationId == 0 ||
+        NotificationCount == 0)
+        return STATUS_INVALID_PARAMETER;
+    if (InterlockedCompareExchange(
+            &DxgkSyncShareInitialized, 2, 2) != 2)
+    {
+        return STATUS_NOT_FOUND;
+    }
+
+    KeAcquireSpinLock(&DxgkSyncPeriodicLock, &OldIrql);
+    for (Entry = DxgkSyncPeriodicListHead.Flink;
+         Entry != &DxgkSyncPeriodicListHead;
+         Entry = Entry->Flink)
+    {
+        PDXGKRNL_SYNC_OBJECT Candidate =
+            CONTAINING_RECORD(
+                Entry,
+                DXGKRNL_SYNC_OBJECT,
+                PeriodicListEntry);
+
+        if (Candidate->PeriodicNotification.NotificationId !=
+            NotificationId)
+        {
+            continue;
+        }
+        if (Candidate->Device == NULL ||
+            Candidate->Device->Adapter != Adapter ||
+            Candidate->PeriodicVidPnTargetId != VidPnTargetId)
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+        if (!DxgkPeriodicNotificationCoreMatches(
+                &Candidate->PeriodicNotification,
+                VidPnTargetId,
+                NotificationId))
+        {
+            Status = STATUS_DEVICE_NOT_READY;
+            break;
+        }
+        if (InterlockedCompareExchange(
+                &Candidate->Destroying, 0, 0) != 0 ||
+            !ExAcquireRundownProtection(
+                &Candidate->PeriodicNotificationRundown))
+        {
+            Status = STATUS_DELETE_PENDING;
+            break;
+        }
+        SyncObj = Candidate;
+        Status = STATUS_SUCCESS;
+        break;
+    }
+    KeReleaseSpinLock(&DxgkSyncPeriodicLock, OldIrql);
+
+    if (SyncObj != NULL)
+    {
+        UINT64 CurrentValue;
+        UINT64 Value;
+
+        KeAcquireSpinLock(&SyncObj->PeriodicSignalLock, &OldIrql);
+        CurrentValue =
+            (UINT64)InterlockedCompareExchange64(
+                &SyncObj->FenceValue, 0, 0);
+        if (NotificationCount > (UINT64)-1 - CurrentValue)
+        {
+            Status = STATUS_INTEGER_OVERFLOW;
+        }
+        else
+        {
+            Value = CurrentValue + NotificationCount;
+            Status =
+                DxgkpSyncObjectPublishRetiredFence(
+                    SyncObj,
+                    Value);
+        }
+        KeReleaseSpinLock(
+            &SyncObj->PeriodicSignalLock,
+            OldIrql);
+        ExReleaseRundownProtection(
+            &SyncObj->PeriodicNotificationRundown);
+    }
+    return Status;
 }
 
 static BOOLEAN
@@ -304,12 +688,37 @@ static VOID
 DxgkpSyncReleaseMonitoredPage(
     _In_ PDXGKRNL_SYNC_OBJECT SyncObj)
 {
-    if (SyncObj->MonitoredValueGpuVa != 0 &&
-        SyncObj->Device != NULL &&
-        SyncObj->Device->ProcessRecord != NULL)
+    BOOLEAN QuarantineKernelPage = FALSE;
+
+    if (SyncObj->MonitoredValueGpuVa != 0)
     {
-        DxgkGpuVaUnmapFencePage(SyncObj->Device->ProcessRecord,
-                                SyncObj->MonitoredValueGpuVa);
+        NTSTATUS UnmapStatus;
+
+        if (SyncObj->Device != NULL &&
+            SyncObj->Device->ProcessRecord != NULL)
+        {
+            UnmapStatus =
+                DxgkGpuVaUnmapFencePage(SyncObj->Device->ProcessRecord,
+                                        SyncObj->MonitoredValueGpuVa);
+        }
+        else
+        {
+            UnmapStatus = STATUS_DEVICE_NOT_READY;
+        }
+        if (!NT_SUCCESS(UnmapStatus))
+        {
+            /*
+             * A stale GPU PTE may still name the nonpaged backing.  Reusing
+             * that page would turn a flush failure into GPU-accessible pool
+             * corruption, so deliberately quarantine it after removing the
+             * CPU mappings.
+             */
+            DXGKRNL_ERR("DXGKRNL: quarantining monitored-fence page %p after GPU VA 0x%I64x unmap failed 0x%08lX\n",
+                        SyncObj->MonitoredValueKernelVa,
+                        SyncObj->MonitoredValueGpuVa,
+                        UnmapStatus);
+            QuarantineKernelPage = TRUE;
+        }
         SyncObj->MonitoredValueGpuVa = 0;
     }
 
@@ -344,7 +753,8 @@ DxgkpSyncReleaseMonitoredPage(
 
     if (SyncObj->MonitoredValueKernelVa != NULL)
     {
-        ExFreePoolWithTag(SyncObj->MonitoredValueKernelVa, TAG_DXGK_SYNC);
+        if (!QuarantineKernelPage)
+            ExFreePoolWithTag(SyncObj->MonitoredValueKernelVa, TAG_DXGK_SYNC);
         SyncObj->MonitoredValueKernelVa = NULL;
     }
 
@@ -366,6 +776,7 @@ DxgkpDereferenceSyncObject(
         PDXGKRNL_SYNC_OBJECT Backing = SyncObj->BackingSyncObject;
 
         DxgkpSyncUnpublishShare(SyncObj);
+        DxgkpSyncDestroyPeriodicNotification(SyncObj);
         DxgkpSyncReleaseMonitoredPage(SyncObj);
         if (SyncObj->CpuNotificationEventReferenced)
             ObDereferenceObject(SyncObj->CpuNotificationEvent);
@@ -524,6 +935,13 @@ DxgkSyncObjectAttachMonitoredPage(
     Status = DxgkpReferenceSyncObjectByHandle(hSyncObject, PsGetCurrentProcess(), &SyncObj);
     if (!NT_SUCCESS(Status))
         return Status;
+    if ((SyncObj->PublicType != D3DDDI_MONITORED_FENCE &&
+         SyncObj->PublicType != D3DDDI_PERIODIC_MONITORED_FENCE) ||
+        SyncObj->MonitoredValueKernelVa != NULL)
+    {
+        DxgkpDereferenceSyncObject(SyncObj);
+        return STATUS_INVALID_PARAMETER;
+    }
 
     /* Pool allocations of PAGE_SIZE are page-aligned. */
     SyncObj->MonitoredValueKernelVa =
@@ -579,10 +997,16 @@ DxgkSyncObjectAttachMonitoredPage(
         D3DGPU_VIRTUAL_ADDRESS FenceGpuVa = 0;
 
         Status = DxgkGpuVaMapFencePage(SyncObj->Device->Adapter, SyncObj->Device->ProcessRecord, SyncObj->MonitoredValueKernelVa, &FenceGpuVa);
-        DxgkGpuVaFlushPageTableUpdates(SyncObj->Device->ProcessRecord);
-        if (NT_SUCCESS(Status))
-            SyncObj->MonitoredValueGpuVa = FenceGpuVa;
-        else
+        if (!NT_SUCCESS(Status))
+            goto Fail;
+        /*
+         * Publish ownership before flushing so a rejected invalidation takes
+         * the ordinary failure cleanup through UnmapFencePage.  That cleanup
+         * either proves the translation gone or quarantines the backing.
+         */
+        SyncObj->MonitoredValueGpuVa = FenceGpuVa;
+        Status = DxgkGpuVaFlushPageTableUpdates(SyncObj->Device->ProcessRecord);
+        if (!NT_SUCCESS(Status))
             goto Fail;
     }
 
@@ -594,7 +1018,6 @@ DxgkSyncObjectAttachMonitoredPage(
         goto Fail;
     }
     SyncObj->Flags = Flags;
-    SyncObj->PublicType = D3DDDI_MONITORED_FENCE;
     if ((InterlockedCompareExchange(&SyncObj->TdrAffected, 0, 0) != 0 || InterlockedCompareExchange(&SyncObj->Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE) && !Flags.NoSignal && !Flags.NoSignalMaxValueOnTdr)
         InterlockedExchange64(&SyncObj->FenceValue, -1);
     else
@@ -603,6 +1026,13 @@ DxgkSyncObjectAttachMonitoredPage(
     KeMemoryBarrier();
     ExReleaseFastMutex(&SyncObj->Device->DeviceMutex);
 
+    if (SyncObj->Periodic)
+    {
+        Status = DxgkpSyncCreatePeriodicNotification(SyncObj);
+        if (!NT_SUCCESS(Status))
+            goto Fail;
+    }
+
     *UserVa = SyncObj->MonitoredValueUserVa;
     if (GpuVa != NULL)
         *GpuVa = SyncObj->MonitoredValueGpuVa;
@@ -610,6 +1040,7 @@ DxgkSyncObjectAttachMonitoredPage(
     return STATUS_SUCCESS;
 
 Fail:
+    DxgkpSyncDestroyPeriodicNotification(SyncObj);
     DxgkpSyncReleaseMonitoredPage(SyncObj);
     DxgkpDereferenceSyncObject(SyncObj);
     return Status;
@@ -638,6 +1069,22 @@ DxgkpCreateSynchronizationObjectInternal(
         return STATUS_INVALID_PARAMETER;
     if (Info->Type == D3DDDI_CPU_NOTIFICATION && Info->CPUNotification.Event == NULL && !AllowMissingCpuNotificationEvent)
         return STATUS_INVALID_PARAMETER;
+    if ((Info->Type == D3DDDI_MONITORED_FENCE ||
+         Info->Type == D3DDDI_PERIODIC_MONITORED_FENCE) &&
+        (Info->Flags.TopOfPipeline || Info->Flags.Shared))
+    {
+        /*
+         * TopOfPipeline needs a real scheduler submission-boundary signal,
+         * and native sharing needs an NT synchronization-object/security
+         * contract.  The private global-handle alias is neither.
+         */
+        return STATUS_NOT_SUPPORTED;
+    }
+    if (Info->Type == D3DDDI_PERIODIC_MONITORED_FENCE &&
+        Info->PeriodicMonitoredFence.hAdapter == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
     /*
      * NoGPUAccess says the fence value gets no GPU-visible address, so nothing
      * on the GPU can read or write it.  Two combinations that asks for are
@@ -666,6 +1113,12 @@ DxgkpCreateSynchronizationObjectInternal(
     Status = DxgkReferenceOwnedDeviceByHandle(hDevice, PsGetCurrentProcess(), &Adapter, &Device);
     if (!NT_SUCCESS(Status))
         return Status;
+    if (Info->Type == D3DDDI_PERIODIC_MONITORED_FENCE &&
+        !DxgkpSyncPeriodicCallbacksSupported(Adapter))
+    {
+        DxgkDereferenceDevice(Device);
+        return STATUS_NOT_SUPPORTED;
+    }
     SyncObj = (PDXGKRNL_SYNC_OBJECT)ExAllocatePoolWithTag(NonPagedPool, sizeof(DXGKRNL_SYNC_OBJECT), TAG_DXGK_SYNC);
     if (SyncObj == NULL)
     {
@@ -711,6 +1164,7 @@ DxgkpCreateSynchronizationObjectInternal(
             SyncObj->FenceValue = 0;
             SyncObj->Periodic = TRUE;
             SyncObj->PeriodicVidPnTargetId = Info->PeriodicMonitoredFence.VidPnTargetId;
+            SyncObj->PeriodicTime = Info->PeriodicMonitoredFence.Time;
             InitialEventState = FALSE;
             break;
         case D3DDDI_CPU_NOTIFICATION:
@@ -724,6 +1178,11 @@ DxgkpCreateSynchronizationObjectInternal(
     InitializeListHead(&SyncObj->DeviceSyncObjListEntry);
     InitializeListHead(&SyncObj->GlobalShareListEntry);
     InitializeListHead(&SyncObj->PeriodicListEntry);
+    DxgkPeriodicNotificationCoreInitialize(
+        &SyncObj->PeriodicNotification);
+    ExInitializeRundownProtection(
+        &SyncObj->PeriodicNotificationRundown);
+    KeInitializeSpinLock(&SyncObj->PeriodicSignalLock);
     if (Info->Type == D3DDDI_CPU_NOTIFICATION && Info->CPUNotification.Event != NULL)
     {
         Status = ObReferenceObjectByHandle(Info->CPUNotification.Event, EVENT_MODIFY_STATE, *ExEventObjectType, UserMode, (PVOID *)&SyncObj->CpuNotificationEvent, NULL);
@@ -757,8 +1216,6 @@ DxgkpCreateSynchronizationObjectInternal(
     ExReleaseFastMutex(&Device->DeviceMutex);
     if (SyncObj->Flags.Shared)
         (VOID)DxgkpSyncPublishShare(SyncObj);
-    if (SyncObj->Periodic)
-        DxgkpSyncRegisterPeriodic(SyncObj);
     *SyncObjectHandle = SyncObj->Handle;
     DXGKRNL_TRACE("DxgkCreateSynchronizationObject: handle=0x%X type=%d shared=0x%X\n", SyncObj->Handle, SyncObj->Info.Type, SyncObj->GlobalShareHandle);
     return STATUS_SUCCESS;
@@ -1009,6 +1466,7 @@ DxgkDestroySynchronizationObject(
     }
     ExReleaseFastMutex(&SyncObj->Device->DeviceMutex);
     DxgkSyncWaitCoreCancelObject(&SyncObj->Device->SyncWaitRegistry, SyncObj, STATUS_DELETE_PENDING);
+    DxgkpSyncDestroyPeriodicNotification(SyncObj);
     KeSetEvent(&SyncObj->CpuEvent, IO_NO_INCREMENT, FALSE);
 
     DXGKRNL_TRACE("DxgkDestroySynchronizationObject: handle=0x%X\n", pDestroySyncObject->hSyncObject);
@@ -1112,8 +1570,15 @@ DxgkpSyncPublishAdmission(
     for (Index = 0; Index < Admission->ObjectCount; ++Index)
     {
         PDXGKRNL_SYNC_OBJECT SyncObj = Admission->Objects[Index];
+        BOOLEAN InternalPeriodic =
+            !Admission->PublicCpuSignal &&
+            SyncObj != NULL &&
+            SyncObj->PublicType == D3DDDI_PERIODIC_MONITORED_FENCE;
 
-        if (SyncObj == NULL || SyncObj->Device != Admission->Device || SyncObj->PublicType != D3DDDI_MONITORED_FENCE || SyncObj->MonitoredValueKernelVa == NULL)
+        if (SyncObj == NULL || SyncObj->Device != Admission->Device ||
+            (SyncObj->PublicType != D3DDDI_MONITORED_FENCE &&
+             !InternalPeriodic) ||
+            SyncObj->MonitoredValueKernelVa == NULL)
             return STATUS_INVALID_PARAMETER;
         if (Admission->PublicCpuSignal && InterlockedCompareExchange(&SyncObj->Destroying, 0, 0) != 0)
             return STATUS_DELETE_PENDING;
@@ -1544,6 +2009,7 @@ DxgkCleanupDeviceSynchronizationObjects(
             continue;
         }
         ASSERT(InterlockedCompareExchange(&SyncObj->TeardownClaimed, 1, 1) == 1);
+        DxgkpSyncDestroyPeriodicNotification(SyncObj);
         DxgkRemoveOwnedHandleObject(DxgkHandleTypeSynchronizationObject, SyncObj);
         KeSetEvent(&SyncObj->CpuEvent, IO_NO_INCREMENT, FALSE);
         DxgkpDereferenceSyncObject(SyncObj);

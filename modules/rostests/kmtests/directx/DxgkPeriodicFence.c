@@ -1,93 +1,225 @@
 /*
  * PROJECT:     ReactOS kernel-mode tests
  * LICENSE:     GPL-2.0-or-later
- * PURPOSE:     Periodic monitored fences driven by display vsync
+ * PURPOSE:     WDDM 2.2 periodic monitored-fence notification lifetime
  *
- * A periodic fence is a clock bound to one display target.  If another
- * target's vsync advances it, a composition loop paces against the wrong
- * monitor and tears.
+ * A periodic notification is not interrupt-visible until the KMD create DDI
+ * succeeds and returns a handle.  Its target and stable NotificationID must
+ * both match interrupt 14, and its KMD handle must be destroyed exactly once.
  */
 
 #include <kmt_test.h>
 #include "fence_core.h"
 
-static VOID TestBinding(VOID)
+static VOID
+TestCreatePublication(VOID)
 {
-    DXGK_PERIODIC_FENCE Fence;
+    DXGK_PERIODIC_NOTIFICATION_CORE Notification;
+    PVOID KmdHandle = (PVOID)(ULONG_PTR)0x1234;
 
-    { NTSTATUS Observed = DxgkPeriodicFenceCoreBind(&Fence, 0, 1, 0); ok_eq_hex(Observed, STATUS_SUCCESS); }
-    ok_bool_true(Fence.Bound, "bound");
-    ok_eq_ulong(Fence.PeriodInVSyncs, 1UL);
+    DxgkPeriodicNotificationCoreInitialize(&Notification);
+    ok_eq_long(Notification.State, DxgkPeriodicNotificationNone);
+    ok_eq_hex(DxgkPeriodicNotificationCoreBeginCreate(
+                  &Notification, 2, 0),
+              STATUS_INVALID_PARAMETER);
+    ok_eq_hex(DxgkPeriodicNotificationCoreBeginCreate(
+                  &Notification, 2, 41),
+              STATUS_SUCCESS);
+    ok_eq_long(Notification.State, DxgkPeriodicNotificationCreating);
 
-    { NTSTATUS Observed = DxgkPeriodicFenceCoreBind(&Fence, 0, 1, 77); ok_eq_hex(Observed, STATUS_SUCCESS); }
-    ok_eq_ulonglong(Fence.CurrentValue, 77ULL);
+    /* A reserved ID is not yet visible to interrupt 14. */
+    ok_bool_false(DxgkPeriodicNotificationCoreMatches(
+                      &Notification, 2, 41),
+                  "creating notification was published");
+    ok_eq_hex(DxgkPeriodicNotificationCoreBeginCreate(
+                  &Notification, 2, 42),
+              STATUS_INVALID_DEVICE_STATE);
+    ok_eq_hex(DxgkPeriodicNotificationCoreCompleteCreate(
+                  &Notification, NULL),
+              STATUS_INVALID_PARAMETER);
+    ok_bool_false(DxgkPeriodicNotificationCoreMatches(
+                      &Notification, 2, 41),
+                  "NULL KMD handle was published");
 
-    /* A zero period would advance the fence on nothing at all. */
-    { NTSTATUS Observed = DxgkPeriodicFenceCoreBind(&Fence, 0, 0, 0); ok_eq_hex(Observed, STATUS_INVALID_PARAMETER); }
-    ok_bool_false(Fence.Bound, "a rejected bind leaves nothing bound");
+    ok_eq_hex(DxgkPeriodicNotificationCoreCompleteCreate(
+                  &Notification, KmdHandle),
+              STATUS_SUCCESS);
+    ok_eq_long(Notification.State, DxgkPeriodicNotificationActive);
+    ok_bool_true(DxgkPeriodicNotificationCoreMatches(
+                     &Notification, 2, 41),
+                 "active notification did not match");
+    ok_bool_false(DxgkPeriodicNotificationCoreMatches(
+                      &Notification, 3, 41),
+                  "foreign target matched");
+    ok_bool_false(DxgkPeriodicNotificationCoreMatches(
+                      &Notification, 2, 42),
+                  "foreign notification ID matched");
 }
 
-static VOID TestEveryVSync(VOID)
+static VOID
+TestRollbackAndExactDestroy(VOID)
 {
-    DXGK_PERIODIC_FENCE Fence;
-    ULONGLONG Value;
+    DXGK_PERIODIC_NOTIFICATION_CORE Notification;
+    PVOID DestroyHandle;
+    PVOID KmdHandle = (PVOID)(ULONG_PTR)0x5678;
 
-    { NTSTATUS Observed = DxgkPeriodicFenceCoreBind(&Fence, 1, 1, 0); ok_eq_hex(Observed, STATUS_SUCCESS); }
-    ok_bool_true(DxgkPeriodicFenceCoreNotifyVSync(&Fence, 1), "advances on its target");
-    ok_eq_ulonglong(Fence.CurrentValue, 1ULL);
-    ok_bool_true(DxgkPeriodicFenceCoreNotifyVSync(&Fence, 1), "advances again");
-    ok_eq_ulonglong(Fence.CurrentValue, 2ULL);
+    DxgkPeriodicNotificationCoreInitialize(&Notification);
+    ok_eq_hex(DxgkPeriodicNotificationCoreBeginCreate(
+                  &Notification, 7, 99),
+              STATUS_SUCCESS);
+    ok_bool_true(DxgkPeriodicNotificationCoreCancelCreate(
+                     &Notification),
+                 "create rollback lost");
+    ok_eq_long(Notification.State, DxgkPeriodicNotificationNone);
+    ok_bool_false(DxgkPeriodicNotificationCoreCancelCreate(
+                      &Notification),
+                  "create rolled back twice");
+    ok_eq_hex(DxgkPeriodicNotificationCoreCompleteCreate(
+                  &Notification, KmdHandle),
+              STATUS_INVALID_DEVICE_STATE);
 
-    /* Another display's vsync is not this fence's clock. */
-    Value = Fence.CurrentValue;
-    ok_bool_false(DxgkPeriodicFenceCoreNotifyVSync(&Fence, 0), "other target ignored");
-    ok_eq_ulonglong(Fence.CurrentValue, Value);
-    ok_bool_false(DxgkPeriodicFenceCoreNotifyVSync(&Fence, 99), "unknown target ignored");
-    ok_eq_ulonglong(Fence.CurrentValue, Value);
+    ok_eq_hex(DxgkPeriodicNotificationCoreBeginCreate(
+                  &Notification, 7, 100),
+              STATUS_SUCCESS);
+    ok_eq_hex(DxgkPeriodicNotificationCoreCompleteCreate(
+                  &Notification, KmdHandle),
+              STATUS_SUCCESS);
+
+    DestroyHandle = NULL;
+    ok_bool_true(DxgkPeriodicNotificationCoreClaimDestroy(
+                     &Notification, &DestroyHandle),
+                 "first destroy did not claim the KMD handle");
+    ok(DestroyHandle == KmdHandle,
+       "destroy returned %p, expected %p\n", DestroyHandle, KmdHandle);
+    ok_eq_long(Notification.State, DxgkPeriodicNotificationDestroyed);
+    ok_bool_false(DxgkPeriodicNotificationCoreMatches(
+                      &Notification, 7, 100),
+                  "destroyed notification remained published");
+
+    DestroyHandle = (PVOID)(ULONG_PTR)0xDEAD;
+    ok_bool_false(DxgkPeriodicNotificationCoreClaimDestroy(
+                      &Notification, &DestroyHandle),
+                  "second destroy claimed the handle again");
+    ok(DestroyHandle == NULL,
+       "losing destroy returned stale handle %p\n", DestroyHandle);
 }
 
-static VOID TestMultiVSyncPeriod(VOID)
+static VOID
+TestInterruptHandoff(VOID)
 {
-    DXGK_PERIODIC_FENCE Fence;
+    DXGK_PERIODIC_INTERRUPT_CORE Core;
+    DXGK_PERIODIC_INTERRUPT_CORE_ENTRY Entry;
+    BOOLEAN QueueDpc;
 
-    { NTSTATUS Observed = DxgkPeriodicFenceCoreBind(&Fence, 2, 3, 0); ok_eq_hex(Observed, STATUS_SUCCESS); }
-    ok_bool_false(DxgkPeriodicFenceCoreNotifyVSync(&Fence, 2), "first of three");
-    ok_eq_ulonglong(Fence.CurrentValue, 0ULL);
-    ok_bool_false(DxgkPeriodicFenceCoreNotifyVSync(&Fence, 2), "second of three");
-    ok_eq_ulonglong(Fence.CurrentValue, 0ULL);
-    ok_bool_true(DxgkPeriodicFenceCoreNotifyVSync(&Fence, 2), "third completes the period");
-    ok_eq_ulonglong(Fence.CurrentValue, 1ULL);
+    DxgkPeriodicInterruptCoreInitialize(&Core);
+    QueueDpc = TRUE;
+    ok_eq_hex(DxgkPeriodicInterruptCoreEnqueueLocked(
+                  &Core, 2, 41, 1, &QueueDpc),
+              STATUS_DEVICE_NOT_READY);
+    ok_bool_false(QueueDpc, "disabled handoff queued a DPC");
 
-    /* The counter restarts, so the period stays exactly three. */
-    ok_bool_false(DxgkPeriodicFenceCoreNotifyVSync(&Fence, 2), "counter restarted");
-    ok_bool_false(DxgkPeriodicFenceCoreNotifyVSync(&Fence, 2), "still counting");
-    ok_bool_true(DxgkPeriodicFenceCoreNotifyVSync(&Fence, 2), "second period");
-    ok_eq_ulonglong(Fence.CurrentValue, 2ULL);
+    DxgkPeriodicInterruptCoreEnableLocked(&Core);
+    QueueDpc = FALSE;
+    ok_eq_hex(DxgkPeriodicInterruptCoreEnqueueLocked(
+                  &Core, 2, 41, 1, &QueueDpc),
+              STATUS_SUCCESS);
+    ok_bool_true(QueueDpc, "first pulse did not queue the drain");
 
-    /* An ignored vsync for another target must not consume a tick of the
-     * period either, or the fence drifts against its own display. */
-    ok_bool_false(DxgkPeriodicFenceCoreNotifyVSync(&Fence, 2), "first tick");
-    ok_bool_false(DxgkPeriodicFenceCoreNotifyVSync(&Fence, 5), "foreign vsync");
-    ok_bool_false(DxgkPeriodicFenceCoreNotifyVSync(&Fence, 2), "second tick");
-    ok_bool_true(DxgkPeriodicFenceCoreNotifyVSync(&Fence, 2), "third tick still completes");
-    ok_eq_ulonglong(Fence.CurrentValue, 3ULL);
+    QueueDpc = TRUE;
+    ok_eq_hex(DxgkPeriodicInterruptCoreEnqueueLocked(
+                  &Core, 2, 41, 2, &QueueDpc),
+              STATUS_SUCCESS);
+    ok_bool_false(QueueDpc, "coalesced pulse queued a duplicate drain");
+
+    QueueDpc = TRUE;
+    ok_eq_hex(DxgkPeriodicInterruptCoreEnqueueLocked(
+                  &Core, 7, 99, 4, &QueueDpc),
+              STATUS_SUCCESS);
+    ok_bool_false(QueueDpc, "second ID queued a duplicate drain");
+
+    ok_bool_true(DxgkPeriodicInterruptCoreDequeueLocked(
+                     &Core, &Entry),
+                 "first pending ID was lost");
+    ok_eq_ulong(Entry.VidPnTargetId, 2);
+    ok_eq_ulong(Entry.NotificationId, 41);
+    ok_eq_ulonglong(Entry.PendingCount, 3);
+    ok_bool_true(DxgkPeriodicInterruptCoreDequeueLocked(
+                     &Core, &Entry),
+                 "second pending ID was lost");
+    ok_eq_ulong(Entry.VidPnTargetId, 7);
+    ok_eq_ulong(Entry.NotificationId, 99);
+    ok_eq_ulonglong(Entry.PendingCount, 4);
+    ok_bool_false(DxgkPeriodicInterruptCoreDequeueLocked(
+                      &Core, &Entry),
+                  "empty table produced an entry");
+    ok_bool_false(Core.DpcActive, "empty drain stayed active");
+
+    /*
+     * The empty transition is the ISR/DPC exit handshake.  A later pulse must
+     * observe the inactive drain and request a fresh DPC.
+     */
+    QueueDpc = FALSE;
+    ok_eq_hex(DxgkPeriodicInterruptCoreEnqueueLocked(
+                  &Core, 2, 41, 1, &QueueDpc),
+              STATUS_SUCCESS);
+    ok_bool_true(QueueDpc, "post-empty pulse could be stranded");
 }
 
-static VOID TestUnbound(VOID)
+static VOID
+TestInterruptOverflowIsSticky(VOID)
 {
-    DXGK_PERIODIC_FENCE Fence;
+    DXGK_PERIODIC_INTERRUPT_CORE Core;
+    DXGK_PERIODIC_INTERRUPT_CORE_ENTRY Entry;
+    BOOLEAN QueueDpc;
+    ULONG Index;
 
-    RtlZeroMemory(&Fence, sizeof(Fence));
-    ok_bool_false(DxgkPeriodicFenceCoreNotifyVSync(&Fence, 0), "unbound never advances");
-    ok_eq_ulonglong(Fence.CurrentValue, 0ULL);
+    DxgkPeriodicInterruptCoreInitialize(&Core);
+    DxgkPeriodicInterruptCoreEnableLocked(&Core);
+    for (Index = 0;
+         Index < DXGK_PERIODIC_INTERRUPT_CORE_CAPACITY;
+         ++Index)
+    {
+        QueueDpc = FALSE;
+        ok_eq_hex(DxgkPeriodicInterruptCoreEnqueueLocked(
+                      &Core, Index, Index + 1, 1, &QueueDpc),
+                  STATUS_SUCCESS);
+    }
+    QueueDpc = FALSE;
+    ok_eq_hex(DxgkPeriodicInterruptCoreEnqueueLocked(
+                  &Core, 100, 1000, 1, &QueueDpc),
+              STATUS_BUFFER_OVERFLOW);
+    ok_eq_long(Core.State, DxgkPeriodicInterruptOverflowed);
+    ok_eq_ulonglong(Core.OverflowCount, 1);
+    ok_bool_false(DxgkPeriodicInterruptCoreDequeueLocked(
+                      &Core, &Entry),
+                  "overflow published an incomplete subset");
+
+    QueueDpc = FALSE;
+    ok_eq_hex(DxgkPeriodicInterruptCoreEnqueueLocked(
+                  &Core, 2, 41, 1, &QueueDpc),
+              STATUS_BUFFER_OVERFLOW);
+    DxgkPeriodicInterruptCoreDisableLocked(&Core);
+    ok_eq_long(Core.State, DxgkPeriodicInterruptDisabled);
+
+    DxgkPeriodicInterruptCoreEnableLocked(&Core);
+    QueueDpc = FALSE;
+    ok_eq_hex(DxgkPeriodicInterruptCoreEnqueueLocked(
+                  &Core, 2, 41, (ULONGLONG)-1, &QueueDpc),
+              STATUS_SUCCESS);
+    QueueDpc = FALSE;
+    ok_eq_hex(DxgkPeriodicInterruptCoreEnqueueLocked(
+                  &Core, 2, 41, 1, &QueueDpc),
+              STATUS_INTEGER_OVERFLOW);
+    ok_eq_long(Core.State, DxgkPeriodicInterruptOverflowed);
+    ok_eq_ulonglong(Core.OverflowCount, 1);
 }
 
 START_TEST(DxgkPeriodicFence)
 {
-    TestBinding();
-    TestEveryVSync();
-    TestMultiVSyncPeriod();
-    TestUnbound();
+    TestCreatePublication();
+    TestRollbackAndExactDestroy();
+    TestInterruptHandoff();
+    TestInterruptOverflowIsSticky();
 }
 
 /* EOF */

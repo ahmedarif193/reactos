@@ -361,7 +361,10 @@ static void Test_MonitoredFence_AccessFlags(void)
     PFND3DKMT_DESTROYSYNCHRONIZATIONOBJECT pDestroy;
     PFND3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU pSignal;
     PFND3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU pWait;
+    PFND3DKMT_QUERYADAPTERINFO pQuery;
     D3DKMT_CREATESYNCHRONIZATIONOBJECT2 Create;
+    D3DKMT_QUERYADAPTERINFO Query;
+    D3DKMT_DRIVERVERSION DriverVersion = (D3DKMT_DRIVERVERSION)0;
     D3DKMT_HANDLE hAdapter;
     D3DKMT_HANDLE hDevice;
     D3DKMT_HANDLE Handle;
@@ -369,11 +372,13 @@ static void Test_MonitoredFence_AccessFlags(void)
     HANDLE Event;
     UINT64 Value;
     NTSTATUS Status;
+    BOOL DriverVersionKnown = FALSE;
 
     pCreate = (PFND3DKMT_CREATESYNCHRONIZATIONOBJECT2)LoadD3DKMTProc("D3DKMTCreateSynchronizationObject2");
     pDestroy = (PFND3DKMT_DESTROYSYNCHRONIZATIONOBJECT)LoadD3DKMTProc("D3DKMTDestroySynchronizationObject");
     pSignal = (PFND3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU)LoadD3DKMTProc("D3DKMTSignalSynchronizationObjectFromCpu");
     pWait = (PFND3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU)LoadD3DKMTProc("D3DKMTWaitForSynchronizationObjectFromCpu");
+    pQuery = (PFND3DKMT_QUERYADAPTERINFO)LoadD3DKMTProc("D3DKMTQueryAdapterInfo");
     if (!pCreate || !pDestroy || !pSignal || !pWait)
     {
         skip("monitored-fence access-flag entry points not exported\n");
@@ -383,6 +388,15 @@ static void Test_MonitoredFence_AccessFlags(void)
     if (hAdapter == 0) { skip("No adapter on \\\\.\\DISPLAY1\n"); return; }
     hDevice = CreateTestDevice(hAdapter);
     if (hDevice == 0) { skip("CreateDevice failed\n"); CloseAdapter(hAdapter); return; }
+    if (pQuery != NULL)
+    {
+        memset(&Query, 0, sizeof(Query));
+        Query.hAdapter = hAdapter;
+        Query.Type = KMTQAITYPE_DRIVERVERSION;
+        Query.pPrivateDriverData = &DriverVersion;
+        Query.PrivateDriverDataSize = sizeof(DriverVersion);
+        DriverVersionKnown = NT_SUCCESS(pQuery(&Query));
+    }
 
     memset(&Create, 0, sizeof(Create));
     Create.hDevice = hDevice;
@@ -481,6 +495,19 @@ static void Test_MonitoredFence_AccessFlags(void)
     Status = pCreate(&Create);
     ok_failed(Status, "NoSignal+NoWait monitored fence create succeeded\n");
 
+    /*
+     * TopOfPipeline is a valid native semantic only when the scheduler can
+     * publish at the KMD submission boundary.  This stack does not implement
+     * that boundary yet, so accepting the bit would lie about ordering.
+     */
+    memset(&Create, 0, sizeof(Create));
+    Create.hDevice = hDevice;
+    Create.Info.Type = D3DDDI_MONITORED_FENCE;
+    Create.Info.Flags.TopOfPipeline = 1;
+    Create.Info.Flags.NoGPUAccess = 1;
+    Status = pCreate(&Create);
+    ok_eq_hex(Status, STATUS_NOT_SUPPORTED);
+
     /* Sharing a fence exists so another *device* can wait on it, and a device
      * waits on the GPU side -- so NoGPUAccess contradicts Shared.  Measured on
      * Win11: refused. */
@@ -491,42 +518,17 @@ static void Test_MonitoredFence_AccessFlags(void)
     Create.Info.Flags.NoGPUAccess = 1;
     ok_failed(pCreate(&Create), "Shared monitored fence with NoGPUAccess was accepted\n");
 
-    /* A shared monitored fence publishes a global share handle that another
-     * device on the same adapter can open into its own namespace. */
+    /*
+     * Monitored-fence sharing uses the native NT synchronization-object and
+     * security contract.  The old process-global integer alias was not that
+     * contract, so the flag must be refused until native sharing exists.
+     */
     memset(&Create, 0, sizeof(Create));
     Create.hDevice = hDevice;
     Create.Info.Type = D3DDDI_MONITORED_FENCE;
     Create.Info.Flags.Shared = 1;
     Status = pCreate(&Create);
-    ok_succeeded(Status, "Shared monitored fence create failed 0x%08lX\n", (long)Status);
-    if (NT_SUCCESS(Status))
-    {
-        PFND3DKMT_OPENSYNCHRONIZATIONOBJECT pOpen =
-            (PFND3DKMT_OPENSYNCHRONIZATIONOBJECT)GetProcAddress(GetModuleHandleW(L"gdi32.dll"), "D3DKMTOpenSynchronizationObject");
-
-        ok(Create.Info.SharedHandle != 0, "Shared monitored fence published a zero share handle\n");
-        if (pOpen != NULL && Create.Info.SharedHandle != 0)
-        {
-            D3DKMT_OPENSYNCHRONIZATIONOBJECT Open;
-
-            memset(&Open, 0, sizeof(Open));
-            Open.hSharedHandle = Create.Info.SharedHandle;
-            Status = pOpen(&Open);
-            ok_succeeded(Status, "Open of a shared monitored fence failed 0x%08lX\n", (long)Status);
-            if (NT_SUCCESS(Status))
-            {
-                ok(Open.hSyncObject != 0, "Open returned a zero sync handle\n");
-                ok(Open.hSyncObject != Create.hSyncObject, "Open returned the creator's own handle\n");
-                D3dkmtTestDestroySyncObject(pDestroy, Open.hSyncObject);
-            }
-
-            memset(&Open, 0, sizeof(Open));
-            Open.hSharedHandle = Create.Info.SharedHandle + 0x1000;
-            Status = pOpen(&Open);
-            ok_failed(Status, "Open of an unknown share handle succeeded\n");
-        }
-        D3dkmtTestDestroySyncObject(pDestroy, Create.hSyncObject);
-    }
+    ok_eq_hex(Status, STATUS_NOT_SUPPORTED);
 
     /* Legacy object types share through the same namespace. */
     memset(&Create, 0, sizeof(Create));
@@ -542,6 +544,41 @@ static void Test_MonitoredFence_AccessFlags(void)
         D3dkmtTestDestroySyncObject(pDestroy, Create.hSyncObject);
     }
 
+    /*
+     * The periodic union arm is WDDM 2.2.  On a lower configured/reported
+     * level, type gating takes precedence over its flag validation.
+     */
+    if (!DriverVersionKnown)
+    {
+        skip("driver version unavailable; periodic WDDM 2.2 cases skipped\n");
+        goto Cleanup;
+    }
+    if (DriverVersion < KMT_DRIVERVERSION_WDDM_2_2)
+    {
+        memset(&Create, 0, sizeof(Create));
+        Create.hDevice = hDevice;
+        Create.Info.Type = D3DDDI_PERIODIC_MONITORED_FENCE;
+        Create.Info.PeriodicMonitoredFence.hAdapter = hAdapter;
+        Create.Info.PeriodicMonitoredFence.VidPnTargetId = 0;
+        Status = pCreate(&Create);
+        ok_eq_hex(Status, STATUS_NOT_SUPPORTED);
+        goto Cleanup;
+    }
+
+    /*
+     * NoSignal and NoWait are mutually exclusive for every monitored-fence
+     * variant, including a periodic monitored fence.
+     */
+    memset(&Create, 0, sizeof(Create));
+    Create.hDevice = hDevice;
+    Create.Info.Type = D3DDDI_PERIODIC_MONITORED_FENCE;
+    Create.Info.Flags.NoSignal = 1;
+    Create.Info.Flags.NoWait = 1;
+    Create.Info.PeriodicMonitoredFence.hAdapter = hAdapter;
+    Create.Info.PeriodicMonitoredFence.VidPnTargetId = 0;
+    Status = pCreate(&Create);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+
     /* A periodic fence is advanced by display hardware, which is a GPU-side
      * write -- with NoGPUAccess nothing can move it, so it would sit at its
      * initial value looking healthy.  Measured on Win11: refused. */
@@ -549,14 +586,43 @@ static void Test_MonitoredFence_AccessFlags(void)
     Create.hDevice = hDevice;
     Create.Info.Type = D3DDDI_PERIODIC_MONITORED_FENCE;
     Create.Info.Flags.NoGPUAccess = 1;
+    Create.Info.PeriodicMonitoredFence.hAdapter = hAdapter;
+    Create.Info.PeriodicMonitoredFence.VidPnTargetId = 0;
     ok_failed(pCreate(&Create), "Periodic monitored fence with NoGPUAccess was accepted\n");
+
+    memset(&Create, 0, sizeof(Create));
+    Create.hDevice = hDevice;
+    Create.Info.Type = D3DDDI_PERIODIC_MONITORED_FENCE;
+    Create.Info.Flags.TopOfPipeline = 1;
+    Create.Info.PeriodicMonitoredFence.hAdapter = hAdapter;
+    Create.Info.PeriodicMonitoredFence.VidPnTargetId = 0;
+    Status = pCreate(&Create);
+    ok_eq_hex(Status, STATUS_NOT_SUPPORTED);
+
+    memset(&Create, 0, sizeof(Create));
+    Create.hDevice = hDevice;
+    Create.Info.Type = D3DDDI_PERIODIC_MONITORED_FENCE;
+    Create.Info.Flags.Shared = 1;
+    Create.Info.PeriodicMonitoredFence.hAdapter = hAdapter;
+    Create.Info.PeriodicMonitoredFence.VidPnTargetId = 0;
+    Status = pCreate(&Create);
+    ok_eq_hex(Status, STATUS_NOT_SUPPORTED);
 
     /* A periodic monitored fence advances on its own vertical-blank cadence. */
     memset(&Create, 0, sizeof(Create));
     Create.hDevice = hDevice;
     Create.Info.Type = D3DDDI_PERIODIC_MONITORED_FENCE;
+    Create.Info.PeriodicMonitoredFence.hAdapter = hAdapter;
+    Create.Info.PeriodicMonitoredFence.VidPnTargetId = 0;
     Status = pCreate(&Create);
-    ok_succeeded(Status, "Periodic monitored fence create failed 0x%08lX\n", (long)Status);
+    if (Status == STATUS_NOT_SUPPORTED)
+    {
+        skip("KMD has no WDDM 2.2 periodic-notification callback pair\n");
+    }
+    else
+    {
+        ok_succeeded(Status, "Periodic monitored fence create failed 0x%08lX\n", (long)Status);
+    }
     if (NT_SUCCESS(Status))
     {
         volatile UINT64 *Value = (volatile UINT64 *)Create.Info.PeriodicMonitoredFence.FenceValueCPUVirtualAddress;
