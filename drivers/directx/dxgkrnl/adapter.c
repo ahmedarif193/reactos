@@ -3047,6 +3047,124 @@ DxgkCbEvalAcpiMethodStub(
 }
 
 /*
+ * Native dxgkrnl does not advertise sizeof(DXGKRNL_INTERFACE) blindly.  Older
+ * selectors are normalized to the newest compatible revision and receive the
+ * exact prefix ending at that revision's last callback.  Starting with WDDM
+ * 2.8, native publishes its whole current callback buffer and leaves callbacks
+ * it does not implement NULL.
+ *
+ * Keep the sizes tied to WDK field ends rather than pointer-size literals.
+ * These assertions also prove the x86 sizes independently of the native
+ * amd64/arm64 branch constants.
+ */
+#ifdef _WIN64
+C_ASSERT(DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbExcludeAdapterAccess) == 0xB8);
+C_ASSERT(DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbCompleteFStateTransition) == 0x100);
+C_ASSERT(DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbCompletePStateTransition) == 0x108);
+C_ASSERT(DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbHardwareContentProtectionTeardown) == 0x138);
+C_ASSERT(DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbMitigatedRangeUpdate) == 0x148);
+C_ASSERT(DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbAcquirePostDisplayOwnership2) == 0x168);
+C_ASSERT(DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbSetProtectedSessionStatus) == 0x170);
+C_ASSERT(DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbReportDiagnostic) == 0x1C8);
+C_ASSERT(DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbSignalEvent) == 0x1D0);
+C_ASSERT(DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbSaveMemoryForHotUpdate) == 0x1E0);
+C_ASSERT(DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbDisconnectDoorbell) == 0x240);
+C_ASSERT(sizeof(DXGKRNL_INTERFACE) == 0x240);
+#else
+C_ASSERT(DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbExcludeAdapterAccess) == 0x60);
+C_ASSERT(DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbCompleteFStateTransition) == 0x84);
+C_ASSERT(DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbCompletePStateTransition) == 0x88);
+C_ASSERT(DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbHardwareContentProtectionTeardown) == 0xA0);
+C_ASSERT(DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbMitigatedRangeUpdate) == 0xA8);
+C_ASSERT(DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbAcquirePostDisplayOwnership2) == 0xB8);
+C_ASSERT(DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbSetProtectedSessionStatus) == 0xBC);
+C_ASSERT(DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbReportDiagnostic) == 0xE8);
+C_ASSERT(DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbSignalEvent) == 0xEC);
+C_ASSERT(DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbSaveMemoryForHotUpdate) == 0xF4);
+C_ASSERT(DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbDisconnectDoorbell) == 0x124);
+C_ASSERT(sizeof(DXGKRNL_INTERFACE) == 0x124);
+#endif
+
+static VOID
+DxgkpSelectInterfaceAdvertisement(
+    _In_ ULONG RequestedVersion,
+    _Out_ PULONG AdvertisedSize,
+    _Out_ PULONG AdvertisedVersion)
+{
+    if (RequestedVersion <= DXGKDDI_INTERFACE_VERSION_WIN7)
+    {
+        *AdvertisedSize =
+            DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbExcludeAdapterAccess);
+        *AdvertisedVersion = DXGKDDI_INTERFACE_VERSION_WIN7;
+    }
+    else if (RequestedVersion <= DXGKDDI_INTERFACE_VERSION_WIN8)
+    {
+        *AdvertisedSize =
+            DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbCompleteFStateTransition);
+        *AdvertisedVersion = DXGKDDI_INTERFACE_VERSION_WIN8;
+    }
+    else if (RequestedVersion <=
+             DXGKDDI_INTERFACE_VERSION_WDDM1_3_PATH_INDEPENDENT_ROTATION)
+    {
+        *AdvertisedSize =
+            DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbCompletePStateTransition);
+        *AdvertisedVersion =
+            DXGKDDI_INTERFACE_VERSION_WDDM1_3_PATH_INDEPENDENT_ROTATION;
+    }
+    else if (RequestedVersion <= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+    {
+        *AdvertisedSize = DXGKP_FIELD_END(
+            DXGKRNL_INTERFACE,
+            DxgkCbHardwareContentProtectionTeardown);
+        *AdvertisedVersion = DXGKDDI_INTERFACE_VERSION_WDDM2_0;
+    }
+    else if (RequestedVersion <= DXGKDDI_INTERFACE_VERSION_WDDM2_1)
+    {
+        *AdvertisedSize =
+            DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbMitigatedRangeUpdate);
+        *AdvertisedVersion = DXGKDDI_INTERFACE_VERSION_WDDM2_1;
+    }
+    else if (RequestedVersion <= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
+    {
+        *AdvertisedSize = DXGKP_FIELD_END(
+            DXGKRNL_INTERFACE,
+            DxgkCbAcquirePostDisplayOwnership2);
+        *AdvertisedVersion = DXGKDDI_INTERFACE_VERSION_WDDM2_2;
+    }
+    else if (RequestedVersion <= DXGKDDI_INTERFACE_VERSION_WDDM2_3)
+    {
+        *AdvertisedSize = DXGKP_FIELD_END(
+            DXGKRNL_INTERFACE,
+            DxgkCbSetProtectedSessionStatus);
+        *AdvertisedVersion = DXGKDDI_INTERFACE_VERSION_WDDM2_3;
+    }
+    else if (RequestedVersion <= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
+    {
+        *AdvertisedSize =
+            DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbReportDiagnostic);
+        *AdvertisedVersion = DXGKDDI_INTERFACE_VERSION_WDDM2_4;
+    }
+    else if (RequestedVersion <= DXGKDDI_INTERFACE_VERSION_WDDM2_5)
+    {
+        *AdvertisedSize =
+            DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbSignalEvent);
+        *AdvertisedVersion = DXGKDDI_INTERFACE_VERSION_WDDM2_5;
+    }
+    else if (RequestedVersion < DXGKDDI_INTERFACE_VERSION_WDDM2_8)
+    {
+        *AdvertisedSize =
+            DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbSaveMemoryForHotUpdate);
+        *AdvertisedVersion = RequestedVersion;
+    }
+    else
+    {
+        *AdvertisedSize =
+            DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbDisconnectDoorbell);
+        *AdvertisedVersion = RequestedVersion;
+    }
+}
+
+/*
  * DxgkpFillInterface
  *
  * Populate a DXGK_INTERFACE (DXGKRNL_INTERFACE) structure with the callbacks
@@ -3062,14 +3180,23 @@ DxgkpFillInterface(
     _In_  PDXGKRNL_ADAPTER Adapter,
     _Out_ PDXGK_INTERFACE  Interface)
 {
+    ULONG RequestedVersion;
+
+    RequestedVersion = Adapter->MiniportContext->InitData.s.Version;
     RtlZeroMemory(Interface, sizeof(*Interface));
 
-    Interface->Size         = sizeof(*Interface);
-    Interface->Version      = Adapter->MiniportContext->InitData.s.Version;
+    DxgkpSelectInterfaceAdvertisement(
+        RequestedVersion,
+        &Interface->Size,
+        &Interface->Version);
     Interface->DeviceHandle = (HANDLE)Adapter;
 
-    DXGKRNL_TRACE("DxgkpFillInterface: DeviceHandle=%p Size=%u Version=%u\n",
-                  Interface->DeviceHandle, Interface->Size, Interface->Version);
+    DXGKRNL_TRACE("DxgkpFillInterface: DeviceHandle=%p Size=%u "
+                  "RequestedVersion=0x%lX AdvertisedVersion=0x%lX\n",
+                  Interface->DeviceHandle,
+                  Interface->Size,
+                  RequestedVersion,
+                  Interface->Version);
 
     /* WDDM 1.0 (Vista) baseline callbacks — correct WDK field order */
     Interface->DxgkCbEvalAcpiMethod                = (PVOID)DxgkCbEvalAcpiMethodStub; /* 0x10 */
@@ -3092,13 +3219,15 @@ DxgkpFillInterface(
     Interface->DxgkCbQueryMonitorInterface         = (PDXGKCB_QUERYMONITORINTERFACE)DxgkCbQueryMonitorInterface; /* 0x98 */
     Interface->DxgkCbGetCaptureAddress             = (PVOID)DxgkCbGetCaptureAddressStub; /* 0xa0 */
 
-    if (Interface->Version >= DXGKDDI_INTERFACE_VERSION_WIN7)
+    if (DxgkCapsCoreInterfaceVersionAtLeast(
+            Interface->Version, DXGK_CAPS_CORE_LEVEL_WDDM_1_1))
     {
         Interface->DxgkCbLogEtwEvent          = (PVOID)DxgkCbLogEtwEventStub; /* 0xa8 */
         Interface->DxgkCbExcludeAdapterAccess = (PVOID)DxgkCbExcludeAdapterAccessStub; /* 0xb0 */
     }
 
-    if (Interface->Version >= DXGKDDI_INTERFACE_VERSION_WIN8)
+    if (DxgkCapsCoreInterfaceVersionAtLeast(
+            Interface->Version, DXGK_CAPS_CORE_LEVEL_WDDM_1_2))
     {
         Interface->DxgkCbCreateContextAllocation =
             (PVOID)DxgkCbCreateContextAllocationStub; /* 0xb8 */
@@ -3114,14 +3243,16 @@ DxgkpFillInterface(
             (PVOID)DxgkCbPowerRuntimeControlRequestStub; /* 0xe0 */
     }
 
-    if (Interface->Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+    if (DxgkCapsCoreInterfaceVersionAtLeast(
+            Interface->Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_0))
     {
         Interface->DxgkCbAcquireHandleData = DxgkCbAcquireHandleData; /* 0x120 */
         Interface->DxgkCbReleaseHandleData = DxgkCbReleaseHandleData; /* 0x128 */
     }
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
-    if (Interface->Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
+    if (DxgkCapsCoreInterfaceVersionAtLeast(
+            Interface->Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_4))
     {
         Interface->DxgkCbAllocateContiguousMemory =
             DxgkCbAllocateContiguousMemory; /* 0x170 */
@@ -3130,15 +3261,13 @@ DxgkpFillInterface(
     }
 #endif
 
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
-    if (Interface->Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
-    {
-        Interface->DxgkCbMapPhysicalMemory =
-            DxgkCbMapPhysicalMemory; /* 0x200 */
-        Interface->DxgkCbUnmapPhysicalMemory =
-            DxgkCbUnmapPhysicalMemory; /* 0x208 */
-    }
-#endif
+    /*
+     * Keep the WDDM 2.9 physical-memory-object callbacks NULL until dxgkrnl
+     * owns the corresponding object lifecycle.  The legacy raw-physical
+     * mapping helpers below have a different ABI and must not be published
+     * through these typed slots.
+     */
+
 }
 
 /*
@@ -3946,10 +4075,12 @@ DxgkCbWriteDeviceSpace(
 }
 
 /*
- * DxgkCbMapPhysicalMemory
+ * DxgkCbMapPhysicalMemory (legacy internal helper)
  *
  * Maps a physical address range into kernel virtual address space.
  * Uses MmNonCached because GPU MMIO registers must not be cached.
+ * This two-argument helper is not the WDDM 2.9 physical-memory-object
+ * callback and is deliberately not published in DXGKRNL_INTERFACE.
  *
  * IRQL: PASSIVE_LEVEL
  */
@@ -3996,9 +4127,11 @@ DxgkCbMapPhysicalMemory(
 }
 
 /*
- * DxgkCbUnmapPhysicalMemory
+ * DxgkCbUnmapPhysicalMemory (legacy internal helper)
  *
  * Unmaps a range mapped by DxgkCbMapPhysicalMemory.
+ * This two-argument helper is not the WDDM 2.9 physical-memory-object
+ * callback and is deliberately not published in DXGKRNL_INTERFACE.
  *
  * IRQL: PASSIVE_LEVEL
  */
@@ -5623,11 +5756,10 @@ DxgkAdapterStart(
                       (ULONG)Adapter->PciSlotNumber.u.bits.FunctionNumber);
     }
 
-    /* Fill the callback table for the miniport -- zero the full 512-byte
-     * buffer so WDDM 2.0+ callbacks beyond our struct definition are NULL. */
-    RtlZeroMemory(&Interface, sizeof(Interface));
+    /* Fill the callback table for the miniport.  DxgkpFillInterface zeros the
+     * full current buffer before publishing the version-specific prefix, so
+     * every unimplemented callback remains NULL. */
     DxgkpFillInterface(Adapter, &Interface);
-    Interface.Size = sizeof(Interface); /* advertise full buffer size */
 
     /* Build the start-info block. */
     RtlZeroMemory(&StartInfo, sizeof(StartInfo));
@@ -5834,7 +5966,9 @@ DxgkAdapterStart(
         {
             if (NT_SUCCESS(DxgkpQueryDriverCaps(Adapter, Caps)))
             {
-                if (Adapter->MiniportContext->InitData.s.Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+                if (DxgkCapsCoreInterfaceVersionAtLeast(
+                        Adapter->MiniportContext->InitData.s.Version,
+                        DXGK_CAPS_CORE_LEVEL_WDDM_2_0))
                     Adapter->SupportSurpriseRemoval = Caps->SupportSurpriseRemoval;
                 if (!Adapter->MiniportContext->IsDisplayOnlyDriver)
                 {
@@ -5856,7 +5990,9 @@ DxgkAdapterStart(
     RtlZeroMemory(Adapter->PageTableLevels, sizeof(Adapter->PageTableLevels));
     if (DXGKP_GPUMMU_END_TO_END &&
         !Adapter->MiniportContext->IsDisplayOnlyDriver &&
-        Adapter->MiniportContext->InitData.s.Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_0 &&
+        DxgkCapsCoreInterfaceVersionAtLeast(
+            Adapter->MiniportContext->InitData.s.Version,
+            DXGK_CAPS_CORE_LEVEL_WDDM_2_0) &&
         NT_SUCCESS(DxgkpQueryGpuMmuCaps(Adapter, &Adapter->GpuMmuCaps)) &&
         Adapter->GpuMmuCaps.VirtualAddressBitCount != 0 &&
         Adapter->GpuMmuCaps.PageTableLevelCount != 0 &&
@@ -7835,7 +7971,9 @@ DxgkpAddDeviceRegistered(
      * it is actually an XDDM driver (version < WDDM 1.0 threshold).
      * The PnP manager will then try the next compatible driver (videoprt).
      */
-    if (MpCtx->InitData.s.Version < DXGKDDI_INTERFACE_VERSION_VISTA)
+    if (!DxgkCapsCoreInterfaceVersionAtLeast(
+            MpCtx->InitData.s.Version,
+            DXGK_CAPS_CORE_LEVEL_WDDM_1_0))
     {
         DXGKRNL_WARN("DxgkpAddDevice: XDDM miniport (version 0x%lX), "
                      "deferring to videoprt\n", MpCtx->InitData.s.Version);
@@ -8180,6 +8318,53 @@ UninitializeUnlock:
  * DxgkInitializeEx / DxgkInitialize — miniport registration entry points
  * ====================================================================== */
 
+#ifndef REACTOS_WDDM_TARGET_LEVEL
+#define REACTOS_WDDM_TARGET_LEVEL DXGK_CAPS_CORE_LEVEL_WDDM_2_0
+#endif
+
+/*
+ * Highest full DRIVER_INITIALIZATION_DATA tail imported and ABI-checked in
+ * this translation unit. Keep this independent from the compile selector:
+ * dxgkrnl compiles with the newest audited declaration surface, but must not
+ * accept a miniport whose declared table extends beyond the tails actually
+ * present here.
+ */
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+#define DXGKP_FULL_INIT_DATA_MAX_LEVEL DXGK_CAPS_CORE_LEVEL_WDDM_3_2
+#elif (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
+#define DXGKP_FULL_INIT_DATA_MAX_LEVEL DXGK_CAPS_CORE_LEVEL_WDDM_3_1
+#elif (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
+#define DXGKP_FULL_INIT_DATA_MAX_LEVEL DXGK_CAPS_CORE_LEVEL_WDDM_3_0
+#elif (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+#define DXGKP_FULL_INIT_DATA_MAX_LEVEL DXGK_CAPS_CORE_LEVEL_WDDM_2_9
+#elif (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_8)
+#define DXGKP_FULL_INIT_DATA_MAX_LEVEL DXGK_CAPS_CORE_LEVEL_WDDM_2_8
+#elif (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_7)
+#define DXGKP_FULL_INIT_DATA_MAX_LEVEL DXGK_CAPS_CORE_LEVEL_WDDM_2_7
+#elif (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_6)
+#define DXGKP_FULL_INIT_DATA_MAX_LEVEL DXGK_CAPS_CORE_LEVEL_WDDM_2_6
+#elif (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_5)
+#define DXGKP_FULL_INIT_DATA_MAX_LEVEL DXGK_CAPS_CORE_LEVEL_WDDM_2_5
+#elif (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
+#define DXGKP_FULL_INIT_DATA_MAX_LEVEL DXGK_CAPS_CORE_LEVEL_WDDM_2_4
+#elif (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_3)
+#define DXGKP_FULL_INIT_DATA_MAX_LEVEL DXGK_CAPS_CORE_LEVEL_WDDM_2_3
+#elif (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
+#define DXGKP_FULL_INIT_DATA_MAX_LEVEL DXGK_CAPS_CORE_LEVEL_WDDM_2_2
+#elif (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_1)
+#define DXGKP_FULL_INIT_DATA_MAX_LEVEL DXGK_CAPS_CORE_LEVEL_WDDM_2_1
+#elif (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+#define DXGKP_FULL_INIT_DATA_MAX_LEVEL DXGK_CAPS_CORE_LEVEL_WDDM_2_0
+#elif (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM1_3)
+#define DXGKP_FULL_INIT_DATA_MAX_LEVEL DXGK_CAPS_CORE_LEVEL_WDDM_1_3
+#elif (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
+#define DXGKP_FULL_INIT_DATA_MAX_LEVEL DXGK_CAPS_CORE_LEVEL_WDDM_1_2
+#elif (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN7)
+#define DXGKP_FULL_INIT_DATA_MAX_LEVEL DXGK_CAPS_CORE_LEVEL_WDDM_1_1
+#else
+#define DXGKP_FULL_INIT_DATA_MAX_LEVEL DXGK_CAPS_CORE_LEVEL_WDDM_1_0
+#endif
+
 /* Return the append-only prefix that a full-table caller compiled for Version
  * can make readable.  Versions newer than the last locally declared tail are
  * deliberately capped at that tail. */
@@ -8187,15 +8372,83 @@ static ULONG
 DxgkpFullInitDataPrefixSize(
     _In_ ULONG Version)
 {
-    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_1)
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+    if (DxgkCapsCoreInterfaceVersionAtLeast(
+            Version, DXGK_CAPS_CORE_LEVEL_WDDM_3_2))
+        return DXGKP_FIELD_END(
+            DRIVER_INITIALIZATION_DATA,
+            DxgkDdiResetDisplayEngine);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
+    if (DxgkCapsCoreInterfaceVersionAtLeast(
+            Version, DXGK_CAPS_CORE_LEVEL_WDDM_3_1))
+        return DXGKP_FIELD_END(
+            DRIVER_INITIALIZATION_DATA,
+            Reserved4);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
+    if (DxgkCapsCoreInterfaceVersionAtLeast(
+            Version, DXGK_CAPS_CORE_LEVEL_WDDM_3_0))
+        return DXGKP_FIELD_END(
+            DRIVER_INITIALIZATION_DATA,
+            DxgkDdiCancelFlips);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+    if (DxgkCapsCoreInterfaceVersionAtLeast(
+            Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_9))
+        return DXGKP_FIELD_END(
+            DRIVER_INITIALIZATION_DATA,
+            DxgkDdiSetInterruptTargetPresentId);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_8)
+    if (DxgkCapsCoreInterfaceVersionAtLeast(
+            Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_8))
+        return DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiControlInterrupt3);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_7)
+    if (DxgkCapsCoreInterfaceVersionAtLeast(
+            Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_7))
+        return DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiControlInterrupt3);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_6)
+    if (DxgkCapsCoreInterfaceVersionAtLeast(
+            Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_6))
+        return DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, Reserved3);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_5)
+    if (DxgkCapsCoreInterfaceVersionAtLeast(
+            Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_5))
+        return DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiSetTrackedWorkloadPowerLevel);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
+    if (DxgkCapsCoreInterfaceVersionAtLeast(
+            Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_4))
+        return DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiResumeHwEngine);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_3)
+    if (DxgkCapsCoreInterfaceVersionAtLeast(
+            Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_3))
+        return DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiDestroyProtectedSession);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
+    if (DxgkCapsCoreInterfaceVersionAtLeast(
+            Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_2))
+        return DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiGetPostCompositionCaps);
+#endif
+    if (DxgkCapsCoreInterfaceVersionAtLeast(
+            Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_1))
         return DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiUpdateMonitorLinkInfo);
-    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+    if (DxgkCapsCoreInterfaceVersionAtLeast(
+            Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_0))
         return DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiSetVideoProtectedRegion);
-    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM1_3)
+    if (DxgkCapsCoreInterfaceVersionAtLeast(
+            Version, DXGK_CAPS_CORE_LEVEL_WDDM_1_3))
         return DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiFormatHistoryBuffer);
-    if (Version >= DXGKDDI_INTERFACE_VERSION_WIN8)
+    if (DxgkCapsCoreInterfaceVersionAtLeast(
+            Version, DXGK_CAPS_CORE_LEVEL_WDDM_1_2))
         return DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiNotifySurpriseRemoval);
-    if (Version >= DXGKDDI_INTERFACE_VERSION_WIN7)
+    if (DxgkCapsCoreInterfaceVersionAtLeast(
+            Version, DXGK_CAPS_CORE_LEVEL_WDDM_1_1))
         return DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiQueryVidPnHWCapability);
     return DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiSetDisplayPrivateDriverFormat);
 }
@@ -8207,7 +8460,8 @@ static ULONG
 DxgkpDodInitDataPrefixSize(
     _In_ ULONG Version)
 {
-    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+    if (DxgkCapsCoreInterfaceVersionAtLeast(
+            Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_0))
         return DXGKP_FIELD_END(KMDDOD_INITIALIZATION_DATA, DxgkDdiPowerRuntimeSetDeviceHandle);
     return DXGKP_FIELD_END(KMDDOD_INITIALIZATION_DATA, DxgkDdiNotifySurpriseRemoval);
 }
@@ -8219,6 +8473,58 @@ C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiNotifySurpriseRemova
 C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiFormatHistoryBuffer) == 0x2C8);
 C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiSetVideoProtectedRegion) == 0x340);
 C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiUpdateMonitorLinkInfo) == 0x370);
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCreateHwContext) == 0x370);
+C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiGetPostCompositionCaps) == 0x408);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_3)
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiUpdateHwContextState) == 0x408);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCreateProtectedSession) == 0x410);
+C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiDestroyProtectedSession) == 0x420);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetSchedulingLogBuffer) == 0x420);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiQueryDiagnosticTypesSupport) == 0x468);
+C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiResumeHwEngine) == 0x480);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_5)
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSignalMonitoredFence) == 0x480);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetTargetAdjustedColorimetry2) == 0x498);
+C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiSetTrackedWorkloadPowerLevel) == 0x4A8);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_6)
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSaveMemoryForHotUpdate) == 0x4A8);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCollectDiagnosticInfo) == 0x4B8);
+C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, Reserved3) == 0x4C8);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_7)
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiControlInterrupt3) == 0x4C8);
+C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiControlInterrupt3) == 0x4D0);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetFlipQueueLogBuffer) == 0x4D0);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiUpdateFlipQueueLog) == 0x4D8);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCancelQueuedFlips) == 0x4E0);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetInterruptTargetPresentId) == 0x4E8);
+C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiSetInterruptTargetPresentId) == 0x4F0);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetAllocationBackingStore) == 0x4F0);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCreateCpuEvent) == 0x4F8);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiDestroyCpuEvent) == 0x500);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCancelFlips) == 0x508);
+C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiCancelFlips) == 0x510);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCreateNativeFence) == 0x510);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, Reserved4) == 0x558);
+C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, Reserved4) == 0x560);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCreateMemoryBasis) == 0x560);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiResetDisplayEngine) == 0x600);
+C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiResetDisplayEngine) == 0x608);
+#endif
 C_ASSERT(DXGKP_FIELD_END(KMDDOD_INITIALIZATION_DATA, DxgkDdiNotifySurpriseRemoval) == 0x148);
 C_ASSERT(DXGKP_FIELD_END(KMDDOD_INITIALIZATION_DATA, DxgkDdiPowerRuntimeSetDeviceHandle) == 0x150);
 #else
@@ -8228,6 +8534,58 @@ C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiNotifySurpriseRemova
 C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiFormatHistoryBuffer) == 0x164);
 C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiSetVideoProtectedRegion) == 0x1A0);
 C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiUpdateMonitorLinkInfo) == 0x1B8);
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCreateHwContext) == 0x1B8);
+C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiGetPostCompositionCaps) == 0x204);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_3)
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiUpdateHwContextState) == 0x204);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCreateProtectedSession) == 0x208);
+C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiDestroyProtectedSession) == 0x210);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetSchedulingLogBuffer) == 0x210);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiQueryDiagnosticTypesSupport) == 0x234);
+C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiResumeHwEngine) == 0x240);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_5)
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSignalMonitoredFence) == 0x240);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetTargetAdjustedColorimetry2) == 0x24C);
+C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiSetTrackedWorkloadPowerLevel) == 0x254);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_6)
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSaveMemoryForHotUpdate) == 0x254);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCollectDiagnosticInfo) == 0x25C);
+C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, Reserved3) == 0x264);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_7)
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiControlInterrupt3) == 0x264);
+C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiControlInterrupt3) == 0x268);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetFlipQueueLogBuffer) == 0x268);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiUpdateFlipQueueLog) == 0x26C);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCancelQueuedFlips) == 0x270);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetInterruptTargetPresentId) == 0x274);
+C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiSetInterruptTargetPresentId) == 0x278);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetAllocationBackingStore) == 0x278);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCreateCpuEvent) == 0x27C);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiDestroyCpuEvent) == 0x280);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCancelFlips) == 0x284);
+C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiCancelFlips) == 0x288);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCreateNativeFence) == 0x288);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, Reserved4) == 0x2AC);
+C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, Reserved4) == 0x2B0);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCreateMemoryBasis) == 0x2B0);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiResetDisplayEngine) == 0x300);
+C_ASSERT(DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiResetDisplayEngine) == 0x304);
+#endif
 C_ASSERT(DXGKP_FIELD_END(KMDDOD_INITIALIZATION_DATA, DxgkDdiNotifySurpriseRemoval) == 0xA4);
 C_ASSERT(DXGKP_FIELD_END(KMDDOD_INITIALIZATION_DATA, DxgkDdiPowerRuntimeSetDeviceHandle) == 0xA8);
 #endif
@@ -8272,6 +8630,7 @@ DxgkpInitializeMiniport(
     ULONG                     RequiredPrefixSize;
     ULONG                     CopySize;
     ULONG                     Version;
+    ULONG                     VersionLevel;
     PWCH                      RegBuf;
     NTSTATUS                  Status;
     BOOLEAN                   NewContext;
@@ -8300,9 +8659,25 @@ DxgkpInitializeMiniport(
     Version = DriverInitializationData->Version;
     DXGKRNL_TRACE("DxgkpInitializeMiniport: DriverObject %p RegPath %wZ Size=%lu Version=0x%lX Layout=%s\n", DriverObject, RegistryPath, DriverInitDataSize, Version, UseDodLayout ? "DOD" : "full");
 
+    VersionLevel = DxgkCapsCoreInterfaceVersionToLevel(Version);
+    if (VersionLevel == 0)
+    {
+        DXGKRNL_ERR("DxgkpInitializeMiniport: unknown DDI selector 0x%lX\n",
+                    Version);
+        return STATUS_REVISION_MISMATCH;
+    }
+    if (!DxgkCapsCoreInterfaceVersionPermitted(
+            Version, REACTOS_WDDM_TARGET_LEVEL))
+    {
+        DXGKRNL_ERR("DxgkpInitializeMiniport: DDI selector 0x%lX level %lu exceeds configured WDDM ceiling %lu\n",
+                    Version, VersionLevel, (ULONG)REACTOS_WDDM_TARGET_LEVEL);
+        return STATUS_REVISION_MISMATCH;
+    }
+
     if (UseDodLayout)
     {
-        if (Version < DXGKDDI_INTERFACE_VERSION_WIN8)
+        if (!DxgkCapsCoreInterfaceVersionAtLeast(
+                Version, DXGK_CAPS_CORE_LEVEL_WDDM_1_2))
         {
             DXGKRNL_ERR("DxgkpInitializeMiniport: unsupported DOD version 0x%lX (minimum 0x%lX)\n", Version, (ULONG)DXGKDDI_INTERFACE_VERSION_WIN8);
             return STATUS_INVALID_PARAMETER;
@@ -8311,7 +8686,15 @@ DxgkpInitializeMiniport(
     }
     else
     {
-        if (Version < DXGKDDI_INTERFACE_VERSION_VISTA)
+        if (VersionLevel > DXGKP_FULL_INIT_DATA_MAX_LEVEL)
+        {
+            DXGKRNL_ERR("DxgkpInitializeMiniport: DDI selector 0x%lX level %lu exceeds imported full-table ceiling %lu\n",
+                        Version, VersionLevel,
+                        (ULONG)DXGKP_FULL_INIT_DATA_MAX_LEVEL);
+            return STATUS_REVISION_MISMATCH;
+        }
+        if (!DxgkCapsCoreInterfaceVersionAtLeast(
+                Version, DXGK_CAPS_CORE_LEVEL_WDDM_1_0))
         {
             DXGKRNL_ERR("DxgkpInitializeMiniport: unsupported full-table version 0x%lX (minimum 0x%lX)\n", Version, (ULONG)DXGKDDI_INTERFACE_VERSION_VISTA);
             return STATUS_INVALID_PARAMETER;
