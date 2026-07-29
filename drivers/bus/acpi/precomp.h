@@ -19,4 +19,7 @@
 #include <reactos/hal/acpi_pci.h>
 #include <reactos/drivers/acpi/acpipci.h>
 
+BOOLEAN
+OslInitializeExecQueue(VOID);
+
 #endif /* _ACPI_PCH_ */

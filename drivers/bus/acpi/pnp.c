@@ -335,6 +335,12 @@ Bus_StartFdo (
     // Continue with ACPI initialization even if interface registration fails
     status = STATUS_SUCCESS;
 
+    if (!OslInitializeExecQueue())
+    {
+        DPRINT1("Unable to initialize the ACPI deferred execution queue\n");
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
     DPRINT1("Bus_StartFdo: Calling AcpiInitializeSubsystem\n");
     //
     // Initialize ACPICA robustly (let it allocate as needed).

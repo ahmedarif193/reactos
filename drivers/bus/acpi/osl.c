@@ -487,35 +487,124 @@ AcpiOsGetThreadId (void)
     return (ULONG_PTR)PsGetCurrentThreadId() + 1;
 }
 
+typedef struct _OSL_EXEC_ENTRY
+{
+    SLIST_ENTRY SListEntry;
+    WORK_QUEUE_ITEM WorkItem;
+    ACPI_OSD_EXEC_CALLBACK Function;
+    void *Context;
+} OSL_EXEC_ENTRY, *POSL_EXEC_ENTRY;
+
+#define OSL_EXEC_ENTRY_COUNT 64
+
+static SLIST_HEADER OslExecFreeList;
+static SLIST_HEADER OslExecPendingList;
+static KDPC OslExecDpc;
+static POSL_EXEC_ENTRY OslExecPool;
+static BOOLEAN OslExecInitialized;
+static volatile LONG OslExecOutstanding;
+static KEVENT OslExecIdleEvent;
+
+static
+VOID
+NTAPI
+OslExecWorkRoutine(PVOID Parameter)
+{
+    POSL_EXEC_ENTRY Entry = Parameter;
+    ACPI_OSD_EXEC_CALLBACK Function = Entry->Function;
+    void *Context = Entry->Context;
+
+    InterlockedPushEntrySList(&OslExecFreeList, &Entry->SListEntry);
+
+    Function(Context);
+
+    if (InterlockedDecrement(&OslExecOutstanding) == 0)
+        KeSetEvent(&OslExecIdleEvent, IO_NO_INCREMENT, FALSE);
+}
+
+static
+VOID
+NTAPI
+OslExecDpcRoutine(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
+{
+    PSLIST_ENTRY SListEntry;
+    POSL_EXEC_ENTRY Entry;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(Arg1);
+    UNREFERENCED_PARAMETER(Arg2);
+
+    while ((SListEntry = InterlockedPopEntrySList(&OslExecPendingList)) != NULL)
+    {
+        Entry = CONTAINING_RECORD(SListEntry, OSL_EXEC_ENTRY, SListEntry);
+        ExInitializeWorkItem(&Entry->WorkItem, OslExecWorkRoutine, Entry);
+        ExQueueWorkItem(&Entry->WorkItem, DelayedWorkQueue);
+    }
+}
+
+BOOLEAN
+OslInitializeExecQueue(VOID)
+{
+    ULONG i;
+
+    if (OslExecInitialized)
+        return TRUE;
+
+    OslExecPool = ExAllocatePoolWithTag(NonPagedPool,
+                                        OSL_EXEC_ENTRY_COUNT * sizeof(OSL_EXEC_ENTRY),
+                                        'QEpA');
+    if (!OslExecPool)
+        return FALSE;
+
+    InitializeSListHead(&OslExecFreeList);
+    InitializeSListHead(&OslExecPendingList);
+    KeInitializeDpc(&OslExecDpc, OslExecDpcRoutine, NULL);
+    KeInitializeEvent(&OslExecIdleEvent, NotificationEvent, TRUE);
+
+    for (i = 0; i < OSL_EXEC_ENTRY_COUNT; i++)
+        InterlockedPushEntrySList(&OslExecFreeList, &OslExecPool[i].SListEntry);
+
+    OslExecInitialized = TRUE;
+    return TRUE;
+}
+
 ACPI_STATUS
 AcpiOsExecute (
     ACPI_EXECUTE_TYPE       Type,
     ACPI_OSD_EXEC_CALLBACK  Function,
     void                    *Context)
 {
-    HANDLE ThreadHandle;
-    OBJECT_ATTRIBUTES ObjectAttributes;
-    NTSTATUS Status;
+    PSLIST_ENTRY SListEntry;
+    POSL_EXEC_ENTRY Entry;
 
     DPRINT("AcpiOsExecute\n");
 
-    InitializeObjectAttributes(&ObjectAttributes,
-                               NULL,
-                               OBJ_KERNEL_HANDLE,
-                               NULL,
-                               NULL);
+    if (!Function)
+        return AE_BAD_PARAMETER;
 
-    Status = PsCreateSystemThread(&ThreadHandle,
-                                  THREAD_ALL_ACCESS,
-                                  &ObjectAttributes,
-                                  NULL,
-                                  NULL,
-                                  (PKSTART_ROUTINE)Function,
-                                  Context);
-    if (!NT_SUCCESS(Status))
-        return AE_ERROR;
+    if (!OslExecInitialized)
+    {
+        DPRINT1("AcpiOsExecute called before the execution queue was ready\n");
+        return AE_NOT_EXIST;
+    }
 
-    ZwClose(ThreadHandle);
+    SListEntry = InterlockedPopEntrySList(&OslExecFreeList);
+    if (!SListEntry)
+    {
+        DPRINT1("AcpiOsExecute exhausted its entry pool\n");
+        return AE_NO_MEMORY;
+    }
+
+    Entry = CONTAINING_RECORD(SListEntry, OSL_EXEC_ENTRY, SListEntry);
+    Entry->Function = Function;
+    Entry->Context = Context;
+
+    if (InterlockedIncrement(&OslExecOutstanding) == 1)
+        KeClearEvent(&OslExecIdleEvent);
+
+    InterlockedPushEntrySList(&OslExecPendingList, &Entry->SListEntry);
+    KeInsertQueueDpc(&OslExecDpc, NULL, NULL);
 
     return AE_OK;
 }
@@ -1225,11 +1314,14 @@ AcpiOsGetTimer(
 void
 AcpiOsWaitEventsComplete(void)
 {
-    /*
-     * Wait for all asynchronous events to complete.
-     * This implementation does nothing.
-     */
-    return;
+    if (!OslExecInitialized || KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return;
+
+    KeWaitForSingleObject(&OslExecIdleEvent,
+                          Executive,
+                          KernelMode,
+                          FALSE,
+                          NULL);
 }
 
 ACPI_STATUS
