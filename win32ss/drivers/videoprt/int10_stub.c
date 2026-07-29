@@ -8,7 +8,8 @@ NTSTATUS
 NTAPI
 IntInitializeVideoAddressSpace(VOID)
 {
-    return STATUS_NOT_IMPLEMENTED;
+    /* No BIOS real-mode address space exists on this architecture. */
+    return STATUS_SUCCESS;
 }
 
 VP_STATUS
