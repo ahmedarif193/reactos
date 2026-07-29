@@ -90,6 +90,14 @@ finish_gdb_packet(void)
         return KdPacketReceived;
     }
 
+    /*
+     * Once a receive timed out, do not restart the attach timeout for every
+     * boot message. A valid break-in or RSP packet marks the debugger present
+     * again before another acknowledgement is expected.
+     */
+    if (KD_DEBUGGER_NOT_PRESENT)
+        return KdPacketTimedOut;
+
     /* Wait for acknowledgement */
     Status = KdpReceiveByte(&ack);
 

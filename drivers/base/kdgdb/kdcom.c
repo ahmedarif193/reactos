@@ -365,7 +365,35 @@ KdpPollByte(OUT PUCHAR OutByte)
     }
 }
 
-#define GDB_RECEIVE_TIMEOUT_US 250000
+#define GDB_RECEIVE_TIMEOUT_US 1000000
+
+#if defined(_M_IX86) || defined(_M_AMD64)
+#define CPUID_MAX_BASIC_LEAF 0
+#define CPUID_TSC_RATIO_LEAF 0x15
+
+static
+ULONG64
+KdpGetTscFrequency(VOID)
+{
+    int CpuInfo[4];
+    ULONG Denominator;
+    ULONG Numerator;
+    ULONG CrystalFrequency;
+
+    __cpuid(CpuInfo, CPUID_MAX_BASIC_LEAF);
+    if ((ULONG)CpuInfo[0] < CPUID_TSC_RATIO_LEAF)
+        return 0;
+
+    __cpuid(CpuInfo, CPUID_TSC_RATIO_LEAF);
+    Denominator = (ULONG)CpuInfo[0];
+    Numerator = (ULONG)CpuInfo[1];
+    CrystalFrequency = (ULONG)CpuInfo[2];
+    if (Denominator == 0 || Numerator == 0 || CrystalFrequency == 0)
+        return 0;
+
+    return ((ULONG64)CrystalFrequency * Numerator) / Denominator;
+}
+#endif
 
 KDSTATUS
 NTAPI
@@ -397,11 +425,37 @@ KdpReceiveByte(OUT PUCHAR OutByte)
 
     return KdPacketTimedOut;
 #else
+#if defined(_M_IX86) || defined(_M_AMD64)
+    ULONG64 CounterFrequency;
+    ULONG64 Start;
+    ULONG64 TimeoutTicks;
+
     /*
-     * A waiting CpGetByte already spins for a bounded time before reporting
-     * that no data arrived, so retrying it here would wait forever whenever no
-     * debugger is listening, and the boot would appear to hang on the very
-     * first packet waiting for an acknowledgement.
+     * Port-I/O latency varies greatly between hardware and virtual machines,
+     * so the shared COM poll count is not a wall-clock timeout. Use CPUID's
+     * architectural TSC ratio when available to keep the attach wait bounded.
+     */
+    CounterFrequency = KdpGetTscFrequency();
+    if (CounterFrequency != 0)
+    {
+        Start = __rdtsc();
+        TimeoutTicks = (CounterFrequency * GDB_RECEIVE_TIMEOUT_US) / 1000000;
+
+        do
+        {
+            if (CpGetByte(&KdComPort, OutByte, FALSE, FALSE) == CP_GET_SUCCESS)
+                return KdPacketReceived;
+
+            YieldProcessor();
+        } while ((__rdtsc() - Start) < TimeoutTicks);
+
+        return KdPacketTimedOut;
+    }
+#endif
+
+    /*
+     * Fall back to the shared bounded poll when the processor does not expose
+     * the TSC frequency ratio.
      */
     if (CpGetByte(&KdComPort, OutByte, TRUE, FALSE) == CP_GET_SUCCESS)
         return KdPacketReceived;

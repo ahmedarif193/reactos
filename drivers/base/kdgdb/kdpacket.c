@@ -199,6 +199,8 @@ static
 void
 send_kd_state_change(DBGKD_ANY_WAIT_STATE_CHANGE* StateChange)
 {
+    KDSTATUS Status;
+
     InException = TRUE;
 
     switch (StateChange->NewState)
@@ -225,7 +227,14 @@ send_kd_state_change(DBGKD_ANY_WAIT_STATE_CHANGE* StateChange)
             gdb_vctrlc_pending = FALSE;
             send_gdb_packet("OK");
         }
-        gdb_send_exception();
+        Status = gdb_send_exception();
+        if (Status == KdPacketTimedOut)
+        {
+            KdpSendPacketHandler = NULL;
+            KdpManipulateStateHandler = NULL;
+            InException = FALSE;
+            break;
+        }
         /* Next receive call will ask for the context */
         KdpManipulateStateHandler = GetContextManipulateHandler;
         break;
@@ -444,10 +453,20 @@ KdReceivePacket(
     {
         static BOOLEAN ignore = 0;
         KDDBGPRINT("Debug prompt.\n");
-        /* HACK: Debug prompt asks for break or ignore. First break, then ignore. */
         MessageData->Length = 1;
-        MessageData->Buffer[0] = ignore ? 'i' : 'b';
-        ignore = !ignore;
+        *DataLength = 1;
+        if (KD_DEBUGGER_NOT_PRESENT)
+        {
+            /* There is nobody to handle the breakpoint, so keep booting. */
+            MessageData->Buffer[0] = 'i';
+            ignore = FALSE;
+        }
+        else
+        {
+            /* HACK: Debug prompt asks for break or ignore. First break, then ignore. */
+            MessageData->Buffer[0] = ignore ? 'i' : 'b';
+            ignore = !ignore;
+        }
         return KdPacketReceived;
     }
 
