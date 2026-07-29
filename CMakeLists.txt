@@ -264,6 +264,15 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
                     -DVER_PRODUCTMAJORVERSION=${_NT_MAJOR}
                     -DVER_PRODUCTMINORVERSION=${_NT_MINOR})
 
+    if(REACTOS_USE_WDDM)
+        add_compile_definitions(REACTOS_GRAPHICS_DRIVER_MODEL_WDDM=1)
+        message(STATUS
+            "Display driver model: WDDM ${REACTOS_WDDM_LEVEL} compatibility ceiling")
+    else()
+        add_compile_definitions(REACTOS_GRAPHICS_DRIVER_MODEL_XPDM=1)
+        message(STATUS "Display driver model: XPDM")
+    endif()
+
     if(_NT_VALUE GREATER_EQUAL 2560)
         add_definitions(-DVER_PRODUCTBUILD=26100 -DVER_PRODUCTBUILD_QFE=1)
     endif()

@@ -1,5 +1,7 @@
 
-add_subdirectory(cdd)
+if(REACTOS_USE_WDDM)
+    add_subdirectory(cdd)
+endif()
 add_subdirectory(framebuf)
 if(ARCH STREQUAL "arm64")
     add_subdirectory(rpi5vc4)

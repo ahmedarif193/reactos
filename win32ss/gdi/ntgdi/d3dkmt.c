@@ -297,6 +297,12 @@ DxStartupDxgkInt(VOID)
 
     DPRINT("DxStartupDxgkInt: Entry\n");
 
+#if defined(REACTOS_GRAPHICS_DRIVER_MODEL_XPDM)
+    RtlZeroMemory(&DxgAdapterCallbacks, sizeof(DxgAdapterCallbacks));
+    DPRINT("DxStartupDxgkInt: XPDM build, dxgkrnl bridge disabled\n");
+    return;
+#endif
+
     Status = WddmBridgeInit();
     if (!NT_SUCCESS(Status))
     {
