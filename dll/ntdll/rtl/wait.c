@@ -1,7 +1,11 @@
 /*
- * PROJECT:     ReactOS NT Library
- * LICENSE:     LGPL-2.1-or-later (https://spdx.org/licenses/LGPL-2.1-or-later)
- * PURPOSE:     WaitOnAddress compatibility exports
+ * COPYRIGHT:       See COPYING in the top level directory
+ * PROJECT:         ReactOS system libraries
+ * FILE:            lib/ntdll/rtl/wait.c
+ * PURPOSE:         Wait-on-address functions
+ * PROGRAMMER:      Ahmed ARIF <arif.ing@outlook.com>
+ * UPDATE HISTORY:
+ *                  Created 29/07/26
  */
 
 #include <ntdll.h>
@@ -13,8 +17,8 @@ typedef struct _RTL_WAIT_ON_ADDRESS_ENTRY
 {
     LIST_ENTRY ListEntry;
     const VOID *Address;
-    PVOID WaitKey;
-    BOOLEAN ListRemovalHandled;
+    HANDLE EventHandle;
+    BOOLEAN Removed;
 } RTL_WAIT_ON_ADDRESS_ENTRY, *PRTL_WAIT_ON_ADDRESS_ENTRY;
 
 static RTL_SRWLOCK RtlpWaitOnAddressLock = RTL_SRWLOCK_INIT;
@@ -56,15 +60,19 @@ RtlWaitOnAddress(const VOID *Address,
     if (!RtlpIsValidWaitOnAddressSize(AddressSize))
         return STATUS_INVALID_PARAMETER;
 
+    Status = NtCreateEvent(&Entry.EventHandle, EVENT_ALL_ACCESS, NULL, SynchronizationEvent, FALSE);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
     Entry.Address = Address;
-    Entry.WaitKey = NULL;
-    Entry.ListRemovalHandled = FALSE;
+    Entry.Removed = FALSE;
 
     RtlAcquireSRWLockExclusive(&RtlpWaitOnAddressLock);
 
     if (!RtlpWaitOnAddressMatches(Address, CompareAddress, AddressSize))
     {
         RtlReleaseSRWLockExclusive(&RtlpWaitOnAddressLock);
+        NtClose(Entry.EventHandle);
         return STATUS_SUCCESS;
     }
 
@@ -72,24 +80,19 @@ RtlWaitOnAddress(const VOID *Address,
 
     RtlReleaseSRWLockExclusive(&RtlpWaitOnAddressLock);
 
-    Status = NtWaitForKeyedEvent(NULL,
-                                 &Entry.WaitKey,
-                                 FALSE,
-                                 (PLARGE_INTEGER)Timeout);
+    Status = NtWaitForSingleObject(Entry.EventHandle, FALSE, (PLARGE_INTEGER)Timeout);
 
-    if (!Entry.ListRemovalHandled)
+    RtlAcquireSRWLockExclusive(&RtlpWaitOnAddressLock);
+
+    if (!Entry.Removed)
     {
-        RtlAcquireSRWLockExclusive(&RtlpWaitOnAddressLock);
-
-        if (!Entry.ListRemovalHandled)
-        {
-            RemoveEntryList(&Entry.ListEntry);
-            Entry.ListRemovalHandled = TRUE;
-        }
-
-        RtlReleaseSRWLockExclusive(&RtlpWaitOnAddressLock);
+        RemoveEntryList(&Entry.ListEntry);
+        Entry.Removed = TRUE;
     }
 
+    RtlReleaseSRWLockExclusive(&RtlpWaitOnAddressLock);
+
+    NtClose(Entry.EventHandle);
     return Status;
 }
 
@@ -99,12 +102,9 @@ RtlpWakeAddress(const VOID *Address,
                 BOOLEAN WakeAll)
 {
     PLIST_ENTRY Current;
-    LARGE_INTEGER Timeout;
 
     if (!Address)
         return;
-
-    Timeout.QuadPart = 0;
 
     RtlAcquireSRWLockExclusive(&RtlpWaitOnAddressLock);
 
@@ -120,15 +120,11 @@ RtlpWakeAddress(const VOID *Address,
 
         if (Entry->Address == Address)
         {
-            Status = NtReleaseKeyedEvent(NULL,
-                                         &Entry->WaitKey,
-                                         FALSE,
-                                         &Timeout);
+            Status = NtSetEvent(Entry->EventHandle, NULL);
             if (NT_SUCCESS(Status))
             {
                 RemoveEntryList(&Entry->ListEntry);
-                Entry->Address = NULL;
-                Entry->ListRemovalHandled = TRUE;
+                Entry->Removed = TRUE;
 
                 if (!WakeAll)
                     break;
