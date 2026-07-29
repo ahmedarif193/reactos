@@ -7,6 +7,10 @@ add_subdirectory(vmx_svga)
 add_subdirectory(virtgpu)
 add_subdirectory(uefifb)
 
+if(REACTOS_USE_XPDM AND (ARCH STREQUAL "arm64") AND RPI_SUPPORT)
+    add_subdirectory(rpi5vc4)
+endif()
+
 if(ARCH STREQUAL "i386")
     add_subdirectory(pc98vid)
     add_subdirectory(xboxvmp)

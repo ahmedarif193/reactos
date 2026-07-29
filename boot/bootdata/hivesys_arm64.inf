@@ -30,11 +30,12 @@ HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#PNP0D10","Ser
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#PNP0D10","ClassGUID",0x00000000,"{36FC9E60-C465-11CF-8056-444553540000}"
 
 ; Raspberry Pi 5 VideoCore VII GPU + HVS/PixelValve display pipeline. The UEFI
-; firmware now exposes it as ACPI device _HID "BCM2712" (_CID "BCM2850"), so
-; acpi.sys enumerates it and PnP binds the WDDM display miniport rpi5vc4 through
-; dxgkrnl. Seeding the CDDB starts it at enumeration with no INF install, the
-; same way BRCM5D12 -> sdbus works. ClassGUID is the Display class. rpi5vc4 is
-; only present on real Pi5 firmware, so the .sys never loads elsewhere.
+; firmware exposes it as ACPI device _HID "BCM2712" (_CID "BCM2850"), so
+; acpi.sys enumerates it and PnP binds the configuration-selected rpi5vc4
+; miniport (XPDM/VideoPort or WDDM/dxgkrnl). Seeding the CDDB starts it at
+; enumeration with no INF install, the same way BRCM5D12 -> sdbus works.
+; ClassGUID is the Display class. rpi5vc4 is only present in the Raspberry Pi 5
+; profile, so the .sys never loads elsewhere.
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2712","Service",0x00000000,"rpi5vc4"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2712","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
 
