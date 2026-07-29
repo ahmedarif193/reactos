@@ -9948,11 +9948,21 @@ static volatile LONG DxgkVidMmReservationLockReady;
 static VOID
 DxgkpVidMmEnsureReservationLock(VOID)
 {
-    if (InterlockedCompareExchange(&DxgkVidMmReservationLockReady, 1, 0) == 0)
+    LONG State;
+
+    State = InterlockedCompareExchange(&DxgkVidMmReservationLockReady, 1, 0);
+    if (State == 0)
+    {
         ExInitializeFastMutex(&DxgkVidMmReservationLock);
-    else
-        while (InterlockedCompareExchange(&DxgkVidMmReservationLockReady, 1, 1) != 1)
-            YieldProcessor();
+        KeMemoryBarrier();
+        InterlockedExchange(&DxgkVidMmReservationLockReady, 2);
+        return;
+    }
+
+    /* State 1 means another CPU owns initialization.  Do not acquire the
+     * FAST_MUTEX until that CPU has published state 2. */
+    while (InterlockedCompareExchange(&DxgkVidMmReservationLockReady, 2, 2) != 2)
+        YieldProcessor();
 }
 
 static UINT64
@@ -9987,6 +9997,7 @@ DxgkVidMmSetProcessReservation(
     _In_ UINT64 Reservation)
 {
     PDXGKVMM_PROCESS_RESERVATION Record = NULL;
+    PDXGKVMM_PROCESS_RESERVATION Candidate = NULL;
     PLIST_ENTRY Entry;
     UINT64 Budget = 0, Usage = 0, Current = 0, Available = 0;
     NTSTATUS Status;
@@ -10020,20 +10031,41 @@ DxgkVidMmSetProcessReservation(
     if (Record == NULL)
     {
         ExReleaseFastMutex(&DxgkVidMmReservationLock);
-        Record = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Record), TAG_VIDMM_ALLOC);
-        if (Record == NULL)
+        Candidate = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Candidate), TAG_VIDMM_ALLOC);
+        if (Candidate == NULL)
             return STATUS_INSUFFICIENT_RESOURCES;
-        RtlZeroMemory(Record, sizeof(*Record));
-        Record->Process = Process;
-        Record->Adapter = Adapter;
+        RtlZeroMemory(Candidate, sizeof(*Candidate));
+        Candidate->Process = Process;
+        Candidate->Adapter = Adapter;
         ExAcquireFastMutex(&DxgkVidMmReservationLock);
-        InsertTailList(&DxgkVidMmReservationListHead, &Record->Link);
+
+        /* Allocation ran without the lock.  Recheck so two first writers for
+         * the same process/adapter cannot publish duplicate records and make
+         * later reservation updates depend on list order. */
+        for (Entry = DxgkVidMmReservationListHead.Flink; Entry != &DxgkVidMmReservationListHead; Entry = Entry->Flink)
+        {
+            PDXGKVMM_PROCESS_RESERVATION Existing = CONTAINING_RECORD(Entry, DXGKVMM_PROCESS_RESERVATION, Link);
+
+            if (Existing->Process == Process && Existing->Adapter == Adapter)
+            {
+                Record = Existing;
+                break;
+            }
+        }
+        if (Record == NULL)
+        {
+            Record = Candidate;
+            Candidate = NULL;
+            InsertTailList(&DxgkVidMmReservationListHead, &Record->Link);
+        }
     }
     if (Group == D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL)
         Record->Local = Reservation;
     else
         Record->NonLocal = Reservation;
     ExReleaseFastMutex(&DxgkVidMmReservationLock);
+    if (Candidate != NULL)
+        ExFreePoolWithTag(Candidate, TAG_VIDMM_ALLOC);
     return STATUS_SUCCESS;
 }
 
@@ -10045,8 +10077,9 @@ DxgkVidMmReleaseProcessReservations(
     PLIST_ENTRY Entry;
     PLIST_ENTRY Next;
 
-    if (InterlockedCompareExchange(&DxgkVidMmReservationLockReady, 1, 1) != 1)
+    if (InterlockedCompareExchange(&DxgkVidMmReservationLockReady, 0, 0) == 0)
         return;
+    DxgkpVidMmEnsureReservationLock();
     InitializeListHead(&Removed);
     ExAcquireFastMutex(&DxgkVidMmReservationLock);
     for (Entry = DxgkVidMmReservationListHead.Flink; Entry != &DxgkVidMmReservationListHead; Entry = Next)
