@@ -604,6 +604,7 @@ CmBattCreateFdo(IN PDRIVER_OBJECT DriverObject,
 
     /* Setup the rest of the extension */
     ExInitializeFastMutex(&FdoExtension->FastMutex);
+    KeInitializeMutex(&FdoExtension->StaticInfoMutex, 0);
     IoInitializeRemoveLock(&FdoExtension->RemoveLock, 'RbmC', 0, 0);
     FdoExtension->HandleCount = 0;
     FdoExtension->WaitWakeEnable = FALSE;
