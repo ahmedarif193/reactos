@@ -106,6 +106,13 @@ finish_gdb_packet(void)
         return KdPacketReceived;
     }
 
+    if (ack == '$')
+    {
+        gdb_packet_start_pending = TRUE;
+        KD_DEBUGGER_NOT_PRESENT = FALSE;
+        return KdPacketReceived;
+    }
+
     if (ack == '-')
     {
         KD_DEBUGGER_NOT_PRESENT = FALSE;

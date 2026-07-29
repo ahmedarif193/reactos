@@ -21,6 +21,7 @@
 
 CPPORT KdComPort;
 BOOLEAN gdb_breakin_pending;
+BOOLEAN gdb_packet_start_pending;
 BOOLEAN gdb_vctrlc_pending;
 #ifdef KDDEBUG
 CPPORT KdDebugComPort;
@@ -427,6 +428,19 @@ KdpPollBreakIn(VOID)
         gdb_breakin_pending = FALSE;
         KD_DEBUGGER_NOT_PRESENT = FALSE;
         return KdPacketReceived;
+    }
+
+    /*
+     * An asynchronous console packet may have been waiting for its ACK when
+     * the framed interrupt arrived. Continue parsing after the '$' consumed
+     * by finish_gdb_packet instead of discarding the remainder of vCtrlC.
+     */
+    if (gdb_packet_start_pending)
+    {
+        gdb_packet_start_pending = FALSE;
+        GdbPollState = GdbPollPayload;
+        GdbPollPayloadIndex = 0;
+        GdbPollChecksum = 0;
     }
 
     while (TRUE)
