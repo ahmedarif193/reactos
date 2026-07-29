@@ -3,7 +3,7 @@
  * LICENSE:         GPL - See COPYING in the top level directory
  * FILE:            ntoskrnl/po/events.c
  * PURPOSE:         Power Manager
- * PROGRAMMERS:     Hervé Poussineau (hpoussin@reactos.org)
+ * PROGRAMMERS:     HervÃ© Poussineau (hpoussin@reactos.org)
  */
 
 /* INCLUDES ******************************************************************/
@@ -22,6 +22,8 @@ typedef struct _SYS_BUTTON_CONTEXT
     IO_STATUS_BLOCK IoStatusBlock;
     ULONG SysButton;
 } SYS_BUTTON_CONTEXT, *PSYS_BUTTON_CONTEXT;
+
+static volatile LONG PopBatteryInterfaceCount;
 
 static VOID
 NTAPI
@@ -176,9 +178,19 @@ PopAddRemoveSysCapsCallback(IN PVOID NotificationStructure,
     else
         return STATUS_INVALID_PARAMETER;
 
-    if (Arrival && DeviceType == PolicyDeviceBattery)
+    if (DeviceType == PolicyDeviceBattery)
     {
-        PopCapabilities.SystemBatteriesPresent = TRUE;
+        if (Arrival)
+        {
+            InterlockedIncrement(&PopBatteryInterfaceCount);
+            PopCapabilities.SystemBatteriesPresent = TRUE;
+        }
+        else if (InterlockedDecrement(&PopBatteryInterfaceCount) <= 0)
+        {
+            InterlockedExchange(&PopBatteryInterfaceCount, 0);
+            PopCapabilities.SystemBatteriesPresent = FALSE;
+        }
+
         return STATUS_SUCCESS;
     }
 
