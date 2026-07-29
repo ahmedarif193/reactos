@@ -148,6 +148,24 @@ ULONG KiArm64NumBreakpoints = 6;
 ULONG KiArm64NumWatchpoints = 2;
 
 /*
+ * Enable self-hosted debug on the current processor.
+ *
+ * Firmware can leave either OS debug lock set. While locked, writes to the
+ * breakpoint and watchpoint registers are permitted, but the corresponding
+ * debug events do not become active. Both registers are banked per processor,
+ * so this must run during BSP and AP initialization.
+ */
+VOID
+KiInitializeDebugMonitors(VOID)
+{
+    ULONGLONG Zero = 0;
+
+    WRITE_SYSREG64(osdlr_el1, Zero);
+    WRITE_SYSREG64(oslar_el1, Zero);
+    __asm__ __volatile__("isb" ::: "memory");
+}
+
+/*
  * Initialize the debug register counts by reading ID_AA64DFR0_EL1.
  * Called early during CPU initialization.
  */
