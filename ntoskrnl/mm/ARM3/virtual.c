@@ -1863,13 +1863,15 @@ MiQueryAddressState(IN PVOID Va,
                     OUT PVOID *NextVa)
 {
 
-    PMMPTE PointerPte, ProtoPte;
+    PMMPTE PointerPte = NULL, ProtoPte;
+#if !defined(_M_ARM64)
     PMMPDE PointerPde;
 #if (_MI_PAGING_LEVELS >= 3)
     PMMPPE PointerPpe;
 #endif
 #if (_MI_PAGING_LEVELS >= 4)
     PMMPXE PointerPxe;
+#endif
 #endif
     MMPTE TempPte, TempProtoPte;
     BOOLEAN DemandZeroPte = TRUE, ValidPte = FALSE;
@@ -1881,8 +1883,7 @@ MiQueryAddressState(IN PVOID Va,
     ASSERT((Vad->u.VadFlags.VadType == VadNone) ||
            (Vad->u.VadFlags.VadType == VadAwe));
 
-    /* ARM64 user leaves live under TTBR0, not the recursive TTBR1 view used
-       by the generic hierarchy walk below. Handle AWE before touching it. */
+    /* ARM64 user leaves live under TTBR0, not the recursive TTBR1 view. */
 #if defined(_M_ARM64)
     if (Vad->u.VadFlags.VadType == VadAwe)
     {
@@ -1900,6 +1901,33 @@ MiQueryAddressState(IN PVOID Va,
     }
 #endif
 
+#if defined(_M_ARM64)
+    {
+        MI_ARM64_USER_PTE_WALK Walk;
+
+        *NextVa = (PVOID)((ULONG_PTR)Va + PAGE_SIZE);
+        if (MiArm64GetUserPteAddressForProcess(TargetProcess, Va, &Walk))
+        {
+            PointerPte = (PMMPTE)Walk.PointerPte;
+            ValidPte = TRUE;
+        }
+        else
+        {
+            ULONG Shift;
+            ULONG_PTR BoundarySize;
+
+            /*
+             * Skip the missing portion of the hierarchy in one step. Depth
+             * names the deepest table reached: L0, L1, then L2.
+             */
+            Shift = (Walk.Depth == 0) ? PXI_SHIFT :
+                    (Walk.Depth == 1) ? PPI_SHIFT :
+                                        PDI_SHIFT;
+            BoundarySize = (ULONG_PTR)1 << Shift;
+            *NextVa = (PVOID)(((ULONG_PTR)Va & ~(BoundarySize - 1)) + BoundarySize);
+        }
+    }
+#else
     /* Get the PDE and PTE for the address */
     PointerPde = MiAddressToPde(Va);
     PointerPte = MiAddressToPte(Va);
@@ -1967,6 +1995,7 @@ MiQueryAddressState(IN PVOID Va,
         ValidPte = TRUE;
 
     } while (FALSE);
+#endif
 
     /* An AWE address is committed exactly while a physical page is mapped
        there; its PTE is only ever zero or valid */
@@ -1988,7 +2017,9 @@ MiQueryAddressState(IN PVOID Va,
     if (ValidPte)
     {
         /* FIXME: watch out for large pages */
+#if !defined(_M_ARM64)
         ASSERT(MI_IS_PAGE_LARGE(PointerPde) == FALSE);
+#endif
 
         /* Capture the PTE */
         TempPte = *PointerPte;
@@ -2425,6 +2456,19 @@ MiIsEntireRangeCommitted(IN ULONG_PTR StartingAddress,
                          IN PMMVAD Vad,
                          IN PEPROCESS Process)
 {
+#if defined(_M_ARM64)
+    PAGED_CODE();
+
+    /*
+     * User commitment lives in the TTBR0 hierarchy. The recursive TTBR1 view
+     * can contain stale software PTEs and cannot answer this query.
+     */
+    return MiArm64CalculatePageCommitment(StartingAddress,
+                                          EndingAddress,
+                                          Vad,
+                                          Process) ==
+           BYTES_TO_PAGES(EndingAddress - StartingAddress + 1);
+#else
     PMMPTE PointerPte, LastPte;
     PMMPDE PointerPde;
     BOOLEAN OnPdeBoundary = TRUE;
@@ -2572,6 +2616,7 @@ MiIsEntireRangeCommitted(IN ULONG_PTR StartingAddress,
 
     /* All PTEs seem valid, and no VAD checks failed, the range is okay */
     return TRUE;
+#endif
 }
 
 NTSTATUS
