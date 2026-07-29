@@ -122,16 +122,6 @@ VOID
 MiArm64ReleaseMappedPageReference(
     _In_ PFN_NUMBER PageFrameNumber);
 
-static
-VOID
-MiArm64SynchronizeUserTablePfn(
-    _Inout_ PEPROCESS Process,
-    _In_ PFN_NUMBER TablePfn,
-    _In_ PVOID PteAddress,
-    _In_ PFN_NUMBER ParentPfn,
-    _In_ ULONG Level,
-    _In_reads_(PTE_PER_PAGE) volatile ULONG64 *Table);
-
 FORCEINLINE
 VOID
 MiArm64WritePteEntry(
@@ -410,7 +400,6 @@ MiArm64AllocateCleanPage(
 static
 VOID
 MiArm64InitializeUserTablePage(
-    _Inout_ PEPROCESS Process,
     _In_ PFN_NUMBER TablePfn,
     _In_ PVOID PteAddress,
     _In_ PFN_NUMBER ParentPfn)
@@ -441,8 +430,6 @@ MiArm64InitializeUserTablePage(
     ASSERT(ParentPfnEntry->OriginalPte.u.Soft.UsedPageTableEntries <= PTE_PER_PAGE);
 
     MiReleasePfnLock(OldIrql);
-
-    Process->NumberOfPrivatePages++;
 }
 
 static
@@ -552,6 +539,7 @@ MiArm64EnsureUserPte(
     ULONG Level;
     KIRQL OldIrql;
     BOOLEAN Healthy;
+    BOOLEAN AllocatedTable = FALSE;
 
     *PointerPte = NULL;
     if (L3TablePfn != NULL)
@@ -594,8 +582,7 @@ MiArm64EnsureUserPte(
 
     /*
      * Descend L0->L3, allocating any missing table level. The three level
-     * steps are identical except for the child PteAddress and the 2MB-block
-     * demolition, which only boot mappings at the L2 level can require.
+     * steps are identical except for the child PteAddress.
      */
     for (Level = 0; Level < 3; Level++)
     {
@@ -603,10 +590,13 @@ MiArm64EnsureUserPte(
 
         if ((Level == 2) && ((Entry & 0x3ULL) == 0x1ULL))
         {
-            Table[LevelIndex[Level]] = 0;
-            MiArm64CleanEntryToPoC(&Table[LevelIndex[Level]]);
-            MiArm64InvalidateUserAddress(Address);
-            Entry = 0;
+            /*
+             * ARM3 creates user mappings as L3 pages. Replacing an existing
+             * L2 block here would discard the other 511 pages in its 2 MB
+             * range; a block is therefore an address-space conflict, not an
+             * implicit request to demolish the mapping.
+             */
+            return STATUS_CONFLICTING_ADDRESSES;
         }
 
         if ((Entry & 0x3ULL) == 0)
@@ -614,12 +604,17 @@ MiArm64EnsureUserPte(
             Status = MiArm64AllocateCleanPage(Process, &ChildPfn);
             if (!NT_SUCCESS(Status))
             {
+                if (AllocatedTable)
+                {
+                    MiArm64PruneEmptyUserPageTables(Process, Address);
+                }
                 return Status;
             }
 
-            MiArm64InitializeUserTablePage(Process, ChildPfn, LevelPteAddress[Level], ParentPfn);
+            MiArm64InitializeUserTablePage(ChildPfn, LevelPteAddress[Level], ParentPfn);
 
             MiArm64WritePteEntry(&Table[LevelIndex[Level]], ARM64_MAKE_TABLE_DESCRIPTOR(ChildPfn));
+            AllocatedTable = TRUE;
         }
         else if ((Entry & 0x3ULL) == 0x3ULL)
         {
@@ -632,6 +627,10 @@ MiArm64EnsureUserPte(
 
         if (!MiArm64EnsureTablePageMapped((ULONG64)ChildPfn << PAGE_SHIFT))
         {
+            if (AllocatedTable)
+            {
+                MiArm64PruneEmptyUserPageTables(Process, Address);
+            }
             return STATUS_INVALID_PARAMETER;
         }
 
@@ -640,10 +639,7 @@ MiArm64EnsureUserPte(
         ParentPfn = ChildPfn;
     }
 
-    /*
-     * One PFN-lock section validates all three table PFNs in the steady
-     * state; the per-table repair scan runs only when a check fails.
-     */
+    /* Every live descriptor must reference the PFN initialized for it. */
     OldIrql = MiAcquirePfnLock();
     Healthy = MiArm64UserTablePfnHealthy(TablePfn[0], LevelPteAddress[0], RootPfn) &&
               MiArm64UserTablePfnHealthy(TablePfn[1], LevelPteAddress[1], TablePfn[0]) &&
@@ -652,9 +648,11 @@ MiArm64EnsureUserPte(
 
     if (!Healthy)
     {
-        MiArm64SynchronizeUserTablePfn(Process, TablePfn[0], LevelPteAddress[0], RootPfn, 1, (volatile ULONG64 *)MI_ARM64_PFN_TO_VA(TablePfn[0]));
-        MiArm64SynchronizeUserTablePfn(Process, TablePfn[1], LevelPteAddress[1], TablePfn[0], 2, (volatile ULONG64 *)MI_ARM64_PFN_TO_VA(TablePfn[1]));
-        MiArm64SynchronizeUserTablePfn(Process, TablePfn[2], LevelPteAddress[2], TablePfn[1], 3, (volatile ULONG64 *)MI_ARM64_PFN_TO_VA(TablePfn[2]));
+        KeBugCheckEx(MEMORY_MANAGEMENT,
+                     0xA642,
+                     (ULONG_PTR)Address,
+                     TablePfn[0],
+                     TablePfn[2]);
     }
 
     *PointerPte = (PMMPTE)&Table[LevelIndex[3]];
@@ -864,94 +862,6 @@ MiArm64CountUserTableEntries(
 
     *ShareReferences = SharedEntries;
     return UsedEntries;
-}
-
-static
-VOID
-MiArm64SynchronizeUserTablePfn(
-    _Inout_ PEPROCESS Process,
-    _In_ PFN_NUMBER TablePfn,
-    _In_ PVOID PteAddress,
-    _In_ PFN_NUMBER ParentPfn,
-    _In_ ULONG Level,
-    _In_reads_(PTE_PER_PAGE) volatile ULONG64 *Table)
-{
-    KIRQL OldIrql;
-    ULONG UsedEntries;
-    ULONG ShareReferences;
-    ULONG ExpectedShareCount;
-    PMMPFN Pfn;
-
-    OldIrql = MiAcquirePfnLock();
-    if (MiArm64UserTablePfnHealthy(TablePfn, PteAddress, ParentPfn))
-    {
-        MiReleasePfnLock(OldIrql);
-        return;
-    }
-
-    if (MiGetPfnEntry(TablePfn) == NULL)
-    {
-        MiReleasePfnLock(OldIrql);
-        return;
-    }
-
-    MiReleasePfnLock(OldIrql);
-
-    /* Repair path: reconcile the PFN entry from an actual table scan */
-    UsedEntries = MiArm64CountUserTableEntries(Table, Level, &ShareReferences);
-    ExpectedShareCount = ShareReferences + 1;
-
-    OldIrql = MiAcquirePfnLock();
-
-    Pfn = MiGetPfnEntry(TablePfn);
-    if (Pfn == NULL)
-    {
-        MiReleasePfnLock(OldIrql);
-        return;
-    }
-
-    if ((Pfn->u3.e1.PageLocation == FreePageList) ||
-        (Pfn->u3.e1.PageLocation == ZeroedPageList))
-    {
-        MiUnlinkFreeOrZeroedPage(Pfn);
-        Pfn = MiGetPfnEntry(TablePfn);
-    }
-
-    if ((Pfn->u3.e1.PageLocation != ActiveAndValid) ||
-        (Pfn->u3.e2.ReferenceCount == 0))
-    {
-        Pfn->PteAddress = PteAddress;
-        MI_MAKE_SOFTWARE_PTE(&Pfn->OriginalPte, MM_READWRITE);
-        Pfn->u3.e2.ReferenceCount = 1;
-        Pfn->u3.e1.PageLocation = ActiveAndValid;
-        Pfn->u3.e1.Modified = TRUE;
-        Pfn->u4.InPageError = FALSE;
-        Pfn->u4.PteFrame = ParentPfn;
-        Pfn->u2.ShareCount = ExpectedShareCount;
-        Pfn->OriginalPte.u.Soft.UsedPageTableEntries = UsedEntries;
-
-        Process->NumberOfPrivatePages++;
-        MiReleasePfnLock(OldIrql);
-        return;
-    }
-
-    if ((ParentPfn != 0) && (Pfn->u4.PteFrame != ParentPfn))
-    {
-        Pfn->u4.PteFrame = ParentPfn;
-    }
-
-    Pfn->PteAddress = PteAddress;
-    if (Pfn->OriginalPte.u.Soft.UsedPageTableEntries != UsedEntries)
-    {
-        Pfn->OriginalPte.u.Soft.UsedPageTableEntries = UsedEntries;
-    }
-
-    if (Pfn->u2.ShareCount < ExpectedShareCount)
-    {
-        Pfn->u2.ShareCount = ExpectedShareCount;
-    }
-
-    MiReleasePfnLock(OldIrql);
 }
 
 static
