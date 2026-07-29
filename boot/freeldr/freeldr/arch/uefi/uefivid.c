@@ -807,37 +807,27 @@ UefiIsUsableLinearGopMode(
 
 static
 UINT32
-UefiSelectBestGopMode(_In_ EFI_GRAPHICS_OUTPUT_PROTOCOL* Gop, _In_ UINT32 PreferredWidth, _In_ UINT32 PreferredHeight)
+UefiSelectPreferredGopMode(
+    _In_ EFI_GRAPHICS_OUTPUT_PROTOCOL* Gop,
+    _In_ UINT32 PreferredWidth,
+    _In_ UINT32 PreferredHeight)
 {
     EFI_STATUS Status;
     EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* Info;
     UINTN SizeOfInfo;
-    UINT32 Mode, BestMode = Gop->Mode->Mode;
-    UINT32 BestWidth = 0, BestHeight = 0;
-    ULONGLONG Area, BestArea = 0;
-    BOOLEAN BestWithinPreferred = FALSE;
-    BOOLEAN Found = FALSE;
-    BOOLEAN HasPreferred = (PreferredWidth != 0) && (PreferredHeight != 0);
+    UINT32 Mode, BestMode;
 
+    BestMode = Gop->Mode->Mode;
     Info = Gop->Mode->Info;
-    if (UefiIsUsableLinearGopMode(Info))
+    if (UefiIsUsableLinearGopMode(Info) &&
+        (Info->HorizontalResolution == PreferredWidth) &&
+        (Info->VerticalResolution == PreferredHeight))
     {
-        BestWidth = Info->HorizontalResolution;
-        BestHeight = Info->VerticalResolution;
-        BestArea = (ULONGLONG)BestWidth * BestHeight;
-        BestWithinPreferred = !HasPreferred || ((BestWidth <= PreferredWidth) && (BestHeight <= PreferredHeight));
-        Found = TRUE;
-
-        if (HasPreferred && (BestWidth == PreferredWidth) && (BestHeight == PreferredHeight))
-        {
-            return BestMode;
-        }
+        return BestMode;
     }
 
     for (Mode = 0; Mode < Gop->Mode->MaxMode; ++Mode)
     {
-        BOOLEAN WithinPreferred;
-
         Info = NULL;
         SizeOfInfo = 0;
         Status = Gop->QueryMode(Gop, Mode, &SizeOfInfo, &Info);
@@ -858,43 +848,16 @@ UefiSelectBestGopMode(_In_ EFI_GRAPHICS_OUTPUT_PROTOCOL* Gop, _In_ UINT32 Prefer
 
         if (UefiIsUsableLinearGopMode(Info))
         {
-            if (HasPreferred && (Info->HorizontalResolution == PreferredWidth) && (Info->VerticalResolution == PreferredHeight))
+            if ((Info->HorizontalResolution == PreferredWidth) &&
+                (Info->VerticalResolution == PreferredHeight))
             {
                 BestMode = Mode;
-                BestWidth = Info->HorizontalResolution;
-                BestHeight = Info->VerticalResolution;
-                BestWithinPreferred = TRUE;
-                Found = TRUE;
                 GlobalSystemTable->BootServices->FreePool(Info);
                 break;
-            }
-
-            /*
-             * Without EDID, use the largest linear framebuffer advertised by
-             * GOP. With EDID, prefer the largest mode that does not exceed the
-             * preferred timing, falling back to the largest advertised mode
-             * only when no such mode exists.
-             */
-            WithinPreferred = !HasPreferred || ((Info->HorizontalResolution <= PreferredWidth) && (Info->VerticalResolution <= PreferredHeight));
-            Area = (ULONGLONG)Info->HorizontalResolution * Info->VerticalResolution;
-
-            if (!Found || (WithinPreferred && !BestWithinPreferred) || ((WithinPreferred == BestWithinPreferred) && ((Area > BestArea) || ((Area == BestArea) && (Info->HorizontalResolution > BestWidth)))))
-            {
-                BestMode = Mode;
-                BestWidth = Info->HorizontalResolution;
-                BestHeight = Info->VerticalResolution;
-                BestArea = Area;
-                BestWithinPreferred = WithinPreferred;
-                Found = TRUE;
             }
         }
 
         GlobalSystemTable->BootServices->FreePool(Info);
-    }
-
-    if (Found)
-    {
-        TRACE("Selected GOP mode %u: %ux%u%s\n", BestMode, BestWidth, BestHeight, BestWithinPreferred && HasPreferred ? " within EDID preference" : "");
     }
 
     return BestMode;
@@ -907,8 +870,7 @@ UefiInitializeGop(VOID)
     EFI_STATUS Status;
     EFI_GRAPHICS_OUTPUT_PROTOCOL* gop = NULL;
     UINT32 SelectedMode;
-    UINT32 PreferredWidth = 0, PreferredHeight = 0;
-    BOOLEAN HasPreferredResolution;
+    UINT32 PreferredWidth, PreferredHeight;
 
     EFI_GRAPHICS_PIXEL_FORMAT PixelFormat;
     EFI_PIXEL_BITMASK* pPixelBitmask;
@@ -921,36 +883,38 @@ UefiInitializeGop(VOID)
         return Status;
     }
 
-    HasPreferredResolution = UefiGetEdidPreferredResolution(&PreferredWidth, &PreferredHeight);
-    if (HasPreferredResolution)
+    if (UefiGetEdidPreferredResolution(&PreferredWidth, &PreferredHeight))
     {
         TRACE("EDID preferred resolution is %ux%u\n",
               PreferredWidth,
               PreferredHeight);
-    }
 
-    /*
-     * Some firmware starts UEFI applications in a low-resolution
-     * compatibility mode. Prefer the EDID timing, or otherwise the largest
-     * usable linear GOP mode, so the loader does not pin the kernel console to
-     * that compatibility mode.
-     */
-    SelectedMode = UefiSelectBestGopMode(gop, PreferredWidth, PreferredHeight);
-    if (SelectedMode != gop->Mode->Mode)
-    {
-        UINT32 PreviousMode = gop->Mode->Mode;
-
-        Status = gop->SetMode(gop, SelectedMode);
-        if (Status != EFI_SUCCESS)
+        /*
+         * Some firmware starts UEFI applications in a low-resolution
+         * compatibility mode. Switch to the monitor's EDID preferred timing
+         * when GOP advertises a compatible linear framebuffer for it.
+         */
+        SelectedMode = UefiSelectPreferredGopMode(gop,
+                                                  PreferredWidth,
+                                                  PreferredHeight);
+        if (SelectedMode != gop->Mode->Mode)
         {
-            WARN("Could not set GOP mode %u (status %llx), keeping mode %u\n", SelectedMode, (ULONGLONG)Status, PreviousMode);
-            Status = EFI_SUCCESS;
+            Status = gop->SetMode(gop, SelectedMode);
+            if (Status != EFI_SUCCESS)
+            {
+                WARN("Could not set GOP mode %u (status %llx), keeping mode %u\n",
+                     SelectedMode,
+                     (ULONGLONG)Status,
+                     gop->Mode->Mode);
+            }
         }
-    }
-
-    if (HasPreferredResolution && ((gop->Mode->Info->HorizontalResolution != PreferredWidth) || (gop->Mode->Info->VerticalResolution != PreferredHeight)))
-    {
-        WARN("GOP does not expose EDID preferred resolution %ux%u; using %ux%u\n", PreferredWidth, PreferredHeight, gop->Mode->Info->HorizontalResolution, gop->Mode->Info->VerticalResolution);
+        else if ((gop->Mode->Info->HorizontalResolution != PreferredWidth) ||
+                 (gop->Mode->Info->VerticalResolution != PreferredHeight))
+        {
+            WARN("GOP does not expose EDID preferred resolution %ux%u\n",
+                 PreferredWidth,
+                 PreferredHeight);
+        }
     }
 
     TRACE("Using GOP mode %u: %ux%u, pixel format %u, stride %u\n",
