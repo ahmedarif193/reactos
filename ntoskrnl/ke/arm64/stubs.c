@@ -235,8 +235,6 @@ MMPTE MmDecommittedPte = {.u.Long = (MM_DECOMMIT << MM_PTE_SOFTWARE_PROTECTION_B
  * implemented. */
 
 extern BOOLEAN KdDebuggerEnabled;
-extern BOOLEAN KdDebuggerNotPresent;
-
 VOID
 NTAPI
 DbgBreakPointWithStatus(
@@ -251,13 +249,15 @@ DbgBreakPointWithStatus(
      * during bugchecks. The BRK handler in trapc.c routes the exception to
      * KdbEnterDebuggerException when KDBG is enabled.
      *
-     * If no debugger of any kind is available, the trap handler will skip
-     * the breakpoint by advancing PC.
+     * An enabled remote debugger must also receive the BRK while it is
+     * currently absent. Its transport has a bounded acknowledgement timeout,
+     * and the repeated second bugcheck break then provides the late-attach
+     * point used after a crash.
      */
 #ifdef KDBG
     __asm__ __volatile__("brk #0xf000" ::: "memory");
 #else
-    if (!KdDebuggerEnabled || KdDebuggerNotPresent)
+    if (!KdDebuggerEnabled)
     {
         return;
     }
