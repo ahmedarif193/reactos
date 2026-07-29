@@ -686,6 +686,9 @@ KeSweepICache(
 }
 
 VOID
+KiInitializeDebugMonitors(VOID);
+
+VOID
 KiInitializeDebugRegisterCounts(VOID);
 
 #define Ki386PerfEnd()

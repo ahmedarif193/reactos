@@ -1187,6 +1187,7 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     }
 
     HalInitializeProcessor(ProcessorNumber, KeLoaderBlock);
+    KiInitializeDebugMonitors();
     /* Skip DbgPrintEx for now, KD not yet initialized */
 
     QpcBypassSafe = KiArm64EnableUserPerformanceCounter(&QpcFrequency);
