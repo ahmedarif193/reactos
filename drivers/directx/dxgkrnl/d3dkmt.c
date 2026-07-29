@@ -28,6 +28,7 @@
 #include "vidpn.h"
 #include "present.h"
 #include "pnp.h"
+#include "caps_core.h"
 
 C_ASSERT(sizeof(RXGK_CREATECONTEXTVIRTUAL_PACKET) == RXGK_CREATECONTEXTVIRTUAL_PACKET_V1_SIZE);
 C_ASSERT(sizeof(RXGK_SUBMITCOMMAND_PACKET) == RXGK_SUBMITCOMMAND_PACKET_V1_SIZE);
@@ -134,69 +135,186 @@ typedef struct _DXGKRNL_FILE_CONTEXT
 #define REACTOS_WDDM_TARGET_LEVEL KMT_DRIVERVERSION_WDDM_2_0
 #endif
 
-static D3DKMT_DRIVERVERSION
-DxgkpMiniportDeclaredWddmLevel(
-    _In_ ULONG Version)
+/*
+ * Minimum OS WDDM level at which each KMT transport exists.  This is an OS
+ * API gate, not an adapter-capability test: a call may exist at a given OS
+ * level and still return NOT_SUPPORTED for a particular adapter.
+ *
+ * Keep the switch exhaustive and fail closed.  The latest WDK leaves several
+ * Windows 7 declarations unguarded, so their 1.1 minima come from the API
+ * requirements and historical WDKs rather than from the 26100 preprocessor
+ * shape alone.
+ */
+static ULONG
+DxgkpKmtIoctlMinimumConfiguredLevel(
+    _In_ ULONG IoControlCode)
 {
-    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
-        return KMT_DRIVERVERSION_WDDM_3_2;
-    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
-        return KMT_DRIVERVERSION_WDDM_3_1;
-    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
-        return KMT_DRIVERVERSION_WDDM_3_0;
-    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
-        return KMT_DRIVERVERSION_WDDM_2_9;
-    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_8)
-        return KMT_DRIVERVERSION_WDDM_2_8;
-    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_7)
-        return KMT_DRIVERVERSION_WDDM_2_7;
-    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_6)
-        return KMT_DRIVERVERSION_WDDM_2_6;
-    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_5)
-        return KMT_DRIVERVERSION_WDDM_2_5;
-    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
-        return KMT_DRIVERVERSION_WDDM_2_4;
-    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_3)
-        return KMT_DRIVERVERSION_WDDM_2_3;
-    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
-        return KMT_DRIVERVERSION_WDDM_2_2;
-    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_1)
-        return KMT_DRIVERVERSION_WDDM_2_1;
-    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
-        return KMT_DRIVERVERSION_WDDM_2_0;
-    if (Version >= DXGKDDI_INTERFACE_VERSION_WDDM1_3)
-        return KMT_DRIVERVERSION_WDDM_1_3;
-    if (Version >= DXGKDDI_INTERFACE_VERSION_WIN8)
-        return KMT_DRIVERVERSION_WDDM_1_2;
-    if (Version >= DXGKDDI_INTERFACE_VERSION_WIN7)
-        return KMT_DRIVERVERSION_WDDM_1_1;
-    return KMT_DRIVERVERSION_WDDM_1_0;
+    switch (IoControlCode)
+    {
+        /* WDDM 1.0 / Vista baseline. */
+        case IOCTL_D3DKMT_CLOSEADAPTER:
+        case IOCTL_D3DKMT_QUERYADAPTERINFO:
+        case IOCTL_D3DKMT_GETDISPLAYMODELIST:
+        case IOCTL_D3DKMT_OPENADAPTERFROMHDC:
+        case IOCTL_D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME:
+        case IOCTL_D3DKMT_OPENADAPTERFROMDEVICENAME:
+        case IOCTL_D3DKMT_CREATEDEVICE:
+        case IOCTL_D3DKMT_DESTROYDEVICE:
+        case IOCTL_D3DKMT_CREATEALLOCATION:
+        case IOCTL_D3DKMT_DESTROYALLOCATION:
+        case IOCTL_D3DKMT_LOCK:
+        case IOCTL_D3DKMT_UNLOCK:
+        case IOCTL_D3DKMT_GETSHAREDPRIMARYHANDLE:
+        case IOCTL_D3DKMT_GETSHADOWSURFACE:
+        case IOCTL_D3DKMT_QUERYRESOURCEINFO:
+        case IOCTL_D3DKMT_OPENRESOURCE:
+        case IOCTL_D3DKMT_RENDER:
+        case IOCTL_D3DKMT_PRESENT:
+        case IOCTL_D3DKMT_WAITFORSYNCHRONIZATIONOBJECT:
+        case IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECT:
+        case IOCTL_D3DKMT_SETDISPLAYMODE:
+        case IOCTL_D3DKMT_CREATECONTEXT:
+        case IOCTL_D3DKMT_DESTROYCONTEXT:
+        case IOCTL_D3DKMT_CREATESYNCHRONIZATIONOBJECT:
+        case IOCTL_D3DKMT_DESTROYSYNCHRONIZATIONOBJECT:
+        case IOCTL_D3DKMT_ESCAPE:
+        case IOCTL_D3DKMT_SETVIDPNSOURCEOWNER:
+        case IOCTL_D3DKMT_GETDEVICESTATE:
+        case IOCTL_D3DKMT_SETALLOCATIONPRIORITY:
+        case IOCTL_D3DKMT_QUERYALLOCATIONRESIDENCY:
+        case IOCTL_D3DKMT_GETPRESENTHISTORY:
+        case IOCTL_D3DKMT_GETPRESENTQUEUEEVENT:
+        case IOCTL_D3DKMT_WAITFORVERTICALBLANKEVENT:
+        case IOCTL_D3DKMT_GETSCANLINE:
+        case IOCTL_D3DKMT_CHECKMONITORPOWERSTATE:
+        case IOCTL_D3DKMT_CHECKOCCLUSION:
+        case IOCTL_D3DKMT_CHECKEXCLUSIVEOWNERSHIP:
+        case IOCTL_D3DKMT_WAITFORIDLE:
+        case IOCTL_D3DKMT_SETCONTEXTSCHEDULINGPRIORITY:
+        case IOCTL_D3DKMT_GETCONTEXTSCHEDULINGPRIORITY:
+        case IOCTL_D3DKMT_SETPROCESSSCHEDULINGPRIORITYCLASS:
+        case IOCTL_D3DKMT_GETPROCESSSCHEDULINGPRIORITYCLASS:
+        case IOCTL_D3DKMT_RELEASEPROCESSVIDPNSOURCEOWNERS:
+        case IOCTL_D3DKMT_SETQUEUEDLIMIT:
+        case IOCTL_D3DKMT_SETGAMMARAMP:
+        case IOCTL_D3DKMT_GETMULTISAMPLEMETHODLIST:
+        case IOCTL_D3DKMT_GETRUNTIMEDATA:
+        case IOCTL_D3DKMT_QUERYSTATISTICS:
+        case IOCTL_D3DKMT_CREATEDCFROMMEMORY:
+        case IOCTL_D3DKMT_DESTROYDCFROMMEMORY:
+        case IOCTL_D3DKMT_SHAREDPRIMARYLOCKNOTIFICATION:
+        case IOCTL_D3DKMT_SHAREDPRIMARYUNLOCKNOTIFICATION:
+        case IOCTL_D3DKMT_SETDISPLAYPRIVATEDRIVERFORMAT:
+        case IOCTL_D3DKMT_INVALIDATEACTIVEVIDPN:
+        case IOCTL_D3DKMT_POLLDISPLAYCHILDREN:
+        case IOCTL_D3DKMT_CREATEOVERLAY:
+        case IOCTL_D3DKMT_DESTROYOVERLAY:
+        case IOCTL_D3DKMT_FLIPOVERLAY:
+        case IOCTL_D3DKMT_UPDATEOVERLAY:
+        case IOCTL_DXGKRNL_EXCHANGE_INTERFACE:
+        case IOCTL_DXGKRNL_GET_LEGACY_FULL_INIT_ENTRY:
+        case IOCTL_DXGKRNL_GET_FULL_INIT_ENTRY:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_1_0;
+
+        /* WDDM 1.1 / Windows 7 additions. */
+        case IOCTL_D3DKMT_CREATEALLOCATION2:
+        case IOCTL_D3DKMT_CHECKSHAREDRESOURCEACCESS:
+        case IOCTL_D3DKMT_CHECKVIDPNEXCLUSIVEOWNERSHIP:
+        case IOCTL_D3DKMT_CREATEKEYEDMUTEX:
+        case IOCTL_D3DKMT_OPENKEYEDMUTEX:
+        case IOCTL_D3DKMT_DESTROYKEYEDMUTEX:
+        case IOCTL_D3DKMT_ACQUIREKEYEDMUTEX:
+        case IOCTL_D3DKMT_RELEASEKEYEDMUTEX:
+        case IOCTL_D3DKMT_GETOVERLAYSTATE:
+        case IOCTL_D3DKMT_CREATESYNCHRONIZATIONOBJECT2:
+        case IOCTL_D3DKMT_OPENSYNCHRONIZATIONOBJECT:
+        case IOCTL_D3DKMT_WAITFORSYNCHRONIZATIONOBJECT2:
+        case IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECT2:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_1_1;
+
+        /* WDDM 1.2 / Windows 8 additions. */
+        case IOCTL_D3DKMT_ENUMADAPTERS:
+        case IOCTL_D3DKMT_ENUMADAPTERS2:
+        case IOCTL_D3DKMT_OPENADAPTERFROMLUID:
+        case IOCTL_D3DKMT_CREATEKEYEDMUTEX2:
+        case IOCTL_D3DKMT_OPENKEYEDMUTEX2:
+        case IOCTL_D3DKMT_ACQUIREKEYEDMUTEX2:
+        case IOCTL_D3DKMT_RELEASEKEYEDMUTEX2:
+        case IOCTL_D3DKMT_OFFERALLOCATIONS:
+        case IOCTL_D3DKMT_RECLAIMALLOCATIONS:
+        case IOCTL_D3DKMT_SETVIDPNSOURCEOWNER1:
+        case IOCTL_D3DKMT_WAITFORVERTICALBLANKEVENT2:
+        case IOCTL_DXGKRNL_GET_DOD_INIT_ENTRY:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_1_2;
+
+        /* WDDM 2.0 / Windows 10 additions and their private prepare phase. */
+        case IOCTL_D3DKMT_CREATECONTEXTVIRTUAL:
+        case IOCTL_D3DKMT_SUBMITCOMMAND:
+        case IOCTL_D3DKMT_MAPGPUVIRTUALADDRESS:
+        case IOCTL_D3DKMT_RESERVEGPUVIRTUALADDRESS:
+        case IOCTL_D3DKMT_FREEGPUVIRTUALADDRESS:
+        case IOCTL_D3DKMT_UPDATEGPUVIRTUALADDRESS:
+        case IOCTL_D3DKMT_MAKERESIDENT:
+        case IOCTL_D3DKMT_EVICT:
+        case IOCTL_D3DKMT_QUERYCLOCKCALIBRATION:
+        case IOCTL_D3DKMT_CHANGEVIDEOMEMORYRESERVATION:
+        case IOCTL_D3DKMT_REGISTERTRIMNOTIFICATION:
+        case IOCTL_D3DKMT_UNREGISTERTRIMNOTIFICATION:
+        case IOCTL_D3DKMT_CREATEPAGINGQUEUE:
+        case IOCTL_D3DKMT_DESTROYPAGINGQUEUE:
+        case IOCTL_D3DKMT_QUERYVIDEOMEMORYINFO:
+        case IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU:
+        case IOCTL_D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU:
+        case IOCTL_D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU:
+        case IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU:
+        case IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2:
+        case IOCTL_DXGKRNL_PREPAREMAPGPUVIRTUALADDRESS:
+        case IOCTL_DXGKRNL_PREPARERESERVEGPUVIRTUALADDRESS:
+        case IOCTL_DXGKRNL_GET_UNINIT_ENTRY:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_2_0;
+
+        /* Hardware queues first appeared in WDDM 2.2. */
+        case IOCTL_D3DKMT_GETALLOCATIONPRIORITY:
+        case IOCTL_D3DKMT_CREATEHWQUEUE:
+        case IOCTL_D3DKMT_DESTROYHWQUEUE:
+        case IOCTL_D3DKMT_SUBMITCOMMANDTOHWQUEUE:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_2_2;
+
+        case IOCTL_D3DKMT_SETVIDPNSOURCEOWNER2:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_2_3;
+
+        default:
+            return 0;
+    }
 }
 
 static D3DKMT_DRIVERVERSION
 DxgkpGetReportedDriverVersion(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
-    D3DKMT_DRIVERVERSION Declared;
-    D3DKMT_DRIVERVERSION Provider;
+    DXGK_CAPS_INPUT Input;
 
     if (Adapter == NULL || Adapter->MiniportContext == NULL)
         return KMT_DRIVERVERSION_WDDM_1_0;
 
-    Declared = DxgkpMiniportDeclaredWddmLevel(Adapter->MiniportContext->InitData.s.Version);
-    if (Declared < KMT_DRIVERVERSION_WDDM_2_0)
-        return Declared;
-
     /*
-     * Two independent ceilings, and the public number is the lower of both:
-     * what this OS implements end to end, and what the memory-manager and
-     * scheduler provider reports as complete.  The provider's number is not
-     * decoration — a provider that owns less than it does today would lower
-     * the version the public path reports.
+     * Four independent ceilings, and the public number is the lowest:
+     * miniport declaration, end-to-end OS implementation, memory-manager /
+     * scheduler provider, and the configured build level. The selector is
+     * normalized by ABI family so historical revisions such as the 10240
+     * WDDM 2.0 value 0x5022 do not fall through as WDDM 1.3.
      */
-    Provider = DxgkpMiniportDeclaredWddmLevel(Adapter->Mms2HighestCompleteWddmVersion);
-    return min(min(min(Declared, DXGKP_OS_COMPLETED_WDDM_LEVEL), Provider),
-               REACTOS_WDDM_TARGET_LEVEL);
+    RtlZeroMemory(&Input, sizeof(Input));
+    Input.MiniportDeclaredLevel =
+        DxgkCapsCoreInterfaceVersionToLevel(
+            Adapter->MiniportContext->InitData.s.Version);
+    Input.OsCompletedLevel = DXGKP_OS_COMPLETED_WDDM_LEVEL;
+    Input.ProviderCompletedLevel =
+        DxgkCapsCoreInterfaceVersionToLevel(
+            Adapter->Mms2HighestCompleteWddmVersion);
+    Input.ConfiguredLevel = REACTOS_WDDM_TARGET_LEVEL;
+
+    return (D3DKMT_DRIVERVERSION)DxgkCapsCoreReportedVersion(&Input);
 }
 
 static BOOLEAN
@@ -1457,6 +1575,86 @@ DxgkpQueryAdapterDeviceIds(
     return STATUS_SUCCESS;
 }
 
+/*
+ * Query information classes are an OS thunk surface. Their availability is
+ * gated by the configured OS WDDM level, independently from the adapter's
+ * reported level. Once a class exists, its query-specific contract may still
+ * permit a lower-level adapter to return a zero/unsupported capability word.
+ */
+static BOOLEAN
+DxgkpQueryAdapterInfoMinimumLevel(
+    _In_ UINT QueryType,
+    _Out_ PULONG MinimumLevel)
+{
+    if (MinimumLevel == NULL)
+        return FALSE;
+
+    switch (QueryType)
+    {
+        case KMTQAITYPE_UMDRIVERPRIVATE:
+        case KMTQAITYPE_UMDRIVERNAME:
+        case KMTQAITYPE_UMOPENGLINFO:
+        case KMTQAITYPE_GETSEGMENTSIZE:
+        case KMTQAITYPE_ADAPTERADDRESS:
+        case KMTQAITYPE_ADAPTERREGISTRYINFO:
+            *MinimumLevel = DXGK_CAPS_CORE_LEVEL_WDDM_1_0;
+            return TRUE;
+
+        case KMTQAITYPE_VIRTUALADDRESSINFO:
+        case KMTQAITYPE_DRIVERVERSION:
+            *MinimumLevel = DXGK_CAPS_CORE_LEVEL_WDDM_1_1;
+            return TRUE;
+
+        case KMTQAITYPE_ADAPTERTYPE:
+        case KMTQAITYPE_WDDM_1_2_CAPS:
+            *MinimumLevel = DXGK_CAPS_CORE_LEVEL_WDDM_1_2;
+            return TRUE;
+
+        case KMTQAITYPE_WDDM_1_3_CAPS:
+            *MinimumLevel = DXGK_CAPS_CORE_LEVEL_WDDM_1_3;
+            return TRUE;
+
+        case KMTQAITYPE_WDDM_2_0_CAPS:
+        case KMTQAITYPE_NODEMETADATA:
+        case KMTQAITYPE_PHYSICALADAPTERCOUNT:
+        case KMTQAITYPE_PHYSICALADAPTERDEVICEIDS:
+        case KMTQAITYPE_QUERY_GPUMMU_CAPS:
+            *MinimumLevel = DXGK_CAPS_CORE_LEVEL_WDDM_2_0;
+            return TRUE;
+
+        case KMTQAITYPE_GETSEGMENTGROUPSIZE:
+            *MinimumLevel = DXGK_CAPS_CORE_LEVEL_WDDM_2_2;
+            return TRUE;
+
+        case KMTQAITYPE_ADAPTERREGISTRYINFO_RENDER:
+        case KMTQAITYPE_WDDM_1_2_CAPS_RENDER:
+        case KMTQAITYPE_WDDM_1_3_CAPS_RENDER:
+            *MinimumLevel = DXGK_CAPS_CORE_LEVEL_WDDM_2_4;
+            return TRUE;
+
+        case KMTQAITYPE_WDDM_2_7_CAPS:
+            *MinimumLevel = DXGK_CAPS_CORE_LEVEL_WDDM_2_7;
+            return TRUE;
+
+        case KMTQAITYPE_WDDM_2_9_CAPS:
+        case KMTQAITYPE_CROSSADAPTERRESOURCE_SUPPORT:
+            *MinimumLevel = DXGK_CAPS_CORE_LEVEL_WDDM_2_9;
+            return TRUE;
+
+        case KMTQAITYPE_WDDM_3_0_CAPS:
+            *MinimumLevel = DXGK_CAPS_CORE_LEVEL_WDDM_3_0;
+            return TRUE;
+
+        case KMTQAITYPE_WDDM_3_1_CAPS:
+            *MinimumLevel = DXGK_CAPS_CORE_LEVEL_WDDM_3_1;
+            return TRUE;
+
+        default:
+            *MinimumLevel = 0;
+            return FALSE;
+    }
+}
+
 static NTSTATUS
 NTAPI
 DxgkpQueryAdapterInfoCaptured(
@@ -1866,8 +2064,6 @@ DxgkpQueryAdapterInfoCaptured(
         {
             D3DKMT_WDDM_3_1_CAPS Caps;
 
-            if (DxgkpGetReportedDriverVersion(Adapter) < KMT_DRIVERVERSION_WDDM_3_1)
-                DXGKP_QUERY_RETURN(STATUS_INVALID_PARAMETER);
             if (pQueryAdapterInfo->pPrivateDriverData == NULL ||
                 pQueryAdapterInfo->PrivateDriverDataSize < sizeof(Caps))
             {
@@ -2307,16 +2503,24 @@ DxgkpQueryAdapterInfoWithAccessMode(
     D3DKMT_QUERYADAPTERINFO CapturedQuery;
     PVOID CapturedPrivateData = NULL;
     PVOID UserPrivateData;
+    ULONG MinimumLevel;
     NTSTATUS Status;
 
     PAGED_CODE();
 
     if (pQueryAdapterInfo == NULL)
         return STATUS_INVALID_PARAMETER;
-    if (pQueryAdapterInfo->PrivateDriverDataSize > DXGKP_MAX_USER_PRIVATE_DATA)
-        return STATUS_INVALID_BUFFER_SIZE;
 
     CapturedQuery = *pQueryAdapterInfo;
+    if (!DxgkpQueryAdapterInfoMinimumLevel((UINT)CapturedQuery.Type,
+                                           &MinimumLevel) ||
+        REACTOS_WDDM_TARGET_LEVEL < MinimumLevel)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (CapturedQuery.PrivateDriverDataSize > DXGKP_MAX_USER_PRIVATE_DATA)
+        return STATUS_INVALID_BUFFER_SIZE;
+
     UserPrivateData = pQueryAdapterInfo->pPrivateDriverData;
     if (CapturedQuery.PrivateDriverDataSize != 0 && UserPrivateData != NULL)
     {
@@ -3425,6 +3629,37 @@ DxgkSetContextSchedulingPriority(
     return STATUS_SUCCESS;
 }
 
+static BOOLEAN
+DxgkpGetDeviceStateMinimumLevel(
+    _In_ D3DKMT_DEVICESTATE_TYPE StateType,
+    _Out_ PULONG MinimumLevel)
+{
+    if (MinimumLevel == NULL)
+        return FALSE;
+
+    switch (StateType)
+    {
+        case D3DKMT_DEVICESTATE_EXECUTION:
+        case D3DKMT_DEVICESTATE_PRESENT:
+        case D3DKMT_DEVICESTATE_RESET:
+        case D3DKMT_DEVICESTATE_PRESENT_DWM:
+            *MinimumLevel = DXGK_CAPS_CORE_LEVEL_WDDM_1_0;
+            return TRUE;
+
+        case D3DKMT_DEVICESTATE_PAGE_FAULT:
+            *MinimumLevel = DXGK_CAPS_CORE_LEVEL_WDDM_2_0;
+            return TRUE;
+
+        case D3DKMT_DEVICESTATE_PRESENT_QUEUE:
+            *MinimumLevel = DXGK_CAPS_CORE_LEVEL_WDDM_2_1;
+            return TRUE;
+
+        default:
+            *MinimumLevel = 0;
+            return FALSE;
+    }
+}
+
 static NTSTATUS
 NTAPI
 DxgkGetDeviceState(
@@ -3432,6 +3667,7 @@ DxgkGetDeviceState(
 {
     PDXGKRNL_ADAPTER Adapter;
     PDXGKRNL_DEVICE Device;
+    ULONG MinimumLevel;
     UINT i;
     NTSTATUS Status;
 
@@ -3441,6 +3677,13 @@ DxgkGetDeviceState(
     Status = DxgkpValidateDeviceHandleForIoctl(pData->hDevice, &Adapter, &Device);
     if (!NT_SUCCESS(Status))
         return Status;
+
+    if (!DxgkpGetDeviceStateMinimumLevel(pData->StateType, &MinimumLevel) ||
+        REACTOS_WDDM_TARGET_LEVEL < MinimumLevel)
+    {
+        DxgkDereferenceDevice(Device);
+        return STATUS_INVALID_PARAMETER;
+    }
 
     switch (pData->StateType)
     {
@@ -3566,10 +3809,31 @@ NTAPI
 DxgkInvalidateActiveVidPn(
     _In_ CONST D3DKMT_INVALIDATEACTIVEVIDPN *pData)
 {
+    PDXGKRNL_ADAPTER Adapter;
+
     if (pData == NULL)
         return STATUS_INVALID_PARAMETER;
-    if (!NT_SUCCESS(DxgkpValidateAdapterOnlyForIoctl(pData->hAdapter)))
+
+    Adapter = DxgkpValidateAdapterHandle(pData->hAdapter);
+    if (Adapter == NULL)
         return STATUS_INVALID_PARAMETER;
+
+    /*
+     * The OS entry point remains present, but the adapter contract is bounded:
+     * Microsoft defines InvalidateActiveVidPn only for pre-Windows-7
+     * miniports.  Do not turn this into a global OS-version maximum.
+     */
+    if (Adapter->MiniportContext == NULL ||
+        !DxgkCapsCoreInterfaceVersionInRange(
+            Adapter->MiniportContext->InitData.s.Version,
+            DXGK_CAPS_CORE_LEVEL_WDDM_1_0,
+            DXGK_CAPS_CORE_LEVEL_WDDM_1_0))
+    {
+        DxgkDereferenceAdapter(Adapter);
+        return STATUS_NOT_SUPPORTED;
+    }
+    DxgkDereferenceAdapter(Adapter);
+
     if (pData->PrivateDriverDataSize != 0 && pData->pPrivateDriverData == NULL)
         return STATUS_INVALID_PARAMETER;
 
@@ -5482,7 +5746,11 @@ DxgkSubmitCommand(
         return STATUS_DEVICE_REMOVED;
     }
 
-    if (Device->ProcessRecord == NULL || Adapter->MiniportContext->InitData.s.Version < DXGKDDI_INTERFACE_VERSION_WDDM2_0 || DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommandVirtual) == NULL)
+    if (Device->ProcessRecord == NULL ||
+        !DxgkCapsCoreInterfaceVersionAtLeast(
+            Adapter->MiniportContext->InitData.s.Version,
+            DXGK_CAPS_CORE_LEVEL_WDDM_2_0) ||
+        DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommandVirtual) == NULL)
     {
         DxgkDereferenceContext(Context);
         return STATUS_NOT_SUPPORTED;
@@ -5579,8 +5847,13 @@ DxgkpDispatchBufferedIoctl(
     ULONG   InputLength   = Stack->Parameters.DeviceIoControl.InputBufferLength;
     ULONG   OutputLength  = Stack->Parameters.DeviceIoControl.OutputBufferLength;
     ULONG   IoControlCode = Stack->Parameters.DeviceIoControl.IoControlCode;
+    ULONG   MinimumLevel;
     KPROCESSOR_MODE EmbeddedBufferMode = Stack->MajorFunction == IRP_MJ_INTERNAL_DEVICE_CONTROL ? KernelMode : Irp->RequestorMode;
     NTSTATUS Status;
+
+    MinimumLevel = DxgkpKmtIoctlMinimumConfiguredLevel(IoControlCode);
+    if (MinimumLevel == 0 || REACTOS_WDDM_TARGET_LEVEL < MinimumLevel)
+        return STATUS_NOT_SUPPORTED;
 
     switch (IoControlCode)
     {
@@ -6939,10 +7212,7 @@ DxgkpDispatchBufferedIoctl(
                 return STATUS_BUFFER_TOO_SMALL;
 
             pInvalidate = (D3DKMT_INVALIDATEACTIVEVIDPN *)SystemBuffer;
-            if (!NT_SUCCESS(DxgkpValidateAdapterOnlyForIoctl(pInvalidate->hAdapter)))
-                return STATUS_INVALID_PARAMETER;
-
-            return STATUS_NOT_SUPPORTED;
+            return DxgkInvalidateActiveVidPn(pInvalidate);
         }
 
         case IOCTL_D3DKMT_POLLDISPLAYCHILDREN:
@@ -7488,10 +7758,22 @@ DxgkDispatchDeviceControl(
         {
             PVOID *OutputPtr = (PVOID *)Irp->UserBuffer;
             PVOID EntryPoint;
+            ULONG MinimumLevel;
 
             if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL || Irp->RequestorMode != KernelMode)
             {
                 Status = STATUS_ACCESS_DENIED;
+                Irp->IoStatus.Information = 0;
+                Irp->IoStatus.Status = Status;
+                IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                return Status;
+            }
+            MinimumLevel = DxgkpKmtIoctlMinimumConfiguredLevel(
+                Stack->Parameters.DeviceIoControl.IoControlCode);
+            if (MinimumLevel == 0 ||
+                REACTOS_WDDM_TARGET_LEVEL < MinimumLevel)
+            {
+                Status = STATUS_NOT_SUPPORTED;
                 Irp->IoStatus.Information = 0;
                 Irp->IoStatus.Status = Status;
                 IoCompleteRequest(Irp, IO_NO_INCREMENT);
