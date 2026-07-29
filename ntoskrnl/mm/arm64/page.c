@@ -995,31 +995,33 @@ MiArm64ReleaseMappedPageReference(
 }
 
 static
-VOID
-MiArm64ReleaseUserPageTableReferenceInternal(
+BOOLEAN
+MiArm64ReleaseUserPageTableReferenceLockedInternal(
     _In_ PEPROCESS Process,
     _In_ PVOID Address,
     _In_ BOOLEAN ReleaseLeafShare,
     _In_ BOOLEAN ReleaseLeafEntry,
     _In_ PMI_ARM64_USER_PTE_WALK Walk)
 {
-    KIRQL OldIrql;
     ULONG Level, TopLevel;
     ULONG Index[3];
     ULONG ActualEntries;
     ULONG ActualShareReferences;
+    ULONG ExpectedShareCount;
     PMMPFN Pfn[4];
     BOOLEAN DecrementUsedEntry;
+    BOOLEAN LeafTableDeleted = FALSE;
 
     ASSERT(Process != NULL);
     UNREFERENCED_PARAMETER(Process);
+    MI_ASSERT_PFN_LOCK_HELD();
 
     if (ReleaseLeafEntry)
     {
         /* A removed leaf can only be accounted against an L3 table. */
         if (Walk->Depth < 3)
         {
-            return;
+            return FALSE;
         }
         TopLevel = 3;
     }
@@ -1028,7 +1030,7 @@ MiArm64ReleaseUserPageTableReferenceInternal(
         /* A failed table build may stop at any allocated child level. */
         if (Walk->Depth == 0)
         {
-            return;
+            return FALSE;
         }
         TopLevel = min(Walk->Depth, 3);
     }
@@ -1037,19 +1039,16 @@ MiArm64ReleaseUserPageTableReferenceInternal(
     Index[1] = ((ULONG64)(ULONG_PTR)Address >> PPI_SHIFT) & PPI_MASK;
     Index[2] = ((ULONG64)(ULONG_PTR)Address >> PDI_SHIFT) & PDI_MASK_ARM64;
 
-    OldIrql = MiAcquirePfnLock();
-
     for (Level = 0; Level <= TopLevel; Level++)
     {
         Pfn[Level] = MiGetPfnEntry(Walk->LevelPfn[Level]);
         if (Pfn[Level] == NULL)
         {
-            MiReleasePfnLock(OldIrql);
-            return;
+            return FALSE;
         }
     }
 
-    if (ReleaseLeafShare && (Pfn[3]->u2.ShareCount > 0))
+    if (ReleaseLeafShare)
     {
         MiDecrementShareCount(Pfn[3], Walk->LevelPfn[3]);
     }
@@ -1078,27 +1077,29 @@ MiArm64ReleaseUserPageTableReferenceInternal(
             }
         }
 
-        if (TablePfn->OriginalPte.u.Soft.UsedPageTableEntries != 0)
+        ActualEntries = MiArm64CountUserTableEntries(Walk->LevelTable[Level],
+                                                     Level,
+                                                     &ActualShareReferences);
+        ExpectedShareCount = ActualShareReferences + 1;
+        if ((TablePfn->OriginalPte.u.Soft.UsedPageTableEntries != ActualEntries) ||
+            (TablePfn->u2.ShareCount != ExpectedShareCount))
         {
-            break;
+            KeBugCheckEx(MEMORY_MANAGEMENT,
+                         0xA643,
+                         (ULONG_PTR)Address,
+                         Walk->LevelPfn[Level],
+                         ((ULONG_PTR)TablePfn->OriginalPte.u.Soft.UsedPageTableEntries << 48) |
+                         ((ULONG_PTR)ActualEntries << 32) |
+                         ((ULONG_PTR)TablePfn->u2.ShareCount << 16) |
+                         ExpectedShareCount);
         }
 
-        /* Re-derive from the actual table before freeing; restore on drift */
-        ActualEntries = MiArm64CountUserTableEntries(Walk->LevelTable[Level], Level, &ActualShareReferences);
         if (ActualEntries != 0)
         {
-            TablePfn->OriginalPte.u.Soft.UsedPageTableEntries = ActualEntries;
-            if (TablePfn->u2.ShareCount < (ActualShareReferences + 1))
-            {
-                TablePfn->u2.ShareCount = ActualShareReferences + 1;
-            }
             break;
         }
 
-        if (TablePfn->u2.ShareCount != 1)
-        {
-            break;
-        }
+        ASSERT(TablePfn->u2.ShareCount == 1);
 
         MiArm64WritePteEntry(&Walk->LevelTable[Level - 1][Index[Level - 1]], 0);
         MiArm64InvalidateUserAddress(Address);
@@ -1106,6 +1107,10 @@ MiArm64ReleaseUserPageTableReferenceInternal(
         MI_SET_PFN_DELETED(TablePfn);
         MiDecrementShareCount(TablePfn, Walk->LevelPfn[Level]);
         DecrementUsedEntry = TRUE;
+        if (Level == 3)
+        {
+            LeafTableDeleted = TRUE;
+        }
 
         if (Level == 1)
         {
@@ -1116,7 +1121,41 @@ MiArm64ReleaseUserPageTableReferenceInternal(
         }
     }
 
+    return LeafTableDeleted;
+}
+
+static
+VOID
+MiArm64ReleaseUserPageTableReferenceInternal(
+    _In_ PEPROCESS Process,
+    _In_ PVOID Address,
+    _In_ BOOLEAN ReleaseLeafShare,
+    _In_ BOOLEAN ReleaseLeafEntry,
+    _In_ PMI_ARM64_USER_PTE_WALK Walk)
+{
+    KIRQL OldIrql;
+
+    OldIrql = MiAcquirePfnLock();
+    MiArm64ReleaseUserPageTableReferenceLockedInternal(Process,
+                                                       Address,
+                                                       ReleaseLeafShare,
+                                                       ReleaseLeafEntry,
+                                                       Walk);
     MiReleasePfnLock(OldIrql);
+}
+
+BOOLEAN
+MiArm64ReleaseUserPageTableReferenceLocked(
+    _In_ PEPROCESS Process,
+    _In_ PVOID Address,
+    _In_ BOOLEAN ReleaseLeafShare,
+    _In_ PMI_ARM64_USER_PTE_WALK Walk)
+{
+    return MiArm64ReleaseUserPageTableReferenceLockedInternal(Process,
+                                                              Address,
+                                                              ReleaseLeafShare,
+                                                              TRUE,
+                                                              Walk);
 }
 
 VOID
