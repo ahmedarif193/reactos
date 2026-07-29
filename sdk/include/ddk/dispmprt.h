@@ -83,6 +83,7 @@ typedef struct _QUERY_INTERFACE
 typedef struct _LINKED_DEVICE          LINKED_DEVICE;
 typedef struct _LINKED_DEVICE         *PLINKED_DEVICE;
 
+typedef _In_ CONST PDEVICE_OBJECT      IN_CONST_PDEVICE_OBJECT;
 
 /* =========================================================================
  * Interface version constants
@@ -93,45 +94,38 @@ typedef struct _LINKED_DEVICE         *PLINKED_DEVICE;
  */
 
 /*
- * These are defined in d3dukmdt.h; replicated here for convenience so that
- * drivers need not include d3dukmdt.h directly.
+ * d3dkmddi.h has already included d3dukmdt.h, which is the single canonical
+ * source for these selectors. Keep this check here because Version controls
+ * how many bytes dxgkrnl may read from DRIVER_INITIALIZATION_DATA; a stale
+ * duplicate value changes the callback-table ABI without changing its type.
  */
-#ifndef DXGKDDI_INTERFACE_VERSION_VISTA
-/* Windows Vista (WDDM 1.0) */
-#define DXGKDDI_INTERFACE_VERSION_VISTA         0x1052
-/* Windows Vista SP1 / Windows Server 2008 (WDDM 1.1) */
-#define DXGKDDI_INTERFACE_VERSION_VISTA_SP1     0x1053
-/* Windows 7 (WDDM 1.1) */
-#define DXGKDDI_INTERFACE_VERSION_WIN7          0x2005
-/* Windows 8 (WDDM 1.2) */
-#define DXGKDDI_INTERFACE_VERSION_WIN8          0x300E
-/* Windows 8.1 (WDDM 1.3) */
-#define DXGKDDI_INTERFACE_VERSION_WDDM1_3      0x4002
-/* Windows 10 (WDDM 2.0) */
-#define DXGKDDI_INTERFACE_VERSION_WDDM2_0      0x5023
-/*
- * WDDM 2.1 .. 3.2.  These are the values Windows itself uses -- a miniport
- * puts one of them in DRIVER_INITIALIZATION_DATA.Version and the port driver
- * reads it to decide how much of the structure it may interpret, so an
- * invented number is rejected outright.
- *
- * Confirmed against a shipping Win11 ARM64 miniport: the genuine viogpudo.sys
- * declares 0xF003 (WDDM 3.0), and Win11's dxgkrnl accepts it.
- */
-#define DXGKDDI_INTERFACE_VERSION_WDDM2_1      0x6002
-#define DXGKDDI_INTERFACE_VERSION_WDDM2_1_5    0x6005
-#define DXGKDDI_INTERFACE_VERSION_WDDM2_2      0x7006
-#define DXGKDDI_INTERFACE_VERSION_WDDM2_3      0x8001
-#define DXGKDDI_INTERFACE_VERSION_WDDM2_4      0x9006
-#define DXGKDDI_INTERFACE_VERSION_WDDM2_5      0xA00B
-#define DXGKDDI_INTERFACE_VERSION_WDDM2_6      0xB004
-#define DXGKDDI_INTERFACE_VERSION_WDDM2_7      0xC004
-#define DXGKDDI_INTERFACE_VERSION_WDDM2_8      0xD001
-#define DXGKDDI_INTERFACE_VERSION_WDDM2_9      0xE005
-#define DXGKDDI_INTERFACE_VERSION_WDDM3_0      0xF003
-#define DXGKDDI_INTERFACE_VERSION_WDDM3_1     0x10003
-#define DXGKDDI_INTERFACE_VERSION_WDDM3_2     0x11005
-#endif /* !DXGKDDI_INTERFACE_VERSION_VISTA */
+#if !defined(DXGKDDI_INTERFACE_VERSION_VISTA) || \
+    !defined(DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+#error d3dukmdt.h did not provide the WDDM interface selectors
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION_VISTA != 0x1052) || \
+    (DXGKDDI_INTERFACE_VERSION_VISTA_SP1 != 0x1053) || \
+    (DXGKDDI_INTERFACE_VERSION_WIN7 != 0x2005) || \
+    (DXGKDDI_INTERFACE_VERSION_WIN8 != 0x300E) || \
+    (DXGKDDI_INTERFACE_VERSION_WDDM1_3 != 0x4002) || \
+    (DXGKDDI_INTERFACE_VERSION_WDDM2_0 != 0x5023) || \
+    (DXGKDDI_INTERFACE_VERSION_WDDM2_1 != 0x6003) || \
+    (DXGKDDI_INTERFACE_VERSION_WDDM2_1_5 != 0x6010) || \
+    (DXGKDDI_INTERFACE_VERSION_WDDM2_1_6 != 0x6011) || \
+    (DXGKDDI_INTERFACE_VERSION_WDDM2_2 != 0x700A) || \
+    (DXGKDDI_INTERFACE_VERSION_WDDM2_3 != 0x8001) || \
+    (DXGKDDI_INTERFACE_VERSION_WDDM2_4 != 0x9006) || \
+    (DXGKDDI_INTERFACE_VERSION_WDDM2_5 != 0xA00B) || \
+    (DXGKDDI_INTERFACE_VERSION_WDDM2_6 != 0xB004) || \
+    (DXGKDDI_INTERFACE_VERSION_WDDM2_7 != 0xC004) || \
+    (DXGKDDI_INTERFACE_VERSION_WDDM2_8 != 0xD001) || \
+    (DXGKDDI_INTERFACE_VERSION_WDDM2_9 != 0xE003) || \
+    (DXGKDDI_INTERFACE_VERSION_WDDM3_0 != 0xF003) || \
+    (DXGKDDI_INTERFACE_VERSION_WDDM3_1 != 0x10004) || \
+    (DXGKDDI_INTERFACE_VERSION_WDDM3_2 != 0x11007)
+#error d3dukmdt.h contains an unsupported WDDM interface selector set
+#endif
 
 /* =========================================================================
  * GPU interrupt type constants
@@ -436,18 +430,6 @@ typedef NTSTATUS
 (APIENTRY *PDXGKCB_FREE_CONTIGUOUS_MEMORY)(
     _In_ HANDLE hAdapter,
     _In_ PVOID  FreeContiguousMemory);
-
-/* Map a physical address range into kernel virtual address space. */
-typedef NTSTATUS
-(APIENTRY *PDXGKCB_MAP_PHYSICAL_MEMORY)(
-    _In_    HANDLE  hAdapter,
-    _Inout_ PVOID   MapPhysicalMemory);
-
-/* Unmap a range previously mapped by MapPhysicalMemory. */
-typedef NTSTATUS
-(APIENTRY *PDXGKCB_UNMAP_PHYSICAL_MEMORY)(
-    _In_ HANDLE hAdapter,
-    _In_ PVOID  UnmapPhysicalMemory);
 
 /*
  * Acquire ownership of the post-display information (DXGK_DISPLAY_INFORMATION)
@@ -860,6 +842,185 @@ typedef union _DXGKARG_SYSTEM_DISPLAY_ENABLE_FLAGS
  * layout; do not redefine here.
  */
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
+
+typedef struct _DXGK_DIAGNOSTIC_CATEGORIES
+{
+    union
+    {
+        struct
+        {
+            UINT Notifications : 1;
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_5)
+            UINT Progressions : 1;
+            UINT Reserved     : 30;
+#else
+            UINT Reserved     : 31;
+#endif
+        };
+        UINT Value;
+    };
+} DXGK_DIAGNOSTIC_CATEGORIES;
+
+#define DXGK_DIAGCAT_NOTIFICATIONS_BIT  0
+#define DXGK_DIAGCAT_NOTIFICATIONS_MASK (1 << DXGK_DIAGCAT_NOTIFICATIONS_BIT)
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_5)
+#define DXGK_DIAGCAT_PROGRESSIONS_BIT  1
+#define DXGK_DIAGCAT_PROGRESSIONS_MASK (1 << DXGK_DIAGCAT_PROGRESSIONS_BIT)
+#define DXGK_DIAGCAT_BITCOUNT          2
+#else
+#define DXGK_DIAGCAT_BITCOUNT          1
+#endif
+
+typedef struct _DXGK_DIAGTYPE_NOTIFICATIONS
+{
+    union
+    {
+        struct
+        {
+            UINT PanelSelfRefreshSoftware : 1;
+            UINT PanelSelfRefreshHardware : 1;
+            UINT Reserved                 : 30;
+        };
+        UINT Value;
+    };
+} DXGK_DIAGTYPE_NOTIFICATIONS;
+
+#define DXGK_DIAG_NOTIFICATIONS_PSR_SW_BIT   0
+#define DXGK_DIAG_NOTIFICATIONS_PSR_SW_MASK  (1 << DXGK_DIAG_NOTIFICATIONS_PSR_SW_BIT)
+#define DXGK_DIAG_NOTIFICATIONS_PSR_HW_BIT   1
+#define DXGK_DIAG_NOTIFICATIONS_PSR_HW_MASK  (1 << DXGK_DIAG_NOTIFICATIONS_PSR_HW_BIT)
+#define DXGK_DIAG_NOTIFICATIONS_BITCOUNT     2
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_5)
+typedef struct _DXGK_DIAGTYPE_PROGRESSIONS
+{
+    union
+    {
+        struct
+        {
+            UINT SyncLockEnableSync : 1;
+            UINT Reserved           : 31;
+        };
+        UINT Value;
+    };
+} DXGK_DIAGTYPE_PROGRESSIONS;
+
+#define DXGK_DIAG_PROGRESSIONS_SYNCLOCK_ENABLE_SYNC_BIT  0
+#define DXGK_DIAG_PROGRESSIONS_SYNCLOCK_ENABLE_SYNC_MASK \
+    (1 << DXGK_DIAG_PROGRESSIONS_SYNCLOCK_ENABLE_SYNC_BIT)
+#define DXGK_DIAG_PROGRESSIONS_BITCOUNT                   1
+#endif
+
+typedef struct _DXGK_DIAGNOSTIC_TYPES
+{
+    union
+    {
+        DXGK_DIAGTYPE_NOTIFICATIONS Notifications;
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_5)
+        DXGK_DIAGTYPE_PROGRESSIONS Progressions;
+#endif
+        UINT Value;
+    };
+} DXGK_DIAGNOSTIC_TYPES;
+
+typedef struct _DXGK_DIAGNOSTIC_HEADER
+{
+    DXGK_DIAGNOSTIC_CATEGORIES Category;
+    DXGK_DIAGNOSTIC_TYPES      Type;
+    union
+    {
+        struct
+        {
+            UINT Size     : 16;
+            UINT Reserved : 16;
+        };
+        UINT Value;
+    };
+    UINT SequenceNumber;
+    union
+    {
+        D3DDDI_VIDEO_PRESENT_TARGET_ID TargetId;
+        D3DDDI_VIDEO_PRESENT_SOURCE_ID SourceId;
+        UINT                           Id;
+    };
+} DXGK_DIAGNOSTIC_HEADER;
+
+typedef union _DXGK_DIAGNOSTIC_PSR_REFRESH_REASON
+{
+    struct
+    {
+        UINT Present                   : 1;
+        UINT CursorUpdate              : 1;
+        UINT VSyncEnabled              : 1;
+        UINT ColorTransformationChange : 1;
+        UINT BrightnessChange          : 1;
+        UINT SinkRequest               : 1;
+        UINT Other                     : 1;
+        UINT Reserved                  : 25;
+    };
+    UINT Value;
+} DXGK_DIAGNOSTIC_PSR_REFRESH_REASON;
+
+typedef struct _DXGK_DIAGNOSTIC_PSR
+{
+    DXGK_DIAGNOSTIC_HEADER Header;
+    union
+    {
+        DXGK_DIAGNOSTIC_PSR_REFRESH_REASON RefreshReason;
+        UINT                               Value;
+    };
+} DXGK_DIAGNOSTIC_PSR;
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_5)
+typedef struct _DXGK_DIAGNOSTIC_SYNCLOCK_ENABLESYNC
+{
+    DXGK_DIAGNOSTIC_HEADER Header;
+    union
+    {
+        struct
+        {
+            UINT DuringSetTiming : 1;
+            UINT EnableSyncStart : 1;
+            UINT EnableSyncEnd   : 1;
+            UINT Reserved        : 29;
+        } SyncLockEnableSync;
+        UINT Value;
+    };
+} DXGK_DIAGNOSTIC_SYNCLOCK_ENABLESYNC;
+#endif
+
+typedef _In_ DXGK_DIAGNOSTIC_HEADER *IN_PDXGK_DIAGNOSTIC_HEADER;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKCB_REPORT_DIAGNOSTIC)
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    _IRQL_requires_same_
+NTSTATUS
+(APIENTRY CALLBACK *DXGKCB_REPORT_DIAGNOSTIC)(
+    _In_ HANDLE DeviceHandle,
+    IN_PDXGK_DIAGNOSTIC_HEADER pDiagnostic);
+
+C_ASSERT(sizeof(DXGK_DIAGNOSTIC_CATEGORIES) == 0x4);
+C_ASSERT(sizeof(DXGK_DIAGTYPE_NOTIFICATIONS) == 0x4);
+C_ASSERT(sizeof(DXGK_DIAGNOSTIC_TYPES) == 0x4);
+C_ASSERT(sizeof(DXGK_DIAGNOSTIC_HEADER) == 0x14);
+C_ASSERT(FIELD_OFFSET(DXGK_DIAGNOSTIC_HEADER, Type) == 0x4);
+C_ASSERT(FIELD_OFFSET(DXGK_DIAGNOSTIC_HEADER, SequenceNumber) == 0xC);
+C_ASSERT(FIELD_OFFSET(DXGK_DIAGNOSTIC_HEADER, Id) == 0x10);
+C_ASSERT(sizeof(DXGK_DIAGNOSTIC_PSR_REFRESH_REASON) == 0x4);
+C_ASSERT(sizeof(DXGK_DIAGNOSTIC_PSR) == 0x18);
+C_ASSERT(FIELD_OFFSET(DXGK_DIAGNOSTIC_PSR, RefreshReason) == 0x14);
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_5)
+C_ASSERT(sizeof(DXGK_DIAGTYPE_PROGRESSIONS) == 0x4);
+C_ASSERT(sizeof(DXGK_DIAGNOSTIC_SYNCLOCK_ENABLESYNC) == 0x18);
+C_ASSERT(FIELD_OFFSET(DXGK_DIAGNOSTIC_SYNCLOCK_ENABLESYNC, Value) == 0x14);
+#endif
+
+#endif /* DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4 */
+
 /* =========================================================================
  * DXGK_INTERFACE  (officially DXGKRNL_INTERFACE in Windows WDK docs)
  *
@@ -976,7 +1137,7 @@ typedef struct _DXGK_INTERFACE
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_3)
     /* --- WDDM 2.3 additions --- */
-    PVOID   DxgkCbSetProtectedSessionStatus;            /* 0x168 */
+    DXGKCB_SETPROTECTEDSESSIONSTATUS DxgkCbSetProtectedSessionStatus; /* 0x168 */
 #endif
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
@@ -991,37 +1152,37 @@ typedef struct _DXGK_INTERFACE
     PVOID   DxgkCbUnmapFrameBufferPointer;              /* 0x1a8 */
     PVOID   DxgkCbMapMdlToIoMmu;                        /* 0x1b0 */
     PVOID   DxgkCbUnmapMdlFromIoMmu;                    /* 0x1b8 */
-    PVOID   DxgkCbReportDiagnostic;                     /* 0x1c0 */
+    DXGKCB_REPORT_DIAGNOSTIC DxgkCbReportDiagnostic;    /* 0x1c0 */
 #endif
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_5)
     /* --- WDDM 2.5+ additions --- */
-    PVOID   DxgkCbSignalEvent;                          /* 0x1c8 */
+    DXGKCB_SIGNALEVENT DxgkCbSignalEvent;               /* 0x1c8 */
 #endif
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_6)
     /* --- WDDM 2.6 additions --- */
     PVOID   DxgkCbIsFeatureEnabled;                     /* 0x1d0 */
-    PVOID   DxgkCbSaveMemoryForHotUpdate;               /* 0x1d8 */
+    DXGKCB_SAVEMEMORYFORHOTUPDATE DxgkCbSaveMemoryForHotUpdate; /* 0x1d8 */
 #endif
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_8)
     /* --- WDDM 2.8 --- */
-    PVOID   DxgkCbNotifyCursorSupportChange;            /* 0x1e0 */
+    DXGKCB_NOTIFYCURSORSUPPORTCHANGE DxgkCbNotifyCursorSupportChange; /* 0x1e0 */
 #endif
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
     /* --- WDDM 2.9 additions --- */
-    PVOID   DxgkCbQueryFeatureSupport;                  /* 0x1e8 */
-    PVOID   DxgkCbCreatePhysicalMemoryObject;           /* 0x1f0 */
-    PVOID   DxgkCbDestroyPhysicalMemoryObject;          /* 0x1f8 */
-    PDXGKCB_MAP_PHYSICAL_MEMORY   DxgkCbMapPhysicalMemory;  /* 0x200 */
-    PDXGKCB_UNMAP_PHYSICAL_MEMORY DxgkCbUnmapPhysicalMemory; /* 0x208 */
-    PVOID   DxgkCbAllocateAdl;                          /* 0x210 */
-    PVOID   DxgkCbFreeAdl;                              /* 0x218 */
-    PVOID   DxgkCbOpenPhysicalMemoryObject;             /* 0x220 */
-    PVOID   DxgkCbClosePhysicalMemoryObject;            /* 0x228 */
-    PVOID   DxgkCbPinFrameBufferForSave2;               /* 0x230 */
+    DXGKCB_QUERYFEATURESUPPORT          DxgkCbQueryFeatureSupport;
+    DXGKCB_CREATEPHYSICALMEMORYOBJECT   DxgkCbCreatePhysicalMemoryObject;
+    DXGKCB_DESTROYPHYSICALMEMORYOBJECT  DxgkCbDestroyPhysicalMemoryObject;
+    DXGKCB_MAPPHYSICALMEMORY            DxgkCbMapPhysicalMemory;
+    DXGKCB_UNMAPPHYSICALMEMORY          DxgkCbUnmapPhysicalMemory;
+    DXGKCB_ALLOCATEADL                  DxgkCbAllocateAdl;
+    DXGKCB_FREEADL                      DxgkCbFreeAdl;
+    DXGKCB_OPENPHYSICALMEMORYOBJECT     DxgkCbOpenPhysicalMemoryObject;
+    DXGKCB_CLOSEPHYSICALMEMORYOBJECT    DxgkCbClosePhysicalMemoryObject;
+    DXGKCB_PINFRAMEBUFFERFORSAVE2       DxgkCbPinFrameBufferForSave2;
 #endif
 
 #if defined(DXGKDDI_INTERFACE_VERSION_WDDM3_1) && \
@@ -1034,6 +1195,96 @@ typedef struct _DXGK_INTERFACE
 /* Windows WDK uses DXGKRNL_INTERFACE as the official name */
 typedef DXGK_INTERFACE  DXGKRNL_INTERFACE;
 typedef DXGK_INTERFACE *PDXGKRNL_INTERFACE;
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_3) && \
+    (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WDDM2_4)
+#ifdef _WIN64
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbSetProtectedSessionStatus) == 0x168);
+C_ASSERT(sizeof(DXGKRNL_INTERFACE) == 0x170);
+#else
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbSetProtectedSessionStatus) == 0xB8);
+C_ASSERT(sizeof(DXGKRNL_INTERFACE) == 0xBC);
+#endif
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4) && \
+    (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WDDM2_5)
+#ifdef _WIN64
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbAllocateContiguousMemory) == 0x170);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbReportDiagnostic) == 0x1C0);
+C_ASSERT(sizeof(DXGKRNL_INTERFACE) == 0x1C8);
+#else
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbAllocateContiguousMemory) == 0xBC);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbReportDiagnostic) == 0xE4);
+C_ASSERT(sizeof(DXGKRNL_INTERFACE) == 0xE8);
+#endif
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_6) && \
+    (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WDDM2_8)
+#ifdef _WIN64
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbIsFeatureEnabled) == 0x1D0);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbSaveMemoryForHotUpdate) == 0x1D8);
+C_ASSERT(sizeof(DXGKRNL_INTERFACE) == 0x1E0);
+#else
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbIsFeatureEnabled) == 0xEC);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbSaveMemoryForHotUpdate) == 0xF0);
+C_ASSERT(sizeof(DXGKRNL_INTERFACE) == 0xF4);
+#endif
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_8) && \
+    (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+#ifdef _WIN64
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbNotifyCursorSupportChange) == 0x1E0);
+C_ASSERT(sizeof(DXGKRNL_INTERFACE) == 0x1E8);
+#else
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbNotifyCursorSupportChange) == 0xF4);
+C_ASSERT(sizeof(DXGKRNL_INTERFACE) == 0xF8);
+#endif
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9) && \
+    (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WDDM3_0)
+#ifdef _WIN64
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbQueryFeatureSupport) == 0x1E8);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbCreatePhysicalMemoryObject) == 0x1F0);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbDestroyPhysicalMemoryObject) == 0x1F8);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbMapPhysicalMemory) == 0x200);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbUnmapPhysicalMemory) == 0x208);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbAllocateAdl) == 0x210);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbFreeAdl) == 0x218);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbOpenPhysicalMemoryObject) == 0x220);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbClosePhysicalMemoryObject) == 0x228);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbPinFrameBufferForSave2) == 0x230);
+C_ASSERT(sizeof(DXGKRNL_INTERFACE) == 0x238);
+#else
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbQueryFeatureSupport) == 0xF8);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbCreatePhysicalMemoryObject) == 0xFC);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbDestroyPhysicalMemoryObject) == 0x100);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbMapPhysicalMemory) == 0x104);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbUnmapPhysicalMemory) == 0x108);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbAllocateAdl) == 0x10C);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbFreeAdl) == 0x110);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbOpenPhysicalMemoryObject) == 0x114);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbClosePhysicalMemoryObject) == 0x118);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbPinFrameBufferForSave2) == 0x11C);
+C_ASSERT(sizeof(DXGKRNL_INTERFACE) == 0x120);
+#endif
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0) && \
+    (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WDDM3_1)
+#ifdef _WIN64
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbQueryFeatureSupport) == 0x1E8);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbPinFrameBufferForSave2) == 0x230);
+C_ASSERT(sizeof(DXGKRNL_INTERFACE) == 0x238);
+#else
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbQueryFeatureSupport) == 0xF8);
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbPinFrameBufferForSave2) == 0x11C);
+C_ASSERT(sizeof(DXGKRNL_INTERFACE) == 0x120);
+#endif
+#endif
 
 /* Forward-declare KMDDOD_INITIALIZATION_DATA — defined after DRIVER_INITIALIZATION_DATA */
 typedef struct _KMDDOD_INITIALIZATION_DATA  KMDDOD_INITIALIZATION_DATA;
@@ -1467,6 +1718,163 @@ typedef NTSTATUS
     _In_  UINT                       NodeOrdinal,
     _Out_ DXGKARG_GETNODEMETADATA   *GetNodeMetadata);
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
+
+typedef struct _DXGKARG_QUERYDIAGNOSTICTYPESSUPPORT
+{
+    _In_  DXGK_DIAGNOSTIC_CATEGORIES DiagnosticCategory;
+    _Out_ DXGK_DIAGNOSTIC_TYPES      NoninvasiveTypes;
+    _Out_ DXGK_DIAGNOSTIC_TYPES      InvasiveTypes;
+} DXGKARG_QUERYDIAGNOSTICTYPESSUPPORT,
+ *PDXGKARG_QUERYDIAGNOSTICTYPESSUPPORT;
+
+typedef _Inout_ PDXGKARG_QUERYDIAGNOSTICTYPESSUPPORT
+    INOUT_PDXGKARG_QUERYDIAGNOSTICTYPESSUPPORT;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_QUERYDIAGNOSTICTYPESSUPPORT)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_QUERYDIAGNOSTICTYPESSUPPORT(
+    IN_CONST_PVOID MiniportDeviceContext,
+    INOUT_PDXGKARG_QUERYDIAGNOSTICTYPESSUPPORT
+        pArgQueryDiagnosticTypesSupport);
+
+typedef struct _DXGKARG_CONTROLDIAGNOSTICREPORTING
+{
+    _In_ DXGK_DIAGNOSTIC_CATEGORIES DiagnosticCategory;
+    _In_ DXGK_DIAGNOSTIC_TYPES      RequestedDiagnostics;
+} DXGKARG_CONTROLDIAGNOSTICREPORTING,
+ *PDXGKARG_CONTROLDIAGNOSTICREPORTING;
+
+typedef _In_ PDXGKARG_CONTROLDIAGNOSTICREPORTING
+    IN_PDXGKARG_CONTROLDIAGNOSTICREPORTING;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_CONTROLDIAGNOSTICREPORTING)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_CONTROLDIAGNOSTICREPORTING(
+    IN_CONST_PVOID MiniportDeviceContext,
+    IN_PDXGKARG_CONTROLDIAGNOSTICREPORTING
+        pArgControlDiagnosticReporting);
+
+typedef DXGKDDI_QUERYDIAGNOSTICTYPESSUPPORT
+    *PDXGKDDI_QUERYDIAGNOSTICTYPESSUPPORT;
+typedef DXGKDDI_CONTROLDIAGNOSTICREPORTING
+    *PDXGKDDI_CONTROLDIAGNOSTICREPORTING;
+
+C_ASSERT(sizeof(DXGKARG_QUERYDIAGNOSTICTYPESSUPPORT) == 0xC);
+C_ASSERT(FIELD_OFFSET(DXGKARG_QUERYDIAGNOSTICTYPESSUPPORT, NoninvasiveTypes) == 0x4);
+C_ASSERT(FIELD_OFFSET(DXGKARG_QUERYDIAGNOSTICTYPESSUPPORT, InvasiveTypes) == 0x8);
+C_ASSERT(sizeof(DXGKARG_CONTROLDIAGNOSTICREPORTING) == 0x8);
+C_ASSERT(FIELD_OFFSET(DXGKARG_CONTROLDIAGNOSTICREPORTING, RequestedDiagnostics) == 0x4);
+
+#endif /* DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4 */
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_5)
+
+typedef struct _DXGKARG_SETTARGETADJUSTEDCOLORIMETRY2
+{
+    _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID TargetId;
+    _In_ DXGK_COLORIMETRY               AdjustedColorimetry;
+    _In_ UINT                           SdrWhiteLevel;
+} DXGKARG_SETTARGETADJUSTEDCOLORIMETRY2,
+ *PDXGKARG_SETTARGETADJUSTEDCOLORIMETRY2;
+
+typedef _In_ PDXGKARG_SETTARGETADJUSTEDCOLORIMETRY2
+    IN_PDXGKARG_SETTARGETADJUSTEDCOLORIMETRY2;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_SETTARGETADJUSTEDCOLORIMETRY2)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_SETTARGETADJUSTEDCOLORIMETRY2(
+    IN_CONST_HANDLE hAdapter,
+    IN_PDXGKARG_SETTARGETADJUSTEDCOLORIMETRY2
+        pArgSetTargetAdjustedColorimetry);
+
+typedef DXGKDDI_SETTARGETADJUSTEDCOLORIMETRY2
+    *PDXGKDDI_SETTARGETADJUSTEDCOLORIMETRY2;
+
+C_ASSERT(sizeof(DXGKARG_SETTARGETADJUSTEDCOLORIMETRY2) == 0x3C);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETTARGETADJUSTEDCOLORIMETRY2, AdjustedColorimetry) == 0x4);
+C_ASSERT(FIELD_OFFSET(DXGKARG_SETTARGETADJUSTEDCOLORIMETRY2, SdrWhiteLevel) == 0x38);
+
+#endif /* DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_5 */
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_6)
+
+#define DXGK_DUMP_BUCKETING_BUFFER_SIZE 64
+#define DXGK_DUMP_DESCRIPTION_BUFFER_SIZE 128
+
+typedef enum _DXGK_DIAGNOSTICINFO_TYPE
+{
+    DXGK_DI_ADDDEVICE = 1,
+    DXGK_DI_STARTDEVICE,
+    DXGK_DI_BLACKSCREEN
+} DXGK_DIAGNOSTICINFO_TYPE;
+
+typedef struct _DXGKARG_COLLECTDIAGNOSTICINFO
+{
+    HANDLE                   hAdapter;
+    DXGK_DIAGNOSTICINFO_TYPE Type;
+    CHAR                     BucketingString[DXGK_DUMP_BUCKETING_BUFFER_SIZE];
+    CHAR                     DescriptionString[DXGK_DUMP_DESCRIPTION_BUFFER_SIZE];
+    union
+    {
+        PVOID pReserved;
+    };
+    UINT                     BufferSizeIn;
+    UINT                     BufferSizeOut;
+    PVOID                    pBuffer;
+} DXGKARG_COLLECTDIAGNOSTICINFO;
+
+typedef _Inout_ DXGKARG_COLLECTDIAGNOSTICINFO
+    *INOUT_PDXGKARG_COLLECTDIAGNOSTICINFO;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_COLLECTDIAGNOSTICINFO)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+APIENTRY
+DXGKDDI_COLLECTDIAGNOSTICINFO(
+    IN_CONST_PDEVICE_OBJECT PhysicalDeviceObject,
+    INOUT_PDXGKARG_COLLECTDIAGNOSTICINFO pCollectDiagnosticInfo);
+
+typedef DXGKDDI_COLLECTDIAGNOSTICINFO
+    *PDXGKDDI_COLLECTDIAGNOSTICINFO;
+
+C_ASSERT(sizeof(DXGK_DIAGNOSTICINFO_TYPE) == 0x4);
+#ifdef _WIN64
+C_ASSERT(sizeof(DXGKARG_COLLECTDIAGNOSTICINFO) == 0xE8);
+C_ASSERT(FIELD_OFFSET(DXGKARG_COLLECTDIAGNOSTICINFO, Type) == 0x8);
+C_ASSERT(FIELD_OFFSET(DXGKARG_COLLECTDIAGNOSTICINFO, BucketingString) == 0xC);
+C_ASSERT(FIELD_OFFSET(DXGKARG_COLLECTDIAGNOSTICINFO, DescriptionString) == 0x4C);
+C_ASSERT(FIELD_OFFSET(DXGKARG_COLLECTDIAGNOSTICINFO, pReserved) == 0xD0);
+C_ASSERT(FIELD_OFFSET(DXGKARG_COLLECTDIAGNOSTICINFO, BufferSizeIn) == 0xD8);
+C_ASSERT(FIELD_OFFSET(DXGKARG_COLLECTDIAGNOSTICINFO, BufferSizeOut) == 0xDC);
+C_ASSERT(FIELD_OFFSET(DXGKARG_COLLECTDIAGNOSTICINFO, pBuffer) == 0xE0);
+#else
+C_ASSERT(sizeof(DXGKARG_COLLECTDIAGNOSTICINFO) == 0xD8);
+C_ASSERT(FIELD_OFFSET(DXGKARG_COLLECTDIAGNOSTICINFO, Type) == 0x4);
+C_ASSERT(FIELD_OFFSET(DXGKARG_COLLECTDIAGNOSTICINFO, BucketingString) == 0x8);
+C_ASSERT(FIELD_OFFSET(DXGKARG_COLLECTDIAGNOSTICINFO, DescriptionString) == 0x48);
+C_ASSERT(FIELD_OFFSET(DXGKARG_COLLECTDIAGNOSTICINFO, pReserved) == 0xC8);
+C_ASSERT(FIELD_OFFSET(DXGKARG_COLLECTDIAGNOSTICINFO, BufferSizeIn) == 0xCC);
+C_ASSERT(FIELD_OFFSET(DXGKARG_COLLECTDIAGNOSTICINFO, BufferSizeOut) == 0xD0);
+C_ASSERT(FIELD_OFFSET(DXGKARG_COLLECTDIAGNOSTICINFO, pBuffer) == 0xD4);
+#endif
+
+#endif /* DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_6 */
+
 
 /* =========================================================================
  * DRIVER_INITIALIZATION_DATA
@@ -1539,11 +1947,7 @@ typedef struct _DRIVER_INITIALIZATION_DATA
 
     /* ---- Escape / debug ------------------------------------------------ */
     PDXGKDDI_ESCAPE                             DxgkDdiEscape;
-    union
-    {
-        PDXGKDDI_COLLECT_DB_ENGINE_INFO         DxgkDdiCollectDbEngineInfo;
-        PDXGKDDI_COLLECT_DB_ENGINE_INFO         DxgkDdiCollectDbgInfo;
-    };
+    PDXGKDDI_COLLECT_DB_ENGINE_INFO             DxgkDdiCollectDbgInfo;
     PDXGKDDI_QUERY_CURRENT_FENCE                DxgkDdiQueryCurrentFence;
 
     /* ---- VidPN management ---------------------------------------------- */
@@ -1587,11 +1991,7 @@ typedef struct _DRIVER_INITIALIZATION_DATA
     PVOID                                       DxgkDdiCreateAllocation2;        /* reserved, set to zero */
     PDXGKDDI_RENDER                             DxgkDdiRenderKm;
     PVOID                                       Reserved;                        /* reserved, set to zero */
-    union
-    {
-        PDXGKDDI_QUERY_VIDPN_HW_CAPABILITY      DxgkDdiQueryVidPnHwCapability;
-        PDXGKDDI_QUERY_VIDPN_HW_CAPABILITY      DxgkDdiQueryVidPnHWCapability;
-    };
+    PDXGKDDI_QUERY_VIDPN_HW_CAPABILITY          DxgkDdiQueryVidPnHWCapability;
 #endif
 
     /* ---- WDDM 1.2 / Win8 additions -------------------------------------- */
@@ -1634,9 +2034,9 @@ typedef struct _DRIVER_INITIALIZATION_DATA
     PDXGKDDI_SETVIDPNSOURCEADDRESSWITHMULTIPLANEOVERLAY2             DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay2;
     PVOID                                                           Reserved1;                       /* reserved */
     PVOID                                                           Reserved2;                       /* reserved */
-    PVOID                                                           DxgkDdiPowerRuntimeSetDeviceHandle;
-    PVOID                                                           DxgkDdiSetStablePowerState;
-    PVOID                                                           DxgkDdiSetVideoProtectedRegion;
+    PDXGKDDI_POWERRUNTIMESETDEVICEHANDLE                            DxgkDdiPowerRuntimeSetDeviceHandle;
+    PDXGKDDI_SETSTABLEPOWERSTATE                                    DxgkDdiSetStablePowerState;
+    PDXGKDDI_SETVIDEOPROTECTEDREGION                                DxgkDdiSetVideoProtectedRegion;
 #endif
 
     /* ---- WDDM 2.1 additions --------------------------------------------- */
@@ -1647,6 +2047,119 @@ typedef struct _DRIVER_INITIALIZATION_DATA
     PDXGKDDI_VALIDATEUPDATEALLOCATIONPROPERTY                        DxgkDdiValidateUpdateAllocationProperty;
     PDXGKDDI_CONTROLMODEBEHAVIOR                                     DxgkDdiControlModeBehavior;
     PDXGKDDI_UPDATEMONITORLINKINFO                                   DxgkDdiUpdateMonitorLinkInfo;
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
+    PDXGKDDI_CREATEHWCONTEXT                                         DxgkDdiCreateHwContext;
+    PDXGKDDI_DESTROYHWCONTEXT                                        DxgkDdiDestroyHwContext;
+    PDXGKDDI_CREATEHWQUEUE                                           DxgkDdiCreateHwQueue;
+    PDXGKDDI_DESTROYHWQUEUE                                          DxgkDdiDestroyHwQueue;
+    PDXGKDDI_SUBMITCOMMANDTOHWQUEUE                                  DxgkDdiSubmitCommandToHwQueue;
+    PDXGKDDI_SWITCHTOHWCONTEXTLIST                                   DxgkDdiSwitchToHwContextList;
+    PDXGKDDI_RESETHWENGINE                                           DxgkDdiResetHwEngine;
+    PDXGKDDI_CREATEPERIODICFRAMENOTIFICATION                         DxgkDdiCreatePeriodicFrameNotification;
+    PDXGKDDI_DESTROYPERIODICFRAMENOTIFICATION                        DxgkDdiDestroyPeriodicFrameNotification;
+    PDXGKDDI_SETTIMINGSFROMVIDPN                                     DxgkDdiSetTimingsFromVidPn;
+    PDXGKDDI_SETTARGETGAMMA                                          DxgkDdiSetTargetGamma;
+    PDXGKDDI_SETTARGETCONTENTTYPE                                    DxgkDdiSetTargetContentType;
+    PDXGKDDI_SETTARGETANALOGCOPYPROTECTION                           DxgkDdiSetTargetAnalogCopyProtection;
+    PDXGKDDI_SETTARGETADJUSTEDCOLORIMETRY                            DxgkDdiSetTargetAdjustedColorimetry;
+    PDXGKDDI_DISPLAYDETECTCONTROL                                    DxgkDdiDisplayDetectControl;
+    PDXGKDDI_QUERYCONNECTIONCHANGE                                   DxgkDdiQueryConnectionChange;
+    PDXGKDDI_EXCHANGEPRESTARTINFO                                    DxgkDdiExchangePreStartInfo;
+    PDXGKDDI_GETMULTIPLANEOVERLAYCAPS                                DxgkDdiGetMultiPlaneOverlayCaps;
+    PDXGKDDI_GETPOSTCOMPOSITIONCAPS                                  DxgkDdiGetPostCompositionCaps;
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_3)
+    PDXGKDDI_UPDATEHWCONTEXTSTATE                                    DxgkDdiUpdateHwContextState;
+    PDXGKDDI_CREATEPROTECTEDSESSION                                  DxgkDdiCreateProtectedSession;
+    PDXGKDDI_DESTROYPROTECTEDSESSION                                 DxgkDdiDestroyProtectedSession;
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
+    PDXGKDDI_SETSCHEDULINGLOGBUFFER                                  DxgkDdiSetSchedulingLogBuffer;
+    PDXGKDDI_SETUPPRIORITYBANDS                                      DxgkDdiSetupPriorityBands;
+    PDXGKDDI_NOTIFYFOCUSPRESENT                                      DxgkDdiNotifyFocusPresent;
+    PDXGKDDI_SETCONTEXTSCHEDULINGPROPERTIES                          DxgkDdiSetContextSchedulingProperties;
+    PDXGKDDI_SUSPENDCONTEXT                                          DxgkDdiSuspendContext;
+    PDXGKDDI_RESUMECONTEXT                                           DxgkDdiResumeContext;
+    PDXGKDDI_SETVIRTUALMACHINEDATA                                   DxgkDdiSetVirtualMachineData;
+    PDXGKDDI_BEGINEXCLUSIVEACCESS                                    DxgkDdiBeginExclusiveAccess;
+    PDXGKDDI_ENDEXCLUSIVEACCESS                                      DxgkDdiEndExclusiveAccess;
+    PDXGKDDI_QUERYDIAGNOSTICTYPESSUPPORT                             DxgkDdiQueryDiagnosticTypesSupport;
+    PDXGKDDI_CONTROLDIAGNOSTICREPORTING                              DxgkDdiControlDiagnosticReporting;
+    PDXGKDDI_RESUMEHWENGINE                                          DxgkDdiResumeHwEngine;
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_5)
+    PDXGKDDI_SIGNALMONITOREDFENCE                                    DxgkDdiSignalMonitoredFence;
+    PDXGKDDI_PRESENTTOHWQUEUE                                        DxgkDdiPresentToHwQueue;
+    PDXGKDDI_VALIDATESUBMITCOMMAND                                   DxgkDdiValidateSubmitCommand;
+    PDXGKDDI_SETTARGETADJUSTEDCOLORIMETRY2                           DxgkDdiSetTargetAdjustedColorimetry2;
+    PDXGKDDI_SETTRACKEDWORKLOADPOWERLEVEL                            DxgkDdiSetTrackedWorkloadPowerLevel;
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_6)
+    PDXGKDDI_SAVEMEMORYFORHOTUPDATE                                  DxgkDdiSaveMemoryForHotUpdate;
+    PDXGKDDI_RESTOREMEMORYFORHOTUPDATE                               DxgkDdiRestoreMemoryForHotUpdate;
+    PDXGKDDI_COLLECTDIAGNOSTICINFO                                   DxgkDdiCollectDiagnosticInfo;
+    void                                                            *Reserved3;
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_7)
+    PDXGKDDI_CONTROLINTERRUPT3                                       DxgkDdiControlInterrupt3;
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+    PDXGKDDI_SETFLIPQUEUELOGBUFFER                                  DxgkDdiSetFlipQueueLogBuffer;
+    PDXGKDDI_UPDATEFLIPQUEUELOG                                     DxgkDdiUpdateFlipQueueLog;
+    PDXGKDDI_CANCELQUEUEDFLIPS                                      DxgkDdiCancelQueuedFlips;
+    PDXGKDDI_SETINTERRUPTTARGETPRESENTID                            DxgkDdiSetInterruptTargetPresentId;
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
+    PDXGKDDI_SETALLOCATIONBACKINGSTORE                              DxgkDdiSetAllocationBackingStore;
+    PDXGKDDI_CREATECPUEVENT                                         DxgkDdiCreateCpuEvent;
+    PDXGKDDI_DESTROYCPUEVENT                                        DxgkDdiDestroyCpuEvent;
+    PDXGKDDI_CANCELFLIPS                                            DxgkDdiCancelFlips;
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
+    PDXGKDDI_CREATENATIVEFENCE                                      DxgkDdiCreateNativeFence;
+    PDXGKDDI_DESTROYNATIVEFENCE                                     DxgkDdiDestroyNativeFence;
+    PDXGKDDI_UPDATEMONITOREDVALUES                                  DxgkDdiUpdateMonitoredValues;
+    PDXGKDDI_UPDATECURRENTVALUESFROMCPU                             DxgkDdiUpdateCurrentValuesFromCpu;
+    PDXGKDDI_CREATEDOORBELL                                         DxgkDdiCreateDoorbell;
+    PDXGKDDI_CONNECTDOORBELL                                        DxgkDdiConnectDoorbell;
+    PDXGKDDI_DISCONNECTDOORBELL                                     DxgkDdiDisconnectDoorbell;
+    PDXGKDDI_DESTROYDOORBELL                                        DxgkDdiDestroyDoorbell;
+    PDXGKDDI_NOTIFYWORKSUBMISSION                                   DxgkDdiNotifyWorkSubmission;
+    void                                                           *Reserved4;
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+    PDXGKDDI_CREATEMEMORYBASIS                                      DxgkDdiCreateMemoryBasis;
+    PDXGKDDI_DESTROYMEMORYBASIS                                     DxgkDdiDestroyMemoryBasis;
+    PDXGKDDI_STARTDIRTYTRACKING                                     DxgkDdiStartDirtyTracking;
+    PDXGKDDI_STOPDIRTYTRACKING                                      DxgkDdiStopDirtyTracking;
+    PDXGKDDI_QUERYDIRTYBITDATA                                      DxgkDdiQueryDirtyBitData;
+    PDXGKDDI_PREPARELIVEMIGRATION                                   DxgkDdiPrepareLiveMigration;
+    PDXGKDDI_SAVEIMMUTABLEMIGRATIONDATA                             DxgkDdiSaveImmutableMigrationData;
+    PDXGKDDI_SAVEMUTABLEMIGRATIONDATA                               DxgkDdiSaveMutableMigrationData;
+    PDXGKDDI_ENDLIVEMIGRATION                                       DxgkDdiEndLiveMigration;
+    PDXGKDDI_RESTOREIMMUTABLEMIGRATIONDATA                          DxgkDdiRestoreImmutableMigrationData;
+    PDXGKDDI_RESTOREMUTABLEMIGRATIONDATA                            DxgkDdiRestoreMutableMigrationData;
+    PDXGKDDI_WRITEVIRTUALIZEDINTERRUPT                              DxgkDdiWriteVirtualizedInterrupt;
+    PDXGKDDI_SETVIRTUALGPURESOURCES2                                DxgkDdiSetVirtualGpuResources2;
+    PDXGKDDI_SETVIRTUALFUNCTIONPAUSESTATE                           DxgkDdiSetVirtualFunctionPauseState;
+    PDXGKDDI_OPENNATIVEFENCE                                        DxgkDdiOpenNativeFence;
+    PDXGKDDI_CLOSENATIVEFENCE                                       DxgkDdiCloseNativeFence;
+    PDXGKDDI_SETNATIVEFENCELOGBUFFER                                DxgkDdiSetNativeFenceLogBuffer;
+    PDXGKDDI_UPDATENATIVEFENCELOGS                                  DxgkDdiUpdateNativeFenceLogs;
+    PDXGKDDI_COLLECTDBGINFO2                                        DxgkDdiCollectDbgInfo2;
+    PDXGKDDI_NOTIFYCONTEXTPRIORITYCHANGE                            DxgkDdiNotifyContextPriorityChange;
+    PDXGKDDI_RESETDISPLAYENGINE                                     DxgkDdiResetDisplayEngine;
 #endif
 
 } DRIVER_INITIALIZATION_DATA, *PDRIVER_INITIALIZATION_DATA;
@@ -1660,6 +2173,172 @@ C_ASSERT(sizeof(DRIVER_INITIALIZATION_DATA) == 0x370);
 C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCheckMultiPlaneOverlaySupport3) == 0x1A0);
 C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiUpdateMonitorLinkInfo) == 0x1B4);
 C_ASSERT(sizeof(DRIVER_INITIALIZATION_DATA) == 0x1B8);
+#endif
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2) && (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WDDM2_3)
+#ifdef _WIN64
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCreateHwContext) == 0x370);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiGetPostCompositionCaps) == 0x400);
+C_ASSERT(sizeof(DRIVER_INITIALIZATION_DATA) == 0x408);
+#else
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCreateHwContext) == 0x1B8);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiGetPostCompositionCaps) == 0x200);
+C_ASSERT(sizeof(DRIVER_INITIALIZATION_DATA) == 0x204);
+#endif
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_3) && \
+    (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WDDM2_4)
+#ifdef _WIN64
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiUpdateHwContextState) == 0x408);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCreateProtectedSession) == 0x410);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiDestroyProtectedSession) == 0x418);
+C_ASSERT(sizeof(DRIVER_INITIALIZATION_DATA) == 0x420);
+#else
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiUpdateHwContextState) == 0x204);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCreateProtectedSession) == 0x208);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiDestroyProtectedSession) == 0x20C);
+C_ASSERT(sizeof(DRIVER_INITIALIZATION_DATA) == 0x210);
+#endif
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4) && \
+    (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WDDM2_5)
+#ifdef _WIN64
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetSchedulingLogBuffer) == 0x420);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetupPriorityBands) == 0x428);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiNotifyFocusPresent) == 0x430);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetContextSchedulingProperties) == 0x438);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSuspendContext) == 0x440);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiResumeContext) == 0x448);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetVirtualMachineData) == 0x450);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiBeginExclusiveAccess) == 0x458);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiEndExclusiveAccess) == 0x460);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiQueryDiagnosticTypesSupport) == 0x468);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiControlDiagnosticReporting) == 0x470);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiResumeHwEngine) == 0x478);
+C_ASSERT(sizeof(DRIVER_INITIALIZATION_DATA) == 0x480);
+#else
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetSchedulingLogBuffer) == 0x210);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetupPriorityBands) == 0x214);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiNotifyFocusPresent) == 0x218);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetContextSchedulingProperties) == 0x21C);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSuspendContext) == 0x220);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiResumeContext) == 0x224);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetVirtualMachineData) == 0x228);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiBeginExclusiveAccess) == 0x22C);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiEndExclusiveAccess) == 0x230);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiQueryDiagnosticTypesSupport) == 0x234);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiControlDiagnosticReporting) == 0x238);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiResumeHwEngine) == 0x23C);
+C_ASSERT(sizeof(DRIVER_INITIALIZATION_DATA) == 0x240);
+#endif
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_5) && \
+    (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WDDM2_6)
+#ifdef _WIN64
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSignalMonitoredFence) == 0x480);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiPresentToHwQueue) == 0x488);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiValidateSubmitCommand) == 0x490);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetTargetAdjustedColorimetry2) == 0x498);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetTrackedWorkloadPowerLevel) == 0x4A0);
+C_ASSERT(sizeof(DRIVER_INITIALIZATION_DATA) == 0x4A8);
+#else
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSignalMonitoredFence) == 0x240);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiPresentToHwQueue) == 0x244);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiValidateSubmitCommand) == 0x248);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetTargetAdjustedColorimetry2) == 0x24C);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetTrackedWorkloadPowerLevel) == 0x250);
+C_ASSERT(sizeof(DRIVER_INITIALIZATION_DATA) == 0x254);
+#endif
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_6) && \
+    (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WDDM2_7)
+#ifdef _WIN64
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSaveMemoryForHotUpdate) == 0x4A8);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiRestoreMemoryForHotUpdate) == 0x4B0);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCollectDiagnosticInfo) == 0x4B8);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, Reserved3) == 0x4C0);
+C_ASSERT(sizeof(DRIVER_INITIALIZATION_DATA) == 0x4C8);
+#else
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSaveMemoryForHotUpdate) == 0x254);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiRestoreMemoryForHotUpdate) == 0x258);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCollectDiagnosticInfo) == 0x25C);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, Reserved3) == 0x260);
+C_ASSERT(sizeof(DRIVER_INITIALIZATION_DATA) == 0x264);
+#endif
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_7) && \
+    (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+#ifdef _WIN64
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiControlInterrupt3) == 0x4C8);
+C_ASSERT(sizeof(DRIVER_INITIALIZATION_DATA) == 0x4D0);
+#else
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiControlInterrupt3) == 0x264);
+C_ASSERT(sizeof(DRIVER_INITIALIZATION_DATA) == 0x268);
+#endif
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9) && \
+    (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WDDM3_0)
+#ifdef _WIN64
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetFlipQueueLogBuffer) == 0x4D0);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiUpdateFlipQueueLog) == 0x4D8);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCancelQueuedFlips) == 0x4E0);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetInterruptTargetPresentId) == 0x4E8);
+C_ASSERT(sizeof(DRIVER_INITIALIZATION_DATA) == 0x4F0);
+#else
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetFlipQueueLogBuffer) == 0x268);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiUpdateFlipQueueLog) == 0x26C);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCancelQueuedFlips) == 0x270);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetInterruptTargetPresentId) == 0x274);
+C_ASSERT(sizeof(DRIVER_INITIALIZATION_DATA) == 0x278);
+#endif
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0) && \
+    (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WDDM3_1)
+#ifdef _WIN64
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetAllocationBackingStore) == 0x4F0);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCreateCpuEvent) == 0x4F8);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiDestroyCpuEvent) == 0x500);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCancelFlips) == 0x508);
+C_ASSERT(sizeof(DRIVER_INITIALIZATION_DATA) == 0x510);
+#else
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetAllocationBackingStore) == 0x278);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCreateCpuEvent) == 0x27C);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiDestroyCpuEvent) == 0x280);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCancelFlips) == 0x284);
+C_ASSERT(sizeof(DRIVER_INITIALIZATION_DATA) == 0x288);
+#endif
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1) && \
+    (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+#ifdef _WIN64
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCreateNativeFence) == 0x510);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, Reserved4) == 0x558);
+C_ASSERT(sizeof(DRIVER_INITIALIZATION_DATA) == 0x560);
+#else
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCreateNativeFence) == 0x288);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, Reserved4) == 0x2AC);
+C_ASSERT(sizeof(DRIVER_INITIALIZATION_DATA) == 0x2B0);
+#endif
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+#ifdef _WIN64
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCreateMemoryBasis) == 0x560);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiResetDisplayEngine) == 0x600);
+C_ASSERT(sizeof(DRIVER_INITIALIZATION_DATA) == 0x608);
+#else
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiCreateMemoryBasis) == 0x2B0);
+C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiResetDisplayEngine) == 0x300);
+C_ASSERT(sizeof(DRIVER_INITIALIZATION_DATA) == 0x304);
 #endif
 #endif
 
@@ -1751,11 +2430,7 @@ struct _KMDDOD_INITIALIZATION_DATA
     PDXGKDDI_UPDATE_ACTIVE_VIDPN_PRESENT_PATH   DxgkDdiUpdateActiveVidPnPresentPath;
     PDXGKDDI_RECOMMEND_MONITORMODES             DxgkDdiRecommendMonitorModes;
     PDXGKDDI_GET_SCAN_LINE                      DxgkDdiGetScanLine;
-    union
-    {
-        PDXGKDDI_QUERY_VIDPN_HW_CAPABILITY      DxgkDdiQueryVidPnHwCapability;
-        PDXGKDDI_QUERY_VIDPN_HW_CAPABILITY      DxgkDdiQueryVidPnHWCapability;
-    };
+    PDXGKDDI_QUERY_VIDPN_HW_CAPABILITY          DxgkDdiQueryVidPnHWCapability;
 
     /* Win8+ display-only callbacks */
     PVOID                                       DxgkDdiPresentDisplayOnly;
@@ -1768,7 +2443,7 @@ struct _KMDDOD_INITIALIZATION_DATA
     PVOID                                       DxgkDdiPowerRuntimeControlRequest;
     PDXGKDDI_NOTIFY_SURPRISE_REMOVAL            DxgkDdiNotifySurpriseRemoval;
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
-    PVOID                                       DxgkDdiPowerRuntimeSetDeviceHandle;
+    PDXGKDDI_POWERRUNTIMESETDEVICEHANDLE        DxgkDdiPowerRuntimeSetDeviceHandle;
 #endif
 };
 
