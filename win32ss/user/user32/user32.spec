@@ -295,10 +295,12 @@
 @ stdcall GetDlgItemTextA(long long ptr long)
 @ stdcall GetDlgItemTextW(long long ptr long)
 @ stdcall GetDoubleClickTime() NtUserGetDoubleClickTime
+@ stdcall -version=0xA00+ GetDpiAwarenessContextForProcess(long)
 @ stdcall -version=0x601+ GetDpiForMonitorInternal(ptr long ptr ptr)
 @ stdcall -version=0xA00+ GetDpiForSystem()
 @ stdcall -version=0xA00+ GetSystemMetricsForDpi(long long)
 @ stdcall -version=0xA00+ GetDpiForWindow(ptr)
+@ stdcall -version=0xA00+ GetDpiFromDpiAwarenessContext(long)
 @ stdcall GetFocus()
 @ stdcall GetForegroundWindow() NtUserGetForegroundWindow
 @ stdcall GetGUIThreadInfo(long ptr) NtUserGetGUIThreadInfo

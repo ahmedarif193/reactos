@@ -760,3 +760,6 @@
     SVC_(UserSetProcessDpiAwarenessContext, 2)
     SVC_(GdiGetFontFileData, 5)
     SVC_(GdiGetFontFileInfo, 5)
+    SVC_(UserGetThreadDpiAwarenessContext, 0)
+    SVC_(UserGetWindowDpiAwarenessContext, 1)
+    SVC_(UserSetThreadDpiAwarenessContext, 1)

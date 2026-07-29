@@ -36,6 +36,7 @@ typedef struct _LOADER_PARAMETER_FRAMEBUFFER
     ULONG GreenMask;
     ULONG BlueMask;
     ULONG Reserved;
+    ULONG Dpi;
 } LOADER_PARAMETER_FRAMEBUFFER, *PLOADER_PARAMETER_FRAMEBUFFER;
 
 /* DEVICE EXTENSION ***********************************************************/

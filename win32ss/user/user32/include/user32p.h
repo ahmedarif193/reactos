@@ -94,6 +94,9 @@ BOOL WINAPI ClearUserApiHook(HINSTANCE hInstance);
 BOOL FASTCALL MessageInit(VOID);
 VOID FASTCALL MessageCleanup(VOID);
 
+/* definitions for user32_vista/dpi.c */
+VOID WINAPI User32InitializeDpiAwareness(VOID);
+
 /* definitions for misc.c */
 VOID WINAPI UserSetLastError(IN DWORD dwErrCode);
 VOID WINAPI UserSetLastNTError(IN NTSTATUS Status);

@@ -251,37 +251,66 @@ InitLanguagesList(
     SendMessageW(hLangList, CB_SELECTSTRING, -1, (LPARAM)langSel);
 }
 
-static VOID
-GetCurrentDPI(LPTSTR szDPI)
+#define FONT_DPI_KEY \
+    L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\FontDPI"
+#define HARDWARE_PROFILE_FONT_KEY \
+    L"SYSTEM\\CurrentControlSet\\Hardware Profiles\\Current\\Software\\Fonts"
+
+static DWORD
+ReadDpiValue(HKEY hRoot, LPCWSTR pszKey)
 {
-    DWORD dwType, dwSize, dwDPI, dwDefDPI = 0x00000060; // Default 96 DPI
+    DWORD dwType = REG_DWORD;
+    DWORD dwSize = sizeof(DWORD);
+    DWORD dwDPI = 0;
     HKEY hKey;
 
-    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\FontDPI", 0, NULL,
-                        REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, NULL, &hKey, NULL) != ERROR_SUCCESS)
+    if (RegOpenKeyExW(hRoot, pszKey, 0, KEY_QUERY_VALUE, &hKey) == ERROR_SUCCESS)
     {
-        wcscpy(szDPI, L"96");
-        return;
-    }
-
-    dwType = REG_DWORD;
-    dwSize = sizeof(DWORD);
-
-    if (RegQueryValueExW(hKey, L"LogPixels", NULL, &dwType, (LPBYTE)&dwDPI, &dwSize) != ERROR_SUCCESS)
-    {
-        if (RegSetValueExW(hKey, L"LogPixels", 0, REG_DWORD, (LPBYTE)&dwDefDPI, sizeof(DWORD)) == ERROR_SUCCESS)
+        if (RegQueryValueExW(hKey,
+                             L"LogPixels",
+                             NULL,
+                             &dwType,
+                             (LPBYTE)&dwDPI,
+                             &dwSize) != ERROR_SUCCESS ||
+            dwType != REG_DWORD ||
+            dwSize != sizeof(dwDPI) ||
+            dwDPI < 96 ||
+            dwDPI > 480)
         {
-            wcscpy(szDPI, L"96");
-            RegCloseKey(hKey);
-            return;
+            dwDPI = 0;
         }
-    }
-    else
-    {
-        wsprintf(szDPI, L"%d", dwDPI);
+        RegCloseKey(hKey);
     }
 
+    return dwDPI;
+}
+
+static BOOL
+WriteDpiValue(HKEY hRoot, LPCWSTR pszKey, DWORD dwDPI)
+{
+    HKEY hKey;
+    LONG Error;
+
+    Error = RegCreateKeyExW(hRoot, pszKey, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, NULL, &hKey, NULL);
+    if (Error != ERROR_SUCCESS)
+        return FALSE;
+
+    Error = RegSetValueExW(hKey, L"LogPixels", 0, REG_DWORD, (const BYTE *)&dwDPI, sizeof(dwDPI));
     RegCloseKey(hKey);
+    return Error == ERROR_SUCCESS;
+}
+
+static DWORD
+GetCurrentDPI(VOID)
+{
+    DWORD dwDPI = ReadDpiValue(HKEY_LOCAL_MACHINE, HARDWARE_PROFILE_FONT_KEY);
+
+    if (!dwDPI)
+        dwDPI = ReadDpiValue(HKEY_LOCAL_MACHINE, FONT_DPI_KEY);
+    if (!dwDPI)
+        dwDPI = 96;
+
+    return dwDPI;
 }
 
 static
@@ -290,14 +319,23 @@ SaveFontSubstitutionSettings(
     HWND hwnd,
     PGLOBALDATA pGlobalData)
 {
-    WCHAR szDefCP[5 + 1], szSection[MAX_PATH], szDPI[3 + 1];
+    WCHAR szDefCP[5 + 1], szSection[MAX_PATH];
     HINF hFontInf;
-    UINT Count;
+    DWORD dwDPI;
+    LONG Count;
+    BOOL Success;
+    BOOL FontDpiRestored;
+    BOOL HardwareDpiRestored;
 
     GetLocaleInfoW(MAKELCID(pGlobalData->SystemLCID, SORT_DEFAULT), LOCALE_IDEFAULTCODEPAGE, szDefCP, sizeof(szDefCP) / sizeof(WCHAR));
-    GetCurrentDPI(szDPI);
+    dwDPI = GetCurrentDPI();
 
-    wsprintf(szSection, L"Font.CP%s.%s", szDefCP, szDPI);
+    /*
+     * The 96/120 INF variants select the same substitution family and also
+     * write their legacy DPI value. Use a known section, then restore the
+     * independently configured logical DPI after installing substitutions.
+     */
+    wsprintf(szSection, L"Font.CP%s.96", szDefCP);
 
     hFontInf = SetupOpenInfFileW(L"font.inf", NULL, INF_STYLE_WIN4, NULL);
     if (hFontInf == INVALID_HANDLE_VALUE)
@@ -309,12 +347,33 @@ SaveFontSubstitutionSettings(
         return;
     }
 
-    Count = (UINT)SetupGetLineCount(hFontInf, szSection);
+    Count = SetupGetLineCount(hFontInf, szSection);
     if (Count <= 0)
+    {
+        SetupCloseInfFile(hFontInf);
         return;
+    }
 
-    if (!SetupInstallFromInfSectionW(hwnd, hFontInf, szSection, SPINST_REGISTRY & ~SPINST_FILES,
-                                     NULL, NULL, 0, NULL, NULL, NULL, NULL))
+    Success = SetupInstallFromInfSectionW(hwnd,
+                                          hFontInf,
+                                          szSection,
+                                          SPINST_REGISTRY & ~SPINST_FILES,
+                                          NULL,
+                                          NULL,
+                                          0,
+                                          NULL,
+                                          NULL,
+                                          NULL,
+                                          NULL);
+
+    FontDpiRestored = WriteDpiValue(HKEY_LOCAL_MACHINE, FONT_DPI_KEY, dwDPI);
+    HardwareDpiRestored = WriteDpiValue(HKEY_LOCAL_MACHINE, HARDWARE_PROFILE_FONT_KEY, dwDPI);
+    if (!FontDpiRestored || !HardwareDpiRestored)
+    {
+        Success = FALSE;
+    }
+
+    if (!Success)
     {
         PrintErrorMsgBox(IDS_ERROR_UNICODE);
     }

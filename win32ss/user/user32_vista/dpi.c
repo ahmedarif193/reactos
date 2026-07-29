@@ -16,14 +16,36 @@
 HDC APIENTRY
 NtUserGetDC(HWND hWnd);
 
+INT APIENTRY
+NtGdiGetDeviceCaps(HDC hDC, INT Index);
+
+NTSYSAPI LONG WINAPI
+RtlQueryActivationContextApplicationSettings(
+    DWORD Flags,
+    HANDLE ActivationContext,
+    const WCHAR *Namespace,
+    const WCHAR *SettingName,
+    WCHAR *Buffer,
+    SIZE_T BufferSize,
+    SIZE_T *Written);
+
 ULONG APIENTRY
 NtUserGetProcessDpiAwarenessContext(HANDLE hProcess);
+
+UINT WINAPI
+GetDpiForSystem(VOID);
+
+ULONG APIENTRY
+NtUserGetThreadDpiAwarenessContext(VOID);
+
+ULONG APIENTRY
+NtUserGetWindowDpiAwarenessContext(HWND hWnd);
 
 ULONG APIENTRY
 NtUserSetProcessDpiAwarenessContext(ULONG DpiContext, ULONG Flags);
 
-UINT WINAPI
-GetDpiForSystem(VOID);
+ULONG APIENTRY
+NtUserSetThreadDpiAwarenessContext(ULONG DpiContext);
 
 #define NDEBUG
 #include <debug.h>
@@ -39,34 +61,123 @@ GetDpiForSystem(VOID);
 #define NTUSER_DPI_CONTEXT_FLAG_VALID_MASK \
     (NTUSER_DPI_CONTEXT_FLAG_PROCESS | NTUSER_DPI_CONTEXT_FLAG_GDISCALED)
 
-#define NTUSER_MDT_EFFECTIVE_DPI        0
-#define NTUSER_MDT_ANGULAR_DPI          1
-#define NTUSER_MDT_RAW_DPI              2
-
 #define NTUSER_DPI_UNAWARE              0x00006010
-#define NTUSER_DPI_SYSTEM_AWARE         0x00000011
 #define NTUSER_DPI_UNAWARE_GDISCALED    0x40006010
 #define NTUSER_DPI_PER_MONITOR_AWARE    0x00000012
 #define NTUSER_DPI_PER_MONITOR_AWARE_V2 0x00000022
 
-static DWORD ThreadDpiContextTlsIndex = TLS_OUT_OF_INDEXES;
-
-static DWORD
-GetThreadDpiContextTlsIndex(VOID)
+static BOOL
+IsDpiManifestSpace(_In_ WCHAR Character)
 {
-    if (ThreadDpiContextTlsIndex == TLS_OUT_OF_INDEXES)
+    return Character == L' ' || Character == L'\t' || Character == L'\r' || Character == L'\n';
+}
+
+static DPI_AWARENESS_CONTEXT
+GetManifestDpiContext(_In_reads_(Length) const WCHAR *Value, _In_ SIZE_T Length)
+{
+    WCHAR Name[32];
+
+    while (Length && IsDpiManifestSpace(*Value))
     {
-        DWORD Index = TlsAlloc();
-        if (Index != TLS_OUT_OF_INDEXES &&
-            InterlockedCompareExchange((LONG volatile *)&ThreadDpiContextTlsIndex,
-                                       (LONG)Index,
-                                       (LONG)TLS_OUT_OF_INDEXES) != (LONG)TLS_OUT_OF_INDEXES)
-        {
-            /* Another thread won the race */
-            TlsFree(Index);
-        }
+        ++Value;
+        --Length;
     }
-    return ThreadDpiContextTlsIndex;
+    while (Length && IsDpiManifestSpace(Value[Length - 1]))
+        --Length;
+
+    if (!Length || Length >= ARRAYSIZE(Name))
+        return NULL;
+
+    RtlCopyMemory(Name, Value, Length * sizeof(*Name));
+    Name[Length] = UNICODE_NULL;
+
+    if (!lstrcmpiW(Name, L"unaware"))
+        return DPI_AWARENESS_CONTEXT_UNAWARE;
+    if (!lstrcmpiW(Name, L"system"))
+        return DPI_AWARENESS_CONTEXT_SYSTEM_AWARE;
+    if (!lstrcmpiW(Name, L"permonitor"))
+        return DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE;
+    if (!lstrcmpiW(Name, L"permonitorv2"))
+        return DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2;
+
+    return NULL;
+}
+
+VOID
+WINAPI
+User32InitializeDpiAwareness(VOID)
+{
+    static const WCHAR Namespace2005[] = L"http://schemas.microsoft.com/SMI/2005/WindowsSettings";
+    static const WCHAR Namespace2016[] = L"http://schemas.microsoft.com/SMI/2016/WindowsSettings";
+    WCHAR Buffer[256];
+    WCHAR *Start, *End;
+    DPI_AWARENESS_CONTEXT Context;
+
+    if (RtlQueryActivationContextApplicationSettings(
+            0,
+            NULL,
+            Namespace2016,
+            L"dpiAwareness",
+            Buffer,
+            ARRAYSIZE(Buffer),
+            NULL) >= 0)
+    {
+        for (Start = Buffer; *Start; Start = *End ? End + 1 : End)
+        {
+            End = Start;
+            while (*End && *End != L',')
+                ++End;
+
+            Context = GetManifestDpiContext(Start, End - Start);
+            if (Context)
+            {
+                SetProcessDpiAwarenessContext(Context);
+                return;
+            }
+
+            if (!*End)
+                break;
+        }
+        return;
+    }
+
+    if (RtlQueryActivationContextApplicationSettings(
+            0,
+            NULL,
+            Namespace2005,
+            L"dpiAware",
+            Buffer,
+            ARRAYSIZE(Buffer),
+            NULL) < 0)
+    {
+        return;
+    }
+
+    if (!lstrcmpiW(Buffer, L"true"))
+        Context = DPI_AWARENESS_CONTEXT_SYSTEM_AWARE;
+    else if (!lstrcmpiW(Buffer, L"true/pm") || !lstrcmpiW(Buffer, L"per monitor"))
+        Context = DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE;
+    else
+        Context = DPI_AWARENESS_CONTEXT_UNAWARE;
+
+    SetProcessDpiAwarenessContext(Context);
+}
+
+static UINT
+GetRawSystemDpi(VOID)
+{
+    HDC hDC;
+    UINT Dpi = USER_DEFAULT_SCREEN_DPI;
+
+    hDC = NtUserGetDC(NULL);
+    if (hDC)
+    {
+        /* Bypass the caller-aware GDI32 view and read the physical PDEV cap. */
+        Dpi = NtGdiGetDeviceCaps(hDC, LOGPIXELSY);
+        ReleaseDC(NULL, hDC);
+    }
+
+    return Dpi ? Dpi : USER_DEFAULT_SCREEN_DPI;
 }
 
 /* Map the public abstract handles onto concrete NTUSER context values */
@@ -122,15 +233,7 @@ IsValidNtUserDpiContext(
 static UINT
 GetThreadNtUserDpiContext(VOID)
 {
-    DWORD Index = GetThreadDpiContextTlsIndex();
-    UINT Context = 0;
-
-    if (Index != TLS_OUT_OF_INDEXES)
-        Context = (UINT)(ULONG_PTR)TlsGetValue(Index);
-    if (!Context)
-        Context = NtUserGetProcessDpiAwarenessContext(GetCurrentProcess()) |
-                  NTUSER_DPI_CONTEXT_FLAG_PROCESS;
-    return Context;
+    return NtUserGetThreadDpiAwarenessContext();
 }
 
 DPI_AWARENESS_CONTEXT
@@ -145,10 +248,8 @@ WINAPI
 SetThreadDpiAwarenessContext(
     _In_ DPI_AWARENESS_CONTEXT dpiContext)
 {
-    UINT SystemDpi = GetDpiForSystem();
+    UINT SystemDpi = GetRawSystemDpi();
     UINT Context = GetNtUserDpiContext(dpiContext, SystemDpi);
-    DWORD Index;
-    UINT Prev;
 
     if (!IsValidNtUserDpiContext(Context, SystemDpi))
     {
@@ -156,47 +257,52 @@ SetThreadDpiAwarenessContext(
         return 0;
     }
 
-    Index = GetThreadDpiContextTlsIndex();
-    if (Index == TLS_OUT_OF_INDEXES)
-        return 0;
-
-    Prev = GetThreadNtUserDpiContext();
-
-    /* Setting an inherit-from-process context clears the thread override */
-    if (NTUSER_DPI_CONTEXT_GET_FLAGS(Context) & NTUSER_DPI_CONTEXT_FLAG_PROCESS)
-        TlsSetValue(Index, NULL);
-    else
-        TlsSetValue(Index, (PVOID)(ULONG_PTR)Context);
-
-    return (DPI_AWARENESS_CONTEXT)(ULONG_PTR)Prev;
+    return (DPI_AWARENESS_CONTEXT)(ULONG_PTR)
+        NtUserSetThreadDpiAwarenessContext(Context);
 }
 
-/*
- * @stub
- */
-UINT
+BOOL
 WINAPI
-GetDpiForSystem(VOID)
+AreDpiAwarenessContextsEqual(_In_ DPI_AWARENESS_CONTEXT Context1, _In_ DPI_AWARENESS_CONTEXT Context2)
 {
-    HDC hDC;
-    UINT Dpi;
-    hDC = NtUserGetDC(NULL);
-    Dpi = GetDeviceCaps(hDC, LOGPIXELSY);
-    ReleaseDC(NULL, hDC);
-    return Dpi;
+    UINT Value1 = GetNtUserDpiContext(Context1, GetRawSystemDpi());
+    UINT Value2 = GetNtUserDpiContext(Context2, GetRawSystemDpi());
+
+    if (!IsValidNtUserDpiContext(Value1, 0) || !IsValidNtUserDpiContext(Value2, 0))
+    {
+        return FALSE;
+    }
+
+    return (Value1 & ~NTUSER_DPI_CONTEXT_FLAG_PROCESS) == (Value2 & ~NTUSER_DPI_CONTEXT_FLAG_PROCESS);
 }
 
-/*
- * @stub
- */
+DPI_AWARENESS
+WINAPI
+GetAwarenessFromDpiAwarenessContext(_In_ DPI_AWARENESS_CONTEXT Context)
+{
+    UINT Value = GetNtUserDpiContext(Context, GetRawSystemDpi());
+
+    if (!IsValidNtUserDpiContext(Value, 0))
+        return DPI_AWARENESS_INVALID;
+
+    return (DPI_AWARENESS)NTUSER_DPI_CONTEXT_GET_AWARENESS(Value);
+}
+
 UINT
 WINAPI
-GetDpiForWindow(
-    _In_ HWND hWnd)
+GetDpiFromDpiAwarenessContext(_In_ DPI_AWARENESS_CONTEXT Context)
 {
-    UNIMPLEMENTED_ONCE;
-    UNREFERENCED_PARAMETER(hWnd);
-    return GetDpiForSystem();
+    UINT Value = GetNtUserDpiContext(Context, GetRawSystemDpi());
+    return NTUSER_DPI_CONTEXT_GET_DPI(Value);
+}
+
+BOOL
+WINAPI
+IsValidDpiAwarenessContext(_In_ DPI_AWARENESS_CONTEXT Context)
+{
+    UINT SystemDpi = GetRawSystemDpi();
+
+    return IsValidNtUserDpiContext(GetNtUserDpiContext(Context, SystemDpi), SystemDpi);
 }
 
 BOOL
@@ -204,243 +310,171 @@ WINAPI
 IsProcessDPIAware(VOID)
 {
     UINT Context = GetThreadNtUserDpiContext();
+
     return NTUSER_DPI_CONTEXT_GET_AWARENESS(Context) != DPI_AWARENESS_UNAWARE;
+}
+
+UINT
+WINAPI
+GetDpiForSystem(VOID)
+{
+    if (!IsProcessDPIAware())
+        return USER_DEFAULT_SCREEN_DPI;
+
+    return GetRawSystemDpi();
+}
+
+DPI_AWARENESS_CONTEXT
+WINAPI
+GetDpiAwarenessContextForProcess(_In_opt_ HANDLE Process)
+{
+    ULONG Context;
+
+    if (!Process)
+        Process = GetCurrentProcess();
+
+    Context = NtUserGetProcessDpiAwarenessContext(Process);
+    return Context ? (DPI_AWARENESS_CONTEXT)(ULONG_PTR)Context : NULL;
+}
+
+DPI_AWARENESS_CONTEXT
+WINAPI
+GetWindowDpiAwarenessContext(_In_ HWND hWnd)
+{
+    ULONG Context = NtUserGetWindowDpiAwarenessContext(hWnd);
+    return Context ? (DPI_AWARENESS_CONTEXT)(ULONG_PTR)Context : NULL;
+}
+
+UINT
+WINAPI
+GetDpiForWindow(
+    _In_ HWND hWnd)
+{
+    DPI_AWARENESS_CONTEXT Context = GetWindowDpiAwarenessContext(hWnd);
+
+    if (!Context)
+        return 0;
+
+    if (GetAwarenessFromDpiAwarenessContext(Context) == DPI_AWARENESS_UNAWARE)
+        return USER_DEFAULT_SCREEN_DPI;
+
+    return GetRawSystemDpi();
+}
+
+BOOL
+WINAPI
+SetProcessDpiAwarenessContext(_In_ DPI_AWARENESS_CONTEXT Context)
+{
+    UINT SystemDpi = GetRawSystemDpi();
+    UINT Value = GetNtUserDpiContext(Context, SystemDpi);
+
+    if (!IsValidNtUserDpiContext(Value, SystemDpi))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    return !!NtUserSetProcessDpiAwarenessContext(Value, 0);
 }
 
 BOOL
 WINAPI
 SetProcessDPIAware(VOID)
 {
-    UINT SystemDpi = GetDpiForSystem();
-    NtUserSetProcessDpiAwarenessContext(NTUSER_DPI_SYSTEM_AWARE | (SystemDpi << 8), 0);
-    return TRUE;
+    return SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE);
 }
 
 BOOL
 WINAPI
-SetProcessDpiAwarenessContext(
-    _In_ DPI_AWARENESS_CONTEXT context)
-{
-    UINT SystemDpi = GetDpiForSystem();
-    UINT Context = GetNtUserDpiContext(context, SystemDpi);
-
-    if (!IsValidNtUserDpiContext(Context, SystemDpi))
-    {
-        SetLastError(ERROR_INVALID_PARAMETER);
-        return FALSE;
-    }
-
-    Context &= ~NTUSER_DPI_CONTEXT_FLAG_PROCESS;
-    return NtUserSetProcessDpiAwarenessContext(Context, 0) != 0;
-}
-
-BOOL
-WINAPI
-GetProcessDpiAwarenessInternal(
-    _In_opt_ HANDLE process,
-    _Out_ DPI_AWARENESS *awareness)
+GetProcessDpiAwarenessInternal(_In_opt_ HANDLE Process, _Out_ DPI_AWARENESS *Awareness)
 {
     ULONG Context;
 
-    if (awareness == NULL)
+    if (!Awareness)
     {
         SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
 
-    if (process == NULL)
-        process = GetCurrentProcess();
+    if (!Process)
+        Process = GetCurrentProcess();
 
-    *awareness = DPI_AWARENESS_INVALID;
-    Context = NtUserGetProcessDpiAwarenessContext(process);
-    if (Context == 0)
+    *Awareness = DPI_AWARENESS_INVALID;
+    Context = NtUserGetProcessDpiAwarenessContext(Process);
+    if (!Context)
     {
         if (GetLastError() == ERROR_INVALID_HANDLE)
             SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
 
-    *awareness = (DPI_AWARENESS)NTUSER_DPI_CONTEXT_GET_AWARENESS(Context);
+    *Awareness = (DPI_AWARENESS)NTUSER_DPI_CONTEXT_GET_AWARENESS(Context);
     return TRUE;
 }
 
 BOOL
 WINAPI
-SetProcessDpiAwarenessInternal(
-    _In_ DPI_AWARENESS awareness)
+SetProcessDpiAwarenessInternal(_In_ DPI_AWARENESS Awareness)
 {
-    UINT SystemDpi = GetDpiForSystem();
-    UINT Context;
-
-    switch (awareness)
+    static const DPI_AWARENESS_CONTEXT Contexts[] =
     {
-        case DPI_AWARENESS_UNAWARE:
-            Context = NTUSER_DPI_UNAWARE;
-            break;
-        case DPI_AWARENESS_SYSTEM_AWARE:
-            Context = NTUSER_DPI_SYSTEM_AWARE | (SystemDpi << 8);
-            break;
-        case DPI_AWARENESS_PER_MONITOR_AWARE:
-            Context = NTUSER_DPI_PER_MONITOR_AWARE;
-            break;
-        default:
-            SetLastError(ERROR_INVALID_PARAMETER);
-            return FALSE;
+        DPI_AWARENESS_CONTEXT_UNAWARE,
+        DPI_AWARENESS_CONTEXT_SYSTEM_AWARE,
+        DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE
+    };
+
+    if (Awareness < DPI_AWARENESS_UNAWARE || Awareness > DPI_AWARENESS_PER_MONITOR_AWARE)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
     }
 
-    return NtUserSetProcessDpiAwarenessContext(Context, 0) != 0;
+    return SetProcessDpiAwarenessContext(Contexts[Awareness]);
 }
 
 BOOL
 WINAPI
-GetDpiForMonitorInternal(
-    _In_  HMONITOR monitor,
-    _In_  UINT type,
-    _Out_ UINT *x,
-    _Out_ UINT *y)
+GetDpiForMonitorInternal(_In_ HMONITOR Monitor, _In_ UINT Type, _Out_ UINT *DpiX, _Out_ UINT *DpiY)
 {
-    MONITORINFOEXW MonitorInfo;
+    MONITORINFO MonitorInfo = { sizeof(MonitorInfo) };
     DPI_AWARENESS Awareness;
-    HDC MonitorDC;
-    UINT DpiX, DpiY;
+    UINT Dpi;
 
-    if (type > NTUSER_MDT_RAW_DPI)
+    if (Type > 2)
     {
         SetLastError(ERROR_BAD_ARGUMENTS);
         return FALSE;
     }
 
-    if (x == NULL || y == NULL)
+    if (!DpiX || !DpiY)
     {
         SetLastError(ERROR_INVALID_ADDRESS);
         return FALSE;
     }
 
-    ZeroMemory(&MonitorInfo, sizeof(MonitorInfo));
-    MonitorInfo.cbSize = sizeof(MonitorInfo);
-    if (!GetMonitorInfoW(monitor, (LPMONITORINFO)&MonitorInfo))
+    if (!GetMonitorInfoW(Monitor, &MonitorInfo))
     {
         SetLastError(ERROR_INVALID_HANDLE);
         return FALSE;
     }
 
-    Awareness = (DPI_AWARENESS)NTUSER_DPI_CONTEXT_GET_AWARENESS(GetThreadNtUserDpiContext());
-    if (Awareness == DPI_AWARENESS_UNAWARE)
-    {
-        *x = USER_DEFAULT_SCREEN_DPI;
-        *y = USER_DEFAULT_SCREEN_DPI;
-        return TRUE;
-    }
-    if (Awareness == DPI_AWARENESS_SYSTEM_AWARE)
-    {
-        *x = GetDpiForSystem();
-        *y = *x;
-        return TRUE;
-    }
-
-    if (type == NTUSER_MDT_RAW_DPI)
-    {
-        *x = 0;
-        *y = 0;
-        SetLastError(ERROR_NOT_SUPPORTED);
-        return FALSE;
-    }
-
-    MonitorDC = CreateDCW(L"DISPLAY", MonitorInfo.szDevice, NULL, NULL);
-    if (MonitorDC == NULL)
-    {
-        *x = 0;
-        *y = 0;
-        SetLastError(ERROR_NOT_SUPPORTED);
-        return FALSE;
-    }
-
-    DpiX = GetDeviceCaps(MonitorDC, LOGPIXELSX);
-    DpiY = GetDeviceCaps(MonitorDC, LOGPIXELSY);
-    DeleteDC(MonitorDC);
-
-    if (DpiX == 0) DpiX = GetDpiForSystem();
-    if (DpiY == 0) DpiY = GetDpiForSystem();
-
-    *x = DpiX;
-    *y = DpiY;
+    /*
+     * ReactOS currently has one logical DPI for the desktop. Raw and angular
+     * monitor DPI require EDID physical dimensions, which GOP does not expose.
+     */
+    Awareness = GetAwarenessFromDpiAwarenessContext(GetThreadDpiAwarenessContext());
+    Dpi = (Awareness == DPI_AWARENESS_UNAWARE) ? USER_DEFAULT_SCREEN_DPI : GetRawSystemDpi();
+    *DpiX = Dpi;
+    *DpiY = Dpi;
     return TRUE;
 }
 
-BOOL
-WINAPI
-IsValidDpiAwarenessContext(
-    _In_ DPI_AWARENESS_CONTEXT context)
-{
-    UINT SystemDpi = GetDpiForSystem();
-    return IsValidNtUserDpiContext(GetNtUserDpiContext(context, SystemDpi), SystemDpi);
-}
-
-BOOL
-WINAPI
-AreDpiAwarenessContextsEqual(
-    _In_ DPI_AWARENESS_CONTEXT context1,
-    _In_ DPI_AWARENESS_CONTEXT context2)
-{
-    UINT SystemDpi = GetDpiForSystem();
-    UINT Context1 = GetNtUserDpiContext(context1, SystemDpi);
-    UINT Context2 = GetNtUserDpiContext(context2, SystemDpi);
-
-    if (!Context1 || !Context2) return FALSE;
-    if (!IsValidNtUserDpiContext(Context1, SystemDpi) || !IsValidNtUserDpiContext(Context2, SystemDpi)) return FALSE;
-    return (Context1 & ~NTUSER_DPI_CONTEXT_FLAG_PROCESS) == (Context2 & ~NTUSER_DPI_CONTEXT_FLAG_PROCESS);
-}
-
-DPI_AWARENESS
-WINAPI
-GetAwarenessFromDpiAwarenessContext(
-    _In_ DPI_AWARENESS_CONTEXT context)
-{
-    UINT Context = GetNtUserDpiContext(context, 0);
-
-    if (!IsValidNtUserDpiContext(Context, 0)) return DPI_AWARENESS_INVALID;
-    return (DPI_AWARENESS)NTUSER_DPI_CONTEXT_GET_AWARENESS(Context);
-}
-
-DPI_AWARENESS_CONTEXT
-WINAPI
-GetWindowDpiAwarenessContext(
-    _In_ HWND hwnd)
-{
-    DWORD ProcessId;
-    DWORD ThreadId;
-    HANDLE Process;
-    ULONG Context;
-
-    if (!IsWindow(hwnd))
-    {
-        SetLastError(ERROR_INVALID_PARAMETER);
-        return NULL;
-    }
-
-    ThreadId = GetWindowThreadProcessId(hwnd, &ProcessId);
-    if (ThreadId == GetCurrentThreadId())
-    {
-        Context = (ULONG)(ULONG_PTR)GetThreadDpiAwarenessContext();
-        return (DPI_AWARENESS_CONTEXT)(ULONG_PTR)(Context & ~NTUSER_DPI_CONTEXT_FLAG_PROCESS);
-    }
-
-    Process = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, ProcessId);
-    if (Process == NULL) return NULL;
-    Context = NtUserGetProcessDpiAwarenessContext(Process);
-    CloseHandle(Process);
-    return (DPI_AWARENESS_CONTEXT)(ULONG_PTR)Context;
-}
-
 static INT
-ScaleDpiValue(
-    _In_ INT Value,
-    _In_ UINT SourceDpi,
-    _In_ UINT TargetDpi)
+ScaleDpiValue(INT Value, UINT SourceDpi, UINT TargetDpi)
 {
     LONGLONG Magnitude;
 
-    if (SourceDpi == 0)
+    if (!SourceDpi)
         SourceDpi = USER_DEFAULT_SCREEN_DPI;
 
     if (Value >= 0)
@@ -451,192 +485,246 @@ ScaleDpiValue(
 }
 
 static VOID
-ScaleLogFontForDpi(
-    _Inout_ PLOGFONTW LogFont,
-    _In_ UINT SourceDpi,
-    _In_ UINT TargetDpi)
+ScaleLogFontForDpi(_Inout_ PLOGFONTW LogFont, UINT SourceDpi, UINT TargetDpi)
 {
     LogFont->lfHeight = ScaleDpiValue(LogFont->lfHeight, SourceDpi, TargetDpi);
     LogFont->lfWidth = ScaleDpiValue(LogFont->lfWidth, SourceDpi, TargetDpi);
 }
 
-static BOOL
-GetNonClientMetricsForDpi(
-    _Out_ PNONCLIENTMETRICSW Metrics,
-    _In_ UINT Dpi)
-{
-    UINT SystemDpi = GetDpiForSystem();
-
-    Metrics->cbSize = sizeof(*Metrics);
-    if (!SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(*Metrics), Metrics, 0))
-        return FALSE;
-
-    Metrics->iBorderWidth = ScaleDpiValue(Metrics->iBorderWidth, SystemDpi, Dpi);
-    Metrics->iScrollWidth = ScaleDpiValue(Metrics->iScrollWidth, SystemDpi, Dpi);
-    Metrics->iScrollHeight = ScaleDpiValue(Metrics->iScrollHeight, SystemDpi, Dpi);
-    Metrics->iCaptionWidth = ScaleDpiValue(Metrics->iCaptionWidth, SystemDpi, Dpi);
-    Metrics->iCaptionHeight = ScaleDpiValue(Metrics->iCaptionHeight, SystemDpi, Dpi);
-    Metrics->iSmCaptionWidth = ScaleDpiValue(Metrics->iSmCaptionWidth, SystemDpi, Dpi);
-    Metrics->iSmCaptionHeight = ScaleDpiValue(Metrics->iSmCaptionHeight, SystemDpi, Dpi);
-    Metrics->iMenuWidth = ScaleDpiValue(Metrics->iMenuWidth, SystemDpi, Dpi);
-    Metrics->iMenuHeight = ScaleDpiValue(Metrics->iMenuHeight, SystemDpi, Dpi);
-    /* ReactOS paints and reports thick frames without a separate padded border. */
-    Metrics->iPaddedBorderWidth = 0;
-    ScaleLogFontForDpi(&Metrics->lfCaptionFont, SystemDpi, Dpi);
-    ScaleLogFontForDpi(&Metrics->lfSmCaptionFont, SystemDpi, Dpi);
-    ScaleLogFontForDpi(&Metrics->lfMenuFont, SystemDpi, Dpi);
-    ScaleLogFontForDpi(&Metrics->lfStatusFont, SystemDpi, Dpi);
-    ScaleLogFontForDpi(&Metrics->lfMessageFont, SystemDpi, Dpi);
-    return TRUE;
-}
-
-static BOOL
-GetIconMetricsForDpi(
-    _Out_ PICONMETRICSW Metrics,
-    _In_ UINT Dpi)
-{
-    UINT SystemDpi = GetDpiForSystem();
-
-    Metrics->cbSize = sizeof(*Metrics);
-    if (!SystemParametersInfoW(SPI_GETICONMETRICS, sizeof(*Metrics), Metrics, 0))
-        return FALSE;
-
-    Metrics->iHorzSpacing = ScaleDpiValue(Metrics->iHorzSpacing, SystemDpi, Dpi);
-    Metrics->iVertSpacing = ScaleDpiValue(Metrics->iVertSpacing, SystemDpi, Dpi);
-    ScaleLogFontForDpi(&Metrics->lfFont, SystemDpi, Dpi);
-    return TRUE;
-}
-
 BOOL
 WINAPI
-SystemParametersInfoForDpi(
-    _In_ UINT action,
-    _In_ UINT val,
-    _Inout_ PVOID ptr,
-    _In_ UINT winini,
-    _In_ UINT dpi)
+SystemParametersInfoForDpi(_In_ UINT Action, _In_ UINT Param, _Inout_opt_ PVOID Data, _In_ UINT Flags, _In_ UINT Dpi)
 {
-    UINT SystemDpi;
+    UINT SystemDpi = GetRawSystemDpi();
 
-    UNREFERENCED_PARAMETER(winini);
-
-    if (ptr == NULL || dpi == 0)
+    if (!Data || !Dpi)
     {
         SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
 
-    switch (action)
+    switch (Action)
     {
+        case SPI_GETICONTITLELOGFONT:
+        {
+            PLOGFONTW LogFont = Data;
+
+            if (!SystemParametersInfoW(Action, Param, Data, Flags))
+                return FALSE;
+            ScaleLogFontForDpi(LogFont, SystemDpi, Dpi);
+            return TRUE;
+        }
+
         case SPI_GETNONCLIENTMETRICS:
-            if (val != sizeof(NONCLIENTMETRICSW) || ((PNONCLIENTMETRICSW)ptr)->cbSize != sizeof(NONCLIENTMETRICSW)) break;
-            return GetNonClientMetricsForDpi((PNONCLIENTMETRICSW)ptr, dpi);
+        {
+            PNONCLIENTMETRICSW Metrics = Data;
+            NONCLIENTMETRICSW LocalMetrics;
+            UINT Size = Metrics->cbSize;
+
+            if (Size != sizeof(*Metrics) && Size != FIELD_OFFSET(NONCLIENTMETRICSW, iPaddedBorderWidth))
+            {
+                SetLastError(ERROR_INVALID_PARAMETER);
+                return FALSE;
+            }
+
+            LocalMetrics.cbSize = sizeof(LocalMetrics);
+            if (!SystemParametersInfoW(Action, sizeof(LocalMetrics), &LocalMetrics, Flags))
+            {
+                return FALSE;
+            }
+
+            LocalMetrics.iBorderWidth = ScaleDpiValue(LocalMetrics.iBorderWidth, SystemDpi, Dpi);
+            LocalMetrics.iScrollWidth = ScaleDpiValue(LocalMetrics.iScrollWidth, SystemDpi, Dpi);
+            LocalMetrics.iScrollHeight = ScaleDpiValue(LocalMetrics.iScrollHeight, SystemDpi, Dpi);
+            LocalMetrics.iCaptionWidth = ScaleDpiValue(LocalMetrics.iCaptionWidth, SystemDpi, Dpi);
+            LocalMetrics.iCaptionHeight = ScaleDpiValue(LocalMetrics.iCaptionHeight, SystemDpi, Dpi);
+            LocalMetrics.iSmCaptionWidth = ScaleDpiValue(LocalMetrics.iSmCaptionWidth, SystemDpi, Dpi);
+            LocalMetrics.iSmCaptionHeight = ScaleDpiValue(LocalMetrics.iSmCaptionHeight, SystemDpi, Dpi);
+            LocalMetrics.iMenuWidth = ScaleDpiValue(LocalMetrics.iMenuWidth, SystemDpi, Dpi);
+            LocalMetrics.iMenuHeight = ScaleDpiValue(LocalMetrics.iMenuHeight, SystemDpi, Dpi);
+#if (WINVER >= 0x0600)
+            LocalMetrics.iPaddedBorderWidth = ScaleDpiValue(LocalMetrics.iPaddedBorderWidth, SystemDpi, Dpi);
+#endif
+            ScaleLogFontForDpi(&LocalMetrics.lfCaptionFont, SystemDpi, Dpi);
+            ScaleLogFontForDpi(&LocalMetrics.lfSmCaptionFont, SystemDpi, Dpi);
+            ScaleLogFontForDpi(&LocalMetrics.lfMenuFont, SystemDpi, Dpi);
+            ScaleLogFontForDpi(&LocalMetrics.lfStatusFont, SystemDpi, Dpi);
+            ScaleLogFontForDpi(&LocalMetrics.lfMessageFont, SystemDpi, Dpi);
+            LocalMetrics.cbSize = Size;
+            CopyMemory(Metrics, &LocalMetrics, Size);
+            return TRUE;
+        }
 
         case SPI_GETICONMETRICS:
-            if (val != sizeof(ICONMETRICSW) || ((PICONMETRICSW)ptr)->cbSize != sizeof(ICONMETRICSW)) break;
-            return GetIconMetricsForDpi((PICONMETRICSW)ptr, dpi);
+        {
+            PICONMETRICSW Metrics = Data;
+            ICONMETRICSW LocalMetrics;
 
-        case SPI_GETICONTITLELOGFONT:
-            if (val != sizeof(LOGFONTW)) break;
-            if (!SystemParametersInfoW(SPI_GETICONTITLELOGFONT, sizeof(LOGFONTW), ptr, 0)) return FALSE;
-            SystemDpi = GetDpiForSystem();
-            ScaleLogFontForDpi((PLOGFONTW)ptr, SystemDpi, dpi);
+            if (Metrics->cbSize != sizeof(*Metrics))
+            {
+                SetLastError(ERROR_INVALID_PARAMETER);
+                return FALSE;
+            }
+
+            LocalMetrics.cbSize = sizeof(LocalMetrics);
+            if (!SystemParametersInfoW(Action, sizeof(LocalMetrics), &LocalMetrics, Flags))
+            {
+                return FALSE;
+            }
+
+            LocalMetrics.iHorzSpacing = ScaleDpiValue(LocalMetrics.iHorzSpacing, SystemDpi, Dpi);
+            LocalMetrics.iVertSpacing = ScaleDpiValue(LocalMetrics.iVertSpacing, SystemDpi, Dpi);
+            ScaleLogFontForDpi(&LocalMetrics.lfFont, SystemDpi, Dpi);
+            *Metrics = LocalMetrics;
             return TRUE;
+        }
     }
 
     SetLastError(ERROR_INVALID_PARAMETER);
     return FALSE;
 }
 
-int
+INT
 WINAPI
-GetSystemMetricsForDpi(
-    _In_ int nIndex,
-    _In_ UINT dpi)
+GetSystemMetricsForDpi(_In_ INT Index, _In_ UINT Dpi)
 {
     NONCLIENTMETRICSW Metrics;
     ICONMETRICSW IconMetrics;
     UINT Value;
 
-    if (dpi == 0)
+    if (!Dpi)
     {
         SetLastError(ERROR_INVALID_PARAMETER);
         return 0;
     }
 
-    switch (nIndex)
+    switch (Index)
     {
         case SM_CXVSCROLL:
         case SM_CYHSCROLL:
-            if (!GetNonClientMetricsForDpi(&Metrics, dpi)) return 0;
+            Metrics.cbSize = sizeof(Metrics);
+            if (!SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(Metrics), &Metrics, 0, Dpi))
+            {
+                return 0;
+            }
             return max(Metrics.iScrollWidth, 8);
 
         case SM_CYCAPTION:
-            if (!GetNonClientMetricsForDpi(&Metrics, dpi)) return 0;
+            Metrics.cbSize = sizeof(Metrics);
+            if (!SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(Metrics), &Metrics, 0, Dpi))
+            {
+                return 0;
+            }
             return Metrics.iCaptionHeight + 1;
 
         case SM_CYVTHUMB:
         case SM_CXHTHUMB:
         case SM_CYVSCROLL:
         case SM_CXHSCROLL:
-            if (!GetNonClientMetricsForDpi(&Metrics, dpi)) return 0;
+            Metrics.cbSize = sizeof(Metrics);
+            if (!SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(Metrics), &Metrics, 0, Dpi))
+            {
+                return 0;
+            }
             return max(Metrics.iScrollHeight, 8);
 
         case SM_CXICON:
         case SM_CYICON:
-            return ScaleDpiValue(32, USER_DEFAULT_SCREEN_DPI, dpi);
+            return ScaleDpiValue(32, USER_DEFAULT_SCREEN_DPI, Dpi);
 
         case SM_CXCURSOR:
         case SM_CYCURSOR:
-            Value = ScaleDpiValue(32, USER_DEFAULT_SCREEN_DPI, dpi);
-            if (Value >= 64) return 64;
-            if (Value >= 48) return 48;
+            Value = ScaleDpiValue(32, USER_DEFAULT_SCREEN_DPI, Dpi);
+            if (Value >= 64)
+                return 64;
+            if (Value >= 48)
+                return 48;
             return 32;
 
         case SM_CYMENU:
-            if (!GetNonClientMetricsForDpi(&Metrics, dpi)) return 0;
+            Metrics.cbSize = sizeof(Metrics);
+            if (!SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(Metrics), &Metrics, 0, Dpi))
+            {
+                return 0;
+            }
             return Metrics.iMenuHeight + 1;
 
         case SM_CXSIZE:
-            if (!GetNonClientMetricsForDpi(&Metrics, dpi)) return 0;
+            Metrics.cbSize = sizeof(Metrics);
+            if (!SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(Metrics), &Metrics, 0, Dpi))
+            {
+                return 0;
+            }
             return max(Metrics.iCaptionWidth, 8);
 
         case SM_CYSIZE:
-            if (!GetNonClientMetricsForDpi(&Metrics, dpi)) return 0;
+            Metrics.cbSize = sizeof(Metrics);
+            if (!SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(Metrics), &Metrics, 0, Dpi))
+            {
+                return 0;
+            }
             return Metrics.iCaptionHeight;
 
         case SM_CXFRAME:
         case SM_CYFRAME:
-            if (!GetNonClientMetricsForDpi(&Metrics, dpi)) return 0;
+            Metrics.cbSize = sizeof(Metrics);
+            if (!SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(Metrics), &Metrics, 0, Dpi))
+            {
+                return 0;
+            }
             return max(Metrics.iBorderWidth, 1) + 3;
 
         case SM_CXICONSPACING:
         case SM_CYICONSPACING:
-            if (!GetIconMetricsForDpi(&IconMetrics, dpi)) return 0;
-            return nIndex == SM_CXICONSPACING ? IconMetrics.iHorzSpacing : IconMetrics.iVertSpacing;
+            IconMetrics.cbSize = sizeof(IconMetrics);
+            if (!SystemParametersInfoForDpi(SPI_GETICONMETRICS, sizeof(IconMetrics), &IconMetrics, 0, Dpi))
+            {
+                return 0;
+            }
+            return (Index == SM_CXICONSPACING) ? IconMetrics.iHorzSpacing : IconMetrics.iVertSpacing;
 
         case SM_CXSMICON:
         case SM_CYSMICON:
-            return ScaleDpiValue(16, USER_DEFAULT_SCREEN_DPI, dpi) & ~1;
+            return ScaleDpiValue(16, USER_DEFAULT_SCREEN_DPI, Dpi) & ~1;
 
         case SM_CYSMCAPTION:
-            if (!GetNonClientMetricsForDpi(&Metrics, dpi)) return 0;
+            Metrics.cbSize = sizeof(Metrics);
+            if (!SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(Metrics), &Metrics, 0, Dpi))
+            {
+                return 0;
+            }
             return Metrics.iSmCaptionHeight + 1;
 
         case SM_CXSMSIZE:
-            if (!GetNonClientMetricsForDpi(&Metrics, dpi)) return 0;
+            Metrics.cbSize = sizeof(Metrics);
+            if (!SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(Metrics), &Metrics, 0, Dpi))
+            {
+                return 0;
+            }
             return Metrics.iSmCaptionWidth;
 
         case SM_CYSMSIZE:
-            if (!GetNonClientMetricsForDpi(&Metrics, dpi)) return 0;
+            Metrics.cbSize = sizeof(Metrics);
+            if (!SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(Metrics), &Metrics, 0, Dpi))
+            {
+                return 0;
+            }
             return Metrics.iSmCaptionHeight;
 
         case SM_CXMENUSIZE:
-            if (!GetNonClientMetricsForDpi(&Metrics, dpi)) return 0;
+            Metrics.cbSize = sizeof(Metrics);
+            if (!SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(Metrics), &Metrics, 0, Dpi))
+            {
+                return 0;
+            }
             return Metrics.iMenuWidth;
 
         case SM_CYMENUSIZE:
-            if (!GetNonClientMetricsForDpi(&Metrics, dpi)) return 0;
+            Metrics.cbSize = sizeof(Metrics);
+            if (!SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(Metrics), &Metrics, 0, Dpi))
+            {
+                return 0;
+            }
             return Metrics.iMenuHeight;
 
         case SM_CXMENUCHECK:
@@ -646,107 +734,105 @@ GetSystemMetricsForDpi(
             HFONT Font, OldFont;
             TEXTMETRICW TextMetrics;
 
-            if (!GetNonClientMetricsForDpi(&Metrics, dpi)) return 0;
+            Metrics.cbSize = sizeof(Metrics);
+            if (!SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(Metrics), &Metrics, 0, Dpi))
+            {
+                return 0;
+            }
 
             hDC = NtUserGetDC(NULL);
             Font = CreateFontIndirectW(&Metrics.lfMenuFont);
-            if (hDC == NULL || Font == NULL)
+            if (!hDC || !Font)
             {
-                if (Font != NULL) DeleteObject(Font);
-                if (hDC != NULL) ReleaseDC(NULL, hDC);
+                if (Font)
+                    DeleteObject(Font);
+                if (hDC)
+                    ReleaseDC(NULL, hDC);
                 return 13;
             }
 
             OldFont = SelectObject(hDC, Font);
-            if (OldFont == NULL || !GetTextMetricsW(hDC, &TextMetrics))
+            if (!OldFont || !GetTextMetricsW(hDC, &TextMetrics))
                 Value = 13;
             else
                 Value = (TextMetrics.tmHeight + TextMetrics.tmExternalLeading - 1) | 1;
-            if (OldFont != NULL) SelectObject(hDC, OldFont);
+            if (OldFont)
+                SelectObject(hDC, OldFont);
             DeleteObject(Font);
             ReleaseDC(NULL, hDC);
             return Value;
         }
     }
 
-    return GetSystemMetrics(nIndex);
+    return GetSystemMetrics(Index);
 }
 
 BOOL
 WINAPI
-AdjustWindowRectExForDpi(
-    _Inout_ LPRECT lpRect,
-    _In_ DWORD dwStyle,
-    _In_ BOOL bMenu,
-    _In_ DWORD dwExStyle,
-    _In_ UINT dpi)
+AdjustWindowRectExForDpi(_Inout_ LPRECT Rect, _In_ DWORD Style, _In_ BOOL Menu, _In_ DWORD ExStyle, _In_ UINT Dpi)
 {
     NONCLIENTMETRICSW Metrics;
     INT Adjust = 0;
 
-    if (lpRect == NULL || dpi == 0)
+    if (!Rect || !Dpi)
     {
         SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
 
-    if (!GetNonClientMetricsForDpi(&Metrics, dpi))
+    Metrics.cbSize = sizeof(Metrics);
+    if (!SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(Metrics), &Metrics, 0, Dpi))
+    {
         return FALSE;
+    }
 
-    if ((dwExStyle & (WS_EX_STATICEDGE | WS_EX_DLGMODALFRAME)) == WS_EX_STATICEDGE)
+    if ((ExStyle & (WS_EX_STATICEDGE | WS_EX_DLGMODALFRAME)) == WS_EX_STATICEDGE)
+    {
         Adjust = 1;
-    else if ((dwExStyle & WS_EX_DLGMODALFRAME) || (dwStyle & (WS_THICKFRAME | WS_DLGFRAME)))
+    }
+    else if ((ExStyle & WS_EX_DLGMODALFRAME) || (Style & (WS_THICKFRAME | WS_DLGFRAME)))
+    {
         Adjust = 2;
+    }
 
-    if (dwStyle & WS_THICKFRAME)
+    if (Style & WS_THICKFRAME)
         Adjust += Metrics.iBorderWidth + Metrics.iPaddedBorderWidth;
 
-    if ((dwStyle & (WS_BORDER | WS_DLGFRAME)) || (dwExStyle & WS_EX_DLGMODALFRAME))
-        ++Adjust;
-
-    InflateRect(lpRect, Adjust, Adjust);
-
-    if ((dwStyle & WS_CAPTION) == WS_CAPTION)
+    if ((Style & (WS_BORDER | WS_DLGFRAME)) || (ExStyle & WS_EX_DLGMODALFRAME))
     {
-        if (dwExStyle & WS_EX_TOOLWINDOW)
-            lpRect->top -= Metrics.iSmCaptionHeight + 1;
-        else
-            lpRect->top -= Metrics.iCaptionHeight + 1;
+        ++Adjust;
     }
-    if (bMenu)
-        lpRect->top -= Metrics.iMenuHeight + 1;
 
-    if (dwExStyle & WS_EX_CLIENTEDGE)
-        InflateRect(lpRect, GetSystemMetrics(SM_CXEDGE), GetSystemMetrics(SM_CYEDGE));
+    InflateRect(Rect, Adjust, Adjust);
+
+    if ((Style & WS_CAPTION) == WS_CAPTION)
+    {
+        Rect->top -= (ExStyle & WS_EX_TOOLWINDOW) ? Metrics.iSmCaptionHeight + 1 : Metrics.iCaptionHeight + 1;
+    }
+    if (Menu)
+        Rect->top -= Metrics.iMenuHeight + 1;
+
+    if (ExStyle & WS_EX_CLIENTEDGE)
+    {
+        InflateRect(Rect, GetSystemMetrics(SM_CXEDGE), GetSystemMetrics(SM_CYEDGE));
+    }
 
     return TRUE;
 }
 
 BOOL
 WINAPI
-EnableNonClientDpiScaling(
-    _In_ HWND hwnd)
+LogicalToPhysicalPoint(
+    _In_ HWND hWnd,
+    _Inout_ POINT *Point)
 {
-    if (!IsWindow(hwnd))
+    if (!Point || !IsWindow(hWnd))
     {
-        SetLastError(ERROR_INVALID_WINDOW_HANDLE);
+        SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
 
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
-}
-
-/*
- * @stub
- */
-BOOL
-WINAPI
-LogicalToPhysicalPoint(
-    _In_ HWND hwnd, 
-    _Inout_ POINT *point )
-{
-    UNIMPLEMENTED;
+    /* ReactOS currently uses one physical coordinate space per desktop. */
     return TRUE;
 }
 

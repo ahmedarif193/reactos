@@ -209,12 +209,24 @@ PDEVOBJ_bEnablePDEV(
         return FALSE;
     }
 
-    /* Fix up some values */
-    if (ppdev->gdiinfo.ulLogPixelsX == 0)
-        ppdev->gdiinfo.ulLogPixelsX = 96;
+    /*
+     * Logical display DPI is a win32k policy, not a physical monitor
+     * dimension. Keep every display driver on the configured value even
+     * when a legacy driver reports a fixed 96 DPI.
+     */
+    if (ppdev->pGraphicsDevice && pdevmode->dmLogPixels)
+    {
+        ppdev->gdiinfo.ulLogPixelsX = pdevmode->dmLogPixels;
+        ppdev->gdiinfo.ulLogPixelsY = pdevmode->dmLogPixels;
+    }
+    else
+    {
+        if (ppdev->gdiinfo.ulLogPixelsX == 0)
+            ppdev->gdiinfo.ulLogPixelsX = USER_SYSTEM_DPI_DEFAULT;
 
-    if (ppdev->gdiinfo.ulLogPixelsY == 0)
-        ppdev->gdiinfo.ulLogPixelsY = 96;
+        if (ppdev->gdiinfo.ulLogPixelsY == 0)
+            ppdev->gdiinfo.ulLogPixelsY = USER_SYSTEM_DPI_DEFAULT;
+    }
 
     /* Set raster caps */
     ppdev->gdiinfo.flRaster = RC_OP_DX_OUTPUT | RC_GDI20_OUTPUT | RC_BIGFONT;
@@ -471,6 +483,12 @@ PDEVOBJ_Create(
     PSURFACE pSurface;
 
     TRACE("PDEVOBJ_Create(%p %p %d)\n", pGraphicsDevice, pdm, ldevtype);
+
+    if (ldevtype == LDEV_DEVICE_DISPLAY && pGraphicsDevice && pdm)
+    {
+        pdm->dmLogPixels = (WORD)UserGetSystemDpi();
+        pdm->dmFields |= DM_LOGPIXELS;
+    }
 
     if (ldevtype != LDEV_DEVICE_META)
     {
