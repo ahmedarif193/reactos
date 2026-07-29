@@ -990,10 +990,10 @@ function(create_registry_hives)
         ${CMAKE_SOURCE_DIR}/boot/bootdata/caroots.inf)
     list(APPEND _livecd_inf_files
         ${CMAKE_SOURCE_DIR}/boot/bootdata/app_launcher.inf)
-    if(SARCH STREQUAL "xbox")
+    if(REACTOS_USE_XPDM AND (SARCH STREQUAL "xbox"))
         list(APPEND _livecd_inf_files
             ${CMAKE_SOURCE_DIR}/boot/bootdata/hiveinst_xbox.inf)
-    elseif(SARCH STREQUAL "pc98")
+    elseif(REACTOS_USE_XPDM AND (SARCH STREQUAL "pc98"))
         list(APPEND _livecd_inf_files
             ${CMAKE_SOURCE_DIR}/boot/bootdata/hiveinst_pc98.inf)
     else()
@@ -1036,10 +1036,10 @@ function(create_registry_hives)
         ${CMAKE_SOURCE_DIR}/boot/bootdata/caroots.inf)
     list(APPEND _preinstall_inf_files
         ${CMAKE_SOURCE_DIR}/boot/bootdata/app_launcher.inf)
-    if(SARCH STREQUAL "xbox")
+    if(REACTOS_USE_XPDM AND (SARCH STREQUAL "xbox"))
         list(APPEND _preinstall_inf_files
             ${CMAKE_SOURCE_DIR}/boot/bootdata/hiveinst_xbox.inf)
-    elseif(SARCH STREQUAL "pc98")
+    elseif(REACTOS_USE_XPDM AND (SARCH STREQUAL "pc98"))
         list(APPEND _preinstall_inf_files
             ${CMAKE_SOURCE_DIR}/boot/bootdata/hiveinst_pc98.inf)
     else()
