@@ -194,13 +194,13 @@ BatteryClassInstall(
     dwError = InstallCompositeBattery(DeviceInfoSet,
                                       DeviceInfoData,
                                       &DeviceInstallParams);
-    if (dwError == ERROR_SUCCESS)
+    if (dwError != ERROR_SUCCESS)
     {
-        /* Install the battery device */
-        dwError = ERROR_DI_DO_DEFAULT;
+        DPRINT1("InstallCompositeBattery() failed (Error %lu 0x%08lx)\n", dwError, dwError);
     }
 
-    return dwError;
+    /* Install the battery device */
+    return ERROR_DI_DO_DEFAULT;
 }
 
 
