@@ -28,6 +28,10 @@ INBV_DISPLAY_STATE
 NTAPI
 InbvGetDisplayState(VOID);
 
+BOOLEAN
+NTAPI
+InbvQueryDisplayInfo(_Out_ PVID_DISPLAY_INFO DisplayInfo);
+
 VOID
 NTAPI
 InbvAcquireLock(VOID);
