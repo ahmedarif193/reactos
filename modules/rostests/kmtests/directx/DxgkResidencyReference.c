@@ -14,6 +14,58 @@
 #define DEVICE_A 0x1001ULL
 #define DEVICE_B 0x1002ULL
 
+#define TRANSACTION_THREAD_COUNT 4
+#define TRANSACTION_ITERATIONS   2000
+
+typedef struct _RESIDENCY_TRANSACTION_STRESS
+{
+    PVOID volatile Owner;
+    volatile LONG Inside;
+    volatile LONG Violations;
+    volatile LONG Acquisitions;
+} RESIDENCY_TRANSACTION_STRESS, *PRESIDENCY_TRANSACTION_STRESS;
+
+typedef struct _RESIDENCY_TRANSACTION_THREAD
+{
+    PRESIDENCY_TRANSACTION_STRESS Stress;
+    KEVENT DoneEvent;
+} RESIDENCY_TRANSACTION_THREAD, *PRESIDENCY_TRANSACTION_THREAD;
+
+static VOID
+NTAPI
+ResidencyTransactionThread(
+    _In_ PVOID Parameter)
+{
+    PRESIDENCY_TRANSACTION_THREAD Thread =
+        (PRESIDENCY_TRANSACTION_THREAD)Parameter;
+    ULONG Iteration;
+
+    for (Iteration = 0; Iteration < TRANSACTION_ITERATIONS; ++Iteration)
+    {
+        if (!DxgkResidencyCoreTransactionTryAcquire(
+                 &Thread->Stress->Owner,
+                 Thread))
+        {
+            YieldProcessor();
+            continue;
+        }
+        if (InterlockedIncrement(&Thread->Stress->Inside) != 1)
+            InterlockedIncrement(&Thread->Stress->Violations);
+        InterlockedIncrement(&Thread->Stress->Acquisitions);
+        KeStallExecutionProcessor(1);
+        InterlockedDecrement(&Thread->Stress->Inside);
+        if (!DxgkResidencyCoreTransactionRelease(
+                 &Thread->Stress->Owner,
+                 Thread))
+        {
+            InterlockedIncrement(&Thread->Stress->Violations);
+        }
+    }
+
+    KeSetEvent(&Thread->DoneEvent, IO_NO_INCREMENT, FALSE);
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
 static VOID TestExplicitReferences(VOID)
 {
     DXGK_RESIDENCY_REFS Refs;
@@ -126,12 +178,100 @@ static VOID TestSubmissionPin(VOID)
     ok_bool_true(DxgkResidencyCoreIsEvictable(&Refs), "still evictable");
 }
 
+static VOID TestTransactionOwnerRace(VOID)
+{
+    RESIDENCY_TRANSACTION_STRESS Stress;
+    RESIDENCY_TRANSACTION_THREAD Threads[TRANSACTION_THREAD_COUNT];
+    HANDLE Handles[TRANSACTION_THREAD_COUNT] = { 0 };
+    ULONG Index;
+
+    RtlZeroMemory(&Stress, sizeof(Stress));
+    RtlZeroMemory(Threads, sizeof(Threads));
+    for (Index = 0; Index < TRANSACTION_THREAD_COUNT; ++Index)
+    {
+        NTSTATUS Status;
+
+        Threads[Index].Stress = &Stress;
+        KeInitializeEvent(&Threads[Index].DoneEvent,
+                          NotificationEvent,
+                          FALSE);
+        Status = PsCreateSystemThread(&Handles[Index],
+                                      THREAD_ALL_ACCESS,
+                                      NULL,
+                                      NULL,
+                                      NULL,
+                                      ResidencyTransactionThread,
+                                      &Threads[Index]);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        if (!NT_SUCCESS(Status))
+            break;
+    }
+
+    while (Index != 0)
+    {
+        --Index;
+        KeWaitForSingleObject(&Threads[Index].DoneEvent,
+                              Executive,
+                              KernelMode,
+                              FALSE,
+                              NULL);
+        ZwClose(Handles[Index]);
+    }
+    ok_eq_long(Stress.Violations, 0L);
+    ok_eq_long(Stress.Inside, 0L);
+    ok(Stress.Acquisitions > 0,
+       "expected at least one transaction acquisition\n");
+    ok(Stress.Owner == NULL, "owner leaked at terminal edge: %p\n", Stress.Owner);
+}
+
+static VOID TestRollbackAndEvictOwnership(VOID)
+{
+    BOOLEAN Evict;
+    BOOLEAN Trim;
+    NTSTATUS Status;
+
+    /*
+     * Two duplicate handles in this request resolve to one physical backing.
+     * A third reference from another request must prevent physical eviction.
+     */
+    Status = DxgkResidencyCorePlanEvict(2, 3, 2, TRUE, FALSE,
+                                        &Evict, &Trim);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_bool_false(Evict, "another request still owns the placement");
+    ok_bool_false(Trim, "not a zero-reference trim candidate");
+    ok_bool_false(DxgkResidencyCoreShouldRollbackPlacement(TRUE, FALSE),
+                  "rollback must not evict across another reference");
+
+    Status = DxgkResidencyCorePlanEvict(2, 2, 2, TRUE, FALSE,
+                                        &Evict, &Trim);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_bool_true(Evict, "this request owns the zero-reference transition");
+    ok_bool_false(Trim, "physical eviction, not trim-only");
+    ok_bool_true(DxgkResidencyCoreShouldRollbackPlacement(TRUE, TRUE),
+                 "owned placement may roll back at zero references");
+    ok_bool_false(DxgkResidencyCoreShouldRollbackPlacement(FALSE, TRUE),
+                  "pre-existing placement is never rollback-owned");
+
+    Status = DxgkResidencyCorePlanEvict(2, 2, 2, TRUE, TRUE,
+                                        &Evict, &Trim);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_bool_false(Evict, "EvictOnlyIfNecessary preserves placement");
+    ok_bool_true(Trim, "zero-reference resident allocation is trimmable");
+
+    Status = DxgkResidencyCorePlanEvict(1, 2, 2, TRUE, FALSE,
+                                        &Evict, &Trim);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    ok_bool_false(Evict, "under-owned duplicate request cannot evict");
+}
+
 START_TEST(DxgkResidencyReference)
 {
     TestExplicitReferences();
     TestImplicitReference();
     TestDeviceTeardown();
     TestSubmissionPin();
+    TestTransactionOwnerRace();
+    TestRollbackAndEvictOwnership();
 }
 
 /* EOF */

@@ -1230,6 +1230,8 @@ GpuVaNotifyPageTableUpdate(
         return STATUS_SUCCESS;
 
     Coverage = (ULONGLONG)Count << GpuVaLevelShift(Adapter, Table->Level);
+    if (Coverage == 0 || FirstVirtualAddress > MAXULONGLONG - Coverage)
+        return STATUS_INTEGER_OVERFLOW;
     if (!Process->PageTableUpdatePending)
     {
         Process->PageTableUpdatePending = TRUE;
@@ -1246,17 +1248,44 @@ GpuVaNotifyPageTableUpdate(
     return STATUS_SUCCESS;
 }
 
+static VOID
+GpuVaRequeuePageTableUpdate(
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_ D3DGPU_VIRTUAL_ADDRESS Start,
+    _In_ D3DGPU_VIRTUAL_ADDRESS End)
+{
+    ExAcquireFastMutex(&Process->GpuVaLock);
+    if (!Process->PageTableUpdatePending)
+    {
+        Process->PageTableUpdatePending = TRUE;
+        Process->PageTableUpdateStart = Start;
+        Process->PageTableUpdateEnd = End;
+    }
+    else
+    {
+        if (Start < Process->PageTableUpdateStart)
+            Process->PageTableUpdateStart = Start;
+        if (End > Process->PageTableUpdateEnd)
+            Process->PageTableUpdateEnd = End;
+    }
+    ExReleaseFastMutex(&Process->GpuVaLock);
+}
+
 /*
  * DxgkGpuVaFlushPageTableUpdates
  *
  * Describes the page-table span accumulated under GpuVaLock to the miniport
- * and invalidates the covering translations.  Runs with the lock released, so
- * the paging submission it performs is at the PASSIVE_LEVEL those DDIs
- * require.  The caller holds a process reference for the duration.
+ * and invalidates the covering translations.  PageTableFlushMutex covers the
+ * entire snapshot/submit/retire transaction, so a second caller cannot observe
+ * an empty pending span and release backing while the first invalidation is
+ * still in flight.  A rejected transaction is merged back with any newer
+ * updates before the mutex is released.
  *
- * IRQL: PASSIVE_LEVEL, GpuVaLock NOT held.
+ * The caller holds a process reference for the duration.
+ *
+ * IRQL: PASSIVE_LEVEL, GpuVaLock and PageTableFlushMutex NOT held.
  */
-VOID
+NTSTATUS
 DxgkGpuVaFlushPageTableUpdates(
     _In_ PDXGKRNL_PROCESS Process)
 {
@@ -1268,14 +1297,22 @@ DxgkGpuVaFlushPageTableUpdates(
 
     PAGED_CODE();
     if (Process == NULL)
-        return;
-    Adapter = Process->Adapter;
+        return STATUS_INVALID_PARAMETER;
+
+    Status = KeWaitForSingleObject(&Process->PageTableFlushMutex,
+                                   Executive,
+                                   KernelMode,
+                                   FALSE,
+                                   NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
 
     ExAcquireFastMutex(&Process->GpuVaLock);
     if (!Process->PageTableUpdatePending)
     {
         ExReleaseFastMutex(&Process->GpuVaLock);
-        return;
+        KeReleaseMutex(&Process->PageTableFlushMutex, FALSE);
+        return STATUS_SUCCESS;
     }
     Start = Process->PageTableUpdateStart;
     End = Process->PageTableUpdateEnd;
@@ -1284,25 +1321,51 @@ DxgkGpuVaFlushPageTableUpdates(
     Process->PageTableUpdateEnd = 0;
     ExReleaseFastMutex(&Process->GpuVaLock);
 
-    if (Adapter == NULL || End <= Start)
-        return;
+    Adapter = Process->Adapter;
+    if (End <= Start)
+    {
+        Status = STATUS_DATA_ERROR;
+        goto Complete;
+    }
+    if (Adapter == NULL)
+    {
+        Status = STATUS_DEVICE_NOT_READY;
+        goto Requeue;
+    }
     /* The tables the CPU already wrote are authoritative in CPU_VIRTUAL mode;
      * this tells the miniport which translations changed so it can drop any
      * it had cached. */
     if (!DxgkPagingOperationSupported(Adapter, DxgkPagingOpFlushTlb))
-        return;
+    {
+        Status = STATUS_NOT_SUPPORTED;
+        goto Requeue;
+    }
     RtlZeroMemory(&Op, sizeof(Op));
     Op.Type = DxgkPagingOpFlushTlb;
     Op.hMiniportDevice = GpuVaProcessMiniportDevice(Process);
     if (Op.hMiniportDevice == NULL)
-        return;
+    {
+        Status = STATUS_DEVICE_NOT_READY;
+        goto Requeue;
+    }
     Op.hMiniportProcess = Process->hMiniportProcess;
     Op.RootPageTableAddress = Process->RootPageTableAddress;
     Op.StartVirtualAddress = Start;
     Op.EndVirtualAddress = End;
     Status = DxgkPagingExecuteSynchronous(Adapter, NULL, &Op);
     if (!NT_SUCCESS(Status))
+    {
         DPRINT1("DxgkGpuVa: TLB invalidation rejected 0x%08lX over [0x%I64x,0x%I64x)\n", Status, Start, End);
+        goto Requeue;
+    }
+    goto Complete;
+
+Requeue:
+    GpuVaRequeuePageTableUpdate(Process, Start, End);
+
+Complete:
+    KeReleaseMutex(&Process->PageTableFlushMutex, FALSE);
+    return Status;
 }
 
 /*
@@ -1640,6 +1703,10 @@ DxgkGpuVaCreateProcess(
     Process->Adapter = Adapter;
     InitializeListHead(&Process->GpuVaRangeList);
     ExInitializeFastMutex(&Process->GpuVaLock);
+    KeInitializeMutex(&Process->PageTableFlushMutex, 0);
+    Process->PageTableUpdatePending = FALSE;
+    Process->PageTableUpdateStart = 0;
+    Process->PageTableUpdateEnd = 0;
     Process->GpuVaTotalReserved = 0;
     Process->GpuVaTotalMapped   = 0;
     Process->GpuVaRangeCount    = 0;
@@ -2590,17 +2657,22 @@ DxgkGpuVaMapFencePage(
 
 /*
  * DxgkGpuVaUnmapFencePage
- * Remove a fence-page mapping created by DxgkGpuVaMapFencePage.
+ * Remove a fence-page mapping created by DxgkGpuVaMapFencePage.  The caller
+ * releases the nonpaged backing immediately afterwards, so the PTE clear must
+ * reach the miniport/TLB before this function returns.  Leaving the update in
+ * Process->PageTableUpdatePending would let the GPU keep a translation to a
+ * page that has already gone back to the pool.
  */
-VOID
+NTSTATUS
 DxgkGpuVaUnmapFencePage(
     _In_ PDXGKRNL_PROCESS       Process,
     _In_ D3DGPU_VIRTUAL_ADDRESS Address)
 {
     PLIST_ENTRY Entry;
+    BOOLEAN Unmapped = FALSE;
 
     if (Process == NULL || Address == 0)
-        return;
+        return STATUS_INVALID_PARAMETER;
 
     ExAcquireFastMutex(&Process->GpuVaLock);
     for (Entry = Process->GpuVaRangeList.Flink;
@@ -2625,9 +2697,19 @@ DxgkGpuVaUnmapFencePage(
         Process->GpuVaTotalReserved -= min(GPUVA_PAGE_SIZE, Process->GpuVaTotalReserved);
         Process->GpuVaTotalMapped -= min(GPUVA_PAGE_SIZE, Process->GpuVaTotalMapped);
         GpuVaClearPteSpan(Process, Address, GPUVA_PAGE_SIZE);
+        Unmapped = TRUE;
         break;
     }
     ExReleaseFastMutex(&Process->GpuVaLock);
+
+    if (!Unmapped)
+        return STATUS_NOT_FOUND;
+
+    /*
+     * GpuVaClearPteSpan only records the invalidation while GpuVaLock is held.
+     * Flush after dropping the lock, before sync.c frees the fence page.
+     */
+    return DxgkGpuVaFlushPageTableUpdates(Process);
 }
 
 VOID
@@ -2672,7 +2754,10 @@ DxgkGpuVaPageTableReady(
 {
     if (Adapter == NULL || Process == NULL || Process->Adapter != Adapter || Process->hMiniportProcess == NULL || Process->hRootPageTable == NULL || Process->RootPageTableEntries == 0 || !Process->RootPageTableProgrammed)
         return FALSE;
-    if (Adapter->MiniportContext == NULL || Adapter->MiniportContext->InitData.s.Version < DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+    if (Adapter->MiniportContext == NULL ||
+        !DxgkCapsCoreInterfaceVersionAtLeast(
+            Adapter->MiniportContext->InitData.s.Version,
+            DXGK_CAPS_CORE_LEVEL_WDDM_2_0))
         return FALSE;
     if (DXGK_CB_FULL(Adapter, DxgkDdiBuildPagingBuffer) == NULL || DXGK_CB_FULL(Adapter, DxgkDdiGetRootPageTableSize) == NULL || DXGK_CB_FULL(Adapter, DxgkDdiSetRootPageTable) == NULL)
         return FALSE;
@@ -3134,8 +3219,10 @@ DxgkGpuVaMakeResident(
     _Out_   ULONGLONG         *OutNumBytesToTrim,
     _Out_   ULONGLONG         *OutPagingFenceValue)
 {
+    PDXGKVMM_ALLOCATION *Allocations;
+    BOOLEAN PagingQueued = FALSE;
     ULONG i;
-    ULONG PacketsQueued = 0;
+    NTSTATUS Status = STATUS_SUCCESS;
 
     PAGED_CODE();
 
@@ -3148,94 +3235,60 @@ DxgkGpuVaMakeResident(
     *OutNumBytesToTrim = 0;
     *OutPagingFenceValue = 0;
 
-    /*
-     * Each list entry adds one residency reference charged to the calling
-     * device and, on the zero-to-one transition of an evicted allocation,
-     * establishes the placement through a real paging packet.  The request is
-     * atomic: any failure rolls back every reference this call took and
-     * exactly the placements it made.
-     */
+    if (NumAllocations > MAXLONG ||
+        (SIZE_T)NumAllocations > MAXULONG_PTR / sizeof(*Allocations))
     {
-        BOOLEAN *Placed;
-        BOOLEAN *Charged;
-        NTSTATUS Status = STATUS_SUCCESS;
+        return STATUS_INTEGER_OVERFLOW;
+    }
+    Allocations = ExAllocatePoolWithTag(PagedPool,
+                                        (SIZE_T)NumAllocations *
+                                            sizeof(*Allocations),
+                                        TAG_DXGK_GPUVA);
+    if (Allocations == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    RtlZeroMemory(Allocations,
+                  (SIZE_T)NumAllocations * sizeof(*Allocations));
 
-        Placed = ExAllocatePoolWithTag(PagedPool, NumAllocations * 2 * sizeof(*Placed), TAG_DXGK_GPUVA);
-        if (Placed == NULL)
-            return STATUS_INSUFFICIENT_RESOURCES;
-        RtlZeroMemory(Placed, NumAllocations * 2 * sizeof(*Placed));
-        Charged = Placed + NumAllocations;
-
-        for (i = 0; i < NumAllocations; i++)
-        {
-            PDXGKVMM_ALLOCATION Alloc;
-
-            Status = DxgkVidMmReferenceProcessAllocation((HANDLE)(ULONG_PTR)AllocationList[i], Adapter, Process, &Alloc);
-            if (NT_SUCCESS(Status))
-            {
-                Status = DxgkVidMmAcquireDeviceResidencyReference(Alloc, Device);
-                if (NT_SUCCESS(Status))
-                {
-                    Charged[i] = TRUE;
-                    if (!Alloc->Resident)
-                    {
-                        Status = DxgkVidMmMakeResident(Alloc, Adapter);
-                        if (NT_SUCCESS(Status))
-                            Placed[i] = TRUE;
-                        else if (Status == STATUS_NO_MEMORY || Status == STATUS_GRAPHICS_NO_VIDEO_MEMORY)
-                            *OutNumBytesToTrim += Alloc->Size;
-                        if (NT_SUCCESS(Status) && Device != NULL && hPagingSyncObject != 0 && PagingFenceCounter != NULL)
-                        {
-                            ULONG64 FenceValue = (ULONG64)InterlockedIncrement64(PagingFenceCounter);
-
-                            Status = DxgkVidMmSubmitAperturePagingPacket(Adapter, Device, Alloc, TRUE, hPagingSyncObject, FenceValue);
-                            if (NT_SUCCESS(Status))
-                            {
-                                *OutPagingFenceValue = FenceValue;
-                                PacketsQueued++;
-                            }
-                            else
-                                (VOID)DxgkVidMmEvict(Alloc);
-                        }
-                    }
-                    if (!NT_SUCCESS(Status))
-                    {
-                        BOOLEAN ReachedZero;
-
-                        (VOID)DxgkVidMmReleaseDeviceResidencyReference(Alloc, Device, &ReachedZero);
-                        Charged[i] = FALSE;
-                    }
-                }
-                DxgkVidMmDereferenceAllocation(Alloc);
-            }
-
-            if (!NT_SUCCESS(Status))
-            {
-                while (i-- > 0)
-                {
-                    PDXGKVMM_ALLOCATION Undo;
-                    BOOLEAN ReachedZero;
-
-                    if (!NT_SUCCESS(DxgkVidMmReferenceProcessAllocation((HANDLE)(ULONG_PTR)AllocationList[i], Adapter, Process, &Undo)))
-                        continue;
-                    if (Charged[i])
-                        (VOID)DxgkVidMmReleaseDeviceResidencyReference(Undo, Device, &ReachedZero);
-                    if (Placed[i])
-                        (VOID)DxgkVidMmEvict(Undo);
-                    DxgkVidMmDereferenceAllocation(Undo);
-                }
-                ExFreePoolWithTag(Placed, TAG_DXGK_GPUVA);
-                return Status;
-            }
-        }
-
-        ExFreePoolWithTag(Placed, TAG_DXGK_GPUVA);
+    /*
+     * Capture every physical backing before the first residency mutation.
+     * Rollback therefore never re-resolves a logical handle that destroy may
+     * already have unpublished.
+     */
+    for (i = 0; i < NumAllocations; ++i)
+    {
+        Status = DxgkVidMmReferenceProcessAllocation(
+                     (HANDLE)(ULONG_PTR)AllocationList[i],
+                     Adapter,
+                     Process,
+                     &Allocations[i]);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
     }
 
-    *OutCompleted = NumAllocations;
+    Status = DxgkVidMmMakeResidentBatch(Adapter,
+                                        Device,
+                                        Allocations,
+                                        NumAllocations,
+                                        hPagingSyncObject,
+                                        PagingFenceCounter,
+                                        OutNumBytesToTrim,
+                                        OutPagingFenceValue,
+                                        &PagingQueued);
+    if (NT_SUCCESS(Status))
+        *OutCompleted = NumAllocations;
+
+Cleanup:
+    for (i = 0; i < NumAllocations; ++i)
+    {
+        if (Allocations[i] != NULL)
+            DxgkVidMmDereferenceAllocation(Allocations[i]);
+    }
+    ExFreePoolWithTag(Allocations, TAG_DXGK_GPUVA);
+    if (!NT_SUCCESS(Status))
+        return Status;
     /* Queued paging work completes through the paging queue's monitored
      * fence; the caller waits *OutPagingFenceValue per the native contract. */
-    return PacketsQueued != 0 ? STATUS_PENDING : STATUS_SUCCESS;
+    return PagingQueued ? STATUS_PENDING : STATUS_SUCCESS;
 }
 
 
@@ -3256,7 +3309,9 @@ DxgkGpuVaEvict(
     _In_    BOOLEAN            EvictOnlyIfNecessary,
     _Out_   ULONGLONG         *OutNumBytesToTrim)
 {
+    PDXGKVMM_ALLOCATION *Allocations;
     ULONG i;
+    NTSTATUS Status = STATUS_SUCCESS;
 
     PAGED_CODE();
 
@@ -3266,54 +3321,45 @@ DxgkGpuVaEvict(
         return STATUS_INVALID_PARAMETER;
 
     *OutNumBytesToTrim = 0;
-
-    /*
-     * Each list entry removes one residency reference held by the calling
-     * device.  The whole request is validated first so a bad handle, or a
-     * device evicting more than it made resident, fails the call before any
-     * reference changes; the release pass then drops the references and
-     * evicts each allocation whose total reaches zero.  With
-     * EvictOnlyIfNecessary the references still drop but the placement stays
-     * as a pressure-trim candidate.
-     */
-    for (i = 0; i < NumAllocations; i++)
+    if (NumAllocations > MAXLONG ||
+        (SIZE_T)NumAllocations > MAXULONG_PTR / sizeof(*Allocations))
     {
-        PDXGKVMM_ALLOCATION Alloc;
-        NTSTATUS Status = DxgkVidMmReferenceProcessAllocation((HANDLE)(ULONG_PTR)AllocationList[i], Adapter, Process, &Alloc);
-        LONG Outstanding;
-        UINT Duplicates = 0;
-        UINT j;
-
-        if (!NT_SUCCESS(Status))
-            return Status;
-        for (j = 0; j < NumAllocations; j++)
-        {
-            if (AllocationList[j] == AllocationList[i])
-                Duplicates++;
-        }
-        Outstanding = DxgkVidMmQueryDeviceResidencyReferenceCount(Alloc, Device);
-        DxgkVidMmDereferenceAllocation(Alloc);
-        if (Outstanding < (LONG)Duplicates)
-            return STATUS_INVALID_PARAMETER;
+        return STATUS_INTEGER_OVERFLOW;
     }
+    Allocations = ExAllocatePoolWithTag(PagedPool,
+                                        (SIZE_T)NumAllocations *
+                                            sizeof(*Allocations),
+                                        TAG_DXGK_GPUVA);
+    if (Allocations == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    RtlZeroMemory(Allocations,
+                  (SIZE_T)NumAllocations * sizeof(*Allocations));
 
-    for (i = 0; i < NumAllocations; i++)
+    for (i = 0; i < NumAllocations; ++i)
     {
-        PDXGKVMM_ALLOCATION Alloc;
-        NTSTATUS Status = DxgkVidMmReferenceProcessAllocation((HANDLE)(ULONG_PTR)AllocationList[i], Adapter, Process, &Alloc);
-        BOOLEAN ReachedZero = FALSE;
-
+        Status = DxgkVidMmReferenceProcessAllocation(
+                     (HANDLE)(ULONG_PTR)AllocationList[i],
+                     Adapter,
+                     Process,
+                     &Allocations[i]);
         if (!NT_SUCCESS(Status))
-            return Status;
-        (VOID)DxgkVidMmReleaseDeviceResidencyReference(Alloc, Device, &ReachedZero);
-        if (ReachedZero && Alloc->Resident && !EvictOnlyIfNecessary)
-            (VOID)DxgkVidMmEvict(Alloc);
-        else if (ReachedZero && Alloc->Resident)
-            *OutNumBytesToTrim += Alloc->Size;
-        DxgkVidMmDereferenceAllocation(Alloc);
+            goto Cleanup;
     }
+    Status = DxgkVidMmEvictBatch(Adapter,
+                                 Device,
+                                 Allocations,
+                                 NumAllocations,
+                                 EvictOnlyIfNecessary,
+                                 OutNumBytesToTrim);
 
-    return STATUS_SUCCESS;
+Cleanup:
+    for (i = 0; i < NumAllocations; ++i)
+    {
+        if (Allocations[i] != NULL)
+            DxgkVidMmDereferenceAllocation(Allocations[i]);
+    }
+    ExFreePoolWithTag(Allocations, TAG_DXGK_GPUVA);
+    return Status;
 }
 
 

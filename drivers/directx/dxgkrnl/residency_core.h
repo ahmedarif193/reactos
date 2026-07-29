@@ -60,6 +60,43 @@ VOID DxgkResidencyCoreUnpinSubmission(_Inout_ PDXGK_RESIDENCY_REFS Refs);
 /* Evictable only when nothing references it and no submission holds it. */
 BOOLEAN DxgkResidencyCoreIsEvictable(_In_ const DXGK_RESIDENCY_REFS *Refs);
 
+/* --- callback-spanning residency transactions ------------------------- */
+
+/*
+ * The owner slot is deliberately pointer-sized: a caller may use the address
+ * of its stack transaction as a unique token.  TryAcquire/Release are atomic
+ * so tests and lock-free observers see one exact owner transition.
+ */
+BOOLEAN
+DxgkResidencyCoreTransactionTryAcquire(
+    _Inout_ PVOID volatile *OwnerSlot,
+    _In_ PVOID Owner);
+
+BOOLEAN
+DxgkResidencyCoreTransactionRelease(
+    _Inout_ PVOID volatile *OwnerSlot,
+    _In_ PVOID Owner);
+
+/*
+ * Validate a duplicate-collapsed Evict entry and decide whether this request
+ * owns the zero-reference transition.  A different device's or request's
+ * reference must keep the physical placement intact.
+ */
+NTSTATUS
+DxgkResidencyCorePlanEvict(
+    _In_ LONG DeviceReferences,
+    _In_ LONG TotalReferences,
+    _In_ ULONG RequestReferences,
+    _In_ BOOLEAN Resident,
+    _In_ BOOLEAN EvictOnlyIfNecessary,
+    _Out_ PBOOLEAN PhysicalEvictionRequired,
+    _Out_ PBOOLEAN TrimCandidate);
+
+BOOLEAN
+DxgkResidencyCoreShouldRollbackPlacement(
+    _In_ BOOLEAN PlacementOwned,
+    _In_ BOOLEAN OwnedReferencesReachedZero);
+
 /* --- offer / reclaim -------------------------------------------------- */
 
 typedef enum _DXGK_OFFER_PRIORITY

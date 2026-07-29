@@ -237,6 +237,70 @@ DxgkResidencyCoreIsEvictable(
     return Refs->TotalCount == 0 && Refs->SubmissionPinCount == 0;
 }
 
+/* --- callback-spanning residency transactions ------------------------- */
+
+BOOLEAN
+DxgkResidencyCoreTransactionTryAcquire(
+    _Inout_ PVOID volatile *OwnerSlot,
+    _In_ PVOID Owner)
+{
+    if (OwnerSlot == NULL || Owner == NULL)
+        return FALSE;
+    return InterlockedCompareExchangePointer(OwnerSlot, Owner, NULL) == NULL;
+}
+
+BOOLEAN
+DxgkResidencyCoreTransactionRelease(
+    _Inout_ PVOID volatile *OwnerSlot,
+    _In_ PVOID Owner)
+{
+    if (OwnerSlot == NULL || Owner == NULL)
+        return FALSE;
+    return InterlockedCompareExchangePointer(OwnerSlot, NULL, Owner) == Owner;
+}
+
+NTSTATUS
+DxgkResidencyCorePlanEvict(
+    _In_ LONG DeviceReferences,
+    _In_ LONG TotalReferences,
+    _In_ ULONG RequestReferences,
+    _In_ BOOLEAN Resident,
+    _In_ BOOLEAN EvictOnlyIfNecessary,
+    _Out_ PBOOLEAN PhysicalEvictionRequired,
+    _Out_ PBOOLEAN TrimCandidate)
+{
+    if (PhysicalEvictionRequired == NULL || TrimCandidate == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *PhysicalEvictionRequired = FALSE;
+    *TrimCandidate = FALSE;
+    if (RequestReferences == 0 ||
+        RequestReferences > MAXLONG ||
+        DeviceReferences < 0 ||
+        TotalReferences < 0 ||
+        DeviceReferences < (LONG)RequestReferences ||
+        TotalReferences < (LONG)RequestReferences)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (Resident && TotalReferences == (LONG)RequestReferences)
+    {
+        if (EvictOnlyIfNecessary)
+            *TrimCandidate = TRUE;
+        else
+            *PhysicalEvictionRequired = TRUE;
+    }
+    return STATUS_SUCCESS;
+}
+
+BOOLEAN
+DxgkResidencyCoreShouldRollbackPlacement(
+    _In_ BOOLEAN PlacementOwned,
+    _In_ BOOLEAN OwnedReferencesReachedZero)
+{
+    return PlacementOwned && OwnedReferencesReachedZero;
+}
+
 /* --- offer / reclaim -------------------------------------------------- */
 
 VOID

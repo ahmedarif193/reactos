@@ -454,6 +454,10 @@ typedef struct _DXGKRNL_SUBMIT_DMA_BUFFER
     UINT                        OpenBindingReferenceCount;
     PDXGKVMM_ALLOCATION        *AllocationReferenceList;
     UINT                        AllocationReferenceCount;
+    /* Paging packets need object lifetime without pretending the allocation
+     * is render-admitted at its not-yet-committed placement. */
+    PDXGKVMM_ALLOCATION        *LifetimeAllocationReferenceList;
+    UINT                        LifetimeAllocationReferenceCount;
     ULONG                       NodeOrdinal;
     ULONG                       EngineOrdinal;
     PDXGKRNL_ADAPTER            Adapter;
@@ -1435,6 +1439,12 @@ struct _DXGKRNL_PROCESS
     BOOLEAN                     PageTableUpdatePending;
     D3DGPU_VIRTUAL_ADDRESS      PageTableUpdateStart;
     D3DGPU_VIRTUAL_ADDRESS      PageTableUpdateEnd;
+    /*
+     * Serializes the snapshot/submit/retire transaction for the pending
+     * page-table span.  This must remain a KMUTEX: the synchronous paging
+     * submission below it runs at PASSIVE_LEVEL.
+     */
+    KMUTEX                      PageTableFlushMutex;
 
     /*
      * Root page table (a DXGKRNL_GPUVA_PAGE_TABLE, dxgkrnl-managed).
@@ -2154,7 +2164,7 @@ DxgkGpuVaMapFencePage(
     _In_ PVOID             KernelVa,
     _Out_ D3DGPU_VIRTUAL_ADDRESS *OutAddress);
 
-VOID
+NTSTATUS
 DxgkGpuVaUnmapFencePage(
     _In_ PDXGKRNL_PROCESS       Process,
     _In_ D3DGPU_VIRTUAL_ADDRESS Address);
@@ -2895,6 +2905,8 @@ typedef struct _DXGKRNL_TRACK_DMA_ARGS
     UINT                            OpenBindingReferenceCount;
     PDXGKVMM_ALLOCATION const      *AllocationReferences;
     UINT                            AllocationReferenceCount;
+    PDXGKVMM_ALLOCATION const      *LifetimeAllocationReferences;
+    UINT                            LifetimeAllocationReferenceCount;
 } DXGKRNL_TRACK_DMA_ARGS, *PDXGKRNL_TRACK_DMA_ARGS;
 
 /* ========================================================================
@@ -2966,6 +2978,20 @@ DxgkPagingOperationSupported(
     _In_ DXGKRNL_PAGING_OP_TYPE Type);
 
 NTSTATUS
+DxgkPagingExecuteBatch(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ PDXGKRNL_DEVICE Device,
+    _In_reads_(OperationCount) CONST DXGKRNL_PAGING_OP *Operations,
+    _In_ ULONG OperationCount,
+    _In_reads_opt_(LifetimeAllocationReferenceCount)
+        PDXGKVMM_ALLOCATION const *LifetimeAllocationReferences,
+    _In_ UINT LifetimeAllocationReferenceCount,
+    _In_ D3DKMT_HANDLE hSignalSyncObject,
+    _In_ ULONG64 SignalFenceValue,
+    _Out_opt_ PULONG OutPagingFenceId,
+    _Out_opt_ PBOOLEAN OutQueued);
+
+NTSTATUS
 DxgkPagingExecute(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_opt_ PDXGKRNL_DEVICE Device,
@@ -2974,7 +3000,7 @@ DxgkPagingExecute(
     _In_ ULONG64 SignalFenceValue,
     _Out_opt_ PULONG OutPagingFenceId);
 
-VOID
+NTSTATUS
 DxgkGpuVaFlushPageTableUpdates(
     _In_ PDXGKRNL_PROCESS Process);
 
