@@ -471,6 +471,20 @@ KiDispatchInterrupt(VOID)
         KiAcquirePrcbLock(Prcb);
 
         OldThread = Prcb->CurrentThread;
+
+        /*
+         * NextThread is also changed by remote scheduler paths under the
+         * PRCB lock.  The unlocked test above is only a fast indication that
+         * dispatch work may exist; revalidate it after acquiring the lock.
+         */
+        if ((Prcb->NextThread == NULL) ||
+            KiConsumeSelfNextThread(Prcb, OldThread))
+        {
+            KiReleasePrcbLock(Prcb);
+            _enable();
+            return;
+        }
+
         NewThread = Prcb->NextThread;
 
         if (OldThread == Prcb->IdleThread)
