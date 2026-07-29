@@ -551,7 +551,8 @@ acpi_ec_add(struct acpi_device *device)
 		acpi_ec_update_global_lock(boot_ec);
 		device->driver_data = boot_ec;
 		first_ec = boot_ec;
-		DPRINT1("EC already configured from ECDT\n");
+		DPRINT1("EC already configured from ECDT, global lock %d\n",
+			boot_ec->global_lock);
 		return AE_OK;
 	}
 
@@ -674,11 +675,9 @@ acpi_ec_ecdt_probe(void)
 	ec->data_addr = data_addr;
 	ec->gpe = gpe;
 	acpi_ec_initialize(ec);
-	acpi_ec_update_global_lock(ec);
 
-	DPRINT1("EC from ECDT: command 0x%x data 0x%x GPE 0x%02x global lock %d\n",
-		(UINT32)ec->command_addr, (UINT32)ec->data_addr,
-		ec->gpe, ec->global_lock);
+	DPRINT1("EC from ECDT: command 0x%x data 0x%x GPE 0x%02x\n",
+		(UINT32)ec->command_addr, (UINT32)ec->data_addr, ec->gpe);
 
 	status = acpi_ec_install_handlers(ec, ACPI_ROOT_OBJECT);
 	if (ACPI_FAILURE(status)) {
