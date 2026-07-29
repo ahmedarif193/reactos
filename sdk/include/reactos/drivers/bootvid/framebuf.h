@@ -59,7 +59,17 @@ typedef struct _CM_FRAMEBUF_DEVICE_DATA
         ULONG ReservedMask;
     } PixelMasks;
 
+    /*
+     * Logical display density. A value of zero means that the producer did
+     * not supply DPI information and consumers must use 96 DPI.
+     */
+    ULONG Dpi;
+
 } CM_FRAMEBUF_DEVICE_DATA, *PCM_FRAMEBUF_DEVICE_DATA;
+
+/* Size of the revision 3 structure, before the Dpi member was added. */
+#define CM_FRAMEBUF_DEVICE_DATA_V3_SIZE \
+    FIELD_OFFSET(CM_FRAMEBUF_DEVICE_DATA, Dpi)
 
 #ifdef __cplusplus
 }

@@ -872,10 +872,12 @@ InbvGopHandleBootBitmap(
     {
         static const CHAR LoadingMsg[] = "ReactOS";
         const ULONG CharW = 8;
-        /* VidDisplayStringXY expects bootvid 640x480 virtual screen coordinates, not native ones */
+        VID_DISPLAY_INFO DisplayInfo;
         ULONG msgPx = (ULONG)(sizeof(LoadingMsg) - 1) * CharW;
-        ULONG x = (SCREEN_WIDTH > msgPx) ? ((SCREEN_WIDTH - msgPx) / 2) : 0;
-        ULONG y = (ULONG)(SCREEN_HEIGHT * INBV_WORDMARK_TOP_VPOS + 0.5f);
+
+        InbvQueryDisplayInfo(&DisplayInfo);
+        ULONG x = (DisplayInfo.Width > msgPx) ? ((DisplayInfo.Width - msgPx) / 2) : 0;
+        ULONG y = (ULONG)(DisplayInfo.Height * INBV_WORDMARK_TOP_VPOS + 0.5f);
         VidDisplayStringXY(LoadingMsg, x, y, TRUE);
     }
 

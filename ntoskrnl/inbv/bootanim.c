@@ -94,6 +94,8 @@ static ROT_BAR_TYPE RotBarSelection = RB_UNSPECIFIED;
 static ROT_BAR_STATUS PltRotBarStatus = 0;
 static UCHAR RotBarBuffer[24 * 9];
 static UCHAR RotLineBuffer[SCREEN_WIDTH * 6];
+static ULONG RotLineLeft = 0;
+static ULONG RotLineTop = SCREEN_HEIGHT - 6;
 #endif // INBV_ROTBAR_IMPLEMENTED
 
 
@@ -203,7 +205,10 @@ BitBltAligned(
     IN ULONG MarginBottom)
 {
     PBITMAPINFOHEADER BitmapInfoHeader = Image;
+    VID_DISPLAY_INFO DisplayInfo;
     ULONG X, Y;
+
+    InbvQueryDisplayInfo(&DisplayInfo);
 
     /* Calculate X */
     switch (HorizontalAlignment)
@@ -213,11 +218,11 @@ BitBltAligned(
             break;
 
         case AL_HORIZONTAL_CENTER:
-            X = MarginLeft - MarginRight + (SCREEN_WIDTH - BitmapInfoHeader->biWidth + 1) / 2;
+            X = MarginLeft - MarginRight + (DisplayInfo.Width - BitmapInfoHeader->biWidth + 1) / 2;
             break;
 
         case AL_HORIZONTAL_RIGHT:
-            X = MarginLeft - MarginRight + SCREEN_WIDTH - BitmapInfoHeader->biWidth;
+            X = MarginLeft - MarginRight + DisplayInfo.Width - BitmapInfoHeader->biWidth;
             break;
 
         default:
@@ -233,11 +238,11 @@ BitBltAligned(
             break;
 
         case AL_VERTICAL_CENTER:
-            Y = MarginTop - MarginBottom + (SCREEN_HEIGHT - BitmapInfoHeader->biHeight + 1) / 2;
+            Y = MarginTop - MarginBottom + (DisplayInfo.Height - BitmapInfoHeader->biHeight + 1) / 2;
             break;
 
         case AL_VERTICAL_BOTTOM:
-            Y = MarginTop - MarginBottom + SCREEN_HEIGHT - BitmapInfoHeader->biHeight;
+            Y = MarginTop - MarginBottom + DisplayInfo.Height - BitmapInfoHeader->biHeight;
             break;
 
         default:
@@ -247,6 +252,42 @@ BitBltAligned(
 
     /* Finally draw the image */
     BitBltPalette(Image, NoPalette, X, Y);
+}
+
+static VOID
+BitBltExpandedFooter(IN PVOID Image, IN UCHAR CenterColor, IN PVID_DISPLAY_INFO DisplayInfo, IN ULONG MarginBottom)
+{
+    PBITMAPINFOHEADER BitmapInfoHeader = Image;
+    ULONG FooterWidth, FooterHeight, LeftWidth, RightWidth, Y;
+
+    if ((BitmapInfoHeader->biWidth <= 0) || (BitmapInfoHeader->biHeight <= 0))
+    {
+        return;
+    }
+
+    FooterWidth = BitmapInfoHeader->biWidth;
+    FooterHeight = BitmapInfoHeader->biHeight;
+    if (FooterHeight + MarginBottom > DisplayInfo->Height)
+        return;
+
+    Y = DisplayInfo->Height - FooterHeight - MarginBottom;
+    if (DisplayInfo->Width <= FooterWidth)
+    {
+        BitBltPalette(Image, TRUE, 0, Y);
+        return;
+    }
+
+    /*
+     * Preserve the original gradient at both ends and insert its solid
+     * center color between them. Drawing the complete bitmap at each edge
+     * avoids maintaining duplicate left/right bitmap resources; the center
+     * fill masks the unused half of each copy.
+     */
+    LeftWidth = FooterWidth / 2;
+    RightWidth = FooterWidth - LeftWidth;
+    BitBltPalette(Image, TRUE, 0, Y);
+    BitBltPalette(Image, TRUE, DisplayInfo->Width - FooterWidth, Y);
+    InbvSolidColorFill(LeftWidth, Y, DisplayInfo->Width - RightWidth - 1, Y + FooterHeight - 1, CenterColor);
 }
 
 /* FUNCTIONS *****************************************************************/
@@ -398,11 +439,11 @@ InbvRotationThread(
             Index %= Total;
 
             /* Right part */
-            VidBufferToScreenBlt(RotLineBuffer, Index, SCREEN_HEIGHT-6, SCREEN_WIDTH - Index, 6, SCREEN_WIDTH);
+            VidBufferToScreenBlt(RotLineBuffer, RotLineLeft + Index, RotLineTop, SCREEN_WIDTH - Index, 6, SCREEN_WIDTH);
             if (Index > 0)
             {
                 /* Left part */
-                VidBufferToScreenBlt(RotLineBuffer + (SCREEN_WIDTH - Index) / 2, 0, SCREEN_HEIGHT-6, Index - 2, 6, SCREEN_WIDTH);
+                VidBufferToScreenBlt(RotLineBuffer + (SCREEN_WIDTH - Index) / 2, RotLineLeft, RotLineTop, Index - 2, 6, SCREEN_WIDTH);
             }
             Index += 32;
         }
@@ -484,9 +525,16 @@ DisplayBootBitmap(
     _In_ BOOLEAN TextMode)
 {
     PVOID BootCopy = NULL, BootProgress = NULL, BootLogo = NULL, Header = NULL, Footer = NULL;
+    VID_DISPLAY_INFO DisplayInfo;
+    ULONG CanvasLeft, CanvasTop;
+    UCHAR FooterCenterColor;
 
     if (InbvGopHandleBootBitmap(TextMode))
         return;
+
+    InbvQueryDisplayInfo(&DisplayInfo);
+    CanvasLeft = (DisplayInfo.Width - SCREEN_WIDTH) / 2;
+    CanvasTop = (DisplayInfo.Height - SCREEN_HEIGHT) / 2;
 
 #ifdef INBV_ROTBAR_IMPLEMENTED
     UCHAR Buffer[RTL_NUMBER_OF(RotBarBuffer)];
@@ -527,43 +575,50 @@ DisplayBootBitmap(
         {
             /* Workstation; set colors */
             InbvSetTextColor(BV_COLOR_WHITE);
-            InbvSolidColorFill(0, 0, SCREEN_WIDTH-1, SCREEN_HEIGHT-1, BV_COLOR_DARK_GRAY);
-            InbvSolidColorFill(0, VID_FOOTER_BG_TOP, SCREEN_WIDTH-1, SCREEN_HEIGHT-1, BV_COLOR_RED);
+            InbvSolidColorFill(0, 0, DisplayInfo.Width - 1, DisplayInfo.Height - 1, BV_COLOR_DARK_GRAY);
+            InbvSolidColorFill(0, DisplayInfo.Height - 59, DisplayInfo.Width - 1, DisplayInfo.Height - 1, BV_COLOR_RED);
 
             /* Get resources */
             Header = InbvGetResourceAddress(IDB_WKSTA_HEADER);
             Footer = InbvGetResourceAddress(IDB_WKSTA_FOOTER);
+            FooterCenterColor = BV_COLOR_YELLOW;
+            if (Header && ((PBITMAPINFOHEADER)Header)->biHeight > 2)
+            {
+                /*
+                 * The fixed header uses palette entry 1 for its solid blue
+                 * background. Leave its last two separator rows in the body
+                 * color and extend both regions across the wider canvas.
+                 */
+                InbvSolidColorFill(0, 0, DisplayInfo.Width - 1, ((PBITMAPINFOHEADER)Header)->biHeight - 3, BV_COLOR_RED);
+            }
         }
         else
         {
             /* Server; set colors */
             InbvSetTextColor(BV_COLOR_LIGHT_CYAN);
-            InbvSolidColorFill(0, 0, SCREEN_WIDTH-1, SCREEN_HEIGHT-1, BV_COLOR_CYAN);
-            InbvSolidColorFill(0, VID_FOOTER_BG_TOP, SCREEN_WIDTH-1, SCREEN_HEIGHT-1, BV_COLOR_RED);
+            InbvSolidColorFill(0, 0, DisplayInfo.Width - 1, DisplayInfo.Height - 1, BV_COLOR_CYAN);
+            InbvSolidColorFill(0, DisplayInfo.Height - 59, DisplayInfo.Width - 1, DisplayInfo.Height - 1, BV_COLOR_RED);
 
             /* Get resources */
             Header = InbvGetResourceAddress(IDB_SERVER_HEADER);
             Footer = InbvGetResourceAddress(IDB_SERVER_FOOTER);
+            FooterCenterColor = BV_COLOR_LIGHT_GREEN;
+            if (Header && ((PBITMAPINFOHEADER)Header)->biHeight > 2)
+            {
+                /* The server header background is palette entry 2. */
+                InbvSolidColorFill(0, 0, DisplayInfo.Width - 1, ((PBITMAPINFOHEADER)Header)->biHeight - 3, BV_COLOR_GREEN);
+            }
         }
 
         /* Set the scrolling region */
-        InbvSetScrollRegion(VID_SCROLL_AREA_LEFT, VID_SCROLL_AREA_TOP,
-                            VID_SCROLL_AREA_RIGHT, VID_SCROLL_AREA_BOTTOM);
+        InbvSetScrollRegion(VID_SCROLL_AREA_LEFT, VID_SCROLL_AREA_TOP, DisplayInfo.Width - (SCREEN_WIDTH - VID_SCROLL_AREA_RIGHT), DisplayInfo.Height - (SCREEN_HEIGHT - VID_SCROLL_AREA_BOTTOM));
 
         /* Make sure we have resources */
         if (Header && Footer)
         {
             /* BitBlt them on the screen */
-            BitBltAligned(Footer,
-                          TRUE,
-                          AL_HORIZONTAL_CENTER,
-                          AL_VERTICAL_BOTTOM,
-                          0, 0, 0, 59);
-            BitBltAligned(Header,
-                          FALSE,
-                          AL_HORIZONTAL_CENTER,
-                          AL_VERTICAL_TOP,
-                          0, 0, 0, 0);
+            BitBltExpandedFooter(Footer, FooterCenterColor, &DisplayInfo, 59);
+            BitBltAligned(Header, FALSE, AL_HORIZONTAL_RIGHT, AL_VERTICAL_TOP, 0, 0, 0, 0);
         }
 
         /* Restore the kernel resource section protection to be read-only */
@@ -653,20 +708,16 @@ DisplayBootBitmap(
 #endif
 
                 /* Set progress bar coordinates and display it */
-                InbvSetProgressBarCoordinates(VID_PROGRESS_BAR_LEFT,
-                                              VID_PROGRESS_BAR_TOP);
+                InbvSetProgressBarCoordinates(CanvasLeft + VID_PROGRESS_BAR_LEFT, CanvasTop + VID_PROGRESS_BAR_TOP);
 
 #ifdef REACTOS_SKUS
                 /* Check for non-workstation products */
                 if (SharedUserData->NtProductType != NtProductWinNt)
                 {
                     /* Overwrite part of the logo for a server product */
-                    InbvScreenToBufferBlt(Buffer, VID_SKU_SAVE_AREA_LEFT,
-                                          VID_SKU_SAVE_AREA_TOP, 7, 7, 8);
-                    InbvSolidColorFill(VID_SKU_AREA_LEFT, VID_SKU_AREA_TOP,
-                                       VID_SKU_AREA_RIGHT, VID_SKU_AREA_BOTTOM, BV_COLOR_BLACK);
-                    InbvBufferToScreenBlt(Buffer, VID_SKU_SAVE_AREA_LEFT,
-                                          VID_SKU_SAVE_AREA_TOP, 7, 7, 8);
+                    InbvScreenToBufferBlt(Buffer, CanvasLeft + VID_SKU_SAVE_AREA_LEFT, CanvasTop + VID_SKU_SAVE_AREA_TOP, 7, 7, 8);
+                    InbvSolidColorFill(CanvasLeft + VID_SKU_AREA_LEFT, CanvasTop + VID_SKU_AREA_TOP, CanvasLeft + VID_SKU_AREA_RIGHT, CanvasTop + VID_SKU_AREA_BOTTOM, BV_COLOR_BLACK);
+                    InbvBufferToScreenBlt(Buffer, CanvasLeft + VID_SKU_SAVE_AREA_LEFT, CanvasTop + VID_SKU_SAVE_AREA_TOP, 7, 7, 8);
 
                     /* In setup mode, you haven't selected a SKU yet */
                     if (ExpInTextModeSetup) Text = NULL;
@@ -693,7 +744,7 @@ DisplayBootBitmap(
 #ifdef REACTOS_SKUS
             /* Draw the SKU text if it exists */
             if (Text)
-                BitBltPalette(Text, TRUE, VID_SKU_TEXT_LEFT, VID_SKU_TEXT_TOP);
+                BitBltPalette(Text, TRUE, CanvasLeft + VID_SKU_TEXT_LEFT, CanvasTop + VID_SKU_TEXT_TOP);
 #endif
 
 #ifdef INBV_ROTBAR_IMPLEMENTED
@@ -720,8 +771,10 @@ DisplayBootBitmap(
                 if (LineBmp)
                 {
                     /* Draw the line and store it in global buffer */
-                    BitBltPalette(LineBmp, TRUE, 0, SCREEN_HEIGHT-6);
-                    InbvScreenToBufferBlt(RotLineBuffer, 0, SCREEN_HEIGHT-6, SCREEN_WIDTH, 6, SCREEN_WIDTH);
+                    RotLineLeft = CanvasLeft;
+                    RotLineTop = CanvasTop + SCREEN_HEIGHT - 6;
+                    BitBltPalette(LineBmp, TRUE, RotLineLeft, RotLineTop);
+                    InbvScreenToBufferBlt(RotLineBuffer, RotLineLeft, RotLineTop, SCREEN_WIDTH, 6, SCREEN_WIDTH);
                 }
             }
             else
@@ -779,12 +832,16 @@ VOID
 NTAPI
 FinalizeBootLogo(VOID)
 {
+    VID_DISPLAY_INFO DisplayInfo;
+
+    InbvQueryDisplayInfo(&DisplayInfo);
+
     /* Acquire lock and check the display state */
     InbvAcquireLock();
     if (InbvGetDisplayState() == INBV_DISPLAY_STATE_OWNED)
     {
         /* Clear the screen */
-        VidSolidColorFill(0, 0, SCREEN_WIDTH-1, SCREEN_HEIGHT-1, BV_COLOR_BLACK);
+        VidSolidColorFill(0, 0, DisplayInfo.Width - 1, DisplayInfo.Height - 1, BV_COLOR_BLACK);
     }
 
     /* Reset progress bar and lock */
@@ -905,6 +962,8 @@ NTAPI
 DisplayShutdownBitmap(VOID)
 {
     PUCHAR Logo1, Logo2;
+    VID_DISPLAY_INFO DisplayInfo;
+    ULONG CanvasLeft, CanvasTop;
 #ifdef REACTOS_FANCY_BOOT
     /* Decide whether this is a good time to change our logo ;^) */
     BOOLEAN IsXmas = IsXmasTime();
@@ -916,12 +975,16 @@ DisplayShutdownBitmap(VOID)
         return;
 #endif
 
+    InbvQueryDisplayInfo(&DisplayInfo);
+    CanvasLeft = (DisplayInfo.Width - SCREEN_WIDTH) / 2;
+    CanvasTop = (DisplayInfo.Height - SCREEN_HEIGHT) / 2;
+
     /* Yes we do, cleanup for shutdown screen */
     // InbvResetDisplay();
     InbvInstallDisplayStringFilter(NULL);
     InbvEnableDisplayString(TRUE);
-    InbvSolidColorFill(0, 0, SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1, BV_COLOR_BLACK);
-    InbvSetScrollRegion(0, 0, SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1);
+    InbvSolidColorFill(0, 0, DisplayInfo.Width - 1, DisplayInfo.Height - 1, BV_COLOR_BLACK);
+    InbvSetScrollRegion(0, 0, DisplayInfo.Width - 1, DisplayInfo.Height - 1);
 
     /* Display shutdown logo and message */
     Logo1 = InbvGetResourceAddress(IDB_SHUTDOWN_MSG);
@@ -930,9 +993,9 @@ DisplayShutdownBitmap(VOID)
 
     if (Logo1 && Logo2)
     {
-        InbvBitBlt(Logo1, VID_SHUTDOWN_MSG_LEFT, VID_SHUTDOWN_MSG_TOP);
+        InbvBitBlt(Logo1, CanvasLeft + VID_SHUTDOWN_MSG_LEFT, CanvasTop + VID_SHUTDOWN_MSG_TOP);
 #ifndef REACTOS_FANCY_BOOT
-        InbvBitBlt(Logo2, VID_SHUTDOWN_LOGO_LEFT, VID_SHUTDOWN_LOGO_TOP);
+        InbvBitBlt(Logo2, CanvasLeft + VID_SHUTDOWN_LOGO_LEFT, CanvasTop + VID_SHUTDOWN_LOGO_TOP);
 #else
         /* Draw the logo at the center of the screen */
         BitBltAligned(Logo2,
@@ -943,10 +1006,7 @@ DisplayShutdownBitmap(VOID)
 
         /* We've got a logo shown, change the scroll region to get
          * the rest of the text down below the shutdown message */
-        InbvSetScrollRegion(0,
-                            VID_SHUTDOWN_MSG_TOP + ((PBITMAPINFOHEADER)Logo1)->biHeight + 32,
-                            SCREEN_WIDTH - 1,
-                            SCREEN_HEIGHT - 1);
+        InbvSetScrollRegion(0, CanvasTop + VID_SHUTDOWN_MSG_TOP + ((PBITMAPINFOHEADER)Logo1)->biHeight + 32, DisplayInfo.Width - 1, DisplayInfo.Height - 1);
 #endif
     }
 
@@ -961,11 +1021,29 @@ VOID
 NTAPI
 DisplayShutdownText(VOID)
 {
-    ULONG i;
+    static const CHAR Message[] = "The system may be powered off now.";
+    CHAR Padding[81];
+    VID_DISPLAY_INFO DisplayInfo;
+    ULONG Columns, Rows, PaddingLength, Count, i;
 
-    for (i = 0; i < 25; ++i) InbvDisplayString("\r\n");
-    InbvDisplayString("                       ");
-    InbvDisplayString("The system may be powered off now.\r\n");
+    InbvQueryDisplayInfo(&DisplayInfo);
+    Columns = DisplayInfo.CharacterWidth ? DisplayInfo.Width / DisplayInfo.CharacterWidth : 80;
+    Rows = DisplayInfo.CharacterHeight ? DisplayInfo.Height / DisplayInfo.CharacterHeight : 34;
+
+    for (i = 0; i < (Rows > 2 ? (Rows - 2) / 2 : 0); ++i)
+        InbvDisplayString("\r\n");
+
+    PaddingLength = (Columns > sizeof(Message) - 1) ? (Columns - (sizeof(Message) - 1)) / 2 : 0;
+    RtlFillMemory(Padding, sizeof(Padding) - 1, ' ');
+    while (PaddingLength)
+    {
+        Count = min(PaddingLength, (ULONG)sizeof(Padding) - 1);
+        Padding[Count] = ANSI_NULL;
+        InbvDisplayString(Padding);
+        PaddingLength -= Count;
+    }
+    InbvDisplayString(Message);
+    InbvDisplayString("\r\n");
 
 #ifdef REACTOS_FANCY_BOOT
     for (i = 0; i < 3; ++i) InbvDisplayString("\r\n");

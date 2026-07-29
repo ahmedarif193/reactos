@@ -60,6 +60,11 @@ typedef struct _URECT
 extern UCHAR VidpTextColor;
 extern ULONG VidpCurrentX;
 extern ULONG VidpCurrentY;
+extern ULONG VidpDisplayWidth;
+extern ULONG VidpDisplayHeight;
+extern ULONG VidpPhysicalWidth;
+extern ULONG VidpPhysicalHeight;
+extern ULONG VidpDisplayDpi;
 extern URECT VidpScrollRegion;
 extern const UCHAR VidpFontData[256 * BOOTCHAR_HEIGHT];
 extern const RGBQUAD VidpDefaultPalette[BV_MAX_COLORS];
