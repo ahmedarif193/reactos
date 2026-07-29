@@ -20,7 +20,7 @@ typedef struct _BATTERY_CLASS_DATA
     BOOLEAN Waiting;
     FAST_MUTEX Mutex;
     UCHAR EventTrigger;
-    PVOID EventTriggerContext;
+    BATTERY_WAIT_STATUS EventTriggerContext;
     UNICODE_STRING InterfaceName;
 } BATTERY_CLASS_DATA, *PBATTERY_CLASS_DATA;
 
