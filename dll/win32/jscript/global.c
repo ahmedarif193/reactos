@@ -420,12 +420,6 @@ static HRESULT JSGlobal_parseFloat(script_ctx_t *ctx, jsval_t vthis, WORD flags,
     return S_OK;
 }
 
-static inline int hex_to_int(const WCHAR wch) {
-    if(towupper(wch)>='A' && towupper(wch)<='F') return towupper(wch)-'A'+10;
-    if(is_digit(wch)) return wch-'0';
-    return -1;
-}
-
 static HRESULT JSGlobal_unescape(script_ctx_t *ctx, jsval_t vthis, WORD flags, unsigned argc, jsval_t *argv,
         jsval_t *r)
 {
