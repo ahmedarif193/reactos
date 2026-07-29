@@ -21,6 +21,7 @@
 /* GLOBALS ********************************************************************/
 
 #define POOL_BIG_TABLE_ENTRY_FREE 0x1
+#define POOL_BIG_TABLE_MIN_SIZE 64
 
 /*
  * This defines when we shrink or expand the table.
@@ -1148,7 +1149,7 @@ InitializePool(IN POOL_TYPE PoolType,
         }
         else
         {
-            PoolBigPageTableSize = max(1 << i, 64);
+            PoolBigPageTableSize = max(1 << i, POOL_BIG_TABLE_MIN_SIZE);
         }
 
         //
@@ -1486,21 +1487,17 @@ ExpReallocateBigPageTable(
     /* Make sure we don't overflow */
     if (Shrink)
     {
+        /* Keep the table size a power of two because it is also the hash mask. */
+        if (OldSize <= POOL_BIG_TABLE_MIN_SIZE)
+        {
+            KeReleaseSpinLock(&ExpLargePoolTableLock, OldIrql);
+            return TRUE;
+        }
+
         NewSize = OldSize / 2;
 
         /* Make sure we don't shrink too much. */
         ASSERT(NewSize >= ExpPoolBigEntriesInUse);
-
-        NewSize = ALIGN_UP_BY(NewSize, PAGE_SIZE / sizeof(POOL_TRACKER_BIG_PAGES));
-        ASSERT(NewSize <= OldSize);
-
-        /* If there is only one page left, then keep it around. Not a failure either. */
-        if (NewSize == OldSize)
-        {
-            ASSERT(NewSize == (PAGE_SIZE / sizeof(POOL_TRACKER_BIG_PAGES)));
-            KeReleaseSpinLock(&ExpLargePoolTableLock, OldIrql);
-            return TRUE;
-        }
     }
     else
     {
@@ -1511,8 +1508,6 @@ ExpReallocateBigPageTable(
             return FALSE;
         }
 
-        /* Make sure we don't stupidly waste pages */
-        NewSize = ALIGN_DOWN_BY(NewSize, PAGE_SIZE / sizeof(POOL_TRACKER_BIG_PAGES));
         ASSERT(NewSize > OldSize);
     }
 
@@ -1552,7 +1547,7 @@ ExpReallocateBigPageTable(
         }
 
         /* Recalculate the hash due to the new table size */
-        Hash = ExpComputePartialHashForAddress(OldTable[i].Va) % HashMask;
+        Hash = ExpComputePartialHashForAddress(OldTable[i].Va) & HashMask;
 
         /* Find the location in the new table */
         while (!((ULONG_PTR)NewTable[Hash].Va & POOL_BIG_TABLE_ENTRY_FREE))
