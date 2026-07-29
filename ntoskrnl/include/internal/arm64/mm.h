@@ -327,6 +327,13 @@ MiArm64GetUserPteAddressForProcess(
     _In_ PVOID Address,
     _Out_ PMI_ARM64_USER_PTE_WALK Walk);
 
+BOOLEAN
+MiArm64ReleaseUserPageTableReferenceLocked(
+    _In_ PEPROCESS Process,
+    _In_ PVOID Address,
+    _In_ BOOLEAN ReleaseLeafShare,
+    _In_ PMI_ARM64_USER_PTE_WALK Walk);
+
 VOID
 MiArm64ReleaseUserPageTableReference(
     _In_ PEPROCESS Process,
