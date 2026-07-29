@@ -700,6 +700,35 @@ IntVideoPortFindAdapter(
                                     &HwResetAdaptersLock);
     }
 
+    /* For legacy (non-PnP) adapters report a detected device so a PDO exists
+     * for INF matching and Device Manager (mirrors ScsiPort). */
+    if (LegacyDetection)
+    {
+        PDEVICE_OBJECT ReportedPdo = NULL;
+        NTSTATUS repStatus = IoReportDetectedDevice(DriverObject,
+                                                    DeviceExtension->AdapterInterfaceType,
+                                                    DeviceExtension->SystemIoBusNumber,
+                                                    DeviceExtension->SystemIoSlotNumber,
+                                                    NULL,
+                                                    NULL,
+                                                    FALSE,
+                                                    &ReportedPdo);
+        if (!NT_SUCCESS(repStatus))
+        {
+            WARN_(VIDEOPRT, "IoReportDetectedDevice failed 0x%08lx (bus=%u slot=%u)\n",
+                  repStatus,
+                  DeviceExtension->SystemIoBusNumber,
+                  DeviceExtension->SystemIoSlotNumber);
+        }
+        else
+        {
+            INFO_(VIDEOPRT, "Reported legacy adapter PDO %p (bus=%u slot=%u)\n",
+                  ReportedPdo,
+                  DeviceExtension->SystemIoBusNumber,
+                  DeviceExtension->SystemIoSlotNumber);
+        }
+    }
+
     INFO_(VIDEOPRT, "STATUS_SUCCESS\n");
     return STATUS_SUCCESS;
 
