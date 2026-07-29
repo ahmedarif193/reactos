@@ -592,7 +592,7 @@ CmBattCreateFdo(IN PDRIVER_OBJECT DriverObject,
     /* Get ACPI interface for EVAL */
     Status = CmBattGetAcpiInterfaces(FdoExtension->AttachedDevice,
                                      &FdoExtension->AcpiInterface);
-    if (!FdoExtension->AttachedDevice)
+    if (!NT_SUCCESS(Status))
     {
         /* Detach, destroy, and fail */
         IoDetachDevice(FdoExtension->AttachedDevice);
