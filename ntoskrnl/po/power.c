@@ -440,6 +440,7 @@ PoInitSystem(IN ULONG BootPhase)
 
     /* Initialize the power capabilities */
     RtlZeroMemory(&PopCapabilities, sizeof(SYSTEM_POWER_CAPABILITIES));
+    PopInitializeEventSupport();
 
     /* Get the Command Line */
     CommandLine = KeLoaderBlock->LoadOptions;

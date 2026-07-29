@@ -24,6 +24,7 @@ typedef struct _SYS_BUTTON_CONTEXT
 } SYS_BUTTON_CONTEXT, *PSYS_BUTTON_CONTEXT;
 
 static volatile LONG PopBatteryInterfaceCount;
+static KSPIN_LOCK PopBatteryInterfaceLock;
 
 static VOID
 NTAPI
@@ -35,6 +36,14 @@ PKWIN32_POWEREVENT_CALLOUT PopEventCallout;
 extern PCALLBACK_OBJECT SetSystemTimeCallback;
 
 /* FUNCTIONS *****************************************************************/
+
+VOID
+NTAPI
+PopInitializeEventSupport(VOID)
+{
+    PopBatteryInterfaceCount = 0;
+    KeInitializeSpinLock(&PopBatteryInterfaceLock);
+}
 
 VOID
 NTAPI
@@ -161,6 +170,7 @@ PopAddRemoveSysCapsCallback(IN PVOID NotificationStructure,
     BOOLEAN Arrival;
     ULONG Caps;
     NTSTATUS Status;
+    KIRQL OldIrql;
     POP_POLICY_DEVICE_TYPE DeviceType = (POP_POLICY_DEVICE_TYPE)(ULONG_PTR)Context;
 
     DPRINT("PopAddRemoveSysCapsCallback(%p %p)\n",
@@ -180,17 +190,21 @@ PopAddRemoveSysCapsCallback(IN PVOID NotificationStructure,
 
     if (DeviceType == PolicyDeviceBattery)
     {
+        KeAcquireSpinLock(&PopBatteryInterfaceLock, &OldIrql);
+
         if (Arrival)
         {
-            InterlockedIncrement(&PopBatteryInterfaceCount);
-            PopCapabilities.SystemBatteriesPresent = TRUE;
+            PopBatteryInterfaceCount++;
         }
-        else if (InterlockedDecrement(&PopBatteryInterfaceCount) <= 0)
+        else if (PopBatteryInterfaceCount > 0)
         {
-            InterlockedExchange(&PopBatteryInterfaceCount, 0);
-            PopCapabilities.SystemBatteriesPresent = FALSE;
+            PopBatteryInterfaceCount--;
         }
 
+        PopCapabilities.SystemBatteriesPresent =
+            (PopBatteryInterfaceCount != 0);
+
+        KeReleaseSpinLock(&PopBatteryInterfaceLock, OldIrql);
         return STATUS_SUCCESS;
     }
 

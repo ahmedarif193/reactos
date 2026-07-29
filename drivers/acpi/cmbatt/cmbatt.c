@@ -25,6 +25,16 @@ LARGE_INTEGER CmBattWakeDpcDelay;
 
 /* FUNCTIONS ******************************************************************/
 
+static
+VOID
+CmBattInvalidateStaticInfo(
+    _Inout_ PCMBATT_DEVICE_EXTENSION DeviceExtension)
+{
+    InterlockedIncrement(&DeviceExtension->StaticInfoGeneration);
+    InterlockedExchange(&DeviceExtension->CachedInfoTag,
+                        BATTERY_TAG_INVALID);
+}
+
 VOID
 NTAPI
 CmBattPowerCallBack(IN PCMBATT_DEVICE_EXTENSION DeviceExtension,
@@ -126,8 +136,9 @@ CmBattWakeDpc(IN PKDPC Dpc,
             /* Removal, clear the battery tag */
             if (ArFlag & CMBATT_AR_REMOVE)
             {
-                DeviceExtension->Tag = 0;
-                DeviceExtension->CachedInfoTag = BATTERY_TAG_INVALID;
+                InterlockedExchange(&DeviceExtension->Tag,
+                                    BATTERY_TAG_INVALID);
+                CmBattInvalidateStaticInfo(DeviceExtension);
             }
 
             /* Notification (or AC/DC adapter change from first pass above) */
@@ -219,7 +230,12 @@ CmBattNotifyHandler(IN PCMBATT_DEVICE_EXTENSION DeviceExtension,
         if (ArFlag & CMBATT_AR_INSERT) InterlockedExchange(&DeviceExtension->ArLockValue, 0);
 
         /* Check if the battery may have been removed */
-        if (ArFlag & CMBATT_AR_REMOVE) DeviceExtension->Tag = 0;
+        if (ArFlag & CMBATT_AR_REMOVE)
+        {
+            InterlockedExchange(&DeviceExtension->Tag,
+                                BATTERY_TAG_INVALID);
+            CmBattInvalidateStaticInfo(DeviceExtension);
+        }
 
         /* Check if there's been any sort of change to the battery */
         if (ArFlag & CMBATT_AR_NOTIFY)
@@ -362,9 +378,8 @@ CmBattGetBattStaticInfo(
  * Verifies the extended battery information (_BIX) and translates
  * such data to the BATTERY_INFORMATION structure.
  *
- * @param[in] DeviceExtension
- * A pointer to a Control Method (CM) battery device extension.
- * It is used to gather _BIX data.
+ * @param[in] BattInfo
+ * A pointer to the queried static battery information.
  *
  * @param[in,out] Info
  * A pointer to a structure of which this function fills in
@@ -374,11 +389,11 @@ CmBattGetBattStaticInfo(
 static
 VOID
 CmBattVerifyBixData(
-    _In_ PCMBATT_DEVICE_EXTENSION DeviceExtension,
+    _In_ PACPI_BATT_STATIC_INFO BattInfo,
     _Inout_ PBATTERY_INFORMATION Info)
 {
     ULONG DesignVoltage;
-    ACPI_BIX_DATA BixData = DeviceExtension->BattInfo.BixData;
+    ACPI_BIX_DATA BixData = BattInfo->BixData;
 
     /* Copy the battery info data */
     Info->Technology = BixData.BatteryTechnology;
@@ -436,9 +451,8 @@ CmBattVerifyBixData(
  * Verifies the battery information (_BIF) and translates
  * such data to the BATTERY_INFORMATION structure.
  *
- * @param[in] DeviceExtension
- * A pointer to a Control Method (CM) battery device extension.
- * It is used to gather _BIF data.
+ * @param[in] BattInfo
+ * A pointer to the queried static battery information.
  *
  * @param[in,out] Info
  * A pointer to a structure of which this function fills in
@@ -448,11 +462,11 @@ CmBattVerifyBixData(
 static
 VOID
 CmBattVerifyBifData(
-    _In_ PCMBATT_DEVICE_EXTENSION DeviceExtension,
+    _In_ PACPI_BATT_STATIC_INFO BattInfo,
     _Inout_ PBATTERY_INFORMATION Info)
 {
     ULONG DesignVoltage;
-    ACPI_BIF_DATA BifData = DeviceExtension->BattInfo.BifData;
+    ACPI_BIF_DATA BifData = BattInfo->BifData;
 
     /* Copy the battery info data, CycleCount is not supported in _BIF */
     Info->Technology = BifData.BatteryTechnology;
@@ -505,53 +519,138 @@ CmBattVerifyBifData(
     }
 }
 
+static
 NTSTATUS
-NTAPI
 CmBattVerifyStaticInfo(
     _Inout_ PCMBATT_DEVICE_EXTENSION DeviceExtension,
-    _In_ ULONG BatteryTag)
+    _In_ ULONG BatteryTag,
+    _Out_opt_ PACPI_BATT_STATIC_INFO StaticInfo,
+    _Out_opt_ PBATTERY_INFORMATION BatteryInformation)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     BOOLEAN UseBix;
-    PACPI_BATT_STATIC_INFO BattInfo;
-    PBATTERY_INFORMATION Info = &DeviceExtension->BatteryInformation;
+    PACPI_BATT_STATIC_INFO QueriedInfo = NULL;
+    ACPI_BATT_STATIC_INFO NewStaticInfo;
+    BATTERY_INFORMATION NewBatteryInformation;
+    LONG Generation;
 
     /* FIXME: This function is not fully implemented, more checks need to be implemented */
+    PAGED_CODE();
 
-    /* The static data only changes when the battery itself does, which yields a new tag */
-    if ((BatteryTag != BATTERY_TAG_INVALID) &&
-        (DeviceExtension->CachedInfoTag == BatteryTag))
+    /*
+     * Serialize cache fills and snapshots. Notifications cannot take this
+     * mutex from their DPC path, so they invalidate through the generation
+     * counter and interlocked tag instead.
+     */
+    KeWaitForSingleObject(&DeviceExtension->StaticInfoMutex,
+                          Executive,
+                          KernelMode,
+                          FALSE,
+                          NULL);
+
+    if ((BatteryTag == BATTERY_TAG_INVALID) ||
+        ((ULONG)InterlockedCompareExchange(&DeviceExtension->Tag, 0, 0) !=
+         BatteryTag))
     {
-        return STATUS_SUCCESS;
+        Status = STATUS_NO_SUCH_DEVICE;
+        goto Exit;
     }
 
-    /* Retrieve the battery static info */
-    Status = CmBattGetBattStaticInfo(DeviceExtension, &UseBix, &BattInfo);
-    if (NT_SUCCESS(Status))
+    Generation = InterlockedCompareExchange(
+        &DeviceExtension->StaticInfoGeneration, 0, 0);
+
+    /* The static data only changes when the battery itself does. */
+    if ((ULONG)InterlockedCompareExchange(&DeviceExtension->CachedInfoTag,
+                                          0,
+                                          0) != BatteryTag)
     {
-        /* Initialize the battery information data */
-        RtlZeroMemory(Info, sizeof(*Info));
-        Info->Capabilities = BATTERY_SYSTEM_BATTERY;
+        Status = CmBattGetBattStaticInfo(DeviceExtension,
+                                         &UseBix,
+                                         &QueriedInfo);
+        if (!NT_SUCCESS(Status))
+            goto Exit;
 
-        /* Copy the static information to the device extension of the battery */
-        RtlCopyMemory(&DeviceExtension->BattInfo, BattInfo, sizeof(*BattInfo));
+        RtlCopyMemory(&NewStaticInfo,
+                      QueriedInfo,
+                      sizeof(NewStaticInfo));
+        ExFreePoolWithTag(QueriedInfo, CMBATT_BATT_STATIC_INFO_TAG);
+        QueriedInfo = NULL;
 
-        /* Check if the data from _BIX has to be used or not */
+        RtlZeroMemory(&NewBatteryInformation,
+                      sizeof(NewBatteryInformation));
+        NewBatteryInformation.Capabilities = BATTERY_SYSTEM_BATTERY;
+
         if (UseBix)
         {
-            CmBattVerifyBixData(DeviceExtension, Info);
+            CmBattVerifyBixData(&NewStaticInfo,
+                                &NewBatteryInformation);
         }
         else
         {
-            CmBattVerifyBifData(DeviceExtension, Info);
+            CmBattVerifyBifData(&NewStaticInfo,
+                                &NewBatteryInformation);
         }
 
-        /* Free the static information buffer as we already copied it */
-        ExFreePoolWithTag(BattInfo, CMBATT_BATT_STATIC_INFO_TAG);
+        /*
+         * Do not publish information obtained for a tag that was invalidated
+         * while the firmware methods were running.
+         */
+        if ((Generation != InterlockedCompareExchange(
+                               &DeviceExtension->StaticInfoGeneration, 0, 0)) ||
+            ((ULONG)InterlockedCompareExchange(&DeviceExtension->Tag, 0, 0) !=
+             BatteryTag))
+        {
+            Status = STATUS_NO_SUCH_DEVICE;
+            goto Exit;
+        }
 
-        DeviceExtension->CachedInfoTag = BatteryTag;
+        RtlCopyMemory(&DeviceExtension->BattInfo,
+                      &NewStaticInfo,
+                      sizeof(NewStaticInfo));
+        RtlCopyMemory(&DeviceExtension->BatteryInformation,
+                      &NewBatteryInformation,
+                      sizeof(NewBatteryInformation));
+        InterlockedExchange(&DeviceExtension->CachedInfoTag,
+                            (LONG)BatteryTag);
     }
 
+    if (StaticInfo != NULL)
+    {
+        RtlCopyMemory(StaticInfo,
+                      &DeviceExtension->BattInfo,
+                      sizeof(*StaticInfo));
+    }
+
+    if (BatteryInformation != NULL)
+    {
+        RtlCopyMemory(BatteryInformation,
+                      &DeviceExtension->BatteryInformation,
+                      sizeof(*BatteryInformation));
+    }
+
+    /*
+     * If invalidation raced the publication or snapshot, withdraw the tag
+     * and make the caller retry with the replacement battery tag.
+     */
+    if ((Generation != InterlockedCompareExchange(
+                           &DeviceExtension->StaticInfoGeneration, 0, 0)) ||
+        ((ULONG)InterlockedCompareExchange(&DeviceExtension->Tag, 0, 0) !=
+         BatteryTag) ||
+        ((ULONG)InterlockedCompareExchange(&DeviceExtension->CachedInfoTag,
+                                           0,
+                                           0) != BatteryTag))
+    {
+        InterlockedCompareExchange(&DeviceExtension->CachedInfoTag,
+                                   BATTERY_TAG_INVALID,
+                                   (LONG)BatteryTag);
+        Status = STATUS_NO_SUCH_DEVICE;
+    }
+
+Exit:
+    if (QueriedInfo != NULL)
+        ExFreePoolWithTag(QueriedInfo, CMBATT_BATT_STATIC_INFO_TAG);
+
+    KeReleaseMutex(&DeviceExtension->StaticInfoMutex, FALSE);
     return Status;
 }
 
@@ -627,6 +726,7 @@ CmBattIoctl(IN PDEVICE_OBJECT DeviceObject,
     NTSTATUS Status;
     PIO_STACK_LOCATION IoStackLocation;
     ULONG IoControlCode, OutputBufferLength, InputBufferLength;
+    BOOLEAN ExtendedData;
     PAGED_CODE();
     if (CmBattDebug & 2) DbgPrint("CmBattIoctl\n");
 
@@ -745,7 +845,15 @@ CmBattIoctl(IN PDEVICE_OBJECT DeviceObject,
             case IOCTL_BATTERY_QUERY_BIF_BIX:
 
                 /* Return the battery static information to the caller depending on the supported ACPI method */
-                if (DeviceExtension->BattInfo.ExtendedData)
+                KeWaitForSingleObject(&DeviceExtension->StaticInfoMutex,
+                                      Executive,
+                                      KernelMode,
+                                      FALSE,
+                                      NULL);
+                ExtendedData = DeviceExtension->BattInfo.ExtendedData;
+                KeReleaseMutex(&DeviceExtension->StaticInfoMutex, FALSE);
+
+                if (ExtendedData)
                 {
                     if (OutputBufferLength == sizeof(ACPI_BIX_DATA))
                     {
@@ -853,12 +961,14 @@ CmBattQueryTag(IN PCMBATT_DEVICE_EXTENSION DeviceExtension,
         if (StaData & ACPI_STA_BATTERY_PRESENT)
         {
             /* Do we not have a tag yet? */
-            if (DeviceExtension->Tag == BATTERY_TAG_INVALID)
+            if (InterlockedCompareExchange(&DeviceExtension->Tag, 0, 0) ==
+                BATTERY_TAG_INVALID)
             {
                 /* Set the new tag value, reset tags if we reached the maximum */
                 if (++DeviceExtension->TagData == BATTERY_TAG_INVALID)
                     DeviceExtension->TagData = 1;
-                DeviceExtension->Tag = DeviceExtension->TagData;
+                InterlockedExchange(&DeviceExtension->Tag,
+                                    (LONG)DeviceExtension->TagData);
                 if (CmBattDebug & CMBATT_GENERIC_INFO)
                     DbgPrint("CmBattQueryTag - New Tag: (%d)\n", DeviceExtension->Tag);
 
@@ -874,13 +984,15 @@ CmBattQueryTag(IN PCMBATT_DEVICE_EXTENSION DeviceExtension,
         else
         {
             /* No battery, so no tag */
-            DeviceExtension->Tag = BATTERY_TAG_INVALID;
+            InterlockedExchange(&DeviceExtension->Tag,
+                                BATTERY_TAG_INVALID);
+            CmBattInvalidateStaticInfo(DeviceExtension);
             Status = STATUS_NO_SUCH_DEVICE;
         }
     }
 
     /* Return the tag and status result */
-    *Tag = DeviceExtension->Tag;
+    *Tag = (ULONG)InterlockedCompareExchange(&DeviceExtension->Tag, 0, 0);
     if (CmBattDebug & CMBATT_ACPI_WARNING)
       DbgPrint("CmBattQueryTag: Returning Tag: 0x%x, status 0x%x\n", *Tag, Status);
     return Status;
@@ -935,6 +1047,7 @@ CmBattSetStatusNotify(IN PCMBATT_DEVICE_EXTENSION DeviceExtension,
 {
     NTSTATUS Status;
     ACPI_BST_DATA BstData;
+    ACPI_BATT_STATIC_INFO StaticInfo;
     ULONG PowerUnit, Capacity, NewTripPoint, TripPoint, DesignVoltage;
     BOOLEAN Charging;
     PAGED_CODE();
@@ -943,7 +1056,10 @@ CmBattSetStatusNotify(IN PCMBATT_DEVICE_EXTENSION DeviceExtension,
                  BatteryTag, BatteryNotify->LowCapacity);
 
     /* Update any ACPI evaluations */
-    Status = CmBattVerifyStaticInfo(DeviceExtension, BatteryTag);
+    Status = CmBattVerifyStaticInfo(DeviceExtension,
+                                    BatteryTag,
+                                    &StaticInfo,
+                                    NULL);
     if (!NT_SUCCESS(Status)) return Status;
 
     /* Trip point not supported, fail */
@@ -975,15 +1091,15 @@ CmBattSetStatusNotify(IN PCMBATT_DEVICE_EXTENSION DeviceExtension,
     }
 
     /* Is this machine supporting _BIX or _BIF? */
-    if (DeviceExtension->BattInfo.ExtendedData)
+    if (StaticInfo.ExtendedData)
     {
-        PowerUnit = DeviceExtension->BattInfo.BixData.PowerUnit;
-        DesignVoltage = DeviceExtension->BattInfo.BixData.DesignVoltage;
+        PowerUnit = StaticInfo.BixData.PowerUnit;
+        DesignVoltage = StaticInfo.BixData.DesignVoltage;
     }
     else
     {
-        PowerUnit = DeviceExtension->BattInfo.BifData.PowerUnit;
-        DesignVoltage = DeviceExtension->BattInfo.BifData.DesignVoltage;
+        PowerUnit = StaticInfo.BifData.PowerUnit;
+        DesignVoltage = StaticInfo.BifData.DesignVoltage;
     }
 
     /* Do we have data in Amps or Watts? */
@@ -1092,6 +1208,7 @@ CmBattGetBatteryStatus(IN PCMBATT_DEVICE_EXTENSION DeviceExtension,
 {
     ULONG PsrData = 0;
     NTSTATUS Status;
+    ACPI_BATT_STATIC_INFO StaticInfo;
     BOOLEAN WasDischarging;
     ULONG BstState;
     ULONG PowerUnit;
@@ -1101,7 +1218,10 @@ CmBattGetBatteryStatus(IN PCMBATT_DEVICE_EXTENSION DeviceExtension,
         DbgPrint("CmBattGetBatteryStatus - CmBatt (%08x) Tag (%d)\n", DeviceExtension, Tag);
 
     /* Validate ACPI data */
-    Status = CmBattVerifyStaticInfo(DeviceExtension, Tag);
+    Status = CmBattVerifyStaticInfo(DeviceExtension,
+                                    Tag,
+                                    &StaticInfo,
+                                    NULL);
     if (!NT_SUCCESS(Status)) return Status;
 
     /* Check for delayed status notifications */
@@ -1199,15 +1319,15 @@ CmBattGetBatteryStatus(IN PCMBATT_DEVICE_EXTENSION DeviceExtension,
     }
 
     /* Is this machine supporting _BIX or _BIF? */
-    if (DeviceExtension->BattInfo.ExtendedData)
+    if (StaticInfo.ExtendedData)
     {
-        PowerUnit = DeviceExtension->BattInfo.BixData.PowerUnit;
-        DesignVoltage = DeviceExtension->BattInfo.BixData.DesignVoltage;
+        PowerUnit = StaticInfo.BixData.PowerUnit;
+        DesignVoltage = StaticInfo.BixData.DesignVoltage;
     }
     else
     {
-        PowerUnit = DeviceExtension->BattInfo.BifData.PowerUnit;
-        DesignVoltage = DeviceExtension->BattInfo.BifData.DesignVoltage;
+        PowerUnit = StaticInfo.BifData.PowerUnit;
+        DesignVoltage = StaticInfo.BifData.DesignVoltage;
     }
 
     /* Get some data we'll need */
@@ -1340,6 +1460,8 @@ CmBattQueryInformation(IN PCMBATT_DEVICE_EXTENSION FdoExtension,
     UNICODE_STRING InfoString;
     ULONG RemainingCapacity;
     BATTERY_REPORTING_SCALE BatteryReportingScale[2];
+    ACPI_BATT_STATIC_INFO StaticInfo;
+    BATTERY_INFORMATION BatteryInfo;
     LONG Rate;
     PAGED_CODE();
     if (CmBattDebug & (CMBATT_ACPI_WARNING | CMBATT_GENERIC_INFO))
@@ -1349,7 +1471,10 @@ CmBattQueryInformation(IN PCMBATT_DEVICE_EXTENSION FdoExtension,
                  InfoLevel);
 
     /* Check ACPI Data */
-    Status = CmBattVerifyStaticInfo(FdoExtension, Tag);
+    Status = CmBattVerifyStaticInfo(FdoExtension,
+                                    Tag,
+                                    &StaticInfo,
+                                    &BatteryInfo);
     if (!NT_SUCCESS(Status)) return Status;
 
     /* Check what caller wants */
@@ -1357,7 +1482,7 @@ CmBattQueryInformation(IN PCMBATT_DEVICE_EXTENSION FdoExtension,
     {
         case BatteryInformation:
             /* Just return our static information */
-            QueryData = &FdoExtension->BatteryInformation;
+            QueryData = &BatteryInfo;
             QueryLength = sizeof(BATTERY_INFORMATION);
             break;
 
@@ -1365,9 +1490,9 @@ CmBattQueryInformation(IN PCMBATT_DEVICE_EXTENSION FdoExtension,
 
             /* Return our static information, we have two scales */
             BatteryReportingScale[0].Granularity = FdoExtension->BatteryCapacityGranularity1;
-            BatteryReportingScale[0].Capacity = FdoExtension->BatteryInformation.DefaultAlert1;
+            BatteryReportingScale[0].Capacity = BatteryInfo.DefaultAlert1;
             BatteryReportingScale[1].Granularity = FdoExtension->BatteryCapacityGranularity2;
-            BatteryReportingScale[1].Capacity = FdoExtension->BatteryInformation.DesignedCapacity;
+            BatteryReportingScale[1].Capacity = BatteryInfo.DesignedCapacity;
             QueryData = BatteryReportingScale;
             QueryLength = sizeof(BATTERY_REPORTING_SCALE) * 2;
             break;
@@ -1450,13 +1575,13 @@ CmBattQueryInformation(IN PCMBATT_DEVICE_EXTENSION FdoExtension,
         case BatteryDeviceName:
 
             /* Build the model number string */
-            if (FdoExtension->BattInfo.ExtendedData)
+            if (StaticInfo.ExtendedData)
             {
-                RtlInitAnsiString(&TempString, FdoExtension->BattInfo.BixData.ModelNumber);
+                RtlInitAnsiString(&TempString, StaticInfo.BixData.ModelNumber);
             }
             else
             {
-                RtlInitAnsiString(&TempString, FdoExtension->BattInfo.BifData.ModelNumber);
+                RtlInitAnsiString(&TempString, StaticInfo.BifData.ModelNumber);
             }
 
             /* Convert it to Unicode */
@@ -1479,13 +1604,13 @@ CmBattQueryInformation(IN PCMBATT_DEVICE_EXTENSION FdoExtension,
         case BatteryManufactureName:
 
             /* Build the OEM info string */
-            if (FdoExtension->BattInfo.ExtendedData)
+            if (StaticInfo.ExtendedData)
             {
-                RtlInitAnsiString(&TempString, FdoExtension->BattInfo.BixData.OemInfo);
+                RtlInitAnsiString(&TempString, StaticInfo.BixData.OemInfo);
             }
             else
             {
-                RtlInitAnsiString(&TempString, FdoExtension->BattInfo.BifData.OemInfo);
+                RtlInitAnsiString(&TempString, StaticInfo.BifData.OemInfo);
             }
 
             /* Convert it to Unicode */
@@ -1501,13 +1626,13 @@ CmBattQueryInformation(IN PCMBATT_DEVICE_EXTENSION FdoExtension,
         case BatteryUniqueID:
 
             /* Build the serial number string */
-            if (FdoExtension->BattInfo.ExtendedData)
+            if (StaticInfo.ExtendedData)
             {
-                RtlInitAnsiString(&TempString, FdoExtension->BattInfo.BixData.SerialNumber);
+                RtlInitAnsiString(&TempString, StaticInfo.BixData.SerialNumber);
             }
             else
             {
-                RtlInitAnsiString(&TempString, FdoExtension->BattInfo.BifData.SerialNumber);
+                RtlInitAnsiString(&TempString, StaticInfo.BifData.SerialNumber);
             }
 
             /* Convert it to Unicode */
@@ -1520,17 +1645,17 @@ CmBattQueryInformation(IN PCMBATT_DEVICE_EXTENSION FdoExtension,
             TempString2.MaximumLength = sizeof(TempBuffer);
 
             /* Check if there's an OEM string */
-            if ((FdoExtension->BattInfo.ExtendedData && FdoExtension->BattInfo.BixData.OemInfo[0]) ||
-                FdoExtension->BattInfo.BifData.OemInfo[0])
+            if ((StaticInfo.ExtendedData && StaticInfo.BixData.OemInfo[0]) ||
+                StaticInfo.BifData.OemInfo[0])
             {
                 /* Build the OEM info string */
-                if (FdoExtension->BattInfo.ExtendedData)
+                if (StaticInfo.ExtendedData)
                 {
-                    RtlInitAnsiString(&TempString, FdoExtension->BattInfo.BixData.OemInfo);
+                    RtlInitAnsiString(&TempString, StaticInfo.BixData.OemInfo);
                 }
                 else
                 {
-                    RtlInitAnsiString(&TempString, FdoExtension->BattInfo.BifData.OemInfo);
+                    RtlInitAnsiString(&TempString, StaticInfo.BifData.OemInfo);
                 }
 
                 /* Convert it to Unicode and append it */
@@ -1539,13 +1664,13 @@ CmBattQueryInformation(IN PCMBATT_DEVICE_EXTENSION FdoExtension,
             }
 
             /* Build the model number string */
-            if (FdoExtension->BattInfo.ExtendedData)
+            if (StaticInfo.ExtendedData)
             {
-                RtlInitAnsiString(&TempString, FdoExtension->BattInfo.BixData.ModelNumber);
+                RtlInitAnsiString(&TempString, StaticInfo.BixData.ModelNumber);
             }
             else
             {
-                RtlInitAnsiString(&TempString, FdoExtension->BattInfo.BifData.ModelNumber);
+                RtlInitAnsiString(&TempString, StaticInfo.BifData.ModelNumber);
             }
 
             /* Convert it to Unicode and append it */

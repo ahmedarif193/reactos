@@ -28,6 +28,7 @@ ACPI_MODULE_NAME		("acpi_ec")
 #define ACPI_EC_SPIN_COUNT	20
 #define ACPI_EC_DELAY_MS	500
 #define ACPI_EC_GLK_TIMEOUT	1000
+#define ACPI_EC_QUERY_RETRY_MS	10
 
 struct acpi_ec {
 	ACPI_HANDLE		handle;
@@ -38,6 +39,11 @@ struct acpi_ec {
 	BOOLEAN			space_handler_installed;
 	BOOLEAN			gpe_handler_installed;
 	KMUTEX			mutex;
+	KTIMER			query_retry_timer;
+	KDPC			query_retry_dpc;
+	KSPIN_LOCK		query_lock;
+	volatile LONG		query_pending;
+	volatile LONG		query_stopping;
 };
 
 static struct acpi_ec *first_ec;
@@ -45,6 +51,7 @@ static struct acpi_ec *boot_ec;
 
 static int acpi_ec_add(struct acpi_device *device);
 static int acpi_ec_remove(struct acpi_device *device, int type);
+static void ACPI_SYSTEM_XFACE acpi_ec_gpe_query(void *context);
 
 static struct acpi_driver acpi_ec_driver = {
 	{0,0},
@@ -177,36 +184,94 @@ acpi_ec_query_unlocked(struct acpi_ec *ec, UINT8 *data)
 }
 
 static ACPI_STATUS
-acpi_ec_transaction(struct acpi_ec *ec, UINT8 address, UINT8 *data, BOOLEAN write)
+acpi_ec_acquire(struct acpi_ec *ec, UINT32 *glk)
 {
 	ACPI_STATUS status;
-	UINT32 glk = 0;
 
 	KeWaitForSingleObject(&ec->mutex, Executive, KernelMode, FALSE, NULL);
 
 	if (ec->global_lock) {
-		status = AcpiAcquireGlobalLock(ACPI_EC_GLK_TIMEOUT, &glk);
+		status = AcpiAcquireGlobalLock(ACPI_EC_GLK_TIMEOUT, glk);
 		if (ACPI_FAILURE(status)) {
 			KeReleaseMutex(&ec->mutex, FALSE);
 			return status;
 		}
 	}
 
-	if (write)
-		status = acpi_ec_write_unlocked(ec, address, *data);
-	else
-		status = acpi_ec_read_unlocked(ec, address, data);
+	return AE_OK;
+}
 
+static void
+acpi_ec_release(struct acpi_ec *ec, UINT32 glk)
+{
 	if (ec->global_lock)
 		AcpiReleaseGlobalLock(glk);
 
 	KeReleaseMutex(&ec->mutex, FALSE);
+}
 
+static void
+acpi_ec_schedule_query_retry(struct acpi_ec *ec)
+{
+	LARGE_INTEGER due_time;
+	KIRQL old_irql;
+
+	due_time.QuadPart = -((LONGLONG)ACPI_EC_QUERY_RETRY_MS * 10000);
+
+	/*
+	 * Serialize timer arming with teardown so no callback can be armed
+	 * after the timer has been cancelled.
+	 */
+	KeAcquireSpinLock(&ec->query_lock, &old_irql);
+	if (InterlockedCompareExchange(&ec->query_stopping, 0, 0) == 0)
+		KeSetTimer(&ec->query_retry_timer, due_time, &ec->query_retry_dpc);
+	KeReleaseSpinLock(&ec->query_lock, old_irql);
+}
+
+static void
+acpi_ec_queue_query(struct acpi_ec *ec)
+{
+	ACPI_STATUS status;
+
+	if (InterlockedCompareExchange(&ec->query_stopping, 0, 0) != 0)
+		return;
+
+	if (InterlockedCompareExchange(&ec->query_pending, 1, 0) != 0)
+		return;
+
+	status = AcpiOsExecute(OSL_GPE_HANDLER, acpi_ec_gpe_query, ec);
+	if (ACPI_FAILURE(status)) {
+		DPRINT1("Unable to queue EC query: %s; retrying\n",
+			AcpiFormatException(status));
+		/*
+		 * The GPE handler can run above DISPATCH_LEVEL. Hop to the
+		 * preallocated DPC before arming a timer or retrying the OSL.
+		 */
+		KeInsertQueueDpc(&ec->query_retry_dpc, NULL, NULL);
+	}
+}
+
+static VOID
+NTAPI
+acpi_ec_query_retry_dpc(PKDPC Dpc, PVOID DeferredContext,
+			PVOID SystemArgument1, PVOID SystemArgument2)
+{
+	struct acpi_ec *ec = DeferredContext;
+	ACPI_STATUS status;
+
+	UNREFERENCED_PARAMETER(Dpc);
+	UNREFERENCED_PARAMETER(SystemArgument1);
+	UNREFERENCED_PARAMETER(SystemArgument2);
+
+	if (InterlockedCompareExchange(&ec->query_stopping, 0, 0) != 0)
+		return;
+
+	if (InterlockedCompareExchange(&ec->query_pending, 0, 0) == 0)
+		return;
+
+	status = AcpiOsExecute(OSL_GPE_HANDLER, acpi_ec_gpe_query, ec);
 	if (ACPI_FAILURE(status))
-		DPRINT1("EC transaction failed at address 0x%02x: %s\n",
-			address, AcpiFormatException(status));
-
-	return status;
+		acpi_ec_schedule_query_retry(ec);
 }
 
 static void ACPI_SYSTEM_XFACE
@@ -221,38 +286,65 @@ acpi_ec_gpe_query(void *context)
 	if (!ec)
 		return;
 
-	KeWaitForSingleObject(&ec->mutex, Executive, KernelMode, FALSE, NULL);
+	for (;;) {
+		status = acpi_ec_acquire(ec, &glk);
+		if (ACPI_FAILURE(status))
+			goto Retry;
 
-	if (ec->global_lock) {
-		status = AcpiAcquireGlobalLock(ACPI_EC_GLK_TIMEOUT, &glk);
-		if (ACPI_FAILURE(status)) {
-			KeReleaseMutex(&ec->mutex, FALSE);
+		status = acpi_ec_query_unlocked(ec, &value);
+		acpi_ec_release(ec, glk);
+
+		if (ACPI_FAILURE(status))
+			goto Retry;
+
+		if (value != 0) {
+			method[0] = '_';
+			method[1] = 'Q';
+			method[2] = "0123456789ABCDEF"[(value >> 4) & 0x0F];
+			method[3] = "0123456789ABCDEF"[value & 0x0F];
+			method[4] = '\0';
+
+			DPRINT("EC query event 0x%02x, evaluating %s\n", value, method);
+
+			status = AcpiEvaluateObject(ec->handle, method, NULL, NULL);
+			if (ACPI_FAILURE(status) && status != AE_NOT_FOUND)
+				DPRINT1("Failed to evaluate EC query method %s: %s\n",
+					method, AcpiFormatException(status));
+		}
+
+		if (InterlockedCompareExchange(&ec->query_stopping, 0, 0) != 0 ||
+		    !(acpi_ec_read_status(ec) & ACPI_EC_FLAG_SCI))
+			break;
+
+		/*
+		 * Some controllers need time to deassert SCI_EVT after returning
+		 * an empty query. Avoid spinning indefinitely in the worker while
+		 * retaining ownership of the coalesced query request.
+		 */
+		if (value == 0) {
+			acpi_ec_schedule_query_retry(ec);
 			return;
 		}
 	}
 
-	status = acpi_ec_query_unlocked(ec, &value);
+	InterlockedExchange(&ec->query_pending, 0);
 
-	if (ec->global_lock)
-		AcpiReleaseGlobalLock(glk);
+	/*
+	 * Close the window where a new SCI edge arrived while query_pending
+	 * was still set and was therefore coalesced into this worker.
+	 */
+	if (InterlockedCompareExchange(&ec->query_stopping, 0, 0) == 0 &&
+	    (acpi_ec_read_status(ec) & ACPI_EC_FLAG_SCI))
+		acpi_ec_queue_query(ec);
 
-	KeReleaseMutex(&ec->mutex, FALSE);
+	return;
 
-	if (ACPI_FAILURE(status) || value == 0)
-		return;
-
-	method[0] = '_';
-	method[1] = 'Q';
-	method[2] = "0123456789ABCDEF"[(value >> 4) & 0x0F];
-	method[3] = "0123456789ABCDEF"[value & 0x0F];
-	method[4] = '\0';
-
-	DPRINT("EC query event 0x%02x, evaluating %s\n", value, method);
-
-	status = AcpiEvaluateObject(ec->handle, method, NULL, NULL);
-	if (ACPI_FAILURE(status) && status != AE_NOT_FOUND)
-		DPRINT1("Failed to evaluate EC query method %s: %s\n",
-			method, AcpiFormatException(status));
+Retry:
+	DPRINT1("EC query failed: %s\n", AcpiFormatException(status));
+	if (InterlockedCompareExchange(&ec->query_stopping, 0, 0) == 0)
+		acpi_ec_schedule_query_retry(ec);
+	else
+		InterlockedExchange(&ec->query_pending, 0);
 }
 
 static UINT32
@@ -264,7 +356,7 @@ acpi_ec_gpe_handler(ACPI_HANDLE GpeDevice, UINT32 GpeNumber, void *context)
 	UNREFERENCED_PARAMETER(GpeNumber);
 
 	if (ec && (acpi_ec_read_status(ec) & ACPI_EC_FLAG_SCI))
-		AcpiOsExecute(OSL_GPE_HANDLER, acpi_ec_gpe_query, ec);
+		acpi_ec_queue_query(ec);
 
 	return ACPI_INTERRUPT_HANDLED | ACPI_REENABLE_GPE;
 }
@@ -279,9 +371,10 @@ acpi_ec_space_handler(UINT32 function,
 {
 	struct acpi_ec *ec = handler_context;
 	ACPI_STATUS status = AE_OK;
+	UINT8 *buffer = (UINT8 *)value;
 	UINT32 bytes;
 	UINT32 i;
-	UINT8 data;
+	UINT32 glk = 0;
 
 	UNREFERENCED_PARAMETER(region_context);
 
@@ -294,32 +387,34 @@ acpi_ec_space_handler(UINT32 function,
 	if (bit_width == 0)
 		return AE_BAD_PARAMETER;
 
-	if ((address + ((bit_width + 7) / 8)) > 0x100)
+	bytes = (bit_width / 8) + ((bit_width % 8) != 0);
+
+	if (address > 0xFF || bytes > (0x100 - (UINT32)address))
 		return AE_BAD_ADDRESS;
 
-	bytes = (bit_width + 7) / 8;
-
-	if (function == ACPI_READ)
-		*value = 0;
+	status = acpi_ec_acquire(ec, &glk);
+	if (ACPI_FAILURE(status))
+		return status;
 
 	for (i = 0; i < bytes; i++) {
-		if (function == ACPI_READ) {
-			status = acpi_ec_transaction(ec, (UINT8)(address + i),
-						     &data, FALSE);
-			if (ACPI_FAILURE(status))
-				return status;
+		if (function == ACPI_READ)
+			status = acpi_ec_read_unlocked(ec, (UINT8)(address + i),
+						       &buffer[i]);
+		else
+			status = acpi_ec_write_unlocked(ec, (UINT8)(address + i),
+							buffer[i]);
 
-			*value |= ((UINT64)data) << (i * 8);
-		} else {
-			data = (UINT8)((*value >> (i * 8)) & 0xFF);
-			status = acpi_ec_transaction(ec, (UINT8)(address + i),
-						     &data, TRUE);
-			if (ACPI_FAILURE(status))
-				return status;
-		}
+		if (ACPI_FAILURE(status))
+			break;
 	}
 
-	return AE_OK;
+	acpi_ec_release(ec, glk);
+
+	if (ACPI_FAILURE(status))
+		DPRINT1("EC field transaction failed at address 0x%02x: %s\n",
+			(UINT32)(address + i), AcpiFormatException(status));
+
+	return status;
 }
 
 static ACPI_STATUS
@@ -340,10 +435,36 @@ acpi_ec_io_ports(ACPI_RESOURCE *resource, void *context)
 	return AE_OK;
 }
 
+static void
+acpi_ec_initialize(struct acpi_ec *ec)
+{
+	KeInitializeMutex(&ec->mutex, 0);
+	KeInitializeTimer(&ec->query_retry_timer);
+	KeInitializeDpc(&ec->query_retry_dpc, acpi_ec_query_retry_dpc, ec);
+	KeInitializeSpinLock(&ec->query_lock);
+}
+
+static void
+acpi_ec_update_global_lock(struct acpi_ec *ec)
+{
+	ACPI_INTEGER glk = 0;
+	ACPI_STATUS status;
+	BOOLEAN global_lock;
+
+	status = acpi_evaluate_integer(ec->handle, "_GLK", NULL, &glk);
+	global_lock = ACPI_SUCCESS(status) && glk != 0;
+
+	KeWaitForSingleObject(&ec->mutex, Executive, KernelMode, FALSE, NULL);
+	ec->global_lock = global_lock;
+	KeReleaseMutex(&ec->mutex, FALSE);
+}
+
 static ACPI_STATUS
 acpi_ec_install_handlers(struct acpi_ec *ec, ACPI_HANDLE region_scope)
 {
 	ACPI_STATUS status;
+
+	InterlockedExchange(&ec->query_stopping, 0);
 
 	status = AcpiInstallAddressSpaceHandler(region_scope,
 						ACPI_ADR_SPACE_EC,
@@ -381,10 +502,31 @@ acpi_ec_install_handlers(struct acpi_ec *ec, ACPI_HANDLE region_scope)
 static void
 acpi_ec_remove_handlers(struct acpi_ec *ec, ACPI_HANDLE region_scope)
 {
+	BOOLEAN had_gpe_handler = ec->gpe_handler_installed;
+	KIRQL old_irql;
+
+	InterlockedExchange(&ec->query_stopping, 1);
+
 	if (ec->gpe_handler_installed) {
 		AcpiDisableGpe(NULL, ec->gpe);
 		AcpiRemoveGpeHandler(NULL, ec->gpe, acpi_ec_gpe_handler);
 		ec->gpe_handler_installed = FALSE;
+	}
+
+	KeAcquireSpinLock(&ec->query_lock, &old_irql);
+	KeCancelTimer(&ec->query_retry_timer);
+	KeRemoveQueueDpc(&ec->query_retry_dpc);
+	KeReleaseSpinLock(&ec->query_lock, old_irql);
+
+	if (had_gpe_handler ||
+	    InterlockedCompareExchange(&ec->query_pending, 0, 0) != 0) {
+		/*
+		 * A retry DPC may be handing the request to the OSL queue.
+		 * Drain it before waiting for any queued/running query callback.
+		 */
+		KeFlushQueuedDpcs();
+		AcpiOsWaitEventsComplete();
+		InterlockedExchange(&ec->query_pending, 0);
 	}
 
 	if (ec->space_handler_installed) {
@@ -401,12 +543,12 @@ acpi_ec_add(struct acpi_device *device)
 	struct acpi_ec *ec;
 	ACPI_STATUS status;
 	ACPI_INTEGER gpe = 0;
-	ACPI_INTEGER glk = 0;
 
 	if (!device)
 		return AE_BAD_PARAMETER;
 
 	if (boot_ec && boot_ec->handle == device->handle) {
+		acpi_ec_update_global_lock(boot_ec);
 		device->driver_data = boot_ec;
 		first_ec = boot_ec;
 		DPRINT1("EC already configured from ECDT\n");
@@ -419,7 +561,7 @@ acpi_ec_add(struct acpi_device *device)
 
 	RtlZeroMemory(ec, sizeof(*ec));
 	ec->handle = device->handle;
-	KeInitializeMutex(&ec->mutex, 0);
+	acpi_ec_initialize(ec);
 
 	status = AcpiWalkResources(ec->handle, METHOD_NAME__CRS,
 				   acpi_ec_io_ports, ec);
@@ -440,8 +582,7 @@ acpi_ec_add(struct acpi_device *device)
 
 	ec->gpe = (UINT32)gpe;
 
-	status = acpi_evaluate_integer(ec->handle, "_GLK", NULL, &glk);
-	ec->global_lock = ACPI_SUCCESS(status) && glk != 0;
+	acpi_ec_update_global_lock(ec);
 
 	DPRINT1("EC: command 0x%x data 0x%x GPE 0x%02x global lock %d\n",
 		(UINT32)ec->command_addr, (UINT32)ec->data_addr,
@@ -498,19 +639,30 @@ acpi_ec_ecdt_probe(void)
 	ACPI_STATUS status;
 	struct acpi_ec *ec;
 	ACPI_HANDLE handle;
+	ACPI_IO_ADDRESS command_addr;
+	ACPI_IO_ADDRESS data_addr;
+	UINT32 gpe;
 
 	status = AcpiGetTable(ACPI_SIG_ECDT, 1, (ACPI_TABLE_HEADER **)&ecdt);
 	if (ACPI_FAILURE(status))
 		return AE_NOT_FOUND;
 
-	if (ecdt->Control.Address == 0 || ecdt->Data.Address == 0)
+	if (ecdt->Control.Address == 0 || ecdt->Data.Address == 0) {
+		AcpiPutTable((ACPI_TABLE_HEADER *)ecdt);
 		return AE_NOT_FOUND;
+	}
 
 	status = AcpiGetHandle(NULL, (char *)ecdt->Id, &handle);
 	if (ACPI_FAILURE(status)) {
 		DPRINT1("ECDT names a device that is not in the namespace\n");
+		AcpiPutTable((ACPI_TABLE_HEADER *)ecdt);
 		return AE_NOT_FOUND;
 	}
+
+	command_addr = (ACPI_IO_ADDRESS)ecdt->Control.Address;
+	data_addr = (ACPI_IO_ADDRESS)ecdt->Data.Address;
+	gpe = ecdt->Gpe;
+	AcpiPutTable((ACPI_TABLE_HEADER *)ecdt);
 
 	ec = ExAllocatePoolWithTag(NonPagedPool, sizeof(*ec), 'CEpA');
 	if (!ec)
@@ -518,13 +670,15 @@ acpi_ec_ecdt_probe(void)
 
 	RtlZeroMemory(ec, sizeof(*ec));
 	ec->handle = handle;
-	ec->command_addr = (ACPI_IO_ADDRESS)ecdt->Control.Address;
-	ec->data_addr = (ACPI_IO_ADDRESS)ecdt->Data.Address;
-	ec->gpe = ecdt->Gpe;
-	KeInitializeMutex(&ec->mutex, 0);
+	ec->command_addr = command_addr;
+	ec->data_addr = data_addr;
+	ec->gpe = gpe;
+	acpi_ec_initialize(ec);
+	acpi_ec_update_global_lock(ec);
 
-	DPRINT1("EC from ECDT: command 0x%x data 0x%x GPE 0x%02x\n",
-		(UINT32)ec->command_addr, (UINT32)ec->data_addr, ec->gpe);
+	DPRINT1("EC from ECDT: command 0x%x data 0x%x GPE 0x%02x global lock %d\n",
+		(UINT32)ec->command_addr, (UINT32)ec->data_addr,
+		ec->gpe, ec->global_lock);
 
 	status = acpi_ec_install_handlers(ec, ACPI_ROOT_OBJECT);
 	if (ACPI_FAILURE(status)) {

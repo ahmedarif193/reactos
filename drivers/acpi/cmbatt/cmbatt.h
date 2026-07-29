@@ -162,6 +162,7 @@ typedef struct _CMBATT_DEVICE_EXTENSION
     PDEVICE_OBJECT PdoDeviceObject;
     PDEVICE_OBJECT AttachedDevice;
     FAST_MUTEX FastMutex;
+    KMUTEX StaticInfoMutex;
     ULONG HandleCount;
     PIRP PowerIrp;
     POWER_STATE PowerState;
@@ -178,8 +179,9 @@ typedef struct _CMBATT_DEVICE_EXTENSION
     BOOLEAN NotifySent;
     LONG ArLockValue;
     ULONG TagData;
-    ULONG Tag;
-    ULONG CachedInfoTag;
+    volatile LONG Tag;
+    volatile LONG CachedInfoTag;
+    volatile LONG StaticInfoGeneration;
     ACPI_BST_DATA BstData;
     ACPI_BATT_STATIC_INFO BattInfo;
     ULONG Id;
