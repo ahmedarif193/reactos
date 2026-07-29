@@ -1230,12 +1230,13 @@ KdbpInternalEnter(
     PETHREAD Thread;
     PVOID SavedInitialStack, SavedStackBase, SavedKernelStack;
     ULONG SavedStackLimit;
+    BOOLEAN DisplayAcquired = FALSE;
 
     KbdDisableMouse();
 
     /* Take control of the display */
     if (KdpDebugMode.Screen)
-        KdpScreenAcquire();
+        DisplayAcquired = KdpScreenAcquire();
 
     /* Call the specified debugger procedure on a different stack */
     Thread = PsGetCurrentThread();
@@ -1259,7 +1260,7 @@ KdbpInternalEnter(
 
     /* Release the display */
     if (KdpDebugMode.Screen)
-        KdpScreenRelease();
+        KdpScreenRelease(DisplayAcquired);
 
     KbdEnableMouse();
 }
