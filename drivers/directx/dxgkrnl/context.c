@@ -1629,7 +1629,13 @@ DxgkCreateContextVirtual(
     if (!NT_SUCCESS(Status))
         return STATUS_INVALID_PARAMETER;
 
-    if (pCreateContext->NodeOrdinal >= Adapter->NodeCount || Adapter->MiniportContext->InitData.s.Version < DXGKDDI_INTERFACE_VERSION_WDDM2_0 || DXGK_CB_FULL(Adapter, DxgkDdiCreateContext) == NULL || DXGK_CB_FULL(Adapter, DxgkDdiDestroyContext) == NULL || DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommandVirtual) == NULL)
+    if (pCreateContext->NodeOrdinal >= Adapter->NodeCount ||
+        !DxgkCapsCoreInterfaceVersionAtLeast(
+            Adapter->MiniportContext->InitData.s.Version,
+            DXGK_CAPS_CORE_LEVEL_WDDM_2_0) ||
+        DXGK_CB_FULL(Adapter, DxgkDdiCreateContext) == NULL ||
+        DXGK_CB_FULL(Adapter, DxgkDdiDestroyContext) == NULL ||
+        DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommandVirtual) == NULL)
     {
         DxgkpDereferenceDevice(Device);
         return STATUS_NOT_SUPPORTED;

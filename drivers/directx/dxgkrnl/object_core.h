@@ -13,6 +13,7 @@
 #define _DXGK_OBJECT_CORE_H_
 
 #include <ntddk.h>
+#include "caps_core.h"
 
 /* --- handle table ----------------------------------------------------- */
 
@@ -50,30 +51,6 @@ NTSTATUS DxgkHandleCoreAllocate(_Inout_ PDXGK_HANDLE_TABLE Table, _In_ PVOID Obj
 NTSTATUS DxgkHandleCoreResolve(_In_ const DXGK_HANDLE_TABLE *Table, _In_ ULONG Handle, _In_ DXGK_HANDLE_TYPE ExpectedType, _Outptr_ PVOID *Object);
 NTSTATUS DxgkHandleCoreFree(_Inout_ PDXGK_HANDLE_TABLE Table, _In_ ULONG Handle, _In_ DXGK_HANDLE_TYPE ExpectedType);
 ULONG DxgkHandleCoreLiveCount(_In_ const DXGK_HANDLE_TABLE *Table);
-
-/* --- capability staircase --------------------------------------------- */
-
-/* DXGKDDI_INTERFACE_VERSION values, low to high. */
-#define DXGK_CAPS_CORE_VERSION_WDDM_1_3   0x4002UL
-#define DXGK_CAPS_CORE_VERSION_WDDM_2_0   0x5023UL
-#define DXGK_CAPS_CORE_VERSION_WDDM_2_9   0x9006UL
-#define DXGK_CAPS_CORE_VERSION_WDDM_3_0   0xF003UL
-
-typedef struct _DXGK_CAPS_INPUT
-{
-    ULONG MiniportDeclaredVersion;
-    ULONG OsCompletedVersion;
-    ULONG ProviderCompletedVersion;
-    BOOLEAN DisplayOnly;
-    BOOLEAN HasRenderCallbacks;
-} DXGK_CAPS_INPUT, *PDXGK_CAPS_INPUT;
-
-/* The reported version is the lowest of every ceiling: claiming more than the
- * weakest participant implements is how a client is told a feature works and
- * then finds it does not. */
-ULONG DxgkCapsCoreReportedVersion(_In_ const DXGK_CAPS_INPUT *Input);
-BOOLEAN DxgkCapsCoreRenderSupported(_In_ const DXGK_CAPS_INPUT *Input);
-BOOLEAN DxgkCapsCoreFeatureAvailable(_In_ const DXGK_CAPS_INPUT *Input, _In_ ULONG RequiredVersion);
 
 /* --- node / engine affinity ------------------------------------------- */
 

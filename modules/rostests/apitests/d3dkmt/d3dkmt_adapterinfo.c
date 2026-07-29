@@ -163,6 +163,13 @@ static void Test_BadHandleAndType(PFND3DKMT_QUERYADAPTERINFO pfn, D3DKMT_HANDLE 
     ok_failed(st,
        "QueryAdapterInfo with unsupported Type must fail, got 0x%08lX\n",
        (long)st);
+
+    /* Reserved gap between the WDDM 1.1 and WDDM 1.2 selectors. */
+    st = QueryAI(pfn, hAdapter, (KMTQUERYADAPTERINFOTYPE)14,
+                 &type, sizeof(type));
+    ok(st == STATUS_INVALID_PARAMETER,
+       "QueryAdapterInfo with reserved Type 14 returned 0x%08lX, expected STATUS_INVALID_PARAMETER\n",
+       (long)st);
 }
 
 /* --------------------------------------------------------------------------
