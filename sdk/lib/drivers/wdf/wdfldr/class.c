@@ -772,18 +772,15 @@ ClassReleaseClientReference(
 {
     int refs;
 
-    __DBGPRINT(("Dereference module %wZ\n", &ClassModule->Service));
     refs = InterlockedDecrement(&ClassModule->ClientRefCount);
 
-    if (refs <= 0)
-    {
-        ClassUnload(ClassModule, TRUE);
-    }
-    else
-    {
-        __DBGPRINT(("Dereference module %wZ still has %d references\n",
-                   &ClassModule->Service, refs));
-    }
+    /*
+     * Class-library callbacks can remain attached to framework objects after
+     * the last client unbinds. Keep the registered class loaded until the WDF
+     * library itself tears its class list down in LibraryUnloadClasses().
+     */
+    __DBGPRINT(("Dereference module %wZ, %d client references left\n",
+               &ClassModule->Service, refs));
 }
 
 VOID
