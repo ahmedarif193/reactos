@@ -29,9 +29,16 @@
 #include "present.h"
 #include "pnp.h"
 #include "caps_core.h"
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
+#include "feature_query_core.h"
+#endif
 
 C_ASSERT(sizeof(RXGK_CREATECONTEXTVIRTUAL_PACKET) == RXGK_CREATECONTEXTVIRTUAL_PACKET_V1_SIZE);
 C_ASSERT(sizeof(RXGK_SUBMITCOMMAND_PACKET) == RXGK_SUBMITCOMMAND_PACKET_V1_SIZE);
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
+C_ASSERT(sizeof(RXGK_ISFEATUREENABLED_PACKET) ==
+         RXGK_ISFEATUREENABLED_PACKET_SIZE);
+#endif
 #if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
 C_ASSERT(sizeof(RXGK_GETDWMVERTICALBLANKEVENT_PACKET) ==
          RXGK_GETDWMVERTICALBLANKEVENT_PACKET_V1_SIZE);
@@ -65,6 +72,14 @@ C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, ResultVidPnSourc
 C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, ResultAdapterLuidLowPart) == 36);
 C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, ResultAdapterLuidHighPart) == 40);
 C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, OwnerType) == 44);
+#endif
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
+C_ASSERT(FIELD_OFFSET(RXGK_ISFEATUREENABLED_PACKET, AdapterHandle) == 0);
+C_ASSERT(FIELD_OFFSET(RXGK_ISFEATUREENABLED_PACKET, FeatureId) == 4);
+C_ASSERT(FIELD_OFFSET(RXGK_ISFEATUREENABLED_PACKET, ResultVersion) == 8);
+C_ASSERT(FIELD_OFFSET(RXGK_ISFEATUREENABLED_PACKET, ResultValue) == 10);
+C_ASSERT(RXGK_ISFEATUREENABLED_RESULT_VALID_MASK ==
+         DXGK_FEATURE_QUERY_RESULT_VALID_MASK);
 #endif
 C_ASSERT(DXGKRNL_INTERFACE_EXCHANGE_IN_LEGACY_SIZE == (2 * sizeof(ULONG)));
 C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE_EXCHANGE_IN, ConfiguredWddmLevel) ==
@@ -327,6 +342,12 @@ DxgkpKmtIoctlMinimumConfiguredLevel(
 
         case IOCTL_D3DKMT_SETVIDPNSOURCEOWNER2:
             return DXGK_CAPS_CORE_LEVEL_WDDM_2_3;
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
+        /* D3DKMTIsFeatureEnabled was introduced with WDDM 3.2. */
+        case IOCTL_D3DKMT_ISFEATUREENABLED:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_3_2;
+#endif
 
         default:
             return 0;
@@ -753,6 +774,412 @@ DxgkpValidateAdapterOnlyForIoctl(
     DxgkDereferenceAdapter(Adapter);
     return STATUS_SUCCESS;
 }
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
+typedef struct _DXGKP_FEATURE_DESCRIPTOR
+{
+    BOOLEAN KnownFeature;
+    BOOLEAN GlobalFeature;
+    BOOLEAN RequiresDriverSupport;
+    BOOLEAN OsSupported;
+    BOOLEAN OsSupportedOnCurrentConfig;
+    USHORT OsMinVersion;
+    USHORT OsMaxVersion;
+} DXGKP_FEATURE_DESCRIPTOR, *PDXGKP_FEATURE_DESCRIPTOR;
+
+static const GUID DxgkpWddmFeatureInterfaceGuid =
+{
+    0x94bb3993, 0xc6c3, 0x4da7,
+    { 0x89, 0x49, 0xa1, 0x13, 0x82, 0x32, 0xe7, 0x59 }
+};
+
+static VOID
+DxgkpDescribeFeature(
+    _In_ DXGK_FEATURE_ID FeatureId,
+    _Out_ PDXGKP_FEATURE_DESCRIPTOR Descriptor)
+{
+    RtlZeroMemory(Descriptor, sizeof(*Descriptor));
+
+    switch (FeatureId)
+    {
+        case DXGK_FEATURE_HWSCH:
+        case DXGK_FEATURE_HWFLIPQUEUE:
+        case DXGK_FEATURE_LDA_GPUPV:
+        case DXGK_FEATURE_USER_MODE_SUBMISSION:
+        case DXGK_FEATURE_SHARE_BACKING_STORE_WITH_KMD:
+        case DXGK_FEATURE_SAMPLE:
+        case DXGK_FEATURE_PAGE_BASED_MEMORY_MANAGER:
+        case DXGK_FEATURE_KERNEL_MODE_TESTING:
+        case DXGK_FEATURE_NATIVE_FENCE:
+        case DXGK_FEATURE_KMD_SIGNAL_CPU_EVENT:
+            Descriptor->KnownFeature = TRUE;
+            Descriptor->RequiresDriverSupport = TRUE;
+            break;
+
+        /*
+         * These WDK 26100 features are negotiated by the OS or host rather
+         * than by DXGKDDI_FEATURE_INTERFACE::QueryFeatureSupport.
+         */
+        case DXGK_FEATURE_64K_PT_DEMOTION_FIX:
+        case DXGK_FEATURE_GPUPV_PRESENT_HWQUEUE:
+        case DXGK_FEATURE_QUERYSTATISTICS_EXTENSIONS:
+            Descriptor->KnownFeature = TRUE;
+            break;
+
+        /*
+         * Microsoft defines GPUVAIOMMU as the sole global WDDM 3.2 feature.
+         * It deliberately does not acquire or invent an adapter.
+         */
+        case DXGK_FEATURE_GPUVAIOMMU:
+            Descriptor->KnownFeature = TRUE;
+            Descriptor->GlobalFeature = TRUE;
+            break;
+
+        default:
+            break;
+    }
+
+    /*
+     * The ReactOS contracts are not complete enough to advertise yet,
+     * including KMD-signaled CPU events, native fences, HWSCH, UMS,
+     * page-based VidMm, and GPUVAIOMMU.
+     */
+}
+
+static NTSTATUS
+DxgkpReferenceFeatureAdapter(
+    _In_ D3DKMT_HANDLE Handle,
+    _Out_ PDXGKRNL_ADAPTER *OutAdapter)
+{
+    PDXGKRNL_ADAPTER Adapter = NULL;
+    NTSTATUS Status;
+
+    if (OutAdapter == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *OutAdapter = NULL;
+
+    Status = DxgkReferenceAdapterByHandle(Handle,
+                                         PsGetCurrentProcess(),
+                                         &Adapter);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Adapter->MiniportContext == NULL)
+    {
+        DxgkDereferenceAdapter(Adapter);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    /*
+     * D3DKMTIsFeatureEnabled is an OS-level WDDM 3.2 API, but it may query
+     * an adapter driven by an older miniport. Such a driver simply has no
+     * DXGKDDI_FEATURE_INTERFACE response; the result remains known but
+     * disabled. Do not turn the adapter's DDI selector into a second API
+     * availability gate.
+     */
+    *OutAdapter = Adapter;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+DxgkpInvokeQueryInterface(
+    _In_ PDXGKDDI_QUERY_INTERFACE Callback,
+    _In_ PVOID MiniportDeviceContext,
+    _Inout_ PQUERY_INTERFACE QueryInterface)
+{
+    NTSTATUS Status;
+
+    _SEH2_TRY
+    {
+        Status = Callback(MiniportDeviceContext, QueryInterface);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    return Status;
+}
+
+static NTSTATUS
+DxgkpInvokeQueryFeatureSupport(
+    _In_ PDXGKDDI_QUERYFEATURESUPPORT Callback,
+    _In_ PVOID Context,
+    INOUT_PDXGKARG_QUERYFEATURESUPPORT QueryFeatureSupport)
+{
+    NTSTATUS Status;
+
+    _SEH2_TRY
+    {
+        Status = Callback(Context, QueryFeatureSupport);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    return Status;
+}
+
+static NTSTATUS
+DxgkpInvokeInterfaceDereference(
+    _In_ PINTERFACE_DEREFERENCE Callback,
+    _In_ PVOID Context)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    _SEH2_TRY
+    {
+        Callback(Context);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    return Status;
+}
+
+static NTSTATUS
+DxgkpQueryKmdFeatureSupport(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ DXGK_FEATURE_ID FeatureId,
+    _Inout_ PDXGK_FEATURE_QUERY_CORE_INPUT CoreInput)
+{
+    PDXGKDDI_QUERY_INTERFACE QueryInterfaceCallback;
+    DXGKDDI_FEATURE_INTERFACE FeatureInterface;
+    DXGKARG_QUERYFEATURESUPPORT QueryFeatureSupport;
+    QUERY_INTERFACE QueryInterface;
+    BOOLEAN InterfaceAcquired = FALSE;
+    BOOLEAN InterfaceDereferenceAttempted = FALSE;
+    NTSTATUS DereferenceStatus;
+    NTSTATUS Status;
+
+    if (Adapter == NULL || CoreInput == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    QueryInterfaceCallback = DXGK_CB(Adapter, DxgkDdiQueryInterface);
+    if (QueryInterfaceCallback == NULL)
+        return STATUS_SUCCESS;
+
+    RtlZeroMemory(&FeatureInterface, sizeof(FeatureInterface));
+    RtlZeroMemory(&QueryInterface, sizeof(QueryInterface));
+    QueryInterface.InterfaceType = &DxgkpWddmFeatureInterfaceGuid;
+    QueryInterface.Size = sizeof(FeatureInterface);
+    QueryInterface.Version = DXGK_FEATURE_INTERFACE_VERSION_1;
+    QueryInterface.Interface = (PINTERFACE)&FeatureInterface;
+    QueryInterface.DeviceUid = DISPLAY_ADAPTER_HW_ID;
+
+    if (!DxgkBeginKmdTransaction(Adapter))
+        return STATUS_DELETE_PENDING;
+
+    Status = DxgkpInvokeQueryInterface(
+                 QueryInterfaceCallback,
+                 Adapter->MiniportDeviceContext,
+                 &QueryInterface);
+    if (!NT_SUCCESS(Status))
+    {
+        /*
+         * STATUS_NOT_SUPPORTED is the documented way for a miniport to
+         * decline an interface.  Other failures, including callback
+         * exceptions, retain their diagnostic meaning.
+         */
+        if (Status == STATUS_NOT_SUPPORTED)
+            Status = STATUS_SUCCESS;
+        goto EndTransaction;
+    }
+    InterfaceAcquired = TRUE;
+
+    if (FeatureInterface.InterfaceDereference == NULL)
+    {
+        /*
+         * A successful query is an acquired interface.  Without its matching
+         * release callback the provider returned an unusable contract.
+         */
+        Status = STATUS_INVALID_DEVICE_STATE;
+        goto ReleaseInterface;
+    }
+    if (FeatureInterface.Size != sizeof(FeatureInterface) ||
+        FeatureInterface.Version != DXGK_FEATURE_INTERFACE_VERSION_1 ||
+        FeatureInterface.InterfaceReference == NULL ||
+        FeatureInterface.QueryFeatureSupport == NULL ||
+        FeatureInterface.QueryFeatureInterface == NULL)
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+        goto ReleaseInterface;
+    }
+
+    RtlZeroMemory(&QueryFeatureSupport, sizeof(QueryFeatureSupport));
+    QueryFeatureSupport.FeatureId = FeatureId;
+    QueryFeatureSupport.AllowExperimental = FALSE;
+    Status = DxgkpInvokeQueryFeatureSupport(
+                 FeatureInterface.QueryFeatureSupport,
+                 FeatureInterface.Context,
+                 &QueryFeatureSupport);
+    if (!NT_SUCCESS(Status))
+    {
+        /*
+         * The WDK sample returns STATUS_INVALID_PARAMETER when the driver's
+         * feature table does not contain this OS-known feature.  That is an
+         * unsupported feature result, not a failure of the public query.
+         */
+        if (Status == STATUS_NOT_SUPPORTED ||
+            Status == STATUS_INVALID_PARAMETER)
+        {
+            Status = STATUS_SUCCESS;
+        }
+        goto ReleaseInterface;
+    }
+
+    CoreInput->DriverResponseValid = TRUE;
+    CoreInput->SupportedByDriver =
+        QueryFeatureSupport.SupportedByDriver != FALSE;
+    CoreInput->SupportedOnCurrentConfig =
+        QueryFeatureSupport.SupportedOnCurrentConfig != FALSE;
+    CoreInput->DriverMinVersion =
+        QueryFeatureSupport.MinSupportedVersion;
+    CoreInput->DriverMaxVersion =
+        QueryFeatureSupport.MaxSupportedVersion;
+    Status = STATUS_SUCCESS;
+
+ReleaseInterface:
+    if (FeatureInterface.InterfaceDereference != NULL)
+    {
+        InterfaceDereferenceAttempted = TRUE;
+        DereferenceStatus = DxgkpInvokeInterfaceDereference(
+                                FeatureInterface.InterfaceDereference,
+                                FeatureInterface.Context);
+        if (!NT_SUCCESS(DereferenceStatus))
+            Status = DereferenceStatus;
+    }
+
+EndTransaction:
+    /*
+     * A successful query acquires one interface reference.  Do not call
+     * InterfaceReference again; issue exactly one release attempt.  The only
+     * impossible release case is a malformed provider that returned success
+     * without an InterfaceDereference entry.
+     */
+    ASSERT(!InterfaceAcquired ||
+           InterfaceDereferenceAttempted ||
+           FeatureInterface.InterfaceDereference == NULL);
+    DxgkEndKmdTransaction(Adapter);
+    return Status;
+}
+
+NTSTATUS
+DxgkQueryFeatureState(
+    _In_opt_ PDXGKRNL_ADAPTER Adapter,
+    _In_ DXGK_FEATURE_ID FeatureId,
+    _Out_ DXGK_ISFEATUREENABLED_RESULT *Result)
+{
+    DXGKP_FEATURE_DESCRIPTOR Descriptor;
+    DXGK_FEATURE_QUERY_CORE_INPUT CoreInput;
+    DXGK_FEATURE_QUERY_CORE_RESULT CoreResult;
+    NTSTATUS Status;
+
+    if (Result == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Result->Version = 0;
+    Result->Value = 0;
+    DxgkpDescribeFeature(FeatureId, &Descriptor);
+
+    RtlZeroMemory(&CoreInput, sizeof(CoreInput));
+    CoreInput.KnownFeature = Descriptor.KnownFeature;
+    CoreInput.RequiresDriverSupport =
+        Descriptor.RequiresDriverSupport;
+    CoreInput.OsSupported = Descriptor.OsSupported;
+    CoreInput.OsSupportedOnCurrentConfig =
+        Descriptor.OsSupportedOnCurrentConfig;
+    CoreInput.OsMinVersion = Descriptor.OsMinVersion;
+    CoreInput.OsMaxVersion = Descriptor.OsMaxVersion;
+
+    if (Descriptor.RequiresDriverSupport)
+    {
+        if (Adapter == NULL)
+            return STATUS_INVALID_PARAMETER;
+        Status = DxgkpQueryKmdFeatureSupport(Adapter,
+                                             FeatureId,
+                                             &CoreInput);
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+
+    if (!DxgkFeatureQueryCoreEvaluate(&CoreInput, &CoreResult))
+        return STATUS_INVALID_DEVICE_STATE;
+
+    Result->Version = CoreResult.Version;
+    Result->Value = CoreResult.Value;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+DxgkpIsFeatureEnabled(
+    _Inout_ PRXGK_ISFEATUREENABLED_PACKET Packet)
+{
+    DXGKP_FEATURE_DESCRIPTOR Descriptor;
+    DXGK_ISFEATUREENABLED_RESULT Result;
+    PDXGKRNL_ADAPTER Adapter = NULL;
+    NTSTATUS Status;
+
+    if (Packet == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Packet->ResultVersion = 0;
+    Packet->ResultValue = 0;
+
+    DxgkpDescribeFeature((DXGK_FEATURE_ID)Packet->FeatureId, &Descriptor);
+
+    /*
+     * An unknown ID cannot be classified as global or adapter-specific.
+     * NULL is therefore a valid way to obtain KnownFeature == FALSE.  A
+     * supplied handle is still ownership-checked and version-gated.
+     */
+    if (!Descriptor.KnownFeature)
+    {
+        if (Packet->AdapterHandle == 0)
+            return STATUS_SUCCESS;
+        Status = DxgkpReferenceFeatureAdapter(Packet->AdapterHandle,
+                                              &Adapter);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        DxgkDereferenceAdapter(Adapter);
+        return STATUS_SUCCESS;
+    }
+
+    if (Descriptor.GlobalFeature)
+    {
+        if (Packet->AdapterHandle != 0)
+            return STATUS_INVALID_PARAMETER;
+    }
+    else
+    {
+        if (Packet->AdapterHandle == 0)
+            return STATUS_INVALID_PARAMETER;
+        Status = DxgkpReferenceFeatureAdapter(Packet->AdapterHandle,
+                                              &Adapter);
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+
+    Status = DxgkQueryFeatureState(
+                 Adapter,
+                 (DXGK_FEATURE_ID)Packet->FeatureId,
+                 &Result);
+
+    if (Adapter != NULL)
+        DxgkDereferenceAdapter(Adapter);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Packet->ResultVersion = Result.Version;
+    Packet->ResultValue = Result.Value;
+    return Status;
+}
+#endif /* REACTOS_WDDM_TARGET_LEVEL >= 3200 */
 
 static NTSTATUS
 DxgkpValidateGlobalShareForIoctl(
@@ -6148,6 +6575,27 @@ DxgkpDispatchBufferedIoctl(
             return Status;
         }
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
+        case IOCTL_D3DKMT_ISFEATUREENABLED:
+        {
+            if (InputLength < sizeof(RXGK_ISFEATUREENABLED_PACKET) ||
+                OutputLength < sizeof(RXGK_ISFEATUREENABLED_PACKET) ||
+                SystemBuffer == NULL)
+            {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            Status = DxgkpIsFeatureEnabled(
+                         (PRXGK_ISFEATUREENABLED_PACKET)SystemBuffer);
+            if (NT_SUCCESS(Status))
+            {
+                Irp->IoStatus.Information =
+                    sizeof(RXGK_ISFEATUREENABLED_PACKET);
+            }
+            return Status;
+        }
+#endif
+
         case IOCTL_D3DKMT_GETDISPLAYMODELIST:
         {
             if (InputLength < sizeof(D3DKMT_GETDISPLAYMODELIST) || SystemBuffer == NULL)
@@ -8235,6 +8683,9 @@ DxgkDispatchDeviceControl(
         case IOCTL_D3DKMT_OPENADAPTERFROMLUID:
         case IOCTL_D3DKMT_CLOSEADAPTER:
         case IOCTL_D3DKMT_QUERYADAPTERINFO:
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
+        case IOCTL_D3DKMT_ISFEATUREENABLED:
+#endif
         case IOCTL_D3DKMT_GETDISPLAYMODELIST:
         case IOCTL_D3DKMT_OPENADAPTERFROMHDC:
         case IOCTL_D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME:
