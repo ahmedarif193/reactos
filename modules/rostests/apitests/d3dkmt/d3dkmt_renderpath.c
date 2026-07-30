@@ -1,7 +1,7 @@
 /*
  * PROJECT:     LiberNT D3DKMT API Tests
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
- * PURPOSE:     Positive render path: Render -> Patch -> Submit -> fence (gate 2.3)
+ * PURPOSE:     Positive render path: Render -> Patch -> Submit -> fence
  * COPYRIGHT:   Copyright 2026 LiberNT WDDM Team
  *
  * Every other render test in this suite is negative: bad contexts, bad flags,

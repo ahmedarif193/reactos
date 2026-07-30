@@ -1,7 +1,7 @@
 /*
  * PROJECT:     LiberNT D3DKMT API Tests
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
- * PURPOSE:     UMD DDI table ABI (roadmap gate 1.3)
+ * PURPOSE:     UMD DDI table ABI
  * COPYRIGHT:   Copyright 2026 LiberNT WDDM Team
  *
  * The two tables in d3dumddi.h are dispatch tables: the runtime indexes them by

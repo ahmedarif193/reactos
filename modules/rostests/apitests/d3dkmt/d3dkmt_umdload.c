@@ -1,7 +1,7 @@
 /*
  * PROJECT:     LiberNT D3DKMT API Tests
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
- * PURPOSE:     Load the user-mode driver the way the D3D runtime does (gate 3)
+ * PURPOSE:     Load the user-mode driver the way the D3D runtime does
  * COPYRIGHT:   Copyright 2026 LiberNT WDDM Team
  *
  * This is the sequence the Direct3D runtime performs, and the first place the

@@ -1,7 +1,7 @@
 /*
  * PROJECT:     LiberNT D3DKMT API Tests
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
- * PURPOSE:     High-value Win11 parity cases (codex-audit driven)
+ * PURPOSE:     High-value Windows 11 parity cases
  * COPYRIGHT:   Copyright 2026 LiberNT WDDM Team
  *
  * Deterministic Win11-ARM64 parity gaps the rest of the suite missed:
