@@ -59,6 +59,10 @@ source_group(TREE ${REACTOS_SOURCE_DIR}/ntoskrnl PREFIX "Source Files" FILES ${N
 
 target_link_libraries(ntoskrnl ntoskrnl_vista cportlib csq ${PSEH_LIB} arbiter cmlib ntlsalib rtl ${ROSSYM_LIB} libcntpr setjmp wdmguid poguid ioevent)
 
+if(ARCH STREQUAL "amd64")
+    target_link_libraries(ntoskrnl rtl_vista)
+endif()
+
 if(STACK_PROTECTOR)
     target_link_libraries(ntoskrnl gcc_ssp_nt)
 endif()

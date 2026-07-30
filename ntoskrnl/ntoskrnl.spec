@@ -3121,6 +3121,7 @@
 @ stub -arch=arm64 RtlRunOnceBeginInitialize
 @ stub -arch=arm64 RtlRunOnceComplete
 @ stub -arch=arm64 RtlRunOnceExecuteOnce
+@ stdcall -arch=x86_64 RtlRunOnceExecuteOnce(ptr ptr ptr ptr)
 @ stub -arch=arm64 RtlRunOnceInitialize
 @ stub -arch=arm64 RtlSetActiveConsoleId
 @ stub -arch=arm64 RtlSetAllBitsEx
