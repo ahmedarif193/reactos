@@ -2055,7 +2055,7 @@
 @ stub -arch=arm64 DbgSetDebugPrintCallback
 @ stub -arch=arm64 DbgkLkmdRegisterCallback
 @ stub -arch=arm64 DbgkLkmdUnregisterCallback
-@ stub -arch=arm64 DbgkWerCaptureLiveKernelDump
+@ stdcall -arch=x86_64,arm64 DbgkWerCaptureLiveKernelDump(ptr long ptr ptr ptr ptr ptr ptr long)
 @ stub -arch=arm64 DbgkWerCaptureLiveKernelDump2
 @ stub -arch=arm64 DifEnumeratePluginData
 @ stub -arch=arm64 DifFindThreadContextData
