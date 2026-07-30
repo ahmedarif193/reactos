@@ -255,6 +255,31 @@ typedef VOID
     _In_opt_ PWDF_OBJECT_ATTRIBUTES FileObjectAttributes);
 
 typedef VOID
+(NTAPI *PFN_WDFCXDEVICEINITSETPNPPOWEREVENTCALLBACKS)(
+    _In_ PWDF_DRIVER_GLOBALS DriverGlobals,
+    _In_ PWDFCXDEVICE_INIT CxDeviceInit,
+    _In_ PWDFCX_PNPPOWER_EVENT_CALLBACKS CxPnpPowerCallbacks);
+
+typedef VOID
+(NTAPI *PFN_WDFCXDEVICEINITSETPOWERPOLICYEVENTCALLBACKS)(
+    _In_ PWDF_DRIVER_GLOBALS DriverGlobals,
+    _In_ PWDFCXDEVICE_INIT CxDeviceInit,
+    _In_ PWDFCX_POWER_POLICY_EVENT_CALLBACKS CxPowerPolicyCallbacks);
+
+typedef NTSTATUS
+(NTAPI *PFN_WDFCXDEVICEINITALLOCATECONTEXT)(
+    _In_ PWDF_DRIVER_GLOBALS DriverGlobals,
+    _In_ PWDFDEVICE_INIT DeviceInit,
+    _In_ PWDF_OBJECT_ATTRIBUTES ContextAttributes,
+    _Outptr_opt_ PVOID *Context);
+
+typedef PVOID
+(NTAPI *PFN_WDFCXDEVICEINITGETTYPEDCONTEXTWORKER)(
+    _In_ PWDF_DRIVER_GLOBALS DriverGlobals,
+    _In_ PWDFDEVICE_INIT DeviceInit,
+    _In_ PCWDF_OBJECT_CONTEXT_TYPE_INFO TypeInfo);
+
+typedef VOID
 (NTAPI *PFN_WDFCXVERIFIERKEBUGCHECK)(
     _In_ PWDF_DRIVER_GLOBALS DriverGlobals,
     _In_opt_ WDFOBJECT Object,
@@ -310,5 +335,121 @@ typedef NTSTATUS (NTAPI *PFN_WDF_CLIENT_BIND_CLASS)(
 typedef VOID (NTAPI *PFN_WDF_CLIENT_UNBIND_CLASS)(
     _In_ PWDF_CLASS_BIND_INFO ClassBindInfo,
     _In_ PWDF_COMPONENT_GLOBALS ComponentGlobals);
+
+typedef struct _WDF_CLASS_BIND_INFO2
+{
+    WDF_CLASS_BIND_INFO V1;
+    PULONG MinimumVersionRequired;
+    PBOOLEAN ClientVersionHigherThanFramework;
+    PULONG FuncCountPtr;
+    PULONG StructCountPtr;
+    size_t *StructTable;
+} WDF_CLASS_BIND_INFO2, *PWDF_CLASS_BIND_INFO2;
+
+typedef struct _WDF_CLASS_EXTENSION_DESCRIPTOR
+{
+    const struct _WDF_CLASS_EXTENSION_DESCRIPTOR *Next;
+    ULONG Size;
+    PFN_WDF_CLASS_EXTENSIONIN_BIND Bind;
+    PFN_WDF_CLASS_EXTENSIONIN_UNBIND Unbind;
+} WDF_CLASS_EXTENSION_DESCRIPTOR, *PWDF_CLASS_EXTENSION_DESCRIPTOR;
+
+/*
+ * Private debugger structure-size ABI carried in the KMDF version table.
+ * The fields are offsets/sizes, so they remain ULONG on 64-bit systems.
+ */
+typedef struct _WDFOBJECT_TRIAGE_INFO
+{
+    ULONG RawObjectSize;
+    ULONG ObjectType;
+    ULONG TotalObjectSize;
+    ULONG ChildListHead;
+    ULONG ChildEntry;
+    ULONG Globals;
+    ULONG ParentObject;
+} WDFOBJECT_TRIAGE_INFO, *PWDFOBJECT_TRIAGE_INFO;
+
+typedef struct _WDFCONTEXT_TRIAGE_INFO
+{
+    ULONG HeaderSize;
+    ULONG NextHeader;
+    ULONG Object;
+    ULONG TypeInfoPtr;
+    ULONG Context;
+} WDFCONTEXT_TRIAGE_INFO, *PWDFCONTEXT_TRIAGE_INFO;
+
+typedef struct _WDFCONTEXTTYPE_TRIAGE_INFO
+{
+    ULONG TypeInfoSize;
+    ULONG ContextSize;
+    ULONG ContextName;
+} WDFCONTEXTTYPE_TRIAGE_INFO, *PWDFCONTEXTTYPE_TRIAGE_INFO;
+
+typedef struct _WDFQUEUE_TRIAGE_INFO
+{
+    ULONG QueueSize;
+    ULONG IrpQueue1;
+    ULONG IrpQueue2;
+    ULONG RequestList1;
+    ULONG RequestList2;
+    ULONG FwdProgressContext;
+    ULONG PkgIo;
+} WDFQUEUE_TRIAGE_INFO, *PWDFQUEUE_TRIAGE_INFO;
+
+typedef struct _WDFFWDPROGRESS_TRIAGE_INFO
+{
+    ULONG ReservedRequestList;
+    ULONG ReservedRequestInUseList;
+    ULONG PendedIrpList;
+} WDFFWDPROGRESS_TRIAGE_INFO, *PWDFFWDPROGRESS_TRIAGE_INFO;
+
+typedef struct _WDFIRPQUEUE_TRIAGE_INFO
+{
+    ULONG IrpQueueSize;
+    ULONG IrpListHeader;
+    ULONG IrpListEntry;
+    ULONG IrpContext;
+} WDFIRPQUEUE_TRIAGE_INFO, *PWDFIRPQUEUE_TRIAGE_INFO;
+
+typedef struct _WDFREQUEST_TRIAGE_INFO
+{
+    ULONG RequestSize;
+    ULONG CsqContext;
+    ULONG FxIrp;
+    ULONG ListEntryQueueOwned;
+    ULONG ListEntryQueueOwned2;
+    ULONG RequestListEntry;
+    ULONG FwdProgressList;
+} WDFREQUEST_TRIAGE_INFO, *PWDFREQUEST_TRIAGE_INFO;
+
+typedef struct _WDFDEVICE_TRIAGE_INFO
+{
+    ULONG DeviceInitSize;
+    ULONG DeviceDriver;
+} WDFDEVICE_TRIAGE_INFO, *PWDFDEVICE_TRIAGE_INFO;
+
+typedef struct _WDFIRP_TRIAGE_INFO
+{
+    ULONG FxIrpSize;
+    ULONG IrpPtr;
+} WDFIRP_TRIAGE_INFO, *PWDFIRP_TRIAGE_INFO;
+
+typedef struct _WDF_TRIAGE_INFO
+{
+    ULONG WdfMajorVersion;
+    ULONG WdfMinorVersion;
+    ULONG TriageInfoMajorVersion;
+    ULONG TriageInfoMinorVersion;
+    PVOID Reserved;
+    PWDFOBJECT_TRIAGE_INFO WdfObjectTriageInfo;
+    PWDFCONTEXT_TRIAGE_INFO WdfContextTriageInfo;
+    PWDFCONTEXTTYPE_TRIAGE_INFO WdfContextTypeTriageInfo;
+    PWDFQUEUE_TRIAGE_INFO WdfQueueTriageInfo;
+    PWDFFWDPROGRESS_TRIAGE_INFO WdfFwdProgressTriageInfo;
+    PWDFIRPQUEUE_TRIAGE_INFO WdfIrpQueueTriageInfo;
+    PWDFREQUEST_TRIAGE_INFO WdfRequestTriageInfo;
+    PWDFDEVICE_TRIAGE_INFO WdfDeviceTriageInfo;
+    PWDFIRP_TRIAGE_INFO WdfIrpTriageInfo;
+} WDF_TRIAGE_INFO, *PWDF_TRIAGE_INFO;
 
 #endif // _WDFCX_H_

@@ -80,10 +80,10 @@ extern const WDFFUNC *WdfFunctions;
 #include "wdfobject.h"
 
 #include "wdfcore.h"
+#include "wdfdriver.h"
 #include "wdfdevice.h"
 // #include "wdfdevicepri.h"
 // #include "wdfiotargetpri.h"
-#include "wdfdriver.h"
 
 #include "wdfmemory.h"
 

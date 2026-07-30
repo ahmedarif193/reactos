@@ -194,9 +194,9 @@ add_registry_inf(wdf01000_reg.inf)
 
 target_compile_definitions(wdf01000
     PUBLIC WDF_DEVICE_NO_WDMSEC_H
-    PRIVATE FX_CORE_MODE=1 FX_CORE_KERNEL_MODE=1
-    PRIVATE __WDF_MAJOR_VERSION=1 __WDF_MINOR_VERSION=17 __WDF_BUILD_NUMBER=7600
-    PRIVATE __WDF_MAJOR_VERSION_STRING=01
+    PRIVATE FX_CORE_MODE=1 FX_CORE_KERNEL_MODE=1 WDF_EVERYTHING_ALWAYS_AVAILABLE
+    PRIVATE __WDF_MAJOR_VERSION=1 __WDF_MINOR_VERSION=33 __WDF_BUILD_NUMBER=22000
+    PRIVATE __WDF_MAJOR_VERSION_STRING=01 __WDF_MINOR_VERSION_STRING=33
     # wdf01000 is primarily 3rd party code, and we cannot control what crap vendor drivers do
     PRIVATE NO_KERNEL_LIST_ENTRY_CHECKS)
 target_compile_options(wdf01000 PUBLIC # NTDDI_WINBLUE
@@ -204,7 +204,7 @@ target_compile_options(wdf01000 PUBLIC # NTDDI_WINBLUE
     -UNTDDI_VERSION -DNTDDI_VERSION=0x06030000)
 
 target_include_directories(wdf01000
-    PUBLIC ${REACTOS_SOURCE_DIR}/sdk/include/wdf/kmdf/1.17
+    PUBLIC ${REACTOS_SOURCE_DIR}/sdk/include/wdf/kmdf/1.33
     PRIVATE
         ${REACTOS_SOURCE_DIR}/sdk/lib/drivers/wdf/wdfldr
         shared/inc/primitives/common
