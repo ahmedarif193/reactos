@@ -2638,6 +2638,11 @@ protected:
         VOID
         );
 
+    WDF_POWER_DEVICE_STATE
+    GetTargetDevicePowerStateFromPendingDevicePowerDownIrp(
+        VOID
+        );
+
     BOOLEAN
     PowerGotoDxIoStopped(
         VOID

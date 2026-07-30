@@ -129,18 +129,20 @@ public:
     _Must_inspect_result_
     NTSTATUS
     Start(
-        VOID
+        __in WDF_POWER_DEVICE_STATE PreviousState
         )
     {
+        m_DeviceSelfManagedIoRestart.SetPreviousState(PreviousState);
         return ProcessEvent(SelfManagedIoEventStart);
     }
 
     _Must_inspect_result_
     NTSTATUS
     Suspend(
-        VOID
+        __in WDF_POWER_DEVICE_STATE TargetState
         )
     {
+        m_DeviceSelfManagedIoSuspend.SetTargetState(TargetState);
         return ProcessEvent(SelfManagedIoEventSuspend);
     }
 
