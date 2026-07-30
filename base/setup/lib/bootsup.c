@@ -85,13 +85,6 @@ CreateFreeLoaderReactOSEntries(
     Options->OsLoadOptions  = L"/DEBUG /DEBUGPORT=COM1 /BAUDRATE=115200 /SOS";
     AddBootStoreEntry(BootStoreHandle, BootEntry, MAKESTRKEY(L"ReactOS_Debug"));
 
-#ifdef _WINKD_
-    /* ReactOS_VBoxDebug */
-    // BootEntry->BootEntryKey = MAKESTRKEY(L"ReactOS_VBoxDebug");
-    BootEntry->FriendlyName = L"\"ReactOS (VBox Debug)\"";
-    Options->OsLoadOptions  = L"/DEBUG /DEBUGPORT=VBOX /SOS";
-    AddBootStoreEntry(BootStoreHandle, BootEntry, MAKESTRKEY(L"ReactOS_VBoxDebug"));
-#endif
 #if DBG
 #ifndef _WINKD_
     /* ReactOS_KdSerial */
