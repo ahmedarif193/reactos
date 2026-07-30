@@ -78,7 +78,7 @@ static NTSTATUS APIENTRY VidPnTargetModeSet_AddMode(D3DKMDT_HVIDPNTARGETMODESET,
 static NTSTATUS APIENTRY VidPnTargetModeSet_PinMode(D3DKMDT_HVIDPNTARGETMODESET, D3DKMDT_VIDEO_PRESENT_TARGET_MODE_ID);
 
 /* Monitor source mode set interface */
-static NTSTATUS APIENTRY MonitorSourceModeSet_GetNumModes(D3DKMDT_HMONITORSOURCEMODESET, CONST SIZE_T*);
+static NTSTATUS APIENTRY MonitorSourceModeSet_GetNumModes(D3DKMDT_HMONITORSOURCEMODESET, SIZE_T*);
 static NTSTATUS APIENTRY MonitorSourceModeSet_AcquirePreferredModeInfo(D3DKMDT_HMONITORSOURCEMODESET, CONST D3DKMDT_MONITOR_SOURCE_MODE**);
 static NTSTATUS APIENTRY MonitorSourceModeSet_AcquireFirstModeInfo(D3DKMDT_HMONITORSOURCEMODESET, CONST D3DKMDT_MONITOR_SOURCE_MODE**);
 static NTSTATUS APIENTRY MonitorSourceModeSet_AcquireNextModeInfo(D3DKMDT_HMONITORSOURCEMODESET, CONST D3DKMDT_MONITOR_SOURCE_MODE*, CONST D3DKMDT_MONITOR_SOURCE_MODE**);
@@ -99,8 +99,12 @@ static NTSTATUS APIENTRY VidPn_CreateNewTargetModeSet(D3DKMDT_HVIDPN, D3DDDI_VID
 static NTSTATUS APIENTRY VidPn_AssignTargetModeSet(D3DKMDT_HVIDPN, D3DDDI_VIDEO_PRESENT_TARGET_ID, D3DKMDT_HVIDPNTARGETMODESET);
 
 /* Monitor interface */
-static NTSTATUS APIENTRY Monitor_AcquireMonitorSourceModeSet(HANDLE, D3DDDI_VIDEO_PRESENT_TARGET_ID, D3DKMDT_HMONITORSOURCEMODESET*, CONST DXGK_MONITORSOURCEMODESET_INTERFACE**);
-static NTSTATUS APIENTRY Monitor_ReleaseMonitorSourceModeSet(HANDLE, D3DKMDT_HMONITORSOURCEMODESET);
+static NTSTATUS APIENTRY Monitor_AcquireMonitorSourceModeSet(D3DKMDT_ADAPTER, D3DDDI_VIDEO_PRESENT_TARGET_ID, D3DKMDT_HMONITORSOURCEMODESET*, CONST DXGK_MONITORSOURCEMODESET_INTERFACE**);
+static NTSTATUS APIENTRY Monitor_ReleaseMonitorSourceModeSet(D3DKMDT_ADAPTER, D3DKMDT_HMONITORSOURCEMODESET);
+static NTSTATUS APIENTRY Monitor_GetMonitorFrequencyRangeSet(D3DKMDT_ADAPTER, D3DDDI_VIDEO_PRESENT_TARGET_ID, D3DKMDT_HMONITORFREQUENCYRANGESET*, CONST DXGK_MONITORFREQUENCYRANGESET_INTERFACE**);
+static NTSTATUS APIENTRY Monitor_GetMonitorDescriptorSet(D3DKMDT_ADAPTER, D3DDDI_VIDEO_PRESENT_TARGET_ID, D3DKMDT_HMONITORDESCRIPTORSET*, CONST DXGK_MONITORDESCRIPTORSET_INTERFACE**);
+static NTSTATUS APIENTRY Monitor_GetAdditionalMonitorModeSet(D3DKMDT_ADAPTER, D3DDDI_VIDEO_PRESENT_TARGET_ID, UINT*, DXGK_TARGETMODE_DETAIL_TIMING**);
+static NTSTATUS APIENTRY Monitor_ReleaseAdditionalMonitorModeSet(D3DKMDT_ADAPTER, D3DDDI_VIDEO_PRESENT_TARGET_ID, CONST DXGK_TARGETMODE_DETAIL_TIMING*);
 static VOID DxgkpDestroySharedPrimaryLocked(PDXGKRNL_ADAPTER);
 
 /* ========================================================================
@@ -173,31 +177,24 @@ static CONST DXGK_VIDPN_INTERFACE g_VidPnInterface =
     VidPn_AssignTargetModeSet,
 };
 
-typedef struct _DXGKP_MONITOR_INTERFACE
-{
-    DXGK_MONITOR_INTERFACE_VERSION                  Version;
-
-    NTSTATUS (APIENTRY *pfnAcquireMonitorSourceModeSet)(
-        _In_  HANDLE                                        hAdapter,
-        _In_  D3DDDI_VIDEO_PRESENT_TARGET_ID                VideoPresentTargetId,
-        _Out_ D3DKMDT_HMONITORSOURCEMODESET*                phMonitorSourceModeSet,
-        _Out_ CONST DXGK_MONITORSOURCEMODESET_INTERFACE**   ppMonitorSourceModeSetInterface);
-
-    NTSTATUS (APIENTRY *pfnReleaseMonitorSourceModeSet)(
-        _In_ HANDLE                                         hAdapter,
-        _In_ D3DKMDT_HMONITORSOURCEMODESET                  hMonitorSourceModeSet);
-
-    PVOID                                                  pfnGetMonitorFrequencyRangeSet;
-    PVOID                                                  pfnGetMonitorDescriptorSet;
-} DXGKP_MONITOR_INTERFACE;
-
-static CONST DXGKP_MONITOR_INTERFACE g_MonitorInterface =
+static CONST DXGK_MONITOR_INTERFACE g_MonitorInterfaceV1 =
 {
     DXGK_MONITOR_INTERFACE_VERSION_V1,
     Monitor_AcquireMonitorSourceModeSet,
     Monitor_ReleaseMonitorSourceModeSet,
-    NULL,
-    NULL,
+    Monitor_GetMonitorFrequencyRangeSet,
+    Monitor_GetMonitorDescriptorSet,
+};
+
+static CONST DXGK_MONITOR_INTERFACE_V2 g_MonitorInterfaceV2 =
+{
+    DXGK_MONITOR_INTERFACE_VERSION_V2,
+    Monitor_AcquireMonitorSourceModeSet,
+    Monitor_ReleaseMonitorSourceModeSet,
+    Monitor_GetMonitorFrequencyRangeSet,
+    Monitor_GetMonitorDescriptorSet,
+    Monitor_GetAdditionalMonitorModeSet,
+    Monitor_ReleaseAdditionalMonitorModeSet,
 };
 
 /* ========================================================================
@@ -2118,9 +2115,9 @@ DxgkVidPnRebuildForHotPlug(
 NTSTATUS
 APIENTRY
 DxgkCbQueryVidPnInterface(
-    _In_  D3DKMDT_HVIDPN                       hVidPn,
-    _In_  DXGK_VIDPN_INTERFACE_VERSION         VidPnInterfaceVersion,
-    _Out_ CONST DXGK_VIDPN_INTERFACE**         ppVidPnInterface)
+    IN_CONST_D3DKMDT_HVIDPN hVidPn,
+    IN_CONST_DXGK_VIDPN_INTERFACE_VERSION VidPnInterfaceVersion,
+    DEREF_OUT_CONST_PPDXGK_VIDPN_INTERFACE ppVidPnInterface)
 {
     PDXGKP_VIDPN VidPn;
 
@@ -2136,13 +2133,14 @@ DxgkCbQueryVidPnInterface(
     if (VidPn == NULL)
     {
         DXGKRNL_ERR("DxgkCbQueryVidPnInterface: invalid hVidPn %p\n", hVidPn);
-        return STATUS_INVALID_PARAMETER;
+        return STATUS_GRAPHICS_INVALID_VIDPN;
     }
 
     if (VidPnInterfaceVersion != DXGK_VIDPN_INTERFACE_VERSION_V1)
     {
-        DXGKRNL_WARN("DxgkCbQueryVidPnInterface: unsupported version %d, "
-                     "returning V1\n", VidPnInterfaceVersion);
+        DXGKRNL_WARN("DxgkCbQueryVidPnInterface: unsupported version %d\n",
+                     VidPnInterfaceVersion);
+        return STATUS_NOT_SUPPORTED;
     }
 
     *ppVidPnInterface = &g_VidPnInterface;
@@ -2152,9 +2150,9 @@ DxgkCbQueryVidPnInterface(
 NTSTATUS
 APIENTRY
 DxgkCbQueryMonitorInterface(
-    _In_  HANDLE                               hAdapter,
-    _In_  UINT                                 MonitorInterfaceVersion,
-    _Out_ PVOID*                               ppMonitorInterface)
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_DXGK_MONITOR_INTERFACE_VERSION MonitorInterfaceVersion,
+    DEREF_OUT_CONST_PPDXGK_MONITOR_INTERFACE ppMonitorInterface)
 {
     DXGKRNL_TRACE("DxgkCbQueryMonitorInterface: hAdapter=%p version=%u\n",
                   hAdapter, MonitorInterfaceVersion);
@@ -2170,8 +2168,22 @@ DxgkCbQueryMonitorInterface(
         return STATUS_INVALID_PARAMETER;
     }
 
-    *ppMonitorInterface = (PVOID)&g_MonitorInterface;
-    return STATUS_SUCCESS;
+    switch (MonitorInterfaceVersion)
+    {
+        case DXGK_MONITOR_INTERFACE_VERSION_V1:
+            *ppMonitorInterface = &g_MonitorInterfaceV1;
+            return STATUS_SUCCESS;
+
+        case DXGK_MONITOR_INTERFACE_VERSION_V2:
+            *ppMonitorInterface =
+                (CONST DXGK_MONITOR_INTERFACE *)&g_MonitorInterfaceV2;
+            return STATUS_SUCCESS;
+
+        default:
+            DXGKRNL_WARN("DxgkCbQueryMonitorInterface: unsupported version %u\n",
+                         MonitorInterfaceVersion);
+            return STATUS_NOT_SUPPORTED;
+    }
 }
 
 /* ========================================================================
@@ -3247,7 +3259,7 @@ VidPnTargetModeSet_PinMode(
 static NTSTATUS APIENTRY
 MonitorSourceModeSet_GetNumModes(
     _In_  D3DKMDT_HMONITORSOURCEMODESET              hMonitorSourceModeSet,
-    _Out_ CONST SIZE_T*                              pNumModes)
+    _Out_ SIZE_T*                                    pNumModes)
 {
     PDXGKP_MONITOR_SOURCE_MODESET ModeSet;
 
@@ -3258,7 +3270,7 @@ MonitorSourceModeSet_GetNumModes(
     if (ModeSet == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    *(SIZE_T*)pNumModes = ModeSet->NumModes;
+    *pNumModes = ModeSet->NumModes;
     return STATUS_SUCCESS;
 }
 
@@ -3445,7 +3457,7 @@ MonitorSourceModeSet_ReleaseModeInfo(
 
 static NTSTATUS APIENTRY
 Monitor_AcquireMonitorSourceModeSet(
-    _In_  HANDLE                                       hAdapter,
+    _In_  D3DKMDT_ADAPTER                              hAdapter,
     _In_  D3DDDI_VIDEO_PRESENT_TARGET_ID               VideoPresentTargetId,
     _Out_ D3DKMDT_HMONITORSOURCEMODESET*               phMonitorSourceModeSet,
     _Out_ CONST DXGK_MONITORSOURCEMODESET_INTERFACE**  ppMonitorSourceModeSetInterface)
@@ -3486,7 +3498,7 @@ Monitor_AcquireMonitorSourceModeSet(
 
 static NTSTATUS APIENTRY
 Monitor_ReleaseMonitorSourceModeSet(
-    _In_ HANDLE                                        hAdapter,
+    _In_ D3DKMDT_ADAPTER                               hAdapter,
     _In_ D3DKMDT_HMONITORSOURCEMODESET                 hMonitorSourceModeSet)
 {
     PDXGKP_MONITOR_SOURCE_MODESET ModeSet = DxgkpMonitorModeSetFromHandle(hMonitorSourceModeSet);
@@ -3495,6 +3507,83 @@ Monitor_ReleaseMonitorSourceModeSet(
         return STATUS_INVALID_PARAMETER;
     DxgkVidPnDestroy((D3DKMDT_HVIDPN)ModeSet->Owner);
     return STATUS_SUCCESS;
+}
+
+static NTSTATUS APIENTRY
+Monitor_GetMonitorFrequencyRangeSet(
+    _In_ D3DKMDT_ADAPTER hAdapter,
+    _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID VideoPresentTargetId,
+    _Out_ D3DKMDT_HMONITORFREQUENCYRANGESET *phMonitorFrequencyRangeSet,
+    _Out_ CONST DXGK_MONITORFREQUENCYRANGESET_INTERFACE
+        **ppMonitorFrequencyRangeSetInterface)
+{
+    UNREFERENCED_PARAMETER(hAdapter);
+    UNREFERENCED_PARAMETER(VideoPresentTargetId);
+
+    if (phMonitorFrequencyRangeSet == NULL ||
+        ppMonitorFrequencyRangeSetInterface == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    *phMonitorFrequencyRangeSet = NULL;
+    *ppMonitorFrequencyRangeSetInterface = NULL;
+    return STATUS_NOT_SUPPORTED;
+}
+
+static NTSTATUS APIENTRY
+Monitor_GetMonitorDescriptorSet(
+    _In_ D3DKMDT_ADAPTER hAdapter,
+    _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID VideoPresentTargetId,
+    _Out_ D3DKMDT_HMONITORDESCRIPTORSET *phMonitorDescriptorSet,
+    _Out_ CONST DXGK_MONITORDESCRIPTORSET_INTERFACE
+        **ppMonitorDescriptorSetInterface)
+{
+    UNREFERENCED_PARAMETER(hAdapter);
+    UNREFERENCED_PARAMETER(VideoPresentTargetId);
+
+    if (phMonitorDescriptorSet == NULL ||
+        ppMonitorDescriptorSetInterface == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    *phMonitorDescriptorSet = NULL;
+    *ppMonitorDescriptorSetInterface = NULL;
+    return STATUS_NOT_SUPPORTED;
+}
+
+static NTSTATUS APIENTRY
+Monitor_GetAdditionalMonitorModeSet(
+    _In_ D3DKMDT_ADAPTER hAdapter,
+    _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID VideoPresentTargetId,
+    _Out_ UINT *pNumberModes,
+    _Out_ DXGK_TARGETMODE_DETAIL_TIMING **ppAdditionalModesSet)
+{
+    UNREFERENCED_PARAMETER(hAdapter);
+    UNREFERENCED_PARAMETER(VideoPresentTargetId);
+
+    if (pNumberModes == NULL || ppAdditionalModesSet == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    *pNumberModes = 0;
+    *ppAdditionalModesSet = NULL;
+    return STATUS_NOT_SUPPORTED;
+}
+
+static NTSTATUS APIENTRY
+Monitor_ReleaseAdditionalMonitorModeSet(
+    _In_ D3DKMDT_ADAPTER hAdapter,
+    _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID VideoPresentTargetId,
+    _In_ CONST DXGK_TARGETMODE_DETAIL_TIMING *pAdditionalModesSet)
+{
+    UNREFERENCED_PARAMETER(hAdapter);
+    UNREFERENCED_PARAMETER(VideoPresentTargetId);
+
+    if (pAdditionalModesSet == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    return STATUS_NOT_SUPPORTED;
 }
 
 /* ========================================================================
@@ -3730,6 +3819,21 @@ DxgkpEnsureSharedShadowSurfaceLocked(
         goto Cleanup;
 
     Status = DxgkVidMmReferenceAllocation(AllocationHandle, Adapter, NULL, &Allocation);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    /*
+     * ShadowFb remains a live CPU alias until the shared-surface generation is
+     * destroyed. Pin the placement before mapping it so VidMm cannot reuse the
+     * slab range behind that alias.
+     */
+    if (!Allocation->Resident)
+    {
+        Status = DxgkVidMmMakeResident(Allocation, Adapter);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+    }
+    Status = DxgkVidMmAcquireDeviceResidencyReference(Allocation, NULL);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
 
@@ -3975,6 +4079,21 @@ DxgkpEnsureSharedPrimaryLocked(
     }
 
     Status = DxgkVidMmReferenceAllocation(AllocationHandle, Adapter, NULL, &Allocation);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    /*
+     * The shared primary is the retirement destination and may also be
+     * CPU-mapped by the display path. Pin it before any mapping is published;
+     * allocation destruction drains this lifetime reference.
+     */
+    if (!Allocation->Resident)
+    {
+        Status = DxgkVidMmMakeResident(Allocation, Adapter);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+    }
+    Status = DxgkVidMmAcquireDeviceResidencyReference(Allocation, NULL);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
 

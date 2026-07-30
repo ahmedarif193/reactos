@@ -50,7 +50,8 @@ DxgkContextRenderTeardown(
     {
         if (Context->RenderRingProcess != NULL && Context->RenderRingProcess != PsGetCurrentProcess())
         {
-            KeStackAttachProcess(Context->RenderRingProcess, &ApcState);
+            KeStackAttachProcess((PKPROCESS)Context->RenderRingProcess,
+                                 &ApcState);
             Attached = TRUE;
         }
         MmUnmapLockedPages(Context->RenderRingUser, Context->RenderRingMdl);
@@ -677,6 +678,14 @@ DxgkPresent(
      */
     if (pPresent->Flags.Flip)
     {
+        if (pPresent->Flags.Blt ||
+            pPresent->Flags.ColorFill ||
+            Entry.hSource == 0 ||
+            Entry.hDestination != 0)
+        {
+            DxgkpReleasePresentEntry(&Entry);
+            return STATUS_INVALID_PARAMETER;
+        }
         Entry.Type = DxgkPresentTypeFlip;
     }
     else if (pPresent->Flags.ColorFill)
@@ -687,6 +696,93 @@ DxgkPresent(
     {
         /* Default to blit present (covers Blt flag and unset flags). */
         Entry.Type = DxgkPresentTypeBlt;
+    }
+
+    /*
+     * KMT rectangles are in source space, while DxgkDdiPresent consumes
+     * destination-space rectangles.  Snapshot them now because this present
+     * may remain queued after the caller's buffer goes away.
+     */
+    if (pPresent->SubRectCnt != 0)
+    {
+        SIZE_T SubRectBytes;
+
+        if (pPresent->pSrcSubRects == NULL)
+        {
+            DxgkpReleasePresentEntry(&Entry);
+            return STATUS_INVALID_PARAMETER;
+        }
+        if (pPresent->SubRectCnt > DXGK_PRESENT_CORE_MAX_SUBRECTS)
+        {
+            DxgkpReleasePresentEntry(&Entry);
+            return STATUS_NOT_SUPPORTED;
+        }
+        if (Entry.Type == DxgkPresentTypeFlip)
+        {
+            DxgkpReleasePresentEntry(&Entry);
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        SubRectBytes =
+            (SIZE_T)pPresent->SubRectCnt * sizeof(Entry.DstSubRects[0]);
+        Entry.DstSubRects = ExAllocatePoolWithTag(
+                                NonPagedPool,
+                                SubRectBytes,
+                                TAG_DXGK_PRESENT);
+        if (Entry.DstSubRects == NULL)
+        {
+            DxgkpReleasePresentEntry(&Entry);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        _SEH2_TRY
+        {
+            RtlCopyMemory(Entry.DstSubRects,
+                          pPresent->pSrcSubRects,
+                          SubRectBytes);
+            Status = STATUS_SUCCESS;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+        if (!NT_SUCCESS(Status))
+        {
+            DxgkpReleasePresentEntry(&Entry);
+            return Status;
+        }
+
+        if (Entry.Type == DxgkPresentTypeColorFill)
+        {
+            Status = DxgkPresentCoreCopyDestinationSubRects(
+                         &Entry.DstRect,
+                         Entry.DstSubRects,
+                         pPresent->SubRectCnt,
+                         Entry.DstSubRects,
+                         pPresent->SubRectCnt);
+        }
+        else
+        {
+            Status = DxgkPresentCoreMapSourceSubRects(
+                         &Entry.SrcRect,
+                         &Entry.DstRect,
+                         Entry.DstSubRects,
+                         pPresent->SubRectCnt,
+                         Entry.DstSubRects,
+                         pPresent->SubRectCnt);
+        }
+        if (!NT_SUCCESS(Status))
+        {
+            DxgkpReleasePresentEntry(&Entry);
+            return Status;
+        }
+        Entry.DstSubRectCount = pPresent->SubRectCnt;
+    }
+    else if (pPresent->pSrcSubRects != NULL)
+    {
+        DxgkpReleasePresentEntry(&Entry);
+        return STATUS_INVALID_PARAMETER;
     }
 
     /*
@@ -773,8 +869,16 @@ DxgkPresent(
     Entry.SourceIsSharedShadow = Entry.SourceAllocation != NULL && Entry.SourceAllocation == Entry.SharedSurface.ShadowAllocation;
     Entry.DestinationIsSharedPrimary = Entry.DestinationAllocation != NULL && Entry.DestinationAllocation == Entry.SharedSurface.PrimaryAllocation;
     Entry.DestinationIsSharedShadow = Entry.DestinationAllocation != NULL && Entry.DestinationAllocation == Entry.SharedSurface.ShadowAllocation;
-    if (!Adapter->MiniportContext->IsDisplayOnlyDriver && Entry.SharedSurface.ShadowFb == NULL && !Entry.SourceIsSharedPrimary && !Entry.SourceIsSharedShadow && !Entry.DestinationIsSharedPrimary && !Entry.DestinationIsSharedShadow)
+    if (!Adapter->MiniportContext->IsDisplayOnlyDriver &&
+        Entry.Type != DxgkPresentTypeFlip &&
+        Entry.SharedSurface.ShadowFb == NULL &&
+        !Entry.SourceIsSharedPrimary &&
+        !Entry.SourceIsSharedShadow &&
+        !Entry.DestinationIsSharedPrimary &&
+        !Entry.DestinationIsSharedShadow)
+    {
         DxgkpReleaseSharedSurfaceSnapshot(&Entry.SharedSurface);
+    }
 
     /* --- Submit to the present queue ----------------------------------- */
 

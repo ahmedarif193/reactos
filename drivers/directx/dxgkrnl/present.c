@@ -51,7 +51,6 @@
 
 #define DXGK_PRESENT_EXEC_LOG_LIMIT  32
 #define DXGK_PRESENT_EXEC_SLOW_US    5000ULL
-#define DXGK_PRESENT_IMMEDIATE_DMA_BYTES  0x1000
 #define DXGK_PRESENT_TRACE_BURST     8
 #define DXGK_PRESENT_TRACE_PERIOD    128
 
@@ -111,28 +110,6 @@ DxgkpWaitForPresentQueues(
 }
 
 #if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
-static inline BOOLEAN
-DxgkpDwmRefreshTargetReached(
-    _In_ ULONG CurrentRefreshCount,
-    _In_ ULONG TargetRefreshCount)
-{
-    return (LONG)(CurrentRefreshCount - TargetRefreshCount) >= 0;
-}
-
-static inline BOOLEAN
-DxgkpDwmRefreshTargetShouldSignalImmediately(
-    _In_ ULONG CurrentRefreshCount,
-    _In_ ULONG TargetRefreshCount)
-{
-    /*
-     * Zero means the next vertical blank, even when the current count has
-     * already advanced. Other targets use 32-bit serial-number arithmetic.
-     */
-    return TargetRefreshCount != 0 &&
-           DxgkpDwmRefreshTargetReached(CurrentRefreshCount,
-                                        TargetRefreshCount);
-}
-
 static NTSTATUS
 DxgkpCreateDwmVBlankEvent(
     _Outptr_ PKEVENT *Event)
@@ -195,8 +172,9 @@ DxgkpSignalQueueVBlankWaiters(
     if (Queue->DwmVBlankEvent != NULL &&
         (Force ||
          (Queue->DwmVBlankTargetArmed &&
-          DxgkpDwmRefreshTargetReached((ULONG)VBlankCount,
-                                       Queue->DwmVBlankTarget))))
+          DxgkPresentCoreRefreshTargetReached(
+              (ULONG)VBlankCount,
+              Queue->DwmVBlankTarget))))
     {
         Queue->DwmVBlankTargetArmed = FALSE;
         KeSetEvent(Queue->DwmVBlankEvent, IO_NO_INCREMENT, FALSE);
@@ -422,9 +400,10 @@ DxgkPresentOpenDwmVBlankEvent(
     }
 
     /*
-     * Without OBJ_KERNEL_HANDLE, ObOpenObjectByPointer creates a normal
-     * handle in the requesting process. Grant only wait access so user mode
-     * cannot spoof a vertical blank by signaling the kernel-owned event.
+     * HandleAttributes, rather than AccessMode, selects the handle table.
+     * With attributes zero this creates a normal wait-only handle in the
+     * requesting process; KernelMode authorizes the kernel-owned unnamed
+     * event without letting user mode signal it.
      */
     Status = ObOpenObjectByPointer(Queue->DwmVBlankEvent,
                                    0,
@@ -483,7 +462,7 @@ DxgkPresentSetSyncRefreshCountWaitTarget(
         KeClearEvent(Queue->DwmVBlankEvent);
         Queue->DwmVBlankTarget = TargetSyncRefreshCount;
         Queue->DwmVBlankTargetArmed = TRUE;
-        if (DxgkpDwmRefreshTargetShouldSignalImmediately(
+        if (DxgkPresentCoreRefreshTargetShouldSignalImmediately(
                 (ULONG)VBlankCount,
                 TargetSyncRefreshCount))
         {
@@ -527,6 +506,8 @@ DxgkpReleasePresentEntry(
     Entry->DeviceWork = NULL;
     if (Entry->Device != NULL)
         DxgkDereferenceDevice(Entry->Device);
+    if (Entry->DstSubRects != NULL)
+        ExFreePoolWithTag(Entry->DstSubRects, TAG_DXGK_PRESENT);
     Entry->DestinationAllocation = NULL;
     Entry->SourceAllocation = NULL;
     Entry->DestinationOpenBindingReference = NULL;
@@ -535,6 +516,8 @@ DxgkpReleasePresentEntry(
     Entry->SourceOpenBindingHandle = NULL;
     Entry->Context = NULL;
     Entry->Device = NULL;
+    Entry->DstSubRects = NULL;
+    Entry->DstSubRectCount = 0;
     DxgkpReleaseSharedSurfaceSnapshot(&Entry->SharedSurface);
     Entry->SourceIsSharedPrimary = FALSE;
     Entry->SourceIsSharedShadow = FALSE;
@@ -1071,6 +1054,15 @@ DxgkpRefreshSharedPrimaryScanout(
         return STATUS_NOT_SUPPORTED;
     }
 
+    if (!DxgkPresentCoreIsFullDestinationRegion(
+             &Entry->DstRect,
+             Entry->DstSubRects,
+             Entry->DstSubRectCount))
+    {
+        *Handled = TRUE;
+        return STATUS_NOT_SUPPORTED;
+    }
+
     Allocation = Entry->SourceAllocation;
     if (Allocation == NULL || Allocation->Adapter != Adapter)
         return STATUS_INVALID_HANDLE;
@@ -1405,11 +1397,12 @@ DxgkpExecuteDodPresent(
     if (PfnPresent == NULL)
         return STATUS_NOT_SUPPORTED;
 
-    /* Build a full-screen dirty rect. */
-    DirtyRect.left   = 0;
-    DirtyRect.top    = 0;
-    DirtyRect.right  = (LONG)Entry->SharedSurface.CommittedWidth;
-    DirtyRect.bottom = (LONG)Entry->SharedSurface.CommittedHeight;
+    if (Entry->DstSubRectCount == 0)
+    {
+        DirtyRect = Entry->DstRect;
+        if (!DxgkPresentCoreRectValid(&DirtyRect))
+            return STATUS_INVALID_PARAMETER;
+    }
 
     ASSERT(Entry->SharedSurface.ShadowFbPitch != 0);
     ShadowPitch = (LONG)(Entry->SharedSurface.ShadowFbPitch != 0 ? Entry->SharedSurface.ShadowFbPitch : (Entry->SharedSurface.CommittedWidth * 4));
@@ -1424,8 +1417,12 @@ DxgkpExecuteDodPresent(
     PresentArgs.Flags.Value   = 0;
     PresentArgs.NumMoves      = 0;
     PresentArgs.pMoves        = NULL;
-    PresentArgs.NumDirtyRects = 1;
-    PresentArgs.pDirtyRect    = &DirtyRect;
+    PresentArgs.NumDirtyRects = Entry->DstSubRectCount != 0
+                                    ? Entry->DstSubRectCount
+                                    : 1;
+    PresentArgs.pDirtyRect    = Entry->DstSubRectCount != 0
+                                    ? Entry->DstSubRects
+                                    : &DirtyRect;
     PresentArgs.pfnPresentDisplayOnlyProgress = NULL;
 
     if (!DxgkBeginKmdTransaction(Adapter))
@@ -1606,6 +1603,14 @@ DxgkpExecuteCpuPresent(
 
     *Handled = TRUE;
 
+    if (!DxgkPresentCoreIsFullDestinationRegion(
+             &Entry->DstRect,
+             Entry->DstSubRects,
+             Entry->DstSubRectCount))
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
     if (Entry->hDestination != 0)
     {
         DestinationAllocation = Entry->DestinationAllocation;
@@ -1666,8 +1671,9 @@ DxgkpExecuteFullPresent(
     _In_ PDXGKRNL_PRESENT_ENTRY  Entry)
 {
     DXGKARG_PRESENT PresentArgs;
-    DXGK_ALLOCATIONLIST PresentAllocationList[DXGK_PRESENT_DESTINATION_INDEX + 1];
-    D3DDDI_PATCHLOCATIONLIST PatchLocationList[DXGK_PRESENT_DESTINATION_INDEX];
+    PDXGK_ALLOCATIONLIST PresentAllocationList = NULL;
+    D3DDDI_PATCHLOCATIONLIST PatchLocationList[VIDSCH_INLINE_PATCHES];
+    DXGK_PRESENT_DMA_GEOMETRY DmaGeometry;
     RECT DstSubRect;
     HANDLE SourceDeviceSpecificHandle = NULL;
     HANDLE DestinationDeviceSpecificHandle = NULL;
@@ -1682,6 +1688,8 @@ DxgkpExecuteFullPresent(
     PDXGKRNL_SUBMIT_DMA_BUFFER Reservation = NULL;
     DXGKRNL_TRACK_DMA_ARGS TrackArgs;
     PVOID DmaBufferPrivateData = NULL;
+    ULONG DmaBufferPrivateDataSize = 0;
+    SIZE_T PresentAllocationListBytes = 0;
     ULONG SubmissionFenceId = 0;
     UINT DmaBytesUsed = 0;
     BOOLEAN PresentBindingsTracked = FALSE;
@@ -1725,7 +1733,6 @@ DxgkpExecuteFullPresent(
     }
 
     RtlZeroMemory(&PresentArgs, sizeof(PresentArgs));
-    RtlZeroMemory(PresentAllocationList, sizeof(PresentAllocationList));
     RtlZeroMemory(PresentBindingReferences, sizeof(PresentBindingReferences));
 
     MiniportDeviceHandle = Device->hMiniportDevice;
@@ -1764,6 +1771,45 @@ DxgkpExecuteFullPresent(
             goto PresentCleanup;
     }
 
+    if (Context != NULL)
+    {
+        Status = DxgkPresentDmaCoreSelectGeometry(
+                     TRUE,
+                     Context->ContextInfo.DmaBufferSize,
+                     Context->ContextInfo.DmaBufferSegmentSet,
+                     Context->ContextInfo.DmaBufferPrivateDataSize,
+                     Context->ContextInfo.AllocationListSize,
+                     Context->ContextInfo.PatchLocationListSize,
+                     VIDSCH_INLINE_PATCHES,
+                     &DmaGeometry);
+    }
+    else if (Device->LegacyDeviceInfoValid)
+    {
+        Status = DxgkPresentDmaCoreSelectGeometry(
+                     TRUE,
+                     Device->LegacyDeviceInfo.DmaBufferSize,
+                     Device->LegacyDeviceInfo.DmaBufferSegmentSet,
+                     Device->LegacyDeviceInfo.DmaBufferPrivateDataSize,
+                     Device->LegacyDeviceInfo.AllocationListSize,
+                     Device->LegacyDeviceInfo.PatchLocationListSize,
+                     VIDSCH_INLINE_PATCHES,
+                     &DmaGeometry);
+    }
+    else
+    {
+        Status = DxgkPresentDmaCoreSelectGeometry(
+                     FALSE,
+                     0,
+                     0,
+                     0,
+                     0,
+                     0,
+                     VIDSCH_INLINE_PATCHES,
+                     &DmaGeometry);
+    }
+    if (!NT_SUCCESS(Status))
+        goto PresentCleanup;
+
     if (Entry->hSource != 0 && (Entry->SourceAllocation == NULL || Entry->SourceAllocation->MiniportHandle == NULL))
     {
         Status = STATUS_NOT_SUPPORTED;
@@ -1787,6 +1833,27 @@ DxgkpExecuteFullPresent(
 
         goto PresentCleanup;
     }
+
+    Status = DxgkPresentDmaCoreAllocationListBytes(
+                 DmaGeometry.AllocationListSize,
+                 sizeof(PresentAllocationList[0]),
+                 &PresentAllocationListBytes);
+    if (!NT_SUCCESS(Status))
+        goto PresentCleanup;
+    PresentAllocationList = ExAllocatePoolWithTag(
+                                NonPagedPool,
+                                PresentAllocationListBytes,
+                                TAG_DXGK_PRESENT);
+    if (PresentAllocationList == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto PresentCleanup;
+    }
+    Status = DxgkPresentDmaCoreInitializeAllocationList(
+                 PresentAllocationList,
+                 PresentAllocationListBytes);
+    if (!NT_SUCCESS(Status))
+        goto PresentCleanup;
 
     /*
      * Present uses an allocation list where slot 0 is always reserved.
@@ -1861,23 +1928,43 @@ DxgkpExecuteFullPresent(
                       Entry->DstRect.bottom);
     }
 
-    Status = DxgkAllocateDmaBuffer(Adapter, DXGK_PRESENT_IMMEDIATE_DMA_BYTES, &DmaBuffer);
+    Status = DxgkAllocateDmaBuffer(Adapter, DmaGeometry.DmaBufferSize, &DmaBuffer);
     if (!NT_SUCCESS(Status))
     {
         DXGKRNL_WARN("DxgkpExecuteFullPresent: DMA buffer alloc failed\n");
         goto PresentCleanup;
     }
 
+    DmaBufferPrivateDataSize = DmaGeometry.DmaBufferPrivateDataSize;
+    if (DmaBufferPrivateDataSize != 0)
+    {
+        DmaBufferPrivateData = ExAllocatePoolWithTag(
+                                   NonPagedPool,
+                                   DmaBufferPrivateDataSize,
+                                   TAG_DXGK_SUBMITDMA);
+        if (DmaBufferPrivateData == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto PresentCleanup;
+        }
+    }
+    Status = DxgkPresentDmaCoreInitializePrivateData(
+                 DmaBufferPrivateData,
+                 DmaBufferPrivateDataSize);
+    if (!NT_SUCCESS(Status))
+        goto PresentCleanup;
+
     RtlZeroMemory(PatchLocationList, sizeof(PatchLocationList));
-    DstSubRect = Entry->DstRect;
+    if (Entry->DstSubRectCount == 0)
+        DstSubRect = Entry->DstRect;
 
     PresentArgs.pDmaBuffer            = DmaBuffer->VirtualAddress;
-    PresentArgs.DmaSize               = DXGK_PRESENT_IMMEDIATE_DMA_BYTES;
-    PresentArgs.pDmaBufferPrivateData = &DmaBufferPrivateData;
-    PresentArgs.DmaBufferPrivateDataSize = sizeof(DmaBufferPrivateData);
+    PresentArgs.DmaSize               = DmaGeometry.DmaBufferSize;
+    PresentArgs.pDmaBufferPrivateData = DmaBufferPrivateData;
+    PresentArgs.DmaBufferPrivateDataSize = DmaBufferPrivateDataSize;
     PresentArgs.pAllocationList       = PresentAllocationList;
     PresentArgs.pPatchLocationListOut = PatchLocationList;
-    PresentArgs.PatchLocationListOutSize = RTL_NUMBER_OF(PatchLocationList);
+    PresentArgs.PatchLocationListOutSize = DmaGeometry.PatchLocationListSize;
     PresentArgs.MultipassOffset       = 0;
     PresentArgs.DmaBufferSegmentId    = DmaBuffer->SegmentId;
     PresentArgs.DmaBufferPhysicalAddress = DmaBuffer->SegmentAddress;
@@ -1890,8 +1977,12 @@ DxgkpExecuteFullPresent(
     /* Source and destination rectangles. */
     PresentArgs.SrcRect      = Entry->SrcRect;
     PresentArgs.DstRect      = Entry->DstRect;
-    PresentArgs.SubRectCnt   = 1;
-    PresentArgs.pDstSubRects = &DstSubRect;
+    PresentArgs.SubRectCnt   = Entry->DstSubRectCount != 0
+                                   ? Entry->DstSubRectCount
+                                   : 1;
+    PresentArgs.pDstSubRects = Entry->DstSubRectCount != 0
+                                   ? Entry->DstSubRects
+                                   : &DstSubRect;
 
     /* Map the present type to miniport flags. */
     PresentArgs.Flags.Value = 0;
@@ -1929,12 +2020,28 @@ DxgkpExecuteFullPresent(
     _SEH2_END;
     DxgkReleaseKmdCall(Adapter);
 
-    if (NT_SUCCESS(Status) && PresentArgs.pDmaBuffer != NULL && (PUCHAR)PresentArgs.pDmaBuffer >= (PUCHAR)DmaBuffer->VirtualAddress && (PUCHAR)PresentArgs.pDmaBuffer <= (PUCHAR)DmaBuffer->VirtualAddress + DmaBuffer->Capacity)
+    if (NT_SUCCESS(Status) &&
+        (PresentArgs.pDmaBufferPrivateData != DmaBufferPrivateData ||
+         PresentArgs.DmaBufferPrivateDataSize != DmaBufferPrivateDataSize))
     {
-        DmaBytesUsed = (UINT)((PUCHAR)PresentArgs.pDmaBuffer - (PUCHAR)DmaBuffer->VirtualAddress);
+        Status = STATUS_INVALID_PARAMETER;
     }
-    if (NT_SUCCESS(Status) && DmaBytesUsed > DmaBuffer->Capacity)
-        Status = STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+    if (NT_SUCCESS(Status))
+    {
+        ULONG_PTR DmaBufferStart = (ULONG_PTR)DmaBuffer->VirtualAddress;
+        ULONG_PTR DmaBufferNext = (ULONG_PTR)PresentArgs.pDmaBuffer;
+
+        if (PresentArgs.pDmaBuffer == NULL ||
+            DmaBufferNext < DmaBufferStart ||
+            DmaBufferNext - DmaBufferStart > DmaBuffer->Capacity)
+        {
+            Status = STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+        }
+        else
+        {
+            DmaBytesUsed = (UINT)(DmaBufferNext - DmaBufferStart);
+        }
+    }
     if (NT_SUCCESS(Status) && DmaBytesUsed == 0)
         Status = STATUS_NOT_SUPPORTED;
     if (NT_SUCCESS(Status) && DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommand) == NULL)
@@ -1953,24 +2060,68 @@ DxgkpExecuteFullPresent(
         PDXGKRNL_SUBMIT_DMA_BUFFER CommittedReservation;
         ULONG VidSchFence = 0;
         UINT PatchEntries;
+        UINT PatchIndex;
+        DXGK_PRESENT_SCANOUT_RETIRE_POLICY
+            ScanoutRetirePolicy;
+        BOOLEAN TrackSourceScanout;
         BOOLEAN TrackRefresh;
 
         PatchEntries = 0;
         if (PresentArgs.pPatchLocationListOut != NULL)
         {
-            if (PresentArgs.pPatchLocationListOut < PatchLocationList || (SIZE_T)(PresentArgs.pPatchLocationListOut - PatchLocationList) > RTL_NUMBER_OF(PatchLocationList))
+            ULONG_PTR PatchListStart = (ULONG_PTR)PatchLocationList;
+            ULONG_PTR PatchListNext =
+                (ULONG_PTR)PresentArgs.pPatchLocationListOut;
+            SIZE_T PatchBytes =
+                (SIZE_T)DmaGeometry.PatchLocationListSize *
+                sizeof(PatchLocationList[0]);
+
+            if (PatchListNext < PatchListStart ||
+                PatchListNext - PatchListStart > PatchBytes ||
+                ((PatchListNext - PatchListStart) %
+                    sizeof(PatchLocationList[0])) != 0)
             {
                 Status = STATUS_INVALID_PARAMETER;
                 goto PresentSubmissionDone;
             }
-            PatchEntries = (UINT)(PresentArgs.pPatchLocationListOut - PatchLocationList);
+            PatchEntries = (UINT)((PatchListNext - PatchListStart) /
+                                  sizeof(PatchLocationList[0]));
+        }
+        for (PatchIndex = 0; PatchIndex < PatchEntries; ++PatchIndex)
+        {
+            UINT AllocationIndex =
+                PatchLocationList[PatchIndex].AllocationIndex;
+
+            if (AllocationIndex == 0 ||
+                AllocationIndex > DXGK_PRESENT_MAX_INDEX ||
+                (AllocationIndex == DXGK_PRESENT_SOURCE_INDEX &&
+                 SourceDeviceSpecificHandle == NULL) ||
+                (AllocationIndex == DXGK_PRESENT_DESTINATION_INDEX &&
+                 DestinationDeviceSpecificHandle == NULL))
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                goto PresentSubmissionDone;
+            }
         }
 
         SubmitFlags.Value = 0;
         SubmitFlags.Present = 1;
         if (Entry->Type == DxgkPresentTypeFlip)
             SubmitFlags.Flip = 1;
-        TrackRefresh = Entry->Type == DxgkPresentTypeBlt && Entry->hDestination != 0 && Entry->DestinationIsSharedPrimary;
+        Status = DxgkPresentCoreEvaluateScanoutRetirement(
+                     Entry->Type == DxgkPresentTypeFlip,
+                     Entry->Type == DxgkPresentTypeBlt ||
+                         Entry->Type == DxgkPresentTypeColorFill,
+                     Entry->hSource != 0,
+                     Entry->hDestination != 0,
+                     Entry->DestinationIsSharedPrimary,
+                     &ScanoutRetirePolicy);
+        if (!NT_SUCCESS(Status))
+            goto PresentSubmissionDone;
+        TrackRefresh =
+            ScanoutRetirePolicy.RefreshSharedPrimary;
+        TrackSourceScanout =
+            ScanoutRetirePolicy.ProgramSource;
 
         RtlZeroMemory(&TrackArgs, sizeof(TrackArgs));
         TrackArgs.PresentId = Entry->PresentId;
@@ -1983,13 +2134,16 @@ DxgkpExecuteFullPresent(
         TrackArgs.DestinationOpenBindingReference = Entry->DestinationOpenBindingReference;
         TrackArgs.SourceAllocationHandle = (HANDLE)(ULONG_PTR)Entry->hSource;
         TrackArgs.RefreshAllocationHandle = TrackRefresh ? (HANDLE)(ULONG_PTR)Entry->hDestination : NULL;
-        TrackArgs.RefreshVidPnSourceId = Entry->SharedSurface.VidPnSourceId;
+        TrackArgs.RefreshVidPnSourceId = Entry->VidPnSourceId;
         TrackArgs.RefreshDstRect = &Entry->DstRect;
         TrackArgs.SharedSurfaceGeneration = Entry->SharedSurface.Generation;
         TrackArgs.SourceIsSharedPrimary = Entry->SourceIsSharedPrimary;
         TrackArgs.SourceIsSharedShadow = Entry->SourceIsSharedShadow;
         TrackArgs.RefreshIsSharedPrimary = TrackRefresh;
-        TrackArgs.HoldSharedSurfaceRundown = TrackRefresh;
+        TrackArgs.ProgramSourceScanoutOnRetire =
+            TrackSourceScanout;
+        TrackArgs.HoldSharedSurfaceRundown =
+            ScanoutRetirePolicy.HoldSharedSurfaceRundown;
         TrackArgs.SourceWidth = Entry->SourceIsSharedShadow ? Entry->SharedSurface.ShadowWidth : Entry->SharedSurface.PrimaryWidth;
         TrackArgs.SourceHeight = Entry->SourceIsSharedShadow ? Entry->SharedSurface.ShadowHeight : Entry->SharedSurface.PrimaryHeight;
         TrackArgs.SourcePitch = Entry->SourceIsSharedShadow ? Entry->SharedSurface.ShadowPitch : 0;
@@ -1998,7 +2152,7 @@ DxgkpExecuteFullPresent(
         TrackArgs.PresentBindingReferences = PresentBindingReferences;
         TrackArgs.PresentBindingReferenceCount = PresentBindingReferenceCount;
 
-        Status = VidSchSubmitCommandTracked(Adapter, PresentNode, PresentEngine, DmaBuffer, &DmaBufferPrivateData, sizeof(DmaBufferPrivateData), PresentAllocationList, RTL_NUMBER_OF(PresentAllocationList), PatchLocationList, PatchEntries, Adapter->SchedulingCaps.MultiEngineAware ? NULL : MiniportDeviceHandle, Adapter->SchedulingCaps.MultiEngineAware ? MiniportContextHandle : NULL, PresentPriority, &TrackArgs, SubmitFlags.Value, Entry->VidPnSourceId, &VidSchFence);
+        Status = VidSchSubmitCommandTracked(Adapter, PresentNode, PresentEngine, DmaBuffer, DmaBufferPrivateData, DmaBufferPrivateDataSize, PresentAllocationList, DXGK_PRESENT_MAX_INDEX + 1, PatchLocationList, PatchEntries, Adapter->SchedulingCaps.MultiEngineAware ? NULL : MiniportDeviceHandle, Adapter->SchedulingCaps.MultiEngineAware ? MiniportContextHandle : NULL, PresentPriority, &TrackArgs, SubmitFlags.Value, Entry->VidPnSourceId, &VidSchFence);
         if (NT_SUCCESS(Status))
         {
             SubmissionFenceId = VidSchFence;
@@ -2039,12 +2193,12 @@ DxgkpExecuteFullPresent(
             PatchArgs.DmaBufferSize = DmaBuffer->Capacity;
             PatchArgs.DmaBufferSubmissionStartOffset = DmaBuffer->SubmissionStartOffset;
             PatchArgs.DmaBufferSubmissionEndOffset = DmaBuffer->SubmissionEndOffset;
-            PatchArgs.pDmaBufferPrivateData = &DmaBufferPrivateData;
-            PatchArgs.DmaBufferPrivateDataSize = sizeof(DmaBufferPrivateData);
+            PatchArgs.pDmaBufferPrivateData = DmaBufferPrivateData;
+            PatchArgs.DmaBufferPrivateDataSize = DmaBufferPrivateDataSize;
             PatchArgs.DmaBufferPrivateDataSubmissionStartOffset = 0;
-            PatchArgs.DmaBufferPrivateDataSubmissionEndOffset = sizeof(DmaBufferPrivateData);
+            PatchArgs.DmaBufferPrivateDataSubmissionEndOffset = DmaBufferPrivateDataSize;
             PatchArgs.pAllocationList = PresentAllocationList;
-            PatchArgs.AllocationListSize = RTL_NUMBER_OF(PresentAllocationList);
+            PatchArgs.AllocationListSize = DXGK_PRESENT_MAX_INDEX + 1;
             PatchArgs.pPatchLocationList = PatchLocationList;
             PatchArgs.PatchLocationListSize = PatchEntries;
             PatchArgs.PatchLocationListSubmissionStart = 0;
@@ -2080,10 +2234,10 @@ DxgkpExecuteFullPresent(
         SubmitArgs.DmaBufferSegmentId = DmaBuffer->SegmentId;
         SubmitArgs.DmaBufferPhysicalAddress = DmaBuffer->SegmentAddress;
         SubmitArgs.DmaBufferSize = DmaBuffer->Capacity;
-        SubmitArgs.pDmaBufferPrivateData = &DmaBufferPrivateData;
-        SubmitArgs.DmaBufferPrivateDataSize = sizeof(DmaBufferPrivateData);
+        SubmitArgs.pDmaBufferPrivateData = DmaBufferPrivateData;
+        SubmitArgs.DmaBufferPrivateDataSize = DmaBufferPrivateDataSize;
         SubmitArgs.DmaBufferPrivateDataSubmissionStartOffset = 0;
-        SubmitArgs.DmaBufferPrivateDataSubmissionEndOffset = sizeof(DmaBufferPrivateData);
+        SubmitArgs.DmaBufferPrivateDataSubmissionEndOffset = DmaBufferPrivateDataSize;
         SubmitArgs.DmaBufferSubmissionStartOffset = DmaBuffer->SubmissionStartOffset;
         SubmitArgs.DmaBufferSubmissionEndOffset = DmaBuffer->SubmissionEndOffset;
         SubmitArgs.SubmissionFenceId = SubmissionFenceId;
@@ -2140,7 +2294,8 @@ PresentSubmissionDone:
 
     if (NT_SUCCESS(Status) &&
         !RefreshSharedPrimaryOnRetire &&
-        Entry->Type == DxgkPresentTypeBlt &&
+        (Entry->Type == DxgkPresentTypeBlt ||
+         Entry->Type == DxgkPresentTypeColorFill) &&
         Entry->hDestination != 0 &&
         Entry->DestinationIsSharedPrimary)
     {
@@ -2194,6 +2349,10 @@ PresentCleanup:
 
     if (DmaBuffer != NULL)
         DxgkFreeDmaBuffer(DmaBuffer);
+    if (DmaBufferPrivateData != NULL)
+        ExFreePoolWithTag(DmaBufferPrivateData, TAG_DXGK_SUBMITDMA);
+    if (PresentAllocationList != NULL)
+        ExFreePoolWithTag(PresentAllocationList, TAG_DXGK_PRESENT);
 
     while (PresentBindingReferenceCount != 0)
     {
@@ -2401,6 +2560,8 @@ DxgkpQueuePresent(
     Entry->SharedSurface.PrimaryAllocation = NULL;
     Entry->SharedSurface.ShadowAllocation = NULL;
     Entry->SharedSurface.RundownHeld = FALSE;
+    Entry->DstSubRects = NULL;
+    Entry->DstSubRectCount = 0;
     Queue->Tail = (Queue->Tail + 1) % DXGKRNL_PRESENT_QUEUE_DEPTH;
     Queue->Count++;
 

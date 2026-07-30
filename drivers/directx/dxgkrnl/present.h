@@ -23,6 +23,9 @@
 
 #pragma once
 
+#include "present_contract_core.h"
+#include "present_dma_core.h"
+
 /* ========================================================================
  * Constants
  * ====================================================================== */
@@ -145,6 +148,14 @@ typedef struct _DXGKRNL_PRESENT_ENTRY
     RECT                            SrcRect;
     RECT                            DstRect;
 
+    /*
+     * Destination-space dirty rectangles owned by this entry.  KMT supplies
+     * source-space rectangles; admission maps and snapshots them before a
+     * queued present can outlive the caller's buffer.
+     */
+    RECT                           *DstSubRects;
+    UINT                            DstSubRectCount;
+
     /* Colour value for colour-fill presents (ARGB 32-bit). */
     UINT                            Color;
 
@@ -215,8 +226,8 @@ typedef struct _DXGKRNL_PRESENT_QUEUE
     LIST_ENTRY                      VBlankWaiterList;
 #if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
     /*
-     * Kernel-owned event exposed through a wait-only DWM handle. The refresh
-     * target fields are protected by VBlankWaitLock.
+     * Kernel-owned synchronization event exposed to DWM through a caller-owned
+     * handle.  Target fields are protected by VBlankWaitLock.
      */
     PKEVENT                         DwmVBlankEvent;
     ULONG                           DwmVBlankTarget;
