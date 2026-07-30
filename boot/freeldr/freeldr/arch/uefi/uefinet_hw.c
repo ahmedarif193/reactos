@@ -10,14 +10,8 @@
 
 #include "uefinetp.h"
 
-#include <intrin.h>
-
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(WARNING);
-
-#define MSR_IA32_PM_ENABLE        0x770
-#define MSR_IA32_HWP_CAPABILITIES 0x771
-#define MSR_IA32_HWP_REQUEST      0x774
 
 #define RTL8168_VENDOR_ID 0x10ec
 #define RTL8168_DEVICE_ID 0x8168
@@ -171,48 +165,6 @@ UefiRtlProgramMac(
     return EFI_SUCCESS;
 }
 
-/*
- * The whole UEFI network stack is CPU-polled and the N100 boots at its low
- * pre-OS clock with HWP left disabled by the BIOS. Enable HWP and pin the
- * highest performance level so the download runs at full core speed; the
- * intelppm driver reprograms HWP for itself once ReactOS is up.
- */
-static VOID
-UefiLattePandaBoostCpu(VOID)
-{
-    INT32 Regs[4];
-    UINT64 Capabilities;
-    UINT64 Request;
-    UINT8 Highest;
-
-    __cpuid(Regs, 0);
-    if (Regs[1] != 0x756E6547 ||    /* Genu */
-        Regs[3] != 0x49656E69 ||    /* ineI */
-        Regs[2] != 0x6C65746E)      /* ntel */
-    {
-        return;
-    }
-    if ((UINT32)Regs[0] < 6)
-        return;
-
-    __cpuid(Regs, 6);
-    if (!(Regs[0] & (1 << 7)))      /* CPUID.06H:EAX[7]: HWP supported */
-        return;
-
-    if (!(__readmsr(MSR_IA32_PM_ENABLE) & 1))
-        __writemsr(MSR_IA32_PM_ENABLE, 1);
-
-    Capabilities = __readmsr(MSR_IA32_HWP_CAPABILITIES);
-    Highest = (UINT8)Capabilities;
-    if (Highest == 0)
-        return;
-
-    /* Minimum = maximum = highest level, desired = auto, EPP = performance. */
-    Request = (UINT64)Highest | ((UINT64)Highest << 8);
-    __writemsr(MSR_IA32_HWP_REQUEST, Request);
-    TRACE("UEFI Network: CPU pinned to HWP performance level %u\n", Highest);
-}
-
 VOID
 UefiLattePandaPrepareNic(VOID)
 {
@@ -220,8 +172,6 @@ UefiLattePandaPrepareNic(VOID)
     EFI_HANDLE *Handles = NULL;
     UINTN HandleCount = 0;
     UINTN Index;
-
-    UefiLattePandaBoostCpu();
 
     Status = GlobalSystemTable->BootServices->LocateHandleBuffer(
         ByProtocol, &EfiPciIoGuid, NULL, &HandleCount, &Handles);
