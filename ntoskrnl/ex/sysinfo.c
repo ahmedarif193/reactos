@@ -3171,6 +3171,27 @@ QSI_DEF(SystemProcessorBrandString)
     return STATUS_SUCCESS;
 }
 
+/* Class 184 - Physical Memory Information */
+QSI_DEF(SystemPhysicalMemoryInformation)
+{
+    PSYSTEM_PHYSICAL_MEMORY_INFORMATION MemInfo = Buffer;
+
+    *ReqSize = sizeof(*MemInfo);
+    if (Size < sizeof(*MemInfo))
+    {
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+
+    MemInfo->TotalPhysicalBytes =
+        (ULONGLONG)MmNumberOfPhysicalPages << PAGE_SHIFT;
+    MemInfo->LowestPhysicalAddress =
+        (ULONGLONG)MmLowestPhysicalPage << PAGE_SHIFT;
+    MemInfo->HighestPhysicalAddress =
+        (((ULONGLONG)MmHighestPhysicalPage + 1) << PAGE_SHIFT) - 1;
+
+    return STATUS_SUCCESS;
+}
+
 /* Query/Set Calls Table */
 typedef
 struct _QSSI_CALLS
@@ -3274,6 +3295,10 @@ CallQS[] =
     // Vista and later
     SI_QX(SystemModuleInformationEx),
     SI_QX(SystemProcessorBrandString),
+
+    // Win10 RS4 and later (gaps in between stay NULL and fail
+    // with STATUS_NOT_IMPLEMENTED)
+    SI_QX(SystemPhysicalMemoryInformation),
 };
 
 C_ASSERT(SystemBasicInformation == 0);
