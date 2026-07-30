@@ -212,6 +212,8 @@ NdisAllocateNetBufferList(
 
     /* The caller's per-NBL ContextSize overrides the pool's default. */
     EffectiveContextSize = ContextSize ? ContextSize : Pool->ContextSize;
+    if ((ULONG)EffectiveContextSize + ContextBackFill > MAXUSHORT)
+        return NULL;
 
     TotalSize = sizeof(NET_BUFFER_LIST);
     if (EffectiveContextSize)
@@ -257,7 +259,7 @@ NdisAllocateNetBufferList(
     {
         Ctx = (PNET_BUFFER_LIST_CONTEXT)((PUCHAR)Nbl + sizeof(NET_BUFFER_LIST));
         Ctx->Next = NULL;
-        Ctx->Size = EffectiveContextSize;
+        Ctx->Size = EffectiveContextSize + ContextBackFill;
         Ctx->Offset = ContextBackFill;
         Nbl->Context = Ctx;
     }
@@ -636,6 +638,323 @@ NdisFreeMdl(
     if (Mdl == NULL)
         return;
     IoFreeMdl(Mdl);
+}
+
+VOID
+NTAPI
+NdisAdvanceNetBufferListDataStart(
+    _In_ PNET_BUFFER_LIST NetBufferList,
+    _In_ ULONG DataOffsetDelta,
+    _In_ BOOLEAN FreeMdl,
+    _In_opt_ PVOID FreeMdlHandler)
+{
+    PNET_BUFFER NetBuffer;
+
+    if (NetBufferList == NULL)
+        return;
+
+    for (NetBuffer = NetBufferList->FirstNetBuffer;
+         NetBuffer != NULL;
+         NetBuffer = NetBuffer->Next)
+    {
+        NdisAdvanceNetBufferDataStart(NetBuffer,
+                                      DataOffsetDelta,
+                                      FreeMdl,
+                                      FreeMdlHandler);
+    }
+}
+
+static VOID
+Ndis6CopyNetBufferListInfo(
+    _Out_ PNET_BUFFER_LIST Destination,
+    _In_ const NET_BUFFER_LIST* Source,
+    _In_ BOOLEAN SendPath)
+{
+    static const UCHAR SendIndexes[] =
+    {
+        TcpIpChecksumNetBufferListInfo,
+        IPsecOffloadV1NetBufferListInfo,
+        TcpLargeSendNetBufferListInfo,
+        Ieee8021QNetBufferListInfo,
+        NetBufferListCancelId,
+        MediaSpecificInformation,
+        NetBufferListFrameType,
+        IPsecOffloadV2TunnelNetBufferListInfo,
+        IPsecOffloadV2HeaderNetBufferListInfo
+    };
+    static const UCHAR ReceiveIndexes[] =
+    {
+        TcpIpChecksumNetBufferListInfo,
+        IPsecOffloadV1NetBufferListInfo,
+        TcpReceiveNoPush,
+        Ieee8021QNetBufferListInfo,
+        MediaSpecificInformation,
+        NetBufferListFrameType,
+        NetBufferListHashValue,
+        NetBufferListHashInfo,
+        IPsecOffloadV2TunnelNetBufferListInfo,
+        IPsecOffloadV2HeaderNetBufferListInfo
+    };
+    const UCHAR* Indexes = SendPath ? SendIndexes : ReceiveIndexes;
+    ULONG Count = SendPath ? RTL_NUMBER_OF(SendIndexes)
+                           : RTL_NUMBER_OF(ReceiveIndexes);
+    ULONG Index;
+
+    Destination->NblFlags = Source->NblFlags;
+    Destination->Flags = Source->Flags;
+    Destination->SourceHandle = Source->SourceHandle;
+
+    for (Index = 0; Index < Count; Index++)
+    {
+        Destination->NetBufferListInfo[Indexes[Index]] =
+            Source->NetBufferListInfo[Indexes[Index]];
+    }
+}
+
+VOID
+NTAPI
+NdisCopySendNetBufferListInfo(
+    _Out_ PNET_BUFFER_LIST Destination,
+    _In_ const NET_BUFFER_LIST* Source)
+{
+    if (Destination && Source)
+        Ndis6CopyNetBufferListInfo(Destination, Source, TRUE);
+}
+
+VOID
+NTAPI
+NdisCopyReceiveNetBufferListInfo(
+    _Out_ PNET_BUFFER_LIST Destination,
+    _In_ const NET_BUFFER_LIST* Source)
+{
+    if (Destination && Source)
+        Ndis6CopyNetBufferListInfo(Destination, Source, FALSE);
+}
+
+VOID
+NTAPI
+NdisFreeNetBufferListContext(
+    _Inout_ PNET_BUFFER_LIST NetBufferList,
+    _In_ USHORT ContextSize)
+{
+    PNET_BUFFER_LIST_CONTEXT Context;
+    ULONG AlignedSize;
+
+    if (NetBufferList == NULL || NetBufferList->Context == NULL ||
+        ContextSize == 0)
+    {
+        return;
+    }
+
+    AlignedSize = ALIGN_UP_BY(ContextSize, sizeof(PVOID));
+    Context = NetBufferList->Context;
+    if (AlignedSize > MAXUSHORT ||
+        Context->Offset > Context->Size ||
+        AlignedSize > Context->Size - Context->Offset)
+    {
+        return;
+    }
+
+    Context->Offset += (USHORT)AlignedSize;
+    if (Context->Offset == Context->Size && Context->Next != NULL)
+    {
+        NetBufferList->Context = Context->Next;
+        ExFreePool(Context);
+    }
+}
+
+static BOOLEAN
+Ndis6SetNetBufferDataOffset(
+    _Inout_ PNET_BUFFER NetBuffer,
+    _In_ ULONG DataOffset)
+{
+    PMDL Mdl = NetBuffer->MdlChain;
+    ULONG Remaining = DataOffset;
+
+    while (Mdl != NULL)
+    {
+        ULONG MdlLength = MmGetMdlByteCount(Mdl);
+
+        if (Remaining < MdlLength ||
+            (Remaining == MdlLength && Mdl->Next == NULL))
+        {
+            NetBuffer->CurrentMdl = Mdl;
+            NetBuffer->CurrentMdlOffset = Remaining;
+            NetBuffer->DataOffset = DataOffset;
+            return TRUE;
+        }
+
+        Remaining -= MdlLength;
+        Mdl = Mdl->Next;
+    }
+
+    return FALSE;
+}
+
+PNET_BUFFER_LIST
+NTAPI
+NdisAllocateFragmentNetBufferList(
+    _In_ PNET_BUFFER_LIST OriginalNetBufferList,
+    _In_ NDIS_HANDLE NetBufferListPool,
+    _In_ NDIS_HANDLE NetBufferPool,
+    _In_ ULONG StartOffset,
+    _In_ ULONG MaximumLength,
+    _In_ ULONG DataOffsetDelta,
+    _In_ ULONG DataBackFill,
+    _In_ ULONG AllocateFragmentFlags)
+{
+    PNET_BUFFER_LIST FragmentNetBufferList;
+    PNET_BUFFER EmbeddedNetBuffer;
+    PNET_BUFFER LastFragment = NULL;
+    PNET_BUFFER SourceNetBuffer;
+
+    UNREFERENCED_PARAMETER(DataBackFill);
+    UNREFERENCED_PARAMETER(AllocateFragmentFlags);
+
+    if (OriginalNetBufferList == NULL || NetBufferListPool == NULL ||
+        MaximumLength == 0)
+    {
+        return NULL;
+    }
+
+    FragmentNetBufferList =
+        NdisAllocateNetBufferList(NetBufferListPool, 0, 0);
+    if (FragmentNetBufferList == NULL)
+        return NULL;
+
+    EmbeddedNetBuffer = FragmentNetBufferList->FirstNetBuffer;
+    FragmentNetBufferList->FirstNetBuffer = NULL;
+
+    for (SourceNetBuffer = OriginalNetBufferList->FirstNetBuffer;
+         SourceNetBuffer != NULL;
+         SourceNetBuffer = SourceNetBuffer->Next)
+    {
+        ULONG Consumed = 0;
+        ULONG Remaining;
+
+        if (StartOffset >= SourceNetBuffer->DataLength)
+            continue;
+
+        Remaining = SourceNetBuffer->DataLength - StartOffset;
+        while (Remaining != 0)
+        {
+            PNET_BUFFER Fragment;
+            ULONG FragmentLength = min(Remaining, MaximumLength);
+            ULONG FragmentOffset;
+
+            if (EmbeddedNetBuffer != NULL)
+            {
+                Fragment = EmbeddedNetBuffer;
+                EmbeddedNetBuffer = NULL;
+                RtlZeroMemory(Fragment, sizeof(*Fragment));
+            }
+            else
+            {
+                Fragment = NdisAllocateNetBuffer(NetBufferPool,
+                                                 SourceNetBuffer->MdlChain,
+                                                 0,
+                                                 FragmentLength);
+                if (Fragment == NULL)
+                    goto Failure;
+            }
+
+            FragmentOffset = SourceNetBuffer->DataOffset +
+                             StartOffset +
+                             Consumed;
+            Fragment->MdlChain = SourceNetBuffer->MdlChain;
+            Fragment->DataLength = FragmentLength;
+            if (!Ndis6SetNetBufferDataOffset(Fragment, FragmentOffset))
+            {
+                if (Fragment->NdisPoolHandle)
+                    NdisFreeNetBuffer(Fragment);
+                goto Failure;
+            }
+
+            /* The common NetAdapterCx path has sufficient source headroom.
+             * Refuse the fragment if satisfying DataOffsetDelta would need a
+             * private MDL allocation that this shallow fragment cannot own. */
+            if (DataOffsetDelta != 0)
+            {
+                if (Fragment->DataOffset < DataOffsetDelta ||
+                    Fragment->CurrentMdlOffset < DataOffsetDelta)
+                {
+                    if (Fragment->NdisPoolHandle)
+                        NdisFreeNetBuffer(Fragment);
+                    goto Failure;
+                }
+
+                Fragment->DataOffset -= DataOffsetDelta;
+                Fragment->CurrentMdlOffset -= DataOffsetDelta;
+                Fragment->DataLength += DataOffsetDelta;
+            }
+
+            if (LastFragment)
+                LastFragment->Next = Fragment;
+            else
+                FragmentNetBufferList->FirstNetBuffer = Fragment;
+            LastFragment = Fragment;
+
+            Consumed += FragmentLength;
+            Remaining -= FragmentLength;
+        }
+    }
+
+    FragmentNetBufferList->ParentNetBufferList = OriginalNetBufferList;
+    InterlockedIncrement(&OriginalNetBufferList->ChildRefCount);
+    NdisCopySendNetBufferListInfo(FragmentNetBufferList,
+                                  OriginalNetBufferList);
+    return FragmentNetBufferList;
+
+Failure:
+    while (FragmentNetBufferList->FirstNetBuffer)
+    {
+        PNET_BUFFER Fragment = FragmentNetBufferList->FirstNetBuffer;
+        FragmentNetBufferList->FirstNetBuffer = Fragment->Next;
+        if (Fragment->NdisPoolHandle)
+            NdisFreeNetBuffer(Fragment);
+    }
+    NdisFreeNetBufferList(FragmentNetBufferList);
+    return NULL;
+}
+
+VOID
+NTAPI
+NdisFreeFragmentNetBufferList(
+    _In_ PNET_BUFFER_LIST FragmentNetBufferList,
+    _In_ ULONG DataOffsetDelta,
+    _In_ ULONG FreeFragmentFlags)
+{
+    PNET_BUFFER Fragment;
+    PNET_BUFFER_LIST Parent;
+
+    UNREFERENCED_PARAMETER(FreeFragmentFlags);
+
+    if (FragmentNetBufferList == NULL)
+        return;
+
+    Parent = FragmentNetBufferList->ParentNetBufferList;
+    Fragment = FragmentNetBufferList->FirstNetBuffer;
+    FragmentNetBufferList->FirstNetBuffer = NULL;
+
+    while (Fragment != NULL)
+    {
+        PNET_BUFFER Next = Fragment->Next;
+
+        if (DataOffsetDelta != 0)
+        {
+            Fragment->DataOffset += DataOffsetDelta;
+            Fragment->CurrentMdlOffset += DataOffsetDelta;
+            Fragment->DataLength -= DataOffsetDelta;
+        }
+
+        if (Fragment->NdisPoolHandle)
+            NdisFreeNetBuffer(Fragment);
+        Fragment = Next;
+    }
+
+    NdisFreeNetBufferList(FragmentNetBufferList);
+    if (Parent)
+        InterlockedDecrement(&Parent->ChildRefCount);
 }
 
 /* EOF */
