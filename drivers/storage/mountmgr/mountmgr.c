@@ -1383,8 +1383,7 @@ MountMgrMountedDeviceArrival(IN PDEVICE_EXTENSION DeviceExtension,
         DeviceInformation->SuggestedDriveLetter = 0;
     }
     /* Else, it's time to set up one */
-    else if ((!DeviceExtension->NoAutoMount ||
-              (DeviceInformation->Removable && !DeviceExtension->IsMiniNt)) &&
+    else if (MountMgrAutoMountAllowed(DeviceExtension, DeviceInformation->Removable) &&
              DeviceExtension->AutomaticDriveLetter &&
              (DriveLetterAllowed || DeviceInformation->SuggestedDriveLetter) &&
              !HasNoDriveLetterEntry(UniqueId))
@@ -1448,7 +1447,8 @@ MountMgrMountedDeviceArrival(IN PDEVICE_EXTENSION DeviceExtension,
 
     /* If automount is enabled or the device was already mounted, send now
      * the online notification if needed; otherwise, defer its posting */
-    if (!DeviceExtension->NoAutoMount || IsDrvLetter)
+    if (MountMgrAutoMountAllowed(DeviceExtension, DeviceInformation->Removable) ||
+        IsDrvLetter)
         SetOnline = !DeviceInformation->SkipNotifications;
     else
         SetOnline = FALSE;
@@ -1915,8 +1915,8 @@ DriverEntry(IN PDRIVER_OBJECT DriverObject,
     DeviceExtension->NoAutoMount = MountmgrReadNoAutoMount(&(DeviceExtension->RegistryPath));
 
     /* In WinPE / LiveCD mode the kernel creates a volatile MiniNT key before
-     * boot drivers are loaded. When present, keep every unregistered volume,
-     * including removable boot media, without a drive letter. */
+     * boot drivers are loaded. Suppress removable boot media without disabling
+     * automatic drive letters for unrelated fixed volumes. */
     {
         UNICODE_STRING MiniNTKeyName = RTL_CONSTANT_STRING(
             L"\\Registry\\Machine\\System\\CurrentControlSet\\Control\\MiniNT");
@@ -1932,7 +1932,6 @@ DriverEntry(IN PDRIVER_OBJECT DriverObject,
         {
             ZwClose(MiniNTKeyHandle);
             DeviceExtension->IsMiniNt = TRUE;
-            DeviceExtension->NoAutoMount = TRUE;
         }
     }
 
