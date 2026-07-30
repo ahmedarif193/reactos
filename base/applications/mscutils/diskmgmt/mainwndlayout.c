@@ -16,8 +16,6 @@ DmMainWndGetCurrentLayoutPanes(
     RECT rcToolbar;
     INT StatusHeight;
     INT ToolbarHeight;
-    WCHAR DbgBuf[256];
-    static BOOL bFirstCall = TRUE;
 
     StatusHeight = 0;
     ToolbarHeight = 0;
@@ -32,17 +30,6 @@ DmMainWndGetCurrentLayoutPanes(
         SendMessageW(Info->hToolbar, TB_AUTOSIZE, 0, 0);
         GetWindowRect(Info->hToolbar, &rcToolbar);
         ToolbarHeight = rcToolbar.bottom - rcToolbar.top;
-    }
-
-    if (bFirstCall)
-    {
-        StringCchPrintfW(DbgBuf, ARRAYSIZE(DbgBuf),
-                         L"[DISKMGMT-LAYOUT] hToolbar=%p, styleBit=%d, ToolbarHeight=%d, client=(%ld,%ld)-(%ld,%ld)\n",
-                         (void *)Info->hToolbar,
-                         (Info->hToolbar != NULL) ? (int)((GetWindowLongPtrW(Info->hToolbar, GWL_STYLE) & WS_VISIBLE) != 0) : -1,
-                         ToolbarHeight,
-                         rcClient.left, rcClient.top, rcClient.right, rcClient.bottom);
-        OutputDebugStringW(DbgBuf);
     }
 
     if (Info->hStatusBar != NULL && Info->bStatusBarVisible)
@@ -60,21 +47,6 @@ DmMainWndGetCurrentLayoutPanes(
     DmLayoutComputePanes(&rcClient,
                          &Info->LayoutMetrics,
                          Panes);
-
-    if (bFirstCall)
-    {
-        StringCchPrintfW(DbgBuf, ARRAYSIZE(DbgBuf),
-                         L"[DISKMGMT-LAYOUT] Panes: toolbar=(%ld,%ld)-(%ld,%ld) h=%ld, top=(%ld,%ld)-(%ld,%ld), bot=(%ld,%ld)-(%ld,%ld)\n",
-                         Panes->ToolbarRect.left, Panes->ToolbarRect.top,
-                         Panes->ToolbarRect.right, Panes->ToolbarRect.bottom,
-                         Panes->ToolbarHeight,
-                         Panes->TopRect.left, Panes->TopRect.top,
-                         Panes->TopRect.right, Panes->TopRect.bottom,
-                         Panes->BottomRect.left, Panes->BottomRect.top,
-                         Panes->BottomRect.right, Panes->BottomRect.bottom);
-        OutputDebugStringW(DbgBuf);
-        bFirstCall = FALSE;
-    }
 }
 
 VOID
