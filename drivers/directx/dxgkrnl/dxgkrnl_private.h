@@ -1864,6 +1864,14 @@ VOID
 DxgkEndKmdTransaction(
     _In_ PDXGKRNL_ADAPTER Adapter);
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
+NTSTATUS
+DxgkQueryFeatureState(
+    _In_opt_ PDXGKRNL_ADAPTER Adapter,
+    _In_ DXGK_FEATURE_ID FeatureId,
+    _Out_ DXGK_ISFEATUREENABLED_RESULT *Result);
+#endif
+
 VOID
 DxgkAcquireLevel3Transition(
     _In_ PDXGKRNL_ADAPTER Adapter);

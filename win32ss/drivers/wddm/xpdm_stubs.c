@@ -33,6 +33,7 @@ struct _D3DKMT_DESTROYHWQUEUE;
 struct _D3DKMT_ENUMADAPTERS;
 struct _D3DKMT_ENUMADAPTERS2;
 struct _D3DKMT_ENUMADAPTERS3;
+struct _D3DKMT_ISFEATUREENABLED;
 struct _D3DKMT_LOCK2;
 struct _D3DKMT_OPENADAPTERFROMLUID;
 struct _D3DKMT_OPENKEYEDMUTEX2;
@@ -93,6 +94,9 @@ DEFINE_XPDM_D3DKMT_STUB(D3DKMTEnumAdapters2,
 DEFINE_XPDM_D3DKMT_STUB(D3DKMTEnumAdapters3,
                         _Inout_,
                         struct _D3DKMT_ENUMADAPTERS3)
+DEFINE_XPDM_D3DKMT_STUB(D3DKMTIsFeatureEnabled,
+                        _Inout_,
+                        struct _D3DKMT_ISFEATUREENABLED)
 DEFINE_XPDM_D3DKMT_STUB(D3DKMTLock2,
                         _Inout_,
                         struct _D3DKMT_LOCK2)

@@ -56,6 +56,14 @@ C_ASSERT(FIELD_OFFSET(RXGK_SUBMITCOMMAND_PACKET, ContextHandle) == 32);
 C_ASSERT(FIELD_OFFSET(RXGK_SUBMITCOMMAND_PACKET, PrivateDriverDataSize) == 36);
 C_ASSERT(FIELD_OFFSET(RXGK_SUBMITCOMMAND_PACKET, PrivateDriverDataOffset) == 40);
 C_ASSERT(FIELD_OFFSET(RXGK_SUBMITCOMMAND_PACKET, Reserved) == 44);
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
+C_ASSERT(sizeof(RXGK_ISFEATUREENABLED_PACKET) ==
+         RXGK_ISFEATUREENABLED_PACKET_SIZE);
+C_ASSERT(FIELD_OFFSET(RXGK_ISFEATUREENABLED_PACKET, AdapterHandle) == 0);
+C_ASSERT(FIELD_OFFSET(RXGK_ISFEATUREENABLED_PACKET, FeatureId) == 4);
+C_ASSERT(FIELD_OFFSET(RXGK_ISFEATUREENABLED_PACKET, ResultVersion) == 8);
+C_ASSERT(FIELD_OFFSET(RXGK_ISFEATUREENABLED_PACKET, ResultValue) == 10);
+#endif
 #if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
 C_ASSERT(sizeof(RXGK_GETDWMVERTICALBLANKEVENT_PACKET) ==
          RXGK_GETDWMVERTICALBLANKEVENT_PACKET_V1_SIZE);
@@ -74,6 +82,15 @@ C_ASSERT(FIELD_OFFSET(RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET, AdapterHandle) 
 C_ASSERT(FIELD_OFFSET(RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET, DeviceHandle) == 12);
 C_ASSERT(FIELD_OFFSET(RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET, VidPnSourceId) == 16);
 C_ASSERT(FIELD_OFFSET(RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET, TargetSyncRefreshCount) == 20);
+#endif
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3200) && \
+    (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+C_ASSERT(sizeof(DXGK_ISFEATUREENABLED_RESULT) == 4);
+C_ASSERT(sizeof(D3DKMT_ISFEATUREENABLED) ==
+         RXGK_ISFEATUREENABLED_PACKET_SIZE);
+C_ASSERT(FIELD_OFFSET(D3DKMT_ISFEATUREENABLED, hAdapter) == 0);
+C_ASSERT(FIELD_OFFSET(D3DKMT_ISFEATUREENABLED, FeatureId) == 4);
+C_ASSERT(FIELD_OFFSET(D3DKMT_ISFEATUREENABLED, Result) == 8);
 #endif
 C_ASSERT(DXGKRNL_INTERFACE_VERSION_1_SIZE == FIELD_OFFSET(REACTOS_WIN32K_DXGKRNL_INTERFACE, RxgkIntPfnCreateContextVirtual));
 C_ASSERT(DXGKRNL_INTERFACE_VERSION_2_SIZE == FIELD_OFFSET(REACTOS_WIN32K_DXGKRNL_INTERFACE, RxgkIntPfnCreateAllocation2));
@@ -4334,6 +4351,67 @@ D3DKMTGetProcessSchedulingPriorityClass(
     if (Information != sizeof(Request))
         return STATUS_INFO_LENGTH_MISMATCH;
     return WddmBridgeRejectBadBuffer(WddmBridgeSafeCopyTo(pClass, &Request.Class, sizeof(*pClass)));
+}
+
+/* ---- WDDM 3.2 feature support ------------------------------------------- */
+
+NTSTATUS
+APIENTRY
+D3DKMTIsFeatureEnabled(
+    _Inout_ D3DKMT_ISFEATUREENABLED *pData)
+{
+#if (REACTOS_WDDM_TARGET_LEVEL < 3200)
+    UNREFERENCED_PARAMETER(pData);
+    return STATUS_NOT_SUPPORTED;
+#else
+    D3DKMT_ISFEATUREENABLED Captured;
+    DXGK_ISFEATUREENABLED_RESULT Result;
+    RXGK_ISFEATUREENABLED_PACKET Packet;
+    ULONG_PTR Information = 0;
+    NTSTATUS Status;
+
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = WddmBridgeSafeProbeForWrite(
+                 (PUCHAR)pData +
+                     FIELD_OFFSET(D3DKMT_ISFEATUREENABLED, Result),
+                 sizeof(Captured.Result));
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlZeroMemory(&Packet, sizeof(Packet));
+    Packet.AdapterHandle = Captured.hAdapter;
+    Packet.FeatureId = (ULONG)Captured.FeatureId;
+    Status = WddmBridgeSendIoctlWithInformation(
+                 IOCTL_D3DKMT_ISFEATUREENABLED,
+                 &Packet,
+                 sizeof(Packet),
+                 &Packet,
+                 sizeof(Packet),
+                 &Information);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Information != sizeof(Packet))
+        return STATUS_INFO_LENGTH_MISMATCH;
+    if ((Packet.ResultValue &
+         ~RXGK_ISFEATUREENABLED_RESULT_VALID_MASK) != 0)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    RtlZeroMemory(&Result, sizeof(Result));
+    Result.Version = Packet.ResultVersion;
+    Result.Value = Packet.ResultValue;
+    return WddmBridgeSafeCopyTo(
+               (PUCHAR)pData +
+                   FIELD_OFFSET(D3DKMT_ISFEATUREENABLED, Result),
+               &Result,
+               sizeof(Result));
+#endif
 }
 
 /* EOF */
