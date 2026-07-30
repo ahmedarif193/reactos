@@ -1748,30 +1748,57 @@ IopReinitializeDrivers(VOID)
     /* Get the first entry and start looping */
     Entry = ExInterlockedRemoveHeadList(&DriverReinitListHead,
                                         &DriverReinitListLock);
+    DPRINT1("INITTRACE: IO-REINIT[01] system-driver callback walk entered first-entry=%p\n",
+            Entry);
     while (Entry)
     {
         /* Get the item */
         ReinitItem = CONTAINING_RECORD(Entry, DRIVER_REINIT_ITEM, ItemEntry);
+        DPRINT1("INITTRACE: IO-REINIT[02] entry=%p item=%p driver=%p routine=%p context=%p old-count=%lu\n",
+                Entry,
+                ReinitItem,
+                ReinitItem->DriverObject,
+                (PVOID)ReinitItem->ReinitRoutine,
+                ReinitItem->Context,
+                ReinitItem->DriverObject->DriverExtension->Count);
 
         /* Increment reinitialization counter */
         ReinitItem->DriverObject->DriverExtension->Count++;
+        DPRINT1("INITTRACE: IO-REINIT[03] driver=%p callback count incremented to %lu\n",
+                ReinitItem->DriverObject,
+                ReinitItem->DriverObject->DriverExtension->Count);
 
         /* Remove the device object flag */
         ReinitItem->DriverObject->Flags &= ~DRVO_REINIT_REGISTERED;
+        DPRINT1("INITTRACE: IO-REINIT[04] driver=%p reinit flag cleared flags=0x%lx\n",
+                ReinitItem->DriverObject,
+                ReinitItem->DriverObject->Flags);
 
         /* Call the routine */
+        DPRINT1("INITTRACE: IO-REINIT[05] invoking routine=%p driver=%p context=%p count=%lu\n",
+                (PVOID)ReinitItem->ReinitRoutine,
+                ReinitItem->DriverObject,
+                ReinitItem->Context,
+                ReinitItem->DriverObject->DriverExtension->Count);
         ReinitItem->ReinitRoutine(ReinitItem->DriverObject,
                                   ReinitItem->Context,
                                   ReinitItem->DriverObject->
                                   DriverExtension->Count);
+        DPRINT1("INITTRACE: IO-REINIT[06] callback returned entry=%p item=%p\n",
+                Entry,
+                ReinitItem);
 
         /* Free the entry */
+        DPRINT1("INITTRACE: IO-REINIT[07] freeing callback entry=%p\n", Entry);
         ExFreePool(Entry);
+        DPRINT1("INITTRACE: IO-REINIT[08] callback entry freed\n");
 
         /* Move to the next one */
         Entry = ExInterlockedRemoveHeadList(&DriverReinitListHead,
                                             &DriverReinitListLock);
+        DPRINT1("INITTRACE: IO-REINIT[09] next callback entry=%p\n", Entry);
     }
+    DPRINT1("INITTRACE: IO-REINIT[10] system-driver callback walk complete\n");
 }
 
 VOID

@@ -3965,19 +3965,47 @@ KdbInitialize(
 
     if (BootPhase >= 2)
     {
+        BOOLEAN RetryRequested;
+
         /* I/O is now set up for disk access: load the KDBinit file */
         NTSTATUS Status = KdbpCliInit();
 
-        DPRINT1("INITTRACE: KDBG phase %lu KDBinit initialization returned 0x%08lx\n",
+        DPRINT1("INITTRACE: KDBG-RETURN[01] phase=%lu KDBinit returned status=0x%08lx\n",
                 BootPhase,
                 Status);
+        DPRINT1("INITTRACE: KDBG-RETURN[02] phase=%lu post-print execution resumed irql=%lu cpu=%lu thread=%p\n",
+                BootPhase,
+                KeGetCurrentIrql(),
+                KeGetCurrentProcessorNumber(),
+                KeGetCurrentThread());
 
         /* Schedule an I/O reinitialization if needed */
-        if (Status == STATUS_OBJECT_NAME_NOT_FOUND ||
-            Status == STATUS_OBJECT_PATH_NOT_FOUND)
+        RetryRequested = (Status == STATUS_OBJECT_NAME_NOT_FOUND ||
+                          Status == STATUS_OBJECT_PATH_NOT_FOUND);
+        DPRINT1("INITTRACE: KDBG-RETURN[03] phase=%lu status classified retry=%u dispatch=%p old-init=%p\n",
+                BootPhase,
+                RetryRequested,
+                DispatchTable,
+                (PVOID)DispatchTable->KdpInitRoutine);
+        if (RetryRequested)
         {
+            DPRINT1("INITTRACE: KDBG-RETURN[04] phase=%lu installing KDB retry routine\n",
+                    BootPhase);
             DispatchTable->KdpInitRoutine = KdbInitialize;
+            DPRINT1("INITTRACE: KDBG-RETURN[05] phase=%lu retry routine installed init=%p\n",
+                    BootPhase,
+                    (PVOID)DispatchTable->KdpInitRoutine);
         }
+        else
+        {
+            DPRINT1("INITTRACE: KDBG-RETURN[04] phase=%lu successful; no KDB retry requested\n",
+                    BootPhase);
+        }
+
+        DPRINT1("INITTRACE: KDBG-RETURN[06] phase=%lu leaving KdbInitialize status=0x%08lx init=%p\n",
+                BootPhase,
+                STATUS_SUCCESS,
+                (PVOID)DispatchTable->KdpInitRoutine);
     }
 
     return STATUS_SUCCESS;

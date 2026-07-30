@@ -199,8 +199,9 @@ KdpDriverReinit(
     PLIST_ENTRY CurrentEntry;
     PKD_DISPATCH_TABLE CurrentTable;
     PKDP_INIT_ROUTINE KdpInitRoutine;
+    NTSTATUS ProviderStatus;
     ULONG BootPhase = (Count + 1); // Do BootPhase >= 2
-    BOOLEAN ScheduleReinit = FALSE;
+    BOOLEAN ProviderRequestsReinit, ScheduleReinit = FALSE;
 
     ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
 
@@ -229,24 +230,52 @@ KdpDriverReinit(
             /* Get the initialization routine and reset it */
             KdpInitRoutine = CurrentTable->KdpInitRoutine;
             CurrentTable->KdpInitRoutine = NULL;
-            DPRINT1("INITTRACE: KD phase %lu calling provider=%p routine=%p\n",
+            DPRINT1("INITTRACE: KD-CALL[01] phase=%lu calling provider=%p routine=%p current-entry=%p next-entry=%p\n",
                     BootPhase,
                     CurrentTable,
-                    (PVOID)KdpInitRoutine);
-            CurrentTable->InitStatus = KdpInitRoutine(CurrentTable, BootPhase);
-            DPRINT1("INITTRACE: KD phase %lu provider=%p returned 0x%08lx reinit=%p\n",
+                    (PVOID)KdpInitRoutine,
+                    &CurrentTable->KdProvidersList,
+                    CurrentEntry);
+            ProviderStatus = KdpInitRoutine(CurrentTable, BootPhase);
+            DPRINT1("INITTRACE: KD-CALL[02] phase=%lu caller resumed provider=%p raw-status=0x%08lx irql=%lu cpu=%lu thread=%p\n",
                     BootPhase,
                     CurrentTable,
-                    CurrentTable->InitStatus,
-                    CurrentTable->KdpInitRoutine);
+                    ProviderStatus,
+                    KeGetCurrentIrql(),
+                    KeGetCurrentProcessorNumber(),
+                    KeGetCurrentThread());
+            CurrentTable->InitStatus = ProviderStatus;
+            DPRINT1("INITTRACE: KD-CALL[03] phase=%lu status stored provider=%p status=0x%08lx\n",
+                    BootPhase,
+                    CurrentTable,
+                    CurrentTable->InitStatus);
+            ProviderRequestsReinit = (CurrentTable->KdpInitRoutine != NULL);
+            DPRINT1("INITTRACE: KD-CALL[04] phase=%lu provider=%p next-init=%p requests-reinit=%u\n",
+                    BootPhase,
+                    CurrentTable,
+                    (PVOID)CurrentTable->KdpInitRoutine,
+                    ProviderRequestsReinit);
             DPRINT("KdpInitRoutine(%p) returned 0x%08lx\n",
                    CurrentTable, CurrentTable->InitStatus);
 
             /* Check whether it needs to be reinitialized again */
-            ScheduleReinit = (ScheduleReinit || CurrentTable->KdpInitRoutine);
+            ScheduleReinit = (ScheduleReinit || ProviderRequestsReinit);
+            DPRINT1("INITTRACE: KD-CALL[05] phase=%lu aggregate schedule-reinit=%u advancing-to=%p\n",
+                    BootPhase,
+                    ScheduleReinit,
+                    CurrentEntry);
+        }
+        else
+        {
+            DPRINT1("INITTRACE: KD-CALL[01] phase=%lu provider=%p has no init routine; skipping\n",
+                    BootPhase,
+                    CurrentTable);
         }
     }
 
+    DPRINT1("INITTRACE: KD-CALL[06] phase=%lu provider walk complete schedule-reinit=%u\n",
+            BootPhase,
+            ScheduleReinit);
     DPRINT("ScheduleReinit: %s\n", ScheduleReinit ? "TRUE" : "FALSE");
     if (ScheduleReinit)
     {
@@ -260,19 +289,32 @@ KdpDriverReinit(
          */
         if (Count <= 1)
         {
+            DPRINT1("INITTRACE: KD-CALL[07] phase=%lu registering boot-driver retry count=%lu\n",
+                    BootPhase,
+                    Count);
             IoRegisterBootDriverReinitialization(DriverObject,
                                                  KdpDriverReinit,
                                                  (PVOID)FALSE);
+            DPRINT1("INITTRACE: KD-CALL[08] phase=%lu boot-driver retry registered\n",
+                    BootPhase);
         }
         else if (Count <= 3)
         {
+            DPRINT1("INITTRACE: KD-CALL[07] phase=%lu registering system-driver retry count=%lu\n",
+                    BootPhase,
+                    Count);
             IoRegisterDriverReinitialization(DriverObject,
                                              KdpDriverReinit,
                                              (PVOID)TRUE);
+            DPRINT1("INITTRACE: KD-CALL[08] phase=%lu system-driver retry registered\n",
+                    BootPhase);
         }
         else
         {
             /* Too late, no more reinitializations! */
+            DPRINT1("INITTRACE: KD-CALL[07] phase=%lu retry limit reached count=%lu\n",
+                    BootPhase,
+                    Count);
             DPRINT("Cannot reinitialize anymore!\n");
             ScheduleReinit = FALSE;
         }
@@ -285,14 +327,22 @@ KdpDriverReinit(
         DPRINT1("INITTRACE: KD phase %lu complete; deleting auxiliary driver=%p\n",
                 BootPhase,
                 DriverObject);
+        DPRINT1("INITTRACE: KD-CALL[09] phase=%lu making auxiliary driver temporary\n",
+                BootPhase);
         ObMakeTemporaryObject(DriverObject);
+        DPRINT1("INITTRACE: KD-CALL[10] phase=%lu auxiliary driver temporary; calling IoDeleteDriver\n",
+                BootPhase);
         IoDeleteDriver(DriverObject);
+        DPRINT1("INITTRACE: KD-CALL[11] phase=%lu IoDeleteDriver returned\n",
+                BootPhase);
     }
     else
     {
         DPRINT1("INITTRACE: KD phase %lu scheduled another reinitialization\n",
                 BootPhase);
     }
+    DPRINT1("INITTRACE: KD-CALL[12] phase=%lu leaving KdpDriverReinit\n",
+            BootPhase);
 }
 
 /**
