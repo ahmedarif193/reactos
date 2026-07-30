@@ -1770,6 +1770,7 @@ acpi_bus_exit (void)
 	acpi_pci_root_exit();
 	acpi_pci_link_exit();
 #endif
+	acpi_fan_exit();
 #ifdef CONFIG_ACPI_EC
 	acpi_ec_exit();
 #endif
@@ -1829,6 +1830,7 @@ acpi_init (void)
 	acpi_power_init();	/* ACPI Bus Power Management */
 	acpi_button_init();
 	acpi_ec_init();		/* ACPI Embedded Controller */
+	acpi_fan_init();		/* ACPI Fan */
 #ifdef CONFIG_ACPI_PCI
 	acpi_pci_link_init();	/* ACPI PCI Interrupt Link */
 	acpi_pci_root_init();	/* ACPI PCI Root Bridge */
