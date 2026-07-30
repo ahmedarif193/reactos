@@ -132,6 +132,220 @@ HalBuildMdlFromScatterGatherList(
     IN PMDL OriginalMdl,
     OUT PMDL *TargetMdl);
 
+NTSTATUS
+NTAPI
+HalpGetDmaAdapterInfo(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN OUT PDMA_ADAPTER_INFO AdapterInfo);
+
+NTSTATUS
+NTAPI
+HalpGetDmaTransferInfo(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PMDL Mdl,
+    IN ULONGLONG Offset,
+    IN ULONG Length,
+    IN BOOLEAN WriteOnly,
+    IN OUT PDMA_TRANSFER_INFO TransferInfo);
+
+NTSTATUS
+NTAPI
+HalpInitializeDmaTransferContext(
+    IN PADAPTER_OBJECT AdapterObject,
+    OUT PVOID DmaTransferContext);
+
+NTSTATUS
+NTAPI
+HalpAllocateAdapterChannelEx(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PDEVICE_OBJECT DeviceObject,
+    IN PVOID DmaTransferContext,
+    IN ULONG NumberOfMapRegisters,
+    IN ULONG Flags,
+    IN PDRIVER_CONTROL ExecutionRoutine OPTIONAL,
+    IN PVOID ExecutionContext OPTIONAL,
+    OUT PVOID *MapRegisterBase OPTIONAL);
+
+BOOLEAN
+NTAPI
+HalpCancelAdapterChannel(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PDEVICE_OBJECT DeviceObject,
+    IN PVOID DmaTransferContext);
+
+NTSTATUS
+NTAPI
+HalpMapTransferEx(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PMDL Mdl,
+    IN PVOID MapRegisterBase,
+    IN ULONGLONG Offset,
+    IN ULONG DeviceOffset,
+    IN OUT PULONG Length,
+    IN BOOLEAN WriteToDevice,
+    OUT PSCATTER_GATHER_LIST ScatterGatherBuffer OPTIONAL,
+    IN ULONG ScatterGatherBufferLength,
+    IN PDMA_COMPLETION_ROUTINE DmaCompletionRoutine OPTIONAL,
+    IN PVOID CompletionContext OPTIONAL);
+
+NTSTATUS
+NTAPI
+HalpGetScatterGatherListEx(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PDEVICE_OBJECT DeviceObject,
+    IN PVOID DmaTransferContext,
+    IN PMDL Mdl,
+    IN ULONGLONG Offset,
+    IN ULONG Length,
+    IN ULONG Flags,
+    IN PDRIVER_LIST_CONTROL ExecutionRoutine OPTIONAL,
+    IN PVOID Context OPTIONAL,
+    IN BOOLEAN WriteToDevice,
+    IN PDMA_COMPLETION_ROUTINE DmaCompletionRoutine OPTIONAL,
+    IN PVOID CompletionContext OPTIONAL,
+    OUT PSCATTER_GATHER_LIST *ScatterGatherList OPTIONAL);
+
+NTSTATUS
+NTAPI
+HalpBuildScatterGatherListEx(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PDEVICE_OBJECT DeviceObject,
+    IN PVOID DmaTransferContext,
+    IN PMDL Mdl,
+    IN ULONGLONG Offset,
+    IN ULONG Length,
+    IN ULONG Flags,
+    IN PDRIVER_LIST_CONTROL ExecutionRoutine OPTIONAL,
+    IN PVOID Context OPTIONAL,
+    IN BOOLEAN WriteToDevice,
+    IN PVOID ScatterGatherBuffer,
+    IN ULONG ScatterGatherBufferLength,
+    IN PDMA_COMPLETION_ROUTINE DmaCompletionRoutine OPTIONAL,
+    IN PVOID CompletionContext OPTIONAL,
+    OUT PVOID ScatterGatherList OPTIONAL);
+
+NTSTATUS
+NTAPI
+HalpFlushAdapterBuffersEx(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PMDL Mdl,
+    IN PVOID MapRegisterBase,
+    IN ULONGLONG Offset,
+    IN ULONG Length,
+    IN BOOLEAN WriteToDevice);
+
+VOID
+NTAPI
+HalpFreeAdapterObject(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN IO_ALLOCATION_ACTION AllocationAction);
+
+NTSTATUS
+NTAPI
+HalpCancelMappedTransfer(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PVOID DmaTransferContext);
+
+PVOID
+NTAPI
+HalpAllocateCommonBufferEx(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PPHYSICAL_ADDRESS MaximumAddress OPTIONAL,
+    IN ULONG Length,
+    OUT PPHYSICAL_ADDRESS LogicalAddress,
+    IN BOOLEAN CacheEnabled,
+    IN NODE_REQUIREMENT PreferredNode);
+
+NTSTATUS
+NTAPI
+HalpConfigureAdapterChannel(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN ULONG FunctionNumber,
+    IN PVOID Context);
+
+NTSTATUS
+NTAPI
+HalpFlushDmaBuffer(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PMDL Mdl,
+    IN BOOLEAN ReadOperation);
+
+NTSTATUS
+NTAPI
+HalpJoinDmaDomain(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN HANDLE DomainHandle);
+
+NTSTATUS
+NTAPI
+HalpLeaveDmaDomain(
+    IN PADAPTER_OBJECT AdapterObject);
+
+HANDLE
+NTAPI
+HalpGetDmaDomain(
+    IN PADAPTER_OBJECT AdapterObject);
+
+PVOID
+NTAPI
+HalpAllocateCommonBufferWithBounds(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PPHYSICAL_ADDRESS MinimumAddress OPTIONAL,
+    IN PPHYSICAL_ADDRESS MaximumAddress OPTIONAL,
+    IN ULONG Length,
+    IN ULONG Flags,
+    IN MEMORY_CACHING_TYPE *CacheType OPTIONAL,
+    IN NODE_REQUIREMENT PreferredNode,
+    OUT PPHYSICAL_ADDRESS LogicalAddress);
+
+NTSTATUS
+NTAPI
+HalpAllocateDomainCommonBuffer(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN HANDLE DomainHandle,
+    IN PPHYSICAL_ADDRESS MaximumAddress OPTIONAL,
+    IN ULONG Length,
+    IN ULONG Flags,
+    IN MEMORY_CACHING_TYPE *CacheType OPTIONAL,
+    IN NODE_REQUIREMENT PreferredNode,
+    OUT PPHYSICAL_ADDRESS LogicalAddress,
+    OUT PVOID *VirtualAddress);
+
+NTSTATUS
+NTAPI
+HalpAllocateCommonBufferVector(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PHYSICAL_ADDRESS LowAddress,
+    IN PHYSICAL_ADDRESS HighAddress,
+    IN MEMORY_CACHING_TYPE CacheType,
+    IN ULONG IdealNode,
+    IN ULONG Flags,
+    IN ULONG NumberOfElements,
+    IN ULONGLONG SizeOfElements,
+    OUT PDMA_COMMON_BUFFER_VECTOR *VectorOut);
+
+VOID
+NTAPI
+HalpGetCommonBufferFromVectorByIndex(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PDMA_COMMON_BUFFER_VECTOR Vector,
+    IN ULONG Index,
+    OUT PVOID *VirtualAddressOut,
+    OUT PPHYSICAL_ADDRESS LogicalAddressOut);
+
+VOID
+NTAPI
+HalpFreeCommonBufferFromVector(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PDMA_COMMON_BUFFER_VECTOR Vector,
+    IN ULONG Index);
+
+VOID
+NTAPI
+HalpFreeCommonBufferVector(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PDMA_COMMON_BUFFER_VECTOR Vector);
+
 
 static DMA_OPERATIONS HalpDmaOperations = {
    sizeof(DMA_OPERATIONS),
@@ -149,7 +363,31 @@ static DMA_OPERATIONS HalpDmaOperations = {
    (PPUT_SCATTER_GATHER_LIST)HalPutScatterGatherList,
    (PCALCULATE_SCATTER_GATHER_LIST_SIZE)HalCalculateScatterGatherListSize,
    (PBUILD_SCATTER_GATHER_LIST)HalBuildScatterGatherList,
-   (PBUILD_MDL_FROM_SCATTER_GATHER_LIST)HalBuildMdlFromScatterGatherList
+   (PBUILD_MDL_FROM_SCATTER_GATHER_LIST)HalBuildMdlFromScatterGatherList,
+   /* DMA V3 operations (Win8+), required by KMDF 1.11+ / NetAdapterCx */
+   (PGET_DMA_ADAPTER_INFO)HalpGetDmaAdapterInfo,
+   (PGET_DMA_TRANSFER_INFO)HalpGetDmaTransferInfo,
+   (PINITIALIZE_DMA_TRANSFER_CONTEXT)HalpInitializeDmaTransferContext,
+   (PALLOCATE_COMMON_BUFFER_EX)HalpAllocateCommonBufferEx,
+   (PALLOCATE_ADAPTER_CHANNEL_EX)HalpAllocateAdapterChannelEx,
+   (PCONFIGURE_ADAPTER_CHANNEL)HalpConfigureAdapterChannel,
+   (PCANCEL_ADAPTER_CHANNEL)HalpCancelAdapterChannel,
+   (PMAP_TRANSFER_EX)HalpMapTransferEx,
+   (PGET_SCATTER_GATHER_LIST_EX)HalpGetScatterGatherListEx,
+   (PBUILD_SCATTER_GATHER_LIST_EX)HalpBuildScatterGatherListEx,
+   (PFLUSH_ADAPTER_BUFFERS_EX)HalpFlushAdapterBuffersEx,
+   (PFREE_ADAPTER_OBJECT)HalpFreeAdapterObject,
+   (PCANCEL_MAPPED_TRANSFER)HalpCancelMappedTransfer,
+   (PALLOCATE_DOMAIN_COMMON_BUFFER)HalpAllocateDomainCommonBuffer,
+   (PFLUSH_DMA_BUFFER)HalpFlushDmaBuffer,
+   (PJOIN_DMA_DOMAIN)HalpJoinDmaDomain,
+   (PLEAVE_DMA_DOMAIN)HalpLeaveDmaDomain,
+   (PGET_DMA_DOMAIN)HalpGetDmaDomain,
+   (PALLOCATE_COMMON_BUFFER_WITH_BOUNDS)HalpAllocateCommonBufferWithBounds,
+   (PALLOCATE_COMMON_BUFFER_VECTOR)HalpAllocateCommonBufferVector,
+   (PGET_COMMON_BUFFER_FROM_VECTOR_BY_INDEX)HalpGetCommonBufferFromVectorByIndex,
+   (PFREE_COMMON_BUFFER_FROM_VECTOR)HalpFreeCommonBufferFromVector,
+   (PFREE_COMMON_BUFFER_VECTOR)HalpFreeCommonBufferVector
 };
 #endif
 
@@ -666,7 +904,7 @@ HalGetAdapter(IN PDEVICE_DESCRIPTION DeviceDescription,
     KIRQL OldIrql;
 
     /* Validate parameters in device description */
-    if (DeviceDescription->Version > DEVICE_DESCRIPTION_VERSION2) return NULL;
+    if (DeviceDescription->Version > DEVICE_DESCRIPTION_VERSION3) return NULL;
 
     /*
      * See if we're going to use ISA/EISA DMA adapter. These adapters are
@@ -816,6 +1054,17 @@ HalGetAdapter(IN PDEVICE_DESCRIPTION DeviceDescription,
 
     AdapterObject->Dma32BitAddresses = DeviceDescription->Dma32BitAddresses;
     AdapterObject->Dma64BitAddresses = DeviceDescription->Dma64BitAddresses;
+
+    /* DMA V3 clients describe their addressing capability via DmaAddressWidth */
+    if ((DeviceDescription->Version >= DEVICE_DESCRIPTION_VERSION3) &&
+        (DeviceDescription->DmaAddressWidth != 0))
+    {
+        if (DeviceDescription->DmaAddressWidth >= 32)
+            AdapterObject->Dma32BitAddresses = TRUE;
+        if (DeviceDescription->DmaAddressWidth >= 64)
+            AdapterObject->Dma64BitAddresses = TRUE;
+    }
+
     AdapterObject->ScatterGather = DeviceDescription->ScatterGather;
     AdapterObject->MasterDevice = DeviceDescription->Master;
     *NumberOfMapRegisters = AdapterObject->MapRegistersPerChannel;
@@ -1418,6 +1667,808 @@ HalBuildMdlFromScatterGatherList(
 {
     UNIMPLEMENTED;
     return STATUS_NOT_IMPLEMENTED;
+}
+
+/*
+ * DMA V3 (Win8+) operations.
+ *
+ * These service DEVICE_DESCRIPTION_VERSION3 adapters, which KMDF 1.11+
+ * uses for all modern DMA profiles (and NetAdapterCx drivers require).
+ * They are layered on top of the V2 machinery: bus-master scatter/gather
+ * adapters map straight through IoMapTransfer, system (slave) DMA
+ * completion callbacks are not supported.
+ */
+
+/* Lives inside the caller-supplied opaque DMA transfer context */
+typedef struct _HALP_DMA_TRANSFER_CONTEXT
+{
+    WAIT_CONTEXT_BLOCK Wcb;
+} HALP_DMA_TRANSFER_CONTEXT, *PHALP_DMA_TRANSFER_CONTEXT;
+
+C_ASSERT(sizeof(HALP_DMA_TRANSFER_CONTEXT) <= DMA_TRANSFER_CONTEXT_SIZE_V1);
+
+/* Advance (Mdl, Offset) so that Offset lies within the returned MDL */
+static
+PMDL
+HalpDmaSkipToOffset(
+    IN PMDL Mdl,
+    IN OUT PULONGLONG Offset)
+{
+    while (Mdl != NULL && *Offset >= MmGetMdlByteCount(Mdl))
+    {
+        *Offset -= MmGetMdlByteCount(Mdl);
+        Mdl = Mdl->Next;
+    }
+    return Mdl;
+}
+
+NTSTATUS
+NTAPI
+HalpGetDmaAdapterInfo(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN OUT PDMA_ADAPTER_INFO AdapterInfo)
+{
+    if (AdapterInfo->Version != DMA_ADAPTER_INFO_VERSION1)
+        return STATUS_INVALID_PARAMETER;
+
+    AdapterInfo->V1.ReadDmaCounterAvailable = !AdapterObject->MasterDevice;
+    AdapterInfo->V1.ScatterGatherLimit = MAX_SG_ELEMENTS;
+    AdapterInfo->V1.DmaAddressWidth = AdapterObject->Dma64BitAddresses ? 64 :
+                                      (AdapterObject->Dma32BitAddresses ? 32 : 24);
+    AdapterInfo->V1.Flags = 0;
+    AdapterInfo->V1.MinimumTransferUnit = 1;
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+HalpGetDmaTransferInfo(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PMDL Mdl,
+    IN ULONGLONG Offset,
+    IN ULONG Length,
+    IN BOOLEAN WriteOnly,
+    IN OUT PDMA_TRANSFER_INFO TransferInfo)
+{
+    ULONG MapRegisters = 0;
+    ULONGLONG CurrentOffset = Offset;
+    ULONG Remaining = Length;
+    PMDL CurrentMdl;
+
+    UNREFERENCED_PARAMETER(AdapterObject);
+    UNREFERENCED_PARAMETER(WriteOnly);
+
+    /* Worst-case page span of the described transfer across the MDL chain */
+    CurrentMdl = HalpDmaSkipToOffset(Mdl, &CurrentOffset);
+    while (CurrentMdl != NULL && Remaining != 0)
+    {
+        PVOID Va = (PUCHAR)MmGetMdlVirtualAddress(CurrentMdl) + CurrentOffset;
+        ULONG ByteCount = MmGetMdlByteCount(CurrentMdl) - (ULONG)CurrentOffset;
+
+        if (ByteCount > Remaining) ByteCount = Remaining;
+        MapRegisters += (ULONG)ADDRESS_AND_SIZE_TO_SPAN_PAGES(Va, ByteCount);
+        Remaining -= ByteCount;
+        CurrentOffset = 0;
+        CurrentMdl = CurrentMdl->Next;
+    }
+
+    /* KMDF zero-initializes the structure, so treat version 0 as V1 */
+    switch (TransferInfo->Version)
+    {
+        case DMA_TRANSFER_INFO_VERSION2:
+            TransferInfo->V2.LogicalPageCount = MapRegisters;
+            /* fall through */
+        case 0:
+        case DMA_TRANSFER_INFO_VERSION1:
+            TransferInfo->V1.MapRegisterCount = MapRegisters;
+            TransferInfo->V1.ScatterGatherElementCount = MapRegisters;
+            TransferInfo->V1.ScatterGatherListSize = sizeof(SCATTER_GATHER_LIST) +
+                MapRegisters * sizeof(SCATTER_GATHER_ELEMENT);
+            break;
+        default:
+            return STATUS_INVALID_PARAMETER;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+HalpInitializeDmaTransferContext(
+    IN PADAPTER_OBJECT AdapterObject,
+    OUT PVOID DmaTransferContext)
+{
+    UNREFERENCED_PARAMETER(AdapterObject);
+
+    if (DmaTransferContext == NULL) return STATUS_INVALID_PARAMETER;
+
+    RtlZeroMemory(DmaTransferContext, DMA_TRANSFER_CONTEXT_SIZE_V1);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+HalpAllocateAdapterChannelEx(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PDEVICE_OBJECT DeviceObject,
+    IN PVOID DmaTransferContext,
+    IN ULONG NumberOfMapRegisters,
+    IN ULONG Flags,
+    IN PDRIVER_CONTROL ExecutionRoutine OPTIONAL,
+    IN PVOID ExecutionContext OPTIONAL,
+    OUT PVOID *MapRegisterBase OPTIONAL)
+{
+    PHALP_DMA_TRANSFER_CONTEXT TransferContext = DmaTransferContext;
+    PWAIT_CONTEXT_BLOCK Wcb;
+
+    if (TransferContext == NULL || ExecutionRoutine == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    if (MapRegisterBase != NULL) *MapRegisterBase = NULL;
+
+    if (Flags & DMA_SYNCHRONOUS_CALLBACK)
+    {
+        /* The execution routine must run before this call returns. When
+         * another transaction currently owns the channel the callback would
+         * be deferred, which the caller explicitly forbade — fail so it can
+         * retry instead. Scatter/gather masters run inline when free. */
+        if (AdapterObject->ChannelWaitQueue.Busy)
+            return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    Wcb = &TransferContext->Wcb;
+    RtlZeroMemory(Wcb, sizeof(*Wcb));
+    Wcb->DeviceObject = DeviceObject;
+    Wcb->DeviceContext = ExecutionContext;
+    Wcb->CurrentIrp = NULL;
+
+    return HalAllocateAdapterChannel(AdapterObject,
+                                     Wcb,
+                                     NumberOfMapRegisters,
+                                     ExecutionRoutine);
+}
+
+BOOLEAN
+NTAPI
+HalpCancelAdapterChannel(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PDEVICE_OBJECT DeviceObject,
+    IN PVOID DmaTransferContext)
+{
+    PHALP_DMA_TRANSFER_CONTEXT TransferContext = DmaTransferContext;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    if (TransferContext == NULL) return FALSE;
+
+    /* TRUE only if the wait block was still queued: the execution routine
+     * is then guaranteed to never run. Once the channel was granted (or is
+     * being granted), the caller must let the callback complete normally. */
+    return KeRemoveEntryDeviceQueue(&AdapterObject->ChannelWaitQueue,
+                                    &TransferContext->Wcb.WaitQueueEntry);
+}
+
+NTSTATUS
+NTAPI
+HalpMapTransferEx(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PMDL Mdl,
+    IN PVOID MapRegisterBase,
+    IN ULONGLONG Offset,
+    IN ULONG DeviceOffset,
+    IN OUT PULONG Length,
+    IN BOOLEAN WriteToDevice,
+    OUT PSCATTER_GATHER_LIST ScatterGatherBuffer OPTIONAL,
+    IN ULONG ScatterGatherBufferLength,
+    IN PDMA_COMPLETION_ROUTINE DmaCompletionRoutine OPTIONAL,
+    IN PVOID CompletionContext OPTIONAL)
+{
+    PMDL CurrentMdl;
+    ULONGLONG MdlOffset = Offset;
+    ULONG Remaining = *Length;
+    ULONG Mapped = 0;
+    ULONG MaxElements;
+    ULONG ElementCount = 0;
+
+    UNREFERENCED_PARAMETER(DeviceOffset);
+    UNREFERENCED_PARAMETER(CompletionContext);
+
+    /* DMA completion callbacks only exist for system (slave) DMA */
+    if (DmaCompletionRoutine != NULL) return STATUS_NOT_SUPPORTED;
+
+    if (ScatterGatherBuffer == NULL ||
+        ScatterGatherBufferLength < (sizeof(SCATTER_GATHER_LIST) +
+                                     sizeof(SCATTER_GATHER_ELEMENT)))
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    MaxElements = (ScatterGatherBufferLength - sizeof(SCATTER_GATHER_LIST)) /
+                  sizeof(SCATTER_GATHER_ELEMENT);
+
+    CurrentMdl = HalpDmaSkipToOffset(Mdl, &MdlOffset);
+    if (CurrentMdl == NULL) return STATUS_INVALID_PARAMETER;
+
+    while (Remaining != 0 && CurrentMdl != NULL && ElementCount < MaxElements)
+    {
+        PUCHAR CurrentVa = (PUCHAR)MmGetMdlVirtualAddress(CurrentMdl) + MdlOffset;
+        ULONG MdlBytes = MmGetMdlByteCount(CurrentMdl) - (ULONG)MdlOffset;
+        ULONG ChunkLength = min(Remaining, MdlBytes);
+
+        /* Map contiguous runs of the current MDL into separate elements */
+        while (ChunkLength != 0 && ElementCount < MaxElements)
+        {
+            ULONG ThisLength = ChunkLength;
+            PHYSICAL_ADDRESS Address = IoMapTransfer(AdapterObject,
+                                                     CurrentMdl,
+                                                     MapRegisterBase,
+                                                     CurrentVa,
+                                                     &ThisLength,
+                                                     WriteToDevice);
+            if (ThisLength == 0) break;
+
+            ScatterGatherBuffer->Elements[ElementCount].Address = Address;
+            ScatterGatherBuffer->Elements[ElementCount].Length = ThisLength;
+            ScatterGatherBuffer->Elements[ElementCount].Reserved = 0;
+            ElementCount++;
+
+            CurrentVa += ThisLength;
+            ChunkLength -= ThisLength;
+            Remaining -= ThisLength;
+            Mapped += ThisLength;
+        }
+
+        if (ChunkLength != 0) break;
+
+        MdlOffset = 0;
+        CurrentMdl = CurrentMdl->Next;
+    }
+
+    if (Mapped == 0) return STATUS_INSUFFICIENT_RESOURCES;
+
+    ScatterGatherBuffer->NumberOfElements = ElementCount;
+    ScatterGatherBuffer->Reserved = 0;
+    *Length = Mapped;
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+HalpGetScatterGatherListEx(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PDEVICE_OBJECT DeviceObject,
+    IN PVOID DmaTransferContext,
+    IN PMDL Mdl,
+    IN ULONGLONG Offset,
+    IN ULONG Length,
+    IN ULONG Flags,
+    IN PDRIVER_LIST_CONTROL ExecutionRoutine OPTIONAL,
+    IN PVOID Context OPTIONAL,
+    IN BOOLEAN WriteToDevice,
+    IN PDMA_COMPLETION_ROUTINE DmaCompletionRoutine OPTIONAL,
+    IN PVOID CompletionContext OPTIONAL,
+    OUT PSCATTER_GATHER_LIST *ScatterGatherList OPTIONAL)
+{
+    ULONGLONG MdlOffset = Offset;
+    PMDL CurrentMdl;
+
+    UNREFERENCED_PARAMETER(DmaTransferContext);
+    UNREFERENCED_PARAMETER(Flags);
+    UNREFERENCED_PARAMETER(CompletionContext);
+
+    if (DmaCompletionRoutine != NULL) return STATUS_NOT_SUPPORTED;
+    if (ExecutionRoutine == NULL) return STATUS_INVALID_PARAMETER;
+
+    if (ScatterGatherList != NULL) *ScatterGatherList = NULL;
+
+    CurrentMdl = HalpDmaSkipToOffset(Mdl, &MdlOffset);
+    if (CurrentMdl == NULL) return STATUS_INVALID_PARAMETER;
+
+    return HalGetScatterGatherList(AdapterObject,
+                                   DeviceObject,
+                                   CurrentMdl,
+                                   (PUCHAR)MmGetMdlVirtualAddress(CurrentMdl) + MdlOffset,
+                                   Length,
+                                   ExecutionRoutine,
+                                   Context,
+                                   WriteToDevice);
+}
+
+NTSTATUS
+NTAPI
+HalpBuildScatterGatherListEx(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PDEVICE_OBJECT DeviceObject,
+    IN PVOID DmaTransferContext,
+    IN PMDL Mdl,
+    IN ULONGLONG Offset,
+    IN ULONG Length,
+    IN ULONG Flags,
+    IN PDRIVER_LIST_CONTROL ExecutionRoutine OPTIONAL,
+    IN PVOID Context OPTIONAL,
+    IN BOOLEAN WriteToDevice,
+    IN PVOID ScatterGatherBuffer,
+    IN ULONG ScatterGatherBufferLength,
+    IN PDMA_COMPLETION_ROUTINE DmaCompletionRoutine OPTIONAL,
+    IN PVOID CompletionContext OPTIONAL,
+    OUT PVOID ScatterGatherList OPTIONAL)
+{
+    ULONGLONG MdlOffset = Offset;
+    PMDL CurrentMdl;
+
+    UNREFERENCED_PARAMETER(DmaTransferContext);
+    UNREFERENCED_PARAMETER(Flags);
+    UNREFERENCED_PARAMETER(CompletionContext);
+    UNREFERENCED_PARAMETER(ScatterGatherList);
+
+    if (DmaCompletionRoutine != NULL) return STATUS_NOT_SUPPORTED;
+    if (ExecutionRoutine == NULL) return STATUS_INVALID_PARAMETER;
+
+    CurrentMdl = HalpDmaSkipToOffset(Mdl, &MdlOffset);
+    if (CurrentMdl == NULL) return STATUS_INVALID_PARAMETER;
+
+    return HalBuildScatterGatherList(AdapterObject,
+                                     DeviceObject,
+                                     CurrentMdl,
+                                     (PUCHAR)MmGetMdlVirtualAddress(CurrentMdl) + MdlOffset,
+                                     Length,
+                                     ExecutionRoutine,
+                                     Context,
+                                     WriteToDevice,
+                                     ScatterGatherBuffer,
+                                     ScatterGatherBufferLength);
+}
+
+NTSTATUS
+NTAPI
+HalpFlushAdapterBuffersEx(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PMDL Mdl,
+    IN PVOID MapRegisterBase,
+    IN ULONGLONG Offset,
+    IN ULONG Length,
+    IN BOOLEAN WriteToDevice)
+{
+    ULONGLONG MdlOffset = Offset;
+    ULONG Remaining = Length;
+    PMDL CurrentMdl;
+    BOOLEAN Success = TRUE;
+
+    CurrentMdl = HalpDmaSkipToOffset(Mdl, &MdlOffset);
+    while (CurrentMdl != NULL && Remaining != 0)
+    {
+        PUCHAR CurrentVa = (PUCHAR)MmGetMdlVirtualAddress(CurrentMdl) + MdlOffset;
+        ULONG ByteCount = MmGetMdlByteCount(CurrentMdl) - (ULONG)MdlOffset;
+
+        if (ByteCount > Remaining) ByteCount = Remaining;
+        if (!IoFlushAdapterBuffers(AdapterObject,
+                                   CurrentMdl,
+                                   MapRegisterBase,
+                                   CurrentVa,
+                                   ByteCount,
+                                   WriteToDevice))
+        {
+            Success = FALSE;
+        }
+
+        Remaining -= ByteCount;
+        MdlOffset = 0;
+        CurrentMdl = CurrentMdl->Next;
+    }
+
+    return Success ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
+}
+
+VOID
+NTAPI
+HalpFreeAdapterObject(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN IO_ALLOCATION_ACTION AllocationAction)
+{
+    if (AllocationAction == KeepObject) return;
+
+    /* Both deallocate actions release the adapter; map registers are
+     * owned by the shared master adapter and freed via IoFreeMapRegisters */
+    HalPutDmaAdapter(AdapterObject);
+}
+
+NTSTATUS
+NTAPI
+HalpCancelMappedTransfer(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PVOID DmaTransferContext)
+{
+    UNREFERENCED_PARAMETER(AdapterObject);
+    UNREFERENCED_PARAMETER(DmaTransferContext);
+
+    /* Nothing is ever deferred for bus-master transfers, so nothing to cancel */
+    return STATUS_SUCCESS;
+}
+
+PVOID
+NTAPI
+HalpAllocateCommonBufferEx(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PPHYSICAL_ADDRESS MaximumAddress OPTIONAL,
+    IN ULONG Length,
+    OUT PPHYSICAL_ADDRESS LogicalAddress,
+    IN BOOLEAN CacheEnabled,
+    IN NODE_REQUIREMENT PreferredNode)
+{
+    UNREFERENCED_PARAMETER(MaximumAddress);
+    UNREFERENCED_PARAMETER(PreferredNode);
+
+    return HalAllocateCommonBuffer(AdapterObject,
+                                   Length,
+                                   LogicalAddress,
+                                   CacheEnabled);
+}
+
+NTSTATUS
+NTAPI
+HalpConfigureAdapterChannel(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN ULONG FunctionNumber,
+    IN PVOID Context)
+{
+    UNREFERENCED_PARAMETER(AdapterObject);
+    UNREFERENCED_PARAMETER(FunctionNumber);
+    UNREFERENCED_PARAMETER(Context);
+
+    /* Side-band controller configuration only exists for system DMA */
+    return STATUS_NOT_SUPPORTED;
+}
+
+NTSTATUS
+NTAPI
+HalpFlushDmaBuffer(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PMDL Mdl,
+    IN BOOLEAN ReadOperation)
+{
+    UNREFERENCED_PARAMETER(AdapterObject);
+    UNREFERENCED_PARAMETER(Mdl);
+    UNREFERENCED_PARAMETER(ReadOperation);
+
+    /* x86/amd64 DMA is cache coherent */
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+HalpJoinDmaDomain(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN HANDLE DomainHandle)
+{
+    UNREFERENCED_PARAMETER(AdapterObject);
+    UNREFERENCED_PARAMETER(DomainHandle);
+
+    return STATUS_NOT_SUPPORTED;
+}
+
+NTSTATUS
+NTAPI
+HalpLeaveDmaDomain(
+    IN PADAPTER_OBJECT AdapterObject)
+{
+    UNREFERENCED_PARAMETER(AdapterObject);
+
+    return STATUS_NOT_SUPPORTED;
+}
+
+HANDLE
+NTAPI
+HalpGetDmaDomain(
+    IN PADAPTER_OBJECT AdapterObject)
+{
+    UNREFERENCED_PARAMETER(AdapterObject);
+
+    /* DMA domains (shared IOMMU translation) are not implemented */
+    return NULL;
+}
+
+PVOID
+NTAPI
+HalpAllocateCommonBufferWithBounds(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PPHYSICAL_ADDRESS MinimumAddress OPTIONAL,
+    IN PPHYSICAL_ADDRESS MaximumAddress OPTIONAL,
+    IN ULONG Length,
+    IN ULONG Flags,
+    IN MEMORY_CACHING_TYPE *CacheType OPTIONAL,
+    IN NODE_REQUIREMENT PreferredNode,
+    OUT PPHYSICAL_ADDRESS LogicalAddress)
+{
+    PHYSICAL_ADDRESS LowestAcceptableAddress;
+    PHYSICAL_ADDRESS HighestAcceptableAddress;
+    PHYSICAL_ADDRESS AdapterMaximumAddress;
+    PHYSICAL_ADDRESS BoundryAddressMultiple;
+    MEMORY_CACHING_TYPE Caching;
+    PVOID VirtualAddress;
+
+    UNREFERENCED_PARAMETER(Flags);
+    UNREFERENCED_PARAMETER(PreferredNode);
+
+    LowestAcceptableAddress.QuadPart = MinimumAddress ? MinimumAddress->QuadPart : 0;
+
+    AdapterMaximumAddress = HalpGetAdapterMaximumPhysicalAddress(AdapterObject);
+    HighestAcceptableAddress = AdapterMaximumAddress;
+    if (MaximumAddress && MaximumAddress->QuadPart != 0 &&
+        MaximumAddress->QuadPart < AdapterMaximumAddress.QuadPart)
+    {
+        HighestAcceptableAddress = *MaximumAddress;
+    }
+
+    BoundryAddressMultiple.QuadPart = 0;
+    if (AdapterObject->MasterDevice)
+        BoundryAddressMultiple.HighPart = 1;
+    else
+        BoundryAddressMultiple.LowPart = 0x10000;
+
+    Caching = CacheType ? *CacheType : MmCached;
+
+    VirtualAddress = MmAllocateContiguousMemorySpecifyCache(Length,
+                                                            LowestAcceptableAddress,
+                                                            HighestAcceptableAddress,
+                                                            BoundryAddressMultiple,
+                                                            Caching);
+    if (VirtualAddress == NULL) return NULL;
+
+    RtlZeroMemory(VirtualAddress, Length);
+    *LogicalAddress = MmGetPhysicalAddress(VirtualAddress);
+
+    return VirtualAddress;
+}
+
+NTSTATUS
+NTAPI
+HalpAllocateDomainCommonBuffer(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN HANDLE DomainHandle,
+    IN PPHYSICAL_ADDRESS MaximumAddress OPTIONAL,
+    IN ULONG Length,
+    IN ULONG Flags,
+    IN MEMORY_CACHING_TYPE *CacheType OPTIONAL,
+    IN NODE_REQUIREMENT PreferredNode,
+    OUT PPHYSICAL_ADDRESS LogicalAddress,
+    OUT PVOID *VirtualAddress)
+{
+    PVOID Va;
+
+    /* Without IOMMU-backed DMA domains every device effectively lives in
+     * its own domain, so a domain allocation degenerates to a plain
+     * bounded common-buffer allocation. */
+    UNREFERENCED_PARAMETER(DomainHandle);
+
+    if (VirtualAddress == NULL || LogicalAddress == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Va = HalpAllocateCommonBufferWithBounds(AdapterObject,
+                                            NULL,
+                                            MaximumAddress,
+                                            Length,
+                                            Flags,
+                                            CacheType,
+                                            PreferredNode,
+                                            LogicalAddress);
+    if (Va == NULL) return STATUS_INSUFFICIENT_RESOURCES;
+
+    *VirtualAddress = Va;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * Common buffer vectors (Win10 RS5+): per-index common buffers used by
+ * NetAdapterCx's buffer manager for DMA-backed packet pools.
+ */
+typedef struct _HALP_COMMON_BUFFER_ELEMENT
+{
+    PVOID VirtualAddress;
+    PHYSICAL_ADDRESS LogicalAddress;
+} HALP_COMMON_BUFFER_ELEMENT, *PHALP_COMMON_BUFFER_ELEMENT;
+
+/* Completes the opaque forward declaration from wdm.h */
+struct _DMA_COMMON_BUFFER_VECTOR
+{
+    ULONG NumberOfElements;
+    ULONG ElementStride;
+    MEMORY_CACHING_TYPE CacheType;
+    PVOID BlockVa;                  /* single contiguous allocation, or NULL */
+    PHYSICAL_ADDRESS BlockPa;
+    SIZE_T BlockSize;
+    HALP_COMMON_BUFFER_ELEMENT Elements[ANYSIZE_ARRAY]; /* per-element mode */
+};
+
+NTSTATUS
+NTAPI
+HalpAllocateCommonBufferVector(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PHYSICAL_ADDRESS LowAddress,
+    IN PHYSICAL_ADDRESS HighAddress,
+    IN MEMORY_CACHING_TYPE CacheType,
+    IN ULONG IdealNode,
+    IN ULONG Flags,
+    IN ULONG NumberOfElements,
+    IN ULONGLONG SizeOfElements,
+    OUT PDMA_COMMON_BUFFER_VECTOR *VectorOut)
+{
+    PHYSICAL_ADDRESS AdapterMaximumAddress;
+    PHYSICAL_ADDRESS HighestAcceptableAddress;
+    PHYSICAL_ADDRESS BoundryAddressMultiple;
+    PDMA_COMMON_BUFFER_VECTOR Vector;
+    SIZE_T VectorSize;
+    ULONGLONG Stride;
+    SIZE_T TotalSize;
+    ULONG Index;
+
+    UNREFERENCED_PARAMETER(IdealNode);
+    UNREFERENCED_PARAMETER(Flags);
+
+    *VectorOut = NULL;
+
+    if (NumberOfElements == 0 || SizeOfElements == 0 ||
+        SizeOfElements > MAXULONG)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    /* Keep elements cache-line separated; preserve power-of-two alignments */
+    Stride = (SizeOfElements + 63) & ~63ull;
+    if (Stride * NumberOfElements > MAXULONG) return STATUS_INVALID_PARAMETER;
+    TotalSize = (SIZE_T)(Stride * NumberOfElements);
+
+    AdapterMaximumAddress = HalpGetAdapterMaximumPhysicalAddress(AdapterObject);
+    HighestAcceptableAddress = AdapterMaximumAddress;
+    if (HighAddress.QuadPart != 0 &&
+        HighAddress.QuadPart < AdapterMaximumAddress.QuadPart)
+    {
+        HighestAcceptableAddress = HighAddress;
+    }
+
+    BoundryAddressMultiple.QuadPart = 0;
+    if (AdapterObject->MasterDevice)
+        BoundryAddressMultiple.HighPart = 1;
+    else
+        BoundryAddressMultiple.LowPart = 0x10000;
+
+    VectorSize = FIELD_OFFSET(DMA_COMMON_BUFFER_VECTOR, Elements) +
+                 NumberOfElements * sizeof(HALP_COMMON_BUFFER_ELEMENT);
+    Vector = ExAllocatePoolWithTag(NonPagedPool, VectorSize, TAG_DMA);
+    if (Vector == NULL) return STATUS_INSUFFICIENT_RESOURCES;
+
+    RtlZeroMemory(Vector, VectorSize);
+    Vector->NumberOfElements = NumberOfElements;
+    Vector->ElementStride = (ULONG)Stride;
+    Vector->CacheType = CacheType;
+
+    /* Prefer one contiguous block for the whole pool */
+    Vector->BlockVa = MmAllocateContiguousMemorySpecifyCache(TotalSize,
+                                                             LowAddress,
+                                                             HighestAcceptableAddress,
+                                                             BoundryAddressMultiple,
+                                                             CacheType);
+    if (Vector->BlockVa != NULL)
+    {
+        RtlZeroMemory(Vector->BlockVa, TotalSize);
+        Vector->BlockPa = MmGetPhysicalAddress(Vector->BlockVa);
+        Vector->BlockSize = TotalSize;
+        *VectorOut = Vector;
+        return STATUS_SUCCESS;
+    }
+
+    /* Fall back to one allocation per element */
+    for (Index = 0; Index < NumberOfElements; Index++)
+    {
+        PVOID Va = MmAllocateContiguousMemorySpecifyCache((SIZE_T)Stride,
+                                                          LowAddress,
+                                                          HighestAcceptableAddress,
+                                                          BoundryAddressMultiple,
+                                                          CacheType);
+        if (Va == NULL)
+        {
+            while (Index != 0)
+            {
+                Index--;
+                MmFreeContiguousMemorySpecifyCache(Vector->Elements[Index].VirtualAddress,
+                                                   (SIZE_T)Stride,
+                                                   CacheType);
+            }
+            ExFreePoolWithTag(Vector, TAG_DMA);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        RtlZeroMemory(Va, (SIZE_T)Stride);
+        Vector->Elements[Index].VirtualAddress = Va;
+        Vector->Elements[Index].LogicalAddress = MmGetPhysicalAddress(Va);
+    }
+
+    *VectorOut = Vector;
+    return STATUS_SUCCESS;
+}
+
+VOID
+NTAPI
+HalpGetCommonBufferFromVectorByIndex(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PDMA_COMMON_BUFFER_VECTOR Vector,
+    IN ULONG Index,
+    OUT PVOID *VirtualAddressOut,
+    OUT PPHYSICAL_ADDRESS LogicalAddressOut)
+{
+    UNREFERENCED_PARAMETER(AdapterObject);
+
+    ASSERT(Index < Vector->NumberOfElements);
+
+    if (Vector->BlockVa != NULL)
+    {
+        ULONGLONG Offset = (ULONGLONG)Index * Vector->ElementStride;
+        *VirtualAddressOut = (PUCHAR)Vector->BlockVa + Offset;
+        LogicalAddressOut->QuadPart = Vector->BlockPa.QuadPart + Offset;
+    }
+    else
+    {
+        *VirtualAddressOut = Vector->Elements[Index].VirtualAddress;
+        *LogicalAddressOut = Vector->Elements[Index].LogicalAddress;
+    }
+}
+
+VOID
+NTAPI
+HalpFreeCommonBufferFromVector(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PDMA_COMMON_BUFFER_VECTOR Vector,
+    IN ULONG Index)
+{
+    UNREFERENCED_PARAMETER(AdapterObject);
+
+    if (Index >= Vector->NumberOfElements) return;
+
+    /* Single-block elements are reclaimed with the vector itself */
+    if (Vector->BlockVa != NULL) return;
+
+    if (Vector->Elements[Index].VirtualAddress != NULL)
+    {
+        MmFreeContiguousMemorySpecifyCache(Vector->Elements[Index].VirtualAddress,
+                                           Vector->ElementStride,
+                                           Vector->CacheType);
+        Vector->Elements[Index].VirtualAddress = NULL;
+    }
+}
+
+VOID
+NTAPI
+HalpFreeCommonBufferVector(
+    IN PADAPTER_OBJECT AdapterObject,
+    IN PDMA_COMMON_BUFFER_VECTOR Vector)
+{
+    ULONG Index;
+
+    UNREFERENCED_PARAMETER(AdapterObject);
+
+    if (Vector == NULL) return;
+
+    if (Vector->BlockVa != NULL)
+    {
+        MmFreeContiguousMemorySpecifyCache(Vector->BlockVa,
+                                           Vector->BlockSize,
+                                           Vector->CacheType);
+    }
+    else
+    {
+        for (Index = 0; Index < Vector->NumberOfElements; Index++)
+        {
+            if (Vector->Elements[Index].VirtualAddress != NULL)
+            {
+                MmFreeContiguousMemorySpecifyCache(Vector->Elements[Index].VirtualAddress,
+                                                   Vector->ElementStride,
+                                                   Vector->CacheType);
+            }
+        }
+    }
+
+    ExFreePoolWithTag(Vector, TAG_DMA);
 }
 #endif
 
