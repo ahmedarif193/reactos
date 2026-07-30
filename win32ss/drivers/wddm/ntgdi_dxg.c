@@ -133,6 +133,10 @@ NTSTATUS APIENTRY D3DKMTOfferAllocations(CONST D3DKMT_OFFERALLOCATIONS *pData);
 NTSTATUS APIENTRY D3DKMTReclaimAllocations(CONST D3DKMT_RECLAIMALLOCATIONS *pData);
 NTSTATUS APIENTRY D3DKMTSetVidPnSourceOwner1(CONST D3DKMT_SETVIDPNSOURCEOWNER1 *pData);
 NTSTATUS APIENTRY D3DKMTWaitForVerticalBlankEvent2(CONST D3DKMT_WAITFORVERTICALBLANKEVENT2 *pData);
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+NTSTATUS APIENTRY D3DKMTGetDWMVerticalBlankEvent(CONST D3DKMT_GETVERTICALBLANKEVENT *pData);
+NTSTATUS APIENTRY D3DKMTSetSyncRefreshCountWaitTarget(CONST D3DKMT_SETSYNCREFRESHCOUNTWAITTARGET *pData);
+#endif
 NTSTATUS APIENTRY D3DKMTCreateSynchronizationObject2(D3DKMT_CREATESYNCHRONIZATIONOBJECT2 *pData);
 NTSTATUS APIENTRY D3DKMTOpenSynchronizationObject(D3DKMT_OPENSYNCHRONIZATIONOBJECT *pData);
 NTSTATUS APIENTRY D3DKMTWaitForSynchronizationObject2(CONST D3DKMT_WAITFORSYNCHRONIZATIONOBJECT2 *pData);
@@ -532,6 +536,18 @@ DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeWaitForVerticalBlankEvent2,
                             _In_,
                             CONST D3DKMT_WAITFORVERTICALBLANKEVENT2)
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeGetDwmVerticalBlankEvent,
+                            D3DKMTGetDWMVerticalBlankEvent,
+                            _In_,
+                            CONST D3DKMT_GETVERTICALBLANKEVENT)
+
+DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeSetSyncRefreshCountWaitTarget,
+                            D3DKMTSetSyncRefreshCountWaitTarget,
+                            _In_,
+                            CONST D3DKMT_SETSYNCREFRESHCOUNTWAITTARGET)
+#endif
+
 DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeCreateSynchronizationObject2,
                             D3DKMTCreateSynchronizationObject2,
                             _Inout_,
@@ -753,6 +769,15 @@ WddmBridgeInitCallbacks(
     Interface->RxgkIntPfnReclaimAllocations = DxgBridgeReclaimAllocations;
     Interface->RxgkIntPfnSetVidPnSourceOwner1 = DxgBridgeSetVidPnSourceOwner1;
     Interface->RxgkIntPfnWaitForVerticalBlankEvent2 = DxgBridgeWaitForVerticalBlankEvent2;
+    if (InterfaceVersion >= DXGKRNL_INTERFACE_VERSION_7 &&
+        ProviderInterface.RxgkIntPfnGetDwmVerticalBlankEvent != NULL &&
+        ProviderInterface.RxgkIntPfnSetSyncRefreshCountWaitTarget != NULL)
+    {
+        Interface->RxgkIntPfnGetDwmVerticalBlankEvent =
+            DxgBridgeGetDwmVerticalBlankEvent;
+        Interface->RxgkIntPfnSetSyncRefreshCountWaitTarget =
+            DxgBridgeSetSyncRefreshCountWaitTarget;
+    }
 #endif
 #if (REACTOS_WDDM_TARGET_LEVEL >= 1105)
     Interface->RxgkIntPfnCreateSynchronizationObject2 = DxgBridgeCreateSynchronizationObject2;
