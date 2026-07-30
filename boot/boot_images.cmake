@@ -6,8 +6,65 @@ option(LATTEPANDAMU_SUPPORT "Enable the LattePanda Mu board profile" OFF)
 if(LATTEPANDAMU_SUPPORT AND NOT ARCH STREQUAL "amd64")
     message(FATAL_ERROR "The LattePanda Mu profile requires ARCH=amd64")
 endif()
-if(FREELDR_HTTP_BOOT AND NOT LATTEPANDAMU_SUPPORT)
-    message(FATAL_ERROR "FREELDR_HTTP_BOOT requires the LattePanda Mu profile")
+if(FREELDR_HTTP_BOOT AND NOT (LATTEPANDAMU_SUPPORT OR RPI_SUPPORT))
+    message(FATAL_ERROR "FREELDR_HTTP_BOOT requires a board profile that ships UEFI network drivers")
+endif()
+
+#
+# Splice an HTTP boot entry into a boot menu at its ROSCONFIG_PROFILE markers.
+# DEFAULT_OS names the entry to boot unattended, or is empty to keep the menu's
+# own selection (the flashed image keeps whichever entry the harness chose).
+#
+function(freeldr_ini_add_http_boot SOURCE OUTPUT URL DEFAULT_OS)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${SOURCE}")
+    file(READ "${SOURCE}" _contents)
+
+    set(_os_marker "; ROSCONFIG_PROFILE_OS_ENTRIES")
+    set(_boot_marker "; ROSCONFIG_PROFILE_BOOT_ENTRIES")
+    string(FIND "${_contents}" "${_os_marker}" _os_marker_offset)
+    string(FIND "${_contents}" "${_boot_marker}" _boot_marker_offset)
+    if(_os_marker_offset EQUAL -1 OR _boot_marker_offset EQUAL -1)
+        message(FATAL_ERROR "HTTP boot menu anchors are missing from ${SOURCE}")
+    endif()
+
+    if(DEFAULT_OS)
+        string(REGEX REPLACE "DefaultOS=[^\r\n]*" "DefaultOS=${DEFAULT_OS}" _contents "${_contents}")
+        string(REGEX REPLACE "TimeOut=[^\r\n]*" "TimeOut=0" _contents "${_contents}")
+    endif()
+
+    string(REPLACE "${_os_marker}"
+                   "HttpBoot=\"ReactOS HTTP Boot - Debug\""
+                   _contents "${_contents}")
+    string(REPLACE "${_boot_marker}"
+                   "[HttpBoot]\nBootType=Windows2003\nSystemPath=ramdisk(0)\\reactos\nOptions=/KERNEL=ntkrnlmp.exe /DEBUG /DEBUGPORT=COM1 /BAUDRATE=115200 /SOS /FASTDETECT /MININT /LOADSYMBOLS\nHttpBootUrl=${URL}"
+                   _contents "${_contents}")
+    file(WRITE "${OUTPUT}" "${_contents}")
+endfunction()
+
+set(FREELDR_BOOTCD_INI "${REACTOS_SOURCE_DIR}/boot/bootdata/bootcd.ini")
+set(FREELDR_PREINSTALL_INI "${REACTOS_SOURCE_DIR}/boot/bootdata/preinstall.ini")
+if(FREELDR_HTTP_BOOT)
+    # The downloaded image is architecture-specific, so each board profile
+    # points at its own copy on the build host.
+    if(ARCH STREQUAL "arm64")
+        set(_freeldr_http_boot_default_url "http://10.42.0.1/livecd-arm64.iso")
+    else()
+        set(_freeldr_http_boot_default_url "http://10.42.0.1/livecd.iso")
+    endif()
+    set(FREELDR_HTTP_BOOT_URL "${_freeldr_http_boot_default_url}" CACHE STRING
+        "URL FreeLdr downloads the live image from")
+
+    set(FREELDR_BOOTCD_INI "${CMAKE_CURRENT_BINARY_DIR}/bootdata/bootcd_httpboot.ini")
+    freeldr_ini_add_http_boot("${REACTOS_SOURCE_DIR}/boot/bootdata/bootcd.ini"
+                              "${FREELDR_BOOTCD_INI}"
+                              "${FREELDR_HTTP_BOOT_URL}"
+                              "HttpBoot")
+
+    set(FREELDR_PREINSTALL_INI "${CMAKE_CURRENT_BINARY_DIR}/bootdata/preinstall_httpboot.ini")
+    freeldr_ini_add_http_boot("${REACTOS_SOURCE_DIR}/boot/bootdata/preinstall.ini"
+                              "${FREELDR_PREINSTALL_INI}"
+                              "${FREELDR_HTTP_BOOT_URL}"
+                              "HttpBoot")
 endif()
 
 # EFI platform ID - Used for naming the EFI boot image on supported platforms.
@@ -332,7 +389,7 @@ math(EXPR _preinstall_system_partition_sectors "${_preinstall_system_partition_s
 set(_preinstall_boot_partition_options)
 set(_preinstall_boot_partition_fs fat)
 set(_preinstall_boot_partition_files
-    -add ${REACTOS_SOURCE_DIR}/boot/bootdata/preinstall.ini freeldr.ini)
+    -add ${FREELDR_PREINSTALL_INI} freeldr.ini)
 file(GLOB _preinstall_rpi_firmware ${REACTOS_SOURCE_DIR}/media/boot/rpi/*)
 foreach(_rpi_firmware_file ${_preinstall_rpi_firmware})
     if(NOT IS_DIRECTORY ${_rpi_firmware_file})
