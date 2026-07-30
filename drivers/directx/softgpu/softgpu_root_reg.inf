@@ -1,0 +1,26 @@
+; Generic WDDM software-GPU fallback (live-image preinstall)
+
+[AddReg]
+HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","ErrorControl",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","Group",0x00000000,"Video"
+HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","ImagePath",0x00020000,"system32\drivers\softgpu.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","Start",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","Type",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","Tag",0x00010001,0x00000003
+HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","UserModeDriverName",0x00010000,"softgpuum.dll","softgpuum.dll","softgpuum.dll","softgpuum.dll"
+HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","UserModeDriverNameWow",0x00010000,"softgpuum.dll","softgpuum.dll","softgpuum.dll","softgpuum.dll"
+HKLM,"SYSTEM\CurrentControlSet\Services\softgpu\Video","Service",0x00000000,"softgpu"
+HKLM,"SYSTEM\CurrentControlSet\Services\softgpu\Device0","InstalledDisplayDrivers",0x00010000,"framebuf"
+HKLM,"SYSTEM\CurrentControlSet\Services\softgpu\Device0","DefaultSettings.VRefresh",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\softgpu\Device0","DefaultSettings.BitsPerPel",0x00010001,0x00000020
+HKLM,"SYSTEM\CurrentControlSet\Services\softgpu\Device0","DefaultSettings.XResolution",0x00010001,0x00000400
+HKLM,"SYSTEM\CurrentControlSet\Services\softgpu\Device0","DefaultSettings.YResolution",0x00010001,0x00000300
+HKLM,"SYSTEM\CurrentControlSet\Services\softgpu\Device0","Device Description",0x00000000,"ReactOS WDDM Software GPU"
+HKLM,"SYSTEM\CurrentControlSet\Services\softgpu\Device0","VgaCompatible",0x00010001,0x00000000
+
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\SOFTGPU\0000","DeviceDesc",0x00000000,"ReactOS WDDM Software GPU"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\SOFTGPU\0000","HardwareID",0x00010000,"ROOT\SOFTGPU"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\SOFTGPU\0000","Service",0x00000000,"softgpu"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\SOFTGPU\0000","Class",0x00000000,"Display"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\SOFTGPU\0000","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\SOFTGPU\0000","ConfigFlags",0x00010001,0x00000000

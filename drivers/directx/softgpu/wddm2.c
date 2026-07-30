@@ -1,17 +1,14 @@
 /*
  * PROJECT:     ReactOS WDDM Null/Software GPU Miniport
  * LICENSE:     GPL-2.0+ (https://spdx.org/licenses/GPL-2.0+)
- * PURPOSE:     WDDM 2.0 ABI callbacks for softgpu.sys. The process/page-table
- *              DDIs retain ABI bookkeeping only; the physical/software engine
- *              has no GPU MMU and virtual submission accepts null rendering.
+ * PURPOSE:     WDDM 2.0 ABI callbacks for softgpu.sys, including per-context
+ *              GPUVA roots for the software page-table walker.
  * COPYRIGHT:   Copyright 2024 ReactOS WDDM Team
  *
  * Architecture notes
  * ==================
- * softgpu is a software/null GPU: it has no real MMU, no command processor and
- * no page tables.  These DDIs therefore validate their arguments, track the
- * minimum state the caller (dxgkrnl) expects (a per-process cookie, identity
- * aperture page numbers), and report success without doing any hardware work.
+ * softgpu is a software GPU with no hardware MMU. These DDIs track the state
+ * dxgkrnl supplies and let the software engine walk CPU-visible page tables.
  *
  * These callbacks only exist in DRIVER_INITIALIZATION_DATA at
  * DXGKDDI_INTERFACE_VERSION_WDDM2_0 (0x5023); the whole file is therefore only
@@ -48,8 +45,8 @@ C_ASSERT(sizeof(DXGK_PTE) == 16);
  *
  * Called by dxgkrnl (gpuva.c) once per user-mode process that opens the
  * adapter, so the miniport can set up per-process GPU MMU state.  softgpu has
- * no MMU; it allocates a tracking cookie so dxgkrnl receives a stable non-NULL
- * hKmdProcess that is handed back at DxgkDdiDestroyProcess time.
+ * no hardware MMU; it allocates a tracking cookie that owns the process GPUVA
+ * root and is handed back at DxgkDdiDestroyProcess time.
  *
  * IRQL: PASSIVE_LEVEL
  */
@@ -80,6 +77,7 @@ SoftGpuDdiCreateProcess(
     RtlZeroMemory(Process, sizeof(*Process));
     Process->Magic        = SOFTGPU_PROCESS_MAGIC;
     Process->hDxgkProcess = pCreateProcess->hDxgkProcess;
+    Process->Adapter      = Device;
 
     /* Hand the tracked cookie back as the miniport process handle. */
     pCreateProcess->hKmdProcess = (HANDLE)Process;
@@ -111,6 +109,7 @@ SoftGpuDdiDestroyProcess(
 {
     PSOFTGPU_DEVICE  Device  = (PSOFTGPU_DEVICE)hAdapter;
     PSOFTGPU_PROCESS Process = (PSOFTGPU_PROCESS)hKmdProcess;
+    KIRQL            OldIrql;
 
     if (Device == NULL || Device->Magic != SOFTGPU_DEVICE_MAGIC)
         return STATUS_INVALID_PARAMETER;
@@ -118,16 +117,22 @@ SoftGpuDdiDestroyProcess(
     if (Process == NULL)
         return STATUS_SUCCESS;   /* nothing to tear down */
 
-    if (Process->Magic != SOFTGPU_PROCESS_MAGIC)
+    KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
+    if (Process->Magic != SOFTGPU_PROCESS_MAGIC ||
+        Process->Adapter != Device)
     {
-        DPRINT1("SOFTGPU: DestroyProcess: bad magic 0x%08lx on %p\n",
-                Process->Magic, Process);
+        KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+        DPRINT1("SOFTGPU: DestroyProcess: invalid process %p\n", Process);
         return STATUS_INVALID_PARAMETER;
     }
 
     DPRINT("SOFTGPU: DestroyProcess hKmdProcess=%p\n", Process);
 
-    Process->Magic = 0xDEAD2607UL;   /* poison */
+    Process->Magic = 0xDEAD2607UL;
+    Process->Adapter = NULL;
+    SoftGpuGpuVaRootClear(&Process->Root);
+    KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+
     ExFreePoolWithTag(Process, SOFTGPU_WDDM2_POOL_TAG);
     return STATUS_SUCCESS;
 }
@@ -182,8 +187,7 @@ SoftGpuDdiGetRootPageTableSize(
 /*
  * SoftGpuDdiSetRootPageTable
  *
- * Programs the GPU MMU with a context's root page table.  Returns VOID.
- * softgpu has no MMU, so this is a no-op acknowledgement.
+ * Records a context's root page table for the software walker. Returns VOID.
  *
  * IRQL: PASSIVE_LEVEL
  */
@@ -193,7 +197,11 @@ SoftGpuDdiSetRootPageTable(
     _In_ CONST HANDLE                      hAdapter,
     _In_ CONST DXGKARG_SETROOTPAGETABLE   *pSetPageTable)
 {
-    PSOFTGPU_DEVICE Device = (PSOFTGPU_DEVICE)hAdapter;
+    PSOFTGPU_DEVICE     Device = (PSOFTGPU_DEVICE)hAdapter;
+    PSOFTGPU_CONTEXT    Context;
+    PSOFTGPU_KMD_DEVICE KmdDevice;
+    PSOFTGPU_PROCESS    Process;
+    KIRQL               OldIrql;
 
     if (Device == NULL || Device->Magic != SOFTGPU_DEVICE_MAGIC ||
         pSetPageTable == NULL)
@@ -206,19 +214,44 @@ SoftGpuDdiSetRootPageTable(
            pSetPageTable->Address.SegmentOffset,
            pSetPageTable->NumEntries);
 
-    /*
-     * The translation walk this device performs starts at the programmed
-     * root, so record it.  SegmentId 0 names a physical address, which is
-     * what the CPU_VIRTUAL model publishes for its tables.
-     */
-    if (pSetPageTable->Address.SegmentId == 0)
-    {
-        KIRQL OldIrql;
+    /* SegmentId 0 is a physical page-table address in CPU_VIRTUAL mode. */
+    if (pSetPageTable->Address.SegmentId != 0)
+        return;
 
-        KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
-        Device->ActiveRootPageTablePhysical = pSetPageTable->Address.SegmentOffset;
+    Context = (PSOFTGPU_CONTEXT)pSetPageTable->hContext;
+    /*
+     * Context state is the authoritative virtual-submit root.  The process
+     * copy supplies the same root to ordinary non-MultiEngineAware submits,
+     * whose ABI exposes hDevice rather than hContext.
+     */
+    KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
+    if (Device->Stopped ||
+        Context == NULL ||
+        Context->Magic != SOFTGPU_CONTEXT_MAGIC)
+    {
         KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+        return;
     }
+    KmdDevice = Context->Device;
+    Process = Context->Process;
+    if (KmdDevice == NULL ||
+        KmdDevice->Magic != SOFTGPU_KMD_DEVICE_MAGIC ||
+        KmdDevice->Adapter != Device ||
+        KmdDevice->Process != Process ||
+        Process == NULL ||
+        Process->Magic != SOFTGPU_PROCESS_MAGIC ||
+        Process->Adapter != Device)
+    {
+        KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+        return;
+    }
+    SoftGpuGpuVaRootProgram(&Context->Root,
+                            pSetPageTable->Address.SegmentOffset,
+                            pSetPageTable->NumEntries);
+    SoftGpuGpuVaRootProgram(&Process->Root,
+                            pSetPageTable->Address.SegmentOffset,
+                            pSetPageTable->NumEntries);
+    KeReleaseSpinLock(&Device->FenceLock, OldIrql);
 }
 
 
@@ -326,8 +359,13 @@ SoftGpuDdiSubmitCommandVirtual(
     _In_ CONST HANDLE                         hAdapter,
     _In_ CONST DXGKARG_SUBMITCOMMANDVIRTUAL  *pSubmitCommand)
 {
-    PSOFTGPU_DEVICE Device = (PSOFTGPU_DEVICE)hAdapter;
-    KIRQL           OldIrql;
+    PSOFTGPU_DEVICE     Device = (PSOFTGPU_DEVICE)hAdapter;
+    PSOFTGPU_CONTEXT    Context;
+    PSOFTGPU_KMD_DEVICE KmdDevice;
+    PSOFTGPU_PROCESS    Process;
+    SOFTGPU_GPUVA_ROOT  Root;
+    HANDLE              DxgkProcessHandle;
+    KIRQL               OldIrql;
 
     if (Device == NULL || Device->Magic != SOFTGPU_DEVICE_MAGIC ||
         pSubmitCommand == NULL)
@@ -345,53 +383,71 @@ SoftGpuDdiSubmitCommandVirtual(
            pSubmitCommand->DmaBufferSize,
            pSubmitCommand->Flags.NullRendering);
 
-    if (!pSubmitCommand->Flags.NullRendering)
+    /*
+     * Take the root before translating or queueing.  The ring owns this value;
+     * programming another context cannot retarget already-submitted work.
+     */
+    Context = (PSOFTGPU_CONTEXT)pSubmitCommand->hContext;
+    KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
+    if (Device->Stopped)
     {
-        /*
-         * A real virtual submission is executed: translate the buffer's GPU
-         * virtual address through the programmed root page table and queue
-         * the resulting physical range on the engine, exactly as the
-         * physical submission path does.
-         */
-        ULONGLONG RootPhysical;
-        ULONGLONG BufferPhysical;
-
-        KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
-        RootPhysical = Device->ActiveRootPageTablePhysical;
         KeReleaseSpinLock(&Device->FenceLock, OldIrql);
-        if (RootPhysical == 0)
-            return STATUS_INVALID_DEVICE_STATE;
-        if (pSubmitCommand->DmaBufferSize == 0)
-            return STATUS_INVALID_PARAMETER;
+        return STATUS_DELETE_PENDING;
+    }
+    if (Context == NULL || Context->Magic != SOFTGPU_CONTEXT_MAGIC)
+    {
+        KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+        return STATUS_INVALID_HANDLE;
+    }
+    KmdDevice = Context->Device;
+    Process = Context->Process;
+    if (KmdDevice == NULL ||
+        KmdDevice->Magic != SOFTGPU_KMD_DEVICE_MAGIC ||
+        KmdDevice->Adapter != Device ||
+        KmdDevice->Process != Process ||
+        Process == NULL ||
+        Process->Magic != SOFTGPU_PROCESS_MAGIC ||
+        Process->Adapter != Device)
+    {
+        KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+        return STATUS_INVALID_HANDLE;
+    }
+    SoftGpuGpuVaSubmissionSnapshot(
+        &Context->Root,
+        Process->hDxgkProcess,
+        &Root,
+        &DxgkProcessHandle);
+    if (pSubmitCommand->Flags.NullRendering)
+    {
+        PSOFTGPU_SUBMIT Entry;
 
-        BufferPhysical = SoftGpuTranslateGpuVa(Device, RootPhysical, pSubmitCommand->DmaBufferVirtualAddress, pSubmitCommand->DmaBufferSize);
-        if (BufferPhysical == 0)
-            return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
-
-        KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
-        if (Device->Stopped)
-        {
-            KeReleaseSpinLock(&Device->FenceLock, OldIrql);
-            return STATUS_DELETE_PENDING;
-        }
-        if (Device->SubmitRingTail - Device->SubmitRingHead >= SOFTGPU_SUBMIT_RING_SIZE)
+        if (Device->SubmitRingTail - Device->SubmitRingHead >=
+            SOFTGPU_SUBMIT_RING_SIZE)
         {
             KeReleaseSpinLock(&Device->FenceLock, OldIrql);
             return STATUS_DEVICE_BUSY;
         }
-        {
-            PSOFTGPU_SUBMIT Entry = &Device->SubmitRing[Device->SubmitRingTail % SOFTGPU_SUBMIT_RING_SIZE];
-
-            Entry->DmaPhys.QuadPart = (LONGLONG)BufferPhysical;
-            Entry->StartOffset = 0;
-            Entry->EndOffset = pSubmitCommand->DmaBufferSize;
-            Entry->Fence = pSubmitCommand->SubmissionFenceId;
-            Device->SubmitRingTail++;
-        }
+        Entry = &Device->SubmitRing[Device->SubmitRingTail %
+                                    SOFTGPU_SUBMIT_RING_SIZE];
+        RtlZeroMemory(Entry, sizeof(*Entry));
+        Entry->Fence = pSubmitCommand->SubmissionFenceId;
+        Entry->NullRendering = TRUE;
+        Entry->DxgkProcessHandle = DxgkProcessHandle;
+        Device->SubmitRingTail++;
         Device->CurrentFence = pSubmitCommand->SubmissionFenceId;
         KeInsertQueueDpc(&Device->DpcObject, NULL, NULL);
         KeReleaseSpinLock(&Device->FenceLock, OldIrql);
         return STATUS_SUCCESS;
+    }
+    KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+
+    if (Root.PhysicalAddress == 0 || Root.EntryCount == 0)
+        return STATUS_INVALID_DEVICE_STATE;
+    if (pSubmitCommand->DmaBufferSize == 0 ||
+        pSubmitCommand->DmaBufferVirtualAddress >
+            MAXULONGLONG - pSubmitCommand->DmaBufferSize)
+    {
+        return STATUS_INVALID_PARAMETER;
     }
 
     KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
@@ -400,50 +456,31 @@ SoftGpuDdiSubmitCommandVirtual(
         KeReleaseSpinLock(&Device->FenceLock, OldIrql);
         return STATUS_DELETE_PENDING;
     }
+    if (Device->SubmitRingTail - Device->SubmitRingHead >=
+        SOFTGPU_SUBMIT_RING_SIZE)
+    {
+        KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+        return STATUS_DEVICE_BUSY;
+    }
+    {
+        PSOFTGPU_SUBMIT Entry =
+            &Device->SubmitRing[Device->SubmitRingTail %
+                                SOFTGPU_SUBMIT_RING_SIZE];
+
+        RtlZeroMemory(Entry, sizeof(*Entry));
+        Entry->DmaGpuVa =
+            pSubmitCommand->DmaBufferVirtualAddress;
+        Entry->StartOffset = 0;
+        Entry->EndOffset = pSubmitCommand->DmaBufferSize;
+        Entry->Fence = pSubmitCommand->SubmissionFenceId;
+        Entry->VirtualAddressing = TRUE;
+        Entry->DxgkProcessHandle = DxgkProcessHandle;
+        SoftGpuGpuVaRootSnapshot(&Root, &Entry->Root);
+        Device->SubmitRingTail++;
+    }
     Device->CurrentFence = pSubmitCommand->SubmissionFenceId;
     KeInsertQueueDpc(&Device->DpcObject, NULL, NULL);
     KeReleaseSpinLock(&Device->FenceLock, OldIrql);
-    return STATUS_SUCCESS;
-}
-
-
-/* =========================================================================
- * DxgkDdiRenderGdi  (WDDM 2.0)
- * =========================================================================
- */
-
-/*
- * SoftGpuDdiRenderGdi
- *
- * Hardware-accelerated GDI render entry.  The first argument is the per-context
- * handle returned by DxgkDdiCreateContext (a SOFTGPU_CONTEXT), not the adapter.
- * softgpu performs all GDI rendering through the CPU framebuffer, so it accepts
- * the call as a no-op (no DMA buffer to emit) and reports completion.
- *
- * IRQL: PASSIVE_LEVEL or DISPATCH_LEVEL
- */
-NTSTATUS
-APIENTRY
-SoftGpuDdiRenderGdi(
-    _In_    CONST HANDLE       hContext,
-    _Inout_ DXGKARG_RENDERGDI *pRenderGdi)
-{
-    PSOFTGPU_CONTEXT Ctx = (PSOFTGPU_CONTEXT)hContext;
-
-    if (Ctx == NULL || Ctx->Magic != SOFTGPU_CONTEXT_MAGIC ||
-        pRenderGdi == NULL)
-    {
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    /*
-     * No real DMA stream is produced.  Report that the whole command was
-     * consumed in a single pass so dxgkrnl does not loop expecting more.
-     */
-    pRenderGdi->MultipassOffset = 0;
-
-    DPRINT("SOFTGPU: RenderGdi ctx=%p cmdLen=%u\n",
-           Ctx, pRenderGdi->CommandLength);
     return STATUS_SUCCESS;
 }
 
