@@ -2956,6 +2956,8 @@
 @ stub -arch=arm64 RtlCheckTokenMembershipEx
 @ stub -arch=arm64 RtlClearAllBitsEx
 @ stub -arch=arm64 RtlClearBitEx
+@ stdcall -arch=x86_64 RtlClearAllBitsEx(ptr) RtlClearAllBits64
+@ stdcall -arch=x86_64 RtlClearBitEx(ptr int64) RtlClearBit64
 @ stub -arch=arm64 RtlClearBitsEx
 @ stub -arch=arm64 RtlCmDecodeMemIoResource
 @ stub -arch=arm64 RtlCmEncodeMemIoResource
@@ -3040,6 +3042,7 @@
 @ stub -arch=arm64 RtlInitUTF8String
 @ stub -arch=arm64 RtlInitUTF8StringEx
 @ stub -arch=arm64 RtlInitializeBitMapEx
+@ stdcall -arch=x86_64 RtlInitializeBitMapEx(ptr ptr int64) RtlInitializeBitMap64
 @ stub -arch=arm64 RtlInitializeCorrelationVector
 @ stub -arch=arm64 RtlInitializeExtendedContext
 @ stub -arch=arm64 RtlInitializeSidEx
@@ -3127,6 +3130,7 @@
 @ stub -arch=arm64 RtlSetActiveConsoleId
 @ stub -arch=arm64 RtlSetAllBitsEx
 @ stub -arch=arm64 RtlSetBitEx
+@ stdcall -arch=x86_64 RtlSetBitEx(ptr int64) RtlSetBit64
 @ stub -arch=arm64 RtlSetBitsEx
 @ stub -arch=arm64 RtlSetConsoleSessionForegroundProcessId
 @ stub -arch=arm64 RtlSetDynamicTimeZoneInformation

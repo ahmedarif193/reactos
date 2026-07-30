@@ -296,7 +296,7 @@ RtlClearBit(
     _In_ BITMAP_INDEX BitNumber)
 {
     ASSERT(BitNumber <= BitMapHeader->SizeOfBitMap);
-    BitMapHeader->Buffer[BitNumber / _BITCOUNT] &= ~(1 << (BitNumber & (_BITCOUNT - 1)));
+    BitMapHeader->Buffer[BitNumber / _BITCOUNT] &= ~((BITMAP_INDEX)1 << (BitNumber & (_BITCOUNT - 1)));
 }
 
 VOID
