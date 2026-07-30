@@ -31,6 +31,8 @@ LIST_ENTRY PiNotifyDeviceInterfaceListHead;
 typedef struct _PNP_NOTIFY_ENTRY
 {
     LIST_ENTRY PnpNotifyList;
+    LIST_ENTRY ActiveCallbacks;
+    KEVENT UnregisterEvent;
     PVOID Context;
     PDRIVER_OBJECT DriverObject;
     PDRIVER_NOTIFICATION_CALLBACK_ROUTINE PnpNotificationProc;
@@ -44,9 +46,17 @@ typedef struct _PNP_NOTIFY_ENTRY
         };
     };
     IO_NOTIFICATION_EVENT_CATEGORY EventCategory;
-    UINT8 RefCount;
+    ULONG RefCount;
+    ULONG UnregisterWaitRefCount;
     BOOLEAN Deleted;
+    BOOLEAN UnregisterWaiting;
 } PNP_NOTIFY_ENTRY, *PPNP_NOTIFY_ENTRY;
+
+typedef struct _PNP_NOTIFY_ACTIVE_CALLBACK
+{
+    LIST_ENTRY ListEntry;
+    PKTHREAD Thread;
+} PNP_NOTIFY_ACTIVE_CALLBACK, *PPNP_NOTIFY_ACTIVE_CALLBACK;
 
 /* FUNCTIONS *****************************************************************/
 
@@ -72,6 +82,13 @@ PiDereferencePnpNotifyEntry(
 
     ObDereferenceObject(Entry->DriverObject);
     Entry->RefCount--;
+
+    if (Entry->UnregisterWaiting &&
+        (Entry->RefCount <= Entry->UnregisterWaitRefCount))
+    {
+        KeSetEvent(&Entry->UnregisterEvent, IO_NO_INCREMENT, FALSE);
+    }
+
     if (Entry->RefCount == 0)
     {
         ASSERT(Entry->Deleted);
@@ -130,10 +147,20 @@ PiProcessSingleNotification(
     _In_ PKGUARDED_MUTEX Lock,
     _Out_ PLIST_ENTRY *NextEntry)
 {
+    PNP_NOTIFY_ACTIVE_CALLBACK ActiveCallback;
+
     PAGED_CODE();
+
+    if (Entry->Deleted)
+    {
+        *NextEntry = Entry->PnpNotifyList.Flink;
+        return;
+    }
 
     // the notification may be unregistered inside the procedure
     // thus reference the entry so we may proceed
+    ActiveCallback.Thread = KeGetCurrentThread();
+    InsertTailList(&Entry->ActiveCallbacks, &ActiveCallback.ListEntry);
     PiReferencePnpNotifyEntry(Entry);
 
     // release the lock because the notification routine has to be called without any
@@ -144,6 +171,7 @@ PiProcessSingleNotification(
 
     // take the next entry link only after the callback finishes
     // the lock is not held there, so Entry may have changed at this point
+    RemoveEntryList(&ActiveCallback.ListEntry);
     *NextEntry = Entry->PnpNotifyList.Flink;
     PiDereferencePnpNotifyEntry(Entry);
 }
@@ -379,6 +407,9 @@ IoRegisterPlugPlayNotification(
         .RefCount = 1
     };
 
+    InitializeListHead(&Entry->ActiveCallbacks);
+    KeInitializeEvent(&Entry->UnregisterEvent, NotificationEvent, FALSE);
+
     switch (EventCategory)
     {
         case EventCategoryDeviceInterfaceChange:
@@ -513,6 +544,91 @@ IoUnregisterPlugPlayNotification(
     {
         DPRINT1("IoUnregisterPlugPlayNotification called two times for 0x%p\n", NotificationEntry);
     }
+    KeReleaseGuardedMutex(Lock);
+
+    return STATUS_SUCCESS;
+}
+
+/*
+ * @implemented
+ */
+CODE_SEG("PAGE")
+NTSTATUS
+NTAPI
+IoUnregisterPlugPlayNotificationEx(
+    _In_ PVOID NotificationEntry)
+{
+    PPNP_NOTIFY_ENTRY Entry = NotificationEntry;
+    PPNP_NOTIFY_ACTIVE_CALLBACK ActiveCallback;
+    PKGUARDED_MUTEX Lock;
+    PLIST_ENTRY ListEntry;
+    PKTHREAD CurrentThread;
+    BOOLEAN Wait;
+
+    PAGED_CODE();
+
+    switch (Entry->EventCategory)
+    {
+        case EventCategoryDeviceInterfaceChange:
+            Lock = &PiNotifyDeviceInterfaceLock;
+            break;
+        case EventCategoryHardwareProfileChange:
+            Lock = &PiNotifyHwProfileLock;
+            break;
+        case EventCategoryTargetDeviceChange:
+            Lock = &PiNotifyTargetDeviceLock;
+            break;
+        default:
+            UNREACHABLE;
+            return STATUS_NOT_SUPPORTED;
+    }
+
+    KeAcquireGuardedMutex(Lock);
+
+    if (Entry->Deleted)
+    {
+        KeReleaseGuardedMutex(Lock);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    /*
+     * Keep a waiter reference while callbacks drain. If this routine is called
+     * by a notification callback, that callback's own references are excluded
+     * from the wait threshold to avoid waiting on the current stack frame.
+     */
+    PiReferencePnpNotifyEntry(Entry);
+    Entry->Deleted = TRUE;
+    PiDereferencePnpNotifyEntry(Entry);
+
+    Entry->UnregisterWaitRefCount = 1;
+    CurrentThread = KeGetCurrentThread();
+    for (ListEntry = Entry->ActiveCallbacks.Flink;
+         ListEntry != &Entry->ActiveCallbacks;
+         ListEntry = ListEntry->Flink)
+    {
+        ActiveCallback = CONTAINING_RECORD(ListEntry,
+                                           PNP_NOTIFY_ACTIVE_CALLBACK,
+                                           ListEntry);
+        if (ActiveCallback->Thread == CurrentThread)
+            Entry->UnregisterWaitRefCount++;
+    }
+
+    Wait = (Entry->RefCount > Entry->UnregisterWaitRefCount);
+    Entry->UnregisterWaiting = Wait;
+    KeReleaseGuardedMutex(Lock);
+
+    if (Wait)
+    {
+        KeWaitForSingleObject(&Entry->UnregisterEvent,
+                              Executive,
+                              KernelMode,
+                              FALSE,
+                              NULL);
+    }
+
+    KeAcquireGuardedMutex(Lock);
+    Entry->UnregisterWaiting = FALSE;
+    PiDereferencePnpNotifyEntry(Entry);
     KeReleaseGuardedMutex(Lock);
 
     return STATUS_SUCCESS;
