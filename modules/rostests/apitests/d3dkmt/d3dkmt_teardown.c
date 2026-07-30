@@ -1,7 +1,7 @@
 /*
  * PROJECT:     ReactOS D3DKMT API Tests
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
- * PURPOSE:     Teardown, exhaustion and contention (roadmap gate 1.4)
+ * PURPOSE:     Teardown, exhaustion and contention
  * COPYRIGHT:   Copyright 2026 ReactOS WDDM Team
  *
  * Every other subtest exercises objects that are created and destroyed in the

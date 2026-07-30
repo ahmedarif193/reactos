@@ -1,7 +1,7 @@
 /*
  * PROJECT:     ReactOS D3DKMT API Tests
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
- * PURPOSE:     Load the user-mode driver the way the D3D runtime does (gate 3)
+ * PURPOSE:     Load the user-mode driver the way the D3D runtime does
  * COPYRIGHT:   Copyright 2026 ReactOS WDDM Team
  *
  * This is the sequence the Direct3D runtime performs, and the first place the

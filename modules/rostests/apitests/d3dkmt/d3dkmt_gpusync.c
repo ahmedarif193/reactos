@@ -1,7 +1,7 @@
 /*
  * PROJECT:     ReactOS D3DKMT API Tests
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
- * PURPOSE:     GPU-side monitored fence wait/signal (roadmap 1.1 sync rows)
+ * PURPOSE:     GPU-side monitored fence wait and signal
  * COPYRIGHT:   Copyright 2026 ReactOS WDDM Team
  *
  * The CPU-side halves of the monitored-fence contract have worked for a while:

@@ -1,12 +1,12 @@
 /*
  * PROJECT:     ReactOS D3DKMT API Tests
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
- * PURPOSE:     Capability honesty audit (roadmap gates 1.5, 5 and 6)
+ * PURPOSE:     Capability advertisement and fallback behavior
  * COPYRIGHT:   Copyright 2026 ReactOS WDDM Team
  *
- * Several roadmap items are satisfied by "or truthful absence": it is fine not
- * to implement hardware queues, native fences, cross-adapter resources or
- * protected content, provided the stack says so and then behaves that way.
+ * It is fine not to implement optional hardware queues, native fences,
+ * cross-adapter resources or protected content, provided the stack reports
+ * them as unavailable and then behaves that way.
  *
  * The failure mode that guards against is not a missing feature, it is a
  * *claimed* one: a capability bit set because it looked harmless, and a runtime
