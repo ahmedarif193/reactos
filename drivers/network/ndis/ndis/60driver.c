@@ -83,12 +83,12 @@ Ndis6DispatchHybridGeneric(
  * ============================================================================ */
 
 NDIS_STATUS
-NTAPI
-NdisMRegisterMiniportDriver(
+Ndis6RegisterMiniportDriverInternal(
     _In_     PDRIVER_OBJECT                          DriverObject,
     _In_     PUNICODE_STRING                         RegistryPath,
     _In_opt_ NDIS_HANDLE                             MiniportDriverContext,
     _In_     PNDIS_MINIPORT_DRIVER_CHARACTERISTICS   MiniportDriverCharacteristics,
+    _In_opt_ PNDIS6_WDF_CX_DRIVER                    WdfCxDriver,
     _Out_    PNDIS_HANDLE                            NdisMiniportDriverHandle)
 {
     PNDIS6_DRIVER_BLOCK Block;
@@ -125,6 +125,8 @@ NdisMRegisterMiniportDriver(
     RtlZeroMemory(Block, sizeof(*Block));
     Block->DriverObject          = DriverObject;
     Block->MiniportDriverContext = MiniportDriverContext;
+    Block->IsWdfManaged          = (WdfCxDriver != NULL);
+    Block->WdfCxDriver           = WdfCxDriver;
     /* Copy only the bytes the driver actually supplied (REV_1 is 16 bytes
      * shorter than REV_2). The block was zeroed above so the REV_2 direct-OID
      * handlers stay NULL for a REV_1 driver. */
@@ -152,41 +154,44 @@ NdisMRegisterMiniportDriver(
         }
     }
 
-    /* Hijack the driver object's PnP / power / AddDevice slots. We save
-     * the originals so we can chain them if the driver had its own. NDIS
-     * miniport drivers shouldn't have their own (they only register via
-     * NdisMRegisterMiniportDriver) but we save them for safety. */
-    Block->OriginalAddDevice = DriverObject->DriverExtension->AddDevice;
-    Block->OriginalPnpDispatch = DriverObject->MajorFunction[IRP_MJ_PNP];
-    for (i = 0; i <= IRP_MJ_MAXIMUM_FUNCTION; i++)
-        Block->OriginalMajorFunction[i] = DriverObject->MajorFunction[i];
-
-    /* Hybrid KMDF+NDIS driver: WdfDriverCreate already installed its own
-     * AddDevice. Only AddDevice is a reliable signal — the IO manager
-     * pre-fills every MajorFunction slot with IopInvalidDeviceRequest. */
-    Block->IsWdfHybrid = (Block->OriginalAddDevice != NULL && Block->OriginalAddDevice != Ndis6AddDevice);
-    if (Block->IsWdfHybrid)
+    if (!Block->IsWdfManaged)
     {
-        DbgPrint("NDIS6: hybrid KMDF+NDIS miniport detected (AddDevice=%p Pnp=%p)\n", Block->OriginalAddDevice, Block->OriginalPnpDispatch);
-    }
+        /* Hijack the driver object's PnP / power / AddDevice slots. We save
+         * the originals so we can chain them if the driver had its own. NDIS
+         * miniport drivers shouldn't have their own (they only register via
+         * NdisMRegisterMiniportDriver) but we save them for safety. */
+        Block->OriginalAddDevice = DriverObject->DriverExtension->AddDevice;
+        Block->OriginalPnpDispatch = DriverObject->MajorFunction[IRP_MJ_PNP];
+        for (i = 0; i <= IRP_MJ_MAXIMUM_FUNCTION; i++)
+            Block->OriginalMajorFunction[i] = DriverObject->MajorFunction[i];
 
-    DriverObject->DriverExtension->AddDevice         = Ndis6AddDevice;
-    DriverObject->MajorFunction[IRP_MJ_PNP]          = Ndis6DispatchPnp;
-    DriverObject->MajorFunction[IRP_MJ_POWER]        = Ndis6DispatchPower;
-    DriverObject->MajorFunction[IRP_MJ_SYSTEM_CONTROL] = Ndis6DispatchSystemControl;
+        /* Hybrid KMDF+NDIS driver: WdfDriverCreate already installed its own
+         * AddDevice. Only AddDevice is a reliable signal — the IO manager
+         * pre-fills every MajorFunction slot with IopInvalidDeviceRequest. */
+        Block->IsWdfHybrid = (Block->OriginalAddDevice != NULL && Block->OriginalAddDevice != Ndis6AddDevice);
+        if (Block->IsWdfHybrid)
+        {
+            DbgPrint("NDIS6: hybrid KMDF+NDIS miniport detected (AddDevice=%p Pnp=%p)\n", Block->OriginalAddDevice, Block->OriginalPnpDispatch);
+        }
 
-    /* Default-handle every other major function so the IO manager
-     * doesn't return STATUS_INVALID_DEVICE_REQUEST. IRP_MJ_DEVICE_CONTROL,
-     * IRP_MJ_CREATE, IRP_MJ_CLOSE, etc. stay at STATUS_NOT_SUPPORTED
-     * until someone needs them — e1000e doesn't use them.
-     * Hybrid path: the slots hold KMDF's FxDevice::Dispatch, which must
-     * never see our adapter FDO — interpose a per-device demux. */
-    for (i = 0; i <= IRP_MJ_MAXIMUM_FUNCTION; i++)
-    {
-        if (DriverObject->MajorFunction[i] == NULL)
-            DriverObject->MajorFunction[i] = Ndis6DispatchUnknown;
-        else if (Block->IsWdfHybrid && i != IRP_MJ_PNP && i != IRP_MJ_POWER && i != IRP_MJ_SYSTEM_CONTROL)
-            DriverObject->MajorFunction[i] = Ndis6DispatchHybridGeneric;
+        DriverObject->DriverExtension->AddDevice         = Ndis6AddDevice;
+        DriverObject->MajorFunction[IRP_MJ_PNP]          = Ndis6DispatchPnp;
+        DriverObject->MajorFunction[IRP_MJ_POWER]        = Ndis6DispatchPower;
+        DriverObject->MajorFunction[IRP_MJ_SYSTEM_CONTROL] = Ndis6DispatchSystemControl;
+
+        /* Default-handle every other major function so the IO manager
+         * doesn't return STATUS_INVALID_DEVICE_REQUEST. IRP_MJ_DEVICE_CONTROL,
+         * IRP_MJ_CREATE, IRP_MJ_CLOSE, etc. stay at STATUS_NOT_SUPPORTED
+         * until someone needs them — e1000e doesn't use them.
+         * Hybrid path: the slots hold KMDF's FxDevice::Dispatch, which must
+         * never see our adapter FDO — interpose a per-device demux. */
+        for (i = 0; i <= IRP_MJ_MAXIMUM_FUNCTION; i++)
+        {
+            if (DriverObject->MajorFunction[i] == NULL)
+                DriverObject->MajorFunction[i] = Ndis6DispatchUnknown;
+            else if (Block->IsWdfHybrid && i != IRP_MJ_PNP && i != IRP_MJ_POWER && i != IRP_MJ_SYSTEM_CONTROL)
+                DriverObject->MajorFunction[i] = Ndis6DispatchHybridGeneric;
+        }
     }
 
     /* Insert into the global driver list. */
@@ -194,8 +199,28 @@ NdisMRegisterMiniportDriver(
     InsertTailList(&g_Ndis6DriverList, &Block->ListEntry);
     KeReleaseSpinLock(&g_Ndis6DriverListLock, OldIrql);
 
+    if (WdfCxDriver)
+        InterlockedIncrement(&WdfCxDriver->ClientCount);
+
     *NdisMiniportDriverHandle = (NDIS_HANDLE)Block;
     return NDIS_STATUS_SUCCESS;
+}
+
+NDIS_STATUS
+NTAPI
+NdisMRegisterMiniportDriver(
+    _In_     PDRIVER_OBJECT                          DriverObject,
+    _In_     PUNICODE_STRING                         RegistryPath,
+    _In_opt_ NDIS_HANDLE                             MiniportDriverContext,
+    _In_     PNDIS_MINIPORT_DRIVER_CHARACTERISTICS   MiniportDriverCharacteristics,
+    _Out_    PNDIS_HANDLE                            NdisMiniportDriverHandle)
+{
+    return Ndis6RegisterMiniportDriverInternal(DriverObject,
+                                               RegistryPath,
+                                               MiniportDriverContext,
+                                               MiniportDriverCharacteristics,
+                                               NULL,
+                                               NdisMiniportDriverHandle);
 }
 
 VOID
@@ -215,6 +240,9 @@ NdisMDeregisterMiniportDriver(
 
     if (Block->RegistryPath.Buffer)
         ExFreePoolWithTag(Block->RegistryPath.Buffer, NDIS6_DRIVER_TAG);
+
+    if (Block->WdfCxDriver)
+        InterlockedDecrement(&Block->WdfCxDriver->ClientCount);
 
     ExFreePoolWithTag(Block, NDIS6_DRIVER_TAG);
 }
@@ -258,7 +286,8 @@ NdisMSetMiniportAttributes(
 
             /* The MiniportAdapterContext field is the driver's per-instance
              * cookie. Every subsequent call into the driver passes this. */
-            Ext->MiniportAdapterContext  = Reg->MiniportAdapterContext;
+            if (!Ext->IsWdfManaged)
+                Ext->MiniportAdapterContext = Reg->MiniportAdapterContext;
             return NDIS_STATUS_SUCCESS;
         }
 
@@ -395,7 +424,7 @@ Ndis6PassThroughIrp(
     return IoCallDriver(LowerDevice, Irp);
 }
 
-static PNDIS6_DRIVER_BLOCK
+PNDIS6_DRIVER_BLOCK
 Ndis6FindDriverBlock(_In_ PDRIVER_OBJECT DriverObject)
 {
     PLIST_ENTRY entry;
@@ -422,11 +451,11 @@ Ndis6FindDriverBlock(_In_ PDRIVER_OBJECT DriverObject)
 /* TRUE if DeviceObject is one of the bridge's adapter FDOs (PnP or IM
  * instance). KMDF's device objects share the driver object on hybrid
  * drivers, so DeviceExtension can only be trusted after this check. */
-static BOOLEAN
-Ndis6DeviceIsAdapterFdo(_In_ PDEVICE_OBJECT DeviceObject)
+PLOGICAL_ADAPTER
+Ndis6FindAdapterByFdo(_In_ PDEVICE_OBJECT DeviceObject)
 {
     PLIST_ENTRY entry;
-    BOOLEAN     found = FALSE;
+    PLOGICAL_ADAPTER found = NULL;
     KIRQL       oldIrql;
     extern LIST_ENTRY AdapterListHead;
     extern KSPIN_LOCK AdapterListLock;
@@ -437,12 +466,18 @@ Ndis6DeviceIsAdapterFdo(_In_ PDEVICE_OBJECT DeviceObject)
         PLOGICAL_ADAPTER adapter = CONTAINING_RECORD(entry, LOGICAL_ADAPTER, ListEntry);
         if (adapter->NdisMiniportBlock.DeviceObject == DeviceObject)
         {
-            found = TRUE;
+            found = adapter;
             break;
         }
     }
     KeReleaseSpinLock(&AdapterListLock, oldIrql);
     return found;
+}
+
+static BOOLEAN
+Ndis6DeviceIsAdapterFdo(_In_ PDEVICE_OBJECT DeviceObject)
+{
+    return Ndis6FindAdapterByFdo(DeviceObject) != NULL;
 }
 
 /* User-mode surface of the miniport FDO: open/close succeed and
@@ -460,10 +495,10 @@ Ndis6TryDispatchAdapterFdoIrp(
     NTSTATUS           Status;
     ULONG              Written = 0;
 
-    if (!Ndis6DeviceIsAdapterFdo(DeviceObject))
+    Adapter = Ndis6FindAdapterByFdo(DeviceObject);
+    if (Adapter == NULL)
         return FALSE;
 
-    Adapter = (PLOGICAL_ADAPTER)DeviceObject->DeviceExtension;
     Stack   = IoGetCurrentIrpStackLocation(Irp);
 
     switch (Stack->MajorFunction)
