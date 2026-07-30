@@ -350,6 +350,74 @@ TestOldestDispatchedOpaqueCookie(
         RTL_NUMBER_OF(Batch));
 }
 
+/*
+ * Fault attribution is per engine. A globally older packet on another engine
+ * must not hide the exact dispatched head of the reporting engine.
+ */
+static VOID
+TestOldestDispatchedOnEngine(
+    _Inout_ PDXGMMS2_SCHED_TEST_STATE State)
+{
+    DXGMMS2_SCHEDULER_CLAIM_V1 Claim;
+    PDXGMMS2_SCHED_PACKET EngineZero;
+    PDXGMMS2_SCHED_PACKET EngineOne;
+    PDXGMMS2_SCHED_PACKET Failed = NULL;
+    PDXGMMS2_SCHED_PACKET Batch[DXGMMS2_SCHED_TEST_BATCH];
+    ULONGLONG Cookie = 0;
+    ULONG Fence = 0;
+    ULONG EngineZeroFence;
+    ULONG EngineOneFence;
+
+    EngineZeroFence = AdmitOne(State, 0, 260, &EngineZero);
+    EngineOneFence = AdmitOne(State, 1, 261, &EngineOne);
+    ok(EngineZero != NULL && EngineOne != NULL, "admission failed\n");
+    if (EngineZero == NULL || EngineOne == NULL)
+        return;
+    ok(EngineZeroFence < EngineOneFence,
+       "engine 0 must carry the globally older fence\n");
+
+    InitClaim(&Claim);
+    ok_bool_true(Dxgmms2SchedCoreClaim(&State->Core, 0, &Claim),
+                 "claim engine 0");
+    (VOID)Dxgmms2SchedCorePublishDispatch(
+        &State->Core, 0, Claim.ClaimToken);
+    (VOID)Dxgmms2SchedCoreCompleteDispatch(
+        &State->Core, 0, Claim.ClaimToken, STATUS_SUCCESS, &Failed);
+
+    InitClaim(&Claim);
+    ok_bool_true(Dxgmms2SchedCoreClaim(&State->Core, 1, &Claim),
+                 "claim engine 1");
+    (VOID)Dxgmms2SchedCorePublishDispatch(
+        &State->Core, 1, Claim.ClaimToken);
+    (VOID)Dxgmms2SchedCoreCompleteDispatch(
+        &State->Core, 1, Claim.ClaimToken, STATUS_SUCCESS, &Failed);
+
+    ok_bool_true(
+        Dxgmms2SchedCoreGetOldestDispatchedOnEngine(
+            &State->Core, 1, &Fence, &Cookie),
+        "engine 1 exact dispatched head is visible");
+    ok_eq_ulong(Fence, EngineOneFence);
+    ok_eq_pointer((PVOID)(ULONG_PTR)Cookie, EngineOne);
+
+    Fence = 0xFFFFFFFF;
+    Cookie = MAXULONGLONG;
+    ok_bool_false(
+        Dxgmms2SchedCoreGetOldestDispatchedOnEngine(
+            &State->Core,
+            DXGMMS2_SCHED_TEST_ENGINES,
+            &Fence,
+            &Cookie),
+        "out-of-range engine is rejected");
+    ok_eq_ulong(Fence, 0UL);
+    ok_eq_ulonglong(Cookie, 0ULL);
+
+    (VOID)Dxgmms2SchedCoreAbortAll(
+        &State->Core,
+        TRUE,
+        Batch,
+        RTL_NUMBER_OF(Batch));
+}
+
 static VOID
 TestFailedDispatchAndCancellation(
     _Inout_ PDXGMMS2_SCHED_TEST_STATE State)
@@ -532,6 +600,121 @@ TestReservationAccounting(
 }
 
 /*
+ * ReserveSlot promises that building work against the reservation cannot lose
+ * admission later.  Capacity consumed on another engine must not steal the
+ * final adapter-wide packet slot from that dependency.
+ */
+static VOID
+TestReservationProtectsGlobalCapacity(
+    _Inout_ PDXGMMS2_SCHED_TEST_STATE State)
+{
+    DXGMMS2_SCHEDULER_ADMIT_INFO_V1 Info;
+    PDXGMMS2_SCHED_PACKET Packet = NULL;
+    PDXGMMS2_SCHED_PACKET Batch[DXGMMS2_SCHED_TEST_BATCH];
+    ULONG Admitted = 0;
+    ULONG Count;
+    ULONG FenceId = 0;
+    ULONG Index;
+    ULONG Removed = 0;
+    NTSTATUS Status;
+
+    State->NextPacket = 0;
+    Status = Dxgmms2SchedCoreReserve(&State->Core, 0);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    /*
+     * Leave exactly the reserved slot free while a different engine fills
+     * every unreserved slot in the shared packet pool.
+     */
+    for (Index = 0; Index < DXGMMS2_SCHED_MAX_PACKETS - 1; ++Index)
+    {
+        Packet = AllocateTestPacket(State);
+        if (Packet == NULL)
+            break;
+        InitAdmitInfo(
+            &Info,
+            1,
+            (ULONGLONG)(ULONG_PTR)Packet,
+            610 + Index);
+        Status = Dxgmms2SchedCoreAdmit(
+                     &State->Core,
+                     &Info,
+                     Packet,
+                     &FenceId);
+        if (!NT_SUCCESS(Status))
+            break;
+        Admitted++;
+    }
+    ok_eq_ulong(Admitted, DXGMMS2_SCHED_MAX_PACKETS - 1);
+    if (Admitted != DXGMMS2_SCHED_MAX_PACKETS - 1)
+        goto Cleanup;
+
+    Packet = AllocateTestPacket(State);
+    ok(Packet != NULL, "packet pool exhausted at the reserved boundary\n");
+    if (Packet == NULL)
+        goto Cleanup;
+
+    InitAdmitInfo(
+        &Info,
+        1,
+        (ULONGLONG)(ULONG_PTR)Packet,
+        700);
+    FenceId = MAXULONG;
+    Status = Dxgmms2SchedCoreAdmit(
+                 &State->Core,
+                 &Info,
+                 Packet,
+                 &FenceId);
+    ok_eq_hex(Status, STATUS_DEVICE_BUSY);
+    ok_eq_ulong(FenceId, 0UL);
+    if (NT_SUCCESS(Status))
+    {
+        Admitted++;
+        goto Cleanup;
+    }
+
+    /*
+     * The rejected ordinary admission did not consume the packet object.  The
+     * owner of the protected reservation can use that same final pool slot.
+     */
+    InitAdmitInfo(
+        &Info,
+        0,
+        (ULONGLONG)(ULONG_PTR)Packet,
+        701);
+    Info.Flags = DXGMMS2_SCHEDULER_ADMIT_CONSUME_RESERVATION;
+    Status = Dxgmms2SchedCoreAdmit(
+                 &State->Core,
+                 &Info,
+                 Packet,
+                 &FenceId);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+        Admitted++;
+
+    Status = Dxgmms2SchedCoreReserve(&State->Core, 1);
+    ok_eq_hex(Status, STATUS_DEVICE_BUSY);
+
+Cleanup:
+    do
+    {
+        Count = Dxgmms2SchedCoreAbortAll(
+                    &State->Core,
+                    TRUE,
+                    Batch,
+                    RTL_NUMBER_OF(Batch));
+        Removed += Count;
+    } while (Count == RTL_NUMBER_OF(Batch));
+    Dxgmms2SchedCoreUnreserve(&State->Core, 0);
+    ok_eq_ulong(Removed, Admitted);
+    ok_bool_true(Dxgmms2SchedCoreIsIdle(&State->Core),
+                 "capacity test drains every admitted packet");
+    State->NextPacket = 0;
+}
+
+/*
  * The engine state machine is dxgmms2's.  SetEngineState is a validated
  * compare-and-set so a caller cannot drive an engine into a state the
  * scheduler does not model, and cannot clobber a state it no longer owns.
@@ -605,8 +788,12 @@ static VOID
 TestStopAndRestart(
     _Inout_ PDXGMMS2_SCHED_TEST_STATE State)
 {
+    DXGMMS2_SCHEDULER_CLAIM_V1 Claim;
     PDXGMMS2_SCHED_PACKET Packet;
+    PDXGMMS2_SCHED_PACKET Failed = NULL;
     PDXGMMS2_SCHED_PACKET Batch[DXGMMS2_SCHED_TEST_BATCH];
+    ULONG Fence;
+    ULONG Count;
     NTSTATUS Status;
 
     (VOID)AdmitOne(State, 0, 800, &Packet);
@@ -628,9 +815,42 @@ TestStopAndRestart(
     ok_bool_true(Dxgmms2SchedCoreIsIdle(&State->Core), "a restarted core is idle");
 
     State->NextPacket = 0;
-    (VOID)AdmitOne(State, 0, 801, &Packet);
+    Fence = AdmitOne(State, 0, 801, &Packet);
     ok(Packet != NULL, "admission works again after restart\n");
-    (VOID)Dxgmms2SchedCoreAbortAll(&State->Core, TRUE, Batch, RTL_NUMBER_OF(Batch));
+    if (Packet == NULL)
+        return;
+
+    /*
+     * Stop must restore the claim-token seed as well as the empty queue. A
+     * zero token cannot be looked up and would strand the first submission
+     * after a PnP restart.
+     */
+    InitClaim(&Claim);
+    ok_bool_true(Dxgmms2SchedCoreClaim(&State->Core, 0, &Claim),
+                 "claim after restart");
+    ok(Claim.ClaimToken != 0,
+       "the first post-restart claim must carry a nonzero token\n");
+    Status = Dxgmms2SchedCorePublishDispatch(
+                 &State->Core, 0, Claim.ClaimToken);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = Dxgmms2SchedCoreCompleteDispatch(
+                 &State->Core,
+                 0,
+                 Claim.ClaimToken,
+                 STATUS_SUCCESS,
+                 &Failed);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_pointer(Failed, NULL);
+    Count = Dxgmms2SchedCoreNotifyCompletion(
+                &State->Core,
+                0,
+                Fence,
+                Batch,
+                RTL_NUMBER_OF(Batch));
+    ok_eq_ulong(Count, 1UL);
+    ok_eq_pointer(Batch[0], Packet);
+    ok_bool_true(Dxgmms2SchedCoreIsIdle(&State->Core),
+                 "post-restart dispatch retires normally");
 }
 
 /* Engines are independent queues: one draining must not disturb another. */
@@ -686,10 +906,12 @@ START_TEST(Dxgmms2Scheduler)
     TestFifoOrderAndClaimProtocol(State);
     TestCompletionDuringOutstandingClaim(State);
     TestOldestDispatchedOpaqueCookie(State);
+    TestOldestDispatchedOnEngine(State);
     TestFailedDispatchAndCancellation(State);
     TestAbortRespectsDispatchOwnership(State);
     TestPreemptionResetsDispatchOnly(State);
     TestReservationAccounting(State);
+    TestReservationProtectsGlobalCapacity(State);
     TestEngineStateMachine(State);
     TestEnginesAreIndependent(State);
     TestStopAndRestart(State);
