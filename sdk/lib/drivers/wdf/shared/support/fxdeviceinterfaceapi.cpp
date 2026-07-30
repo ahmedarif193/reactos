@@ -270,6 +270,24 @@ WDFEXPORT(WdfDeviceSetDeviceInterfaceState)(
     pPkgPnp->m_DeviceInterfaceLock.ReleaseLock(pFxDriverGlobals);
 }
 
+__drv_maxIRQL(PASSIVE_LEVEL)
+VOID
+NTAPI
+WDFEXPORT(WdfDeviceSetDeviceInterfaceStateEx)(
+    _In_ PWDF_DRIVER_GLOBALS DriverGlobals,
+    _In_ WDFDEVICE Device,
+    _In_ CONST GUID *InterfaceClassGUID,
+    _In_opt_ PCUNICODE_STRING RefString,
+    _In_ BOOLEAN State
+    )
+{
+    WDFEXPORT(WdfDeviceSetDeviceInterfaceState)(DriverGlobals,
+                                                 Device,
+                                                 InterfaceClassGUID,
+                                                 RefString,
+                                                 State);
+}
+
 _Must_inspect_result_
 __drv_maxIRQL(PASSIVE_LEVEL)
 NTSTATUS
