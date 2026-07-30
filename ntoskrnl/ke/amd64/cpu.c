@@ -858,3 +858,18 @@ KeSetDmaIoCoherency(IN ULONG Coherency)
     /* Save the coherency globally */
     KiDmaIoCoherency = Coherency;
 }
+
+#undef KeFlushIoBuffers
+VOID
+NTAPI
+KeFlushIoBuffers(
+    _Inout_ PMDL Mdl,
+    _In_ BOOLEAN ReadOperation,
+    _In_ BOOLEAN DmaOperation)
+{
+    UNREFERENCED_PARAMETER(Mdl);
+    UNREFERENCED_PARAMETER(ReadOperation);
+    UNREFERENCED_PARAMETER(DmaOperation);
+
+    /* x86-64 DMA is cache coherent. */
+}
