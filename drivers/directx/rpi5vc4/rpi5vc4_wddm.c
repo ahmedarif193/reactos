@@ -199,7 +199,7 @@ Rpi5Vc4ProcessPendingLocked(
             /* Phase 1: kick binning. */
             if (HasBin && !Head->BinSubmitted)
             {
-                /* Pre-bin gate (ReactOS-specific workaround, codex round 4):
+                /* Pre-bin serialization workaround:
                  * our bin kick fires exactly at the previous render's RFC
                  * edge, inside its thread-tail window, and that timing
                  * deterministically wedges the PTB (BFC freezes, only a
@@ -223,7 +223,7 @@ Rpi5Vc4ProcessPendingLocked(
                     /* gate expired: kick once anyway */
                 }
 
-                /* BCM2712 silicon-quirk workaround (codex rounds 9-11): the
+                /* BCM2712 silicon-quirk workaround: the
                  * V3D core wedges the NEXT bin's final PTB flush after any
                  * completed render; no register-level recovery releases it —
                  * only an SMS-class reset.  Pulse proactively: bounded SMS
@@ -931,10 +931,9 @@ Rpi5Vc4VsyncControl(
     }
 }
 
-/* Sacrificial cold-core warm-up (codex round 15): one Mesa-shaped
- * bin-only job through the normal queue so the first-job PTB final-flush
- * wedge fires (and is absorbed by the 50ms reset) at boot instead of on
- * the user's first frame. */
+/* Cold-core warm-up: submit one Mesa-shaped bin-only job through the normal
+ * queue so the first-job PTB final-flush wedge fires (and is absorbed by the
+ * 50ms reset) at boot instead of on the user's first frame. */
 VOID
 Rpi5Vc4QueueWarmupV3dJob(
     _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)

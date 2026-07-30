@@ -736,8 +736,7 @@ Rpi5Vc4DdiUpdateActiveVidPnPresentPath(
 
     /*
      * Only the identity transformation is supported: the HVS plane scans
-     * unrotated/unscaled (rotation/scaling planes are the MPO follow-up,
-     * see the parity roadmap).
+     * unrotated and unscaled. Rotation and scaling planes are not yet exposed.
      */
     if (UpdateActiveVidPnPresentPath->VidPnPresentPathInfo.ContentTransformation.Rotation
             > D3DKMDT_VPPR_IDENTITY)

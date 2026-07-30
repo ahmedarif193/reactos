@@ -102,7 +102,7 @@ Rpi5HvsIommuDumpState(VOID)
     if ((AddrCap & MMMU_ADDR_CAP_ENABLE) != 0)
     {
         DbgPrint("RPI5VC4: WARNING — firmware address cap active; slab "
-                "scanout above the cap will fault (see roadmap 1.12c)\n");
+                "scanout above the cap will fault\n");
     }
 
     MmUnmapIoSpace(Base, RPI5_HVS_IOMMU_LENGTH);
