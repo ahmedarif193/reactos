@@ -2082,13 +2082,13 @@
 @ stub -arch=arm64 EtwProviderEnabled
 @ stdcall EtwRegisterClassicProvider(ptr long ptr ptr ptr)
 @ stub -arch=arm64 EtwSendTraceBuffer
-@ stub -arch=arm64 EtwSetInformation
+@ stdcall -arch=x86_64,arm64 EtwSetInformation(int64 long ptr long)
 @ stub -arch=arm64 EtwTelemetryCoverageReport
 @ stub -arch=arm64 EtwWriteEndScenario
 @ stub -arch=arm64 EtwWriteEx
 @ stub -arch=arm64 EtwWriteStartScenario
 @ stub -arch=arm64 EtwWriteString
-@ stub -arch=arm64 EtwWriteTransfer
+@ stdcall -arch=x86_64,arm64 EtwWriteTransfer(int64 ptr ptr ptr long ptr)
 @ stub -arch=arm64 EtwpDisableStackWalkApc
 @ stub -arch=arm64 EtwpReenableStackWalkApc
 @ stub -arch=arm64 ExAccessByte

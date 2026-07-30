@@ -42,7 +42,20 @@ EtwRegister(
     _In_opt_ PVOID CallbackContext,
     _Out_ PREGHANDLE RegHandle)
 {
-    return STATUS_NOT_IMPLEMENTED;
+    UNREFERENCED_PARAMETER(ProviderId);
+    UNREFERENCED_PARAMETER(EnableCallback);
+    UNREFERENCED_PARAMETER(CallbackContext);
+
+    if (RegHandle == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    /*
+     * ReactOS does not yet have an ETW provider backend. A zero handle keeps
+     * providers disabled while allowing tracing-only initialization to
+     * complete.
+     */
+    *RegHandle = 0;
+    return STATUS_SUCCESS;
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -52,7 +65,48 @@ NTAPI
 EtwUnregister(
     _In_ REGHANDLE RegHandle)
 {
-    return STATUS_NOT_IMPLEMENTED;
+    UNREFERENCED_PARAMETER(RegHandle);
+    return STATUS_SUCCESS;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+NTKRNLVISTAAPI
+NTAPI
+EtwSetInformation(
+    _In_ REGHANDLE RegHandle,
+    _In_ ULONG InformationClass,
+    _In_opt_ PVOID EventInformation,
+    _In_ ULONG InformationLength)
+{
+    UNREFERENCED_PARAMETER(RegHandle);
+    UNREFERENCED_PARAMETER(InformationClass);
+    UNREFERENCED_PARAMETER(EventInformation);
+    UNREFERENCED_PARAMETER(InformationLength);
+
+    return STATUS_SUCCESS;
+}
+
+_IRQL_requires_max_(HIGH_LEVEL)
+NTSTATUS
+NTKRNLVISTAAPI
+NTAPI
+EtwWriteTransfer(
+    _In_ REGHANDLE RegHandle,
+    _In_ PCEVENT_DESCRIPTOR EventDescriptor,
+    _In_opt_ LPCGUID ActivityId,
+    _In_opt_ LPCGUID RelatedActivityId,
+    _In_ ULONG UserDataCount,
+    _In_reads_opt_(UserDataCount) PEVENT_DATA_DESCRIPTOR UserData)
+{
+    UNREFERENCED_PARAMETER(RegHandle);
+    UNREFERENCED_PARAMETER(EventDescriptor);
+    UNREFERENCED_PARAMETER(ActivityId);
+    UNREFERENCED_PARAMETER(RelatedActivityId);
+    UNREFERENCED_PARAMETER(UserDataCount);
+    UNREFERENCED_PARAMETER(UserData);
+
+    return STATUS_SUCCESS;
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
