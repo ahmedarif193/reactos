@@ -2757,11 +2757,11 @@
 @ stub -arch=arm64 ObWaitForSingleObject
 @ stub -arch=arm64 ObfDereferenceObjectWithTag
 @ stub -arch=arm64 ObfReferenceObjectWithTag
-@ stub -arch=arm64 PcwAddInstance
+@ stdcall -arch=x86_64,arm64 PcwAddInstance(ptr ptr long long ptr)
 @ stub -arch=arm64 PcwCloseInstance
 @ stub -arch=arm64 PcwCreateInstance
-@ stub -arch=arm64 PcwRegister
-@ stub -arch=arm64 PcwUnregister
+@ stdcall -arch=x86_64,arm64 PcwRegister(ptr ptr)
+@ stdcall -arch=x86_64,arm64 PcwUnregister(ptr)
 @ stub -arch=arm64 PfFileInfoNotify
 @ stub -arch=arm64 PoClearPowerRequest
 @ stub -arch=arm64 PoCpuIdledSinceLastCallImprecise
