@@ -1265,3 +1265,43 @@ ExfUnblockPushLock(PEX_PUSH_LOCK PushLock,
         ExWaitForUnblockPushLock(PushLock, CurrentWaitBlock);
     }
 }
+
+VOID
+FASTCALL
+ExAcquirePushLockExclusiveEx(
+    _Inout_ PEX_PUSH_LOCK PushLock,
+    _In_ ULONG Flags)
+{
+    UNREFERENCED_PARAMETER(Flags);
+    ExAcquirePushLockExclusive(PushLock);
+}
+
+VOID
+FASTCALL
+ExAcquirePushLockSharedEx(
+    _Inout_ PEX_PUSH_LOCK PushLock,
+    _In_ ULONG Flags)
+{
+    UNREFERENCED_PARAMETER(Flags);
+    ExAcquirePushLockShared(PushLock);
+}
+
+VOID
+FASTCALL
+ExReleasePushLockEx(
+    _Inout_ PEX_PUSH_LOCK PushLock,
+    _In_ ULONG Flags)
+{
+    UNREFERENCED_PARAMETER(Flags);
+    ExReleasePushLock(PushLock);
+}
+
+VOID
+FASTCALL
+ExReleasePushLockExclusiveEx(
+    _Inout_ PEX_PUSH_LOCK PushLock,
+    _In_ ULONG Flags)
+{
+    UNREFERENCED_PARAMETER(Flags);
+    ExReleasePushLockExclusive(PushLock);
+}
