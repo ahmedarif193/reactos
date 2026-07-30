@@ -294,7 +294,7 @@ Fat12Format(IN HANDLE FileHandle,
     BootSector.Drive = (DiskGeometry->MediaType == FixedMedia) ? 0x80 : 0x00;
     BootSector.ExtBootSignature = 0x29;
     BootSector.VolumeID = CalcVolumeSerialNumber();
-    if ((Label == NULL) || (Label->Buffer == NULL))
+    if ((Label == NULL) || (Label->Buffer == NULL) || (Label->Length == 0))
     {
         memcpy(&BootSector.VolumeLabel[0], "NO NAME    ", 11);
     }
