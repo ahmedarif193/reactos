@@ -2397,7 +2397,7 @@
 @ stub -arch=arm64 IoGetCopyInformationExtension
 @ stub -arch=arm64 IoGetDeviceDirectory
 @ stub -arch=arm64 IoGetDeviceInterfacePropertyData
-@ stub -arch=arm64 IoGetDeviceNumaNode
+@ stdcall -arch=x86_64,arm64 IoGetDeviceNumaNode(ptr ptr)
 @ stub -arch=arm64 IoGetDriverDirectory
 @ stub -arch=arm64 IoGetDriverProxyEndpointWrapper
 @ stub -arch=arm64 IoGetDriverProxyFeatures
