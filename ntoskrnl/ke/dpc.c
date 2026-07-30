@@ -1269,4 +1269,21 @@ KeQueryDpcWatchdogInformation(
     return STATUS_SUCCESS;
 }
 
+LOGICAL
+NTAPI
+KeShouldYieldProcessor(VOID)
+{
+    PKPRCB Prcb = KeGetCurrentPrcb();
+
+    ASSERT(KeGetCurrentIrql() >= DISPATCH_LEVEL);
+
+    /*
+     * This is advisory: report work that KiRetireDpcList itself treats as a
+     * reason to end the current DPC batch.
+     */
+    return ((Prcb->QuantumEnd != FALSE) ||
+            (Prcb->NextThread != NULL) ||
+            (Prcb->DpcData[DPC_NORMAL].DpcQueueDepth != 0));
+}
+
 /* EOF */
