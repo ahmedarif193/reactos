@@ -672,8 +672,7 @@ Rpi5Vc4DdiQueryChildRelations(
      * The BCM2712 drives two HDMI connectors (HDMI0/HDMI1).  The boot
      * display (whichever port the firmware lit) is child 0 and reported
      * always-connected; the second port is enumerated honestly as a
-     * connector but stays disconnected until real HPD probing exists
-     * (parity roadmap 2.9).
+     * connector but stays disconnected until real HPD probing exists.
      */
     RtlZeroMemory(ChildRelations,
                   RPI5VC4_CHILD_COUNT * sizeof(DXGK_CHILD_DESCRIPTOR));
