@@ -410,7 +410,7 @@ int main(int argc, char *argv[])
                    "    type : {" GUID_FORMAT_STR "}\n"
                    "    id   : {" GUID_FORMAT_STR "}\n"
                    "    attrs: 0x%016I64x\n"
-                   "    name : '%.*S'\n"
+                   "    name : '%.*ls'\n"
                    "    start: 0x%016I64x count: 0x%016I64x\n",
                    pPartInfoEx->PartitionNumber,
                    PARTITION_STYLE_NAME(pPartInfoEx->PartitionStyle),
@@ -691,7 +691,7 @@ int main(int argc, char *argv[])
                        "    type : {" GUID_FORMAT_STR "}\n"
                        "    id   : {" GUID_FORMAT_STR "}\n"
                        "    attrs: 0x%016I64x\n"
-                       "    name : '%.*S'\n"
+                       "    name : '%.*ls'\n"
                        "    start: 0x%016I64x count: 0x%016I64x\n",
                        i,
                        pPartInfoEx->PartitionNumber,
