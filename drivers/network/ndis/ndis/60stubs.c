@@ -1371,14 +1371,12 @@ NdisGetDeviceReservedExtension(
     if (IsCtlDev)
         return DeviceObject->DeviceExtension;
 
-    /* Miniport FDO check: its device extension is the LOGICAL_ADAPTER,
-     * which points back at the same device object. */
-    Adapter = (PLOGICAL_ADAPTER)DeviceObject->DeviceExtension;
-    if (Adapter != NULL &&
-        Adapter->NdisMiniportBlock.DeviceObject == DeviceObject)
-    {
+    /* WDF-managed NetAdapterCx FDOs do not store the logical adapter in
+     * DeviceExtension, so resolve both native and WDF-owned FDOs through
+     * the registered adapter list. */
+    Adapter = Ndis6FindAdapterByFdo(DeviceObject);
+    if (Adapter != NULL)
         return &Adapter->WdfReserved[0];
-    }
 
     return NULL;
 }
@@ -1411,7 +1409,6 @@ NdisOpenConfigurationEx(
     Adapter = GET_LOGICAL_ADAPTER(Obj->NdisHandle);
     if (!Adapter->IsNdis6 ||
         Adapter->NdisMiniportBlock.DeviceObject == NULL ||
-        (PLOGICAL_ADAPTER)Adapter->NdisMiniportBlock.DeviceObject->DeviceExtension != Adapter ||
         Adapter->NdisMiniportBlock.PhysicalDeviceObject == NULL)
     {
         return NDIS_STATUS_INVALID_PARAMETER;
