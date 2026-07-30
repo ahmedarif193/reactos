@@ -1091,7 +1091,8 @@ Return Value:
 
     WDFCASSERT((sizeof(m_WdfPowerStates)/sizeof(m_WdfPowerStates[0]))
                ==
-               (WdfDevStatePowerNull - WdfDevStatePowerObjectCreated));
+               (WdfDevStatePowerInitialPowerUpFailedPowerDown -
+                WdfDevStatePowerObjectCreated));
 
     // we assume these are the same length when we update the history index
     WDFCASSERT((sizeof(m_PowerMachine.m_Queue.Events)/

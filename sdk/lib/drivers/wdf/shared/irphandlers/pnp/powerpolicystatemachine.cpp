@@ -2073,7 +2073,8 @@ Return Value:
 
     WDFCASSERT((sizeof(m_WdfPowerPolicyStates)/sizeof(m_WdfPowerPolicyStates[0]))
                  ==
-               (WdfDevStatePwrPolNull - WdfDevStatePwrPolObjectCreated));
+               (WdfDevStatePwrPolStartedNotIdleCapableDirectedDown -
+                WdfDevStatePwrPolObjectCreated));
 
     // we assume these are the same length when we update the history index
     WDFCASSERT((sizeof(m_PowerPolicyMachine.m_Queue)/
