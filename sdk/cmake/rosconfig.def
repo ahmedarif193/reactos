@@ -299,33 +299,32 @@ config SEPARATE_DBG
       Whether to generate separate debug symbol files (instead of
       keeping symbols inside the binaries).
 
-config KDBG
-    prompt "Integrated kernel debugger (KDBG)"
-    type bool
-    default auto
+config KD_DEBUGGER
+    prompt "Kernel debugger mode"
+    type choice
+    value AUTO     "Automatic (toolchain and build-type default)"
+    value NONE     "No interactive kernel debugger"
+    value KDBG     "Integrated ReactOS debugger (KDBG)"
+    value EXTERNAL "External KD protocol"
+    default AUTO
     help
-      Whether to compile in the integrated kernel debugger.
-      "auto" enables it for DBG builds with GCC/Clang and disables
-      it for MSVC, like sdk/cmake/config.cmake.
+      Select the mutually exclusive kernel debugger implementation.
+      "Automatic" preserves the defaults from sdk/cmake/config.cmake:
+      KDBG for GCC/Clang debug builds, external KD for MSVC debug
+      builds, and neither for non-debug builds.
 
-config GDB
-    prompt "Use KDGDB.DLL for GDB remote debugging"
-    type bool
-    default n
+config KD_DEFAULT_TRANSPORT
+    prompt "Default external KD transport"
+    type choice
+    value KDCOM "Serial KD (KDCOM / WinDbg)"
+    value KDGDB "GDB remote protocol (KDGDB)"
+    default KDCOM
+    depends KD_DEBUGGER=EXTERNAL
     help
-      Whether to use KDGDB.DLL instead of KDCOM.DLL by default, for
-      debugging with GDB. Mainly used for cloud-based ReactOS
-      development with Gitpod and Docker. If you don't use GDB,
-      don't enable this.
-
-config _WINKD_
-    prompt "KD protocol (WinDbg)"
-    type bool
-    default auto
-    help
-      Whether to compile with the KD protocol for WinDbg.
-      "auto" enables it for MSVC debug builds only, like
-      sdk/cmake/config.cmake.
+      Select which external transport is installed as the default
+      KDCOM.DLL. This does not disable the other compatible transport
+      modules; they remain available for selection through the boot
+      DEBUGPORT option.
 
 config RUNTIME_CHECKS
     prompt "MSVC runtime checks"

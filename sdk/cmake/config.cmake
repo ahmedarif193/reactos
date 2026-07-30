@@ -63,6 +63,16 @@ set(OPTIMIZE "4" CACHE STRING
 set(LTCG FALSE CACHE BOOL
 "Whether to build with link-time code generation")
 
+set(KD_DEBUGGER "AUTO" CACHE STRING
+"Kernel debugger mode. Specify one of:
+ AUTO NONE KDBG EXTERNAL")
+set_property(CACHE KD_DEBUGGER PROPERTY STRINGS AUTO NONE KDBG EXTERNAL)
+
+set(KD_DEFAULT_TRANSPORT "KDCOM" CACHE STRING
+"Default transport for the external KD protocol. Specify one of:
+ KDCOM KDGDB")
+set_property(CACHE KD_DEFAULT_TRANSPORT PROPERTY STRINGS KDCOM KDGDB)
+
 set(GDB FALSE CACHE BOOL
 "Whether to use by default KDGDB.DLL instead of KDCOM.DLL for debugging with GDB.
 Mainly used for cloud-based ReactOS development using Gitpod and Docker.
@@ -106,6 +116,36 @@ else()
         set(KDBG FALSE CACHE BOOL "Whether to compile in the integrated kernel debugger.")
     endif()
     set(_WINKD_ FALSE CACHE BOOL "Whether to compile with the KD protocol.")
+endif()
+
+string(TOUPPER "${KD_DEBUGGER}" _REACTOS_KD_DEBUGGER)
+if(NOT _REACTOS_KD_DEBUGGER MATCHES "^(AUTO|NONE|KDBG|EXTERNAL)$")
+    message(FATAL_ERROR
+        "Unknown KD_DEBUGGER '${KD_DEBUGGER}'; expected AUTO, NONE, KDBG or EXTERNAL")
+endif()
+
+string(TOUPPER "${KD_DEFAULT_TRANSPORT}" _REACTOS_KD_DEFAULT_TRANSPORT)
+if(NOT _REACTOS_KD_DEFAULT_TRANSPORT MATCHES "^(KDCOM|KDGDB)$")
+    message(FATAL_ERROR
+        "Unknown KD_DEFAULT_TRANSPORT '${KD_DEFAULT_TRANSPORT}'; expected KDCOM or KDGDB")
+endif()
+
+if(_REACTOS_KD_DEBUGGER STREQUAL "NONE")
+    set(KDBG FALSE)
+    set(_WINKD_ FALSE)
+    set(GDB FALSE)
+elseif(_REACTOS_KD_DEBUGGER STREQUAL "KDBG")
+    set(KDBG TRUE)
+    set(_WINKD_ FALSE)
+    set(GDB FALSE)
+elseif(_REACTOS_KD_DEBUGGER STREQUAL "EXTERNAL")
+    set(KDBG FALSE)
+    set(_WINKD_ TRUE)
+    if(_REACTOS_KD_DEFAULT_TRANSPORT STREQUAL "KDGDB")
+        set(GDB TRUE)
+    else()
+        set(GDB FALSE)
+    endif()
 endif()
 
 if(GDB)
