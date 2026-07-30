@@ -23,15 +23,10 @@ AddKeyToBothDirInfo(_In_     PBTreeKey Key,
 
     // Set the file name data pointer
     FileNameData = GetFileName(Key);
-    EntrySize = ALIGN_UP_BY(sizeof(FILE_BOTH_DIR_INFORMATION) + GetWStrLength(FileNameData->NameLength),
-                            sizeof(ULONG));
+    EntrySize = ALIGN_UP_BY(FIELD_OFFSET(FILE_BOTH_DIR_INFORMATION, FileName) + GetWStrLength(FileNameData->NameLength), sizeof(ULONGLONG));
 
     if (*BufferLength < EntrySize)
-    {
-        // We will overrun the buffer if we continue
-        DPRINT1("Unable to add key to buffer: too small!\n");
         return STATUS_BUFFER_OVERFLOW;
-    }
 
     Buffer->FileIndex = 0; // Undefined for NTFS
     Buffer->CreationTime.QuadPart = FileNameData->CreationTime;
