@@ -18,6 +18,16 @@
 
 #include "scheduler_core.h"
 
+static VOID
+Dxgmms2SchedCoreInitializeEngine(
+    _Out_ PDXGMMS2_SCHED_ENGINE Engine)
+{
+    RtlZeroMemory(Engine, sizeof(*Engine));
+    InitializeListHead(&Engine->RunQueue);
+    Engine->State = Dxgmms2EngineIdle;
+    Engine->NextClaimToken = 1;
+}
+
 static PDXGMMS2_SCHED_ENGINE
 Dxgmms2SchedCoreEngine(
     _In_ PDXGMMS2_SCHED_CORE Core,
@@ -28,6 +38,18 @@ Dxgmms2SchedCoreEngine(
     return &Core->Engines[EngineOrdinal];
 }
 
+static ULONG
+Dxgmms2SchedCoreCountReservations(
+    _In_ PDXGMMS2_SCHED_CORE Core)
+{
+    ULONG Count = 0;
+    ULONG Index;
+
+    for (Index = 0; Index < Core->EngineCount; ++Index)
+        Count += Core->Engines[Index].ReservedPacketCount;
+    return Count;
+}
+
 VOID
 Dxgmms2SchedCoreInitialize(
     _Out_ PDXGMMS2_SCHED_CORE Core)
@@ -36,11 +58,7 @@ Dxgmms2SchedCoreInitialize(
 
     RtlZeroMemory(Core, sizeof(*Core));
     for (Index = 0; Index < DXGMMS2_SCHEDULER_MAX_ENGINES; ++Index)
-    {
-        InitializeListHead(&Core->Engines[Index].RunQueue);
-        Core->Engines[Index].State = Dxgmms2EngineIdle;
-        Core->Engines[Index].NextClaimToken = 1;
-    }
+        Dxgmms2SchedCoreInitializeEngine(&Core->Engines[Index]);
     InitializeListHead(&Core->RetirementList);
     InitializeListHead(&Core->FreeList);
     Core->NextFenceId = 0;
@@ -103,7 +121,12 @@ Dxgmms2SchedCoreAdmit(
         if (Engine->ReservedPacketCount == 0)
             return STATUS_INVALID_DEVICE_STATE;
     }
-    else if (Engine->PendingPacketCount + Engine->ReservedPacketCount >= DXGMMS2_SCHED_MAX_PACKETS)
+    else if (Core->TotalPackets +
+                 Dxgmms2SchedCoreCountReservations(Core) >=
+                 DXGMMS2_SCHED_MAX_PACKETS ||
+             Engine->PendingPacketCount +
+                 Engine->ReservedPacketCount >=
+                 DXGMMS2_SCHED_MAX_PACKETS)
     {
         return STATUS_DEVICE_BUSY;
     }
@@ -443,7 +466,18 @@ Dxgmms2SchedCoreReserve(
         return STATUS_INVALID_PARAMETER;
     if (!Core->AdmissionOpen)
         return STATUS_DEVICE_NOT_READY;
-    if (Engine->PendingPacketCount + Engine->ReservedPacketCount >= DXGMMS2_SCHED_MAX_PACKETS)
+    /*
+     * A reservation protects one slot in the adapter-wide packet pool, not
+     * merely this engine's queue.  Without the global sum, another engine can
+     * fill the pool after this call succeeds and make the promised consuming
+     * admission fail.
+     */
+    if (Core->TotalPackets +
+            Dxgmms2SchedCoreCountReservations(Core) >=
+            DXGMMS2_SCHED_MAX_PACKETS ||
+        Engine->PendingPacketCount +
+            Engine->ReservedPacketCount >=
+            DXGMMS2_SCHED_MAX_PACKETS)
         return STATUS_DEVICE_BUSY;
     Engine->ReservedPacketCount++;
     return STATUS_SUCCESS;
@@ -651,8 +685,7 @@ Dxgmms2SchedCoreStop(
 
         if (!IsListEmpty(&Engine->RunQueue))
             return STATUS_DEVICE_BUSY;
-        RtlZeroMemory(Engine, sizeof(*Engine));
-        InitializeListHead(&Engine->RunQueue);
+        Dxgmms2SchedCoreInitializeEngine(Engine);
     }
     Core->EngineCount = 0;
     Core->AdmissionOpen = FALSE;
