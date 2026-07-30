@@ -499,6 +499,35 @@ Dxgmms2SchedulerPeekNextPacket(
     return Found;
 }
 
+static BOOLEAN
+NTAPI
+Dxgmms2SchedulerGetOldestDispatchedOnEngine(
+    _In_ DXGMMS2_SCHEDULER_HANDLE Scheduler,
+    _In_ ULONG EngineOrdinal,
+    _Out_ PULONG FenceId,
+    _Out_ PULONGLONG PacketCookie)
+{
+    PDXGMMS2_ADAPTER_CONTEXT Context = Dxgmms2SchedulerContext(Scheduler);
+    KIRQL OldIrql;
+    BOOLEAN Found;
+
+    if (FenceId == NULL || PacketCookie == NULL)
+        return FALSE;
+    *FenceId = 0;
+    *PacketCookie = 0;
+    if (Context == NULL)
+        return FALSE;
+
+    KeAcquireSpinLock(&Context->SchedulerLock, &OldIrql);
+    Found = Dxgmms2SchedCoreGetOldestDispatchedOnEngine(
+                &Context->SchedulerCore,
+                EngineOrdinal,
+                FenceId,
+                PacketCookie);
+    KeReleaseSpinLock(&Context->SchedulerLock, OldIrql);
+    return Found;
+}
+
 NTSTATUS
 Dxgmms2SchedulerStartAdapter(
     _Inout_ PDXGMMS2_ADAPTER_CONTEXT Context,
@@ -583,9 +612,10 @@ Dxgmms2QuerySchedulerInterface(
     }
     if (SchedulerInterface->Version != DXGMMS2_SCHEDULER_VERSION_1)
         return STATUS_REVISION_MISMATCH;
-    if (Capacity < DXGMMS2_SCHEDULER_INTERFACE_V1_SIZE)
+    if (Capacity < DXGMMS2_SCHEDULER_INTERFACE_V1_BASE_SIZE)
     {
-        SchedulerInterface->Size = DXGMMS2_SCHEDULER_INTERFACE_V1_SIZE;
+        SchedulerInterface->Size =
+            DXGMMS2_SCHEDULER_INTERFACE_V1_BASE_SIZE;
         return STATUS_BUFFER_TOO_SMALL;
     }
 
@@ -593,8 +623,11 @@ Dxgmms2QuerySchedulerInterface(
     if (Context == NULL)
         return STATUS_INVALID_HANDLE;
 
-    RtlZeroMemory(SchedulerInterface, DXGMMS2_SCHEDULER_INTERFACE_V1_SIZE);
-    SchedulerInterface->Size = DXGMMS2_SCHEDULER_INTERFACE_V1_SIZE;
+    RtlZeroMemory(
+        SchedulerInterface,
+        min(Capacity, DXGMMS2_SCHEDULER_INTERFACE_V1_SIZE));
+    SchedulerInterface->Size =
+        min(Capacity, DXGMMS2_SCHEDULER_INTERFACE_V1_SIZE);
     SchedulerInterface->Version = DXGMMS2_SCHEDULER_VERSION_1;
     SchedulerInterface->Generation = Context->Generation;
     SchedulerInterface->SchedulerHandle = (DXGMMS2_SCHEDULER_HANDLE)Context;
@@ -617,6 +650,11 @@ Dxgmms2QuerySchedulerInterface(
     SchedulerInterface->ResetDispatched = Dxgmms2SchedulerResetDispatched;
     SchedulerInterface->GetOldestDispatched = Dxgmms2SchedulerGetOldestDispatched;
     SchedulerInterface->PeekNextPacket = Dxgmms2SchedulerPeekNextPacket;
+    if (Capacity >= DXGMMS2_SCHEDULER_INTERFACE_V1_SIZE)
+    {
+        SchedulerInterface->GetOldestDispatchedOnEngine =
+            Dxgmms2SchedulerGetOldestDispatchedOnEngine;
+    }
 
     Dxgmms2DereferenceAdapterContext(Context);
     return STATUS_SUCCESS;

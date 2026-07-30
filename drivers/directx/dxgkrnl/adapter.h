@@ -147,6 +147,11 @@ NTSTATUS
 DxgkAdapterStop(
     _In_ PDXGKRNL_ADAPTER Adapter);
 
+NTSTATUS
+DxgkCollectAdapterDiagnosticInfo(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ DXGK_DIAGNOSTICINFO_TYPE Type);
+
 /**
  * DxgkAdapterRemove
  *
@@ -171,24 +176,34 @@ DxgkAdapterRemove(
  * driver image; the miniport only calls them through the interface struct.
  * ========================================================================= */
 
-NTSTATUS APIENTRY DxgkCbNotifyInterrupt(
-    _In_ HANDLE                           DeviceHandle,
-    _In_ PDXGKARGCB_NOTIFY_INTERRUPT_DATA NotifyInterruptData);
+VOID APIENTRY DxgkCbNotifyInterrupt(
+    _In_ HANDLE DeviceHandle,
+    IN_CONST_PDXGKARGCB_NOTIFY_INTERRUPT_DATA NotifyInterruptData);
 
-NTSTATUS APIENTRY DxgkCbNotifyDpc(
+VOID APIENTRY DxgkCbNotifyDpc(
     _In_ HANDLE DeviceHandle);
 
 NTSTATUS APIENTRY DxgkCbGetDeviceInformation(
     _In_  HANDLE            DeviceHandle,
     _Out_ PDXGK_DEVICE_INFO DeviceInformation);
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
 NTSTATUS APIENTRY DxgkCbAllocateContiguousMemory(
-    _In_    HANDLE                             DeviceHandle,
-    _Inout_ PDXGKARGCB_ALLOCATECONTIGUOUSMEMORY AllocContiguousMemory);
+    IN_CONST_HANDLE hAdapter,
+    INOUT_PDXGKARGCB_ALLOCATECONTIGUOUSMEMORY pAllocateContiguousMemory);
 
 NTSTATUS APIENTRY DxgkCbFreeContiguousMemory(
-    _In_ HANDLE                          DeviceHandle,
-    _In_ PDXGKARGCB_FREECONTIGUOUSMEMORY FreeContiguousMemory);
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARGCB_FREECONTIGUOUSMEMORY pFreeContiguousMemory);
+
+NTSTATUS APIENTRY DxgkCbAllocatePagesForMdl(
+    IN_CONST_HANDLE hAdapter,
+    INOUT_PDXGKARGCB_ALLOCATEPAGESFORMDL pAllocatePagesForMdl);
+
+NTSTATUS APIENTRY DxgkCbFreePagesFromMdl(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARGCB_FREEPAGESFROMMDL pFreePagesFromMdl);
+#endif
 
 NTSTATUS APIENTRY DxgkCbMapPhysicalMemory(
     _In_    HANDLE                       DeviceHandle,

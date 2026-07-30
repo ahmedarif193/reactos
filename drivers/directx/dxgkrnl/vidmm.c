@@ -56,6 +56,7 @@
 #include "vidmm_worker_drain_core.h"
 #include "vidsch.h"
 #include "debug.h"
+#include <ndk/psfuncs.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -94,6 +95,69 @@ static VOID DxgkpVidMmQuarantineDestroyBatch(_In_ struct _DXGKVMM_DESTROY_BATCH 
 static BOOLEAN DxgkpVidMmTryCommitDestroyBatch(_In_ struct _DXGKVMM_DESTROY_BATCH *Batch);
 static NTSTATUS DxgkpVidMmCloseReadyBindingGroup(_In_ PDXGKRNL_ADAPTER Adapter, _In_ struct _DXGKVMM_OPEN_BINDING_GROUP *Group);
 
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+typedef struct _DXGKVMM_PROCESS_BUDGET
+{
+    LIST_ENTRY Link;
+    PEPROCESS Process;
+    PDXGKRNL_ADAPTER Adapter;
+    DXGK_RESIDENCY_BUDGET Groups[2];
+    ULONG ChargeEntryCount;
+    ULONG ActiveTransactions;
+    BOOLEAN ProcessExiting;
+} DXGKVMM_PROCESS_BUDGET, *PDXGKVMM_PROCESS_BUDGET;
+
+typedef struct _DXGKVMM_PROCESS_BUDGET_CHARGE
+{
+    LIST_ENTRY Link;
+    PDXGKVMM_PROCESS_BUDGET Record;
+    D3DKMT_MEMORY_SEGMENT_GROUP Group;
+    ULONGLONG Bytes;
+    DXGK_RESIDENCY_PROCESS_CHARGE_STATE State;
+} DXGKVMM_PROCESS_BUDGET_CHARGE, *PDXGKVMM_PROCESS_BUDGET_CHARGE;
+
+typedef struct _DXGKVMM_PROCESS_BUDGET_GATE
+{
+    LIST_ENTRY Link;
+    PEPROCESS Process;
+    DXGK_RESIDENCY_PROCESS_ADMISSION Admission;
+} DXGKVMM_PROCESS_BUDGET_GATE, *PDXGKVMM_PROCESS_BUDGET_GATE;
+
+static ULONG
+DxgkpVidMmBudgetGroupIndex(
+    _In_ D3DKMT_MEMORY_SEGMENT_GROUP Group);
+
+static PDXGKVMM_PROCESS_BUDGET
+DxgkpVidMmAcquireProcessBudget(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PEPROCESS Process,
+    _Out_ NTSTATUS *OutStatus);
+
+static VOID
+DxgkpVidMmReleaseProcessBudget(
+    _In_ PDXGKVMM_PROCESS_BUDGET Record);
+
+static NTSTATUS
+DxgkpVidMmChargeInitialPlacement(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PEPROCESS Process,
+    _Inout_ PDXGKVMM_ALLOCATION Allocation);
+
+static VOID
+DxgkpVidMmReleaseAllAllocationBudgetCharges(
+    _Inout_ PDXGKVMM_ALLOCATION Allocation);
+
+static NTSTATUS
+DxgkpVidMmReleaseProcessBudgetReferences(
+    _Inout_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ PEPROCESS Process,
+    _In_ ULONG ReferenceCount);
+
+static VOID
+DxgkpVidMmReleaseAdapterBudgets(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+#endif
+
 /*
  * VIDMM_PAGING_BUFFER_SIZE_DEFAULT: fallback when the miniport does not
  * specify a paging buffer size.  64 KB handles Vista-era paging operations.
@@ -125,6 +189,11 @@ static ULONG      DxgkVidMmAllocationHandleCookie = 0x4D4D414C; /* "LAMM" */
 static ULONG      DxgkVidMmResourceHandleCookie   = 0x4D4D4552; /* "REMM" */
 static ULONG      DxgkVidMmGlobalShareHandleCookie = 0x4D4D4753; /* "SGMM" */
 static volatile LONG DxgkVidMmNextAllocationHandle = 0;
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+static LIST_ENTRY DxgkVidMmProcessBudgetListHead;
+static LIST_ENTRY DxgkVidMmProcessBudgetGateListHead;
+static FAST_MUTEX DxgkVidMmProcessBudgetLock;
+#endif
 
 static BOOLEAN
 DxgkpVidMmRoundUpPageSize(
@@ -360,9 +429,16 @@ DxgkpVidMmEnsureGlobalsInitialized(VOID)
         ExInitializeFastMutex(&DxgkVidMmResourceListLock);
         ExInitializeFastMutex(&DxgkVidMmDestroyBatchListLock);
         ExInitializeFastMutex(&DxgkVidMmPolicyLock);
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+        ExInitializeFastMutex(&DxgkVidMmProcessBudgetLock);
+#endif
         InitializeListHead(&DxgkVidMmAllocationListHead);
         InitializeListHead(&DxgkVidMmResourceListHead);
         InitializeListHead(&DxgkVidMmDestroyBatchListHead);
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+        InitializeListHead(&DxgkVidMmProcessBudgetListHead);
+        InitializeListHead(&DxgkVidMmProcessBudgetGateListHead);
+#endif
         InterlockedExchange(&DxgkVidMmGlobalsState, 2);
         return;
     }
@@ -556,6 +632,9 @@ DxgkpVidMmInitializeAllocationLifetime(
     Allocation->ResidencyReferenceCount = 1;
     Allocation->ImplicitResidencyReference = TRUE;
     InitializeListHead(&Allocation->ResidencyReferenceList);
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    InitializeListHead(&Allocation->ResidencyBudgetChargeList);
+#endif
     Allocation->SubmissionResidencyPinCount = 0;
     Allocation->ResidencyTransactionOwner = NULL;
     KeInitializeEvent(&Allocation->ReferencesDrainedEvent, NotificationEvent, FALSE);
@@ -894,6 +973,9 @@ DxgkpVidMmCreateSystemAllocation(
     Alloc->Alignment = AllocInfo->Alignment ? AllocInfo->Alignment : PAGE_SIZE;
     Alloc->SupportedWriteSegmentSet = AllocInfo->SupportedWriteSegmentSet;
     Alloc->EvictionSegmentSet = AllocInfo->EvictionSegmentSet;
+    Alloc->PreferredSegment.Value = AllocInfo->PreferredSegment.Value;
+    Alloc->AccessedPhysically =
+        AllocInfo->FlagsWddm2.AccessedPhysically != 0;
     Alloc->AllocationPriority = AllocInfo->AllocationPriority ?
                                 AllocInfo->AllocationPriority :
                                 VIDMM_PRIORITY_NORMAL;
@@ -1704,6 +1786,87 @@ DxgkVidMmDereferenceResource(
     }
 }
 
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+NTSTATUS
+DxgkVidMmCopyResourcePresentPrivateDriverData(
+    _In_ D3DKMT_HANDLE ResourceHandle,
+    _In_ PEPROCESS ExpectedProcess,
+    _Out_writes_bytes_to_opt_(BufferCapacity, *RequiredSize) PVOID Buffer,
+    _In_ UINT BufferCapacity,
+    _Out_ PUINT RequiredSize)
+{
+    PDXGKVMM_RESOURCE Resource = NULL;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (ResourceHandle == 0 ||
+        ExpectedProcess == NULL ||
+        RequiredSize == NULL ||
+        (BufferCapacity != 0 && Buffer == NULL))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    *RequiredSize = 0;
+
+    Status = DxgkVidMmReferenceResource(
+                 ResourceHandle,
+                 FALSE,
+                 NULL,
+                 &Resource);
+    if (!NT_SUCCESS(Status))
+        return STATUS_INVALID_HANDLE;
+
+    Status = KeWaitForSingleObject(
+                 &Resource->ResourceOperationLock,
+                 Executive,
+                 KernelMode,
+                 FALSE,
+                 NULL);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    /*
+     * A KMT resource handle is process-local.  ReferenceResource validates
+     * type and lifetime, while this owner check prevents a handle guessed in
+     * another process from becoming a private-data oracle.
+     */
+    if (InterlockedCompareExchange(&Resource->Destroying, 0, 0) != 0 ||
+        Resource->Device == NULL ||
+        Resource->Device->ProcessRecord == NULL ||
+        Resource->Device->ProcessRecord->Process != ExpectedProcess)
+    {
+        Status = STATUS_INVALID_HANDLE;
+    }
+    else
+    {
+        *RequiredSize = Resource->ResourcePrivateDriverDataSize;
+        if (BufferCapacity < *RequiredSize)
+        {
+            Status = STATUS_BUFFER_TOO_SMALL;
+        }
+        else
+        {
+            if (*RequiredSize != 0)
+            {
+                ASSERT(Resource->ResourcePrivateDriverData != NULL);
+                RtlCopyMemory(
+                    Buffer,
+                    Resource->ResourcePrivateDriverData,
+                    *RequiredSize);
+            }
+            Status = STATUS_SUCCESS;
+        }
+    }
+
+    KeReleaseMutex(&Resource->ResourceOperationLock, FALSE);
+
+Cleanup:
+    DxgkVidMmDereferenceResource(Resource);
+    return Status;
+}
+#endif
+
 NTSTATUS
 DxgkVidMmSnapshotResourceAllocations(
     _In_ PDXGKVMM_RESOURCE Resource,
@@ -2275,6 +2438,123 @@ DxgkVidMmReleaseHandleData(
     }
 }
 
+D3DKMT_HANDLE
+DxgkVidMmGetHandleParent(
+    _In_ D3DKMT_HANDLE AllocationHandle)
+{
+    PDXGKVMM_ALLOCATION Allocation;
+    D3DKMT_HANDLE ParentHandle = 0;
+
+    DxgkpVidMmEnsureGlobalsInitialized();
+    ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+    Allocation = DxgkpVidMmLookupAllocationLocked(AllocationHandle);
+    if (Allocation != NULL &&
+        InterlockedCompareExchange(&Allocation->Destroying, 0, 0) == 0 &&
+        Allocation->Resource != NULL &&
+        InterlockedCompareExchange(&Allocation->Resource->Destroying, 0, 0) == 0)
+    {
+        ParentHandle = Allocation->Resource->Handle;
+    }
+    ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+
+    return ParentHandle;
+}
+
+D3DKMT_HANDLE
+DxgkVidMmEnumHandleChildren(
+    _In_ D3DKMT_HANDLE ResourceHandle,
+    _In_ UINT Index)
+{
+    PLIST_ENTRY Entry;
+    PDXGKVMM_RESOURCE Resource = NULL;
+    D3DKMT_HANDLE ChildHandle = 0;
+    UINT CurrentIndex = 0;
+
+    DxgkpVidMmEnsureGlobalsInitialized();
+    ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+
+    for (Entry = DxgkVidMmAllocationListHead.Flink;
+         Entry != &DxgkVidMmAllocationListHead;
+         Entry = Entry->Flink)
+    {
+        PDXGKVMM_ALLOCATION Allocation =
+            CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, GlobalAllocationEntry);
+
+        if (Allocation->Resource != NULL &&
+            Allocation->Resource->Handle == ResourceHandle &&
+            InterlockedCompareExchange(&Allocation->Resource->Destroying, 0, 0) == 0)
+        {
+            Resource = Allocation->Resource;
+            break;
+        }
+    }
+
+    if (Resource != NULL)
+    {
+        for (Entry = Resource->AllocationList.Flink;
+             Entry != &Resource->AllocationList;
+             Entry = Entry->Flink)
+        {
+            PDXGKVMM_ALLOCATION Allocation =
+                CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, ResourceEntry);
+
+            if (InterlockedCompareExchange(&Allocation->Destroying, 0, 0) != 0)
+                continue;
+            if (CurrentIndex++ == Index)
+            {
+                ChildHandle = Allocation->Handle;
+                break;
+            }
+        }
+    }
+
+    ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+    return ChildHandle;
+}
+
+NTSTATUS
+DxgkVidMmGetCaptureAddress(
+    INOUT_PDXGKARGCB_GETCAPTUREADDRESS GetCaptureAddress)
+{
+    PDXGKVMM_ALLOCATION Allocation;
+    NTSTATUS Status;
+
+    if (GetCaptureAddress == NULL || GetCaptureAddress->hAllocation == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    GetCaptureAddress->SegmentId = 0;
+    GetCaptureAddress->PhysicalAddress.QuadPart = 0;
+
+    Status = DxgkVidMmReferenceAllocation(
+        (HANDLE)(ULONG_PTR)GetCaptureAddress->hAllocation,
+        NULL,
+        NULL,
+        &Allocation);
+    if (!NT_SUCCESS(Status))
+        return STATUS_INVALID_PARAMETER;
+
+    (VOID)KeWaitForSingleObject(
+        &Allocation->ResidencyLock,
+        Executive,
+        KernelMode,
+        FALSE,
+        NULL);
+    if (!Allocation->Resident || Allocation->PendingPlacement)
+    {
+        Status = STATUS_GRAPHICS_ALLOCATION_BUSY;
+    }
+    else
+    {
+        GetCaptureAddress->SegmentId = Allocation->SegmentId;
+        GetCaptureAddress->PhysicalAddress = Allocation->PhysicalAddress;
+        Status = STATUS_SUCCESS;
+    }
+    KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+    DxgkVidMmDereferenceAllocation(Allocation);
+
+    return Status;
+}
+
 PDXGKVMM_RESOURCE
 DxgkVidMmCreateResourceWrapper(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -2457,6 +2737,16 @@ DxgkpVidMmDrainResidencyReferences(
     Allocation->ImplicitResidencyReference = FALSE;
     InterlockedExchange(&Allocation->ResidencyReferenceCount, 0);
     KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    /*
+     * Finalization is the last-resort close path for unpublished/quarantined
+     * physical backings.  Device cleanup normally releases each process
+     * charge with its exact reference count first; draining the charge list
+     * here guarantees that no process ledger survives a backing whose
+     * residency-reference storage is being destroyed.
+     */
+    DxgkpVidMmReleaseAllAllocationBudgetCharges(Allocation);
+#endif
 }
 
 static VOID
@@ -3468,6 +3758,9 @@ DxgkVidMmTeardownAdapter(
 
     if (Adapter->Segments == NULL)
     {
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+        DxgkpVidMmReleaseAdapterBudgets(Adapter);
+#endif
         DxgkpVidMmRetireOwnerLedger(Adapter);
         return;
     }
@@ -3500,6 +3793,9 @@ DxgkVidMmTeardownAdapter(
         }
     }
 
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    DxgkpVidMmReleaseAdapterBudgets(Adapter);
+#endif
     DxgkpVidMmRetireOwnerLedger(Adapter);
 
     for (i = 0; i < Adapter->SegmentCount; i++)
@@ -3763,6 +4059,9 @@ DxgkpVidMmCreateAllocationTracked(
                                 : PAGE_SIZE;
     Alloc->SupportedWriteSegmentSet = AllocInfo->SupportedWriteSegmentSet;
     Alloc->EvictionSegmentSet = AllocInfo->EvictionSegmentSet;
+    Alloc->PreferredSegment.Value = AllocInfo->PreferredSegment.Value;
+    Alloc->AccessedPhysically =
+        AllocInfo->FlagsWddm2.AccessedPhysically != 0;
     Alloc->AllocationPriority = AllocInfo->AllocationPriority
                                 ? AllocInfo->AllocationPriority
                                 : VIDMM_PRIORITY_NORMAL;
@@ -3926,6 +4225,18 @@ DxgkpVidMmCreateAllocationTracked(
         if (Alloc->CpuVisible)
             Alloc->CpuAddress = Alloc->SystemMemory;
     }
+
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    if (Placed && Device != NULL && Device->OwnerProcess != NULL)
+    {
+        Status = DxgkpVidMmChargeInitialPlacement(
+                     Adapter,
+                     Device->OwnerProcess,
+                     Alloc);
+        if (!NT_SUCCESS(Status))
+            goto FailMiniportAllocation;
+    }
+#endif
 
     DxgkpVidMmTrackBacking(Adapter);
     ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
@@ -4878,6 +5189,7 @@ DxgkpVidMmDestroyAllocationList(
         return Status;
     }
 
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
     /*
      * Clear every GPUVA binding before dropping the logical handle references.
      * GpuVaInvalidateAllocation batches page-table notifications while it owns
@@ -4931,6 +5243,7 @@ DxgkpVidMmDestroyAllocationList(
         DxgkpVidMmFreeDestroyBatch(Batch);
         return Status;
     }
+#endif
     for (Index = 0; Index < AllocationCount; ++Index)
         DxgkpVidMmDropLogicalHandleReference(Batch->Allocations[Index]);
     for (Index = 0; Index < AllocationCount; ++Index)
@@ -6686,6 +6999,10 @@ DxgkpVidMmReleaseSegmentPlacement(
     if (Allocation == NULL || !Allocation->Resident)
         return;
 
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    DxgkpVidMmReleaseAllAllocationBudgetCharges(Allocation);
+#endif
+
     Adapter = Allocation->Adapter;
     if (Adapter == NULL ||
         Adapter->Segments == NULL ||
@@ -6870,6 +7187,50 @@ DxgkpVidMmEvictOwned(
     if (ApertureUnmapRequired && Queued)
         DxgkPagingBeginPlacement(Allocation, 0, 0, PagingFenceId);
     return STATUS_SUCCESS;
+}
+
+/*
+ * Complete the semantic half of evicting an offered allocation.
+ *
+ * A normal offer may lose its contents but keeps a valid backing store.
+ * WDDM 2.1 AllowDecommit additionally permits VidMm to release pool-owned
+ * backing. Existing-heap pages and live user mappings remain committed: they
+ * are owned or mapped outside VidMm and cannot safely be discarded here.
+ */
+static VOID
+DxgkpVidMmCompleteOfferedEvictionOwned(
+    _Inout_ PDXGKVMM_ALLOCATION Allocation)
+{
+    BOOLEAN AllowDecommit = FALSE;
+
+    ExAcquireFastMutex(&DxgkVidMmPolicyLock);
+    if (Allocation->Offered)
+    {
+        Allocation->OfferDiscarded = TRUE;
+        AllowDecommit = Allocation->OfferAllowDecommit;
+    }
+    ExReleaseFastMutex(&DxgkVidMmPolicyLock);
+
+    if (!AllowDecommit ||
+        Allocation->Resident ||
+        Allocation->SysMemMdl != NULL ||
+        Allocation->SystemMemory == NULL ||
+        Allocation->UserModeAddress != NULL ||
+        (Allocation->CpuAddress != NULL &&
+         Allocation->CpuAddress != Allocation->SystemMemory))
+    {
+        return;
+    }
+
+    if (Allocation->CpuAddress == Allocation->SystemMemory)
+        Allocation->CpuAddress = NULL;
+    DxgkpVidMmReleaseSystemBacking(Allocation);
+    Allocation->PhysicalAddress.QuadPart = 0;
+
+    ExAcquireFastMutex(&DxgkVidMmPolicyLock);
+    if (Allocation->Offered)
+        Allocation->OfferDecommitted = TRUE;
+    ExReleaseFastMutex(&DxgkVidMmPolicyLock);
 }
 
 /* ========================================================================
@@ -7181,6 +7542,47 @@ DxgkpVidMmQueryDeviceResidencyReferenceCountLocked(
     return Count;
 }
 
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+static ULONG
+DxgkpVidMmQueryProcessResidencyReferenceCountLocked(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ PEPROCESS Process)
+{
+    PLIST_ENTRY Entry;
+    ULONG Count = 0;
+
+    if (Allocation->ResidencyReferenceList.Flink != NULL)
+    {
+        for (Entry = Allocation->ResidencyReferenceList.Flink;
+             Entry != &Allocation->ResidencyReferenceList;
+             Entry = Entry->Flink)
+        {
+            PDXGKVMM_RESIDENCY_REF Ref =
+                CONTAINING_RECORD(Entry, DXGKVMM_RESIDENCY_REF, Entry);
+
+            if (Ref->Device == NULL ||
+                Ref->Device->OwnerProcess != Process)
+            {
+                continue;
+            }
+            ASSERT(Ref->Count >= 0);
+            ASSERT((ULONG)Ref->Count <= MAXULONG - Count);
+            if (Ref->Count > 0 && (ULONG)Ref->Count <= MAXULONG - Count)
+                Count += (ULONG)Ref->Count;
+        }
+    }
+    if (Allocation->ImplicitResidencyReference &&
+        Allocation->Device != NULL &&
+        Allocation->Device->OwnerProcess == Process)
+    {
+        ASSERT(Count != MAXULONG);
+        if (Count != MAXULONG)
+            Count++;
+    }
+    return Count;
+}
+#endif
+
 static BOOLEAN
 DxgkpVidMmReleaseExplicitResidencyReferencesLocked(
     _In_ PDXGKVMM_ALLOCATION Allocation,
@@ -7296,6 +7698,9 @@ DxgkVidMmReleaseDeviceResidencyReference(
     _Out_ PBOOLEAN OutReachedZero)
 {
     BOOLEAN Released;
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    NTSTATUS BudgetStatus;
+#endif
 
     if (OutReachedZero != NULL)
         *OutReachedZero = FALSE;
@@ -7304,6 +7709,17 @@ DxgkVidMmReleaseDeviceResidencyReference(
     if (!NT_SUCCESS(DxgkpVidMmLockResidencyForExternalOperation(Allocation)))
         return FALSE;
     Released = DxgkpVidMmReleaseDeviceResidencyReferenceLocked(Allocation, Device, OutReachedZero);
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    if (Released && Device != NULL && Device->OwnerProcess != NULL)
+    {
+        BudgetStatus = DxgkpVidMmReleaseProcessBudgetReferences(
+                           Allocation,
+                           Device->OwnerProcess,
+                           1);
+        ASSERT(NT_SUCCESS(BudgetStatus) ||
+               BudgetStatus == STATUS_NOT_FOUND);
+    }
+#endif
     KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
     return Released;
 }
@@ -7314,6 +7730,7 @@ DxgkVidMmReleaseAllDeviceResidencyReferences(
     _In_opt_ PDXGKRNL_DEVICE Device)
 {
     PDXGKVMM_RESIDENCY_REF Ref;
+    ULONG ReleasedReferences = 0;
     NTSTATUS Status;
 
     if (Allocation == NULL)
@@ -7331,6 +7748,8 @@ DxgkVidMmReleaseAllDeviceResidencyReferences(
         ExFreePoolWithTag(Ref, TAG_VIDMM_ALLOC);
         PreviousCount = InterlockedExchangeAdd(&Allocation->ResidencyReferenceCount, -Count);
         ASSERT(Count >= 0 && PreviousCount >= Count);
+        if (Count > 0)
+            ReleasedReferences += (ULONG)Count;
     }
     if (Allocation->ImplicitResidencyReference && Device == Allocation->Device)
     {
@@ -7339,7 +7758,20 @@ DxgkVidMmReleaseAllDeviceResidencyReferences(
         Allocation->ImplicitResidencyReference = FALSE;
         References = InterlockedDecrement(&Allocation->ResidencyReferenceCount);
         ASSERT(References >= 0);
+        ReleasedReferences++;
     }
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    if (ReleasedReferences != 0 &&
+        Device != NULL &&
+        Device->OwnerProcess != NULL)
+    {
+        Status = DxgkpVidMmReleaseProcessBudgetReferences(
+                     Allocation,
+                     Device->OwnerProcess,
+                     ReleasedReferences);
+        ASSERT(NT_SUCCESS(Status) || Status == STATUS_NOT_FOUND);
+    }
+#endif
     KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
 }
 
@@ -7356,13 +7788,211 @@ DxgkVidMmEvict(
     if (!NT_SUCCESS(Status))
         return Status;
     Status = DxgkpVidMmEvictOwned(Allocation);
-    ExAcquireFastMutex(&DxgkVidMmPolicyLock);
-    if (NT_SUCCESS(Status) && Allocation->Offered)
-        Allocation->OfferDiscarded = TRUE;
-    ExReleaseFastMutex(&DxgkVidMmPolicyLock);
+    if (NT_SUCCESS(Status))
+        DxgkpVidMmCompleteOfferedEvictionOwned(Allocation);
     DxgkpVidMmEndResidencyTransaction(Allocation, &OwnerToken);
     return Status;
 }
+
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+/*
+ * Flush at most this much with one temporary MDL.  The public range is
+ * SIZE_T-wide, but an MDL's ByteCount and IoAllocateMdl length are ULONG.
+ * Chunking therefore supports the full allocation range without allocating
+ * an unbounded PFN array.
+ */
+#define DXGKP_VIDMM_CACHE_FLUSH_CHUNK_MAX (16U * 1024U * 1024U)
+
+NTSTATUS
+DxgkVidMmInvalidateAllocationCache(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ D3DKMT_HANDLE Handle,
+    _In_ ULONGLONG Offset,
+    _In_ ULONGLONG Length)
+{
+    PDXGKVMM_ALLOCATION Allocation = NULL;
+    PDXGKRNL_SEGMENT Segment = NULL;
+    ULONGLONG CurrentOffset;
+    ULONGLONG Remaining;
+    BOOLEAN CachedBacking = FALSE;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (Adapter == NULL || Device == NULL || Handle == 0 || Length == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = DxgkVidMmReferenceAllocation(
+                 (HANDLE)(ULONG_PTR)Handle,
+                 Adapter,
+                 Device,
+                 &Allocation);
+    if (!NT_SUCCESS(Status))
+        return STATUS_INVALID_HANDLE;
+
+    Status = DxgkpVidMmLockResidencyForExternalOperation(Allocation);
+    if (!NT_SUCCESS(Status))
+        goto CleanupReference;
+
+    /*
+     * A queued paging transfer leaves the old placement authoritative until
+     * its fence retires.  Do not clean one backing while the GPU is switching
+     * to another one.
+     */
+    if (!DxgkPagingSyncPlacement(Allocation))
+    {
+        Status = STATUS_GRAPHICS_ALLOCATION_BUSY;
+        goto CleanupLock;
+    }
+    if (Allocation->ContentLost)
+    {
+        Status = STATUS_GRAPHICS_ALLOCATION_CONTENT_LOST;
+        goto CleanupLock;
+    }
+    if (Offset > (ULONGLONG)Allocation->Size ||
+        Length > (ULONGLONG)Allocation->Size - Offset)
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto CleanupLock;
+    }
+
+    if (!Allocation->Resident)
+    {
+        CachedBacking = Allocation->SystemMemory != NULL;
+    }
+    else
+    {
+        if (Adapter->Segments == NULL ||
+            Allocation->SegmentId == 0 ||
+            Allocation->SegmentId > Adapter->SegmentCount)
+        {
+            Status = STATUS_INVALID_DEVICE_STATE;
+            goto CleanupLock;
+        }
+
+        Segment = &ADAPTER_SEGMENTS(Adapter)[Allocation->SegmentId - 1];
+        CachedBacking =
+            VidMmSegmentIsAperture(Segment) &&
+            Allocation->SystemMemory != NULL;
+    }
+
+    /*
+     * Non-aperture GPU memory is exposed through MmWriteCombined mappings,
+     * never through the CPU cache.  It needs ordering, but has no dirty cache
+     * lines to write back or stale cache lines to invalidate.
+     */
+    if (!CachedBacking)
+    {
+        if (Allocation->Resident && Segment != NULL &&
+            !VidMmSegmentIsAperture(Segment))
+        {
+            KeMemoryBarrier();
+            Status = STATUS_SUCCESS;
+        }
+        else
+        {
+            Status = STATUS_INVALID_DEVICE_STATE;
+        }
+        goto CleanupLock;
+    }
+
+    CurrentOffset = Offset;
+    Remaining = Length;
+    while (Remaining != 0)
+    {
+        PVOID MdlAddress;
+        PMDL Mdl;
+        ULONG ChunkLength =
+            Remaining > DXGKP_VIDMM_CACHE_FLUSH_CHUNK_MAX
+                ? DXGKP_VIDMM_CACHE_FLUSH_CHUNK_MAX
+                : (ULONG)Remaining;
+
+        if (CurrentOffset > MAXULONG_PTR ||
+            (ULONG_PTR)Allocation->SystemMemory >
+                MAXULONG_PTR - (ULONG_PTR)CurrentOffset)
+        {
+            Status = STATUS_INTEGER_OVERFLOW;
+            goto CleanupLock;
+        }
+
+        if (Allocation->SysMemMdl != NULL)
+        {
+            PVOID SourceAddress = MmGetMdlVirtualAddress(
+                                      Allocation->SysMemMdl);
+
+            if (SourceAddress == NULL ||
+                CurrentOffset > MmGetMdlByteCount(Allocation->SysMemMdl) ||
+                ChunkLength >
+                    MmGetMdlByteCount(Allocation->SysMemMdl) -
+                        (ULONG)CurrentOffset ||
+                (ULONG_PTR)SourceAddress >
+                    MAXULONG_PTR - (ULONG_PTR)CurrentOffset)
+            {
+                Status = STATUS_INVALID_DEVICE_STATE;
+                goto CleanupLock;
+            }
+
+            MdlAddress = (PVOID)((ULONG_PTR)SourceAddress +
+                                 (ULONG_PTR)CurrentOffset);
+            Mdl = IoAllocateMdl(
+                      MdlAddress,
+                      ChunkLength,
+                      FALSE,
+                      FALSE,
+                      NULL);
+            if (Mdl != NULL)
+            {
+                IoBuildPartialMdl(
+                    Allocation->SysMemMdl,
+                    Mdl,
+                    MdlAddress,
+                    ChunkLength);
+            }
+        }
+        else
+        {
+            MdlAddress =
+                (PVOID)((ULONG_PTR)Allocation->SystemMemory +
+                        (ULONG_PTR)CurrentOffset);
+            Mdl = IoAllocateMdl(
+                      MdlAddress,
+                      ChunkLength,
+                      FALSE,
+                      FALSE,
+                      NULL);
+            if (Mdl != NULL)
+                MmBuildMdlForNonPagedPool(Mdl);
+        }
+
+        if (Mdl == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto CleanupLock;
+        }
+
+        /*
+         * ReadOperation=TRUE performs clean+invalidate on non-coherent ARM64
+         * and is a coherent no-op on x86/amd64.  The final barrier also orders
+         * write-combined/coherent machines where KeFlushIoBuffers is a macro.
+         */
+        KeFlushIoBuffers(Mdl, TRUE, TRUE);
+        IoFreeMdl(Mdl);
+
+        CurrentOffset += ChunkLength;
+        Remaining -= ChunkLength;
+    }
+
+    KeMemoryBarrier();
+    Status = STATUS_SUCCESS;
+
+CleanupLock:
+    KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+CleanupReference:
+    DxgkVidMmDereferenceAllocation(Allocation);
+    return Status;
+}
+#endif
 
 /*
  * DxgkVidMmOfferAllocation / DxgkVidMmReclaimAllocation
@@ -7373,11 +8003,44 @@ DxgkVidMmEvict(
  * discarded pool-owned backing is replaced with zeroed pages at reclaim.
  */
 NTSTATUS
+DxgkVidMmOfferReferencedAllocation(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ ULONG Priority,
+    _In_ ULONG Flags)
+{
+    NTSTATUS Status;
+
+    if (Allocation == NULL || (Flags & ~0x3UL) != 0)
+        return STATUS_INVALID_PARAMETER;
+    Status = DxgkpVidMmLockResidencyForExternalOperation(Allocation);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    ExAcquireFastMutex(&DxgkVidMmPolicyLock);
+    if (Allocation->Offered)
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+    }
+    else
+    {
+        Allocation->Offered = TRUE;
+        Allocation->OfferDiscarded = FALSE;
+        Allocation->OfferAllowDecommit = (Flags & 0x2UL) != 0;
+        Allocation->OfferDecommitted = FALSE;
+        Allocation->OfferPriority = Priority;
+        Status = STATUS_SUCCESS;
+    }
+    ExReleaseFastMutex(&DxgkVidMmPolicyLock);
+    KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+    return Status;
+}
+
+NTSTATUS
 DxgkVidMmOfferAllocation(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ PDXGKRNL_DEVICE  Device,
     _In_ D3DKMT_HANDLE    Handle,
-    _In_ ULONG            Priority)
+    _In_ ULONG            Priority,
+    _In_ ULONG            Flags)
 {
     PDXGKVMM_ALLOCATION Allocation;
     NTSTATUS Status;
@@ -7386,49 +8049,48 @@ DxgkVidMmOfferAllocation(
     if (!NT_SUCCESS(Status))
         return STATUS_INVALID_PARAMETER;
 
-    Status = DxgkpVidMmLockResidencyForExternalOperation(Allocation);
-    if (!NT_SUCCESS(Status))
-    {
-        DxgkVidMmDereferenceAllocation(Allocation);
-        return Status;
-    }
-    ExAcquireFastMutex(&DxgkVidMmPolicyLock);
-    Allocation->Offered = TRUE;
-    Allocation->OfferPriority = Priority;
-    ExReleaseFastMutex(&DxgkVidMmPolicyLock);
-    KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
-
+    Status = DxgkVidMmOfferReferencedAllocation(
+                 Allocation,
+                 Priority,
+                 Flags);
     DxgkVidMmDereferenceAllocation(Allocation);
-    return STATUS_SUCCESS;
+    return Status;
 }
 
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2100)
 NTSTATUS
-DxgkVidMmReclaimAllocation(
-    _In_ PDXGKRNL_ADAPTER Adapter,
-    _In_ PDXGKRNL_DEVICE  Device,
-    _In_ D3DKMT_HANDLE    Handle,
-    _Out_ PBOOLEAN        Discarded)
+DxgkVidMmReclaimReferencedAllocation3(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _Out_ PULONG Result)
 {
-    PDXGKVMM_ALLOCATION Allocation;
+    BOOLEAN Offered;
     BOOLEAN OfferDiscarded;
+    BOOLEAN OfferDecommitted;
     NTSTATUS Status;
 
-    *Discarded = FALSE;
-    Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)Handle, Adapter, Device, &Allocation);
-    if (!NT_SUCCESS(Status))
+    if (Allocation == NULL || Result == NULL)
         return STATUS_INVALID_PARAMETER;
-
+    *Result = D3DDDI_RECLAIM_RESULT_OK;
     Status = DxgkpVidMmLockResidencyForExternalOperation(Allocation);
     if (!NT_SUCCESS(Status))
-    {
-        DxgkVidMmDereferenceAllocation(Allocation);
         return Status;
-    }
     ExAcquireFastMutex(&DxgkVidMmPolicyLock);
+    Offered = Allocation->Offered;
     OfferDiscarded = Allocation->OfferDiscarded;
+    OfferDecommitted = Allocation->OfferDecommitted;
     ExReleaseFastMutex(&DxgkVidMmPolicyLock);
-    *Discarded = OfferDiscarded;
-    if (OfferDiscarded &&
+    if (!Offered)
+    {
+        KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    if (OfferDecommitted)
+        *Result = D3DDDI_RECLAIM_RESULT_NOT_COMMITTED;
+    else if (OfferDiscarded)
+        *Result = D3DDDI_RECLAIM_RESULT_DISCARDED;
+
+    if ((OfferDiscarded || OfferDecommitted) &&
         Allocation->SystemMemory == NULL &&
         Allocation->SysMemMdl == NULL)
     {
@@ -7437,7 +8099,6 @@ DxgkVidMmReclaimAllocation(
         if (!DxgkpVidMmRoundUpPageSize(Allocation->Size, &AllocSize))
         {
             KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
-            DxgkVidMmDereferenceAllocation(Allocation);
             return STATUS_INTEGER_OVERFLOW;
         }
 
@@ -7445,7 +8106,6 @@ DxgkVidMmReclaimAllocation(
         if (Allocation->SystemMemory == NULL)
         {
             KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
-            DxgkVidMmDereferenceAllocation(Allocation);
             return STATUS_INSUFFICIENT_RESOURCES;
         }
         RtlZeroMemory(Allocation->SystemMemory, AllocSize);
@@ -7457,13 +8117,345 @@ DxgkVidMmReclaimAllocation(
     ExAcquireFastMutex(&DxgkVidMmPolicyLock);
     Allocation->Offered = FALSE;
     Allocation->OfferDiscarded = FALSE;
+    Allocation->OfferAllowDecommit = FALSE;
+    Allocation->OfferDecommitted = FALSE;
     Allocation->OfferPriority = 0;
     ExReleaseFastMutex(&DxgkVidMmPolicyLock);
     KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
-
-    DxgkVidMmDereferenceAllocation(Allocation);
     return STATUS_SUCCESS;
 }
+#endif
+
+NTSTATUS
+DxgkVidMmReclaimReferencedAllocation(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _Out_ PBOOLEAN Discarded)
+{
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2100)
+    ULONG Result;
+    NTSTATUS Status;
+
+    if (Discarded == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Status = DxgkVidMmReclaimReferencedAllocation3(Allocation, &Result);
+    if (NT_SUCCESS(Status))
+        *Discarded = Result != D3DDDI_RECLAIM_RESULT_OK;
+    else
+        *Discarded = FALSE;
+    return Status;
+#else
+    BOOLEAN Offered;
+    BOOLEAN OfferDiscarded;
+    NTSTATUS Status;
+
+    if (Allocation == NULL || Discarded == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *Discarded = FALSE;
+    Status = DxgkpVidMmLockResidencyForExternalOperation(Allocation);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    ExAcquireFastMutex(&DxgkVidMmPolicyLock);
+    Offered = Allocation->Offered;
+    OfferDiscarded = Allocation->OfferDiscarded;
+    ExReleaseFastMutex(&DxgkVidMmPolicyLock);
+    if (!Offered)
+    {
+        KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    *Discarded = OfferDiscarded;
+    if (OfferDiscarded &&
+        Allocation->SystemMemory == NULL &&
+        Allocation->SysMemMdl == NULL)
+    {
+        SIZE_T AllocSize;
+
+        if (!DxgkpVidMmRoundUpPageSize(Allocation->Size, &AllocSize))
+        {
+            KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+            return STATUS_INTEGER_OVERFLOW;
+        }
+
+        Allocation->SystemMemory = ExAllocatePoolWithTag(
+                                       NonPagedPool,
+                                       AllocSize,
+                                       TAG_VIDMM_ALLOC);
+        if (Allocation->SystemMemory == NULL)
+        {
+            KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        RtlZeroMemory(Allocation->SystemMemory, AllocSize);
+        if (!Allocation->Resident)
+            Allocation->PhysicalAddress =
+                MmGetPhysicalAddress(Allocation->SystemMemory);
+        if (Allocation->CpuVisible && Allocation->CpuAddress == NULL)
+            Allocation->CpuAddress = Allocation->SystemMemory;
+    }
+    ExAcquireFastMutex(&DxgkVidMmPolicyLock);
+    Allocation->Offered = FALSE;
+    Allocation->OfferDiscarded = FALSE;
+    Allocation->OfferAllowDecommit = FALSE;
+    Allocation->OfferDecommitted = FALSE;
+    Allocation->OfferPriority = 0;
+    ExReleaseFastMutex(&DxgkVidMmPolicyLock);
+    KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+    return STATUS_SUCCESS;
+#endif
+}
+
+NTSTATUS
+DxgkVidMmReclaimAllocation(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE  Device,
+    _In_ D3DKMT_HANDLE    Handle,
+    _Out_ PBOOLEAN        Discarded)
+{
+    PDXGKVMM_ALLOCATION Allocation;
+    NTSTATUS Status;
+
+    if (Discarded == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)Handle, Adapter, Device, &Allocation);
+    if (!NT_SUCCESS(Status))
+        return STATUS_INVALID_PARAMETER;
+
+    Status = DxgkVidMmReclaimReferencedAllocation(Allocation, Discarded);
+    DxgkVidMmDereferenceAllocation(Allocation);
+    return Status;
+}
+
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2100)
+#define DXGKP_UPDATE_PROPERTY_MASK_WDDM_2_1   0x00000007UL
+#define DXGKP_UPDATE_PROPERTY_FLAGS_WDDM_2_1  0x00000001UL
+
+NTSTATUS
+DxgkVidMmUpdateAllocationProperty(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ D3DKMT_HANDLE Handle,
+    _In_ ULONG SupportedSegmentSet,
+    _In_ ULONG PreferredSegmentValue,
+    _In_ ULONG PropertyFlagsValue,
+    _In_ ULONG PropertyMaskValue)
+{
+    PDXGKVMM_ALLOCATION Binding = NULL;
+    PDXGKVMM_ALLOCATION Allocation;
+    HANDLE MiniportAllocation = NULL;
+    D3DDDI_SEGMENTPREFERENCE PreferredSegment;
+    DXGK_ALLOCATIONINFO ValidationInfo;
+    DXGKARG_VALIDATEUPDATEALLOCPROPERTY ValidationArgs;
+    ULONG NewSupportedSegmentSet;
+    ULONG NewPreferredSegmentValue;
+    BOOLEAN NewAccessedPhysically;
+    BOOLEAN Offered;
+    BOOLEAN EvictionRequired;
+    ULONG OwnerToken;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (Adapter == NULL || Device == NULL || Handle == 0 ||
+        Device->Adapter != Adapter ||
+        (PropertyMaskValue & ~DXGKP_UPDATE_PROPERTY_MASK_WDDM_2_1) != 0 ||
+        (((PropertyMaskValue & 0x1UL) != 0) &&
+         (PropertyFlagsValue &
+          ~DXGKP_UPDATE_PROPERTY_FLAGS_WDDM_2_1) != 0))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (Adapter->MiniportContext == NULL ||
+        Adapter->MiniportContext->UseDodLayout ||
+        !DxgkCapsCoreInterfaceVersionAtLeast(
+             Adapter->MiniportContext->InitData.s.Version,
+             DXGK_CAPS_CORE_LEVEL_WDDM_2_1) ||
+        DXGK_CB_FULL(Adapter,
+                     DxgkDdiValidateUpdateAllocationProperty) == NULL)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    PreferredSegment.Value = PreferredSegmentValue;
+    if ((PropertyMaskValue & 0x4UL) != 0 &&
+        PreferredSegment.Reserved != 0)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = DxgkVidMmReferenceOpenBinding(
+                 (HANDLE)(ULONG_PTR)Handle,
+                 Adapter,
+                 Device,
+                 &MiniportAllocation,
+                 &Binding);
+    if (!NT_SUCCESS(Status))
+        return STATUS_INVALID_HANDLE;
+
+    Allocation = Binding->BackingAllocation != NULL
+                     ? Binding->BackingAllocation
+                     : Binding;
+    Status = DxgkpVidMmBeginResidencyTransaction(
+                 Allocation,
+                 &OwnerToken);
+    if (!NT_SUCCESS(Status))
+        goto CleanupBinding;
+
+    if (Allocation->PendingPlacement &&
+        !DxgkPagingFenceCompleted(
+             Adapter,
+             Allocation->PagingFenceId))
+    {
+        Status = DxgkPagingWaitForFence(
+                     Adapter,
+                     Allocation->PagingFenceId,
+                     DXGKP_VIDMM_PAGING_ADMISSION_TIMEOUT_MS);
+        if (!NT_SUCCESS(Status))
+        {
+            if (Status == STATUS_TIMEOUT)
+                Status = STATUS_GRAPHICS_ALLOCATION_BUSY;
+            goto CleanupTransaction;
+        }
+    }
+    if (!DxgkPagingSyncPlacement(Allocation))
+    {
+        Status = STATUS_GRAPHICS_ALLOCATION_BUSY;
+        goto CleanupTransaction;
+    }
+
+    ExAcquireFastMutex(&DxgkVidMmPolicyLock);
+    Offered = Allocation->Offered;
+    ExReleaseFastMutex(&DxgkVidMmPolicyLock);
+    if (Offered)
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+        goto CleanupTransaction;
+    }
+
+    NewSupportedSegmentSet =
+        (PropertyMaskValue & 0x2UL) != 0
+            ? SupportedSegmentSet
+            : Allocation->SupportedWriteSegmentSet;
+    NewPreferredSegmentValue =
+        (PropertyMaskValue & 0x4UL) != 0
+            ? PreferredSegmentValue
+            : Allocation->PreferredSegment.Value;
+    NewAccessedPhysically =
+        (PropertyMaskValue & 0x1UL) != 0
+            ? (PropertyFlagsValue & 0x1UL) != 0
+            : Allocation->AccessedPhysically;
+
+    if ((PropertyMaskValue & 0x2UL) != 0 &&
+        NewSupportedSegmentSet == 0)
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto CleanupTransaction;
+    }
+
+    RtlZeroMemory(&ValidationInfo, sizeof(ValidationInfo));
+    ValidationInfo.Size = Allocation->Size;
+    ValidationInfo.PitchAlignedSize = Allocation->PitchAlignedSize;
+    ValidationInfo.Alignment = (UINT)Allocation->Alignment;
+    ValidationInfo.SupportedWriteSegmentSet = NewSupportedSegmentSet;
+    ValidationInfo.EvictionSegmentSet = Allocation->EvictionSegmentSet;
+    ValidationInfo.PreferredSegment.Value = NewPreferredSegmentValue;
+    if (Adapter->Segments != NULL &&
+        !DxgkpVidMmValidateAllocationSegmentSets(
+             Adapter,
+             &ValidationInfo))
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto CleanupTransaction;
+    }
+
+    RtlZeroMemory(&ValidationArgs, sizeof(ValidationArgs));
+    ValidationArgs.hAllocation = MiniportAllocation;
+    ValidationArgs.SupportedSegmentSet = NewSupportedSegmentSet;
+    ValidationArgs.PreferredSegment.Value =
+        NewPreferredSegmentValue;
+    ValidationArgs.Flags.Value =
+        NewAccessedPhysically ? 0x1UL : 0;
+    ValidationArgs.PropertyMaskValue = PropertyMaskValue;
+
+    if (!DxgkAcquireMiniportCallback(Adapter))
+    {
+        Status = STATUS_DEVICE_NOT_READY;
+        goto CleanupTransaction;
+    }
+    Status = DXGK_CB_FULL(
+                 Adapter,
+                 DxgkDdiValidateUpdateAllocationProperty)(
+                     Adapter->MiniportDeviceContext,
+                     &ValidationArgs);
+    DxgkReleaseMiniportCallback(Adapter);
+    if (!NT_SUCCESS(Status))
+        goto CleanupTransaction;
+
+    if (Allocation->Resident &&
+        Allocation->SegmentId >= 1 &&
+        Allocation->SegmentId <= 32)
+    {
+        EvictionRequired =
+            (NewSupportedSegmentSet &
+             (1UL << (Allocation->SegmentId - 1))) == 0;
+    }
+    else
+    {
+        EvictionRequired = FALSE;
+    }
+
+    if (EvictionRequired)
+    {
+        Status = DxgkpVidMmEvictOwned(Allocation);
+        if (!NT_SUCCESS(Status))
+            goto CleanupTransaction;
+        if (Allocation->PendingPlacement &&
+            !DxgkPagingFenceCompleted(
+                 Adapter,
+                 Allocation->PagingFenceId))
+        {
+            Status = DxgkPagingWaitForFence(
+                         Adapter,
+                         Allocation->PagingFenceId,
+                         DXGKP_VIDMM_PAGING_ADMISSION_TIMEOUT_MS);
+            if (!NT_SUCCESS(Status))
+            {
+                if (Status == STATUS_TIMEOUT)
+                    Status = STATUS_GRAPHICS_ALLOCATION_BUSY;
+                goto CleanupTransaction;
+            }
+        }
+        if (!DxgkPagingSyncPlacement(Allocation))
+        {
+            Status = STATUS_GRAPHICS_ALLOCATION_BUSY;
+            goto CleanupTransaction;
+        }
+    }
+
+    Status = KeWaitForSingleObject(
+                 &Allocation->ResidencyLock,
+                 Executive,
+                 KernelMode,
+                 FALSE,
+                 NULL);
+    if (!NT_SUCCESS(Status))
+        goto CleanupTransaction;
+    ASSERT(Allocation->ResidencyTransactionOwner == &OwnerToken);
+    Allocation->SupportedWriteSegmentSet =
+        NewSupportedSegmentSet;
+    Allocation->PreferredSegment.Value =
+        NewPreferredSegmentValue;
+    Allocation->AccessedPhysically =
+        NewAccessedPhysically;
+    KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+    Status = STATUS_SUCCESS;
+
+CleanupTransaction:
+    DxgkpVidMmEndResidencyTransaction(
+        Allocation,
+        &OwnerToken);
+CleanupBinding:
+    DxgkVidMmDereferenceLogicalAllocation(Binding);
+    return Status;
+}
+#endif
 
 
 /*
@@ -7705,6 +8697,27 @@ DxgkpVidMmMakeResidentOwned(
 
     if (Placed)
     {
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+        if (!DeferAperturePaging &&
+            Allocation->Device != NULL &&
+            Allocation->Device->OwnerProcess != NULL)
+        {
+            Status = DxgkpVidMmChargeInitialPlacement(
+                         Adapter,
+                         Allocation->Device->OwnerProcess,
+                         Allocation);
+            if (!NT_SUCCESS(Status))
+            {
+                DxgkpVidMmReleaseSegmentPlacement(Allocation);
+                if (Allocation->SystemMemory != NULL)
+                {
+                    Allocation->PhysicalAddress =
+                        MmGetPhysicalAddress(Allocation->SystemMemory);
+                }
+                goto Cleanup;
+            }
+        }
+#endif
         Status = DxgkpVidMmCompleteResidencyOwned(Allocation,
                                                  Adapter,
                                                  DeferAperturePaging,
@@ -7750,10 +8763,8 @@ DxgkpVidMmMakeResidentOwned(
         if (NT_SUCCESS(Status))
         {
             Status = DxgkpVidMmEvictOwned(Victim);
-            ExAcquireFastMutex(&DxgkVidMmPolicyLock);
-            if (NT_SUCCESS(Status) && Victim->Offered)
-                Victim->OfferDiscarded = TRUE;
-            ExReleaseFastMutex(&DxgkVidMmPolicyLock);
+            if (NT_SUCCESS(Status))
+                DxgkpVidMmCompleteOfferedEvictionOwned(Victim);
             DxgkpVidMmEndResidencyTransaction(Victim,
                                              &VictimOwnerToken);
         }
@@ -7778,6 +8789,27 @@ DxgkpVidMmMakeResidentOwned(
         Status = STATUS_NO_MEMORY;
         goto Cleanup;
     }
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    if (!DeferAperturePaging &&
+        Allocation->Device != NULL &&
+        Allocation->Device->OwnerProcess != NULL)
+    {
+        Status = DxgkpVidMmChargeInitialPlacement(
+                     Adapter,
+                     Allocation->Device->OwnerProcess,
+                     Allocation);
+        if (!NT_SUCCESS(Status))
+        {
+            DxgkpVidMmReleaseSegmentPlacement(Allocation);
+            if (Allocation->SystemMemory != NULL)
+            {
+                Allocation->PhysicalAddress =
+                    MmGetPhysicalAddress(Allocation->SystemMemory);
+            }
+            goto Cleanup;
+        }
+    }
+#endif
     Status = DxgkpVidMmCompleteResidencyOwned(Allocation,
                                              Adapter,
                                              DeferAperturePaging,
@@ -7816,6 +8848,11 @@ typedef struct _DXGKP_VIDMM_BATCH_ENTRY
     BOOLEAN ReferencesAcquired;
     BOOLEAN WasResident;
     BOOLEAN PlacementOwned;
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    ULONG ProcessReferenceCount;
+    PDXGKVMM_PROCESS_BUDGET_CHARGE BudgetChargeCandidate;
+    BOOLEAN BudgetReferencesAcquired;
+#endif
     BOOLEAN AperturePagingRequired;
     BOOLEAN EvictionRequired;
     BOOLEAN ApertureUnmapRequired;
@@ -7876,6 +8913,325 @@ DxgkpVidMmBuildSortedBatchEntries(
     }
     return UniqueCount;
 }
+
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+static PDXGKVMM_PROCESS_BUDGET_CHARGE
+DxgkpVidMmFindAllocationBudgetChargeLocked(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ PDXGKVMM_PROCESS_BUDGET Record)
+{
+    PLIST_ENTRY Entry;
+
+    for (Entry = Allocation->ResidencyBudgetChargeList.Flink;
+         Entry != &Allocation->ResidencyBudgetChargeList;
+         Entry = Entry->Flink)
+    {
+        PDXGKVMM_PROCESS_BUDGET_CHARGE Charge =
+            CONTAINING_RECORD(
+                Entry,
+                DXGKVMM_PROCESS_BUDGET_CHARGE,
+                Link);
+
+        if (Charge->Record == Record)
+            return Charge;
+    }
+    return NULL;
+}
+
+static NTSTATUS
+DxgkpVidMmChargeMakeResidentBatch(
+    _In_ PDXGKVMM_PROCESS_BUDGET Record,
+    _Inout_updates_(EntryCount) PDXGKP_VIDMM_BATCH_ENTRY Entries,
+    _In_ ULONG EntryCount,
+    _In_ BOOLEAN CantTrimFurther,
+    _Out_ PULONGLONG OutNumBytesToTrim)
+{
+    ULONGLONG Bytes[2] = { 0, 0 };
+    ULONGLONG Trim[2] = { 0, 0 };
+    NTSTATUS PlanStatus[2] = { STATUS_SUCCESS, STATUS_SUCCESS };
+    BOOLEAN Committed[2] = { FALSE, FALSE };
+    ULONG Index;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    ExAcquireFastMutex(&DxgkVidMmProcessBudgetLock);
+    if (Record->ProcessExiting)
+    {
+        Status = STATUS_DELETE_PENDING;
+        goto Exit;
+    }
+
+    for (Index = 0; Index < EntryCount; ++Index)
+    {
+        PDXGKVMM_ALLOCATION Allocation = Entries[Index].Allocation;
+        PDXGKRNL_SEGMENT Segment;
+        VIDMM_BUDGET_GROUP VidMmGroup;
+        ULONGLONG AllocationBytes;
+        PDXGKVMM_PROCESS_BUDGET_CHARGE Charge;
+        BOOLEAN RequiresBudgetCharge;
+        ULONG AcquireReferenceCount;
+        ULONG GroupIndex;
+
+        /*
+         * Deliberately include allocations that were already resident before
+         * this request.  An opened/shared handle resolves to the resident
+         * physical backing, but this can still be the calling process's first
+         * reference and therefore its first budget charge.
+         */
+        if (!Allocation->Resident ||
+            Allocation->SegmentId == 0 ||
+            Allocation->SegmentId > Record->Adapter->SegmentCount ||
+            Entries[Index].ProcessReferenceCount <
+                Entries[Index].RequestReferenceCount)
+        {
+            Status = STATUS_INVALID_DEVICE_STATE;
+            goto Exit;
+        }
+        Segment =
+            &ADAPTER_SEGMENTS(Record->Adapter)[Allocation->SegmentId - 1];
+        VidMmGroup = VidMmSegmentBudgetGroup(Record->Adapter, Segment);
+        if (VidMmGroup == VidMmBudgetGroupNone)
+            continue;
+        GroupIndex = (VidMmGroup == VidMmBudgetGroupLocal) ? 0 : 1;
+        AllocationBytes =
+            VidMmAllocationSizeForSegment(Allocation, Segment);
+
+        Charge = DxgkpVidMmFindAllocationBudgetChargeLocked(
+                     Allocation,
+                     Record);
+        if (Charge == NULL)
+        {
+            Charge = ExAllocatePoolWithTag(
+                         NonPagedPool,
+                         sizeof(*Charge),
+                         TAG_VIDMM_ALLOC);
+            if (Charge == NULL)
+            {
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+                goto Exit;
+            }
+            RtlZeroMemory(Charge, sizeof(*Charge));
+            Charge->Record = Record;
+            Charge->Group =
+                (VidMmGroup == VidMmBudgetGroupLocal)
+                    ? D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL
+                    : D3DKMT_MEMORY_SEGMENT_GROUP_NON_LOCAL;
+            Charge->Bytes = AllocationBytes;
+            DxgkResidencyCoreProcessChargeInitialize(&Charge->State);
+            Entries[Index].BudgetChargeCandidate = Charge;
+            AcquireReferenceCount =
+                Entries[Index].ProcessReferenceCount;
+        }
+        else
+        {
+            if (Charge->Group !=
+                    ((VidMmGroup == VidMmBudgetGroupLocal)
+                         ? D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL
+                         : D3DKMT_MEMORY_SEGMENT_GROUP_NON_LOCAL) ||
+                Charge->Bytes != AllocationBytes ||
+                Charge->State.ReferenceCount >
+                    Entries[Index].ProcessReferenceCount ||
+                Entries[Index].ProcessReferenceCount -
+                        Charge->State.ReferenceCount !=
+                    Entries[Index].RequestReferenceCount)
+            {
+                Status = STATUS_INVALID_DEVICE_STATE;
+                goto Exit;
+            }
+            AcquireReferenceCount =
+                Entries[Index].RequestReferenceCount;
+        }
+
+        Status = DxgkResidencyCoreProcessChargePlanAcquire(
+                     &Charge->State,
+                     AcquireReferenceCount,
+                     &RequiresBudgetCharge);
+        if (!NT_SUCCESS(Status))
+            goto Exit;
+        if (RequiresBudgetCharge !=
+                (Entries[Index].BudgetChargeCandidate != NULL))
+        {
+            Status = STATUS_INVALID_DEVICE_STATE;
+            goto Exit;
+        }
+        if (!RequiresBudgetCharge)
+            continue;
+        if (Bytes[GroupIndex] > MAXULONGLONG - AllocationBytes)
+        {
+            Status = STATUS_INTEGER_OVERFLOW;
+            goto Exit;
+        }
+        Bytes[GroupIndex] += AllocationBytes;
+    }
+
+    for (Index = 0; Index < RTL_NUMBER_OF(Bytes); ++Index)
+    {
+        if (Bytes[Index] == 0)
+            continue;
+        PlanStatus[Index] = DxgkResidencyCoreBudgetPlanCharge(
+                                &Record->Groups[Index],
+                                Bytes[Index],
+                                CantTrimFurther,
+                                &Trim[Index]);
+        if (!NT_SUCCESS(PlanStatus[Index]) &&
+            PlanStatus[Index] != STATUS_GRAPHICS_NO_VIDEO_MEMORY)
+        {
+            Status = PlanStatus[Index];
+            goto Exit;
+        }
+    }
+    if (PlanStatus[0] == STATUS_GRAPHICS_NO_VIDEO_MEMORY ||
+        PlanStatus[1] == STATUS_GRAPHICS_NO_VIDEO_MEMORY)
+    {
+        DxgkpVidMmSaturatingAdd(OutNumBytesToTrim, Trim[0]);
+        DxgkpVidMmSaturatingAdd(OutNumBytesToTrim, Trim[1]);
+        Status = STATUS_GRAPHICS_NO_VIDEO_MEMORY;
+        goto Exit;
+    }
+
+    for (Index = 0; Index < RTL_NUMBER_OF(Bytes); ++Index)
+    {
+        ULONGLONG IgnoredTrim;
+
+        if (Bytes[Index] == 0)
+            continue;
+        Status = DxgkResidencyCoreBudgetTryCharge(
+                     &Record->Groups[Index],
+                     Bytes[Index],
+                     CantTrimFurther,
+                     &IgnoredTrim);
+        ASSERT(NT_SUCCESS(Status));
+        if (!NT_SUCCESS(Status))
+        {
+            ULONG RollbackIndex;
+
+            for (RollbackIndex = 0;
+                 RollbackIndex < RTL_NUMBER_OF(Committed);
+                 ++RollbackIndex)
+            {
+                if (Committed[RollbackIndex])
+                {
+                    (VOID)DxgkResidencyCoreBudgetRelease(
+                        &Record->Groups[RollbackIndex],
+                        Bytes[RollbackIndex]);
+                }
+            }
+            goto Exit;
+        }
+        Committed[Index] = TRUE;
+    }
+
+    for (Index = 0; Index < EntryCount; ++Index)
+    {
+        PDXGKVMM_ALLOCATION Allocation = Entries[Index].Allocation;
+        PDXGKVMM_PROCESS_BUDGET_CHARGE Charge;
+        ULONG AcquireReferenceCount;
+
+        Charge = Entries[Index].BudgetChargeCandidate;
+        if (Charge == NULL)
+            Charge = DxgkpVidMmFindAllocationBudgetChargeLocked(
+                         Allocation,
+                         Record);
+        if (Charge == NULL)
+            continue;
+        AcquireReferenceCount =
+            Entries[Index].BudgetChargeCandidate != NULL
+                ? Entries[Index].ProcessReferenceCount
+                : Entries[Index].RequestReferenceCount;
+        Status = DxgkResidencyCoreProcessChargeCommitAcquire(
+                     &Charge->State,
+                     AcquireReferenceCount,
+                     Entries[Index].BudgetChargeCandidate != NULL);
+        ASSERT(NT_SUCCESS(Status));
+        if (!NT_SUCCESS(Status))
+            goto Exit;
+        if (Entries[Index].BudgetChargeCandidate != NULL)
+        {
+            InsertTailList(
+                &Allocation->ResidencyBudgetChargeList,
+                &Charge->Link);
+            Entries[Index].BudgetChargeCandidate = NULL;
+            Record->ChargeEntryCount++;
+        }
+        Entries[Index].BudgetReferencesAcquired = TRUE;
+    }
+
+Exit:
+    ExReleaseFastMutex(&DxgkVidMmProcessBudgetLock);
+    for (Index = 0; Index < EntryCount; ++Index)
+    {
+        if (Entries[Index].BudgetChargeCandidate != NULL)
+        {
+            ExFreePoolWithTag(
+                Entries[Index].BudgetChargeCandidate,
+                TAG_VIDMM_ALLOC);
+            Entries[Index].BudgetChargeCandidate = NULL;
+        }
+    }
+    return Status;
+}
+
+static VOID
+DxgkpVidMmRollbackMakeResidentBudget(
+    _In_ PDXGKVMM_PROCESS_BUDGET Record,
+    _Inout_updates_(EntryCount) PDXGKP_VIDMM_BATCH_ENTRY Entries,
+    _In_ ULONG EntryCount)
+{
+    LIST_ENTRY RemovedCharges;
+    ULONG Index;
+
+    InitializeListHead(&RemovedCharges);
+    ExAcquireFastMutex(&DxgkVidMmProcessBudgetLock);
+    for (Index = 0; Index < EntryCount; ++Index)
+    {
+        PDXGKVMM_ALLOCATION Allocation = Entries[Index].Allocation;
+        PDXGKVMM_PROCESS_BUDGET_CHARGE Charge;
+        BOOLEAN ReleaseBudgetCharge;
+        NTSTATUS Status;
+
+        if (!Entries[Index].BudgetReferencesAcquired)
+            continue;
+        Charge = DxgkpVidMmFindAllocationBudgetChargeLocked(
+                     Allocation,
+                     Record);
+        ASSERT(Charge != NULL);
+        if (Charge == NULL)
+            continue;
+        Status = DxgkResidencyCoreProcessChargeRelease(
+                     &Charge->State,
+                     Entries[Index].RequestReferenceCount,
+                     &ReleaseBudgetCharge);
+        ASSERT(NT_SUCCESS(Status));
+        if (!NT_SUCCESS(Status))
+            continue;
+        if (ReleaseBudgetCharge)
+        {
+            Status = DxgkResidencyCoreBudgetRelease(
+                         &Record->Groups[
+                             DxgkpVidMmBudgetGroupIndex(Charge->Group)],
+                         Charge->Bytes);
+            ASSERT(NT_SUCCESS(Status));
+            ASSERT(Record->ChargeEntryCount != 0);
+            if (Record->ChargeEntryCount != 0)
+                Record->ChargeEntryCount--;
+            RemoveEntryList(&Charge->Link);
+            InsertTailList(&RemovedCharges, &Charge->Link);
+        }
+        Entries[Index].BudgetReferencesAcquired = FALSE;
+    }
+    ExReleaseFastMutex(&DxgkVidMmProcessBudgetLock);
+    while (!IsListEmpty(&RemovedCharges))
+    {
+        PLIST_ENTRY Entry = RemoveHeadList(&RemovedCharges);
+
+        ExFreePoolWithTag(
+            CONTAINING_RECORD(
+                Entry,
+                DXGKVMM_PROCESS_BUDGET_CHARGE,
+                Link),
+            TAG_VIDMM_ALLOC);
+    }
+}
+#endif
 
 static VOID
 DxgkpVidMmRollbackMakeResidentBatchEntry(
@@ -7942,11 +9298,14 @@ DxgkpVidMmRollbackMakeResidentBatchEntry(
 NTSTATUS
 DxgkVidMmMakeResidentBatch(
     _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_PROCESS Process,
     _In_opt_ PDXGKRNL_DEVICE Device,
     _In_reads_(AllocationCount) PDXGKVMM_ALLOCATION const *Allocations,
     _In_ ULONG AllocationCount,
     _In_ D3DKMT_HANDLE hPagingSyncObject,
     _Inout_opt_ volatile LONG64 *PagingFenceCounter,
+    _In_ BOOLEAN CantTrimFurther,
+    _In_ BOOLEAN MustSucceed,
     _Out_ PULONGLONG OutNumBytesToTrim,
     _Out_ PULONGLONG OutPagingFenceValue,
     _Out_ PBOOLEAN OutPagingQueued)
@@ -7954,8 +9313,11 @@ DxgkVidMmMakeResidentBatch(
     DXGKP_VIDMM_BATCH_ENTRY *Entries = NULL;
     DXGKRNL_PAGING_OP *PagingOperations = NULL;
     PDXGKVMM_ALLOCATION *PagingAllocations = NULL;
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    PDXGKVMM_PROCESS_BUDGET BudgetRecord = NULL;
+#endif
     ULONG OwnerToken;
-    ULONG UniqueCount;
+    ULONG UniqueCount = 0;
     ULONG EntryIndex;
     ULONG PagingOperationCount = 0;
     ULONG PagingFenceId = 0;
@@ -7971,9 +9333,14 @@ DxgkVidMmMakeResidentBatch(
     if (OutPagingQueued != NULL)
         *OutPagingQueued = FALSE;
     if (Adapter == NULL ||
+        Process == NULL ||
+        Process->Process == NULL ||
+        Process->Adapter != Adapter ||
+        (Device != NULL && Device->ProcessRecord != Process) ||
         Allocations == NULL ||
         AllocationCount == 0 ||
         AllocationCount > MAXLONG ||
+        (MustSucceed && !CantTrimFurther) ||
         OutNumBytesToTrim == NULL ||
         OutPagingFenceValue == NULL ||
         OutPagingQueued == NULL ||
@@ -7983,12 +9350,33 @@ DxgkVidMmMakeResidentBatch(
         return STATUS_INVALID_PARAMETER;
     }
 
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    if (DxgkpVidMmEffectiveWddmLevel(Adapter) <
+        DXGK_CAPS_CORE_LEVEL_WDDM_2_0)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+    BudgetRecord = DxgkpVidMmAcquireProcessBudget(
+                       Adapter,
+                       Process->Process,
+                       &Status);
+    if (BudgetRecord == NULL)
+        return Status;
+#else
+    UNREFERENCED_PARAMETER(CantTrimFurther);
+    UNREFERENCED_PARAMETER(MustSucceed);
+    return STATUS_NOT_SUPPORTED;
+#endif
+
     Entries = ExAllocatePoolWithTag(PagedPool,
                                     (SIZE_T)AllocationCount *
                                         sizeof(*Entries),
                                     TAG_VIDMM_ALLOC);
     if (Entries == NULL)
-        return STATUS_INSUFFICIENT_RESOURCES;
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Cleanup;
+    }
     UniqueCount = DxgkpVidMmBuildSortedBatchEntries(Entries,
                                                    Allocations,
                                                    AllocationCount);
@@ -8027,7 +9415,20 @@ DxgkVidMmMakeResidentBatch(
                      Device,
                      Entries[EntryIndex].RequestReferenceCount);
         if (NT_SUCCESS(Status))
+        {
             Entries[EntryIndex].ReferencesAcquired = TRUE;
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+            Entries[EntryIndex].ProcessReferenceCount =
+                DxgkpVidMmQueryProcessResidencyReferenceCountLocked(
+                    Allocation,
+                    BudgetRecord->Process);
+            if (Entries[EntryIndex].ProcessReferenceCount <
+                Entries[EntryIndex].RequestReferenceCount)
+            {
+                Status = STATUS_INVALID_DEVICE_STATE;
+            }
+#endif
+        }
         KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
         if (!NT_SUCCESS(Status))
             goto Rollback;
@@ -8057,6 +9458,17 @@ DxgkVidMmMakeResidentBatch(
         if (Entries[EntryIndex].AperturePagingRequired)
             PagingOperationCount++;
     }
+
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    Status = DxgkpVidMmChargeMakeResidentBatch(
+                 BudgetRecord,
+                 Entries,
+                 UniqueCount,
+                 CantTrimFurther,
+                 OutNumBytesToTrim);
+    if (!NT_SUCCESS(Status))
+        goto Rollback;
+#endif
 
     if (PagingOperationCount != 0)
     {
@@ -8148,6 +9560,15 @@ DxgkVidMmMakeResidentBatch(
     goto Cleanup;
 
 Rollback:
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    if (BudgetRecord != NULL && Entries != NULL)
+    {
+        DxgkpVidMmRollbackMakeResidentBudget(
+            BudgetRecord,
+            Entries,
+            UniqueCount);
+    }
+#endif
     for (EntryIndex = UniqueCount; EntryIndex != 0; --EntryIndex)
     {
         DxgkpVidMmRollbackMakeResidentBatchEntry(
@@ -8175,6 +9596,21 @@ Cleanup:
         ExFreePoolWithTag(PagingAllocations, TAG_VIDMM_ALLOC);
     if (Entries != NULL)
         ExFreePoolWithTag(Entries, TAG_VIDMM_ALLOC);
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    if (BudgetRecord != NULL)
+        DxgkpVidMmReleaseProcessBudget(BudgetRecord);
+#endif
+    if (!NT_SUCCESS(Status) &&
+        MustSucceed &&
+        CantTrimFurther &&
+        Device != NULL &&
+        (Status == STATUS_GRAPHICS_NO_VIDEO_MEMORY ||
+         Status == STATUS_NO_MEMORY))
+    {
+        DxgkDeviceSetExecutionState(
+            Device,
+            D3DKMT_DEVICEEXECUTION_ERROR_OUTOFMEMORY);
+    }
     return Status;
 }
 
@@ -8395,6 +9831,19 @@ DxgkVidMmEvictBatch(
 
             ASSERT(Released);
         }
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+        if (Device != NULL && Device->OwnerProcess != NULL)
+        {
+            NTSTATUS BudgetStatus =
+                DxgkpVidMmReleaseProcessBudgetReferences(
+                    Allocation,
+                    Device->OwnerProcess,
+                    Entries[EntryIndex].RequestReferenceCount);
+
+            ASSERT(NT_SUCCESS(BudgetStatus) ||
+                   BudgetStatus == STATUS_NOT_FOUND);
+        }
+#endif
         KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
 
         if (Entries[EntryIndex].EvictionRequired)
@@ -8409,10 +9858,7 @@ DxgkVidMmEvictBatch(
                                          0,
                                          PagingFenceId);
             }
-            ExAcquireFastMutex(&DxgkVidMmPolicyLock);
-            if (Allocation->Offered)
-                Allocation->OfferDiscarded = TRUE;
-            ExReleaseFastMutex(&DxgkVidMmPolicyLock);
+            DxgkpVidMmCompleteOfferedEvictionOwned(Allocation);
         }
     }
     Status = STATUS_SUCCESS;
@@ -9926,68 +11372,629 @@ DxgkVidMmCleanupAdapterAllocations(
         DxgkpVidMmCleanupAllocations(Adapter, NULL);
 }
 
-/*
- * A reservation is a process's claim on video memory that VidMm honours before
- * handing budget to anyone else.  It is per process and per segment group, and
- * it must survive until the process exits -- a reservation that outlived its
- * process would permanently shrink everyone else's budget.
- */
-typedef struct _DXGKVMM_PROCESS_RESERVATION
-{
-    LIST_ENTRY Link;
-    PEPROCESS Process;
-    PDXGKRNL_ADAPTER Adapter;
-    UINT64 Local;
-    UINT64 NonLocal;
-} DXGKVMM_PROCESS_RESERVATION, *PDXGKVMM_PROCESS_RESERVATION;
-
-static LIST_ENTRY DxgkVidMmReservationListHead = { &DxgkVidMmReservationListHead, &DxgkVidMmReservationListHead };
-static FAST_MUTEX DxgkVidMmReservationLock;
-static volatile LONG DxgkVidMmReservationLockReady;
-
-static VOID
-DxgkpVidMmEnsureReservationLock(VOID)
-{
-    LONG State;
-
-    State = InterlockedCompareExchange(&DxgkVidMmReservationLockReady, 1, 0);
-    if (State == 0)
-    {
-        ExInitializeFastMutex(&DxgkVidMmReservationLock);
-        KeMemoryBarrier();
-        InterlockedExchange(&DxgkVidMmReservationLockReady, 2);
-        return;
-    }
-
-    /* State 1 means another CPU owns initialization.  Do not acquire the
-     * FAST_MUTEX until that CPU has published state 2. */
-    while (InterlockedCompareExchange(&DxgkVidMmReservationLockReady, 2, 2) != 2)
-        YieldProcessor();
-}
-
-static UINT64
-DxgkpVidMmGetReservation(
-    _In_ PDXGKRNL_ADAPTER Adapter,
-    _In_ PEPROCESS Process,
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+static ULONG
+DxgkpVidMmBudgetGroupIndex(
     _In_ D3DKMT_MEMORY_SEGMENT_GROUP Group)
 {
-    PLIST_ENTRY Entry;
-    UINT64 Value = 0;
-
-    DxgkpVidMmEnsureReservationLock();
-    ExAcquireFastMutex(&DxgkVidMmReservationLock);
-    for (Entry = DxgkVidMmReservationListHead.Flink; Entry != &DxgkVidMmReservationListHead; Entry = Entry->Flink)
-    {
-        PDXGKVMM_PROCESS_RESERVATION Record = CONTAINING_RECORD(Entry, DXGKVMM_PROCESS_RESERVATION, Link);
-
-        if (Record->Process != Process || Record->Adapter != Adapter)
-            continue;
-        Value = (Group == D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL) ? Record->Local : Record->NonLocal;
-        break;
-    }
-    ExReleaseFastMutex(&DxgkVidMmReservationLock);
-    return Value;
+    return (Group == D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL) ? 0 : 1;
 }
+
+static PDXGKVMM_PROCESS_BUDGET
+DxgkpVidMmFindProcessBudgetLocked(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PEPROCESS Process)
+{
+    PLIST_ENTRY Entry;
+
+    for (Entry = DxgkVidMmProcessBudgetListHead.Flink;
+         Entry != &DxgkVidMmProcessBudgetListHead;
+         Entry = Entry->Flink)
+    {
+        PDXGKVMM_PROCESS_BUDGET Record =
+            CONTAINING_RECORD(Entry, DXGKVMM_PROCESS_BUDGET, Link);
+
+        if (Record->Adapter == Adapter && Record->Process == Process)
+            return Record;
+    }
+    return NULL;
+}
+
+static PDXGKVMM_PROCESS_BUDGET_GATE
+DxgkpVidMmFindProcessBudgetGateLocked(
+    _In_ PEPROCESS Process)
+{
+    PLIST_ENTRY Entry;
+
+    for (Entry = DxgkVidMmProcessBudgetGateListHead.Flink;
+         Entry != &DxgkVidMmProcessBudgetGateListHead;
+         Entry = Entry->Flink)
+    {
+        PDXGKVMM_PROCESS_BUDGET_GATE Gate =
+            CONTAINING_RECORD(Entry, DXGKVMM_PROCESS_BUDGET_GATE, Link);
+
+        if (Gate->Process == Process)
+            return Gate;
+    }
+    return NULL;
+}
+
+static PDXGKVMM_PROCESS_BUDGET_GATE
+DxgkpVidMmEnterProcessBudgetGate(
+    _In_ PEPROCESS Process,
+    _Out_ NTSTATUS *OutStatus)
+{
+    PDXGKVMM_PROCESS_BUDGET_GATE Gate;
+    PDXGKVMM_PROCESS_BUDGET_GATE Candidate;
+    PDXGKVMM_PROCESS_BUDGET_GATE RetiredGate = NULL;
+    BOOLEAN ProcessAlreadyExiting;
+
+    Candidate = ExAllocatePoolWithTag(
+                    NonPagedPool,
+                    sizeof(*Candidate),
+                    TAG_VIDMM_ALLOC);
+    DxgkpVidMmEnsureGlobalsInitialized();
+    ExAcquireFastMutex(&DxgkVidMmProcessBudgetLock);
+    Gate = DxgkpVidMmFindProcessBudgetGateLocked(Process);
+    if (Gate == NULL && Candidate != NULL)
+    {
+        RtlZeroMemory(Candidate, sizeof(*Candidate));
+        Candidate->Process = Process;
+        DxgkResidencyCoreProcessAdmissionInitialize(&Candidate->Admission);
+        Gate = Candidate;
+        Candidate = NULL;
+        InsertTailList(&DxgkVidMmProcessBudgetGateListHead, &Gate->Link);
+    }
+
+    ProcessAlreadyExiting =
+        PsGetProcessExitStatus(Process) != STATUS_PENDING;
+    if (Gate == NULL)
+    {
+        *OutStatus = ProcessAlreadyExiting
+                         ? STATUS_PROCESS_IS_TERMINATING
+                         : STATUS_INSUFFICIENT_RESOURCES;
+    }
+    else if (!DxgkResidencyCoreProcessAdmissionTryEnter(
+                  &Gate->Admission,
+                  ProcessAlreadyExiting))
+    {
+        ProcessAlreadyExiting = Gate->Admission.Exiting;
+        if (Gate->Admission.ActiveEntrants == 0)
+        {
+            RemoveEntryList(&Gate->Link);
+            RetiredGate = Gate;
+        }
+        Gate = NULL;
+        *OutStatus = ProcessAlreadyExiting
+                         ? STATUS_PROCESS_IS_TERMINATING
+                         : STATUS_INSUFFICIENT_RESOURCES;
+    }
+    else
+    {
+        *OutStatus = STATUS_SUCCESS;
+    }
+    ExReleaseFastMutex(&DxgkVidMmProcessBudgetLock);
+
+    if (Candidate != NULL)
+        ExFreePoolWithTag(Candidate, TAG_VIDMM_ALLOC);
+    if (RetiredGate != NULL)
+        ExFreePoolWithTag(RetiredGate, TAG_VIDMM_ALLOC);
+    return Gate;
+}
+
+static VOID
+DxgkpVidMmLeaveProcessBudgetGate(
+    _In_ PDXGKVMM_PROCESS_BUDGET_GATE Gate)
+{
+    BOOLEAN Retire;
+
+    ExAcquireFastMutex(&DxgkVidMmProcessBudgetLock);
+    ASSERT(Gate->Admission.ActiveEntrants != 0);
+    Retire = DxgkResidencyCoreProcessAdmissionLeave(&Gate->Admission);
+    if (Retire)
+    {
+        ASSERT(Gate->Admission.ActiveEntrants == 0);
+        RemoveEntryList(&Gate->Link);
+    }
+    ExReleaseFastMutex(&DxgkVidMmProcessBudgetLock);
+    if (Retire)
+        ExFreePoolWithTag(Gate, TAG_VIDMM_ALLOC);
+}
+
+static BOOLEAN
+DxgkpVidMmProcessBudgetCanRetireLocked(
+    _In_ PDXGKVMM_PROCESS_BUDGET Record)
+{
+    return Record->ProcessExiting &&
+           Record->ActiveTransactions == 0 &&
+           Record->ChargeEntryCount == 0 &&
+           Record->Groups[0].Reservation == 0 &&
+           Record->Groups[1].Reservation == 0;
+}
+
+static VOID
+DxgkpVidMmFreeProcessBudget(
+    _In_ PDXGKVMM_PROCESS_BUDGET Record)
+{
+    ObDereferenceObject(Record->Process);
+    ExFreePoolWithTag(Record, TAG_VIDMM_ALLOC);
+}
+
+static NTSTATUS
+DxgkpVidMmQueryGroupMaximum(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ D3DKMT_MEMORY_SEGMENT_GROUP Group,
+    _Out_ PULONGLONG Maximum)
+{
+    PDXGKRNL_SEGMENT Segments;
+    D3DKMT_SEGMENTGROUPSIZEINFO SegmentInfo;
+    VIDMM_BUDGET_GROUP RequestedGroup;
+    ULONGLONG ApertureBytes = 0;
+    ULONGLONG MemoryBytes = 0;
+    ULONG Index;
+    NTSTATUS Status;
+
+    if (Maximum == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *Maximum = 0;
+    if (Adapter == NULL ||
+        (Group != D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL &&
+         Group != D3DKMT_MEMORY_SEGMENT_GROUP_NON_LOCAL))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (DxgkpVidMmEffectiveWddmLevel(Adapter) <
+        DXGK_CAPS_CORE_LEVEL_WDDM_2_0)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    RtlZeroMemory(&SegmentInfo, sizeof(SegmentInfo));
+    Status = DxgkVidMmQuerySegmentSizes(Adapter, &SegmentInfo);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Segments = ADAPTER_SEGMENTS(Adapter);
+    if (Adapter->SegmentCount != 0 && Segments == NULL)
+        return STATUS_DEVICE_NOT_READY;
+    RequestedGroup =
+        (Group == D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL)
+            ? VidMmBudgetGroupLocal
+            : VidMmBudgetGroupNonLocal;
+
+    for (Index = 0; Index < Adapter->SegmentCount; ++Index)
+    {
+        ULONGLONG PlacementLimit;
+
+        ExAcquireFastMutex(&Segments[Index].Lock);
+        if (VidMmSegmentBudgetGroup(Adapter, &Segments[Index]) ==
+            RequestedGroup)
+        {
+            PlacementLimit = VidMmSegmentPlacementLimit(&Segments[Index]);
+            if (VidMmSegmentIsAperture(&Segments[Index]))
+                DxgkpVidMmSaturatingAdd(&ApertureBytes, PlacementLimit);
+            else
+                DxgkpVidMmSaturatingAdd(&MemoryBytes, PlacementLimit);
+        }
+        ExReleaseFastMutex(&Segments[Index].Lock);
+    }
+
+    *Maximum = MemoryBytes;
+    DxgkpVidMmSaturatingAdd(
+        Maximum,
+        min(ApertureBytes, SegmentInfo.LegacyInfo.SharedSystemMemorySize));
+    return STATUS_SUCCESS;
+}
+
+static PDXGKVMM_PROCESS_BUDGET
+DxgkpVidMmAcquireProcessBudget(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PEPROCESS Process,
+    _Out_ NTSTATUS *OutStatus)
+{
+    PDXGKVMM_PROCESS_BUDGET Record = NULL;
+    PDXGKVMM_PROCESS_BUDGET Candidate = NULL;
+    PDXGKVMM_PROCESS_BUDGET_GATE Gate;
+    ULONGLONG Maximum[2];
+    NTSTATUS Status;
+
+    if (OutStatus == NULL)
+        return NULL;
+    *OutStatus = STATUS_INVALID_PARAMETER;
+    if (Adapter == NULL || Process == NULL)
+        return NULL;
+
+    Gate = DxgkpVidMmEnterProcessBudgetGate(Process, &Status);
+    if (Gate == NULL)
+    {
+        *OutStatus = Status;
+        return NULL;
+    }
+
+    Status = DxgkpVidMmQueryGroupMaximum(
+                 Adapter,
+                 D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL,
+                 &Maximum[0]);
+    if (!NT_SUCCESS(Status))
+        goto Exit;
+    Status = DxgkpVidMmQueryGroupMaximum(
+                 Adapter,
+                 D3DKMT_MEMORY_SEGMENT_GROUP_NON_LOCAL,
+                 &Maximum[1]);
+    if (!NT_SUCCESS(Status))
+        goto Exit;
+
+    Candidate = ExAllocatePoolWithTag(
+                    NonPagedPool,
+                    sizeof(*Candidate),
+                    TAG_VIDMM_ALLOC);
+    if (Candidate == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Exit;
+    }
+    RtlZeroMemory(Candidate, sizeof(*Candidate));
+    Candidate->Process = Process;
+    Candidate->Adapter = Adapter;
+    ObReferenceObject(Process);
+    /*
+     * Segment geometry supplies the immutable hard maximum.  Until a memory
+     * pressure policy publishes a smaller working-set budget, current budget
+     * begins at that maximum; keeping the two fields distinct is what lets a
+     * later policy lower Budget without weakening CantTrimFurther's hard cap.
+     */
+    Status = DxgkResidencyCoreBudgetInitialize(
+                 &Candidate->Groups[0],
+                 Maximum[0],
+                 Maximum[0],
+                 0);
+    if (NT_SUCCESS(Status))
+    {
+        Status = DxgkResidencyCoreBudgetInitialize(
+                     &Candidate->Groups[1],
+                     Maximum[1],
+                     Maximum[1],
+                     0);
+    }
+    if (!NT_SUCCESS(Status))
+    {
+        goto Exit;
+    }
+
+    ExAcquireFastMutex(&DxgkVidMmProcessBudgetLock);
+    Record = DxgkpVidMmFindProcessBudgetLocked(Adapter, Process);
+    if (!DxgkResidencyCoreProcessAdmissionCanPublish(&Gate->Admission) ||
+        (Record != NULL && Record->ProcessExiting))
+    {
+        Record = NULL;
+        Status = STATUS_PROCESS_IS_TERMINATING;
+    }
+    else
+    {
+        if (Record == NULL)
+        {
+            Record = Candidate;
+            Candidate = NULL;
+            InsertTailList(&DxgkVidMmProcessBudgetListHead, &Record->Link);
+        }
+        Record->ActiveTransactions++;
+        Status = STATUS_SUCCESS;
+    }
+    ExReleaseFastMutex(&DxgkVidMmProcessBudgetLock);
+
+Exit:
+    if (Candidate != NULL)
+        DxgkpVidMmFreeProcessBudget(Candidate);
+    DxgkpVidMmLeaveProcessBudgetGate(Gate);
+    *OutStatus = Status;
+    return NT_SUCCESS(Status) ? Record : NULL;
+}
+
+static VOID
+DxgkpVidMmReleaseProcessBudget(
+    _In_ PDXGKVMM_PROCESS_BUDGET Record)
+{
+    BOOLEAN Retire = FALSE;
+
+    if (Record == NULL)
+        return;
+    ExAcquireFastMutex(&DxgkVidMmProcessBudgetLock);
+    ASSERT(Record->ActiveTransactions != 0);
+    if (Record->ActiveTransactions != 0)
+        Record->ActiveTransactions--;
+    if (DxgkpVidMmProcessBudgetCanRetireLocked(Record))
+    {
+        RemoveEntryList(&Record->Link);
+        Retire = TRUE;
+    }
+    ExReleaseFastMutex(&DxgkVidMmProcessBudgetLock);
+    if (Retire)
+        DxgkpVidMmFreeProcessBudget(Record);
+}
+
+static NTSTATUS
+DxgkpVidMmChargeInitialPlacement(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PEPROCESS Process,
+    _Inout_ PDXGKVMM_ALLOCATION Allocation)
+{
+    PDXGKVMM_PROCESS_BUDGET Record;
+    PDXGKVMM_PROCESS_BUDGET_CHARGE Charge;
+    D3DKMT_MEMORY_SEGMENT_GROUP Group;
+    PDXGKRNL_SEGMENT Segment;
+    ULONGLONG Bytes;
+    ULONGLONG NumBytesToTrim;
+    ULONG ReferenceCount;
+    BOOLEAN RequiresBudgetCharge;
+    NTSTATUS Status;
+
+    if (DxgkpVidMmEffectiveWddmLevel(Adapter) <
+        DXGK_CAPS_CORE_LEVEL_WDDM_2_0)
+    {
+        return STATUS_SUCCESS;
+    }
+    if (Allocation == NULL ||
+        !Allocation->Resident ||
+        Allocation->SegmentId == 0 ||
+        Allocation->SegmentId > Adapter->SegmentCount)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Segment = &ADAPTER_SEGMENTS(Adapter)[Allocation->SegmentId - 1];
+    if (VidMmSegmentBudgetGroup(Adapter, Segment) == VidMmBudgetGroupLocal)
+        Group = D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL;
+    else if (VidMmSegmentBudgetGroup(Adapter, Segment) ==
+             VidMmBudgetGroupNonLocal)
+        Group = D3DKMT_MEMORY_SEGMENT_GROUP_NON_LOCAL;
+    else
+        return STATUS_SUCCESS;
+    Bytes = VidMmAllocationSizeForSegment(Allocation, Segment);
+    ReferenceCount =
+        DxgkpVidMmQueryProcessResidencyReferenceCountLocked(
+            Allocation,
+            Process);
+    if (ReferenceCount == 0)
+        return STATUS_INVALID_DEVICE_STATE;
+
+    Charge = ExAllocatePoolWithTag(
+                 NonPagedPool,
+                 sizeof(*Charge),
+                 TAG_VIDMM_ALLOC);
+    if (Charge == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    RtlZeroMemory(Charge, sizeof(*Charge));
+    Charge->Group = Group;
+    Charge->Bytes = Bytes;
+    DxgkResidencyCoreProcessChargeInitialize(&Charge->State);
+
+    Record = DxgkpVidMmAcquireProcessBudget(Adapter, Process, &Status);
+    if (Record == NULL)
+    {
+        ExFreePoolWithTag(Charge, TAG_VIDMM_ALLOC);
+        return Status;
+    }
+    Charge->Record = Record;
+    ExAcquireFastMutex(&DxgkVidMmProcessBudgetLock);
+    if (Record->ProcessExiting)
+    {
+        Status = STATUS_DELETE_PENDING;
+    }
+    else if (DxgkpVidMmFindAllocationBudgetChargeLocked(
+                 Allocation,
+                 Record) != NULL)
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+    }
+    else
+    {
+        Status = DxgkResidencyCoreProcessChargePlanAcquire(
+                     &Charge->State,
+                     ReferenceCount,
+                     &RequiresBudgetCharge);
+        ASSERT(!NT_SUCCESS(Status) || RequiresBudgetCharge);
+        if (NT_SUCCESS(Status))
+        {
+            Status = DxgkResidencyCoreBudgetTryCharge(
+                         &Record->Groups[
+                             DxgkpVidMmBudgetGroupIndex(Group)],
+                         Bytes,
+                         TRUE,
+                         &NumBytesToTrim);
+        }
+        if (NT_SUCCESS(Status))
+        {
+            Status = DxgkResidencyCoreProcessChargeCommitAcquire(
+                         &Charge->State,
+                         ReferenceCount,
+                         TRUE);
+            ASSERT(NT_SUCCESS(Status));
+        }
+        if (NT_SUCCESS(Status))
+        {
+            InsertTailList(
+                &Allocation->ResidencyBudgetChargeList,
+                &Charge->Link);
+            Record->ChargeEntryCount++;
+            Charge = NULL;
+        }
+    }
+    ExReleaseFastMutex(&DxgkVidMmProcessBudgetLock);
+    DxgkpVidMmReleaseProcessBudget(Record);
+    if (Charge != NULL)
+        ExFreePoolWithTag(Charge, TAG_VIDMM_ALLOC);
+    return Status;
+}
+
+static VOID
+DxgkpVidMmReleaseAllAllocationBudgetCharges(
+    _Inout_ PDXGKVMM_ALLOCATION Allocation)
+{
+    LIST_ENTRY RemovedCharges;
+    LIST_ENTRY RetiredRecords;
+    PLIST_ENTRY Entry;
+
+    if (Allocation->ResidencyBudgetChargeList.Flink == NULL ||
+        IsListEmpty(&Allocation->ResidencyBudgetChargeList))
+    {
+        return;
+    }
+    DxgkpVidMmEnsureGlobalsInitialized();
+    InitializeListHead(&RemovedCharges);
+    InitializeListHead(&RetiredRecords);
+    ExAcquireFastMutex(&DxgkVidMmProcessBudgetLock);
+    while (!IsListEmpty(&Allocation->ResidencyBudgetChargeList))
+    {
+        PDXGKVMM_PROCESS_BUDGET_CHARGE Charge;
+        PDXGKVMM_PROCESS_BUDGET Record;
+        NTSTATUS Status;
+
+        Entry = RemoveHeadList(&Allocation->ResidencyBudgetChargeList);
+        Charge = CONTAINING_RECORD(
+                     Entry,
+                     DXGKVMM_PROCESS_BUDGET_CHARGE,
+                     Link);
+        Record = Charge->Record;
+        ASSERT(Record != NULL);
+        ASSERT(Charge->State.BudgetCharged);
+        Status = DxgkResidencyCoreBudgetRelease(
+                     &Record->Groups[
+                         DxgkpVidMmBudgetGroupIndex(Charge->Group)],
+                     Charge->Bytes);
+        ASSERT(NT_SUCCESS(Status));
+        ASSERT(Record->ChargeEntryCount != 0);
+        if (Record->ChargeEntryCount != 0)
+            Record->ChargeEntryCount--;
+        InsertTailList(&RemovedCharges, &Charge->Link);
+        if (DxgkpVidMmProcessBudgetCanRetireLocked(Record))
+        {
+            RemoveEntryList(&Record->Link);
+            InsertTailList(&RetiredRecords, &Record->Link);
+        }
+    }
+    ExReleaseFastMutex(&DxgkVidMmProcessBudgetLock);
+
+    while (!IsListEmpty(&RemovedCharges))
+    {
+        Entry = RemoveHeadList(&RemovedCharges);
+        ExFreePoolWithTag(
+            CONTAINING_RECORD(
+                Entry,
+                DXGKVMM_PROCESS_BUDGET_CHARGE,
+                Link),
+            TAG_VIDMM_ALLOC);
+    }
+    while (!IsListEmpty(&RetiredRecords))
+    {
+        Entry = RemoveHeadList(&RetiredRecords);
+        DxgkpVidMmFreeProcessBudget(
+            CONTAINING_RECORD(
+                Entry,
+                DXGKVMM_PROCESS_BUDGET,
+                Link));
+    }
+}
+
+static NTSTATUS
+DxgkpVidMmReleaseProcessBudgetReferences(
+    _Inout_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ PEPROCESS Process,
+    _In_ ULONG ReferenceCount)
+{
+    PDXGKVMM_PROCESS_BUDGET_CHARGE Charge;
+    PDXGKVMM_PROCESS_BUDGET Record;
+    PDXGKVMM_PROCESS_BUDGET RetiredRecord = NULL;
+    BOOLEAN ReleaseBudgetCharge;
+    NTSTATUS Status;
+
+    if (Allocation == NULL || Process == NULL || ReferenceCount == 0)
+        return STATUS_INVALID_PARAMETER;
+    DxgkpVidMmEnsureGlobalsInitialized();
+    ExAcquireFastMutex(&DxgkVidMmProcessBudgetLock);
+    Record = DxgkpVidMmFindProcessBudgetLocked(
+                 Allocation->Adapter,
+                 Process);
+    Charge = Record != NULL
+                 ? DxgkpVidMmFindAllocationBudgetChargeLocked(
+                       Allocation,
+                       Record)
+                 : NULL;
+    if (Charge == NULL)
+    {
+        ExReleaseFastMutex(&DxgkVidMmProcessBudgetLock);
+        return STATUS_NOT_FOUND;
+    }
+
+    Status = DxgkResidencyCoreProcessChargeRelease(
+                 &Charge->State,
+                 ReferenceCount,
+                 &ReleaseBudgetCharge);
+    if (NT_SUCCESS(Status) && ReleaseBudgetCharge)
+    {
+        Status = DxgkResidencyCoreBudgetRelease(
+                     &Record->Groups[
+                         DxgkpVidMmBudgetGroupIndex(Charge->Group)],
+                     Charge->Bytes);
+        ASSERT(NT_SUCCESS(Status));
+        if (NT_SUCCESS(Status))
+        {
+            ASSERT(Record->ChargeEntryCount != 0);
+            if (Record->ChargeEntryCount != 0)
+                Record->ChargeEntryCount--;
+            RemoveEntryList(&Charge->Link);
+            if (DxgkpVidMmProcessBudgetCanRetireLocked(Record))
+            {
+                RemoveEntryList(&Record->Link);
+                RetiredRecord = Record;
+            }
+        }
+    }
+    ExReleaseFastMutex(&DxgkVidMmProcessBudgetLock);
+
+    if (NT_SUCCESS(Status) && ReleaseBudgetCharge)
+        ExFreePoolWithTag(Charge, TAG_VIDMM_ALLOC);
+    if (RetiredRecord != NULL)
+        DxgkpVidMmFreeProcessBudget(RetiredRecord);
+    return Status;
+}
+
+static VOID
+DxgkpVidMmReleaseAdapterBudgets(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    LIST_ENTRY Removed;
+    PLIST_ENTRY Entry;
+    PLIST_ENTRY Next;
+
+    DxgkpVidMmEnsureGlobalsInitialized();
+    InitializeListHead(&Removed);
+    ExAcquireFastMutex(&DxgkVidMmProcessBudgetLock);
+    for (Entry = DxgkVidMmProcessBudgetListHead.Flink;
+         Entry != &DxgkVidMmProcessBudgetListHead;
+         Entry = Next)
+    {
+        PDXGKVMM_PROCESS_BUDGET Record =
+            CONTAINING_RECORD(Entry, DXGKVMM_PROCESS_BUDGET, Link);
+
+        Next = Entry->Flink;
+        if (Record->Adapter != Adapter)
+            continue;
+        ASSERT(Record->ActiveTransactions == 0);
+        ASSERT(Record->ChargeEntryCount == 0);
+        ASSERT(Record->Groups[0].CurrentUsage == 0);
+        ASSERT(Record->Groups[1].CurrentUsage == 0);
+        RemoveEntryList(&Record->Link);
+        InsertTailList(&Removed, &Record->Link);
+    }
+    ExReleaseFastMutex(&DxgkVidMmProcessBudgetLock);
+
+    while (!IsListEmpty(&Removed))
+    {
+        Entry = RemoveHeadList(&Removed);
+        DxgkpVidMmFreeProcessBudget(
+            CONTAINING_RECORD(Entry, DXGKVMM_PROCESS_BUDGET, Link));
+    }
+}
+#endif
 
 NTSTATUS
 DxgkVidMmSetProcessReservation(
@@ -9996,108 +12003,121 @@ DxgkVidMmSetProcessReservation(
     _In_ D3DKMT_MEMORY_SEGMENT_GROUP Group,
     _In_ UINT64 Reservation)
 {
-    PDXGKVMM_PROCESS_RESERVATION Record = NULL;
-    PDXGKVMM_PROCESS_RESERVATION Candidate = NULL;
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    PDXGKVMM_PROCESS_BUDGET Record;
     PLIST_ENTRY Entry;
-    UINT64 Budget = 0, Usage = 0, Current = 0, Available = 0;
+    ULONGLONG OtherReservations = 0;
+    ULONGLONG Available;
+    ULONG GroupIndex;
     NTSTATUS Status;
 
     PAGED_CODE();
-    if (Adapter == NULL || Process == NULL)
-        return STATUS_INVALID_PARAMETER;
-    if (Group != D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL && Group != D3DKMT_MEMORY_SEGMENT_GROUP_NON_LOCAL)
-        return STATUS_INVALID_PARAMETER;
-
-    Status = DxgkVidMmQueryProcessBudget(Adapter, Process, Group, &Budget, &Usage, &Current, &Available);
-    if (!NT_SUCCESS(Status))
-        return Status;
-    /* Reserving more than the group can ever hold is not a request that can be
-     * honoured later; refusing it now is better than silently capping it. */
-    if (Reservation > Available)
-        return STATUS_INVALID_PARAMETER;
-
-    DxgkpVidMmEnsureReservationLock();
-    ExAcquireFastMutex(&DxgkVidMmReservationLock);
-    for (Entry = DxgkVidMmReservationListHead.Flink; Entry != &DxgkVidMmReservationListHead; Entry = Entry->Flink)
+    if (Adapter == NULL || Process == NULL ||
+        (Group != D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL &&
+         Group != D3DKMT_MEMORY_SEGMENT_GROUP_NON_LOCAL))
     {
-        PDXGKVMM_PROCESS_RESERVATION Existing = CONTAINING_RECORD(Entry, DXGKVMM_PROCESS_RESERVATION, Link);
-
-        if (Existing->Process == Process && Existing->Adapter == Adapter)
-        {
-            Record = Existing;
-            break;
-        }
+        return STATUS_INVALID_PARAMETER;
     }
+
+    Record = DxgkpVidMmAcquireProcessBudget(Adapter, Process, &Status);
     if (Record == NULL)
+        return Status;
+    GroupIndex = DxgkpVidMmBudgetGroupIndex(Group);
+    ExAcquireFastMutex(&DxgkVidMmProcessBudgetLock);
+    for (Entry = DxgkVidMmProcessBudgetListHead.Flink;
+         Entry != &DxgkVidMmProcessBudgetListHead;
+         Entry = Entry->Flink)
     {
-        ExReleaseFastMutex(&DxgkVidMmReservationLock);
-        Candidate = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Candidate), TAG_VIDMM_ALLOC);
-        if (Candidate == NULL)
-            return STATUS_INSUFFICIENT_RESOURCES;
-        RtlZeroMemory(Candidate, sizeof(*Candidate));
-        Candidate->Process = Process;
-        Candidate->Adapter = Adapter;
-        ExAcquireFastMutex(&DxgkVidMmReservationLock);
+        PDXGKVMM_PROCESS_BUDGET Other =
+            CONTAINING_RECORD(Entry, DXGKVMM_PROCESS_BUDGET, Link);
 
-        /* Allocation ran without the lock.  Recheck so two first writers for
-         * the same process/adapter cannot publish duplicate records and make
-         * later reservation updates depend on list order. */
-        for (Entry = DxgkVidMmReservationListHead.Flink; Entry != &DxgkVidMmReservationListHead; Entry = Entry->Flink)
+        if (Other != Record && Other->Adapter == Adapter)
         {
-            PDXGKVMM_PROCESS_RESERVATION Existing = CONTAINING_RECORD(Entry, DXGKVMM_PROCESS_RESERVATION, Link);
-
-            if (Existing->Process == Process && Existing->Adapter == Adapter)
-            {
-                Record = Existing;
-                break;
-            }
-        }
-        if (Record == NULL)
-        {
-            Record = Candidate;
-            Candidate = NULL;
-            InsertTailList(&DxgkVidMmReservationListHead, &Record->Link);
+            DxgkpVidMmSaturatingAdd(
+                &OtherReservations,
+                Other->Groups[GroupIndex].Reservation);
         }
     }
-    if (Group == D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL)
-        Record->Local = Reservation;
+    Available = (OtherReservations >= Record->Groups[GroupIndex].Maximum)
+                    ? 0
+                    : Record->Groups[GroupIndex].Maximum - OtherReservations;
+    if (Record->ProcessExiting)
+        Status = STATUS_DELETE_PENDING;
+    else if (Reservation > Available)
+        Status = STATUS_INVALID_PARAMETER;
     else
-        Record->NonLocal = Reservation;
-    ExReleaseFastMutex(&DxgkVidMmReservationLock);
-    if (Candidate != NULL)
-        ExFreePoolWithTag(Candidate, TAG_VIDMM_ALLOC);
-    return STATUS_SUCCESS;
+        Status = DxgkResidencyCoreBudgetSetReservation(
+                     &Record->Groups[GroupIndex],
+                     Reservation);
+    ExReleaseFastMutex(&DxgkVidMmProcessBudgetLock);
+    DxgkpVidMmReleaseProcessBudget(Record);
+    return Status;
+#else
+    UNREFERENCED_PARAMETER(Adapter);
+    UNREFERENCED_PARAMETER(Process);
+    UNREFERENCED_PARAMETER(Group);
+    UNREFERENCED_PARAMETER(Reservation);
+    return STATUS_NOT_SUPPORTED;
+#endif
 }
 
 VOID
 DxgkVidMmReleaseProcessReservations(
     _In_ PEPROCESS Process)
 {
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    PDXGKVMM_PROCESS_BUDGET_GATE Gate;
     LIST_ENTRY Removed;
     PLIST_ENTRY Entry;
     PLIST_ENTRY Next;
 
-    if (InterlockedCompareExchange(&DxgkVidMmReservationLockReady, 0, 0) == 0)
-        return;
-    DxgkpVidMmEnsureReservationLock();
-    InitializeListHead(&Removed);
-    ExAcquireFastMutex(&DxgkVidMmReservationLock);
-    for (Entry = DxgkVidMmReservationListHead.Flink; Entry != &DxgkVidMmReservationListHead; Entry = Next)
+    if (Process == NULL ||
+        InterlockedCompareExchange(&DxgkVidMmGlobalsState, 0, 0) == 0)
     {
-        PDXGKVMM_PROCESS_RESERVATION Record = CONTAINING_RECORD(Entry, DXGKVMM_PROCESS_RESERVATION, Link);
+        return;
+    }
+    DxgkpVidMmEnsureGlobalsInitialized();
+    InitializeListHead(&Removed);
+    ExAcquireFastMutex(&DxgkVidMmProcessBudgetLock);
+    Gate = DxgkpVidMmFindProcessBudgetGateLocked(Process);
+    if (Gate != NULL)
+    {
+        /*
+         * This tombstone is independent of ledger publication.  An entrant
+         * that passed PsGetProcessExitStatus before this callback cannot
+         * publish a new ledger after cleanup reaches this point.
+         */
+        DxgkResidencyCoreProcessAdmissionMarkExiting(&Gate->Admission);
+    }
+    for (Entry = DxgkVidMmProcessBudgetListHead.Flink;
+         Entry != &DxgkVidMmProcessBudgetListHead;
+         Entry = Next)
+    {
+        PDXGKVMM_PROCESS_BUDGET Record =
+            CONTAINING_RECORD(Entry, DXGKVMM_PROCESS_BUDGET, Link);
 
         Next = Entry->Flink;
         if (Record->Process != Process)
             continue;
-        RemoveEntryList(&Record->Link);
-        InsertTailList(&Removed, &Record->Link);
+        Record->ProcessExiting = TRUE;
+        (VOID)DxgkResidencyCoreBudgetSetReservation(&Record->Groups[0], 0);
+        (VOID)DxgkResidencyCoreBudgetSetReservation(&Record->Groups[1], 0);
+        if (DxgkpVidMmProcessBudgetCanRetireLocked(Record))
+        {
+            RemoveEntryList(&Record->Link);
+            InsertTailList(&Removed, &Record->Link);
+        }
     }
-    ExReleaseFastMutex(&DxgkVidMmReservationLock);
+    ExReleaseFastMutex(&DxgkVidMmProcessBudgetLock);
     while (!IsListEmpty(&Removed))
     {
         Entry = RemoveHeadList(&Removed);
-        ExFreePoolWithTag(CONTAINING_RECORD(Entry, DXGKVMM_PROCESS_RESERVATION, Link), TAG_VIDMM_ALLOC);
+        DxgkpVidMmFreeProcessBudget(
+            CONTAINING_RECORD(Entry, DXGKVMM_PROCESS_BUDGET, Link));
     }
+#else
+    UNREFERENCED_PARAMETER(Process);
+#endif
 }
 
 NTSTATUS
@@ -10110,78 +12130,66 @@ DxgkVidMmQueryProcessBudget(
     _Out_ UINT64 *CurrentReservation,
     _Out_ UINT64 *AvailableForReservation)
 {
-    PDXGKRNL_SEGMENT Segments;
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    PDXGKVMM_PROCESS_BUDGET Record;
     PLIST_ENTRY Entry;
-    ULONG SegmentCount;
-    ULONG Index;
-    VIDMM_BUDGET_GROUP RequestedBudgetGroup;
-    ULONGLONG ApertureBudget = 0;
-    ULONGLONG MemoryBudget = 0;
-    D3DKMT_SEGMENTGROUPSIZEINFO SegmentInfo;
+    ULONGLONG OtherReservations = 0;
+    ULONG GroupIndex;
     NTSTATUS Status;
 
     PAGED_CODE();
-    if (Adapter == NULL || Process == NULL || Budget == NULL || CurrentUsage == NULL || CurrentReservation == NULL || AvailableForReservation == NULL)
+    if (Adapter == NULL || Process == NULL || Budget == NULL ||
+        CurrentUsage == NULL || CurrentReservation == NULL ||
+        AvailableForReservation == NULL ||
+        (MemorySegmentGroup != D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL &&
+         MemorySegmentGroup != D3DKMT_MEMORY_SEGMENT_GROUP_NON_LOCAL))
+    {
         return STATUS_INVALID_PARAMETER;
-    if (MemorySegmentGroup != D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL && MemorySegmentGroup != D3DKMT_MEMORY_SEGMENT_GROUP_NON_LOCAL)
-        return STATUS_INVALID_PARAMETER;
-
+    }
     *Budget = 0;
     *CurrentUsage = 0;
     *CurrentReservation = 0;
     *AvailableForReservation = 0;
-    RequestedBudgetGroup = MemorySegmentGroup == D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL ? VidMmBudgetGroupLocal : VidMmBudgetGroupNonLocal;
-    RtlZeroMemory(&SegmentInfo, sizeof(SegmentInfo));
-    Status = DxgkVidMmQuerySegmentSizes(Adapter, &SegmentInfo);
-    if (!NT_SUCCESS(Status))
+
+    Record = DxgkpVidMmAcquireProcessBudget(Adapter, Process, &Status);
+    if (Record == NULL)
         return Status;
-    Segments = ADAPTER_SEGMENTS(Adapter);
-    SegmentCount = Adapter->SegmentCount;
-    if (SegmentCount != 0 && Segments == NULL)
-        return STATUS_DEVICE_NOT_READY;
-
-    for (Index = 0; Index < SegmentCount; ++Index)
-        ExAcquireFastMutex(&Segments[Index].Lock);
-    ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
-
-    for (Index = 0; Index < SegmentCount; ++Index)
+    GroupIndex = DxgkpVidMmBudgetGroupIndex(MemorySegmentGroup);
+    ExAcquireFastMutex(&DxgkVidMmProcessBudgetLock);
+    *Budget = Record->Groups[GroupIndex].Budget;
+    *CurrentUsage = Record->Groups[GroupIndex].CurrentUsage;
+    *CurrentReservation = Record->Groups[GroupIndex].Reservation;
+    for (Entry = DxgkVidMmProcessBudgetListHead.Flink;
+         Entry != &DxgkVidMmProcessBudgetListHead;
+         Entry = Entry->Flink)
     {
-        ULONGLONG PlacementLimit;
+        PDXGKVMM_PROCESS_BUDGET Other =
+            CONTAINING_RECORD(Entry, DXGKVMM_PROCESS_BUDGET, Link);
 
-        if (VidMmSegmentBudgetGroup(Adapter, &Segments[Index]) != RequestedBudgetGroup)
-            continue;
-        PlacementLimit = VidMmSegmentPlacementLimit(&Segments[Index]);
-        if (VidMmSegmentIsAperture(&Segments[Index]))
-            DxgkpVidMmSaturatingAdd(&ApertureBudget, PlacementLimit);
-        else
-            DxgkpVidMmSaturatingAdd(&MemoryBudget, PlacementLimit);
+        if (Other != Record && Other->Adapter == Adapter)
+        {
+            DxgkpVidMmSaturatingAdd(
+                &OtherReservations,
+                Other->Groups[GroupIndex].Reservation);
+        }
     }
-    *Budget = MemoryBudget;
-    DxgkpVidMmSaturatingAdd(Budget, min(ApertureBudget, SegmentInfo.LegacyInfo.SharedSystemMemorySize));
-
-    for (Entry = DxgkVidMmAllocationListHead.Flink; Entry != &DxgkVidMmAllocationListHead; Entry = Entry->Flink)
-    {
-        PDXGKVMM_ALLOCATION Allocation = CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, GlobalAllocationEntry);
-        PDXGKRNL_SEGMENT Segment;
-
-        if (Allocation->Adapter != Adapter || Allocation->Device == NULL || Allocation->Device->OwnerProcess != Process || !Allocation->Resident)
-            continue;
-        if (Allocation->SegmentId == 0 || Allocation->SegmentId > SegmentCount)
-            continue;
-        Segment = &Segments[Allocation->SegmentId - 1];
-        if (VidMmSegmentBudgetGroup(Adapter, Segment) == RequestedBudgetGroup)
-            DxgkpVidMmSaturatingAdd(CurrentUsage, VidMmAllocationSizeForSegment(Allocation, Segment));
-    }
-
-    ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
-    while (SegmentCount != 0)
-        ExReleaseFastMutex(&Segments[--SegmentCount].Lock);
-
-    /* Everything the group can hold is reservable; what this process has
-     * already claimed is reported separately. */
-    *AvailableForReservation = *Budget;
-    *CurrentReservation = DxgkpVidMmGetReservation(Adapter, Process, MemorySegmentGroup);
+    *AvailableForReservation =
+        (OtherReservations >= Record->Groups[GroupIndex].Maximum)
+            ? 0
+            : Record->Groups[GroupIndex].Maximum - OtherReservations;
+    ExReleaseFastMutex(&DxgkVidMmProcessBudgetLock);
+    DxgkpVidMmReleaseProcessBudget(Record);
     return STATUS_SUCCESS;
+#else
+    UNREFERENCED_PARAMETER(Adapter);
+    UNREFERENCED_PARAMETER(Process);
+    UNREFERENCED_PARAMETER(MemorySegmentGroup);
+    UNREFERENCED_PARAMETER(Budget);
+    UNREFERENCED_PARAMETER(CurrentUsage);
+    UNREFERENCED_PARAMETER(CurrentReservation);
+    UNREFERENCED_PARAMETER(AvailableForReservation);
+    return STATUS_NOT_SUPPORTED;
+#endif
 }
 
 /*

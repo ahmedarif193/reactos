@@ -80,5 +80,6 @@ ULONG Dxgmms2SchedCoreResetDispatched(_Inout_ PDXGMMS2_SCHED_CORE Core, _In_ ULO
 BOOLEAN Dxgmms2SchedCorePeekNext(_In_ PDXGMMS2_SCHED_CORE Core, _In_ ULONG EngineOrdinal, _Out_ PULONGLONG OutPacketCookie);
 NTSTATUS Dxgmms2SchedCoreStop(_Inout_ PDXGMMS2_SCHED_CORE Core);
 BOOLEAN Dxgmms2SchedCoreGetOldestDispatched(_In_ PDXGMMS2_SCHED_CORE Core, _Out_ PULONG EngineOrdinal, _Out_ PULONG FenceId, _Out_ PULONGLONG PacketCookie);
+BOOLEAN Dxgmms2SchedCoreGetOldestDispatchedOnEngine(_In_ PDXGMMS2_SCHED_CORE Core, _In_ ULONG EngineOrdinal, _Out_ PULONG FenceId, _Out_ PULONGLONG PacketCookie);
 
 /* EOF */

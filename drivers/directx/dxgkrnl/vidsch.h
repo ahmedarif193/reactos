@@ -32,7 +32,7 @@
  * operations are permitted.  All transitions use InterlockedCompareExchange
  * to ensure atomicity across ISR, DPC, and thread contexts.
  *
- * State diagram (Phase 1 — foundation transitions only):
+ * Supported state transitions:
  *
  *   IDLE --submit--> SUBMITTING --hw_accept--> RUNNING
  *   RUNNING --complete--> COMPLETING --processed--> IDLE
@@ -138,6 +138,11 @@ typedef struct _VIDSCH_DMA_PACKET
 
     /* Back-pointer to the submitting context (for priority). */
     PVOID                       Context;        /* PDXGKRNL_CONTEXT */
+    /*
+     * Stable device identity for contextless tracked/paging packets as well as
+     * ordinary context submissions.  The packet owns one device reference.
+     */
+    struct _DXGKRNL_DEVICE     *Device;
     HANDLE                      MiniportDeviceHandle;
     HANDLE                      MiniportContextHandle;
 
@@ -173,6 +178,14 @@ typedef struct _VIDSCH_DMA_PACKET
     LONG                        Priority;
     BOOLEAN                     Kicked;
     BOOLEAN                     FenceIdentityReserved;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    /* Set before the provider retires a faulted packet as a fence watermark. */
+    volatile LONG               Faulted;
+    NTSTATUS                    FaultStatus;
+    volatile LONG               FaultCleanupQueued;
+    volatile LONG               CancelFaultedDevicePackets;
+    NTSTATUS                    FaultCleanupStatus;
+#endif
     /* Borrowed after first kick so preemption can resubmit the same DMA. */
     PDXGKRNL_SUBMIT_DMA_BUFFER  TrackerReservation;
     BOOLEAN                     TrackerOwnsDmaBuffer;
@@ -199,8 +212,8 @@ typedef struct _VIDSCH_DMA_PACKET
 /* ========================================================================
  * VIDSCH_ENGINE — Per-GPU-engine scheduling context
  *
- * One instance per engine (node) in the adapter.  Manages the run queue,
- * fence tracking, and engine state machine for a single GPU engine.
+ * The current scheduler supports exactly one WDDM engine (ordinal zero) per
+ * node.  One instance therefore represents one node's sole engine.
  * ====================================================================== */
 typedef struct _VIDSCH_ENGINE
 {
@@ -210,8 +223,11 @@ typedef struct _VIDSCH_ENGINE
     /* Back-pointer to the owning scheduler lifecycle context. */
     struct _VIDSCH_CONTEXT      *Scheduler;
 
-    /* Zero-based engine ordinal within the adapter. */
-    ULONG                       EngineOrdinal;
+    /*
+     * Flattened dxgmms2 scheduler slot.  This is the node ordinal, not the
+     * public WDDM EngineOrdinal (which is explicitly limited to zero).
+     */
+    ULONG                       SchedulerOrdinal;
 
     /* The engine state machine lives in dxgmms2; dxgkrnl reads it through
      * the scheduler interface and never caches it. */
@@ -223,6 +239,22 @@ typedef struct _VIDSCH_ENGINE
      * owned by dxgmms2 and reached through Adapter->Mms2SchedulerInterface.
      */
     KSPIN_LOCK                  QueueLock;
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    /*
+     * QueueLock protects ActivePacket.  The provider owns the packet reference
+     * while this raw pointer is published; retirement clears it before
+     * releasing that reference.
+     */
+    struct _VIDSCH_DMA_PACKET  *ActivePacket;
+
+    /*
+     * Lock-free interrupt-to-DPC handoff:
+     *   0 = empty, 1 = writer/consumer owns the payload, 2 = ready.
+     */
+    volatile LONG               PageFaultInterruptState;
+    DXGKARGCB_NOTIFY_INTERRUPT_DATA PageFaultInterruptData;
+#endif
 
     /* Set by the ISR when a DMA_PREEMPTED notification must be consumed. */
     volatile LONG               PreemptionInterruptPending;

@@ -36,6 +36,7 @@
 #include "dxgkrnl_private.h"
 #include "gpuva_core.h"
 #include "vidmm.h"
+#include <ndk/psfuncs.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -484,6 +485,57 @@ GpuVaListCoversRange(
 }
 
 /*
+ * Command buffers must come from executable mappings when the miniport
+ * advertises no-execute PTE support.  This is checked under the same lock as
+ * the submission pin so a MAP_PROTECT cannot race the decision.
+ */
+static BOOLEAN
+GpuVaListAllowsExecute(
+    _In_ PLIST_ENTRY ListHead,
+    _In_ D3DGPU_VIRTUAL_ADDRESS Address,
+    _In_ ULONGLONG Size)
+{
+    D3DGPU_VIRTUAL_ADDRESS EndAddress;
+    D3DGPU_VIRTUAL_ADDRESS Cursor;
+    PLIST_ENTRY Entry;
+
+    if (!GpuVaGetRangeEnd(Address, Size, &EndAddress))
+        return FALSE;
+
+    Cursor = Address;
+    for (Entry = ListHead->Flink;
+         Entry != ListHead && Cursor < EndAddress;
+         Entry = Entry->Flink)
+    {
+        PDXGKRNL_GPUVA_RANGE Range =
+            CONTAINING_RECORD(Entry,
+                              DXGKRNL_GPUVA_RANGE,
+                              RangeListEntry);
+        D3DGPU_VIRTUAL_ADDRESS RangeEnd;
+
+        if (!GpuVaGetRangeEnd(Range->GpuVirtualAddress,
+                              Range->SizeInBytes,
+                              &RangeEnd))
+        {
+            return FALSE;
+        }
+        if (RangeEnd <= Cursor)
+            continue;
+        if (Range->GpuVirtualAddress > Cursor ||
+            Range->State != GpuVaStateMapped ||
+            !Range->Protection.Execute ||
+            Range->Protection.Zero ||
+            Range->Protection.NoAccess)
+        {
+            return FALSE;
+        }
+        Cursor = min(RangeEnd, EndAddress);
+    }
+
+    return Cursor == EndAddress;
+}
+
+/*
  * GpuVaListAdjustPin — add Delta to SubmissionPinCount on every range that
  * covers [Address, Address+Size).  Caller holds GpuVaLock and has already
  * verified coverage, so every step of the walk must land on a covering range.
@@ -773,7 +825,13 @@ GpuVaApplyMapOperation(
         AllocationHandle = Operation->Map.hAllocation;
         AllocationOffset = Operation->Map.AllocationOffsetInBytes;
         AllocationSize = Operation->Map.AllocationSizeInBytes;
+        /*
+         * The legacy MAP operation has no protection payload. Its documented
+         * compatibility protection is read/write/execute; MAP_PROTECT is the
+         * operation that can deliberately remove write or execute access.
+         */
         Protection.Write = 1;
+        Protection.Execute = 1;
     }
 
     if (Size == 0 || (Address & GPUVA_PAGE_MASK) != 0 || (Size & GPUVA_PAGE_MASK) != 0 || (AllocationOffset & GPUVA_PAGE_MASK) != 0 || (AllocationSize & GPUVA_PAGE_MASK) != 0 || !GpuVaProtectionValid(Protection, FALSE))
@@ -1188,16 +1246,6 @@ GpuVaEnsureRootPageTable(
  * miniport owns the hardware entry format and the invalidation.
  * Caller MUST hold GpuVaLock.
  */
-/* Paging packets for process-owned page tables are submitted against the
- * handle the process's first device published. */
-FORCEINLINE
-HANDLE
-GpuVaProcessMiniportDevice(
-    _In_ PDXGKRNL_PROCESS Process)
-{
-    return Process->PagingMiniportDevice;
-}
-
 /*
  * GpuVaNotifyPageTableUpdate
  *
@@ -1290,7 +1338,9 @@ DxgkGpuVaFlushPageTableUpdates(
     _In_ PDXGKRNL_PROCESS Process)
 {
     PDXGKRNL_ADAPTER Adapter;
+    PDXGKRNL_DEVICE PagingDevice = NULL;
     DXGKRNL_PAGING_OP Op;
+    HANDLE PagingMiniportDevice = NULL;
     D3DGPU_VIRTUAL_ADDRESS Start;
     D3DGPU_VIRTUAL_ADDRESS End;
     NTSTATUS Status;
@@ -1342,17 +1392,25 @@ DxgkGpuVaFlushPageTableUpdates(
     }
     RtlZeroMemory(&Op, sizeof(Op));
     Op.Type = DxgkPagingOpFlushTlb;
-    Op.hMiniportDevice = GpuVaProcessMiniportDevice(Process);
-    if (Op.hMiniportDevice == NULL)
+    Status = DxgkReferenceProcessPagingDevice(Process,
+                                              &PagingDevice,
+                                              &PagingMiniportDevice);
+    if (!NT_SUCCESS(Status))
     {
-        Status = STATUS_DEVICE_NOT_READY;
         goto Requeue;
     }
+    Op.hMiniportDevice = PagingMiniportDevice;
     Op.hMiniportProcess = Process->hMiniportProcess;
     Op.RootPageTableAddress = Process->RootPageTableAddress;
     Op.StartVirtualAddress = Start;
     Op.EndVirtualAddress = End;
-    Status = DxgkPagingExecuteSynchronous(Adapter, NULL, &Op);
+    /*
+     * Passing PagingDevice makes every queued paging packet take its own device
+     * reference.  The explicit reference acquired above covers the build and
+     * no-packet paths; a queued packet remains safe even if this bounded wait
+     * times out before retirement.
+     */
+    Status = DxgkPagingExecuteSynchronous(Adapter, PagingDevice, &Op);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("DxgkGpuVa: TLB invalidation rejected 0x%08lX over [0x%I64x,0x%I64x)\n", Status, Start, End);
@@ -1364,6 +1422,8 @@ Requeue:
     GpuVaRequeuePageTableUpdate(Process, Start, End);
 
 Complete:
+    if (PagingDevice != NULL)
+        DxgkDereferenceDevice(PagingDevice);
     KeReleaseMutex(&Process->PageTableFlushMutex, FALSE);
     return Status;
 }
@@ -1678,6 +1738,20 @@ GpuVaOperationSpan(
 
 /* PROCESS LIFECYCLE **********************************************************/
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+static BOOLEAN
+DxgkpGpuVaProcessDdiTableAvailable(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    return Adapter != NULL &&
+           Adapter->MiniportContext != NULL &&
+           !Adapter->MiniportContext->UseDodLayout &&
+           DxgkCapsCoreInterfaceVersionAtLeast(
+               Adapter->MiniportContext->InitData.s.Version,
+               DXGK_CAPS_CORE_LEVEL_WDDM_2_0);
+}
+#endif
+
 /*
  * DxgkGpuVaCreateProcess
  *
@@ -1699,8 +1773,11 @@ DxgkGpuVaCreateProcess(
     ASSERT(Adapter != NULL);
     ASSERT(Process != NULL);
 
-    /* Initialize GPU VA space. */
+    /* Adapter/process ownership exists at every selected driver-model level. */
     Process->Adapter = Adapter;
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    /* Initialize the WDDM 2.0 GPU VA space. */
     InitializeListHead(&Process->GpuVaRangeList);
     ExInitializeFastMutex(&Process->GpuVaLock);
     KeInitializeMutex(&Process->PageTableFlushMutex, 0);
@@ -1717,6 +1794,7 @@ DxgkGpuVaCreateProcess(
                       NotificationEvent, FALSE);
 
     Process->hMiniportProcess   = NULL;
+    Process->MiniportProcessCreated = FALSE;
     Process->hRootPageTable     = NULL;
     RtlZeroMemory(&Process->RootPageTableAddress,
                   sizeof(Process->RootPageTableAddress));
@@ -1725,26 +1803,42 @@ DxgkGpuVaCreateProcess(
     InitializeListHead(&Process->GpuVaPageTableList);
     Process->GpuVaPageTableCount = 0;
 
-    /* Call the miniport's DxgkDdiCreateProcess if available. */
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
-    if (DXGK_CB_FULL(Adapter, DxgkDdiCreateProcess) != NULL)
+    /* Call the miniport's DxgkDdiCreateProcess if this table exposes it. */
+    if (DxgkpGpuVaProcessDdiTableAvailable(Adapter) &&
+        DXGK_CB_FULL(Adapter, DxgkDdiCreateProcess) != NULL)
     {
         DXGKARG_CREATEPROCESS CreateArgs;
+
+        if (DXGK_CB_FULL(Adapter, DxgkDdiDestroyProcess) == NULL)
+            return STATUS_NOT_SUPPORTED;
 
         RtlZeroMemory(&CreateArgs, sizeof(CreateArgs));
         CreateArgs.hDxgkProcess = (HANDLE)Process;
         CreateArgs.Flags.Value  = 0;
+        CreateArgs.Flags.SystemProcess =
+            PsIsSystemProcess(Process->Process) ? 1 : 0;
         CreateArgs.NumPasid     = 0;
         CreateArgs.pPasid       = NULL;
 
         if (!DxgkAcquireKmdCall(Adapter))
             return STATUS_DELETE_PENDING;
-        Status = DXGK_CB_FULL(Adapter, DxgkDdiCreateProcess)(Adapter->MiniportDeviceContext, &CreateArgs);
+        _SEH2_TRY
+        {
+            Status = DXGK_CB_FULL(Adapter, DxgkDdiCreateProcess)(
+                         Adapter->MiniportDeviceContext,
+                         &CreateArgs);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
         DxgkReleaseKmdCall(Adapter);
 
         if (NT_SUCCESS(Status))
         {
             Process->hMiniportProcess = CreateArgs.hKmdProcess;
+            Process->MiniportProcessCreated = TRUE;
             DPRINT("DxgkGpuVaCreateProcess: miniport process=%p\n",
                    Process->hMiniportProcess);
         }
@@ -1781,6 +1875,7 @@ DxgkGpuVaDestroyProcess(
     if (Process == NULL)
         return;
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
     /* Free all GPU VA ranges. */
     ExAcquireFastMutex(&Process->GpuVaLock);
     {
@@ -1803,30 +1898,45 @@ DxgkGpuVaDestroyProcess(
     GpuVaFreePageTables(Process);
     ExReleaseFastMutex(&Process->GpuVaLock);
 
-    /* Call the miniport's DxgkDdiDestroyProcess. */
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
-    if (Process->hMiniportProcess != NULL &&
-        Adapter != NULL &&
-        DXGK_CB_FULL(Adapter, DxgkDdiDestroyProcess) != NULL &&
-        DxgkAcquireMiniportCallback(Adapter))
+    /*
+     * A successful CreateProcess owns one DestroyProcess callback even when
+     * the miniport selected NULL as its opaque process context.
+     */
+    if (Process->MiniportProcessCreated)
     {
-        NTSTATUS Status;
-
-        Status = DXGK_CB_FULL(Adapter, DxgkDdiDestroyProcess)(Adapter->MiniportDeviceContext, Process->hMiniportProcess);
-        DxgkReleaseMiniportCallback(Adapter);
-
-        if (!NT_SUCCESS(Status))
+        if (DxgkpGpuVaProcessDdiTableAvailable(Adapter) &&
+            DXGK_CB_FULL(Adapter, DxgkDdiDestroyProcess) != NULL &&
+            DxgkAcquireMiniportCallback(Adapter))
         {
-            DPRINT1("DxgkGpuVaDestroyProcess: DxgkDdiDestroyProcess failed "
-                    "0x%08lx\n", Status);
+            NTSTATUS Status;
+
+            _SEH2_TRY
+            {
+                Status = DXGK_CB_FULL(Adapter, DxgkDdiDestroyProcess)(
+                             Adapter->MiniportDeviceContext,
+                             Process->hMiniportProcess);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            DxgkReleaseMiniportCallback(Adapter);
+
+            if (!NT_SUCCESS(Status))
+            {
+                DPRINT1("DxgkGpuVaDestroyProcess: "
+                        "DxgkDdiDestroyProcess failed 0x%08lx\n",
+                        Status);
+            }
         }
 
+        Process->MiniportProcessCreated = FALSE;
         Process->hMiniportProcess = NULL;
     }
-#endif
 
-    Process->Adapter = NULL;
     Process->GpuVaRangeCount = 0;
+#endif
 
     DPRINT("DxgkGpuVaDestroyProcess: done\n");
 }
@@ -2809,6 +2919,14 @@ DxgkGpuVaPinRange(
 
     ExAcquireFastMutex(&Process->GpuVaLock);
     Valid = GpuVaListCoversRange(&Process->GpuVaRangeList, Address, Size, GpuVaStateMapped);
+    if (Valid &&
+        Adapter->GpuMmuCaps.NoExecuteMemorySupported &&
+        !GpuVaListAllowsExecute(&Process->GpuVaRangeList,
+                                Address,
+                                Size))
+    {
+        Valid = FALSE;
+    }
     if (Valid)
         GpuVaListAdjustPin(&Process->GpuVaRangeList, Address, Size, 1);
     ExReleaseFastMutex(&Process->GpuVaLock);
@@ -3113,7 +3231,7 @@ DxgkGpuVaSetRootPageTable(
     if (InterlockedCompareExchange(&Context->Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE)
         return STATUS_DEVICE_REMOVED;
 
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
     if (Adapter->GpuMmuCapsValid &&
         Adapter->GpuMmuCaps.PageTableUpdateMode == DXGK_PAGETABLEUPDATE_CPU_VIRTUAL)
     {
@@ -3169,7 +3287,7 @@ DxgkGpuVaGetRootPageTableSize(
 {
     PAGED_CODE();
 
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
     if (Adapter != NULL &&
         DXGK_CB_FULL(Adapter, DxgkDdiGetRootPageTableSize) != NULL)
     {
@@ -3215,6 +3333,8 @@ DxgkGpuVaMakeResident(
     _Inout_opt_ volatile LONG64 *PagingFenceCounter,
     _In_reads_(NumAllocations) CONST D3DKMT_HANDLE *AllocationList,
     _In_    ULONG              NumAllocations,
+    _In_    BOOLEAN            CantTrimFurther,
+    _In_    BOOLEAN            MustSucceed,
     _Out_   ULONG             *OutCompleted,
     _Out_   ULONGLONG         *OutNumBytesToTrim,
     _Out_   ULONGLONG         *OutPagingFenceValue)
@@ -3266,11 +3386,14 @@ DxgkGpuVaMakeResident(
     }
 
     Status = DxgkVidMmMakeResidentBatch(Adapter,
+                                        Process,
                                         Device,
                                         Allocations,
                                         NumAllocations,
                                         hPagingSyncObject,
                                         PagingFenceCounter,
+                                        CantTrimFurther,
+                                        MustSucceed,
                                         OutNumBytesToTrim,
                                         OutPagingFenceValue,
                                         &PagingQueued);
@@ -3388,7 +3511,7 @@ DxgkGpuVaMapCpuHostAperture(
     if (Adapter == NULL)
         return STATUS_INVALID_PARAMETER;
 
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
     if (DXGK_CB_FULL(Adapter, DxgkDdiMapCpuHostAperture) != NULL)
     {
         DXGKARG_MAPCPUHOSTAPERTURE Args;
@@ -3440,7 +3563,7 @@ DxgkGpuVaUnmapCpuHostAperture(
     if (Adapter == NULL)
         return STATUS_INVALID_PARAMETER;
 
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
     if (DXGK_CB_FULL(Adapter, DxgkDdiUnmapCpuHostAperture) != NULL)
     {
         DXGKARG_UNMAPCPUHOSTAPERTURE Args;

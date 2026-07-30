@@ -7,6 +7,7 @@
 
 #include "dxgkrnl_private.h"
 #include "handles.h"
+#include <ndk/psfuncs.h>
 
 #define DXGKP_HANDLE_TYPE_SHIFT 29
 #define DXGKP_HANDLE_TYPE_MASK 0xE0000000UL
@@ -20,6 +21,7 @@ typedef struct _DXGKRNL_HANDLE_ENTRY
     DXGKRNL_HANDLE_TYPE Type;
     PVOID Object;
     PDXGKRNL_ADAPTER Adapter;
+    PDXGKRNL_PROCESS ProcessRecord;
     PEPROCESS OwnerProcess;
     volatile LONG *Destroying;
     volatile LONG *TeardownClaimed;
@@ -88,10 +90,12 @@ DxgkpCreateHandle(
     _In_ PEPROCESS OwnerProcess,
     _In_opt_ volatile LONG *Destroying,
     _In_opt_ volatile LONG *TeardownClaimed,
+    _In_opt_ PDXGKRNL_PROCESS ProcessRecord,
     _In_ BOOLEAN OwnsAdapterReference,
     _Out_ D3DKMT_HANDLE *OutHandle)
 {
     PDXGKRNL_HANDLE_ENTRY Entry;
+    NTSTATUS Status;
 
     if (!DxgkHandleTableInitialized || Object == NULL || Adapter == NULL || OwnerProcess == NULL || OutHandle == NULL)
         return STATUS_INVALID_PARAMETER;
@@ -105,6 +109,7 @@ DxgkpCreateHandle(
     Entry->Type = Type;
     Entry->Object = Object;
     Entry->Adapter = Adapter;
+    Entry->ProcessRecord = ProcessRecord;
     Entry->OwnerProcess = OwnerProcess;
     Entry->Destroying = Destroying;
     Entry->TeardownClaimed = TeardownClaimed;
@@ -115,10 +120,22 @@ DxgkpCreateHandle(
     ExAcquireFastMutex(&DxgkHandleTableLock);
     if (InterlockedCompareExchange(&Adapter->RundownStarted, 0, 0) != 0)
     {
+        Status = STATUS_DELETE_PENDING;
+    }
+    else if (PsGetProcessExitStatus(OwnerProcess) != STATUS_PENDING)
+    {
+        Status = STATUS_PROCESS_IS_TERMINATING;
+    }
+    else
+    {
+        Status = STATUS_SUCCESS;
+    }
+    if (!NT_SUCCESS(Status))
+    {
         ExReleaseFastMutex(&DxgkHandleTableLock);
         ObDereferenceObject(OwnerProcess);
         ExFreePoolWithTag(Entry, TAG_DXGK_HANDLE);
-        return STATUS_DELETE_PENDING;
+        return Status;
     }
     Entry->Handle = DxgkpAllocateHandleLocked(Type);
     InsertTailList(&DxgkHandleTableHead, &Entry->ListEntry);
@@ -189,6 +206,8 @@ static VOID
 DxgkpFreeHandleEntry(
     _In_ PDXGKRNL_HANDLE_ENTRY Entry)
 {
+    if (Entry->ProcessRecord != NULL)
+        DxgkDereferenceProcessRecord(Entry->ProcessRecord);
     if (Entry->OwnsAdapterReference)
         DxgkDereferenceAdapter(Entry->Adapter);
     ObDereferenceObject(Entry->OwnerProcess);
@@ -353,13 +372,40 @@ DxgkCreateAdapterHandle(
     _In_ PEPROCESS OwnerProcess,
     _Out_ D3DKMT_HANDLE *OutHandle)
 {
+    PDXGKRNL_PROCESS ProcessRecord = NULL;
     NTSTATUS Status;
+
+    if (Adapter == NULL ||
+        OwnerProcess == NULL ||
+        OutHandle == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    *OutHandle = 0;
 
     if (!DxgkReferenceAdapterObject(Adapter))
         return STATUS_DELETE_PENDING;
-    Status = DxgkpCreateHandle(DxgkHandleTypeAdapter, Adapter, Adapter, OwnerProcess, NULL, NULL, TRUE, OutHandle);
+    Status = DxgkAcquireProcessRecord(Adapter,
+                                      OwnerProcess,
+                                      &ProcessRecord);
+    if (NT_SUCCESS(Status))
+    {
+        Status = DxgkpCreateHandle(DxgkHandleTypeAdapter,
+                                   Adapter,
+                                   Adapter,
+                                   OwnerProcess,
+                                   NULL,
+                                   NULL,
+                                   ProcessRecord,
+                                   TRUE,
+                                   OutHandle);
+    }
     if (!NT_SUCCESS(Status))
+    {
+        if (ProcessRecord != NULL)
+            DxgkDereferenceProcessRecord(ProcessRecord);
         DxgkDereferenceAdapter(Adapter);
+    }
     return Status;
 }
 
@@ -422,7 +468,7 @@ DxgkCreateDeviceHandle(
 {
     if (Device == NULL || Device->Adapter == NULL || Device->OwnerProcess != OwnerProcess || InterlockedCompareExchange(&Device->Destroying, 0, 0) != 0)
         return STATUS_INVALID_PARAMETER;
-    return DxgkpCreateHandle(DxgkHandleTypeDevice, Device, Device->Adapter, OwnerProcess, &Device->Destroying, &Device->TeardownClaimed, FALSE, OutHandle);
+    return DxgkpCreateHandle(DxgkHandleTypeDevice, Device, Device->Adapter, OwnerProcess, &Device->Destroying, &Device->TeardownClaimed, NULL, FALSE, OutHandle);
 }
 
 NTSTATUS
@@ -498,7 +544,7 @@ DxgkCreateContextHandle(
 {
     if (Context == NULL || Context->Device == NULL || Context->Device->OwnerProcess != OwnerProcess || InterlockedCompareExchange(&Context->Destroying, 0, 0) != 0 || InterlockedCompareExchange(&Context->Device->Destroying, 0, 0) != 0)
         return STATUS_INVALID_PARAMETER;
-    return DxgkpCreateHandle(DxgkHandleTypeContext, Context, Context->Device->Adapter, OwnerProcess, &Context->Destroying, &Context->TeardownClaimed, FALSE, OutHandle);
+    return DxgkpCreateHandle(DxgkHandleTypeContext, Context, Context->Device->Adapter, OwnerProcess, &Context->Destroying, &Context->TeardownClaimed, NULL, FALSE, OutHandle);
 }
 
 NTSTATUS
@@ -575,7 +621,7 @@ DxgkCreateOwnedHandle(
         return STATUS_INVALID_PARAMETER;
     if (TeardownClaimed == NULL)
         return STATUS_INVALID_PARAMETER;
-    return DxgkpCreateHandle(Type, Object, Adapter, OwnerProcess, Destroying, TeardownClaimed, FALSE, OutHandle);
+    return DxgkpCreateHandle(Type, Object, Adapter, OwnerProcess, Destroying, TeardownClaimed, NULL, FALSE, OutHandle);
 }
 
 NTSTATUS

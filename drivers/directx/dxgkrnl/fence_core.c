@@ -131,6 +131,59 @@ DxgkMonitoredFenceCoreCanSignal(
     return STATUS_SUCCESS;
 }
 
+BOOLEAN
+DxgkMonitoredInterruptCoreSupported(
+    _In_ ULONG ConfiguredWddmLevel,
+    _In_ ULONG RuntimeWddmLevel,
+    _In_ ULONG NodeCount)
+{
+    return ConfiguredWddmLevel >= 2200 &&
+           RuntimeWddmLevel >= 2200 &&
+           NodeCount != 0 &&
+           NodeCount <= sizeof(LONG) * 8;
+}
+
+NTSTATUS
+DxgkMonitoredInterruptCoreEnqueue(
+    _Inout_ volatile LONG *PendingNodes,
+    _In_ ULONG NodeCount,
+    _In_ ULONG NodeOrdinal,
+    _In_ ULONG EngineOrdinal)
+{
+    if (PendingNodes == NULL ||
+        NodeCount == 0 ||
+        NodeCount > sizeof(*PendingNodes) * 8 ||
+        NodeOrdinal >= NodeCount ||
+        EngineOrdinal != 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    InterlockedOr(PendingNodes, (LONG)(1UL << NodeOrdinal));
+    return STATUS_SUCCESS;
+}
+
+ULONG
+DxgkMonitoredInterruptCoreDrain(
+    _Inout_ volatile LONG *PendingNodes)
+{
+    if (PendingNodes == NULL)
+        return 0;
+    return (ULONG)InterlockedExchange(PendingNodes, 0);
+}
+
+BOOLEAN
+DxgkMonitoredInterruptCoreAffinityMatches(
+    _In_ ULONG EngineAffinity,
+    _In_ ULONG PhysicalAdapterIndex)
+{
+    if (EngineAffinity == 0)
+        return TRUE;
+    if (PhysicalAdapterIndex >= sizeof(EngineAffinity) * 8)
+        return FALSE;
+    return (EngineAffinity & (1UL << PhysicalAdapterIndex)) != 0;
+}
+
 /* --- periodic monitored-fence notification lifetime ----------------- */
 
 VOID
