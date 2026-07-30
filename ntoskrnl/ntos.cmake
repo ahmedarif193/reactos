@@ -305,6 +305,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/se/tokenlif.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/vf/driver.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/wmi/guidobj.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/wmi/pcw.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/wmi/smbios.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/wmi/wmi.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/wmi/wmidrv.c)
