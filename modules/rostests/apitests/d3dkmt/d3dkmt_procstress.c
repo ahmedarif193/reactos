@@ -1,7 +1,7 @@
 /*
  * PROJECT:     ReactOS D3DKMT API Tests
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
- * PURPOSE:     Process-exit and multi-process stress (roadmap gate 1.4)
+ * PURPOSE:     Process-exit and multi-process stress
  * COPYRIGHT:   Copyright 2026 ReactOS WDDM Team
  *
  * `teardown` covers what happens when a process tidies up in an unusual order.
