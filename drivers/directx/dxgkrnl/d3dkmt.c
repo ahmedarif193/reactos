@@ -32,6 +32,25 @@
 
 C_ASSERT(sizeof(RXGK_CREATECONTEXTVIRTUAL_PACKET) == RXGK_CREATECONTEXTVIRTUAL_PACKET_V1_SIZE);
 C_ASSERT(sizeof(RXGK_SUBMITCOMMAND_PACKET) == RXGK_SUBMITCOMMAND_PACKET_V1_SIZE);
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+C_ASSERT(sizeof(RXGK_GETDWMVERTICALBLANKEVENT_PACKET) ==
+         RXGK_GETDWMVERTICALBLANKEVENT_PACKET_V1_SIZE);
+C_ASSERT(FIELD_OFFSET(RXGK_GETDWMVERTICALBLANKEVENT_PACKET, Size) == 0);
+C_ASSERT(FIELD_OFFSET(RXGK_GETDWMVERTICALBLANKEVENT_PACKET, Version) == 4);
+C_ASSERT(FIELD_OFFSET(RXGK_GETDWMVERTICALBLANKEVENT_PACKET, AdapterHandle) == 8);
+C_ASSERT(FIELD_OFFSET(RXGK_GETDWMVERTICALBLANKEVENT_PACKET, DeviceHandle) == 12);
+C_ASSERT(FIELD_OFFSET(RXGK_GETDWMVERTICALBLANKEVENT_PACKET, VidPnSourceId) == 16);
+C_ASSERT(FIELD_OFFSET(RXGK_GETDWMVERTICALBLANKEVENT_PACKET, Reserved) == 20);
+C_ASSERT(FIELD_OFFSET(RXGK_GETDWMVERTICALBLANKEVENT_PACKET, EventHandle) == 24);
+C_ASSERT(sizeof(RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET) ==
+         RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET_V1_SIZE);
+C_ASSERT(FIELD_OFFSET(RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET, Size) == 0);
+C_ASSERT(FIELD_OFFSET(RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET, Version) == 4);
+C_ASSERT(FIELD_OFFSET(RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET, AdapterHandle) == 8);
+C_ASSERT(FIELD_OFFSET(RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET, DeviceHandle) == 12);
+C_ASSERT(FIELD_OFFSET(RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET, VidPnSourceId) == 16);
+C_ASSERT(FIELD_OFFSET(RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET, TargetSyncRefreshCount) == 20);
+#endif
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
 C_ASSERT(sizeof(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET) ==
          RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET_V1_SIZE);
@@ -263,6 +282,10 @@ DxgkpKmtIoctlMinimumConfiguredLevel(
         case IOCTL_D3DKMT_RECLAIMALLOCATIONS:
         case IOCTL_D3DKMT_SETVIDPNSOURCEOWNER1:
         case IOCTL_D3DKMT_WAITFORVERTICALBLANKEVENT2:
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+        case IOCTL_D3DKMT_GETDWMVERTICALBLANKEVENT:
+        case IOCTL_D3DKMT_SETSYNCREFRESHCOUNTWAITTARGET:
+#endif
         case IOCTL_DXGKRNL_GET_DOD_INIT_ENTRY:
             return DXGK_CAPS_CORE_LEVEL_WDDM_1_2;
 
@@ -4412,6 +4435,104 @@ DxgkWaitForVerticalBlankEvent(
     return Status;
 }
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+static NTSTATUS
+DxgkpOpenDwmVerticalBlankEvent(
+    _In_ D3DKMT_HANDLE hAdapter,
+    _In_ D3DKMT_HANDLE hDevice,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+    _Out_ PHANDLE EventHandle)
+{
+    PDXGKRNL_ADAPTER Adapter;
+    PDXGKRNL_DEVICE Device;
+    NTSTATUS Status;
+
+    if (EventHandle == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *EventHandle = NULL;
+
+    Status = DxgkpReferenceVerticalBlankTarget(hAdapter,
+                                               hDevice,
+                                               VidPnSourceId,
+                                               &Adapter,
+                                               &Device);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = DxgkPresentOpenDwmVBlankEvent(Adapter,
+                                           VidPnSourceId,
+                                           EventHandle);
+    if (Device != NULL)
+        DxgkDereferenceDevice(Device);
+    DxgkDereferenceAdapter(Adapter);
+    return Status;
+}
+
+static NTSTATUS
+DxgkpSetSyncRefreshCountWaitTarget(
+    _In_ D3DKMT_HANDLE hAdapter,
+    _In_ D3DKMT_HANDLE hDevice,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+    _In_ ULONG TargetSyncRefreshCount)
+{
+    PDXGKRNL_ADAPTER Adapter;
+    PDXGKRNL_DEVICE Device;
+    NTSTATUS Status;
+
+    Status = DxgkpReferenceVerticalBlankTarget(hAdapter,
+                                               hDevice,
+                                               VidPnSourceId,
+                                               &Adapter,
+                                               &Device);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = DxgkPresentSetSyncRefreshCountWaitTarget(
+                 Adapter,
+                 VidPnSourceId,
+                 TargetSyncRefreshCount);
+    if (Device != NULL)
+        DxgkDereferenceDevice(Device);
+    DxgkDereferenceAdapter(Adapter);
+    return Status;
+}
+
+static NTSTATUS
+NTAPI
+DxgkGetDwmVerticalBlankEvent(
+    _In_ CONST D3DKMT_GETVERTICALBLANKEVENT *pData)
+{
+    HANDLE EventHandle;
+    NTSTATUS Status;
+
+    if (pData == NULL || pData->phEvent == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = DxgkpOpenDwmVerticalBlankEvent(pData->hAdapter,
+                                            pData->hDevice,
+                                            pData->VidPnSourceId,
+                                            &EventHandle);
+    if (NT_SUCCESS(Status))
+        *pData->phEvent = EventHandle;
+    return Status;
+}
+
+static NTSTATUS
+NTAPI
+DxgkSetSyncRefreshCountWaitTarget(
+    _In_ CONST D3DKMT_SETSYNCREFRESHCOUNTWAITTARGET *pData)
+{
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    return DxgkpSetSyncRefreshCountWaitTarget(
+               pData->hAdapter,
+               pData->hDevice,
+               pData->VidPnSourceId,
+               pData->TargetSyncRefreshCount);
+}
+#endif
+
 static NTSTATUS
 NTAPI
 DxgkOfferAllocations(
@@ -7604,6 +7725,83 @@ DxgkpDispatchBufferedIoctl(
             return Status;
         }
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+        case IOCTL_D3DKMT_GETDWMVERTICALBLANKEVENT:
+        {
+            PRXGK_GETDWMVERTICALBLANKEVENT_PACKET Packet;
+            HANDLE EventHandle;
+
+            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL ||
+                Irp->RequestorMode != KernelMode)
+            {
+                return STATUS_ACCESS_DENIED;
+            }
+            if (InputLength <
+                    RXGK_GETDWMVERTICALBLANKEVENT_PACKET_V1_SIZE ||
+                OutputLength <
+                    RXGK_GETDWMVERTICALBLANKEVENT_PACKET_V1_SIZE ||
+                SystemBuffer == NULL)
+            {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            Packet = (PRXGK_GETDWMVERTICALBLANKEVENT_PACKET)SystemBuffer;
+            if (Packet->Size !=
+                    RXGK_GETDWMVERTICALBLANKEVENT_PACKET_V1_SIZE ||
+                Packet->Version != RXGK_WDDM_PACKET_VERSION_1 ||
+                Packet->Reserved != 0 ||
+                Packet->EventHandle != 0)
+            {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            Status = DxgkpOpenDwmVerticalBlankEvent(
+                         Packet->AdapterHandle,
+                         Packet->DeviceHandle,
+                         Packet->VidPnSourceId,
+                         &EventHandle);
+            if (!NT_SUCCESS(Status))
+                return Status;
+
+            Packet->EventHandle = (ULONGLONG)(ULONG_PTR)EventHandle;
+            Irp->IoStatus.Information =
+                RXGK_GETDWMVERTICALBLANKEVENT_PACKET_V1_SIZE;
+            return STATUS_SUCCESS;
+        }
+
+        case IOCTL_D3DKMT_SETSYNCREFRESHCOUNTWAITTARGET:
+        {
+            PRXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET Packet;
+
+            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL ||
+                Irp->RequestorMode != KernelMode)
+            {
+                return STATUS_ACCESS_DENIED;
+            }
+            if (InputLength <
+                    RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET_V1_SIZE ||
+                SystemBuffer == NULL)
+            {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            Packet =
+                (PRXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET)SystemBuffer;
+            if (Packet->Size !=
+                    RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET_V1_SIZE ||
+                Packet->Version != RXGK_WDDM_PACKET_VERSION_1)
+            {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            return DxgkpSetSyncRefreshCountWaitTarget(
+                       Packet->AdapterHandle,
+                       Packet->DeviceHandle,
+                       Packet->VidPnSourceId,
+                       Packet->TargetSyncRefreshCount);
+        }
+#endif
+
         case IOCTL_D3DKMT_WAITFORVERTICALBLANKEVENT2:
         {
             D3DKMT_WAITFORVERTICALBLANKEVENT2 *pVBlank2;
@@ -7797,6 +7995,8 @@ DxgkpDispatchBufferedIoctl(
                 InterfaceSize = DXGKRNL_INTERFACE_VERSION_5_SIZE;
             else if (Version == DXGKRNL_INTERFACE_VERSION_6)
                 InterfaceSize = DXGKRNL_INTERFACE_VERSION_6_SIZE;
+            else if (Version == DXGKRNL_INTERFACE_VERSION_7)
+                InterfaceSize = DXGKRNL_INTERFACE_VERSION_7_SIZE;
             else
             {
                 DXGKRNL_WARN("IOCTL_DXGKRNL_EXCHANGE_INTERFACE: "
@@ -7911,6 +8111,18 @@ DxgkpDispatchBufferedIoctl(
                 pInterface->RxgkIntPfnWaitForSynchronizationObjectFromGpu = (PDXGADAPTER_WAITFORSYNCHRONIZATIONOBJECTFROMGPU)DxgkWaitForSynchronizationObjectFromGpu;
                 pInterface->RxgkIntPfnSignalSynchronizationObjectFromGpu = (PDXGADAPTER_SIGNALSYNCHRONIZATIONOBJECTFROMGPU)DxgkSignalSynchronizationObjectFromGpu;
                 pInterface->RxgkIntPfnSignalSynchronizationObjectFromGpu2 = (PDXGADAPTER_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2)DxgkSignalSynchronizationObjectFromGpu2;
+            }
+#endif
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+            if (Version >= DXGKRNL_INTERFACE_VERSION_7)
+            {
+                pInterface->RxgkIntPfnGetDwmVerticalBlankEvent =
+                    (PDXGADAPTER_GETDWMVERTICALBLANKEVENT)
+                        DxgkGetDwmVerticalBlankEvent;
+                pInterface->RxgkIntPfnSetSyncRefreshCountWaitTarget =
+                    (PDXGADAPTER_SETSYNCREFRESHCOUNTWAITTARGET)
+                        DxgkSetSyncRefreshCountWaitTarget;
             }
 #endif
 
@@ -8050,6 +8262,10 @@ DxgkDispatchDeviceControl(
         case IOCTL_D3DKMT_GETSHADOWSURFACE:
         case IOCTL_D3DKMT_QUERYRESOURCEINFO:
         case IOCTL_D3DKMT_OPENRESOURCE:
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+        case IOCTL_D3DKMT_GETDWMVERTICALBLANKEVENT:
+        case IOCTL_D3DKMT_SETSYNCREFRESHCOUNTWAITTARGET:
+#endif
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
         case IOCTL_D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP:
 #endif

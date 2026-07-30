@@ -56,10 +56,30 @@ C_ASSERT(FIELD_OFFSET(RXGK_SUBMITCOMMAND_PACKET, ContextHandle) == 32);
 C_ASSERT(FIELD_OFFSET(RXGK_SUBMITCOMMAND_PACKET, PrivateDriverDataSize) == 36);
 C_ASSERT(FIELD_OFFSET(RXGK_SUBMITCOMMAND_PACKET, PrivateDriverDataOffset) == 40);
 C_ASSERT(FIELD_OFFSET(RXGK_SUBMITCOMMAND_PACKET, Reserved) == 44);
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+C_ASSERT(sizeof(RXGK_GETDWMVERTICALBLANKEVENT_PACKET) ==
+         RXGK_GETDWMVERTICALBLANKEVENT_PACKET_V1_SIZE);
+C_ASSERT(FIELD_OFFSET(RXGK_GETDWMVERTICALBLANKEVENT_PACKET, Size) == 0);
+C_ASSERT(FIELD_OFFSET(RXGK_GETDWMVERTICALBLANKEVENT_PACKET, Version) == 4);
+C_ASSERT(FIELD_OFFSET(RXGK_GETDWMVERTICALBLANKEVENT_PACKET, AdapterHandle) == 8);
+C_ASSERT(FIELD_OFFSET(RXGK_GETDWMVERTICALBLANKEVENT_PACKET, DeviceHandle) == 12);
+C_ASSERT(FIELD_OFFSET(RXGK_GETDWMVERTICALBLANKEVENT_PACKET, VidPnSourceId) == 16);
+C_ASSERT(FIELD_OFFSET(RXGK_GETDWMVERTICALBLANKEVENT_PACKET, Reserved) == 20);
+C_ASSERT(FIELD_OFFSET(RXGK_GETDWMVERTICALBLANKEVENT_PACKET, EventHandle) == 24);
+C_ASSERT(sizeof(RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET) ==
+         RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET_V1_SIZE);
+C_ASSERT(FIELD_OFFSET(RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET, Size) == 0);
+C_ASSERT(FIELD_OFFSET(RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET, Version) == 4);
+C_ASSERT(FIELD_OFFSET(RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET, AdapterHandle) == 8);
+C_ASSERT(FIELD_OFFSET(RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET, DeviceHandle) == 12);
+C_ASSERT(FIELD_OFFSET(RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET, VidPnSourceId) == 16);
+C_ASSERT(FIELD_OFFSET(RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET, TargetSyncRefreshCount) == 20);
+#endif
 C_ASSERT(DXGKRNL_INTERFACE_VERSION_1_SIZE == FIELD_OFFSET(REACTOS_WIN32K_DXGKRNL_INTERFACE, RxgkIntPfnCreateContextVirtual));
 C_ASSERT(DXGKRNL_INTERFACE_VERSION_2_SIZE == FIELD_OFFSET(REACTOS_WIN32K_DXGKRNL_INTERFACE, RxgkIntPfnCreateAllocation2));
 C_ASSERT(DXGKRNL_INTERFACE_VERSION_3_SIZE == FIELD_OFFSET(REACTOS_WIN32K_DXGKRNL_INTERFACE, RxgkIntPfnGetAllocationPriority));
-C_ASSERT(DXGKRNL_INTERFACE_VERSION_6_SIZE == sizeof(REACTOS_WIN32K_DXGKRNL_INTERFACE));
+C_ASSERT(DXGKRNL_INTERFACE_VERSION_6_SIZE == FIELD_OFFSET(REACTOS_WIN32K_DXGKRNL_INTERFACE, RxgkIntPfnGetDwmVerticalBlankEvent));
+C_ASSERT(DXGKRNL_INTERFACE_VERSION_7_SIZE == sizeof(REACTOS_WIN32K_DXGKRNL_INTERFACE));
 C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, hAllocation) == 0);
 C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, hAllocation) == 0);
 #if defined(_WIN64)
@@ -69,6 +89,7 @@ C_ASSERT(DXGKRNL_INTERFACE_VERSION_3_SIZE == 560);
 C_ASSERT(DXGKRNL_INTERFACE_VERSION_4_SIZE == 568);
 C_ASSERT(DXGKRNL_INTERFACE_VERSION_5_SIZE == 576);
 C_ASSERT(DXGKRNL_INTERFACE_VERSION_6_SIZE == 600);
+C_ASSERT(DXGKRNL_INTERFACE_VERSION_7_SIZE == 616);
 C_ASSERT(sizeof(D3DDDI_ALLOCATIONINFO) == 40);
 C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, pSystemMem) == 8);
 C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, pPrivateDriverData) == 16);
@@ -94,6 +115,8 @@ C_ASSERT(DXGKRNL_INTERFACE_VERSION_2_SIZE == 276);
 C_ASSERT(DXGKRNL_INTERFACE_VERSION_3_SIZE == 280);
 C_ASSERT(DXGKRNL_INTERFACE_VERSION_4_SIZE == 284);
 C_ASSERT(DXGKRNL_INTERFACE_VERSION_5_SIZE == 288);
+C_ASSERT(DXGKRNL_INTERFACE_VERSION_6_SIZE == 300);
+C_ASSERT(DXGKRNL_INTERFACE_VERSION_7_SIZE == 308);
 C_ASSERT(sizeof(D3DDDI_ALLOCATIONINFO) == 24);
 C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, pSystemMem) == 4);
 C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO, pPrivateDriverData) == 8);
@@ -3046,6 +3069,104 @@ D3DKMTWaitForVerticalBlankEvent2(
 {
     return WddmBridgeCaptureFixedIoctl(IOCTL_D3DKMT_WAITFORVERTICALBLANKEVENT2, (PVOID)pData, sizeof(*pData), FALSE);
 }
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+NTSTATUS
+APIENTRY
+D3DKMTGetDWMVerticalBlankEvent(
+    _In_ CONST D3DKMT_GETVERTICALBLANKEVENT *pData)
+{
+    D3DKMT_GETVERTICALBLANKEVENT Captured;
+    RXGK_GETDWMVERTICALBLANKEVENT_PACKET Packet;
+    D3DKMT_PTR_TYPE EventHandleValue;
+    D3DKMT_PTR_TYPE *UserEventHandle;
+    ULONG_PTR Information = 0;
+    NTSTATUS Status;
+
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    UserEventHandle = Captured.phEvent;
+    if (UserEventHandle == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Status = WddmBridgeSafeProbeForWrite(UserEventHandle,
+                                         sizeof(*UserEventHandle));
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlZeroMemory(&Packet, sizeof(Packet));
+    Packet.Size = RXGK_GETDWMVERTICALBLANKEVENT_PACKET_V1_SIZE;
+    Packet.Version = RXGK_WDDM_PACKET_VERSION_1;
+    Packet.AdapterHandle = Captured.hAdapter;
+    Packet.DeviceHandle = Captured.hDevice;
+    Packet.VidPnSourceId = Captured.VidPnSourceId;
+
+    Status = WddmBridgeSendIoctlWithInformation(
+                 IOCTL_D3DKMT_GETDWMVERTICALBLANKEVENT,
+                 &Packet,
+                 sizeof(Packet),
+                 &Packet,
+                 sizeof(Packet),
+                 &Information);
+    if (NT_SUCCESS(Status) && Information != sizeof(Packet))
+        Status = STATUS_INFO_LENGTH_MISMATCH;
+    if (NT_SUCCESS(Status) &&
+        (Packet.EventHandle == 0 ||
+         Packet.EventHandle > (ULONGLONG)MAXULONG_PTR))
+    {
+        Status = STATUS_INVALID_HANDLE;
+    }
+    if (NT_SUCCESS(Status))
+    {
+        EventHandleValue = (HANDLE)(ULONG_PTR)Packet.EventHandle;
+        Status = WddmBridgeSafeCopyTo(UserEventHandle,
+                                      &EventHandleValue,
+                                      sizeof(EventHandleValue));
+    }
+
+    if (!NT_SUCCESS(Status) &&
+        Packet.EventHandle != 0 &&
+        Packet.EventHandle <= (ULONGLONG)MAXULONG_PTR)
+    {
+        (VOID)ZwClose((HANDLE)(ULONG_PTR)Packet.EventHandle);
+    }
+    return Status;
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTSetSyncRefreshCountWaitTarget(
+    _In_ CONST D3DKMT_SETSYNCREFRESHCOUNTWAITTARGET *pData)
+{
+    D3DKMT_SETSYNCREFRESHCOUNTWAITTARGET Captured;
+    RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET Packet;
+    NTSTATUS Status;
+
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlZeroMemory(&Packet, sizeof(Packet));
+    Packet.Size = RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET_V1_SIZE;
+    Packet.Version = RXGK_WDDM_PACKET_VERSION_1;
+    Packet.AdapterHandle = Captured.hAdapter;
+    Packet.DeviceHandle = Captured.hDevice;
+    Packet.VidPnSourceId = Captured.VidPnSourceId;
+    Packet.TargetSyncRefreshCount = Captured.TargetSyncRefreshCount;
+
+    return WddmBridgeSendIoctl(
+               IOCTL_D3DKMT_SETSYNCREFRESHCOUNTWAITTARGET,
+               &Packet,
+               sizeof(Packet),
+               NULL,
+               0);
+}
+#endif
 
 NTSTATUS
 APIENTRY

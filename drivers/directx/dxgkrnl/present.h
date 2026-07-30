@@ -213,6 +213,15 @@ typedef struct _DXGKRNL_PRESENT_QUEUE
     LONG64                          LastPresentVBlank;
     KSPIN_LOCK                      VBlankWaitLock;
     LIST_ENTRY                      VBlankWaiterList;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+    /*
+     * Kernel-owned event exposed through a wait-only DWM handle. The refresh
+     * target fields are protected by VBlankWaitLock.
+     */
+    PKEVENT                         DwmVBlankEvent;
+    ULONG                           DwmVBlankTarget;
+    BOOLEAN                         DwmVBlankTargetArmed;
+#endif
 
     /* Back-pointer to the owning adapter. */
     struct _DXGKRNL_ADAPTER        *Adapter;
@@ -297,6 +306,20 @@ DxgkpWaitForVerticalBlank(
     _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
     _In_ UINT NumObjects,
     _In_reads_opt_(NumObjects) CONST D3DKMT_PTR_TYPE *ObjectHandleArray);
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+NTSTATUS
+DxgkPresentOpenDwmVBlankEvent(
+    _In_ struct _DXGKRNL_ADAPTER *Adapter,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+    _Out_ PHANDLE EventHandle);
+
+NTSTATUS
+DxgkPresentSetSyncRefreshCountWaitTarget(
+    _In_ struct _DXGKRNL_ADAPTER *Adapter,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+    _In_ ULONG TargetSyncRefreshCount);
+#endif
 
 /*
  * DxgkpQueuePresent

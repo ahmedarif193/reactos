@@ -110,6 +110,70 @@ DxgkpWaitForPresentQueues(
         KeWaitForSingleObject(&Adapter->PresentQueueCallsDrainedEvent, Executive, KernelMode, FALSE, NULL);
 }
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+static inline BOOLEAN
+DxgkpDwmRefreshTargetReached(
+    _In_ ULONG CurrentRefreshCount,
+    _In_ ULONG TargetRefreshCount)
+{
+    return (LONG)(CurrentRefreshCount - TargetRefreshCount) >= 0;
+}
+
+static inline BOOLEAN
+DxgkpDwmRefreshTargetShouldSignalImmediately(
+    _In_ ULONG CurrentRefreshCount,
+    _In_ ULONG TargetRefreshCount)
+{
+    /*
+     * Zero means the next vertical blank, even when the current count has
+     * already advanced. Other targets use 32-bit serial-number arithmetic.
+     */
+    return TargetRefreshCount != 0 &&
+           DxgkpDwmRefreshTargetReached(CurrentRefreshCount,
+                                        TargetRefreshCount);
+}
+
+static NTSTATUS
+DxgkpCreateDwmVBlankEvent(
+    _Outptr_ PKEVENT *Event)
+{
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    HANDLE EventHandle = NULL;
+    PKEVENT EventObject = NULL;
+    NTSTATUS Status;
+
+    if (Event == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *Event = NULL;
+
+    InitializeObjectAttributes(&ObjectAttributes,
+                               NULL,
+                               OBJ_KERNEL_HANDLE,
+                               NULL,
+                               NULL);
+    Status = ZwCreateEvent(&EventHandle,
+                           EVENT_MODIFY_STATE | SYNCHRONIZE,
+                           &ObjectAttributes,
+                           SynchronizationEvent,
+                           FALSE);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = ObReferenceObjectByHandle(EventHandle,
+                                       EVENT_MODIFY_STATE | SYNCHRONIZE,
+                                       *ExEventObjectType,
+                                       KernelMode,
+                                       (PVOID *)&EventObject,
+                                       NULL);
+    ZwClose(EventHandle);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    *Event = EventObject;
+    return STATUS_SUCCESS;
+}
+#endif
+
 static VOID
 DxgkpSignalQueueVBlankWaiters(
     _In_ PDXGKRNL_PRESENT_QUEUE Queue,
@@ -127,6 +191,17 @@ DxgkpSignalQueueVBlankWaiters(
         if (Force || VBlankCount >= Waiter->TargetVBlank)
             KeSetEvent(&Waiter->Event, IO_NO_INCREMENT, FALSE);
     }
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+    if (Queue->DwmVBlankEvent != NULL &&
+        (Force ||
+         (Queue->DwmVBlankTargetArmed &&
+          DxgkpDwmRefreshTargetReached((ULONG)VBlankCount,
+                                       Queue->DwmVBlankTarget))))
+    {
+        Queue->DwmVBlankTargetArmed = FALSE;
+        KeSetEvent(Queue->DwmVBlankEvent, IO_NO_INCREMENT, FALSE);
+    }
+#endif
     KeReleaseSpinLock(&Queue->VBlankWaitLock, OldIrql);
 }
 
@@ -306,6 +381,124 @@ Cleanup:
     DxgkpReleasePresentQueues(Adapter);
     return Status;
 }
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+NTSTATUS
+DxgkPresentOpenDwmVBlankEvent(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+    _Out_ PHANDLE EventHandle)
+{
+    PDXGKRNL_PRESENT_QUEUE Queue;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (Adapter == NULL || EventHandle == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *EventHandle = NULL;
+
+    if (!DxgkpAcquirePresentQueues(Adapter))
+        return STATUS_DEVICE_REMOVED;
+    if (Adapter->PresentQueues == NULL ||
+        VidPnSourceId >= Adapter->PresentQueueCount)
+    {
+        Status = Adapter->PresentQueues == NULL
+                     ? Adapter->PresentQueueInitializationStatus
+                     : STATUS_INVALID_PARAMETER;
+        goto Cleanup;
+    }
+    if (InterlockedCompareExchange(&Adapter->VBlankResetActive, 0, 0) != 0)
+    {
+        Status = STATUS_DEVICE_REMOVED;
+        goto Cleanup;
+    }
+
+    Queue = &((PDXGKRNL_PRESENT_QUEUE)Adapter->PresentQueues)[VidPnSourceId];
+    if (Queue->DwmVBlankEvent == NULL)
+    {
+        Status = STATUS_DEVICE_NOT_READY;
+        goto Cleanup;
+    }
+
+    /*
+     * Without OBJ_KERNEL_HANDLE, ObOpenObjectByPointer creates a normal
+     * handle in the requesting process. Grant only wait access so user mode
+     * cannot spoof a vertical blank by signaling the kernel-owned event.
+     */
+    Status = ObOpenObjectByPointer(Queue->DwmVBlankEvent,
+                                   0,
+                                   NULL,
+                                   SYNCHRONIZE,
+                                   *ExEventObjectType,
+                                   KernelMode,
+                                   EventHandle);
+
+Cleanup:
+    DxgkpReleasePresentQueues(Adapter);
+    return Status;
+}
+
+NTSTATUS
+DxgkPresentSetSyncRefreshCountWaitTarget(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+    _In_ ULONG TargetSyncRefreshCount)
+{
+    PDXGKRNL_PRESENT_QUEUE Queue;
+    LONG64 VBlankCount;
+    KIRQL OldIrql;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (Adapter == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (!DxgkpAcquirePresentQueues(Adapter))
+        return STATUS_DEVICE_REMOVED;
+    if (Adapter->PresentQueues == NULL ||
+        VidPnSourceId >= Adapter->PresentQueueCount)
+    {
+        Status = Adapter->PresentQueues == NULL
+                     ? Adapter->PresentQueueInitializationStatus
+                     : STATUS_INVALID_PARAMETER;
+        goto Cleanup;
+    }
+
+    Queue = &((PDXGKRNL_PRESENT_QUEUE)Adapter->PresentQueues)[VidPnSourceId];
+    KeAcquireSpinLock(&Queue->VBlankWaitLock, &OldIrql);
+    if (InterlockedCompareExchange(&Adapter->PresentQueueStopping, 0, 0) != 0 ||
+        InterlockedCompareExchange(&Adapter->VBlankResetActive, 0, 0) != 0)
+    {
+        Status = STATUS_DEVICE_REMOVED;
+    }
+    else if (Queue->DwmVBlankEvent == NULL)
+    {
+        Status = STATUS_DEVICE_NOT_READY;
+    }
+    else
+    {
+        VBlankCount =
+            InterlockedCompareExchange64(&Queue->VBlankCount, 0, 0);
+        KeClearEvent(Queue->DwmVBlankEvent);
+        Queue->DwmVBlankTarget = TargetSyncRefreshCount;
+        Queue->DwmVBlankTargetArmed = TRUE;
+        if (DxgkpDwmRefreshTargetShouldSignalImmediately(
+                (ULONG)VBlankCount,
+                TargetSyncRefreshCount))
+        {
+            Queue->DwmVBlankTargetArmed = FALSE;
+            KeSetEvent(Queue->DwmVBlankEvent, IO_NO_INCREMENT, FALSE);
+        }
+        Status = STATUS_SUCCESS;
+    }
+    KeReleaseSpinLock(&Queue->VBlankWaitLock, OldIrql);
+
+Cleanup:
+    DxgkpReleasePresentQueues(Adapter);
+    return Status;
+}
+#endif
 
 VOID
 DxgkpReleasePresentEntry(
@@ -923,6 +1116,9 @@ DxgkPresentInit(
     ULONG i;
     ULONG NumSources;
     PDXGKRNL_PRESENT_QUEUE Queues;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+    NTSTATUS Status;
+#endif
 
     PAGED_CODE();
 
@@ -965,6 +1161,24 @@ DxgkPresentInit(
         KeInitializeSpinLock(&Queues[i].QueueLock);
         KeInitializeSpinLock(&Queues[i].VBlankWaitLock);
         InitializeListHead(&Queues[i].VBlankWaiterList);
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+        Status = DxgkpCreateDwmVBlankEvent(&Queues[i].DwmVBlankEvent);
+        if (!NT_SUCCESS(Status))
+        {
+            DXGKRNL_ERR("DxgkPresentInit: DWM vblank event %lu failed "
+                        "(0x%08lx)\n",
+                        i,
+                        Status);
+            while (i != 0)
+            {
+                --i;
+                ObDereferenceObject(Queues[i].DwmVBlankEvent);
+                Queues[i].DwmVBlankEvent = NULL;
+            }
+            ExFreePoolWithTag(Queues, TAG_DXGK_PRESENT);
+            return Status;
+        }
+#endif
     }
 
     Adapter->PresentQueues     = Queues;
@@ -1092,6 +1306,11 @@ VOID
 DxgkPresentTeardown(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+    PDXGKRNL_PRESENT_QUEUE Queues;
+    ULONG Index;
+#endif
+
     PAGED_CODE();
 
     if (Adapter == NULL)
@@ -1104,6 +1323,17 @@ DxgkPresentTeardown(
 
     if (Adapter->PresentQueues != NULL)
     {
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+        Queues = (PDXGKRNL_PRESENT_QUEUE)Adapter->PresentQueues;
+        for (Index = 0; Index < Adapter->PresentQueueCount; ++Index)
+        {
+            if (Queues[Index].DwmVBlankEvent != NULL)
+            {
+                ObDereferenceObject(Queues[Index].DwmVBlankEvent);
+                Queues[Index].DwmVBlankEvent = NULL;
+            }
+        }
+#endif
         ExFreePoolWithTag(Adapter->PresentQueues, TAG_DXGK_PRESENT);
         Adapter->PresentQueues     = NULL;
         Adapter->PresentQueueCount = 0;
