@@ -1,0 +1,114 @@
+Third-Party UEFI DXE Drivers for HTTP/network boot
+==================================================
+
+The binary drivers under the per-architecture subdirectories (amd64/
+today; other architectures may be added the same way) are NOT part of
+the ReactOS project. They are third-party firmware components
+redistributed here to enable network boot on hardware whose built-in
+UEFI firmware does not include them. Apart from the NIC-specific UNDI
+driver, they are the generic EDK2 network protocol stack; the only
+current consumer is the LattePanda Mu HTTP boot profile
+(FREELDR_HTTP_BOOT).
+
+These drivers are loaded by FreeLDR (uefildr.efi) at early boot time
+via UEFI Boot Services LoadImage()/StartImage() to provide network
+protocol support (SNP, IP, TCP, HTTP) before the operating system starts.
+
+
+RtkUndiDxe.efi
+---------------
+  Description : Realtek PCIe Gigabit Ethernet UNDI (Universal Network Device
+                Interface) DXE driver v2.077.  Provides
+                EFI_SIMPLE_NETWORK_PROTOCOL for Realtek PCIe Ethernet
+                controllers (RTL8111/8168/8411 family).
+  Origin      : Realtek (https://www.realtek.com/Download/List?cate_id=584)
+  Copyright   : Copyright (c) Realtek Semiconductor Corp.
+  License     : Proprietary.
+  Signed      : Microsoft UEFI CA 2011.
+  Note        : The LattePanda Mu carrier board has an RTL8111/8168 PCIe
+                GbE NIC at PCI 01:00.0 [10ec:8168].
+
+EDK2 DXE Drivers
+----------------
+  The following drivers originate from the TianoCore EDK2 project
+  (https://github.com/tianocore/edk2) and are licensed under the
+  BSD-2-Clause-Patent license.
+
+  Copyright (c) TianoCore contributors.
+  SPDX-License-Identifier: BSD-2-Clause-Patent
+
+  The locally rebuilt Hash2DxeCrypto.efi and HttpDxe.efi binaries use:
+
+    git clone --branch edk2-stable202602 https://github.com/tianocore/edk2.git
+    cd edk2
+    git submodule update --init
+    make -C BaseTools
+    source edksetup.sh
+
+  Hash2DxeCrypto.efi is built separately from SecurityPkg:
+
+    build -a X64 -t GCC5 -p SecurityPkg/SecurityPkg.dsc -b RELEASE \
+      -m SecurityPkg/Hash2DxeCrypto/Hash2DxeCrypto.inf
+
+  HttpDxe.efi and TcpDxe.efi carry local modifications for the board-gated
+  LattePanda Mu HTTP boot profile. The full source diff against upstream
+  and the exact build procedure live in this repository:
+
+    patches/edk2-networkpkg-httpboot.patch
+      - NetworkPkg.dsc: PcdHttpIoTimeout moved from [PcdsDynamicDefault]
+        to [PcdsFixedAtBuild]. NetworkPkg maps PcdLib to BasePcdLibNull,
+        whose accessors ASSERT at runtime, so every PCD a shipped module
+        consumes must resolve as FixedAtBuild (a dynamic PCD also cannot
+        work in a driver loaded onto foreign firmware, whose PCD database
+        uses different token numbers).
+      - TcpDxe/TcpOutput.c: ACK every 8th segment instead of every 2nd;
+        in this polled pre-OS stack each ACK transmit dominates the
+        per-packet CPU budget at gigabit rates.
+    patches/rebuild.sh
+      Applies the patch and rebuilds both modules as RELEASE (so no
+      leftover ASSERT can halt boot) with
+      --pcd gEfiNetworkPkgTokenSpaceGuid.PcdAllowHttpConnections=TRUE for
+      HttpDxe. Verify with the -y build reports that all [Pcd] entries of
+      the built modules say FIXED.
+
+  Hash2DxeCrypto.efi was built from edk2-stable202602 at commit
+  b7a715f7c03c45c6b4575bf88596bfd79658b8ce; HttpDxe.efi and TcpDxe.efi
+  from edk2-stable202605 (b03a21a63e, toolchain tag GCC) with
+  patches/edk2-networkpkg-httpboot.patch applied.
+  Their SHA-256 hashes are:
+
+    af08fb4051a7b6e365c3a8fee3412b812822b19869f162a95f0da10fac148c81
+      Hash2DxeCrypto.efi
+    aba6dc1548d05b34e761660d554a52d487a0fe463e422da35313de033f727384
+      HttpDxe.efi
+    50984349799a15c662999829787e94113515cc39c54e47c8caeafa213c8d5d8a
+      TcpDxe.efi
+
+  Copy the resulting .efi files from the corresponding
+  Build/*/RELEASE_GCC5/X64/ directory into this directory.
+
+  Included drivers and their roles:
+
+    DpcDxe.efi              Deferred Procedure Call (dependency of MnpDxe)
+    RngDxe.efi              Random Number Generator (RDRAND)
+    Hash2DxeCrypto.efi      Hash2 service binding (required by TcpDxe)
+    MnpDxe.efi              Managed Network Protocol
+    ArpDxe.efi              Address Resolution Protocol
+    Ip4Dxe.efi              IPv4 network layer
+    Udp4Dxe.efi             UDP over IPv4
+    Dhcp4Dxe.efi            DHCPv4 client
+    Mtftp4Dxe.efi           TFTP over IPv4 (for PXE/TFTP boot)
+    TcpDxe.efi              TCP (dual-stack, replaces deprecated Tcp4Dxe)
+    DnsDxe.efi              DNS resolver
+    HttpDxe.efi             HTTP protocol
+    HttpUtilitiesDxe.efi    HTTP header utilities
+
+  Note: HttpBootDxe.efi (the UEFI firmware HTTP Boot orchestrator) is
+  intentionally NOT included.  FreeLDR implements its own boot logic
+  using EFI_HTTP_PROTOCOL directly.
+
+  Not all are required for every boot mode:
+    - TFTP boot:  DpcDxe + MnpDxe + ArpDxe + Ip4Dxe + Udp4Dxe + Dhcp4Dxe
+                  + Mtftp4Dxe
+    - HTTP boot:  All of the above plus Hash2DxeCrypto + TcpDxe + DnsDxe
+                  + Http*.efi
