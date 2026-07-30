@@ -120,7 +120,6 @@ DmMainWndCreateMaskedBitmapImageList(
 {
     HIMAGELIST hImageList;
     UINT Index;
-    WCHAR DbgBuf[256];
 
     if (Images == NULL || ImageCount == 0)
         return NULL;
@@ -131,13 +130,7 @@ DmMainWndCreateMaskedBitmapImageList(
                                   ImageCount,
                                   0);
     if (hImageList == NULL)
-    {
-        StringCchPrintfW(DbgBuf, ARRAYSIZE(DbgBuf),
-                         L"[DISKMGMT-TB] ImageList_Create FAILED, err=%lu\n",
-                         GetLastError());
-        OutputDebugStringW(DbgBuf);
         return NULL;
-    }
 
     for (Index = 0; Index < ImageCount; ++Index)
     {
@@ -152,10 +145,6 @@ DmMainWndCreateMaskedBitmapImageList(
                                       LR_CREATEDIBSECTION);
         if (hBitmap == NULL)
         {
-            StringCchPrintfW(DbgBuf, ARRAYSIZE(DbgBuf),
-                             L"[DISKMGMT-TB] LoadImageW FAILED for resId=%u, err=%lu\n",
-                             Images[Index].ResourceId, GetLastError());
-            OutputDebugStringW(DbgBuf);
             ImageList_Destroy(hImageList);
             return NULL;
         }
@@ -165,19 +154,10 @@ DmMainWndCreateMaskedBitmapImageList(
                                         Images[Index].MaskColor);
         if (addResult == -1)
         {
-            StringCchPrintfW(DbgBuf, ARRAYSIZE(DbgBuf),
-                             L"[DISKMGMT-TB] ImageList_AddMasked FAILED for resId=%u, err=%lu\n",
-                             Images[Index].ResourceId, GetLastError());
-            OutputDebugStringW(DbgBuf);
             DeleteObject(hBitmap);
             ImageList_Destroy(hImageList);
             return NULL;
         }
-
-        StringCchPrintfW(DbgBuf, ARRAYSIZE(DbgBuf),
-                         L"[DISKMGMT-TB] Loaded bitmap resId=%u -> imageIndex=%d\n",
-                         Images[Index].ResourceId, addResult);
-        OutputDebugStringW(DbgBuf);
 
         DeleteObject(hBitmap);
     }
@@ -481,10 +461,6 @@ DmMainWndCreateToolbar(
     WCHAR ButtonText[ARRAYSIZE(DmMainToolbarButtons)][24];
     UINT Index;
     BOOL HasImages;
-    WCHAR DbgBuf[256];
-    RECT rcTb;
-
-    OutputDebugStringW(L"[DISKMGMT-TB] DmMainWndCreateToolbar: ENTER\n");
 
     Info->hToolbar = CreateWindowExW(0,
                                      TOOLBARCLASSNAMEW,
@@ -498,20 +474,7 @@ DmMainWndCreateToolbar(
                                      hInstance,
                                      NULL);
     if (Info->hToolbar == NULL)
-    {
-        StringCchPrintfW(DbgBuf, ARRAYSIZE(DbgBuf),
-                         L"[DISKMGMT-TB] CreateWindowExW FAILED, GetLastError=%lu\n",
-                         GetLastError());
-        OutputDebugStringW(DbgBuf);
         return FALSE;
-    }
-
-    StringCchPrintfW(DbgBuf, ARRAYSIZE(DbgBuf),
-                     L"[DISKMGMT-TB] toolbar hwnd=%p, parent=%p, visible=%d\n",
-                     (void *)Info->hToolbar,
-                     (void *)Info->hMainWnd,
-                     IsWindowVisible(Info->hToolbar));
-    OutputDebugStringW(DbgBuf);
 
     SendMessageW(Info->hToolbar,
                  TB_BUTTONSTRUCTSIZE,
@@ -537,11 +500,6 @@ DmMainWndCreateToolbar(
     Info->hToolbarImageList = DmMainWndCreateToolbarImageList();
     HasImages = (Info->hToolbarImageList != NULL);
 
-    StringCchPrintfW(DbgBuf, ARRAYSIZE(DbgBuf),
-                     L"[DISKMGMT-TB] ImageList=%p, HasImages=%d\n",
-                     (void *)Info->hToolbarImageList, HasImages);
-    OutputDebugStringW(DbgBuf);
-
     if (HasImages)
     {
         ImageList_Destroy((HIMAGELIST)SendMessageW(Info->hToolbar,
@@ -560,8 +518,6 @@ DmMainWndCreateToolbar(
     if (!HasImages)
     {
         LONG_PTR Style;
-
-        OutputDebugStringW(L"[DISKMGMT-TB] No images, falling back to text-only toolbar\n");
 
         Style = GetWindowLongPtrW(Info->hToolbar, GWL_STYLE);
         SetWindowLongPtrW(Info->hToolbar,
@@ -593,10 +549,6 @@ DmMainWndCreateToolbar(
                             ButtonText[Index],
                             ARRAYSIZE(ButtonText[Index])) == 0)
             {
-                StringCchPrintfW(DbgBuf, ARRAYSIZE(DbgBuf),
-                                 L"[DISKMGMT-TB] LoadString FAILED for button %u, strId=%u\n",
-                                 Index, DmMainToolbarButtonTextIds[Index]);
-                OutputDebugStringW(DbgBuf);
                 ButtonText[Index][0] = UNICODE_NULL;
             }
 
@@ -633,14 +585,6 @@ DmMainWndCreateToolbar(
                  0,
                  0);
 
-    GetWindowRect(Info->hToolbar, &rcTb);
-    StringCchPrintfW(DbgBuf, ARRAYSIZE(DbgBuf),
-                     L"[DISKMGMT-TB] After AUTOSIZE: rect=(%ld,%ld)-(%ld,%ld) h=%ld, visible=%d, btnCount=%lld\n",
-                     rcTb.left, rcTb.top, rcTb.right, rcTb.bottom,
-                     rcTb.bottom - rcTb.top,
-                     IsWindowVisible(Info->hToolbar),
-                     (LONGLONG)SendMessageW(Info->hToolbar, TB_BUTTONCOUNT, 0, 0));
-    OutputDebugStringW(DbgBuf);
     return TRUE;
 }
 

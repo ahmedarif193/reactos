@@ -473,10 +473,6 @@ LRESULT
 OnCreate(
     _In_ PMAIN_WND_INFO Info)
 {
-    WCHAR DbgBuf[256];
-
-    OutputDebugStringW(L"[DISKMGMT] OnCreate: ENTER\n");
-
     Info->hMenu = GetMenu(Info->hMainWnd);
 
     /* Use the system message font (Tahoma / Segoe UI class) everywhere
@@ -500,37 +496,16 @@ OnCreate(
     Info->FocusTarget = DmViewTargetTop;
 
     if (!DmMainWndCreateStatusBar(Info))
-    {
-        OutputDebugStringW(L"[DISKMGMT] CreateStatusBar FAILED\n");
         return -1;
-    }
-    OutputDebugStringW(L"[DISKMGMT] StatusBar OK\n");
 
     if (!DmMainWndCreateToolbar(Info))
-    {
-        OutputDebugStringW(L"[DISKMGMT] CreateToolbar FAILED\n");
         return -1;
-    }
-
-    StringCchPrintfW(DbgBuf, ARRAYSIZE(DbgBuf),
-                     L"[DISKMGMT] Toolbar OK: hwnd=%p visible=%d\n",
-                     (void *)Info->hToolbar,
-                     IsWindowVisible(Info->hToolbar));
-    OutputDebugStringW(DbgBuf);
 
     if (!DmMainWndCreateVolumeView(Info))
-    {
-        OutputDebugStringW(L"[DISKMGMT] CreateVolumeView FAILED\n");
         return -1;
-    }
-    OutputDebugStringW(L"[DISKMGMT] VolumeView OK\n");
 
     if (!DmMainWndCreateDiskView(Info))
-    {
-        OutputDebugStringW(L"[DISKMGMT] CreateDiskView FAILED\n");
         return -1;
-    }
-    OutputDebugStringW(L"[DISKMGMT] DiskView OK\n");
 
     if (Info->hUiFont != NULL)
     {
@@ -540,11 +515,9 @@ OnCreate(
     }
 
     DmMainWndLayoutMainWindow(Info);
-    OutputDebugStringW(L"[DISKMGMT] Layout done, starting refresh\n");
 
     DmMainWndExecuteCommand(Info, IDM_ACTION_REFRESH);
     DmMainWndUpdateMenuState(Info);
-    OutputDebugStringW(L"[DISKMGMT] OnCreate: DONE\n");
     return 0;
 }
 
