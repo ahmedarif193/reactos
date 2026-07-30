@@ -25,6 +25,7 @@ typedef struct _DEVICE_EXTENSION
     LIST_ENTRY SavedLinksListHead;
     BOOLEAN ProcessedSuggestions;
     BOOLEAN NoAutoMount;
+    BOOLEAN IsMiniNt;
     LIST_ENTRY WorkerQueueListHead;
     KSEMAPHORE WorkerSemaphore;
     LONG WorkerReferences;

@@ -513,9 +513,10 @@ MountMgrNextDriveLetterWorker(IN PDEVICE_EXTENSION DeviceExtension,
         }
     }
 
-    /* If automount is disabled, and the device is not removable
-     * but needs a drive letter, don't assign one and bail out */
-    if (DeviceExtension->NoAutoMount && !Removable)
+    /* MiniNT keeps all unregistered volumes, including removable media,
+     * unassigned. Normal no-automount mode still permits removable media. */
+    if (DeviceExtension->NoAutoMount &&
+        (!Removable || DeviceExtension->IsMiniNt))
     {
         if (DriveLetterInfo->DriveLetterWasAssigned)
         {
