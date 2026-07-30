@@ -8,6 +8,207 @@
 
 #include "ntfspch.h"
 
+typedef struct _NTFS_VOLUME_IO_CONTEXT
+{
+    PFILE_OBJECT FileObject;
+    LARGE_INTEGER ByteOffset;
+} NTFS_VOLUME_IO_CONTEXT, *PNTFS_VOLUME_IO_CONTEXT;
+
+static
+NTSTATUS
+NTAPI
+NtfsVolumeIoCompletion(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp,
+    _In_ PVOID Context)
+{
+    PNTFS_VOLUME_IO_CONTEXT IoContext =
+        (PNTFS_VOLUME_IO_CONTEXT)Context;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    if (NT_SUCCESS(Irp->IoStatus.Status) &&
+        (IoContext->FileObject->Flags & FO_SYNCHRONOUS_IO))
+    {
+        IoContext->FileObject->CurrentByteOffset.QuadPart =
+            IoContext->ByteOffset.QuadPart +
+            Irp->IoStatus.Information;
+    }
+
+    ExFreePoolWithTag(IoContext, TAG_NTFS);
+    if (Irp->PendingReturned)
+        IoMarkIrpPending(Irp);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NtfsForwardVolumeIo(
+    _In_ PVolumeContextBlock VolCB,
+    _In_ PFileContextBlock FileCB,
+    _Inout_ PIRP Irp,
+    _In_ BOOLEAN Write)
+{
+    PIO_STACK_LOCATION IrpSp;
+    PIO_STACK_LOCATION NextIrpSp;
+    PFILE_OBJECT FileObject;
+    PNTFS_VOLUME_IO_CONTEXT IoContext;
+    LARGE_INTEGER ByteOffset;
+    PVOID Buffer;
+    PMDL Mdl;
+    ULONG Length;
+    NTSTATUS Status;
+
+    IrpSp = IoGetCurrentIrpStackLocation(Irp);
+    FileObject = IrpSp->FileObject;
+    ByteOffset = Write ? IrpSp->Parameters.Write.ByteOffset
+                       : IrpSp->Parameters.Read.ByteOffset;
+    Length = Write ? IrpSp->Parameters.Write.Length
+                   : IrpSp->Parameters.Read.Length;
+    Irp->IoStatus.Information = 0;
+
+    if (!VolCB || !FileCB || !FileCB->IsVolumeOpen ||
+        !FileObject || !VolCB->StorageDevice ||
+        !VolCB->BytesPerSector)
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto Complete;
+    }
+    if (FileCB->CleanupComplete)
+    {
+        Status = STATUS_FILE_CLOSED;
+        goto Complete;
+    }
+    if (Write)
+    {
+        if (!(FileCB->DesiredAccess &
+              (FILE_WRITE_DATA | FILE_APPEND_DATA)))
+        {
+            Status = STATUS_ACCESS_DENIED;
+            goto Complete;
+        }
+        if (NtfsVolumeIsReadOnly(VolCB->DiskVolume))
+        {
+            Status = STATUS_MEDIA_WRITE_PROTECTED;
+            goto Complete;
+        }
+
+        ExAcquireFastMutex(&VolCB->VolumeStateMutex);
+        if (VolCB->Dismounted)
+            Status = STATUS_VOLUME_DISMOUNTED;
+        else if (VolCB->Dismounting)
+            Status = STATUS_DEVICE_BUSY;
+        else if (VolCB->VolumeLockOwner != FileObject)
+            Status = STATUS_ACCESS_DENIED;
+        else
+            Status = STATUS_SUCCESS;
+        ExReleaseFastMutex(&VolCB->VolumeStateMutex);
+        if (!NT_SUCCESS(Status))
+            goto Complete;
+    }
+    else if (!(FileCB->DesiredAccess & FILE_READ_DATA))
+    {
+        Status = STATUS_ACCESS_DENIED;
+        goto Complete;
+    }
+
+    if (ByteOffset.QuadPart < 0 ||
+        (ByteOffset.QuadPart % VolCB->BytesPerSector) != 0 ||
+        (Length % VolCB->BytesPerSector) != 0)
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto Complete;
+    }
+    if (Length == 0)
+    {
+        Status = STATUS_SUCCESS;
+        goto Complete;
+    }
+
+    if (Irp->MdlAddress)
+    {
+        if (Irp->MdlAddress->Next ||
+            MmGetMdlByteCount(Irp->MdlAddress) < Length)
+        {
+            Status = STATUS_INVALID_USER_BUFFER;
+            goto Complete;
+        }
+    }
+    else
+    {
+        Buffer = Irp->AssociatedIrp.SystemBuffer
+            ? Irp->AssociatedIrp.SystemBuffer
+            : Irp->UserBuffer;
+        if (!Buffer)
+        {
+            Status = STATUS_INVALID_USER_BUFFER;
+            goto Complete;
+        }
+
+        Mdl = IoAllocateMdl(Buffer,
+                            Length,
+                            FALSE,
+                            FALSE,
+                            Irp);
+        if (!Mdl)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Complete;
+        }
+
+        Status = STATUS_SUCCESS;
+        _SEH2_TRY
+        {
+            MmProbeAndLockPages(
+                Mdl,
+                Irp->AssociatedIrp.SystemBuffer
+                    ? KernelMode
+                    : Irp->RequestorMode,
+                Write ? IoReadAccess : IoWriteAccess);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+
+        if (!NT_SUCCESS(Status))
+        {
+            Irp->MdlAddress = NULL;
+            IoFreeMdl(Mdl);
+            goto Complete;
+        }
+    }
+
+    IoContext = (PNTFS_VOLUME_IO_CONTEXT)
+        ExAllocatePoolZero(NonPagedPool,
+                           sizeof(*IoContext),
+                           TAG_NTFS);
+    if (!IoContext)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Complete;
+    }
+    IoContext->FileObject = FileObject;
+    IoContext->ByteOffset = ByteOffset;
+
+    IoCopyCurrentIrpStackLocationToNext(Irp);
+    NextIrpSp = IoGetNextIrpStackLocation(Irp);
+    NextIrpSp->Flags |= SL_OVERRIDE_VERIFY_VOLUME;
+    NextIrpSp->FileObject = NULL;
+    IoSetCompletionRoutine(Irp,
+                           NtfsVolumeIoCompletion,
+                           IoContext,
+                           TRUE,
+                           TRUE,
+                           TRUE);
+    return IoCallDriver(VolCB->StorageDevice, Irp);
+
+Complete:
+    Irp->IoStatus.Status = Status;
+    IoCompleteRequest(Irp, IO_DISK_INCREMENT);
+    return Status;
+}
+
 //TODO: This shouldn't really be needed. Honestly there's something wrong with this.
 NTSTATUS
 NTAPI

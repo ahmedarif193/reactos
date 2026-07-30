@@ -53,6 +53,10 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     }
 
     FileCB = (PFileContextBlock)FileObj->FsContext;
+    VolCB = (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
+    if (FileCB->IsVolumeOpen)
+        return NtfsForwardVolumeIo(VolCB, FileCB, Irp, TRUE);
+
     FileRec = FileCB->FileRec;
     if (!FileRec)
     {
@@ -60,7 +64,6 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         goto Complete;
     }
 
-    VolCB = (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
     DiskVolume = VolCB->DiskVolume;
     if (!DiskVolume)
     {
