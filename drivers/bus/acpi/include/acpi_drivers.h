@@ -151,6 +151,9 @@ void acpi_ec_exit (void);
 #define ACPI_FAN_FILE_STATE		"state"
 #define ACPI_FAN_NOTIFY_STATUS		0x80
 
+int acpi_fan_init(void);
+void acpi_fan_exit(void);
+
 
 /* --------------------------------------------------------------------------
                                        PCI
