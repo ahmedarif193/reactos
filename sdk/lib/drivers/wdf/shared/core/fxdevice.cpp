@@ -438,6 +438,13 @@ FxDevice::_Create(
         goto Done;
     }
 
+    if (pInit->CxContextObject != NULL) {
+        status = pInit->CxContextObject->MoveContexts(pDevice);
+        if (!NT_SUCCESS(status)) {
+            goto Done;
+        }
+    }
+
     //
     // NOTE: ---> DO NOT FAIL FROM HERE FORWARD <---
     //

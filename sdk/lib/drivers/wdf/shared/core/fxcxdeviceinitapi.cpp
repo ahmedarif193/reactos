@@ -502,5 +502,58 @@ Done:
     return cxDeviceInit;
 }
 
-} // extern "C"
+_Must_inspect_result_
+__drv_maxIRQL(DISPATCH_LEVEL)
+NTSTATUS
+NTAPI
+WDFEXPORT(WdfCxDeviceInitAllocateContext)(
+    _In_ PWDF_DRIVER_GLOBALS DriverGlobals,
+    _In_ PWDFDEVICE_INIT DeviceInit,
+    _In_ PWDF_OBJECT_ATTRIBUTES ContextAttributes,
+    _Outptr_opt_ PVOID* Context
+    )
+{
+    PFX_DRIVER_GLOBALS clientGlobals;
+    PFX_DRIVER_GLOBALS cxGlobals;
+    NTSTATUS status;
 
+    cxGlobals = GetFxDriverGlobals(DriverGlobals);
+    FxPointerNotNull(cxGlobals, DeviceInit);
+    clientGlobals = DeviceInit->DriverGlobals;
+
+    status = FxValiateCx(clientGlobals, cxGlobals);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
+    return DeviceInit->AllocateCxContext(cxGlobals,
+                                         ContextAttributes,
+                                         Context);
+}
+
+__drv_maxIRQL(DISPATCH_LEVEL + 1)
+PVOID
+NTAPI
+WDFEXPORT(WdfCxDeviceInitGetTypedContextWorker)(
+    _In_ PWDF_DRIVER_GLOBALS DriverGlobals,
+    _In_ PWDFDEVICE_INIT DeviceInit,
+    _In_ PCWDF_OBJECT_CONTEXT_TYPE_INFO TypeInfo
+    )
+{
+    PFX_DRIVER_GLOBALS clientGlobals;
+    PFX_DRIVER_GLOBALS cxGlobals;
+    NTSTATUS status;
+
+    cxGlobals = GetFxDriverGlobals(DriverGlobals);
+    FxPointerNotNull(cxGlobals, DeviceInit);
+    clientGlobals = DeviceInit->DriverGlobals;
+
+    status = FxValiateCx(clientGlobals, cxGlobals);
+    if (!NT_SUCCESS(status)) {
+        return NULL;
+    }
+
+    return DeviceInit->GetCxTypedContext(TypeInfo);
+}
+
+} // extern "C"
