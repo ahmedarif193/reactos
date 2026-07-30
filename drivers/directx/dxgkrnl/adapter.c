@@ -60,6 +60,7 @@
 #include "submit_reservation_core.h"
 #include "hotplug_work_core.h"
 
+#include <ndk/inbvfuncs.h>
 #include <reactos/arc/arc.h>
 /*
  * ntddvdeo.h is already included via dxgkrnl_private.h (before INITGUID),
@@ -82,9 +83,9 @@ const GUID GUID_DISPLAY_DEVICE_ARRIVAL =
 /* ========================================================================
  * InbV forward declarations
  *
- * These functions are exported by ntoskrnl but not declared in public SDK
- * headers.  We forward-declare them here rather than pulling in the full
- * internal inbv.h to keep the dependency boundary clean.
+ * The GOP helpers are exported by ntoskrnl but not declared in public SDK
+ * headers.  Forward-declare only those helpers here; display-ownership
+ * functions come from the NDK InbV interface.
  * ====================================================================== */
 
 BOOLEAN
@@ -95,10 +96,6 @@ BOOLEAN
 NTAPI
 InbvGetGopFrameBufferInfo(
     _Out_ PLOADER_PARAMETER_FRAMEBUFFER FrameBufferInfo);
-
-VOID
-NTAPI
-InbvAcquireDisplayOwnership(VOID);
 
 /* ========================================================================
  * POST (boot) display ownership
@@ -5968,10 +5965,11 @@ DxgkCbAcquirePostDisplayOwnership(
 
     /*
      * Transfer display ownership from InbV to the miniport.
-     * After this call InbV stops writing to the framebuffer.
+     * This synchronously stops the boot animation before InbV marks the
+     * display lost, so no boot-video thread can write after the handoff.
      */
     StepStart100ns = DxgkpTraceNow100ns();
-    InbvAcquireDisplayOwnership();
+    InbvNotifyDisplayOwnershipLost(NULL);
     OwnershipUs = DxgkpTraceElapsedUs(StepStart100ns);
 
     DxgkpSetPostDisplayOwner((PDXGKRNL_ADAPTER)DeviceHandle);
