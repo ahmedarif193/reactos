@@ -1,0 +1,34 @@
+diff --git a/NetworkPkg/NetworkPkg.dsc b/NetworkPkg/NetworkPkg.dsc
+index 96d13050eb..d11034dd19 100644
+--- a/NetworkPkg/NetworkPkg.dsc
++++ b/NetworkPkg/NetworkPkg.dsc
+@@ -84,8 +84,8 @@
+ [PcdsFixedAtBuild]
+   gEfiMdePkgTokenSpaceGuid.PcdDebugPropertyMask|0x2f
+   gEfiMdePkgTokenSpaceGuid.PcdDebugPrintErrorLevel|0x80000000
+-
+-[PcdsDynamicDefault]
++  # Fixed (was PcdsDynamicDefault): standalone drivers loaded on foreign
++  # firmware must not touch a dynamic PCD database (LattePanda Mu HTTP boot).
+   gEfiNetworkPkgTokenSpaceGuid.PcdHttpIoTimeout|5000
+ 
+ ###################################################################################################
+diff --git a/NetworkPkg/TcpDxe/TcpOutput.c b/NetworkPkg/TcpDxe/TcpOutput.c
+index 294c8956fe..20a2be7cf4 100644
+--- a/NetworkPkg/TcpDxe/TcpOutput.c
++++ b/NetworkPkg/TcpDxe/TcpOutput.c
+@@ -1052,7 +1052,13 @@ TcpToSendAck (
+   //   2. Packets received out of order.
+   //   3. Receiving window is open.
+   //
+-  if (TCP_FLG_ON (Tcb->CtrlFlag, TCP_CTRL_ACK_NOW) || (Tcb->DelayedAck >= 1)) {
++  // LattePanda Mu HTTP boot: stretch ACKs to every 8th segment instead of
++  // every 2nd. In this polled pre-OS stack each ACK transmit costs a full
++  // trip through TCP/IP/MNP/UNDI and dominates the per-packet budget at
++  // gigabit rates; senders handle stretch ACKs fine (ABC, RFC 3465) and
++  // the delayed-ACK timer still bounds ACK latency for sparse traffic.
++  //
++  if (TCP_FLG_ON (Tcb->CtrlFlag, TCP_CTRL_ACK_NOW) || (Tcb->DelayedAck >= 7)) {
+     TcpSendAck (Tcb);
+     return;
+   }

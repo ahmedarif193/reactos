@@ -1,0 +1,3 @@
+# Patches carry the upstream files' own line endings (the DSC is CRLF);
+# normalization would break git apply.
+*.patch -text
