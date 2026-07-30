@@ -491,6 +491,95 @@ DxgkVidPnReleaseProcessOwners(
     return STATUS_SUCCESS;
 }
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+NTSTATUS
+DxgkVidPnQueryExclusiveOwnership(
+    _In_ HANDLE ProcessId,
+    _In_ CONST LUID *QueryAdapterLuid,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID QueryVidPnSourceId,
+    _Out_ D3DDDI_VIDEO_PRESENT_SOURCE_ID *ResultVidPnSourceId,
+    _Out_ LUID *ResultAdapterLuid,
+    _Out_ D3DKMT_VIDPNSOURCEOWNER_TYPE *OwnerType)
+{
+    PLIST_ENTRY Entry;
+    PDXGKP_VIDPN_SOURCE_OWNER Owner;
+    PEPROCESS Process = NULL;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (QueryAdapterLuid == NULL ||
+        ResultVidPnSourceId == NULL ||
+        ResultAdapterLuid == NULL ||
+        OwnerType == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    *ResultVidPnSourceId = D3DDDI_ID_UNINITIALIZED;
+    RtlZeroMemory(ResultAdapterLuid, sizeof(*ResultAdapterLuid));
+    *OwnerType = D3DKMT_VIDPNSOURCEOWNER_UNOWNED;
+
+    if (ProcessId == NULL)
+        return STATUS_INVALID_HANDLE;
+
+    Status = PsLookupProcessByProcessId(ProcessId, &Process);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    /*
+     * QueryVidPnExclusiveOwnership does not turn a yieldable SHARED owner into
+     * an exclusive one.  Native reports only EXCLUSIVE, EXCLUSIVEGDI, and
+     * EMULATED here; no match is a successful query with the defaults above.
+     *
+     * Device teardown removes an owner while holding this same mutex before
+     * the final device reference is released, so OwnerDevice and its adapter
+     * remain stable for the duration of the lookup.
+     */
+    DxgkpEnsureSourceOwnerMutex();
+    ExAcquireFastMutex(&g_SourceOwnerMutex);
+    for (Entry = g_SourceOwnerAdapterList.Flink;
+         Entry != &g_SourceOwnerAdapterList;
+         Entry = Entry->Flink)
+    {
+        PDXGKP_SOURCE_OWNER_ADAPTER_STATE State =
+            CONTAINING_RECORD(
+                Entry,
+                DXGKP_SOURCE_OWNER_ADAPTER_STATE,
+                Entry);
+
+        if (State->Adapter != NULL &&
+            State->Adapter->AdapterLuid.LowPart ==
+                QueryAdapterLuid->LowPart &&
+            State->Adapter->AdapterLuid.HighPart ==
+                QueryAdapterLuid->HighPart &&
+            QueryVidPnSourceId < DXGKP_MAX_SOURCES)
+        {
+            Owner = &State->Owners[QueryVidPnSourceId];
+            if (Owner->OwnerDevice != NULL &&
+                Owner->OwnerDevice->OwnerProcess == Process &&
+                InterlockedCompareExchange(
+                    &Owner->OwnerDevice->Destroying, 0, 0) == 0 &&
+                (Owner->OwnerType ==
+                     D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVE ||
+                 Owner->OwnerType ==
+                     D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVEGDI ||
+                 Owner->OwnerType ==
+                     D3DKMT_VIDPNSOURCEOWNER_EMULATED))
+            {
+                *ResultVidPnSourceId = QueryVidPnSourceId;
+                *ResultAdapterLuid = State->Adapter->AdapterLuid;
+                *OwnerType = Owner->OwnerType;
+            }
+            break;
+        }
+    }
+    ExReleaseFastMutex(&g_SourceOwnerMutex);
+    ObDereferenceObject(Process);
+    return STATUS_SUCCESS;
+}
+#endif
+
 /* ========================================================================
  * Handle validation helpers
  * ====================================================================== */
