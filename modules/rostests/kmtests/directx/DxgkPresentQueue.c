@@ -5,6 +5,8 @@
  */
 
 #include <kmt_test.h>
+#include "present_contract_core.h"
+#include "present_dma_core.h"
 #include "present_queue_core.h"
 
 #define DXGK_PRESENT_QUEUE_TEST_CAPACITY 5
@@ -36,6 +38,276 @@ typedef struct _DXGK_PRESENT_QUEUE_TEST_MATCH
     PVOID Device;
     PVOID Context;
 } DXGK_PRESENT_QUEUE_TEST_MATCH, *PDXGK_PRESENT_QUEUE_TEST_MATCH;
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+static VOID
+DxgkPresentQueueTestRefreshTargets(VOID)
+{
+    ok_bool_true(DxgkPresentCoreRefreshTargetReached(17, 17),
+                 "equal refresh target is reached");
+    ok_bool_true(DxgkPresentCoreRefreshTargetReached(18, 17),
+                 "past refresh target is reached");
+    ok_bool_false(DxgkPresentCoreRefreshTargetReached(16, 17),
+                  "future refresh target remains pending");
+
+    ok_bool_true(DxgkPresentCoreRefreshTargetReached(0, MAXULONG),
+                 "serial comparison crosses wrap for the preceding target");
+    ok_bool_false(DxgkPresentCoreRefreshTargetReached(MAXULONG, 0),
+                  "serial comparison keeps the post-wrap target pending");
+    ok_bool_true(DxgkPresentCoreRefreshTargetReached(1, MAXULONG),
+                 "serial comparison remains reached after wrap");
+
+    ok_bool_false(
+        DxgkPresentCoreRefreshTargetShouldSignalImmediately(0, 0),
+        "zero target waits for the next vblank at startup");
+    ok_bool_false(
+        DxgkPresentCoreRefreshTargetShouldSignalImmediately(42, 0),
+        "zero target always waits for the next vblank");
+    ok_bool_true(
+        DxgkPresentCoreRefreshTargetShouldSignalImmediately(42, 41),
+        "passed nonzero target signals immediately");
+    ok_bool_true(
+        DxgkPresentCoreRefreshTargetShouldSignalImmediately(42, 42),
+        "equal nonzero target signals immediately");
+    ok_bool_false(
+        DxgkPresentCoreRefreshTargetShouldSignalImmediately(42, 43),
+        "future nonzero target remains pending");
+}
+#endif
+
+static VOID
+DxgkPresentQueueTestDmaGeometry(VOID)
+{
+    DXGK_PRESENT_DMA_GEOMETRY Geometry;
+    UCHAR GuardedPrivateData[66];
+    UCHAR GuardedAllocationList[26];
+    SIZE_T AllocationListBytes;
+    NTSTATUS Status;
+    ULONG Index;
+
+    Status = DxgkPresentDmaCoreSelectGeometry(
+                 TRUE, 8192, 0, 64, 256, 256, 64, &Geometry);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_ulong(Geometry.DmaBufferSize, 8192);
+    ok_eq_ulong(Geometry.DmaBufferPrivateDataSize, 64);
+    ok_eq_ulong(Geometry.AllocationListSize, 256);
+    ok_eq_ulong(Geometry.PatchLocationListSize, 64);
+    ok_bool_true(Geometry.Declared, "context geometry remains declared");
+
+    RtlFillMemory(GuardedPrivateData, sizeof(GuardedPrivateData), 0xa5);
+    Status = DxgkPresentDmaCoreInitializePrivateData(
+                 &GuardedPrivateData[1], 64);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_ulong(GuardedPrivateData[0], 0xa5);
+    ok_eq_ulong(GuardedPrivateData[65], 0xa5);
+    for (Index = 1; Index <= 64; ++Index)
+        ok_eq_ulong(GuardedPrivateData[Index], 0);
+
+    Status = DxgkPresentDmaCoreAllocationListBytes(
+                 DXGK_PRESENT_DMA_MIN_ALLOCATIONS, 8, &AllocationListBytes);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_size(AllocationListBytes, 24);
+    RtlFillMemory(GuardedAllocationList, sizeof(GuardedAllocationList), 0x5a);
+    Status = DxgkPresentDmaCoreInitializeAllocationList(
+                 &GuardedAllocationList[1], AllocationListBytes);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_ulong(GuardedAllocationList[0], 0x5a);
+    ok_eq_ulong(GuardedAllocationList[25], 0x5a);
+    for (Index = 1; Index <= 24; ++Index)
+        ok_eq_ulong(GuardedAllocationList[Index], 0);
+
+    Status = DxgkPresentDmaCoreSelectGeometry(
+                 TRUE, 8192, 0, 0, 3, 2, 64, &Geometry);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_ulong(Geometry.DmaBufferPrivateDataSize, 0);
+    Status = DxgkPresentDmaCoreInitializePrivateData(NULL, 0);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = DxgkPresentDmaCoreInitializePrivateData(
+                 &GuardedPrivateData[1], 0);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+
+    Status = DxgkPresentDmaCoreSelectGeometry(
+                 FALSE, 0, 0, 0, 0, 0, 64, &Geometry);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_ulong(Geometry.DmaBufferSize, DXGK_PRESENT_DMA_COMPAT_BYTES);
+    ok_eq_ulong(Geometry.DmaBufferPrivateDataSize, 0);
+    ok_bool_false(Geometry.Declared, "missing legacy pInfo uses compatibility geometry");
+
+    Status = DxgkPresentDmaCoreSelectGeometry(
+                 TRUE, 0, 0, 0, 3, 2, 64, &Geometry);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    Status = DxgkPresentDmaCoreSelectGeometry(
+                 TRUE, DXGK_PRESENT_DMA_MAX_BYTES + 1, 0, 0, 3, 2,
+                 64, &Geometry);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    Status = DxgkPresentDmaCoreSelectGeometry(
+                 TRUE, 8192, 0, DXGK_PRESENT_DMA_MAX_PRIVATE_BYTES + 1,
+                 3, 2, 64, &Geometry);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    Status = DxgkPresentDmaCoreSelectGeometry(
+                 TRUE, 8192, 1, 0, 3, 2, 64, &Geometry);
+    ok_eq_hex(Status, STATUS_NOT_SUPPORTED);
+    Status = DxgkPresentDmaCoreSelectGeometry(
+                 TRUE, 8192, 0, 0,
+                 DXGK_PRESENT_DMA_MAX_ALLOCATIONS + 1, 2, 64, &Geometry);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    Status = DxgkPresentDmaCoreAllocationListBytes(
+                 DXGK_PRESENT_DMA_MIN_ALLOCATIONS,
+                 (SIZE_T)MAXULONG_PTR,
+                 &AllocationListBytes);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+}
+
+static VOID
+DxgkPresentQueueTestContract(VOID)
+{
+    static const RECT SourceSubRects[] =
+    {
+        { 10, 20, 35, 45 },
+        { 60, 70, 110, 120 }
+    };
+    RECT SourceRect = { 10, 20, 110, 120 };
+    RECT DestinationRect = { 200, 300, 400, 500 };
+    RECT DestinationSubRects[RTL_NUMBER_OF(SourceSubRects)];
+    RECT FractionalSourceRect = { 0, 0, 3, 3 };
+    RECT FractionalDestinationRect = { 0, 0, 10, 10 };
+    RECT FractionalSubRect = { 0, 0, 1, 1 };
+    RECT InvalidSubRect = { 9, 20, 35, 45 };
+    DXGK_PRESENT_SCANOUT_RETIRE_POLICY RetirePolicy;
+    UINT OverlayHandle;
+    NTSTATUS Status;
+
+    RtlZeroMemory(DestinationSubRects, sizeof(DestinationSubRects));
+    Status = DxgkPresentCoreMapSourceSubRects(
+                 &SourceRect,
+                 &DestinationRect,
+                 SourceSubRects,
+                 RTL_NUMBER_OF(SourceSubRects),
+                 DestinationSubRects,
+                 RTL_NUMBER_OF(DestinationSubRects));
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_long(DestinationSubRects[0].left, 200);
+    ok_eq_long(DestinationSubRects[0].top, 300);
+    ok_eq_long(DestinationSubRects[0].right, 250);
+    ok_eq_long(DestinationSubRects[0].bottom, 350);
+    ok_eq_long(DestinationSubRects[1].left, 300);
+    ok_eq_long(DestinationSubRects[1].top, 400);
+    ok_eq_long(DestinationSubRects[1].right, 400);
+    ok_eq_long(DestinationSubRects[1].bottom, 500);
+
+    Status = DxgkPresentCoreMapSourceSubRects(
+                 &FractionalSourceRect,
+                 &FractionalDestinationRect,
+                 &FractionalSubRect,
+                 1,
+                 DestinationSubRects,
+                 RTL_NUMBER_OF(DestinationSubRects));
+    ok_eq_hex(Status, STATUS_NOT_SUPPORTED);
+
+    Status = DxgkPresentCoreMapSourceSubRects(
+                 &SourceRect,
+                 &DestinationRect,
+                 &InvalidSubRect,
+                 1,
+                 DestinationSubRects,
+                 RTL_NUMBER_OF(DestinationSubRects));
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+
+    Status = DxgkPresentCoreMapSourceSubRects(
+                 &SourceRect,
+                 &DestinationRect,
+                 SourceSubRects,
+                 RTL_NUMBER_OF(SourceSubRects),
+                 DestinationSubRects,
+                 1);
+    ok_eq_hex(Status, STATUS_NOT_SUPPORTED);
+
+    DestinationSubRects[0] = DestinationRect;
+    Status = DxgkPresentCoreCopyDestinationSubRects(
+                 &DestinationRect,
+                 DestinationSubRects,
+                 1,
+                 DestinationSubRects,
+                 1);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+
+    ok_bool_true(DxgkPresentCoreIsFullDestinationRegion(
+                     &DestinationRect,
+                     NULL,
+                     0),
+                 "implicit full destination");
+    ok_bool_true(DxgkPresentCoreIsFullDestinationRegion(
+                     &DestinationRect,
+                     DestinationSubRects,
+                     1),
+                 "single explicit full destination");
+    DestinationSubRects[0].right--;
+    ok_bool_false(DxgkPresentCoreIsFullDestinationRegion(
+                      &DestinationRect,
+                      DestinationSubRects,
+                      1),
+                  "partial destination is not widened");
+
+    OverlayHandle = 0x12345678;
+    Status = DxgkPresentCoreCompleteUnsupportedOverlayCreate(
+                 STATUS_SUCCESS,
+                 &OverlayHandle);
+    ok_eq_hex(Status, STATUS_NOT_SUPPORTED);
+    ok_eq_ulong(OverlayHandle, 0);
+    OverlayHandle = 0x12345678;
+    Status = DxgkPresentCoreCompleteUnsupportedOverlayCreate(
+                 STATUS_INVALID_HANDLE,
+                 &OverlayHandle);
+    ok_eq_hex(Status, STATUS_INVALID_HANDLE);
+    ok_eq_ulong(OverlayHandle, 0);
+
+    ok_bool_false(DxgkPresentCoreMpoV1Supported(
+                      1300, TRUE, TRUE, FALSE, FALSE),
+                  "internal miniport MPO is not a KMT MPO path");
+    ok_bool_false(DxgkPresentCoreMpoV1Supported(
+                      1200, TRUE, TRUE, TRUE, TRUE),
+                  "MPO v1 query is unavailable below WDDM 1.3");
+    ok_bool_true(DxgkPresentCoreMpoV1Supported(
+                     1300, TRUE, TRUE, TRUE, TRUE),
+                 "complete WDDM 1.3 MPO path");
+
+    Status = DxgkPresentCoreEvaluateScanoutRetirement(
+                 TRUE, FALSE, TRUE, FALSE, FALSE, &RetirePolicy);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_bool_false(RetirePolicy.RefreshSharedPrimary,
+                  "flip does not refresh a destination");
+    ok_bool_true(RetirePolicy.ProgramSource,
+                 "flip programs its source after retirement");
+    ok_bool_true(RetirePolicy.HoldSharedSurfaceRundown,
+                 "flip keeps the VidPN generation stable");
+
+    Status = DxgkPresentCoreEvaluateScanoutRetirement(
+                 FALSE, TRUE, TRUE, TRUE, TRUE, &RetirePolicy);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_bool_true(RetirePolicy.RefreshSharedPrimary,
+                 "blit or fill refreshes a shared-primary destination");
+    ok_bool_false(RetirePolicy.ProgramSource,
+                  "destination write does not flip its source");
+    ok_bool_true(RetirePolicy.HoldSharedSurfaceRundown,
+                 "shared-primary refresh keeps its generation stable");
+
+    Status = DxgkPresentCoreEvaluateScanoutRetirement(
+                 FALSE, TRUE, TRUE, TRUE, FALSE, &RetirePolicy);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_bool_false(RetirePolicy.RefreshSharedPrimary,
+                  "ordinary destination needs no scanout refresh");
+    ok_bool_false(RetirePolicy.ProgramSource,
+                  "ordinary destination needs no source flip");
+    ok_bool_false(RetirePolicy.HoldSharedSurfaceRundown,
+                  "ordinary destination holds no shared-surface rundown");
+
+    Status = DxgkPresentCoreEvaluateScanoutRetirement(
+                 TRUE, FALSE, FALSE, FALSE, FALSE, &RetirePolicy);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    Status = DxgkPresentCoreEvaluateScanoutRetirement(
+                 TRUE, FALSE, TRUE, TRUE, FALSE, &RetirePolicy);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+}
 
 static BOOLEAN NTAPI DxgkPresentQueueTestMatch(_In_ const VOID *OpaqueEntry, _In_opt_ PVOID OpaqueContext)
 {
@@ -155,6 +427,11 @@ START_TEST(DxgkPresentQueue)
     DXGK_PRESENT_QUEUE_TEST_ENTRY Entry;
     ULONG Index;
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+    DxgkPresentQueueTestRefreshTargets();
+#endif
+    DxgkPresentQueueTestDmaGeometry();
+    DxgkPresentQueueTestContract();
     DxgkPresentQueueTestLimits();
 
     DxgkPresentQueueTestInitialize(&Queue);

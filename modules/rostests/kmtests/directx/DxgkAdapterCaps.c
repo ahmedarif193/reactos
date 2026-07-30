@@ -10,6 +10,7 @@
 
 #include <kmt_test.h>
 #include "object_core.h"
+#include "feature_query_core.h"
 
 static VOID InitInput(_Out_ PDXGK_CAPS_INPUT Input)
 {
@@ -208,12 +209,101 @@ static VOID TestInterfaceSelectorNormalization(VOID)
         "interface above bounded range");
 }
 
+static VOID
+TestFeatureQueryNegotiation(VOID)
+{
+    DXGK_FEATURE_QUERY_CORE_INPUT Input;
+    DXGK_FEATURE_QUERY_CORE_RESULT Result;
+
+    RtlZeroMemory(&Input, sizeof(Input));
+    Result.Version = MAXUSHORT;
+    Result.Value = MAXUSHORT;
+    ok_bool_true(DxgkFeatureQueryCoreEvaluate(&Input, &Result),
+                 "unknown feature result");
+    ok_eq_ulong(Result.Version, 0);
+    ok_eq_ulong(Result.Value, 0);
+
+    RtlZeroMemory(&Input, sizeof(Input));
+    Input.KnownFeature = TRUE;
+    Input.RequiresDriverSupport = TRUE;
+    ok_bool_true(DxgkFeatureQueryCoreEvaluate(&Input, &Result),
+                 "known but unsupported feature result");
+    ok_eq_ulong(Result.Version, 0);
+    ok_eq_ulong(Result.Value, DXGK_FEATURE_QUERY_RESULT_KNOWN);
+
+    /*
+     * Driver support remains observable even when the OS deliberately keeps
+     * a known feature disabled.  Version is meaningful only when Enabled is
+     * set.
+     */
+    Input.DriverResponseValid = TRUE;
+    Input.SupportedByDriver = TRUE;
+    Input.SupportedOnCurrentConfig = TRUE;
+    Input.DriverMinVersion = 1;
+    Input.DriverMaxVersion = 1;
+    ok_bool_true(DxgkFeatureQueryCoreEvaluate(&Input, &Result),
+                 "disabled OS with valid driver support");
+    ok_eq_ulong(Result.Version, 0);
+    ok_eq_ulong(Result.Value,
+                DXGK_FEATURE_QUERY_RESULT_KNOWN |
+                DXGK_FEATURE_QUERY_RESULT_SUPPORTED_BY_DRIVER |
+                DXGK_FEATURE_QUERY_RESULT_SUPPORTED_ON_CONFIG);
+
+    Input.DriverMinVersion = 2;
+    Input.DriverMaxVersion = 1;
+    ok_bool_false(DxgkFeatureQueryCoreEvaluate(&Input, &Result),
+                  "malformed driver version range");
+    ok_eq_ulong(Result.Version, 0);
+    ok_eq_ulong(Result.Value, 0);
+
+    RtlZeroMemory(&Input, sizeof(Input));
+    Input.KnownFeature = TRUE;
+    Input.RequiresDriverSupport = TRUE;
+    Input.OsSupported = TRUE;
+    Input.OsSupportedOnCurrentConfig = TRUE;
+    Input.OsMinVersion = 1;
+    Input.OsMaxVersion = 3;
+    Input.DriverResponseValid = TRUE;
+    Input.SupportedByDriver = TRUE;
+    Input.SupportedOnCurrentConfig = TRUE;
+    Input.DriverMinVersion = 2;
+    Input.DriverMaxVersion = 5;
+    ok_bool_true(DxgkFeatureQueryCoreEvaluate(&Input, &Result),
+                 "overlapping feature versions");
+    ok_eq_ulong(Result.Version, 3);
+    ok_eq_ulong(Result.Value, DXGK_FEATURE_QUERY_RESULT_VALID_MASK);
+
+    Input.DriverMinVersion = 4;
+    ok_bool_true(DxgkFeatureQueryCoreEvaluate(&Input, &Result),
+                 "non-overlapping feature versions");
+    ok_eq_ulong(Result.Version, 0);
+    ok_eq_ulong(Result.Value,
+                DXGK_FEATURE_QUERY_RESULT_KNOWN |
+                DXGK_FEATURE_QUERY_RESULT_SUPPORTED_BY_DRIVER |
+                DXGK_FEATURE_QUERY_RESULT_SUPPORTED_ON_CONFIG);
+
+    RtlZeroMemory(&Input, sizeof(Input));
+    Input.KnownFeature = TRUE;
+    Input.OsSupported = TRUE;
+    Input.OsSupportedOnCurrentConfig = TRUE;
+    Input.OsMinVersion = 1;
+    Input.OsMaxVersion = 1;
+    ok_bool_true(DxgkFeatureQueryCoreEvaluate(&Input, &Result),
+                 "OS-only feature result");
+    ok_eq_ulong(Result.Version, 1);
+    ok_eq_ulong(Result.Value,
+                DXGK_FEATURE_QUERY_RESULT_ENABLED |
+                DXGK_FEATURE_QUERY_RESULT_KNOWN |
+                DXGK_FEATURE_QUERY_RESULT_SUPPORTED_ON_CONFIG);
+}
+
 START_TEST(DxgkAdapterCaps)
 {
     TestVersionIsTheMinimum();
     TestRenderSupport();
     TestFeatureGating();
     TestInterfaceSelectorNormalization();
+    TestFeatureQueryNegotiation();
 }
 
 /* EOF */

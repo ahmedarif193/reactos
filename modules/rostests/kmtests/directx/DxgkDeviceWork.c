@@ -431,6 +431,44 @@ Cleanup:
     ok_bool_true(DxgkDeviceWorkCoreIsEmpty(&SecondOwner.Ledger), "second isolated ledger empty");
 }
 
+static VOID
+DxgkDeviceWorkTestConditionalTerminalTransition(VOID)
+{
+    DXGK_DEVICE_WORK_TEST_OWNER Owner;
+    DXGK_DEVICE_WORK_ITEM Work;
+    NTSTATUS Status;
+
+    DxgkDeviceWorkTestInitializeOwner(&Owner);
+    DxgkDeviceWorkCoreInitializeItem(&Work, &Owner.Ledger);
+
+    ok_bool_true(
+        DxgkDeviceWorkCoreTryTransitionTerminal(
+            &Owner.Ledger,
+            &Owner.ExecutionState,
+            DxgkDeviceWorkTestActive,
+            DxgkDeviceWorkTestReset),
+        "active owner takes the first terminal transition");
+    ok_eq_long(
+        InterlockedCompareExchange(&Owner.ExecutionState, 0, 0),
+        DxgkDeviceWorkTestReset);
+    ok_bool_false(
+        DxgkDeviceWorkCoreTryTransitionTerminal(
+            &Owner.Ledger,
+            &Owner.ExecutionState,
+            DxgkDeviceWorkTestActive,
+            DxgkDeviceWorkTestStopped),
+        "late terminal transition cannot overwrite the winner");
+    ok_eq_long(
+        InterlockedCompareExchange(&Owner.ExecutionState, 0, 0),
+        DxgkDeviceWorkTestReset);
+
+    Status = DxgkDeviceWorkCoreActivate(&Work);
+    ok_eq_hex(Status, STATUS_DEVICE_REMOVED);
+    ok_eq_long(
+        InterlockedCompareExchange(&Work.State, 0, 0),
+        DxgkDeviceWorkItemDormant);
+}
+
 START_TEST(DxgkDeviceWork)
 {
     DxgkDeviceWorkTestDormantIdempotentOverflow();
@@ -442,4 +480,5 @@ START_TEST(DxgkDeviceWork)
     DxgkDeviceWorkTestTerminalWake(DxgkDeviceWorkTerminalDestroy);
     DxgkDeviceWorkTestTerminalWake(DxgkDeviceWorkTerminalCallback);
     DxgkDeviceWorkTestSnapshotAndIsolation();
+    DxgkDeviceWorkTestConditionalTerminalTransition();
 }
