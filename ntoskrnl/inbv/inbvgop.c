@@ -871,13 +871,17 @@ InbvGopHandleBootBitmap(
     if (!WordmarkDrawn)
     {
         static const CHAR LoadingMsg[] = "ReactOS";
-        const ULONG CharW = 8;
         VID_DISPLAY_INFO DisplayInfo;
-        ULONG msgPx = (ULONG)(sizeof(LoadingMsg) - 1) * CharW;
+        ULONG CharW;
+        ULONG msgPx;
+        ULONG x;
+        ULONG y;
 
         InbvQueryDisplayInfo(&DisplayInfo);
-        ULONG x = (DisplayInfo.Width > msgPx) ? ((DisplayInfo.Width - msgPx) / 2) : 0;
-        ULONG y = (ULONG)(DisplayInfo.Height * INBV_WORDMARK_TOP_VPOS + 0.5f);
+        CharW = DisplayInfo.CharacterWidth ? DisplayInfo.CharacterWidth : 8;
+        msgPx = (ULONG)(sizeof(LoadingMsg) - 1) * CharW;
+        x = (DisplayInfo.Width > msgPx) ? ((DisplayInfo.Width - msgPx) / 2) : 0;
+        y = (ULONG)(DisplayInfo.Height * INBV_WORDMARK_TOP_VPOS + 0.5f);
         VidDisplayStringXY(LoadingMsg, x, y, TRUE);
     }
 

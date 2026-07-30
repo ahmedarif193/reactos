@@ -19,6 +19,8 @@ ULONG VidpDisplayHeight = SCREEN_HEIGHT;
 ULONG VidpPhysicalWidth = SCREEN_WIDTH;
 ULONG VidpPhysicalHeight = SCREEN_HEIGHT;
 ULONG VidpDisplayDpi = 96;
+ULONG VidpCharacterWidth = BOOTCHAR_WIDTH;
+ULONG VidpCharacterHeight = BOOTCHAR_HEIGHT + 1;
 URECT VidpScrollRegion = {0, 0, SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1};
 
 static BOOLEAN ClearRow = FALSE;
@@ -36,8 +38,8 @@ VidQueryDisplayInfo(_Out_ PVID_DISPLAY_INFO DisplayInfo)
     DisplayInfo->Height = VidpDisplayHeight;
     DisplayInfo->PhysicalWidth = VidpPhysicalWidth;
     DisplayInfo->PhysicalHeight = VidpPhysicalHeight;
-    DisplayInfo->CharacterWidth = BOOTCHAR_WIDTH;
-    DisplayInfo->CharacterHeight = BOOTCHAR_HEIGHT + 1;
+    DisplayInfo->CharacterWidth = VidpCharacterWidth;
+    DisplayInfo->CharacterHeight = VidpCharacterHeight;
     DisplayInfo->Dpi = VidpDisplayDpi;
     return TRUE;
 }
@@ -78,8 +80,8 @@ VidSetScrollRegion(
     _In_ ULONG Bottom)
 {
     /* Assert alignment */
-    ASSERT((Left % BOOTCHAR_WIDTH) == 0);
-    ASSERT((Right % BOOTCHAR_WIDTH) == BOOTCHAR_WIDTH - 1);
+    ASSERT((Left % VidpCharacterWidth) == 0);
+    ASSERT((Right % VidpCharacterWidth) == VidpCharacterWidth - 1);
     ASSERT(Left <= Right);
     ASSERT(Top <= Bottom);
     ASSERT(Right < VidpDisplayWidth);
@@ -121,7 +123,7 @@ VidDisplayStringXY(
     if (Top >= VidpDisplayHeight)
         return;
 
-    for (; *String && (Left + BOOTCHAR_WIDTH <= VidpDisplayWidth); ++String, Left += BOOTCHAR_WIDTH)
+    for (; *String && (Left + VidpCharacterWidth <= VidpDisplayWidth); ++String, Left += VidpCharacterWidth)
     {
         /* Display a character */
         DisplayCharacter(*String, Left, Top, BV_COLOR_LIGHT_BLUE, BackColor);
@@ -140,18 +142,18 @@ VidDisplayString(
         if (*String == '\n')
         {
             /* Modify Y position */
-            VidpCurrentY += BOOTCHAR_HEIGHT + 1;
-            if (VidpCurrentY + BOOTCHAR_HEIGHT > VidpScrollRegion.Bottom)
+            VidpCurrentY += VidpCharacterHeight;
+            if (VidpCurrentY + VidpCharacterHeight - 1 > VidpScrollRegion.Bottom)
             {
                 /* Scroll the view and clear the current row */
-                DoScroll(BOOTCHAR_HEIGHT + 1);
-                VidpCurrentY -= BOOTCHAR_HEIGHT + 1;
-                PreserveRow(VidpCurrentY, BOOTCHAR_HEIGHT + 1, TRUE);
+                DoScroll(VidpCharacterHeight);
+                VidpCurrentY -= VidpCharacterHeight;
+                PreserveRow(VidpCurrentY, VidpCharacterHeight, TRUE);
             }
             else
             {
                 /* Preserve the current row */
-                PreserveRow(VidpCurrentY, BOOTCHAR_HEIGHT + 1, FALSE);
+                PreserveRow(VidpCurrentY, VidpCharacterHeight, FALSE);
             }
 
             /* Update current X */
@@ -174,30 +176,30 @@ VidDisplayString(
             /* Clear the current row if we had a return-carriage without a new-line */
             if (ClearRow)
             {
-                PreserveRow(VidpCurrentY, BOOTCHAR_HEIGHT + 1, TRUE);
+                PreserveRow(VidpCurrentY, VidpCharacterHeight, TRUE);
                 ClearRow = FALSE;
             }
 
             /* Display this character */
             DisplayCharacter(*String, VidpCurrentX, VidpCurrentY, VidpTextColor, BV_COLOR_NONE);
-            VidpCurrentX += BOOTCHAR_WIDTH;
+            VidpCurrentX += VidpCharacterWidth;
 
             /* Check if we should scroll */
-            if (VidpCurrentX + BOOTCHAR_WIDTH - 1 > VidpScrollRegion.Right)
+            if (VidpCurrentX + VidpCharacterWidth - 1 > VidpScrollRegion.Right)
             {
                 /* Update Y position and check if we should scroll it */
-                VidpCurrentY += BOOTCHAR_HEIGHT + 1;
-                if (VidpCurrentY + BOOTCHAR_HEIGHT > VidpScrollRegion.Bottom)
+                VidpCurrentY += VidpCharacterHeight;
+                if (VidpCurrentY + VidpCharacterHeight - 1 > VidpScrollRegion.Bottom)
                 {
                     /* Scroll the view and clear the current row */
-                    DoScroll(BOOTCHAR_HEIGHT + 1);
-                    VidpCurrentY -= BOOTCHAR_HEIGHT + 1;
-                    PreserveRow(VidpCurrentY, BOOTCHAR_HEIGHT + 1, TRUE);
+                    DoScroll(VidpCharacterHeight);
+                    VidpCurrentY -= VidpCharacterHeight;
+                    PreserveRow(VidpCurrentY, VidpCharacterHeight, TRUE);
                 }
                 else
                 {
                     /* Preserve the current row */
-                    PreserveRow(VidpCurrentY, BOOTCHAR_HEIGHT + 1, FALSE);
+                    PreserveRow(VidpCurrentY, VidpCharacterHeight, FALSE);
                 }
 
                 /* Update current X */
