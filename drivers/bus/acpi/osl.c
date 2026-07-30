@@ -811,6 +811,11 @@ AcpiOsWaitSemaphore(
     UINT16 Timeout)
 {
     PACPI_SEM Sem = Handle;
+    LARGE_INTEGER WaitTime;
+    PLARGE_INTEGER WaitTimeout;
+    ULONGLONG Deadline = 0;
+    ULONGLONG CurrentTime;
+    NTSTATUS Status;
     KIRQL OldIrql;
 
     if (!Handle)
@@ -819,26 +824,47 @@ AcpiOsWaitSemaphore(
         return AE_BAD_PARAMETER;
     }
 
-    KeAcquireSpinLock(&Sem->Lock, &OldIrql);
+    WaitTimeout = NULL;
+    if (Timeout != ACPI_WAIT_FOREVER)
+        Deadline = KeQueryInterruptTime() + (ULONGLONG)Timeout * 10000;
 
-    /* Make sure we can wait if we have fewer units than we need */
-    if ((Timeout == ACPI_DO_NOT_WAIT) && (Sem->CurrentUnits < Units))
-    {
-        /* We can't so we must bail now */
-        KeReleaseSpinLock(&Sem->Lock, OldIrql);
-        return AE_TIME;
-    }
+    KeAcquireSpinLock(&Sem->Lock, &OldIrql);
 
     /* Time to block until we get enough units */
     while (Sem->CurrentUnits < Units)
     {
+        if (Timeout != ACPI_WAIT_FOREVER)
+        {
+            CurrentTime = KeQueryInterruptTime();
+            if (CurrentTime >= Deadline)
+            {
+                KeReleaseSpinLock(&Sem->Lock, OldIrql);
+                return AE_TIME;
+            }
+
+            WaitTime.QuadPart = -(LONGLONG)(Deadline - CurrentTime);
+            WaitTimeout = &WaitTime;
+        }
+
         KeReleaseSpinLock(&Sem->Lock, OldIrql);
-        KeWaitForSingleObject(&Sem->Event,
-                              Executive,
-                              KernelMode,
-                              FALSE,
-                              NULL);
+        Status = KeWaitForSingleObject(&Sem->Event,
+                                       Executive,
+                                       KernelMode,
+                                       FALSE,
+                                       WaitTimeout);
         KeAcquireSpinLock(&Sem->Lock, &OldIrql);
+
+        if (Status == STATUS_TIMEOUT && Sem->CurrentUnits < Units)
+        {
+            KeReleaseSpinLock(&Sem->Lock, OldIrql);
+            return AE_TIME;
+        }
+        else if (!NT_SUCCESS(Status))
+        {
+            KeReleaseSpinLock(&Sem->Lock, OldIrql);
+            DPRINT1("Semaphore wait failed with status 0x%08lx\n", Status);
+            return AE_ERROR;
+        }
     }
 
     Sem->CurrentUnits -= Units;
