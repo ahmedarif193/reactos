@@ -44,6 +44,7 @@ extern void func_umdcallbacks(void);
 extern void func_abifreeze(void);
 extern void func_procstress(void);
 extern void func_umdload(void);
+extern void func_umd2d(void);
 extern void func_renderadapter(void);
 extern void func_luidident(void);
 extern void func_handletype(void);
@@ -107,6 +108,7 @@ const struct test winetest_testlist[] =
     { "abifreeze",     func_abifreeze },
     { "procstress",    func_procstress },
     { "umdload",       func_umdload },
+    { "umd2d",         func_umd2d },
     { "renderadapter", func_renderadapter },
     { "luidident",     func_luidident },
     { "handletype",    func_handletype },

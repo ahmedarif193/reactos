@@ -437,6 +437,8 @@ static void Test_SetProcessSchedulingPriorityClass_InvalidClass(void)
  *  In-process context scheduling priority
  * ===================================================================== */
 
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && \
+    (REACTOS_WDDM_TARGET_LEVEL >= 1300)
 static void Test_SetContextInProcessSchedulingPriority_NullArg(void)
 {
     LOADFN(PFND3DKMT_SETCONTEXTINPROCESSSCHEDULINGPRIORITY, p,
@@ -456,6 +458,168 @@ static void Test_SetContextInProcessSchedulingPriority_BadHandle(void)
     MISC_EXPECT_REFUSED(p(&cip),
                         "D3DKMTSetContextInProcessSchedulingPriority(bad context)");
 }
+
+static void Test_GetContextInProcessSchedulingPriority_NullArg(void)
+{
+    LOADFN(PFND3DKMT_GETCONTEXTINPROCESSSCHEDULINGPRIORITY, p,
+           "D3DKMTGetContextInProcessSchedulingPriority");
+    EXPECT_NULL_REJECTED(p, "D3DKMTGetContextInProcessSchedulingPriority");
+}
+
+static void Test_GetContextInProcessSchedulingPriority_BadHandle(void)
+{
+    D3DKMT_GETCONTEXTINPROCESSSCHEDULINGPRIORITY cip;
+    LOADFN(PFND3DKMT_GETCONTEXTINPROCESSSCHEDULINGPRIORITY, p,
+           "D3DKMTGetContextInProcessSchedulingPriority");
+
+    memset(&cip, 0, sizeof(cip));
+    cip.hContext = MISC_BAD_CONTEXT;
+    MISC_EXPECT_REFUSED(p(&cip),
+                        "D3DKMTGetContextInProcessSchedulingPriority(bad context)");
+}
+
+static void Test_ContextInProcessSchedulingPriority_RoundTrip(void)
+{
+    PFND3DKMT_SETCONTEXTINPROCESSSCHEDULINGPRIORITY pSet;
+    PFND3DKMT_GETCONTEXTINPROCESSSCHEDULINGPRIORITY pGet;
+    PFND3DKMT_GETCONTEXTSCHEDULINGPRIORITY pGetOrdinary;
+    PFND3DKMT_CREATECONTEXT pCreateContext;
+    PFND3DKMT_DESTROYCONTEXT pDestroyContext;
+    D3DKMT_SETCONTEXTINPROCESSSCHEDULINGPRIORITY Set;
+    D3DKMT_GETCONTEXTINPROCESSSCHEDULINGPRIORITY Get;
+    D3DKMT_GETCONTEXTSCHEDULINGPRIORITY GetOrdinary;
+    D3DKMT_CREATECONTEXT CreateContext;
+    D3DKMT_DESTROYCONTEXT DestroyContext;
+    D3DKMT_HANDLE hAdapter;
+    D3DKMT_HANDLE hDevice;
+    INT OrdinaryPriority = 0;
+    BOOLEAN HaveOrdinaryPriority = FALSE;
+    NTSTATUS Status;
+
+    pSet = (PFND3DKMT_SETCONTEXTINPROCESSSCHEDULINGPRIORITY)
+        LoadD3DKMTProc("D3DKMTSetContextInProcessSchedulingPriority");
+    pGet = (PFND3DKMT_GETCONTEXTINPROCESSSCHEDULINGPRIORITY)
+        LoadD3DKMTProc("D3DKMTGetContextInProcessSchedulingPriority");
+    pGetOrdinary = (PFND3DKMT_GETCONTEXTSCHEDULINGPRIORITY)
+        LoadD3DKMTProc("D3DKMTGetContextSchedulingPriority");
+    pCreateContext = (PFND3DKMT_CREATECONTEXT)
+        LoadD3DKMTProc("D3DKMTCreateContext");
+    pDestroyContext = (PFND3DKMT_DESTROYCONTEXT)
+        LoadD3DKMTProc("D3DKMTDestroyContext");
+    if (pSet == NULL || pGet == NULL ||
+        pCreateContext == NULL || pDestroyContext == NULL)
+    {
+        skip("context-in-process scheduling-priority exports unavailable\n");
+        return;
+    }
+
+    hAdapter = OpenRenderAdapter();
+    if (hAdapter == 0)
+    {
+        skip("no render-capable adapter for context-priority round-trip\n");
+        return;
+    }
+    hDevice = CreateTestDevice(hAdapter);
+    if (hDevice == 0)
+    {
+        skip("cannot create device for context-priority round-trip\n");
+        CloseAdapter(hAdapter);
+        return;
+    }
+
+    memset(&CreateContext, 0, sizeof(CreateContext));
+    CreateContext.hDevice = hDevice;
+    CreateContext.NodeOrdinal = 0;
+    CreateContext.EngineAffinity = 1;
+    Status = pCreateContext(&CreateContext);
+    if (!NT_SUCCESS(Status) || CreateContext.hContext == 0)
+    {
+        skip("cannot create context for priority round-trip (0x%08lX)\n",
+             (long)Status);
+        DestroyTestDevice(hDevice);
+        CloseAdapter(hAdapter);
+        return;
+    }
+
+    memset(&Get, 0, sizeof(Get));
+    Get.hContext = CreateContext.hContext;
+    Status = pGet(&Get);
+    ok(NT_SUCCESS(Status) && Get.Priority == 0,
+       "new context in-process priority: status 0x%08lX, value %ld\n",
+       (long)Status, (long)Get.Priority);
+
+    memset(&Set, 0, sizeof(Set));
+    Set.hContext = CreateContext.hContext;
+    Set.Priority = -1;
+    Status = pSet(&Set);
+    ok(!NT_SUCCESS(Status),
+       "in-process priority -1 must be rejected, got 0x%08lX\n",
+       (long)Status);
+
+    Set.Priority = 2;
+    Status = pSet(&Set);
+    ok(!NT_SUCCESS(Status),
+       "in-process priority 2 must be rejected, got 0x%08lX\n",
+       (long)Status);
+
+    if (pGetOrdinary != NULL)
+    {
+        memset(&GetOrdinary, 0, sizeof(GetOrdinary));
+        GetOrdinary.hContext = CreateContext.hContext;
+        Status = pGetOrdinary(&GetOrdinary);
+        if (NT_SUCCESS(Status))
+        {
+            OrdinaryPriority = GetOrdinary.Priority;
+            HaveOrdinaryPriority = TRUE;
+        }
+    }
+
+    Set.Priority = 1;
+    Status = pSet(&Set);
+    ok_succeeded(Status,
+                 "set in-process priority 1 failed with 0x%08lX\n",
+                 (long)Status);
+
+    Get.Priority = 0;
+    Status = pGet(&Get);
+    ok(NT_SUCCESS(Status) && Get.Priority == 1,
+       "get after priority 1: status 0x%08lX, value %ld\n",
+       (long)Status, (long)Get.Priority);
+
+    if (HaveOrdinaryPriority)
+    {
+        memset(&GetOrdinary, 0, sizeof(GetOrdinary));
+        GetOrdinary.hContext = CreateContext.hContext;
+        Status = pGetOrdinary(&GetOrdinary);
+        ok(NT_SUCCESS(Status) &&
+           GetOrdinary.Priority == OrdinaryPriority,
+           "ordinary priority was aliased: status 0x%08lX, before %ld, after %ld\n",
+           (long)Status,
+           (long)OrdinaryPriority,
+           (long)GetOrdinary.Priority);
+    }
+
+    Set.Priority = 0;
+    Status = pSet(&Set);
+    ok_succeeded(Status,
+                 "reset in-process priority failed with 0x%08lX\n",
+                 (long)Status);
+    Get.Priority = 1;
+    Status = pGet(&Get);
+    ok(NT_SUCCESS(Status) && Get.Priority == 0,
+       "get after priority 0: status 0x%08lX, value %ld\n",
+       (long)Status, (long)Get.Priority);
+
+    memset(&DestroyContext, 0, sizeof(DestroyContext));
+    DestroyContext.hContext = CreateContext.hContext;
+    Status = pDestroyContext(&DestroyContext);
+    ok_succeeded(Status,
+                 "destroy context after priority test failed with 0x%08lX\n",
+                 (long)Status);
+    DestroyTestDevice(hDevice);
+    CloseAdapter(hAdapter);
+}
+#endif
 
 /* =====================================================================
  *  Trim notifications
@@ -905,8 +1069,14 @@ START_TEST(misc)
     Test_SetProcessSchedulingPriorityClass_InvalidClass();
 
     /* In-process context scheduling priority */
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && \
+    (REACTOS_WDDM_TARGET_LEVEL >= 1300)
     Test_SetContextInProcessSchedulingPriority_NullArg();
     Test_SetContextInProcessSchedulingPriority_BadHandle();
+    Test_GetContextInProcessSchedulingPriority_NullArg();
+    Test_GetContextInProcessSchedulingPriority_BadHandle();
+    Test_ContextInProcessSchedulingPriority_RoundTrip();
+#endif
 
     /* Trim notifications */
     Test_RegisterTrimNotification_NullArg();

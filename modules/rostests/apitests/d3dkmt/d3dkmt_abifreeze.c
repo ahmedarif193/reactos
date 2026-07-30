@@ -1,7 +1,7 @@
 /*
  * PROJECT:     ReactOS D3DKMT API Tests
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
- * PURPOSE:     D3DKMT ABI layout freeze (roadmap gate 5)
+ * PURPOSE:     D3DKMT ABI layout regression coverage
  * COPYRIGHT:   Copyright 2026 ReactOS WDDM Team
  *
  * Every structure below crosses the D3DKMT boundary, so its layout is a
@@ -9,8 +9,7 @@
  * application. A field inserted into the middle of one of these does not fail
  * to build and does not fail to load: it shifts every field after it, and the
  * two sides quietly disagree about where the data is. That is the failure this
- * catches, and it is the reason the roadmap asks for a layout freeze before any
- * version promotion.
+ * catches, so the layouts must be frozen before any version promotion.
  *
  * These are a tripwire that the layouts have not *moved*, not a claim that they
  * are correct against Windows -- that question belongs to the differential
@@ -130,16 +129,113 @@ C_ASSERT(sizeof(D3DKMT_WAITFORSYNCHRONIZATIONOBJECT2) == 200);
 C_ASSERT(sizeof(D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU) == 40);
 C_ASSERT(sizeof(D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU) == 80);
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
+C_ASSERT(D3DDDI_NATIVE_FENCE == 7);
+C_ASSERT(D3DDDI_SYNCHRONIZATION_TYPE_LIMIT == 8);
+C_ASSERT(sizeof(D3DKMT_CREATENATIVEFENCE_FLAGS) == 4);
+C_ASSERT(sizeof(D3DKMT_CREATENATIVEFENCE) == 0xd8);
+C_ASSERT(FIELD_OFFSET(D3DKMT_CREATENATIVEFENCE, hSyncObject) == 0x04);
+C_ASSERT(FIELD_OFFSET(D3DKMT_CREATENATIVEFENCE, PrivateDriverData) == 0x08);
+C_ASSERT(FIELD_OFFSET(D3DKMT_CREATENATIVEFENCE, Info) == 0x48);
+C_ASSERT(FIELD_OFFSET(D3DKMT_CREATENATIVEFENCE, Flags) == 0xb8);
+C_ASSERT(FIELD_OFFSET(D3DKMT_CREATENATIVEFENCE, Reserved) == 0xbc);
+C_ASSERT(sizeof(D3DKMT_GETNATIVEFENCELOGDETAIL_FLAGS) == 4);
+C_ASSERT(sizeof(D3DKMT_GETNATIVEFENCELOGDETAIL) == 0x60);
+C_ASSERT(FIELD_OFFSET(D3DKMT_GETNATIVEFENCELOGDETAIL, WaitLogNumberOfEntries) == 0x08);
+C_ASSERT(FIELD_OFFSET(D3DKMT_GETNATIVEFENCELOGDETAIL, SignalLogNumberOfEntries) == 0x0c);
+C_ASSERT(FIELD_OFFSET(D3DKMT_GETNATIVEFENCELOGDETAIL, WaitLogGpuBaseAddress) == 0x10);
+C_ASSERT(FIELD_OFFSET(D3DKMT_GETNATIVEFENCELOGDETAIL, SignalLogGpuBaseAddress) == 0x18);
+C_ASSERT(FIELD_OFFSET(D3DKMT_GETNATIVEFENCELOGDETAIL, Reserved) == 0x20);
+C_ASSERT(sizeof(D3DKMT_OPENNATIVEFENCEFROMNTHANDLE) == 0x70);
+C_ASSERT(FIELD_OFFSET(D3DKMT_OPENNATIVEFENCEFROMNTHANDLE, NativeFenceMapping) == 0x18);
+C_ASSERT(FIELD_OFFSET(D3DKMT_OPENNATIVEFENCEFROMNTHANDLE, Reserved) == 0x50);
+C_ASSERT(sizeof(D3DKMT_CREATE_DOORBELL_FLAGS) == 4);
+C_ASSERT(sizeof(D3DKMT_CONNECT_DOORBELL_FLAGS) == 4);
+C_ASSERT(sizeof(D3DKMT_NOTIFY_WORK_SUBMISSION_FLAGS) == 4);
+C_ASSERT(sizeof(D3DKMT_CONNECT_DOORBELL) == 8);
+C_ASSERT(sizeof(D3DKMT_DESTROY_DOORBELL) == 4);
+C_ASSERT(sizeof(D3DKMT_NOTIFY_WORK_SUBMISSION) == 8);
+
+#ifdef _WIN64
+C_ASSERT(FIELD_OFFSET(D3DKMT_OPENNATIVEFENCEFROMNTHANDLE, hDevice) == 0x08);
+C_ASSERT(sizeof(D3DKMT_CREATE_DOORBELL) == 0x48);
+C_ASSERT(FIELD_OFFSET(D3DKMT_CREATE_DOORBELL, PrivateDriverData) == 0x18);
+C_ASSERT(FIELD_OFFSET(D3DKMT_CREATE_DOORBELL, DoorbellCPUVirtualAddress) == 0x20);
+C_ASSERT(FIELD_OFFSET(D3DKMT_CREATE_DOORBELL, DoorbellSecondaryCPUVirtualAddress) == 0x28);
+C_ASSERT(FIELD_OFFSET(D3DKMT_CREATE_DOORBELL, DoorbellStatusCPUVirtualAddress) == 0x30);
+C_ASSERT(FIELD_OFFSET(D3DKMT_CREATE_DOORBELL, HwQueueProgressFenceLastQueuedValueCPUVirtualAddress) == 0x38);
+C_ASSERT(FIELD_OFFSET(D3DKMT_CREATE_DOORBELL, hDoorbell) == 0x40);
+#else
+C_ASSERT(FIELD_OFFSET(D3DKMT_OPENNATIVEFENCEFROMNTHANDLE, hDevice) == 0x04);
+C_ASSERT(sizeof(D3DKMT_CREATE_DOORBELL) == 0x2c);
+C_ASSERT(FIELD_OFFSET(D3DKMT_CREATE_DOORBELL, PrivateDriverData) == 0x14);
+C_ASSERT(FIELD_OFFSET(D3DKMT_CREATE_DOORBELL, DoorbellCPUVirtualAddress) == 0x18);
+C_ASSERT(FIELD_OFFSET(D3DKMT_CREATE_DOORBELL, DoorbellSecondaryCPUVirtualAddress) == 0x1c);
+C_ASSERT(FIELD_OFFSET(D3DKMT_CREATE_DOORBELL, DoorbellStatusCPUVirtualAddress) == 0x20);
+C_ASSERT(FIELD_OFFSET(D3DKMT_CREATE_DOORBELL, HwQueueProgressFenceLastQueuedValueCPUVirtualAddress) == 0x24);
+C_ASSERT(FIELD_OFFSET(D3DKMT_CREATE_DOORBELL, hDoorbell) == 0x28);
+#endif
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+C_ASSERT(sizeof(DXGK_ISFEATUREENABLED_RESULT) == 4);
+C_ASSERT(sizeof(D3DKMT_ISFEATUREENABLED) == 0x0c);
+C_ASSERT(FIELD_OFFSET(D3DKMT_ISFEATUREENABLED, hAdapter) == 0x00);
+C_ASSERT(FIELD_OFFSET(D3DKMT_ISFEATUREENABLED, FeatureId) == 0x04);
+C_ASSERT(FIELD_OFFSET(D3DKMT_ISFEATUREENABLED, Result) == 0x08);
+#endif
+
 static void Test_LayoutsAreFrozen(void)
 {
     /* The assertions above are compile-time; this reports the same values so a
      * deliberate change can be re-measured without editing anything. */
-    trace("frozen D3DKMT layouts: 106 structures\n");
+    trace("frozen D3DKMT layouts compiled\n");
     ok(sizeof(D3DKMT_CREATEDEVICE) != 0, "CREATEDEVICE has no layout\n");
     ok(sizeof(D3DKMT_RENDER) != 0, "RENDER has no layout\n");
     ok(sizeof(D3DKMT_SUBMITCOMMAND) != 0, "SUBMITCOMMAND has no layout\n");
     ok(sizeof(D3DKMT_CREATEALLOCATION) != 0, "CREATEALLOCATION has no layout\n");
 }
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
+static void Test_SynchronizationFlagBits(void)
+{
+    D3DDDI_SYNCHRONIZATIONOBJECT_FLAGS Flags = {0};
+
+    Flags.SignalByKmd = 1;
+    ok_eq_ulong(Flags.Value, 0x00000100);
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
+    Flags.Value = 0;
+    Flags.Unused = 1;
+    ok_eq_ulong(Flags.Value, 0x00000200);
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+    Flags.Value = 0;
+    Flags.UnwaitCpuWaitersOnlyOnDestroy = 1;
+    ok_eq_ulong(Flags.Value, 0x00000400);
+#endif
+}
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+static void Test_FeatureQueryResultBits(void)
+{
+    DXGK_ISFEATUREENABLED_RESULT Result = {0};
+
+    Result.Enabled = 1;
+    ok_eq_ulong(Result.Value, 0x0001);
+    Result.Value = 0;
+    Result.KnownFeature = 1;
+    ok_eq_ulong(Result.Value, 0x0002);
+    Result.Value = 0;
+    Result.SupportedByDriver = 1;
+    ok_eq_ulong(Result.Value, 0x0004);
+    Result.Value = 0;
+    Result.SupportedOnCurrentConfig = 1;
+    ok_eq_ulong(Result.Value, 0x0008);
+}
+#endif
 
 static void Test_PointerWidthAssumptions(void)
 {
@@ -156,6 +252,12 @@ static void Test_PointerWidthAssumptions(void)
 START_TEST(abifreeze)
 {
     Test_LayoutsAreFrozen();
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
+    Test_SynchronizationFlagBits();
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+    Test_FeatureQueryResultBits();
+#endif
     Test_PointerWidthAssumptions();
 }
 

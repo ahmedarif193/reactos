@@ -645,6 +645,83 @@ static void Test_GetDWMVerticalBlankEvent_Null_BadHandle(void)
     EXPECT_REFUSED("GetDWMVerticalBlankEvent(bad handle)", pfn(&gvb));
 }
 
+static void Test_DwmVerticalBlankEvent_AdapterContract(void)
+{
+    PFND3DKMT_GETDWMVERTICALBLANKEVENT pGet;
+    PFND3DKMT_SETSYNCREFRESHCOUNTWAITTARGET pSetTarget;
+    D3DKMT_SETSYNCREFRESHCOUNTWAITTARGET SetTarget;
+    D3DKMT_GETVERTICALBLANKEVENT GetEvent;
+    D3DKMT_PTR_TYPE EventValue = NULL;
+    D3DKMT_HANDLE hAdapter;
+    HANDLE EventHandle;
+    DWORD HandleFlags;
+    NTSTATUS Status;
+    BOOL Faulted;
+
+    pGet = (PFND3DKMT_GETDWMVERTICALBLANKEVENT)
+               LoadD3DKMTProc("D3DKMTGetDWMVerticalBlankEvent");
+    pSetTarget = (PFND3DKMT_SETSYNCREFRESHCOUNTWAITTARGET)
+                     LoadD3DKMTProc(
+                         "D3DKMTSetSyncRefreshCountWaitTarget");
+    if (pGet == NULL || pSetTarget == NULL)
+    {
+        skip("DWM vertical-blank target APIs are not both exported\n");
+        return;
+    }
+
+    hAdapter = OpenAdapterFromDisplay1();
+    if (hAdapter == 0)
+    {
+        skip("No adapter for DWM vertical-blank event contract\n");
+        return;
+    }
+
+    memset(&GetEvent, 0, sizeof(GetEvent));
+    GetEvent.hAdapter = hAdapter;
+    GetEvent.VidPnSourceId = 0;
+    GetEvent.phEvent = NULL;
+    EXPECT_REFUSED("GetDWMVerticalBlankEvent(NULL phEvent)",
+                   pGet(&GetEvent));
+
+    GetEvent.phEvent = (D3DKMT_PTR_TYPE *)(ULONG_PTR)1;
+    EXPECT_REFUSED("GetDWMVerticalBlankEvent(invalid phEvent)",
+                   pGet(&GetEvent));
+
+    GetEvent.phEvent = &EventValue;
+    SEH_CALL(Status, Faulted, pGet(&GetEvent));
+    if (Faulted || !NT_SUCCESS(Status))
+    {
+        skip("DWM vertical-blank event unavailable (0x%08lX%s)\n",
+             (long)Status,
+             Faulted ? " fault" : "");
+        CloseAdapter(hAdapter);
+        return;
+    }
+
+    EventHandle = (HANDLE)EventValue;
+    ok(EventHandle != NULL, "successful get must return an event handle\n");
+    if (EventHandle != NULL)
+    {
+        ok(GetHandleInformation(EventHandle, &HandleFlags),
+           "returned DWM vblank handle must be valid, error %lu\n",
+           GetLastError());
+    }
+
+    memset(&SetTarget, 0, sizeof(SetTarget));
+    SetTarget.hAdapter = hAdapter;
+    SetTarget.VidPnSourceId = 0;
+    SetTarget.TargetSyncRefreshCount = 0;
+    SEH_CALL(Status, Faulted, pSetTarget(&SetTarget));
+    ok(!Faulted && NT_SUCCESS(Status),
+       "zero target must arm the next vblank, got 0x%08lX%s\n",
+       (long)Status,
+       Faulted ? " fault" : "");
+
+    if (EventHandle != NULL)
+        CloseHandle(EventHandle);
+    CloseAdapter(hAdapter);
+}
+
 START_TEST(presentext)
 {
     /* Present / Render negative + skip-guarded positive */
@@ -671,4 +748,5 @@ START_TEST(presentext)
     Test_CancelPresents_Null();
     Test_SetSyncRefreshCountWaitTarget_Null_BadHandle();
     Test_GetDWMVerticalBlankEvent_Null_BadHandle();
+    Test_DwmVerticalBlankEvent_AdapterContract();
 }
