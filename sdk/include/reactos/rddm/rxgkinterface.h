@@ -41,7 +41,11 @@ typedef struct _DXGKRNL_INTERFACE_EXCHANGE_IN
 {
     ULONG Version;      /* Highest interface version understood by caller. */
     ULONG Size;         /* Bytes available for that version's callback table. */
+    ULONG ConfiguredWddmLevel; /* REACTOS_WDDM_TARGET_LEVEL, or zero for legacy callers. */
 } DXGKRNL_INTERFACE_EXCHANGE_IN, *PDXGKRNL_INTERFACE_EXCHANGE_IN;
+
+#define DXGKRNL_INTERFACE_EXCHANGE_IN_LEGACY_SIZE \
+    FIELD_OFFSET(DXGKRNL_INTERFACE_EXCHANGE_IN, ConfiguredWddmLevel)
 
 /* REACTOS_WIN32K_DXGKRNL_INTERFACE function Pointers: */
 

@@ -35,6 +35,11 @@
 #define NDEBUG
 #include <debug.h>
 
+C_ASSERT(DXGKRNL_INTERFACE_EXCHANGE_IN_LEGACY_SIZE == (2 * sizeof(ULONG)));
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE_EXCHANGE_IN, ConfiguredWddmLevel) ==
+         DXGKRNL_INTERFACE_EXCHANGE_IN_LEGACY_SIZE);
+C_ASSERT(sizeof(DXGKRNL_INTERFACE_EXCHANGE_IN) == (3 * sizeof(ULONG)));
+
 /* ---- Global state -------------------------------------------------------- */
 
 /*
@@ -307,6 +312,7 @@ WddmBridgeInit(VOID)
      */
     ExchangeIn.Version = DXGKRNL_INTERFACE_VERSION_CURRENT;
     ExchangeIn.Size = DXGKRNL_INTERFACE_VERSION_CURRENT_SIZE;
+    ExchangeIn.ConfiguredWddmLevel = REACTOS_WDDM_TARGET_LEVEL;
     RtlZeroMemory(&ExchangeOut, sizeof(ExchangeOut));
     Status = WddmBridgeSendIoctlToDevice(DeviceObject, IOCTL_DXGKRNL_EXCHANGE_INTERFACE, &ExchangeIn, sizeof(ExchangeIn), &ExchangeOut, sizeof(ExchangeOut), &Information);
 
@@ -320,7 +326,17 @@ WddmBridgeInit(VOID)
         Status = WddmBridgeSendIoctlToDevice(DeviceObject, IOCTL_DXGKRNL_EXCHANGE_INTERFACE, &ExchangeIn, sizeof(ExchangeIn), &ExchangeOut, sizeof(ExchangeOut), &Information);
     }
 
-    /* An older dxgkrnl rejects version 4.  Retry the append-only v3 prefix. */
+    /* A version-4 dxgkrnl rejects version 5.  Retry its exact prefix. */
+    if (Status == STATUS_NOT_SUPPORTED)
+    {
+        ExchangeIn.Version = DXGKRNL_INTERFACE_VERSION_4;
+        ExchangeIn.Size = DXGKRNL_INTERFACE_VERSION_4_SIZE;
+        RtlZeroMemory(&ExchangeOut, sizeof(ExchangeOut));
+        Information = 0;
+        Status = WddmBridgeSendIoctlToDevice(DeviceObject, IOCTL_DXGKRNL_EXCHANGE_INTERFACE, &ExchangeIn, sizeof(ExchangeIn), &ExchangeOut, sizeof(ExchangeOut), &Information);
+    }
+
+    /* A version-3 dxgkrnl rejects version 4.  Retry its exact prefix. */
     if (Status == STATUS_NOT_SUPPORTED)
     {
         ExchangeIn.Version = DXGKRNL_INTERFACE_VERSION_3;
@@ -353,8 +369,58 @@ WddmBridgeInit(VOID)
     if (NT_SUCCESS(Status) && Information != ExchangeIn.Size)
         Status = STATUS_INFO_LENGTH_MISMATCH;
 
-    if (NT_SUCCESS(Status) && (ExchangeOut.RxgkIntPfnCreateDevice == NULL || ExchangeOut.RxgkIntPfnPresent == NULL || ExchangeOut.RxgkIntPfnQueryAdapterInfo == NULL || (ExchangeIn.Version >= DXGKRNL_INTERFACE_VERSION_2 && (ExchangeOut.RxgkIntPfnCreateContextVirtual == NULL || ExchangeOut.RxgkIntPfnSubmitCommand == NULL)) || (ExchangeIn.Version >= DXGKRNL_INTERFACE_VERSION_3 && ExchangeOut.RxgkIntPfnCreateAllocation2 == NULL) || (ExchangeIn.Version >= DXGKRNL_INTERFACE_VERSION_4 && ExchangeOut.RxgkIntPfnGetAllocationPriority == NULL) || (ExchangeIn.Version >= DXGKRNL_INTERFACE_VERSION_5 && ExchangeOut.RxgkIntPfnOpenSynchronizationObject == NULL) || (ExchangeIn.Version >= DXGKRNL_INTERFACE_VERSION_6 && ExchangeOut.RxgkIntPfnWaitForSynchronizationObjectFromGpu == NULL)))
+    /* Private protocol revisions are append-only, not WDDM levels. */
+    if (NT_SUCCESS(Status) &&
+        (ExchangeOut.RxgkIntPfnCreateDevice == NULL ||
+         ExchangeOut.RxgkIntPfnPresent == NULL ||
+         ExchangeOut.RxgkIntPfnQueryAdapterInfo == NULL))
+    {
         Status = STATUS_INVALID_DEVICE_STATE;
+    }
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    if (NT_SUCCESS(Status) &&
+        ExchangeIn.Version >= DXGKRNL_INTERFACE_VERSION_2 &&
+        (ExchangeOut.RxgkIntPfnCreateContextVirtual == NULL ||
+         ExchangeOut.RxgkIntPfnSubmitCommand == NULL))
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+    }
+
+    if (NT_SUCCESS(Status) &&
+        ExchangeIn.Version >= DXGKRNL_INTERFACE_VERSION_6 &&
+        (ExchangeOut.RxgkIntPfnWaitForSynchronizationObjectFromGpu == NULL ||
+         ExchangeOut.RxgkIntPfnSignalSynchronizationObjectFromGpu == NULL ||
+         ExchangeOut.RxgkIntPfnSignalSynchronizationObjectFromGpu2 == NULL))
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+    }
+#endif
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1105)
+    if (NT_SUCCESS(Status) &&
+        ExchangeIn.Version >= DXGKRNL_INTERFACE_VERSION_3 &&
+        ExchangeOut.RxgkIntPfnCreateAllocation2 == NULL)
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+    }
+
+    if (NT_SUCCESS(Status) &&
+        ExchangeIn.Version >= DXGKRNL_INTERFACE_VERSION_5 &&
+        ExchangeOut.RxgkIntPfnOpenSynchronizationObject == NULL)
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+    }
+#endif
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
+    if (NT_SUCCESS(Status) &&
+        ExchangeIn.Version >= DXGKRNL_INTERFACE_VERSION_4 &&
+        ExchangeOut.RxgkIntPfnGetAllocationPriority == NULL)
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+    }
+#endif
 
     if (!NT_SUCCESS(Status))
     {

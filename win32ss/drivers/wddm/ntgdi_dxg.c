@@ -666,9 +666,13 @@ WddmBridgeInitCallbacks(
     _Out_ PREACTOS_WIN32K_DXGKRNL_INTERFACE Interface)
 {
     NTSTATUS Status;
+    ULONG InterfaceVersion;
+    REACTOS_WIN32K_DXGKRNL_INTERFACE ProviderInterface;
 
     if (Interface == NULL)
         return;
+
+    RtlZeroMemory(Interface, sizeof(*Interface));
 
     /*
      * The dxgkrnl exchange is a version/readiness handshake.  The callback
@@ -679,13 +683,21 @@ WddmBridgeInitCallbacks(
     Status = WddmBridgeRequireReady();
     if (!NT_SUCCESS(Status))
     {
-        RtlZeroMemory(Interface, sizeof(*Interface));
         DPRINT1("WddmBridgeInitCallbacks: bridge unavailable "
                 "(status=0x%08lx)\n", Status);
         return;
     }
 
-    RtlZeroMemory(Interface, sizeof(*Interface));
+    Status = WddmBridgeGetInterface(&ProviderInterface);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("WddmBridgeInitCallbacks: provider interface unavailable "
+                "(0x%08lX)\n",
+                Status);
+        return;
+    }
+
+    InterfaceVersion = WddmBridgeGetInterfaceVersion();
 
     Interface->RxgkIntPfnPresent = DxgBridgePresent;
     Interface->RxgkIntPfnQueryAdapterInfo = DxgBridgeQueryAdapterInfo;
@@ -734,41 +746,68 @@ WddmBridgeInitCallbacks(
     Interface->RxgkIntPfnSetDisplayMode = DxgBridgeSetDisplayMode;
     Interface->RxgkIntPfnSetDisplayPrivateDriverFormat = DxgBridgeSetDisplayPrivateDriverFormat;
     Interface->RxgkIntPfnUnlock = DxgBridgeUnlock;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
     Interface->RxgkIntPfnEnumAdapters = DxgBridgeEnumAdapters;
     Interface->RxgkIntPfnOpenAdapterFromLuid = DxgBridgeOpenAdapterFromLuid;
     Interface->RxgkIntPfnOfferAllocations = DxgBridgeOfferAllocations;
     Interface->RxgkIntPfnReclaimAllocations = DxgBridgeReclaimAllocations;
     Interface->RxgkIntPfnSetVidPnSourceOwner1 = DxgBridgeSetVidPnSourceOwner1;
     Interface->RxgkIntPfnWaitForVerticalBlankEvent2 = DxgBridgeWaitForVerticalBlankEvent2;
+#endif
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1105)
     Interface->RxgkIntPfnCreateSynchronizationObject2 = DxgBridgeCreateSynchronizationObject2;
     Interface->RxgkIntPfnWaitForSynchronizationObject2 = DxgBridgeWaitForSynchronizationObject2;
     Interface->RxgkIntPfnSignalSynchronizationObject2 = DxgBridgeSignalSynchronizationObject2;
+#endif
 
     /* WDDM 2.0 additions */
-    Interface->RxgkIntPfnMakeResident = DxgBridgeMakeResident;
-    Interface->RxgkIntPfnEvict = DxgBridgeEvict;
-    Interface->RxgkIntPfnQueryVideoMemoryInfo = DxgBridgeQueryVideoMemoryInfo;
-    Interface->RxgkIntPfnCreatePagingQueue = DxgBridgeCreatePagingQueue;
-    Interface->RxgkIntPfnDestroyPagingQueue = DxgBridgeDestroyPagingQueue;
-    Interface->RxgkIntPfnReserveGpuVirtualAddress = DxgBridgeReserveGpuVirtualAddress;
-    Interface->RxgkIntPfnMapGpuVirtualAddress = DxgBridgeMapGpuVirtualAddress;
-    Interface->RxgkIntPfnFreeGpuVirtualAddress = DxgBridgeFreeGpuVirtualAddress;
-    Interface->RxgkIntPfnUpdateGpuVirtualAddress = DxgBridgeUpdateGpuVirtualAddress;
-    Interface->RxgkIntPfnWaitForSynchronizationObjectFromCpu = DxgBridgeWaitForSynchronizationObjectFromCpu;
-    Interface->RxgkIntPfnSignalSynchronizationObjectFromCpu = DxgBridgeSignalSynchronizationObjectFromCpu;
-    Interface->RxgkIntPfnWaitForSynchronizationObjectFromGpu = DxgBridgeWaitForSynchronizationObjectFromGpu;
-    Interface->RxgkIntPfnSignalSynchronizationObjectFromGpu = DxgBridgeSignalSynchronizationObjectFromGpu;
-    Interface->RxgkIntPfnSignalSynchronizationObjectFromGpu2 = DxgBridgeSignalSynchronizationObjectFromGpu2;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    if (ProviderInterface.RxgkIntPfnMakeResident != NULL)
+        Interface->RxgkIntPfnMakeResident = DxgBridgeMakeResident;
+    if (ProviderInterface.RxgkIntPfnEvict != NULL)
+        Interface->RxgkIntPfnEvict = DxgBridgeEvict;
+    if (ProviderInterface.RxgkIntPfnQueryVideoMemoryInfo != NULL)
+        Interface->RxgkIntPfnQueryVideoMemoryInfo = DxgBridgeQueryVideoMemoryInfo;
+    if (ProviderInterface.RxgkIntPfnCreatePagingQueue != NULL)
+        Interface->RxgkIntPfnCreatePagingQueue = DxgBridgeCreatePagingQueue;
+    if (ProviderInterface.RxgkIntPfnDestroyPagingQueue != NULL)
+        Interface->RxgkIntPfnDestroyPagingQueue = DxgBridgeDestroyPagingQueue;
+    if (ProviderInterface.RxgkIntPfnReserveGpuVirtualAddress != NULL)
+        Interface->RxgkIntPfnReserveGpuVirtualAddress = DxgBridgeReserveGpuVirtualAddress;
+    if (ProviderInterface.RxgkIntPfnMapGpuVirtualAddress != NULL)
+        Interface->RxgkIntPfnMapGpuVirtualAddress = DxgBridgeMapGpuVirtualAddress;
+    if (ProviderInterface.RxgkIntPfnFreeGpuVirtualAddress != NULL)
+        Interface->RxgkIntPfnFreeGpuVirtualAddress = DxgBridgeFreeGpuVirtualAddress;
+    if (ProviderInterface.RxgkIntPfnUpdateGpuVirtualAddress != NULL)
+        Interface->RxgkIntPfnUpdateGpuVirtualAddress = DxgBridgeUpdateGpuVirtualAddress;
+    if (ProviderInterface.RxgkIntPfnWaitForSynchronizationObjectFromCpu != NULL)
+        Interface->RxgkIntPfnWaitForSynchronizationObjectFromCpu = DxgBridgeWaitForSynchronizationObjectFromCpu;
+    if (ProviderInterface.RxgkIntPfnSignalSynchronizationObjectFromCpu != NULL)
+        Interface->RxgkIntPfnSignalSynchronizationObjectFromCpu = DxgBridgeSignalSynchronizationObjectFromCpu;
+    if (InterfaceVersion >= DXGKRNL_INTERFACE_VERSION_6)
+    {
+        Interface->RxgkIntPfnWaitForSynchronizationObjectFromGpu = DxgBridgeWaitForSynchronizationObjectFromGpu;
+        Interface->RxgkIntPfnSignalSynchronizationObjectFromGpu = DxgBridgeSignalSynchronizationObjectFromGpu;
+        Interface->RxgkIntPfnSignalSynchronizationObjectFromGpu2 = DxgBridgeSignalSynchronizationObjectFromGpu2;
+    }
 
-    if (WddmBridgeGetInterfaceVersion() >= DXGKRNL_INTERFACE_VERSION_2)
+    if (InterfaceVersion >= DXGKRNL_INTERFACE_VERSION_2)
     {
         Interface->RxgkIntPfnCreateContextVirtual = DxgBridgeCreateContextVirtual;
         Interface->RxgkIntPfnSubmitCommand = DxgBridgeSubmitCommand;
     }
-    if (WddmBridgeGetInterfaceVersion() >= DXGKRNL_INTERFACE_VERSION_3)
+#endif
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1105)
+    if (InterfaceVersion >= DXGKRNL_INTERFACE_VERSION_3)
         Interface->RxgkIntPfnCreateAllocation2 = DxgBridgeCreateAllocation2;
-    if (WddmBridgeGetInterfaceVersion() >= DXGKRNL_INTERFACE_VERSION_4)
+#endif
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
+    if (InterfaceVersion >= DXGKRNL_INTERFACE_VERSION_4)
         Interface->RxgkIntPfnGetAllocationPriority = DxgBridgeGetAllocationPriority;
-    if (WddmBridgeGetInterfaceVersion() >= DXGKRNL_INTERFACE_VERSION_5)
+#endif
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1105)
+    if (InterfaceVersion >= DXGKRNL_INTERFACE_VERSION_5)
         Interface->RxgkIntPfnOpenSynchronizationObject = DxgBridgeOpenSynchronizationObject;
+#endif
+    UNREFERENCED_PARAMETER(InterfaceVersion);
 }
