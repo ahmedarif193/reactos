@@ -29,6 +29,7 @@
 #include "present.h"
 #include "pnp.h"
 #include "caps_core.h"
+#include "paging_core.h"
 #if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
 #include "feature_query_core.h"
 #endif
@@ -36,9 +37,10 @@
 C_ASSERT(sizeof(RXGK_CREATECONTEXTVIRTUAL_PACKET) == RXGK_CREATECONTEXTVIRTUAL_PACKET_V1_SIZE);
 C_ASSERT(sizeof(RXGK_SUBMITCOMMAND_PACKET) == RXGK_SUBMITCOMMAND_PACKET_V1_SIZE);
 #if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
-C_ASSERT(sizeof(RXGK_ISFEATUREENABLED_PACKET) ==
-         RXGK_ISFEATUREENABLED_PACKET_SIZE);
+C_ASSERT(sizeof(RXGK_ISFEATUREENABLED_PACKET) == RXGK_ISFEATUREENABLED_PACKET_SIZE);
 #endif
+C_ASSERT(sizeof(RXGK_GETRESOURCEPRESENTPRIVATE_PACKET) == RXGK_GETRESOURCEPRESENTPRIVATE_PACKET_V1_SIZE);
+C_ASSERT(sizeof(RXGK_INVALIDATECACHE_PACKET) == RXGK_INVALIDATECACHE_PACKET_V1_SIZE);
 #if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
 C_ASSERT(sizeof(RXGK_GETDWMVERTICALBLANKEVENT_PACKET) ==
          RXGK_GETDWMVERTICALBLANKEVENT_PACKET_V1_SIZE);
@@ -57,6 +59,23 @@ C_ASSERT(FIELD_OFFSET(RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET, AdapterHandle) 
 C_ASSERT(FIELD_OFFSET(RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET, DeviceHandle) == 12);
 C_ASSERT(FIELD_OFFSET(RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET, VidPnSourceId) == 16);
 C_ASSERT(FIELD_OFFSET(RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET, TargetSyncRefreshCount) == 20);
+C_ASSERT(sizeof(RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET) ==
+         RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET_V1_SIZE);
+C_ASSERT(FIELD_OFFSET(RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET, Size) == 0);
+C_ASSERT(FIELD_OFFSET(RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET, Version) == 4);
+C_ASSERT(FIELD_OFFSET(RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET, GlobalShareHandle) == 8);
+C_ASSERT(FIELD_OFFSET(RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET, Reserved) == 12);
+C_ASSERT(FIELD_OFFSET(RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET, NtHandle) == 16);
+C_ASSERT(FIELD_OFFSET(RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET, AdapterLuidLowPart) == 24);
+C_ASSERT(FIELD_OFFSET(RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET, AdapterLuidHighPart) == 28);
+#endif
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1300)
+C_ASSERT(sizeof(RXGK_CONTEXTINPROCESSPRIORITY_PACKET) ==
+         RXGK_CONTEXTINPROCESSPRIORITY_PACKET_V1_SIZE);
+C_ASSERT(FIELD_OFFSET(RXGK_CONTEXTINPROCESSPRIORITY_PACKET, Size) == 0);
+C_ASSERT(FIELD_OFFSET(RXGK_CONTEXTINPROCESSPRIORITY_PACKET, Version) == 4);
+C_ASSERT(FIELD_OFFSET(RXGK_CONTEXTINPROCESSPRIORITY_PACKET, ContextHandle) == 8);
+C_ASSERT(FIELD_OFFSET(RXGK_CONTEXTINPROCESSPRIORITY_PACKET, Priority) == 12);
 #endif
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
 C_ASSERT(sizeof(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET) ==
@@ -72,6 +91,50 @@ C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, ResultVidPnSourc
 C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, ResultAdapterLuidLowPart) == 36);
 C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, ResultAdapterLuidHighPart) == 40);
 C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, OwnerType) == 44);
+#endif
+C_ASSERT(FIELD_OFFSET(RXGK_GETRESOURCEPRESENTPRIVATE_PACKET, Size) == 0);
+C_ASSERT(FIELD_OFFSET(RXGK_GETRESOURCEPRESENTPRIVATE_PACKET, Version) == 4);
+C_ASSERT(FIELD_OFFSET(RXGK_GETRESOURCEPRESENTPRIVATE_PACKET, ResourceHandle) == 8);
+C_ASSERT(FIELD_OFFSET(RXGK_GETRESOURCEPRESENTPRIVATE_PACKET, PrivateDriverDataSize) == 12);
+C_ASSERT(FIELD_OFFSET(RXGK_GETRESOURCEPRESENTPRIVATE_PACKET, PrivateDriverDataOffset) == 16);
+C_ASSERT(FIELD_OFFSET(RXGK_GETRESOURCEPRESENTPRIVATE_PACKET, Reserved) == 20);
+C_ASSERT(FIELD_OFFSET(RXGK_INVALIDATECACHE_PACKET, Size) == 0);
+C_ASSERT(FIELD_OFFSET(RXGK_INVALIDATECACHE_PACKET, Version) == 4);
+C_ASSERT(FIELD_OFFSET(RXGK_INVALIDATECACHE_PACKET, DeviceHandle) == 8);
+C_ASSERT(FIELD_OFFSET(RXGK_INVALIDATECACHE_PACKET, AllocationHandle) == 12);
+C_ASSERT(FIELD_OFFSET(RXGK_INVALIDATECACHE_PACKET, Offset) == 16);
+C_ASSERT(FIELD_OFFSET(RXGK_INVALIDATECACHE_PACKET, Length) == 24);
+C_ASSERT(sizeof(RXGK_RECLAIMALLOCATIONS2_PACKET) == RXGK_RECLAIMALLOCATIONS2_PACKET_V1_SIZE);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS2_PACKET, Size) == 0);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS2_PACKET, Version) == 4);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS2_PACKET, PagingQueueHandle) == 8);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS2_PACKET, NumAllocations) == 12);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS2_PACKET, Flags) == 16);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS2_PACKET, HandlesOffset) == 20);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS2_PACKET, DiscardedOffset) == 24);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS2_PACKET, Reserved) == 28);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS2_PACKET, PagingFenceValue) == 32);
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2100)
+C_ASSERT(sizeof(RXGK_UPDATEALLOCATIONPROPERTY_PACKET) == RXGK_UPDATEALLOCATIONPROPERTY_PACKET_V1_SIZE);
+C_ASSERT(FIELD_OFFSET(RXGK_UPDATEALLOCATIONPROPERTY_PACKET, Size) == 0);
+C_ASSERT(FIELD_OFFSET(RXGK_UPDATEALLOCATIONPROPERTY_PACKET, Version) == 4);
+C_ASSERT(FIELD_OFFSET(RXGK_UPDATEALLOCATIONPROPERTY_PACKET, PagingQueueHandle) == 8);
+C_ASSERT(FIELD_OFFSET(RXGK_UPDATEALLOCATIONPROPERTY_PACKET, AllocationHandle) == 12);
+C_ASSERT(FIELD_OFFSET(RXGK_UPDATEALLOCATIONPROPERTY_PACKET, SupportedSegmentSet) == 16);
+C_ASSERT(FIELD_OFFSET(RXGK_UPDATEALLOCATIONPROPERTY_PACKET, PreferredSegmentValue) == 20);
+C_ASSERT(FIELD_OFFSET(RXGK_UPDATEALLOCATIONPROPERTY_PACKET, PropertyFlagsValue) == 24);
+C_ASSERT(FIELD_OFFSET(RXGK_UPDATEALLOCATIONPROPERTY_PACKET, PropertyMaskValue) == 28);
+C_ASSERT(FIELD_OFFSET(RXGK_UPDATEALLOCATIONPROPERTY_PACKET, PagingFenceValue) == 32);
+C_ASSERT(sizeof(RXGK_RECLAIMALLOCATIONS3_PACKET) == RXGK_RECLAIMALLOCATIONS3_PACKET_V1_SIZE);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS3_PACKET, Size) == 0);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS3_PACKET, Version) == 4);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS3_PACKET, PagingQueueHandle) == 8);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS3_PACKET, NumAllocations) == 12);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS3_PACKET, Flags) == 16);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS3_PACKET, HandlesOffset) == 20);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS3_PACKET, ResultsOffset) == 24);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS3_PACKET, Reserved) == 28);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS3_PACKET, PagingFenceValue) == 32);
 #endif
 #if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
 C_ASSERT(FIELD_OFFSET(RXGK_ISFEATUREENABLED_PACKET, AdapterHandle) == 0);
@@ -164,6 +227,40 @@ DxgkUnInitialize(
 #endif
 #ifndef PROCESS_SET_INFORMATION
 #define PROCESS_SET_INFORMATION 0x0200
+#endif
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+static NTSTATUS
+DxgkpDirectMakeResident(
+    _Inout_ D3DDDI_MAKERESIDENT *Data);
+
+static NTSTATUS
+DxgkpDirectEvict(
+    _Inout_ D3DKMT_EVICT *Data);
+
+static NTSTATUS
+DxgkpDirectReserveGpuVirtualAddress(
+    _Inout_ D3DDDI_RESERVEGPUVIRTUALADDRESS *Data);
+
+static NTSTATUS
+DxgkpDirectMapGpuVirtualAddress(
+    _Inout_ D3DDDI_MAPGPUVIRTUALADDRESS *Data);
+
+static NTSTATUS
+DxgkpDirectFreeGpuVirtualAddress(
+    _In_ const D3DKMT_FREEGPUVIRTUALADDRESS *Data);
+
+static NTSTATUS
+DxgkpDirectUpdateGpuVirtualAddress(
+    _In_ const D3DKMT_UPDATEGPUVIRTUALADDRESS *Data);
+
+static NTSTATUS
+DxgkpDirectWaitForSynchronizationObjectFromCpu(
+    _In_ const D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU *Data);
+
+static NTSTATUS
+DxgkpDirectSignalSynchronizationObjectFromCpu(
+    _In_ const D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU *Data);
 #endif
 
 typedef struct _DXGKRNL_FILE_CONTEXT
@@ -301,8 +398,16 @@ DxgkpKmtIoctlMinimumConfiguredLevel(
         case IOCTL_D3DKMT_GETDWMVERTICALBLANKEVENT:
         case IOCTL_D3DKMT_SETSYNCREFRESHCOUNTWAITTARGET:
 #endif
+        case IOCTL_D3DKMT_GETSHAREDRESOURCEADAPTERLUID:
         case IOCTL_DXGKRNL_GET_DOD_INIT_ENTRY:
             return DXGK_CAPS_CORE_LEVEL_WDDM_1_2;
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1300)
+        /* Exported KMT entry points first exposed at WDDM 1.3. */
+        case IOCTL_D3DKMT_SETCONTEXTINPROCESSPRIORITY:
+        case IOCTL_D3DKMT_GETCONTEXTINPROCESSPRIORITY:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_1_3;
+#endif
 
         /* WDDM 2.0 / Windows 10 additions and their private prepare phase. */
         case IOCTL_D3DKMT_CREATECONTEXTVIRTUAL:
@@ -311,6 +416,9 @@ DxgkpKmtIoctlMinimumConfiguredLevel(
         case IOCTL_D3DKMT_RESERVEGPUVIRTUALADDRESS:
         case IOCTL_D3DKMT_FREEGPUVIRTUALADDRESS:
         case IOCTL_D3DKMT_UPDATEGPUVIRTUALADDRESS:
+        case IOCTL_D3DKMT_GETRESOURCEPRESENTPRIVATEDRIVERDATA:
+        case IOCTL_D3DKMT_INVALIDATECACHE:
+        case IOCTL_D3DKMT_RECLAIMALLOCATIONS2:
         case IOCTL_D3DKMT_MAKERESIDENT:
         case IOCTL_D3DKMT_EVICT:
         case IOCTL_D3DKMT_QUERYCLOCKCALIBRATION:
@@ -332,6 +440,13 @@ DxgkpKmtIoctlMinimumConfiguredLevel(
         case IOCTL_DXGKRNL_PREPARERESERVEGPUVIRTUALADDRESS:
         case IOCTL_DXGKRNL_GET_UNINIT_ENTRY:
             return DXGK_CAPS_CORE_LEVEL_WDDM_2_0;
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2100)
+        /* Mandatory WDDM 2.1 allocation-property and reclaim contracts. */
+        case IOCTL_D3DKMT_UPDATEALLOCATIONPROPERTY:
+        case IOCTL_D3DKMT_RECLAIMALLOCATIONS3:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_2_1;
+#endif
 
         /* Hardware queues first appeared in WDDM 2.2. */
         case IOCTL_D3DKMT_GETALLOCATIONPRIORITY:
@@ -811,9 +926,17 @@ DxgkpDescribeFeature(
         case DXGK_FEATURE_PAGE_BASED_MEMORY_MANAGER:
         case DXGK_FEATURE_KERNEL_MODE_TESTING:
         case DXGK_FEATURE_NATIVE_FENCE:
+            Descriptor->KnownFeature = TRUE;
+            Descriptor->RequiresDriverSupport = TRUE;
+            break;
+
         case DXGK_FEATURE_KMD_SIGNAL_CPU_EVENT:
             Descriptor->KnownFeature = TRUE;
             Descriptor->RequiresDriverSupport = TRUE;
+            Descriptor->OsSupported = TRUE;
+            Descriptor->OsSupportedOnCurrentConfig = TRUE;
+            Descriptor->OsMinVersion = 1;
+            Descriptor->OsMaxVersion = 1;
             break;
 
         /*
@@ -840,9 +963,9 @@ DxgkpDescribeFeature(
     }
 
     /*
-     * The ReactOS contracts are not complete enough to advertise yet,
-     * including KMD-signaled CPU events, native fences, HWSCH, UMS,
-     * page-based VidMm, and GPUVAIOMMU.
+     * Except for KMD-signaled CPU events above, the remaining ReactOS
+     * contracts are not complete enough to advertise, including native
+     * fences, HWSCH, UMS, page-based VidMm, and GPUVAIOMMU.
      */
 }
 
@@ -1020,16 +1143,8 @@ DxgkpQueryKmdFeatureSupport(
                  &QueryFeatureSupport);
     if (!NT_SUCCESS(Status))
     {
-        /*
-         * The WDK sample returns STATUS_INVALID_PARAMETER when the driver's
-         * feature table does not contain this OS-known feature.  That is an
-         * unsupported feature result, not a failure of the public query.
-         */
-        if (Status == STATUS_NOT_SUPPORTED ||
-            Status == STATUS_INVALID_PARAMETER)
-        {
+        if (Status == STATUS_NOT_SUPPORTED)
             Status = STATUS_SUCCESS;
-        }
         goto ReleaseInterface;
     }
 
@@ -1194,6 +1309,60 @@ DxgkpValidateGlobalShareForIoctl(
     DxgkVidMmDereferenceResource(Resource);
     return STATUS_SUCCESS;
 }
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+static NTSTATUS
+DxgkpGetSharedResourceAdapterLuid(
+    _Inout_ PRXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET Packet)
+{
+    PDXGKVMM_RESOURCE Resource = NULL;
+    PDXGKRNL_ADAPTER Adapter;
+    NTSTATUS Status;
+
+    if (Packet == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Packet->AdapterLuidLowPart = 0;
+    Packet->AdapterLuidHighPart = 0;
+
+    /*
+     * The two input handles are alternatives.  ReactOS VidMm currently has a
+     * real global-share namespace, but it does not yet create NT resource
+     * objects.  Reject that unimplemented model explicitly instead of
+     * interpreting an arbitrary process handle as a VidMm handle.
+     */
+    if (Packet->GlobalShareHandle != 0 && Packet->NtHandle != 0)
+        return STATUS_INVALID_PARAMETER;
+    if (Packet->GlobalShareHandle == 0)
+        return Packet->NtHandle == 0
+                   ? STATUS_INVALID_PARAMETER
+                   : STATUS_NOT_SUPPORTED;
+
+    Status = DxgkVidMmReferenceResource(
+                 Packet->GlobalShareHandle,
+                 TRUE,
+                 NULL,
+                 &Resource);
+    if (!NT_SUCCESS(Status))
+        return STATUS_INVALID_PARAMETER;
+
+    Adapter = Resource->Adapter;
+    if (Adapter == NULL)
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+        goto Cleanup;
+    }
+
+    /* AdapterLuid is assigned once at adapter start and is immutable. */
+    Packet->AdapterLuidLowPart = Adapter->AdapterLuid.LowPart;
+    Packet->AdapterLuidHighPart = Adapter->AdapterLuid.HighPart;
+    Status = STATUS_SUCCESS;
+
+Cleanup:
+    DxgkVidMmDereferenceResource(Resource);
+    return Status;
+}
+#endif
 
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
 static NTSTATUS
@@ -2123,6 +2292,9 @@ DxgkpQueryAdapterInfoMinimumLevel(
             return TRUE;
 
         case KMTQAITYPE_WDDM_1_3_CAPS:
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1300)
+        case KMTQAITYPE_MULTIPLANEOVERLAY_SUPPORT:
+#endif
             *MinimumLevel = DXGK_CAPS_CORE_LEVEL_WDDM_1_3;
             return TRUE;
 
@@ -2425,6 +2597,42 @@ DxgkpQueryAdapterInfoCaptured(
         {
             DXGKP_QUERY_RETURN(STATUS_NOT_SUPPORTED);
         }
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1300)
+        case KMTQAITYPE_MULTIPLANEOVERLAY_SUPPORT:
+        {
+            D3DKMT_MULTIPLANEOVERLAY_SUPPORT Support;
+
+            if (pQueryAdapterInfo->pPrivateDriverData == NULL ||
+                pQueryAdapterInfo->PrivateDriverDataSize < sizeof(Support))
+            {
+                DXGKP_QUERY_RETURN(STATUS_BUFFER_TOO_SMALL);
+            }
+
+            RtlZeroMemory(&Support, sizeof(Support));
+            Support.Supported = DxgkPresentCoreMpoV1Supported(
+                                    REACTOS_WDDM_TARGET_LEVEL,
+                                    DXGK_CB_FULL(
+                                        Adapter,
+                                        DxgkDdiCheckMultiPlaneOverlaySupport) != NULL,
+                                    DXGK_CB_FULL(
+                                        Adapter,
+                                        DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay) != NULL,
+                                    FALSE,
+                                    FALSE);
+            _SEH2_TRY
+            {
+                *(D3DKMT_MULTIPLANEOVERLAY_SUPPORT *)
+                    pQueryAdapterInfo->pPrivateDriverData = Support;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                DXGKP_QUERY_RETURN(_SEH2_GetExceptionCode());
+            }
+            _SEH2_END;
+            DXGKP_QUERY_RETURN(STATUS_SUCCESS);
+        }
+#endif
 
         /*
          * Per-level capability words.  Every bit is derived from a complete,
@@ -3795,6 +4003,11 @@ DxgkpEscapeCaptured(
     CONST D3DKMT_HANDLE *ResourceHandles;
     UINT             ResourceHandleCount;
     NTSTATUS         Status;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3000)
+    PDXGKRNL_SYNC_OBJECT CpuEventSyncObject = NULL;
+    D3DDDI_DRIVERESCAPE_CPUEVENTUSAGE *CpuEventUsage = NULL;
+    UINT64 OriginalKmdCpuEvent = 0;
+#endif
 
     if (pEscape == NULL)
         return STATUS_INVALID_PARAMETER;
@@ -3838,6 +4051,65 @@ DxgkpEscapeCaptured(
             goto Cleanup;
         }
     }
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3000)
+    if (pEscape->Flags.DriverKnownEscape)
+    {
+        CONST D3DDDI_DRIVERESCAPETYPE *KnownEscapeType;
+
+        if (pEscape->Type != D3DKMT_ESCAPE_DRIVERPRIVATE ||
+            pEscape->PrivateDriverDataSize <
+                sizeof(D3DDDI_DRIVERESCAPETYPE))
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Cleanup;
+        }
+
+        KnownEscapeType =
+            (CONST D3DDDI_DRIVERESCAPETYPE *)
+                pEscape->pPrivateDriverData;
+        if (*KnownEscapeType == D3DDDI_DRIVERESCAPETYPE_CPUEVENTUSAGE)
+        {
+            D3DDDI_ESCAPEFLAGS AllowedFlags;
+            HANDLE KmdCpuEvent;
+
+            RtlZeroMemory(&AllowedFlags, sizeof(AllowedFlags));
+            AllowedFlags.NoAdapterSynchronization = 1;
+            AllowedFlags.DriverKnownEscape = 1;
+            if (pEscape->PrivateDriverDataSize !=
+                    sizeof(D3DDDI_DRIVERESCAPE_CPUEVENTUSAGE) ||
+                (pEscape->Flags.Value & ~AllowedFlags.Value) != 0 ||
+                EscDevice == NULL ||
+                pEscape->hContext != 0)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                goto Cleanup;
+            }
+
+            CpuEventUsage =
+                (D3DDDI_DRIVERESCAPE_CPUEVENTUSAGE *)
+                    pEscape->pPrivateDriverData;
+            OriginalKmdCpuEvent = CpuEventUsage->hKmdCpuEvent;
+            if (CpuEventUsage->hSyncObject == 0 ||
+                OriginalKmdCpuEvent != 0)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                goto Cleanup;
+            }
+
+            Status = DxgkSyncObjectReferenceKmdCpuEvent(
+                         CpuEventUsage->hSyncObject,
+                         PsGetCurrentProcess(),
+                         EscDevice,
+                         &CpuEventSyncObject,
+                         &KmdCpuEvent);
+            if (!NT_SUCCESS(Status))
+                goto Cleanup;
+            CpuEventUsage->hKmdCpuEvent =
+                (UINT64)(ULONG_PTR)KmdCpuEvent;
+        }
+    }
+#endif
 
     {
         D3DKMT_HANDLE SignalSyncObject = 0;
@@ -3907,6 +4179,12 @@ DxgkpEscapeCaptured(
     DxgkReleaseKmdCall(Adapter);
 
 Cleanup:
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3000)
+    if (CpuEventUsage != NULL)
+        CpuEventUsage->hKmdCpuEvent = OriginalKmdCpuEvent;
+    if (CpuEventSyncObject != NULL)
+        DxgkSyncObjectDereferenceKmdCpuEvent(CpuEventSyncObject);
+#endif
     if (EscContext != NULL)
         DxgkDereferenceContext(EscContext);
     if (EscDevice != NULL)
@@ -4057,11 +4335,18 @@ NTAPI
 DxgkCreateOverlay(
     _Inout_ D3DKMT_CREATEOVERLAY *pData)
 {
+    NTSTATUS Status;
+
     if (pData == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    pData->hOverlay = 0;
-    return DxgkUnsupportedDeviceCall(pData->hDevice);
+    Status = DxgkpValidateDeviceHandleForIoctl(
+                 pData->hDevice,
+                 NULL,
+                 NULL);
+    return DxgkPresentCoreCompleteUnsupportedOverlayCreate(
+               Status,
+               &pData->hOverlay);
 }
 
 static NTSTATUS
@@ -4141,6 +4426,54 @@ DxgkSetContextSchedulingPriority(
     return STATUS_SUCCESS;
 }
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1300)
+static NTSTATUS
+DxgkpSetContextInProcessSchedulingPriority(
+    _In_ D3DKMT_HANDLE ContextHandle,
+    _In_ LONG Priority)
+{
+    PDXGKRNL_CONTEXT Context;
+
+    /*
+     * Native dxgkrnl uses an unsigned <= 1 check.  Consequently both negative
+     * values and values above one are invalid; this is not the ordinary
+     * context-priority range.
+     */
+    if ((ULONG)Priority > 1U)
+        return STATUS_INVALID_PARAMETER;
+
+    Context = DxgkLookupContextByHandle(ContextHandle, NULL, NULL);
+    if (Context == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    InterlockedExchange(&Context->InProcessSchedulingPriority, Priority);
+    DxgkDereferenceContext(Context);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+DxgkpGetContextInProcessSchedulingPriority(
+    _In_ D3DKMT_HANDLE ContextHandle,
+    _Out_ PLONG Priority)
+{
+    PDXGKRNL_CONTEXT Context;
+
+    if (Priority == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Context = DxgkLookupContextByHandle(ContextHandle, NULL, NULL);
+    if (Context == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    *Priority = InterlockedCompareExchange(
+                    &Context->InProcessSchedulingPriority,
+                    0,
+                    0);
+    DxgkDereferenceContext(Context);
+    return STATUS_SUCCESS;
+}
+#endif
+
 static BOOLEAN
 DxgkpGetDeviceStateMinimumLevel(
     _In_ D3DKMT_DEVICESTATE_TYPE StateType,
@@ -4216,13 +4549,20 @@ DxgkGetDeviceState(
 
         case D3DKMT_DEVICESTATE_PRESENT:
         case D3DKMT_DEVICESTATE_PRESENT_DWM:
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
-        case D3DKMT_DEVICESTATE_PAGE_FAULT:
-#endif
             Status = STATUS_NOT_SUPPORTED;
             break;
 
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_1)
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+        case D3DKMT_DEVICESTATE_PAGE_FAULT:
+            Status = DxgkDeviceGetPageFaultState(
+                         Device,
+                         &pData->PageFaultState)
+                         ? STATUS_SUCCESS
+                         : STATUS_NOT_FOUND;
+            break;
+#endif
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2100)
         case D3DKMT_DEVICESTATE_PRESENT_QUEUE:
             Status = DxgkPresentGetQueueLimitState(Device, pData->PresentQueueState.VidPnSourceId, &pData->PresentQueueState.bQueuedPresentLimitReached);
             break;
@@ -4797,6 +5137,249 @@ DxgkWaitForIdle(
     return Status;
 }
 
+typedef struct _DXGKP_RESOURCE_ALLOCATION_SNAPSHOT
+{
+    PDXGKVMM_RESOURCE Resource;
+    PDXGKVMM_ALLOCATION *Allocations;
+    UINT AllocationCount;
+} DXGKP_RESOURCE_ALLOCATION_SNAPSHOT,
+ *PDXGKP_RESOURCE_ALLOCATION_SNAPSHOT;
+
+static VOID
+DxgkpReleaseResourceAllocationSnapshots(
+    _Inout_updates_(ResourceCount)
+        PDXGKP_RESOURCE_ALLOCATION_SNAPSHOT Snapshots,
+    _In_ UINT ResourceCount)
+{
+    UINT Index;
+
+    if (Snapshots == NULL)
+        return;
+    for (Index = 0; Index < ResourceCount; ++Index)
+    {
+        if (Snapshots[Index].Allocations != NULL)
+        {
+            DxgkVidMmReleaseAllocationSnapshot(
+                Snapshots[Index].Allocations,
+                Snapshots[Index].AllocationCount);
+        }
+        if (Snapshots[Index].Resource != NULL)
+            DxgkVidMmDereferenceResource(Snapshots[Index].Resource);
+    }
+    ExFreePoolWithTag(Snapshots, TAG_DXGK_CAPTURE);
+}
+
+static NTSTATUS
+DxgkpCaptureResourceAllocationSnapshots(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_reads_(ResourceCount) CONST D3DKMT_HANDLE *ResourceHandles,
+    _In_ UINT ResourceCount,
+    _Outptr_result_buffer_(ResourceCount)
+        PDXGKP_RESOURCE_ALLOCATION_SNAPSHOT *OutSnapshots,
+    _Out_ PUINT OutAllocationCount)
+{
+    PDXGKP_RESOURCE_ALLOCATION_SNAPSHOT Snapshots = NULL;
+    D3DKMT_HANDLE *Handles = NULL;
+    SIZE_T HandlesSize;
+    SIZE_T SnapshotsSize;
+    UINT TotalAllocationCount = 0;
+    UINT Index;
+    NTSTATUS Status;
+
+    if (OutSnapshots == NULL || OutAllocationCount == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *OutSnapshots = NULL;
+    *OutAllocationCount = 0;
+    if (Adapter == NULL ||
+        Device == NULL ||
+        ResourceHandles == NULL ||
+        ResourceCount == 0 ||
+        ResourceCount > DXGKP_MAX_D3DKMT_LIST_COUNT ||
+        (SIZE_T)ResourceCount > MAXULONG_PTR / sizeof(*Handles) ||
+        (SIZE_T)ResourceCount > MAXULONG_PTR / sizeof(*Snapshots))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    HandlesSize = (SIZE_T)ResourceCount * sizeof(*Handles);
+    SnapshotsSize = (SIZE_T)ResourceCount * sizeof(*Snapshots);
+    Status = DxgkpCaptureUserBuffer(
+                 ResourceHandles,
+                 HandlesSize,
+                 KernelMode,
+                 TAG_DXGK_CAPTURE,
+                 (PVOID *)&Handles);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Snapshots = ExAllocatePoolWithTag(
+                    NonPagedPool,
+                    SnapshotsSize,
+                    TAG_DXGK_CAPTURE);
+    if (Snapshots == NULL)
+    {
+        ExFreePoolWithTag(Handles, TAG_DXGK_CAPTURE);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    RtlZeroMemory(Snapshots, SnapshotsSize);
+
+    for (Index = 0; Index < ResourceCount; ++Index)
+    {
+        UINT IgnoredPrivateDataSize;
+
+        if (Handles[Index] == 0)
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Cleanup;
+        }
+        Status = DxgkVidMmReferenceResource(
+                     Handles[Index],
+                     FALSE,
+                     Device,
+                     &Snapshots[Index].Resource);
+        if (!NT_SUCCESS(Status))
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Cleanup;
+        }
+        Status = DxgkVidMmSnapshotResourceAllocations(
+                     Snapshots[Index].Resource,
+                     Adapter,
+                     &Snapshots[Index].Allocations,
+                     &Snapshots[Index].AllocationCount,
+                     &IgnoredPrivateDataSize);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+        if (Snapshots[Index].AllocationCount >
+                DXGKP_MAX_D3DKMT_LIST_COUNT - TotalAllocationCount)
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Cleanup;
+        }
+        TotalAllocationCount += Snapshots[Index].AllocationCount;
+    }
+
+    ExFreePoolWithTag(Handles, TAG_DXGK_CAPTURE);
+    *OutSnapshots = Snapshots;
+    *OutAllocationCount = TotalAllocationCount;
+    return STATUS_SUCCESS;
+
+Cleanup:
+    ExFreePoolWithTag(Handles, TAG_DXGK_CAPTURE);
+    DxgkpReleaseResourceAllocationSnapshots(Snapshots, ResourceCount);
+    return Status;
+}
+
+static NTSTATUS
+DxgkpOfferResourceAllocationSnapshots(
+    _In_reads_(ResourceCount)
+        PDXGKP_RESOURCE_ALLOCATION_SNAPSHOT Snapshots,
+    _In_ UINT ResourceCount,
+    _In_ ULONG Priority,
+    _In_ ULONG Flags)
+{
+    UINT ResourceIndex;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    for (ResourceIndex = 0;
+         ResourceIndex < ResourceCount && NT_SUCCESS(Status);
+         ++ResourceIndex)
+    {
+        UINT AllocationIndex;
+
+        for (AllocationIndex = 0;
+             AllocationIndex < Snapshots[ResourceIndex].AllocationCount &&
+                 NT_SUCCESS(Status);
+             ++AllocationIndex)
+        {
+            Status = DxgkVidMmOfferReferencedAllocation(
+                         Snapshots[ResourceIndex].Allocations[AllocationIndex],
+                         Priority,
+                         Flags);
+        }
+    }
+    return Status;
+}
+
+static NTSTATUS
+DxgkpReclaimResourceAllocationSnapshots(
+    _In_reads_(ResourceCount)
+        PDXGKP_RESOURCE_ALLOCATION_SNAPSHOT Snapshots,
+    _In_ UINT ResourceCount,
+    _Out_writes_opt_(ResourceCount) PULONG DiscardedResults)
+{
+    UINT ResourceIndex;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    for (ResourceIndex = 0;
+         ResourceIndex < ResourceCount && NT_SUCCESS(Status);
+         ++ResourceIndex)
+    {
+        BOOLEAN ResourceDiscarded = FALSE;
+        UINT AllocationIndex;
+
+        for (AllocationIndex = 0;
+             AllocationIndex < Snapshots[ResourceIndex].AllocationCount &&
+                 NT_SUCCESS(Status);
+             ++AllocationIndex)
+        {
+            BOOLEAN AllocationDiscarded = FALSE;
+
+            Status = DxgkVidMmReclaimReferencedAllocation(
+                         Snapshots[ResourceIndex].Allocations[AllocationIndex],
+                         &AllocationDiscarded);
+            if (AllocationDiscarded)
+                ResourceDiscarded = TRUE;
+        }
+        if (NT_SUCCESS(Status) && DiscardedResults != NULL)
+            DiscardedResults[ResourceIndex] =
+                ResourceDiscarded ? TRUE : FALSE;
+    }
+    return Status;
+}
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2100)
+static NTSTATUS
+DxgkpReclaimResourceAllocationSnapshots3(
+    _In_reads_(ResourceCount)
+        PDXGKP_RESOURCE_ALLOCATION_SNAPSHOT Snapshots,
+    _In_ UINT ResourceCount,
+    _Out_writes_(ResourceCount) PULONG Results)
+{
+    UINT ResourceIndex;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (Results == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    for (ResourceIndex = 0;
+         ResourceIndex < ResourceCount && NT_SUCCESS(Status);
+         ++ResourceIndex)
+    {
+        ULONG ResourceResult = RXGK_RECLAIM_RESULT_OK;
+        UINT AllocationIndex;
+
+        for (AllocationIndex = 0;
+             AllocationIndex < Snapshots[ResourceIndex].AllocationCount &&
+                 NT_SUCCESS(Status);
+             ++AllocationIndex)
+        {
+            ULONG AllocationResult = RXGK_RECLAIM_RESULT_OK;
+
+            Status = DxgkVidMmReclaimReferencedAllocation3(
+                         Snapshots[ResourceIndex].Allocations[AllocationIndex],
+                         &AllocationResult);
+            if (AllocationResult > ResourceResult)
+                ResourceResult = AllocationResult;
+        }
+        if (NT_SUCCESS(Status))
+            Results[ResourceIndex] = ResourceResult;
+    }
+    return Status;
+}
+#endif
+
 static NTSTATUS
 DxgkpReferenceVerticalBlankTarget(
     _In_ D3DKMT_HANDLE hAdapter,
@@ -4967,6 +5550,8 @@ DxgkOfferAllocations(
 {
     PDXGKRNL_ADAPTER Adapter;
     PDXGKRNL_DEVICE Device;
+    PDXGKP_RESOURCE_ALLOCATION_SNAPSHOT ResourceSnapshots = NULL;
+    UINT ResourceAllocationCount = 0;
     NTSTATUS Status;
 
     if (pData == NULL)
@@ -4991,6 +5576,19 @@ DxgkOfferAllocations(
         DxgkDereferenceDevice(Device);
         return STATUS_INVALID_PARAMETER;
     }
+#if (REACTOS_WDDM_TARGET_LEVEL < 2000)
+    if (pData->Flags.Value != 0)
+    {
+        DxgkDereferenceDevice(Device);
+        return STATUS_INVALID_PARAMETER;
+    }
+#elif (REACTOS_WDDM_TARGET_LEVEL < 2100)
+    if (pData->Flags.AllowDecommit)
+    {
+        DxgkDereferenceDevice(Device);
+        return STATUS_NOT_SUPPORTED;
+    }
+#endif
     if (!DXGKP_OFFER_RECLAIM_END_TO_END)
     {
         DxgkDereferenceDevice(Device);
@@ -5007,7 +5605,12 @@ DxgkOfferAllocations(
             _SEH2_TRY
             {
                 for (i = 0; i < pData->NumAllocations && NT_SUCCESS(Status); ++i)
-                    Status = DxgkVidMmOfferAllocation(Adapter, Device, pData->HandleList[i], (ULONG)pData->Priority);
+                    Status = DxgkVidMmOfferAllocation(
+                                 Adapter,
+                                 Device,
+                                 pData->HandleList[i],
+                                 (ULONG)pData->Priority,
+                                 pData->Flags.Value);
             }
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
             {
@@ -5019,8 +5622,27 @@ DxgkOfferAllocations(
         return Status;
     }
 
+    Status = DxgkpCaptureResourceAllocationSnapshots(
+                 Adapter,
+                 Device,
+                 pData->pResources,
+                 pData->NumAllocations,
+                 &ResourceSnapshots,
+                 &ResourceAllocationCount);
+    if (NT_SUCCESS(Status))
+    {
+        Status = DxgkpOfferResourceAllocationSnapshots(
+                     ResourceSnapshots,
+                     pData->NumAllocations,
+                     (ULONG)pData->Priority,
+                     pData->Flags.Value);
+    }
+    UNREFERENCED_PARAMETER(ResourceAllocationCount);
+    DxgkpReleaseResourceAllocationSnapshots(
+        ResourceSnapshots,
+        pData->NumAllocations);
     DxgkDereferenceDevice(Device);
-    return STATUS_NOT_SUPPORTED;
+    return Status;
 }
 
 static NTSTATUS
@@ -5030,6 +5652,8 @@ DxgkReclaimAllocations(
 {
     PDXGKRNL_ADAPTER Adapter;
     PDXGKRNL_DEVICE Device;
+    PDXGKP_RESOURCE_ALLOCATION_SNAPSHOT ResourceSnapshots = NULL;
+    UINT ResourceAllocationCount = 0;
     NTSTATUS Status;
 
     if (pData == NULL)
@@ -5085,8 +5709,26 @@ DxgkReclaimAllocations(
         return Status;
     }
 
+    Status = DxgkpCaptureResourceAllocationSnapshots(
+                 Adapter,
+                 Device,
+                 pData->pResources,
+                 pData->NumAllocations,
+                 &ResourceSnapshots,
+                 &ResourceAllocationCount);
+    if (NT_SUCCESS(Status))
+    {
+        Status = DxgkpReclaimResourceAllocationSnapshots(
+                     ResourceSnapshots,
+                     pData->NumAllocations,
+                     (PULONG)pData->pDiscarded);
+    }
+    UNREFERENCED_PARAMETER(ResourceAllocationCount);
+    DxgkpReleaseResourceAllocationSnapshots(
+        ResourceSnapshots,
+        pData->NumAllocations);
     DxgkDereferenceDevice(Device);
-    return STATUS_NOT_SUPPORTED;
+    return Status;
 }
 
 static NTSTATUS
@@ -5201,6 +5843,33 @@ DxgkCreateSynchronizationObject2(
         }
     }
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
+    if (pData->Info.Flags.SignalByKmd)
+    {
+        if (pData->Info.Type != D3DDDI_CPU_NOTIFICATION ||
+            pData->Info.Flags.Shared)
+        {
+            DxgkDereferenceDevice(Device);
+            return STATUS_INVALID_PARAMETER;
+        }
+#if (REACTOS_WDDM_TARGET_LEVEL < 3000)
+        DxgkDereferenceDevice(Device);
+        return STATUS_NOT_SUPPORTED;
+#else
+        if (!DxgkCapsCoreInterfaceVersionAtLeast(
+                Adapter->MiniportContext->InitData.s.Version,
+                DXGK_CAPS_CORE_LEVEL_WDDM_3_0) ||
+            Device->hMiniportDevice == NULL ||
+            DXGK_CB_FULL(Adapter, DxgkDdiCreateCpuEvent) == NULL ||
+            DXGK_CB_FULL(Adapter, DxgkDdiDestroyCpuEvent) == NULL)
+        {
+            DxgkDereferenceDevice(Device);
+            return STATUS_NOT_SUPPORTED;
+        }
+#endif
+    }
+#endif
+
     DxgkDereferenceDevice(Device);
 
     if ((pData->Info.Type == D3DDDI_MONITORED_FENCE ||
@@ -5216,6 +5885,11 @@ DxgkCreateSynchronizationObject2(
          * no other flag applies to them. */
         RtlZeroMemory(&SupportedFlags, sizeof(SupportedFlags));
         SupportedFlags.Shared = 1;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3000) && \
+    (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
+        if (pData->Info.Type == D3DDDI_CPU_NOTIFICATION)
+            SupportedFlags.SignalByKmd = 1;
+#endif
         if ((pData->Info.Flags.Value & ~SupportedFlags.Value) != 0)
             return STATUS_NOT_SUPPORTED;
     }
@@ -5559,9 +6233,12 @@ typedef struct _DXGKRNL_PAGING_QUEUE
     volatile LONG   Destroying;
     volatile LONG   TeardownClaimed;
 
-    /* Monotonic paging fence: one value per queued paging operation; the
-     * queue's monitored fence is signaled to it at packet retirement. */
-    volatile LONG64 LastQueuedFence;
+    /*
+     * Serializes value reservation with scheduler admission.  A failed
+     * transaction aborts its candidate; a successful transaction commits the
+     * value carried by the queue's monitored fence at packet retirement.
+     */
+    DXGK_PAGING_FENCE_QUEUE_CORE FenceQueue;
 } DXGKRNL_PAGING_QUEUE, *PDXGKRNL_PAGING_QUEUE;
 
 static LONG DxgkPagingQueueInitialized = 0;
@@ -5696,6 +6373,367 @@ DxgkpReferencePagingQueueForPaging(
 }
 
 static NTSTATUS
+DxgkpReclaimAllocationsPacket(
+    _In_ D3DKMT_HANDLE PagingQueueHandle,
+    _In_ UINT NumAllocations,
+    _In_ BOOLEAN ResourceList,
+    _In_reads_(NumAllocations) CONST D3DKMT_HANDLE *Handles,
+    _Out_writes_opt_(NumAllocations) PULONG Results,
+    _In_ BOOLEAN ThreeStateResults,
+    _Out_ PULONGLONG OutPagingFenceValue)
+{
+    PDXGKRNL_ADAPTER Adapter = NULL;
+    PDXGKRNL_DEVICE Device = NULL;
+    PDXGKRNL_PAGING_QUEUE PagingQueue = NULL;
+    PDXGKVMM_ALLOCATION *DirectAllocations = NULL;
+    PDXGKP_RESOURCE_ALLOCATION_SNAPSHOT ResourceSnapshots = NULL;
+    PDXGKVMM_ALLOCATION *ResidentAllocations = NULL;
+    UINT TotalAllocationCount = 0;
+    UINT ResidentAllocationCount = 0;
+    UINT Index;
+    ULONGLONG NumBytesToTrim = 0;
+    ULONGLONG PagingFenceValue = 0;
+    BOOLEAN PagingQueued = FALSE;
+    BOOLEAN BatchSucceeded = FALSE;
+    DXGK_PAGING_FENCE_TRANSACTION FenceTransaction;
+    BOOLEAN FenceTransactionActive = FALSE;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (OutPagingFenceValue == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *OutPagingFenceValue = 0;
+    if (Results != NULL)
+        RtlZeroMemory(
+            Results,
+            (SIZE_T)NumAllocations * sizeof(*Results));
+
+    Status = DxgkpReferencePagingQueueForPaging(
+                 PagingQueueHandle,
+                 PsGetCurrentProcess(),
+                 &Adapter,
+                 &Device,
+                 &PagingQueue);
+    if (!NT_SUCCESS(Status))
+        return STATUS_INVALID_HANDLE;
+    if (Device->ProcessRecord == NULL)
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+        goto Cleanup;
+    }
+
+    if (ResourceList)
+    {
+        Status = DxgkpCaptureResourceAllocationSnapshots(
+                     Adapter,
+                     Device,
+                     Handles,
+                     NumAllocations,
+                     &ResourceSnapshots,
+                     &TotalAllocationCount);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2100)
+        if (ThreeStateResults)
+        {
+            Status = DxgkpReclaimResourceAllocationSnapshots3(
+                         ResourceSnapshots,
+                         NumAllocations,
+                         Results);
+        }
+        else
+#endif
+        {
+            Status = DxgkpReclaimResourceAllocationSnapshots(
+                         ResourceSnapshots,
+                         NumAllocations,
+                         Results);
+        }
+    }
+    else
+    {
+        TotalAllocationCount = NumAllocations;
+        Status = DxgkpCaptureAllocationReferencesForIoctl(
+                     Adapter,
+                     Device,
+                     Handles,
+                     NumAllocations,
+                     KernelMode,
+                     &DirectAllocations);
+        if (NT_SUCCESS(Status))
+        {
+            for (Index = 0;
+                 Index < NumAllocations && NT_SUCCESS(Status);
+                 ++Index)
+            {
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2100)
+                if (ThreeStateResults)
+                {
+                    Status = DxgkVidMmReclaimReferencedAllocation3(
+                                 DirectAllocations[Index],
+                                 &Results[Index]);
+                }
+                else
+#endif
+                {
+                    BOOLEAN Discarded = FALSE;
+
+                    Status = DxgkVidMmReclaimReferencedAllocation(
+                                 DirectAllocations[Index],
+                                 &Discarded);
+                    if (NT_SUCCESS(Status) && Results != NULL)
+                        Results[Index] = Discarded ? TRUE : FALSE;
+                }
+            }
+        }
+    }
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    if (TotalAllocationCount != 0)
+    {
+        if ((SIZE_T)TotalAllocationCount >
+            MAXULONG_PTR / sizeof(*ResidentAllocations))
+        {
+            Status = STATUS_INTEGER_OVERFLOW;
+            goto Cleanup;
+        }
+        ResidentAllocations = ExAllocatePoolWithTag(
+                                  PagedPool,
+                                  (SIZE_T)TotalAllocationCount *
+                                      sizeof(*ResidentAllocations),
+                                  TAG_DXGK_CAPTURE);
+        if (ResidentAllocations == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Cleanup;
+        }
+
+        if (DirectAllocations != NULL)
+        {
+            for (Index = 0; Index < NumAllocations; ++Index)
+            {
+                if (DxgkVidMmDeviceHoldsResidencyReference(
+                        DirectAllocations[Index],
+                        Device))
+                {
+                    ResidentAllocations[ResidentAllocationCount++] =
+                        DirectAllocations[Index];
+                }
+            }
+        }
+        else
+        {
+            UINT ResourceIndex;
+
+            for (ResourceIndex = 0;
+                 ResourceIndex < NumAllocations;
+                 ++ResourceIndex)
+            {
+                UINT AllocationIndex;
+
+                for (AllocationIndex = 0;
+                     AllocationIndex <
+                         ResourceSnapshots[ResourceIndex].AllocationCount;
+                     ++AllocationIndex)
+                {
+                    PDXGKVMM_ALLOCATION Allocation =
+                        ResourceSnapshots[ResourceIndex]
+                            .Allocations[AllocationIndex];
+
+                    if (DxgkVidMmDeviceHoldsResidencyReference(
+                            Allocation,
+                            Device))
+                    {
+                        ResidentAllocations[ResidentAllocationCount++] =
+                            Allocation;
+                    }
+                }
+            }
+        }
+    }
+
+    if (ResidentAllocationCount == 0)
+    {
+        Status = STATUS_SUCCESS;
+        goto Cleanup;
+    }
+
+    Status = DxgkPagingFenceQueueCoreBegin(
+                 &PagingQueue->FenceQueue,
+                 &FenceTransaction);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    FenceTransactionActive = TRUE;
+
+    /*
+     * MakeResidentBatch temporarily adds one residency reference for every
+     * list occurrence.  Existing references decide whether reclaim must page
+     * the allocation back in; releasing only those temporary references after
+     * admission restores the caller's residency requirement list exactly.
+     */
+    Status = DxgkVidMmMakeResidentBatch(
+                 Adapter,
+                 Device->ProcessRecord,
+                 Device,
+                 ResidentAllocations,
+                 ResidentAllocationCount,
+                 PagingQueue->hSyncObject,
+                 &FenceTransaction.CandidateCounter,
+                 FALSE,
+                 FALSE,
+                 &NumBytesToTrim,
+                 &PagingFenceValue,
+                 &PagingQueued);
+    BatchSucceeded = NT_SUCCESS(Status);
+    if (BatchSucceeded)
+    {
+        NTSTATUS TransactionStatus =
+            DxgkPagingFenceQueueCoreComplete(
+                &FenceTransaction,
+                PagingFenceValue);
+
+        FenceTransactionActive = FALSE;
+        if (!NT_SUCCESS(TransactionStatus))
+            Status = TransactionStatus;
+    }
+    else
+    {
+        DxgkPagingFenceQueueCoreAbort(&FenceTransaction);
+        FenceTransactionActive = FALSE;
+    }
+
+    if (BatchSucceeded)
+    {
+        for (Index = 0; Index < ResidentAllocationCount; ++Index)
+        {
+            if (!DxgkVidMmReleaseDeviceResidencyReference(
+                    ResidentAllocations[Index],
+                    Device,
+                    NULL) &&
+                NT_SUCCESS(Status))
+            {
+                Status = STATUS_DEVICE_PROTOCOL_ERROR;
+            }
+        }
+    }
+    if (NT_SUCCESS(Status))
+        *OutPagingFenceValue = PagingFenceValue;
+
+Cleanup:
+    if (FenceTransactionActive)
+        DxgkPagingFenceQueueCoreAbort(&FenceTransaction);
+    if (ResidentAllocations != NULL)
+        ExFreePoolWithTag(ResidentAllocations, TAG_DXGK_CAPTURE);
+    if (DirectAllocations != NULL)
+    {
+        DxgkpReleaseAllocationReferencesForIoctl(
+            DirectAllocations,
+            NumAllocations);
+    }
+    if (ResourceSnapshots != NULL)
+    {
+        DxgkpReleaseResourceAllocationSnapshots(
+            ResourceSnapshots,
+            NumAllocations);
+    }
+    if (PagingQueue != NULL)
+        DxgkpDereferencePagingQueue(PagingQueue);
+    if (Device != NULL)
+        DxgkDereferenceDevice(Device);
+    UNREFERENCED_PARAMETER(NumBytesToTrim);
+    UNREFERENCED_PARAMETER(PagingQueued);
+#if (REACTOS_WDDM_TARGET_LEVEL < 2100)
+    UNREFERENCED_PARAMETER(ThreeStateResults);
+#endif
+    return Status;
+}
+
+static NTSTATUS
+DxgkpReclaimAllocations2Packet(
+    _Inout_ PRXGK_RECLAIMALLOCATIONS2_PACKET Packet)
+{
+    CONST D3DKMT_HANDLE *Handles =
+        (CONST D3DKMT_HANDLE *)
+            ((PUCHAR)Packet + Packet->HandlesOffset);
+    PULONG DiscardedResults = NULL;
+
+    if ((Packet->Flags &
+         RXGK_RECLAIMALLOCATIONS2_FLAG_RETURN_DISCARDED) != 0)
+    {
+        DiscardedResults =
+            (PULONG)((PUCHAR)Packet + Packet->DiscardedOffset);
+    }
+
+    return DxgkpReclaimAllocationsPacket(
+               Packet->PagingQueueHandle,
+               Packet->NumAllocations,
+               (Packet->Flags &
+                RXGK_RECLAIMALLOCATIONS2_FLAG_RESOURCE_LIST) != 0,
+               Handles,
+               DiscardedResults,
+               FALSE,
+               &Packet->PagingFenceValue);
+}
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2100)
+static NTSTATUS
+DxgkpReclaimAllocations3Packet(
+    _Inout_ PRXGK_RECLAIMALLOCATIONS3_PACKET Packet)
+{
+    CONST D3DKMT_HANDLE *Handles =
+        (CONST D3DKMT_HANDLE *)
+            ((PUCHAR)Packet + Packet->HandlesOffset);
+    PULONG Results =
+        (PULONG)((PUCHAR)Packet + Packet->ResultsOffset);
+
+    return DxgkpReclaimAllocationsPacket(
+               Packet->PagingQueueHandle,
+               Packet->NumAllocations,
+               (Packet->Flags &
+                RXGK_RECLAIMALLOCATIONS3_FLAG_RESOURCE_LIST) != 0,
+               Handles,
+               Results,
+               TRUE,
+               &Packet->PagingFenceValue);
+}
+
+static NTSTATUS
+DxgkpUpdateAllocationPropertyPacket(
+    _Inout_ PRXGK_UPDATEALLOCATIONPROPERTY_PACKET Packet)
+{
+    PDXGKRNL_ADAPTER Adapter = NULL;
+    PDXGKRNL_DEVICE Device = NULL;
+    PDXGKRNL_PAGING_QUEUE PagingQueue = NULL;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    Packet->PagingFenceValue = 0;
+    Status = DxgkpReferencePagingQueueForPaging(
+                 Packet->PagingQueueHandle,
+                 PsGetCurrentProcess(),
+                 &Adapter,
+                 &Device,
+                 &PagingQueue);
+    if (!NT_SUCCESS(Status))
+        return STATUS_INVALID_HANDLE;
+
+    Status = DxgkVidMmUpdateAllocationProperty(
+                 Adapter,
+                 Device,
+                 Packet->AllocationHandle,
+                 Packet->SupportedSegmentSet,
+                 Packet->PreferredSegmentValue,
+                 Packet->PropertyFlagsValue,
+                 Packet->PropertyMaskValue);
+
+    DxgkpDereferencePagingQueue(PagingQueue);
+    DxgkDereferenceDevice(Device);
+    return Status;
+}
+#endif
+
+static NTSTATUS
 NTAPI
 DxgkCreatePagingQueue(
     _Inout_ D3DKMT_CREATEPAGINGQUEUE *pData)
@@ -5755,6 +6793,7 @@ DxgkCreatePagingQueue(
     Queue->OwnerProcess = PsGetCurrentProcess();
     Queue->ReferenceCount = 1;
     InitializeListHead(&Queue->ListEntry);
+    DxgkPagingFenceQueueCoreInitialize(&Queue->FenceQueue, 0);
 
     Status = DxgkCreateOwnedHandle(DxgkHandleTypePagingQueue, Queue, Adapter, Queue->OwnerProcess, &Queue->Destroying, &Queue->TeardownClaimed, &Queue->Handle);
     if (!NT_SUCCESS(Status))
@@ -5821,6 +6860,12 @@ DxgkDestroyPagingQueue(
     }
     ExReleaseFastMutex(&DxgkPagingQueueListLock);
 
+    /*
+     * Drain the one serialized paging transaction before destroying its
+     * monitored fence.  A caller that retained Queue before handle detach is
+     * refused when it reaches Begin.
+     */
+    DxgkPagingFenceQueueCoreShutDown(&Found->FenceQueue);
     hSyncObject = Found->hSyncObject;
 
     if (hSyncObject != 0)
@@ -5877,6 +6922,7 @@ DxgkpCleanupPagingQueues(
         PDXGKRNL_PAGING_QUEUE Queue = CONTAINING_RECORD(RemoveHeadList(&Retired), DXGKRNL_PAGING_QUEUE, ListEntry);
 
         ASSERT(InterlockedCompareExchange(&Queue->TeardownClaimed, 1, 1) == 1);
+        DxgkPagingFenceQueueCoreShutDown(&Queue->FenceQueue);
         DxgkRemoveOwnedHandleObject(DxgkHandleTypePagingQueue, Queue);
         DxgkpDereferencePagingQueue(Queue);
     }
@@ -6945,6 +7991,255 @@ DxgkpDispatchBufferedIoctl(
             return Status == STATUS_BUFFER_TOO_SMALL ? STATUS_BUFFER_OVERFLOW : Status;
         }
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+        case IOCTL_D3DKMT_GETRESOURCEPRESENTPRIVATEDRIVERDATA:
+        {
+            PRXGK_GETRESOURCEPRESENTPRIVATE_PACKET Packet;
+            PVOID PrivateDriverData;
+            UINT Capacity;
+            UINT RequiredSize = 0;
+
+            if (SystemBuffer == NULL ||
+                InputLength < sizeof(*Packet) ||
+                OutputLength < sizeof(*Packet))
+            {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            Packet = (PRXGK_GETRESOURCEPRESENTPRIVATE_PACKET)SystemBuffer;
+            Capacity = Packet->PrivateDriverDataSize;
+            if (Packet->Size != InputLength ||
+                OutputLength < Packet->Size ||
+                Packet->Version != RXGK_WDDM_PACKET_VERSION_1 ||
+                Packet->Reserved != 0 ||
+                Capacity > RXGK_WDDM_MAX_PRIVATE_DRIVER_DATA)
+            {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            if (Capacity == 0)
+            {
+                if (Packet->PrivateDriverDataOffset != 0 ||
+                    Packet->Size != sizeof(*Packet))
+                {
+                    return STATUS_INVALID_PARAMETER;
+                }
+                PrivateDriverData = NULL;
+            }
+            else
+            {
+                if (Packet->PrivateDriverDataOffset != sizeof(*Packet) ||
+                    Capacity > Packet->Size - sizeof(*Packet) ||
+                    Packet->Size != sizeof(*Packet) + Capacity)
+                {
+                    return STATUS_INVALID_PARAMETER;
+                }
+                PrivateDriverData =
+                    (PUCHAR)Packet + Packet->PrivateDriverDataOffset;
+            }
+
+            Status = DxgkVidMmCopyResourcePresentPrivateDriverData(
+                         Packet->ResourceHandle,
+                         PsGetCurrentProcess(),
+                         PrivateDriverData,
+                         Capacity,
+                         &RequiredSize);
+            Packet->PrivateDriverDataSize = RequiredSize;
+            if (NT_SUCCESS(Status) || Status == STATUS_BUFFER_TOO_SMALL)
+                Irp->IoStatus.Information = Packet->Size;
+            return Status == STATUS_BUFFER_TOO_SMALL
+                       ? STATUS_BUFFER_OVERFLOW
+                       : Status;
+        }
+
+        case IOCTL_D3DKMT_INVALIDATECACHE:
+        {
+            PRXGK_INVALIDATECACHE_PACKET Packet;
+            PDXGKRNL_ADAPTER Adapter;
+            PDXGKRNL_DEVICE Device;
+
+            if (SystemBuffer == NULL ||
+                InputLength != sizeof(*Packet) ||
+                OutputLength != 0)
+            {
+                return STATUS_INFO_LENGTH_MISMATCH;
+            }
+
+            Packet = (PRXGK_INVALIDATECACHE_PACKET)SystemBuffer;
+            if (Packet->Size != sizeof(*Packet) ||
+                Packet->Version != RXGK_WDDM_PACKET_VERSION_1 ||
+                Packet->DeviceHandle == 0 ||
+                Packet->AllocationHandle == 0 ||
+                Packet->Length == 0 ||
+                Packet->Offset > MAXULONGLONG - Packet->Length)
+            {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            Status = DxgkReferenceOwnedDeviceByHandle(
+                         Packet->DeviceHandle,
+                         PsGetCurrentProcess(),
+                         &Adapter,
+                         &Device);
+            if (!NT_SUCCESS(Status))
+                return STATUS_INVALID_HANDLE;
+
+            if (!DxgkpDeviceExecutionActive(Device))
+            {
+                Status = STATUS_DEVICE_REMOVED;
+            }
+            else
+            {
+                Status = DxgkVidMmInvalidateAllocationCache(
+                             Adapter,
+                             Device,
+                             Packet->AllocationHandle,
+                             Packet->Offset,
+                             Packet->Length);
+            }
+
+            DxgkDereferenceDevice(Device);
+            return Status;
+        }
+
+        case IOCTL_D3DKMT_RECLAIMALLOCATIONS2:
+        {
+            PRXGK_RECLAIMALLOCATIONS2_PACKET Packet;
+            ULONG HandlesSize;
+            ULONG ExpectedSize;
+            BOOLEAN ReturnDiscarded;
+
+            if (SystemBuffer == NULL ||
+                InputLength < sizeof(*Packet) ||
+                OutputLength < sizeof(*Packet))
+            {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            Packet =
+                (PRXGK_RECLAIMALLOCATIONS2_PACKET)SystemBuffer;
+            if (Packet->Size != InputLength ||
+                OutputLength < Packet->Size ||
+                Packet->Version != RXGK_WDDM_PACKET_VERSION_1 ||
+                Packet->PagingQueueHandle == 0 ||
+                Packet->NumAllocations == 0 ||
+                Packet->NumAllocations >
+                    DXGKP_MAX_D3DKMT_LIST_COUNT ||
+                (Packet->Flags &
+                 ~RXGK_RECLAIMALLOCATIONS2_VALID_FLAGS) != 0 ||
+                Packet->Reserved != 0 ||
+                Packet->HandlesOffset != sizeof(*Packet))
+            {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            HandlesSize =
+                Packet->NumAllocations * sizeof(D3DKMT_HANDLE);
+            ExpectedSize = sizeof(*Packet) + HandlesSize;
+            ReturnDiscarded =
+                (Packet->Flags &
+                 RXGK_RECLAIMALLOCATIONS2_FLAG_RETURN_DISCARDED) != 0;
+            if (ReturnDiscarded)
+            {
+                if (Packet->DiscardedOffset != ExpectedSize ||
+                    ExpectedSize > MAXULONG - HandlesSize)
+                {
+                    return STATUS_INVALID_PARAMETER;
+                }
+                ExpectedSize += HandlesSize;
+            }
+            else if (Packet->DiscardedOffset != 0)
+            {
+                return STATUS_INVALID_PARAMETER;
+            }
+            if (Packet->Size != ExpectedSize)
+                return STATUS_INVALID_PARAMETER;
+
+            Status = DxgkpReclaimAllocations2Packet(Packet);
+            if (NT_SUCCESS(Status))
+                Irp->IoStatus.Information = Packet->Size;
+            return Status;
+        }
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2100)
+        case IOCTL_D3DKMT_UPDATEALLOCATIONPROPERTY:
+        {
+            PRXGK_UPDATEALLOCATIONPROPERTY_PACKET Packet;
+
+            if (SystemBuffer == NULL ||
+                InputLength != sizeof(*Packet) ||
+                OutputLength < sizeof(*Packet))
+            {
+                return STATUS_INFO_LENGTH_MISMATCH;
+            }
+
+            Packet =
+                (PRXGK_UPDATEALLOCATIONPROPERTY_PACKET)SystemBuffer;
+            if (Packet->Size != sizeof(*Packet) ||
+                Packet->Version != RXGK_WDDM_PACKET_VERSION_1 ||
+                Packet->PagingQueueHandle == 0 ||
+                Packet->AllocationHandle == 0 ||
+                (Packet->PropertyMaskValue & ~0x7UL) != 0)
+            {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            Status = DxgkpUpdateAllocationPropertyPacket(Packet);
+            if (NT_SUCCESS(Status))
+                Irp->IoStatus.Information = sizeof(*Packet);
+            return Status;
+        }
+
+        case IOCTL_D3DKMT_RECLAIMALLOCATIONS3:
+        {
+            PRXGK_RECLAIMALLOCATIONS3_PACKET Packet;
+            ULONG HandlesSize;
+            ULONG ExpectedSize;
+
+            if (SystemBuffer == NULL ||
+                InputLength < sizeof(*Packet) ||
+                OutputLength < sizeof(*Packet))
+            {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            Packet =
+                (PRXGK_RECLAIMALLOCATIONS3_PACKET)SystemBuffer;
+            if (Packet->Size != InputLength ||
+                OutputLength < Packet->Size ||
+                Packet->Version != RXGK_WDDM_PACKET_VERSION_1 ||
+                Packet->PagingQueueHandle == 0 ||
+                Packet->NumAllocations == 0 ||
+                Packet->NumAllocations >
+                    DXGKP_MAX_D3DKMT_LIST_COUNT ||
+                (Packet->Flags &
+                 ~RXGK_RECLAIMALLOCATIONS3_VALID_FLAGS) != 0 ||
+                Packet->Reserved != 0 ||
+                Packet->HandlesOffset != sizeof(*Packet))
+            {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            HandlesSize =
+                Packet->NumAllocations * sizeof(D3DKMT_HANDLE);
+            ExpectedSize = sizeof(*Packet) + HandlesSize;
+            if (Packet->ResultsOffset != ExpectedSize ||
+                ExpectedSize > MAXULONG - HandlesSize)
+            {
+                return STATUS_INVALID_PARAMETER;
+            }
+            ExpectedSize += HandlesSize;
+            if (Packet->Size != ExpectedSize)
+                return STATUS_INVALID_PARAMETER;
+
+            Status = DxgkpReclaimAllocations3Packet(Packet);
+            if (NT_SUCCESS(Status))
+                Irp->IoStatus.Information = Packet->Size;
+            return Status;
+        }
+#endif
+#endif
+
         case IOCTL_D3DKMT_CREATECONTEXTVIRTUAL:
         {
             PRXGK_CREATECONTEXTVIRTUAL_PACKET Packet;
@@ -7432,6 +8727,8 @@ DxgkpDispatchBufferedIoctl(
             SIZE_T AllocationListSize;
             ULONGLONG PagingFenceValue = 0;
             ULONG Completed = 0;
+            DXGK_PAGING_FENCE_TRANSACTION FenceTransaction;
+            BOOLEAN FenceTransactionActive = FALSE;
             UINT i;
 
             if (InputLength < sizeof(D3DDDI_MAKERESIDENT_LOCAL) || SystemBuffer == NULL)
@@ -7440,6 +8737,8 @@ DxgkpDispatchBufferedIoctl(
             pMakeResident = (D3DDDI_MAKERESIDENT_LOCAL *)SystemBuffer;
             if (pMakeResident->hPagingQueue == 0 || pMakeResident->NumAllocations > DXGKP_MAX_D3DKMT_LIST_COUNT || (pMakeResident->NumAllocations != 0 && pMakeResident->AllocationList == NULL) || pMakeResident->Flags.Reserved != 0 || (pMakeResident->Flags.MustSucceed && !pMakeResident->Flags.CantTrimFurther))
                 return STATUS_INVALID_PARAMETER;
+            pMakeResident->NumBytesToTrim = 0;
+            pMakeResident->PagingFenceValue = 0;
             Status = DxgkpReferencePagingQueueForPaging(pMakeResident->hPagingQueue, PsGetCurrentProcess(), &Adapter, &Device, &PagingQueue);
             if (!NT_SUCCESS(Status))
                 return Status;
@@ -7490,15 +8789,55 @@ DxgkpDispatchBufferedIoctl(
                     }
                 }
 
+                if (NT_SUCCESS(Status))
+                {
+                    Status = DxgkPagingFenceQueueCoreBegin(
+                                 &PagingQueue->FenceQueue,
+                                 &FenceTransaction);
+                    FenceTransactionActive = NT_SUCCESS(Status);
+                }
                 if (NT_SUCCESS(Status) && PriorityList != NULL)
                     Status = DxgkpApplyMakeResidentPriorities(Adapter, Device, AllocationList, PriorityList, pMakeResident->NumAllocations);
                 if (NT_SUCCESS(Status))
-                    Status = DxgkGpuVaMakeResident(Adapter, Device->ProcessRecord, Device, PagingQueue->hSyncObject, &PagingQueue->LastQueuedFence, AllocationList, pMakeResident->NumAllocations, &Completed, &pMakeResident->NumBytesToTrim, &PagingFenceValue);
+                {
+                    Status = DxgkGpuVaMakeResident(
+                                 Adapter,
+                                 Device->ProcessRecord,
+                                 Device,
+                                 PagingQueue->hSyncObject,
+                                 &FenceTransaction.CandidateCounter,
+                                 AllocationList,
+                                 pMakeResident->NumAllocations,
+                                 pMakeResident->Flags.CantTrimFurther,
+                                 pMakeResident->Flags.MustSucceed,
+                                 &Completed,
+                                 &pMakeResident->NumBytesToTrim,
+                                 &PagingFenceValue);
+                }
             }
             else
             {
                 Status = STATUS_SUCCESS;
                 pMakeResident->NumBytesToTrim = 0;
+            }
+
+            if (FenceTransactionActive)
+            {
+                if (NT_SUCCESS(Status))
+                {
+                    NTSTATUS TransactionStatus =
+                        DxgkPagingFenceQueueCoreComplete(
+                            &FenceTransaction,
+                            PagingFenceValue);
+
+                    if (!NT_SUCCESS(TransactionStatus))
+                        Status = TransactionStatus;
+                }
+                else
+                {
+                    DxgkPagingFenceQueueCoreAbort(&FenceTransaction);
+                }
+                FenceTransactionActive = FALSE;
             }
 
             /* STATUS_PENDING is an API status, not an IRP completion status:
@@ -7514,8 +8853,12 @@ DxgkpDispatchBufferedIoctl(
                 ExFreePoolWithTag(AllocationList, TAG_DXGK_GPUVA);
             DxgkpDereferencePagingQueue(PagingQueue);
             DxgkDereferenceDevice(Device);
-            if (NT_SUCCESS(Status))
+            if (NT_SUCCESS(Status) ||
+                Status == STATUS_GRAPHICS_NO_VIDEO_MEMORY ||
+                Status == STATUS_NO_MEMORY)
+            {
                 Irp->IoStatus.Information = sizeof(D3DDDI_MAKERESIDENT_LOCAL);
+            }
             return Status;
         }
 
@@ -7761,6 +9104,47 @@ DxgkpDispatchBufferedIoctl(
             }
         }
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+        case IOCTL_D3DKMT_GETSHAREDRESOURCEADAPTERLUID:
+        {
+            PRXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET Packet;
+
+            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL ||
+                Irp->RequestorMode != KernelMode)
+            {
+                return STATUS_ACCESS_DENIED;
+            }
+            if (InputLength <
+                    RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET_V1_SIZE ||
+                OutputLength <
+                    RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET_V1_SIZE ||
+                SystemBuffer == NULL)
+            {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            Packet =
+                (PRXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET)SystemBuffer;
+            if (Packet->Size !=
+                    RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET_V1_SIZE ||
+                Packet->Version != RXGK_WDDM_PACKET_VERSION_1 ||
+                Packet->Reserved != 0 ||
+                Packet->AdapterLuidLowPart != 0 ||
+                Packet->AdapterLuidHighPart != 0)
+            {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            Status = DxgkpGetSharedResourceAdapterLuid(Packet);
+            if (NT_SUCCESS(Status))
+            {
+                Irp->IoStatus.Information =
+                    RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET_V1_SIZE;
+            }
+            return Status;
+        }
+#endif
+
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
         case IOCTL_D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP:
         {
@@ -7803,6 +9187,61 @@ DxgkpDispatchBufferedIoctl(
             {
                 Irp->IoStatus.Information =
                     RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET_V1_SIZE;
+            }
+            return Status;
+        }
+#endif
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1300)
+        case IOCTL_D3DKMT_SETCONTEXTINPROCESSPRIORITY:
+        case IOCTL_D3DKMT_GETCONTEXTINPROCESSPRIORITY:
+        {
+            PRXGK_CONTEXTINPROCESSPRIORITY_PACKET Packet;
+
+            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL ||
+                Irp->RequestorMode != KernelMode)
+            {
+                return STATUS_ACCESS_DENIED;
+            }
+            if (InputLength <
+                    RXGK_CONTEXTINPROCESSPRIORITY_PACKET_V1_SIZE ||
+                SystemBuffer == NULL)
+            {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            Packet =
+                (PRXGK_CONTEXTINPROCESSPRIORITY_PACKET)SystemBuffer;
+            if (Packet->Size !=
+                    RXGK_CONTEXTINPROCESSPRIORITY_PACKET_V1_SIZE ||
+                Packet->Version != RXGK_WDDM_PACKET_VERSION_1)
+            {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            if (IoControlCode ==
+                    IOCTL_D3DKMT_SETCONTEXTINPROCESSPRIORITY)
+            {
+                return DxgkpSetContextInProcessSchedulingPriority(
+                           Packet->ContextHandle,
+                           Packet->Priority);
+            }
+
+            if (OutputLength <
+                    RXGK_CONTEXTINPROCESSPRIORITY_PACKET_V1_SIZE)
+            {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+            if (Packet->Priority != 0)
+                return STATUS_INVALID_PARAMETER;
+
+            Status = DxgkpGetContextInProcessSchedulingPriority(
+                         Packet->ContextHandle,
+                         &Packet->Priority);
+            if (NT_SUCCESS(Status))
+            {
+                Irp->IoStatus.Information =
+                    RXGK_CONTEXTINPROCESSPRIORITY_PACKET_V1_SIZE;
             }
             return Status;
         }
@@ -8529,9 +9968,25 @@ DxgkpDispatchBufferedIoctl(
             pInterface->RxgkIntPfnSignalSynchronizationObject2 = (PDXGADAPTER_SIGNALSYNCHRONIZATIONOBJECT2)DxgkSignalSynchronizationObject2;
 #endif
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+            pInterface->RxgkIntPfnMakeResident =
+                DxgkpDirectMakeResident;
+            pInterface->RxgkIntPfnEvict =
+                DxgkpDirectEvict;
             pInterface->RxgkIntPfnQueryVideoMemoryInfo = (PDXGADAPTER_QUERYVIDEOMEMORYINFO)DxgkQueryVideoMemoryInfo;
             pInterface->RxgkIntPfnCreatePagingQueue    = (PDXGADAPTER_CREATEPAGINGQUEUE)DxgkCreatePagingQueue;
             pInterface->RxgkIntPfnDestroyPagingQueue   = (PDXGADAPTER_DESTROYPAGINGQUEUE)DxgkDestroyPagingQueue;
+            pInterface->RxgkIntPfnReserveGpuVirtualAddress =
+                DxgkpDirectReserveGpuVirtualAddress;
+            pInterface->RxgkIntPfnMapGpuVirtualAddress =
+                DxgkpDirectMapGpuVirtualAddress;
+            pInterface->RxgkIntPfnFreeGpuVirtualAddress =
+                DxgkpDirectFreeGpuVirtualAddress;
+            pInterface->RxgkIntPfnUpdateGpuVirtualAddress =
+                DxgkpDirectUpdateGpuVirtualAddress;
+            pInterface->RxgkIntPfnWaitForSynchronizationObjectFromCpu =
+                DxgkpDirectWaitForSynchronizationObjectFromCpu;
+            pInterface->RxgkIntPfnSignalSynchronizationObjectFromCpu =
+                DxgkpDirectSignalSynchronizationObjectFromCpu;
 #endif
 
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
@@ -8561,7 +10016,6 @@ DxgkpDispatchBufferedIoctl(
                 pInterface->RxgkIntPfnSignalSynchronizationObjectFromGpu2 = (PDXGADAPTER_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2)DxgkSignalSynchronizationObjectFromGpu2;
             }
 #endif
-
 #if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
             if (Version >= DXGKRNL_INTERFACE_VERSION_7)
             {
@@ -8584,6 +10038,242 @@ DxgkpDispatchBufferedIoctl(
             return STATUS_NOT_SUPPORTED;
     }
 }
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+/*
+ * The exchanged table is a kernel-private interface.  Its callers must pass
+ * an already captured top-level packet and kernel-resident embedded arrays.
+ * Reuse the same validated METHOD_BUFFERED implementation as the win32k
+ * bridge, but force the embedded-buffer access mode to KernelMode.
+ */
+static NTSTATUS
+DxgkpInvokeDirectBufferedThunk(
+    _In_ ULONG IoControlCode,
+    _Inout_ PVOID Buffer,
+    _In_ ULONG InputLength,
+    _In_ ULONG OutputLength,
+    _Out_opt_ PULONG_PTR Information)
+{
+    IRP Irp;
+    IO_STACK_LOCATION Stack;
+    NTSTATUS Status;
+
+    if (Buffer == NULL && (InputLength != 0 || OutputLength != 0))
+        return STATUS_INVALID_PARAMETER;
+
+    RtlZeroMemory(&Irp, sizeof(Irp));
+    RtlZeroMemory(&Stack, sizeof(Stack));
+    Irp.AssociatedIrp.SystemBuffer = Buffer;
+    Irp.RequestorMode = KernelMode;
+    Stack.MajorFunction = IRP_MJ_INTERNAL_DEVICE_CONTROL;
+    Stack.Parameters.DeviceIoControl.IoControlCode = IoControlCode;
+    Stack.Parameters.DeviceIoControl.InputBufferLength = InputLength;
+    Stack.Parameters.DeviceIoControl.OutputBufferLength = OutputLength;
+
+    Status = DxgkpDispatchBufferedIoctl(&Irp, &Stack);
+    if (Information != NULL)
+        *Information = Irp.IoStatus.Information;
+    return Status;
+}
+
+static NTSTATUS
+DxgkpDirectMakeResident(
+    _Inout_ D3DDDI_MAKERESIDENT *Data)
+{
+    ULONG_PTR Information = 0;
+    NTSTATUS Status;
+
+    if (Data == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = DxgkpInvokeDirectBufferedThunk(
+                 IOCTL_D3DKMT_MAKERESIDENT,
+                 Data,
+                 sizeof(*Data),
+                 sizeof(*Data),
+                 &Information);
+    if ((NT_SUCCESS(Status) ||
+         Status == STATUS_GRAPHICS_NO_VIDEO_MEMORY ||
+         Status == STATUS_NO_MEMORY) &&
+        Information != sizeof(*Data))
+    {
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+
+    if (Status == STATUS_SUCCESS && Data->PagingFenceValue != 0)
+        return STATUS_PENDING;
+    return Status;
+}
+
+static NTSTATUS
+DxgkpDirectEvict(
+    _Inout_ D3DKMT_EVICT *Data)
+{
+    ULONG_PTR Information = 0;
+    NTSTATUS Status;
+
+    if (Data == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = DxgkpInvokeDirectBufferedThunk(
+                 IOCTL_D3DKMT_EVICT,
+                 Data,
+                 sizeof(*Data),
+                 sizeof(*Data),
+                 &Information);
+    if (NT_SUCCESS(Status) && Information != sizeof(*Data))
+        return STATUS_INFO_LENGTH_MISMATCH;
+    return Status;
+}
+
+static NTSTATUS
+DxgkpDirectReserveGpuVirtualAddress(
+    _Inout_ D3DDDI_RESERVEGPUVIRTUALADDRESS *Data)
+{
+    D3DDDI_RESERVEGPUVIRTUALADDRESS Commit;
+    ULONG_PTR Information = 0;
+    NTSTATUS Status;
+
+    if (Data == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = DxgkpInvokeDirectBufferedThunk(
+                 IOCTL_DXGKRNL_PREPARERESERVEGPUVIRTUALADDRESS,
+                 Data,
+                 sizeof(*Data),
+                 sizeof(*Data),
+                 &Information);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Information != sizeof(*Data) || Data->VirtualAddress == 0)
+        return STATUS_INVALID_DEVICE_STATE;
+
+    Commit = *Data;
+    Commit.BaseAddress = Data->VirtualAddress;
+    Information = 0;
+    Status = DxgkpInvokeDirectBufferedThunk(
+                 IOCTL_D3DKMT_RESERVEGPUVIRTUALADDRESS,
+                 &Commit,
+                 sizeof(Commit),
+                 sizeof(Commit),
+                 &Information);
+    if (NT_SUCCESS(Status) &&
+        (Information != sizeof(Commit) ||
+         Commit.VirtualAddress != Data->VirtualAddress))
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    return Status;
+}
+
+static NTSTATUS
+DxgkpDirectMapGpuVirtualAddress(
+    _Inout_ D3DDDI_MAPGPUVIRTUALADDRESS *Data)
+{
+    D3DDDI_MAPGPUVIRTUALADDRESS Commit;
+    ULONG_PTR Information = 0;
+    NTSTATUS Status;
+
+    if (Data == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = DxgkpInvokeDirectBufferedThunk(
+                 IOCTL_DXGKRNL_PREPAREMAPGPUVIRTUALADDRESS,
+                 Data,
+                 sizeof(*Data),
+                 sizeof(*Data),
+                 &Information);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Information != sizeof(*Data) || Data->VirtualAddress == 0)
+        return STATUS_INVALID_DEVICE_STATE;
+
+    Commit = *Data;
+    Commit.BaseAddress = Data->VirtualAddress;
+    Information = 0;
+    Status = DxgkpInvokeDirectBufferedThunk(
+                 IOCTL_D3DKMT_MAPGPUVIRTUALADDRESS,
+                 &Commit,
+                 sizeof(Commit),
+                 sizeof(Commit),
+                 &Information);
+    if (NT_SUCCESS(Status) &&
+        (Information != sizeof(Commit) ||
+         Commit.VirtualAddress != Data->VirtualAddress))
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    return Status;
+}
+
+static NTSTATUS
+DxgkpDirectFreeGpuVirtualAddress(
+    _In_ const D3DKMT_FREEGPUVIRTUALADDRESS *Data)
+{
+    D3DKMT_FREEGPUVIRTUALADDRESS Captured;
+
+    if (Data == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Captured = *Data;
+    return DxgkpInvokeDirectBufferedThunk(
+               IOCTL_D3DKMT_FREEGPUVIRTUALADDRESS,
+               &Captured,
+               sizeof(Captured),
+               0,
+               NULL);
+}
+
+static NTSTATUS
+DxgkpDirectUpdateGpuVirtualAddress(
+    _In_ const D3DKMT_UPDATEGPUVIRTUALADDRESS *Data)
+{
+    D3DKMT_UPDATEGPUVIRTUALADDRESS Captured;
+
+    if (Data == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Captured = *Data;
+    return DxgkpInvokeDirectBufferedThunk(
+               IOCTL_D3DKMT_UPDATEGPUVIRTUALADDRESS,
+               &Captured,
+               sizeof(Captured),
+               0,
+               NULL);
+}
+
+static NTSTATUS
+DxgkpDirectWaitForSynchronizationObjectFromCpu(
+    _In_ const D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU *Data)
+{
+    D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU Captured;
+
+    if (Data == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Captured = *Data;
+    return DxgkpInvokeDirectBufferedThunk(
+               IOCTL_D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU,
+               &Captured,
+               sizeof(Captured),
+               0,
+               NULL);
+}
+
+static NTSTATUS
+DxgkpDirectSignalSynchronizationObjectFromCpu(
+    _In_ const D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU *Data)
+{
+    D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU Captured;
+
+    if (Data == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Captured = *Data;
+    return DxgkpInvokeDirectBufferedThunk(
+               IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU,
+               &Captured,
+               sizeof(Captured),
+               0,
+               NULL);
+}
+#endif
 
 /* ========================================================================
  * DxgkDispatchDeviceControl
@@ -8713,12 +10403,24 @@ DxgkDispatchDeviceControl(
         case IOCTL_D3DKMT_GETSHADOWSURFACE:
         case IOCTL_D3DKMT_QUERYRESOURCEINFO:
         case IOCTL_D3DKMT_OPENRESOURCE:
+        case IOCTL_D3DKMT_GETRESOURCEPRESENTPRIVATEDRIVERDATA:
+        case IOCTL_D3DKMT_INVALIDATECACHE:
+        case IOCTL_D3DKMT_RECLAIMALLOCATIONS2:
 #if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
         case IOCTL_D3DKMT_GETDWMVERTICALBLANKEVENT:
         case IOCTL_D3DKMT_SETSYNCREFRESHCOUNTWAITTARGET:
+        case IOCTL_D3DKMT_GETSHAREDRESOURCEADAPTERLUID:
+#endif
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1300)
+        case IOCTL_D3DKMT_SETCONTEXTINPROCESSPRIORITY:
+        case IOCTL_D3DKMT_GETCONTEXTINPROCESSPRIORITY:
 #endif
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
         case IOCTL_D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP:
+#endif
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2100)
+        case IOCTL_D3DKMT_UPDATEALLOCATIONPROPERTY:
+        case IOCTL_D3DKMT_RECLAIMALLOCATIONS3:
 #endif
         case IOCTL_D3DKMT_SETVIDPNSOURCEOWNER:
         case IOCTL_D3DKMT_GETDEVICESTATE:

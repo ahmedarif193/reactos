@@ -316,7 +316,7 @@ WddmBridgeInit(VOID)
     RtlZeroMemory(&ExchangeOut, sizeof(ExchangeOut));
     Status = WddmBridgeSendIoctlToDevice(DeviceObject, IOCTL_DXGKRNL_EXCHANGE_INTERFACE, &ExchangeIn, sizeof(ExchangeIn), &ExchangeOut, sizeof(ExchangeOut), &Information);
 
-    /* An older dxgkrnl rejects version 7. Retry the append-only v6 prefix. */
+    /* An older dxgkrnl rejects version 7.  Retry the append-only v6 prefix. */
     if (Status == STATUS_NOT_SUPPORTED)
     {
         ExchangeIn.Version = DXGKRNL_INTERFACE_VERSION_6;
@@ -326,7 +326,7 @@ WddmBridgeInit(VOID)
         Status = WddmBridgeSendIoctlToDevice(DeviceObject, IOCTL_DXGKRNL_EXCHANGE_INTERFACE, &ExchangeIn, sizeof(ExchangeIn), &ExchangeOut, sizeof(ExchangeOut), &Information);
     }
 
-    /* A version-5 dxgkrnl rejects version 6. Retry its exact prefix. */
+    /* A version-5 dxgkrnl rejects version 6.  Retry its exact prefix. */
     if (Status == STATUS_NOT_SUPPORTED)
     {
         ExchangeIn.Version = DXGKRNL_INTERFACE_VERSION_5;
@@ -356,7 +356,7 @@ WddmBridgeInit(VOID)
         Status = WddmBridgeSendIoctlToDevice(DeviceObject, IOCTL_DXGKRNL_EXCHANGE_INTERFACE, &ExchangeIn, sizeof(ExchangeIn), &ExchangeOut, sizeof(ExchangeOut), &Information);
     }
 
-    /* A version-2 dxgkrnl rejects version 3.  Retry the append-only v2 prefix. */
+    /* A version-2 dxgkrnl rejects version 3.  Retry its exact prefix. */
     if (Status == STATUS_NOT_SUPPORTED)
     {
         ExchangeIn.Version = DXGKRNL_INTERFACE_VERSION_2;
@@ -379,7 +379,11 @@ WddmBridgeInit(VOID)
     if (NT_SUCCESS(Status) && Information != ExchangeIn.Size)
         Status = STATUS_INFO_LENGTH_MISMATCH;
 
-    /* Private protocol revisions are append-only, not WDDM levels. */
+    /*
+     * Private protocol revisions are append-only, not WDDM levels.  Optional
+     * slots can therefore be NULL at any negotiated revision when their WDDM
+     * level is above the configured ceiling or no direct entry is implemented.
+     */
     if (NT_SUCCESS(Status) &&
         (ExchangeOut.RxgkIntPfnCreateDevice == NULL ||
          ExchangeOut.RxgkIntPfnPresent == NULL ||
@@ -389,6 +393,22 @@ WddmBridgeInit(VOID)
     }
 
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    if (NT_SUCCESS(Status) &&
+        (ExchangeOut.RxgkIntPfnMakeResident == NULL ||
+         ExchangeOut.RxgkIntPfnEvict == NULL ||
+         ExchangeOut.RxgkIntPfnQueryVideoMemoryInfo == NULL ||
+         ExchangeOut.RxgkIntPfnCreatePagingQueue == NULL ||
+         ExchangeOut.RxgkIntPfnDestroyPagingQueue == NULL ||
+         ExchangeOut.RxgkIntPfnReserveGpuVirtualAddress == NULL ||
+         ExchangeOut.RxgkIntPfnMapGpuVirtualAddress == NULL ||
+         ExchangeOut.RxgkIntPfnFreeGpuVirtualAddress == NULL ||
+         ExchangeOut.RxgkIntPfnUpdateGpuVirtualAddress == NULL ||
+         ExchangeOut.RxgkIntPfnWaitForSynchronizationObjectFromCpu == NULL ||
+         ExchangeOut.RxgkIntPfnSignalSynchronizationObjectFromCpu == NULL))
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+    }
+
     if (NT_SUCCESS(Status) &&
         ExchangeIn.Version >= DXGKRNL_INTERFACE_VERSION_2 &&
         (ExchangeOut.RxgkIntPfnCreateContextVirtual == NULL ||
