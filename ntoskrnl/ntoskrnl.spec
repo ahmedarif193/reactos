@@ -653,7 +653,7 @@
 @ stdcall KeInitializeMutex(ptr long)
 @ stdcall KeInitializeQueue(ptr long)
 @ stdcall KeInitializeSemaphore(ptr long long)
-@ stdcall -arch=i386,arm,arm64 KeInitializeSpinLock(ptr) _KeInitializeSpinLock
+@ stdcall -arch=i386,x86_64,arm,arm64 KeInitializeSpinLock(ptr) _KeInitializeSpinLock
 @ stdcall KeInitializeThreadedDpc(ptr ptr ptr)
 @ stdcall KeInitializeTimer(ptr)
 @ stdcall KeInitializeTimerEx(ptr long)
@@ -1751,6 +1751,7 @@
 @ stdcall -arch=arm64 KfAcquireSpinLock(ptr)
 @ stdcall -arch=arm64 KfReleaseSpinLock(ptr long)
 @ stdcall -arch=arm64 KeGetCurrentIrql()
+@ stdcall -arch=x86_64 KeGetCurrentIrql() KxGetCurrentIrql
 ; ARM64 SMP diagnostics (smpdbg) recorders, called from the HAL
 @ stdcall -arch=arm64 SmpDbgTimerBegin(long long)
 @ stdcall -arch=arm64 SmpDbgTimerEoi(long long)
@@ -2112,7 +2113,7 @@
 @ stub -arch=arm64 ExAllocateCacheAwarePushLock
 @ stdcall -arch=arm64 ExAllocateFromLookasideListEx(ptr) ExiAllocateFromLookasideListEx
 @ stdcall -arch=arm64 ExAllocateFromNPagedLookasideList(ptr) ExiAllocateFromNPagedLookasideList
-@ stdcall -arch=arm64 ExAllocatePool2(int64 long long)
+@ stdcall -arch=x86_64,arm64 ExAllocatePool2(int64 int64 long)
 @ stdcall -arch=arm64 ExAllocatePool3(int64 long long ptr long)
 @ stdcall -version=0x603+ -arch=arm64 ExAllocateTimer(ptr ptr long)
 @ stub -arch=arm64 ExBlockOnAddressPushLock
@@ -2569,7 +2570,7 @@
 @ stdcall -arch=arm64 KeQueryActiveProcessorAffinity(ptr)
 @ stdcall -arch=arm64 KeQueryActiveProcessorAffinity2(ptr ptr)
 @ stdcall -arch=arm64 KeQueryAuxiliaryCounterFrequency(ptr)
-@ stdcall -arch=arm64 KeQueryDpcWatchdogInformation(ptr)
+@ stdcall -arch=x86_64,arm64 KeQueryDpcWatchdogInformation(ptr)
 @ stdcall -arch=arm64 KeQueryEffectivePriorityThread(ptr)
 @ stdcall -arch=arm64 KeQueryGroupAffinity(long)
 @ stdcall -arch=arm64 KeQueryGroupAffinityEx(ptr long)
@@ -2577,7 +2578,7 @@
 @ stdcall -arch=arm64 KeQueryHeteroCpuPolicyThread(ptr long)
 @ stub -arch=arm64 KeQueryInterruptPartitionCount
 @ stub -arch=arm64 KeQueryInterruptPartitionInformation
-@ stdcall -arch=arm64 KeQueryLogicalProcessorRelationship(ptr long ptr ptr)
+@ stdcall -arch=x86_64,arm64 KeQueryLogicalProcessorRelationship(ptr long ptr ptr)
 @ stdcall -arch=arm64 KeQueryMaximumGroupCount()
 @ stdcall -arch=arm64 KeQueryNodeActiveAffinity(long ptr ptr)
 @ stdcall -arch=arm64 KeQueryNodeActiveAffinity2(long ptr ptr)
@@ -2608,8 +2609,8 @@
 @ stdcall -arch=arm64 KeSetHardwareCounterConfiguration(ptr long)
 @ stdcall -arch=arm64 KeSetHeteroCpuPolicyThread(ptr long long)
 @ stdcall -arch=arm64 KeSetSelectedCpuSetsThread(ptr long ptr)
-@ stdcall -arch=arm64 KeSetSystemGroupAffinityThread(ptr ptr)
-@ stdcall -arch=arm64 KeSetTargetProcessorDpcEx(ptr ptr)
+@ stdcall -arch=x86_64,arm64 KeSetSystemGroupAffinityThread(ptr ptr)
+@ stdcall -arch=x86_64,arm64 KeSetTargetProcessorDpcEx(ptr ptr)
 @ stdcall -version=0x603+ -arch=arm64 KeSetTimer2(ptr int64 int64 ptr)
 @ stdcall -arch=x86_64,arm64 KeShouldYieldProcessor()
 @ stub -arch=arm64 KeSizeOfAffinityEx
