@@ -1803,6 +1803,16 @@ typedef struct _SYSTEM_MEMORY_LIST_INFORMATION
 } SYSTEM_MEMORY_LIST_INFORMATION, *PSYSTEM_MEMORY_LIST_INFORMATION;
 
 //
+// Class 184
+//
+typedef struct _SYSTEM_PHYSICAL_MEMORY_INFORMATION
+{
+    ULONGLONG TotalPhysicalBytes;
+    ULONGLONG LowestPhysicalAddress;
+    ULONGLONG HighestPhysicalAddress;
+} SYSTEM_PHYSICAL_MEMORY_INFORMATION, *PSYSTEM_PHYSICAL_MEMORY_INFORMATION;
+
+//
 // Firmware variable attributes
 //
 #define VARIABLE_ATTRIBUTE_NON_VOLATILE                             0x00000001
