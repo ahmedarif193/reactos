@@ -1240,14 +1240,55 @@ HalCalculateScatterGatherListSize(
     OUT PULONG pNumberOfMapRegisters)
 {
     ULONG NumberOfMapRegisters;
-    ULONG SgSize;
 
-    UNIMPLEMENTED_ONCE;
+    UNREFERENCED_PARAMETER(AdapterObject);
 
-    NumberOfMapRegisters = PAGE_ROUND_UP(Length) >> PAGE_SHIFT;
-    SgSize = sizeof(SCATTER_GATHER_CONTEXT);
+    if (Mdl != NULL)
+    {
+        /* Worst-case page span from CurrentVa across the MDL chain */
+        PMDL CurrentMdl = Mdl;
+        ULONG Remaining = Length;
+        ULONG_PTR Va = (ULONG_PTR)CurrentVa;
+        ULONG_PTR MdlVa;
+        ULONG MdlBytes;
 
-    *ScatterGatherListSize = SgSize;
+        NumberOfMapRegisters = 0;
+        while (CurrentMdl != NULL && Remaining != 0)
+        {
+            MdlVa = (ULONG_PTR)MmGetMdlVirtualAddress(CurrentMdl);
+            MdlBytes = MmGetMdlByteCount(CurrentMdl);
+
+            if (Va >= MdlVa && Va < MdlVa + MdlBytes)
+            {
+                ULONG ByteCount = MdlBytes - (ULONG)(Va - MdlVa);
+
+                if (ByteCount > Remaining) ByteCount = Remaining;
+                NumberOfMapRegisters +=
+                    (ULONG)ADDRESS_AND_SIZE_TO_SPAN_PAGES(Va, ByteCount);
+                Remaining -= ByteCount;
+                Va = 0; /* continue at the start of the next MDL */
+            }
+
+            CurrentMdl = CurrentMdl->Next;
+            if (CurrentMdl != NULL && Va == 0)
+                Va = (ULONG_PTR)MmGetMdlVirtualAddress(CurrentMdl);
+        }
+
+        /* Unmatched CurrentVa or short chain: fall back to a flat estimate */
+        if (Remaining != 0)
+            NumberOfMapRegisters +=
+                (ULONG)ADDRESS_AND_SIZE_TO_SPAN_PAGES(CurrentVa, Remaining);
+    }
+    else
+    {
+        NumberOfMapRegisters =
+            (ULONG)ADDRESS_AND_SIZE_TO_SPAN_PAGES(CurrentVa, Length);
+    }
+
+    /* The caller-provided list buffer only ever holds our bookkeeping
+     * context; the SCATTER_GATHER_LIST itself is built from pool by
+     * HalpScatterGatherAdapterControl. */
+    *ScatterGatherListSize = sizeof(SCATTER_GATHER_CONTEXT);
     if (pNumberOfMapRegisters) *pNumberOfMapRegisters = NumberOfMapRegisters;
 
     return STATUS_SUCCESS;
