@@ -644,7 +644,7 @@ ACPI_STATUS
 AcpiOsCreateMutex(
     ACPI_MUTEX *OutHandle)
 {
-    PFAST_MUTEX Mutex;
+    PKSEMAPHORE Mutex;
 
     if (!OutHandle)
     {
@@ -652,10 +652,17 @@ AcpiOsCreateMutex(
         return AE_BAD_PARAMETER;
     }
 
-    Mutex = ExAllocatePoolWithTag(NonPagedPool, sizeof(FAST_MUTEX), 'LpcA');
+    Mutex = ExAllocatePoolWithTag(NonPagedPool, sizeof(KSEMAPHORE), 'LpcA');
     if (!Mutex) return AE_NO_MEMORY;
 
-    ExInitializeFastMutex(Mutex);
+    /*
+     * ACPICA can retain a mutex while temporarily releasing its interpreter
+     * locks, and the ACPI Global Lock can be released by another thread.
+     * A FAST_MUTEX cannot support either operation because it raises IRQL to
+     * APC_LEVEL and records an owning thread. Use a binary dispatcher
+     * semaphore for the mutex contract instead.
+     */
+    KeInitializeSemaphore(Mutex, 1, 1);
 
     *OutHandle = (ACPI_MUTEX)Mutex;
 
@@ -680,23 +687,35 @@ AcpiOsAcquireMutex(
     ACPI_MUTEX Handle,
     UINT16 Timeout)
 {
+    LARGE_INTEGER WaitTime;
+    PLARGE_INTEGER WaitTimeout = NULL;
+    NTSTATUS Status;
+
     if (!Handle)
     {
         DPRINT1("Bad parameter\n");
         return AE_BAD_PARAMETER;
     }
 
-    /* Check what the caller wants us to do */
-    if (Timeout == ACPI_DO_NOT_WAIT)
+    if (Timeout != ACPI_WAIT_FOREVER)
     {
-        /* Try to acquire without waiting */
-        if (!ExTryToAcquireFastMutex((PFAST_MUTEX)Handle))
-            return AE_TIME;
+        /* ACPICA uses milliseconds; NT relative timeouts use 100-ns units. */
+        WaitTime.QuadPart = -((LONGLONG)Timeout * 10000);
+        WaitTimeout = &WaitTime;
     }
-    else
+
+    Status = KeWaitForSingleObject(Handle,
+                                   Executive,
+                                   KernelMode,
+                                   FALSE,
+                                   WaitTimeout);
+    if (Status == STATUS_TIMEOUT)
+        return AE_TIME;
+
+    if (!NT_SUCCESS(Status))
     {
-        /* Block until we get it */
-        ExAcquireFastMutex((PFAST_MUTEX)Handle);
+        DPRINT1("Mutex wait failed with status 0x%08lx\n", Status);
+        return AE_ERROR;
     }
 
     return AE_OK;
@@ -712,7 +731,10 @@ AcpiOsReleaseMutex(
         return;
     }
 
-    ExReleaseFastMutex((PFAST_MUTEX)Handle);
+    KeReleaseSemaphore((PKSEMAPHORE)Handle,
+                       IO_NO_INCREMENT,
+                       1,
+                       FALSE);
 }
 
 typedef struct _ACPI_SEM {
