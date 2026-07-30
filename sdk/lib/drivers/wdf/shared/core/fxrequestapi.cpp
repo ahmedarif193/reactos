@@ -3804,5 +3804,23 @@ Returns:
     return pRequest->IsReserved();
 }
 
+__drv_maxIRQL(DISPATCH_LEVEL)
+ULONG
+NTAPI
+WDFEXPORT(WdfRequestGetRequestorProcessId)(
+    _In_ PWDF_DRIVER_GLOBALS DriverGlobals,
+    _In_ WDFREQUEST Request
+    )
+{
+    FxRequest* pRequest;
+
+    FxObjectHandleGetPtr(GetFxDriverGlobals(DriverGlobals),
+                         Request,
+                         FX_TYPE_REQUEST,
+                         (PVOID*)&pRequest);
+
+    return pRequest->GetRequestorProcessId();
+}
+
 
 } // extern "C" the whole file

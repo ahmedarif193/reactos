@@ -1001,6 +1001,11 @@ public:
         }
     }
 
+    ULONG
+    GetRequestorProcessId(
+        VOID
+        );
+
     //
     // Return the FxFileObject if associated with this request
     //

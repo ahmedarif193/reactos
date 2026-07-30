@@ -28,6 +28,13 @@ Revision History:
 // Tracing support
 extern "C" {
 // #include "FxRequestKm.tmh"
+
+NTKERNELAPI
+ULONG
+NTAPI
+IoGetRequestorProcessId(
+    _In_ PIRP Irp
+    );
 }
 
 VOID
@@ -742,6 +749,22 @@ Done:
     }
 
     return status;
+}
+
+ULONG
+FxRequest::GetRequestorProcessId(
+    VOID
+    )
+{
+    NTSTATUS status;
+    MdIrp irp;
+
+    status = GetIrp(&irp);
+    if (!NT_SUCCESS(status) || irp == NULL) {
+        return 0;
+    }
+
+    return IoGetRequestorProcessId(irp);
 }
 
 _Must_inspect_result_
