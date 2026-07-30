@@ -1970,6 +1970,20 @@ IoStartPacket(IN PDEVICE_OBJECT DeviceObject,
 }
 
 #if defined (_WIN64)
+NTSTATUS
+NTAPI
+IoGetDeviceNumaNode(
+    _In_ PDEVICE_OBJECT PhysicalDeviceObject,
+    _Out_ PUSHORT NodeNumber)
+{
+    if ((PhysicalDeviceObject == NULL) || (NodeNumber == NULL))
+        return STATUS_INVALID_PARAMETER;
+
+    /* ReactOS currently models a single NUMA node. */
+    *NodeNumber = 0;
+    return STATUS_SUCCESS;
+}
+
 ULONG
 NTAPI
 IoWMIDeviceObjectToProviderId(
