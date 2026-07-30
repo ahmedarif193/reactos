@@ -465,6 +465,123 @@ NtfsCompleteFailedCreate(
     return Status;
 }
 
+static
+NTSTATUS
+NtfsOpenVolume(
+    _Inout_ PIRP Irp,
+    _In_ PIO_STACK_LOCATION IrpSp,
+    _In_ PVolumeContextBlock VolCB)
+{
+    PFILE_OBJECT FileObject = IrpSp->FileObject;
+    PFileContextBlock FileCB;
+    ULONG CreateOptions;
+    UCHAR Disposition;
+    NTSTATUS Status;
+
+    CreateOptions = GetCreateOptions(IrpSp->Parameters.Create.Options);
+    Disposition = GetDisposition(IrpSp->Parameters.Create.Options);
+    if (Disposition != FILE_OPEN && Disposition != FILE_OPEN_IF)
+        Status = STATUS_ACCESS_DENIED;
+    else if (CreateOptions & FILE_DIRECTORY_FILE)
+        Status = STATUS_NOT_A_DIRECTORY;
+    else if (CreateOptions & FILE_DELETE_ON_CLOSE)
+        Status = STATUS_CANNOT_DELETE;
+    else if (IrpSp->Flags & SL_OPEN_TARGET_DIRECTORY)
+        Status = STATUS_INVALID_PARAMETER;
+    else
+        Status = STATUS_SUCCESS;
+
+    if (!NT_SUCCESS(Status))
+        goto Complete;
+
+    FileCB = (PFileContextBlock)ExAllocatePoolZero(NonPagedPool,
+                                                   sizeof(*FileCB),
+                                                   TAG_NTFS);
+    if (!FileCB)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Complete;
+    }
+
+    Status = ExInitializeResourceLite(&FileCB->MainResource);
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePoolWithTag(FileCB, TAG_NTFS);
+        goto Complete;
+    }
+    Status = ExInitializeResourceLite(&FileCB->PagingIoResource);
+    if (!NT_SUCCESS(Status))
+    {
+        ExDeleteResourceLite(&FileCB->MainResource);
+        ExFreePoolWithTag(FileCB, TAG_NTFS);
+        goto Complete;
+    }
+    ExInitializeFastMutex(&FileCB->HeaderMutex);
+    FsRtlSetupAdvancedHeader(&FileCB->CommonFCBHeader,
+                             &FileCB->HeaderMutex);
+    FileCB->CommonFCBHeader.Resource = &FileCB->MainResource;
+    FileCB->CommonFCBHeader.PagingIoResource =
+        &FileCB->PagingIoResource;
+    FileCB->CommonFCBHeader.IsFastIoPossible =
+        FastIoIsNotPossible;
+    FileCB->IsVolumeOpen = TRUE;
+    FileCB->CreateOptions = IrpSp->Parameters.Create.Options;
+    FileCB->DesiredAccess =
+        IrpSp->Parameters.Create.SecurityContext->DesiredAccess;
+
+    ExAcquireFastMutex(&VolCB->VolumeStateMutex);
+    if (VolCB->Dismounting || VolCB->Dismounted)
+    {
+        Status = STATUS_VOLUME_DISMOUNTED;
+    }
+    else if (VolCB->VolumeLockOwner)
+    {
+        Status = STATUS_ACCESS_DENIED;
+    }
+    else if (VolCB->VolumeHandleCount == 0)
+    {
+        IoSetShareAccess(FileCB->DesiredAccess,
+                         IrpSp->Parameters.Create.ShareAccess,
+                         FileObject,
+                         &VolCB->VolumeShareAccess);
+        Status = STATUS_SUCCESS;
+    }
+    else
+    {
+        Status = IoCheckShareAccess(
+            FileCB->DesiredAccess,
+            IrpSp->Parameters.Create.ShareAccess,
+            FileObject,
+            &VolCB->VolumeShareAccess,
+            TRUE);
+    }
+
+    if (NT_SUCCESS(Status))
+    {
+        VolCB->VolumeHandleCount++;
+        VolCB->OpenHandleCount++;
+        FileObject->FsContext = FileCB;
+    }
+    ExReleaseFastMutex(&VolCB->VolumeStateMutex);
+
+    if (!NT_SUCCESS(Status))
+    {
+        ExDeleteResourceLite(&FileCB->MainResource);
+        ExDeleteResourceLite(&FileCB->PagingIoResource);
+        ExFreePoolWithTag(FileCB, TAG_NTFS);
+        goto Complete;
+    }
+
+    Irp->IoStatus.Information = FILE_OPENED;
+
+Complete:
+    if (!NT_SUCCESS(Status))
+        Irp->IoStatus.Information = 0;
+    Irp->IoStatus.Status = Status;
+    IoCompleteRequest(Irp, IO_DISK_INCREMENT);
+    return Status;
+}
+
 NTSTATUS
 NTAPI
 NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
@@ -512,6 +629,31 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     if (FileAttributes & ~FILE_ATTRIBUTE_NORMAL)
         FileAttributes &= ~FILE_ATTRIBUTE_NORMAL;
     VolCB = (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
+
+    if (FileObject->FileName.Length == 0 &&
+        FileObject->RelatedFileObject == NULL)
+    {
+        return NtfsOpenVolume(Irp,
+                              IrpSp,
+                              VolCB);
+    }
+
+    ExAcquireFastMutex(&VolCB->VolumeStateMutex);
+    if (VolCB->Dismounting || VolCB->Dismounted)
+        Status = STATUS_VOLUME_DISMOUNTED;
+    else if (VolCB->VolumeLockOwner)
+        Status = STATUS_ACCESS_DENIED;
+    else
+        Status = STATUS_SUCCESS;
+    ExReleaseFastMutex(&VolCB->VolumeStateMutex);
+    if (!NT_SUCCESS(Status))
+    {
+        Irp->IoStatus.Information = 0;
+        Irp->IoStatus.Status = Status;
+        IoCompleteRequest(Irp, IO_DISK_INCREMENT);
+        return Status;
+    }
+
     DiskVolume = VolCB->DiskVolume;
     Mft = NtfsVolumeGetMft(DiskVolume);
 
@@ -1029,6 +1171,32 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                             CachedRecord,
                                             Status);
         }
+    }
+
+    /*
+     * Publish the handle under the same lock used by volume locking and
+     * dismount. If either operation won the race while the name was being
+     * resolved, do not expose a new handle after that boundary.
+     */
+    ExAcquireFastMutex(&VolCB->VolumeStateMutex);
+    if (VolCB->Dismounting || VolCB->Dismounted)
+        Status = STATUS_VOLUME_DISMOUNTED;
+    else if (VolCB->VolumeLockOwner)
+        Status = STATUS_ACCESS_DENIED;
+    else
+    {
+        VolCB->OpenHandleCount++;
+        Status = STATUS_SUCCESS;
+    }
+    ExReleaseFastMutex(&VolCB->VolumeStateMutex);
+    if (!NT_SUCCESS(Status))
+    {
+        return NtfsCompleteFailedCreate(VolumeDeviceObject,
+                                        Irp,
+                                        FileCB,
+                                        CurrentFile,
+                                        CachedRecord,
+                                        Status);
     }
 
     // Initialize file sizes and section state.

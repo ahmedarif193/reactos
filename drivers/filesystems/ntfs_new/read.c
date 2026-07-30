@@ -309,6 +309,9 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         ? (PFileContextBlock)FileObject->FsContext
         : NULL;
 
+    if (FileCB && FileCB->IsVolumeOpen)
+        return NtfsForwardVolumeIo(VolCB, FileCB, Irp, FALSE);
+
     if (!FileCB || !FileCB->FileRec || !DiskVolume)
     {
         DPRINT1("NtfsFsdRead(): invalid file or volume context!\n");
