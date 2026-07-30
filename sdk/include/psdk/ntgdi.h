@@ -4893,6 +4893,7 @@ struct _D3DKMT_CHECKMULTIPLANEOVERLAYSUPPORT2;
 struct _D3DKMT_CHECKMULTIPLANEOVERLAYSUPPORT3;
 struct _D3DKMT_PRESENT_MULTIPLANE_OVERLAY2;
 struct _D3DKMT_PRESENT_MULTIPLANE_OVERLAY3;
+struct _D3DKMT_ISFEATUREENABLED;
 
 __kernel_entry
 W32KAPI
@@ -5026,6 +5027,13 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIPresentMultiPlaneOverlay3(
     _In_ const struct _D3DKMT_PRESENT_MULTIPLANE_OVERLAY3* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIIsFeatureEnabled(
+    _Inout_ struct _D3DKMT_ISFEATUREENABLED* unnamedParam1);
 
 /* Multi-argument D3DKMT entry points (non-single-struct signatures). */
 __kernel_entry

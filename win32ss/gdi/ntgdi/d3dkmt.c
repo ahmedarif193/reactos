@@ -215,6 +215,7 @@ NTSTATUS APIENTRY D3DKMTDestroyHwQueue(_In_ CONST struct _D3DKMT_DESTROYHWQUEUE 
 NTSTATUS APIENTRY D3DKMTSubmitCommandToHwQueue(_In_ CONST struct _D3DKMT_SUBMITCOMMANDTOHWQUEUE *pData);
 NTSTATUS APIENTRY D3DKMTRegisterTrimNotification(_Inout_ struct _D3DKMT_REGISTERTRIMNOTIFICATION *pData);
 NTSTATUS APIENTRY D3DKMTUnregisterTrimNotification(_Inout_ struct _D3DKMT_UNREGISTERTRIMNOTIFICATION *pData);
+NTSTATUS APIENTRY D3DKMTIsFeatureEnabled(_Inout_ struct _D3DKMT_ISFEATUREENABLED *pData);
 NTSTATUS APIENTRY D3DKMTCreateKeyedMutex2(_Inout_ struct _D3DKMT_CREATEKEYEDMUTEX2 *pData);
 NTSTATUS APIENTRY D3DKMTOpenKeyedMutex(_Inout_ D3DKMT_OPENKEYEDMUTEX *pData);
 NTSTATUS APIENTRY D3DKMTOpenKeyedMutex2(_Inout_ struct _D3DKMT_OPENKEYEDMUTEX2 *pData);
@@ -1914,6 +1915,18 @@ NtGdiDdDDIPresentMultiPlaneOverlay3(_In_ const struct _D3DKMT_PRESENT_MULTIPLANE
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
     return STATUS_NOT_IMPLEMENTED;
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDIIsFeatureEnabled(
+    _Inout_ struct _D3DKMT_ISFEATUREENABLED* unnamedParam1)
+{
+    NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
+
+    if (!NT_SUCCESS(Status))
+        return Status;
+    return D3DKMTIsFeatureEnabled(unnamedParam1);
 }
 
 /*
