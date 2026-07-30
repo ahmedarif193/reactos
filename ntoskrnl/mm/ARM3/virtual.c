@@ -789,6 +789,9 @@ MiDeleteVirtualAddresses(
     KIRQL OldIrql;
     BOOLEAN AddressGap = FALSE;
     BOOLEAN FlushTb;
+#if defined(_M_AMD64)
+    BOOLEAN FlushAllTb;
+#endif
     PSUBSECTION Subsection;
 #if defined(_M_AMD64) || defined(_M_ARM64)
     ULONG_PTR FlushStart;
@@ -927,6 +930,9 @@ MiDeleteVirtualAddresses(
 #endif
         OldIrql = MiAcquirePfnLock();
         FlushTb = FALSE;
+#if defined(_M_AMD64)
+        FlushAllTb = FALSE;
+#endif
 #if defined(_M_ARM64)
         PointerPte = (PMMPTE)Arm64Walk.PointerPte;
 #else
@@ -1021,6 +1027,9 @@ MiDeleteVirtualAddresses(
                     /* Delete the PDE proper */
                     MiDeletePde(PointerPde, CurrentProcess, FALSE);
                     FlushTb = TRUE;
+#if defined(_M_AMD64)
+                    FlushAllTb = TRUE;
+#endif
 
                     /* Continue with the next PDE */
                     Va = (ULONG_PTR)MiPdeToAddress(PointerPde + 1);
@@ -1044,7 +1053,23 @@ MiDeleteVirtualAddresses(
            prevents deleted data and page-table frames from being reused. */
         if (FlushTb)
         {
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_M_AMD64)
+            /*
+             * A range invalidation is sufficient while the page-table
+             * hierarchy stays in place. If a page-table page was deleted,
+             * also invalidate the recursive PTE mapping before its PFN can
+             * be reused.
+             */
+            if (FlushAllTb)
+            {
+                KeFlushProcessTb();
+            }
+            else
+            {
+                MiFlushProcessTbRange((PVOID)FlushStart,
+                                      BYTES_TO_PAGES(Va - FlushStart));
+            }
+#elif defined(_M_ARM64)
             MiFlushProcessTbRange((PVOID)FlushStart,
                                   BYTES_TO_PAGES(Va - FlushStart));
 #else
