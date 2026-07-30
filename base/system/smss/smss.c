@@ -461,6 +461,9 @@ _main(IN INT argc,
                                      (PVOID)&SetBasePriority,
                                      sizeof(SetBasePriority));
     ASSERT(NT_SUCCESS(Status));
+    DPRINT1("INITTRACE: SMSS base priority set status=0x%08lx priority=%ld\n",
+            Status,
+            SetBasePriority);
 
     /* Save the debug flag if it was passed */
     if (DebugFlag) SmpDebug = DebugFlag != 0;
@@ -470,6 +473,7 @@ _main(IN INT argc,
     Parameters[1] = Parameters[2] = Parameters[3] = 0;
 
     /* Enter SEH so we can terminate correctly if anything goes wrong */
+    DPRINT1("INITTRACE: SMSS entering guarded initialization block\n");
     _SEH2_TRY
     {
         /* Initialize SMSS */

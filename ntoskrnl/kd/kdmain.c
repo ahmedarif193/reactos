@@ -206,6 +206,11 @@ KdpDriverReinit(
 
     DPRINT("*** KD %sREINITIALIZATION - Phase %d ***\n",
            Context ? "" : "BOOT ", BootPhase);
+    DPRINT1("INITTRACE: KD reinitialization entered phase=%lu count=%lu context=%p driver=%p\n",
+            BootPhase,
+            Count,
+            Context,
+            DriverObject);
 
     /* Call the registered providers */
     for (CurrentEntry = KdProviders.Flink;
@@ -224,7 +229,16 @@ KdpDriverReinit(
             /* Get the initialization routine and reset it */
             KdpInitRoutine = CurrentTable->KdpInitRoutine;
             CurrentTable->KdpInitRoutine = NULL;
+            DPRINT1("INITTRACE: KD phase %lu calling provider=%p routine=%p\n",
+                    BootPhase,
+                    CurrentTable,
+                    (PVOID)KdpInitRoutine);
             CurrentTable->InitStatus = KdpInitRoutine(CurrentTable, BootPhase);
+            DPRINT1("INITTRACE: KD phase %lu provider=%p returned 0x%08lx reinit=%p\n",
+                    BootPhase,
+                    CurrentTable,
+                    CurrentTable->InitStatus,
+                    CurrentTable->KdpInitRoutine);
             DPRINT("KdpInitRoutine(%p) returned 0x%08lx\n",
                    CurrentTable, CurrentTable->InitStatus);
 
@@ -268,8 +282,16 @@ KdpDriverReinit(
     {
         /* All the necessary reinitializations are done,
          * the driver object is not needed anymore. */
+        DPRINT1("INITTRACE: KD phase %lu complete; deleting auxiliary driver=%p\n",
+                BootPhase,
+                DriverObject);
         ObMakeTemporaryObject(DriverObject);
         IoDeleteDriver(DriverObject);
+    }
+    else
+    {
+        DPRINT1("INITTRACE: KD phase %lu scheduled another reinitialization\n",
+                BootPhase);
     }
 }
 

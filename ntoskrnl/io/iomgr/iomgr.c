@@ -475,6 +475,10 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     CHAR Buffer[256];
     ANSI_STRING NtBootPath, RootString;
 
+    DPRINT1("INITTRACE: IoInitSystem entered loader=%p arcboot='%s'\n",
+            LoaderBlock,
+            LoaderBlock->ArcBootDeviceName);
+
     /* Initialize empty NT Boot Path */
     RtlInitEmptyAnsiString(&NtBootPath, Buffer, sizeof(Buffer));
 
@@ -561,17 +565,24 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     /* Load boot start drivers */
     IopInitializeBootDrivers();
+    DPRINT1("INITTRACE: I/O boot-start driver initialization complete\n");
 
     /* Call back drivers that asked for */
+    DPRINT1("INITTRACE: I/O invoking boot-driver reinitialization callbacks\n");
     IopReinitializeBootDrivers();
+    DPRINT1("INITTRACE: I/O boot-driver reinitialization callbacks complete\n");
 
     /*
      * Boot-start bus drivers may have attached to critical PDOs during
      * IopInitializeBootDrivers. Walk the tree synchronously now so their child
      * boot devices exist before ARC names and the boot partition are resolved.
      */
+    DPRINT1("INITTRACE: I/O synchronously enumerating the boot device tree root=%p\n",
+            IopRootDeviceNode->PhysicalDeviceObject);
     Status = PiPerformSyncDeviceAction(IopRootDeviceNode->PhysicalDeviceObject,
                                        PiActionEnumDeviceTree);
+    DPRINT1("INITTRACE: I/O boot device-tree enumeration returned 0x%08lx\n",
+            Status);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Boot PnP device-tree enumeration failed: %lx\n", Status);
@@ -582,14 +593,19 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     if (!_strnicmp(LoaderBlock->ArcBootDeviceName, "ramdisk(0)", 10))
     {
         /* Initialize the ramdisk driver */
+        DPRINT1("INITTRACE: I/O starting boot RAM disk arcboot='%s'\n",
+                LoaderBlock->ArcBootDeviceName);
         IopStartRamdisk(LoaderBlock);
+        DPRINT1("INITTRACE: I/O boot RAM disk startup complete\n");
     }
 
     /* No one should need loader block any longer */
     IopLoaderBlock = NULL;
 
     /* Create ARC names for boot devices */
+    DPRINT1("INITTRACE: I/O creating ARC names for boot devices\n");
     Status = IopCreateArcNames(LoaderBlock);
+    DPRINT1("INITTRACE: I/O ARC-name creation returned 0x%08lx\n", Status);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("IopCreateArcNames failed: %lx\n", Status);
@@ -597,25 +613,35 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     }
 
     /* Mark the system boot partition */
+    DPRINT1("INITTRACE: I/O marking the system boot partition\n");
     if (!IopMarkBootPartition(LoaderBlock))
     {
         DPRINT1("IopMarkBootPartition failed!\n");
         return FALSE;
     }
+    DPRINT1("INITTRACE: I/O system boot partition marked\n");
 
     /* The disk subsystem is initialized here and the SystemRoot is set too.
      * We can finally load other drivers from the boot volume. */
     PnPBootDriversInitialized = TRUE;
 
     /* Load system start drivers */
+    DPRINT1("INITTRACE: I/O loading system-start drivers\n");
     IopInitializeSystemDrivers();
     PnpSystemInit = TRUE;
+    DPRINT1("INITTRACE: I/O system-start driver initialization complete\n");
 
     /* Reinitialize drivers that requested it */
+    DPRINT1("INITTRACE: I/O invoking system-driver reinitialization callbacks\n");
     IopReinitializeDrivers();
+    DPRINT1("INITTRACE: I/O system-driver reinitialization callbacks complete\n");
 
     /* Convert SystemRoot from ARC to NT path */
+    DPRINT1("INITTRACE: I/O resolving SystemRoot from ARC path\n");
     Status = IopReassignSystemRoot(LoaderBlock, &NtBootPath);
+    DPRINT1("INITTRACE: I/O SystemRoot resolution returned 0x%08lx ntboot='%Z'\n",
+            Status,
+            &NtBootPath);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("IopReassignSystemRoot failed: %lx\n", Status);
@@ -638,10 +664,12 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     }
 
     /* Assign drive letters */
+    DPRINT1("INITTRACE: I/O assigning drive letters root='%Z'\n", &RootString);
     IoAssignDriveLetters(LoaderBlock,
                          &NtBootPath,
                          (PUCHAR)RootString.Buffer,
                          &RootString);
+    DPRINT1("INITTRACE: I/O drive-letter assignment complete\n");
 
     /* Update system root through the writable KUSER_SHARED_DATA alias */
     NtSystemRoot.Buffer = MmWriteableSharedUserData->NtSystemRoot;
@@ -653,7 +681,9 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     }
 
     /* Load the System DLL and its entrypoints */
+    DPRINT1("INITTRACE: I/O locating the system DLL\n");
     Status = PsLocateSystemDll();
+    DPRINT1("INITTRACE: I/O system DLL lookup returned 0x%08lx\n", Status);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("PsLocateSystemDll failed: %lx\n", Status);
@@ -661,6 +691,8 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     }
 
     /* Return success */
+    DPRINT1("INITTRACE: IoInitSystem completed successfully systemroot='%wZ'\n",
+            &NtSystemRoot);
     return TRUE;
 }
 

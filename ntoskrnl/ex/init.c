@@ -486,6 +486,9 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
         /* Bugcheck the system */
         KeBugCheckEx(SESSION1_INITIALIZATION_FAILED, Status, 0, 0, 0);
     }
+    DPRINT1("INITTRACE: initial process parameter block allocated base=%p size=%Iu\n",
+            ProcessParams,
+            Size);
 
     /* Setup the basic header, and give the process the low 1MB to itself */
     ProcessParams->Length = (ULONG)Size;
@@ -514,6 +517,9 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
         /* Bugcheck the system */
         KeBugCheckEx(SESSION2_INITIALIZATION_FAILED, Status, 0, 0, 0);
     }
+    DPRINT1("INITTRACE: initial process environment allocated base=%p size=%Iu\n",
+            EnvironmentPtr,
+            Size);
 
     /* Write the pointer */
     ProcessParams->Environment = EnvironmentPtr;
@@ -576,6 +582,8 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
     /* Null-terminate it */
     ProcessParams->ImagePathName.Buffer[ProcessParams->ImagePathName.Length /
                                         sizeof(WCHAR)] = UNICODE_NULL;
+    DPRINT1("INITTRACE: initial process image path prepared '%wZ'\n",
+            &ProcessParams->ImagePathName);
 
     /* Make a buffer for the command line */
     p = (PWSTR)((PCHAR)ProcessParams->ImagePathName.Buffer +
@@ -610,6 +618,11 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
     RtlAppendUnicodeToString(&Environment, L"SystemRoot=");
     RtlAppendUnicodeStringToString(&Environment, &NtSystemRoot);
     RtlAppendUnicodeStringToString(&Environment, &NullString);
+    DPRINT1("INITTRACE: initial process parameters ready cwd='%wZ' dllpath='%wZ' command='%wZ' envbytes=%u\n",
+            &ProcessParams->CurrentDirectory.DosPath,
+            &ProcessParams->DllPath,
+            &ProcessParams->CommandLine,
+            Environment.Length);
 
     /* Prepare the prefetcher */
     //CcPfBeginBootPhase(150);
@@ -2148,6 +2161,7 @@ Phase1InitializationDiscard(IN PVOID Context)
 
     /* FIXME: This doesn't do anything for now */
     MmArmInitSystem(2, LoaderBlock);
+    DPRINT1("INITTRACE: phase 1 memory manager phase 2 complete\n");
 
     /* Update progress bar */
     InbvUpdateProgressBar(80);
@@ -2159,6 +2173,7 @@ Phase1InitializationDiscard(IN PVOID Context)
 
     /* Initialize Power Subsystem in Phase 1*/
     if (!PoInitSystem(1)) KeBugCheck(INTERNAL_POWER_ERROR);
+    DPRINT1("INITTRACE: phase 1 power initialization complete\n");
 
     /* Update progress bar */
     InbvUpdateProgressBar(90);
@@ -2175,6 +2190,7 @@ Phase1InitializationDiscard(IN PVOID Context)
     if (LoaderBlock == KeLoaderBlock) KeLoaderBlock = NULL;
     MmFreeLoaderBlock(LoaderBlock);
     LoaderBlock = Context = NULL;
+    DPRINT1("INITTRACE: phase 1 loader block released\n");
 
     /* Initialize the SRM in phase 1 */
     if (!SeRmInitPhase1()) KeBugCheck(PROCESS1_INITIALIZATION_FAILED);
@@ -2188,6 +2204,7 @@ Phase1InitializationDiscard(IN PVOID Context)
 
     /* Allow strings to be displayed */
     InbvEnableDisplayString(TRUE);
+    DPRINT1("INITTRACE: phase 1 boot display finalized; user-process launch enabled\n");
 
     /* Launch initial process */
     ProcessInfo = &InitBuffer->ProcessInfo;

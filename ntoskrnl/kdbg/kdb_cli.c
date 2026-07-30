@@ -3715,6 +3715,7 @@ KdbpCliInterpretInitFile(VOID)
             p1++;
     }
     KdbPuts("KDB: KDBinit executed\n");
+    DPRINT1("INITTRACE: KDBinit command stream complete; returning to phase 2 I/O initialization\n");
 }
 
 /**
@@ -3813,7 +3814,10 @@ KdbpCliInit(VOID)
      * default KDBinit only issues "set" commands, which are context-free.
      */
     InterlockedExchangePointer((PVOID*)&KdbInitFileBuffer, FileBuffer);
+    DPRINT1("INITTRACE: KDBinit loaded bytes=%lu; entering command interpreter\n",
+            FileSize);
     KdbpCliInterpretInitFile();
+    DPRINT1("INITTRACE: KDBinit command interpreter returned; releasing file buffer\n");
 
     ExFreePool(FileBuffer);
 
