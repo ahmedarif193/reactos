@@ -14,6 +14,8 @@ struct FxCxDeviceInfo : public FxStump {
     {
         InitializeListHead(&ListEntry);
         RtlZeroMemory(&RequestAttributes, sizeof(RequestAttributes));
+        RtlZeroMemory(&PnpPowerCallbacks, sizeof(PnpPowerCallbacks));
+        RtlZeroMemory(&PowerPolicyCallbacks, sizeof(PowerPolicyCallbacks));
     }
 
     ~FxCxDeviceInfo()
@@ -25,6 +27,8 @@ struct FxCxDeviceInfo : public FxStump {
     FxDriver*                   Driver;
     FxIoInCallerContext         IoInCallerContextCallback;
     WDF_OBJECT_ATTRIBUTES       RequestAttributes;
+    WDFCX_PNPPOWER_EVENT_CALLBACKS PnpPowerCallbacks;
+    WDFCX_POWER_POLICY_EVENT_CALLBACKS PowerPolicyCallbacks;
     CCHAR                       Index;
 };
 

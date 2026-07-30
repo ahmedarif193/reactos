@@ -753,6 +753,12 @@ Return Value:
         cxDeviceInfo->IoInCallerContextCallback.m_Method =
                         cxInit->IoInCallerContextCallback;
         cxDeviceInfo->RequestAttributes = cxInit->RequestAttributes;
+        if (cxInit->PnpPowerCallbacks.Set) {
+            cxDeviceInfo->PnpPowerCallbacks =
+                cxInit->PnpPowerCallbacks.PnpPowerCallbacks;
+            cxDeviceInfo->PowerPolicyCallbacks =
+                cxInit->PnpPowerCallbacks.PowerPolicyCallbacks;
+        }
 
         InsertTailList(&m_CxDeviceInfoListHead, &cxDeviceInfo->ListEntry);
 

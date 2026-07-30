@@ -25,6 +25,97 @@ Revision History:
 #ifndef _FXPNPCALLBACKS_H_
 #define _FXPNPCALLBACKS_H_
 
+NTSTATUS
+FxCxInvokeDevicePrepareHardware(
+    __in WDFDEVICE Device,
+    __in WDFCMRESLIST ResourcesRaw,
+    __in WDFCMRESLIST ResourcesTranslated,
+    __in_opt PFN_WDF_DEVICE_PREPARE_HARDWARE ClientCallback
+    );
+
+NTSTATUS
+FxCxInvokeDeviceReleaseHardware(
+    __in WDFDEVICE Device,
+    __in WDFCMRESLIST ResourcesTranslated,
+    __in_opt PFN_WDF_DEVICE_RELEASE_HARDWARE ClientCallback
+    );
+
+NTSTATUS
+FxCxInvokeDeviceD0Entry(
+    __in WDFDEVICE Device,
+    __in WDF_POWER_DEVICE_STATE PreviousState,
+    __in_opt PFN_WDF_DEVICE_D0_ENTRY ClientCallback
+    );
+
+NTSTATUS
+FxCxInvokeDeviceD0Exit(
+    __in WDFDEVICE Device,
+    __in WDF_POWER_DEVICE_STATE TargetState,
+    __in_opt PFN_WDF_DEVICE_D0_EXIT ClientCallback
+    );
+
+NTSTATUS
+FxCxInvokeDeviceSelfManagedIoInit(
+    __in WDFDEVICE Device,
+    __in_opt PFN_WDF_DEVICE_SELF_MANAGED_IO_INIT ClientCallback
+    );
+
+NTSTATUS
+FxCxInvokeDeviceSelfManagedIoSuspend(
+    __in WDFDEVICE Device,
+    __in WDF_POWER_DEVICE_STATE TargetState,
+    __in_opt PFN_WDF_DEVICE_SELF_MANAGED_IO_SUSPEND ClientCallback
+    );
+
+NTSTATUS
+FxCxInvokeDeviceSelfManagedIoRestart(
+    __in WDFDEVICE Device,
+    __in WDF_POWER_DEVICE_STATE PreviousState,
+    __in_opt PFN_WDF_DEVICE_SELF_MANAGED_IO_RESTART ClientCallback
+    );
+
+VOID
+FxCxInvokeDeviceSurpriseRemoval(
+    __in WDFDEVICE Device,
+    __in_opt PFN_WDF_DEVICE_SURPRISE_REMOVAL ClientCallback
+    );
+
+NTSTATUS
+FxCxInvokeDeviceD0EntryPostHardwareEnabled(
+    __in WDFDEVICE Device,
+    __in WDF_POWER_DEVICE_STATE PreviousState
+    );
+
+NTSTATUS
+FxCxInvokeDeviceD0ExitPreHardwareDisabled(
+    __in WDFDEVICE Device,
+    __in WDF_POWER_DEVICE_STATE TargetState
+    );
+
+VOID
+FxCxInvokeDeviceDisarmWakeFromS0(
+    __in WDFDEVICE Device,
+    __in_opt PFN_WDF_DEVICE_DISARM_WAKE_FROM_S0 ClientCallback
+    );
+
+VOID
+FxCxInvokeDeviceDisarmWakeFromSx(
+    __in WDFDEVICE Device,
+    __in_opt PFN_WDF_DEVICE_DISARM_WAKE_FROM_SX ClientCallback
+    );
+
+VOID
+FxCxInvokeDeviceWakeFromS0Triggered(
+    __in WDFDEVICE Device,
+    __in_opt PFN_WDF_DEVICE_WAKE_FROM_S0_TRIGGERED ClientCallback
+    );
+
+VOID
+FxCxInvokeDeviceWakeFromSxTriggered(
+    __in WDFDEVICE Device,
+    __in_opt PFN_WDF_DEVICE_WAKE_FROM_SX_TRIGGERED ClientCallback
+    );
+
 class FxPnpDeviceFilterResourceRequirements : public FxCallback {
 
 public:
@@ -76,18 +167,7 @@ public:
         __in WDF_POWER_DEVICE_STATE PreviousState
         )
     {
-        if (m_Method != NULL) {
-            NTSTATUS status;
-
-            CallbackStart();
-            status = m_Method(Device, PreviousState);
-            CallbackEnd();
-
-            return status;
-        }
-        else {
-            return STATUS_SUCCESS;
-        }
+        return FxCxInvokeDeviceD0Entry(Device, PreviousState, m_Method);
     }
 };
 
@@ -142,18 +222,7 @@ public:
         __in WDF_POWER_DEVICE_STATE TargetState
         )
     {
-        if (m_Method != NULL) {
-            NTSTATUS status;
-
-            CallbackStart();
-            status = m_Method(Device, TargetState);
-            CallbackEnd();
-
-            return status;
-        }
-        else {
-            return STATUS_SUCCESS;
-        }
+        return FxCxInvokeDeviceD0Exit(Device, TargetState, m_Method);
     }
 };
 
@@ -209,18 +278,10 @@ public:
         __in WDFCMRESLIST ResourcesTranslated
         )
     {
-        if (m_Method != NULL) {
-            NTSTATUS status;
-
-            CallbackStart();
-            status = m_Method(Device, ResourcesRaw, ResourcesTranslated);
-            CallbackEnd();
-
-            return status;
-        }
-        else {
-            return STATUS_SUCCESS;
-        }
+        return FxCxInvokeDevicePrepareHardware(Device,
+                                               ResourcesRaw,
+                                               ResourcesTranslated,
+                                               m_Method);
     }
 };
 
@@ -242,18 +303,9 @@ public:
         __in WDFCMRESLIST ResourcesTranslated
         )
     {
-        if (m_Method != NULL) {
-            NTSTATUS status;
-
-            CallbackStart();
-            status = m_Method(Device, ResourcesTranslated);
-            CallbackEnd();
-
-            return status;
-        }
-        else {
-            return STATUS_SUCCESS;
-        }
+        return FxCxInvokeDeviceReleaseHardware(Device,
+                                               ResourcesTranslated,
+                                               m_Method);
     }
 };
 
@@ -356,18 +408,7 @@ public:
         __in  WDFDEVICE  Device
         )
     {
-        if (m_Method != NULL) {
-            NTSTATUS status;
-
-            CallbackStart();
-            status = m_Method(Device);
-            CallbackEnd();
-
-            return status;
-        }
-        else {
-            return STATUS_SUCCESS;
-        }
+        return FxCxInvokeDeviceSelfManagedIoInit(Device, m_Method);
     }
 };
 
@@ -378,8 +419,16 @@ public:
 
     FxPnpDeviceSelfManagedIoSuspend(
         VOID
-        ) : m_Method(NULL)
+        ) : m_Method(NULL), m_TargetState(WdfPowerDeviceInvalid)
     {
+    }
+
+    VOID
+    SetTargetState(
+        __in WDF_POWER_DEVICE_STATE TargetState
+        )
+    {
+        m_TargetState = TargetState;
     }
 
     _Must_inspect_result_
@@ -388,19 +437,13 @@ public:
         __in  WDFDEVICE  Device
         )
     {
-        if (m_Method != NULL) {
-            NTSTATUS status;
-
-            CallbackStart();
-            status = m_Method(Device);
-            CallbackEnd();
-
-            return status;
-        }
-        else {
-            return STATUS_SUCCESS;
-        }
+        return FxCxInvokeDeviceSelfManagedIoSuspend(Device,
+                                                    m_TargetState,
+                                                    m_Method);
     }
+
+private:
+    WDF_POWER_DEVICE_STATE m_TargetState;
 };
 
 class FxPnpDeviceSelfManagedIoRestart : public FxCallback {
@@ -410,8 +453,16 @@ public:
 
     FxPnpDeviceSelfManagedIoRestart(
         VOID
-        ) : m_Method(NULL)
+        ) : m_Method(NULL), m_PreviousState(WdfPowerDeviceInvalid)
     {
+    }
+
+    VOID
+    SetPreviousState(
+        __in WDF_POWER_DEVICE_STATE PreviousState
+        )
+    {
+        m_PreviousState = PreviousState;
     }
 
     _Must_inspect_result_
@@ -420,19 +471,13 @@ public:
         __in  WDFDEVICE  Device
         )
     {
-        if (m_Method != NULL) {
-            NTSTATUS status;
-
-            CallbackStart();
-            status = m_Method(Device);
-            CallbackEnd();
-
-            return status;
-        }
-        else {
-            return STATUS_SUCCESS;
-        }
+        return FxCxInvokeDeviceSelfManagedIoRestart(Device,
+                                                    m_PreviousState,
+                                                    m_Method);
     }
+
+private:
+    WDF_POWER_DEVICE_STATE m_PreviousState;
 };
 
 class FxPnpDeviceQueryStop : public FxCallback {
@@ -613,11 +658,7 @@ public:
         __in WDFDEVICE  Device
         )
     {
-        if (m_Method != NULL) {
-            CallbackStart();
-            m_Method(Device);
-            CallbackEnd();
-        }
+        FxCxInvokeDeviceSurpriseRemoval(Device, m_Method);
     }
 };
 
@@ -755,11 +796,7 @@ public:
         __in WDFDEVICE Device
         )
     {
-        if (m_Method != NULL) {
-            CallbackStart();
-            m_Method(Device);
-            CallbackEnd();
-        }
+        FxCxInvokeDeviceDisarmWakeFromS0(Device, m_Method);
     }
 };
 
@@ -812,11 +849,7 @@ public:
         __in WDFDEVICE Device
         )
     {
-        if (m_Method != NULL) {
-            CallbackStart();
-            m_Method(Device);
-            CallbackEnd();
-        }
+        FxCxInvokeDeviceDisarmWakeFromSx(Device, m_Method);
     }
 };
 
@@ -915,11 +948,7 @@ public:
         __in WDFDEVICE Device
         )
     {
-        if (m_Method != NULL) {
-            CallbackStart();
-            m_Method(Device);
-            CallbackEnd();
-        }
+        FxCxInvokeDeviceWakeFromSxTriggered(Device, m_Method);
     }
 };
 
@@ -939,11 +968,7 @@ public:
         __in WDFDEVICE Device
         )
     {
-        if (m_Method != NULL) {
-            CallbackStart();
-            m_Method(Device);
-            CallbackEnd();
-        }
+        FxCxInvokeDeviceWakeFromS0Triggered(Device, m_Method);
     }
 };
 
