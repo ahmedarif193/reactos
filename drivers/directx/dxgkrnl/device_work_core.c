@@ -162,6 +162,29 @@ VOID DxgkDeviceWorkCoreTransitionTerminal(_Inout_opt_ PDXGK_DEVICE_WORK_LEDGER L
     KeReleaseSpinLock(&Ledger->Lock, OldIrql);
 }
 
+BOOLEAN
+DxgkDeviceWorkCoreTryTransitionTerminal(
+    _Inout_opt_ PDXGK_DEVICE_WORK_LEDGER Ledger,
+    _Inout_opt_ volatile LONG *State,
+    _In_ LONG ExpectedValue,
+    _In_ LONG NewValue)
+{
+    KIRQL OldIrql;
+    BOOLEAN Transitioned = FALSE;
+
+    if (Ledger == NULL || State == NULL)
+        return FALSE;
+    KeAcquireSpinLock(&Ledger->Lock, &OldIrql);
+    if (InterlockedCompareExchange(State, NewValue, ExpectedValue) ==
+        ExpectedValue)
+    {
+        KeSetEvent(&Ledger->ProgressEvent, IO_NO_INCREMENT, FALSE);
+        Transitioned = TRUE;
+    }
+    KeReleaseSpinLock(&Ledger->Lock, OldIrql);
+    return Transitioned;
+}
+
 NTSTATUS DxgkDeviceWorkCoreCaptureSnapshot(_Inout_ PDXGK_DEVICE_WORK_LEDGER Ledger, _Out_ PDXGK_DEVICE_WORK_SNAPSHOT Snapshot)
 {
     KIRQL OldIrql;

@@ -40,6 +40,11 @@
  *   Adapter->AdapterMutex (KMUTEX, PASSIVE_LEVEL)
  *     — protects Adapter->DeviceListHead and serializes passive adapter lifecycle work.
  *
+ *   ProcessRecord->ProcessMutex (FAST_MUTEX, APC_LEVEL)
+ *     — protects ProcessRecord->DeviceListHead and each ProcessDeviceLink.
+ *       Publication may acquire it while AdapterMutex is held.  Code holding
+ *       ProcessMutex must never acquire AdapterMutex.
+ *
  *   Device->DeviceMutex (FAST_MUTEX, APC_LEVEL)
  *     — protects Device->ContextListHead.  Must not be held while calling
  *       miniport DDIs.
@@ -53,6 +58,7 @@
 #include "vidmm.h"
 #include "vidpn.h"
 #include "vidsch.h"
+#include <ndk/psfuncs.h>
 
 /* GLOBALS *******************************************************************/
 
@@ -157,6 +163,69 @@ DxgkDeviceSetExecutionState(
         DxgkSyncObjectCancelDeviceWaits(Device, STATUS_DEVICE_REMOVED, TRUE);
 }
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+BOOLEAN
+DxgkDeviceSetPageFaultExecutionState(
+    _In_ PDXGKRNL_DEVICE Device)
+{
+    BOOLEAN Transitioned;
+
+    if (Device == NULL)
+        return FALSE;
+    Transitioned = DxgkDeviceWorkCoreTryTransitionTerminal(
+                       &Device->WorkLedger,
+                       &Device->ExecutionState,
+                       D3DKMT_DEVICEEXECUTION_ACTIVE,
+                       D3DKMT_DEVICEEXECUTION_ERROR_DMAPAGEFAULT);
+    if (Transitioned)
+    {
+        DxgkSyncObjectCancelDeviceWaits(
+            Device,
+            STATUS_GRAPHICS_GPU_EXCEPTION_ON_DEVICE,
+            TRUE);
+    }
+    return Transitioned;
+}
+
+VOID
+DxgkDeviceSetPageFaultState(
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ CONST D3DKMT_DEVICEPAGEFAULT_STATE *PageFaultState)
+{
+    KIRQL OldIrql;
+
+    if (Device == NULL || PageFaultState == NULL)
+        return;
+
+    KeAcquireSpinLock(&Device->PageFaultLock, &OldIrql);
+    Device->PageFaultState = *PageFaultState;
+    KeMemoryBarrier();
+    InterlockedExchange(&Device->PageFaultValid, 1);
+    KeReleaseSpinLock(&Device->PageFaultLock, OldIrql);
+}
+
+BOOLEAN
+DxgkDeviceGetPageFaultState(
+    _In_ PDXGKRNL_DEVICE Device,
+    _Out_ D3DKMT_DEVICEPAGEFAULT_STATE *PageFaultState)
+{
+    KIRQL OldIrql;
+    BOOLEAN Valid;
+
+    if (Device == NULL || PageFaultState == NULL)
+        return FALSE;
+
+    KeAcquireSpinLock(&Device->PageFaultLock, &OldIrql);
+    Valid = InterlockedCompareExchange(&Device->PageFaultValid, 0, 0) != 0;
+    if (Valid)
+        *PageFaultState = Device->PageFaultState;
+    else
+        RtlZeroMemory(PageFaultState, sizeof(*PageFaultState));
+    KeReleaseSpinLock(&Device->PageFaultLock, OldIrql);
+    return Valid;
+}
+#endif
+
 VOID
 DxgkMarkAdapterDevicesStoppedLocked(
     _In_ PDXGKRNL_ADAPTER Adapter)
@@ -250,6 +319,79 @@ DxgkReferenceDevice(
     return TRUE;
 }
 
+static BOOLEAN
+DxgkpTryReferenceProcessDevice(
+    _In_ PVOID Object,
+    _In_opt_ PVOID Context)
+{
+    PDXGKRNL_DEVICE Device = (PDXGKRNL_DEVICE)Object;
+    PDXGKRNL_PROCESS ProcessRecord = (PDXGKRNL_PROCESS)Context;
+
+    if (Device == NULL || Device->ProcessRecord != ProcessRecord)
+        return FALSE;
+    return DxgkReferenceDevice(Device);
+}
+
+/*
+ * Acquire one live device owned by ProcessRecord for process-wide paging work.
+ *
+ * ProcessMutex keeps every list node valid while DxgkReferenceDevice performs
+ * its before/after Destroying checks.  Once that reference succeeds,
+ * DxgkpDestroyDetachedDevice cannot call DxgkDdiDestroyDevice (and therefore
+ * cannot invalidate hMiniportDevice) until the caller releases the reference.
+ */
+NTSTATUS
+DxgkReferenceProcessPagingDevice(
+    _In_ PDXGKRNL_PROCESS ProcessRecord,
+    _Out_ PDXGKRNL_DEVICE *OutDevice,
+    _Out_ PHANDLE OutMiniportDevice)
+{
+    PVOID Object = NULL;
+    BOOLEAN Referenced;
+
+    if (ProcessRecord == NULL ||
+        OutDevice == NULL ||
+        OutMiniportDevice == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    *OutDevice = NULL;
+    *OutMiniportDevice = NULL;
+
+    ExAcquireFastMutex(&ProcessRecord->ProcessMutex);
+    Referenced = DxgkProcessDeviceTryReference(
+                     &ProcessRecord->DeviceListHead,
+                     DxgkpTryReferenceProcessDevice,
+                     ProcessRecord,
+                     &Object,
+                     OutMiniportDevice);
+    ExReleaseFastMutex(&ProcessRecord->ProcessMutex);
+
+    if (!Referenced)
+        return STATUS_DEVICE_NOT_READY;
+
+    *OutDevice = (PDXGKRNL_DEVICE)Object;
+    return STATUS_SUCCESS;
+}
+
+static VOID
+DxgkpUnlinkProcessDevice(
+    _Inout_ PDXGKRNL_DEVICE Device)
+{
+    PDXGKRNL_PROCESS ProcessRecord;
+
+    if (Device == NULL)
+        return;
+    ProcessRecord = Device->ProcessRecord;
+    if (ProcessRecord == NULL)
+        return;
+
+    ExAcquireFastMutex(&ProcessRecord->ProcessMutex);
+    (VOID)DxgkProcessDeviceLinkDetach(&Device->ProcessDeviceLink);
+    ExReleaseFastMutex(&ProcessRecord->ProcessMutex);
+}
+
 BOOLEAN
 DxgkReferenceContext(
     _In_ PDXGKRNL_CONTEXT Context)
@@ -308,74 +450,226 @@ DxgkpWaitForContextReferences(
         KeWaitForSingleObject(&Context->ReferencesDrainedEvent, Executive, KernelMode, FALSE, NULL);
 }
 
-static NTSTATUS
-DxgkpAcquireProcessRecord(
+static PDXGKRNL_PROCESS
+DxgkpFindProcessRecordLocked(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PEPROCESS Process)
+{
+    PLIST_ENTRY Entry;
+
+    for (Entry = DxgkProcessListHead.Flink;
+         Entry != &DxgkProcessListHead;
+         Entry = Entry->Flink)
+    {
+        PDXGKRNL_PROCESS ProcessRecord =
+            CONTAINING_RECORD(Entry,
+                              DXGKRNL_PROCESS,
+                              GlobalProcessListEntry);
+
+        if (ProcessRecord->Process == Process &&
+            ProcessRecord->Adapter == Adapter)
+        {
+            return ProcessRecord;
+        }
+    }
+
+    return NULL;
+}
+
+static VOID
+DxgkpFreeProcessRecordStorage(
+    _In_ PDXGKRNL_PROCESS ProcessRecord)
+{
+    ASSERT(ProcessRecord != NULL);
+    ASSERT(ProcessRecord->Lifetime.ReferenceCount == 0);
+    ASSERT(IsListEmpty(&ProcessRecord->GlobalProcessListEntry));
+    ASSERT(IsListEmpty(&ProcessRecord->DeviceListHead));
+    ASSERT(IsListEmpty(&ProcessRecord->AllocationListHead));
+    ObDereferenceObject(ProcessRecord->Process);
+    ExFreePoolWithTag(ProcessRecord, TAG_DXGK_PROCESS);
+}
+
+NTSTATUS
+DxgkAcquireProcessRecord(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ PEPROCESS Process,
     _Out_ PDXGKRNL_PROCESS *OutProcessRecord)
 {
     PDXGKRNL_PROCESS Candidate;
-    PLIST_ENTRY Entry;
+    PDXGKRNL_PROCESS Existing;
+    DXGK_PROCESS_LIFETIME_ACQUIRE AcquireResult;
+    DXGK_PROCESS_LIFETIME_RELEASE ReleaseResult;
+    DXGK_PROCESS_LIFETIME_STATE State;
+    PVOID CurrentThread;
     NTSTATUS Status;
 
+    PAGED_CODE();
+
+    if (Adapter == NULL || Process == NULL || OutProcessRecord == NULL)
+        return STATUS_INVALID_PARAMETER;
     *OutProcessRecord = NULL;
+    CurrentThread = PsGetCurrentThread();
 
-    ExAcquireFastMutex(&DxgkProcessListLock);
-    for (Entry = DxgkProcessListHead.Flink; Entry != &DxgkProcessListHead; Entry = Entry->Flink)
+    for (;;)
     {
-        PDXGKRNL_PROCESS Existing = CONTAINING_RECORD(Entry, DXGKRNL_PROCESS, GlobalProcessListEntry);
+        if (PsGetProcessExitStatus(Process) != STATUS_PENDING)
+            return STATUS_PROCESS_IS_TERMINATING;
 
-        if (Existing->Process == Process && Existing->Adapter == Adapter)
+        ExAcquireFastMutex(&DxgkProcessListLock);
+        Existing = DxgkpFindProcessRecordLocked(Adapter, Process);
+        if (Existing != NULL)
         {
-            InterlockedIncrement(&Existing->ReferenceCount);
+            AcquireResult =
+                DxgkProcessLifetimeAcquire(&Existing->Lifetime,
+                                           CurrentThread);
             ExReleaseFastMutex(&DxgkProcessListLock);
-            *OutProcessRecord = Existing;
-            return STATUS_SUCCESS;
+
+            if (AcquireResult == DxgkProcessLifetimeAcquireReady)
+            {
+                *OutProcessRecord = Existing;
+                return STATUS_SUCCESS;
+            }
+            if (AcquireResult == DxgkProcessLifetimeRetry)
+                continue;
+            if (AcquireResult == DxgkProcessLifetimeRejectReentrant)
+                return STATUS_DEVICE_BUSY;
+
+            Status = KeWaitForSingleObject(&Existing->LifetimeEvent,
+                                           Executive,
+                                           KernelMode,
+                                           FALSE,
+                                           NULL);
+
+            ExAcquireFastMutex(&DxgkProcessListLock);
+            State = Existing->Lifetime.State;
+            if (NT_SUCCESS(Status) &&
+                AcquireResult == DxgkProcessLifetimeWaitForCreate &&
+                State == DxgkProcessLifetimeReady)
+            {
+                /*
+                 * The wait pin acquired while Creating becomes this caller's
+                 * ordinary adapter/device ownership reference.
+                 */
+                ExReleaseFastMutex(&DxgkProcessListLock);
+                *OutProcessRecord = Existing;
+                return STATUS_SUCCESS;
+            }
+
+            if (NT_SUCCESS(Status) &&
+                AcquireResult == DxgkProcessLifetimeWaitForCreate &&
+                State == DxgkProcessLifetimeFailed)
+            {
+                Status = Existing->Lifetime.FailureStatus;
+            }
+            else if (NT_SUCCESS(Status) &&
+                     AcquireResult != DxgkProcessLifetimeWaitForDestroy)
+            {
+                Status = STATUS_INTERNAL_ERROR;
+            }
+
+            ReleaseResult =
+                DxgkProcessLifetimeRelease(&Existing->Lifetime,
+                                           CurrentThread);
+            ExReleaseFastMutex(&DxgkProcessListLock);
+            if (ReleaseResult == DxgkProcessLifetimeFree)
+                DxgkpFreeProcessRecordStorage(Existing);
+
+            if (AcquireResult == DxgkProcessLifetimeWaitForCreate)
+                return Status;
+
+            /* Destruction completed; retry against the now-empty key. */
+            continue;
         }
-    }
-    ExReleaseFastMutex(&DxgkProcessListLock);
+        ExReleaseFastMutex(&DxgkProcessListLock);
 
-    Candidate = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Candidate), TAG_DXGK_PROCESS);
-    if (Candidate == NULL)
-        return STATUS_INSUFFICIENT_RESOURCES;
+        Candidate = ExAllocatePoolWithTag(NonPagedPool,
+                                          sizeof(*Candidate),
+                                          TAG_DXGK_PROCESS);
+        if (Candidate == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
 
-    RtlZeroMemory(Candidate, sizeof(*Candidate));
-    Candidate->Process = Process;
-    Candidate->ReferenceCount = 1;
-    InitializeListHead(&Candidate->DeviceListHead);
-    InitializeListHead(&Candidate->AllocationListHead);
-    InitializeListHead(&Candidate->GlobalProcessListEntry);
-    ExInitializeFastMutex(&Candidate->ProcessMutex);
-    ObReferenceObject(Process);
+        RtlZeroMemory(Candidate, sizeof(*Candidate));
+        Candidate->Process = Process;
+        Candidate->Adapter = Adapter;
+        DxgkProcessLifetimeInitialize(&Candidate->Lifetime,
+                                      CurrentThread);
+        KeInitializeEvent(&Candidate->LifetimeEvent,
+                          NotificationEvent,
+                          FALSE);
+        InitializeListHead(&Candidate->DeviceListHead);
+        InitializeListHead(&Candidate->AllocationListHead);
+        InitializeListHead(&Candidate->GlobalProcessListEntry);
+        ExInitializeFastMutex(&Candidate->ProcessMutex);
+        ObReferenceObject(Process);
 
-    Status = DxgkGpuVaCreateProcess(Adapter, Candidate);
-    if (!NT_SUCCESS(Status))
-    {
-        ObDereferenceObject(Process);
-        ExFreePoolWithTag(Candidate, TAG_DXGK_PROCESS);
-        return Status;
-    }
-    ExAcquireFastMutex(&DxgkProcessListLock);
-    for (Entry = DxgkProcessListHead.Flink; Entry != &DxgkProcessListHead; Entry = Entry->Flink)
-    {
-        PDXGKRNL_PROCESS Existing = CONTAINING_RECORD(Entry, DXGKRNL_PROCESS, GlobalProcessListEntry);
-
-        if (Existing->Process == Process && Existing->Adapter == Adapter)
+        /*
+         * Publish the Creating placeholder before entering the miniport.
+         * A competing opener pins and waits on this exact object instead of
+         * issuing a duplicate CreateProcess callback.
+         */
+        ExAcquireFastMutex(&DxgkProcessListLock);
+        if (PsGetProcessExitStatus(Process) != STATUS_PENDING)
         {
-            InterlockedIncrement(&Existing->ReferenceCount);
             ExReleaseFastMutex(&DxgkProcessListLock);
-            DxgkGpuVaDestroyProcess(Adapter, Candidate);
             ObDereferenceObject(Process);
             ExFreePoolWithTag(Candidate, TAG_DXGK_PROCESS);
-            *OutProcessRecord = Existing;
-            return STATUS_SUCCESS;
+            return STATUS_PROCESS_IS_TERMINATING;
         }
-    }
+        Existing = DxgkpFindProcessRecordLocked(Adapter, Process);
+        if (Existing != NULL)
+        {
+            ExReleaseFastMutex(&DxgkProcessListLock);
+            ObDereferenceObject(Process);
+            ExFreePoolWithTag(Candidate, TAG_DXGK_PROCESS);
+            continue;
+        }
+        InsertTailList(&DxgkProcessListHead,
+                       &Candidate->GlobalProcessListEntry);
+        ExReleaseFastMutex(&DxgkProcessListLock);
 
-    InsertTailList(&DxgkProcessListHead, &Candidate->GlobalProcessListEntry);
-    ExReleaseFastMutex(&DxgkProcessListLock);
-    *OutProcessRecord = Candidate;
-    return STATUS_SUCCESS;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+        Status = DxgkGpuVaCreateProcess(Adapter, Candidate);
+        if (!NT_SUCCESS(Status))
+        {
+            /*
+             * Generic GPUVA state is initialized before the optional WDDM2
+             * callback. Finish that local teardown before allowing a retry.
+             * hMiniportProcess is published only on callback success.
+             */
+            DxgkGpuVaDestroyProcess(Adapter, Candidate);
+        }
+#else
+        Status = STATUS_SUCCESS;
+#endif
+
+        ExAcquireFastMutex(&DxgkProcessListLock);
+        if (!NT_SUCCESS(Status))
+        {
+            RemoveEntryList(&Candidate->GlobalProcessListEntry);
+            InitializeListHead(&Candidate->GlobalProcessListEntry);
+        }
+        DxgkProcessLifetimeCompleteCreate(&Candidate->Lifetime,
+                                          CurrentThread,
+                                          Status);
+        KeSetEvent(&Candidate->LifetimeEvent, IO_NO_INCREMENT, FALSE);
+        if (!NT_SUCCESS(Status))
+            ReleaseResult =
+                DxgkProcessLifetimeRelease(&Candidate->Lifetime,
+                                           CurrentThread);
+        else
+            ReleaseResult = DxgkProcessLifetimeReleaseNone;
+        ExReleaseFastMutex(&DxgkProcessListLock);
+
+        if (!NT_SUCCESS(Status))
+        {
+            if (ReleaseResult == DxgkProcessLifetimeFree)
+                DxgkpFreeProcessRecordStorage(Candidate);
+            return Status;
+        }
+
+        *OutProcessRecord = Candidate;
+        return STATUS_SUCCESS;
+    }
 }
 
 NTSTATUS
@@ -384,26 +678,30 @@ DxgkReferenceProcessRecordByAdapter(
     _In_ PEPROCESS Process,
     _Out_ PDXGKRNL_PROCESS *OutProcessRecord)
 {
-    PLIST_ENTRY Entry;
+    PDXGKRNL_PROCESS ProcessRecord;
+    DXGK_PROCESS_LIFETIME_ACQUIRE AcquireResult;
 
     if (Adapter == NULL || Process == NULL || OutProcessRecord == NULL)
         return STATUS_INVALID_PARAMETER;
 
     *OutProcessRecord = NULL;
     ExAcquireFastMutex(&DxgkProcessListLock);
-    for (Entry = DxgkProcessListHead.Flink; Entry != &DxgkProcessListHead; Entry = Entry->Flink)
+    ProcessRecord = DxgkpFindProcessRecordLocked(Adapter, Process);
+    if (ProcessRecord != NULL &&
+        ProcessRecord->Lifetime.State == DxgkProcessLifetimeReady)
     {
-        PDXGKRNL_PROCESS ProcessRecord = CONTAINING_RECORD(Entry, DXGKRNL_PROCESS, GlobalProcessListEntry);
-
-        if (ProcessRecord->Adapter != Adapter || ProcessRecord->Process != Process)
-            continue;
-
-        InterlockedIncrement(&ProcessRecord->ReferenceCount);
+        AcquireResult =
+            DxgkProcessLifetimeAcquire(&ProcessRecord->Lifetime,
+                                       PsGetCurrentThread());
+        ASSERT(AcquireResult == DxgkProcessLifetimeAcquireReady);
         ExReleaseFastMutex(&DxgkProcessListLock);
         *OutProcessRecord = ProcessRecord;
         return STATUS_SUCCESS;
     }
     ExReleaseFastMutex(&DxgkProcessListLock);
+
+    if (ProcessRecord != NULL)
+        return STATUS_DEVICE_NOT_READY;
     return STATUS_NOT_FOUND;
 }
 
@@ -411,26 +709,53 @@ VOID
 DxgkDereferenceProcessRecord(
     _In_opt_ PDXGKRNL_PROCESS ProcessRecord)
 {
-    BOOLEAN Destroy = FALSE;
+    DXGK_PROCESS_LIFETIME_RELEASE ReleaseResult;
+    BOOLEAN FreeRecord;
+
+    PAGED_CODE();
 
     if (ProcessRecord == NULL)
         return;
 
     ExAcquireFastMutex(&DxgkProcessListLock);
-    if (InterlockedDecrement(&ProcessRecord->ReferenceCount) == 0)
-    {
-        RemoveEntryList(&ProcessRecord->GlobalProcessListEntry);
-        InitializeListHead(&ProcessRecord->GlobalProcessListEntry);
-        Destroy = TRUE;
-    }
+    ReleaseResult =
+        DxgkProcessLifetimeRelease(&ProcessRecord->Lifetime,
+                                   PsGetCurrentThread());
+    if (ReleaseResult == DxgkProcessLifetimeBeginDestroy)
+        KeResetEvent(&ProcessRecord->LifetimeEvent);
     ExReleaseFastMutex(&DxgkProcessListLock);
 
-    if (Destroy)
+    if (ReleaseResult == DxgkProcessLifetimeBeginDestroy)
     {
-        ASSERT(InterlockedCompareExchange(&ProcessRecord->InFlightSubmissions, 0, 0) == 0);
+        ASSERT(InterlockedCompareExchange(
+                   &ProcessRecord->InFlightSubmissions, 0, 0) == 0);
+        ASSERT(IsListEmpty(&ProcessRecord->DeviceListHead));
+
+        /*
+         * Keep the Destroying record discoverable while the callback runs.
+         * New openers pin it and wait, so CreateProcess cannot overlap this
+         * DestroyProcess for the same (process, adapter) identity.
+         */
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
         DxgkGpuVaDestroyProcess(ProcessRecord->Adapter, ProcessRecord);
-        ObDereferenceObject(ProcessRecord->Process);
-        ExFreePoolWithTag(ProcessRecord, TAG_DXGK_PROCESS);
+#endif
+
+        ExAcquireFastMutex(&DxgkProcessListLock);
+        RemoveEntryList(&ProcessRecord->GlobalProcessListEntry);
+        InitializeListHead(&ProcessRecord->GlobalProcessListEntry);
+        FreeRecord =
+            DxgkProcessLifetimeCompleteDestroy(
+                &ProcessRecord->Lifetime,
+                PsGetCurrentThread());
+        KeSetEvent(&ProcessRecord->LifetimeEvent, IO_NO_INCREMENT, FALSE);
+        ExReleaseFastMutex(&DxgkProcessListLock);
+
+        if (FreeRecord)
+            DxgkpFreeProcessRecordStorage(ProcessRecord);
+    }
+    else if (ReleaseResult == DxgkProcessLifetimeFree)
+    {
+        DxgkpFreeProcessRecordStorage(ProcessRecord);
     }
 }
 
@@ -936,9 +1261,11 @@ DxgkCreateDevice(
     PDXGKRNL_ADAPTER     Adapter;
     PDXGKRNL_DEVICE      Device;
     DXGKARG_CREATEDEVICE CreateDeviceArg;
+    DXGK_DEVICEINFO      LegacyDeviceInfo;
     DXGK_DEVICE_WORK_TERMINAL_STATE WorkTerminal;
     NTSTATUS             Status;
     BOOLEAN              KmdTransactionStarted = FALSE;
+    BOOLEAN              LegacyDeviceInfoValid = FALSE;
 
     PAGED_CODE();
 
@@ -990,6 +1317,7 @@ DxgkCreateDevice(
     InitializeListHead(&Device->ContextListHead);
     InitializeListHead(&Device->SyncObjListHead);
     InitializeListHead(&Device->DeviceListEntry);
+    DxgkProcessDeviceLinkInitialize(&Device->ProcessDeviceLink, Device);
     RtlZeroMemory(&WorkTerminal, sizeof(WorkTerminal));
     WorkTerminal.Destroying = &Device->Destroying;
     WorkTerminal.ExecutionState = &Device->ExecutionState;
@@ -997,11 +1325,21 @@ DxgkCreateDevice(
     WorkTerminal.TerminalStatus = STATUS_DEVICE_REMOVED;
     DxgkDeviceWorkCoreInitializeLedger(&Device->WorkLedger, &WorkTerminal);
     DxgkSyncWaitCoreInitializeRegistry(&Device->SyncWaitRegistry);
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    KeInitializeSpinLock(&Device->PageFaultLock);
+#endif
     DxgkPresentLimitCoreInitialize(&Device->PresentLimit, DXGKRNL_DEFAULT_QUEUED_PRESENT_LIMIT);
     ExInitializeFastMutex(&Device->DeviceMutex);
     KeInitializeEvent(&Device->ReferencesDrainedEvent, NotificationEvent, FALSE);
 
-    Status = DxgkpAcquireProcessRecord(Adapter, Device->OwnerProcess, &Device->ProcessRecord);
+    /*
+     * Opening the adapter establishes the per-process/per-adapter KMD
+     * process. A device takes another reference to that already-published
+     * record; it must not create or recreate process state on its own.
+     */
+    Status = DxgkReferenceProcessRecordByAdapter(Adapter,
+                                                 Device->OwnerProcess,
+                                                 &Device->ProcessRecord);
     if (!NT_SUCCESS(Status))
     {
         ExFreePoolWithTag(Device, TAG_DXGK_DEVICE);
@@ -1013,10 +1351,13 @@ DxgkCreateDevice(
     /* --- Call DxgkDdiCreateDevice ---------------------------------------- */
 
     RtlZeroMemory(&CreateDeviceArg, sizeof(CreateDeviceArg));
+    RtlZeroMemory(&LegacyDeviceInfo, sizeof(LegacyDeviceInfo));
     CreateDeviceArg.hDevice             = (HANDLE)Device; /* raw pointer as token */
     /* UMD D3DKMT flags are not bit-compatible with the KMD device flags. */
     CreateDeviceArg.Flags.Value         = 0;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
     CreateDeviceArg.hKmdProcess         = Device->ProcessRecord->hMiniportProcess;
+#endif
 
     if (DXGK_CB_FULL(Adapter, DxgkDdiCreateDevice) != NULL)
     {
@@ -1039,6 +1380,24 @@ DxgkCreateDevice(
         }
         KmdTransactionStarted = TRUE;
         Status = DXGK_CB_FULL(Adapter, DxgkDdiCreateDevice)(Adapter->MiniportDeviceContext, &CreateDeviceArg);
+        if (NT_SUCCESS(Status) && CreateDeviceArg.pInfo != NULL)
+        {
+            /*
+             * pInfo belongs to the miniport and is only an output pointer for
+             * backward-compatible contextless DMA geometry.  Snapshot it
+             * before any other callback can invalidate driver-owned storage.
+             */
+            _SEH2_TRY
+            {
+                LegacyDeviceInfo = *CreateDeviceArg.pInfo;
+                LegacyDeviceInfoValid = TRUE;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+        }
         if (!NT_SUCCESS(Status))
         {
             DXGKRNL_ERR("DxgkCreateDevice: DxgkDdiCreateDevice failed 0x%08lX\n", Status);
@@ -1067,12 +1426,11 @@ DxgkCreateDevice(
          * and to DxgkDdiCreateContext (as MiniportDeviceContext per-device).
          */
         Device->hMiniportDevice = CreateDeviceArg.hDevice;
-        /* Paging packets that belong to the process rather than to one device
-         * (page-table updates, TLB invalidation) are submitted against this
-         * handle; publish the first one the process establishes. */
-        if (Device->ProcessRecord != NULL && Device->ProcessRecord->PagingMiniportDevice == NULL)
-            Device->ProcessRecord->PagingMiniportDevice = CreateDeviceArg.hDevice;
-
+        if (LegacyDeviceInfoValid)
+        {
+            Device->LegacyDeviceInfo = LegacyDeviceInfo;
+            Device->LegacyDeviceInfoValid = TRUE;
+        }
         DXGKRNL_TRACE("DxgkCreateDevice: miniport device handle %p\n", Device->hMiniportDevice);
     }
     else
@@ -1116,7 +1474,31 @@ DxgkCreateDevice(
         }
         return STATUS_DELETE_PENDING;
     }
+    /*
+     * Publish both memberships while AdapterMutex still excludes every
+     * teardown path.  ProcessMutex makes the process-owned list and its
+     * miniport handle one atomic selection boundary for paging flushes.
+     */
+    ExAcquireFastMutex(&Device->ProcessRecord->ProcessMutex);
+    if (!DxgkProcessDeviceLinkAttach(&Device->ProcessRecord->DeviceListHead,
+                                     &Device->ProcessDeviceLink,
+                                     Device->hMiniportDevice))
+    {
+        ExReleaseFastMutex(&Device->ProcessRecord->ProcessMutex);
+        KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+        DxgkRemoveDeviceHandleObject(Device);
+        InterlockedExchange(&Device->TeardownClaimed, 1);
+        (VOID)DxgkpDestroyDetachedDevice(Device);
+        DxgkEndDeviceLifecycleOperation(Adapter);
+        if (KmdTransactionStarted)
+        {
+            DxgkEndKmdTransaction(Adapter);
+            DxgkDereferenceAdapter(Adapter);
+        }
+        return STATUS_INVALID_DEVICE_STATE;
+    }
     InsertTailList(&Adapter->DeviceListHead, &Device->DeviceListEntry);
+    ExReleaseFastMutex(&Device->ProcessRecord->ProcessMutex);
     KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
 
     pCreateDevice->hDevice = Device->Handle;
@@ -1167,6 +1549,7 @@ DxgkpDestroyDetachedDevice(
 
     ASSERT(InterlockedCompareExchange(&Device->TeardownClaimed, 1, 1) == 1);
     DxgkDeviceBeginDestroy(Device);
+    DxgkpUnlinkProcessDevice(Device);
     DxgkDeviceSetExecutionState(Device, D3DKMT_DEVICEEXECUTION_STOPPED);
     DxgkPresentNotifyDeviceRemoved(Adapter);
     DxgkPresentCancelDevice(Adapter, Device);
@@ -1240,6 +1623,7 @@ DxgkpDestroyDetachedDevice(
     ASSERT(DxgkDeviceWorkCoreIsEmpty(&Device->WorkLedger));
     ASSERT(DxgkSyncWaitCoreIsEmpty(&Device->SyncWaitRegistry));
     ASSERT(InterlockedCompareExchange(&Device->InFlightSubmissions, 0, 0) == 0);
+    ASSERT(IsListEmpty(&Device->ProcessDeviceLink.Entry));
     DxgkDereferenceProcessRecord(Device->ProcessRecord);
     ExFreePoolWithTag(Device, TAG_DXGK_DEVICE);
     DxgkDereferenceAdapter(Adapter);
@@ -1388,6 +1772,9 @@ DxgkpCreateContextCaptured(
     Context->NodeOrdinal    = pCreateContext->NodeOrdinal;
     Context->EngineAffinity = pCreateContext->EngineAffinity;
     Context->SchedulingPriority = 0;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1300)
+    Context->InProcessSchedulingPriority = 0;
+#endif
     Context->ReferenceCount = 1;
 
     InitializeListHead(&Context->ContextListEntry);
@@ -1658,6 +2045,9 @@ DxgkCreateContextVirtual(
     Context->NodeOrdinal = pCreateContext->NodeOrdinal;
     Context->EngineAffinity = pCreateContext->EngineAffinity;
     Context->SchedulingPriority = 0;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1300)
+    Context->InProcessSchedulingPriority = 0;
+#endif
     Context->VirtualAddressing = TRUE;
     Context->UserModeCreateFlags = pCreateContext->Flags;
     Context->ReferenceCount = 1;
@@ -1924,6 +2314,13 @@ DxgkProcessCleanup(
         DxgkEndDeviceLifecycleOperation(Adapter);
         DxgkDereferenceAdapter(Adapter);
     }
+
+    /*
+     * The early pass closes admission through the ExitStatus-backed VidMm
+     * tombstone; this idempotent pass also retires any zero-charge record
+     * retained while device teardown released its final placement.
+     */
+    DxgkVidMmReleaseProcessReservations(Process);
 }
 
 /* EOF */

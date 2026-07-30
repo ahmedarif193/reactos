@@ -70,6 +70,8 @@
 #include "submit_reservation_core.h"
 #include "sync_wait_core.h"
 #include "tracked_work_core.h"
+#include "process_device_core.h"
+#include "process_lifetime_core.h"
 #include "caps_core.h"
 
 /* ---- WDDM DDI interface version selection ------------------------------ */
@@ -240,46 +242,11 @@ typedef struct _DXGKRNL_DMA_BUFFER
     DXGKRNL_DMA_BACKING_KIND    BackingKind;
 } DXGKRNL_DMA_BUFFER, *PDXGKRNL_DMA_BUFFER;
 
-/* ========================================================================
- * DXGKARGCB_* — Callback argument structures (Vista WDK layout)
- *
- * These structures are used by the DxgkCb* callbacks that dxgkrnl exports
- * to the miniport.  They are not yet present in the ReactOS SDK so we
- * define them inline here.  All field offsets must match the Vista WDK.
- * ====================================================================== */
-
-/*
- * DXGKARGCB_ALLOCATECONTIGUOUSMEMORY
- *
- * Argument structure for DxgkCbAllocateContiguousMemory.
- * Layout matches the Vista WDK / dispmprt.h definition.
- */
-typedef struct _DXGKARGCB_ALLOCATECONTIGUOUSMEMORY
-{
-    SIZE_T              NumberOfBytes;              /* in:  bytes to allocate          */
-    PHYSICAL_ADDRESS    LowestAcceptableAddress;    /* in:  min physical address       */
-    PHYSICAL_ADDRESS    HighestAcceptableAddress;   /* in:  max physical address       */
-    PHYSICAL_ADDRESS    BoundaryAddressMultiple;    /* in:  alignment boundary         */
-    MEMORY_CACHING_TYPE CacheType;                  /* in:  cache type                 */
-    PVOID               pContiguousMemoryAddress;   /* out: kernel VA of allocation    */
-    PMDL                pMemoryDescriptorList;       /* out: MDL for the allocation     */
-} DXGKARGCB_ALLOCATECONTIGUOUSMEMORY, *PDXGKARGCB_ALLOCATECONTIGUOUSMEMORY;
-
-/*
- * DXGKARGCB_FREECONTIGUOUSMEMORY
- *
- * Argument structure for DxgkCbFreeContiguousMemory.
- */
-typedef struct _DXGKARGCB_FREECONTIGUOUSMEMORY
-{
-    PVOID   pContiguousMemoryAddress;   /* in: kernel VA returned by AllocContiguous */
-    PMDL    pMemoryDescriptorList;      /* in: MDL returned by AllocContiguous       */
-} DXGKARGCB_FREECONTIGUOUSMEMORY, *PDXGKARGCB_FREECONTIGUOUSMEMORY;
-
 /*
  * DXGKARGCB_MAPPHYSICALMEMORY
  *
- * Argument structure for DxgkCbMapPhysicalMemory.
+ * Private legacy raw-physical mapping helper.  This is not the WDDM 2.9
+ * physical-memory-object ABI published by the DXGKRNL_INTERFACE.
  */
 typedef struct _DXGKARGCB_MAPPHYSICALMEMORY
 {
@@ -439,6 +406,7 @@ typedef struct _DXGKRNL_SUBMIT_DMA_BUFFER
     D3DDDI_VIDEO_PRESENT_SOURCE_ID RefreshVidPnSourceId;
     RECT                        RefreshDstRect;
     BOOLEAN                     RefreshSharedPrimaryOnRetire;
+    BOOLEAN                     ProgramSourceScanoutOnRetire;
     BOOLEAN                     SharedSurfaceRundownHeld;
     ULONG64                     SharedSurfaceGeneration;
     BOOLEAN                     SourceIsSharedPrimary;
@@ -463,6 +431,10 @@ typedef struct _DXGKRNL_SUBMIT_DMA_BUFFER
     PDXGKRNL_ADAPTER            Adapter;
     volatile LONG               ReservationActive;
     BOOLEAN                     FenceIdentityOwned;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    /* PASSIVE retire worker outcome; failed GPU work must never publish. */
+    BOOLEAN                     CleanupAsCompleted;
+#endif
     PDXGKRNL_DEVICE_WORK        DeviceWork;
     DXGK_SUBMISSION_ACCOUNTING  SubmissionAccounting;
 
@@ -471,6 +443,10 @@ typedef struct _DXGKRNL_SUBMIT_DMA_BUFFER
      * hardware without GPU-writable fence values). */
     PVOID                       SignalSyncObjectReference;
     ULONG64                     SignalFenceValue;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
+    /* The DMA stream writes the value; retirement retains lifetime only. */
+    BOOLEAN                     SignalWrittenByGpu;
+#endif
 } DXGKRNL_SUBMIT_DMA_BUFFER, *PDXGKRNL_SUBMIT_DMA_BUFFER;
 
 /* Per-node completed-fence tracking cap (independent GPU engine queues
@@ -734,6 +710,11 @@ struct _DXGKRNL_ADAPTER
      */
     DXGK_PERIODIC_INTERRUPT_CORE PeriodicInterruptCore;
     BOOLEAN                     PeriodicInterruptOverflowReported;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
+    /* Type-11 notifications coalesce by node until the adapter DPC evaluates
+     * the GPU-written regular monitored-fence pages. */
+    volatile LONG               MonitoredFencePendingNodes;
+#endif
 
     /*
      * DPC object queued by the ISR to defer miniport DPC work.
@@ -965,7 +946,8 @@ struct _DXGKRNL_ADAPTER
 
     /*
      * Vblank pacing: miniport CRTC_VSYNC notifications (enabled through
-     * DxgkDdiControlInterrupt at adapter start) set VsyncPending from the
+     * highest compatible ControlInterrupt DDI at adapter start) set
+     * VsyncPending from the
      * "ISR"; the adapter DPC turns each pulse into a pending-dirty-rect
      * flush so presents pace to the scanout instead of the fallback timer.
      */
@@ -1101,9 +1083,24 @@ struct _DXGKRNL_DEVICE
     /* WDDM 2.x FromCpu waits share one nonpaged, DPC-safe completion boundary. */
     DXGK_SYNC_WAIT_CORE_REGISTRY SyncWaitRegistry;
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    /* Last valid WDDM 2.0 page-fault report for D3DKMTGetDeviceState. */
+    KSPIN_LOCK                  PageFaultLock;
+    volatile LONG               PageFaultValid;
+    D3DKMT_DEVICEPAGEFAULT_STATE PageFaultState;
+#endif
+
     /* SetQueuedLimit and every queued-present admission/release use this one
      * lock-backed state so limit changes cannot race a reservation. */
     DXGK_PRESENT_LIMIT_CORE      PresentLimit;
+
+    /*
+     * Vista-era contextless presents use the obsolete pInfo output from
+     * DxgkDdiCreateDevice.  Copy it during device creation; never retain the
+     * miniport-owned pointer beyond that callback.
+     */
+    DXGK_DEVICEINFO              LegacyDeviceInfo;
+    BOOLEAN                      LegacyDeviceInfoValid;
 
     /*
      * Miniport-side device handle returned from DxgkDdiCreateDevice.
@@ -1116,6 +1113,14 @@ struct _DXGKRNL_DEVICE
      * Protected by Adapter->AdapterMutex.
      */
     LIST_ENTRY                  DeviceListEntry;
+
+    /*
+     * Linkage in ProcessRecord->DeviceListHead.  This is separate from the
+     * adapter linkage because adapter teardown temporarily repurposes its list
+     * entry while process-wide paging work still needs stable membership.
+     * Protected by ProcessRecord->ProcessMutex.
+     */
+    DXGK_PROCESS_DEVICE_LINK    ProcessDeviceLink;
 
     /*
      * List of DXGKRNL_CONTEXT objects created against this device.
@@ -1154,6 +1159,9 @@ struct _DXGKRNL_CONTEXT
     UINT                        NodeOrdinal;
     UINT                        EngineAffinity;
     INT                         SchedulingPriority;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1300)
+    volatile LONG               InProcessSchedulingPriority;
+#endif
 
     /* TRUE when created through D3DKMTCreateContextVirtual. */
     BOOLEAN                     VirtualAddressing;
@@ -1381,9 +1389,20 @@ typedef struct _DXGKRNL_GPUVA_PAGE_TABLE
  * ====================================================================== */
 struct _DXGKRNL_PROCESS
 {
-    /* Referenced owning process object and shared-device reference count. */
+    /* Referenced owning process object and immutable adapter identity. */
     PEPROCESS                   Process;
-    volatile LONG               ReferenceCount;
+    PDXGKRNL_ADAPTER            Adapter;
+
+    /*
+     * Shared adapter-handle/device ownership and serialized KMD process DDI
+     * state. LifetimeEvent wakes every opener after CreateProcess or
+     * DestroyProcess has completed.
+     */
+    DXGK_PROCESS_LIFETIME_CORE  Lifetime;
+    KEVENT                      LifetimeEvent;
+
+    /* Linkage in the global (process, adapter) identity table. */
+    LIST_ENTRY                  GlobalProcessListEntry;
 
     /* Direct aggregate for tracked submissions across every device owned by
      * this process on this adapter, including detached devices still retained
@@ -1414,21 +1433,11 @@ struct _DXGKRNL_PROCESS
     /* ---- WDDM 2.0: Per-process GPU VA space management --------------- */
 
     /*
-     * Back-pointer to the adapter this process is bound to.
-     * Set during DxgkDdiCreateProcess; used for DDI calls.
-     */
-    PDXGKRNL_ADAPTER            Adapter;
-
-    /*
      * Miniport-side process handle returned by DxgkDdiCreateProcess.
      * Passed back to DxgkDdiDestroyProcess on cleanup.
      */
     HANDLE                      hMiniportProcess;
-
-    /* Miniport device handle used to submit paging packets that belong to
-     * the process rather than to one device (page-table update, TLB flush).
-     * Published by the first device this process creates. */
-    HANDLE                      PagingMiniportDevice;
+    BOOLEAN                     MiniportProcessCreated;
 
     /*
      * Page-table writes are made under GpuVaLock, but describing them to the
@@ -1506,15 +1515,6 @@ struct _DXGKRNL_PROCESS
      * the allocation is only evicted when the count reaches zero.
      */
 
-    /*
-     * Linkage in global process list for enumeration during cleanup.
-     */
-    LIST_ENTRY                  GlobalProcessListEntry;
-#else
-    /*
-     * Linkage in global process list for enumeration during cleanup.
-     */
-    LIST_ENTRY                  GlobalProcessListEntry;
 #endif
 };
 
@@ -1546,6 +1546,17 @@ typedef struct _DXGKRNL_SYNC_OBJECT
     ULONG                       SemaphoreLimit;
     PKEVENT                     CpuNotificationEvent;
     BOOLEAN                     CpuNotificationEventReferenced;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3000)
+    /*
+     * WDDM 3.0 SignalByKmd CPU notification ownership.  hKmdCpuEvent is
+     * supplied by DxgkDdiCreateCpuEvent and remains private to the miniport.
+     * KmdCpuEventCreated is claimed exactly once before invoking
+     * DxgkDdiDestroyCpuEvent.
+     */
+    HANDLE                      hKmdCpuEvent;
+    volatile LONG               KmdCpuEventCreated;
+    EX_RUNDOWN_REF              KmdCpuEventRundown;
+#endif
     KEVENT                      CpuEvent;
     LIST_ENTRY                  SyncObjListEntry;
     LIST_ENTRY                  DeviceSyncObjListEntry;
@@ -1565,6 +1576,11 @@ typedef struct _DXGKRNL_SYNC_OBJECT
     /* GPU VA of the value page in the creating process's address space
      * (CPU_VIRTUAL GpuMmu adapters only), 0 when not mapped. */
     D3DGPU_VIRTUAL_ADDRESS      MonitoredValueGpuVa;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
+    UINT                        MonitoredEngineAffinity;
+    EX_RUNDOWN_REF              MonitoredInterruptRundown;
+    ULONG                       MonitoredInterruptSequence;
+#endif
 
     /*
      * Legacy sharing.  A supported legacy object that asked for Shared gets
@@ -1673,37 +1689,44 @@ APIENTRY
 DxgkUnInitialize(
     _In_ PDRIVER_OBJECT DriverObject);
 
-/*
- * DxgkCb* callbacks — prototypes match the PDXGKCB_* typedefs in dispmprt.h.
- * The memory-related callbacks (AllocateContiguous, FreeContiguous,
- * MapPhysical, UnmapPhysical, AcquirePostDisplay) use PVOID for the
- * argument structure to remain type-compatible with the DXGK_INTERFACE
- * function-pointer table.  Implementations cast PVOID to the specific
- * PDXGKARGCB_* type internally.
- */
+/* DxgkCb* callbacks published through DXGKRNL_INTERFACE. */
 
-NTSTATUS
+VOID
 APIENTRY
 DxgkCbNotifyInterrupt(
-    _In_ HANDLE                                    DeviceHandle,
-    _In_ CONST DXGKARGCB_NOTIFY_INTERRUPT_DATA    *NotifyInterruptData);
+    _In_ HANDLE DeviceHandle,
+    IN_CONST_PDXGKARGCB_NOTIFY_INTERRUPT_DATA NotifyInterruptData);
 
 VOID
 APIENTRY
 DxgkCbNotifyDpc(
     _In_ HANDLE DeviceHandle);
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
 NTSTATUS
 APIENTRY
 DxgkCbAllocateContiguousMemory(
-    _In_    HANDLE  DeviceHandle,
-    _Inout_ PVOID   AllocContiguousMemory);
+    IN_CONST_HANDLE hAdapter,
+    INOUT_PDXGKARGCB_ALLOCATECONTIGUOUSMEMORY pAllocateContiguousMemory);
 
 NTSTATUS
 APIENTRY
 DxgkCbFreeContiguousMemory(
-    _In_ HANDLE  DeviceHandle,
-    _In_ PVOID   FreeContiguousMemory);
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARGCB_FREECONTIGUOUSMEMORY pFreeContiguousMemory);
+
+NTSTATUS
+APIENTRY
+DxgkCbAllocatePagesForMdl(
+    IN_CONST_HANDLE hAdapter,
+    INOUT_PDXGKARGCB_ALLOCATEPAGESFORMDL pAllocatePagesForMdl);
+
+NTSTATUS
+APIENTRY
+DxgkCbFreePagesFromMdl(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_PDXGKARGCB_FREEPAGESFROMMDL pFreePagesFromMdl);
+#endif
 
 NTSTATUS
 APIENTRY
@@ -1788,8 +1811,8 @@ DxgkCbWriteDeviceSpace(
 NTSTATUS
 APIENTRY
 DxgkCbAcquirePostDisplayOwnership(
-    _In_  HANDLE  DeviceHandle,
-    _Out_ PVOID   DisplayInformation);
+    _In_ HANDLE DeviceHandle,
+    _Out_ PDXGK_DISPLAY_INFORMATION DisplayInformation);
 
 /* ========================================================================
  * Function prototypes — adapter.c
@@ -1817,6 +1840,11 @@ DxgkAdapterStart(
 NTSTATUS
 DxgkAdapterStop(
     _In_ PDXGKRNL_ADAPTER Adapter);
+
+NTSTATUS
+DxgkCollectAdapterDiagnosticInfo(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ DXGK_DIAGNOSTICINFO_TYPE Type);
 
 VOID
 DxgkAdapterRemove(
@@ -2195,6 +2223,8 @@ DxgkGpuVaMakeResident(
     _Inout_opt_ volatile LONG64 *PagingFenceCounter,
     _In_reads_(NumAllocations) CONST D3DKMT_HANDLE *AllocationList,
     _In_    ULONG              NumAllocations,
+    _In_    BOOLEAN            CantTrimFurther,
+    _In_    BOOLEAN            MustSucceed,
     _Out_   ULONG             *OutCompleted,
     _Out_   ULONGLONG         *OutNumBytesToTrim,
     _Out_   ULONGLONG         *OutPagingFenceValue);
@@ -2317,6 +2347,12 @@ DxgkContextOrderWakeDevice(
     _Inout_ PDXGKRNL_DEVICE Device);
 
 NTSTATUS
+DxgkAcquireProcessRecord(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PEPROCESS Process,
+    _Out_ PDXGKRNL_PROCESS *OutProcessRecord);
+
+NTSTATUS
 DxgkReferenceProcessRecordByAdapter(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ PEPROCESS Process,
@@ -2337,6 +2373,12 @@ DxgkReferenceContext(
 BOOLEAN
 DxgkReferenceDevice(
     _In_ PDXGKRNL_DEVICE Device);
+
+NTSTATUS
+DxgkReferenceProcessPagingDevice(
+    _In_ PDXGKRNL_PROCESS ProcessRecord,
+    _Out_ PDXGKRNL_DEVICE *OutDevice,
+    _Out_ PHANDLE OutMiniportDevice);
 
 VOID
 DxgkDereferenceDevice(
@@ -2410,6 +2452,25 @@ VOID
 DxgkpDereferenceSyncObject(
     _In_ PDXGKRNL_SYNC_OBJECT SyncObj);
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3000)
+NTSTATUS
+APIENTRY
+DxgkCbSignalEvent(
+    _In_ CONST DXGKARGCB_SIGNALEVENT *Args);
+
+NTSTATUS
+DxgkSyncObjectReferenceKmdCpuEvent(
+    _In_ D3DKMT_HANDLE Handle,
+    _In_ PEPROCESS OwnerProcess,
+    _In_ PDXGKRNL_DEVICE Device,
+    _Out_ PDXGKRNL_SYNC_OBJECT *OutSyncObject,
+    _Out_ PHANDLE OutKmdCpuEvent);
+
+VOID
+DxgkSyncObjectDereferenceKmdCpuEvent(
+    _In_ PDXGKRNL_SYNC_OBJECT SyncObject);
+#endif
+
 NTSTATUS
 NTAPI
 DxgkCreateSynchronizationObject(
@@ -2482,6 +2543,29 @@ DxgkSyncObjectReferenceTrackedSignal(
     _In_ D3DKMT_HANDLE hSyncObject,
     _In_ PDXGKRNL_DEVICE Device,
     _Outptr_ PVOID *Reference);
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
+NTSTATUS
+NTAPI
+DxgkSyncObjectQueryTrackedSignalAddress(
+    _In_ PVOID Reference,
+    _In_ PDXGKRNL_DEVICE Device,
+    _Out_ D3DGPU_VIRTUAL_ADDRESS *GpuVa);
+
+NTSTATUS
+NTAPI
+DxgkSyncObjectDuplicateTrackedSignal(
+    _In_ PVOID Reference,
+    _In_ PDXGKRNL_DEVICE Device,
+    _Outptr_ PVOID *DuplicateReference);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS
+DxgkSyncNotifyMonitoredFence(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG NodeOrdinal,
+    _In_ ULONG EngineOrdinal);
+#endif
 
 VOID
 NTAPI
@@ -2566,9 +2650,9 @@ DxgkVidPnInitializeHotPlugWorker(
 NTSTATUS
 APIENTRY
 DxgkCbQueryVidPnInterface(
-    _In_  D3DKMDT_HVIDPN                       hVidPn,
-    _In_  DXGK_VIDPN_INTERFACE_VERSION         VidPnInterfaceVersion,
-    _Out_ CONST DXGK_VIDPN_INTERFACE**         ppVidPnInterface);
+    IN_CONST_D3DKMDT_HVIDPN hVidPn,
+    IN_CONST_DXGK_VIDPN_INTERFACE_VERSION VidPnInterfaceVersion,
+    DEREF_OUT_CONST_PPDXGK_VIDPN_INTERFACE ppVidPnInterface);
 
 /*
  * DxgkCbQueryMonitorInterface — DXGK_INTERFACE callback at offset 0x98.
@@ -2576,9 +2660,9 @@ DxgkCbQueryVidPnInterface(
 NTSTATUS
 APIENTRY
 DxgkCbQueryMonitorInterface(
-    _In_  HANDLE                               hAdapter,
-    _In_  UINT                                 MonitorInterfaceVersion,
-    _Out_ PVOID*                               ppMonitorInterface);
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_DXGK_MONITOR_INTERFACE_VERSION MonitorInterfaceVersion,
+    DEREF_OUT_CONST_PPDXGK_MONITOR_INTERFACE ppMonitorInterface);
 
 /*
  * D3DKMT stubs.
@@ -2883,6 +2967,11 @@ typedef struct _DXGKRNL_TRACK_DMA_ARGS
     ULONG                           EngineOrdinal;
     D3DKMT_HANDLE                   hSignalSyncObject;
     ULONG64                         SignalFenceValue;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
+    /* Borrowed pre-reference while an op16 signal is built. */
+    PVOID                           SignalSyncObjectReference;
+    BOOLEAN                         SignalWrittenByGpu;
+#endif
     ULONG64                         PresentId;
     PDXGKRNL_DMA_BUFFER             DmaBuffer;
     PDXGKRNL_DEVICE                 Device;
@@ -2901,6 +2990,7 @@ typedef struct _DXGKRNL_TRACK_DMA_ARGS
     BOOLEAN                         SourceIsSharedPrimary;
     BOOLEAN                         SourceIsSharedShadow;
     BOOLEAN                         RefreshIsSharedPrimary;
+    BOOLEAN                         ProgramSourceScanoutOnRetire;
     BOOLEAN                         HoldSharedSurfaceRundown;
     ULONG                           SourceWidth;
     ULONG                           SourceHeight;
@@ -3118,6 +3208,22 @@ DxgkDeviceSetExecutionState(
     _In_ PDXGKRNL_DEVICE Device,
     _In_ D3DKMT_DEVICEEXECUTION_STATE ExecutionState);
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+BOOLEAN
+DxgkDeviceSetPageFaultExecutionState(
+    _In_ PDXGKRNL_DEVICE Device);
+
+VOID
+DxgkDeviceSetPageFaultState(
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ CONST D3DKMT_DEVICEPAGEFAULT_STATE *PageFaultState);
+
+BOOLEAN
+DxgkDeviceGetPageFaultState(
+    _In_ PDXGKRNL_DEVICE Device,
+    _Out_ D3DKMT_DEVICEPAGEFAULT_STATE *PageFaultState);
+#endif
+
 VOID
 DxgkMarkAdapterDevicesStopped(
     _In_ PDXGKRNL_ADAPTER Adapter);
@@ -3169,6 +3275,14 @@ VOID
 NTAPI
 DxgkCancelTrackedDmaBuffer(
     _In_opt_ PDXGKRNL_SUBMIT_DMA_BUFFER Entry);
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+BOOLEAN
+NTAPI
+DxgkFailTrackedDmaBuffer(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_SUBMIT_DMA_BUFFER Entry);
+#endif
 
 VOID
 NTAPI

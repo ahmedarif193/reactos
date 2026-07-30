@@ -246,7 +246,9 @@ VOID
 DxgkpInitializeCoreInterface(VOID)
 {
     /* Forward declarations from adapter.c (all non-paged) */
-    extern NTSTATUS APIENTRY DxgkCbNotifyInterrupt(HANDLE, CONST DXGKARGCB_NOTIFY_INTERRUPT_DATA*);
+    extern VOID APIENTRY DxgkCbNotifyInterrupt(
+        HANDLE,
+        IN_CONST_PDXGKARGCB_NOTIFY_INTERRUPT_DATA);
     extern VOID APIENTRY DxgkCbNotifyDpc(HANDLE);
     extern NTSTATUS APIENTRY DxgkCbGetDeviceInformation(HANDLE, PDXGK_DEVICE_INFO);
     extern NTSTATUS APIENTRY DxgkCbIndicateChildStatus(HANDLE, PDXGK_CHILD_STATUS);
@@ -254,7 +256,9 @@ DxgkpInitializeCoreInterface(VOID)
     extern NTSTATUS APIENTRY DxgkCbUnmapMemory(HANDLE, PVOID);
     extern NTSTATUS APIENTRY DxgkCbReadDeviceSpace(HANDLE, ULONG, PVOID, ULONG, ULONG, PULONG);
     extern NTSTATUS APIENTRY DxgkCbWriteDeviceSpace(HANDLE, ULONG, PVOID, ULONG, ULONG, PULONG);
-    extern NTSTATUS APIENTRY DxgkCbAcquirePostDisplayOwnership(HANDLE, PVOID);
+    extern NTSTATUS APIENTRY DxgkCbAcquirePostDisplayOwnership(
+        HANDLE,
+        PDXGK_DISPLAY_INFORMATION);
 
     /*
      * Slot order matches the Win7 report's DxgCoreInterface layout:

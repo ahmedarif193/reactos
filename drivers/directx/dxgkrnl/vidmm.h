@@ -243,6 +243,11 @@ typedef struct _DXGKVMM_ALLOCATION
     /* Miniport-declared placement sets; bit 0 names segment 1. */
     UINT                SupportedWriteSegmentSet;
     UINT                EvictionSegmentSet;
+    D3DDDI_SEGMENTPREFERENCE PreferredSegment;
+
+    /* Mutable WDDM 2.1 allocation properties. */
+    BOOLEAN             AccessedPhysically;
+    BOOLEAN             Unmoveable;
 
     /* WDDM allocation priority (D3DDDI_ALLOCATIONPRIORITY_NORMAL default). */
     ULONG               AllocationPriority;
@@ -273,6 +278,16 @@ typedef struct _DXGKVMM_ALLOCATION
     /* The created-resident reference, owned by Device.  Held separately from
      * the list because the owner is assigned after lifetime initialization. */
     BOOLEAN             ImplicitResidencyReference;
+
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    /*
+     * One charge entry per process that currently references this physical
+     * placement. Open/shared aliases resolve here, so every process receives
+     * its own usage charge without multiplying usage for extra aliases or
+     * devices in that same process. Protected by the VidMm budget lock.
+     */
+    LIST_ENTRY          ResidencyBudgetChargeList;
+#endif
 
     /* Separate from user MakeResident/Evict references: each admitted GPU
      * submission pins this exact placement until tracked terminal cleanup. */
@@ -364,6 +379,8 @@ typedef struct _DXGKVMM_ALLOCATION
      */
     BOOLEAN             Offered;
     BOOLEAN             OfferDiscarded;
+    BOOLEAN             OfferAllowDecommit;
+    BOOLEAN             OfferDecommitted;
     ULONG               OfferPriority;
 
     /*
@@ -460,11 +477,14 @@ DxgkVidMmMakeResident(
 NTSTATUS
 DxgkVidMmMakeResidentBatch(
     _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_PROCESS Process,
     _In_opt_ PDXGKRNL_DEVICE Device,
     _In_reads_(AllocationCount) PDXGKVMM_ALLOCATION const *Allocations,
     _In_ ULONG AllocationCount,
     _In_ D3DKMT_HANDLE hPagingSyncObject,
     _Inout_opt_ volatile LONG64 *PagingFenceCounter,
+    _In_ BOOLEAN CantTrimFurther,
+    _In_ BOOLEAN MustSucceed,
     _Out_ PULONGLONG OutNumBytesToTrim,
     _Out_ PULONGLONG OutPagingFenceValue,
     _Out_ PBOOLEAN OutPagingQueued);
@@ -516,7 +536,8 @@ DxgkVidMmOfferAllocation(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ PDXGKRNL_DEVICE  Device,
     _In_ D3DKMT_HANDLE    Handle,
-    _In_ ULONG            Priority);
+    _In_ ULONG            Priority,
+    _In_ ULONG            Flags);
 
 NTSTATUS
 DxgkVidMmReclaimAllocation(
@@ -735,6 +756,52 @@ VOID
 DxgkVidMmDereferenceResource(
     _In_ PDXGKVMM_RESOURCE Resource);
 
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+NTSTATUS
+DxgkVidMmCopyResourcePresentPrivateDriverData(
+    _In_ D3DKMT_HANDLE ResourceHandle,
+    _In_ PEPROCESS ExpectedProcess,
+    _Out_writes_bytes_to_opt_(BufferCapacity, *RequiredSize) PVOID Buffer,
+    _In_ UINT BufferCapacity,
+    _Out_ PUINT RequiredSize);
+
+NTSTATUS
+DxgkVidMmInvalidateAllocationCache(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ D3DKMT_HANDLE Handle,
+    _In_ ULONGLONG Offset,
+    _In_ ULONGLONG Length);
+#endif
+
+NTSTATUS
+DxgkVidMmOfferReferencedAllocation(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ ULONG Priority,
+    _In_ ULONG Flags);
+
+NTSTATUS
+DxgkVidMmReclaimReferencedAllocation(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _Out_ PBOOLEAN Discarded);
+
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2100)
+NTSTATUS
+DxgkVidMmReclaimReferencedAllocation3(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _Out_ PULONG Result);
+
+NTSTATUS
+DxgkVidMmUpdateAllocationProperty(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ D3DKMT_HANDLE Handle,
+    _In_ ULONG SupportedSegmentSet,
+    _In_ ULONG PreferredSegmentValue,
+    _In_ ULONG PropertyFlagsValue,
+    _In_ ULONG PropertyMaskValue);
+#endif
+
 PDXGKVMM_RESOURCE
 DxgkVidMmCreateResourceWrapper(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -793,5 +860,18 @@ VOID
 DxgkVidMmReleaseHandleData(
     _In_ DXGK_HANDLE_TYPE Type,
     _In_ DXGKARG_RELEASE_HANDLE ReleaseHandle);
+
+D3DKMT_HANDLE
+DxgkVidMmGetHandleParent(
+    _In_ D3DKMT_HANDLE AllocationHandle);
+
+D3DKMT_HANDLE
+DxgkVidMmEnumHandleChildren(
+    _In_ D3DKMT_HANDLE ResourceHandle,
+    _In_ UINT Index);
+
+NTSTATUS
+DxgkVidMmGetCaptureAddress(
+    INOUT_PDXGKARGCB_GETCAPTUREADDRESS GetCaptureAddress);
 
 NTSTATUS DxgkVidMmPublishSegments(_In_ PDXGKRNL_ADAPTER Adapter);

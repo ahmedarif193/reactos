@@ -52,6 +52,33 @@ BOOLEAN DxgkMonitoredFenceCoreIsSatisfied(_In_ const DXGK_MONITORED_FENCE *Fence
 NTSTATUS DxgkMonitoredFenceCoreCanWait(_In_ const DXGK_MONITORED_FENCE *Fence);
 NTSTATUS DxgkMonitoredFenceCoreCanSignal(_In_ const DXGK_MONITORED_FENCE *Fence);
 
+/*
+ * WDDM 2.2 regular monitored-fence interrupt handoff.  The KMD reports an
+ * engine identity, and the ISR coalesces repeated reports into one node bit
+ * for the DPC to consume.  This runtime implements one engine per node.
+ */
+BOOLEAN
+DxgkMonitoredInterruptCoreSupported(
+    _In_ ULONG ConfiguredWddmLevel,
+    _In_ ULONG RuntimeWddmLevel,
+    _In_ ULONG NodeCount);
+
+NTSTATUS
+DxgkMonitoredInterruptCoreEnqueue(
+    _Inout_ volatile LONG *PendingNodes,
+    _In_ ULONG NodeCount,
+    _In_ ULONG NodeOrdinal,
+    _In_ ULONG EngineOrdinal);
+
+ULONG
+DxgkMonitoredInterruptCoreDrain(
+    _Inout_ volatile LONG *PendingNodes);
+
+BOOLEAN
+DxgkMonitoredInterruptCoreAffinityMatches(
+    _In_ ULONG EngineAffinity,
+    _In_ ULONG PhysicalAdapterIndex);
+
 /* --- periodic monitored-fence notification lifetime ----------------- */
 
 typedef enum _DXGK_PERIODIC_NOTIFICATION_STATE

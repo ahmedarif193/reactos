@@ -67,4 +67,97 @@ NTSTATUS DxgkPagingCoreMultipassAdvance(_Inout_ PDXGK_PAGING_CORE_MULTIPASS Pass
 BOOLEAN DxgkPagingCoreMultipassMayEmitFence(_In_ const DXGK_PAGING_CORE_MULTIPASS Pass[1]);
 NTSTATUS DxgkPagingCoreMultipassEmitFence(_Inout_ PDXGK_PAGING_CORE_MULTIPASS Pass);
 
+/* --- WDDM 2.2 monitored-fence paging signal ------------------------- */
+
+typedef enum _DXGK_PAGING_NO_WORK_SIGNAL_ROUTE
+{
+    DxgkPagingNoWorkSignalNone = 0,
+    DxgkPagingNoWorkSignalHandle,
+    DxgkPagingNoWorkSignalRetainedReference
+} DXGK_PAGING_NO_WORK_SIGNAL_ROUTE;
+
+BOOLEAN
+DxgkPagingCoreShouldAppendMonitoredSignal(
+    _In_ ULONG ConfiguredWddmLevel,
+    _In_ ULONG RuntimeWddmLevel,
+    _In_ BOOLEAN SignalRequested,
+    _In_ BOOLEAN GpuAddressReferenceAvailable);
+
+NTSTATUS
+DxgkPagingCoreBeginMonitoredSignal(
+    _In_ BOOLEAN OperationsBuilt);
+
+NTSTATUS
+DxgkPagingCoreFinishMonitoredSignal(
+    _In_ NTSTATUS BuildStatus,
+    _In_ ULONG BytesEmitted,
+    _Out_ PBOOLEAN SignalWrittenByGpu);
+
+DXGK_PAGING_NO_WORK_SIGNAL_ROUTE
+DxgkPagingCoreNoWorkSignalRoute(
+    _In_ BOOLEAN SignalRequested,
+    _In_ BOOLEAN RetainedReferenceAvailable);
+
+/*
+ * WDDM paging-queue fence transaction
+ *
+ * A paging queue is an ordered stream.  Reserving its monitored-fence value
+ * before scheduler admission without serializing the whole transaction lets a
+ * later request publish value N+1 before request N has even been admitted.
+ * The waiter for N then observes false completion.
+ *
+ * Begin holds the queue mutex through paging build/admission.  The caller
+ * gives CandidateCounter to the existing residency path, which increments it
+ * only when a paging packet is actually produced.  Complete commits that
+ * candidate after successful admission; Abort discards it after any failure,
+ * so rejected work consumes no externally visible fence value.
+ */
+typedef struct _DXGK_PAGING_FENCE_QUEUE_CORE
+{
+    KMUTEX Lock;
+    ULONGLONG CommittedFenceValue;
+    BOOLEAN Initialized;
+    BOOLEAN ShuttingDown;
+} DXGK_PAGING_FENCE_QUEUE_CORE, *PDXGK_PAGING_FENCE_QUEUE_CORE;
+
+typedef struct _DXGK_PAGING_FENCE_TRANSACTION
+{
+    PDXGK_PAGING_FENCE_QUEUE_CORE Queue;
+    DECLSPEC_ALIGN(8) volatile LONG64 CandidateCounter;
+    ULONGLONG StartingFenceValue;
+    BOOLEAN Active;
+} DXGK_PAGING_FENCE_TRANSACTION, *PDXGK_PAGING_FENCE_TRANSACTION;
+
+VOID
+DxgkPagingFenceQueueCoreInitialize(
+    _Out_ PDXGK_PAGING_FENCE_QUEUE_CORE Queue,
+    _In_ ULONGLONG InitialFenceValue);
+
+_IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+DxgkPagingFenceQueueCoreBegin(
+    _Inout_ PDXGK_PAGING_FENCE_QUEUE_CORE Queue,
+    _Out_ PDXGK_PAGING_FENCE_TRANSACTION Transaction);
+
+_IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+DxgkPagingFenceQueueCoreComplete(
+    _Inout_ PDXGK_PAGING_FENCE_TRANSACTION Transaction,
+    _In_ ULONGLONG PublishedFenceValue);
+
+_IRQL_requires_(PASSIVE_LEVEL)
+VOID
+DxgkPagingFenceQueueCoreAbort(
+    _Inout_ PDXGK_PAGING_FENCE_TRANSACTION Transaction);
+
+_IRQL_requires_(PASSIVE_LEVEL)
+VOID
+DxgkPagingFenceQueueCoreShutDown(
+    _Inout_ PDXGK_PAGING_FENCE_QUEUE_CORE Queue);
+
+_IRQL_requires_(PASSIVE_LEVEL)
+ULONGLONG
+DxgkPagingFenceQueueCoreQueryCommitted(
+    _Inout_ PDXGK_PAGING_FENCE_QUEUE_CORE Queue);
+
 #endif /* _DXGK_PAGING_CORE_H_ */

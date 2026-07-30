@@ -20,6 +20,7 @@
  */
 
 #include "dxgkrnl_private.h"
+#include "paging_core.h"
 #include "vidmm.h"
 #include "vidsch.h"
 
@@ -44,6 +45,23 @@ DxgkpPagingBufferBytes(
         Bytes = DXGKP_PAGING_MAX_BUFFER_BYTES;
     return Bytes;
 }
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
+static BOOLEAN
+DxgkpPagingMonitoredFenceSignalSupported(
+    _In_opt_ PDXGKRNL_ADAPTER Adapter)
+{
+    return Adapter != NULL &&
+           Adapter->MiniportContext != NULL &&
+           !Adapter->MiniportContext->UseDodLayout &&
+           DxgkPagingCoreShouldAppendMonitoredSignal(
+               REACTOS_WDDM_TARGET_LEVEL,
+               DxgkCapsCoreInterfaceVersionToLevel(
+                   Adapter->MiniportContext->InitData.s.Version),
+               TRUE,
+               TRUE);
+}
+#endif
 
 static VOID
 DxgkpPagingFillBuildArgs(
@@ -208,6 +226,12 @@ DxgkPagingExecuteBatch(
     PDXGKRNL_DMA_BUFFER DmaBuffer = NULL;
     DXGKRNL_TRACK_DMA_ARGS TrackArgs;
     PUCHAR FinalCursor = NULL;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
+    PVOID SignalSyncObjectReference = NULL;
+    D3DGPU_VIRTUAL_ADDRESS SignalFenceGpuVa = 0;
+    BOOLEAN BuildGpuSignal = FALSE;
+    BOOLEAN SignalWrittenByGpu = FALSE;
+#endif
     ULONG BufferBytes;
     ULONG LastFenceId = 0;
     ULONG OperationIndex;
@@ -231,25 +255,67 @@ DxgkPagingExecuteBatch(
     if (Adapter->MiniportDeviceContext == NULL)
         return STATUS_DEVICE_NOT_READY;
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
+    if (hSignalSyncObject != 0 &&
+        DxgkpPagingMonitoredFenceSignalSupported(Adapter))
+    {
+        Status =
+            DxgkSyncObjectReferenceTrackedSignal(
+                hSignalSyncObject,
+                Device,
+                &SignalSyncObjectReference);
+        if (!NT_SUCCESS(Status))
+            return Status;
+
+        Status =
+            DxgkSyncObjectQueryTrackedSignalAddress(
+                SignalSyncObjectReference,
+                Device,
+                &SignalFenceGpuVa);
+        if (NT_SUCCESS(Status))
+        {
+            BuildGpuSignal = TRUE;
+        }
+        else if (Status != STATUS_NOT_SUPPORTED)
+        {
+            goto Cleanup;
+        }
+    }
+#endif
+
     for (OperationIndex = 0; OperationIndex < OperationCount; ++OperationIndex)
     {
         if (!DxgkPagingOperationSupported(Adapter,
                                           Operations[OperationIndex].Type))
         {
-            return STATUS_NOT_SUPPORTED;
+            Status = STATUS_NOT_SUPPORTED;
+            goto Cleanup;
         }
         if (Operations[OperationIndex].NodeOrdinal != Operations[0].NodeOrdinal ||
             Operations[OperationIndex].EngineOrdinal != Operations[0].EngineOrdinal ||
             Operations[OperationIndex].hMiniportDevice != Operations[0].hMiniportDevice)
         {
-            return STATUS_INVALID_PARAMETER;
+            Status = STATUS_INVALID_PARAMETER;
+            goto Cleanup;
         }
     }
 
     BufferBytes = DxgkpPagingBufferBytes(Adapter);
-    if (OperationCount <= DXGKP_PAGING_MAX_BUFFER_BYTES / PAGE_SIZE)
+    if (OperationCount <=
+        DXGKP_PAGING_MAX_BUFFER_BYTES / PAGE_SIZE
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
+            - (BuildGpuSignal ? 1 : 0)
+#endif
+        )
     {
-        ULONG Estimate = OperationCount * PAGE_SIZE;
+        ULONG Estimate =
+            OperationCount
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
+            + (BuildGpuSignal ? 1 : 0)
+#endif
+            ;
+
+        Estimate *= PAGE_SIZE;
 
         if (Estimate > BufferBytes)
             BufferBytes = Estimate;
@@ -267,7 +333,7 @@ DxgkPagingExecuteBatch(
 
         Status = DxgkAllocateDmaBuffer(Adapter, BufferBytes, &DmaBuffer);
         if (!NT_SUCCESS(Status))
-            return Status;
+            goto Cleanup;
         Cursor = (PUCHAR)DmaBuffer->VirtualAddress;
         End = Cursor + DmaBuffer->Capacity;
 
@@ -348,6 +414,112 @@ DxgkPagingExecuteBatch(
             }
         }
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
+        if (BuildGpuSignal && !RetryLarger)
+        {
+            ULONG MultipassOffset = 0;
+            ULONG Pass;
+            BOOLEAN Complete = FALSE;
+            PUCHAR SignalStartCursor = Cursor;
+
+            Status =
+                DxgkPagingCoreBeginMonitoredSignal(
+                    OperationIndex == OperationCount);
+            if (!NT_SUCCESS(Status))
+                goto Cleanup;
+
+            for (Pass = 0; Pass < DXGKP_PAGING_MAX_PASSES; ++Pass)
+            {
+                DXGKARG_BUILDPAGINGBUFFER BuildArgs;
+                ULONG PreviousMultipassOffset = MultipassOffset;
+                PUCHAR PreviousCursor = Cursor;
+                NTSTATUS BuildStatus;
+
+                RtlZeroMemory(&BuildArgs, sizeof(BuildArgs));
+                BuildArgs.pDmaBuffer = Cursor;
+                BuildArgs.DmaSize = (UINT)(End - Cursor);
+                BuildArgs.MultipassOffset = MultipassOffset;
+                BuildArgs.Operation =
+                    DXGK_OPERATION_SIGNAL_MONITORED_FENCE;
+                BuildArgs.SignalMonitoredFence.MonitoredFenceGpuVa =
+                    SignalFenceGpuVa;
+                BuildArgs.SignalMonitoredFence.MonitoredFenceValue =
+                    SignalFenceValue;
+
+                if (!DxgkAcquireKmdCall(Adapter))
+                {
+                    Status = STATUS_DELETE_PENDING;
+                    goto Cleanup;
+                }
+                _SEH2_TRY
+                {
+                    BuildStatus =
+                        DXGK_CB_FULL(Adapter, DxgkDdiBuildPagingBuffer)(
+                            Adapter->MiniportDeviceContext,
+                            &BuildArgs);
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    BuildStatus = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+                DxgkReleaseKmdCall(Adapter);
+
+                if (!NT_SUCCESS(BuildStatus) &&
+                    BuildStatus !=
+                        STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER)
+                {
+                    Status = BuildStatus;
+                    goto Cleanup;
+                }
+                if (BuildArgs.pDmaBuffer == NULL ||
+                    (PUCHAR)BuildArgs.pDmaBuffer < PreviousCursor ||
+                    (PUCHAR)BuildArgs.pDmaBuffer > End)
+                {
+                    Status =
+                        STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+                    goto Cleanup;
+                }
+
+                Cursor = (PUCHAR)BuildArgs.pDmaBuffer;
+                MultipassOffset = BuildArgs.MultipassOffset;
+                Complete = NT_SUCCESS(BuildStatus);
+                if (Complete)
+                    break;
+
+                if (Cursor == PreviousCursor &&
+                    MultipassOffset == PreviousMultipassOffset)
+                {
+                    RetryLarger = TRUE;
+                    break;
+                }
+            }
+
+            if (!RetryLarger && !Complete)
+            {
+                Status =
+                    STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+                goto Cleanup;
+            }
+
+            /*
+             * A successful build that emitted no bytes did not put a GPU
+             * write in the stream.  Keep the ordinary retire-time CPU
+             * publication enabled instead of claiming a GPU-written fence.
+             */
+            if (!RetryLarger)
+            {
+                Status =
+                    DxgkPagingCoreFinishMonitoredSignal(
+                        STATUS_SUCCESS,
+                        (ULONG)(Cursor - SignalStartCursor),
+                        &SignalWrittenByGpu);
+                if (!NT_SUCCESS(Status))
+                    goto Cleanup;
+            }
+        }
+#endif
+
         if (!RetryLarger)
         {
             FinalCursor = Cursor;
@@ -356,7 +528,10 @@ DxgkPagingExecuteBatch(
         DxgkFreeDmaBuffer(DmaBuffer);
         DmaBuffer = NULL;
         if (BufferBytes >= DXGKP_PAGING_MAX_BUFFER_BYTES)
-            return STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+        {
+            Status = STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+            goto Cleanup;
+        }
         BufferBytes = min(BufferBytes * 2,
                           (ULONG)DXGKP_PAGING_MAX_BUFFER_BYTES);
     }
@@ -365,10 +540,26 @@ DxgkPagingExecuteBatch(
     BytesUsed = (ULONG)(FinalCursor - (PUCHAR)DmaBuffer->VirtualAddress);
     if (BytesUsed == 0)
     {
-        Status = hSignalSyncObject != 0
-                   ? DxgkSyncObjectGpuRetireSignal(hSignalSyncObject,
-                                                   SignalFenceValue)
-                   : STATUS_SUCCESS;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
+        if (DxgkPagingCoreNoWorkSignalRoute(
+                hSignalSyncObject != 0,
+                SignalSyncObjectReference != NULL) ==
+            DxgkPagingNoWorkSignalRetainedReference)
+        {
+            DxgkSyncObjectPublishTrackedSignal(
+                SignalSyncObjectReference,
+                SignalFenceValue);
+            Status = STATUS_SUCCESS;
+        }
+        else
+#endif
+        {
+            Status = hSignalSyncObject != 0
+                       ? DxgkSyncObjectGpuRetireSignal(
+                             hSignalSyncObject,
+                             SignalFenceValue)
+                       : STATUS_SUCCESS;
+        }
         goto Cleanup;
     }
 
@@ -378,6 +569,11 @@ DxgkPagingExecuteBatch(
     TrackArgs.Device = Device;
     TrackArgs.hSignalSyncObject = hSignalSyncObject;
     TrackArgs.SignalFenceValue = SignalFenceValue;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
+    TrackArgs.SignalSyncObjectReference =
+        SignalSyncObjectReference;
+    TrackArgs.SignalWrittenByGpu = SignalWrittenByGpu;
+#endif
     TrackArgs.LifetimeAllocationReferences =
         LifetimeAllocationReferences;
     TrackArgs.LifetimeAllocationReferenceCount =
@@ -407,11 +603,20 @@ DxgkPagingExecuteBatch(
         *OutPagingFenceId = LastFenceId;
     if (OutQueued != NULL)
         *OutQueued = TRUE;
-    return STATUS_SUCCESS;
+    Status = STATUS_SUCCESS;
 
 Cleanup:
     if (DmaBuffer != NULL)
         DxgkFreeDmaBuffer(DmaBuffer);
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
+    if (SignalSyncObjectReference != NULL)
+    {
+        DxgkSyncObjectReleaseTrackedSignal(
+            SignalSyncObjectReference,
+            FALSE,
+            SignalFenceValue);
+    }
+#endif
     return Status;
 }
 
@@ -464,6 +669,26 @@ DxgkPagingExecute(
         return STATUS_NOT_SUPPORTED;
     if (Adapter->MiniportDeviceContext == NULL)
         return STATUS_DEVICE_NOT_READY;
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
+    if (hSignalSyncObject != 0 &&
+        DxgkpPagingMonitoredFenceSignalSupported(Adapter))
+    {
+        BOOLEAN Queued;
+
+        return DxgkPagingExecuteBatch(
+                   Adapter,
+                   Device,
+                   Op,
+                   1,
+                   NULL,
+                   0,
+                   hSignalSyncObject,
+                   SignalFenceValue,
+                   OutPagingFenceId,
+                   &Queued);
+    }
+#endif
 
     BufferBytes = DxgkpPagingBufferBytes(Adapter);
 
