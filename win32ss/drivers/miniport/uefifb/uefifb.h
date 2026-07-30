@@ -69,6 +69,27 @@ typedef struct _UEFIFB_DEVICE_EXTENSION
     PVOID HeadlessBuffer;
 } UEFIFB_DEVICE_EXTENSION, *PUEFIFB_DEVICE_EXTENSION;
 
+/* TARGET-SPECIFIC PLATFORM CONTRACT *****************************************/
+
+typedef VP_STATUS
+(NTAPI *PUEFIFB_VALIDATE_FRAMEBUFFER)(
+    _In_ PVOID HwDeviceExtension,
+    _In_ const LOADER_PARAMETER_FRAMEBUFFER *FrameBuffer);
+
+typedef VP_STATUS
+(NTAPI *PUEFIFB_INITIALIZE_FALLBACK)(
+    _Inout_ PUEFIFB_DEVICE_EXTENSION DeviceExtension);
+
+typedef struct _UEFIFB_PLATFORM_INTERFACE
+{
+    INTERFACE_TYPE AdapterInterfaceType;
+    PVIDEO_HW_GET_CHILD_DESCRIPTOR GetVideoChildDescriptor;
+    PUEFIFB_VALIDATE_FRAMEBUFFER ValidateFrameBuffer;
+    PUEFIFB_INITIALIZE_FALLBACK InitializeFallback;
+} UEFIFB_PLATFORM_INTERFACE;
+
+extern const UEFIFB_PLATFORM_INTERFACE UefiFbPlatform;
+
 /* KERNEL-EXPORTED GOP ACCESSOR ***********************************************/
 
 BOOLEAN

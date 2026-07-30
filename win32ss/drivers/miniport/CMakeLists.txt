@@ -6,6 +6,11 @@ add_subdirectory(vga)
 add_subdirectory(uefifb)
 
 if(REACTOS_USE_XPDM)
+    add_driver_inf(uefifb uefifb/uefifb.inf)
+    add_registry_inf(uefifb/uefifb_reg.inf)
+endif()
+
+if(REACTOS_USE_XPDM)
     add_subdirectory(vmx_svga)
     add_subdirectory(virtgpu)
 
@@ -17,4 +22,5 @@ if(REACTOS_USE_XPDM)
         add_subdirectory(pc98vid)
         add_subdirectory(xboxvmp)
     endif()
+
 endif()
