@@ -154,6 +154,17 @@ NTSTATUS
 DxgkVidPnReleaseProcessOwners(
     _In_ PEPROCESS Process);
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+NTSTATUS
+DxgkVidPnQueryExclusiveOwnership(
+    _In_ HANDLE ProcessId,
+    _In_ CONST LUID *QueryAdapterLuid,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID QueryVidPnSourceId,
+    _Out_ D3DDDI_VIDEO_PRESENT_SOURCE_ID *ResultVidPnSourceId,
+    _Out_ LUID *ResultAdapterLuid,
+    _Out_ D3DKMT_VIDPNSOURCEOWNER_TYPE *OwnerType);
+#endif
+
 NTSTATUS NTAPI DxgkpSetVidPnSourceOwnerWithFlagsAndAccessMode(_In_ D3DKMT_SETVIDPNSOURCEOWNER *SetVidPnSourceOwner, _In_ UINT OwnerFlags, _In_ KPROCESSOR_MODE EmbeddedBufferMode);
 
 /* ========================================================================
