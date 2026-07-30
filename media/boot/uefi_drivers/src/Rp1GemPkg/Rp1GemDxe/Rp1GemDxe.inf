@@ -1,0 +1,41 @@
+## @file
+#  Simple Network Protocol driver for the Raspberry Pi 5 RP1 Cadence GEM.
+#
+#  Copyright (c) 2026, ReactOS Project. All rights reserved.
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION    = 0x00010005
+  BASE_NAME      = Rp1GemDxe
+  FILE_GUID      = 8d2c4f19-3b7a-4e6d-8c1f-2a3b4c5d6e70
+  MODULE_TYPE    = UEFI_DRIVER
+  VERSION_STRING = 0.10
+  ENTRY_POINT    = Rp1GemDxeEntry
+
+[Sources]
+  Rp1GemDxe.c
+  Rp1GemDxe.h
+
+[Packages]
+  MdePkg/MdePkg.dec
+  Rp1GemPkg/Rp1GemPkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  CacheMaintenanceLib
+  DebugLib
+  DevicePathLib
+  MemoryAllocationLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+  UefiLib
+
+[Protocols]
+  gEfiSimpleNetworkProtocolGuid   ## PRODUCES
+  gEfiDevicePathProtocolGuid      ## PRODUCES
+  gEfiPciIoProtocolGuid           ## CONSUMES
+
+[Depex]
+  gEfiPciIoProtocolGuid

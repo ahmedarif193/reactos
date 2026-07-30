@@ -107,6 +107,21 @@ EDK2 DXE Drivers
   intentionally NOT included.  FreeLDR implements its own boot logic
   using EFI_HTTP_PROTOCOL directly.
 
+Raspberry Pi 5 (arm64/)
+-----------------------
+  Rp1GemDxe.efi is NOT third-party: it is part of this repository, built from
+  media/boot/uefi_drivers/src/Rp1GemPkg/. It produces EFI_SIMPLE_NETWORK_PROTOCOL
+  for the RP1 Cadence GEM, which the board firmware carries no driver for, and
+  is the only reason the firmware's own network stack can bind at all.
+
+    eb03aa69f72cac4059c2ad3a2e16a335de3cb955201d1a06b48b71b8dd419a87
+      Rp1GemDxe.efi
+    ba334a6b15bd0ac20249051c49159927c845ebe5911fc42d669af06cfe215bb1
+      HttpDxe.efi (AARCH64)
+
+  The Pi 5 firmware already provides Mnp/Arp/Ip4/Udp4/Dhcp4/Tcp/Dns and the
+  HTTP utilities, so only the two drivers above are shipped for it.
+
   Not all are required for every boot mode:
     - TFTP boot:  DpcDxe + MnpDxe + ArpDxe + Ip4Dxe + Udp4Dxe + Dhcp4Dxe
                   + Mtftp4Dxe

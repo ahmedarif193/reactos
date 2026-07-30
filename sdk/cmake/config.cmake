@@ -140,8 +140,8 @@ cmake_dependent_option(ENABLE_ROSV
                        "ARCH STREQUAL amd64" OFF)
 
 cmake_dependent_option(FREELDR_HTTP_BOOT
-                       "Whether to build the LattePanda Mu FreeLdr HTTP boot path." OFF
-                       "ARCH STREQUAL amd64;LATTEPANDAMU_SUPPORT" OFF)
+                       "Whether to build the FreeLdr UEFI HTTP boot path." OFF
+                       "LATTEPANDAMU_SUPPORT OR RPI_SUPPORT" OFF)
 
 # Set by the nested build that wow64.cmake configures: marks this i386 tree
 # as the 32-bit guest half of an amd64 WoW64 build.

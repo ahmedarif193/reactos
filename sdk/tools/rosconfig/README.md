@@ -98,7 +98,7 @@ architecture. Profile definitions and their CMake manifests are kept below
 profiles/
   profiles.def
   apply.cmake
-  amd64/{profiles.def,generic.cmake}
+  amd64/{profiles.def,generic.cmake,lattepandamu.cmake}
   i386/{profiles.def,generic.cmake}
   arm64/{profiles.def,generic.cmake,rpi5.cmake}
 ```
@@ -113,7 +113,11 @@ partially populated image.
 Every supported architecture has a `generic` default profile. ARM64
 additionally provides `rpi5`, which enables the firmware/device-tree payload
 and builds the RP1 Ethernet, CYW43455 Wi-Fi, and Raspberry Pi 5 VC4 display
-drivers. Generic ARM64 builds exclude those Pi-only payloads and targets.
+drivers. AMD64 additionally provides `lattepandamu`, which exposes the
+LattePanda Mu HTTP boot option. Enabling it from the `Boot options` menu builds
+the FreeLdr HTTP path, makes it the zero-timeout default boot entry, and
+packages the board's external UEFI network stack. Generic builds exclude these
+board-only payloads and targets.
 
 Profile-owned config values are enforced when the profile is applied, so an
 existing tree can switch profiles without retaining stale values from the old
