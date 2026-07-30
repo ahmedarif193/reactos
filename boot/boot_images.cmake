@@ -2,6 +2,14 @@
 # Include ARM64 hardware boot media configuration.
 include(${CMAKE_SOURCE_DIR}/media/boot/arm64_boot_media.cmake)
 
+option(LATTEPANDAMU_SUPPORT "Enable the LattePanda Mu board profile" OFF)
+if(LATTEPANDAMU_SUPPORT AND NOT ARCH STREQUAL "amd64")
+    message(FATAL_ERROR "The LattePanda Mu profile requires ARCH=amd64")
+endif()
+if(FREELDR_HTTP_BOOT AND NOT LATTEPANDAMU_SUPPORT)
+    message(FATAL_ERROR "FREELDR_HTTP_BOOT requires the LattePanda Mu profile")
+endif()
+
 # EFI platform ID - Used for naming the EFI boot image on supported platforms.
 if(ARCH STREQUAL "i386")
     if(NOT (SARCH STREQUAL "pc98" OR SARCH STREQUAL "xbox"))
@@ -23,15 +31,34 @@ endif()
 if(DEFINED EFI_PLATFORM_ID)
     set(_efisys_boot_options)
     set(_efisys_depends native-fatten uefildr)
+    set(_uefi_driver_fatten_options)
+    set(_uefi_driver_files)
     if(FREELDR_HAS_BIOS_BOOT)
         set(_efisys_boot_options -boot ${CMAKE_CURRENT_BINARY_DIR}/freeldr/bootsect/fat.bin)
         list(APPEND _efisys_depends fat)
+    endif()
+
+    if(FREELDR_HTTP_BOOT)
+        set(_uefi_driver_dir "${REACTOS_SOURCE_DIR}/media/boot/uefi_drivers/${ARCH}")
+        file(GLOB _uefi_driver_files CONFIGURE_DEPENDS "${_uefi_driver_dir}/*.efi")
+        if(NOT _uefi_driver_files)
+            message(FATAL_ERROR "UEFI network boot drivers are missing from ${_uefi_driver_dir}")
+        endif()
+
+        list(APPEND _uefi_driver_fatten_options -mkdir EFI/BOOT/drivers)
+        foreach(_driver ${_uefi_driver_files})
+            get_filename_component(_driver_name "${_driver}" NAME)
+            list(APPEND _uefi_driver_fatten_options -add "${_driver}" "EFI/BOOT/drivers/${_driver_name}")
+        endforeach()
+        list(APPEND _efisys_depends ${_uefi_driver_files})
+        message(STATUS "UEFI network boot drivers: ${_uefi_driver_files}")
     endif()
 
     add_custom_target(efisys
         COMMAND native-fatten ${CMAKE_CURRENT_BINARY_DIR}/efisys.bin -format 5760 EFIBOOT
             ${_efisys_boot_options}
             -mkdir EFI -mkdir EFI/BOOT -add $<TARGET_FILE:uefildr> EFI/BOOT/boot${EFI_PLATFORM_ID}.efi
+            ${_uefi_driver_fatten_options}
         DEPENDS ${_efisys_depends}
         VERBATIM)
 endif()
@@ -336,6 +363,14 @@ if(DEFINED EFI_PLATFORM_ID)
         -mkdir EFI/BOOT
         -add $<TARGET_FILE:uefildr> EFI/BOOT/boot${EFI_PLATFORM_ID}.efi)
     list(APPEND _preinstall_partition_deps uefildr)
+    if(_uefi_driver_files)
+        list(APPEND _preinstall_boot_partition_files -mkdir EFI/BOOT/drivers)
+        foreach(_driver ${_uefi_driver_files})
+            get_filename_component(_driver_name "${_driver}" NAME)
+            list(APPEND _preinstall_boot_partition_files -add "${_driver}" "EFI/BOOT/drivers/${_driver_name}")
+        endforeach()
+        list(APPEND _preinstall_partition_deps ${_uefi_driver_files})
+    endif()
 endif()
 
 add_custom_target(preinstall_partition
@@ -407,4 +442,10 @@ if(DEFINED EFI_PLATFORM_ID)
     # For devices such as USB drives, add also the EFI boot image into efi/boot.
     add_cd_file(TARGET efisys FILE ${CMAKE_CURRENT_BINARY_DIR}/efisys.bin DESTINATION loader NO_CAB FOR bootcd livecd regtest)
     add_cd_file(TARGET uefildr DESTINATION efi/boot NO_CAB NAME_ON_CD boot${EFI_PLATFORM_ID}.efi FOR bootcd livecd regtest)
+    if(_uefi_driver_files)
+        foreach(_driver ${_uefi_driver_files})
+            get_filename_component(_driver_name "${_driver}" NAME)
+            add_cd_file(FILE "${_driver}" DESTINATION efi/boot/drivers NO_CAB NAME_ON_CD "${_driver_name}" FOR bootcd livecd regtest)
+        endforeach()
+    endif()
 endif()

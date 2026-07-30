@@ -226,18 +226,17 @@ typedef INT64   INTN;
 //
 
 ///
-/// A value of native width with the highest bit set.
+/// Native-width limits for the selected processor.
 ///
-#define MAX_BIT     0x80000000
-///
-/// A value of native width with the two highest bits set.
-///
-#define MAX_2_BITS  0xC0000000
-
-///
-/// Maximum legal IA-32 address.
-///
+#ifdef _WIN64
+#define MAX_BIT       0x8000000000000000ULL
+#define MAX_2_BITS    0xC000000000000000ULL
+#define MAX_ADDRESS   0xFFFFFFFFFFFFFFFFULL
+#else
+#define MAX_BIT       0x80000000
+#define MAX_2_BITS    0xC0000000
 #define MAX_ADDRESS   0xFFFFFFFF
+#endif
 
 ///
 /// The stack alignment required for IA-32.
@@ -292,4 +291,3 @@ so the implementation of this macro is very simple.
 #define FUNCTION_ENTRY_POINT(FunctionPointer) (VOID *)(UINTN)(FunctionPointer)
 
 #endif
-

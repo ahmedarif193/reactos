@@ -86,6 +86,20 @@ source "rosconfig/profiles/profiles.def"
 
 endmenu
 
+menu "Boot options"
+
+config FREELDR_HTTP_BOOT
+    prompt "Enable HTTP boot"
+    type bool
+    default n
+    depends ARCH=amd64
+    depends PROFILE_AMD64=lattepandamu
+    help
+      Build the LattePanda Mu FreeLdr HTTP boot path and package the
+      board's external UEFI network stack.
+
+endmenu
+
 menu "Modules"
 
 config ENABLE_ROSAPPS

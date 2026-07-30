@@ -29,6 +29,14 @@ list(APPEND UEFILDR_ARC_SOURCE
     arch/vidfb.c
     arch/vgafont.c)
 
+if(FREELDR_HTTP_BOOT)
+    list(APPEND UEFILDR_ARC_SOURCE
+        arch/uefi/uefinet.c
+        arch/uefi/uefinet_hw.c
+        arch/uefi/uefidhcp.c
+        arch/uefi/uefihttp.c)
+endif()
+
 if(ARCH STREQUAL "i386")
     list(APPEND UEFILDR_ARC_SOURCE
         arch/i386/i386idt.c)
@@ -106,6 +114,9 @@ target_link_libraries(uefifreeldr_common setjmp bootfont)
 target_link_libraries(uefifreeldr_common fatfs)
 
 target_compile_definitions(uefifreeldr_common PRIVATE _FRLDRLIB_ UEFIBOOT)
+if(FREELDR_HTTP_BOOT)
+    target_compile_definitions(uefifreeldr_common PRIVATE FREELDR_HTTP_BOOT=1)
+endif()
 if(FREELDR_WIM_RAMDISK)
     target_compile_definitions(uefifreeldr_common PRIVATE FREELDR_WIM_RAMDISK=1)
 endif()

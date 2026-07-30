@@ -1351,6 +1351,7 @@ LoadAndBootWindows(
     PCSTR FileName;
     ULONG FileNameLength;
     BOOLEAN Success;
+    BOOLEAN RamDiskInitialized = FALSE;
     USHORT OperatingSystemVersion;
     PLOADER_PARAMETER_BLOCK LoaderBlock;
     CHAR BootPath[MAX_PATH];
@@ -1492,13 +1493,37 @@ LoadAndBootWindows(
     NtLdrNormalizeOptions(BootOptions);
     TRACE("BootOptions(2): '%s'\n", BootOptions);
 
+#if defined(UEFIBOOT) && defined(FREELDR_HTTP_BOOT)
+    /* HTTP boot: download the ISO and initialize it as the boot ramdisk. */
+    ArgValue = GetArgumentValue(Argc, Argv, "HttpBootUrl");
+    if (ArgValue && *ArgValue)
+    {
+        if (!UefiHttpBootDownload(ArgValue))
+        {
+            UiMessageBox("Failed to download ISO from network.");
+            return ENOEXEC;
+        }
+
+        Status = RamDiskInitialize(TRUE, NULL, NULL);
+        if (Status != ESUCCESS)
+        {
+            UiMessageBox("Failed to initialize ramdisk from downloaded ISO.");
+            return Status;
+        }
+
+        RamDiskInitialized = TRUE;
+        UiDrawProgressBarCenter("Loading NT...");
+    }
+#endif
+
     /* Check if a RAM disk is needed: either an explicit RDPATH= file,
      * a writable ramdisk size request (RDRAMSIZE=), or the boot path
      * itself targets the ramdisk device. */
     FileName = NtLdrGetOptionEx(BootOptions, "RDPATH=", &FileNameLength);
-    if ((FileName && (FileNameLength >= 7)) ||
-        NtLdrGetOption(BootOptions, "RDRAMSIZE=") ||
-        _strnicmp(BootPath, "ramdisk(", 8) == 0)
+    if (!RamDiskInitialized &&
+        ((FileName && (FileNameLength >= 7)) ||
+         NtLdrGetOption(BootOptions, "RDRAMSIZE=") ||
+         _strnicmp(BootPath, "ramdisk(", 8) == 0))
     {
         /* Load the RAM disk */
         Status = RamDiskInitialize(FALSE, BootOptions, SystemPartition);

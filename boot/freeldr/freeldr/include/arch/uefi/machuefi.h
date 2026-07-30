@@ -136,3 +136,9 @@ UefiHwIdle(VOID);
 VOID
 UefiInitializeFileSystemSupport(_In_ EFI_HANDLE ImageHandle,
                                 _In_ EFI_SYSTEM_TABLE *SystemTable);
+
+#ifdef FREELDR_HTTP_BOOT
+BOOLEAN
+UefiHttpBootDownload(
+    _In_ PCSTR Url);
+#endif
