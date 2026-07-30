@@ -1372,6 +1372,10 @@ typedef enum _D3DDDI_SYNCHRONIZATIONOBJECT_TYPE
     D3DDDI_PERIODIC_MONITORED_FENCE = 6,
 #endif // DXGKDDI_INTERFACE_VERSION
 
+#if ((DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1) || \
+     (D3D_UMD_INTERFACE_VERSION >= D3D_UMD_INTERFACE_VERSION_WDDM3_1))
+    D3DDDI_NATIVE_FENCE             = 7,
+#endif
     D3DDDI_SYNCHRONIZATION_TYPE_LIMIT
 
 } D3DDDI_SYNCHRONIZATIONOBJECT_TYPE;
@@ -1766,7 +1770,26 @@ typedef struct _D3DDDI_SYNCHRONIZATIONOBJECT_FLAGS
             // When set, the fence can be signaled by KMD.
             // The flag can be used only with D3DDDI_CPU_NOTIFICATION objects.
             UINT SignalByKmd                                    :  1;
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
+            UINT Unused                                         :  1;
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+            // When set, the waiters for a shared sync object on CPU will be unblocked
+            // only when the shared sync object is finally destroyed. By default, CPU
+            // waiters are unblocked when a local sync object is destroyed, but the main
+            // shared sync object is still opened by another local sync object.
+            UINT UnwaitCpuWaitersOnlyOnDestroy                  :  1;
+            UINT Reserved                                       : 20;
+#else
+            UINT Reserved                                       : 21;
+#endif // (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+
+#else
+
             UINT Reserved                                       : 22;
+#endif // (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
+
 #else
             UINT Reserved                                       : 23;
 #endif // (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
@@ -2171,6 +2194,29 @@ typedef enum _DXGK_FEATURE_ID
 #define DXGK_FEATURE_MAX DXGK_DRIVER_FEATURE_MAX
 
 #endif // (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_6)
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+
+typedef UINT16 DXGK_FEATURE_VERSION;
+
+typedef struct _DXGK_ISFEATUREENABLED_RESULT
+{
+    UINT16 Version;
+    union
+    {
+        struct
+        {
+            UINT16 Enabled                  :  1;
+            UINT16 KnownFeature             :  1;
+            UINT16 SupportedByDriver        :  1;
+            UINT16 SupportedOnCurrentConfig :  1;
+            UINT16 Reserved                 : 12;
+        };
+        DXGK_FEATURE_VERSION Value;
+    };
+} DXGK_ISFEATUREENABLED_RESULT;
+
+#endif // (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
 
 #endif // (NTDDI_VERSION >= NTDDI_LONGHORN) || defined(D3DKMDT_SPECIAL_MULTIPLATFORM_TOOL)
 
