@@ -256,71 +256,46 @@ Ndis6ImSeedTcpipRegistry(_In_ PCUNICODE_STRING DeviceName)
  *  resources.
  * ============================================================================ */
 
-NDIS_STATUS
-Ndis6CreateLogicalAdapter(
-    _In_  PNDIS6_DRIVER_BLOCK   DriverBlock,
-    _In_  PDEVICE_OBJECT        Pdo,
-    _Out_ PLOGICAL_ADAPTER*     AdapterOut)
+static NDIS_STATUS
+Ndis6InitializeLogicalAdapter(
+    _In_ PNDIS6_DRIVER_BLOCK DriverBlock,
+    _In_ PDEVICE_OBJECT Pdo,
+    _In_ PDEVICE_OBJECT Fdo,
+    _In_opt_ PDEVICE_OBJECT NextDeviceObject,
+    _In_ PUNICODE_STRING AdapterName,
+    _In_ BOOLEAN IsWdfManaged,
+    _In_opt_ NDIS_HANDLE MiniportAdapterContext,
+    _Inout_ PLOGICAL_ADAPTER Adapter)
 {
-    PLOGICAL_ADAPTER    Adapter;
     PNDIS6_ADAPTER_EXT  Ext;
-    PDEVICE_OBJECT      Fdo;
-    NTSTATUS            Status;
-    UNICODE_STRING      AdapterName;
     KIRQL               OldIrql;
     extern LIST_ENTRY   AdapterListHead;
     extern KSPIN_LOCK   AdapterListLock;
 
-    if (DriverBlock == NULL || Pdo == NULL || AdapterOut == NULL)
-        return NDIS_STATUS_INVALID_PARAMETER;
-
-    *AdapterOut = NULL;
-
-    /* Read \Device\{NetCfgInstanceId} from the registry so protocol
-     * drivers (tcpip.sys) can find us by the same GUID name they
-     * stored in their own Linkage\Bind list. */
-    Status = Ndis6ReadExportName(Pdo, &AdapterName);
-    if (!NT_SUCCESS(Status))
-        return Status;
-
-    /* Create an FDO whose DeviceExtension is our LOGICAL_ADAPTER.
-     * The device object IS named — it's \Device\{GUID} — so that
-     * ObReferenceObjectByName in the legacy NdisOpenAdapter path
-     * can open it in addition to MiniLocateDevice finding it. */
-    Status = IoCreateDevice(
-        DriverBlock->DriverObject,
-        sizeof(LOGICAL_ADAPTER),
-        &AdapterName,
-        FILE_DEVICE_PHYSICAL_NETCARD,
-        0,
-        FALSE,
-        &Fdo);
-    if (!NT_SUCCESS(Status))
+    if (DriverBlock == NULL || Pdo == NULL || Fdo == NULL ||
+        AdapterName == NULL || Adapter == NULL)
     {
-        Ndis6FreeAdapterName(&AdapterName);
-        return Status;
+        return NDIS_STATUS_INVALID_PARAMETER;
     }
 
-    Adapter = (PLOGICAL_ADAPTER)Fdo->DeviceExtension;
     RtlZeroMemory(Adapter, sizeof(*Adapter));
-
     Adapter->IsNdis6 = TRUE;
 
     /* Allocate the NDIS 6 extension. */
     Ext = (PNDIS6_ADAPTER_EXT)ExAllocatePoolWithTag(
         NonPagedPool, sizeof(NDIS6_ADAPTER_EXT), NDIS6_ADAPTER_TAG);
     if (Ext == NULL)
-    {
-        IoDeleteDevice(Fdo);
-        Ndis6FreeAdapterName(&AdapterName);
         return NDIS_STATUS_RESOURCES;
-    }
 
     RtlZeroMemory(Ext, sizeof(*Ext));
     Ext->Adapter                = Adapter;
     Ext->DriverBlock            = DriverBlock;
+    Ext->IsWdfManaged           = IsWdfManaged;
     Ext->PhysicalDeviceObject   = Pdo;
     Ext->FunctionalDeviceObject = Fdo;
+    Ext->MiniportAdapterContext = MiniportAdapterContext;
+    KeInitializeSpinLock(&Ext->WdfReferenceLock);
+    KeInitializeEvent(&Ext->WdfReferenceDrainEvent, NotificationEvent, TRUE);
     KeInitializeSpinLock(&Ext->IsrLock);
     Ext->InterruptRundownState = NDIS6_INTERRUPT_RUNDOWN_STOPPING;
     KeInitializeEvent(&Ext->InterruptDrainEvent, NotificationEvent, TRUE);
@@ -402,7 +377,7 @@ Ndis6CreateLogicalAdapter(
 
     /* Stash the synthesized name in the miniport block so legacy code
      * (MiniLocateDevice) can match it. */
-    Adapter->NdisMiniportBlock.MiniportName = AdapterName;
+    Adapter->NdisMiniportBlock.MiniportName = *AdapterName;
 
     /* Populate the device-object pointers in the legacy NdisMiniportBlock
      * so the existing NdisMGetDeviceProperty implementation in
@@ -431,26 +406,198 @@ Ndis6CreateLogicalAdapter(
         }
     }
 
-    /* Attach to the device stack so we receive subsequent PnP IRPs.
-     * Use IoAttachDeviceToDeviceStack which is the canonical pattern. */
-    Adapter->NdisMiniportBlock.NextDeviceObject =
-        IoAttachDeviceToDeviceStack(Fdo, Pdo);
-    if (Adapter->NdisMiniportBlock.NextDeviceObject == NULL)
+    if (IsWdfManaged)
     {
-        ExFreePoolWithTag(Ext, NDIS6_ADAPTER_TAG);
-        IoDeleteDevice(Fdo);
-        Ndis6FreeAdapterName(&AdapterName);
-        return NDIS_STATUS_RESOURCES;
+        /* WDF already owns and attached this FDO. This is a borrowed lower
+         * stack pointer used only by NdisMGetDeviceProperty. */
+        Adapter->NdisMiniportBlock.NextDeviceObject = NextDeviceObject;
     }
+    else
+    {
+        /* Attach to the device stack so we receive subsequent PnP IRPs.
+         * Use IoAttachDeviceToDeviceStack which is the canonical pattern. */
+        Adapter->NdisMiniportBlock.NextDeviceObject =
+            IoAttachDeviceToDeviceStack(Fdo, Pdo);
+        if (Adapter->NdisMiniportBlock.NextDeviceObject == NULL)
+        {
+            if (Ext->TxWrapperNblPool)
+                NdisFreeNetBufferListPool(Ext->TxWrapperNblPool);
+            if (Ext->RxLegacyPacketPool)
+                NdisFreePacketPool(Ext->RxLegacyPacketPool);
+            if (Ext->RxLegacyBufferPool)
+                NdisFreeBufferPool(Ext->RxLegacyBufferPool);
+            ExFreePoolWithTag(Ext, NDIS6_ADAPTER_TAG);
+            Adapter->Ndis6Context = NULL;
+            Adapter->IsNdis6 = FALSE;
+            return NDIS_STATUS_RESOURCES;
+        }
 
-    Fdo->Flags |= DO_DIRECT_IO | DO_POWER_PAGABLE;
-    Fdo->Flags &= ~DO_DEVICE_INITIALIZING;
+        Fdo->Flags |= DO_DIRECT_IO | DO_POWER_PAGABLE;
+        Fdo->Flags &= ~DO_DEVICE_INITIALIZING;
+    }
 
     /* Insert into the global adapter list so legacy NdisOpenAdapter
      * (which calls MiniLocateDevice) can find this adapter by name. */
     KeAcquireSpinLock(&AdapterListLock, &OldIrql);
     InsertTailList(&AdapterListHead, &Adapter->ListEntry);
     KeReleaseSpinLock(&AdapterListLock, OldIrql);
+
+    return NDIS_STATUS_SUCCESS;
+}
+
+NDIS_STATUS
+Ndis6CreateLogicalAdapter(
+    _In_  PNDIS6_DRIVER_BLOCK   DriverBlock,
+    _In_  PDEVICE_OBJECT        Pdo,
+    _Out_ PLOGICAL_ADAPTER*     AdapterOut)
+{
+    PLOGICAL_ADAPTER Adapter;
+    PDEVICE_OBJECT Fdo;
+    NTSTATUS Status;
+    UNICODE_STRING AdapterName;
+
+    if (DriverBlock == NULL || Pdo == NULL || AdapterOut == NULL)
+        return NDIS_STATUS_INVALID_PARAMETER;
+
+    *AdapterOut = NULL;
+
+    /* Read \Device\{NetCfgInstanceId} from the registry so protocol
+     * drivers (tcpip.sys) can find us by the same GUID name they
+     * stored in their own Linkage\Bind list. */
+    Status = Ndis6ReadExportName(Pdo, &AdapterName);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    /* Create an FDO whose DeviceExtension is our LOGICAL_ADAPTER.
+     * The device object IS named — it's \Device\{GUID} — so that
+     * ObReferenceObjectByName in the legacy NdisOpenAdapter path
+     * can open it in addition to MiniLocateDevice finding it. */
+    Status = IoCreateDevice(
+        DriverBlock->DriverObject,
+        sizeof(LOGICAL_ADAPTER),
+        &AdapterName,
+        FILE_DEVICE_PHYSICAL_NETCARD,
+        0,
+        FALSE,
+        &Fdo);
+    if (!NT_SUCCESS(Status))
+    {
+        Ndis6FreeAdapterName(&AdapterName);
+        return Status;
+    }
+
+    Adapter = (PLOGICAL_ADAPTER)Fdo->DeviceExtension;
+    Status = Ndis6InitializeLogicalAdapter(DriverBlock,
+                                           Pdo,
+                                           Fdo,
+                                           NULL,
+                                           &AdapterName,
+                                           FALSE,
+                                           NULL,
+                                           Adapter);
+    if (!NT_SUCCESS(Status))
+    {
+        IoDeleteDevice(Fdo);
+        Ndis6FreeAdapterName(&AdapterName);
+        return Status;
+    }
+
+    *AdapterOut = Adapter;
+    return NDIS_STATUS_SUCCESS;
+}
+
+NDIS_STATUS
+Ndis6CreateWdfLogicalAdapter(
+    _In_ PNDIS6_DRIVER_BLOCK DriverBlock,
+    _In_ PNDIS6_WDF_ADD_DEVICE_INFO AddDeviceInfo,
+    _Out_ PLOGICAL_ADAPTER* AdapterOut)
+{
+    PNDIS6_WDF_CX_DRIVER CxDriver;
+    PLOGICAL_ADAPTER Adapter = NULL;
+    PDEVICE_OBJECT Fdo;
+    PDEVICE_OBJECT NextDeviceObject;
+    UNICODE_STRING AdapterName;
+    WCHAR AssignedNameBuffer[260];
+    NTSTATUS Status;
+
+    if (DriverBlock == NULL || AddDeviceInfo == NULL || AdapterOut == NULL)
+        return NDIS_STATUS_INVALID_PARAMETER;
+
+    *AdapterOut = NULL;
+    CxDriver = DriverBlock->WdfCxDriver;
+    if (!DriverBlock->IsWdfManaged || CxDriver == NULL ||
+        CxDriver->Signature != NDIS6_WDF_CX_SIGNATURE ||
+        CxDriver->Characteristics.EvtCxAllocateMiniportBlock == NULL ||
+        CxDriver->Characteristics.EvtCxGetDeviceObject == NULL)
+    {
+        return NDIS_STATUS_INVALID_PARAMETER;
+    }
+
+    Status = CxDriver->Characteristics.EvtCxAllocateMiniportBlock(
+        AddDeviceInfo->MiniportAdapterContext,
+        sizeof(LOGICAL_ADAPTER),
+        (PVOID*)&Adapter);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Fdo = CxDriver->Characteristics.EvtCxGetDeviceObject(
+        AddDeviceInfo->MiniportAdapterContext);
+    NextDeviceObject = CxDriver->Characteristics.EvtCxGetNextDeviceObject
+        ? CxDriver->Characteristics.EvtCxGetNextDeviceObject(
+              AddDeviceInfo->MiniportAdapterContext)
+        : NULL;
+
+    /* Prefer the NDIS installation's \Device\{NetCfgInstanceId} name. If
+     * ReactOS setup did not create Linkage yet, use NetAdapterCx's WDF FDO
+     * name and make an RTL-owned copy with the same lifetime semantics. */
+    Status = Ndis6ReadExportName(AddDeviceInfo->PhysicalDeviceObject,
+                                 &AdapterName);
+    if (!NT_SUCCESS(Status) &&
+        CxDriver->Characteristics.EvtCxGetAssignedFdoName != NULL)
+    {
+        UNICODE_STRING AssignedName;
+
+        AssignedName.Buffer = AssignedNameBuffer;
+        AssignedName.Length = 0;
+        AssignedName.MaximumLength = sizeof(AssignedNameBuffer);
+        Status = CxDriver->Characteristics.EvtCxGetAssignedFdoName(
+            AddDeviceInfo->MiniportAdapterContext,
+            &AssignedName);
+        if (NT_SUCCESS(Status))
+        {
+            if (AssignedName.Length + sizeof(WCHAR) >
+                AssignedName.MaximumLength)
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+            }
+            else
+            {
+                AssignedName.Buffer[AssignedName.Length / sizeof(WCHAR)] = L'\0';
+                Status = RtlCreateUnicodeString(&AdapterName,
+                                                AssignedName.Buffer)
+                    ? STATUS_SUCCESS
+                    : STATUS_INSUFFICIENT_RESOURCES;
+            }
+        }
+    }
+
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = Ndis6InitializeLogicalAdapter(
+        DriverBlock,
+        AddDeviceInfo->PhysicalDeviceObject,
+        Fdo,
+        NextDeviceObject,
+        &AdapterName,
+        TRUE,
+        AddDeviceInfo->MiniportAdapterContext,
+        Adapter);
+    if (!NT_SUCCESS(Status))
+    {
+        Ndis6FreeAdapterName(&AdapterName);
+        return Status;
+    }
 
     *AdapterOut = Adapter;
     return NDIS_STATUS_SUCCESS;
@@ -832,6 +979,7 @@ Ndis6DestroyLogicalAdapter(
 {
     PNDIS6_ADAPTER_EXT Ext;
     PDEVICE_OBJECT     Fdo;
+    BOOLEAN            IsWdfManaged;
     KIRQL              OldIrql;
     extern LIST_ENTRY  AdapterListHead;
     extern KSPIN_LOCK  AdapterListLock;
@@ -841,6 +989,7 @@ Ndis6DestroyLogicalAdapter(
 
     Ext = NDIS6_EXT(Adapter);
     Fdo = Ext ? Ext->FunctionalDeviceObject : NULL;
+    IsWdfManaged = Ext ? Ext->IsWdfManaged : FALSE;
 
     /* Phase 7B: detach any NDIS 6 filter modules attached to this adapter
      * BEFORE we tear anything else down — filters may try to issue OID
@@ -851,9 +1000,13 @@ Ndis6DestroyLogicalAdapter(
     }
 
     /* Detach from the device stack BEFORE we free anything. */
-    if (Adapter->NdisMiniportBlock.NextDeviceObject)
+    if (!IsWdfManaged && Adapter->NdisMiniportBlock.NextDeviceObject)
     {
         IoDetachDevice(Adapter->NdisMiniportBlock.NextDeviceObject);
+        Adapter->NdisMiniportBlock.NextDeviceObject = NULL;
+    }
+    else if (IsWdfManaged)
+    {
         Adapter->NdisMiniportBlock.NextDeviceObject = NULL;
     }
 
@@ -911,7 +1064,7 @@ Ndis6DestroyLogicalAdapter(
 
     /* Finally delete the FDO. After this Adapter (which lives inside
      * Fdo->DeviceExtension) is gone — do NOT touch it again. */
-    if (Fdo)
+    if (!IsWdfManaged && Fdo)
         IoDeleteDevice(Fdo);
 }
 
