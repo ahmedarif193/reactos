@@ -2510,11 +2510,19 @@ SmpInit(IN PUNICODE_STRING InitialCommand,
     HANDLE EventHandle, PortHandle;
     ULONG HardErrorMode;
 
+    DPRINT1("INITTRACE: SmpInit entered process=%p thread=%p\n",
+            NtCurrentProcess(),
+            NtCurrentThread());
+
     /* Create the SMSS Heap */
+    DPRINT1("INITTRACE: SmpInit creating SMSS heap tag on heap=%p\n",
+            RtlGetProcessHeap());
     SmBaseTag = RtlCreateTagHeap(RtlGetProcessHeap(),
                                  0,
                                  L"SMSS!",
                                  L"INIT");
+    DPRINT1("INITTRACE: SmpInit heap tag creation returned tag=%lu\n",
+            SmBaseTag);
     SmpHeap = RtlGetProcessHeap();
 
     /* Enable hard errors */

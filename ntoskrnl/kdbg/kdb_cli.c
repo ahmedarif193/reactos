@@ -3964,6 +3964,10 @@ KdbInitialize(
         /* I/O is now set up for disk access: load the KDBinit file */
         NTSTATUS Status = KdbpCliInit();
 
+        DPRINT1("INITTRACE: KDBG phase %lu KDBinit initialization returned 0x%08lx\n",
+                BootPhase,
+                Status);
+
         /* Schedule an I/O reinitialization if needed */
         if (Status == STATUS_OBJECT_NAME_NOT_FOUND ||
             Status == STATUS_OBJECT_PATH_NOT_FOUND)

@@ -443,9 +443,16 @@ _main(IN INT argc,
     PROCESS_BASIC_INFORMATION ProcessInfo;
     UNICODE_STRING DbgString, InitialCommand;
 
+    DPRINT1("INITTRACE: SMSS _main entered argc=%d debug=%lu peb=%p heap=%p\n",
+            argc,
+            DebugFlag,
+            NtCurrentPeb(),
+            RtlGetProcessHeap());
+
     /* Make us critical */
     RtlSetProcessIsCritical(TRUE, NULL, FALSE);
     RtlSetThreadIsCritical(TRUE, NULL, FALSE);
+    DPRINT1("INITTRACE: SMSS process and initial thread marked critical\n");
 
     /* Raise our priority */
     SetBasePriority = 11;
@@ -466,7 +473,9 @@ _main(IN INT argc,
     _SEH2_TRY
     {
         /* Initialize SMSS */
+        DPRINT1("INITTRACE: SMSS calling SmpInit\n");
         Status = SmpInit(&InitialCommand, &Handles[0]);
+        DPRINT1("INITTRACE: SMSS SmpInit returned 0x%08lx\n", Status);
         if (!NT_SUCCESS(Status))
         {
             DPRINT1("SMSS: SmpInit return failure - Status == %x\n", Status);
@@ -474,6 +483,9 @@ _main(IN INT argc,
             Parameters[1] = Status;
             _SEH2_LEAVE;
         }
+        DPRINT1("INITTRACE: SMSS initialized initial='%wZ' subsystem=%p\n",
+                &InitialCommand,
+                Handles[0]);
 
         /* Get the global flags */
         Status = NtQuerySystemInformation(SystemFlagsInformation,

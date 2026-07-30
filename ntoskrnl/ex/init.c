@@ -457,6 +457,9 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
     PRTL_USER_PROCESS_INFORMATION ProcessInformation;
     PRTL_USER_PROCESS_PARAMETERS ProcessParams = NULL;
 
+    DPRINT1("INITTRACE: ExpLoadInitialProcess entered for '%ws'\n",
+            NtInitialUserProcessBuffer);
+
     NullString.Length = sizeof(WCHAR);
 
     /* Use the initial buffer, after the strings */
@@ -613,6 +616,9 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
 
     /* Create SMSS process */
     SmssName = ProcessParams->ImagePathName;
+    DPRINT1("INITTRACE: creating initial user process image='%wZ' command='%wZ'\n",
+            &SmssName,
+            &ProcessParams->CommandLine);
     Status = RtlCreateUserProcess(&SmssName,
                                   OBJ_CASE_INSENSITIVE,
                                   RtlDeNormalizeProcessParams(ProcessParams),
@@ -637,7 +643,15 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
         KeBugCheckEx(SESSION3_INITIALIZATION_FAILED, Status, 0, 0, 0);
     }
 
+    DPRINT1("INITTRACE: initial user process created process=%p thread=%p pid=%p tid=%p\n",
+            ProcessInformation->ProcessHandle,
+            ProcessInformation->ThreadHandle,
+            ProcessInformation->ClientId.UniqueProcess,
+            ProcessInformation->ClientId.UniqueThread);
+
     /* Resume the thread */
+    DPRINT1("INITTRACE: resuming initial user thread %p\n",
+            ProcessInformation->ThreadHandle);
     Status = ZwResumeThread(ProcessInformation->ThreadHandle, NULL);
     if (!NT_SUCCESS(Status))
     {
@@ -652,6 +666,8 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
         /* Bugcheck the system */
         KeBugCheckEx(SESSION4_INITIALIZATION_FAILED, Status, 0, 0, 0);
     }
+
+    DPRINT1("INITTRACE: initial user thread resumed successfully\n");
 
     /* Return success */
     *ProcessParameters = ProcessParams;
@@ -1499,6 +1515,9 @@ Phase1InitializationDiscard(IN PVOID Context)
     HANDLE KeyHandle, OptionHandle;
     PRTL_USER_PROCESS_PARAMETERS ProcessParameters = NULL;
 
+    DPRINT1("INITTRACE: phase 1 executive initialization entered context=%p\n",
+            Context);
+
     /* Allocate the initialization buffer */
     InitBuffer = ExAllocatePoolWithTag(NonPagedPool,
                                        sizeof(INIT_BUFFER),
@@ -2041,6 +2060,7 @@ Phase1InitializationDiscard(IN PVOID Context)
 
     /* Initialize the I/O Subsystem */
     if (!IoInitSystem(LoaderBlock)) KeBugCheck(IO1_INITIALIZATION_FAILED);
+    DPRINT1("INITTRACE: phase 1 I/O initialization complete\n");
 
     /* Set maximum update to 100% */
     InbvSetProgressBarSubset(0, 100);
@@ -2145,6 +2165,7 @@ Phase1InitializationDiscard(IN PVOID Context)
 
     /* Initialize the Process Manager at Phase 1 */
     if (!PsInitSystem(LoaderBlock)) KeBugCheck(PROCESS1_INITIALIZATION_FAILED);
+    DPRINT1("INITTRACE: phase 1 process manager initialization complete\n");
 #if defined(_M_ARM64) || defined(_M_AMD64)
     /* Start gated SMP diagnostics now that Ps can create system threads. */
     SmpDbgStartWatchdog();
@@ -2157,6 +2178,7 @@ Phase1InitializationDiscard(IN PVOID Context)
 
     /* Initialize the SRM in phase 1 */
     if (!SeRmInitPhase1()) KeBugCheck(PROCESS1_INITIALIZATION_FAILED);
+    DPRINT1("INITTRACE: phase 1 security reference monitor initialization complete\n");
 
     /* Update progress bar */
     InbvUpdateProgressBar(100);
@@ -2169,11 +2191,17 @@ Phase1InitializationDiscard(IN PVOID Context)
 
     /* Launch initial process */
     ProcessInfo = &InitBuffer->ProcessInfo;
+    DPRINT1("INITTRACE: phase 1 launching the initial user process\n");
     ExpLoadInitialProcess(InitBuffer, &ProcessParameters, &Environment);
+    DPRINT1("INITTRACE: phase 1 initial user process is running pid=%p tid=%p\n",
+            ProcessInfo->ClientId.UniqueProcess,
+            ProcessInfo->ClientId.UniqueThread);
 
     /* Wait 5 seconds for initial process to initialize */
     Timeout.QuadPart = Int32x32To64(5, -10000000);
+    DPRINT1("INITTRACE: phase 1 waiting for initial user process startup window\n");
     Status = ZwWaitForSingleObject(ProcessInfo->ProcessHandle, FALSE, &Timeout);
+    DPRINT1("INITTRACE: initial user process wait returned 0x%08lx\n", Status);
     if (Status == STATUS_SUCCESS)
     {
         /* Failed, display error */

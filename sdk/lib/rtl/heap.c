@@ -4107,6 +4107,12 @@ RtlCreateTagHeap(_In_ HANDLE HeapHandle,
                  _In_opt_ PWSTR TagName,
                  _In_ PWSTR TagSubName)
 {
+    DPRINT1("INITTRACE: RtlCreateTagHeap entered heap=%p flags=0x%lx tag='%ws' subtag='%ws'\n",
+            HeapHandle,
+            Flags,
+            TagName ? TagName : L"<null>",
+            TagSubName ? TagSubName : L"<null>");
+
     /* TODO */
     UNIMPLEMENTED;
     return 0;
@@ -4282,4 +4288,3 @@ RtlQueryProcessHeapInformation(
 }
 
 /* EOF */
-
