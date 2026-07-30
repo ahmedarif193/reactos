@@ -473,6 +473,8 @@ NtfsOpenVolume(
     _In_ PVolumeContextBlock VolCB)
 {
     PFILE_OBJECT FileObject = IrpSp->FileObject;
+    PIO_SECURITY_CONTEXT SecurityContext =
+        IrpSp->Parameters.Create.SecurityContext;
     PFileContextBlock FileCB;
     ULONG CreateOptions;
     UCHAR Disposition;
@@ -526,8 +528,12 @@ NtfsOpenVolume(
         FastIoIsNotPossible;
     FileCB->IsVolumeOpen = TRUE;
     FileCB->CreateOptions = IrpSp->Parameters.Create.Options;
-    FileCB->DesiredAccess =
-        IrpSp->Parameters.Create.SecurityContext->DesiredAccess;
+    FileCB->DesiredAccess = SecurityContext->DesiredAccess;
+    if (SecurityContext->AccessState)
+    {
+        FileCB->DesiredAccess |=
+            SecurityContext->AccessState->PreviouslyGrantedAccess;
+    }
 
     ExAcquireFastMutex(&VolCB->VolumeStateMutex);
     if (VolCB->Dismounting || VolCB->Dismounted)
