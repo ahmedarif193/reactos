@@ -17,13 +17,20 @@
 
 typedef struct _DXGK_RESIDENCY_BUDGET
 {
-    ULONGLONG Budget;             /* what this process may keep resident */
+    ULONGLONG Budget;             /* current working-set budget */
+    ULONGLONG Maximum;            /* hard limit, even when trimming is exhausted */
     ULONGLONG Reservation;        /* what it is guaranteed */
     ULONGLONG CurrentUsage;
     BOOLEAN   Initialized;
 } DXGK_RESIDENCY_BUDGET, *PDXGK_RESIDENCY_BUDGET;
 
-NTSTATUS DxgkResidencyCoreBudgetInitialize(_Out_ PDXGK_RESIDENCY_BUDGET Budget, _In_ ULONGLONG BudgetBytes, _In_ ULONGLONG ReservationBytes);
+NTSTATUS DxgkResidencyCoreBudgetInitialize(_Out_ PDXGK_RESIDENCY_BUDGET Budget, _In_ ULONGLONG BudgetBytes, _In_ ULONGLONG MaximumBytes, _In_ ULONGLONG ReservationBytes);
+NTSTATUS DxgkResidencyCoreBudgetSetLimits(_Inout_ PDXGK_RESIDENCY_BUDGET Budget, _In_ ULONGLONG BudgetBytes, _In_ ULONGLONG MaximumBytes);
+NTSTATUS DxgkResidencyCoreBudgetSetReservation(_Inout_ PDXGK_RESIDENCY_BUDGET Budget, _In_ ULONGLONG ReservationBytes);
+NTSTATUS DxgkResidencyCoreBudgetPlanCharge(_In_ const DXGK_RESIDENCY_BUDGET *Budget, _In_ ULONGLONG Bytes, _In_ BOOLEAN CantTrimFurther, _Out_ PULONGLONG NumBytesToTrim);
+NTSTATUS DxgkResidencyCoreBudgetTryCharge(_Inout_ PDXGK_RESIDENCY_BUDGET Budget, _In_ ULONGLONG Bytes, _In_ BOOLEAN CantTrimFurther, _Out_ PULONGLONG NumBytesToTrim);
+/* Compatibility helper for internal callers that have already exhausted
+ * trimming. It still refuses to cross Maximum. */
 NTSTATUS DxgkResidencyCoreBudgetCharge(_Inout_ PDXGK_RESIDENCY_BUDGET Budget, _In_ ULONGLONG Bytes);
 NTSTATUS DxgkResidencyCoreBudgetRelease(_Inout_ PDXGK_RESIDENCY_BUDGET Budget, _In_ ULONGLONG Bytes);
 BOOLEAN DxgkResidencyCoreBudgetIsOver(_In_ const DXGK_RESIDENCY_BUDGET *Budget);
@@ -31,6 +38,78 @@ BOOLEAN DxgkResidencyCoreBudgetIsOver(_In_ const DXGK_RESIDENCY_BUDGET *Budget);
 ULONGLONG DxgkResidencyCoreBudgetTrimTarget(_In_ const DXGK_RESIDENCY_BUDGET *Budget);
 /* Usage below the reservation is protected from trimming under pressure. */
 BOOLEAN DxgkResidencyCoreBudgetIsProtected(_In_ const DXGK_RESIDENCY_BUDGET *Budget);
+
+/* --- process-exit admission ------------------------------------------ */
+
+/*
+ * The caller owns the lock around every operation.  An entrant pins the
+ * admission object from the initial process-exit check through publication of
+ * its per-process residency ledger.  Exit cleanup marks the object before
+ * retiring any ledgers, so a request cannot publish after cleanup passed it.
+ */
+typedef struct _DXGK_RESIDENCY_PROCESS_ADMISSION
+{
+    ULONG ActiveEntrants;
+    BOOLEAN Exiting;
+} DXGK_RESIDENCY_PROCESS_ADMISSION, *PDXGK_RESIDENCY_PROCESS_ADMISSION;
+
+VOID
+DxgkResidencyCoreProcessAdmissionInitialize(
+    _Out_ PDXGK_RESIDENCY_PROCESS_ADMISSION Admission);
+
+BOOLEAN
+DxgkResidencyCoreProcessAdmissionTryEnter(
+    _Inout_ PDXGK_RESIDENCY_PROCESS_ADMISSION Admission,
+    _In_ BOOLEAN ProcessAlreadyExiting);
+
+VOID
+DxgkResidencyCoreProcessAdmissionMarkExiting(
+    _Inout_ PDXGK_RESIDENCY_PROCESS_ADMISSION Admission);
+
+BOOLEAN
+DxgkResidencyCoreProcessAdmissionCanPublish(
+    _In_ const DXGK_RESIDENCY_PROCESS_ADMISSION *Admission);
+
+/* Returns TRUE when the last entrant left and the wrapper may be retired. */
+BOOLEAN
+DxgkResidencyCoreProcessAdmissionLeave(
+    _Inout_ PDXGK_RESIDENCY_PROCESS_ADMISSION Admission);
+
+/* --- per-process shared-placement charges ---------------------------- */
+
+/*
+ * One state belongs to one (physical allocation, process) pair.  Multiple
+ * aliases and devices owned by that process contribute references, but the
+ * physical placement is charged to its budget exactly once.
+ */
+typedef struct _DXGK_RESIDENCY_PROCESS_CHARGE_STATE
+{
+    ULONG ReferenceCount;
+    BOOLEAN BudgetCharged;
+} DXGK_RESIDENCY_PROCESS_CHARGE_STATE,
+  *PDXGK_RESIDENCY_PROCESS_CHARGE_STATE;
+
+VOID
+DxgkResidencyCoreProcessChargeInitialize(
+    _Out_ PDXGK_RESIDENCY_PROCESS_CHARGE_STATE State);
+
+NTSTATUS
+DxgkResidencyCoreProcessChargePlanAcquire(
+    _In_ const DXGK_RESIDENCY_PROCESS_CHARGE_STATE *State,
+    _In_ ULONG ReferenceCount,
+    _Out_ PBOOLEAN RequiresBudgetCharge);
+
+NTSTATUS
+DxgkResidencyCoreProcessChargeCommitAcquire(
+    _Inout_ PDXGK_RESIDENCY_PROCESS_CHARGE_STATE State,
+    _In_ ULONG ReferenceCount,
+    _In_ BOOLEAN BudgetChargeCommitted);
+
+NTSTATUS
+DxgkResidencyCoreProcessChargeRelease(
+    _Inout_ PDXGK_RESIDENCY_PROCESS_CHARGE_STATE State,
+    _In_ ULONG ReferenceCount,
+    _Out_ PBOOLEAN ReleaseBudgetCharge);
 
 /* --- per-device residency references ---------------------------------- */
 
