@@ -8,6 +8,7 @@
 #include <win32k.h>
 #include "drivers/wddm/wddm_bridge.h"
 #include <reactos/rddm/rxgkinterface.h>
+#include <reactos/rddm/rxgkioctl.h>
 #include <debug.h>
 
 #define IOCTL_RXGK_OPENADAPTERFROMDEVICENAME CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x112, METHOD_BUFFERED, FILE_ANY_ACCESS)
@@ -62,6 +63,37 @@ C_ASSERT(sizeof(struct _D3DKMT_LOCK2) == 16);
 C_ASSERT(FIELD_OFFSET(struct _D3DKMT_LOCK2, pData) == 12);
 #endif
 C_ASSERT(sizeof(struct _D3DKMT_UNLOCK2) == 8);
+#endif
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+C_ASSERT(sizeof(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET) ==
+         RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET_V1_SIZE);
+C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, Size) == 0);
+C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, Version) == 4);
+C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, ProcessId) == 8);
+C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, QueryVidPnSourceId) == 16);
+C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, QueryAdapterLuidLowPart) == 20);
+C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, QueryAdapterLuidHighPart) == 24);
+C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, Reserved) == 28);
+C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, ResultVidPnSourceId) == 32);
+C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, ResultAdapterLuidLowPart) == 36);
+C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, ResultAdapterLuidHighPart) == 40);
+C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, OwnerType) == 44);
+#if defined(_WIN64)
+C_ASSERT(sizeof(D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP) == 32);
+C_ASSERT(FIELD_OFFSET(D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP, hProcess) == 0);
+C_ASSERT(FIELD_OFFSET(D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP, hWindow) == 8);
+C_ASSERT(FIELD_OFFSET(D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP, VidPnSourceId) == 16);
+C_ASSERT(FIELD_OFFSET(D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP, AdapterLuid) == 20);
+C_ASSERT(FIELD_OFFSET(D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP, OwnerType) == 28);
+#else
+C_ASSERT(sizeof(D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP) == 24);
+C_ASSERT(FIELD_OFFSET(D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP, hProcess) == 0);
+C_ASSERT(FIELD_OFFSET(D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP, hWindow) == 4);
+C_ASSERT(FIELD_OFFSET(D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP, VidPnSourceId) == 8);
+C_ASSERT(FIELD_OFFSET(D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP, AdapterLuid) == 12);
+C_ASSERT(FIELD_OFFSET(D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP, OwnerType) == 20);
+#endif
 #endif
 
 #define RETURN_STATUS_IF_NULL(Argument)            \
@@ -1635,8 +1667,181 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIQueryVidPnExclusiveOwnership(_Inout_ struct _D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP* unnamedParam1)
 {
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP Captured;
+    RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET Packet;
+    D3DKMT_HANDLE AdapterHandle = 0;
+    PEPROCESS Process = NULL;
+    PPDEVOBJ Pdev;
+    PMONITOR Monitor;
+    PWND Window;
+    LUID QueryAdapterLuid;
+    POINT WindowCenter;
+    WCHAR NtDeviceName[CCHDEVICENAME / 2];
+    ULONG_PTR Information = 0;
+    BOOLEAN HaveDisplay = FALSE;
+    BOOLEAN HaveWindow = FALSE;
+    BOOLEAN UserLockEntered;
+    NTSTATUS Status;
+
+    Status = D3dkmtCaptureUserStructure(
+                 unnamedParam1, sizeof(Captured), &Captured);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    /*
+     * Native requests PROCESS_QUERY_LIMITED_INFORMATION and returns the
+     * object-manager status for an invalid process handle.  Keep this
+     * reference until the synchronous dxgkrnl query completes so the fixed
+     * process ID carried on the wire cannot be recycled underneath it.
+     */
+    Status = ObReferenceObjectByHandle(
+                 Captured.hProcess,
+                 PROCESS_QUERY_LIMITED_INFORMATION,
+                 *PsProcessType,
+                 ExGetPreviousMode(),
+                 (PVOID *)&Process,
+                 NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    /*
+     * The native path treats an unresolvable window as a successful no-op and
+     * leaves the caller's output fields untouched.  Resolve all USER objects
+     * while holding the shared lock and copy only the stable device name out.
+     */
+    UserLockEntered = UserIsEntered();
+    if (!UserLockEntered)
+        UserEnterShared();
+    Window = ValidateHwndNoErr(Captured.hWindow);
+    if (Window != NULL)
+    {
+        HaveWindow = TRUE;
+        WindowCenter.x =
+            (LONG)(((LONGLONG)Window->rcWindow.left +
+                    (LONGLONG)Window->rcWindow.right) /
+                   2);
+        WindowCenter.y =
+            (LONG)(((LONGLONG)Window->rcWindow.top +
+                    (LONGLONG)Window->rcWindow.bottom) /
+                   2);
+        Monitor =
+            UserMonitorFromPoint(WindowCenter, MONITOR_DEFAULTTONULL);
+        if (Monitor != NULL && Monitor->hDev != NULL)
+        {
+            Pdev = (PPDEVOBJ)Monitor->hDev;
+            if (Pdev->pGraphicsDevice != NULL &&
+                Pdev->pGraphicsDevice->szNtDeviceName[0] != L'\0')
+            {
+                RtlCopyMemory(
+                    NtDeviceName,
+                    Pdev->pGraphicsDevice->szNtDeviceName,
+                    sizeof(NtDeviceName));
+                NtDeviceName[RTL_NUMBER_OF(NtDeviceName) - 1] = L'\0';
+                HaveDisplay = TRUE;
+            }
+        }
+    }
+    if (!UserLockEntered)
+        UserLeave();
+
+    if (!HaveWindow)
+    {
+        ObDereferenceObject(Process);
+        return STATUS_SUCCESS;
+    }
+
+    Captured.VidPnSourceId = D3DDDI_ID_UNINITIALIZED;
+    RtlZeroMemory(&Captured.AdapterLuid, sizeof(Captured.AdapterLuid));
+    Captured.OwnerType = D3DKMT_VIDPNSOURCEOWNER_UNOWNED;
+
+    if (HaveDisplay)
+    {
+        Status = D3dkmtOpenAdapterByCapturedNtDeviceName(
+                     NtDeviceName,
+                     &AdapterHandle,
+                     &QueryAdapterLuid);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+
+        RtlZeroMemory(&Packet, sizeof(Packet));
+        Packet.Size =
+            RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET_V1_SIZE;
+        Packet.Version = RXGK_WDDM_PACKET_VERSION_1;
+        Packet.ProcessId =
+            (ULONGLONG)(ULONG_PTR)PsGetProcessId(Process);
+        /*
+         * ReactOS currently maps each GDI PDEV to source zero, the same
+         * mapping used by OpenAdapterFromHdc/GdiDisplayName.  The packet keeps
+         * this field explicit so a later multi-source PDEV mapping extends the
+         * selector without changing the kernel ABI.
+         */
+        Packet.QueryVidPnSourceId = 0;
+        Packet.QueryAdapterLuidLowPart = QueryAdapterLuid.LowPart;
+        Packet.QueryAdapterLuidHighPart = QueryAdapterLuid.HighPart;
+        Packet.ResultVidPnSourceId = D3DDDI_ID_UNINITIALIZED;
+        Packet.OwnerType = D3DKMT_VIDPNSOURCEOWNER_UNOWNED;
+
+        Status = WddmBridgeSendIoctlWithInformation(
+                     IOCTL_D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP,
+                     &Packet,
+                     sizeof(Packet),
+                     &Packet,
+                     sizeof(Packet),
+                     &Information);
+        if (NT_SUCCESS(Status) && Information != sizeof(Packet))
+            Status = STATUS_INFO_LENGTH_MISMATCH;
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+
+        Captured.VidPnSourceId = Packet.ResultVidPnSourceId;
+        Captured.AdapterLuid.LowPart =
+            Packet.ResultAdapterLuidLowPart;
+        Captured.AdapterLuid.HighPart =
+            Packet.ResultAdapterLuidHighPart;
+        Captured.OwnerType =
+            (D3DKMT_VIDPNSOURCEOWNER_TYPE)Packet.OwnerType;
+    }
+
+    _SEH2_TRY
+    {
+        if (ExGetPreviousMode() != KernelMode)
+        {
+            ProbeForWrite(
+                (PUCHAR)unnamedParam1 +
+                    FIELD_OFFSET(
+                        D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP,
+                        VidPnSourceId),
+                sizeof(Captured.VidPnSourceId) +
+                    sizeof(Captured.AdapterLuid) +
+                    sizeof(Captured.OwnerType),
+                1);
+        }
+        RtlCopyMemory(
+            (PUCHAR)unnamedParam1 +
+                FIELD_OFFSET(
+                    D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP,
+                    VidPnSourceId),
+            &Captured.VidPnSourceId,
+            sizeof(Captured.VidPnSourceId) +
+                sizeof(Captured.AdapterLuid) +
+                sizeof(Captured.OwnerType));
+        Status = STATUS_SUCCESS;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+Cleanup:
+    D3dkmtCloseCapturedAdapter(AdapterHandle);
+    ObDereferenceObject(Process);
+    return Status;
+#else
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    return STATUS_NOT_SUPPORTED;
+#endif
 }
 
 NTSTATUS

@@ -32,6 +32,21 @@
 
 C_ASSERT(sizeof(RXGK_CREATECONTEXTVIRTUAL_PACKET) == RXGK_CREATECONTEXTVIRTUAL_PACKET_V1_SIZE);
 C_ASSERT(sizeof(RXGK_SUBMITCOMMAND_PACKET) == RXGK_SUBMITCOMMAND_PACKET_V1_SIZE);
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+C_ASSERT(sizeof(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET) ==
+         RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET_V1_SIZE);
+C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, Size) == 0);
+C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, Version) == 4);
+C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, ProcessId) == 8);
+C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, QueryVidPnSourceId) == 16);
+C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, QueryAdapterLuidLowPart) == 20);
+C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, QueryAdapterLuidHighPart) == 24);
+C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, Reserved) == 28);
+C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, ResultVidPnSourceId) == 32);
+C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, ResultAdapterLuidLowPart) == 36);
+C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, ResultAdapterLuidHighPart) == 40);
+C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, OwnerType) == 44);
+#endif
 C_ASSERT(FIELD_OFFSET(RXGK_SUBMITCOMMAND_PACKET, Commands) == 8);
 C_ASSERT(FIELD_OFFSET(RXGK_SUBMITCOMMAND_PACKET, PresentHistoryToken) == 24);
 C_ASSERT(DXGMMS2_CONTEXT_STREAM_MAX_BROADCAST_CONTEXTS == D3DDDI_MAX_BROADCAST_CONTEXT + 1);
@@ -268,6 +283,9 @@ DxgkpKmtIoctlMinimumConfiguredLevel(
         case IOCTL_D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU:
         case IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU:
         case IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2:
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+        case IOCTL_D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP:
+#endif
         case IOCTL_DXGKRNL_PREPAREMAPGPUVIRTUALADDRESS:
         case IOCTL_DXGKRNL_PREPARERESERVEGPUVIRTUALADDRESS:
         case IOCTL_DXGKRNL_GET_UNINIT_ENTRY:
@@ -722,6 +740,44 @@ DxgkpValidateGlobalShareForIoctl(
     DxgkVidMmDereferenceResource(Resource);
     return STATUS_SUCCESS;
 }
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+static NTSTATUS
+DxgkpQueryVidPnExclusiveOwnershipPacket(
+    _Inout_ PRXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET Packet)
+{
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID ResultVidPnSourceId;
+    D3DKMT_VIDPNSOURCEOWNER_TYPE OwnerType;
+    LUID QueryAdapterLuid;
+    LUID ResultAdapterLuid;
+    NTSTATUS Status;
+
+    if (Packet == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    QueryAdapterLuid.LowPart = Packet->QueryAdapterLuidLowPart;
+    QueryAdapterLuid.HighPart = Packet->QueryAdapterLuidHighPart;
+    ResultVidPnSourceId = D3DDDI_ID_UNINITIALIZED;
+    RtlZeroMemory(&ResultAdapterLuid, sizeof(ResultAdapterLuid));
+    OwnerType = D3DKMT_VIDPNSOURCEOWNER_UNOWNED;
+
+    Status = DxgkVidPnQueryExclusiveOwnership(
+                 (HANDLE)(ULONG_PTR)Packet->ProcessId,
+                 &QueryAdapterLuid,
+                 Packet->QueryVidPnSourceId,
+                 &ResultVidPnSourceId,
+                 &ResultAdapterLuid,
+                 &OwnerType);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Packet->ResultVidPnSourceId = ResultVidPnSourceId;
+    Packet->ResultAdapterLuidLowPart = ResultAdapterLuid.LowPart;
+    Packet->ResultAdapterLuidHighPart = ResultAdapterLuid.HighPart;
+    Packet->OwnerType = (ULONG)OwnerType;
+    return STATUS_SUCCESS;
+}
+#endif
 
 static NTSTATUS
 DxgkpValidateDeviceHandleForIoctl(
@@ -7132,6 +7188,53 @@ DxgkpDispatchBufferedIoctl(
             }
         }
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+        case IOCTL_D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP:
+        {
+            PRXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET Packet;
+
+            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL ||
+                Irp->RequestorMode != KernelMode)
+            {
+                return STATUS_ACCESS_DENIED;
+            }
+            if (InputLength <
+                    RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET_V1_SIZE ||
+                OutputLength <
+                    RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET_V1_SIZE ||
+                SystemBuffer == NULL)
+            {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            Packet =
+                (PRXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET)SystemBuffer;
+            if (Packet->Size !=
+                    RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET_V1_SIZE ||
+                Packet->Version != RXGK_WDDM_PACKET_VERSION_1 ||
+                Packet->ProcessId == 0 ||
+                Packet->ProcessId > (ULONGLONG)(ULONG_PTR)-1 ||
+                Packet->QueryVidPnSourceId >= DXGKP_MAX_SOURCES ||
+                Packet->Reserved != 0 ||
+                Packet->ResultVidPnSourceId != D3DDDI_ID_UNINITIALIZED ||
+                Packet->ResultAdapterLuidLowPart != 0 ||
+                Packet->ResultAdapterLuidHighPart != 0 ||
+                Packet->OwnerType !=
+                    D3DKMT_VIDPNSOURCEOWNER_UNOWNED)
+            {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            Status = DxgkpQueryVidPnExclusiveOwnershipPacket(Packet);
+            if (NT_SUCCESS(Status))
+            {
+                Irp->IoStatus.Information =
+                    RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET_V1_SIZE;
+            }
+            return Status;
+        }
+#endif
+
         case IOCTL_D3DKMT_SETPROCESSSCHEDULINGPRIORITYCLASS:
         case IOCTL_D3DKMT_GETPROCESSSCHEDULINGPRIORITYCLASS:
         {
@@ -7914,6 +8017,9 @@ DxgkDispatchDeviceControl(
         case IOCTL_D3DKMT_GETSHADOWSURFACE:
         case IOCTL_D3DKMT_QUERYRESOURCEINFO:
         case IOCTL_D3DKMT_OPENRESOURCE:
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+        case IOCTL_D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP:
+#endif
         case IOCTL_D3DKMT_SETVIDPNSOURCEOWNER:
         case IOCTL_D3DKMT_GETDEVICESTATE:
         case IOCTL_DXGKRNL_PREPAREMAPGPUVIRTUALADDRESS:
