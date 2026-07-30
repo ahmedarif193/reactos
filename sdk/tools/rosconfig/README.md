@@ -143,12 +143,16 @@ menu "Build options"
 
 menu "Debugging"
 
-config KDBG
-    prompt "Integrated kernel debugger (KDBG)"
-    type bool
-    default auto
+config KD_DEBUGGER
+    prompt "Kernel debugger mode"
+    type choice
+    value AUTO     "Automatic"
+    value NONE     "Disabled"
+    value KDBG     "Integrated ReactOS debugger (KDBG)"
+    value EXTERNAL "External KD protocol"
+    default AUTO
     help
-      Whether to compile in the integrated kernel debugger.
+      Select the mutually exclusive kernel debugger implementation.
 
 endmenu
 
@@ -161,6 +165,11 @@ relative to the file containing the directive. Supported config directives are
 `prompt`, `type bool|choice|string`,
 `value <v> "<label>"`, `default`, `depends KEY=VAL` / `KEY!=VAL` (ANDed),
 `meta`, `var <CMakeName>`, `cmaketype BOOL|STRING`, `help`.
+
+Kernel debugger implementations are mutually exclusive. External KD transport
+DLLs are not independent enable switches: rosconfig selects which transport is
+installed as the default `kdcom.dll`, while compatible alternatives remain
+available through the boot `DEBUGPORT` option.
 
 Visibility follows the build path that actually consumes each setting:
 
