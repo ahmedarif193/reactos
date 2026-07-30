@@ -528,6 +528,8 @@ NTAPI
 OslExecDpcRoutine(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
 {
     PSLIST_ENTRY SListEntry;
+    PSLIST_ENTRY NextEntry;
+    PSLIST_ENTRY ReversedList;
     POSL_EXEC_ENTRY Entry;
 
     UNREFERENCED_PARAMETER(Dpc);
@@ -535,9 +537,27 @@ OslExecDpcRoutine(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
     UNREFERENCED_PARAMETER(Arg1);
     UNREFERENCED_PARAMETER(Arg2);
 
-    while ((SListEntry = InterlockedPopEntrySList(&OslExecPendingList)) != NULL)
+    /*
+     * The pending list pops in LIFO order. Detach it in one operation and
+     * reverse the chain so callbacks reach the work queue in submission
+     * order; ACPICA notify and EC query sequencing depend on it. A push
+     * racing the flush requeues this DPC, so nothing is lost.
+     */
+    SListEntry = InterlockedFlushSList(&OslExecPendingList);
+    ReversedList = NULL;
+    while (SListEntry != NULL)
     {
-        Entry = CONTAINING_RECORD(SListEntry, OSL_EXEC_ENTRY, SListEntry);
+        NextEntry = SListEntry->Next;
+        SListEntry->Next = ReversedList;
+        ReversedList = SListEntry;
+        SListEntry = NextEntry;
+    }
+
+    while (ReversedList != NULL)
+    {
+        Entry = CONTAINING_RECORD(ReversedList, OSL_EXEC_ENTRY, SListEntry);
+        /* The work routine recycles the entry; step past it before queueing */
+        ReversedList = ReversedList->Next;
         ExInitializeWorkItem(&Entry->WorkItem, OslExecWorkRoutine, Entry);
         ExQueueWorkItem(&Entry->WorkItem, DelayedWorkQueue);
     }
@@ -1330,16 +1350,23 @@ UINT64
 AcpiOsGetTimer(
     void)
 {
-    LARGE_INTEGER CurrentTime;
-
-    KeQuerySystemTime(&CurrentTime);
-    return CurrentTime.QuadPart;
+    /*
+     * ACPICA expects a monotonic 100-ns timer (AML Timer opcode, internal
+     * timeouts). The system time jumps when the clock is set, so use the
+     * interrupt time instead.
+     */
+    return KeQueryInterruptTime();
 }
 
 void
 AcpiOsWaitEventsComplete(void)
 {
-    if (!OslExecInitialized || KeGetCurrentIrql() != PASSIVE_LEVEL)
+    /*
+     * Waiting is legal below DISPATCH_LEVEL, and ACPICA handler teardown
+     * relies on this flush actually happening, so only skip it when a
+     * blocking wait is truly impossible.
+     */
+    if (!OslExecInitialized || KeGetCurrentIrql() >= DISPATCH_LEVEL)
         return;
 
     for (;;)

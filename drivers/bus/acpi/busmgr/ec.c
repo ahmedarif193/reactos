@@ -389,6 +389,13 @@ acpi_ec_space_handler(UINT32 function,
 
 	bytes = (bit_width / 8) + ((bit_width % 8) != 0);
 
+	/*
+	 * ACPICA splits field access into datum transfers of at most 64 bits,
+	 * so value points at a single UINT64. Never write past it.
+	 */
+	if (bytes > sizeof(*value))
+		return AE_BAD_PARAMETER;
+
 	if (address > 0xFF || bytes > (0x100 - (UINT32)address))
 		return AE_BAD_ADDRESS;
 
