@@ -262,6 +262,286 @@ static void D3dkmtTestDestroySyncObject(_In_ PFND3DKMT_DESTROYSYNCHRONIZATIONOBJ
     ok_succeeded(Status, "DestroySynchronizationObject(0x%08lX) failed 0x%08lX\n", (unsigned long)Handle, (long)Status);
 }
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
+static BOOL
+D3dkmtTestIsSoftGpuAdapter(
+    _In_ PFND3DKMT_QUERYADAPTERINFO QueryAdapterInfo,
+    _In_ D3DKMT_HANDLE hAdapter)
+{
+    D3DKMT_QUERYADAPTERINFO Query;
+    D3DKMT_UMDFILENAMEINFO Name;
+    const WCHAR *Base;
+    const WCHAR *Cursor;
+
+    memset(&Name, 0, sizeof(Name));
+    Name.Version = KMTUMDVERSION_DX9;
+    memset(&Query, 0, sizeof(Query));
+    Query.hAdapter = hAdapter;
+    Query.Type = KMTQAITYPE_UMDRIVERNAME;
+    Query.pPrivateDriverData = &Name;
+    Query.PrivateDriverDataSize = sizeof(Name);
+    if (!NT_SUCCESS(QueryAdapterInfo(&Query)) ||
+        Name.UmdFileName[0] == UNICODE_NULL)
+    {
+        return FALSE;
+    }
+
+    Base = Name.UmdFileName;
+    for (Cursor = Name.UmdFileName;
+         *Cursor != UNICODE_NULL;
+         ++Cursor)
+    {
+        if (*Cursor == L'\\' || *Cursor == L'/')
+            Base = Cursor + 1;
+    }
+    return lstrcmpiW(Base, L"softgpuum.dll") == 0;
+}
+
+static void
+Test_KmdCpuEvent_LifecycleAndKnownEscape(void)
+{
+    PFND3DKMT_CREATESYNCHRONIZATIONOBJECT2 pCreate;
+    PFND3DKMT_DESTROYSYNCHRONIZATIONOBJECT pDestroy;
+    PFND3DKMT_QUERYADAPTERINFO pQuery;
+    PFN_D3DKMTEscape pEscape;
+    D3DDDI_DRIVERESCAPE_CPUEVENTUSAGE Usage;
+    D3DKMT_CREATESYNCHRONIZATIONOBJECT2 Create = {0};
+    D3DKMT_ESCAPE Escape;
+    D3DKMT_HANDLE hAdapter = 0;
+    D3DKMT_HANDLE hDevice = 0;
+    HANDLE Event = NULL;
+    NTSTATUS Status;
+
+    pCreate = (PFND3DKMT_CREATESYNCHRONIZATIONOBJECT2)
+              LoadD3DKMTProc("D3DKMTCreateSynchronizationObject2");
+    pDestroy = (PFND3DKMT_DESTROYSYNCHRONIZATIONOBJECT)
+               LoadD3DKMTProc("D3DKMTDestroySynchronizationObject");
+    pQuery = (PFND3DKMT_QUERYADAPTERINFO)
+             LoadD3DKMTProc("D3DKMTQueryAdapterInfo");
+    pEscape = (PFN_D3DKMTEscape)LoadD3DKMTProc("D3DKMTEscape");
+    if (pCreate == NULL || pDestroy == NULL ||
+        pQuery == NULL || pEscape == NULL)
+    {
+        skip("WDDM CPU-event lifecycle entry points unavailable\n");
+        return;
+    }
+
+    hAdapter = OpenAdapterFromDisplay1();
+    if (hAdapter == 0)
+    {
+        skip("No adapter on \\\\.\\DISPLAY1\n");
+        return;
+    }
+    if (!D3dkmtTestIsSoftGpuAdapter(pQuery, hAdapter))
+    {
+        skip("adapter does not use the softgpu CPU-event contract\n");
+        goto Cleanup;
+    }
+
+    hDevice = CreateTestDevice(hAdapter);
+    if (hDevice == 0)
+    {
+        skip("CreateDevice failed\n");
+        goto Cleanup;
+    }
+    Event = CreateEventW(NULL, FALSE, FALSE, NULL);
+    ok(Event != NULL, "CreateEventW failed %lu\n", GetLastError());
+    if (Event == NULL)
+        goto Cleanup;
+
+    memset(&Create, 0, sizeof(Create));
+    Create.hDevice = hDevice;
+    Create.Info.Type = D3DDDI_CPU_NOTIFICATION;
+    Create.Info.Flags.SignalByKmd = 1;
+    Create.Info.CPUNotification.Event = Event;
+    Status = pCreate(&Create);
+    ok_succeeded(Status,
+                 "CreateSynchronizationObject2(SignalByKmd) failed "
+                 "0x%08lX\n",
+                 (long)Status);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    ok(Create.hSyncObject != 0,
+       "SignalByKmd creation returned a zero sync handle\n");
+
+    /*
+     * The OS substitutes the private KMD cookie only for the DDI call.  It
+     * must never copy that kernel pointer back to UMD.
+     */
+    memset(&Usage, 0, sizeof(Usage));
+    Usage.EscapeType = D3DDDI_DRIVERESCAPETYPE_CPUEVENTUSAGE;
+    Usage.hSyncObject = Create.hSyncObject;
+    Usage.Usage[0] = 1;
+    memset(&Escape, 0, sizeof(Escape));
+    Escape.hAdapter = hAdapter;
+    Escape.hDevice = hDevice;
+    Escape.Type = D3DKMT_ESCAPE_DRIVERPRIVATE;
+    Escape.Flags.DriverKnownEscape = 1;
+    Escape.Flags.NoAdapterSynchronization = 1;
+    Escape.pPrivateDriverData = &Usage;
+    Escape.PrivateDriverDataSize = sizeof(Usage);
+    Status = pEscape(&Escape);
+    ok_succeeded(Status,
+                 "CPUEVENTUSAGE known escape failed 0x%08lX\n",
+                 (long)Status);
+    ok(Usage.hKmdCpuEvent == 0,
+       "known escape leaked KMD CPU-event cookie %I64x\n",
+       Usage.hKmdCpuEvent);
+
+    Usage.hKmdCpuEvent = 0x1122334455667788ULL;
+    Status = pEscape(&Escape);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    ok(Usage.hKmdCpuEvent == 0x1122334455667788ULL,
+       "refused escape rewrote caller cookie to %I64x\n",
+       Usage.hKmdCpuEvent);
+    Usage.hKmdCpuEvent = 0;
+
+    D3dkmtTestDestroySyncObject(pDestroy, Create.hSyncObject);
+    Create.hSyncObject = 0;
+
+    Status = pEscape(&Escape);
+    ok_failed(Status, "known escape accepted a destroyed CPU event\n");
+
+    /*
+     * The device cleanup path owns the same exactly-once DestroyCpuEvent
+     * contract when UMD leaks the public synchronization handle.
+     */
+    memset(&Create, 0, sizeof(Create));
+    Create.hDevice = hDevice;
+    Create.Info.Type = D3DDDI_CPU_NOTIFICATION;
+    Create.Info.Flags.SignalByKmd = 1;
+    Create.Info.CPUNotification.Event = Event;
+    Status = pCreate(&Create);
+    ok_succeeded(Status,
+                 "second SignalByKmd creation failed 0x%08lX\n",
+                 (long)Status);
+    if (NT_SUCCESS(Status))
+    {
+        DestroyTestDevice(hDevice);
+        hDevice = 0;
+        Create.hSyncObject = 0;
+    }
+
+Cleanup:
+    if (Create.hSyncObject != 0)
+        D3dkmtTestDestroySyncObject(pDestroy, Create.hSyncObject);
+    if (Event != NULL)
+        CloseHandle(Event);
+    if (hDevice != 0)
+        DestroyTestDevice(hDevice);
+    if (hAdapter != 0)
+        CloseAdapter(hAdapter);
+}
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+static void
+Test_KmdCpuEvent_FeatureNegotiation(void)
+{
+    PFND3DKMT_ISFEATUREENABLED pIsFeatureEnabled;
+    PFND3DKMT_QUERYADAPTERINFO pQuery;
+    D3DKMT_ISFEATUREENABLED Query;
+    D3DKMT_HANDLE hAdapter;
+    NTSTATUS Status;
+
+    pIsFeatureEnabled = (PFND3DKMT_ISFEATUREENABLED)
+        LoadD3DKMTProc("D3DKMTIsFeatureEnabled");
+    pQuery = (PFND3DKMT_QUERYADAPTERINFO)
+        LoadD3DKMTProc("D3DKMTQueryAdapterInfo");
+    if (pIsFeatureEnabled == NULL || pQuery == NULL)
+    {
+        skip("WDDM 3.2 feature-query entry points unavailable\n");
+        return;
+    }
+
+    hAdapter = OpenAdapterFromDisplay1();
+    if (hAdapter == 0)
+    {
+        skip("No adapter on \\\\.\\DISPLAY1\n");
+        return;
+    }
+    if (!D3dkmtTestIsSoftGpuAdapter(pQuery, hAdapter))
+    {
+        skip("adapter does not use the softgpu feature contract\n");
+        CloseAdapter(hAdapter);
+        return;
+    }
+
+    memset(&Query, 0, sizeof(Query));
+    Query.hAdapter = hAdapter;
+    Query.FeatureId = DXGK_FEATURE_KMD_SIGNAL_CPU_EVENT;
+    Status = pIsFeatureEnabled(&Query);
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
+    ok_succeeded(Status,
+                 "KMD CPU-event feature query failed 0x%08lX\n",
+                 (long)Status);
+    if (NT_SUCCESS(Status))
+    {
+        /*
+         * SupportedOnCurrentConfig is published only after SoftGPU has
+         * completed its KMD-to-port DxgkServicesFeature negotiation. Thus
+         * 0xF validates both directions of the WDDM 3.2 handshake.
+         */
+        ok_eq_ulong(Query.Result.Version, 1);
+        ok_eq_ulong(Query.Result.Value, 0x000f);
+    }
+
+    memset(&Query, 0, sizeof(Query));
+    Query.hAdapter = hAdapter;
+    Query.FeatureId = DXGK_FEATURE_NATIVE_FENCE;
+    Status = pIsFeatureEnabled(&Query);
+    ok_succeeded(Status,
+                 "native-fence feature query failed 0x%08lX\n",
+                 (long)Status);
+    if (NT_SUCCESS(Status))
+    {
+        ok_eq_ulong(Query.Result.Version, 0);
+        ok_eq_ulong(Query.Result.Value, 0x0002);
+    }
+
+    memset(&Query, 0, sizeof(Query));
+    Query.FeatureId = DXGK_FEATURE_GPUVAIOMMU;
+    Status = pIsFeatureEnabled(&Query);
+    ok_succeeded(Status,
+                 "global GPUVAIOMMU feature query failed 0x%08lX\n",
+                 (long)Status);
+    if (NT_SUCCESS(Status))
+    {
+        ok_eq_ulong(Query.Result.Version, 0);
+        ok_eq_ulong(Query.Result.Value, 0x0002);
+    }
+
+    memset(&Query, 0, sizeof(Query));
+    Query.hAdapter = hAdapter;
+    Query.FeatureId = DXGK_FEATURE_GPUVAIOMMU;
+    Status = pIsFeatureEnabled(&Query);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+
+    memset(&Query, 0, sizeof(Query));
+    Query.FeatureId = DXGK_FEATURE_KMD_SIGNAL_CPU_EVENT;
+    Status = pIsFeatureEnabled(&Query);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+
+    memset(&Query, 0, sizeof(Query));
+    Query.hAdapter = hAdapter;
+    Query.FeatureId = (DXGK_FEATURE_ID)0x7fffffff;
+    Status = pIsFeatureEnabled(&Query);
+    ok_succeeded(Status,
+                 "unknown feature query failed 0x%08lX\n",
+                 (long)Status);
+    if (NT_SUCCESS(Status))
+    {
+        ok_eq_ulong(Query.Result.Version, 0);
+        ok_eq_ulong(Query.Result.Value, 0);
+    }
+#else
+    ok_eq_hex(Status, STATUS_NOT_SUPPORTED);
+#endif
+
+    CloseAdapter(hAdapter);
+}
+#endif
+#endif
+
 static void Test_CreateSyncObject2_NormalizedState(void)
 {
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
@@ -915,4 +1195,10 @@ START_TEST(sync2)
     Test_MonitoredFence_CpuValuePage();
     Test_MonitoredFence_AccessFlags();
     Test_MonitoredFence_CpuBatchSemantics();
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
+    Test_KmdCpuEvent_LifecycleAndKnownEscape();
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+    Test_KmdCpuEvent_FeatureNegotiation();
+#endif
+#endif
 }

@@ -16,9 +16,9 @@
  * of them had ever been executed on this OS: the kernel half was tested against
  * the kernel half, and no user-mode driver existed to load.
  *
- * What this pins is that the contract *connects*. It deliberately does not
- * assert that the driver can draw -- softgpuum answers E_NOTIMPL for rendering,
- * truthfully, and a test that demanded otherwise would be demanding a lie.
+ * What this pins is that the contract connects and the lifecycle table can be
+ * exchanged without a runtime implementation. The separate umd2d test supplies
+ * real callbacks and drives the implemented linear 2D execution path.
  */
 
 #include "precomp.h"
