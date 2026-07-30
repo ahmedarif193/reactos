@@ -1651,8 +1651,8 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIGetDWMVerticalBlankEvent(_In_ const struct _D3DKMT_GETVERTICALBLANKEVENT* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    D3DKMT_CALL_CALLBACK(RxgkIntPfnGetDwmVerticalBlankEvent,
+                         unnamedParam1);
 }
 
 NTSTATUS
@@ -1848,8 +1848,8 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDISetSyncRefreshCountWaitTarget(_In_ const struct _D3DKMT_SETSYNCREFRESHCOUNTWAITTARGET* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    D3DKMT_CALL_CALLBACK(RxgkIntPfnSetSyncRefreshCountWaitTarget,
+                         unnamedParam1);
 }
 
 NTSTATUS
