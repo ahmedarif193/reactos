@@ -19,6 +19,11 @@
 #define NDEBUG
 #include <debug.h>
 
+#ifndef FSCTL_ALLOW_EXTENDED_DASD_IO
+#define FSCTL_ALLOW_EXTENDED_DASD_IO \
+    CTL_CODE(FILE_DEVICE_FILE_SYSTEM, 32, METHOD_NEITHER, FILE_ANY_ACCESS)
+#endif
+
 typedef struct _NTFS_FORMAT_CONTEXT
 {
     HANDLE FileHandle;
@@ -274,8 +279,49 @@ NtfsFormat(
                                  0);
     if (!NT_SUCCESS(LockStatus))
     {
-        DPRINT1("WARNING: Failed to lock volume for formatting! Format may fail! (Status: 0x%x)\n",
+        DPRINT1("Failed to lock volume for formatting (Status: 0x%x)\n",
                 LockStatus);
+        NtClose(Context.FileHandle);
+        return FALSE;
+    }
+
+    /*
+     * A mounted filesystem normally bounds raw I/O to the size recorded in
+     * its own boot sector. That size can be smaller than the current
+     * partition after delete/recreate or resize operations. Allow the
+     * formatter to address the complete partition reported above.
+     */
+    LockStatus = NtFsControlFile(Context.FileHandle,
+                                 NULL,
+                                 NULL,
+                                 NULL,
+                                 &IoStatusBlock,
+                                 FSCTL_ALLOW_EXTENDED_DASD_IO,
+                                 NULL,
+                                 0,
+                                 NULL,
+                                 0);
+    /* RawFS and filesystems that already expose the full device need not
+     * implement this control. */
+    if (!NT_SUCCESS(LockStatus) &&
+        LockStatus != STATUS_INVALID_PARAMETER &&
+        LockStatus != STATUS_INVALID_DEVICE_REQUEST &&
+        LockStatus != STATUS_NOT_SUPPORTED)
+    {
+        DPRINT1("Failed to enable extended raw volume I/O (Status: 0x%x)\n",
+                LockStatus);
+        NtFsControlFile(Context.FileHandle,
+                        NULL,
+                        NULL,
+                        NULL,
+                        &IoStatusBlock,
+                        FSCTL_UNLOCK_VOLUME,
+                        NULL,
+                        0,
+                        NULL,
+                        0);
+        NtClose(Context.FileHandle);
+        return FALSE;
     }
 
     Status = NtfsVolumeFormat(&Parameters);
