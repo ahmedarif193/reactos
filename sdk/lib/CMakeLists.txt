@@ -8,6 +8,7 @@ if(CMAKE_CROSSCOMPILING)
 
 add_subdirectory(3rdparty)
 add_subdirectory(ansi_sync_hacks)
+add_subdirectory(bootfont)
 if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND DLL_EXPORT_VERSION LESS 0x601)
     add_subdirectory(llvm-compat)
 endif()

@@ -65,6 +65,8 @@ extern ULONG VidpDisplayHeight;
 extern ULONG VidpPhysicalWidth;
 extern ULONG VidpPhysicalHeight;
 extern ULONG VidpDisplayDpi;
+extern ULONG VidpCharacterWidth;
+extern ULONG VidpCharacterHeight;
 extern URECT VidpScrollRegion;
 extern const UCHAR VidpFontData[256 * BOOTCHAR_HEIGHT];
 extern const RGBQUAD VidpDefaultPalette[BV_MAX_COLORS];

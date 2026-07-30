@@ -1,4 +1,3 @@
-
 function(add_bootvid _target _configfile)
     cmake_parse_arguments(_bviddata "" "NAME_ON_CD" "SOURCES" ${ARGN})
 
@@ -39,6 +38,9 @@ function(add_bootvid _target _configfile)
         ${CMAKE_CURRENT_BINARY_DIR}/${_target}.def)
     add_pch(${_target} precomp.h "")
     target_compile_definitions(${_target} PRIVATE ${COMPILE_DEFINITIONS})
+    if(BOOTVID_LIBRARIES)
+        target_link_libraries(${_target} ${BOOTVID_LIBRARIES})
+    endif()
 
     set_module_type(${_target} kerneldll ENTRYPOINT 0)
     add_importlibs(${_target} ntoskrnl hal)
