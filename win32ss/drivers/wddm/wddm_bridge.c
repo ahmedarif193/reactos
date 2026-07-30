@@ -316,7 +316,17 @@ WddmBridgeInit(VOID)
     RtlZeroMemory(&ExchangeOut, sizeof(ExchangeOut));
     Status = WddmBridgeSendIoctlToDevice(DeviceObject, IOCTL_DXGKRNL_EXCHANGE_INTERFACE, &ExchangeIn, sizeof(ExchangeIn), &ExchangeOut, sizeof(ExchangeOut), &Information);
 
-    /* An older dxgkrnl rejects version 6.  Retry the append-only v5 prefix. */
+    /* An older dxgkrnl rejects version 7. Retry the append-only v6 prefix. */
+    if (Status == STATUS_NOT_SUPPORTED)
+    {
+        ExchangeIn.Version = DXGKRNL_INTERFACE_VERSION_6;
+        ExchangeIn.Size = DXGKRNL_INTERFACE_VERSION_6_SIZE;
+        RtlZeroMemory(&ExchangeOut, sizeof(ExchangeOut));
+        Information = 0;
+        Status = WddmBridgeSendIoctlToDevice(DeviceObject, IOCTL_DXGKRNL_EXCHANGE_INTERFACE, &ExchangeIn, sizeof(ExchangeIn), &ExchangeOut, sizeof(ExchangeOut), &Information);
+    }
+
+    /* A version-5 dxgkrnl rejects version 6. Retry its exact prefix. */
     if (Status == STATUS_NOT_SUPPORTED)
     {
         ExchangeIn.Version = DXGKRNL_INTERFACE_VERSION_5;
@@ -392,6 +402,16 @@ WddmBridgeInit(VOID)
         (ExchangeOut.RxgkIntPfnWaitForSynchronizationObjectFromGpu == NULL ||
          ExchangeOut.RxgkIntPfnSignalSynchronizationObjectFromGpu == NULL ||
          ExchangeOut.RxgkIntPfnSignalSynchronizationObjectFromGpu2 == NULL))
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+    }
+#endif
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+    if (NT_SUCCESS(Status) &&
+        ExchangeIn.Version >= DXGKRNL_INTERFACE_VERSION_7 &&
+        (ExchangeOut.RxgkIntPfnGetDwmVerticalBlankEvent == NULL ||
+         ExchangeOut.RxgkIntPfnSetSyncRefreshCountWaitTarget == NULL))
     {
         Status = STATUS_INVALID_DEVICE_STATE;
     }
