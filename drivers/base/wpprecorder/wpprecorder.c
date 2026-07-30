@@ -45,6 +45,20 @@ WppAutoLogTrace(
     UNREFERENCED_PARAMETER(MessageNumber);
 }
 
+VOID
+NTAPI
+imp_WppRecorderReplay(
+    _In_opt_ PVOID WppControlBlock,
+    _In_ TRACEHANDLE WppTraceHandle,
+    _In_ ULONG EnableFlags,
+    _In_ UCHAR EnableLevel)
+{
+    UNREFERENCED_PARAMETER(WppControlBlock);
+    UNREFERENCED_PARAMETER(WppTraceHandle);
+    UNREFERENCED_PARAMETER(EnableFlags);
+    UNREFERENCED_PARAMETER(EnableLevel);
+}
+
 NTSTATUS
 NTAPI
 DriverEntry(
