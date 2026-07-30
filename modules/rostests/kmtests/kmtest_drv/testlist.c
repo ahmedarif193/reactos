@@ -32,6 +32,7 @@ KMT_TESTFUNC Test_DxgkAdapterCaps;
 KMT_TESTFUNC Test_DxgkNodeAffinity;
 KMT_TESTFUNC Test_DxgkTdrPolicy;
 KMT_TESTFUNC Test_DxgkFenceConcurrency;
+KMT_TESTFUNC Test_DxgkGpuFaultPolicy;
 KMT_TESTFUNC Test_DxgkKeyedMutex;
 KMT_TESTFUNC Test_DxgkCoreConcurrency;
 KMT_TESTFUNC Test_DxgkContextSync;
@@ -43,6 +44,21 @@ KMT_TESTFUNC Test_Dxgmms2ContextStream;
 KMT_TESTFUNC Test_Dxgmms2Scheduler;
 KMT_TESTFUNC Test_Dxgmms2Timeline;
 KMT_TESTFUNC Test_Dxgmms2VidMm;
+#ifdef KMT_DXGK_WDDM_ABI
+KMT_TESTFUNC Test_DxgkWddmAbi;
+#endif
+#ifdef KMT_SOFTGPU_GPUVA_ISOLATION
+KMT_TESTFUNC Test_SoftGpuGpuVaIsolation;
+#endif
+#ifdef KMT_SOFTGPU_2D_POLICY
+KMT_TESTFUNC Test_SoftGpu2DPolicy;
+#endif
+#ifdef KMT_SOFTGPU_VIDPN_POLICY
+KMT_TESTFUNC Test_SoftGpuVidPnPolicy;
+#endif
+#ifdef KMT_SOFTGPU_VSYNC_POLICY
+KMT_TESTFUNC Test_SoftGpuVsyncPolicy;
+#endif
 KMT_TESTFUNC Test_Example;
 KMT_TESTFUNC Test_ExCallback;
 KMT_TESTFUNC Test_ExDoubleList;
@@ -244,6 +260,7 @@ const KMT_TEST TestList[] =
     { "DxgkNodeAffinity",                   Test_DxgkNodeAffinity },
     { "DxgkTdrPolicy",                      Test_DxgkTdrPolicy },
     { "DxgkFenceConcurrency",               Test_DxgkFenceConcurrency },
+    { "DxgkGpuFaultPolicy",                 Test_DxgkGpuFaultPolicy },
     { "DxgkKeyedMutex",                     Test_DxgkKeyedMutex },
     { "DxgkCoreConcurrency",                Test_DxgkCoreConcurrency },
     { "DxgkContextSync",                   Test_DxgkContextSync },
@@ -255,6 +272,21 @@ const KMT_TEST TestList[] =
     { "Dxgmms2Scheduler",                  Test_Dxgmms2Scheduler },
     { "Dxgmms2Timeline",                   Test_Dxgmms2Timeline },
     { "Dxgmms2VidMm",                      Test_Dxgmms2VidMm },
+#ifdef KMT_DXGK_WDDM_ABI
+    { "DxgkWddmAbi",                       Test_DxgkWddmAbi },
+#endif
+#ifdef KMT_SOFTGPU_GPUVA_ISOLATION
+    { "SoftGpuGpuVaIsolation",             Test_SoftGpuGpuVaIsolation },
+#endif
+#ifdef KMT_SOFTGPU_2D_POLICY
+    { "SoftGpu2DPolicy",                    Test_SoftGpu2DPolicy },
+#endif
+#ifdef KMT_SOFTGPU_VIDPN_POLICY
+    { "SoftGpuVidPnPolicy",                Test_SoftGpuVidPnPolicy },
+#endif
+#ifdef KMT_SOFTGPU_VSYNC_POLICY
+    { "SoftGpuVsyncPolicy",                Test_SoftGpuVsyncPolicy },
+#endif
     { "ExCallback",                         Test_ExCallback },
     { "ExDoubleList",                       Test_ExDoubleList },
     { "ExFastMutex",                        Test_ExFastMutex },
@@ -283,9 +315,7 @@ const KMT_TEST TestList[] =
     { "FsRtlRemoveDotsFromPath",            Test_FsRtlRemoveDotsFromPath },
     { "FsRtlTunnel",                        Test_FsRtlTunnel },
 #if defined(_M_IX86) || defined(_M_AMD64)
-#if defined(_M_IX86) || defined(_M_AMD64)
     { "HalPortIo",                          Test_HalPortIo },
-#endif
 #endif
     { "HalSystemInfo",                      Test_HalSystemInfo },
     { "IoCreateFile",                       Test_IoCreateFile },

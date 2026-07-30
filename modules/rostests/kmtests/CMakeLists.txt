@@ -72,6 +72,7 @@ list(APPEND KMTEST_DRV_SOURCE
     directx/DxgkTdrPolicy.c
     directx/DxgkKeyedMutex.c
     directx/DxgkFenceConcurrency.c
+    directx/DxgkGpuFaultPolicy.c
     directx/DxgkCoreConcurrency.c
     directx/DxgkContextSync.c
     directx/DxgkPresentQueue.c
@@ -211,6 +212,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/dma_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/residency_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/paging_core.c
+    ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/feature_query_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/display_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/object_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/keyedmutex_core.c
@@ -226,6 +228,23 @@ list(APPEND KMTEST_DRV_SOURCE
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgmms2/timeline_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgmms2/vidmm_core.c
     kmtest_drv/kmtest_drv.rc)
+
+if(REACTOS_USE_WDDM)
+    list(APPEND KMTEST_DRV_SOURCE
+        directx/DxgkWddmAbi.c
+        directx/SoftGpu2DPolicy.c
+        directx/SoftGpuVidPnPolicy.c
+        directx/SoftGpuVsyncPolicy.c)
+    set(KMTEST_DXGK_WDDM_ABI TRUE)
+    set(KMTEST_SOFTGPU_2D_POLICY TRUE)
+    set(KMTEST_SOFTGPU_VIDPN_POLICY TRUE)
+    set(KMTEST_SOFTGPU_VSYNC_POLICY TRUE)
+endif()
+
+if(REACTOS_USE_WDDM AND (REACTOS_WDDM_TARGET_LEVEL GREATER_EQUAL 2000))
+    list(APPEND KMTEST_DRV_SOURCE directx/SoftGpuGpuVaIsolation.c)
+    set(KMTEST_SOFTGPU_GPUVA_ISOLATION TRUE)
+endif()
 
 if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
     add_asm_files(KMTEST_DRV_ASM
@@ -266,7 +285,30 @@ if(ARCH STREQUAL "arm64")
 endif()
 
 add_library(kmtest_drv MODULE ${KMTEST_DRV_SOURCE})
-target_include_directories(kmtest_drv PRIVATE ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl ${REACTOS_SOURCE_DIR}/drivers/directx/dxgmms2)
+target_include_directories(kmtest_drv PRIVATE
+    ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl
+    ${REACTOS_SOURCE_DIR}/drivers/directx/dxgmms2
+    ${REACTOS_SOURCE_DIR}/drivers/directx/softgpu)
+if(KMTEST_DXGK_WDDM_ABI)
+    target_compile_definitions(kmtest_drv PRIVATE
+        KMT_DXGK_WDDM_ABI)
+endif()
+if(KMTEST_SOFTGPU_GPUVA_ISOLATION)
+    target_compile_definitions(kmtest_drv PRIVATE
+        KMT_SOFTGPU_GPUVA_ISOLATION)
+endif()
+if(KMTEST_SOFTGPU_2D_POLICY)
+    target_compile_definitions(kmtest_drv PRIVATE
+        KMT_SOFTGPU_2D_POLICY)
+endif()
+if(KMTEST_SOFTGPU_VIDPN_POLICY)
+    target_compile_definitions(kmtest_drv PRIVATE
+        KMT_SOFTGPU_VIDPN_POLICY)
+endif()
+if(KMTEST_SOFTGPU_VSYNC_POLICY)
+    target_compile_definitions(kmtest_drv PRIVATE
+        KMT_SOFTGPU_VSYNC_POLICY)
+endif()
 set_module_type(kmtest_drv kernelmodedriver)
 target_link_libraries(kmtest_drv kmtest_printf chkstk memcmp ntoskrnl_vista ${PSEH_LIB})
 add_importlibs(kmtest_drv ntoskrnl hal)

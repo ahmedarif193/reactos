@@ -13,6 +13,8 @@
 #include "vidmm_core.h"
 #include "residency_core.h"
 #include "scheduler_core.h"
+#include "process_device_core.h"
+#include "process_lifetime_core.h"
 
 #define TAG_CORE_CONCURRENCY 'cCxD'
 #define CORE_STRESS_THREADS  3
@@ -28,6 +30,7 @@ typedef struct _CORE_STRESS
     DXGMMS2_VIDMM_CORE VidMm;
     DXGMMS2_VIDMM_RANGE RangePool[CORE_STRESS_POOL];
     DXGK_RESIDENCY_REFS Refs;
+    DXGK_RESIDENCY_BUDGET Budget;
     DXGMMS2_SCHED_CORE Sched;
     DXGMMS2_SCHED_PACKET Packets[DXGMMS2_SCHED_MAX_PACKETS];
     volatile LONG StartGate;
@@ -37,6 +40,10 @@ typedef struct _CORE_STRESS
     volatile LONG ReleaseOk;
     volatile LONG AcquireOk;
     volatile LONG ReleaseRefOk;
+    volatile LONG BudgetChargeOk;
+    volatile LONG BudgetChargeFail;
+    volatile LONG BudgetReleaseOk;
+    ULONGLONG MaximumBudgetUsage;
     volatile LONG Anomalies;
     KEVENT DoneEvent[CORE_STRESS_THREADS];
 } CORE_STRESS, *PCORE_STRESS;
@@ -125,6 +132,48 @@ static VOID NTAPI CoreStressThread(_In_ PVOID Parameter)
         {
             InterlockedIncrement(&Stress->Anomalies);
         }
+
+        {
+            ULONGLONG BytesToTrim = 0;
+
+            KeAcquireSpinLock(&Stress->Lock, &OldIrql);
+            Status = DxgkResidencyCoreBudgetTryCharge(
+                         &Stress->Budget,
+                         CORE_PAGE,
+                         TRUE,
+                         &BytesToTrim);
+            if (NT_SUCCESS(Status) &&
+                Stress->Budget.CurrentUsage > Stress->MaximumBudgetUsage)
+            {
+                Stress->MaximumBudgetUsage =
+                    Stress->Budget.CurrentUsage;
+            }
+            KeReleaseSpinLock(&Stress->Lock, OldIrql);
+            if (NT_SUCCESS(Status))
+            {
+                InterlockedIncrement(&Stress->BudgetChargeOk);
+                YieldProcessor();
+                KeAcquireSpinLock(&Stress->Lock, &OldIrql);
+                Status = DxgkResidencyCoreBudgetRelease(
+                             &Stress->Budget,
+                             CORE_PAGE);
+                KeReleaseSpinLock(&Stress->Lock, OldIrql);
+                if (NT_SUCCESS(Status))
+                    InterlockedIncrement(&Stress->BudgetReleaseOk);
+                else
+                    InterlockedIncrement(&Stress->Anomalies);
+            }
+            else if (Status == STATUS_GRAPHICS_NO_VIDEO_MEMORY)
+            {
+                InterlockedIncrement(&Stress->BudgetChargeFail);
+                if (BytesToTrim != CORE_PAGE)
+                    InterlockedIncrement(&Stress->Anomalies);
+            }
+            else
+            {
+                InterlockedIncrement(&Stress->Anomalies);
+            }
+        }
     }
 
     KeSetEvent(&Stress->DoneEvent[Slot], IO_NO_INCREMENT, FALSE);
@@ -159,6 +208,12 @@ static VOID TestLedgersBalance(VOID)
     Status = Dxgmms2VidMmCoreSetSegment(&Stress->VidMm, 0, &Desc);
     ok_eq_hex(Status, STATUS_SUCCESS);
     DxgkResidencyCoreRefsInitialize(&Stress->Refs, 0x1ULL, FALSE);
+    Status = DxgkResidencyCoreBudgetInitialize(
+                 &Stress->Budget,
+                 CORE_PAGE,
+                 2 * CORE_PAGE,
+                 0);
+    ok_eq_hex(Status, STATUS_SUCCESS);
 
     InitializeObjectAttributes(&Attributes, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
     for (Index = 0; Index < CORE_STRESS_THREADS; ++Index)
@@ -199,6 +254,16 @@ static VOID TestLedgersBalance(VOID)
                InterlockedCompareExchange(&Stress->ReleaseRefOk, 0, 0));
     ok_eq_ulong(Stress->Refs.TotalCount, 0UL);
     ok_bool_true(DxgkResidencyCoreIsEvictable(&Stress->Refs), "fully released");
+
+    /* Concurrent budget admissions never cross the hard cap, and every
+     * successful placement charge is released exactly once. */
+    ok_eq_long(InterlockedCompareExchange(&Stress->BudgetChargeOk, 0, 0),
+               InterlockedCompareExchange(&Stress->BudgetReleaseOk, 0, 0));
+    ok_eq_ulonglong(Stress->Budget.CurrentUsage, 0ULL);
+    ok(Stress->MaximumBudgetUsage <= Stress->Budget.Maximum,
+       "maximum observed budget usage %I64u exceeds %I64u\n",
+       Stress->MaximumBudgetUsage,
+       Stress->Budget.Maximum);
 
     Dxgmms2VidMmCoreStop(&Stress->VidMm);
     for (Index = 0; Index < Started; ++Index)
@@ -358,10 +423,415 @@ static VOID TestClaimIsExclusive(VOID)
     ExFreePoolWithTag(Stress, TAG_CORE_CONCURRENCY);
 }
 
+typedef struct _PROCESS_DEVICE_TEST
+{
+    DXGK_PROCESS_DEVICE_LINK Link;
+    BOOLEAN Referenceable;
+    ULONG References;
+} PROCESS_DEVICE_TEST, *PPROCESS_DEVICE_TEST;
+
+static BOOLEAN
+TryReferenceProcessDevice(
+    _In_ PVOID Object,
+    _In_opt_ PVOID Context)
+{
+    PPROCESS_DEVICE_TEST Device = (PPROCESS_DEVICE_TEST)Object;
+
+    UNREFERENCED_PARAMETER(Context);
+    if (!Device->Referenceable)
+        return FALSE;
+    Device->References++;
+    return TRUE;
+}
+
+static VOID
+TestProcessPagingDeviceLifetime(VOID)
+{
+    LIST_ENTRY ProcessDevices;
+    PROCESS_DEVICE_TEST First;
+    PROCESS_DEVICE_TEST Second;
+    PVOID SelectedDevice;
+    HANDLE SelectedHandle;
+    BOOLEAN Selected;
+
+    InitializeListHead(&ProcessDevices);
+    RtlZeroMemory(&First, sizeof(First));
+    RtlZeroMemory(&Second, sizeof(Second));
+    DxgkProcessDeviceLinkInitialize(&First.Link, &First);
+    DxgkProcessDeviceLinkInitialize(&Second.Link, &Second);
+
+    ok_bool_true(DxgkProcessDeviceLinkAttach(&ProcessDevices,
+                                             &First.Link,
+                                             (HANDLE)(ULONG_PTR)0x1111),
+                 "attach first");
+    ok_bool_true(DxgkProcessDeviceLinkAttach(&ProcessDevices,
+                                             &Second.Link,
+                                             (HANDLE)(ULONG_PTR)0x2222),
+                 "attach second");
+
+    /*
+     * A teardown-closing first device must be skipped, not returned as a raw
+     * stale handle.  Selection falls through to the next device only after its
+     * callback has acquired a real lifetime reference.
+     */
+    First.Referenceable = FALSE;
+    Second.Referenceable = TRUE;
+    Selected = DxgkProcessDeviceTryReference(&ProcessDevices,
+                                             TryReferenceProcessDevice,
+                                             NULL,
+                                             &SelectedDevice,
+                                             &SelectedHandle);
+    ok_bool_true(Selected, "select live fallback");
+    ok_eq_pointer(SelectedDevice, &Second);
+    ok_eq_pointer(SelectedHandle, (HANDLE)(ULONG_PTR)0x2222);
+    ok_eq_ulong(First.References, 0);
+    ok_eq_ulong(Second.References, 1);
+
+    /* Detaching the old first device removes both membership and its handle. */
+    ok_bool_true(DxgkProcessDeviceLinkDetach(&First.Link), "detach first");
+    ok_bool_false(DxgkProcessDeviceLinkDetach(&First.Link), "detach first twice");
+
+    Second.Referenceable = FALSE;
+    SelectedDevice = (PVOID)(ULONG_PTR)0xBAD;
+    SelectedHandle = (HANDLE)(ULONG_PTR)0xBAD;
+    Selected = DxgkProcessDeviceTryReference(&ProcessDevices,
+                                             TryReferenceProcessDevice,
+                                             NULL,
+                                             &SelectedDevice,
+                                             &SelectedHandle);
+    ok_bool_false(Selected, "no referenceable device");
+    ok_eq_pointer(SelectedDevice, NULL);
+    ok_eq_pointer(SelectedHandle, NULL);
+
+    ok_bool_true(DxgkProcessDeviceLinkDetach(&Second.Link), "detach second");
+    ok_bool_true(IsListEmpty(&ProcessDevices), "process list drained");
+}
+
+#define PROCESS_LIFETIME_TEST_THREADS 3
+
+typedef enum _PROCESS_LIFETIME_TEST_MODE
+{
+    ProcessLifetimeTestCreating,
+    ProcessLifetimeTestDestroying
+} PROCESS_LIFETIME_TEST_MODE;
+
+typedef struct _PROCESS_LIFETIME_TEST
+{
+    KSPIN_LOCK Lock;
+    DXGK_PROCESS_LIFETIME_CORE Core;
+    PROCESS_LIFETIME_TEST_MODE Mode;
+    LONG ExpectedThreads;
+    volatile LONG StartGate;
+    volatile LONG NextSlot;
+    volatile LONG PinnedThreads;
+    volatile LONG ObservedThreads;
+    volatile LONG Anomalies;
+    volatile LONG BeginDestroyCount;
+    volatile LONG FreeCount;
+    KEVENT AllPinnedEvent;
+    KEVENT AllObservedEvent;
+    KEVENT TransitionEvent;
+    KEVENT ReleaseEvent;
+    KEVENT DoneEvent[PROCESS_LIFETIME_TEST_THREADS];
+} PROCESS_LIFETIME_TEST, *PPROCESS_LIFETIME_TEST;
+
+static VOID
+NTAPI
+ProcessLifetimeTestThread(
+    _In_ PVOID Parameter)
+{
+    PPROCESS_LIFETIME_TEST Test = (PPROCESS_LIFETIME_TEST)Parameter;
+    DXGK_PROCESS_LIFETIME_ACQUIRE AcquireResult;
+    DXGK_PROCESS_LIFETIME_RELEASE ReleaseResult;
+    DXGK_PROCESS_LIFETIME_ACQUIRE ExpectedAcquire;
+    KIRQL OldIrql;
+    LONG Count;
+    LONG Slot;
+
+    Slot = InterlockedIncrement(&Test->NextSlot) - 1;
+    while (InterlockedCompareExchange(&Test->StartGate, 0, 0) == 0)
+        YieldProcessor();
+
+    KeAcquireSpinLock(&Test->Lock, &OldIrql);
+    AcquireResult = DxgkProcessLifetimeAcquire(&Test->Core,
+                                               PsGetCurrentThread());
+    ExpectedAcquire =
+        Test->Mode == ProcessLifetimeTestCreating ?
+            DxgkProcessLifetimeWaitForCreate :
+            DxgkProcessLifetimeWaitForDestroy;
+    if (AcquireResult != ExpectedAcquire)
+        InterlockedIncrement(&Test->Anomalies);
+    KeReleaseSpinLock(&Test->Lock, OldIrql);
+
+    Count = InterlockedIncrement(&Test->PinnedThreads);
+    if (Count == Test->ExpectedThreads)
+        KeSetEvent(&Test->AllPinnedEvent, IO_NO_INCREMENT, FALSE);
+
+    (VOID)KeWaitForSingleObject(&Test->TransitionEvent,
+                                Executive,
+                                KernelMode,
+                                FALSE,
+                                NULL);
+
+    KeAcquireSpinLock(&Test->Lock, &OldIrql);
+    if (Test->Mode == ProcessLifetimeTestCreating)
+    {
+        if (Test->Core.State != DxgkProcessLifetimeReady)
+            InterlockedIncrement(&Test->Anomalies);
+        ReleaseResult = DxgkProcessLifetimeReleaseNone;
+    }
+    else
+    {
+        if (Test->Core.State != DxgkProcessLifetimeDestroying)
+            InterlockedIncrement(&Test->Anomalies);
+        ReleaseResult = DxgkProcessLifetimeRelease(&Test->Core,
+                                                   PsGetCurrentThread());
+    }
+    KeReleaseSpinLock(&Test->Lock, OldIrql);
+
+    if (ReleaseResult == DxgkProcessLifetimeBeginDestroy)
+        InterlockedIncrement(&Test->BeginDestroyCount);
+    else if (ReleaseResult == DxgkProcessLifetimeFree)
+        InterlockedIncrement(&Test->FreeCount);
+
+    Count = InterlockedIncrement(&Test->ObservedThreads);
+    if (Count == Test->ExpectedThreads)
+        KeSetEvent(&Test->AllObservedEvent, IO_NO_INCREMENT, FALSE);
+
+    if (Test->Mode == ProcessLifetimeTestCreating)
+    {
+        (VOID)KeWaitForSingleObject(&Test->ReleaseEvent,
+                                    Executive,
+                                    KernelMode,
+                                    FALSE,
+                                    NULL);
+        KeAcquireSpinLock(&Test->Lock, &OldIrql);
+        ReleaseResult = DxgkProcessLifetimeRelease(&Test->Core,
+                                                   PsGetCurrentThread());
+        if (ReleaseResult == DxgkProcessLifetimeBeginDestroy &&
+            !DxgkProcessLifetimeCompleteDestroy(&Test->Core,
+                                                PsGetCurrentThread()))
+        {
+            InterlockedIncrement(&Test->Anomalies);
+        }
+        KeReleaseSpinLock(&Test->Lock, OldIrql);
+        if (ReleaseResult == DxgkProcessLifetimeBeginDestroy)
+            InterlockedIncrement(&Test->BeginDestroyCount);
+        else if (ReleaseResult == DxgkProcessLifetimeFree)
+            InterlockedIncrement(&Test->FreeCount);
+    }
+
+    if (Slot >= 0 && Slot < PROCESS_LIFETIME_TEST_THREADS)
+        KeSetEvent(&Test->DoneEvent[Slot], IO_NO_INCREMENT, FALSE);
+    else
+        InterlockedIncrement(&Test->Anomalies);
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+static VOID
+RunProcessLifetimeContention(
+    _In_ PROCESS_LIFETIME_TEST_MODE Mode)
+{
+    PPROCESS_LIFETIME_TEST Test;
+    OBJECT_ATTRIBUTES Attributes;
+    HANDLE Threads[PROCESS_LIFETIME_TEST_THREADS] = { NULL };
+    DXGK_PROCESS_LIFETIME_RELEASE ReleaseResult;
+    NTSTATUS Status;
+    KIRQL OldIrql;
+    ULONG Index;
+    ULONG Started = 0;
+
+    Test = ExAllocatePoolWithTag(NonPagedPool,
+                                 sizeof(*Test),
+                                 TAG_CORE_CONCURRENCY);
+    ok(Test != NULL, "process-lifetime test allocation failed\n");
+    if (Test == NULL)
+        return;
+
+    RtlZeroMemory(Test, sizeof(*Test));
+    KeInitializeSpinLock(&Test->Lock);
+    KeInitializeEvent(&Test->AllPinnedEvent, NotificationEvent, FALSE);
+    KeInitializeEvent(&Test->AllObservedEvent, NotificationEvent, FALSE);
+    KeInitializeEvent(&Test->TransitionEvent, NotificationEvent, FALSE);
+    KeInitializeEvent(&Test->ReleaseEvent, NotificationEvent, FALSE);
+    for (Index = 0; Index < PROCESS_LIFETIME_TEST_THREADS; ++Index)
+        KeInitializeEvent(&Test->DoneEvent[Index], NotificationEvent, FALSE);
+
+    Test->Mode = Mode;
+    DxgkProcessLifetimeInitialize(&Test->Core, PsGetCurrentThread());
+    if (Mode == ProcessLifetimeTestDestroying)
+    {
+        DxgkProcessLifetimeCompleteCreate(&Test->Core,
+                                          PsGetCurrentThread(),
+                                          STATUS_SUCCESS);
+        ReleaseResult = DxgkProcessLifetimeRelease(&Test->Core,
+                                                   PsGetCurrentThread());
+        ok_eq_long(ReleaseResult, DxgkProcessLifetimeBeginDestroy);
+    }
+
+    InitializeObjectAttributes(&Attributes,
+                               NULL,
+                               OBJ_KERNEL_HANDLE,
+                               NULL,
+                               NULL);
+    for (Index = 0; Index < PROCESS_LIFETIME_TEST_THREADS; ++Index)
+    {
+        Status = PsCreateSystemThread(&Threads[Index],
+                                      THREAD_ALL_ACCESS,
+                                      &Attributes,
+                                      NULL,
+                                      NULL,
+                                      ProcessLifetimeTestThread,
+                                      Test);
+        if (!NT_SUCCESS(Status))
+            break;
+        Started++;
+    }
+    ok(Started != 0, "no process-lifetime threads started\n");
+    if (Started == 0)
+        goto Cleanup;
+
+    Test->ExpectedThreads = (LONG)Started;
+    InterlockedExchange(&Test->StartGate, 1);
+    Status = WaitForCoreEvent(&Test->AllPinnedEvent);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+
+    KeAcquireSpinLock(&Test->Lock, &OldIrql);
+    ok_eq_long(Test->Core.ReferenceCount,
+               Mode == ProcessLifetimeTestCreating ?
+                   (LONG)Started + 1 :
+                   (LONG)Started);
+    if (Mode == ProcessLifetimeTestCreating)
+    {
+        ok_eq_long(Test->Core.State, DxgkProcessLifetimeCreating);
+        DxgkProcessLifetimeCompleteCreate(&Test->Core,
+                                          PsGetCurrentThread(),
+                                          STATUS_SUCCESS);
+    }
+    else
+    {
+        ok_eq_long(Test->Core.State, DxgkProcessLifetimeDestroying);
+        ok_bool_false(DxgkProcessLifetimeCompleteDestroy(
+                          &Test->Core,
+                          PsGetCurrentThread()),
+                      "destroy waiters pin storage");
+    }
+    KeReleaseSpinLock(&Test->Lock, OldIrql);
+    KeSetEvent(&Test->TransitionEvent, IO_NO_INCREMENT, FALSE);
+
+    Status = WaitForCoreEvent(&Test->AllObservedEvent);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (Mode == ProcessLifetimeTestCreating)
+    {
+        /*
+         * The original adapter handle may close while the concurrently opened
+         * handles remain. It cannot trigger process destruction.
+         */
+        KeAcquireSpinLock(&Test->Lock, &OldIrql);
+        ReleaseResult = DxgkProcessLifetimeRelease(&Test->Core,
+                                                   PsGetCurrentThread());
+        KeReleaseSpinLock(&Test->Lock, OldIrql);
+        ok_eq_long(ReleaseResult, DxgkProcessLifetimeReleaseNone);
+        KeSetEvent(&Test->ReleaseEvent, IO_NO_INCREMENT, FALSE);
+    }
+
+    for (Index = 0; Index < Started; ++Index)
+    {
+        Status = WaitForCoreEvent(&Test->DoneEvent[Index]);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+    }
+
+    ok_eq_long(InterlockedCompareExchange(&Test->Anomalies, 0, 0), 0L);
+    if (Mode == ProcessLifetimeTestCreating)
+    {
+        ok_eq_long(InterlockedCompareExchange(
+                       &Test->BeginDestroyCount, 0, 0), 1L);
+        ok_eq_long(InterlockedCompareExchange(&Test->FreeCount, 0, 0), 0L);
+    }
+    else
+    {
+        ok_eq_long(InterlockedCompareExchange(
+                       &Test->BeginDestroyCount, 0, 0), 0L);
+        ok_eq_long(InterlockedCompareExchange(&Test->FreeCount, 0, 0), 1L);
+    }
+    ok_eq_long(Test->Core.ReferenceCount, 0L);
+    ok_bool_true(DxgkProcessLifetimeStorageUnpinned(&Test->Core),
+                 "all process-lifetime pins drained");
+
+Cleanup:
+    for (Index = 0; Index < Started; ++Index)
+    {
+        if (Threads[Index] != NULL)
+            ZwClose(Threads[Index]);
+    }
+    ExFreePoolWithTag(Test, TAG_CORE_CONCURRENCY);
+}
+
+static VOID
+TestProcessLifetimeOwnership(VOID)
+{
+    DXGK_PROCESS_LIFETIME_CORE Core;
+    DXGK_PROCESS_LIFETIME_RELEASE ReleaseResult;
+    PVOID CallbackOwner = (PVOID)(ULONG_PTR)0x1111;
+    PVOID OtherCaller = (PVOID)(ULONG_PTR)0x2222;
+
+    /* Opening an adapter alone establishes and owns the process record. */
+    DxgkProcessLifetimeInitialize(&Core, CallbackOwner);
+    ok_eq_long(Core.ReferenceCount, 1L);
+    ok_eq_long(Core.State, DxgkProcessLifetimeCreating);
+    ok_eq_long(DxgkProcessLifetimeAcquire(&Core, CallbackOwner),
+               DxgkProcessLifetimeRejectReentrant);
+    ok_eq_long(Core.ReferenceCount, 1L);
+    DxgkProcessLifetimeCompleteCreate(&Core,
+                                      CallbackOwner,
+                                      STATUS_SUCCESS);
+    ReleaseResult = DxgkProcessLifetimeRelease(&Core, CallbackOwner);
+    ok_eq_long(ReleaseResult, DxgkProcessLifetimeBeginDestroy);
+    ok_eq_long(DxgkProcessLifetimeAcquire(&Core, CallbackOwner),
+               DxgkProcessLifetimeRejectReentrant);
+    ok_eq_long(Core.ReferenceCount, 0L);
+    ok_bool_true(DxgkProcessLifetimeCompleteDestroy(&Core, CallbackOwner),
+                 "open-without-device destroys on adapter close");
+
+    /*
+     * A device is an additional owner. Destroying the last device must not
+     * destroy the process while its adapter handle remains open.
+     */
+    DxgkProcessLifetimeInitialize(&Core, CallbackOwner);
+    DxgkProcessLifetimeCompleteCreate(&Core,
+                                      CallbackOwner,
+                                      STATUS_SUCCESS);
+    ok_eq_long(DxgkProcessLifetimeAcquire(&Core, OtherCaller),
+               DxgkProcessLifetimeAcquireReady);
+    ReleaseResult = DxgkProcessLifetimeRelease(&Core, OtherCaller);
+    ok_eq_long(ReleaseResult, DxgkProcessLifetimeReleaseNone);
+    ok_eq_long(Core.State, DxgkProcessLifetimeReady);
+    ReleaseResult = DxgkProcessLifetimeRelease(&Core, CallbackOwner);
+    ok_eq_long(ReleaseResult, DxgkProcessLifetimeBeginDestroy);
+    ok_bool_true(DxgkProcessLifetimeCompleteDestroy(&Core, CallbackOwner),
+                 "device and adapter owners both released");
+
+    /* Failed creation wakes pinned openers and frees only after the last pin. */
+    DxgkProcessLifetimeInitialize(&Core, CallbackOwner);
+    ok_eq_long(DxgkProcessLifetimeAcquire(&Core, OtherCaller),
+               DxgkProcessLifetimeWaitForCreate);
+    DxgkProcessLifetimeCompleteCreate(&Core,
+                                      CallbackOwner,
+                                      STATUS_DEVICE_NOT_READY);
+    ReleaseResult = DxgkProcessLifetimeRelease(&Core, CallbackOwner);
+    ok_eq_long(ReleaseResult, DxgkProcessLifetimeReleaseNone);
+    ReleaseResult = DxgkProcessLifetimeRelease(&Core, OtherCaller);
+    ok_eq_long(ReleaseResult, DxgkProcessLifetimeFree);
+}
+
 START_TEST(DxgkCoreConcurrency)
 {
     TestLedgersBalance();
     TestClaimIsExclusive();
+    TestProcessPagingDeviceLifetime();
+    TestProcessLifetimeOwnership();
+    RunProcessLifetimeContention(ProcessLifetimeTestCreating);
+    RunProcessLifetimeContention(ProcessLifetimeTestDestroying);
 }
 
 /* EOF */
