@@ -2660,6 +2660,33 @@ WDFEXPORT(WdfPdoInitAllowForwardingRequestToParent)(
     return ;
 }
 
+__drv_maxIRQL(PASSIVE_LEVEL)
+VOID
+NTAPI
+WDFEXPORT(WdfPdoInitRemovePowerDependencyOnParent)(
+    _In_ PWDF_DRIVER_GLOBALS DriverGlobals,
+    _In_ PWDFDEVICE_INIT DeviceInit
+    )
+{
+    PFX_DRIVER_GLOBALS pFxDriverGlobals;
+    NTSTATUS status;
+
+    FxPointerNotNull(GetFxDriverGlobals(DriverGlobals), DeviceInit);
+    pFxDriverGlobals = DeviceInit->DriverGlobals;
+
+    status = FxVerifierCheckIrqlLevel(pFxDriverGlobals, PASSIVE_LEVEL);
+    if (!NT_SUCCESS(status)) {
+        return;
+    }
+
+    if (DeviceInit->IsNotPdoInit()) {
+        FxVerifierDbgBreakPoint(pFxDriverGlobals);
+        return;
+    }
+
+    DeviceInit->Pdo.NoPowerDependencyOnParent = TRUE;
+}
+
 
 
 //

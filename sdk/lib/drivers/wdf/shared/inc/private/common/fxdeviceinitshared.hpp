@@ -60,6 +60,8 @@ struct PdoInit {
     BOOLEAN Static;
 
     BOOLEAN ForwardRequestToParent;
+
+    BOOLEAN NoPowerDependencyOnParent;
 };
 
 #endif //__FXDEVICEINITSHARED_HPP__

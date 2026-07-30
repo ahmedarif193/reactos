@@ -77,6 +77,7 @@ WDFDEVICE_INIT::WDFDEVICE_INIT(
     Pdo.DefaultLocale = 0x0;
     Pdo.DescriptionEntry = NULL;
     Pdo.ForwardRequestToParent = FALSE;
+    Pdo.NoPowerDependencyOnParent = FALSE;
 
     RtlZeroMemory(&Security, sizeof(Security));
 
