@@ -133,6 +133,9 @@ C_ASSERT(FIELD_OFFSET(D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP, OwnerType) == 20);
             return Status;                                               \
     } while (0)
 
+#define D3DKMT_PRESENT_MAX_SUBRECTS 64U
+#define TAG_D3DKMT_PRESENT_SUBRECTS 'rPmD'
+
 NTSTATUS
 APIENTRY
 D3DKMTOpenAdapterFromDeviceName(
@@ -200,6 +203,13 @@ APIENTRY
 D3DKMTEnumAdapters2(
     _Inout_ CONST D3DKMT_ENUMADAPTERS2 *pData);
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+NTSTATUS
+APIENTRY
+D3DKMTGetSharedResourceAdapterLuid(
+    _Inout_ D3DKMT_GETSHAREDRESOURCEADAPTERLUID *pData);
+#endif
+
 NTSTATUS
 APIENTRY
 D3DKMTEnumAdapters3(
@@ -210,6 +220,10 @@ NTSTATUS APIENTRY D3DKMTQueryClockCalibration(_Inout_ struct _D3DKMT_QUERYCLOCKC
 NTSTATUS APIENTRY D3DKMTChangeVideoMemoryReservation(_In_ CONST struct _D3DKMT_CHANGEVIDEOMMEMORYRESERVATION *pData);
 NTSTATUS APIENTRY D3DKMTSetProcessSchedulingPriorityClass(_In_ HANDLE hProcess, _In_ D3DKMT_SCHEDULINGPRIORITYCLASS Class);
 NTSTATUS APIENTRY D3DKMTGetProcessSchedulingPriorityClass(_In_ HANDLE hProcess, _Out_ D3DKMT_SCHEDULINGPRIORITYCLASS *pClass);
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1300)
+NTSTATUS APIENTRY D3DKMTSetContextInProcessSchedulingPriority(_In_ CONST D3DKMT_SETCONTEXTINPROCESSSCHEDULINGPRIORITY *pData);
+NTSTATUS APIENTRY D3DKMTGetContextInProcessSchedulingPriority(_Inout_ D3DKMT_GETCONTEXTINPROCESSSCHEDULINGPRIORITY *pData);
+#endif
 NTSTATUS APIENTRY D3DKMTCreateHwQueue(_Inout_ struct _D3DKMT_CREATEHWQUEUE *pData);
 NTSTATUS APIENTRY D3DKMTDestroyHwQueue(_In_ CONST struct _D3DKMT_DESTROYHWQUEUE *pData);
 NTSTATUS APIENTRY D3DKMTSubmitCommandToHwQueue(_In_ CONST struct _D3DKMT_SUBMITCOMMANDTOHWQUEUE *pData);
@@ -250,6 +264,30 @@ NTSTATUS
 APIENTRY
 D3DKMTUnlock2(
     _In_ CONST struct _D3DKMT_UNLOCK2 *pData);
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+NTSTATUS
+APIENTRY
+D3DKMTGetResourcePresentPrivateDriverData(
+    _Inout_ D3DDDI_GETRESOURCEPRESENTPRIVATEDRIVERDATA *pData);
+
+NTSTATUS
+APIENTRY
+D3DKMTInvalidateCache(
+    _In_ CONST struct _D3DKMT_INVALIDATECACHE *pData);
+
+NTSTATUS
+APIENTRY
+D3DKMTReclaimAllocations2(
+    _Inout_ struct _D3DKMT_RECLAIMALLOCATIONS2 *pData);
+#endif
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2100)
+NTSTATUS
+APIENTRY
+D3DKMTUpdateAllocationProperty(
+    _Inout_ struct D3DDDI_UPDATEALLOCPROPERTY *pData);
+#endif
 
 NTSTATUS
 APIENTRY
@@ -791,8 +829,70 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIPresent(_In_ D3DKMT_PRESENT* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_CALL_CALLBACK(RxgkIntPfnPresent, unnamedParam1);
+    D3DKMT_PRESENT Captured;
+    RECT *CapturedSubRects = NULL;
+    SIZE_T SubRectBytes;
+    NTSTATUS Status;
+
+    Status = D3dkmtCaptureUserStructure(
+                 unnamedParam1,
+                 sizeof(Captured),
+                 &Captured);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = WddmBridgeRequireReady();
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (DxgAdapterCallbacks.RxgkIntPfnPresent == NULL)
+        return STATUS_PROCEDURE_NOT_FOUND;
+
+    if (Captured.SubRectCnt != 0)
+    {
+        if (Captured.pSrcSubRects == NULL ||
+            Captured.SubRectCnt > D3DKMT_PRESENT_MAX_SUBRECTS)
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        SubRectBytes =
+            (SIZE_T)Captured.SubRectCnt * sizeof(CapturedSubRects[0]);
+        CapturedSubRects = ExAllocatePoolWithTag(
+                               NonPagedPool,
+                               SubRectBytes,
+                               TAG_D3DKMT_PRESENT_SUBRECTS);
+        if (CapturedSubRects == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+
+        _SEH2_TRY
+        {
+            if (ExGetPreviousMode() != KernelMode)
+                ProbeForRead(Captured.pSrcSubRects, SubRectBytes, 1);
+            RtlCopyMemory(CapturedSubRects,
+                          Captured.pSrcSubRects,
+                          SubRectBytes);
+            Status = STATUS_SUCCESS;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+
+        Captured.pSrcSubRects = CapturedSubRects;
+    }
+    else if (Captured.pSrcSubRects != NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = DxgAdapterCallbacks.RxgkIntPfnPresent(&Captured);
+
+Cleanup:
+    if (CapturedSubRects != NULL)
+        ExFreePoolWithTag(CapturedSubRects, TAG_D3DKMT_PRESENT_SUBRECTS);
+    return Status;
 }
 
 NTSTATUS
@@ -1163,6 +1263,25 @@ NtGdiDdDDIReclaimAllocations(_Inout_ D3DKMT_RECLAIMALLOCATIONS* unnamedParam1)
 
 NTSTATUS
 APIENTRY
+NtGdiDdDDIReclaimAllocations2(
+    _Inout_ struct _D3DKMT_RECLAIMALLOCATIONS2* unnamedParam1)
+{
+    RETURN_STATUS_IF_NULL(unnamedParam1);
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    {
+        NTSTATUS Status = WddmBridgeRequireReady();
+
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+    return D3DKMTReclaimAllocations2(unnamedParam1);
+#else
+    return STATUS_NOT_SUPPORTED;
+#endif
+}
+
+NTSTATUS
+APIENTRY
 NtGdiDdDDISetVidPnSourceOwner1(_In_ const D3DKMT_SETVIDPNSOURCEOWNER1* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
@@ -1242,6 +1361,25 @@ APIENTRY
 NtGdiDdDDIUpdateGpuVirtualAddress(_In_ const D3DKMT_UPDATEGPUVIRTUALADDRESS* unnamedParam1)
 {
     D3DKMT_CALL_CALLBACK(RxgkIntPfnUpdateGpuVirtualAddress, unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDIGetResourcePresentPrivateDriverData(
+    _Inout_ struct _D3DDDI_GETRESOURCEPRESENTPRIVATEDRIVERDATA* unnamedParam1)
+{
+    RETURN_STATUS_IF_NULL(unnamedParam1);
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    {
+        NTSTATUS Status = WddmBridgeRequireReady();
+
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+    return D3DKMTGetResourcePresentPrivateDriverData(unnamedParam1);
+#else
+    return STATUS_NOT_SUPPORTED;
+#endif
 }
 
 NTSTATUS
@@ -1350,7 +1488,17 @@ APIENTRY
 NtGdiDdDDIUpdateAllocationProperty(_Inout_ struct D3DDDI_UPDATEALLOCPROPERTY* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2100)
+    {
+        NTSTATUS Status = WddmBridgeRequireReady();
+
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+    return D3DKMTUpdateAllocationProperty(unnamedParam1);
+#else
+    return STATUS_NOT_SUPPORTED;
+#endif
 }
 
 NTSTATUS
@@ -1388,16 +1536,32 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDISetContextInProcessSchedulingPriority(_In_ const struct _D3DKMT_SETCONTEXTINPROCESSSCHEDULINGPRIORITY* unnamedParam1)
 {
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1300)
+    NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return D3DKMTSetContextInProcessSchedulingPriority(unnamedParam1);
+#else
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    return STATUS_NOT_SUPPORTED;
+#endif
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIGetContextInProcessSchedulingPriority(_Inout_ struct _D3DKMT_GETCONTEXTINPROCESSSCHEDULINGPRIORITY* unnamedParam1)
 {
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1300)
+    NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return D3DKMTGetContextInProcessSchedulingPriority(unnamedParam1);
+#else
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    return STATUS_NOT_SUPPORTED;
+#endif
 }
 
 NTSTATUS
@@ -1443,15 +1607,33 @@ APIENTRY
 NtGdiDdDDIInvalidateCache(_In_ const struct _D3DKMT_INVALIDATECACHE* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    {
+        NTSTATUS Status = WddmBridgeRequireReady();
+
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+    return D3DKMTInvalidateCache(unnamedParam1);
+#else
+    return STATUS_NOT_SUPPORTED;
+#endif
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIGetSharedResourceAdapterLuid(_Inout_ struct _D3DKMT_GETSHAREDRESOURCEADAPTERLUID* unnamedParam1)
 {
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+    NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return D3DKMTGetSharedResourceAdapterLuid(unnamedParam1);
+#else
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    return STATUS_NOT_SUPPORTED;
+#endif
 }
 
 NTSTATUS

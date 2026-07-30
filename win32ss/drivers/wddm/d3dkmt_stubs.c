@@ -57,13 +57,26 @@ C_ASSERT(FIELD_OFFSET(RXGK_SUBMITCOMMAND_PACKET, PrivateDriverDataSize) == 36);
 C_ASSERT(FIELD_OFFSET(RXGK_SUBMITCOMMAND_PACKET, PrivateDriverDataOffset) == 40);
 C_ASSERT(FIELD_OFFSET(RXGK_SUBMITCOMMAND_PACKET, Reserved) == 44);
 #if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
-C_ASSERT(sizeof(RXGK_ISFEATUREENABLED_PACKET) ==
-         RXGK_ISFEATUREENABLED_PACKET_SIZE);
+C_ASSERT(sizeof(RXGK_ISFEATUREENABLED_PACKET) == RXGK_ISFEATUREENABLED_PACKET_SIZE);
 C_ASSERT(FIELD_OFFSET(RXGK_ISFEATUREENABLED_PACKET, AdapterHandle) == 0);
 C_ASSERT(FIELD_OFFSET(RXGK_ISFEATUREENABLED_PACKET, FeatureId) == 4);
 C_ASSERT(FIELD_OFFSET(RXGK_ISFEATUREENABLED_PACKET, ResultVersion) == 8);
 C_ASSERT(FIELD_OFFSET(RXGK_ISFEATUREENABLED_PACKET, ResultValue) == 10);
 #endif
+C_ASSERT(sizeof(RXGK_GETRESOURCEPRESENTPRIVATE_PACKET) == RXGK_GETRESOURCEPRESENTPRIVATE_PACKET_V1_SIZE);
+C_ASSERT(FIELD_OFFSET(RXGK_GETRESOURCEPRESENTPRIVATE_PACKET, Size) == 0);
+C_ASSERT(FIELD_OFFSET(RXGK_GETRESOURCEPRESENTPRIVATE_PACKET, Version) == 4);
+C_ASSERT(FIELD_OFFSET(RXGK_GETRESOURCEPRESENTPRIVATE_PACKET, ResourceHandle) == 8);
+C_ASSERT(FIELD_OFFSET(RXGK_GETRESOURCEPRESENTPRIVATE_PACKET, PrivateDriverDataSize) == 12);
+C_ASSERT(FIELD_OFFSET(RXGK_GETRESOURCEPRESENTPRIVATE_PACKET, PrivateDriverDataOffset) == 16);
+C_ASSERT(FIELD_OFFSET(RXGK_GETRESOURCEPRESENTPRIVATE_PACKET, Reserved) == 20);
+C_ASSERT(sizeof(RXGK_INVALIDATECACHE_PACKET) == RXGK_INVALIDATECACHE_PACKET_V1_SIZE);
+C_ASSERT(FIELD_OFFSET(RXGK_INVALIDATECACHE_PACKET, Size) == 0);
+C_ASSERT(FIELD_OFFSET(RXGK_INVALIDATECACHE_PACKET, Version) == 4);
+C_ASSERT(FIELD_OFFSET(RXGK_INVALIDATECACHE_PACKET, DeviceHandle) == 8);
+C_ASSERT(FIELD_OFFSET(RXGK_INVALIDATECACHE_PACKET, AllocationHandle) == 12);
+C_ASSERT(FIELD_OFFSET(RXGK_INVALIDATECACHE_PACKET, Offset) == 16);
+C_ASSERT(FIELD_OFFSET(RXGK_INVALIDATECACHE_PACKET, Length) == 24);
 #if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
 C_ASSERT(sizeof(RXGK_GETDWMVERTICALBLANKEVENT_PACKET) ==
          RXGK_GETDWMVERTICALBLANKEVENT_PACKET_V1_SIZE);
@@ -82,12 +95,53 @@ C_ASSERT(FIELD_OFFSET(RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET, AdapterHandle) 
 C_ASSERT(FIELD_OFFSET(RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET, DeviceHandle) == 12);
 C_ASSERT(FIELD_OFFSET(RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET, VidPnSourceId) == 16);
 C_ASSERT(FIELD_OFFSET(RXGK_SETSYNCREFRESHCOUNTWAITTARGET_PACKET, TargetSyncRefreshCount) == 20);
+C_ASSERT(sizeof(RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET) ==
+         RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET_V1_SIZE);
+C_ASSERT(FIELD_OFFSET(RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET, Size) == 0);
+C_ASSERT(FIELD_OFFSET(RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET, Version) == 4);
+C_ASSERT(FIELD_OFFSET(RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET, GlobalShareHandle) == 8);
+C_ASSERT(FIELD_OFFSET(RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET, Reserved) == 12);
+C_ASSERT(FIELD_OFFSET(RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET, NtHandle) == 16);
+C_ASSERT(FIELD_OFFSET(RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET, AdapterLuidLowPart) == 24);
+C_ASSERT(FIELD_OFFSET(RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET, AdapterLuidHighPart) == 28);
 #endif
+C_ASSERT(sizeof(RXGK_RECLAIMALLOCATIONS2_PACKET) == RXGK_RECLAIMALLOCATIONS2_PACKET_V1_SIZE);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS2_PACKET, Size) == 0);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS2_PACKET, Version) == 4);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS2_PACKET, PagingQueueHandle) == 8);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS2_PACKET, NumAllocations) == 12);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS2_PACKET, Flags) == 16);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS2_PACKET, HandlesOffset) == 20);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS2_PACKET, DiscardedOffset) == 24);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS2_PACKET, Reserved) == 28);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS2_PACKET, PagingFenceValue) == 32);
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2100)
+C_ASSERT(sizeof(RXGK_UPDATEALLOCATIONPROPERTY_PACKET) == RXGK_UPDATEALLOCATIONPROPERTY_PACKET_V1_SIZE);
+C_ASSERT(FIELD_OFFSET(RXGK_UPDATEALLOCATIONPROPERTY_PACKET, Size) == 0);
+C_ASSERT(FIELD_OFFSET(RXGK_UPDATEALLOCATIONPROPERTY_PACKET, Version) == 4);
+C_ASSERT(FIELD_OFFSET(RXGK_UPDATEALLOCATIONPROPERTY_PACKET, PagingQueueHandle) == 8);
+C_ASSERT(FIELD_OFFSET(RXGK_UPDATEALLOCATIONPROPERTY_PACKET, AllocationHandle) == 12);
+C_ASSERT(FIELD_OFFSET(RXGK_UPDATEALLOCATIONPROPERTY_PACKET, SupportedSegmentSet) == 16);
+C_ASSERT(FIELD_OFFSET(RXGK_UPDATEALLOCATIONPROPERTY_PACKET, PreferredSegmentValue) == 20);
+C_ASSERT(FIELD_OFFSET(RXGK_UPDATEALLOCATIONPROPERTY_PACKET, PropertyFlagsValue) == 24);
+C_ASSERT(FIELD_OFFSET(RXGK_UPDATEALLOCATIONPROPERTY_PACKET, PropertyMaskValue) == 28);
+C_ASSERT(FIELD_OFFSET(RXGK_UPDATEALLOCATIONPROPERTY_PACKET, PagingFenceValue) == 32);
+C_ASSERT(sizeof(RXGK_RECLAIMALLOCATIONS3_PACKET) == RXGK_RECLAIMALLOCATIONS3_PACKET_V1_SIZE);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS3_PACKET, Size) == 0);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS3_PACKET, Version) == 4);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS3_PACKET, PagingQueueHandle) == 8);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS3_PACKET, NumAllocations) == 12);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS3_PACKET, Flags) == 16);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS3_PACKET, HandlesOffset) == 20);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS3_PACKET, ResultsOffset) == 24);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS3_PACKET, Reserved) == 28);
+C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS3_PACKET, PagingFenceValue) == 32);
+#endif
+C_ASSERT(sizeof(BOOL) == sizeof(ULONG));
 #if (REACTOS_WDDM_TARGET_LEVEL >= 3200) && \
     (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
 C_ASSERT(sizeof(DXGK_ISFEATUREENABLED_RESULT) == 4);
-C_ASSERT(sizeof(D3DKMT_ISFEATUREENABLED) ==
-         RXGK_ISFEATUREENABLED_PACKET_SIZE);
+C_ASSERT(sizeof(D3DKMT_ISFEATUREENABLED) == RXGK_ISFEATUREENABLED_PACKET_SIZE);
 C_ASSERT(FIELD_OFFSET(D3DKMT_ISFEATUREENABLED, hAdapter) == 0);
 C_ASSERT(FIELD_OFFSET(D3DKMT_ISFEATUREENABLED, FeatureId) == 4);
 C_ASSERT(FIELD_OFFSET(D3DKMT_ISFEATUREENABLED, Result) == 8);
@@ -266,6 +320,7 @@ typedef struct _DXGKP_PROCESS_PRIORITY_REQUEST
 #define D3DKMT_BRIDGE_MAX_PRIVATE_BYTES RXGK_WDDM_MAX_PRIVATE_DRIVER_DATA
 #define D3DKMT_BRIDGE_MAX_FIXED_BYTES 65536U
 #define D3DKMT_BRIDGE_MAX_ENUM_ADAPTERS 256U
+#define D3DKMT_BRIDGE_MAX_PRESENT_SUBRECTS 64U
 
 /*
  * Windows 11 reports an unreadable or unwritable caller buffer as
@@ -1600,6 +1655,163 @@ Cleanup:
     return Status;
 }
 
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+NTSTATUS
+APIENTRY
+D3DKMTGetResourcePresentPrivateDriverData(
+    _Inout_ D3DDDI_GETRESOURCEPRESENTPRIVATEDRIVERDATA *pData)
+{
+    D3DDDI_GETRESOURCEPRESENTPRIVATEDRIVERDATA Captured;
+    PRXGK_GETRESOURCEPRESENTPRIVATE_PACKET Packet = NULL;
+    PVOID UserPrivateDriverData;
+    SIZE_T PacketSize;
+    UINT Capacity;
+    ULONG_PTR Information = 0;
+    NTSTATUS Status;
+
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    Status = WddmBridgeRejectBadBuffer(Status);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Capacity = Captured.PrivateDriverDataSize;
+    UserPrivateDriverData = Captured.pPrivateDriverData;
+    if (Captured.hResource == 0 ||
+        Capacity > D3DKMT_BRIDGE_MAX_PRIVATE_BYTES ||
+        (Capacity != 0 && UserPrivateDriverData == NULL))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = WddmBridgeSizeAdd(sizeof(*Packet), Capacity, &PacketSize);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = WddmBridgeSafeProbeForWrite(
+                 (PUCHAR)pData +
+                     FIELD_OFFSET(
+                         D3DDDI_GETRESOURCEPRESENTPRIVATEDRIVERDATA,
+                         PrivateDriverDataSize),
+                 sizeof(Captured.PrivateDriverDataSize));
+    if (NT_SUCCESS(Status) && Capacity != 0)
+    {
+        Status = WddmBridgeSafeProbeForWrite(
+                     UserPrivateDriverData,
+                     Capacity);
+    }
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+
+    Packet = ExAllocatePoolWithTag(
+                 NonPagedPool,
+                 PacketSize,
+                 TAG_WDDM_BRIDGE);
+    if (Packet == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    RtlZeroMemory(Packet, PacketSize);
+    Packet->Size = (ULONG)PacketSize;
+    Packet->Version = RXGK_WDDM_PACKET_VERSION_1;
+    Packet->ResourceHandle = Captured.hResource;
+    Packet->PrivateDriverDataSize = Capacity;
+    Packet->PrivateDriverDataOffset =
+        Capacity != 0 ? sizeof(*Packet) : 0;
+
+    Status = WddmBridgeSendIoctlWithInformation(
+                 IOCTL_D3DKMT_GETRESOURCEPRESENTPRIVATEDRIVERDATA,
+                 Packet,
+                 (ULONG)PacketSize,
+                 Packet,
+                 (ULONG)PacketSize,
+                 &Information);
+    if ((NT_SUCCESS(Status) || Status == STATUS_BUFFER_OVERFLOW) &&
+        Information != PacketSize)
+    {
+        Status = STATUS_INFO_LENGTH_MISMATCH;
+    }
+
+    if (NT_SUCCESS(Status) || Status == STATUS_BUFFER_OVERFLOW)
+    {
+        NTSTATUS CopyStatus;
+
+        CopyStatus = WddmBridgeSafeCopyTo(
+                         (PUCHAR)pData +
+                             FIELD_OFFSET(
+                                 D3DDDI_GETRESOURCEPRESENTPRIVATEDRIVERDATA,
+                                 PrivateDriverDataSize),
+                         &Packet->PrivateDriverDataSize,
+                         sizeof(Packet->PrivateDriverDataSize));
+        if (!NT_SUCCESS(CopyStatus))
+        {
+            Status = WddmBridgeRejectBadBuffer(CopyStatus);
+        }
+        else if (Status == STATUS_BUFFER_OVERFLOW)
+        {
+            Status = STATUS_INVALID_BUFFER_SIZE;
+        }
+        else if (Packet->PrivateDriverDataSize > Capacity)
+        {
+            Status = STATUS_INFO_LENGTH_MISMATCH;
+        }
+        else if (Packet->PrivateDriverDataSize != 0)
+        {
+            Status = WddmBridgeSafeCopyTo(
+                         UserPrivateDriverData,
+                         (PUCHAR)Packet +
+                             Packet->PrivateDriverDataOffset,
+                         Packet->PrivateDriverDataSize);
+            Status = WddmBridgeRejectBadBuffer(Status);
+        }
+    }
+
+    ExFreePoolWithTag(Packet, TAG_WDDM_BRIDGE);
+    return Status;
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTInvalidateCache(
+    _In_ CONST D3DKMT_INVALIDATECACHE *pData)
+{
+    D3DKMT_INVALIDATECACHE Captured;
+    RXGK_INVALIDATECACHE_PACKET Packet;
+    NTSTATUS Status;
+
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    Status = WddmBridgeRejectBadBuffer(Status);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Captured.hDevice == 0 ||
+        Captured.hAllocation == 0 ||
+        Captured.Length == 0 ||
+        Captured.Offset > (D3DKMT_SIZE_T)-1 - Captured.Length)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    RtlZeroMemory(&Packet, sizeof(Packet));
+    Packet.Size = sizeof(Packet);
+    Packet.Version = RXGK_WDDM_PACKET_VERSION_1;
+    Packet.DeviceHandle = Captured.hDevice;
+    Packet.AllocationHandle = Captured.hAllocation;
+    Packet.Offset = Captured.Offset;
+    Packet.Length = Captured.Length;
+
+    return WddmBridgeSendIoctl(
+               IOCTL_D3DKMT_INVALIDATECACHE,
+               &Packet,
+               sizeof(Packet),
+               NULL,
+               0);
+}
+#endif
+
 NTSTATUS
 APIENTRY
 D3DKMTGetSharedPrimaryHandle(
@@ -1623,7 +1835,61 @@ APIENTRY
 D3DKMTPresent(
     _Inout_ D3DKMT_PRESENT *pData)
 {
-    return WddmBridgeRejectBadBuffer(WddmBridgeCaptureFixedIoctl(IOCTL_D3DKMT_PRESENT, pData, sizeof(*pData), TRUE));
+    D3DKMT_PRESENT Captured;
+    CONST RECT *UserSubRects;
+    RECT *CapturedSubRects = NULL;
+    SIZE_T SubRectBytes = 0;
+    ULONG_PTR Information = 0;
+    NTSTATUS Status;
+
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+
+    UserSubRects = Captured.pSrcSubRects;
+    Status = WddmBridgeCaptureArray(
+                 UserSubRects,
+                 Captured.SubRectCnt,
+                 sizeof(CapturedSubRects[0]),
+                 D3DKMT_BRIDGE_MAX_PRESENT_SUBRECTS,
+                 TRUE,
+                 FALSE,
+                 (PVOID *)&CapturedSubRects,
+                 &SubRectBytes);
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    if (Captured.SubRectCnt == 0 && UserSubRects != NULL)
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto Cleanup;
+    }
+
+    Captured.pSrcSubRects = CapturedSubRects;
+    Status = WddmBridgeSafeProbeForWrite(pData, sizeof(*pData));
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    Status = WddmBridgeSendIoctlWithInformation(
+                 IOCTL_D3DKMT_PRESENT,
+                 &Captured,
+                 sizeof(Captured),
+                 &Captured,
+                 sizeof(Captured),
+                 &Information);
+    if (NT_SUCCESS(Status) && Information != sizeof(Captured))
+        Status = STATUS_INFO_LENGTH_MISMATCH;
+    if (NT_SUCCESS(Status))
+    {
+        Captured.pSrcSubRects = UserSubRects;
+        Status = WddmBridgeSafeCopyTo(pData, &Captured, sizeof(Captured));
+    }
+
+Cleanup:
+    if (CapturedSubRects != NULL)
+        ExFreePoolWithTag(CapturedSubRects, TAG_WDDM_BRIDGE);
+    return WddmBridgeRejectBadBuffer(Status);
 }
 
 /* ---- Memory locking ------------------------------------------------------ */
@@ -2281,6 +2547,88 @@ D3DKMTSetContextSchedulingPriority(
     return WddmBridgeCaptureFixedIoctl(IOCTL_D3DKMT_SETCONTEXTSCHEDULINGPRIORITY, (PVOID)pData, sizeof(*pData), FALSE);
 }
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1300)
+NTSTATUS
+APIENTRY
+D3DKMTSetContextInProcessSchedulingPriority(
+    _In_ CONST D3DKMT_SETCONTEXTINPROCESSSCHEDULINGPRIORITY *pData)
+{
+    D3DKMT_SETCONTEXTINPROCESSSCHEDULINGPRIORITY Captured;
+    RXGK_CONTEXTINPROCESSPRIORITY_PACKET Packet;
+    NTSTATUS Status;
+
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlZeroMemory(&Packet, sizeof(Packet));
+    Packet.Size = RXGK_CONTEXTINPROCESSPRIORITY_PACKET_V1_SIZE;
+    Packet.Version = RXGK_WDDM_PACKET_VERSION_1;
+    Packet.ContextHandle = Captured.hContext;
+    Packet.Priority = Captured.Priority;
+
+    return WddmBridgeSendIoctl(
+               IOCTL_D3DKMT_SETCONTEXTINPROCESSPRIORITY,
+               &Packet,
+               sizeof(Packet),
+               NULL,
+               0);
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTGetContextInProcessSchedulingPriority(
+    _Inout_ D3DKMT_GETCONTEXTINPROCESSSCHEDULINGPRIORITY *pData)
+{
+    D3DKMT_GETCONTEXTINPROCESSSCHEDULINGPRIORITY Captured;
+    RXGK_CONTEXTINPROCESSPRIORITY_PACKET Packet;
+    ULONG_PTR Information = 0;
+    NTSTATUS Status;
+
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = WddmBridgeSafeProbeForWrite(
+                 (PUCHAR)pData +
+                     FIELD_OFFSET(
+                         D3DKMT_GETCONTEXTINPROCESSSCHEDULINGPRIORITY,
+                         Priority),
+                 sizeof(Captured.Priority));
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlZeroMemory(&Packet, sizeof(Packet));
+    Packet.Size = RXGK_CONTEXTINPROCESSPRIORITY_PACKET_V1_SIZE;
+    Packet.Version = RXGK_WDDM_PACKET_VERSION_1;
+    Packet.ContextHandle = Captured.hContext;
+
+    Status = WddmBridgeSendIoctlWithInformation(
+                 IOCTL_D3DKMT_GETCONTEXTINPROCESSPRIORITY,
+                 &Packet,
+                 sizeof(Packet),
+                 &Packet,
+                 sizeof(Packet),
+                 &Information);
+    if (NT_SUCCESS(Status) && Information != sizeof(Packet))
+        Status = STATUS_INFO_LENGTH_MISMATCH;
+    if (NT_SUCCESS(Status))
+    {
+        Status = WddmBridgeSafeCopyTo(
+                     (PUCHAR)pData +
+                         FIELD_OFFSET(
+                             D3DKMT_GETCONTEXTINPROCESSSCHEDULINGPRIORITY,
+                             Priority),
+                     &Packet.Priority,
+                     sizeof(Packet.Priority));
+    }
+    return Status;
+}
+#endif
+
 NTSTATUS
 APIENTRY
 D3DKMTGetMultisampleMethodList(
@@ -2581,6 +2929,64 @@ D3DKMTOpenAdapterFromLuid(
 {
     return WddmBridgeOpenAdapterIoctl(IOCTL_D3DKMT_OPENADAPTERFROMLUID, (PVOID)pData, sizeof(*pData), FIELD_OFFSET(D3DKMT_OPENADAPTERFROMLUID, hAdapter));
 }
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+NTSTATUS
+APIENTRY
+D3DKMTGetSharedResourceAdapterLuid(
+    _Inout_ D3DKMT_GETSHAREDRESOURCEADAPTERLUID *pData)
+{
+    D3DKMT_GETSHAREDRESOURCEADAPTERLUID Captured;
+    RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET Packet;
+    LUID AdapterLuid;
+    ULONG_PTR Information = 0;
+    NTSTATUS Status;
+
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = WddmBridgeSafeProbeForWrite(
+                 (PUCHAR)pData +
+                     FIELD_OFFSET(
+                         D3DKMT_GETSHAREDRESOURCEADAPTERLUID,
+                         AdapterLuid),
+                 sizeof(AdapterLuid));
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlZeroMemory(&Packet, sizeof(Packet));
+    Packet.Size =
+        RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET_V1_SIZE;
+    Packet.Version = RXGK_WDDM_PACKET_VERSION_1;
+    Packet.GlobalShareHandle = Captured.hGlobalShare;
+    Packet.NtHandle = (ULONGLONG)(ULONG_PTR)Captured.hNtHandle;
+
+    Status = WddmBridgeSendIoctlWithInformation(
+                 IOCTL_D3DKMT_GETSHAREDRESOURCEADAPTERLUID,
+                 &Packet,
+                 sizeof(Packet),
+                 &Packet,
+                 sizeof(Packet),
+                 &Information);
+    if (NT_SUCCESS(Status) && Information != sizeof(Packet))
+        Status = STATUS_INFO_LENGTH_MISMATCH;
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    AdapterLuid.LowPart = Packet.AdapterLuidLowPart;
+    AdapterLuid.HighPart = Packet.AdapterLuidHighPart;
+    return WddmBridgeSafeCopyTo(
+               (PUCHAR)pData +
+                   FIELD_OFFSET(
+                       D3DKMT_GETSHAREDRESOURCEADAPTERLUID,
+                       AdapterLuid),
+               &AdapterLuid,
+               sizeof(AdapterLuid));
+}
+#endif
 
 /*
  * D3DKMTEnumAdapters2 — two-pass enumeration into a caller-provided array.
@@ -2965,6 +3371,344 @@ D3DKMTReclaimAllocations(
     return Status;
 }
 
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+NTSTATUS
+APIENTRY
+D3DKMTReclaimAllocations2(
+    _Inout_ D3DKMT_RECLAIMALLOCATIONS2 *pData)
+{
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2100)
+    D3DKMT_RECLAIMALLOCATIONS2 Captured;
+    PRXGK_RECLAIMALLOCATIONS3_PACKET Packet = NULL;
+    CONST D3DKMT_HANDLE *UserHandles;
+    D3DDDI_RECLAIM_RESULT *UserResults;
+    PULONG PacketResults;
+    SIZE_T HandlesSize;
+    SIZE_T PacketSize;
+    ULONG_PTR Information = 0;
+    NTSTATUS Status;
+
+    C_ASSERT(sizeof(D3DDDI_RECLAIM_RESULT) == sizeof(ULONG));
+
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    Status = WddmBridgeRejectBadBuffer(Status);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Captured.hPagingQueue == 0 ||
+        Captured.NumAllocations == 0 ||
+        Captured.NumAllocations > D3DKMT_BRIDGE_MAX_ALLOCATIONS ||
+        (Captured.pResources == NULL) == (Captured.HandleList == NULL))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    UserHandles = Captured.pResources != NULL
+                      ? Captured.pResources
+                      : Captured.HandleList;
+    UserResults = Captured.pResults;
+
+    Status = WddmBridgeSizeForCount(
+                 Captured.NumAllocations,
+                 sizeof(D3DKMT_HANDLE),
+                 &HandlesSize);
+    if (NT_SUCCESS(Status))
+        Status = WddmBridgeSizeAdd(
+                     sizeof(*Packet),
+                     HandlesSize,
+                     &PacketSize);
+    if (NT_SUCCESS(Status))
+        Status = WddmBridgeSizeAdd(
+                     PacketSize,
+                     HandlesSize,
+                     &PacketSize);
+    if (!NT_SUCCESS(Status) ||
+        PacketSize > D3DKMT_BRIDGE_MAX_FIXED_BYTES)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = WddmBridgeSafeProbeForWrite(
+                 (PUCHAR)pData +
+                     FIELD_OFFSET(
+                         D3DKMT_RECLAIMALLOCATIONS2,
+                         PagingFenceValue),
+                 sizeof(Captured.PagingFenceValue));
+    if (NT_SUCCESS(Status) && UserResults != NULL)
+    {
+        Status = WddmBridgeSafeProbeForWrite(
+                     UserResults,
+                     HandlesSize);
+    }
+    Status = WddmBridgeRejectBadBuffer(Status);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Packet = ExAllocatePoolWithTag(
+                 NonPagedPool,
+                 PacketSize,
+                 TAG_WDDM_BRIDGE);
+    if (Packet == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    RtlZeroMemory(Packet, PacketSize);
+    Packet->Size = (ULONG)PacketSize;
+    Packet->Version = RXGK_WDDM_PACKET_VERSION_1;
+    Packet->PagingQueueHandle = Captured.hPagingQueue;
+    Packet->NumAllocations = Captured.NumAllocations;
+    Packet->HandlesOffset = sizeof(*Packet);
+    Packet->ResultsOffset =
+        (ULONG)(sizeof(*Packet) + HandlesSize);
+    if (Captured.pResources != NULL)
+    {
+        Packet->Flags |=
+            RXGK_RECLAIMALLOCATIONS3_FLAG_RESOURCE_LIST;
+    }
+    PacketResults =
+        (PULONG)((PUCHAR)Packet + Packet->ResultsOffset);
+
+    Status = WddmBridgeSafeCopyFrom(
+                 (PUCHAR)Packet + Packet->HandlesOffset,
+                 UserHandles,
+                 HandlesSize);
+    Status = WddmBridgeRejectBadBuffer(Status);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup2100;
+
+    Status = WddmBridgeSendIoctlWithInformation(
+                 IOCTL_D3DKMT_RECLAIMALLOCATIONS3,
+                 Packet,
+                 (ULONG)PacketSize,
+                 Packet,
+                 (ULONG)PacketSize,
+                 &Information);
+    if (NT_SUCCESS(Status) && Information != PacketSize)
+        Status = STATUS_INFO_LENGTH_MISMATCH;
+    if (!NT_SUCCESS(Status))
+        goto Cleanup2100;
+
+    if (UserResults != NULL)
+    {
+        Status = WddmBridgeSafeCopyTo(
+                     UserResults,
+                     PacketResults,
+                     HandlesSize);
+        Status = WddmBridgeRejectBadBuffer(Status);
+    }
+    if (NT_SUCCESS(Status))
+    {
+        Status = WddmBridgeSafeCopyTo(
+                     (PUCHAR)pData +
+                         FIELD_OFFSET(
+                             D3DKMT_RECLAIMALLOCATIONS2,
+                             PagingFenceValue),
+                     &Packet->PagingFenceValue,
+                     sizeof(Packet->PagingFenceValue));
+        Status = WddmBridgeRejectBadBuffer(Status);
+    }
+
+Cleanup2100:
+    ExFreePoolWithTag(Packet, TAG_WDDM_BRIDGE);
+    return Status;
+#else
+    D3DKMT_RECLAIMALLOCATIONS2 Captured;
+    PRXGK_RECLAIMALLOCATIONS2_PACKET Packet = NULL;
+    CONST D3DKMT_HANDLE *UserHandles;
+    BOOL *UserDiscarded;
+    PULONG PacketDiscarded = NULL;
+    SIZE_T HandlesSize;
+    SIZE_T PacketSize;
+    ULONG_PTR Information = 0;
+    NTSTATUS Status;
+
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    Status = WddmBridgeRejectBadBuffer(Status);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Captured.hPagingQueue == 0 ||
+        Captured.NumAllocations == 0 ||
+        Captured.NumAllocations > D3DKMT_BRIDGE_MAX_ALLOCATIONS ||
+        (Captured.pResources == NULL) == (Captured.HandleList == NULL))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    UserHandles = Captured.pResources != NULL
+                      ? Captured.pResources
+                      : Captured.HandleList;
+    UserDiscarded = Captured.pDiscarded;
+
+    Status = WddmBridgeSizeForCount(
+                 Captured.NumAllocations,
+                 sizeof(D3DKMT_HANDLE),
+                 &HandlesSize);
+    if (NT_SUCCESS(Status))
+        Status = WddmBridgeSizeAdd(sizeof(*Packet), HandlesSize, &PacketSize);
+    if (NT_SUCCESS(Status) && UserDiscarded != NULL)
+        Status = WddmBridgeSizeAdd(PacketSize, HandlesSize, &PacketSize);
+    if (!NT_SUCCESS(Status) ||
+        PacketSize > D3DKMT_BRIDGE_MAX_FIXED_BYTES)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = WddmBridgeSafeProbeForWrite(
+                 (PUCHAR)pData +
+                     FIELD_OFFSET(
+                         D3DKMT_RECLAIMALLOCATIONS2,
+                         PagingFenceValue),
+                 sizeof(Captured.PagingFenceValue));
+    if (NT_SUCCESS(Status) && UserDiscarded != NULL)
+    {
+        Status = WddmBridgeSafeProbeForWrite(
+                     UserDiscarded,
+                     HandlesSize);
+    }
+    Status = WddmBridgeRejectBadBuffer(Status);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Packet = ExAllocatePoolWithTag(
+                 NonPagedPool,
+                 PacketSize,
+                 TAG_WDDM_BRIDGE);
+    if (Packet == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    RtlZeroMemory(Packet, PacketSize);
+    Packet->Size = (ULONG)PacketSize;
+    Packet->Version = RXGK_WDDM_PACKET_VERSION_1;
+    Packet->PagingQueueHandle = Captured.hPagingQueue;
+    Packet->NumAllocations = Captured.NumAllocations;
+    Packet->HandlesOffset = sizeof(*Packet);
+    if (Captured.pResources != NULL)
+    {
+        Packet->Flags |=
+            RXGK_RECLAIMALLOCATIONS2_FLAG_RESOURCE_LIST;
+    }
+    if (UserDiscarded != NULL)
+    {
+        Packet->Flags |=
+            RXGK_RECLAIMALLOCATIONS2_FLAG_RETURN_DISCARDED;
+        Packet->DiscardedOffset =
+            (ULONG)(sizeof(*Packet) + HandlesSize);
+        PacketDiscarded =
+            (PULONG)((PUCHAR)Packet + Packet->DiscardedOffset);
+    }
+
+    Status = WddmBridgeSafeCopyFrom(
+                 (PUCHAR)Packet + Packet->HandlesOffset,
+                 UserHandles,
+                 HandlesSize);
+    Status = WddmBridgeRejectBadBuffer(Status);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    Status = WddmBridgeSendIoctlWithInformation(
+                 IOCTL_D3DKMT_RECLAIMALLOCATIONS2,
+                 Packet,
+                 (ULONG)PacketSize,
+                 Packet,
+                 (ULONG)PacketSize,
+                 &Information);
+    if (NT_SUCCESS(Status) && Information != PacketSize)
+        Status = STATUS_INFO_LENGTH_MISMATCH;
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    if (PacketDiscarded != NULL)
+    {
+        Status = WddmBridgeSafeCopyTo(
+                     UserDiscarded,
+                     PacketDiscarded,
+                     HandlesSize);
+        Status = WddmBridgeRejectBadBuffer(Status);
+    }
+    if (NT_SUCCESS(Status))
+    {
+        Status = WddmBridgeSafeCopyTo(
+                     (PUCHAR)pData +
+                         FIELD_OFFSET(
+                             D3DKMT_RECLAIMALLOCATIONS2,
+                             PagingFenceValue),
+                     &Packet->PagingFenceValue,
+                     sizeof(Packet->PagingFenceValue));
+        Status = WddmBridgeRejectBadBuffer(Status);
+    }
+
+Cleanup:
+    ExFreePoolWithTag(Packet, TAG_WDDM_BRIDGE);
+    return Status;
+#endif
+}
+#endif
+
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2100)
+NTSTATUS
+APIENTRY
+D3DKMTUpdateAllocationProperty(
+    _Inout_ D3DDDI_UPDATEALLOCPROPERTY *pData)
+{
+    D3DDDI_UPDATEALLOCPROPERTY Captured;
+    RXGK_UPDATEALLOCATIONPROPERTY_PACKET Packet;
+    ULONG_PTR Information = 0;
+    NTSTATUS Status;
+
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = WddmBridgeSafeCopyFrom(
+                 &Captured,
+                 pData,
+                 sizeof(Captured));
+    Status = WddmBridgeRejectBadBuffer(Status);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = WddmBridgeSafeProbeForWrite(
+                 (PUCHAR)pData +
+                     FIELD_OFFSET(
+                         D3DDDI_UPDATEALLOCPROPERTY,
+                         PagingFenceValue),
+                 sizeof(Captured.PagingFenceValue));
+    Status = WddmBridgeRejectBadBuffer(Status);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlZeroMemory(&Packet, sizeof(Packet));
+    Packet.Size = sizeof(Packet);
+    Packet.Version = RXGK_WDDM_PACKET_VERSION_1;
+    Packet.PagingQueueHandle = Captured.hPagingQueue;
+    Packet.AllocationHandle = Captured.hAllocation;
+    Packet.SupportedSegmentSet = Captured.SupportedSegmentSet;
+    Packet.PreferredSegmentValue = Captured.PreferredSegment.Value;
+    Packet.PropertyFlagsValue = Captured.Flags.Value;
+    Packet.PropertyMaskValue = Captured.PropertyMaskValue;
+
+    Status = WddmBridgeSendIoctlWithInformation(
+                 IOCTL_D3DKMT_UPDATEALLOCATIONPROPERTY,
+                 &Packet,
+                 sizeof(Packet),
+                 &Packet,
+                 sizeof(Packet),
+                 &Information);
+    if (NT_SUCCESS(Status) && Information != sizeof(Packet))
+        Status = STATUS_INFO_LENGTH_MISMATCH;
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = WddmBridgeSafeCopyTo(
+                 (PUCHAR)pData +
+                     FIELD_OFFSET(
+                         D3DDDI_UPDATEALLOCPROPERTY,
+                         PagingFenceValue),
+                 &Packet.PagingFenceValue,
+                 sizeof(Packet.PagingFenceValue));
+    return WddmBridgeRejectBadBuffer(Status);
+}
+#endif
+
 NTSTATUS
 APIENTRY
 D3DKMTSetVidPnSourceOwner1(
@@ -3296,7 +4040,9 @@ D3DKMTMakeResident(
     SIZE_T AllocationListSize = 0;
     SIZE_T PriorityListSize = 0;
     ULONG_PTR Information = 0;
+    NTSTATUS IoctlStatus;
     NTSTATUS Status;
+    BOOLEAN OutputValid;
 
     if (pData == NULL)
         return STATUS_INVALID_PARAMETER;
@@ -3353,15 +4099,26 @@ D3DKMTMakeResident(
     if (!NT_SUCCESS(Status))
         goto Cleanup;
 
-    Status = WddmBridgeSendIoctlWithInformation(IOCTL_D3DKMT_MAKERESIDENT, &Captured, sizeof(Captured), &Captured, sizeof(Captured), &Information);
-    if (NT_SUCCESS(Status) && Information != sizeof(Captured))
+    IoctlStatus = WddmBridgeSendIoctlWithInformation(IOCTL_D3DKMT_MAKERESIDENT, &Captured, sizeof(Captured), &Captured, sizeof(Captured), &Information);
+    OutputValid =
+        Information == sizeof(Captured) &&
+        (NT_SUCCESS(IoctlStatus) ||
+         IoctlStatus == STATUS_GRAPHICS_NO_VIDEO_MEMORY ||
+         IoctlStatus == STATUS_NO_MEMORY);
+    if (NT_SUCCESS(IoctlStatus) && Information != sizeof(Captured))
+    {
         Status = STATUS_INFO_LENGTH_MISMATCH;
-    if (NT_SUCCESS(Status))
+        goto Cleanup;
+    }
+    Status = IoctlStatus;
+    if (OutputValid)
         Status = WddmBridgeSafeCopyTo((PUCHAR)pData + FIELD_OFFSET(D3DDDI_MAKERESIDENT, NumAllocations), &Captured.NumAllocations, sizeof(Captured.NumAllocations));
-    if (NT_SUCCESS(Status))
+    if (OutputValid && NT_SUCCESS(Status))
         Status = WddmBridgeSafeCopyTo((PUCHAR)pData + FIELD_OFFSET(D3DDDI_MAKERESIDENT, PagingFenceValue), &Captured.PagingFenceValue, sizeof(Captured.PagingFenceValue));
-    if (NT_SUCCESS(Status))
+    if (OutputValid && NT_SUCCESS(Status))
         Status = WddmBridgeSafeCopyTo((PUCHAR)pData + FIELD_OFFSET(D3DDDI_MAKERESIDENT, NumBytesToTrim), &Captured.NumBytesToTrim, sizeof(Captured.NumBytesToTrim));
+    if (OutputValid && NT_SUCCESS(Status))
+        Status = IoctlStatus;
 
     /* The IRP completes with STATUS_SUCCESS (an IRP cannot complete as
      * PENDING); a nonzero paging fence in the output is the wire encoding
