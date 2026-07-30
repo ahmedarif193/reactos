@@ -1760,7 +1760,11 @@ PdoQueryCapabilities(
 {
     PPDO_DEVICE_EXTENSION DeviceExtension;
     PDEVICE_CAPABILITIES DeviceCapabilities;
-    ULONG DeviceNumber, FunctionNumber;
+    PPCI_DEVICE Device;
+    DEVICE_POWER_STATE DeviceWake;
+    USHORT PmCapabilities;
+    ULONG DeviceNumber, FunctionNumber, Index;
+    ULONG BytesRead;
 
     UNREFERENCED_PARAMETER(Irp);
     DPRINT("Called\n");
@@ -1768,15 +1772,85 @@ PdoQueryCapabilities(
     DeviceExtension = (PPDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
     DeviceCapabilities = IrpSp->Parameters.DeviceCapabilities.Capabilities;
 
-    if (DeviceCapabilities->Version != 1)
-        return STATUS_UNSUCCESSFUL;
+    if (DeviceCapabilities == NULL ||
+        DeviceCapabilities->Size < sizeof(DEVICE_CAPABILITIES))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
-    DeviceNumber = DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber;
-    FunctionNumber = DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber;
+    if (DeviceCapabilities->Version != 1)
+        return STATUS_REVISION_MISMATCH;
+
+    Device = DeviceExtension->PciDevice;
+    if (Device == NULL)
+        return STATUS_NO_SUCH_DEVICE;
+
+    DeviceNumber = Device->SlotNumber.u.bits.DeviceNumber;
+    FunctionNumber = Device->SlotNumber.u.bits.FunctionNumber;
 
     DeviceCapabilities->UniqueID = FALSE;
     DeviceCapabilities->Address = ((DeviceNumber << 16) & 0xFFFF0000) + (FunctionNumber & 0xFFFF);
     DeviceCapabilities->UINumber = MAXULONG; /* FIXME */
+
+    /*
+     * A PCI PDO always maps S0 to D0. Keep the sleep-state mapping
+     * conservative until the root bridge supplies platform-specific data.
+     */
+    DeviceCapabilities->DeviceState[PowerSystemUnspecified] = PowerDeviceUnspecified;
+    DeviceCapabilities->DeviceState[PowerSystemWorking] = PowerDeviceD0;
+    for (Index = PowerSystemSleeping1; Index < PowerSystemMaximum; Index++)
+        DeviceCapabilities->DeviceState[Index] = PowerDeviceD3;
+
+    DeviceCapabilities->DeviceD1 = FALSE;
+    DeviceCapabilities->DeviceD2 = FALSE;
+    DeviceCapabilities->WakeFromD0 = FALSE;
+    DeviceCapabilities->WakeFromD1 = FALSE;
+    DeviceCapabilities->WakeFromD2 = FALSE;
+    DeviceCapabilities->WakeFromD3 = FALSE;
+    DeviceCapabilities->SystemWake = PowerSystemUnspecified;
+    DeviceCapabilities->DeviceWake = PowerDeviceUnspecified;
+    DeviceCapabilities->D1Latency = 0;
+    DeviceCapabilities->D2Latency = 0;
+    DeviceCapabilities->D3Latency = 0;
+
+    PciPdoCacheMsiInfo(DeviceExtension);
+    if (Device->PmCapability == 0)
+        return STATUS_SUCCESS;
+
+    BytesRead = PciPdoGetBusDataByOffset(DeviceExtension,
+                                         &PmCapabilities,
+                                         Device->PmCapability + PCI_PM_PMC,
+                                         sizeof(PmCapabilities));
+    if (BytesRead != sizeof(PmCapabilities))
+        return STATUS_SUCCESS;
+
+    DeviceCapabilities->DeviceD1 = !!(PmCapabilities & PCI_PM_CAP_D1);
+    DeviceCapabilities->DeviceD2 = !!(PmCapabilities & PCI_PM_CAP_D2);
+    DeviceCapabilities->WakeFromD0 = !!(PmCapabilities & PCI_PM_CAP_PME_D0);
+    DeviceCapabilities->WakeFromD1 =
+        DeviceCapabilities->DeviceD1 && !!(PmCapabilities & PCI_PM_CAP_PME_D1);
+    DeviceCapabilities->WakeFromD2 =
+        DeviceCapabilities->DeviceD2 && !!(PmCapabilities & PCI_PM_CAP_PME_D2);
+    DeviceCapabilities->WakeFromD3 = !!(PmCapabilities & PCI_PM_CAP_PME_D3);
+
+    DeviceWake = PowerDeviceUnspecified;
+    if (DeviceCapabilities->WakeFromD0)
+        DeviceWake = PowerDeviceD0;
+    if (DeviceCapabilities->WakeFromD1)
+        DeviceWake = PowerDeviceD1;
+    if (DeviceCapabilities->WakeFromD2)
+        DeviceWake = PowerDeviceD2;
+    if (DeviceCapabilities->WakeFromD3)
+        DeviceWake = PowerDeviceD3;
+
+    DeviceCapabilities->DeviceWake = DeviceWake;
+    if (DeviceWake != PowerDeviceUnspecified)
+        DeviceCapabilities->SystemWake = PowerSystemWorking;
+
+    /* PCI Bus Power Management Interface Specification maximum latencies. */
+    DeviceCapabilities->D1Latency = 0;
+    DeviceCapabilities->D2Latency = 2;
+    DeviceCapabilities->D3Latency = 100;
 
     return STATUS_SUCCESS;
 }
