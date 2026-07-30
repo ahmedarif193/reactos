@@ -97,7 +97,7 @@
  * 0x5800 dwords; the firmware allocates from the bottom, so two
  * double-buffered slots near the top stay clear of it.  Each slot holds
  * RPI5_HVS_MPO_MAX_PLANES planes + the cursor overlay + a terminator.
- * (Region bounds unverified on silicon — see parity roadmap 3.2.)
+ * The region bounds remain unverified on silicon.
  */
 #define RPI5_HVS_DLIST_DWORDS           ((RPI5_HVS_LENGTH - RPI5_HVS_DLIST_OFFSET) / 4)
 #define RPI5_HVS_MPO_MAX_PLANES         3
