@@ -1213,6 +1213,12 @@ public:
         __in PWDF_OBJECT_ATTRIBUTES Attributes
         );
 
+    _Must_inspect_result_
+    NTSTATUS
+    MoveContexts(
+        _In_ FxObject* TargetObject
+        );
+
     //
     // Request that this Object be removed from the child association
     // list for its parent
