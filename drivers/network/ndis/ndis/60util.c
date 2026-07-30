@@ -191,6 +191,65 @@ NdisCancelTimerObject(
 }
 
 /* ============================================================================
+ *  Status and interface-identity helpers used by NetAdapterCx.
+ * ============================================================================ */
+
+NTSTATUS
+NTAPI
+NdisConvertNdisStatusToNtStatus(
+    _In_ NDIS_STATUS Status)
+{
+    /* Modern NDIS status values used by NetAdapterCx are NTSTATUS values.
+     * Keep the conversion explicit so legacy 0xC001xxxx values do not get
+     * silently reported as success. */
+    switch (Status)
+    {
+        case NDIS_STATUS_CLOSING:
+        case NDIS_STATUS_ADAPTER_NOT_READY:
+            return STATUS_DEVICE_NOT_READY;
+
+        case NDIS_STATUS_BAD_VERSION:
+        case NDIS_STATUS_BAD_CHARACTERISTICS:
+            return STATUS_REVISION_MISMATCH;
+
+        case NDIS_STATUS_ADAPTER_NOT_FOUND:
+            return STATUS_NO_SUCH_DEVICE;
+
+        case NDIS_STATUS_INVALID_LENGTH:
+        case NDIS_STATUS_BUFFER_TOO_SHORT:
+            return STATUS_BUFFER_TOO_SMALL;
+
+        case NDIS_STATUS_INVALID_DATA:
+        case NDIS_STATUS_INVALID_OID:
+            return STATUS_INVALID_PARAMETER;
+
+        default:
+            return (NTSTATUS)Status;
+    }
+}
+
+NDIS_STATUS
+NTAPI
+NdisConvertNtStatusToNdisStatus(
+    _In_ NTSTATUS Status)
+{
+    return (NDIS_STATUS)Status;
+}
+
+NDIS_STATUS
+NTAPI
+NdisIfGetInterfaceIndexFromNetLuid(
+    _In_ NET_LUID NetLuid,
+    _Out_ PNET_IFINDEX IfIndex)
+{
+    if (IfIndex == NULL || NetLuid.Info.NetLuidIndex == 0)
+        return NDIS_STATUS_INTERFACE_NOT_FOUND;
+
+    *IfIndex = (NET_IFINDEX)NetLuid.Info.NetLuidIndex;
+    return NDIS_STATUS_SUCCESS;
+}
+
+/* ============================================================================
  *  NDIS 6 RW lock
  *
  *  Wraps ERESOURCE which gives us shared/exclusive semantics. The
