@@ -2670,7 +2670,7 @@
 @ stub -arch=arm64 MmGetPhysicalMemoryRangesEx2
 @ stub -arch=arm64 MmGetSectionInformation
 @ stub -arch=arm64 MmIsDriverSuspectForVerifier
-@ stub -arch=arm64 MmIsDriverVerifyingByAddress
+@ stdcall -arch=x86_64,arm64 MmIsDriverVerifyingByAddress(ptr)
 @ stub -arch=arm64 MmIsFileSectionActive
 @ stub -arch=arm64 MmLockPreChargedPagedPool
 @ stdcall -arch=arm64 MmMapIoSpaceEx(long long long long)
