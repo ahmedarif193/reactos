@@ -57,6 +57,17 @@ MmpReleaseDeviceLock(_Inout_ PDEVICE_EXTENSION DeviceExtension)
     KeReleaseMutex(&(DeviceExtension->DeviceLock), FALSE);
 }
 
+FORCEINLINE
+BOOLEAN
+MountMgrAutoMountAllowed(_In_ PDEVICE_EXTENSION DeviceExtension,
+                         _In_ BOOLEAN Removable)
+{
+    if (DeviceExtension->IsMiniNt && Removable)
+        return FALSE;
+
+    return !DeviceExtension->NoAutoMount || Removable;
+}
+
 typedef struct _DEVICE_INFORMATION
 {
     LIST_ENTRY DeviceListEntry;
