@@ -12,24 +12,8 @@ include_directories(BEFORE
     ${REACTOS_SOURCE_DIR}/boot/freeldr/freeldr/include/arch/uefi
     ${CMAKE_CURRENT_BINARY_DIR})
 
-set(UEFILDR_FONT_C ${CMAKE_CURRENT_BINARY_DIR}/uefi_fb_font.c)
-set(UEFILDR_FONT_H ${CMAKE_CURRENT_BINARY_DIR}/uefi_fb_font.h)
-
-add_custom_command(
-    OUTPUT ${UEFILDR_FONT_C} ${UEFILDR_FONT_H}
-    COMMAND native-bin2c
-            ${REACTOS_SOURCE_DIR}/media/fonts/lucon.ttf
-            ${UEFILDR_FONT_C}
-            ${UEFILDR_FONT_H}
-            BIN
-            uefi_fb_font_data
-    DEPENDS
-            native-bin2c
-            ${REACTOS_SOURCE_DIR}/media/fonts/lucon.ttf)
-
 list(APPEND UEFILDR_ARC_SOURCE
     ${FREELDR_ARC_SOURCE}
-    ${UEFILDR_FONT_C}
     arch/uefi/ftglue.c
     arch/uefi/stubs.c
     arch/uefi/ueficon.c
@@ -116,9 +100,9 @@ add_library(uefifreeldr_common
     ${UEFILDR_BOOTMGR_SOURCE}
     ${FREELDR_NTLDR_SOURCE})
 
-# Keep setjmp before freetype so the archive does not satisfy FreeType's
+# Keep setjmp before bootfont so the archive does not satisfy FreeType's
 # longjmp reference with the vcruntime implementation, which needs RtlUnwind.
-target_link_libraries(uefifreeldr_common setjmp freetype)
+target_link_libraries(uefifreeldr_common setjmp bootfont)
 target_link_libraries(uefifreeldr_common fatfs)
 
 target_compile_definitions(uefifreeldr_common PRIVATE _FRLDRLIB_ UEFIBOOT)

@@ -7,6 +7,7 @@
  */
 
 #include "precomp.h"
+#include <bootfont/bootfont.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -17,6 +18,10 @@
 /* GLOBALS ********************************************************************/
 
 #define TAG_BOOTVID_BACKBUFFER 'bdiV'
+
+#define BOOTVID_FALLBACK_FONT_SCALE 2
+#define BOOTVID_FALLBACK_CELL_WIDTH (BOOTCHAR_WIDTH * BOOTVID_FALLBACK_FONT_SCALE)
+#define BOOTVID_FALLBACK_CELL_HEIGHT ((BOOTCHAR_HEIGHT + 1) * BOOTVID_FALLBACK_FONT_SCALE)
 
 #define BB_PIXEL(x, y) \
     (BackBuffer + (ULONG_PTR)(y) * VidpDisplayWidth + (x))
@@ -29,6 +34,8 @@ static PUCHAR BackBuffer = NULL;
 static SIZE_T BackBufferSize;
 
 static RGBQUAD CachedPalette[BV_MAX_COLORS];
+static UCHAR CachedBlendPalette[BV_MAX_COLORS][BV_MAX_COLORS][MAXUCHAR + 1];
+static BOOT_FONT_RENDERER BootVidFont;
 
 
 /* PRIVATE FUNCTIONS *********************************************************/
@@ -104,6 +111,118 @@ ApplyPalette(VOID)
     FlushBackBufferRect(0, 0, VidpDisplayWidth, VidpDisplayHeight);
 }
 
+static UCHAR
+FindClosestBlendedPaletteColor(
+    _In_ UCHAR Background,
+    _In_ UCHAR Foreground,
+    _In_ UCHAR Alpha)
+{
+    ULONG BackgroundColor;
+    ULONG ForegroundColor;
+    LONG Red;
+    LONG Green;
+    LONG Blue;
+    ULONG BestDistance = MAXULONG;
+    UCHAR BestIndex = Background;
+    UCHAR Index;
+
+    if ((Alpha == 0) || (Foreground >= BV_MAX_COLORS))
+        return Background;
+
+    if ((Alpha == 0xFF) || (Background >= BV_MAX_COLORS))
+        return Foreground;
+
+    BackgroundColor = CachedPalette[Background];
+    ForegroundColor = CachedPalette[Foreground];
+    Red = (GetRValue(BackgroundColor) * (255 - Alpha) +
+           GetRValue(ForegroundColor) * Alpha + 127) / 255;
+    Green = (GetGValue(BackgroundColor) * (255 - Alpha) +
+             GetGValue(ForegroundColor) * Alpha + 127) / 255;
+    Blue = (GetBValue(BackgroundColor) * (255 - Alpha) +
+            GetBValue(ForegroundColor) * Alpha + 127) / 255;
+
+    for (Index = 0; Index < BV_MAX_COLORS; ++Index)
+    {
+        LONG DeltaRed = Red - GetRValue(CachedPalette[Index]);
+        LONG DeltaGreen = Green - GetGValue(CachedPalette[Index]);
+        LONG DeltaBlue = Blue - GetBValue(CachedPalette[Index]);
+        ULONG Distance = DeltaRed * DeltaRed +
+                         DeltaGreen * DeltaGreen +
+                         DeltaBlue * DeltaBlue;
+
+        if (Distance < BestDistance)
+        {
+            BestDistance = Distance;
+            BestIndex = Index;
+        }
+    }
+
+    return BestIndex;
+}
+
+static VOID
+CachePaletteBlends(VOID)
+{
+    ULONG Background;
+    ULONG Foreground;
+    ULONG Alpha;
+
+    for (Background = 0; Background < BV_MAX_COLORS; ++Background)
+    {
+        for (Foreground = 0; Foreground < BV_MAX_COLORS; ++Foreground)
+        {
+            for (Alpha = 0; Alpha <= MAXUCHAR; ++Alpha)
+            {
+                CachedBlendPalette[Background][Foreground][Alpha] =
+                    FindClosestBlendedPaletteColor((UCHAR)Background,
+                                                   (UCHAR)Foreground,
+                                                   (UCHAR)Alpha);
+            }
+        }
+    }
+}
+
+static VOID
+DisplayBitmapCharacter(
+    _In_ CHAR Character,
+    _In_ ULONG Left,
+    _In_ ULONG Top,
+    _In_ ULONG TextColor,
+    _In_ ULONG BackColor)
+{
+    const UCHAR* FontChar = GetFontPtr((UCHAR)Character);
+    const BOOLEAN Opaque = (BackColor < BV_COLOR_NONE);
+    ULONG Width, Height, y;
+
+    Width = min(VidpCharacterWidth, VidpDisplayWidth - Left);
+    Height = min(VidpCharacterHeight, VidpDisplayHeight - Top);
+
+    for (y = 0; y < Height; ++y)
+    {
+        ULONG SourceY = (y * (BOOTCHAR_HEIGHT + 1)) / VidpCharacterHeight;
+        PUCHAR Back = BB_PIXEL(Left, Top + y);
+        ULONG x;
+
+        for (x = 0; x < Width; ++x)
+        {
+            ULONG SourceX = (x * BOOTCHAR_WIDTH) / VidpCharacterWidth;
+            UCHAR Bit = 1 << (BOOTCHAR_WIDTH - 1 - SourceX);
+
+            if ((SourceY < BOOTCHAR_HEIGHT) &&
+                (FontChar[(LONG)SourceY * FONT_PTR_DELTA] & Bit))
+            {
+                Back[x] = (UCHAR)TextColor;
+            }
+            else if (Opaque)
+            {
+                Back[x] = (UCHAR)BackColor;
+            }
+        }
+    }
+
+    FlushBackBufferRect(Left, Top, Width, Height);
+}
+
 /* PUBLIC FUNCTIONS **********************************************************/
 
 BOOLEAN
@@ -117,7 +236,7 @@ VidInitialize(
     CM_FRAMEBUF_DEVICE_DATA VideoConfigData; /* Configuration data from hardware tree */
     INTERFACE_TYPE Interface;
     ULONG BusNumber;
-    ULONG Dpi, MaximumDpi;
+    ULONG Dpi, ReadableDpi, MaximumDpi;
     ULONG LogicalWidth, LogicalHeight;
     SIZE_T BackBufferHeight;
     NTSTATUS Status;
@@ -200,6 +319,22 @@ VidInitialize(
         Dpi = LOADER_PARAMETER_FRAMEBUFFER_DPI_DEFAULT;
     }
 
+    /*
+     * The UEFI console chooses its font to retain about 38 visible rows.
+     * Preserve that minimum physical text size after the kernel takes over;
+     * the configured system DPI may still request a larger scale.
+     */
+    ReadableDpi = (ULONG)(((ULONGLONG)ScreenHeight *
+                           LOADER_PARAMETER_FRAMEBUFFER_DPI_DEFAULT +
+                           BOOT_FONT_TARGET_ROWS *
+                           BOOTVID_FALLBACK_CELL_HEIGHT - 1) /
+                          (BOOT_FONT_TARGET_ROWS *
+                           BOOTVID_FALLBACK_CELL_HEIGHT));
+    ReadableDpi = min(max(ReadableDpi,
+                          (ULONG)LOADER_PARAMETER_FRAMEBUFFER_DPI_MIN),
+                      (ULONG)LOADER_PARAMETER_FRAMEBUFFER_DPI_MAX);
+    Dpi = max(Dpi, ReadableDpi);
+
     MaximumDpi = min((ULONG)(((ULONGLONG)ScreenWidth * LOADER_PARAMETER_FRAMEBUFFER_DPI_DEFAULT) / SCREEN_WIDTH), (ULONG)(((ULONGLONG)ScreenHeight * LOADER_PARAMETER_FRAMEBUFFER_DPI_DEFAULT) / SCREEN_HEIGHT));
     Dpi = min(Dpi, MaximumDpi);
 
@@ -208,8 +343,20 @@ VidInitialize(
     LogicalWidth = max(LogicalWidth, SCREEN_WIDTH);
     LogicalHeight = max(LogicalHeight, SCREEN_HEIGHT);
 
-    /* A full-width scroll region must end on an 8-pixel character boundary. */
-    LogicalWidth = ALIGN_DOWN_BY(LogicalWidth, BOOTCHAR_WIDTH);
+    if (BootFontInitialize(&BootVidFont, LogicalWidth, LogicalHeight))
+    {
+        VidpCharacterWidth = BootVidFont.CellWidth;
+        VidpCharacterHeight = BootVidFont.CellHeight;
+    }
+    else
+    {
+        DPRINT1("Could not initialize the FreeType boot console font\n");
+        VidpCharacterWidth = BOOTVID_FALLBACK_CELL_WIDTH;
+        VidpCharacterHeight = BOOTVID_FALLBACK_CELL_HEIGHT;
+    }
+
+    /* A full-width scroll region must end on a character boundary. */
+    LogicalWidth -= LogicalWidth % VidpCharacterWidth;
 
     VidpDisplayWidth = LogicalWidth;
     VidpDisplayHeight = LogicalHeight;
@@ -250,7 +397,7 @@ VidInitialize(
         MappedSize += (ULONG)(TranslatedAddress.QuadPart - FrameBuffer.QuadPart); // BYTE_OFFSET()
         MappedSize = ROUND_TO_PAGES(MappedSize);
         /* Essentially MmMapVideoDisplay() */
-        FrameBufferBase = MmMapIoSpace(FrameBuffer, MappedSize, MmFrameBufferCached);
+        FrameBufferBase = MmMapIoSpace(FrameBuffer, MappedSize, (MEMORY_CACHING_TYPE)MmFrameBufferCached);
         if (!FrameBufferBase)
             FrameBufferBase = MmMapIoSpace(FrameBuffer, MappedSize, MmNonCached);
         if (!FrameBufferBase)
@@ -273,7 +420,7 @@ VidInitialize(
      * Reserve off-screen area for the backbuffer that contains
      * 8-bit indexed color screen image, plus preserved row data.
      */
-    BackBufferHeight = (SIZE_T)VidpDisplayHeight + (BOOTCHAR_HEIGHT + 1);
+    BackBufferHeight = (SIZE_T)VidpDisplayHeight + VidpCharacterHeight;
     if ((BackBufferHeight < VidpDisplayHeight) || ((SIZE_T)VidpDisplayWidth > MAXULONG_PTR / BackBufferHeight))
     {
         DPRINT1("Logical framebuffer dimensions are too large\n");
@@ -310,6 +457,8 @@ VidInitialize(
     return TRUE;
 
 Failure:
+    BootFontCleanup(&BootVidFont);
+
     /* We failed somewhere; unmap the framebuffer if we mapped it */
     if (FrameBufferBase && (AddressSpace == 0))
         MmUnmapIoSpace(FrameBufferBase, MappedSize);
@@ -354,7 +503,10 @@ InitPaletteWithTable(
 
     /* Re-apply the palette if it has changed */
     if (HasChanged)
+    {
+        CachePaletteBlends();
         ApplyPalette();
+    }
 }
 
 VOID
@@ -425,7 +577,7 @@ PreserveRow(
         return;
 
     Height = min(Height, VidpDisplayHeight - CurrentTop);
-    Height = min(Height, (ULONG)(BOOTCHAR_HEIGHT + 1));
+    Height = min(Height, VidpCharacterHeight);
 
     /* Calculate the position in memory for the row */
     if (Restore)
@@ -495,30 +647,62 @@ DisplayCharacter(
     _In_ ULONG TextColor,
     _In_ ULONG BackColor)
 {
-    /* Get the font line for this character */
-    const UCHAR* FontChar = GetFontPtr(Character);
+    const BOOT_FONT_GLYPH* Glyph;
+    const UCHAR* Bitmap;
     const BOOLEAN Opaque = (BackColor < BV_COLOR_NONE);
-    ULONG Width, Height, y;
+    ULONG Width, Height;
+    ULONG Row;
 
     if ((Left >= VidpDisplayWidth) || (Top >= VidpDisplayHeight))
         return;
 
-    Width = min((ULONG)BOOTCHAR_WIDTH, VidpDisplayWidth - Left);
-    Height = min((ULONG)BOOTCHAR_HEIGHT, VidpDisplayHeight - Top);
+    if (TextColor >= BV_MAX_COLORS)
+        return;
 
-    /* Loop each pixel height */
-    for (y = 0; y < Height; ++y, FontChar += FONT_PTR_DELTA)
+    Glyph = BootFontGetGlyph(&BootVidFont, (UCHAR)Character);
+    if (!Glyph)
     {
-        PUCHAR Back = BB_PIXEL(Left, Top + y);
-        UCHAR bit = 1 << (BOOTCHAR_WIDTH - 1);
-        ULONG x;
+        DisplayBitmapCharacter(Character, Left, Top, TextColor, BackColor);
+        return;
+    }
 
-        for (x = 0; x < Width; ++x, bit >>= 1)
+    Width = min(VidpCharacterWidth, VidpDisplayWidth - Left);
+    Height = min(VidpCharacterHeight, VidpDisplayHeight - Top);
+
+    if (Opaque)
+    {
+        for (Row = 0; Row < Height; ++Row)
+            RtlFillMemory(BB_PIXEL(Left, Top + Row), Width, (UCHAR)BackColor);
+    }
+
+    Bitmap = BootFontGetGlyphBitmap(&BootVidFont, Glyph);
+    if (Bitmap && Glyph->Width && Glyph->Height)
+    {
+        LONG RelativeX = max((LONG)Glyph->Left, 0L);
+        LONG RelativeY = (LONG)BootVidFont.Baseline - Glyph->Top;
+
+        for (Row = 0; Row < Glyph->Height; ++Row)
         {
-            if (*FontChar & bit)
-                Back[x] = (UCHAR)TextColor;
-            else if (Opaque)
-                Back[x] = (UCHAR)BackColor;
+            LONG Y = RelativeY + Row;
+            ULONG Column;
+            PUCHAR Back;
+
+            if ((Y < 0) || (Y >= (LONG)Height))
+                continue;
+
+            Back = BB_PIXEL(Left, Top + Y);
+            for (Column = 0; Column < Glyph->Width; ++Column)
+            {
+                LONG X = RelativeX + Column;
+                UCHAR Alpha;
+
+                if ((X < 0) || (X >= (LONG)Width))
+                    continue;
+
+                Alpha = Bitmap[Row * Glyph->Pitch + Column];
+                if (Alpha != 0)
+                    Back[X] = CachedBlendPalette[Back[X]][TextColor][Alpha];
+            }
         }
     }
 
