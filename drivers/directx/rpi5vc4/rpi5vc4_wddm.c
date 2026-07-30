@@ -1108,21 +1108,28 @@ Rpi5Vc4DmaPipelineDrain(
  * ====================================================================== */
 
 /*
- * Walk a packet stream.  Returns FALSE on malformed input.  When Job is
- * non-NULL, the last V3D job packet found is copied out.
+ * Walk a packet stream.  Returns FALSE on malformed input or more than one
+ * hardware job/PRESENT marker.  When Job is non-NULL, the single hardware
+ * job packet is copied out.  PRESENT is descriptive CPU-completed work and
+ * is reported separately.
  */
 static BOOLEAN
 Rpi5Vc4ParseDmaStream(
     _In_reads_bytes_(Length) const VOID *Stream,
     _In_ SIZE_T Length,
     _Out_opt_ PRPI5VC4_DMA_PACKET Job,
-    _Out_opt_ PBOOLEAN HasJob)
+    _Out_opt_ PBOOLEAN HasJob,
+    _Out_opt_ PBOOLEAN HasPresent)
 {
     const UCHAR *Cursor = Stream;
     SIZE_T Remaining = Length;
+    BOOLEAN FoundJob = FALSE;
+    BOOLEAN FoundPresent = FALSE;
 
     if (HasJob != NULL)
         *HasJob = FALSE;
+    if (HasPresent != NULL)
+        *HasPresent = FALSE;
 
     while (Remaining >= sizeof(RPI5VC4_DMA_PACKET))
     {
@@ -1139,13 +1146,23 @@ Rpi5Vc4ParseDmaStream(
             Packet->Op == RPI5VC4_DMA_OP_TFU_JOB ||
             Packet->Op == RPI5VC4_DMA_OP_CSD_JOB)
         {
+            if (FoundJob)
+                return FALSE;
+            FoundJob = TRUE;
             if (Job != NULL)
                 *Job = *Packet;
             if (HasJob != NULL)
                 *HasJob = TRUE;
         }
-        else if (Packet->Op != RPI5VC4_DMA_OP_NOP &&
-                 Packet->Op != RPI5VC4_DMA_OP_PRESENT)
+        else if (Packet->Op == RPI5VC4_DMA_OP_PRESENT)
+        {
+            if (FoundPresent)
+                return FALSE;
+            FoundPresent = TRUE;
+            if (HasPresent != NULL)
+                *HasPresent = TRUE;
+        }
+        else if (Packet->Op != RPI5VC4_DMA_OP_NOP)
         {
             return FALSE;
         }
@@ -1695,7 +1712,7 @@ Rpi5Vc4DdiRender(
      * packet stream (see rpi5vc4.h); validate before accepting it.
      */
     if (!Rpi5Vc4ParseDmaStream(Render->pCommand, Render->CommandLength,
-                               NULL, NULL))
+                               NULL, NULL, NULL))
     {
         do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
     }
@@ -2043,6 +2060,7 @@ Rpi5Vc4DdiSubmitCommand(
     PRPI5VC4_DEVICE_EXTENSION DeviceExtension = MiniportDeviceContext;
     RPI5VC4_DMA_PACKET Job;
     BOOLEAN HasJob = FALSE;
+    BOOLEAN HasPresent = FALSE;
     PRPI5VC4_PENDING_SUBMIT Entry;
     KIRQL OldIrql;
     BOOLEAN Completed;
@@ -2077,17 +2095,33 @@ Rpi5Vc4DdiSubmitCommand(
         return STATUS_INVALID_PARAMETER;
 
     /*
-     * Look for a V3D control-list job in the submitted range. Missing or
-     * malformed physical mappings are rejected; only explicit null rendering
-     * may complete without parsing a mapped DMA stream.
+     * Parse the submitted range strictly.  Hardware jobs execute on their
+     * engine; the descriptive packet emitted by DxgkDdiPresent is valid work
+     * that completes on the CPU after dxgkrnl has performed the CPU blit (or
+     * the scanout change has gone through SetVidPnSourceAddress).  It must not
+     * be mistaken for a missing GPU job.
      */
     if (!SubmitCommand->Flags.NullRendering)
     {
         if (DmaBuffer == NULL || SubmitCommand->DmaBufferSubmissionStartOffset == SubmitCommand->DmaBufferSubmissionEndOffset)
             return STATUS_INVALID_PARAMETER;
-        if (!Rpi5Vc4ParseDmaStream((PUCHAR)DmaBuffer + SubmitCommand->DmaBufferSubmissionStartOffset, SubmitCommand->DmaBufferSubmissionEndOffset - SubmitCommand->DmaBufferSubmissionStartOffset, &Job, &HasJob))
+        if (!Rpi5Vc4ParseDmaStream((PUCHAR)DmaBuffer + SubmitCommand->DmaBufferSubmissionStartOffset, SubmitCommand->DmaBufferSubmissionEndOffset - SubmitCommand->DmaBufferSubmissionStartOffset, &Job, &HasJob, &HasPresent))
             return STATUS_INVALID_PARAMETER;
-        if (!HasJob)
+
+        /* PRESENT is kernel-generated work, never a user Render opcode. */
+        if (HasPresent &&
+            !SubmitCommand->Flags.Present &&
+            !SubmitCommand->Flags.RedirectedPresent)
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+        if ((SubmitCommand->Flags.Present ||
+             SubmitCommand->Flags.RedirectedPresent) &&
+            !HasPresent)
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+        if (!HasJob && !HasPresent)
             return STATUS_INVALID_PARAMETER;
     }
 
