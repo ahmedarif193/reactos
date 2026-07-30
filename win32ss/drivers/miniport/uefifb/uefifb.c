@@ -6,8 +6,8 @@
  *              handoff) to the framebuf.dll display driver.
  * COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
  *
- * This driver is intentionally non-PnP: the GOP framebuffer is a pre-boot
- * firmware resource, not a bus-enumerated device.
+ * Device binding, firmware-resource ownership, and headless fallback policy
+ * are supplied by the platform provider linked into each miniport target.
  */
 
 #include "uefifb.h"
@@ -25,99 +25,84 @@ DriverEntry(
     VideoPortZeroMemory(&InitData, sizeof(InitData));
     InitData.HwInitDataSize = sizeof(VIDEO_HW_INITIALIZATION_DATA);
     InitData.StartingDeviceNumber = 0;
-    InitData.AdapterInterfaceType = Internal;
+    InitData.AdapterInterfaceType = UefiFbPlatform.AdapterInterfaceType;
     InitData.HwFindAdapter = UefiFbFindAdapter;
     InitData.HwInitialize = UefiFbInitialize;
     InitData.HwStartIO = UefiFbStartIO;
     InitData.HwResetHw = UefiFbResetHw;
     InitData.HwGetPowerState = UefiFbGetPowerState;
     InitData.HwSetPowerState = UefiFbSetPowerState;
-    /*
-     * The firmware framebuffer is not bus-enumerated, so no child descriptor
-     * callback is needed - videoport will not try to enumerate monitors.
-     */
-    InitData.HwGetVideoChildDescriptor = NULL;
+    InitData.HwGetVideoChildDescriptor =
+        UefiFbPlatform.GetVideoChildDescriptor;
     InitData.HwDeviceExtensionSize = sizeof(UEFIFB_DEVICE_EXTENSION);
 
     return VideoPortInitialize(Context1, Context2, &InitData, NULL);
 }
 
-/*
- * Headless fallback geometry. A modest, universally-supported mode keeps the
- * contiguous RAM allocation small (~3 MiB) while still giving the desktop a
- * usable surface. Nothing scans this buffer out, so the exact resolution is
- * cosmetic - bump it here if a larger off-screen desktop is wanted.
- */
-#define UEFIFB_HEADLESS_WIDTH  1024
-#define UEFIFB_HEADLESS_HEIGHT 768
-#define UEFIFB_HEADLESS_BPP    32
-
-/*
- * Synthesise an off-screen framebuffer backed by ordinary RAM. Used when the
- * firmware exposed no usable GOP framebuffer (e.g. no display was attached at
- * power-on, so the firmware never allocated one). Presenting a valid adapter -
- * rather than declining - mirrors how Windows always keeps a basic display
- * adapter present, and prevents win32k from bugchecking
- * VIDEO_DRIVER_INIT_FAILURE (0xB4) on a machine that would otherwise have zero
- * display devices.
- */
-static
-VP_STATUS
-UefiFbInitHeadlessFallback(
-    _Inout_ PUEFIFB_DEVICE_EXTENSION DeviceExtension)
+static BOOLEAN
+UefiFbDecodePixelFormat(
+    _In_ const LOADER_PARAMETER_FRAMEBUFFER *FrameBuffer,
+    _Out_ PULONG BitsPerPixel,
+    _Out_ PULONG BytesPerPixel,
+    _Out_ PULONG RedMask,
+    _Out_ PULONG GreenMask,
+    _Out_ PULONG BlueMask,
+    _Out_ PULONG ReservedMask)
 {
-    const ULONG Width = UEFIFB_HEADLESS_WIDTH;
-    const ULONG Height = UEFIFB_HEADLESS_HEIGHT;
-    const ULONG BytesPerPixel = UEFIFB_HEADLESS_BPP / 8;
-    const ULONG Pitch = Width * BytesPerPixel;
-    const SIZE_T SizeInBytes = (SIZE_T)Pitch * Height;
-    PHYSICAL_ADDRESS Low, High, Boundary;
-    PVOID Buffer;
+    ULONG ColorMasks;
+    ULONG AllMasks;
+    ULONG ValidBits;
 
-    Low.QuadPart = 0;
-    High.QuadPart = (LONGLONG)-1;   /* any RAM; videoport maps it 64-bit safe */
-    Boundary.QuadPart = 0;
+    *RedMask = FrameBuffer->RedMask;
+    *GreenMask = FrameBuffer->GreenMask;
+    *BlueMask = FrameBuffer->BlueMask;
+    *ReservedMask = FrameBuffer->Reserved;
 
     /*
-     * Write-combined to match videoport's P6CACHE mapping of these same pages;
-     * a cached alias here would be a mismatched-attribute alias on ARM64.
+     * PixelFormat in LOADER_PARAMETER_FRAMEBUFFER is the loader-normalized
+     * bits-per-pixel value. FreeLdr has already converted the EFI GOP enum
+     * into this value and copied the corresponding channel masks.
      */
-    Buffer = MmAllocateContiguousMemorySpecifyCache(SizeInBytes,
-                                                    Low,
-                                                    High,
-                                                    Boundary,
-                                                    MmWriteCombined);
-    if (Buffer == NULL)
+    switch (FrameBuffer->PixelFormat)
     {
-        VideoPortDebugPrint(Error,
-            "UefiFb: headless framebuffer alloc (%lu bytes) failed\n",
-            (ULONG)SizeInBytes);
-        return ERROR_NOT_ENOUGH_MEMORY;
+        case 16:
+        case 24:
+        case 32:
+            *BitsPerPixel = FrameBuffer->PixelFormat;
+            *BytesPerPixel = (*BitsPerPixel + 7) / 8;
+            break;
+
+        default:
+            return FALSE;
     }
 
-    VideoPortZeroMemory(Buffer, (ULONG)SizeInBytes);
+    ColorMasks = *RedMask | *GreenMask | *BlueMask;
+    AllMasks = ColorMasks | *ReservedMask;
+    ValidBits = (*BitsPerPixel == 32) ?
+                    MAXULONG :
+                    (1UL << *BitsPerPixel) - 1;
 
-    DeviceExtension->HeadlessBuffer = Buffer;
-    DeviceExtension->FrameBufferPhysical = MmGetPhysicalAddress(Buffer);
-    DeviceExtension->FrameBufferSize = (ULONG)SizeInBytes;
-    DeviceExtension->ScreenWidth = Width;
-    DeviceExtension->ScreenHeight = Height;
-    DeviceExtension->PixelsPerScanLine = Width;
-    DeviceExtension->BitsPerPixel = UEFIFB_HEADLESS_BPP;
-    DeviceExtension->RedMask = 0x00FF0000;
-    DeviceExtension->GreenMask = 0x0000FF00;
-    DeviceExtension->BlueMask = 0x000000FF;
-    DeviceExtension->ReservedMask = 0xFF000000;
-    DeviceExtension->BytesPerScanLine = Pitch;
-    DeviceExtension->MappedFrameBuffer = NULL;
-    DeviceExtension->CurrentMode = 0;
+    return ColorMasks != 0 &&
+           (AllMasks & ~ValidBits) == 0 &&
+           (*RedMask & *GreenMask) == 0 &&
+           (*RedMask & *BlueMask) == 0 &&
+           (*GreenMask & *BlueMask) == 0 &&
+           (*ReservedMask & ColorMasks) == 0;
+}
 
-    VideoPortDebugPrint(Info,
-        "UefiFb: no firmware framebuffer; synthesised %lux%lu headless RAM "
-        "surface at 0x%I64x\n",
-        Width, Height, DeviceExtension->FrameBufferPhysical.QuadPart);
+static ULONG
+UefiFbMaskBitCount(
+    _In_ ULONG Mask)
+{
+    ULONG Count = 0;
 
-    return NO_ERROR;
+    while (Mask != 0)
+    {
+        Count += Mask & 1;
+        Mask >>= 1;
+    }
+
+    return Count;
 }
 
 VP_STATUS
@@ -132,8 +117,14 @@ UefiFbFindAdapter(
     PUEFIFB_DEVICE_EXTENSION DeviceExtension =
         (PUEFIFB_DEVICE_EXTENSION)HwDeviceExtension;
     LOADER_PARAMETER_FRAMEBUFFER FbInfo;
+    VP_STATUS Status;
     ULONG BytesPerPixel;
     ULONGLONG VisibleFrameBufferSize;
+    ULONG RedMask;
+    ULONG GreenMask;
+    ULONG BlueMask;
+    ULONG ReservedMask;
+    ULONG BitsPerPixel;
 
     UNREFERENCED_PARAMETER(HwContext);
     UNREFERENCED_PARAMETER(ArgumentString);
@@ -158,44 +149,81 @@ UefiFbFindAdapter(
         FbInfo.FrameBufferSize == 0 ||
         FbInfo.HorizontalResolution == 0 ||
         FbInfo.VerticalResolution == 0 ||
-        FbInfo.PixelsPerScanLine == 0 ||
+        FbInfo.PixelsPerScanLine < FbInfo.HorizontalResolution ||
         FbInfo.PixelFormat == 0)
     {
-        if (UefiFbInitHeadlessFallback(DeviceExtension) != NO_ERROR)
-            return ERROR_DEV_NOT_EXIST;
+        Status = UefiFbPlatform.InitializeFallback(DeviceExtension);
+        if (Status != NO_ERROR)
+            return Status;
         goto Configured;
     }
 
-    BytesPerPixel = (FbInfo.PixelFormat + 7) / 8;
+    if (!UefiFbDecodePixelFormat(&FbInfo,
+                                 &BitsPerPixel,
+                                 &BytesPerPixel,
+                                 &RedMask,
+                                 &GreenMask,
+                                 &BlueMask,
+                                 &ReservedMask))
+    {
+        Status = UefiFbPlatform.InitializeFallback(DeviceExtension);
+        if (Status != NO_ERROR)
+            return Status;
+        goto Configured;
+    }
+
+    if (BytesPerPixel == 0 ||
+        FbInfo.PixelsPerScanLine > MAXULONG / BytesPerPixel)
+    {
+        Status = UefiFbPlatform.InitializeFallback(DeviceExtension);
+        if (Status != NO_ERROR)
+            return Status;
+        goto Configured;
+    }
+
+    DeviceExtension->BytesPerScanLine =
+        FbInfo.PixelsPerScanLine * BytesPerPixel;
+    if (FbInfo.VerticalResolution >
+        (~(ULONGLONG)0) / DeviceExtension->BytesPerScanLine)
+    {
+        Status = UefiFbPlatform.InitializeFallback(DeviceExtension);
+        if (Status != NO_ERROR)
+            return Status;
+        goto Configured;
+    }
+
     VisibleFrameBufferSize =
         (ULONGLONG)FbInfo.VerticalResolution *
-        FbInfo.PixelsPerScanLine *
-        BytesPerPixel;
+        DeviceExtension->BytesPerScanLine;
     if (VisibleFrameBufferSize == 0 ||
-        VisibleFrameBufferSize > FbInfo.FrameBufferSize)
+        VisibleFrameBufferSize > FbInfo.FrameBufferSize ||
+        VisibleFrameBufferSize > MAXULONG)
     {
         VideoPortDebugPrint(Error,
             "UefiFb: visible size 0x%I64x exceeds aperture 0x%lx, "
-            "using headless surface\n",
+            "rejecting firmware mode\n",
             VisibleFrameBufferSize,
             FbInfo.FrameBufferSize);
-        if (UefiFbInitHeadlessFallback(DeviceExtension) != NO_ERROR)
-            return ERROR_DEV_NOT_EXIST;
+        Status = UefiFbPlatform.InitializeFallback(DeviceExtension);
+        if (Status != NO_ERROR)
+            return Status;
         goto Configured;
     }
+
+    Status = UefiFbPlatform.ValidateFrameBuffer(DeviceExtension, &FbInfo);
+    if (Status != NO_ERROR)
+        return Status;
 
     DeviceExtension->FrameBufferPhysical = FbInfo.FrameBufferBase;
     DeviceExtension->FrameBufferSize = (ULONG)VisibleFrameBufferSize;
     DeviceExtension->ScreenWidth = FbInfo.HorizontalResolution;
     DeviceExtension->ScreenHeight = FbInfo.VerticalResolution;
     DeviceExtension->PixelsPerScanLine = FbInfo.PixelsPerScanLine;
-    DeviceExtension->BitsPerPixel = FbInfo.PixelFormat;
-    DeviceExtension->RedMask = FbInfo.RedMask;
-    DeviceExtension->GreenMask = FbInfo.GreenMask;
-    DeviceExtension->BlueMask = FbInfo.BlueMask;
-    DeviceExtension->ReservedMask = FbInfo.Reserved;
-    DeviceExtension->BytesPerScanLine =
-        DeviceExtension->PixelsPerScanLine * BytesPerPixel;
+    DeviceExtension->BitsPerPixel = BitsPerPixel;
+    DeviceExtension->RedMask = RedMask;
+    DeviceExtension->GreenMask = GreenMask;
+    DeviceExtension->BlueMask = BlueMask;
+    DeviceExtension->ReservedMask = ReservedMask;
     DeviceExtension->MappedFrameBuffer = NULL;
     DeviceExtension->CurrentMode = 0;
 
@@ -246,9 +274,9 @@ UefiFbInitialize(
     Mode->YMillimeter =
         ((ULONGLONG)DeviceExtension->ScreenHeight * 254 + (Dpi * 5)) / (Dpi * 10);
 
-    Mode->NumberRedBits = 8;
-    Mode->NumberGreenBits = 8;
-    Mode->NumberBlueBits = 8;
+    Mode->NumberRedBits = UefiFbMaskBitCount(DeviceExtension->RedMask);
+    Mode->NumberGreenBits = UefiFbMaskBitCount(DeviceExtension->GreenMask);
+    Mode->NumberBlueBits = UefiFbMaskBitCount(DeviceExtension->BlueMask);
     Mode->RedMask = DeviceExtension->RedMask;
     Mode->GreenMask = DeviceExtension->GreenMask;
     Mode->BlueMask = DeviceExtension->BlueMask;

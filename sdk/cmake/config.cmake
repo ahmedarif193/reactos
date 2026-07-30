@@ -271,14 +271,16 @@ if(REACTOS_USE_WDDM)
             "Unsupported REACTOS_WDDM_LEVEL '${REACTOS_WDDM_LEVEL}'")
     endif()
 
-    # The current in-tree UMD/runtime implementation is complete only through
-    # WDDM 2.0. Lower targets need their exact shorter table layouts; higher
-    # targets may run this older UMD but must not make it claim a newer table.
+    # Lower targets need their exact shorter table layouts. The current UMD
+    # and runtime implement the complete WDDM 2.1 callback tail; later targets
+    # retain that honest implementation ceiling.
     if(REACTOS_WDDM_TARGET_LEVEL LESS 2000)
         set(REACTOS_WDDM_EFFECTIVE_UMD_INTERFACE_VERSION
             ${REACTOS_WDDM_TARGET_UMD_INTERFACE_VERSION})
-    else()
+    elseif(REACTOS_WDDM_TARGET_LEVEL LESS 2100)
         set(REACTOS_WDDM_EFFECTIVE_UMD_INTERFACE_VERSION 0x5002)
+    else()
+        set(REACTOS_WDDM_EFFECTIVE_UMD_INTERFACE_VERSION 0x6003)
     endif()
 endif()
 
