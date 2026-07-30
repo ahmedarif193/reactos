@@ -1228,7 +1228,7 @@ NtfsLockOrUnlockVolume(
         ExReleaseFastMutex(&VolCB->VolumeStateMutex);
 
         if (NT_SUCCESS(Status))
-            Status = NtfsFlushVolume(VolCB, FALSE);
+            Status = NtfsFlushVolume(VolCB, TRUE);
 
         ExAcquireFastMutex(&VolCB->VolumeStateMutex);
         if (NT_SUCCESS(Status))

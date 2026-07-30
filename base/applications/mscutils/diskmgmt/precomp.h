@@ -21,6 +21,10 @@
 #include <wchar.h>
 #include <wctype.h>
 
+#define NTOS_MODE_USER
+#include <ndk/iofuncs.h>
+#include <ndk/rtlfuncs.h>
+
 #include "resource.h"
 #include "snapshot.h"
 #include "snapshotmatch.h"

@@ -1036,27 +1036,96 @@ DmActionIsRawVolume(
 }
 
 static HANDLE
+DmActionOpenNativeVolumeHandle(
+    _In_z_ PCWSTR DevicePath)
+{
+    UNICODE_STRING DeviceName;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    IO_STATUS_BLOCK IoStatusBlock;
+    HANDLE Handle;
+    NTSTATUS Status;
+
+    RtlInitUnicodeString(&DeviceName, DevicePath);
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &DeviceName,
+                               OBJ_CASE_INSENSITIVE,
+                               NULL,
+                               NULL);
+    Status = NtOpenFile(&Handle,
+                        GENERIC_READ | GENERIC_WRITE | SYNCHRONIZE,
+                        &ObjectAttributes,
+                        &IoStatusBlock,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE,
+                        FILE_SYNCHRONOUS_IO_NONALERT);
+    if (NT_SUCCESS(Status))
+        return Handle;
+
+    SetLastError(RtlNtStatusToDosError(Status));
+    return INVALID_HANDLE_VALUE;
+}
+
+static HANDLE
 DmActionOpenVolumeHandle(
     _In_ const DM_VOLUME *Volume)
 {
     WCHAR VolumePath[MAX_PATH];
     SIZE_T Length;
+    HANDLE Handle;
 
-    if (Volume == NULL || Volume->VolumeName[0] == UNICODE_NULL)
+    if (Volume == NULL)
         return INVALID_HANDLE_VALUE;
 
-    StringCchCopyW(VolumePath, ARRAYSIZE(VolumePath), Volume->VolumeName);
-    Length = wcslen(VolumePath);
-    if (Length > 0 && VolumePath[Length - 1] == L'\\')
-        VolumePath[Length - 1] = UNICODE_NULL;
+    if (Volume->HasStorageDeviceNumber)
+    {
+        StringCchPrintfW(VolumePath,
+                         ARRAYSIZE(VolumePath),
+                         L"\\Device\\Harddisk%lu\\Partition%lu",
+                         Volume->StorageDiskNumber,
+                         Volume->StoragePartitionNumber);
+        Handle = DmActionOpenNativeVolumeHandle(VolumePath);
+        if (Handle != INVALID_HANDLE_VALUE)
+            return Handle;
+    }
 
-    return CreateFileW(VolumePath,
-                       GENERIC_READ | GENERIC_WRITE,
-                       FILE_SHARE_READ | FILE_SHARE_WRITE,
-                       NULL,
-                       OPEN_EXISTING,
-                       0,
-                       NULL);
+    if (Volume->VolumeName[0] != UNICODE_NULL)
+    {
+        StringCchCopyW(VolumePath, ARRAYSIZE(VolumePath), Volume->VolumeName);
+        Length = wcslen(VolumePath);
+        if (Length > 0 && VolumePath[Length - 1] == L'\\')
+            VolumePath[Length - 1] = UNICODE_NULL;
+
+        Handle = CreateFileW(VolumePath,
+                             GENERIC_READ | GENERIC_WRITE,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE,
+                             NULL,
+                             OPEN_EXISTING,
+                             0,
+                             NULL);
+        if (Handle != INVALID_HANDLE_VALUE)
+            return Handle;
+    }
+
+    if (Volume->HasDriveLetter)
+    {
+        StringCchPrintfW(VolumePath,
+                         ARRAYSIZE(VolumePath),
+                         L"\\\\.\\%C:",
+                         towupper(Volume->DriveLetter));
+        Handle = CreateFileW(VolumePath,
+                             GENERIC_READ | GENERIC_WRITE,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE,
+                             NULL,
+                             OPEN_EXISTING,
+                             0,
+                             NULL);
+        if (Handle != INVALID_HANDLE_VALUE)
+            return Handle;
+    }
+
+    if (Volume->DeviceName[0] != UNICODE_NULL)
+        return DmActionOpenNativeVolumeHandle(Volume->DeviceName);
+
+    return INVALID_HANDLE_VALUE;
 }
 
 static const DM_REGION *
@@ -2391,26 +2460,17 @@ DmActionDismountVolume(
     _In_opt_ HWND hWnd,
     _In_ const DM_VOLUME *Volume)
 {
-    WCHAR VolumePath[MAX_PATH];
-    SIZE_T Length;
     HANDLE Handle;
     DWORD BytesReturned;
 
-    if (Volume == NULL || Volume->VolumeName[0] == UNICODE_NULL)
+    if (Volume == NULL ||
+        (Volume->VolumeName[0] == UNICODE_NULL &&
+         !Volume->HasDriveLetter &&
+         !Volume->HasStorageDeviceNumber &&
+         Volume->DeviceName[0] == UNICODE_NULL))
         return TRUE;
 
-    StringCchCopyW(VolumePath, ARRAYSIZE(VolumePath), Volume->VolumeName);
-    Length = wcslen(VolumePath);
-    if (Length > 0 && VolumePath[Length - 1] == L'\\')
-        VolumePath[Length - 1] = UNICODE_NULL;
-
-    Handle = CreateFileW(VolumePath,
-                         GENERIC_READ | GENERIC_WRITE,
-                         FILE_SHARE_READ | FILE_SHARE_WRITE,
-                         NULL,
-                         OPEN_EXISTING,
-                         0,
-                         NULL);
+    Handle = DmActionOpenVolumeHandle(Volume);
     if (Handle == INVALID_HANDLE_VALUE)
     {
         DmActionShowWin32Error(hWnd,

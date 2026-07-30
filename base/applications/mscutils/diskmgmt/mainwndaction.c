@@ -226,6 +226,13 @@ DmMainWndExecuteCommand(
         DmMainWndCacheSelectedVolumeName(Info);
         Info->SelectedDisk = NULL;
         Info->SelectedRegion = NULL;
+
+        /* The local action context has already captured the clicked target.
+           Do not retain snapshot pointers across a refresh. */
+        Info->HasCommandContextOverride = FALSE;
+        Info->CommandDiskOverride = NULL;
+        Info->CommandRegionOverride = NULL;
+        Info->CommandVolumeOverride = NULL;
     }
 
     if (StatusId != 0)
@@ -248,6 +255,9 @@ DmMainWndExecuteCommand(
     }
     if (Success && DmActionMutatesSnapshot(CommandId))
     {
+        /* Synchronize the view with the committed layout immediately. The
+           device-change timer remains armed to pick up delayed PnP changes. */
+        DmSnapshotRefresh(&Info->Snapshot);
         Info->DeviceChangeShot = 0;
         SetTimer(Info->hMainWnd,
                  IDT_DEVICE_CHANGE,
