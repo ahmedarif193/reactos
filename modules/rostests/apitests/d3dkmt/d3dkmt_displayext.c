@@ -394,53 +394,240 @@ static void Test_CheckVidPnExclusiveOwnership(void)
     CloseAdapter(hAdapter);
 }
 
-/* ---- QueryVidPnExclusiveOwnership: NULL + real query ---- */
+/* ---- QueryVidPnExclusiveOwnership: WDDM 2.0 process/window ownership ---- */
 static void Test_QueryVidPnExclusiveOwnership(void)
 {
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
     D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP QueryData;
+    D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME OpenAdapter;
+    D3DKMT_SETVIDPNSOURCEOWNER OwnerData;
+    D3DKMT_VIDPNSOURCEOWNER_TYPE OwnerType;
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID SourceId;
+    PFN_D3DKMTOpenAdapterFromGdiDisplayName pfnOpenAdapter;
+    PFND3DKMT_SETVIDPNSOURCEOWNER pfnSetOwner;
+    D3DKMT_HANDLE hAdapter = 0;
+    D3DKMT_HANDLE hDevice = 0;
+    HANDLE hProcess = NULL;
+    HWND hWindow = NULL;
+    DEVMODEW DisplayMode;
+    LONG WindowX = 0;
+    LONG WindowY = 0;
+    BOOL OwnerClaimed = FALSE;
     NTSTATUS Status;
-    BOOL faulted;
 
     LOADFN(PFND3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP, pfn,
            "D3DKMTQueryVidPnExclusiveOwnership");
 
     EXPECT_NULL_REJECTED(pfn, "D3DKMTQueryVidPnExclusiveOwnership");
 
-    /* Query global exclusive-ownership state (no specific process/window). */
+    /* Native first resolves hProcess, so two NULL handles fail as a bad handle. */
     memset(&QueryData, 0, sizeof(QueryData));
-    QueryData.hProcess = NULL;
-    QueryData.hWindow = NULL;
+    Status = pfn(&QueryData);
+    ok(Status == STATUS_INVALID_HANDLE,
+       "QueryVidPnExclusiveOwnership(NULL process/window) returned 0x%08lx, expected STATUS_INVALID_HANDLE\n",
+       (unsigned long)Status);
 
-    Status = STATUS_SUCCESS;
-    faulted = FALSE;
-    _SEH2_TRY { Status = pfn(&QueryData); }
-    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) { faulted = TRUE; }
-    _SEH2_END;
-
-    if (faulted)
+    hProcess = OpenProcess(
+                   PROCESS_QUERY_LIMITED_INFORMATION,
+                   FALSE,
+                   GetCurrentProcessId());
+    if (hProcess == NULL)
     {
-        skip("QueryVidPnExclusiveOwnership faulted on a NULL process/window query\n");
+        skip("Cannot open current process for QueryVidPnExclusiveOwnership\n");
         return;
     }
 
-    if (NT_SUCCESS(Status))
+    /*
+     * Once the process handle is valid, native treats an unresolvable HWND as
+     * a successful no-op and does not rewrite any output field.
+     */
+    memset(&QueryData, 0, sizeof(QueryData));
+    QueryData.hProcess = hProcess;
+    QueryData.hWindow = NULL;
+    QueryData.VidPnSourceId = 0x11223344;
+    QueryData.AdapterLuid.LowPart = 0x55667788;
+    QueryData.AdapterLuid.HighPart = 0x12345678;
+    QueryData.OwnerType = D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVEGDI;
+    Status = pfn(&QueryData);
+    ok(Status == STATUS_SUCCESS,
+       "QueryVidPnExclusiveOwnership(valid process, NULL window) returned 0x%08lx\n",
+       (unsigned long)Status);
+    ok(QueryData.VidPnSourceId == 0x11223344 &&
+       QueryData.AdapterLuid.LowPart == 0x55667788 &&
+       QueryData.AdapterLuid.HighPart == 0x12345678 &&
+       QueryData.OwnerType == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVEGDI,
+       "NULL-window query changed outputs: source=%08lx LUID=%08lx:%08lx owner=%u\n",
+       (unsigned long)QueryData.VidPnSourceId,
+       (unsigned long)QueryData.AdapterLuid.HighPart,
+       (unsigned long)QueryData.AdapterLuid.LowPart,
+       (unsigned)QueryData.OwnerType);
+
+    pfnOpenAdapter = (PFN_D3DKMTOpenAdapterFromGdiDisplayName)
+        LoadD3DKMTProc("D3DKMTOpenAdapterFromGdiDisplayName");
+    pfnSetOwner = (PFND3DKMT_SETVIDPNSOURCEOWNER)
+        LoadD3DKMTProc("D3DKMTSetVidPnSourceOwner");
+    if (pfnOpenAdapter == NULL || pfnSetOwner == NULL)
     {
-        int ot = (int)QueryData.OwnerType;
-        ok(ot == D3DKMT_VIDPNSOURCEOWNER_UNOWNED ||
-           ot == D3DKMT_VIDPNSOURCEOWNER_SHARED ||
-           ot == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVE ||
-           ot == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVEGDI ||
-           ot == D3DKMT_VIDPNSOURCEOWNER_EMULATED,
-           "QueryVidPnExclusiveOwnership OwnerType unexpected: %d\n", ot);
-        trace("QueryVidPnExclusiveOwnership: OwnerType=%d VidPnSourceId=%u Luid=%08lx:%08lx\n",
-              (int)QueryData.OwnerType, (unsigned)QueryData.VidPnSourceId,
-              (unsigned long)QueryData.AdapterLuid.HighPart,
-              (unsigned long)QueryData.AdapterLuid.LowPart);
+        skip("Adapter/source-owner entry points unavailable for ownership query\n");
+        goto Cleanup;
+    }
+
+    memset(&OpenAdapter, 0, sizeof(OpenAdapter));
+    wcscpy(OpenAdapter.DeviceName, L"\\\\.\\DISPLAY1");
+    Status = pfnOpenAdapter(&OpenAdapter);
+    if (!NT_SUCCESS(Status) || OpenAdapter.hAdapter == 0)
+    {
+        skip("Cannot open DISPLAY1 for ownership query (0x%08lx)\n",
+             (unsigned long)Status);
+        goto Cleanup;
+    }
+    hAdapter = OpenAdapter.hAdapter;
+    hDevice = CreateTestDevice(hAdapter);
+    if (hDevice == 0)
+    {
+        skip("Cannot create a device for ownership query\n");
+        goto Cleanup;
+    }
+
+    /*
+     * Place the window on DISPLAY1 even when it is not the primary monitor.
+     * The kernel path uses the window center to select the display source.
+     */
+    memset(&DisplayMode, 0, sizeof(DisplayMode));
+    DisplayMode.dmSize = sizeof(DisplayMode);
+    if (EnumDisplaySettingsW(
+            L"\\\\.\\DISPLAY1",
+            ENUM_CURRENT_SETTINGS,
+            &DisplayMode))
+    {
+        WindowX = DisplayMode.dmPosition.x;
+        WindowY = DisplayMode.dmPosition.y;
+    }
+    hWindow = CreateWindowExW(
+                  0,
+                  L"STATIC",
+                  L"D3DKMT ownership probe",
+                  WS_POPUP,
+                  WindowX,
+                  WindowY,
+                  32,
+                  32,
+                  NULL,
+                  NULL,
+                  NULL,
+                  NULL);
+    if (hWindow == NULL)
+    {
+        skip("Cannot create DISPLAY1 ownership-query window\n");
+        goto Cleanup;
+    }
+
+    OwnerType = D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVE;
+    SourceId = OpenAdapter.VidPnSourceId;
+    memset(&OwnerData, 0, sizeof(OwnerData));
+    OwnerData.hDevice = hDevice;
+    OwnerData.pType = &OwnerType;
+    OwnerData.pVidPnSourceId = &SourceId;
+    OwnerData.VidPnSourceCount = 1;
+    Status = pfnSetOwner(&OwnerData);
+    if (!NT_SUCCESS(Status))
+    {
+        skip("Cannot claim EXCLUSIVE source ownership (0x%08lx)\n",
+             (unsigned long)Status);
     }
     else
     {
-        trace("QueryVidPnExclusiveOwnership returned 0x%08lx\n", (unsigned long)Status);
+        OwnerClaimed = TRUE;
+        memset(&QueryData, 0, sizeof(QueryData));
+        QueryData.hProcess = hProcess;
+        QueryData.hWindow = hWindow;
+        Status = pfn(&QueryData);
+        ok(Status == STATUS_SUCCESS,
+           "EXCLUSIVE ownership query returned 0x%08lx\n",
+           (unsigned long)Status);
+        ok(QueryData.VidPnSourceId == SourceId &&
+           QueryData.AdapterLuid.LowPart ==
+               OpenAdapter.AdapterLuid.LowPart &&
+           QueryData.AdapterLuid.HighPart ==
+               OpenAdapter.AdapterLuid.HighPart &&
+           QueryData.OwnerType ==
+               D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVE,
+           "EXCLUSIVE query mismatch: source=%u/%u LUID=%08lx:%08lx/%08lx:%08lx owner=%u\n",
+           (unsigned)QueryData.VidPnSourceId,
+           (unsigned)SourceId,
+           (unsigned long)QueryData.AdapterLuid.HighPart,
+           (unsigned long)QueryData.AdapterLuid.LowPart,
+           (unsigned long)OpenAdapter.AdapterLuid.HighPart,
+           (unsigned long)OpenAdapter.AdapterLuid.LowPart,
+           (unsigned)QueryData.OwnerType);
+
+        memset(&OwnerData, 0, sizeof(OwnerData));
+        OwnerData.hDevice = hDevice;
+        OwnerData.VidPnSourceCount = 0;
+        Status = pfnSetOwner(&OwnerData);
+        ok(NT_SUCCESS(Status),
+           "Release after EXCLUSIVE ownership query failed 0x%08lx\n",
+           (unsigned long)Status);
+        OwnerClaimed = !NT_SUCCESS(Status);
     }
+
+    /*
+     * SHARED is yieldable ownership, not exclusive ownership.  A successful
+     * query therefore reports the documented no-match defaults.
+     */
+    OwnerType = D3DKMT_VIDPNSOURCEOWNER_SHARED;
+    SourceId = OpenAdapter.VidPnSourceId;
+    memset(&OwnerData, 0, sizeof(OwnerData));
+    OwnerData.hDevice = hDevice;
+    OwnerData.pType = &OwnerType;
+    OwnerData.pVidPnSourceId = &SourceId;
+    OwnerData.VidPnSourceCount = 1;
+    Status = pfnSetOwner(&OwnerData);
+    if (!NT_SUCCESS(Status))
+    {
+        skip("Cannot claim SHARED source ownership (0x%08lx)\n",
+             (unsigned long)Status);
+    }
+    else
+    {
+        OwnerClaimed = TRUE;
+        memset(&QueryData, 0xcc, sizeof(QueryData));
+        QueryData.hProcess = hProcess;
+        QueryData.hWindow = hWindow;
+        Status = pfn(&QueryData);
+        ok(Status == STATUS_SUCCESS,
+           "SHARED ownership query returned 0x%08lx\n",
+           (unsigned long)Status);
+        ok(QueryData.VidPnSourceId == D3DDDI_ID_UNINITIALIZED &&
+           QueryData.AdapterLuid.LowPart == 0 &&
+           QueryData.AdapterLuid.HighPart == 0 &&
+           QueryData.OwnerType == D3DKMT_VIDPNSOURCEOWNER_UNOWNED,
+           "SHARED query was reported as exclusive: source=%08lx LUID=%08lx:%08lx owner=%u\n",
+           (unsigned long)QueryData.VidPnSourceId,
+           (unsigned long)QueryData.AdapterLuid.HighPart,
+           (unsigned long)QueryData.AdapterLuid.LowPart,
+           (unsigned)QueryData.OwnerType);
+    }
+
+Cleanup:
+    if (OwnerClaimed && pfnSetOwner != NULL && hDevice != 0)
+    {
+        memset(&OwnerData, 0, sizeof(OwnerData));
+        OwnerData.hDevice = hDevice;
+        OwnerData.VidPnSourceCount = 0;
+        (void)pfnSetOwner(&OwnerData);
+    }
+    if (hWindow != NULL)
+        DestroyWindow(hWindow);
+    if (hDevice != 0)
+        DestroyTestDevice(hDevice);
+    if (hAdapter != 0)
+        CloseAdapter(hAdapter);
+    if (hProcess != NULL)
+        CloseHandle(hProcess);
+#else
+    trace("QueryVidPnExclusiveOwnership is gated out below WDDM 2.0\n");
+#endif
 }
 
 /*

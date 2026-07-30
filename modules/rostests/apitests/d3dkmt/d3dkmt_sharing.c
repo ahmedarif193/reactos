@@ -43,6 +43,39 @@ typedef struct _SHARED_OPEN_BUFFERS
     PVOID TotalPrivateDriverData;
 } SHARED_OPEN_BUFFERS;
 
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && \
+    (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+static D3DKMT_HANDLE
+OpenAdapterFromDisplay1WithLuid(
+    _Out_ LUID *AdapterLuid)
+{
+    PFN_D3DKMTOpenAdapterFromGdiDisplayName OpenAdapter;
+    D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME Data;
+    NTSTATUS Status;
+
+    if (AdapterLuid == NULL)
+        return 0;
+    AdapterLuid->LowPart = 0;
+    AdapterLuid->HighPart = 0;
+
+    OpenAdapter =
+        (PFN_D3DKMTOpenAdapterFromGdiDisplayName)
+            LoadD3DKMTProc(
+                "D3DKMTOpenAdapterFromGdiDisplayName");
+    if (OpenAdapter == NULL)
+        return 0;
+
+    memset(&Data, 0, sizeof(Data));
+    wcscpy(Data.DeviceName, L"\\\\.\\DISPLAY1");
+    Status = OpenAdapter(&Data);
+    if (!NT_SUCCESS(Status))
+        return 0;
+
+    *AdapterLuid = Data.AdapterLuid;
+    return Data.hAdapter;
+}
+#endif
+
 static void FreeSharedOpenBuffers(SHARED_OPEN_BUFFERS *Buffers)
 {
     HANDLE Heap = GetProcessHeap();
@@ -156,7 +189,10 @@ static void Test_Sharing_NullContract(void)
     CHECK_NULL_REJECTED(PFND3DKMT_OPENSYNCOBJECTFROMNTHANDLE,     "D3DKMTOpenSyncObjectFromNtHandle");
     CHECK_NULL_REJECTED(PFND3DKMT_OPENSYNCOBJECTFROMNTHANDLE2,    "D3DKMTOpenSyncObjectFromNtHandle2");
     CHECK_NULL_REJECTED(PFND3DKMT_OPENSYNCOBJECTNTHANDLEFROMNAME, "D3DKMTOpenSyncObjectNtHandleFromName");
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && \
+    (REACTOS_WDDM_TARGET_LEVEL >= 1200)
     CHECK_NULL_REJECTED(PFND3DKMT_GETSHAREDRESOURCEADAPTERLUID,   "D3DKMTGetSharedResourceAdapterLuid");
+#endif
     CHECK_NULL_REJECTED(PFND3DKMT_CHECKSHAREDRESOURCEACCESS,      "D3DKMTCheckSharedResourceAccess");
     CHECK_NULL_REJECTED(PFND3DKMT_GETSHAREDPRIMARYHANDLE,         "D3DKMTGetSharedPrimaryHandle");
 }
@@ -312,6 +348,8 @@ static void Test_NameOpens_BadAttributes(void)
 /* D3DKMTGetSharedResourceAdapterLuid -- bogus legacy share handle and  */
 /* bogus NT handle must both fail (no valid shared resource exists).    */
 /* ------------------------------------------------------------------ */
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && \
+    (REACTOS_WDDM_TARGET_LEVEL >= 1200)
 static void Test_GetSharedResourceAdapterLuid_BadHandles(void)
 {
     D3DKMT_GETSHAREDRESOURCEADAPTERLUID Data;
@@ -329,7 +367,18 @@ static void Test_GetSharedResourceAdapterLuid_BadHandles(void)
     Data.hGlobalShare = 0;
     Data.hNtHandle = BAD_NT_HANDLE;
     EXPECT_CALL_REFUSED("D3DKMTGetSharedResourceAdapterLuid(bogus NT handle)", pGet(&Data));
+
+    /* Neither handle names a resource. */
+    memset(&Data, 0, sizeof(Data));
+    EXPECT_CALL_REFUSED("D3DKMTGetSharedResourceAdapterLuid(no handle)", pGet(&Data));
+
+    /* The two handle namespaces are alternatives, never a combined key. */
+    memset(&Data, 0, sizeof(Data));
+    Data.hGlobalShare = BAD_D3DKMT_HANDLE;
+    Data.hNtHandle = BAD_NT_HANDLE;
+    EXPECT_CALL_REFUSED("D3DKMTGetSharedResourceAdapterLuid(both handles)", pGet(&Data));
 }
+#endif
 
 /* ------------------------------------------------------------------ */
 /* D3DKMTCheckSharedResourceAccess -- bogus resource handle must fail.  */
@@ -607,6 +656,12 @@ static void Test_SharedResource_MultiAllocationRoundTrip(void)
     D3DKMT_HANDLE hOpenerDevice = 0;
     NTSTATUS Status = STATUS_UNSUCCESSFUL;
     UINT Index;
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && \
+    (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+    PFND3DKMT_GETSHAREDRESOURCEADAPTERLUID pGetAdapterLuid;
+    D3DKMT_GETSHAREDRESOURCEADAPTERLUID SharedResourceLuid;
+    LUID ExpectedAdapterLuid;
+#endif
 
     memset(&Create, 0, sizeof(Create));
     memset(&Append, 0, sizeof(Append));
@@ -618,7 +673,12 @@ static void Test_SharedResource_MultiAllocationRoundTrip(void)
         return;
     }
 
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && \
+    (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+    hAdapter = OpenAdapterFromDisplay1WithLuid(&ExpectedAdapterLuid);
+#else
     hAdapter = OpenAdapterFromDisplay1();
+#endif
     if (hAdapter == 0)
     {
         skip("No display adapter for multi-allocation sharing\n");
@@ -657,6 +717,40 @@ static void Test_SharedResource_MultiAllocationRoundTrip(void)
     ok(Create.hResource != 0 && Create.hGlobalShare != 0, "CreateShared returned resource/share handles 0x%08lX/0x%08lX\n", (unsigned long)Create.hResource, (unsigned long)Create.hGlobalShare);
     if (Create.hResource == 0 || Create.hGlobalShare == 0)
         goto Cleanup;
+
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && \
+    (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+    pGetAdapterLuid =
+        (PFND3DKMT_GETSHAREDRESOURCEADAPTERLUID)
+            LoadD3DKMTProc(
+                "D3DKMTGetSharedResourceAdapterLuid");
+    if (pGetAdapterLuid == NULL)
+    {
+        skip("D3DKMTGetSharedResourceAdapterLuid is not exported\n");
+    }
+    else
+    {
+        memset(&SharedResourceLuid, 0, sizeof(SharedResourceLuid));
+        SharedResourceLuid.hGlobalShare = Create.hGlobalShare;
+        Status = pGetAdapterLuid(&SharedResourceLuid);
+        ok_succeeded(
+            Status,
+            "GetSharedResourceAdapterLuid(CreateShared) failed 0x%08lX\n",
+            (long)Status);
+        if (NT_SUCCESS(Status))
+        {
+            ok(SharedResourceLuid.AdapterLuid.LowPart ==
+                   ExpectedAdapterLuid.LowPart &&
+               SharedResourceLuid.AdapterLuid.HighPart ==
+                   ExpectedAdapterLuid.HighPart,
+               "Shared-resource LUID %08lX:%08lX, expected adapter %08lX:%08lX\n",
+               (unsigned long)SharedResourceLuid.AdapterLuid.HighPart,
+               (unsigned long)SharedResourceLuid.AdapterLuid.LowPart,
+               (unsigned long)ExpectedAdapterLuid.HighPart,
+               (unsigned long)ExpectedAdapterLuid.LowPart);
+        }
+    }
+#endif
 
     AppendedAllocationInfo.pPrivateDriverData = &AllocationPrivate[2];
     AppendedAllocationInfo.PrivateDriverDataSize = sizeof(AllocationPrivate[2]);
@@ -925,7 +1019,10 @@ START_TEST(sharing)
     Test_ShareObjects_Contract();
     Test_OpenQuery_NoDevice_BadHandles();
     Test_NameOpens_BadAttributes();
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && \
+    (REACTOS_WDDM_TARGET_LEVEL >= 1200)
     Test_GetSharedResourceAdapterLuid_BadHandles();
+#endif
     Test_CheckSharedResourceAccess_BadHandle();
     Test_OpenQuery_RealDevice_BadHandles();
     Test_SharedPrimary_OpenRoundTrip();
