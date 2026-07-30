@@ -564,7 +564,7 @@ DC_vPrepareDCsForBlit(
         }
     }
 
-    if (pdcFirst->dctype == DCTYPE_DIRECT)
+    if (pdcFirst->dctype == DCTYPE_DIRECT && !(pdcFirst->fs & DC_REDIRECTION))
     {
         if (!prcFirst)
             prcFirst = &pdcFirst->erclClip;
@@ -596,7 +596,7 @@ DC_vPrepareDCsForBlit(
         }
     }
 
-    if (pdcSecond->dctype == DCTYPE_DIRECT)
+    if (pdcSecond->dctype == DCTYPE_DIRECT && !(pdcSecond->fs & DC_REDIRECTION))
     {
         if (!prcSecond)
             prcSecond = &pdcSecond->erclClip;
@@ -631,7 +631,8 @@ DC_vFinishBlit(PDC pdc1, PDC pdc2)
 
     if (pdc1->dctype == DCTYPE_DIRECT)
     {
-        MouseSafetyOnDrawEnd(pdc1->ppdev);
+        if (!(pdc1->fs & DC_REDIRECTION))
+            MouseSafetyOnDrawEnd(pdc1->ppdev);
         EngReleaseSemaphore(pdc1->ppdev->hsemDevLock);
     }
 #if DBG
@@ -642,7 +643,8 @@ DC_vFinishBlit(PDC pdc1, PDC pdc2)
     {
         if (pdc2->dctype == DCTYPE_DIRECT)
         {
-            MouseSafetyOnDrawEnd(pdc2->ppdev);
+            if (!(pdc2->fs & DC_REDIRECTION))
+                MouseSafetyOnDrawEnd(pdc2->ppdev);
             EngReleaseSemaphore(pdc2->ppdev->hsemDevLock);
         }
 #if DBG
