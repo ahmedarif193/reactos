@@ -38,6 +38,7 @@
  * use the same pattern (see dxgkrnl_private.h).
  */
 #include <windef.h>
+#include <guiddef.h>
 
 /*
  * d3dukmdt.h defaults an unspecified DXGKDDI_INTERFACE_VERSION to the newest
@@ -54,10 +55,21 @@
  * d3dukmdt.h which supply D3DDDI_* types.
  */
 #include <d3dkmddi.h>
+#include <acpiioct.h>
+
+#ifndef _IRQL_requires_DXGK_
+#define _IRQL_requires_DXGK_(level) _IRQL_requires_(level)
+#endif
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+DEFINE_GUID(GUID_WDDM_INTERFACE_DISPLAYMUX,
+    0x086467fb, 0xdddf, 0x4c19, 0x97, 0xd5, 0xc4, 0x1d, 0x76, 0x72, 0x21, 0xc7);
+DEFINE_GUID(GUID_WDDM_INTERFACE_DISPLAYMUX_2,
+    0x086467fb, 0xdddf, 0x4c19, 0x97, 0xd5, 0xc4, 0x1d, 0x76, 0x72, 0x21, 0xc8);
 DEFINE_GUID(GUID_WDDM_INTERFACE_FEATURE,
     0x94bb3993, 0xc6c3, 0x4da7, 0x89, 0x49, 0xa1, 0x13, 0x82, 0x32, 0xe7, 0x59);
+DEFINE_GUID(GUID_WDDM_INTERFACE_WAITWAKE,
+    0xd3a8ec81, 0xbdef, 0x43d6, 0x94, 0x71, 0x22, 0x38, 0x14, 0x60, 0x5e, 0x38);
 #endif
 
 /* =========================================================================
@@ -100,40 +112,6 @@ C_ASSERT(FIELD_OFFSET(QUERY_INTERFACE, DeviceUid) == 0x10);
 C_ASSERT(sizeof(QUERY_INTERFACE) == 0x20);
 #else
 C_ASSERT(sizeof(QUERY_INTERFACE) == 0x10);
-#endif
-#endif
-
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
-#define DXGK_FEATURE_INTERFACE_VERSION_1 0x1
-
-typedef struct _DXGK_FEATURE_INTERFACE
-{
-    USHORT Size;
-    USHORT Version;
-    PVOID Context;
-    PINTERFACE_REFERENCE InterfaceReference;
-    PINTERFACE_DEREFERENCE InterfaceDereference;
-    DXGKCB_ISFEATUREENABLED2 IsFeatureEnabled;
-    DXGKCB_QUERYFEATUREINTERFACE QueryFeatureInterface;
-} DXGK_FEATURE_INTERFACE, *PDXGK_FEATURE_INTERFACE;
-
-typedef struct _DXGKDDI_FEATURE_INTERFACE
-{
-    USHORT Size;
-    USHORT Version;
-    PVOID Context;
-    PINTERFACE_REFERENCE InterfaceReference;
-    PINTERFACE_DEREFERENCE InterfaceDereference;
-    PDXGKDDI_QUERYFEATURESUPPORT QueryFeatureSupport;
-    PDXGKDDI_QUERYFEATUREINTERFACE QueryFeatureInterface;
-} DXGKDDI_FEATURE_INTERFACE, *PDXGKDDI_FEATURE_INTERFACE;
-
-#ifdef _WIN64
-C_ASSERT(sizeof(DXGK_FEATURE_INTERFACE) == 0x30);
-C_ASSERT(sizeof(DXGKDDI_FEATURE_INTERFACE) == 0x30);
-#else
-C_ASSERT(sizeof(DXGK_FEATURE_INTERFACE) == 0x18);
-C_ASSERT(sizeof(DXGKDDI_FEATURE_INTERFACE) == 0x18);
 #endif
 #endif
 
@@ -217,6 +195,18 @@ typedef _In_ CONST PDEVICE_OBJECT      IN_CONST_PDEVICE_OBJECT;
 #define DXGK_INTERRUPT_HWCONTEXTLIST_SWITCH_COMPLETED       13
 #define DXGK_INTERRUPT_PERIODIC_MONITORED_FENCE_SIGNALED    14
 #define DXGK_INTERRUPT_PERIODICED_MONITORED_FENCE_SIGNALED  DXGK_INTERRUPT_PERIODIC_MONITORED_FENCE_SIGNALED
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
+#define DXGK_INTERRUPT_SCHEDULING_LOG_INTERRUPT             15
+#define DXGK_INTERRUPT_GPU_ENGINE_TIMEOUT                   16
+#define DXGK_INTERRUPT_SUSPEND_CONTEXT_COMPLETED            17
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+#define DXGK_INTERRUPT_CRTC_VSYNC_WITH_MULTIPLANE_OVERLAY3  18
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
+#define DXGK_INTERRUPT_NATIVE_FENCE_SIGNALED                19
+#define DXGK_INTERRUPT_GPU_ENGINE_STATE_CHANGE              20
 #endif
 
 
@@ -331,6 +321,15 @@ typedef struct _DXGK_CHILD_STATUS
     };
 } DXGK_CHILD_STATUS, *PDXGK_CHILD_STATUS;
 
+typedef
+    _Function_class_DXGK_(DXGKDDI_PROTECTED_CALLBACK)
+    _IRQL_requires_(PASSIVE_LEVEL)
+VOID
+(*DXGKDDI_PROTECTED_CALLBACK)(
+    IN_CONST_PVOID MiniportDeviceContext,
+    _In_ PVOID ProtectedCallbackContext,
+    _In_ NTSTATUS ProtectionStatus);
+
 
 /* =========================================================================
  * DXGK_DEVICE_DESCRIPTOR
@@ -356,22 +355,270 @@ typedef struct _DXGK_DEVICE_DESCRIPTOR
  * This layout matches the Vista WDK definition exactly.
  * =========================================================================
  */
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+
+#define DXGK_DISPLAYMUX_INTERFACE_VERSION_1 0x01
+
+typedef
+    _Function_class_DXGK_(DXGKDDI_DISPLAYMUX_GET_DRIVER_SUPPORT_LEVEL)
+    _IRQL_requires_DXGK_(PASSIVE_LEVEL)
+NTSTATUS
+(*DXGKDDI_DISPLAYMUX_GET_DRIVER_SUPPORT_LEVEL)(
+    _In_ PVOID DriverContext,
+    _Out_ PDXGK_DISPLAYMUX_SUPPORT_LEVEL pDriverSupportLevel);
+
+typedef
+    _Function_class_DXGK_(DXGKDDI_DISPLAYMUX_GET_RUNTIME_STATUS)
+    _IRQL_requires_DXGK_(PASSIVE_LEVEL)
+NTSTATUS
+(*DXGKDDI_DISPLAYMUX_GET_RUNTIME_STATUS)(
+    _In_ PVOID DriverContext,
+    _Out_ PDXGK_DISPLAYMUX_RUNTIME_STATUS pRuntimeStatus);
+
+typedef
+    _Function_class_DXGK_(DXGKDDI_DISPLAYMUX_PRE_SWITCH_AWAY)
+    _IRQL_requires_DXGK_(PASSIVE_LEVEL)
+NTSTATUS
+(*DXGKDDI_DISPLAYMUX_PRE_SWITCH_AWAY)(
+    _In_ PVOID DriverContext,
+    _In_ ULONG VidPnTargetId,
+    _Out_ PULONG pSwitchPrivateDataSize);
+
+typedef
+    _Function_class_DXGK_(DXGKDDI_DISPLAYMUX_PRE_SWITCH_AWAY_GET_PRIVATE_DATA)
+    _IRQL_requires_DXGK_(PASSIVE_LEVEL)
+NTSTATUS
+(*DXGKDDI_DISPLAYMUX_PRE_SWITCH_AWAY_GET_PRIVATE_DATA)(
+    _In_ PVOID DriverContext,
+    _In_ ULONG VidPnTargetId,
+    _In_ ULONG SwitchPrivateDataSize,
+    _Out_writes_bytes_(SwitchPrivateDataSize) PVOID pSwitchPrivateDataBuffer,
+    _Out_ GUID *pSwitchPrivateDataGUID);
+
+typedef
+    _Function_class_DXGK_(DXGKDDI_DISPLAYMUX_PRE_SWITCH_TO)
+    _IRQL_requires_DXGK_(PASSIVE_LEVEL)
+NTSTATUS
+(*DXGKDDI_DISPLAYMUX_PRE_SWITCH_TO)(
+    _In_ PVOID DriverContext,
+    _In_ ULONG VidPnTargetId,
+    _In_ ULONG CurrentBrightnessLevel);
+
+typedef
+    _Function_class_DXGK_(DXGKDDI_DISPLAYMUX_SWITCH_CANCELED)
+    _IRQL_requires_DXGK_(PASSIVE_LEVEL)
+NTSTATUS
+(*DXGKDDI_DISPLAYMUX_SWITCH_CANCELED)(
+    _In_ PVOID DriverContext,
+    _In_ ULONG VidPnTargetId,
+    _In_ BOOLEAN MuxSwitchedToTarget);
+
+typedef
+    _Function_class_DXGK_(DXGKDDI_DISPLAYMUX_POST_SWITCH_AWAY)
+    _IRQL_requires_DXGK_(PASSIVE_LEVEL)
+NTSTATUS
+(*DXGKDDI_DISPLAYMUX_POST_SWITCH_AWAY)(
+    _In_ PVOID DriverContext,
+    _In_ ULONG VidPnTargetId);
+
+typedef
+    _Function_class_DXGK_(DXGKDDI_DISPLAYMUX_POST_SWITCH_TO_PHASE1)
+    _IRQL_requires_DXGK_(PASSIVE_LEVEL)
+NTSTATUS
+(*DXGKDDI_DISPLAYMUX_POST_SWITCH_TO_PHASE1)(
+    _In_ PVOID DriverContext,
+    _In_ ULONG VidPnTargetId,
+    _In_ ULONG SwitchPrivateDataSize,
+    _In_reads_bytes_(SwitchPrivateDataSize) PVOID pSwitchPrivateDataBuffer,
+    _In_ GUID *pSwitchPrivateDataGUID);
+
+typedef
+    _Function_class_DXGK_(DXGKDDI_DISPLAYMUX_POST_SWITCH_TO_PHASE2)
+    _IRQL_requires_DXGK_(PASSIVE_LEVEL)
+NTSTATUS
+(*DXGKDDI_DISPLAYMUX_POST_SWITCH_TO_PHASE2)(
+    _In_ PVOID DriverContext,
+    _In_ ULONG VidPnTargetId,
+    _Out_ BOOLEAN *pWasPanelInPSR);
+
+typedef
+    _Function_class_DXGK_(DXGKDDI_DISPLAYMUX_UPDATE_STATE)
+    _IRQL_requires_DXGK_(PASSIVE_LEVEL)
+VOID
+(*DXGKDDI_DISPLAYMUX_UPDATE_STATE)(
+    _In_ PVOID DriverContext,
+    _In_ ULONG VidPnTargetId,
+    _In_ BOOLEAN MuxSwitchedToTarget);
+
+typedef
+    _Function_class_DXGK_(DXGKDDI_DISPLAYMUX_REPORT_PRESENCE)
+    _IRQL_requires_DXGK_(PASSIVE_LEVEL)
+VOID
+(*DXGKDDI_DISPLAYMUX_REPORT_PRESENCE)(
+    _In_ PVOID DriverContext,
+    _In_ BOOLEAN SystemHasMux);
+
+#define DISPLAYMUX_SWITCH_PRIVATE_DATA_MAX (1024 * 1024)
+
+typedef struct _DXGK_DISPLAYMUX_INTERFACE
+{
+    USHORT Size;
+    USHORT Version;
+    PVOID Context;
+    PINTERFACE_REFERENCE InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+    DXGKDDI_DISPLAYMUX_GET_DRIVER_SUPPORT_LEVEL
+        DxgkDdiDisplayMuxGetDriverSupportLevel;
+    DXGKDDI_DISPLAYMUX_GET_RUNTIME_STATUS
+        DxgkDdiDisplayMuxGetRuntimeStatus;
+    DXGKDDI_DISPLAYMUX_PRE_SWITCH_AWAY
+        DxgkDdiDisplayMuxPreSwitchAway;
+    DXGKDDI_DISPLAYMUX_PRE_SWITCH_AWAY_GET_PRIVATE_DATA
+        DxgkDdiDisplayMuxPreSwitchAwayGetPrivateData;
+    DXGKDDI_DISPLAYMUX_PRE_SWITCH_TO
+        DxgkDdiDisplayMuxPreSwitchTo;
+    DXGKDDI_DISPLAYMUX_SWITCH_CANCELED
+        DxgkDdiDisplayMuxSwitchCanceled;
+    DXGKDDI_DISPLAYMUX_POST_SWITCH_AWAY
+        DxgkDdiDisplayMuxPostSwitchAway;
+    DXGKDDI_DISPLAYMUX_POST_SWITCH_TO_PHASE1
+        DxgkDdiDisplayMuxPostSwitchToPhase1;
+    DXGKDDI_DISPLAYMUX_POST_SWITCH_TO_PHASE2
+        DxgkDdiDisplayMuxPostSwitchToPhase2;
+    DXGKDDI_DISPLAYMUX_UPDATE_STATE
+        DxgkDdiDisplayMuxUpdateState;
+    DXGKDDI_DISPLAYMUX_REPORT_PRESENCE
+        DxgkDdiDisplayMuxReportPresence;
+} DXGK_DISPLAYMUX_INTERFACE, *PDXGK_DISPLAYMUX_INTERFACE;
+
+#define DXGK_DISPLAYMUX_INTERFACE_VERSION_2 0x02
+
+typedef
+    _Function_class_DXGK_(DXGKDDI_DISPLAYMUX_SET_INTERNAL_PANEL_INFO)
+    _IRQL_requires_DXGK_(PASSIVE_LEVEL)
+NTSTATUS
+(*DXGKDDI_DISPLAYMUX_SET_INTERNAL_PANEL_INFO)(
+    _In_ PVOID DriverContext,
+    _In_ ULONG VidPnTargetId,
+    _In_ PDXGK_DISPLAYMUX_SET_INTERNAL_PANEL_INFO pInternalPanelInfo);
+
+typedef struct _DXGK_DISPLAYMUX_INTERFACE_2
+{
+    USHORT Size;
+    USHORT Version;
+    PVOID Context;
+    PINTERFACE_REFERENCE InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+    DXGKDDI_DISPLAYMUX_GET_DRIVER_SUPPORT_LEVEL
+        DxgkDdiDisplayMuxGetDriverSupportLevel;
+    DXGKDDI_DISPLAYMUX_GET_RUNTIME_STATUS
+        DxgkDdiDisplayMuxGetRuntimeStatus;
+    DXGKDDI_DISPLAYMUX_PRE_SWITCH_AWAY
+        DxgkDdiDisplayMuxPreSwitchAway;
+    DXGKDDI_DISPLAYMUX_PRE_SWITCH_AWAY_GET_PRIVATE_DATA
+        DxgkDdiDisplayMuxPreSwitchAwayGetPrivateData;
+    DXGKDDI_DISPLAYMUX_PRE_SWITCH_TO
+        DxgkDdiDisplayMuxPreSwitchTo;
+    DXGKDDI_DISPLAYMUX_SWITCH_CANCELED
+        DxgkDdiDisplayMuxSwitchCanceled;
+    DXGKDDI_DISPLAYMUX_POST_SWITCH_AWAY
+        DxgkDdiDisplayMuxPostSwitchAway;
+    DXGKDDI_DISPLAYMUX_POST_SWITCH_TO_PHASE1
+        DxgkDdiDisplayMuxPostSwitchToPhase1;
+    DXGKDDI_DISPLAYMUX_POST_SWITCH_TO_PHASE2
+        DxgkDdiDisplayMuxPostSwitchToPhase2;
+    DXGKDDI_DISPLAYMUX_UPDATE_STATE
+        DxgkDdiDisplayMuxUpdateState;
+    DXGKDDI_DISPLAYMUX_REPORT_PRESENCE
+        DxgkDdiDisplayMuxReportPresence;
+    DXGKDDI_DISPLAYMUX_SET_INTERNAL_PANEL_INFO
+        DxgkDdiDisplayMuxSetInternalPanelInfo;
+} DXGK_DISPLAYMUX_INTERFACE_2, *PDXGK_DISPLAYMUX_INTERFACE_2;
+
+#define DXGK_FEATURE_INTERFACE_VERSION_1 0x1
+
+typedef struct _DXGK_FEATURE_INTERFACE
+{
+    USHORT Size;
+    USHORT Version;
+    PVOID Context;
+    PINTERFACE_REFERENCE InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+    DXGKCB_ISFEATUREENABLED2 IsFeatureEnabled;
+    DXGKCB_QUERYFEATUREINTERFACE QueryFeatureInterface;
+} DXGK_FEATURE_INTERFACE, *PDXGK_FEATURE_INTERFACE;
+
+typedef struct _DXGKDDI_FEATURE_INTERFACE
+{
+    USHORT Size;
+    USHORT Version;
+    PVOID Context;
+    PINTERFACE_REFERENCE InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+    PDXGKDDI_QUERYFEATURESUPPORT QueryFeatureSupport;
+    PDXGKDDI_QUERYFEATUREINTERFACE QueryFeatureInterface;
+} DXGKDDI_FEATURE_INTERFACE, *PDXGKDDI_FEATURE_INTERFACE;
+
+#define DXGK_WAITWAKE_INTERFACE_VERSION_1 0x01
+
+typedef
+    _IRQL_requires_DXGK_(PASSIVE_LEVEL)
+NTSTATUS
+(*DXGKDDI_WAITWAKE_ARMING)(
+    _In_ PVOID DriverContext);
+
+typedef
+    _IRQL_requires_DXGK_(PASSIVE_LEVEL)
+VOID
+(*DXGKDDI_WAITWAKE_DISARMING)(
+    _In_ PVOID DriverContext);
+
+typedef struct _DXGK_WAITWAKE_INTERFACE
+{
+    USHORT Size;
+    USHORT Version;
+    PVOID Context;
+    PINTERFACE_REFERENCE InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+    DXGKDDI_WAITWAKE_ARMING DxgkDdiWaitWakeArming;
+    DXGKDDI_WAITWAKE_DISARMING DxgkDdiWaitWakeDisarming;
+} DXGK_WAITWAKE_INTERFACE, *PDXGK_WAITWAKE_INTERFACE;
+
+#ifdef _WIN64
+C_ASSERT(sizeof(DXGK_DISPLAYMUX_INTERFACE) == 0x78);
+C_ASSERT(sizeof(DXGK_DISPLAYMUX_INTERFACE_2) == 0x80);
+C_ASSERT(sizeof(DXGK_FEATURE_INTERFACE) == 0x30);
+C_ASSERT(sizeof(DXGKDDI_FEATURE_INTERFACE) == 0x30);
+C_ASSERT(sizeof(DXGK_WAITWAKE_INTERFACE) == 0x30);
+#else
+C_ASSERT(sizeof(DXGK_DISPLAYMUX_INTERFACE) == 0x3C);
+C_ASSERT(sizeof(DXGK_DISPLAYMUX_INTERFACE_2) == 0x40);
+C_ASSERT(sizeof(DXGK_FEATURE_INTERFACE) == 0x18);
+C_ASSERT(sizeof(DXGKDDI_FEATURE_INTERFACE) == 0x18);
+C_ASSERT(sizeof(DXGK_WAITWAKE_INTERFACE) == 0x18);
+#endif
+
+#endif /* DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2 */
+
+typedef enum
+{
+    DockStateUnsupported = 0,
+    DockStateUnDocked = 1,
+    DockStateDocked = 2,
+    DockStateUnknown = 3,
+} DOCKING_STATE;
+
 typedef struct _DXGK_DEVICE_INFO
 {
-    PDEVICE_OBJECT      PhysicalDeviceObject;
-    PUNICODE_STRING     MiniportRegistryPath;
-    PHYSICAL_ADDRESS    SegmentAperture;
-    ULONGLONG           SegmentFrameBufferLength;
-    PCM_RESOURCE_LIST   TranslatedResourceList;
-    ULONG               SystemIoBusNumber;
-    INTERFACE_TYPE      AdapterInterfaceType;
-    ULONG               BusInterruptLevel;
-    ULONG               BusInterruptVector;
-    KINTERRUPT_MODE     InterruptMode;
-    ULONG               DmaAddressWidth;
-    ULONG               AgpApertureBase;
-    ULONG               AgpApertureSize;
-    ULONG               SystemMemorySize;
+    PVOID MiniportDeviceContext;
+    PDEVICE_OBJECT PhysicalDeviceObject;
+    UNICODE_STRING DeviceRegistryPath;
+    PCM_RESOURCE_LIST TranslatedResourceList;
+    LARGE_INTEGER SystemMemorySize;
+    PHYSICAL_ADDRESS HighestPhysicalAddress;
+    PHYSICAL_ADDRESS AgpApertureBase;
+    SIZE_T AgpApertureSize;
+    DOCKING_STATE DockingState;
 } DXGK_DEVICE_INFO, *PDXGK_DEVICE_INFO;
 
 
@@ -427,7 +674,7 @@ typedef enum _DXGK_SURPRISE_REMOVAL_TYPE
  * =========================================================================
  */
 #ifndef DISPLAY_ADAPTER_HW_ID
-#define DISPLAY_ADAPTER_HW_ID   0xFFFEFFFFUL
+#define DISPLAY_ADAPTER_HW_ID   0xFFFFFFFFUL
 #endif
 
 
@@ -439,118 +686,255 @@ typedef enum _DXGK_SURPRISE_REMOVAL_TYPE
  * =========================================================================
  */
 
+typedef enum
+{
+    DxgkServicesAgp,
+    DxgkServicesDebugReport,
+    DxgkServicesTimedOperation,
+    DxgkServicesSPB,
+    DxgkServicesBDD,
+    DxgkServicesFirmwareTable,
+    DxgkServicesIDD,
+    DxgkServicesFeature,
+} DXGK_SERVICES;
+
+typedef
+    _Function_class_DXGK_(DXGKCB_EVAL_ACPI_METHOD)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKCB_EVAL_ACPI_METHOD)(
+    _In_ HANDLE DeviceHandle,
+    _In_ ULONG DeviceUid,
+    _In_reads_bytes_(AcpiInputSize)
+        PACPI_EVAL_INPUT_BUFFER_COMPLEX AcpiInputBuffer,
+    _In_range_(>=, sizeof(ACPI_EVAL_INPUT_BUFFER_COMPLEX))
+        ULONG AcpiInputSize,
+    _Out_writes_bytes_(AcpiOutputSize)
+        PACPI_EVAL_OUTPUT_BUFFER AcpiOutputBuffer,
+    _In_range_(>=, sizeof(ACPI_EVAL_OUTPUT_BUFFER))
+        ULONG AcpiOutputSize);
+
 /* Notify dxgkrnl of a GPU interrupt event (called from ISR at DIRQL). */
-typedef NTSTATUS
-(APIENTRY *PDXGKCB_NOTIFY_INTERRUPT)(
-    _In_ HANDLE                             hAdapter,
-    _In_ CONST DXGKARGCB_NOTIFY_INTERRUPT_DATA *NotifyInterruptData);
+typedef
+    _Function_class_DXGK_(DXGKCB_NOTIFY_INTERRUPT)
+    _IRQL_requires_(HIGH_LEVEL)
+VOID
+(APIENTRY CALLBACK *DXGKCB_NOTIFY_INTERRUPT)(
+    _In_ HANDLE hAdapter,
+    IN_CONST_PDXGKARGCB_NOTIFY_INTERRUPT_DATA NotifyInterruptData);
+
+/* Compatibility spelling used by older in-tree miniports. */
+typedef DXGKCB_NOTIFY_INTERRUPT PDXGKCB_NOTIFY_INTERRUPT;
 
 /*
  * Notify dxgkrnl that the DPC triggered by NotifyInterrupt has run
  * (called from DPC at DISPATCH_LEVEL).
  */
-typedef VOID
-(APIENTRY *PDXGKCB_NOTIFY_DPC)(
+typedef
+    _Function_class_DXGK_(DXGKCB_NOTIFY_DPC)
+    _IRQL_requires_(DISPATCH_LEVEL)
+VOID
+(APIENTRY CALLBACK *DXGKCB_NOTIFY_DPC)(
     _In_ HANDLE hAdapter);
 
+/* Compatibility spelling used by older in-tree miniports. */
+typedef DXGKCB_NOTIFY_DPC PDXGKCB_NOTIFY_DPC;
+
 /* Retrieve hardware resource information populated during StartDevice. */
-typedef NTSTATUS
-(APIENTRY *PDXGKCB_GET_DEVICE_INFORMATION)(
-    _In_  HANDLE                hAdapter,
-    _Out_ PDXGK_DEVICE_INFO     DeviceInformation);
+typedef
+    _Function_class_DXGK_(DXGKCB_GET_DEVICE_INFORMATION)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKCB_GET_DEVICE_INFORMATION)(
+    _In_ HANDLE DeviceHandle,
+    _Out_ PDXGK_DEVICE_INFO DeviceInfo);
+
+typedef DXGKCB_GET_DEVICE_INFORMATION PDXGKCB_GET_DEVICE_INFORMATION;
 
 /* Report a child device connection/rotation status change. */
-typedef NTSTATUS
-(APIENTRY *PDXGKCB_INDICATE_CHILD_STATUS)(
-    _In_ HANDLE             hAdapter,
+typedef
+    _Function_class_DXGK_(DXGKCB_INDICATE_CHILD_STATUS)
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKCB_INDICATE_CHILD_STATUS)(
+    _In_ HANDLE DeviceHandle,
     _In_ PDXGK_CHILD_STATUS ChildStatus);
+
+typedef DXGKCB_INDICATE_CHILD_STATUS PDXGKCB_INDICATE_CHILD_STATUS;
+
+typedef
+    _Function_class_DXGK_(DXGKCB_MAP_MEMORY)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKCB_MAP_MEMORY)(
+    _In_ HANDLE DeviceHandle,
+    _In_ PHYSICAL_ADDRESS TranslatedAddress,
+    _In_ ULONG Length,
+    _In_ BOOLEAN InIoSpace,
+    _In_ BOOLEAN MapToUserMode,
+    _In_ MEMORY_CACHING_TYPE CacheType,
+    _Outptr_ PVOID *VirtualAddress);
+
+typedef DXGKCB_MAP_MEMORY PDXGKCB_MAP_MEMORY;
+
+typedef
+    _Function_class_DXGK_(DXGKCB_QUERY_SERVICES)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKCB_QUERY_SERVICES)(
+    _In_ HANDLE DeviceHandle,
+    _In_ DXGK_SERVICES ServicesType,
+    _Inout_ PINTERFACE Interface);
+
+typedef
+    _Function_class_DXGK_(DXGKCB_QUEUE_DPC)
+    _Success_(return != 0)
+BOOLEAN
+(APIENTRY *DXGKCB_QUEUE_DPC)(
+    _In_ HANDLE DeviceHandle);
+
+typedef DXGKCB_QUEUE_DPC PDXGKCB_QUEUE_DPC;
 
 /*
  * Synchronize a routine with the GPU interrupt service routine.
  * Equivalent to KeSynchronizeExecution for the adapter's interrupt.
  */
-typedef NTSTATUS
-(APIENTRY *PDXGKCB_SYNCHRONIZE_EXECUTION)(
-    _In_  HANDLE                    hAdapter,
-    _In_  PKSYNCHRONIZE_ROUTINE     SynchronizeRoutine,
-    _In_  PVOID                     Context,
-    _In_  ULONG                     MessageNumber,
-    _Out_ PBOOLEAN                  ReturnValue);
+typedef
+    _Function_class_DXGK_(DXGKCB_SYNCHRONIZE_EXECUTION)
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKCB_SYNCHRONIZE_EXECUTION)(
+    _In_ HANDLE DeviceHandle,
+    _In_ PKSYNCHRONIZE_ROUTINE SynchronizeRoutine,
+    _In_ PVOID Context,
+    _In_ ULONG MessageNumber,
+    _Out_ PBOOLEAN ReturnValue);
 
-/* Allocate physically contiguous GPU-accessible memory. */
-typedef NTSTATUS
-(APIENTRY *PDXGKCB_ALLOCATE_CONTIGUOUS_MEMORY)(
-    _In_    HANDLE  hAdapter,
-    _Inout_ PVOID   AllocContiguousMemory);
-
-/* Free memory allocated by AllocateContiguousMemory. */
-typedef NTSTATUS
-(APIENTRY *PDXGKCB_FREE_CONTIGUOUS_MEMORY)(
-    _In_ HANDLE hAdapter,
-    _In_ PVOID  FreeContiguousMemory);
+typedef DXGKCB_SYNCHRONIZE_EXECUTION PDXGKCB_SYNCHRONIZE_EXECUTION;
 
 /*
  * Acquire ownership of the post-display information (DXGK_DISPLAY_INFORMATION)
  * from the system firmware / boot graphics driver.
  * Available on Win8+ (WDDM 1.2); may be NULL on Vista/Win7.
  */
-typedef NTSTATUS
-(APIENTRY *PDXGKCB_ACQUIRE_POST_DISPLAY_OWNERSHIP)(
-    _In_  HANDLE   hAdapter,
-    _Out_ PVOID    DisplayInformation);
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
+typedef
+    _Function_class_DXGK_(DXGKCB_ACQUIRE_POST_DISPLAY_OWNERSHIP)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKCB_ACQUIRE_POST_DISPLAY_OWNERSHIP)(
+    _In_ HANDLE DeviceHandle,
+    _Out_ PDXGK_DISPLAY_INFORMATION DisplayInfo);
 
-/*
- * Map a range of translated physical addresses (BAR regions) into
- * kernel virtual address space or user-mode process address space.
- * This is the WDDM 1.0 memory-mapping callback (distinct from the
- * WDDM 2.9 DxgkCbMapPhysicalMemory).
- */
-typedef NTSTATUS
-(APIENTRY *PDXGKCB_MAP_MEMORY)(
-    _In_  HANDLE              hAdapter,
-    _In_  PHYSICAL_ADDRESS    TranslatedAddress,
-    _In_  ULONG               Length,
-    _In_  BOOLEAN             InIoSpace,
-    _In_  BOOLEAN             MapToUserMode,
-    _In_  MEMORY_CACHING_TYPE CacheType,
-    _Out_ PVOID              *VirtualAddress);
+typedef DXGKCB_ACQUIRE_POST_DISPLAY_OWNERSHIP
+    PDXGKCB_ACQUIRE_POST_DISPLAY_OWNERSHIP;
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
+typedef enum _DXGK_FRAMEBUFFER_STATE
+{
+    FrameBufferStateUnknown = 0,
+    FrameBufferStateInitializedByFirmware = 1,
+    FrameBufferStateInitializedByDriver = 2,
+} DXGK_FRAMEBUFFER_STATE;
+
+typedef struct _DXGK_DISPLAY_OWNERSHIP_FLAGS
+{
+    union
+    {
+        struct
+        {
+            DXGK_FRAMEBUFFER_STATE FrameBufferState : 4;
+        };
+        UINT Value;
+    };
+} DXGK_DISPLAY_OWNERSHIP_FLAGS, *PDXGK_DISPLAY_OWNERSHIP_FLAGS;
+
+typedef
+    _Function_class_DXGK_(DXGKCB_ACQUIRE_POST_DISPLAY_OWNERSHIP2)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKCB_ACQUIRE_POST_DISPLAY_OWNERSHIP2)(
+    _In_ HANDLE DeviceHandle,
+    _Out_ PDXGK_DISPLAY_INFORMATION DisplayInfo,
+    _Out_ PDXGK_DISPLAY_OWNERSHIP_FLAGS Flags);
+#endif
 
 /* Unmap a range previously mapped by DxgkCbMapMemory. */
-typedef NTSTATUS
-(APIENTRY *PDXGKCB_UNMAP_MEMORY)(
-    _In_ HANDLE hAdapter,
-    _In_ PVOID  VirtualAddress);
+typedef
+    _Function_class_DXGK_(DXGKCB_UNMAP_MEMORY)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKCB_UNMAP_MEMORY)(
+    _In_ HANDLE DeviceHandle,
+    _In_ PVOID VirtualAddress);
 
-/* Queue a DPC for the display adapter (called from ISR at any IRQL). */
-typedef BOOLEAN
-(APIENTRY *PDXGKCB_QUEUE_DPC)(
-    _In_ HANDLE hAdapter);
+typedef DXGKCB_UNMAP_MEMORY PDXGKCB_UNMAP_MEMORY;
 
 /*
  * Read from a device configuration space or expansion ROM.
  * DataType: DXGK_WHICHSPACE_CONFIG, _BRIDGE, _MCH, or _ROM.
  */
-typedef NTSTATUS
-(APIENTRY *PDXGKCB_READ_DEVICE_SPACE)(
-    _In_  HANDLE  hAdapter,
-    _In_  ULONG   DataType,
-    _In_  PVOID   Buffer,
-    _In_  ULONG   Offset,
-    _In_  ULONG   Length,
-    _Out_ PULONG  BytesRead);
+typedef
+    _Function_class_DXGK_(DXGKCB_READ_DEVICE_SPACE)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKCB_READ_DEVICE_SPACE)(
+    _In_ HANDLE DeviceHandle,
+    _In_ ULONG DataType,
+    _Out_writes_bytes_to_(Length, *BytesRead) PVOID Buffer,
+    _In_ ULONG Offset,
+    _In_ ULONG Length,
+    _Out_ PULONG BytesRead);
+
+typedef DXGKCB_READ_DEVICE_SPACE PDXGKCB_READ_DEVICE_SPACE;
 
 /*
  * Write to a device configuration space.
  * DataType: DXGK_WHICHSPACE_CONFIG, _BRIDGE, _MCH, or _ROM.
  */
-typedef NTSTATUS
-(APIENTRY *PDXGKCB_WRITE_DEVICE_SPACE)(
-    _In_  HANDLE  hAdapter,
-    _In_  ULONG   DataType,
-    _In_  PVOID   Buffer,
-    _In_  ULONG   Offset,
-    _In_  ULONG   Length,
-    _Out_ PULONG  BytesWritten);
+typedef
+    _Function_class_DXGK_(DXGKCB_WRITE_DEVICE_SPACE)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKCB_WRITE_DEVICE_SPACE)(
+    _In_ HANDLE DeviceHandle,
+    _In_ ULONG DataType,
+    _In_reads_bytes_(Length) PVOID Buffer,
+    _In_ ULONG Offset,
+    _In_ ULONG Length,
+    _Out_ _Out_range_(<=, Length) PULONG BytesWritten);
+
+typedef DXGKCB_WRITE_DEVICE_SPACE PDXGKCB_WRITE_DEVICE_SPACE;
+
+typedef
+    _Function_class_DXGK_(DXGKCB_IS_DEVICE_PRESENT)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKCB_IS_DEVICE_PRESENT)(
+    _In_ HANDLE DeviceHandle,
+    _In_ PPCI_DEVICE_PRESENCE_PARAMETERS DevicePresenceParameters,
+    _Out_ PBOOLEAN DevicePresent);
+
+typedef
+    _Function_class_DXGK_(DXGKCB_LOG_ETW_EVENT)
+    _When_(EventBufferSize > 256, _IRQL_requires_(PASSIVE_LEVEL))
+VOID
+(APIENTRY *DXGKCB_LOG_ETW_EVENT)(
+    _In_ CONST LPCGUID EventGuid,
+    _In_ UCHAR Type,
+    _In_ USHORT EventBufferSize,
+    _In_reads_bytes_(EventBufferSize) PVOID EventBuffer);
+
+typedef
+    _Function_class_DXGK_(DXGKCB_EXCLUDE_ADAPTER_ACCESS)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKCB_EXCLUDE_ADAPTER_ACCESS)(
+    _In_ HANDLE DeviceHandle,
+    _In_ ULONG Attributes,
+    _In_ DXGKDDI_PROTECTED_CALLBACK DxgkProtectedCallback,
+    _In_ PVOID ProtectedCallbackContext);
 
 /* DXGK_WHICHSPACE constants for Read/WriteDeviceSpace */
 #ifndef DXGK_WHICHSPACE_BRIDGE
@@ -569,6 +953,9 @@ typedef enum _DXGK_VIDPN_INTERFACE_VERSION
 {
     DXGK_VIDPN_INTERFACE_VERSION_UNINITIALIZED = 0,
     DXGK_VIDPN_INTERFACE_VERSION_V1            = 1,
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+    DXGK_VIDPN_INTERFACE_VERSION_V2            = 2,
+#endif
 } DXGK_VIDPN_INTERFACE_VERSION;
 
 /* =========================================================================
@@ -581,6 +968,8 @@ typedef enum _DXGK_MONITOR_INTERFACE_VERSION
     DXGK_MONITOR_INTERFACE_VERSION_V1            = 1,
     DXGK_MONITOR_INTERFACE_VERSION_V2            = 2,
 } DXGK_MONITOR_INTERFACE_VERSION;
+
+typedef struct _DXGK_MONITOR_INTERFACE DXGK_MONITOR_INTERFACE;
 
 /*
  * VidPN handle typedefs (D3DKMDT_HVIDPN, D3DKMDT_HVIDPNTOPOLOGY, etc.)
@@ -736,43 +1125,338 @@ typedef struct _DXGK_VIDPNTARGETMODESET_INTERFACE
         _In_ D3DKMDT_VIDEO_PRESENT_TARGET_MODE_ID           VidPnTargetModeId);
 } DXGK_VIDPNTARGETMODESET_INTERFACE;
 
-/* =========================================================================
- * DXGK_MONITORSOURCEMODESET_INTERFACE
- *
- * Function table for manipulating a monitor source mode set.
- * =========================================================================
- */
+/* Monitor-source-mode-set interface. */
+typedef _Out_ SIZE_T* CONST OUT_PSIZE_T_CONST;
+typedef _Out_ UINT* OUT_PUINT;
+typedef _In_ CONST D3DDDI_VIDEO_PRESENT_TARGET_ID
+    IN_CONST_D3DDDI_VIDEO_PRESENT_TARGET_ID;
+typedef _In_ CONST D3DKMDT_HMONITORSOURCEMODESET
+    IN_CONST_D3DKMDT_HMONITORSOURCEMODESET;
+typedef _In_ D3DKMDT_MONITOR_SOURCE_MODE* CONST
+    IN_PD3DKMDT_MONITOR_SOURCE_MODE_CONST;
+typedef _In_ CONST D3DKMDT_MONITOR_SOURCE_MODE* CONST
+    IN_CONST_PD3DKMDT_MONITOR_SOURCE_MODE_CONST;
+typedef _Outptr_ D3DKMDT_MONITOR_SOURCE_MODE**
+    DEREF_OUT_PPD3DKMDT_MONITOR_SOURCE_MODE;
+typedef _Outptr_ CONST D3DKMDT_MONITOR_SOURCE_MODE**
+    DEREF_OUT_CONST_PPD3DKMDT_MONITOR_SOURCE_MODE;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_MONITORSOURCEMODESET_GETNUMMODES)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKDDI_MONITORSOURCEMODESET_GETNUMMODES)(
+    IN_CONST_D3DKMDT_HMONITORSOURCEMODESET hMonitorSourceModeSet,
+    OUT_PSIZE_T_CONST pNumMonitorSourceModes);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_MONITORSOURCEMODESET_ACQUIREPREFERREDMODEINFO)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKDDI_MONITORSOURCEMODESET_ACQUIREPREFERREDMODEINFO)(
+    IN_CONST_D3DKMDT_HMONITORSOURCEMODESET hMonitorSourceModeSet,
+    DEREF_OUT_CONST_PPD3DKMDT_MONITOR_SOURCE_MODE
+        ppFirstMonitorSourceModeInfo);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_MONITORSOURCEMODESET_ACQUIREFIRSTMODEINFO)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKDDI_MONITORSOURCEMODESET_ACQUIREFIRSTMODEINFO)(
+    IN_CONST_D3DKMDT_HMONITORSOURCEMODESET hMonitorSourceModeSet,
+    DEREF_OUT_CONST_PPD3DKMDT_MONITOR_SOURCE_MODE
+        ppFirstMonitorSourceModeInfo);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_MONITORSOURCEMODESET_ACQUIRENEXTMODEINFO)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKDDI_MONITORSOURCEMODESET_ACQUIRENEXTMODEINFO)(
+    IN_CONST_D3DKMDT_HMONITORSOURCEMODESET hMonitorSourceModeSet,
+    IN_CONST_PD3DKMDT_MONITOR_SOURCE_MODE_CONST pMonitorSourceModeInfo,
+    DEREF_OUT_CONST_PPD3DKMDT_MONITOR_SOURCE_MODE
+        ppNextMonitorSourceModeInfo);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_MONITORSOURCEMODESET_CREATENEWMODEINFO)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKDDI_MONITORSOURCEMODESET_CREATENEWMODEINFO)(
+    IN_CONST_D3DKMDT_HMONITORSOURCEMODESET hMonitorSourceModeSet,
+    DEREF_OUT_PPD3DKMDT_MONITOR_SOURCE_MODE ppNewMonitorSourceModeInfo);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_MONITORSOURCEMODESET_ADDMODE)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKDDI_MONITORSOURCEMODESET_ADDMODE)(
+    IN_CONST_D3DKMDT_HMONITORSOURCEMODESET hMonitorSourceModeSet,
+    IN_PD3DKMDT_MONITOR_SOURCE_MODE_CONST pMonitorSourceModeInfo);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_MONITORSOURCEMODESET_RELEASEMODEINFO)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKDDI_MONITORSOURCEMODESET_RELEASEMODEINFO)(
+    IN_CONST_D3DKMDT_HMONITORSOURCEMODESET hMonitorSourceModeSet,
+    IN_CONST_PD3DKMDT_MONITOR_SOURCE_MODE_CONST pMonitorSourceModeInfo);
+
 typedef struct _DXGK_MONITORSOURCEMODESET_INTERFACE
 {
-    NTSTATUS (APIENTRY *pfnGetNumModes)(
-        _In_  D3DKMDT_HMONITORSOURCEMODESET              hMonitorSourceModeSet,
-        _Out_ CONST SIZE_T*                              pNumModes);
-
-    NTSTATUS (APIENTRY *pfnAcquirePreferredModeInfo)(
-        _In_  D3DKMDT_HMONITORSOURCEMODESET              hMonitorSourceModeSet,
-        _Out_ CONST D3DKMDT_MONITOR_SOURCE_MODE**        ppFirstMonitorSourceModeInfo);
-
-    NTSTATUS (APIENTRY *pfnAcquireFirstModeInfo)(
-        _In_  D3DKMDT_HMONITORSOURCEMODESET              hMonitorSourceModeSet,
-        _Out_ CONST D3DKMDT_MONITOR_SOURCE_MODE**        ppFirstMonitorSourceModeInfo);
-
-    NTSTATUS (APIENTRY *pfnAcquireNextModeInfo)(
-        _In_  D3DKMDT_HMONITORSOURCEMODESET              hMonitorSourceModeSet,
-        _In_  CONST D3DKMDT_MONITOR_SOURCE_MODE*         pMonitorSourceModeInfo,
-        _Out_ CONST D3DKMDT_MONITOR_SOURCE_MODE**        ppNextMonitorSourceModeInfo);
-
-    NTSTATUS (APIENTRY *pfnCreateNewModeInfo)(
-        _In_  D3DKMDT_HMONITORSOURCEMODESET              hMonitorSourceModeSet,
-        _Out_ D3DKMDT_MONITOR_SOURCE_MODE**              ppNewMonitorSourceModeInfo);
-
-    NTSTATUS (APIENTRY *pfnAddMode)(
-        _In_ D3DKMDT_HMONITORSOURCEMODESET               hMonitorSourceModeSet,
-        _In_ D3DKMDT_MONITOR_SOURCE_MODE*                pMonitorSourceModeInfo);
-
-    NTSTATUS (APIENTRY *pfnReleaseModeInfo)(
-        _In_ D3DKMDT_HMONITORSOURCEMODESET               hMonitorSourceModeSet,
-        _In_ CONST D3DKMDT_MONITOR_SOURCE_MODE*          pMonitorSourceModeInfo);
+    DXGKDDI_MONITORSOURCEMODESET_GETNUMMODES pfnGetNumModes;
+    DXGKDDI_MONITORSOURCEMODESET_ACQUIREPREFERREDMODEINFO
+        pfnAcquirePreferredModeInfo;
+    DXGKDDI_MONITORSOURCEMODESET_ACQUIREFIRSTMODEINFO
+        pfnAcquireFirstModeInfo;
+    DXGKDDI_MONITORSOURCEMODESET_ACQUIRENEXTMODEINFO
+        pfnAcquireNextModeInfo;
+    DXGKDDI_MONITORSOURCEMODESET_CREATENEWMODEINFO pfnCreateNewModeInfo;
+    DXGKDDI_MONITORSOURCEMODESET_ADDMODE pfnAddMode;
+    DXGKDDI_MONITORSOURCEMODESET_RELEASEMODEINFO pfnReleaseModeInfo;
 } DXGK_MONITORSOURCEMODESET_INTERFACE;
+
+/* Monitor-frequency-range-set interface. */
+typedef _In_ CONST D3DKMDT_HMONITORFREQUENCYRANGESET
+    IN_CONST_D3DKMDT_HMONITORFREQUENCYRANGESET;
+typedef _In_ CONST D3DKMDT_MONITOR_FREQUENCY_RANGE* CONST
+    IN_CONST_PD3DKMDT_MONITOR_FREQUENCY_RANGE_CONST;
+typedef _Outptr_ CONST D3DKMDT_MONITOR_FREQUENCY_RANGE**
+    DEREF_OUT_CONST_PPD3DKMDT_MONITOR_FREQUENCY_RANGE;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_MONITORFREQUENCYRANGESET_GETNUMFREQUENCYRANGES)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKDDI_MONITORFREQUENCYRANGESET_GETNUMFREQUENCYRANGES)(
+    IN_CONST_D3DKMDT_HMONITORFREQUENCYRANGESET hMonitorFrequencyRangeSet,
+    OUT_PSIZE_T_CONST pNumMonitorFrequencyRanges);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_MONITORFREQUENCYRANGESET_ACQUIREFIRSTFREQUENCYRANGEINFO)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKDDI_MONITORFREQUENCYRANGESET_ACQUIREFIRSTFREQUENCYRANGEINFO)(
+    IN_CONST_D3DKMDT_HMONITORFREQUENCYRANGESET hMonitorFrequencyRangeSet,
+    DEREF_OUT_CONST_PPD3DKMDT_MONITOR_FREQUENCY_RANGE
+        ppFirstMonitorFrequencyRangeInfo);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_MONITORFREQUENCYRANGESET_ACQUIRENEXTFREQUENCYRANGEINFO)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKDDI_MONITORFREQUENCYRANGESET_ACQUIRENEXTFREQUENCYRANGEINFO)(
+    IN_CONST_D3DKMDT_HMONITORFREQUENCYRANGESET hMonitorFrequencyRangeSet,
+    IN_CONST_PD3DKMDT_MONITOR_FREQUENCY_RANGE_CONST
+        pMonitorFrequencyRangeInfo,
+    DEREF_OUT_CONST_PPD3DKMDT_MONITOR_FREQUENCY_RANGE
+        ppNextMonitorFrequencyRangeInfo);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_MONITORFREQUENCYRANGESET_RELEASEFREQUENCYRANGEINFO)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKDDI_MONITORFREQUENCYRANGESET_RELEASEFREQUENCYRANGEINFO)(
+    IN_CONST_D3DKMDT_HMONITORFREQUENCYRANGESET hMonitorFrequencyRangeSet,
+    IN_CONST_PD3DKMDT_MONITOR_FREQUENCY_RANGE_CONST
+        pMonitorFrequencyRangeInfo);
+
+typedef struct _DXGK_MONITORFREQUENCYRANGESET_INTERFACE
+{
+    DXGKDDI_MONITORFREQUENCYRANGESET_GETNUMFREQUENCYRANGES
+        pfnGetNumFrequencyRanges;
+    DXGKDDI_MONITORFREQUENCYRANGESET_ACQUIREFIRSTFREQUENCYRANGEINFO
+        pfnAcquireFirstFrequencyRangeInfo;
+    DXGKDDI_MONITORFREQUENCYRANGESET_ACQUIRENEXTFREQUENCYRANGEINFO
+        pfnAcquireNextFrequencyRangeInfo;
+    DXGKDDI_MONITORFREQUENCYRANGESET_RELEASEFREQUENCYRANGEINFO
+        pfnReleaseFrequencyRangeInfo;
+} DXGK_MONITORFREQUENCYRANGESET_INTERFACE;
+
+/* Monitor-descriptor-set interface. */
+typedef _In_ CONST D3DKMDT_HMONITORDESCRIPTORSET
+    IN_CONST_D3DKMDT_HMONITORDESCRIPTORSET;
+typedef _In_ CONST D3DKMDT_MONITOR_DESCRIPTOR* CONST
+    IN_CONST_PD3DKMDT_MONITOR_DESCRIPTOR_CONST;
+typedef _Outptr_ CONST D3DKMDT_MONITOR_DESCRIPTOR**
+    DEREF_OUT_CONST_PPD3DKMDT_MONITOR_DESCRIPTOR;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_MONITORDESCRIPTORSET_GETNUMDESCRIPTORS)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKDDI_MONITORDESCRIPTORSET_GETNUMDESCRIPTORS)(
+    IN_CONST_D3DKMDT_HMONITORDESCRIPTORSET hMonitorDescriptorSet,
+    OUT_PSIZE_T_CONST pNumMonitorDescriptors);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_MONITORDESCRIPTORSET_ACQUIREFIRSTDESCRIPTORINFO)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKDDI_MONITORDESCRIPTORSET_ACQUIREFIRSTDESCRIPTORINFO)(
+    IN_CONST_D3DKMDT_HMONITORDESCRIPTORSET hMonitorDescriptorSet,
+    DEREF_OUT_CONST_PPD3DKMDT_MONITOR_DESCRIPTOR
+        ppFirstMonitorDescriptorInfo);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_MONITORDESCRIPTORSET_ACQUIRENEXTDESCRIPTORINFO)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKDDI_MONITORDESCRIPTORSET_ACQUIRENEXTDESCRIPTORINFO)(
+    IN_CONST_D3DKMDT_HMONITORDESCRIPTORSET hMonitorDescriptorSet,
+    IN_CONST_PD3DKMDT_MONITOR_DESCRIPTOR_CONST pMonitorDescriptorInfo,
+    DEREF_OUT_CONST_PPD3DKMDT_MONITOR_DESCRIPTOR
+        ppNextMonitorDescriptorInfo);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_MONITORDESCRIPTORSET_RELEASEDESCRIPTORINFO)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKDDI_MONITORDESCRIPTORSET_RELEASEDESCRIPTORINFO)(
+    IN_CONST_D3DKMDT_HMONITORDESCRIPTORSET hMonitorDescriptorSet,
+    IN_CONST_PD3DKMDT_MONITOR_DESCRIPTOR_CONST pMonitorDescriptorInfo);
+
+typedef struct _DXGK_MONITORDESCRIPTORSET_INTERFACE
+{
+    DXGKDDI_MONITORDESCRIPTORSET_GETNUMDESCRIPTORS pfnGetNumDescriptors;
+    DXGKDDI_MONITORDESCRIPTORSET_ACQUIREFIRSTDESCRIPTORINFO
+        pfnAcquireFirstDescriptorInfo;
+    DXGKDDI_MONITORDESCRIPTORSET_ACQUIRENEXTDESCRIPTORINFO
+        pfnAcquireNextDescriptorInfo;
+    DXGKDDI_MONITORDESCRIPTORSET_RELEASEDESCRIPTORINFO
+        pfnReleaseDescriptorInfo;
+} DXGK_MONITORDESCRIPTORSET_INTERFACE;
+
+/* Top-level monitor interfaces. */
+typedef _In_ CONST D3DKMDT_ADAPTER IN_CONST_D3DKMDT_ADAPTER;
+typedef _Out_ D3DKMDT_HMONITORDESCRIPTORSET*
+    OUT_PD3DKMDT_HMONITORDESCRIPTORSET;
+typedef _Out_ D3DKMDT_HMONITORSOURCEMODESET*
+    OUT_PD3DKMDT_HMONITORSOURCEMODESET;
+typedef _Out_ D3DKMDT_HMONITORFREQUENCYRANGESET*
+    OUT_PD3DKMDT_HMONITORFREQUENCYRANGESET;
+typedef _Outptr_ CONST DXGK_MONITORSOURCEMODESET_INTERFACE**
+    DEREF_OUT_CONST_PPDXGK_MONITORSOURCEMODESET_INTERFACE;
+typedef _Outptr_ CONST DXGK_MONITORFREQUENCYRANGESET_INTERFACE**
+    DEREF_OUT_CONST_PPDXGK_MONITORFREQUENCYRANGESET_INTERFACE;
+typedef _Outptr_ CONST DXGK_MONITORDESCRIPTORSET_INTERFACE**
+    DEREF_OUT_CONST_PPDXGK_MONITORDESCRIPTORSET_INTERFACE;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_MONITOR_ACQUIREMONITORSOURCEMODESET)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKDDI_MONITOR_ACQUIREMONITORSOURCEMODESET)(
+    IN_CONST_D3DKMDT_ADAPTER hAdapter,
+    IN_CONST_D3DDDI_VIDEO_PRESENT_TARGET_ID VideoPresentTargetId,
+    OUT_PD3DKMDT_HMONITORSOURCEMODESET phMonitorSourceModeSet,
+    DEREF_OUT_CONST_PPDXGK_MONITORSOURCEMODESET_INTERFACE
+        ppMonitorSourceModeSetInterface);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_MONITOR_RELEASEMONITORSOURCEMODESET)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKDDI_MONITOR_RELEASEMONITORSOURCEMODESET)(
+    IN_CONST_D3DKMDT_ADAPTER hAdapter,
+    IN_CONST_D3DKMDT_HMONITORSOURCEMODESET hMonitorSourceModeSet);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_MONITOR_GETMONITORFREQUENCYRANGESET)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKDDI_MONITOR_GETMONITORFREQUENCYRANGESET)(
+    IN_CONST_D3DKMDT_ADAPTER hAdapter,
+    IN_CONST_D3DDDI_VIDEO_PRESENT_TARGET_ID VideoPresentTargetId,
+    OUT_PD3DKMDT_HMONITORFREQUENCYRANGESET phMonitorFrequencyRangeSet,
+    DEREF_OUT_CONST_PPDXGK_MONITORFREQUENCYRANGESET_INTERFACE
+        ppMonitorFrequencyRangeSetInterface);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_MONITOR_GETMONITORDESCRIPTORSET)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKDDI_MONITOR_GETMONITORDESCRIPTORSET)(
+    IN_CONST_D3DKMDT_ADAPTER hAdapter,
+    IN_CONST_D3DDDI_VIDEO_PRESENT_TARGET_ID VideoPresentTargetId,
+    OUT_PD3DKMDT_HMONITORDESCRIPTORSET phMonitorDescriptorSet,
+    DEREF_OUT_CONST_PPDXGK_MONITORDESCRIPTORSET_INTERFACE
+        ppMonitorDescriptorSetInterface);
+
+struct _DXGK_MONITOR_INTERFACE
+{
+    DXGK_MONITOR_INTERFACE_VERSION Version;
+    DXGKDDI_MONITOR_ACQUIREMONITORSOURCEMODESET
+        pfnAcquireMonitorSourceModeSet;
+    DXGKDDI_MONITOR_RELEASEMONITORSOURCEMODESET
+        pfnReleaseMonitorSourceModeSet;
+    DXGKDDI_MONITOR_GETMONITORFREQUENCYRANGESET
+        pfnGetMonitorFrequencyRangeSet;
+    DXGKDDI_MONITOR_GETMONITORDESCRIPTORSET
+        pfnGetMonitorDescriptorSet;
+};
+
+typedef _In_ CONST DXGK_TARGETMODE_DETAIL_TIMING*
+    IN_CONST_PDXGK_TARGETMODE_DETAIL_TIMING;
+typedef DXGK_TARGETMODE_DETAIL_TIMING**
+    DEREF_ECOUNT_PPDXGK_TARGETMODE_DETAIL_TIMING;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_MONITOR_GETADDITIONALMONITORMODESET)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKDDI_MONITOR_GETADDITIONALMONITORMODESET)(
+    IN_CONST_D3DKMDT_ADAPTER hAdapter,
+    IN_CONST_D3DDDI_VIDEO_PRESENT_TARGET_ID VideoPresentTargetId,
+    OUT_PUINT pNumberModes,
+    _At_(*ppAdditionalModesSet, _Inout_updates_(*pNumberModes))
+    DEREF_ECOUNT_PPDXGK_TARGETMODE_DETAIL_TIMING ppAdditionalModesSet);
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKDDI_MONITOR_RELEASEADDITIONALMONITORMODESET)
+    _IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+(APIENTRY *DXGKDDI_MONITOR_RELEASEADDITIONALMONITORMODESET)(
+    IN_CONST_D3DKMDT_ADAPTER hAdapter,
+    IN_CONST_D3DDDI_VIDEO_PRESENT_TARGET_ID VideoPresentTargetId,
+    IN_CONST_PDXGK_TARGETMODE_DETAIL_TIMING pAdditionalModesSet);
+
+typedef struct _DXGK_MONITOR_INTERFACE_V2
+{
+    DXGK_MONITOR_INTERFACE_VERSION Version;
+    DXGKDDI_MONITOR_ACQUIREMONITORSOURCEMODESET
+        pfnAcquireMonitorSourceModeSet;
+    DXGKDDI_MONITOR_RELEASEMONITORSOURCEMODESET
+        pfnReleaseMonitorSourceModeSet;
+    DXGKDDI_MONITOR_GETMONITORFREQUENCYRANGESET
+        pfnGetMonitorFrequencyRangeSet;
+    DXGKDDI_MONITOR_GETMONITORDESCRIPTORSET
+        pfnGetMonitorDescriptorSet;
+    DXGKDDI_MONITOR_GETADDITIONALMONITORMODESET
+        pfnGetAdditionalMonitorModeSet;
+    DXGKDDI_MONITOR_RELEASEADDITIONALMONITORMODESET
+        pfnReleaseAdditionalMonitorModeSet;
+} DXGK_MONITOR_INTERFACE_V2;
 
 /* =========================================================================
  * DXGK_VIDPN_INTERFACE
@@ -841,17 +1525,37 @@ typedef struct _DXGK_VIDPN_INTERFACE
  * DxgkCbQueryVidPnInterface / DxgkCbQueryMonitorInterface callback types
  * =========================================================================
  */
-typedef NTSTATUS
-(APIENTRY *PDXGKCB_QUERYVIDPNINTERFACE)(
-    _In_  D3DKMDT_HVIDPN                       hVidPn,
-    _In_  DXGK_VIDPN_INTERFACE_VERSION         VidPnInterfaceVersion,
-    _Out_ CONST DXGK_VIDPN_INTERFACE**         ppVidPnInterface);
+typedef _In_ CONST D3DKMDT_HVIDPN
+    IN_CONST_D3DKMDT_HVIDPN;
+typedef _In_ CONST DXGK_VIDPN_INTERFACE_VERSION
+    IN_CONST_DXGK_VIDPN_INTERFACE_VERSION;
+typedef _Outptr_ CONST DXGK_VIDPN_INTERFACE**
+    DEREF_OUT_CONST_PPDXGK_VIDPN_INTERFACE;
 
-typedef NTSTATUS
-(APIENTRY *PDXGKCB_QUERYMONITORINTERFACE)(
-    _In_  HANDLE                                   hAdapter,
-    _In_  UINT                                     MonitorInterfaceVersion,
-    _Out_ PVOID*                                   ppMonitorInterface);
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKCB_QUERYVIDPNINTERFACE)
+    _IRQL_requires_max_(APC_LEVEL)
+NTSTATUS
+(APIENTRY CALLBACK *DXGKCB_QUERYVIDPNINTERFACE)(
+    IN_CONST_D3DKMDT_HVIDPN hVidPn,
+    IN_CONST_DXGK_VIDPN_INTERFACE_VERSION VidPnInterfaceVersion,
+    DEREF_OUT_CONST_PPDXGK_VIDPN_INTERFACE ppVidPnInterface);
+
+typedef _In_ CONST DXGK_MONITOR_INTERFACE_VERSION
+    IN_CONST_DXGK_MONITOR_INTERFACE_VERSION;
+typedef _Outptr_ CONST DXGK_MONITOR_INTERFACE**
+    DEREF_OUT_CONST_PPDXGK_MONITOR_INTERFACE;
+
+typedef
+    _Check_return_
+    _Function_class_DXGK_(DXGKCB_QUERYMONITORINTERFACE)
+    _IRQL_requires_max_(APC_LEVEL)
+NTSTATUS
+(APIENTRY CALLBACK *DXGKCB_QUERYMONITORINTERFACE)(
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_DXGK_MONITOR_INTERFACE_VERSION MonitorInterfaceVersion,
+    DEREF_OUT_CONST_PPDXGK_MONITOR_INTERFACE ppMonitorInterface);
 
 /* =========================================================================
  * DOD-specific types (DXGKARG_PRESENT_DISPLAYONLY, etc.)
@@ -1127,70 +1831,70 @@ typedef struct _DXGK_INTERFACE
     HANDLE  DeviceHandle;                               /* 0x08 */
 
     /* --- WDDM 1.0 (Vista) baseline callbacks --- */
-    PVOID   DxgkCbEvalAcpiMethod;                       /* 0x10 */
-    PDXGKCB_GET_DEVICE_INFORMATION DxgkCbGetDeviceInformation; /* 0x18 */
-    PDXGKCB_INDICATE_CHILD_STATUS DxgkCbIndicateChildStatus;   /* 0x20 */
-    PDXGKCB_MAP_MEMORY        DxgkCbMapMemory;          /* 0x28 */
-    PDXGKCB_QUEUE_DPC         DxgkCbQueueDpc;           /* 0x30 */
-    PVOID   DxgkCbQueryServices;                        /* 0x38 */
-    PDXGKCB_READ_DEVICE_SPACE DxgkCbReadDeviceSpace;    /* 0x40 */
-    PDXGKCB_SYNCHRONIZE_EXECUTION DxgkCbSynchronizeExecution; /* 0x48 */
-    PDXGKCB_UNMAP_MEMORY      DxgkCbUnmapMemory;       /* 0x50 */
-    PDXGKCB_WRITE_DEVICE_SPACE DxgkCbWriteDeviceSpace;  /* 0x58 */
-    PVOID   DxgkCbIsDevicePresent;                      /* 0x60 */
+    DXGKCB_EVAL_ACPI_METHOD DxgkCbEvalAcpiMethod;       /* 0x10 */
+    DXGKCB_GET_DEVICE_INFORMATION DxgkCbGetDeviceInformation; /* 0x18 */
+    DXGKCB_INDICATE_CHILD_STATUS DxgkCbIndicateChildStatus;   /* 0x20 */
+    DXGKCB_MAP_MEMORY DxgkCbMapMemory;                  /* 0x28 */
+    DXGKCB_QUEUE_DPC DxgkCbQueueDpc;                    /* 0x30 */
+    DXGKCB_QUERY_SERVICES DxgkCbQueryServices;          /* 0x38 */
+    DXGKCB_READ_DEVICE_SPACE DxgkCbReadDeviceSpace;     /* 0x40 */
+    DXGKCB_SYNCHRONIZE_EXECUTION DxgkCbSynchronizeExecution; /* 0x48 */
+    DXGKCB_UNMAP_MEMORY DxgkCbUnmapMemory;              /* 0x50 */
+    DXGKCB_WRITE_DEVICE_SPACE DxgkCbWriteDeviceSpace;   /* 0x58 */
+    DXGKCB_IS_DEVICE_PRESENT DxgkCbIsDevicePresent;     /* 0x60 */
     DXGKCB_GETHANDLEDATA DxgkCbGetHandleData;           /* 0x68 */
-    PVOID   DxgkCbGetHandleParent;                      /* 0x70 */
-    PVOID   DxgkCbEnumHandleChildren;                   /* 0x78 */
-    PDXGKCB_NOTIFY_INTERRUPT  DxgkCbNotifyInterrupt;    /* 0x80 */
-    PDXGKCB_NOTIFY_DPC        DxgkCbNotifyDpc;          /* 0x88 */
-    PDXGKCB_QUERYVIDPNINTERFACE    DxgkCbQueryVidPnInterface;    /* 0x90 */
-    PDXGKCB_QUERYMONITORINTERFACE  DxgkCbQueryMonitorInterface;  /* 0x98 */
-    PVOID   DxgkCbGetCaptureAddress;                    /* 0xa0 */
+    DXGKCB_GETHANDLEPARENT DxgkCbGetHandleParent;       /* 0x70 */
+    DXGKCB_ENUMHANDLECHILDREN DxgkCbEnumHandleChildren; /* 0x78 */
+    DXGKCB_NOTIFY_INTERRUPT   DxgkCbNotifyInterrupt;    /* 0x80 */
+    DXGKCB_NOTIFY_DPC         DxgkCbNotifyDpc;          /* 0x88 */
+    DXGKCB_QUERYVIDPNINTERFACE     DxgkCbQueryVidPnInterface;    /* 0x90 */
+    DXGKCB_QUERYMONITORINTERFACE   DxgkCbQueryMonitorInterface;  /* 0x98 */
+    DXGKCB_GETCAPTUREADDRESS DxgkCbGetCaptureAddress;   /* 0xa0 */
 
     /* --- Vista SP1 / Win7 additions --- */
-    PVOID   DxgkCbLogEtwEvent;                          /* 0xa8 */
-    PVOID   DxgkCbExcludeAdapterAccess;                 /* 0xb0 */
+    DXGKCB_LOG_ETW_EVENT DxgkCbLogEtwEvent;             /* 0xa8 */
+    DXGKCB_EXCLUDE_ADAPTER_ACCESS DxgkCbExcludeAdapterAccess; /* 0xb0 */
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
     /* --- Win8 (WDDM 1.2) additions --- */
-    PVOID   DxgkCbCreateContextAllocation;              /* 0xb8 */
-    PVOID   DxgkCbDestroyContextAllocation;             /* 0xc0 */
-    PVOID   DxgkCbSetPowerComponentActive;              /* 0xc8 */
-    PVOID   DxgkCbSetPowerComponentIdle;                /* 0xd0 */
-    PDXGKCB_ACQUIRE_POST_DISPLAY_OWNERSHIP DxgkCbAcquirePostDisplayOwnership; /* 0xd8 */
-    PVOID   DxgkCbPowerRuntimeControlRequest;           /* 0xe0 */
-    PVOID   DxgkCbSetPowerComponentLatency;             /* 0xe8 */
-    PVOID   DxgkCbSetPowerComponentResidency;           /* 0xf0 */
-    PVOID   DxgkCbCompleteFStateTransition;             /* 0xf8 */
+    DXGKCB_CREATECONTEXTALLOCATION DxgkCbCreateContextAllocation; /* 0xb8 */
+    DXGKCB_DESTROYCONTEXTALLOCATION DxgkCbDestroyContextAllocation; /* 0xc0 */
+    DXGKCB_SETPOWERCOMPONENTACTIVE DxgkCbSetPowerComponentActive; /* 0xc8 */
+    DXGKCB_SETPOWERCOMPONENTIDLE DxgkCbSetPowerComponentIdle; /* 0xd0 */
+    DXGKCB_ACQUIRE_POST_DISPLAY_OWNERSHIP DxgkCbAcquirePostDisplayOwnership; /* 0xd8 */
+    DXGKCB_POWERRUNTIMECONTROLREQUEST DxgkCbPowerRuntimeControlRequest; /* 0xe0 */
+    DXGKCB_SETPOWERCOMPONENTLATENCY DxgkCbSetPowerComponentLatency; /* 0xe8 */
+    DXGKCB_SETPOWERCOMPONENTRESIDENCY DxgkCbSetPowerComponentResidency; /* 0xf0 */
+    DXGKCB_COMPLETEFSTATETRANSITION DxgkCbCompleteFStateTransition; /* 0xf8 */
 #endif
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM1_3)
     /* --- Win8.1 (WDDM 1.3) --- */
-    PVOID   DxgkCbCompletePStateTransition;             /* 0x100 */
+    DXGKCB_COMPLETEPSTATETRANSITION DxgkCbCompletePStateTransition; /* 0x100 */
 #endif
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
     /* --- WDDM 2.0 additions --- */
-    PVOID   DxgkCbMapContextAllocation;                 /* 0x108 */
-    PVOID   DxgkCbUpdateContextAllocation;              /* 0x110 */
-    PVOID   DxgkCbReserveGpuVirtualAddressRange;        /* 0x118 */
+    DXGKCB_MAPCONTEXTALLOCATION DxgkCbMapContextAllocation; /* 0x108 */
+    DXGKCB_UPDATECONTEXTALLOCATION DxgkCbUpdateContextAllocation; /* 0x110 */
+    DXGKCB_RESERVEGPUVIRTUALADDRESSRANGE DxgkCbReserveGpuVirtualAddressRange; /* 0x118 */
     DXGKCB_ACQUIREHANDLEDATA DxgkCbAcquireHandleData;   /* 0x120 */
     DXGKCB_RELEASEHANDLEDATA DxgkCbReleaseHandleData;   /* 0x128 */
-    PVOID   DxgkCbHardwareContentProtectionTeardown;    /* 0x130 */
+    DXGKCB_HARDWARECONTENTPROTECTIONTEARDOWN DxgkCbHardwareContentProtectionTeardown; /* 0x130 */
 #endif
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_1)
     /* --- WDDM 2.1 additions --- */
-    PVOID   DxgkCbMultiPlaneOverlayDisabled;            /* 0x138 */
-    PVOID   DxgkCbMitigatedRangeUpdate;                 /* 0x140 */
+    DXGKCB_MULTIPLANEOVERLAYDISABLED DxgkCbMultiPlaneOverlayDisabled; /* 0x138 */
+    DXGKCB_DXGKCB_MITIGATEDRANGEUPDATE DxgkCbMitigatedRangeUpdate; /* 0x140 */
 #endif
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
     /* --- WDDM 2.2 additions --- */
-    PVOID   DxgkCbInvalidateHwContext;                  /* 0x148 */
-    PVOID   DxgkCbIndicateConnectorChange;              /* 0x150 */
-    PVOID   DxgkCbUnblockUEFIFrameBufferRanges;         /* 0x158 */
-    PVOID   DxgkCbAcquirePostDisplayOwnership2;         /* 0x160 */
+    DXGKCB_INVALIDATEHWCONTEXT DxgkCbInvalidateHwContext; /* 0x148 */
+    DXGKCB_INDICATE_CONNECTOR_CHANGE DxgkCbIndicateConnectorChange; /* 0x150 */
+    DXGKCB_UNBLOCKUEFIFRAMEBUFFERRANGES DxgkCbUnblockUEFIFrameBufferRanges; /* 0x158 */
+    DXGKCB_ACQUIRE_POST_DISPLAY_OWNERSHIP2 DxgkCbAcquirePostDisplayOwnership2; /* 0x160 */
 #endif
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_3)
@@ -1200,16 +1904,16 @@ typedef struct _DXGK_INTERFACE
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
     /* --- WDDM 2.4 additions --- */
-    PDXGKCB_ALLOCATE_CONTIGUOUS_MEMORY DxgkCbAllocateContiguousMemory; /* 0x170 */
-    PDXGKCB_FREE_CONTIGUOUS_MEMORY DxgkCbFreeContiguousMemory;       /* 0x178 */
-    PVOID   DxgkCbAllocatePagesForMdl;                  /* 0x180 */
-    PVOID   DxgkCbFreePagesFromMdl;                     /* 0x188 */
-    PVOID   DxgkCbPinFrameBufferForSave;                /* 0x190 */
-    PVOID   DxgkCbUnpinFrameBufferForSave;              /* 0x198 */
-    PVOID   DxgkCbMapFrameBufferPointer;                /* 0x1a0 */
-    PVOID   DxgkCbUnmapFrameBufferPointer;              /* 0x1a8 */
-    PVOID   DxgkCbMapMdlToIoMmu;                        /* 0x1b0 */
-    PVOID   DxgkCbUnmapMdlFromIoMmu;                    /* 0x1b8 */
+    DXGKCB_ALLOCATECONTIGUOUSMEMORY DxgkCbAllocateContiguousMemory; /* 0x170 */
+    DXGKCB_FREECONTIGUOUSMEMORY DxgkCbFreeContiguousMemory;       /* 0x178 */
+    DXGKCB_ALLOCATEPAGESFORMDL DxgkCbAllocatePagesForMdl;         /* 0x180 */
+    DXGKCB_FREEPAGESFROMMDL DxgkCbFreePagesFromMdl;                /* 0x188 */
+    DXGKCB_PINFRAMEBUFFERFORSAVE DxgkCbPinFrameBufferForSave;      /* 0x190 */
+    DXGKCB_UNPINFRAMEBUFFERFORSAVE DxgkCbUnpinFrameBufferForSave;  /* 0x198 */
+    DXGKCB_MAPFRAMEBUFFERPOINTER DxgkCbMapFrameBufferPointer;      /* 0x1a0 */
+    DXGKCB_UNMAPFRAMEBUFFERPOINTER DxgkCbUnmapFrameBufferPointer;  /* 0x1a8 */
+    DXGKCB_MAPMDLTOIOMMU DxgkCbMapMdlToIoMmu;                     /* 0x1b0 */
+    DXGKCB_UNMAPMDLFROMIOMMU DxgkCbUnmapMdlFromIoMmu;             /* 0x1b8 */
     DXGKCB_REPORT_DIAGNOSTIC DxgkCbReportDiagnostic;    /* 0x1c0 */
 #endif
 
@@ -1220,7 +1924,7 @@ typedef struct _DXGK_INTERFACE
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_6)
     /* --- WDDM 2.6 additions --- */
-    PVOID   DxgkCbIsFeatureEnabled;                     /* 0x1d0 */
+    DXGKCB_ISFEATUREENABLED DxgkCbIsFeatureEnabled;     /* 0x1d0 */
     DXGKCB_SAVEMEMORYFORHOTUPDATE DxgkCbSaveMemoryForHotUpdate; /* 0x1d8 */
 #endif
 
@@ -1243,10 +1947,9 @@ typedef struct _DXGK_INTERFACE
     DXGKCB_PINFRAMEBUFFERFORSAVE2       DxgkCbPinFrameBufferForSave2;
 #endif
 
-#if defined(DXGKDDI_INTERFACE_VERSION_WDDM3_1) && \
-    (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
     /* --- WDDM 3.1 --- */
-    PVOID   DxgkCbDisconnectDoorbell;                   /* 0x238 */
+    DXGKCB_DISCONNECTDOORBELL DxgkCbDisconnectDoorbell; /* 0x238 */
 #endif
 } DXGK_INTERFACE, *PDXGK_INTERFACE;
 
@@ -1275,6 +1978,17 @@ C_ASSERT(sizeof(DXGKRNL_INTERFACE) == 0x1C8);
 C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbAllocateContiguousMemory) == 0xBC);
 C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbReportDiagnostic) == 0xE4);
 C_ASSERT(sizeof(DXGKRNL_INTERFACE) == 0xE8);
+#endif
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_5) && \
+    (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WDDM2_6)
+#ifdef _WIN64
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbSignalEvent) == 0x1C8);
+C_ASSERT(sizeof(DXGKRNL_INTERFACE) == 0x1D0);
+#else
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbSignalEvent) == 0xE8);
+C_ASSERT(sizeof(DXGKRNL_INTERFACE) == 0xEC);
 #endif
 #endif
 
@@ -1344,6 +2058,17 @@ C_ASSERT(sizeof(DXGKRNL_INTERFACE) == 0x120);
 #endif
 #endif
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
+#ifdef _WIN64
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbDisconnectDoorbell) == 0x238);
+C_ASSERT(sizeof(DXGKRNL_INTERFACE) == 0x240);
+#else
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE, DxgkCbDisconnectDoorbell) == 0x120);
+C_ASSERT(sizeof(DXGKRNL_INTERFACE) == 0x124);
+#endif
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
 /* Forward-declare KMDDOD_INITIALIZATION_DATA — defined after DRIVER_INITIALIZATION_DATA */
 typedef struct _KMDDOD_INITIALIZATION_DATA  KMDDOD_INITIALIZATION_DATA;
 typedef struct _KMDDOD_INITIALIZATION_DATA *PKMDDOD_INITIALIZATION_DATA;
@@ -1356,6 +2081,7 @@ DxgkInitializeDisplayOnlyDriver(
     _In_ PDRIVER_OBJECT  DriverObject,
     _In_ PUNICODE_STRING RegistryPath,
     _In_ PKMDDOD_INITIALIZATION_DATA KmDodInitializationData);
+#endif
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
 NTSTATUS
@@ -1770,11 +2496,13 @@ DXGKDDI_NOTIFY_SURPRISE_REMOVAL(
 typedef DXGKDDI_NOTIFY_SURPRISE_REMOVAL *PDXGKDDI_NOTIFY_SURPRISE_REMOVAL;
 #endif
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM1_3)
 typedef NTSTATUS
 (APIENTRY *PDXGKDDI_GET_NODE_METADATA)(
     _In_  PVOID                      MiniportDeviceContext,
     _In_  UINT                       NodeOrdinal,
     _Out_ DXGKARG_GETNODEMETADATA   *GetNodeMetadata);
+#endif
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
 
@@ -2072,7 +2800,7 @@ typedef struct _DRIVER_INITIALIZATION_DATA
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM1_3)
     PDXGKDDI_GET_NODE_METADATA                  DxgkDdiGetNodeMetadata;
     PVOID                                       DxgkDdiSetPowerPState;           /* reserved, set to zero */
-    PVOID                                       DxgkDdiControlInterrupt2;
+    PDXGKDDI_CONTROLINTERRUPT2                   DxgkDdiControlInterrupt2;
     PDXGKDDI_CHECKMULTIPLANEOVERLAYSUPPORT      DxgkDdiCheckMultiPlaneOverlaySupport;
     PVOID                                       DxgkDdiCalibrateGpuClock;
     PVOID                                       DxgkDdiFormatHistoryBuffer;
@@ -2449,6 +3177,7 @@ C_ASSERT(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA, DxgkDdiSetVideoProtectedRegion
  * Matching the Windows layout is required for prebuilt DOD miniports such as
  * viogpudo, which pass this structure to DxgkInitializeDisplayOnlyDriver.
  */
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
 struct _KMDDOD_INITIALIZATION_DATA
 {
     ULONG                                       Version;
@@ -2516,6 +3245,7 @@ C_ASSERT(sizeof(KMDDOD_INITIALIZATION_DATA) == 0x148);
 C_ASSERT(sizeof(KMDDOD_INITIALIZATION_DATA) == 0xA8);
 #else
 C_ASSERT(sizeof(KMDDOD_INITIALIZATION_DATA) == 0xA4);
+#endif
 #endif
 #endif
 
