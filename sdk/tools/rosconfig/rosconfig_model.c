@@ -107,24 +107,50 @@ static void def_error(const char *path, int lineno, const char *msg)
     die("%s:%d: %s", path, lineno, msg);
 }
 
-static void parse_depends(Dep **deps, int *ndeps, int *cdeps, const char *expr, const char *path, int lineno)
+static void parse_depends_term(Dep **deps, int *ndeps, int *cdeps, const char *expr,
+                               size_t length, int or_with_next, const char *path, int lineno)
 {
-    const char *sep = strstr(expr, "!=");
-    Dep *d = GROW(*deps, *ndeps, *cdeps);
+    char *term = xstrndup(expr, length);
+    const char *sep;
+    Dep *d;
+
+    rtrim(term);
+    while (*term == ' ' || *term == '\t')
+        term++;
+
+    sep = strstr(term, "!=");
+    d = GROW(*deps, *ndeps, *cdeps);
     d->negate = 0;
+    d->or_with_next = or_with_next;
     if (sep) {
         d->negate = 1;
     } else {
-        sep = strchr(expr, '=');
+        sep = strchr(term, '=');
         if (!sep)
             def_error(path, lineno, "depends expects KEY=VALUE or KEY!=VALUE");
     }
-    d->key = xstrndup(expr, (size_t)(sep - expr));
+    d->key = xstrndup(term, (size_t)(sep - term));
     d->value = xstrdup(sep + (d->negate ? 2 : 1));
     rtrim(d->key);
     rtrim(d->value);
     if (d->key[0] == '\0' || d->value[0] == '\0')
         def_error(path, lineno, "depends expects KEY=VALUE or KEY!=VALUE");
+}
+
+static void parse_depends(Dep **deps, int *ndeps, int *cdeps, const char *expr, const char *path, int lineno)
+{
+    const char *term = expr;
+    const char *alt;
+
+    /*
+     * Terms of one line joined by "||" are alternatives; separate depends
+     * lines stay ANDed.
+     */
+    while ((alt = strstr(term, "||")) != NULL) {
+        parse_depends_term(deps, ndeps, cdeps, term, (size_t)(alt - term), 1, path, lineno);
+        term = alt + 2;
+    }
+    parse_depends_term(deps, ndeps, cdeps, term, strlen(term), 0, path, lineno);
 }
 
 static int path_is_absolute(const char *path)
@@ -519,12 +545,20 @@ const char *config_value(const char *key)
 
 static int deps_visible(const Dep *deps, int ndeps)
 {
-    int i;
-    for (i = 0; i < ndeps; i++) {
-        const Dep *d = &deps[i];
-        const char *v = config_value(d->key);
-        int eq = (v != NULL) && strcmp(v, d->value) == 0;
-        if (d->negate ? eq : !eq)
+    int i = 0;
+    while (i < ndeps) {
+        int group_satisfied = 0;
+        for (;;) {
+            const Dep *d = &deps[i];
+            const char *v = config_value(d->key);
+            int eq = (v != NULL) && strcmp(v, d->value) == 0;
+            if (d->negate ? !eq : eq)
+                group_satisfied = 1;
+            i++;
+            if (!d->or_with_next)
+                break;
+        }
+        if (!group_satisfied)
             return 0;
     }
     return 1;

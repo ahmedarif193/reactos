@@ -116,9 +116,18 @@ static EFI_GUID EfiTcp4ServiceBindingGuid =
  * Bind the stack in stages. ARP is the first consumer that configures MNP,
  * which may reinitialize SNP, so DHCP, IP, and HTTP must not bind until the
  * board-specific MAC repair has run after ARP.
+ *
+ * Only the layers the board firmware lacks are shipped. The LattePanda Mu
+ * firmware has no network stack at all, while the Raspberry Pi 5 firmware
+ * carries everything except a driver for its own NIC (and an HTTP driver
+ * that allows plain http:// URLs).
  */
 static const UEFI_NETWORK_DRIVER NetworkDrivers[] =
 {
+#if defined(_M_ARM64)
+    {L"\\EFI\\BOOT\\drivers\\Rp1GemDxe.efi", TRUE, FALSE, UefiNetworkDriverBase},
+    {L"\\EFI\\BOOT\\drivers\\HttpDxe.efi", FALSE, TRUE, UefiNetworkDriverUpper},
+#else
     {L"\\EFI\\BOOT\\drivers\\DpcDxe.efi", FALSE, FALSE, UefiNetworkDriverBase},
     {L"\\EFI\\BOOT\\drivers\\RngDxe.efi", FALSE, FALSE, UefiNetworkDriverBase},
     {L"\\EFI\\BOOT\\drivers\\Hash2DxeCrypto.efi", FALSE, FALSE, UefiNetworkDriverBase},
@@ -133,6 +142,7 @@ static const UEFI_NETWORK_DRIVER NetworkDrivers[] =
     {L"\\EFI\\BOOT\\drivers\\DnsDxe.efi", FALSE, FALSE, UefiNetworkDriverUpper},
     {L"\\EFI\\BOOT\\drivers\\HttpUtilitiesDxe.efi", FALSE, FALSE, UefiNetworkDriverUpper},
     {L"\\EFI\\BOOT\\drivers\\HttpDxe.efi", FALSE, TRUE, UefiNetworkDriverUpper},
+#endif
 };
 
 static BOOLEAN NetworkDriversAttempted;
@@ -270,6 +280,22 @@ UefiGetNetworkStageMask(
 }
 
 static VOID
+UefiTraceNetworkStages(
+    _In_ UINT32 Mask)
+{
+    TRACE("UEFI Network: SNP=%s MNP=%s ARP=%s IP4=%s IP4CFG=%s DHCP4=%s UDP4=%s TCP4=%s HTTP=%s\n",
+          (Mask & NET_STAGE_SNP) ? "yes" : "no",
+          (Mask & NET_STAGE_MNP) ? "yes" : "no",
+          (Mask & NET_STAGE_ARP) ? "yes" : "no",
+          (Mask & NET_STAGE_IP4) ? "yes" : "no",
+          (Mask & NET_STAGE_IP4_CONFIG2) ? "yes" : "no",
+          (Mask & NET_STAGE_DHCP) ? "yes" : "no",
+          (Mask & NET_STAGE_UDP4) ? "yes" : "no",
+          (Mask & NET_STAGE_TCP4) ? "yes" : "no",
+          (Mask & NET_STAGE_HTTP) ? "yes" : "no");
+}
+
+static VOID
 UefiConnectAllControllers(
     _In_ BOOLEAN Recursive)
 {
@@ -378,16 +404,21 @@ UefiStartNetworkDrivers(
             continue;
         }
 
+        TRACE("UEFI Network: starting %S\n", NetworkDrivers[Index].Path);
         Status = GlobalSystemTable->BootServices->StartImage(
             NetworkDriverImages[Index], NULL, NULL);
         if (EFI_ERROR(Status))
         {
+            TRACE("UEFI Network: %S failed to start (Status %llx)\n",
+                  NetworkDrivers[Index].Path,
+                  (unsigned long long)Status);
             GlobalSystemTable->BootServices->UnloadImage(
                 NetworkDriverImages[Index]);
             NetworkDriverImages[Index] = NULL;
             continue;
         }
 
+        TRACE("UEFI Network: started %S\n", NetworkDrivers[Index].Path);
         NetworkDriversStarted[Index] = TRUE;
     }
 }
@@ -698,6 +729,8 @@ UefiNetPrepare(
     EFI_HANDLE HttpController = NULL;
     EFI_SIMPLE_NETWORK_PROTOCOL *Snp = NULL;
     UINT32 Mask;
+    UINT32 PreviousMask = (UINT32)-1;
+    UINTN Attempts = 0;
 
     if (!Context ||
         !GlobalSystemTable ||
@@ -712,19 +745,32 @@ UefiNetPrepare(
      * Expose PCI I/O handles, apply the board's RTL8168 preparation before
      * UNDI binds, then load only the layers missing from firmware.
      */
+    TRACE("UEFI Network: connecting controllers\n");
     UefiConnectAllControllers(FALSE);
     UefiLattePandaPrepareNic();
 
     Mask = UefiGetNetworkStageMask(NULL);
+    TRACE("UEFI Network: firmware provides mask %08lx, need %08lx\n",
+          (unsigned long)Mask,
+          (unsigned long)NET_REQUIRED_STAGES);
     if ((Mask & NET_REQUIRED_STAGES) != NET_REQUIRED_STAGES)
         UefiLoadNetworkDrivers((Mask & NET_STAGE_SNP) == 0);
+    TRACE("UEFI Network: waiting for the protocol stack\n");
 
     for (;;)
     {
         Mask = UefiGetNetworkStageMask(&HttpController);
+        if (Mask != PreviousMask)
+        {
+            UefiTraceNetworkStages(Mask);
+            PreviousMask = Mask;
+        }
 
         if (!Snp && (Mask & NET_STAGE_SNP))
-            UefiInitializeSimpleNetwork(&Snp);
+        {
+            if (!UefiInitializeSimpleNetwork(&Snp))
+                TRACE("UEFI Network: SNP initialization failed\n");
+        }
 
         if (Snp && (Mask & NET_REQUIRED_STAGES) == NET_REQUIRED_STAGES)
         {
@@ -763,6 +809,13 @@ UefiNetPrepare(
         if (Snp)
             UefiConnectHttpPriority();
         UefiConnectAllControllers(Snp != NULL);
+
+        if (++Attempts % 10 == 0)
+        {
+            TRACE("UEFI Network: still waiting, mask %08lx snp=%s\n",
+                  (unsigned long)Mask,
+                  Snp ? "yes" : "no");
+        }
 
         GlobalSystemTable->BootServices->Stall(UEFI_NETWORK_RETRY_DELAY_US);
     }

@@ -15,6 +15,7 @@
 #     default VAL                default value (bool: y / n / auto)
 #     depends KEY=VAL            only active when the dependency holds
 #     depends KEY!=VAL           (multiple "depends" lines are ANDed)
+#     depends K=V || K2=V2       terms joined by "||" are alternatives
 #     meta                       consumed by the configure scripts only
 #     var NAME                   CMake variable name (default: KEY)
 #     cmaketype BOOL|STRING      CMake cache type (default by option type)
@@ -92,11 +93,11 @@ config FREELDR_HTTP_BOOT
     prompt "Enable HTTP boot"
     type bool
     default n
-    depends ARCH=amd64
-    depends PROFILE_AMD64=lattepandamu
+    depends PROFILE_AMD64=lattepandamu || PROFILE_ARM64=rpi5
     help
-      Build the LattePanda Mu FreeLdr HTTP boot path and package the
-      board's external UEFI network stack.
+      Build the FreeLdr UEFI HTTP boot path: FreeLdr downloads the
+      live image over HTTP and boots it as a ramdisk. Packages the
+      board's UEFI network drivers onto the boot media.
 
 endmenu
 

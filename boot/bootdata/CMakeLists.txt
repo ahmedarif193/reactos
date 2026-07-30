@@ -67,47 +67,8 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/welcome_config/)
     add_custom_target(converted_welcome_i18n_files DEPENDS ${_converted_welcome_i18n_files})
 endif()
 
-# freeldr.ini
-set(_boot_media_freeldr_ini "${CMAKE_CURRENT_SOURCE_DIR}/bootcd.ini")
-if(FREELDR_HTTP_BOOT)
-    set(_boot_media_freeldr_ini "${CMAKE_CURRENT_BINARY_DIR}/bootcd_lattepandamu.ini")
-    set(_boot_media_freeldr_ini_source "${CMAKE_CURRENT_SOURCE_DIR}/bootcd.ini")
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_boot_media_freeldr_ini_source}")
-    file(READ "${_boot_media_freeldr_ini_source}" _boot_media_freeldr_ini_contents)
-
-    set(_lattepandamu_os_marker "; ROSCONFIG_PROFILE_OS_ENTRIES")
-    set(_lattepandamu_boot_marker "; ROSCONFIG_PROFILE_BOOT_ENTRIES")
-    string(FIND "${_boot_media_freeldr_ini_contents}" "${_lattepandamu_os_marker}" _lattepandamu_os_marker_offset)
-    string(FIND "${_boot_media_freeldr_ini_contents}" "${_lattepandamu_boot_marker}" _lattepandamu_boot_marker_offset)
-    string(FIND "${_boot_media_freeldr_ini_contents}" "DefaultOS=LiveImg_RamDisk_Debug" _lattepandamu_default_os_offset)
-    string(FIND "${_boot_media_freeldr_ini_contents}" "TimeOut=1" _lattepandamu_timeout_offset)
-    if(_lattepandamu_os_marker_offset EQUAL -1 OR
-       _lattepandamu_boot_marker_offset EQUAL -1 OR
-       _lattepandamu_default_os_offset EQUAL -1 OR
-       _lattepandamu_timeout_offset EQUAL -1)
-        message(FATAL_ERROR "LattePanda Mu boot-menu anchors are missing from bootcd.ini")
-    endif()
-
-    string(REPLACE "DefaultOS=LiveImg_RamDisk_Debug"
-                   "DefaultOS=HttpBoot"
-                   _boot_media_freeldr_ini_contents
-                   "${_boot_media_freeldr_ini_contents}")
-    string(REPLACE "TimeOut=1"
-                   "TimeOut=0"
-                   _boot_media_freeldr_ini_contents
-                   "${_boot_media_freeldr_ini_contents}")
-    string(REPLACE "${_lattepandamu_os_marker}"
-                   "HttpBoot=\"ReactOS HTTP Boot - Debug\""
-                   _boot_media_freeldr_ini_contents
-                   "${_boot_media_freeldr_ini_contents}")
-    set(_lattepandamu_boot_entry
-        "[HttpBoot]\nBootType=Windows2003\nSystemPath=ramdisk(0)\\reactos\nOptions=/KERNEL=ntkrnlmp.exe /DEBUG /DEBUGPORT=COM1 /BAUDRATE=115200 /SOS /FASTDETECT /MININT /LOADSYMBOLS\nHttpBootUrl=http://10.42.0.1/livecd.iso")
-    string(REPLACE "${_lattepandamu_boot_marker}"
-                   "${_lattepandamu_boot_entry}"
-                   _boot_media_freeldr_ini_contents
-                   "${_boot_media_freeldr_ini_contents}")
-    file(WRITE "${_boot_media_freeldr_ini}" "${_boot_media_freeldr_ini_contents}")
-endif()
+# freeldr.ini (FREELDR_BOOTCD_INI is prepared by boot/boot_images.cmake)
+set(_boot_media_freeldr_ini "${FREELDR_BOOTCD_INI}")
 add_cd_file(FILE ${_boot_media_freeldr_ini} DESTINATION root NO_CAB NAME_ON_CD freeldr.ini FOR bootcd livecd)
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/bootcd_regtest.ini DESTINATION root NO_CAB NAME_ON_CD freeldr.ini FOR regtest)
 
