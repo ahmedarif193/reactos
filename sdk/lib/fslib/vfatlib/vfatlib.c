@@ -37,6 +37,11 @@
 #define NDEBUG
 #include <debug.h>
 
+#ifndef FSCTL_ALLOW_EXTENDED_DASD_IO
+#define FSCTL_ALLOW_EXTENDED_DASD_IO \
+    CTL_CODE(FILE_DEVICE_FILE_SYSTEM, 32, METHOD_NEITHER, FILE_ANY_ACCESS)
+#endif
+
 
 /* GLOBALS & FUNCTIONS ********************************************************/
 
@@ -281,7 +286,46 @@ VfatFormat(
                                  0);
     if (!NT_SUCCESS(LockStatus))
     {
-        DPRINT1("WARNING: Failed to lock volume for formatting! Format may fail! (Status: 0x%x)\n", LockStatus);
+        DPRINT1("Failed to lock volume for formatting (Status: 0x%x)\n", LockStatus);
+        NtClose(FileHandle);
+        return FALSE;
+    }
+
+    /*
+     * The mounted filesystem may expose only the size stored in its old boot
+     * sector. Formatting a recreated or enlarged partition needs raw access
+     * to the complete partition returned by the disk stack.
+     */
+    LockStatus = NtFsControlFile(FileHandle,
+                                 NULL,
+                                 NULL,
+                                 NULL,
+                                 &Iosb,
+                                 FSCTL_ALLOW_EXTENDED_DASD_IO,
+                                 NULL,
+                                 0,
+                                 NULL,
+                                 0);
+    /* RawFS and filesystems that already expose the full device need not
+     * implement this control. */
+    if (!NT_SUCCESS(LockStatus) &&
+        LockStatus != STATUS_INVALID_PARAMETER &&
+        LockStatus != STATUS_INVALID_DEVICE_REQUEST &&
+        LockStatus != STATUS_NOT_SUPPORTED)
+    {
+        DPRINT1("Failed to enable extended raw volume I/O (Status: 0x%x)\n", LockStatus);
+        NtFsControlFile(FileHandle,
+                        NULL,
+                        NULL,
+                        NULL,
+                        &Iosb,
+                        FSCTL_UNLOCK_VOLUME,
+                        NULL,
+                        0,
+                        NULL,
+                        0);
+        NtClose(FileHandle);
+        return FALSE;
     }
 
     if (FatType == FAT_12)
