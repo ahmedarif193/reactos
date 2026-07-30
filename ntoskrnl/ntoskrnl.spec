@@ -2670,7 +2670,7 @@
 @ stdcall -arch=x86_64,arm64 MmIsDriverVerifyingByAddress(ptr)
 @ stub -arch=arm64 MmIsFileSectionActive
 @ stub -arch=arm64 MmLockPreChargedPagedPool
-@ stdcall -arch=arm64 MmMapIoSpaceEx(long long long long)
+@ stdcall -arch=x86_64,arm64 MmMapIoSpaceEx(long long long long)
 @ stub -arch=arm64 MmMapMdl
 @ stub -arch=arm64 MmMapMemoryDumpMdlEx
 @ stub -arch=arm64 MmMapViewInSessionSpaceEx
