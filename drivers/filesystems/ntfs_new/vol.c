@@ -307,8 +307,8 @@ NtfsMountVolume(IN PDEVICE_OBJECT TargetDeviceObject,
         goto Cleanup;
 
     // Set up NTFS library to use disk routines.
-    Status = NtfsDiskInitializeKm(TargetDeviceObject,
-                                  DiskGeometry.BytesPerSector);
+    Status = NtfsDiskPrepareMountKm(TargetDeviceObject,
+                                    DiskGeometry.BytesPerSector);
 
     if (!NT_SUCCESS(Status))
         goto Cleanup;
@@ -348,6 +348,7 @@ NtfsMountVolume(IN PDEVICE_OBJECT TargetDeviceObject,
         IoDeleteDevice(FSDeviceObject);
         goto Cleanup;
     }
+    ExInitializeFastMutex(&VolCB->VolumeStateMutex);
     ExInitializeFastMutex(&VolCB->StreamListMutex);
     ExInitializeFastMutex(&VolCB->MissingNameMutex);
     InitializeListHead(&VolCB->MissingNameList);

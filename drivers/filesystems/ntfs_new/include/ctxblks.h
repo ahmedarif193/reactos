@@ -30,6 +30,13 @@ typedef struct _VolumeContextBlock
     PDEVICE_OBJECT StorageDevice;
     PFILE_OBJECT StreamFileObject;
     ERESOURCE MetadataResource;
+    FAST_MUTEX VolumeStateMutex;
+    SHARE_ACCESS VolumeShareAccess;
+    LONG OpenHandleCount;
+    LONG VolumeHandleCount;
+    PFILE_OBJECT VolumeLockOwner;
+    BOOLEAN Dismounting;
+    BOOLEAN Dismounted;
     FAST_MUTEX StreamListMutex;
     LIST_ENTRY StreamList;
     PNOTIFY_SYNC NotifySync;
@@ -198,6 +205,8 @@ typedef struct _FCB
     WCHAR InlineFileName[NTFS_INLINE_FILE_NAME_CHARS];
 
     PNtfsFileRecord FileRec;
+    BOOLEAN IsVolumeOpen;
+    BOOLEAN CleanupComplete;
     ULONG CreateOptions;
     ACCESS_MASK DesiredAccess;
     ULONG AutomaticTimestampMask;
@@ -241,6 +250,12 @@ typedef struct _FCB
     LIST_ENTRY IdleLink;
 
 } FileContextBlock, *PFileContextBlock;
+
+NTSTATUS
+NtfsForwardVolumeIo(_In_ PVolumeContextBlock VolCB,
+                    _In_ PFileContextBlock FileCB,
+                    _Inout_ PIRP Irp,
+                    _In_ BOOLEAN Write);
 
 PStreamContextBlock
 NtfsReferenceStreamContext(

@@ -223,6 +223,51 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     IrpSp = IoGetCurrentIrpStackLocation(Irp);
     FileCB = (PFileContextBlock)IrpSp->FileObject->FsContext;
 
+    if (FileCB && !FileCB->CleanupComplete)
+    {
+        PVolumeContextBlock VolCB =
+            (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
+        BOOLEAN NotifyUnlock = FALSE;
+
+        ExAcquireFastMutex(&VolCB->VolumeStateMutex);
+        if (FileCB->IsVolumeOpen)
+        {
+            KIRQL OldIrql;
+
+            if (VolCB->VolumeHandleCount > 0)
+            {
+                IoRemoveShareAccess(IrpSp->FileObject,
+                                    &VolCB->VolumeShareAccess);
+                VolCB->VolumeHandleCount--;
+            }
+
+            if (VolCB->VolumeLockOwner == IrpSp->FileObject)
+            {
+                VolCB->VolumeLockOwner = NULL;
+                IoAcquireVpbSpinLock(&OldIrql);
+                VolumeDeviceObject->Vpb->Flags &= ~VPB_LOCKED;
+                if (!VolCB->Dismounted)
+                {
+                    VolumeDeviceObject->Vpb->Flags &=
+                        ~VPB_DIRECT_WRITES_ALLOWED;
+                }
+                IoReleaseVpbSpinLock(OldIrql);
+                NotifyUnlock = TRUE;
+            }
+        }
+        if (VolCB->OpenHandleCount > 0)
+            VolCB->OpenHandleCount--;
+        FileCB->CleanupComplete = TRUE;
+        ExReleaseFastMutex(&VolCB->VolumeStateMutex);
+
+        if (NotifyUnlock)
+        {
+            FsRtlNotifyVolumeEvent(IrpSp->FileObject,
+                                   FSRTL_VOLUME_UNLOCK);
+        }
+        IrpSp->FileObject->Flags |= FO_CLEANUP_COMPLETE;
+    }
+
     // Do not free the FCB/stream structures here. Cleanup is called when the
     // last handle is closed, but the file object may still be referenced by
     // the cache/section. The actual deallocation is done on IRP_MJ_CLOSE.

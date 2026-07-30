@@ -14,6 +14,11 @@ NtfsDiskInitializeKm(
     _In_ PDEVICE_OBJECT DeviceObject,
     _In_ ULONG SectorBytes);
 
+NTSTATUS
+NtfsDiskPrepareMountKm(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ ULONG SectorBytes);
+
 /* Writes out metadata held back by the block cache. */
 NTSTATUS
 NtfsDiskFlushKm(VOID);
