@@ -676,11 +676,13 @@ FxObject::AddContext(
             // the creation of the object itself, FxObject::Commit would have done
             // this assignment.
             //
-            Header->EvtDestroyCallback = Attributes->EvtDestroyCallback;
+            if (Attributes != NULL) {
+                Header->EvtDestroyCallback = Attributes->EvtDestroyCallback;
 
-            if (Attributes->EvtCleanupCallback != NULL) {
-                Header->EvtCleanupCallback = Attributes->EvtCleanupCallback;
-                m_ObjectFlags |= FXOBJECT_FLAGS_HAS_CLEANUP;
+                if (Attributes->EvtCleanupCallback != NULL) {
+                    Header->EvtCleanupCallback = Attributes->EvtCleanupCallback;
+                    m_ObjectFlags |= FXOBJECT_FLAGS_HAS_CLEANUP;
+                }
             }
 
         }
