@@ -1959,7 +1959,7 @@ typedef struct _KTHREAD
 // Mirrors the arm64 variant above: genuine Windows fields are offset-accurate and
 // C_ASSERT-locked; ReactOS-internal scheduler/APC fields are tucked into spares.
 //
-#elif defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_WIN10)
+#elif defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_WIN11_GE)
 
 typedef struct _KTHREAD
 {
@@ -3301,7 +3301,7 @@ C_ASSERT(FIELD_OFFSET(KTHREAD, ResourceIndex) == 0x480);
 // fields live in the Win11 Padding[5] tail (ApcQueueLock/ApcStatePointer/CallbackStack)
 // plus Spare6 (LargeStack). Spare18 overlays WaitBlock[3].Object and is not writable.
 //
-#if defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_WIN10) && !defined(__ASSEMBLER__)
+#if defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_WIN11_GE) && !defined(__ASSEMBLER__)
 C_ASSERT(sizeof(KTHREAD) == 0x4C0);
 C_ASSERT(sizeof(KWAIT_BLOCK) == 0x30);
 C_ASSERT(sizeof(KAPC) == 0x58);
