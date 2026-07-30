@@ -223,6 +223,14 @@ int rosconfig_self_test(void)
         "    prompt \"PREFAST\"\n"
         "    type bool\n"
         "    default n\n"
+        "endmenu\n"
+        "\n"
+        "menu \"Boot options\"\n"
+        "config FREELDR_HTTP_BOOT\n"
+        "    prompt \"Enable HTTP boot\"\n"
+        "    type bool\n"
+        "    default n\n"
+        "    depends PROFILE_AMD64=lattepandamu || PROFILE_ARM64=rpi5\n"
         "endmenu\n";
     static const char included_definition[] =
         "config PROFILE_AMD64\n"
@@ -230,6 +238,7 @@ int rosconfig_self_test(void)
         "    type choice\n"
         "    var ROSCONFIG_PROFILE\n"
         "    value generic \"Generic AMD64\"\n"
+        "    value lattepandamu \"LattePanda Mu\"\n"
         "    default generic\n"
         "    depends ARCH=amd64\n"
         "config PROFILE_I386\n"
@@ -276,6 +285,7 @@ int rosconfig_self_test(void)
     Option *profile_amd64;
     Option *profile_i386;
     Option *profile_arm64;
+    Option *http_boot;
     Option *enable_rostests;
 
     expect(&test, rosconfig_quit_status(0, 0, 1, 1, 1) == 0,
@@ -334,21 +344,33 @@ int rosconfig_self_test(void)
     profile_amd64 = find_opt("PROFILE_AMD64");
     profile_i386 = find_opt("PROFILE_I386");
     profile_arm64 = find_opt("PROFILE_ARM64");
+    http_boot = find_opt("FREELDR_HTTP_BOOT");
     enable_rostests = find_opt("ENABLE_ROSTESTS");
 
-    expect(&test, g_nopts == 17, "parser creates options from the root and sourced files");
-    expect(&test, g_nmenus == 8, "parser creates target, module, and nested menus");
-    expect(&test, g_nentries == 25, "definition order includes sourced menus and options");
+    expect(&test, g_nopts == 18, "parser creates options from the root and sourced files");
+    expect(&test, g_nmenus == 9, "parser creates target, module, and nested menus");
+    expect(&test, g_nentries == 27, "definition order includes sourced menus and options");
     expect(&test, g_menus[2].parent == -1 && g_menus[3].parent == 2, "nested menu has the correct parent");
     expect(&test, g_menus[2].ndeps == 1 && g_menus[3].ndeps == 1, "menu dependencies are parsed");
-    expect(&test, arch && toolchain && build_type && enable && level && label && optimize && optimize_msvc && ltcg && stack_protector && dummy_pseh && runtime_checks && prefast && profile_amd64 && profile_i386 && profile_arm64 && enable_rostests, "symbols can be found across definition files");
-    if (!arch || !toolchain || !build_type || !enable || !level || !label || !optimize || !optimize_msvc || !ltcg || !stack_protector || !dummy_pseh || !runtime_checks || !prefast || !profile_amd64 || !profile_i386 || !profile_arm64 || !enable_rostests)
+    expect(&test, arch && toolchain && build_type && enable && level && label && optimize && optimize_msvc && ltcg && stack_protector && dummy_pseh && runtime_checks && prefast && profile_amd64 && profile_i386 && profile_arm64 && http_boot && enable_rostests, "symbols can be found across definition files");
+    if (!arch || !toolchain || !build_type || !enable || !level || !label || !optimize || !optimize_msvc || !ltcg || !stack_protector || !dummy_pseh || !runtime_checks || !prefast || !profile_amd64 || !profile_i386 || !profile_arm64 || !http_boot || !enable_rostests)
         goto cleanup;
 
     expect_string(&test, arch->help, "Select the target architecture.", "indented help text is parsed");
     expect_string(&test, label->def, "starter", "quoted string default is parsed");
     expect_string(&test, optimize_msvc->var, "OPTIMIZE", "toolchain-specific symbols can share one CMake variable");
     expect(&test, profile_amd64->menu == arch->menu && profile_i386->menu == arch->menu && profile_arm64->menu == arch->menu, "profiles are part of the target platform menu");
+    expect(&test, !opt_visible(http_boot), "HTTP boot is hidden from the generic AMD64 profile");
+    set_value(profile_amd64, "lattepandamu");
+    expect(&test, opt_visible(http_boot), "the LattePanda Mu profile exposes HTTP boot");
+    set_value(profile_amd64, "generic");
+    expect(&test, !opt_visible(http_boot), "leaving the LattePanda Mu profile hides HTTP boot");
+    expect(&test, http_boot->ndeps == 2 && http_boot->deps[0].or_with_next && !http_boot->deps[1].or_with_next,
+           "alternative dependency terms are parsed as one group");
+    set_value(profile_arm64, "rpi5");
+    expect(&test, opt_visible(http_boot), "the second alternative also exposes HTTP boot");
+    set_value(profile_arm64, "generic");
+    expect(&test, !opt_visible(http_boot), "HTTP boot is hidden when no alternative holds");
     expect(&test, label->ndeps == 1 && label->deps[0].negate, "negated option dependency is parsed");
     expect(&test, opt_visible(enable_rostests), "rostests are visible in Debug mode");
     expect(&test, opt_visible(enable), "root menu dependency is initially met");
@@ -409,6 +431,13 @@ int rosconfig_self_test(void)
     expect(&test, file_contains(generated_path, "set(ROSCONFIG_PROFILE \"generic\" CACHE STRING \"Target profile\")"), "the selected architecture's generic profile is emitted");
     expect(&test, file_contains(generated_path, "set(ENABLE_ROSTESTS TRUE CACHE BOOL \"ReactOS test suite and RosAutoTest\")"), "the RosAutoTest module is emitted independently of the profile");
     expect(&test, !file_contains(generated_path, "rpi5"), "a hidden architecture profile is not emitted");
+
+    set_value(profile_amd64, "lattepandamu");
+    set_value(http_boot, "y");
+    expect(&test, generate_cmake(generated_path) == 0, "CMake fragment regenerates for the LattePanda Mu HTTP boot option");
+    expect(&test, file_contains(generated_path, "set(ROSCONFIG_PROFILE \"lattepandamu\" CACHE STRING \"Target profile\")"), "the LattePanda Mu profile is emitted");
+    expect(&test, file_contains(generated_path, "set(FREELDR_HTTP_BOOT TRUE CACHE BOOL \"Enable HTTP boot\")"), "the LattePanda Mu HTTP boot option is emitted");
+    set_value(profile_amd64, "generic");
 
     set_value(enable, "n");
     expect(&test, generate_cmake(generated_path) == 0, "CMake fragment regenerates after a dependency change");

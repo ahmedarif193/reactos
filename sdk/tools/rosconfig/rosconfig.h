@@ -61,6 +61,7 @@ typedef struct {
     char *key;
     char *value;
     int negate;
+    int or_with_next; /* this term and the next one form an alternative */
 } Dep;
 
 typedef struct {

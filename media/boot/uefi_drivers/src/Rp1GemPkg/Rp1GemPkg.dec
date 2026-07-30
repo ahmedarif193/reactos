@@ -1,0 +1,15 @@
+## @file
+#  Raspberry Pi 5 RP1 Cadence GEM UEFI network package.
+#
+#  Copyright (c) 2026, ReactOS Project. All rights reserved.
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  DEC_SPECIFICATION = 0x00010005
+  PACKAGE_NAME      = Rp1GemPkg
+  PACKAGE_GUID      = 0f0a0d1a-4e2a-4d4a-9a5e-6a1b2c3d4e5f
+  PACKAGE_VERSION   = 0.10
+
+[Guids]
+  gRp1GemPkgTokenSpaceGuid = { 0x2b6f1a04, 0x8f2d, 0x4a1e, { 0xb9, 0x3c, 0x5d, 0x7e, 0x8f, 0x90, 0xa1, 0xb2 } }

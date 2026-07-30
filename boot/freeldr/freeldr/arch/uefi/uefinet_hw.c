@@ -13,6 +13,8 @@
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(WARNING);
 
+#if defined(_M_IX86) || defined(_M_AMD64)
+
 #define RTL8168_VENDOR_ID 0x10ec
 #define RTL8168_DEVICE_ID 0x8168
 
@@ -294,3 +296,23 @@ UefiLattePandaFixMac(
 
     TRACE("UEFI RTL8168: SNP fallback MAC applied\n");
 }
+
+#else
+
+/*
+ * Boards whose NIC needs no pre-UNDI repair. The Raspberry Pi 5 GEM driver
+ * reports the MAC the firmware programmed, so both hooks are no-ops.
+ */
+VOID
+UefiLattePandaPrepareNic(VOID)
+{
+}
+
+VOID
+UefiLattePandaFixMac(
+    _In_ EFI_SIMPLE_NETWORK_PROTOCOL *Snp)
+{
+    UNREFERENCED_PARAMETER(Snp);
+}
+
+#endif /* defined(_M_IX86) || defined(_M_AMD64) */
