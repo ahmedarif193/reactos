@@ -11,6 +11,7 @@
 #include <ntstrsafe.h>
 #include <initguid.h>
 #include <devpkey.h>
+#include <ndk/iotypes.h>
 
 typedef struct _EX_WORKITEM_CONTEXT
 {
@@ -515,6 +516,29 @@ IopQueryMappedDevicePropertyData(
                                    Data,
                                    RequiredSize,
                                    Type);
+    }
+
+    if (IopIsEqualDevPropKey(PropertyKey, &DEVPKEY_Device_InstanceId))
+    {
+        PEXTENDED_DEVOBJ_EXTENSION DeviceObjectExtension;
+        PDEVICE_NODE DeviceNode;
+
+        DeviceObjectExtension = (PEXTENDED_DEVOBJ_EXTENSION)Pdo->DeviceObjectExtension;
+        if (!DeviceObjectExtension)
+            return STATUS_INVALID_DEVICE_REQUEST;
+
+        DeviceNode = DeviceObjectExtension->DeviceNode;
+        if (!DeviceNode || !DeviceNode->InstancePath.Buffer)
+            return STATUS_INVALID_DEVICE_REQUEST;
+
+        *RequiredSize = DeviceNode->InstancePath.Length + sizeof(WCHAR);
+        *Type = DEVPROP_TYPE_STRING;
+        if (!Data || Size < *RequiredSize)
+            return STATUS_BUFFER_TOO_SMALL;
+
+        RtlCopyMemory(Data, DeviceNode->InstancePath.Buffer, DeviceNode->InstancePath.Length);
+        ((PWCHAR)Data)[DeviceNode->InstancePath.Length / sizeof(WCHAR)] = UNICODE_NULL;
+        return STATUS_SUCCESS;
     }
 
     if (IopIsEqualDevPropKey(PropertyKey, &DEVPKEY_Device_Service))
