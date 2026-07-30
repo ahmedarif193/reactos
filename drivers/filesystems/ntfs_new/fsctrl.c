@@ -1104,6 +1104,253 @@ NtfsGetNtfsFileRecord(
     return STATUS_SUCCESS;
 }
 
+static
+NTSTATUS
+NtfsFlushVolume(
+    _In_ PVolumeContextBlock VolCB,
+    _In_ BOOLEAN Purge)
+{
+    PStreamContextBlock *Streams = NULL;
+    PLIST_ENTRY Entry;
+    ULONG StreamCount = 0;
+    ULONG Captured = 0;
+    ULONG Index;
+    NTSTATUS Status = STATUS_SUCCESS;
+    NTSTATUS DiskStatus;
+
+    ExAcquireFastMutex(&VolCB->StreamListMutex);
+    for (Entry = VolCB->StreamList.Flink;
+         Entry != &VolCB->StreamList;
+         Entry = Entry->Flink)
+    {
+        StreamCount++;
+    }
+    ExReleaseFastMutex(&VolCB->StreamListMutex);
+
+    if (StreamCount)
+    {
+        Streams = (PStreamContextBlock*)ExAllocatePoolWithTag(
+            PagedPool,
+            StreamCount * sizeof(*Streams),
+            TAG_NTFS);
+        if (!Streams)
+            return STATUS_INSUFFICIENT_RESOURCES;
+
+        ExAcquireFastMutex(&VolCB->StreamListMutex);
+        for (Entry = VolCB->StreamList.Flink;
+             Entry != &VolCB->StreamList && Captured < StreamCount;
+             Entry = Entry->Flink)
+        {
+            PStreamContextBlock StreamCB =
+                CONTAINING_RECORD(Entry,
+                                  StreamContextBlock,
+                                  ListEntry);
+
+            StreamCB->ReferenceCount++;
+            Streams[Captured++] = StreamCB;
+        }
+        ExReleaseFastMutex(&VolCB->StreamListMutex);
+    }
+
+    for (Index = 0; Index < Captured; Index++)
+    {
+        IO_STATUS_BLOCK IoStatus;
+
+        CcFlushCache(&Streams[Index]->SectionObjectPointers,
+                     NULL,
+                     0,
+                     &IoStatus);
+        if (!NT_SUCCESS(IoStatus.Status) &&
+            NT_SUCCESS(Status))
+        {
+            Status = IoStatus.Status;
+        }
+
+        if (Purge &&
+            !CcPurgeCacheSection(
+                &Streams[Index]->SectionObjectPointers,
+                NULL,
+                0,
+                TRUE) &&
+            NT_SUCCESS(Status))
+        {
+            Status = STATUS_USER_MAPPED_FILE;
+        }
+
+        NtfsDereferenceStreamContext(VolCB,
+                                     Streams[Index]);
+    }
+
+    if (Streams)
+        ExFreePoolWithTag(Streams, TAG_NTFS);
+
+    DiskStatus = NtfsDiskFlushKm();
+    if (!NT_SUCCESS(DiskStatus) && NT_SUCCESS(Status))
+        Status = DiskStatus;
+    return Status;
+}
+
+static
+NTSTATUS
+NtfsLockOrUnlockVolume(
+    _In_ PDEVICE_OBJECT VolumeDeviceObject,
+    _In_ PIO_STACK_LOCATION IrpSp,
+    _In_ BOOLEAN Lock)
+{
+    PFILE_OBJECT FileObject = IrpSp->FileObject;
+    PFileContextBlock FileCB = FileObject
+        ? (PFileContextBlock)FileObject->FsContext
+        : NULL;
+    PVolumeContextBlock VolCB =
+        (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
+    KIRQL OldIrql;
+    NTSTATUS Status;
+
+    if (!FileCB || !FileCB->IsVolumeOpen)
+        return STATUS_INVALID_PARAMETER;
+
+    if (Lock)
+    {
+        FsRtlNotifyVolumeEvent(FileObject,
+                               FSRTL_VOLUME_LOCK);
+
+        ExAcquireFastMutex(&VolCB->VolumeStateMutex);
+        if (VolCB->Dismounted)
+            Status = STATUS_VOLUME_DISMOUNTED;
+        else if (VolCB->VolumeLockOwner ||
+                 VolCB->OpenHandleCount != 1)
+            Status = STATUS_ACCESS_DENIED;
+        else
+        {
+            VolCB->VolumeLockOwner = FileObject;
+            Status = STATUS_SUCCESS;
+        }
+        ExReleaseFastMutex(&VolCB->VolumeStateMutex);
+
+        if (NT_SUCCESS(Status))
+            Status = NtfsFlushVolume(VolCB, FALSE);
+
+        ExAcquireFastMutex(&VolCB->VolumeStateMutex);
+        if (NT_SUCCESS(Status))
+        {
+            IoAcquireVpbSpinLock(&OldIrql);
+            VolumeDeviceObject->Vpb->Flags |=
+                VPB_LOCKED | VPB_DIRECT_WRITES_ALLOWED;
+            IoReleaseVpbSpinLock(OldIrql);
+        }
+        else if (VolCB->VolumeLockOwner == FileObject)
+        {
+            VolCB->VolumeLockOwner = NULL;
+        }
+        ExReleaseFastMutex(&VolCB->VolumeStateMutex);
+
+        if (!NT_SUCCESS(Status))
+        {
+            FsRtlNotifyVolumeEvent(
+                FileObject,
+                FSRTL_VOLUME_LOCK_FAILED);
+        }
+        return Status;
+    }
+
+    ExAcquireFastMutex(&VolCB->VolumeStateMutex);
+    if (VolCB->VolumeLockOwner != FileObject)
+    {
+        Status = STATUS_NOT_LOCKED;
+    }
+    else
+    {
+        VolCB->VolumeLockOwner = NULL;
+        IoAcquireVpbSpinLock(&OldIrql);
+        VolumeDeviceObject->Vpb->Flags &= ~VPB_LOCKED;
+        if (!VolCB->Dismounted)
+        {
+            VolumeDeviceObject->Vpb->Flags &=
+                ~VPB_DIRECT_WRITES_ALLOWED;
+        }
+        IoReleaseVpbSpinLock(OldIrql);
+        Status = STATUS_SUCCESS;
+    }
+    ExReleaseFastMutex(&VolCB->VolumeStateMutex);
+
+    if (NT_SUCCESS(Status))
+    {
+        FsRtlNotifyVolumeEvent(FileObject,
+                               FSRTL_VOLUME_UNLOCK);
+    }
+    return Status;
+}
+
+static
+NTSTATUS
+NtfsDismountVolume(
+    _In_ PDEVICE_OBJECT VolumeDeviceObject,
+    _In_ PIO_STACK_LOCATION IrpSp)
+{
+    PFILE_OBJECT FileObject = IrpSp->FileObject;
+    PFileContextBlock FileCB = FileObject
+        ? (PFileContextBlock)FileObject->FsContext
+        : NULL;
+    PVolumeContextBlock VolCB =
+        (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
+    KIRQL OldIrql;
+    NTSTATUS Status;
+
+    if (!FileCB || !FileCB->IsVolumeOpen)
+        return STATUS_INVALID_PARAMETER;
+
+    ExAcquireFastMutex(&VolCB->VolumeStateMutex);
+    if (VolCB->Dismounted)
+        Status = STATUS_VOLUME_DISMOUNTED;
+    else if (VolCB->Dismounting)
+        Status = STATUS_DEVICE_BUSY;
+    else
+    {
+        VolCB->Dismounting = TRUE;
+        Status = STATUS_SUCCESS;
+    }
+    ExReleaseFastMutex(&VolCB->VolumeStateMutex);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    FsRtlNotifyVolumeEvent(FileObject,
+                           FSRTL_VOLUME_DISMOUNT);
+
+    /*
+     * Drain metadata operations that crossed the state check before the
+     * dismount flag was published. Cached paging writes remain able to run
+     * while CcFlushCache below commits them.
+     */
+    KeEnterCriticalRegion();
+    ExAcquireResourceExclusiveLite(&VolCB->MetadataResource,
+                                   TRUE);
+    ExReleaseResourceLite(&VolCB->MetadataResource);
+    KeLeaveCriticalRegion();
+
+    Status = NtfsFlushVolume(VolCB, TRUE);
+
+    ExAcquireFastMutex(&VolCB->VolumeStateMutex);
+    if (NT_SUCCESS(Status))
+    {
+        VolCB->Dismounted = TRUE;
+        IoAcquireVpbSpinLock(&OldIrql);
+        VolumeDeviceObject->Vpb->Flags &= ~VPB_MOUNTED;
+        VolumeDeviceObject->Vpb->Flags |=
+            VPB_DIRECT_WRITES_ALLOWED;
+        IoReleaseVpbSpinLock(OldIrql);
+    }
+    VolCB->Dismounting = FALSE;
+    ExReleaseFastMutex(&VolCB->VolumeStateMutex);
+
+    if (!NT_SUCCESS(Status))
+    {
+        FsRtlNotifyVolumeEvent(
+            FileObject,
+            FSRTL_VOLUME_DISMOUNT_FAILED);
+    }
+    return Status;
+}
+
 /* INCOMPLETE */
 _Function_class_(IRP_MJ_FILE_SYSTEM_CONTROL)
 _Function_class_(DRIVER_DISPATCH)
@@ -1149,6 +1396,29 @@ NtfsFsdFileSystemControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             case IRP_MN_USER_FS_REQUEST:
                 switch (IrpSp->Parameters.FileSystemControl.FsControlCode)
                 {
+                    case FSCTL_LOCK_VOLUME:
+                        Irp->IoStatus.Status =
+                            NtfsLockOrUnlockVolume(
+                                VolumeDeviceObject,
+                                IrpSp,
+                                TRUE);
+                        break;
+
+                    case FSCTL_UNLOCK_VOLUME:
+                        Irp->IoStatus.Status =
+                            NtfsLockOrUnlockVolume(
+                                VolumeDeviceObject,
+                                IrpSp,
+                                FALSE);
+                        break;
+
+                    case FSCTL_DISMOUNT_VOLUME:
+                        Irp->IoStatus.Status =
+                            NtfsDismountVolume(
+                                VolumeDeviceObject,
+                                IrpSp);
+                        break;
+
                     case FSCTL_GET_REPARSE_POINT:
                         Irp->IoStatus.Status =
                             NtfsGetReparsePoint(Irp, IrpSp);

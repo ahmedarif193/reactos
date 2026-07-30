@@ -481,6 +481,37 @@ NtfsDiskInitializeKm(
     return STATUS_SUCCESS;
 }
 
+NTSTATUS
+NtfsDiskPrepareMountKm(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ ULONG SectorBytes)
+{
+    NTSTATUS Status;
+    ULONG Index;
+
+    Status = NtfsDiskInitializeKm(DeviceObject, SectorBytes);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    /*
+     * Failed mount probes cache clean data from raw volumes. A formatter writes
+     * below the filesystem, so a later probe of the same device must not reuse
+     * that data. Preserve dirty blocks in case a mounted volume is still active.
+     */
+    ExAcquireFastMutex(&NtfsCacheMutex);
+    for (Index = 0; Index < NTFS_CACHE_SLOTS; Index++)
+    {
+        if (NtfsCacheSlots[Index].Owner == DeviceObject &&
+            !NtfsCacheSlots[Index].Dirty)
+        {
+            NtfsCacheSlots[Index].Tag = NTFS_CACHE_EMPTY;
+        }
+    }
+    ExReleaseFastMutex(&NtfsCacheMutex);
+
+    return STATUS_SUCCESS;
+}
+
 typedef struct _NTFS_DISK_IO_CONTEXT
 {
     KEVENT Event;
