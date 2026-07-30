@@ -47,6 +47,10 @@ C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, ResultAdapterLui
 C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, ResultAdapterLuidHighPart) == 40);
 C_ASSERT(FIELD_OFFSET(RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET, OwnerType) == 44);
 #endif
+C_ASSERT(DXGKRNL_INTERFACE_EXCHANGE_IN_LEGACY_SIZE == (2 * sizeof(ULONG)));
+C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE_EXCHANGE_IN, ConfiguredWddmLevel) ==
+         DXGKRNL_INTERFACE_EXCHANGE_IN_LEGACY_SIZE);
+C_ASSERT(sizeof(DXGKRNL_INTERFACE_EXCHANGE_IN) == (3 * sizeof(ULONG)));
 C_ASSERT(FIELD_OFFSET(RXGK_SUBMITCOMMAND_PACKET, Commands) == 8);
 C_ASSERT(FIELD_OFFSET(RXGK_SUBMITCOMMAND_PACKET, PresentHistoryToken) == 24);
 C_ASSERT(DXGMMS2_CONTEXT_STREAM_MAX_BROADCAST_CONTEXTS == D3DDDI_MAX_BROADCAST_CONTEXT + 1);
@@ -7762,11 +7766,24 @@ DxgkpDispatchBufferedIoctl(
 
             if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL || Irp->RequestorMode != KernelMode)
                 return STATUS_ACCESS_DENIED;
-            if (InputLength < sizeof(DXGKRNL_INTERFACE_EXCHANGE_IN) || SystemBuffer == NULL)
+            if (InputLength < DXGKRNL_INTERFACE_EXCHANGE_IN_LEGACY_SIZE ||
+                SystemBuffer == NULL)
                 return STATUS_BUFFER_TOO_SMALL;
 
             pExchangeIn = (PDXGKRNL_INTERFACE_EXCHANGE_IN)SystemBuffer;
             Version = pExchangeIn->Version;
+            if (InputLength >= sizeof(*pExchangeIn) &&
+                pExchangeIn->ConfiguredWddmLevel != 0 &&
+                pExchangeIn->ConfiguredWddmLevel !=
+                    REACTOS_WDDM_TARGET_LEVEL)
+            {
+                DXGKRNL_WARN(
+                    "IOCTL_DXGKRNL_EXCHANGE_INTERFACE: caller WDDM level "
+                    "%lu does not match configured level %lu\n",
+                    pExchangeIn->ConfiguredWddmLevel,
+                    (ULONG)REACTOS_WDDM_TARGET_LEVEL);
+                return STATUS_REVISION_MISMATCH;
+            }
 
             if (Version == DXGKRNL_INTERFACE_VERSION_1)
                 InterfaceSize = DXGKRNL_INTERFACE_VERSION_1_SIZE;
@@ -7850,36 +7867,52 @@ DxgkpDispatchBufferedIoctl(
             pInterface->RxgkIntPfnSetQueuedLimit       = (PDXGADAPTER_SETQUEUEDLIMIT)DxgkSetQueuedLimit;
             pInterface->RxgkIntPfnWaitForIdle          = (PDXGADAPTER_WAITFORIDLE)DxgkWaitForIdle;
             pInterface->RxgkIntPfnWaitForVerticalBlankEvent = (PDXGADAPTER_WAITFORVERTICALBLANKEVENT)DxgkWaitForVerticalBlankEvent;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
             pInterface->RxgkIntPfnEnumAdapters         = (PDXGADAPTER_ENUMADAPTERS)DxgkEnumAdapters;
             pInterface->RxgkIntPfnOpenAdapterFromLuid  = (PDXGADAPTER_OPENADAPTERFROMLUID)DxgkOpenAdapterFromLuid;
             pInterface->RxgkIntPfnOfferAllocations     = (PDXGADAPTER_OFFERALLOCATIONS)DxgkOfferAllocations;
             pInterface->RxgkIntPfnReclaimAllocations   = (PDXGADAPTER_RECLAIMALLOCATIONS)DxgkReclaimAllocations;
             pInterface->RxgkIntPfnSetVidPnSourceOwner1 = (PDXGADAPTER_SETVIDPNSOURCEOWNER1)DxgkSetVidPnSourceOwner1;
             pInterface->RxgkIntPfnWaitForVerticalBlankEvent2 = (PDXGADAPTER_WAITFORVERTICALBLANKEVENT2)DxgkWaitForVerticalBlankEvent2;
+#endif
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1105)
             pInterface->RxgkIntPfnCreateSynchronizationObject2 = (PDXGADAPTER_CREATESYNCHRONIZATIONOBJECT2)DxgkCreateSynchronizationObject2;
             pInterface->RxgkIntPfnWaitForSynchronizationObject2 = (PDXGADAPTER_WAITFORSYNCHRONIZATIONOBJECT2)DxgkWaitForSynchronizationObject2;
             pInterface->RxgkIntPfnSignalSynchronizationObject2 = (PDXGADAPTER_SIGNALSYNCHRONIZATIONOBJECT2)DxgkSignalSynchronizationObject2;
+#endif
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
             pInterface->RxgkIntPfnQueryVideoMemoryInfo = (PDXGADAPTER_QUERYVIDEOMEMORYINFO)DxgkQueryVideoMemoryInfo;
             pInterface->RxgkIntPfnCreatePagingQueue    = (PDXGADAPTER_CREATEPAGINGQUEUE)DxgkCreatePagingQueue;
             pInterface->RxgkIntPfnDestroyPagingQueue   = (PDXGADAPTER_DESTROYPAGINGQUEUE)DxgkDestroyPagingQueue;
+#endif
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
             if (Version >= DXGKRNL_INTERFACE_VERSION_2)
             {
                 pInterface->RxgkIntPfnCreateContextVirtual = (PDXGADAPTER_CREATECONTEXTVIRTUAL)DxgkCreateContextVirtual;
                 pInterface->RxgkIntPfnSubmitCommand = (PDXGADAPTER_SUBMITCOMMAND)DxgkSubmitCommand;
             }
+#endif
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1105)
             if (Version >= DXGKRNL_INTERFACE_VERSION_3)
                 pInterface->RxgkIntPfnCreateAllocation2 = (PDXGADAPTER_CREATEALLOCATION2)DxgkCreateAllocation2;
+#endif
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
             if (Version >= DXGKRNL_INTERFACE_VERSION_4)
                 pInterface->RxgkIntPfnGetAllocationPriority = (PDXGADAPTER_GETALLOCATIONPRIORITY)DxgkGetAllocationPriority;
+#endif
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1105)
             if (Version >= DXGKRNL_INTERFACE_VERSION_5)
                 pInterface->RxgkIntPfnOpenSynchronizationObject = (PDXGADAPTER_OPENSYNCHRONIZATIONOBJECT)DxgkOpenSynchronizationObject;
+#endif
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
             if (Version >= DXGKRNL_INTERFACE_VERSION_6)
             {
                 pInterface->RxgkIntPfnWaitForSynchronizationObjectFromGpu = (PDXGADAPTER_WAITFORSYNCHRONIZATIONOBJECTFROMGPU)DxgkWaitForSynchronizationObjectFromGpu;
                 pInterface->RxgkIntPfnSignalSynchronizationObjectFromGpu = (PDXGADAPTER_SIGNALSYNCHRONIZATIONOBJECTFROMGPU)DxgkSignalSynchronizationObjectFromGpu;
                 pInterface->RxgkIntPfnSignalSynchronizationObjectFromGpu2 = (PDXGADAPTER_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2)DxgkSignalSynchronizationObjectFromGpu2;
             }
+#endif
 
             Irp->IoStatus.Information = InterfaceSize;
 
