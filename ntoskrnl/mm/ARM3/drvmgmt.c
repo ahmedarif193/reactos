@@ -232,6 +232,20 @@ MmIsDriverVerifying(IN PDRIVER_OBJECT DriverObject)
 /*
  * @implemented
  */
+LOGICAL
+NTAPI
+MmIsDriverVerifyingByAddress(
+    _In_ PVOID AddressWithinSection)
+{
+    UNREFERENCED_PARAMETER(AddressWithinSection);
+
+    /* The driver verifier backend is not active on ReactOS. */
+    return FALSE;
+}
+
+/*
+ * @implemented
+ */
 NTSTATUS
 NTAPI
 MmIsVerifierEnabled(OUT PULONG VerifierFlags)
