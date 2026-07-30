@@ -59,6 +59,7 @@ NTSTATUS DxgkDeviceWorkCoreActivate(_Inout_ PDXGK_DEVICE_WORK_ITEM Item);
 VOID DxgkDeviceWorkCoreComplete(_Inout_opt_ PDXGK_DEVICE_WORK_ITEM Item);
 VOID DxgkDeviceWorkCoreNotifyStateChange(_Inout_opt_ PDXGK_DEVICE_WORK_LEDGER Ledger);
 VOID DxgkDeviceWorkCoreTransitionTerminal(_Inout_opt_ PDXGK_DEVICE_WORK_LEDGER Ledger, _Inout_opt_ volatile LONG *State, _In_ LONG Value);
+BOOLEAN DxgkDeviceWorkCoreTryTransitionTerminal(_Inout_opt_ PDXGK_DEVICE_WORK_LEDGER Ledger, _Inout_opt_ volatile LONG *State, _In_ LONG ExpectedValue, _In_ LONG NewValue);
 NTSTATUS DxgkDeviceWorkCoreCaptureSnapshot(_Inout_ PDXGK_DEVICE_WORK_LEDGER Ledger, _Out_ PDXGK_DEVICE_WORK_SNAPSHOT Snapshot);
 NTSTATUS DxgkDeviceWorkCoreWaitForSnapshot(_Inout_ PDXGK_DEVICE_WORK_LEDGER Ledger, _In_ const DXGK_DEVICE_WORK_SNAPSHOT *Snapshot, _Inout_opt_ PKEVENT ArmedEvent);
 NTSTATUS DxgkDeviceWorkCoreWaitForIdle(_Inout_ PDXGK_DEVICE_WORK_LEDGER Ledger, _Inout_opt_ PKEVENT ArmedEvent);

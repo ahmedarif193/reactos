@@ -162,4 +162,250 @@ DxgkPagingCoreMultipassEmitFence(
     return STATUS_SUCCESS;
 }
 
+BOOLEAN
+DxgkPagingCoreShouldAppendMonitoredSignal(
+    _In_ ULONG ConfiguredWddmLevel,
+    _In_ ULONG RuntimeWddmLevel,
+    _In_ BOOLEAN SignalRequested,
+    _In_ BOOLEAN GpuAddressReferenceAvailable)
+{
+    return ConfiguredWddmLevel >= 2200 &&
+           RuntimeWddmLevel >= 2200 &&
+           SignalRequested &&
+           GpuAddressReferenceAvailable;
+}
+
+NTSTATUS
+DxgkPagingCoreBeginMonitoredSignal(
+    _In_ BOOLEAN OperationsBuilt)
+{
+    /*
+     * Operation 16 is the last command in the same paging DMA stream.  It
+     * cannot be built while any transfer/fill/page-table pass is outstanding.
+     */
+    return OperationsBuilt
+               ? STATUS_SUCCESS
+               : STATUS_INVALID_DEVICE_STATE;
+}
+
+NTSTATUS
+DxgkPagingCoreFinishMonitoredSignal(
+    _In_ NTSTATUS BuildStatus,
+    _In_ ULONG BytesEmitted,
+    _Out_ PBOOLEAN SignalWrittenByGpu)
+{
+    if (SignalWrittenByGpu == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *SignalWrittenByGpu = FALSE;
+    if (!NT_SUCCESS(BuildStatus))
+        return BuildStatus;
+
+    /*
+     * A miniport may return success without advancing pDmaBuffer.  That did
+     * not encode a GPU write, so the tracked retire path must retain its CPU
+     * publication fallback.
+     */
+    *SignalWrittenByGpu = BytesEmitted != 0;
+    return STATUS_SUCCESS;
+}
+
+DXGK_PAGING_NO_WORK_SIGNAL_ROUTE
+DxgkPagingCoreNoWorkSignalRoute(
+    _In_ BOOLEAN SignalRequested,
+    _In_ BOOLEAN RetainedReferenceAvailable)
+{
+    if (!SignalRequested)
+        return DxgkPagingNoWorkSignalNone;
+    if (RetainedReferenceAvailable)
+        return DxgkPagingNoWorkSignalRetainedReference;
+    return DxgkPagingNoWorkSignalHandle;
+}
+
+VOID
+DxgkPagingFenceQueueCoreInitialize(
+    _Out_ PDXGK_PAGING_FENCE_QUEUE_CORE Queue,
+    _In_ ULONGLONG InitialFenceValue)
+{
+    RtlZeroMemory(Queue, sizeof(*Queue));
+    KeInitializeMutex(&Queue->Lock, 0);
+    Queue->CommittedFenceValue = InitialFenceValue;
+    KeMemoryBarrier();
+    Queue->Initialized = TRUE;
+}
+
+NTSTATUS
+DxgkPagingFenceQueueCoreBegin(
+    _Inout_ PDXGK_PAGING_FENCE_QUEUE_CORE Queue,
+    _Out_ PDXGK_PAGING_FENCE_TRANSACTION Transaction)
+{
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Queue == NULL || Transaction == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    RtlZeroMemory(Transaction, sizeof(*Transaction));
+    if (!Queue->Initialized)
+        return STATUS_INVALID_DEVICE_STATE;
+
+    Status = KeWaitForSingleObject(&Queue->Lock,
+                                   Executive,
+                                   KernelMode,
+                                   FALSE,
+                                   NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (!Queue->Initialized || Queue->ShuttingDown)
+    {
+        KeReleaseMutex(&Queue->Lock, FALSE);
+        return STATUS_DELETE_PENDING;
+    }
+    if (Queue->CommittedFenceValue == MAXULONGLONG)
+    {
+        KeReleaseMutex(&Queue->Lock, FALSE);
+        return STATUS_INTEGER_OVERFLOW;
+    }
+
+    Transaction->Queue = Queue;
+    Transaction->CandidateCounter =
+        (LONG64)Queue->CommittedFenceValue;
+    Transaction->StartingFenceValue =
+        Queue->CommittedFenceValue;
+    Transaction->Active = TRUE;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+DxgkPagingFenceQueueCoreComplete(
+    _Inout_ PDXGK_PAGING_FENCE_TRANSACTION Transaction,
+    _In_ ULONGLONG PublishedFenceValue)
+{
+    PDXGK_PAGING_FENCE_QUEUE_CORE Queue;
+    ULONGLONG Candidate;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    PAGED_CODE();
+    if (Transaction == NULL ||
+        !Transaction->Active ||
+        Transaction->Queue == NULL)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    Queue = Transaction->Queue;
+    Candidate = (ULONGLONG)InterlockedCompareExchange64(
+                                &Transaction->CandidateCounter,
+                                0,
+                                0);
+
+    if (PublishedFenceValue == 0)
+    {
+        /* A request that produced no paging packet consumes no value. */
+        if (Candidate != Transaction->StartingFenceValue)
+        {
+            Queue->CommittedFenceValue = Candidate;
+            Status = STATUS_DEVICE_PROTOCOL_ERROR;
+        }
+    }
+    else if (Candidate != PublishedFenceValue ||
+             PublishedFenceValue !=
+                 Transaction->StartingFenceValue + 1)
+    {
+        /*
+         * Never reuse a value that the producer may already have exposed.
+         * This is a provider contract failure, but consuming the largest
+         * observed candidate is safer than allowing a later transaction to
+         * alias an in-flight fence.
+         */
+        Queue->CommittedFenceValue =
+            max(Candidate, PublishedFenceValue);
+        Status = STATUS_DEVICE_PROTOCOL_ERROR;
+    }
+    else
+    {
+        Queue->CommittedFenceValue = PublishedFenceValue;
+    }
+
+    KeMemoryBarrier();
+    Transaction->Active = FALSE;
+    Transaction->Queue = NULL;
+    KeReleaseMutex(&Queue->Lock, FALSE);
+    return Status;
+}
+
+VOID
+DxgkPagingFenceQueueCoreAbort(
+    _Inout_ PDXGK_PAGING_FENCE_TRANSACTION Transaction)
+{
+    PDXGK_PAGING_FENCE_QUEUE_CORE Queue;
+
+    PAGED_CODE();
+    if (Transaction == NULL ||
+        !Transaction->Active ||
+        Transaction->Queue == NULL)
+    {
+        return;
+    }
+
+    /*
+     * Scheduler admission is the commit point.  The caller invokes Abort only
+     * when no packet was admitted, so even a locally incremented candidate is
+     * deliberately discarded and can be reused by the next transaction.
+     */
+    Queue = Transaction->Queue;
+    Transaction->Active = FALSE;
+    Transaction->Queue = NULL;
+    KeReleaseMutex(&Queue->Lock, FALSE);
+}
+
+VOID
+DxgkPagingFenceQueueCoreShutDown(
+    _Inout_ PDXGK_PAGING_FENCE_QUEUE_CORE Queue)
+{
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Queue == NULL || !Queue->Initialized)
+        return;
+
+    /*
+     * Waiting for the mutex drains the one admitted/building transaction.
+     * Once ShuttingDown is visible, callers that retained the queue before its
+     * public handle was detached are also refused at Begin.
+     */
+    Status = KeWaitForSingleObject(&Queue->Lock,
+                                   Executive,
+                                   KernelMode,
+                                   FALSE,
+                                   NULL);
+    if (!NT_SUCCESS(Status))
+        return;
+    Queue->ShuttingDown = TRUE;
+    KeMemoryBarrier();
+    KeReleaseMutex(&Queue->Lock, FALSE);
+}
+
+ULONGLONG
+DxgkPagingFenceQueueCoreQueryCommitted(
+    _Inout_ PDXGK_PAGING_FENCE_QUEUE_CORE Queue)
+{
+    ULONGLONG Value;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Queue == NULL || !Queue->Initialized)
+        return 0;
+
+    Status = KeWaitForSingleObject(&Queue->Lock,
+                                   Executive,
+                                   KernelMode,
+                                   FALSE,
+                                   NULL);
+    if (!NT_SUCCESS(Status))
+        return 0;
+    Value = Queue->CommittedFenceValue;
+    KeReleaseMutex(&Queue->Lock, FALSE);
+    return Value;
+}
+
 /* EOF */

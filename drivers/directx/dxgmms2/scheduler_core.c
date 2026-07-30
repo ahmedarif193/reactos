@@ -582,6 +582,34 @@ Dxgmms2SchedCoreGetOldestDispatched(
     return *FenceId != 0;
 }
 
+BOOLEAN
+Dxgmms2SchedCoreGetOldestDispatchedOnEngine(
+    _In_ PDXGMMS2_SCHED_CORE Core,
+    _In_ ULONG EngineOrdinal,
+    _Out_ PULONG FenceId,
+    _Out_ PULONGLONG PacketCookie)
+{
+    PDXGMMS2_SCHED_ENGINE Engine;
+    PDXGMMS2_SCHED_PACKET Packet;
+
+    *FenceId = 0;
+    *PacketCookie = 0;
+    Engine = Dxgmms2SchedCoreEngine(Core, EngineOrdinal);
+    if (Engine == NULL || IsListEmpty(&Engine->RunQueue))
+        return FALSE;
+
+    Packet = CONTAINING_RECORD(
+                 Engine->RunQueue.Flink,
+                 DXGMMS2_SCHED_PACKET,
+                 Entry);
+    if (!Packet->Dispatched)
+        return FALSE;
+
+    *FenceId = Packet->SubmissionFenceId;
+    *PacketCookie = Packet->PacketCookie;
+    return TRUE;
+}
+
 /*
  * Dxgmms2SchedCoreIsValidTransition
  *

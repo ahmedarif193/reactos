@@ -12,17 +12,97 @@ NTSTATUS
 DxgkResidencyCoreBudgetInitialize(
     _Out_ PDXGK_RESIDENCY_BUDGET Budget,
     _In_ ULONGLONG BudgetBytes,
+    _In_ ULONGLONG MaximumBytes,
     _In_ ULONGLONG ReservationBytes)
 {
     RtlZeroMemory(Budget, sizeof(*Budget));
-    /* A reservation the budget cannot honour is a contradiction: the process
-     * would be guaranteed memory it is simultaneously forbidden to keep. */
-    if (ReservationBytes > BudgetBytes)
+    if (BudgetBytes > MaximumBytes || ReservationBytes > MaximumBytes)
         return STATUS_INVALID_PARAMETER;
     Budget->Budget = BudgetBytes;
+    Budget->Maximum = MaximumBytes;
     Budget->Reservation = ReservationBytes;
     Budget->Initialized = TRUE;
     return STATUS_SUCCESS;
+}
+
+NTSTATUS
+DxgkResidencyCoreBudgetSetLimits(
+    _Inout_ PDXGK_RESIDENCY_BUDGET Budget,
+    _In_ ULONGLONG BudgetBytes,
+    _In_ ULONGLONG MaximumBytes)
+{
+    if (!Budget->Initialized)
+        return STATUS_INVALID_DEVICE_STATE;
+    if (BudgetBytes > MaximumBytes ||
+        Budget->Reservation > MaximumBytes ||
+        Budget->CurrentUsage > MaximumBytes)
+        return STATUS_INVALID_PARAMETER;
+    Budget->Budget = BudgetBytes;
+    Budget->Maximum = MaximumBytes;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+DxgkResidencyCoreBudgetSetReservation(
+    _Inout_ PDXGK_RESIDENCY_BUDGET Budget,
+    _In_ ULONGLONG ReservationBytes)
+{
+    if (!Budget->Initialized)
+        return STATUS_INVALID_DEVICE_STATE;
+    if (ReservationBytes > Budget->Maximum)
+        return STATUS_INVALID_PARAMETER;
+    Budget->Reservation = ReservationBytes;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+DxgkResidencyCoreBudgetPlanCharge(
+    _In_ const DXGK_RESIDENCY_BUDGET *Budget,
+    _In_ ULONGLONG Bytes,
+    _In_ BOOLEAN CantTrimFurther,
+    _Out_ PULONGLONG NumBytesToTrim)
+{
+    ULONGLONG EffectiveBudget;
+    ULONGLONG NewUsage;
+
+    if (NumBytesToTrim == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *NumBytesToTrim = 0;
+    if (Budget == NULL || !Budget->Initialized)
+        return STATUS_INVALID_DEVICE_STATE;
+    if (Bytes == 0)
+        return STATUS_INVALID_PARAMETER;
+    if (Budget->CurrentUsage > MAXULONGLONG - Bytes)
+        return STATUS_INTEGER_OVERFLOW;
+
+    NewUsage = Budget->CurrentUsage + Bytes;
+    EffectiveBudget = CantTrimFurther
+                        ? Budget->Maximum
+                        : max(Budget->Budget, Budget->Reservation);
+    if (NewUsage > EffectiveBudget)
+    {
+        *NumBytesToTrim = NewUsage - EffectiveBudget;
+        return STATUS_GRAPHICS_NO_VIDEO_MEMORY;
+    }
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+DxgkResidencyCoreBudgetTryCharge(
+    _Inout_ PDXGK_RESIDENCY_BUDGET Budget,
+    _In_ ULONGLONG Bytes,
+    _In_ BOOLEAN CantTrimFurther,
+    _Out_ PULONGLONG NumBytesToTrim)
+{
+    NTSTATUS Status;
+
+    Status = DxgkResidencyCoreBudgetPlanCharge(Budget,
+                                               Bytes,
+                                               CantTrimFurther,
+                                               NumBytesToTrim);
+    if (NT_SUCCESS(Status))
+        Budget->CurrentUsage += Bytes;
+    return Status;
 }
 
 NTSTATUS
@@ -30,19 +110,12 @@ DxgkResidencyCoreBudgetCharge(
     _Inout_ PDXGK_RESIDENCY_BUDGET Budget,
     _In_ ULONGLONG Bytes)
 {
-    if (!Budget->Initialized)
-        return STATUS_INVALID_DEVICE_STATE;
-    if (Bytes == 0)
-        return STATUS_INVALID_PARAMETER;
-    if (Budget->CurrentUsage > MAXULONGLONG - Bytes)
-        return STATUS_INTEGER_OVERFLOW;
-    /*
-     * Charging past the budget is allowed and is exactly what makes a process
-     * over-budget: the memory manager reacts by trimming rather than by
-     * failing the residency request outright.
-     */
-    Budget->CurrentUsage += Bytes;
-    return STATUS_SUCCESS;
+    ULONGLONG NumBytesToTrim;
+
+    return DxgkResidencyCoreBudgetTryCharge(Budget,
+                                            Bytes,
+                                            TRUE,
+                                            &NumBytesToTrim);
 }
 
 NTSTATUS
@@ -85,6 +158,139 @@ DxgkResidencyCoreBudgetIsProtected(
     if (!Budget->Initialized)
         return FALSE;
     return Budget->CurrentUsage <= Budget->Reservation;
+}
+
+/* --- process-exit admission ------------------------------------------ */
+
+VOID
+DxgkResidencyCoreProcessAdmissionInitialize(
+    _Out_ PDXGK_RESIDENCY_PROCESS_ADMISSION Admission)
+{
+    RtlZeroMemory(Admission, sizeof(*Admission));
+}
+
+BOOLEAN
+DxgkResidencyCoreProcessAdmissionTryEnter(
+    _Inout_ PDXGK_RESIDENCY_PROCESS_ADMISSION Admission,
+    _In_ BOOLEAN ProcessAlreadyExiting)
+{
+    if (Admission == NULL)
+        return FALSE;
+    if (ProcessAlreadyExiting)
+    {
+        Admission->Exiting = TRUE;
+        return FALSE;
+    }
+    if (Admission->Exiting || Admission->ActiveEntrants == MAXULONG)
+    {
+        return FALSE;
+    }
+    Admission->ActiveEntrants++;
+    return TRUE;
+}
+
+VOID
+DxgkResidencyCoreProcessAdmissionMarkExiting(
+    _Inout_ PDXGK_RESIDENCY_PROCESS_ADMISSION Admission)
+{
+    if (Admission != NULL)
+        Admission->Exiting = TRUE;
+}
+
+BOOLEAN
+DxgkResidencyCoreProcessAdmissionCanPublish(
+    _In_ const DXGK_RESIDENCY_PROCESS_ADMISSION *Admission)
+{
+    return Admission != NULL &&
+           Admission->ActiveEntrants != 0 &&
+           !Admission->Exiting;
+}
+
+BOOLEAN
+DxgkResidencyCoreProcessAdmissionLeave(
+    _Inout_ PDXGK_RESIDENCY_PROCESS_ADMISSION Admission)
+{
+    if (Admission == NULL || Admission->ActiveEntrants == 0)
+        return FALSE;
+    Admission->ActiveEntrants--;
+    return Admission->ActiveEntrants == 0;
+}
+
+/* --- per-process shared-placement charges ---------------------------- */
+
+VOID
+DxgkResidencyCoreProcessChargeInitialize(
+    _Out_ PDXGK_RESIDENCY_PROCESS_CHARGE_STATE State)
+{
+    RtlZeroMemory(State, sizeof(*State));
+}
+
+NTSTATUS
+DxgkResidencyCoreProcessChargePlanAcquire(
+    _In_ const DXGK_RESIDENCY_PROCESS_CHARGE_STATE *State,
+    _In_ ULONG ReferenceCount,
+    _Out_ PBOOLEAN RequiresBudgetCharge)
+{
+    if (RequiresBudgetCharge == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *RequiresBudgetCharge = FALSE;
+    if (State == NULL || ReferenceCount == 0)
+        return STATUS_INVALID_PARAMETER;
+    if ((State->ReferenceCount == 0) != !State->BudgetCharged)
+        return STATUS_INVALID_DEVICE_STATE;
+    if (ReferenceCount > MAXULONG - State->ReferenceCount)
+        return STATUS_INTEGER_OVERFLOW;
+    *RequiresBudgetCharge = State->ReferenceCount == 0;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+DxgkResidencyCoreProcessChargeCommitAcquire(
+    _Inout_ PDXGK_RESIDENCY_PROCESS_CHARGE_STATE State,
+    _In_ ULONG ReferenceCount,
+    _In_ BOOLEAN BudgetChargeCommitted)
+{
+    BOOLEAN RequiresBudgetCharge;
+    NTSTATUS Status;
+
+    Status = DxgkResidencyCoreProcessChargePlanAcquire(
+                 State,
+                 ReferenceCount,
+                 &RequiresBudgetCharge);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (RequiresBudgetCharge != BudgetChargeCommitted)
+        return STATUS_INVALID_DEVICE_STATE;
+    State->ReferenceCount += ReferenceCount;
+    if (RequiresBudgetCharge)
+        State->BudgetCharged = TRUE;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+DxgkResidencyCoreProcessChargeRelease(
+    _Inout_ PDXGK_RESIDENCY_PROCESS_CHARGE_STATE State,
+    _In_ ULONG ReferenceCount,
+    _Out_ PBOOLEAN ReleaseBudgetCharge)
+{
+    if (ReleaseBudgetCharge == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *ReleaseBudgetCharge = FALSE;
+    if (State == NULL || ReferenceCount == 0)
+        return STATUS_INVALID_PARAMETER;
+    if (State->ReferenceCount == 0 ||
+        !State->BudgetCharged ||
+        ReferenceCount > State->ReferenceCount)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    State->ReferenceCount -= ReferenceCount;
+    if (State->ReferenceCount == 0)
+    {
+        State->BudgetCharged = FALSE;
+        *ReleaseBudgetCharge = TRUE;
+    }
+    return STATUS_SUCCESS;
 }
 
 /* --- per-device residency references ---------------------------------- */
