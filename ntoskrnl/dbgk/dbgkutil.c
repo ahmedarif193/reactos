@@ -463,3 +463,30 @@ DbgkUnMapViewOfSection(IN PVOID BaseAddress)
     /* Send the message */
     DbgkpSendApiMessage(&ApiMessage, TRUE);
 }
+
+NTSTATUS
+NTAPI
+DbgkWerCaptureLiveKernelDump(
+    _In_ PCWSTR ComponentName,
+    _In_ ULONG BugCheckCode,
+    _In_opt_ ULONG_PTR Parameter1,
+    _In_opt_ ULONG_PTR Parameter2,
+    _In_opt_ ULONG_PTR Parameter3,
+    _In_opt_ ULONG_PTR Parameter4,
+    _In_opt_ PVOID CallbackContext,
+    _In_opt_ PVOID CallbackFunction,
+    _In_ ULONG Flags)
+{
+    UNREFERENCED_PARAMETER(ComponentName);
+    UNREFERENCED_PARAMETER(BugCheckCode);
+    UNREFERENCED_PARAMETER(Parameter1);
+    UNREFERENCED_PARAMETER(Parameter2);
+    UNREFERENCED_PARAMETER(Parameter3);
+    UNREFERENCED_PARAMETER(Parameter4);
+    UNREFERENCED_PARAMETER(CallbackContext);
+    UNREFERENCED_PARAMETER(CallbackFunction);
+    UNREFERENCED_PARAMETER(Flags);
+
+    /* Live kernel dump capture is not implemented. */
+    return STATUS_NOT_SUPPORTED;
+}
