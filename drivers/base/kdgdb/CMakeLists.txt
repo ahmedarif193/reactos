@@ -24,6 +24,7 @@ add_library(kdgdb MODULE
     ${SOURCE}
     kdgdb.rc
     ${CMAKE_CURRENT_BINARY_DIR}/kdgdb.def)
+target_compile_definitions(kdgdb PRIVATE NTDDI_VERSION=${REACTOS_TARGET_NTDDI})
 add_pch(kdgdb kdgdb.h SOURCE)
 
 set_module_type(kdgdb kerneldll ENTRYPOINT 0)
