@@ -2104,8 +2104,8 @@
 @ stub -arch=arm64 ExAcquireFastResourceShared
 @ stub -arch=arm64 ExAcquireFastResourceSharedStarveExclusive
 @ stub -arch=arm64 ExAcquireFastResourceWithFlags
-@ stub -arch=arm64 ExAcquirePushLockExclusiveEx
-@ stub -arch=arm64 ExAcquirePushLockSharedEx
+@ fastcall -arch=x86_64,arm64 ExAcquirePushLockExclusiveEx(ptr long)
+@ fastcall -arch=x86_64,arm64 ExAcquirePushLockSharedEx(ptr long)
 @ stub -arch=arm64 ExAcquireSpinLockExclusive
 @ stub -arch=arm64 ExAcquireSpinLockExclusiveAtDpcLevel
 @ stub -arch=arm64 ExAcquireSpinLockShared
@@ -2180,8 +2180,8 @@
 @ stub -arch=arm64 ExReleaseFastResource
 @ stub -arch=arm64 ExReleaseFastResourceExclusive
 @ stub -arch=arm64 ExReleaseFastResourceShared
-@ stub -arch=arm64 ExReleasePushLockEx
-@ stub -arch=arm64 ExReleasePushLockExclusiveEx
+@ fastcall -arch=x86_64,arm64 ExReleasePushLockEx(ptr long)
+@ fastcall -arch=x86_64,arm64 ExReleasePushLockExclusiveEx(ptr long)
 @ stub -arch=arm64 ExReleasePushLockSharedEx
 @ stub -arch=arm64 ExReleaseResourceAndLeavePriorityRegion
 @ stub -arch=arm64 ExReleaseSpinLockExclusive
