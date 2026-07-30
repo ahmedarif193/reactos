@@ -23,11 +23,18 @@
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x18B, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_D3DKMT_SUBMITCOMMAND \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x18C, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+#define IOCTL_D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1C7, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#endif
 
 #define RXGK_WDDM_PACKET_VERSION_1            1U
 #define RXGK_WDDM_MAX_PRIVATE_DRIVER_DATA      (1024U * 1024U)
 #define RXGK_CREATECONTEXTVIRTUAL_PACKET_V1_SIZE 44U
 #define RXGK_SUBMITCOMMAND_PACKET_V1_SIZE       48U
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+#define RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET_V1_SIZE 48U
+#endif
 
 /* D3DDDI_CREATECONTEXTFLAGS bits represented by the WDDM 2.0 packet. */
 #define RXGK_CREATECONTEXTVIRTUAL_FLAG_NULL_RENDERING        0x00000001U
@@ -87,3 +94,34 @@ typedef struct _RXGK_SUBMITCOMMAND_PACKET
     ULONG       PrivateDriverDataOffset;
     ULONG       Reserved;
 } RXGK_SUBMITCOMMAND_PACKET, *PRXGK_SUBMITCOMMAND_PACKET;
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+/*
+ * Pointer-free WDDM 2.0 VidPn exclusive-ownership query.
+ *
+ * Win32k validates and references the caller's process handle, maps the
+ * window centre to a GDI display source, and holds the process reference
+ * across the synchronous IOCTL.  The wire therefore carries only the stable
+ * process ID and display identity; dxgkrnl resolves the process again while
+ * the win32k reference prevents PID reuse.
+ *
+ * A successful query with no matching exclusive owner returns
+ * ResultVidPnSourceId == D3DDDI_ID_UNINITIALIZED, a zero LUID, and
+ * D3DKMT_VIDPNSOURCEOWNER_UNOWNED.
+ */
+typedef struct _RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET
+{
+    ULONG       Size;
+    ULONG       Version;
+    ULONGLONG   ProcessId;
+    ULONG       QueryVidPnSourceId;
+    ULONG       QueryAdapterLuidLowPart;
+    LONG        QueryAdapterLuidHighPart;
+    ULONG       Reserved;
+    ULONG       ResultVidPnSourceId;
+    ULONG       ResultAdapterLuidLowPart;
+    LONG        ResultAdapterLuidHighPart;
+    ULONG       OwnerType;
+} RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET,
+ *PRXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET;
+#endif
