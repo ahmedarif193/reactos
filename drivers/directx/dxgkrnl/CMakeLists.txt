@@ -58,6 +58,10 @@ list(APPEND SOURCE
     display.c
     debug.c)
 
+if(REACTOS_WDDM_TARGET_LEVEL GREATER_EQUAL 3200)
+    list(APPEND SOURCE feature_query_core.c)
+endif()
+
 add_library(dxgkrnl MODULE
     ${SOURCE}
     dxgkrnl.rc

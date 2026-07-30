@@ -850,3 +850,4 @@
     SVC_(GdiDdDDIShareObjects, 5)
     SVC_(GdiDdDDIWaitForSynchronizationObjectFromGpu, 1)
     SVC_(GdiDdDDISignalSynchronizationObjectFromGpu2, 1)
+    SVC_(GdiDdDDIIsFeatureEnabled, 1)

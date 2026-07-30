@@ -749,6 +749,7 @@
 @ stdcall -version=0x600+ D3DKMTSignalSynchronizationObjectFromGpu(ptr) NtGdiDdDDISignalSynchronizationObjectFromGpu
 @ stdcall -version=0x600+ D3DKMTWaitForSynchronizationObjectFromGpu(ptr) NtGdiDdDDIWaitForSynchronizationObjectFromGpu
 @ stdcall -version=0x600+ D3DKMTSignalSynchronizationObjectFromGpu2(ptr) NtGdiDdDDISignalSynchronizationObjectFromGpu2
+@ stdcall -version=0xA00+ D3DKMTIsFeatureEnabled(ptr) NtGdiDdDDIIsFeatureEnabled
 @ stdcall -version=0x600+ D3DKMTCheckMultiPlaneOverlaySupport2(ptr) NtGdiDdDDICheckMultiPlaneOverlaySupport2
 @ stdcall -version=0x600+ D3DKMTCheckMultiPlaneOverlaySupport3(ptr) NtGdiDdDDICheckMultiPlaneOverlaySupport3
 @ stdcall -version=0x600+ D3DKMTPresentMultiPlaneOverlay2(ptr) NtGdiDdDDIPresentMultiPlaneOverlay2

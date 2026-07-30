@@ -55,6 +55,11 @@
  */
 #include <d3dkmddi.h>
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+DEFINE_GUID(GUID_WDDM_INTERFACE_FEATURE,
+    0x94bb3993, 0xc6c3, 0x4da7, 0x89, 0x49, 0xa1, 0x13, 0x82, 0x32, 0xe7, 0x59);
+#endif
+
 /* =========================================================================
  * Forward declarations for types defined in other DDK headers
  *
@@ -77,7 +82,60 @@ typedef struct _QUERY_INTERFACE
     USHORT      Version;
     PINTERFACE  Interface;
     PVOID       InterfaceSpecificData;
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM1_3)
+    ULONG       DeviceUid;
+#endif
 } QUERY_INTERFACE, *PQUERY_INTERFACE;
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM1_3)
+#ifdef _WIN64
+C_ASSERT(sizeof(QUERY_INTERFACE) == 0x28);
+C_ASSERT(FIELD_OFFSET(QUERY_INTERFACE, DeviceUid) == 0x20);
+#else
+C_ASSERT(sizeof(QUERY_INTERFACE) == 0x14);
+C_ASSERT(FIELD_OFFSET(QUERY_INTERFACE, DeviceUid) == 0x10);
+#endif
+#else
+#ifdef _WIN64
+C_ASSERT(sizeof(QUERY_INTERFACE) == 0x20);
+#else
+C_ASSERT(sizeof(QUERY_INTERFACE) == 0x10);
+#endif
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+#define DXGK_FEATURE_INTERFACE_VERSION_1 0x1
+
+typedef struct _DXGK_FEATURE_INTERFACE
+{
+    USHORT Size;
+    USHORT Version;
+    PVOID Context;
+    PINTERFACE_REFERENCE InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+    DXGKCB_ISFEATUREENABLED2 IsFeatureEnabled;
+    DXGKCB_QUERYFEATUREINTERFACE QueryFeatureInterface;
+} DXGK_FEATURE_INTERFACE, *PDXGK_FEATURE_INTERFACE;
+
+typedef struct _DXGKDDI_FEATURE_INTERFACE
+{
+    USHORT Size;
+    USHORT Version;
+    PVOID Context;
+    PINTERFACE_REFERENCE InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+    PDXGKDDI_QUERYFEATURESUPPORT QueryFeatureSupport;
+    PDXGKDDI_QUERYFEATUREINTERFACE QueryFeatureInterface;
+} DXGKDDI_FEATURE_INTERFACE, *PDXGKDDI_FEATURE_INTERFACE;
+
+#ifdef _WIN64
+C_ASSERT(sizeof(DXGK_FEATURE_INTERFACE) == 0x30);
+C_ASSERT(sizeof(DXGKDDI_FEATURE_INTERFACE) == 0x30);
+#else
+C_ASSERT(sizeof(DXGK_FEATURE_INTERFACE) == 0x18);
+C_ASSERT(sizeof(DXGKDDI_FEATURE_INTERFACE) == 0x18);
+#endif
+#endif
 
 /* Multi-GPU linked adapter descriptor (no public header yet) */
 typedef struct _LINKED_DEVICE          LINKED_DEVICE;
