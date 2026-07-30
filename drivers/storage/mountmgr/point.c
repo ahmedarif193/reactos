@@ -28,6 +28,29 @@
 #define NDEBUG
 #include <debug.h>
 
+static
+BOOLEAN
+MountMgrPointTargetsDevice(IN PUNICODE_STRING SymbolicLinkName,
+                           IN PUNICODE_STRING DeviceName)
+{
+    NTSTATUS Status;
+    BOOLEAN Equal;
+    UNICODE_STRING TargetDeviceName;
+
+    Status = QueryDeviceInformation(SymbolicLinkName,
+                                    &TargetDeviceName,
+                                    NULL, NULL, NULL,
+                                    NULL, NULL, NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        return FALSE;
+    }
+
+    Equal = RtlEqualUnicodeString(&TargetDeviceName, DeviceName, TRUE);
+    FreePool(TargetDeviceName.Buffer);
+    return Equal;
+}
+
 /*
  * @implemented
  */
@@ -42,6 +65,7 @@ MountMgrCreatePointWorker(IN PDEVICE_EXTENSION DeviceExtension,
     PSYMLINK_INFORMATION SymlinkInformation;
     UNICODE_STRING SymLink, TargetDeviceName;
     PDEVICE_INFORMATION DeviceInformation = NULL, DeviceInfo;
+    BOOLEAN LinkCreated;
 
     /* Get device name */
     Status = QueryDeviceInformation(DeviceName,
@@ -136,6 +160,13 @@ MountMgrCreatePointWorker(IN PDEVICE_EXTENSION DeviceExtension,
 
     /* Now, create a link */
     Status = GlobalCreateSymbolicLink(&SymLink, &TargetDeviceName);
+    LinkCreated = NT_SUCCESS(Status);
+    if (Status == STATUS_OBJECT_NAME_COLLISION &&
+        MountMgrPointTargetsDevice(&SymLink, &TargetDeviceName))
+    {
+        Status = STATUS_SUCCESS;
+    }
+
     FreePool(TargetDeviceName.Buffer);
     if (!NT_SUCCESS(Status))
     {
@@ -153,7 +184,11 @@ MountMgrCreatePointWorker(IN PDEVICE_EXTENSION DeviceExtension,
                                    UniqueId->UniqueIdLength);
     if (!NT_SUCCESS(Status))
     {
-        GlobalDeleteSymbolicLink(&SymLink);
+        if (LinkCreated)
+        {
+            GlobalDeleteSymbolicLink(&SymLink);
+        }
+
         FreePool(SymLink.Buffer);
         return Status;
     }
@@ -163,7 +198,11 @@ MountMgrCreatePointWorker(IN PDEVICE_EXTENSION DeviceExtension,
     if (!SymlinkInformation)
     {
         Status = STATUS_INSUFFICIENT_RESOURCES;
-        GlobalDeleteSymbolicLink(&SymLink);
+        if (LinkCreated)
+        {
+            GlobalDeleteSymbolicLink(&SymLink);
+        }
+
         FreePool(SymLink.Buffer);
         return Status;
     }
@@ -175,7 +214,11 @@ MountMgrCreatePointWorker(IN PDEVICE_EXTENSION DeviceExtension,
     {
         Status = STATUS_INSUFFICIENT_RESOURCES;
         FreePool(SymlinkInformation);
-        GlobalDeleteSymbolicLink(&SymLink);
+        if (LinkCreated)
+        {
+            GlobalDeleteSymbolicLink(&SymLink);
+        }
+
         FreePool(SymLink.Buffer);
         return Status;
     }
