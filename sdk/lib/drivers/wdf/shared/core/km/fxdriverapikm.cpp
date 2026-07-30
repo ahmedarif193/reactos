@@ -265,4 +265,72 @@ Done:
     return status;
 }
 
+_Must_inspect_result_
+__drv_maxIRQL(PASSIVE_LEVEL)
+NTSTATUS
+NTAPI
+WDFEXPORT(WdfDriverOpenPersistentStateRegistryKey)(
+    _In_ PWDF_DRIVER_GLOBALS DriverGlobals,
+    _In_ WDFDRIVER Driver,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_opt_ PWDF_OBJECT_ATTRIBUTES KeyAttributes,
+    _Out_ WDFKEY* Key
+    )
+{
+    PFX_DRIVER_GLOBALS pFxDriverGlobals;
+    FxDriver* pDriver;
+    FxRegKey* pKey;
+    FxAutoRegKey serviceKey;
+    WDFKEY keyHandle;
+    NTSTATUS status;
+
+    pFxDriverGlobals = GetFxDriverGlobals(DriverGlobals);
+    FxPointerNotNull(pFxDriverGlobals, Key);
+    *Key = NULL;
+
+    status = FxVerifierCheckIrqlLevel(pFxDriverGlobals, PASSIVE_LEVEL);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
+    status = FxValidateObjectAttributes(pFxDriverGlobals, KeyAttributes);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
+    FxObjectHandleGetPtr(pFxDriverGlobals,
+                         Driver,
+                         FX_TYPE_DRIVER,
+                         (PVOID*)&pDriver);
+
+    pKey = new(pFxDriverGlobals, KeyAttributes) FxRegKey(pFxDriverGlobals);
+    if (pKey == NULL) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    status = pKey->Commit(KeyAttributes, (WDFOBJECT*)&keyHandle);
+    if (NT_SUCCESS(status)) {
+        status = FxRegKey::_OpenKey(NULL,
+                                    pDriver->GetRegistryPathUnicodeString(),
+                                    &serviceKey.m_Key);
+    }
+
+    if (NT_SUCCESS(status)) {
+        DECLARE_CONST_UNICODE_STRING(persistentState, L"PersistentState");
+
+        status = pKey->Create(serviceKey.m_Key,
+                              &persistentState,
+                              DesiredAccess);
+        if (NT_SUCCESS(status)) {
+            *Key = keyHandle;
+        }
+    }
+
+    if (!NT_SUCCESS(status)) {
+        pKey->DeleteFromFailedCreate();
+    }
+
+    return status;
+}
+
 } // extern "C"
