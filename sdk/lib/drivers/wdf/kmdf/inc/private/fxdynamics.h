@@ -1,5 +1,7 @@
 /*++
 
+Copyright (c) Microsoft. All rights reserved.
+
 Module Name: FxDynamics.h
 
 Abstract:
@@ -13,6 +15,10 @@ Environment:
 
 #ifndef _FXDYNAMICS_H_
 #define _FXDYNAMICS_H_
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 typedef struct _WDFFUNCTIONS {
 
@@ -41,7 +47,6 @@ typedef struct _WDFFUNCTIONS {
     PFN_WDFCOMMONBUFFERGETALIGNEDVIRTUALADDRESS               pfnWdfCommonBufferGetAlignedVirtualAddress;
     PFN_WDFCOMMONBUFFERGETALIGNEDLOGICALADDRESS               pfnWdfCommonBufferGetAlignedLogicalAddress;
     PFN_WDFCOMMONBUFFERGETLENGTH                              pfnWdfCommonBufferGetLength;
-
     PFN_WDFCONTROLDEVICEINITALLOCATE                          pfnWdfControlDeviceInitAllocate;
     PFN_WDFCONTROLDEVICEINITSETSHUTDOWNNOTIFICATION           pfnWdfControlDeviceInitSetShutdownNotification;
     PFN_WDFCONTROLFINISHINITIALIZING                          pfnWdfControlFinishInitializing;
@@ -128,7 +133,6 @@ typedef struct _WDFFUNCTIONS {
     PFN_WDFDMATRANSACTIONGETREQUEST                           pfnWdfDmaTransactionGetRequest;
     PFN_WDFDMATRANSACTIONGETCURRENTDMATRANSFERLENGTH          pfnWdfDmaTransactionGetCurrentDmaTransferLength;
     PFN_WDFDMATRANSACTIONGETDEVICE                            pfnWdfDmaTransactionGetDevice;
-
     PFN_WDFDPCCREATE                                          pfnWdfDpcCreate;
     PFN_WDFDPCENQUEUE                                         pfnWdfDpcEnqueue;
     PFN_WDFDPCCANCEL                                          pfnWdfDpcCancel;
@@ -397,7 +401,6 @@ typedef struct _WDFFUNCTIONS {
     PFN_WDFWMIINSTANCEGETDEVICE                               pfnWdfWmiInstanceGetDevice;
     PFN_WDFWMIINSTANCEGETPROVIDER                             pfnWdfWmiInstanceGetProvider;
     PFN_WDFWMIINSTANCEFIREEVENT                               pfnWdfWmiInstanceFireEvent;
-
     PFN_WDFWORKITEMCREATE                                     pfnWdfWorkItemCreate;
     PFN_WDFWORKITEMENQUEUE                                    pfnWdfWorkItemEnqueue;
     PFN_WDFWORKITEMGETPARENTOBJECT                            pfnWdfWorkItemGetParentObject;
@@ -406,7 +409,6 @@ typedef struct _WDFFUNCTIONS {
     PFN_WDFDMAENABLERGETFRAGMENTLENGTH                        pfnWdfDmaEnablerGetFragmentLength;
     PFN_WDFDMAENABLERWDMGETDMAADAPTER                         pfnWdfDmaEnablerWdmGetDmaAdapter;
     PFN_WDFUSBINTERFACEGETNUMSETTINGS                         pfnWdfUsbInterfaceGetNumSettings;
-
     PFN_WDFDEVICEREMOVEDEPENDENTUSAGEDEVICEOBJECT             pfnWdfDeviceRemoveDependentUsageDeviceObject;
     PFN_WDFDEVICEGETSYSTEMPOWERACTION                         pfnWdfDeviceGetSystemPowerAction;
     PFN_WDFINTERRUPTSETEXTENDEDPOLICY                         pfnWdfInterruptSetExtendedPolicy;
@@ -436,7 +438,6 @@ typedef struct _WDFFUNCTIONS {
     PFN_WDFDMATRANSACTIONFREERESOURCES                        pfnWdfDmaTransactionFreeResources;
     PFN_WDFDMATRANSACTIONCANCEL                               pfnWdfDmaTransactionCancel;
     PFN_WDFDMATRANSACTIONWDMGETTRANSFERCONTEXT                pfnWdfDmaTransactionWdmGetTransferContext;
-
     PFN_WDFINTERRUPTQUEUEWORKITEMFORISR                       pfnWdfInterruptQueueWorkItemForIsr;
     PFN_WDFINTERRUPTTRYTOACQUIRELOCK                          pfnWdfInterruptTryToAcquireLock;
     PFN_WDFIOQUEUESTOPANDPURGE                                pfnWdfIoQueueStopAndPurge;
@@ -446,16 +447,13 @@ typedef struct _WDFFUNCTIONS {
     PFN_WDFUSBTARGETDEVICEQUERYUSBCAPABILITY                  pfnWdfUsbTargetDeviceQueryUsbCapability;
     PFN_WDFUSBTARGETDEVICECREATEURB                           pfnWdfUsbTargetDeviceCreateUrb;
     PFN_WDFUSBTARGETDEVICECREATEISOCHURB                      pfnWdfUsbTargetDeviceCreateIsochUrb;
-
     PFN_WDFDEVICEWDMASSIGNPOWERFRAMEWORKSETTINGS              pfnWdfDeviceWdmAssignPowerFrameworkSettings;
     PFN_WDFDMATRANSACTIONSTOPSYSTEMTRANSFER                   pfnWdfDmaTransactionStopSystemTransfer;
     PFN_WDFCXVERIFIERKEBUGCHECK                               pfnWdfCxVerifierKeBugCheck;
-
     PFN_WDFINTERRUPTREPORTACTIVE                              pfnWdfInterruptReportActive;
     PFN_WDFINTERRUPTREPORTINACTIVE                            pfnWdfInterruptReportInactive;
     PFN_WDFDEVICEINITSETRELEASEHARDWAREORDERONFAILURE         pfnWdfDeviceInitSetReleaseHardwareOrderOnFailure;
     PFN_WDFGETTRIAGEINFO                                      pfnWdfGetTriageInfo;
-
     PFN_WDFDEVICEINITSETIOTYPEEX                              pfnWdfDeviceInitSetIoTypeEx;
     PFN_WDFDEVICEQUERYPROPERTYEX                              pfnWdfDeviceQueryPropertyEx;
     PFN_WDFDEVICEALLOCANDQUERYPROPERTYEX                      pfnWdfDeviceAllocAndQueryPropertyEx;
@@ -468,8 +466,109 @@ typedef struct _WDFFUNCTIONS {
     PFN_WDFDEVICEINITALLOWSELFIOTARGET                        pfnWdfDeviceInitAllowSelfIoTarget;
     PFN_WDFIOTARGETSELFASSIGNDEFAULTIOQUEUE                   pfnWdfIoTargetSelfAssignDefaultIoQueue;
     PFN_WDFDEVICEOPENDEVICEMAPKEY                             pfnWdfDeviceOpenDevicemapKey;
+    PFN_WDFDMATRANSACTIONSETSINGLETRANSFERREQUIREMENT         pfnWdfDmaTransactionSetSingleTransferRequirement;
+    PFN_WDFCXDEVICEINITSETPNPPOWEREVENTCALLBACKS              pfnWdfCxDeviceInitSetPnpPowerEventCallbacks;
+    PFN_WDFFILEOBJECTGETINITIATORPROCESSID                    pfnWdfFileObjectGetInitiatorProcessId;
+    PFN_WDFREQUESTGETREQUESTORPROCESSID                       pfnWdfRequestGetRequestorProcessId;
+    PFN_WDFDEVICERETRIEVECOMPANIONTARGET                      pfnWdfDeviceRetrieveCompanionTarget;
+    PFN_WDFCOMPANIONTARGETSENDTASKSYNCHRONOUSLY               pfnWdfCompanionTargetSendTaskSynchronously;
+    PFN_WDFCOMPANIONTARGETWDMGETCOMPANIONPROCESS              pfnWdfCompanionTargetWdmGetCompanionProcess;
+    PFN_WDFDRIVEROPENPERSISTENTSTATEREGISTRYKEY               pfnWdfDriverOpenPersistentStateRegistryKey;
+    PFN_WDFDRIVERERRORREPORTAPIMISSING                        pfnWdfDriverErrorReportApiMissing;
+    PFN_WDFPDOINITREMOVEPOWERDEPENDENCYONPARENT               pfnWdfPdoInitRemovePowerDependencyOnParent;
+    PFN_WDFCXDEVICEINITALLOCATECONTEXT                        pfnWdfCxDeviceInitAllocateContext;
+    PFN_WDFCXDEVICEINITGETTYPEDCONTEXTWORKER                  pfnWdfCxDeviceInitGetTypedContextWorker;
+    PFN_WDFCXDEVICEINITSETPOWERPOLICYEVENTCALLBACKS           pfnWdfCxDeviceInitSetPowerPolicyEventCallbacks;
+    PFN_WDFDEVICESETDEVICEINTERFACESTATEEX                    pfnWdfDeviceSetDeviceInterfaceStateEx;
 
 } WDFFUNCTIONS, *PWDFFUNCTIONS;
+
+
+typedef struct _WDFSTRUCTURES {
+
+    size_t  SIZE_WDF_CHILD_ADDRESS_DESCRIPTION_HEADER;
+    size_t  SIZE_WDF_CHILD_IDENTIFICATION_DESCRIPTION_HEADER;
+    size_t  SIZE_WDF_CHILD_LIST_CONFIG;
+    size_t  SIZE_WDF_CHILD_LIST_ITERATOR;
+    size_t  SIZE_WDF_CHILD_RETRIEVE_INFO;
+    size_t  SIZE_WDF_CLASS_BIND_INFO;
+    size_t  SIZE_WDF_CLASS_BIND_INFO2;
+    size_t  SIZE_WDF_CLASS_EXTENSION_DESCRIPTOR;
+    size_t  SIZE_WDF_CLASS_LIBRARY_INFO;
+    size_t  SIZE_WDF_CLASS_VERSION;
+    size_t  SIZE_WDF_COMMON_BUFFER_CONFIG;
+    size_t  SIZE_WDF_CUSTOM_TYPE_CONTEXT;
+    size_t  SIZE_WDF_DEVICE_PNP_CAPABILITIES;
+    size_t  SIZE_WDF_DEVICE_PNP_NOTIFICATION_DATA;
+    size_t  SIZE_WDF_DEVICE_POWER_CAPABILITIES;
+    size_t  SIZE_WDF_DEVICE_POWER_NOTIFICATION_DATA;
+    size_t  SIZE_WDF_DEVICE_POWER_POLICY_IDLE_SETTINGS;
+    size_t  SIZE_WDF_DEVICE_POWER_POLICY_NOTIFICATION_DATA;
+    size_t  SIZE_WDF_DEVICE_POWER_POLICY_WAKE_SETTINGS;
+    size_t  SIZE_WDF_DEVICE_PROPERTY_DATA;
+    size_t  SIZE_WDF_DEVICE_STATE;
+    size_t  SIZE_WDF_DMA_ENABLER_CONFIG;
+    size_t  SIZE_WDF_DMA_SYSTEM_PROFILE_CONFIG;
+    size_t  SIZE_WDF_DPC_CONFIG;
+    size_t  SIZE_WDF_DRIVER_CONFIG;
+    size_t  SIZE_WDF_DRIVER_GLOBALS;
+    size_t  SIZE_WDF_DRIVER_VERSION_AVAILABLE_PARAMS;
+    size_t  SIZE_WDF_FDO_EVENT_CALLBACKS;
+    size_t  SIZE_WDF_FILEOBJECT_CONFIG;
+    size_t  SIZE_WDF_INTERRUPT_CONFIG;
+    size_t  SIZE_WDF_INTERRUPT_EXTENDED_POLICY;
+    size_t  SIZE_WDF_INTERRUPT_INFO;
+    size_t  SIZE_WDF_IO_FORWARD_PROGRESS_RESERVED_POLICY_SETTINGS;
+    size_t  SIZE_WDF_IO_QUEUE_CONFIG;
+    size_t  SIZE_WDF_IO_QUEUE_FORWARD_PROGRESS_POLICY;
+    size_t  SIZE_WDF_IO_TARGET_OPEN_PARAMS;
+    size_t  SIZE_WDF_IO_TYPE_CONFIG;
+    size_t  SIZE_WDF_MEMORY_DESCRIPTOR;
+    size_t  SIZE_WDF_OBJECT_ATTRIBUTES;
+    size_t  SIZE_WDF_OBJECT_CONTEXT_TYPE_INFO;
+    size_t  SIZE_WDF_PDO_EVENT_CALLBACKS;
+    size_t  SIZE_WDF_PNPPOWER_EVENT_CALLBACKS;
+    size_t  SIZE_WDF_POWER_FRAMEWORK_SETTINGS;
+    size_t  SIZE_WDF_POWER_POLICY_EVENT_CALLBACKS;
+    size_t  SIZE_WDF_POWER_ROUTINE_TIMED_OUT_DATA;
+    size_t  SIZE_WDF_QUERY_INTERFACE_CONFIG;
+    size_t  SIZE_WDF_QUEUE_FATAL_ERROR_DATA;
+    size_t  SIZE_WDF_REMOVE_LOCK_OPTIONS;
+    size_t  SIZE_WDF_REQUEST_COMPLETION_PARAMS;
+    size_t  SIZE_WDF_REQUEST_FATAL_ERROR_INFORMATION_LENGTH_MISMATCH_DATA;
+    size_t  SIZE_WDF_REQUEST_FORWARD_OPTIONS;
+    size_t  SIZE_WDF_REQUEST_PARAMETERS;
+    size_t  SIZE_WDF_REQUEST_REUSE_PARAMS;
+    size_t  SIZE_WDF_REQUEST_SEND_OPTIONS;
+    size_t  SIZE_WDF_TASK_SEND_OPTIONS;
+    size_t  SIZE_WDF_TIMER_CONFIG;
+    size_t  SIZE_WDF_TRIAGE_INFO;
+    size_t  SIZE_WDF_USB_CONTINUOUS_READER_CONFIG;
+    size_t  SIZE_WDF_USB_DEVICE_CREATE_CONFIG;
+    size_t  SIZE_WDF_USB_DEVICE_INFORMATION;
+    size_t  SIZE_WDF_USB_DEVICE_SELECT_CONFIG_PARAMS;
+    size_t  SIZE_WDF_USB_INTERFACE_SELECT_SETTING_PARAMS;
+    size_t  SIZE_WDF_USB_INTERFACE_SETTING_PAIR;
+    size_t  SIZE_WDF_USB_PIPE_INFORMATION;
+    size_t  SIZE_WDF_USB_REQUEST_COMPLETION_PARAMS;
+    size_t  SIZE_WDF_WMI_INSTANCE_CONFIG;
+    size_t  SIZE_WDF_WMI_PROVIDER_CONFIG;
+    size_t  SIZE_WDF_WORKITEM_CONFIG;
+    size_t  SIZE_WDFCONTEXT_TRIAGE_INFO;
+    size_t  SIZE_WDFCONTEXTTYPE_TRIAGE_INFO;
+    size_t  SIZE_WDFCX_FILEOBJECT_CONFIG;
+    size_t  SIZE_WDFCX_PNPPOWER_EVENT_CALLBACKS;
+    size_t  SIZE_WDFDEVICE_TRIAGE_INFO;
+    size_t  SIZE_WDFFWDPROGRESS_TRIAGE_INFO;
+    size_t  SIZE_WDFIRP_TRIAGE_INFO;
+    size_t  SIZE_WDFIRPQUEUE_TRIAGE_INFO;
+    size_t  SIZE_WDFMEMORY_OFFSET;
+    size_t  SIZE_WDFOBJECT_TRIAGE_INFO;
+    size_t  SIZE_WDFQUEUE_TRIAGE_INFO;
+    size_t  SIZE_WDFREQUEST_TRIAGE_INFO;
+    size_t  SIZE_WDFCX_POWER_POLICY_EVENT_CALLBACKS;
+
+} WDFSTRUCTURES, *PWDFSTRUCTURES;
 
 
 typedef struct _WDFVERSION {
@@ -477,6 +576,8 @@ typedef struct _WDFVERSION {
     ULONG         Size;
     ULONG         FuncCount;
     WDFFUNCTIONS  Functions;
+    ULONG         StructCount;
+    WDFSTRUCTURES Structures;
 
 } WDFVERSION, *PWDFVERSION;
 
@@ -836,6 +937,42 @@ WDFEXPORT(WdfCommonBufferGetLength)(
 _Must_inspect_result_
 _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
+NTSTATUS
+NTAPI
+WDFEXPORT(WdfCompanionTargetSendTaskSynchronously)(
+    _In_
+    PWDF_DRIVER_GLOBALS DriverGlobals,
+    _In_
+    WDFCOMPANIONTARGET CompanionTarget,
+    _In_
+    USHORT TaskQueueIdentifier,
+    _In_
+    ULONG TaskOperationCode,
+    _In_opt_
+    PWDF_MEMORY_DESCRIPTOR InputBuffer,
+    _In_opt_
+    PWDF_MEMORY_DESCRIPTOR OutputBuffer,
+    _In_opt_
+    PWDF_TASK_SEND_OPTIONS TaskOptions,
+    _Out_
+    PULONG_PTR BytesReturned
+    );
+
+_Must_inspect_result_
+_IRQL_requires_max_(DISPATCH_LEVEL)
+WDFAPI
+PEPROCESS
+NTAPI
+WDFEXPORT(WdfCompanionTargetWdmGetCompanionProcess)(
+    _In_
+    PWDF_DRIVER_GLOBALS DriverGlobals,
+    _In_
+    WDFCOMPANIONTARGET CompanionTarget
+    );
+
+_Must_inspect_result_
+_IRQL_requires_max_(PASSIVE_LEVEL)
+WDFAPI
 PWDFDEVICE_INIT
 NTAPI
 WDFEXPORT(WdfControlDeviceInitAllocate)(
@@ -947,6 +1084,32 @@ WDFEXPORT(WdfCxDeviceInitSetFileObjectConfig)(
     PWDF_OBJECT_ATTRIBUTES FileObjectAttributes
     );
 
+_IRQL_requires_max_(DISPATCH_LEVEL)
+WDFAPI
+VOID
+NTAPI
+WDFEXPORT(WdfCxDeviceInitSetPnpPowerEventCallbacks)(
+    _In_
+    PWDF_DRIVER_GLOBALS DriverGlobals,
+    _In_
+    PWDFCXDEVICE_INIT CxDeviceInit,
+    _In_
+    PWDFCX_PNPPOWER_EVENT_CALLBACKS CxPnpPowerCallbacks
+    );
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+WDFAPI
+VOID
+NTAPI
+WDFEXPORT(WdfCxDeviceInitSetPowerPolicyEventCallbacks)(
+    _In_
+    PWDF_DRIVER_GLOBALS DriverGlobals,
+    _In_
+    PWDFCXDEVICE_INIT CxDeviceInit,
+    _In_
+    PWDFCX_POWER_POLICY_EVENT_CALLBACKS CxPowerPolicyCallbacks
+    );
+
 WDFAPI
 VOID
 NTAPI
@@ -965,6 +1128,35 @@ WDFEXPORT(WdfCxVerifierKeBugCheck)(
     ULONG_PTR BugCheckParameter3,
     _In_
     ULONG_PTR BugCheckParameter4
+    );
+
+_Must_inspect_result_
+_IRQL_requires_max_(DISPATCH_LEVEL)
+WDFAPI
+NTSTATUS
+NTAPI
+WDFEXPORT(WdfCxDeviceInitAllocateContext)(
+    _In_
+    PWDF_DRIVER_GLOBALS DriverGlobals,
+    _In_
+    PWDFDEVICE_INIT DeviceInit,
+    _In_
+    PWDF_OBJECT_ATTRIBUTES ContextAttributes,
+    _Outptr_opt_
+    PVOID* Context
+    );
+
+_IRQL_requires_max_(DISPATCH_LEVEL+1)
+WDFAPI
+PVOID
+NTAPI
+WDFEXPORT(WdfCxDeviceInitGetTypedContextWorker)(
+    _In_
+    PWDF_DRIVER_GLOBALS DriverGlobals,
+    _In_
+    PWDFDEVICE_INIT DeviceInit,
+    _In_
+    PCWDF_OBJECT_CONTEXT_TYPE_INFO TypeInfo
     );
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -1733,6 +1925,23 @@ WDFEXPORT(WdfDeviceSetDeviceInterfaceState)(
     BOOLEAN IsInterfaceEnabled
     );
 
+_IRQL_requires_max_(PASSIVE_LEVEL)
+WDFAPI
+VOID
+NTAPI
+WDFEXPORT(WdfDeviceSetDeviceInterfaceStateEx)(
+    _In_
+    PWDF_DRIVER_GLOBALS DriverGlobals,
+    _In_
+    WDFDEVICE Device,
+    _In_
+    CONST GUID* InterfaceClassGUID,
+    _In_opt_
+    PCUNICODE_STRING ReferenceString,
+    _In_
+    BOOLEAN IsInterfaceEnabled
+    );
+
 _Must_inspect_result_
 _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
@@ -1916,7 +2125,7 @@ WDFEXPORT(WdfDeviceStopIdleActual)(
     _In_
     LONG Line,
     _In_z_
-    PCHAR File
+    PCCH File
     );
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -1933,7 +2142,7 @@ WDFEXPORT(WdfDeviceResumeIdleActual)(
     _In_
     LONG Line,
     _In_z_
-    PCHAR File
+    PCCH File
     );
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -2006,7 +2215,7 @@ WDFEXPORT(WdfDeviceConfigureWdmIrpDispatchCallback)(
     _In_
     UCHAR MajorFunction,
     _In_
-    PFN_WDFDEVICE_WDM_IRP_DISPATCH EvtDeviceWdmIrpDisptach,
+    PFN_WDFDEVICE_WDM_IRP_DISPATCH EvtDeviceWdmIrpDispatch,
     _In_opt_
     WDFCONTEXT DriverContext
     );
@@ -2125,6 +2334,20 @@ WDFEXPORT(WdfDeviceAssignProperty)(
     ULONG Size,
     _In_opt_
     PVOID Data
+    );
+
+_Must_inspect_result_
+_IRQL_requires_max_(PASSIVE_LEVEL)
+WDFAPI
+NTSTATUS
+NTAPI
+WDFEXPORT(WdfDeviceRetrieveCompanionTarget)(
+    _In_
+    PWDF_DRIVER_GLOBALS DriverGlobals,
+    _In_
+    WDFDEVICE Device,
+    _Out_
+    WDFCOMPANIONTARGET* CompanionTarget
     );
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -2416,6 +2639,19 @@ WDFEXPORT(WdfDmaTransactionSetMaximumLength)(
     WDFDMATRANSACTION DmaTransaction,
     _In_
     size_t MaximumLength
+    );
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+WDFAPI
+VOID
+NTAPI
+WDFEXPORT(WdfDmaTransactionSetSingleTransferRequirement)(
+    _In_
+    PWDF_DRIVER_GLOBALS DriverGlobals,
+    _In_
+    WDFDMATRANSACTION DmaTransaction,
+    _In_
+    BOOLEAN RequireSingleTransfer
     );
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -2763,6 +2999,42 @@ WDFEXPORT(WdfDriverIsVersionAvailable)(
     PWDF_DRIVER_VERSION_AVAILABLE_PARAMS VersionAvailableParams
     );
 
+_Must_inspect_result_
+_IRQL_requires_max_(DISPATCH_LEVEL + 1)
+WDFAPI
+NTSTATUS
+NTAPI
+WDFEXPORT(WdfDriverErrorReportApiMissing)(
+    _In_
+    PWDF_DRIVER_GLOBALS DriverGlobals,
+    _In_
+    WDFDRIVER Driver,
+    _In_opt_
+    PCWSTR FrameworkExtensionName,
+    _In_
+    ULONG ApiIndex,
+    _In_
+    BOOLEAN DoesApiReturnNtstatus
+    );
+
+_Must_inspect_result_
+_IRQL_requires_max_(PASSIVE_LEVEL)
+WDFAPI
+NTSTATUS
+NTAPI
+WDFEXPORT(WdfDriverOpenPersistentStateRegistryKey)(
+    _In_
+    PWDF_DRIVER_GLOBALS DriverGlobals,
+    _In_
+    WDFDRIVER Driver,
+    _In_
+    ACCESS_MASK DesiredAccess,
+    _In_opt_
+    PWDF_OBJECT_ATTRIBUTES KeyAttributes,
+    _Out_
+    WDFKEY* Key
+    );
+
 _IRQL_requires_max_(DISPATCH_LEVEL)
 WDFAPI
 PDEVICE_OBJECT
@@ -3031,6 +3303,17 @@ WDFAPI
 WDFDEVICE
 NTAPI
 WDFEXPORT(WdfFileObjectGetDevice)(
+    _In_
+    PWDF_DRIVER_GLOBALS DriverGlobals,
+    _In_
+    WDFFILEOBJECT FileObject
+    );
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+WDFAPI
+ULONG
+NTAPI
+WDFEXPORT(WdfFileObjectGetInitiatorProcessId)(
     _In_
     PWDF_DRIVER_GLOBALS DriverGlobals,
     _In_
@@ -3986,7 +4269,7 @@ WDFEXPORT(WdfIoTargetSelfAssignDefaultIoQueue)(
 
 _Must_inspect_result_
 _When_(PoolType == 1 || PoolType == 257, _IRQL_requires_max_(APC_LEVEL))
-_When_(PoolType == 0 || PoolType == 256, _IRQL_requires_max_(DISPATCH_LEVEL))
+_When_(PoolType == 0 || PoolType == 256 || PoolType == 512, _IRQL_requires_max_(DISPATCH_LEVEL))
 WDFAPI
 NTSTATUS
 NTAPI
@@ -4167,6 +4450,7 @@ WDFEXPORT(WdfDriverMiniportUnload)(
     WDFDRIVER Driver
     );
 
+_IRQL_requires_max_(DISPATCH_LEVEL+1)
 WDFAPI
 PVOID
 FASTCALL
@@ -4179,6 +4463,8 @@ WDFEXPORT(WdfObjectGetTypedContextWorker)(
     PCWDF_OBJECT_CONTEXT_TYPE_INFO TypeInfo
     );
 
+_Must_inspect_result_
+_IRQL_requires_max_(DISPATCH_LEVEL)
 WDFAPI
 NTSTATUS
 NTAPI
@@ -4193,6 +4479,7 @@ WDFEXPORT(WdfObjectAllocateContext)(
     PVOID* Context
     );
 
+_IRQL_requires_max_(DISPATCH_LEVEL+1)
 WDFAPI
 WDFOBJECT
 FASTCALL
@@ -4203,6 +4490,7 @@ WDFEXPORT(WdfObjectContextGetObject)(
     PVOID ContextPointer
     );
 
+_IRQL_requires_max_(DISPATCH_LEVEL)
 WDFAPI
 VOID
 NTAPI
@@ -4216,9 +4504,10 @@ WDFEXPORT(WdfObjectReferenceActual)(
     _In_
     LONG Line,
     _In_z_
-    PCHAR File
+    PCCH File
     );
 
+_IRQL_requires_max_(DISPATCH_LEVEL)
 WDFAPI
 VOID
 NTAPI
@@ -4232,7 +4521,7 @@ WDFEXPORT(WdfObjectDereferenceActual)(
     _In_
     LONG Line,
     _In_z_
-    PCHAR File
+    PCCH File
     );
 
 _Must_inspect_result_
@@ -4541,6 +4830,17 @@ WDFEXPORT(WdfPdoClearEjectionRelationsDevices)(
     PWDF_DRIVER_GLOBALS DriverGlobals,
     _In_
     WDFDEVICE Device
+    );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+WDFAPI
+VOID
+NTAPI
+WDFEXPORT(WdfPdoInitRemovePowerDependencyOnParent)(
+    _In_
+    PWDF_DRIVER_GLOBALS DriverGlobals,
+    _In_
+    PWDFDEVICE_INIT DeviceInit
     );
 
 _Must_inspect_result_
@@ -4880,6 +5180,17 @@ WDFEXPORT(WdfRequestCreate)(
     WDFIOTARGET IoTarget,
     _Out_
     WDFREQUEST* Request
+    );
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+WDFAPI
+ULONG
+NTAPI
+WDFEXPORT(WdfRequestGetRequestorProcessId)(
+    _In_
+    PWDF_DRIVER_GLOBALS DriverGlobals,
+    _In_
+    WDFREQUEST Request
     );
 
 _Must_inspect_result_
@@ -6932,6 +7243,9 @@ WDFEXPORT(WdfWorkItemFlush)(
     WDFWORKITEM WorkItem
     );
 
+
+extern WDFVERSION WdfVersion;
+
 #ifdef FX_DYNAMICS_GENERATE_TABLE
 
 WDFVERSION WdfVersion = {
@@ -6963,7 +7277,6 @@ WDFVERSION WdfVersion = {
         WDFEXPORT(WdfCommonBufferGetAlignedVirtualAddress),
         WDFEXPORT(WdfCommonBufferGetAlignedLogicalAddress),
         WDFEXPORT(WdfCommonBufferGetLength),
-
         WDFEXPORT(WdfControlDeviceInitAllocate),
         WDFEXPORT(WdfControlDeviceInitSetShutdownNotification),
         WDFEXPORT(WdfControlFinishInitializing),
@@ -7050,7 +7363,6 @@ WDFVERSION WdfVersion = {
         WDFEXPORT(WdfDmaTransactionGetRequest),
         WDFEXPORT(WdfDmaTransactionGetCurrentDmaTransferLength),
         WDFEXPORT(WdfDmaTransactionGetDevice),
-
         WDFEXPORT(WdfDpcCreate),
         WDFEXPORT(WdfDpcEnqueue),
         WDFEXPORT(WdfDpcCancel),
@@ -7319,7 +7631,6 @@ WDFVERSION WdfVersion = {
         WDFEXPORT(WdfWmiInstanceGetDevice),
         WDFEXPORT(WdfWmiInstanceGetProvider),
         WDFEXPORT(WdfWmiInstanceFireEvent),
-
         WDFEXPORT(WdfWorkItemCreate),
         WDFEXPORT(WdfWorkItemEnqueue),
         WDFEXPORT(WdfWorkItemGetParentObject),
@@ -7328,7 +7639,6 @@ WDFVERSION WdfVersion = {
         WDFEXPORT(WdfDmaEnablerGetFragmentLength),
         WDFEXPORT(WdfDmaEnablerWdmGetDmaAdapter),
         WDFEXPORT(WdfUsbInterfaceGetNumSettings),
-
         WDFEXPORT(WdfDeviceRemoveDependentUsageDeviceObject),
         WDFEXPORT(WdfDeviceGetSystemPowerAction),
         WDFEXPORT(WdfInterruptSetExtendedPolicy),
@@ -7358,7 +7668,6 @@ WDFVERSION WdfVersion = {
         WDFEXPORT(WdfDmaTransactionFreeResources),
         WDFEXPORT(WdfDmaTransactionCancel),
         WDFEXPORT(WdfDmaTransactionWdmGetTransferContext),
-
         WDFEXPORT(WdfInterruptQueueWorkItemForIsr),
         WDFEXPORT(WdfInterruptTryToAcquireLock),
         WDFEXPORT(WdfIoQueueStopAndPurge),
@@ -7368,16 +7677,13 @@ WDFVERSION WdfVersion = {
         WDFEXPORT(WdfUsbTargetDeviceQueryUsbCapability),
         WDFEXPORT(WdfUsbTargetDeviceCreateUrb),
         WDFEXPORT(WdfUsbTargetDeviceCreateIsochUrb),
-
         WDFEXPORT(WdfDeviceWdmAssignPowerFrameworkSettings),
         WDFEXPORT(WdfDmaTransactionStopSystemTransfer),
         WDFEXPORT(WdfCxVerifierKeBugCheck),
-
         WDFEXPORT(WdfInterruptReportActive),
         WDFEXPORT(WdfInterruptReportInactive),
         WDFEXPORT(WdfDeviceInitSetReleaseHardwareOrderOnFailure),
         WDFEXPORT(WdfGetTriageInfo),
-
         WDFEXPORT(WdfDeviceInitSetIoTypeEx),
         WDFEXPORT(WdfDeviceQueryPropertyEx),
         WDFEXPORT(WdfDeviceAllocAndQueryPropertyEx),
@@ -7390,10 +7696,112 @@ WDFVERSION WdfVersion = {
         WDFEXPORT(WdfDeviceInitAllowSelfIoTarget),
         WDFEXPORT(WdfIoTargetSelfAssignDefaultIoQueue),
         WDFEXPORT(WdfDeviceOpenDevicemapKey),
-    }
+        WDFEXPORT(WdfDmaTransactionSetSingleTransferRequirement),
+        WDFEXPORT(WdfCxDeviceInitSetPnpPowerEventCallbacks),
+        WDFEXPORT(WdfFileObjectGetInitiatorProcessId),
+        WDFEXPORT(WdfRequestGetRequestorProcessId),
+        WDFEXPORT(WdfDeviceRetrieveCompanionTarget),
+        WDFEXPORT(WdfCompanionTargetSendTaskSynchronously),
+        WDFEXPORT(WdfCompanionTargetWdmGetCompanionProcess),
+        WDFEXPORT(WdfDriverOpenPersistentStateRegistryKey),
+        WDFEXPORT(WdfDriverErrorReportApiMissing),
+        WDFEXPORT(WdfPdoInitRemovePowerDependencyOnParent),
+        WDFEXPORT(WdfCxDeviceInitAllocateContext),
+        WDFEXPORT(WdfCxDeviceInitGetTypedContextWorker),
+        WDFEXPORT(WdfCxDeviceInitSetPowerPolicyEventCallbacks),
+        WDFEXPORT(WdfDeviceSetDeviceInterfaceStateEx),
+    },
+    sizeof(WDFSTRUCTURES)/sizeof(size_t),
+    {
+        sizeof(WDF_CHILD_ADDRESS_DESCRIPTION_HEADER),
+        sizeof(WDF_CHILD_IDENTIFICATION_DESCRIPTION_HEADER),
+        sizeof(WDF_CHILD_LIST_CONFIG),
+        sizeof(WDF_CHILD_LIST_ITERATOR),
+        sizeof(WDF_CHILD_RETRIEVE_INFO),
+        sizeof(WDF_CLASS_BIND_INFO),
+        sizeof(WDF_CLASS_BIND_INFO2),
+        sizeof(WDF_CLASS_EXTENSION_DESCRIPTOR),
+        sizeof(WDF_CLASS_LIBRARY_INFO),
+        sizeof(WDF_CLASS_VERSION),
+        sizeof(WDF_COMMON_BUFFER_CONFIG),
+        sizeof(WDF_CUSTOM_TYPE_CONTEXT),
+        sizeof(WDF_DEVICE_PNP_CAPABILITIES),
+        sizeof(WDF_DEVICE_PNP_NOTIFICATION_DATA),
+        sizeof(WDF_DEVICE_POWER_CAPABILITIES),
+        sizeof(WDF_DEVICE_POWER_NOTIFICATION_DATA),
+        sizeof(WDF_DEVICE_POWER_POLICY_IDLE_SETTINGS),
+        sizeof(WDF_DEVICE_POWER_POLICY_NOTIFICATION_DATA),
+        sizeof(WDF_DEVICE_POWER_POLICY_WAKE_SETTINGS),
+        sizeof(WDF_DEVICE_PROPERTY_DATA),
+        sizeof(WDF_DEVICE_STATE),
+        sizeof(WDF_DMA_ENABLER_CONFIG),
+        sizeof(WDF_DMA_SYSTEM_PROFILE_CONFIG),
+        sizeof(WDF_DPC_CONFIG),
+        sizeof(WDF_DRIVER_CONFIG),
+        sizeof(WDF_DRIVER_GLOBALS),
+        sizeof(WDF_DRIVER_VERSION_AVAILABLE_PARAMS),
+        sizeof(WDF_FDO_EVENT_CALLBACKS),
+        sizeof(WDF_FILEOBJECT_CONFIG),
+        sizeof(WDF_INTERRUPT_CONFIG),
+        sizeof(WDF_INTERRUPT_EXTENDED_POLICY),
+        sizeof(WDF_INTERRUPT_INFO),
+        sizeof(WDF_IO_FORWARD_PROGRESS_RESERVED_POLICY_SETTINGS),
+        sizeof(WDF_IO_QUEUE_CONFIG),
+        sizeof(WDF_IO_QUEUE_FORWARD_PROGRESS_POLICY),
+        sizeof(WDF_IO_TARGET_OPEN_PARAMS),
+        sizeof(WDF_IO_TYPE_CONFIG),
+        sizeof(WDF_MEMORY_DESCRIPTOR),
+        sizeof(WDF_OBJECT_ATTRIBUTES),
+        sizeof(WDF_OBJECT_CONTEXT_TYPE_INFO),
+        sizeof(WDF_PDO_EVENT_CALLBACKS),
+        sizeof(WDF_PNPPOWER_EVENT_CALLBACKS),
+        sizeof(WDF_POWER_FRAMEWORK_SETTINGS),
+        sizeof(WDF_POWER_POLICY_EVENT_CALLBACKS),
+        sizeof(WDF_POWER_ROUTINE_TIMED_OUT_DATA),
+        sizeof(WDF_QUERY_INTERFACE_CONFIG),
+        sizeof(WDF_QUEUE_FATAL_ERROR_DATA),
+        sizeof(WDF_REMOVE_LOCK_OPTIONS),
+        sizeof(WDF_REQUEST_COMPLETION_PARAMS),
+        sizeof(WDF_REQUEST_FATAL_ERROR_INFORMATION_LENGTH_MISMATCH_DATA),
+        sizeof(WDF_REQUEST_FORWARD_OPTIONS),
+        sizeof(WDF_REQUEST_PARAMETERS),
+        sizeof(WDF_REQUEST_REUSE_PARAMS),
+        sizeof(WDF_REQUEST_SEND_OPTIONS),
+        sizeof(WDF_TASK_SEND_OPTIONS),
+        sizeof(WDF_TIMER_CONFIG),
+        sizeof(WDF_TRIAGE_INFO),
+        sizeof(WDF_USB_CONTINUOUS_READER_CONFIG),
+        sizeof(WDF_USB_DEVICE_CREATE_CONFIG),
+        sizeof(WDF_USB_DEVICE_INFORMATION),
+        sizeof(WDF_USB_DEVICE_SELECT_CONFIG_PARAMS),
+        sizeof(WDF_USB_INTERFACE_SELECT_SETTING_PARAMS),
+        sizeof(WDF_USB_INTERFACE_SETTING_PAIR),
+        sizeof(WDF_USB_PIPE_INFORMATION),
+        sizeof(WDF_USB_REQUEST_COMPLETION_PARAMS),
+        sizeof(WDF_WMI_INSTANCE_CONFIG),
+        sizeof(WDF_WMI_PROVIDER_CONFIG),
+        sizeof(WDF_WORKITEM_CONFIG),
+        sizeof(WDFCONTEXT_TRIAGE_INFO),
+        sizeof(WDFCONTEXTTYPE_TRIAGE_INFO),
+        sizeof(WDFCX_FILEOBJECT_CONFIG),
+        sizeof(WDFCX_PNPPOWER_EVENT_CALLBACKS),
+        sizeof(WDFDEVICE_TRIAGE_INFO),
+        sizeof(WDFFWDPROGRESS_TRIAGE_INFO),
+        sizeof(WDFIRP_TRIAGE_INFO),
+        sizeof(WDFIRPQUEUE_TRIAGE_INFO),
+        sizeof(WDFMEMORY_OFFSET),
+        sizeof(WDFOBJECT_TRIAGE_INFO),
+        sizeof(WDFQUEUE_TRIAGE_INFO),
+        sizeof(WDFREQUEST_TRIAGE_INFO),
+        sizeof(WDFCX_POWER_POLICY_EVENT_CALLBACKS),
+    },
 };
 
 #endif // FX_DYNAMICS_GENERATE_TABLE
+
+#ifdef __cplusplus
+} // extern "C"
+#endif
 
 #endif // _FXDYNAMICS_H_
 

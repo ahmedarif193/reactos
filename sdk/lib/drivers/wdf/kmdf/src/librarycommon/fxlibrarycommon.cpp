@@ -6,6 +6,17 @@ extern "C" {
 #include <ntddk.h>
 }
 
+typedef enum _WDFFUNCENUM_NUMENTRIES {
+    WdfFunctionTableNumEntries_V1_17 = 444,
+    WdfFunctionTableNumEntries_V1_19 = 446,
+    WdfFunctionTableNumEntries_V1_21 = 448,
+    WdfFunctionTableNumEntries_V1_23 = 451,
+    WdfFunctionTableNumEntries_V1_25 = 453,
+    WdfFunctionTableNumEntries_V1_27 = 453,
+    WdfFunctionTableNumEntries_V1_29 = 454,
+    WdfFunctionTableNumEntries_V1_31 = 458,
+} WDFFUNCENUM_NUMENTRIES;
+
 //
 // This will cause inclusion of VfWdfFunctions table implementation from header
 //
@@ -385,13 +396,28 @@ FxLibraryCommonRegisterClient(
         goto Done;
     }
 
-    if (Info->FuncCount <= WdfFunctionTableNumEntries_V1_15) {
+    if (Info->FuncCount <= WdfFunctionTableNumEntries_V1_31) {
         //
         // Make sure table count matches exactly with previously
         // released framework version table sizes.
         //
+        ASSERT((ULONG)WdfFunctionTableNumEntries_V1_27 ==
+               (ULONG)WdfFunctionTableNumEntries_V1_25);
+        ASSERT((ULONG)WdfFunctionTableNumEntries_V1_17 ==
+               (ULONG)WdfFunctionTableNumEntries_V1_15);
+        ASSERT((ULONG)WdfFunctionTableNumEntries_V1_7 ==
+               (ULONG)WdfFunctionTableNumEntries_V1_5);
+
         switch (Info->FuncCount) {
 
+        case WdfFunctionTableNumEntries_V1_31:
+        case WdfFunctionTableNumEntries_V1_29:
+     // case WdfFunctionTableNumEntries_V1_27:
+        case WdfFunctionTableNumEntries_V1_25:
+        case WdfFunctionTableNumEntries_V1_23:
+        case WdfFunctionTableNumEntries_V1_21:
+        case WdfFunctionTableNumEntries_V1_19:
+     // case WdfFunctionTableNumEntries_V1_17:
         case WdfFunctionTableNumEntries_V1_15:
         case WdfFunctionTableNumEntries_V1_13:
         case WdfFunctionTableNumEntries_V1_11:
