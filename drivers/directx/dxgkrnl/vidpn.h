@@ -294,9 +294,9 @@ DxgkVidPnRebuildForHotPlug(
 NTSTATUS
 APIENTRY
 DxgkCbQueryVidPnInterface(
-    _In_  D3DKMDT_HVIDPN                       hVidPn,
-    _In_  DXGK_VIDPN_INTERFACE_VERSION         VidPnInterfaceVersion,
-    _Out_ CONST DXGK_VIDPN_INTERFACE**         ppVidPnInterface);
+    IN_CONST_D3DKMDT_HVIDPN hVidPn,
+    IN_CONST_DXGK_VIDPN_INTERFACE_VERSION VidPnInterfaceVersion,
+    DEREF_OUT_CONST_PPDXGK_VIDPN_INTERFACE ppVidPnInterface);
 
 /*
  * DxgkCbQueryMonitorInterface
@@ -307,6 +307,6 @@ DxgkCbQueryVidPnInterface(
 NTSTATUS
 APIENTRY
 DxgkCbQueryMonitorInterface(
-    _In_  HANDLE                               hAdapter,
-    _In_  UINT                                 MonitorInterfaceVersion,
-    _Out_ PVOID*                               ppMonitorInterface);
+    IN_CONST_HANDLE hAdapter,
+    IN_CONST_DXGK_MONITOR_INTERFACE_VERSION MonitorInterfaceVersion,
+    DEREF_OUT_CONST_PPDXGK_MONITOR_INTERFACE ppMonitorInterface);

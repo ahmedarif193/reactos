@@ -293,7 +293,7 @@ DxgkpSnapshotCommittedDisplayState(
  *   1. IsSupportedVidPn (optional, to validate)
  *   2. EnumVidPnCofuncModality (lets miniport prune/populate modes)
  *   3. Pin source and target modes for 1024x768
- *   4. CommitVidPn (miniport creates GPU resource, sets scanout)
+ *   4. SetTimingsFromVidPn for WDDM 2.3+, otherwise CommitVidPn
  *   5. SetVidPnSourceVisibility (make the display visible)
  *
  * IRQL: PASSIVE_LEVEL
@@ -310,9 +310,12 @@ DxgkpDisplayCommitVidPnCandidate(
     BOOLEAN ForceDodPresentOnlyPath;
     BOOLEAN SkipDodVidPnNegotiation;
     BOOLEAN KmdTransaction = FALSE;
+    BOOLEAN MiniportModeSetFailed = FALSE;
     BOOLEAN TopologyEmpty;
+    BOOLEAN UseSetTimings;
     ULONG NewCommittedWidth;
     ULONG NewCommittedHeight;
+    PDXGKDDI_SETTIMINGSFROMVIDPN SetTimingsCallback;
     D3DDDI_VIDEO_PRESENT_SOURCE_ID ActiveSourceId = 0;
     D3DDDI_VIDEO_PRESENT_TARGET_ID ActiveTargetId = 0;
 
@@ -327,7 +330,17 @@ DxgkpDisplayCommitVidPnCandidate(
     VidPn = (PDXGKP_VIDPN)hVidPn;
     RtlZeroMemory(Result, sizeof(*Result));
     SkipDodVidPnNegotiation = FALSE;
-    ForceDodPresentOnlyPath = (DXGK_CB(Adapter, DxgkDdiCommitVidPn) == NULL);
+    SetTimingsCallback =
+        DXGK_CB_FULL(Adapter, DxgkDdiSetTimingsFromVidPn);
+    UseSetTimings =
+        !Adapter->MiniportContext->UseDodLayout &&
+        DxgkCapsCoreInterfaceVersionAtLeast(
+            Adapter->MiniportContext->InitData.s.Version,
+            DXGK_CAPS_CORE_LEVEL_WDDM_2_3) &&
+        SetTimingsCallback != NULL;
+    ForceDodPresentOnlyPath =
+        !UseSetTimings &&
+        DXGK_CB(Adapter, DxgkDdiCommitVidPn) == NULL;
     TopologyEmpty = VidPn->NumPaths == 0;
     NewCommittedWidth = Adapter->CommittedWidth;
     NewCommittedHeight = Adapter->CommittedHeight;
@@ -351,10 +364,12 @@ DxgkpDisplayCommitVidPnCandidate(
 
     DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: starting mode-set sequence\n");
     DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: callbacks IsSupportedVidPn=%p "
-                  "EnumCofunc=%p CommitVidPn=%p SetVisibility=%p\n",
+                  "EnumCofunc=%p CommitVidPn=%p SetTimings=%p "
+                  "SetVisibility=%p\n",
                   DXGK_CB(Adapter, DxgkDdiIsSupportedVidPn),
                   DXGK_CB(Adapter, DxgkDdiEnumVidPnCofuncModality),
                   DXGK_CB(Adapter, DxgkDdiCommitVidPn),
+                  SetTimingsCallback,
                   DXGK_CB(Adapter, DxgkDdiSetVidPnSourceVisibility));
 
     if (ForceDodPresentOnlyPath)
@@ -371,7 +386,6 @@ DxgkpDisplayCommitVidPnCandidate(
      */
     if (!ForceDodPresentOnlyPath &&
         !SkipDodVidPnNegotiation &&
-        DXGK_CB(Adapter, DxgkDdiCommitVidPn) != NULL &&
         DXGK_CB(Adapter, DxgkDdiIsSupportedVidPn) != NULL)
     {
         DXGKARG_ISSUPPORTEDVIDPN IsSupportedArgs;
@@ -422,7 +436,6 @@ DxgkpDisplayCommitVidPnCandidate(
      */
     if (!ForceDodPresentOnlyPath &&
         !SkipDodVidPnNegotiation &&
-        DXGK_CB(Adapter, DxgkDdiCommitVidPn) != NULL &&
         DXGK_CB(Adapter, DxgkDdiEnumVidPnCofuncModality) != NULL)
     {
         DXGKARG_ENUMVIDPNCOFUNCMODALITY EnumArgs;
@@ -794,12 +807,95 @@ DxgkpDisplayCommitVidPnCandidate(
     }
 
     /*
-     * Step 4: Call CommitVidPn.
-     * This is the key call that makes the miniport create GPU resources
-     * (RESOURCE_CREATE_2D, RESOURCE_ATTACH_BACKING, SET_SCANOUT).
+     * Step 4: WDDM 2.3 replaced CommitVidPn with SetTimingsFromVidPn.
+     * Send one exact per-target record for this single-path implementation,
+     * including a removal record when the functional topology is empty.
      */
-    if (!ForceDodPresentOnlyPath &&
-        DXGK_CB(Adapter, DxgkDdiCommitVidPn) != NULL)
+    if (!ForceDodPresentOnlyPath && UseSetTimings)
+    {
+        DXGKARG_SETTIMINGSFROMVIDPN TimingArgs;
+        DXGK_SET_TIMING_RESULTS TimingResults;
+        DXGK_SET_TIMING_PATH_INFO TimingPath;
+
+        RtlZeroMemory(&TimingArgs, sizeof(TimingArgs));
+        RtlZeroMemory(&TimingResults, sizeof(TimingResults));
+        RtlZeroMemory(&TimingPath, sizeof(TimingPath));
+
+        TimingPath.VidPnTargetId = ActiveTargetId;
+        TimingPath.OutputWireColorSpace =
+            D3DDDI_OUTPUT_WIRE_COLOR_SPACE_G22_P709;
+        TimingPath.SelectedWireFormat.Rgb =
+            D3DKMDT_BITS_PER_COMPONENT_08;
+        TimingPath.Input.VidPnPathUpdates =
+            TopologyEmpty
+                ? DXGK_PATH_UPDATE_REMOVED
+                : (Adapter->VidPnCommitted
+                    ? DXGK_PATH_UPDATE_MODIFIED
+                    : DXGK_PATH_UPDATE_ADDED);
+        TimingPath.Input.Active = TopologyEmpty ? 0 : 1;
+        TimingPath.Input.IgnoreConnectivity = 1;
+        TimingPath.Input.PreserveInherited =
+            (!Adapter->VidPnCommitted &&
+             Adapter->PostDisplayWidth != 0 &&
+             Adapter->PostDisplayHeight != 0) ? 1 : 0;
+
+        TimingArgs.hFunctionalVidPn = (D3DKMDT_HVIDPN)VidPn;
+        TimingArgs.SetFlags.Value = 0;
+        TimingArgs.pResultsFlags = &TimingResults;
+        TimingArgs.PathCount = 1;
+        TimingArgs.pSetTimingPathInfo = &TimingPath;
+
+        DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: calling "
+                      "DxgkDdiSetTimingsFromVidPn (hVidPn=%p update=%u "
+                      "active=%u)\n",
+                      TimingArgs.hFunctionalVidPn,
+                      (UINT)TimingPath.Input.VidPnPathUpdates,
+                      TimingPath.Input.Active);
+        if (!DxgkAcquireKmdCall(Adapter))
+        {
+            Status = STATUS_DELETE_PENDING;
+            goto Cleanup;
+        }
+        _SEH2_TRY
+        {
+            Status = SetTimingsCallback(
+                         Adapter->MiniportDeviceContext,
+                         &TimingArgs);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+            DXGKRNL_ERR("DxgkpCommitVidPnToMiniport: "
+                        "SetTimingsFromVidPn faulted 0x%08lX\n",
+                        Status);
+        }
+        _SEH2_END;
+        DxgkReleaseKmdCall(Adapter);
+
+        if (!NT_SUCCESS(Status))
+        {
+            DXGKRNL_ERR("DxgkpCommitVidPnToMiniport: "
+                        "SetTimingsFromVidPn failed 0x%08lX\n",
+                        Status);
+            MiniportModeSetFailed = TRUE;
+            goto Cleanup;
+        }
+        if ((TimingResults.Value & ~1UL) != 0 ||
+            (TimingPath.OutputFlags & ~1UL) != 0)
+        {
+            DXGKRNL_ERR("DxgkpCommitVidPnToMiniport: miniport returned "
+                        "reserved timing result bits (results=0x%08X "
+                        "path=0x%08X)\n",
+                        TimingResults.Value,
+                        TimingPath.OutputFlags);
+            Status = STATUS_DATA_ERROR;
+            goto Cleanup;
+        }
+        if (TimingResults.ConnectionStatusChanges)
+            (VOID)DxgkVidPnQueueHotPlugRebuild(Adapter);
+    }
+    else if (!ForceDodPresentOnlyPath &&
+             DXGK_CB(Adapter, DxgkDdiCommitVidPn) != NULL)
     {
         DXGKARG_COMMITVIDPN CommitArgs;
         RtlZeroMemory(&CommitArgs, sizeof(CommitArgs));
@@ -828,6 +924,7 @@ DxgkpDisplayCommitVidPnCandidate(
         {
             DXGKRNL_ERR("DxgkpCommitVidPnToMiniport: CommitVidPn failed 0x%08lX\n",
                         Status);
+            MiniportModeSetFailed = TRUE;
             goto Cleanup;
         }
         Status = STATUS_SUCCESS;
@@ -858,11 +955,10 @@ DxgkpDisplayCommitVidPnCandidate(
 
     /*
      * Step 5: Call SetVidPnSourceVisibility to make the display visible.
-     * Only call when CommitVidPn succeeded — DOD drivers without CommitVidPn
-     * don't have framebuffer state ready for visibility changes.
+     * Only call after a full timing/commit transaction; DOD drivers do not
+     * have the same framebuffer state contract.
      */
     if (!ForceDodPresentOnlyPath &&
-        DXGK_CB(Adapter, DxgkDdiCommitVidPn) != NULL &&
         DXGK_CB(Adapter, DxgkDdiSetVidPnSourceVisibility) != NULL)
     {
         DXGKARG_SETVIDPNSOURCEVISIBILITY VisArgs;
@@ -900,6 +996,12 @@ DxgkpDisplayCommitVidPnCandidate(
 Cleanup:
     if (KmdTransaction)
         DxgkEndKmdTransaction(Adapter);
+    if (MiniportModeSetFailed)
+    {
+        (VOID)DxgkCollectAdapterDiagnosticInfo(
+                  Adapter,
+                  DXGK_DI_BLACKSCREEN);
+    }
     return Status;
 }
 
@@ -1740,7 +1842,8 @@ DxgkpStopPresentTimer(
  * DxgkDisplayVsyncFlush
  *
  * Called from the adapter DPC when the miniport delivered a CRTC_VSYNC
- * notification (enabled via DxgkDdiControlInterrupt at adapter start).
+ * notification (enabled through the highest compatible ControlInterrupt DDI
+ * at adapter start).
  * Flushes any dirty rects accumulated since the last vblank so presents
  * pace to the scanout instead of waiting for the fallback present timer.
  * The free-running timer stays armed as a safety net for adapters whose
