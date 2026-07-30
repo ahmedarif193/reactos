@@ -3,8 +3,12 @@ config PROFILE_AMD64
     type choice
     var ROSCONFIG_PROFILE
     value generic "Generic AMD64"
+    value lattepandamu "LattePanda Mu"
     default generic
     depends ARCH=amd64
     help
-      Select the generic AMD64 target profile. Optional modules are selected
-      independently in the Modules submenu.
+      Generic builds the architecture-independent AMD64 target.
+
+      LattePanda Mu exposes the board-specific FreeLdr HTTP boot option and
+      external UEFI network stack. Optional modules are selected independently
+      in the Modules submenu.
