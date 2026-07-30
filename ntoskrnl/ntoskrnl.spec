@@ -1957,6 +1957,7 @@
 @ stdcall -arch=arm64 strnlen()
 @ stdcall -arch=arm64 wcscat_s()
 @ stdcall -arch=arm64 wcscpy_s()
+@ cdecl -arch=x86_64 wcscpy_s(ptr int64 ptr)
 @ stdcall -arch=arm64 wcsncat_s()
 @ stdcall -arch=arm64 wcsncpy_s()
 @ stdcall -arch=arm64 wcsnlen()
