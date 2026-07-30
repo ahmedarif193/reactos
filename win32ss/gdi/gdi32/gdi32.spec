@@ -677,10 +677,12 @@
 @ stdcall -version=0x600+ D3DKMTDestroyPagingQueue(ptr) NtGdiDdDDIDestroyPagingQueue
 @ stdcall -version=0x600+ D3DKMTOfferAllocations(ptr) NtGdiDdDDIOfferAllocations
 @ stdcall -version=0x600+ D3DKMTReclaimAllocations(ptr) NtGdiDdDDIReclaimAllocations
+@ stdcall -version=0xA00+ D3DKMTReclaimAllocations2(ptr) NtGdiDdDDIReclaimAllocations2
 @ stdcall -version=0x600+ D3DKMTReserveGpuVirtualAddress(ptr) NtGdiDdDDIReserveGpuVirtualAddress
 @ stdcall -version=0x600+ D3DKMTMapGpuVirtualAddress(ptr) NtGdiDdDDIMapGpuVirtualAddress
 @ stdcall -version=0x600+ D3DKMTFreeGpuVirtualAddress(ptr) NtGdiDdDDIFreeGpuVirtualAddress
 @ stdcall -version=0x600+ D3DKMTUpdateGpuVirtualAddress(ptr) NtGdiDdDDIUpdateGpuVirtualAddress
+@ stdcall -version=0xA00+ D3DKMTGetResourcePresentPrivateDriverData(ptr) NtGdiDdDDIGetResourcePresentPrivateDriverData
 @ stdcall -version=0x600+ D3DKMTWaitForSynchronizationObjectFromCpu(ptr) NtGdiDdDDIWaitForSynchronizationObjectFromCpu
 @ stdcall -version=0x600+ D3DKMTSignalSynchronizationObjectFromCpu(ptr) NtGdiDdDDISignalSynchronizationObjectFromCpu
 @ stdcall -version=0x600+ D3DKMTSetVidPnSourceOwner1(ptr) NtGdiDdDDISetVidPnSourceOwner1
@@ -717,7 +719,7 @@
 @ stdcall -version=0x600+ D3DKMTUnregisterTrimNotification(ptr) NtGdiDdDDIUnregisterTrimNotification
 @ stdcall -version=0x600+ D3DKMTRegisterBudgetChangeNotification(ptr) NtGdiDdDDIRegisterBudgetChangeNotification
 @ stdcall -version=0x600+ D3DKMTUnregisterBudgetChangeNotification(ptr) NtGdiDdDDIUnregisterBudgetChangeNotification
-@ stdcall -version=0x600+ D3DKMTInvalidateCache(ptr) NtGdiDdDDIInvalidateCache
+@ stdcall -version=0xA00+ D3DKMTInvalidateCache(ptr) NtGdiDdDDIInvalidateCache
 @ stdcall -version=0x600+ D3DKMTGetSharedResourceAdapterLuid(ptr) NtGdiDdDDIGetSharedResourceAdapterLuid
 @ stdcall -version=0x600+ D3DKMTOpenResourceFromNtHandle(ptr) NtGdiDdDDIOpenResourceFromNtHandle
 @ stdcall -version=0x600+ D3DKMTQueryResourceInfoFromNtHandle(ptr) NtGdiDdDDIQueryResourceInfoFromNtHandle

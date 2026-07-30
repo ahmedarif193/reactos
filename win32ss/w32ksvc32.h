@@ -776,6 +776,7 @@
     SVC_(GdiDdDDIMapGpuVirtualAddress, 1)
     SVC_(GdiDdDDIFreeGpuVirtualAddress, 1)
     SVC_(GdiDdDDIUpdateGpuVirtualAddress, 1)
+    SVC_(GdiDdDDIGetResourcePresentPrivateDriverData, 1)
     SVC_(GdiDdDDIWaitForSynchronizationObjectFromCpu, 1)
     SVC_(GdiDdDDISignalSynchronizationObjectFromCpu, 1)
     SVC_(GdiDdDDISetVidPnSourceOwner1, 1)
@@ -851,3 +852,4 @@
     SVC_(GdiDdDDIWaitForSynchronizationObjectFromGpu, 1)
     SVC_(GdiDdDDISignalSynchronizationObjectFromGpu2, 1)
     SVC_(GdiDdDDIIsFeatureEnabled, 1)
+    SVC_(GdiDdDDIReclaimAllocations2, 1)
