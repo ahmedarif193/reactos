@@ -526,4 +526,48 @@ WDFEXPORT(WdfDriverIsVersionAvailable)(
     return FALSE;
 }
 
+_Must_inspect_result_
+__drv_maxIRQL(DISPATCH_LEVEL + 1)
+NTSTATUS
+NTAPI
+WDFEXPORT(WdfDriverErrorReportApiMissing)(
+    _In_ PWDF_DRIVER_GLOBALS DriverGlobals,
+    _In_ WDFDRIVER Driver,
+    _In_opt_ PCWSTR FrameworkExtensionName,
+    _In_ ULONG ApiIndex,
+    _In_ BOOLEAN DoesApiReturnNtstatus
+    )
+{
+    PFX_DRIVER_GLOBALS pFxDriverGlobals;
+    FxDriver* pDriver;
+
+    FxObjectHandleGetPtrAndGlobals(GetFxDriverGlobals(DriverGlobals),
+                                   Driver,
+                                   FX_TYPE_DRIVER,
+                                   (PVOID*)&pDriver,
+                                   &pFxDriverGlobals);
+    UNREFERENCED_PARAMETER(pDriver);
+
+    if (FrameworkExtensionName == NULL) {
+        FrameworkExtensionName = L"KMDF";
+    }
+
+    DoTraceLevelMessage(pFxDriverGlobals,
+                        TRACE_LEVEL_ERROR,
+                        TRACINGAPIERROR,
+                        "Driver %s called unavailable %ws API index %lu",
+                        DriverGlobals->DriverName,
+                        FrameworkExtensionName,
+                        ApiIndex);
+
+    if (DoesApiReturnNtstatus == FALSE || pFxDriverGlobals->FxVerifierOn) {
+        FxVerifierBugCheck(pFxDriverGlobals,
+                           WDF_API_UNAVAILABLE,
+                           ApiIndex,
+                           (ULONG_PTR)FrameworkExtensionName);
+    }
+
+    return STATUS_PROCEDURE_NOT_FOUND;
+}
+
 } // extern "C"
