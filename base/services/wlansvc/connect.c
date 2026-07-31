@@ -45,10 +45,10 @@ WlanSvcPickBss(PWLANSVC_INTERFACE Iface, PDOT11_SSID pSsid, DOT11_BSS_TYPE BssTy
  */
 static DWORD
 WlanSvcInstallProfileKey(PWLANSVC_INTERFACE Iface,
-                         PWLANSVC_PROFILE prof,
-                         DOT11_CIPHER_ALGORITHM cipher)
+                         PWLANSVC_PROFILE prof)
 {
     NWIFI_SET_KEY key;
+    DWORD result;
 
     if (prof == NULL || prof->KeyLength == 0)
         return ERROR_SUCCESS;       /* open network: nothing to install */
@@ -63,7 +63,9 @@ WlanSvcInstallProfileKey(PWLANSVC_INTERFACE Iface,
                         ? prof->KeyLength : sizeof(key.KeyData);
     memcpy(key.KeyData, prof->Key, key.KeyLength);
 
-    return NwifiSetKey(&key);
+    result = NwifiSetKey(&key);
+    SecureZeroMemory(&key, sizeof(key));
+    return result;
 }
 
 /*
@@ -81,6 +83,7 @@ WlanSvcConnect(PWLANSVC_INTERFACE Iface, const PWLAN_CONNECTION_PARAMETERS pPara
     DOT11_BSS_TYPE bssType;
     DOT11_AUTH_ALGORITHM auth = DOT11_AUTH_ALGO_80211_OPEN;
     DOT11_CIPHER_ALGORITHM cipher = DOT11_CIPHER_ALGO_NONE;
+    DOT11_CIPHER_ALGORITHM groupCipher = DOT11_CIPHER_ALGO_NONE;
     WCHAR profileName[WLAN_MAX_NAME_LENGTH] = L"";
     DWORD dwResult;
 
@@ -103,6 +106,7 @@ WlanSvcConnect(PWLANSVC_INTERFACE Iface, const PWLAN_CONNECTION_PARAMETERS pPara
             bssType = prof->BssType;
             auth = prof->Auth;
             cipher = prof->Cipher;
+            groupCipher = prof->Cipher;
             wcsncpy(profileName, prof->Name, WLAN_MAX_NAME_LENGTH - 1);
             break;
 
@@ -121,15 +125,14 @@ WlanSvcConnect(PWLANSVC_INTERFACE Iface, const PWLAN_CONNECTION_PARAMETERS pPara
     if (ssid.uSSIDLength == 0 || ssid.uSSIDLength > DOT11_SSID_MAX_LENGTH)
         return ERROR_INVALID_PARAMETER;
 
-    WlanSvcIndicateAcm(Iface, wlan_notification_acm_connection_start);
-
-    /* Choose a BSS from the cache; fall back to a fresh scan if none. */
+    /* Choose a BSS from the cache. Scanning is asynchronous and must not be
+     * overlapped with the firmware join; profile connects can still let the
+     * lower miniport select a BSSID when the cache is empty. */
     bss = WlanSvcPickBss(Iface, &ssid, bssType);
-    if (bss == NULL)
-    {
-        WlanSvcDoScan(Iface, &ssid);
-        bss = WlanSvcPickBss(Iface, &ssid, bssType);
-    }
+    if (bss == NULL && prof == NULL)
+        return ERROR_NOT_FOUND;
+
+    WlanSvcIndicateAcm(Iface, wlan_notification_acm_connection_start);
 
     /* If the BSS advertises security and the profile did not pin it, adopt
      * the BSS's advertised auth/cipher (open networks stay open). */
@@ -138,11 +141,29 @@ WlanSvcConnect(PWLANSVC_INTERFACE Iface, const PWLAN_CONNECTION_PARAMETERS pPara
     {
         auth = bss->DefaultAuth;
         cipher = bss->DefaultCipher;
+        groupCipher = bss->DefaultMulticastCipher;
+    }
+    else if (bss != NULL && bss->SecurityEnabled &&
+             bss->DefaultMulticastCipher != DOT11_CIPHER_ALGO_NONE)
+    {
+        groupCipher = bss->DefaultMulticastCipher;
     }
 
     /* Install the PSK first so it is in place before association starts. */
     if (prof != NULL && prof->KeyLength != 0)
-        WlanSvcInstallProfileKey(Iface, prof, cipher);
+    {
+        dwResult = WlanSvcInstallProfileKey(Iface, prof);
+        if (dwResult != ERROR_SUCCESS)
+        {
+            Iface->State = wlan_interface_state_disconnected;
+            WlanSvcIndicateConnection(Iface,
+                                      wlan_notification_acm_connection_attempt_fail,
+                                      pParams->wlanConnectionMode,
+                                      profileName,
+                                      dwResult);
+            return dwResult;
+        }
+    }
 
     ZeroMemory(&req, sizeof(req));
     req.Size = sizeof(req);
@@ -151,7 +172,7 @@ WlanSvcConnect(PWLANSVC_INTERFACE Iface, const PWLAN_CONNECTION_PARAMETERS pPara
     req.BssType = bssType;
     req.AuthAlgorithm = auth;
     req.UnicastCipher = cipher;
-    req.MulticastCipher = cipher;
+    req.MulticastCipher = groupCipher;
     if (bss != NULL)
         req.DesiredBssid = bss->Bssid;  /* all-zero => any BSSID for the SSID */
 
@@ -200,6 +221,7 @@ WlanSvcDisconnect(PWLANSVC_INTERFACE Iface)
     Iface->State = wlan_interface_state_disconnected;
     Iface->Rssi = -100;
     Iface->LinkQuality = 0;
+    Iface->LinkSpeedKbps = 0;
 
     WlanSvcIndicateAcm(Iface, wlan_notification_acm_disconnected);
     return dwResult;
@@ -220,6 +242,7 @@ WlanSvcUpdateLinkState(PWLANSVC_INTERFACE Iface)
 
     Iface->PhyType = (DOT11_PHY_TYPE)ls.PhyType;
     Iface->Rssi = ls.Rssi;
+    Iface->LinkSpeedKbps = ls.LinkSpeedKbps;
     Iface->LinkQuality = (ls.Rssi <= -100) ? 0 :
                          (ls.Rssi >= -50)  ? 100 :
                          (ULONG)(2 * (ls.Rssi + 100));
@@ -323,8 +346,8 @@ WlanSvcQueryInterface(PWLANSVC_INTERFACE Iface,
             ca.wlanAssociationAttributes.dot11PhyType = Iface->PhyType;
             ca.wlanAssociationAttributes.uDot11PhyIndex = 0;
             ca.wlanAssociationAttributes.wlanSignalQuality = Iface->LinkQuality;
-            ca.wlanAssociationAttributes.ulRxRate = 54000;
-            ca.wlanAssociationAttributes.ulTxRate = 54000;
+            ca.wlanAssociationAttributes.ulRxRate = Iface->LinkSpeedKbps;
+            ca.wlanAssociationAttributes.ulTxRate = Iface->LinkSpeedKbps;
 
             ca.wlanSecurityAttributes.bSecurityEnabled =
                 (Iface->ConnectedAuth != DOT11_AUTH_ALGO_80211_OPEN);
