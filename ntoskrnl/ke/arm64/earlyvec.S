@@ -22,11 +22,11 @@
 .equ ARM64_EARLY_STATE_EXC_PTR,       0x140
 .equ ARM64_EARLY_STATE_EXC_FRAME,     0x148
 .equ ARM64_EARLY_STATE_TRAP_FRAME,    0x210
-.equ ARM64_EARLY_STATE_VFP,           0x370
-.equ ARM64_EARLY_STATE_FPCR,          0x378
-.equ ARM64_EARLY_STATE_FPSR,          0x37C
-.equ ARM64_EARLY_STATE_NEON,          0x380
-.equ ARM64_EARLY_STATE_SIZE,          0x590
+.equ ARM64_EARLY_STATE_VFP,           0x360
+.equ ARM64_EARLY_STATE_FPCR,          0x368
+.equ ARM64_EARLY_STATE_FPSR,          0x36C
+.equ ARM64_EARLY_STATE_NEON,          0x370
+.equ ARM64_EARLY_STATE_SIZE,          0x580
 
 /* Keep the Windows ARM64 16-byte red zone below the interrupted SP untouched. */
 .equ ARM64_EARLY_ENTRY_FRAME_SIZE,    0x20
