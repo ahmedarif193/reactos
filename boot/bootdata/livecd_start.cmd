@@ -7,6 +7,9 @@ if not "%1" == "" (
 
 set S=%SystemRoot%\system32
 
+"%S%\reg.exe" query "HKLM\SYSTEM\CurrentControlSet\Control" /v SystemStartOptions 2>nul | "%S%\findstr.exe" /i "WDDMTEST" >nul
+if not errorlevel 1 goto wddm_test
+
 "%S%\reg.exe" query "HKLM\SYSTEM\CurrentControlSet\Control" /v SystemStartOptions 2>nul | "%S%\findstr.exe" /i "SMPDIAG" >nul
 if errorlevel 1 goto normal_start
 
@@ -31,6 +34,25 @@ goto cpubench_done
 
 "%S%\ping.exe" -n 3 127.0.0.1 >nul
 "%S%\dbgprint.exe" BOOT_TESTS_DONE
+goto :eof
+
+:wddm_test
+rem Boot with /WDDMTEST to run the WDDM D3DKMT suite unattended and mirror every
+rem subtest to the debug port, so the result can be diffed against the same
+rem binary's Windows 11 reference run. The binary rides on an attached payload
+rem volume (same model as the Win11 reference harness) so the boot media does
+rem not have to carry the test suite; the live CD copy is used when present.
+"%S%\ping.exe" -n 6 127.0.0.1 >nul
+set WDDMEXE=
+if exist "%SystemRoot%\bin\d3dkmt_apitest.exe" set WDDMEXE=%SystemRoot%\bin\d3dkmt_apitest.exe
+for %%D in (C D E F G H I J K L M) do if exist "%%D:\d3dkmt_apitest.exe" set WDDMEXE=%%D:\d3dkmt_apitest.exe
+if "%WDDMEXE%" == "" goto wddm_test_missing
+"%S%\dbgprint.exe" WDDM_APITEST_BEGIN
+"%S%\dbgprint.exe" --winetest "%WDDMEXE%"
+"%S%\dbgprint.exe" WDDM_APITEST_END
+goto :eof
+:wddm_test_missing
+"%S%\dbgprint.exe" WDDM_APITEST_MISSING
 goto :eof
 
 :normal_start
