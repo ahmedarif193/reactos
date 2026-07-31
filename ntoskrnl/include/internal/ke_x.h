@@ -1355,6 +1355,26 @@ KiIsKernelApcDeliverable(IN PKTHREAD Thread,
 }
 
 //
+// Queue active-count updates are not all made while holding the queue's
+// dispatcher-object lock. In particular, a thread can be unwaited while the
+// signaling object is locked instead. Keep every read-modify-write atomic so
+// those transitions cannot lose one another on SMP.
+//
+FORCEINLINE
+LONG
+KiIncrementQueueCurrentCount(IN PKQUEUE Queue)
+{
+    return InterlockedIncrement((volatile LONG *)&Queue->CurrentCount);
+}
+
+FORCEINLINE
+LONG
+KiDecrementQueueCurrentCount(IN PKQUEUE Queue)
+{
+    return InterlockedDecrement((volatile LONG *)&Queue->CurrentCount);
+}
+
+//
 // Undoes KiActivateWaiterQueue's active-count decrement when a wait on
 // another object is abandoned before being published, so the queue does
 // not over-admit workers.
@@ -1368,7 +1388,7 @@ KiUndoActivateWaiterQueue(IN PKTHREAD Thread)
     if (Queue)
     {
         KiAcquireDispatcherObject(&Queue->Header);
-        Queue->CurrentCount++;
+        KiIncrementQueueCurrentCount(Queue);
         KiReleaseDispatcherObject(&Queue->Header);
     }
 }

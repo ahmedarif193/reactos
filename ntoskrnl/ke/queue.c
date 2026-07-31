@@ -76,7 +76,7 @@ KiActivateWaiterQueue(IN PKQUEUE Queue)
     ASSERT_QUEUE(Queue);
 
     /* Decrement the number of active threads */
-    Queue->CurrentCount--;
+    KiDecrementQueueCurrentCount(Queue);
 
     /* Make sure the counts are OK */
     if (Queue->CurrentCount < Queue->MaximumCount)
@@ -295,7 +295,7 @@ KiRemoveQueue(IN PKQUEUE Queue,
     else
     {
         /* Same queue, decrement waiting threads */
-        Queue->CurrentCount--;
+        KiDecrementQueueCurrentCount(Queue);
     }
 
     /* Loop until the queue is processed */
@@ -310,7 +310,7 @@ KiRemoveQueue(IN PKQUEUE Queue,
             Queue->Header.SignalState--;
 
             /* Increase numbef of running threads */
-            Queue->CurrentCount++;
+            KiIncrementQueueCurrentCount(Queue);
 
             /* Check if the entry is valid. If not, bugcheck */
             if (!(QueueEntry->Flink) || !(QueueEntry->Blink))
@@ -337,7 +337,7 @@ KiRemoveQueue(IN PKQUEUE Queue,
             if (KiIsKernelApcDeliverable(Thread, Thread->WaitIrql))
             {
                 /* Increment the count and unlock the queue */
-                Queue->CurrentCount++;
+                KiIncrementQueueCurrentCount(Queue);
                 KiReleaseDispatcherObject(&Queue->Header);
                 KiExitDispatcher(Thread->WaitIrql);
             }
@@ -347,7 +347,7 @@ KiRemoveQueue(IN PKQUEUE Queue,
                 if ((NTSTATUS)Status != STATUS_WAIT_0)
                 {
                     QueueEntry = (PLIST_ENTRY)Status;
-                    Queue->CurrentCount++;
+                    KiIncrementQueueCurrentCount(Queue);
                     break;
                 }
 
@@ -360,7 +360,7 @@ KiRemoveQueue(IN PKQUEUE Queue,
                     {
                         /* It did, so we don't need to wait */
                         QueueEntry = (PLIST_ENTRY)STATUS_TIMEOUT;
-                        Queue->CurrentCount++;
+                        KiIncrementQueueCurrentCount(Queue);
                         break;
                     }
 
@@ -374,7 +374,7 @@ KiRemoveQueue(IN PKQUEUE Queue,
                 {
                     /* Not blocking after all: restore the active count and
                      * retry, exactly like the pre-wait APC check above. */
-                    Queue->CurrentCount++;
+                    KiIncrementQueueCurrentCount(Queue);
                     KiReleaseDispatcherObject(&Queue->Header);
                     KiExitDispatcher(Thread->WaitIrql);
                     goto WaitStart;
@@ -443,7 +443,7 @@ WaitStart:
             KxQueueThreadWait();
             Thread->Alertable = Alertable;
             KiAcquireDispatcherObject(&Queue->Header);
-            Queue->CurrentCount--;
+            KiDecrementQueueCurrentCount(Queue);
         }
     }
 

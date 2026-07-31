@@ -216,7 +216,7 @@ KeSignalGateBoostPriority(IN PKGATE Gate)
                 if (WaitThread->Queue)
                 {
                     /* Increment active threads */
-                    WaitThread->Queue->CurrentCount++;
+                    KiIncrementQueueCurrentCount(WaitThread->Queue);
                 }
 
                 /* Release lock */
