@@ -311,12 +311,14 @@ KiArm64WriteUserTtbr(
     _In_ BOOLEAN FlushAll)
 {
     /*
-     * Process switch: TCR.A1 selects the tag in TTBR1. A generation-live ASID
+     * Process switch: TCR.A1 selects the authoritative tag in TTBR1, while NT
+     * mirrors the same process ASID into both TTBRs. A generation-live ASID
      * needs no invalidation; ASID-0 fallback retains the old full-flush safety
      * contract. Interrupts stay masked across the transient TTBR0/TTBR1 pair.
      */
     ULONGLONG RootBase = UserDirectoryBase & KI_ARM64_TTBR_ADDR_MASK;
-    ULONGLONG TaggedUserRoot = RootBase | ((ULONGLONG)Asid << KI_ARM64_TTBR_ASID_SHIFT);
+    ULONGLONG TaggedUserRoot = RootBase |
+                               ((ULONGLONG)Asid << KI_ARM64_TTBR_ASID_SHIFT);
     ULONGLONG TaggedKernelRoot = (KernelRootBase & KI_ARM64_TTBR1_ADDR_MASK) |
                                  ((ULONGLONG)Asid << KI_ARM64_TTBR_ASID_SHIFT);
     ULONGLONG SavedDaif;
