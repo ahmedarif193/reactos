@@ -141,8 +141,9 @@ static inline void tlbi_va_entry(ULONGLONG va, ULONGLONG size)
 #define PTE_BLOCK_NG            (1ULL << 11)
 #define PTE_BLOCK_PXN           (1ULL << 53)
 #define PTE_BLOCK_UXN           (1ULL << 54)
+#define PTE_NT_WRITE            (1ULL << 55)
 #define PTE_BLOCK_RO            (1ULL << 7)
-#define PTE_TABLE_NT_FLAGS      (PTE_BLOCK_NG | PTE_BLOCK_PXN | PTE_BLOCK_UXN)
+#define PTE_TABLE_NT_FLAGS      (PTE_BLOCK_NG | PTE_BLOCK_PXN | PTE_BLOCK_UXN | PTE_NT_WRITE)
 #define PTE_BLOCK_ADDR_MASK_1G  (PTE_ADDR_MASK & ~ARM64_BLOCK_MASK_1G)
 #define PTE_BLOCK_ADDR_MASK_2M  (PTE_ADDR_MASK & ~ARM64_BLOCK_MASK_2M)
 
@@ -150,9 +151,10 @@ static inline void tlbi_va_entry(ULONGLONG va, ULONGLONG size)
  * Windows/NT self-map compatibility: every upper-level table descriptor is
  * visible through PXE/PPE/PDE aliases. Preserve the NT-observed ignored table
  * policy bits while keeping address extraction strictly masked by PTE_ADDR_MASK.
+ * Table descriptors do not carry a leaf AttrIndx; Win11 leaves bits [4:2]
+ * clear in the recursively visible entry.
  */
 #define PTE_TABLE_ATTRS         (PTE_TYPE_VALID | PTE_TYPE_TABLE | \
-                                 PTE_BLOCK_MEMTYPE(ARM64_MEM_ATTR_NORMAL_WB) | \
                                  PTE_BLOCK_INNER_SHARE | \
                                  PTE_BLOCK_AF | \
                                  PTE_TABLE_NT_FLAGS)
@@ -161,7 +163,7 @@ static inline void tlbi_va_entry(ULONGLONG va, ULONGLONG size)
 typedef char arm64_selfmap_index_must_match_nt[
     (((ARM64_SELF_PXE_BASE >> ARM64_PXI_SHIFT) & ARM64_PX_MASK) == 493ULL) ? 1 : -1];
 typedef char arm64_table_attrs_must_match_nt[
-    (PTE_TABLE_ATTRS == 0x0060000000000F13ULL) ? 1 : -1];
+    (PTE_TABLE_ATTRS == 0x00E0000000000F03ULL) ? 1 : -1];
 
 #define PTE_BLOCK_MEMTYPE_MASK  (7ULL << 2)
 
