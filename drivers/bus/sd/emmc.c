@@ -21,6 +21,17 @@
 #define EMMC_BOOT_SIZE_UNIT_BYTES    (128ULL * 1024ULL)
 #define EMMC_RPMB_SIZE_UNIT_BYTES    (128ULL * 1024ULL)
 #define EMMC_GP_SIZE_UNIT_BYTES      (512ULL * 1024ULL)
+#define EMMC_EXT_CSD_PARTITION_SETTING_COMPLETED 155
+#define EMMC_EXT_CSD_HC_WP_GRP_SIZE  221
+#define EMMC_EXT_CSD_HC_ERASE_GRP_SIZE 224
+#define EMMC_PARTITION_SETTING_COMPLETED 0x01
+#define EMMC_PARTITION_SUPPORT_ENABLED 0x01
+
+typedef struct _SDBUS_EMMC_PARTITION_INFO
+{
+    UCHAR PartitionId;
+    ULONGLONG SizeBytes;
+} SDBUS_EMMC_PARTITION_INFO, *PSDBUS_EMMC_PARTITION_INFO;
 
 static __inline ULONG
 SdBusEmmcBuildSwitchArgument(
@@ -74,6 +85,12 @@ SdBusEmmcWaitReadyByRca(
             return CmdStatus;
         }
 
+        CmdStatus = SdBusR1Status(Status);
+        if (!NT_SUCCESS(CmdStatus))
+        {
+            return CmdStatus;
+        }
+
         if (Status & EMMC_STATUS_SWITCH_ERROR)
         {
             DPRINT1("SdBusEmmcWaitReadyByRca: SWITCH_ERROR set in status 0x%08lx\n",
@@ -118,6 +135,7 @@ SdBusEmmcSwitchByRca(
     _In_ ULONG TimeoutMs)
 {
     ULONG Argument;
+    ULONG Response;
     NTSTATUS Status;
 
     if (FdoExtension == NULL)
@@ -148,10 +166,16 @@ SdBusEmmcSwitchByRca(
                               SDHCI_CMD_RESP_48_BUSY |
                                   SDHCI_CMD_CRC_CHECK |
                                   SDHCI_CMD_INDEX_CHECK,
-                              NULL);
+                              &Response);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("SdBusEmmcSwitchByRca: CMD6 failed (0x%08lx)\n", Status);
+        return Status;
+    }
+
+    Status = SdBusR1Status(Response);
+    if (!NT_SUCCESS(Status))
+    {
         return Status;
     }
 
@@ -380,12 +404,14 @@ SdBusCreateEmmcPartitionPdo(
     _In_ PFDO_EXTENSION FdoExtension,
     _In_ PPDO_EXTENSION MainPdo,
     _In_ UCHAR PartitionId,
-    _In_ ULONGLONG PartitionSize)
+    _In_ ULONGLONG PartitionSize,
+    _Out_ PDEVICE_OBJECT *CreatedPdo)
 {
     PDEVICE_OBJECT Pdo;
     PPDO_EXTENSION PdoExtension;
     NTSTATUS Status;
-    KIRQL OldIrql;
+
+    *CreatedPdo = NULL;
 
     Status = IoCreateDevice(FdoExtension->Common.Self->DriverObject,
                             sizeof(PDO_EXTENSION),
@@ -413,8 +439,6 @@ SdBusCreateEmmcPartitionPdo(
     PdoExtension->Present = TRUE;
     PdoExtension->ReportedMissing = FALSE;
     PdoExtension->Started = FALSE;
-    PdoExtension->InterfaceReferenceCount = 0;
-
     PdoExtension->CardType = MainPdo->CardType;
     PdoExtension->Cid = MainPdo->Cid;
     PdoExtension->Csd = MainPdo->Csd;
@@ -434,15 +458,13 @@ SdBusCreateEmmcPartitionPdo(
     IoInitializeRemoveLock(&PdoExtension->RemoveLock, TAG_SDBUS, 0, 0);
 
     Pdo->Flags |= DO_DIRECT_IO;
-    Pdo->Flags &= ~DO_DEVICE_INITIALIZING;
-
-    KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
-    InsertTailList(&FdoExtension->ChildPdoList, &PdoExtension->ListEntry);
-    FdoExtension->ChildPdoCount++;
-    KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
-
-    DPRINT1("SdBusCreateEmmcPartitionPdo: partition=%u size=%I64u bytes PDO=%p\n",
-            PartitionId, PartitionSize, Pdo);
+    if (FdoExtension->Common.PowerPagable)
+    {
+        Pdo->Flags |= DO_POWER_PAGABLE;
+    }
+    SdBusInitializeDeviceUsage(&PdoExtension->Common,
+                               FdoExtension->Common.PowerPagable);
+    *CreatedPdo = Pdo;
     return STATUS_SUCCESS;
 }
 
@@ -461,12 +483,21 @@ SdBusEmmcEnumeratePartitions(
     _In_ PPDO_EXTENSION MainPdo)
 {
     const UCHAR *ExtCsd;
+    SDBUS_EMMC_PARTITION_INFO PartitionInfo[7];
+    PDEVICE_OBJECT PartitionPdos[7];
+    ULONG PartitionCount = 0;
+    ULONG CreatedCount = 0;
     ULONG BootSizeMult;
     ULONG RpmbSizeMult;
     ULONG GpSizeMult;
+    ULONG HcEraseGroupSize;
+    ULONG HcWriteProtectGroupSize;
     ULONGLONG PartSizeBytes;
     UCHAR PartitioningSupport;
     UCHAR Partition;
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+    NTSTATUS Status;
 
     if (FdoExtension == NULL || MainPdo == NULL)
     {
@@ -480,9 +511,13 @@ SdBusEmmcEnumeratePartitions(
     }
 
     ExtCsd = MainPdo->ExtCsd;
+    RtlZeroMemory(PartitionInfo, sizeof(PartitionInfo));
+    RtlZeroMemory(PartitionPdos, sizeof(PartitionPdos));
     PartitioningSupport = ExtCsd[EMMC_EXT_CSD_PARTITIONING_SUPPORT];
     BootSizeMult = ExtCsd[EMMC_EXT_CSD_BOOT_SIZE_MULT_OFFSET];
     RpmbSizeMult = ExtCsd[EMMC_EXT_CSD_RPMB_SIZE_MULT_OFFSET];
+    HcEraseGroupSize = ExtCsd[EMMC_EXT_CSD_HC_ERASE_GRP_SIZE];
+    HcWriteProtectGroupSize = ExtCsd[EMMC_EXT_CSD_HC_WP_GRP_SIZE];
 
     DPRINT1("SdBusEmmcEnumeratePartitions: PARTITIONING_SUPPORT=0x%02X BOOT=%lu RPMB=%lu\n",
             PartitioningSupport, BootSizeMult, RpmbSizeMult);
@@ -490,34 +525,156 @@ SdBusEmmcEnumeratePartitions(
     if (BootSizeMult > 0)
     {
         PartSizeBytes = (ULONGLONG)BootSizeMult * EMMC_BOOT_SIZE_UNIT_BYTES;
-
-        SdBusCreateEmmcPartitionPdo(FdoExtension, MainPdo,
-                                    EMMC_PARTITION_BOOT0, PartSizeBytes);
-        SdBusCreateEmmcPartitionPdo(FdoExtension, MainPdo,
-                                    EMMC_PARTITION_BOOT1, PartSizeBytes);
+        PartitionInfo[PartitionCount].PartitionId = EMMC_PARTITION_BOOT0;
+        PartitionInfo[PartitionCount++].SizeBytes = PartSizeBytes;
+        PartitionInfo[PartitionCount].PartitionId = EMMC_PARTITION_BOOT1;
+        PartitionInfo[PartitionCount++].SizeBytes = PartSizeBytes;
     }
 
     if (RpmbSizeMult > 0)
     {
         PartSizeBytes = (ULONGLONG)RpmbSizeMult * EMMC_RPMB_SIZE_UNIT_BYTES;
-        SdBusCreateEmmcPartitionPdo(FdoExtension, MainPdo,
-                                    EMMC_PARTITION_RPMB, PartSizeBytes);
+        PartitionInfo[PartitionCount].PartitionId = EMMC_PARTITION_RPMB;
+        PartitionInfo[PartitionCount++].SizeBytes = PartSizeBytes;
     }
 
-    for (Partition = 0; Partition < 4; Partition++)
+    if ((PartitioningSupport & EMMC_PARTITION_SUPPORT_ENABLED) &&
+        (ExtCsd[EMMC_EXT_CSD_PARTITION_SETTING_COMPLETED] &
+         EMMC_PARTITION_SETTING_COMPLETED) != 0)
     {
-        const UCHAR *Slot =
-            &ExtCsd[EMMC_EXT_CSD_GP_SIZE_MULT_OFFSET + (Partition * 3)];
-        GpSizeMult = SdBusEmmcRead24Le(Slot);
-        if (GpSizeMult == 0)
+        for (Partition = 0; Partition < 4; Partition++)
         {
-            continue;
+            const UCHAR *Slot =
+                &ExtCsd[EMMC_EXT_CSD_GP_SIZE_MULT_OFFSET + (Partition * 3)];
+            GpSizeMult = SdBusEmmcRead24Le(Slot);
+            if (GpSizeMult == 0)
+            {
+                continue;
+            }
+            if (HcEraseGroupSize == 0 || HcWriteProtectGroupSize == 0)
+            {
+                DPRINT1("SdBusEmmcEnumeratePartitions: invalid GP group "
+                        "multipliers (erase=%lu wp=%lu)\n",
+                        HcEraseGroupSize, HcWriteProtectGroupSize);
+                return STATUS_DEVICE_DATA_ERROR;
+            }
+
+            PartSizeBytes = (ULONGLONG)GpSizeMult *
+                            HcEraseGroupSize *
+                            HcWriteProtectGroupSize *
+                            EMMC_GP_SIZE_UNIT_BYTES;
+            PartitionInfo[PartitionCount].PartitionId =
+                (UCHAR)(EMMC_PARTITION_GPP1 + Partition);
+            PartitionInfo[PartitionCount++].SizeBytes = PartSizeBytes;
+        }
+    }
+
+    KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
+    {
+        ULONG ExistingCount = 0;
+        UCHAR SeenPartitions = 0;
+
+        Status = STATUS_SUCCESS;
+        for (Entry = FdoExtension->ChildPdoList.Flink;
+             Entry != &FdoExtension->ChildPdoList;
+             Entry = Entry->Flink)
+        {
+            PPDO_EXTENSION Existing;
+            ULONG InfoIndex;
+            UCHAR PartitionBit;
+
+            Existing = CONTAINING_RECORD(Entry, PDO_EXTENSION, ListEntry);
+            if (!Existing->IsEmmcPartition ||
+                Existing->InsertionGeneration != MainPdo->InsertionGeneration)
+            {
+                continue;
+            }
+
+            for (InfoIndex = 0; InfoIndex < PartitionCount; InfoIndex++)
+            {
+                if (PartitionInfo[InfoIndex].PartitionId ==
+                    Existing->EmmcPartitionId)
+                {
+                    break;
+                }
+            }
+            PartitionBit = (UCHAR)(1U << Existing->EmmcPartitionId);
+            if (!Existing->Present || InfoIndex == PartitionCount ||
+                (SeenPartitions & PartitionBit) != 0 ||
+                Existing->EmmcPartitionSizeBytes !=
+                    PartitionInfo[InfoIndex].SizeBytes)
+            {
+                Status = STATUS_DEVICE_DATA_ERROR;
+                break;
+            }
+
+            Existing->CardType = MainPdo->CardType;
+            Existing->Cid = MainPdo->Cid;
+            Existing->Csd = MainPdo->Csd;
+            RtlCopyMemory(Existing->ExtCsd, MainPdo->ExtCsd,
+                          sizeof(Existing->ExtCsd));
+            Existing->RelativeAddress = MainPdo->RelativeAddress;
+            Existing->HighCapacity = MainPdo->HighCapacity;
+            Existing->WriteProtected = MainPdo->WriteProtected;
+            Existing->TotalSectors =
+                Existing->EmmcPartitionSizeBytes / SD_DEFAULT_BLOCK_SIZE;
+            SeenPartitions |= PartitionBit;
+            ExistingCount++;
         }
 
-        PartSizeBytes = (ULONGLONG)GpSizeMult * EMMC_GP_SIZE_UNIT_BYTES;
-        SdBusCreateEmmcPartitionPdo(FdoExtension, MainPdo,
-                                    (UCHAR)(EMMC_PARTITION_GPP1 + Partition),
-                                    PartSizeBytes);
+        if (NT_SUCCESS(Status) && ExistingCount != 0 &&
+            ExistingCount != PartitionCount)
+        {
+            Status = STATUS_DEVICE_DATA_ERROR;
+        }
+
+        if (!NT_SUCCESS(Status) || ExistingCount != 0)
+        {
+            KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
+            return Status;
+        }
+    }
+    KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
+
+    for (Partition = 0; Partition < PartitionCount; Partition++)
+    {
+        Status = SdBusCreateEmmcPartitionPdo(
+            FdoExtension,
+            MainPdo,
+            PartitionInfo[Partition].PartitionId,
+            PartitionInfo[Partition].SizeBytes,
+            &PartitionPdos[Partition]);
+        if (!NT_SUCCESS(Status))
+        {
+            while (CreatedCount != 0)
+            {
+                CreatedCount--;
+                IoDeleteDevice(PartitionPdos[CreatedCount]);
+            }
+            return Status;
+        }
+        CreatedCount++;
+    }
+
+    KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
+    for (Partition = 0; Partition < PartitionCount; Partition++)
+    {
+        PPDO_EXTENSION PartitionExtension;
+
+        PartitionExtension = (PPDO_EXTENSION)
+            PartitionPdos[Partition]->DeviceExtension;
+        PartitionPdos[Partition]->Flags &= ~DO_DEVICE_INITIALIZING;
+        InsertTailList(&FdoExtension->ChildPdoList,
+                       &PartitionExtension->ListEntry);
+        FdoExtension->ChildPdoCount++;
+    }
+    KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
+
+    for (Partition = 0; Partition < PartitionCount; Partition++)
+    {
+        DPRINT1("SdBusCreateEmmcPartitionPdo: partition=%u size=%I64u bytes "
+                "PDO=%p\n", PartitionInfo[Partition].PartitionId,
+                PartitionInfo[Partition].SizeBytes, PartitionPdos[Partition]);
     }
 
     return STATUS_SUCCESS;

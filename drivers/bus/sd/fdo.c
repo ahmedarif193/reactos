@@ -12,6 +12,37 @@
 
 #include "hardware.h"
 
+static VOID
+SdBusCompleteFdoIrp(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _Inout_ PIRP Irp,
+    _In_ CCHAR PriorityBoost)
+{
+    IoReleaseRemoveLock(&FdoExtension->RemoveLock, Irp);
+    IoCompleteRequest(Irp, PriorityBoost);
+}
+
+static NTSTATUS
+SdBusForwardFdoPnpIrp(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _Inout_ PIRP Irp,
+    _In_ BOOLEAN CopyStack)
+{
+    PDEVICE_OBJECT LowerDevice = FdoExtension->LowerDevice;
+
+    if (CopyStack)
+    {
+        IoCopyCurrentIrpStackLocationToNext(Irp);
+    }
+    else
+    {
+        IoSkipCurrentIrpStackLocation(Irp);
+    }
+
+    IoReleaseRemoveLock(&FdoExtension->RemoveLock, Irp);
+    return IoCallDriver(LowerDevice, Irp);
+}
+
 /**
  * @brief IoCompletion routine that signals an event when the lower driver finishes.
  *
@@ -145,6 +176,40 @@ SdBusReleaseDmaAdapter(
     FdoExtension->UseDmaMappingForAdma2 = FALSE;
 }
 
+static VOID
+SdBusReleaseControllerResources(
+    _In_ PFDO_EXTENSION FdoExtension)
+{
+    SdBusReleaseDmaAdapter(FdoExtension);
+
+    if (FdoExtension->Adma2Table != NULL)
+    {
+        MmFreeContiguousMemory(FdoExtension->Adma2Table);
+        FdoExtension->Adma2Table = NULL;
+    }
+    FdoExtension->UseAdma2 = FALSE;
+    FdoExtension->Adma2MaxDescriptors = 0;
+
+    if (FdoExtension->DmaBuffer != NULL)
+    {
+        MmFreeContiguousMemory(FdoExtension->DmaBuffer);
+        FdoExtension->DmaBuffer = NULL;
+    }
+    FdoExtension->UseSdma = FALSE;
+    FdoExtension->DmaBufferSize = 0;
+
+    SdBusHardwareRelease(FdoExtension);
+
+    if (FdoExtension->RegistersMapped)
+    {
+        MmUnmapIoSpace(FdoExtension->RegisterBase,
+                       FdoExtension->RegisterLength);
+        FdoExtension->RegisterBase = NULL;
+        FdoExtension->RegisterLength = 0;
+        FdoExtension->RegistersMapped = FALSE;
+    }
+}
+
 /**
  * @brief Initialize DMA adapter used for MDL -> bus-address mapping.
  *
@@ -246,8 +311,9 @@ SdBusForwardIrpAndWait(
                               KernelMode,
                               FALSE,
                               NULL);
-        Status = Irp->IoStatus.Status;
     }
+
+    Status = Irp->IoStatus.Status;
 
     return Status;
 }
@@ -279,6 +345,8 @@ SdBusInitializeController(
     BOOLEAN NeedDmaMappingForAdma2;
     LARGE_INTEGER Delay;
 
+    InterlockedExchange(&FdoExtension->CurrentClockKhz, 0);
+
     DPRINT1("SdBusInitializeController: RegisterBase %p\n",
            FdoExtension->RegisterBase);
 
@@ -293,6 +361,8 @@ SdBusInitializeController(
     Caps &= ~SDHCI_CAP_ADMA2_SUPPORT;
     FdoExtension->HostCapabilities = Caps;
     FdoExtension->HostCapabilities2 = Caps2;
+    FdoExtension->NonRemovable =
+        ((Caps & SDHCI_CAP_SLOT_TYPE_MASK) != SDHCI_CAP_SLOT_TYPE_REMOVABLE);
 
     /* Extract base clock frequency */
     FdoExtension->MaxClockFrequency = SDHCI_BASE_CLK_MHZ(Caps) * 1000; /* kHz */
@@ -388,6 +458,11 @@ SdBusInitializeController(
         /* Enable SD clock output */
         ClockControl |= SDHCI_CLK_SD_CLK_ENABLE;
         SdBusWriteReg16(FdoExtension, SDHCI_CLOCK_CONTROL, ClockControl);
+        InterlockedExchange(&FdoExtension->CurrentClockKhz,
+                            (LONG)(Divisor == 0 ?
+                                   FdoExtension->MaxClockFrequency :
+                                   FdoExtension->MaxClockFrequency /
+                                       ((ULONG)Divisor << 1)));
     }
 
     /* Reset leaves the host in 1-bit mode until card enumeration widens it. */
@@ -467,13 +542,21 @@ SdBusInitializeController(
     if ((Caps & SDHCI_CAP_ADMA2_SUPPORT) && !NeedDmaMappingForAdma2)
     {
         PHYSICAL_ADDRESS HighestAcceptable;
+        PHYSICAL_ADDRESS LowestAcceptable;
+        PHYSICAL_ADDRESS BoundaryMultiple;
+
         HighestAcceptable.QuadPart = 0xFFFFFFFF; /* 32-bit addressable */
+        LowestAcceptable.QuadPart = 0;
+        BoundaryMultiple.QuadPart = 0;
 
         FdoExtension->Adma2MaxDescriptors = 512;
         FdoExtension->Adma2Table = (PSDHCI_ADMA2_DESCRIPTOR_32)
-            MmAllocateContiguousMemory(
+            MmAllocateContiguousMemorySpecifyCache(
                 FdoExtension->Adma2MaxDescriptors * sizeof(SDHCI_ADMA2_DESCRIPTOR_32),
-                HighestAcceptable);
+                LowestAcceptable,
+                HighestAcceptable,
+                BoundaryMultiple,
+                MmNonCached);
 
         if (FdoExtension->Adma2Table != NULL)
         {
@@ -590,7 +673,7 @@ SdBusFdoStartDevice(
     {
         DPRINT1("SdBusFdoStartDevice: Lower driver failed start (0x%08lx)\n", Status);
         Irp->IoStatus.Status = Status;
-        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        SdBusCompleteFdoIrp(FdoExtension, Irp, IO_NO_INCREMENT);
         return Status;
     }
 
@@ -603,7 +686,7 @@ SdBusFdoStartDevice(
         DPRINT1("SdBusFdoStartDevice: No resources assigned\n");
         Status = STATUS_INSUFFICIENT_RESOURCES;
         Irp->IoStatus.Status = Status;
-        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        SdBusCompleteFdoIrp(FdoExtension, Irp, IO_NO_INCREMENT);
         return Status;
     }
 
@@ -656,7 +739,7 @@ SdBusFdoStartDevice(
         DPRINT1("SdBusFdoStartDevice: No memory resource found\n");
         Status = STATUS_INSUFFICIENT_RESOURCES;
         Irp->IoStatus.Status = Status;
-        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        SdBusCompleteFdoIrp(FdoExtension, Irp, IO_NO_INCREMENT);
         return Status;
     }
 
@@ -669,7 +752,7 @@ SdBusFdoStartDevice(
         DPRINT1("SdBusFdoStartDevice: MmMapIoSpace failed\n");
         Status = STATUS_INSUFFICIENT_RESOURCES;
         Irp->IoStatus.Status = Status;
-        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        SdBusCompleteFdoIrp(FdoExtension, Irp, IO_NO_INCREMENT);
         return Status;
     }
 
@@ -685,7 +768,7 @@ SdBusFdoStartDevice(
         FdoExtension->RegisterBase = NULL;
         FdoExtension->RegistersMapped = FALSE;
         Irp->IoStatus.Status = Status;
-        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        SdBusCompleteFdoIrp(FdoExtension, Irp, IO_NO_INCREMENT);
         return Status;
     }
 
@@ -706,16 +789,15 @@ SdBusFdoStartDevice(
         if (!NT_SUCCESS(Status))
         {
             DPRINT1("SdBusFdoStartDevice: IoConnectInterrupt failed (0x%08lx)\n", Status);
-            SdBusHardwareRelease(FdoExtension);
-            MmUnmapIoSpace(FdoExtension->RegisterBase, FdoExtension->RegisterLength);
-            FdoExtension->RegisterBase = NULL;
-            FdoExtension->RegistersMapped = FALSE;
+            SdBusReleaseControllerResources(FdoExtension);
             Irp->IoStatus.Status = Status;
-            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            SdBusCompleteFdoIrp(FdoExtension, Irp, IO_NO_INCREMENT);
             return Status;
         }
     }
 
+    /* Select platform hooks before controller initialization so their reset
+     * and voltage requirements participate in the first start, not only resume. */
     (VOID)SdBusHardwareAttach(FdoExtension);
 
     /* Initialize the SDHCI controller */
@@ -729,27 +811,9 @@ SdBusFdoStartDevice(
             FdoExtension->InterruptObject = NULL;
         }
 
-        if (FdoExtension->Adma2Table != NULL)
-        {
-            MmFreeContiguousMemory(FdoExtension->Adma2Table);
-            FdoExtension->Adma2Table = NULL;
-            FdoExtension->UseAdma2 = FALSE;
-        }
-
-        if (FdoExtension->DmaBuffer != NULL)
-        {
-            MmFreeContiguousMemory(FdoExtension->DmaBuffer);
-            FdoExtension->DmaBuffer = NULL;
-            FdoExtension->UseSdma = FALSE;
-        }
-
-        SdBusReleaseDmaAdapter(FdoExtension);
-        SdBusHardwareRelease(FdoExtension);
-        MmUnmapIoSpace(FdoExtension->RegisterBase, FdoExtension->RegisterLength);
-        FdoExtension->RegisterBase = NULL;
-        FdoExtension->RegistersMapped = FALSE;
+        SdBusReleaseControllerResources(FdoExtension);
         Irp->IoStatus.Status = Status;
-        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        SdBusCompleteFdoIrp(FdoExtension, Irp, IO_NO_INCREMENT);
         return Status;
     }
 
@@ -760,6 +824,21 @@ SdBusFdoStartDevice(
     {
         DPRINT1("SdBusFdoStartDevice: SdBusInitializeRequestQueue failed (0x%08lx)\n",
                 Status);
+
+        FdoExtension->Common.DeviceState = SdBusDeviceStateStopped;
+        if (FdoExtension->InterruptObject != NULL)
+        {
+            IoDisconnectInterrupt(FdoExtension->InterruptObject);
+            FdoExtension->InterruptObject = NULL;
+        }
+        KeRemoveQueueDpc(&FdoExtension->CardDetectDpc);
+        KeRemoveQueueDpc(&FdoExtension->CommandDpc);
+        KeFlushQueuedDpcs();
+        SdBusReleaseControllerResources(FdoExtension);
+
+        Irp->IoStatus.Status = Status;
+        SdBusCompleteFdoIrp(FdoExtension, Irp, IO_NO_INCREMENT);
+        return Status;
     }
 
     {
@@ -785,14 +864,23 @@ SdBusFdoStartDevice(
 
         if ((PresentState & SDHCI_PS_CARD_INSERTED) || FdoExtension->NonRemovable)
         {
-            Status = SdBusEnumerateInsertedCard(FdoExtension, FALSE, FALSE);
-            if (!NT_SUCCESS(Status))
+            if (FdoExtension->ChildPdoCount != 0)
             {
-                DPRINT1("SdBusFdoStartDevice: initial card enumeration failed "
-                        "(0x%08lx)\n", Status);
+                SdBusReIdentifyChildren(FdoExtension);
+            }
+            else
+            {
+                Status = SdBusEnumerateInsertedCard(FdoExtension, FALSE, FALSE);
+                if (!NT_SUCCESS(Status))
+                {
+                    DPRINT1("SdBusFdoStartDevice: initial card enumeration failed "
+                            "(0x%08lx)\n", Status);
+                }
             }
         }
     }
+
+    InterlockedExchange(&FdoExtension->RequestsBlocked, 0);
 
     /* Device is Started and the ISR is live: enable card-detect signaling for hotplug. */
     if (!FdoExtension->NonRemovable)
@@ -801,9 +889,10 @@ SdBusFdoStartDevice(
                                          SDHCI_INT_CARD_INSERTION | SDHCI_INT_CARD_REMOVAL,
                                          0);
     }
+    SdBusRefreshCardInterrupt(FdoExtension);
 
     Irp->IoStatus.Status = STATUS_SUCCESS;
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    SdBusCompleteFdoIrp(FdoExtension, Irp, IO_NO_INCREMENT);
     return STATUS_SUCCESS;
 }
 
@@ -845,7 +934,7 @@ SdBusFdoQueryBusRelations(
         if (Relations == NULL)
         {
             Irp->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
-            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            SdBusCompleteFdoIrp(FdoExtension, Irp, IO_NO_INCREMENT);
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
@@ -859,6 +948,10 @@ SdBusFdoQueryBusRelations(
         {
             PdoExtension = CONTAINING_RECORD(Entry, PDO_EXTENSION, ListEntry);
             if (!PdoExtension->Present)
+            {
+                continue;
+            }
+            if (PdoExtension->IsInternalSdioHost)
             {
                 continue;
             }
@@ -893,8 +986,44 @@ SdBusFdoQueryBusRelations(
 
     Irp->IoStatus.Status = STATUS_SUCCESS;
     Irp->IoStatus.Information = (ULONG_PTR)Relations;
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    SdBusCompleteFdoIrp(FdoExtension, Irp, IO_NO_INCREMENT);
     return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+SdBusFdoDeviceUsageNotification(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _Inout_ PIRP Irp)
+{
+    PIO_STACK_LOCATION IoStack;
+    DEVICE_USAGE_NOTIFICATION_TYPE Type;
+    BOOLEAN InPath;
+    NTSTATUS Status;
+
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    Type = IoStack->Parameters.UsageNotification.Type;
+    InPath = IoStack->Parameters.UsageNotification.InPath;
+
+    Status = SdBusAdjustDeviceUsage(&FdoExtension->Common, Type, InPath);
+    if (NT_SUCCESS(Status))
+    {
+        Irp->IoStatus.Status = STATUS_SUCCESS;
+        Status = SdBusForwardIrpAndWait(FdoExtension, Irp);
+        if (!NT_SUCCESS(Status))
+        {
+            (VOID)SdBusAdjustDeviceUsage(&FdoExtension->Common,
+                                         Type,
+                                         !InPath);
+        }
+        else
+        {
+            IoInvalidateDeviceState(FdoExtension->PhysicalDevice);
+        }
+    }
+
+    Irp->IoStatus.Status = Status;
+    SdBusCompleteFdoIrp(FdoExtension, Irp, IO_NO_INCREMENT);
+    return Status;
 }
 
 /**
@@ -913,6 +1042,8 @@ SdBusFdoStopDevice(
     _In_ PFDO_EXTENSION FdoExtension,
     _Inout_ PIRP Irp)
 {
+    InterlockedExchange(&FdoExtension->RequestsBlocked, 1);
+    SdBusTearDownRequestQueue(FdoExtension);
     FdoExtension->Common.DeviceState = SdBusDeviceStateStopped;
 
     /* Disable all interrupts */
@@ -929,18 +1060,22 @@ SdBusFdoStopDevice(
         FdoExtension->InterruptObject = NULL;
     }
 
+    KeRemoveQueueDpc(&FdoExtension->CardDetectDpc);
+    KeRemoveQueueDpc(&FdoExtension->CommandDpc);
+    KeFlushQueuedDpcs();
+    SdBusReleaseControllerResources(FdoExtension);
+
     Irp->IoStatus.Status = STATUS_SUCCESS;
-    IoSkipCurrentIrpStackLocation(Irp);
-    return IoCallDriver(FdoExtension->LowerDevice, Irp);
+    return SdBusForwardFdoPnpIrp(FdoExtension, Irp, FALSE);
 }
 
 /**
  * @brief Handle IRP_MN_REMOVE_DEVICE for the FDO.
  *
  * Disables interrupts, disconnects the ISR, cancels the card-detect DPC,
- * marks all child PDOs as absent, passes the IRP down, waits for pending
- * I/O via IoReleaseRemoveLockAndWait, unmaps registers, detaches from
- * the device stack, and deletes the FDO.
+ * marks all child PDOs as absent, waits for pending I/O via
+ * IoReleaseRemoveLockAndWait, unmaps registers, passes the IRP down,
+ * detaches from the device stack, and deletes the FDO.
  *
  * @param[in]     FdoExtension  Pointer to the FDO device extension.
  * @param[in,out] Irp           Pointer to the IRP_MN_REMOVE_DEVICE IRP.
@@ -954,8 +1089,15 @@ SdBusFdoRemoveDevice(
 {
     PLIST_ENTRY Entry;
     PPDO_EXTENSION PdoExtension;
+    PDEVICE_OBJECT LowerDevice;
+    PDEVICE_OBJECT Self;
     KIRQL OldIrql;
+    NTSTATUS Status;
 
+    LowerDevice = FdoExtension->LowerDevice;
+    Self = FdoExtension->Common.Self;
+
+    InterlockedExchange(&FdoExtension->RequestsBlocked, 1);
     FdoExtension->Common.DeviceState = SdBusDeviceStateRemoved;
 
     /* Disable all interrupts and disconnect */
@@ -971,8 +1113,10 @@ SdBusFdoRemoveDevice(
         FdoExtension->InterruptObject = NULL;
     }
 
-    /* Cancel pending DPCs */
+    /* Cancel pending DPCs and wait out a DPC that was already running. */
     KeRemoveQueueDpc(&FdoExtension->CardDetectDpc);
+    KeRemoveQueueDpc(&FdoExtension->CommandDpc);
+    KeFlushQueuedDpcs();
 
     /* Mark all child PDOs as no longer present */
     KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
@@ -990,48 +1134,24 @@ SdBusFdoRemoveDevice(
 
     SdBusTearDownRequestQueue(FdoExtension);
 
-    /* Pass the IRP down */
-    Irp->IoStatus.Status = STATUS_SUCCESS;
-    IoSkipCurrentIrpStackLocation(Irp);
-    IoCallDriver(FdoExtension->LowerDevice, Irp);
-
     /* Wait for pending I/O and queued work items to drain */
     IoReleaseRemoveLockAndWait(&FdoExtension->RemoveLock, Irp);
 
-    /* Release DMA adapter */
-    SdBusReleaseDmaAdapter(FdoExtension);
+    /* Hidden pure-SDIO host contexts are never removed by the PnP manager. */
+    SdBusDeleteMissingInternalSdioHosts(FdoExtension);
 
-    /* Free ADMA2 descriptor table */
-    if (FdoExtension->Adma2Table != NULL)
-    {
-        MmFreeContiguousMemory(FdoExtension->Adma2Table);
-        FdoExtension->Adma2Table = NULL;
-        FdoExtension->UseAdma2 = FALSE;
-    }
+    /* Unmap registers after all in-flight work has completed. */
+    SdBusReleaseControllerResources(FdoExtension);
 
-    /* Free SDMA bounce buffer */
-    if (FdoExtension->DmaBuffer != NULL)
-    {
-        MmFreeContiguousMemory(FdoExtension->DmaBuffer);
-        FdoExtension->DmaBuffer = NULL;
-        FdoExtension->UseSdma = FALSE;
-    }
-
-    /* Unmap registers after all in-flight work has completed */
-    SdBusHardwareRelease(FdoExtension);
-
-    if (FdoExtension->RegistersMapped)
-    {
-        MmUnmapIoSpace(FdoExtension->RegisterBase, FdoExtension->RegisterLength);
-        FdoExtension->RegisterBase = NULL;
-        FdoExtension->RegistersMapped = FALSE;
-    }
+    Irp->IoStatus.Status = STATUS_SUCCESS;
+    IoSkipCurrentIrpStackLocation(Irp);
+    Status = IoCallDriver(LowerDevice, Irp);
 
     /* Detach and delete */
-    IoDetachDevice(FdoExtension->LowerDevice);
-    IoDeleteDevice(FdoExtension->Common.Self);
+    IoDetachDevice(LowerDevice);
+    IoDeleteDevice(Self);
 
-    return STATUS_SUCCESS;
+    return Status;
 }
 
 /**
@@ -1050,11 +1170,28 @@ SdBusFdoSurpriseRemoval(
     _In_ PFDO_EXTENSION FdoExtension,
     _Inout_ PIRP Irp)
 {
+    InterlockedExchange(&FdoExtension->RequestsBlocked, 1);
     FdoExtension->Common.DeviceState = SdBusDeviceStateSurpriseRemoved;
 
+    if (FdoExtension->RegistersMapped)
+    {
+        SdBusWriteReg32(FdoExtension, SDHCI_INT_SIGNAL_ENABLE, 0);
+        SdBusWriteReg32(FdoExtension, SDHCI_INT_STATUS_ENABLE, 0);
+    }
+
+    if (FdoExtension->InterruptObject != NULL)
+    {
+        IoDisconnectInterrupt(FdoExtension->InterruptObject);
+        FdoExtension->InterruptObject = NULL;
+    }
+
+    KeRemoveQueueDpc(&FdoExtension->CardDetectDpc);
+    KeRemoveQueueDpc(&FdoExtension->CommandDpc);
+    KeFlushQueuedDpcs();
+    SdBusTearDownRequestQueue(FdoExtension);
+
     Irp->IoStatus.Status = STATUS_SUCCESS;
-    IoSkipCurrentIrpStackLocation(Irp);
-    return IoCallDriver(FdoExtension->LowerDevice, Irp);
+    return SdBusForwardFdoPnpIrp(FdoExtension, Irp, FALSE);
 }
 
 /**
@@ -1105,10 +1242,27 @@ SdBusFdoPnp(
             else
             {
                 /* Not our type, pass down */
-                IoSkipCurrentIrpStackLocation(Irp);
-                Status = IoCallDriver(FdoExtension->LowerDevice, Irp);
+                return SdBusForwardFdoPnpIrp(FdoExtension, Irp, FALSE);
             }
             break;
+
+        case IRP_MN_DEVICE_USAGE_NOTIFICATION:
+            DPRINT("SdBusFdoPnp: IRP_MN_DEVICE_USAGE_NOTIFICATION (type %u, inpath %u)\n",
+                   IoStack->Parameters.UsageNotification.Type,
+                   IoStack->Parameters.UsageNotification.InPath);
+            Status = SdBusFdoDeviceUsageNotification(FdoExtension, Irp);
+            break;
+
+        case IRP_MN_QUERY_PNP_DEVICE_STATE:
+            Status = SdBusForwardIrpAndWait(FdoExtension, Irp);
+            if (NT_SUCCESS(Status) &&
+                SdBusHasActiveDeviceUsage(&FdoExtension->Common))
+            {
+                Irp->IoStatus.Information |= PNP_DEVICE_NOT_DISABLEABLE;
+            }
+            Irp->IoStatus.Status = Status;
+            SdBusCompleteFdoIrp(FdoExtension, Irp, IO_NO_INCREMENT);
+            return Status;
 
         case IRP_MN_STOP_DEVICE:
             DPRINT("SdBusFdoPnp: IRP_MN_STOP_DEVICE\n");
@@ -1131,23 +1285,16 @@ SdBusFdoPnp(
         case IRP_MN_QUERY_REMOVE_DEVICE:
         case IRP_MN_CANCEL_REMOVE_DEVICE:
             Irp->IoStatus.Status = STATUS_SUCCESS;
-            IoSkipCurrentIrpStackLocation(Irp);
-            Status = IoCallDriver(FdoExtension->LowerDevice, Irp);
-            break;
+            return SdBusForwardFdoPnpIrp(FdoExtension, Irp, FALSE);
 
         case IRP_MN_FILTER_RESOURCE_REQUIREMENTS:
             DPRINT("SdBusFdoPnp: IRP_MN_FILTER_RESOURCE_REQUIREMENTS\n");
-            IoCopyCurrentIrpStackLocationToNext(Irp);
-            Status = IoCallDriver(FdoExtension->LowerDevice, Irp);
-            break;
+            return SdBusForwardFdoPnpIrp(FdoExtension, Irp, TRUE);
 
         default:
             /* Pass all unhandled PnP IRPs down to the lower driver */
-            IoSkipCurrentIrpStackLocation(Irp);
-            Status = IoCallDriver(FdoExtension->LowerDevice, Irp);
-            break;
+            return SdBusForwardFdoPnpIrp(FdoExtension, Irp, FALSE);
     }
 
-    IoReleaseRemoveLock(&FdoExtension->RemoveLock, Irp);
     return Status;
 }

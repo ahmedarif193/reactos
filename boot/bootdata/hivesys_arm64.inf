@@ -56,7 +56,7 @@ HKLM,"SYSTEM\CurrentControlSet\Services\Nwifi","DisplayName",0x00000000,"ReactOS
 
 ; The CYW43455 SDIO WiFi function is intentionally not seeded in the
 ; CriticalDeviceDatabase. It is not a boot device, so it must install the
-; ordinary way: umpnpmgr matches SDIO\VEN_02D0&DEV_4345&FUNC_1 against
+; ordinary way: umpnpmgr matches SD\VID_02D0&PID_4345&FN_1 against
 ; cyw43455.inf and runs the Net class installer (hivesys.inf registers
 ; NetCfgx.dll,NetClassInstaller for {4D36E972-...}), which is what creates the
 ; NetCfgInstanceId, Linkage, the Control\Network ...\Connection object that
