@@ -66,10 +66,70 @@ DestroySingleAllocation(
     return pfnDestroy(&da);
 }
 
+
+/*
+ * Presenting on a WDDM 2.0+ adapter goes through a context: dxgkrnl refuses a
+ * context-less present once the adapter reports multi-engine scheduling, which
+ * is the contract a real runtime follows. The Windows 11 reference image only
+ * exposes a WDDM 1.3 basic display adapter, where the device-only form is the
+ * only form, so these tests present through a context when one can be created
+ * and fall back to the device-only path otherwise. That keeps the same binary
+ * honest on both.
+ *
+ * D3DKMT_PRESENT.hDevice and .hContext are one union member, so exactly one of
+ * them may be written -- assigning both makes the second erase the first.
+ */
+static D3DKMT_HANDLE
+CreatePresentContext(D3DKMT_HANDLE hDevice)
+{
+    PFN_D3DKMTCreateContext pfn;
+    D3DKMT_CREATECONTEXT cc;
+    NTSTATUS Status;
+
+    pfn = (PFN_D3DKMTCreateContext)LoadD3DKMTProc("D3DKMTCreateContext");
+    if (pfn == NULL)
+    {
+        trace("D3DKMTCreateContext is not exported; using the device present path\n");
+        return 0;
+    }
+
+    memset(&cc, 0, sizeof(cc));
+    cc.hDevice = hDevice;
+    cc.NodeOrdinal = 0;
+    cc.EngineAffinity = 0;
+
+    Status = pfn(&cc);
+    if (!NT_SUCCESS(Status))
+    {
+        trace("CreateContext for the present path failed 0x%08lX\n", (long)Status);
+        return 0;
+    }
+
+    return cc.hContext;
+}
+
+static void
+DestroyPresentContext(D3DKMT_HANDLE hContext)
+{
+    PFN_D3DKMTDestroyContext pfn;
+    D3DKMT_DESTROYCONTEXT dc;
+
+    if (hContext == 0)
+        return;
+
+    pfn = (PFN_D3DKMTDestroyContext)LoadD3DKMTProc("D3DKMTDestroyContext");
+    if (pfn == NULL)
+        return;
+
+    memset(&dc, 0, sizeof(dc));
+    dc.hContext = hContext;
+    pfn(&dc);
+}
+
 /* ---- Test 1: Basic present with source allocation ---- */
 static void Test_BasicPresent(void)
 {
-    D3DKMT_HANDLE hAdapter, hDevice, hAlloc;
+    D3DKMT_HANDLE hAdapter, hDevice, hAlloc, hContext;
     D3DKMT_PRESENT pres;
     NTSTATUS Status;
 
@@ -92,10 +152,17 @@ static void Test_BasicPresent(void)
         return;
     }
 
+    hContext = CreatePresentContext(hDevice);
+
     memset(&pres, 0, sizeof(pres));
-    pres.hDevice = hDevice;
+    if (hContext != 0)
+        pres.hContext = hContext;
+    else
+        pres.hDevice = hDevice;
     pres.hSource = hAlloc;
     pres.VidPnSourceId = 0;
+    pres.Flags.SrcRectValid = 1;
+    pres.Flags.DstRectValid = 1;
     pres.SrcRect.left = 0;
     pres.SrcRect.top = 0;
     pres.SrcRect.right = 1024;
@@ -106,6 +173,7 @@ static void Test_BasicPresent(void)
     ok_succeeded(Status,
        "Basic present should succeed, got 0x%08lX\n", Status);
 
+    DestroyPresentContext(hContext);
     DestroySingleAllocation(pfnD3DKMTDestroyAllocation, hDevice, hAlloc);
     DestroyTestDevice(hDevice);
     CloseAdapter(hAdapter);
@@ -114,7 +182,7 @@ static void Test_BasicPresent(void)
 /* ---- Test 2: BLT present (source to destination) ---- */
 static void Test_BltPresent(void)
 {
-    D3DKMT_HANDLE hAdapter, hDevice, hSrc, hDst;
+    D3DKMT_HANDLE hAdapter, hDevice, hSrc, hDst, hContext;
     D3DKMT_PRESENT pres;
     NTSTATUS Status;
 
@@ -141,11 +209,18 @@ static void Test_BltPresent(void)
         return;
     }
 
+    hContext = CreatePresentContext(hDevice);
+
     memset(&pres, 0, sizeof(pres));
-    pres.hDevice = hDevice;
+    if (hContext != 0)
+        pres.hContext = hContext;
+    else
+        pres.hDevice = hDevice;
     pres.hSource = hSrc;
     pres.hDestination = hDst;
     pres.VidPnSourceId = 0;
+    pres.Flags.SrcRectValid = 1;
+    pres.Flags.DstRectValid = 1;
     pres.SrcRect.right = 640;
     pres.SrcRect.bottom = 480;
     pres.DstRect = pres.SrcRect;
@@ -154,6 +229,7 @@ static void Test_BltPresent(void)
     ok_succeeded(Status,
        "BLT present should succeed, got 0x%08lX\n", Status);
 
+    DestroyPresentContext(hContext);
     DestroySingleAllocation(pfnD3DKMTDestroyAllocation, hDevice, hDst);
     DestroySingleAllocation(pfnD3DKMTDestroyAllocation, hDevice, hSrc);
     DestroyTestDevice(hDevice);
@@ -209,7 +285,7 @@ static void Test_PresentInvalidDevice(void)
 /* ---- Test 5: Rapid presents (100 iterations) ---- */
 static void Test_RapidPresents(void)
 {
-    D3DKMT_HANDLE hAdapter, hDevice, hAlloc;
+    D3DKMT_HANDLE hAdapter, hDevice, hAlloc, hContext;
     D3DKMT_PRESENT pres;
     NTSTATUS Status;
     ULONG i;
@@ -234,10 +310,17 @@ static void Test_RapidPresents(void)
         return;
     }
 
+    hContext = CreatePresentContext(hDevice);
+
     memset(&pres, 0, sizeof(pres));
-    pres.hDevice = hDevice;
+    if (hContext != 0)
+        pres.hContext = hContext;
+    else
+        pres.hDevice = hDevice;
     pres.hSource = hAlloc;
     pres.VidPnSourceId = 0;
+    pres.Flags.SrcRectValid = 1;
+    pres.Flags.DstRectValid = 1;
     pres.SrcRect.right = 640;
     pres.SrcRect.bottom = 480;
     pres.DstRect = pres.SrcRect;
@@ -252,6 +335,7 @@ static void Test_RapidPresents(void)
     ok(successCount == 100,
        "All 100 rapid presents should succeed, got %lu\n", successCount);
 
+    DestroyPresentContext(hContext);
     DestroySingleAllocation(pfnD3DKMTDestroyAllocation, hDevice, hAlloc);
     DestroyTestDevice(hDevice);
     CloseAdapter(hAdapter);

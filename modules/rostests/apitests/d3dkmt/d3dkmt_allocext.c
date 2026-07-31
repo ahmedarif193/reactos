@@ -31,6 +31,10 @@
  */
 
 #include "precomp.h"
+
+#ifndef STATUS_PROCEDURE_NOT_FOUND
+#define STATUS_PROCEDURE_NOT_FOUND ((NTSTATUS)0xC000007AL)
+#endif
 #include <pseh/pseh2.h>
 
 /*
@@ -732,6 +736,14 @@ Prio_Sweep(void)
             gp.AllocationCount = 1;
             gp.pPriorities = &got;
             st = pGet(&gp);
+            /* GetAllocationPriority arrived in WDDM 2.2. An OS built to a
+             * lower compatibility ceiling does not publish the kernel entry at
+             * all, which is a correct refusal rather than a defect. */
+            if (st == STATUS_PROCEDURE_NOT_FOUND || st == STATUS_NOT_SUPPORTED)
+            {
+                skip("GetAllocationPriority not published at this WDDM level (0x%08lX)\n", (long)st);
+            }
+            else
             ok_succeeded(st, "GetAllocationPriority round-trip failed 0x%08lX\n", (long)st);
             if (NT_SUCCESS(st))
                 ok(got == Levels[RTL_NUMBER_OF(Levels) - 1].value, "GetAllocationPriority returned 0x%08X expected 0x%08X\n", got, Levels[RTL_NUMBER_OF(Levels) - 1].value);
