@@ -95,7 +95,6 @@ NwifiBuildNbl(
     {
         return NULL;
     }
-    MmBuildMdlForNonPagedPool(Mdl);
 
     Nbl = NdisAllocateNetBufferAndNetBufferList(Pool, 0, 0, Mdl, 0, FrameLength);
     if (Nbl == NULL)
