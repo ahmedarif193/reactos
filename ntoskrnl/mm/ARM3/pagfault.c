@@ -2214,9 +2214,12 @@ MmArmAccessFault(IN ULONG FaultCode,
         /* Check if this was a write */
         if (MI_IS_WRITE_ACCESS(FaultCode))
         {
+#if defined(_M_ARM64)
+            MiArm64ResolveSoftwareDirtyFault(Address, PointerPte);
+#endif
             /* Was it to a read-only page? */
             Pfn1 = MI_PFN_ELEMENT(PointerPte->u.Hard.PageFrameNumber);
-            if (!(PointerPte->u.Long & PTE_READWRITE) &&
+            if (!MI_IS_PAGE_WRITEABLE(PointerPte) &&
                 !(Pfn1->OriginalPte.u.Soft.Protection & MM_READWRITE))
             {
                 /* Crash with distinguished bugcheck code */
@@ -2293,9 +2296,13 @@ MmArmAccessFault(IN ULONG FaultCode,
                     /* Check if this was a write */
                     if (MI_IS_WRITE_ACCESS(FaultCode))
                     {
+#if defined(_M_ARM64)
+                        if (MiArm64ResolveSoftwareDirtyFault(Address, PointerPte))
+                            TempPte = *PointerPte;
+#endif
                         /* Was it to a read-only page? */
                         Pfn1 = MI_PFN_ELEMENT(PointerPte->u.Hard.PageFrameNumber);
-                        if (!(PointerPte->u.Long & PTE_READWRITE) &&
+                        if (!MI_IS_PAGE_WRITEABLE(PointerPte) &&
                             !(Pfn1->OriginalPte.u.Soft.Protection & MM_READWRITE))
                         {
                             /* Crash with distinguished bugcheck code */
@@ -2413,9 +2420,13 @@ RetryKernel:
             /* Check if this was a write */
             if (MI_IS_WRITE_ACCESS(FaultCode))
             {
+#if defined(_M_ARM64)
+                if (MiArm64ResolveSoftwareDirtyFault(Address, PointerPte))
+                    TempPte = *PointerPte;
+#endif
                 /* Was it to a read-only page that is not copy on write? */
                 Pfn1 = MI_PFN_ELEMENT(PointerPte->u.Hard.PageFrameNumber);
-                if (!(TempPte.u.Long & PTE_READWRITE) &&
+                if (!MI_IS_PAGE_WRITEABLE(&TempPte) &&
                     !(Pfn1->OriginalPte.u.Soft.Protection & MM_READWRITE) &&
                     !MI_IS_PAGE_COPY_ON_WRITE(&TempPte))
                 {
@@ -2767,6 +2778,13 @@ Arm64UserLeafReady:
         if (MI_IS_WRITE_ACCESS(FaultCode))
         {
 #if defined(_M_ARM64)
+            /* Software-managed dirty bits come first: the resolver only accepts
+             * a valid, writable, not-dirty PTE, so it cannot swallow the
+             * executable-write trap below, which works by keeping the page
+             * read-only. Re-capture the PTE once it has been made dirty. */
+            if (MiArm64ResolveSoftwareDirtyFault(Address, PointerPte))
+                TempPte = *PointerPte;
+
             Pfn1 = MI_PFN_ELEMENT(PFN_FROM_PTE(&TempPte));
             ManagedExecutableWrite = MiIsExecutableWriteProtection(Pfn1->OriginalPte.u.Soft.Protection);
             if (ManagedExecutableWrite && CurrentProcess->ExecutableWriteExceptions)

@@ -103,6 +103,16 @@ Arm64ReadTcr(VOID)
 
 static
 ULONGLONG
+Arm64ReadMmfr1(VOID)
+{
+    ULONGLONG Value;
+
+    __asm__ __volatile__("mrs %0, id_aa64mmfr1_el1" : "=r"(Value));
+    return Value;
+}
+
+static
+ULONGLONG
 Arm64ReadMair(VOID)
 {
     ULONGLONG Value;
@@ -1004,6 +1014,7 @@ TestNtArm64TranslationRegisterContract(VOID)
     ULONGLONG Tcr = Arm64ReadTcr();
     ULONGLONG Ttbr0 = Arm64ReadTtbr0();
     ULONGLONG Ttbr1 = Arm64ReadTtbr1();
+    ULONGLONG Hafdbs = Arm64ReadMmfr1() & 0xf;
 
     ok_eq_ulong((ULONG)PAGE_SIZE, 0x1000);
     ok_eq_ulong((ULONG)PAGE_SHIFT, 12);
@@ -1017,7 +1028,7 @@ TestNtArm64TranslationRegisterContract(VOID)
     ok_eq_ulonglong((Tcr >> 22) & 1, 1ULL);
     ok_eq_ulonglong((Tcr >> 37) & 1, 0ULL);
     ok_eq_ulonglong((Tcr >> 38) & 1, 0ULL);
-    ok_eq_ulonglong((Tcr >> 39) & 1, 0ULL);
+    ok_eq_ulonglong((Tcr >> 39) & 1, Hafdbs != 0 ? 1ULL : 0ULL);
     ok_eq_ulonglong((Tcr >> 40) & 1, 0ULL);
 
     ok_eq_hex64(Ttbr0 & ARM64_TEST_PTE_ADDR_MASK,

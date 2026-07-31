@@ -16,6 +16,41 @@
 static KSPIN_LOCK MiArm64SystemPageDirectoryLock;
 static PFN_NUMBER MiArm64KernelRootPage;
 
+/*
+ * With TCR_EL1.HD clear, a clean software-writable PTE is deliberately
+ * hardware read-only (AP[2]/NotDirty is set). The first write must clear that
+ * bit and invalidate the translation before retrying the instruction.
+ */
+BOOLEAN
+MiArm64ResolveSoftwareDirtyFault(
+    _In_ PVOID FaultAddress,
+    _Inout_ PMMPTE PointerPte)
+{
+    MMPTE TempPte = *PointerPte;
+
+    if (!TempPte.u.Hard.Valid ||
+        !TempPte.u.Hard.Writable ||
+        !TempPte.u.Hard.NotDirty)
+    {
+        return FALSE;
+    }
+
+    MI_MAKE_DIRTY_PAGE(&TempPte);
+    MI_UPDATE_VALID_PTE(PointerPte, TempPte);
+
+    if ((ULONG_PTR)FaultAddress < (ULONG_PTR)MmSystemRangeStart)
+    {
+        MiArm64InvalidateUserAddress(FaultAddress);
+    }
+    else
+    {
+        MiArm64SyncKernelLeafPteWrite(PointerPte);
+        KeInvalidateTlbEntry(FaultAddress);
+    }
+
+    return TRUE;
+}
+
 VOID
 MiArm64InitializeSystemPageDirectoryLock(VOID)
 {
