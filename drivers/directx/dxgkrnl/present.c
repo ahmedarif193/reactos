@@ -197,6 +197,73 @@ DxgkpSignalVBlankWaiters(
         DxgkpSignalQueueVBlankWaiters(&Queues[Index], TRUE);
 }
 
+/*
+ * Frames presented on a source, and how many presents are still queued for it.
+ * This is what D3DKMT_QUERYSTATISTICS_VIDPNSOURCE reports; the display-only
+ * scan-out path accounts its own copies through DxgkPresentAccountFrame.
+ */
+NTSTATUS
+DxgkPresentQueryVidPnSourceStats(
+    _In_  PDXGKRNL_ADAPTER               Adapter,
+    _In_  D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+    _Out_ PULONG                         Frame,
+    _Out_ PULONG                         QueuedPresent)
+{
+    PDXGKRNL_PRESENT_QUEUE Queue;
+    NTSTATUS Status = STATUS_SUCCESS;
+    KIRQL OldIrql;
+
+    if (Adapter == NULL || Frame == NULL || QueuedPresent == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    *Frame = 0;
+    *QueuedPresent = 0;
+
+    if (!DxgkpAcquirePresentQueues(Adapter))
+        return STATUS_DEVICE_REMOVED;
+
+    if (Adapter->PresentQueues == NULL || VidPnSourceId >= Adapter->PresentQueueCount)
+    {
+        Status = (Adapter->PresentQueues == NULL)
+                     ? Adapter->PresentQueueInitializationStatus
+                     : STATUS_INVALID_PARAMETER;
+        DxgkpReleasePresentQueues(Adapter);
+        return Status;
+    }
+
+    Queue = &((PDXGKRNL_PRESENT_QUEUE)Adapter->PresentQueues)[VidPnSourceId];
+
+    *Frame = (ULONG)InterlockedCompareExchange(&Queue->PresentedFrameCount, 0, 0);
+    KeAcquireSpinLock(&Queue->QueueLock, &OldIrql);
+    *QueuedPresent = Queue->Count;
+    KeReleaseSpinLock(&Queue->QueueLock, OldIrql);
+
+    DxgkpReleasePresentQueues(Adapter);
+    return Status;
+}
+
+/* Account one presented frame on a source from outside the present queue (the
+ * display-only path scans out directly, without queueing a present). */
+VOID
+DxgkPresentAccountFrame(
+    _In_ PDXGKRNL_ADAPTER               Adapter,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId)
+{
+    PDXGKRNL_PRESENT_QUEUE Queues;
+
+    if (Adapter == NULL)
+        return;
+
+    if (!DxgkpAcquirePresentQueues(Adapter))
+        return;
+
+    Queues = (PDXGKRNL_PRESENT_QUEUE)Adapter->PresentQueues;
+    if (Queues != NULL && VidPnSourceId < Adapter->PresentQueueCount)
+        InterlockedIncrement(&Queues[VidPnSourceId].PresentedFrameCount);
+
+    DxgkpReleasePresentQueues(Adapter);
+}
+
 BOOLEAN
 DxgkPresentTryBeginStop(
     _In_ PDXGKRNL_ADAPTER Adapter)
@@ -1145,6 +1212,7 @@ DxgkPresentInit(
         Queues[i].Tail          = 0;
         Queues[i].Count         = 0;
         Queues[i].NextPresentId = 0; /* InterlockedIncrement returns ID 1 first. */
+        Queues[i].PresentedFrameCount = 0;
         Queues[i].VBlankCount   = 0;
         Queues[i].LastPresentVBlank = 0;
         Queues[i].Adapter       = Adapter;
@@ -2700,6 +2768,9 @@ DxgkpProcessPresentQueue(
             Status = DxgkpExecuteDodPresent(Adapter, &Entry);
         }
     }
+
+    if (NT_SUCCESS(Status))
+        InterlockedIncrement(&Queue->PresentedFrameCount);
 
     if (!NT_SUCCESS(Status) && Status != STATUS_NOT_SUPPORTED)
     {

@@ -4820,15 +4820,91 @@ DxgkQueryAllocationResidency(
     return DxgkQueryAllocationResidencyWithAccessMode(pData, KernelMode);
 }
 
+/* ========================================================================
+ * DxgkQueryStatistics — D3DKMTQueryStatistics
+ *
+ * Only the VidPn-source frame counters are answered: Frame is every present
+ * that reached the scan-out on that source (blt and flip, which is what the
+ * Windows documentation says the field counts) and QueuedPresent is the
+ * present queue depth. Every other query class stays STATUS_NOT_SUPPORTED
+ * rather than reporting zeros that a caller would read as real data.
+ *
+ * IRQL: PASSIVE_LEVEL
+ * ====================================================================== */
 static NTSTATUS
 NTAPI
 DxgkQueryStatistics(
     _Inout_ CONST D3DKMT_QUERYSTATISTICS *pData)
 {
+    D3DKMT_QUERYSTATISTICS_VIDPNSOURCE_INFORMATION Info;
+    PDXGKRNL_ADAPTER Snapshot[DXGKP_MAX_ADAPTERS];
+    PDXGKRNL_ADAPTER Adapter = NULL;
+    D3DKMT_QUERYSTATISTICS_TYPE Type;
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId;
+    LUID Luid;
+    ULONG Count, i, Frame = 0, Queued = 0;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
     if (pData == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    return STATUS_NOT_SUPPORTED;
+    _SEH2_TRY
+    {
+        Type = pData->Type;
+        Luid = pData->AdapterLuid;
+        VidPnSourceId = pData->QueryVidPnSource.VidPnSourceId;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
+    }
+    _SEH2_END;
+
+    if (Type != D3DKMT_QUERYSTATISTICS_VIDPNSOURCE)
+        return STATUS_NOT_SUPPORTED;
+
+    Count = DxgkpSnapshotAdapters(Snapshot);
+    for (i = 0; i < Count; ++i)
+    {
+        if (Snapshot[i]->State == DxgkAdapterStateStarted &&
+            Snapshot[i]->AdapterLuid.LowPart  == Luid.LowPart &&
+            Snapshot[i]->AdapterLuid.HighPart == Luid.HighPart)
+        {
+            Adapter = Snapshot[i];
+            break;
+        }
+    }
+
+    if (Adapter == NULL)
+    {
+        DxgkpDereferenceAdapterSnapshot(Snapshot, Count);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = DxgkPresentQueryVidPnSourceStats(Adapter, VidPnSourceId, &Frame, &Queued);
+    DxgkpDereferenceAdapterSnapshot(Snapshot, Count);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlZeroMemory(&Info, sizeof(Info));
+    Info.GlobalInformation.Frame = Frame;
+    Info.GlobalInformation.QueuedPresent = Queued;
+    Info.SystemInformation = Info.GlobalInformation;
+
+    _SEH2_TRY
+    {
+        RtlCopyMemory((PVOID)&pData->QueryResult.VidPnSourceInformation,
+                      &Info, sizeof(Info));
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
+    }
+    _SEH2_END;
+
+    return STATUS_SUCCESS;
 }
 
 static NTSTATUS
