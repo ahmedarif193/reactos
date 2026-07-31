@@ -73,9 +73,74 @@ NwifiMsmCreate(
     Msm->BssCount = 0;
     Msm->Supplicant = NULL;
     Msm->LinkSpeedKbps = (ULONG)(NWIFI_DEFAULT_LINK_SPEED / 1000ULL);
+    KeInitializeSpinLock(&Msm->WorkItemLock);
+    KeInitializeEvent(&Msm->WorkItemsDrainedEvent, NotificationEvent, TRUE);
 
     Adapter->MsmContext = Msm;
     return NDIS_STATUS_SUCCESS;
+}
+
+BOOLEAN
+NwifiMsmQueueWorkItem(
+    _In_ PNWIFI_MSM Msm,
+    _In_ NDIS_IO_WORKITEM_ROUTINE Routine,
+    _In_opt_ PVOID Context)
+{
+    NDIS_HANDLE WorkItem;
+    KIRQL OldIrql;
+    BOOLEAN Queue = FALSE;
+
+    if (Routine == NULL ||
+        Msm->Adapter->LowerBindParameters.MiniportHandle == NULL)
+    {
+        return FALSE;
+    }
+
+    WorkItem = NdisAllocateIoWorkItem(
+        Msm->Adapter->LowerBindParameters.MiniportHandle);
+    if (WorkItem == NULL)
+    {
+        return FALSE;
+    }
+
+    KeAcquireSpinLock(&Msm->WorkItemLock, &OldIrql);
+    if (Msm->WorkItemsHalting == 0 && Msm->WorkItemsPending < MAXLONG)
+    {
+        if (Msm->WorkItemsPending++ == 0)
+        {
+            KeResetEvent(&Msm->WorkItemsDrainedEvent);
+        }
+        Queue = TRUE;
+    }
+    KeReleaseSpinLock(&Msm->WorkItemLock, OldIrql);
+
+    if (Queue)
+    {
+        NdisQueueIoWorkItem(WorkItem, Routine, Context);
+    }
+    else
+    {
+        NdisFreeIoWorkItem(WorkItem);
+    }
+    return Queue;
+}
+
+VOID
+NwifiMsmCompleteWorkItem(
+    _In_ PNWIFI_MSM Msm,
+    _In_ NDIS_HANDLE WorkItem)
+{
+    KIRQL OldIrql;
+
+    NdisFreeIoWorkItem(WorkItem);
+
+    KeAcquireSpinLock(&Msm->WorkItemLock, &OldIrql);
+    ASSERT(Msm->WorkItemsPending > 0);
+    if (Msm->WorkItemsPending > 0 && --Msm->WorkItemsPending == 0)
+    {
+        KeSetEvent(&Msm->WorkItemsDrainedEvent, IO_NO_INCREMENT, FALSE);
+    }
+    KeReleaseSpinLock(&Msm->WorkItemLock, OldIrql);
 }
 
 VOID
@@ -83,25 +148,29 @@ NwifiMsmDestroy(
     _In_ PNWIFI_ADAPTER Adapter)
 {
     PNWIFI_MSM Msm = NwifiMsmFromAdapter(Adapter);
+    KIRQL OldIrql;
 
     if (Msm == NULL)
     {
         return;
     }
 
+    InterlockedExchangePointer((PVOID volatile *)&Adapter->MsmContext, NULL);
+    KeAcquireSpinLock(&Msm->WorkItemLock, &OldIrql);
+    Msm->WorkItemsHalting = 1;
+    KeReleaseSpinLock(&Msm->WorkItemLock, OldIrql);
     NwifiSupplicantStop(Msm);
+    KeWaitForSingleObject(&Msm->WorkItemsDrainedEvent,
+                          Executive,
+                          KernelMode,
+                          FALSE,
+                          NULL);
     NwifiSupplicantFree(Msm);
-    if (Msm->ScanWorkItem != NULL)
-    {
-        NdisFreeIoWorkItem(Msm->ScanWorkItem);
-        Msm->ScanWorkItem = NULL;
-    }
     NdisFreeSpinLock(&Msm->Lock);
-    Adapter->MsmContext = NULL;
     NwifiFree(Msm);
 }
 
-/* Deferred (PASSIVE_LEVEL) scan-confirm handler; see ScanWorkItem in msm.h. */
+/* Deferred (PASSIVE_LEVEL) scan-confirm handler. */
 static
 VOID
 NTAPI
@@ -111,8 +180,6 @@ NwifiMsmScanWorker(
 {
     PNWIFI_MSM Msm = (PNWIFI_MSM)WorkItemContext;
     NDIS_STATUS ScanStatus;
-
-    UNREFERENCED_PARAMETER(NdisIoWorkItemHandle);
 
     if (Msm == NULL)
     {
@@ -131,6 +198,7 @@ NwifiMsmScanWorker(
 
     NwifiQueueNotification(Msm->Adapter->InterfaceIndex,
                            NwifiNotifyScanComplete, ScanStatus);
+    NwifiMsmCompleteWorkItem(Msm, NdisIoWorkItemHandle);
 }
 
 /* ===========================================================================
@@ -168,29 +236,23 @@ NwifiProgramDesiredBssid(
     _In_ PNWIFI_ADAPTER Adapter,
     _In_opt_ PUCHAR Bssid)
 {
-    struct
-    {
-        DOT11_BSSID_LIST List;
-        DOT11_MAC_ADDRESS Extra; /* room for the single inlined entry */
-    } Buffer;
+    DOT11_BSSID_LIST List;
     static const UCHAR Broadcast[IEEE80211_ADDR_LEN] =
         { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 
-    RtlZeroMemory(&Buffer, sizeof(Buffer));
-    Buffer.List.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
-    Buffer.List.Header.Revision = DOT11_BSSID_LIST_REVISION_1;
-    Buffer.List.Header.Size = sizeof(DOT11_BSSID_LIST);
-    Buffer.List.uNumOfEntries = 1;
-    Buffer.List.uTotalNumOfEntries = 1;
-    RtlCopyMemory(Buffer.List.BSSIDs[0],
+    RtlZeroMemory(&List, sizeof(List));
+    List.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
+    List.Header.Revision = DOT11_BSSID_LIST_REVISION_1;
+    List.Header.Size = sizeof(List);
+    List.uNumOfEntries = 1;
+    List.uTotalNumOfEntries = 1;
+    RtlCopyMemory(List.BSSIDs[0],
                   (Bssid != NULL && !NwifiMacIsZero(Bssid)) ? Bssid : Broadcast,
                   IEEE80211_ADDR_LEN);
 
     return NwifiProtocolDoRequest(Adapter, NdisRequestSetInformation,
                                   OID_DOT11_DESIRED_BSSID_LIST,
-                                  &Buffer,
-                                  FIELD_OFFSET(DOT11_BSSID_LIST, BSSIDs) +
-                                      sizeof(DOT11_MAC_ADDRESS),
+                                  &List, sizeof(List),
                                   NULL);
 }
 
@@ -267,6 +329,11 @@ NwifiMsmStartScan(
     NDIS_STATUS Status;
 
     NdisAcquireSpinLock(&Msm->Lock);
+    if (Msm->ScanInProgress || Msm->WorkItemsHalting != 0)
+    {
+        NdisReleaseSpinLock(&Msm->Lock);
+        return NDIS_STATUS_DOT11_MEDIA_IN_USE;
+    }
     Msm->ScanInProgress = TRUE;
     /* Scanning does not change an established association state; only move to
      * Scanning when idle so a scan during connect does not stomp the FSM. */
@@ -501,44 +568,89 @@ NwifiMsmConnect(
     NDIS_STATUS Status;
 
     NdisAcquireSpinLock(&Msm->Lock);
+    if (Msm->State != NwifiMsmIdle)
+    {
+        NdisReleaseSpinLock(&Msm->Lock);
+        return NDIS_STATUS_MEDIA_BUSY;
+    }
     Msm->Connect = *Params;
     Msm->CurrentSsid = Params->Ssid;
     Msm->State = NwifiMsmAssociating;
     NdisReleaseSpinLock(&Msm->Lock);
 
-    NwifiProgramBssType(Adapter, Params->BssType);
+    Status = NwifiProgramBssType(Adapter, Params->BssType);
+    if (Status != NDIS_STATUS_SUCCESS)
+    {
+        DPRINT1("NWIFI: DESIRED_BSS_TYPE failed 0x%08X\n", Status);
+        goto ConnectFailed;
+    }
 
     Status = NwifiProgramDesiredSsid(Adapter, &Params->Ssid);
     if (Status != NDIS_STATUS_SUCCESS)
     {
         DPRINT1("NWIFI: DESIRED_SSID_LIST failed 0x%08X\n", Status);
+        goto ConnectFailed;
     }
 
-    NwifiProgramDesiredBssid(Adapter,
-                             Params->HaveBssid ? Params->DesiredBssid : NULL);
+    Status = NwifiProgramDesiredBssid(
+        Adapter, Params->HaveBssid ? Params->DesiredBssid : NULL);
+    if (Status != NDIS_STATUS_SUCCESS)
+    {
+        DPRINT1("NWIFI: DESIRED_BSSID_LIST failed 0x%08X\n", Status);
+        goto ConnectFailed;
+    }
 
     Status = NwifiProgramAuthAlgorithm(Adapter, Params->AuthAlgorithm);
     if (Status != NDIS_STATUS_SUCCESS)
     {
         DPRINT1("NWIFI: ENABLED_AUTH_ALGO failed 0x%08X\n", Status);
+        goto ConnectFailed;
     }
 
-    NwifiProgramCipherAlgorithm(Adapter,
-                                OID_DOT11_ENABLED_UNICAST_CIPHER_ALGORITHM,
-                                Params->UnicastCipher);
-    NwifiProgramCipherAlgorithm(Adapter,
-                                OID_DOT11_ENABLED_MULTICAST_CIPHER_ALGORITHM,
-                                Params->MulticastCipher);
+    Status = NwifiProgramCipherAlgorithm(
+        Adapter,
+        OID_DOT11_ENABLED_UNICAST_CIPHER_ALGORITHM,
+        Params->UnicastCipher);
+    if (Status != NDIS_STATUS_SUCCESS)
+    {
+        DPRINT1("NWIFI: unicast cipher failed 0x%08X\n", Status);
+        goto ConnectFailed;
+    }
+    Status = NwifiProgramCipherAlgorithm(
+        Adapter,
+        OID_DOT11_ENABLED_MULTICAST_CIPHER_ALGORITHM,
+        Params->MulticastCipher);
+    if (Status != NDIS_STATUS_SUCCESS)
+    {
+        DPRINT1("NWIFI: multicast cipher failed 0x%08X\n", Status);
+        goto ConnectFailed;
+    }
 
-    /* Arm the supplicant before connecting so the 4-way handshake can be
-     * processed the moment association completes; the PSK must already have
-     * been seeded via IOCTL_NWIFI_SET_KEY. */
+    /* WPA3-SAE is completed by a capable fullmac adapter.  WPA2-PSK uses the
+     * host supplicant so EAPOL is armed before association completes. */
     if (Params->Secure)
     {
-        if (NwifiSupplicantStart(Msm) != NDIS_STATUS_SUCCESS)
+        if (Params->AuthAlgorithm == DOT11_AUTH_ALGO_WPA3_SAE)
         {
-            DPRINT1("NWIFI: supplicant start failed (no PSK seeded?)\n");
+            Status = NwifiSupplicantSeedFirmware(Msm);
         }
+        else if (Params->AuthAlgorithm == DOT11_AUTH_ALGO_RSNA_PSK)
+        {
+            Status = NwifiSupplicantStart(Msm);
+        }
+        else
+        {
+            Status = NDIS_STATUS_NOT_SUPPORTED;
+        }
+        if (Status != NDIS_STATUS_SUCCESS)
+        {
+            DPRINT1("NWIFI: security setup failed 0x%08X\n", Status);
+            goto ConnectFailed;
+        }
+    }
+    else
+    {
+        NwifiSupplicantStop(Msm);
     }
 
     /* OID_DOT11_CONNECT_REQUEST has no payload; the lower miniport runs
@@ -558,6 +670,13 @@ NwifiMsmConnect(
     }
 
     return NDIS_STATUS_SUCCESS;
+
+ConnectFailed:
+    NdisAcquireSpinLock(&Msm->Lock);
+    Msm->State = NwifiMsmIdle;
+    NdisReleaseSpinLock(&Msm->Lock);
+    NwifiSupplicantStop(Msm);
+    return Status;
 }
 
 /* ===========================================================================
@@ -595,29 +714,35 @@ NwifiMsmDisconnect(
  *  Establish the link once associated (open) or handshake-complete (secure)
  * ===========================================================================
  */
-static
 VOID
 NwifiMsmLinkUp(
     _In_ PNWIFI_MSM Msm,
     _In_ BOOLEAN Secure)
 {
     PNWIFI_ADAPTER Adapter = Msm->Adapter;
+    DOT11_MAC_ADDRESS Bssid;
+    DOT11_SSID Ssid;
 
     NdisAcquireSpinLock(&Msm->Lock);
+    if (Msm->State != NwifiMsmAssociating &&
+        Msm->State != NwifiMsmHandshaking)
+    {
+        NdisReleaseSpinLock(&Msm->Lock);
+        return;
+    }
     Msm->State = Secure ? NwifiMsmConnectedSecure : NwifiMsmConnectedOpen;
-    RtlCopyMemory(Adapter->Bssid, Msm->CurrentBssid, IEEE80211_ADDR_LEN);
-    Adapter->Ssid = Msm->CurrentSsid;
+    RtlCopyMemory(Bssid, Msm->CurrentBssid, IEEE80211_ADDR_LEN);
+    Ssid = Msm->CurrentSsid;
     NdisReleaseSpinLock(&Msm->Lock);
 
     NdisAcquireSpinLock(&Adapter->DataLock);
-    RtlCopyMemory(Adapter->Bssid, Msm->CurrentBssid, IEEE80211_ADDR_LEN);
+    RtlCopyMemory(Adapter->Bssid, Bssid, IEEE80211_ADDR_LEN);
+    Adapter->Ssid = Ssid;
     Adapter->Associated = TRUE;
     NdisReleaseSpinLock(&Adapter->DataLock);
 
     NwifiIndicateLinkState(Adapter, TRUE);
     NwifiQueueNotification(Adapter->InterfaceIndex, NwifiNotifyConnectComplete,
-                           NDIS_STATUS_SUCCESS);
-    NwifiQueueNotification(Adapter->InterfaceIndex, NwifiNotifyLinkUp,
                            NDIS_STATUS_SUCCESS);
 }
 
@@ -644,8 +769,9 @@ NwifiMsmIndicateStatus(
         case NDIS_STATUS_DOT11_SCAN_CONFIRM:
         {
             /* This indication may be at DISPATCH_LEVEL; harvesting the BSS
-             * list is a blocking OID, so defer it to the scan work item. */
+             * list is a blocking OID, so defer it to a one-shot work item. */
             NDIS_STATUS ScanStatus = NDIS_STATUS_SUCCESS;
+            BOOLEAN Queue = FALSE;
             if (Buffer != NULL && BufferSize >= sizeof(DOT11_STATUS_INDICATION))
             {
                 ScanStatus = ((PDOT11_STATUS_INDICATION)Buffer)->ndisStatus;
@@ -653,33 +779,25 @@ NwifiMsmIndicateStatus(
 
             NdisAcquireSpinLock(&Msm->Lock);
             Msm->LastScanStatus = ScanStatus;
-            /* Allocate the work item from the lower (dot11) adapter: the
-             * upper miniport may not exist, so the scan/control path must
-             * not depend on Adapter->MiniportAdapterHandle. */
-            if (Msm->ScanWorkItem == NULL &&
-                Adapter->LowerBindParameters.MiniportHandle != NULL)
+            if (Msm->ScanInProgress && Msm->ScanWorkQueued == 0)
             {
-                Msm->ScanWorkItem =
-                    NdisAllocateIoWorkItem(Adapter->LowerBindParameters.MiniportHandle);
+                Msm->ScanWorkQueued = 1;
+                Queue = TRUE;
             }
             NdisReleaseSpinLock(&Msm->Lock);
 
-            if (Msm->ScanWorkItem != NULL &&
-                InterlockedCompareExchange(&Msm->ScanWorkQueued, 1, 0) == 0)
+            if (Queue &&
+                !NwifiMsmQueueWorkItem(Msm, NwifiMsmScanWorker, Msm))
             {
-                NdisQueueIoWorkItem(Msm->ScanWorkItem, NwifiMsmScanWorker, Msm);
-            }
-            else
-            {
-                /* No work item available (very early, or one already queued):
-                 * report completion without a fresh BSS harvest. */
                 NdisAcquireSpinLock(&Msm->Lock);
+                Msm->ScanWorkQueued = 0;
                 Msm->ScanInProgress = FALSE;
                 if (Msm->State == NwifiMsmScanning)
                     Msm->State = NwifiMsmIdle;
                 NdisReleaseSpinLock(&Msm->Lock);
                 NwifiQueueNotification(Adapter->InterfaceIndex,
-                                       NwifiNotifyScanComplete, ScanStatus);
+                                       NwifiNotifyScanComplete,
+                                       NDIS_STATUS_RESOURCES);
             }
             break;
         }
@@ -727,6 +845,14 @@ NwifiMsmIndicateStatus(
                     {
                         /* Open network: associated == connected. */
                         NwifiMsmLinkUp(Msm, FALSE);
+                    }
+                    else if (P->bPortAuthorized)
+                    {
+                        /* A fullmac adapter completed authentication and key
+                         * installation in firmware; no host EAPOL follows. */
+                        NwifiSupplicantStop(Msm);
+                        NwifiMsmLinkUp(Msm, TRUE);
+                        DPRINT1("NWIFI: lower miniport authorized secure port\n");
                     }
                     else
                     {
@@ -816,8 +942,6 @@ NwifiMsmIndicateStatus(
             NwifiIndicateLinkState(Adapter, FALSE);
             NwifiQueueNotification(Adapter->InterfaceIndex, NwifiNotifyDisconnected,
                                    NDIS_STATUS_DOT11_DISASSOCIATION);
-            NwifiQueueNotification(Adapter->InterfaceIndex, NwifiNotifyLinkDown,
-                                   NDIS_STATUS_SUCCESS);
             break;
         }
 
@@ -1039,6 +1163,12 @@ NwifiMsmSetKey(
     _In_ PNWIFI_MSM Msm,
     _In_ PNWIFI_SET_KEY Key)
 {
+    if (Key->KeyLength > sizeof(Key->KeyData) ||
+        Key->KeyId >= DOT11_MAX_NUM_DEFAULT_KEY)
+    {
+        return NDIS_STATUS_INVALID_DATA;
+    }
+
     /* Algorithm == DOT11_CIPHER_ALGO_NONE with a non-zero key is the wlansvc
      * convention for "WPA2 passphrase/PSK": seed the supplicant.  Any other
      * algorithm is a static cipher key forwarded straight down. */

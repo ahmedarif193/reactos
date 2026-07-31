@@ -179,8 +179,9 @@ NwifiCreateNblPools(
     PoolParams.ProtocolId = NDIS_PROTOCOL_ID_DEFAULT;
     PoolParams.fAllocateNetBuffer = TRUE;
     PoolParams.PoolTag = NWIFI_TAG;
-    /* Per-NBL context carries NWIFI_NBL_CONTEXT for the matching free path. */
-    PoolParams.ContextSize = sizeof(NWIFI_NBL_CONTEXT);
+    /* NDIS requires per-NBL context storage to use allocation alignment. */
+    PoolParams.ContextSize = ALIGN_UP_BY(sizeof(NWIFI_NBL_CONTEXT),
+                                         MEMORY_ALLOCATION_ALIGNMENT);
 
     /* TX pool: NBLs we build (802.11 frames) and send down to the dot11 NIC. */
     Adapter->TxNblPool = NdisAllocateNetBufferListPool(gNwifi.MiniportDriverHandle,
@@ -353,6 +354,30 @@ NwifiBindAdapterEx(
         if (Status != NDIS_STATUS_SUCCESS)
         {
             DPRINT1("NWIFI: set ExtSTA op-mode failed 0x%08X (continuing)\n", Status);
+        }
+    }
+
+    /* Program the lower Native-802.11 receive edge once during bind. The
+     * upper Ethernet packet filter is enforced in nwifi after 802.11-to-802.3
+     * translation; forwarding each upper OID synchronously would block an OID
+     * callback on arbitrary lower-driver work. */
+    {
+        ULONG Dot11PacketFilter =
+            DOT11_PACKET_TYPE_DIRECTED_DATA |
+            DOT11_PACKET_TYPE_MULTICAST_DATA |
+            DOT11_PACKET_TYPE_ALL_MULTICAST_DATA |
+            DOT11_PACKET_TYPE_BROADCAST_DATA;
+        ULONG BytesRead = 0;
+
+        Status = NwifiProtocolDoRequest(Adapter, NdisRequestSetInformation,
+                                        OID_DOT11_CURRENT_PACKET_FILTER,
+                                        &Dot11PacketFilter,
+                                        sizeof(Dot11PacketFilter),
+                                        &BytesRead);
+        if (Status != NDIS_STATUS_SUCCESS)
+        {
+            DPRINT1("NWIFI: set lower packet filter failed 0x%08X\n", Status);
+            goto FailAfterOpen;
         }
     }
 
@@ -570,8 +595,9 @@ NwifiProtocolStatusEx(
     switch (StatusIndication->StatusCode)
     {
         case NDIS_STATUS_LINK_STATE:
-            /* Mirror the lower link state to the upper miniport so TCP/IP
-             * sees media connect/disconnect. */
+            /* Cache the lower PHY rate, but do not mirror lower association
+             * directly to the upper Ethernet edge.  For a secured network the
+             * MSM must keep TCP/IP down until port authorization/keys complete. */
             if (StatusIndication->StatusBuffer != NULL &&
                 StatusIndication->StatusBufferSize >= sizeof(NDIS_LINK_STATE))
             {
@@ -579,15 +605,38 @@ NwifiProtocolStatusEx(
                     (PNDIS_LINK_STATE)StatusIndication->StatusBuffer;
                 BOOLEAN Connected =
                     (LinkState->MediaConnectState == MediaConnectStateConnected);
+                BOOLEAN UpperConnected;
+                ULONG64 SpeedBps = 0;
+                PNWIFI_MSM Msm = (PNWIFI_MSM)Adapter->MsmContext;
 
-                /* Treat a connected lower link as associated so the TX path
-                 * goes live; the MSM is the authoritative writer of
-                 * Bssid/Ssid/Associated during a connect. */
+                if (Connected)
+                {
+                    SpeedBps = max(LinkState->XmitLinkSpeed,
+                                   LinkState->RcvLinkSpeed);
+                    if (SpeedBps == 0 || SpeedBps == NDIS_LINK_SPEED_UNKNOWN)
+                    {
+                        SpeedBps = NWIFI_DEFAULT_LINK_SPEED;
+                    }
+                }
                 NdisAcquireSpinLock(&Adapter->DataLock);
-                Adapter->Associated = Connected;
+                Adapter->LinkSpeedBps = SpeedBps;
+                UpperConnected = Adapter->MediaConnected;
                 NdisReleaseSpinLock(&Adapter->DataLock);
 
-                NwifiIndicateLinkState(Adapter, Connected);
+                if (Msm != NULL)
+                {
+                    NdisAcquireSpinLock(&Msm->Lock);
+                    Msm->LinkSpeedKbps =
+                        (SpeedBps / 1000 > MAXULONG)
+                            ? MAXULONG : (ULONG)(SpeedBps / 1000);
+                    NdisReleaseSpinLock(&Msm->Lock);
+                }
+                if (Connected && UpperConnected)
+                {
+                    /* The secure link was already authorized; publish the
+                     * newly learned rate as a link-state update. */
+                    NwifiIndicateLinkState(Adapter, TRUE);
+                }
             }
             break;
 

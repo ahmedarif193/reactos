@@ -287,6 +287,8 @@ NwifiMapNdisStatus(
         case NDIS_STATUS_INVALID_DATA:      return STATUS_INVALID_PARAMETER;
         case NDIS_STATUS_RESOURCES:         return STATUS_INSUFFICIENT_RESOURCES;
         case NDIS_STATUS_NOT_SUPPORTED:     return STATUS_NOT_SUPPORTED;
+        case NDIS_STATUS_MEDIA_BUSY:        return STATUS_DEVICE_BUSY;
+        case NDIS_STATUS_INVALID_STATE:     return STATUS_INVALID_DEVICE_STATE;
         default:                            return STATUS_UNSUCCESSFUL;
     }
 }
@@ -327,6 +329,15 @@ NwifiDispatchDeviceControl(
             if (InLen < sizeof(NWIFI_SCAN_REQUEST))
             {
                 Status = STATUS_INVALID_BUFFER_SIZE;
+                break;
+            }
+            if (Req->Size < sizeof(*Req) ||
+                Req->Ssid.uSSIDLength > DOT11_SSID_MAX_LENGTH ||
+                (Req->BssType != dot11_BSS_type_infrastructure &&
+                 Req->BssType != dot11_BSS_type_independent &&
+                 Req->BssType != dot11_BSS_type_any))
+            {
+                Status = STATUS_INVALID_PARAMETER;
                 break;
             }
             Adapter = NwifiFindAdapterByIndex(Req->InterfaceIndex);
@@ -375,6 +386,33 @@ NwifiDispatchDeviceControl(
                 Status = STATUS_INVALID_BUFFER_SIZE;
                 break;
             }
+            if (Req->Size < sizeof(*Req) ||
+                Req->Ssid.uSSIDLength == 0 ||
+                Req->Ssid.uSSIDLength > DOT11_SSID_MAX_LENGTH ||
+                Req->BssType != dot11_BSS_type_infrastructure ||
+                (Req->AuthAlgorithm != DOT11_AUTH_ALGO_80211_OPEN &&
+                 Req->AuthAlgorithm != DOT11_AUTH_ALGO_RSNA_PSK &&
+                 Req->AuthAlgorithm != DOT11_AUTH_ALGO_WPA3_SAE))
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+            if ((Req->AuthAlgorithm == DOT11_AUTH_ALGO_80211_OPEN &&
+                 (Req->UnicastCipher != DOT11_CIPHER_ALGO_NONE ||
+                  Req->MulticastCipher != DOT11_CIPHER_ALGO_NONE)) ||
+                (Req->AuthAlgorithm == DOT11_AUTH_ALGO_RSNA_PSK &&
+                 (Req->UnicastCipher != DOT11_CIPHER_ALGO_CCMP &&
+                  Req->UnicastCipher != DOT11_CIPHER_ALGO_TKIP)) ||
+                (Req->AuthAlgorithm == DOT11_AUTH_ALGO_RSNA_PSK &&
+                 (Req->MulticastCipher != DOT11_CIPHER_ALGO_CCMP &&
+                  Req->MulticastCipher != DOT11_CIPHER_ALGO_TKIP)) ||
+                (Req->AuthAlgorithm == DOT11_AUTH_ALGO_WPA3_SAE &&
+                 (Req->UnicastCipher != DOT11_CIPHER_ALGO_CCMP ||
+                  Req->MulticastCipher != DOT11_CIPHER_ALGO_CCMP)))
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
             Adapter = NwifiFindAdapterByIndex(Req->InterfaceIndex);
             if (Adapter == NULL || Adapter->MsmContext == NULL)
             {
@@ -398,11 +436,13 @@ NwifiDispatchDeviceControl(
             Params.AuthAlgorithm = Req->AuthAlgorithm;
             Params.UnicastCipher = Req->UnicastCipher;
             Params.MulticastCipher = Req->MulticastCipher;
-            /* RSNA / WPA-PSK auth => run the supplicant. */
+            /* Encrypted networks require either the host supplicant or lower
+             * fullmac authorization. */
             Params.Secure = (Req->AuthAlgorithm == DOT11_AUTH_ALGO_RSNA_PSK ||
                              Req->AuthAlgorithm == DOT11_AUTH_ALGO_RSNA ||
                              Req->AuthAlgorithm == DOT11_AUTH_ALGO_WPA_PSK ||
-                             Req->AuthAlgorithm == DOT11_AUTH_ALGO_WPA);
+                             Req->AuthAlgorithm == DOT11_AUTH_ALGO_WPA ||
+                             Req->AuthAlgorithm == DOT11_AUTH_ALGO_WPA3_SAE);
 
             NdisStatus = NwifiMsmConnect(Msm, &Params);
             Status = NwifiMapNdisStatus(NdisStatus);
@@ -415,6 +455,11 @@ NwifiDispatchDeviceControl(
             if (InLen < sizeof(NWIFI_INTERFACE_REF))
             {
                 Status = STATUS_INVALID_BUFFER_SIZE;
+                break;
+            }
+            if (Ref->Size < sizeof(*Ref))
+            {
+                Status = STATUS_INVALID_PARAMETER;
                 break;
             }
             Adapter = NwifiFindAdapterByIndex(Ref->InterfaceIndex);
@@ -439,6 +484,12 @@ NwifiDispatchDeviceControl(
                 Info = sizeof(NWIFI_LINK_STATE);
                 break;
             }
+            if (InLen >= sizeof(NWIFI_INTERFACE_REF) &&
+                Ref->Size < sizeof(*Ref))
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
             Index = (InLen >= sizeof(NWIFI_INTERFACE_REF)) ? Ref->InterfaceIndex
                   : (InLen >= sizeof(ULONG)) ? *(PULONG)Buffer : 0;
             Adapter = NwifiFindAdapterByIndex(Index);
@@ -460,6 +511,13 @@ NwifiDispatchDeviceControl(
             if (InLen < sizeof(NWIFI_SET_KEY))
             {
                 Status = STATUS_INVALID_BUFFER_SIZE;
+                break;
+            }
+            if (Key->Size < sizeof(*Key) ||
+                Key->KeyLength > sizeof(Key->KeyData) ||
+                Key->KeyId >= DOT11_MAX_NUM_DEFAULT_KEY)
+            {
+                Status = STATUS_INVALID_PARAMETER;
                 break;
             }
             Adapter = NwifiFindAdapterByIndex(Key->InterfaceIndex);
