@@ -712,6 +712,19 @@ Ndis6CallMiniportInitializeEx(
          * a later START begins with an empty NDIS instance. */
         Ndis6ResetMiniportAttributes(Adapter);
     }
+    else if (!Ext->GeneralAttrsValid)
+    {
+        DbgPrint("NDIS6: InitializeEx omitted general adapter attributes\n");
+        if (Ext->DriverBlock->Characteristics.HaltHandlerEx != NULL &&
+            Ext->MiniportAdapterContext != NULL)
+        {
+            Ext->DriverBlock->Characteristics.HaltHandlerEx(
+                Ext->MiniportAdapterContext,
+                NdisHaltDeviceInitializationFailed);
+        }
+        Ndis6ResetMiniportAttributes(Adapter);
+        Status = NDIS_STATUS_FAILURE;
+    }
 
     return Status;
 }
