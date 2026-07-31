@@ -245,7 +245,7 @@ KiInsertQueueApc(IN PKAPC Apc,
                         KiReleaseDispatcherObject(&Gate->Header);
 
                         /* Increase the queue counter if needed */
-                        if (Thread->Queue) Thread->Queue->CurrentCount++;
+                        if (Thread->Queue) KiIncrementQueueCurrentCount(Thread->Queue);
 
                         /* Put into deferred ready list with this status */
                         Thread->WaitStatus = STATUS_KERNEL_APC;
