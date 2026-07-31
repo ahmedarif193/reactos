@@ -143,6 +143,7 @@ VOID MachVideoGetFontsFromFirmware(PULONG RomFontPointers);
 ULONG MachGetBootSectorLoadAddress(IN UCHAR DriveNumber);
 
 #ifdef UEFIBOOT
+PVOID UefiGetSmbiosEpsPointer(VOID);
 BOOLEAN UefiFirmwareSetupSupported(VOID);
 VOID UefiBootToFirmware(VOID);
 #endif
