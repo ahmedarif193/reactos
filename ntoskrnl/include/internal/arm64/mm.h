@@ -286,6 +286,11 @@ VOID
 MiArm64RemoveProcessAddressSpace(
     _Inout_ PEPROCESS Process);
 
+BOOLEAN
+MiArm64ResolveSoftwareDirtyFault(
+    _In_ PVOID FaultAddress,
+    _Inout_ PMMPTE PointerPte);
+
 /*
  * Per-CPU PFN-lock recursion depth (writer: ke/arm64/spinlock.c on every
  * PFN-lock acquire/release; reader: MiArm64AllocatePageTablePage, own CPU
