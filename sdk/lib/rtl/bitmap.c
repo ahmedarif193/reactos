@@ -495,6 +495,7 @@ RtlNumberOfSetBits(
     return BitCount;
 }
 
+#ifndef USE_RTL_BITMAP64
 ULONG
 NTAPI
 RtlNumberOfSetBitsUlongPtr(
@@ -511,6 +512,7 @@ RtlNumberOfSetBitsUlongPtr(
 
     return BitCount;
 }
+#endif /* !USE_RTL_BITMAP64 */
 
 BITMAP_INDEX
 NTAPI
