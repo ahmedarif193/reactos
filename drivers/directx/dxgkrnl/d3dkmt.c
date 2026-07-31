@@ -5884,7 +5884,16 @@ DxgkCreateSynchronizationObject2(
     }
 
     if (REACTOS_WDDM_TARGET_LEVEL < MinimumLevel)
+    {
+        /* Windows 11, whose reference adapter is itself below the periodic
+         * monitored-fence level, refuses that type with
+         * STATUS_INVALID_PARAMETER rather than STATUS_NOT_SUPPORTED. Only the
+         * periodic case is changed -- that is the extent of the observed
+         * behaviour. */
+        if (pData->Info.Type == D3DDDI_PERIODIC_MONITORED_FENCE)
+            return STATUS_INVALID_PARAMETER;
         return STATUS_NOT_SUPPORTED;
+    }
 
     Status = DxgkpValidateDeviceHandleForIoctl(
         pData->hDevice, &Adapter, &Device);
@@ -5974,25 +5983,31 @@ DxgkCreateSynchronizationObject2(
         /* This stack currently exposes one physical adapter per logical
          * adapter. Zero means all physical adapters; bit zero selects the
          * sole physical adapter explicitly. */
-        if (pData->Info.Type == D3DDDI_MONITORED_FENCE &&
-            (pData->Info.MonitoredFence.Padding != 0 || (pData->Info.MonitoredFence.EngineAffinity & ~1u) != 0))
-            return STATUS_INVALID_PARAMETER;
-        if (pData->Info.Type == D3DDDI_PERIODIC_MONITORED_FENCE)
-        {
-            if (pData->Info.PeriodicMonitoredFence.Padding != 0 || (pData->Info.PeriodicMonitoredFence.EngineAffinity & ~1u) != 0)
-                return STATUS_INVALID_PARAMETER;
-        }
+        /*
+         * Windows 11 does not validate the padding field or narrow the engine
+         * affinity mask to the reported node count at create time, so neither
+         * is refused here.
+         */
         RtlZeroMemory(&SupportedFlags, sizeof(SupportedFlags));
         SupportedFlags.NoSignal = 1;
         SupportedFlags.NoWait = 1;
         SupportedFlags.NoSignalMaxValueOnTdr = 1;
         SupportedFlags.NoGPUAccess = 1;
         /*
-         * TopOfPipeline needs a real submission-boundary action; the current
-         * ordered stream retires signals only at software completion. Shared
-         * monitored fences likewise require the NT-security handle path.
-         * Leave both bits out until those contracts exist end to end.
+         * TopOfPipeline is accepted, as it is on Windows 11. The ordered
+         * stream still retires the signal at software completion rather than
+         * at the submission boundary, which makes the fence advance LATER than
+         * a top-of-pipe signal would, never earlier -- a waiter can therefore
+         * only ever be released too late, never before the work it is
+         * ordered against. Refusing the flag outright is worse: it fails
+         * callers that only use the value as a progress marker.
          */
+        SupportedFlags.TopOfPipeline = 1;
+        /* A shared monitored fence asked for without the NT security
+         * parameters is a bad parameter on Windows 11, not an unsupported
+         * operation -- answer that before the generic unsupported-bit sweep. */
+        if (pData->Info.Flags.Shared)
+            return STATUS_INVALID_PARAMETER;
         if ((pData->Info.Flags.Value & ~SupportedFlags.Value) != 0)
             return STATUS_NOT_SUPPORTED;
     }
