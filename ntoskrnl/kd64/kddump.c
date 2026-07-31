@@ -5,9 +5,9 @@
  * COPYRIGHT:       Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
+#include <ntoskrnl.h>
 #include <internal/dump.h>
 #include <ntdddisk.h>
-#include <ntoskrnl.h>
 #include <reactos/drivers/dumpstor.h>
 
 #define NDEBUG

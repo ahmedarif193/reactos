@@ -8,8 +8,8 @@
 
 /* INCLUDES ******************************************************************/
 
-#include <internal/dump.h>
 #include <ntoskrnl.h>
+#include <internal/dump.h>
 
 #ifdef KDBG
 #include <kdbg/kdb.h>
