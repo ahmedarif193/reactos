@@ -1337,6 +1337,20 @@ DxgkpPresentShadowFb(
     return DxgkpPresentShadowFbInternal(Adapter, NULL, "timer");
 }
 
+/*
+ * Present a rectangle for the display-only execute path. A DOD miniport with
+ * no DxgkDdiPresentDisplayOnly (softgpu) is not an error: the internal path
+ * copies the shadow framebuffer straight to the firmware GOP instead, which is
+ * how every other present on such an adapter already reaches the panel.
+ */
+NTSTATUS
+DxgkDisplayPresentRect(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ const RECT *DirtyRect)
+{
+    return DxgkpPresentShadowFbInternal(Adapter, DirtyRect, "dod");
+}
+
 static VOID
 DxgkpRecordDirtyRect(
     _In_ PDXGKRNL_ADAPTER Adapter,
