@@ -130,8 +130,8 @@ static VOID Arm64PcrPrcbAccess(VOID)
     ok_eq_uint(Pcr->CurrentIrql, PASSIVE_LEVEL);
 
     /* Sanity-check size of the embedded PRCB. */
-    ok_eq_ulonglong((ULONGLONG)sizeof(KPRCB), 0x9f00ULL);
-    ok_eq_ulonglong((ULONGLONG)sizeof(KIPCR), 0xa880ULL);
+    ok_eq_ulonglong((ULONGLONG)sizeof(KPRCB), 0xa000ULL);
+    ok_eq_ulonglong((ULONGLONG)sizeof(KIPCR), 0xa980ULL);
 
     /* The PRCB lives at +0x980 from the PCR. */
     ok_eq_ulonglong((ULONGLONG)((ULONG_PTR)Prcb - (ULONG_PTR)Pcr), 0x980ULL);

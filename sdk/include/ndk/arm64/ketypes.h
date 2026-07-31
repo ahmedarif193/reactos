@@ -399,7 +399,7 @@ typedef struct _REQUEST_MAILBOX
 
 //
 // Processor Control Block, Win11 26100 arm64 layout (ntkrnlmp.pdb 10.0.26100.8036)
-// sizeof == 0x9F00; members marked [ReactOS] live inside Win11 pad regions
+// sizeof == 0xA000; members marked [ReactOS] live inside Win11 pad regions
 //
 typedef struct _KPRCB
 {
@@ -787,27 +787,29 @@ typedef struct _KPRCB
     UCHAR SelfmapLockHandle[96];                         // 0x9468 KLOCK_QUEUE_HANDLE[4]
     ULONG64 CacheProcessorSet[198];                      // 0x94C8 KAFFINITY_EX[6]
     ULONG64 ModuleProcessorSet[33];                      // 0x9AF8 KAFFINITY_EX
-    ULONG64 DieProcessorSet[33];                         // 0x9C00 KAFFINITY_EX
-    UCHAR LocalCoreControlBlock[48];                     // 0x9D08 KCORE_CONTROL_BLOCK
-    ULONG CoreControlBlockIndex;                         // 0x9D38
-    ULONG PrcbPad26;                                     // 0x9D3C
-    PVOID CoreControlBlockShadow;                        // 0x9D40 PKCORE_CONTROL_BLOCK_SHADOW
-    UCHAR LocalCoreControlBlockShadow[64];               // 0x9D48 KCORE_CONTROL_BLOCK_SHADOW
-    ULONG NodeRelativeTopologyIndex[6];                  // 0x9D88
-    KDPC KstackFreeDpc;                                  // 0x9DA0
-    SLIST_HEADER KstackFreeList;                         // 0x9DE0
-    struct _KTRAP_FRAME *IpiFrame;                       // 0x9DF0
-    KDPC SlistRollbackDpc;                               // 0x9DF8
-    PVOID LocalSearchContexts[2];                        // 0x9E38 PKI_COOPERATIVE_IDLE_SEARCH_CONTEXT[2]
-    PVOID SearchContexts[2];                             // 0x9E48
-    PVOID SearchGenerations[2];                          // 0x9E58
-    ULONG64 PrcbPad9E68[3];                              // 0x9E68
-    REQUEST_MAILBOX RequestMailbox[1];                   // 0x9E80
-    ULONG64 PrcbPadEnd[8];                               // 0x9EC0
-} KPRCB, *PKPRCB;                                        // sizeof 0x9F00
+    ULONG64 ComplexProcessorSet[33];                     // 0x9C00 KAFFINITY_EX
+    ULONG64 DieProcessorSet[33];                         // 0x9D08 KAFFINITY_EX
+    UCHAR LocalCoreControlBlock[48];                     // 0x9E10 KCORE_CONTROL_BLOCK
+    ULONG CoreControlBlockIndex;                         // 0x9E40
+    ULONG PrcbPad26;                                     // 0x9E44
+    PVOID CoreControlBlockShadow;                        // 0x9E48 PKCORE_CONTROL_BLOCK_SHADOW
+    UCHAR LocalCoreControlBlockShadow[64];               // 0x9E50 KCORE_CONTROL_BLOCK_SHADOW
+    ULONG NodeRelativeTopologyIndex[6];                  // 0x9E90
+    KDPC KstackFreeDpc;                                  // 0x9EA8
+    ULONG64 PrcbPad9EE8;                                 // 0x9EE8
+    SLIST_HEADER KstackFreeList;                         // 0x9EF0
+    struct _KTRAP_FRAME *IpiFrame;                       // 0x9F00
+    KDPC SlistRollbackDpc;                               // 0x9F08
+    PVOID LocalSearchContexts[2];                        // 0x9F48 PKI_COOPERATIVE_IDLE_SEARCH_CONTEXT[2]
+    PVOID SearchContexts[2];                             // 0x9F58
+    PVOID SearchGenerations[2];                          // 0x9F68
+    ULONG64 PrcbPad9F78;                                 // 0x9F78
+    REQUEST_MAILBOX RequestMailbox[1];                   // 0x9F80
+    ULONG64 PrcbPadEnd[8];                               // 0x9FC0
+} KPRCB, *PKPRCB;                                        // sizeof 0xA000
 //
 // Processor Control Region, Win11 26100 arm64 layout (ntkrnlmp.pdb 10.0.26100.8036)
-// public part is 0x100 bytes; Prcb at 0x980; sizeof == 0xA880
+// public part is 0x100 bytes; Prcb at 0x980; sizeof == 0xA980
 //
 typedef struct _KIPCR
 {
@@ -865,7 +867,7 @@ typedef struct _KIPCR
     PVOID* IdtExt;                                  // 0x900
     PVOID PcrAlign[15];                             // 0x908
     KPRCB Prcb;                                     // 0x980
-} KIPCR, *PKIPCR;                                   // sizeof 0xA880
+} KIPCR, *PKIPCR;                                   // sizeof 0xA980
 
 #ifndef __ASSEMBLER__
 C_ASSERT(FIELD_OFFSET(KIPCR, Self) == 0x018);
@@ -880,8 +882,8 @@ C_ASSERT(FIELD_OFFSET(KIPCR, IdtExt) == 0x900);
 C_ASSERT(FIELD_OFFSET(KIPCR, Prcb) == 0x980);
 C_ASSERT(FIELD_OFFSET(KIPCR, Prcb.CurrentThread) == 0x988);
 C_ASSERT(FIELD_OFFSET(KIPCR, Prcb.Number) == 0x9A4);
-C_ASSERT(sizeof(KIPCR) == 0xA880);
-C_ASSERT(sizeof(KPRCB) == 0x9F00);
+C_ASSERT(sizeof(KIPCR) == 0xA980);
+C_ASSERT(sizeof(KPRCB) == 0xA000);
 C_ASSERT(sizeof(KPROCESSOR_STATE) == 0x6D0);
 C_ASSERT(sizeof(KSPECIAL_REGISTERS) == 0x0A0);
 C_ASSERT(sizeof(KARM64_ARCH_STATE) == 0x2A0);
@@ -940,7 +942,11 @@ C_ASSERT(FIELD_OFFSET(KPRCB, ClockTimerState) == 0x8480);
 C_ASSERT(FIELD_OFFSET(KPRCB, StaticAffinity) == 0x89D0);
 C_ASSERT(FIELD_OFFSET(KPRCB, SelfmapLockHandle) == 0x9468);
 C_ASSERT(FIELD_OFFSET(KPRCB, CacheProcessorSet) == 0x94C8);
-C_ASSERT(FIELD_OFFSET(KPRCB, RequestMailbox) == 0x9E80);
+C_ASSERT(FIELD_OFFSET(KPRCB, ComplexProcessorSet) == 0x9C00);
+C_ASSERT(FIELD_OFFSET(KPRCB, DieProcessorSet) == 0x9D08);
+C_ASSERT(FIELD_OFFSET(KPRCB, LocalCoreControlBlock) == 0x9E10);
+C_ASSERT(FIELD_OFFSET(KPRCB, IpiFrame) == 0x9F00);
+C_ASSERT(FIELD_OFFSET(KPRCB, RequestMailbox) == 0x9F80);
 C_ASSERT(sizeof(PROCESSOR_POWER_STATE) <= 504);
 C_ASSERT(sizeof(KDPC) == 0x40);
 C_ASSERT(FIELD_OFFSET(KDPC, DpcListEntry) == 0x08);

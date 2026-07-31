@@ -16,8 +16,8 @@ START_TEST(KeArm64)
 #ifndef _M_ARM64
     skip(FALSE, "KeArm64 is ARM64-only\n");
 #else
-    ok_eq_ulonglong((ULONGLONG)sizeof(KIPCR), 0xa880ULL);
-    ok_eq_ulonglong((ULONGLONG)sizeof(KPRCB), 0x9f00ULL);
+    ok_eq_ulonglong((ULONGLONG)sizeof(KIPCR), 0xa980ULL);
+    ok_eq_ulonglong((ULONGLONG)sizeof(KPRCB), 0xa000ULL);
     trace("[arm64][KeArm64] KIPCR = 0x%Ix, KPRCB = 0x%Ix\n",
           (SIZE_T)sizeof(KIPCR), (SIZE_T)sizeof(KPRCB));
 
@@ -339,20 +339,21 @@ START_TEST(KeArm64)
     ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, SelfmapLockHandle), 0x9468ULL);
     ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, CacheProcessorSet), 0x94c8ULL);
     ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, ModuleProcessorSet), 0x9af8ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, DieProcessorSet), 0x9c00ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, LocalCoreControlBlock), 0x9d08ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, CoreControlBlockIndex), 0x9d38ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, PrcbPad26), 0x9d3cULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, CoreControlBlockShadow), 0x9d40ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, LocalCoreControlBlockShadow), 0x9d48ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, NodeRelativeTopologyIndex), 0x9d88ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, KstackFreeDpc), 0x9da0ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, KstackFreeList), 0x9de0ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, IpiFrame), 0x9df0ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, SlistRollbackDpc), 0x9df8ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, LocalSearchContexts), 0x9e38ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, SearchContexts), 0x9e48ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, SearchGenerations), 0x9e58ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, RequestMailbox), 0x9e80ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, ComplexProcessorSet), 0x9c00ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, DieProcessorSet), 0x9d08ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, LocalCoreControlBlock), 0x9e10ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, CoreControlBlockIndex), 0x9e40ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, PrcbPad26), 0x9e44ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, CoreControlBlockShadow), 0x9e48ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, LocalCoreControlBlockShadow), 0x9e50ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, NodeRelativeTopologyIndex), 0x9e90ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, KstackFreeDpc), 0x9ea8ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, KstackFreeList), 0x9ef0ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, IpiFrame), 0x9f00ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, SlistRollbackDpc), 0x9f08ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, LocalSearchContexts), 0x9f48ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, SearchContexts), 0x9f58ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, SearchGenerations), 0x9f68ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, RequestMailbox), 0x9f80ULL);
 #endif
 }
