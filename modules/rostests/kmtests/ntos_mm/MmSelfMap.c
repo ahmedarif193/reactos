@@ -44,22 +44,22 @@ VOID Test_MmSelfMap(VOID);
  * dynamically and derives all addresses from that slot; the constants are
  * reference probes so the log shows when ReactOS drifts from the Win11 dump.
  */
-#define ARM64_TEST_PXE_SELFMAP_INDEX 457ULL
+#define ARM64_TEST_PXE_SELFMAP_INDEX 493ULL
 #define ARM64_TEST_NO_SELFMAP_INDEX  ((ULONGLONG)-1)
 
-#define ARM64_TEST_PXE_BASE         0xFFFFE4F2793C9000ULL
-#define ARM64_TEST_PXE_SELFMAP      0xFFFFE4F2793C9E48ULL
-#define ARM64_TEST_PPE_BASE         0xFFFFE4F279200000ULL
-#define ARM64_TEST_PDE_BASE         0xFFFFE4F240000000ULL
-#define ARM64_TEST_PTE_BASE         0xFFFFE48000000000ULL
+#define ARM64_TEST_PXE_BASE         0xFFFFF6FB7DBED000ULL
+#define ARM64_TEST_PXE_SELFMAP      0xFFFFF6FB7DBEDF68ULL
+#define ARM64_TEST_PPE_BASE         0xFFFFF6FB7DA00000ULL
+#define ARM64_TEST_PDE_BASE         0xFFFFF6FB40000000ULL
+#define ARM64_TEST_PTE_BASE         0xFFFFF68000000000ULL
 #define ARM64_TEST_KSEG0_BASE       0xFFFF800000000000ULL
 #define ARM64_TEST_L2_SPAN          (1ULL << ARM64_TEST_PDI_SHIFT)
 
-#define ARM64_TEST_LEGACY_PXE_SELFMAP_INDEX 493ULL
-#define ARM64_TEST_LEGACY_PXE_BASE         0xFFFFF6FB7DBED000ULL
-#define ARM64_TEST_LEGACY_PPE_BASE         0xFFFFF6FB7DA00000ULL
-#define ARM64_TEST_LEGACY_PDE_BASE         0xFFFFF6FB40000000ULL
-#define ARM64_TEST_LEGACY_PTE_BASE         0xFFFFF68000000000ULL
+#define ARM64_TEST_OBSOLETE_PXE_SELFMAP_INDEX 457ULL
+#define ARM64_TEST_OBSOLETE_PXE_BASE         0xFFFFE4F2793C9000ULL
+#define ARM64_TEST_OBSOLETE_PPE_BASE         0xFFFFE4F279200000ULL
+#define ARM64_TEST_OBSOLETE_PDE_BASE         0xFFFFE4F240000000ULL
+#define ARM64_TEST_OBSOLETE_PTE_BASE         0xFFFFE48000000000ULL
 
 #define ARM64_TEST_WIN11_HIGHEST_USER       0x00007FFFFFFEFFFFULL
 #define ARM64_TEST_WIN11_USER_PROBE         0x00007FFFFFFF0000ULL
@@ -1291,27 +1291,27 @@ TestSystemRangeStartInvalidContract(
 
 static
 VOID
-TestLegacyReactOSSelfMapConstantsContract(
+TestObsoleteReactOSSelfMapConstantsContract(
     _In_ ULONGLONG SelfMapIndex)
 {
-    ok(SelfMapIndex != ARM64_TEST_LEGACY_PXE_SELFMAP_INDEX,
-       "Win11 ARM64 self-map used the legacy ReactOS fixed slot %I64u\n",
-       ARM64_TEST_LEGACY_PXE_SELFMAP_INDEX);
-    if (SelfMapIndex == ARM64_TEST_LEGACY_PXE_SELFMAP_INDEX)
+    ok(SelfMapIndex != ARM64_TEST_OBSOLETE_PXE_SELFMAP_INDEX,
+       "ARM64 self-map still uses the obsolete ReactOS fixed slot %I64u\n",
+       ARM64_TEST_OBSOLETE_PXE_SELFMAP_INDEX);
+    if (SelfMapIndex == ARM64_TEST_OBSOLETE_PXE_SELFMAP_INDEX)
         return;
 
     TestInvalidAtL0SelfMapAddress(SelfMapIndex,
-                                  (PVOID)ARM64_TEST_LEGACY_PTE_BASE,
-                                  "legacy PTE_BASE");
+                                  (PVOID)ARM64_TEST_OBSOLETE_PTE_BASE,
+                                  "obsolete PTE_BASE");
     TestInvalidAtL0SelfMapAddress(SelfMapIndex,
-                                  (PVOID)ARM64_TEST_LEGACY_PDE_BASE,
-                                  "legacy PDE_BASE");
+                                  (PVOID)ARM64_TEST_OBSOLETE_PDE_BASE,
+                                  "obsolete PDE_BASE");
     TestInvalidAtL0SelfMapAddress(SelfMapIndex,
-                                  (PVOID)ARM64_TEST_LEGACY_PPE_BASE,
-                                  "legacy PPE_BASE");
+                                  (PVOID)ARM64_TEST_OBSOLETE_PPE_BASE,
+                                  "obsolete PPE_BASE");
     TestInvalidAtL0SelfMapAddress(SelfMapIndex,
-                                  (PVOID)ARM64_TEST_LEGACY_PXE_BASE,
-                                  "legacy PXE_BASE");
+                                  (PVOID)ARM64_TEST_OBSOLETE_PXE_BASE,
+                                  "obsolete PXE_BASE");
 }
 
 static
@@ -2088,7 +2088,7 @@ START_TEST(MmSelfMap)
     TestSelfMapArithmeticContract(SelfMapIndex);
     TestInvalidUserBoundaryContract(SelfMapIndex);
     TestSystemRangeStartInvalidContract(SelfMapIndex);
-    TestLegacyReactOSSelfMapConstantsContract(SelfMapIndex);
+    TestObsoleteReactOSSelfMapConstantsContract(SelfMapIndex);
 
     TestSelectedSelfMapRanges(SelfMapIndex);
     TestSelectedSelfMapRoot(SelfMapIndex);
