@@ -445,10 +445,15 @@ int rosconfig_self_test(void)
 
     set_value(arch, "arm64");
     set_value(profile_arm64, "rpi5");
+    set_value(http_boot, "n");
     expect(&test, !opt_visible(enable), "changed target hides an incompatible menu");
-    expect(&test, generate_cmake(generated_path) == 0, "CMake fragment regenerates for another architecture profile");
+    expect(&test, generate_cmake(generated_path) == 0, "CMake fragment regenerates with Raspberry Pi 5 HTTP boot disabled");
     expect(&test, file_contains(generated_path, "set(ROSCONFIG_PROFILE \"rpi5\" CACHE STRING \"Target profile\")"), "the ARM64 Raspberry Pi 5 profile is emitted");
+    expect(&test, file_contains(generated_path, "set(FREELDR_HTTP_BOOT FALSE CACHE BOOL \"Enable HTTP boot\")"), "the Raspberry Pi 5 HTTP boot option can be disabled");
     expect(&test, file_contains(generated_path, "set(ENABLE_ROSTESTS TRUE CACHE BOOL \"ReactOS test suite and RosAutoTest\")"), "the RosAutoTest module composes with the Raspberry Pi 5 profile");
+    set_value(http_boot, "y");
+    expect(&test, generate_cmake(generated_path) == 0, "CMake fragment regenerates with Raspberry Pi 5 HTTP boot enabled");
+    expect(&test, file_contains(generated_path, "set(FREELDR_HTTP_BOOT TRUE CACHE BOOL \"Enable HTTP boot\")"), "the Raspberry Pi 5 HTTP boot option can be enabled");
     add_override("ARCH=amd64");
     expect(&test, opt_visible(enable), "transient overrides participate in dependency evaluation");
     expect_string(&test, config_value("ARCH"), "amd64", "transient override has value precedence");

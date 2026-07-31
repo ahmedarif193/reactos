@@ -113,11 +113,12 @@ partially populated image.
 Every supported architecture has a `generic` default profile. ARM64
 additionally provides `rpi5`, which enables the firmware/device-tree payload
 and builds the RP1 Ethernet, CYW43455 Wi-Fi, and Raspberry Pi 5 VC4 display
-drivers. AMD64 additionally provides `lattepandamu`, which exposes the
-LattePanda Mu HTTP boot option. Enabling it from the `Boot options` menu builds
-the FreeLdr HTTP path, makes it the zero-timeout default boot entry, and
-packages the board's external UEFI network stack. Generic builds exclude these
-board-only payloads and targets.
+drivers. AMD64 additionally provides `lattepandamu`. Both board profiles expose
+the HTTP boot option. Enabling it from the `Boot options` menu builds the
+FreeLdr HTTP path, makes it the zero-timeout default boot entry, and packages
+the board's external UEFI network stack. The Raspberry Pi 5 profile leaves this
+choice to the user instead of forcing HTTP boot on. Generic builds exclude
+these board-only payloads and targets.
 
 Profile-owned config values are enforced when the profile is applied, so an
 existing tree can switch profiles without retaining stale values from the old
