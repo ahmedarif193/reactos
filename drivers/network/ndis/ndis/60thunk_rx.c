@@ -240,7 +240,7 @@ Ndis6RxFreeLegacyPacket(
  *  Ndis6RxReturnLegacyPacket — called from miniport.c:NdisReturnPackets via
  *  the IsNdis6 gate when a legacy protocol releases a held wrapper packet.
  *
- *  Decrements the per-NBL refcount stored in NBL->MiniportReserved[2]; when
+ *  Decrements the per-NBL refcount stored in NBL->ChildRefCount; when
  *  it hits zero, returns the entire NBL to the miniport via its
  *  ReturnNetBufferListsHandler.
  * ============================================================================ */
@@ -264,9 +264,10 @@ Ndis6RxReturnLegacyPacket(
     if (Nbl == NULL || Ext == NULL || Ext->Adapter == NULL)
         return;
 
-    /* Atomic decrement of the per-NBL refcount stashed in MiniportReserved[2]. */
-    RemainingRefs = (ULONG_PTR)InterlockedDecrementSizeT(
-        (volatile SIZE_T*)&Nbl->MiniportReserved[2]);
+    /* ChildRefCount is NDIS-owned. MiniportReserved has only two entries and
+     * belongs to the miniport, so using MiniportReserved[2] corrupted the
+     * following NET_BUFFER_LIST fields on 64-bit builds. */
+    RemainingRefs = (ULONG_PTR)InterlockedDecrement(&Nbl->ChildRefCount);
 
     if (RemainingRefs == 0)
     {
@@ -370,7 +371,8 @@ Ndis6FilterTerminalReceive(
                 PNDIS6_PROTOCOL_BINDING Binding =
                     CONTAINING_RECORD(entry, NDIS6_PROTOCOL_BINDING, AdapterLink);
                 if (Binding->DriverBlock != NULL &&
-                    Binding->DriverBlock->Characteristics.ReceiveNetBufferListsHandler != NULL)
+                    Binding->DriverBlock->Characteristics.ReceiveNetBufferListsHandler != NULL &&
+                    Ndis6ReferenceProtocolBinding(Binding))
                 {
                     Snapshot[SnapCount].Binding        = Binding;
                     Snapshot[SnapCount].ReceiveHandler =
@@ -392,6 +394,7 @@ Ndis6FilterTerminalReceive(
                     PortNumber,
                     NumberOfNetBufferLists,
                     ReceiveFlags);
+                Ndis6DereferenceProtocolBinding(Snapshot[i].Binding);
             }
             return;
         }
@@ -432,12 +435,9 @@ Ndis6FilterTerminalReceive(
                 Ndis6RxFreeLegacyPacket(BatchArray[j]);
         }
 
-        for (CurrentNbl = NetBufferLists; CurrentNbl != NULL; CurrentNbl = NextNbl)
-        {
-            NextNbl = NET_BUFFER_LIST_NEXT_NBL(CurrentNbl);
-            NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = NULL;
-            Ndis6FilterDispatchReturn(Adapter, CurrentNbl, 0);
-        }
+        /* The miniport retains ownership when RESOURCES is set and reclaims
+         * the original NBL chain as soon as its indication call returns.
+         * NDIS must never invoke MiniportReturnNetBufferLists for this path. */
         return;
     }
 
@@ -470,9 +470,8 @@ Ndis6FilterTerminalReceive(
         }
 
         /* Stash the per-NBL outstanding refcount BEFORE indicating, so
-         * Ndis6RxReturnLegacyPacket can decrement it as wrappers come back.
-         * Use MiniportReserved[2] which is unused on the RX side. */
-        *(volatile SIZE_T*)&CurrentNbl->MiniportReserved[2] = (SIZE_T)PacketCount;
+         * Ndis6RxReturnLegacyPacket can decrement it as wrappers come back. */
+        InterlockedExchange(&CurrentNbl->ChildRefCount, (LONG)PacketCount);
 
         /* Push the wrapper packets up the legacy protocol chain. The
          * existing MiniIndicateReceivePacket increments WrapperReserved[0]
@@ -591,6 +590,7 @@ NdisMIndicateStatusEx(
 #define NDIS6_STATUSEX_SNAPSHOT_MAX 8
         struct
         {
+            PNDIS6_PROTOCOL_BINDING Binding;
             NDIS_HANDLE                Context;
             PROTOCOL_STATUS_EX_HANDLER StatusHandlerEx;
         } Snapshot[NDIS6_STATUSEX_SNAPSHOT_MAX];
@@ -609,8 +609,10 @@ NdisMIndicateStatusEx(
                 PNDIS6_PROTOCOL_BINDING Binding =
                     CONTAINING_RECORD(entry, NDIS6_PROTOCOL_BINDING, AdapterLink);
                 if (Binding->DriverBlock != NULL &&
-                    Binding->DriverBlock->Characteristics.StatusHandlerEx != NULL)
+                    Binding->DriverBlock->Characteristics.StatusHandlerEx != NULL &&
+                    Ndis6ReferenceProtocolBinding(Binding))
                 {
+                    Snapshot[SnapCount].Binding = Binding;
                     Snapshot[SnapCount].Context =
                         Binding->ProtocolBindingContext;
                     Snapshot[SnapCount].StatusHandlerEx =
@@ -626,6 +628,7 @@ NdisMIndicateStatusEx(
             Snapshot[i].StatusHandlerEx(
                 Snapshot[i].Context,
                 StatusIndication);
+            Ndis6DereferenceProtocolBinding(Snapshot[i].Binding);
         }
     }
 
