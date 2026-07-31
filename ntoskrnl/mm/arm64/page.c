@@ -240,7 +240,7 @@ MiArm64GetUserPteAddressForProcess(
     }
     else
     {
-        RootPa = Process->Pcb.DirectoryTableBase[0] & ARM64_PTE_ADDR_MASK;
+        RootPa = KPROCESS_DTB0(&Process->Pcb) & ARM64_PTE_ADDR_MASK;
     }
 
     if (RootPa == 0)
