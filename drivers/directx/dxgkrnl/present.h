@@ -215,6 +215,10 @@ typedef struct _DXGKRNL_PRESENT_QUEUE
     /* Monotonically increasing present ID counter for this source. */
     volatile LONG64                 NextPresentId;
 
+    /* Frames actually presented on this source (blt and flip), reported as
+     * D3DKMT_QUERYSTATISTICS_VIDPNSOURCE.GlobalInformation.Frame. */
+    volatile LONG                   PresentedFrameCount;
+
     /*
      * VSync tracking.
      *   VBlankCount    — total vertical blanks since adapter start.
