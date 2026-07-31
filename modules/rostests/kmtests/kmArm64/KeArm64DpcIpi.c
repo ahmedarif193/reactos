@@ -73,7 +73,7 @@ static VOID Arm64DpcIpiCheck(VOID)
        "MinimumDpcRate=%u looks too large\n", Prcb->MinimumDpcRate);
 
     ok_eq_size(sizeof(REQUEST_MAILBOX), (SIZE_T)0x40);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, RequestMailbox), 0x9E80ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KPRCB, RequestMailbox), 0x9F80ULL);
 
     /* Mailbox / TargetCount / IpiFrozen reachable. */
     {
