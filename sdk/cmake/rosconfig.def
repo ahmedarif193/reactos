@@ -141,6 +141,15 @@ config ENABLE_ROSTESTS
       Build and package the ReactOS test suite, including the
       rosautotest runner. Tests are available only in Debug builds.
 
+config ENABLE_ARM64_NT10_ABI_PROBES
+    prompt "ARM64 NT10 kernel ABI boot probes"
+    type bool
+    default n
+    depends BUILD_TYPE=Debug && PROFILE_ARM64=rpi5 && FREELDR_HTTP_BOOT
+    help
+      Build only the kernel-mode test harness and package the staged ARM64
+      NT10 layout, HAL, SMP, RTL, and memory-manager probes for HTTP boot.
+
 config ENABLE_WALLPAPERS
     prompt "ReactOS wallpapers"
     type bool

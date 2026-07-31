@@ -36,13 +36,17 @@ function(freeldr_ini_add_http_boot SOURCE OUTPUT URL DEFAULT_OS)
                    "HttpBoot=\"ReactOS HTTP Boot - Debug\""
                    _contents "${_contents}")
     string(REPLACE "${_boot_marker}"
-                   "[HttpBoot]\nBootType=Windows2003\nSystemPath=ramdisk(0)\\reactos\nOptions=/KERNEL=ntkrnlmp.exe /DEBUG /DEBUGPORT=COM1 /BAUDRATE=115200 /SOS /FASTDETECT /MININT /RDPATH= /RDRAMSIZE=64M /LOADSYMBOLS\nHttpBootUrl=${URL}"
+                   "[HttpBoot]\nBootType=Windows2003\nSystemPath=ramdisk(0)\\reactos\nOptions=/KERNEL=ntkrnlmp.exe /DEBUG /DEBUGPORT=COM1 /BAUDRATE=115200 /SOS /FASTDETECT /MININT /LOADSYMBOLS${_freeldr_http_probe_options}\nHttpBootUrl=${URL}"
                    _contents "${_contents}")
     file(WRITE "${OUTPUT}" "${_contents}")
 endfunction()
 
 set(FREELDR_BOOTCD_INI "${REACTOS_SOURCE_DIR}/boot/bootdata/bootcd.ini")
 set(FREELDR_PREINSTALL_INI "${REACTOS_SOURCE_DIR}/boot/bootdata/preinstall.ini")
+set(_freeldr_http_probe_options "")
+if(ENABLE_ARM64_NT10_ABI_PROBES)
+    set(_freeldr_http_probe_options " /KMTEST")
+endif()
 if(FREELDR_HTTP_BOOT)
     # The downloaded image is architecture-specific, so each board profile
     # points at its own copy on the build host.

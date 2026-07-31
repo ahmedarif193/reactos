@@ -8,6 +8,10 @@ endif()
 
 if(ENABLE_ROSTESTS)
     add_subdirectory(rostests)
+elseif(ENABLE_ARM64_NT10_ABI_PROBES)
+    # Keep the physical ARM64 parity image focused: it needs the kernel-mode
+    # ABI exerciser, not the complete application and Wine test suites.
+    add_subdirectory(rostests/kmtests)
 endif()
 
 if(ENABLE_WALLPAPERS)

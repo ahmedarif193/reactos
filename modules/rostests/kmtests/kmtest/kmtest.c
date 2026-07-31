@@ -299,7 +299,11 @@ RunTest(
 
 cleanup:
     if (!Error)
+    {
         Error = OutputResult(TestName);
+        if (!Error && ResultBuffer->Failures)
+            Error = ERROR_ASSERTION_FAILURE;
+    }
 
     return Error;
 }
