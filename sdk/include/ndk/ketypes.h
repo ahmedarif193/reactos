@@ -3417,6 +3417,13 @@ C_ASSERT(FIELD_OFFSET(KTHREAD, ReadOperationCount) == 0x3A0);
 C_ASSERT(FIELD_OFFSET(KTHREAD, ApcQueueLock) == 0x440);
 C_ASSERT(FIELD_OFFSET(KTHREAD, StateSaveArea) == 0x478);
 C_ASSERT(FIELD_OFFSET(KTHREAD, ResourceIndex) == 0x480);
+C_ASSERT(FIELD_OFFSET(KTHREAD, CoreIsolationReasons) == 0x481);
+C_ASSERT(FIELD_OFFSET(KTHREAD, BamQosLevelFromAssistPage) == 0x482);
+C_ASSERT(FIELD_OFFSET(KTHREAD, SecureCallCoreIsolationCount) == 0x483);
+C_ASSERT(FIELD_OFFSET(KTHREAD, SchedulerSharedOffset) == 0x484);
+C_ASSERT(FIELD_OFFSET(KTHREAD, SchedulerSharedSwappablePage) == 0x488);
+C_ASSERT(FIELD_OFFSET(KTHREAD, KernelAbEntries) == 0x490);
+C_ASSERT(FIELD_OFFSET(KTHREAD, UserAbEntries) == 0x498);
 #endif
 
 //
