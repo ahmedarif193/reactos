@@ -160,7 +160,7 @@ wmain(int argc, WCHAR *argv[])
     FreeAddrInfoW(Target);
     WSACleanup();
 
-    return 0;
+    return (EchosSuccessful != 0) ? 0 : 1;
 }
 
 static
