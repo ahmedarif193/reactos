@@ -3,137 +3,75 @@
 set S=%SystemRoot%\system32
 set BIN=%SystemRoot%\bin
 
+if "%1" == "httpboot" goto run_tests
 "%S%\reg.exe" query "HKLM\SYSTEM\CurrentControlSet\Control" /v SystemStartOptions 2>nul | "%S%\findstr.exe" /i "KMTEST" >nul
 if errorlevel 1 goto :eof
 
-if not exist "%BIN%\kmtest_.exe" goto nodriver
+:run_tests
+if not exist "%BIN%\kmtest.exe" goto nodriver
+if not exist "%BIN%\kmtest_drv.sys" goto nodriver
 
-"%S%\dbgprint.exe" KMTEST_SUITE_BEGIN arm64
+set KMTEST_FAILED=0
+"%S%\dbgprint.exe" KMTEST_SUITE_BEGIN arm64_nt10
 
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64Smp
-"%BIN%\kmtest_.exe" KeArm64Smp
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64Smp %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64Smp
+rem Begin with narrow layout and architectural probes. Every boundary is tagged
+rem independently so the runner reports all failures before the final status.
+call :run HalArm64Stage1
+call :run HalArm64Stage2
+call :run HalArm64Stage3
+call :run HalArm64Stage4
+call :run HalArm64Stage5
+call :run HalArm64Layout
+call :run KdArm64Layout
+call :run KeArm64Frames
+call :run RtlArm64UnwindLayout
+call :run KeArm64PcrPrcb
+call :run KeArm64ThreadProcess
+call :run KeArm64LoaderCache
 
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64SmpChurn
-"%BIN%\kmtest_.exe" KeArm64SmpChurn
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64SmpChurn %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64SmpChurn
+call :run KeArm64
+call :run KeArm64Dispatcher
+call :run KeQueue
+call :run KeArm64Intrinsics
+call :run KeArm64Irql
+call :run KeArm64SpinLock
+call :run KeArm64Smp
+call :run KeArm64DpcIpi
+call :run KeArm64IpiBroadcast
+call :run KeArm64SmpChurn
+call :run KeArm64SubNodeSched
+call :run KeArm64Smt
+call :run KeArm64Numa
 
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64SubNodeSched
-"%BIN%\kmtest_.exe" KeArm64SubNodeSched
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64SubNodeSched %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64SubNodeSched
+rem These tests encode behavior measured against the local Windows 11 ARM64
+rem reference kernel, PDB, and type dumps.
+call :run Win11NewKM
+call :run MmWin11KM
+call :run MmMdlWin11KM
+call :run MmPoolWin11KM
+call :run MmSectionWin11KM
+call :run MmPteWin11KM
+call :run MmSelfMap
 
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64Smt
-"%BIN%\kmtest_.exe" KeArm64Smt
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64Smt %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64Smt
-
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64Numa
-"%BIN%\kmtest_.exe" KeArm64Numa
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64Numa %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64Numa
-
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64DpcIpi
-"%BIN%\kmtest_.exe" KeArm64DpcIpi
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64DpcIpi %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64DpcIpi
-
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64IpiBroadcast
-"%BIN%\kmtest_.exe" KeArm64IpiBroadcast
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64IpiBroadcast %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64IpiBroadcast
-
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64Irql
-"%BIN%\kmtest_.exe" KeArm64Irql
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64Irql %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64Irql
-
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64SpinLock
-"%BIN%\kmtest_.exe" KeArm64SpinLock
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64SpinLock %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64SpinLock
-
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64
-"%BIN%\kmtest_.exe" KeArm64
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64 %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64
-
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64Dispatcher
-"%BIN%\kmtest_.exe" KeArm64Dispatcher
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64Dispatcher %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64Dispatcher
-
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64Frames
-"%BIN%\kmtest_.exe" KeArm64Frames
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64Frames %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64Frames
-
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64Intrinsics
-"%BIN%\kmtest_.exe" KeArm64Intrinsics
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64Intrinsics %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64Intrinsics
-
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64LoaderCache
-"%BIN%\kmtest_.exe" KeArm64LoaderCache
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64LoaderCache %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64LoaderCache
-
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64PcrPrcb
-"%BIN%\kmtest_.exe" KeArm64PcrPrcb
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64PcrPrcb %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64PcrPrcb
-
-"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64ThreadProcess
-"%BIN%\kmtest_.exe" KeArm64ThreadProcess
-"%S%\dbgprint.exe" KMTEST_EXIT KeArm64ThreadProcess %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KeArm64ThreadProcess
-
-"%S%\dbgprint.exe" KMTEST_BEGIN HalArm64Layout
-"%BIN%\kmtest_.exe" HalArm64Layout
-"%S%\dbgprint.exe" KMTEST_EXIT HalArm64Layout %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END HalArm64Layout
-
-"%S%\dbgprint.exe" KMTEST_BEGIN HalArm64Stage1
-"%BIN%\kmtest_.exe" HalArm64Stage1
-"%S%\dbgprint.exe" KMTEST_EXIT HalArm64Stage1 %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END HalArm64Stage1
-
-"%S%\dbgprint.exe" KMTEST_BEGIN HalArm64Stage2
-"%BIN%\kmtest_.exe" HalArm64Stage2
-"%S%\dbgprint.exe" KMTEST_EXIT HalArm64Stage2 %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END HalArm64Stage2
-
-"%S%\dbgprint.exe" KMTEST_BEGIN HalArm64Stage3
-"%BIN%\kmtest_.exe" HalArm64Stage3
-"%S%\dbgprint.exe" KMTEST_EXIT HalArm64Stage3 %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END HalArm64Stage3
-
-"%S%\dbgprint.exe" KMTEST_BEGIN HalArm64Stage4
-"%BIN%\kmtest_.exe" HalArm64Stage4
-"%S%\dbgprint.exe" KMTEST_EXIT HalArm64Stage4 %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END HalArm64Stage4
-
-"%S%\dbgprint.exe" KMTEST_BEGIN HalArm64Stage5
-"%BIN%\kmtest_.exe" HalArm64Stage5
-"%S%\dbgprint.exe" KMTEST_EXIT HalArm64Stage5 %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END HalArm64Stage5
-
-"%S%\dbgprint.exe" KMTEST_BEGIN KdArm64Layout
-"%BIN%\kmtest_.exe" KdArm64Layout
-"%S%\dbgprint.exe" KMTEST_EXIT KdArm64Layout %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END KdArm64Layout
-
-"%S%\dbgprint.exe" KMTEST_BEGIN RtlArm64UnwindLayout
-"%BIN%\kmtest_.exe" RtlArm64UnwindLayout
-"%S%\dbgprint.exe" KMTEST_EXIT RtlArm64UnwindLayout %ERRORLEVEL%
-"%S%\dbgprint.exe" KMTEST_END RtlArm64UnwindLayout
-
-"%S%\dbgprint.exe" KMTEST_SUITE_END arm64
+if not "%KMTEST_FAILED%" == "0" goto failed
+"%S%\dbgprint.exe" KMTEST_SUITE_END arm64_nt10
 "%S%\dbgprint.exe" BOOT_TESTS_DONE
+goto :eof
+
+:run
+"%S%\dbgprint.exe" KMTEST_BEGIN %1
+"%BIN%\kmtest.exe" %1
+set KMTEST_RC=%ERRORLEVEL%
+"%S%\dbgprint.exe" KMTEST_EXIT %1 %KMTEST_RC%
+"%S%\dbgprint.exe" KMTEST_END %1
+if not "%KMTEST_RC%" == "0" set KMTEST_FAILED=1
+goto :eof
+
+:failed
+"%S%\dbgprint.exe" KMTEST_SUITE_FAILED arm64_nt10
+"%S%\dbgprint.exe" BOOT_TESTS_FAILED
 goto :eof
 
 :nodriver
 "%S%\dbgprint.exe" KMTEST_RUNNER_MISSING
-"%S%\dbgprint.exe" BOOT_TESTS_DONE
+"%S%\dbgprint.exe" BOOT_TESTS_FAILED

@@ -210,6 +210,10 @@ cmake_dependent_option(FREELDR_HTTP_BOOT
                        "Whether to build the FreeLdr UEFI HTTP boot path." OFF
                        "LATTEPANDAMU_SUPPORT OR RPI_SUPPORT" OFF)
 
+cmake_dependent_option(ENABLE_ARM64_NT10_ABI_PROBES
+                       "Whether to package and run the ARM64 NT10 kernel ABI probes from HTTP boot." OFF
+                       "ARCH STREQUAL arm64 AND CMAKE_BUILD_TYPE STREQUAL Debug AND FREELDR_HTTP_BOOT" OFF)
+
 # Set by the nested build that wow64.cmake configures: marks this i386 tree
 # as the 32-bit guest half of an amd64 WoW64 build.
 cmake_dependent_option(WOW64_I386_RUNTIME
