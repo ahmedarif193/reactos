@@ -2109,12 +2109,12 @@ typedef struct _DEVICE_DESCRIPTION {
   DMA_SPEED DmaSpeed;
   ULONG MaximumLength;
   ULONG DmaPort;
-#if (NTDDI_VERSION >= NTDDI_WIN8)
+#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(__REACTOS__)
   ULONG DmaAddressWidth;
   ULONG DmaControllerInstance;
   ULONG DmaRequestLine;
   PHYSICAL_ADDRESS DeviceAddress;
-#endif // NTDDI_WIN8
+#endif // (NTDDI_VERSION >= NTDDI_WIN8) || defined(__REACTOS__)
 } DEVICE_DESCRIPTION, *PDEVICE_DESCRIPTION;
 
 #define DMA_ADAPTER_INFO_VERSION1   1
