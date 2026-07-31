@@ -42,10 +42,140 @@ WlanSvcRssiToQuality(LONG Rssi)
  * raw beacon/probe IE blob.  The capability Privacy bit is the fallback
  * "secured" signal when no RSN/WPA IE is present.
  */
+static DOT11_CIPHER_ALGORITHM
+WlanSvcCipherFromSuite(const UCHAR *suite, const UCHAR *oui)
+{
+    if (memcmp(suite, oui, 3) != 0)
+        return DOT11_CIPHER_ALGO_NONE;
+    if (suite[3] == 2)
+        return DOT11_CIPHER_ALGO_TKIP;
+    if (suite[3] == 4)
+        return DOT11_CIPHER_ALGO_CCMP;
+    return DOT11_CIPHER_ALGO_NONE;
+}
+
+static BOOL
+WlanSvcParseRsn(const UCHAR *body,
+                ULONG len,
+                DOT11_AUTH_ALGORITHM *auth,
+                DOT11_CIPHER_ALGORITHM *pairwise,
+                DOT11_CIPHER_ALGORITHM *group)
+{
+    static const UCHAR RsnOui[3] = { 0x00, 0x0F, 0xAC };
+    ULONG off;
+    USHORT count;
+    ULONG k;
+    BOOL havePsk = FALSE;
+    BOOL haveSae = FALSE;
+
+    if (len < 8 || body[0] != 1 || body[1] != 0)
+        return FALSE;
+
+    *group = WlanSvcCipherFromSuite(&body[2], RsnOui);
+    *pairwise = DOT11_CIPHER_ALGO_NONE;
+    count = (USHORT)(body[6] | ((USHORT)body[7] << 8));
+    off = 8;
+    if (count == 0 || count > (len - off) / 4)
+        return FALSE;
+    for (k = 0; k < count; k++, off += 4)
+    {
+        DOT11_CIPHER_ALGORITHM cipher =
+            WlanSvcCipherFromSuite(&body[off], RsnOui);
+
+        if (cipher == DOT11_CIPHER_ALGO_CCMP ||
+            *pairwise == DOT11_CIPHER_ALGO_NONE)
+        {
+            *pairwise = cipher;
+        }
+    }
+
+    if (off + 2 > len)
+        return FALSE;
+    count = (USHORT)(body[off] | ((USHORT)body[off + 1] << 8));
+    off += 2;
+    if (count == 0 || count > (len - off) / 4)
+        return FALSE;
+    for (k = 0; k < count; k++, off += 4)
+    {
+        if (memcmp(&body[off], RsnOui, 3) != 0)
+            continue;
+        if (body[off + 3] == 2)
+            havePsk = TRUE;
+        else if (body[off + 3] == 8)
+            haveSae = TRUE;
+    }
+
+    if (havePsk)
+        *auth = DOT11_AUTH_ALGO_RSNA_PSK;
+    else if (haveSae)
+        *auth = DOT11_AUTH_ALGO_WPA3_SAE;
+    else
+        *auth = DOT11_AUTH_ALGO_RSNA;
+    if (*pairwise == DOT11_CIPHER_ALGO_NONE)
+        *pairwise = *group;
+    return TRUE;
+}
+
+static BOOL
+WlanSvcParseWpa(const UCHAR *body,
+                ULONG len,
+                DOT11_AUTH_ALGORITHM *auth,
+                DOT11_CIPHER_ALGORITHM *pairwise,
+                DOT11_CIPHER_ALGORITHM *group)
+{
+    static const UCHAR WpaOui[3] = { 0x00, 0x50, 0xF2 };
+    ULONG off;
+    USHORT count;
+    ULONG k;
+    BOOL havePsk = FALSE;
+
+    if (len < 12 || memcmp(body, WpaOui, 3) != 0 || body[3] != 1 ||
+        body[4] != 1 || body[5] != 0)
+    {
+        return FALSE;
+    }
+
+    *group = WlanSvcCipherFromSuite(&body[6], WpaOui);
+    *pairwise = DOT11_CIPHER_ALGO_NONE;
+    count = (USHORT)(body[10] | ((USHORT)body[11] << 8));
+    off = 12;
+    if (count == 0 || count > (len - off) / 4)
+        return FALSE;
+    for (k = 0; k < count; k++, off += 4)
+    {
+        DOT11_CIPHER_ALGORITHM cipher =
+            WlanSvcCipherFromSuite(&body[off], WpaOui);
+
+        if (cipher == DOT11_CIPHER_ALGO_CCMP ||
+            *pairwise == DOT11_CIPHER_ALGO_NONE)
+        {
+            *pairwise = cipher;
+        }
+    }
+
+    if (off + 2 > len)
+        return FALSE;
+    count = (USHORT)(body[off] | ((USHORT)body[off + 1] << 8));
+    off += 2;
+    if (count == 0 || count > (len - off) / 4)
+        return FALSE;
+    for (k = 0; k < count; k++, off += 4)
+    {
+        if (memcmp(&body[off], WpaOui, 3) == 0 && body[off + 3] == 2)
+            havePsk = TRUE;
+    }
+
+    *auth = havePsk ? DOT11_AUTH_ALGO_WPA_PSK : DOT11_AUTH_ALGO_WPA;
+    if (*pairwise == DOT11_CIPHER_ALGO_NONE)
+        *pairwise = *group;
+    return TRUE;
+}
+
 static VOID
 WlanSvcParseBssIes(PWLANSVC_BSS_ENTRY bss, const UCHAR *ie, ULONG ieLen)
 {
     ULONG pos = 0;
+    BOOL haveRsn = FALSE;
 
     /* Default: open unless an RSN/WPA IE (or the Privacy bit) says otherwise. */
     if (bss->CapabilityInformation & 0x0010 /* Privacy */)
@@ -53,12 +183,14 @@ WlanSvcParseBssIes(PWLANSVC_BSS_ENTRY bss, const UCHAR *ie, ULONG ieLen)
         bss->SecurityEnabled = TRUE;
         bss->DefaultAuth = DOT11_AUTH_ALGO_80211_OPEN;   /* WEP-era default */
         bss->DefaultCipher = DOT11_CIPHER_ALGO_WEP;
+        bss->DefaultMulticastCipher = DOT11_CIPHER_ALGO_WEP;
     }
     else
     {
         bss->SecurityEnabled = FALSE;
         bss->DefaultAuth = DOT11_AUTH_ALGO_80211_OPEN;
         bss->DefaultCipher = DOT11_CIPHER_ALGO_NONE;
+        bss->DefaultMulticastCipher = DOT11_CIPHER_ALGO_NONE;
     }
 
     while (pos + 2 <= ieLen)
@@ -83,32 +215,34 @@ WlanSvcParseBssIes(PWLANSVC_BSS_ENTRY bss, const UCHAR *ie, ULONG ieLen)
 
             case 48:  /* RSN (WPA2) */
             {
-                /* Minimal RSN parse: presence => RSNA; pick the group cipher
-                 * suite type to distinguish CCMP(4) from TKIP(2). */
-                bss->SecurityEnabled = TRUE;
-                bss->DefaultAuth = DOT11_AUTH_ALGO_RSNA_PSK;
-                bss->DefaultCipher = DOT11_CIPHER_ALGO_CCMP;
-                if (len >= 8)
+                DOT11_AUTH_ALGORITHM auth;
+                DOT11_CIPHER_ALGORITHM pairwise = DOT11_CIPHER_ALGO_NONE;
+                DOT11_CIPHER_ALGORITHM group = DOT11_CIPHER_ALGO_NONE;
+
+                if (WlanSvcParseRsn(body, len, &auth, &pairwise, &group))
                 {
-                    /* version(2) + group suite OUI(3) + group suite type(1) */
-                    UCHAR groupType = body[2 + 3];
-                    if (groupType == 2)
-                        bss->DefaultCipher = DOT11_CIPHER_ALGO_TKIP;
-                    else if (groupType == 4)
-                        bss->DefaultCipher = DOT11_CIPHER_ALGO_CCMP;
+                    haveRsn = TRUE;
+                    bss->SecurityEnabled = TRUE;
+                    bss->DefaultAuth = auth;
+                    bss->DefaultCipher = pairwise;
+                    bss->DefaultMulticastCipher = group;
                 }
                 break;
             }
 
             case 221: /* Vendor Specific -- WPA(1) uses OUI 00:50:F2 type 1 */
             {
-                static const UCHAR WpaOui[4] = { 0x00, 0x50, 0xF2, 0x01 };
-                if (len >= 4 && memcmp(body, WpaOui, 4) == 0 &&
-                    !bss->SecurityEnabled)   /* RSN, if present, wins */
+                DOT11_AUTH_ALGORITHM auth;
+                DOT11_CIPHER_ALGORITHM pairwise = DOT11_CIPHER_ALGO_NONE;
+                DOT11_CIPHER_ALGORITHM group = DOT11_CIPHER_ALGO_NONE;
+
+                if (!haveRsn &&
+                    WlanSvcParseWpa(body, len, &auth, &pairwise, &group))
                 {
                     bss->SecurityEnabled = TRUE;
-                    bss->DefaultAuth = DOT11_AUTH_ALGO_WPA_PSK;
-                    bss->DefaultCipher = DOT11_CIPHER_ALGO_TKIP;
+                    bss->DefaultAuth = auth;
+                    bss->DefaultCipher = pairwise;
+                    bss->DefaultMulticastCipher = group;
                 }
                 break;
             }
@@ -147,6 +281,13 @@ WlanSvcImportBss(PNWIFI_BSS_ENTRY src)
     bss->RateCount = 0;
 
     /* The raw IE blob is appended after the fixed entry, at IeOffset. */
+    if (src->Size < sizeof(*src) || src->IeOffset < sizeof(*src) ||
+        src->IeOffset > src->Size ||
+        src->IeLength > src->Size - src->IeOffset)
+    {
+        HeapFree(GetProcessHeap(), 0, bss);
+        return NULL;
+    }
     ieLen = src->IeLength;
     if (ieLen > NWIFI_MAX_IE_SIZE)
         ieLen = NWIFI_MAX_IE_SIZE;
@@ -168,6 +309,13 @@ WlanSvcApplyBssCache(PWLANSVC_INTERFACE Iface,
     PNWIFI_BSS_ENTRY entry;
     ULONG off, i;
 
+    if (Results == NULL || Results->Size < sizeof(*Results) ||
+        Results->FirstEntryOffset < sizeof(*Results) ||
+        Results->FirstEntryOffset > Results->Size)
+    {
+        return ERROR_INVALID_DATA;
+    }
+
     WlanSvcFlushBssList(Iface);
 
     off = Results->FirstEntryOffset;
@@ -175,24 +323,40 @@ WlanSvcApplyBssCache(PWLANSVC_INTERFACE Iface,
     {
         PWLANSVC_BSS_ENTRY bss;
 
-        if (off + FIELD_OFFSET(NWIFI_BSS_ENTRY, IeOffset) > Results->Size)
-            break;
+        if (off > Results->Size ||
+            Results->Size - off < sizeof(NWIFI_BSS_ENTRY))
+            goto InvalidList;
 
         entry = (PNWIFI_BSS_ENTRY)((PUCHAR)Results + off);
-        if (entry->Size == 0 || off + entry->Size > Results->Size)
-            break;
+        if (entry->Size < sizeof(NWIFI_BSS_ENTRY) ||
+            entry->Size > Results->Size - off)
+        {
+            goto InvalidList;
+        }
+        if (entry->IeOffset < sizeof(*entry) ||
+            entry->IeOffset > entry->Size ||
+            entry->IeLength > entry->Size - entry->IeOffset)
+        {
+            goto InvalidList;
+        }
 
         bss = WlanSvcImportBss(entry);
-        if (bss != NULL)
+        if (bss == NULL)
         {
-            InsertTailList(&Iface->BssListHead, &bss->ListEntry);
-            Iface->BssCount++;
+            WlanSvcFlushBssList(Iface);
+            return ERROR_NOT_ENOUGH_MEMORY;
         }
+        InsertTailList(&Iface->BssListHead, &bss->ListEntry);
+        Iface->BssCount++;
 
         off += entry->Size;
     }
 
     return ERROR_SUCCESS;
+
+InvalidList:
+    WlanSvcFlushBssList(Iface);
+    return ERROR_INVALID_DATA;
 }
 
 /*

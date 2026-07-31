@@ -220,6 +220,7 @@ typedef struct _WLANSVC_BSS_ENTRY
     BOOL               SecurityEnabled;
     DOT11_AUTH_ALGORITHM   DefaultAuth;
     DOT11_CIPHER_ALGORITHM DefaultCipher;
+    DOT11_CIPHER_ALGORITHM DefaultMulticastCipher;
     ULONG              RateCount;
     USHORT             Rates[DOT11_RATE_SET_MAX_LENGTH];
     ULONG              IeLength;
@@ -278,6 +279,7 @@ typedef struct _WLANSVC_INTERFACE
     WCHAR                 ConnectedProfile[WLAN_MAX_NAME_LENGTH];
     LONG                  Rssi;
     ULONG                 LinkQuality;
+    ULONG                 LinkSpeedKbps;
 } WLANSVC_INTERFACE, *PWLANSVC_INTERFACE;
 
 /* A queued notification waiting to be drained by _RpcAsyncGetNotification. */
