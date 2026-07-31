@@ -458,7 +458,7 @@ SffdiskQueryAdapterProperty(
     Descriptor->Size = RequiredSize;
     Descriptor->MaximumTransferLength = SFFDISK_MAX_TRANSFER_SIZE;
     Descriptor->MaximumPhysicalPages = (SFFDISK_MAX_TRANSFER_SIZE / PAGE_SIZE) + 1;
-    Descriptor->AlignmentMask = FILE_WORD_ALIGNMENT;
+    Descriptor->AlignmentMask = DeviceExtension->Self->AlignmentRequirement;
     Descriptor->AdapterUsesPio = FALSE;
     Descriptor->AdapterScansDown = FALSE;
     Descriptor->CommandQueueing = FALSE;
@@ -486,6 +486,7 @@ SffdiskQueryDeviceUniqueId(
     PSTORAGE_IDENTIFIER Ident;
     CHAR NameString[64];
     ULONG NameStringLen;
+    ULONG AlignedNameStringLen;
     ULONG IdentSize;
     ULONG IdDescSize;
     ULONG RequiredSize;
@@ -495,6 +496,7 @@ SffdiskQueryDeviceUniqueId(
         return STATUS_NOT_SUPPORTED;
     }
 
+    RtlZeroMemory(NameString, sizeof(NameString));
     NameStringLen = (ULONG)_snprintf(
         NameString, sizeof(NameString),
         "SD:MID=%02X:OID=%04X:PNM=%c%c%c%c%c:PSN=%08X",
@@ -517,9 +519,9 @@ SffdiskQueryDeviceUniqueId(
                 ? DeviceExtension->CardId.ProductName[4] : '_',
         DeviceExtension->CardId.ProductSerialNumber) + 1;
 
-    NameStringLen = (NameStringLen + 3) & ~3UL;
+    AlignedNameStringLen = (NameStringLen + 3) & ~3UL;
 
-    IdentSize = FIELD_OFFSET(STORAGE_IDENTIFIER, Identifier) + NameStringLen;
+    IdentSize = FIELD_OFFSET(STORAGE_IDENTIFIER, Identifier) + AlignedNameStringLen;
     IdDescSize = FIELD_OFFSET(STORAGE_DEVICE_ID_DESCRIPTOR, Identifiers) + IdentSize;
     RequiredSize = sizeof(STORAGE_DEVICE_UNIQUE_IDENTIFIER) + IdDescSize;
 
@@ -532,7 +534,7 @@ SffdiskQueryDeviceUniqueId(
     {
         PSTORAGE_DESCRIPTOR_HEADER Header;
         Header = (PSTORAGE_DESCRIPTOR_HEADER)Irp->AssociatedIrp.SystemBuffer;
-        Header->Version = sizeof(STORAGE_DEVICE_UNIQUE_IDENTIFIER);
+        Header->Version = DUID_VERSION_1;
         Header->Size = RequiredSize;
         Irp->IoStatus.Information = sizeof(STORAGE_DESCRIPTOR_HEADER);
         return STATUS_SUCCESS;
@@ -541,7 +543,7 @@ SffdiskQueryDeviceUniqueId(
     Duid = (PSTORAGE_DEVICE_UNIQUE_IDENTIFIER)Irp->AssociatedIrp.SystemBuffer;
     RtlZeroMemory(Duid, RequiredSize);
 
-    Duid->Version = sizeof(STORAGE_DEVICE_UNIQUE_IDENTIFIER);
+    Duid->Version = DUID_VERSION_1;
     Duid->Size = RequiredSize;
     Duid->StorageDeviceIdOffset = sizeof(STORAGE_DEVICE_UNIQUE_IDENTIFIER);
     Duid->StorageDeviceOffset = 0;
@@ -762,6 +764,13 @@ SffdiskHandleStorageQueryProperty(
         return STATUS_INVALID_PARAMETER;
     }
 
+    if (Query->PropertyId == StorageDeviceUniqueIdProperty &&
+        Query->AdditionalParameters[0] != DUID_HARDWARE_IDS_ONLY &&
+        Query->AdditionalParameters[0] != DUID_INCLUDE_SOFTWARE_IDS)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
     switch (Query->PropertyId)
     {
         case StorageDeviceProperty:
@@ -958,6 +967,283 @@ SffdiskHandleMountdevQuerySuggestedLinkName(
     return STATUS_SUCCESS;
 }
 
+static
+NTSTATUS
+SffdiskHandleQueryProtocol(
+    _In_ PSFFDISK_DEVICE_EXTENSION DeviceExtension,
+    _Inout_ PIRP Irp)
+{
+    PIO_STACK_LOCATION IrpSp;
+    PSFFDISK_QUERY_DEVICE_PROTOCOL_DATA Protocol;
+    static const GUID SdProtocolGuid = GUID_SFF_PROTOCOL_SD;
+    static const GUID MmcProtocolGuid = GUID_SFF_PROTOCOL_MMC;
+
+    IrpSp = IoGetCurrentIrpStackLocation(Irp);
+    if (IrpSp->Parameters.DeviceIoControl.OutputBufferLength < sizeof(*Protocol))
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    Protocol = (PSFFDISK_QUERY_DEVICE_PROTOCOL_DATA)Irp->AssociatedIrp.SystemBuffer;
+    RtlZeroMemory(Protocol, sizeof(*Protocol));
+    Protocol->Size = sizeof(*Protocol);
+
+    switch (DeviceExtension->CardType)
+    {
+        case SdCardTypeSdV1:
+        case SdCardTypeSdV2:
+        case SdCardTypeSdhc:
+        case SdCardTypeSdxc:
+        case SdCardTypeCombo:
+            Protocol->ProtocolGUID = SdProtocolGuid;
+            break;
+
+        case SdCardTypeMmc:
+        case SdCardTypeEmmc:
+            Protocol->ProtocolGUID = MmcProtocolGuid;
+            break;
+
+        default:
+            return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
+    Irp->IoStatus.Information = sizeof(*Protocol);
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+SffdiskHandleDeviceCommand(
+    _In_ PSFFDISK_DEVICE_EXTENSION DeviceExtension,
+    _Inout_ PIRP Irp)
+{
+    PIO_STACK_LOCATION IrpSp;
+    PSFFDISK_DEVICE_COMMAND_DATA Data;
+    PSDCMD_DESCRIPTOR CmdDesc;
+    SDBUS_REQUEST_PACKET Packet;
+    PMDL Mdl;
+    PUCHAR DataBuffer;
+    NTSTATUS Status;
+    BOOLEAN CommandOnly;
+    ULONG InputLength;
+    ULONG OutputLength;
+    ULONG HeaderSize;
+    ULONG BufferOffset;
+    ULONG BufferEnd;
+    ULONG BytesReturned;
+
+    IrpSp = IoGetCurrentIrpStackLocation(Irp);
+    InputLength = IrpSp->Parameters.DeviceIoControl.InputBufferLength;
+    OutputLength = IrpSp->Parameters.DeviceIoControl.OutputBufferLength;
+
+    if (InputLength < FIELD_OFFSET(SFFDISK_DEVICE_COMMAND_DATA, Data))
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    Data = (PSFFDISK_DEVICE_COMMAND_DATA)Irp->AssociatedIrp.SystemBuffer;
+    HeaderSize = Data->HeaderSize;
+    if (HeaderSize < FIELD_OFFSET(SFFDISK_DEVICE_COMMAND_DATA, Data) ||
+        HeaderSize > InputLength ||
+        (Data->Flags & ~SFFDISK_DEVCMD_VALID_FLAGS) != 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    switch (Data->Command)
+    {
+        case SFFDISK_DC_GET_VERSION:
+            if (Data->ProtocolArgumentSize != 0 ||
+                Data->DeviceDataBufferSize != 0 ||
+                Data->Flags != 0)
+            {
+                return STATUS_INVALID_PARAMETER;
+            }
+            if (OutputLength < HeaderSize)
+            {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            Data->Information = SDBUS_DRIVER_VERSION_4;
+            Irp->IoStatus.Information = HeaderSize;
+            return STATUS_SUCCESS;
+
+        case SFFDISK_DC_LOCK_CHANNEL:
+            if (Data->ProtocolArgumentSize != 0 ||
+                Data->DeviceDataBufferSize != 0 ||
+                Data->Flags != 0)
+            {
+                return STATUS_INVALID_PARAMETER;
+            }
+            if (OutputLength < HeaderSize)
+            {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            Status = SffdiskLockChannel(DeviceExtension, IrpSp->FileObject);
+            if (NT_SUCCESS(Status))
+            {
+                Data->Information = 0;
+                Irp->IoStatus.Information = HeaderSize;
+            }
+            return Status;
+
+        case SFFDISK_DC_UNLOCK_CHANNEL:
+            if (Data->ProtocolArgumentSize != 0 ||
+                Data->DeviceDataBufferSize != 0 ||
+                Data->Flags != 0)
+            {
+                return STATUS_INVALID_PARAMETER;
+            }
+            if (OutputLength < HeaderSize)
+            {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            Status = SffdiskUnlockChannel(DeviceExtension, IrpSp->FileObject);
+            if (NT_SUCCESS(Status))
+            {
+                Data->Information = 0;
+                Irp->IoStatus.Information = HeaderSize;
+            }
+            return Status;
+
+        case SFFDISK_DC_DEVICE_COMMAND:
+            break;
+
+        default:
+            return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
+    if (Data->ProtocolArgumentSize < sizeof(SDCMD_DESCRIPTOR) ||
+        Data->ProtocolArgumentSize > InputLength - HeaderSize)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    BufferOffset = HeaderSize + Data->ProtocolArgumentSize;
+    if (BufferOffset < HeaderSize ||
+        Data->DeviceDataBufferSize > MAXULONG - BufferOffset)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (OutputLength < HeaderSize)
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    CmdDesc = (PSDCMD_DESCRIPTOR)(((PUCHAR)Data) + HeaderSize);
+    CommandOnly = (CmdDesc->TransferType == SDTT_CMD_ONLY);
+    BufferEnd = BufferOffset + Data->DeviceDataBufferSize;
+
+    if (CommandOnly)
+    {
+        if (BufferEnd > OutputLength)
+        {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+    }
+    else if (CmdDesc->TransferDirection == SDTD_READ)
+    {
+        if (BufferEnd > OutputLength)
+        {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+    }
+    else if (CmdDesc->TransferDirection == SDTD_WRITE)
+    {
+        if (BufferEnd > InputLength)
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+    }
+    else if (CmdDesc->TransferDirection != SDTD_UNSPECIFIED ||
+             Data->DeviceDataBufferSize != 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Mdl = NULL;
+    DataBuffer = NULL;
+    if (Data->DeviceDataBufferSize != 0 && !CommandOnly)
+    {
+        DataBuffer = ((PUCHAR)Data) + BufferOffset;
+        Mdl = IoAllocateMdl(DataBuffer,
+                            Data->DeviceDataBufferSize,
+                            FALSE,
+                            FALSE,
+                            NULL);
+        if (Mdl == NULL)
+        {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        MmBuildMdlForNonPagedPool(Mdl);
+    }
+
+    SD_INIT_REQUEST_PACKET(&Packet, SDRF_DEVICE_COMMAND);
+    if (Data->Flags & SFFDISK_DEVCMD_FLAG_APPEND_CMD_SEQ)
+    {
+        Packet.Flags |= SDRP_FLAG_APPEND_CMD_SEQ;
+    }
+    if (Data->Flags & SFFDISK_DEVCMD_FLAG_LONG_OPERATION)
+    {
+        Packet.Flags |= SDRP_FLAG_WAIT_FOR_BUSY;
+    }
+    Packet.Parameters.DeviceCommand.CmdDesc = *CmdDesc;
+    Packet.Parameters.DeviceCommand.Argument = (ULONG)Data->Information;
+    Packet.Parameters.DeviceCommand.Mdl = Mdl;
+    Packet.Parameters.DeviceCommand.Length = CommandOnly ? 0 : Data->DeviceDataBufferSize;
+
+    Status = SffdiskAcquireBusRequest(DeviceExtension, IrpSp->FileObject);
+    if (NT_SUCCESS(Status))
+    {
+        Status = SdBusSubmitRequest(DeviceExtension->BusInterface.Context, &Packet);
+        SffdiskReleaseBusRequest(DeviceExtension);
+    }
+    Data->Information = Packet.Information;
+    BytesReturned = HeaderSize;
+
+    if (NT_SUCCESS(Status) && CommandOnly)
+    {
+        if (Packet.ResponseLength > sizeof(Packet.ResponseData.AsUCHAR) ||
+            Packet.ResponseLength > Data->DeviceDataBufferSize)
+        {
+            Status = STATUS_BUFFER_TOO_SMALL;
+        }
+        else
+        {
+            DataBuffer = ((PUCHAR)Data) + BufferOffset;
+            if (Packet.ResponseLength != 0)
+            {
+                RtlCopyMemory(DataBuffer,
+                              Packet.ResponseData.AsUCHAR,
+                              Packet.ResponseLength);
+            }
+            BytesReturned = BufferOffset + Packet.ResponseLength;
+        }
+    }
+    else if (NT_SUCCESS(Status) && CmdDesc->TransferDirection == SDTD_READ)
+    {
+        if (Packet.Information > Data->DeviceDataBufferSize)
+        {
+            Status = STATUS_DEVICE_DATA_ERROR;
+        }
+        else
+        {
+            BytesReturned = BufferOffset + (ULONG)Packet.Information;
+        }
+    }
+
+    if (Mdl != NULL)
+    {
+        IoFreeMdl(Mdl);
+    }
+
+    Irp->IoStatus.Information = NT_SUCCESS(Status) ? BytesReturned : 0;
+    return Status;
+}
+
 /* DISPATCH FUNCTION **********************************************************/
 
 /**
@@ -1103,14 +1389,23 @@ SffdiskDeviceControl(
             Status = SffdiskHandleMountdevQuerySuggestedLinkName(DeviceExtension, Irp);
             break;
 
-        default:
-            Status = STATUS_INVALID_DEVICE_REQUEST;
+        case IOCTL_SFFDISK_QUERY_DEVICE_PROTOCOL:
+            Status = SffdiskHandleQueryProtocol(DeviceExtension, Irp);
             break;
+
+        case IOCTL_SFFDISK_DEVICE_COMMAND:
+            Status = SffdiskHandleDeviceCommand(DeviceExtension, Irp);
+            break;
+
+        default:
+            return SffdiskForwardIrpWithRemoveLock(DeviceExtension,
+                                                   Irp,
+                                                   FALSE);
     }
 
     Irp->IoStatus.Status = Status;
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
     IoReleaseRemoveLock(&DeviceExtension->RemoveLock, Irp);
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
 
     return Status;
 }

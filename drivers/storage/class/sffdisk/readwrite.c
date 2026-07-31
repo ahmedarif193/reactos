@@ -231,6 +231,8 @@ SffdiskReadWrite(
     ULONG ChunkBytes;
     ULONG ChunkSectors;
     ULONGLONG CurrentSector;
+    ULONGLONG LastSector;
+    BOOLEAN BusRequestAcquired;
 
     DeviceExtension = (PSFFDISK_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
     IrpSp = IoGetCurrentIrpStackLocation(Irp);
@@ -249,6 +251,8 @@ SffdiskReadWrite(
         return Status;
     }
 
+    Irp->IoStatus.Information = 0;
+    BusRequestAcquired = FALSE;
     IsWrite = (IrpSp->MajorFunction == IRP_MJ_WRITE);
 
     if (!DeviceExtension->Present)
@@ -309,14 +313,17 @@ SffdiskReadWrite(
     /*
      * Validate that the transfer does not exceed the card capacity.
      */
-    if (StartSector + SectorCount > DeviceExtension->TotalSectors)
+    if ((ULONGLONG)SectorCount > DeviceExtension->TotalSectors ||
+        StartSector > DeviceExtension->TotalSectors - SectorCount)
     {
         Status = STATUS_NONEXISTENT_SECTOR;
         goto Complete;
     }
 
-    if (StartSector >= 0x100000000ULL ||
-        (StartSector + SectorCount) > 0x100000000ULL)
+    LastSector = StartSector + SectorCount - 1;
+    if (LastSector > MAXULONG ||
+        (!DeviceExtension->HighCapacity &&
+         LastSector > MAXULONG / DeviceExtension->BytesPerSector))
     {
         Status = STATUS_NONEXISTENT_SECTOR;
         goto Complete;
@@ -328,15 +335,27 @@ SffdiskReadWrite(
      * address to be within the MDL's original VA range, NOT the system mapping.
      */
     Mdl = Irp->MdlAddress;
-    if (Mdl == NULL)
+    if (Mdl == NULL || MmGetMdlByteCount(Mdl) < TransferLength)
     {
-        DPRINT1("SffdiskReadWrite: MDL is NULL for %lu byte %s!\n",
+        DPRINT1("SffdiskReadWrite: invalid MDL for %lu byte %s\n",
                 TransferLength, IsWrite ? "write" : "read");
-        Status = STATUS_INVALID_PARAMETER;
+        Status = STATUS_INVALID_USER_BUFFER;
         goto Complete;
     }
 
     MdlVa = MmGetMdlVirtualAddress(Mdl);
+    if (MdlVa == NULL)
+    {
+        Status = STATUS_INVALID_USER_BUFFER;
+        goto Complete;
+    }
+
+    Status = SffdiskAcquireBusRequest(DeviceExtension, IrpSp->FileObject);
+    if (!NT_SUCCESS(Status))
+    {
+        goto Complete;
+    }
+    BusRequestAcquired = TRUE;
 
     /*
      * Perform the transfer in chunks to stay within the maximum transfer size.
@@ -388,8 +407,12 @@ SffdiskReadWrite(
 
 Complete:
     Irp->IoStatus.Status = Status;
-    IoCompleteRequest(Irp, (NT_SUCCESS(Status) ? IO_DISK_INCREMENT : IO_NO_INCREMENT));
+    if (BusRequestAcquired)
+    {
+        SffdiskReleaseBusRequest(DeviceExtension);
+    }
     IoReleaseRemoveLock(&DeviceExtension->RemoveLock, Irp);
+    IoCompleteRequest(Irp, (NT_SUCCESS(Status) ? IO_DISK_INCREMENT : IO_NO_INCREMENT));
 
     return Status;
 }

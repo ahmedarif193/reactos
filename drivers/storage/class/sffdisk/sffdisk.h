@@ -11,6 +11,7 @@
 #include <ntdddisk.h>
 #include <ntddstor.h>
 #include <ntddsd.h>
+#include <psdk/sffdisk.h>
 #include <reactos/drivers/sd/sddef.h>
 #include <stdio.h>
 
@@ -35,15 +36,31 @@ typedef struct _SFFDISK_DEVICE_EXTENSION
     PDEVICE_OBJECT LowerDevice;         /**< Next lower device in the stack */
     PDEVICE_OBJECT PhysicalDevice;      /**< The physical device object (PDO) */
     IO_REMOVE_LOCK RemoveLock;          /**< Remove lock for safe device removal */
+    KSPIN_LOCK UsageLock;               /**< Protects special-file usage state */
+    ULONG PagingPathCount;
+    ULONG HibernationPathCount;
+    ULONG DumpPathCount;
+    ULONG BootPathCount;
+    ULONG PostDisplayPathCount;
+    ULONG GuestAssignedPathCount;
+    BOOLEAN PowerPagable;               /**< Base pageability inherited from below */
     SDBUS_INTERFACE_STANDARD BusInterface; /**< SD bus interface from the bus driver */
     BOOLEAN InterfaceOpen;              /**< TRUE if the bus interface has been opened */
+    KSPIN_LOCK BusRequestLock;          /**< Serializes interface admission and rundown */
+    ULONG OutstandingBusRequests;       /**< Commands currently using BusInterface */
+    KEVENT BusRequestsDrained;          /**< Signaled when OutstandingBusRequests is zero */
+    BOOLEAN BusRequestsBlocked;         /**< TRUE while PnP is closing the bus interface */
+    KEVENT ChannelAvailable;             /**< Signaled when a command sequence may reserve the channel */
+    PFILE_OBJECT ChannelOwner;           /**< File object holding the raw-command channel lock */
+    ULONG ChannelLockDepth;              /**< Nested channel locks held by ChannelOwner */
     SD_CARD_TYPE CardType;              /**< Card type (SD, SDHC, eMMC, etc.) */
     ULONGLONG TotalSectors;             /**< Total number of 512-byte sectors on the card */
     ULONG BytesPerSector;               /**< Bytes per sector (always 512 for SD/eMMC) */
     BOOLEAN WriteProtected;             /**< TRUE if the write-protect switch is engaged */
     BOOLEAN MediaPresent;               /**< TRUE if media is present */
     ULONG MediaChangeCount;             /**< Media change counter */
-    BOOLEAN Removable;                  /**< TRUE for removable SD cards, FALSE for eMMC */
+    BOOLEAN Removable;                  /**< TRUE when the bus reports removable slot wiring */
+    BOOLEAN RemovabilityKnown;          /**< TRUE after lower QUERY_CAPABILITIES completed */
     BOOLEAN HighCapacity;               /**< TRUE if the card uses block addressing (SDHC/SDXC/eMMC) */
     BOOLEAN CidValid;
     SD_CID CardId;                      /**< Card identification data */
@@ -72,6 +89,7 @@ _Dispatch_type_(IRP_MJ_POWER)
 DRIVER_DISPATCH SffdiskPower;
 
 _Dispatch_type_(IRP_MJ_CREATE)
+_Dispatch_type_(IRP_MJ_CLEANUP)
 _Dispatch_type_(IRP_MJ_CLOSE)
 DRIVER_DISPATCH SffdiskCreateClose;
 
@@ -88,6 +106,36 @@ DRIVER_DISPATCH SffdiskCreateClose;
 NTSTATUS
 SffdiskStartDevice(
     _In_ PSFFDISK_DEVICE_EXTENSION DeviceExtension);
+
+NTSTATUS
+SffdiskAcquireBusRequest(
+    _In_ PSFFDISK_DEVICE_EXTENSION DeviceExtension,
+    _In_opt_ PFILE_OBJECT FileObject);
+
+VOID
+SffdiskReleaseBusRequest(
+    _In_ PSFFDISK_DEVICE_EXTENSION DeviceExtension);
+
+NTSTATUS
+SffdiskLockChannel(
+    _In_ PSFFDISK_DEVICE_EXTENSION DeviceExtension,
+    _In_ PFILE_OBJECT FileObject);
+
+NTSTATUS
+SffdiskUnlockChannel(
+    _In_ PSFFDISK_DEVICE_EXTENSION DeviceExtension,
+    _In_ PFILE_OBJECT FileObject);
+
+VOID
+SffdiskReleaseChannelForFile(
+    _In_ PSFFDISK_DEVICE_EXTENSION DeviceExtension,
+    _In_opt_ PFILE_OBJECT FileObject);
+
+NTSTATUS
+SffdiskForwardIrpWithRemoveLock(
+    _In_ PSFFDISK_DEVICE_EXTENSION DeviceExtension,
+    _Inout_ PIRP Irp,
+    _In_ BOOLEAN PowerIrp);
 
 _Dispatch_type_(IRP_MJ_FLUSH_BUFFERS)
 DRIVER_DISPATCH SffdiskFlushBuffers;

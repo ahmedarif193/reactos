@@ -127,6 +127,8 @@ HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1B36&DEV_0
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BRCME88C","Service",0x00000000,"sdbus"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BRCME88C","ClassGUID",0x00000000,"{a0a588a4-c46f-4b37-b7ea-c82fe89870c6}"
 ; SD card class driver (loaded on sdbus child PDOs)
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\SD#CLASS_STORAGE","Service",0x00000000,"sffdisk"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\SD#CLASS_STORAGE","ClassGUID",0x00000000,"{4D36E967-E325-11CE-BFC1-08002BE10318}"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\SD#CLASS_MEMORY","Service",0x00000000,"sffdisk"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\SD#CLASS_MEMORY","ClassGUID",0x00000000,"{4D36E967-E325-11CE-BFC1-08002BE10318}"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\SD#CLASS_MMC","Service",0x00000000,"sffdisk"

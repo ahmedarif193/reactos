@@ -36,8 +36,20 @@ typedef struct _SFFP_SD_EXTENSION
     PDEVICE_OBJECT LowerDevice;         /**< Next lower device in the stack */
     PDEVICE_OBJECT PhysicalDevice;      /**< The physical device object (PDO) from the bus driver */
     IO_REMOVE_LOCK RemoveLock;          /**< Remove lock for safe device removal */
+    KSPIN_LOCK UsageLock;               /**< Protects special-file usage state */
+    ULONG PagingPathCount;
+    ULONG HibernationPathCount;
+    ULONG DumpPathCount;
+    ULONG BootPathCount;
+    ULONG PostDisplayPathCount;
+    ULONG GuestAssignedPathCount;
+    BOOLEAN PowerPagable;               /**< Base pageability inherited from below */
     SDBUS_INTERFACE_STANDARD BusInterface; /**< SD bus interface from the bus driver */
     BOOLEAN InterfaceOpen;              /**< TRUE if the bus interface has been opened */
+    KSPIN_LOCK BusRequestLock;          /**< Serializes interface admission and rundown */
+    ULONG OutstandingBusRequests;       /**< Commands currently using BusInterface */
+    KEVENT BusRequestsDrained;          /**< Signaled when OutstandingBusRequests is zero */
+    BOOLEAN BusRequestsBlocked;         /**< TRUE while PnP is closing the bus interface */
     BOOLEAN HighCapacity;               /**< TRUE if the card uses block (sector) addressing (SDHC/SDXC/eMMC) */
     SDBUS_FUNCTION_TYPE FunctionType;   /**< Function type reported by the bus driver */
     SD_CARD_TYPE CardType;              /**< Card type reported by the bus driver */
