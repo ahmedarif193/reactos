@@ -315,6 +315,7 @@
  @ stdcall NdisAdvanceNetBufferDataStart(ptr long long ptr)
  @ stdcall NdisRetreatNetBufferListDataStart(ptr long long ptr ptr)
  @ stdcall NdisAdvanceNetBufferListDataStart(ptr long long ptr)
+ @ stdcall NdisAdjustNetBufferCurrentMdl(ptr)
  @ stdcall NdisCopyReceiveNetBufferListInfo(ptr ptr)
  @ stdcall NdisCopySendNetBufferListInfo(ptr ptr)
  @ stdcall NdisGetDataBuffer(ptr long ptr long long)
