@@ -839,7 +839,12 @@ NtGdiDdDDIPresent(_In_ D3DKMT_PRESENT* unnamedParam1)
                  sizeof(Captured),
                  &Captured);
     if (!NT_SUCCESS(Status))
-        return Status;
+    {
+        /* Windows 11 reports an unreadable D3DKMT_PRESENT as a bad parameter
+         * rather than surfacing the capture fault (unlike OpenResource, which
+         * really does answer STATUS_ACCESS_VIOLATION). */
+        return STATUS_INVALID_PARAMETER;
+    }
     Status = WddmBridgeRequireReady();
     if (!NT_SUCCESS(Status))
         return Status;
@@ -888,6 +893,7 @@ NtGdiDdDDIPresent(_In_ D3DKMT_PRESENT* unnamedParam1)
     }
 
     Status = DxgAdapterCallbacks.RxgkIntPfnPresent(&Captured);
+    if (!NT_SUCCESS(Status))
 
 Cleanup:
     if (CapturedSubRects != NULL)
