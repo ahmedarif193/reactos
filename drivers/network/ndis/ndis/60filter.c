@@ -274,6 +274,12 @@ Ndis6FilterDispatchReceive(
             NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = NULL;
 
             Bottom->DriverBlock->Characteristics.ReceiveNetBufferListsHandler(Bottom->FilterModuleContext, CurrentNbl, PortNumber, 1, ReceiveFlags);
+
+            /* A RESOURCES indication is synchronous and ownership never
+             * leaves the miniport. Restore the exact incoming chain before
+             * NdisMIndicateReceiveNetBufferLists returns to that miniport. */
+            if (ReceiveFlags & NDIS_RECEIVE_FLAGS_RESOURCES)
+                NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = NextNbl;
         }
     }
 }

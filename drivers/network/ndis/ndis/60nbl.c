@@ -4,11 +4,10 @@
  * FILE:        drivers/network/ndis/ndis/60nbl.c
  * PURPOSE:     NDIS 6 NET_BUFFER / NET_BUFFER_LIST allocation.
  *
- *              Real implementations of the NBL/NB pool API. Backed by
- *              ExAllocatePoolWithTag — no lookaside list yet, that's a
- *              future optimization. The pool handle is just a small
- *              header struct that remembers context size and DataSize
- *              the caller asked for; alloc/free goes straight to pool.
+ *              Real implementations of the NBL/NB pool API. Fixed geometry
+ *              allocations use nonpaged lookaside lists; private allocation
+ *              headers retain MDL/data ownership without consuming the public
+ *              NDIS reserved fields.
  *
  *              Created on the dev-nt6-1 branch by the NDIS 5↔6 bridge
  *              work that lets e1000e move real packets.
@@ -50,6 +49,19 @@ typedef struct _NDIS6_NBL_POOL
 
 #define NDIS6_NBL_POOL_MAGIC  0xB16CB16C
 
+typedef struct _NDIS6_NBL_ALLOCATION_HEADER
+{
+    ULONG Magic;
+    BOOLEAN FromLookaside;
+    UCHAR Reserved[3];
+    PMDL OwnedMdl;
+    PVOID OwnedData;
+} NDIS6_NBL_ALLOCATION_HEADER, *PNDIS6_NBL_ALLOCATION_HEADER;
+
+#define NDIS6_NBL_ALLOCATION_MAGIC 0xA16CB16C
+#define NDIS6_NBL_ALLOCATION_HEADER_SIZE \
+    ALIGN_UP_BY(sizeof(NDIS6_NBL_ALLOCATION_HEADER), MEMORY_ALLOCATION_ALIGNMENT)
+
 typedef struct _NDIS6_NB_POOL
 {
     ULONG       Magic;
@@ -62,7 +74,120 @@ typedef struct _NDIS6_NB_POOL
     NPAGED_LOOKASIDE_LIST Lookaside;
 } NDIS6_NB_POOL, *PNDIS6_NB_POOL;
 
+typedef struct _NDIS6_NB_ALLOCATION_HEADER
+{
+    ULONG Magic;
+    BOOLEAN FromLookaside;
+    UCHAR Reserved[3];
+    PMDL OwnedMdl;
+    PVOID OwnedData;
+} NDIS6_NB_ALLOCATION_HEADER, *PNDIS6_NB_ALLOCATION_HEADER;
+
 #define NDIS6_NB_POOL_MAGIC   0xB1601001
+#define NDIS6_NB_ALLOCATION_MAGIC 0xA1601001
+#define NDIS6_NB_ALLOCATION_HEADER_SIZE \
+    ALIGN_UP_BY(sizeof(NDIS6_NB_ALLOCATION_HEADER), MEMORY_ALLOCATION_ALIGNMENT)
+#define NDIS6_RETREAT_CONTEXT_TAG 'cRbN'
+#define NDIS6_RETREAT_RESERVED_SIGNATURE ((PVOID)(ULONG_PTR)0x5254424E)
+
+typedef struct _NDIS6_CONTEXT_ALLOCATION_HEADER
+{
+    ULONG Magic;
+    ULONG PoolTag;
+} NDIS6_CONTEXT_ALLOCATION_HEADER, *PNDIS6_CONTEXT_ALLOCATION_HEADER;
+
+#define NDIS6_CONTEXT_ALLOCATION_MAGIC 0xA16CC7E1
+#define NDIS6_CONTEXT_ALLOCATION_HEADER_SIZE \
+    ALIGN_UP_BY(sizeof(NDIS6_CONTEXT_ALLOCATION_HEADER), MEMORY_ALLOCATION_ALIGNMENT)
+
+typedef struct _NDIS6_RETREAT_MDL_CONTEXT
+{
+    struct _NDIS6_RETREAT_MDL_CONTEXT *Next;
+    PMDL Mdl;
+    PVOID DefaultBuffer;
+    PVOID SavedReserved0;
+    PVOID SavedReserved1;
+} NDIS6_RETREAT_MDL_CONTEXT, *PNDIS6_RETREAT_MDL_CONTEXT;
+
+static BOOLEAN
+Ndis6SetNetBufferDataOffset(
+    _Inout_ PNET_BUFFER NetBuffer,
+    _In_ ULONG DataOffset);
+
+static BOOLEAN
+Ndis6NetBufferDataRangeFits(
+    _In_ PNET_BUFFER NetBuffer,
+    _In_ ULONG DataLength)
+{
+    PMDL Mdl = NetBuffer->CurrentMdl;
+    ULONG MdlOffset = NetBuffer->CurrentMdlOffset;
+    ULONG Remaining = DataLength;
+
+    while (Mdl != NULL && Remaining != 0)
+    {
+        ULONG MdlLength = MmGetMdlByteCount(Mdl);
+        ULONG Available;
+
+        if (MdlOffset > MdlLength)
+            return FALSE;
+
+        Available = MdlLength - MdlOffset;
+        if (Remaining <= Available)
+            return TRUE;
+
+        Remaining -= Available;
+        Mdl = Mdl->Next;
+        MdlOffset = 0;
+    }
+
+    return Remaining == 0;
+}
+
+static PNDIS6_RETREAT_MDL_CONTEXT
+Ndis6GetRetreatContextHead(
+    _In_ PNET_BUFFER NetBuffer)
+{
+    if (NetBuffer->NdisReserved[1] != NDIS6_RETREAT_RESERVED_SIGNATURE)
+        return NULL;
+
+    return (PNDIS6_RETREAT_MDL_CONTEXT)NetBuffer->NdisReserved[0];
+}
+
+static VOID
+Ndis6PushRetreatContext(
+    _Inout_ PNET_BUFFER NetBuffer,
+    _Inout_ PNDIS6_RETREAT_MDL_CONTEXT Context)
+{
+    PNDIS6_RETREAT_MDL_CONTEXT Head =
+        Ndis6GetRetreatContextHead(NetBuffer);
+
+    Context->Next = Head;
+    if (Head == NULL)
+    {
+        Context->SavedReserved0 = NetBuffer->NdisReserved[0];
+        Context->SavedReserved1 = NetBuffer->NdisReserved[1];
+    }
+    NetBuffer->NdisReserved[0] = Context;
+    NetBuffer->NdisReserved[1] = NDIS6_RETREAT_RESERVED_SIGNATURE;
+}
+
+static VOID
+Ndis6PopRetreatContext(
+    _Inout_ PNET_BUFFER NetBuffer,
+    _In_ PNDIS6_RETREAT_MDL_CONTEXT Context)
+{
+    ASSERT(Ndis6GetRetreatContextHead(NetBuffer) == Context);
+
+    if (Context->Next != NULL)
+    {
+        NetBuffer->NdisReserved[0] = Context->Next;
+    }
+    else
+    {
+        NetBuffer->NdisReserved[0] = Context->SavedReserved0;
+        NetBuffer->NdisReserved[1] = Context->SavedReserved1;
+    }
+}
 
 /* ============================================================================
  *  NBL pool — Allocate / Free
@@ -78,13 +203,20 @@ NdisAllocateNetBufferListPool(
 
     UNREFERENCED_PARAMETER(NdisHandle);
 
-    if (Parameters == NULL)
+    if (Parameters == NULL ||
+        Parameters->Header.Type != NDIS_OBJECT_TYPE_DEFAULT ||
+        Parameters->Header.Revision < NET_BUFFER_LIST_POOL_PARAMETERS_REVISION_1 ||
+        Parameters->Header.Size < sizeof(NET_BUFFER_LIST_POOL_PARAMETERS) ||
+        (Parameters->ContextSize & (MEMORY_ALLOCATION_ALIGNMENT - 1)) != 0 ||
+        (Parameters->DataSize != 0 && !Parameters->fAllocateNetBuffer))
         return NULL;
 
     Pool = (PNDIS6_NBL_POOL)ExAllocatePoolWithTag(
         NonPagedPool, sizeof(NDIS6_NBL_POOL), NBL_POOL_TAG);
     if (Pool == NULL)
         return NULL;
+
+    RtlZeroMemory(Pool, sizeof(*Pool));
 
     Pool->Magic              = NDIS6_NBL_POOL_MAGIC;
     Pool->PoolTag            = Parameters->PoolTag ? Parameters->PoolTag : NBL_POOL_TAG;
@@ -99,7 +231,8 @@ NdisAllocateNetBufferListPool(
      * default geometry. NBLs allocated with caller-provided ContextSize
      * matching the pool default and ContextBackFill==0 use this size
      * and come from the lookaside list. */
-    Pool->FixedAllocSize = sizeof(NET_BUFFER_LIST);
+    Pool->FixedAllocSize = NDIS6_NBL_ALLOCATION_HEADER_SIZE +
+                           sizeof(NET_BUFFER_LIST);
     if (Pool->ContextSize)
     {
         Pool->FixedAllocSize +=
@@ -154,7 +287,10 @@ NdisAllocateNetBufferPool(
 
     UNREFERENCED_PARAMETER(NdisHandle);
 
-    if (Parameters == NULL)
+    if (Parameters == NULL ||
+        Parameters->Header.Type != NDIS_OBJECT_TYPE_DEFAULT ||
+        Parameters->Header.Revision < NET_BUFFER_POOL_PARAMETERS_REVISION_1 ||
+        Parameters->Header.Size < sizeof(NET_BUFFER_POOL_PARAMETERS))
         return NULL;
 
     Pool = (PNDIS6_NB_POOL)ExAllocatePoolWithTag(
@@ -162,9 +298,19 @@ NdisAllocateNetBufferPool(
     if (Pool == NULL)
         return NULL;
 
+    RtlZeroMemory(Pool, sizeof(*Pool));
+
     Pool->Magic   = NDIS6_NB_POOL_MAGIC;
     Pool->PoolTag = Parameters->PoolTag ? Parameters->PoolTag : NB_TAG;
     Pool->DataSize = Parameters->DataSize;
+
+    ExInitializeNPagedLookasideList(
+        &Pool->Lookaside,
+        NULL, NULL, 0,
+        NDIS6_NB_ALLOCATION_HEADER_SIZE + sizeof(NET_BUFFER),
+        Pool->PoolTag,
+        0);
+    Pool->LookasideValid = TRUE;
     return (NDIS_HANDLE)Pool;
 }
 
@@ -177,6 +323,12 @@ NdisFreeNetBufferPool(
 
     if (Pool == NULL || Pool->Magic != NDIS6_NB_POOL_MAGIC)
         return;
+
+    if (Pool->LookasideValid)
+    {
+        ExDeleteNPagedLookasideList(&Pool->Lookaside);
+        Pool->LookasideValid = FALSE;
+    }
 
     Pool->Magic = 0;
     ExFreePoolWithTag(Pool, NBL_POOL_TAG);
@@ -201,9 +353,13 @@ NdisAllocateNetBufferList(
     _In_ USHORT ContextBackFill)
 {
     PNDIS6_NBL_POOL Pool = (PNDIS6_NBL_POOL)PoolHandle;
+    PNDIS6_NBL_ALLOCATION_HEADER Allocation;
     PNET_BUFFER_LIST Nbl;
     PNET_BUFFER_LIST_CONTEXT Ctx;
     PNET_BUFFER Nb;
+    PVOID DataBuffer;
+    PMDL Mdl;
+    ULONG AllocationSize;
     ULONG TotalSize;
     USHORT EffectiveContextSize;
 
@@ -212,54 +368,58 @@ NdisAllocateNetBufferList(
 
     /* The caller's per-NBL ContextSize overrides the pool's default. */
     EffectiveContextSize = ContextSize ? ContextSize : Pool->ContextSize;
-    if ((ULONG)EffectiveContextSize + ContextBackFill > MAXUSHORT)
+    if ((ContextSize & (MEMORY_ALLOCATION_ALIGNMENT - 1)) != 0 ||
+        (ContextBackFill & (MEMORY_ALLOCATION_ALIGNMENT - 1)) != 0 ||
+        (ULONG)EffectiveContextSize + ContextBackFill > MAXUSHORT)
         return NULL;
 
     TotalSize = sizeof(NET_BUFFER_LIST);
-    if (EffectiveContextSize)
+    if (EffectiveContextSize != 0 || ContextBackFill != 0)
         TotalSize += FIELD_OFFSET(NET_BUFFER_LIST_CONTEXT, ContextData)
                    + EffectiveContextSize + ContextBackFill;
     if (Pool->fAllocateNetBuffer)
         TotalSize += sizeof(NET_BUFFER);
+    AllocationSize = NDIS6_NBL_ALLOCATION_HEADER_SIZE + TotalSize;
 
     /* Hot path: if the requested geometry matches the pool default
      * (no per-call context override and no backfill), pull from the
      * lookaside list. The TX wrapper pool the bridge uses for legacy
-     * NDIS_PACKET wrapping always hits this path.
-     *
-     * Mark lookaside-sourced NBLs by setting NdisReserved[0] = (PVOID)1
-     * so the free path knows where to return them. NdisReserved is
-     * reserved for the NDIS module that owns the NBL, which is us. */
+     * NDIS_PACKET wrapping always hits this path. The private allocation
+     * header records where the block must be returned without consuming
+     * any driver-visible reserved field in the NBL. */
     {
         BOOLEAN UseLookaside =
             Pool->LookasideValid &&
-            TotalSize == Pool->FixedAllocSize &&
+            AllocationSize == Pool->FixedAllocSize &&
             ContextBackFill == 0;
 
         if (UseLookaside)
         {
-            Nbl = (PNET_BUFFER_LIST)ExAllocateFromNPagedLookasideList(&Pool->Lookaside);
+            Allocation = (PNDIS6_NBL_ALLOCATION_HEADER)
+                ExAllocateFromNPagedLookasideList(&Pool->Lookaside);
         }
         else
         {
-            Nbl = (PNET_BUFFER_LIST)ExAllocatePoolWithTag(
-                NonPagedPool, TotalSize, Pool->PoolTag);
+            Allocation = (PNDIS6_NBL_ALLOCATION_HEADER)ExAllocatePoolWithTag(
+                NonPagedPool, AllocationSize, Pool->PoolTag);
         }
-        if (Nbl == NULL)
+        if (Allocation == NULL)
             return NULL;
 
-        RtlZeroMemory(Nbl, TotalSize);
-        if (UseLookaside)
-            Nbl->NdisReserved[0] = (PVOID)(ULONG_PTR)1;
+        RtlZeroMemory(Allocation, AllocationSize);
+        Allocation->Magic = NDIS6_NBL_ALLOCATION_MAGIC;
+        Allocation->FromLookaside = UseLookaside;
+        Nbl = (PNET_BUFFER_LIST)((PUCHAR)Allocation +
+                                 NDIS6_NBL_ALLOCATION_HEADER_SIZE);
     }
 
     Nbl->NdisPoolHandle = PoolHandle;
 
-    if (EffectiveContextSize)
+    if (EffectiveContextSize != 0 || ContextBackFill != 0)
     {
         Ctx = (PNET_BUFFER_LIST_CONTEXT)((PUCHAR)Nbl + sizeof(NET_BUFFER_LIST));
         Ctx->Next = NULL;
-        Ctx->Size = EffectiveContextSize + ContextBackFill;
+        Ctx->Size = EffectiveContextSize;
         Ctx->Offset = ContextBackFill;
         Nbl->Context = Ctx;
     }
@@ -267,12 +427,44 @@ NdisAllocateNetBufferList(
     if (Pool->fAllocateNetBuffer)
     {
         ULONG NbOffset = sizeof(NET_BUFFER_LIST);
-        if (EffectiveContextSize)
+        if (EffectiveContextSize != 0 || ContextBackFill != 0)
             NbOffset += FIELD_OFFSET(NET_BUFFER_LIST_CONTEXT, ContextData)
                       + EffectiveContextSize + ContextBackFill;
         Nb = (PNET_BUFFER)((PUCHAR)Nbl + NbOffset);
         Nbl->FirstNetBuffer = Nb;
         Nb->NdisPoolHandle = NULL;  /* this NB is owned by the NBL allocation */
+
+        if (Pool->DataSize != 0)
+        {
+            DataBuffer = ExAllocatePoolWithTag(NonPagedPool,
+                                               Pool->DataSize,
+                                               Pool->PoolTag);
+            if (DataBuffer == NULL)
+            {
+                NdisFreeNetBufferList(Nbl);
+                return NULL;
+            }
+            Allocation->OwnedData = DataBuffer;
+
+            Mdl = IoAllocateMdl(DataBuffer,
+                                Pool->DataSize,
+                                FALSE,
+                                FALSE,
+                                NULL);
+            if (Mdl == NULL)
+            {
+                NdisFreeNetBufferList(Nbl);
+                return NULL;
+            }
+            MmBuildMdlForNonPagedPool(Mdl);
+            Allocation->OwnedMdl = Mdl;
+
+            Nb->MdlChain = Mdl;
+            Nb->CurrentMdl = Mdl;
+            Nb->CurrentMdlOffset = 0;
+            Nb->DataOffset = 0;
+            Nb->DataLength = Pool->DataSize;
+        }
     }
 
     return Nbl;
@@ -284,6 +476,7 @@ NdisFreeNetBufferList(
     _In_ PNET_BUFFER_LIST NetBufferList)
 {
     PNDIS6_NBL_POOL Pool;
+    PNDIS6_NBL_ALLOCATION_HEADER Allocation;
     BOOLEAN FromLookaside;
 
     if (NetBufferList == NULL)
@@ -296,15 +489,25 @@ NdisFreeNetBufferList(
         return;
     }
 
-    FromLookaside = (NetBufferList->NdisReserved[0] == (PVOID)(ULONG_PTR)1);
+    Allocation = (PNDIS6_NBL_ALLOCATION_HEADER)
+        ((PUCHAR)NetBufferList - NDIS6_NBL_ALLOCATION_HEADER_SIZE);
+    if (Allocation->Magic != NDIS6_NBL_ALLOCATION_MAGIC)
+        return;
+
+    FromLookaside = Allocation->FromLookaside;
+    if (Allocation->OwnedMdl != NULL)
+        IoFreeMdl(Allocation->OwnedMdl);
+    if (Allocation->OwnedData != NULL)
+        ExFreePoolWithTag(Allocation->OwnedData, Pool->PoolTag);
+    Allocation->Magic = 0;
 
     if (FromLookaside && Pool->LookasideValid)
     {
-        ExFreeToNPagedLookasideList(&Pool->Lookaside, NetBufferList);
+        ExFreeToNPagedLookasideList(&Pool->Lookaside, Allocation);
     }
     else
     {
-        ExFreePoolWithTag(NetBufferList, Pool->PoolTag);
+        ExFreePoolWithTag(Allocation, Pool->PoolTag);
     }
 }
 
@@ -322,8 +525,15 @@ NdisAllocateNetBufferAndNetBufferList(
     _In_ ULONG DataOffset,
     _In_ SIZE_T DataLength)
 {
+    PNDIS6_NBL_POOL Pool = (PNDIS6_NBL_POOL)PoolHandle;
     PNET_BUFFER_LIST Nbl;
     PNET_BUFFER Nb;
+
+    if (Pool == NULL || Pool->Magic != NDIS6_NBL_POOL_MAGIC ||
+        !Pool->fAllocateNetBuffer || Pool->DataSize != 0)
+    {
+        return NULL;
+    }
 
     Nbl = NdisAllocateNetBufferList(PoolHandle, ContextSize, ContextBackFill);
     if (Nbl == NULL)
@@ -340,8 +550,17 @@ NdisAllocateNetBufferAndNetBufferList(
 
     Nb->Next             = NULL;
     Nb->MdlChain         = MdlChain;
-    Nb->CurrentMdl       = MdlChain;
-    Nb->CurrentMdlOffset = 0;
+
+    if (DataLength > MAXULONG ||
+        (MdlChain == NULL && (DataOffset != 0 || DataLength != 0)) ||
+        (MdlChain != NULL &&
+         (!Ndis6SetNetBufferDataOffset(Nb, DataOffset) ||
+          !Ndis6NetBufferDataRangeFits(Nb, (ULONG)DataLength))))
+    {
+        NdisFreeNetBufferList(Nbl);
+        return NULL;
+    }
+
     Nb->DataLength       = (ULONG)DataLength;
     Nb->DataOffset       = DataOffset;
 
@@ -353,6 +572,62 @@ NdisAllocateNetBufferAndNetBufferList(
  *  helper above)
  * ============================================================================ */
 
+static PNET_BUFFER
+Ndis6AllocateNetBuffer(
+    _In_ PNDIS6_NB_POOL Pool,
+    _In_ NDIS_HANDLE PoolHandle,
+    _In_opt_ PMDL MdlChain,
+    _In_ ULONG DataOffset,
+    _In_ SIZE_T DataLength)
+{
+    PNDIS6_NB_ALLOCATION_HEADER Allocation;
+    PNET_BUFFER Nb;
+    BOOLEAN FromLookaside;
+
+    FromLookaside = Pool->LookasideValid;
+    if (FromLookaside)
+    {
+        Allocation = (PNDIS6_NB_ALLOCATION_HEADER)
+            ExAllocateFromNPagedLookasideList(&Pool->Lookaside);
+    }
+    else
+    {
+        Allocation = (PNDIS6_NB_ALLOCATION_HEADER)ExAllocatePoolWithTag(
+            NonPagedPool,
+            NDIS6_NB_ALLOCATION_HEADER_SIZE + sizeof(NET_BUFFER),
+            Pool->PoolTag);
+    }
+    if (Allocation == NULL)
+        return NULL;
+
+    RtlZeroMemory(Allocation,
+                  NDIS6_NB_ALLOCATION_HEADER_SIZE + sizeof(NET_BUFFER));
+    Allocation->Magic = NDIS6_NB_ALLOCATION_MAGIC;
+    Allocation->FromLookaside = FromLookaside;
+    Nb = (PNET_BUFFER)((PUCHAR)Allocation +
+                       NDIS6_NB_ALLOCATION_HEADER_SIZE);
+    Nb->NdisPoolHandle   = PoolHandle;
+    Nb->MdlChain         = MdlChain;
+
+    if (DataLength > MAXULONG ||
+        (MdlChain == NULL && (DataOffset != 0 || DataLength != 0)) ||
+        (MdlChain != NULL &&
+         (!Ndis6SetNetBufferDataOffset(Nb, DataOffset) ||
+          !Ndis6NetBufferDataRangeFits(Nb, (ULONG)DataLength))))
+    {
+        Allocation->Magic = 0;
+        if (FromLookaside && Pool->LookasideValid)
+            ExFreeToNPagedLookasideList(&Pool->Lookaside, Allocation);
+        else
+            ExFreePoolWithTag(Allocation, Pool->PoolTag);
+        return NULL;
+    }
+
+    Nb->DataLength       = (ULONG)DataLength;
+    Nb->DataOffset       = DataOffset;
+    return Nb;
+}
+
 PNET_BUFFER
 NTAPI
 NdisAllocateNetBuffer(
@@ -362,23 +637,71 @@ NdisAllocateNetBuffer(
     _In_ SIZE_T DataLength)
 {
     PNDIS6_NB_POOL Pool = (PNDIS6_NB_POOL)PoolHandle;
+
+    if (Pool == NULL || Pool->Magic != NDIS6_NB_POOL_MAGIC ||
+        Pool->DataSize != 0)
+    {
+        return NULL;
+    }
+
+    return Ndis6AllocateNetBuffer(Pool,
+                                  PoolHandle,
+                                  MdlChain,
+                                  DataOffset,
+                                  DataLength);
+}
+
+PNET_BUFFER
+NTAPI
+NdisAllocateNetBufferMdlAndData(
+    _In_ NDIS_HANDLE PoolHandle)
+{
+    PNDIS6_NB_POOL Pool = (PNDIS6_NB_POOL)PoolHandle;
+    PNDIS6_NB_ALLOCATION_HEADER Allocation;
     PNET_BUFFER Nb;
+    PMDL Mdl;
+    PVOID DataBuffer;
 
-    if (Pool == NULL || Pool->Magic != NDIS6_NB_POOL_MAGIC)
+    if (Pool == NULL || Pool->Magic != NDIS6_NB_POOL_MAGIC ||
+        Pool->DataSize == 0)
+    {
+        return NULL;
+    }
+
+    DataBuffer = ExAllocatePoolWithTag(NonPagedPool,
+                                       Pool->DataSize,
+                                       Pool->PoolTag);
+    if (DataBuffer == NULL)
         return NULL;
 
-    Nb = (PNET_BUFFER)ExAllocatePoolWithTag(
-        NonPagedPool, sizeof(NET_BUFFER), Pool->PoolTag);
+    Mdl = IoAllocateMdl(DataBuffer,
+                        Pool->DataSize,
+                        FALSE,
+                        FALSE,
+                        NULL);
+    if (Mdl == NULL)
+    {
+        ExFreePoolWithTag(DataBuffer, Pool->PoolTag);
+        return NULL;
+    }
+    MmBuildMdlForNonPagedPool(Mdl);
+
+    Nb = Ndis6AllocateNetBuffer(Pool,
+                                PoolHandle,
+                                Mdl,
+                                0,
+                                Pool->DataSize);
     if (Nb == NULL)
+    {
+        IoFreeMdl(Mdl);
+        ExFreePoolWithTag(DataBuffer, Pool->PoolTag);
         return NULL;
+    }
 
-    RtlZeroMemory(Nb, sizeof(NET_BUFFER));
-    Nb->NdisPoolHandle   = PoolHandle;
-    Nb->MdlChain         = MdlChain;
-    Nb->CurrentMdl       = MdlChain;
-    Nb->CurrentMdlOffset = 0;
-    Nb->DataLength       = (ULONG)DataLength;
-    Nb->DataOffset       = DataOffset;
+    Allocation = (PNDIS6_NB_ALLOCATION_HEADER)
+        ((PUCHAR)Nb - NDIS6_NB_ALLOCATION_HEADER_SIZE);
+    Allocation->OwnedMdl = Mdl;
+    Allocation->OwnedData = DataBuffer;
     return Nb;
 }
 
@@ -388,6 +711,8 @@ NdisFreeNetBuffer(
     _In_ PNET_BUFFER NetBuffer)
 {
     PNDIS6_NB_POOL Pool;
+    PNDIS6_NB_ALLOCATION_HEADER Allocation;
+    BOOLEAN FromLookaside;
 
     if (NetBuffer == NULL || NetBuffer->NdisPoolHandle == NULL)
     {
@@ -397,10 +722,25 @@ NdisFreeNetBuffer(
     }
 
     Pool = (PNDIS6_NB_POOL)NetBuffer->NdisPoolHandle;
-    if (Pool->Magic != NDIS6_NB_POOL_MAGIC)
+    if (Pool == NULL || Pool->Magic != NDIS6_NB_POOL_MAGIC)
         return;
 
-    ExFreePoolWithTag(NetBuffer, Pool->PoolTag);
+    Allocation = (PNDIS6_NB_ALLOCATION_HEADER)
+        ((PUCHAR)NetBuffer - NDIS6_NB_ALLOCATION_HEADER_SIZE);
+    if (Allocation->Magic != NDIS6_NB_ALLOCATION_MAGIC)
+        return;
+
+    FromLookaside = Allocation->FromLookaside;
+    if (Allocation->OwnedMdl != NULL)
+        IoFreeMdl(Allocation->OwnedMdl);
+    if (Allocation->OwnedData != NULL)
+        ExFreePoolWithTag(Allocation->OwnedData, Pool->PoolTag);
+    Allocation->Magic = 0;
+
+    if (FromLookaside && Pool->LookasideValid)
+        ExFreeToNPagedLookasideList(&Pool->Lookaside, Allocation);
+    else
+        ExFreePoolWithTag(Allocation, Pool->PoolTag);
 }
 
 /* ============================================================================
@@ -417,26 +757,33 @@ NdisRetreatNetBufferDataStart(
     _In_ PNET_BUFFER NetBuffer,
     _In_ ULONG DataOffsetDelta,
     _In_ ULONG DataBackFill,
-    _In_opt_ PVOID AllocateMdlHandler)
+    _In_opt_ NET_BUFFER_ALLOCATE_MDL_HANDLER AllocateMdlHandler)
 {
     PMDL    NewMdl;
     PVOID   NewMdlVa;
+    PNDIS6_RETREAT_MDL_CONTEXT RetreatContext;
     ULONG   NewMdlSize;
     ULONG   NewMdlOffset;
-
-    UNREFERENCED_PARAMETER(AllocateMdlHandler);
 
     if (NetBuffer == NULL)
         return NDIS_STATUS_INVALID_PARAMETER;
 
-    /* Hot path — there's enough room in the current MDL to back up the
-     * header pointer in place, no allocation needed. */
-    if (NetBuffer->DataOffset >= DataOffsetDelta &&
-        NetBuffer->CurrentMdlOffset >= DataOffsetDelta)
+    if (DataOffsetDelta > MAXULONG - NetBuffer->DataLength)
+        return NDIS_STATUS_FAILURE;
+
+    /* Existing headroom can span MDLs before CurrentMdl. Recompute the
+     * optimized CurrentMdl view from the chain-wide DataOffset instead of
+     * considering only CurrentMdlOffset. */
+    if (NetBuffer->DataOffset >= DataOffsetDelta)
     {
-        NetBuffer->DataOffset       -= DataOffsetDelta;
-        NetBuffer->CurrentMdlOffset -= DataOffsetDelta;
-        NetBuffer->DataLength       += DataOffsetDelta;
+        if (NetBuffer->MdlChain != NULL &&
+            !Ndis6SetNetBufferDataOffset(
+                NetBuffer, NetBuffer->DataOffset - DataOffsetDelta))
+        {
+            return NDIS_STATUS_FAILURE;
+        }
+        NetBuffer->DataOffset -= DataOffsetDelta;
+        NetBuffer->DataLength += DataOffsetDelta;
         return NDIS_STATUS_SUCCESS;
     }
 
@@ -447,34 +794,77 @@ NdisRetreatNetBufferDataStart(
      * DataOffsetDelta bytes of header space; please ensure DataBackFill
      * bytes are also reserved behind that for future retreats." We
      * place the new data start DataBackFill bytes into the new MDL. */
+    if (DataOffsetDelta > MAXULONG - DataBackFill)
+        return NDIS_STATUS_FAILURE;
     NewMdlSize = DataOffsetDelta + DataBackFill;
-    if (NewMdlSize == 0)
-        return NDIS_STATUS_INVALID_PARAMETER;
 
-    /* Allocate the backing memory and wrap it in an MDL. We use NonPaged
-     * pool because the MDL chain may be touched at DISPATCH_LEVEL. */
-    NewMdlVa = ExAllocatePoolWithTag(NonPagedPool, NewMdlSize, 'rNbR');
-    if (NewMdlVa == NULL)
+    RetreatContext = (PNDIS6_RETREAT_MDL_CONTEXT)ExAllocatePoolWithTag(
+        NonPagedPool, sizeof(*RetreatContext), NDIS6_RETREAT_CONTEXT_TAG);
+    if (RetreatContext == NULL)
         return NDIS_STATUS_RESOURCES;
+    RtlZeroMemory(RetreatContext, sizeof(*RetreatContext));
 
-    NewMdl = IoAllocateMdl(NewMdlVa, NewMdlSize, FALSE, FALSE, NULL);
-    if (NewMdl == NULL)
+    if (AllocateMdlHandler != NULL)
     {
-        ExFreePoolWithTag(NewMdlVa, 'rNbR');
-        return NDIS_STATUS_RESOURCES;
+        ULONG BufferSize = NewMdlSize;
+
+        NewMdl = AllocateMdlHandler(&BufferSize);
+        if (NewMdl == NULL)
+        {
+            ExFreePoolWithTag(RetreatContext, NDIS6_RETREAT_CONTEXT_TAG);
+            return NDIS_STATUS_RESOURCES;
+        }
+    }
+    else
+    {
+        /* Default allocation is reciprocal with the default free path in
+         * NdisAdvanceNetBufferDataStart. */
+        NewMdlVa = ExAllocatePoolWithTag(NonPagedPool, NewMdlSize, 'rNbR');
+        if (NewMdlVa == NULL)
+        {
+            ExFreePoolWithTag(RetreatContext, NDIS6_RETREAT_CONTEXT_TAG);
+            return NDIS_STATUS_RESOURCES;
+        }
+
+        NewMdl = IoAllocateMdl(NewMdlVa, NewMdlSize, FALSE, FALSE, NULL);
+        if (NewMdl == NULL)
+        {
+            ExFreePoolWithTag(NewMdlVa, 'rNbR');
+            ExFreePoolWithTag(RetreatContext, NDIS6_RETREAT_CONTEXT_TAG);
+            return NDIS_STATUS_RESOURCES;
+        }
+
+        MmBuildMdlForNonPagedPool(NewMdl);
     }
 
-    MmBuildMdlForNonPagedPool(NewMdl);
+    if (MmGetMdlByteCount(NewMdl) < NewMdlSize)
+    {
+        /* A caller-supplied allocator owns its failure cleanup. The default
+         * allocation can be released here directly. */
+        if (AllocateMdlHandler == NULL)
+        {
+            NewMdlVa = MmGetMdlVirtualAddress(NewMdl);
+            IoFreeMdl(NewMdl);
+            ExFreePoolWithTag(NewMdlVa, 'rNbR');
+        }
+        ExFreePoolWithTag(RetreatContext, NDIS6_RETREAT_CONTEXT_TAG);
+        return NDIS_STATUS_FAILURE;
+    }
+
+    RetreatContext->Mdl = NewMdl;
+    RetreatContext->DefaultBuffer =
+        (AllocateMdlHandler == NULL) ? NewMdlVa : NULL;
+    Ndis6PushRetreatContext(NetBuffer, RetreatContext);
 
     /* Prepend the new MDL to the head of the chain. The original
      * NetBuffer->MdlChain head becomes the new MDL's Next link. */
     NewMdl->Next        = NetBuffer->MdlChain;
     NetBuffer->MdlChain = NewMdl;
 
-    /* The new data start sits at offset DataBackFill inside the new MDL.
-     * That leaves DataBackFill bytes "behind" the data start for future
-     * retreats and DataOffsetDelta bytes "in front" for the new header. */
-    NewMdlOffset = DataBackFill;
+    /* Preserve any existing (insufficient) headroom as part of the newly
+     * exposed data. The new MDL supplies the remaining bytes, while the
+     * requested backfill remains unused before the new data start. */
+    NewMdlOffset = DataBackFill + NetBuffer->DataOffset;
 
     NetBuffer->CurrentMdl       = NewMdl;
     NetBuffer->CurrentMdlOffset = NewMdlOffset;
@@ -490,41 +880,76 @@ NdisAdvanceNetBufferDataStart(
     _In_ PNET_BUFFER NetBuffer,
     _In_ ULONG DataOffsetDelta,
     _In_ BOOLEAN FreeMdl,
-    _In_opt_ PVOID FreeMdlHandler)
+    _In_opt_ NET_BUFFER_FREE_MDL_HANDLER FreeMdlHandler)
 {
-    PMDL CurrentMdl;
-    ULONG MdlBytesAvailable;
+    PMDL OldMdl;
+    PMDL NewCurrentMdl;
+    ULONG NewCurrentMdlOffset;
+    ULONG NewDataOffset;
+    ULONG RemovedBytes = 0;
 
-    UNREFERENCED_PARAMETER(FreeMdl);
-    UNREFERENCED_PARAMETER(FreeMdlHandler);
-
-    if (NetBuffer == NULL)
+    if (NetBuffer == NULL || DataOffsetDelta > NetBuffer->DataLength ||
+        DataOffsetDelta > MAXULONG - NetBuffer->DataOffset)
         return;
 
-    while (DataOffsetDelta > 0)
+    NewDataOffset = NetBuffer->DataOffset + DataOffsetDelta;
+    if (NetBuffer->MdlChain == NULL)
     {
-        CurrentMdl = NetBuffer->CurrentMdl;
-        if (CurrentMdl == NULL)
+        if (NewDataOffset != 0)
             return;
-
-        MdlBytesAvailable = MmGetMdlByteCount(CurrentMdl) - NetBuffer->CurrentMdlOffset;
-
-        if (DataOffsetDelta < MdlBytesAvailable)
-        {
-            /* Stays inside the current MDL */
-            NetBuffer->CurrentMdlOffset += DataOffsetDelta;
-            NetBuffer->DataOffset       += DataOffsetDelta;
-            NetBuffer->DataLength       -= DataOffsetDelta;
-            return;
-        }
-
-        /* Consumes the rest of the current MDL; advance to next */
-        NetBuffer->DataLength       -= MdlBytesAvailable;
-        NetBuffer->DataOffset       += MdlBytesAvailable;
-        DataOffsetDelta             -= MdlBytesAvailable;
-        NetBuffer->CurrentMdl       = CurrentMdl->Next;
-        NetBuffer->CurrentMdlOffset = 0;
+        NetBuffer->DataLength -= DataOffsetDelta;
+        return;
     }
+
+    if (!Ndis6SetNetBufferDataOffset(NetBuffer, NewDataOffset))
+        return;
+
+    NewCurrentMdl = NetBuffer->CurrentMdl;
+    NewCurrentMdlOffset = NetBuffer->CurrentMdlOffset;
+    NetBuffer->DataLength -= DataOffsetDelta;
+
+    if (!FreeMdl)
+        return;
+
+    /* MDLs before the new CurrentMdl no longer describe used or backfill
+     * data. Remove and release them, then make DataOffset relative to the
+     * shortened chain. */
+    OldMdl = NetBuffer->MdlChain;
+    while (OldMdl != NewCurrentMdl)
+    {
+        PNDIS6_RETREAT_MDL_CONTEXT RetreatContext =
+            Ndis6GetRetreatContextHead(NetBuffer);
+        PMDL NextMdl = OldMdl->Next;
+        ULONG OldMdlLength = MmGetMdlByteCount(OldMdl);
+
+        /* Only MDLs allocated by our retreat path may be released. Original
+         * receive/transmit MDLs remain in the chain even when FreeMdl is set. */
+        if (RetreatContext == NULL || RetreatContext->Mdl != OldMdl)
+            break;
+
+        if (RetreatContext->DefaultBuffer == NULL && FreeMdlHandler == NULL)
+            break;
+
+        Ndis6PopRetreatContext(NetBuffer, RetreatContext);
+
+        if (RetreatContext->DefaultBuffer != NULL)
+        {
+            IoFreeMdl(OldMdl);
+            ExFreePoolWithTag(RetreatContext->DefaultBuffer, 'rNbR');
+        }
+        else
+        {
+            FreeMdlHandler(OldMdl);
+        }
+        ExFreePoolWithTag(RetreatContext, NDIS6_RETREAT_CONTEXT_TAG);
+        RemovedBytes += OldMdlLength;
+        OldMdl = NextMdl;
+    }
+
+    NetBuffer->MdlChain = OldMdl;
+    NetBuffer->CurrentMdl = NewCurrentMdl;
+    NetBuffer->CurrentMdlOffset = NewCurrentMdlOffset;
+    NetBuffer->DataOffset = NewDataOffset - RemovedBytes;
 }
 
 PVOID
@@ -544,8 +969,14 @@ NdisGetDataBuffer(
     PUCHAR DataVa;
     PUCHAR StoragePtr;
 
+#define NDIS6_DATA_BUFFER_ALIGNED(_Address) \
+    ((AlignMultiple <= 1) || \
+     ((((ULONG_PTR)(_Address) - AlignOffset) & (AlignMultiple - 1)) == 0))
+
     if (NetBuffer == NULL || BytesNeeded == 0 ||
-        BytesNeeded > NET_BUFFER_DATA_LENGTH(NetBuffer))
+        BytesNeeded > NET_BUFFER_DATA_LENGTH(NetBuffer) ||
+        (AlignMultiple > 1 &&
+         (AlignMultiple & (AlignMultiple - 1)) != 0))
     {
         return NULL;
     }
@@ -566,20 +997,19 @@ NdisGetDataBuffer(
             return NULL;
 
         DataVa = MdlVa + CurrentMdlOffset;
-        if (AlignMultiple <= 1 ||
-            (((ULONG_PTR)DataVa + AlignOffset) % AlignMultiple) == 0)
+        if (NDIS6_DATA_BUFFER_ALIGNED(DataVa))
         {
             return DataVa;
         }
 
-        if (Storage == NULL)
+        if (Storage == NULL || !NDIS6_DATA_BUFFER_ALIGNED(Storage))
             return NULL;
 
         RtlCopyMemory(Storage, DataVa, BytesNeeded);
         return Storage;
     }
 
-    if (Storage == NULL)
+    if (Storage == NULL || !NDIS6_DATA_BUFFER_ALIGNED(Storage))
         return NULL;
 
     StoragePtr = (PUCHAR)Storage;
@@ -613,6 +1043,204 @@ NdisGetDataBuffer(
         return NULL;
 
     return Storage;
+
+#undef NDIS6_DATA_BUFFER_ALIGNED
+}
+
+static BOOLEAN
+Ndis6AdvanceMdlPosition(
+    _Inout_ PMDL *Mdl,
+    _Inout_ PULONG MdlOffset,
+    _In_ ULONG Delta)
+{
+    while (*Mdl != NULL)
+    {
+        ULONG MdlLength = MmGetMdlByteCount(*Mdl);
+        ULONG Available;
+
+        if (*MdlOffset > MdlLength)
+            return FALSE;
+
+        Available = MdlLength - *MdlOffset;
+        if (Delta < Available)
+        {
+            *MdlOffset += Delta;
+            return TRUE;
+        }
+
+        Delta -= Available;
+        if ((*Mdl)->Next == NULL)
+        {
+            *MdlOffset = MdlLength;
+            return Delta == 0;
+        }
+
+        *Mdl = (*Mdl)->Next;
+        *MdlOffset = 0;
+        if (Delta == 0)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+NDIS_HANDLE
+NTAPI
+NdisGetPoolFromNetBufferList(
+    _In_ PNET_BUFFER_LIST NetBufferList)
+{
+    return NetBufferList ? NetBufferList->NdisPoolHandle : NULL;
+}
+
+NDIS_HANDLE
+NTAPI
+NdisGetPoolFromNetBuffer(
+    _In_ PNET_BUFFER NetBuffer)
+{
+    return NetBuffer ? NetBuffer->NdisPoolHandle : NULL;
+}
+
+NDIS_STATUS
+NTAPI
+NdisCopyFromNetBufferToNetBuffer(
+    _In_ PNET_BUFFER Destination,
+    _In_ ULONG DestinationOffset,
+    _In_ ULONG BytesToCopy,
+    _In_ PNET_BUFFER Source,
+    _In_ ULONG SourceOffset,
+    _Out_ PULONG BytesCopied)
+{
+    PMDL DestinationMdl;
+    PMDL SourceMdl;
+    ULONG DestinationMdlOffset;
+    ULONG SourceMdlOffset;
+    ULONG SourceRemaining;
+
+    if (BytesCopied == NULL)
+        return NDIS_STATUS_INVALID_PARAMETER;
+    *BytesCopied = 0;
+
+    if (Destination == NULL || Source == NULL)
+        return NDIS_STATUS_INVALID_PARAMETER;
+    if (BytesToCopy == 0)
+        return NDIS_STATUS_SUCCESS;
+    if (SourceOffset >= Source->DataLength)
+        return NDIS_STATUS_SUCCESS;
+
+    DestinationMdl = Destination->CurrentMdl;
+    DestinationMdlOffset = Destination->CurrentMdlOffset;
+    SourceMdl = Source->CurrentMdl;
+    SourceMdlOffset = Source->CurrentMdlOffset;
+    if (!Ndis6AdvanceMdlPosition(&DestinationMdl,
+                                 &DestinationMdlOffset,
+                                 DestinationOffset) ||
+        !Ndis6AdvanceMdlPosition(&SourceMdl,
+                                 &SourceMdlOffset,
+                                 SourceOffset))
+    {
+        return NDIS_STATUS_SUCCESS;
+    }
+
+    SourceRemaining = Source->DataLength - SourceOffset;
+    while (*BytesCopied < BytesToCopy && SourceRemaining != 0 &&
+           SourceMdl != NULL && DestinationMdl != NULL)
+    {
+        ULONG DestinationMdlLength = MmGetMdlByteCount(DestinationMdl);
+        ULONG SourceMdlLength = MmGetMdlByteCount(SourceMdl);
+        ULONG DestinationAvailable;
+        ULONG SourceAvailable;
+        ULONG CopyLength;
+        PUCHAR DestinationVa;
+        PUCHAR SourceVa;
+
+        if (DestinationMdlOffset > DestinationMdlLength ||
+            SourceMdlOffset > SourceMdlLength)
+        {
+            break;
+        }
+        if (DestinationMdlOffset == DestinationMdlLength)
+        {
+            DestinationMdl = DestinationMdl->Next;
+            DestinationMdlOffset = 0;
+            continue;
+        }
+        if (SourceMdlOffset == SourceMdlLength)
+        {
+            SourceMdl = SourceMdl->Next;
+            SourceMdlOffset = 0;
+            continue;
+        }
+
+        DestinationAvailable = DestinationMdlLength - DestinationMdlOffset;
+        SourceAvailable = SourceMdlLength - SourceMdlOffset;
+        CopyLength = min(DestinationAvailable, SourceAvailable);
+        CopyLength = min(CopyLength, SourceRemaining);
+        CopyLength = min(CopyLength, BytesToCopy - *BytesCopied);
+
+        DestinationVa = (PUCHAR)MmGetSystemAddressForMdlSafe(
+            DestinationMdl, NormalPagePriority);
+        SourceVa = (PUCHAR)MmGetSystemAddressForMdlSafe(
+            SourceMdl, NormalPagePriority);
+        if (DestinationVa == NULL || SourceVa == NULL)
+            return NDIS_STATUS_RESOURCES;
+
+        RtlMoveMemory(DestinationVa + DestinationMdlOffset,
+                      SourceVa + SourceMdlOffset,
+                      CopyLength);
+        DestinationMdlOffset += CopyLength;
+        SourceMdlOffset += CopyLength;
+        SourceRemaining -= CopyLength;
+        *BytesCopied += CopyLength;
+    }
+
+    return NDIS_STATUS_SUCCESS;
+}
+
+ULONG
+NTAPI
+NdisQueryNetBufferPhysicalCount(
+    _In_ PNET_BUFFER NetBuffer)
+{
+    PMDL Mdl;
+    ULONG MdlOffset;
+    ULONG Remaining;
+    ULONG PhysicalCount = 0;
+
+    if (NetBuffer == NULL)
+        return 0;
+
+    Mdl = NetBuffer->CurrentMdl;
+    MdlOffset = NetBuffer->CurrentMdlOffset;
+    Remaining = NetBuffer->DataLength;
+    while (Remaining != 0 && Mdl != NULL)
+    {
+        ULONG MdlLength = MmGetMdlByteCount(Mdl);
+        ULONG SegmentLength;
+        ULONG SegmentPages;
+
+        if (MdlOffset > MdlLength)
+            return PhysicalCount;
+        if (MdlOffset == MdlLength)
+        {
+            Mdl = Mdl->Next;
+            MdlOffset = 0;
+            continue;
+        }
+
+        SegmentLength = min(Remaining, MdlLength - MdlOffset);
+        SegmentPages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(
+            (PUCHAR)MmGetMdlVirtualAddress(Mdl) + MdlOffset,
+            SegmentLength);
+        if (SegmentPages > MAXULONG - PhysicalCount)
+            return MAXULONG;
+
+        PhysicalCount += SegmentPages;
+        Remaining -= SegmentLength;
+        Mdl = Mdl->Next;
+        MdlOffset = 0;
+    }
+
+    return PhysicalCount;
 }
 
 /* ============================================================================
@@ -640,13 +1268,59 @@ NdisFreeMdl(
     IoFreeMdl(Mdl);
 }
 
+NDIS_STATUS
+NTAPI
+NdisRetreatNetBufferListDataStart(
+    _In_ PNET_BUFFER_LIST NetBufferList,
+    _In_ ULONG DataOffsetDelta,
+    _In_ ULONG DataBackFill,
+    _In_opt_ NET_BUFFER_ALLOCATE_MDL_HANDLER AllocateMdlHandler,
+    _In_opt_ NET_BUFFER_FREE_MDL_HANDLER FreeMdlHandler)
+{
+    PNET_BUFFER NetBuffer;
+    NDIS_STATUS Status;
+
+    if (NetBufferList == NULL)
+        return NDIS_STATUS_INVALID_PARAMETER;
+
+    for (NetBuffer = NetBufferList->FirstNetBuffer;
+         NetBuffer != NULL;
+         NetBuffer = NetBuffer->Next)
+    {
+        Status = NdisRetreatNetBufferDataStart(NetBuffer,
+                                               DataOffsetDelta,
+                                               DataBackFill,
+                                               AllocateMdlHandler);
+        if (Status != NDIS_STATUS_SUCCESS)
+        {
+            PNET_BUFFER Rollback;
+
+            /* Restore every NET_BUFFER already changed by this list call.
+             * The per-NB retreat tracker ensures FreeMdl releases only MDLs
+             * allocated during retreat, never the caller's original chain. */
+            for (Rollback = NetBufferList->FirstNetBuffer;
+                 Rollback != NetBuffer;
+                 Rollback = Rollback->Next)
+            {
+                NdisAdvanceNetBufferDataStart(Rollback,
+                                              DataOffsetDelta,
+                                              TRUE,
+                                              FreeMdlHandler);
+            }
+            return Status;
+        }
+    }
+
+    return NDIS_STATUS_SUCCESS;
+}
+
 VOID
 NTAPI
 NdisAdvanceNetBufferListDataStart(
     _In_ PNET_BUFFER_LIST NetBufferList,
     _In_ ULONG DataOffsetDelta,
     _In_ BOOLEAN FreeMdl,
-    _In_opt_ PVOID FreeMdlHandler)
+    _In_opt_ NET_BUFFER_FREE_MDL_HANDLER FreeMdlHandler)
 {
     PNET_BUFFER NetBuffer;
 
@@ -731,36 +1405,98 @@ NdisCopyReceiveNetBufferListInfo(
         Ndis6CopyNetBufferListInfo(Destination, Source, FALSE);
 }
 
+NDIS_STATUS
+NTAPI
+NdisAllocateNetBufferListContext(
+    _In_ PNET_BUFFER_LIST NetBufferList,
+    _In_ USHORT ContextSize,
+    _In_ USHORT ContextBackFill,
+    _In_ ULONG PoolTag)
+{
+    PNDIS6_CONTEXT_ALLOCATION_HEADER Allocation;
+    PNET_BUFFER_LIST_CONTEXT Context;
+    ULONG AllocationSize;
+
+    if (NetBufferList == NULL || ContextSize == 0 ||
+        (ContextSize & (sizeof(PVOID) - 1)) != 0 ||
+        (ContextBackFill & (sizeof(PVOID) - 1)) != 0 ||
+        (ULONG)ContextSize + ContextBackFill > MAXUSHORT)
+    {
+        return NDIS_STATUS_FAILURE;
+    }
+
+    Context = NetBufferList->Context;
+    if (Context != NULL && Context->Offset >= ContextSize)
+    {
+        if ((ULONG)Context->Size + ContextSize > MAXUSHORT)
+            return NDIS_STATUS_FAILURE;
+
+        Context->Offset -= ContextSize;
+        Context->Size += ContextSize;
+        return NDIS_STATUS_SUCCESS;
+    }
+
+    AllocationSize = NDIS6_CONTEXT_ALLOCATION_HEADER_SIZE +
+                     FIELD_OFFSET(NET_BUFFER_LIST_CONTEXT, ContextData) +
+                     ContextSize + ContextBackFill;
+    Allocation = (PNDIS6_CONTEXT_ALLOCATION_HEADER)ExAllocatePoolWithTag(
+        NonPagedPool,
+        AllocationSize,
+        PoolTag ? PoolTag : NBL_TAG);
+    if (Allocation == NULL)
+        return NDIS_STATUS_RESOURCES;
+
+    RtlZeroMemory(Allocation, AllocationSize);
+    Allocation->Magic = NDIS6_CONTEXT_ALLOCATION_MAGIC;
+    Allocation->PoolTag = PoolTag ? PoolTag : NBL_TAG;
+
+    Context = (PNET_BUFFER_LIST_CONTEXT)
+        ((PUCHAR)Allocation + NDIS6_CONTEXT_ALLOCATION_HEADER_SIZE);
+    Context->Next = NetBufferList->Context;
+    Context->Size = ContextSize;
+    Context->Offset = ContextBackFill;
+    NetBufferList->Context = Context;
+    return NDIS_STATUS_SUCCESS;
+}
+
 VOID
 NTAPI
 NdisFreeNetBufferListContext(
     _Inout_ PNET_BUFFER_LIST NetBufferList,
     _In_ USHORT ContextSize)
 {
+    PNDIS6_CONTEXT_ALLOCATION_HEADER Allocation;
     PNET_BUFFER_LIST_CONTEXT Context;
-    ULONG AlignedSize;
+    PNET_BUFFER_LIST_CONTEXT EmbeddedContext;
 
     if (NetBufferList == NULL || NetBufferList->Context == NULL ||
-        ContextSize == 0)
+        ContextSize == 0 ||
+        (ContextSize & (sizeof(PVOID) - 1)) != 0)
     {
         return;
     }
 
-    AlignedSize = ALIGN_UP_BY(ContextSize, sizeof(PVOID));
     Context = NetBufferList->Context;
-    if (AlignedSize > MAXUSHORT ||
-        Context->Offset > Context->Size ||
-        AlignedSize > Context->Size - Context->Offset)
+    if (ContextSize > Context->Size)
+        return;
+
+    EmbeddedContext = (PNET_BUFFER_LIST_CONTEXT)
+        ((PUCHAR)NetBufferList + sizeof(NET_BUFFER_LIST));
+    if (ContextSize == Context->Size && Context != EmbeddedContext)
     {
+        Allocation = (PNDIS6_CONTEXT_ALLOCATION_HEADER)
+            ((PUCHAR)Context - NDIS6_CONTEXT_ALLOCATION_HEADER_SIZE);
+        if (Allocation->Magic != NDIS6_CONTEXT_ALLOCATION_MAGIC)
+            return;
+
+        NetBufferList->Context = Context->Next;
+        Allocation->Magic = 0;
+        ExFreePoolWithTag(Allocation, Allocation->PoolTag);
         return;
     }
 
-    Context->Offset += (USHORT)AlignedSize;
-    if (Context->Offset == Context->Size && Context->Next != NULL)
-    {
-        NetBufferList->Context = Context->Next;
-        ExFreePool(Context);
-    }
+    Context->Size -= ContextSize;
+    Context->Offset += ContextSize;
 }
 
 static BOOLEAN
