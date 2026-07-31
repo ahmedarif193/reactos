@@ -128,7 +128,12 @@ Test_EnumAdapters2EmbeddedOutput(void)
     Before = Data;
     CAPTURE_CALL(Status, Faulted, pfn(&Data));
     ok(Status == STATUS_INVALID_PARAMETER, "EnumAdapters2 with an inaccessible output array returned 0x%08lX%s, expected STATUS_INVALID_PARAMETER (Win11)\n", (long)Status, Faulted ? " (faulted)" : "");
-    ok(Data.NumAdapters == Before.NumAdapters && Data.pAdapters == Before.pAdapters, "EnumAdapters2 changed its descriptor after rejecting an inaccessible output array\n");
+    /* Windows 11 rewrites NumAdapters (it reports the real count even on the
+     * failing path), so only the caller's buffer pointer is guaranteed. Handing
+     * a different pointer back would make the caller free memory it never
+     * allocated. */
+    ok(Data.pAdapters == Before.pAdapters, "EnumAdapters2 replaced the caller's output pointer after rejecting an inaccessible output array\n");
+    trace("EnumAdapters2(inaccessible): NumAdapters %lu -> %lu\n", Before.NumAdapters, Data.NumAdapters);
     VirtualFree(GuardPage, 0, MEM_RELEASE);
 
     ReadOnlyPage = VirtualAlloc(NULL, BufferSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
@@ -155,7 +160,8 @@ Test_EnumAdapters2EmbeddedOutput(void)
     Before = Data;
     CAPTURE_CALL(Status, Faulted, pfn(&Data));
     ok(Status == STATUS_INVALID_PARAMETER, "EnumAdapters2 with a read-only output array returned 0x%08lX%s, expected STATUS_INVALID_PARAMETER (Win11)\n", (long)Status, Faulted ? " (faulted)" : "");
-    ok(Data.NumAdapters == Before.NumAdapters && Data.pAdapters == Before.pAdapters, "EnumAdapters2 changed its descriptor after rejecting a read-only output array\n");
+    ok(Data.pAdapters == Before.pAdapters, "EnumAdapters2 replaced the caller's output pointer after rejecting a read-only output array\n");
+    trace("EnumAdapters2(read-only): NumAdapters %lu -> %lu\n", Before.NumAdapters, Data.NumAdapters);
     if (VirtualProtect(ReadOnlyPage, BufferSize, PAGE_READWRITE, &OldProtect))
         ok(memcmp(ReadOnlyPage, ExpectedBuffer, BufferSize) == 0, "EnumAdapters2 modified a read-only output canary before reporting failure\n");
     else
