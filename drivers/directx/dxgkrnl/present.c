@@ -1462,14 +1462,26 @@ DxgkpExecuteDodPresent(
         PfnPresent = NULL;
     }
 
-    if (PfnPresent == NULL)
-        return STATUS_NOT_SUPPORTED;
-
     if (Entry->DstSubRectCount == 0)
     {
         DirtyRect = Entry->DstRect;
         if (!DxgkPresentCoreRectValid(&DirtyRect))
             return STATUS_INVALID_PARAMETER;
+    }
+
+    /*
+     * A display-only miniport that exposes no DxgkDdiPresentDisplayOnly (a
+     * software miniport such as softgpu) is not a failure: the display path
+     * copies the shadow framebuffer straight to the firmware GOP, which is how
+     * every other present on such an adapter already reaches the panel.
+     * Refusing here made D3DKMTPresent fail on exactly those adapters.
+     */
+    if (PfnPresent == NULL)
+    {
+        return DxgkDisplayPresentRect(Adapter,
+                                      Entry->DstSubRectCount != 0
+                                          ? &Entry->DstSubRects[0]
+                                          : &DirtyRect);
     }
 
     ASSERT(Entry->SharedSurface.ShadowFbPitch != 0);
