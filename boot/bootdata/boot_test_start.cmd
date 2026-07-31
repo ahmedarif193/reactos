@@ -13,6 +13,7 @@ set RUN_ROSAUTOTEST=0
 set RUN_CPUBENCH=0
 set RUN_ETHBENCH=0
 set RUN_KMTEST=0
+set RUN_WDDMTEST=0
 set RUN_RPI5_WIFI=0
 set ETHBENCH_PEER=10.42.0.1
 set ETHBENCH_SECONDS=30
@@ -30,8 +31,9 @@ if not "!OPTS_TEXT:ROSAUTOTEST=!" == "!OPTS_TEXT!" set RUN_ROSAUTOTEST=1
 if not "!OPTS_TEXT:CPUBENCH=!" == "!OPTS_TEXT!" set RUN_CPUBENCH=1
 if not "!OPTS_TEXT:ETHBENCH=!" == "!OPTS_TEXT!" set RUN_ETHBENCH=1
 if not "!OPTS_TEXT:KMTEST=!" == "!OPTS_TEXT!" set RUN_KMTEST=1
+if not "!OPTS_TEXT:WDDMTEST=!" == "!OPTS_TEXT!" set RUN_WDDMTEST=1
 if not "!OPTS_TEXT:RPI5WIFITEST=!" == "!OPTS_TEXT!" set RUN_RPI5_WIFI=1
-if "!RUN_ROSAUTOTEST!!RUN_CPUBENCH!!RUN_ETHBENCH!!RUN_KMTEST!!RUN_RPI5_WIFI!" == "00000" goto disabled
+if "!RUN_ROSAUTOTEST!!RUN_CPUBENCH!!RUN_ETHBENCH!!RUN_KMTEST!!RUN_WDDMTEST!!RUN_RPI5_WIFI!" == "000000" goto disabled
 
 if not "!RUN_ETHBENCH!!RUN_RPI5_WIFI!" == "00" call :load_network_config
 
@@ -42,6 +44,7 @@ if "!RUN_ETHBENCH!" == "1" call :run_ethbench
 if "!RUN_RPI5_WIFI!" == "1" call :run_rpi5_wifi
 if "!RUN_CPUBENCH!" == "1" call :run_cpubench
 if "!RUN_KMTEST!" == "1" call :run_kmtests
+if "!RUN_WDDMTEST!" == "1" call :run_wddmtest
 if "!RUN_ROSAUTOTEST!" == "1" call :run_rosautotest
 
 "%S%\dbgprint.exe" BOOT_TESTS_END selected=!BOOT_TEST_SELECTED! failures=!BOOT_TEST_FAILURES!
@@ -267,6 +270,23 @@ set /a KMTEST_FAILURES+=1
 set /a BOOT_TEST_FAILURES+=KMTEST_FAILURES
 "%S%\dbgprint.exe" KMTEST_SUITE_EXIT !KMTEST_FAILURES!
 "%S%\dbgprint.exe" KMTEST_SUITE_END all count=!KMTEST_COUNT! failures=!KMTEST_FAILURES! skipped=!KMTEST_SKIPPED!
+exit /b 0
+
+:run_wddmtest
+set /a BOOT_TEST_SELECTED+=1
+"%S%\ping.exe" -n 6 127.0.0.1 >nul
+set WDDMEXE=
+if exist "%BIN%\d3dkmt_apitest.exe" set WDDMEXE=%BIN%\d3dkmt_apitest.exe
+for %%D in (C D E F G H I J K L M) do if exist "%%D:\d3dkmt_apitest.exe" set WDDMEXE=%%D:\d3dkmt_apitest.exe
+if "!WDDMEXE!" == "" goto wddmtest_missing
+"%S%\dbgprint.exe" WDDM_APITEST_BEGIN
+"%S%\dbgprint.exe" --winetest "!WDDMEXE!"
+"%S%\dbgprint.exe" WDDM_APITEST_END
+exit /b 0
+
+:wddmtest_missing
+"%S%\dbgprint.exe" WDDM_APITEST_MISSING
+set /a BOOT_TEST_FAILURES+=1
 exit /b 0
 
 :run_rosautotest
