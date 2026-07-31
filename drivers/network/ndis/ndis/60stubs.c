@@ -549,6 +549,7 @@ NdisOpenAdapterEx(
     PNDIS6_PROTOCOL_DRIVER_BLOCK Block = (PNDIS6_PROTOCOL_DRIVER_BLOCK)NdisProtocolHandle;
     PNDIS6_PROTOCOL_BINDING      Binding;
     PLOGICAL_ADAPTER             Adapter;
+    PNDIS6_ADAPTER_EXT           Ext;
     PNDIS_OPEN_PARAMETERS        OpenParams = (PNDIS_OPEN_PARAMETERS)OpenParameters;
 
     if (Block == NULL || NdisBindingHandle == NULL || BindContext == NULL)
@@ -564,6 +565,10 @@ NdisOpenAdapterEx(
     if (BindContext != (NDIS_HANDLE)Block)
         Adapter = (PLOGICAL_ADAPTER)BindContext;
     if (Adapter == NULL || !Adapter->IsNdis6)
+        return NDIS_STATUS_FAILURE;
+
+    Ext = NDIS6_EXT(Adapter);
+    if (Ext == NULL)
         return NDIS_STATUS_FAILURE;
 
     Binding = (PNDIS6_PROTOCOL_BINDING)ExAllocatePoolWithTag(
@@ -592,8 +597,6 @@ NdisOpenAdapterEx(
         NDIS_MEDIUM  AdapterMedium = NdisMedium802_3;
         UINT         i;
         BOOLEAN      Matched = FALSE;
-        PNDIS6_ADAPTER_EXT Ext = NDIS6_EXT(Adapter);
-
         if (Ext != NULL && Ext->GeneralAttrsValid)
             AdapterMedium = Ext->GeneralAttrs.MediaType;
 
@@ -619,18 +622,23 @@ NdisOpenAdapterEx(
          * to the protocol and let it decode. */
     }
 
-    /* Link this binding into the adapter's native-protocol list. Must happen
-     * before OpenAdapterCompleteHandlerEx, from which the protocol may start
-     * sending immediately. */
+    /* Link this binding into the adapter's native-protocol list. The current
+     * receive bridge cannot safely fan one mutable NBL out to several native
+     * protocols, so reject a second native open instead of allowing two
+     * independent returns to reach the miniport. Must happen before
+     * OpenAdapterCompleteHandlerEx, from which the protocol may start sending. */
     {
-        PNDIS6_ADAPTER_EXT Ext = NDIS6_EXT(Adapter);
-        if (Ext != NULL)
+        KIRQL OldIrql;
+
+        KeAcquireSpinLock(&Ext->ProtocolBindingListLock, &OldIrql);
+        if (!IsListEmpty(&Ext->ProtocolBindingList))
         {
-            KIRQL OldIrql;
-            KeAcquireSpinLock(&Ext->ProtocolBindingListLock, &OldIrql);
-            InsertTailList(&Ext->ProtocolBindingList, &Binding->AdapterLink);
             KeReleaseSpinLock(&Ext->ProtocolBindingListLock, OldIrql);
+            ExFreePoolWithTag(Binding, NDIS6_PROTOCOL_BINDING_TAG);
+            return NDIS_STATUS_OPEN_FAILED;
         }
+        InsertTailList(&Ext->ProtocolBindingList, &Binding->AdapterLink);
+        KeReleaseSpinLock(&Ext->ProtocolBindingListLock, OldIrql);
     }
 
     *NdisBindingHandle = (NDIS_HANDLE)Binding;

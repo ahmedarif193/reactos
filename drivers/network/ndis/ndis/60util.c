@@ -13,9 +13,6 @@
  *                  KTIMER + KDPC wrapper used for periodic work
  *                - RW lock API (NdisAllocateRWLock etc.) — shared/exclusive
  *                  synchronization primitive on top of EX_PUSH_LOCK
- *                - NdisAllocateNetBufferMdlAndData — combined helper used
- *                  by drivers building synthetic NBs from a backing buffer
- *
  *              The legacy DDK header doesn't carry these declarations
  *              (NDIS_TIMER_CHARACTERISTICS, NDIS_RW_LOCK_EX, etc.), so
  *              ndis6_internal.h declares the prototypes locally and the
@@ -349,67 +346,6 @@ NdisReleaseRWLock(
     KeLeaveCriticalRegion();
 
     LockState->Reserved[0] = NULL;
-}
-
-/* ============================================================================
- *  NdisAllocateNetBufferMdlAndData
- *
- *  Combined helper that allocates a NET_BUFFER from the given pool with
- *  a freshly created MDL and a backing nonpaged buffer. The buffer's
- *  size comes from the pool's DataSize parameter set at pool creation.
- *  Returns NULL on any failure.
- * ============================================================================ */
-
-PNET_BUFFER
-NTAPI
-NdisAllocateNetBufferMdlAndData(
-    _In_ NDIS_HANDLE PoolHandle)
-{
-    /* Walk into the NB pool descriptor (defined in 60nbl.c). The bridge
-     * stores DataSize there from NdisAllocateNetBufferPool. */
-    typedef struct _NDIS6_NB_POOL_PEEK
-    {
-        ULONG       Magic;
-        ULONG       PoolTag;
-        ULONG       DataSize;
-    } NDIS6_NB_POOL_PEEK, *PNDIS6_NB_POOL_PEEK;
-
-    #define NDIS6_NB_POOL_MAGIC_LOCAL   0xB1601001
-
-    PNDIS6_NB_POOL_PEEK Pool = (PNDIS6_NB_POOL_PEEK)PoolHandle;
-    PNET_BUFFER         Nb;
-    PMDL                Mdl;
-    PVOID               DataBuffer;
-    ULONG               DataSize;
-
-    if (Pool == NULL || Pool->Magic != NDIS6_NB_POOL_MAGIC_LOCAL)
-        return NULL;
-
-    DataSize = Pool->DataSize;
-    if (DataSize == 0)
-        DataSize = 2048;  /* sensible default */
-
-    DataBuffer = ExAllocatePoolWithTag(NonPagedPool, DataSize, Pool->PoolTag);
-    if (DataBuffer == NULL)
-        return NULL;
-
-    Mdl = IoAllocateMdl(DataBuffer, DataSize, FALSE, FALSE, NULL);
-    if (Mdl == NULL)
-    {
-        ExFreePoolWithTag(DataBuffer, Pool->PoolTag);
-        return NULL;
-    }
-    MmBuildMdlForNonPagedPool(Mdl);
-
-    Nb = NdisAllocateNetBuffer(PoolHandle, Mdl, 0, DataSize);
-    if (Nb == NULL)
-    {
-        IoFreeMdl(Mdl);
-        ExFreePoolWithTag(DataBuffer, Pool->PoolTag);
-        return NULL;
-    }
-
-    return Nb;
 }
 
 /* ============================================================================

@@ -322,7 +322,8 @@ RndisAllocateNblPool(
     NblPoolParams.fAllocateNetBuffer = TRUE;
     NblPoolParams.ContextSize = 0;
     NblPoolParams.PoolTag = USBRNDIS_TAG;
-    NblPoolParams.DataSize = RNDIS_MAX_TRANSFER_SIZE;
+    /* Receive NBLs wrap the per-frame copy through an explicit MDL. */
+    NblPoolParams.DataSize = 0;
 
     Adapter->RxNblPool = NdisAllocateNetBufferListPool(
         Adapter->MiniportAdapterHandle,

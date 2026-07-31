@@ -315,8 +315,8 @@ typedef struct _NDIS6_ADAPTER_EXT
     /* Phase 3 TX thunk: NBL pool used to wrap legacy NDIS_PACKETs when
      * forwarding sends from a legacy NDIS 5 protocol (tcpip.sys) into an
      * NDIS 6 miniport's SendNetBufferListsHandler. Bridge-owned wrapper
-     * state lives in NdisReserved[1] so miniports keep MiniportReserved and
-     * the allocator keeps its NdisReserved[0] ownership marker. */
+     * state lives in NdisReserved[1] so miniports keep MiniportReserved; NBL
+     * allocation ownership is tracked in an allocator-private prefix. */
     NDIS_HANDLE                     TxWrapperNblPool;
     LIST_ENTRY                      InFlightNblsTx;
     KSPIN_LOCK                      TxLookupLock;
@@ -352,7 +352,7 @@ typedef struct _NDIS6_ADAPTER_EXT
     /* Phase 3 RX thunk: legacy NDIS_PACKET / NDIS_BUFFER pools used to
      * wrap incoming NET_BUFFERs when indicating receives up to a legacy
      * NDIS 5 protocol (tcpip.sys). One legacy packet per NB; per-NBL
-     * outstanding refcount lives in NBL->MiniportReserved[2]. */
+     * outstanding refcount lives in the NDIS-owned ChildRefCount field. */
     NDIS_HANDLE                     RxLegacyPacketPool;
     NDIS_HANDLE                     RxLegacyBufferPool;
 
@@ -691,12 +691,6 @@ VOID NTAPI
 NdisReleaseRWLock(
     _In_ PNDIS_RW_LOCK_EX Lock,
     _In_ PLOCK_STATE_EX   LockState);
-
-/* Combined NB+MDL+data allocation — common helper used by drivers
- * building synthetic NBs from a simple buffer. */
-PNET_BUFFER NTAPI
-NdisAllocateNetBufferMdlAndData(
-    _In_ NDIS_HANDLE PoolHandle);
 
 /* ============================================================================
  *  NDIS 6 protocol open/close adapter

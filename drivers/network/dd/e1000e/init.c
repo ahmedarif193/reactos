@@ -1172,7 +1172,8 @@ E1000AllocateAdapterResources(
     NblPoolParams.fAllocateNetBuffer = TRUE;
     NblPoolParams.ContextSize = 0;
     NblPoolParams.PoolTag = 'E1kR';
-    NblPoolParams.DataSize = E1000_RX_BUFFER_SIZE;
+    /* Receive NBLs wrap the DMA ring buffer through an explicit MDL. */
+    NblPoolParams.DataSize = 0;
 
     Adapter->RxNblPool = NdisAllocateNetBufferListPool(
                             Adapter->MiniportAdapterHandle,
