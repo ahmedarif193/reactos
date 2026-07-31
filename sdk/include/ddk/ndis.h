@@ -7098,6 +7098,11 @@ NdisAdvanceNetBufferListDataStart(
   _In_     BOOLEAN          FreeMdl,
   _In_opt_ NET_BUFFER_FREE_MDL_HANDLER FreeMdlHandler);
 
+VOID
+NDISAPI
+NdisAdjustNetBufferCurrentMdl(
+  _In_ PNET_BUFFER NetBuffer);
+
 PVOID
 NDISAPI
 NdisGetDataBuffer(
