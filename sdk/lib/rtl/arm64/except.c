@@ -176,11 +176,9 @@ RtlGetCallersAddress(
  * RtlRaiseStatus / RtlRaiseException capture their own register state with
  * RtlCaptureContext, which records Pc/Sp/Fp pointing INTO the raise helper. The
  * exception logically originates at the helper's call site, so dispatch must
- * begin in the caller (where the __try scope lives). amd64 fixes this by
- * rewriting Rip/Rsp/Rbp from intrinsics; arm64's return address lives in a
- * frame-relative slot rather than at a fixed stack offset, so do one virtual
- * unwind step instead - it yields a fully self-consistent caller context
- * (Pc, Sp, Fp, Lr) regardless of the helper's frame layout.
+ * begin in the caller (where the __try scope lives). Do one virtual unwind
+ * step to obtain a fully self-consistent caller context (Pc, Sp, Fp, Lr)
+ * regardless of the helper's frame layout.
  */
 VOID
 NTAPI

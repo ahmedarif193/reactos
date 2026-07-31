@@ -14,6 +14,34 @@
 /* PUBLIC FUNCTIONS **********************************************************/
 
 /*
+ * Advance a freshly captured CONTEXT up exactly one frame so it describes the
+ * caller of the routine that captured it.
+ */
+VOID
+NTAPI
+RtlpAmd64StepContextToCaller(
+    _Inout_ PCONTEXT Context)
+{
+    PRUNTIME_FUNCTION FunctionEntry;
+    ULONG64 ImageBase;
+    ULONG64 EstablisherFrame;
+    PVOID HandlerData;
+
+    FunctionEntry = RtlLookupFunctionEntry(Context->Rip, &ImageBase, NULL);
+    if (FunctionEntry != NULL)
+    {
+        RtlVirtualUnwind(UNW_FLAG_NHANDLER,
+                         ImageBase,
+                         Context->Rip,
+                         FunctionEntry,
+                         Context,
+                         &HandlerData,
+                         &EstablisherFrame,
+                         NULL);
+    }
+}
+
+/*
 * @unimplemented
 */
 PVOID
