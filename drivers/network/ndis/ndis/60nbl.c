@@ -1384,12 +1384,28 @@ Ndis6CopyNetBufferListInfo(
         TcpIpChecksumNetBufferListInfo,
         IPsecOffloadV1NetBufferListInfo,
         TcpLargeSendNetBufferListInfo,
+        ClassificationHandleNetBufferListInfo,
         Ieee8021QNetBufferListInfo,
         NetBufferListCancelId,
         MediaSpecificInformation,
-        NetBufferListFrameType,
+        NetBufferListHashValue,
         IPsecOffloadV2TunnelNetBufferListInfo,
-        IPsecOffloadV2HeaderNetBufferListInfo
+        IPsecOffloadV2HeaderNetBufferListInfo,
+#if NDIS_SUPPORT_NDIS620
+        NblOriginalInterfaceIfIndex,
+        NetBufferListFilteringInfo,
+#endif
+#if NDIS_SUPPORT_NDIS630 && (defined(_AMD64_) || defined(_ARM64_))
+        VirtualSubnetInfo,
+#endif
+#if NDIS_SUPPORT_NDIS630
+        TcpRecvSegCoalesceInfo,
+        RscTcpTimestampDelta,
+#endif
+#if NDIS_SUPPORT_NDIS650 && (defined(_AMD64_) || defined(_ARM64_))
+        GftOffloadInformation,
+        GftFlowEntryId,
+#endif
     };
     static const UCHAR ReceiveIndexes[] =
     {
@@ -1402,22 +1418,91 @@ Ndis6CopyNetBufferListInfo(
         NetBufferListHashValue,
         NetBufferListHashInfo,
         IPsecOffloadV2TunnelNetBufferListInfo,
-        IPsecOffloadV2HeaderNetBufferListInfo
+        IPsecOffloadV2HeaderNetBufferListInfo,
+#if NDIS_SUPPORT_NDIS620
+        NblOriginalInterfaceIfIndex,
+        TcpReceiveBytesTransferred,
+        NetBufferListFilteringInfo,
+#endif
+#if NDIS_SUPPORT_NDIS630 && (defined(_AMD64_) || defined(_ARM64_))
+        VirtualSubnetInfo,
+#endif
+#if NDIS_SUPPORT_NDIS630
+        TcpRecvSegCoalesceInfo,
+        RscTcpTimestampDelta,
+#endif
+#if NDIS_SUPPORT_NDIS650 && (defined(_AMD64_) || defined(_ARM64_))
+        GftOffloadInformation,
+        GftFlowEntryId,
+#endif
     };
     const UCHAR* Indexes = SendPath ? SendIndexes : ReceiveIndexes;
     ULONG Count = SendPath ? RTL_NUMBER_OF(SendIndexes)
                            : RTL_NUMBER_OF(ReceiveIndexes);
     ULONG Index;
 
-    Destination->NblFlags = Source->NblFlags;
-    Destination->Flags = Source->Flags;
-    Destination->SourceHandle = Source->SourceHandle;
-
     for (Index = 0; Index < Count; Index++)
     {
         Destination->NetBufferListInfo[Indexes[Index]] =
             Source->NetBufferListInfo[Indexes[Index]];
     }
+
+    /* Frame type and protocol ID share one OOB slot. On sends, Windows copies
+     * only the protocol byte; on receives, the full frame-type slot is copied
+     * through ReceiveIndexes above. SourceHandle and the general Flags fields
+     * describe ownership and are intentionally not propagated. */
+    if (SendPath)
+    {
+        NdisSetNetBufferListProtocolId(
+            Destination,
+            NdisGetNetBufferListProtocolId(Source));
+#if NDIS_SUPPORT_NDIS682
+        if (Source->NblFlags & NDIS_NBL_FLAGS_CAPTURE_TIMESTAMP_ON_TRANSMIT)
+        {
+            Destination->NblFlags |=
+                NDIS_NBL_FLAGS_CAPTURE_TIMESTAMP_ON_TRANSMIT;
+        }
+#endif
+    }
+    else if (Source->NblFlags & NDIS_NBL_FLAGS_IS_LOOPBACK_PACKET)
+    {
+        Destination->NblFlags |= NDIS_NBL_FLAGS_IS_LOOPBACK_PACKET;
+        Destination->NetBufferListInfo[NetBufferListCancelId] =
+            Source->NetBufferListInfo[NetBufferListCancelId];
+    }
+#if NDIS_SUPPORT_NDIS680
+    else
+    {
+        Destination->NetBufferListInfo[NetBufferListInfoReserved3] =
+            Source->NetBufferListInfo[NetBufferListInfoReserved3];
+    }
+#endif
+
+    /* WfpNetBufferListInfo is reference-counted by a private NDIS helper on
+     * Windows and cannot be propagated safely as a raw pointer here. */
+}
+
+UCHAR
+NTAPI
+NdisGetNetBufferListProtocolId(
+    _In_ const NET_BUFFER_LIST *NetBufferList)
+{
+    PNDIS6_NBL_POOL Pool;
+    UCHAR ProtocolId;
+
+    if (NetBufferList == NULL)
+        return NDIS_PROTOCOL_ID_DEFAULT;
+
+    ProtocolId = *((const UCHAR *)&NET_BUFFER_LIST_INFO(
+        NetBufferList, NetBufferListProtocolId)) & NDIS_PROTOCOL_ID_MASK;
+    if (ProtocolId != NDIS_PROTOCOL_ID_DEFAULT)
+        return ProtocolId;
+
+    Pool = (PNDIS6_NBL_POOL)NetBufferList->NdisPoolHandle;
+    if (Pool != NULL && Pool->Magic == NDIS6_NBL_POOL_MAGIC)
+        return Pool->ProtocolId;
+
+    return NDIS_PROTOCOL_ID_DEFAULT;
 }
 
 VOID

@@ -6961,6 +6961,8 @@ typedef struct _NET_BUFFER_POOL_PARAMETERS {
     NET_BUFFER_LIST_INFO((_NBL), NetBufferListCancelId)
 #define NDIS_SET_NET_BUFFER_LIST_CANCEL_ID(_NBL, _CancelId) \
     (NET_BUFFER_LIST_INFO((_NBL), NetBufferListCancelId) = (_CancelId))
+#define NdisSetNetBufferListProtocolId(_NBL, _ProtocolId) \
+    (*((PUCHAR)&NET_BUFFER_LIST_INFO((_NBL), NetBufferListProtocolId)) = (UCHAR)(_ProtocolId))
 
 /* NET_BUFFER_LIST.Flags ownership masks. */
 #if NDIS_SUPPORT_NDIS630
@@ -7121,6 +7123,11 @@ NDIS_HANDLE
 NDISAPI
 NdisGetPoolFromNetBuffer(
   _In_ PNET_BUFFER NetBuffer);
+
+UCHAR
+NDISAPI
+NdisGetNetBufferListProtocolId(
+  _In_ const NET_BUFFER_LIST *NetBufferList);
 
 NDIS_STATUS
 NDISAPI

@@ -321,6 +321,7 @@
  @ stdcall NdisGetDataBuffer(ptr long ptr long long)
  @ stdcall NdisGetPoolFromNetBufferList(ptr)
  @ stdcall NdisGetPoolFromNetBuffer(ptr)
+ @ stdcall NdisGetNetBufferListProtocolId(ptr)
  @ stdcall NdisCopyFromNetBufferToNetBuffer(ptr long long ptr long ptr)
  @ stdcall NdisQueryNetBufferPhysicalCount(ptr)
  @ stdcall NdisAllocateMdl(ptr ptr long)
