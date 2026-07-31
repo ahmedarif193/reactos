@@ -10,6 +10,15 @@
 #define NDEBUG
 #include <debug.h>
 
+#define SDBUS_MAX_SDIO_CALLBACKS 7
+
+typedef struct _SDBUS_CALLBACK_SNAPSHOT
+{
+    PSDBUS_CALLBACK_ROUTINE Routine;
+    PVOID Context;
+    PSDBUS_INTERFACE_CONTEXT InterfaceContext;
+} SDBUS_CALLBACK_SNAPSHOT, *PSDBUS_CALLBACK_SNAPSHOT;
+
 /**
  * @brief SDHCI Interrupt Service Routine (ISR).
  *
@@ -62,8 +71,7 @@ SdBusInterruptService(
                                SDHCI_INT_BUFFER_READ_READY |
                                SDHCI_INT_BUFFER_WRITE_READY |
                                SDHCI_INT_ERROR |
-                               SDHCI_INT_CMD_ERROR_MASK |
-                               SDHCI_INT_DATA_ERROR_MASK);
+                               SDHCI_INT_ERROR_MASK);
 
     DmaBit = IntStatus & SDHCI_INT_DMA;
 
@@ -171,13 +179,17 @@ SdBusCreateChildPdo(
     PdoExtension->Present = TRUE;
     PdoExtension->ReportedMissing = FALSE;
     PdoExtension->Started = FALSE;
-    PdoExtension->InterfaceReferenceCount = 0;
-
     InitializeListHead(&PdoExtension->ListEntry);
     IoInitializeRemoveLock(&PdoExtension->RemoveLock, TAG_SDBUS, 0, 0);
 
-    /* Inherit I/O method from the FDO */
+    /* Inherit the parent's base power-pageability policy. */
     Pdo->Flags |= DO_DIRECT_IO;
+    if (FdoExtension->Common.PowerPagable)
+    {
+        Pdo->Flags |= DO_POWER_PAGABLE;
+    }
+    SdBusInitializeDeviceUsage(&PdoExtension->Common,
+                               FdoExtension->Common.PowerPagable);
     Pdo->Flags &= ~DO_DEVICE_INITIALIZING;
 
     *OutPdoExtension = PdoExtension;
@@ -276,6 +288,9 @@ SdBusEnumerateInsertedCard(
         return Status;
     }
 
+    /* A pure-SDIO card exposes only its function PDOs to PnP. */
+    NewPdo->IsInternalSdioHost = (NewPdo->CardType == SdCardTypeSdio);
+
     Status = SdBusSetTransferClock(FdoExtension, NewPdo);
     if (!NT_SUCCESS(Status))
     {
@@ -287,6 +302,7 @@ SdBusEnumerateInsertedCard(
     InsertTailList(&FdoExtension->ChildPdoList, &NewPdo->ListEntry);
     FdoExtension->ChildPdoCount++;
     KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
+    InterlockedIncrement(&FdoExtension->MediaChangeCount);
 
     if (NotifyPnp)
     {
@@ -335,21 +351,15 @@ SdBusCardDetectWorker(
         (volatile LONG *)&FdoExtension->PendingInterruptStatus, 0);
 
     /*
-     * Handle card insertion (at PASSIVE_LEVEL — safe for IoCreateDevice,
-     * card enumeration with KeDelayExecutionThread, etc.)
-     */
-    if (PendingStatus & SDHCI_INT_CARD_INSERTION)
-    {
-        (VOID)SdBusEnumerateInsertedCard(FdoExtension, TRUE, TRUE);
-    }
-
-    /*
-     * Handle card removal
+     * Handle card removal before insertion when both edges were latched. A
+     * quick remove/reinsert otherwise leaves the old generation present, so
+     * the insertion path mistakes it for an already-enumerated card.
      */
     if (PendingStatus & SDHCI_INT_CARD_REMOVAL)
     {
         PLIST_ENTRY Entry;
         PPDO_EXTENSION PdoExtension;
+        BOOLEAN MediaChanged = FALSE;
 
         /* Mark all child PDOs as absent */
         KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
@@ -359,15 +369,39 @@ SdBusCardDetectWorker(
              Entry = Entry->Flink)
         {
             PdoExtension = CONTAINING_RECORD(Entry, PDO_EXTENSION, ListEntry);
+            if (PdoExtension->Present)
+            {
+                MediaChanged = TRUE;
+            }
             PdoExtension->Present = FALSE;
             PdoExtension->ReportedMissing = TRUE;
         }
 
         KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
+        SdBusDeleteMissingInternalSdioHosts(FdoExtension);
+
+        if (MediaChanged)
+        {
+            InterlockedIncrement(&FdoExtension->MediaChangeCount);
+        }
 
         /* Notify PnP manager */
         IoInvalidateDeviceRelations(FdoExtension->PhysicalDevice,
                                     BusRelations);
+    }
+
+    /*
+     * Handle card insertion (at PASSIVE_LEVEL -- safe for IoCreateDevice,
+     * card enumeration with KeDelayExecutionThread, etc.). Also re-enumerate
+     * when removal was the only latched edge but the socket is present again;
+     * some controllers coalesce a rapid remove/reinsert transition.
+     */
+    if ((PendingStatus & SDHCI_INT_CARD_INSERTION) ||
+        ((PendingStatus & SDHCI_INT_CARD_REMOVAL) &&
+         (SdBusReadReg32(FdoExtension, SDHCI_PRESENT_STATE) &
+          SDHCI_PS_CARD_INSERTED)))
+    {
+        (VOID)SdBusEnumerateInsertedCard(FdoExtension, TRUE, TRUE);
     }
 
     /*
@@ -378,10 +412,12 @@ SdBusCardDetectWorker(
     {
         PLIST_ENTRY Entry;
         PPDO_EXTENSION PdoExtension;
-        PSDBUS_CALLBACK_ROUTINE Callback;
-        PVOID CallbackCtx;
+        PSDBUS_INTERFACE_CONTEXT InterfaceContext;
+        SDBUS_CALLBACK_SNAPSHOT Callbacks[SDBUS_MAX_SDIO_CALLBACKS];
+        ULONG CallbackCount = 0;
+        ULONG CallbackIndex;
 
-        /* Snapshot callback under the lock, invoke outside */
+        /* Snapshot every passive callback under the lock, invoke outside. */
         KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
 
         for (Entry = FdoExtension->ChildPdoList.Flink;
@@ -389,22 +425,34 @@ SdBusCardDetectWorker(
              Entry = Entry->Flink)
         {
             PdoExtension = CONTAINING_RECORD(Entry, PDO_EXTENSION, ListEntry);
-            if (PdoExtension->Present && PdoExtension->CallbackRoutine != NULL)
+            InterfaceContext = (PSDBUS_INTERFACE_CONTEXT)
+                PdoExtension->CallbackInterfaceContext;
+            if (PdoExtension->Present &&
+                PdoExtension->CardInterruptForwardEnabled &&
+                PdoExtension->CallbackRoutine != NULL &&
+                !PdoExtension->CallbackAtDpcLevel &&
+                InterfaceContext != NULL &&
+                InterlockedCompareExchange(&InterfaceContext->InterruptOutstanding,
+                                           0,
+                                           0) != 0 &&
+                CallbackCount < SDBUS_MAX_SDIO_CALLBACKS &&
+                SdBusReferenceInterfaceContext(InterfaceContext))
             {
-                Callback = PdoExtension->CallbackRoutine;
-                CallbackCtx = PdoExtension->CallbackContext;
-
-                KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
-
-                Callback(CallbackCtx, 0);
-
-                KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
-                /* Restart from list head — list may have changed */
-                break;
+                Callbacks[CallbackCount].Routine = PdoExtension->CallbackRoutine;
+                Callbacks[CallbackCount].Context = PdoExtension->CallbackContext;
+                Callbacks[CallbackCount].InterfaceContext = InterfaceContext;
+                CallbackCount++;
             }
         }
 
         KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
+
+        for (CallbackIndex = 0; CallbackIndex < CallbackCount; CallbackIndex++)
+        {
+            Callbacks[CallbackIndex].Routine(Callbacks[CallbackIndex].Context,
+                                             SDBUS_INTTYPE_DEVICE);
+            SdBusInterfaceDereference(Callbacks[CallbackIndex].InterfaceContext);
+        }
     }
 
     /* Re-enable card detect interrupt signals */
@@ -413,9 +461,8 @@ SdBusCardDetectWorker(
                                      SDHCI_INT_CARD_REMOVAL,
                                      0);
 
-    /* Free the work item */
-    IoFreeWorkItem(WorkItem);
     IoReleaseRemoveLock(&FdoExtension->RemoveLock, WorkItem);
+    IoFreeWorkItem(WorkItem);
 }
 
 /**
@@ -485,10 +532,12 @@ SdBusCardDetectDpc(
     {
         PLIST_ENTRY Entry;
         PPDO_EXTENSION PdoExtension;
-        PSDBUS_CALLBACK_ROUTINE Callback;
-        PVOID CallbackCtx;
+        PSDBUS_INTERFACE_CONTEXT InterfaceContext;
+        SDBUS_CALLBACK_SNAPSHOT Callbacks[SDBUS_MAX_SDIO_CALLBACKS];
+        ULONG CallbackCount = 0;
+        ULONG CallbackIndex;
         KIRQL OldIrql;
-        BOOLEAN Handled = FALSE;
+        BOOLEAN HasPassiveCallback = FALSE;
 
         KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
         for (Entry = FdoExtension->ChildPdoList.Flink;
@@ -496,24 +545,53 @@ SdBusCardDetectDpc(
              Entry = Entry->Flink)
         {
             PdoExtension = CONTAINING_RECORD(Entry, PDO_EXTENSION, ListEntry);
-            if (PdoExtension->Present && PdoExtension->CallbackRoutine != NULL &&
-                PdoExtension->CallbackAtDpcLevel)
+            InterfaceContext = (PSDBUS_INTERFACE_CONTEXT)
+                PdoExtension->CallbackInterfaceContext;
+            if (!PdoExtension->Present ||
+                !PdoExtension->CardInterruptForwardEnabled ||
+                PdoExtension->CallbackRoutine == NULL ||
+                InterfaceContext == NULL)
             {
-                Callback = PdoExtension->CallbackRoutine;
-                CallbackCtx = PdoExtension->CallbackContext;
-                KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
-                Callback(CallbackCtx, 0);
-                KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
-                Handled = TRUE;
-                break;
+                continue;
+            }
+
+            if (InterlockedCompareExchange(&InterfaceContext->InterruptOutstanding,
+                                           1,
+                                           0) == 0)
+            {
+                InterlockedIncrement(&FdoExtension->PendingSdioAcks);
+            }
+
+            if (PdoExtension->CallbackAtDpcLevel)
+            {
+                if (CallbackCount < SDBUS_MAX_SDIO_CALLBACKS &&
+                    SdBusReferenceInterfaceContext(InterfaceContext))
+                {
+                    Callbacks[CallbackCount].Routine = PdoExtension->CallbackRoutine;
+                    Callbacks[CallbackCount].Context = PdoExtension->CallbackContext;
+                    Callbacks[CallbackCount].InterfaceContext = InterfaceContext;
+                    CallbackCount++;
+                }
+            }
+            else
+            {
+                HasPassiveCallback = TRUE;
             }
         }
         KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
 
-        if (Handled)
+        /* Consume this delivery before callbacks can acknowledge and re-arm it. */
+        if (!HasPassiveCallback)
         {
             InterlockedAnd((volatile LONG *)&FdoExtension->PendingInterruptStatus,
                            ~(LONG)SDHCI_INT_CARD_INTERRUPT);
+        }
+
+        for (CallbackIndex = 0; CallbackIndex < CallbackCount; CallbackIndex++)
+        {
+            Callbacks[CallbackIndex].Routine(Callbacks[CallbackIndex].Context,
+                                             SDBUS_INTTYPE_DEVICE);
+            SdBusInterfaceDereference(Callbacks[CallbackIndex].InterfaceContext);
         }
     }
 
@@ -527,11 +605,36 @@ SdBusCardDetectDpc(
     WorkItem = IoAllocateWorkItem(FdoExtension->Common.Self);
     if (WorkItem == NULL)
     {
+        PLIST_ENTRY Entry;
+        PPDO_EXTENSION PdoExtension;
+        PSDBUS_INTERFACE_CONTEXT InterfaceContext;
+        KIRQL OldIrql;
+
         DPRINT1("SdBusCardDetectDpc: Failed to allocate work item\n");
+        KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
+        for (Entry = FdoExtension->ChildPdoList.Flink;
+             Entry != &FdoExtension->ChildPdoList;
+             Entry = Entry->Flink)
+        {
+            PdoExtension = CONTAINING_RECORD(Entry, PDO_EXTENSION, ListEntry);
+            InterfaceContext = (PSDBUS_INTERFACE_CONTEXT)
+                PdoExtension->CallbackInterfaceContext;
+            if (InterfaceContext != NULL &&
+                !PdoExtension->CallbackAtDpcLevel &&
+                InterlockedExchange(&InterfaceContext->InterruptOutstanding, 0) != 0)
+            {
+                InterlockedDecrement(&FdoExtension->PendingSdioAcks);
+            }
+        }
+        KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
+
+        InterlockedAnd((volatile LONG *)&FdoExtension->PendingInterruptStatus,
+                       ~(LONG)SDHCI_INT_CARD_INTERRUPT);
         SdBusUpdateInterruptSignalEnable(FdoExtension,
                                          SDHCI_INT_CARD_INSERTION |
                                          SDHCI_INT_CARD_REMOVAL,
                                          0);
+        SdBusRefreshCardInterrupt(FdoExtension);
         return;
     }
 

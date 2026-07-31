@@ -40,6 +40,56 @@
 #define CMD53_ARG_ADDR_MASK         0x1FFFFUL
 #define CMD53_ARG_COUNT_MASK        0x1FFUL
 
+#define SDIO_R5_COM_CRC_ERROR       (1UL << 15)
+#define SDIO_R5_ILLEGAL_COMMAND     (1UL << 14)
+#define SDIO_R5_ERROR               (1UL << 11)
+#define SDIO_R5_FUNCTION_NUMBER     (1UL << 9)
+#define SDIO_R5_OUT_OF_RANGE        (1UL << 8)
+
+#define SDIO_MAX_FUNCTIONS          7
+#define SDIO_CCCR_REV_MASK          0x0F
+#define SDIO_CCCR_REV_1_20          2
+#define SDIO_CCCR_REV_3_00          3
+#define SDIO_CCCR_CAP_LSC           0x40
+#define SDIO_CCCR_CAP_4BLS          0x80
+#define SDIO_SPEED_SHS              0x01
+#define SDIO_SPEED_BSS_MASK         0x0E
+#define SDIO_SPEED_EHS              0x02
+
+typedef struct _SDBUS_SDIO_FUNCTION_INFO
+{
+    UCHAR StandardInterface;
+    UCHAR ExtendedInterface;
+    UCHAR FunctionClass;
+    ULONG CisPointer;
+    USHORT VendorId;
+    USHORT DeviceId;
+} SDBUS_SDIO_FUNCTION_INFO, *PSDBUS_SDIO_FUNCTION_INFO;
+
+NTSTATUS
+SdBusSdioR5Status(
+    _In_ ULONG Response)
+{
+    if (Response & SDIO_R5_COM_CRC_ERROR)
+    {
+        return STATUS_SD_CMD_CRC_ERROR;
+    }
+    if (Response & SDIO_R5_ILLEGAL_COMMAND)
+    {
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
+    if (Response & (SDIO_R5_FUNCTION_NUMBER | SDIO_R5_OUT_OF_RANGE))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (Response & SDIO_R5_ERROR)
+    {
+        return STATUS_IO_DEVICE_ERROR;
+    }
+
+    return STATUS_SUCCESS;
+}
+
 static __inline ULONG
 SdBusSdioBuildCmd52Argument(
     _In_ UCHAR Function,
@@ -119,7 +169,8 @@ SdBusSdioCmd52(
     ULONG Argument;
     ULONG Response = 0;
 
-    if (FdoExtension == NULL)
+    if (FdoExtension == NULL || Function > CMD52_ARG_FUNC_MASK ||
+        Address > CMD52_ARG_ADDR_MASK || (RawMode && !Write))
     {
         return STATUS_INVALID_PARAMETER;
     }
@@ -138,12 +189,238 @@ SdBusSdioCmd52(
         return Status;
     }
 
+    Status = SdBusSdioR5Status(Response);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
     if (DataOut != NULL)
     {
         *DataOut = (UCHAR)(Response & 0xFF);
     }
 
     return STATUS_SUCCESS;
+}
+
+NTSTATUS
+SdBusSetSdioFunctionEnabled(
+    _In_ PPDO_EXTENSION PdoExtension,
+    _In_ BOOLEAN Enable)
+{
+    PFDO_EXTENSION FdoExtension;
+    UCHAR FunctionBit;
+    UCHAR IoEnable;
+    UCHAR RequestedEnable;
+    UCHAR DataOut;
+    ULONG Timeout;
+    LARGE_INTEGER Delay;
+    NTSTATUS Status;
+
+    if (PdoExtension == NULL || PdoExtension->FunctionNumber == 0 ||
+        PdoExtension->FunctionNumber > PdoExtension->SdioNumFunctions ||
+        PdoExtension->FunctionNumber > SDIO_MAX_FUNCTIONS ||
+        (PdoExtension->CardType != SdCardTypeSdio &&
+         PdoExtension->CardType != SdCardTypeCombo))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (!PdoExtension->Present)
+    {
+        return STATUS_SD_CARD_REMOVED;
+    }
+    if (KeGetCurrentIrql() > APC_LEVEL)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    FdoExtension = PdoExtension->FdoExtension;
+    if (FdoExtension == NULL || FdoExtension->RegisterBase == NULL ||
+        FdoExtension->Common.DeviceState != SdBusDeviceStateStarted)
+    {
+        return STATUS_DEVICE_NOT_READY;
+    }
+    FunctionBit = (UCHAR)(1U << PdoExtension->FunctionNumber);
+    Delay.QuadPart = -10000LL;
+
+    ExAcquireFastMutex(&FdoExtension->CommandMutex);
+
+    if (!PdoExtension->Present || FdoExtension->RegisterBase == NULL ||
+        FdoExtension->Common.DeviceState != SdBusDeviceStateStarted ||
+        (Enable &&
+         (!PdoExtension->Started ||
+          InterlockedCompareExchange(&PdoExtension->ManageIoEnable, 0, 0) == 0)))
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+        goto Exit;
+    }
+
+    Status = SdBusSdioCmd52(FdoExtension, 0, FALSE, FALSE,
+                            SDIO_CCCR_IO_ENABLE, 0, &IoEnable);
+    if (!NT_SUCCESS(Status))
+    {
+        goto Exit;
+    }
+
+    RequestedEnable = Enable ? (IoEnable | FunctionBit) :
+                               (IoEnable & ~FunctionBit);
+    if (RequestedEnable != IoEnable)
+    {
+        Status = SdBusSdioCmd52(FdoExtension, 0, TRUE, TRUE,
+                                SDIO_CCCR_IO_ENABLE, RequestedEnable,
+                                &DataOut);
+        if (!NT_SUCCESS(Status))
+        {
+            goto Exit;
+        }
+        if (DataOut != RequestedEnable)
+        {
+            Status = STATUS_DEVICE_DATA_ERROR;
+            goto Exit;
+        }
+    }
+
+    if (!Enable)
+    {
+        Status = STATUS_SUCCESS;
+        goto Exit;
+    }
+
+    for (Timeout = 0; Timeout < 1000; Timeout++)
+    {
+        Status = SdBusSdioCmd52(FdoExtension, 0, FALSE, FALSE,
+                                SDIO_CCCR_IO_READY, 0, &DataOut);
+        if (!NT_SUCCESS(Status))
+        {
+            goto Rollback;
+        }
+        if (DataOut & FunctionBit)
+        {
+            Status = STATUS_SUCCESS;
+            goto Exit;
+        }
+        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+    }
+
+    Status = STATUS_IO_TIMEOUT;
+
+Rollback:
+    RequestedEnable &= ~FunctionBit;
+    if (!NT_SUCCESS(SdBusSdioCmd52(FdoExtension, 0, TRUE, TRUE,
+                                   SDIO_CCCR_IO_ENABLE, RequestedEnable,
+                                   &DataOut)) ||
+        DataOut != RequestedEnable)
+    {
+        DPRINT1("SdBusSetSdioFunctionEnabled: function %lu rollback failed\n",
+                PdoExtension->FunctionNumber);
+        Status = STATUS_DEVICE_DATA_ERROR;
+    }
+
+Exit:
+    ExReleaseFastMutex(&FdoExtension->CommandMutex);
+    InterlockedExchange(&PdoExtension->SdioEnableStatus, Status);
+    InterlockedExchange(&PdoExtension->SdioEnablePending, 0);
+    if (NT_SUCCESS(Status))
+    {
+        InterlockedExchange(&PdoExtension->SdioFunctionEnabled,
+                            Enable ? 1 : 0);
+    }
+    return Status;
+}
+
+NTSTATUS
+SdBusSetSdioFunctionEnabledAdmitted(
+    _In_ PPDO_EXTENSION PdoExtension,
+    _In_ BOOLEAN Enable)
+{
+    PFDO_EXTENSION FdoExtension;
+    NTSTATUS Status;
+
+    if (PdoExtension == NULL || PdoExtension->FdoExtension == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    FdoExtension = PdoExtension->FdoExtension;
+    Status = SdBusAcquireRequestAdmission(FdoExtension);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    Status = SdBusSetSdioFunctionEnabled(PdoExtension, Enable);
+    SdBusReleaseRequestAdmission(FdoExtension);
+    return Status;
+}
+
+VOID
+SdBusProcessPendingSdioEnables(
+    _In_ PFDO_EXTENSION FdoExtension)
+{
+    PDEVICE_OBJECT FunctionPdos[SDIO_MAX_FUNCTIONS];
+    ULONG FunctionCount = 0;
+    ULONG FunctionIndex;
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+
+    if (FdoExtension == NULL ||
+        InterlockedCompareExchange(&FdoExtension->WorkerShutdown, 0, 0) != 0 ||
+        InterlockedCompareExchange(&FdoExtension->RequestsBlocked, 0, 0) != 0 ||
+        FdoExtension->Common.DeviceState != SdBusDeviceStateStarted)
+    {
+        return;
+    }
+
+    KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
+    for (Entry = FdoExtension->ChildPdoList.Flink;
+         Entry != &FdoExtension->ChildPdoList &&
+         FunctionCount < RTL_NUMBER_OF(FunctionPdos);
+         Entry = Entry->Flink)
+    {
+        PPDO_EXTENSION PdoExtension;
+
+        PdoExtension = CONTAINING_RECORD(Entry, PDO_EXTENSION, ListEntry);
+        if (PdoExtension->Present && PdoExtension->Started &&
+            PdoExtension->FunctionNumber != 0 &&
+            InterlockedCompareExchange(&PdoExtension->ManageIoEnable, 0, 0) != 0 &&
+            InterlockedCompareExchange(&PdoExtension->SdioEnablePending, 0, 0) != 0)
+        {
+            FunctionPdos[FunctionCount] = PdoExtension->Common.Self;
+            ObReferenceObject(FunctionPdos[FunctionCount]);
+            FunctionCount++;
+        }
+    }
+    KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
+
+    for (FunctionIndex = 0; FunctionIndex < FunctionCount; FunctionIndex++)
+    {
+        PPDO_EXTENSION PdoExtension;
+        NTSTATUS Status;
+
+        PdoExtension = (PPDO_EXTENSION)FunctionPdos[FunctionIndex]->DeviceExtension;
+        if (PdoExtension->Present && PdoExtension->Started &&
+            InterlockedCompareExchange(&PdoExtension->ManageIoEnable, 0, 0) != 0 &&
+            InterlockedCompareExchange(&PdoExtension->SdioEnablePending, 0, 0) != 0)
+        {
+            Status = SdBusAcquireRequestAdmission(FdoExtension);
+            if (NT_SUCCESS(Status))
+            {
+                if (InterlockedCompareExchange(&PdoExtension->SdioEnablePending,
+                                               0,
+                                               1) == 1)
+                {
+                    Status = SdBusSetSdioFunctionEnabled(PdoExtension, TRUE);
+                }
+                SdBusReleaseRequestAdmission(FdoExtension);
+                if (!NT_SUCCESS(Status))
+                {
+                    DPRINT1("SdBusProcessPendingSdioEnables: function %lu failed "
+                            "(0x%08lx)\n", PdoExtension->FunctionNumber, Status);
+                }
+            }
+        }
+        ObDereferenceObject(FunctionPdos[FunctionIndex]);
+    }
 }
 
 NTSTATUS
@@ -188,11 +465,18 @@ SdBusSdioCmd53(
     ULONG TransferBlockSize;
     ULONG Response = 0;
 
-    UNREFERENCED_PARAMETER(PdoExtension);
-
-    if (FdoExtension == NULL)
+    if (FdoExtension == NULL || PdoExtension == NULL ||
+        PdoExtension->FdoExtension != FdoExtension ||
+        Function > CMD53_ARG_FUNC_MASK || Address > CMD53_ARG_ADDR_MASK)
     {
         return STATUS_INVALID_PARAMETER;
+    }
+
+    if ((PdoExtension->CardType != SdCardTypeSdio &&
+         PdoExtension->CardType != SdCardTypeCombo) ||
+        Function > PdoExtension->SdioNumFunctions)
+    {
+        return STATUS_INVALID_DEVICE_REQUEST;
     }
 
     if (Count > 512)
@@ -218,8 +502,18 @@ SdBusSdioCmd53(
     }
     else
     {
+        if (BlockSize != 0)
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
         TransferBlockSize = ActualCount;
         DataLength = ActualCount;
+    }
+
+    if (MmGetMdlByteCount(Mdl) < DataLength ||
+        (Increment && DataLength - 1 > CMD53_ARG_ADDR_MASK - Address))
+    {
+        return STATUS_INVALID_PARAMETER;
     }
 
     RtlZeroMemory(&CmdDesc, sizeof(CmdDesc));
@@ -233,8 +527,18 @@ SdBusSdioCmd53(
     Argument = SdBusSdioBuildCmd53Argument(Function, Write, BlockMode,
                                             Increment, Address, Count);
 
-    return SdBusSendSdhciCommand(FdoExtension, &CmdDesc, Argument,
-                                 Mdl, DataLength, TransferBlockSize, &Response);
+    {
+        NTSTATUS Status;
+
+        Status = SdBusSendSdhciCommand(FdoExtension, &CmdDesc, Argument,
+                                       Mdl, DataLength, TransferBlockSize, 0,
+                                       &Response);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+        return SdBusSdioR5Status(Response);
+    }
 }
 
 static NTSTATUS
@@ -250,6 +554,11 @@ SdBusSdioReadCisPointer(
     UCHAR Byte2 = 0;
 
     if (OutPointer == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (BaseAddress > CMD52_ARG_ADDR_MASK - 2)
     {
         return STATUS_INVALID_PARAMETER;
     }
@@ -313,9 +622,18 @@ SdBusSdioWalkCis(
     {
         return STATUS_NOT_FOUND;
     }
+    if (CisPointer > CMD52_ARG_ADDR_MASK)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
     while (BytesWalked < SDIO_CIS_WALK_MAX_BYTES)
     {
+        if (Address > CMD52_ARG_ADDR_MASK)
+        {
+            return STATUS_DEVICE_DATA_ERROR;
+        }
+
         Status = SdBusSdioCmd52(FdoExtension, 0, FALSE, FALSE,
                                 Address, 0, &TupleCode);
         if (!NT_SUCCESS(Status))
@@ -335,6 +653,11 @@ SdBusSdioWalkCis(
             continue;
         }
 
+        if (Address == CMD52_ARG_ADDR_MASK)
+        {
+            return STATUS_DEVICE_DATA_ERROR;
+        }
+
         Status = SdBusSdioCmd52(FdoExtension, 0, FALSE, FALSE,
                                 Address + 1, 0, &TupleLink);
         if (!NT_SUCCESS(Status))
@@ -343,6 +666,11 @@ SdBusSdioWalkCis(
         }
 
         BodyStart = Address + 2;
+        if (BodyStart > CMD52_ARG_ADDR_MASK ||
+            TupleLink > CMD52_ARG_ADDR_MASK - BodyStart)
+        {
+            return STATUS_DEVICE_DATA_ERROR;
+        }
 
         switch (TupleCode)
         {
@@ -354,14 +682,21 @@ SdBusSdioWalkCis(
                 {
                     break;
                 }
-                SdBusSdioCmd52(FdoExtension, 0, FALSE, FALSE,
-                               BodyStart + 0, 0, &VidLo);
-                SdBusSdioCmd52(FdoExtension, 0, FALSE, FALSE,
-                               BodyStart + 1, 0, &VidHi);
-                SdBusSdioCmd52(FdoExtension, 0, FALSE, FALSE,
-                               BodyStart + 2, 0, &DidLo);
-                SdBusSdioCmd52(FdoExtension, 0, FALSE, FALSE,
-                               BodyStart + 3, 0, &DidHi);
+                Status = SdBusSdioCmd52(FdoExtension, 0, FALSE, FALSE,
+                                        BodyStart + 0, 0, &VidLo);
+                if (NT_SUCCESS(Status))
+                    Status = SdBusSdioCmd52(FdoExtension, 0, FALSE, FALSE,
+                                            BodyStart + 1, 0, &VidHi);
+                if (NT_SUCCESS(Status))
+                    Status = SdBusSdioCmd52(FdoExtension, 0, FALSE, FALSE,
+                                            BodyStart + 2, 0, &DidLo);
+                if (NT_SUCCESS(Status))
+                    Status = SdBusSdioCmd52(FdoExtension, 0, FALSE, FALSE,
+                                            BodyStart + 3, 0, &DidHi);
+                if (!NT_SUCCESS(Status))
+                {
+                    return Status;
+                }
 
                 if (OutVid != NULL)
                 {
@@ -381,8 +716,12 @@ SdBusSdioWalkCis(
                 {
                     break;
                 }
-                SdBusSdioCmd52(FdoExtension, 0, FALSE, FALSE,
-                               BodyStart + 0, 0, &Class);
+                Status = SdBusSdioCmd52(FdoExtension, 0, FALSE, FALSE,
+                                        BodyStart + 0, 0, &Class);
+                if (!NT_SUCCESS(Status))
+                {
+                    return Status;
+                }
                 if (OutFuncClass != NULL)
                 {
                     *OutFuncClass = Class;
@@ -409,12 +748,20 @@ SdBusCreateSdioFunctionPdo(
     _In_ UCHAR FunctionNumber,
     _In_ USHORT Vid,
     _In_ USHORT Did,
-    _In_ UCHAR Class)
+    _In_ UCHAR Class,
+    _Out_ PDEVICE_OBJECT *CreatedPdo)
 {
     PDEVICE_OBJECT Pdo;
     PPDO_EXTENSION PdoExtension;
     NTSTATUS Status;
-    KIRQL OldIrql;
+
+    if (FdoExtension == NULL || HostPdo == NULL || CreatedPdo == NULL ||
+        FunctionNumber == 0 || FunctionNumber > SDIO_MAX_FUNCTIONS)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    *CreatedPdo = NULL;
 
     Status = IoCreateDevice(FdoExtension->Common.Self->DriverObject,
                             sizeof(PDO_EXTENSION),
@@ -442,11 +789,18 @@ SdBusCreateSdioFunctionPdo(
     PdoExtension->Present = TRUE;
     PdoExtension->ReportedMissing = FALSE;
     PdoExtension->Started = FALSE;
-    PdoExtension->InterfaceReferenceCount = 0;
-
     PdoExtension->CardType = HostPdo->CardType;
     PdoExtension->RelativeAddress = HostPdo->RelativeAddress;
+    RtlCopyMemory(PdoExtension->Scr, HostPdo->Scr,
+                  sizeof(PdoExtension->Scr));
     PdoExtension->FunctionNumber = FunctionNumber;
+    PdoExtension->SdioNumFunctions = HostPdo->SdioNumFunctions;
+    PdoExtension->SdioCccrRev = HostPdo->SdioCccrRev;
+    PdoExtension->SdioSdSpecRev = HostPdo->SdioSdSpecRev;
+    PdoExtension->SdioCardCap = HostPdo->SdioCardCap;
+    PdoExtension->SdioBusIfCtrl = HostPdo->SdioBusIfCtrl;
+    PdoExtension->SdioUhsSupport = HostPdo->SdioUhsSupport;
+    PdoExtension->SdioCommonCisPointer = HostPdo->SdioCommonCisPointer;
     PdoExtension->SdioVendorId = Vid;
     PdoExtension->SdioDeviceId = Did;
     PdoExtension->SdioClass = Class;
@@ -457,17 +811,164 @@ SdBusCreateSdioFunctionPdo(
     IoInitializeRemoveLock(&PdoExtension->RemoveLock, TAG_SDBUS, 0, 0);
 
     Pdo->Flags |= DO_DIRECT_IO;
-    Pdo->Flags &= ~DO_DEVICE_INITIALIZING;
-
-    KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
-    InsertTailList(&FdoExtension->ChildPdoList, &PdoExtension->ListEntry);
-    FdoExtension->ChildPdoCount++;
-    KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
-
-    DPRINT1("SdBusCreateSdioFunctionPdo: func=%u VID=%04X DID=%04X class=%u PDO=%p\n",
-            FunctionNumber, Vid, Did, Class, Pdo);
+    if (FdoExtension->Common.PowerPagable)
+    {
+        Pdo->Flags |= DO_POWER_PAGABLE;
+    }
+    SdBusInitializeDeviceUsage(&PdoExtension->Common,
+                               FdoExtension->Common.PowerPagable);
+    *CreatedPdo = Pdo;
 
     return STATUS_SUCCESS;
+}
+
+VOID
+SdBusDeleteMissingInternalSdioHosts(
+    _In_ PFDO_EXTENSION FdoExtension)
+{
+    PDEVICE_OBJECT DeviceObject;
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+
+    if (FdoExtension == NULL)
+    {
+        return;
+    }
+
+    for (;;)
+    {
+        DeviceObject = NULL;
+
+        KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
+        for (Entry = FdoExtension->ChildPdoList.Flink;
+             Entry != &FdoExtension->ChildPdoList;
+             Entry = Entry->Flink)
+        {
+            PPDO_EXTENSION PdoExtension;
+
+            PdoExtension = CONTAINING_RECORD(Entry, PDO_EXTENSION, ListEntry);
+            if (PdoExtension->IsInternalSdioHost && !PdoExtension->Present)
+            {
+                DeviceObject = PdoExtension->Common.Self;
+                RemoveEntryList(&PdoExtension->ListEntry);
+                if (FdoExtension->ChildPdoCount != 0)
+                {
+                    FdoExtension->ChildPdoCount--;
+                }
+                break;
+            }
+        }
+        KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
+
+        if (DeviceObject == NULL)
+        {
+            break;
+        }
+
+        IoDeleteDevice(DeviceObject);
+    }
+}
+
+static NTSTATUS
+SdBusReuseSdioFunctionPdos(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _In_ PPDO_EXTENSION HostPdo,
+    _In_reads_(NumFunctions) PSDBUS_SDIO_FUNCTION_INFO FunctionInfo,
+    _In_ ULONG NumFunctions,
+    _Out_ PBOOLEAN Reused)
+{
+    PLIST_ENTRY Entry;
+    PPDO_EXTENSION FunctionPdo;
+    ULONG FunctionCount = 0;
+    UCHAR SeenFunctions = 0;
+    UCHAR ExpectedFunctions;
+    KIRQL OldIrql;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    *Reused = FALSE;
+    ExpectedFunctions = (UCHAR)(((1UL << NumFunctions) - 1) << 1);
+
+    KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
+    for (Entry = FdoExtension->ChildPdoList.Flink;
+         Entry != &FdoExtension->ChildPdoList;
+         Entry = Entry->Flink)
+    {
+        ULONG Index;
+        UCHAR FunctionBit;
+        PSDBUS_SDIO_FUNCTION_INFO Info;
+
+        FunctionPdo = CONTAINING_RECORD(Entry, PDO_EXTENSION, ListEntry);
+        if (FunctionPdo->InsertionGeneration != HostPdo->InsertionGeneration ||
+            FunctionPdo->FunctionNumber == 0)
+        {
+            continue;
+        }
+
+        if (!FunctionPdo->Present ||
+            FunctionPdo->FunctionNumber > NumFunctions)
+        {
+            Status = STATUS_DEVICE_DATA_ERROR;
+            break;
+        }
+
+        FunctionBit = (UCHAR)(1U << FunctionPdo->FunctionNumber);
+        if (SeenFunctions & FunctionBit)
+        {
+            Status = STATUS_DEVICE_DATA_ERROR;
+            break;
+        }
+
+        Index = FunctionPdo->FunctionNumber - 1;
+        Info = &FunctionInfo[Index];
+        if (FunctionPdo->SdioVendorId != Info->VendorId ||
+            FunctionPdo->SdioDeviceId != Info->DeviceId ||
+            FunctionPdo->SdioClass != Info->FunctionClass)
+        {
+            Status = STATUS_DEVICE_DATA_ERROR;
+            break;
+        }
+
+        SeenFunctions |= FunctionBit;
+        FunctionCount++;
+    }
+
+    if (NT_SUCCESS(Status) && FunctionCount != 0)
+    {
+        if (FunctionCount != NumFunctions || SeenFunctions != ExpectedFunctions)
+        {
+            Status = STATUS_DEVICE_DATA_ERROR;
+        }
+        else
+        {
+            for (Entry = FdoExtension->ChildPdoList.Flink;
+                 Entry != &FdoExtension->ChildPdoList;
+                 Entry = Entry->Flink)
+            {
+                FunctionPdo = CONTAINING_RECORD(Entry, PDO_EXTENSION, ListEntry);
+                if (FunctionPdo->InsertionGeneration ==
+                        HostPdo->InsertionGeneration &&
+                    FunctionPdo->FunctionNumber != 0)
+                {
+                    FunctionPdo->CardType = HostPdo->CardType;
+                    FunctionPdo->RelativeAddress = HostPdo->RelativeAddress;
+                    RtlCopyMemory(FunctionPdo->Scr, HostPdo->Scr,
+                                  sizeof(FunctionPdo->Scr));
+                    FunctionPdo->SdioNumFunctions = (UCHAR)NumFunctions;
+                    FunctionPdo->SdioCccrRev = HostPdo->SdioCccrRev;
+                    FunctionPdo->SdioSdSpecRev = HostPdo->SdioSdSpecRev;
+                    FunctionPdo->SdioCardCap = HostPdo->SdioCardCap;
+                    FunctionPdo->SdioBusIfCtrl = HostPdo->SdioBusIfCtrl;
+                    FunctionPdo->SdioUhsSupport = HostPdo->SdioUhsSupport;
+                    FunctionPdo->SdioCommonCisPointer =
+                        HostPdo->SdioCommonCisPointer;
+                }
+            }
+            *Reused = TRUE;
+        }
+    }
+    KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
+
+    return Status;
 }
 
 NTSTATUS
@@ -477,6 +978,7 @@ SdBusSdioEnumerateFunctions(
     _In_ ULONG NumFunctions)
 {
     NTSTATUS Status;
+    NTSTATUS RollbackStatus;
     UCHAR CccrRev = 0;
     UCHAR SdSpecRev = 0;
     UCHAR CardCap = 0;
@@ -487,8 +989,16 @@ SdBusSdioEnumerateFunctions(
     USHORT CommonDid = 0;
     UCHAR CommonClass = 0;
     ULONG FunctionIndex;
+    ULONG CreatedCount = 0;
+    SDBUS_SDIO_FUNCTION_INFO FunctionInfo[SDIO_MAX_FUNCTIONS];
+    PDEVICE_OBJECT FunctionPdos[SDIO_MAX_FUNCTIONS];
+    KIRQL OldIrql;
+    BOOLEAN Reused;
 
-    if (FdoExtension == NULL || HostPdo == NULL)
+    if (FdoExtension == NULL || HostPdo == NULL ||
+        HostPdo->FdoExtension != FdoExtension ||
+        (HostPdo->CardType != SdCardTypeSdio &&
+         HostPdo->CardType != SdCardTypeCombo))
     {
         return STATUS_INVALID_PARAMETER;
     }
@@ -499,16 +1009,44 @@ SdBusSdioEnumerateFunctions(
         return STATUS_SUCCESS;
     }
 
-    if (NumFunctions > 7)
+    if (NumFunctions > SDIO_MAX_FUNCTIONS)
     {
-        NumFunctions = 7;
+        return STATUS_DEVICE_DATA_ERROR;
     }
 
-    (void)SdBusSdioReadCccr(FdoExtension, SDIO_CCCR_REVISION, &CccrRev);
-    (void)SdBusSdioReadCccr(FdoExtension, SDIO_CCCR_SD_SPEC, &SdSpecRev);
-    (void)SdBusSdioReadCccr(FdoExtension, SDIO_CCCR_CARD_CAPABILITY, &CardCap);
-    (void)SdBusSdioReadCccr(FdoExtension, SDIO_CCCR_BUS_INTERFACE, &BusIfCtrl);
-    (void)SdBusSdioReadCccr(FdoExtension, SDIO_CCCR_UHS_SUPPORT, &UhsSupport);
+    RtlZeroMemory(FunctionInfo, sizeof(FunctionInfo));
+    RtlZeroMemory(FunctionPdos, sizeof(FunctionPdos));
+
+    Status = SdBusSdioReadCccr(FdoExtension, SDIO_CCCR_REVISION, &CccrRev);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if ((CccrRev & SDIO_CCCR_REV_MASK) > SDIO_CCCR_REV_3_00)
+    {
+        DPRINT1("SdBusSdioEnumerateFunctions: unsupported CCCR revision 0x%02X\n",
+                CccrRev);
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    Status = SdBusSdioReadCccr(FdoExtension, SDIO_CCCR_SD_SPEC, &SdSpecRev);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = SdBusSdioReadCccr(FdoExtension, SDIO_CCCR_CARD_CAPABILITY, &CardCap);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = SdBusSdioReadCccr(FdoExtension, SDIO_CCCR_BUS_INTERFACE, &BusIfCtrl);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if ((CccrRev & SDIO_CCCR_REV_MASK) >= SDIO_CCCR_REV_3_00)
+    {
+        Status = SdBusSdioReadCccr(FdoExtension, SDIO_CCCR_UHS_SUPPORT,
+                                    &UhsSupport);
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
 
     Status = SdBusSdioReadCisPointer(FdoExtension, 0, SDIO_CCCR_CIS_POINTER,
                                      &CommonCisPointer);
@@ -516,7 +1054,7 @@ SdBusSdioEnumerateFunctions(
     {
         DPRINT1("SdBusSdioEnumerateFunctions: common CIS pointer read failed "
                 "(0x%08lx)\n", Status);
-        CommonCisPointer = 0;
+        return Status;
     }
 
     DPRINT1("SdBusSdioEnumerateFunctions: CCCR rev=0x%02X spec=0x%02X cap=0x%02X "
@@ -524,12 +1062,88 @@ SdBusSdioEnumerateFunctions(
             CccrRev, SdSpecRev, CardCap, BusIfCtrl, UhsSupport,
             CommonCisPointer, NumFunctions);
 
-    if (CommonCisPointer != 0)
+    Status = SdBusSdioWalkCis(FdoExtension, CommonCisPointer,
+                              &CommonVid, &CommonDid, &CommonClass);
+    if (!NT_SUCCESS(Status))
     {
-        (void)SdBusSdioWalkCis(FdoExtension, CommonCisPointer,
-                               &CommonVid, &CommonDid, &CommonClass);
-        DPRINT1("SdBusSdioEnumerateFunctions: Common CIS VID=0x%04X DID=0x%04X "
-                "class=0x%02X\n", CommonVid, CommonDid, CommonClass);
+        DPRINT1("SdBusSdioEnumerateFunctions: common CIS walk failed "
+                "(0x%08lx)\n", Status);
+        return Status;
+    }
+    DPRINT1("SdBusSdioEnumerateFunctions: Common CIS VID=0x%04X DID=0x%04X "
+            "class=0x%02X\n", CommonVid, CommonDid, CommonClass);
+
+    for (FunctionIndex = 1; FunctionIndex <= NumFunctions; FunctionIndex++)
+    {
+        ULONG FbrBase = SDIO_FBR_BASE(FunctionIndex);
+        PSDBUS_SDIO_FUNCTION_INFO Info = &FunctionInfo[FunctionIndex - 1];
+        USHORT FuncVid = CommonVid;
+        USHORT FuncDid = CommonDid;
+        UCHAR TupleClass = 0;
+
+        Status = SdBusSdioReadCccr(FdoExtension,
+                                   FbrBase + SDIO_FBR_STD_INTERFACE,
+                                   &Info->StandardInterface);
+        if (!NT_SUCCESS(Status))
+            return Status;
+
+        Info->FunctionClass = Info->StandardInterface & 0x0F;
+        if (Info->FunctionClass == 0x0F)
+        {
+            Status = SdBusSdioReadCccr(FdoExtension,
+                                       FbrBase + SDIO_FBR_EXT_INTERFACE,
+                                       &Info->ExtendedInterface);
+            if (!NT_SUCCESS(Status))
+                return Status;
+            Info->FunctionClass = Info->ExtendedInterface;
+        }
+
+        Status = SdBusSdioReadCisPointer(FdoExtension, (UCHAR)FunctionIndex,
+                                         FbrBase + SDIO_FBR_CIS_POINTER,
+                                         &Info->CisPointer);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("SdBusSdioEnumerateFunctions: func %lu CIS pointer read "
+                    "failed (0x%08lx)\n", FunctionIndex, Status);
+            return Status;
+        }
+
+        {
+            USHORT TupleVid = 0;
+            USHORT TupleDid = 0;
+
+            Status = SdBusSdioWalkCis(FdoExtension, Info->CisPointer,
+                                      &TupleVid, &TupleDid, &TupleClass);
+            if (!NT_SUCCESS(Status))
+            {
+                DPRINT1("SdBusSdioEnumerateFunctions: func %lu CIS walk failed "
+                        "(0x%08lx)\n", FunctionIndex, Status);
+                return Status;
+            }
+
+            if (TupleVid != 0)
+                FuncVid = TupleVid;
+            if (TupleDid != 0)
+                FuncDid = TupleDid;
+            if (TupleClass != 0 && Info->FunctionClass == 0)
+                Info->FunctionClass = TupleClass;
+        }
+
+        if (FuncVid == 0 || FuncDid == 0)
+        {
+            DPRINT1("SdBusSdioEnumerateFunctions: func %lu has no usable "
+                    "manufacturer/card ID\n", FunctionIndex);
+            return STATUS_DEVICE_DATA_ERROR;
+        }
+
+        Info->VendorId = FuncVid;
+        Info->DeviceId = FuncDid;
+
+        DPRINT1("SdBusSdioEnumerateFunctions: func %lu std=0x%02X ext=0x%02X "
+                "class=0x%02X CIS=0x%06lX VID=0x%04X DID=0x%04X\n",
+                FunctionIndex, Info->StandardInterface,
+                Info->ExtendedInterface, Info->FunctionClass,
+                Info->CisPointer, Info->VendorId, Info->DeviceId);
     }
 
     HostPdo->SdioCccrRev = CccrRev;
@@ -546,100 +1160,162 @@ SdBusSdioEnumerateFunctions(
         UCHAR BusIf = (UCHAR)((BusIfCtrl & ~0x03) | 0x02);
         UCHAR HighSpeed = 0;
         UCHAR HostCtrl;
+        BOOLEAN CanUseFourBit;
 
-        if (NT_SUCCESS(SdBusSdioWriteCccr(FdoExtension, SDIO_CCCR_BUS_INTERFACE, BusIf)))
+        HostCtrl = SdBusReadReg8(FdoExtension, SDHCI_HOST_CONTROL);
+        HostCtrl &= ~SDHCI_HC_DATA_WIDTH_4BIT;
+        SdBusWriteReg8(FdoExtension, SDHCI_HOST_CONTROL, HostCtrl);
+        FdoExtension->CurrentBusWidth = 1;
+
+        CanUseFourBit = !(CardCap & SDIO_CCCR_CAP_LSC) ||
+                        (CardCap & SDIO_CCCR_CAP_4BLS);
+        if (HostPdo->CardType == SdCardTypeCombo &&
+            !(HostPdo->Scr[1] & SD_SCR_BUS_WIDTH_4))
         {
-            HostCtrl = SdBusReadReg8(FdoExtension, SDHCI_HOST_CONTROL);
-            HostCtrl |= SDHCI_HC_DATA_WIDTH_4BIT;
-            SdBusWriteReg8(FdoExtension, SDHCI_HOST_CONTROL, HostCtrl);
-            FdoExtension->CurrentBusWidth = 4;
-            DPRINT1("SdBusSdioEnumerateFunctions: SDIO 4-bit bus enabled\n");
+            CanUseFourBit = FALSE;
         }
 
-        (void)SdBusSdioReadCccr(FdoExtension, SDIO_CCCR_HIGH_SPEED, &HighSpeed);
-        if (HighSpeed & 0x01)
+        if (CanUseFourBit)
         {
-            HighSpeed |= 0x02;
-            if (NT_SUCCESS(SdBusSdioWriteCccr(FdoExtension, SDIO_CCCR_HIGH_SPEED, HighSpeed)))
+            Status = SdBusSdioWriteCccr(FdoExtension,
+                                         SDIO_CCCR_BUS_INTERFACE,
+                                         BusIf);
+            if (NT_SUCCESS(Status) && HostPdo->CardType == SdCardTypeCombo)
+            {
+                Status = SdBusSendAppCommand(FdoExtension,
+                                             HostPdo->RelativeAddress,
+                                             SDACMD_SET_BUS_WIDTH,
+                                             SD_ACMD6_BUS_WIDTH_4,
+                                             SDHCI_CMD_RESP_48 |
+                                                 SDHCI_CMD_CRC_CHECK |
+                                                 SDHCI_CMD_INDEX_CHECK,
+                                             NULL);
+                if (!NT_SUCCESS(Status))
+                {
+                    RollbackStatus = SdBusSdioWriteCccr(
+                        FdoExtension,
+                        SDIO_CCCR_BUS_INTERFACE,
+                        (UCHAR)(BusIfCtrl & ~0x03));
+                    if (!NT_SUCCESS(RollbackStatus))
+                    {
+                        DPRINT1("SdBusSdioEnumerateFunctions: combo-card "
+                                "4-bit rollback failed (0x%08lx)\n",
+                                RollbackStatus);
+                        return RollbackStatus;
+                    }
+                }
+            }
+
+            if (NT_SUCCESS(Status))
             {
                 HostCtrl = SdBusReadReg8(FdoExtension, SDHCI_HOST_CONTROL);
-                HostCtrl |= SDHCI_HC_HIGH_SPEED;
+                HostCtrl |= SDHCI_HC_DATA_WIDTH_4BIT;
                 SdBusWriteReg8(FdoExtension, SDHCI_HOST_CONTROL, HostCtrl);
-                DPRINT1("SdBusSdioEnumerateFunctions: SDIO high-speed enabled\n");
+                FdoExtension->CurrentBusWidth = 4;
+                DPRINT1("SdBusSdioEnumerateFunctions: SDIO 4-bit bus enabled\n");
+            }
+            else
+            {
+                DPRINT1("SdBusSdioEnumerateFunctions: 4-bit switch failed "
+                        "(0x%08lx), staying on 1-bit bus\n", Status);
+            }
+        }
+
+        if ((CccrRev & SDIO_CCCR_REV_MASK) >= SDIO_CCCR_REV_1_20)
+        {
+            Status = SdBusSdioReadCccr(FdoExtension, SDIO_CCCR_HIGH_SPEED,
+                                       &HighSpeed);
+            if (!NT_SUCCESS(Status))
+                return Status;
+
+            if ((HighSpeed & SDIO_SPEED_SHS) &&
+                HostPdo->CardType == SdCardTypeSdio &&
+                (FdoExtension->HostCapabilities & SDHCI_CAP_HIGH_SPEED))
+            {
+                HighSpeed = (UCHAR)((HighSpeed & ~SDIO_SPEED_BSS_MASK) |
+                                    SDIO_SPEED_EHS);
+                Status = SdBusSdioWriteCccr(FdoExtension,
+                                             SDIO_CCCR_HIGH_SPEED,
+                                             HighSpeed);
+                if (NT_SUCCESS(Status))
+                {
+                    HostCtrl = SdBusReadReg8(FdoExtension,
+                                             SDHCI_HOST_CONTROL);
+                    HostCtrl |= SDHCI_HC_HIGH_SPEED;
+                    SdBusWriteReg8(FdoExtension, SDHCI_HOST_CONTROL, HostCtrl);
+                    DPRINT1("SdBusSdioEnumerateFunctions: SDIO high-speed enabled\n");
+                }
+                else
+                {
+                    DPRINT1("SdBusSdioEnumerateFunctions: high-speed switch "
+                            "failed (0x%08lx), staying at default speed\n",
+                            Status);
+                }
             }
         }
     }
 
-    for (FunctionIndex = 1; FunctionIndex <= NumFunctions; FunctionIndex++)
+    Status = SdBusReuseSdioFunctionPdos(FdoExtension, HostPdo,
+                                        FunctionInfo, NumFunctions, &Reused);
+    if (!NT_SUCCESS(Status))
     {
-        ULONG FbrBase = SDIO_FBR_BASE(FunctionIndex);
-        UCHAR StdInterface = 0;
-        UCHAR ExtInterface = 0;
-        ULONG FuncCisPointer = 0;
-        USHORT FuncVid = CommonVid;
-        USHORT FuncDid = CommonDid;
-        UCHAR FuncClass = 0;
+        DPRINT1("SdBusSdioEnumerateFunctions: existing function PDO set no "
+                "longer matches the card (0x%08lx)\n", Status);
+        return Status;
+    }
+    if (Reused)
+    {
+        DPRINT1("SdBusSdioEnumerateFunctions: reused %lu function PDOs for "
+                "insertion generation %lu\n", NumFunctions,
+                HostPdo->InsertionGeneration);
+        return STATUS_SUCCESS;
+    }
 
-        (void)SdBusSdioReadCccr(FdoExtension,
-                                FbrBase + SDIO_FBR_STD_INTERFACE,
-                                &StdInterface);
-        (void)SdBusSdioReadCccr(FdoExtension,
-                                FbrBase + SDIO_FBR_EXT_INTERFACE,
-                                &ExtInterface);
-
-        FuncClass = (StdInterface & 0x0F);
-        if (FuncClass == 0x0F)
-        {
-            FuncClass = ExtInterface;
-        }
-
-        Status = SdBusSdioReadCisPointer(FdoExtension, (UCHAR)FunctionIndex,
-                                         FbrBase + SDIO_FBR_CIS_POINTER,
-                                         &FuncCisPointer);
-        if (!NT_SUCCESS(Status))
-        {
-            DPRINT1("SdBusSdioEnumerateFunctions: func %lu CIS pointer read "
-                    "failed (0x%08lx)\n", FunctionIndex, Status);
-            FuncCisPointer = 0;
-        }
-
-        if (FuncCisPointer != 0)
-        {
-            USHORT TupleVid = 0;
-            USHORT TupleDid = 0;
-            UCHAR TupleClass = 0;
-
-            (void)SdBusSdioWalkCis(FdoExtension, FuncCisPointer,
-                                   &TupleVid, &TupleDid, &TupleClass);
-
-            if (TupleVid != 0)
-            {
-                FuncVid = TupleVid;
-            }
-            if (TupleDid != 0)
-            {
-                FuncDid = TupleDid;
-            }
-            if (TupleClass != 0 && FuncClass == 0)
-            {
-                FuncClass = TupleClass;
-            }
-        }
-
-        DPRINT1("SdBusSdioEnumerateFunctions: func %lu std=0x%02X ext=0x%02X "
-                "class=0x%02X CIS=0x%06lX VID=0x%04X DID=0x%04X\n",
-                FunctionIndex, StdInterface, ExtInterface, FuncClass,
-                FuncCisPointer, FuncVid, FuncDid);
-
+    for (FunctionIndex = 0; FunctionIndex < NumFunctions; FunctionIndex++)
+    {
+        PSDBUS_SDIO_FUNCTION_INFO Info = &FunctionInfo[FunctionIndex];
         Status = SdBusCreateSdioFunctionPdo(FdoExtension, HostPdo,
-                                             (UCHAR)FunctionIndex,
-                                             FuncVid, FuncDid, FuncClass);
+                                             (UCHAR)(FunctionIndex + 1),
+                                             Info->VendorId,
+                                             Info->DeviceId,
+                                             Info->FunctionClass,
+                                             &FunctionPdos[FunctionIndex]);
         if (!NT_SUCCESS(Status))
         {
             DPRINT1("SdBusSdioEnumerateFunctions: func %lu PDO creation failed "
-                    "(0x%08lx), continuing with siblings\n",
-                    FunctionIndex, Status);
+                    "(0x%08lx)\n", FunctionIndex + 1, Status);
+            while (CreatedCount != 0)
+            {
+                CreatedCount--;
+                IoDeleteDevice(FunctionPdos[CreatedCount]);
+            }
+            return Status;
         }
+        CreatedCount++;
+    }
+
+    KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
+    for (FunctionIndex = 0; FunctionIndex < NumFunctions; FunctionIndex++)
+    {
+        PPDO_EXTENSION FunctionPdoExtension;
+
+        FunctionPdoExtension = (PPDO_EXTENSION)
+            FunctionPdos[FunctionIndex]->DeviceExtension;
+        FunctionPdos[FunctionIndex]->Flags &= ~DO_DEVICE_INITIALIZING;
+        InsertTailList(&FdoExtension->ChildPdoList,
+                       &FunctionPdoExtension->ListEntry);
+        FdoExtension->ChildPdoCount++;
+    }
+    KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
+
+    for (FunctionIndex = 0; FunctionIndex < NumFunctions; FunctionIndex++)
+    {
+        PSDBUS_SDIO_FUNCTION_INFO Info = &FunctionInfo[FunctionIndex];
+
+        DPRINT1("SdBusCreateSdioFunctionPdo: func=%lu VID=%04X DID=%04X "
+                "class=%u PDO=%p\n", FunctionIndex + 1,
+                Info->VendorId, Info->DeviceId, Info->FunctionClass,
+                FunctionPdos[FunctionIndex]);
     }
 
     return STATUS_SUCCESS;

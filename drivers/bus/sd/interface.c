@@ -10,6 +10,64 @@
 #define NDEBUG
 #include <debug.h>
 
+static BOOLEAN
+SdBusHasInterruptCallbackLocked(
+    _In_ PFDO_EXTENSION FdoExtension)
+{
+    PLIST_ENTRY Entry;
+    PPDO_EXTENSION PdoExtension;
+
+    for (Entry = FdoExtension->ChildPdoList.Flink;
+         Entry != &FdoExtension->ChildPdoList;
+         Entry = Entry->Flink)
+    {
+        PdoExtension = CONTAINING_RECORD(Entry, PDO_EXTENSION, ListEntry);
+        if (PdoExtension->Present &&
+            PdoExtension->CardInterruptForwardEnabled &&
+            PdoExtension->CallbackRoutine != NULL)
+        {
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+static VOID
+SdBusUpdateCardInterruptLocked(
+    _In_ PFDO_EXTENSION FdoExtension)
+{
+    if (SdBusHasInterruptCallbackLocked(FdoExtension) &&
+        InterlockedCompareExchange(&FdoExtension->PendingSdioAcks, 0, 0) == 0)
+    {
+        SdBusUpdateInterruptSignalEnable(FdoExtension,
+                                         SDHCI_INT_CARD_INTERRUPT,
+                                         0);
+    }
+    else
+    {
+        SdBusUpdateInterruptSignalEnable(FdoExtension,
+                                         0,
+                                         SDHCI_INT_CARD_INTERRUPT);
+    }
+}
+
+VOID
+SdBusRefreshCardInterrupt(
+    _In_ PFDO_EXTENSION FdoExtension)
+{
+    KIRQL OldIrql;
+
+    if (FdoExtension == NULL)
+    {
+        return;
+    }
+
+    KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
+    SdBusUpdateCardInterruptLocked(FdoExtension);
+    KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
+}
+
 /**
  * @brief Increment the SD bus interface reference count.
  *
@@ -21,16 +79,46 @@ SdBusInterfaceReference(
     _In_ PVOID Context)
 {
     PSDBUS_INTERFACE_CONTEXT InterfaceContext;
-    PPDO_EXTENSION PdoExtension;
 
     InterfaceContext = (PSDBUS_INTERFACE_CONTEXT)Context;
+    (VOID)SdBusReferenceInterfaceContext(InterfaceContext);
+}
+
+BOOLEAN
+SdBusReferenceInterfaceContext(
+    _In_ PSDBUS_INTERFACE_CONTEXT InterfaceContext)
+{
+    LONG ReferenceCount;
+
     if (InterfaceContext == NULL || InterfaceContext->PdoExtension == NULL)
     {
-        return;
+        return FALSE;
     }
 
-    PdoExtension = InterfaceContext->PdoExtension;
-    InterlockedIncrement(&PdoExtension->InterfaceReferenceCount);
+    ReferenceCount = InterlockedCompareExchange(&InterfaceContext->ReferenceCount,
+                                                0,
+                                                0);
+    while (ReferenceCount > 0)
+    {
+        LONG PreviousCount;
+
+        if (ReferenceCount == MAXLONG)
+        {
+            return FALSE;
+        }
+
+        PreviousCount = InterlockedCompareExchange(
+            &InterfaceContext->ReferenceCount,
+            ReferenceCount + 1,
+            ReferenceCount);
+        if (PreviousCount == ReferenceCount)
+        {
+            return TRUE;
+        }
+        ReferenceCount = PreviousCount;
+    }
+
+    return FALSE;
 }
 
 /**
@@ -47,7 +135,12 @@ SdBusInterfaceDereference(
 {
     PSDBUS_INTERFACE_CONTEXT InterfaceContext;
     PPDO_EXTENSION PdoExtension;
+    PFDO_EXTENSION FdoExtension;
+    PDEVICE_OBJECT TargetObject;
+    PDEVICE_OBJECT PdoDeviceObject;
+    PDEVICE_OBJECT FdoDeviceObject;
     LONG NewCount;
+    KIRQL OldIrql;
 
     InterfaceContext = (PSDBUS_INTERFACE_CONTEXT)Context;
     if (InterfaceContext == NULL || InterfaceContext->PdoExtension == NULL)
@@ -56,12 +149,51 @@ SdBusInterfaceDereference(
     }
 
     PdoExtension = InterfaceContext->PdoExtension;
-    NewCount = InterlockedDecrement(&PdoExtension->InterfaceReferenceCount);
+    PdoDeviceObject = InterfaceContext->PdoDeviceObject;
+    FdoDeviceObject = InterfaceContext->FdoDeviceObject;
+    NewCount = InterlockedDecrement(&InterfaceContext->ReferenceCount);
 
     if (NewCount == 0)
     {
-        /* Last reference released; free the interface context */
+        KeAcquireSpinLock(&InterfaceContext->TargetLock, &OldIrql);
+        TargetObject = InterfaceContext->TargetObject;
+        InterfaceContext->TargetObject = NULL;
+        KeReleaseSpinLock(&InterfaceContext->TargetLock, OldIrql);
+
+        FdoExtension = PdoExtension->FdoExtension;
+        if (FdoExtension != NULL)
+        {
+            KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
+            if (PdoExtension->InitializedInterfaceContext == InterfaceContext)
+            {
+                PdoExtension->InitializedInterfaceContext = NULL;
+                InterlockedExchange(&PdoExtension->ManageIoEnable, 0);
+                InterlockedExchange(&PdoExtension->SdioEnablePending, 0);
+            }
+            if (PdoExtension->CallbackInterfaceContext == InterfaceContext)
+            {
+                PdoExtension->CallbackRoutine = NULL;
+                PdoExtension->CallbackContext = NULL;
+                PdoExtension->CallbackInterfaceContext = NULL;
+                PdoExtension->CallbackAtDpcLevel = FALSE;
+                PdoExtension->CardInterruptForwardEnabled = FALSE;
+            }
+            InterfaceContext->Initialized = FALSE;
+            if (InterlockedExchange(&InterfaceContext->InterruptOutstanding, 0) != 0)
+            {
+                InterlockedDecrement(&FdoExtension->PendingSdioAcks);
+            }
+            SdBusUpdateCardInterruptLocked(FdoExtension);
+            KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
+        }
+
         ExFreePoolWithTag(InterfaceContext, TAG_SDBUS);
+        if (TargetObject != NULL)
+        {
+            ObDereferenceObject(TargetObject);
+        }
+        ObDereferenceObject(PdoDeviceObject);
+        ObDereferenceObject(FdoDeviceObject);
     }
 }
 
@@ -87,6 +219,14 @@ SdBusInitializeInterfaceImpl(
     PSDBUS_INTERFACE_CONTEXT InterfaceContext;
     PSDBUS_INTERFACE_PARAMETERS Params;
     PPDO_EXTENSION PdoExtension;
+    PFDO_EXTENSION FdoExtension;
+    PSDBUS_INTERFACE_CONTEXT PreviousOwner;
+    KIRQL OldIrql;
+    NTSTATUS Status;
+    BOOLEAN ManageIoEnable;
+    BOOLEAN ClaimedInitialization = FALSE;
+    LONG PreviousManageIoEnable;
+    PDEVICE_OBJECT PreviousTarget;
 
     InterfaceContext = (PSDBUS_INTERFACE_CONTEXT)Context;
     if (InterfaceContext == NULL)
@@ -95,7 +235,8 @@ SdBusInitializeInterfaceImpl(
     }
 
     Params = InterfaceParameters;
-    if (Params == NULL || Params->Size < sizeof(SDBUS_INTERFACE_PARAMETERS))
+    if (Params == NULL || Params->Size < sizeof(SDBUS_INTERFACE_PARAMETERS) ||
+        Params->TargetObject == NULL)
     {
         return STATUS_INVALID_PARAMETER;
     }
@@ -106,25 +247,119 @@ SdBusInitializeInterfaceImpl(
         return STATUS_INVALID_PARAMETER;
     }
 
+    if ((Params->SdioFlags & ~(SDIO_FLAG_DO_NOT_MANAGE_IO_ENABLE |
+                               SDIO_FLAG_SDIO_ENABLE_POLLING)) != 0 ||
+        (Params->DeviceGeneratesInterrupts && Params->CallbackRoutine == NULL))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (Params->DeviceGeneratesInterrupts &&
+        (PdoExtension->FunctionNumber == 0 ||
+         (PdoExtension->CardType != SdCardTypeSdio &&
+          PdoExtension->CardType != SdCardTypeCombo)))
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    FdoExtension = PdoExtension->FdoExtension;
+    if (FdoExtension == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
+    PreviousOwner = (PSDBUS_INTERFACE_CONTEXT)
+        PdoExtension->InitializedInterfaceContext;
+    if (PreviousOwner != NULL && PreviousOwner != InterfaceContext)
+    {
+        KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
+        return STATUS_DEVICE_BUSY;
+    }
+    if (PreviousOwner == NULL)
+    {
+        PdoExtension->InitializedInterfaceContext = InterfaceContext;
+        ClaimedInitialization = TRUE;
+    }
+    KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
+
+    ManageIoEnable = PdoExtension->FunctionNumber != 0 &&
+        !(Params->SdioFlags & SDIO_FLAG_DO_NOT_MANAGE_IO_ENABLE);
+    PreviousManageIoEnable = InterlockedExchange(
+        &PdoExtension->ManageIoEnable, ManageIoEnable ? 1 : 0);
+    if (ManageIoEnable && PdoExtension->Started)
+    {
+        if (KeGetCurrentIrql() <= APC_LEVEL)
+        {
+            Status = SdBusSetSdioFunctionEnabledAdmitted(PdoExtension, TRUE);
+            if (!NT_SUCCESS(Status))
+            {
+                KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
+                if (ClaimedInitialization &&
+                    PdoExtension->InitializedInterfaceContext == InterfaceContext)
+                {
+                    PdoExtension->InitializedInterfaceContext = NULL;
+                }
+                KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
+                InterlockedExchange(&PdoExtension->ManageIoEnable,
+                                    PreviousManageIoEnable);
+                InterlockedExchange(&PdoExtension->SdioEnablePending, 0);
+                return Status;
+            }
+        }
+        else
+        {
+            InterlockedExchange(&PdoExtension->SdioEnableStatus,
+                                STATUS_PENDING);
+            InterlockedExchange(&PdoExtension->SdioEnablePending, 1);
+            if (FdoExtension->WorkerStarted)
+            {
+                KeSetEvent(&FdoExtension->RequestArrived,
+                           IO_NO_INCREMENT,
+                           FALSE);
+            }
+        }
+    }
+
+    KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
     InterfaceContext->CallbackRoutine = Params->CallbackRoutine;
     InterfaceContext->CallbackContext = Params->CallbackRoutineContext;
     InterfaceContext->DeviceGeneratesInterrupts = Params->DeviceGeneratesInterrupts;
+    InterfaceContext->CallbackAtDpcLevel = Params->CallbackAtDpcLevel;
+    InterfaceContext->SdioFlags = Params->SdioFlags;
+    InterfaceContext->Initialized = TRUE;
 
-    PdoExtension->CallbackRoutine = Params->CallbackRoutine;
-    PdoExtension->CallbackContext = Params->CallbackRoutineContext;
-    PdoExtension->CallbackAtDpcLevel = Params->CallbackAtDpcLevel;
-
-    if (Params->DeviceGeneratesInterrupts && PdoExtension->FdoExtension)
+    if (Params->DeviceGeneratesInterrupts)
     {
-        SdBusUpdateInterruptSignalEnable(PdoExtension->FdoExtension,
-                                         SDHCI_INT_CARD_INTERRUPT,
-                                         0);
+        PdoExtension->CallbackRoutine = Params->CallbackRoutine;
+        PdoExtension->CallbackContext = Params->CallbackRoutineContext;
+        PdoExtension->CallbackInterfaceContext = InterfaceContext;
+        PdoExtension->CallbackAtDpcLevel = Params->CallbackAtDpcLevel;
+        PdoExtension->CardInterruptForwardEnabled = TRUE;
     }
-    else if (PdoExtension->FdoExtension)
+    else
     {
-        SdBusUpdateInterruptSignalEnable(PdoExtension->FdoExtension,
-                                         0,
-                                         SDHCI_INT_CARD_INTERRUPT);
+        PdoExtension->CallbackRoutine = NULL;
+        PdoExtension->CallbackContext = NULL;
+        PdoExtension->CallbackInterfaceContext = NULL;
+        PdoExtension->CallbackAtDpcLevel = FALSE;
+        PdoExtension->CardInterruptForwardEnabled = FALSE;
+        if (InterlockedExchange(&InterfaceContext->InterruptOutstanding, 0) != 0)
+        {
+            InterlockedDecrement(&FdoExtension->PendingSdioAcks);
+        }
+    }
+    SdBusUpdateCardInterruptLocked(FdoExtension);
+    KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
+
+    ObReferenceObject(Params->TargetObject);
+    KeAcquireSpinLock(&InterfaceContext->TargetLock, &OldIrql);
+    PreviousTarget = InterfaceContext->TargetObject;
+    InterfaceContext->TargetObject = Params->TargetObject;
+    KeReleaseSpinLock(&InterfaceContext->TargetLock, OldIrql);
+    if (PreviousTarget != NULL)
+    {
+        ObDereferenceObject(PreviousTarget);
     }
 
     return STATUS_SUCCESS;
@@ -147,6 +382,8 @@ SdBusAcknowledgeInterruptImpl(
     PSDBUS_INTERFACE_CONTEXT InterfaceContext;
     PPDO_EXTENSION PdoExtension;
     PFDO_EXTENSION FdoExtension;
+    KIRQL OldIrql;
+
     InterfaceContext = (PSDBUS_INTERFACE_CONTEXT)Context;
     if (InterfaceContext == NULL || InterfaceContext->PdoExtension == NULL)
     {
@@ -161,9 +398,20 @@ SdBusAcknowledgeInterruptImpl(
         return STATUS_INVALID_PARAMETER;
     }
 
-    SdBusUpdateInterruptSignalEnable(FdoExtension,
-                                     SDHCI_INT_CARD_INTERRUPT,
-                                     0);
+    KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
+    if (PdoExtension->CallbackInterfaceContext != InterfaceContext ||
+        !InterfaceContext->DeviceGeneratesInterrupts)
+    {
+        KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    if (InterlockedExchange(&InterfaceContext->InterruptOutstanding, 0) != 0)
+    {
+        InterlockedDecrement(&FdoExtension->PendingSdioAcks);
+    }
+    SdBusUpdateCardInterruptLocked(FdoExtension);
+    KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
 
     return STATUS_SUCCESS;
 }
@@ -191,6 +439,12 @@ SdBusOpenInterfaceImpl(
     _In_ USHORT Version)
 {
     PSDBUS_INTERFACE_CONTEXT InterfaceContext;
+    PFDO_EXTENSION FdoExtension;
+
+    if (PdoExtension == NULL || Interface == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
     if (Size < sizeof(SDBUS_INTERFACE_STANDARD))
     {
@@ -200,6 +454,15 @@ SdBusOpenInterfaceImpl(
     if (Version > SDBUS_INTERFACE_VERSION)
     {
         return STATUS_NOT_SUPPORTED;
+    }
+
+    FdoExtension = PdoExtension->FdoExtension;
+    if (FdoExtension == NULL || PdoExtension->Common.Self == NULL ||
+        FdoExtension->Common.Self == NULL || !PdoExtension->Present ||
+        PdoExtension->Common.DeviceState == SdBusDeviceStateRemoved ||
+        FdoExtension->Common.DeviceState == SdBusDeviceStateRemoved)
+    {
+        return STATUS_DEVICE_REMOVED;
     }
 
     /* Allocate a per-open interface context */
@@ -214,7 +477,16 @@ SdBusOpenInterfaceImpl(
     }
 
     RtlZeroMemory(InterfaceContext, sizeof(SDBUS_INTERFACE_CONTEXT));
+    KeInitializeSpinLock(&InterfaceContext->TargetLock);
+    InterfaceContext->TargetObject = PdoExtension->Common.Self;
     InterfaceContext->PdoExtension = PdoExtension;
+    InterfaceContext->PdoDeviceObject = PdoExtension->Common.Self;
+    InterfaceContext->FdoDeviceObject = FdoExtension->Common.Self;
+    InterfaceContext->ReferenceCount = 1;
+
+    ObReferenceObject(InterfaceContext->TargetObject);
+    ObReferenceObject(InterfaceContext->PdoDeviceObject);
+    ObReferenceObject(InterfaceContext->FdoDeviceObject);
 
     /* Fill in the interface structure */
     Interface->Size = sizeof(SDBUS_INTERFACE_STANDARD);
@@ -224,9 +496,6 @@ SdBusOpenInterfaceImpl(
     Interface->InterfaceDereference = SdBusInterfaceDereference;
     Interface->InitializeInterface = SdBusInitializeInterfaceImpl;
     Interface->AcknowledgeInterrupt = SdBusAcknowledgeInterruptImpl;
-
-    /* Take an initial reference */
-    InterlockedIncrement(&PdoExtension->InterfaceReferenceCount);
 
     return STATUS_SUCCESS;
 }

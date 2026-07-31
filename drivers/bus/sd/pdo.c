@@ -19,6 +19,86 @@ DEFINE_GUID(GUID_SD_HOST_CONTROLLER_LOCAL,
 DEFINE_GUID(GUID_SDBUS_INTERFACE_STANDARD_LOCAL,
     0x6BB24D81, 0xE924, 0x4825, 0xAF, 0x49, 0x3A, 0xCD, 0x33, 0xC1, 0xD8, 0x20);
 
+static VOID
+SdBusCompletePdoIrp(
+    _In_ PPDO_EXTENSION PdoExtension,
+    _Inout_ PIRP Irp,
+    _In_ CCHAR PriorityBoost)
+{
+    IoReleaseRemoveLock(&PdoExtension->RemoveLock, Irp);
+    IoCompleteRequest(Irp, PriorityBoost);
+}
+
+static NTSTATUS
+NTAPI
+SdBusPdoRepeatCompletion(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ PIRP Irp,
+    _In_ PVOID Context)
+{
+    PKEVENT Event = (PKEVENT)Context;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+    UNREFERENCED_PARAMETER(Irp);
+
+    KeSetEvent(Event, IO_NO_INCREMENT, FALSE);
+    return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
+static NTSTATUS
+SdBusRepeatPdoPnpRequest(
+    _In_ PPDO_EXTENSION PdoExtension,
+    _In_ PIRP Irp)
+{
+    PFDO_EXTENSION FdoExtension = PdoExtension->FdoExtension;
+    PDEVICE_OBJECT TopDeviceObject;
+    PIO_STACK_LOCATION IoStack;
+    PIO_STACK_LOCATION SubStack;
+    PIRP SubIrp;
+    KEVENT Event;
+    NTSTATUS Status;
+
+    if (FdoExtension == NULL || FdoExtension->Common.Self == NULL)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    TopDeviceObject = IoGetAttachedDeviceReference(FdoExtension->Common.Self);
+    SubIrp = IoAllocateIrp(TopDeviceObject->StackSize, FALSE);
+    if (SubIrp == NULL)
+    {
+        ObDereferenceObject(TopDeviceObject);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    SubStack = IoGetNextIrpStackLocation(SubIrp);
+    RtlCopyMemory(SubStack, IoStack, sizeof(*SubStack));
+    IoSetCompletionRoutine(SubIrp,
+                           SdBusPdoRepeatCompletion,
+                           &Event,
+                           TRUE,
+                           TRUE,
+                           TRUE);
+    SubIrp->IoStatus.Status = STATUS_SUCCESS;
+
+    Status = IoCallDriver(TopDeviceObject, SubIrp);
+    if (Status == STATUS_PENDING)
+    {
+        KeWaitForSingleObject(&Event,
+                              Executive,
+                              KernelMode,
+                              FALSE,
+                              NULL);
+    }
+
+    Status = SubIrp->IoStatus.Status;
+    IoFreeIrp(SubIrp);
+    ObDereferenceObject(TopDeviceObject);
+    return Status;
+}
+
 static __inline BOOLEAN
 SdBusIsSdioFunctionPdo(
     _In_ PPDO_EXTENSION PdoExtension)
@@ -164,16 +244,14 @@ SdBusFormatSdioHardwareIds(
     _In_ SIZE_T BufSize,
     _Out_ PULONG OutLengthWchars)
 {
-    PWCHAR Cursor = Buffer;
-    SIZE_T Remaining = BufSize;
     NTSTATUS Status;
     SIZE_T Written;
 
     *OutLengthWchars = 0;
 
     Status = RtlStringCchPrintfW(
-        Cursor, Remaining,
-        L"SDIO\\VEN_%04X&DEV_%04X&FUNC_%u",
+        Buffer, BufSize,
+        L"SD\\VID_%04X&PID_%04X&FN_%u",
         PdoExtension->SdioVendorId,
         PdoExtension->SdioDeviceId,
         PdoExtension->FunctionNumber);
@@ -181,56 +259,14 @@ SdBusFormatSdioHardwareIds(
     {
         return Status;
     }
-    Written = wcslen(Cursor) + 1;
-    Cursor += Written;
-    Remaining -= Written;
-
-    Status = RtlStringCchPrintfW(
-        Cursor, Remaining,
-        L"SDIO\\VEN_%04X&CLASS_%02X&FUNC_%u",
-        PdoExtension->SdioVendorId,
-        PdoExtension->SdioClass,
-        PdoExtension->FunctionNumber);
-    if (!NT_SUCCESS(Status))
-    {
-        return Status;
-    }
-    Written = wcslen(Cursor) + 1;
-    Cursor += Written;
-    Remaining -= Written;
-
-    Status = RtlStringCchPrintfW(
-        Cursor, Remaining,
-        L"SDIO\\CLASS_%02X&FUNC_%u",
-        PdoExtension->SdioClass,
-        PdoExtension->FunctionNumber);
-    if (!NT_SUCCESS(Status))
-    {
-        return Status;
-    }
-    Written = wcslen(Cursor) + 1;
-    Cursor += Written;
-    Remaining -= Written;
-
-    Status = RtlStringCchPrintfW(
-        Cursor, Remaining,
-        L"SDIO\\GenericSDIO");
-    if (!NT_SUCCESS(Status))
-    {
-        return Status;
-    }
-    Written = wcslen(Cursor) + 1;
-    Cursor += Written;
-    Remaining -= Written;
-
-    if (Remaining < 1)
+    Written = wcslen(Buffer) + 1;
+    if (Written >= BufSize)
     {
         return STATUS_BUFFER_TOO_SMALL;
     }
-    *Cursor = UNICODE_NULL;
-    Cursor++;
+    Buffer[Written] = UNICODE_NULL;
 
-    *OutLengthWchars = (ULONG)(Cursor - Buffer);
+    *OutLengthWchars = (ULONG)(Written + 1);
 
     return STATUS_SUCCESS;
 }
@@ -242,17 +278,77 @@ SdBusFormatSdioCompatibleIds(
     _In_ SIZE_T BufSize,
     _Out_ PULONG OutLengthWchars)
 {
-    PWCHAR Cursor = Buffer;
-    SIZE_T Remaining = BufSize;
     NTSTATUS Status;
     SIZE_T Written;
 
     *OutLengthWchars = 0;
 
     Status = RtlStringCchPrintfW(
-        Cursor, Remaining,
-        L"SDIO\\CLASS_%02X",
+        Buffer, BufSize,
+        L"SD\\CLASS_%02X",
         PdoExtension->SdioClass);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+    Written = wcslen(Buffer) + 1;
+    if (Written >= BufSize)
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    Buffer[Written] = UNICODE_NULL;
+
+    *OutLengthWchars = (ULONG)(Written + 1);
+
+    return STATUS_SUCCESS;
+}
+
+static VOID
+SdBusGetProductName(
+    _In_ PPDO_EXTENSION PdoExtension,
+    _Out_writes_(6) PWCHAR ProductName)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < RTL_NUMBER_OF(PdoExtension->Cid.ProductName); Index++)
+    {
+        UCHAR Character = PdoExtension->Cid.ProductName[Index];
+
+        if (Character == 0)
+        {
+            break;
+        }
+        ProductName[Index] = (WCHAR)Character;
+    }
+    ProductName[Index] = UNICODE_NULL;
+}
+
+static NTSTATUS
+SdBusFormatSdMemoryHardwareIds(
+    _In_ PPDO_EXTENSION PdoExtension,
+    _Out_writes_(BufSize) PWCHAR Buffer,
+    _In_ SIZE_T BufSize,
+    _Out_ PULONG OutLengthWchars)
+{
+    WCHAR ProductName[6];
+    PWCHAR Cursor;
+    SIZE_T Remaining;
+    SIZE_T Written;
+    NTSTATUS Status;
+
+    *OutLengthWchars = 0;
+    SdBusGetProductName(PdoExtension, ProductName);
+    Cursor = Buffer;
+    Remaining = BufSize;
+
+    Status = RtlStringCchPrintfW(
+        Cursor, Remaining,
+        L"SD\\VID_%02X&OID_%04X&PID_%ls&REV_%X.%X",
+        (ULONG)PdoExtension->Cid.ManufacturerId,
+        (ULONG)PdoExtension->Cid.OemId,
+        ProductName,
+        (PdoExtension->Cid.ProductRevision >> 4) & 0x0F,
+        PdoExtension->Cid.ProductRevision & 0x0F);
     if (!NT_SUCCESS(Status))
     {
         return Status;
@@ -263,7 +359,10 @@ SdBusFormatSdioCompatibleIds(
 
     Status = RtlStringCchPrintfW(
         Cursor, Remaining,
-        L"SDIO\\GenericSDIO");
+        L"SD\\VID_%02X&OID_%04X&PID_%ls",
+        (ULONG)PdoExtension->Cid.ManufacturerId,
+        (ULONG)PdoExtension->Cid.OemId,
+        ProductName);
     if (!NT_SUCCESS(Status))
     {
         return Status;
@@ -276,11 +375,8 @@ SdBusFormatSdioCompatibleIds(
     {
         return STATUS_BUFFER_TOO_SMALL;
     }
-    *Cursor = UNICODE_NULL;
-    Cursor++;
-
+    *Cursor++ = UNICODE_NULL;
     *OutLengthWchars = (ULONG)(Cursor - Buffer);
-
     return STATUS_SUCCESS;
 }
 
@@ -338,7 +434,7 @@ SdBusPdoQueryId(
                 Status = RtlStringCchPrintfW(
                     TempBuffer,
                     RTL_NUMBER_OF(TempBuffer),
-                    L"SDIO\\VEN_%04X&DEV_%04X&FUNC_%u",
+                    L"SD\\VID_%04X&PID_%04X&FN_%u",
                     PdoExtension->SdioVendorId,
                     PdoExtension->SdioDeviceId,
                     PdoExtension->FunctionNumber);
@@ -354,23 +450,24 @@ SdBusPdoQueryId(
             }
             else
             {
+                WCHAR ProductName[6];
+
+                SdBusGetProductName(PdoExtension, ProductName);
                 Status = RtlStringCchPrintfW(
                     TempBuffer,
                     RTL_NUMBER_OF(TempBuffer),
-                    L"SD\\VID_%02X&OID_%04X&PID_%c%c%c%c%c",
+                    L"SD\\VID_%02X&OID_%04X&PID_%ls&REV_%X.%X",
                     (ULONG)PdoExtension->Cid.ManufacturerId,
                     (ULONG)PdoExtension->Cid.OemId,
-                    PdoExtension->Cid.ProductName[0] ? PdoExtension->Cid.ProductName[0] : L'_',
-                    PdoExtension->Cid.ProductName[1] ? PdoExtension->Cid.ProductName[1] : L'_',
-                    PdoExtension->Cid.ProductName[2] ? PdoExtension->Cid.ProductName[2] : L'_',
-                    PdoExtension->Cid.ProductName[3] ? PdoExtension->Cid.ProductName[3] : L'_',
-                    PdoExtension->Cid.ProductName[4] ? PdoExtension->Cid.ProductName[4] : L'_');
+                    ProductName,
+                    (PdoExtension->Cid.ProductRevision >> 4) & 0x0F,
+                    PdoExtension->Cid.ProductRevision & 0x0F);
             }
 
             if (!NT_SUCCESS(Status))
             {
                 Irp->IoStatus.Status = Status;
-                IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
                 return Status;
             }
             break;
@@ -390,7 +487,7 @@ SdBusPdoQueryId(
                 if (!NT_SUCCESS(Status))
                 {
                     Irp->IoStatus.Status = Status;
-                    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                    SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
                     return Status;
                 }
 
@@ -400,14 +497,14 @@ SdBusPdoQueryId(
                 if (Buffer == NULL)
                 {
                     Irp->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
-                    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                    SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
                     return STATUS_INSUFFICIENT_RESOURCES;
                 }
 
                 RtlCopyMemory(Buffer, TempBuffer, Length * sizeof(WCHAR));
                 Irp->IoStatus.Information = (ULONG_PTR)Buffer;
                 Irp->IoStatus.Status = STATUS_SUCCESS;
-                IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
                 return STATUS_SUCCESS;
             }
 
@@ -420,7 +517,7 @@ SdBusPdoQueryId(
                 if (!NT_SUCCESS(Status))
                 {
                     Irp->IoStatus.Status = Status;
-                    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                    SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
                     return Status;
                 }
 
@@ -430,14 +527,14 @@ SdBusPdoQueryId(
                 if (Buffer == NULL)
                 {
                     Irp->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
-                    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                    SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
                     return STATUS_INSUFFICIENT_RESOURCES;
                 }
 
                 RtlCopyMemory(Buffer, TempBuffer, Length * sizeof(WCHAR));
                 Irp->IoStatus.Information = (ULONG_PTR)Buffer;
                 Irp->IoStatus.Status = STATUS_SUCCESS;
-                IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
                 return STATUS_SUCCESS;
             }
 
@@ -452,23 +549,39 @@ SdBusPdoQueryId(
             }
             else
             {
-                Status = RtlStringCchPrintfW(
+                Status = SdBusFormatSdMemoryHardwareIds(
+                    PdoExtension,
                     TempBuffer,
-                    RTL_NUMBER_OF(TempBuffer) - 2,
-                    L"SD\\VID_%02X&OID_%04X&PID_%c%c%c%c%c",
-                    (ULONG)PdoExtension->Cid.ManufacturerId,
-                    (ULONG)PdoExtension->Cid.OemId,
-                    PdoExtension->Cid.ProductName[0] ? PdoExtension->Cid.ProductName[0] : L'_',
-                    PdoExtension->Cid.ProductName[1] ? PdoExtension->Cid.ProductName[1] : L'_',
-                    PdoExtension->Cid.ProductName[2] ? PdoExtension->Cid.ProductName[2] : L'_',
-                    PdoExtension->Cid.ProductName[3] ? PdoExtension->Cid.ProductName[3] : L'_',
-                    PdoExtension->Cid.ProductName[4] ? PdoExtension->Cid.ProductName[4] : L'_');
+                    RTL_NUMBER_OF(TempBuffer),
+                    &Length);
+                if (!NT_SUCCESS(Status))
+                {
+                    Irp->IoStatus.Status = Status;
+                    SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
+                    return Status;
+                }
+
+                Buffer = (PWCHAR)ExAllocatePoolWithTag(PagedPool,
+                                                        Length * sizeof(WCHAR),
+                                                        TAG_SDBUS);
+                if (Buffer == NULL)
+                {
+                    Irp->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
+                    SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
+                    return STATUS_INSUFFICIENT_RESOURCES;
+                }
+
+                RtlCopyMemory(Buffer, TempBuffer, Length * sizeof(WCHAR));
+                Irp->IoStatus.Information = (ULONG_PTR)Buffer;
+                Irp->IoStatus.Status = STATUS_SUCCESS;
+                SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
+                return STATUS_SUCCESS;
             }
 
             if (!NT_SUCCESS(Status))
             {
                 Irp->IoStatus.Status = Status;
-                IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
                 return Status;
             }
 
@@ -484,14 +597,14 @@ SdBusPdoQueryId(
             if (Buffer == NULL)
             {
                 Irp->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
-                IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
                 return STATUS_INSUFFICIENT_RESOURCES;
             }
 
             RtlCopyMemory(Buffer, TempBuffer, Length * sizeof(WCHAR));
             Irp->IoStatus.Information = (ULONG_PTR)Buffer;
             Irp->IoStatus.Status = STATUS_SUCCESS;
-            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
             return STATUS_SUCCESS;
 
         case BusQueryInstanceID:
@@ -604,7 +717,7 @@ SdBusPdoQueryId(
             if (!NT_SUCCESS(Status))
             {
                 Irp->IoStatus.Status = Status;
-                IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
                 return Status;
             }
             break;
@@ -623,7 +736,7 @@ SdBusPdoQueryId(
                 if (!NT_SUCCESS(Status))
                 {
                     Irp->IoStatus.Status = Status;
-                    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                    SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
                     return Status;
                 }
 
@@ -633,14 +746,14 @@ SdBusPdoQueryId(
                 if (Buffer == NULL)
                 {
                     Irp->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
-                    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                    SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
                     return STATUS_INSUFFICIENT_RESOURCES;
                 }
 
                 RtlCopyMemory(Buffer, TempBuffer, Length * sizeof(WCHAR));
                 Irp->IoStatus.Information = (ULONG_PTR)Buffer;
                 Irp->IoStatus.Status = STATUS_SUCCESS;
-                IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
                 return STATUS_SUCCESS;
             }
 
@@ -653,7 +766,7 @@ SdBusPdoQueryId(
                 if (!NT_SUCCESS(Status))
                 {
                     Irp->IoStatus.Status = Status;
-                    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                    SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
                     return Status;
                 }
 
@@ -663,14 +776,14 @@ SdBusPdoQueryId(
                 if (Buffer == NULL)
                 {
                     Irp->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
-                    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                    SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
                     return STATUS_INSUFFICIENT_RESOURCES;
                 }
 
                 RtlCopyMemory(Buffer, TempBuffer, Length * sizeof(WCHAR));
                 Irp->IoStatus.Information = (ULONG_PTR)Buffer;
                 Irp->IoStatus.Status = STATUS_SUCCESS;
-                IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
                 return STATUS_SUCCESS;
             }
 
@@ -680,13 +793,13 @@ SdBusPdoQueryId(
                 case SdCardTypeSdV2:
                 case SdCardTypeSdhc:
                 case SdCardTypeSdxc:
-                    CompatId = L"SD\\CLASS_MEMORY";
+                    CompatId = L"SD\\CLASS_STORAGE";
                     break;
                 case SdCardTypeSdio:
                     CompatId = L"SD\\CLASS_SDIO";
                     break;
                 case SdCardTypeCombo:
-                    CompatId = L"SD\\CLASS_COMBO";
+                    CompatId = L"SD\\CLASS_STORAGE";
                     break;
                 case SdCardTypeMmc:
                     CompatId = L"SD\\CLASS_MMC";
@@ -707,7 +820,7 @@ SdBusPdoQueryId(
             if (Buffer == NULL)
             {
                 Irp->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
-                IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
                 return STATUS_INSUFFICIENT_RESOURCES;
             }
 
@@ -716,13 +829,13 @@ SdBusPdoQueryId(
 
             Irp->IoStatus.Information = (ULONG_PTR)Buffer;
             Irp->IoStatus.Status = STATUS_SUCCESS;
-            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
             return STATUS_SUCCESS;
         }
 
         default:
             Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
-            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
             return STATUS_NOT_SUPPORTED;
     }
 
@@ -735,7 +848,7 @@ SdBusPdoQueryId(
     if (Buffer == NULL)
     {
         Irp->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
-        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -743,7 +856,7 @@ SdBusPdoQueryId(
 
     Irp->IoStatus.Information = (ULONG_PTR)Buffer;
     Irp->IoStatus.Status = STATUS_SUCCESS;
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
     return STATUS_SUCCESS;
 }
 
@@ -773,25 +886,18 @@ SdBusPdoQueryCapabilities(
     if (Caps == NULL || Caps->Size < sizeof(DEVICE_CAPABILITIES))
     {
         Irp->IoStatus.Status = STATUS_INVALID_PARAMETER;
-        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
         return STATUS_INVALID_PARAMETER;
     }
 
     Caps->Version = 1;
 
-    /* eMMC is soldered on, not removable; SD cards are removable */
-    if (PdoExtension->CardType == SdCardTypeEmmc)
-    {
-        Caps->Removable = FALSE;
-        Caps->EjectSupported = FALSE;
-    }
-    else
-    {
-        Caps->Removable = TRUE;
-        Caps->EjectSupported = TRUE;
-    }
-
-    Caps->SurpriseRemovalOK = TRUE;
+    /* Slot wiring, not the protocol alone, determines whether media can leave. */
+    Caps->Removable =
+        !PdoExtension->FdoExtension->NonRemovable &&
+        PdoExtension->CardType != SdCardTypeEmmc;
+    Caps->EjectSupported = Caps->Removable;
+    Caps->SurpriseRemovalOK = Caps->Removable;
     Caps->UniqueID = TRUE;
     Caps->Address = 0; /* Slot 0 */
     Caps->UINumber = 0;
@@ -817,7 +923,7 @@ SdBusPdoQueryCapabilities(
     Caps->D3Latency = 0;
 
     Irp->IoStatus.Status = STATUS_SUCCESS;
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
     return STATUS_SUCCESS;
 }
 
@@ -847,7 +953,7 @@ SdBusPdoQueryDeviceText(
     if (IoStack->Parameters.QueryDeviceText.DeviceTextType != DeviceTextDescription)
     {
         Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
-        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
         return STATUS_NOT_SUPPORTED;
     }
 
@@ -905,7 +1011,7 @@ SdBusPdoQueryDeviceText(
     if (Buffer == NULL)
     {
         Irp->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
-        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -913,7 +1019,7 @@ SdBusPdoQueryDeviceText(
 
     Irp->IoStatus.Information = (ULONG_PTR)Buffer;
     Irp->IoStatus.Status = STATUS_SUCCESS;
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
     return STATUS_SUCCESS;
 }
 
@@ -945,7 +1051,7 @@ SdBusPdoQueryBusInformation(
     if (BusInfo == NULL)
     {
         Irp->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
-        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -957,7 +1063,7 @@ SdBusPdoQueryBusInformation(
 
     Irp->IoStatus.Information = (ULONG_PTR)BusInfo;
     Irp->IoStatus.Status = STATUS_SUCCESS;
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
     return STATUS_SUCCESS;
 }
 
@@ -991,7 +1097,7 @@ SdBusPdoQueryInterface(
         if (IoStack->Parameters.QueryInterface.Size < sizeof(SDBUS_INTERFACE_STANDARD))
         {
             Irp->IoStatus.Status = STATUS_BUFFER_TOO_SMALL;
-            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
             return STATUS_BUFFER_TOO_SMALL;
         }
 
@@ -1002,13 +1108,13 @@ SdBusPdoQueryInterface(
             IoStack->Parameters.QueryInterface.Version);
 
         Irp->IoStatus.Status = Status;
-        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
         return Status;
     }
 
     /* Not our GUID, leave the IRP untouched */
     Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
     return STATUS_NOT_SUPPORTED;
 }
 
@@ -1038,7 +1144,7 @@ SdBusPdoQueryTargetRelation(
     if (Relations == NULL)
     {
         Irp->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
-        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -1048,7 +1154,7 @@ SdBusPdoQueryTargetRelation(
 
     Irp->IoStatus.Information = (ULONG_PTR)Relations;
     Irp->IoStatus.Status = STATUS_SUCCESS;
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
     return STATUS_SUCCESS;
 }
 
@@ -1068,11 +1174,26 @@ SdBusPdoStartDevice(
     _In_ PPDO_EXTENSION PdoExtension,
     _Inout_ PIRP Irp)
 {
+    NTSTATUS Status;
+
     PdoExtension->Started = TRUE;
     PdoExtension->Common.DeviceState = SdBusDeviceStateStarted;
 
+    if (InterlockedCompareExchange(&PdoExtension->ManageIoEnable, 0, 0) != 0)
+    {
+        Status = SdBusSetSdioFunctionEnabledAdmitted(PdoExtension, TRUE);
+        if (!NT_SUCCESS(Status))
+        {
+            PdoExtension->Started = FALSE;
+            PdoExtension->Common.DeviceState = SdBusDeviceStateStopped;
+            Irp->IoStatus.Status = Status;
+            SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
+            return Status;
+        }
+    }
+
     Irp->IoStatus.Status = STATUS_SUCCESS;
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
     return STATUS_SUCCESS;
 }
 
@@ -1093,9 +1214,24 @@ SdBusPdoStopDevice(
 {
     PdoExtension->Started = FALSE;
     PdoExtension->Common.DeviceState = SdBusDeviceStateStopped;
+    InterlockedExchange(&PdoExtension->SdioEnablePending, 0);
+
+    if (PdoExtension->Present &&
+        (InterlockedCompareExchange(&PdoExtension->ManageIoEnable, 0, 0) != 0 ||
+         InterlockedCompareExchange(&PdoExtension->SdioFunctionEnabled, 0, 0) != 0))
+    {
+        NTSTATUS Status;
+
+        Status = SdBusSetSdioFunctionEnabledAdmitted(PdoExtension, FALSE);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("SdBusPdoStopDevice: failed to disable SDIO function %lu "
+                    "(0x%08lx)\n", PdoExtension->FunctionNumber, Status);
+        }
+    }
 
     Irp->IoStatus.Status = STATUS_SUCCESS;
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
     return STATUS_SUCCESS;
 }
 
@@ -1117,17 +1253,33 @@ SdBusPdoRemoveDevice(
     _Inout_ PIRP Irp)
 {
     PFDO_EXTENSION FdoExtension = PdoExtension->FdoExtension;
+    PDEVICE_OBJECT Self = PdoExtension->Common.Self;
+    BOOLEAN DeletePdo;
     KIRQL OldIrql;
+
+    PdoExtension->Started = FALSE;
+    InterlockedExchange(&PdoExtension->SdioEnablePending, 0);
+
+    if (PdoExtension->Present &&
+        (InterlockedCompareExchange(&PdoExtension->ManageIoEnable, 0, 0) != 0 ||
+         InterlockedCompareExchange(&PdoExtension->SdioFunctionEnabled, 0, 0) != 0))
+    {
+        NTSTATUS Status;
+
+        Status = SdBusSetSdioFunctionEnabledAdmitted(PdoExtension, FALSE);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("SdBusPdoRemoveDevice: failed to disable SDIO function %lu "
+                    "(0x%08lx)\n", PdoExtension->FunctionNumber, Status);
+        }
+    }
 
     PdoExtension->Common.DeviceState = SdBusDeviceStateRemoved;
     PdoExtension->Present = FALSE;
-    PdoExtension->Started = FALSE;
-
-    Irp->IoStatus.Status = STATUS_SUCCESS;
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
 
     /* If the PDO has been reported missing, remove it from the list and delete */
-    if (PdoExtension->ReportedMissing)
+    DeletePdo = PdoExtension->ReportedMissing;
+    if (DeletePdo)
     {
         /* Remove from the FDO's child list */
         KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
@@ -1137,8 +1289,14 @@ SdBusPdoRemoveDevice(
             FdoExtension->ChildPdoCount--;
         }
         KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
+    }
 
-        IoDeleteDevice(PdoExtension->Common.Self);
+    Irp->IoStatus.Status = STATUS_SUCCESS;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+
+    if (DeletePdo)
+    {
+        IoDeleteDevice(Self);
     }
 
     return STATUS_SUCCESS;
@@ -1164,7 +1322,7 @@ SdBusPdoSurpriseRemoval(
     PdoExtension->Started = FALSE;
 
     Irp->IoStatus.Status = STATUS_SUCCESS;
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
     return STATUS_SUCCESS;
 }
 
@@ -1184,12 +1342,10 @@ SdBusPdoQueryResourceRequirements(
     _In_ PPDO_EXTENSION PdoExtension,
     _Inout_ PIRP Irp)
 {
-    UNREFERENCED_PARAMETER(PdoExtension);
-
     /* PDO has no hardware resources of its own */
     Irp->IoStatus.Information = 0;
     Irp->IoStatus.Status = STATUS_SUCCESS;
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
     return STATUS_SUCCESS;
 }
 
@@ -1208,11 +1364,15 @@ SdBusPdoQueryPnpDeviceState(
     {
         State |= PNP_DEVICE_REMOVED;
     }
+    if (SdBusHasActiveDeviceUsage(&PdoExtension->Common))
+    {
+        State |= PNP_DEVICE_NOT_DISABLEABLE;
+    }
 
 
     Irp->IoStatus.Information = (ULONG_PTR)State;
     Irp->IoStatus.Status = STATUS_SUCCESS;
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
     return STATUS_SUCCESS;
 }
 
@@ -1224,62 +1384,31 @@ SdBusPdoDeviceUsageNotification(
     PIO_STACK_LOCATION IoStack;
     DEVICE_USAGE_NOTIFICATION_TYPE Type;
     BOOLEAN InPath;
-    PULONG Counter;
-    PDEVICE_OBJECT DeviceObject;
-    BOOLEAN AdjustPagableFlag;
+    NTSTATUS Status;
 
     IoStack = IoGetCurrentIrpStackLocation(Irp);
     Type = IoStack->Parameters.UsageNotification.Type;
     InPath = IoStack->Parameters.UsageNotification.InPath;
-    DeviceObject = PdoExtension->Common.Self;
-    AdjustPagableFlag = FALSE;
 
-    switch (Type)
+    Status = SdBusAdjustDeviceUsage(&PdoExtension->Common, Type, InPath);
+    if (NT_SUCCESS(Status))
     {
-        case DeviceUsageTypePaging:
-            Counter = &PdoExtension->PagingPathCount;
-            AdjustPagableFlag = TRUE;
-            break;
-
-        case DeviceUsageTypeHibernation:
-            Counter = &PdoExtension->HibernationPathCount;
-            break;
-
-        case DeviceUsageTypeDumpFile:
-            Counter = &PdoExtension->DumpPathCount;
-            break;
-
-        default:
-            Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
-            IoCompleteRequest(Irp, IO_NO_INCREMENT);
-            return STATUS_NOT_SUPPORTED;
-    }
-
-    if (InPath)
-    {
-        ULONG Previous = (*Counter)++;
-
-        if (AdjustPagableFlag && Previous == 0)
+        Status = SdBusRepeatPdoPnpRequest(PdoExtension, Irp);
+        if (!NT_SUCCESS(Status))
         {
-            DeviceObject->Flags &= ~DO_POWER_PAGABLE;
+            (VOID)SdBusAdjustDeviceUsage(&PdoExtension->Common,
+                                         Type,
+                                         !InPath);
         }
-    }
-    else
-    {
-        if (*Counter > 0)
+        else
         {
-            (*Counter)--;
-        }
-
-        if (AdjustPagableFlag && *Counter == 0)
-        {
-            DeviceObject->Flags |= DO_POWER_PAGABLE;
+            IoInvalidateDeviceState(PdoExtension->Common.Self);
         }
     }
 
-    Irp->IoStatus.Status = STATUS_SUCCESS;
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
-    return STATUS_SUCCESS;
+    Irp->IoStatus.Status = Status;
+    SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
+    return Status;
 }
 
 static NTSTATUS
@@ -1299,7 +1428,7 @@ SdBusPdoEject(
     IoInvalidateDeviceRelations(FdoExtension->PhysicalDevice, BusRelations);
 
     Irp->IoStatus.Status = STATUS_SUCCESS;
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
     return STATUS_SUCCESS;
 }
 
@@ -1394,7 +1523,7 @@ SdBusPdoPnp(
             else
             {
                 Status = Irp->IoStatus.Status;
-                IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
             }
             break;
 
@@ -1405,7 +1534,7 @@ SdBusPdoPnp(
         case IRP_MN_FILTER_RESOURCE_REQUIREMENTS:
             DPRINT("SdBusPdoPnp: IRP_MN_FILTER_RESOURCE_REQUIREMENTS\n");
             Irp->IoStatus.Status = STATUS_SUCCESS;
-            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
             Status = STATUS_SUCCESS;
             break;
 
@@ -1413,7 +1542,7 @@ SdBusPdoPnp(
             /* No hardware resources */
             Irp->IoStatus.Information = 0;
             Irp->IoStatus.Status = STATUS_SUCCESS;
-            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
             Status = STATUS_SUCCESS;
             break;
 
@@ -1437,24 +1566,23 @@ SdBusPdoPnp(
         case IRP_MN_QUERY_STOP_DEVICE:
         case IRP_MN_QUERY_REMOVE_DEVICE:
             Irp->IoStatus.Status = STATUS_SUCCESS;
-            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
             Status = STATUS_SUCCESS;
             break;
 
         case IRP_MN_CANCEL_STOP_DEVICE:
         case IRP_MN_CANCEL_REMOVE_DEVICE:
             Irp->IoStatus.Status = STATUS_SUCCESS;
-            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
             Status = STATUS_SUCCESS;
             break;
 
         default:
             Status = Irp->IoStatus.Status;
-            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            SdBusCompletePdoIrp(PdoExtension, Irp, IO_NO_INCREMENT);
             break;
     }
 
-    IoReleaseRemoveLock(&PdoExtension->RemoveLock, Irp);
     return Status;
 }
 
@@ -1491,50 +1619,77 @@ SdBusPdoInternalDeviceControl(
 
     IoStack = IoGetCurrentIrpStackLocation(Irp);
 
-    /* The IOCTL code for SD requests is IOCTL_SD_SUBMIT_REQUEST,
-     * but the Windows SD bus driver uses the Argument1 field of
-     * Parameters.Others to pass the SDBUS_REQUEST_PACKET pointer. */
+    if (IoStack->Parameters.DeviceIoControl.IoControlCode !=
+        IOCTL_SD_SUBMIT_REQUEST)
+    {
+        Irp->IoStatus.Status = STATUS_INVALID_DEVICE_REQUEST;
+        Irp->IoStatus.Information = 0;
+        IoReleaseRemoveLock(&PdoExtension->RemoveLock, Irp);
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
+    /* Windows places the request packet in Argument1 of the next stack slot. */
     RequestPacket = (PSDBUS_REQUEST_PACKET)IoStack->Parameters.Others.Argument1;
     if (RequestPacket == NULL)
     {
         Irp->IoStatus.Status = STATUS_INVALID_PARAMETER;
-        IoCompleteRequest(Irp, IO_NO_INCREMENT);
         IoReleaseRemoveLock(&PdoExtension->RemoveLock, Irp);
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
         return STATUS_INVALID_PARAMETER;
     }
 
-    if (RequestPacket->RequestFunction == SDRF_GET_PROPERTY)
+    if (SdBusIsCachedGetRequest(RequestPacket))
     {
         Status = SdBusHandleRequest(PdoExtension, RequestPacket);
         Irp->IoStatus.Status = Status;
         Irp->IoStatus.Information = RequestPacket->Information;
-        IoCompleteRequest(Irp, IO_NO_INCREMENT);
         IoReleaseRemoveLock(&PdoExtension->RemoveLock, Irp);
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
         return Status;
     }
 
+    if (FdoExtension == NULL || !FdoExtension->RegistersMapped)
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+        Irp->IoStatus.Status = Status;
+        Irp->IoStatus.Information = 0;
+        IoReleaseRemoveLock(&PdoExtension->RemoveLock, Irp);
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return Status;
+    }
+
+    Status = SdBusAcquireRequestAdmission(FdoExtension);
+    if (!NT_SUCCESS(Status))
+    {
+        Irp->IoStatus.Status = Status;
+        Irp->IoStatus.Information = 0;
+        IoReleaseRemoveLock(&PdoExtension->RemoveLock, Irp);
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return Status;
+    }
     if (!FdoExtension->WorkerStarted ||
         InterlockedCompareExchange(&FdoExtension->WorkerShutdown, 0, 0) != 0)
     {
-        Status = SdBusHandleRequest(PdoExtension, RequestPacket);
+        Status = STATUS_DEVICE_NOT_READY;
         Irp->IoStatus.Status = Status;
-        Irp->IoStatus.Information = RequestPacket->Information;
-        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        Irp->IoStatus.Information = 0;
+        SdBusReleaseRequestAdmission(FdoExtension);
         IoReleaseRemoveLock(&PdoExtension->RemoveLock, Irp);
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
         return Status;
     }
 
     IoMarkIrpPending(Irp);
-    InterlockedIncrement(&FdoExtension->OutstandingRequestCount);
     Status = IoCsqInsertIrpEx(&FdoExtension->RequestCsq, Irp, NULL, NULL);
     if (!NT_SUCCESS(Status))
     {
-        InterlockedDecrement(&FdoExtension->OutstandingRequestCount);
+        SdBusReleaseRequestAdmission(FdoExtension);
 
         Irp->IoStatus.Status = Status;
         Irp->IoStatus.Information = 0;
-        IoCompleteRequest(Irp, IO_NO_INCREMENT);
         IoReleaseRemoveLock(&PdoExtension->RemoveLock, Irp);
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
         return STATUS_PENDING;
     }
     return STATUS_PENDING;

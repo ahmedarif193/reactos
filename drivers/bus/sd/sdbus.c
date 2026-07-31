@@ -32,6 +32,142 @@ SdBusDispatchCreateCloseImpl(
     _In_ PDEVICE_OBJECT DeviceObject,
     _Inout_ PIRP Irp);
 
+static
+NTSTATUS
+NTAPI
+SdBusReleaseFdoRemoveLockCompletion(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp,
+    _In_ PVOID Context)
+{
+    PFDO_EXTENSION FdoExtension;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    FdoExtension = (PFDO_EXTENSION)Context;
+    if (Irp->PendingReturned)
+    {
+        IoMarkIrpPending(Irp);
+    }
+    IoReleaseRemoveLock(&FdoExtension->RemoveLock, Irp);
+    return STATUS_CONTINUE_COMPLETION;
+}
+
+VOID
+SdBusInitializeDeviceUsage(
+    _Inout_ PSDBUS_COMMON_EXTENSION CommonExtension,
+    _In_ BOOLEAN PowerPagable)
+{
+    KeInitializeSpinLock(&CommonExtension->UsageLock);
+    CommonExtension->PowerPagable = PowerPagable;
+}
+
+NTSTATUS
+SdBusAdjustDeviceUsage(
+    _Inout_ PSDBUS_COMMON_EXTENSION CommonExtension,
+    _In_ DEVICE_USAGE_NOTIFICATION_TYPE Type,
+    _In_ BOOLEAN InPath)
+{
+    PULONG Counter;
+    BOOLEAN AffectsPaging;
+    KIRQL OldIrql;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    switch (Type)
+    {
+        case DeviceUsageTypePaging:
+            Counter = &CommonExtension->PagingPathCount;
+            AffectsPaging = TRUE;
+            break;
+
+        case DeviceUsageTypeHibernation:
+            Counter = &CommonExtension->HibernationPathCount;
+            AffectsPaging = TRUE;
+            break;
+
+        case DeviceUsageTypeDumpFile:
+            Counter = &CommonExtension->DumpPathCount;
+            AffectsPaging = TRUE;
+            break;
+
+        case DeviceUsageTypeBoot:
+            Counter = &CommonExtension->BootPathCount;
+            AffectsPaging = FALSE;
+            break;
+
+        case DeviceUsageTypePostDisplay:
+            Counter = &CommonExtension->PostDisplayPathCount;
+            AffectsPaging = FALSE;
+            break;
+
+        case DeviceUsageTypeGuestAssigned:
+            Counter = &CommonExtension->GuestAssignedPathCount;
+            AffectsPaging = FALSE;
+            break;
+
+        default:
+            return STATUS_INVALID_PARAMETER;
+    }
+
+    KeAcquireSpinLock(&CommonExtension->UsageLock, &OldIrql);
+    if (InPath)
+    {
+        if (*Counter == MAXULONG)
+        {
+            Status = STATUS_INTEGER_OVERFLOW;
+        }
+        else
+        {
+            (*Counter)++;
+        }
+    }
+    else if (*Counter == 0)
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+    }
+    else
+    {
+        (*Counter)--;
+    }
+
+    if (NT_SUCCESS(Status) && AffectsPaging)
+    {
+        if (CommonExtension->PagingPathCount != 0 ||
+            CommonExtension->HibernationPathCount != 0 ||
+            CommonExtension->DumpPathCount != 0)
+        {
+            CommonExtension->Self->Flags &= ~DO_POWER_PAGABLE;
+        }
+        else if (CommonExtension->PowerPagable &&
+                 !(CommonExtension->Self->Flags & DO_POWER_INRUSH))
+        {
+            CommonExtension->Self->Flags |= DO_POWER_PAGABLE;
+        }
+    }
+    KeReleaseSpinLock(&CommonExtension->UsageLock, OldIrql);
+
+    return Status;
+}
+
+BOOLEAN
+SdBusHasActiveDeviceUsage(
+    _Inout_ PSDBUS_COMMON_EXTENSION CommonExtension)
+{
+    KIRQL OldIrql;
+    BOOLEAN Active;
+
+    KeAcquireSpinLock(&CommonExtension->UsageLock, &OldIrql);
+    Active = CommonExtension->PagingPathCount != 0 ||
+             CommonExtension->HibernationPathCount != 0 ||
+             CommonExtension->DumpPathCount != 0 ||
+             CommonExtension->BootPathCount != 0 ||
+             CommonExtension->PostDisplayPathCount != 0 ||
+             CommonExtension->GuestAssignedPathCount != 0;
+    KeReleaseSpinLock(&CommonExtension->UsageLock, OldIrql);
+
+    return Active;
+}
+
 /**
  * @brief Create and attach an FDO for the SD host controller.
  *
@@ -58,7 +194,7 @@ SdBusAddDevice(
 
     if (PhysicalDeviceObject == NULL)
     {
-        return STATUS_SUCCESS;
+        return STATUS_INVALID_PARAMETER;
     }
 
     /* Create the functional device object */
@@ -89,6 +225,7 @@ SdBusAddDevice(
     FdoExtension->BusInterfaceType = InterfaceTypeUndefined;
     FdoExtension->BusNumber = 0;
     FdoExtension->CurrentBusWidth = 1;
+    FdoExtension->RequestsBlocked = 1;
 
     /* Attach to the device stack */
     FdoExtension->LowerDevice = IoAttachDeviceToDeviceStack(Fdo,
@@ -126,7 +263,17 @@ SdBusAddDevice(
 
     /* Propagate flags from the lower device */
     Fdo->Flags |= FdoExtension->LowerDevice->Flags &
-                   (DO_DIRECT_IO | DO_BUFFERED_IO | DO_POWER_PAGABLE);
+                  (DO_DIRECT_IO | DO_BUFFERED_IO);
+    if (FdoExtension->LowerDevice->Flags & DO_POWER_INRUSH)
+    {
+        Fdo->Flags |= DO_POWER_INRUSH;
+    }
+    else if (FdoExtension->LowerDevice->Flags & DO_POWER_PAGABLE)
+    {
+        Fdo->Flags |= DO_POWER_PAGABLE;
+    }
+    SdBusInitializeDeviceUsage(&FdoExtension->Common,
+                               (Fdo->Flags & DO_POWER_PAGABLE) != 0);
     Fdo->Flags &= ~DO_DEVICE_INITIALIZING;
 
     DPRINT1("SdBusAddDevice: FDO %p attached to %p\n",
@@ -215,6 +362,8 @@ SdBusDispatchInternalDeviceControlImpl(
     _Inout_ PIRP Irp)
 {
     PSDBUS_COMMON_EXTENSION CommonExtension;
+    PFDO_EXTENSION FdoExtension;
+    NTSTATUS Status;
 
     CommonExtension = (PSDBUS_COMMON_EXTENSION)DeviceObject->DeviceExtension;
 
@@ -223,10 +372,26 @@ SdBusDispatchInternalDeviceControlImpl(
         return SdBusPdoInternalDeviceControl(DeviceObject, Irp);
     }
 
-    /* FDO does not handle IOCTL_INTERNAL, pass down */
-    IoSkipCurrentIrpStackLocation(Irp);
-    return IoCallDriver(((PFDO_EXTENSION)DeviceObject->DeviceExtension)->LowerDevice,
-                        Irp);
+    FdoExtension = (PFDO_EXTENSION)DeviceObject->DeviceExtension;
+    Status = IoAcquireRemoveLock(&FdoExtension->RemoveLock, Irp);
+    if (!NT_SUCCESS(Status))
+    {
+        Irp->IoStatus.Status = Status;
+        Irp->IoStatus.Information = 0;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return Status;
+    }
+
+    /* The FDO does not handle the request, but it must remain attached until
+       the lower stack finishes with the IRP. */
+    IoCopyCurrentIrpStackLocationToNext(Irp);
+    IoSetCompletionRoutine(Irp,
+                           SdBusReleaseFdoRemoveLockCompletion,
+                           FdoExtension,
+                           TRUE,
+                           TRUE,
+                           TRUE);
+    return IoCallDriver(FdoExtension->LowerDevice, Irp);
 }
 
 /**
@@ -246,12 +411,31 @@ SdBusDispatchCreateCloseImpl(
     _In_ PDEVICE_OBJECT DeviceObject,
     _Inout_ PIRP Irp)
 {
-    UNREFERENCED_PARAMETER(DeviceObject);
+    PSDBUS_COMMON_EXTENSION CommonExtension;
+    PIO_STACK_LOCATION IoStack;
+    PIO_REMOVE_LOCK RemoveLock;
+    NTSTATUS Status;
 
-    Irp->IoStatus.Status = STATUS_SUCCESS;
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    Status = STATUS_SUCCESS;
+
+    if (IoStack->MajorFunction == IRP_MJ_CREATE)
+    {
+        CommonExtension = (PSDBUS_COMMON_EXTENSION)DeviceObject->DeviceExtension;
+        RemoveLock = CommonExtension->IsFdo
+                         ? &((PFDO_EXTENSION)CommonExtension)->RemoveLock
+                         : &((PPDO_EXTENSION)CommonExtension)->RemoveLock;
+        Status = IoAcquireRemoveLock(RemoveLock, Irp);
+        if (NT_SUCCESS(Status))
+        {
+            IoReleaseRemoveLock(RemoveLock, Irp);
+        }
+    }
+
+    Irp->IoStatus.Status = Status;
     Irp->IoStatus.Information = 0;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
-    return STATUS_SUCCESS;
+    return Status;
 }
 
 /**
