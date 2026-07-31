@@ -110,9 +110,14 @@ static void Test_CrossAdapterAbsent(D3DKMT_HANDLE hAdapter)
         trace("cross-adapter support query unavailable (0x%08lX)\n", (long)Status);
         return;
     }
-    ok(Support.SupportTier == D3DKMT_CROSSADAPTERRESOURCE_SUPPORT_TIER_NONE,
-       "cross-adapter resources reported at tier %u with no implementation\n",
+    /* Windows 11 reports a real tier here (tier 2 on the reference image), so a
+     * tier above NONE is not by itself a defect. What the query must never do
+     * is answer with a value outside the defined enumeration. */
+    ok(Support.SupportTier >= D3DKMT_CROSSADAPTERRESOURCE_SUPPORT_TIER_NONE &&
+       Support.SupportTier <= D3DKMT_CROSSADAPTERRESOURCE_SUPPORT_TIER_SCANOUT,
+       "cross-adapter support tier %u is not a defined tier\n",
        (unsigned)Support.SupportTier);
+    trace("cross-adapter resource support tier: %u\n", (unsigned)Support.SupportTier);
 }
 
 /* ------------------------------------------------------------------ *

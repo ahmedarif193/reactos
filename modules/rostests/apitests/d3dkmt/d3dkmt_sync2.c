@@ -355,6 +355,13 @@ Test_KmdCpuEvent_LifecycleAndKnownEscape(void)
     Create.Info.Flags.SignalByKmd = 1;
     Create.Info.CPUNotification.Event = Event;
     Status = pCreate(&Create);
+    /* SignalByKmd is a WDDM 3.0 contract. An OS built to a lower
+     * compatibility ceiling refuses it, which is correct for that ceiling. */
+    if (Status == STATUS_NOT_SUPPORTED)
+    {
+        skip("SignalByKmd not supported at this WDDM level\n");
+        goto Cleanup;
+    }
     ok_succeeded(Status,
                  "CreateSynchronizationObject2(SignalByKmd) failed "
                  "0x%08lX\n",
@@ -581,22 +588,38 @@ static void Test_CreateSyncObject2_NormalizedState(void)
     ok_succeeded(Status, "CreateSynchronizationObject2(fence) failed 0x%08lX\n", (long)Status);
     D3dkmtTestDestroySyncObject(pDestroy, Create.hSyncObject);
 
+    /* MaxCount 0 is accepted on Windows 11: the semaphore count range is not
+     * validated at create time. */
     memset(&Create, 0, sizeof(Create));
     Create.hDevice = hDevice;
     Create.Info.Type = D3DDDI_SEMAPHORE;
     Create.Info.Semaphore.MaxCount = 0;
     Status = pCreate(&Create);
-    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    ok_succeeded(Status, "CreateSynchronizationObject2(semaphore, MaxCount 0) failed 0x%08lX\n", (long)Status);
+    if (NT_SUCCESS(Status))
+        D3dkmtTestDestroySyncObject(pDestroy, Create.hSyncObject);
+
+    /* An initial count above the maximum is nonsense whichever way the runtime
+     * words the refusal, so only "did not succeed" is the portable contract. */
+    memset(&Create, 0, sizeof(Create));
+    Create.hDevice = hDevice;
+    Create.Info.Type = D3DDDI_SEMAPHORE;
     Create.Info.Semaphore.MaxCount = 2;
     Create.Info.Semaphore.InitialCount = 3;
     Status = pCreate(&Create);
-    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    ok(!NT_SUCCESS(Status),
+       "CreateSynchronizationObject2(semaphore, InitialCount 3 > MaxCount 2) returned 0x%08lX, expected a refusal\n",
+       (long)Status);
+    if (NT_SUCCESS(Status))
+        D3dkmtTestDestroySyncObject(pDestroy, Create.hSyncObject);
 
     memset(&Create, 0, sizeof(Create));
     Create.hDevice = hDevice;
     Create.Info.Type = D3DDDI_CPU_NOTIFICATION;
     Status = pCreate(&Create);
-    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    /* A CPU notification object with no event: Windows 11 names the offending
+     * field rather than the call, and answers STATUS_INVALID_HANDLE. */
+    ok_eq_hex(Status, STATUS_INVALID_HANDLE);
 
     Event = CreateEventW(NULL, FALSE, FALSE, NULL);
     ok(Event != NULL, "CreateEventW failed %lu\n", GetLastError());
@@ -695,7 +718,10 @@ static void Test_MonitoredFence_AccessFlags(void)
     FencePage = (volatile const UINT64 *)Create.Info.MonitoredFence.FenceValueCPUVirtualAddress;
     ok(FencePage != NULL, "NoGPUAccess fence must retain its CPU mapping\n");
     ok(Create.Info.MonitoredFence.FenceValueGPUVirtualAddress == 0, "NoGPUAccess fence received GPU VA %I64x\n", Create.Info.MonitoredFence.FenceValueGPUVirtualAddress);
-    ok(Create.Info.SharedHandle == 0, "unshared monitored fence echoed SharedHandle 0x%08lX\n", (unsigned long)Create.Info.SharedHandle);
+    /* Windows 11 leaves SharedHandle alone for an unshared fence rather than
+     * zeroing it; what must never happen is a fabricated shared handle. */
+    ok(Create.Info.SharedHandle == 0 || Create.Info.SharedHandle == (D3DKMT_HANDLE)0xBAD0F003,
+       "unshared monitored fence produced SharedHandle 0x%08lX\n", (unsigned long)Create.Info.SharedHandle);
     if (FencePage != NULL)
         ok(*FencePage == 11, "NoGPUAccess initial fence is %I64u, expected 11\n", *FencePage);
     Value = 12;
@@ -711,7 +737,11 @@ static void Test_MonitoredFence_AccessFlags(void)
     Create.Info.Flags.NoGPUAccess = 1;
     Create.Info.MonitoredFence.EngineAffinity = 2;
     Status = pCreate(&Create);
-    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    /* Windows 11 accepts an engine affinity mask beyond the reported node
+     * count instead of validating it at create time. */
+    ok_succeeded(Status, "monitored fence with EngineAffinity 2 failed 0x%08lX\n", (long)Status);
+    if (NT_SUCCESS(Status))
+        D3dkmtTestDestroySyncObject(pDestroy, Create.hSyncObject);
 
     memset(&Create, 0, sizeof(Create));
     Create.hDevice = hDevice;
@@ -719,7 +749,10 @@ static void Test_MonitoredFence_AccessFlags(void)
     Create.Info.Flags.NoGPUAccess = 1;
     Create.Info.MonitoredFence.Padding = 1;
     Status = pCreate(&Create);
-    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    /* Windows 11 ignores the padding field rather than rejecting it. */
+    ok_succeeded(Status, "monitored fence with Padding 1 failed 0x%08lX\n", (long)Status);
+    if (NT_SUCCESS(Status))
+        D3dkmtTestDestroySyncObject(pDestroy, Create.hSyncObject);
 
     memset(&Create, 0, sizeof(Create));
     Create.hDevice = hDevice;
@@ -786,7 +819,10 @@ static void Test_MonitoredFence_AccessFlags(void)
     Create.Info.Flags.TopOfPipeline = 1;
     Create.Info.Flags.NoGPUAccess = 1;
     Status = pCreate(&Create);
-    ok_eq_hex(Status, STATUS_NOT_SUPPORTED);
+    /* Windows 11 implements top-of-pipeline monitored fences. */
+    ok_succeeded(Status, "TopOfPipeline monitored fence failed 0x%08lX\n", (long)Status);
+    if (NT_SUCCESS(Status))
+        D3dkmtTestDestroySyncObject(pDestroy, Create.hSyncObject);
 
     /* Sharing a fence exists so another *device* can wait on it, and a device
      * waits on the GPU side -- so NoGPUAccess contradicts Shared.  Measured on
@@ -808,7 +844,9 @@ static void Test_MonitoredFence_AccessFlags(void)
     Create.Info.Type = D3DDDI_MONITORED_FENCE;
     Create.Info.Flags.Shared = 1;
     Status = pCreate(&Create);
-    ok_eq_hex(Status, STATUS_NOT_SUPPORTED);
+    /* Windows 11 refuses a shared monitored fence created without the NT
+     * security parameters with STATUS_INVALID_PARAMETER. */
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
 
     /* Legacy object types share through the same namespace. */
     memset(&Create, 0, sizeof(Create));
@@ -841,7 +879,7 @@ static void Test_MonitoredFence_AccessFlags(void)
         Create.Info.PeriodicMonitoredFence.hAdapter = hAdapter;
         Create.Info.PeriodicMonitoredFence.VidPnTargetId = 0;
         Status = pCreate(&Create);
-        ok_eq_hex(Status, STATUS_NOT_SUPPORTED);
+        ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
         goto Cleanup;
     }
 

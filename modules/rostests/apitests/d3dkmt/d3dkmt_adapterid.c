@@ -68,12 +68,22 @@ static void Test_AdapterAddress(D3DKMT_HANDLE hAdapter)
         return;
     }
 
-    /* PCI is 32 devices of 8 functions.  A value outside that is not a bus
-     * location at all -- most likely uninitialised memory returned as one. */
-    ok(Address.DeviceNumber < 32, "device number %u is not a PCI device number\n",
-       Address.DeviceNumber);
-    ok(Address.FunctionNumber < 8, "function number %u is not a PCI function\n",
-       Address.FunctionNumber);
+    /* PCI is 32 devices of 8 functions. An adapter that is not on the PCI bus
+     * at all -- the Microsoft Basic Render/Display driver, which is what the
+     * Windows 11 reference image exposes -- reports 0xFFFF in every field
+     * instead. Anything else is not a bus location: most likely uninitialised
+     * memory returned as one. */
+    if (Address.DeviceNumber == 0xFFFF && Address.FunctionNumber == 0xFFFF)
+    {
+        trace("adapter is not a PCI device (bus location reported as 0xFFFF)\n");
+    }
+    else
+    {
+        ok(Address.DeviceNumber < 32, "device number %u is not a PCI device number\n",
+           Address.DeviceNumber);
+        ok(Address.FunctionNumber < 8, "function number %u is not a PCI function\n",
+           Address.FunctionNumber);
+    }
     trace("adapter at PCI %u:%u.%u\n", Address.BusNumber, Address.DeviceNumber,
           Address.FunctionNumber);
 
@@ -239,11 +249,20 @@ static void Test_VirtualAddressAnswerIsConsistent(D3DKMT_HANDLE hAdapter)
     CapsStatus = AdapterIdQuery(hAdapter, KMTQAITYPE_WDDM_2_0_CAPS, &Caps20, sizeof(Caps20));
     if (NT_SUCCESS(CapsStatus))
     {
-        ok((Info.VirtualAddressFlags.VirtualAddressSupported != 0) ==
-           (Caps20.GpuMmuSupported != 0),
-           "VIRTUALADDRESSINFO says GPU VA=%u but WDDM 2.0 caps says GpuMmuSupported=%u -- "
-           "a caller that reserves GPU VA on one answer fails on every later call\n",
-           Info.VirtualAddressFlags.VirtualAddressSupported, Caps20.GpuMmuSupported);
+        /* GpuMmuSupported is the stronger claim: it says the adapter maps GPU
+         * virtual addresses through its own MMU. An adapter can support GPU VA
+         * without it (IoMmu model), which is what the Windows 11 reference
+         * reports, so this is an implication and not an equivalence. The
+         * defect it still catches is claiming a GPU MMU while denying GPU
+         * virtual addressing -- a caller that reserves GPU VA on the caps
+         * answer would then fail on every later call. */
+        ok(Caps20.GpuMmuSupported == 0 ||
+           Info.VirtualAddressFlags.VirtualAddressSupported != 0,
+           "WDDM 2.0 caps says GpuMmuSupported=%u but VIRTUALADDRESSINFO says GPU VA=%u\n",
+           Caps20.GpuMmuSupported, Info.VirtualAddressFlags.VirtualAddressSupported);
+        trace("GpuMmuSupported=%u, VirtualAddressSupported=%u\n",
+              Caps20.GpuMmuSupported,
+              Info.VirtualAddressFlags.VirtualAddressSupported);
     }
     trace("GPU virtual addressing supported: %u\n",
           Info.VirtualAddressFlags.VirtualAddressSupported);
