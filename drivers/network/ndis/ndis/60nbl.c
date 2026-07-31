@@ -99,6 +99,7 @@ typedef struct _NDIS6_CONTEXT_ALLOCATION_HEADER
 #define NDIS6_CONTEXT_ALLOCATION_MAGIC 0xA16CC7E1
 #define NDIS6_CONTEXT_ALLOCATION_HEADER_SIZE \
     ALIGN_UP_BY(sizeof(NDIS6_CONTEXT_ALLOCATION_HEADER), MEMORY_ALLOCATION_ALIGNMENT)
+#define NDIS6_NBL_FLAG_ALLOCATED_CONTEXT 0x00000400UL
 
 typedef struct _NDIS6_RETREAT_MDL_CONTEXT
 {
@@ -361,37 +362,38 @@ NdisAllocateNetBufferList(
     PMDL Mdl;
     ULONG AllocationSize;
     ULONG TotalSize;
-    USHORT EffectiveContextSize;
+    USHORT ContextCapacity;
 
     if (Pool == NULL || Pool->Magic != NDIS6_NBL_POOL_MAGIC)
         return NULL;
 
-    /* The caller's per-NBL ContextSize overrides the pool's default. */
-    EffectiveContextSize = ContextSize ? ContextSize : Pool->ContextSize;
     if ((ContextSize & (MEMORY_ALLOCATION_ALIGNMENT - 1)) != 0 ||
         (ContextBackFill & (MEMORY_ALLOCATION_ALIGNMENT - 1)) != 0 ||
-        (ULONG)EffectiveContextSize + ContextBackFill > MAXUSHORT)
+        (ULONG)ContextSize + ContextBackFill > MAXUSHORT)
         return NULL;
 
+    /* The pool ContextSize is unused capacity preallocated in every NBL.  The
+     * per-allocation ContextSize is the amount initially consumed by this
+     * caller; ContextBackFill matters only if the preallocated block cannot
+     * satisfy that request and NDIS must allocate another context block. */
+    ContextCapacity = Pool->ContextSize;
+
     TotalSize = sizeof(NET_BUFFER_LIST);
-    if (EffectiveContextSize != 0 || ContextBackFill != 0)
+    if (ContextCapacity != 0)
         TotalSize += FIELD_OFFSET(NET_BUFFER_LIST_CONTEXT, ContextData)
-                   + EffectiveContextSize + ContextBackFill;
+                   + ContextCapacity;
     if (Pool->fAllocateNetBuffer)
         TotalSize += sizeof(NET_BUFFER);
     AllocationSize = NDIS6_NBL_ALLOCATION_HEADER_SIZE + TotalSize;
 
-    /* Hot path: if the requested geometry matches the pool default
-     * (no per-call context override and no backfill), pull from the
-     * lookaside list. The TX wrapper pool the bridge uses for legacy
-     * NDIS_PACKET wrapping always hits this path. The private allocation
-     * header records where the block must be returned without consuming
-     * any driver-visible reserved field in the NBL. */
+    /* The NBL's inline geometry is fixed by its pool, so every allocation can
+     * use the pool lookaside. A per-call context that does not fit is a
+     * separate allocation. The private allocation header records where the
+     * core block must be returned without consuming driver-visible fields. */
     {
         BOOLEAN UseLookaside =
             Pool->LookasideValid &&
-            AllocationSize == Pool->FixedAllocSize &&
-            ContextBackFill == 0;
+            AllocationSize == Pool->FixedAllocSize;
 
         if (UseLookaside)
         {
@@ -413,23 +415,40 @@ NdisAllocateNetBufferList(
                                  NDIS6_NBL_ALLOCATION_HEADER_SIZE);
     }
 
+    Ctx = NULL;
     Nbl->NdisPoolHandle = PoolHandle;
+    NdisSetNetBufferListProtocolId(Nbl, Pool->ProtocolId);
 
-    if (EffectiveContextSize != 0 || ContextBackFill != 0)
+    if (ContextCapacity != 0)
     {
         Ctx = (PNET_BUFFER_LIST_CONTEXT)((PUCHAR)Nbl + sizeof(NET_BUFFER_LIST));
         Ctx->Next = NULL;
-        Ctx->Size = EffectiveContextSize;
-        Ctx->Offset = ContextBackFill;
+        Ctx->Size = ContextCapacity;
+        Ctx->Offset = ContextCapacity;
         Nbl->Context = Ctx;
+    }
+
+    if (ContextSize != 0)
+    {
+        NDIS_STATUS Status = NdisAllocateNetBufferListContext(
+            Nbl, ContextSize, ContextBackFill, Pool->PoolTag);
+
+        if (Status != NDIS_STATUS_SUCCESS)
+        {
+            NdisFreeNetBufferList(Nbl);
+            return NULL;
+        }
+
+        if (Nbl->Context != Ctx)
+            Nbl->Flags |= NDIS6_NBL_FLAG_ALLOCATED_CONTEXT;
     }
 
     if (Pool->fAllocateNetBuffer)
     {
         ULONG NbOffset = sizeof(NET_BUFFER_LIST);
-        if (EffectiveContextSize != 0 || ContextBackFill != 0)
+        if (ContextCapacity != 0)
             NbOffset += FIELD_OFFSET(NET_BUFFER_LIST_CONTEXT, ContextData)
-                      + EffectiveContextSize + ContextBackFill;
+                      + ContextCapacity;
         Nb = (PNET_BUFFER)((PUCHAR)Nbl + NbOffset);
         Nbl->FirstNetBuffer = Nb;
         Nb->NdisPoolHandle = NULL;  /* this NB is owned by the NBL allocation */
@@ -493,6 +512,18 @@ NdisFreeNetBufferList(
         ((PUCHAR)NetBufferList - NDIS6_NBL_ALLOCATION_HEADER_SIZE);
     if (Allocation->Magic != NDIS6_NBL_ALLOCATION_MAGIC)
         return;
+
+    if ((NetBufferList->Flags & NDIS6_NBL_FLAG_ALLOCATED_CONTEXT) != 0)
+    {
+        PNET_BUFFER_LIST_CONTEXT Context = NetBufferList->Context;
+
+        if (Context != NULL && Context->Offset <= Context->Size)
+        {
+            NdisFreeNetBufferListContext(
+                NetBufferList, Context->Size - Context->Offset);
+        }
+        NetBufferList->Flags &= ~NDIS6_NBL_FLAG_ALLOCATED_CONTEXT;
+    }
 
     FromLookaside = Allocation->FromLookaside;
     if (Allocation->OwnedMdl != NULL)
@@ -1548,11 +1579,10 @@ NdisAllocateNetBufferListContext(
     Context = NetBufferList->Context;
     if (Context != NULL && Context->Offset >= ContextSize)
     {
-        if ((ULONG)Context->Size + ContextSize > MAXUSHORT)
+        if (Context->Offset > Context->Size)
             return NDIS_STATUS_FAILURE;
 
         Context->Offset -= ContextSize;
-        Context->Size += ContextSize;
         return NDIS_STATUS_SUCCESS;
     }
 
@@ -1573,7 +1603,7 @@ NdisAllocateNetBufferListContext(
     Context = (PNET_BUFFER_LIST_CONTEXT)
         ((PUCHAR)Allocation + NDIS6_CONTEXT_ALLOCATION_HEADER_SIZE);
     Context->Next = NetBufferList->Context;
-    Context->Size = ContextSize;
+    Context->Size = ContextSize + ContextBackFill;
     Context->Offset = ContextBackFill;
     NetBufferList->Context = Context;
     return NDIS_STATUS_SUCCESS;
@@ -1588,6 +1618,9 @@ NdisFreeNetBufferListContext(
     PNDIS6_CONTEXT_ALLOCATION_HEADER Allocation;
     PNET_BUFFER_LIST_CONTEXT Context;
     PNET_BUFFER_LIST_CONTEXT EmbeddedContext;
+    USHORT Available;
+    USHORT Remaining;
+    ULONG PoolTag;
 
     if (NetBufferList == NULL || NetBufferList->Context == NULL ||
         ContextSize == 0 ||
@@ -1596,27 +1629,49 @@ NdisFreeNetBufferListContext(
         return;
     }
 
-    Context = NetBufferList->Context;
-    if (ContextSize > Context->Size)
-        return;
-
     EmbeddedContext = (PNET_BUFFER_LIST_CONTEXT)
         ((PUCHAR)NetBufferList + sizeof(NET_BUFFER_LIST));
-    if (ContextSize == Context->Size && Context != EmbeddedContext)
+    Remaining = ContextSize;
+
+    while (Remaining != 0)
     {
+        Context = NetBufferList->Context;
+        if (Context == NULL || Context->Offset > Context->Size)
+            return;
+
+        Available = Context->Size - Context->Offset;
+        if (Context == EmbeddedContext)
+        {
+            if (Remaining > Available)
+                return;
+
+            Context->Offset += Remaining;
+            return;
+        }
+
         Allocation = (PNDIS6_CONTEXT_ALLOCATION_HEADER)
             ((PUCHAR)Context - NDIS6_CONTEXT_ALLOCATION_HEADER_SIZE);
         if (Allocation->Magic != NDIS6_CONTEXT_ALLOCATION_MAGIC)
             return;
 
-        NetBufferList->Context = Context->Next;
-        Allocation->Magic = 0;
-        ExFreePoolWithTag(Allocation, Allocation->PoolTag);
-        return;
-    }
+        if (Remaining < Available)
+        {
+            Context->Offset += Remaining;
+            return;
+        }
 
-    Context->Size -= ContextSize;
-    Context->Offset += ContextSize;
+        Remaining -= Available;
+        NetBufferList->Context = Context->Next;
+        PoolTag = Allocation->PoolTag;
+        Allocation->Magic = 0;
+        ExFreePoolWithTag(Allocation, PoolTag);
+
+        if (NetBufferList->Context == EmbeddedContext ||
+            NetBufferList->Context == NULL)
+        {
+            NetBufferList->Flags &= ~NDIS6_NBL_FLAG_ALLOCATED_CONTEXT;
+        }
+    }
 }
 
 static BOOLEAN
