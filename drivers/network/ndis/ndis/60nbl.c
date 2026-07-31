@@ -762,6 +762,7 @@ NdisRetreatNetBufferDataStart(
     PMDL    NewMdl;
     PVOID   NewMdlVa;
     PNDIS6_RETREAT_MDL_CONTEXT RetreatContext;
+    ULONG   MissingData;
     ULONG   NewMdlSize;
     ULONG   NewMdlOffset;
 
@@ -786,16 +787,13 @@ NdisRetreatNetBufferDataStart(
         return NDIS_STATUS_SUCCESS;
     }
 
-    /* Slow path — the retreat would back the data start up past the
-     * front of the current MDL. We allocate a new MDL of size
-     * DataOffsetDelta + DataBackFill, prepend it to the chain, and
-     * point CurrentMdl at it. The caller's intended use is "I want
-     * DataOffsetDelta bytes of header space; please ensure DataBackFill
-     * bytes are also reserved behind that for future retreats." We
-     * place the new data start DataBackFill bytes into the new MDL. */
-    if (DataOffsetDelta > MAXULONG - DataBackFill)
+    /* Slow path: allocate only the part of the retreat not covered by the
+     * existing chain-wide DataOffset, plus the requested backfill. Prepend
+     * that MDL and leave its extra bytes before the new data start. */
+    MissingData = DataOffsetDelta - NetBuffer->DataOffset;
+    if (MissingData > MAXULONG - DataBackFill)
         return NDIS_STATUS_FAILURE;
-    NewMdlSize = DataOffsetDelta + DataBackFill;
+    NewMdlSize = MissingData + DataBackFill;
 
     RetreatContext = (PNDIS6_RETREAT_MDL_CONTEXT)ExAllocatePoolWithTag(
         NonPagedPool, sizeof(*RetreatContext), NDIS6_RETREAT_CONTEXT_TAG);
@@ -813,6 +811,7 @@ NdisRetreatNetBufferDataStart(
             ExFreePoolWithTag(RetreatContext, NDIS6_RETREAT_CONTEXT_TAG);
             return NDIS_STATUS_RESOURCES;
         }
+        NewMdlSize = BufferSize;
     }
     else
     {
@@ -836,7 +835,8 @@ NdisRetreatNetBufferDataStart(
         MmBuildMdlForNonPagedPool(NewMdl);
     }
 
-    if (MmGetMdlByteCount(NewMdl) < NewMdlSize)
+    if (NewMdlSize < MissingData ||
+        MmGetMdlByteCount(NewMdl) < NewMdlSize)
     {
         /* A caller-supplied allocator owns its failure cleanup. The default
          * allocation can be released here directly. */
@@ -860,10 +860,10 @@ NdisRetreatNetBufferDataStart(
     NewMdl->Next        = NetBuffer->MdlChain;
     NetBuffer->MdlChain = NewMdl;
 
-    /* Preserve any existing (insufficient) headroom as part of the newly
-     * exposed data. The new MDL supplies the remaining bytes, while the
-     * requested backfill remains unused before the new data start. */
-    NewMdlOffset = DataBackFill + NetBuffer->DataOffset;
+    /* The original chain's headroom supplies part of the requested retreat.
+     * The new MDL contains only the missing bytes plus any backfill, so its
+     * data start is the unused part of the actual allocation. */
+    NewMdlOffset = NewMdlSize - MissingData;
 
     NetBuffer->CurrentMdl       = NewMdl;
     NetBuffer->CurrentMdlOffset = NewMdlOffset;
