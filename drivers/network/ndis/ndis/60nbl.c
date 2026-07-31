@@ -1205,18 +1205,20 @@ NdisQueryNetBufferPhysicalCount(
     if (NetBuffer == NULL)
         return 0;
 
+    NdisAdjustNetBufferCurrentMdl(NetBuffer);
     Mdl = NetBuffer->CurrentMdl;
     MdlOffset = NetBuffer->CurrentMdlOffset;
     Remaining = NetBuffer->DataLength;
     while (Remaining != 0 && Mdl != NULL)
     {
         ULONG MdlLength = MmGetMdlByteCount(Mdl);
+        ULONG EndOffset;
         ULONG SegmentLength;
         ULONG SegmentPages;
 
         if (MdlOffset > MdlLength)
             return PhysicalCount;
-        if (MdlOffset == MdlLength)
+        if (MdlLength != 0 && MdlOffset == MdlLength)
         {
             Mdl = Mdl->Next;
             MdlOffset = 0;
@@ -1224,9 +1226,14 @@ NdisQueryNetBufferPhysicalCount(
         }
 
         SegmentLength = min(Remaining, MdlLength - MdlOffset);
-        SegmentPages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(
-            (PUCHAR)MmGetMdlVirtualAddress(Mdl) + MdlOffset,
-            SegmentLength);
+        EndOffset = MdlOffset + SegmentLength;
+
+        /* Count the maximum breaks mapped by the MDL from its virtual start
+         * through the used range's end. Counting only from CurrentMdlOffset
+         * underestimates the scatter/gather capacity Windows reports. */
+        SegmentPages = MdlLength == 0 ? 1 :
+            ADDRESS_AND_SIZE_TO_SPAN_PAGES(
+                MmGetMdlVirtualAddress(Mdl), EndOffset);
         if (SegmentPages > MAXULONG - PhysicalCount)
             return MAXULONG;
 
