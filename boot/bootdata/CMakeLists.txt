@@ -78,6 +78,9 @@ add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/preinstall/unattend.inf DESTINATION
 
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/livecd_start.cmd DESTINATION "Profiles/Default User/My Documents" FOR livecd)
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/cpubench_start.cmd DESTINATION "Profiles/Default User/My Documents" FOR preinstall)
+if(ENABLE_ARM64_NT10_ABI_PROBES)
+    add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/cpubench_start.cmd DESTINATION "Profiles/Default User/My Documents" FOR livecd)
+endif()
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/ethbench_start.cmd DESTINATION "Profiles/Default User/My Documents" FOR preinstall)
 
 
