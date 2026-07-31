@@ -468,7 +468,7 @@ KiArm64TimerIsr(
      */
     if (Cpu == 0)
     {
-        KeUpdateSystemTime(TrapFrame, Increment, TrapFrame->PreviousIrql);
+        KeUpdateSystemTime(TrapFrame, Increment, TrapFrame->SavedIrql);
     }
     else
     {
@@ -477,7 +477,7 @@ KiArm64TimerIsr(
         if (TimerState->TickOffset >= RuntimeIncrement)
         {
             TimerState->TickOffset -= RuntimeIncrement;
-            KeUpdateRunTime(TrapFrame, TrapFrame->PreviousIrql);
+            KeUpdateRunTime(TrapFrame, TrapFrame->SavedIrql);
         }
     }
 
@@ -935,12 +935,14 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId, _In_ PKI_ARM64_IRQ_FRAME IrqF
     }
 
     /*
-     * The clock path consumes PreviousMode/PreviousIrql for accounting and Pc
+     * The clock path consumes PreviousMode/SavedIrql for accounting and Pc
      * for profiling.  Keep the control state coherent with the architectural
      * IRQ frame without zeroing/copying the unused 340+ bytes on every tick.
+     * SavedIrql, not PreviousIrql: the Win11 layout overlays PreviousIrql with
+     * PreviousMode at 0x003, and PreviousMode is live here.
      */
     LocalTrapFrame.PreviousMode = (VectorId >= 8) ? UserMode : KernelMode;
-    LocalTrapFrame.PreviousIrql = OldIrql;
+    LocalTrapFrame.SavedIrql = OldIrql;
     LocalTrapFrame.Spsr = (ULONG)IrqFrame->Spsr;
     LocalTrapFrame.Sp = (VectorId >= 8) ? IrqFrame->SpEl0 : (ULONG_PTR)(IrqFrame + 1);
     LocalTrapFrame.Lr = IrqFrame->Lr;

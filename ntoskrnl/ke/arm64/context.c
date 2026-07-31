@@ -35,7 +35,7 @@ KeContextToTrapFrame(_In_ PCONTEXT Context,
     /* Drop the architecture tag so the bitfield map matches */
     ContextFlags &= ~CONTEXT_ARM64;
 
-    PreviousIrql = TrapFrame->PreviousIrql;
+    PreviousIrql = TrapFrame->SavedIrql;
     OldIrql = KeGetCurrentIrql();
     if (OldIrql < APC_LEVEL)
     {
@@ -90,7 +90,7 @@ KeContextToTrapFrame(_In_ PCONTEXT Context,
         }
 
         TrapFrame->PreviousMode = (CHAR)PreviousMode;
-        TrapFrame->PreviousIrql = PreviousIrql;
+        TrapFrame->SavedIrql = PreviousIrql;
     }
 
     if (ContextFlags & CONTEXT_DEBUG_REGISTERS)

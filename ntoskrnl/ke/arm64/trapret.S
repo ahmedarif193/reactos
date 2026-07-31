@@ -32,7 +32,7 @@ KiTrapReturn:
     msr     daifset, #0xF                /* Disable D(8), A(4), I(2), F(1) */
     isb                                  /* Ensure mask takes effect NOW */
 
-    ldrb    w0, [x20, #TfPreviousIrql]
+    ldrb    w0, [x20, #TfSavedIrql]
     bl      KiRestoreTrapFrameIrql
 
     /* Preserve fallback frame pointer/link register */

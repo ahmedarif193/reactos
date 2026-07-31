@@ -103,29 +103,45 @@ typedef struct _KARM64_VFP_STATE
 } KARM64_VFP_STATE, *PKARM64_VFP_STATE;
 
 /*
- * ReactOS ARM64 trap-frame layout. The VFP field follows the Windows pointer
- * semantics; the surrounding private offsets remain ReactOS-specific.
+ * Win11 26100 ARM64 layout, sizeof 0x150.
+ *
+ * Windows overlays PreviousMode/PreviousIrql at 0x003 and
+ * FaultAddress/TrapFrame at 0x008. ReactOS needs the interrupted IRQL while
+ * PreviousMode is live, so SavedIrql uses the low byte of the Windows Reserved
+ * dword. The SVC previous-mode cookie already reserves only bits 8 through 31.
  */
 typedef struct _KTRAP_FRAME
 {
     UCHAR ExceptionActive;               // 0x000
     UCHAR ContextFromKFramesUnwound;     // 0x001
     UCHAR DebugRegistersValid;           // 0x002
-    CHAR PreviousMode;                   // 0x003
-    UCHAR PreviousIrql;                  // 0x004 [ReactOS]
-    UCHAR ReservedBytes[3];              // 0x005
-    ULONG Reserved;                      // 0x008
-    ULONG ReservedPad;                   // 0x00C
-    ULONG64 FaultAddress;                // 0x010
-    ULONG64 TrapFrame;                   // 0x018
-    PKARM64_VFP_STATE VfpState;          // 0x020
-    ULONG Bcr[8];                        // 0x028
-    ULONG64 Bvr[8];                      // 0x048
-    ULONG Wcr[2];                        // 0x088
-    ULONG64 Wvr[2];                      // 0x090
-    ULONG Spsr;                          // 0x0A0
-    ULONG Esr;                           // 0x0A4
-    ULONG64 Sp;                          // 0x0A8
+    union
+    {
+        CHAR PreviousMode;               // 0x003
+        UCHAR PreviousIrql;              // 0x003
+    };
+    union
+    {
+        ULONG Reserved;                  // 0x004
+        struct
+        {
+            UCHAR SavedIrql;             // 0x004 [ReactOS]
+            UCHAR ReservedBytes[3];      // 0x005
+        };
+    };
+    union
+    {
+        ULONG64 FaultAddress;            // 0x008
+        ULONG64 TrapFrame;               // 0x008
+    };
+    PKARM64_VFP_STATE VfpState;          // 0x010
+    ULONG Bcr[8];                        // 0x018
+    ULONG64 Bvr[8];                      // 0x038
+    ULONG Wcr[2];                        // 0x078
+    ULONG64 Wvr[2];                      // 0x080
+    ULONG Spsr;                          // 0x090
+    ULONG Esr;                           // 0x094
+    ULONG64 Sp;                          // 0x098
     union
     {
         ULONG64 X[19];
@@ -152,32 +168,34 @@ typedef struct _KTRAP_FRAME
             ULONG64 X18;
         };
     };
-    ULONG64 Lr;                          // 0x148
-    ULONG64 Fp;                          // 0x150
-    ULONG64 Pc;                          // 0x158
-} KTRAP_FRAME, *PKTRAP_FRAME;            // sizeof 0x160
+    ULONG64 Lr;                          // 0x138
+    ULONG64 Fp;                          // 0x140
+    ULONG64 Pc;                          // 0x148
+} KTRAP_FRAME, *PKTRAP_FRAME;            // sizeof 0x150
 
 #ifndef __ASSEMBLER__
-C_ASSERT(sizeof(KTRAP_FRAME) == 0x160);
+C_ASSERT(sizeof(KTRAP_FRAME) == 0x150);
 C_ASSERT(sizeof(KARM64_VFP_STATE) == 0x210);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, PreviousIrql) == 0x004);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Reserved) == 0x008);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, FaultAddress) == 0x010);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, TrapFrame) == 0x018);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, VfpState) == 0x020);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Bcr) == 0x028);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Bvr) == 0x048);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Wcr) == 0x088);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Wvr) == 0x090);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Spsr) == 0x0A0);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Esr) == 0x0A4);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Sp) == 0x0A8);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, X) == 0x0B0);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, X0) == 0x0B0);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, X18) == 0x140);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Lr) == 0x148);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Fp) == 0x150);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Pc) == 0x158);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, PreviousMode) == 0x003);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, PreviousIrql) == 0x003);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Reserved) == 0x004);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, SavedIrql) == 0x004);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, FaultAddress) == 0x008);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, TrapFrame) == 0x008);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, VfpState) == 0x010);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Bcr) == 0x018);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Bvr) == 0x038);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Wcr) == 0x078);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Wvr) == 0x080);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Spsr) == 0x090);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Esr) == 0x094);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Sp) == 0x098);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, X) == 0x0A0);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, X0) == 0x0A0);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, X18) == 0x130);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Lr) == 0x138);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Fp) == 0x140);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Pc) == 0x148);
 #endif
 
 typedef struct _KEXCEPTION_FRAME

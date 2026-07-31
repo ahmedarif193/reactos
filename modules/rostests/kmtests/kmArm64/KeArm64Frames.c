@@ -25,59 +25,60 @@ static VOID Arm64FrameLayout(VOID)
     dump_trace("[arm64][KeArm64Frames] sizeof(KEXCEPTION_FRAME)=0x%Ix\n",
                (SIZE_T)sizeof(KEXCEPTION_FRAME));
 
-    /* KTRAP_FRAME size is fixed to keep the kernel ABI stable. */
-    ok_eq_ulonglong((ULONGLONG)sizeof(KTRAP_FRAME), 0x160ULL);
+    /* Win11 26100 ARM64 ntkrnlmp.pdb fixes this private layout at 0x150. */
+    ok_eq_ulonglong((ULONGLONG)sizeof(KTRAP_FRAME), 0x150ULL);
 
     /* Leading byte fields. */
     ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, ExceptionActive), 0x0ULL);
     ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, ContextFromKFramesUnwound), 0x1ULL);
     ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, DebugRegistersValid), 0x2ULL);
     ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, PreviousMode), 0x3ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, PreviousIrql), 0x4ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, Reserved), 0x8ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, PreviousIrql), 0x3ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, SavedIrql), 0x4ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, Reserved), 0x4ULL);
 
     /* Fault accounting + VFP state. */
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, FaultAddress), 0x10ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, TrapFrame), 0x18ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, VfpState), 0x20ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, FaultAddress), 0x8ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, TrapFrame), 0x8ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, VfpState), 0x10ULL);
 
     /* Debug registers. */
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, Bcr), 0x28ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, Bvr), 0x48ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, Wcr), 0x88ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, Wvr), 0x90ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, Bcr), 0x18ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, Bvr), 0x38ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, Wcr), 0x78ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, Wvr), 0x80ULL);
 
     /* Status word + stack. */
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, Spsr), 0xA0ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, Esr), 0xA4ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, Sp), 0xA8ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, Spsr), 0x90ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, Esr), 0x94ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, Sp), 0x98ULL);
 
     /* X registers. */
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X), 0xB0ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X0), 0xB0ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X1), 0xB8ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X2), 0xC0ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X3), 0xC8ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X4), 0xD0ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X5), 0xD8ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X6), 0xE0ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X7), 0xE8ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X8), 0xF0ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X9), 0xF8ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X10), 0x100ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X11), 0x108ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X12), 0x110ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X13), 0x118ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X14), 0x120ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X15), 0x128ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X16), 0x130ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X17), 0x138ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X18), 0x140ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X), 0xA0ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X0), 0xA0ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X1), 0xA8ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X2), 0xB0ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X3), 0xB8ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X4), 0xC0ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X5), 0xC8ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X6), 0xD0ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X7), 0xD8ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X8), 0xE0ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X9), 0xE8ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X10), 0xF0ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X11), 0xF8ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X12), 0x100ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X13), 0x108ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X14), 0x110ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X15), 0x118ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X16), 0x120ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X17), 0x128ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, X18), 0x130ULL);
 
     /* Final trio: Lr, Fp, Pc. */
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, Lr), 0x148ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, Fp), 0x150ULL);
-    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, Pc), 0x158ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, Lr), 0x138ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, Fp), 0x140ULL);
+    ok_eq_ulonglong((ULONGLONG)FIELD_OFFSET(KTRAP_FRAME, Pc), 0x148ULL);
 
     /*
      * KEXCEPTION_FRAME -- non-volatile call-preserved registers.

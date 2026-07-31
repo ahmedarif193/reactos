@@ -22,7 +22,7 @@
 #endif
 
 #define ESR_EC_BRK 0x3C
-// Cookie lives in Reserved bits 16-31, mode in bits 8-15; byte 0 carries PreviousIrql
+// Cookie lives in Reserved bits 16-31, mode in bits 8-15; byte 0 carries SavedIrql
 #define ARM64_PREVIOUS_MODE_COOKIE 0x4D500000UL
 #define ARM64_PREVIOUS_MODE_MASK   0xFFFF0000UL
 #define ARM64_PREVIOUS_MODE_VALUE  0x0000FF00UL
@@ -824,8 +824,8 @@ KiSwapProcess(_Inout_ PKPROCESS NewProcess,
 #endif
 }
 
-#define ARM64_EARLY_SYNC_CONTEXT_ALLOC_SIZE 0x590
-#define ARM64_EARLY_SYNC_VFP_OFFSET         0x370
+#define ARM64_EARLY_SYNC_CONTEXT_ALLOC_SIZE 0x580
+#define ARM64_EARLY_SYNC_VFP_OFFSET         0x360
 
 typedef struct _ARM64_EARLY_SYNC_CONTEXT
 {
@@ -853,9 +853,9 @@ C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, ExceptionFramePointer) == 0x140)
 C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, ExceptionFrame) == 0x148);
 C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, TrapFrame) == 0x210);
 C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, VfpState) == ARM64_EARLY_SYNC_VFP_OFFSET);
-C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, VfpState.Fpcr) == 0x378);
-C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, VfpState.Fpsr) == 0x37C);
-C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, VfpState.V) == 0x380);
+C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, VfpState.Fpcr) == 0x368);
+C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, VfpState.Fpsr) == 0x36C);
+C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, VfpState.V) == 0x370);
 C_ASSERT(sizeof(ARM64_EARLY_SYNC_CONTEXT) == ARM64_EARLY_SYNC_CONTEXT_ALLOC_SIZE);
 
 /* The vector slot, not the faulting address, identifies the interrupted EL. */
@@ -888,8 +888,7 @@ KiArm64InitializeTrapFrame(
     CurrentIrql = KeGetCurrentIrql();
 
     TrapFrame->PreviousMode = (CHAR)KiArm64PreviousModeFromVector(Context->State.VectorId);
-    TrapFrame->PreviousIrql = (UCHAR)CurrentIrql;
-    TrapFrame->TrapFrame = (ULONG64)(ULONG_PTR)TrapFrame;
+    TrapFrame->SavedIrql = (UCHAR)CurrentIrql;
     Context->VfpState.Link = NULL;
     TrapFrame->VfpState = &Context->VfpState;
     TrapFrame->FaultAddress = Context->State.FaultAddress;
@@ -1010,7 +1009,7 @@ KiArm64HandleSystemService(
 
     /* The fast vector path already populated architectural state directly. */
     TrapFrame->PreviousMode = (CHAR)KiArm64PreviousModeFromVector(Context->State.VectorId);
-    TrapFrame->PreviousIrql = (UCHAR)KeGetCurrentIrql();
+    TrapFrame->SavedIrql = (UCHAR)KeGetCurrentIrql();
     ExceptionFrame->TrapFrame = (ULONG64)(ULONG_PTR)TrapFrame;
     Context->TrapFramePointer = TrapFrame;
     Context->ExceptionFramePointer = ExceptionFrame;
