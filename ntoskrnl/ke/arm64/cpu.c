@@ -571,9 +571,10 @@ KiRestoreProcessorState(
  * - ReadOperation == TRUE (device-to-memory DMA, e.g., disk read):
  *   The device will write data directly to RAM. We must INVALIDATE the CPU's
  *   data cache lines covering this memory region so subsequent CPU reads fetch
- *   the fresh data from RAM rather than stale cached data. We use DC CIVAC
- *   (Clean and Invalidate by VA to Point of Coherency) which ensures any dirty
- *   cache data is written back before invalidation.
+ *   the fresh data from RAM rather than stale cached data. DMA uses DC IVAC
+ *   (Invalidate by VA to Point of Coherency), matching Windows ARM64. Partial
+ *   boundary lines use DC CIVAC so bytes outside the MDL are not discarded.
+ *   PIO reads use DC CIVAC because the CPU produced the data being published.
  *
  * - ReadOperation == FALSE (memory-to-device DMA, e.g., disk write):
  *   The CPU has written data that the device will read. We must CLEAN (flush)
@@ -589,7 +590,8 @@ KiRestoreProcessorState(
  * lines (typically 64 bytes). We must align to cache line boundaries to avoid
  * corrupting adjacent data.
  *
- * Memory barriers (DSB ISH) ensure cache operations complete before returning.
+ * Full-system barriers ensure cache operations reach the Point of Coherency
+ * before an external DMA agent is allowed to observe or update the buffer.
  */
 VOID
 NTAPI
@@ -656,7 +658,7 @@ KeFlushIoBuffers(_Inout_ PMDL Mdl,
     {
         if (ReadOperation)
         {
-            __asm__ __volatile__("dsb ish" ::: "memory");
+            __asm__ __volatile__("dsb sy" ::: "memory");
         }
 
         RemainingLength = Length;
@@ -664,11 +666,15 @@ KeFlushIoBuffers(_Inout_ PMDL Mdl,
         {
             ULONG ChunkLength;
             ULONG_PTR AliasVa;
+            ULONG_PTR ChunkStart;
+            ULONG_PTR ChunkEnd;
 
             ChunkLength = min(RemainingLength, (ULONG)(PAGE_SIZE - ByteOffset));
             AliasVa = MI_ARM64_PFN_TO_VA(MdlPages[PageIndex]);
-            StartAddress = (AliasVa + ByteOffset) & ~((ULONG_PTR)CacheLineSize - 1);
-            EndAddress = (AliasVa + ByteOffset + ChunkLength + CacheLineSize - 1) &
+            ChunkStart = AliasVa + ByteOffset;
+            ChunkEnd = ChunkStart + ChunkLength;
+            StartAddress = ChunkStart & ~((ULONG_PTR)CacheLineSize - 1);
+            EndAddress = (ChunkEnd + CacheLineSize - 1) &
                          ~((ULONG_PTR)CacheLineSize - 1);
 
             for (CacheAddress = StartAddress;
@@ -677,7 +683,16 @@ KeFlushIoBuffers(_Inout_ PMDL Mdl,
             {
                 if (ReadOperation)
                 {
-                    __asm__ __volatile__("dc civac, %0" :: "r"(CacheAddress) : "memory");
+                    if (DmaOperation &&
+                        CacheAddress >= ChunkStart &&
+                        CacheAddress + CacheLineSize <= ChunkEnd)
+                    {
+                        __asm__ __volatile__("dc ivac, %0" :: "r"(CacheAddress) : "memory");
+                    }
+                    else
+                    {
+                        __asm__ __volatile__("dc civac, %0" :: "r"(CacheAddress) : "memory");
+                    }
                 }
                 else
                 {
@@ -689,7 +704,7 @@ KeFlushIoBuffers(_Inout_ PMDL Mdl,
             ByteOffset = 0;
         }
 
-        __asm__ __volatile__("dsb ish" ::: "memory");
+        __asm__ __volatile__("dsb sy" ::: "memory");
         return;
     }
 
@@ -724,15 +739,25 @@ KeFlushIoBuffers(_Inout_ PMDL Mdl,
 
     if (ReadOperation)
     {
-        __asm__ __volatile__("dsb ish" ::: "memory");
+        __asm__ __volatile__("dsb sy" ::: "memory");
 
         for (CacheAddress = StartAddress; CacheAddress < EndAddress;
              CacheAddress += CacheLineSize)
         {
-            __asm__ __volatile__("dc civac, %0" :: "r"(CacheAddress) : "memory");
+            if (DmaOperation &&
+                CacheAddress >= (ULONG_PTR)VirtualAddress &&
+                CacheAddress + CacheLineSize <=
+                    (ULONG_PTR)VirtualAddress + Length)
+            {
+                __asm__ __volatile__("dc ivac, %0" :: "r"(CacheAddress) : "memory");
+            }
+            else
+            {
+                __asm__ __volatile__("dc civac, %0" :: "r"(CacheAddress) : "memory");
+            }
         }
 
-        __asm__ __volatile__("dsb ish" ::: "memory");
+        __asm__ __volatile__("dsb sy" ::: "memory");
     }
     else
     {
@@ -742,7 +767,7 @@ KeFlushIoBuffers(_Inout_ PMDL Mdl,
             __asm__ __volatile__("dc cvac, %0" :: "r"(CacheAddress) : "memory");
         }
 
-        __asm__ __volatile__("dsb ish" ::: "memory");
+        __asm__ __volatile__("dsb sy" ::: "memory");
     }
 
     /*
