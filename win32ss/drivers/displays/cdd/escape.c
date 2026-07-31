@@ -34,9 +34,6 @@ RcddEscape(
    PRCDD_PDEV ppdev;
    LONG value;
 
-   UNREFERENCED_PARAMETER(cjOut);
-   UNREFERENCED_PARAMETER(pvOut);
-
    if (pso == NULL || pso->dhpdev == NULL)
       return 0;
 
@@ -56,11 +53,28 @@ RcddEscape(
       RequestedEscape = *(PULONG)pvIn;
       if (RequestedEscape == CDD_ESCAPE_SUPPRESS_CURSOR ||
           RequestedEscape == CDD_ESCAPE_COMPOSITION_SYNC ||
-          RequestedEscape == CDD_ESCAPE_REGISTER_VBLANK)
+          RequestedEscape == CDD_ESCAPE_REGISTER_VBLANK ||
+          RequestedEscape == CDD_ESCAPE_PRESENT_STATS)
       {
          return 1;
       }
       return 0;
+   }
+
+   if (iEsc == CDD_ESCAPE_PRESENT_STATS)
+   {
+      ULONG Ret;
+
+      if (pvOut == NULL || cjOut < sizeof(DXGK_PRESENT_STATS))
+         return 0;
+
+      if (EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_DXGK_PRESENT_STATS,
+                             NULL, 0, pvOut, sizeof(DXGK_PRESENT_STATS), &Ret))
+      {
+         return 0;
+      }
+
+      return 1;
    }
 
    if (iEsc == CDD_ESCAPE_SUPPRESS_CURSOR)
