@@ -25,6 +25,45 @@
 
 #define NDIS6_ADAPTER_TAG  'aDNn'  /* "nNDa" */
 
+static VOID
+Ndis6ResetMiniportAttributes(
+    _In_ PLOGICAL_ADAPTER Adapter)
+{
+    PNDIS6_ADAPTER_EXT Ext;
+
+    ASSERT(Adapter != NULL);
+    Ext = NDIS6_EXT(Adapter);
+    ASSERT(Ext != NULL);
+
+    if (Ext->GeneralAttrs.SupportedOidList != NULL)
+    {
+        ExFreePoolWithTag(Ext->GeneralAttrs.SupportedOidList,
+                          NDIS6_ATTR_TAG);
+    }
+    if (Ext->OffloadDefaultPtr != NULL)
+        ExFreePoolWithTag(Ext->OffloadDefaultPtr, NDIS6_ATTR_TAG);
+    if (Ext->OffloadHwPtr != NULL)
+        ExFreePoolWithTag(Ext->OffloadHwPtr, NDIS6_ATTR_TAG);
+    if (Ext->TcpOffloadDefaultPtr != NULL)
+        ExFreePoolWithTag(Ext->TcpOffloadDefaultPtr, NDIS6_ATTR_TAG);
+    if (Ext->TcpOffloadHwPtr != NULL)
+        ExFreePoolWithTag(Ext->TcpOffloadHwPtr, NDIS6_ATTR_TAG);
+
+    RtlZeroMemory(&Ext->RegistrationAttrs, sizeof(Ext->RegistrationAttrs));
+    RtlZeroMemory(&Ext->GeneralAttrs, sizeof(Ext->GeneralAttrs));
+    Ext->RegistrationAttrsValid = FALSE;
+    Ext->GeneralAttrsValid = FALSE;
+    Ext->OffloadDefaultPtr = NULL;
+    Ext->OffloadHwPtr = NULL;
+    Ext->TcpOffloadDefaultPtr = NULL;
+    Ext->TcpOffloadHwPtr = NULL;
+    Ext->OffloadValid = FALSE;
+    Ext->MiniportAdapterContext = NULL;
+
+    RtlZeroMemory(&Adapter->Address, sizeof(Adapter->Address));
+    Adapter->AddressLength = 0;
+}
+
 /* ============================================================================
  *  Ndis6ReadExportName — read "\Device\{NetCfgInstanceId}" from the
  *  device's Class\<GUID>\<Instance>\Linkage key in the registry.
@@ -666,6 +705,14 @@ Ndis6CallMiniportInitializeEx(
         &Params);
     DbgPrint("NDIS6: InitializeEx returned 0x%08lx (ctx=%p)\n", (ULONG)Status, Ext->MiniportAdapterContext);
 
+    if (Status != NDIS_STATUS_SUCCESS)
+    {
+        /* A failed InitializeEx owns its driver-side unwind and must not be
+         * followed by HaltEx. Discard attributes published before failure so
+         * a later START begins with an empty NDIS instance. */
+        Ndis6ResetMiniportAttributes(Adapter);
+    }
+
     return Status;
 }
 
@@ -751,8 +798,12 @@ Ndis6CallMiniportHaltEx(
     {
         Ext->DriverBlock->Characteristics.HaltHandlerEx(
             Ext->MiniportAdapterContext, HaltAction);
-        Ext->MiniportAdapterContext = NULL;
     }
+
+    /* Registration, general, and offload attributes belong to one
+     * InitializeEx/HaltEx cycle. AddDevice state and interface identity stay
+     * with the devnode so STOP followed by START can initialize it again. */
+    Ndis6ResetMiniportAttributes(Adapter);
 }
 
 /* ============================================================================
@@ -1050,32 +1101,7 @@ Ndis6DestroyLogicalAdapter(
             Ext->RxLegacyBufferPool = NULL;
         }
 
-        if (Ext->GeneralAttrs.SupportedOidList != NULL)
-        {
-            ExFreePoolWithTag(Ext->GeneralAttrs.SupportedOidList,
-                              NDIS6_ATTR_TAG);
-            Ext->GeneralAttrs.SupportedOidList = NULL;
-        }
-        if (Ext->OffloadDefaultPtr != NULL)
-        {
-            ExFreePoolWithTag(Ext->OffloadDefaultPtr, NDIS6_ATTR_TAG);
-            Ext->OffloadDefaultPtr = NULL;
-        }
-        if (Ext->OffloadHwPtr != NULL)
-        {
-            ExFreePoolWithTag(Ext->OffloadHwPtr, NDIS6_ATTR_TAG);
-            Ext->OffloadHwPtr = NULL;
-        }
-        if (Ext->TcpOffloadDefaultPtr != NULL)
-        {
-            ExFreePoolWithTag(Ext->TcpOffloadDefaultPtr, NDIS6_ATTR_TAG);
-            Ext->TcpOffloadDefaultPtr = NULL;
-        }
-        if (Ext->TcpOffloadHwPtr != NULL)
-        {
-            ExFreePoolWithTag(Ext->TcpOffloadHwPtr, NDIS6_ATTR_TAG);
-            Ext->TcpOffloadHwPtr = NULL;
-        }
+        Ndis6ResetMiniportAttributes(Adapter);
     }
 
     Ndis6FreeAdapterName(&Adapter->NdisMiniportBlock.MiniportName);
