@@ -1350,6 +1350,126 @@ typedef struct _RTL_RB_TREE
 #endif
 
 #if (NTDDI_VERSION >= NTDDI_WINBLUE)
+#if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_WIN11_GE)
+
+//
+// Win11 26100 KLOCK_ENTRY layout. This ABI is identical in the ARM64 and
+// amd64 ntkrnlmp PDBs; older targets retain their version-specific definition.
+//
+typedef union _KLOCK_ENTRY_LOCK_STATE
+{
+    struct
+    {
+        ULONG_PTR CrossThreadReleasable : 1;
+        ULONG_PTR Busy : 1;
+        ULONG_PTR Reserved : 61;
+        ULONG_PTR InTree : 1;
+    };
+    PVOID LockState;
+} KLOCK_ENTRY_LOCK_STATE, *PKLOCK_ENTRY_LOCK_STATE;
+
+typedef union _KLOCK_ENTRY_BOOST_BITMAP
+{
+    ULONG64 AllFields;
+    struct
+    {
+        ULONG AllBoosts;
+        ULONG WaiterCounts;
+    };
+    struct
+    {
+        ULONG CpuBoostsBitmap : 30;
+        ULONG IoBoost : 1;
+        ULONG IoQoSBoost : 1;
+        ULONG IoNormalPriorityWaiterCount : 8;
+        ULONG IoQoSWaiterCount : 7;
+        ULONG : 17;
+    };
+} KLOCK_ENTRY_BOOST_BITMAP, *PKLOCK_ENTRY_BOOST_BITMAP;
+
+typedef struct _KLOCK_ENTRY
+{
+    union
+    {
+        KLOCK_ENTRY_LOCK_STATE LockState;
+        PVOID LockUnsafe;
+        struct
+        {
+            volatile UCHAR CrossThreadReleasableAndBusyByte;
+            UCHAR Reserved[6];
+            volatile UCHAR InTreeByte;
+        };
+    };
+    union
+    {
+        ULONG EntryFlags;
+        struct
+        {
+            union
+            {
+                UCHAR StaticByte;
+                struct
+                {
+                    UCHAR EntryIndex : 6;
+                    UCHAR PreWaiting : 1;
+                    UCHAR UserModeBit : 1;
+                };
+            };
+            UCHAR WaitingByte;
+            UCHAR AcquiredByte;
+            union
+            {
+                UCHAR CrossThreadFlags;
+                struct
+                {
+                    UCHAR HeadNodeBit : 1;
+                    UCHAR IoPriorityBit : 1;
+                    UCHAR IoQoSWaiter : 1;
+                    UCHAR Spare1 : 5;
+                };
+            };
+        };
+        struct
+        {
+            ULONG StaticState : 8;
+            ULONG AllFlags : 24;
+        };
+    };
+    ULONG SpareFlags;
+    RTL_BALANCED_NODE TreeNode;
+    union
+    {
+        struct
+        {
+            RTL_RB_TREE OwnerTree;
+            RTL_RB_TREE WaiterTree;
+        };
+        CHAR CpuPriorityKey;
+    };
+    ULONG64 EntryLock;
+    KLOCK_ENTRY_BOOST_BITMAP BoostBitmap;
+} KLOCK_ENTRY, *PKLOCK_ENTRY;
+
+C_ASSERT(sizeof(KLOCK_ENTRY_LOCK_STATE) == 0x08);
+C_ASSERT(sizeof(KLOCK_ENTRY_BOOST_BITMAP) == 0x08);
+C_ASSERT(sizeof(KLOCK_ENTRY) == 0x58);
+C_ASSERT(FIELD_OFFSET(KLOCK_ENTRY, LockState) == 0x00);
+C_ASSERT(FIELD_OFFSET(KLOCK_ENTRY, CrossThreadReleasableAndBusyByte) == 0x00);
+C_ASSERT(FIELD_OFFSET(KLOCK_ENTRY, InTreeByte) == 0x07);
+C_ASSERT(FIELD_OFFSET(KLOCK_ENTRY, EntryFlags) == 0x08);
+C_ASSERT(FIELD_OFFSET(KLOCK_ENTRY, StaticByte) == 0x08);
+C_ASSERT(FIELD_OFFSET(KLOCK_ENTRY, WaitingByte) == 0x09);
+C_ASSERT(FIELD_OFFSET(KLOCK_ENTRY, AcquiredByte) == 0x0A);
+C_ASSERT(FIELD_OFFSET(KLOCK_ENTRY, CrossThreadFlags) == 0x0B);
+C_ASSERT(FIELD_OFFSET(KLOCK_ENTRY, SpareFlags) == 0x0C);
+C_ASSERT(FIELD_OFFSET(KLOCK_ENTRY, TreeNode) == 0x10);
+C_ASSERT(FIELD_OFFSET(KLOCK_ENTRY, OwnerTree) == 0x28);
+C_ASSERT(FIELD_OFFSET(KLOCK_ENTRY, WaiterTree) == 0x38);
+C_ASSERT(FIELD_OFFSET(KLOCK_ENTRY, EntryLock) == 0x48);
+C_ASSERT(FIELD_OFFSET(KLOCK_ENTRY, BoostBitmap) == 0x50);
+
+#else
+
 typedef struct _KLOCK_ENTRY_LOCK_STATE
 {
     union
@@ -1505,6 +1625,7 @@ typedef struct _KLOCK_ENTRY
 #endif
 } KLOCK_ENTRY, *PKLOCK_ENTRY;
 
+#endif // defined(_WIN64) && (NTDDI_VERSION >= NTDDI_WIN11_GE)
 #endif
 
 //
