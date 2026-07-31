@@ -336,6 +336,25 @@ WddmBridgeRejectBadBuffer(
     return (Status == STATUS_ACCESS_VIOLATION) ? STATUS_INVALID_PARAMETER : Status;
 }
 
+/*
+ * A pointer this bridge receives is either a user-mode buffer (the caller came
+ * straight from a thunk that has not captured yet) or win32k's own kernel copy
+ * (the thunk already probed the user buffer and captured it). ExGetPreviousMode
+ * still reports UserMode for the latter, because it describes who entered the
+ * syscall, not where this pointer lives -- probing a kernel address on that
+ * basis fails the whole call with STATUS_ACCESS_VIOLATION. Probe on the
+ * pointer's own range instead. This is safe: a user-supplied pointer is always
+ * a user address here (the thunk rejected anything else before copying).
+ */
+FORCEINLINE
+BOOLEAN
+WddmBridgeNeedsProbe(
+    _In_opt_ CONST VOID *Address)
+{
+    return (ExGetPreviousMode() != KernelMode) &&
+           (Address == NULL || (PVOID)Address <= MmHighestUserAddress);
+}
+
 static NTSTATUS
 WddmBridgeSafeCopyFrom(
     _Out_writes_bytes_(Size) PVOID Destination,
@@ -352,7 +371,7 @@ WddmBridgeSafeCopyFrom(
 
     _SEH2_TRY
     {
-        if (ExGetPreviousMode() != KernelMode)
+        if (WddmBridgeNeedsProbe(Source))
             ProbeForRead(Source, Size, 1);
         RtlCopyMemory(Destination, Source, Size);
     }
@@ -381,7 +400,7 @@ WddmBridgeSafeCopyTo(
 
     _SEH2_TRY
     {
-        if (ExGetPreviousMode() != KernelMode)
+        if (WddmBridgeNeedsProbe(Destination))
             ProbeForWrite(Destination, Size, 1);
         RtlCopyMemory(Destination, Source, Size);
     }
@@ -407,7 +426,7 @@ WddmBridgeSafeProbeForWrite(
     if (Destination == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    if (ExGetPreviousMode() == KernelMode)
+    if (!WddmBridgeNeedsProbe(Destination))
         return STATUS_SUCCESS;
 
     _SEH2_TRY
