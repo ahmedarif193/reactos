@@ -63,12 +63,15 @@
 #define SBSDIO_SB_ACCESS_2_4B_FLAG      0x08000
 #define SBSDIO_SBWINDOW_MASK            0xFFFF8000
 
+#define SBSDIO_FORCE_ALP                0x01
+#define SBSDIO_FORCE_HT                 0x02
 #define SBSDIO_ALP_AVAIL_REQ            0x08
 #define SBSDIO_HT_AVAIL_REQ             0x10
-#define SBSDIO_FORCE_HT                 0x20
+#define SBSDIO_FORCE_HW_CLKREQ_OFF      0x20
 #define SBSDIO_ALP_AVAIL                0x40
 #define SBSDIO_HT_AVAIL                 0x80
 #define SBSDIO_CSR_MASK                 0x1F
+#define SBSDIO_AVAIL_MASK               (SBSDIO_ALP_AVAIL | SBSDIO_HT_AVAIL)
 
 #define SI_ENUM_BASE_DEFAULT            0x18000000
 
@@ -119,7 +122,10 @@
 
 #define CC_EROMPTR                      0x0FC
 #define DMP_DESC_TYPE_MSK               0x0000000F
+#define DMP_DESC_EMPTY                  0x00000000
+#define DMP_DESC_VALID                  0x00000001
 #define DMP_DESC_COMPONENT              0x00000001
+#define DMP_DESC_MASTER_PORT            0x00000003
 #define DMP_DESC_ADDRESS                0x00000005
 #define DMP_DESC_ADDRSIZE_GT32          0x00000008
 #define DMP_DESC_EOT                    0x0000000F
@@ -127,6 +133,10 @@
 #define DMP_COMP_PARTNUM_S              8
 #define DMP_COMP_NUM_MPORT              0x000001F0
 #define DMP_COMP_NUM_MPORT_S            4
+#define DMP_COMP_NUM_MWRAP              0x0007C000
+#define DMP_COMP_NUM_MWRAP_S            14
+#define DMP_COMP_NUM_SWRAP              0x00F80000
+#define DMP_COMP_NUM_SWRAP_S            19
 #define DMP_SLAVE_ADDR_BASE             0xFFFFF000
 #define DMP_SLAVE_TYPE                  0x000000C0
 #define DMP_SLAVE_TYPE_S                6
@@ -213,6 +223,10 @@ typedef struct _CYW_DLOAD_DATA
 #define CYW_MFP_CAPABLE                 1
 #define CYW_MFP_REQUIRED                2
 
+#define CYW_CRYPTO_ALGO_OFF             0
+#define CYW_CRYPTO_ALGO_WEP1            1
+#define CYW_CRYPTO_ALGO_TKIP            2
+#define CYW_CRYPTO_ALGO_WEP128          3
 #define CYW_CRYPTO_ALGO_AES_CCM         4
 #define CYW_WSEC_PRIMARY_KEY            2
 
@@ -226,10 +240,16 @@ typedef struct _CYW_DLOAD_DATA
 #define CYW_JOIN_PROBE_INTERVAL_MS      20
 
 #define CYW_FC0_TYPE_DATA               0x08
+#define CYW_FC1_DIR_MASK                0x03
+#define CYW_FC1_TODS                    0x01
 #define CYW_FC1_FROMDS                  0x02
+#define CYW_FC1_PROTECTED               0x40
 #define CYW_SNAP_DSAP                   0xAA
 #define CYW_SNAP_SSAP                   0xAA
 #define CYW_SNAP_CONTROL                0x03
+#define CYW_SNAP_OUI_BRIDGE_TUNNEL      0xF8
+#define ETH_P_AARP                      0x80F3
+#define ETH_P_IPX                       0x8137
 #define ETH_P_EAPOL                     0x888E
 
 #define BRCMF_ESCAN_REQ_VERSION         1
@@ -239,9 +259,13 @@ typedef struct _CYW_DLOAD_DATA
 #define WL_ESCAN_ACTION_ABORT           3
 #define CYW_ESCAN_SYNCID                0x1234
 
+#define DOT11_BSSTYPE_INFRASTRUCTURE    0
+#define DOT11_BSSTYPE_INDEPENDENT       1
 #define DOT11_BSSTYPE_ANY               2
 #define BRCMF_SCANTYPE_ACTIVE           0
 #define BRCMF_SCANTYPE_PASSIVE          1
+#define BRCMF_SCAN_PARAMS_NSSID_SHIFT   16
+#define CYW_SCAN_MAX_SSIDS              10
 
 #define BRCMF_E_SET_SSID                0
 #define BRCMF_E_JOIN                    1
@@ -286,6 +310,7 @@ typedef struct _CYW_DLOAD_DATA
 #define CYW_MTU_SIZE                    1500
 #define CYW_MAX_FRAME_SIZE              DOT11_MAX_PDU_SIZE
 #define CYW_LINK_SPEED_BPS              54000000ULL
+#define CYW_MAX_LINK_SPEED_BPS          433300000ULL
 
 #include <pshpack1.h>
 typedef struct _CYW_BCDC_DCMD
@@ -557,6 +582,7 @@ typedef struct _CYW_RX_BUF
     struct _CYW_RX_BUF *Next;
     PUCHAR Buffer;
     PMDL Mdl;
+    DOT11_EXTSTA_RECV_CONTEXT RecvContext;
 } CYW_RX_BUF, *PCYW_RX_BUF;
 
 /* A persistent nonpaged transfer buffer with a preallocated MDL that is
@@ -610,13 +636,23 @@ typedef struct _CYW_ADAPTER
     KEVENT BusEvent;
     LIST_ENTRY TxQueue;
     KSPIN_LOCK TxLock;
+    volatile LONG OutstandingTxNbls;
+    KEVENT TxDrainEvent;
     ULONG CtrlResponseLen;
-    BOOLEAN BusThreadRunning;
+    volatile LONG CtrlResponseStatus;
+    volatile LONG ExpectedBcdcRequestId;
+    volatile LONG ExpectedBcdcCommand;
+    volatile LONG BusThreadRunning;
+    KEVENT BusThreadExited;
     KMUTEX F2Lock;
     KMUTEX CmdLock;
+    KMUTEX ConnectLock;
+    KMUTEX BackplaneLock;
     NDIS_HANDLE RxNblPool;
     PCYW_RX_BUF RxBufFree;
     KSPIN_LOCK RxBufLock;
+    volatile LONG OutstandingRxNbls;
+    KEVENT RxDrainEvent;
 
     UCHAR PermanentAddress[CYW_ADDRESS_LENGTH];
     UCHAR CurrentAddress[CYW_ADDRESS_LENGTH];
@@ -624,6 +660,8 @@ typedef struct _CYW_ADAPTER
     DOT11_PHY_TYPE CurrentPhyType;
     ULONG CurrentOperationMode;
     ULONG PacketFilter;
+    ULONG Dot11PacketFilter;
+    ULONG AutoConfigEnabled;
     BOOLEAN RadioOn;
 
     NDIS_SPIN_LOCK Lock;
@@ -645,24 +683,28 @@ typedef struct _CYW_ADAPTER
     UCHAR SaePassword[CYW_SAE_PASSWORD_MAX];
     ULONG SaePasswordLen;
     UCHAR ConnectedBssid[CYW_ADDRESS_LENGTH];
+    ULONG ConnectedChannelFrequency;
+    LONG ConnectedRssi;
+    ULONG CurrentRateUnits500Kbps;
     BOOLEAN Associated;
     BOOLEAN LinkUp;
     PNDIS_OID_REQUEST PendingConnectOid;
 
-    ULONG64 TxOkCount;
-    ULONG64 TxErrCount;
-    ULONG64 RxOkCount;
+    volatile LONG64 TxOkCount;
+    volatile LONG64 TxErrCount;
+    volatile LONG64 RxOkCount;
 
     PVOID BusThread;
     volatile LONG BusThreadStop;
 
-    NDIS_HANDLE InterruptWorkItem;
     volatile LONG ScanWorkQueued;
-    NDIS_HANDLE ConnectWorkItem;
-    NDIS_HANDLE LinkWorkItem;
+    KSPIN_LOCK WorkItemLock;
     volatile LONG WorkItemsPending;
-    BOOLEAN Halting;
-    BOOLEAN CardIntRegistered;
+    KEVENT WorkItemsDrainedEvent;
+    volatile LONG Paused;
+    volatile LONG Halting;
+    volatile LONG CardIntRegistered;
+    volatile LONG CardInterruptPending;
 } CYW_ADAPTER, *PCYW_ADAPTER;
 
 DRIVER_INITIALIZE DriverEntry;
@@ -712,6 +754,8 @@ NTSTATUS CywFilIovarSetInt(_In_ PCYW_ADAPTER Adapter, _In_ PCSTR Name, _In_ ULON
 NTSTATUS CywActivateEvents(_In_ PCYW_ADAPTER Adapter);
 NTSTATUS CywQueryRssi(_In_ PCYW_ADAPTER Adapter, _Out_ PLONG Rssi);
 NTSTATUS CywQueryRate(_In_ PCYW_ADAPTER Adapter, _Out_ PULONG RateUnits500Kbps);
+ULONG CywChannelToFrequency(_In_ ULONG Channel);
+UCHAR CywDataRateIndexFromUnits(_In_ ULONG RateUnits500Kbps);
 
 
 NTSTATUS CywScanStart(_In_ PCYW_ADAPTER Adapter, _In_reads_bytes_opt_(RequestLength) PDOT11_SCAN_REQUEST_V2 Request, _In_ ULONG RequestLength);
@@ -721,6 +765,10 @@ NTSTATUS CywSdpcmSendNb(_In_ PCYW_ADAPTER Adapter, _In_ PNET_BUFFER Nb);
 ULONG CywBuildEthFromNbl(_In_ PNET_BUFFER Nb, _Out_writes_(Capacity) PUCHAR Dest, _In_ ULONG Capacity);
 BOOLEAN CywTxAllowed(_In_ PCYW_ADAPTER Adapter, _In_reads_(EthLen) PUCHAR Eth, _In_ ULONG EthLen);
 PNET_BUFFER_LIST CywRxData(_In_ PCYW_ADAPTER Adapter, _In_ PUCHAR Body, _In_ ULONG BodyLen);
+PCYW_RX_BUF CywAcquireRxBuffer(_In_ PCYW_ADAPTER Adapter);
+VOID CywReleaseRxBuffer(_In_ PCYW_ADAPTER Adapter, _In_ PCYW_RX_BUF RxBuffer);
+BOOLEAN CywQueueWorkItem(_In_ PCYW_ADAPTER Adapter, _In_ NDIS_IO_WORKITEM_ROUTINE Routine, _In_opt_ PVOID Context);
+VOID CywCompleteWorkItem(_In_ PCYW_ADAPTER Adapter, _In_ NDIS_HANDLE WorkItem);
 NTSTATUS CywStartBusThread(_In_ PCYW_ADAPTER Adapter);
 VOID CywStopBusThread(_In_ PCYW_ADAPTER Adapter);
 VOID CywDrainTxQueue(_In_ PCYW_ADAPTER Adapter);
@@ -733,11 +781,12 @@ VOID CywIndicateLinkState(_In_ PCYW_ADAPTER Adapter, _In_ BOOLEAN Connected, _In
 VOID CywIndicateDisassociation(_In_ PCYW_ADAPTER Adapter);
 VOID CywIndicateLinkQuality(_In_ PCYW_ADAPTER Adapter);
 VOID CywCompletePendingConnect(_In_ PCYW_ADAPTER Adapter, _In_ NDIS_STATUS Status);
+VOID CywAbortPendingOids(_In_ PCYW_ADAPTER Adapter, _In_ NDIS_STATUS Status);
 VOID CywQueueLinkUpWork(_In_ PCYW_ADAPTER Adapter);
 NTSTATUS CywConnect(_In_ PCYW_ADAPTER Adapter);
 VOID CywQueueConnectWork(_In_ PCYW_ADAPTER Adapter);
 NTSTATUS CywDisconnect(_In_ PCYW_ADAPTER Adapter);
-NTSTATUS CywSetKey(_In_ PCYW_ADAPTER Adapter, _In_ BOOLEAN Pairwise, _In_opt_ PUCHAR Ea, _In_ PUCHAR Key, _In_ ULONG KeyLen, _In_ ULONG KeyIndex);
+NTSTATUS CywSetKey(_In_ PCYW_ADAPTER Adapter, _In_ BOOLEAN Pairwise, _In_opt_ PUCHAR Ea, _In_ DOT11_CIPHER_ALGORITHM Algorithm, _In_ BOOLEAN Delete, _In_reads_bytes_opt_(KeyLen) PUCHAR Key, _In_ ULONG KeyLen, _In_ ULONG KeyIndex);
 
 PVOID CywAllocate(_In_ ULONG Size);
 VOID CywFree(_In_ PVOID Buffer);
