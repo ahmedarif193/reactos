@@ -1113,7 +1113,6 @@ NdisCopyFromNetBufferToNetBuffer(
     PMDL SourceMdl;
     ULONG DestinationMdlOffset;
     ULONG SourceMdlOffset;
-    ULONG SourceRemaining;
 
     if (BytesCopied == NULL)
         return NDIS_STATUS_INVALID_PARAMETER;
@@ -1122,8 +1121,6 @@ NdisCopyFromNetBufferToNetBuffer(
     if (Destination == NULL || Source == NULL)
         return NDIS_STATUS_INVALID_PARAMETER;
     if (BytesToCopy == 0)
-        return NDIS_STATUS_SUCCESS;
-    if (SourceOffset >= Source->DataLength)
         return NDIS_STATUS_SUCCESS;
 
     DestinationMdl = Destination->CurrentMdl;
@@ -1140,8 +1137,10 @@ NdisCopyFromNetBufferToNetBuffer(
         return NDIS_STATUS_SUCCESS;
     }
 
-    SourceRemaining = Source->DataLength - SourceOffset;
-    while (*BytesCopied < BytesToCopy && SourceRemaining != 0 &&
+    /* NDIS copies through the available MDL ranges. DataLength describes the
+     * current packet view, but does not bound this primitive while a caller is
+     * constructing or extending a view. */
+    while (*BytesCopied < BytesToCopy &&
            SourceMdl != NULL && DestinationMdl != NULL)
     {
         ULONG DestinationMdlLength = MmGetMdlByteCount(DestinationMdl);
@@ -1173,7 +1172,6 @@ NdisCopyFromNetBufferToNetBuffer(
         DestinationAvailable = DestinationMdlLength - DestinationMdlOffset;
         SourceAvailable = SourceMdlLength - SourceMdlOffset;
         CopyLength = min(DestinationAvailable, SourceAvailable);
-        CopyLength = min(CopyLength, SourceRemaining);
         CopyLength = min(CopyLength, BytesToCopy - *BytesCopied);
 
         DestinationVa = (PUCHAR)MmGetSystemAddressForMdlSafe(
@@ -1188,7 +1186,6 @@ NdisCopyFromNetBufferToNetBuffer(
                       CopyLength);
         DestinationMdlOffset += CopyLength;
         SourceMdlOffset += CopyLength;
-        SourceRemaining -= CopyLength;
         *BytesCopied += CopyLength;
     }
 
