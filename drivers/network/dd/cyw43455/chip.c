@@ -25,6 +25,12 @@ CywReadFile(
     NTSTATUS Status;
     PUCHAR Data;
     ULONG Length;
+    ULONG AllocationSize;
+
+    if (Path == NULL || Buffer == NULL || Size == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
     *Buffer = NULL;
     *Size = 0;
@@ -53,7 +59,13 @@ CywReadFile(
     }
 
     Length = FileInfo.EndOfFile.LowPart;
-    Data = CywAllocate(ALIGN_UP(Length, ULONG));
+    if (Length > MAXULONG - (sizeof(ULONG) - 1))
+    {
+        ZwClose(Handle);
+        return STATUS_FILE_TOO_LARGE;
+    }
+    AllocationSize = ALIGN_UP(Length, ULONG);
+    Data = CywAllocate(AllocationSize);
     if (Data == NULL)
     {
         ZwClose(Handle);
@@ -62,10 +74,10 @@ CywReadFile(
 
     Status = ZwReadFile(Handle, NULL, NULL, NULL, &IoStatus, Data, Length, NULL, NULL);
     ZwClose(Handle);
-    if (!NT_SUCCESS(Status))
+    if (!NT_SUCCESS(Status) || IoStatus.Information != Length)
     {
         CywFree(Data);
-        return Status;
+        return NT_SUCCESS(Status) ? STATUS_END_OF_FILE : Status;
     }
 
     *Buffer = Data;
@@ -78,41 +90,43 @@ NTSTATUS
 CywClockRequest(
     _In_ PCYW_ADAPTER Adapter,
     _In_ UCHAR Request,
-    _In_ UCHAR AvailMask)
+    _In_ UCHAR AvailMask,
+    _In_ ULONG TimeoutMilliseconds)
 {
     NTSTATUS Status;
     UCHAR Csr;
     ULONG Retry;
+    LARGE_INTEGER Delay;
 
-    Status = CywSdioReadByte(Adapter, CYW_SDIO_FUNC_BACKPLANE,
-                             SBSDIO_FUNC1_CHIPCLKCSR, &Csr);
-    if (!NT_SUCCESS(Status))
+    if (Adapter == NULL ||
+        (Request & ~(SBSDIO_CSR_MASK | SBSDIO_FORCE_HW_CLKREQ_OFF)) != 0 ||
+        (AvailMask & ~SBSDIO_AVAIL_MASK) != 0 ||
+        TimeoutMilliseconds == 0)
     {
-        return Status;
+        return STATUS_INVALID_PARAMETER;
     }
 
-    Csr |= Request;
     Status = CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BACKPLANE,
-                              SBSDIO_FUNC1_CHIPCLKCSR, Csr);
+                              SBSDIO_FUNC1_CHIPCLKCSR, Request);
     if (!NT_SUCCESS(Status))
     {
         return Status;
     }
 
-    if (AvailMask == 0)
-    {
-        return STATUS_SUCCESS;
-    }
-
-    for (Retry = 0; Retry < 5000; Retry++)
+    for (Retry = 0; Retry < TimeoutMilliseconds; Retry++)
     {
         Status = CywSdioReadByte(Adapter, CYW_SDIO_FUNC_BACKPLANE,
                                  SBSDIO_FUNC1_CHIPCLKCSR, &Csr);
-        if (NT_SUCCESS(Status) && (Csr & AvailMask))
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+        if ((Csr & AvailMask) == AvailMask)
         {
             return STATUS_SUCCESS;
         }
-        KeStallExecutionProcessor(200);
+        Delay.QuadPart = -10000LL;
+        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
     }
 
     return STATUS_DEVICE_NOT_READY;
@@ -124,8 +138,37 @@ CywChipRecognize(
 {
     NTSTATUS Status;
     ULONG RegData;
+    UCHAR Csr;
 
-    CywClockRequest(Adapter, SBSDIO_ALP_AVAIL_REQ, SBSDIO_ALP_AVAIL);
+    Status = CywClockRequest(Adapter,
+                             SBSDIO_FORCE_HW_CLKREQ_OFF | SBSDIO_ALP_AVAIL_REQ,
+                             SBSDIO_ALP_AVAIL,
+                             1000);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    Status = CywSdioReadByte(Adapter, CYW_SDIO_FUNC_BACKPLANE,
+                             SBSDIO_FUNC1_CHIPCLKCSR, &Csr);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+    if ((Csr & ~SBSDIO_AVAIL_MASK) !=
+        (SBSDIO_FORCE_HW_CLKREQ_OFF | SBSDIO_ALP_AVAIL_REQ))
+    {
+        return STATUS_DEVICE_DATA_ERROR;
+    }
+
+    Status = CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BACKPLANE,
+                              SBSDIO_FUNC1_CHIPCLKCSR,
+                              SBSDIO_FORCE_HW_CLKREQ_OFF | SBSDIO_FORCE_ALP);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+    KeStallExecutionProcessor(65);
 
     Status = CywBackplaneReadl(Adapter, SI_ENUM_BASE_DEFAULT, &RegData);
     if (!NT_SUCCESS(Status))
@@ -148,17 +191,27 @@ CywChipRecognize(
 static
 NTSTATUS
 CywDownloadNvram(
-    _In_ PCYW_ADAPTER Adapter)
+    _In_ PCYW_ADAPTER Adapter,
+    _In_ ULONG FirmwareSize)
 {
     NTSTATUS Status;
     PUCHAR Raw;
     PUCHAR Stripped;
     ULONG RawSize;
+    ULONG AllocationSize;
     ULONG OutLen;
     ULONG Words;
     ULONG Token;
+    ULONG RamEnd;
+    ULONG NvramAddress;
+    ULONG NvramSize;
     ULONG i;
-    ULONG j;
+
+    if (Adapter == NULL || Adapter->ControlBuffer == NULL ||
+        Adapter->RamSize == 0 || FirmwareSize == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
     Status = CywReadFile(CYW_FW_DIR CYW_FW_NVRAM, &Raw, &RawSize);
     if (!NT_SUCCESS(Status))
@@ -166,7 +219,13 @@ CywDownloadNvram(
         return Status;
     }
 
-    Stripped = CywAllocate(RawSize + 8);
+    if (RawSize > MAXULONG - 8)
+    {
+        CywFree(Raw);
+        return STATUS_INTEGER_OVERFLOW;
+    }
+    AllocationSize = RawSize + 8;
+    Stripped = CywAllocate(AllocationSize);
     if (Stripped == NULL)
     {
         CywFree(Raw);
@@ -201,10 +260,18 @@ CywDownloadNvram(
         }
         Stripped[OutLen++] = Raw[i++];
     }
-    if (OutLen == 0 || Stripped[OutLen - 1] != '\0')
+    if (OutLen == 0)
+    {
+        Status = STATUS_DEVICE_DATA_ERROR;
+        goto Cleanup;
+    }
+    if (Stripped[OutLen - 1] != '\0')
     {
         Stripped[OutLen++] = '\0';
     }
+
+    /* The firmware variable table is terminated by an additional NUL. */
+    Stripped[OutLen++] = '\0';
 
     while ((OutLen % 4) != 0)
     {
@@ -212,16 +279,37 @@ CywDownloadNvram(
     }
 
     Words = OutLen / 4;
+    if (Words > MAXUSHORT || OutLen > MAXULONG - sizeof(Token))
+    {
+        Status = STATUS_INTEGER_OVERFLOW;
+        goto Cleanup;
+    }
     Token = CYW_NVRAM_TOKEN(Words);
 
-    j = Adapter->RamBase + Adapter->RamSize - OutLen - 4;
-    Status = CywRamWrite(Adapter, j, Stripped, OutLen);
+    NvramSize = OutLen + sizeof(Token);
+    if (Adapter->RamBase > MAXULONG - Adapter->RamSize ||
+        Adapter->RamSize < NvramSize)
+    {
+        Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        goto Cleanup;
+    }
+    RamEnd = Adapter->RamBase + Adapter->RamSize;
+    NvramAddress = RamEnd - NvramSize;
+    if (FirmwareSize > NvramAddress - Adapter->RamBase)
+    {
+        Status = STATUS_BUFFER_OVERFLOW;
+        goto Cleanup;
+    }
+
+    Status = CywRamWrite(Adapter, NvramAddress, Stripped, OutLen);
     if (NT_SUCCESS(Status))
     {
         ((PULONG)Adapter->ControlBuffer)[0] = Token;
-        Status = CywRamWrite(Adapter, j + OutLen, Adapter->ControlBuffer, sizeof(Token));
+        Status = CywRamWrite(Adapter, NvramAddress + OutLen,
+                             Adapter->ControlBuffer, sizeof(Token));
     }
 
+Cleanup:
     CywFree(Stripped);
     CywFree(Raw);
     return Status;
@@ -239,10 +327,21 @@ CywDownloadClm(
     ULONG HdrSize = FIELD_OFFSET(CYW_DLOAD_DATA, Data);
     ULONG Offset;
 
+    if (Adapter == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
     Status = CywReadFile(CYW_FW_DIR CYW_FW_CLM, &Blob, &BlobSize);
     if (!NT_SUCCESS(Status))
     {
-        return STATUS_SUCCESS;
+        if (Status == STATUS_OBJECT_NAME_NOT_FOUND ||
+            Status == STATUS_OBJECT_PATH_NOT_FOUND ||
+            Status == STATUS_NO_SUCH_FILE)
+        {
+            return STATUS_SUCCESS;
+        }
+        return Status;
     }
 
     Chunk = CywAllocate(HdrSize + CYW_CLM_CHUNK_LEN);
@@ -298,13 +397,26 @@ CywChipDownloadFirmware(
     PUCHAR FwImage;
     ULONG FwSize;
 
+    if (Adapter == NULL || Adapter->RamSize == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
     Status = CywReadFile(CYW_FW_DIR CYW_FW_BIN, &FwImage, &FwSize);
     if (!NT_SUCCESS(Status))
     {
         return Status;
     }
 
-    Adapter->RstVec = ((PULONG)FwImage)[0];
+    if (FwSize < sizeof(Adapter->RstVec) ||
+        FwSize > Adapter->RamSize ||
+        Adapter->RamBase > MAXULONG - FwSize)
+    {
+        CywFree(FwImage);
+        return STATUS_INVALID_IMAGE_FORMAT;
+    }
+
+    RtlCopyMemory(&Adapter->RstVec, FwImage, sizeof(Adapter->RstVec));
 
     Status = CywRamWrite(Adapter, Adapter->RamBase, FwImage, FwSize);
     CywFree(FwImage);
@@ -313,12 +425,175 @@ CywChipDownloadFirmware(
         return Status;
     }
 
-    if (Adapter->RamSize > 0)
+    return CywDownloadNvram(Adapter, FwSize);
+}
+
+#define CYW_EROM_MAX_DESCRIPTORS 4096
+
+static
+ULONG
+CywEromDescriptorType(
+    _In_ ULONG Descriptor)
+{
+    ULONG Type = Descriptor & DMP_DESC_TYPE_MSK;
+
+    if ((Type & ~DMP_DESC_ADDRSIZE_GT32) == DMP_DESC_ADDRESS)
     {
-        Status = CywDownloadNvram(Adapter);
+        return DMP_DESC_ADDRESS;
+    }
+    return Type;
+}
+
+static
+NTSTATUS
+CywEromReadDescriptor(
+    _In_ PCYW_ADAPTER Adapter,
+    _Inout_ PULONG EromAddress,
+    _Inout_ PULONG Remaining,
+    _Out_ PULONG Descriptor)
+{
+    NTSTATUS Status;
+
+    if (Adapter == NULL || EromAddress == NULL || Remaining == NULL ||
+        Descriptor == NULL || *Remaining == 0 || (*EromAddress & 3) != 0 ||
+        *EromAddress > MAXULONG - sizeof(ULONG))
+    {
+        return STATUS_DEVICE_DATA_ERROR;
     }
 
-    return STATUS_SUCCESS;
+    Status = CywBackplaneReadl(Adapter, *EromAddress, Descriptor);
+    if (NT_SUCCESS(Status))
+    {
+        *EromAddress += sizeof(ULONG);
+        (*Remaining)--;
+    }
+    return Status;
+}
+
+static
+NTSTATUS
+CywEromGetCoreBases(
+    _In_ PCYW_ADAPTER Adapter,
+    _Inout_ PULONG EromAddress,
+    _Inout_ PULONG Remaining,
+    _Out_ PULONG RegisterBase,
+    _Out_ PULONG WrapperBase)
+{
+    NTSTATUS Status;
+    ULONG Descriptor;
+    ULONG DescriptorType;
+    ULONG AddressHigh;
+    ULONG SizeDescriptor;
+    ULONG SizeType;
+    ULONG SlaveType;
+    ULONG WrapperType;
+
+    *RegisterBase = 0;
+    *WrapperBase = 0;
+
+    Status = CywEromReadDescriptor(Adapter, EromAddress, Remaining,
+                                   &Descriptor);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    DescriptorType = CywEromDescriptorType(Descriptor);
+    if (DescriptorType == DMP_DESC_MASTER_PORT)
+    {
+        WrapperType = DMP_SLAVE_TYPE_MWRAP;
+    }
+    else if (DescriptorType == DMP_DESC_ADDRESS)
+    {
+        *EromAddress -= sizeof(ULONG);
+        WrapperType = DMP_SLAVE_TYPE_SWRAP;
+    }
+    else
+    {
+        *EromAddress -= sizeof(ULONG);
+        return STATUS_NOT_FOUND;
+    }
+
+    while (*Remaining != 0)
+    {
+        do
+        {
+            Status = CywEromReadDescriptor(Adapter, EromAddress, Remaining,
+                                           &Descriptor);
+            if (!NT_SUCCESS(Status))
+            {
+                return Status;
+            }
+            DescriptorType = CywEromDescriptorType(Descriptor);
+            if (DescriptorType == DMP_DESC_EOT)
+            {
+                *EromAddress -= sizeof(ULONG);
+                return STATUS_SUCCESS;
+            }
+        } while (DescriptorType != DMP_DESC_ADDRESS &&
+                 DescriptorType != DMP_DESC_COMPONENT);
+
+        if (DescriptorType == DMP_DESC_COMPONENT)
+        {
+            *EromAddress -= sizeof(ULONG);
+            return STATUS_SUCCESS;
+        }
+
+        AddressHigh = 0;
+        if (Descriptor & DMP_DESC_ADDRSIZE_GT32)
+        {
+            Status = CywEromReadDescriptor(Adapter, EromAddress, Remaining,
+                                           &AddressHigh);
+            if (!NT_SUCCESS(Status))
+            {
+                return Status;
+            }
+        }
+
+        SizeType = (Descriptor & DMP_SLAVE_SIZE_TYPE) >>
+                   DMP_SLAVE_SIZE_TYPE_S;
+        if (SizeType == DMP_SLAVE_SIZE_DESC)
+        {
+            Status = CywEromReadDescriptor(Adapter, EromAddress, Remaining,
+                                           &SizeDescriptor);
+            if (!NT_SUCCESS(Status))
+            {
+                return Status;
+            }
+            if (SizeDescriptor & DMP_DESC_ADDRSIZE_GT32)
+            {
+                Status = CywEromReadDescriptor(Adapter, EromAddress,
+                                               Remaining, &SizeDescriptor);
+                if (!NT_SUCCESS(Status))
+                {
+                    return Status;
+                }
+            }
+        }
+
+        if (AddressHigh != 0 ||
+            (SizeType != DMP_SLAVE_SIZE_4K &&
+             SizeType != DMP_SLAVE_SIZE_8K))
+        {
+            continue;
+        }
+
+        SlaveType = (Descriptor & DMP_SLAVE_TYPE) >> DMP_SLAVE_TYPE_S;
+        if (*RegisterBase == 0 && SlaveType == DMP_SLAVE_TYPE_SLAVE)
+        {
+            *RegisterBase = Descriptor & DMP_SLAVE_ADDR_BASE;
+        }
+        if (*WrapperBase == 0 && SlaveType == WrapperType)
+        {
+            *WrapperBase = Descriptor & DMP_SLAVE_ADDR_BASE;
+        }
+        if (*RegisterBase != 0 && *WrapperBase != 0)
+        {
+            return STATUS_SUCCESS;
+        }
+    }
+
+    return STATUS_DEVICE_DATA_ERROR;
 }
 
 static
@@ -327,127 +602,112 @@ CywChipEnumerateCores(
     _In_ PCYW_ADAPTER Adapter)
 {
     NTSTATUS Status;
-    ULONG EromAddr;
-    ULONG Desc;
-    ULONG DescB;
+    ULONG EromAddress;
+    ULONG Remaining = CYW_EROM_MAX_DESCRIPTORS;
+    ULONG Descriptor;
+    ULONG DescriptorB;
+    ULONG DescriptorType;
     ULONG CoreId;
-    ULONG Nmp;
-    ULONG i;
-    ULONG RegBase;
-    ULONG WrapBase;
+    ULONG MasterWrappers;
+    ULONG SlaveWrappers;
+    ULONG RegisterBase;
+    ULONG WrapperBase;
+    BOOLEAN FoundEnd = FALSE;
 
-    Status = CywBackplaneReadl(Adapter, SI_ENUM_BASE_DEFAULT + CC_EROMPTR, &EromAddr);
+    if (Adapter == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Adapter->Cr4WrapBase = 0;
+    Adapter->SdioCoreBase = 0;
+
+    Status = CywBackplaneReadl(Adapter, SI_ENUM_BASE_DEFAULT + CC_EROMPTR,
+                               &EromAddress);
     if (!NT_SUCCESS(Status))
     {
         return Status;
     }
-
-    for (;;)
+    if (EromAddress == 0 || (EromAddress & 3) != 0)
     {
-        Status = CywBackplaneReadl(Adapter, EromAddr, &Desc);
+        return STATUS_DEVICE_DATA_ERROR;
+    }
+
+    while (Remaining != 0)
+    {
+        Status = CywEromReadDescriptor(Adapter, &EromAddress, &Remaining,
+                                       &Descriptor);
         if (!NT_SUCCESS(Status))
         {
             return Status;
         }
-        EromAddr += 4;
 
-        if ((Desc & DMP_DESC_TYPE_MSK) == DMP_DESC_EOT)
+        DescriptorType = CywEromDescriptorType(Descriptor);
+        if (DescriptorType == DMP_DESC_EOT)
         {
+            FoundEnd = TRUE;
             break;
         }
-        if ((Desc & DMP_DESC_TYPE_MSK) != DMP_DESC_COMPONENT)
+        if (!(Descriptor & DMP_DESC_VALID) ||
+            DescriptorType == DMP_DESC_EMPTY ||
+            DescriptorType != DMP_DESC_COMPONENT)
         {
             continue;
         }
 
-        CoreId = (Desc & DMP_COMP_PARTNUM) >> DMP_COMP_PARTNUM_S;
-
-        Status = CywBackplaneReadl(Adapter, EromAddr, &DescB);
+        CoreId = (Descriptor & DMP_COMP_PARTNUM) >> DMP_COMP_PARTNUM_S;
+        Status = CywEromReadDescriptor(Adapter, &EromAddress, &Remaining,
+                                       &DescriptorB);
         if (!NT_SUCCESS(Status))
         {
             return Status;
         }
-        EromAddr += 4;
-        Nmp = (DescB & DMP_COMP_NUM_MPORT) >> DMP_COMP_NUM_MPORT_S;
-
-        for (i = 0; i < Nmp; i++)
+        if (!(DescriptorB & DMP_DESC_VALID) ||
+            CywEromDescriptorType(DescriptorB) != DMP_DESC_COMPONENT)
         {
-            EromAddr += 4;
+            return STATUS_DEVICE_DATA_ERROR;
         }
 
-        RegBase = 0;
-        WrapBase = 0;
-        for (;;)
+        MasterWrappers = (DescriptorB & DMP_COMP_NUM_MWRAP) >>
+                         DMP_COMP_NUM_MWRAP_S;
+        SlaveWrappers = (DescriptorB & DMP_COMP_NUM_SWRAP) >>
+                        DMP_COMP_NUM_SWRAP_S;
+        if (MasterWrappers + SlaveWrappers == 0)
         {
-            ULONG DescType;
-            ULONG SizeType;
-            ULONG SlaveType;
+            continue;
+        }
 
-            Status = CywBackplaneReadl(Adapter, EromAddr, &Desc);
-            if (!NT_SUCCESS(Status))
-            {
-                return Status;
-            }
-
-            DescType = Desc & DMP_DESC_TYPE_MSK;
-            if (DescType != DMP_DESC_ADDRESS &&
-                DescType != (DMP_DESC_ADDRESS | DMP_DESC_ADDRSIZE_GT32))
-            {
-                break;
-            }
-            EromAddr += 4;
-            if (DescType & DMP_DESC_ADDRSIZE_GT32)
-            {
-                EromAddr += 4;
-            }
-
-            SizeType = (Desc & DMP_SLAVE_SIZE_TYPE) >> DMP_SLAVE_SIZE_TYPE_S;
-            if (SizeType == DMP_SLAVE_SIZE_DESC)
-            {
-                ULONG SizeDesc = 0;
-                CywBackplaneReadl(Adapter, EromAddr, &SizeDesc);
-                EromAddr += 4;
-                if (SizeDesc & DMP_DESC_ADDRSIZE_GT32)
-                {
-                    EromAddr += 4;
-                }
-                continue;
-            }
-            if (SizeType != DMP_SLAVE_SIZE_4K && SizeType != DMP_SLAVE_SIZE_8K)
-            {
-                continue;
-            }
-
-            SlaveType = (Desc & DMP_SLAVE_TYPE) >> DMP_SLAVE_TYPE_S;
-            if (SlaveType == DMP_SLAVE_TYPE_SLAVE)
-            {
-                if (RegBase == 0)
-                {
-                    RegBase = Desc & DMP_SLAVE_ADDR_BASE;
-                }
-            }
-            else if (SlaveType == DMP_SLAVE_TYPE_MWRAP ||
-                     SlaveType == DMP_SLAVE_TYPE_SWRAP)
-            {
-                if (WrapBase == 0)
-                {
-                    WrapBase = Desc & DMP_SLAVE_ADDR_BASE;
-                }
-            }
+        Status = CywEromGetCoreBases(Adapter, &EromAddress, &Remaining,
+                                     &RegisterBase, &WrapperBase);
+        if (Status == STATUS_NOT_FOUND)
+        {
+            continue;
+        }
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
         }
 
         if (CoreId == BCMA_CORE_ARM_CR4)
         {
-            Adapter->Cr4WrapBase = WrapBase;
+            if (WrapperBase == 0 || Adapter->Cr4WrapBase != 0)
+            {
+                return STATUS_DEVICE_CONFIGURATION_ERROR;
+            }
+            Adapter->Cr4WrapBase = WrapperBase;
         }
-
-        if (CoreId == BCMA_CORE_SDIO_DEV)
+        else if (CoreId == BCMA_CORE_SDIO_DEV)
         {
-            Adapter->SdioCoreBase = RegBase;
+            if (RegisterBase == 0 || Adapter->SdioCoreBase != 0)
+            {
+                return STATUS_DEVICE_CONFIGURATION_ERROR;
+            }
+            Adapter->SdioCoreBase = RegisterBase;
         }
     }
 
-    if (Adapter->Cr4WrapBase == 0)
+    if (!FoundEnd || Adapter->Cr4WrapBase == 0 ||
+        Adapter->SdioCoreBase == 0)
     {
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
@@ -455,7 +715,80 @@ CywChipEnumerateCores(
 }
 
 static
-VOID
+NTSTATUS
+CywChipDisableCore(
+    _In_ PCYW_ADAPTER Adapter,
+    _In_ ULONG WrapBase,
+    _In_ ULONG Prereset,
+    _In_ ULONG Reset)
+{
+    NTSTATUS Status;
+    ULONG Value;
+    ULONG Count;
+
+    if (Adapter == NULL || WrapBase == 0 ||
+        WrapBase > MAXULONG - BCMA_RESET_CTL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = CywBackplaneReadl(Adapter, WrapBase + BCMA_RESET_CTL, &Value);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    if (!(Value & BCMA_RESET_CTL_RESET))
+    {
+        Status = CywBackplaneWritel(Adapter, WrapBase + BCMA_IOCTL,
+                                    Prereset | SICF_FGC | SICF_CLOCK_EN);
+        if (NT_SUCCESS(Status))
+        {
+            Status = CywBackplaneReadl(Adapter, WrapBase + BCMA_IOCTL,
+                                       &Value);
+        }
+        if (NT_SUCCESS(Status))
+        {
+            Status = CywBackplaneWritel(Adapter, WrapBase + BCMA_RESET_CTL,
+                                        BCMA_RESET_CTL_RESET);
+        }
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+
+        KeStallExecutionProcessor(10);
+        for (Count = 0; Count < 30; Count++)
+        {
+            Status = CywBackplaneReadl(Adapter,
+                                       WrapBase + BCMA_RESET_CTL, &Value);
+            if (!NT_SUCCESS(Status))
+            {
+                return Status;
+            }
+            if (Value & BCMA_RESET_CTL_RESET)
+            {
+                break;
+            }
+            KeStallExecutionProcessor(10);
+        }
+        if (!(Value & BCMA_RESET_CTL_RESET))
+        {
+            return STATUS_DEVICE_NOT_READY;
+        }
+    }
+
+    Status = CywBackplaneWritel(Adapter, WrapBase + BCMA_IOCTL,
+                                Reset | SICF_FGC | SICF_CLOCK_EN);
+    if (NT_SUCCESS(Status))
+    {
+        Status = CywBackplaneReadl(Adapter, WrapBase + BCMA_IOCTL, &Value);
+    }
+    return Status;
+}
+
+static
+NTSTATUS
 CywChipResetCore(
     _In_ PCYW_ADAPTER Adapter,
     _In_ ULONG WrapBase,
@@ -463,85 +796,97 @@ CywChipResetCore(
     _In_ ULONG Reset,
     _In_ ULONG Postreset)
 {
-    ULONG Val = 0;
+    NTSTATUS Status;
+    ULONG Value;
     ULONG Count;
 
-    CywBackplaneReadl(Adapter, WrapBase + BCMA_RESET_CTL, &Val);
-    if (!(Val & BCMA_RESET_CTL_RESET))
+    Status = CywChipDisableCore(Adapter, WrapBase, Prereset, Reset);
+    if (!NT_SUCCESS(Status))
     {
-        CywBackplaneWritel(Adapter, WrapBase + BCMA_IOCTL, Prereset | SICF_FGC | SICF_CLOCK_EN);
-        CywBackplaneReadl(Adapter, WrapBase + BCMA_IOCTL, &Val);
-
-        CywBackplaneWritel(Adapter, WrapBase + BCMA_RESET_CTL, BCMA_RESET_CTL_RESET);
-        CywBackplaneReadl(Adapter, WrapBase + BCMA_RESET_CTL, &Val);
-        KeStallExecutionProcessor(10);
-
-        CywBackplaneWritel(Adapter, WrapBase + BCMA_IOCTL, Reset | SICF_FGC | SICF_CLOCK_EN);
-        CywBackplaneReadl(Adapter, WrapBase + BCMA_IOCTL, &Val);
+        return Status;
     }
 
-    Count = 0;
-    for (;;)
+    for (Count = 0; Count <= 50; Count++)
     {
-        CywBackplaneReadl(Adapter, WrapBase + BCMA_RESET_CTL, &Val);
-        if (!(Val & BCMA_RESET_CTL_RESET))
+        Status = CywBackplaneReadl(Adapter, WrapBase + BCMA_RESET_CTL,
+                                   &Value);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+        if (!(Value & BCMA_RESET_CTL_RESET))
         {
             break;
         }
-        CywBackplaneWritel(Adapter, WrapBase + BCMA_RESET_CTL, 0);
-        CywBackplaneReadl(Adapter, WrapBase + BCMA_RESET_CTL, &Val);
-        KeStallExecutionProcessor(10);
-        if (++Count >= 50)
+        if (Count == 50)
         {
-            break;
+            return STATUS_DEVICE_NOT_READY;
         }
+
+        Status = CywBackplaneWritel(Adapter, WrapBase + BCMA_RESET_CTL, 0);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+        KeStallExecutionProcessor(50);
     }
 
-    CywBackplaneWritel(Adapter, WrapBase + BCMA_IOCTL, Postreset | SICF_CLOCK_EN);
-    CywBackplaneReadl(Adapter, WrapBase + BCMA_IOCTL, &Val);
-    KeStallExecutionProcessor(10);
-}
-
-static
-VOID
-CywChipDisableCore(
-    _In_ PCYW_ADAPTER Adapter,
-    _In_ ULONG WrapBase,
-    _In_ ULONG Prereset,
-    _In_ ULONG Reset)
-{
-    ULONG Val = 0;
-
-    CywBackplaneReadl(Adapter, WrapBase + BCMA_RESET_CTL, &Val);
-    if (Val & BCMA_RESET_CTL_RESET)
+    Status = CywBackplaneWritel(Adapter, WrapBase + BCMA_IOCTL,
+                                Postreset | SICF_CLOCK_EN);
+    if (NT_SUCCESS(Status))
     {
-        CywBackplaneWritel(Adapter, WrapBase + BCMA_IOCTL, Reset | SICF_FGC | SICF_CLOCK_EN);
-        CywBackplaneReadl(Adapter, WrapBase + BCMA_IOCTL, &Val);
-        return;
+        Status = CywBackplaneReadl(Adapter, WrapBase + BCMA_IOCTL, &Value);
     }
-
-    CywBackplaneWritel(Adapter, WrapBase + BCMA_IOCTL, Prereset | SICF_FGC | SICF_CLOCK_EN);
-    CywBackplaneReadl(Adapter, WrapBase + BCMA_IOCTL, &Val);
-
-    CywBackplaneWritel(Adapter, WrapBase + BCMA_RESET_CTL, BCMA_RESET_CTL_RESET);
-    CywBackplaneReadl(Adapter, WrapBase + BCMA_RESET_CTL, &Val);
-    KeStallExecutionProcessor(10);
-
-    CywBackplaneWritel(Adapter, WrapBase + BCMA_IOCTL, Reset | SICF_FGC | SICF_CLOCK_EN);
-    CywBackplaneReadl(Adapter, WrapBase + BCMA_IOCTL, &Val);
-    KeStallExecutionProcessor(1);
+    if (NT_SUCCESS(Status))
+    {
+        KeStallExecutionProcessor(10);
+    }
+    return Status;
 }
 
 static
-VOID
+NTSTATUS
 CywChipSetActive(
     _In_ PCYW_ADAPTER Adapter,
     _In_ ULONG Rstvec)
 {
-    ((PULONG)Adapter->ControlBuffer)[0] = Rstvec;
-    CywRamWrite(Adapter, 0, Adapter->ControlBuffer, 4);
+    NTSTATUS Status;
 
-    CywChipResetCore(Adapter, Adapter->Cr4WrapBase, ARMCR4_BCMA_IOCTL_CPUHALT, 0, 0);
+    if (Adapter == NULL || Adapter->ControlBuffer == NULL ||
+        Adapter->Cr4WrapBase == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    ((PULONG)Adapter->ControlBuffer)[0] = Rstvec;
+    Status = CywRamWrite(Adapter, 0, Adapter->ControlBuffer, sizeof(Rstvec));
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    return CywChipResetCore(Adapter, Adapter->Cr4WrapBase,
+                            ARMCR4_BCMA_IOCTL_CPUHALT, 0, 0);
+}
+
+static
+BOOLEAN
+CywIsValidEthernetAddress(
+    _In_reads_(CYW_ADDRESS_LENGTH) const UCHAR *Address)
+{
+    UCHAR Nonzero = 0;
+    ULONG Index;
+
+    if (Address == NULL || (Address[0] & 1) != 0)
+    {
+        return FALSE;
+    }
+
+    for (Index = 0; Index < CYW_ADDRESS_LENGTH; Index++)
+    {
+        Nonzero |= Address[Index];
+    }
+    return Nonzero != 0;
 }
 
 static
@@ -551,6 +896,13 @@ CywSetCountry(
     _In_ PCSTR Alpha2)
 {
     CYW_COUNTRY_LE Cc;
+
+    if (Adapter == NULL || Alpha2 == NULL ||
+        Alpha2[0] < 'A' || Alpha2[0] > 'Z' ||
+        Alpha2[1] < 'A' || Alpha2[1] > 'Z' || Alpha2[2] != ANSI_NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
     RtlZeroMemory(&Cc, sizeof(Cc));
     Cc.Rev = -1;
@@ -566,7 +918,12 @@ CywChipBringUp(
     _In_ PCYW_ADAPTER Adapter)
 {
     NTSTATUS Status;
-    ULONG IntStatus;
+    UCHAR InterruptEnable;
+
+    if (Adapter == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
     Status = CywSdioSetBlockSize(Adapter, CYW_SDIO_FUNC_BACKPLANE, CYW_F1_BLOCKSIZE);
     if (!NT_SUCCESS(Status))
@@ -596,9 +953,23 @@ CywChipBringUp(
 
     {
         ULONG Cr4Ioctl;
-        CywBackplaneReadl(Adapter, Adapter->Cr4WrapBase + BCMA_IOCTL, &Cr4Ioctl);
-        Cr4Ioctl |= ARMCR4_BCMA_IOCTL_CPUHALT;
-        CywBackplaneWritel(Adapter, Adapter->Cr4WrapBase + BCMA_IOCTL, Cr4Ioctl);
+
+        Status = CywBackplaneReadl(Adapter,
+                                   Adapter->Cr4WrapBase + BCMA_IOCTL,
+                                   &Cr4Ioctl);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+        Cr4Ioctl &= ARMCR4_BCMA_IOCTL_CPUHALT;
+        Status = CywChipResetCore(Adapter, Adapter->Cr4WrapBase,
+                                  Cr4Ioctl,
+                                  ARMCR4_BCMA_IOCTL_CPUHALT,
+                                  ARMCR4_BCMA_IOCTL_CPUHALT);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
     }
 
     Status = CywChipDownloadFirmware(Adapter);
@@ -607,20 +978,51 @@ CywChipBringUp(
         return Status;
     }
 
-    CywChipSetActive(Adapter, Adapter->RstVec);
+    Status = CywChipSetActive(Adapter, Adapter->RstVec);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
 
-    CywClockRequest(Adapter, SBSDIO_HT_AVAIL_REQ, SBSDIO_HT_AVAIL);
+    Status = CywClockRequest(Adapter, SBSDIO_HT_AVAIL_REQ,
+                             SBSDIO_AVAIL_MASK, 1000);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
 
     {
-        UCHAR Devctl = 0;
-        CywSdioReadByte(Adapter, CYW_SDIO_FUNC_BACKPLANE, SBSDIO_DEVICE_CTL, &Devctl);
+        UCHAR Devctl;
+
+        Status = CywSdioReadByte(Adapter, CYW_SDIO_FUNC_BACKPLANE,
+                                 SBSDIO_DEVICE_CTL, &Devctl);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
         Devctl |= SBSDIO_DEVCTL_F2WM_ENAB;
-        CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BACKPLANE, SBSDIO_DEVICE_CTL, Devctl);
+        Status = CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BACKPLANE,
+                                  SBSDIO_DEVICE_CTL, Devctl);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
     }
-    CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BACKPLANE, SBSDIO_FUNC1_WATERMARK,
-                     CY_43455_F2_WATERMARK);
-    CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BACKPLANE, SBSDIO_FUNC1_MESBUSYCTRL,
-                     CY_43455_MES_WATERMARK | SBSDIO_MESBUSYCTRL_ENAB);
+    Status = CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BACKPLANE,
+                              SBSDIO_FUNC1_WATERMARK,
+                              CY_43455_F2_WATERMARK);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+    Status = CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BACKPLANE,
+                              SBSDIO_FUNC1_MESBUSYCTRL,
+                              CY_43455_MES_WATERMARK |
+                              SBSDIO_MESBUSYCTRL_ENAB);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
 
     Status = CywSdioSetBlockSize(Adapter, CYW_SDIO_FUNC_RADIO, CYW_F2_BLOCKSIZE);
     if (!NT_SUCCESS(Status))
@@ -628,10 +1030,13 @@ CywChipBringUp(
         return Status;
     }
 
-    if (Adapter->SdioCoreBase != 0)
+    Status = CywBackplaneWritel(Adapter,
+                               Adapter->SdioCoreBase +
+                               SD_REG_TOSBMAILBOXDATA,
+                               SMB_DATA_VERSION);
+    if (!NT_SUCCESS(Status))
     {
-        CywBackplaneWritel(Adapter, Adapter->SdioCoreBase + SD_REG_TOSBMAILBOXDATA,
-                           SMB_DATA_VERSION);
+        return Status;
     }
 
     Status = CywSdioEnableFunction(Adapter, CYW_SDIO_FUNC_RADIO);
@@ -640,65 +1045,132 @@ CywChipBringUp(
         return Status;
     }
 
-    Status = CywSdioReadByte(Adapter, CYW_SDIO_FUNC_BUS, SDIO_CCCR_INTEN, (PUCHAR)&IntStatus);
-    if (NT_SUCCESS(Status))
+    Status = CywSdioReadByte(Adapter, CYW_SDIO_FUNC_BUS,
+                             SDIO_CCCR_INTEN, &InterruptEnable);
+    if (!NT_SUCCESS(Status))
     {
-        CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BUS, SDIO_CCCR_INTEN,
-                         (UCHAR)(IntStatus | SDIO_INTR_ENABLE_MASTER |
-                                 SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2));
+        return Status;
+    }
+    Status = CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BUS,
+                              SDIO_CCCR_INTEN,
+                              InterruptEnable | SDIO_INTR_ENABLE_MASTER |
+                              SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
     }
 
-    if (Adapter->SdioCoreBase != 0)
+    Status = CywBackplaneWritel(Adapter,
+                               Adapter->SdioCoreBase + SD_REG_HOSTINTMASK,
+                               CYW_HOSTINTMASK);
+    if (!NT_SUCCESS(Status))
     {
-        CywBackplaneWritel(Adapter, Adapter->SdioCoreBase + SD_REG_HOSTINTMASK,
-                           CYW_HOSTINTMASK);
+        return Status;
     }
 
-    CywDownloadClm(Adapter);
+    Status = CywDownloadClm(Adapter);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
 
     {
         ULONG Down = 0;
-        NTSTATUS DownStatus = CywFilCmdSet(Adapter, BRCMF_C_DOWN, &Down, sizeof(Down));
-        if (!NT_SUCCESS(DownStatus))
+
+        Status = CywFilCmdSet(Adapter, BRCMF_C_DOWN, &Down, sizeof(Down));
+        if (!NT_SUCCESS(Status))
         {
-            DPRINT1("CYW: BRCMF_C_DOWN failed 0x%08lx\n", DownStatus);
+            return Status;
         }
     }
 
-    CywSetCountry(Adapter, CYW_DEFAULT_COUNTRY);
+    Status = CywSetCountry(Adapter, CYW_DEFAULT_COUNTRY);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
 
     {
         ULONG GlomVal = 0xFFFFFFFF;
 
-        CywFilIovarSetInt(Adapter, "ampdu_rx", 1);
-        CywFilIovarSetInt(Adapter, "bus:txglom", 1);
-        if (NT_SUCCESS(CywFilIovarGet(Adapter, "bus:txglom", &GlomVal, sizeof(GlomVal))) && GlomVal == 1)
+        Status = CywFilIovarSetInt(Adapter, "ampdu_rx", 1);
+        if (!NT_SUCCESS(Status))
         {
-            CywFilIovarSetInt(Adapter, "bus:txglomalign", 4);
+            DPRINT1("CYW: optional ampdu_rx setup failed 0x%08lx\n", Status);
+        }
+        Status = CywFilIovarSetInt(Adapter, "bus:txglom", 1);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("CYW: optional txglom setup failed 0x%08lx\n", Status);
+        }
+        else if (NT_SUCCESS(CywFilIovarGet(Adapter, "bus:txglom",
+                                           &GlomVal, sizeof(GlomVal))) &&
+                 GlomVal == 1)
+        {
+            Status = CywFilIovarSetInt(Adapter, "bus:txglomalign", 4);
+            if (!NT_SUCCESS(Status))
+            {
+                DPRINT1("CYW: optional txglom alignment failed 0x%08lx\n", Status);
+            }
         }
     }
 
-
-    CywFilIovarSetInt(Adapter, "mpc", 0);
+    Status = CywFilIovarSetInt(Adapter, "mpc", 0);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("CYW: optional mpc setup failed 0x%08lx\n", Status);
+    }
 
     {
         ULONG Bw[2];
+
         Bw[0] = 2; Bw[1] = 0x3;
-        CywFilIovarSet(Adapter, "bw_cap", Bw, sizeof(Bw));
+        Status = CywFilIovarSet(Adapter, "bw_cap", Bw, sizeof(Bw));
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("CYW: optional 2.4 GHz bandwidth setup failed 0x%08lx\n", Status);
+        }
         Bw[0] = 1; Bw[1] = 0x7;
-        CywFilIovarSet(Adapter, "bw_cap", Bw, sizeof(Bw));
+        Status = CywFilIovarSet(Adapter, "bw_cap", Bw, sizeof(Bw));
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("CYW: optional 5 GHz bandwidth setup failed 0x%08lx\n", Status);
+        }
     }
 
     {
         ULONG Infra = 1;
         ULONG Up = 0;
-        CywFilCmdSet(Adapter, BRCMF_C_SET_INFRA, &Infra, sizeof(Infra));
+
+        Status = CywFilCmdSet(Adapter, BRCMF_C_SET_INFRA,
+                              &Infra, sizeof(Infra));
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
         Status = CywFilCmdSet(Adapter, BRCMF_C_UP, &Up, sizeof(Up));
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
     }
 
-    CywActivateEvents(Adapter);
+    Status = CywActivateEvents(Adapter);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
 
-    CywFilIovarGet(Adapter, "cur_etheraddr", Adapter->CurrentAddress, CYW_ADDRESS_LENGTH);
+    Status = CywFilIovarGet(Adapter, "cur_etheraddr",
+                            Adapter->CurrentAddress, CYW_ADDRESS_LENGTH);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+    if (!CywIsValidEthernetAddress(Adapter->CurrentAddress))
+    {
+        return STATUS_DEVICE_DATA_ERROR;
+    }
     RtlCopyMemory(Adapter->PermanentAddress, Adapter->CurrentAddress, CYW_ADDRESS_LENGTH);
 
     return STATUS_SUCCESS;
