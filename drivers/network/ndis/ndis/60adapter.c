@@ -1049,6 +1049,13 @@ Ndis6DestroyLogicalAdapter(
             NdisFreeBufferPool(Ext->RxLegacyBufferPool);
             Ext->RxLegacyBufferPool = NULL;
         }
+
+        if (Ext->GeneralAttrs.SupportedOidList != NULL)
+        {
+            ExFreePoolWithTag(Ext->GeneralAttrs.SupportedOidList,
+                              NDIS6_ATTR_TAG);
+            Ext->GeneralAttrs.SupportedOidList = NULL;
+        }
     }
 
     Ndis6FreeAdapterName(&Adapter->NdisMiniportBlock.MiniportName);

@@ -210,6 +210,8 @@ typedef struct _NDIS6_DRIVER_BLOCK
 extern LIST_ENTRY g_Ndis6DriverList;
 extern KSPIN_LOCK g_Ndis6DriverListLock;
 
+#define NDIS6_ATTR_TAG 'aANn' /* "nNAa" */
+
 /* ============================================================================
  *  NDIS 6 adapter extension — one per device instance the bridge owns
  * ============================================================================ */
