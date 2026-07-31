@@ -303,15 +303,11 @@ typedef struct _NDIS6_ADAPTER_EXT
     NDIS_SG_DMA_DESCRIPTION         SgDescription;
     BOOLEAN                         SgDescriptionValid;
 
-    /* B2: offload capabilities the driver reported via
-     * NdisMSetMiniportAttributes(OFFLOAD). Saved as raw pointers into
-     * the driver's own memory — the miniport contract requires drivers
-     * to keep the offload state alive for the adapter's lifetime.
-     * The legacy OID dispatcher reads fields out of these via
-     * unchecked pointer arithmetic; we don't redeclare NDIS_OFFLOAD
-     * locally because it's large (~256 bytes) and version-dependent. */
+    /* NDIS-owned, zero-normalized offload descriptors. */
     PVOID                           OffloadHwPtr;
     PVOID                           OffloadDefaultPtr;
+    PVOID                           TcpOffloadHwPtr;
+    PVOID                           TcpOffloadDefaultPtr;
     BOOLEAN                         OffloadValid;
 
     /* Phase 3 TX thunk: NBL pool used to wrap legacy NDIS_PACKETs when

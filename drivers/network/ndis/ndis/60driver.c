@@ -43,6 +43,50 @@ Ndis6DriverInit(VOID)
     }
 }
 
+/* Windows 11 zero-normalizes these descriptors into fixed NDIS-owned
+ * storage before publishing them to the rest of the stack. */
+#define NDIS6_OFFLOAD_MINIMUM_SIZE       0x70
+#define NDIS6_OFFLOAD_STORAGE_SIZE       0xD8
+#define NDIS6_TCP_OFFLOAD_MINIMUM_SIZE   0x14
+#define NDIS6_TCP_OFFLOAD_STORAGE_SIZE   0x14
+
+static NDIS_STATUS
+Ndis6DuplicateOffloadDescriptor(
+    _In_opt_ PVOID Source,
+    _In_ UCHAR ExpectedType,
+    _In_ USHORT MinimumSize,
+    _In_ USHORT StorageSize,
+    _Outptr_result_bytebuffer_maybenull_(StorageSize) PVOID *Copy)
+{
+    PNDIS_OBJECT_HEADER Header;
+    ULONG CopyLength;
+    PVOID Buffer;
+
+    *Copy = NULL;
+    if (Source == NULL)
+        return NDIS_STATUS_SUCCESS;
+
+    Header = Source;
+    if (Header->Type != ExpectedType ||
+        Header->Revision < 1 ||
+        Header->Size < MinimumSize)
+    {
+        return NDIS_STATUS_NOT_SUPPORTED;
+    }
+
+    Buffer = ExAllocatePoolWithTag(NonPagedPool,
+                                   StorageSize,
+                                   NDIS6_ATTR_TAG);
+    if (Buffer == NULL)
+        return NDIS_STATUS_RESOURCES;
+
+    RtlZeroMemory(Buffer, StorageSize);
+    CopyLength = Header->Size < StorageSize ? Header->Size : StorageSize;
+    RtlCopyMemory(Buffer, Source, CopyLength);
+    *Copy = Buffer;
+    return NDIS_STATUS_SUCCESS;
+}
+
 /* ============================================================================
  *  Forward declarations for our PnP dispatchers (defined further down)
  * ============================================================================ */
@@ -335,22 +379,100 @@ NdisMSetMiniportAttributes(
             return NDIS_STATUS_SUCCESS;
         }
 
-        case 0xCA:  /* NDIS_OBJECT_TYPE_MINIPORT_ADAPTER_OFFLOAD_ATTRIBUTES */
+        case NDIS_OBJECT_TYPE_MINIPORT_ADAPTER_OFFLOAD_ATTRIBUTES:
         {
-            /* B2: record the driver's offload capability pointers. The
-             * struct layout at the start is:
-             *   NDIS_OBJECT_HEADER Header;
-             *   NDIS_OFFLOAD*      DefaultOffloadConfiguration;
-             *   NDIS_OFFLOAD*      HardwareOffloadCapabilities;
-             * We read the pointers by offset because the header file
-             * doesn't fully declare the struct in our NDIS 5.1 PCH. */
-            PVOID* AttrBase  = (PVOID*)((PUCHAR)MiniportAttributes + sizeof(NDIS_OBJECT_HEADER));
-            Ext->OffloadDefaultPtr = AttrBase[0];
-            Ext->OffloadHwPtr      = AttrBase[1];
-            Ext->OffloadValid      = TRUE;
-            DbgPrint("NDIS6: offload attrs recorded Default=%p Hw=%p\n",
-                     Ext->OffloadDefaultPtr, Ext->OffloadHwPtr);
+            PNDIS_MINIPORT_ADAPTER_OFFLOAD_ATTRIBUTES Offload =
+                &MiniportAttributes->OffloadAttributes;
+            PVOID Default = NULL;
+            PVOID Hardware = NULL;
+            PVOID TcpDefault = NULL;
+            PVOID TcpHardware = NULL;
+            PVOID NewDefault = NULL;
+            PVOID NewHardware = NULL;
+            PVOID NewTcpDefault = NULL;
+            PVOID NewTcpHardware = NULL;
+            NDIS_STATUS Status;
+
+            /* Windows treats a short outer descriptor as an empty offload
+             * declaration and does not read beyond Header.Size. */
+            if (Offload->Header.Size >=
+                NDIS_SIZEOF_MINIPORT_ADAPTER_OFFLOAD_ATTRIBUTES_REVISION_1)
+            {
+                Default = Offload->DefaultOffloadConfiguration;
+                Hardware = Offload->HardwareOffloadCapabilities;
+                TcpDefault = Offload->DefaultTcpConnectionOffloadConfiguration;
+                TcpHardware = Offload->TcpConnectionOffloadHardwareCapabilities;
+            }
+
+            if ((Default == NULL) != (Hardware == NULL) ||
+                (TcpDefault == NULL) != (TcpHardware == NULL))
+            {
+                return NDIS_STATUS_NOT_SUPPORTED;
+            }
+
+            Status = Ndis6DuplicateOffloadDescriptor(
+                Default,
+                NDIS_OBJECT_TYPE_OFFLOAD,
+                NDIS6_OFFLOAD_MINIMUM_SIZE,
+                NDIS6_OFFLOAD_STORAGE_SIZE,
+                &NewDefault);
+            if (Status != NDIS_STATUS_SUCCESS)
+                goto OffloadFailure;
+
+            Status = Ndis6DuplicateOffloadDescriptor(
+                Hardware,
+                NDIS_OBJECT_TYPE_OFFLOAD,
+                NDIS6_OFFLOAD_MINIMUM_SIZE,
+                NDIS6_OFFLOAD_STORAGE_SIZE,
+                &NewHardware);
+            if (Status != NDIS_STATUS_SUCCESS)
+                goto OffloadFailure;
+
+            Status = Ndis6DuplicateOffloadDescriptor(
+                TcpDefault,
+                NDIS_OBJECT_TYPE_DEFAULT,
+                NDIS6_TCP_OFFLOAD_MINIMUM_SIZE,
+                NDIS6_TCP_OFFLOAD_STORAGE_SIZE,
+                &NewTcpDefault);
+            if (Status != NDIS_STATUS_SUCCESS)
+                goto OffloadFailure;
+
+            Status = Ndis6DuplicateOffloadDescriptor(
+                TcpHardware,
+                NDIS_OBJECT_TYPE_DEFAULT,
+                NDIS6_TCP_OFFLOAD_MINIMUM_SIZE,
+                NDIS6_TCP_OFFLOAD_STORAGE_SIZE,
+                &NewTcpHardware);
+            if (Status != NDIS_STATUS_SUCCESS)
+                goto OffloadFailure;
+
+            if (Ext->OffloadDefaultPtr != NULL)
+                ExFreePoolWithTag(Ext->OffloadDefaultPtr, NDIS6_ATTR_TAG);
+            if (Ext->OffloadHwPtr != NULL)
+                ExFreePoolWithTag(Ext->OffloadHwPtr, NDIS6_ATTR_TAG);
+            if (Ext->TcpOffloadDefaultPtr != NULL)
+                ExFreePoolWithTag(Ext->TcpOffloadDefaultPtr, NDIS6_ATTR_TAG);
+            if (Ext->TcpOffloadHwPtr != NULL)
+                ExFreePoolWithTag(Ext->TcpOffloadHwPtr, NDIS6_ATTR_TAG);
+
+            Ext->OffloadDefaultPtr = NewDefault;
+            Ext->OffloadHwPtr = NewHardware;
+            Ext->TcpOffloadDefaultPtr = NewTcpDefault;
+            Ext->TcpOffloadHwPtr = NewTcpHardware;
+            Ext->OffloadValid = TRUE;
+            DbgPrint("NDIS6: offload attributes copied Default=%p Hw=%p TcpDefault=%p TcpHw=%p\n", NewDefault, NewHardware, NewTcpDefault, NewTcpHardware);
             return NDIS_STATUS_SUCCESS;
+
+OffloadFailure:
+            if (NewDefault != NULL)
+                ExFreePoolWithTag(NewDefault, NDIS6_ATTR_TAG);
+            if (NewHardware != NULL)
+                ExFreePoolWithTag(NewHardware, NDIS6_ATTR_TAG);
+            if (NewTcpDefault != NULL)
+                ExFreePoolWithTag(NewTcpDefault, NDIS6_ATTR_TAG);
+            if (NewTcpHardware != NULL)
+                ExFreePoolWithTag(NewTcpHardware, NDIS6_ATTR_TAG);
+            return Status;
         }
 
         case NDIS_OBJECT_TYPE_DEFAULT:

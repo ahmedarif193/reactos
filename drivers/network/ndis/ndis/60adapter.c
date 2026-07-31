@@ -1056,6 +1056,26 @@ Ndis6DestroyLogicalAdapter(
                               NDIS6_ATTR_TAG);
             Ext->GeneralAttrs.SupportedOidList = NULL;
         }
+        if (Ext->OffloadDefaultPtr != NULL)
+        {
+            ExFreePoolWithTag(Ext->OffloadDefaultPtr, NDIS6_ATTR_TAG);
+            Ext->OffloadDefaultPtr = NULL;
+        }
+        if (Ext->OffloadHwPtr != NULL)
+        {
+            ExFreePoolWithTag(Ext->OffloadHwPtr, NDIS6_ATTR_TAG);
+            Ext->OffloadHwPtr = NULL;
+        }
+        if (Ext->TcpOffloadDefaultPtr != NULL)
+        {
+            ExFreePoolWithTag(Ext->TcpOffloadDefaultPtr, NDIS6_ATTR_TAG);
+            Ext->TcpOffloadDefaultPtr = NULL;
+        }
+        if (Ext->TcpOffloadHwPtr != NULL)
+        {
+            ExFreePoolWithTag(Ext->TcpOffloadHwPtr, NDIS6_ATTR_TAG);
+            Ext->TcpOffloadHwPtr = NULL;
+        }
     }
 
     Ndis6FreeAdapterName(&Adapter->NdisMiniportBlock.MiniportName);
