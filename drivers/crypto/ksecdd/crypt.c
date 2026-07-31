@@ -96,7 +96,7 @@ KsecGetKeyData (
         ProcessData.Process = CurrentProcess;
         ProcessData.ProcessId = CurrentProcess->UniqueProcessId;
         ProcessData.CreateTime = PsGetProcessCreateTimeQuadPart(CurrentProcess);
-#if (NTDDI_VERSION >= NTDDI_LONGHORN) && !defined(_M_ARM64)
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
         ProcessData.DirectoryTableBase = CurrentProcess->Pcb.DirectoryTableBase;
 #else
         ProcessData.DirectoryTableBase = CurrentProcess->Pcb.DirectoryTableBase[0];
