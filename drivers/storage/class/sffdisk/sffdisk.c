@@ -31,6 +31,170 @@ NTSTATUS
 SffdiskCreatePhysicalDriveLink(
     _Inout_ PSFFDISK_DEVICE_EXTENSION DeviceExtension);
 
+static
+NTSTATUS
+SffdiskOpenBusInterface(
+    _Inout_ PSFFDISK_DEVICE_EXTENSION DeviceExtension);
+
+static
+VOID
+SffdiskCloseBusInterface(
+    _Inout_ PSFFDISK_DEVICE_EXTENSION DeviceExtension);
+
+static
+VOID
+SffdiskBlockBusRequests(
+    _Inout_ PSFFDISK_DEVICE_EXTENSION DeviceExtension);
+
+static
+VOID
+SffdiskUnblockBusRequests(
+    _Inout_ PSFFDISK_DEVICE_EXTENSION DeviceExtension);
+
+static
+VOID
+SffdiskStopDevice(
+    _Inout_ PSFFDISK_DEVICE_EXTENSION DeviceExtension);
+
+static
+NTSTATUS
+SffdiskAdjustDeviceUsage(
+    _Inout_ PSFFDISK_DEVICE_EXTENSION DeviceExtension,
+    _In_ DEVICE_USAGE_NOTIFICATION_TYPE Type,
+    _In_ BOOLEAN InPath)
+{
+    PULONG Counter;
+    BOOLEAN AffectsPowerPageability;
+    KIRQL OldIrql;
+    NTSTATUS Status;
+
+    switch (Type)
+    {
+        case DeviceUsageTypePaging:
+            Counter = &DeviceExtension->PagingPathCount;
+            AffectsPowerPageability = TRUE;
+            break;
+
+        case DeviceUsageTypeHibernation:
+            Counter = &DeviceExtension->HibernationPathCount;
+            AffectsPowerPageability = TRUE;
+            break;
+
+        case DeviceUsageTypeDumpFile:
+            Counter = &DeviceExtension->DumpPathCount;
+            AffectsPowerPageability = TRUE;
+            break;
+
+        case DeviceUsageTypeBoot:
+            Counter = &DeviceExtension->BootPathCount;
+            AffectsPowerPageability = FALSE;
+            break;
+
+        case DeviceUsageTypePostDisplay:
+            Counter = &DeviceExtension->PostDisplayPathCount;
+            AffectsPowerPageability = FALSE;
+            break;
+
+        case DeviceUsageTypeGuestAssigned:
+            Counter = &DeviceExtension->GuestAssignedPathCount;
+            AffectsPowerPageability = FALSE;
+            break;
+
+        default:
+            return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = STATUS_SUCCESS;
+    KeAcquireSpinLock(&DeviceExtension->UsageLock, &OldIrql);
+    if (InPath)
+    {
+        if (*Counter == MAXULONG)
+        {
+            Status = STATUS_INTEGER_OVERFLOW;
+        }
+        else
+        {
+            (*Counter)++;
+        }
+    }
+    else if (*Counter == 0)
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+    }
+    else
+    {
+        (*Counter)--;
+    }
+
+    if (NT_SUCCESS(Status) && AffectsPowerPageability)
+    {
+        if (DeviceExtension->PagingPathCount != 0 ||
+            DeviceExtension->HibernationPathCount != 0 ||
+            DeviceExtension->DumpPathCount != 0)
+        {
+            DeviceExtension->Self->Flags &= ~DO_POWER_PAGABLE;
+        }
+        else if (DeviceExtension->PowerPagable &&
+                 !(DeviceExtension->Self->Flags & DO_POWER_INRUSH))
+        {
+            DeviceExtension->Self->Flags |= DO_POWER_PAGABLE;
+        }
+    }
+    KeReleaseSpinLock(&DeviceExtension->UsageLock, OldIrql);
+
+    return Status;
+}
+
+static
+BOOLEAN
+SffdiskHasActiveDeviceUsage(
+    _Inout_ PSFFDISK_DEVICE_EXTENSION DeviceExtension)
+{
+    KIRQL OldIrql;
+    BOOLEAN Active;
+
+    KeAcquireSpinLock(&DeviceExtension->UsageLock, &OldIrql);
+    Active = DeviceExtension->PagingPathCount != 0 ||
+             DeviceExtension->HibernationPathCount != 0 ||
+             DeviceExtension->DumpPathCount != 0 ||
+             DeviceExtension->BootPathCount != 0 ||
+             DeviceExtension->PostDisplayPathCount != 0 ||
+             DeviceExtension->GuestAssignedPathCount != 0;
+    KeReleaseSpinLock(&DeviceExtension->UsageLock, OldIrql);
+
+    return Active;
+}
+
+static
+NTSTATUS
+SffdiskReserveDiskNumber(
+    _Inout_ PULONG DiskCount,
+    _Out_ PULONG DiskNumber)
+{
+    volatile LONG *AtomicDiskCount;
+    LONG Observed;
+    LONG Previous;
+    ULONG Next;
+
+    AtomicDiskCount = (volatile LONG *)DiskCount;
+    do
+    {
+        Observed = InterlockedCompareExchange(AtomicDiskCount, 0, 0);
+        if ((ULONG)Observed == MAXULONG)
+        {
+            return STATUS_INTEGER_OVERFLOW;
+        }
+
+        Next = (ULONG)Observed + 1;
+        Previous = InterlockedCompareExchange(AtomicDiskCount,
+                                              (LONG)Next,
+                                              Observed);
+    } while (Previous != Observed);
+
+    *DiskNumber = (ULONG)Observed;
+    return STATUS_SUCCESS;
+}
+
 /**
  * @brief Completion routine that signals the event when the lower driver
  *        finishes processing a forwarded IRP.
@@ -54,6 +218,48 @@ SffdiskForwardIrpCompletion(
 
     KeSetEvent((PKEVENT)Context, IO_NO_INCREMENT, FALSE);
     return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
+static
+NTSTATUS
+NTAPI
+SffdiskReleaseRemoveLockCompletion(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ PIRP Irp,
+    _In_ PVOID Context)
+{
+    PSFFDISK_DEVICE_EXTENSION DeviceExtension;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    DeviceExtension = (PSFFDISK_DEVICE_EXTENSION)Context;
+    if (Irp->PendingReturned)
+    {
+        IoMarkIrpPending(Irp);
+    }
+    IoReleaseRemoveLock(&DeviceExtension->RemoveLock, Irp);
+    return STATUS_CONTINUE_COMPLETION;
+}
+
+NTSTATUS
+SffdiskForwardIrpWithRemoveLock(
+    _In_ PSFFDISK_DEVICE_EXTENSION DeviceExtension,
+    _Inout_ PIRP Irp,
+    _In_ BOOLEAN PowerIrp)
+{
+    IoCopyCurrentIrpStackLocationToNext(Irp);
+    IoSetCompletionRoutine(Irp,
+                           SffdiskReleaseRemoveLockCompletion,
+                           DeviceExtension,
+                           TRUE,
+                           TRUE,
+                           TRUE);
+
+    if (PowerIrp)
+    {
+        return PoCallDriver(DeviceExtension->LowerDevice, Irp);
+    }
+    return IoCallDriver(DeviceExtension->LowerDevice, Irp);
 }
 
 /**
@@ -94,8 +300,9 @@ SffdiskForwardIrpSynchronous(
                               KernelMode,
                               FALSE,
                               NULL);
-        Status = Irp->IoStatus.Status;
     }
+
+    Status = Irp->IoStatus.Status;
 
     return Status;
 }
@@ -123,6 +330,352 @@ SffdiskGetProperty(
     SD_INIT_GET_PROPERTY(&Srb, Property, Buffer, Length);
 
     return SdBusSubmitRequest(DeviceExtension->BusInterface.Context, &Srb);
+}
+
+static
+NTSTATUS
+SffdiskOpenBusInterface(
+    _Inout_ PSFFDISK_DEVICE_EXTENSION DeviceExtension)
+{
+    SDBUS_INTERFACE_PARAMETERS InterfaceParams;
+    KIRQL OldIrql;
+    BOOLEAN InterfaceOpen;
+    NTSTATUS Status;
+
+    KeAcquireSpinLock(&DeviceExtension->BusRequestLock, &OldIrql);
+    InterfaceOpen = DeviceExtension->InterfaceOpen;
+    KeReleaseSpinLock(&DeviceExtension->BusRequestLock, OldIrql);
+
+    if (InterfaceOpen)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    RtlZeroMemory(&DeviceExtension->BusInterface,
+                  sizeof(DeviceExtension->BusInterface));
+
+    Status = SdBusOpenInterface(DeviceExtension->PhysicalDevice,
+                                &DeviceExtension->BusInterface,
+                                sizeof(SDBUS_INTERFACE_STANDARD),
+                                SDBUS_INTERFACE_VERSION);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("SffdiskOpenBusInterface: SdBusOpenInterface failed (0x%08lx)\n",
+                Status);
+        return Status;
+    }
+
+    RtlZeroMemory(&InterfaceParams, sizeof(InterfaceParams));
+    InterfaceParams.Size = sizeof(SDBUS_INTERFACE_PARAMETERS);
+    InterfaceParams.TargetObject = DeviceExtension->LowerDevice;
+
+    Status = DeviceExtension->BusInterface.InitializeInterface(
+                 DeviceExtension->BusInterface.Context,
+                 &InterfaceParams);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("SffdiskOpenBusInterface: InitializeInterface failed (0x%08lx)\n",
+                Status);
+        DeviceExtension->BusInterface.InterfaceDereference(
+            DeviceExtension->BusInterface.Context);
+        RtlZeroMemory(&DeviceExtension->BusInterface,
+                      sizeof(DeviceExtension->BusInterface));
+        return Status;
+    }
+
+    KeAcquireSpinLock(&DeviceExtension->BusRequestLock, &OldIrql);
+    DeviceExtension->InterfaceOpen = TRUE;
+    KeReleaseSpinLock(&DeviceExtension->BusRequestLock, OldIrql);
+
+    return STATUS_SUCCESS;
+}
+
+static
+VOID
+SffdiskCloseBusInterface(
+    _Inout_ PSFFDISK_DEVICE_EXTENSION DeviceExtension)
+{
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+    PVOID InterfaceContext;
+    KIRQL OldIrql;
+
+    InterfaceDereference = NULL;
+    InterfaceContext = NULL;
+
+    KeAcquireSpinLock(&DeviceExtension->BusRequestLock, &OldIrql);
+    if (DeviceExtension->InterfaceOpen)
+    {
+        InterfaceDereference = DeviceExtension->BusInterface.InterfaceDereference;
+        InterfaceContext = DeviceExtension->BusInterface.Context;
+        DeviceExtension->InterfaceOpen = FALSE;
+    }
+    KeReleaseSpinLock(&DeviceExtension->BusRequestLock, OldIrql);
+
+    if (InterfaceDereference != NULL)
+    {
+        InterfaceDereference(InterfaceContext);
+        RtlZeroMemory(&DeviceExtension->BusInterface,
+                      sizeof(DeviceExtension->BusInterface));
+    }
+}
+
+NTSTATUS
+SffdiskAcquireBusRequest(
+    _In_ PSFFDISK_DEVICE_EXTENSION DeviceExtension,
+    _In_opt_ PFILE_OBJECT FileObject)
+{
+    KIRQL OldIrql;
+    NTSTATUS Status;
+
+    for (;;)
+    {
+        KeAcquireSpinLock(&DeviceExtension->BusRequestLock, &OldIrql);
+        if (DeviceExtension->BusRequestsBlocked ||
+            !DeviceExtension->InterfaceOpen)
+        {
+            KeReleaseSpinLock(&DeviceExtension->BusRequestLock, OldIrql);
+            return STATUS_DEVICE_NOT_READY;
+        }
+
+        if (DeviceExtension->OutstandingBusRequests == MAXULONG)
+        {
+            KeReleaseSpinLock(&DeviceExtension->BusRequestLock, OldIrql);
+            return STATUS_INTEGER_OVERFLOW;
+        }
+
+        if (DeviceExtension->ChannelOwner == NULL ||
+            DeviceExtension->ChannelOwner == FileObject)
+        {
+            if (DeviceExtension->OutstandingBusRequests++ == 0)
+            {
+                KeClearEvent(&DeviceExtension->BusRequestsDrained);
+            }
+            KeClearEvent(&DeviceExtension->ChannelAvailable);
+            KeReleaseSpinLock(&DeviceExtension->BusRequestLock, OldIrql);
+            return STATUS_SUCCESS;
+        }
+        KeReleaseSpinLock(&DeviceExtension->BusRequestLock, OldIrql);
+
+        Status = KeWaitForSingleObject(&DeviceExtension->ChannelAvailable,
+                                       Executive,
+                                       KernelMode,
+                                       FALSE,
+                                       NULL);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+    }
+}
+
+VOID
+SffdiskReleaseBusRequest(
+    _In_ PSFFDISK_DEVICE_EXTENSION DeviceExtension)
+{
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&DeviceExtension->BusRequestLock, &OldIrql);
+    ASSERT(DeviceExtension->OutstandingBusRequests != 0);
+    if (--DeviceExtension->OutstandingBusRequests == 0)
+    {
+        KeSetEvent(&DeviceExtension->BusRequestsDrained,
+                   IO_NO_INCREMENT,
+                   FALSE);
+        if (DeviceExtension->ChannelOwner == NULL)
+        {
+            KeSetEvent(&DeviceExtension->ChannelAvailable,
+                       IO_NO_INCREMENT,
+                       FALSE);
+        }
+    }
+    KeReleaseSpinLock(&DeviceExtension->BusRequestLock, OldIrql);
+}
+
+NTSTATUS
+SffdiskLockChannel(
+    _In_ PSFFDISK_DEVICE_EXTENSION DeviceExtension,
+    _In_ PFILE_OBJECT FileObject)
+{
+    KIRQL OldIrql;
+    NTSTATUS Status;
+
+    if (FileObject == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    for (;;)
+    {
+        KeAcquireSpinLock(&DeviceExtension->BusRequestLock, &OldIrql);
+        if (DeviceExtension->BusRequestsBlocked ||
+            !DeviceExtension->InterfaceOpen)
+        {
+            KeReleaseSpinLock(&DeviceExtension->BusRequestLock, OldIrql);
+            return STATUS_DEVICE_NOT_READY;
+        }
+
+        if (DeviceExtension->ChannelOwner == FileObject)
+        {
+            if (DeviceExtension->ChannelLockDepth == MAXULONG)
+            {
+                KeReleaseSpinLock(&DeviceExtension->BusRequestLock, OldIrql);
+                return STATUS_INTEGER_OVERFLOW;
+            }
+
+            DeviceExtension->ChannelLockDepth++;
+            KeReleaseSpinLock(&DeviceExtension->BusRequestLock, OldIrql);
+            return STATUS_SUCCESS;
+        }
+
+        if (DeviceExtension->ChannelOwner == NULL &&
+            DeviceExtension->OutstandingBusRequests == 0)
+        {
+            DeviceExtension->ChannelOwner = FileObject;
+            DeviceExtension->ChannelLockDepth = 1;
+            KeClearEvent(&DeviceExtension->ChannelAvailable);
+            KeReleaseSpinLock(&DeviceExtension->BusRequestLock, OldIrql);
+            return STATUS_SUCCESS;
+        }
+        KeReleaseSpinLock(&DeviceExtension->BusRequestLock, OldIrql);
+
+        Status = KeWaitForSingleObject(&DeviceExtension->ChannelAvailable,
+                                       Executive,
+                                       KernelMode,
+                                       FALSE,
+                                       NULL);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+    }
+}
+
+NTSTATUS
+SffdiskUnlockChannel(
+    _In_ PSFFDISK_DEVICE_EXTENSION DeviceExtension,
+    _In_ PFILE_OBJECT FileObject)
+{
+    KIRQL OldIrql;
+    NTSTATUS Status;
+
+    if (FileObject == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    for (;;)
+    {
+        KeAcquireSpinLock(&DeviceExtension->BusRequestLock, &OldIrql);
+        if (DeviceExtension->ChannelOwner != FileObject ||
+            DeviceExtension->ChannelLockDepth == 0)
+        {
+            KeReleaseSpinLock(&DeviceExtension->BusRequestLock, OldIrql);
+            return STATUS_INVALID_DEVICE_STATE;
+        }
+
+        if (DeviceExtension->ChannelLockDepth > 1)
+        {
+            DeviceExtension->ChannelLockDepth--;
+            KeReleaseSpinLock(&DeviceExtension->BusRequestLock, OldIrql);
+            return STATUS_SUCCESS;
+        }
+
+        if (DeviceExtension->OutstandingBusRequests == 0)
+        {
+            DeviceExtension->ChannelOwner = NULL;
+            DeviceExtension->ChannelLockDepth = 0;
+            KeSetEvent(&DeviceExtension->ChannelAvailable,
+                       IO_NO_INCREMENT,
+                       FALSE);
+            KeReleaseSpinLock(&DeviceExtension->BusRequestLock, OldIrql);
+            return STATUS_SUCCESS;
+        }
+        KeReleaseSpinLock(&DeviceExtension->BusRequestLock, OldIrql);
+
+        Status = KeWaitForSingleObject(&DeviceExtension->BusRequestsDrained,
+                                       Executive,
+                                       KernelMode,
+                                       FALSE,
+                                       NULL);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+    }
+}
+
+VOID
+SffdiskReleaseChannelForFile(
+    _In_ PSFFDISK_DEVICE_EXTENSION DeviceExtension,
+    _In_opt_ PFILE_OBJECT FileObject)
+{
+    KIRQL OldIrql;
+
+    if (FileObject == NULL)
+    {
+        return;
+    }
+
+    KeAcquireSpinLock(&DeviceExtension->BusRequestLock, &OldIrql);
+    if (DeviceExtension->ChannelOwner == FileObject)
+    {
+        DeviceExtension->ChannelOwner = NULL;
+        DeviceExtension->ChannelLockDepth = 0;
+        if (DeviceExtension->OutstandingBusRequests == 0)
+        {
+            KeSetEvent(&DeviceExtension->ChannelAvailable,
+                       IO_NO_INCREMENT,
+                       FALSE);
+        }
+    }
+    KeReleaseSpinLock(&DeviceExtension->BusRequestLock, OldIrql);
+}
+
+static
+VOID
+SffdiskBlockBusRequests(
+    _Inout_ PSFFDISK_DEVICE_EXTENSION DeviceExtension)
+{
+    KIRQL OldIrql;
+    BOOLEAN WaitForDrain;
+
+    KeAcquireSpinLock(&DeviceExtension->BusRequestLock, &OldIrql);
+    DeviceExtension->BusRequestsBlocked = TRUE;
+    DeviceExtension->ChannelOwner = NULL;
+    DeviceExtension->ChannelLockDepth = 0;
+    KeSetEvent(&DeviceExtension->ChannelAvailable,
+               IO_NO_INCREMENT,
+               FALSE);
+    WaitForDrain = (DeviceExtension->OutstandingBusRequests != 0);
+    KeReleaseSpinLock(&DeviceExtension->BusRequestLock, OldIrql);
+
+    if (WaitForDrain)
+    {
+        KeWaitForSingleObject(&DeviceExtension->BusRequestsDrained,
+                              Executive,
+                              KernelMode,
+                              FALSE,
+                              NULL);
+    }
+}
+
+static
+VOID
+SffdiskUnblockBusRequests(
+    _Inout_ PSFFDISK_DEVICE_EXTENSION DeviceExtension)
+{
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&DeviceExtension->BusRequestLock, &OldIrql);
+    ASSERT(DeviceExtension->InterfaceOpen);
+    DeviceExtension->BusRequestsBlocked = FALSE;
+    if (DeviceExtension->OutstandingBusRequests == 0)
+    {
+        KeSetEvent(&DeviceExtension->ChannelAvailable,
+                   IO_NO_INCREMENT,
+                   FALSE);
+    }
+    KeReleaseSpinLock(&DeviceExtension->BusRequestLock, OldIrql);
 }
 
 /**
@@ -182,7 +735,6 @@ SffdiskStartDevice(
     _In_ PSFFDISK_DEVICE_EXTENSION DeviceExtension)
 {
     NTSTATUS Status;
-    SDBUS_INTERFACE_PARAMETERS InterfaceParams;
     SDBUS_FUNCTION_TYPE FunctionType;
     BOOLEAN WriteProtected;
     BOOLEAN HighCapacity;
@@ -192,41 +744,17 @@ SffdiskStartDevice(
 
     PAGED_CODE();
 
-    /*
-     * Step 1: Open the SD bus interface on the PDO.
-     */
-    Status = SdBusOpenInterface(DeviceExtension->PhysicalDevice,
-                                &DeviceExtension->BusInterface,
-                                sizeof(SDBUS_INTERFACE_STANDARD),
-                                SDBUS_INTERFACE_VERSION);
+    SffdiskBlockBusRequests(DeviceExtension);
+    DeviceExtension->Present = FALSE;
+    DeviceExtension->MediaPresent = FALSE;
+    DeviceExtension->TotalSectors = 0;
+    DeviceExtension->CardType = SdCardTypeUnknown;
+    DeviceExtension->CidValid = FALSE;
+
+    Status = SffdiskOpenBusInterface(DeviceExtension);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("SffdiskStartDevice: SdBusOpenInterface failed (0x%08lx)\n", Status);
         return Status;
-    }
-
-    DeviceExtension->InterfaceOpen = TRUE;
-
-    /*
-     * Step 2: Initialize the interface parameters.
-     * We are a storage class driver and do not handle card interrupts directly.
-     */
-    RtlZeroMemory(&InterfaceParams, sizeof(InterfaceParams));
-    InterfaceParams.Size = sizeof(SDBUS_INTERFACE_PARAMETERS);
-    InterfaceParams.SdioFlags = 0;
-    InterfaceParams.TargetObject = DeviceExtension->LowerDevice;
-    InterfaceParams.DeviceGeneratesInterrupts = FALSE;
-    InterfaceParams.CallbackAtDpcLevel = FALSE;
-    InterfaceParams.CallbackRoutine = NULL;
-    InterfaceParams.CallbackRoutineContext = NULL;
-
-    Status = DeviceExtension->BusInterface.InitializeInterface(
-                 DeviceExtension->BusInterface.Context,
-                 &InterfaceParams);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("SffdiskStartDevice: InitializeInterface failed (0x%08lx)\n", Status);
-        goto CleanupInterface;
     }
 
     /*
@@ -242,24 +770,51 @@ SffdiskStartDevice(
         DPRINT1("SffdiskStartDevice: Failed to get SDP_FUNCTION_TYPE (0x%08lx)\n", Status);
         goto CleanupInterface;
     }
+    if (!IsTypeMemory(FunctionType))
+    {
+        Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        goto CleanupInterface;
+    }
 
     BusCardType = SdCardTypeUnknown;
     Status = SffdiskGetProperty(DeviceExtension,
                                 SDP_ROS_CARD_TYPE,
                                 &BusCardType,
                                 sizeof(BusCardType));
-    if (NT_SUCCESS(Status))
+    if (!NT_SUCCESS(Status))
     {
-        DeviceExtension->CardType = (SD_CARD_TYPE)BusCardType;
+        DPRINT1("SffdiskStartDevice: Failed to get SDP_ROS_CARD_TYPE (0x%08lx)\n",
+                Status);
+        goto CleanupInterface;
+    }
+    switch ((SD_CARD_TYPE)BusCardType)
+    {
+        case SdCardTypeSdV1:
+        case SdCardTypeSdV2:
+        case SdCardTypeSdhc:
+        case SdCardTypeSdxc:
+        case SdCardTypeCombo:
+        case SdCardTypeMmc:
+        case SdCardTypeEmmc:
+            DeviceExtension->CardType = (SD_CARD_TYPE)BusCardType;
+            break;
+
+        default:
+            Status = STATUS_DEVICE_DATA_ERROR;
+            goto CleanupInterface;
     }
 
-    if (FunctionType == SDBUS_FUNCTION_TYPE_MMC_MEMORY &&
-        DeviceExtension->CardType == SdCardTypeUnknown)
+    if (DeviceExtension->CardType == SdCardTypeEmmc)
     {
-        DeviceExtension->CardType = SdCardTypeMmc;
+        DeviceExtension->Removable = FALSE;
+        DeviceExtension->RemovabilityKnown = TRUE;
     }
-
-    DeviceExtension->Removable = (DeviceExtension->CardType != SdCardTypeEmmc);
+    else if (!DeviceExtension->RemovabilityKnown)
+    {
+        /* QUERY_CAPABILITIES normally precedes start. Keep a conservative
+         * protocol fallback for stacks that start without querying it. */
+        DeviceExtension->Removable = TRUE;
+    }
 
     /*
      * Step 4: Query write-protect status.
@@ -269,15 +824,13 @@ SffdiskStartDevice(
                                 SDP_WRITE_PROTECTED,
                                 &WriteProtected,
                                 sizeof(WriteProtected));
-    if (NT_SUCCESS(Status))
+    if (!NT_SUCCESS(Status))
     {
-        DeviceExtension->WriteProtected = WriteProtected;
+        DPRINT1("SffdiskStartDevice: Failed to get SDP_WRITE_PROTECTED (0x%08lx)\n",
+                Status);
+        goto CleanupInterface;
     }
-    else
-    {
-        /* Assume writable if the query fails (eMMC has no WP switch) */
-        DeviceExtension->WriteProtected = FALSE;
-    }
+    DeviceExtension->WriteProtected = WriteProtected;
 
     /*
      * Step 5: Query high-capacity support to determine addressing mode.
@@ -287,15 +840,13 @@ SffdiskStartDevice(
                                 SDP_HIGH_CAPACITY_SUPPORTED,
                                 &HighCapacity,
                                 sizeof(HighCapacity));
-    if (NT_SUCCESS(Status))
+    if (!NT_SUCCESS(Status))
     {
-        DeviceExtension->HighCapacity = HighCapacity;
+        DPRINT1("SffdiskStartDevice: Failed to get SDP_HIGH_CAPACITY_SUPPORTED (0x%08lx)\n",
+                Status);
+        goto CleanupInterface;
     }
-    else
-    {
-        /* Default to byte addressing if unknown */
-        DeviceExtension->HighCapacity = FALSE;
-    }
+    DeviceExtension->HighCapacity = HighCapacity;
 
     /*
      * Refine card type based on high-capacity flag for SD memory.
@@ -315,9 +866,20 @@ SffdiskStartDevice(
     /*
      * eMMC and SDHC/SDXC always use block addressing.
      */
-    if (DeviceExtension->CardType == SdCardTypeEmmc)
+    if ((DeviceExtension->CardType == SdCardTypeSdhc ||
+         DeviceExtension->CardType == SdCardTypeSdxc ||
+         DeviceExtension->CardType == SdCardTypeEmmc) &&
+        !DeviceExtension->HighCapacity)
     {
-        DeviceExtension->HighCapacity = TRUE;
+        Status = STATUS_DEVICE_DATA_ERROR;
+        goto CleanupInterface;
+    }
+    if ((DeviceExtension->CardType == SdCardTypeSdV1 ||
+         DeviceExtension->CardType == SdCardTypeSdV2) &&
+        DeviceExtension->HighCapacity)
+    {
+        Status = STATUS_DEVICE_DATA_ERROR;
+        goto CleanupInterface;
     }
 
     /*
@@ -328,14 +890,22 @@ SffdiskStartDevice(
                                 SDP_MEDIA_STATE,
                                 &MediaState,
                                 sizeof(MediaState));
-    if (NT_SUCCESS(Status))
+    if (!NT_SUCCESS(Status))
     {
-        DeviceExtension->MediaPresent = (MediaState == SDPMS_MEDIA_INSERTED);
+        DPRINT1("SffdiskStartDevice: Failed to get SDP_MEDIA_STATE (0x%08lx)\n",
+                Status);
+        goto CleanupInterface;
     }
-    else
+    if (MediaState != SDPMS_NO_MEDIA && MediaState != SDPMS_MEDIA_INSERTED)
     {
-        /* If we got this far, media must be present */
-        DeviceExtension->MediaPresent = TRUE;
+        Status = STATUS_DEVICE_DATA_ERROR;
+        goto CleanupInterface;
+    }
+    DeviceExtension->MediaPresent = (MediaState == SDPMS_MEDIA_INSERTED);
+    if (!DeviceExtension->MediaPresent)
+    {
+        Status = STATUS_NO_MEDIA_IN_DEVICE;
+        goto CleanupInterface;
     }
 
     /*
@@ -502,6 +1072,7 @@ SffdiskStartDevice(
 
     DeviceExtension->DevicePowerState = PowerDeviceD0;
     DeviceExtension->Present = TRUE;
+    DeviceExtension->SurpriseRemoved = FALSE;
 
     /*
      *
@@ -509,11 +1080,9 @@ SffdiskStartDevice(
     if (DeviceExtension->DiskInterfaceRegistered &&
         !DeviceExtension->DiskInterfaceEnabled)
     {
-        NTSTATUS IfStatus;
-
-        IfStatus = IoSetDeviceInterfaceState(&DeviceExtension->DiskInterfaceName,
-                                             TRUE);
-        if (NT_SUCCESS(IfStatus))
+        Status = IoSetDeviceInterfaceState(&DeviceExtension->DiskInterfaceName,
+                                           TRUE);
+        if (NT_SUCCESS(Status))
         {
             DeviceExtension->DiskInterfaceEnabled = TRUE;
             DPRINT1("SffdiskStartDevice: Enabled disk interface %wZ\n",
@@ -522,15 +1091,21 @@ SffdiskStartDevice(
         else
         {
             DPRINT1("SffdiskStartDevice: IoSetDeviceInterfaceState(disk) failed 0x%08lx\n",
-                    IfStatus);
+                    Status);
+            goto CleanupInterface;
         }
     }
 
     /* Match disk.sys' public naming contract. Opening PhysicalDriveN reaches
        the top of the attached stack, including partmgr's performance and
-       storage-property handlers. The card remains usable if link creation
-       fails; only raw-disk clients lose the well-known name. */
-    SffdiskCreatePhysicalDriveLink(DeviceExtension);
+       storage-property handlers. */
+    Status = SffdiskCreatePhysicalDriveLink(DeviceExtension);
+    if (!NT_SUCCESS(Status))
+    {
+        goto CleanupInterface;
+    }
+
+    SffdiskUnblockBusRequests(DeviceExtension);
 
     DPRINT1("SffdiskStartDevice: Card type %d, %I64u sectors, %s, %s\n",
            DeviceExtension->CardType,
@@ -541,9 +1116,7 @@ SffdiskStartDevice(
     return STATUS_SUCCESS;
 
 CleanupInterface:
-    DeviceExtension->BusInterface.InterfaceDereference(
-        DeviceExtension->BusInterface.Context);
-    DeviceExtension->InterfaceOpen = FALSE;
+    SffdiskStopDevice(DeviceExtension);
     return Status;
 }
 
@@ -613,9 +1186,13 @@ SffdiskDeletePhysicalDriveLink(
 
 static
 VOID
-SffdiskCleanupDevice(
+SffdiskStopDevice(
     _Inout_ PSFFDISK_DEVICE_EXTENSION DeviceExtension)
 {
+    SffdiskBlockBusRequests(DeviceExtension);
+    DeviceExtension->Present = FALSE;
+    DeviceExtension->MediaPresent = FALSE;
+
     if (DeviceExtension->DiskInterfaceEnabled)
     {
         IoSetDeviceInterfaceState(&DeviceExtension->DiskInterfaceName, FALSE);
@@ -624,8 +1201,19 @@ SffdiskCleanupDevice(
 
     SffdiskDeletePhysicalDriveLink(DeviceExtension);
 
+    SffdiskCloseBusInterface(DeviceExtension);
+}
+
+static
+VOID
+SffdiskCleanupDevice(
+    _Inout_ PSFFDISK_DEVICE_EXTENSION DeviceExtension)
+{
+    SffdiskStopDevice(DeviceExtension);
+
     if (DeviceExtension->HarddiskDirectory != NULL)
     {
+        ZwMakeTemporaryObject(DeviceExtension->HarddiskDirectory);
         ZwClose(DeviceExtension->HarddiskDirectory);
         DeviceExtension->HarddiskDirectory = NULL;
     }
@@ -642,13 +1230,6 @@ SffdiskCleanupDevice(
         RtlFreeUnicodeString(&DeviceExtension->DiskInterfaceName);
         RtlInitUnicodeString(&DeviceExtension->DiskInterfaceName, NULL);
         DeviceExtension->DiskInterfaceRegistered = FALSE;
-    }
-
-    if (DeviceExtension->InterfaceOpen)
-    {
-        DeviceExtension->BusInterface.InterfaceDereference(
-            DeviceExtension->BusInterface.Context);
-        DeviceExtension->InterfaceOpen = FALSE;
     }
 }
 
@@ -688,8 +1269,11 @@ SffdiskAddDevice(
      * \\Device\\HarddiskN directory object (like disk.sys does).
      */
     ConfigInfo = IoGetConfigurationInformation();
-    DiskNumber = ConfigInfo->DiskCount;
-    ConfigInfo->DiskCount++;
+    Status = SffdiskReserveDiskNumber(&ConfigInfo->DiskCount, &DiskNumber);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
 
     swprintf(DirNameBuf,
              RTL_NUMBER_OF(DirNameBuf),
@@ -710,7 +1294,6 @@ SffdiskAddDevice(
     {
         DPRINT1("SffdiskAddDevice: ZwCreateDirectoryObject(%wZ) failed 0x%08lx\n",
                 &DirName, Status);
-        ConfigInfo->DiskCount--;
         return Status;
     }
 
@@ -739,7 +1322,6 @@ SffdiskAddDevice(
         DPRINT1("SffdiskAddDevice: IoCreateDevice failed (0x%08lx)\n", Status);
         ZwMakeTemporaryObject(DirHandle);
         ZwClose(DirHandle);
-        ConfigInfo->DiskCount--;
         return Status;
     }
 
@@ -755,13 +1337,26 @@ SffdiskAddDevice(
     DeviceExtension->DeviceName.MaximumLength = sizeof(DevNameBuf);
     DeviceExtension->DeviceName.Buffer = ExAllocatePoolWithTag(
         NonPagedPool, sizeof(DevNameBuf), TAG_SFFDISK);
-    if (DeviceExtension->DeviceName.Buffer != NULL)
+    if (DeviceExtension->DeviceName.Buffer == NULL)
     {
-        RtlCopyUnicodeString(&DeviceExtension->DeviceName, &DevName);
+        IoDeleteDevice(DeviceObject);
+        ZwMakeTemporaryObject(DirHandle);
+        ZwClose(DirHandle);
+        return STATUS_INSUFFICIENT_RESOURCES;
     }
+    RtlCopyUnicodeString(&DeviceExtension->DeviceName, &DevName);
 
     /* Initialize the remove lock */
     IoInitializeRemoveLock(&DeviceExtension->RemoveLock, TAG_SFFDISK, 0, 0);
+    KeInitializeSpinLock(&DeviceExtension->UsageLock);
+    KeInitializeSpinLock(&DeviceExtension->BusRequestLock);
+    KeInitializeEvent(&DeviceExtension->BusRequestsDrained,
+                      NotificationEvent,
+                      TRUE);
+    KeInitializeEvent(&DeviceExtension->ChannelAvailable,
+                      NotificationEvent,
+                      TRUE);
+    DeviceExtension->BusRequestsBlocked = TRUE;
 
     /* Attach to the device stack */
     DeviceExtension->LowerDevice = IoAttachDeviceToDeviceStack(DeviceObject,
@@ -774,7 +1369,6 @@ SffdiskAddDevice(
         IoDeleteDevice(DeviceObject);
         ZwMakeTemporaryObject(DirHandle);
         ZwClose(DirHandle);
-        ConfigInfo->DiskCount--;
         return STATUS_NO_SUCH_DEVICE;
     }
 
@@ -784,8 +1378,16 @@ SffdiskAddDevice(
      * - Power pageable to allow paging path power IRPs
      */
     DeviceObject->Flags |= DO_DIRECT_IO;
-    DeviceObject->Flags |= DO_POWER_PAGABLE;
-    DeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
+    if (DeviceExtension->LowerDevice->Flags & DO_POWER_INRUSH)
+    {
+        DeviceObject->Flags |= DO_POWER_INRUSH;
+    }
+    else if (DeviceExtension->LowerDevice->Flags & DO_POWER_PAGABLE)
+    {
+        DeviceObject->Flags |= DO_POWER_PAGABLE;
+    }
+    DeviceExtension->PowerPagable =
+        (DeviceObject->Flags & DO_POWER_PAGABLE) != 0;
 
     /* Match the alignment requirement of the lower device */
     DeviceObject->AlignmentRequirement = DeviceExtension->LowerDevice->AlignmentRequirement;
@@ -813,9 +1415,17 @@ SffdiskAddDevice(
         {
             DPRINT1("SffdiskAddDevice: IoRegisterDeviceInterface(disk) failed 0x%08lx\n",
                     IfStatus);
-            RtlInitUnicodeString(&DeviceExtension->DiskInterfaceName, NULL);
+            IoDetachDevice(DeviceExtension->LowerDevice);
+            ExFreePoolWithTag(DeviceExtension->DeviceName.Buffer, TAG_SFFDISK);
+            DeviceExtension->DeviceName.Buffer = NULL;
+            IoDeleteDevice(DeviceObject);
+            ZwMakeTemporaryObject(DirHandle);
+            ZwClose(DirHandle);
+            return IfStatus;
         }
     }
+
+    DeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
 
     DPRINT1("SffdiskAddDevice: FDO %p (%wZ) attached to PDO %p\n",
             DeviceObject, &DeviceExtension->DeviceName, PhysicalDeviceObject);
@@ -867,41 +1477,86 @@ SffdiskPnp(
             }
 
             Irp->IoStatus.Status = Status;
-            IoCompleteRequest(Irp, IO_NO_INCREMENT);
             IoReleaseRemoveLock(&DeviceExtension->RemoveLock, Irp);
+            IoCompleteRequest(Irp, IO_NO_INCREMENT);
             return Status;
         }
 
         case IRP_MN_QUERY_STOP_DEVICE:
+        {
+            Irp->IoStatus.Status = STATUS_SUCCESS;
+            return SffdiskForwardIrpWithRemoveLock(DeviceExtension, Irp, FALSE);
+        }
+
         case IRP_MN_QUERY_REMOVE_DEVICE:
         {
-            /* We can always be stopped/removed */
+            NTSTATUS RestoreStatus;
+
+            SffdiskBlockBusRequests(DeviceExtension);
+            DeviceExtension->Present = FALSE;
+            SffdiskCloseBusInterface(DeviceExtension);
+
             Irp->IoStatus.Status = STATUS_SUCCESS;
-            IoSkipCurrentIrpStackLocation(Irp);
-            Status = IoCallDriver(DeviceExtension->LowerDevice, Irp);
+            Status = SffdiskForwardIrpSynchronous(DeviceObject, Irp);
+            if (!NT_SUCCESS(Status))
+            {
+                RestoreStatus = SffdiskOpenBusInterface(DeviceExtension);
+                if (NT_SUCCESS(RestoreStatus))
+                {
+                    DeviceExtension->Present = TRUE;
+                    SffdiskUnblockBusRequests(DeviceExtension);
+                }
+                else
+                {
+                    DPRINT1("SffdiskPnp: failed to reopen interface after rejected query-remove (0x%08lx)\n",
+                            RestoreStatus);
+                }
+            }
+
+            Irp->IoStatus.Status = Status;
             IoReleaseRemoveLock(&DeviceExtension->RemoveLock, Irp);
+            IoCompleteRequest(Irp, IO_NO_INCREMENT);
             return Status;
         }
 
         case IRP_MN_CANCEL_STOP_DEVICE:
-        case IRP_MN_CANCEL_REMOVE_DEVICE:
         {
             Irp->IoStatus.Status = STATUS_SUCCESS;
-            IoSkipCurrentIrpStackLocation(Irp);
-            Status = IoCallDriver(DeviceExtension->LowerDevice, Irp);
+            return SffdiskForwardIrpWithRemoveLock(DeviceExtension, Irp, FALSE);
+        }
+
+        case IRP_MN_CANCEL_REMOVE_DEVICE:
+        {
+            NTSTATUS RestoreStatus;
+
+            Irp->IoStatus.Status = STATUS_SUCCESS;
+            Status = SffdiskForwardIrpSynchronous(DeviceObject, Irp);
+            if (NT_SUCCESS(Status))
+            {
+                RestoreStatus = SffdiskOpenBusInterface(DeviceExtension);
+                if (NT_SUCCESS(RestoreStatus))
+                {
+                    DeviceExtension->Present = TRUE;
+                    SffdiskUnblockBusRequests(DeviceExtension);
+                }
+                else
+                {
+                    Status = RestoreStatus;
+                }
+            }
+
+            Irp->IoStatus.Status = Status;
             IoReleaseRemoveLock(&DeviceExtension->RemoveLock, Irp);
+            IoCompleteRequest(Irp, IO_NO_INCREMENT);
             return Status;
         }
 
         case IRP_MN_STOP_DEVICE:
         {
-            SffdiskCleanupDevice(DeviceExtension);
+            SffdiskStopDevice(DeviceExtension);
 
             Irp->IoStatus.Status = STATUS_SUCCESS;
-            IoSkipCurrentIrpStackLocation(Irp);
-            Status = IoCallDriver(DeviceExtension->LowerDevice, Irp);
-            IoReleaseRemoveLock(&DeviceExtension->RemoveLock, Irp);
-            return Status;
+            return SffdiskForwardIrpWithRemoveLock(DeviceExtension, Irp, FALSE);
         }
 
         case IRP_MN_SURPRISE_REMOVAL:
@@ -910,24 +1565,26 @@ SffdiskPnp(
             DeviceExtension->MediaPresent = FALSE;
             DeviceExtension->SurpriseRemoved = TRUE;
             DeviceObject->Flags |= DO_VERIFY_VOLUME;
+            SffdiskStopDevice(DeviceExtension);
 
             Irp->IoStatus.Status = STATUS_SUCCESS;
-            IoSkipCurrentIrpStackLocation(Irp);
-            Status = IoCallDriver(DeviceExtension->LowerDevice, Irp);
-            IoReleaseRemoveLock(&DeviceExtension->RemoveLock, Irp);
-            return Status;
+            return SffdiskForwardIrpWithRemoveLock(DeviceExtension, Irp, FALSE);
         }
 
         case IRP_MN_REMOVE_DEVICE:
         {
-            Irp->IoStatus.Status = STATUS_SUCCESS;
-            IoSkipCurrentIrpStackLocation(Irp);
-            Status = IoCallDriver(DeviceExtension->LowerDevice, Irp);
+            PDEVICE_OBJECT LowerDevice = DeviceExtension->LowerDevice;
+
+            SffdiskStopDevice(DeviceExtension);
 
             IoReleaseRemoveLockAndWait(&DeviceExtension->RemoveLock, Irp);
             SffdiskCleanupDevice(DeviceExtension);
 
-            IoDetachDevice(DeviceExtension->LowerDevice);
+            Irp->IoStatus.Status = STATUS_SUCCESS;
+            IoSkipCurrentIrpStackLocation(Irp);
+            Status = IoCallDriver(LowerDevice, Irp);
+
+            IoDetachDevice(LowerDevice);
             IoDeleteDevice(DeviceObject);
             return Status;
         }
@@ -942,60 +1599,74 @@ SffdiskPnp(
             {
                 Capabilities = IrpSp->Parameters.DeviceCapabilities.Capabilities;
 
-                /* SD cards are removable; eMMC is not */
-                Capabilities->Removable = DeviceExtension->Removable;
-                Capabilities->EjectSupported = DeviceExtension->Removable;
-                Capabilities->SurpriseRemovalOK = DeviceExtension->Removable;
-                Capabilities->UniqueID = FALSE;
+                /* The SD bus owns slot-wiring policy. Cache its answer instead
+                 * of replacing an embedded-slot result with a protocol guess. */
+                DeviceExtension->Removable = Capabilities->Removable;
+                DeviceExtension->RemovabilityKnown = TRUE;
+                if (DeviceExtension->BytesPerSector != 0 &&
+                    DeviceExtension->TotalSectors != 0)
+                {
+                    SffdiskComputeGeometry(DeviceExtension);
+                }
             }
 
             Irp->IoStatus.Status = Status;
-            IoCompleteRequest(Irp, IO_NO_INCREMENT);
             IoReleaseRemoveLock(&DeviceExtension->RemoveLock, Irp);
+            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            return Status;
+        }
+
+        case IRP_MN_DEVICE_USAGE_NOTIFICATION:
+        {
+            DEVICE_USAGE_NOTIFICATION_TYPE Type;
+            BOOLEAN InPath;
+
+            Type = IrpSp->Parameters.UsageNotification.Type;
+            InPath = IrpSp->Parameters.UsageNotification.InPath;
+            Status = SffdiskAdjustDeviceUsage(DeviceExtension, Type, InPath);
+            if (NT_SUCCESS(Status))
+            {
+                Irp->IoStatus.Status = STATUS_SUCCESS;
+                Status = SffdiskForwardIrpSynchronous(DeviceObject, Irp);
+                if (!NT_SUCCESS(Status))
+                {
+                    (VOID)SffdiskAdjustDeviceUsage(DeviceExtension,
+                                                   Type,
+                                                   !InPath);
+                }
+                else
+                {
+                    IoInvalidateDeviceState(DeviceExtension->PhysicalDevice);
+                }
+            }
+
+            Irp->IoStatus.Status = Status;
+            IoReleaseRemoveLock(&DeviceExtension->RemoveLock, Irp);
+            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            return Status;
+        }
+
+        case IRP_MN_QUERY_PNP_DEVICE_STATE:
+        {
+            Status = SffdiskForwardIrpSynchronous(DeviceObject, Irp);
+            if (NT_SUCCESS(Status) &&
+                SffdiskHasActiveDeviceUsage(DeviceExtension))
+            {
+                Irp->IoStatus.Information |= PNP_DEVICE_NOT_DISABLEABLE;
+            }
+
+            Irp->IoStatus.Status = Status;
+            IoReleaseRemoveLock(&DeviceExtension->RemoveLock, Irp);
+            IoCompleteRequest(Irp, IO_NO_INCREMENT);
             return Status;
         }
 
         default:
         {
             /* Pass all other PnP IRPs down the stack */
-            IoSkipCurrentIrpStackLocation(Irp);
-            Status = IoCallDriver(DeviceExtension->LowerDevice, Irp);
-            IoReleaseRemoveLock(&DeviceExtension->RemoveLock, Irp);
-            return Status;
+            return SffdiskForwardIrpWithRemoveLock(DeviceExtension, Irp, FALSE);
         }
     }
-}
-
-static
-NTSTATUS
-SffdiskSelectCard(
-    _In_ PSFFDISK_DEVICE_EXTENSION DeviceExtension)
-{
-    SDBUS_REQUEST_PACKET Srb;
-    NTSTATUS Status;
-
-    if (!DeviceExtension->InterfaceOpen)
-    {
-        return STATUS_SUCCESS;
-    }
-
-    SD_INIT_REQUEST_PACKET(&Srb, SDRF_DEVICE_COMMAND);
-    Srb.Parameters.DeviceCommand.CmdDesc.Cmd = SDCMD_SELECT_CARD;
-    Srb.Parameters.DeviceCommand.CmdDesc.CmdClass = SDCC_STANDARD;
-    Srb.Parameters.DeviceCommand.CmdDesc.TransferDirection = SDTD_UNSPECIFIED;
-    Srb.Parameters.DeviceCommand.CmdDesc.TransferType = SDTT_CMD_ONLY;
-    Srb.Parameters.DeviceCommand.CmdDesc.ResponseType = SDRT_1B;
-    Srb.Parameters.DeviceCommand.Argument = 0;
-    Srb.Parameters.DeviceCommand.Mdl = NULL;
-    Srb.Parameters.DeviceCommand.Length = 0;
-
-    Status = SdBusSubmitRequest(DeviceExtension->BusInterface.Context, &Srb);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("SffdiskSelectCard: CMD7 failed (0x%08lx)\n", Status);
-    }
-
-    return Status;
 }
 
 static
@@ -1008,7 +1679,6 @@ SffdiskPowerUpCompletion(
 {
     PSFFDISK_DEVICE_EXTENSION DeviceExtension;
     PIO_STACK_LOCATION IrpSp;
-    NTSTATUS Status;
 
     UNREFERENCED_PARAMETER(Context);
 
@@ -1022,20 +1692,12 @@ SffdiskPowerUpCompletion(
 
     if (NT_SUCCESS(Irp->IoStatus.Status))
     {
-        Status = SffdiskSelectCard(DeviceExtension);
-        if (NT_SUCCESS(Status))
-        {
-            DeviceExtension->DevicePowerState =
-                IrpSp->Parameters.Power.State.DeviceState;
+        DeviceExtension->DevicePowerState =
+            IrpSp->Parameters.Power.State.DeviceState;
 
-            PoSetPowerState(DeviceObject,
-                            IrpSp->Parameters.Power.Type,
-                            IrpSp->Parameters.Power.State);
-        }
-        else
-        {
-            Irp->IoStatus.Status = Status;
-        }
+        PoSetPowerState(DeviceObject,
+                        IrpSp->Parameters.Power.Type,
+                        IrpSp->Parameters.Power.State);
     }
 
     PoStartNextPowerIrp(Irp);
@@ -1092,20 +1754,17 @@ SffdiskPower(
     }
 
     PoStartNextPowerIrp(Irp);
-    IoSkipCurrentIrpStackLocation(Irp);
-    Status = PoCallDriver(DeviceExtension->LowerDevice, Irp);
-
-    IoReleaseRemoveLock(&DeviceExtension->RemoveLock, Irp);
-    return Status;
+    return SffdiskForwardIrpWithRemoveLock(DeviceExtension, Irp, TRUE);
 }
 
 /**
- * @brief Handles IRP_MJ_CREATE and IRP_MJ_CLOSE. Both always succeed.
+ * @brief Handles per-handle create, cleanup, and close lifecycle.
  *
  * @param DeviceObject Our FDO (unused).
  * @param Irp The create/close IRP to complete.
  *
- * @return STATUS_SUCCESS always.
+ * Cleanup and close release any raw-command channel reservation owned by the
+ * handle.
  */
 NTSTATUS
 NTAPI
@@ -1113,13 +1772,42 @@ SffdiskCreateClose(
     _In_ PDEVICE_OBJECT DeviceObject,
     _Inout_ PIRP Irp)
 {
-    UNREFERENCED_PARAMETER(DeviceObject);
+    PSFFDISK_DEVICE_EXTENSION DeviceExtension;
+    PIO_STACK_LOCATION IrpSp;
+    NTSTATUS Status;
 
-    Irp->IoStatus.Status = STATUS_SUCCESS;
+    DeviceExtension = (PSFFDISK_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
+    IrpSp = IoGetCurrentIrpStackLocation(Irp);
+    Status = STATUS_SUCCESS;
+
+    switch (IrpSp->MajorFunction)
+    {
+        case IRP_MJ_CREATE:
+            Status = IoAcquireRemoveLock(&DeviceExtension->RemoveLock, Irp);
+            if (NT_SUCCESS(Status))
+            {
+                IoReleaseRemoveLock(&DeviceExtension->RemoveLock, Irp);
+            }
+            break;
+
+        case IRP_MJ_CLEANUP:
+            SffdiskReleaseChannelForFile(DeviceExtension, IrpSp->FileObject);
+            break;
+
+        case IRP_MJ_CLOSE:
+            SffdiskReleaseChannelForFile(DeviceExtension, IrpSp->FileObject);
+            break;
+
+        default:
+            Status = STATUS_INVALID_DEVICE_REQUEST;
+            break;
+    }
+
+    Irp->IoStatus.Status = Status;
     Irp->IoStatus.Information = 0;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
 
-    return STATUS_SUCCESS;
+    return Status;
 }
 
 /**
@@ -1186,6 +1874,7 @@ DriverEntry(
     DriverObject->MajorFunction[IRP_MJ_WRITE] = SffdiskReadWrite;
     DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = SffdiskDeviceControl;
     DriverObject->MajorFunction[IRP_MJ_CREATE] = SffdiskCreateClose;
+    DriverObject->MajorFunction[IRP_MJ_CLEANUP] = SffdiskCreateClose;
     DriverObject->MajorFunction[IRP_MJ_CLOSE] = SffdiskCreateClose;
     DriverObject->MajorFunction[IRP_MJ_FLUSH_BUFFERS] = SffdiskFlushBuffers;
     DriverObject->DriverExtension->AddDevice = SffdiskAddDevice;
