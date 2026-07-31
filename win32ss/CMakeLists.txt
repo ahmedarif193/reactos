@@ -39,6 +39,13 @@ add_definitions(
     -DLANGPACK
     -D_WIN32K_)
 
+# win32k and dxgkrnl exchange the D3DKMT_* structures by pointer, so both must
+# compile them at the SAME DXGKDDI_INTERFACE_VERSION. dxgkrnl builds at the
+# audited 3.2 header ceiling; leaving win32k on the tree-wide Vista default made
+# it capture a smaller D3DKMT_PRESENT than dxgkrnl then read back.
+remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
+add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x11007)
+
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/gdi/dib)
 
 list(APPEND GENDIB_FILES
