@@ -126,7 +126,7 @@ KiUnlinkThread(IN PKTHREAD Thread,
     if (Timer->Header.Inserted) KxRemoveTreeTimer(Timer);
 
     /* Increment the Queue's active threads */
-    if (Thread->Queue) Thread->Queue->CurrentCount++;
+    if (Thread->Queue) KiIncrementQueueCurrentCount(Thread->Queue);
 }
 
 VOID
