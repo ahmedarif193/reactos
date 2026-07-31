@@ -295,9 +295,32 @@ NdisMSetMiniportAttributes(
         {
             PNDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES Gen =
                 &MiniportAttributes->GeneralAttributes;
+            PNDIS_OID NewOidList = NULL;
+            PNDIS_OID OldOidList;
 
+            if (Gen->SupportedOidListLength != 0)
+            {
+                if (Gen->SupportedOidList == NULL)
+                    return NDIS_STATUS_INVALID_PARAMETER;
+
+                NewOidList = ExAllocatePoolWithTag(
+                    NonPagedPool,
+                    Gen->SupportedOidListLength,
+                    NDIS6_ATTR_TAG);
+                if (NewOidList == NULL)
+                    return NDIS_STATUS_RESOURCES;
+
+                RtlCopyMemory(NewOidList,
+                              Gen->SupportedOidList,
+                              Gen->SupportedOidListLength);
+            }
+
+            OldOidList = Ext->GeneralAttrs.SupportedOidList;
             Ext->GeneralAttrs       = *Gen;
+            Ext->GeneralAttrs.SupportedOidList = NewOidList;
             Ext->GeneralAttrsValid  = TRUE;
+            if (OldOidList != NULL)
+                ExFreePoolWithTag(OldOidList, NDIS6_ATTR_TAG);
 
             /* Mirror the MAC address into the legacy LOGICAL_ADAPTER
              * fields so existing 5.x consumers see it. */
