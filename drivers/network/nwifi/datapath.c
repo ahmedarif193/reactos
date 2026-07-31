@@ -15,7 +15,7 @@
 #define SNAP_LLC_SSAP       0xAA
 #define SNAP_LLC_CONTROL    0x03
 
-/* Per-NBL context accessor (pool created with ContextSize == sizeof). */
+/* Per-NBL context accessor (the pool rounds this structure for NDIS alignment). */
 #define NWIFI_NBL_CTX(_nbl) \
     ((PNWIFI_NBL_CONTEXT)NET_BUFFER_LIST_CONTEXT_DATA_START(_nbl))
 
@@ -144,6 +144,63 @@ NwifiUsesBridgeTunnel(
     return (EtherType == ETHERTYPE_AARP || EtherType == ETHERTYPE_IPX);
 }
 
+static
+BOOLEAN
+NwifiAcceptEthernetFrame(
+    _In_ PNWIFI_ADAPTER Adapter,
+    _In_reads_bytes_(FrameLength) const UCHAR *Frame,
+    _In_ ULONG FrameLength)
+{
+    static const UCHAR BroadcastAddress[ETH_ADDR_LEN] =
+        {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    const UCHAR *Destination;
+    ULONG PacketFilter;
+    ULONG Index;
+    BOOLEAN Accepted = FALSE;
+
+    if (FrameLength < ETH_HEADER_LEN)
+        return FALSE;
+
+    Destination = Frame;
+    NdisAcquireSpinLock(&Adapter->DataLock);
+    PacketFilter = Adapter->CurrentPacketFilter;
+
+    if (RtlCompareMemory(Destination, BroadcastAddress, ETH_ADDR_LEN) ==
+        ETH_ADDR_LEN)
+    {
+        Accepted = (PacketFilter & NDIS_PACKET_TYPE_BROADCAST) != 0;
+    }
+    else if ((Destination[0] & 1) != 0)
+    {
+        if (PacketFilter & NDIS_PACKET_TYPE_ALL_MULTICAST)
+        {
+            Accepted = TRUE;
+        }
+        else if (PacketFilter & NDIS_PACKET_TYPE_MULTICAST)
+        {
+            for (Index = 0; Index < Adapter->MulticastAddressCount; Index++)
+            {
+                if (RtlCompareMemory(Destination,
+                                     Adapter->MulticastAddresses[Index],
+                                     ETH_ADDR_LEN) == ETH_ADDR_LEN)
+                {
+                    Accepted = TRUE;
+                    break;
+                }
+            }
+        }
+    }
+    else if ((PacketFilter & NDIS_PACKET_TYPE_DIRECTED) != 0 &&
+             RtlCompareMemory(Destination, Adapter->MacAddress,
+                              ETH_ADDR_LEN) == ETH_ADDR_LEN)
+    {
+        Accepted = TRUE;
+    }
+
+    NdisReleaseSpinLock(&Adapter->DataLock);
+    return Accepted;
+}
+
 /* ===========================================================================
  *  Transmit: 802.3 -> 802.11 (ToDS), attach DOT11_EXTSTA_SEND_CONTEXT
  * ===========================================================================
@@ -156,7 +213,8 @@ PNET_BUFFER_LIST
 NwifiTranslateTxFrame(
     _In_ PNWIFI_ADAPTER Adapter,
     _In_ PNET_BUFFER NetBuffer,
-    _In_ PNET_BUFFER_LIST OriginalNbl)
+    _In_ PNET_BUFFER_LIST OriginalNbl,
+    _In_reads_(IEEE80211_ADDR_LEN) const UCHAR *Bssid)
 {
     UCHAR Eth[ETH_MAX_FRAME];
     ULONG EthLength;
@@ -200,7 +258,7 @@ NwifiTranslateTxFrame(
     MacHeader->DurationId[0] = 0;
     MacHeader->DurationId[1] = 0;
     /* ToDS: A1=BSSID, A2=SA(our MAC), A3=DA(eth dst). */
-    RtlCopyMemory(MacHeader->Address1, Adapter->Bssid, IEEE80211_ADDR_LEN);
+    RtlCopyMemory(MacHeader->Address1, Bssid, IEEE80211_ADDR_LEN);
     RtlCopyMemory(MacHeader->Address2, &Eth[ETH_ADDR_LEN], IEEE80211_ADDR_LEN);
     RtlCopyMemory(MacHeader->Address3, &Eth[0], IEEE80211_ADDR_LEN);
 
@@ -271,6 +329,8 @@ NwifiMiniportSendNetBufferLists(
     PNET_BUFFER_LIST Nbl = NetBufferLists;
     ULONG DownFlags = 0;
     BOOLEAN Running;
+    BOOLEAN Associated;
+    UCHAR Bssid[IEEE80211_ADDR_LEN];
 
     UNREFERENCED_PARAMETER(PortNumber);
 
@@ -281,6 +341,8 @@ NwifiMiniportSendNetBufferLists(
 
     NdisAcquireSpinLock(&Adapter->DataLock);
     Running = (Adapter->State == NwifiStateRunning);
+    Associated = Adapter->Associated;
+    RtlCopyMemory(Bssid, Adapter->Bssid, sizeof(Bssid));
     NdisReleaseSpinLock(&Adapter->DataLock);
 
     while (Nbl != NULL)
@@ -293,11 +355,11 @@ NwifiMiniportSendNetBufferLists(
 
         /* Only single-NET_BUFFER NBLs are translated (TCP/IP sends one frame
          * per NBL); multi-NB NBLs are failed, not silently dropped. */
-        if (Running && NetBuffer != NULL && NET_BUFFER_NEXT_NB(NetBuffer) == NULL &&
-            Adapter->Associated)
+        if (Running && Associated && NetBuffer != NULL &&
+            NET_BUFFER_NEXT_NB(NetBuffer) == NULL)
         {
             PNET_BUFFER_LIST DownNbl =
-                NwifiTranslateTxFrame(Adapter, NetBuffer, Nbl);
+                NwifiTranslateTxFrame(Adapter, NetBuffer, Nbl, Bssid);
             if (DownNbl != NULL)
             {
                 DownNbl->SourceHandle = NULL;   /* protocol-originated send */
@@ -317,7 +379,7 @@ NwifiMiniportSendNetBufferLists(
              */
             NET_BUFFER_LIST_STATUS(Nbl) =
                 Running ? NDIS_STATUS_FAILURE : NDIS_STATUS_PAUSED;
-            Adapter->TxError++;
+            InterlockedIncrement64(&Adapter->TxError);
             NdisMSendNetBufferListsComplete(Adapter->MiniportAdapterHandle, Nbl,
                 (SendFlags & NDIS_SEND_FLAGS_DISPATCH_LEVEL)
                     ? NDIS_SEND_COMPLETE_FLAGS_DISPATCH_LEVEL : 0);
@@ -356,12 +418,12 @@ NwifiSendCompleteFromLower(
 
         if (Status == NDIS_STATUS_SUCCESS)
         {
-            Adapter->TxOk++;
-            Adapter->TxBytes += Ctx->DataLength;
+            InterlockedIncrement64(&Adapter->TxOk);
+            InterlockedExchangeAdd64(&Adapter->TxBytes, Ctx->DataLength);
         }
         else
         {
-            Adapter->TxError++;
+            InterlockedIncrement64(&Adapter->TxError);
         }
 
         /* Free the per-send dot11 context and the translated frame/NBL. */
@@ -409,6 +471,7 @@ NwifiInjectL2Frame(
     USHORT SeqCtl;
     PNET_BUFFER_LIST Nbl;
     PDOT11_EXTSTA_SEND_CONTEXT SendCtx;
+    UCHAR Bssid[IEEE80211_ADDR_LEN];
 
     if (PayloadLength == 0 || PayloadLength > ETH_MTU)
     {
@@ -430,7 +493,10 @@ NwifiInjectL2Frame(
     MacHeader->DurationId[0] = 0;
     MacHeader->DurationId[1] = 0;
     /* ToDS: A1=BSSID, A2=SA(our MAC), A3=DA. */
-    RtlCopyMemory(MacHeader->Address1, Adapter->Bssid, IEEE80211_ADDR_LEN);
+    NdisAcquireSpinLock(&Adapter->DataLock);
+    RtlCopyMemory(Bssid, Adapter->Bssid, sizeof(Bssid));
+    NdisReleaseSpinLock(&Adapter->DataLock);
+    RtlCopyMemory(MacHeader->Address1, Bssid, IEEE80211_ADDR_LEN);
     RtlCopyMemory(MacHeader->Address2, Adapter->MacAddress, IEEE80211_ADDR_LEN);
     RtlCopyMemory(MacHeader->Address3, DestMac, IEEE80211_ADDR_LEN);
 
@@ -467,7 +533,7 @@ NwifiInjectL2Frame(
     SendCtx->Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
     SendCtx->Header.Revision = DOT11_EXTSTA_SEND_CONTEXT_REVISION_1;
     SendCtx->Header.Size = sizeof(DOT11_EXTSTA_SEND_CONTEXT);
-    /* EAPOL must always be sent in the clear during the handshake. */
+    /* Message 2 is exempt before PTK installation; message 4 is protected. */
     SendCtx->usExemptionActionType =
         SendUnencrypted ? DOT11_EXEMPT_ALWAYS : DOT11_EXEMPT_NO_EXEMPTION;
     SendCtx->uPhyId = 0;
@@ -599,7 +665,9 @@ NwifiReceiveFromLower(
     PNET_BUFFER_LIST Nbl = NetBufferLists;
     BOOLEAN AtDispatch = (ReceiveFlags & NDIS_RECEIVE_FLAGS_DISPATCH_LEVEL) ? TRUE : FALSE;
     BOOLEAN Running;
+    BOOLEAN Associated;
     ULONG ReturnFlags = 0;
+    ULONG IndicateFlags = 0;
     PNET_BUFFER_LIST UpHead = NULL;
     PNET_BUFFER_LIST UpTail = NULL;
     ULONG UpCount = 0;
@@ -609,10 +677,12 @@ NwifiReceiveFromLower(
     if (AtDispatch)
     {
         ReturnFlags |= NDIS_RETURN_FLAGS_DISPATCH_LEVEL;
+        IndicateFlags |= NDIS_RECEIVE_FLAGS_DISPATCH_LEVEL;
     }
 
     NdisAcquireSpinLock(&Adapter->DataLock);
     Running = (Adapter->State == NwifiStateRunning);
+    Associated = Adapter->Associated;
     NdisReleaseSpinLock(&Adapter->DataLock);
 
     while (Nbl != NULL)
@@ -631,12 +701,12 @@ NwifiReceiveFromLower(
 
             if (FrameLength == 0 || FrameLength > sizeof(Frame))
             {
-                Adapter->RxError++;
+                InterlockedIncrement64(&Adapter->RxError);
                 continue;
             }
             if (NwifiLinearizeNb(NetBuffer, Frame, FrameLength) != FrameLength)
             {
-                Adapter->RxError++;
+                InterlockedIncrement64(&Adapter->RxError);
                 continue;
             }
 
@@ -658,14 +728,26 @@ NwifiReceiveFromLower(
                 }
             }
 
-            if (!Running)
+            if (!Running || !Associated)
             {
                 NwifiFreeBuiltNbl(UpNbl);
                 continue;
             }
 
-            Adapter->RxOk++;
-            Adapter->RxBytes += NWIFI_NBL_CTX(UpNbl)->DataLength;
+            {
+                PNWIFI_NBL_CONTEXT UpCtx = NWIFI_NBL_CTX(UpNbl);
+                if (!NwifiAcceptEthernetFrame(Adapter,
+                                              UpCtx->DataBuffer,
+                                              UpCtx->DataLength))
+                {
+                    NwifiFreeBuiltNbl(UpNbl);
+                    continue;
+                }
+            }
+
+            InterlockedIncrement64(&Adapter->RxOk);
+            InterlockedExchangeAdd64(&Adapter->RxBytes,
+                                     NWIFI_NBL_CTX(UpNbl)->DataLength);
             InterlockedIncrement(&Adapter->PendingReceives);
 
             NET_BUFFER_LIST_NEXT_NBL(UpNbl) = NULL;
@@ -686,7 +768,7 @@ NwifiReceiveFromLower(
 
     if (UpHead != NULL)
     {
-        NdisMIndicateReceiveNetBufferLists(Adapter->MiniportAdapterHandle, UpHead, NDIS_DEFAULT_PORT_NUMBER, UpCount, ReceiveFlags | NDIS_RECEIVE_FLAGS_RESOURCES);
+        NdisMIndicateReceiveNetBufferLists(Adapter->MiniportAdapterHandle, UpHead, NDIS_DEFAULT_PORT_NUMBER, UpCount, IndicateFlags);
     }
 
     /* With RESOURCES the lower NBL data is only valid during this call and
@@ -734,13 +816,17 @@ NwifiIndicateLinkState(
 {
     NDIS_LINK_STATE LinkState;
     NDIS_STATUS_INDICATION StatusIndication;
+    ULONG64 LinkSpeed;
 
     if (Adapter->MiniportAdapterHandle == NULL)
     {
         return;
     }
 
+    NdisAcquireSpinLock(&Adapter->DataLock);
     Adapter->MediaConnected = Connected;
+    LinkSpeed = Adapter->LinkSpeedBps;
+    NdisReleaseSpinLock(&Adapter->DataLock);
 
     RtlZeroMemory(&LinkState, sizeof(LinkState));
     LinkState.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
@@ -751,8 +837,12 @@ NwifiIndicateLinkState(
     LinkState.MediaDuplexState = MediaDuplexStateFull;
     if (Connected)
     {
-        LinkState.XmitLinkSpeed = NWIFI_DEFAULT_LINK_SPEED;
-        LinkState.RcvLinkSpeed = NWIFI_DEFAULT_LINK_SPEED;
+        if (LinkSpeed == 0 || LinkSpeed == NDIS_LINK_SPEED_UNKNOWN)
+        {
+            LinkSpeed = NWIFI_DEFAULT_LINK_SPEED;
+        }
+        LinkState.XmitLinkSpeed = LinkSpeed;
+        LinkState.RcvLinkSpeed = LinkSpeed;
     }
     else
     {

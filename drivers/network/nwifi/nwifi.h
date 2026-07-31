@@ -69,6 +69,7 @@ NdisCompleteUnbindAdapterEx(
 /* Link speed reported to TCP/IP for the virtual Ethernet adapter until the MSM
  * learns the real PHY rate.  54 Mbit/s (classic 802.11g) is a safe stand-in. */
 #define NWIFI_DEFAULT_LINK_SPEED    (54ULL * 1000000ULL)
+#define NWIFI_MAX_LINK_SPEED        433300000ULL
 
 /* ===========================================================================
  *  IEEE 802.11 framing
@@ -125,6 +126,10 @@ typedef struct _RFC1042_SNAP_HEADER
 #define ETH_TYPE_OFFSET             12
 #define ETH_MTU                     1500
 #define ETH_MAX_FRAME               (ETH_HEADER_LEN + ETH_MTU)  /* 1514 */
+#define NWIFI_MAX_MULTICAST_ADDRESSES 32
+#define NWIFI_SUPPORTED_PACKET_FILTERS \
+    (NDIS_PACKET_TYPE_DIRECTED | NDIS_PACKET_TYPE_MULTICAST | \
+     NDIS_PACKET_TYPE_ALL_MULTICAST | NDIS_PACKET_TYPE_BROADCAST)
 
 /* Largest 802.11 MSDU we build = SNAP + payload (no Ethernet addrs/type). */
 #define NWIFI_MAX_80211_FRAME \
@@ -198,7 +203,10 @@ typedef struct _NWIFI_ADAPTER
     NWIFI_STATE   State;
     ULONG         CurrentPacketFilter;
     ULONG         CurrentLookahead;
+    ULONG         MulticastAddressCount;
+    UCHAR         MulticastAddresses[NWIFI_MAX_MULTICAST_ADDRESSES][ETH_ADDR_LEN];
     BOOLEAN       MediaConnected;
+    ULONG64       LinkSpeedBps;
 
     /* Association state, owned by the MSM.  ToDS frames use Bssid as Address1. */
     UCHAR         Bssid[IEEE80211_ADDR_LEN];
@@ -221,12 +229,12 @@ typedef struct _NWIFI_ADAPTER
     NDIS_EVENT    CloseEvent;
 
     /* ---- Statistics ---- */
-    ULONG64       TxOk;
-    ULONG64       RxOk;
-    ULONG64       TxError;
-    ULONG64       RxError;
-    ULONG64       TxBytes;
-    ULONG64       RxBytes;
+    volatile LONG64 TxOk;
+    volatile LONG64 RxOk;
+    volatile LONG64 TxError;
+    volatile LONG64 RxError;
+    volatile LONG64 TxBytes;
+    volatile LONG64 RxBytes;
 
     /* Station management object; typed as PNWIFI_MSM (see msm.h), kept as
      * PVOID so this header need not pull in MSM internals. */

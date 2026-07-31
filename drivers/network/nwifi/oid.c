@@ -114,6 +114,14 @@ NwifiQueryCounter(
 }
 
 static
+ULONG64
+NwifiReadCounter(
+    _In_ volatile LONG64 *Counter)
+{
+    return (ULONG64)InterlockedCompareExchange64(Counter, 0, 0);
+}
+
+static
 NDIS_STATUS
 NwifiQueryStatistics(
     _In_ PNWIFI_ADAPTER Adapter,
@@ -138,12 +146,12 @@ NwifiQueryStatistics(
         NDIS_STATISTICS_FLAGS_VALID_BYTES_XMIT |
         NDIS_STATISTICS_FLAGS_VALID_RCV_DISCARDS |
         NDIS_STATISTICS_FLAGS_VALID_XMIT_ERROR;
-    Stats.ifHCInOctets = Adapter->RxBytes;
-    Stats.ifHCInUcastPkts = Adapter->RxOk;
-    Stats.ifHCOutOctets = Adapter->TxBytes;
-    Stats.ifHCOutUcastPkts = Adapter->TxOk;
-    Stats.ifInErrors = Adapter->RxError;
-    Stats.ifOutErrors = Adapter->TxError;
+    Stats.ifHCInOctets = NwifiReadCounter(&Adapter->RxBytes);
+    Stats.ifHCInUcastPkts = NwifiReadCounter(&Adapter->RxOk);
+    Stats.ifHCOutOctets = NwifiReadCounter(&Adapter->TxBytes);
+    Stats.ifHCOutUcastPkts = NwifiReadCounter(&Adapter->TxOk);
+    Stats.ifInErrors = NwifiReadCounter(&Adapter->RxError);
+    Stats.ifOutErrors = NwifiReadCounter(&Adapter->TxError);
 
     RtlCopyMemory(Request->DATA.QUERY_INFORMATION.InformationBuffer, &Stats, sizeof(Stats));
     Request->DATA.QUERY_INFORMATION.BytesWritten = sizeof(Stats);
@@ -207,21 +215,45 @@ NwifiQueryInformation(
         }
 
         case OID_GEN_CURRENT_PACKET_FILTER:
-            return NwifiQueryUlong(Request, Adapter->CurrentPacketFilter);
+        {
+            ULONG PacketFilter;
+
+            NdisAcquireSpinLock(&Adapter->DataLock);
+            PacketFilter = Adapter->CurrentPacketFilter;
+            NdisReleaseSpinLock(&Adapter->DataLock);
+            return NwifiQueryUlong(Request, PacketFilter);
+        }
 
         case OID_GEN_CURRENT_LOOKAHEAD:
         case OID_GEN_MAXIMUM_LOOKAHEAD:
             return NwifiQueryUlong(Request, ETH_MAX_FRAME);
 
         case OID_GEN_LINK_SPEED:
+        {
+            ULONG64 Speed;
+
             /* 100 bps units. */
-            return NwifiQueryUlong(Request,
-                Adapter->MediaConnected ? (54000000UL / 100UL) : 0);
+            NdisAcquireSpinLock(&Adapter->DataLock);
+            Speed = Adapter->MediaConnected ? Adapter->LinkSpeedBps : 0;
+            NdisReleaseSpinLock(&Adapter->DataLock);
+            if (Speed > (ULONG64)MAXULONG * 100)
+            {
+                Speed = (ULONG64)MAXULONG * 100;
+            }
+            return NwifiQueryUlong(Request, (ULONG)(Speed / 100));
+        }
 
         case OID_GEN_MEDIA_CONNECT_STATUS:
+        {
+            BOOLEAN Connected;
+
+            NdisAcquireSpinLock(&Adapter->DataLock);
+            Connected = Adapter->MediaConnected;
+            NdisReleaseSpinLock(&Adapter->DataLock);
             return NwifiQueryUlong(Request,
-                Adapter->MediaConnected ? NdisMediaStateConnected
-                                        : NdisMediaStateDisconnected);
+                Connected ? NdisMediaStateConnected
+                          : NdisMediaStateDisconnected);
+        }
 
         case OID_GEN_MAXIMUM_SEND_PACKETS:
             return NwifiQueryUlong(Request, 16);
@@ -232,10 +264,10 @@ NwifiQueryInformation(
                 NDIS_MAC_OPTION_TRANSFERS_NOT_PEND |
                 NDIS_MAC_OPTION_NO_LOOPBACK);
 
-        case OID_GEN_XMIT_OK:    return NwifiQueryCounter(Request, Adapter->TxOk);
-        case OID_GEN_RCV_OK:     return NwifiQueryCounter(Request, Adapter->RxOk);
-        case OID_GEN_XMIT_ERROR: return NwifiQueryCounter(Request, Adapter->TxError);
-        case OID_GEN_RCV_ERROR:  return NwifiQueryCounter(Request, Adapter->RxError);
+        case OID_GEN_XMIT_OK:    return NwifiQueryCounter(Request, NwifiReadCounter(&Adapter->TxOk));
+        case OID_GEN_RCV_OK:     return NwifiQueryCounter(Request, NwifiReadCounter(&Adapter->RxOk));
+        case OID_GEN_XMIT_ERROR: return NwifiQueryCounter(Request, NwifiReadCounter(&Adapter->TxError));
+        case OID_GEN_RCV_ERROR:  return NwifiQueryCounter(Request, NwifiReadCounter(&Adapter->RxError));
         case OID_GEN_RCV_NO_BUFFER: return NwifiQueryCounter(Request, 0);
         case OID_GEN_STATISTICS: return NwifiQueryStatistics(Adapter, Request);
 
@@ -244,7 +276,7 @@ NwifiQueryInformation(
             return NwifiQueryBuffer(Request, Adapter->MacAddress, ETH_ADDR_LEN);
 
         case OID_802_3_MAXIMUM_LIST_SIZE:
-            return NwifiQueryUlong(Request, 32);
+            return NwifiQueryUlong(Request, NWIFI_MAX_MULTICAST_ADDRESSES);
 
         case OID_802_3_RCV_ERROR_ALIGNMENT:
         case OID_802_3_XMIT_ONE_COLLISION:
@@ -270,6 +302,13 @@ NwifiSetInformation(
     PVOID Buffer = Request->DATA.SET_INFORMATION.InformationBuffer;
     ULONG Length = Request->DATA.SET_INFORMATION.InformationBufferLength;
 
+    Request->DATA.SET_INFORMATION.BytesRead = 0;
+    Request->DATA.SET_INFORMATION.BytesNeeded = 0;
+    if (Length != 0 && Buffer == NULL)
+    {
+        return NDIS_STATUS_INVALID_DATA;
+    }
+
     switch (Oid)
     {
         case OID_GEN_CURRENT_PACKET_FILTER:
@@ -278,9 +317,14 @@ NwifiSetInformation(
                 Request->DATA.SET_INFORMATION.BytesNeeded = sizeof(ULONG);
                 return NDIS_STATUS_INVALID_LENGTH;
             }
+            if (*(PULONG)Buffer & ~NWIFI_SUPPORTED_PACKET_FILTERS)
+            {
+                return NDIS_STATUS_NOT_SUPPORTED;
+            }
+            NdisAcquireSpinLock(&Adapter->DataLock);
             Adapter->CurrentPacketFilter = *(PULONG)Buffer;
+            NdisReleaseSpinLock(&Adapter->DataLock);
             Request->DATA.SET_INFORMATION.BytesRead = sizeof(ULONG);
-            /* TODO: translate to OID_DOT11_CURRENT_PACKET_FILTER and forward down. */
             return NDIS_STATUS_SUCCESS;
 
         case OID_GEN_CURRENT_LOOKAHEAD:
@@ -289,12 +333,30 @@ NwifiSetInformation(
                 Request->DATA.SET_INFORMATION.BytesNeeded = sizeof(ULONG);
                 return NDIS_STATUS_INVALID_LENGTH;
             }
+            NdisAcquireSpinLock(&Adapter->DataLock);
             Adapter->CurrentLookahead = *(PULONG)Buffer;
+            NdisReleaseSpinLock(&Adapter->DataLock);
             Request->DATA.SET_INFORMATION.BytesRead = sizeof(ULONG);
             return NDIS_STATUS_SUCCESS;
 
         case OID_802_3_MULTICAST_LIST:
-            /* Accept; the open data path indicates all received frames anyway. */
+            if ((Length % ETH_ADDR_LEN) != 0)
+            {
+                return NDIS_STATUS_INVALID_LENGTH;
+            }
+            if ((Length / ETH_ADDR_LEN) > NWIFI_MAX_MULTICAST_ADDRESSES)
+            {
+                Request->DATA.SET_INFORMATION.BytesNeeded =
+                    NWIFI_MAX_MULTICAST_ADDRESSES * ETH_ADDR_LEN;
+                return NDIS_STATUS_MULTICAST_FULL;
+            }
+            NdisAcquireSpinLock(&Adapter->DataLock);
+            if (Length != 0)
+            {
+                RtlCopyMemory(Adapter->MulticastAddresses, Buffer, Length);
+            }
+            Adapter->MulticastAddressCount = Length / ETH_ADDR_LEN;
+            NdisReleaseSpinLock(&Adapter->DataLock);
             Request->DATA.SET_INFORMATION.BytesRead = Length;
             return NDIS_STATUS_SUCCESS;
 

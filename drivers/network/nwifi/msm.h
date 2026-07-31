@@ -7,7 +7,9 @@
  * The MSM is the host-side MLME for an extensible-station (ExtSTA)
  * Native-802.11 miniport: it drives the OID_DOT11_* scan/connect/key flow,
  * consumes NDIS_STATUS_DOT11_* indications, and runs the RSNA supplicant
- * (supplicant.c) over EAPOL-Key frames for a secured (WPA2-PSK) connect.
+ * (supplicant.c) over EAPOL-Key frames for a secured WPA2-PSK connect, while
+ * honoring lower fullmac adapters that complete and authorize the port in
+ * firmware (for example WPA3-SAE).
  */
 
 #ifndef _NWIFI_MSM_H_
@@ -62,7 +64,7 @@ typedef struct _NWIFI_CONNECT_PARAMS
     DOT11_AUTH_ALGORITHM   AuthAlgorithm;
     DOT11_CIPHER_ALGORITHM UnicastCipher;
     DOT11_CIPHER_ALGORITHM MulticastCipher;
-    BOOLEAN                Secure;             /* RSNA/WPA-PSK => run supplicant */
+    BOOLEAN                Secure;             /* encrypted network */
 } NWIFI_CONNECT_PARAMS, *PNWIFI_CONNECT_PARAMS;
 
 /* Per-interface MSM object (NWIFI_ADAPTER.MsmContext).  Mutable state is
@@ -88,11 +90,16 @@ typedef struct _NWIFI_MSM
     BOOLEAN          ScanInProgress;
 
     /* Scan-confirm may arrive at DISPATCH_LEVEL, but harvesting the BSS list
-     * (OID_DOT11_ENUM_BSS_LIST) is a blocking OID needing PASSIVE_LEVEL, so
-     * it is deferred to this NDIS IO work item. */
-    NDIS_HANDLE      ScanWorkItem;
+     * (OID_DOT11_ENUM_BSS_LIST) is a blocking OID needing PASSIVE_LEVEL. */
     volatile LONG    ScanWorkQueued;
     NDIS_STATUS      LastScanStatus;     /* ndisStatus from the scan-confirm */
+
+    /* Every PASSIVE_LEVEL callback owns a one-shot NDIS work item.  This
+     * rundown prevents handle reuse and keeps the MSM alive through unbind. */
+    KSPIN_LOCK       WorkItemLock;
+    volatile LONG    WorkItemsPending;
+    volatile LONG    WorkItemsHalting;
+    KEVENT           WorkItemsDrainedEvent;
 
     /* BSS cache (aggregated across ENUM_BSS_LIST snapshots). */
     NWIFI_BSS_CACHE_ENTRY BssCache[NWIFI_MAX_BSS_CACHE];
@@ -126,6 +133,22 @@ NDIS_STATUS NwifiMsmStartScan(
 NDIS_STATUS NwifiMsmConnect(
     _In_ PNWIFI_MSM Msm,
     _In_ PNWIFI_CONNECT_PARAMS Params);
+
+/* Queue/retire a one-shot PASSIVE_LEVEL callback protected by MSM rundown. */
+BOOLEAN NwifiMsmQueueWorkItem(
+    _In_ PNWIFI_MSM Msm,
+    _In_ NDIS_IO_WORKITEM_ROUTINE Routine,
+    _In_opt_ PVOID Context);
+
+VOID NwifiMsmCompleteWorkItem(
+    _In_ PNWIFI_MSM Msm,
+    _In_ NDIS_HANDLE WorkItem);
+
+/* Publish an associated link after either host key installation or lower
+ * fullmac authorization has completed. */
+VOID NwifiMsmLinkUp(
+    _In_ PNWIFI_MSM Msm,
+    _In_ BOOLEAN Secure);
 
 /* OID_DOT11_DISCONNECT_REQUEST. */
 NDIS_STATUS NwifiMsmDisconnect(_In_ PNWIFI_MSM Msm);
@@ -187,6 +210,10 @@ VOID NwifiMsmInterfaceRemoval(_In_ struct _NWIFI_ADAPTER *Adapter);
 
 /* Start a WPA2-PSK supplicant session for the current association. */
 NDIS_STATUS NwifiSupplicantStart(_In_ PNWIFI_MSM Msm);
+
+/* Send the cached credential to a lower fullmac adapter for firmware-owned
+ * authentication (currently WPA3-SAE). */
+NDIS_STATUS NwifiSupplicantSeedFirmware(_In_ PNWIFI_MSM Msm);
 
 /* Stop the supplicant session (zeroise keys, disarm) but keep the object so a
  * concurrent RX-path EAPOL feed never dereferences freed memory. */
