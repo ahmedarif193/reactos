@@ -466,6 +466,10 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
                             (1ULL << 39) |   /* HA */
                             (1ULL << 40));   /* HD */
 
+                /* Feature policy was selected before this geometry fixup. */
+                if (Arm64CpuFeatures.HaEnabled)
+                    NewTcr |= (1ULL << 39);
+
                 __asm__ __volatile__("dsb ish" ::: "memory");
                 __asm__ __volatile__("msr tcr_el1, %0" :: "r"(NewTcr) : "memory");
                 __asm__ __volatile__("isb" ::: "memory");
@@ -1279,10 +1283,15 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
         }
 
-        /* Enable HA/HD if the CPU advertises FEAT_HAFDBS. */
+        /*
+         * Match the NT ARM64 policy: use hardware Access Flag updates when
+         * FEAT_HAFDBS is present, but keep dirty-state accounting under MM's
+         * software control even when the processor implements hardware dirty
+         * management.
+         */
         {
             BOOLEAN EnableHa = (Arm64CpuFeatures.HafdbsSupported >= 1);
-            BOOLEAN EnableHd = (Arm64CpuFeatures.HafdbsSupported >= 2);
+            BOOLEAN EnableHd = FALSE;
             ULONG64 CurrentTcr, NewTcr;
 
             __asm__ __volatile__("mrs %0, tcr_el1" : "=r"(CurrentTcr));
