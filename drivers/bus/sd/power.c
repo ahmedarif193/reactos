@@ -6,9 +6,33 @@
  */
 
 #include "sdbus.h"
+#include "hardware.h"
 
 #define NDEBUG
 #include <debug.h>
+
+static VOID
+SdBusCompleteFdoPowerIrp(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _Inout_ PIRP Irp,
+    _In_ CCHAR PriorityBoost)
+{
+    IoReleaseRemoveLock(&FdoExtension->RemoveLock, Irp);
+    IoCompleteRequest(Irp, PriorityBoost);
+}
+
+static NTSTATUS
+SdBusForwardFdoPowerIrp(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _Inout_ PIRP Irp)
+{
+    PDEVICE_OBJECT LowerDevice = FdoExtension->LowerDevice;
+
+    PoStartNextPowerIrp(Irp);
+    IoSkipCurrentIrpStackLocation(Irp);
+    IoReleaseRemoveLock(&FdoExtension->RemoveLock, Irp);
+    return PoCallDriver(LowerDevice, Irp);
+}
 
 static NTSTATUS
 NTAPI
@@ -53,13 +77,12 @@ SdBusForwardPowerIrpAndWait(
                               KernelMode,
                               FALSE,
                               NULL);
-        Status = Irp->IoStatus.Status;
     }
 
-    return Status;
+    return Irp->IoStatus.Status;
 }
 
-static VOID
+static NTSTATUS
 SdBusQuiesceRequests(
     _In_ PFDO_EXTENSION FdoExtension,
     _In_ ULONG TimeoutMs)
@@ -68,11 +91,6 @@ SdBusQuiesceRequests(
     ULONG Elapsed = 0;
     const ULONG PollStepMs = 10;
 
-    if (!FdoExtension->WorkerStarted)
-    {
-        return;
-    }
-
     PollDelay.QuadPart = -((LONGLONG)PollStepMs * 10000);
 
     while (Elapsed < TimeoutMs)
@@ -80,7 +98,7 @@ SdBusQuiesceRequests(
         if (InterlockedCompareExchange(&FdoExtension->OutstandingRequestCount,
                                        0, 0) == 0)
         {
-            return;
+            return STATUS_SUCCESS;
         }
 
         KeDelayExecutionThread(KernelMode, FALSE, &PollDelay);
@@ -89,6 +107,92 @@ SdBusQuiesceRequests(
 
     DPRINT1("SdBusQuiesceRequests: timed out waiting for %ld outstanding requests\n",
             FdoExtension->OutstandingRequestCount);
+    return STATUS_IO_TIMEOUT;
+}
+
+static VOID
+SdBusUnblockRequests(
+    _In_ PFDO_EXTENSION FdoExtension)
+{
+    InterlockedExchange(&FdoExtension->RequestsBlocked, 0);
+    if (FdoExtension->WorkerStarted &&
+        InterlockedCompareExchange(&FdoExtension->WorkerShutdown, 0, 0) == 0)
+    {
+        /* A deferred SDIO enable may have consumed the earlier wake while the
+         * transition gate was closed. Give it another chance now. */
+        KeSetEvent(&FdoExtension->RequestArrived, IO_NO_INCREMENT, FALSE);
+    }
+}
+
+static VOID
+SdBusEnableRuntimeInterrupts(
+    _In_ PFDO_EXTENSION FdoExtension)
+{
+    ULONG SignalMask;
+
+    SignalMask = SDHCI_INT_CMD_COMPLETE |
+                 SDHCI_INT_XFER_COMPLETE |
+                 SDHCI_INT_DMA |
+                 SDHCI_INT_BUFFER_WRITE_READY |
+                 SDHCI_INT_BUFFER_READ_READY |
+                 SDHCI_INT_ERROR |
+                 SDHCI_INT_CMD_ERROR_MASK |
+                 SDHCI_INT_DATA_ERROR_MASK;
+    if (!FdoExtension->NonRemovable)
+    {
+        SignalMask |= SDHCI_INT_CARD_INSERTION | SDHCI_INT_CARD_REMOVAL;
+    }
+
+    SdBusUpdateInterruptSignalEnable(FdoExtension, SignalMask, 0);
+    SdBusRefreshCardInterrupt(FdoExtension);
+}
+
+static VOID
+SdBusRestoreManagedSdioFunctions(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _In_ ULONG InsertionGeneration)
+{
+    PDEVICE_OBJECT FunctionPdos[7];
+    ULONG FunctionCount = 0;
+    ULONG FunctionIndex;
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
+    for (Entry = FdoExtension->ChildPdoList.Flink;
+         Entry != &FdoExtension->ChildPdoList &&
+         FunctionCount < RTL_NUMBER_OF(FunctionPdos);
+         Entry = Entry->Flink)
+    {
+        PPDO_EXTENSION Child;
+
+        Child = CONTAINING_RECORD(Entry, PDO_EXTENSION, ListEntry);
+        if (Child->Present && Child->Started &&
+            Child->InsertionGeneration == InsertionGeneration &&
+            Child->FunctionNumber != 0 &&
+            InterlockedCompareExchange(&Child->ManageIoEnable, 0, 0) != 0)
+        {
+            FunctionPdos[FunctionCount] = Child->Common.Self;
+            ObReferenceObject(FunctionPdos[FunctionCount]);
+            FunctionCount++;
+        }
+    }
+    KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
+
+    for (FunctionIndex = 0; FunctionIndex < FunctionCount; FunctionIndex++)
+    {
+        PPDO_EXTENSION Child;
+        NTSTATUS Status;
+
+        Child = (PPDO_EXTENSION)FunctionPdos[FunctionIndex]->DeviceExtension;
+        Status = SdBusSetSdioFunctionEnabled(Child, TRUE);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("SdBusRestoreManagedSdioFunctions: function %lu failed "
+                    "(0x%08lx)\n", Child->FunctionNumber, Status);
+        }
+        ObDereferenceObject(FunctionPdos[FunctionIndex]);
+    }
 }
 
 static
@@ -100,12 +204,14 @@ SdBusRestoreControllerState(
     ULONG Timeout;
     USHORT ClockControl;
     UCHAR PowerControl;
+    ULONG SignalEnable;
 
     if (!FdoExtension->RegistersMapped)
     {
         return STATUS_SUCCESS;
     }
 
+    InterlockedExchange(&FdoExtension->CurrentClockKhz, 0);
     Delay.QuadPart = -10000LL;
 
     SdBusWriteReg8(FdoExtension, SDHCI_SOFTWARE_RESET, SDHCI_RESET_ALL);
@@ -126,6 +232,11 @@ SdBusRestoreControllerState(
         return STATUS_IO_TIMEOUT;
     }
 
+    InterlockedExchange(&FdoExtension->CommandInterruptStatus, 0);
+    InterlockedExchange(&FdoExtension->PendingInterruptStatus, 0);
+    KeClearEvent(&FdoExtension->CommandEvent);
+    SdBusHardwareInitializeController(FdoExtension);
+
     if (FdoExtension->HostCapabilities & SDHCI_CAP_VOLTAGE_330)
     {
         PowerControl = SDHCI_PC_BUS_VOLTAGE_330 | SDHCI_PC_BUS_POWER_ON;
@@ -134,9 +245,13 @@ SdBusRestoreControllerState(
     {
         PowerControl = SDHCI_PC_BUS_VOLTAGE_300 | SDHCI_PC_BUS_POWER_ON;
     }
-    else
+    else if (FdoExtension->HostCapabilities & SDHCI_CAP_VOLTAGE_180)
     {
         PowerControl = SDHCI_PC_BUS_VOLTAGE_180 | SDHCI_PC_BUS_POWER_ON;
+    }
+    else
+    {
+        return STATUS_SD_BUS_POWER_ERROR;
     }
     SdBusWriteReg8(FdoExtension, SDHCI_POWER_CONTROL, PowerControl);
 
@@ -178,6 +293,11 @@ SdBusRestoreControllerState(
 
         ClockControl |= SDHCI_CLK_SD_CLK_ENABLE;
         SdBusWriteReg16(FdoExtension, SDHCI_CLOCK_CONTROL, ClockControl);
+        InterlockedExchange(&FdoExtension->CurrentClockKhz,
+                            (LONG)(Divisor == 0 ?
+                                   FdoExtension->MaxClockFrequency :
+                                   FdoExtension->MaxClockFrequency /
+                                       ((ULONG)Divisor << 1)));
     }
 
     Delay.QuadPart = -(LONGLONG)SD_POWER_UP_DELAY_MS * 10000;
@@ -191,6 +311,7 @@ SdBusRestoreControllerState(
     SdBusWriteReg32(FdoExtension, SDHCI_INT_STATUS_ENABLE,
                     SDHCI_INT_CMD_COMPLETE |
                     SDHCI_INT_XFER_COMPLETE |
+                    SDHCI_INT_DMA |
                     SDHCI_INT_BUFFER_WRITE_READY |
                     SDHCI_INT_BUFFER_READ_READY |
                     SDHCI_INT_CARD_INSERTION |
@@ -199,95 +320,132 @@ SdBusRestoreControllerState(
                     SDHCI_INT_ERROR |
                     SDHCI_INT_CMD_ERROR_MASK |
                     SDHCI_INT_DATA_ERROR_MASK);
-    SdBusWriteReg32(FdoExtension, SDHCI_INT_SIGNAL_ENABLE,
-                    SDHCI_INT_CMD_COMPLETE |
-                    SDHCI_INT_XFER_COMPLETE |
-                    SDHCI_INT_BUFFER_WRITE_READY |
-                    SDHCI_INT_BUFFER_READ_READY |
-                    SDHCI_INT_CARD_INSERTION |
-                    SDHCI_INT_CARD_REMOVAL |
-                    SDHCI_INT_CARD_INTERRUPT |
-                    SDHCI_INT_ERROR |
-                    SDHCI_INT_CMD_ERROR_MASK |
-                    SDHCI_INT_DATA_ERROR_MASK);
+    SignalEnable = SDHCI_INT_CMD_COMPLETE |
+                   SDHCI_INT_XFER_COMPLETE |
+                   SDHCI_INT_DMA |
+                   SDHCI_INT_BUFFER_WRITE_READY |
+                   SDHCI_INT_BUFFER_READ_READY |
+                   SDHCI_INT_ERROR |
+                   SDHCI_INT_CMD_ERROR_MASK |
+                   SDHCI_INT_DATA_ERROR_MASK;
+    SdBusWriteReg32(FdoExtension, SDHCI_INT_SIGNAL_ENABLE, SignalEnable);
 
     return STATUS_SUCCESS;
 }
 
-static VOID
+VOID
 SdBusReIdentifyChildren(
     _In_ PFDO_EXTENSION FdoExtension)
 {
     PLIST_ENTRY Entry;
-    PPDO_EXTENSION PdoExtension;
+    PPDO_EXTENSION PdoExtension = NULL;
     SD_CID CachedCid;
+    SD_CARD_TYPE CachedCardType;
+    ULONG InsertionGeneration;
+    UCHAR CachedSdioFunctions;
+    USHORT CachedSdioVendorId;
+    USHORT CachedSdioDeviceId;
     KIRQL OldIrql;
     NTSTATUS Status;
-    BOOLEAN CardSwapped = FALSE;
-
-    if (FdoExtension->ChildPdoCount == 0)
-    {
-        return;
-    }
+    BOOLEAN CardSwapped;
+    PDEVICE_OBJECT PdoDeviceObject;
 
     KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
-    Entry = FdoExtension->ChildPdoList.Flink;
+    for (Entry = FdoExtension->ChildPdoList.Flink;
+         Entry != &FdoExtension->ChildPdoList;
+         Entry = Entry->Flink)
+    {
+        PPDO_EXTENSION Candidate;
+
+        Candidate = CONTAINING_RECORD(Entry, PDO_EXTENSION, ListEntry);
+        if (Candidate->Present && Candidate->FunctionNumber == 0 &&
+            !Candidate->IsEmmcPartition)
+        {
+            PdoExtension = Candidate;
+            ObReferenceObject(PdoExtension->Common.Self);
+            break;
+        }
+    }
     KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
 
-    while (Entry != &FdoExtension->ChildPdoList)
+    if (PdoExtension == NULL)
     {
-        PLIST_ENTRY Next = Entry->Flink;
-        PdoExtension = CONTAINING_RECORD(Entry, PDO_EXTENSION, ListEntry);
+        ULONG PresentState;
 
-        if (!PdoExtension->Present)
+        PresentState = SdBusReadReg32(FdoExtension, SDHCI_PRESENT_STATE);
+        if (FdoExtension->NonRemovable ||
+            (PresentState & SDHCI_PS_CARD_INSERTED))
         {
-            Entry = Next;
-            continue;
+            (VOID)SdBusEnumerateInsertedCard(FdoExtension, TRUE, FALSE);
         }
+        return;
+    }
+    PdoDeviceObject = PdoExtension->Common.Self;
 
-        CachedCid = PdoExtension->Cid;
+    CachedCid = PdoExtension->Cid;
+    CachedCardType = PdoExtension->CardType;
+    CachedSdioFunctions = PdoExtension->SdioNumFunctions;
+    CachedSdioVendorId = PdoExtension->SdioVendorId;
+    CachedSdioDeviceId = PdoExtension->SdioDeviceId;
+    InsertionGeneration = PdoExtension->InsertionGeneration;
 
-        Status = SdBusEnumerateCard(FdoExtension, PdoExtension, FALSE);
-        if (Status == STATUS_SD_RETRY_NO_UHS)
-        {
-            DPRINT1("SdBusReIdentifyChildren: voltage switch aborted; "
-                    "retrying at 3.3V without UHS\n");
-            Status = SdBusEnumerateCard(FdoExtension, PdoExtension, TRUE);
-        }
+    Status = SdBusEnumerateCard(FdoExtension, PdoExtension, FALSE);
+    if (Status == STATUS_SD_RETRY_NO_UHS)
+    {
+        DPRINT1("SdBusReIdentifyChildren: voltage switch aborted; "
+                "retrying at 3.3V without UHS\n");
+        Status = SdBusEnumerateCard(FdoExtension, PdoExtension, TRUE);
+    }
 
-        if (!NT_SUCCESS(Status))
-        {
-            DPRINT1("SdBusReIdentifyChildren: Re-enum failed (0x%08lx); "
-                    "marking PDO absent\n", Status);
-            PdoExtension->Present = FALSE;
-            PdoExtension->ReportedMissing = TRUE;
-            CardSwapped = TRUE;
-            Entry = Next;
-            continue;
-        }
-
-        if (RtlCompareMemory(&PdoExtension->Cid, &CachedCid,
-                             sizeof(SD_CID)) != sizeof(SD_CID))
-        {
-            DPRINT1("SdBusReIdentifyChildren: CID changed during sleep "
-                    "(old PSN=%08lx new PSN=%08lx); invalidating PDO\n",
-                    CachedCid.ProductSerialNumber,
-                    PdoExtension->Cid.ProductSerialNumber);
-            PdoExtension->Present = FALSE;
-            PdoExtension->ReportedMissing = TRUE;
-            CardSwapped = TRUE;
-            Entry = Next;
-            continue;
-        }
-
-        (VOID)SdBusSetTransferClock(FdoExtension, PdoExtension);
-        Entry = Next;
+    CardSwapped = !NT_SUCCESS(Status) ||
+                  PdoExtension->CardType != CachedCardType;
+    if (!CardSwapped &&
+        (CachedCardType == SdCardTypeSdio ||
+         CachedCardType == SdCardTypeCombo))
+    {
+        CardSwapped =
+            PdoExtension->SdioNumFunctions != CachedSdioFunctions ||
+            PdoExtension->SdioVendorId != CachedSdioVendorId ||
+            PdoExtension->SdioDeviceId != CachedSdioDeviceId;
+    }
+    if (!CardSwapped && CachedCardType != SdCardTypeSdio)
+    {
+        CardSwapped =
+            RtlCompareMemory(&PdoExtension->Cid, &CachedCid,
+                             sizeof(SD_CID)) != sizeof(SD_CID);
     }
 
     if (CardSwapped)
     {
+        DPRINT1("SdBusReIdentifyChildren: card identity changed or re-enum "
+                "failed (0x%08lx); invalidating generation %lu\n",
+                Status, InsertionGeneration);
+
+        KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
+        for (Entry = FdoExtension->ChildPdoList.Flink;
+             Entry != &FdoExtension->ChildPdoList;
+             Entry = Entry->Flink)
+        {
+            PPDO_EXTENSION Child;
+
+            Child = CONTAINING_RECORD(Entry, PDO_EXTENSION, ListEntry);
+            if (Child->InsertionGeneration == InsertionGeneration)
+            {
+                Child->Present = FALSE;
+                Child->ReportedMissing = TRUE;
+            }
+        }
+        KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
+
+        SdBusDeleteMissingInternalSdioHosts(FdoExtension);
         IoInvalidateDeviceRelations(FdoExtension->PhysicalDevice, BusRelations);
+        ObDereferenceObject(PdoDeviceObject);
+        return;
     }
+
+    (VOID)SdBusSetTransferClock(FdoExtension, PdoExtension);
+    SdBusRestoreManagedSdioFunctions(FdoExtension, InsertionGeneration);
+    ObDereferenceObject(PdoDeviceObject);
 }
 
 /**
@@ -316,6 +474,15 @@ SdBusFdoPower(
     FdoExtension = (PFDO_EXTENSION)DeviceObject->DeviceExtension;
     IoStack = IoGetCurrentIrpStackLocation(Irp);
 
+    Status = IoAcquireRemoveLock(&FdoExtension->RemoveLock, Irp);
+    if (!NT_SUCCESS(Status))
+    {
+        PoStartNextPowerIrp(Irp);
+        Irp->IoStatus.Status = Status;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return Status;
+    }
+
     switch (IoStack->MinorFunction)
     {
         case IRP_MN_SET_POWER:
@@ -326,19 +493,42 @@ SdBusFdoPower(
             if (IoStack->Parameters.Power.Type == SystemPowerState)
             {
                 /* System power IRP -- just pass down */
-                PoStartNextPowerIrp(Irp);
-                IoSkipCurrentIrpStackLocation(Irp);
-                return PoCallDriver(FdoExtension->LowerDevice, Irp);
+                return SdBusForwardFdoPowerIrp(FdoExtension, Irp);
             }
 
             if (IoStack->Parameters.Power.Type == DevicePowerState)
             {
                 DEVICE_POWER_STATE NewState;
+                DEVICE_POWER_STATE OldState;
+                BOOLEAN BlockedHere;
+                LONG PreviousBlock;
+
                 NewState = IoStack->Parameters.Power.State.DeviceState;
+                OldState = FdoExtension->Common.DevicePowerState;
+                BlockedHere = FALSE;
+
+                if (NewState == PowerDeviceD0 ||
+                    (NewState > PowerDeviceD0 && FdoExtension->RegistersMapped))
+                {
+                    PreviousBlock = InterlockedExchange(
+                        &FdoExtension->RequestsBlocked, 1);
+                    BlockedHere = (PreviousBlock == 0);
+                }
 
                 if (NewState > PowerDeviceD0 && FdoExtension->RegistersMapped)
                 {
-                    SdBusQuiesceRequests(FdoExtension, 5000);
+                    Status = SdBusQuiesceRequests(FdoExtension, 5000);
+                    if (!NT_SUCCESS(Status))
+                    {
+                        if (BlockedHere)
+                        {
+                            SdBusUnblockRequests(FdoExtension);
+                        }
+                        PoStartNextPowerIrp(Irp);
+                        Irp->IoStatus.Status = Status;
+                        SdBusCompleteFdoPowerIrp(FdoExtension, Irp, IO_NO_INCREMENT);
+                        return Status;
+                    }
 
                     /* Going to low power -- disable interrupts */
                     SdBusWriteReg32(FdoExtension, SDHCI_INT_SIGNAL_ENABLE, 0);
@@ -347,43 +537,53 @@ SdBusFdoPower(
                 Status = SdBusForwardPowerIrpAndWait(FdoExtension, Irp);
                 if (NT_SUCCESS(Status))
                 {
-                    FdoExtension->Common.DevicePowerState = NewState;
-
                     if (NewState == PowerDeviceD0)
                     {
                         Status = SdBusRestoreControllerState(FdoExtension);
-                        if (NT_SUCCESS(Status))
+                        if (NT_SUCCESS(Status) && FdoExtension->RegistersMapped)
                         {
                             SdBusReIdentifyChildren(FdoExtension);
+                            SdBusUnblockRequests(FdoExtension);
+                            SdBusEnableRuntimeInterrupts(FdoExtension);
                         }
+                        else if (NT_SUCCESS(Status))
+                        {
+                            SdBusUnblockRequests(FdoExtension);
+                        }
+                    }
+
+                    if (NT_SUCCESS(Status))
+                    {
+                        FdoExtension->Common.DevicePowerState = NewState;
+                    }
+                }
+                else if (BlockedHere)
+                {
+                    SdBusUnblockRequests(FdoExtension);
+                    if (OldState == PowerDeviceD0 && FdoExtension->RegistersMapped)
+                    {
+                        SdBusEnableRuntimeInterrupts(FdoExtension);
                     }
                 }
 
                 PoStartNextPowerIrp(Irp);
                 Irp->IoStatus.Status = Status;
-                IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                SdBusCompleteFdoPowerIrp(FdoExtension, Irp, IO_NO_INCREMENT);
                 return Status;
             }
 
             /* Unrecognized power type, pass down */
-            PoStartNextPowerIrp(Irp);
-            IoSkipCurrentIrpStackLocation(Irp);
-            return PoCallDriver(FdoExtension->LowerDevice, Irp);
+            return SdBusForwardFdoPowerIrp(FdoExtension, Irp);
 
         case IRP_MN_QUERY_POWER:
             /* Always succeed power queries */
-            PoStartNextPowerIrp(Irp);
             Irp->IoStatus.Status = STATUS_SUCCESS;
-            IoSkipCurrentIrpStackLocation(Irp);
-            return PoCallDriver(FdoExtension->LowerDevice, Irp);
+            return SdBusForwardFdoPowerIrp(FdoExtension, Irp);
 
         case IRP_MN_WAIT_WAKE:
         default:
             /* Pass down unhandled power IRPs */
-            PoStartNextPowerIrp(Irp);
-            IoSkipCurrentIrpStackLocation(Irp);
-            Status = PoCallDriver(FdoExtension->LowerDevice, Irp);
-            return Status;
+            return SdBusForwardFdoPowerIrp(FdoExtension, Irp);
     }
 }
 
@@ -411,6 +611,15 @@ SdBusPdoPower(
 
     PdoExtension = (PPDO_EXTENSION)DeviceObject->DeviceExtension;
     IoStack = IoGetCurrentIrpStackLocation(Irp);
+
+    Status = IoAcquireRemoveLock(&PdoExtension->RemoveLock, Irp);
+    if (!NT_SUCCESS(Status))
+    {
+        PoStartNextPowerIrp(Irp);
+        Irp->IoStatus.Status = Status;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return Status;
+    }
 
     switch (IoStack->MinorFunction)
     {
@@ -443,6 +652,7 @@ SdBusPdoPower(
 
     Status = Irp->IoStatus.Status;
     PoStartNextPowerIrp(Irp);
+    IoReleaseRemoveLock(&PdoExtension->RemoveLock, Irp);
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
     return Status;
 }

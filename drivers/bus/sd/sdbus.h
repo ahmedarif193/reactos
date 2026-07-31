@@ -38,8 +38,16 @@ typedef enum _SDBUS_DEVICE_STATE {
 typedef struct _SDBUS_COMMON_EXTENSION {
     PDEVICE_OBJECT Self;
     BOOLEAN IsFdo;
+    BOOLEAN PowerPagable;
     SDBUS_DEVICE_STATE DeviceState;
     DEVICE_POWER_STATE DevicePowerState;
+    KSPIN_LOCK UsageLock;
+    ULONG PagingPathCount;
+    ULONG HibernationPathCount;
+    ULONG DumpPathCount;
+    ULONG BootPathCount;
+    ULONG PostDisplayPathCount;
+    ULONG GuestAssignedPathCount;
 } SDBUS_COMMON_EXTENSION, *PSDBUS_COMMON_EXTENSION;
 
 /**
@@ -83,11 +91,14 @@ typedef struct _FDO_EXTENSION {
     ULONG ChildPdoCount;
 
     volatile LONG InsertionGeneration;
+    volatile LONG PendingSdioAcks;
 
     /* Host controller capabilities */
     ULONG HostCapabilities;
     ULONG HostCapabilities2;
     ULONG MaxClockFrequency;
+    volatile LONG CurrentClockKhz;
+    volatile LONG MediaChangeCount;
     USHORT SpecVersion;
     UCHAR CurrentBusWidth;
     BOOLEAN EmmcPartitionConfigValid;
@@ -125,6 +136,7 @@ typedef struct _FDO_EXTENSION {
     PVOID WorkerThread;
     volatile LONG OutstandingRequestCount;
     volatile LONG WorkerShutdown;
+    volatile LONG RequestsBlocked;
     BOOLEAN WorkerStarted;
     BOOLEAN CsqInitialized;
 
@@ -168,14 +180,17 @@ typedef struct _PDO_EXTENSION {
 
     ULONG InsertionGeneration;
 
-    ULONG PagingPathCount;
-    ULONG HibernationPathCount;
-    ULONG DumpPathCount;
-
     /* Interface callback */
     PSDBUS_CALLBACK_ROUTINE CallbackRoutine;
     PVOID CallbackContext;
+    PVOID CallbackInterfaceContext;
+    PVOID InitializedInterfaceContext;
     BOOLEAN CallbackAtDpcLevel;
+    BOOLEAN CardInterruptForwardEnabled;
+    volatile LONG ManageIoEnable;
+    volatile LONG SdioFunctionEnabled;
+    volatile LONG SdioEnablePending;
+    volatile LONG SdioEnableStatus;
     ULONG FunctionNumber;
 
     USHORT SdioVendorId;
@@ -191,11 +206,9 @@ typedef struct _PDO_EXTENSION {
     ULONG SdioCommonCisPointer;
 
     BOOLEAN IsEmmcPartition;
+    BOOLEAN IsInternalSdioHost;
     UCHAR EmmcPartitionId;
     ULONGLONG EmmcPartitionSizeBytes;
-
-    /* Interface reference count */
-    LONG InterfaceReferenceCount;
 
     /* Remove lock */
     IO_REMOVE_LOCK RemoveLock;
@@ -205,10 +218,20 @@ typedef struct _PDO_EXTENSION {
  * @brief Interface context allocated per SdBusOpenInterface call.
  */
 typedef struct _SDBUS_INTERFACE_CONTEXT {
+    /* Keep first: the companion sdbus.lib reads this opaque ABI prefix. */
+    PDEVICE_OBJECT TargetObject;
+    KSPIN_LOCK TargetLock;
     PPDO_EXTENSION PdoExtension;
+    PDEVICE_OBJECT PdoDeviceObject;
+    PDEVICE_OBJECT FdoDeviceObject;
+    LONG ReferenceCount;
     PSDBUS_CALLBACK_ROUTINE CallbackRoutine;
     PVOID CallbackContext;
     BOOLEAN DeviceGeneratesInterrupts;
+    BOOLEAN CallbackAtDpcLevel;
+    BOOLEAN Initialized;
+    USHORT SdioFlags;
+    volatile LONG InterruptOutstanding;
 } SDBUS_INTERFACE_CONTEXT, *PSDBUS_INTERFACE_CONTEXT;
 
 /**
@@ -290,6 +313,25 @@ SdBusPdoPower(
     _In_ PDEVICE_OBJECT DeviceObject,
     _Inout_ PIRP Irp);
 
+VOID
+SdBusInitializeDeviceUsage(
+    _Inout_ PSDBUS_COMMON_EXTENSION CommonExtension,
+    _In_ BOOLEAN PowerPagable);
+
+NTSTATUS
+SdBusAdjustDeviceUsage(
+    _Inout_ PSDBUS_COMMON_EXTENSION CommonExtension,
+    _In_ DEVICE_USAGE_NOTIFICATION_TYPE Type,
+    _In_ BOOLEAN InPath);
+
+BOOLEAN
+SdBusHasActiveDeviceUsage(
+    _Inout_ PSDBUS_COMMON_EXTENSION CommonExtension);
+
+VOID
+SdBusReIdentifyChildren(
+    _In_ PFDO_EXTENSION FdoExtension);
+
 /**
  * @brief Handle internal device control IRPs for a child PDO.
  *
@@ -337,6 +379,11 @@ SdBusSetTransferClock(
     _In_ PFDO_EXTENSION FdoExtension,
     _In_ PPDO_EXTENSION PdoExtension);
 
+NTSTATUS
+SdBusProgramClock(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _In_ ULONG TargetClockKhz);
+
 /**
  * @brief Send a single SD/MMC command via the SDHCI controller.
  *
@@ -376,6 +423,19 @@ SdBusSendAppCommand(
     _In_ ULONG Argument,
     _In_ USHORT CommandFlags,
     _Out_opt_ PULONG Response);
+
+NTSTATUS
+SdBusSendAppCommandPrefix(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _In_ ULONG Rca);
+
+NTSTATUS
+SdBusR1Status(
+    _In_ ULONG Response);
+
+NTSTATUS
+SdBusR6Status(
+    _In_ ULONG Response);
 
 /**
  * @brief Parse a 128-bit CID from SDHCI response registers.
@@ -464,6 +524,10 @@ SdBusHandleRequest(
     _In_ PPDO_EXTENSION PdoExtension,
     _Inout_ PSDBUS_REQUEST_PACKET RequestPacket);
 
+BOOLEAN
+SdBusIsCachedGetRequest(
+    _In_ PSDBUS_REQUEST_PACKET RequestPacket);
+
 /**
  * @brief Wait for SDHCI interrupt bits via the ISR-driven completion event.
  *
@@ -483,6 +547,10 @@ SdBusWaitForInterrupt(
     _In_ ULONG TimeoutMs,
     _Out_ PULONG ResultBits);
 
+NTSTATUS
+SdBusInterruptErrorToStatus(
+    _In_ ULONG ErrorBits);
+
 /**
  * @brief Execute an SDHCI command with optional PIO data transfer.
  *
@@ -492,6 +560,7 @@ SdBusWaitForInterrupt(
  * @param[in,out]  Mdl           Optional MDL describing the data buffer for read/write transfers.
  * @param[in]      DataLength    Length of the data transfer in bytes (0 for command-only).
  * @param[in]      BlockSize     SDHCI block size for data transfers.
+ * @param[in]      RequestFlags  SDRP flags controlling command sequencing and busy waits.
  * @param[out]     Response      Optional pointer to receive response data (4 ULONGs for R2).
  *
  * @return STATUS_SUCCESS on success, or an NTSTATUS error code.
@@ -504,10 +573,19 @@ SdBusSendSdhciCommand(
     _Inout_opt_ PMDL Mdl,
     _In_ ULONG DataLength,
     _In_ ULONG BlockSize,
+    _In_ USHORT RequestFlags,
     _Out_opt_ PULONG Response);
 
 NTSTATUS
 SdBusInitializeRequestQueue(
+    _In_ PFDO_EXTENSION FdoExtension);
+
+NTSTATUS
+SdBusAcquireRequestAdmission(
+    _In_ PFDO_EXTENSION FdoExtension);
+
+VOID
+SdBusReleaseRequestAdmission(
     _In_ PFDO_EXTENSION FdoExtension);
 
 VOID
@@ -544,6 +622,14 @@ VOID
 NTAPI
 SdBusInterfaceReference(
     _In_ PVOID Context);
+
+BOOLEAN
+SdBusReferenceInterfaceContext(
+    _In_ PSDBUS_INTERFACE_CONTEXT InterfaceContext);
+
+VOID
+SdBusRefreshCardInterrupt(
+    _In_ PFDO_EXTENSION FdoExtension);
 
 /**
  * @brief Decrement the interface reference count, freeing context at zero.
@@ -598,6 +684,10 @@ SdBusSdioCmd52(
     _Out_opt_ PUCHAR DataOut);
 
 NTSTATUS
+SdBusSdioR5Status(
+    _In_ ULONG Response);
+
+NTSTATUS
 SdBusSdioReadCccr(
     _In_ PFDO_EXTENSION FdoExtension,
     _In_ ULONG Address,
@@ -623,10 +713,28 @@ SdBusSdioCmd53(
     _Inout_opt_ PMDL Mdl);
 
 NTSTATUS
+SdBusSetSdioFunctionEnabled(
+    _In_ PPDO_EXTENSION PdoExtension,
+    _In_ BOOLEAN Enable);
+
+NTSTATUS
+SdBusSetSdioFunctionEnabledAdmitted(
+    _In_ PPDO_EXTENSION PdoExtension,
+    _In_ BOOLEAN Enable);
+
+VOID
+SdBusProcessPendingSdioEnables(
+    _In_ PFDO_EXTENSION FdoExtension);
+
+NTSTATUS
 SdBusSdioEnumerateFunctions(
     _In_ PFDO_EXTENSION FdoExtension,
     _In_ PPDO_EXTENSION HostPdo,
     _In_ ULONG NumFunctions);
+
+VOID
+SdBusDeleteMissingInternalSdioHosts(
+    _In_ PFDO_EXTENSION FdoExtension);
 
 
 NTSTATUS

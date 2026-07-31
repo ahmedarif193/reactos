@@ -28,25 +28,30 @@
 /* PRIVATE DEFINITIONS ********************************************************/
 
 /**
- * @brief Retrieve the PDO device object from the SD bus interface context.
+ * @brief Retrieve the initialized request target from the SD bus interface
+ * context.
  *
  * The SD bus driver's interface context (SDBUS_INTERFACE_CONTEXT) has the
  * following layout:
  *
- *   offset 0: PPDO_EXTENSION  PdoExtension
+ *   offset 0: PDEVICE_OBJECT TargetObject
+ *   next naturally aligned field: KSPIN_LOCK TargetLock
  *
- * And PDO_EXTENSION embeds SDBUS_COMMON_EXTENSION as its first member:
- *
- *   offset 0: PDEVICE_OBJECT  Self
- *
- * Therefore, the PDO device object can be retrieved by double-dereferencing
- * the interface context pointer. This layout knowledge is equivalent to what
- * Microsoft's sdbus.lib has about the Windows SD bus driver internals.
+ * TargetObject is the referenced next-lower device supplied through
+ * SDBUS_INTERFACE_PARAMETERS. TargetLock protects taking a transient object
+ * reference while that target is replaced or detached. This preserves
+ * filter-stack ordering without exposing the bus driver's PDO extension
+ * layout.
  *
  * @param InterfaceContext  The Context field from SDBUS_INTERFACE_STANDARD.
  */
-#define SDBUS_GET_PDO_FROM_CONTEXT(InterfaceContext) \
-    (*(PDEVICE_OBJECT *)(*(PVOID *)(InterfaceContext)))
+#define TAG_SDBUSLIB 'lBdS'
+
+typedef struct _SDBUS_INTERFACE_CONTEXT_PREFIX
+{
+    PDEVICE_OBJECT TargetObject;
+    KSPIN_LOCK TargetLock;
+} SDBUS_INTERFACE_CONTEXT_PREFIX, *PSDBUS_INTERFACE_CONTEXT_PREFIX;
 
 typedef struct _SDBUS_SYNC_REQUEST_CONTEXT
 {
@@ -54,12 +59,40 @@ typedef struct _SDBUS_SYNC_REQUEST_CONTEXT
     IO_STATUS_BLOCK IoStatus;
 } SDBUS_SYNC_REQUEST_CONTEXT, *PSDBUS_SYNC_REQUEST_CONTEXT;
 
+typedef struct _SDBUS_ASYNC_REQUEST_CONTEXT
+{
+    PIO_COMPLETION_ROUTINE CompletionRoutine;
+    PVOID UserContext;
+    PDEVICE_OBJECT TargetObject;
+} SDBUS_ASYNC_REQUEST_CONTEXT, *PSDBUS_ASYNC_REQUEST_CONTEXT;
+
 /*
  * GUID for the SD bus interface. Defined locally to avoid dependency
  * on initguid.h in the caller.
  */
 static const GUID GUID_SDBUS_INTERFACE_STANDARD_LOCAL =
     { 0x6BB24D81, 0xE924, 0x4825, { 0xAF, 0x49, 0x3A, 0xCD, 0x33, 0xC1, 0xD8, 0x20 } };
+
+static
+PDEVICE_OBJECT
+SdBusReferenceTargetObject(
+    _In_ PVOID InterfaceContext)
+{
+    PSDBUS_INTERFACE_CONTEXT_PREFIX Prefix;
+    PDEVICE_OBJECT TargetObject;
+    KIRQL OldIrql;
+
+    Prefix = (PSDBUS_INTERFACE_CONTEXT_PREFIX)InterfaceContext;
+    KeAcquireSpinLock(&Prefix->TargetLock, &OldIrql);
+    TargetObject = Prefix->TargetObject;
+    if (TargetObject != NULL)
+    {
+        ObReferenceObject(TargetObject);
+    }
+    KeReleaseSpinLock(&Prefix->TargetLock, OldIrql);
+
+    return TargetObject;
+}
 
 static
 NTSTATUS
@@ -78,6 +111,32 @@ SdBusSubmitRequestCompletion(
     KeSetEvent(&RequestContext->Event, IO_NO_INCREMENT, FALSE);
 
     return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
+static
+NTSTATUS
+NTAPI
+SdBusSubmitRequestAsyncCompletion(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ PIRP Irp,
+    _In_ PVOID Context)
+{
+    PSDBUS_ASYNC_REQUEST_CONTEXT RequestContext;
+    PIO_COMPLETION_ROUTINE CompletionRoutine;
+    PVOID UserContext;
+    PDEVICE_OBJECT TargetObject;
+    NTSTATUS Status;
+
+    RequestContext = (PSDBUS_ASYNC_REQUEST_CONTEXT)Context;
+    CompletionRoutine = RequestContext->CompletionRoutine;
+    UserContext = RequestContext->UserContext;
+    TargetObject = RequestContext->TargetObject;
+
+    Status = CompletionRoutine(DeviceObject, Irp, UserContext);
+
+    ObDereferenceObject(TargetObject);
+    ExFreePoolWithTag(RequestContext, TAG_SDBUSLIB);
+    return Status;
 }
 
 /* PUBLIC FUNCTIONS ***********************************************************/
@@ -109,6 +168,16 @@ SdBusOpenInterface(
     KEVENT Event;
     IO_STATUS_BLOCK IoStatus;
     NTSTATUS Status;
+
+    if (Pdo == NULL || InterfaceStandard == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (KeGetCurrentIrql() > APC_LEVEL)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
 
     if (Size < sizeof(SDBUS_INTERFACE_STANDARD))
     {
@@ -153,8 +222,9 @@ SdBusOpenInterface(
                               KernelMode,
                               FALSE,
                               NULL);
-        Status = IoStatus.Status;
     }
+
+    Status = IoStatus.Status;
 
     return Status;
 }
@@ -183,7 +253,21 @@ SdBusSubmitRequest(
     SDBUS_SYNC_REQUEST_CONTEXT RequestContext;
     NTSTATUS Status;
 
-    Pdo = SDBUS_GET_PDO_FROM_CONTEXT(InterfaceContext);
+    if (InterfaceContext == NULL || Packet == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (KeGetCurrentIrql() > APC_LEVEL)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    Pdo = SdBusReferenceTargetObject(InterfaceContext);
+    if (Pdo == NULL)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
 
     KeInitializeEvent(&RequestContext.Event, NotificationEvent, FALSE);
     RequestContext.IoStatus.Status = STATUS_PENDING;
@@ -192,11 +276,13 @@ SdBusSubmitRequest(
     Irp = IoAllocateIrp(Pdo->StackSize, FALSE);
     if (Irp == NULL)
     {
+        ObDereferenceObject(Pdo);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
     IoStack = IoGetNextIrpStackLocation(Irp);
     IoStack->MajorFunction = IRP_MJ_INTERNAL_DEVICE_CONTROL;
+    IoStack->Parameters.DeviceIoControl.IoControlCode = IOCTL_SD_SUBMIT_REQUEST;
     IoStack->Parameters.Others.Argument1 = (PVOID)Packet;
 
     IoSetCompletionRoutine(Irp,
@@ -222,6 +308,7 @@ SdBusSubmitRequest(
 
     Status = RequestContext.IoStatus.Status;
     IoFreeIrp(Irp);
+    ObDereferenceObject(Pdo);
 
     return Status;
 }
@@ -251,16 +338,47 @@ SdBusSubmitRequestAsync(
 {
     PDEVICE_OBJECT Pdo;
     PIO_STACK_LOCATION IoStack;
+    PSDBUS_ASYNC_REQUEST_CONTEXT RequestContext;
 
-    Pdo = SDBUS_GET_PDO_FROM_CONTEXT(InterfaceContext);
+    if (InterfaceContext == NULL || Packet == NULL || Irp == NULL ||
+        CompletionRoutine == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (KeGetCurrentIrql() > DISPATCH_LEVEL || Irp->CurrentLocation <= 1)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    Pdo = SdBusReferenceTargetObject(InterfaceContext);
+    if (Pdo == NULL)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    RequestContext = (PSDBUS_ASYNC_REQUEST_CONTEXT)ExAllocatePoolWithTag(
+        NonPagedPool,
+        sizeof(SDBUS_ASYNC_REQUEST_CONTEXT),
+        TAG_SDBUSLIB);
+    if (RequestContext == NULL)
+    {
+        ObDereferenceObject(Pdo);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    RequestContext->CompletionRoutine = CompletionRoutine;
+    RequestContext->UserContext = UserContext;
+    RequestContext->TargetObject = Pdo;
 
     IoStack = IoGetNextIrpStackLocation(Irp);
     IoStack->MajorFunction = IRP_MJ_INTERNAL_DEVICE_CONTROL;
+    IoStack->Parameters.DeviceIoControl.IoControlCode = IOCTL_SD_SUBMIT_REQUEST;
     IoStack->Parameters.Others.Argument1 = (PVOID)Packet;
 
     IoSetCompletionRoutine(Irp,
-                           CompletionRoutine,
-                           UserContext,
+                           SdBusSubmitRequestAsyncCompletion,
+                           RequestContext,
                            TRUE,
                            TRUE,
                            TRUE);

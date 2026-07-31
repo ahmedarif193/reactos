@@ -26,10 +26,29 @@
 #define SDBUS_FW_UHS_SDR50   0x04
 #define SDBUS_FW_UHS_SDR104  0x08
 
-static NTSTATUS
-SdBusProgramClock(
-    _In_ PFDO_EXTENSION FdoExtension,
-    _In_ ULONG TargetClockKhz);
+#define SD_R6_COM_CRC_ERROR  0x00008000
+#define SD_R6_ILLEGAL_CMD    0x00004000
+#define SD_R6_ERROR          0x00002000
+
+NTSTATUS
+SdBusR6Status(
+    _In_ ULONG Response)
+{
+    if (Response & SD_R6_COM_CRC_ERROR)
+    {
+        return STATUS_SD_CMD_CRC_ERROR;
+    }
+    if (Response & SD_R6_ILLEGAL_CMD)
+    {
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
+    if (Response & SD_R6_ERROR)
+    {
+        return STATUS_DEVICE_DATA_ERROR;
+    }
+
+    return STATUS_SUCCESS;
+}
 
 static NTSTATUS
 SdBusWaitForBusyRelease(
@@ -128,11 +147,7 @@ SdBusSendCommand(
     if (WaitStatus == STATUS_IO_DEVICE_ERROR)
     {
         (void)SdBusResetHost(FdoExtension, SDHCI_RESET_CMD);
-        if (CmdBits & SDHCI_INT_CMD_TIMEOUT)
-        {
-            return STATUS_SD_CMD_TIMEOUT;
-        }
-        return STATUS_SD_CMD_CRC_ERROR;
+        return SdBusInterruptErrorToStatus(CmdBits);
     }
 
     if (WaitStatus == STATUS_IO_TIMEOUT)
@@ -145,7 +160,7 @@ SdBusSendCommand(
     /* Read response if requested */
     if (Response != NULL)
     {
-        if (CommandFlags & SDHCI_CMD_RESP_136)
+        if ((CommandFlags & SDHCI_CMD_RESP_MASK) == SDHCI_CMD_RESP_136)
         {
             Response[0] = SdBusReadReg32(FdoExtension, SDHCI_RESPONSE0);
             Response[1] = SdBusReadReg32(FdoExtension, SDHCI_RESPONSE1);
@@ -158,7 +173,7 @@ SdBusSendCommand(
         }
     }
 
-    if (CommandFlags & SDHCI_CMD_RESP_48_BUSY)
+    if ((CommandFlags & SDHCI_CMD_RESP_MASK) == SDHCI_CMD_RESP_48_BUSY)
     {
         return SdBusWaitForBusyRelease(FdoExtension, CommandIndex);
     }
@@ -182,13 +197,9 @@ SdBusSendCommand(
  * @return STATUS_SUCCESS on success, or an NTSTATUS error code.
  */
 NTSTATUS
-SdBusSendAppCommand(
+SdBusSendAppCommandPrefix(
     _In_ PFDO_EXTENSION FdoExtension,
-    _In_ ULONG Rca,
-    _In_ UCHAR CommandIndex,
-    _In_ ULONG Argument,
-    _In_ USHORT CommandFlags,
-    _Out_opt_ PULONG Response)
+    _In_ ULONG Rca)
 {
     NTSTATUS Status;
     ULONG AppCmdResp;
@@ -205,12 +216,51 @@ SdBusSendAppCommand(
         return Status;
     }
 
+    Status = SdBusR1Status(AppCmdResp);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+    if (!(AppCmdResp & SD_STATUS_APP_CMD))
+    {
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+SdBusSendAppCommand(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _In_ ULONG Rca,
+    _In_ UCHAR CommandIndex,
+    _In_ ULONG Argument,
+    _In_ USHORT CommandFlags,
+    _Out_opt_ PULONG Response)
+{
+    NTSTATUS Status;
+    ULONG CommandResponse = 0;
+
+    Status = SdBusSendAppCommandPrefix(FdoExtension, Rca);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
     /* Now send the actual application command */
     Status = SdBusSendCommand(FdoExtension,
                               CommandIndex,
                               Argument,
                               CommandFlags,
-                              Response);
+                              &CommandResponse);
+    if (NT_SUCCESS(Status) && (CommandFlags & SDHCI_CMD_CRC_CHECK))
+    {
+        Status = SdBusR1Status(CommandResponse);
+    }
+    if (Response != NULL)
+    {
+        Response[0] = CommandResponse;
+    }
     return Status;
 }
 
@@ -402,11 +452,7 @@ SdBusReadDataPio(
     if (WaitStatus == STATUS_IO_DEVICE_ERROR)
     {
         (void)SdBusResetHost(FdoExtension, SDHCI_RESET_DATA);
-        if (DataBits & SDHCI_INT_DATA_TIMEOUT)
-        {
-            return STATUS_SD_DATA_TIMEOUT;
-        }
-        return STATUS_SD_DATA_CRC_ERROR;
+        return SdBusInterruptErrorToStatus(DataBits);
     }
 
     if (WaitStatus == STATUS_IO_TIMEOUT)
@@ -436,7 +482,7 @@ SdBusReadDataPio(
     if (WaitStatus == STATUS_IO_DEVICE_ERROR)
     {
         (void)SdBusResetHost(FdoExtension, SDHCI_RESET_DATA);
-        return STATUS_SD_DATA_CRC_ERROR;
+        return SdBusInterruptErrorToStatus(DataBits);
     }
 
     if (WaitStatus == STATUS_IO_TIMEOUT)
@@ -478,6 +524,7 @@ SdBusSendDataReadCommand(
 {
     NTSTATUS Status;
     ULONG CmdBits;
+    ULONG CommandResponse;
     NTSTATUS WaitStatus;
     ULONG Timeout;
 
@@ -528,11 +575,7 @@ SdBusSendDataReadCommand(
     if (WaitStatus == STATUS_IO_DEVICE_ERROR)
     {
         (void)SdBusResetHost(FdoExtension, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
-        if (CmdBits & SDHCI_INT_CMD_TIMEOUT)
-        {
-            return STATUS_SD_CMD_TIMEOUT;
-        }
-        return STATUS_SD_CMD_CRC_ERROR;
+        return SdBusInterruptErrorToStatus(CmdBits);
     }
 
     if (WaitStatus == STATUS_IO_TIMEOUT)
@@ -541,9 +584,17 @@ SdBusSendDataReadCommand(
         return STATUS_IO_TIMEOUT;
     }
 
+    CommandResponse = SdBusReadReg32(FdoExtension, SDHCI_RESPONSE0);
     if (Response != NULL)
     {
-        Response[0] = SdBusReadReg32(FdoExtension, SDHCI_RESPONSE0);
+        Response[0] = CommandResponse;
+    }
+
+    Status = SdBusR1Status(CommandResponse);
+    if (!NT_SUCCESS(Status))
+    {
+        (void)SdBusResetHost(FdoExtension, SDHCI_RESET_DATA);
+        return Status;
     }
 
     /* Now read the data via PIO */
@@ -665,6 +716,7 @@ SdBusEngageDdr50(
 {
     USHORT HostCtrl2;
     NTSTATUS Status;
+    NTSTATUS RollbackStatus;
 
     Status = SdBusUhsSwitchFunction(FdoExtension, 0x80FFFFF4, 4);
     if (!NT_SUCCESS(Status))
@@ -681,6 +733,20 @@ SdBusEngageDdr50(
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("SdBusEngageDdr50: clock program failed (0x%08lx)\n", Status);
+
+        /* The old clock was restored with both ends still in DDR50. */
+        RollbackStatus = SdBusUhsSwitchFunction(FdoExtension,
+                                                0x80FFFFF1,
+                                                1);
+        if (!NT_SUCCESS(RollbackStatus))
+        {
+            return STATUS_DEVICE_DATA_ERROR;
+        }
+
+        HostCtrl2 = SdBusReadReg16(FdoExtension, SDHCI_HOST_CONTROL2);
+        HostCtrl2 &= ~SDHCI_HC2_UHS_MODE_MASK;
+        HostCtrl2 |= SDHCI_HC2_UHS_SDR25;
+        SdBusWriteReg16(FdoExtension, SDHCI_HOST_CONTROL2, HostCtrl2);
         return Status;
     }
 
@@ -701,6 +767,7 @@ SdBusEnableSdUhs(
     BOOLEAN CardDdr50;
     BOOLEAN HostSdr104;
     BOOLEAN HostDdr50;
+    BOOLEAN Sdr104Selected = FALSE;
     ULONG FirmwareAllowed;
     ULONG i;
 
@@ -741,6 +808,7 @@ SdBusEnableSdUhs(
         Status = SdBusUhsSwitchFunction(FdoExtension, 0x80FFFFF3, 3);
         if (NT_SUCCESS(Status))
         {
+            Sdr104Selected = TRUE;
             HostCtrl2 = SdBusReadReg16(FdoExtension, SDHCI_HOST_CONTROL2);
             HostCtrl2 &= ~SDHCI_HC2_UHS_MODE_MASK;
             HostCtrl2 |= SDHCI_HC2_UHS_SDR104;
@@ -757,13 +825,17 @@ SdBusEnableSdUhs(
                 {
                     ULONG TuningWords[16];
 
-                    (void)SdBusSendDataReadCommand(FdoExtension,
-                                                   SDCMD_SEND_TUNING_BLOCK,
-                                                   0,
-                                                   SDHCI_CMD_RESP_48 | SDHCI_CMD_CRC_CHECK | SDHCI_CMD_INDEX_CHECK,
-                                                   TuningWords,
-                                                   sizeof(TuningWords),
-                                                   NULL);
+                    Status = SdBusSendDataReadCommand(FdoExtension,
+                                                      SDCMD_SEND_TUNING_BLOCK,
+                                                      0,
+                                                      SDHCI_CMD_RESP_48 | SDHCI_CMD_CRC_CHECK | SDHCI_CMD_INDEX_CHECK,
+                                                      TuningWords,
+                                                      sizeof(TuningWords),
+                                                      NULL);
+                    if (!NT_SUCCESS(Status))
+                    {
+                        break;
+                    }
 
                     HostCtrl2 = SdBusReadReg16(FdoExtension, SDHCI_HOST_CONTROL2);
                     if (!(HostCtrl2 & SDHCI_HC2_EXEC_TUNING))
@@ -773,7 +845,8 @@ SdBusEnableSdUhs(
                 }
 
                 HostCtrl2 = SdBusReadReg16(FdoExtension, SDHCI_HOST_CONTROL2);
-                if ((HostCtrl2 & SDHCI_HC2_SAMPLING_CLK_SELECT) &&
+                if (NT_SUCCESS(Status) &&
+                    (HostCtrl2 & SDHCI_HC2_SAMPLING_CLK_SELECT) &&
                     !(HostCtrl2 & SDHCI_HC2_EXEC_TUNING))
                 {
                     DPRINT1("SdBusEnableSdUhs: SDR104 tuning pass (%lu kHz)\n",
@@ -785,6 +858,17 @@ SdBusEnableSdUhs(
                 HostCtrl2 &= ~(SDHCI_HC2_EXEC_TUNING | SDHCI_HC2_SAMPLING_CLK_SELECT);
                 SdBusWriteReg16(FdoExtension, SDHCI_HOST_CONTROL2, HostCtrl2);
             }
+        }
+    }
+
+    if (Sdr104Selected &&
+        InterlockedCompareExchange(&FdoExtension->CurrentClockKhz, 0, 0) >
+            SD_DEFAULT_SPEED_KHZ)
+    {
+        Status = SdBusProgramClock(FdoExtension, SD_DEFAULT_SPEED_KHZ);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
         }
     }
 
@@ -973,7 +1057,8 @@ SdBusPerformVoltageSwitch(
         return Status;
     }
 
-    if (Response & SD_STATUS_ERROR_MASK)
+    Status = SdBusR1Status(Response);
+    if (!NT_SUCCESS(Status))
     {
         DPRINT1("SdBusPerformVoltageSwitch: CMD11 response error 0x%08lx\n",
                 Response);
@@ -1276,6 +1361,7 @@ SdBusEnumerateCard(
             }
 
             if (!ForceNoUhs &&
+                !HasSdio &&
                 IsV2 &&
                 SdBusHostSupportsUhs(FdoExtension) &&
                 SdBusHardwareCanVoltageSwitch(FdoExtension))
@@ -1453,6 +1539,11 @@ SdBusEnumerateCard(
             DPRINT1("SdBusEnumerateCard: SDIO CMD3 failed (0x%08lx)\n", Status);
             return Status;
         }
+        Status = SdBusR6Status(Response[0]);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
         Rca = (Response[0] >> 16) & 0xFFFF;
 
         RtlZeroMemory(&PdoExtension->Cid, sizeof(PdoExtension->Cid));
@@ -1494,6 +1585,10 @@ SdBusEnumerateCard(
                                       Rca << 16,
                                       SDHCI_CMD_RESP_48 | SDHCI_CMD_CRC_CHECK | SDHCI_CMD_INDEX_CHECK,
                                       &Response[0]);
+            if (NT_SUCCESS(Status))
+            {
+                Status = SdBusR1Status(Response[0]);
+            }
         }
         else
         {
@@ -1504,7 +1599,11 @@ SdBusEnumerateCard(
                                       &Response[0]);
             if (NT_SUCCESS(Status))
             {
-                Rca = (Response[0] >> 16) & 0xFFFF;
+                Status = SdBusR6Status(Response[0]);
+                if (NT_SUCCESS(Status))
+                {
+                    Rca = (Response[0] >> 16) & 0xFFFF;
+                }
             }
         }
 
@@ -1549,19 +1648,11 @@ SdBusEnumerateCard(
         DPRINT1("SdBusEnumerateCard: CMD7 failed (0x%08lx)\n", Status);
         return Status;
     }
-
-    if (HasSdio && NumSdioFunctions > 0)
+    Status = SdBusR1Status(Response[0]);
+    if (!NT_SUCCESS(Status))
     {
-        PdoExtension->SdioNumFunctions = (UCHAR)NumSdioFunctions;
-
-        Status = SdBusSdioEnumerateFunctions(FdoExtension, PdoExtension,
-                                             NumSdioFunctions);
-        if (!NT_SUCCESS(Status))
-        {
-            DPRINT1("SdBusEnumerateCard: SDIO function enumeration failed "
-                    "(0x%08lx), continuing with host PDO only\n", Status);
-        }
-        Status = STATUS_SUCCESS;
+        DPRINT1("SdBusEnumerateCard: CMD7 response failed (0x%08lx)\n", Status);
+        return Status;
     }
 
     /*
@@ -1580,11 +1671,18 @@ SdBusEnumerateCard(
                                   SDCMD_SET_BLOCKLEN,
                                   SD_DEFAULT_BLOCK_SIZE,
                                   SDHCI_CMD_RESP_48 | SDHCI_CMD_CRC_CHECK | SDHCI_CMD_INDEX_CHECK,
-                                  NULL);
+                                  &Response[0]);
+        if (NT_SUCCESS(Status))
+        {
+            Status = SdBusR1Status(Response[0]);
+        }
         if (!NT_SUCCESS(Status))
         {
             DPRINT1("SdBusEnumerateCard: CMD16 failed (0x%08lx)\n", Status);
-            /* Non-fatal, continue */
+            if (!IsHighCapacity)
+            {
+                return Status;
+            }
         }
 
         /*
@@ -1592,14 +1690,8 @@ SdBusEnumerateCard(
          * Need to issue CMD55 + CMD51 as a data-bearing command.
          */
         {
-            ULONG AppCmdResp;
-
             /* CMD55 */
-            Status = SdBusSendCommand(FdoExtension,
-                                      SDCMD_APP_CMD,
-                                      Rca << 16,
-                                      SDHCI_CMD_RESP_48 | SDHCI_CMD_CRC_CHECK | SDHCI_CMD_INDEX_CHECK,
-                                      &AppCmdResp);
+            Status = SdBusSendAppCommandPrefix(FdoExtension, Rca);
             if (NT_SUCCESS(Status))
             {
                 RtlZeroMemory(ScrData, sizeof(ScrData));
@@ -1659,7 +1751,13 @@ SdBusEnumerateCard(
             DPRINT1("SdBusEnumerateCard: Leaving combo card on 1-bit bus until SDIO bus-width switching is coordinated\n");
         }
 
-        if (CardAcceptedUhs)
+        if (CardType == SdCardTypeCombo)
+        {
+            DPRINT1("SdBusEnumerateCard: keeping combo card at default speed "
+                    "until SD-memory/SDIO speed switching is coordinated\n");
+            Status = STATUS_SUCCESS;
+        }
+        else if (CardAcceptedUhs)
         {
             Status = SdBusEnableSdUhs(FdoExtension);
         }
@@ -1681,11 +1779,23 @@ SdBusEnumerateCard(
          */
 
         /* CMD16: SET_BLOCKLEN to 512 */
-        SdBusSendCommand(FdoExtension,
-                         SDCMD_SET_BLOCKLEN,
-                         SD_DEFAULT_BLOCK_SIZE,
-                         SDHCI_CMD_RESP_48 | SDHCI_CMD_CRC_CHECK | SDHCI_CMD_INDEX_CHECK,
-                         NULL);
+        Status = SdBusSendCommand(FdoExtension,
+                                  SDCMD_SET_BLOCKLEN,
+                                  SD_DEFAULT_BLOCK_SIZE,
+                                  SDHCI_CMD_RESP_48 | SDHCI_CMD_CRC_CHECK | SDHCI_CMD_INDEX_CHECK,
+                                  &Response[0]);
+        if (NT_SUCCESS(Status))
+        {
+            Status = SdBusR1Status(Response[0]);
+        }
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("SdBusEnumerateCard: MMC CMD16 failed (0x%08lx)\n", Status);
+            if (!IsHighCapacity)
+            {
+                return Status;
+            }
+        }
 
         /*
          * CMD8 (for MMC): SEND_EXT_CSD -- 512-byte data read
@@ -1765,7 +1875,14 @@ SdBusEnumerateCard(
         }
 
         PdoExtension->CardType = CardType;
-        SdBusEmmcEnumeratePartitions(FdoExtension, PdoExtension);
+        PdoExtension->HighCapacity = IsHighCapacity;
+        Status = SdBusEmmcEnumeratePartitions(FdoExtension, PdoExtension);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("SdBusEnumerateCard: eMMC partition enumeration failed "
+                    "(0x%08lx)\n", Status);
+            return Status;
+        }
     }
 
     /* Store the determined card type */
@@ -1820,6 +1937,19 @@ SdBusEnumerateCard(
             SD_CSD_V2_SECTORS(&PdoExtension->Csd.V2);
     }
 
+    /* Publish SDIO function PDOs only after the complete card setup succeeded. */
+    if (HasSdio && NumSdioFunctions > 0)
+    {
+        Status = SdBusSdioEnumerateFunctions(FdoExtension, PdoExtension,
+                                             NumSdioFunctions);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("SdBusEnumerateCard: SDIO function enumeration failed "
+                    "(0x%08lx)\n", Status);
+            return Status;
+        }
+    }
+
     DPRINT1("SdBusEnumerateCard: Enumeration complete, CardType=%d, HighCapacity=%u, TotalSectors=%I64u\n",
             CardType, IsHighCapacity, PdoExtension->TotalSectors);
 
@@ -1838,7 +1968,7 @@ SdBusEnumerateCard(
  *
  * @return STATUS_SUCCESS, or STATUS_IO_TIMEOUT if the clock fails to stabilize.
  */
-static NTSTATUS
+NTSTATUS
 SdBusProgramClock(
     _In_ PFDO_EXTENSION FdoExtension,
     _In_ ULONG TargetClockKhz)
@@ -1846,7 +1976,18 @@ SdBusProgramClock(
     USHORT Divisor;
     USHORT DivisorHigh;
     USHORT ClockControl;
+    USHORT OriginalClockControl;
+    LONG OriginalClockKhz;
     ULONG Timeout;
+
+    if (FdoExtension == NULL || FdoExtension->RegisterBase == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (TargetClockKhz != 0 && FdoExtension->MaxClockFrequency == 0)
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
 
     /* Clamp to base clock */
     if (FdoExtension->MaxClockFrequency > 0 &&
@@ -1859,9 +2000,18 @@ SdBusProgramClock(
             TargetClockKhz);
 
     /* Disable SD clock output */
-    ClockControl = SdBusReadReg16(FdoExtension, SDHCI_CLOCK_CONTROL);
+    OriginalClockControl = SdBusReadReg16(FdoExtension, SDHCI_CLOCK_CONTROL);
+    OriginalClockKhz = InterlockedCompareExchange(
+        &FdoExtension->CurrentClockKhz, 0, 0);
+    ClockControl = OriginalClockControl;
     ClockControl &= ~SDHCI_CLK_SD_CLK_ENABLE;
     SdBusWriteReg16(FdoExtension, SDHCI_CLOCK_CONTROL, ClockControl);
+    InterlockedExchange(&FdoExtension->CurrentClockKhz, 0);
+
+    if (TargetClockKhz == 0)
+    {
+        return STATUS_SUCCESS;
+    }
 
     /* Compute divisor */
     if (FdoExtension->MaxClockFrequency > 0)
@@ -1900,12 +2050,28 @@ SdBusProgramClock(
     if (Timeout == 0)
     {
         DPRINT1("SdBusProgramClock: Clock stabilization timed out\n");
+        SdBusWriteReg16(FdoExtension, SDHCI_CLOCK_CONTROL,
+                        OriginalClockControl);
+        InterlockedExchange(&FdoExtension->CurrentClockKhz,
+                            OriginalClockKhz);
         return STATUS_IO_TIMEOUT;
     }
 
     /* Enable SD clock output */
     ClockControl |= SDHCI_CLK_SD_CLK_ENABLE;
     SdBusWriteReg16(FdoExtension, SDHCI_CLOCK_CONTROL, ClockControl);
+
+    if (Divisor == 0)
+    {
+        InterlockedExchange(&FdoExtension->CurrentClockKhz,
+                            (LONG)FdoExtension->MaxClockFrequency);
+    }
+    else
+    {
+        InterlockedExchange(&FdoExtension->CurrentClockKhz,
+                            (LONG)(FdoExtension->MaxClockFrequency /
+                                   ((ULONG)Divisor << 1)));
+    }
 
     return STATUS_SUCCESS;
 }
@@ -1926,6 +2092,7 @@ SdBusVerifyCardResponds(
     _In_ PPDO_EXTENSION PdoExtension)
 {
     ULONG Response = 0;
+    NTSTATUS Status;
 
     /* SDIO-only cards have no CMD13 SEND_STATUS; probe CCCR with CMD52 instead. */
     if (PdoExtension->CardType == SdCardTypeSdio)
@@ -1935,11 +2102,16 @@ SdBusVerifyCardResponds(
         return SdBusSdioReadCccr(FdoExtension, SDIO_CCCR_REVISION, &CccrRev);
     }
 
-    return SdBusSendCommand(FdoExtension,
-                            SDCMD_SEND_STATUS,
-                            PdoExtension->RelativeAddress << 16,
-                            SDHCI_CMD_RESP_48 | SDHCI_CMD_CRC_CHECK | SDHCI_CMD_INDEX_CHECK,
-                            &Response);
+    Status = SdBusSendCommand(FdoExtension,
+                              SDCMD_SEND_STATUS,
+                              PdoExtension->RelativeAddress << 16,
+                              SDHCI_CMD_RESP_48 | SDHCI_CMD_CRC_CHECK | SDHCI_CMD_INDEX_CHECK,
+                              &Response);
+    if (NT_SUCCESS(Status))
+    {
+        Status = SdBusR1Status(Response);
+    }
+    return Status;
 }
 
 /**
