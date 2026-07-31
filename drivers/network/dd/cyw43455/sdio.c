@@ -10,6 +10,11 @@
 #define NDEBUG
 #include <debug.h>
 
+#define CYW_SDIO_MAX_FUNCTION          7
+#define CYW_SDIO_MAX_ADDRESS           0x1FFFFUL
+#define CYW_SDIO_MAX_COUNT             512
+#define CYW_SDIO_MAX_BLOCK_SIZE        0x0FFF
+
 PVOID
 CywAllocate(
     _In_ ULONG Size)
@@ -33,6 +38,11 @@ CywSdioOpen(
 {
     NTSTATUS Status;
 
+    if (Adapter == NULL || Adapter->Pdo == NULL || Adapter->SdBusOpened)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
     Status = SdBusOpenInterface(Adapter->Pdo,
                                 &Adapter->SdBus,
                                 sizeof(SDBUS_INTERFACE_STANDARD),
@@ -54,6 +64,7 @@ CywSdioClose(
         Adapter->SdBus.InterfaceDereference(Adapter->SdBus.Context);
     }
     Adapter->SdBusOpened = FALSE;
+    RtlZeroMemory(&Adapter->SdBus, sizeof(Adapter->SdBus));
 }
 
 NTSTATUS
@@ -66,6 +77,13 @@ CywSdioReadByte(
     SDBUS_REQUEST_PACKET Packet;
     NTSTATUS Status;
 
+    if (Adapter == NULL || !Adapter->SdBusOpened ||
+        Adapter->SdBus.Context == NULL || Value == NULL ||
+        Function > CYW_SDIO_MAX_FUNCTION || Address > CYW_SDIO_MAX_ADDRESS)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
     SD_INIT_REQUEST_PACKET(&Packet, SDRF_IO_RW_DIRECT);
     Packet.Parameters.IoDirect.Function = Function;
     Packet.Parameters.IoDirect.Write = FALSE;
@@ -73,7 +91,7 @@ CywSdioReadByte(
     Packet.Parameters.IoDirect.Address = Address;
 
     Status = SdBusSubmitRequest(Adapter->SdBus.Context, &Packet);
-    if (NT_SUCCESS(Status) && Value != NULL)
+    if (NT_SUCCESS(Status))
     {
         *Value = Packet.Parameters.IoDirect.DataOut;
     }
@@ -89,6 +107,13 @@ CywSdioWriteByte(
     _In_ UCHAR Value)
 {
     SDBUS_REQUEST_PACKET Packet;
+
+    if (Adapter == NULL || !Adapter->SdBusOpened ||
+        Adapter->SdBus.Context == NULL ||
+        Function > CYW_SDIO_MAX_FUNCTION || Address > CYW_SDIO_MAX_ADDRESS)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
     SD_INIT_REQUEST_PACKET(&Packet, SDRF_IO_RW_DIRECT);
     Packet.Parameters.IoDirect.Function = Function;
@@ -107,14 +132,26 @@ CywRegisterDmaBuf(
     _In_ ULONG Size)
 {
     PCYW_DMA_BUF Buf;
-    ULONG MdlSize;
+    SIZE_T MdlSize;
+    ULONG PageCount;
 
-    ASSERT(Adapter->DmaBufCount < CYW_DMA_BUF_COUNT);
+    if (Adapter == NULL || Buffer == NULL || Size == 0 ||
+        Adapter->DmaBufCount >= CYW_DMA_BUF_COUNT ||
+        (ULONG_PTR)Buffer > MAXULONG_PTR - (Size - 1))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
     Buf = &Adapter->DmaBufs[Adapter->DmaBufCount];
 
-    MdlSize = sizeof(MDL) +
-              sizeof(PFN_NUMBER) * ADDRESS_AND_SIZE_TO_SPAN_PAGES(Buffer, Size);
-    Buf->Mdl = CywAllocate(MdlSize);
+    PageCount = ADDRESS_AND_SIZE_TO_SPAN_PAGES(Buffer, Size);
+    MdlSize = sizeof(MDL) + sizeof(PFN_NUMBER) * (SIZE_T)PageCount;
+    if (MdlSize > MAXULONG)
+    {
+        return STATUS_INTEGER_OVERFLOW;
+    }
+
+    Buf->Mdl = CywAllocate((ULONG)MdlSize);
     if (Buf->Mdl == NULL)
     {
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -136,6 +173,8 @@ CywFreeDmaBufs(
     {
         CywFree(Adapter->DmaBufs[i].Mdl);
         Adapter->DmaBufs[i].Mdl = NULL;
+        Adapter->DmaBufs[i].Buffer = NULL;
+        Adapter->DmaBufs[i].Size = 0;
     }
     Adapter->DmaBufCount = 0;
 }
@@ -153,18 +192,37 @@ CywAcquireMdl(
 {
     PMDL Mdl;
     ULONG i;
+    ULONG_PTR BufferAddress;
 
+    if (Owned == NULL)
+    {
+        return NULL;
+    }
+    *Owned = FALSE;
+
+    if (Adapter == NULL || Buffer == NULL || Length == 0 ||
+        (ULONG_PTR)Buffer > MAXULONG_PTR - (Length - 1))
+    {
+        return NULL;
+    }
+
+    BufferAddress = (ULONG_PTR)Buffer;
     for (i = 0; i < Adapter->DmaBufCount; i++)
     {
         PCYW_DMA_BUF Buf = &Adapter->DmaBufs[i];
+        ULONG_PTR RegisteredAddress = (ULONG_PTR)Buf->Buffer;
+        SIZE_T Offset;
 
-        if (Buffer >= Buf->Buffer && Buffer + Length <= Buf->Buffer + Buf->Size)
+        if (BufferAddress >= RegisteredAddress)
         {
-            Mdl = Buf->Mdl;
-            MmInitializeMdl(Mdl, Buffer, Length);
-            MmBuildMdlForNonPagedPool(Mdl);
-            *Owned = FALSE;
-            return Mdl;
+            Offset = BufferAddress - RegisteredAddress;
+            if (Offset <= Buf->Size && Length <= Buf->Size - Offset)
+            {
+                Mdl = Buf->Mdl;
+                MmInitializeMdl(Mdl, Buffer, Length);
+                MmBuildMdlForNonPagedPool(Mdl);
+                return Mdl;
+            }
         }
     }
 
@@ -193,6 +251,45 @@ CywSdioRw(
     PMDL Mdl;
     BOOLEAN OwnedMdl;
     NTSTATUS Status;
+    ULONG Count;
+    BOOLEAN Increment;
+
+    if (Adapter == NULL || !Adapter->SdBusOpened ||
+        Adapter->SdBus.Context == NULL || Buffer == NULL || Length == 0 ||
+        Function > CYW_SDIO_MAX_FUNCTION || Address > CYW_SDIO_MAX_ADDRESS)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (BlockMode)
+    {
+        if (BlockSize == 0 || BlockSize > CYW_SDIO_MAX_BLOCK_SIZE ||
+            (Length % BlockSize) != 0)
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+        Count = Length / BlockSize;
+    }
+    else
+    {
+        if (BlockSize != 0)
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+        Count = Length;
+    }
+
+    if (Count == 0 || Count > CYW_SDIO_MAX_COUNT)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    /* Function 2 is a receive FIFO; reads must keep the CMD53 address fixed. */
+    Increment = !(Function == CYW_SDIO_FUNC_RADIO && !Write);
+    if (Increment && Length - 1 > CYW_SDIO_MAX_ADDRESS - Address)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
     Mdl = CywAcquireMdl(Adapter, Buffer, Length, &OwnedMdl);
     if (Mdl == NULL)
@@ -204,9 +301,9 @@ CywSdioRw(
     Packet.Parameters.IoExtended.Function = Function;
     Packet.Parameters.IoExtended.Write = Write;
     Packet.Parameters.IoExtended.BlockMode = BlockMode;
-    Packet.Parameters.IoExtended.Increment = TRUE;
+    Packet.Parameters.IoExtended.Increment = Increment;
     Packet.Parameters.IoExtended.Address = Address;
-    Packet.Parameters.IoExtended.BlockCount = BlockMode ? (Length / BlockSize) : Length;
+    Packet.Parameters.IoExtended.BlockCount = Count;
     Packet.Parameters.IoExtended.BlockSize = BlockSize;
     Packet.Parameters.IoExtended.Mdl = Mdl;
 
@@ -274,6 +371,13 @@ CywSdioEnableFunction(
     UCHAR Enable;
     UCHAR Ready;
     ULONG Retry;
+    LARGE_INTEGER Delay;
+
+    if (Adapter == NULL || Function == 0 ||
+        Function > CYW_SDIO_MAX_FUNCTION)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
     Status = CywSdioReadByte(Adapter, CYW_SDIO_FUNC_BUS, SDIO_CCCR_IOEx, &Enable);
     if (!NT_SUCCESS(Status))
@@ -291,13 +395,21 @@ CywSdioEnableFunction(
     for (Retry = 0; Retry < 500; Retry++)
     {
         Status = CywSdioReadByte(Adapter, CYW_SDIO_FUNC_BUS, SDIO_CCCR_IORx, &Ready);
-        if (NT_SUCCESS(Status) && (Ready & (1u << Function)))
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+        if (Ready & (1u << Function))
         {
             return STATUS_SUCCESS;
         }
-        KeStallExecutionProcessor(1000);
+        Delay.QuadPart = -10000LL;
+        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
     }
 
+    Enable &= (UCHAR)~(1u << Function);
+    (VOID)CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BUS,
+                           SDIO_CCCR_IOEx, Enable);
     return STATUS_DEVICE_NOT_READY;
 }
 
@@ -309,17 +421,64 @@ CywSdioSetBlockSize(
 {
     ULONG Fbr = (ULONG)Function * 0x100;
     NTSTATUS Status;
+    UCHAR OldLow;
+    UCHAR OldHigh;
+    UCHAR VerifyLow;
+    UCHAR VerifyHigh;
+
+    if (Adapter == NULL || Function > CYW_SDIO_MAX_FUNCTION ||
+        BlockSize == 0 || BlockSize > CYW_SDIO_MAX_BLOCK_SIZE)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = CywSdioReadByte(Adapter, CYW_SDIO_FUNC_BUS,
+                             Fbr + 0x10, &OldLow);
+    if (NT_SUCCESS(Status))
+    {
+        Status = CywSdioReadByte(Adapter, CYW_SDIO_FUNC_BUS,
+                                 Fbr + 0x11, &OldHigh);
+    }
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
 
     Status = CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BUS, Fbr + 0x10, (UCHAR)(BlockSize & 0xFF));
     if (!NT_SUCCESS(Status))
     {
         return Status;
     }
-    return CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BUS, Fbr + 0x11, (UCHAR)((BlockSize >> 8) & 0xFF));
+    Status = CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BUS, Fbr + 0x11, (UCHAR)((BlockSize >> 8) & 0xFF));
+    if (!NT_SUCCESS(Status))
+    {
+        (VOID)CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BUS,
+                               Fbr + 0x10, OldLow);
+        return Status;
+    }
+
+    Status = CywSdioReadByte(Adapter, CYW_SDIO_FUNC_BUS,
+                             Fbr + 0x10, &VerifyLow);
+    if (NT_SUCCESS(Status))
+    {
+        Status = CywSdioReadByte(Adapter, CYW_SDIO_FUNC_BUS,
+                                 Fbr + 0x11, &VerifyHigh);
+    }
+    if (!NT_SUCCESS(Status) || VerifyLow != (UCHAR)BlockSize ||
+        VerifyHigh != (UCHAR)(BlockSize >> 8))
+    {
+        (VOID)CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BUS,
+                               Fbr + 0x10, OldLow);
+        (VOID)CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BUS,
+                               Fbr + 0x11, OldHigh);
+        return NT_SUCCESS(Status) ? STATUS_DEVICE_DATA_ERROR : Status;
+    }
+
+    return STATUS_SUCCESS;
 }
 
-NTSTATUS
-CywBackplaneSetWindow(
+static NTSTATUS
+CywBackplaneSetWindowLocked(
     _In_ PCYW_ADAPTER Adapter,
     _In_ ULONG Address)
 {
@@ -330,6 +489,9 @@ CywBackplaneSetWindow(
     {
         return STATUS_SUCCESS;
     }
+
+    /* A partial programming failure makes the old cached value untrustworthy. */
+    Adapter->CurrentBackplaneWindow = MAXULONG;
 
     Status = CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BACKPLANE,
                               SBSDIO_FUNC1_SBADDRLOW, (UCHAR)((Window >> 8) & 0x80));
@@ -352,12 +514,36 @@ CywBackplaneSetWindow(
 }
 
 NTSTATUS
+CywBackplaneSetWindow(
+    _In_ PCYW_ADAPTER Adapter,
+    _In_ ULONG Address)
+{
+    NTSTATUS Status;
+
+    if (Adapter == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    KeWaitForSingleObject(&Adapter->BackplaneLock, Executive,
+                          KernelMode, FALSE, NULL);
+    Status = CywBackplaneSetWindowLocked(Adapter, Address);
+    KeReleaseMutex(&Adapter->BackplaneLock, FALSE);
+    return Status;
+}
+
+NTSTATUS
 CywBackplaneReadl(
     _In_ PCYW_ADAPTER Adapter,
     _In_ ULONG Address,
     _Out_ PULONG Value)
 {
-    return CywBackplaneReadlSc(Adapter, Address, Value, Adapter->ControlBuffer);
+    if (Adapter == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    return CywBackplaneReadlSc(Adapter, Address, Value,
+                               Adapter->ControlBuffer);
 }
 
 NTSTATUS
@@ -366,7 +552,12 @@ CywBackplaneWritel(
     _In_ ULONG Address,
     _In_ ULONG Value)
 {
-    return CywBackplaneWritelSc(Adapter, Address, Value, Adapter->ControlBuffer);
+    if (Adapter == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    return CywBackplaneWritelSc(Adapter, Address, Value,
+                                Adapter->ControlBuffer);
 }
 
 NTSTATUS
@@ -379,9 +570,19 @@ CywBackplaneReadlSc(
     NTSTATUS Status;
     ULONG Offset;
 
-    Status = CywBackplaneSetWindow(Adapter, Address);
+    if (Adapter == NULL || Value == NULL || Scratch == NULL ||
+        (Address & SBSDIO_SB_OFT_ADDR_MASK) >
+            SBSDIO_SB_OFT_ADDR_LIMIT - sizeof(ULONG))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    KeWaitForSingleObject(&Adapter->BackplaneLock, Executive,
+                          KernelMode, FALSE, NULL);
+    Status = CywBackplaneSetWindowLocked(Adapter, Address);
     if (!NT_SUCCESS(Status))
     {
+        KeReleaseMutex(&Adapter->BackplaneLock, FALSE);
         return Status;
     }
 
@@ -391,6 +592,7 @@ CywBackplaneReadlSc(
     {
         *Value = ((PULONG)Scratch)[0];
     }
+    KeReleaseMutex(&Adapter->BackplaneLock, FALSE);
     return Status;
 }
 
@@ -404,15 +606,28 @@ CywBackplaneWritelSc(
     NTSTATUS Status;
     ULONG Offset;
 
-    Status = CywBackplaneSetWindow(Adapter, Address);
+    if (Adapter == NULL || Scratch == NULL ||
+        (Address & SBSDIO_SB_OFT_ADDR_MASK) >
+            SBSDIO_SB_OFT_ADDR_LIMIT - sizeof(ULONG))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    KeWaitForSingleObject(&Adapter->BackplaneLock, Executive,
+                          KernelMode, FALSE, NULL);
+    Status = CywBackplaneSetWindowLocked(Adapter, Address);
     if (!NT_SUCCESS(Status))
     {
+        KeReleaseMutex(&Adapter->BackplaneLock, FALSE);
         return Status;
     }
 
     ((PULONG)Scratch)[0] = Value;
     Offset = (Address & SBSDIO_SB_OFT_ADDR_MASK) | SBSDIO_SB_ACCESS_2_4B_FLAG;
-    return CywSdioWriteBytes(Adapter, CYW_SDIO_FUNC_BACKPLANE, Offset, Scratch, 4);
+    Status = CywSdioWriteBytes(Adapter, CYW_SDIO_FUNC_BACKPLANE,
+                               Offset, Scratch, 4);
+    KeReleaseMutex(&Adapter->BackplaneLock, FALSE);
+    return Status;
 }
 
 NTSTATUS
@@ -427,11 +642,20 @@ CywRamWrite(
     ULONG Chunk;
     ULONG Transfer;
 
+    if (Adapter == NULL || (Buffer == NULL && Length != 0) ||
+        (Length != 0 && Address > MAXULONG - (Length - 1)))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    KeWaitForSingleObject(&Adapter->BackplaneLock, Executive,
+                          KernelMode, FALSE, NULL);
     while (Length > 0)
     {
-        Status = CywBackplaneSetWindow(Adapter, Address);
+        Status = CywBackplaneSetWindowLocked(Adapter, Address);
         if (!NT_SUCCESS(Status))
         {
+            KeReleaseMutex(&Adapter->BackplaneLock, FALSE);
             return Status;
         }
 
@@ -463,6 +687,7 @@ CywRamWrite(
         }
         if (!NT_SUCCESS(Status))
         {
+            KeReleaseMutex(&Adapter->BackplaneLock, FALSE);
             return Status;
         }
 
@@ -471,5 +696,6 @@ CywRamWrite(
         Length -= Transfer;
     }
 
+    KeReleaseMutex(&Adapter->BackplaneLock, FALSE);
     return STATUS_SUCCESS;
 }
