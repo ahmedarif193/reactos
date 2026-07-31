@@ -209,15 +209,11 @@ NwifiGetBssList(ULONG InterfaceIndex, ULONG64 UpperLuid,
 
         if (err == ERROR_SUCCESS)
         {
-            /* If the driver reports it needed more than we gave, grow. */
-            if (list->Size > size)
+            if (ret < sizeof(*list) || list->Size < sizeof(*list) ||
+                list->Size > ret || list->Size > size)
             {
-                size = list->Size;
                 HeapFree(GetProcessHeap(), 0, list);
-                list = NULL;
-                if (size > 256 * 1024)
-                    return ERROR_NOT_ENOUGH_MEMORY;
-                continue;
+                return ERROR_INVALID_DATA;
             }
             break;
         }
@@ -367,20 +363,25 @@ NwifiDispatchNotification(const NWIFI_NOTIFICATION *pNotif)
             if (iface != NULL)
             {
                 WlanSvcUpdateLinkState(iface);
-                if (pNotif->StatusCode == 0 /* NDIS_STATUS_SUCCESS */)
+                if (pNotif->StatusCode == 0 /* NDIS_STATUS_SUCCESS */ &&
+                    iface->Connected)
+                {
                     WlanSvcIndicateConnection(iface,
                         wlan_notification_acm_connection_complete,
                         (iface->ConnectedProfile[0] != L'\0')
                             ? wlan_connection_mode_profile
                             : wlan_connection_mode_discovery_unsecure,
                         iface->ConnectedProfile, WLAN_REASON_CODE_SUCCESS);
+                }
                 else
+                {
                     WlanSvcIndicateConnection(iface,
                         wlan_notification_acm_connection_attempt_fail,
                         (iface->ConnectedProfile[0] != L'\0')
                             ? wlan_connection_mode_profile
                             : wlan_connection_mode_discovery_unsecure,
                         iface->ConnectedProfile, pNotif->StatusCode);
+                }
             }
             break;
 
@@ -388,21 +389,22 @@ NwifiDispatchNotification(const NWIFI_NOTIFICATION *pNotif)
         case NwifiNotifyLinkDown:
             if (iface != NULL)
             {
+                BOOL wasDisconnected =
+                    (!iface->Connected &&
+                     iface->State == wlan_interface_state_disconnected);
+
                 iface->Connected = FALSE;
                 iface->State = wlan_interface_state_disconnected;
                 iface->Rssi = -100;
                 iface->LinkQuality = 0;
-                WlanSvcIndicateAcm(iface, wlan_notification_acm_disconnected);
+                if (!wasDisconnected)
+                    WlanSvcIndicateAcm(iface, wlan_notification_acm_disconnected);
             }
             break;
 
         case NwifiNotifyLinkUp:
             if (iface != NULL)
-            {
                 WlanSvcUpdateLinkState(iface);
-                WlanSvcIndicateAcm(iface,
-                                   wlan_notification_acm_connection_complete);
-            }
             break;
 
         case NwifiNotifyInterfaceArrival:

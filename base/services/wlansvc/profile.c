@@ -58,7 +58,11 @@ XmlGetText(LPCWSTR xml, LPCWSTR tag, LPWSTR out, size_t outChars)
 {
     LPCWSTR start = XmlFindOpen(xml, tag);
     LPCWSTR end;
-    size_t n;
+    size_t n = 0;
+
+    if (outChars == 0)
+        return FALSE;
+    out[0] = L'\0';
 
     if (start == NULL)
         return FALSE;
@@ -70,14 +74,91 @@ XmlGetText(LPCWSTR xml, LPCWSTR tag, LPWSTR out, size_t outChars)
     if (end == NULL)
         return FALSE;
 
-    n = (size_t)(end - start);
-    while (n > 0 && (start[n - 1] == L' ' || start[n - 1] == L'\t' ||
-                     start[n - 1] == L'\r' || start[n - 1] == L'\n'))
-        n--;
+    while (end > start && (end[-1] == L' ' || end[-1] == L'\t' ||
+                           end[-1] == L'\r' || end[-1] == L'\n'))
+        end--;
 
-    if (n >= outChars)
-        n = outChars - 1;
-    memcpy(out, start, n * sizeof(WCHAR));
+    while (start < end)
+    {
+        WCHAR value = *start++;
+
+        if (value == L'&')
+        {
+            SIZE_T remaining = (SIZE_T)(end - start);
+
+            if (remaining >= 4 && wcsncmp(start, L"amp;", 4) == 0)
+            {
+                value = L'&';
+                start += 4;
+            }
+            else if (remaining >= 3 && wcsncmp(start, L"lt;", 3) == 0)
+            {
+                value = L'<';
+                start += 3;
+            }
+            else if (remaining >= 3 && wcsncmp(start, L"gt;", 3) == 0)
+            {
+                value = L'>';
+                start += 3;
+            }
+            else if (remaining >= 5 && wcsncmp(start, L"quot;", 5) == 0)
+            {
+                value = L'\"';
+                start += 5;
+            }
+            else if (remaining >= 5 && wcsncmp(start, L"apos;", 5) == 0)
+            {
+                value = L'\'';
+                start += 5;
+            }
+            else if (remaining >= 3 && start[0] == L'#')
+            {
+                LPCWSTR digit = start + 1;
+                ULONG base = 10;
+                ULONG code = 0;
+                BOOL haveDigit = FALSE;
+
+                if (digit < end && (*digit == L'x' || *digit == L'X'))
+                {
+                    base = 16;
+                    digit++;
+                }
+                while (digit < end && *digit != L';')
+                {
+                    ULONG d;
+
+                    if (*digit >= L'0' && *digit <= L'9')
+                        d = *digit - L'0';
+                    else if (base == 16 && *digit >= L'a' && *digit <= L'f')
+                        d = *digit - L'a' + 10;
+                    else if (base == 16 && *digit >= L'A' && *digit <= L'F')
+                        d = *digit - L'A' + 10;
+                    else
+                        return FALSE;
+                    if (d >= base || code > (0xFFFF - d) / base)
+                        return FALSE;
+                    code = code * base + d;
+                    haveDigit = TRUE;
+                    digit++;
+                }
+                if (!haveDigit || digit == end || code == 0 ||
+                    (code >= 0xD800 && code <= 0xDFFF))
+                {
+                    return FALSE;
+                }
+                value = (WCHAR)code;
+                start = digit + 1;
+            }
+            else
+            {
+                return FALSE;
+            }
+        }
+
+        if (n + 1 >= outChars)
+            return FALSE;
+        out[n++] = value;
+    }
     out[n] = L'\0';
     return TRUE;
 }
@@ -101,10 +182,17 @@ SsidFromText(LPCWSTR text, PDOT11_SSID ssid)
 VOID
 WlanSvcFreeProfile(PWLANSVC_PROFILE Profile)
 {
+    SIZE_T XmlBytes;
+
     if (Profile == NULL)
         return;
     if (Profile->Xml != NULL)
+    {
+        XmlBytes = (wcslen(Profile->Xml) + 1) * sizeof(WCHAR);
+        SecureZeroMemory(Profile->Xml, XmlBytes);
         HeapFree(GetProcessHeap(), 0, Profile->Xml);
+    }
+    SecureZeroMemory(Profile, sizeof(*Profile));
     HeapFree(GetProcessHeap(), 0, Profile);
 }
 
@@ -183,6 +271,8 @@ WlanSvcParseProfileXml(LPCWSTR Xml, PWLANSVC_PROFILE *ppProfile)
     {
         if (_wcsicmp(buf, L"WPA2PSK") == 0 || _wcsicmp(buf, L"RSNAPSK") == 0)
             prof->Auth = DOT11_AUTH_ALGO_RSNA_PSK;
+        else if (_wcsicmp(buf, L"WPA3SAE") == 0)
+            prof->Auth = DOT11_AUTH_ALGO_WPA3_SAE;
         else if (_wcsicmp(buf, L"WPAPSK") == 0)
             prof->Auth = DOT11_AUTH_ALGO_WPA_PSK;
         else if (_wcsicmp(buf, L"WPA2") == 0)
@@ -214,19 +304,69 @@ WlanSvcParseProfileXml(LPCWSTR Xml, PWLANSVC_PROFILE *ppProfile)
     {
         size_t klen = wcslen(buf);
         size_t i;
+
         if (klen > NWIFI_MAX_PSK_BYTES)
-            klen = NWIFI_MAX_PSK_BYTES;
+        {
+            SecureZeroMemory(buf, sizeof(buf));
+            WlanSvcFreeProfile(prof);
+            return ERROR_BAD_PROFILE;
+        }
         for (i = 0; i < klen; i++)
+        {
+            if (buf[i] > 0x7F)
+            {
+                SecureZeroMemory(buf, sizeof(buf));
+                WlanSvcFreeProfile(prof);
+                return ERROR_BAD_PROFILE;
+            }
             prof->Key[i] = (UCHAR)buf[i];
+        }
         prof->KeyLength = (ULONG)klen;
         SecureZeroMemory(buf, sizeof(buf));
+    }
+
+    if ((prof->Auth == DOT11_AUTH_ALGO_RSNA_PSK ||
+         prof->Auth == DOT11_AUTH_ALGO_WPA_PSK) &&
+        (prof->KeyLength < 8 || prof->KeyLength > NWIFI_MAX_PSK_BYTES))
+    {
+        WlanSvcFreeProfile(prof);
+        return ERROR_BAD_PROFILE;
+    }
+    if ((prof->Auth == DOT11_AUTH_ALGO_RSNA_PSK ||
+         prof->Auth == DOT11_AUTH_ALGO_WPA_PSK) &&
+        prof->KeyLength == NWIFI_MAX_PSK_BYTES)
+    {
+        ULONG i;
+
+        for (i = 0; i < prof->KeyLength; i++)
+        {
+            UCHAR c = prof->Key[i];
+
+            if (!((c >= '0' && c <= '9') ||
+                  (c >= 'a' && c <= 'f') ||
+                  (c >= 'A' && c <= 'F')))
+            {
+                WlanSvcFreeProfile(prof);
+                return ERROR_BAD_PROFILE;
+            }
+        }
+    }
+    if (prof->Auth == DOT11_AUTH_ALGO_WPA3_SAE &&
+        (prof->KeyLength == 0 || prof->KeyLength >= NWIFI_MAX_PSK_BYTES))
+    {
+        WlanSvcFreeProfile(prof);
+        return ERROR_BAD_PROFILE;
     }
 
     /* Duplicate the source XML for later retrieval. */
     xmlLen = (wcslen(Xml) + 1) * sizeof(WCHAR);
     prof->Xml = HeapAlloc(GetProcessHeap(), 0, xmlLen);
-    if (prof->Xml != NULL)
-        memcpy(prof->Xml, Xml, xmlLen);
+    if (prof->Xml == NULL)
+    {
+        WlanSvcFreeProfile(prof);
+        return ERROR_NOT_ENOUGH_MEMORY;
+    }
+    memcpy(prof->Xml, Xml, xmlLen);
 
     *ppProfile = prof;
     return ERROR_SUCCESS;
