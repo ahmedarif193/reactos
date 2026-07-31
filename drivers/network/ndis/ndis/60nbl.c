@@ -969,13 +969,12 @@ NdisGetDataBuffer(
     PUCHAR StoragePtr;
 
 #define NDIS6_DATA_BUFFER_ALIGNED(_Address) \
-    ((AlignMultiple <= 1) || \
-     ((((ULONG_PTR)(_Address) - AlignOffset) & (AlignMultiple - 1)) == 0))
+    ((((ULONG_PTR)(_Address)) & (AlignMultiple - 1)) == AlignOffset)
 
     if (NetBuffer == NULL || BytesNeeded == 0 ||
         BytesNeeded > NET_BUFFER_DATA_LENGTH(NetBuffer) ||
-        (AlignMultiple > 1 &&
-         (AlignMultiple & (AlignMultiple - 1)) != 0))
+        AlignMultiple == 0 ||
+        (AlignMultiple & (AlignMultiple - 1)) != 0)
     {
         return NULL;
     }
@@ -985,8 +984,16 @@ NdisGetDataBuffer(
     if (CurrentMdl == NULL)
         return NULL;
 
-    MdlByteCount = MmGetMdlByteCount(CurrentMdl);
-    if (CurrentMdlOffset >= MdlByteCount)
+    while (CurrentMdl != NULL)
+    {
+        MdlByteCount = MmGetMdlByteCount(CurrentMdl);
+        if (CurrentMdlOffset < MdlByteCount)
+            break;
+
+        CurrentMdlOffset -= MdlByteCount;
+        CurrentMdl = CurrentMdl->Next;
+    }
+    if (CurrentMdl == NULL)
         return NULL;
 
     if (BytesNeeded <= MdlByteCount - CurrentMdlOffset)
@@ -1001,14 +1008,14 @@ NdisGetDataBuffer(
             return DataVa;
         }
 
-        if (Storage == NULL || !NDIS6_DATA_BUFFER_ALIGNED(Storage))
+        if (Storage == NULL)
             return NULL;
 
         RtlCopyMemory(Storage, DataVa, BytesNeeded);
         return Storage;
     }
 
-    if (Storage == NULL || !NDIS6_DATA_BUFFER_ALIGNED(Storage))
+    if (Storage == NULL)
         return NULL;
 
     StoragePtr = (PUCHAR)Storage;
@@ -1020,7 +1027,11 @@ NdisGetDataBuffer(
 
         MdlByteCount = MmGetMdlByteCount(CurrentMdl);
         if (CurrentMdlOffset >= MdlByteCount)
-            return NULL;
+        {
+            CurrentMdlOffset -= MdlByteCount;
+            CurrentMdl = CurrentMdl->Next;
+            continue;
+        }
 
         MdlVa = (PUCHAR)MmGetSystemAddressForMdlSafe(CurrentMdl, NormalPagePriority);
         if (MdlVa == NULL)
