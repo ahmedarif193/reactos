@@ -415,7 +415,6 @@ CywMiniportInitializeEx(
                 CywFree(Rb);
                 break;
             }
-            MmBuildMdlForNonPagedPool(Rb->Mdl);
             Rb->Next = Adapter->RxBufFree;
             Adapter->RxBufFree = Rb;
         }
