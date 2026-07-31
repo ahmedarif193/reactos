@@ -98,7 +98,7 @@ typedef enum _SYSDBG_COMMAND
     SysDbgGetUmAttachPid = 35,
     SysDbgClearUmAttachPid = 36,
 #endif
-#if (NTDDI_VERSION >= NTDDI_WINBLUE) // NTDDI_WIN81
+#if (NTDDI_VERSION >= NTDDI_WINBLUE) || defined(__REACTOS__) // NTDDI_WIN81
     SysDbgGetLiveKernelDump = 37,
 #endif
 #if (NTDDI_VERSION >= NTDDI_WIN10_VB)
@@ -170,7 +170,7 @@ typedef struct _SYSDBG_TRIAGE_DUMP
     PHANDLE Handles;
 } SYSDBG_TRIAGE_DUMP, *PSYSDBG_TRIAGE_DUMP;
 
-#if (NTDDI_VERSION >= NTDDI_WINBLUE) // NTDDI_WIN81
+#if (NTDDI_VERSION >= NTDDI_WINBLUE) || defined(__REACTOS__) // NTDDI_WIN81
 
 typedef union _SYSDBG_LIVEDUMP_CONTROL_FLAGS
 {
@@ -250,7 +250,7 @@ typedef struct _SYSDBG_LIVEDUMP_CONTROL
 #endif
 } SYSDBG_LIVEDUMP_CONTROL, *PSYSDBG_LIVEDUMP_CONTROL;
 
-#endif // (NTDDI_VERSION >= NTDDI_WINBLUE)
+#endif // (NTDDI_VERSION >= NTDDI_WINBLUE) || defined(__REACTOS__)
 
 #if (NTDDI_VERSION >= NTDDI_WIN10_VB)
 
