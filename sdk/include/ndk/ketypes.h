@@ -3405,16 +3405,9 @@ typedef struct _KPROCESS
 {
     DISPATCHER_HEADER Header;                            // 0x000
     LIST_ENTRY ProfileListHead;                          // 0x018
-    union
-    {
-        ULONG_PTR DirectoryTableBase[2];                 // 0x028 [ReactOS: [1] is TTBR1]
-        struct
-        {
-            ULONG_PTR DirectoryTableBaseWin11;           // 0x028
-            ULONG Asid;                                  // 0x030
-            ULONG Spare0b;                               // 0x034
-        };
-    };
+    ULONG_PTR DirectoryTableBase;                        // 0x028
+    ULONG Asid;                                          // 0x030
+    ULONG Spare0b;                                       // 0x034
     LIST_ENTRY ThreadListHead;                           // 0x038
     KSPIN_LOCK ProcessLock;                              // 0x048 Win11: ULONG ProcessLock + ULONG ProcessTimerDelay
     ULONG64 DeepFreezeStartTime;                         // 0x050
@@ -3566,6 +3559,8 @@ typedef struct _KPROCESS
 #if defined(_M_ARM64) && !defined(__ASSEMBLER__)
 C_ASSERT(sizeof(KPROCESS) == 0x1B8);
 C_ASSERT(FIELD_OFFSET(KPROCESS, DirectoryTableBase) == 0x028);
+C_ASSERT(FIELD_OFFSET(KPROCESS, Asid) == 0x030);
+C_ASSERT(FIELD_OFFSET(KPROCESS, Spare0b) == 0x034);
 C_ASSERT(FIELD_OFFSET(KPROCESS, ThreadListHead) == 0x038);
 C_ASSERT(FIELD_OFFSET(KPROCESS, ProcessLock) == 0x048);
 C_ASSERT(FIELD_OFFSET(KPROCESS, Affinity) == 0x058);
@@ -3574,6 +3569,7 @@ C_ASSERT(FIELD_OFFSET(KPROCESS, SwapListEntry) == 0x080);
 C_ASSERT(FIELD_OFFSET(KPROCESS, ActiveProcessors) == 0x088);
 C_ASSERT(FIELD_OFFSET(KPROCESS, ProcessFlags) == 0x090);
 C_ASSERT(FIELD_OFFSET(KPROCESS, BasePriority) == 0x098);
+C_ASSERT(FIELD_OFFSET(KPROCESS, Unused0) == 0x0C8);
 C_ASSERT(FIELD_OFFSET(KPROCESS, StackCount) == 0x110);
 C_ASSERT(FIELD_OFFSET(KPROCESS, ProcessListEntry) == 0x118);
 C_ASSERT(FIELD_OFFSET(KPROCESS, CycleTime) == 0x128);

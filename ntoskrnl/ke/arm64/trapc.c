@@ -806,10 +806,10 @@ KiSwapProcess(_Inout_ PKPROCESS NewProcess,
     }
 #endif
 
-    NewUserRoot = NewProcess->DirectoryTableBase[0] & ARM64_PTE_ADDR_MASK;
-    NewKernelRoot = KiArm64KernelTtbrBase(NewProcess->DirectoryTableBase[0]);
+    NewUserRoot = KPROCESS_DTB0(NewProcess) & ARM64_PTE_ADDR_MASK;
+    NewKernelRoot = KiArm64KernelTtbrBase(KPROCESS_DTB0(NewProcess));
 
-    ASSERT(NewProcess->DirectoryTableBase[0] != 0);
+    ASSERT(KPROCESS_DTB0(NewProcess) != 0);
     ASSERT(NewProcess->Unused0 != 0);   /* hyperspace root (Win11 ARM64: 0x030 is the ASID field) */
 
     KiArm64SwitchAddressSpace(NewProcess, NewUserRoot, NewKernelRoot);

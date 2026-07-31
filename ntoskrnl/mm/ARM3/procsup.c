@@ -17,12 +17,8 @@
 #include <mm/ARM3/miarm.h>
 
 /* DirectoryTableBase compatibility: single value at Vista+, array pre-Vista */
-#if (NTDDI_VERSION >= NTDDI_LONGHORN) && !defined(_M_ARM64)
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
 #define DTB0 DirectoryTableBase
-#define DTB1 Unused0
-#elif defined(_M_ARM64)
-/* ARM64: 0x030 is the Win11 ASID field; hyperspace lives in Unused0 (as amd64). */
-#define DTB0 DirectoryTableBase[0]
 #define DTB1 Unused0
 #else
 #define DTB0 DirectoryTableBase[0]

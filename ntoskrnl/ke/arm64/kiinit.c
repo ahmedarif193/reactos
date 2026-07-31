@@ -554,9 +554,9 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
            tagged BSP TTBR1. Install the idle process roots under ASID 0 before
            this CPU can enter the scheduler; same-process switches can then be
            a true no-op. */
-        ASSERT(InitProcess->DirectoryTableBase[0] != 0);
-        UserRoot = InitProcess->DirectoryTableBase[0] & ARM64_PTE_ADDR_MASK;
-        KernelRoot = KiArm64KernelTtbrBase(InitProcess->DirectoryTableBase[0]);
+        ASSERT(KPROCESS_DTB0(InitProcess) != 0);
+        UserRoot = KPROCESS_DTB0(InitProcess) & ARM64_PTE_ADDR_MASK;
+        KernelRoot = KiArm64KernelTtbrBase(KPROCESS_DTB0(InitProcess));
         KiArm64WriteUserTtbr(UserRoot, KernelRoot, 0, TRUE);
     }
     /* quiet */

@@ -60,7 +60,7 @@ KdpAddBreakpoint(IN PVOID Address)
 
     /* If we are setting the breakpoint in user space, save the active process context */
     if (Address < KD_HIGHEST_USER_BREAKPOINT_ADDRESS)
-#if (NTDDI_VERSION >= NTDDI_LONGHORN) && !defined(_M_ARM64)
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
         KdpBreakpointTable[i].DirectoryTableBase = KeGetCurrentThread()->ApcState.Process->DirectoryTableBase;
 #else
         KdpBreakpointTable[i].DirectoryTableBase = KeGetCurrentThread()->ApcState.Process->DirectoryTableBase[0];
@@ -141,7 +141,7 @@ KdSetOwedBreakpoints(VOID)
              * in user space and the active process context matches.
              */
             if (KdpBreakpointTable[i].Address < KD_HIGHEST_USER_BREAKPOINT_ADDRESS &&
-#if (NTDDI_VERSION >= NTDDI_LONGHORN) && !defined(_M_ARM64)
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
                 KdpBreakpointTable[i].DirectoryTableBase != KeGetCurrentThread()->ApcState.Process->DirectoryTableBase)
 #else
                 KdpBreakpointTable[i].DirectoryTableBase != KeGetCurrentThread()->ApcState.Process->DirectoryTableBase[0])

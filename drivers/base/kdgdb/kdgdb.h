@@ -72,11 +72,8 @@ format_gdb_tid(
 
 FORCEINLINE ULONG_PTR KdpGetDirectoryTableBase(PKPROCESS Process)
 {
-#if defined(_M_ARM64) || (NTDDI_VERSION < NTDDI_LONGHORN)
-    /*
-     * An array on pre-Longhorn targets, and on ARM64 whatever the version:
-     * entry zero is the TTBR0 user translation root.
-     */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
+    /* An array on pre-Longhorn targets; entry zero is the user translation root. */
     return Process->DirectoryTableBase[0];
 #else
     return Process->DirectoryTableBase;
