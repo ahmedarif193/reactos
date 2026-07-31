@@ -23,16 +23,12 @@ PRTLP_UNHANDLED_EXCEPTION_FILTER RtlpUnhandledExceptionFilter;
 /* FUNCTIONS ***************************************************************/
 
 #if defined(_M_AMD64)
-FORCEINLINE
-ULONG64
-RtlpGetCallerFramePointer(VOID)
-{
-#if defined(_MSC_VER)
-    return *(PULONG64)((ULONG_PTR)_AddressOfReturnAddress() - sizeof(PVOID));
-#else
-    return *(PULONG64)__builtin_frame_address(0);
-#endif
-}
+/* Defined in rtl/amd64/except.c - advances a captured CONTEXT one frame up so
+ * it describes the caller of the routine that captured it. */
+VOID
+NTAPI
+RtlpAmd64StepContextToCaller(
+    _Inout_ PCONTEXT Context);
 #endif
 
 #if defined(_M_ARM64)
@@ -143,13 +139,11 @@ RtlRaiseStatus(IN NTSTATUS Status)
 
 #if defined(_M_AMD64)
     /*
-     * Raise from the caller's machine frame. RtlCaptureContext records this
-     * helper's RIP/RSP, which makes amd64 unwind start in RtlRaiseStatus
-     * itself and can miss the caller's SEH scope.
+     * RtlCaptureContext records this helper's own frame. Step the context up
+     * one frame so exception dispatch starts in the caller's SEH scope with
+     * all nonvolatile registers restored.
      */
-    Context.Rip = (ULONG64)_ReturnAddress();
-    Context.Rsp = (ULONG64)_AddressOfReturnAddress() + sizeof(PVOID);
-    Context.Rbp = RtlpGetCallerFramePointer();
+    RtlpAmd64StepContextToCaller(&Context);
 #elif defined(_M_ARM64)
     /*
      * Same problem on arm64: RtlCaptureContext records this helper's own
