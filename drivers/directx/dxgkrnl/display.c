@@ -104,6 +104,7 @@ static ULONG g_DisplayDeviceNumber = 0;
 static volatile LONG g_PresentShadowTraceCount = 0;
 static volatile LONG g_PresentTimerTraceCount = 0;
 static volatile LONG g_PresentDirtyTraceCount = 0;
+static volatile LONG g_ScanoutCopyCount = 0;
 static volatile LONG g_PresentDispatchBusy = 0;
 static BOOLEAN g_PresentDirtyRectValid = FALSE;
 static RECTL g_PresentDirtyRect;
@@ -1113,8 +1114,6 @@ DxgkpBlitShadowToGop(
     SIZE_T GopSize;
     LONG   Left, Top, Right, Bottom, y, BytesPerRow, GopRows;
 
-    UNREFERENCED_PARAMETER(Adapter);
-
     if (SharedSurface == NULL)
         return STATUS_INVALID_PARAMETER;
     Src = (PUCHAR)SharedSurface->ShadowFb;
@@ -1150,6 +1149,8 @@ DxgkpBlitShadowToGop(
         RtlCopyMemory(Dst + (SIZE_T)y * DstPitch + (SIZE_T)Left * 4, Src + (SIZE_T)y * SrcPitch + (SIZE_T)Left * 4, (SIZE_T)BytesPerRow);
     }
 
+    InterlockedIncrement(&g_ScanoutCopyCount);
+    DxgkPresentAccountFrame(Adapter, 0);
     InterlockedExchange64(&g_LastPresentSubmit100ns,
                           (LONGLONG)DxgkpDisplayTraceNow100ns());
     return STATUS_SUCCESS;
@@ -1297,6 +1298,8 @@ DxgkpPresentShadowFbInternal(
         Start100ns = DxgkpDisplayTraceNow100ns();
         Status = PfnPresent(Adapter->MiniportDeviceContext, &PresentArgs);
         DxgkReleaseMiniportCallback(Adapter);
+        InterlockedIncrement(&g_ScanoutCopyCount);
+        DxgkPresentAccountFrame(Adapter, PresentArgs.VidPnSourceId);
         ElapsedUs = DxgkpDisplayTraceElapsedUs(Start100ns);
         TraceSeq = InterlockedIncrement(&g_PresentShadowTraceCount);
         if (TraceSeq <= DXGK_PRESENT_TRACE_LOG_LIMIT ||
@@ -2482,6 +2485,35 @@ DxgkpDisplayDispatch(
              * is a referenced PKEVENT owned by win32k, or 0 to unregister. */
             InterlockedExchangePointer((PVOID volatile *)&g_DisplayAdapter->DwmVblankEvent,
                                        (PVOID)(ULONG_PTR)*pValue);
+            Status = STATUS_SUCCESS;
+            break;
+        }
+
+        case IOCTL_VIDEO_DXGK_PRESENT_STATS:
+        {
+            PDXGK_PRESENT_STATS Stats = (PDXGK_PRESENT_STATS)Irp->AssociatedIrp.SystemBuffer;
+
+            if (Stats == NULL ||
+                Stack->Parameters.DeviceIoControl.OutputBufferLength < sizeof(*Stats))
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+            if (g_DisplayAdapter == NULL)
+            {
+                Status = STATUS_DEVICE_NOT_READY;
+                break;
+            }
+
+            RtlZeroMemory(Stats, sizeof(*Stats));
+            Stats->StructSize        = sizeof(*Stats);
+            Stats->DirtyRectRequests = (ULONG)InterlockedCompareExchange(&g_PresentDirtyTraceCount, 0, 0);
+            Stats->ScanoutCopies     = (ULONG)InterlockedCompareExchange(&g_ScanoutCopyCount, 0, 0);
+            Stats->PendingDirtyRect  = DxgkpHasPendingDirtyRect(g_DisplayAdapter) ? 1 : 0;
+            Stats->CompositionActive =
+                InterlockedCompareExchange(&g_DisplayAdapter->DwmCompositionInProgress, 0, 0) != 0 ? 1 : 0;
+
+            BytesReturned = sizeof(*Stats);
             Status = STATUS_SUCCESS;
             break;
         }

@@ -2838,6 +2838,23 @@ BOOLEAN
 DxgkPresentTryBeginStop(
     _In_ PDXGKRNL_ADAPTER Adapter);
 
+NTSTATUS
+DxgkDisplayPresentRect(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ const RECT *DirtyRect);
+
+NTSTATUS
+DxgkPresentQueryVidPnSourceStats(
+    _In_  PDXGKRNL_ADAPTER               Adapter,
+    _In_  D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+    _Out_ PULONG                         Frame,
+    _Out_ PULONG                         QueuedPresent);
+
+VOID
+DxgkPresentAccountFrame(
+    _In_ PDXGKRNL_ADAPTER               Adapter,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId);
+
 VOID
 DxgkPresentBeginStop(
     _In_ PDXGKRNL_ADAPTER Adapter);

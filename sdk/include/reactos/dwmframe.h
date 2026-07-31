@@ -43,10 +43,14 @@
  *   REGISTER_VBLANK  - win32k hands dxgkrnl a referenced PKEVENT (ULONGLONG
  *                      payload, 0 unregisters); the present timer signals it
  *                      every scanout period for dwm frame pacing.
+ *   PRESENT_STATS    - read-only present-path counters (DXGK_PRESENT_STATS in
+ *                      the escape output buffer) so a test can measure how much
+ *                      scan-out work a GDI/cursor operation costs.
  */
 #define CDD_ESCAPE_SUPPRESS_CURSOR  0x44574D01
 #define CDD_ESCAPE_COMPOSITION_SYNC 0x44574D02
 #define CDD_ESCAPE_REGISTER_VBLANK  0x44574D03
+#define CDD_ESCAPE_PRESENT_STATS    0x44574D04
 
 /*
  * cdd -> dxgkrnl present-path IOCTLs (kernel side of the same contract).
@@ -70,8 +74,26 @@
     CTL_CODE(FILE_DEVICE_VIDEO, 0x922, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_VIDEO_DXGK_REGISTER_VBLANK \
     CTL_CODE(FILE_DEVICE_VIDEO, 0x923, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_VIDEO_DXGK_PRESENT_STATS \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x924, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 #include <pshpack4.h>
+
+/*
+ * Present-path counters (CDD_ESCAPE_PRESENT_STATS / IOCTL_VIDEO_DXGK_PRESENT_STATS).
+ * DirtyRectRequests counts the present requests cdd sends for drawing that
+ * reached the primary; ScanoutCopies counts the shadow->scan-out copies those
+ * requests produced. Both are free-running since adapter start.
+ */
+typedef struct _DXGK_PRESENT_STATS
+{
+    ULONG StructSize;          /* out: sizeof(DXGK_PRESENT_STATS) */
+    ULONG DirtyRectRequests;
+    ULONG ScanoutCopies;
+    ULONG PendingDirtyRect;    /* 1 = a recorded rect is not scanned out yet */
+    ULONG CompositionActive;   /* 1 = inside a compositor present bracket    */
+    ULONG Reserved;
+} DXGK_PRESENT_STATS, *PDXGK_PRESENT_STATS;
 
 /* LayerFlags bits (match winuser LWA_*). */
 #define DWM_LWA_COLORKEY 0x00000001u
