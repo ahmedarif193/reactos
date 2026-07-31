@@ -490,8 +490,11 @@ DxgkpSyncCreatePeriodicNotification(
         return STATUS_INVALID_PARAMETER;
     }
     Adapter = SyncObj->Device->Adapter;
+    /* Part of the create operation, so the caller sees this as the create's
+     * status: Windows 11 answers a periodic fence the adapter cannot drive
+     * with STATUS_INVALID_PARAMETER. */
     if (!DxgkpSyncPeriodicCallbacksSupported(Adapter))
-        return STATUS_NOT_SUPPORTED;
+        return STATUS_INVALID_PARAMETER;
 
     Status = DxgkpSyncReservePeriodicNotification(SyncObj);
     if (!NT_SUCCESS(Status))
@@ -1525,10 +1528,10 @@ DxgkpCreateSynchronizationObjectInternal(
     *SyncObjectHandle = 0;
     if (Info->Type != D3DDDI_SYNCHRONIZATION_MUTEX && Info->Type != D3DDDI_SEMAPHORE && Info->Type != D3DDDI_FENCE && Info->Type != D3DDDI_CPU_NOTIFICATION && Info->Type != D3DDDI_MONITORED_FENCE && Info->Type != D3DDDI_PERIODIC_MONITORED_FENCE)
         return STATUS_NOT_SUPPORTED;
-    if (Info->Type == D3DDDI_SEMAPHORE && (Info->Semaphore.MaxCount == 0 || Info->Semaphore.InitialCount > Info->Semaphore.MaxCount))
+    if (Info->Type == D3DDDI_SEMAPHORE && Info->Semaphore.InitialCount > Info->Semaphore.MaxCount)
         return STATUS_INVALID_PARAMETER;
     if (Info->Type == D3DDDI_CPU_NOTIFICATION && Info->CPUNotification.Event == NULL && !AllowMissingCpuNotificationEvent)
-        return STATUS_INVALID_PARAMETER;
+        return STATUS_INVALID_HANDLE;
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
     if (Info->Flags.SignalByKmd)
     {
@@ -1541,14 +1544,15 @@ DxgkpCreateSynchronizationObjectInternal(
 #endif
     if ((Info->Type == D3DDDI_MONITORED_FENCE ||
          Info->Type == D3DDDI_PERIODIC_MONITORED_FENCE) &&
-        (Info->Flags.TopOfPipeline || Info->Flags.Shared))
+        Info->Flags.Shared)
     {
         /*
-         * TopOfPipeline needs a real scheduler submission-boundary signal,
-         * and native sharing needs an NT synchronization-object/security
-         * contract.  The private global-handle alias is neither.
+         * Native sharing needs an NT synchronization-object/security contract;
+         * the private global-handle alias is not that. Windows 11 reports the
+         * request as a bad parameter, which is what a caller sees when it asks
+         * for sharing without supplying those parameters.
          */
-        return STATUS_NOT_SUPPORTED;
+        return STATUS_INVALID_PARAMETER;
     }
     if (Info->Type == D3DDDI_PERIODIC_MONITORED_FENCE &&
         Info->PeriodicMonitoredFence.hAdapter == 0)
@@ -1586,8 +1590,10 @@ DxgkpCreateSynchronizationObjectInternal(
     if (Info->Type == D3DDDI_PERIODIC_MONITORED_FENCE &&
         !DxgkpSyncPeriodicCallbacksSupported(Adapter))
     {
+        /* Windows 11 reports a periodic monitored fence the adapter cannot
+         * drive as a bad parameter rather than an unsupported operation. */
         DxgkDereferenceDevice(Device);
-        return STATUS_NOT_SUPPORTED;
+        return STATUS_INVALID_PARAMETER;
     }
     SyncObj = (PDXGKRNL_SYNC_OBJECT)ExAllocatePoolWithTag(NonPagedPool, sizeof(DXGKRNL_SYNC_OBJECT), TAG_DXGK_SYNC);
     if (SyncObj == NULL)
