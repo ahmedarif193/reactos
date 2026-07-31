@@ -337,7 +337,14 @@ MiniIndicateReceivePacket(
     {
         /* Store the indicating miniport in the packet */
         PacketArray[i]->Reserved[1] = (ULONG_PTR)Adapter;
-        PacketArray[i]->WrapperReserved[0] = 1;
+        /* Keep one additional owner reference on normal NDIS 6 bridge
+         * wrappers until their thunk caller regains control after this
+         * routine releases the adapter lock. Protocol returns can otherwise
+         * free the wrapper before the caller can decide whether to release
+         * it. RESOURCES wrappers are reclaimed directly by their caller. */
+        PacketArray[i]->WrapperReserved[0] =
+            (Adapter->IsNdis6 &&
+             NDIS_GET_PACKET_STATUS(PacketArray[i]) != NDIS_STATUS_RESOURCES) ? 2 : 1;
     }
 
     CurrentEntry = Adapter->ProtocolListHead.Flink;
@@ -360,8 +367,9 @@ MiniIndicateReceivePacket(
             else
             {
                 UINT FirstBufferLength, TotalBufferLength, LookAheadSize, HeaderSize;
+                UINT CacheSize, BytesCopied;
                 PNDIS_BUFFER NdisBuffer;
-                PVOID NdisBufferVA, LookAheadBuffer;
+                PVOID NdisBufferVA, HeaderBuffer, LookAheadBuffer;
 
                 NdisGetFirstBufferFromPacket(PacketArray[i],
                                              &NdisBuffer,
@@ -371,36 +379,68 @@ MiniIndicateReceivePacket(
 
                 HeaderSize = NDIS_GET_PACKET_HEADER_SIZE(PacketArray[i]);
 
-                LookAheadSize = TotalBufferLength - HeaderSize;
-
-                if (Adapter->LookaheadCacheSize < LookAheadSize)
+                if (HeaderSize > TotalBufferLength)
                 {
-                    PVOID NewCache = ExAllocatePool(NonPagedPool, LookAheadSize);
+                    NDIS_DbgPrint(MIN_TRACE, ("Invalid receive header length %u for %u-byte packet\n",
+                                              HeaderSize, TotalBufferLength));
+                    continue;
+                }
+
+                LookAheadSize = TotalBufferLength - HeaderSize;
+                CacheSize = HeaderSize > FirstBufferLength ? TotalBufferLength : LookAheadSize;
+
+                if (Adapter->LookaheadCacheSize < CacheSize)
+                {
+                    PVOID NewCache = ExAllocatePool(NonPagedPool, CacheSize);
                     if (!NewCache)
                     {
                         NDIS_DbgPrint(MIN_TRACE, ("Failed to allocate lookahead buffer!\n"));
-                        KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
-                        return;
+                        continue;
                     }
                     if (Adapter->LookaheadCache != NULL)
                     {
                         ExFreePool(Adapter->LookaheadCache);
                     }
                     Adapter->LookaheadCache = NewCache;
-                    Adapter->LookaheadCacheSize = LookAheadSize;
+                    Adapter->LookaheadCacheSize = CacheSize;
                 }
-                LookAheadBuffer = Adapter->LookaheadCache;
 
-                CopyBufferChainToBuffer(LookAheadBuffer,
-                                        NdisBuffer,
-                                        HeaderSize,
-                                        LookAheadSize);
+                HeaderBuffer = NdisBufferVA;
+                if (HeaderSize > FirstBufferLength)
+                {
+                    BytesCopied = CopyBufferChainToBuffer(Adapter->LookaheadCache,
+                                                          NdisBuffer,
+                                                          0,
+                                                          TotalBufferLength);
+                    if (BytesCopied != TotalBufferLength)
+                    {
+                        NDIS_DbgPrint(MIN_TRACE, ("Failed to copy fragmented receive header\n"));
+                        continue;
+                    }
+
+                    HeaderBuffer = Adapter->LookaheadCache;
+                    LookAheadBuffer = (PUCHAR)Adapter->LookaheadCache + HeaderSize;
+                }
+                else
+                {
+                    LookAheadBuffer = LookAheadSize != 0 ? Adapter->LookaheadCache : NULL;
+                    BytesCopied = LookAheadSize != 0 ?
+                        CopyBufferChainToBuffer(LookAheadBuffer,
+                                                NdisBuffer,
+                                                HeaderSize,
+                                                LookAheadSize) : 0;
+                    if (BytesCopied != LookAheadSize)
+                    {
+                        NDIS_DbgPrint(MIN_TRACE, ("Failed to copy receive lookahead\n"));
+                        continue;
+                    }
+                }
 
                 NDIS_DbgPrint(MID_TRACE, ("Indicating packet to protocol's legacy Receive handler\n"));
                 (*AdapterBinding->ProtocolBinding->Chars.ReceiveHandler)(
                      AdapterBinding->NdisOpenBlock.ProtocolBindingContext,
                      AdapterBinding->NdisOpenBlock.MacHandle,
-                     NdisBufferVA,
+                     HeaderBuffer,
                      HeaderSize,
                      LookAheadBuffer,
                      LookAheadSize,
@@ -434,12 +474,22 @@ MiniIndicateReceivePacket(
             /* We need to check the reference count */
             if (PacketArray[i]->WrapperReserved[0] == 0)
             {
-                /* NOTE: Unlike serialized miniports, this is REQUIRED to be called for each
-                 * packet received that can be reused immediately, it is not implied! */
-                Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.ReturnPacketHandler(
-                      Adapter->NdisMiniportBlock.MiniportAdapterContext,
-                      PacketArray[i]);
-                NDIS_DbgPrint(MID_TRACE, ("Packet has been returned to miniport (Deserialized)\n"));
+                if (Adapter->IsNdis6)
+                {
+                    /* The NDIS 6 RX thunk owns this legacy wrapper and must
+                     * release it after this indication routine drops the
+                     * adapter lock. There is no legacy ReturnPacketHandler. */
+                    NDIS_DbgPrint(MID_TRACE, ("NDIS 6 wrapper is immediately reusable\n"));
+                }
+                else
+                {
+                    /* Unlike serialized miniports, the packet must be
+                     * returned explicitly when it is immediately reusable. */
+                    Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.ReturnPacketHandler(
+                          Adapter->NdisMiniportBlock.MiniportAdapterContext,
+                          PacketArray[i]);
+                    NDIS_DbgPrint(MID_TRACE, ("Packet has been returned to miniport (Deserialized)\n"));
+                }
             }
             else
             {
