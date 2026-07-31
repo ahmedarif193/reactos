@@ -807,26 +807,21 @@ NdisReturnNetBufferLists(
     _In_ ULONG ReturnFlags)
 {
     PNDIS6_PROTOCOL_BINDING Binding = (PNDIS6_PROTOCOL_BINDING)NdisBindingHandle;
-    PLOGICAL_ADAPTER        Adapter;
     PNET_BUFFER_LIST        CurrentNbl;
     PNET_BUFFER_LIST        NextNbl;
 
     if (Binding == NULL || NetBufferLists == NULL)
         return;
 
-    Adapter = Binding->Adapter;
-    if (Adapter == NULL || !Adapter->IsNdis6)
-        return;
-
     /* Hand the receive NBLs back to the miniport's ReturnNetBufferListsHandler
-     * via the filter chain; the NBLs are miniport-owned. The chain is split
-     * because the terminal return handler nulls the Next link per NBL. */
+     * via the filter chain. Each NBL carries the native receive context that
+     * keeps this binding alive until the protocol releases its final NBL. */
     for (CurrentNbl = NetBufferLists; CurrentNbl != NULL; CurrentNbl = NextNbl)
     {
         NextNbl = NET_BUFFER_LIST_NEXT_NBL(CurrentNbl);
         NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = NULL;
 
-        Ndis6FilterDispatchReturn(Adapter, CurrentNbl, ReturnFlags);
+        Ndis6RxReturnNativeNetBufferList(Binding, CurrentNbl, ReturnFlags);
     }
 }
 

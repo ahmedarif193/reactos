@@ -40,15 +40,122 @@ MiniIndicateReceivePacket(
     IN PPNDIS_PACKET PacketArray,
     IN UINT          NumberOfPackets);
 
+#define NDIS6_RX_LEGACY_CONTEXT_TAG   'cRxN'
+#define NDIS6_RX_LEGACY_CONTEXT_MAGIC 0x4E785243
+
+typedef struct _NDIS6_RX_LEGACY_CONTEXT
+{
+    ULONG Magic;
+    volatile LONG WrapperReferences;
+    PNET_BUFFER_LIST NetBufferList;
+    PLOGICAL_ADAPTER Adapter;
+} NDIS6_RX_LEGACY_CONTEXT, *PNDIS6_RX_LEGACY_CONTEXT;
+
+#define NDIS6_RX_NATIVE_CONTEXT_TAG   'nRxN'
+#define NDIS6_RX_NATIVE_CONTEXT_MAGIC 0x4E78524E
+
+typedef struct _NDIS6_RX_NATIVE_CONTEXT
+{
+    ULONG Magic;
+    volatile LONG NetBufferListReferences;
+    PNDIS6_PROTOCOL_BINDING Binding;
+    PLOGICAL_ADAPTER Adapter;
+} NDIS6_RX_NATIVE_CONTEXT, *PNDIS6_RX_NATIVE_CONTEXT;
+
+static BOOLEAN
+Ndis6RxPrepareNativeIndication(
+    _In_ PNDIS6_PROTOCOL_BINDING Binding,
+    _In_ PLOGICAL_ADAPTER Adapter,
+    _In_ PNET_BUFFER_LIST NetBufferLists)
+{
+    PNDIS6_RX_NATIVE_CONTEXT Context;
+    PNET_BUFFER_LIST NetBufferList;
+    LONG ReferenceCount = 0;
+
+    for (NetBufferList = NetBufferLists;
+         NetBufferList != NULL && ReferenceCount != MAXLONG;
+         NetBufferList = NET_BUFFER_LIST_NEXT_NBL(NetBufferList))
+    {
+        ReferenceCount++;
+    }
+    if (NetBufferList != NULL || ReferenceCount == 0)
+        return FALSE;
+
+    Context = (PNDIS6_RX_NATIVE_CONTEXT)ExAllocatePoolWithTag(
+        NonPagedPool, sizeof(*Context), NDIS6_RX_NATIVE_CONTEXT_TAG);
+    if (Context == NULL)
+        return FALSE;
+
+    /* The snapshot reference protects the callback itself. This additional
+     * rundown reference protects a protocol that retains one or more NBLs
+     * after the callback returns. */
+    if (!Ndis6ReferenceProtocolBinding(Binding))
+    {
+        ExFreePoolWithTag(Context, NDIS6_RX_NATIVE_CONTEXT_TAG);
+        return FALSE;
+    }
+
+    Context->Magic = NDIS6_RX_NATIVE_CONTEXT_MAGIC;
+    Context->NetBufferListReferences = ReferenceCount;
+    Context->Binding = Binding;
+    Context->Adapter = Adapter;
+
+    for (NetBufferList = NetBufferLists;
+         NetBufferList != NULL;
+         NetBufferList = NET_BUFFER_LIST_NEXT_NBL(NetBufferList))
+    {
+        NetBufferList->NdisReserved[0] = Context;
+    }
+
+    return TRUE;
+}
+
+BOOLEAN
+Ndis6RxReturnNativeNetBufferList(
+    _In_ PNDIS6_PROTOCOL_BINDING Binding,
+    _In_ PNET_BUFFER_LIST NetBufferList,
+    _In_ ULONG ReturnFlags)
+{
+    PNDIS6_RX_NATIVE_CONTEXT Context;
+    LONG RemainingRefs;
+
+    if (Binding == NULL || NetBufferList == NULL)
+        return FALSE;
+
+    Context = (PNDIS6_RX_NATIVE_CONTEXT)NetBufferList->NdisReserved[0];
+    if (Context == NULL ||
+        Context->Magic != NDIS6_RX_NATIVE_CONTEXT_MAGIC ||
+        Context->Binding != Binding ||
+        Context->Adapter != Binding->Adapter)
+    {
+        return FALSE;
+    }
+
+    /* Clear the ownership marker before returning the miniport-owned NBL;
+     * the miniport may recycle it synchronously. */
+    NetBufferList->NdisReserved[0] = NULL;
+    Ndis6FilterDispatchReturn(Context->Adapter, NetBufferList, ReturnFlags);
+
+    RemainingRefs = InterlockedDecrement(&Context->NetBufferListReferences);
+    ASSERT(RemainingRefs >= 0);
+    if (RemainingRefs == 0)
+    {
+        Context->Magic = 0;
+        ExFreePoolWithTag(Context, NDIS6_RX_NATIVE_CONTEXT_TAG);
+        Ndis6DereferenceProtocolBinding(Binding);
+    }
+
+    return TRUE;
+}
+
 /* ============================================================================
  *  Ndis6RxBuildLegacyPacket — wrap a NET_BUFFER in a legacy NDIS_PACKET.
  *
  *  The wrapper is allocated from Ext->RxLegacyPacketPool, with a single
  *  NDIS_BUFFER chained on that re-uses the NB's CurrentMdl directly (no
- *  copy). The original NBL pointer is stashed in Reserved[0] so the
- *  return path can find it; the Ext is stashed in Reserved[1]. The legacy
- *  WrapperReserved[0] starts at zero and is incremented by the existing
- *  protocol-bind logic in MiniIndicateReceivePacket.
+ *  copy). Reserved[0] carries the private per-NBL return context and
+ *  Reserved[1] carries the indicating adapter. The legacy WrapperReserved[0]
+ *  starts at zero and is initialized by MiniIndicateReceivePacket.
  *
  *  Returns NULL on allocation failure (caller drops the NB).
  * ============================================================================ */
@@ -58,7 +165,8 @@ Ndis6RxBuildLegacyPacket(
     _In_ PNDIS6_ADAPTER_EXT Ext,
     _In_ PNET_BUFFER_LIST   Nbl,
     _In_ PNET_BUFFER        Nb,
-    _In_ BOOLEAN            ResourcesFlag)
+    _In_ BOOLEAN            ResourcesFlag,
+    _In_opt_ PNDIS6_RX_LEGACY_CONTEXT ReturnContext)
 {
     PNDIS_PACKET Packet     = NULL;
     PNDIS_BUFFER FirstBuffer = NULL;
@@ -70,7 +178,6 @@ Ndis6RxBuildLegacyPacket(
     ULONG        Remaining;
     ULONG        MdlSegmentSize;
     ULONG        MdlSegmentOffset;
-    ULONG        ChainedMdls = 0;
     /* Note: RxLegacyBufferPool is always NULL because NdisAllocateBufferPool
      * is a no-op stub in the legacy library — NdisAllocateBuffer ignores
      * the handle and just calls IoAllocateMdl. Only the packet pool needs
@@ -100,6 +207,7 @@ Ndis6RxBuildLegacyPacket(
     {
         ULONG MdlSize = MmGetMdlByteCount(CurrentMdl);
         PNDIS_BUFFER NdisBuffer = NULL;
+        PVOID SegmentAddress;
 
         /* Clamp the MDL segment to what's available in this MDL AND
          * what's remaining in the total payload. */
@@ -116,12 +224,18 @@ Ndis6RxBuildLegacyPacket(
         if (MdlSegmentSize > Remaining)
             MdlSegmentSize = Remaining;
 
-        NdisAllocateBuffer(&Status,
-                           &NdisBuffer,
-                           Ext->RxLegacyBufferPool,
-                           (PUCHAR)MmGetMdlVirtualAddress(CurrentMdl) + MdlSegmentOffset,
-                           MdlSegmentSize);
-        if (Status != NDIS_STATUS_SUCCESS || NdisBuffer == NULL)
+        SegmentAddress =
+            (PUCHAR)MmGetMdlVirtualAddress(CurrentMdl) + MdlSegmentOffset;
+
+        /* Preserve the source MDL's locked-page description. Rebuilding this
+         * range with MmBuildMdlForNonPagedPool would incorrectly assume that
+         * every NDIS 6 receive MDL describes ordinary nonpaged pool. */
+        NdisBuffer = IoAllocateMdl(SegmentAddress,
+                                   MdlSegmentSize,
+                                   FALSE,
+                                   FALSE,
+                                   NULL);
+        if (NdisBuffer == NULL)
         {
             /* Tear down the partial chain we built before this failure,
              * then free the packet itself. */
@@ -137,6 +251,11 @@ Ndis6RxBuildLegacyPacket(
             NdisFreePacket(Packet);
             return NULL;
         }
+        IoBuildPartialMdl(CurrentMdl,
+                          NdisBuffer,
+                          SegmentAddress,
+                          MdlSegmentSize);
+        NdisBuffer->Next = NULL;
 
         if (FirstBuffer == NULL)
         {
@@ -149,7 +268,6 @@ Ndis6RxBuildLegacyPacket(
             NDIS_BUFFER_LINKAGE(PrevBuffer) = NdisBuffer;
         }
         PrevBuffer = NdisBuffer;
-        ChainedMdls++;
 
         Remaining       -= MdlSegmentSize;
         MdlSegmentOffset = 0;              /* second and later MDLs start at 0 */
@@ -173,9 +291,11 @@ Ndis6RxBuildLegacyPacket(
 
     NdisChainBufferAtFront(Packet, FirstBuffer);
 
-    /* Stash NBL backptr + Ext so Ndis6RxReturnLegacyPacket can find them. */
-    Packet->Reserved[0] = (ULONG_PTR)Nbl;
-    Packet->Reserved[1] = (ULONG_PTR)Ext;
+    /* Reserved[1] is the indicating adapter in the legacy packet ABI;
+     * MiniIndicateReceivePacket writes the same value before indication.
+     * Reserved[0] points to the bridge-owned return context. */
+    Packet->Reserved[0] = (ULONG_PTR)ReturnContext;
+    Packet->Reserved[1] = (ULONG_PTR)Ext->Adapter;
 
     /* B2: translate RX offload result from NBL info to legacy packet info.
      * NDIS_TCP_IP_CHECKSUM_PACKET_INFO.Receive and
@@ -236,46 +356,85 @@ Ndis6RxFreeLegacyPacket(
     NdisFreePacket(Packet);
 }
 
+static VOID
+Ndis6RxReleaseLegacyContext(
+    _In_ PNDIS6_RX_LEGACY_CONTEXT Context)
+{
+    PNET_BUFFER_LIST NetBufferList;
+    PLOGICAL_ADAPTER Adapter;
+    LONG RemainingRefs;
+    ULONG ReturnFlags;
+
+    if (Context == NULL || Context->Magic != NDIS6_RX_LEGACY_CONTEXT_MAGIC)
+        return;
+
+    RemainingRefs = InterlockedDecrement(&Context->WrapperReferences);
+    ASSERT(RemainingRefs >= 0);
+    if (RemainingRefs != 0)
+        return;
+
+    NetBufferList = Context->NetBufferList;
+    Adapter = Context->Adapter;
+    Context->Magic = 0;
+    ExFreePoolWithTag(Context, NDIS6_RX_LEGACY_CONTEXT_TAG);
+
+    /* All wrappers are gone. Hand the NBL back through the filter chain so
+     * attached filters see the return before the miniport does. */
+    ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
+    ReturnFlags = KeGetCurrentIrql() == DISPATCH_LEVEL ?
+        NDIS_RETURN_FLAGS_DISPATCH_LEVEL : 0;
+    Ndis6FilterDispatchReturn(Adapter, NetBufferList, ReturnFlags);
+}
+
 /* ============================================================================
  *  Ndis6RxReturnLegacyPacket — called from miniport.c:NdisReturnPackets via
  *  the IsNdis6 gate when a legacy protocol releases a held wrapper packet.
  *
- *  Decrements the per-NBL refcount stored in NBL->ChildRefCount; when
- *  it hits zero, returns the entire NBL to the miniport via its
- *  ReturnNetBufferListsHandler.
+ *  Drops one wrapper reference in the private per-NBL return context. The
+ *  final release returns the original NBL to the miniport.
  * ============================================================================ */
 
 VOID
 Ndis6RxReturnLegacyPacket(
     _In_ PNDIS_PACKET Packet)
 {
-    PNET_BUFFER_LIST    Nbl;
-    PNDIS6_ADAPTER_EXT  Ext;
-    ULONG_PTR           RemainingRefs;
+    PNDIS6_RX_LEGACY_CONTEXT ReturnContext;
+    PLOGICAL_ADAPTER Adapter;
 
     if (Packet == NULL)
         return;
 
-    Nbl = (PNET_BUFFER_LIST)Packet->Reserved[0];
-    Ext = (PNDIS6_ADAPTER_EXT)Packet->Reserved[1];
+    ReturnContext = (PNDIS6_RX_LEGACY_CONTEXT)Packet->Reserved[0];
+    Adapter = (PLOGICAL_ADAPTER)Packet->Reserved[1];
 
     Ndis6RxFreeLegacyPacket(Packet);
 
-    if (Nbl == NULL || Ext == NULL || Ext->Adapter == NULL)
-        return;
-
-    /* ChildRefCount is NDIS-owned. MiniportReserved has only two entries and
-     * belongs to the miniport, so using MiniportReserved[2] corrupted the
-     * following NET_BUFFER_LIST fields on 64-bit builds. */
-    RemainingRefs = (ULONG_PTR)InterlockedDecrement(&Nbl->ChildRefCount);
-
-    if (RemainingRefs == 0)
+    if (ReturnContext == NULL ||
+        ReturnContext->Magic != NDIS6_RX_LEGACY_CONTEXT_MAGIC ||
+        Adapter == NULL ||
+        !Adapter->IsNdis6 ||
+        ReturnContext->Adapter != Adapter)
     {
-        /* All wrappers released. Hand the NBL back to the miniport via
-         * the filter chain so any attached filter's ReturnNBL handler
-         * runs in TX (top→bottom) order before the miniport sees it. */
-        Ndis6FilterDispatchReturn(Ext->Adapter, Nbl, 0);
+        return;
     }
+
+    Ndis6RxReleaseLegacyContext(ReturnContext);
+}
+
+static VOID
+Ndis6RxIndicateLegacyBatch(
+    _In_ PLOGICAL_ADAPTER Adapter,
+    _In_reads_(PacketCount) PPNDIS_PACKET PacketArray,
+    _In_ UINT PacketCount)
+{
+    ASSERT(PacketCount != 0);
+    MiniIndicateReceivePacket((NDIS_HANDLE)Adapter, PacketArray, PacketCount);
+
+    /* MiniIndicateReceivePacket leaves one NDIS 6 bridge-owner reference on
+     * every non-RESOURCES wrapper. Drop it through the same locked return
+     * path used by protocols. This prevents a concurrent protocol return
+     * from freeing a wrapper while this batch still holds its pointer. */
+    NdisReturnPackets(PacketArray, PacketCount);
 }
 
 /* ============================================================================
@@ -335,6 +494,7 @@ Ndis6FilterTerminalReceive(
     PNET_BUFFER_LIST    CurrentNbl;
     PNET_BUFFER_LIST    NextNbl;
     BOOLEAN             ResourcesFlag;
+    ULONG               ImmediateReturnFlags;
 
     if (Adapter == NULL || !Adapter->IsNdis6 || NetBufferLists == NULL)
         return;
@@ -343,13 +503,18 @@ Ndis6FilterTerminalReceive(
     if (Ext == NULL)
         return;
 
+    ResourcesFlag = (ReceiveFlags & NDIS_RECEIVE_FLAGS_RESOURCES) != 0;
+    ImmediateReturnFlags =
+        (ReceiveFlags & NDIS_RECEIVE_FLAGS_DISPATCH_LEVEL) != 0 ?
+        NDIS_RETURN_FLAGS_DISPATCH_LEVEL : 0;
+
     /* If a native NDIS 6 protocol is bound, deliver the NBLs (still
      * miniport-owned) straight to its ReceiveNetBufferListsHandler instead of
      * the legacy NDIS_PACKET wrap. Indicate outside the lock since the handler
      * may re-enter NDIS (e.g. NdisReturnNetBufferLists); only a single native
      * binding is supported — multi-binding fan-out would need NBL clones. */
     {
-#define NDIS6_RX_BINDING_SNAPSHOT_MAX 8
+#define NDIS6_RX_BINDING_SNAPSHOT_MAX 1
         struct
         {
             PNDIS6_PROTOCOL_BINDING                   Binding;
@@ -388,6 +553,25 @@ Ndis6FilterTerminalReceive(
         {
             for (i = 0; i < SnapCount; i++)
             {
+                if (!ResourcesFlag &&
+                    !Ndis6RxPrepareNativeIndication(Snapshot[i].Binding,
+                                                    Adapter,
+                                                    NetBufferLists))
+                {
+                    for (CurrentNbl = NetBufferLists;
+                         CurrentNbl != NULL;
+                         CurrentNbl = NextNbl)
+                    {
+                        NextNbl = NET_BUFFER_LIST_NEXT_NBL(CurrentNbl);
+                        NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = NULL;
+                        Ndis6FilterDispatchReturn(Adapter,
+                                                  CurrentNbl,
+                                                  ImmediateReturnFlags);
+                    }
+                    Ndis6DereferenceProtocolBinding(Snapshot[i].Binding);
+                    return;
+                }
+
                 Snapshot[i].ReceiveHandler(
                     Snapshot[i].Context,
                     NetBufferLists,
@@ -399,8 +583,6 @@ Ndis6FilterTerminalReceive(
             return;
         }
     }
-
-    ResourcesFlag = (ReceiveFlags & NDIS_RECEIVE_FLAGS_RESOURCES) != 0;
 
     if (ResourcesFlag)
     {
@@ -414,7 +596,7 @@ Ndis6FilterTerminalReceive(
 
             for (Nb = NET_BUFFER_LIST_FIRST_NB(CurrentNbl); Nb != NULL; Nb = NET_BUFFER_NEXT_NB(Nb))
             {
-                PNDIS_PACKET LegacyPacket = Ndis6RxBuildLegacyPacket(Ext, CurrentNbl, Nb, TRUE);
+                PNDIS_PACKET LegacyPacket = Ndis6RxBuildLegacyPacket(Ext, CurrentNbl, Nb, TRUE, NULL);
                 if (LegacyPacket == NULL)
                     continue;
                 BatchArray[BatchCount++] = LegacyPacket;
@@ -444,76 +626,72 @@ Ndis6FilterTerminalReceive(
     for (CurrentNbl = NetBufferLists; CurrentNbl != NULL; CurrentNbl = NextNbl)
     {
         PNET_BUFFER  Nb;
+        PNET_BUFFER  NextNb;
+        PNDIS6_RX_LEGACY_CONTEXT ReturnContext;
         PNDIS_PACKET PacketArray[16];
         UINT         PacketCount = 0;
+        LONG         ReferenceCount = 0;
 
         NextNbl = NET_BUFFER_LIST_NEXT_NBL(CurrentNbl);
         NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = NULL;
 
+        /* Account for every NB before the first indication. A protocol can
+         * return a wrapper synchronously after indication, so counting only a
+         * 16-entry batch could return the NBL while later NBs still use it. */
         for (Nb = NET_BUFFER_LIST_FIRST_NB(CurrentNbl);
-             Nb != NULL && PacketCount < ARRAYSIZE(PacketArray);
+             Nb != NULL && ReferenceCount != MAXLONG;
              Nb = NET_BUFFER_NEXT_NB(Nb))
         {
+            ReferenceCount++;
+        }
+
+        if (Nb != NULL || ReferenceCount == 0)
+        {
+            /* An empty or impossibly large NBL cannot be represented by the
+             * signed private reference count. Return it without indication. */
+            Ndis6FilterDispatchReturn(Adapter, CurrentNbl, ImmediateReturnFlags);
+            continue;
+        }
+
+        ReturnContext = (PNDIS6_RX_LEGACY_CONTEXT)ExAllocatePoolWithTag(
+            NonPagedPool, sizeof(*ReturnContext), NDIS6_RX_LEGACY_CONTEXT_TAG);
+        if (ReturnContext == NULL)
+        {
+            Ndis6FilterDispatchReturn(Adapter, CurrentNbl, ImmediateReturnFlags);
+            continue;
+        }
+
+        ReturnContext->Magic = NDIS6_RX_LEGACY_CONTEXT_MAGIC;
+        ReturnContext->WrapperReferences = ReferenceCount;
+        ReturnContext->NetBufferList = CurrentNbl;
+        ReturnContext->Adapter = Adapter;
+
+        for (Nb = NET_BUFFER_LIST_FIRST_NB(CurrentNbl);
+             Nb != NULL;
+             Nb = NextNb)
+        {
             PNDIS_PACKET LegacyPacket =
-                Ndis6RxBuildLegacyPacket(Ext, CurrentNbl, Nb, ResourcesFlag);
-            if (LegacyPacket != NULL)
-                PacketArray[PacketCount++] = LegacyPacket;
-        }
+                Ndis6RxBuildLegacyPacket(Ext, CurrentNbl, Nb, FALSE, ReturnContext);
 
-        if (PacketCount == 0)
-        {
-            /* Nothing to indicate — return the NBL immediately via the
-             * filter chain (TX direction). */
-            if (!ResourcesFlag)
-                Ndis6FilterDispatchReturn(Adapter, CurrentNbl, 0);
-            continue;
-        }
-
-        /* Stash the per-NBL outstanding refcount BEFORE indicating, so
-         * Ndis6RxReturnLegacyPacket can decrement it as wrappers come back. */
-        InterlockedExchange(&CurrentNbl->ChildRefCount, (LONG)PacketCount);
-
-        /* Push the wrapper packets up the legacy protocol chain. The
-         * existing MiniIndicateReceivePacket increments WrapperReserved[0]
-         * for each protocol that holds the packet. Packets that no
-         * protocol holds (refcount stays 0) need to be freed immediately
-         * and counted as one fewer outstanding NBL ref. */
-        MiniIndicateReceivePacket((NDIS_HANDLE)Adapter, PacketArray, PacketCount);
-
-        /* B3: RESOURCES path — the miniport needs the NBL back before
-         * we return, and protocols are contractually required to copy
-         * the data inline (they cannot hold the wrapper). So we free
-         * every wrapper immediately WITHOUT touching the per-NBL
-         * refcount, then return the NBL once through the filter chain.
-         * This is a fast path that skips the refcount bookkeeping. */
-        if (ResourcesFlag)
-        {
-            UINT j;
-            for (j = 0; j < PacketCount; j++)
+            NextNb = NET_BUFFER_NEXT_NB(Nb);
+            if (LegacyPacket == NULL)
             {
-                /* Direct free — does not touch the NBL refcount. */
-                Ndis6RxFreeLegacyPacket(PacketArray[j]);
+                /* This NB has no wrapper to release later. Its pre-counted
+                 * reference must be dropped here. */
+                Ndis6RxReleaseLegacyContext(ReturnContext);
+                continue;
             }
-            Ndis6FilterDispatchReturn(Adapter, CurrentNbl, 0);
-            continue;
-        }
 
-        /* Normal path: walk the array; for unheld wrappers (refcount==0),
-         * free now and decrement the per-NBL refcount. For held wrappers,
-         * the protocol will eventually call NdisReturnPackets which routes
-         * through the IsNdis6 gate to Ndis6RxReturnLegacyPacket. */
-        {
-            UINT j;
-            for (j = 0; j < PacketCount; j++)
+            PacketArray[PacketCount++] = LegacyPacket;
+            if (PacketCount == ARRAYSIZE(PacketArray))
             {
-                if (PacketArray[j]->WrapperReserved[0] == 0)
-                {
-                    /* No protocol held it — free wrapper and drop the
-                     * outstanding-NBL ref. Last decrement returns NBL. */
-                    Ndis6RxReturnLegacyPacket(PacketArray[j]);
-                }
+                Ndis6RxIndicateLegacyBatch(Adapter, PacketArray, PacketCount);
+                PacketCount = 0;
             }
         }
+
+        if (PacketCount != 0)
+            Ndis6RxIndicateLegacyBatch(Adapter, PacketArray, PacketCount);
     }
 }
 

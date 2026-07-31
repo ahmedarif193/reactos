@@ -797,6 +797,12 @@ Ndis6DereferenceProtocolBinding(
     ExReleaseRundownProtection(&Binding->RundownRef);
 }
 
+BOOLEAN
+Ndis6RxReturnNativeNetBufferList(
+    _In_ PNDIS6_PROTOCOL_BINDING Binding,
+    _In_ PNET_BUFFER_LIST NetBufferList,
+    _In_ ULONG ReturnFlags);
+
 /* D4: per-async-OID context. Stashed in OidRequest->RequestId by
  * NdisOidRequest so NdisMOidRequestComplete can find the binding +
  * original RequestId and call the protocol's OidRequestCompleteHandler. */
