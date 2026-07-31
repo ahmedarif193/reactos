@@ -16,10 +16,10 @@ DBG_DEFAULT_CHANNEL(WARNING);
 /* Page-table view (self-map) & core layout constants                         */
 /* -------------------------------------------------------------------------- */
 
-#define ARM64_SELF_PTE_BASE   0xFFFFE48000000000ULL
-#define ARM64_SELF_PDE_BASE   0xFFFFE4F240000000ULL
-#define ARM64_SELF_PPE_BASE   0xFFFFE4F279200000ULL
-#define ARM64_SELF_PXE_BASE   0xFFFFE4F2793C9000ULL
+#define ARM64_SELF_PTE_BASE   0xFFFFF68000000000ULL
+#define ARM64_SELF_PDE_BASE   0xFFFFF6FB40000000ULL
+#define ARM64_SELF_PPE_BASE   0xFFFFF6FB7DA00000ULL
+#define ARM64_SELF_PXE_BASE   0xFFFFF6FB7DBED000ULL
 
 #define ARM64_PFN_DB_BASE          0xFFFFFA8000000000ULL
 #define ARM64_PFN_DB_RESERVE_SIZE  (512ULL << 20) /* 512MB for PFN DB + metadata */
@@ -159,7 +159,7 @@ static inline void tlbi_va_entry(ULONGLONG va, ULONGLONG size)
 #define PTE_SELFREF_ATTRS       PTE_TABLE_ATTRS
 
 typedef char arm64_selfmap_index_must_match_nt[
-    (((ARM64_SELF_PXE_BASE >> ARM64_PXI_SHIFT) & ARM64_PX_MASK) == 457ULL) ? 1 : -1];
+    (((ARM64_SELF_PXE_BASE >> ARM64_PXI_SHIFT) & ARM64_PX_MASK) == 493ULL) ? 1 : -1];
 typedef char arm64_table_attrs_must_match_nt[
     (PTE_TABLE_ATTRS == 0x0060000000000F13ULL) ? 1 : -1];
 
@@ -271,12 +271,12 @@ static BOOLEAN page_tables_initialized = FALSE;
  * These need pre-allocated page tables since they are mapped after ExitBootServices.
  *
  * L0 indices for special kernel regions:
- *   - 457 (0x1C9): Self-map (ARM64_SELF_PXE_BASE)
+ *   - 493 (0x1ED): Self-map (ARM64_SELF_PXE_BASE)
  *   - 494 (0x1EE): Hyperspace (ARM64_HYPERSPACE_BASE)
  *   - 497 (0x1F1): Paged Pool / Debug mapping
  *   - 501 (0x1F5): PFN Database
  */
-#define ARM64_EXTRA_L0_SLOT_SELFMAP    457U  /* 0x1C9 - Self-map region */
+#define ARM64_EXTRA_L0_SLOT_SELFMAP    493U  /* 0x1ED - Self-map region */
 #define ARM64_EXTRA_L0_SLOT_HYPERSPACE 494U  /* 0x1EE - Hyperspace */
 #define ARM64_EXTRA_L0_SLOT_PAGEDPOOL  497U  /* 0x1F1 - Paged pool / Debug */
 #define ARM64_EXTRA_L0_SLOT_PFNDB      501U  /* 0x1F5 - PFN Database */
@@ -318,7 +318,7 @@ static UINT64 arm64_user_l3_next_index[ARM64_USER_L1_TABLES] = {0};  /* FLAT: pe
  * These are pre-allocated to avoid needing Boot Services during kernel mapping.
  */
 static const UINT64 arm64_extra_kernel_l0_slots[ARM64_EXTRA_KERNEL_SLOTS] = {
-    ARM64_EXTRA_L0_SLOT_SELFMAP,    /* 457 */
+    ARM64_EXTRA_L0_SLOT_SELFMAP,    /* 493 */
     ARM64_EXTRA_L0_SLOT_HYPERSPACE, /* 494 */
     ARM64_EXTRA_L0_SLOT_PAGEDPOOL,  /* 497 */
     ARM64_EXTRA_L0_SLOT_PFNDB       /* 501 */
@@ -1715,7 +1715,7 @@ static BOOLEAN map_region_hierarchical(UINT64 va, UINT64 pa, UINT64 size, UINT64
          * Block mappings policy:
          *
          * For ordinary kernel space (TTBR1): Always use 4KB pages. The self-map
-         * at L0[457] requires all intermediate entries to be TABLE descriptors
+         * at L0[493] requires all intermediate entries to be TABLE descriptors
          * to allow PTE access via the recursive self-map structure.
          *
          * The private physical alias is not part of the public NT self-map
@@ -2556,8 +2556,8 @@ static VOID setup_pgtables(VOID)
 
     /* Pre-seed TTBR1 L0 slots for extra kernel regions using pre-allocated tables.
      * This ensures we don't need Boot Services allocations during kernel mapping.
-     * The extra L0 slots (457, 494, 497, 501) map to:
-     *   - 457: Self-map (ARM64_SELF_PXE_BASE)
+     * The extra L0 slots (493, 494, 497, 501) map to:
+     *   - 493: Self-map (ARM64_SELF_PXE_BASE)
      *   - 494: Hyperspace (ARM64_HYPERSPACE_BASE)
      *   - 497: Paged Pool / Debug mapping
      *   - 501: PFN Database
