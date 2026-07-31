@@ -52,8 +52,8 @@ NwifiSetMiniportAttributes(
     GenAttr.MediaType = NdisMedium802_3;
     GenAttr.PhysicalMediumType = NdisPhysicalMediumNative802_11;
     GenAttr.MtuSize = ETH_MTU;
-    GenAttr.MaxXmitLinkSpeed = NWIFI_DEFAULT_LINK_SPEED;
-    GenAttr.MaxRcvLinkSpeed = NWIFI_DEFAULT_LINK_SPEED;
+    GenAttr.MaxXmitLinkSpeed = NWIFI_MAX_LINK_SPEED;
+    GenAttr.MaxRcvLinkSpeed = NWIFI_MAX_LINK_SPEED;
     GenAttr.XmitLinkSpeed = NDIS_LINK_SPEED_UNKNOWN;
     GenAttr.RcvLinkSpeed = NDIS_LINK_SPEED_UNKNOWN;
     GenAttr.MediaConnectState = MediaConnectStateDisconnected;
@@ -62,11 +62,8 @@ NwifiSetMiniportAttributes(
     GenAttr.MacOptions = NDIS_MAC_OPTION_COPY_LOOKAHEAD_DATA |
                          NDIS_MAC_OPTION_TRANSFERS_NOT_PEND |
                          NDIS_MAC_OPTION_NO_LOOPBACK;
-    GenAttr.SupportedPacketFilters = NDIS_PACKET_TYPE_DIRECTED |
-                                     NDIS_PACKET_TYPE_MULTICAST |
-                                     NDIS_PACKET_TYPE_ALL_MULTICAST |
-                                     NDIS_PACKET_TYPE_BROADCAST;
-    GenAttr.MaxMulticastListSize = 32;
+    GenAttr.SupportedPacketFilters = NWIFI_SUPPORTED_PACKET_FILTERS;
+    GenAttr.MaxMulticastListSize = NWIFI_MAX_MULTICAST_ADDRESSES;
     GenAttr.MacAddressLength = ETH_ADDR_LEN;
     RtlCopyMemory(GenAttr.PermanentMacAddress, Adapter->MacAddress, ETH_ADDR_LEN);
     RtlCopyMemory(GenAttr.CurrentMacAddress, Adapter->MacAddress, ETH_ADDR_LEN);
