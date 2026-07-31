@@ -63,6 +63,7 @@ list(APPEND SOURCE
     vidmm_test.c
     present_test.c
     dwm_test.c
+    cursor_test.c
     display_test.c)
 
 if(REACTOS_USE_WDDM AND (REACTOS_WDDM_TARGET_LEVEL GREATER_EQUAL 2000))
