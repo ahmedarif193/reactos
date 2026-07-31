@@ -782,7 +782,6 @@ NdisRetreatNetBufferDataStart(
         {
             return NDIS_STATUS_FAILURE;
         }
-        NetBuffer->DataOffset -= DataOffsetDelta;
         NetBuffer->DataLength += DataOffsetDelta;
         return NDIS_STATUS_SUCCESS;
     }
@@ -1347,6 +1346,15 @@ NdisAdvanceNetBufferListDataStart(
     }
 }
 
+VOID
+NTAPI
+NdisAdjustNetBufferCurrentMdl(
+    _In_ PNET_BUFFER NetBuffer)
+{
+    if (NetBuffer != NULL)
+        Ndis6SetNetBufferDataOffset(NetBuffer, NetBuffer->DataOffset);
+}
+
 static VOID
 Ndis6CopyNetBufferListInfo(
     _Out_ PNET_BUFFER_LIST Destination,
@@ -1520,8 +1528,7 @@ Ndis6SetNetBufferDataOffset(
     {
         ULONG MdlLength = MmGetMdlByteCount(Mdl);
 
-        if (Remaining < MdlLength ||
-            (Remaining == MdlLength && Mdl->Next == NULL))
+        if (Remaining < MdlLength)
         {
             NetBuffer->CurrentMdl = Mdl;
             NetBuffer->CurrentMdlOffset = Remaining;
@@ -1533,7 +1540,13 @@ Ndis6SetNetBufferDataOffset(
         Mdl = Mdl->Next;
     }
 
-    return FALSE;
+    /* Do not leave a stale optimized cursor behind when DataOffset runs past
+     * the MDL chain. Windows stores the exhausted chain and residual offset
+     * even for that malformed state. */
+    NetBuffer->CurrentMdl = Mdl;
+    NetBuffer->CurrentMdlOffset = Remaining;
+    NetBuffer->DataOffset = DataOffset;
+    return Remaining == 0;
 }
 
 PNET_BUFFER_LIST
