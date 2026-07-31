@@ -1254,8 +1254,17 @@ NdisAllocateMdl(
     _In_ PVOID VirtualAddress,
     _In_ UINT Length)
 {
+    PMDL Mdl;
+
     UNREFERENCED_PARAMETER(NdisHandle);
-    return IoAllocateMdl(VirtualAddress, Length, FALSE, FALSE, NULL);
+
+    if (VirtualAddress == NULL || Length == 0)
+        return NULL;
+
+    Mdl = IoAllocateMdl(VirtualAddress, Length, FALSE, FALSE, NULL);
+    if (Mdl != NULL)
+        MmBuildMdlForNonPagedPool(Mdl);
+    return Mdl;
 }
 
 VOID
