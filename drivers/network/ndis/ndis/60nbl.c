@@ -1306,6 +1306,9 @@ NdisRetreatNetBufferListDataStart(
     if (NetBufferList == NULL)
         return NDIS_STATUS_INVALID_PARAMETER;
 
+    if ((AllocateMdlHandler == NULL) != (FreeMdlHandler == NULL))
+        return NDIS_STATUS_INVALID_PARAMETER;
+
     for (NetBuffer = NetBufferList->FirstNetBuffer;
          NetBuffer != NULL;
          NetBuffer = NetBuffer->Next)
