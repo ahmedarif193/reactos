@@ -7493,12 +7493,11 @@ typedef struct _NDIS_MINIPORT_INIT_PARAMETERS {
 typedef enum _NDIS_HALT_ACTION {
   NdisHaltDeviceDisabled,
   NdisHaltDeviceInstanceDeInitialized,
-  NdisHaltDeviceStopped,
-  NdisHaltDeviceRemoved,
+  NdisHaltDevicePoweredDown,
   NdisHaltDeviceSurpriseRemoved,
   NdisHaltDeviceFailed,
   NdisHaltDeviceInitializationFailed,
-  NdisHaltDevicePoweredDown
+  NdisHaltDeviceStopped
 } NDIS_HALT_ACTION, *PNDIS_HALT_ACTION;
 
 typedef enum _NDIS_SHUTDOWN_ACTION {
