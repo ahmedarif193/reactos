@@ -25,6 +25,16 @@ typedef enum _NET_PNP_EVENT_CODE {
   NetEventPortActivation,
   NetEventPortDeactivation,
   NetEventIMReEnableDevice,
+  NetEventNDKEnable,
+  NetEventNDKDisable,
+  NetEventFilterPreDetach,
+  NetEventBindFailed,
+  NetEventSwitchActivate,
+  NetEventAllowBindsAbove,
+  NetEventInhibitBindsAbove,
+  NetEventAllowStart,
+  NetEventRequirePause,
+  NetEventUploadGftFlowEntries,
   NetEventMaximum
 } NET_PNP_EVENT_CODE, *PNET_PNP_EVENT_CODE;
 
