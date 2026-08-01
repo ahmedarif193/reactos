@@ -1395,10 +1395,9 @@ NdisRegisterDeviceEx(
         }
     }
 
-    Device->Flags &= ~DO_DEVICE_INITIALIZING;
-
     ExInterlockedInsertTailList(&g_Ndis6CtlDevList, &CtlDev->ListEntry,
                                 &g_Ndis6CtlDevLock);
+    Device->Flags &= ~DO_DEVICE_INITIALIZING;
 
     *pDeviceObject    = Device;
     *NdisDeviceHandle = (NDIS_HANDLE)CtlDev;
