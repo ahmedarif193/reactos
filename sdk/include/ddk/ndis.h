@@ -7194,6 +7194,9 @@ typedef ULONG NDIS_PORT_NUMBER, *PNDIS_PORT_NUMBER;
  * that same enum via a conditional, so no new typedef is needed here. */
 
 #define NDIS_OID_REQUEST_REVISION_1           1
+#if NDIS_SUPPORT_NDIS650
+#define NDIS_OID_REQUEST_REVISION_2           2
+#endif
 #define NDIS_OID_REQUEST_TIMEOUT_INFINITE     0
 
 typedef struct _NDIS_OID_REQUEST {
@@ -7235,9 +7238,19 @@ typedef struct _NDIS_OID_REQUEST {
   UCHAR              SupportedRevision;
   UCHAR              Reserved1;
   USHORT             Reserved2;
+#if NDIS_SUPPORT_NDIS650
+  NDIS_NIC_SWITCH_ID       SwitchId;
+  NDIS_NIC_SWITCH_VPORT_ID VPortId;
+  ULONG                    Flags;
+#endif
 } NDIS_OID_REQUEST, *PNDIS_OID_REQUEST;
 #define NDIS_SIZEOF_OID_REQUEST_REVISION_1 \
   RTL_SIZEOF_THROUGH_FIELD(NDIS_OID_REQUEST, Reserved2)
+#if NDIS_SUPPORT_NDIS650
+#define NDIS_SIZEOF_OID_REQUEST_REVISION_2 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_OID_REQUEST, Flags)
+#define NDIS_OID_REQUEST_FLAGS_VPORT_ID_VALID 0x0001
+#endif
 
 /* Status indication object */
 #define NDIS_STATUS_INDICATION_REVISION_1 1
