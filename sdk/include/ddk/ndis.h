@@ -7489,7 +7489,7 @@ NdisRegisterDeviceEx(
   _Out_ PNDIS_HANDLE NdisDeviceHandle);
 
 NDISAPI
-NDIS_STATUS
+VOID
 NTAPI
 NdisDeregisterDeviceEx(
   _In_ NDIS_HANDLE NdisDeviceHandle);
