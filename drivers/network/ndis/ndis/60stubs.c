@@ -1252,6 +1252,25 @@ NdisRegisterDeviceEx(
     KeReleaseSpinLock(&g_Ndis6DriverListLock, OldIrql);
 
     if (DriverObject == NULL)
+    {
+        Ndis6FilterDriverListInit();
+        KeAcquireSpinLock(&g_Ndis6FilterDriverListLock, &OldIrql);
+        for (PLIST_ENTRY Entry = g_Ndis6FilterDriverList.Flink;
+             Entry != &g_Ndis6FilterDriverList;
+             Entry = Entry->Flink)
+        {
+            PNDIS6_FILTER_DRIVER_BLOCK Block =
+                CONTAINING_RECORD(Entry, NDIS6_FILTER_DRIVER_BLOCK, ListEntry);
+            if ((NDIS_HANDLE)Block == NdisHandle)
+            {
+                DriverObject = Block->DriverObject;
+                break;
+            }
+        }
+        KeReleaseSpinLock(&g_Ndis6FilterDriverListLock, OldIrql);
+    }
+
+    if (DriverObject == NULL)
         return NDIS_STATUS_INVALID_PARAMETER;
 
     CtlDev = (PNDIS6_CONTROL_DEVICE)ExAllocatePoolWithTag(
