@@ -140,6 +140,7 @@ Ndis6RegisterMiniportDriverInternal(
     _Out_    PNDIS_HANDLE                            NdisMiniportDriverHandle)
 {
     PNDIS6_DRIVER_BLOCK Block;
+    NDIS_STATUS Status;
     KIRQL OldIrql;
     ULONG i;
 
@@ -212,6 +213,24 @@ Ndis6RegisterMiniportDriverInternal(
                       RegistryPath->Buffer,
                       RegistryPath->Length);
         Block->RegistryPath.Buffer[RegistryPath->Length / sizeof(WCHAR)] = L'\0';
+    }
+
+    /* Windows invokes MiniportSetOptions synchronously from registration,
+     * with the newly allocated NDIS driver handle already usable. */
+    if (Block->Characteristics.SetOptionsHandler != NULL)
+    {
+        *NdisMiniportDriverHandle = (NDIS_HANDLE)Block;
+        Status = Block->Characteristics.SetOptionsHandler(
+            (NDIS_HANDLE)Block,
+            MiniportDriverContext);
+        if (Status != NDIS_STATUS_SUCCESS)
+        {
+            *NdisMiniportDriverHandle = NULL;
+            if (Block->RegistryPath.Buffer != NULL)
+                ExFreePoolWithTag(Block->RegistryPath.Buffer, NDIS6_DRIVER_TAG);
+            ExFreePoolWithTag(Block, NDIS6_DRIVER_TAG);
+            return Status;
+        }
     }
 
     if (!Block->IsWdfManaged)
