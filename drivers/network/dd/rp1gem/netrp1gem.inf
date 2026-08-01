@@ -25,6 +25,9 @@ RP1GEM_CopyFiles.NT=12
 [RP1GEM_Inst.ndi.NT]
 Characteristics=0x4
 BusType=0
+*IfType=6
+*MediaType=0
+*PhysicalMediaType=14
 AddReg=RP1GEM_AddReg.NT
 CopyFiles=RP1GEM_CopyFiles.NT
 
