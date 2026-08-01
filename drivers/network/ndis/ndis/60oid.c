@@ -68,7 +68,7 @@ Ndis6OidForward(
     RtlZeroMemory(&OidReq, sizeof(OidReq));
     OidReq.Header.Type     = NDIS_OBJECT_TYPE_OID_REQUEST;
     OidReq.Header.Revision = NDIS_OID_REQUEST_REVISION_1;
-    OidReq.Header.Size     = sizeof(NDIS_OID_REQUEST);
+    OidReq.Header.Size     = NDIS_SIZEOF_OID_REQUEST_REVISION_1;
     OidReq.RequestType     = Request->RequestType;
     OidReq.PortNumber      = 0;
     OidReq.Timeout         = NDIS_OID_REQUEST_TIMEOUT_INFINITE;
