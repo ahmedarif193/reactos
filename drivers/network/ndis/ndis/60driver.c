@@ -149,6 +149,15 @@ Ndis6RegisterMiniportDriverInternal(
         return NDIS_STATUS_INVALID_PARAMETER;
     }
 
+    if (RegistryPath == NULL ||
+        RegistryPath->Length > RegistryPath->MaximumLength ||
+        (RegistryPath->Length & (sizeof(WCHAR) - 1)) != 0 ||
+        RegistryPath->Length > MAXUSHORT - sizeof(WCHAR) ||
+        (RegistryPath->Length != 0 && RegistryPath->Buffer == NULL))
+    {
+        return NDIS_STATUS_INVALID_PARAMETER;
+    }
+
     /* Validate the characteristics minimally — we don't enforce every
      * required handler because the bridge can tolerate some being NULL. */
     if (MiniportDriverCharacteristics->Header.Type !=
@@ -187,19 +196,22 @@ Ndis6RegisterMiniportDriverInternal(
 
     /* Copy the registry path so the driver can free its own copy if it
      * wants. We allocate fresh PagedPool storage for the buffer. */
-    if (RegistryPath && RegistryPath->Buffer && RegistryPath->Length)
+    if (RegistryPath->Length != 0)
     {
         Block->RegistryPath.Length        = RegistryPath->Length;
         Block->RegistryPath.MaximumLength = RegistryPath->Length + sizeof(WCHAR);
         Block->RegistryPath.Buffer        = (PWSTR)ExAllocatePoolWithTag(
             PagedPool, Block->RegistryPath.MaximumLength, NDIS6_DRIVER_TAG);
-        if (Block->RegistryPath.Buffer)
+        if (Block->RegistryPath.Buffer == NULL)
         {
-            RtlCopyMemory(Block->RegistryPath.Buffer,
-                          RegistryPath->Buffer,
-                          RegistryPath->Length);
-            Block->RegistryPath.Buffer[RegistryPath->Length / sizeof(WCHAR)] = L'\0';
+            ExFreePoolWithTag(Block, NDIS6_DRIVER_TAG);
+            return NDIS_STATUS_RESOURCES;
         }
+
+        RtlCopyMemory(Block->RegistryPath.Buffer,
+                      RegistryPath->Buffer,
+                      RegistryPath->Length);
+        Block->RegistryPath.Buffer[RegistryPath->Length / sizeof(WCHAR)] = L'\0';
     }
 
     if (!Block->IsWdfManaged)
