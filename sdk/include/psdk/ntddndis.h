@@ -27,6 +27,11 @@
 extern "C" {
 #endif
 
+/* NDIS 6.30+ Hyper-V switch identifiers. These are scalar ABI types shared
+ * by ntddndis.h consumers and the kernel-mode NET_PNP notification surface. */
+typedef ULONG NDIS_NIC_SWITCH_ID, *PNDIS_NIC_SWITCH_ID;
+typedef ULONG NDIS_NIC_SWITCH_VPORT_ID, *PNDIS_NIC_SWITCH_VPORT_ID;
+
 typedef enum _NDIS_WAN_QUALITY {
 	NdisWanRaw,
 	NdisWanErrorControl,
