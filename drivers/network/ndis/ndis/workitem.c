@@ -42,14 +42,16 @@ EXPORT
 NdisAllocateIoWorkItem(
     IN NDIS_HANDLE NdisObjectHandle)
 {
-   PLOGICAL_ADAPTER Adapter = NdisObjectHandle;
+   PDEVICE_OBJECT DeviceObject;
    PNDIS_IO_WORKITEM_WRAPPER Wrapper;
    PIO_WORKITEM IoWorkItem;
+   extern PDEVICE_OBJECT Ndis6GetIoWorkItemDeviceObject(NDIS_HANDLE);
 
-   if (Adapter == NULL || Adapter->NdisMiniportBlock.PhysicalDeviceObject == NULL)
+   DeviceObject = Ndis6GetIoWorkItemDeviceObject(NdisObjectHandle);
+   if (DeviceObject == NULL)
       return NULL;
 
-   IoWorkItem = IoAllocateWorkItem(Adapter->NdisMiniportBlock.PhysicalDeviceObject);
+   IoWorkItem = IoAllocateWorkItem(DeviceObject);
    if (IoWorkItem == NULL)
       return NULL;
 
