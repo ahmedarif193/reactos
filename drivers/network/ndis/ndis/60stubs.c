@@ -1310,7 +1310,7 @@ NdisRegisterDeviceEx(
     return NDIS_STATUS_SUCCESS;
 }
 
-NDIS_STATUS
+VOID
 NTAPI
 NdisDeregisterDeviceEx(
     _In_ NDIS_HANDLE NdisDeviceHandle)
@@ -1319,7 +1319,7 @@ NdisDeregisterDeviceEx(
     KIRQL OldIrql;
 
     if (CtlDev == NULL)
-        return NDIS_STATUS_INVALID_PARAMETER;
+        return;
 
     KeAcquireSpinLock(&g_Ndis6CtlDevLock, &OldIrql);
     RemoveEntryList(&CtlDev->ListEntry);
@@ -1331,7 +1331,6 @@ NdisDeregisterDeviceEx(
         IoDeleteDevice(CtlDev->DeviceObject);
 
     ExFreePoolWithTag(CtlDev, NDIS6_CTL_DEV_TAG);
-    return NDIS_STATUS_SUCCESS;
 }
 
 /*
