@@ -47,7 +47,7 @@ NwifiProtocolDoRequest(
 
     Request->Header.Type = NDIS_OBJECT_TYPE_OID_REQUEST;
     Request->Header.Revision = NDIS_OID_REQUEST_REVISION_1;
-    Request->Header.Size = sizeof(NDIS_OID_REQUEST);
+    Request->Header.Size = NDIS_SIZEOF_OID_REQUEST_REVISION_1;
     Request->RequestType = RequestType;
 
     if (RequestType == NdisRequestSetInformation)
