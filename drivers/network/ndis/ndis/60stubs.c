@@ -1281,6 +1281,16 @@ NdisRegisterDeviceEx(
         return NDIS_STATUS_INVALID_PARAMETER;
     }
 
+    if (Attrs->SymbolicName != NULL &&
+        (Attrs->SymbolicName->Length > Attrs->SymbolicName->MaximumLength ||
+         (Attrs->SymbolicName->Length & (sizeof(WCHAR) - 1)) != 0 ||
+         Attrs->SymbolicName->Length > MAXUSHORT - sizeof(WCHAR) ||
+         (Attrs->SymbolicName->Length != 0 &&
+          Attrs->SymbolicName->Buffer == NULL)))
+    {
+        return NDIS_STATUS_INVALID_PARAMETER;
+    }
+
     /* Resolve the caller's own driver object. For a miniport, NdisHandle is the
      * NDIS6_DRIVER_BLOCK returned by NdisMRegisterMiniportDriver; validate it
      * against the registered-driver list and use ITS driver object. Using the
@@ -1330,6 +1340,19 @@ NdisRegisterDeviceEx(
         return NDIS_STATUS_RESOURCES;
     RtlZeroMemory(CtlDev, sizeof(*CtlDev));
 
+    if (Attrs->SymbolicName != NULL)
+    {
+        Status = RtlDuplicateUnicodeString(
+            RTL_DUPLICATE_UNICODE_STRING_NULL_TERMINATE,
+            Attrs->SymbolicName,
+            &CtlDev->SymbolicName);
+        if (!NT_SUCCESS(Status))
+        {
+            ExFreePoolWithTag(CtlDev, NDIS6_CTL_DEV_TAG);
+            return (NDIS_STATUS)Status;
+        }
+    }
+
     /* Create the control device object. */
     Status = IoCreateDevice(DriverObject,
                             Attrs->ExtensionSize,
@@ -1340,6 +1363,7 @@ NdisRegisterDeviceEx(
                             &Device);
     if (!NT_SUCCESS(Status))
     {
+        RtlFreeUnicodeString(&CtlDev->SymbolicName);
         ExFreePoolWithTag(CtlDev, NDIS6_CTL_DEV_TAG);
         return (NDIS_STATUS)Status;
     }
@@ -1360,13 +1384,17 @@ NdisRegisterDeviceEx(
     /* Symbolic link so user-mode can CreateFile on it. */
     if (Attrs->SymbolicName != NULL)
     {
-        Status = IoCreateSymbolicLink(Attrs->SymbolicName, Attrs->DeviceName);
+        Status = IoCreateSymbolicLink(&CtlDev->SymbolicName,
+                                      Attrs->DeviceName);
         if (NT_SUCCESS(Status))
         {
-            CtlDev->SymbolicName         = *Attrs->SymbolicName;
             CtlDev->SymbolicLinkCreated  = TRUE;
         }
-        /* Symbolic link failure is non-fatal. */
+        else
+        {
+            /* Symbolic link failure is non-fatal. */
+            RtlFreeUnicodeString(&CtlDev->SymbolicName);
+        }
     }
 
     CtlDev->DeviceObject = Device;
@@ -1397,6 +1425,7 @@ NdisDeregisterDeviceEx(
 
     if (CtlDev->SymbolicLinkCreated)
         IoDeleteSymbolicLink(&CtlDev->SymbolicName);
+    RtlFreeUnicodeString(&CtlDev->SymbolicName);
     if (CtlDev->DeviceObject != NULL)
         IoDeleteDevice(CtlDev->DeviceObject);
 
