@@ -623,6 +623,60 @@ Ndis6FindAdapterByFdo(_In_ PDEVICE_OBJECT DeviceObject)
     return found;
 }
 
+PDEVICE_OBJECT
+Ndis6GetIoWorkItemDeviceObject(
+    _In_ NDIS_HANDLE NdisObjectHandle)
+{
+    PLIST_ENTRY Entry;
+    PDEVICE_OBJECT DeviceObject = NULL;
+    KIRQL OldIrql;
+    extern PDEVICE_OBJECT Ndis6GetFilterOrControlIoWorkItemObject(NDIS_HANDLE);
+    extern LIST_ENTRY AdapterListHead;
+    extern KSPIN_LOCK AdapterListLock;
+
+    if (NdisObjectHandle == NULL)
+        return NULL;
+
+    Ndis6DriverInit();
+    KeAcquireSpinLock(&g_Ndis6DriverListLock, &OldIrql);
+    for (Entry = g_Ndis6DriverList.Flink;
+         Entry != &g_Ndis6DriverList;
+         Entry = Entry->Flink)
+    {
+        PNDIS6_DRIVER_BLOCK Block =
+            CONTAINING_RECORD(Entry, NDIS6_DRIVER_BLOCK, ListEntry);
+        if ((NDIS_HANDLE)Block == NdisObjectHandle)
+        {
+            DeviceObject = (PDEVICE_OBJECT)Block->DriverObject;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&g_Ndis6DriverListLock, OldIrql);
+
+    if (DeviceObject != NULL)
+        return DeviceObject;
+
+    DeviceObject = Ndis6GetFilterOrControlIoWorkItemObject(NdisObjectHandle);
+    if (DeviceObject != NULL)
+        return DeviceObject;
+
+    KeAcquireSpinLock(&AdapterListLock, &OldIrql);
+    for (Entry = AdapterListHead.Flink;
+         Entry != &AdapterListHead;
+         Entry = Entry->Flink)
+    {
+        PLOGICAL_ADAPTER Adapter =
+            CONTAINING_RECORD(Entry, LOGICAL_ADAPTER, ListEntry);
+        if ((NDIS_HANDLE)Adapter == NdisObjectHandle)
+        {
+            DeviceObject = Adapter->NdisMiniportBlock.PhysicalDeviceObject;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&AdapterListLock, OldIrql);
+    return DeviceObject;
+}
+
 static BOOLEAN
 Ndis6DeviceIsAdapterFdo(_In_ PDEVICE_OBJECT DeviceObject)
 {
