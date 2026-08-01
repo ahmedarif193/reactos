@@ -1118,6 +1118,52 @@ typedef struct _NDIS6_CONTROL_DEVICE
 static LIST_ENTRY g_Ndis6CtlDevList = { &g_Ndis6CtlDevList, &g_Ndis6CtlDevList };
 static KSPIN_LOCK g_Ndis6CtlDevLock;
 
+PDEVICE_OBJECT
+Ndis6GetFilterOrControlIoWorkItemObject(
+    _In_ NDIS_HANDLE NdisObjectHandle)
+{
+    PDEVICE_OBJECT Object = NULL;
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+
+    Ndis6FilterDriverListInit();
+    KeAcquireSpinLock(&g_Ndis6FilterDriverListLock, &OldIrql);
+    for (Entry = g_Ndis6FilterDriverList.Flink;
+         Entry != &g_Ndis6FilterDriverList;
+         Entry = Entry->Flink)
+    {
+        PNDIS6_FILTER_DRIVER_BLOCK Block =
+            CONTAINING_RECORD(Entry, NDIS6_FILTER_DRIVER_BLOCK, ListEntry);
+
+        if ((NDIS_HANDLE)Block == NdisObjectHandle)
+        {
+            Object = (PDEVICE_OBJECT)Block->DriverObject;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&g_Ndis6FilterDriverListLock, OldIrql);
+
+    if (Object != NULL)
+        return Object;
+
+    KeAcquireSpinLock(&g_Ndis6CtlDevLock, &OldIrql);
+    for (Entry = g_Ndis6CtlDevList.Flink;
+         Entry != &g_Ndis6CtlDevList;
+         Entry = Entry->Flink)
+    {
+        PNDIS6_CONTROL_DEVICE CtlDev =
+            CONTAINING_RECORD(Entry, NDIS6_CONTROL_DEVICE, ListEntry);
+
+        if ((NDIS_HANDLE)CtlDev == NdisObjectHandle)
+        {
+            Object = CtlDev->DeviceObject;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&g_Ndis6CtlDevLock, OldIrql);
+    return Object;
+}
+
 /* TRUE if DeviceObject is a control device created by NdisRegisterDeviceEx.
  * The hybrid KMDF demux (60driver.c) uses this so a control device with no
  * handler for a major function is never misrouted into KMDF's dispatch. */
