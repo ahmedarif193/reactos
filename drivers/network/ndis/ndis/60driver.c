@@ -28,19 +28,23 @@
 
 LIST_ENTRY  g_Ndis6DriverList;
 KSPIN_LOCK  g_Ndis6DriverListLock;
-static BOOLEAN g_Ndis6DriverListReady = FALSE;
+static volatile LONG g_Ndis6DriverListState;
 
 #define NDIS6_DRIVER_TAG    'rDNn'  /* "nNDr" */
 
 VOID
 Ndis6DriverInit(VOID)
 {
-    if (!g_Ndis6DriverListReady)
+    if (InterlockedCompareExchange(&g_Ndis6DriverListState, 1, 0) == 0)
     {
         InitializeListHead(&g_Ndis6DriverList);
         KeInitializeSpinLock(&g_Ndis6DriverListLock);
-        g_Ndis6DriverListReady = TRUE;
+        InterlockedExchange(&g_Ndis6DriverListState, 2);
+        return;
     }
+
+    while (InterlockedCompareExchange(&g_Ndis6DriverListState, 2, 2) != 2)
+        YieldProcessor();
 }
 
 /* Windows 11 zero-normalizes these descriptors into fixed NDIS-owned
