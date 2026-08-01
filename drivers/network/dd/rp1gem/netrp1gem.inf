@@ -17,9 +17,9 @@ DefaultDestDir=12
 RP1GEM_CopyFiles.NT=12
 
 [Manufacturer]
-%ManufacturerName%=CadenceMfg
+%ManufacturerName%=CadenceMfg,NTARM64
 
-[CadenceMfg]
+[CadenceMfg.NTARM64]
 %RP1GEM.DeviceDesc%=RP1GEM_Inst.ndi,ACPI\PRP0001
 
 [RP1GEM_Inst.ndi.NT]
