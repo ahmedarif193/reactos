@@ -2483,6 +2483,9 @@ Rp1GemSendNetBufferLists(
         NDIS_STATUS Status = NDIS_STATUS_SUCCESS;
         ULONG Index = 0;
         ULONG Length = 0;
+        ULONG NetBufferCount = 0;
+        ULONG Offset;
+        ULONG StartIndex;
 
         NextNbl = NET_BUFFER_LIST_NEXT_NBL(Nbl);
         NET_BUFFER_LIST_NEXT_NBL(Nbl) = NULL;
@@ -2495,53 +2498,80 @@ Rp1GemSendNetBufferLists(
             goto FailNbl;
         }
 
-        if (!NetBuffer || NET_BUFFER_NEXT_NB(NetBuffer))
+        if (!NetBuffer)
         {
             Status = NDIS_STATUS_INVALID_PACKET;
             goto FailNbl;
         }
 
-        if (NET_BUFFER_DATA_LENGTH(NetBuffer) > RP1GEM_FRAME_SIZE ||
-            NET_BUFFER_DATA_LENGTH(NetBuffer) < ETH_LENGTH_OF_ADDRESS)
+        for (; NetBuffer; NetBuffer = NET_BUFFER_NEXT_NB(NetBuffer))
         {
-            Status = NDIS_STATUS_INVALID_LENGTH;
-            goto FailNbl;
+            if (NET_BUFFER_DATA_LENGTH(NetBuffer) > RP1GEM_FRAME_SIZE ||
+                NET_BUFFER_DATA_LENGTH(NetBuffer) < ETH_LENGTH_OF_ADDRESS)
+            {
+                Status = NDIS_STATUS_INVALID_LENGTH;
+                goto FailNbl;
+            }
+
+            NetBufferCount++;
+            if (NetBufferCount > RP1GEM_TX_RING_SIZE)
+            {
+                Status = NDIS_STATUS_RESOURCES;
+                goto FailNbl;
+            }
         }
 
         NdisAcquireSpinLock(&Adapter->TxLock);
-        if (Adapter->TxFree == 0)
+        if (Adapter->TxFree < NetBufferCount)
         {
             NdisReleaseSpinLock(&Adapter->TxLock);
             Status = NDIS_STATUS_RESOURCES;
             goto FailNbl;
         }
 
-        Index = Adapter->TxHead;
-        Status = Rp1GemCopyNetBuffer(NetBuffer,
-                                     Adapter->TxBuffers[Index].VirtualAddress,
-                                     RP1GEM_BUFFER_SIZE,
-                                     &Length);
-        if (Status != NDIS_STATUS_SUCCESS)
+        StartIndex = Adapter->TxHead;
+        NetBuffer = NET_BUFFER_LIST_FIRST_NB(Nbl);
+        for (Offset = 0; NetBuffer; Offset++, NetBuffer = NET_BUFFER_NEXT_NB(NetBuffer))
         {
-            NdisReleaseSpinLock(&Adapter->TxLock);
-            goto FailNbl;
+            Index = (StartIndex + Offset) % RP1GEM_TX_RING_SIZE;
+            Status = Rp1GemCopyNetBuffer(NetBuffer,
+                                         Adapter->TxBuffers[Index].VirtualAddress,
+                                         RP1GEM_BUFFER_SIZE,
+                                         &Length);
+            if (Status != NDIS_STATUS_SUCCESS)
+            {
+                while (Offset > 0)
+                {
+                    Offset--;
+                    Index = (StartIndex + Offset) % RP1GEM_TX_RING_SIZE;
+                    Adapter->TxBuffers[Index].Length = 0;
+                }
+                NdisReleaseSpinLock(&Adapter->TxLock);
+                goto FailNbl;
+            }
+
+            Adapter->TxBuffers[Index].Length = Length;
         }
 
-        Adapter->TxBuffers[Index].Length = Length;
-        Adapter->TxHead = (Index + 1) % RP1GEM_TX_RING_SIZE;
-        Adapter->TxFree--;
+        for (Offset = 0; Offset < NetBufferCount; Offset++)
+        {
+            Index = (StartIndex + Offset) % RP1GEM_TX_RING_SIZE;
+            Length = Adapter->TxBuffers[Index].Length;
+            Rp1GemDcacheClean(Adapter->TxBuffers[Index].VirtualAddress, Length);
 
-        Rp1GemDcacheClean(Adapter->TxBuffers[Index].VirtualAddress, Length);
+            Rp1GemSetDescriptorAddress(Adapter,
+                                       &Adapter->TxRing[Index],
+                                       Adapter->TxBuffers[Index].PhysicalAddress,
+                                       0);
+            KeMemoryBarrier();
+            Adapter->TxRing[Index].Control =
+                Length |
+                MACB_TX_LAST |
+                ((Index == (RP1GEM_TX_RING_SIZE - 1)) ? MACB_TX_WRAP : 0);
+        }
 
-        Rp1GemSetDescriptorAddress(Adapter,
-                                   &Adapter->TxRing[Index],
-                                   Adapter->TxBuffers[Index].PhysicalAddress,
-                                   0);
-        KeMemoryBarrier();
-        Adapter->TxRing[Index].Control =
-            Length |
-            MACB_TX_LAST |
-            ((Index == (RP1GEM_TX_RING_SIZE - 1)) ? MACB_TX_WRAP : 0);
+        Adapter->TxHead = (StartIndex + NetBufferCount) % RP1GEM_TX_RING_SIZE;
+        Adapter->TxFree -= NetBufferCount;
 
         NdisReleaseSpinLock(&Adapter->TxLock);
 
