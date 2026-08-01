@@ -1276,7 +1276,7 @@ NdisRegisterDeviceEx(
     }
 
     if (DriverObject == NULL)
-        return NDIS_STATUS_INVALID_PARAMETER;
+        return NDIS_STATUS_NOT_SUPPORTED;
 
     CtlDev = (PNDIS6_CONTROL_DEVICE)ExAllocatePoolWithTag(
         NonPagedPool, sizeof(NDIS6_CONTROL_DEVICE), NDIS6_CTL_DEV_TAG);
