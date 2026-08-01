@@ -123,8 +123,8 @@ NwifiRegisterProtocol(VOID)
 
     RtlZeroMemory(&Chars, sizeof(Chars));
     Chars.Header.Type = NDIS_OBJECT_TYPE_PROTOCOL_DRIVER_CHARACTERISTICS;
-    Chars.Header.Revision = NDIS_PROTOCOL_DRIVER_CHARACTERISTICS_REVISION_1;
-    Chars.Header.Size = sizeof(NDIS_PROTOCOL_DRIVER_CHARACTERISTICS);
+    Chars.Header.Revision = NDIS_PROTOCOL_DRIVER_CHARACTERISTICS_REVISION_2;
+    Chars.Header.Size = NDIS_SIZEOF_PROTOCOL_DRIVER_CHARACTERISTICS_REVISION_2;
     Chars.MajorNdisVersion = 6;
     Chars.MinorNdisVersion = 20;
     Chars.MajorDriverVersion = 1;
