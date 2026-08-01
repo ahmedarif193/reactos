@@ -1258,11 +1258,11 @@ NDIS_STATUS
 NTAPI
 NdisRegisterDeviceEx(
     _In_  NDIS_HANDLE   NdisHandle,
-    _In_  PVOID         DeviceObjectAttributes,
+    _In_  PNDIS_DEVICE_OBJECT_ATTRIBUTES DeviceObjectAttributes,
     _Out_ PDEVICE_OBJECT* pDeviceObject,
     _Out_ PNDIS_HANDLE  NdisDeviceHandle)
 {
-    PNDIS_DEVICE_OBJECT_ATTRIBUTES Attrs = (PNDIS_DEVICE_OBJECT_ATTRIBUTES)DeviceObjectAttributes;
+    PNDIS_DEVICE_OBJECT_ATTRIBUTES Attrs = DeviceObjectAttributes;
     PNDIS6_CONTROL_DEVICE   CtlDev;
     PDRIVER_OBJECT          DriverObject = NULL;
     PDEVICE_OBJECT          Device       = NULL;
