@@ -1224,6 +1224,11 @@ NdisRegisterDeviceEx(
     ULONG                   i;
     KIRQL                   OldIrql;
 
+    if (pDeviceObject != NULL)
+        *pDeviceObject = NULL;
+    if (NdisDeviceHandle != NULL)
+        *NdisDeviceHandle = NULL;
+
     if (Attrs == NULL || pDeviceObject == NULL || NdisDeviceHandle == NULL ||
         Attrs->DeviceName == NULL || Attrs->MajorFunctions == NULL)
     {
