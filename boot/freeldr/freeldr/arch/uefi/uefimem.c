@@ -349,12 +349,13 @@ UefiMemGetMemoryMap(ULONG *MemoryMapSize)
     RtlZeroMemory(FreeldrMem, FreeldrMemMapSize);
 
     /*
-     * Leave the reserve at the high end and pin the rest for FreeLoader.
+     * Leave the reserve at the low end and pin the rest for FreeLoader.
+     * Firmware DMA allocators may be limited to 32-bit addresses even when
+     * normal Boot Services allocations can use memory above 4 GiB.
      */
     {
         UINT64 TotalFreePages = 0;
-        UINT64 PagesToPin;
-        UINT64 PinnedSoFar = 0;
+        UINT64 PagesToReserve;
 
         MapEntry = EfiMemoryMap;
         for (Index = 0; Index < EntryCount; ++Index)
@@ -370,7 +371,7 @@ UefiMemGetMemoryMap(ULONG *MemoryMapSize)
          */
         {
             UINT64 Reserve = min(UEFI_FIRMWARE_RESERVE_PAGES, TotalFreePages);
-            PagesToPin = TotalFreePages - Reserve;
+            PagesToReserve = Reserve;
         }
 
         MapEntry = EfiMemoryMap;
@@ -382,33 +383,30 @@ UefiMemGetMemoryMap(ULONG *MemoryMapSize)
             {
                 EFI_PHYSICAL_ADDRESS RegionBase = MapEntry->PhysicalStart;
                 UINT64 RegionPages = MapEntry->NumberOfPages;
-                UINT64 PinPages = (PinnedSoFar < PagesToPin) ? min(RegionPages, PagesToPin - PinnedSoFar) : 0;
+                UINT64 ReservePages = min(RegionPages, PagesToReserve);
+                UINT64 PinPages = RegionPages - ReservePages;
+
+                if (ReservePages != 0)
+                {
+                    UefiSetMemory(FreeldrMem, RegionBase, ReservePages, LoaderFirmwareTemporary);
+                    PagesToReserve -= ReservePages;
+                }
 
                 /* Pin the part FreeLoader will manage as its own free pool. */
                 if (PinPages != 0)
                 {
-                    EFI_PHYSICAL_ADDRESS PinBase = RegionBase;
+                    EFI_PHYSICAL_ADDRESS PinBase = RegionBase + ReservePages * EFI_PAGE_SIZE;
 
                     Status = GlobalSystemTable->BootServices->AllocatePages(AllocateAddress, EfiLoaderData, PinPages, &PinBase);
                     if (Status == EFI_SUCCESS)
                     {
-                        PinnedSoFar += PinPages;
                         UefiSetMemory(FreeldrMem, PinBase, PinPages, LoaderFree);
                     }
                     else
                     {
                         /* Firmware refused: don't claim ownership we don't have. */
-                        PinPages = 0;
+                        UefiSetMemory(FreeldrMem, PinBase, PinPages, LoaderFirmwareTemporary);
                     }
-                }
-
-                /*
-                 * FreeLoader will not allocate from LoaderFirmwareTemporary,
-                 * and NT can reclaim it after boot.
-                 */
-                if (PinPages < RegionPages)
-                {
-                    UefiSetMemory(FreeldrMem, RegionBase + PinPages * EFI_PAGE_SIZE, RegionPages - PinPages, LoaderFirmwareTemporary);
                 }
             }
             else if (MemoryType != LoaderReserve)
