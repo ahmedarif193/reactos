@@ -9,6 +9,7 @@ Signature="$Windows NT$"
 Class=Net
 ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
 Provider=%ProviderName%
+CatalogFile=netrp1gem.cat
 DriverVer=06/28/2026,1.0.0.0
 
 [DestinationDirs]
