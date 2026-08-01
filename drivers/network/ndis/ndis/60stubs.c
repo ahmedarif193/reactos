@@ -1111,8 +1111,6 @@ typedef struct _NDIS6_CONTROL_DEVICE
 #define NDIS6_MJ_IS_NDIS_OWNED(mj) \
     ((mj) == IRP_MJ_PNP || (mj) == IRP_MJ_POWER || (mj) == IRP_MJ_SYSTEM_CONTROL)
 
-#define NDIS6_CTL_DEV_TAG  'dCNn'
-
 /* All live control devices, so NdisGetDeviceReservedExtension can tell a
  * NdisRegisterDeviceEx device object apart from a miniport FDO. */
 static LIST_ENTRY g_Ndis6CtlDevList = { &g_Ndis6CtlDevList, &g_Ndis6CtlDevList };
@@ -1267,6 +1265,7 @@ NdisRegisterDeviceEx(
     PDRIVER_OBJECT          DriverObject = NULL;
     PDEVICE_OBJECT          Device       = NULL;
     NTSTATUS                Status;
+    ULONG                   DeviceExtensionSize;
     ULONG                   i;
     KIRQL                   OldIrql;
 
@@ -1280,6 +1279,10 @@ NdisRegisterDeviceEx(
     {
         return NDIS_STATUS_INVALID_PARAMETER;
     }
+
+    if (Attrs->ExtensionSize > MAXULONG - sizeof(*CtlDev))
+        return NDIS_STATUS_INVALID_PARAMETER;
+    DeviceExtensionSize = Attrs->ExtensionSize + sizeof(*CtlDev);
 
     if (Attrs->SymbolicName != NULL &&
         (Attrs->SymbolicName->Length > Attrs->SymbolicName->MaximumLength ||
@@ -1334,11 +1337,21 @@ NdisRegisterDeviceEx(
     if (DriverObject == NULL)
         return NDIS_STATUS_NOT_SUPPORTED;
 
-    CtlDev = (PNDIS6_CONTROL_DEVICE)ExAllocatePoolWithTag(
-        NonPagedPool, sizeof(NDIS6_CONTROL_DEVICE), NDIS6_CTL_DEV_TAG);
-    if (CtlDev == NULL)
-        return NDIS_STATUS_RESOURCES;
+    /* Keep the NDIS control block in the device extension so its lifetime is
+     * protected by the I/O manager while an IRP dispatch is still active. */
+    Status = IoCreateDevice(DriverObject,
+                            DeviceExtensionSize,
+                            Attrs->DeviceName,
+                            FILE_DEVICE_NETWORK,
+                            0,
+                            FALSE,
+                            &Device);
+    if (!NT_SUCCESS(Status))
+        return (NDIS_STATUS)Status;
+
+    CtlDev = (PNDIS6_CONTROL_DEVICE)Device->DeviceExtension;
     RtlZeroMemory(CtlDev, sizeof(*CtlDev));
+    CtlDev->DeviceObject = Device;
 
     if (Attrs->SymbolicName != NULL)
     {
@@ -1348,24 +1361,9 @@ NdisRegisterDeviceEx(
             &CtlDev->SymbolicName);
         if (!NT_SUCCESS(Status))
         {
-            ExFreePoolWithTag(CtlDev, NDIS6_CTL_DEV_TAG);
+            IoDeleteDevice(Device);
             return (NDIS_STATUS)Status;
         }
-    }
-
-    /* Create the control device object. */
-    Status = IoCreateDevice(DriverObject,
-                            Attrs->ExtensionSize,
-                            Attrs->DeviceName,
-                            FILE_DEVICE_NETWORK,
-                            0,
-                            FALSE,
-                            &Device);
-    if (!NT_SUCCESS(Status))
-    {
-        RtlFreeUnicodeString(&CtlDev->SymbolicName);
-        ExFreePoolWithTag(CtlDev, NDIS6_CTL_DEV_TAG);
-        return (NDIS_STATUS)Status;
     }
 
     /* Keep the caller's handlers on the control device, and route the driver
@@ -1397,7 +1395,6 @@ NdisRegisterDeviceEx(
         }
     }
 
-    CtlDev->DeviceObject = Device;
     Device->Flags &= ~DO_DEVICE_INITIALIZING;
 
     ExInterlockedInsertTailList(&g_Ndis6CtlDevList, &CtlDev->ListEntry,
@@ -1426,20 +1423,16 @@ NdisDeregisterDeviceEx(
     if (CtlDev->SymbolicLinkCreated)
         IoDeleteSymbolicLink(&CtlDev->SymbolicName);
     RtlFreeUnicodeString(&CtlDev->SymbolicName);
-    if (CtlDev->DeviceObject != NULL)
-        IoDeleteDevice(CtlDev->DeviceObject);
-
-    ExFreePoolWithTag(CtlDev, NDIS6_CTL_DEV_TAG);
+    IoDeleteDevice(CtlDev->DeviceObject);
 }
 
 /*
  * NdisGetDeviceReservedExtension
  *
- * For a device created by NdisRegisterDeviceEx the caller's reserved area is
- * the whole device extension (we pass ExtensionSize straight to
- * IoCreateDevice). For a miniport FDO the reserved area is the WdfReserved
- * scratch space in LOGICAL_ADAPTER, where NDIS-WDF miniports keep their
- * framework context.
+ * For a device created by NdisRegisterDeviceEx the NDIS control block leads
+ * the device extension and the caller's reserved area follows it. For a
+ * miniport FDO the reserved area is the WdfReserved scratch space in
+ * LOGICAL_ADAPTER, where NDIS-WDF miniports keep their framework context.
  */
 PVOID
 NTAPI
@@ -1448,6 +1441,7 @@ NdisGetDeviceReservedExtension(
 {
     PLOGICAL_ADAPTER Adapter;
     PLIST_ENTRY Entry;
+    PNDIS6_CONTROL_DEVICE CtlDev = NULL;
     KIRQL OldIrql;
     BOOLEAN IsCtlDev = FALSE;
 
@@ -1459,8 +1453,9 @@ NdisGetDeviceReservedExtension(
          Entry != &g_Ndis6CtlDevList;
          Entry = Entry->Flink)
     {
-        PNDIS6_CONTROL_DEVICE CtlDev =
-            CONTAINING_RECORD(Entry, NDIS6_CONTROL_DEVICE, ListEntry);
+        CtlDev = CONTAINING_RECORD(Entry,
+                                   NDIS6_CONTROL_DEVICE,
+                                   ListEntry);
         if (CtlDev->DeviceObject == DeviceObject)
         {
             IsCtlDev = TRUE;
@@ -1470,7 +1465,7 @@ NdisGetDeviceReservedExtension(
     KeReleaseSpinLock(&g_Ndis6CtlDevLock, OldIrql);
 
     if (IsCtlDev)
-        return DeviceObject->DeviceExtension;
+        return (PVOID)(CtlDev + 1);
 
     /* WDF-managed NetAdapterCx FDOs do not store the logical adapter in
      * DeviceExtension, so resolve both native and WDF-owned FDOs through
