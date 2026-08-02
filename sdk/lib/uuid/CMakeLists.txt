@@ -129,6 +129,7 @@ list(APPEND IDL_SOURCES
     textstor.idl
 #    tlog.idl
     tlogstg.idl
+    transact.idl
 #    trkadm.idl
 #    trkcom.idl
     unknwn.idl
