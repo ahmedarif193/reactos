@@ -9,5 +9,5 @@ list(APPEND SOURCE
 add_library(version MODULE ${SOURCE} version.rc)
 set_module_type(version win32dll)
 target_link_libraries(version wine oldnames)
-add_importlibs(version msvcrt kernel32 ntdll)
+add_importlibs(version kernelbase msvcrt kernel32 ntdll)
 add_cd_file(TARGET version DESTINATION reactos/system32 FOR all)
