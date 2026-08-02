@@ -13,6 +13,10 @@
 #include <windef.h>
 #include <winbase.h>
 #include <winreg.h>
+#ifdef __REACTOS__
+#include <wingdi.h>
+#include <winuser.h>
+#endif
 #include <objbase.h>
 #include <oleauto.h>
 
