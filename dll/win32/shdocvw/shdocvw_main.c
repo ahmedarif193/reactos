@@ -29,12 +29,9 @@
 
 #include "winreg.h"
 #ifdef __REACTOS__
-#include "winnls.h"
-#include <shlguid_undoc.h>
 #include <rpcproxy.h> /* for __wine_register_resources / __wine_unregister_resources */
 #include "objects.h"
 #endif
-#include "shlwapi.h"
 #include "wininet.h"
 #include "isguids.h"
 
@@ -52,10 +49,8 @@ HINSTANCE instance;
 
 static HINSTANCE get_ieframe_instance(void)
 {
-    static const WCHAR ieframe_dllW[] = {'i','e','f','r','a','m','e','.','d','l','l',0};
-
     if(!ieframe_instance)
-        ieframe_instance = LoadLibraryW(ieframe_dllW);
+        ieframe_instance = LoadLibraryW(L"ieframe.dll");
 
     return ieframe_instance;
 }
@@ -105,18 +100,15 @@ HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void **ppv)
     return SHDOCVW_GetShellInstanceObjectClassObject(rclsid, riid, ppv);
 }
 
+#ifdef __REACTOS__
 /***********************************************************************
  *          DllRegisterServer (shdocvw.@)
  */
 HRESULT WINAPI DllRegisterServer(void)
 {
     TRACE("\n");
-#ifdef __REACTOS__
     SHDOCVW_DllRegisterServer();
     return __wine_register_resources(instance);
-#else
-    return S_OK;
-#endif
 }
 
 /***********************************************************************
@@ -125,13 +117,10 @@ HRESULT WINAPI DllRegisterServer(void)
 HRESULT WINAPI DllUnregisterServer(void)
 {
     TRACE("\n");
-#ifdef __REACTOS__
     SHDOCVW_DllUnregisterServer();
     return __wine_unregister_resources(instance);
-#else
-    return S_OK;
-#endif
 }
+#endif
 
 /******************************************************************
  *             IEWinMain            (SHDOCVW.101)
@@ -151,14 +140,14 @@ DWORD WINAPI IEWinMain(LPSTR szCommandLine, int nShowWindow)
         ExitProcess(1);
 
     len = MultiByteToWideChar(CP_ACP, 0, szCommandLine, -1, NULL, 0);
-    cmdline = heap_alloc(len*sizeof(WCHAR));
+    cmdline = malloc(len * sizeof(WCHAR));
     if(!cmdline)
         ExitProcess(1);
     MultiByteToWideChar(CP_ACP, 0, szCommandLine, -1, cmdline, len);
 
     ret = pIEWinMain(cmdline, nShowWindow);
 
-    heap_free(cmdline);
+    free(cmdline);
     return ret;
 }
 
@@ -167,7 +156,7 @@ DWORD WINAPI IEWinMain(LPSTR szCommandLine, int nShowWindow)
  */
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD fdwReason, LPVOID fImpLoad)
 {
-    TRACE("%p 0x%x %p\n", hinst, fdwReason, fImpLoad);
+    TRACE("%p 0x%lx %p\n", hinst, fdwReason, fImpLoad);
     switch (fdwReason)
     {
     case DLL_PROCESS_ATTACH:
@@ -198,6 +187,7 @@ HRESULT WINAPI DllCanUnloadNow(void)
     return SHDOCVW_refCount ? S_FALSE : S_OK;
 }
 
+#ifdef __REACTOS__
 /***********************************************************************
  *              DllGetVersion (SHDOCVW.@)
  */
@@ -213,6 +203,7 @@ HRESULT WINAPI DllGetVersion(DLLVERSIONINFO *info)
 
     return NOERROR;
 }
+#endif
 
 /*************************************************************************
  *              DllInstall (SHDOCVW.@)
@@ -303,7 +294,7 @@ DWORD WINAPI RunInstallUninstallStubs2(int arg)
  */
 DWORD WINAPI SetQueryNetSessionCount(DWORD arg)
 {
-    FIXME("(%u), stub!\n", arg);
+    FIXME("(%lu), stub!\n", arg);
     return 0;
 }
 
@@ -313,22 +304,10 @@ DWORD WINAPI SetQueryNetSessionCount(DWORD arg)
 
 static void* fetch_shlwapi_ordinal(UINT_PTR ord)
 {
-    static const WCHAR shlwapiW[] = {'s','h','l','w','a','p','i','.','d','l','l','\0'};
     static HANDLE h;
 
-    if (!h && !(h = GetModuleHandleW(shlwapiW))) return NULL;
+    if (!h && !(h = GetModuleHandleW(L"shlwapi.dll"))) return NULL;
     return (void*)GetProcAddress(h, (const char*)ord);
-}
-
-/******************************************************************
- *		WhichPlatformFORWARD            (SHDOCVW.@)
- */
-DWORD WINAPI WhichPlatformFORWARD(void)
-{
-    static DWORD (WINAPI *p)(void);
-
-    if (p || (p = fetch_shlwapi_ordinal(276))) return p();
-    return 1; /* not integrated, see shlwapi.WhichPlatform */
 }
 
 /******************************************************************
@@ -378,134 +357,12 @@ DWORD WINAPI StopWatchWFORWARD(DWORD dwClass, LPCWSTR lpszStr, DWORD dwUnknown,
 }
 
 /******************************************************************
- *  URLSubRegQueryA (SHDOCVW.151)
- */
-HRESULT WINAPI URLSubRegQueryA(LPCSTR regpath, LPCSTR name, DWORD type,
-                               LPSTR out, DWORD outlen, DWORD unknown)
-{
-    CHAR buffer[INTERNET_MAX_URL_LENGTH];
-    DWORD len;
-    LONG res;
-
-    TRACE("(%s, %s, %d, %p, %d, %d)\n", debugstr_a(regpath), debugstr_a(name),
-            type, out, outlen, unknown);
-
-    if (!out) return S_OK;
-
-    len = sizeof(buffer);
-    res = SHRegGetUSValueA(regpath, name, NULL, buffer,  &len, FALSE, NULL, 0);
-    if (!res) {
-        lstrcpynA(out, buffer, outlen);
-        return S_OK;
-    }
-
-    return E_FAIL;
-}
-
-/******************************************************************
- *  ParseURLFromOutsideSourceW (SHDOCVW.170)
- */
-DWORD WINAPI ParseURLFromOutsideSourceW(LPCWSTR url, LPWSTR out, LPDWORD plen, LPDWORD unknown)
-{
-    WCHAR buffer_in[INTERNET_MAX_URL_LENGTH];
-    WCHAR buffer_out[INTERNET_MAX_URL_LENGTH];
-    LPCWSTR ptr = url;
-    HRESULT hr;
-    DWORD needed;
-    DWORD len;
-    DWORD res;
-
-    TRACE("(%s, %p, %p, %p) len: %d, unknown: 0x%x\n", debugstr_w(url), out, plen, unknown,
-            plen ? *plen : 0, unknown ? *unknown : 0);
-
-    if (!PathIsURLW(ptr)) {
-        len = ARRAY_SIZE(buffer_in);
-        buffer_in[0] = 0;
-        hr = UrlApplySchemeW(ptr, buffer_in, &len, URL_APPLY_GUESSSCHEME | URL_APPLY_DEFAULT);
-        TRACE("got 0x%x with %s\n", hr, debugstr_w(buffer_in));
-        if (hr == S_OK) {
-            /* we parsed the url to buffer_in */
-            ptr = buffer_in;
-        }
-        else
-        {
-            FIXME("call search hook for %s\n", debugstr_w(ptr));
-        }
-    }
-
-    len = ARRAY_SIZE(buffer_out);
-    buffer_out[0] = '\0';
-    hr = UrlCanonicalizeW(ptr, buffer_out, &len, URL_ESCAPE_SPACES_ONLY);
-    needed = lstrlenW(buffer_out)+1;
-    TRACE("got 0x%x with %s (need %d)\n", hr, debugstr_w(buffer_out), needed);
-
-    res = 0;
-    if (*plen >= needed) {
-        if (out != NULL) {
-            lstrcpyW(out, buffer_out);
-            /* On success, 1 is returned for unicode version */
-            res = 1;
-        }
-        needed--;
-    }
-
-    *plen = needed;
-
-    TRACE("=> %d\n", res);
-    return res;
-}
-
-/******************************************************************
- *  ParseURLFromOutsideSourceA (SHDOCVW.169)
- *
- * See ParseURLFromOutsideSourceW
- */
-DWORD WINAPI ParseURLFromOutsideSourceA(LPCSTR url, LPSTR out, LPDWORD plen, LPDWORD unknown)
-{
-    WCHAR buffer[INTERNET_MAX_URL_LENGTH];
-    LPWSTR urlW = NULL;
-    DWORD needed;
-    DWORD res;
-    DWORD len;
-
-    TRACE("(%s, %p, %p, %p) len: %d, unknown: 0x%x\n", debugstr_a(url), out, plen, unknown,
-            plen ? *plen : 0, unknown ? *unknown : 0);
-
-    if (url) {
-        len = MultiByteToWideChar(CP_ACP, 0, url, -1, NULL, 0);
-        urlW = HeapAlloc(GetProcessHeap(), 0, len * sizeof(WCHAR));
-        MultiByteToWideChar(CP_ACP, 0, url, -1, urlW, len);
-    }
-
-    len = ARRAY_SIZE(buffer);
-    ParseURLFromOutsideSourceW(urlW, buffer, &len, unknown);
-    HeapFree(GetProcessHeap(), 0, urlW);
-
-    needed = WideCharToMultiByte(CP_ACP, 0, buffer, -1, NULL, 0, NULL, NULL);
-
-    res = 0;
-    if (*plen >= needed) {
-        if (out != NULL) {
-            WideCharToMultiByte(CP_ACP, 0, buffer, -1, out, *plen, NULL, NULL);
-            /* On success, string size including terminating 0 is returned for ansi version */
-            res = needed;
-        }
-        needed--;
-    }
-
-    *plen = needed;
-
-    TRACE("=> %d\n", res);
-    return res;
-}
-
-/******************************************************************
  *  IEParseDisplayNameWithBCW (SHDOCVW.218)
  */
 HRESULT WINAPI IEParseDisplayNameWithBCW(DWORD codepage, LPCWSTR lpszDisplayName, LPBC pbc, LPITEMIDLIST *ppidl)
 {
     /* Guessing at parameter 3 based on IShellFolder's  ParseDisplayName */
-    FIXME("stub: 0x%x %s %p %p\n",codepage,debugstr_w(lpszDisplayName),pbc,ppidl);
+    FIXME("stub: 0x%lx %s %p %p\n",codepage,debugstr_w(lpszDisplayName),pbc,ppidl);
     return E_FAIL;
 }
 
@@ -514,7 +371,7 @@ HRESULT WINAPI IEParseDisplayNameWithBCW(DWORD codepage, LPCWSTR lpszDisplayName
  */
 DWORD WINAPI SHRestricted2W(DWORD res, LPCWSTR url, DWORD reserved)
 {
-    FIXME("(%d %s %d) stub\n", res, debugstr_w(url), reserved);
+    FIXME("(%ld %s %ld) stub\n", res, debugstr_w(url), reserved);
     return 0;
 }
 
@@ -528,14 +385,14 @@ DWORD WINAPI SHRestricted2A(DWORD restriction, LPCSTR url, DWORD reserved)
     LPWSTR urlW = NULL;
     DWORD res;
 
-    TRACE("(%d, %s, %d)\n", restriction, debugstr_a(url), reserved);
+    TRACE("(%ld, %s, %ld)\n", restriction, debugstr_a(url), reserved);
     if (url) {
         DWORD len = MultiByteToWideChar(CP_ACP, 0, url, -1, NULL, 0);
-        urlW = heap_alloc(len * sizeof(WCHAR));
+        urlW = malloc(len * sizeof(WCHAR));
         MultiByteToWideChar(CP_ACP, 0, url, -1, urlW, len);
     }
     res = SHRestricted2W(restriction, urlW, reserved);
-    heap_free(urlW);
+    free(urlW);
     return res;
 }
 
@@ -618,10 +475,10 @@ BOOL WINAPI DoOrganizeFavDlg(HWND hwnd, LPCSTR initDir)
 
     if (initDir) {
         DWORD len = MultiByteToWideChar(CP_ACP, 0, initDir, -1, NULL, 0);
-        initDirW = heap_alloc(len * sizeof(WCHAR));
+        initDirW = malloc(len * sizeof(WCHAR));
         MultiByteToWideChar(CP_ACP, 0, initDir, -1, initDirW, len);
     }
     res = DoOrganizeFavDlgW(hwnd, initDirW);
-    heap_free(initDirW);
+    free(initDirW);
     return res;
 }

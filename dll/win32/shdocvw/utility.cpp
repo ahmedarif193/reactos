@@ -186,7 +186,7 @@ SHDOCVW_CreateShortcut(
 }
 
 /*************************************************************************
- *      AddUrlToFavorites [SHDOCVW.106]
+ *      AddUrlToFavorites [SHDOCVW.108]
  */
 EXTERN_C HRESULT WINAPI
 AddUrlToFavorites(
