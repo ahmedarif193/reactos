@@ -9,6 +9,7 @@ list(APPEND SOURCE
     activaut.idl
     activdbg.idl
     activscp.idl
+    asyncinfo.idl
     asptlb.idl
 #   asynot.idl
 #   asysta.idl
@@ -50,6 +51,7 @@ list(APPEND SOURCE
 #   dyngraph.idl
     emptyvc.idl
     endpointvolume.idl
+    eventtoken.idl
     exdisp.idl
     fusion.idl
     hlink.idl
@@ -66,6 +68,7 @@ list(APPEND SOURCE
     inputscope.idl
     inseng.idl
     inspectable.idl
+    ivectorchangedeventargs.idl
     mediaobj.idl
     metahost.idl
     mfidl.idl
@@ -147,6 +150,9 @@ list(APPEND SOURCE
     wbemprov.idl
     wia_lh.idl
     wia_xp.idl
+    windows.foundation.collections.idl
+    windows.foundation.idl
+    windowscontracts.idl
     wincodec.idl
     wincodecsdk.idl
     winsxs.idl

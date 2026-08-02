@@ -1,0 +1,5 @@
+add_executable(iertutil_winetest iertutil.c)
+set_module_type(iertutil_winetest win32cui)
+target_link_libraries(iertutil_winetest uuid winetestlib)
+add_importlibs(iertutil_winetest iertutil combase msvcrt kernel32)
+add_rostests_file(TARGET iertutil_winetest)
