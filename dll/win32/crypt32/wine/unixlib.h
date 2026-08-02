@@ -12,21 +12,22 @@
 
 #define __wine_init_unix_call() 0
 
-static inline int __reactos_call_unix_process_attach(void* Args)
+static inline NTSTATUS __reactos_call_unix_process_attach(void* Args)
 {
     return 0;
 }
 
-static inline int __reactos_call_unix_process_detach(void* Args)
+static inline NTSTATUS __reactos_call_unix_process_detach(void* Args)
 {
     return 0;
 }
 
 // Implemented in reactos/unixlib.c
-int __reactos_call_unix_open_cert_store(void* Args);
-int __reactos_call_unix_close_cert_store(void* Args);
-int __reactos_call_unix_import_store_key(void* Args);
-int __reactos_call_unix_import_store_cert(void* Args);
-int __reactos_call_unix_enum_root_certs(void* Args);
+NTSTATUS __reactos_call_unix_open_cert_store(void* Args);
+NTSTATUS __reactos_call_unix_close_cert_store(void* Args);
+NTSTATUS __reactos_call_unix_import_store_key(void* Args);
+NTSTATUS __reactos_call_unix_import_store_cert(void* Args);
+NTSTATUS __reactos_call_unix_enum_root_certs(void* Args);
+NTSTATUS __reactos_call_unix_export_cert_store(void* Args);
 
 #define WINE_UNIX_CALL(code,args) __reactos_call_ ## code(args)
