@@ -193,11 +193,7 @@ static BOOL WINAPI winsock_startup( INIT_ONCE *once, void *param, void **ctx )
     return TRUE;
 }
 
-#ifdef __REACTOS__
-void winsock_init(void)
-#else
 static void winsock_init(void)
-#endif
 {
     static INIT_ONCE once = INIT_ONCE_STATIC_INIT;
     InitOnceExecuteOnce( &once, winsock_startup, NULL, NULL );
@@ -216,9 +212,7 @@ DWORD netconn_create( struct hostdata *host, const struct sockaddr_storage *sock
     unsigned int addr_len;
     DWORD ret;
 
-#ifndef __REACTOS__
     winsock_init();
-#endif
 
     if (!(conn = calloc( 1, sizeof(*conn) ))) return ERROR_OUTOFMEMORY;
     conn->refs = 1;
@@ -678,11 +672,6 @@ void netconn_cancel_io( struct netconn *conn )
     closesocket( socket );
 }
 
-ULONG netconn_query_data_available( struct netconn *conn )
-{
-    return conn->secure ? conn->peek_len : 0;
-}
-
 DWORD netconn_set_timeout( struct netconn *netconn, BOOL send, int value )
 {
     int opt = send ? SO_SNDTIMEO : SO_RCVTIMEO;
@@ -693,6 +682,11 @@ DWORD netconn_set_timeout( struct netconn *netconn, BOOL send, int value )
         return err;
     }
     return ERROR_SUCCESS;
+}
+
+BOOL netconn_is_valid( struct netconn *netconn )
+{
+    return netconn && netconn->socket != -1;
 }
 
 BOOL netconn_is_alive( struct netconn *netconn )
@@ -729,7 +723,7 @@ BOOL netconn_is_alive( struct netconn *netconn )
     return len == 1 || (len == -1 && err == WSAEWOULDBLOCK);
 }
 
-static DWORD resolve_hostname( const WCHAR *name, INTERNET_PORT port, struct sockaddr_storage *sa )
+static DWORD resolve_hostname( const WCHAR *name, INTERNET_PORT port, DWORD flags, struct sockaddr_storage *sa )
 {
     ADDRINFOW *res, hints;
     int ret;
@@ -739,6 +733,7 @@ static DWORD resolve_hostname( const WCHAR *name, INTERNET_PORT port, struct soc
      * their IPv6 addresses even though they have IPv6 addresses in the DNS.
      */
     hints.ai_family = AF_INET;
+    hints.ai_flags  = flags;
 
     ret = GetAddrInfoW( name, NULL, &hints, &res );
     if (ret != 0)
@@ -772,12 +767,13 @@ struct async_resolve
     LONG                     ref;
     WCHAR                   *hostname;
     INTERNET_PORT            port;
+    DWORD                    flags;
     struct sockaddr_storage  addr;
     DWORD                    result;
     HANDLE                   done;
 };
 
-static struct async_resolve *create_async_resolve( const WCHAR *hostname, INTERNET_PORT port )
+static struct async_resolve *create_async_resolve( const WCHAR *hostname, INTERNET_PORT port, DWORD flags )
 {
     struct async_resolve *ret;
 
@@ -789,6 +785,7 @@ static struct async_resolve *create_async_resolve( const WCHAR *hostname, INTERN
     ret->ref = 1;
     ret->hostname = wcsdup( hostname );
     ret->port     = port;
+    ret->flags    = flags;
     if (!(ret->done = CreateEventW( NULL, FALSE, FALSE, NULL )))
     {
         free( ret->hostname );
@@ -811,21 +808,21 @@ static void CALLBACK resolve_proc( TP_CALLBACK_INSTANCE *instance, void *ctx )
 {
     struct async_resolve *async = ctx;
 
-    async->result = resolve_hostname( async->hostname, async->port, &async->addr );
+    async->result = resolve_hostname( async->hostname, async->port, async->flags, &async->addr );
     SetEvent( async->done );
     async_resolve_release( async );
 }
 
-DWORD netconn_resolve( WCHAR *hostname, INTERNET_PORT port, struct sockaddr_storage *addr, int timeout )
+DWORD netconn_resolve( const WCHAR *hostname, INTERNET_PORT port, DWORD flags, struct sockaddr_storage *addr, int timeout )
 {
     DWORD ret;
 
-    if (!timeout) ret = resolve_hostname( hostname, port, addr );
+    if (!timeout) ret = resolve_hostname( hostname, port, flags, addr );
     else
     {
         struct async_resolve *async;
 
-        if (!(async = create_async_resolve( hostname, port )))
+        if (!(async = create_async_resolve( hostname, port, flags )))
             return ERROR_OUTOFMEMORY;
 
         InterlockedIncrement( &async->ref );

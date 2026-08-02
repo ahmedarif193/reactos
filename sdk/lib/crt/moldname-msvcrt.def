@@ -121,3 +121,4 @@ cabs==_cabs
 hypot==_hypot
 logb==_logb
 nextafter==_nextafter
+wcstoull==_wcstoui64

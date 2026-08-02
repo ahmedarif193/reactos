@@ -16,7 +16,9 @@
 #include <winbase.h>
 #include <ole2.h>
 #include <winsock2.h>
+#include <schannel.h>
 #include <winhttp.h>
+#include <winnls.h>
 #include <string.h>
 
 #include <wine/debug.h>
