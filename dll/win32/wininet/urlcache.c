@@ -196,10 +196,6 @@ typedef struct
 /* List of all containers available */
 static struct list UrlContainers = LIST_INIT(UrlContainers);
 
-#ifdef __REACTOS__
-static BOOL bDefaultContainersAdded = FALSE;
-#endif
-
 static inline char *strdupWtoUTF8(const WCHAR *str)
 {
     char *ret = NULL;
@@ -742,21 +738,13 @@ static void cache_containers_init(void)
         const WCHAR *shpath_suffix; /* suffix on path returned by SHGetSpecialFolderPath */
         const char *cache_prefix; /* prefix used to reference the container */
         DWORD default_entry_type;
-    } DefaultContainerData[] =
+    } DefaultContainerData[] = 
     {
         { CSIDL_INTERNET_CACHE, L"Content.IE5", "", NORMAL_CACHE_ENTRY },
         { CSIDL_HISTORY, L"History.IE5", "Visited:", URLHISTORY_CACHE_ENTRY },
         { CSIDL_COOKIES, L"", "Cookie:", COOKIE_CACHE_ENTRY },
     };
     DWORD i;
-
-#ifdef __REACTOS__
-    if (GetEnvironmentVariableW(L"USERPROFILE", NULL, 0) == 0 && GetLastError() == ERROR_ENVVAR_NOT_FOUND)
-    {
-        ERR("Environment variable 'USERPROFILE' does not exist!\n");
-        return;
-    }
-#endif
 
     for (i = 0; i < ARRAY_SIZE(DefaultContainerData); i++)
     {
@@ -783,7 +771,7 @@ static void cache_containers_init(void)
         wszCachePath[path_len+1] = 0;
 
         lstrcpyW(wszMutexName, wszCachePath);
-
+        
         if (suffix_len)
         {
             memcpy(wszCachePath + path_len + 1, DefaultContainerData[i].shpath_suffix, (suffix_len + 1) * sizeof(WCHAR));
@@ -808,10 +796,6 @@ static void cache_containers_init(void)
         cache_containers_add(DefaultContainerData[i].cache_prefix, wszCachePath,
                 DefaultContainerData[i].default_entry_type, wszMutexName);
     }
-
-#ifdef __REACTOS__
-    bDefaultContainersAdded = TRUE;
-#endif
 }
 
 static void cache_containers_free(void)
@@ -830,11 +814,6 @@ static DWORD cache_containers_find(const char *url, cache_container **ret)
 
     if(!url)
         return ERROR_INVALID_PARAMETER;
-
-#ifdef __REACTOS__
-    if (!bDefaultContainersAdded)
-        cache_containers_init();
-#endif
 
     LIST_FOR_EACH_ENTRY(container, &UrlContainers, cache_container, entry)
     {
@@ -857,11 +836,6 @@ static BOOL cache_containers_enum(char *search_pattern, DWORD index, cache_conta
     cache_container *container;
 
     TRACE("searching for prefix: %s\n", debugstr_a(search_pattern));
-
-#ifdef __REACTOS__
-    if (!bDefaultContainersAdded)
-        cache_containers_init();
-#endif
 
     /* non-NULL search pattern only returns one container ever */
     if (search_pattern && index > 0)
@@ -952,7 +926,7 @@ static urlcache_header* cache_container_lock_index(cache_container *pContainer)
     {
         TRACE("Directory[%d] = \"%.8s\"\n", index, pHeader->directory_data[index].name);
     }
-
+    
     return pHeader;
 }
 
@@ -1446,7 +1420,7 @@ static DWORD urlcache_hash_key(LPCSTR lpszKey)
     /* NOTE: this uses the same lookup table as SHLWAPI.UrlHash{A,W}
      * but the algorithm and result are not the same!
      */
-    static const unsigned char lookupTable[256] =
+    static const unsigned char lookupTable[256] = 
     {
         0x01, 0x0E, 0x6E, 0x19, 0x61, 0xAE, 0x84, 0x77,
         0x8A, 0xAA, 0x7D, 0x76, 0x1B, 0xE9, 0x8C, 0x33,
@@ -1481,17 +1455,19 @@ static DWORD urlcache_hash_key(LPCSTR lpszKey)
         0xA3, 0xC8, 0xDE, 0xEB, 0xF8, 0xF3, 0xDB, 0x0A,
         0x98, 0x83, 0x7B, 0xE5, 0xCB, 0x4C, 0x78, 0xD1
     };
+    const BYTE *input = (const BYTE *)lpszKey;
     BYTE key[4];
     DWORD i;
 
     for (i = 0; i < ARRAY_SIZE(key); i++)
-        key[i] = lookupTable[(*lpszKey + i) & 0xFF];
+        key[i] = lookupTable[(*input + i) & 0xFF];
 
-    for (lpszKey++; *lpszKey; lpszKey++)
-    {
-        for (i = 0; i < ARRAY_SIZE(key); i++)
-            key[i] = lookupTable[*lpszKey ^ key[i]];
-    }
+    if (*input)
+        for (input++; *input; input++)
+        {
+            for (i = 0; i < ARRAY_SIZE(key); i++)
+                key[i] = lookupTable[*input ^ key[i]];
+        }
 
     return *(DWORD *)key;
 }
@@ -2713,19 +2689,23 @@ static BOOL urlcache_entry_create(const char *url, const char *ext, WCHAR *full_
 
         extW[0] = '.';
         ext_len = MultiByteToWideChar(CP_ACP, 0, ext, -1, extW+1, MAX_PATH-1);
-
-        for(p=extW; *p; p++) {
-            switch(*p) {
-            case '<': case '>':
-            case ':': case '"':
-            case '|': case '?':
-            case '*':
-                *p = '_'; break;
-            default: break;
+        if(!ext_len || ext_len >= MAX_PATH - 8) {
+            extW[0] = '\0';
+            ext_len = 0;
+        }else {
+            for(p=extW; *p; p++) {
+                switch(*p) {
+                case '<': case '>':
+                case ':': case '"':
+                case '|': case '?':
+                case '*':
+                    *p = '_'; break;
+                default: break;
+                }
             }
+            if(p > extW && (p[-1]==' ' || p[-1]=='.'))
+                p[-1] = '_';
         }
-        if(p[-1]==' ' || p[-1]=='.')
-            p[-1] = '_';
     }else {
         extW[0] = '\0';
     }
@@ -4110,9 +4090,7 @@ BOOL init_urlcache(void)
         return FALSE;
     }
 
-#ifndef __REACTOS__
     cache_containers_init();
-#endif
     return TRUE;
 }
 

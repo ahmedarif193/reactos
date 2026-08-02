@@ -102,7 +102,7 @@ extern DWORD WINAPI WNetGetCachedPassword(LPSTR,WORD,LPSTR,LPWORD,BYTE);
 /***********************************************************************
  *         WININET_GetSetPassword
  */
-static BOOL WININET_GetSetPassword( HWND hdlg, LPCWSTR szServer,
+static BOOL WININET_GetSetPassword( HWND hdlg, LPCWSTR szServer, 
                                     LPCWSTR szRealm, BOOL bSet )
 {
     WCHAR szResource[0x80], szUserPass[0x40];

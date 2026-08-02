@@ -1386,7 +1386,11 @@ const char *wine_dbgstr_variant(const VARIANT *var)
         sprintf(buf, "{VT_BOOL: %x}", V_BOOL(var));
         break;
     case VT_UI4:
+#ifdef __ROS_LONG64__
+        sprintf(buf, "{VT_UI4: %u}", V_UI4(var));
+#else
         sprintf(buf, "{VT_UI4: %lu}", V_UI4(var));
+#endif
         break;
     default:
         sprintf(buf, "{vt %d}", V_VT(var));

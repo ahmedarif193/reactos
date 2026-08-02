@@ -128,9 +128,11 @@ BOOL        WINAPI GetUrlCacheConfigInfoW(LPINTERNET_CACHE_CONFIG_INFOW,LPDWORD,
 #define     GetUrlCacheConfigInfo WINELIB_NAME_AW(GetUrlCacheConfigInfo)
 BOOL        WINAPI IncrementUrlCacheHeaderData(DWORD,LPDWORD);
 BOOL        WINAPI InternetQueryFortezzaStatus(DWORD*,DWORD_PTR);
+BOOL        WINAPI IsHostInProxyBypassList(INTERNET_SCHEME,LPCSTR,DWORD);
 BOOL        WINAPI IsUrlCacheEntryExpiredA(LPCSTR,DWORD,FILETIME*);
 BOOL        WINAPI IsUrlCacheEntryExpiredW(LPCWSTR,DWORD,FILETIME*);
 #define     IsUrlCacheEntryExpired WINELIB_NAME_AW(IsUrlCacheEntryExpired)
+DWORD       WINAPI ParseX509EncodedCertificateForListBoxEntry(LPBYTE,DWORD,LPSTR,LPDWORD);
 BOOL        WINAPI SetUrlCacheConfigInfoA(LPINTERNET_CACHE_CONFIG_INFOA,DWORD);
 BOOL        WINAPI SetUrlCacheConfigInfoW(LPINTERNET_CACHE_CONFIG_INFOW,DWORD);
 #define     SetUrlCacheConfigInfo WINELIB_NAME_AW(SetUrlCacheConfigInfo)
