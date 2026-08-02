@@ -218,7 +218,7 @@ dll/win32/windowscodecs       # Synced to Wine-10.0
 dll/win32/windowscodecsext    # Synced to Wine-11.14
 dll/win32/winemp3.acm         # Synced to WineStaging-4.18
 dll/win32/wing32              # Synced to Wine-11.14
-dll/win32/winhttp             # Synced to Wine-10.0
+dll/win32/winhttp             # Synced to Wine-11.14
 dll/win32/wininet             # Synced to Wine-10.0
 dll/win32/winmm               # Synced to Wine-10.0
 dll/win32/winmm/midimap       # Forked at Wine-20050628
