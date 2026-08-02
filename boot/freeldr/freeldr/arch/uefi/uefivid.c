@@ -671,6 +671,10 @@ UefiDrawBgrtLogo(VOID)
 {
     PUCHAR VramBase;
     ULONG BytesPerPixel, Pitch;
+    ULONG DirtyX, DirtyY, DirtyWidth, DirtyHeight;
+    ULONG DirtyRight, DirtyBottom;
+    ULONG DrawLeft, DrawTop, DrawRight, DrawBottom;
+    LONG SourceDeltaX, SourceDeltaY;
     ULONG Row, Col;
 
     if (!UefiBgrtLogo.Valid || !UiProgressBar.Show)
@@ -686,41 +690,91 @@ UefiDrawBgrtLogo(VOID)
     if (UefiRenderAddress == 0)
         return;
 
+    /*
+     * The text renderer already tracks the pixels changed by this update.
+     * Redraw only the part of the firmware logo that those pixels covered;
+     * redrawing the full BGRT bitmap for every progress tick is prohibitively
+     * expensive on emulated framebuffers.
+     */
+    if (!FbConsPeekDirtyRect(&DirtyX,
+                             &DirtyY,
+                             &DirtyWidth,
+                             &DirtyHeight))
+    {
+        return;
+    }
+
+    DirtyRight = DirtyX + DirtyWidth;
+    DirtyBottom = DirtyY + DirtyHeight;
+    DrawLeft = max(DirtyX, UefiBgrtLogo.PositionX);
+    DrawTop = max(DirtyY, UefiBgrtLogo.PositionY);
+    DrawRight = min(DirtyRight,
+                    UefiBgrtLogo.PositionX + UefiBgrtLogo.DrawWidth);
+    DrawBottom = min(DirtyBottom,
+                     UefiBgrtLogo.PositionY + UefiBgrtLogo.DrawHeight);
+
+    if ((DrawLeft >= DrawRight) || (DrawTop >= DrawBottom))
+        return;
+
     Pitch = UefiRenderPixelsPerScanLine * BytesPerPixel;
     VramBase = (PUCHAR)UefiRenderAddress;
 
-    for (Row = 0; Row < UefiBgrtLogo.DrawHeight; ++Row)
+    switch (UefiBgrtLogo.Orientation)
+    {
+        case BGRT_ORIENTATION_90:
+            SourceDeltaX = 0;
+            SourceDeltaY = -1;
+            break;
+
+        case BGRT_ORIENTATION_180:
+            SourceDeltaX = -1;
+            SourceDeltaY = 0;
+            break;
+
+        case BGRT_ORIENTATION_270:
+            SourceDeltaX = 0;
+            SourceDeltaY = 1;
+            break;
+
+        case BGRT_ORIENTATION_0:
+        default:
+            SourceDeltaX = 1;
+            SourceDeltaY = 0;
+            break;
+    }
+
+    for (Row = DrawTop; Row < DrawBottom; ++Row)
     {
         PULONG DestinationRow;
+        ULONG LogoRow = Row - UefiBgrtLogo.PositionY;
+        ULONG SourceX, SourceY;
 
         DestinationRow = (PULONG)(VramBase +
-                                  (UefiBgrtLogo.PositionY + Row) * Pitch +
-                                  UefiBgrtLogo.PositionX * BytesPerPixel);
+                                  Row * Pitch +
+                                  DrawLeft * BytesPerPixel);
 
-        for (Col = 0; Col < UefiBgrtLogo.DrawWidth; ++Col)
+        UefiGetLogoSourceCoordinates(&UefiBgrtLogo,
+                                     UefiBgrtLogo.SourceX +
+                                         (DrawLeft - UefiBgrtLogo.PositionX),
+                                     UefiBgrtLogo.SourceY + LogoRow,
+                                     &SourceX,
+                                     &SourceY);
+
+        for (Col = DrawLeft; Col < DrawRight; ++Col)
         {
-            ULONG SourceX, SourceY;
             PUCHAR SourcePixel;
-
-            UefiGetLogoSourceCoordinates(&UefiBgrtLogo,
-                                         UefiBgrtLogo.SourceX + Col,
-                                         UefiBgrtLogo.SourceY + Row,
-                                         &SourceX,
-                                         &SourceY);
 
             SourcePixel = UefiGetLogoPixelAddress(&UefiBgrtLogo, SourceX, SourceY);
 
-            DestinationRow[Col] = 0xFF000000 |
-                                  (SourcePixel[2] << 16) |
-                                  (SourcePixel[1] << 8) |
-                                  SourcePixel[0];
+            DestinationRow[Col - DrawLeft] = 0xFF000000 |
+                                             (SourcePixel[2] << 16) |
+                                             (SourcePixel[1] << 8) |
+                                             SourcePixel[0];
+
+            SourceX += (ULONG)SourceDeltaX;
+            SourceY += (ULONG)SourceDeltaY;
         }
     }
-
-    FbConsMarkDirtyRect(UefiBgrtLogo.PositionX,
-                        UefiBgrtLogo.PositionY,
-                        UefiBgrtLogo.DrawWidth,
-                        UefiBgrtLogo.DrawHeight);
 }
 
 static
