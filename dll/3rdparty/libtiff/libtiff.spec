@@ -1,8 +1,10 @@
 # TODO: add remaining exports
 @ cdecl TIFFClose(ptr)
 @ cdecl TIFFClientOpen(ptr ptr ptr ptr ptr ptr ptr ptr ptr ptr)
+@ cdecl TIFFComputeStrip(ptr long long)
 @ cdecl TIFFCurrentDirOffset(ptr)
 @ cdecl TIFFGetField(ptr long long long)
+@ cdecl TIFFGetFieldDefaulted(ptr long long long)
 @ cdecl TIFFIsByteSwapped(ptr)
 @ cdecl TIFFNumberOfDirectories(ptr)
 @ cdecl TIFFReadEncodedStrip(ptr)

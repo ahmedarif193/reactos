@@ -33,22 +33,12 @@
 #include "initguid.h"
 DEFINE_GUID(IID_CMetaBitmapRenderTarget, 0x0ccd7824,0xdc16,0x4d09,0xbc,0xa8,0x6b,0x09,0xc4,0xef,0x55,0x35);
 
-#ifndef IID_IMILBitmap
-#include <initguid.h>
-DEFINE_GUID(IID_IMILBitmap,0xb1784d3f,0x8115,0x4763,0x13,0xaa,0x32,0xed,0xdb,0x68,0x29,0x4a);
-DEFINE_GUID(IID_IMILBitmapSource,0x7543696a,0xbc8d,0x46b0,0x5f,0x81,0x8d,0x95,0x72,0x89,0x72,0xbe);
-DEFINE_GUID(IID_IMILBitmapLock,0xa67b2b53,0x8fa1,0x4155,0x8f,0x64,0x0c,0x24,0x7a,0x8f,0x84,0xcd);
-DEFINE_GUID(IID_IMILBitmapScaler,0xa767b0f0,0x1c8c,0x4aef,0x56,0x8f,0xad,0xf9,0x6d,0xcf,0xd5,0xcb);
-DEFINE_GUID(IID_IMILFormatConverter,0x7e2a746f,0x25c5,0x4851,0xb3,0xaf,0x44,0x3b,0x79,0x63,0x9e,0xc0);
-DEFINE_GUID(IID_IMILPalette,0xca8e206f,0xf22c,0x4af7,0x6f,0xba,0x7b,0xed,0x5e,0xb1,0xc9,0x2f);
-#else
 extern IID IID_IMILBitmap;
 extern IID IID_IMILBitmapSource;
 extern IID IID_IMILBitmapLock;
 extern IID IID_IMILBitmapScaler;
 extern IID IID_IMILFormatConverter;
 extern IID IID_IMILPalette;
-#endif
 
 #undef INTERFACE
 #define INTERFACE IMILBitmapSource
@@ -217,8 +207,8 @@ static HBITMAP create_dib(int width, int height, int bpp, LOGPALETTE *pal, const
     ok(hdib != 0, "CreateDIBSection(%dx%d,%d bpp) failed\n", width, height, bpp);
 
     GetObjectW(hdib, sizeof(bm), &bm);
-    ok(bm.bmWidth == width, "expected %d, got %ld\n", width, bm.bmWidth);
-    ok(bm.bmHeight == height, "expected %d, got %ld\n", height, bm.bmHeight);
+    ok(bm.bmWidth == width, "expected %d, got %d\n", width, bm.bmWidth);
+    ok(bm.bmHeight == height, "expected %d, got %d\n", height, bm.bmHeight);
     ok(bm.bmPlanes == 1, "expected 1, got %d\n", bm.bmPlanes);
     ok(bm.bmBitsPixel == bpp, "expected %d, got %d\n", bpp, bm.bmBitsPixel);
 
@@ -1486,6 +1476,118 @@ static void test_IMILBitmap(void)
     IWICBitmap_Release(bitmap);
 }
 
+static void test_FlipRotator(void)
+{
+    static BYTE src_data[] = { 1,2,3, 4,5,6 };
+    static BYTE dst_data_rotate90[] = { 4,1, 5,2, 6,3 };
+    static BYTE dst_data_rotate90_flip_h[] = { 6,3, 5,2, 4,1 };
+    static BYTE dst_data_rotate90_flip_v[] = { 1,4, 2,5, 3,6 };
+    static BYTE dst_data_rotate90_flip_hv[] = { 3,6, 2,5, 1,4 };
+    static BYTE dst_data_rotate180[] = { 6,5,4, 3,2,1 };
+    static BYTE dst_data_rotate180_flip_h[] = { 4,5,6, 1,2,3 };
+    static BYTE dst_data_rotate180_flip_v[] = { 3,2,1, 6,5,4 };
+    static BYTE dst_data_rotate180_flip_hv[] = { 1,2,3, 4,5,6 };
+    static BYTE dst_data_rotate270[] = {  3,6, 2,5, 1,4 };
+    static BYTE dst_data_rotate270_flip_h[] = { 1,4, 2,5, 3,6 };
+    static BYTE dst_data_rotate270_flip_v[] = { 6,3, 5,2, 4,1 };
+    static BYTE dst_data_rotate270_flip_hv[] = { 4,1, 5,2, 6,3 };
+    static BYTE dst_data_flip_h[] = { 3,2,1, 6,5,4 };
+    static BYTE dst_data_flip_v[] = { 4,5,6, 1,2,3 };
+    static BYTE dst_data_flip_hv[] = { 6,5,4, 3,2,1 };
+    static const struct
+    {
+        WICBitmapTransformOptions options;
+        UINT dst_width, dst_height;
+        const BYTE *dst_data;
+    } td[] =
+    {
+        { WICBitmapTransformRotate0, 3, 2, src_data },
+        { WICBitmapTransformRotate90, 2, 3, dst_data_rotate90 },
+        { WICBitmapTransformRotate90 | WICBitmapTransformFlipHorizontal, 2, 3, dst_data_rotate90_flip_h },
+        { WICBitmapTransformRotate90 | WICBitmapTransformFlipVertical, 2, 3, dst_data_rotate90_flip_v },
+        { WICBitmapTransformRotate90 | WICBitmapTransformFlipHorizontal | WICBitmapTransformFlipVertical, 2, 3, dst_data_rotate90_flip_hv },
+        { WICBitmapTransformRotate180, 3, 2, dst_data_rotate180 },
+        { WICBitmapTransformRotate180 | WICBitmapTransformFlipHorizontal, 3, 2, dst_data_rotate180_flip_h },
+        { WICBitmapTransformRotate180 | WICBitmapTransformFlipVertical, 3, 2, dst_data_rotate180_flip_v },
+        { WICBitmapTransformRotate180 | WICBitmapTransformFlipHorizontal | WICBitmapTransformFlipVertical, 3, 2, dst_data_rotate180_flip_hv },
+        { WICBitmapTransformRotate270, 2, 3, dst_data_rotate270 },
+        { WICBitmapTransformRotate270 | WICBitmapTransformFlipHorizontal, 2, 3, dst_data_rotate270_flip_h },
+        { WICBitmapTransformRotate270 | WICBitmapTransformFlipVertical, 2, 3, dst_data_rotate270_flip_v },
+        { WICBitmapTransformRotate270 | WICBitmapTransformFlipHorizontal | WICBitmapTransformFlipVertical, 2, 3, dst_data_rotate270_flip_hv },
+        { WICBitmapTransformFlipHorizontal, 3, 2, dst_data_flip_h },
+        { WICBitmapTransformFlipVertical, 3, 2, dst_data_flip_v },
+        { WICBitmapTransformFlipHorizontal | WICBitmapTransformFlipVertical, 3, 2, dst_data_flip_hv },
+        { 7, 2, 3, dst_data_rotate270 },
+        { 7 | WICBitmapTransformFlipHorizontal, 2, 3, dst_data_rotate270_flip_h },
+        { 7 | WICBitmapTransformFlipVertical, 2, 3, dst_data_rotate270_flip_v },
+        { 7 | WICBitmapTransformFlipHorizontal | WICBitmapTransformFlipVertical, 2, 3, dst_data_rotate270_flip_hv },
+    };
+    HRESULT hr;
+    IWICBitmap *bitmap;
+    IWICPalette *palette;
+    IWICBitmapFlipRotator *fr;
+    WICColor colors[256];
+    WICRect rc;
+    UINT width, height;
+    BYTE buf[sizeof(src_data)];
+    int i, ret;
+
+    hr = IWICImagingFactory_CreateBitmapFromMemory(factory, 3, 2, &GUID_WICPixelFormat8bppIndexed,
+                                                   3, sizeof(src_data), src_data, &bitmap);
+    ok(hr == S_OK, "got %#lx\n", hr);
+
+    hr = IWICImagingFactory_CreatePalette(factory, &palette);
+    ok(hr == S_OK, "got %#lx\n", hr);
+
+    for (i = 0; i < 256; i++)
+        colors[i] = i;
+    hr = IWICPalette_InitializeCustom(palette, colors, 256);
+    ok(hr == S_OK, "got %#lx\n", hr);
+
+    hr = IWICBitmap_SetPalette(bitmap, palette);
+    ok(hr == S_OK, "got %#lx\n", hr);
+
+    for (i = 0; i < ARRAY_SIZE(td); i++)
+    {
+        winetest_push_context("%d", i);
+
+        hr = IWICImagingFactory_CreateBitmapFlipRotator(factory, &fr);
+        ok(hr == S_OK, "got %#lx\n", hr);
+
+        hr = IWICBitmapFlipRotator_Initialize(fr, (IWICBitmapSource *)bitmap, td[i].options);
+        ok(hr == S_OK, "got %#lx\n", hr);
+
+        hr = IWICBitmapFlipRotator_GetSize(fr, &width, &height);
+        ok(hr == S_OK, "got %#lx\n", hr);
+        ok(width == td[i].dst_width, "got %u\n", td[i].dst_width);
+        ok(height == td[i].dst_height, "got %u\n", td[i].dst_height);
+
+        rc.X = 0;
+        rc.Y = 0;
+        rc.Width = width;
+        rc.Height = height;
+        memset(buf, 0, sizeof(buf));
+        hr = IWICBitmapFlipRotator_CopyPixels(fr, &rc, width, sizeof(buf), buf);
+        ok(hr == S_OK, "got %#lx\n", hr);
+        ret = !memcmp(buf, td[i].dst_data, sizeof(src_data));
+        ok(ret, "data mismatch\n");
+        if (!ret && winetest_debug > 1)
+        {
+            int k;
+            printf("got data:\n");
+            for (k = 0; k < sizeof(buf); k++)
+                printf(" %u", buf[k]);
+            printf("\n");
+        }
+
+        IWICBitmapFlipRotator_Release(fr);
+        winetest_pop_context();
+    }
+
+    IWICPalette_Release(palette);
+    IWICBitmap_Release(bitmap);
+}
+
 START_TEST(bitmap)
 {
     HRESULT hr;
@@ -1504,6 +1606,7 @@ START_TEST(bitmap)
     test_CreateBitmapFromHBITMAP();
     test_clipper();
     test_bitmap_scaler();
+    test_FlipRotator();
 
     IWICImagingFactory_Release(factory);
 
