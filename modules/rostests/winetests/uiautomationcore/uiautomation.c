@@ -20,7 +20,9 @@
 
 #define COBJMACROS
 
+#ifdef __REACTOS__
 #include <oleauto.h>
+#endif
 #include <assert.h>
 #include "windows.h"
 #include "initguid.h"
@@ -10049,14 +10051,14 @@ static void test_UiaGetUpdatedCache(void)
 
         SafeArrayDestroy(out_req);
         SysFreeString(tree_struct);
-        VariantClear(&v);
+        VariantClear(&prop_cond.Value);
 
         /* Same values, except we're short by one element. */
         V_VT(&v) = VT_I4 | VT_ARRAY;
         V_ARRAY(&v) = SafeArrayCreateVector(VT_I4, 0, ARRAY_SIZE(uia_i4_arr_prop_val) - 1);
 
         for (i = 0; i < ARRAY_SIZE(uia_i4_arr_prop_val) - 1; i++)
-            SafeArrayPutElement(V_ARRAY(&prop_cond.Value), &i, (void *)&uia_i4_arr_prop_val[i]);
+            SafeArrayPutElement(V_ARRAY(&v), &i, (void *)&uia_i4_arr_prop_val[i]);
 
         set_property_condition(&prop_cond, UIA_OutlineColorPropertyId, &v, PropertyConditionFlags_None);
         set_cache_request(&cache_req, (struct UiaCondition *)&prop_cond, TreeScope_Element, NULL, 0, NULL, 0,
@@ -10071,7 +10073,7 @@ static void test_UiaGetUpdatedCache(void)
         ok(!wcscmp(tree_struct, L""), "tree structure %s\n", debugstr_w(tree_struct));
 
         SysFreeString(tree_struct);
-        VariantClear(&v);
+        VariantClear(&prop_cond.Value);
     }
     else
         win_skip("UIA_OutlineColorPropertyId unavailable, skipping property condition tests for it.\n");
@@ -10490,6 +10492,7 @@ static const struct prov_method_sequence nav_seq9[] = {
     { &Provider, PROV_GET_PROVIDER_OPTIONS, METHOD_OPTIONAL },
     { &Provider_nc, PROV_GET_PROVIDER_OPTIONS, METHOD_OPTIONAL },
     { &Provider_hwnd, PROV_GET_PROVIDER_OPTIONS, METHOD_OPTIONAL },
+    { 0 },
 };
 
 static const struct prov_method_sequence nav_seq10[] = {
@@ -10568,6 +10571,7 @@ static const struct prov_method_sequence nav_seq14[] = {
 static const struct prov_method_sequence nav_seq15[] = {
     NODE_CREATE_SEQ(&Provider_child2_child_child),
     { &Provider_child2_child_child, PROV_GET_PROPERTY_VALUE }, /* UIA_ProviderDescriptionPropertyId */
+    { 0 },
 };
 
 static const struct prov_method_sequence nav_seq16[] = {
@@ -18641,7 +18645,11 @@ static void launch_test_process(const char *name, const char *test_name)
     memset(&startup, 0, sizeof(startup));
     startup.cb = sizeof(startup);
     CreateProcessA(NULL, cmdline, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &proc);
+#ifdef __REACTOS__
     wait_child_process(proc.hProcess);
+#else
+    wait_child_process(&proc);
+#endif
 }
 
 START_TEST(uiautomation)
