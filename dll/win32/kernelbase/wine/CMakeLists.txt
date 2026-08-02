@@ -44,6 +44,7 @@ list(APPEND SOURCE_STATIC
     locale.c
     path.c
     string.c
+    version.c
     )
 
 add_library(kernelbase_static ${SOURCE_STATIC})
@@ -60,4 +61,3 @@ else()
     target_compile_options(kernelbase_static PRIVATE -Wno-unused-variable)
     target_compile_options(kernelbase_static PRIVATE -Wno-unused-function)
 endif()
-
