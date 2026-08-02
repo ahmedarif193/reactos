@@ -186,7 +186,7 @@ FbConsMarkDirtyRect(
 }
 
 BOOLEAN
-FbConsTakeDirtyRect(
+FbConsPeekDirtyRect(
     _Out_ PULONG X,
     _Out_ PULONG Y,
     _Out_ PULONG Width,
@@ -199,6 +199,18 @@ FbConsTakeDirtyRect(
     *Y = VidFbDirtyTop;
     *Width = VidFbDirtyRight - VidFbDirtyLeft;
     *Height = VidFbDirtyBottom - VidFbDirtyTop;
+    return TRUE;
+}
+
+BOOLEAN
+FbConsTakeDirtyRect(
+    _Out_ PULONG X,
+    _Out_ PULONG Y,
+    _Out_ PULONG Width,
+    _Out_ PULONG Height)
+{
+    if (!FbConsPeekDirtyRect(X, Y, Width, Height))
+        return FALSE;
 
     FbConsResetDirtyRect();
     return TRUE;
