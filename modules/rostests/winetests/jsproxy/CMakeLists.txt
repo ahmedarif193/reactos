@@ -1,0 +1,5 @@
+add_executable(jsproxy_winetest jsproxy.c)
+set_module_type(jsproxy_winetest win32cui)
+target_link_libraries(jsproxy_winetest winetestlib)
+add_importlibs(jsproxy_winetest jsproxy msvcrt kernel32)
+add_rostests_file(TARGET jsproxy_winetest)
