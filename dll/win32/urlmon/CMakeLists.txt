@@ -3,8 +3,7 @@ add_definitions(
     -D_URLMON_
     -DENTRY_PREFIX=URLMON_
     -DPROXY_DELEGATION
-    -DWINE_REGISTER_DLL
-    -D_CRT_NON_CONFORMING_SWPRINTFS)
+    -DWINE_REGISTER_DLL)
 
 # PROXY_CLSID_IS contains braces and commas that get shell-expanded on macOS.
 # Define it via a force-included header instead of the command line.
@@ -39,7 +38,8 @@ list(APPEND SOURCE
     umstream.c
     uri.c
     urlmon_main.c
-    usrmarshal.c)
+    usrmarshal.c
+    zone_id.c)
 
 list(APPEND PCH_SKIP_SOURCE
     ${CMAKE_CURRENT_BINARY_DIR}/proxy.dlldata.c
@@ -53,9 +53,8 @@ add_library(urlmon MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/urlmon.def)
 
 set_module_type(urlmon win32dll)
-target_link_libraries(urlmon uuid wine ${PSEH_LIB} oldnames)
+target_link_libraries(urlmon uuid wine crtheap ${PSEH_LIB} oldnames)
 add_delay_importlibs(urlmon advpack)
-add_importlibs(urlmon rpcrt4 propsys ole32 oleaut32 shlwapi shell32 wininet user32 advapi32 kernel32_vista msvcrt kernel32 ntdll)
-add_pch(urlmon precomp.h "${PCH_SKIP_SOURCE}")
+add_importlibs(urlmon rpcrt4 ole32 oleaut32 shlwapi shell32 wininet user32 advapi32 iertutil kernel32_vista msvcrt kernel32 ntdll)
 add_cd_file(TARGET urlmon DESTINATION reactos/system32 FOR all)
 set_wine_module_FIXME(urlmon) # CORE-5743: No ARRAY_SIZE macro

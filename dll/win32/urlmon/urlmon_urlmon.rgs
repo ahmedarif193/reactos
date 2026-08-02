@@ -22,6 +22,11 @@ HKCR
             NumMethods = s 4
             ProxyStubClsid32 = s '{79EAC9F1-BAF9-11CE-8C82-00AA004BA90B}'
         }
+        '{2AD1EDAF-D83D-48B5-9ADF-03DBE19F53BD}' = s 'IAuthenticateEx'
+        {
+            NumMethods = s 5
+            ProxyStubClsid32 = s '{79EAC9F1-BAF9-11CE-8C82-00AA004BA90B}'
+        }
         '{79EAC9D2-BAF9-11CE-8C82-00AA004BA90B}' = s 'IHttpNegotiate'
         {
             NumMethods = s 5
@@ -43,11 +48,6 @@ HKCR
             ProxyStubClsid32 = s '{79EAC9F1-BAF9-11CE-8C82-00AA004BA90B}'
         }
         '{79EAC9D8-BAFA-11CE-8C82-00AA004BA90B}' = s 'IWinInetHttpInfo'
-        {
-            NumMethods = s 5
-            ProxyStubClsid32 = s '{79EAC9F1-BAF9-11CE-8C82-00AA004BA90B}'
-        }
-        '{79EAC9D7-BAFA-11CE-8C82-00AA004BA90B}' = s 'IHttpSecurity'
         {
             NumMethods = s 5
             ProxyStubClsid32 = s '{79EAC9F1-BAF9-11CE-8C82-00AA004BA90B}'
@@ -75,6 +75,11 @@ HKCR
         '{F1E50292-A795-4117-8E09-2B560A72AC60}' = s 'IInternetSecurityManagerEx2'
         {
             NumMethods = s 16
+            ProxyStubClsid32 = s '{79EAC9F1-BAF9-11CE-8C82-00AA004BA90B}'
+        }
+        '{CD45F185-1B21-48E2-967B-EAD743A8914E}' = s 'IZoneIdentifier'
+        {
+            NumMethods = s 6
             ProxyStubClsid32 = s '{79EAC9F1-BAF9-11CE-8C82-00AA004BA90B}'
         }
         '{A39EE748-6A27-4817-A6F2-13914BEF5890}' = s 'IUri'
@@ -133,9 +138,9 @@ HKCR
         {
             InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Apartment' }
         }
-        '{DF2FCE13-25EC-45BB-9D4C-CECD47C2430C}' = s 'CUri'
+        '{0968E258-16C7-4DBA-AA86-462DD61E31A3}' = s 'Persistent Zone Identifier'
         {
-            InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Apartment' }
+            InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Both' }
         }
     }
 }
