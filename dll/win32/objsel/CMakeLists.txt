@@ -2,9 +2,7 @@
 spec2def(objsel.dll objsel.spec)
 
 list(APPEND SOURCE
-    factory.c
-    objsel.c
-    precomp.h)
+    objsel.c)
 
 add_library(objsel MODULE
     ${SOURCE}
@@ -12,8 +10,8 @@ add_library(objsel MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/objsel.def)
 
 set_module_type(objsel win32dll)
-target_link_libraries(objsel uuid wine)
+add_idl_reg_scripts(objsel registry objsel_classes.idl)
+target_link_libraries(objsel uuid wine wine_dll_canunload wine_dll_register)
 add_importlibs(objsel ole32 advapi32 msvcrt kernel32 ntdll)
-add_pch(objsel precomp.h SOURCE)
 add_cd_file(TARGET objsel DESTINATION reactos/system32 FOR all)
 set_wine_module(objsel)
