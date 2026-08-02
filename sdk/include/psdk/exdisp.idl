@@ -64,14 +64,35 @@ interface IWebBrowser : IDispatch
 {
     typedef enum BrowserNavConstants
     {
-        navOpenInNewWindow   = 0x1,
-        navNoHistory         = 0x2,
-        navNoReadFromCache   = 0x4,
-        navNoWriteToCache    = 0x8,
-        navAllowAutosearch   = 0x10,
-        navBrowserBar        = 0x20,
-        navHyperlink         = 0x40,
-        navEnforceRestricted = 0x80
+        navOpenInNewWindow          = 0x00000001,
+        navNoHistory                = 0x00000002,
+        navNoReadFromCache          = 0x00000004,
+        navNoWriteToCache           = 0x00000008,
+        navAllowAutosearch          = 0x00000010,
+        navBrowserBar               = 0x00000020,
+        navHyperlink                = 0x00000040,
+        navEnforceRestricted        = 0x00000080,
+        navNewWindowsManaged        = 0x00000100,
+        navUntrustedForDownload     = 0x00000200,
+        navTrustedForActiveX        = 0x00000400,
+        navOpenInNewTab             = 0x00000800,
+        navOpenInBackgroundTab      = 0x00001000,
+        navKeepWordWheelText        = 0x00002000,
+        navVirtualTab               = 0x00004000,
+        navBlockRedirectsXDomain    = 0x00008000,
+        navOpenNewForegroundTab     = 0x00010000,
+        navTravelLogScreenshot      = 0x00020000,
+        navDeferUnload              = 0x00040000,
+        navSpeculative              = 0x00080000,
+        navSuggestNewWindow         = 0x00100000,
+        navSuggestNewTab            = 0x00200000,
+        navReserved1                = 0x00400000,
+        navHomepageNavigate         = 0x00800000,
+        navRefresh                  = 0x01000000,
+        navHostNavigation           = 0x02000000,
+        navReserved2                = 0x04000000,
+        navReserved3                = 0x08000000,
+        navReserved4                = 0x10000000,
     } BrowserNavConstants;
 
     typedef enum RefreshConstants
@@ -229,7 +250,7 @@ interface IWebBrowserApp : IWebBrowser
     [id(301)] HRESULT ClientToWindow([in,out] int* pcx, [in,out] int* pcy);
     [id(302)] HRESULT PutProperty([in] BSTR Property, [in] VARIANT vtValue);
     [id(303)] HRESULT GetProperty([in] BSTR Property, [out, retval] VARIANT *pvtValue);
-    [id(0), propget] HRESULT Name([out, retval] BSTR* Name);
+    [id(DISPID_VALUE), propget] HRESULT Name([out, retval] BSTR* Name);
     [id(DISPID_HWND), propget] HRESULT HWND([out, retval] SHANDLE_PTR *pHWND);
     [id(400), propget] HRESULT FullName([out, retval] BSTR* FullName);
     [id(401), propget] HRESULT Path([out, retval] BSTR* Path);
@@ -476,6 +497,17 @@ dispinterface DWebBrowserEvents2
             [in] VARIANT *RedirectURL,
             [in] VARIANT *Frame,
             [in] VARIANT *StatusCode);
+
+    [id(DISPID_BEFORESCRIPTEXECUTE)]
+    void BeforeScriptExecute([in] IDispatch *pDispWindow);
+
+    [id(DISPID_WEBWORKERSTARTED)]
+    void WebWorkerStarted(
+            [in] DWORD dwUniqueID,
+            [in] BSTR bstrWorkerLabel);
+
+    [id(DISPID_WEBWORKERFINISHED)]
+    void WebWorkerFinished([in] DWORD dwUniqueID);
 }
 
 [
@@ -581,11 +613,13 @@ interface IShellWindows : IDispatch
 {
     [propget] HRESULT Count([out, retval] long *Count);
 
-    [id(0)] HRESULT Item(
+    [id(DISPID_VALUE)]
+    HRESULT Item(
             [in, optional] VARIANT index,
             [out, retval] IDispatch **Folder);
 
-    [id(-4)] HRESULT _NewEnum([out, retval] IUnknown **ppunk);
+    [id(DISPID_NEWENUM)]
+    HRESULT _NewEnum([out, retval] IUnknown **ppunk);
 
     [hidden] HRESULT Register(
             [in] IDispatch *pid,
@@ -916,7 +950,8 @@ interface ISearches : IDispatch {
             [in, optional] VARIANT index,
             [out, retval] ISearch **ppid);
 
-    [id(-4)] HRESULT _NewEnum([out, retval] IUnknown **ppunk);
+    [id(DISPID_NEWENUM)]
+    HRESULT _NewEnum([out, retval] IUnknown **ppunk);
 }
 
 [
@@ -1043,6 +1078,7 @@ coclass SearchAssistantOC {
     [default, source] dispinterface _SearchAssistantEvents;
 }
 
+#ifdef __REACTOS__
 [
     uuid(60890160-69f0-11d1-b758-00a0c90564fe),
     hidden
@@ -1054,5 +1090,6 @@ dispinterface DSearchCommandEvents {
     [id(DISPID_SEARCHCOMPLETE)] void SearchComplete();
     [id(DISPID_SEARCHABORT)]    void SearchAbort();
 }
+#endif
 
 } /* library */
