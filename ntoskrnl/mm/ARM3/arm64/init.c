@@ -292,6 +292,84 @@ MiArm64MapEarlyDeviceRanges(
     }
 }
 
+CODE_SEG("INIT")
+VOID
+NTAPI
+MiArm64UnmapEarlyDeviceAliases(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
+{
+    PARM64_LOADER_BLOCK Arm64Block;
+    ULONG Count;
+    BOOLEAN UnmappedAny = FALSE;
+
+    Arm64Block = &LoaderBlock->u.Arm64;
+    Count = Arm64Block->EarlyDeviceRangeCount;
+    if (Count > ARM64_LOADER_MAX_EARLY_DEVICE_RANGES)
+    {
+        Count = ARM64_LOADER_MAX_EARLY_DEVICE_RANGES;
+    }
+
+    for (ULONG Index = 0; Index < Count; ++Index)
+    {
+        PARM64_LOADER_EARLY_DEVICE_RANGE Range;
+        ULONG_PTR StartVa, EndVa, Va;
+        PFN_NUMBER PageCount;
+        PMMPFN TablePfnEntry = NULL;
+        KIRQL OldIrql;
+
+        Range = &Arm64Block->EarlyDeviceRanges[Index];
+        if ((Range->BaseAddress == 0) || (Range->Length == 0))
+        {
+            continue;
+        }
+
+        StartVa = ALIGN_DOWN_BY((ULONG_PTR)Range->BaseAddress, PAGE_SIZE);
+        EndVa = ALIGN_DOWN_BY((ULONG_PTR)Range->BaseAddress +
+                             (ULONG_PTR)Range->Length - 1,
+                             PAGE_SIZE);
+        PageCount = ((EndVa - StartVa) >> PAGE_SHIFT) + 1;
+
+        /*
+         * These temporary VA==PA device mappings let Phase 0 reach MMIO.
+         * HAL Phase 1 has replaced them with kernel-VA mappings.  Remove
+         * only the original leaf: low user views (notably 0x40000000 on
+         * RPi3) must now be free to acquire their normal process PTEs.
+         */
+        OldIrql = MiAcquirePfnLock();
+        Va = StartVa;
+        for (PFN_NUMBER Page = 0; Page < PageCount; ++Page, Va += PAGE_SIZE)
+        {
+            PMMPTE PointerPte = MiAddressToPte((PVOID)Va);
+            PFN_NUMBER ExpectedPfn = (PFN_NUMBER)(Va >> PAGE_SHIFT);
+
+            if ((Page == 0) ||
+                ((Va & (((ULONG_PTR)PTE_PER_PAGE << PAGE_SHIFT) - 1)) == 0))
+            {
+                TablePfnEntry = MiGetPfnEntry(PFN_FROM_PDE(MiAddressToPde((PVOID)Va)));
+            }
+
+            if ((TablePfnEntry != NULL) &&
+                (PointerPte->u.Hard.Valid != 0) &&
+                (PointerPte->u.Hard.PageFrameNumber == ExpectedPfn) &&
+                (TablePfnEntry->OriginalPte.u.Soft.UsedPageTableEntries != 0) &&
+                (TablePfnEntry->u2.ShareCount > 1))
+            {
+                PointerPte->u.Long = 0;
+                MiArm64CleanEntryToPoC((volatile UINT64 *)PointerPte);
+                TablePfnEntry->OriginalPte.u.Soft.UsedPageTableEntries--;
+                TablePfnEntry->u2.ShareCount--;
+                UnmappedAny = TRUE;
+            }
+        }
+        MiReleasePfnLock(OldIrql);
+    }
+
+    if (UnmappedAny)
+    {
+        MiArm64FlushTranslationChanges();
+    }
+}
+
 static
 VOID
 MiArm64MapKseg0IdentityRangeWithAttr(
@@ -2394,4 +2472,3 @@ MiBuildSystemPteSpace(VOID)
     MmDebugPte = MiReserveSystemPtes(1, SystemPteSpace);
     MiDebugMapping = MiPteToAddress(MmDebugPte);
 }
-
