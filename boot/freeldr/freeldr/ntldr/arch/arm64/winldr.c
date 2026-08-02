@@ -452,6 +452,36 @@ Arm64PopulateEarlyDeviceRanges(PLOADER_PARAMETER_BLOCK LoaderBlock)
                              LoaderBlock->u.Arm64.EarlyUartAddress,
                              PAGE_SIZE);
 
+    /*
+     * BCM2837 (Raspberry Pi 3): the HAL drives the ARMCTRL interrupt
+     * controller and the QA7 ARM-local block through the identity window
+     * during Phase 0, but the Pi firmware describes neither in the EFI
+     * memory map nor the MADT (its GICC entries are Windows-compat decoys
+     * covering only the QA7 block).  Gate on the same FADT identification
+     * the HAL's Bcm2837InterruptProbe uses so the generic ARM64 path gains
+     * no new ranges.
+     */
+    {
+        PFADT Fadt = Arm64LocateFadt();
+
+        if (Fadt &&
+            !memcmp(Fadt->Header.OEMID,
+                    BCM2837_ACPI_OEM_ID,
+                    sizeof(BCM2837_ACPI_OEM_ID) - 1) &&
+            !memcmp(Fadt->Header.OEMTableID,
+                    BCM2837_ACPI_OEM_TABLE_ID,
+                    sizeof(BCM2837_ACPI_OEM_TABLE_ID) - 1))
+        {
+            /* SoC peripheral window (ARMCTRL, mailbox, SDHOST, UARTs). */
+            Arm64AddEarlyDeviceRange(LoaderBlock,
+                                     BCM2837_PERIPHERAL_BASE,
+                                     BCM2837_PERIPHERAL_LENGTH);
+            /* QA7 ARM-local block (per-core timers, mailboxes, routing). */
+            Arm64AddEarlyDeviceRange(LoaderBlock, BCM2837_LOCAL_BASE, PAGE_SIZE);
+            TRACE("ARM64: Added BCM2837 early MMIO ranges\n");
+        }
+    }
+
     Madt = (PARM64_ACPI_MADT)Arm64LocateAcpiTable(APIC_SIGNATURE,
                                                   sizeof(*Madt));
     if (!Madt)
