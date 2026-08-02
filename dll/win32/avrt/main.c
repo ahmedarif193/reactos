@@ -18,7 +18,9 @@
  */
 
 #include <stdarg.h>
+#ifdef __REACTOS__
 #include <stdlib.h>
+#endif
 
 #include "windef.h"
 #include "winbase.h"
