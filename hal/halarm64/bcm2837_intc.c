@@ -242,6 +242,8 @@ Bcm2837AcknowledgeInterrupt(VOID)
 {
     ULONG Core = Bcm2837CurrentCore();
     UCHAR Pmr = Bcm2837PmrShadow[Core];
+    UCHAR BestPriority = Pmr;
+    ULONG BestIntId = BCM2837_SPURIOUS_INTID;
     ULONG Source;
     ULONG Row;
     ULONG Mailbox;
@@ -250,17 +252,24 @@ Bcm2837AcknowledgeInterrupt(VOID)
     if (Source == 0)
         return BCM2837_SPURIOUS_INTID;
 
-    /* Mailboxes first: they back the four SGIs at their normal IRQLs. */
+    /* Find the highest-priority eligible source across every pending class. */
     for (Mailbox = 0; Mailbox < BCM2837_SGI_COUNT; Mailbox++)
     {
+        UCHAR Priority;
+
         if (!(Source & (1u << (BCM2837_SRC_MAILBOX0 + Mailbox))))
             continue;
 
-        if (Bcm2837SgiPriority[Mailbox] < Pmr)
+        Priority = Bcm2837SgiPriority[Mailbox];
+        if (Priority < Pmr)
         {
-            ULONG Value = Bcm2837LocalRead(BCM2837_LOCAL_MAILBOX_RDCLR(Core, Mailbox));
-            Bcm2837LocalWrite(BCM2837_LOCAL_MAILBOX_RDCLR(Core, Mailbox), Value);
-            return Mailbox;
+            if (Priority < BestPriority ||
+                (Priority == BestPriority && Mailbox < BestIntId))
+            {
+                BestPriority = Priority;
+                BestIntId = Mailbox;
+            }
+            continue;
         }
 
         /* Defer: gate the mailbox until the IRQL drops. */
@@ -274,16 +283,22 @@ Bcm2837AcknowledgeInterrupt(VOID)
     for (Row = 0; Row < 4; Row++)
     {
         ULONG IntId;
+        UCHAR Priority;
 
         if (!(Source & (1u << Row)))
             continue;
 
         IntId = Bcm2837RowToIntId[Row];
-        if (Bcm2837TimerRowPriority[Row] < Pmr)
+        Priority = Bcm2837TimerRowPriority[Row];
+        if (Priority < Pmr)
         {
-            /* Silence the level output for the duration of the ISR. */
-            Bcm2837SetTimerImask(IntId, TRUE);
-            return IntId;
+            if (Priority < BestPriority ||
+                (Priority == BestPriority && IntId < BestIntId))
+            {
+                BestPriority = Priority;
+                BestIntId = IntId;
+            }
+            continue;
         }
 
         Bcm2837LocalWrite(BCM2837_LOCAL_TIMER_INT_CONTROL(Core),
@@ -296,8 +311,6 @@ Bcm2837AcknowledgeInterrupt(VOID)
     if (Source & (1u << BCM2837_SRC_GPU))
     {
         ULONG Basic = Bcm2837ArmctrlRead(BCM2837_ARMCTRL_PENDING_BASIC);
-        ULONG BestIntId = BCM2837_SPURIOUS_INTID;
-        UCHAR BestPriority = Pmr;
         ULONG Bank;
 
         for (Bank = 0; Bank < 2; Bank++)
@@ -325,11 +338,13 @@ Bcm2837AcknowledgeInterrupt(VOID)
 
                 if (Priority < Pmr)
                 {
+                    ULONG IntId = BCM2837_INTID_GPU_BASE + Irq;
+
                     if (Priority < BestPriority ||
-                        BestIntId == BCM2837_SPURIOUS_INTID)
+                        (Priority == BestPriority && IntId < BestIntId))
                     {
                         BestPriority = Priority;
-                        BestIntId = BCM2837_INTID_GPU_BASE + Irq;
+                        BestIntId = IntId;
                     }
                 }
                 else
@@ -356,11 +371,13 @@ Bcm2837AcknowledgeInterrupt(VOID)
 
                 if (Priority < Pmr)
                 {
+                    ULONG IntId = BCM2837_INTID_BASIC_BASE + Irq;
+
                     if (Priority < BestPriority ||
-                        BestIntId == BCM2837_SPURIOUS_INTID)
+                        (Priority == BestPriority && IntId < BestIntId))
                     {
                         BestPriority = Priority;
-                        BestIntId = BCM2837_INTID_BASIC_BASE + Irq;
+                        BestIntId = IntId;
                     }
                 }
                 else
@@ -370,36 +387,41 @@ Bcm2837AcknowledgeInterrupt(VOID)
                 }
             }
         }
+    }
 
-        if (BestIntId != BCM2837_SPURIOUS_INTID)
+    if (BestIntId != BCM2837_SPURIOUS_INTID)
+    {
+        if (BestIntId < BCM2837_SGI_COUNT)
         {
-            /*
-             * Mask the delivered line until the IRQL drops back below its
-             * priority: the level output stays asserted until the ISR
-             * services the device, and the reopen pass in SetPriorityMask
-             * (run by KeLowerIrql after EOI) lifts the mask again.  This
-             * also avoids one defer round-trip per delivered interrupt.
-             */
-            if (BestIntId >= BCM2837_INTID_BASIC_BASE)
-            {
-                ULONG Bit = 1u << (BestIntId - BCM2837_INTID_BASIC_BASE);
-
-                Bcm2837ArmctrlWrite(BCM2837_ARMCTRL_DISABLE_BASIC, Bit);
-                InterlockedOr(&Bcm2837DeferredBasic, (LONG)Bit);
-            }
-            else
-            {
-                ULONG Irq = BestIntId - BCM2837_INTID_GPU_BASE;
-                ULONG Bit = 1u << (Irq % 32);
-
-                Bcm2837ArmctrlWrite((Irq / 32) ? BCM2837_ARMCTRL_DISABLE_2
-                                               : BCM2837_ARMCTRL_DISABLE_1,
-                                    Bit);
-                InterlockedOr(&Bcm2837DeferredGpu[Irq / 32], (LONG)Bit);
-            }
-
-            return BestIntId;
+            ULONG Value = Bcm2837LocalRead(BCM2837_LOCAL_MAILBOX_RDCLR(Core,
+                                                                       BestIntId));
+            Bcm2837LocalWrite(BCM2837_LOCAL_MAILBOX_RDCLR(Core, BestIntId),
+                              Value);
         }
+        else if (Bcm2837IntIdToTimerRow(BestIntId) >= 0)
+        {
+            /* Silence the level output for the duration of the ISR. */
+            Bcm2837SetTimerImask(BestIntId, TRUE);
+        }
+        else if (BestIntId >= BCM2837_INTID_BASIC_BASE)
+        {
+            ULONG Bit = 1u << (BestIntId - BCM2837_INTID_BASIC_BASE);
+
+            Bcm2837ArmctrlWrite(BCM2837_ARMCTRL_DISABLE_BASIC, Bit);
+            InterlockedOr(&Bcm2837DeferredBasic, (LONG)Bit);
+        }
+        else
+        {
+            ULONG Irq = BestIntId - BCM2837_INTID_GPU_BASE;
+            ULONG Bit = 1u << (Irq % 32);
+
+            Bcm2837ArmctrlWrite((Irq / 32) ? BCM2837_ARMCTRL_DISABLE_2
+                                           : BCM2837_ARMCTRL_DISABLE_1,
+                                Bit);
+            InterlockedOr(&Bcm2837DeferredGpu[Irq / 32], (LONG)Bit);
+        }
+
+        return BestIntId;
     }
 
     /* Stray QA7 sources: quiesce them so they cannot storm. */
