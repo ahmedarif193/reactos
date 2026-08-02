@@ -301,10 +301,17 @@ RamDiskWritableAllocationLimit(VOID)
 {
     ULONGLONG AddressLimit;
     ULONGLONG FreeBytes;
+    PFN_NUMBER EligiblePages;
     PFN_NUMBER RunPages;
 
     AddressLimit = RamDiskWritableAddressLimit();
-    FreeBytes = (ULONGLONG)FreePagesInLookupTable << MM_PAGE_SHIFT;
+    EligiblePages = (PFN_NUMBER)(AddressLimit >> MM_PAGE_SHIFT);
+    if (EligiblePages > TotalPagesInLookupTable)
+        EligiblePages = TotalPagesInLookupTable;
+
+    /* High memory cannot fund the reserve left for later low allocations. */
+    FreeBytes = (ULONGLONG)MmCountFreePagesInLookupTable(PageLookupTableAddress,
+                                                        EligiblePages) << MM_PAGE_SHIFT;
 
     if (FreeBytes <= RAMDISK_SAFETY_SLACK)
         return 0;
@@ -319,7 +326,7 @@ RamDiskWritableAllocationLimit(VOID)
      */
     RunPages = MmFindLargestFreeRunBeforePage(PageLookupTableAddress,
                                               TotalPagesInLookupTable,
-                                              (PFN_NUMBER)(AddressLimit >> MM_PAGE_SHIFT));
+                                              EligiblePages);
 
     return min(FreeBytes, (ULONGLONG)RunPages << MM_PAGE_SHIFT);
 }
@@ -1924,7 +1931,7 @@ RamDiskBuildWritableImage(
         WARN("RamDiskBuildWritableImage: payload %llu exceeds free-memory budget %llu\n",
              MinimumPayloadSize,
              AllocationLimit);
-        RamDiskReportError("RAM disk contents exceed available memory.", FALSE);
+        RamDiskReportError("RAM disk contents exceed available memory.", OptionalRamDisk);
         return FALSE;
     }
 
@@ -1938,7 +1945,7 @@ RamDiskBuildWritableImage(
 
     if (RequiredSize == 0)
     {
-        RamDiskReportError("No memory is available for the RAM disk.", FALSE);
+        RamDiskReportError("No memory is available for the RAM disk.", OptionalRamDisk);
         return FALSE;
     }
 
@@ -2879,8 +2886,12 @@ RamDiskInitialize(
                         else
                         {
                             RamDiskCloseIsoSource(&StreamSource);
-                            RamDiskReportError("RAM disk contents do not fit in available memory or the source is not a supported ISO.", FALSE);
-                            return ENOMEM;
+                            RamDiskReportError("Failed to expand LiveCD into writable RAM. "
+                                               "Continuing with read-only media.",
+                                               OptionalRamDisk);
+                            RamDiskRequestedSize = 0;
+                            TRACE("RamDiskInitialize: streaming writable expansion failed; "
+                                  "reloading read-only media\n");
                         }
                     }
                 }
