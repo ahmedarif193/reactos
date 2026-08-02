@@ -62,8 +62,6 @@ static ULONGLONG Bcm2837ArmctrlBase;
 /* ARMCTRL output routing target (GPU_INT_ROUTING), always core 0. */
 #define BCM2837_GPU_ROUTING_CORE    0
 
-/* All SGIs share one GIC-style priority, mirroring the GIC SGI setup. */
-#define BCM2837_SGI_PRIORITY        0x10
 #define BCM2837_DEFAULT_PRIORITY    0xA0
 #define BCM2837_SPURIOUS_INTID      1023
 
@@ -85,6 +83,13 @@ static volatile LONG Bcm2837BasicEnabled;
 static volatile LONG Bcm2837DeferredBasic;
 
 /* GIC-style priority byte per source (lower = more urgent). */
+static UCHAR Bcm2837SgiPriority[BCM2837_SGI_COUNT] =
+{
+    HAL_ARM64_SGI_IPI_PRIORITY,
+    HAL_ARM64_SGI_APC_PRIORITY,
+    HAL_ARM64_SGI_DPC_PRIORITY,
+    HAL_ARM64_SGI_FREEZE_PRIORITY
+};
 static UCHAR Bcm2837GpuPriority[BCM2837_GPU_IRQ_COUNT];
 static UCHAR Bcm2837BasicPriority[BCM2837_BASIC_IRQ_COUNT];
 static UCHAR Bcm2837TimerRowPriority[4];
@@ -98,7 +103,7 @@ static UCHAR Bcm2837CoreForCpu[MAXIMUM_PROCESSORS];
  */
 static const UCHAR Bcm2837IrqlToPmr[HIGH_LEVEL + 1] =
 {
-    0xFF, 0xFF, 0xFF,               /* PASSIVE/APC/DISPATCH */
+    0xFF, 0xE0, 0xD0,               /* PASSIVE/APC/DISPATCH */
     0xC0, 0xB0, 0xA0, 0x90, 0x80,   /* device IRQLs 3-7 */
     0x70, 0x60, 0x50, 0x40, 0x30,   /* device IRQLs 8-12 */
     0x20,                           /* CLOCK_LEVEL */
@@ -245,16 +250,13 @@ Bcm2837AcknowledgeInterrupt(VOID)
     if (Source == 0)
         return BCM2837_SPURIOUS_INTID;
 
-    /*
-     * Mailboxes first: they back the SGIs (IPI at priority 0x10), which
-     * outrank everything except HIGH_LEVEL.
-     */
+    /* Mailboxes first: they back the four SGIs at their normal IRQLs. */
     for (Mailbox = 0; Mailbox < BCM2837_SGI_COUNT; Mailbox++)
     {
         if (!(Source & (1u << (BCM2837_SRC_MAILBOX0 + Mailbox))))
             continue;
 
-        if (BCM2837_SGI_PRIORITY < Pmr)
+        if (Bcm2837SgiPriority[Mailbox] < Pmr)
         {
             ULONG Value = Bcm2837LocalRead(BCM2837_LOCAL_MAILBOX_RDCLR(Core, Mailbox));
             Bcm2837LocalWrite(BCM2837_LOCAL_MAILBOX_RDCLR(Core, Mailbox), Value);
@@ -551,6 +553,12 @@ Bcm2837SetInterruptPriority(
 {
     LONG Row;
 
+    if (IntId < BCM2837_SGI_COUNT)
+    {
+        Bcm2837SgiPriority[IntId] = (UCHAR)Priority;
+        return;
+    }
+
     Row = Bcm2837IntIdToTimerRow(IntId);
     if (Row >= 0)
     {
@@ -571,7 +579,6 @@ Bcm2837SetInterruptPriority(
         return;
     }
 
-    /* SGIs are fixed at BCM2837_SGI_PRIORITY. */
 }
 
 static
@@ -610,6 +617,7 @@ Bcm2837SetPriorityMask(
     if (Bcm2837DeferredLocal[Core] != 0)
     {
         ULONG Deferred = Bcm2837DeferredLocal[Core];
+        ULONG MailboxEnable = 0;
         ULONG Row;
         ULONG Mailbox;
 
@@ -624,18 +632,21 @@ Bcm2837SetPriorityMask(
             }
         }
 
-        if (BCM2837_SGI_PRIORITY < Pmr)
+        for (Mailbox = 0; Mailbox < BCM2837_SGI_COUNT; Mailbox++)
         {
-            for (Mailbox = 0; Mailbox < BCM2837_SGI_COUNT; Mailbox++)
+            if ((Deferred & (1u << (BCM2837_SRC_MAILBOX0 + Mailbox))) &&
+                Bcm2837SgiPriority[Mailbox] < Pmr)
             {
-                if (Deferred & (1u << (BCM2837_SRC_MAILBOX0 + Mailbox)))
-                {
-                    Bcm2837DeferredLocal[Core] &= ~(1u << (BCM2837_SRC_MAILBOX0 + Mailbox));
-                    Bcm2837LocalWrite(BCM2837_LOCAL_MAILBOX_INT_CONTROL(Core),
-                                      Bcm2837LocalRead(BCM2837_LOCAL_MAILBOX_INT_CONTROL(Core)) |
-                                      (1u << Mailbox));
-                }
+                Bcm2837DeferredLocal[Core] &= ~(1u << (BCM2837_SRC_MAILBOX0 + Mailbox));
+                MailboxEnable |= (1u << Mailbox);
             }
+        }
+
+        if (MailboxEnable != 0)
+        {
+            Bcm2837LocalWrite(BCM2837_LOCAL_MAILBOX_INT_CONTROL(Core),
+                              Bcm2837LocalRead(BCM2837_LOCAL_MAILBOX_INT_CONTROL(Core)) |
+                              MailboxEnable);
         }
     }
 

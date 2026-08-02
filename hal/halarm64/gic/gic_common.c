@@ -514,6 +514,14 @@ HalpArm64ClearSelfSgi(
     if (SgiId > 15)
         return;
 
+    /*
+     * Platform backends clear their SGI latch when the interrupt is
+     * acknowledged; there is no GIC pending register to poke, and a
+     * spurious redelivery is benign (the handlers check for work).
+     */
+    if (HalpArm64InterruptController)
+        return;
+
     if (HalpGicUseSysRegs)
     {
         ULONG Cpu = KeGetCurrentProcessorNumber();
@@ -547,6 +555,20 @@ VOID
 HalpArm64RependInterrupt(
     _In_ ULONG IntId)
 {
+    if (HalpArm64InterruptController)
+    {
+        /*
+         * Platform backends have no pending-register file to poke: SGIs are
+         * re-raised through the backend's own delivery mechanism, and
+         * blocked level-triggered device sources stay asserted at the
+         * controller, which the backend must redeliver once the priority
+         * mask rises (see the AcknowledgeInterrupt contract in halext.h).
+         */
+        if (IntId < 16)
+            HalpArm64SendSgiSelf(IntId);
+        return;
+    }
+
     if (IntId < 16)
     {
         if (HalpGicUseSysRegs)
