@@ -165,6 +165,13 @@ VOID
 FbConsResetDirtyRect(VOID);
 
 BOOLEAN
+FbConsPeekDirtyRect(
+    _Out_ PULONG X,
+    _Out_ PULONG Y,
+    _Out_ PULONG Width,
+    _Out_ PULONG Height);
+
+BOOLEAN
 FbConsTakeDirtyRect(
     _Out_ PULONG X,
     _Out_ PULONG Y,
