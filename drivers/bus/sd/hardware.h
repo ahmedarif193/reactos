@@ -21,6 +21,9 @@ typedef struct _SDBUS_HARDWARE_OPS
                               _In_ BOOLEAN To18);
     NTSTATUS (*QueryUhsModes)(_In_ PFDO_EXTENSION FdoExtension,
                               _Out_ PULONG Modes);
+    VOID (*GetSlotCapabilities)(_In_ PFDO_EXTENSION FdoExtension,
+                                _Inout_ PULONG Capabilities,
+                                _Inout_ PULONG Capabilities2);
 } SDBUS_HARDWARE_OPS, *PSDBUS_HARDWARE_OPS;
 
 typedef struct _SDBUS_HARDWARE_EXTENSION
@@ -33,6 +36,12 @@ SdBusHardwareMapResources(
     _In_ PFDO_EXTENSION FdoExtension,
     _In_ PHYSICAL_ADDRESS HostPhysicalAddress,
     _In_ PCM_PARTIAL_RESOURCE_LIST PartialList);
+
+VOID
+SdBusHardwareGetSlotCapabilities(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _Inout_ PULONG Capabilities,
+    _Inout_ PULONG Capabilities2);
 
 VOID
 SdBusHardwareRelease(
