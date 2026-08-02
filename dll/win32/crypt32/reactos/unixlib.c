@@ -180,7 +180,7 @@ LoadCertificateFromStore(
 
 // Note: this function is not thread-safe! It is called under a lock in crypt32.
 static
-int
+NTSTATUS
 EnumerateRootCertificates(
     PVOID pvBuffer,
     DWORD cbBufferSize,
@@ -225,13 +225,13 @@ EnumerateRootCertificates(
             {
                 /* Successfully retrieved a certificate */
                 dwCertIndex++;
-                return 0;
+                return STATUS_SUCCESS;
             }
 
             if (ret == SEC_E_BUFFER_TOO_SMALL)
             {
-                /* Buffer too small, return required size, but don't increment index! */
-                return ENOBUFS;
+                /* Return the required size without incrementing the index. */
+                return STATUS_SUCCESS;
             }
 
             if (ret == ERROR_NO_MORE_ITEMS)
@@ -253,10 +253,10 @@ EnumerateRootCertificates(
     hStoreKey = NULL;
     dwStoreIndex = 0;
     dwCertIndex = 0;
-    return ENOENT;
+    return STATUS_NO_MORE_ENTRIES;
 }
 
-int __reactos_call_unix_enum_root_certs(void* Args)
+NTSTATUS __reactos_call_unix_enum_root_certs(void* Args)
 {
     struct enum_root_certs_params* params = (struct enum_root_certs_params*)Args;
     return EnumerateRootCertificates(params->buffer,
@@ -265,50 +265,54 @@ int __reactos_call_unix_enum_root_certs(void* Args)
 }
 
 static
-int
+NTSTATUS
 OpenCertStore(
     CRYPT_DATA_BLOB *pfx,
     const WCHAR *password,
-    cert_store_data_t *data_ret)
+    cert_store_data_t *data_ret,
+    unsigned int *key_count_ret)
 {
     UNIMPLEMENTED;
-    return -1;
+    *data_ret = 0;
+    *key_count_ret = 0;
+    return STATUS_NOT_IMPLEMENTED;
 }
 
-int __reactos_call_unix_open_cert_store(void* Args)
+NTSTATUS __reactos_call_unix_open_cert_store(void* Args)
 {
     struct open_cert_store_params* params = (struct open_cert_store_params*)Args;
     return OpenCertStore(params->pfx,
                          params->password,
-                         params->data_ret);
+                         params->data_ret,
+                         params->key_count_ret);
 }
 
 static
-int
+NTSTATUS
 CloseCertStore(cert_store_data_t data)
 {
     UNIMPLEMENTED;
-    return -1;
+    return STATUS_NOT_IMPLEMENTED;
 }
 
-int __reactos_call_unix_close_cert_store(void* Args)
+NTSTATUS __reactos_call_unix_close_cert_store(void* Args)
 {
     struct close_cert_store_params* params = (struct close_cert_store_params*)Args;
     return CloseCertStore(params->data);
 }
 
 static
-int
+NTSTATUS
 ImportStoreKey(
     cert_store_data_t data,
     void *buf,
     DWORD *buf_size)
 {
     UNIMPLEMENTED;
-    return -1;
+    return STATUS_NOT_IMPLEMENTED;
 }
 
-int __reactos_call_unix_import_store_key(void* Args)
+NTSTATUS __reactos_call_unix_import_store_key(void* Args)
 {
     struct import_store_key_params* params = (struct import_store_key_params*)Args;
     return ImportStoreKey(params->data,
@@ -317,7 +321,7 @@ int __reactos_call_unix_import_store_key(void* Args)
 }
 
 static
-int
+NTSTATUS
 ImportStoreCert(
     cert_store_data_t data,
     unsigned int index,
@@ -325,14 +329,20 @@ ImportStoreCert(
     DWORD *buf_size)
 {
     UNIMPLEMENTED;
-    return -1;
+    return STATUS_NOT_IMPLEMENTED;
 }
 
-int __reactos_call_unix_import_store_cert(void* Args)
+NTSTATUS __reactos_call_unix_import_store_cert(void* Args)
 {
     struct import_store_cert_params* params = (struct import_store_cert_params*)Args;
     return ImportStoreCert(params->data,
                            params->index,
                            params->buf,
                            params->buf_size);
+}
+
+NTSTATUS __reactos_call_unix_export_cert_store(void* Args)
+{
+    UNIMPLEMENTED;
+    return STATUS_NOT_IMPLEMENTED;
 }
