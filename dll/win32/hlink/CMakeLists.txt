@@ -17,9 +17,8 @@ add_library(hlink MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/hlink.def)
 
 set_module_type(hlink win32dll)
-target_link_libraries(hlink uuid wine oldnames)
+target_link_libraries(hlink uuid wine wine_dll_register wine_dll_canunload oldnames)
 add_delay_importlibs(hlink urlmon)
 add_importlibs(hlink shell32 ole32 advapi32 msvcrt kernel32 ntdll)
-add_pch(hlink precomp.h "${PCH_SKIP_SOURCE}")
 add_cd_file(TARGET hlink DESTINATION reactos/system32 FOR all)
 set_wine_module_FIXME(hlink) # CORE-5743: No ARRAY_SIZE and CONST_VTABLE
