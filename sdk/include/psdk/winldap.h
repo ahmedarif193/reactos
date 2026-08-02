@@ -18,7 +18,7 @@
 #ifndef _WINLDAP_H
 #define _WINLDAP_H
 
-#ifndef _SCHANNEL_H
+#ifndef __SCHANNEL_H__
 #include <schannel.h>
 #endif
 
