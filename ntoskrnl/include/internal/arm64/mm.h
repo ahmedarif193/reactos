@@ -265,6 +265,11 @@ VOID
 MiArm64MapKseg0Page(
     _In_ PFN_NUMBER PageFrameNumber);
 
+VOID
+NTAPI
+MiArm64UnmapEarlyDeviceAliases(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock);
+
 _Must_inspect_result_
 BOOLEAN
 MiArm64FillSystemPageDirectory(

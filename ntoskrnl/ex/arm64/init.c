@@ -94,6 +94,9 @@ ExArchPostHalInitSystemPhase1(
 {
     KIRQL CurrentIrql;
 
+    /* HAL has moved interrupt MMIO to kernel VAs; retire its low aliases. */
+    MiArm64UnmapEarlyDeviceAliases(KeLoaderBlock);
+
     /*
      * From this point the MM bootstrap mappings are in place and the timer
      * PPI has been re-enabled, so IRQL transitions may use HAL's GIC PMR path.
