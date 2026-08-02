@@ -15,5 +15,6 @@
     CREATE_ALIAS hypot, _hypot
     CREATE_ALIAS logb, _logb
     CREATE_ALIAS nextafter, _nextafter
+    CREATE_ALIAS wcstoull, _wcstoui64
 
     END

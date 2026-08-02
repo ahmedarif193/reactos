@@ -1,6 +1,4 @@
 
-add_definitions(-DUSE_WINE_TODOS)
-
 list(APPEND SOURCE
     notification.c
     url.c
