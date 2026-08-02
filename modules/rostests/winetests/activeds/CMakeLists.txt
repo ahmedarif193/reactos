@@ -5,7 +5,7 @@ list(APPEND SOURCE
 
 add_executable(activeds_winetest ${SOURCE})
 
-target_compile_definitions(activeds_winetest PRIVATE STANDALONE USE_WINE_TODOS)
+target_compile_definitions(activeds_winetest PRIVATE STANDALONE)
 
 #if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
 #    target_compile_options(activeds_winetest PRIVATE -Wno-format-overflow)
