@@ -165,16 +165,14 @@ static void test_ShortcutFolder(void) {
     CLSID clsid;
     const CLSID CLSID_WineTest = 
         { 0x9b352ebf, 0x2765, 0x45c1, { 0xb4, 0xc6, 0x85, 0xcc, 0x7f, 0x7a, 0xbc, 0x64 } };
-    WCHAR wszWineTestFolder[] = {
-        ':',':','{','9','B','3','5','2','E','B','F','-','2','7','6','5','-','4','5','C','1','-',
-        'B','4','C','6','-','8','5','C','C','7','F','7','A','B','C','6','4','}',0 };
+    static WCHAR wszWineTestFolder[] = L"::{9B352EBF-2765-45C1-B4C6-85CC7F7ABC64}";
 
     /* First, we register all the necessary registry keys/values for our 'WineTest'
      * shell object. */
     register_keys(HKEY_CLASSES_ROOT, HKEY_CLASSES_ROOT_keys, 1);
 
     hr = SHGetDesktopFolder(&pDesktopFolder);
-    ok (SUCCEEDED(hr), "SHGetDesktopFolder failed! hr = %08x\n", hr);
+    ok (SUCCEEDED(hr), "SHGetDesktopFolder failed! hr = %08lx\n", hr);
     if (FAILED(hr)) goto cleanup;
 
     /* Convert the wszWineTestFolder string to an ITEMIDLIST. */
@@ -183,7 +181,7 @@ static void test_ShortcutFolder(void) {
     todo_wine
     {
         ok (hr == HRESULT_FROM_WIN32(ERROR_INVALID_PARAMETER),
-            "Expected %08x, got %08x\n", HRESULT_FROM_WIN32(ERROR_INVALID_PARAMETER), hr);
+            "Expected %08lx, got %08lx\n", HRESULT_FROM_WIN32(ERROR_INVALID_PARAMETER), hr);
     }
     if (FAILED(hr)) {
         IShellFolder_Release(pDesktopFolder);
@@ -198,22 +196,22 @@ static void test_ShortcutFolder(void) {
                                    (LPVOID*)&pWineTestFolder);
     IShellFolder_Release(pDesktopFolder);
     ILFree(pidlWineTestFolder);
-    ok (SUCCEEDED(hr), "IShellFolder::BindToObject(WineTestFolder) failed! hr = %08x\n", hr);
+    ok (SUCCEEDED(hr), "IShellFolder::BindToObject(WineTestFolder) failed! hr = %08lx\n", hr);
     if (FAILED(hr)) goto cleanup;
 
     hr = IShellFolder_QueryInterface(pWineTestFolder, &IID_IPersistFolder3, (LPVOID*)&pWineTestPersistFolder);
-    ok (SUCCEEDED(hr), "IShellFolder::QueryInterface(IPersistFolder3) failed! hr = %08x\n", hr);
+    ok (SUCCEEDED(hr), "IShellFolder::QueryInterface(IPersistFolder3) failed! hr = %08lx\n", hr);
     IShellFolder_Release(pWineTestFolder);
     if (FAILED(hr)) goto cleanup;
 
     /* The resulting folder object has the FolderShortcut CLSID, instead of its own. */
     hr = IPersistFolder3_GetClassID(pWineTestPersistFolder, &clsid);
-    ok (SUCCEEDED(hr), "IPersist::GetClassID failed! hr = %08x\n", hr);
+    ok (SUCCEEDED(hr), "IPersist::GetClassID failed! hr = %08lx\n", hr);
     ok (IsEqualCLSID(&CLSID_FolderShortcut, &clsid), "GetClassId returned wrong CLSID!\n"); 
   
     pidlCurFolder = (LPITEMIDLIST)0xdeadbeef;
     hr = IPersistFolder3_GetCurFolder(pWineTestPersistFolder, &pidlCurFolder);
-    ok (SUCCEEDED(hr), "IPersistFolder3::GetCurFolder failed! hr = %08x\n", hr);
+    ok (SUCCEEDED(hr), "IPersistFolder3::GetCurFolder failed! hr = %08lx\n", hr);
     ok (pidlCurFolder->mkid.cb == 20 && ((LPSHITEMID)((BYTE*)pidlCurFolder+20))->cb == 0 && 
         IsEqualCLSID(&CLSID_WineTest, (REFCLSID)((LPBYTE)pidlCurFolder+4)), 
         "GetCurFolder returned unexpected pidl!\n");
