@@ -238,7 +238,7 @@ dll/win32/xinput1_2           # Synced to WineStaging-2.9
 dll/win32/xinput1_3           # Synced to WineStaging-2.9
 dll/win32/xinput9_1_0         # Synced to WineStaging-2.9
 dll/win32/xmllite             # Synced to Wine-11.14
-dll/win32/xolehlp             # Synced to WineStaging-3.21
+dll/win32/xolehlp             # Synced to Wine-11.14
 
 comctl32 -
   dll/win32/comctl32/button.c              # Forked at Wine-3.3
