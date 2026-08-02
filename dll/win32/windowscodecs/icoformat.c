@@ -31,7 +31,7 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(wincodecs);
 
-#include "pshpack1.h"
+#pragma pack(push,1)
 
 typedef struct {
     BYTE bWidth;
@@ -51,7 +51,7 @@ typedef struct
     WORD idCount;
 } ICONHEADER;
 
-#include "poppack.h"
+#pragma pack(pop)
 
 typedef struct {
     IWICBitmapDecoder IWICBitmapDecoder_iface;
@@ -662,9 +662,9 @@ static HRESULT WINAPI IcoDecoder_GetFrame(IWICBitmapDecoder *iface,
         goto fail;
     }
 
-    if (This->header.idCount < index)
+    if (This->header.idCount <= index)
     {
-        hr = E_INVALIDARG;
+        hr = WINCODEC_ERR_FRAMEMISSING;
         goto fail;
     }
 
@@ -770,11 +770,7 @@ HRESULT IcoDecoder_CreateInstance(REFIID iid, void** ppv)
     This->ref = 1;
     This->stream = NULL;
     This->initialized = FALSE;
-#ifdef __REACTOS__
-    InitializeCriticalSection(&This->lock);
-#else
     InitializeCriticalSectionEx(&This->lock, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO);
-#endif
     This->lock.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": IcoDecoder.lock");
 
     ret = IWICBitmapDecoder_QueryInterface(&This->IWICBitmapDecoder_iface, iid, ppv);

@@ -52,13 +52,6 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
     return WIC_DllMain(hinstDLL, fdwReason, lpvReserved);
 }
 
-#ifdef __REACTOS__
-HRESULT WINAPI DllCanUnloadNow(void)
-{
-    return S_FALSE;
-}
-#endif
-
 HRESULT get_pixelformat_bpp(const GUID *pixelformat, UINT *bpp)
 {
     HRESULT hr;

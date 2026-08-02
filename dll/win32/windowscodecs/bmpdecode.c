@@ -1195,11 +1195,7 @@ static HRESULT BmpDecoder_Create(int packed, int icoframe, BmpDecoder **ppDecode
     This->initialized = FALSE;
     This->stream = NULL;
     This->imagedata = NULL;
-#ifdef __REACTOS__
-    InitializeCriticalSection(&This->lock);
-#else
     InitializeCriticalSectionEx(&This->lock, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO);
-#endif
     This->lock.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": BmpDecoder.lock");
     This->packed = packed;
     This->icoframe = icoframe;

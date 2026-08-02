@@ -44,7 +44,6 @@ list(APPEND SOURCE
     regsvr.c
     scaler.c
     stream.c
-    tgaformat.c
     ungif.c
     uuid.c
     wincodecs_common.c)
@@ -61,6 +60,7 @@ endif()
 
 list(APPEND PCH_SKIP_SOURCE
     guid.c
+    uuid.c
     ${CMAKE_CURRENT_BINARY_DIR}/proxy.dlldata.c
     ${CMAKE_CURRENT_BINARY_DIR}/windowscodecs_stubs.c
     ${CMAKE_CURRENT_BINARY_DIR}/windowscodecs_wincodec_p.c)
@@ -72,6 +72,12 @@ add_library(windowscodecs MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/windowscodecs.def)
 
 if(MSVC)
+    target_compile_definitions(windowscodecs PRIVATE isfinite=_finite)
+else()
+    target_compile_definitions(windowscodecs PRIVATE isfinite=__builtin_isfinite)
+endif()
+
+if(MSVC)
     # Disable warning C4133: 'function': incompatible types - from 'WICPixelFormatNumericRepresentation *' to 'DWORD *'
     # Disable warning C4146: unary minus operator applied to unsigned type, result still unsigned
     target_compile_options(windowscodecs PRIVATE /wd4133 /wd4146)
@@ -81,7 +87,7 @@ endif()
 
 set_module_type(windowscodecs win32dll)
 add_idl_reg_scripts(windowscodecs registry windowscodecs_wincodec.idl)
-target_link_libraries(windowscodecs wine uuid ${PSEH_LIB} oldnames)
+target_link_libraries(windowscodecs wine wine_dll_canunload uuid ${PSEH_LIB} oldnames)
 add_importlibs(windowscodecs libjpeg libpng libtiff ole32 oleaut32 rpcrt4 shlwapi user32 gdi32 advapi32 advapi32_vista propsys msvcrt kernel32 ntdll)
 add_pch(windowscodecs precomp.h "${PCH_SKIP_SOURCE}")
 add_cd_file(TARGET windowscodecs DESTINATION reactos/system32 FOR all)
