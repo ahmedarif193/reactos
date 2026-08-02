@@ -209,14 +209,6 @@ static void test_notification_cb(void)
 
     expect_runtime_tid = GetCurrentThreadId();
     hr = ICLRRuntimeInfo_GetInterface(info, &CLSID_CLRRuntimeHost, &IID_ICLRRuntimeHost, (void**)&host);
-#ifdef __REACTOS__
-    if (hr != S_OK)
-    {
-        // skip test if mono is not installed
-        win_skip("mono runtime is not installed\n");
-        return;
-    }
-#endif
 
     todo_wine_if(!has_mono) ok(hr == S_OK, "GetInterface returned %lx\n", hr);
     todo_wine if(!has_mono) ok(expect_runtime_tid == 0, "notification_callback was not called\n");
