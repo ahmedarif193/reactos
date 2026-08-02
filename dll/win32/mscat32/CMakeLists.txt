@@ -2,7 +2,7 @@
 spec2def(mscat32.dll mscat32.spec)
 
 list(APPEND SOURCE
-    main.c
+    ${CMAKE_CURRENT_BINARY_DIR}/mscat32_stubs.c
     ${CMAKE_CURRENT_BINARY_DIR}/mscat32.def)
 
 add_library(mscat32 MODULE ${SOURCE})
