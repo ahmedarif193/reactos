@@ -16,9 +16,6 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __REACTOS__
-#include "config.h"
-#endif
 #include <stdarg.h>
 #include "windef.h"
 #include "winbase.h"
@@ -27,12 +24,6 @@
 #include "vsbackup.h"
 #include "wine/asm.h"
 #include "wine/debug.h"
-
-#ifdef __REACTOS__
-#ifdef _MSC_VER
-#define __thiscall __stdcall
-#endif
-#endif
 
 WINE_DEFAULT_DEBUG_CHANNEL( vssapi );
 
@@ -44,57 +35,57 @@ struct CVssWriter
 /******************************************************************
  *  ??0CVssWriter@@QAE@XZ (VSSAPI.@)
  */
+DEFINE_THISCALL_WRAPPER( VSSAPI_CVssWriter_default_ctor, 4 )
 struct CVssWriter * __thiscall VSSAPI_CVssWriter_default_ctor( struct CVssWriter *writer )
 {
     FIXME( "%p\n", writer );
     writer->vtable = NULL;
     return writer;
 }
-DEFINE_THISCALL_WRAPPER( VSSAPI_CVssWriter_default_ctor, 4 )
 
 /******************************************************************
  *  ??1CVssWriter@@UAE@XZ (VSSAPI.@)
  */
+DEFINE_THISCALL_WRAPPER( VSSAPI_CVssWriter_dtor, 4 )
 void __thiscall VSSAPI_CVssWriter_dtor( struct CVssWriter *writer )
 {
     FIXME( "%p\n", writer );
 }
-DEFINE_THISCALL_WRAPPER( VSSAPI_CVssWriter_dtor, 4 )
 
 /******************************************************************
  *  ?Initialize@CVssWriter@@QAGJU_GUID@@PBGW4VSS_USAGE_TYPE@@W4VSS_SOURCE_TYPE@@W4_VSS_APPLICATION_LEVEL@@KW4VSS_ALTERNATE_WRITER_STATE@@_N@Z
  */
+DEFINE_THISCALL_WRAPPER( VSSAPI_CVssWriter_Initialize, 52 )
 HRESULT __thiscall VSSAPI_CVssWriter_Initialize( struct CVssWriter *writer, VSS_ID id,
     LPCWSTR name, VSS_USAGE_TYPE usage_type, VSS_SOURCE_TYPE source_type,
     VSS_APPLICATION_LEVEL level, DWORD timeout, VSS_ALTERNATE_WRITER_STATE alt_writer_state,
     BOOL throttle, LPCWSTR instance )
 {
-    FIXME( "%p, %s, %s, %u, %u, %u, %u, %u, %d, %s\n", writer, debugstr_guid(&id),
+    FIXME( "%p, %s, %s, %u, %u, %u, %lu, %u, %d, %s\n", writer, debugstr_guid(&id),
            debugstr_w(name), usage_type, source_type, level, timeout, alt_writer_state,
            throttle, debugstr_w(instance) );
     return S_OK;
 }
-DEFINE_THISCALL_WRAPPER( VSSAPI_CVssWriter_Initialize, 52 )
 
 /******************************************************************
  *  ?Subscribe@CVssWriter@@QAGJK@Z
  */
+DEFINE_THISCALL_WRAPPER( VSSAPI_CVssWriter_Subscribe, 8 )
 HRESULT __thiscall VSSAPI_CVssWriter_Subscribe( struct CVssWriter *writer, DWORD flags )
 {
-    FIXME( "%p, %x\n", writer, flags );
+    FIXME( "%p, %lx\n", writer, flags );
     return S_OK;
 }
-DEFINE_THISCALL_WRAPPER( VSSAPI_CVssWriter_Subscribe, 8 )
 
 /******************************************************************
  *  ?Unsubscribe@CVssWriter@@QAGJXZ
  */
+DEFINE_THISCALL_WRAPPER( VSSAPI_CVssWriter_Unsubscribe, 4 )
 HRESULT __thiscall VSSAPI_CVssWriter_Unsubscribe( struct CVssWriter *writer )
 {
     FIXME( "%p\n", writer );
     return S_OK;
 }
-DEFINE_THISCALL_WRAPPER( VSSAPI_CVssWriter_Unsubscribe, 4 )
 
 HRESULT WINAPI CreateVssBackupComponentsInternal(IVssBackupComponents **backup)
 {
