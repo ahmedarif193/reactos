@@ -3,22 +3,14 @@
 
 void init_locale( HMODULE module );
 
-// Used by wine/locale.c
-char system_dir[MAX_PATH];
-
-static
-void
-InitSystemDir(void)
-{
-    GetSystemDirectoryA(system_dir, MAX_PATH);
-}
+const WCHAR windows_dir[] = L"C:\\windows";
+const WCHAR system_dir[] = L"C:\\windows\\system32";
 
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
 {
     switch (fdwReason)
     {
         case DLL_PROCESS_ATTACH:
-            InitSystemDir();
             //init_locale(hinstDLL);
             break;
 
