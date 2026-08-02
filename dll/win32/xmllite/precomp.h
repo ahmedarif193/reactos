@@ -14,6 +14,7 @@
 
 #include <windef.h>
 #include <winbase.h>
+#include <winnls.h>
 #include <objbase.h>
 #include <xmllite.h>
 
