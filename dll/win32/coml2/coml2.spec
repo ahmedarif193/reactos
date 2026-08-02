@@ -1,6 +1,16 @@
+1 stub @
+2 stub @
+3 stub @
+4 stub @
+5 stub @
+6 stub @
+7 stub @
+8 stub @
+11 stub @
+12 stub @
 @ stub Coml2DllGetClassObject
 @ stdcall CreateILockBytesOnHGlobal(ptr long ptr)
-@ stub -private DllGetClassObject
+@ stub DllGetClassObject
 @ stdcall FmtIdToPropStgName(ptr wstr)
 @ stdcall GetConvertStg(ptr)
 @ stdcall GetHGlobalFromILockBytes(ptr ptr)

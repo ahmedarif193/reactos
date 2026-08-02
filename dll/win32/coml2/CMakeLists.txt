@@ -10,6 +10,7 @@ list(APPEND SOURCE
 )
 
 add_library(coml2 MODULE ${SOURCE} ${CMAKE_CURRENT_BINARY_DIR}/coml2.def)
+target_compile_definitions(coml2 PRIVATE WINOLE32API=)
 set_module_type(coml2 win32dll)
 if(MSVC)
     # Disable warning C4090: 'function': different 'const' qualifiers
