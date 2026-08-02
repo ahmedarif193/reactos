@@ -28,7 +28,6 @@
 /* ------------------------------------------------------------------ */
 /*  Physical bases (BCM2837: SoC peripherals at 0x3F000000)           */
 /* ------------------------------------------------------------------ */
-#define BCM2837_LOCAL_BASE          0x40000000ULL   /* ARM-local (QA7)    */
 #define BCM2837_LOCAL_LENGTH        0x100
 #define BCM2837_ARMCTRL_BASE        0x3F00B200ULL   /* ARMCTRL IC         */
 #define BCM2837_ARMCTRL_LENGTH      0x28
@@ -102,10 +101,6 @@
 #define BCM2837_BASIC_IRQ_COUNT             8
 #define BCM2837_CORE_COUNT                  4
 #define BCM2837_SGI_COUNT                   4
-
-/* ACPI OEM identification used by the Raspberry Pi 3 UEFI firmware */
-#define BCM2837_ACPI_OEM_ID                 "BC2836"
-#define BCM2837_ACPI_OEM_TABLE_ID           "RPI3"
 
 /* Set when the FADT identifies a Raspberry Pi 3 (BCM2837) platform. */
 extern BOOLEAN Bcm2837Detected;

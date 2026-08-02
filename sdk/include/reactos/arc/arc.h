@@ -787,6 +787,14 @@ typedef struct _ARM_LOADER_BLOCK
 
 #define ARM64_LOADER_MAX_EARLY_DEVICE_RANGES 16
 
+/* BCM2837 (Raspberry Pi 3) identification and MMIO windows, shared between
+ * the loader's early-device-range population and the HAL platform backend. */
+#define BCM2837_ACPI_OEM_ID          "BC2836"
+#define BCM2837_ACPI_OEM_TABLE_ID    "RPI3"
+#define BCM2837_PERIPHERAL_BASE      0x3F000000ULL
+#define BCM2837_PERIPHERAL_LENGTH    0x01000000
+#define BCM2837_LOCAL_BASE           0x40000000ULL
+
 typedef struct _ARM64_LOADER_EARLY_DEVICE_RANGE
 {
     ULONGLONG BaseAddress;
