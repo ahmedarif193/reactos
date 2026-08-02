@@ -32,11 +32,6 @@ RamDiskInitialize(
 ULONGLONG
 RamDiskGetRequestedSize(VOID);
 
-BOOLEAN
-RamDiskGetReservedBuffer(IN ULONGLONG MinimumSize,
-                         OUT PVOID *BaseAddress,
-                         OUT PULONGLONG ActualSize);
-
 ULONGLONG
 RamDiskGetImageLength(VOID);
 
