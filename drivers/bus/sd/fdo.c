@@ -289,6 +289,7 @@ SdBusInitializeController(
     /* Read capabilities */
     Caps = SdBusReadReg32(FdoExtension, SDHCI_CAPABILITIES);
     Caps2 = SdBusReadReg32(FdoExtension, SDHCI_CAPABILITIES2);
+    SdBusHardwareGetSlotCapabilities(FdoExtension, &Caps, &Caps2);
     Caps &= ~SDHCI_CAP_ADMA2_SUPPORT;
     FdoExtension->HostCapabilities = Caps;
     FdoExtension->HostCapabilities2 = Caps2;
@@ -715,6 +716,8 @@ SdBusFdoStartDevice(
         }
     }
 
+    (VOID)SdBusHardwareAttach(FdoExtension);
+
     /* Initialize the SDHCI controller */
     Status = SdBusInitializeController(FdoExtension);
     if (!NT_SUCCESS(Status))
@@ -758,8 +761,6 @@ SdBusFdoStartDevice(
         DPRINT1("SdBusFdoStartDevice: SdBusInitializeRequestQueue failed (0x%08lx)\n",
                 Status);
     }
-
-    (VOID)SdBusHardwareAttach(FdoExtension);
 
     {
         ULONG PresentState;
