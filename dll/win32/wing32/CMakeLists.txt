@@ -1,5 +1,5 @@
 
-spec2def(wing32.dll wing32.spec)
+spec2def(wing32.dll wing32.spec ADD_IMPORTLIB)
 
 list(APPEND SOURCE
     wing32.c
