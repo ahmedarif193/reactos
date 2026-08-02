@@ -47,6 +47,7 @@ list(APPEND SOURCE
     docobjectservice.idl
     downloadmgr.idl
     drmexternals.idl
+    dcommon.idl
     dxgiformat.idl
 #   dyngraph.idl
     emptyvc.idl

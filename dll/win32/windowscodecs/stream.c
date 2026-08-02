@@ -1002,11 +1002,7 @@ static HRESULT WINAPI IWICStreamImpl_InitializeFromMemory(IWICStream *iface,
     pObject->pbMemory = pbBuffer;
     pObject->dwMemsize = cbBufferSize;
     pObject->dwCurPos = 0;
-#ifdef __REACTOS__
-    InitializeCriticalSection(&pObject->lock);
-#else
     InitializeCriticalSectionEx(&pObject->lock, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO);
-#endif
     pObject->lock.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": StreamOnMemory.lock");
 
     if (InterlockedCompareExchangePointer((void**)&This->pStream, pObject, NULL))
@@ -1111,11 +1107,7 @@ static HRESULT WINAPI IWICStreamImpl_InitializeFromIStreamRegion(IWICStream *ifa
     pObject->pos.QuadPart = 0;
     pObject->offset = ulOffset;
     pObject->max_size = ulMaxSize;
-#ifdef __REACTOS__
-    InitializeCriticalSection(&pObject->lock);
-#else
     InitializeCriticalSectionEx(&pObject->lock, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO);
-#endif
     pObject->lock.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": StreamOnStreamRange.lock");
 
     if (InterlockedCompareExchangePointer((void**)&This->pStream, pObject, NULL))

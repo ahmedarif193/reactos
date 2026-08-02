@@ -254,8 +254,8 @@ static void test_filled_propertybag(void)
     IWICComponentFactory *factory;
     IPropertyBag2 *property;
     PROPBAG2 opts[2]= {
-        {PROPBAG2_TYPE_DATA, VT_UI1, 0, 0, (LPOLESTR)wszTestProperty1, {0}},
-        {PROPBAG2_TYPE_DATA, VT_R4, 0, 0, (LPOLESTR)wszTestProperty2, {0}}
+        {.pstrName = (LPOLESTR)wszTestProperty1, .vt=VT_UI1, .dwType=PROPBAG2_TYPE_DATA},
+        {.pstrName = (LPOLESTR)wszTestProperty2, .vt=VT_R4,  .dwType=PROPBAG2_TYPE_DATA}
     };
 
     hr = CoCreateInstance(&CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER,

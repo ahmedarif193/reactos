@@ -21,6 +21,8 @@ import "propidl.idl";
 import "ocidl.idl";
 import "dxgiformat.idl";
 
+cpp_quote ("#include \"dcommon.h\"")
+
 cpp_quote("#define WINCODEC_SDK_VERSION 0x0236")
 
 #define CODEC_FORCE_DWORD 0x7fffffff
@@ -328,6 +330,10 @@ cpp_quote("DEFINE_GUID(GUID_WICPixelFormat16bppYQuantizedDctCoefficients, 0xa355
 cpp_quote("DEFINE_GUID(GUID_WICPixelFormat16bppCbQuantizedDctCoefficients, 0xd2c4ff61,0x56a5,0x49c2,0x8b,0x5c,0x4c,0x19,0x25,0x96,0x48,0x37);")
 cpp_quote("DEFINE_GUID(GUID_WICPixelFormat16bppCrQuantizedDctCoefficients, 0x2fe354f0,0x1680,0x42d8,0x92,0x31,0xe7,0x3c,0x05,0x65,0xbf,0xc1);")
 
+cpp_quote("#if 0")
+typedef DWORD *D2D1_PIXEL_FORMAT;
+cpp_quote ("#endif")
+
 typedef struct WICRect {
     INT X;
     INT Y;
@@ -342,6 +348,17 @@ typedef struct WICBitmapPattern {
     BYTE *Mask;
     BOOL EndOfStream;
 } WICBitmapPattern;
+
+typedef struct WICImageParameters
+{
+    D2D1_PIXEL_FORMAT PixelFormat;
+    FLOAT DpiX;
+    FLOAT DpiY;
+    FLOAT Top;
+    FLOAT Left;
+    UINT32 PixelWidth;
+    UINT32 PixelHeight;
+} WICImageParameters;
 
 typedef struct WICDdsParameters {
     UINT Width;
@@ -363,6 +380,8 @@ typedef struct WICDdsFormatInfo {
 
 typedef UINT32 WICColor;
 
+interface ID2D1Device;
+interface ID2D1Image;
 interface IWICPalette;
 
 [
@@ -973,6 +992,29 @@ interface IWICFastMetadataEncoder : IUnknown
         [out] IWICMetadataQueryWriter **ppIMetadataQueryWriter);
 }
 
+[
+    object,
+    uuid(04c75bf8-3ce1-473b-acc5-3cc4f5e94999),
+    local
+]
+interface IWICImageEncoder : IUnknown
+{
+    HRESULT WriteFrame(
+        [in] ID2D1Image *image,
+        [in] IWICBitmapFrameEncode *encode,
+        [in, unique] const WICImageParameters *parameters);
+
+    HRESULT WriteFrameThumbnail(
+        [in] ID2D1Image *image,
+        [in] IWICBitmapFrameEncode *encode,
+        [in, unique] const WICImageParameters *parameters);
+
+    HRESULT WriteThumbnail(
+        [in] ID2D1Image *image,
+        [in] IWICBitmapEncoder *encoder,
+        [in, unique] const WICImageParameters *parameters);
+}
+
 cpp_quote("DEFINE_GUID(CLSID_WICImagingFactory,  0xcacaf262,0x9370,0x4615,0xa1,0x3b,0x9f,0x55,0x39,0xda,0x4c,0x0a);")
 cpp_quote("DEFINE_GUID(CLSID_WICImagingFactory1, 0xcacaf262,0x9370,0x4615,0xa1,0x3b,0x9f,0x55,0x39,0xda,0x4c,0x0a);")
 cpp_quote("DEFINE_GUID(CLSID_WICImagingFactory2, 0x317d06e8,0x5f24,0x433d,0xbd,0xf7,0x79,0xce,0x68,0xd8,0xab,0xc2);")
@@ -1110,6 +1152,9 @@ interface IWICImagingFactory : IUnknown
 ]
 interface IWICImagingFactory2 : IWICImagingFactory
 {
+    HRESULT CreateImageEncoder(
+        [in] ID2D1Device *device,
+        [out] IWICImageEncoder **encoder);
 }
 
 [
@@ -1188,17 +1233,6 @@ interface IWICDdsFrameDecode : IUnknown
         [in] UINT stride,
         [in] UINT bufferSize,
         [out, size_is(bufferSize)] BYTE *buffer);
-};
-
-[
-    object,
-    uuid(b9bd430d-28a8-41d3-a1f5-f36ee02840bf)
-]
-interface IWICWineDecoder : IUnknown
-{
-    HRESULT Initialize(
-        [in] IStream *stream,
-        [in] WICDecodeOptions options);
 };
 
 cpp_quote("HRESULT WINAPI WICConvertBitmapSource(REFWICPixelFormatGUID dstFormat, IWICBitmapSource *pISrc, IWICBitmapSource **ppIDst);")

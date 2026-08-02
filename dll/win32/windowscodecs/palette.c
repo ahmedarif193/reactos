@@ -906,11 +906,7 @@ HRESULT PaletteImpl_Create(IWICPalette **palette)
     This->count = 0;
     This->colors = NULL;
     This->type = WICBitmapPaletteTypeCustom;
-#ifdef __REACTOS__
-    InitializeCriticalSection(&This->lock);
-#else
     InitializeCriticalSectionEx(&This->lock, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO);
-#endif
     This->lock.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": PaletteImpl.lock");
 
     *palette = &This->IWICPalette_iface;

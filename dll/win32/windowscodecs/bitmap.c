@@ -672,7 +672,8 @@ static ULONG WINAPI IMILUnknown1Impl_Release(IMILUnknown1 *iface)
     return IWICBitmap_Release(&This->IWICBitmap_iface);
 }
 
-void WINAPI IMILUnknown1Impl_unknown1(IMILUnknown1 *iface, void *arg)
+DEFINE_THISCALL_WRAPPER(IMILUnknown1Impl_unknown1, 8)
+void __thiscall IMILUnknown1Impl_unknown1(IMILUnknown1 *iface, void *arg)
 {
     FIXME("(%p,%p): stub\n", iface, arg);
 }
@@ -683,7 +684,8 @@ static HRESULT WINAPI IMILUnknown1Impl_unknown2(IMILUnknown1 *iface, void *arg1,
     return E_NOTIMPL;
 }
 
-HRESULT WINAPI IMILUnknown1Impl_unknown3(IMILUnknown1 *iface, void *arg)
+DEFINE_THISCALL_WRAPPER(IMILUnknown1Impl_unknown3, 8)
+HRESULT __thiscall IMILUnknown1Impl_unknown3(IMILUnknown1 *iface, void *arg)
 {
     FIXME("(%p,%p): stub\n", iface, arg);
     return E_NOTIMPL;
@@ -713,15 +715,12 @@ static HRESULT WINAPI IMILUnknown1Impl_unknown7(IMILUnknown1 *iface, void *arg)
     return E_NOTIMPL;
 }
 
-HRESULT WINAPI IMILUnknown1Impl_unknown8(IMILUnknown1 *iface)
+DEFINE_THISCALL_WRAPPER(IMILUnknown1Impl_unknown8, 4)
+HRESULT __thiscall IMILUnknown1Impl_unknown8(IMILUnknown1 *iface)
 {
     FIXME("(%p): stub\n", iface);
     return E_NOTIMPL;
 }
-
-DEFINE_THISCALL_WRAPPER(IMILUnknown1Impl_unknown1, 8)
-DEFINE_THISCALL_WRAPPER(IMILUnknown1Impl_unknown3, 8)
-DEFINE_THISCALL_WRAPPER(IMILUnknown1Impl_unknown8, 4)
 
 static const IMILUnknown1Vtbl IMILUnknown1Impl_Vtbl =
 {
@@ -832,11 +831,7 @@ HRESULT BitmapImpl_Create(UINT uiWidth, UINT uiHeight, UINT stride, UINT datasiz
     This->bpp = bpp;
     memcpy(&This->pixelformat, pixelFormat, sizeof(GUID));
     This->dpix = This->dpiy = 0.0;
-#ifdef __REACTOS__
-    InitializeCriticalSection(&This->cs);
-#else
     InitializeCriticalSectionEx(&This->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO);
-#endif
     This->cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": BitmapImpl.lock");
 
     *ppIBitmap = &This->IWICBitmap_iface;
