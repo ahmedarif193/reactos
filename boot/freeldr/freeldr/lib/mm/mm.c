@@ -193,7 +193,8 @@ PVOID MmAllocateHighestMemoryBelowAddress(SIZE_T MemorySize, PVOID DesiredAddres
     // then return NULL
     if (FreePagesInLookupTable < PagesNeeded)
     {
-        ERR("Memory allocation failed in MmAllocateHighestMemoryBelowAddress(). Not enough free memory to allocate %d bytes.\n", MemorySize);
+        ERR("Memory allocation failed in MmAllocateHighestMemoryBelowAddress(). Not enough free memory to allocate %llu bytes.\n",
+            (ULONGLONG)MemorySize);
         UiMessageBoxCritical("Memory allocation failed: out of memory.");
         return NULL;
     }
@@ -202,7 +203,8 @@ PVOID MmAllocateHighestMemoryBelowAddress(SIZE_T MemorySize, PVOID DesiredAddres
 
     if (FirstFreePageFromEnd == 0)
     {
-        ERR("Memory allocation failed in MmAllocateHighestMemoryBelowAddress(). Not enough free memory to allocate %d bytes.\n", MemorySize);
+        ERR("Memory allocation failed in MmAllocateHighestMemoryBelowAddress(). Not enough free memory to allocate %llu bytes.\n",
+            (ULONGLONG)MemorySize);
         UiMessageBoxCritical("Memory allocation failed: out of memory.");
         return NULL;
     }
@@ -212,7 +214,10 @@ PVOID MmAllocateHighestMemoryBelowAddress(SIZE_T MemorySize, PVOID DesiredAddres
     FreePagesInLookupTable -= PagesNeeded;
     MemPointer = (PVOID)((ULONG_PTR)FirstFreePageFromEnd * MM_PAGE_SIZE);
 
-    TRACE("Allocated %d bytes (%d pages) of memory starting at page %d.\n", MemorySize, PagesNeeded, FirstFreePageFromEnd);
+    TRACE("Allocated %llu bytes (%llu pages) of memory starting at page %llu.\n",
+          (ULONGLONG)MemorySize,
+          (ULONGLONG)PagesNeeded,
+          (ULONGLONG)FirstFreePageFromEnd);
     TRACE("Memory allocation pointer: 0x%x\n", MemPointer);
 
     /* LoaderXIPRom identifies the retained boot ramdisk and must not define the boot image mapping span. */
@@ -228,6 +233,27 @@ PVOID MmAllocateHighestMemoryBelowAddress(SIZE_T MemorySize, PVOID DesiredAddres
 
 VOID MmFreeMemory(PVOID MemoryPointer)
 {
+}
+
+VOID MmFreeMemoryEx(PVOID MemoryPointer, SIZE_T MemorySize)
+{
+    PFN_NUMBER PagesFreed;
+    PFN_NUMBER StartPage;
+
+    if (MemoryPointer == NULL || MemorySize == 0)
+        return;
+
+    PagesFreed = ROUND_UP(MemorySize, MM_PAGE_SIZE) / MM_PAGE_SIZE;
+    StartPage = MmGetPageNumberFromAddress(MemoryPointer);
+
+    MmMarkPagesInLookupTable(PageLookupTableAddress, StartPage, PagesFreed, LoaderFree);
+    FreePagesInLookupTable += PagesFreed;
+    MmUpdateLastFreePageHint(PageLookupTableAddress, TotalPagesInLookupTable);
+
+    TRACE("Freed %llu bytes (%llu pages) of memory starting at page %llu.\n",
+          (ULONGLONG)MemorySize,
+          (ULONGLONG)PagesFreed,
+          (ULONGLONG)StartPage);
 }
 
 #if DBG
