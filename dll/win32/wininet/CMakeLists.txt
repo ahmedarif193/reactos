@@ -1,4 +1,6 @@
 
+include_directories(${REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/zlib)
+
 add_definitions(
     -D_WINE
     -D_WININET_INTERNAL_)
@@ -15,23 +17,15 @@ list(APPEND SOURCE
     internet.c
     utility.c)
 
-if(DLL_EXPORT_VERSION LESS 0x600)
-    list(APPEND SOURCE inet_ntop.c)
-endif()
-
 list(APPEND PCH_SKIP_SOURCE
     # Sometimes wine uses nameless structs & unions. Sometimes not... */
     netconnection.c
     urlcache.c
     ${CMAKE_CURRENT_BINARY_DIR}/wininet_stubs.c)
 
-add_library(wininet_inflate OBJECT inflate.c)
-add_dependencies(wininet_inflate psdk)
-
 add_library(wininet MODULE
     ${SOURCE}
     ${PCH_SKIP_SOURCE}
-    $<TARGET_OBJECTS:wininet_inflate>
     ${CMAKE_CURRENT_BINARY_DIR}/winineterror.rc
     rsrc.rc
     ${CMAKE_CURRENT_BINARY_DIR}/wininet.def)
@@ -43,7 +37,7 @@ if(MSVC)
 endif()
 
 set_module_type(wininet win32dll)
-target_link_libraries(wininet wine ${PSEH_LIB} oldnames)
+target_link_libraries(wininet wine ${PSEH_LIB} oldnames zlib)
 
 add_delay_importlibs(wininet secur32 crypt32 cryptui iphlpapi dhcpcsvc)
 add_importlibs(wininet mpr shlwapi shell32 user32 advapi32 ws2_32 normaliz kernel32_vista msvcrt kernel32 ntdll)

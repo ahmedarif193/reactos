@@ -8,8 +8,6 @@
 #define _INC_WINDOWS
 #define COM_NO_WINDOWS_H
 
-#include <kefuncs.h>
-
 #include <windef.h>
 #include <winbase.h>
 #include <winreg.h>
