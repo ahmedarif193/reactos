@@ -43,13 +43,6 @@ typedef struct {
     UINT           command_table;
     HWND           parent;
     HWND           window;
-#ifdef __REACTOS__
-    BOOL           fallback;
-    HWND           fallback_child;
-    RECT           fallback_source;
-    RECT           fallback_destination;
-    DWORD          fallback_mode;
-#endif
     MCIDEVICEID    notify_devid;
     HANDLE         callback;
     HANDLE         thread;
