@@ -1,0 +1,119 @@
+; SMSC/Microchip LAN95xx USB Ethernet driver installation file
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = Net
+ClassGUID   = {4d36e972-e325-11ce-bfc1-08002be10318}
+Provider    = %ReactOS%
+DriverVer   = 08/02/2026,1.0.0.0
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[Manufacturer]
+%SMSC% = SMSCDevices,NTx86,NTamd64,NTarm64
+
+[SMSCDevices.NTx86]
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9500
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9505
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9530
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9730
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9E00
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9E01
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9E08
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_EC00
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9900
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9901
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9902
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9903
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9904
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9905
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9906
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9907
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9908
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9909
+
+[SMSCDevices.NTamd64]
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9500
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9505
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9530
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9730
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9E00
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9E01
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9E08
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_EC00
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9900
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9901
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9902
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9903
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9904
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9905
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9906
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9907
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9908
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9909
+
+[SMSCDevices.NTarm64]
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9500
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9505
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9530
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9730
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9E00
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9E01
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9E08
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_EC00
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9900
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9901
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9902
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9903
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9904
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9905
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9906
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9907
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9908
+%LAN95xx.DeviceDesc% = LAN95xx.Install, USB\VID_0424&PID_9909
+
+[LAN95xx.Install]
+Characteristics = 0x84
+BusType         = 15
+AddReg          = LAN95xx.Reg
+CopyFiles       = LAN95xx.CopyFiles
+
+[LAN95xx.Install.Services]
+AddService = smsc95xx, 2, LAN95xx.Service, LAN95xx.EventLog
+
+[LAN95xx.Reg]
+HKR, Ndi,               Service,    0, "smsc95xx"
+HKR, Ndi\Interfaces,    UpperRange, 0, "ndis5"
+HKR, Ndi\Interfaces,    LowerRange, 0, "ethernet"
+
+[LAN95xx.CopyFiles]
+smsc95xx.sys
+
+[LAN95xx.Service]
+DisplayName    = %LAN95xx.ServiceDesc%
+ServiceType    = 1
+StartType      = 3
+ErrorControl   = 1
+ServiceBinary  = %12%\smsc95xx.sys
+LoadOrderGroup = NDIS
+
+[LAN95xx.EventLog]
+AddReg = LAN95xx.EventLog.Reg
+
+[LAN95xx.EventLog.Reg]
+HKR, , EventMessageFile, 0x00020000, "%%SystemRoot%%\System32\netevent.dll"
+HKR, , TypesSupported,   0x00010001, 7
+
+[SourceDisksNames]
+1 = %DiskName%
+
+[SourceDisksFiles]
+smsc95xx.sys = 1
+
+[Strings]
+ReactOS                = "ReactOS Team"
+SMSC                   = "SMSC/Microchip"
+LAN95xx.DeviceDesc     = "SMSC LAN95xx USB 2.0 Ethernet Adapter"
+LAN95xx.ServiceDesc    = "SMSC LAN95xx USB Ethernet Driver"
+DiskName               = "SMSC LAN95xx USB Ethernet Driver Installation Disk"
