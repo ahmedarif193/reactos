@@ -22,11 +22,11 @@
 #include <stdarg.h>
 
 #ifdef __REACTOS__
-#include <rtlfuncs.h>
+#include <ndk/kefuncs.h>
+#include <ndk/rtlfuncs.h>
 #else
 #include "winternl.h"
 #endif
-
 #define COBJMACROS
 #include "windef.h"
 #include "winbase.h"
@@ -43,7 +43,6 @@ WINE_DEFAULT_DEBUG_CHANNEL(dwmapi);
  */
 HRESULT WINAPI DwmIsCompositionEnabled(BOOL *enabled)
 {
-
 #ifdef __REACTOS__
     RTL_OSVERSIONINFOW version;
 #else
@@ -91,18 +90,6 @@ HRESULT WINAPI DwmGetColorizationColor(DWORD *colorization, BOOL *opaque_blend)
     FIXME("(%p, %p) stub\n", colorization, opaque_blend);
 
     return E_NOTIMPL;
-}
-
-/**********************************************************************
- *                  DwmFlush              (DWMAPI.@)
- */
-HRESULT WINAPI DwmFlush(void)
-{
-    static BOOL once;
-
-    if (!once++) FIXME("() stub\n");
-
-    return S_OK;
 }
 
 /**********************************************************************
@@ -206,9 +193,46 @@ BOOL WINAPI DwmDefWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, 
  */
 HRESULT WINAPI DwmGetWindowAttribute(HWND hwnd, DWORD attribute, PVOID pv_attribute, DWORD size)
 {
-    FIXME("(%p %ld %p %ld) stub\n", hwnd, attribute, pv_attribute, size);
+    BOOL enabled = FALSE;
+    HRESULT hr;
 
-    return E_NOTIMPL;
+    TRACE("(%p %ld %p %ld)\n", hwnd, attribute, pv_attribute, size);
+
+    if (DwmIsCompositionEnabled(&enabled) == S_OK && !enabled)
+        return E_HANDLE;
+    if (!IsWindow(hwnd))
+        return E_HANDLE;
+
+    switch (attribute) {
+    case DWMWA_EXTENDED_FRAME_BOUNDS:
+    {
+        RECT *rect = (RECT *)pv_attribute;
+        DPI_AWARENESS_CONTEXT context;
+
+        if (!rect)
+            return E_INVALIDARG;
+        if (size < sizeof(*rect))
+            return E_NOT_SUFFICIENT_BUFFER;
+        if (GetWindowLongW(hwnd, GWL_STYLE) & WS_CHILD)
+            return E_HANDLE;
+
+        /* DWM frame bounds are always in physical coords */
+        context = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
+        if (GetWindowRect(hwnd, rect))
+            hr = S_OK;
+        else
+            hr = HRESULT_FROM_WIN32(GetLastError());
+
+        SetThreadDpiAwarenessContext(context);
+        break;
+    }
+    default:
+        FIXME("attribute %ld not implemented.\n", attribute);
+        hr = E_NOTIMPL;
+        break;
+    }
+
+    return hr;
 }
 
 /**********************************************************************
@@ -275,6 +299,31 @@ HRESULT WINAPI DwmGetCompositionTimingInfo(HWND hwnd, DWM_TIMING_INFO *info)
 }
 
 /**********************************************************************
+ *                  DwmFlush              (DWMAPI.@)
+ */
+HRESULT WINAPI DwmFlush(void)
+{
+    LARGE_INTEGER qpf, qpc, delay;
+    LONG64 qpc_refresh_period;
+    int display_frequency;
+    static BOOL once;
+
+    if (!once++)
+        FIXME("stub.\n");
+    else
+        TRACE("stub.\n");
+
+    display_frequency = get_display_frequency();
+    NtQueryPerformanceCounter(&qpc, &qpf);
+    qpc_refresh_period = qpf.QuadPart / display_frequency;
+    delay.QuadPart = (qpc.QuadPart - ((qpc.QuadPart + qpc_refresh_period - 1) / qpc_refresh_period) * qpc_refresh_period)
+            * 10000000 / qpf.QuadPart;
+    NtDelayExecution(FALSE, &delay);
+
+    return S_OK;
+}
+
+/**********************************************************************
  *           DwmAttachMilContent         (DWMAPI.@)
  */
 HRESULT WINAPI DwmAttachMilContent(HWND hwnd)
@@ -335,4 +384,13 @@ HRESULT WINAPI DwmpGetColorizationParameters(void *params)
 {
     FIXME("(%p) stub\n", params);
     return E_NOTIMPL;
+}
+
+/**********************************************************************
+ *           DwmShowContact         (DWMAPI.@)
+ */
+HRESULT WINAPI DwmShowContact(DWORD pointer_id, enum DWM_SHOWCONTACT showcontact)
+{
+    FIXME("pointer_id %#lx, showcontact %#x stub\n", pointer_id, showcontact);
+    return S_OK;
 }

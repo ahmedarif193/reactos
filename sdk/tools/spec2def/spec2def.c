@@ -294,8 +294,13 @@ OutputLine_stub(FILE *file, EXPORT *pexp)
             fprintf(file, "__stdcall ");
         }
 
+        /* Check for an anonymous ordinal */
+        if ((pexp->strName.len == 1) && (pexp->strName.buf[0] == '@'))
+        {
+            fprintf(file, "ordinal%d(", pexp->nOrdinal);
+        }
         /* Check for C++ */
-        if (pexp->strName.buf[0] == '?')
+        else if (pexp->strName.buf[0] == '?')
         {
             fprintf(file, "stub_function%d(", pexp->nNumber);
         }
@@ -1346,7 +1351,7 @@ ParseFile(char* pcStart, FILE *fileDest, unsigned *cExports)
             else
             {
                 /* Check for stdcall name */
-                const char *p = ScanToken(exp.strName.buf, '@');
+                const char *p = exp.strName.len > 1 ? ScanToken(exp.strName.buf, '@') : NULL;
                 if (p && (p - exp.strName.buf < exp.strName.len))
                 {
                     int i;
