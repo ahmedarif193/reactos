@@ -31,14 +31,19 @@
 
 extern HMODULE WININET_hModule;
 
+typedef struct server_addr
+{
+    struct sockaddr_storage addr;
+    int addr_len;
+    char addr_str[INET6_ADDRSTRLEN];
+    struct server_addr *next;
+} server_addr_t;
+
 typedef struct {
     WCHAR *name;
     INTERNET_PORT port;
     BOOL is_https;
-    struct sockaddr_storage addr;
-    int addr_len;
-    char addr_str[INET6_ADDRSTRLEN];
-
+    server_addr_t *addr;
     WCHAR *scheme_host_port;
     const WCHAR *host_port;
     const WCHAR *canon_host_port;
@@ -88,10 +93,6 @@ typedef struct
 BOOL is_valid_netconn(netconn_t *);
 void close_netconn(netconn_t *);
 
-#if defined(__REACTOS__) && DLL_EXPORT_VERSION < 0x600
-PCSTR WSAAPI wininet_inet_ntop(INT, const VOID *, PSTR, size_t);
-#endif
-
 static inline WCHAR *strndupW(const WCHAR *str, UINT max_len)
 {
     LPWSTR ret;
@@ -121,17 +122,8 @@ static inline WCHAR *strndupAtoW(const char *str, int len_a, DWORD *len_w)
         size_t len;
         if(len_a < 0)
             len_a = strlen(str);
-#if defined(__REACTOS__) && DLL_EXPORT_VERSION < 0x600
-        else if(len_a > 0) {
-            int i;
-            for(i = 0; i < len_a && str[i]; i++)
-                ;
-            len_a = i;
-        }
-#else
         else if(len_a > 0)
             len_a = strnlen(str, len_a);
-#endif
         len = MultiByteToWideChar(CP_ACP, 0, str, len_a, NULL, 0);
         ret = malloc((len + 1) * sizeof(WCHAR));
         if(ret) {
@@ -200,10 +192,10 @@ static inline void WININET_find_data_WtoA(LPWIN32_FIND_DATAW dataW, LPWIN32_FIND
     dataA->nFileSizeLow     = dataW->nFileSizeLow;
     dataA->dwReserved0      = dataW->dwReserved0;
     dataA->dwReserved1      = dataW->dwReserved1;
-    WideCharToMultiByte(CP_ACP, 0, dataW->cFileName, -1,
+    WideCharToMultiByte(CP_ACP, 0, dataW->cFileName, -1, 
         dataA->cFileName, sizeof(dataA->cFileName),
         NULL, NULL);
-    WideCharToMultiByte(CP_ACP, 0, dataW->cAlternateFileName, -1,
+    WideCharToMultiByte(CP_ACP, 0, dataW->cAlternateFileName, -1, 
         dataA->cAlternateFileName, sizeof(dataA->cAlternateFileName),
         NULL, NULL);
 }
@@ -261,7 +253,6 @@ struct _object_header_t
     BOOL valid_handle;
     DWORD  dwFlags;
     DWORD_PTR dwContext;
-    DWORD  dwError;
     ULONG  ErrorMask;
     DWORD  dwInternalFlags;
     LONG   refs;
@@ -324,6 +315,7 @@ typedef struct {
 typedef struct
 {
     object_header_t hdr;
+    DWORD state;
     http_session_t *session;
     server_t *server;
     server_t *proxy;
@@ -393,7 +385,8 @@ DWORD HTTP_Connect(appinfo_t*,LPCWSTR,
         LPCWSTR lpszPassword, DWORD dwFlags, DWORD_PTR dwContext,
         DWORD dwInternalFlags, HINTERNET*);
 
-BOOL GetAddress(const WCHAR*,INTERNET_PORT,SOCKADDR*,int*,char*);
+server_addr_t *GetAddress(const WCHAR*,INTERNET_PORT);
+int create_connect_socket(server_addr_t*,int,DWORD,object_header_t*,DWORD_PTR);
 
 DWORD get_cookie_header(const WCHAR*,const WCHAR*,WCHAR**);
 DWORD set_cookie(substr_t,substr_t,substr_t,substr_t,DWORD);
@@ -408,7 +401,7 @@ VOID INTERNET_SendCallback(object_header_t *hdr, DWORD_PTR dwContext,
                            DWORD dwStatusInfoLength);
 WCHAR *INTERNET_FindProxyForProtocol(LPCWSTR szProxy, LPCWSTR proto);
 
-DWORD create_netconn(server_t*,DWORD,BOOL,DWORD,netconn_t**);
+DWORD create_netconn(server_t*,object_header_t*,DWORD,BOOL,DWORD,netconn_t**);
 void free_netconn(netconn_t*);
 void NETCON_unload(void);
 DWORD NETCON_secure_connect(netconn_t*,server_t*);
