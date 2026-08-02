@@ -35,7 +35,7 @@
 #include <olectl.h>
 #include <ocidl.h>
 #include <exdisp.h>
-#include <wine/atlbase.h>
+#include <atlbase.h>
 
 static HRESULT (WINAPI *pAtlAxAttachControl)(IUnknown *, HWND, IUnknown **);
 
@@ -73,20 +73,20 @@ static void test_AtlAxAttachControl(void)
     IUnknown *pObj, *pContainer;
 
     hr = pAtlAxAttachControl(NULL, NULL, NULL);
-    ok(hr == E_INVALIDARG, "Expected AtlAxAttachControl to return E_INVALIDARG, got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Expected AtlAxAttachControl to return E_INVALIDARG, got 0x%08lx\n", hr);
 
     pContainer = (IUnknown *)0xdeadbeef;
     hr = pAtlAxAttachControl(NULL, NULL, &pContainer);
-    ok(hr == E_INVALIDARG, "Expected AtlAxAttachControl to return E_INVALIDARG, got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Expected AtlAxAttachControl to return E_INVALIDARG, got 0x%08lx\n", hr);
     ok(pContainer == (IUnknown *)0xdeadbeef,
        "Expected the output container pointer to be untouched, got %p\n", pContainer);
 
     hr = pAtlAxAttachControl(NULL, hwnd, NULL);
-    ok(hr == E_INVALIDARG, "Expected AtlAxAttachControl to return E_INVALIDARG, got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Expected AtlAxAttachControl to return E_INVALIDARG, got 0x%08lx\n", hr);
 
     hr = CoCreateInstance(&CLSID_WebBrowser, NULL, CLSCTX_INPROC_SERVER | CLSCTX_INPROC_HANDLER,
                           &IID_IOleObject, (void **)&pObj);
-    ok(hr == S_OK, "Expected CoCreateInstance to return S_OK, got 0x%08x\n", hr);
+    ok(hr == S_OK, "Expected CoCreateInstance to return S_OK, got 0x%08lx\n", hr);
 
     if (FAILED(hr))
     {
@@ -95,16 +95,16 @@ static void test_AtlAxAttachControl(void)
     }
 
     hr = pAtlAxAttachControl(pObj, NULL, NULL);
-    ok(hr == S_FALSE, "Expected AtlAxAttachControl to return S_FALSE, got 0x%08x\n", hr);
+    ok(hr == S_FALSE, "Expected AtlAxAttachControl to return S_FALSE, got 0x%08lx\n", hr);
 
     pContainer = NULL;
     hr = pAtlAxAttachControl(pObj, NULL, &pContainer);
-    ok(hr == S_FALSE, "Expected AtlAxAttachControl to return S_FALSE, got 0x%08x\n", hr);
+    ok(hr == S_FALSE, "Expected AtlAxAttachControl to return S_FALSE, got 0x%08lx\n", hr);
     ok(pContainer != NULL, "got %p\n", pContainer);
     IUnknown_Release(pContainer);
 
     hr = pAtlAxAttachControl(pObj, hwnd, NULL);
-    ok(hr == S_OK, "Expected AtlAxAttachControl to return S_OK, got 0x%08x\n", hr);
+    ok(hr == S_OK, "Expected AtlAxAttachControl to return S_OK, got 0x%08lx\n", hr);
 
     IUnknown_Release(pObj);
 
@@ -115,7 +115,6 @@ static void test_ax_win(void)
 {
     BOOL ret;
     WNDCLASSEXW wcex;
-    static const WCHAR AtlAxWin[] = {'A','t','l','A','x','W','i','n',0};
     static HMODULE hinstance = 0;
 
     ret = AtlAxWinInit();
@@ -124,9 +123,53 @@ static void test_ax_win(void)
     hinstance = GetModuleHandleA(NULL);
     memset(&wcex, 0, sizeof(wcex));
     wcex.cbSize = sizeof(wcex);
-    ret = GetClassInfoExW(hinstance, AtlAxWin, &wcex);
+    ret = GetClassInfoExW(hinstance, L"AtlAxWin", &wcex);
     ok(ret, "AtlAxWin has not registered\n");
     ok(wcex.style == CS_GLOBALCLASS, "wcex.style %08x\n", wcex.style);
+}
+
+static void test_atl_messages(void)
+{
+    UINT wmAtlGetHost;
+    UINT wmAtlGetControl;
+    HWND hwnd;
+    HRESULT ret;
+    IUnknown *host1 = NULL, *host2;
+    IUnknown *ctrl1 = NULL, *ctrl2;
+
+    /* Already called by test_ax_win, but left in to allow this test to be standalone */
+    AtlAxWinInit();
+
+    wmAtlGetHost = RegisterWindowMessageW( L"WM_ATLGETHOST" );
+    wmAtlGetControl = RegisterWindowMessageW( L"WM_ATLGETCONTROL" );
+
+    hwnd = CreateWindowExW(0, L"AtlAxWin", L"Shell.Explorer", 0,
+                           CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+                           CW_USEDEFAULT, NULL, NULL, NULL, NULL);
+    ok(hwnd != NULL, "Failed to create AtlAxWin window\n");
+
+    ret = AtlAxGetHost(hwnd, &host1);
+    ok(ret == S_OK, "AtlAxGetHost failed\n");
+    ok(host1 != NULL, "AtlAxGetHost did not fill the out pointer\n");
+
+    ret = AtlAxGetControl(hwnd, &ctrl1);
+    ok(ret == S_OK, "AtlAxGetControl failed\n");
+    ok(ctrl1 != NULL, "AtlAxGetControl did not fill the out pointer\n");
+
+    host2 = (IUnknown *)SendMessageW(hwnd, wmAtlGetHost, 0, 0);
+    ok(host2 != NULL, "WM_ATLGETHOST did not return a value\n");
+    ctrl2 = (IUnknown *)SendMessageW(hwnd, wmAtlGetControl, 0, 0);
+    ok(ctrl2 != NULL, "WM_ATLGETCONTROL did not return a value\n");
+
+    ok(host1 == host2, "Mismatch between AtlAxGetHost and WM_ATLGETHOST\n");
+    ok(ctrl1 == ctrl2, "Mismatch between AtlAxGetControl and WM_ATLGETCONTROL\n");
+
+    IUnknown_Release(host1);
+    IUnknown_Release(ctrl1);
+    IUnknown_Release(host2);
+    IUnknown_Release(ctrl2);
+
+    DestroyWindow(hwnd);
 }
 
 START_TEST(atl_ax)
@@ -144,6 +187,7 @@ START_TEST(atl_ax)
         win_skip("AtlAxAttachControl is not available\n");
 
     test_ax_win();
+    test_atl_messages();
 
     CoUninitialize();
 }
