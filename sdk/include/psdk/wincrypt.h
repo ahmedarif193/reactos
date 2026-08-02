@@ -30,9 +30,7 @@ extern "C" {
 #endif
 
 #include <bcrypt.h>
-#ifndef __REACTOS__
 #include <ncrypt.h>
-#endif
 
 #ifndef WINADVAPI
 #ifdef _ADVAPI32_
@@ -225,9 +223,12 @@ typedef struct _CRYPT_KEY_PROV_INFO {
 } CRYPT_KEY_PROV_INFO, *PCRYPT_KEY_PROV_INFO;
 
 typedef struct _CERT_KEY_CONTEXT {
-    DWORD      cbSize;
-    HCRYPTPROV hCryptProv;
-    DWORD      dwKeySpec;
+    DWORD cbSize;
+    union {
+        HCRYPTPROV        hCryptProv;
+        NCRYPT_KEY_HANDLE hNCryptKey;
+    } DUMMYUNIONNAME;
+    DWORD dwKeySpec;
 } CERT_KEY_CONTEXT, *PCERT_KEY_CONTEXT;
 
 typedef struct _CERT_PUBLIC_KEY_INFO {
@@ -1957,6 +1958,9 @@ typedef const CERT_CRL_CONTEXT_PAIR *PCCERT_CRL_CONTEXT_PAIR;
 #define CRYPT_OID_INFO_ALGID_KEY 3
 #define CRYPT_OID_INFO_SIGN_KEY  4
 
+#define CRYPT_OID_INFO_PUBKEY_ENCRYPT_KEY_FLAG 0x40000000
+#define CRYPT_OID_INFO_PUBKEY_SIGN_KEY_FLAG    0x80000000
+
 /* Algorithm IDs */
 
 #define GET_ALG_CLASS(x)                (x & (7 << 13))
@@ -2238,6 +2242,7 @@ static const WCHAR MS_ENH_RSA_AES_PROV_XP_W[] = { 'M','i','c','r','o','s','o','f
 /* Key Specs*/
 #define AT_KEYEXCHANGE          1
 #define AT_SIGNATURE            2
+#define CERT_NCRYPT_KEY_SPEC    0xffffffff
 
 /* Provider Types */
 #define PROV_RSA_FULL             1
@@ -3762,6 +3767,10 @@ typedef struct _CTL_FIND_SUBJECT_PARA
 #define CRYPT_ACQUIRE_USE_PROV_INFO_FLAG 0x00000002
 #define CRYPT_ACQUIRE_COMPARE_KEY_FLAG   0x00000004
 #define CRYPT_ACQUIRE_SILENT_FLAG        0x00000040
+#define CRYPT_ACQUIRE_NCRYPT_KEY_FLAGS_MASK  0x00070000
+#define CRYPT_ACQUIRE_ALLOW_NCRYPT_KEY_FLAG  0x00010000
+#define CRYPT_ACQUIRE_PREFER_NCRYPT_KEY_FLAG 0x00020000
+#define CRYPT_ACQUIRE_ONLY_NCRYPT_KEY_FLAG   0x00040000
 
 /* flags for CryptFindCertificateKeyProvInfo */
 #define CRYPT_FIND_USER_KEYSET_FLAG    0x00000001
@@ -3793,7 +3802,8 @@ typedef struct _CERT_CHAIN_ENGINE_CONFIG
     DWORD       MaximumCachedCertificates;
     DWORD       CycleDetectionModulus;
     HCERTSTORE  hExclusiveRoot;
-    HCERTSTORE  hExclusiveRootTrustedPeople;
+    HCERTSTORE  hExclusiveTrustedPeople;
+    DWORD       dwExclusiveFlags;
 } CERT_CHAIN_ENGINE_CONFIG, *PCERT_CHAIN_ENGINE_CONFIG;
 
 /* message-related definitions */
@@ -5564,6 +5574,19 @@ CryptHashCertificate(
   _In_ ALG_ID Algid,
   _In_ DWORD dwFlags,
   _In_reads_bytes_(cbEncoded) const BYTE *pbEncoded,
+  _In_ DWORD cbEncoded,
+  _Out_writes_bytes_to_opt_(*pcbComputedHash, *pcbComputedHash) BYTE *pbComputedHash,
+  _Inout_ DWORD *pcbComputedHash);
+
+WINCRYPT32API
+_Success_(return != FALSE)
+BOOL
+WINAPI
+CryptHashCertificate2(
+  _In_ LPCWSTR pwszCNGHashAlgid,
+  _In_ DWORD dwFlags,
+  _Reserved_ void *pvReserved,
+  _In_reads_bytes_opt_(cbEncoded) const BYTE *pbEncoded,
   _In_ DWORD cbEncoded,
   _Out_writes_bytes_to_opt_(*pcbComputedHash, *pcbComputedHash) BYTE *pbComputedHash,
   _Inout_ DWORD *pcbComputedHash);
