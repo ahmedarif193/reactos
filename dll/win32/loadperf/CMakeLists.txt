@@ -3,7 +3,7 @@ spec2def(loadperf.dll loadperf.spec ADD_IMPORTLIB)
 
 list(APPEND SOURCE
     loadperf_main.c
-    stubs.c
+    ${CMAKE_CURRENT_BINARY_DIR}/loadperf_stubs.c
     ${CMAKE_CURRENT_BINARY_DIR}/loadperf.def)
 
 add_library(loadperf MODULE ${SOURCE})
