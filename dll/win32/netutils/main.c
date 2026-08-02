@@ -22,86 +22,83 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
- #include <stdarg.h>
+#include <stdarg.h>
 
- #include "ntstatus.h"
- #define WIN32_NO_STATUS
- #include "windef.h"
- #include "winbase.h"
- #ifndef __REACTOS__
- #include "winternl.h"
- #endif
- #include "lm.h"
- #include "wine/debug.h"
- #include "wine/list.h"
- #include "initguid.h"
- 
- WINE_DEFAULT_DEBUG_CHANNEL(netutils);
- 
- /************************************************************
-  *                NetApiBufferAllocate  (NETUTILS.@)
-  */
- NET_API_STATUS WINAPI NetApiBufferAllocate(DWORD ByteCount, LPVOID* Buffer)
- {
-     TRACE("(%ld, %p)\n", ByteCount, Buffer);
- 
-     if (Buffer == NULL) return ERROR_INVALID_PARAMETER;
-     *Buffer = HeapAlloc(GetProcessHeap(), 0, ByteCount);
-     if (*Buffer)
-         return NERR_Success;
-     else
-         return GetLastError();
- }
- 
- /************************************************************
-  *                NetApiBufferFree  (NETUTILS.@)
-  */
- NET_API_STATUS WINAPI NetApiBufferFree(LPVOID Buffer)
- {
-     TRACE("(%p)\n", Buffer);
-     HeapFree(GetProcessHeap(), 0, Buffer);
-     return NERR_Success;
- }
- 
- /************************************************************
-  *                NetApiBufferReallocate  (NETUTILS.@)
-  */
- NET_API_STATUS WINAPI NetApiBufferReallocate(LPVOID OldBuffer, DWORD NewByteCount,
-                                              LPVOID* NewBuffer)
- {
-     TRACE("(%p, %ld, %p)\n", OldBuffer, NewByteCount, NewBuffer);
-     if (NewByteCount)
-     {
-         if (OldBuffer)
-             *NewBuffer = HeapReAlloc(GetProcessHeap(), 0, OldBuffer, NewByteCount);
-         else
-             *NewBuffer = HeapAlloc(GetProcessHeap(), 0, NewByteCount);
-         return *NewBuffer ? NERR_Success : GetLastError();
-     }
-     else
-     {
-         if (!HeapFree(GetProcessHeap(), 0, OldBuffer)) return GetLastError();
-         *NewBuffer = 0;
-         return NERR_Success;
-     }
- }
- 
- /************************************************************
-  *                NetApiBufferSize  (NETUTILS.@)
-  */
- NET_API_STATUS WINAPI NetApiBufferSize(LPVOID Buffer, LPDWORD ByteCount)
- {
-     DWORD dw;
- 
-     TRACE("(%p, %p)\n", Buffer, ByteCount);
-     if (Buffer == NULL)
-         return ERROR_INVALID_PARAMETER;
-     dw = HeapSize(GetProcessHeap(), 0, Buffer);
-     TRACE("size: %ld\n", dw);
-     if (dw != 0xFFFFFFFF)
-         *ByteCount = dw;
-     else
-         *ByteCount = 0;
- 
-     return NERR_Success;
- }
+#include "ntstatus.h"
+#include "windef.h"
+#include "winbase.h"
+#include "winternl.h"
+#include "lm.h"
+#include "wine/debug.h"
+#include "wine/list.h"
+#include "initguid.h"
+
+WINE_DEFAULT_DEBUG_CHANNEL(netutils);
+
+/************************************************************
+ *                NetApiBufferAllocate  (NETUTILS.@)
+ */
+NET_API_STATUS WINAPI NetApiBufferAllocate(DWORD ByteCount, LPVOID* Buffer)
+{
+    TRACE("(%ld, %p)\n", ByteCount, Buffer);
+
+    if (Buffer == NULL) return ERROR_INVALID_PARAMETER;
+    *Buffer = HeapAlloc(GetProcessHeap(), 0, ByteCount);
+    if (*Buffer)
+        return NERR_Success;
+    else
+        return GetLastError();
+}
+
+/************************************************************
+ *                NetApiBufferFree  (NETUTILS.@)
+ */
+NET_API_STATUS WINAPI NetApiBufferFree(LPVOID Buffer)
+{
+    TRACE("(%p)\n", Buffer);
+    HeapFree(GetProcessHeap(), 0, Buffer);
+    return NERR_Success;
+}
+
+/************************************************************
+ *                NetApiBufferReallocate  (NETUTILS.@)
+ */
+NET_API_STATUS WINAPI NetApiBufferReallocate(LPVOID OldBuffer, DWORD NewByteCount,
+                                             LPVOID* NewBuffer)
+{
+    TRACE("(%p, %ld, %p)\n", OldBuffer, NewByteCount, NewBuffer);
+    if (NewByteCount)
+    {
+        if (OldBuffer)
+            *NewBuffer = HeapReAlloc(GetProcessHeap(), 0, OldBuffer, NewByteCount);
+        else
+            *NewBuffer = HeapAlloc(GetProcessHeap(), 0, NewByteCount);
+        return *NewBuffer ? NERR_Success : GetLastError();
+    }
+    else
+    {
+        if (!HeapFree(GetProcessHeap(), 0, OldBuffer)) return GetLastError();
+        *NewBuffer = 0;
+        return NERR_Success;
+    }
+}
+
+/************************************************************
+ *                NetApiBufferSize  (NETUTILS.@)
+ */
+NET_API_STATUS WINAPI NetApiBufferSize(LPVOID Buffer, LPDWORD ByteCount)
+{
+    DWORD dw;
+
+    TRACE("(%p, %p)\n", Buffer, ByteCount);
+    if (Buffer == NULL)
+        return ERROR_INVALID_PARAMETER;
+    dw = HeapSize(GetProcessHeap(), 0, Buffer);
+    TRACE("size: %ld\n", dw);
+    if (dw != 0xFFFFFFFF)
+        *ByteCount = dw;
+    else
+        *ByteCount = 0;
+
+    return NERR_Success;
+}
