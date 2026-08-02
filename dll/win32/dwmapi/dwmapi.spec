@@ -31,8 +31,32 @@
 135 stub DwmpRenderFlick
 136 stub DwmpAllocateSecurityDescriptor
 137 stub DwmpFreeSecurityDescriptor
+138 stub @
+139 stub @
+140 stub @
+141 stub @
+142 stub @
 143 stub DwmpEnableDDASupport
+144 stub @
+145 stub @
+146 stub @
+147 stub @
+148 stub @
+150 stub @
+151 stub @
+152 stub @
+153 stub @
+154 stub @
+155 stub @
 156 stub DwmTetherTextContact
+157 stub @
+158 stub @
+159 stub @
+160 stub @
+161 stub @
+162 stub @
+163 stub @
+164 stub @
 
 # @ stdcall -private DllCanUnloadNow()
 # @ stdcall -private DllGetClassObject(ptr ptr ptr)
@@ -60,7 +84,7 @@
 @ stdcall DwmSetIconicThumbnail(long long long)
 @ stdcall DwmSetPresentParameters(ptr ptr)
 @ stdcall DwmSetWindowAttribute(long long ptr long)
-# @ stub DwmShowContact
+@ stdcall DwmShowContact(long long)
 # @ stub DwmTetherContact
 # @ stub DwmTransitionOwnedWindow
 @ stdcall DwmUnregisterThumbnail(long)

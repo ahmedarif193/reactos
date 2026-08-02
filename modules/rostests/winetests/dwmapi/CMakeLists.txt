@@ -1,0 +1,5 @@
+add_executable(dwmapi_winetest dwmapi.c)
+set_module_type(dwmapi_winetest win32cui)
+target_compile_definitions(dwmapi_winetest PRIVATE STANDALONE WINETEST_USE_DBGSTR_LONGLONG)
+add_importlibs(dwmapi_winetest dwmapi user32 msvcrt kernel32)
+add_rostests_file(TARGET dwmapi_winetest)
