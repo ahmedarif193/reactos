@@ -11,6 +11,11 @@ HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows ARM64","Direct
 HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows ARM64\Print Processors",,0x00000010
 HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows ARM64\Print Processors\winprint","Driver",,"winprint.dll"
 
+; Raspberry Pi 3 Arasan SDHCI controller.  The RPi3 UEFI ACPI tables expose
+; the boot SD controller as ACPI\BCM2847, so bind it before ARC-name creation.
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2847","Service",0x00000000,"sdbus"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2847","ClassGUID",0x00000000,"{a0a588a4-c46f-4b37-b7ea-c82fe89870c6}"
+
 ; Raspberry Pi 5 RP1 southbridge: no OS bus driver. The UEFI firmware exposes
 ; the RP1 functions (USB XHC0/XHC1, Ethernet ETH0) as standard ACPI devices
 ; under the RP1B ACPI0004 container and hides the RP1 PCIe endpoint, so acpi.sys
