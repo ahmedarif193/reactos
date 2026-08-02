@@ -375,21 +375,6 @@
 
 /*
  * ============================================================================
- * SGI (Software Generated Interrupt) Definitions
- * ============================================================================
- */
-#define HAL_ARM64_SGI_IPI    0
-#define HAL_ARM64_SGI_APC    1
-#define HAL_ARM64_SGI_DPC    2
-#define HAL_ARM64_SGI_FREEZE 3
-
-#define HAL_ARM64_SGI_IPI_PRIORITY    0x10
-#define HAL_ARM64_SGI_APC_PRIORITY    0xE0
-#define HAL_ARM64_SGI_DPC_PRIORITY    0xD0
-#define HAL_ARM64_SGI_FREEZE_PRIORITY 0x00
-
-/*
- * ============================================================================
  * ITS Command Queue Definitions
  * ============================================================================
  *

@@ -48,6 +48,16 @@ extern volatile ULONG *HalpMmio(ULONG_PTR Base, ULONG Offset);
 /*  is numerically below the current mask, and must quiesce (defer)   */
 /*  blocked level-triggered sources until the mask rises above them.  */
 /* ------------------------------------------------------------------ */
+#define HAL_ARM64_SGI_IPI    0
+#define HAL_ARM64_SGI_APC    1
+#define HAL_ARM64_SGI_DPC    2
+#define HAL_ARM64_SGI_FREEZE 3
+
+#define HAL_ARM64_SGI_IPI_PRIORITY    0x10
+#define HAL_ARM64_SGI_APC_PRIORITY    0xE0
+#define HAL_ARM64_SGI_DPC_PRIORITY    0xD0
+#define HAL_ARM64_SGI_FREEZE_PRIORITY 0x00
+
 typedef struct _HAL_ARM64_INTERRUPT_CONTROLLER
 {
     PCSTR Name;
