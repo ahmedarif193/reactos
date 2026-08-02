@@ -8,14 +8,15 @@
 #define _INC_WINDOWS
 #define COM_NO_WINDOWS_H
 
-#define NONAMELESSUNION
-#define NONAMELESSSTRUCT
+#include <windef.h>
+#include <winbase.h>
+#include <wincon.h>
+#include <winnls.h>
 
 #include "ieframe.h"
 
 #include <wingdi.h>
 #include <winreg.h>
-#include <wincon.h>
 #include <mshtmdid.h>
 #include <exdispid.h>
 #include <idispids.h>

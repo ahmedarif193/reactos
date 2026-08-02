@@ -18,8 +18,6 @@
 
 #include "resource.h"
 
-#include <reactos/manifest_dll.rc>
-
 /* UTF-8 */
 #pragma code_page(65001)
 
@@ -77,13 +75,16 @@ LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
 
 #define WINE_FILEDESCRIPTION_STR "Internet Browser"
 #define WINE_FILENAME_STR "ieframe.dll"
-#define WINE_FILEVERSION 8,0,6001,18702
-#define WINE_FILEVERSION_STR "8.0.6001.18702"
-#define WINE_PRODUCTVERSION 8,0,6001,18702
-#define WINE_PRODUCTVERSION_STR "8.0.6001.18702"
+#define WINE_FILEVERSION 8,0,7601,17601
+#define WINE_FILEVERSION_STR "8.0.7601.17601"
+#define WINE_PRODUCTVERSION 8,0,7601,17601
+#define WINE_PRODUCTVERSION_STR "8.0.7601.17601"
 #define WINE_EXTRAVALUES VALUE "OLESelfRegister",""
 
 #include "wine/wine_common_ver.rc"
+
+/* @makedep: ieframe.manifest */
+123 RT_MANIFEST "ieframe.manifest"
 
 /* @makedep: ietoolbar.bmp */
 IDB_IETOOLBAR BITMAP "resources/ietoolbar.bmp"
@@ -93,9 +94,4 @@ IDC_PAGEICO ICON "resources/pages.ico"
 #endif
 
 /* @makedep: ieframe.rgs */
-1 WINE_REGISTRY "ieframe.rgs"
-
-2 WINE_REGISTRY "ieframe_v1.rgs"
-3 WINE_REGISTRY "ieframe_v1.tlb.rgs"
-
-1 TYPELIB "ieframe_v1.tlb"
+2 WINE_REGISTRY "ieframe.rgs"
