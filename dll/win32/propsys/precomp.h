@@ -20,6 +20,4 @@
 
 #include <wine/debug.h>
 
-#include "propsys_private.h"
-
 #endif /* !_PROPSYS_PRECOMP_H_ */

@@ -908,6 +908,9 @@ int main( int argc, char **argv )
 #endif
 
 // FIXME: Should include wine/debug.h instead
+#ifdef WINETEST_USE_DBG_SPRINTF
+extern const char *wine_dbg_sprintf( const char *format, ... ) __WINE_PRINTF_ATTR(1,2);
+#endif
 extern const char *wine_dbgstr_wn( const WCHAR *str, intptr_t n );
 extern const char *wine_dbgstr_an( const CHAR *str, intptr_t n );
 extern const char *wine_dbgstr_guid( const GUID *guid );
@@ -924,6 +927,42 @@ static inline const char *debugstr_wn( const WCHAR *s, int n ) { return wine_dbg
 static inline const char *debugstr_guid( const struct _GUID *id ) { return wine_dbgstr_guid(id); }
 static inline const char *wine_dbgstr_a( const char *s )  { return wine_dbgstr_an( s, -1 ); }
 static inline const char *wine_dbgstr_w( const WCHAR *s ) { return wine_dbgstr_wn( s, -1 ); }
+#if defined(WINETEST_USE_DBGSTR_VT) && defined(__oaidl_h__) && defined(V_VT)
+static inline const char *wine_dbgstr_vt( VARTYPE vt )
+{
+    static const char *const variant_types[] =
+    {
+        "VT_EMPTY","VT_NULL","VT_I2","VT_I4","VT_R4","VT_R8","VT_CY","VT_DATE",
+        "VT_BSTR","VT_DISPATCH","VT_ERROR","VT_BOOL","VT_VARIANT","VT_UNKNOWN",
+        "VT_DECIMAL","15","VT_I1","VT_UI1","VT_UI2","VT_UI4","VT_I8","VT_UI8",
+        "VT_INT","VT_UINT","VT_VOID","VT_HRESULT","VT_PTR","VT_SAFEARRAY",
+        "VT_CARRAY","VT_USERDEFINED","VT_LPSTR","VT_LPWSTR","32","33","34","35",
+        "VT_RECORD","VT_INT_PTR","VT_UINT_PTR","39","40","41","42","43","44","45",
+        "46","47","48","49","50","51","52","53","54","55","56","57","58","59","60",
+        "61","62","63","VT_FILETIME","VT_BLOB","VT_STREAM","VT_STORAGE",
+        "VT_STREAMED_OBJECT","VT_STORED_OBJECT","VT_BLOB_OBJECT","VT_CF","VT_CLSID",
+        "VT_VERSIONED_STREAM"
+    };
+    static const char *const variant_flags[16] =
+    {
+        "", "|VT_VECTOR", "|VT_ARRAY", "|VT_VECTOR|VT_ARRAY", "|VT_BYREF",
+        "|VT_VECTOR|VT_BYREF", "|VT_ARRAY|VT_BYREF", "|VT_VECTOR|VT_ARRAY|VT_BYREF",
+        "|VT_RESERVED", "|VT_VECTOR|VT_RESERVED", "|VT_ARRAY|VT_RESERVED",
+        "|VT_VECTOR|VT_ARRAY|VT_RESERVED", "|VT_BYREF|VT_RESERVED",
+        "|VT_VECTOR|VT_BYREF|VT_RESERVED", "|VT_ARRAY|VT_BYREF|VT_RESERVED",
+        "|VT_VECTOR|VT_ARRAY|VT_BYREF|VT_RESERVED",
+    };
+
+    if (vt & ~VT_TYPEMASK)
+        return wine_dbg_sprintf("%s%s", wine_dbgstr_vt(vt & VT_TYPEMASK), variant_flags[vt >> 12]);
+    if (vt < ARRAY_SIZE(variant_types))
+        return variant_types[vt];
+    if (vt == VT_BSTR_BLOB)
+        return "VT_BSTR_BLOB";
+    return wine_dbg_sprintf("vt(invalid %x)", vt);
+}
+static inline const char *debugstr_vt( VARTYPE vt ) { return wine_dbgstr_vt(vt); }
+#endif
 #if defined(__oaidl_h__) && defined(V_VT)
 extern const char *wine_dbgstr_variant(const VARIANT *var);
 static inline const char *debugstr_variant( const VARIANT *v ) { return wine_dbgstr_variant( v ); }
@@ -1123,6 +1162,29 @@ static void release_temp_buffer( char *ptr, size_t size )
     struct winetest_thread_data *data = winetest_get_thread_data();
     data->str_pos = ptr + size;
 }
+
+#ifdef WINETEST_USE_DBG_SPRINTF
+const char *wine_dbg_sprintf( const char *format, ... )
+{
+    va_list args;
+    char *res;
+    int len;
+
+    va_start(args, format);
+    len = _vscprintf(format, args);
+    va_end(args);
+    if (len < 0)
+        return "(format error)";
+
+    res = get_temp_buffer(len + 1);
+    va_start(args, format);
+    _vsnprintf(res, len + 1, format, args);
+    va_end(args);
+    res[len] = 0;
+    release_temp_buffer(res, len + 1);
+    return res;
+}
+#endif
 
 const char *wine_dbgstr_an( const CHAR *str, intptr_t n )
 {
@@ -1324,7 +1386,7 @@ const char *wine_dbgstr_variant(const VARIANT *var)
         sprintf(buf, "{VT_BOOL: %x}", V_BOOL(var));
         break;
     case VT_UI4:
-        sprintf(buf, "{VT_UI4: %u}", V_UI4(var));
+        sprintf(buf, "{VT_UI4: %lu}", V_UI4(var));
         break;
     default:
         sprintf(buf, "{vt %d}", V_VT(var));

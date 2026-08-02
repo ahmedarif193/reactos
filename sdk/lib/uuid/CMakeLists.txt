@@ -216,6 +216,7 @@ list(APPEND SOURCE
 #    oledbiid.c
 #    oledbnewiid.c
 #    qosguid.c
+    propkey.c
     shguids.c
 #    tapi3iid.c
 #    vcguids.c

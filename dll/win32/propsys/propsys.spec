@@ -1,26 +1,25 @@
   3 stub GetProxyDllInfo
-
-400 stub PROPSYS_400
-402 stub PROPSYS_402
-403 stub PROPSYS_403
-404 stub PROPSYS_404
-405 stub PROPSYS_405
-406 stub PROPSYS_406
-407 stub PROPSYS_407
-408 stub PROPSYS_408
-409 stub PROPSYS_409
-410 stub PROPSYS_410
-411 stub PROPSYS_411
-412 stub PROPSYS_412
-413 stub PROPSYS_413
-414 stub PROPSYS_414
-415 stub PROPSYS_415
-416 stub PROPSYS_416
-417 stub PROPSYS_417
-418 stub PROPSYS_418
-420 stub PROPSYS_420
-421 stub PROPSYS_421
-422 stub PROPSYS_422
+400 stub @
+402 stub @
+403 stub @
+404 stub @
+405 stub @
+406 stub @
+407 stub @
+408 stub @
+409 stub @
+410 stub @
+411 stub @
+412 stub @
+413 stub @
+414 stub @
+415 stub @
+416 stub @
+417 stub @
+418 stub @
+420 stub @
+421 stub @
+422 stub @
 
 @ stub ClearPropVariantArray
 @ stub ClearVariantArray
@@ -78,7 +77,7 @@
 @ stub PSFormatPropertyValue
 @ stub PSGetItemPropertyHandler
 @ stub PSGetItemPropertyHandlerWithCreateObject
-@ stub PSGetNameFromPropertyKey
+@ stdcall PSGetNameFromPropertyKey(ptr ptr)
 @ stub PSGetNamedPropertyFromPropertyStorage
 @ stdcall PSGetPropertyDescription(ptr ptr ptr)
 @ stub PSGetPropertyDescriptionByName
@@ -103,7 +102,7 @@
 @ stub PropVariantGetInt16Elem
 @ stub PropVariantGetInt32Elem
 @ stub PropVariantGetInt64Elem
-@ stub PropVariantGetStringElem
+@ stdcall PropVariantGetStringElem(ptr long ptr)
 @ stub PropVariantGetUInt16Elem
 @ stub PropVariantGetUInt32Elem
 @ stub PropVariantGetUInt64Elem
@@ -117,7 +116,7 @@
 @ stub PropVariantToDoubleVector
 @ stub PropVariantToDoubleVectorAlloc
 @ stub PropVariantToDoubleWithDefault
-@ stub PropVariantToFileTime
+@ stdcall PropVariantToFileTime(ptr long ptr)
 @ stub PropVariantToFileTimeVector
 @ stub PropVariantToFileTimeVectorAlloc
 @ stdcall PropVariantToGUID(ptr ptr)
@@ -144,7 +143,7 @@
 @ stub PropVariantToUInt16VectorAlloc
 @ stub PropVariantToUInt16WithDefault
 @ stdcall PropVariantToUInt32(ptr ptr)
-@ stub PropVariantToUInt32Vector
+@ stdcall PropVariantToUInt32Vector(ptr ptr long ptr)
 @ stub PropVariantToUInt32VectorAlloc
 @ stdcall PropVariantToUInt32WithDefault(ptr long)
 @ stdcall PropVariantToUInt64(ptr ptr)
