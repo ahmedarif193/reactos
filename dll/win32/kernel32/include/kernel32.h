@@ -11,6 +11,7 @@
 #define comm                    205
 #define profile                 206
 #define nls                     207
+#define kernel32sync            208
 
 
 #if DBG

@@ -425,9 +425,7 @@ MMRESULT WINAPI DECLSPEC_HOTPATCH joyGetDevCapsW( UINT_PTR id, JOYCAPSW *caps, U
             caps->wPid = HIWORD(diprop.dwData);
         }
 
-        lstrcpynW( caps->szPname, joysticks[id].instance.tszProductName,
-                   ARRAY_SIZE(caps->szPname) );
-        if (!caps->szPname[0]) wcscpy( caps->szPname, L"Wine joystick driver" );
+        wcscpy( caps->szPname, L"Wine joystick driver" );
         caps->wXmin = 0;
         caps->wXmax = 0xffff;
         caps->wYmin = 0;
