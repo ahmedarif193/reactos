@@ -117,7 +117,7 @@ dll/win32/mpr                 # Synced to WineStaging-4.18
 dll/win32/mprapi              # Synced to Wine-11.14
 dll/win32/msacm32             # Synced to Wine-11.14
 dll/win32/msacm32.drv         # Synced to Wine-11.14
-dll/win32/msadp32.acm         # Synced to WineStaging-4.0
+dll/win32/msadp32.acm         # Synced to Wine-11.14
 dll/win32/mscat32             # Synced to Wine-11.14
 dll/win32/mscms               # Synced to WineStaging-4.18
 dll/win32/mscoree             # Synced to Wine-10.0
