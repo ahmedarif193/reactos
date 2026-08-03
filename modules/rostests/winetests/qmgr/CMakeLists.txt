@@ -11,6 +11,7 @@ list(APPEND SOURCE
 
 add_executable(qmgr_winetest ${SOURCE})
 set_module_type(qmgr_winetest win32cui)
+target_link_libraries(qmgr_winetest uuid)
 add_importlibs(qmgr_winetest ole32 shlwapi user32 msvcrt kernel32)
 
 if(MSVC)
