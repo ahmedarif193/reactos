@@ -1,7 +1,7 @@
 # ordinal exports
 2 stdcall @(ptr long long) PlaySoundA
-3 stub WINMM_3
-4 stub WINMM_4
+3 stub @
+4 stub @
 
 @ stdcall CloseDriver(long long long)
 @ stdcall DefDriverProc(long long long long long)
