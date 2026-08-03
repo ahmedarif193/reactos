@@ -8,6 +8,7 @@ extern void func_dependency(void);
 extern void func_mmdevenum(void);
 extern void func_propstore(void);
 extern void func_render(void);
+extern void func_spatialaudio(void);
 
 const struct test winetest_testlist[] =
 {
@@ -16,5 +17,6 @@ const struct test winetest_testlist[] =
     { "mmdevenum", func_mmdevenum },
     { "propstore", func_propstore },
     { "render", func_render },
+    { "spatialaudio", func_spatialaudio },
     { 0, 0 }
 };
