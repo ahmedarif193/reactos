@@ -17,7 +17,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include <d3dx9.h>
+#include "d3dx9.h"
 
 #ifndef __D3DX9MATH_H__
 #define __D3DX9MATH_H__
@@ -396,7 +396,7 @@ HRESULT WINAPI D3DXSHEvalSphericalLight(UINT order, const D3DXVECTOR3 *dir, FLOA
 FLOAT* WINAPI D3DXSHMultiply2(FLOAT *out, const FLOAT *a, const FLOAT *b);
 FLOAT* WINAPI D3DXSHMultiply3(FLOAT *out, const FLOAT *a, const FLOAT *b);
 FLOAT* WINAPI D3DXSHMultiply4(FLOAT *out, const FLOAT *a, const FLOAT *b);
-HRESULT WINAPI D3DXSHProjectCubeMap(UINT order, IDirect3DCubeTexture9 *cubemap, FLOAT *rout, FLOAT *gout, FLOAT *bout);
+HRESULT WINAPI D3DXSHProjectCubeMap(UINT order, IDirect3DCubeTexture9 *texture, FLOAT *red, FLOAT *green, FLOAT *blue);
 FLOAT* WINAPI D3DXSHRotate(FLOAT *out, UINT order, const D3DXMATRIX *matrix, const FLOAT *in);
 FLOAT* WINAPI D3DXSHRotateZ(FLOAT *out, UINT order, FLOAT angle, const FLOAT *in);
 FLOAT* WINAPI D3DXSHScale(FLOAT *out, UINT order, const FLOAT *a, const FLOAT scale);
@@ -470,6 +470,6 @@ HRESULT WINAPI D3DXCreateMatrixStack(DWORD flags, ID3DXMatrixStack **stack);
 }
 #endif
 
-#include <d3dx9math.inl>
+#include "d3dx9math.inl"
 
 #endif /* __D3DX9MATH_H__ */

@@ -212,7 +212,7 @@ DECLARE_INTERFACE_(ID3DXConstantTable, ID3DXBuffer)
 /*** ID3DXConstantTable methods ***/
 #define ID3DXConstantTable_GetDesc(p,a)                               (p)->GetDesc(a)
 #define ID3DXConstantTable_GetConstantDesc(p,a,b,c)                   (p)->GetConstantDesc(a,b,c)
-#define ID3DXConstantTable_GetSamplerIndex(p,a)                       (p)->GetConstantDesc(a)
+#define ID3DXConstantTable_GetSamplerIndex(p,a)                       (p)->GetSamplerIndex(a)
 #define ID3DXConstantTable_GetConstant(p,a,b)                         (p)->GetConstant(a,b)
 #define ID3DXConstantTable_GetConstantByName(p,a,b)                   (p)->GetConstantByName(a,b)
 #define ID3DXConstantTable_GetConstantElement(p,a,b)                  (p)->GetConstantElement(a,b)
@@ -352,8 +352,6 @@ DWORD WINAPI D3DXGetShaderVersion(const DWORD *byte_code);
 const char * WINAPI D3DXGetVertexShaderProfile(struct IDirect3DDevice9 *device);
 HRESULT WINAPI D3DXFindShaderComment(const DWORD *byte_code, DWORD fourcc, const void **data, UINT *size);
 HRESULT WINAPI D3DXGetShaderSamplers(const DWORD *byte_code, const char **samplers, UINT *count);
-HRESULT WINAPI D3DXGetShaderInputSemantics(const DWORD *byte_code, D3DXSEMANTIC *semantics, UINT *count);
-HRESULT WINAPI D3DXGetShaderOuputSemantics(const DWORD *byte_code, D3DXSEMANTIC *semantics, UINT *count);
 
 HRESULT WINAPI D3DXAssembleShaderFromFileA(const char *filename, const D3DXMACRO *defines,
         ID3DXInclude *include, DWORD flags, ID3DXBuffer **shader, ID3DXBuffer **error_messages);

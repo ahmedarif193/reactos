@@ -16,7 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include <d3dx9.h>
+#include "d3dx9.h"
 
 #ifndef __WINE_D3DX9TEX_H
 #define __WINE_D3DX9TEX_H
@@ -180,6 +180,9 @@ HRESULT WINAPI D3DXLoadVolumeFromMemory(struct IDirect3DVolume9 *destvolume,
         const PALETTEENTRY *destpalette, const D3DBOX *destbox, const void *srcmemory,
         D3DFORMAT srcformat, UINT srcrowpitch, UINT srcslicepitch, const PALETTEENTRY *srcpalette,
         const D3DBOX *srcbox, DWORD filter, D3DCOLOR colorkey);
+
+HRESULT WINAPI D3DXSaveVolumeToFileInMemory(struct ID3DXBuffer **dst_buffer, D3DXIMAGE_FILEFORMAT dst_format,
+        struct IDirect3DVolume9 *src_volume, const PALETTEENTRY *src_palette, const D3DBOX *src_box);
 
 HRESULT WINAPI D3DXSaveVolumeToFileA(const char *destfile, D3DXIMAGE_FILEFORMAT destformat,
         struct IDirect3DVolume9 *srcvolume, const PALETTEENTRY *srcpalette, const D3DBOX *srcbox);
