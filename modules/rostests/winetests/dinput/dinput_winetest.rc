@@ -1,0 +1,3 @@
+driver_bus.dll TESTDLL "driver_bus.dll"
+driver_hid.dll TESTDLL "driver_hid.dll"
+driver_hid_poll.dll TESTDLL "driver_hid_poll.dll"
