@@ -747,7 +747,13 @@ unsigned char _BitScanForward64(unsigned long * _Index, unsigned __int64 _Mask);
 unsigned char _BitScanReverse64(unsigned long * _Index, unsigned __int64 _Mask);
 long _InterlockedAdd(_Interlocked_operand_ long volatile * _Addend, long _Value);
 __int64 _InterlockedAdd64(_Interlocked_operand_ __int64 volatile * _Addend, __int64 _Value);
+__int64 _InterlockedAdd64_nf(_Interlocked_operand_ __int64 volatile * _Addend, __int64 _Value);
 unsigned char _InterlockedCompareExchange128(_Interlocked_operand_ __int64 volatile * _Destination, __int64 _ExchangeHigh, __int64 _ExchangeLow, __int64 * _ComparandResult);
+unsigned char _InterlockedCompareExchange128_acq(_Interlocked_operand_ __int64 volatile * _Destination, __int64 _ExchangeHigh, __int64 _ExchangeLow, __int64 * _ComparandResult);
+unsigned char _InterlockedCompareExchange128_nf(_Interlocked_operand_ __int64 volatile * _Destination, __int64 _ExchangeHigh, __int64 _ExchangeLow, __int64 * _ComparandResult);
+unsigned char _InterlockedCompareExchange128_rel(_Interlocked_operand_ __int64 volatile * _Destination, __int64 _ExchangeHigh, __int64 _ExchangeLow, __int64 * _ComparandResult);
+long _InterlockedExchangeAdd_nf(_Interlocked_operand_ long volatile * _Addend, long _Value);
+long _InterlockedOr_nf(_Interlocked_operand_ long volatile * _Value, long _Mask);
 void __break(int);
 void __yield(void);
 
