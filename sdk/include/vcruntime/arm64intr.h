@@ -31,9 +31,28 @@ void __dmb(unsigned int _Type);
 void __dsb(unsigned int _Type);
 void __isb(unsigned int _Type);
 
+#if defined(__GNUC__)
+static __inline__ unsigned __int64 __ldar64(unsigned __int64 volatile * _Target)
+{
+    return __atomic_load_n(_Target, __ATOMIC_ACQUIRE);
+}
+
+static __inline__ void __stlr64(unsigned __int64 volatile * _Target, unsigned __int64 _Value)
+{
+    __atomic_store_n(_Target, _Value, __ATOMIC_RELEASE);
+}
+#else
+unsigned __int64 __ldar64(unsigned __int64 volatile * _Target);
+void __stlr64(unsigned __int64 volatile * _Target, unsigned __int64 _Value);
+#endif
+
 #pragma intrinsic(__dmb)
 #pragma intrinsic(__dsb)
 #pragma intrinsic(__isb)
+#if !defined(__GNUC__)
+#pragma intrinsic(__ldar64)
+#pragma intrinsic(__stlr64)
+#endif
 
 #if defined(__cplusplus)
 } // extern "C"
