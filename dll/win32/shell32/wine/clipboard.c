@@ -35,16 +35,18 @@
  *
  */
 
-#define WIN32_NO_STATUS
-#define _INC_WINDOWS
+#include <stdarg.h>
+#include <string.h>
 
-#include <windef.h>
-#include <winbase.h>
-#include <shlobj.h>
-#include <wine/debug.h>
-#include <wine/unicode.h>
-
+#include "windef.h"
+#include "winbase.h"
+#include "winreg.h"
+#include "wingdi.h"
+#include "pidl.h"
 #include "shell32_main.h"
+#include "shlwapi.h"
+
+#include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(shell);
 
@@ -53,11 +55,11 @@ WINE_DEFAULT_DEBUG_CHANNEL(shell);
  *
  * creates a CF_HDROP structure
  */
-HGLOBAL RenderHDROP(LPITEMIDLIST pidlRoot, LPITEMIDLIST * apidl, UINT cidl)
+HGLOBAL RenderHDROP(const ITEMIDLIST *pidlRoot, const ITEMIDLIST **apidl, unsigned int cidl)
 {
 	UINT i;
 #ifdef __REACTOS__
-        int size = 0;
+	int size = 0;
 #else
 	int rootlen = 0,size = 0;
 	WCHAR wszRootPath[MAX_PATH];
@@ -67,15 +69,15 @@ HGLOBAL RenderHDROP(LPITEMIDLIST pidlRoot, LPITEMIDLIST * apidl, UINT cidl)
 	DROPFILES *pDropFiles;
 	int offset;
 #ifdef __REACTOS__
-        LPITEMIDLIST *pidls;
+	LPITEMIDLIST *pidls;
 #endif
 
 	TRACE("(%p,%p,%u)\n", pidlRoot, apidl, cidl);
 
 #ifdef __REACTOS__
-        pidls = (LPITEMIDLIST *)HeapAlloc(GetProcessHeap(), 0, cidl * sizeof(*pidls));
-        if (!pidls)
-            goto cleanup;
+	pidls = HeapAlloc(GetProcessHeap(), 0, cidl * sizeof(*pidls));
+	if (!pidls)
+		goto cleanup;
 #endif
 
 	/* get the size needed */
@@ -84,18 +86,18 @@ HGLOBAL RenderHDROP(LPITEMIDLIST pidlRoot, LPITEMIDLIST * apidl, UINT cidl)
 #ifndef __REACTOS__
 	SHGetPathFromIDListW(pidlRoot, wszRootPath);
 	PathAddBackslashW(wszRootPath);
-	rootlen = strlenW(wszRootPath);
+	rootlen = lstrlenW(wszRootPath);
 #endif
 
 	for (i=0; i<cidl;i++)
 	{
 #ifdef __REACTOS__
-          pidls[i] = ILCombine(pidlRoot, apidl[i]);
-          SHGetPathFromIDListW(pidls[i], wszFileName);
-          size += (wcslen(wszFileName) + 1) * sizeof(WCHAR);
+	  pidls[i] = ILCombine(pidlRoot, apidl[i]);
+	  SHGetPathFromIDListW(pidls[i], wszFileName);
+	  size += (lstrlenW(wszFileName) + 1) * sizeof(WCHAR);
 #else
 	  _ILSimpleGetTextW(apidl[i], wszFileName, MAX_PATH);
-	  size += (rootlen + strlenW(wszFileName) + 1) * sizeof(WCHAR);
+	  size += (rootlen + lstrlenW(wszFileName) + 1) * sizeof(WCHAR);
 #endif
 	}
 
@@ -104,7 +106,7 @@ HGLOBAL RenderHDROP(LPITEMIDLIST pidlRoot, LPITEMIDLIST * apidl, UINT cidl)
 	/* Fill the structure */
 	hGlobal = GlobalAlloc(GHND|GMEM_SHARE, size);
 #ifdef __REACTOS__
-        if(!hGlobal) goto cleanup;
+	if (!hGlobal) goto cleanup;
 #else
 	if(!hGlobal) return hGlobal;
 #endif
@@ -115,21 +117,20 @@ HGLOBAL RenderHDROP(LPITEMIDLIST pidlRoot, LPITEMIDLIST * apidl, UINT cidl)
         pDropFiles->fWide = TRUE;
 
 #ifndef __REACTOS__
-	strcpyW(wszFileName, wszRootPath);
+	lstrcpyW(wszFileName, wszRootPath);
 #endif
 
 	for (i=0; i<cidl;i++)
 	{
-
 #ifdef __REACTOS__
-          SHGetPathFromIDListW(pidls[i], wszFileName);
-          wcscpy(((WCHAR*)pDropFiles)+offset, wszFileName);
-          offset += wcslen(wszFileName) + 1;
-          ILFree(pidls[i]);
+	  SHGetPathFromIDListW(pidls[i], wszFileName);
+	  lstrcpyW(((WCHAR*)pDropFiles)+offset, wszFileName);
+	  offset += lstrlenW(wszFileName) + 1;
+	  ILFree(pidls[i]);
 #else
 	  _ILSimpleGetTextW(apidl[i], wszFileName + rootlen, MAX_PATH - rootlen);
-	  strcpyW(((WCHAR*)pDropFiles)+offset, wszFileName);
-	  offset += strlenW(wszFileName) + 1;
+	  lstrcpyW(((WCHAR*)pDropFiles)+offset, wszFileName);
+	  offset += lstrlenW(wszFileName) + 1;
 #endif
 	}
 
@@ -138,14 +139,13 @@ HGLOBAL RenderHDROP(LPITEMIDLIST pidlRoot, LPITEMIDLIST * apidl, UINT cidl)
 
 #ifdef __REACTOS__
 cleanup:
-    if(pidls)
-        HeapFree(GetProcessHeap(), 0, pidls);
+	HeapFree(GetProcessHeap(), 0, pidls);
 #endif
 
 	return hGlobal;
 }
 
-HGLOBAL RenderSHELLIDLIST (LPITEMIDLIST pidlRoot, LPITEMIDLIST * apidl, UINT cidl)
+HGLOBAL RenderSHELLIDLIST(const ITEMIDLIST *pidlRoot, const ITEMIDLIST **apidl, unsigned int cidl)
 {
 	UINT i;
 	int offset = 0, sizePidl, size;
@@ -187,7 +187,7 @@ HGLOBAL RenderSHELLIDLIST (LPITEMIDLIST pidlRoot, LPITEMIDLIST * apidl, UINT cid
 	return hGlobal;
 }
 
-HGLOBAL RenderFILENAMEA (LPITEMIDLIST pidlRoot, LPITEMIDLIST * apidl, UINT cidl)
+HGLOBAL RenderFILENAMEA(const ITEMIDLIST *pidlRoot, const ITEMIDLIST **apidl, unsigned int cidl)
 {
 	int size = 0;
 	char szTemp[MAX_PATH], *szFileName;
@@ -203,7 +203,7 @@ HGLOBAL RenderFILENAMEA (LPITEMIDLIST pidlRoot, LPITEMIDLIST * apidl, UINT cidl)
 		return 0;
 
 	bSuccess = SHGetPathFromIDListA(pidl, szTemp);
-	SHFree(pidl);
+	ILFree(pidl);
 	if (!bSuccess)
 		return 0;
 
@@ -219,7 +219,7 @@ HGLOBAL RenderFILENAMEA (LPITEMIDLIST pidlRoot, LPITEMIDLIST * apidl, UINT cidl)
 	return hGlobal;
 }
 
-HGLOBAL RenderFILENAMEW (LPITEMIDLIST pidlRoot, LPITEMIDLIST * apidl, UINT cidl)
+HGLOBAL RenderFILENAMEW(const ITEMIDLIST *pidlRoot, const ITEMIDLIST **apidl, unsigned int cidl)
 {
 	int size = 0;
 	WCHAR szTemp[MAX_PATH], *szFileName;
@@ -235,11 +235,11 @@ HGLOBAL RenderFILENAMEW (LPITEMIDLIST pidlRoot, LPITEMIDLIST * apidl, UINT cidl)
 		return 0;
 
 	bSuccess = SHGetPathFromIDListW(pidl, szTemp);
-	SHFree(pidl);
+	ILFree(pidl);
 	if (!bSuccess)
 		return 0;
 
-	size = (strlenW(szTemp)+1) * sizeof(WCHAR);
+	size = (lstrlenW(szTemp)+1) * sizeof(WCHAR);
 
 	/* fill the structure */
 	hGlobal = GlobalAlloc(GHND|GMEM_SHARE, size);

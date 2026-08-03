@@ -22,6 +22,4 @@
 #include <commoncontrols.h>
 #include <reactos/undocshell.h>
 
-#include "shell32_test.h"
-
 #endif /* !_SHELL32_WINETEST_PRECOMP_H_ */
