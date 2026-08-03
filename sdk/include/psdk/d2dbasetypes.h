@@ -1,9 +1,5 @@
 /*
- * DirectX 10 GUID definitions
- *
- * Copyright 2000 Alexandre Julliard
- * Copyright 2000 Francois Gouget
- * Copyright 2003 Raphael Junqueira
+ * Copyright 2013 Nikolay Sivov for CodeWeavers
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -20,22 +16,40 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include <stdarg.h>
+#ifndef _D2DBASETYPES_INCLUDED
+#define _D2DBASETYPES_INCLUDED
 
-#include "windef.h"
-#include "winbase.h"
-#include "wingdi.h"
-#include "winuser.h"
-
-#include "objbase.h"
-#include "olectl.h"
-#include "initguid.h"
-#include "dxva.h"
-
-#if 0
-#include "d3d10_1.h"
-#include "d3d11.h"
-#include "d3d10_1shader.h"
+#ifndef D3DCOLORVALUE_DEFINED
+typedef struct D3DCOLORVALUE
+{
+    float r;
+    float g;
+    float b;
+    float a;
+} D3DCOLORVALUE;
+#define D3DCOLORVALUE_DEFINED
 #endif
 
-#include "d3d11shader.h"
+typedef D3DCOLORVALUE D2D_COLOR_F;
+
+typedef struct D2D_SIZE_F
+{
+    float width;
+    float height;
+} D2D_SIZE_F;
+
+typedef struct D2D_POINT_2U
+{
+    UINT32 x;
+    UINT32 y;
+} D2D_POINT_2U;
+
+typedef struct D2D_RECT_U
+{
+    UINT32 left;
+    UINT32 top;
+    UINT32 right;
+    UINT32 bottom;
+} D2D_RECT_U;
+
+#endif /* _D2DBASETYPES_INCLUDED */
