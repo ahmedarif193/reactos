@@ -1444,7 +1444,9 @@ WINBOOL WINAPI EnumPrintersW(DWORD Flags,LPWSTR Name,DWORD Level,LPBYTE pPrinter
 #if (_WIN32_WINNT >= 0x0600)
 #define AddPrinterConnection2 __MINGW_NAME_AW(AddPrinterConnection2)
 #define DeletePrinterDriverPackage __MINGW_NAME_AW(DeletePrinterDriverPackage)
+#ifndef WINE_NO_UNICODE_MACROS
 #define DocumentEvent __MINGW_NAME_AW(DocumentEvent)
+#endif
 
 #define PRINTER_CONNECTION_MISMATCH 0x00000020
 #define PRINTER_CONNECTION_NO_UI    0x00000040
