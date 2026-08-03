@@ -50,7 +50,7 @@ dll/directx/wine/msdmo          # Synced to Wine-11.14
 dll/directx/wine/qcap           # Synced to Wine-11.14
 dll/directx/wine/qedit          # Synced to Wine-11.14
 dll/directx/wine/quartz         # Synced to Wine-11.14
-dll/directx/wine/wined3d        # Synced to WineStaging-3.3
+dll/directx/wine/wined3d        # Synced to Wine-11.14
 
 dll/win32/activeds            # Synced to Wine-11.14
 dll/win32/activeds.tlb        # Synced to Wine-11.14

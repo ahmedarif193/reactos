@@ -71,8 +71,10 @@ typedef int pid_t;
 #if !defined(HAVE_SIZE_T) && !defined(_SIZE_T)
 typedef unsigned int size_t;
 #endif
-#if !defined(HAVE_SSIZE_T) && !defined(_SSIZE_T)
-typedef int ssize_t;
+#if !defined(HAVE_SSIZE_T) && !defined(_SSIZE_T) && !defined(_SSIZE_T_DEFINED)
+typedef ptrdiff_t ssize_t;
+#define _SSIZE_T
+#define _SSIZE_T_DEFINED
 #endif
 //#ifndef HAVE_SOCKLEN_T
 //typedef unsigned int socklen_t;
