@@ -18,7 +18,7 @@
 @ stdcall PdhCollectQueryDataWithTime(ptr ptr)
 @ stdcall PdhCollectQueryDataEx(ptr long ptr)
 @ stub PdhComputeCounterStatistics
-@ stub PdhConnectMachineA
+@ stdcall PdhConnectMachineA(str)
 @ stub PdhConnectMachineW
 @ stub PdhCreateSQLTablesA
 @ stub PdhCreateSQLTablesW
@@ -32,10 +32,10 @@
 @ stub PdhEnumObjectItemsHA
 @ stub PdhEnumObjectItemsHW
 @ stdcall PdhEnumObjectItemsW(wstr wstr wstr ptr ptr ptr ptr long long)
-@ stub PdhEnumObjectsA
+@ stdcall PdhEnumObjectsA(str str ptr ptr long long)
 @ stub PdhEnumObjectsHA
 @ stub PdhEnumObjectsHW
-@ stub PdhEnumObjectsW
+@ stdcall PdhEnumObjectsW(wstr wstr ptr ptr long long)
 @ stdcall PdhExpandCounterPathA(str ptr ptr)
 @ stdcall PdhExpandCounterPathW(wstr ptr ptr)
 @ stdcall PdhExpandWildCardPathA(str str ptr ptr long)
@@ -58,15 +58,15 @@
 @ stub PdhGetDefaultPerfObjectHW
 @ stub PdhGetDefaultPerfObjectW
 @ stdcall PdhGetDllVersion(ptr)
-@ stub PdhGetFormattedCounterArrayA
-@ stub PdhGetFormattedCounterArrayW
+@ stdcall PdhGetFormattedCounterArrayA(ptr long ptr ptr ptr)
+@ stdcall PdhGetFormattedCounterArrayW(ptr long ptr ptr ptr)
 @ stdcall PdhGetFormattedCounterValue(ptr long ptr ptr)
 @ stub PdhGetLogFileSize
 @ stdcall PdhGetLogFileTypeA(str ptr)
 @ stdcall PdhGetLogFileTypeW(wstr ptr)
 @ stub PdhGetLogSetGUID
-@ stub PdhGetRawCounterArrayA
-@ stub PdhGetRawCounterArrayW
+@ stdcall PdhGetRawCounterArrayA(ptr ptr ptr ptr)
+@ stdcall PdhGetRawCounterArrayW(ptr ptr ptr ptr)
 @ stdcall PdhGetRawCounterValue(ptr ptr ptr)
 @ stub PdhIsRealTimeQuery
 @ stub PdhListLogFileHeaderA
@@ -145,7 +145,7 @@
 @ stub PdhVbCreateCounterPathList
 @ stub PdhVbGetCounterPathElements
 @ stub PdhVbGetCounterPathFromList
-@ stub PdhVbGetDoubleCounterValue
+@ stdcall PdhVbGetDoubleCounterValue(ptr ptr)
 @ stub PdhVbGetLogFileSize
 @ stub PdhVbGetOneCounterPath
 @ stub PdhVbIsGoodStatus
