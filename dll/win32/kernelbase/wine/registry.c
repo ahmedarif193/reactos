@@ -48,6 +48,13 @@ WINE_DEFAULT_DEBUG_CHANNEL(reg);
 #define HKEY_SPECIAL_ROOT_FIRST   HKEY_CLASSES_ROOT
 #define HKEY_SPECIAL_ROOT_LAST    HKEY_DYN_DATA
 
+#ifdef __REACTOS__
+/* Native registry paths pass through the case-sensitive object namespace. */
+#define REG_KEY_ATTRIBUTES OBJ_CASE_INSENSITIVE
+#else
+#define REG_KEY_ATTRIBUTES 0
+#endif
+
 static const WCHAR * const root_key_names[] =
 {
     L"\\Registry\\Machine\\Software\\Classes",
@@ -157,7 +164,7 @@ static HANDLE open_wow6432node( HANDLE key )
     OBJECT_ATTRIBUTES attr;
     HANDLE ret;
 
-    InitializeObjectAttributes( &attr, &nameW, 0, key, NULL );
+    InitializeObjectAttributes( &attr, &nameW, REG_KEY_ATTRIBUTES, key, NULL );
     if (NtOpenKeyEx( &ret, MAXIMUM_ALLOWED | KEY_WOW64_64KEY, &attr, 0 )) return key;
     return ret;
 }
@@ -169,7 +176,7 @@ static HANDLE open_classes_root( void )
     UNICODE_STRING nameW;
     HANDLE ret = 0;
 
-    InitializeObjectAttributes( &attr, &nameW, 0, 0, NULL );
+    InitializeObjectAttributes( &attr, &nameW, REG_KEY_ATTRIBUTES, 0, NULL );
     RtlInitUnicodeString( &nameW, root_key_names[0] );
     NtOpenKeyEx( &ret, MAXIMUM_ALLOWED, &attr, 0 );
     return ret;
@@ -311,7 +318,7 @@ static NTSTATUS open_key( HKEY *retkey, HKEY root, UNICODE_STRING *name, DWORD o
     {
         OBJECT_ATTRIBUTES attr;
 
-        InitializeObjectAttributes( &attr, name, 0, root, NULL );
+        InitializeObjectAttributes( &attr, name, REG_KEY_ATTRIBUTES, root, NULL );
         if (options & REG_OPTION_OPEN_LINK) attr.Attributes |= OBJ_OPENLINK;
         status = NtOpenKeyEx( (HANDLE *)retkey, access, &attr, options );
         if (status == STATUS_PREDEFINED_HANDLE)
@@ -403,7 +410,7 @@ static NTSTATUS create_key( HKEY *retkey, HKEY root, UNICODE_STRING name, ULONG 
     {
         OBJECT_ATTRIBUTES attr;
 
-        InitializeObjectAttributes( &attr, &name, 0, root, NULL );
+        InitializeObjectAttributes( &attr, &name, REG_KEY_ATTRIBUTES, root, NULL );
         if (options & REG_OPTION_OPEN_LINK) attr.Attributes |= OBJ_OPENLINK;
 
         status = NtCreateKey( (HANDLE *)retkey, access, &attr, 0, class, options, dispos );
@@ -460,7 +467,12 @@ static HKEY create_special_root_hkey( HKEY hkey, DWORD access )
         UNICODE_STRING name;
 
         RtlInitUnicodeString( &name, root_key_names[idx] );
+#ifdef __REACTOS__
+        /* The native registry roots already exist and must only be opened. */
+        if (open_key( &hkey, 0, &name, 0, access, FALSE )) return 0;
+#else
         if (create_key( &hkey, 0, name, 0, access, NULL, NULL )) return 0;
+#endif
         TRACE( "%s -> %p\n", debugstr_w(name.Buffer), hkey );
     }
 
@@ -2419,7 +2431,7 @@ LSTATUS WINAPI RegLoadKeyW( HKEY hkey, LPCWSTR subkey, LPCWSTR filename )
 
     if (!(hkey = get_special_root_hkey( hkey ))) return ERROR_INVALID_HANDLE;
 
-    InitializeObjectAttributes( &destkey, &subkeyW, 0, hkey, NULL );
+    InitializeObjectAttributes( &destkey, &subkeyW, REG_KEY_ATTRIBUTES, hkey, NULL );
     RtlInitUnicodeString(&subkeyW, subkey);
 
     InitializeObjectAttributes( &file, &filenameW, OBJ_CASE_INSENSITIVE, 0, NULL );
