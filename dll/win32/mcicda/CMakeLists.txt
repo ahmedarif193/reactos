@@ -1,6 +1,6 @@
 
 add_definitions(-D__WINESRC__)
-include_directories(${REACTOS_SOURCE_DIR}/sdk/include/wine)
+include_directories(BEFORE ${REACTOS_SOURCE_DIR}/sdk/include/wine)
 spec2def(mcicda.dll mcicda.spec)
 
 list(APPEND SOURCE

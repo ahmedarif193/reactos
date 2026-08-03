@@ -32,12 +32,7 @@
 #include "mmddk.h"
 #include "winioctl.h"
 #include "ntddcdrm.h"
-#ifdef __REACTOS__
-#include "wine/winternl.h"
-#endif
-#ifndef __REACTOS__
 #include "winternl.h"
-#endif
 #include "wine/debug.h"
 #include "dsound.h"
 
