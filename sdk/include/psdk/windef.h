@@ -120,6 +120,11 @@ typedef struct _RECTL {
 
 typedef const RECTL *LPCRECTL;
 
+typedef struct APP_LOCAL_DEVICE_ID
+{
+    BYTE value[32];
+} APP_LOCAL_DEVICE_ID;
+
 typedef struct tagPOINT {
 	LONG x;
 	LONG y;
@@ -263,4 +268,3 @@ typedef struct tagPOINTS {
 #endif
 
 #endif /* _WINDEF_ */
-
