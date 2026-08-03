@@ -37,9 +37,6 @@ add_library(quartz MODULE
     quartz.rc
     version.rc)
 
-target_include_directories(quartz BEFORE PRIVATE
-    ${REACTOS_SOURCE_DIR}/sdk/lib/3rdparty/strmbase11/include)
-
 add_typelib(control_tlb.idl)
 
 list(APPEND quartz_rc_deps
@@ -50,7 +47,7 @@ list(APPEND quartz_rc_deps
 set_source_files_properties(version.rc PROPERTIES OBJECT_DEPENDS "${quartz_rc_deps}")
 set_source_files_properties(quartz.rc PROPERTIES OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/quartz.rgs")
 set_module_type(quartz win32dll)
-target_link_libraries(quartz strmbase11 strmiids dxguid uuid wine wine_dll_register wine_dll_canunload ${PSEH_LIB})
+target_link_libraries(quartz strmbase strmiids dxguid uuid wine wine_dll_register wine_dll_canunload ${PSEH_LIB})
 add_importlibs(quartz dsound msacm32 msvfw32 ole32 oleaut32 rpcrt4 user32 gdi32 advapi32 winmm msvcrt kernel32 ntdll)
 add_delay_importlibs(quartz ddraw)
 add_dependencies(quartz dxsdk stdole2)
