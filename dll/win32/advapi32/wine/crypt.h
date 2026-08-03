@@ -21,13 +21,11 @@
 #ifndef __WINE_CRYPT_H
 #define __WINE_CRYPT_H
 
-#ifndef __REACTOS__
 #include <stdarg.h>
 
 #include "windef.h"
 #include "winbase.h"
 #include "wincrypt.h"
-#endif
 
 typedef struct tagPROVFUNCS
 {
@@ -88,10 +86,12 @@ typedef struct tagCRYPTHASH
 
 #define MAXPROVTYPES 999
 
+#ifdef __REACTOS__
 extern unsigned char *CRYPT_DEShash( unsigned char *dst, const unsigned char *key,
                                      const unsigned char *src ) DECLSPEC_HIDDEN;
 extern unsigned char *CRYPT_DESunhash( unsigned char *dst, const unsigned char *key,
                                        const unsigned char *src ) DECLSPEC_HIDDEN;
+#endif /* __REACTOS__ */
 
 struct ustring {
     DWORD Length;
