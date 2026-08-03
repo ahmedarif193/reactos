@@ -369,8 +369,22 @@ interface IShellFolder2 : IShellFolder
 ]
 interface IParentAndItem : IUnknown
 {
-    HRESULT SetParentAndItem([in] PCIDLIST_ABSOLUTE pidlParent, [in] IShellFolder*psf, [in] PCUITEMID_CHILD pidlChild);
-    HRESULT GetParentAndItem([out, optional] PIDLIST_ABSOLUTE *ppidlParent, [out, optional] IShellFolder **ppsf, [out, optional] PITEMID_CHILD *ppidlChild);
+    HRESULT SetParentAndItem(
+        [in, unique] PCIDLIST_ABSOLUTE parent,
+        [in, unique] IShellFolder *folder,
+        [in] PCUITEMID_CHILD child);
+
+    [local]
+    HRESULT GetParentAndItem(
+        [out] PIDLIST_ABSOLUTE *parent,
+        [out] IShellFolder **folder,
+        [out] PITEMID_CHILD *child);
+
+    [call_as(GetParentAndItem)]
+    HRESULT RemoteGetParentAndItem(
+        [out] PIDLIST_ABSOLUTE *parent,
+        [out] IShellFolder **folder,
+        [out] PITEMID_CHILD *child);
 }
 
 /*****************************************************************************
@@ -4787,6 +4801,20 @@ interface IFileOperation : IUnknown
      HRESULT GetAnyOperationsAborted(
          [out] BOOL *pfAnyOperationsAborted);
 };
+
+[
+    object,
+    uuid(2c1c7e2e-2d0e-4059-831e-1e6f82335c2e),
+    pointer_default(unique)
+]
+interface IEnumObjects : IUnknown
+{
+    [local] HRESULT Next([in] ULONG celt, [in] REFIID riid, [out, iid_is(riid)] void **rgelt, [out, optional] ULONG *pceltFetched);
+    [call_as(Next)] HRESULT RemoteNext([in] ULONG  celt, [in] REFIID riid, [out, size_is(celt), length_is(*pceltFetched), iid_is(riid)] void **rgelt, [out] ULONG *pceltFetched);
+    HRESULT Skip([in] ULONG celt);
+    HRESULT Reset();
+    HRESULT Clone([out] IEnumObjects **ppenum);
+}
 
 [
     uuid(6CCB7BE0-6807-11d0-B810-00C04FD706EC),

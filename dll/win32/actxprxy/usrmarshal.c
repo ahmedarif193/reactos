@@ -175,7 +175,7 @@ HRESULT CALLBACK IEnumShellItems_Next_Proxy(
     ULONG *pceltFetched)
 {
     ULONG fetched;
-    TRACE("(%p)->(%d, %p, %p)\n", This, celt, rgelt, pceltFetched);
+    TRACE("(%p)->(%ld, %p, %p)\n", This, celt, rgelt, pceltFetched);
     if (!pceltFetched) pceltFetched = &fetched;
     return IEnumShellItems_RemoteNext_Proxy(This, celt, rgelt, pceltFetched);
 }
@@ -187,7 +187,7 @@ HRESULT __RPC_STUB IEnumShellItems_Next_Stub(
     ULONG *pceltFetched)
 {
     HRESULT hr;
-    TRACE("(%p)->(%d, %p, %p)\n", This, celt, rgelt, pceltFetched);
+    TRACE("(%p)->(%ld, %p, %p)\n", This, celt, rgelt, pceltFetched);
     *pceltFetched = 0;
     hr = IEnumShellItems_Next(This, celt, rgelt, pceltFetched);
     if (hr == S_OK) *pceltFetched = celt;
@@ -203,7 +203,7 @@ HRESULT CALLBACK IEnumExplorerCommand_Next_Proxy(
     ULONG *pceltFetched)
 {
     ULONG fetched;
-    TRACE("(%p)->(%d, %p, %p)\n", This, celt, pUICommand, pceltFetched);
+    TRACE("(%p)->(%ld, %p, %p)\n", This, celt, pUICommand, pceltFetched);
     if (!pceltFetched) pceltFetched = &fetched;
     return IEnumExplorerCommand_RemoteNext_Proxy(This, celt, pUICommand, pceltFetched);
 }
@@ -215,14 +215,14 @@ HRESULT __RPC_STUB IEnumExplorerCommand_Next_Stub(
     ULONG *pceltFetched)
 {
     HRESULT hr;
-    TRACE("(%p)->(%d, %p, %p)\n", This, celt, pUICommand, pceltFetched);
+    TRACE("(%p)->(%ld, %p, %p)\n", This, celt, pUICommand, pceltFetched);
     *pceltFetched = 0;
     hr = IEnumExplorerCommand_Next(This, celt, pUICommand, pceltFetched);
     if (hr == S_OK) *pceltFetched = celt;
     return hr;
 }
 
-#endif // __REACTOS__
+#endif /* __REACTOS__ */
 
 HRESULT CALLBACK IModalWindow_Show_Proxy(
     IModalWindow *This,
@@ -256,4 +256,41 @@ HRESULT __RPC_STUB IFolderView2_GetGroupBy_Proxy(
 {
     TRACE("(%p)->(%p %p)\n", This, pkey, ascending);
     return IFolderView2_RemoteGetGroupBy_Proxy(This, pkey, ascending);
+}
+
+HRESULT __RPC_STUB IParentAndItem_GetParentAndItem_Stub(
+    IParentAndItem *This,
+    PIDLIST_ABSOLUTE *parent,
+    IShellFolder **folder,
+    PITEMID_CHILD *child)
+{
+    TRACE("(%p)->(%p %p %p)\n", This, parent, folder, child);
+    return IParentAndItem_GetParentAndItem(This, parent, folder, child);
+}
+
+HRESULT __RPC_STUB IParentAndItem_GetParentAndItem_Proxy(
+    IParentAndItem *This,
+    PIDLIST_ABSOLUTE *parent,
+    IShellFolder **folder,
+    PITEMID_CHILD *child)
+{
+    TRACE("(%p)->(%p %p %p)\n", This, parent, folder, child);
+    return IParentAndItem_RemoteGetParentAndItem_Proxy(This, parent, folder, child);
+}
+
+HRESULT CALLBACK IEnumObjects_Next_Proxy(IEnumObjects *This, ULONG celt, REFIID riid, void **rgelt, ULONG *pceltFetched)
+{
+    ULONG fetched;
+    TRACE("(%p)->(%ld, %p, %p, %p)\n", This, celt, debugstr_guid(riid), rgelt, pceltFetched);
+    if (!pceltFetched) pceltFetched = &fetched;
+    return IEnumObjects_RemoteNext_Proxy(This, celt, riid, rgelt, pceltFetched);
+}
+
+HRESULT __RPC_STUB IEnumObjects_Next_Stub(IEnumObjects *This, ULONG celt, REFIID riid, void **rgelt, ULONG *pceltFetched)
+{
+    HRESULT hr;
+    TRACE("(%p)->(%ld, %p, %p, %p)\n", This, celt, debugstr_guid(riid), rgelt, pceltFetched);
+    *pceltFetched = 0;
+    hr = IEnumObjects_Next(This, celt, riid, rgelt, pceltFetched);
+    return hr;
 }
