@@ -22,6 +22,7 @@
 #include "setupapi_private.h"
 
 #include <dbt.h>
+#include <devpkey.h>
 #include <pnp_c.h>
 #include <winsvc.h>
 #include <winsvc_undoc.h>
@@ -4702,6 +4703,135 @@ CM_Get_Device_Interface_List_Size_ExW(
     }
     RpcEndExcept;
 
+    return ret;
+}
+
+
+/***********************************************************************
+ * CM_Get_Device_Interface_PropertyW [SETUPAPI.@]
+ */
+CONFIGRET
+WINAPI
+CM_Get_Device_Interface_PropertyW(
+    _In_ PCWSTR pszDeviceInterface,
+    _In_ const DEVPROPKEY *PropertyKey,
+    _Out_ DEVPROPTYPE *PropertyType,
+    _Out_writes_bytes_opt_(*PropertyBufferSize) PBYTE PropertyBuffer,
+    _Inout_ PULONG PropertyBufferSize,
+    _In_ ULONG ulFlags)
+{
+    SP_DEVICE_INTERFACE_DETAIL_DATA_W *detail = NULL;
+    SP_DEVICE_INTERFACE_DATA iface = { sizeof(iface) };
+    SP_DEVINFO_DATA device = { sizeof(device) };
+    HDEVINFO set = INVALID_HANDLE_VALUE;
+    CONFIGRET ret = CR_FAILURE;
+    ULONG required = 0;
+
+    if (!pszDeviceInterface)
+        return CR_INVALID_POINTER;
+    if (!PropertyKey)
+        return CR_FAILURE;
+    if (!PropertyType || !PropertyBufferSize)
+        return CR_INVALID_POINTER;
+    if (ulFlags)
+        return CR_INVALID_FLAG;
+    if (!PropertyBuffer && *PropertyBufferSize)
+        return CR_INVALID_POINTER;
+
+    set = SetupDiCreateDeviceInfoList(NULL, NULL);
+    if (set == INVALID_HANDLE_VALUE)
+        return CR_FAILURE;
+
+    if (!SetupDiOpenDeviceInterfaceW(set, pszDeviceInterface, 0, &iface))
+    {
+        *PropertyBufferSize = 0;
+        ret = CR_NO_SUCH_DEVICE_INTERFACE;
+        goto done;
+    }
+
+    if (IsEqualGUID(&PropertyKey->fmtid, &DEVPKEY_DeviceInterface_Enabled.fmtid) &&
+        PropertyKey->pid == DEVPKEY_DeviceInterface_Enabled.pid)
+    {
+        BYTE enabled = (iface.Flags & SPINT_ACTIVE) ? DEVPROP_TRUE : DEVPROP_FALSE;
+
+        *PropertyType = DEVPROP_TYPE_BOOLEAN;
+        required = sizeof(enabled);
+        if (*PropertyBufferSize < required)
+            ret = CR_BUFFER_SMALL;
+        else
+        {
+            memcpy(PropertyBuffer, &enabled, required);
+            ret = CR_SUCCESS;
+        }
+        *PropertyBufferSize = required;
+        goto done;
+    }
+
+    if (IsEqualGUID(&PropertyKey->fmtid, &DEVPKEY_DeviceInterface_ClassGuid.fmtid) &&
+        PropertyKey->pid == DEVPKEY_DeviceInterface_ClassGuid.pid)
+    {
+        *PropertyType = DEVPROP_TYPE_GUID;
+        required = sizeof(iface.InterfaceClassGuid);
+        if (*PropertyBufferSize < required)
+            ret = CR_BUFFER_SMALL;
+        else
+        {
+            memcpy(PropertyBuffer, &iface.InterfaceClassGuid, required);
+            ret = CR_SUCCESS;
+        }
+        *PropertyBufferSize = required;
+        goto done;
+    }
+
+    if (!IsEqualGUID(&PropertyKey->fmtid, &DEVPKEY_Device_InstanceId.fmtid) ||
+        PropertyKey->pid != DEVPKEY_Device_InstanceId.pid)
+    {
+        ret = CR_NO_SUCH_VALUE;
+        goto done;
+    }
+
+    SetupDiGetDeviceInterfaceDetailW(set, &iface, NULL, 0, &required, NULL);
+    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+    {
+        ret = CR_NO_SUCH_DEVICE_INTERFACE;
+        goto done;
+    }
+
+    detail = HeapAlloc(GetProcessHeap(), 0, required);
+    if (!detail)
+    {
+        ret = CR_OUT_OF_MEMORY;
+        goto done;
+    }
+
+    detail->cbSize = sizeof(*detail);
+    if (!SetupDiGetDeviceInterfaceDetailW(set, &iface, detail, required, NULL, &device))
+    {
+        ret = CR_NO_SUCH_DEVICE_INTERFACE;
+        goto done;
+    }
+
+    if (!SetupDiGetDeviceInstanceIdW(set, &device, NULL, 0, &required) &&
+        GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+    {
+        ret = CR_FAILURE;
+        goto done;
+    }
+
+    required *= sizeof(WCHAR);
+    *PropertyType = DEVPROP_TYPE_STRING;
+    if (*PropertyBufferSize < required)
+        ret = CR_BUFFER_SMALL;
+    else if (SetupDiGetDeviceInstanceIdW(set, &device, (WCHAR *)PropertyBuffer,
+                                         *PropertyBufferSize / sizeof(WCHAR), NULL))
+        ret = CR_SUCCESS;
+    else
+        ret = CR_FAILURE;
+    *PropertyBufferSize = required;
+
+done:
+    HeapFree(GetProcessHeap(), 0, detail);
+    SetupDiDestroyDeviceInfoList(set);
     return ret;
 }
 
