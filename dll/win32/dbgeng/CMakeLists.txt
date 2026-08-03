@@ -1,5 +1,5 @@
 
-spec2def(dbgeng.dll dbgeng.spec)
+spec2def(dbgeng.dll dbgeng.spec ADD_IMPORTLIB)
 
 list(APPEND SOURCE
     dbgeng.c
