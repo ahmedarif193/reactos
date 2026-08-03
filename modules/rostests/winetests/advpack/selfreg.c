@@ -1,7 +1,7 @@
 /*
- * Advpack private header
+ * DLL for testing self-registration
  *
- * Copyright 2006 James Hawkins
+ * Copyright 2018 Zebediah Figura
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -18,27 +18,25 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __ADVPACK_PRIVATE_H
-#define __ADVPACK_PRIVATE_H
+#if 0
+#pragma makedep testdll
+#endif
 
-HRESULT do_ocx_reg(HMODULE hocx, BOOL do_reg, const WCHAR *flags, const WCHAR *param);
-LPWSTR get_parameter(LPWSTR *params, WCHAR separator, BOOL quoted);
-void set_ldids(HINF hInf, LPCWSTR pszInstallSection, LPCWSTR pszWorkingDir);
+#include <stdarg.h>
+#include <windef.h>
+#include <winbase.h>
+#include <winreg.h>
 
-HRESULT launch_exe(LPCWSTR cmd, LPCWSTR dir, HANDLE *phEXE);
-
-static inline char *strdupWtoA(const WCHAR *str)
+HRESULT WINAPI DllRegisterServer(void)
 {
-    char *ret = NULL;
-
-    if(str) {
-        size_t size = WideCharToMultiByte(CP_ACP, 0, str, -1, NULL, 0, NULL, NULL);
-        ret = malloc(size);
-        if(ret)
-            WideCharToMultiByte(CP_ACP, 0, str, -1, ret, size, NULL, NULL);
-    }
-
-    return ret;
+    HKEY key;
+    RegCreateKeyA(HKEY_CLASSES_ROOT, "selfreg_test", &key);
+    RegCloseKey(key);
+    return S_OK;
 }
 
-#endif /* __ADVPACK_PRIVATE_H */
+HRESULT WINAPI DllUnregisterServer(void)
+{
+    RegDeleteKeyA(HKEY_CLASSES_ROOT, "selfreg_test");
+    return S_OK;
+}
