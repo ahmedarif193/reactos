@@ -8,5 +8,5 @@ add_library(strmbase11 STATIC
     seeking.c)
 
 target_compile_definitions(strmbase11 PRIVATE __WINESRC__)
-target_include_directories(strmbase11 BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(strmbase11 BEFORE PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_dependencies(strmbase11 psdk dxsdk)
