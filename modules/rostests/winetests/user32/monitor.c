@@ -42,6 +42,7 @@
 
 #ifdef __REACTOS__
 #include "devpropdef.h"
+#else
 
 typedef struct DISPLAYCONFIG_GET_SOURCE_DPI_SCALE
 {
