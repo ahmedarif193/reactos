@@ -1,0 +1,5 @@
+add_definitions(-DUSE_WINE_TODOS)
+add_executable(tapi32_winetest tapi.c testlist.c)
+set_module_type(tapi32_winetest win32cui)
+add_importlibs(tapi32_winetest tapi32 msvcrt kernel32)
+add_rostests_file(TARGET tapi32_winetest)
