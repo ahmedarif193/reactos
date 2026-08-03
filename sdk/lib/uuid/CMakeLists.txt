@@ -29,6 +29,7 @@ list(APPEND IDL_SOURCES
     ctxtcall.idl
 #    cxq_cust.idl
 #    dbgprop.idl
+    d3d9on12.idl
     dimm.idl
     dispex.idl
 #    dlmgridl.idl
