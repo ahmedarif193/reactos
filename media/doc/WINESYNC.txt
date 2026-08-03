@@ -28,7 +28,7 @@ sdk/include/psdk/netioapi.h     # Synced to Wine-10.0 (mirrors sdk/include/wine/
 The following libraries are shared with Wine.
 
 dll/directx/wine/amstream       # Synced to Wine-11.14
-dll/directx/wine/d3d8           # Synced to WineStaging-3.3
+dll/directx/wine/d3d8           # Synced to Wine-11.14
 dll/directx/wine/d3d9           # Synced to WineStaging-3.3
 dll/directx/wine/d3dcompiler_43 # Synced to Wine-11.14
 dll/directx/wine/d3dcompiler_47 # Synced to Wine-11.14
