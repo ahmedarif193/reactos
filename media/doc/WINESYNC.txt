@@ -102,7 +102,7 @@ dll/win32/inseng              # Synced to Wine-11.14
 dll/win32/iphlpapi            # Out of sync
 dll/win32/itircl              # Synced to Wine-11.14
 dll/win32/itss                # Synced to Wine-11.14
-dll/win32/jscript             # Synced to Wine-10.0
+dll/win32/jscript             # Synced to Wine-11.14
 dll/win32/jsproxy             # Synced to Wine-11.14
 dll/win32/loadperf            # Synced to Wine-11.14
 dll/win32/lz32                # Synced to Wine-11.14

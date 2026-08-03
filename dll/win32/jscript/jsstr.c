@@ -120,8 +120,9 @@ void jsstr_extract(jsstr_t *str, unsigned off, unsigned len, WCHAR *buf)
         memcpy(buf, jsstr_as_heap(str)->buf+off, len*sizeof(WCHAR));
         return;
     case JSSTR_ROPE:
-#ifdef __REACTOS__
+#if defined(__REACTOS__) && defined(_MSC_VER)
         jsstr_rope_extract(jsstr_as_rope(str), off, len, buf);
+        return;
 #else
         return jsstr_rope_extract(jsstr_as_rope(str), off, len, buf);
 #endif
