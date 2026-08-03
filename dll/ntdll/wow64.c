@@ -121,6 +121,19 @@ RtlWow64IsWowGuestMachineSupported(USHORT machine, BOOLEAN *supported)
     return status;
 }
 
+static BOOLEAN
+RtlpIsCurrentProcess(HANDLE process)
+{
+    return process == NtCurrentProcess() || !NtCompareObjects(process, NtCurrentProcess());
+}
+
+BOOLEAN
+WINAPI
+RtlIsCurrentProcess(HANDLE process)
+{
+    return RtlpIsCurrentProcess(process);
+}
+
 #if defined(_WIN64) && (!defined(__REACTOS__) || !defined(_M_ARM64))
 
 NTSTATUS
@@ -272,19 +285,6 @@ done:
     if (retlen)
         *retlen = sizeof(entry);
     return STATUS_SUCCESS;
-}
-
-static BOOLEAN
-RtlpIsCurrentProcess(HANDLE process)
-{
-    return process == NtCurrentProcess() || !NtCompareObjects(process, NtCurrentProcess());
-}
-
-BOOLEAN
-WINAPI
-RtlIsCurrentProcess(HANDLE process)
-{
-    return RtlpIsCurrentProcess(process);
 }
 
 VOID
