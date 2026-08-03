@@ -21,17 +21,7 @@
 #ifndef __WINE_SERVER_LIST_H
 #define __WINE_SERVER_LIST_H
 
-#ifdef __cplusplus
-#define __WINE_SERVER_LIST_INLINE inline
-#else
-#if defined(__GNUC__)
-#define __WINE_SERVER_LIST_INLINE extern __inline__ __attribute__((__always_inline__,__gnu_inline__))
-#elif defined(_MSC_VER)
-#define __WINE_SERVER_LIST_INLINE __inline
-#else
-#define __WINE_SERVER_LIST_INLINE static
-#endif
-#endif
+#include <stddef.h>
 
 struct list
 {
@@ -75,7 +65,7 @@ struct list
  */
 
 /* add an element after the specified one */
-__WINE_SERVER_LIST_INLINE void list_add_after( struct list *elem, struct list *to_add )
+static inline void list_add_after( struct list *elem, struct list *to_add )
 {
     to_add->next = elem->next;
     to_add->prev = elem;
@@ -84,7 +74,7 @@ __WINE_SERVER_LIST_INLINE void list_add_after( struct list *elem, struct list *t
 }
 
 /* add an element before the specified one */
-__WINE_SERVER_LIST_INLINE void list_add_before( struct list *elem, struct list *to_add )
+static inline void list_add_before( struct list *elem, struct list *to_add )
 {
     to_add->next = elem;
     to_add->prev = elem->prev;
@@ -93,26 +83,26 @@ __WINE_SERVER_LIST_INLINE void list_add_before( struct list *elem, struct list *
 }
 
 /* add element at the head of the list */
-__WINE_SERVER_LIST_INLINE void list_add_head( struct list *list, struct list *elem )
+static inline void list_add_head( struct list *list, struct list *elem )
 {
     list_add_after( list, elem );
 }
 
 /* add element at the tail of the list */
-__WINE_SERVER_LIST_INLINE void list_add_tail( struct list *list, struct list *elem )
+static inline void list_add_tail( struct list *list, struct list *elem )
 {
     list_add_before( list, elem );
 }
 
 /* remove an element from its list */
-__WINE_SERVER_LIST_INLINE void list_remove( struct list *elem )
+static inline void list_remove( struct list *elem )
 {
     elem->next->prev = elem->prev;
     elem->prev->next = elem->next;
 }
 
 /* get the next element */
-__WINE_SERVER_LIST_INLINE struct list *list_next( const struct list *list, const struct list *elem )
+static inline struct list *list_next( const struct list *list, const struct list *elem )
 {
     struct list *ret = elem->next;
     if (elem->next == list) ret = NULL;
@@ -120,7 +110,7 @@ __WINE_SERVER_LIST_INLINE struct list *list_next( const struct list *list, const
 }
 
 /* get the previous element */
-__WINE_SERVER_LIST_INLINE struct list *list_prev( const struct list *list, const struct list *elem )
+static inline struct list *list_prev( const struct list *list, const struct list *elem )
 {
     struct list *ret = elem->prev;
     if (elem->prev == list) ret = NULL;
@@ -128,31 +118,31 @@ __WINE_SERVER_LIST_INLINE struct list *list_prev( const struct list *list, const
 }
 
 /* get the first element */
-__WINE_SERVER_LIST_INLINE struct list *list_head( const struct list *list )
+static inline struct list *list_head( const struct list *list )
 {
     return list_next( list, list );
 }
 
 /* get the last element */
-__WINE_SERVER_LIST_INLINE struct list *list_tail( const struct list *list )
+static inline struct list *list_tail( const struct list *list )
 {
     return list_prev( list, list );
 }
 
 /* check if a list is empty */
-__WINE_SERVER_LIST_INLINE int list_empty( const struct list *list )
+static inline int list_empty( const struct list *list )
 {
     return list->next == list;
 }
 
 /* initialize a list */
-__WINE_SERVER_LIST_INLINE void list_init( struct list *list )
+static inline void list_init( struct list *list )
 {
     list->next = list->prev = list;
 }
 
 /* count the elements of a list */
-__WINE_SERVER_LIST_INLINE unsigned int list_count( const struct list *list )
+static inline unsigned int list_count( const struct list *list )
 {
     unsigned count = 0;
     const struct list *ptr;
@@ -160,8 +150,8 @@ __WINE_SERVER_LIST_INLINE unsigned int list_count( const struct list *list )
     return count;
 }
 
-/* move all elements from src to the tail of dst */
-__WINE_SERVER_LIST_INLINE void list_move_tail( struct list *dst, struct list *src )
+/* move all elements from src to before the specified element */
+static inline void list_move_before( struct list *dst, struct list *src )
 {
     if (list_empty(src)) return;
 
@@ -172,8 +162,8 @@ __WINE_SERVER_LIST_INLINE void list_move_tail( struct list *dst, struct list *sr
     list_init(src);
 }
 
-/* move all elements from src to the head of dst */
-__WINE_SERVER_LIST_INLINE void list_move_head( struct list *dst, struct list *src )
+/* move all elements from src to after the specified element */
+static inline void list_move_after( struct list *dst, struct list *src )
 {
     if (list_empty(src)) return;
 
@@ -182,6 +172,42 @@ __WINE_SERVER_LIST_INLINE void list_move_head( struct list *dst, struct list *sr
     dst->next = src->next;
     src->next->prev = dst;
     list_init(src);
+}
+
+/* move all elements from src to the head of dst */
+static inline void list_move_head( struct list *dst, struct list *src )
+{
+    list_move_after( dst, src );
+}
+
+/* move all elements from src to the tail of dst */
+static inline void list_move_tail( struct list *dst, struct list *src )
+{
+    list_move_before( dst, src );
+}
+
+/* move the slice of elements from begin to end inclusive to the head of dst */
+static inline void list_move_slice_head( struct list *dst, struct list *begin, struct list *end )
+{
+    struct list *dst_next = dst->next;
+    begin->prev->next = end->next;
+    end->next->prev = begin->prev;
+    dst->next = begin;
+    dst_next->prev = end;
+    begin->prev = dst;
+    end->next = dst_next;
+}
+
+/* move the slice of elements from begin to end inclusive to the tail of dst */
+static inline void list_move_slice_tail( struct list *dst, struct list *begin, struct list *end )
+{
+    struct list *dst_prev = dst->prev;
+    begin->prev->next = end->next;
+    end->next->prev = begin->prev;
+    dst_prev->next = begin;
+    dst->prev = end;
+    begin->prev = dst_prev;
+    end->next = dst;
 }
 
 /* iterate through the list */
@@ -233,15 +259,12 @@ __WINE_SERVER_LIST_INLINE void list_move_head( struct list *dst, struct list *sr
          (cursor2) = LIST_ENTRY((cursor)->field.prev, type, field))
 
 /* macros for statically initialized lists */
+#undef LIST_INIT
 #define LIST_INIT(list)  { &(list), &(list) }
 
 /* get pointer to object containing list element */
-#ifdef _WIN64
+#undef LIST_ENTRY
 #define LIST_ENTRY(elem, type, field) \
-    ((type *)((char *)(elem) - (unsigned long long)(&((type *)0)->field)))
-#else
-#define LIST_ENTRY(elem, type, field) \
-    ((type *)((char *)(elem) - (unsigned long)(&((type *)0)->field)))
-#endif
+    ((type *)((char *)(elem) - offsetof(type, field)))
 
 #endif  /* __WINE_SERVER_LIST_H */
