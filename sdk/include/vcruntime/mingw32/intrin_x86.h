@@ -1694,6 +1694,7 @@ __INTRIN_INLINE unsigned long long __rdtsc(void)
 }
 #endif /* !HAS_BUILTIN(__rdtsc) */
 
+#ifndef __clang__
 __INTRIN_INLINE void __writeeflags(uintptr_t Value)
 {
 	__asm__ __volatile__("push %0\n popf" : : "rim"(Value));
@@ -1705,6 +1706,7 @@ __INTRIN_INLINE uintptr_t __readeflags(void)
 	__asm__ __volatile__("pushf\n pop %0" : "=rm"(retval));
 	return retval;
 }
+#endif
 
 /*** Interrupts ***/
 
