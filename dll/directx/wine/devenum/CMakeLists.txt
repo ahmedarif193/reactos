@@ -5,20 +5,19 @@ list(APPEND SOURCE
     createdevenum.c
     devenum_main.c
     mediacatenum.c
-    parsedisplayname.c
-    precomp.h)
+    parsedisplayname.c)
 
 add_library(devenum MODULE
     ${SOURCE}
     devenum.rc
     ${CMAKE_CURRENT_BINARY_DIR}/devenum.def)
 
-set_source_files_properties(devenum.rc PROPERTIES OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/devenum_classes.rgs)
+add_idl_reg_scripts(devenum registry devenum_classes.idl)
+target_compile_definitions(devenum PRIVATE USE_NEW_WINE_REGISTER_RESOURCES)
 set_module_type(devenum win32dll UNICODE)
-target_link_libraries(devenum strmiids uuid wine)
+target_link_libraries(devenum dmoguids strmiids uuid wine wine_dll_canunload)
 add_delay_importlibs(devenum msvfw32)
-add_importlibs(devenum advapi32 advapi32_vista ole32 oleaut32 winmm user32 avicap32 msacm32 dsound msdmo msvcrt kernel32 ntdll)
+add_importlibs(devenum advapi32 ole32 oleaut32 winmm user32 avicap32 dsound msdmo msvcrt kernel32 ntdll)
 add_dependencies(devenum wineheaders)
-add_pch(devenum precomp.h SOURCE)
 add_cd_file(TARGET devenum DESTINATION reactos/system32 FOR all)
 set_wine_module_FIXME(devenum) # CORE-5743: No ARRAY_SIZE and CONST_VTABLE
