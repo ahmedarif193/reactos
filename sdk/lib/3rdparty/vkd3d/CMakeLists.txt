@@ -21,6 +21,7 @@ FLEX_TARGET(vkd3d_preproc_scanner
 ADD_FLEX_BISON_DEPENDENCY(vkd3d_preproc_scanner vkd3d_preproc_parser)
 
 list(APPEND SOURCE
+    libs/vkd3d-common/blob.c
     libs/vkd3d-common/debug.c
     libs/vkd3d-common/error.c
     libs/vkd3d-common/memory.c
@@ -40,15 +41,26 @@ list(APPEND SOURCE
     libs/vkd3d-shader/spirv.c
     libs/vkd3d-shader/tpf.c
     libs/vkd3d-shader/vkd3d_shader_main.c
+    libs/vkd3d-utils/vkd3d_utils_main.c
+    libs/vkd3d/cache.c
+    libs/vkd3d/command.c
+    libs/vkd3d/device.c
+    libs/vkd3d/resource.c
+    libs/vkd3d/state.c
+    libs/vkd3d/utils.c
+    libs/vkd3d/vkd3d_main.c
     ${BISON_vkd3d_hlsl_parser_OUTPUTS}
     ${FLEX_vkd3d_hlsl_scanner_OUTPUTS}
     ${BISON_vkd3d_preproc_parser_OUTPUTS}
     ${FLEX_vkd3d_preproc_scanner_OUTPUTS})
 
-add_library(vkd3d_shader STATIC ${SOURCE})
-add_dependencies(vkd3d_shader psdk)
+add_library(vkd3d STATIC ${SOURCE})
+add_dependencies(vkd3d psdk)
+target_compile_definitions(vkd3d PRIVATE
+    LIBVKD3D_SOURCE
+    LIBVKD3D_UTILS_SOURCE)
 
-target_include_directories(vkd3d_shader
+target_include_directories(vkd3d
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE
@@ -56,8 +68,13 @@ target_include_directories(vkd3d_shader
         ${CMAKE_CURRENT_SOURCE_DIR}/include/private
         ${CMAKE_CURRENT_SOURCE_DIR}/libs/vkd3d-common
         ${CMAKE_CURRENT_SOURCE_DIR}/libs/vkd3d-shader
+        ${CMAKE_CURRENT_SOURCE_DIR}/libs/vkd3d-utils
+        ${CMAKE_CURRENT_SOURCE_DIR}/libs/vkd3d
         ${CMAKE_CURRENT_BINARY_DIR})
 
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
-    target_compile_options(vkd3d_shader PRIVATE -Wno-format-overflow)
+    target_compile_options(vkd3d PRIVATE -Wno-format-overflow)
 endif()
+
+add_library(vkd3d_shader INTERFACE)
+target_link_libraries(vkd3d_shader INTERFACE vkd3d)
