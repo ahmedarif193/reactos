@@ -1,0 +1,5 @@
+add_executable(msdmo_winetest msdmo.c testlist.c)
+target_link_libraries(msdmo_winetest mediaobj_guid uuid)
+set_module_type(msdmo_winetest win32cui)
+add_importlibs(msdmo_winetest advapi32 msdmo msvcrt kernel32)
+add_rostests_file(TARGET msdmo_winetest)
