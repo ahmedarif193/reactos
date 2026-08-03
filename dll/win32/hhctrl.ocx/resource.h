@@ -18,23 +18,18 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#pragma once
-
 #include <windef.h>
 #include <winbase.h>
 #include <wingdi.h>
 #include <htmlhelp.h>
 
-#ifdef __REACTOS__
-#define IDI_HHICON      100
-#define IDS_DEFTITLE    0
-#endif
 #define IDS_CONTENTS    1
 #define IDS_INDEX       2
 #define IDS_SEARCH      3
 #define IDS_FAVORITES   4
 #define IDS_HIDETABS    5
 #define IDS_SHOWTABS    6
+#define IDS_SELECT_TOPIC    7
 
 #define MENU_POPUP      1
 #define MENU_WEBBROWSER 2
@@ -62,3 +57,5 @@
 #define HHTV_FOLDER     1
 #define HHTV_OPENFOLDER 2
 #define HHTV_NUMBITMAPS HHTV_OPENFOLDER
+
+#define IDC_SEARCH_BTN 0
