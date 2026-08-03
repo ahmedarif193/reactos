@@ -54,7 +54,7 @@ if(REACTOS_USE_WDDM)
 endif()
 
 set_module_type(d3dwine win32dll)
-target_link_libraries(d3dwine wine vkd3d_shader dxguid dx10guid)
+target_link_libraries(d3dwine wine vkd3d dxguid dx10guid uuid)
 add_importlibs(d3dwine user32 opengl32 gdi32 gdi32_vista advapi32 msvcrt kernel32 ntdll)
 add_dependencies(d3dwine d3d_idl_headers)
 add_pch(d3dwine precomp.h SOURCE)

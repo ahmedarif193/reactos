@@ -763,7 +763,7 @@
 #define HAVE_SPAWNVP 1
 
 /* Define to 1 if the system has the type `ssize_t'. */
-#define HAVE_SSIZE_T 1
+/* #undef HAVE_SSIZE_T */
 
 /* Define to 1 if you have the `statfs' function. */
 /* #undef HAVE_STATFS */

@@ -47,11 +47,6 @@
 #include "ddk/d3dkmthk.h"
 #include "wine/debug.h"
 
-#if defined(__REACTOS__) && !defined(_SSIZE_T_DEFINED)
-typedef SSIZE_T ssize_t;
-#define _SSIZE_T_DEFINED
-#endif
-
 #include "objbase.h"
 #include "wine/wined3d.h"
 #include "wine/list.h"
