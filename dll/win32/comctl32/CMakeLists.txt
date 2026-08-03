@@ -2,9 +2,10 @@
 add_definitions(
     -D_WINE
     -D__ROS_LONG64__
-    -D_COMCTL32_)
+    -D_COMCTL32_
+    -D__WINE_COMCTL32_VERSION=5)
 
-spec2def(comctl32.dll comctl32.spec ADD_IMPORTLIB)
+spec2def(comctl32.dll comctl32.spec)
 
 if(MSVC)
 
@@ -12,22 +13,17 @@ endif()
 
 list(APPEND SOURCE
     animate.c
-    button.c
-    combo.c
     comboex.c
-    comctl32undoc.c
     commctrl.c
     datetime.c
     dpa.c
     draglist.c
     dsa.c
-    edit.c
     flatsb.c
     header.c
     hotkey.c
     imagelist.c
     ipaddress.c
-    listbox.c
     listview.c
     monthcal.c
     nativefont.c
@@ -36,26 +32,20 @@ list(APPEND SOURCE
     propsheet.c
     rebar.c
     smoothscroll.c
-    static.c
     status.c
     string.c
-    syslink.c
     tab.c
-    taskdialog.c
-    theme_scrollbar.c
-    theming.c
     toolbar.c
     tooltips.c
     trackbar.c
     treeview.c
-    updown.c)
-
-list(APPEND PCH_SKIP_SOURCE
+    updown.c
     stubs.c)
+
+set_source_files_properties(stubs.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 add_library(comctl32 MODULE
     ${SOURCE}
-    ${PCH_SKIP_SOURCE}
     rsrc.rc
     ${CMAKE_CURRENT_BINARY_DIR}/comctl32.def)
 
@@ -68,13 +58,12 @@ endif()
 
 set_module_type(comctl32 win32dll UNICODE)
 target_link_libraries(comctl32 uuid wine ${PSEH_LIB} oldnames)
-add_delay_importlibs(comctl32 winmm uxtheme)
-add_importlibs(comctl32 user32 gdi32 advapi32 usp10 imm32 msvcrt kernel32 ntdll)
-add_pch(comctl32 precomp.h "${PCH_SKIP_SOURCE}")
+add_delay_importlibs(comctl32 oleacc winmm uxtheme)
+add_importlibs(comctl32 user32 gdi32 advapi32 usp10 imm32 kernelbase_ros oleaut32 msvcrt kernel32 ntdll)
+add_pch(comctl32 precomp.h SOURCE)
 add_cd_file(TARGET comctl32 DESTINATION reactos/system32 FOR all)
 
 add_cd_file(TARGET comctl32 DESTINATION reactos/winsxs/${WINARCH}_microsoft.windows.common-controls_6595b64144ccf1df_5.82.2600.2982_none_deadbeef FOR all)
-add_cd_file(TARGET comctl32 DESTINATION reactos/winsxs/${WINARCH}_microsoft.windows.common-controls_6595b64144ccf1df_6.0.2600.2982_none_deadbeef FOR all)
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/${WINARCH}_microsoft.windows.common-controls_6595b64144ccf1df_5.82.2600.2982_none_deadbeef.manifest DESTINATION reactos/winsxs/manifests FOR all)
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/${WINARCH}_microsoft.windows.common-controls_6595b64144ccf1df_6.0.2600.2982_none_deadbeef.manifest DESTINATION reactos/winsxs/manifests FOR all)
 set_wine_module_FIXME(comctl32) # CORE-5743: No ARRAY_SIZE macro

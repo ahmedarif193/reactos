@@ -18,13 +18,8 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifdef __REACTOS__
-#pragma once
-#endif
-
 #include <assert.h>
 #include <windows.h>
-#include "wine/heap.h"
 #include "wine/test.h"
 
 /* undocumented SWP flags - from SDK 3.1 */
@@ -65,6 +60,8 @@ struct msg_sequence
     struct message *sequence;
 };
 
+static HWINEVENTHOOK hwineventhook;
+
 static void add_message(struct msg_sequence **seq, int sequence_index,
     const struct message *msg)
 {
@@ -73,13 +70,13 @@ static void add_message(struct msg_sequence **seq, int sequence_index,
     if (!msg_seq->sequence)
     {
         msg_seq->size = 10;
-        msg_seq->sequence = heap_alloc(msg_seq->size * sizeof (*msg_seq->sequence));
+        msg_seq->sequence = malloc(msg_seq->size * sizeof (*msg_seq->sequence));
     }
 
     if (msg_seq->count == msg_seq->size)
     {
         msg_seq->size *= 2;
-        msg_seq->sequence = heap_realloc(msg_seq->sequence, msg_seq->size * sizeof (*msg_seq->sequence));
+        msg_seq->sequence = realloc(msg_seq->sequence, msg_seq->size * sizeof (*msg_seq->sequence));
     }
 
     assert(msg_seq->sequence);
@@ -91,7 +88,7 @@ static void add_message(struct msg_sequence **seq, int sequence_index,
 static inline void flush_sequence(struct msg_sequence **seg, int sequence_index)
 {
     struct msg_sequence *msg_seq = seg[sequence_index];
-    heap_free(msg_seq->sequence);
+    free(msg_seq->sequence);
     msg_seq->sequence = NULL;
     msg_seq->count = msg_seq->size = 0;
 }
@@ -118,13 +115,13 @@ static void dump_sequence( struct msg_sequence **seq, int sequence_index,
     trace_(file, line)("Failed sequence %s:\n", context );
     while (expected->message && actual->message)
     {
-        trace_(file, line)( "  %u: expected: %04x - actual: %04x wp %08lx lp %08lx\n",
-                            count, expected->message, actual->message, actual->wParam, actual->lParam );
+        trace_(file, line)( "  %u: expected: %04x id %u - actual: %04x wp %08Ix lp %08Ix id %u\n",
+                            count, expected->message, expected->id, actual->message, actual->wParam, actual->lParam, actual->id );
 
 	if (expected->message == actual->message)
 	{
 	    if ((expected->flags & defwinproc) != (actual->flags & defwinproc) &&
-                (expected->flags & optional))
+                ((expected->flags & optional) || ((expected->flags & winevent_hook) && !hwineventhook)))
             {
                 /* don't match messages if their defwinproc status differs */
                 expected++;
@@ -144,7 +141,8 @@ static void dump_sequence( struct msg_sequence **seq, int sequence_index,
     }
 
     /* optional trailing messages */
-    while (expected->message && expected->flags & optional)
+    while (expected->message && (expected->flags & optional ||
+                                 ((expected->flags & winevent_hook) && !hwineventhook)))
     {
         trace_(file, line)( "  %u: expected: msg %04x - actual: nothing\n", count, expected->message );
 	expected++;
@@ -159,8 +157,8 @@ static void dump_sequence( struct msg_sequence **seq, int sequence_index,
 
     while (actual->message)
     {
-        trace_(file, line)( "  %u: expected: nothing - actual: %04x wp %08lx lp %08lx\n",
-                            count, actual->message, actual->wParam, actual->lParam );
+        trace_(file, line)( "  %u: expected: nothing - actual: %04x wp %08Ix lp %08Ix id %u\n",
+                            count, actual->message, actual->wParam, actual->lParam, actual->id );
         actual++;
         count++;
     }
@@ -194,14 +192,14 @@ static void ok_sequence_(struct msg_sequence **seq, int sequence_index,
                         failcount++;
                         dump++;
                         ok_(file, line) (FALSE,
-                            "%s: in msg 0x%04x expecting wParam 0x%lx got 0x%lx\n",
+                            "%s: in msg 0x%04x expecting wParam 0x%Ix got 0x%Ix\n",
                             context, expected->message, expected->wParam, actual->wParam);
                     }
                 }
                 else
                 {
                     ok_(file, line) (expected->wParam == actual->wParam,
-                        "%s: in msg 0x%04x expecting wParam 0x%lx got 0x%lx\n",
+                        "%s: in msg 0x%04x expecting wParam 0x%Ix got 0x%Ix\n",
                         context, expected->message, expected->wParam, actual->wParam);
                     if (expected->wParam != actual->wParam) dump++;
                 }
@@ -216,14 +214,14 @@ static void ok_sequence_(struct msg_sequence **seq, int sequence_index,
                         failcount++;
                         dump++;
                         ok_(file, line) (FALSE,
-                            "%s: in msg 0x%04x expecting lParam 0x%lx got 0x%lx\n",
+                            "%s: in msg 0x%04x expecting lParam 0x%Ix got 0x%Ix\n",
                             context, expected->message, expected->lParam, actual->lParam);
                     }
                 }
                 else
                 {
                     ok_(file, line) (expected->lParam == actual->lParam,
-                        "%s: in msg 0x%04x expecting lParam 0x%lx got 0x%lx\n",
+                        "%s: in msg 0x%04x expecting lParam 0x%Ix got 0x%Ix\n",
                         context, expected->message, expected->lParam, actual->lParam);
                     if (expected->lParam != actual->lParam) dump++;
                 }
@@ -238,14 +236,14 @@ static void ok_sequence_(struct msg_sequence **seq, int sequence_index,
                         failcount++;
                         dump++;
                         ok_(file, line) (FALSE,
-                            "%s: in msg 0x%04x expecting cd stage 0x%08x got 0x%08x\n",
+                            "%s: in msg 0x%04x expecting cd stage 0x%08lx got 0x%08lx\n",
                             context, expected->message, expected->stage, actual->stage);
                     }
                 }
                 else
                 {
                     ok_(file, line) (expected->stage == actual->stage,
-                        "%s: in msg 0x%04x expecting cd stage 0x%08x got 0x%08x\n",
+                        "%s: in msg 0x%04x expecting cd stage 0x%08lx got 0x%08lx\n",
                         context, expected->message, expected->stage, actual->stage);
                     if (expected->stage != actual->stage) dump++;
                 }
@@ -253,7 +251,7 @@ static void ok_sequence_(struct msg_sequence **seq, int sequence_index,
 
             if (expected->flags & id)
             {
-                if (expected->id != actual->id && expected->flags & optional)
+                if (expected->id != actual->id && ((expected->flags & optional) || ((expected->flags & winevent_hook) && !hwineventhook)))
                 {
                     expected++;
                     continue;
@@ -265,14 +263,14 @@ static void ok_sequence_(struct msg_sequence **seq, int sequence_index,
                         failcount++;
                         dump++;
                         ok_(file, line) (FALSE,
-                            "%s: in msg 0x%04x expecting id 0x%x got 0x%x\n",
+                            "%s: in msg 0x%04x expecting id %d got %d\n",
                             context, expected->message, expected->id, actual->id);
                     }
                 }
                 else
                 {
                     ok_(file, line) (expected->id == actual->id,
-                        "%s: in msg 0x%04x expecting id 0x%x got 0x%x\n",
+                        "%s: in msg 0x%04x expecting id %d got %d\n",
                         context, expected->message, expected->id, actual->id);
                     if (expected->id != actual->id) dump++;
                 }
@@ -325,7 +323,7 @@ static void ok_sequence_(struct msg_sequence **seq, int sequence_index,
             expected++;
             actual++;
         }
-        else if (expected->flags & optional)
+        else if ((expected->flags & optional) || ((expected->flags & winevent_hook) && !hwineventhook))
             expected++;
         else if (todo)
         {
@@ -349,7 +347,7 @@ static void ok_sequence_(struct msg_sequence **seq, int sequence_index,
     }
 
     /* skip all optional trailing messages */
-    while (expected->message && ((expected->flags & optional)))
+    while (expected->message && ((expected->flags & optional) || ((expected->flags & winevent_hook) && !hwineventhook)))
         expected++;
 
     if (todo)
@@ -395,5 +393,5 @@ static void init_msg_sequences(struct msg_sequence **seq, int n)
     int i;
 
     for (i = 0; i < n; i++)
-        seq[i] = heap_alloc_zero(sizeof(*seq[i]));
+        seq[i] = calloc(1, sizeof(*seq[i]));
 }
