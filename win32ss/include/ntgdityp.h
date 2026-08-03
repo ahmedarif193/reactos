@@ -279,6 +279,26 @@ typedef struct _REALIZATION_INFO
     DWORD  dwUnknown;
 } REALIZATION_INFO, *PREALIZATION_INFO;
 
+#define _FONT_REALIZATION_INFO_DEFINED
+typedef struct _FONT_REALIZATION_INFO
+{
+    DWORD Size;
+    DWORD Flags;
+    DWORD CacheNum;
+    DWORD InstanceId;
+    DWORD FileCount;
+    WORD FaceIndex;
+    WORD Simulations;
+} FONT_REALIZATION_INFO, *PFONT_REALIZATION_INFO;
+
+#define _FONT_FILE_INFO_DEFINED
+typedef struct _FONT_FILE_INFO
+{
+    FILETIME WriteTime;
+    LARGE_INTEGER FileSize;
+    WCHAR FileName[1];
+} FONT_FILE_INFO, *PFONT_FILE_INFO;
+
 typedef struct _WIDTHDATA
 {
     USHORT      sOverhang;
