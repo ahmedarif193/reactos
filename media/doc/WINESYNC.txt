@@ -44,7 +44,7 @@ dll/directx/wine/dplayx         # Synced to Wine-11.14
 dll/directx/wine/dpnhpast       # Synced to Wine-11.14
 dll/directx/wine/dpwsockx       # Synced to Wine-11.14
 dll/directx/wine/dsound         # Synced to Wine-11.14
-dll/directx/wine/dxdiagn        # Synced to WineStaging-4.18
+dll/directx/wine/dxdiagn        # Synced to Wine-11.14
 dll/directx/wine/msdmo          # Synced to Wine-11.14
 dll/directx/wine/qcap           # Synced to Wine-11.14
 dll/directx/wine/qedit          # Synced to Wine-11.14
