@@ -27,23 +27,16 @@
 #include <commctrl.h>
 
 extern HMODULE hcpl;
-INT_PTR CALLBACK connections_dlgproc(HWND, UINT, WPARAM, LPARAM) DECLSPEC_HIDDEN;
-INT_PTR CALLBACK content_dlgproc(HWND, UINT, WPARAM, LPARAM) DECLSPEC_HIDDEN;
-INT_PTR CALLBACK general_dlgproc(HWND, UINT, WPARAM, LPARAM) DECLSPEC_HIDDEN;
-INT_PTR CALLBACK security_dlgproc(HWND, UINT, WPARAM, LPARAM) DECLSPEC_HIDDEN;
+INT_PTR CALLBACK connections_dlgproc(HWND, UINT, WPARAM, LPARAM);
+INT_PTR CALLBACK content_dlgproc(HWND, UINT, WPARAM, LPARAM);
+INT_PTR CALLBACK general_dlgproc(HWND, UINT, WPARAM, LPARAM);
+INT_PTR CALLBACK security_dlgproc(HWND, UINT, WPARAM, LPARAM);
 
 #define NUM_PROPERTY_PAGES 8
 
 /* icons */
 #define ICO_MAIN            100
 #define ICO_INTERNET        1313
-#ifdef __REACTOS__
-#define ICO_CERTIFICATES    1314
-#define ICO_HISTORY         1315
-#define ICO_HOME            1316
-#define ICO_TRUSTED         4480
-#define ICO_RESTRICTED      4481
-#endif
 
 /* strings */
 #define IDS_CPL_NAME        1
