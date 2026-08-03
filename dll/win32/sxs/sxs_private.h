@@ -16,25 +16,14 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#pragma once
-
 enum name_attr_id
 {
     NAME_ATTR_ID_NAME,
     NAME_ATTR_ID_ARCH,
     NAME_ATTR_ID_TOKEN,
     NAME_ATTR_ID_TYPE,
-    NAME_ATTR_ID_VERSION
+    NAME_ATTR_ID_VERSION,
+    NAME_ATTR_ID_LANGUAGE,
 };
 
-const WCHAR *get_name_attribute( IAssemblyName *, enum name_attr_id ) DECLSPEC_HIDDEN;
-
-static inline WCHAR *strdupW( const WCHAR *src )
-{
-    WCHAR *dst;
-
-    if (!src) return NULL;
-    dst = HeapAlloc( GetProcessHeap(), 0, (lstrlenW( src ) + 1) * sizeof(WCHAR) );
-    if (dst) lstrcpyW( dst, src );
-    return dst;
-}
+const WCHAR *get_name_attribute( IAssemblyName *, enum name_attr_id );
