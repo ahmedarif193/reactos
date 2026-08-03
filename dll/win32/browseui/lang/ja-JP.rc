@@ -200,7 +200,11 @@ END
 STRINGTABLE
 BEGIN
     IDS_CANCELLING "キャンセル中..."
-    IDS_REMAINING  "残っています"
+    IDS_REMAINING1 "残り %1!u! %2"
+    IDS_REMAINING2 "残り %1!u! %2 %3!u! %4"
+    IDS_SECONDS    "秒"
+    IDS_MINUTES    "分"
+    IDS_HOURS      "時間"
 END
 
 STRINGTABLE
