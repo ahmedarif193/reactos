@@ -177,7 +177,7 @@ dll/win32/query               # Synced to Wine-11.14
 dll/win32/rasapi32            # Synced to Wine-11.14
 dll/win32/regapi              # Synced to Wine-11.14
 dll/win32/resutils            # Synced to Wine-11.14
-dll/win32/riched20            # Synced to Wine-10.0
+dll/win32/riched20            # Synced to Wine-11.14
 dll/win32/riched32            # Synced to Wine-11.14
 dll/win32/rpcrt4              # Synced to Wine-10.0
 dll/win32/rsabase             # Synced to Wine-11.14
