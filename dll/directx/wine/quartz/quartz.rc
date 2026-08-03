@@ -1,7 +1,5 @@
 /*
- * Implementation of IEnumMediaTypes Interface
- *
- * Copyright 2003 Robert Shearman
+ * Copyright (c) 2003 John K. Hohm
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -18,15 +16,5 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include "quartz_private.h"
-
-#include "wine/debug.h"
-
-WINE_DEFAULT_DEBUG_CHANNEL(quartz);
-
-void dump_AM_MEDIA_TYPE(const AM_MEDIA_TYPE * pmt)
-{
-    if (!pmt)
-        return;
-    TRACE("\t%s\n\t%s\n\t...\n\t%s\n", qzdebugstr_guid(&pmt->majortype), qzdebugstr_guid(&pmt->subtype), qzdebugstr_guid(&pmt->formattype));
-}
+/* @makedep: quartz.rgs */
+1 WINE_REGISTRY quartz.rgs

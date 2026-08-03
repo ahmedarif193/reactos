@@ -33,8 +33,10 @@
 #define __RELFILE__ __FILE__
 #endif
 
+#ifndef __REACTOS__
 #ifdef __WINE_WINE_TEST_H
 #error This file should not be used in Wine tests
+#endif
 #endif
 
 #ifdef __cplusplus

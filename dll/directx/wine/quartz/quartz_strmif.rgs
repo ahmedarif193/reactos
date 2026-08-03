@@ -77,6 +77,11 @@ HKCR
             NumMethods = s 20
             ProxyStubClsid32 = s '{670D1D20-A068-11D0-B3F0-00AA003761C5}'
         }
+        '{C1960960-17F5-11D1-ABE1-00A0C905F375}' = s 'IAMStreamSelect'
+        {
+            NumMethods = s 6
+            ProxyStubClsid32 = s '{670D1D20-A068-11D0-B3F0-00AA003761C5}'
+        }
         '{56A868A4-0AD4-11CE-B03A-0020AF0BA770}' = s 'IEnumRegFilters'
         {
             NumMethods = s 7
@@ -122,6 +127,11 @@ HKCR
             NumMethods = s 7
             ProxyStubClsid32 = s '{670D1D20-A068-11D0-B3F0-00AA003761C5}'
         }
+        '{F90A6130-B658-11D2-AE49-0000F8754B99}' = s 'IAMDeviceRemoval'
+        {
+            NumMethods = s 6
+            ProxyStubClsid32 = s '{670D1D20-A068-11D0-B3F0-00AA003761C5}'
+        }
         '{56A868A9-0AD4-11CE-B03A-0020AF0BA770}' = s 'IGraphBuilder'
         {
             NumMethods = s 18
@@ -145,6 +155,11 @@ HKCR
         '{36B73882-C2C8-11CF-8B46-00805F6CEF60}' = s 'IFilterGraph2'
         {
             NumMethods = s 21
+            ProxyStubClsid32 = s '{670D1D20-A068-11D0-B3F0-00AA003761C5}'
+        }
+        '{56A868AF-0AD4-11CE-B03A-0020AF0BA770}' = s 'IDistributorNotify'
+        {
+            NumMethods = s 8
             ProxyStubClsid32 = s '{670D1D20-A068-11D0-B3F0-00AA003761C5}'
         }
         '{C6E13340-30AC-11D0-A18C-00A0C9118956}' = s 'IAMStreamConfig'
@@ -221,14 +236,6 @@ HKCR
         {
             InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Both' }
         }
-        '{1B544C20-FD0B-11CE-8C63-00AA0044B51E}' = s 'AVI Splitter'
-        {
-            InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Both' }
-        }
-        '{336475D0-942A-11CE-A870-00AA002FEAB5}' = s 'MPEG-I Stream Splitter'
-        {
-            InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Both' }
-        }
         '{CF49D4E0-1115-11CE-B03A-0020AF0BA770}' = s 'AVI Decompressor'
         {
             InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Both' }
@@ -238,10 +245,6 @@ HKCR
             InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Both' }
         }
         '{E30629D1-27E5-11CE-875D-00608CB78066}' = s 'Wave Audio Renderer'
-        {
-            InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Both' }
-        }
-        '{C1F400A4-3F08-11D3-9F0B-006008039E37}' = s 'Null Renderer'
         {
             InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Both' }
         }
@@ -257,15 +260,35 @@ HKCR
         {
             InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Both' }
         }
-        '{D51BD5A1-7548-11CF-A520-0080C77EF58A}' = s 'Wave Parser'
-        {
-            InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Both' }
-        }
         '{B87BEB7B-8D29-423F-AE4D-6582C10175AC}' = s 'Video Mixing Renderer'
         {
             InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Both' }
         }
         '{51B4ABF3-748F-4E3B-A276-C828330E926A}' = s 'Video Mixing Renderer 9'
+        {
+            InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Both' }
+        }
+        '{99D54F63-1A69-41AE-AA4D-C976EB3F0713}' = s 'AllocPresenter'
+        {
+            InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Both' }
+        }
+        '{336475D0-942A-11CE-A870-00AA002FEAB5}' = s 'MPEG-I Stream Splitter'
+        {
+            InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Both' }
+        }
+        '{1B544C20-FD0B-11CE-8C63-00AA0044B51E}' = s 'AVI Splitter'
+        {
+            InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Both' }
+        }
+        '{D51BD5A1-7548-11CF-A520-0080C77EF58A}' = s 'Wave Parser'
+        {
+            InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Both' }
+        }
+        '{4A2286E0-7BEF-11CE-9BD9-0000E202599C}' = s 'MPEG Audio Decoder'
+        {
+            InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Both' }
+        }
+        '{FEB50740-7BEF-11CE-9BD9-0000E202599C}' = s 'MPEG Video Decoder'
         {
             InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Both' }
         }

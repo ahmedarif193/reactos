@@ -23,6 +23,7 @@ list(APPEND SOURCE
     vidcap.idl
     videoacc.idl
     #vmrender.idl
+    wmcodecdsp.idl
 )
 
 add_idl_headers(dxsdk ${SOURCE})

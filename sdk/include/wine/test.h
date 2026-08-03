@@ -25,7 +25,13 @@
 #include <stdlib.h>
 #include <windef.h>
 #include <winbase.h>
-#include <stdio.h> // In the future: replace by <wine/debug.h>
+#include <stdio.h>
+
+#ifdef __REACTOS__
+#ifdef WINETEST_USE_WINE_DEBUG
+#include <wine/debug.h>
+#endif
+#endif
 
 #ifdef __GNUC__
 #pragma GCC diagnostic push
@@ -41,15 +47,19 @@
 #ifdef __WINE_WINE_UNICODE_H
 #error wine/unicode.h should not be used in Wine tests
 #endif
+#ifndef __REACTOS__
 #ifdef __WINE_WINE_DEBUG_H
 #error wine/debug.h should not be used in Wine tests
 #endif
+#endif
 
+#if !defined(__REACTOS__) || !defined(__WINE_PRINTF_ATTR)
 #ifdef __GNUC__
 # define __WINE_PRINTF_ATTR(fmt,args) __attribute__((format (printf,fmt,args)))
 #else /* __GNUC__ */
 # define __WINE_PRINTF_ATTR(fmt,args)
 #endif /* __GNUC__ */
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -1000,6 +1010,7 @@ int main( int argc, char **argv )
 # define S5(x) (x)
 #endif
 
+#if !defined(__REACTOS__) || !defined(__WINE_DEBUG_H)
 // FIXME: Should include wine/debug.h instead
 #ifdef WINETEST_USE_DBG_SPRINTF
 extern const char *wine_dbg_sprintf( const char *format, ... ) __WINE_PRINTF_ATTR(1,2);
@@ -1067,6 +1078,7 @@ extern const char *wine_dbgstr_variant(const VARIANT *var);
 static inline const char *debugstr_variant( const VARIANT *v ) { return wine_dbgstr_variant( v ); }
 #endif
 extern const char * __cdecl __wine_dbg_strdup( const char *str );
+#endif
 
 /* strcmpW is available for tests compiled under Wine, but not in standalone
  * builds under Windows, so we reimplement it under a different name. */
@@ -1244,6 +1256,7 @@ void winetest_end_nocount(void)
     data->nocount_level >>= 2;
 }
 
+#if !defined(__REACTOS__) || !defined(__WINE_DEBUG_H)
 /* allocate some tmp space for a string */
 static char *get_temp_buffer( size_t n )
 {
@@ -1512,6 +1525,7 @@ const char * __cdecl __wine_dbg_strdup( const char *str )
     free( InterlockedExchangePointer( (void **)&list[idx], ret ));
     return ret;
 }
+#endif
 
 #endif
 
