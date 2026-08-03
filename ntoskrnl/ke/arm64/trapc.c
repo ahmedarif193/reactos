@@ -1353,6 +1353,7 @@ KiArm64HandleSynchronousException(
 	        case 0x21: /* Instruction abort, same EL  */
 	        {
 	            EXCEPTION_RECORD ExceptionRecord;
+            KIRQL AbortIrql;
 
             TrapFrame = &Context->TrapFrame;
             KiArm64InitializeTrapFrame(Context, TrapFrame);
@@ -1396,10 +1397,28 @@ KiArm64HandleSynchronousException(
                 }
             }
 
+            /* The generic fault path takes working-set guarded-region locks. */
+            AbortIrql = KeGetCurrentIrql();
+            if (AbortIrql > APC_LEVEL)
+            {
+                KeBugCheckEx(IRQL_NOT_LESS_OR_EQUAL,
+                             (ULONG_PTR)Context->State.FaultAddress,
+                             AbortIrql,
+                             8,
+                             (ULONG_PTR)Context->State.Elr);
+            }
+
             Status = MmAccessFault(KiArm64BuildFaultCode(FaultStatus, WriteAccess, TRUE, PreviousMode), (PVOID)(ULONG_PTR)Context->State.FaultAddress, PreviousMode, TrapFrame);
 
-            /* MM refuses not-present faults above APC_LEVEL; that is a fatal IRQL contract violation */
-            if (Status == (NTSTATUS)(STATUS_IN_PAGE_ERROR | 0x10000000)) KeBugCheckEx(IRQL_NOT_LESS_OR_EQUAL, (ULONG_PTR)Context->State.FaultAddress, KeGetCurrentIrql(), 8, (ULONG_PTR)Context->State.Elr);
+            /* Convert MM's non-recoverable fault status into the required stop. */
+            if (Status == (NTSTATUS)(STATUS_IN_PAGE_ERROR | 0x10000000))
+            {
+                KeBugCheckEx(IRQL_NOT_LESS_OR_EQUAL,
+                             (ULONG_PTR)Context->State.FaultAddress,
+                             AbortIrql,
+                             8,
+                             (ULONG_PTR)Context->State.Elr);
+            }
 
             if (NT_SUCCESS(Status))
             {
@@ -1626,12 +1645,28 @@ KiArm64HandleSynchronousException(
                      */
                     KiArm64ClearTrapActive();
 
+                    /* The generic fault path takes working-set guarded-region locks. */
                     AbortIrql = KeGetCurrentIrql();
+                    if (AbortIrql > APC_LEVEL)
+                    {
+                        KeBugCheckEx(IRQL_NOT_LESS_OR_EQUAL,
+                                     (ULONG_PTR)AddressArg,
+                                     AbortIrql,
+                                     WriteAccess ? 1 : 0,
+                                     (ULONG_PTR)Context->State.Elr);
+                    }
 
                     Status = MmAccessFault(FaultCodeArg, AddressArg, PreviousMode, TrapFrame);
 
-                    /* MM refuses not-present faults above APC_LEVEL; that is a fatal IRQL contract violation */
-                    if (Status == (NTSTATUS)(STATUS_IN_PAGE_ERROR | 0x10000000)) KeBugCheckEx(IRQL_NOT_LESS_OR_EQUAL, (ULONG_PTR)AddressArg, KeGetCurrentIrql(), WriteAccess ? 1 : 0, (ULONG_PTR)Context->State.Elr);
+                    /* Convert MM's non-recoverable fault status into the required stop. */
+                    if (Status == (NTSTATUS)(STATUS_IN_PAGE_ERROR | 0x10000000))
+                    {
+                        KeBugCheckEx(IRQL_NOT_LESS_OR_EQUAL,
+                                     (ULONG_PTR)AddressArg,
+                                     AbortIrql,
+                                     WriteAccess ? 1 : 0,
+                                     (ULONG_PTR)Context->State.Elr);
+                    }
                 }
 
 #if DBG && defined(ARM64_TRAP_TRACE)
