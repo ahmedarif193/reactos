@@ -31,28 +31,44 @@ function(add_dependency_footer)
 endfunction()
 
 function(add_message_headers _type)
+    set(_files ${ARGN})
+    set(_resource_only FALSE)
+    list(FIND _files RESOURCE_ONLY _resource_only_index)
+    if(NOT _resource_only_index EQUAL -1)
+        set(_resource_only TRUE)
+        list(REMOVE_AT _files ${_resource_only_index})
+    endif()
+
     if(${_type} STREQUAL UNICODE)
         set(_flag "-U")
     else()
         set(_flag "-A")
     endif()
-    foreach(_file ${ARGN})
+    foreach(_file ${_files})
         get_filename_component(_file_name ${_file} NAME_WE)
         set(_converted_file ${CMAKE_CURRENT_BINARY_DIR}/${_file}) ## ${_file_name}.mc
         set(_source_file ${CMAKE_CURRENT_SOURCE_DIR}/${_file})    ## ${_file_name}.mc
+        if(_resource_only)
+            set(_header_dir ${CMAKE_CURRENT_BINARY_DIR}/message_headers)
+            set(_target_name ${_file_name}_message_resources)
+        else()
+            set(_header_dir ${CMAKE_CURRENT_BINARY_DIR})
+            set(_target_name ${_file_name})
+        endif()
         set(_mc_depends "${_converted_file}")
         if(TARGET ${CMAKE_MC_COMPILER})
             list(APPEND _mc_depends ${CMAKE_MC_COMPILER})
         endif()
         utf16le_convert(${_source_file} ${_converted_file} nobom)
         add_custom_command(
-            OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${_file_name}.h ${CMAKE_CURRENT_BINARY_DIR}/${_file_name}.rc
-            COMMAND ${CMAKE_MC_COMPILER} -u ${_flag} -b -h ${CMAKE_CURRENT_BINARY_DIR}/ -r ${CMAKE_CURRENT_BINARY_DIR}/ ${_converted_file}
+            OUTPUT ${_header_dir}/${_file_name}.h ${CMAKE_CURRENT_BINARY_DIR}/${_file_name}.rc
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${_header_dir}
+            COMMAND ${CMAKE_MC_COMPILER} -u ${_flag} -b -h ${_header_dir}/ -r ${CMAKE_CURRENT_BINARY_DIR}/ ${_converted_file}
             DEPENDS ${_mc_depends})
         set_source_files_properties(
-            ${CMAKE_CURRENT_BINARY_DIR}/${_file_name}.h ${CMAKE_CURRENT_BINARY_DIR}/${_file_name}.rc
+            ${_header_dir}/${_file_name}.h ${CMAKE_CURRENT_BINARY_DIR}/${_file_name}.rc
             PROPERTIES GENERATED TRUE)
-        add_custom_target(${_file_name} ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/${_file_name}.h ${CMAKE_CURRENT_BINARY_DIR}/${_file_name}.rc)
+        add_custom_target(${_target_name} ALL DEPENDS ${_header_dir}/${_file_name}.h ${CMAKE_CURRENT_BINARY_DIR}/${_file_name}.rc)
     endforeach()
 endfunction()
 

@@ -10,9 +10,6 @@
 #include <stdio.h>
 #include <assert.h>
 
-#include <wine/test.h>
-#include <wine/heap.h>
-
 #include <windows.h>
 #include <ole2.h>
 #include <msxml2.h>
@@ -21,5 +18,8 @@
 #include <dispex.h>
 #include <mshtml.h>
 #include <xmlparser.h>
+
+#include <wine/test.h>
+#include <wine/heap.h>
 
 #endif /* !_MSXML3_WINETEST_PRECOMP_H_ */
