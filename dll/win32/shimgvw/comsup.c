@@ -19,14 +19,14 @@ DllInitServer(VOID)
 STDAPI
 DllRegisterServer(VOID)
 {
-    return __wine_register_resources(g_hInstance);
+    return __wine_register_resources();
 }
 
 
 STDAPI
 DllUnregisterServer(VOID)
 {
-    return __wine_unregister_resources(g_hInstance);
+    return __wine_unregister_resources();
 }
 
 
