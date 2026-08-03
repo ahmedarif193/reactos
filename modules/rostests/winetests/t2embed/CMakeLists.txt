@@ -1,0 +1,5 @@
+add_definitions(-DUSE_WINE_TODOS)
+add_executable(t2embed_winetest t2embed.c testlist.c)
+set_module_type(t2embed_winetest win32cui)
+add_importlibs(t2embed_winetest t2embed user32 gdi32 msvcrt kernel32)
+add_rostests_file(TARGET t2embed_winetest)
