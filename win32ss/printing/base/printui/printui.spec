@@ -1,8 +1,8 @@
 @ stub ConnectToPrinterDlg
 @ stub ConnectToPrinterPropertyPage
-@ stdcall -stub ConstructPrinterFriendlyName(wstr wstr ptr)
-@ stub -private DllCanUnloadNow
-@ stub -private DllGetClassObject
+@ stub ConstructPrinterFriendlyName
+@ stdcall -private DllCanUnloadNow()
+@ stub DllGetClassObject
 @ stub DocumentPropertiesWrap
 @ stub PnPInterface
 @ stub PrintNotifyTray_Exit
@@ -16,7 +16,7 @@
 @ stub bFolderEnumPrinters
 @ stub bFolderGetPrinter
 @ stub bFolderRefresh
-@ stdcall -stub bPrinterSetup(ptr long long ptr ptr ptr)
+@ stub bPrinterSetup
 @ stub vDocumentDefaults
 @ stub vPrinterPropPages
 @ stub vQueueCreate
