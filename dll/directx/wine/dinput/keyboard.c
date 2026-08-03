@@ -196,7 +196,6 @@ HRESULT keyboard_create_device( struct dinput *dinput, const GUID *guid, IDirect
     TRACE( "dinput %p, guid %s, out %p.\n", dinput, debugstr_guid( guid ), out );
 
     *out = NULL;
-    if (!IsEqualGUID( &GUID_SysKeyboard, guid )) return DIERR_DEVICENOTREG;
 
     if (!(impl = calloc( 1, sizeof(*impl) ))) return E_OUTOFMEMORY;
     dinput_device_init( &impl->base, &keyboard_vtbl, guid, dinput );
@@ -206,9 +205,6 @@ HRESULT keyboard_create_device( struct dinput *dinput, const GUID *guid, IDirect
     impl->base.caps.dwDevType = impl->base.instance.dwDevType;
     impl->base.caps.dwFirmwareRevision = 100;
     impl->base.caps.dwHardwareRevision = 100;
-#ifdef __REACTOS__
-    impl->base.dwCoopLevel = DISCL_NONEXCLUSIVE | DISCL_BACKGROUND;
-#endif
     if (dinput->dwVersion >= 0x0800) impl->base.use_raw_input = TRUE;
     subtype = GET_DIDEVICE_SUBTYPE( impl->base.instance.dwDevType );
 
