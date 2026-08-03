@@ -93,7 +93,6 @@ static BOOL CALLBACK MSACM_FillFormatTagsCB(HACMDRIVERID hadid,
 		afd.cbwfx = paftd->cbFormatSize;
 
 		for (i = 0; i < paftd->cStandardFormats; i++) {
-                    static const WCHAR fmtW[] = {'%','d',' ','K','o','/','s','\0'};
                     int j, index;
 
 		    afd.dwFormatIndex = i;
@@ -105,7 +104,7 @@ static BOOL CALLBACK MSACM_FillFormatTagsCB(HACMDRIVERID hadid,
                        for (j = len; j < ACMFORMATTAGDETAILS_FORMATTAG_CHARS; j++)
                            buffer[j] = ' ';
                        wsprintfW(buffer + ACMFORMATTAGDETAILS_FORMATTAG_CHARS,
-                                 fmtW, (afd.pwfx->nAvgBytesPerSec + 512) / 1024);
+                                 L"%d Ko/s", (afd.pwfx->nAvgBytesPerSec + 512) / 1024);
                        index = SendDlgItemMessageW(affd->hWnd,
                                            IDD_ACMFORMATCHOOSE_CMB_FORMAT,
                                            CB_ADDSTRING, 0, (LPARAM)buffer);
@@ -213,19 +212,17 @@ static MMRESULT MSACM_GetWFX(HWND hWnd, PACMFORMATCHOOSEW afc)
     return affd.ret;
 }
 
-static const WCHAR fmt_prop[] = {'a','c','m','p','r','o','p','\0'};
-
 static INT_PTR CALLBACK FormatChooseDlgProc(HWND hWnd, UINT msg,
                                             WPARAM wParam, LPARAM lParam)
 {
-    PACMFORMATCHOOSEW   afc = (PACMFORMATCHOOSEW)GetPropW(hWnd, fmt_prop);
+    ACMFORMATCHOOSEW *afc = (ACMFORMATCHOOSEW *)GetPropW(hWnd, L"acmprop");
 
-    TRACE("hwnd=%p msg=%i 0x%08lx 0x%08lx\n", hWnd, msg, wParam, lParam);
+    TRACE("hwnd=%p msg=%i 0x%08Ix 0x%08Ix\n", hWnd, msg, wParam, lParam);
 
     switch (msg) {
     case WM_INITDIALOG:
 	afc = (PACMFORMATCHOOSEW)lParam;
-	SetPropW(hWnd, fmt_prop, (HANDLE)afc);
+	SetPropW(hWnd, L"acmprop", (HANDLE)afc);
 	MSACM_FillFormatTags(hWnd, afc);
 	MSACM_FillFormat(hWnd, afc);
 	if ((afc->fdwStyle & ~(ACMFORMATCHOOSE_STYLEF_CONTEXTHELP|
@@ -233,7 +230,7 @@ static INT_PTR CALLBACK FormatChooseDlgProc(HWND hWnd, UINT msg,
                                ACMFORMATCHOOSE_STYLEF_INITTOWFXSTRUCT|
                                ACMFORMATCHOOSE_STYLEF_ENABLETEMPLATEHANDLE|
                                ACMFORMATCHOOSE_STYLEF_ENABLETEMPLATE)) != 0)
-            FIXME("Unsupported style %08x\n", afc->fdwStyle);
+            FIXME("Unsupported style %08lx\n", afc->fdwStyle);
 	if (!(afc->fdwStyle & ACMFORMATCHOOSE_STYLEF_SHOWHELP))
 	    ShowWindow(GetDlgItem(hWnd, IDD_ACMFORMATCHOOSE_BTN_HELP), SW_HIDE);
 	return TRUE;
@@ -252,7 +249,7 @@ static INT_PTR CALLBACK FormatChooseDlgProc(HWND hWnd, UINT msg,
 		MSACM_FillFormat(hWnd, afc);
 		break;
 	    default:
-		TRACE("Dropped dlgNotif (fmtTag): 0x%08x 0x%08lx\n",
+		TRACE("Dropped dlgNotif (fmtTag): 0x%08x 0x%08Ix\n",
 		      HIWORD(wParam), lParam);
 		break;
 	    }
@@ -264,7 +261,7 @@ static INT_PTR CALLBACK FormatChooseDlgProc(HWND hWnd, UINT msg,
 	    break;
 
 	default:
-	    TRACE("Dropped dlgCmd: ctl=%d ntf=0x%04x 0x%08lx\n",
+	    TRACE("Dropped dlgCmd: ctl=%d ntf=0x%04x 0x%08Ix\n",
 		  LOWORD(wParam), HIWORD(wParam), lParam);
 	    break;
 	}
@@ -284,7 +281,7 @@ static INT_PTR CALLBACK FormatChooseDlgProc(HWND hWnd, UINT msg,
 	break;
 #endif
     default:
-	TRACE("Dropped dlgMsg: hwnd=%p msg=%i 0x%08lx 0x%08lx\n",
+	TRACE("Dropped dlgMsg: hwnd=%p msg=%i 0x%08Ix 0x%08Ix\n",
 	      hWnd,  msg, wParam, lParam );
 	break;
     }
@@ -431,11 +428,9 @@ MMRESULT WINAPI acmFormatDetailsA(HACMDRIVER had, PACMFORMATDETAILSA pafd,
 MMRESULT WINAPI acmFormatDetailsW(HACMDRIVER had, PACMFORMATDETAILSW pafd, DWORD fdwDetails)
 {
     MMRESULT			mmr;
-    static const WCHAR		fmt1[] = {'%','d',' ','H','z',0};
-    static const WCHAR		fmt2[] = {';',' ','%','d',' ','b','i','t','s',0};
     ACMFORMATTAGDETAILSW	aftd = {0};
 
-    TRACE("(%p, %p, %d)\n", had, pafd, fdwDetails);
+    TRACE("(%p, %p, %ld)\n", had, pafd, fdwDetails);
 
     if (!pafd)
         return MMSYSERR_INVALPARAM;
@@ -491,15 +486,15 @@ MMRESULT WINAPI acmFormatDetailsW(HACMDRIVER had, PACMFORMATDETAILSW pafd, DWORD
 	mmr = MSACM_Message(had, ACMDM_FORMAT_DETAILS, (LPARAM)pafd, fdwDetails);
 	break;
     default:
-	WARN("Unknown fdwDetails %08x\n", fdwDetails);
+	WARN("Unknown fdwDetails %08lx\n", fdwDetails);
 	mmr = MMSYSERR_INVALFLAG;
 	break;
     }
 
     if (mmr == MMSYSERR_NOERROR && pafd->szFormat[0] == 0) {
-	wsprintfW(pafd->szFormat, fmt1, pafd->pwfx->nSamplesPerSec);
+	wsprintfW(pafd->szFormat, L"%d Hz", pafd->pwfx->nSamplesPerSec);
 	if (pafd->pwfx->wBitsPerSample) {
-	    wsprintfW(pafd->szFormat + lstrlenW(pafd->szFormat), fmt2,
+	    wsprintfW(pafd->szFormat + lstrlenW(pafd->szFormat), L"; %d bits",
 		      pafd->pwfx->wBitsPerSample);
 	}
         MultiByteToWideChar(CP_ACP, 0, (pafd->pwfx->nChannels == 1) ? "; Mono" : "; Stereo", -1,
@@ -678,7 +673,7 @@ MMRESULT WINAPI acmFormatEnumW(HACMDRIVER had, PACMFORMATDETAILSW pafd,
     DWORD			cbwfxMax;
     MMRESULT			mmr;
 
-    TRACE("(%p, %p, %p, %ld, %d)\n",
+    TRACE("(%p, %p, %p, %Id, %ld)\n",
 	  had, pafd, fnCallback, dwInstance, fdwEnum);
 
     if (!pafd)
@@ -710,7 +705,7 @@ MMRESULT WINAPI acmFormatEnumW(HACMDRIVER had, PACMFORMATDETAILSW pafd,
 	return MMSYSERR_INVALPARAM;
 
     if (fdwEnum & (ACM_FORMATENUMF_CONVERT|ACM_FORMATENUMF_INPUT|ACM_FORMATENUMF_OUTPUT))
-	FIXME("Unsupported fdwEnum values %08x\n", fdwEnum);
+	FIXME("Unsupported fdwEnum values %08lx\n", fdwEnum);
 
     mmr = acmMetrics((HACMOBJ)had, ACM_METRIC_MAX_SIZE_FORMAT, &cbwfxMax);
     if (mmr != MMSYSERR_NOERROR)
@@ -750,7 +745,7 @@ MMRESULT WINAPI acmFormatSuggest(HACMDRIVER had, PWAVEFORMATEX pwfxSrc,
     ACMDRVFORMATSUGGEST	adfg;
     MMRESULT		mmr;
 
-    TRACE("(%p, %p, %p, %d, %d)\n",
+    TRACE("(%p, %p, %p, %ld, %ld)\n",
 	  had, pwfxSrc, pwfxDst, cbwfxDst, fdwSuggest);
 
     if (!pwfxSrc || !pwfxDst)
@@ -855,7 +850,7 @@ MMRESULT WINAPI acmFormatTagDetailsW(HACMDRIVER had, PACMFORMATTAGDETAILSW paftd
     PWINE_ACMDRIVERID	padid;
     MMRESULT		mmr = ACMERR_NOTPOSSIBLE;
 
-    TRACE("(%p, %p, %d)\n", had, paftd, fdwDetails);
+    TRACE("(%p, %p, %ld)\n", had, paftd, fdwDetails);
 
     if (fdwDetails & ~(ACM_FORMATTAGDETAILSF_FORMATTAG|ACM_FORMATTAGDETAILSF_INDEX|
 		       ACM_FORMATTAGDETAILSF_LARGESTSIZE))
@@ -922,7 +917,7 @@ MMRESULT WINAPI acmFormatTagDetailsW(HACMDRIVER had, PACMFORMATTAGDETAILSW paftd
 	break;
 
     default:
-	WARN("Unsupported fdwDetails=%08x\n", fdwDetails);
+	WARN("Unsupported fdwDetails=%08lx\n", fdwDetails);
 	mmr = MMSYSERR_ERROR;
     }
 
@@ -1004,7 +999,7 @@ MMRESULT WINAPI acmFormatTagEnumW(HACMDRIVER had, PACMFORMATTAGDETAILSW paftd,
     unsigned int        i;
     BOOL                bPcmDone = FALSE;
 
-    TRACE("(%p, %p, %p, %ld, %d)\n",
+    TRACE("(%p, %p, %p, %Id, %ld)\n",
           had, paftd, fnCallback, dwInstance, fdwEnum);
 
     if (!paftd)

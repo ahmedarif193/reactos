@@ -44,6 +44,7 @@
 
 #define ACMDM_DRIVER_NOTIFY             (ACMDM_BASE + 1)
 #define ACMDM_DRIVER_DETAILS            (ACMDM_BASE + 10)
+#define ACMDM_DRIVER_ABOUT              (ACMDM_BASE + 11)
 
 #define ACMDM_HARDWARE_WAVE_CAPS_INPUT  (ACMDM_BASE + 20)
 #define ACMDM_HARDWARE_WAVE_CAPS_OUTPUT (ACMDM_BASE + 21)
@@ -109,6 +110,7 @@ typedef struct _ACMDRVSTREAMINSTANCE
 } ACMDRVSTREAMINSTANCE, *PACMDRVSTREAMINSTANCE;
 
 typedef struct _ACMDRVSTREAMHEADER *PACMDRVSTREAMHEADER;
+#pragma pack(push,1)
 typedef struct _ACMDRVSTREAMHEADER {
   DWORD                cbStruct;
   DWORD                fdwStatus;
@@ -135,6 +137,7 @@ typedef struct _ACMDRVSTREAMHEADER {
   LPBYTE               pbPreparedDst;
   DWORD                cbPreparedDstLength;
 } ACMDRVSTREAMHEADER;
+#pragma pack(pop)
 
 typedef struct _ACMDRVSTREAMSIZE
 {
