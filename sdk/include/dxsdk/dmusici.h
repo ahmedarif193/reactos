@@ -21,18 +21,14 @@
 #ifndef __WINE_DMUSIC_PERFORMANCE_H
 #define __WINE_DMUSIC_PERFORMANCE_H
 
-#ifndef __WINESRC__
 #include <windows.h>
-#else
-#include <oleauto.h> /* VARIANT */
-#endif /* __WINESRC__ */
 
 #define COM_NO_WINDOWS_H
 #include <objbase.h>
 #include <mmsystem.h>
 #include <dmusicc.h>
 #include <dmplugin.h>
-#include <pshpack8.h>
+#pragma pack(push,8)
 
 #ifdef WINE_NO_UNICODE_MACROS
 #undef AddPort
@@ -67,7 +63,6 @@ DEFINE_GUID(CLSID_DirectMusicSynthSink,                    0xaec17ce3,0xa514,0x1
 DEFINE_GUID(CLSID_DirectMusicSection,                      0x3f037241,0x414e,0x11d1,0xa7,0xce,0x00,0xa0,0xc9,0x13,0xf7,0x3c);
 DEFINE_GUID(CLSID_DirectMusicAuditionTrack,                0xd2ac2897,0xb39b,0x11d1,0x87,0x04,0x00,0x60,0x08,0x93,0xb1,0xbd);
 DEFINE_GUID(CLSID_DirectMusicSegTriggerTrack,              0xbae4d665,0x4ea1,0x11d3,0x8b,0xda,0x00,0x60,0x08,0x93,0xb1,0xb6);
-DEFINE_GUID(CLSID_DirectMusicAudioPath,                    0xee0b9ca0,0xa81e,0x11d3,0x9b,0xd1,0x00,0x80,0xc7,0x15,0x0a,0x74);
 DEFINE_GUID(CLSID_DirectMusicTemplate,                     0xd30bcc65,0x60e8,0x11d1,0xa7,0xce,0x00,0xa0,0xc9,0x13,0xf7,0x3c);
 DEFINE_GUID(CLSID_DirectMusicScriptAutoImpSegment,         0x4062c116,0x0270,0x11d3,0x8b,0xcb,0x00,0x60,0x08,0x93,0xb1,0xb6);
 DEFINE_GUID(CLSID_AudioVBScript,                           0x4ee17959,0x931e,0x49e4,0xa2,0xc6,0x97,0x7e,0xcf,0x36,0x28,0xf3);
@@ -371,38 +366,23 @@ typedef WORD    TRANSITION_TYPE, *LPTRANSITION_TYPE;
 /*****************************************************************************
  * Enumerations
  */
-/* typedef definitions */
-typedef enum enumDMUS_STYLET_TYPES       DMUS_STYLET_TYPES;
-typedef enum enumDMUS_COMMANDT_TYPES     DMUS_COMMANDT_TYPES;
-typedef enum enumDMUS_SHAPET_TYPES       DMUS_SHAPET_TYPES;
-typedef enum enumDMUS_COMPOSEF_FLAGS     DMUS_COMPOSEF_FLAGS;
-typedef enum enumDMUS_PMSGF_FLAGS        DMUS_PMSGF_FLAGS;
-typedef enum enumDMUS_PMSGT_TYPES        DMUS_PMSGT_TYPES;
-typedef enum enumDMUS_SEGF_FLAGS         DMUS_SEGF_FLAGS;
-typedef enum enumDMUS_TIME_RESOLVE_FLAGS DMUS_TIME_RESOLVE_FLAGS;
-typedef enum enumDMUS_CHORDKEYF_FLAGS    DMUS_CHORDKEYF_FLAGS;
-typedef enum enumDMUS_NOTEF_FLAGS        DMUS_NOTEF_FLAGS;
-typedef enum enumDMUS_PLAYMODE_FLAGS     DMUS_PLAYMODE_FLAGS;
-typedef enum enumDMUS_CURVE_FLAGS        DMUS_CURVE_FLAGS;
-
-
 
 /* actual enumerations */
-enum enumDMUS_STYLET_TYPES {
+typedef enum enumDMUS_STYLET_TYPES {
 	DMUS_STYLET_PATTERN = 0x0,
 	DMUS_STYLET_MOTIF   = 0x1,
-};
+} DMUS_STYLET_TYPES;
 
-enum enumDMUS_COMMANDT_TYPES {
+typedef enum enumDMUS_COMMANDT_TYPES {
 	DMUS_COMMANDT_GROOVE      = 0x0,
 	DMUS_COMMANDT_FILL        = 0x1,
 	DMUS_COMMANDT_INTRO       = 0x2,
 	DMUS_COMMANDT_BREAK       = 0x3,
 	DMUS_COMMANDT_END         = 0x4,
 	DMUS_COMMANDT_ENDANDINTRO = 0x5
-};
+} DMUS_COMMANDT_TYPES;
 
-enum enumDMUS_SHAPET_TYPES {
+typedef enum enumDMUS_SHAPET_TYPES {
 	DMUS_SHAPET_FALLING  = 0x0,
 	DMUS_SHAPET_LEVEL    = 0x1,
 	DMUS_SHAPET_LOOPABLE = 0x2,
@@ -412,9 +392,9 @@ enum enumDMUS_SHAPET_TYPES {
 	DMUS_SHAPET_RANDOM   = 0x6,
 	DMUS_SHAPET_RISING   = 0x7,
 	DMUS_SHAPET_SONG     = 0x8
-};
+} DMUS_SHAPET_TYPES;
 
-enum enumDMUS_COMPOSEF_FLAGS {
+typedef enum enumDMUS_COMPOSEF_FLAGS {
 	DMUS_COMPOSEF_NONE                = 0x000000,
 	DMUS_COMPOSEF_ALIGN               = 0x000001,
 	DMUS_COMPOSEF_OVERLAP             = 0x000002,
@@ -439,9 +419,9 @@ enum enumDMUS_COMPOSEF_FLAGS {
 	DMUS_COMPOSEF_NOINVALIDATE        = 0x100000,
 	DMUS_COMPOSEF_USE_AUDIOPATH       = 0x200000,
 	DMUS_COMPOSEF_INVALIDATE_PRI      = 0x400000
-};
+} DMUS_COMPOSEF_FLAGS;
 
-enum enumDMUS_PMSGF_FLAGS {
+typedef enum enumDMUS_PMSGF_FLAGS {
 	DMUS_PMSGF_REFTIME        = 1,
 	DMUS_PMSGF_MUSICTIME      = 2,
 	DMUS_PMSGF_TOOL_IMMEDIATE = 4,
@@ -450,9 +430,9 @@ enum enumDMUS_PMSGF_FLAGS {
 	DMUS_PMSGF_TOOL_FLUSH     = 0x20,
 	DMUS_PMSGF_LOCKTOREFTIME  = 0x40,
 	DMUS_PMSGF_DX8            = 0x80
-};
+} DMUS_PMSGF_FLAGS;
 
-enum enumDMUS_PMSGT_TYPES {
+typedef enum enumDMUS_PMSGT_TYPES {
 	DMUS_PMSGT_MIDI             = 0x00,
 	DMUS_PMSGT_NOTE             = 0x01,
 	DMUS_PMSGT_SYSEX            = 0x02,
@@ -469,9 +449,9 @@ enum enumDMUS_PMSGT_TYPES {
 	DMUS_PMSGT_LYRIC            = 0x0D,
 	DMUS_PMSGT_SCRIPTLYRIC      = 0x0E,
 	DMUS_PMSGT_USER             = 0xFF
-};
+} DMUS_PMSGT_TYPES;
 
-enum enumDMUS_SEGF_FLAGS {
+typedef enum enumDMUS_SEGF_FLAGS {
 	DMUS_SEGF_REFTIME             = 0x000040,
 	DMUS_SEGF_SECONDARY           = 0x000080,
 	DMUS_SEGF_QUEUE               = 0x000100,
@@ -495,9 +475,9 @@ enum enumDMUS_SEGF_FLAGS {
 	DMUS_SEGF_USE_AUDIOPATH       = 0x04000000,
 	DMUS_SEGF_VALID_START_MEASURE = 0x08000000,
 	DMUS_SEGF_INVALIDATE_PRI      = 0x10000000
-};
+} DMUS_SEGF_FLAGS;
 
-enum enumDMUS_TIME_RESOLVE_FLAGS {
+typedef enum enumDMUS_TIME_RESOLVE_FLAGS {
 	DMUS_TIME_RESOLVE_AFTERPREPARETIME = DMUS_SEGF_AFTERPREPARETIME,
 	DMUS_TIME_RESOLVE_AFTERQUEUETIME   = DMUS_SEGF_AFTERQUEUETIME,
 	DMUS_TIME_RESOLVE_AFTERLATENCYTIME = DMUS_SEGF_AFTERLATENCYTIME,
@@ -506,33 +486,33 @@ enum enumDMUS_TIME_RESOLVE_FLAGS {
 	DMUS_TIME_RESOLVE_MEASURE          = DMUS_SEGF_MEASURE,
 	DMUS_TIME_RESOLVE_MARKER           = DMUS_SEGF_MARKER,
 	DMUS_TIME_RESOLVE_SEGMENTEND       = DMUS_SEGF_SEGMENTEND,
-};
+} DMUS_TIME_RESOLVE_FLAGS;
 
-enum enumDMUS_CHORDKEYF_FLAGS {
+typedef enum enumDMUS_CHORDKEYF_FLAGS {
 	DMUS_CHORDKEYF_SILENT = 0x1,
-};
+} DMUS_CHORDKEYF_FLAGS;
 
-enum enumDMUS_NOTEF_FLAGS {
+typedef enum enumDMUS_NOTEF_FLAGS {
 	DMUS_NOTEF_NOTEON               = 0x01,
 	/* DX8 */
 	DMUS_NOTEF_NOINVALIDATE         = 0x02,
 	DMUS_NOTEF_NOINVALIDATE_INSCALE = 0x04,
 	DMUS_NOTEF_NOINVALIDATE_INCHORD = 0x08,
 	DMUS_NOTEF_REGENERATE           = 0x10,
-};
+} DMUS_NOTEF_FLAGS;
 
-enum enumDMUS_PLAYMODE_FLAGS {
+typedef enum enumDMUS_PLAYMODE_FLAGS {
 	DMUS_PLAYMODE_KEY_ROOT        = 0x01,
 	DMUS_PLAYMODE_CHORD_ROOT      = 0x02,
 	DMUS_PLAYMODE_SCALE_INTERVALS = 0x04,
 	DMUS_PLAYMODE_CHORD_INTERVALS = 0x08,
 	DMUS_PLAYMODE_NONE            = 0x10,
-};
+} DMUS_PLAYMODE_FLAGS;
 
-enum enumDMUS_CURVE_FLAGS {
+typedef enum enumDMUS_CURVE_FLAGS {
 	DMUS_CURVE_RESET              = 0x1,
 	DMUS_CURVE_START_FROM_CURRENT = 0x2
-};
+} DMUS_CURVE_FLAGS;
 
 enum {
 	DMUS_CURVES_LINEAR  = 0x0,
@@ -860,7 +840,7 @@ DECLARE_INTERFACE_(IDirectMusicLoader,IUnknown)
     STDMETHOD_(ULONG,AddRef)(THIS) PURE;
     STDMETHOD_(ULONG,Release)(THIS) PURE;
     /*** IDirectMusicLoader methods ***/
-    STDMETHOD(_GetObject)(THIS_ LPDMUS_OBJECTDESC pDesc, REFIID riid, LPVOID *ppv) PURE;
+    STDMETHOD(GetObject)(THIS_ LPDMUS_OBJECTDESC pDesc, REFIID riid, LPVOID *ppv) PURE;
     STDMETHOD(SetObject)(THIS_ LPDMUS_OBJECTDESC pDesc) PURE;
     STDMETHOD(SetSearchDirectory)(THIS_ REFGUID rguidClass, WCHAR *pwzPath, BOOL fClear) PURE;
     STDMETHOD(ScanDirectory)(THIS_ REFGUID rguidClass, WCHAR *pwzFileExtension, WCHAR *pwzScanFileName) PURE;
@@ -878,7 +858,7 @@ DECLARE_INTERFACE_(IDirectMusicLoader,IUnknown)
 #define IDirectMusicLoader_AddRef(p)                   (p)->lpVtbl->AddRef(p)
 #define IDirectMusicLoader_Release(p)                  (p)->lpVtbl->Release(p)
 /*** IDirectMusicLoader methods ***/
-#define IDirectMusicLoader_GetObject(p,a,b,c)          (p)->lpVtbl->_GetObject(p,a,b,c)
+#define IDirectMusicLoader_GetObject(p,a,b,c)          (p)->lpVtbl->GetObject(p,a,b,c)
 #define IDirectMusicLoader_SetObject(p,a)              (p)->lpVtbl->SetObject(p,a)
 #define IDirectMusicLoader_SetSearchDirectory(p,a,b,c) (p)->lpVtbl->SetSearchDirectory(p,a,b,c)
 #define IDirectMusicLoader_ScanDirectory(p,a,b,c)      (p)->lpVtbl->ScanDirectory(p,a,b,c)
@@ -901,7 +881,7 @@ DECLARE_INTERFACE_(IDirectMusicLoader8,IDirectMusicLoader)
     STDMETHOD_(ULONG,AddRef)(THIS) PURE;
     STDMETHOD_(ULONG,Release)(THIS) PURE;
     /*** IDirectMusicLoader methods ***/
-    STDMETHOD(_GetObject)(THIS_ LPDMUS_OBJECTDESC pDesc, REFIID riid, LPVOID *ppv) PURE;
+    STDMETHOD(GetObject)(THIS_ LPDMUS_OBJECTDESC pDesc, REFIID riid, LPVOID *ppv) PURE;
     STDMETHOD(SetObject)(THIS_ LPDMUS_OBJECTDESC pDesc) PURE;
     STDMETHOD(SetSearchDirectory)(THIS_ REFGUID rguidClass, WCHAR *pwzPath, BOOL fClear) PURE;
     STDMETHOD(ScanDirectory)(THIS_ REFGUID rguidClass, WCHAR *pwzFileExtension, WCHAR *pwzScanFileName) PURE;
@@ -923,7 +903,7 @@ DECLARE_INTERFACE_(IDirectMusicLoader8,IDirectMusicLoader)
 #define IDirectMusicLoader8_AddRef(p)                     (p)->lpVtbl->AddRef(p)
 #define IDirectMusicLoader8_Release(p)                    (p)->lpVtbl->Release(p)
 /*** IDirectMusicLoader methods ***/
-#define IDirectMusicLoader8_GetObject(p,a,b,c)            (p)->lpVtbl->_GetObject(p,a,b,c)
+#define IDirectMusicLoader8_GetObject(p,a,b,c)            (p)->lpVtbl->GetObject(p,a,b,c)
 #define IDirectMusicLoader8_SetObject(p,a)                (p)->lpVtbl->SetObject(p,a)
 #define IDirectMusicLoader8_SetSearchDirectory(p,a,b,c)   (p)->lpVtbl->SetSearchDirectory(p,a,b,c)
 #define IDirectMusicLoader8_ScanDirectory(p,a,b,c)        (p)->lpVtbl->ScanDirectory(p,a,b,c)
@@ -1197,7 +1177,7 @@ DECLARE_INTERFACE_(IDirectMusicAudioPath,IUnknown)
     STDMETHOD_(ULONG,AddRef)(THIS) PURE;
     STDMETHOD_(ULONG,Release)(THIS) PURE;
     /*** IDirectMusicAudioPath methods ***/
-    STDMETHOD(GetObjectInPath)(THIS_ DWORD dwPChannel, DWORD dwStage, DWORD dwBuffer, REFGUID guidObject, WORD dwIndex, REFGUID iidInterface, void **ppObject) PURE;
+    STDMETHOD(GetObjectInPath)(THIS_ DWORD dwPChannel, DWORD dwStage, DWORD dwBuffer, REFGUID guidObject, DWORD dwIndex, REFGUID iidInterface, void **ppObject) PURE;
     STDMETHOD(Activate)(THIS_ BOOL fActivate) PURE;
     STDMETHOD(SetVolume)(THIS_ LONG lVolume, DWORD dwDuration) PURE;
     STDMETHOD(ConvertPChannel)(THIS_ DWORD dwPChannelIn, DWORD *pdwPChannelOut) PURE;
@@ -1733,6 +1713,6 @@ DECLARE_INTERFACE_(IDirectMusicContainer,IUnknown)
 }
 #endif
 
-#include <poppack.h>
+#pragma pack(pop)
 
 #endif /* __WINE_DMUSIC_PERFORMANCE_H */
