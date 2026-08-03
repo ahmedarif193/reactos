@@ -58,6 +58,9 @@
 #define IDI_TT_INFO_SM                   22
 #define IDI_TT_WARN_SM                   25
 #define IDI_TT_ERROR_SM                  28
+#define IDI_TT_INFO_MD                   20
+#define IDI_TT_WARN_MD                   23
+#define IDI_TT_ERROR_MD                  26
 
 /* Taskdialog strings */
 #define IDS_BUTTON_YES    3000

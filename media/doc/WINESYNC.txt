@@ -248,10 +248,8 @@ dll/win32/xinput9_1_0         # Synced to Wine-11.14
 dll/win32/xmllite             # Synced to Wine-11.14
 dll/win32/xolehlp             # Synced to Wine-11.14
 
-comctl32 -
-  dll/win32/comctl32/button.c              # Forked at Wine-3.3
-  dll/win32/comctl32/datetime.c            # Synced to Wine-6.0
-  dll/win32/comctl32/*                     # Synced to Wine-5.0
+dll/win32/comctl32           # Synced to Wine-11.14
+dll/win32/comctl32_v6        # Synced to Wine-11.14
 
 dll/cpl/bthprops              # Synced to Wine-11.14
 dll/cpl/inetcpl               # Synced to Wine-11.14

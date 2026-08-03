@@ -12,7 +12,8 @@ extern "C" {
 #endif
 
 #undef DPA_GetPtr
-LPVOID WINAPI DPA_GetPtr(HDPA, INT);
+LPVOID WINAPI DPA_GetPtr(HDPA, INT_PTR);
+HDPA WINAPI DPA_Clone(const HDPA, HDPA);
 
 #undef FlatSB_SetScrollProp
 BOOL  WINAPI FlatSB_SetScrollProp(HWND, UINT, INT, BOOL);
@@ -33,12 +34,14 @@ static const WCHAR DRAGLISTMSGSTRINGW[] = { 'c','o','m','m','c','t','r','l',
 #define ListView_InsertItemW(hwnd,pitem) \
     (INT)SNDMSGW((hwnd),LVM_INSERTITEMW,0,(LPARAM)(const LVITEMW *)(pitem))
 
+#ifndef SNDMSGA
 #ifdef __cplusplus
 #define SNDMSGA ::SendMessageA
 #define SNDMSGW ::SendMessageW
 #else
 #define SNDMSGA SendMessageA
 #define SNDMSGW SendMessageW
+#endif
 #endif
 
 #define FLATSB_CLASSA         "flatsb_class32"
