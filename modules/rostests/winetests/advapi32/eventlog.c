@@ -1395,23 +1395,14 @@ static void test_eventlog_start(void)
             ok(record->TimeGenerated == record->TimeWritten, "Expected time values to be the same\n");
             ok(record->EventType == EVENTLOG_INFORMATION_TYPE,
                 "Expected %d, got %d\n", EVENTLOG_INFORMATION_TYPE, record->EventType);
-#ifdef __REACTOS__
-            ok(record->NumStrings == 0 || broken(GetNTVersion() <= _WIN32_WINNT_WS03), "Expected 0, got %d\n", record->NumStrings);
-#else
             ok(record->NumStrings == 0, "Expected 0, got %d\n", record->NumStrings);
-#endif
             ok(record->EventCategory == 0, "Expected 0, got %d\n", record->EventCategory);
             ok(record->ReservedFlags == 0, "Expected 0, got %d\n", record->ReservedFlags);
             ok(record->ClosingRecordNumber == 0, "Expected 0, got %ld\n", record->ClosingRecordNumber);
             ok(record->StringOffset == record->UserSidOffset, "Expected offsets to be the same\n");
             ok(record->UserSidLength == 0, "Expected 0, got %ld\n", record->UserSidLength);
-#ifdef __REACTOS__
-            ok(record->DataLength == 24 || broken(GetNTVersion() <= _WIN32_WINNT_WS03), "Expected 24, got %ld\n", record->DataLength);
-            ok(record->DataOffset == record->UserSidOffset || broken(GetNTVersion() <= _WIN32_WINNT_WS03), "Expected offsets to be the same\n");
-#else
             ok(record->DataLength == 24, "Expected 24, got %ld\n", record->DataLength);
             ok(record->DataOffset == record->UserSidOffset, "Expected offsets to be the same\n");
-#endif
 
             sourcename = (WCHAR *)(record + 1);
             ok(!lstrcmpW(sourcename, L"EventLog"),
@@ -1424,12 +1415,7 @@ static void test_eventlog_start(void)
             size = sizeof(EVENTLOGRECORD) + sizeof(L"EventLog") +
                 (lstrlenW(computername) + 1) * sizeof(WCHAR);
             size = (size + 7) & ~7;
-#ifdef __REACTOS__
-            ok(record->DataOffset == size || broken(GetNTVersion() <= _WIN32_WINNT_WS03) ||
-                broken(record->DataOffset == (sizeof(EVENTLOGRECORD) + sizeof(L"EventLog") + (lstrlenW(computername) + 1) * sizeof(WCHAR))) /* Vista */ ||
-#else
             ok(record->DataOffset == size ||
-#endif
                 broken(record->DataOffset == size - sizeof(WCHAR)), /* win8 */
                 "Expected %ld, got %ld\n", size, record->DataOffset);
 
@@ -1474,23 +1460,14 @@ static void test_eventlog_start(void)
             ok(record->TimeGenerated == record->TimeWritten, "Expected time values to be the same\n");
             ok(record->EventType == EVENTLOG_INFORMATION_TYPE,
                 "Expected %d, got %d\n", EVENTLOG_INFORMATION_TYPE, record->EventType);
-#ifdef __REACTOS__
-            ok(record->NumStrings == 0 || broken(GetNTVersion() <= _WIN32_WINNT_WS03), "Expected 0, got %d\n", record->NumStrings);
-#else
             ok(record->NumStrings == 0, "Expected 0, got %d\n", record->NumStrings);
-#endif
             ok(record->EventCategory == 0, "Expected 0, got %d\n", record->EventCategory);
             ok(record->ReservedFlags == 0, "Expected 0, got %d\n", record->ReservedFlags);
             ok(record->ClosingRecordNumber == 0, "Expected 0, got %ld\n", record->ClosingRecordNumber);
             ok(record->StringOffset == record->UserSidOffset, "Expected offsets to be the same\n");
             ok(record->UserSidLength == 0, "Expected 0, got %ld\n", record->UserSidLength);
-#ifdef __REACTOS__
-            ok(record->DataLength == 24 || broken(GetNTVersion() <= _WIN32_WINNT_WS03), "Expected 24, got %ld\n", record->DataLength);
-            ok(record->DataOffset == record->UserSidOffset || broken(GetNTVersion() <= _WIN32_WINNT_WS03), "Expected offsets to be the same\n");
-#else
             ok(record->DataLength == 24, "Expected 24, got %ld\n", record->DataLength);
             ok(record->DataOffset == record->UserSidOffset, "Expected offsets to be the same\n");
-#endif
 
             sourcenameA = (char *)(record + 1);
             ok(!strcmp(sourcenameA, "EventLog"),
@@ -1502,12 +1479,7 @@ static void test_eventlog_start(void)
 
             size = sizeof(EVENTLOGRECORD) + sizeof("EventLog") + strlen(computernameA) + 1;
             size = (size + 7) & ~7;
-#ifdef __REACTOS__
-            ok(record->DataOffset == size || broken(GetNTVersion() <= _WIN32_WINNT_WS03) ||
-                broken(record->DataOffset == (sizeof(EVENTLOGRECORD) + sizeof("EventLog") + strlen(computernameA) + 1)) /* Vista */ ||
-#else
             ok(record->DataOffset == size ||
-#endif
                 broken(record->DataOffset == size - 1), /* win8 */
                 "Expected %ld, got %ld\n", size, record->DataOffset);
 
@@ -1526,26 +1498,18 @@ static void test_eventlog_start(void)
     todo_wine {
     ret = read_record(handle, EVENTLOG_SEQUENTIAL_READ | EVENTLOG_FORWARDS_READ, 100, &record, &size);
     ok(ret, "Expected success : %ld\n", GetLastError());
-#ifndef __REACTOS__ // Flaky on WS03 and Vista
     ok(record->RecordNumber == 1, "Expected 1, got %lu\n", record->RecordNumber);
-#endif
     ret = read_record(handle, EVENTLOG_SEQUENTIAL_READ | EVENTLOG_FORWARDS_READ, 200, &record, &size);
     ok(ret, "Expected success : %ld\n", GetLastError());
-#ifndef __REACTOS__ // Flaky on WS03 and Vista
     ok(record->RecordNumber == 2, "Expected 2, got %lu\n", record->RecordNumber);
-#endif
 
     /* change direction sequentially */
     ret = read_record(handle, EVENTLOG_SEQUENTIAL_READ | EVENTLOG_BACKWARDS_READ, 300, &record, &size);
     ok(ret, "Expected success : %ld\n", GetLastError());
-#ifndef __REACTOS__ // Flaky on WS03 and Vista
     ok(record->RecordNumber == 2, "Expected 2, got %lu\n", record->RecordNumber);
-#endif
     ret = read_record(handle, EVENTLOG_SEQUENTIAL_READ | EVENTLOG_BACKWARDS_READ, 400, &record, &size);
     ok(ret, "Expected success : %ld\n", GetLastError());
-#ifndef __REACTOS__ // Flaky on WS03 and Vista
     ok(record->RecordNumber == 1, "Expected 1, got %lu\n", record->RecordNumber);
-#endif
     }
 
     /* changing how is an error */
@@ -1567,15 +1531,11 @@ static void test_eventlog_start(void)
     ret = read_record(handle, EVENTLOG_SEQUENTIAL_READ | EVENTLOG_BACKWARDS_READ, 100, &record, &size);
     todo_wine
     ok(ret, "Expected success : %ld\n", GetLastError());
-#ifndef __REACTOS__ // Flaky on WS03 and Vista
     ok(record->RecordNumber == count, "Expected %lu, got %lu\n", count, record->RecordNumber);
-#endif
     ret = read_record(handle, EVENTLOG_SEQUENTIAL_READ | EVENTLOG_BACKWARDS_READ, 100, &record, &size);
     todo_wine {
     ok(ret, "Expected success : %ld\n", GetLastError());
-#ifndef __REACTOS__ // Flaky on WS03 and Vista
     ok(record->RecordNumber == count - 1, "Expected %lu, got %lu\n", count - 1, record->RecordNumber);
-#endif
     }
     CloseEventLog(handle);
 
@@ -1591,58 +1551,31 @@ static void test_eventlog_start(void)
     ret = GetNumberOfEventLogRecords(handle, &count);
     ok(ret, "Expected success : %ld\n", GetLastError());
     ret = read_record(handle, EVENTLOG_SEEK_READ | EVENTLOG_FORWARDS_READ, count + 1, &record, &size);
-#ifdef __REACTOS__
-    ok(!ret || broken(GetNTVersion() == _WIN32_WINNT_VISTA), "Expected failure\n");
-    todo_wine ok(GetLastError() == ERROR_INVALID_PARAMETER || broken(GetLastError() == ERROR_SUCCESS) /* Vista */, "Expected ERROR_INVALID_PARAMETER, got %ld\n", GetLastError());
-#else
     ok(!ret, "Expected failure\n");
     todo_wine
     ok(GetLastError() == ERROR_INVALID_PARAMETER, "Expected ERROR_INVALID_PARAMETER, got %ld\n", GetLastError());
-#endif
 
     todo_wine {
     ret = read_record(handle, EVENTLOG_SEEK_READ | EVENTLOG_FORWARDS_READ, 2, &record, &size);
-#ifdef __REACTOS__
-    ok(ret || broken(GetLastError() == ERROR_INVALID_PARAMETER) /* Vista */, "Expected success : %ld\n", GetLastError());
-    ok(record->RecordNumber == 2 || broken(GetLastError() == ERROR_INVALID_PARAMETER) /* Vista */, "Expected 2, got %lu\n", record->RecordNumber);
-#else
     ok(ret, "Expected success : %ld\n", GetLastError());
     ok(record->RecordNumber == 2, "Expected 2, got %lu\n", record->RecordNumber);
-#endif
     /* skip one */
     ret = read_record(handle, EVENTLOG_SEEK_READ | EVENTLOG_FORWARDS_READ, 4, &record, &size);
-#ifdef __REACTOS__
-    ok(ret || broken(GetLastError() == ERROR_INVALID_PARAMETER) /* Vista */, "Expected success : %ld\n", GetLastError());
-    ok(record->RecordNumber == 4 || broken(GetLastError() == ERROR_INVALID_PARAMETER) /* Vista */, "Expected 4, got %lu\n", record->RecordNumber);
-#else
     ok(ret, "Expected success : %ld\n", GetLastError());
     ok(record->RecordNumber == 4, "Expected 4, got %lu\n", record->RecordNumber);
-#endif
     /* seek an earlier one */
     ret = read_record(handle, EVENTLOG_SEEK_READ | EVENTLOG_FORWARDS_READ, 3, &record, &size);
-#ifdef __REACTOS__
-    ok(ret || broken(GetLastError() == ERROR_INVALID_PARAMETER) /* Vista */, "Expected success : %ld\n", GetLastError());
-    ok(record->RecordNumber == 3 || broken(GetLastError() == ERROR_INVALID_PARAMETER) /* Vista */, "Expected 3, got %lu\n", record->RecordNumber);
-#else
     ok(ret, "Expected success : %ld\n", GetLastError());
     ok(record->RecordNumber == 3, "Expected 3, got %lu\n", record->RecordNumber);
-#endif
     /* change how */
     ret = read_record(handle, EVENTLOG_SEQUENTIAL_READ | EVENTLOG_FORWARDS_READ, 100, &record, &size);
     ok(ret, "Expected success : %ld\n", GetLastError());
-#ifndef __REACTOS__ // Flaky on WS03 and Vista
     ok(record->RecordNumber == 4 || broken(record->RecordNumber == 5) /* some win10 22h2 */,
         "Expected 4, got %lu\n", record->RecordNumber);
-#endif
     /* change direction */
     ret = read_record(handle, EVENTLOG_SEEK_READ | EVENTLOG_BACKWARDS_READ, 10, &record, &size);
-#ifdef __REACTOS__
-    ok(ret || broken(GetLastError() == ERROR_INVALID_PARAMETER) /* Vista */, "Expected success : %ld\n", GetLastError());
-    ok(record->RecordNumber == 10 || broken(GetLastError() == ERROR_INVALID_PARAMETER) /* Vista */, "Expected 10, got %lu\n", record->RecordNumber);
-#else
     ok(ret, "Expected success : %ld\n", GetLastError());
     ok(record->RecordNumber == 10, "Expected 10, got %lu\n", record->RecordNumber);
-#endif
     }
     CloseEventLog(handle);
 
@@ -1656,47 +1589,25 @@ static void test_eventlog_start(void)
 
     todo_wine {
     ret = read_record(handle, EVENTLOG_SEEK_READ | EVENTLOG_BACKWARDS_READ, 5, &record, &size);
-#ifdef __REACTOS__
-    ok(ret || broken(GetLastError() == ERROR_INVALID_PARAMETER) /* Vista */, "Expected success : %ld\n", GetLastError());
-    ok(record->RecordNumber == 5 || broken(GetLastError() == ERROR_INVALID_PARAMETER) /* Vista */, "Expected 5, got %lu\n", record->RecordNumber);
-#else
     ok(ret, "Expected success : %ld\n", GetLastError());
     ok(record->RecordNumber == 5, "Expected 5, got %lu\n", record->RecordNumber);
-#endif
     /* skip one */
     ret = read_record(handle, EVENTLOG_SEEK_READ | EVENTLOG_BACKWARDS_READ, 3, &record, &size);
-#ifdef __REACTOS__
-    ok(ret || broken(GetLastError() == ERROR_INVALID_PARAMETER) /* Vista */, "Expected success : %ld\n", GetLastError());
-    ok(record->RecordNumber == 3 || broken(GetLastError() == ERROR_INVALID_PARAMETER) /* Vista */, "Expected 3, got %lu\n", record->RecordNumber);
-#else
     ok(ret, "Expected success : %ld\n", GetLastError());
     ok(record->RecordNumber == 3, "Expected 3, got %lu\n", record->RecordNumber);
-#endif
     /* seek a later one */
     ret = read_record(handle, EVENTLOG_SEEK_READ | EVENTLOG_BACKWARDS_READ, 4, &record, &size);
-#ifdef __REACTOS__
-    ok(ret || broken(GetLastError() == ERROR_INVALID_PARAMETER) /* Vista */, "Expected success : %ld\n", GetLastError());
-    ok(record->RecordNumber == 4 || broken(GetLastError() == ERROR_INVALID_PARAMETER) /* Vista */, "Expected 4, got %lu\n", record->RecordNumber);
-#else
     ok(ret, "Expected success : %ld\n", GetLastError());
     ok(record->RecordNumber == 4, "Expected 4, got %lu\n", record->RecordNumber);
-#endif
     /* change how */
     ret = read_record(handle, EVENTLOG_SEQUENTIAL_READ | EVENTLOG_BACKWARDS_READ, 100, &record, &size);
     ok(ret, "Expected success : %ld\n", GetLastError());
-#ifndef __REACTOS__ // Flaky on WS03 and Vista
     ok(record->RecordNumber == 3 || broken(record->RecordNumber == 2) /* some win10 22h2 */,
         "Expected 3, got %lu\n", record->RecordNumber);
-#endif
     /* change direction */
     ret = read_record(handle, EVENTLOG_SEEK_READ | EVENTLOG_FORWARDS_READ, 10, &record, &size);
-#ifdef __REACTOS__
-    ok(ret || broken(GetLastError() == ERROR_INVALID_PARAMETER) /* Vista */, "Expected success : %ld\n", GetLastError());
-    ok(record->RecordNumber == 10 || broken(GetLastError() == ERROR_INVALID_PARAMETER) /* Vista */, "Expected 10, got %lu\n", record->RecordNumber);
-#else
     ok(ret, "Expected success : %ld\n", GetLastError());
     ok(record->RecordNumber == 10, "Expected 10, got %lu\n", record->RecordNumber);
-#endif
     }
     CloseEventLog(handle);
 
@@ -1706,14 +1617,10 @@ static void test_eventlog_start(void)
     todo_wine {
     ret = read_record(handle, EVENTLOG_SEQUENTIAL_READ | EVENTLOG_FORWARDS_READ, 0, &record, &size);
     ok(ret, "Expected success : %ld\n", GetLastError());
-#ifndef __REACTOS__ // Flaky on WS03 and Vista
     ok(record->RecordNumber == 1, "Expected 1, got %lu\n", record->RecordNumber);
-#endif
     ret = read_record(handle2, EVENTLOG_SEQUENTIAL_READ | EVENTLOG_FORWARDS_READ, 0, &record, &size);
     ok(ret, "Expected success : %ld\n", GetLastError());
-#ifndef __REACTOS__ // Flaky on WS03 and Vista
     ok(record->RecordNumber == 1, "Expected 1, got %lu\n", record->RecordNumber);
-#endif
     }
     CloseEventLog(handle2);
     CloseEventLog(handle);
