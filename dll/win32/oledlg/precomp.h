@@ -3,6 +3,9 @@
 #define _OLEDLG_PRECOMP_H_
 
 #include <stdarg.h>
+#include <stdlib.h>
+#include <string.h>
+#include <wchar.h>
 
 #define WIN32_NO_STATUS
 #define _INC_WINDOWS
@@ -10,7 +13,6 @@
 
 #define COBJMACROS
 #define NONAMELESSSTRUCT
-#define NONAMELESSUNION
 
 #include <windef.h>
 #include <winbase.h>
