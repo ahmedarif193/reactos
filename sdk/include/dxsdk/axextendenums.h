@@ -21,11 +21,64 @@
 
 #include <exposeenums2managed.h>
 
+#ifdef __REACTOS__
+FLAGS TAG(AnalogVideoStandard)
+{
+    AnalogVideo_None        = 0x00000000,
+    AnalogVideo_NTSC_M      = 0x00000001,
+    AnalogVideo_NTSC_M_J    = 0x00000002,
+    AnalogVideo_NTSC_433    = 0x00000004,
+    AnalogVideo_PAL_B       = 0x00000010,
+    AnalogVideo_PAL_D       = 0x00000020,
+    AnalogVideo_PAL_G       = 0x00000040,
+    AnalogVideo_PAL_H       = 0x00000080,
+    AnalogVideo_PAL_I       = 0x00000100,
+    AnalogVideo_PAL_M       = 0x00000200,
+    AnalogVideo_PAL_N       = 0x00000400,
+    AnalogVideo_PAL_60      = 0x00000800,
+    AnalogVideo_SECAM_B     = 0x00001000,
+    AnalogVideo_SECAM_D     = 0x00002000,
+    AnalogVideo_SECAM_G     = 0x00004000,
+    AnalogVideo_SECAM_H     = 0x00008000,
+    AnalogVideo_SECAM_K     = 0x00010000,
+    AnalogVideo_SECAM_K1    = 0x00020000,
+    AnalogVideo_SECAM_L     = 0x00040000,
+    AnalogVideo_SECAM_L1    = 0x00080000,
+    AnalogVideo_PAL_N_COMBO = 0x00100000,
+    AnalogVideoMask_MCE_NTSC = AnalogVideo_NTSC_M | AnalogVideo_NTSC_M_J |
+                               AnalogVideo_NTSC_433 | AnalogVideo_PAL_M |
+                               AnalogVideo_PAL_N | AnalogVideo_PAL_60 |
+                               AnalogVideo_PAL_N_COMBO,
+    AnalogVideoMask_MCE_PAL = AnalogVideo_PAL_B | AnalogVideo_PAL_D |
+                              AnalogVideo_PAL_G | AnalogVideo_PAL_H |
+                              AnalogVideo_PAL_I,
+    AnalogVideoMask_MCE_SECAM = AnalogVideo_SECAM_B | AnalogVideo_SECAM_D |
+                                AnalogVideo_SECAM_G | AnalogVideo_SECAM_H |
+                                AnalogVideo_SECAM_K | AnalogVideo_SECAM_K1 |
+                                AnalogVideo_SECAM_L | AnalogVideo_SECAM_L1,
+} AnalogVideoStandard;
+#endif
+
 ENUM16 TAG(TunerInputType)
 {
     TunerInputCable,
     TunerInputAntenna
 } TunerInputType;
+
+#ifdef __REACTOS__
+ENUM16 TAG(TVAudioMode)
+{
+    AMTVAUDIO_MODE_MONO     = 0x0001,
+    AMTVAUDIO_MODE_STEREO   = 0x0002,
+    AMTVAUDIO_MODE_LANG_A   = 0x0010,
+    AMTVAUDIO_MODE_LANG_B   = 0x0020,
+    AMTVAUDIO_MODE_LANG_C   = 0x0040,
+    AMTVAUDIO_PRESET_STEREO = 0x0200,
+    AMTVAUDIO_PRESET_LANG_A = 0x1000,
+    AMTVAUDIO_PRESET_LANG_B = 0x2000,
+    AMTVAUDIO_PRESET_LANG_C = 0x4000,
+} TVAudioMode;
+#endif
 
 #include <unexposeenums2managed.h>
 
