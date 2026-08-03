@@ -10,14 +10,20 @@
 #define COM_NO_WINDOWS_H
 
 #define COBJMACROS
-#define NONAMELESSUNION
-#define NONAMELESSSTRUCT
 #define OEMRESOURCE
+
+#include <windef.h>
+#include <winbase.h>
+#include <wingdi.h>
+#include <winuser.h>
+#include <winnls.h>
+#include <objbase.h>
+#include <oleidl.h>
+#include <oleauto.h>
 
 #include "comctl32.h"
 
 #include <winreg.h>
-#include <objbase.h>
 #include <uxtheme.h>
 #include <vssym32.h>
 

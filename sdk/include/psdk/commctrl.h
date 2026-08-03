@@ -49,6 +49,16 @@ extern "C" {
 #endif
 #endif /* !SNDMSG */
 
+#ifndef SNDMSGA
+#ifdef __cplusplus
+#define SNDMSGA ::SendMessageA
+#define SNDMSGW ::SendMessageW
+#else
+#define SNDMSGA SendMessageA
+#define SNDMSGW SendMessageW
+#endif
+#endif /* !SNDMSGA */
+
   WINCOMMCTRLAPI void WINAPI InitCommonControls(void);
 
   typedef struct tagINITCOMMONCONTROLSEX {
@@ -251,7 +261,9 @@ extern "C" {
 #define BCSIF_STYLE 0x00000004
 #define BCSIF_SIZE  0x00000008
 
+#define BCSS_NOSPLIT 0x00000001
 #define BCSS_STRETCH 0x00000002
+#define BCSS_ALIGNLEFT 0x00000004
 #define BCSS_IMAGE   0x00000008
 
 #define BCN_FIRST (0U-1250U)
@@ -2686,6 +2698,8 @@ typedef struct tagNMBCDROPDOWN {
 
 #define LVM_GETITEMTEXT __MINGW_NAME_AW(LVM_GETITEMTEXT)
 
+#define ListView_GetItemTextA(hwndLV,i,iSubItem_,pszText_,cchTextMax_) { LVITEMA _ms_lvi; _ms_lvi.iSubItem = iSubItem_; _ms_lvi.cchTextMax = cchTextMax_; _ms_lvi.pszText = pszText_; SNDMSGA((hwndLV),LVM_GETITEMTEXTA,(WPARAM)(i),(LPARAM)(LVITEMA *)&_ms_lvi);}
+#define ListView_GetItemTextW(hwndLV,i,iSubItem_,pszText_,cchTextMax_) { LVITEMW _ms_lvi; _ms_lvi.iSubItem = iSubItem_; _ms_lvi.cchTextMax = cchTextMax_; _ms_lvi.pszText = pszText_; SNDMSGW((hwndLV),LVM_GETITEMTEXTW,(WPARAM)(i),(LPARAM)(LVITEMW *)&_ms_lvi);}
 #define ListView_GetItemText(hwndLV,i,iSubItem_,pszText_,cchTextMax_) { LV_ITEM _ms_lvi; _ms_lvi.iSubItem = iSubItem_; _ms_lvi.cchTextMax = cchTextMax_; _ms_lvi.pszText = pszText_; SNDMSG((hwndLV),LVM_GETITEMTEXT,(WPARAM)(i),(LPARAM)(LV_ITEM *)&_ms_lvi);}
 
 #define LVM_SETITEMTEXTA (LVM_FIRST+46)
@@ -3832,12 +3846,36 @@ typedef struct tagTVDISPINFOEXW {
 #define TVN_GETINFOTIPA (TVN_FIRST-13)
 #define TVN_GETINFOTIPW (TVN_FIRST-14)
 #define TVN_SINGLEEXPAND (TVN_FIRST-15)
+#define TVN_ITEMCHANGINGA (TVN_FIRST-16)
+#define TVN_ITEMCHANGINGW (TVN_FIRST-17)
+#define TVN_ITEMCHANGEDA (TVN_FIRST-18)
+#define TVN_ITEMCHANGEDW (TVN_FIRST-19)
+#define TVN_ASYNCDRAW (TVN_FIRST-20)
 
 #define TVNRET_DEFAULT 0
 #define TVNRET_SKIPOLD 1
 #define TVNRET_SKIPNEW 2
 
 #define TV_KEYDOWN NMTVKEYDOWN
+
+  typedef struct tagTVITEMCHANGE {
+    NMHDR hdr;
+    UINT uChanged;
+    HTREEITEM hItem;
+    UINT uStateNew;
+    UINT uStateOld;
+    LPARAM lParam;
+  } NMTVITEMCHANGE;
+
+  typedef struct tagNMTVASYNCDRAW {
+    NMHDR hdr;
+    IMAGELISTDRAWPARAMS *pimldp;
+    HRESULT hr;
+    HTREEITEM hItem;
+    LPARAM lParam;
+    DWORD dwRetFlags;
+    int iRetImageIndex;
+  } NMTVASYNCDRAW;
 
 #include <pshpack1.h>
 
@@ -4429,6 +4467,7 @@ typedef struct {
 #define MCS_NOTODAY            0x0010
 #define MCS_NOTRAILINGDATES    0x0040
 #define MCS_SHORTDAYSOFWEEK    0x0080
+#define MCS_NOSELCHANGEONNAV   0x0100
 
 #define GMR_VISIBLE 0
 #define GMR_DAYSTATE 1
@@ -4784,6 +4823,7 @@ typedef struct {
   } NMBCHOTITEM,*LPNMBCHOTITEM;
 
 #define BST_HOT 0x200
+#define BST_DROPDOWNPUSHED 0x400
 
 #define BS_SPLITBUTTON    0x0000000C
 #define BS_DEFSPLITBUTTON 0x0000000D
