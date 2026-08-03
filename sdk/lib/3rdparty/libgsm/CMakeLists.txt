@@ -1,0 +1,18 @@
+add_library(libgsm
+    src/add.c
+    src/code.c
+    src/decode.c
+    src/gsm_create.c
+    src/gsm_decode.c
+    src/gsm_destroy.c
+    src/gsm_encode.c
+    src/gsm_option.c
+    src/long_term.c
+    src/lpc.c
+    src/preprocess.c
+    src/rpe.c
+    src/short_term.c
+    src/table.c)
+
+target_include_directories(libgsm PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inc)
+target_compile_definitions(libgsm PRIVATE WAV49)
