@@ -30,14 +30,10 @@
 #include <stdarg.h>
 
 #include "wine/list.h"
-#include "wine/heap.h"
 
 #include "windef.h"
 #include "winbase.h"
 #include "wtypes.h"
-#ifdef __REACTOS__
-#include <ole2.h>
-#endif
 #include "dcom.h"
 #include "winreg.h"
 #include "winternl.h"
@@ -91,11 +87,6 @@ static inline struct oletls *COM_CurrentInfo(void)
         InternalTlsAllocData(&oletls);
 
     return NtCurrentTeb()->ReservedForOle;
-}
-
-static inline struct apartment * COM_CurrentApt(void)
-{  
-    return COM_CurrentInfo()->apt;
 }
 
 #define CHARS_IN_GUID 39 /* including NULL */
