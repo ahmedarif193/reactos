@@ -1,0 +1,6 @@
+add_definitions(-DUSE_WINE_TODOS)
+add_executable(compstui_winetest compstui.c rsrc.rc testlist.c)
+target_include_directories(compstui_winetest BEFORE PRIVATE ${REACTOS_SOURCE_DIR}/sdk/include/wine)
+set_module_type(compstui_winetest win32cui)
+add_importlibs(compstui_winetest compstui comctl32 user32 msvcrt kernel32)
+add_rostests_file(TARGET compstui_winetest)
