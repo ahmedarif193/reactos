@@ -31,7 +31,9 @@
  * the Initial Developer. All Rights Reserved.
  */
 
+#ifdef __REACTOS__
 #pragma once
+#endif
 
 #define REG_FOLD      0x01      /* fold uppercase to lowercase */
 #define REG_GLOB      0x02      /* global exec, creates array of matches */

@@ -11,6 +11,7 @@ list(APPEND vbscript_winetest_rc_deps
     ${CMAKE_CURRENT_SOURCE_DIR}/api.vbs
     ${CMAKE_CURRENT_SOURCE_DIR}/error.vbs
     ${CMAKE_CURRENT_SOURCE_DIR}/lang.vbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/noexplicit.vbs
     ${CMAKE_CURRENT_SOURCE_DIR}/regexp.vbs)
 
 set_source_files_properties(rsrc.rc PROPERTIES OBJECT_DEPENDS "${vbscript_winetest_rc_deps}")
