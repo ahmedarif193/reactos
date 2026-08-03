@@ -21,7 +21,7 @@ add_library(dsound MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/dsound.def)
 
 set_module_type(dsound win32dll)
-target_link_libraries(dsound dxguid uuid wine)
-add_importlibs(dsound winmm advapi32 msvcrt kernel32 ntdll)
+target_link_libraries(dsound dxguid uuid wine wine_dll_register wine_dll_canunload)
+add_importlibs(dsound winmm ole32 advapi32 user32 msvcrt kernel32 ntdll)
 add_cd_file(TARGET dsound DESTINATION reactos/system32 FOR all)
 set_wine_module_FIXME(dsound) # CORE-5743: No CONST_VTABLE

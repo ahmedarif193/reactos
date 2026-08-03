@@ -15,8 +15,8 @@ add_executable(dsound_winetest
     ${SOURCE}
     ${PCH_SKIP_SOURCE})
 
-target_link_libraries(dsound_winetest uuid dxguid)
+target_compile_definitions(dsound_winetest PRIVATE COBJMACROS= WINETEST_USE_DBGSTR_LONGLONG)
+target_link_libraries(dsound_winetest wine uuid dxguid dmoguids)
 set_module_type(dsound_winetest win32cui)
-add_importlibs(dsound_winetest ole32 user32 msvcrt kernel32)
-add_pch(dsound_winetest dsound_test.h "${PCH_SKIP_SOURCE}")
+add_importlibs(dsound_winetest dsound msdmo ole32 version user32 msvcrt kernel32)
 add_rostests_file(TARGET dsound_winetest)
