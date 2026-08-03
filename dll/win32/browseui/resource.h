@@ -135,7 +135,11 @@
 #define IDS_FOLDER_OPTIONS       58691
 
 #define IDS_CANCELLING           16
-#define IDS_REMAINING            17
+#define IDS_REMAINING1           17
+#define IDS_REMAINING2           18
+#define IDS_SECONDS              19
+#define IDS_MINUTES              20
+#define IDS_HOURS                21
 #define IDC_ANIMATION            100
 #define IDC_PROGRESS_BAR         102
 #define IDC_TEXT_LINE            103

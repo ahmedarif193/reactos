@@ -192,7 +192,11 @@ END
 STRINGTABLE
 BEGIN
     IDS_CANCELLING "İptal ediliyor..."
-    IDS_REMAINING  "Kalan"
+    IDS_REMAINING1 "%1!u! %2 kaldı"
+    IDS_REMAINING2 "%1!u! %2 ve %3!u! %4 kaldı"
+    IDS_SECONDS    "saniye"
+    IDS_MINUTES    "dakika"
+    IDS_HOURS      "saat"
 END
 
 STRINGTABLE

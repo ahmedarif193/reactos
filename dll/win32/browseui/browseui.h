@@ -10,6 +10,23 @@
 #define USE_CUSTOM_SEARCHBAND 1
 #define USE_CUSTOM_INTERNETTOOLBAR 1
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+extern LONG BROWSEUI_refCount;
+extern HINSTANCE BROWSEUI_hinstance;
+
+HRESULT ACLMulti_Constructor(IUnknown *punkOuter, IUnknown **ppOut);
+HRESULT ProgressDialog_Constructor(IUnknown *punkOuter, IUnknown **ppOut);
+HRESULT CompCatCacheDaemon_Constructor(IUnknown *punkOuter, IUnknown **ppOut);
+HRESULT ACLShellSource_Constructor(IUnknown *punkOuter, IUnknown **ppOut);
+
+extern const GUID CLSID_CompCatCacheDaemon;
+
+#ifdef __cplusplus
+}
+
 HRESULT CAddressBand_CreateInstance(REFIID riid, void **ppv);
 HRESULT CAddressEditBox_CreateInstance(REFIID riid, void **ppv);
 HRESULT CBandProxy_CreateInstance(REFIID riid, void **ppv);
@@ -25,3 +42,4 @@ HRESULT CBaseBar_CreateInstance(REFIID riid, void **ppv, BOOL vertical);
 HRESULT CBaseBarSite_CreateInstance(REFIID riid, void **ppv, BOOL bVertical);
 HRESULT CToolsBand_CreateInstance(REFIID riid, void **ppv);
 HRESULT IEGetNameAndFlags(LPITEMIDLIST pidl, SHGDNF uFlags, LPWSTR pszBuf, UINT cchBuf, SFGAOF *rgfInOut);
+#endif

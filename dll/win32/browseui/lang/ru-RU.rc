@@ -191,7 +191,11 @@ END
 STRINGTABLE
 BEGIN
     IDS_CANCELLING "Прерывание..."
-    IDS_REMAINING  "Осталось"
+    IDS_REMAINING1 "Осталось %1!u! %2"
+    IDS_REMAINING2 "Осталось %1!u! %2 и %3!u! %4"
+    IDS_SECONDS    "сек."
+    IDS_MINUTES    "мин."
+    IDS_HOURS      "ч."
 END
 
 STRINGTABLE

@@ -64,7 +64,7 @@ dll/win32/avrt                # Synced to Wine-11.14
 dll/win32/bcrypt              # Synced to Wine-11.14
 dll/win32/bcryptprimitives    # Synced to Wine-11.14
 dll/win32/bluetoothapis       # Synced to Wine-11.14
-dll/win32/browseui            # Out of sync
+dll/win32/browseui            # Synced to Wine-11.14 (ReactOS shell extensions retained)
 dll/win32/cabinet             # Synced to Wine-11.14
 dll/win32/cfgmgr32            # Synced to Wine-11.14
 dll/win32/clusapi             # Synced to Wine-11.14

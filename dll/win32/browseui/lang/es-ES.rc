@@ -191,7 +191,11 @@ END
 STRINGTABLE
 BEGIN
     IDS_CANCELLING "Cancelando..."
-    IDS_REMAINING  "restantes"
+    IDS_REMAINING1 "%1!u! %2 restante"
+    IDS_REMAINING2 "%1!u! %2 and %3!u! %4 restante"
+    IDS_SECONDS    "segundos"
+    IDS_MINUTES    "minutos"
+    IDS_HOURS      "horas"
 END
 
 STRINGTABLE
