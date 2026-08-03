@@ -174,7 +174,6 @@ list(APPEND IDL_SOURCES
     tuner.idl
     vmr9.idl
     wia_xp.idl
-    wincodec.idl
     xmldom.idl
     xmldso.idl
     ctfutb.idl
@@ -225,6 +224,7 @@ list(APPEND SOURCE
     wdmguids.c
     otherguids.c
     undoc.c
+    wincodec.c
 )
 
 add_library(uuid ${SOURCE})
