@@ -86,22 +86,19 @@ struct shellExpectedValues {
 
 static HRESULT (WINAPI *pDllGetVersion)(DLLVERSIONINFO *);
 static HRESULT (WINAPI *pSHGetFolderPathA)(HWND, int, HANDLE, DWORD, LPSTR);
-static HRESULT (WINAPI *pSHGetFolderLocation)(HWND, int, HANDLE, DWORD,
- LPITEMIDLIST *);
 static BOOL    (WINAPI *pSHGetSpecialFolderPathA)(HWND, LPSTR, int, BOOL);
 static HRESULT (WINAPI *pSHGetSpecialFolderLocation)(HWND, int, LPITEMIDLIST *);
 static LPITEMIDLIST (WINAPI *pILFindLastID)(LPCITEMIDLIST);
 static int (WINAPI *pSHFileOperationA)(LPSHFILEOPSTRUCTA);
-static HRESULT (WINAPI *pSHGetMalloc)(LPMALLOC *);
 static UINT (WINAPI *pGetSystemWow64DirectoryA)(LPSTR,UINT);
 static HRESULT (WINAPI *pSHGetKnownFolderPath)(REFKNOWNFOLDERID, DWORD, HANDLE, PWSTR *);
 static HRESULT (WINAPI *pSHSetKnownFolderPath)(REFKNOWNFOLDERID, DWORD, HANDLE, PWSTR);
 static HRESULT (WINAPI *pSHGetFolderPathEx)(REFKNOWNFOLDERID, DWORD, HANDLE, LPWSTR, DWORD);
 static BOOL (WINAPI *pPathYetAnotherMakeUniqueName)(PWSTR, PCWSTR, PCWSTR, PCWSTR);
 static HRESULT (WINAPI *pSHGetKnownFolderIDList)(REFKNOWNFOLDERID, DWORD, HANDLE, PIDLIST_ABSOLUTE*);
+static BOOL (WINAPI *pPathResolve)(PWSTR, PZPCWSTR, UINT);
 
 static DLLVERSIONINFO shellVersion = { 0 };
-static LPMALLOC pMalloc;
 static const BYTE guidType[] = { PT_GUID };
 static const BYTE controlPanelType[] = { PT_SHELLEXT, PT_GUID, PT_CPL };
 static const BYTE folderType[] = { PT_FOLDER, PT_FOLDERW };
@@ -114,6 +111,7 @@ static const BYTE printersType[] = { PT_YAGUID, PT_SHELLEXT, 0x71 };
 static const BYTE ieSpecialType[] = { PT_IESPECIAL2 };
 static const BYTE shellExtType[] = { PT_SHELLEXT };
 static const BYTE workgroupType[] = { PT_WORKGRP };
+static const BYTE missingType[] = { 0xff };
 #define DECLARE_TYPE(x, y) { x, ARRAY_SIZE(y), y }
 static const struct shellExpectedValues requiredShellValues[] = {
  DECLARE_TYPE(CSIDL_BITBUCKET, guidType),
@@ -181,6 +179,14 @@ static const struct shellExpectedValues optionalShellValues[] = {
  DECLARE_TYPE(CSIDL_RESOURCES, folderType),
  DECLARE_TYPE(CSIDL_RESOURCES_LOCALIZED, folderType),
 };
+static const struct shellExpectedValues undefinedShellValues[] = {
+ DECLARE_TYPE(0x0f, missingType),
+ DECLARE_TYPE(0x32, missingType),
+ DECLARE_TYPE(0x33, missingType),
+ DECLARE_TYPE(0x34, missingType),
+ DECLARE_TYPE(0x3c, missingType),
+ DECLARE_TYPE(0x45, missingType),
+};
 #undef DECLARE_TYPE
 
 static void loadShell32(void)
@@ -195,7 +201,6 @@ static void loadShell32(void)
     GET_PROC(DllGetVersion)
     GET_PROC(SHGetFolderPathA)
     GET_PROC(SHGetFolderPathEx)
-    GET_PROC(SHGetFolderLocation)
     GET_PROC(SHGetKnownFolderPath)
     GET_PROC(SHSetKnownFolderPath)
     GET_PROC(SHGetSpecialFolderPathA)
@@ -204,24 +209,15 @@ static void loadShell32(void)
     if (!pILFindLastID)
         pILFindLastID = (void *)GetProcAddress(hShell32, (LPCSTR)16);
     GET_PROC(SHFileOperationA)
-    GET_PROC(SHGetMalloc)
     GET_PROC(PathYetAnotherMakeUniqueName)
     GET_PROC(SHGetKnownFolderIDList)
-
-    ok(pSHGetMalloc != NULL, "shell32 is missing SHGetMalloc\n");
-    if (pSHGetMalloc)
-    {
-        HRESULT hr = pSHGetMalloc(&pMalloc);
-
-        ok(hr == S_OK, "SHGetMalloc failed: 0x%08x\n", hr);
-        ok(pMalloc != NULL, "SHGetMalloc returned a NULL IMalloc\n");
-    }
+    GET_PROC(PathResolve);
 
     if (pDllGetVersion)
     {
         shellVersion.cbSize = sizeof(shellVersion);
         pDllGetVersion(&shellVersion);
-        trace("shell32 version is %d.%d\n",
+        trace("shell32 version is %ld.%ld\n",
               shellVersion.dwMajorVersion, shellVersion.dwMinorVersion);
     }
 #undef GET_PROC
@@ -302,6 +298,18 @@ static const char *getFolderName(int folder)
         sprintf(unknown, "unknown (0x%04x)", folder);
         return unknown;
     }
+}
+
+static LPWSTR wcscasestr( LPCWSTR str, LPCWSTR sub )
+{
+    while (*str)
+    {
+        const WCHAR *p1 = str, *p2 = sub;
+        while (*p1 && *p2 && towlower(*p1) == towlower(*p2)) { p1++; p2++; }
+        if (!*p2) return (WCHAR *)str;
+        str++;
+    }
+    return NULL;
 }
 
 /* Standard CSIDL values (and their flags) uses only two less-significant bytes */
@@ -425,7 +433,6 @@ static const struct knownFolderDef known_folders[] = {
                  NULL,
                  FILE_ATTRIBUTE_READONLY,
                  KFDF_PRECREATE),
-#ifndef __REACTOS__
     KNOWN_FOLDER(FOLDERID_CommonStartup,
                  CSIDL_COMMON_STARTUP,
                  "Common Startup",
@@ -435,17 +442,6 @@ static const struct knownFolderDef known_folders[] = {
                  NULL,
                  FILE_ATTRIBUTE_READONLY,
                  KFDF_PRECREATE),
-#else // s/StartUp/Startup/
-    KNOWN_FOLDER(FOLDERID_CommonStartup,
-                 CSIDL_COMMON_STARTUP,
-                 "Common Startup",
-                 KF_CATEGORY_COMMON,
-                 FOLDERID_CommonPrograms, GUID_NULL,
-                 "Startup",
-                 NULL,
-                 FILE_ATTRIBUTE_READONLY,
-                 KFDF_PRECREATE),
-#endif
     KNOWN_FOLDER(FOLDERID_CommonTemplates,
                  CSIDL_COMMON_TEMPLATES,
                  "Common Templates",
@@ -1135,7 +1131,6 @@ static const struct knownFolderDef known_folders[] = {
                  NULL,
                  FILE_ATTRIBUTE_READONLY,
                  KFDF_PRECREATE),
-#ifndef __REACTOS__
     KNOWN_FOLDER(FOLDERID_Startup,
                  CSIDL_STARTUP,
                  "Startup",
@@ -1145,17 +1140,6 @@ static const struct knownFolderDef known_folders[] = {
                  NULL,
                  FILE_ATTRIBUTE_READONLY,
                  KFDF_PRECREATE),
-#else // s/StartUp/Startup/
-    KNOWN_FOLDER(FOLDERID_Startup,
-                 CSIDL_STARTUP,
-                 "Startup",
-                 KF_CATEGORY_PERUSER,
-                 FOLDERID_Programs, GUID_NULL,
-                 "Startup\0",
-                 NULL,
-                 FILE_ATTRIBUTE_READONLY,
-                 KFDF_PRECREATE),
-#endif
     KNOWN_FOLDER(FOLDERID_SyncManagerFolder,
                  NO_CSIDL,
                  "SyncCenterFolder",
@@ -1330,6 +1314,33 @@ static const struct knownFolderDef known_folders[] = {
                  NULL,
                  0,
                  0),
+    KNOWN_FOLDER(FOLDERID_AccountPictures,
+                 NO_CSIDL,
+                 "AccountPictures",
+                 KF_CATEGORY_PERUSER,
+                 FOLDERID_RoamingAppData, GUID_NULL,
+                 "Microsoft\\Windows\\AccountPictures",
+                 NULL,
+                 FILE_ATTRIBUTE_READONLY,
+                 KFDF_PRECREATE | KFDF_ROAMABLE),
+    KNOWN_FOLDER(FOLDERID_Screenshots,
+                 NO_CSIDL,
+                 "Screenshots",
+                 KF_CATEGORY_PERUSER,
+                 FOLDERID_Pictures, GUID_NULL,
+                 "Screenshots",
+                 NULL,
+                 0,
+                 KFDF_PRECREATE | KFDF_ROAMABLE),
+    KNOWN_FOLDER(FOLDERID_AppDataDocuments,
+                 NO_CSIDL,
+                 "AppDataDocuments",
+                 KF_CATEGORY_PERUSER,
+                 FOLDERID_LocalAppData, GUID_NULL,
+                 "Documents",
+                 NULL,
+                 0,
+                 KFDF_PRECREATE | KFDF_ROAMABLE),
 };
 #undef KNOWN_FOLDER
 BOOL known_folder_found[ARRAY_SIZE(known_folders)];
@@ -1340,22 +1351,17 @@ static void test_parameters(void)
     char path[MAX_PATH];
     HRESULT hr;
 
-    if (pSHGetFolderLocation)
-    {
-        /* check a bogus CSIDL: */
-        pidl = NULL;
-        hr = pSHGetFolderLocation(NULL, 0xeeee, NULL, 0, &pidl);
-        ok(hr == E_INVALIDARG, "got 0x%08x, expected E_INVALIDARG\n", hr);
-        if (hr == S_OK) IMalloc_Free(pMalloc, pidl);
+    /* check a bogus CSIDL: */
+    pidl = NULL;
+    hr = SHGetFolderLocation(NULL, 0xeeee, NULL, 0, &pidl);
+    ok(hr == E_INVALIDARG, "got 0x%08lx, expected E_INVALIDARG\n", hr);
 
-        /* check a bogus user token: */
-        pidl = NULL;
-        hr = pSHGetFolderLocation(NULL, CSIDL_FAVORITES, (HANDLE)2, 0, &pidl);
-        ok(hr == E_FAIL || hr == E_HANDLE, "got 0x%08x, expected E_FAIL or E_HANDLE\n", hr);
-        if (hr == S_OK) IMalloc_Free(pMalloc, pidl);
+    /* check a bogus user token: */
+    pidl = NULL;
+    hr = SHGetFolderLocation(NULL, CSIDL_FAVORITES, (HANDLE)2, 0, &pidl);
+    ok(hr == E_FAIL || hr == E_HANDLE, "got 0x%08lx, expected E_FAIL or E_HANDLE\n", hr);
 
-        /* a NULL pidl pointer crashes, so don't test it */
-    }
+    /* a NULL pidl pointer crashes, so don't test it */
 
     if (pSHGetSpecialFolderLocation)
     {
@@ -1364,7 +1370,7 @@ static void test_parameters(void)
             SHGetSpecialFolderLocation(NULL, 0, NULL);
 
         hr = pSHGetSpecialFolderLocation(NULL, 0xeeee, &pidl);
-        ok(hr == E_INVALIDARG, "got returned 0x%08x\n", hr);
+        ok(hr == E_INVALIDARG, "got returned 0x%08lx\n", hr);
     }
 
     if (pSHGetFolderPathA)
@@ -1372,10 +1378,10 @@ static void test_parameters(void)
         /* expect 2's a bogus handle, especially since we didn't open it */
         hr = pSHGetFolderPathA(NULL, CSIDL_DESKTOP, (HANDLE)2, SHGFP_TYPE_DEFAULT, path);
         ok(hr == E_FAIL || hr == E_HANDLE || /* Vista and 2k8 */
-           broken(hr == S_OK), /* W2k and Me */ "got 0x%08x, expected E_FAIL\n", hr);
+           broken(hr == S_OK), /* W2k and Me */ "got 0x%08lx, expected E_FAIL\n", hr);
 
         hr = pSHGetFolderPathA(NULL, 0xeeee, NULL, SHGFP_TYPE_DEFAULT, path);
-        ok(hr == E_INVALIDARG, "got 0x%08x, expected E_INVALIDARG\n", hr);
+        ok(hr == E_INVALIDARG, "got 0x%08lx, expected E_INVALIDARG\n", hr);
     }
 
     if (pSHGetSpecialFolderPathA)
@@ -1403,11 +1409,8 @@ static BYTE testSHGetFolderLocation(int folder)
     HRESULT hr;
     BYTE ret = 0xff;
 
-    /* treat absence of function as success */
-    if (!pSHGetFolderLocation) return TRUE;
-
     pidl = NULL;
-    hr = pSHGetFolderLocation(NULL, folder, NULL, 0, &pidl);
+    hr = SHGetFolderLocation(NULL, folder, NULL, 0, &pidl);
     if (hr == S_OK)
     {
         if (pidl)
@@ -1418,9 +1421,10 @@ static BYTE testSHGetFolderLocation(int folder)
              getFolderName(folder));
             if (pidlLast)
                 ret = pidlLast->mkid.abID[0];
-            IMalloc_Free(pMalloc, pidl);
+            ILFree(pidl);
         }
     }
+
     return ret;
 }
 
@@ -1431,8 +1435,7 @@ static BYTE testSHGetSpecialFolderLocation(int folder)
     HRESULT hr;
     BYTE ret = 0xff;
 
-    /* treat absence of function as success */
-    if (!pSHGetSpecialFolderLocation) return TRUE;
+    if (!pSHGetSpecialFolderLocation) return ret;
 
     pidl = NULL;
     hr = pSHGetSpecialFolderLocation(NULL, folder, &pidl);
@@ -1446,7 +1449,7 @@ static BYTE testSHGetSpecialFolderLocation(int folder)
                 "%s: ILFindLastID failed\n", getFolderName(folder));
             if (pidlLast)
                 ret = pidlLast->mkid.abID[0];
-            IMalloc_Free(pMalloc, pidl);
+            ILFree(pidl);
         }
     }
     return ret;
@@ -1461,7 +1464,7 @@ static void test_SHGetFolderPath(BOOL optional, int folder)
 
     hr = pSHGetFolderPathA(NULL, folder, NULL, SHGFP_TYPE_CURRENT, path);
     ok(hr == S_OK || optional,
-     "SHGetFolderPathA(NULL, %s, NULL, SHGFP_TYPE_CURRENT, path) failed: 0x%08x\n", getFolderName(folder), hr);
+     "SHGetFolderPathA(NULL, %s, NULL, SHGFP_TYPE_CURRENT, path) failed: 0x%08lx\n", getFolderName(folder), hr);
 }
 
 static void test_SHGetSpecialFolderPath(BOOL optional, int folder)
@@ -1479,8 +1482,14 @@ static void test_SHGetSpecialFolderPath(BOOL optional, int folder)
      getFolderName(folder));
 }
 
+enum ShellValuesTestExpect {
+    ShellValuesTestExpect_Required,
+    ShellValuesTestExpect_Optional,
+    ShellValuesTestExpect_Missing,
+};
+
 static void test_ShellValues(const struct shellExpectedValues testEntries[],
- int numEntries, BOOL optional)
+ int numEntries, enum ShellValuesTestExpect expect)
 {
     int i;
 
@@ -1490,33 +1499,38 @@ static void test_ShellValues(const struct shellExpectedValues testEntries[],
         int j;
         BOOL foundTypeMatch = FALSE;
 
-        if (pSHGetFolderLocation)
-        {
-            type = testSHGetFolderLocation(testEntries[i].folder);
-            for (j = 0; !foundTypeMatch && j < testEntries[i].numTypes; j++)
-                if (testEntries[i].types[j] == type)
-                    foundTypeMatch = TRUE;
-            ok(foundTypeMatch || optional || broken(type == 0xff) /* Win9x */,
-             "%s has unexpected type %d (0x%02x)\n",
-             getFolderName(testEntries[i].folder), type, type);
-        }
+        type = testSHGetFolderLocation(testEntries[i].folder);
+        for (j = 0; !foundTypeMatch && j < testEntries[i].numTypes; j++)
+            if (testEntries[i].types[j] == type)
+                foundTypeMatch = TRUE;
+        ok((expect == ShellValuesTestExpect_Required && foundTypeMatch) ||
+                (expect == ShellValuesTestExpect_Optional) ||
+                (expect == ShellValuesTestExpect_Missing && type == 0xff),
+         "%s has unexpected type %d (0x%02x)\n",
+         getFolderName(testEntries[i].folder), type, type);
+
         type = testSHGetSpecialFolderLocation(testEntries[i].folder);
         for (j = 0, foundTypeMatch = FALSE; !foundTypeMatch &&
          j < testEntries[i].numTypes; j++)
             if (testEntries[i].types[j] == type)
                 foundTypeMatch = TRUE;
-        ok(foundTypeMatch || optional || broken(type == 0xff) /* Win9x */,
+        ok((expect == ShellValuesTestExpect_Required && foundTypeMatch) ||
+                (expect == ShellValuesTestExpect_Optional) ||
+                (expect == ShellValuesTestExpect_Missing && type == 0xff),
          "%s has unexpected type %d (0x%02x)\n",
          getFolderName(testEntries[i].folder), type, type);
-        switch (type)
+        if (expect != ShellValuesTestExpect_Missing)
         {
-            case PT_FOLDER:
-            case PT_DRIVE:
-            case PT_DRIVE2:
-            case PT_IESPECIAL2:
-                test_SHGetFolderPath(optional, testEntries[i].folder);
-                test_SHGetSpecialFolderPath(optional, testEntries[i].folder);
-                break;
+            switch (type)
+            {
+                case PT_FOLDER:
+                case PT_DRIVE:
+                case PT_DRIVE2:
+                case PT_IESPECIAL2:
+                    test_SHGetFolderPath(expect == ShellValuesTestExpect_Optional, testEntries[i].folder);
+                    test_SHGetSpecialFolderPath(expect == ShellValuesTestExpect_Optional, testEntries[i].folder);
+                    break;
+            }
         }
     }
 }
@@ -1555,11 +1569,10 @@ static void matchGUID(int folder, const GUID *guid, const GUID *guid_alt)
     LPITEMIDLIST pidl;
     HRESULT hr;
 
-    if (!pSHGetFolderLocation) return;
     if (!guid) return;
 
     pidl = NULL;
-    hr = pSHGetFolderLocation(NULL, folder, NULL, 0, &pidl);
+    hr = SHGetFolderLocation(NULL, folder, NULL, 0, &pidl);
     if (hr == S_OK)
     {
         LPITEMIDLIST pidlLast = pILFindLastID(pidl);
@@ -1579,7 +1592,7 @@ static void matchGUID(int folder, const GUID *guid, const GUID *guid_alt)
               "%s: got GUID %s, expected %s or %s\n", getFolderName(folder),
               wine_dbgstr_guid(shellGuid), wine_dbgstr_guid(guid), wine_dbgstr_guid(guid_alt));
         }
-        IMalloc_Free(pMalloc, pidl);
+        ILFree(pidl);
     }
 }
 
@@ -1590,8 +1603,9 @@ static void test_PidlTypes(void)
     test_SHGetFolderPath(FALSE, CSIDL_DESKTOP);
     test_SHGetSpecialFolderPath(FALSE, CSIDL_DESKTOP);
 
-    test_ShellValues(requiredShellValues, ARRAY_SIZE(requiredShellValues), FALSE);
-    test_ShellValues(optionalShellValues, ARRAY_SIZE(optionalShellValues), TRUE);
+    test_ShellValues(requiredShellValues, ARRAY_SIZE(requiredShellValues), ShellValuesTestExpect_Required);
+    test_ShellValues(optionalShellValues, ARRAY_SIZE(optionalShellValues), ShellValuesTestExpect_Optional);
+    test_ShellValues(undefinedShellValues, ARRAY_SIZE(undefinedShellValues), ShellValuesTestExpect_Missing);
 }
 
 /* FIXME: Should be in shobjidl.idl */
@@ -1729,13 +1743,12 @@ static void doChild(const char *arg)
         /* test some failure cases first: */
         hr = pSHGetFolderPathA(NULL, CSIDL_FAVORITES, NULL, SHGFP_TYPE_CURRENT, path);
         ok(hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND),
-            "SHGetFolderPath returned 0x%08x, expected 0x80070002\n", hr);
+            "SHGetFolderPath returned 0x%08lx, expected 0x80070002\n", hr);
 
         pidl = NULL;
-        hr = pSHGetFolderLocation(NULL, CSIDL_FAVORITES, NULL, 0, &pidl);
+        hr = SHGetFolderLocation(NULL, CSIDL_FAVORITES, NULL, 0, &pidl);
         ok(hr == E_FAIL || hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND),
-            "SHGetFolderLocation returned 0x%08x\n", hr);
-        if (hr == S_OK && pidl) IMalloc_Free(pMalloc, pidl);
+            "SHGetFolderLocation returned 0x%08lx\n", hr);
 
         ok(!pSHGetSpecialFolderPathA(NULL, path, CSIDL_FAVORITES, FALSE),
             "SHGetSpecialFolderPath succeeded, expected failure\n");
@@ -1743,14 +1756,12 @@ static void doChild(const char *arg)
         pidl = NULL;
         hr = pSHGetSpecialFolderLocation(NULL, CSIDL_FAVORITES, &pidl);
         ok(hr == E_FAIL || hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND),
-            "SHGetFolderLocation returned 0x%08x\n", hr);
-
-        if (hr == S_OK && pidl) IMalloc_Free(pMalloc, pidl);
+            "SHGetFolderLocation returned 0x%08lx\n", hr);
 
         /* now test success: */
         hr = pSHGetFolderPathA(NULL, CSIDL_FAVORITES | CSIDL_FLAG_CREATE, NULL,
                                SHGFP_TYPE_CURRENT, path);
-        ok (hr == S_OK, "got 0x%08x\n", hr);
+        ok (hr == S_OK, "got 0x%08lx\n", hr);
         if (hr == S_OK)
         {
             BOOL ret;
@@ -1760,7 +1771,7 @@ static void doChild(const char *arg)
             ok(!ret, "expected failure with ERROR_ALREADY_EXISTS\n");
             if (!ret)
                 ok(GetLastError() == ERROR_ALREADY_EXISTS,
-                  "got %d, expected ERROR_ALREADY_EXISTS\n", GetLastError());
+                  "got %ld, expected ERROR_ALREADY_EXISTS\n", GetLastError());
 
             p = path + strlen(path);
             strcpy(p, "\\desktop.ini");
@@ -1768,7 +1779,7 @@ static void doChild(const char *arg)
             *p = 0;
             SetFileAttributesA( path, FILE_ATTRIBUTE_NORMAL );
             ret = RemoveDirectoryA(path);
-            ok( ret, "failed to remove %s error %u\n", path, GetLastError() );
+            ok( ret, "failed to remove %s error %lu\n", path, GetLastError() );
         }
     }
     else if (arg[0] == '2')
@@ -1777,7 +1788,7 @@ static void doChild(const char *arg)
            original value of CSIDL_FAVORITES is restored. */
         hr = pSHGetFolderPathA(NULL, CSIDL_FAVORITES | CSIDL_FLAG_CREATE, NULL,
             SHGFP_TYPE_CURRENT, path);
-        ok(hr == S_OK, "SHGetFolderPath failed: 0x%08x\n", hr);
+        ok(hr == S_OK, "SHGetFolderPath failed: 0x%08lx\n", hr);
     }
 }
 
@@ -1802,7 +1813,6 @@ static void test_NonExistentPath(void)
     HKEY key;
 
     if (!pSHGetFolderPathA) return;
-    if (!pSHGetFolderLocation) return;
     if (!pSHGetSpecialFolderPathA) return;
     if (!pSHGetSpecialFolderLocation) return;
     if (!pSHFileOperationA) return;
@@ -1830,14 +1840,14 @@ static void test_NonExistentPath(void)
                 STARTUPINFOA startup;
                 PROCESS_INFORMATION info;
 
-                sprintf(buffer, "%s tests/shellpath.c 1", selfname);
+                sprintf(buffer, "%s shellpath 1", selfname);
                 memset(&startup, 0, sizeof(startup));
                 startup.cb = sizeof(startup);
                 startup.dwFlags = STARTF_USESHOWWINDOW;
                 startup.wShowWindow = SW_SHOWNORMAL;
                 CreateProcessA(NULL, buffer, NULL, NULL, FALSE, 0L, NULL, NULL,
                  &startup, &info);
-                winetest_wait_child_process( info.hProcess );
+                wait_child_process( &info );
 
                 /* restore original values: */
                 trace("Restoring CSIDL_FAVORITES to %s\n", originalPath);
@@ -1845,7 +1855,7 @@ static void test_NonExistentPath(void)
                  strlen(originalPath) + 1);
                 RegFlushKey(key);
 
-                sprintf(buffer, "%s tests/shellpath.c 2", selfname);
+                sprintf(buffer, "%s shellpath 2", selfname);
                 memset(&startup, 0, sizeof(startup));
                 startup.cb = sizeof(startup);
                 startup.dwFlags = STARTF_USESHOWWINDOW;
@@ -1878,17 +1888,17 @@ static void test_SHGetFolderPathEx(void)
 
 if (0) { /* crashes */
     hr = pSHGetKnownFolderPath(&FOLDERID_Desktop, 0, NULL, NULL);
-    ok(hr == E_INVALIDARG, "expected E_INVALIDARG, got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "expected E_INVALIDARG, got 0x%08lx\n", hr);
 }
     /* non-existent folder id */
     path = (void *)0xdeadbeef;
     hr = pSHGetKnownFolderPath(&IID_IOleObject, 0, NULL, &path);
-    ok(hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND), "got 0x%08x\n", hr);
+    ok(hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND), "got 0x%08lx\n", hr);
     ok(path == NULL, "got %p\n", path);
 
     path = NULL;
     hr = pSHGetKnownFolderPath(&FOLDERID_Desktop, KF_FLAG_DEFAULT_PATH, NULL, &path);
-    ok(hr == S_OK, "expected S_OK, got 0x%08x\n", hr);
+    ok(hr == S_OK, "expected S_OK, got 0x%08lx\n", hr);
     ok(path != NULL, "expected path != NULL\n");
     CoTaskMemFree(path);
 
@@ -1903,28 +1913,41 @@ if (0) { /* crashes */
             ok(path == NULL, "expected path == NULL\n");
             continue;
         }
-        ok(hr == S_OK, "expected S_OK, got 0x%08x\n", hr);
+        ok(hr == S_OK, "expected S_OK, got 0x%08lx\n", hr);
         ok(path != NULL, "expected path != NULL\n");
 
         path2 = NULL;
         hr = pSHGetKnownFolderPath(folder_id, KF_FLAG_SIMPLE_IDLIST, NULL, &path2);
-        ok(hr == S_OK, "expected S_OK, got 0x%08x\n", hr);
+        ok(hr == S_OK, "expected S_OK, got 0x%08lx\n", hr);
         ok(path2 != NULL, "expected path != NULL\n");
         ok(!lstrcmpiW(path, path2), "expected equal paths: %s, %s\n", wine_dbgstr_w(path), wine_dbgstr_w(path2));
         CoTaskMemFree(path2);
 
         path2 = NULL;
         hr = pSHGetKnownFolderPath(folder_id, KF_FLAG_DONT_UNEXPAND, NULL, &path2);
-        ok(hr == S_OK, "expected S_OK, got 0x%08x\n", hr);
+        ok(hr == S_OK, "expected S_OK, got 0x%08lx\n", hr);
         ok(path2 != NULL, "expected path != NULL\n");
         ok(!lstrcmpiW(path, path2), "expected equal paths: %s, %s\n", wine_dbgstr_w(path), wine_dbgstr_w(path2));
         CoTaskMemFree(path2);
 
         path2 = NULL;
         hr = pSHGetKnownFolderPath(folder_id, KF_FLAG_SIMPLE_IDLIST | KF_FLAG_DONT_UNEXPAND, NULL, &path2);
-        ok(hr == S_OK, "expected S_OK, got 0x%08x\n", hr);
+        ok(hr == S_OK, "expected S_OK, got 0x%08lx\n", hr);
         ok(path2 != NULL, "expected path != NULL\n");
         ok(!lstrcmpiW(path, path2), "expected equal paths: %s, %s\n", wine_dbgstr_w(path), wine_dbgstr_w(path2));
+        CoTaskMemFree(path2);
+
+        hr = pSHGetKnownFolderPath(folder_id, KF_FLAG_DEFAULT_PATH, NULL, &path2);
+        ok(hr == S_OK, "expected S_OK, got 0x%08lx\n", hr);
+        ok(path2 != NULL, "expected path != NULL\n");
+        CoTaskMemFree(path2);
+
+        hr = pSHGetKnownFolderPath(folder_id, KF_FLAG_NOT_PARENT_RELATIVE, NULL, &path2);
+        ok(hr == E_INVALIDARG, "expected S_OK, got 0x%08lx\n", hr);
+
+        hr = pSHGetKnownFolderPath(folder_id, KF_FLAG_DEFAULT_PATH | KF_FLAG_NOT_PARENT_RELATIVE, NULL, &path2);
+        ok(hr == S_OK, "expected S_OK, got 0x%08lx\n", hr);
+        ok(path2 != NULL, "expected path != NULL\n");
         CoTaskMemFree(path2);
 
         CoTaskMemFree(path);
@@ -1932,30 +1955,65 @@ if (0) { /* crashes */
 
     path = NULL;
     hr = pSHGetKnownFolderPath(&FOLDERID_Desktop, 0, NULL, &path);
-    ok(hr == S_OK, "expected S_OK, got 0x%08x\n", hr);
+    ok(hr == S_OK, "expected S_OK, got 0x%08lx\n", hr);
     ok(path != NULL, "expected path != NULL\n");
 
     hr = pSHGetFolderPathEx(&FOLDERID_Desktop, 0, NULL, buffer, MAX_PATH);
-    ok(hr == S_OK, "expected S_OK, got 0x%08x\n", hr);
+    ok(hr == S_OK, "expected S_OK, got 0x%08lx\n", hr);
     ok(!lstrcmpiW(path, buffer), "expected equal paths\n");
     len = lstrlenW(buffer);
     CoTaskMemFree(path);
 
     hr = pSHGetFolderPathEx(&FOLDERID_Desktop, 0, NULL, buffer, 0);
-    ok(hr == E_INVALIDARG, "expected E_INVALIDARG, got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "expected E_INVALIDARG, got 0x%08lx\n", hr);
 
 if (0) { /* crashes */
     hr = pSHGetFolderPathEx(&FOLDERID_Desktop, 0, NULL, NULL, len + 1);
-    ok(hr == E_INVALIDARG, "expected E_INVALIDARG, got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "expected E_INVALIDARG, got 0x%08lx\n", hr);
 
     hr = pSHGetFolderPathEx(NULL, 0, NULL, buffer, MAX_PATH);
-    ok(hr == E_INVALIDARG, "expected E_INVALIDARG, got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "expected E_INVALIDARG, got 0x%08lx\n", hr);
 }
     hr = pSHGetFolderPathEx(&FOLDERID_Desktop, 0, NULL, buffer, len);
-    ok(hr == E_NOT_SUFFICIENT_BUFFER, "expected E_NOT_SUFFICIENT_BUFFER, got 0x%08x\n", hr);
+    ok(hr == E_NOT_SUFFICIENT_BUFFER, "expected E_NOT_SUFFICIENT_BUFFER, got 0x%08lx\n", hr);
 
     hr = pSHGetFolderPathEx(&FOLDERID_Desktop, 0, NULL, buffer, len + 1);
-    ok(hr == S_OK, "expected S_OK, got 0x%08x\n", hr);
+    ok(hr == S_OK, "expected S_OK, got 0x%08lx\n", hr);
+
+    path = NULL;
+    hr = pSHGetKnownFolderPath(&FOLDERID_ProgramFilesX64, 0, NULL, &path);
+#ifdef _WIN64
+    ok(hr == S_OK, "got 0x%08lx\n", hr);
+    ok(path != NULL, "path not set\n");
+    CoTaskMemFree(path);
+#else
+    todo_wine ok(hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND), "got 0x%08lx\n", hr);
+    ok(path == NULL, "path set\n");
+#endif
+
+    path = NULL;
+    hr = pSHGetKnownFolderPath(&FOLDERID_ProgramFilesCommonX64, 0, NULL, &path);
+#ifdef _WIN64
+    ok(hr == S_OK, "expected S_OK, got 0x%08lx\n", hr);
+    ok(path != NULL, "path not set\n");
+    CoTaskMemFree(path);
+#else
+    todo_wine ok(hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND), "got 0x%08lx\n", hr);
+    ok(path == NULL, "path set\n");
+#endif
+
+    /* check UserProgramFiles */
+    path = NULL;
+    hr = pSHGetKnownFolderPath(&FOLDERID_UserProgramFiles, KF_FLAG_CREATE, NULL, &path);
+    ok(hr == S_OK, "expected S_OK, got 0x%08lx\n", hr);
+    ok(path != NULL, "path not set\n");
+    path2 = NULL;
+    len = ExpandEnvironmentStringsW(L"%LOCALAPPDATA%\\Programs", NULL, -1);
+    path2 = CoTaskMemAlloc(sizeof(WCHAR) * (len + 1));
+    ExpandEnvironmentStringsW(L"%LOCALAPPDATA%\\Programs", path2, len);
+    ok(!wcsicmp(path, path2), "expected equal paths got %s\n", debugstr_w(path));
+    CoTaskMemFree(path);
+    CoTaskMemFree(path2);
 }
 
 static BOOL is_in_strarray(const WCHAR *needle, const char *hay)
@@ -1993,10 +2051,11 @@ static void check_known_folder(IKnownFolderManager *mgr, KNOWNFOLDERID *folderId
     HRESULT hr;
     int csidl, expectedCsidl, ret;
     KNOWNFOLDER_DEFINITION kfd;
-    IKnownFolder *folder;
+    IKnownFolder *folder, *kf_parent;
     WCHAR sName[1024];
     BOOL found = FALSE;
     unsigned int i;
+    WCHAR *ikf_path, *gkfp_path, *ikf_parent_path;
 
     for (i = 0; i < ARRAY_SIZE(known_folders); ++i)
     {
@@ -2044,14 +2103,65 @@ static void check_known_folder(IKnownFolderManager *mgr, KNOWNFOLDERID *folderId
 
                     ok_(__FILE__, known_folder->line)(known_folder->attributes == kfd.dwAttributes ||
                             (known_folder->csidl & WINE_ATTRIBUTES_OPTIONAL && kfd.dwAttributes == 0),
-                            "invalid known folder attributes for %s: 0x%08x expected, but 0x%08x retrieved\n", known_folder->sFolderId, known_folder->attributes, kfd.dwAttributes);
+                            "invalid known folder attributes for %s: 0x%08lx expected, but 0x%08lx retrieved\n", known_folder->sFolderId, known_folder->attributes, kfd.dwAttributes);
 
                     ok_(__FILE__, known_folder->line)(!(kfd.kfdFlags & (~known_folder->definitionFlags)), "invalid known folder flags for %s: 0x%08x expected, but 0x%08x retrieved\n", known_folder->sFolderId, known_folder->definitionFlags, kfd.kfdFlags);
 
+                    gkfp_path = NULL;
+                    hr = pSHGetKnownFolderPath(folderId, KF_FLAG_DEFAULT, NULL, &gkfp_path);
+                    if(SUCCEEDED(hr))
+                    {
+                        ikf_path = NULL;
+                        hr = IKnownFolder_GetPath(folder, KF_FLAG_DEFAULT, &ikf_path);
+                        ok_(__FILE__, known_folder->line)(hr == S_OK, "IKnownFolder::GetPath failed: 0x%08lx\n", hr);
+                        ok_(__FILE__, known_folder->line)(ikf_path != NULL, "SHGetKnownFolderPath gave NULL path\n");
+
+                        /* IKnownFolder::GetPath and SHGetKnownFolderPath should be the same */
+                        ok_(__FILE__, known_folder->line)(lstrcmpW(gkfp_path, ikf_path) == 0, "Got different paths: %s vs %s\n",
+                                debugstr_w(gkfp_path), debugstr_w(ikf_path));
+
+                        if(kfd.pszRelativePath)
+                        {
+                            /* RelativePath should be a substring of the path */
+                            ok_(__FILE__, known_folder->line)(wcscasestr(ikf_path, kfd.pszRelativePath) != NULL,
+                                    "KNOWNFOLDER_DEFINITION.pszRelativePath %s is not a substring of full path %s\n",
+                                    debugstr_w(kfd.pszRelativePath), debugstr_w(ikf_path));
+
+                            hr = IKnownFolderManager_GetFolder(mgr, &kfd.fidParent, &kf_parent);
+                            ok_(__FILE__, known_folder->line)(hr == S_OK, "IKnownFolderManager::GetFolder(parent) failed: 0x%08lx\n", hr);
+
+                            if(SUCCEEDED(hr))
+                            {
+                                ikf_parent_path = NULL;
+                                hr = IKnownFolder_GetPath(kf_parent, KF_FLAG_DEFAULT, &ikf_parent_path);
+                                ok_(__FILE__, known_folder->line)(hr == S_OK, "IKnownFolder::GetPath(parent) failed: 0x%08lx\n", hr);
+
+                                /* Parent path + pszRelativePath should give the full path */
+                                ok_(__FILE__, known_folder->line)(memcmp(ikf_parent_path, ikf_path, lstrlenW(ikf_parent_path) * sizeof(WCHAR)) == 0,
+                                        "Full path %s does not start with parent path %s\n",
+                                        debugstr_w(ikf_path), debugstr_w(ikf_parent_path));
+                                ok_(__FILE__, known_folder->line)(*(ikf_path + lstrlenW(ikf_parent_path)) == '\\',
+                                        "Missing slash\n");
+                                ok_(__FILE__, known_folder->line)(
+                                        wcsicmp(kfd.pszRelativePath, ikf_path + lstrlenW(ikf_parent_path) + 1) == 0 ||
+                                        /* With multiple drives, there are multiple CD-burning folders */
+                                        (IsEqualGUID(folderId, &FOLDERID_CDBurning) &&
+                                         wcsnicmp(kfd.pszRelativePath, ikf_path + lstrlenW(ikf_parent_path) + 1, wcslen(kfd.pszRelativePath)) == 0),
+                                        "Full path %s does not end with relative path %s\n",
+                                        debugstr_w(ikf_path), debugstr_w(kfd.pszRelativePath));
+
+                                CoTaskMemFree(ikf_parent_path);
+                                IKnownFolder_Release(kf_parent);
+                            }
+                        }
+
+                        CoTaskMemFree(ikf_path);
+                        CoTaskMemFree(gkfp_path);
+                    }
                     FreeKnownFolderDefinitionFields(&kfd);
                 }
 
-            IKnownFolder_Release(folder);
+                IKnownFolder_Release(folder);
             }
 
             break;
@@ -2081,7 +2191,7 @@ static void check_known_folder(IKnownFolderManager *mgr, KNOWNFOLDERID *folderId
                 trace("  localized name: %s\n", wine_dbgstr_w(kfd.pszLocalizedName));
                 trace("  icon: %s\n", wine_dbgstr_w(kfd.pszIcon));
                 trace("  security: %s\n", wine_dbgstr_w(kfd.pszSecurity));
-                trace("  attributes: 0x%08x\n", kfd.dwAttributes);
+                trace("  attributes: 0x%08lx\n", kfd.dwAttributes);
                 trace("  flags: 0x%08x\n", kfd.kfdFlags);
                 trace("  type: %s\n", wine_dbgstr_guid(&kfd.ftidType));
                 FreeKnownFolderDefinitionFields(&kfd);
@@ -2095,13 +2205,6 @@ static void check_known_folder(IKnownFolderManager *mgr, KNOWNFOLDERID *folderId
 
 static void test_knownFolders(void)
 {
-    static const WCHAR sWindows[] = {'W','i','n','d','o','w','s',0};
-    static const WCHAR sWindows2[] = {'w','i','n','d','o','w','s',0};
-    static const WCHAR sExample[] = {'E','x','a','m','p','l','e',0};
-    static const WCHAR sExample2[] = {'E','x','a','m','p','l','e','2',0};
-    static const WCHAR sSubFolder[] = {'S','u','b','F','o','l','d','e','r',0};
-    static const WCHAR sNoSuch[] = {'N','o','S','u','c','h',0};
-    static const WCHAR sBackslash[] = {'\\',0};
     static const KNOWNFOLDERID newFolderId = {0x01234567, 0x89AB, 0xCDEF, {0xFE, 0xDC, 0xBA, 0x98, 0x76, 0x54, 0x32, 0x01} };
     static const KNOWNFOLDERID subFolderId = {0xFEDCBA98, 0x7654, 0x3210, {0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF} };
     HRESULT hr;
@@ -2121,18 +2224,16 @@ static void test_knownFolders(void)
     GetWindowsDirectoryW( sWinDir, MAX_PATH );
 
     GetTempPathW(ARRAY_SIZE(sExamplePath), sExamplePath);
-    lstrcatW(sExamplePath, sExample);
+    lstrcatW(sExamplePath, L"Example");
 
     GetTempPathW(ARRAY_SIZE(sExample2Path), sExample2Path);
-    lstrcatW(sExample2Path, sExample2);
+    lstrcatW(sExample2Path, L"Example2");
 
     lstrcpyW(sSubFolderPath, sExamplePath);
-    lstrcatW(sSubFolderPath, sBackslash);
-    lstrcatW(sSubFolderPath, sSubFolder);
+    lstrcatW(sSubFolderPath, L"\\SubFolder");
 
     lstrcpyW(sSubFolder2Path, sExample2Path);
-    lstrcatW(sSubFolder2Path, sBackslash);
-    lstrcatW(sSubFolder2Path, sSubFolder);
+    lstrcatW(sSubFolder2Path, L"\\SubFolder");
 
     CoInitialize(NULL);
 
@@ -2144,96 +2245,96 @@ static void test_knownFolders(void)
     {
         IUnknown *unk;
 
-        ok(hr == S_OK, "failed to create KnownFolderManager instance: 0x%08x\n", hr);
+        ok(hr == S_OK, "failed to create KnownFolderManager instance: 0x%08lx\n", hr);
 
         hr = IKnownFolderManager_QueryInterface(mgr, &IID_IMarshal, (void**)&unk);
-        ok(hr == E_NOINTERFACE, "got 0x%08x\n", hr);
+        ok(hr == E_NOINTERFACE, "got 0x%08lx\n", hr);
 
         hr = IKnownFolderManager_FolderIdFromCsidl(mgr, CSIDL_WINDOWS, &folderId);
-        ok(hr == S_OK, "failed to convert CSIDL to KNOWNFOLDERID: 0x%08x\n", hr);
+        ok(hr == S_OK, "failed to convert CSIDL to KNOWNFOLDERID: 0x%08lx\n", hr);
         ok(IsEqualGUID(&folderId, &FOLDERID_Windows)==TRUE, "invalid KNOWNFOLDERID returned\n");
 
         hr = IKnownFolderManager_FolderIdToCsidl(mgr, &FOLDERID_Windows, &csidl);
-        ok(hr == S_OK, "failed to convert CSIDL to KNOWNFOLDERID: 0x%08x\n", hr);
+        ok(hr == S_OK, "failed to convert CSIDL to KNOWNFOLDERID: 0x%08lx\n", hr);
         ok(csidl == CSIDL_WINDOWS, "invalid CSIDL returned\n");
 
         hr = IKnownFolderManager_GetFolder(mgr, &FOLDERID_Windows, &folder);
-        ok(hr == S_OK, "failed to get known folder: 0x%08x\n", hr);
+        ok(hr == S_OK, "failed to get known folder: 0x%08lx\n", hr);
         if(SUCCEEDED(hr))
         {
             hr = IKnownFolder_QueryInterface(folder, &IID_IMarshal, (void**)&unk);
-            ok(hr == E_NOINTERFACE, "got 0x%08x\n", hr);
+            ok(hr == E_NOINTERFACE, "got 0x%08lx\n", hr);
 
             hr = IKnownFolder_GetCategory(folder, &cat);
-            ok(hr == S_OK, "failed to get folder category: 0x%08x\n", hr);
+            ok(hr == S_OK, "failed to get folder category: 0x%08lx\n", hr);
             ok(cat==KF_CATEGORY_FIXED, "invalid folder category: %d\n", cat);
 
             hr = IKnownFolder_GetId(folder, &folderId);
-            ok(hr == S_OK, "failed to get folder id: 0x%08x\n", hr);
+            ok(hr == S_OK, "failed to get folder id: 0x%08lx\n", hr);
             ok(IsEqualGUID(&folderId, &FOLDERID_Windows)==TRUE, "invalid KNOWNFOLDERID returned\n");
 
             hr = IKnownFolder_GetPath(folder, 0, &folderPath);
-            ok(hr == S_OK, "failed to get path from known folder: 0x%08x\n", hr);
+            ok(hr == S_OK, "failed to get path from known folder: 0x%08lx\n", hr);
             ok(lstrcmpiW(sWinDir, folderPath)==0, "invalid path returned: \"%s\", expected: \"%s\"\n", wine_dbgstr_w(folderPath), wine_dbgstr_w(sWinDir));
             CoTaskMemFree(folderPath);
 
             hr = IKnownFolder_GetRedirectionCapabilities(folder, &redirectionCapabilities);
-            ok(hr == S_OK, "failed to get redirection capabilities: 0x%08x\n", hr);
+            ok(hr == S_OK, "failed to get redirection capabilities: 0x%08lx\n", hr);
             todo_wine
             ok(redirectionCapabilities==0, "invalid redirection capabilities returned: %d\n", redirectionCapabilities);
 
             hr = IKnownFolder_SetPath(folder, 0, sWinDir);
             todo_wine
-            ok(hr == E_INVALIDARG, "unexpected value from SetPath: 0x%08x\n", hr);
+            ok(hr == E_INVALIDARG, "unexpected value from SetPath: 0x%08lx\n", hr);
 
             hr = IKnownFolder_GetFolderDefinition(folder, &kfDefinition);
-            ok(hr == S_OK, "failed to get folder definition: 0x%08x\n", hr);
+            ok(hr == S_OK, "failed to get folder definition: 0x%08lx\n", hr);
             if(SUCCEEDED(hr))
             {
                 ok(kfDefinition.category==KF_CATEGORY_FIXED, "invalid folder category: 0x%08x\n", kfDefinition.category);
-                ok(lstrcmpW(kfDefinition.pszName, sWindows)==0, "invalid folder name: %s\n", wine_dbgstr_w(kfDefinition.pszName));
-                ok(kfDefinition.dwAttributes==0, "invalid folder attributes: %d\n", kfDefinition.dwAttributes);
+                ok(lstrcmpW(kfDefinition.pszName, L"Windows")==0, "invalid folder name: %s\n", wine_dbgstr_w(kfDefinition.pszName));
+                ok(kfDefinition.dwAttributes==0, "invalid folder attributes: %ld\n", kfDefinition.dwAttributes);
                 FreeKnownFolderDefinitionFields(&kfDefinition);
             }
 
             hr = IKnownFolder_Release(folder);
-            ok(hr == S_OK, "failed to release KnownFolder instance: 0x%08x\n", hr);
+            ok(hr == S_OK, "failed to release KnownFolder instance: 0x%08lx\n", hr);
         }
 
-        hr = IKnownFolderManager_GetFolderByName(mgr, sWindows, &folder);
-        ok(hr == S_OK, "failed to get known folder: 0x%08x\n", hr);
+        hr = IKnownFolderManager_GetFolderByName(mgr, L"Windows", &folder);
+        ok(hr == S_OK, "failed to get known folder: 0x%08lx\n", hr);
         if(SUCCEEDED(hr))
         {
             hr = IKnownFolder_GetId(folder, &folderId);
-            ok(hr == S_OK, "failed to get folder id: 0x%08x\n", hr);
+            ok(hr == S_OK, "failed to get folder id: 0x%08lx\n", hr);
             ok(IsEqualGUID(&folderId, &FOLDERID_Windows)==TRUE, "invalid KNOWNFOLDERID returned\n");
 
             hr = IKnownFolder_Release(folder);
-            ok(hr == S_OK, "failed to release KnownFolder instance: 0x%08x\n", hr);
+            ok(hr == S_OK, "failed to release KnownFolder instance: 0x%08lx\n", hr);
         }
 
-        hr = IKnownFolderManager_GetFolderByName(mgr, sWindows2, &folder);
-        ok(hr == S_OK, "failed to get known folder: 0x%08x\n", hr);
+        hr = IKnownFolderManager_GetFolderByName(mgr, L"windows", &folder);
+        ok(hr == S_OK, "failed to get known folder: 0x%08lx\n", hr);
         if(SUCCEEDED(hr))
         {
             hr = IKnownFolder_GetId(folder, &folderId);
-            ok(hr == S_OK, "failed to get folder id: 0x%08x\n", hr);
+            ok(hr == S_OK, "failed to get folder id: 0x%08lx\n", hr);
             ok(IsEqualGUID(&folderId, &FOLDERID_Windows)==TRUE, "invalid KNOWNFOLDERID returned\n");
 
             hr = IKnownFolder_Release(folder);
-            ok(hr == S_OK, "failed to release KnownFolder instance: 0x%08x\n", hr);
+            ok(hr == S_OK, "failed to release KnownFolder instance: 0x%08lx\n", hr);
         }
 
         folder = (IKnownFolder *)0xdeadbeef;
-        hr = IKnownFolderManager_GetFolderByName(mgr, sNoSuch, &folder);
-        ok(hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND), "got 0x%08x\n", hr);
+        hr = IKnownFolderManager_GetFolderByName(mgr, L"NoSuch", &folder);
+        ok(hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND), "got 0x%08lx\n", hr);
         ok(folder == NULL, "got %p\n", folder);
 
         for(i=0; i < ARRAY_SIZE(known_folder_found); ++i)
             known_folder_found[i] = FALSE;
 
         hr = IKnownFolderManager_GetFolderIds(mgr, &folders, &nCount);
-        ok(hr == S_OK, "failed to get known folders: 0x%08x\n", hr);
+        ok(hr == S_OK, "failed to get known folders: 0x%08lx\n", hr);
         for(i=0;i<nCount;++i)
             check_known_folder(mgr, &folders[i]);
 
@@ -2253,10 +2354,10 @@ static void test_knownFolders(void)
 
         ZeroMemory(&kfDefinition, sizeof(kfDefinition));
         kfDefinition.category = KF_CATEGORY_PERUSER;
-        kfDefinition.pszName = CoTaskMemAlloc(sizeof(sExample));
-        lstrcpyW(kfDefinition.pszName, sExample);
-        kfDefinition.pszDescription = CoTaskMemAlloc(sizeof(sExample));
-        lstrcpyW(kfDefinition.pszDescription, sExample);
+        kfDefinition.pszName = CoTaskMemAlloc(sizeof(L"Example"));
+        lstrcpyW(kfDefinition.pszName, L"Example");
+        kfDefinition.pszDescription = CoTaskMemAlloc(sizeof(L"Example"));
+        lstrcpyW(kfDefinition.pszDescription, L"Example");
         kfDefinition.pszRelativePath = CoTaskMemAlloc(sizeof(sExamplePath));
         lstrcpyW(kfDefinition.pszRelativePath, sExamplePath);
 
@@ -2265,78 +2366,78 @@ static void test_knownFolders(void)
             win_skip("No permissions required to register custom known folder\n");
         else
         {
-            ok(hr == S_OK, "failed to register known folder: 0x%08x\n", hr);
+            ok(hr == S_OK, "failed to register known folder: 0x%08lx\n", hr);
             if(SUCCEEDED(hr))
             {
                 hr = IKnownFolderManager_GetFolder(mgr, &newFolderId, &folder);
-                ok(hr == S_OK, "failed to get known folder: 0x%08x\n", hr);
+                ok(hr == S_OK, "failed to get known folder: 0x%08lx\n", hr);
                 if(SUCCEEDED(hr))
                 {
                     hr = IKnownFolder_GetCategory(folder, &cat);
-                    ok(hr == S_OK, "failed to get folder category: hr=0x%0x\n", hr);
+                    ok(hr == S_OK, "failed to get folder category: hr=0x%0lx\n", hr);
                     ok(cat == KF_CATEGORY_PERUSER, "invalid category returned: %d, while %d (KF_CATEGORY_PERUSER) expected\n", cat, KF_CATEGORY_PERUSER);
 
                     hr = IKnownFolder_GetId(folder, &folderId);
-                    ok(hr == S_OK, "failed to get folder id: 0x%08x\n", hr);
+                    ok(hr == S_OK, "failed to get folder id: 0x%08lx\n", hr);
                     ok(IsEqualGUID(&folderId, &newFolderId)==TRUE, "invalid KNOWNFOLDERID returned\n");
 
                     /* current path should be Temp\Example */
                     hr = IKnownFolder_GetPath(folder, 0, &folderPath);
-                    ok(hr == S_OK, "failed to get path from known folder: 0x%08x\n", hr);
+                    ok(hr == S_OK, "failed to get path from known folder: 0x%08lx\n", hr);
                     ok(lstrcmpiW(folderPath, sExamplePath)==0, "invalid known folder path retrieved: \"%s\" when \"%s\" was expected\n", wine_dbgstr_w(folderPath), wine_dbgstr_w(sExamplePath));
                     CoTaskMemFree(folderPath);
 
                     /* register sub-folder and mark it as child of Example folder */
                     ZeroMemory(&kfSubDefinition, sizeof(kfSubDefinition));
                     kfSubDefinition.category = KF_CATEGORY_PERUSER;
-                    kfSubDefinition.pszName = CoTaskMemAlloc(sizeof(sSubFolder));
-                    lstrcpyW(kfSubDefinition.pszName, sSubFolder);
-                    kfSubDefinition.pszDescription = CoTaskMemAlloc(sizeof(sSubFolder));
-                    lstrcpyW(kfSubDefinition.pszDescription, sSubFolder);
-                    kfSubDefinition.pszRelativePath = CoTaskMemAlloc(sizeof(sSubFolder));
-                    lstrcpyW(kfSubDefinition.pszRelativePath, sSubFolder);
+                    kfSubDefinition.pszName = CoTaskMemAlloc(sizeof(L"SubFolder"));
+                    lstrcpyW(kfSubDefinition.pszName, L"SubFolder");
+                    kfSubDefinition.pszDescription = CoTaskMemAlloc(sizeof(L"SubFolder"));
+                    lstrcpyW(kfSubDefinition.pszDescription, L"SubFolder");
+                    kfSubDefinition.pszRelativePath = CoTaskMemAlloc(sizeof(L"SubFolder"));
+                    lstrcpyW(kfSubDefinition.pszRelativePath, L"SubFolder");
                     kfSubDefinition.fidParent = newFolderId;
 
                     hr = IKnownFolderManager_RegisterFolder(mgr, &subFolderId, &kfSubDefinition);
-                    ok(hr == S_OK, "failed to register known folder: 0x%08x\n", hr);
+                    ok(hr == S_OK, "failed to register known folder: 0x%08lx\n", hr);
                     if(SUCCEEDED(hr))
                     {
 
                         hr = IKnownFolderManager_GetFolder(mgr, &subFolderId, &subFolder);
-                        ok(hr == S_OK, "failed to get known folder: 0x%08x\n", hr);
+                        ok(hr == S_OK, "failed to get known folder: 0x%08lx\n", hr);
                         if(SUCCEEDED(hr))
                         {
                             /* check sub folder path */
                             hr = IKnownFolder_GetPath(subFolder, 0, &folderPath);
-                            ok(hr == S_OK, "failed to get known folder path: 0x%08x\n", hr);
+                            ok(hr == S_OK, "failed to get known folder path: 0x%08lx\n", hr);
                             ok(lstrcmpiW(folderPath, sSubFolderPath)==0, "invalid known folder path retrieved: \"%s\" when \"%s\" was expected\n", wine_dbgstr_w(folderPath), wine_dbgstr_w(sSubFolderPath));
                             CoTaskMemFree(folderPath);
 
 
                             /* try to redirect Example to Temp\Example2  */
                             hr = IKnownFolderManager_Redirect(mgr, &newFolderId, NULL, 0, sExample2Path, 0, NULL, &errorMsg);
-                            ok(hr == S_OK, "failed to redirect known folder: 0x%08x, errorMsg: %s\n", hr, wine_dbgstr_w(errorMsg));
+                            ok(hr == S_OK, "failed to redirect known folder: 0x%08lx, errorMsg: %s\n", hr, wine_dbgstr_w(errorMsg));
 
                             /* verify */
                             hr = IKnownFolder_GetPath(folder, 0, &folderPath);
-                            ok(hr == S_OK, "failed to get known folder path: 0x%08x\n", hr);
+                            ok(hr == S_OK, "failed to get known folder path: 0x%08lx\n", hr);
                             ok(lstrcmpiW(folderPath, sExample2Path)==0, "invalid known folder path retrieved: \"%s\" when \"%s\" was expected\n", wine_dbgstr_w(folderPath), wine_dbgstr_w(sExample2Path));
                             CoTaskMemFree(folderPath);
 
                             /* verify sub folder - it should fail now, as we redirected its parent folder, but we have no sub folder in new location */
                             hr = IKnownFolder_GetPath(subFolder, 0, &folderPath);
-                            ok(hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND), "unexpected value from GetPath(): 0x%08x\n", hr);
+                            ok(hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND), "unexpected value from GetPath(): 0x%08lx\n", hr);
                             ok(folderPath==NULL, "invalid known folder path retrieved: \"%s\" when NULL pointer was expected\n", wine_dbgstr_w(folderPath));
                             CoTaskMemFree(folderPath);
 
 
                             /* set Example path to original. Using SetPath() is valid here, as it also uses redirection internally */
                             hr = IKnownFolder_SetPath(folder, 0, sExamplePath);
-                            ok(hr == S_OK, "SetPath() failed: 0x%08x\n", hr);
+                            ok(hr == S_OK, "SetPath() failed: 0x%08lx\n", hr);
 
                             /* verify */
                             hr = IKnownFolder_GetPath(folder, 0, &folderPath);
-                            ok(hr == S_OK, "failed to get known folder path: 0x%08x\n", hr);
+                            ok(hr == S_OK, "failed to get known folder path: 0x%08lx\n", hr);
                             ok(lstrcmpiW(folderPath, sExamplePath)==0, "invalid known folder path retrieved: \"%s\" when \"%s\" was expected\n", wine_dbgstr_w(folderPath), wine_dbgstr_w(sExamplePath));
                             CoTaskMemFree(folderPath);
 
@@ -2347,11 +2448,11 @@ static void test_knownFolders(void)
 
                             /* again perform that same redirection */
                             hr = IKnownFolderManager_Redirect(mgr, &newFolderId, NULL, 0, sExample2Path, 0, NULL, &errorMsg);
-                            ok(hr == S_OK, "failed to redirect known folder: 0x%08x, errorMsg: %s\n", hr, wine_dbgstr_w(errorMsg));
+                            ok(hr == S_OK, "failed to redirect known folder: 0x%08lx, errorMsg: %s\n", hr, wine_dbgstr_w(errorMsg));
 
                             /* verify sub folder. It should succeed now, as the required sub folder exists */
                             hr = IKnownFolder_GetPath(subFolder, 0, &folderPath);
-                            ok(hr == S_OK, "failed to get known folder path: 0x%08x\n", hr);
+                            ok(hr == S_OK, "failed to get known folder path: 0x%08lx\n", hr);
                             ok(lstrcmpiW(folderPath, sSubFolder2Path)==0, "invalid known folder path retrieved: \"%s\" when \"%s\" was expected\n", wine_dbgstr_w(folderPath), wine_dbgstr_w(sSubFolder2Path));
                             CoTaskMemFree(folderPath);
 
@@ -2361,7 +2462,7 @@ static void test_knownFolders(void)
                             /* verify subfolder. It still succeeds, so Windows does not check folder presence each time */
                             hr = IKnownFolder_GetPath(subFolder, 0, &folderPath);
                             todo_wine
-                            ok(hr == S_OK, "failed to get known folder path: 0x%08x\n", hr);
+                            ok(hr == S_OK, "failed to get known folder path: 0x%08lx\n", hr);
                             todo_wine
                             ok(lstrcmpiW(folderPath, sSubFolder2Path)==0, "invalid known folder path retrieved: \"%s\" when \"%s\" was expected\n", wine_dbgstr_w(folderPath), wine_dbgstr_w(sSubFolder2Path));
                             CoTaskMemFree(folderPath);
@@ -2369,17 +2470,17 @@ static void test_knownFolders(void)
 
                             /* set Example path to original */
                             hr = IKnownFolder_SetPath(folder, 0, sExamplePath);
-                            ok(hr == S_OK, "SetPath() failed: 0x%08x\n", hr);
+                            ok(hr == S_OK, "SetPath() failed: 0x%08lx\n", hr);
 
                             /* verify */
                             hr = IKnownFolder_GetPath(folder, 0, &folderPath);
-                            ok(hr == S_OK, "failed to get known folder path: 0x%08x\n", hr);
+                            ok(hr == S_OK, "failed to get known folder path: 0x%08lx\n", hr);
                             ok(lstrcmpiW(folderPath, sExamplePath)==0, "invalid known folder path retrieved: \"%s\" when \"%s\" was expected\n", wine_dbgstr_w(folderPath), wine_dbgstr_w(sExamplePath));
                             CoTaskMemFree(folderPath);
 
                             /* verify sub folder */
                             hr = IKnownFolder_GetPath(subFolder, 0, &folderPath);
-                            ok(hr == S_OK, "failed to get known folder path: 0x%08x\n", hr);
+                            ok(hr == S_OK, "failed to get known folder path: 0x%08lx\n", hr);
                             ok(lstrcmpiW(folderPath, sSubFolderPath)==0, "invalid known folder path retrieved: \"%s\" when \"%s\" was expected\n", wine_dbgstr_w(folderPath), wine_dbgstr_w(sSubFolderPath));
                             CoTaskMemFree(folderPath);
 
@@ -2390,17 +2491,17 @@ static void test_knownFolders(void)
 
                             /* do that same redirection, but try to exclude sub-folder */
                             hr = IKnownFolderManager_Redirect(mgr, &newFolderId, NULL, 0, sExample2Path, 1, &subFolderId, &errorMsg);
-                            ok(hr == S_OK, "failed to redirect known folder: 0x%08x, errorMsg: %s\n", hr, wine_dbgstr_w(errorMsg));
+                            ok(hr == S_OK, "failed to redirect known folder: 0x%08lx, errorMsg: %s\n", hr, wine_dbgstr_w(errorMsg));
 
                             /* verify */
                             hr = IKnownFolder_GetPath(folder, 0, &folderPath);
-                            ok(hr == S_OK, "failed to get known folder path: 0x%08x\n", hr);
+                            ok(hr == S_OK, "failed to get known folder path: 0x%08lx\n", hr);
                             ok(lstrcmpiW(folderPath, sExample2Path)==0, "invalid known folder path retrieved: \"%s\" when \"%s\" was expected\n", wine_dbgstr_w(folderPath), wine_dbgstr_w(sExample2Path));
                             CoTaskMemFree(folderPath);
 
                             /* verify sub folder. Unexpectedly, this path was also changed. So, exclusion seems to be ignored (Windows bug)? This test however will let us know, if this behavior is changed */
                             hr = IKnownFolder_GetPath(subFolder, 0, &folderPath);
-                            ok(hr == S_OK, "failed to get known folder path: 0x%08x\n", hr);
+                            ok(hr == S_OK, "failed to get known folder path: 0x%08lx\n", hr);
                             ok(lstrcmpiW(folderPath, sSubFolder2Path)==0, "invalid known folder path retrieved: \"%s\" when \"%s\" was expected\n", wine_dbgstr_w(folderPath), wine_dbgstr_w(sSubFolder2Path));
                             CoTaskMemFree(folderPath);
 
@@ -2410,34 +2511,34 @@ static void test_knownFolders(void)
 
                             /* set Example path to original */
                             hr = IKnownFolder_SetPath(folder, 0, sExamplePath);
-                            ok(hr == S_OK, "SetPath() failed: 0x%08x\n", hr);
+                            ok(hr == S_OK, "SetPath() failed: 0x%08lx\n", hr);
 
                             /* verify */
                             hr = IKnownFolder_GetPath(folder, 0, &folderPath);
-                            ok(hr == S_OK, "failed to get known folder path: 0x%08x\n", hr);
+                            ok(hr == S_OK, "failed to get known folder path: 0x%08lx\n", hr);
                             ok(lstrcmpiW(folderPath, sExamplePath)==0, "invalid known folder path retrieved: \"%s\" when \"%s\" was expected\n", wine_dbgstr_w(folderPath), wine_dbgstr_w(sExamplePath));
                             CoTaskMemFree(folderPath);
 
                             /* verify sub folder */
                             hr = IKnownFolder_GetPath(subFolder, 0, &folderPath);
-                            ok(hr == S_OK, "failed to get known folder path: 0x%08x\n", hr);
+                            ok(hr == S_OK, "failed to get known folder path: 0x%08lx\n", hr);
                             ok(lstrcmpiW(folderPath, sSubFolderPath)==0, "invalid known folder path retrieved: \"%s\" when \"%s\" was expected\n", wine_dbgstr_w(folderPath), wine_dbgstr_w(sSubFolderPath));
                             CoTaskMemFree(folderPath);
 
 
                             /* do that same redirection again, but set it to copy content. It should also copy the sub folder, so checking it would succeed now */
                             hr = IKnownFolderManager_Redirect(mgr, &newFolderId, NULL, KF_REDIRECT_COPY_CONTENTS, sExample2Path, 0, NULL, &errorMsg);
-                            ok(hr == S_OK, "failed to redirect known folder: 0x%08x, errorMsg: %s\n", hr, wine_dbgstr_w(errorMsg));
+                            ok(hr == S_OK, "failed to redirect known folder: 0x%08lx, errorMsg: %s\n", hr, wine_dbgstr_w(errorMsg));
 
                             /* verify */
                             hr = IKnownFolder_GetPath(folder, 0, &folderPath);
-                            ok(hr == S_OK, "failed to get known folder path: 0x%08x\n", hr);
+                            ok(hr == S_OK, "failed to get known folder path: 0x%08lx\n", hr);
                             ok(lstrcmpiW(folderPath, sExample2Path)==0, "invalid known folder path retrieved: \"%s\" when \"%s\" was expected\n", wine_dbgstr_w(folderPath), wine_dbgstr_w(sExample2Path));
                             CoTaskMemFree(folderPath);
 
                             /* verify sub folder */
                             hr = IKnownFolder_GetPath(subFolder, 0, &folderPath);
-                            ok(hr == S_OK, "failed to get known folder path: 0x%08x\n", hr);
+                            ok(hr == S_OK, "failed to get known folder path: 0x%08lx\n", hr);
                             ok(lstrcmpiW(folderPath, sSubFolder2Path)==0, "invalid known folder path retrieved: \"%s\" when \"%s\" was expected\n", wine_dbgstr_w(folderPath), wine_dbgstr_w(sSubFolder2Path));
                             CoTaskMemFree(folderPath);
 
@@ -2447,55 +2548,55 @@ static void test_knownFolders(void)
 
                             /* set Example path to original */
                             hr = IKnownFolder_SetPath(folder, 0, sExamplePath);
-                            ok(hr == S_OK, "SetPath() failed: 0x%08x\n", hr);
+                            ok(hr == S_OK, "SetPath() failed: 0x%08lx\n", hr);
 
                             /* verify */
                             hr = IKnownFolder_GetPath(folder, 0, &folderPath);
-                            ok(hr == S_OK, "failed to get known folder path: 0x%08x\n", hr);
+                            ok(hr == S_OK, "failed to get known folder path: 0x%08lx\n", hr);
                             ok(lstrcmpiW(folderPath, sExamplePath)==0, "invalid known folder path retrieved: \"%s\" when \"%s\" was expected\n", wine_dbgstr_w(folderPath), wine_dbgstr_w(sExamplePath));
                             CoTaskMemFree(folderPath);
 
                             /* verify sub folder */
                             hr = IKnownFolder_GetPath(subFolder, 0, &folderPath);
-                            ok(hr == S_OK, "failed to get known folder path: 0x%08x\n", hr);
+                            ok(hr == S_OK, "failed to get known folder path: 0x%08lx\n", hr);
                             ok(lstrcmpiW(folderPath, sSubFolderPath)==0, "invalid known folder path retrieved: \"%s\" when \"%s\" was expected\n", wine_dbgstr_w(folderPath), wine_dbgstr_w(sSubFolderPath));
                             CoTaskMemFree(folderPath);
 
 
                             /* redirect again, set it to copy content and remove originals */
                             hr = IKnownFolderManager_Redirect(mgr, &newFolderId, NULL, KF_REDIRECT_COPY_CONTENTS | KF_REDIRECT_DEL_SOURCE_CONTENTS, sExample2Path, 0, NULL, &errorMsg);
-                            ok(hr == S_OK, "failed to redirect known folder: 0x%08x, errorMsg: %s\n", hr, wine_dbgstr_w(errorMsg));
+                            ok(hr == S_OK, "failed to redirect known folder: 0x%08lx, errorMsg: %s\n", hr, wine_dbgstr_w(errorMsg));
 
                             /* verify */
                             hr = IKnownFolder_GetPath(folder, 0, &folderPath);
-                            ok(hr == S_OK, "failed to get known folder path: 0x%08x\n", hr);
+                            ok(hr == S_OK, "failed to get known folder path: 0x%08lx\n", hr);
                             ok(lstrcmpiW(folderPath, sExample2Path)==0, "invalid known folder path retrieved: \"%s\" when \"%s\" was expected\n", wine_dbgstr_w(folderPath), wine_dbgstr_w(sExample2Path));
                             CoTaskMemFree(folderPath);
 
                             /* verify sub folder */
                             hr = IKnownFolder_GetPath(subFolder, 0, &folderPath);
-                            ok(hr == S_OK, "failed to get known folder path: 0x%08x\n", hr);
+                            ok(hr == S_OK, "failed to get known folder path: 0x%08lx\n", hr);
                             ok(lstrcmpiW(folderPath, sSubFolder2Path)==0, "invalid known folder path retrieved: \"%s\" when \"%s\" was expected\n", wine_dbgstr_w(folderPath), wine_dbgstr_w(sSubFolder2Path));
                             CoTaskMemFree(folderPath);
 
                             /* check if original directory was really removed */
                             dwAttributes = GetFileAttributesW(sExamplePath);
-                            ok(dwAttributes==INVALID_FILE_ATTRIBUTES, "directory should not exist, but has attributes: 0x%08x\n", dwAttributes );
+                            ok(dwAttributes==INVALID_FILE_ATTRIBUTES, "directory should not exist, but has attributes: 0x%08lx\n", dwAttributes );
 
 
                             /* redirect (with copy) to original path */
                             hr = IKnownFolderManager_Redirect(mgr, &newFolderId, NULL, KF_REDIRECT_COPY_CONTENTS,  sExamplePath, 0, NULL, &errorMsg);
-                            ok(hr == S_OK, "failed to redirect known folder: 0x%08x, errorMsg: %s\n", hr, wine_dbgstr_w(errorMsg));
+                            ok(hr == S_OK, "failed to redirect known folder: 0x%08lx, errorMsg: %s\n", hr, wine_dbgstr_w(errorMsg));
 
                             /* verify */
                             hr = IKnownFolder_GetPath(folder, 0, &folderPath);
-                            ok(hr == S_OK, "failed to get known folder path: 0x%08x\n", hr);
+                            ok(hr == S_OK, "failed to get known folder path: 0x%08lx\n", hr);
                             ok(lstrcmpiW(folderPath, sExamplePath)==0, "invalid known folder path retrieved: \"%s\" when \"%s\" was expected\n", wine_dbgstr_w(folderPath), wine_dbgstr_w(sExamplePath));
                             CoTaskMemFree(folderPath);
 
                             /* verify sub folder */
                             hr = IKnownFolder_GetPath(subFolder, 0, &folderPath);
-                            ok(hr == S_OK, "failed to get known folder path: 0x%08x\n", hr);
+                            ok(hr == S_OK, "failed to get known folder path: 0x%08lx\n", hr);
                             ok(lstrcmpiW(folderPath, sSubFolderPath)==0, "invalid known folder path retrieved: \"%s\" when \"%s\" was expected\n", wine_dbgstr_w(folderPath), wine_dbgstr_w(sSubFolderPath));
                             CoTaskMemFree(folderPath);
 
@@ -2508,63 +2609,63 @@ static void test_knownFolders(void)
                                 /* try to get current known folder path */
                                 hr = pSHGetKnownFolderPath(&newFolderId, 0, NULL, &folderPath);
                                 todo_wine
-                                ok(hr==S_OK, "cannot get known folder path: hr=0x%0x\n", hr);
+                                ok(hr==S_OK, "cannot get known folder path: hr=0x%0lx\n", hr);
                                 todo_wine
                                 ok(lstrcmpW(folderPath, sExamplePath)==0, "invalid path returned: %s\n", wine_dbgstr_w(folderPath));
 
                                 /* set it to new value */
                                 hr = pSHSetKnownFolderPath(&newFolderId, 0, NULL, sExample2Path);
                                 todo_wine
-                                ok(hr==S_OK, "cannot set known folder path: hr=0x%0x\n", hr);
+                                ok(hr==S_OK, "cannot set known folder path: hr=0x%0lx\n", hr);
 
                                 /* check if it changed */
                                 hr = pSHGetKnownFolderPath(&newFolderId, 0, NULL, &folderPath);
                                 todo_wine
-                                ok(hr==S_OK, "cannot get known folder path: hr=0x%0x\n", hr);
+                                ok(hr==S_OK, "cannot get known folder path: hr=0x%0lx\n", hr);
                                 todo_wine
                                 ok(lstrcmpW(folderPath, sExample2Path)==0, "invalid path returned: %s\n", wine_dbgstr_w(folderPath));
 
                                 /* set it back */
                                 hr = pSHSetKnownFolderPath(&newFolderId, 0, NULL, sExamplePath);
                                 todo_wine
-                                ok(hr==S_OK, "cannot set known folder path: hr=0x%0x\n", hr);
+                                ok(hr==S_OK, "cannot set known folder path: hr=0x%0lx\n", hr);
                             }
 
                             IKnownFolder_Release(subFolder);
                         }
 
                         hr = IKnownFolderManager_UnregisterFolder(mgr, &subFolderId);
-                        ok(hr == S_OK, "failed to unregister folder: 0x%08x\n", hr);
+                        ok(hr == S_OK, "failed to unregister folder: 0x%08lx\n", hr);
                     }
 
                     FreeKnownFolderDefinitionFields(&kfSubDefinition);
 
                     hr = IKnownFolder_Release(folder);
-                    ok(hr == S_OK, "failed to release KnownFolder instance: 0x%08x\n", hr);
+                    ok(hr == S_OK, "failed to release KnownFolder instance: 0x%08lx\n", hr);
 
                     /* update the folder */
                     CoTaskMemFree(kfDefinition.pszName);
-                    kfDefinition.pszName = CoTaskMemAlloc(sizeof(sExample2));
-                    lstrcpyW(kfDefinition.pszName, sExample2);
+                    kfDefinition.pszName = CoTaskMemAlloc(sizeof(L"Example2"));
+                    lstrcpyW(kfDefinition.pszName, L"Example2");
                     hr = IKnownFolderManager_RegisterFolder(mgr, &newFolderId, &kfDefinition);
-                    ok(hr == S_OK, "failed to re-register known folder: 0x%08x\n", hr);
+                    ok(hr == S_OK, "failed to re-register known folder: 0x%08lx\n", hr);
 
                     hr = IKnownFolderManager_GetFolder(mgr, &newFolderId, &folder);
-                    ok(hr == S_OK, "failed to get known folder: 0x%08x\n", hr);
+                    ok(hr == S_OK, "failed to get known folder: 0x%08lx\n", hr);
 
                     hr = IKnownFolder_GetFolderDefinition(folder, &kfSubDefinition);
-                    ok(hr == S_OK, "failed to get folder definition: 0x%08x\n", hr);
-                    ok(!memcmp(kfDefinition.pszName, kfSubDefinition.pszName, sizeof(sExample2)),
+                    ok(hr == S_OK, "failed to get folder definition: 0x%08lx\n", hr);
+                    ok(!memcmp(kfDefinition.pszName, kfSubDefinition.pszName, sizeof(L"Example2")),
                             "Got wrong updated name: %s\n", wine_dbgstr_w(kfSubDefinition.pszName));
 
                     FreeKnownFolderDefinitionFields(&kfSubDefinition);
 
                     hr = IKnownFolder_Release(folder);
-                    ok(hr == S_OK, "failed to release KnownFolder instance: 0x%08x\n", hr);
+                    ok(hr == S_OK, "failed to release KnownFolder instance: 0x%08lx\n", hr);
                 }
 
                 hr = IKnownFolderManager_UnregisterFolder(mgr, &newFolderId);
-                ok(hr == S_OK, "failed to unregister folder: 0x%08x\n", hr);
+                ok(hr == S_OK, "failed to unregister folder: 0x%08lx\n", hr);
             }
         }
         FreeKnownFolderDefinitionFields(&kfDefinition);
@@ -2575,7 +2676,7 @@ static void test_knownFolders(void)
         RemoveDirectoryW(sExample2Path);
 
         hr = IKnownFolderManager_Release(mgr);
-        ok(hr == S_OK, "failed to release KnownFolderManager instance: 0x%08x\n", hr);
+        ok(hr == S_OK, "failed to release KnownFolderManager instance: 0x%08lx\n", hr);
     }
     CoUninitialize();
 }
@@ -2591,8 +2692,6 @@ static void test_DoEnvironmentSubst(void)
     DWORD res2;
     DWORD len;
     INT   i;
-    static const WCHAR does_not_existW[] = {'%','D','O','E','S','_','N','O','T','_','E','X','I','S','T','%',0};
-    static const CHAR  does_not_existA[] = "%DOES_NOT_EXIST%";
     static const CHAR  *names[] = {
                             /* interactive apps and services (works on all windows versions) */
                             "%ALLUSERSPROFILE%", "%APPDATA%", "%LOCALAPPDATA%",
@@ -2606,8 +2705,9 @@ static void test_DoEnvironmentSubst(void)
                             "%HOMEDRIVE%%HOMEPATH%",
                             "%OS% %windir%"}; /* always the last entry in the table */
 
-    for (i = 0; i < (ARRAY_SIZE(names)); i++)
+    for (i = 0; i < ARRAY_SIZE(names); i++)
     {
+        winetest_push_context("%d", i);
         memset(bufferA, '#', MAX_PATH - 1);
         bufferA[MAX_PATH - 1] = 0;
         lstrcpyA(bufferA, names[i]);
@@ -2620,19 +2720,21 @@ static void test_DoEnvironmentSubst(void)
         if (!i && HIWORD(res) && (LOWORD(res) == (lstrlenA(bufferA))))
         {
             win_skip("DoEnvironmentSubstA/W are broken on NT 4\n");
+            winetest_pop_context();
             return;
         }
         ok(HIWORD(res) && (LOWORD(res) == res2),
-            "%d: got %d/%d (expected TRUE/%d)\n", i, HIWORD(res), LOWORD(res), res2);
+            "got %d/%d (expected TRUE/%ld)\n", HIWORD(res), LOWORD(res), res2);
         ok(!lstrcmpA(bufferA, expectedA),
-            "%d: got %s (expected %s)\n", i, bufferA, expectedA);
+            "got %s (expected %s)\n", bufferA, expectedA);
 
         res2 = ExpandEnvironmentStringsW(bufferW, expectedW, MAX_PATH);
         res = DoEnvironmentSubstW(bufferW, MAX_PATH);
         ok(HIWORD(res) && (LOWORD(res) == res2),
-            "%d: got %d/%d (expected TRUE/%d)\n", i, HIWORD(res), LOWORD(res), res2);
+            "got %d/%d (expected TRUE/%ld)\n", HIWORD(res), LOWORD(res), res2);
         ok(!lstrcmpW(bufferW, expectedW),
-            "%d: got %s (expected %s)\n", i, wine_dbgstr_w(bufferW), wine_dbgstr_w(expectedW));
+            "got %s (expected %s)\n", wine_dbgstr_w(bufferW), wine_dbgstr_w(expectedW));
+        winetest_pop_context();
     }
 
     i--; /* reuse data in the last table entry */
@@ -2647,14 +2749,14 @@ static void test_DoEnvironmentSubst(void)
     res2 = ExpandEnvironmentStringsA(bufferA, expectedA, MAX_PATH);
     res = DoEnvironmentSubstA(bufferA, len + 1);
     ok(HIWORD(res) && (LOWORD(res) == res2),
-        "+1: got %d/%d (expected TRUE/%d)\n", HIWORD(res), LOWORD(res), res2);
+        "+1: got %d/%d (expected TRUE/%ld)\n", HIWORD(res), LOWORD(res), res2);
     ok(!lstrcmpA(bufferA, expectedA),
         "+1: got %s (expected %s)\n", bufferA, expectedA);
 
     res2 = ExpandEnvironmentStringsW(bufferW, expectedW, MAX_PATH);
     res = DoEnvironmentSubstW(bufferW, len + 1);
     ok(HIWORD(res) && (LOWORD(res) == res2),
-        "+1: got %d/%d (expected TRUE/%d)\n", HIWORD(res), LOWORD(res), res2);
+        "+1: got %d/%d (expected TRUE/%ld)\n", HIWORD(res), LOWORD(res), res2);
     ok(!lstrcmpW(bufferW, expectedW),
         "+1: got %s (expected %s)\n", wine_dbgstr_w(bufferW), wine_dbgstr_w(expectedW));
 
@@ -2668,7 +2770,7 @@ static void test_DoEnvironmentSubst(void)
     /* ANSI version failed without an extra byte, as documented on msdn */
     res = DoEnvironmentSubstA(bufferA, len);
     ok(!HIWORD(res) && (LOWORD(res) == len),
-        " 0: got %d/%d  (expected FALSE/%d)\n", HIWORD(res), LOWORD(res), len);
+        " 0: got %d/%d  (expected FALSE/%ld)\n", HIWORD(res), LOWORD(res), len);
     ok(!lstrcmpA(bufferA, names[i]),
         " 0: got %s (expected %s)\n", bufferA, names[i]);
 
@@ -2676,7 +2778,7 @@ static void test_DoEnvironmentSubst(void)
     res2 = ExpandEnvironmentStringsW(bufferW, expectedW, MAX_PATH);
     res = DoEnvironmentSubstW(bufferW, len);
     ok(HIWORD(res) && (LOWORD(res) == res2),
-        " 0: got %d/%d (expected TRUE/%d)\n", HIWORD(res), LOWORD(res), res2);
+        " 0: got %d/%d (expected TRUE/%ld)\n", HIWORD(res), LOWORD(res), res2);
     ok(!lstrcmpW(bufferW, expectedW),
         " 0: got %s (expected %s)\n", wine_dbgstr_w(bufferW), wine_dbgstr_w(expectedW));
 
@@ -2690,14 +2792,14 @@ static void test_DoEnvironmentSubst(void)
 
     res = DoEnvironmentSubstA(bufferA, len - 1);
     ok(!HIWORD(res) && (LOWORD(res) == (len - 1)),
-        "-1: got %d/%d  (expected FALSE/%d)\n", HIWORD(res), LOWORD(res), len - 1);
+        "-1: got %d/%d  (expected FALSE/%ld)\n", HIWORD(res), LOWORD(res), len - 1);
     ok(!lstrcmpA(bufferA, names[i]),
         "-1: got %s (expected %s)\n", bufferA, names[i]);
 
     lstrcpyW(expectedW, bufferW);
     res = DoEnvironmentSubstW(bufferW, len - 1);
     ok(!HIWORD(res) && (LOWORD(res) == (len - 1)),
-        "-1: got %d/%d  (expected FALSE/%d)\n", HIWORD(res), LOWORD(res), len - 1);
+        "-1: got %d/%d  (expected FALSE/%ld)\n", HIWORD(res), LOWORD(res), len - 1);
     ok(!lstrcmpW(bufferW, expectedW),
         "-1: got %s (expected %s)\n", wine_dbgstr_w(bufferW), wine_dbgstr_w(expectedW));
 
@@ -2706,21 +2808,21 @@ static void test_DoEnvironmentSubst(void)
     /* result: TRUE / string length including terminating 0 / the buffer is untouched */
     memset(bufferA, '#', MAX_PATH - 1);
     bufferA[MAX_PATH - 1] = 0;
-    lstrcpyA(bufferA, does_not_existA);
+    lstrcpyA(bufferA, "%DOES_NOT_EXIST%");
     MultiByteToWideChar(CP_ACP, 0, bufferA, MAX_PATH, bufferW, ARRAY_SIZE(bufferW));
 
-    res2 = lstrlenA(does_not_existA) + 1;
+    res2 = sizeof("%DOES_NOT_EXIST%");
     res = DoEnvironmentSubstA(bufferA, MAX_PATH);
     ok(HIWORD(res) && (LOWORD(res) == res2),
-            "%d: got %d/%d (expected TRUE/%d)\n", i, HIWORD(res), LOWORD(res), res2);
-    ok(!lstrcmpA(bufferA, does_not_existA),
-        "%d: got %s (expected %s)\n", i, bufferA, does_not_existA);
+            "%d: got %d/%d (expected TRUE/%ld)\n", i, HIWORD(res), LOWORD(res), res2);
+    ok(!lstrcmpA(bufferA, "%DOES_NOT_EXIST%"),
+        "%d: got %s (expected %s)\n", i, bufferA, "%DOES_NOT_EXIST%");
 
     res = DoEnvironmentSubstW(bufferW, MAX_PATH);
     ok(HIWORD(res) && (LOWORD(res) == res2),
-        "%d: got %d/%d (expected TRUE/%d)\n", i, HIWORD(res), LOWORD(res), res2);
-    ok(!lstrcmpW(bufferW, does_not_existW),
-        "%d: got %s (expected %s)\n", i, wine_dbgstr_w(bufferW), wine_dbgstr_w(does_not_existW));
+        "%d: got %d/%d (expected TRUE/%ld)\n", i, HIWORD(res), LOWORD(res), res2);
+    ok(!lstrcmpW(bufferW, L"%DOES_NOT_EXIST%"),
+        "%d: got %s (expected %s)\n", i, wine_dbgstr_w(bufferW), wine_dbgstr_w(L"%DOES_NOT_EXIST%"));
 
 
     if (0)
@@ -2733,11 +2835,6 @@ static void test_DoEnvironmentSubst(void)
 
 static void test_PathYetAnotherMakeUniqueName(void)
 {
-    static const WCHAR shortW[] = {'f','i','l','e','.','t','s','t',0};
-    static const WCHAR short2W[] = {'f','i','l','e',' ','(','2',')','.','t','s','t',0};
-    static const WCHAR tmpW[] = {'t','m','p',0};
-    static const WCHAR longW[] = {'n','a','m','e',0};
-    static const WCHAR long2W[] = {'n','a','m','e',' ','(','2',')',0};
     WCHAR nameW[MAX_PATH], buffW[MAX_PATH], pathW[MAX_PATH];
     HANDLE file;
     BOOL ret;
@@ -2762,10 +2859,10 @@ if (0)
 
     /* Using short name only first */
     nameW[0] = 0;
-    ret = pPathYetAnotherMakeUniqueName(nameW, pathW, shortW, NULL);
+    ret = pPathYetAnotherMakeUniqueName(nameW, pathW, L"file.tst", NULL);
     ok(ret, "got %d\n", ret);
     lstrcpyW(buffW, pathW);
-    lstrcatW(buffW, shortW);
+    lstrcatW(buffW, L"file.tst");
     ok(!lstrcmpW(nameW, buffW), "got %s, expected %s\n", wine_dbgstr_w(nameW), wine_dbgstr_w(buffW));
 
     /* now create a file with this name and get next name */
@@ -2773,40 +2870,40 @@ if (0)
     ok(file != NULL, "got %p\n", file);
 
     nameW[0] = 0;
-    ret = pPathYetAnotherMakeUniqueName(nameW, pathW, shortW, NULL);
+    ret = pPathYetAnotherMakeUniqueName(nameW, pathW, L"file.tst", NULL);
     ok(ret, "got %d\n", ret);
     lstrcpyW(buffW, pathW);
-    lstrcatW(buffW, short2W);
+    lstrcatW(buffW, L"file (2).tst");
     ok(!lstrcmpW(nameW, buffW), "got %s, expected %s\n", wine_dbgstr_w(nameW), wine_dbgstr_w(buffW));
 
     CloseHandle(file);
 
     /* Using short and long */
     nameW[0] = 0;
-    ret = pPathYetAnotherMakeUniqueName(nameW, pathW, tmpW, longW);
+    ret = pPathYetAnotherMakeUniqueName(nameW, pathW, L"tmp", L"name");
     ok(ret, "got %d\n", ret);
     lstrcpyW(buffW, pathW);
-    lstrcatW(buffW, longW);
+    lstrcatW(buffW, L"name");
     ok(!lstrcmpW(nameW, buffW), "got %s, expected %s\n", wine_dbgstr_w(nameW), wine_dbgstr_w(buffW));
 
     file = CreateFileW(nameW, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_FLAG_DELETE_ON_CLOSE, NULL);
     ok(file != NULL, "got %p\n", file);
 
     nameW[0] = 0;
-    ret = pPathYetAnotherMakeUniqueName(nameW, pathW, tmpW, longW);
+    ret = pPathYetAnotherMakeUniqueName(nameW, pathW, L"tmp", L"name");
     ok(ret, "got %d\n", ret);
     lstrcpyW(buffW, pathW);
-    lstrcatW(buffW, long2W);
+    lstrcatW(buffW, L"name (2)");
     ok(!lstrcmpW(nameW, buffW), "got %s, expected %s\n", wine_dbgstr_w(nameW), wine_dbgstr_w(buffW));
 
     CloseHandle(file);
 
     /* Using long only */
     nameW[0] = 0;
-    ret = pPathYetAnotherMakeUniqueName(nameW, pathW, NULL, longW);
+    ret = pPathYetAnotherMakeUniqueName(nameW, pathW, NULL, L"name");
     ok(ret, "got %d\n", ret);
     lstrcpyW(buffW, pathW);
-    lstrcatW(buffW, longW);
+    lstrcatW(buffW, L"name");
     ok(!lstrcmpW(nameW, buffW), "got %s, expected %s\n", wine_dbgstr_w(nameW), wine_dbgstr_w(buffW));
 }
 
@@ -2822,7 +2919,7 @@ static void test_SHGetKnownFolderIDList(void)
     }
 
     hr = pSHGetKnownFolderIDList(NULL, 0, NULL, NULL);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "got 0x%08lx\n", hr);
 
 if (0) { /* crashes on native */
     pidl = (void*)0xdeadbeef;
@@ -2831,39 +2928,211 @@ if (0) { /* crashes on native */
     /* not a known folder */
     pidl = (void*)0xdeadbeef;
     hr = pSHGetKnownFolderIDList(&IID_IUnknown, 0, NULL, &pidl);
-    ok(hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND), "got 0x%08x\n", hr);
+    ok(hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND), "got 0x%08lx\n", hr);
     ok(pidl == NULL, "got %p\n", pidl);
 
     hr = pSHGetKnownFolderIDList(&FOLDERID_Desktop, 0, NULL, NULL);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "got 0x%08lx\n", hr);
 
     pidl = (void*)0xdeadbeef;
     hr = pSHGetKnownFolderIDList(&FOLDERID_Desktop, 0, NULL, &pidl);
-    ok(hr == S_OK, "SHGetKnownFolderIDList failed: 0x%08x\n", hr);
+    ok(hr == S_OK, "SHGetKnownFolderIDList failed: 0x%08lx\n", hr);
     ok(ILIsEmpty(pidl), "pidl should be empty.\n");
     ok(pidl->mkid.cb == 0, "get wrong value: %d\n", pidl->mkid.cb);
     ILFree(pidl);
 
     pidl = (void*)0xdeadbeef;
     hr = pSHGetKnownFolderIDList(&FOLDERID_Desktop, KF_FLAG_NO_ALIAS, NULL, &pidl);
-    ok(hr == S_OK, "SHGetKnownFolderIDList failed: 0x%08x\n", hr);
+    ok(hr == S_OK, "SHGetKnownFolderIDList failed: 0x%08lx\n", hr);
     todo_wine ok(!ILIsEmpty(pidl), "pidl should not be empty.\n");
     todo_wine ok(pidl->mkid.cb == 20, "get wrong value: %d\n", pidl->mkid.cb);
     ILFree(pidl);
 
     pidl = (void*)0xdeadbeef;
     hr = pSHGetKnownFolderIDList(&FOLDERID_Documents, 0, NULL, &pidl);
-    ok(hr == S_OK, "SHGetKnownFolderIDList failed: 0x%08x\n", hr);
+    ok(hr == S_OK, "SHGetKnownFolderIDList failed: 0x%08lx\n", hr);
     ok(!ILIsEmpty(pidl), "pidl should not be empty.\n");
     ok(pidl->mkid.cb == 20, "get wrong value: %d\n", pidl->mkid.cb);
     ILFree(pidl);
 
     pidl = (void*)0xdeadbeef;
     hr = pSHGetKnownFolderIDList(&FOLDERID_Documents, KF_FLAG_NO_ALIAS, NULL, &pidl);
-    ok(hr == S_OK, "SHGetKnownFolderIDList failed: 0x%08x\n", hr);
+    ok(hr == S_OK, "SHGetKnownFolderIDList failed: 0x%08lx\n", hr);
     ok(!ILIsEmpty(pidl), "pidl should not be empty.\n");
     ok(pidl->mkid.cb == 20, "get wrong value: %d\n", pidl->mkid.cb);
     ILFree(pidl);
+}
+
+static void test_PathResolve(void)
+{
+    WCHAR testfile[MAX_PATH], testfile_lnk[MAX_PATH], regedit_in_testdir[MAX_PATH], regedit_cmd[MAX_PATH];
+    WCHAR tempdir[MAX_PATH], path[MAX_PATH], curdir[MAX_PATH];
+    WCHAR argv0_dir[MAX_PATH] = {0}, argv0_base[MAX_PATH] = {0}, *argv0_basep = NULL;
+    const WCHAR *dirs[2] = { tempdir, NULL };
+    HANDLE file, file2;
+    BOOL ret;
+    int i;
+    struct {
+        const WCHAR *path;
+        UINT flags;
+        BOOL expected;
+        const WCHAR *expected_path;
+    } tests[] = {
+        /* no flags */
+        { L"shellpath", 0, FALSE, L"shellpath" },
+        { L"C:\\shellpath", 0, TRUE, L"C:\\shellpath" },
+        { L"regedit", 0, FALSE, L"regedit" },
+        { testfile, 0, TRUE, testfile },
+
+        /* PRF_VERIFYEXISTS */
+        { L"shellpath", PRF_VERIFYEXISTS, TRUE, testfile_lnk },
+        { L"shellpath.lnk", PRF_VERIFYEXISTS, TRUE, testfile_lnk },
+        { L"shellpath.lnk.", PRF_VERIFYEXISTS, TRUE, testfile_lnk },
+        { L"C:\\shellpath", PRF_VERIFYEXISTS, FALSE, L"C:\\shellpath" },
+        /* common extensions are tried even if PRF_TRYPROGRAMEXTENSIONS isn't passed */
+        /* directories in dirs parameter are always searched first even if PRF_FIRSTDIRDEF isn't passed */
+        { L"regedit", PRF_VERIFYEXISTS, TRUE, regedit_cmd },
+        /* .dll is not tried */
+        { L"bcrypt", PRF_VERIFYEXISTS, FALSE, L"bcrypt" },
+        { testfile, PRF_VERIFYEXISTS, TRUE, testfile_lnk },
+        { regedit_in_testdir, PRF_VERIFYEXISTS, TRUE, regedit_cmd },
+
+        /* PRF_FIRSTDIRDEF */
+        { L"regedit", PRF_FIRSTDIRDEF, FALSE, L"regedit" },
+
+        /* RF_VERIFYEXISTS | PRF_FIRSTDIRDEF */
+        { L"regedit", PRF_VERIFYEXISTS | PRF_FIRSTDIRDEF, TRUE, regedit_cmd },
+
+        /* PRF_DONTFINDLNK */
+        { testfile, PRF_DONTFINDLNK, TRUE, testfile },
+        { regedit_in_testdir, PRF_DONTFINDLNK, TRUE, regedit_in_testdir },
+
+        /* RF_VERIFYEXISTS | PRF_DONTFINDLNK */
+        { testfile, PRF_VERIFYEXISTS | PRF_DONTFINDLNK, FALSE, testfile },
+        /* cmd is also ignored when passing PRF_VERIFYEXISTS | PRF_DONTFINDLNK */
+        { regedit_in_testdir, PRF_VERIFYEXISTS | PRF_DONTFINDLNK, FALSE, regedit_in_testdir },
+
+        /* PRF_VERIFYEXISTS | PRF_REQUIREABSOLUTE */
+        /* only PRF_VERIFYEXISTS matters*/
+        { L"shellpath", PRF_VERIFYEXISTS | PRF_REQUIREABSOLUTE, TRUE, testfile_lnk },
+        { L"C:\\shellpath", PRF_VERIFYEXISTS | PRF_REQUIREABSOLUTE, FALSE, L"C:\\shellpath" },
+        { L"regedit", PRF_VERIFYEXISTS | PRF_REQUIREABSOLUTE, TRUE, regedit_cmd },
+        { testfile, PRF_VERIFYEXISTS | PRF_REQUIREABSOLUTE, TRUE, testfile_lnk },
+
+        /* PRF_TRYPROGRAMEXTENSIONS */
+        { L"shellpath", PRF_TRYPROGRAMEXTENSIONS, TRUE, testfile_lnk},
+        { L"C:\\shellpath", PRF_TRYPROGRAMEXTENSIONS, FALSE, L"C:\\shellpath" },
+        { L"regedit", PRF_TRYPROGRAMEXTENSIONS, TRUE, regedit_cmd },
+        /* .dll is not tried */
+        { L"bcrypt", PRF_TRYPROGRAMEXTENSIONS, FALSE, L"bcrypt" },
+        { testfile, PRF_TRYPROGRAMEXTENSIONS, TRUE, testfile_lnk },
+        { regedit_in_testdir, PRF_TRYPROGRAMEXTENSIONS, TRUE, regedit_cmd },
+
+        /* PRF_TRYPROGRAMEXTENSIONS | PRF_DONTFINDLNK */
+        { testfile, PRF_TRYPROGRAMEXTENSIONS | PRF_DONTFINDLNK, FALSE, testfile },
+        /* cmd is also ignored when passing PRF_TRYPROGRAMEXTENSIONS | PRF_DONTFINDLNK */
+        { regedit_in_testdir, PRF_TRYPROGRAMEXTENSIONS | PRF_DONTFINDLNK, FALSE, regedit_in_testdir }
+    };
+
+    if (!pPathResolve)
+    {
+        win_skip("PathResolve not available\n");
+        return;
+    }
+
+    ret = GetModuleFileNameW(NULL, argv0_dir, ARRAY_SIZE(argv0_dir));
+    ok(ret != 0 && ret < ARRAY_SIZE(argv0_dir), "GetModuleFileName failed\n");
+    if (ret != 0 && ret < ARRAY_SIZE(argv0_dir))
+    {
+        argv0_basep = wcsrchr(argv0_dir, '\\');
+        *argv0_basep = 0;
+        argv0_basep++;
+    }
+
+    GetTempPathW(MAX_PATH, tempdir);
+
+    lstrcpyW(testfile, tempdir);
+    lstrcatW(testfile, L"shellpath");
+    lstrcpyW(testfile_lnk, testfile);
+    lstrcatW(testfile_lnk, L".lnk");
+
+    file = CreateFileW(testfile_lnk, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_FLAG_DELETE_ON_CLOSE, NULL);
+    ok(file != INVALID_HANDLE_VALUE, "got %p\n", file);
+
+    lstrcpyW(regedit_in_testdir, tempdir);
+    lstrcatW(regedit_in_testdir, L"regedit");
+    lstrcpyW(regedit_cmd, regedit_in_testdir);
+    lstrcatW(regedit_cmd, L".cmd");
+
+    file2 = CreateFileW(regedit_cmd, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_FLAG_DELETE_ON_CLOSE, NULL);
+    ok(file2 != INVALID_HANDLE_VALUE, "got %p\n", file);
+
+    /* show that resolving regedit with NULL dirs returns regedit.exe */
+    lstrcpyW(path, L"regedit");
+    ret = pPathResolve(path, NULL, PRF_VERIFYEXISTS);
+    ok(ret, "resolving regedit failed unexpectedly\n");
+    ok(!lstrcmpiW(path, L"C:\\windows\\regedit.exe") || !lstrcmpiW(path, L"C:\\windows\\system32\\regedit.exe"),
+            "unexpected path %s\n", wine_dbgstr_w(path));
+
+    if (argv0_basep)
+    {
+        WCHAR *ext;
+        const WCHAR *search_path[] = {
+            argv0_dir,
+            NULL
+        };
+        /* show that PathResolve doesn't check current directory */
+        lstrcpyW(argv0_base, argv0_basep);
+        GetCurrentDirectoryW(MAX_PATH, curdir);
+        SetCurrentDirectoryW(argv0_dir);
+        ret = pPathResolve(argv0_base, NULL, PRF_VERIFYEXISTS | PRF_TRYPROGRAMEXTENSIONS);
+        ok(!ret, "resolving argv0 succeeded unexpectedly, result: %s\n", wine_dbgstr_w(argv0_base));
+
+        lstrcpyW(argv0_base, argv0_basep);
+        if ((ext = wcsrchr(argv0_base, '.')))
+        {
+            *ext = 0;
+            ret = pPathResolve(argv0_base, NULL, PRF_VERIFYEXISTS | PRF_TRYPROGRAMEXTENSIONS);
+            ok(!ret, "resolving argv0 without extension succeeded unexpectedly, result: %s\n", wine_dbgstr_w(argv0_base));
+        }
+
+        /* show that PathResolve will check specified search path, even if it's the current directory */
+        lstrcpyW(argv0_base, argv0_basep);
+        ret = pPathResolve(argv0_base, search_path, PRF_VERIFYEXISTS | PRF_TRYPROGRAMEXTENSIONS);
+        ok(ret, "resolving argv0 with search path failed unexpectedly, result: %s\n", wine_dbgstr_w(argv0_base));
+
+        lstrcpyW(argv0_base, argv0_basep);
+        if ((ext = wcsrchr(argv0_base, '.')))
+        {
+            *ext = 0;
+            ret = pPathResolve(argv0_base, search_path, PRF_VERIFYEXISTS | PRF_TRYPROGRAMEXTENSIONS);
+            ok(ret, "resolving argv0 without extension with search path failed unexpectedly, result: %s\n", wine_dbgstr_w(argv0_base));
+        }
+
+        SetCurrentDirectoryW(curdir);
+    }
+    else
+        win_skip("couldn't get module filename\n");
+
+    for (i = 0; i < ARRAY_SIZE(tests); i++)
+    {
+        winetest_push_context("test %d", i);
+        lstrcpyW(path, tests[i].path);
+
+        if (!tests[i].expected) SetLastError(0xdeadbeef);
+        ret = pPathResolve(path, dirs, tests[i].flags);
+        ok(ret == tests[i].expected, "expected %d, got %d\n", tests[i].expected, ret);
+        ok(!lstrcmpiW(path, tests[i].expected_path),
+                "expected %s, got %s\n", wine_dbgstr_w(tests[i].expected_path), wine_dbgstr_w(path));
+        if (!tests[i].expected)
+            ok(GetLastError() == ERROR_FILE_NOT_FOUND ||
+               broken(GetLastError() == ERROR_PATH_NOT_FOUND /* some win 8.1 & 10 */),
+               "expected ERROR_FILE_NOT_FOUND, got %ld\n", GetLastError());
+        winetest_pop_context();
+    }
+
+    CloseHandle(file);
+    CloseHandle(file2);
 }
 
 START_TEST(shellpath)
@@ -2877,10 +3146,6 @@ START_TEST(shellpath)
         doChild(myARGV[2]);
     else
     {
-        /* Report missing functions once */
-        if (!pSHGetFolderLocation)
-            win_skip("SHGetFolderLocation is not available\n");
-
         /* first test various combinations of parameters: */
         test_parameters();
 
@@ -2896,5 +3161,6 @@ START_TEST(shellpath)
         test_DoEnvironmentSubst();
         test_PathYetAnotherMakeUniqueName();
         test_SHGetKnownFolderIDList();
+        test_PathResolve();
     }
 }

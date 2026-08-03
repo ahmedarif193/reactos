@@ -1,6 +1,7 @@
 /* Control Panel management
  *
  * Copyright 2001 Eric Pouech
+ * Copyright 2008 Owen Rudge
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -20,11 +21,12 @@
 #ifndef __WINE_SHELL_CPANEL_H
 #define __WINE_SHELL_CPANEL_H
 
+#include "wine/list.h"
+#include "cpl.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-#include <cpl.h>
 
 struct applet_info
 {
@@ -39,20 +41,21 @@ struct applet_info
 };
 
 typedef struct CPlApplet {
-#ifndef __REACTOS__
     struct list         entry;
-#else
-    HANDLE hActCtx;
-#endif
     HWND		hWnd;
     LPWSTR		cmd;        /* path to applet */
     unsigned		count;		/* number of subprograms */
     HMODULE     	hModule;	/* module of loaded applet */
     APPLET_PROC		proc;		/* entry point address */
+#ifdef __REACTOS__
+    HANDLE              hActCtx;
+#endif
+    BOOL                context_activated; /* whether context is activated */
+    HANDLE              context;        /* activation context handle */
+    ULONG_PTR           cookie;         /* activation context cookie */
     struct applet_info  info[1];	/* array of count information */
 } CPlApplet;
 
-#ifndef __REACTOS__
 typedef struct CPanel {
     struct list applets;
     HWND        hWnd;
@@ -69,15 +72,12 @@ typedef struct CPlItem {
     CPlApplet *applet;
     unsigned id;
 } CPlItem;
-#else
-typedef int CPanel;
-#endif
 
-CPlApplet* Control_LoadApplet(HWND hWnd, LPCWSTR cmd, CPanel* panel) DECLSPEC_HIDDEN;
-void Control_UnloadApplet(CPlApplet* applet) DECLSPEC_HIDDEN;
+CPlApplet* Control_LoadApplet(HWND hWnd, LPCWSTR cmd, CPanel* panel);
+void Control_UnloadApplet(CPlApplet* applet);
 
 #ifdef __cplusplus
-} /* extern "C" */
+}
 #endif
 
 #endif /* __WINE_SHELL_CPANEL_H */

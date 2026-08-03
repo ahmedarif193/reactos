@@ -114,7 +114,7 @@ list(APPEND IDL_SOURCES
 #    shappmgr.idl
     shdeprecated.idl
 #    shgina.idl
-#    shimgdata.idl
+    shimgdata.idl
     shldisp.idl
     shobjidl.idl
 #    sifmt.idl

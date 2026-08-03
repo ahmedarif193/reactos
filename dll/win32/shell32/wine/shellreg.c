@@ -18,20 +18,21 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include <wine/config.h>
-
+#include <string.h>
+#include <stdarg.h>
 #include <stdio.h>
 
-#define WIN32_NO_STATUS
-#define _INC_WINDOWS
-
-#include <windef.h>
-#include <winbase.h>
-#include <shlobj.h>
-#include <shlwapi.h>
-#include <wine/debug.h>
+#include "windef.h"
+#include "winbase.h"
+#include "shellapi.h"
+#include "wingdi.h"
+#include "winuser.h"
+#include "shlobj.h"
+#include "winreg.h"
 
 #include "shell32_main.h"
+
+#include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(shell);
 
@@ -75,16 +76,16 @@ HRESULT WINAPI SHRegQueryValueA(HKEY hkey, LPSTR lpSubKey, LPSTR lpValue, LPDWOR
  * SHRegQueryValueExA   [SHELL32.509]
  *
  */
-LONG WINAPI SHRegQueryValueExA(
+HRESULT WINAPI SHRegQueryValueExA(
 	HKEY hkey,
-	LPCSTR lpValueName,
+	LPSTR lpValueName,
 	LPDWORD lpReserved,
 	LPDWORD lpType,
 	LPBYTE lpData,
 	LPDWORD lpcbData)
 {
 	TRACE("%p %s %p %p %p %p\n", hkey, lpValueName, lpReserved, lpType, lpData, lpcbData);
-	return SHQueryValueExA(hkey, lpValueName, lpReserved, lpType, lpData, lpcbData);
+	return RegQueryValueExA (hkey, lpValueName, lpReserved, lpType, lpData, lpcbData);
 }
 
 /*************************************************************************
@@ -104,18 +105,24 @@ HRESULT WINAPI SHRegQueryValueW(
 
 /*************************************************************************
  * SHRegQueryValueExW	[SHELL32.511] NT4.0
+ *
+ * FIXME
+ *  if the datatype REG_EXPAND_SZ then expand the string and change
+ *  *pdwType to REG_SZ.
  */
-LONG WINAPI SHRegQueryValueExW(
+HRESULT WINAPI SHRegQueryValueExW (
 	HKEY hkey,
-	LPCWSTR pszValue,
+	LPWSTR pszValue,
 	LPDWORD pdwReserved,
 	LPDWORD pdwType,
 	LPVOID pvData,
 	LPDWORD pcbData)
 {
-	TRACE("%p %s %p %p %p %p\n",
+	DWORD ret;
+	WARN("%p %s %p %p %p %p semi-stub\n",
 		hkey, debugstr_w(pszValue), pdwReserved, pdwType, pvData, pcbData);
-	return SHQueryValueExW(hkey, pszValue, pdwReserved, pdwType, pvData, pcbData);
+	ret = RegQueryValueExW ( hkey, pszValue, pdwReserved, pdwType, pvData, pcbData);
+	return ret;
 }
 
 /*************************************************************************
@@ -140,47 +147,27 @@ HRESULT WINAPI SHRegCloseKey (HKEY hkey)
 }
 
 /*************************************************************************
- * SHCreateSessionKey            [SHELL32.723]
+ * SHCreateSessionKey                   [SHELL32.723]
+ *
  */
-HRESULT
-WINAPI
-SHCreateSessionKey(REGSAM samDesired, PHKEY phKey)
+HRESULT WINAPI SHCreateSessionKey(REGSAM access, HKEY *hkey)
 {
-    HRESULT hr = S_OK;
-    static WCHAR wszSessionKey[256];
-    LONG Error;
+    DWORD session, ret;
+    WCHAR str[ARRAY_SIZE(L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\SessionInfo\\") + 16];
 
-    if (!wszSessionKey[0]) // FIXME: Critical Section
-    {
-        HANDLE hToken;
+    if (hkey)
+        *hkey = NULL;
 
-        if (OpenProcessToken(GetCurrentProcess(), TOKEN_READ, &hToken))
-        {
-            TOKEN_STATISTICS Stats;
-            DWORD ReturnLength;
+    if (!access)
+        return E_ACCESSDENIED;
 
-            if (GetTokenInformation(hToken, TokenStatistics, &Stats, sizeof(Stats), &ReturnLength))
-            {
-                swprintf(wszSessionKey,
-                         L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\SessionInfo\\%08x%08x",
-                         Stats.AuthenticationId.HighPart, Stats.AuthenticationId.LowPart);
-            }
-            else
-                hr = HRESULT_FROM_WIN32(GetLastError());
+    if (!ProcessIdToSessionId(GetCurrentProcessId(), &session))
+        return E_INVALIDARG;
 
-            CloseHandle(hToken);
-        }
-        else
-            hr = HRESULT_FROM_WIN32(GetLastError());
-    }
+    swprintf(str, ARRAY_SIZE(str),
+             L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\SessionInfo\\%u", session);
+    TRACE("using session key %s\n", debugstr_w(str));
 
-    if(SUCCEEDED(hr))
-    {
-        Error = RegCreateKeyExW(HKEY_LOCAL_MACHINE, wszSessionKey, 0, NULL,
-                                REG_OPTION_VOLATILE, samDesired, NULL, phKey, NULL);
-        if (Error != ERROR_SUCCESS)
-            hr = HRESULT_FROM_WIN32(Error);
-    }
-
-    return hr;
+    ret = RegCreateKeyExW(HKEY_CURRENT_USER, str, 0, NULL, REG_OPTION_VOLATILE, access, NULL, hkey, NULL);
+    return HRESULT_FROM_WIN32( ret );
 }

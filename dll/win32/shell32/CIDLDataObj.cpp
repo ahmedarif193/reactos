@@ -191,7 +191,7 @@ CIDLDataObj::~CIDLDataObj()
 
 HRESULT WINAPI CIDLDataObj::Initialize(HWND hwndOwner, PCIDLIST_ABSOLUTE pMyPidl, PCUIDLIST_RELATIVE_ARRAY apidlx, UINT cidlx, BOOL bAddAdditionalFormats)
 {
-    HGLOBAL hida = RenderSHELLIDLIST((LPITEMIDLIST)pMyPidl, (LPITEMIDLIST*)apidlx, cidlx);
+    HGLOBAL hida = RenderSHELLIDLIST(pMyPidl, (const ITEMIDLIST **)apidlx, cidlx);
     if (!hida)
     {
         ERR("Failed to render " CFSTR_SHELLIDLISTA "\n");
@@ -217,19 +217,19 @@ HRESULT WINAPI CIDLDataObj::Initialize(HWND hwndOwner, PCIDLIST_ABSOLUTE pMyPidl
         }
 
         Format.cfFormat = CF_HDROP;
-        medium.hGlobal = RenderHDROP((LPITEMIDLIST)pMyPidl, (LPITEMIDLIST*)apidlx, cidlx);
+        medium.hGlobal = RenderHDROP(pMyPidl, (const ITEMIDLIST **)apidlx, cidlx);
         hr = SetData(&Format, &medium, TRUE);
         if (FAILED_UNEXPECTEDLY(hr))
             return hr;
 
         Format.cfFormat = RegisterClipboardFormatA(CFSTR_FILENAMEA);
-        medium.hGlobal = RenderFILENAMEA((LPITEMIDLIST)pMyPidl, (LPITEMIDLIST*)apidlx, cidlx);
+        medium.hGlobal = RenderFILENAMEA(pMyPidl, (const ITEMIDLIST **)apidlx, cidlx);
         hr = SetData(&Format, &medium, TRUE);
         if (FAILED_UNEXPECTEDLY(hr))
             return hr;
 
         Format.cfFormat = RegisterClipboardFormatW(CFSTR_FILENAMEW);
-        medium.hGlobal = RenderFILENAMEW((LPITEMIDLIST)pMyPidl, (LPITEMIDLIST*)apidlx, cidlx);
+        medium.hGlobal = RenderFILENAMEW(pMyPidl, (const ITEMIDLIST **)apidlx, cidlx);
         hr = SetData(&Format, &medium, TRUE);
         if (FAILED_UNEXPECTEDLY(hr))
             return hr;

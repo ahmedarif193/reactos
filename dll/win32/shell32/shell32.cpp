@@ -468,6 +468,8 @@ STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID *ppv)
     TRACE("CLSID:%s,IID:%s\n", shdebugstr_guid(&rclsid), shdebugstr_guid(&riid));
 
     hResult = gModule.DllGetClassObject(rclsid, riid, ppv);
+    if (hResult == CLASS_E_CLASSNOTAVAILABLE)
+        hResult = WineShell32_GetClassObject(rclsid, riid, ppv);
     TRACE("-- pointer to class factory: %p\n", *ppv);
     return hResult;
 }

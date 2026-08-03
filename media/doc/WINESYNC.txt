@@ -195,7 +195,7 @@ dll/win32/sensapi             # Synced to Wine-11.14
 dll/win32/setupapi            # Forked at Wine-20050524
 dll/win32/shdoclc             # Synced to Wine-11.14
 dll/win32/shdocvw             # Synced to Wine-11.14
-dll/win32/shell32             # Forked at Wine-20071011
+dll/win32/shell32             # Forked from Wine-11.14
 dll/win32/shfolder            # Synced to Wine-11.14
 dll/win32/shlwapi             # Synced to Wine-11.14
 dll/win32/slbcsp              # Synced to Wine-11.14

@@ -34,6 +34,13 @@
 #ifndef __WINE_PIDL_H
 #define __WINE_PIDL_H
 
+#include <stdarg.h>
+
+#include "windef.h"
+#include "winbase.h"
+#include "winuser.h"
+#include "shlobj.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -163,6 +170,10 @@ typedef struct tagPIDLCPanelStruct
     WORD offsComment;		/*08*/
     WCHAR szName[1];		/*10*/ /* terminated by 0x00, followed by display name and comment string */
 } PIDLCPanelStruct;
+
+#define ILGDN_FORPARSING  0
+#define ILGDN_NORMAL      1
+#define ILGDN_INFOLDER    2
 
 #ifdef __REACTOS__
 

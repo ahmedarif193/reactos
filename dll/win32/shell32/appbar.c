@@ -1,128 +1,163 @@
 /*
- * PROJECT:     ReactOS Shell32
- * LICENSE:     LGPL-2.1-or-later (https://spdx.org/licenses/LGPL-2.1-or-later)
- * PURPOSE:     SHAppBarMessage implementation
- * COPYRIGHT:   Copyright 2008 Vincent Povirk for CodeWeavers
- *              Copyright 2025 Katayama Hirofumi MZ <katayama.hirofumi.mz@gmail.com>
+ * SHAppBarMessage implementation
+ *
+ * Copyright 2008 Vincent Povirk for CodeWeavers
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include <windef.h>
-#include <winbase.h>
-#include <winuser.h>
-#include <shellapi.h>
-#include <shlobj.h>
-#include <shlwapi.h>
-#include <undocshell.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdarg.h>
+#include <stdio.h>
 
-#include <wine/debug.h>
-#include <wine/unicode.h>
+#include "windef.h"
+#include "winbase.h"
+#include "winerror.h"
+#include "shellapi.h"
+#include "winuser.h"
+
+#include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(appbar);
 
-static HANDLE
-AppBar_CopyIn(
-    _In_ const VOID *pvSrc,
-    _In_ SIZE_T dwSize,
-    _In_ DWORD dwProcessId)
+struct appbar_data_msg  /* platform-independent data */
 {
-    HANDLE hMem = SHAllocShared(NULL, dwSize, dwProcessId);
-    if (!hMem)
-        return 0;
+    ULONG     hWnd;
+    UINT      uCallbackMessage;
+    UINT      uEdge;
+    RECT      rc;
+    ULONGLONG lParam;
+};
 
-    PVOID pvDest = SHLockShared(hMem, dwProcessId);
-    if (!pvDest)
-    {
-        SHFreeShared(hMem, dwProcessId);
-        return 0;
-    }
-
-    CopyMemory(pvDest, pvSrc, dwSize);
-    SHUnlockShared(pvDest);
-    return hMem;
-}
-
-static BOOL
-AppBar_CopyOut(
-    _In_ HANDLE hOutput,
-    _Out_ PVOID pvDest,
-    _In_ SIZE_T cbDest,
-    _In_ DWORD dwProcessId)
+struct appbar_cmd
 {
-    PVOID pvSrc = SHLockShared(hOutput, dwProcessId);
-    if (pvSrc)
-    {
-        CopyMemory(pvDest, pvSrc, cbDest);
-        SHUnlockShared(pvSrc);
-    }
+    ULONG  return_map;
+    DWORD  return_process;
+    struct appbar_data_msg abd;
+};
 
-    SHFreeShared(hOutput, dwProcessId);
-    return pvSrc != NULL;
-}
+struct appbar_response
+{
+    ULONGLONG result;
+    struct appbar_data_msg abd;
+};
 
 /*************************************************************************
  * SHAppBarMessage            [SHELL32.@]
  */
-UINT_PTR
-WINAPI
-SHAppBarMessage(
-    _In_ DWORD dwMessage,
-    _Inout_ PAPPBARDATA pData)
+UINT_PTR WINAPI SHAppBarMessage(DWORD msg, PAPPBARDATA data)
 {
-    TRACE("dwMessage=%d, pData={cb=%d, hwnd=%p}\n", dwMessage, pData->cbSize, pData->hWnd);
+    struct appbar_cmd command;
+    struct appbar_response* response;
+    HANDLE return_map;
+    LPVOID return_view;
+    HWND appbarmsg_window;
+    COPYDATASTRUCT cds;
+    DWORD_PTR msg_result;
+    UINT_PTR ret = 0;
 
-    HWND hTrayWnd = FindWindowW(L"Shell_TrayWnd", NULL);
-    if (!hTrayWnd || pData->cbSize > sizeof(*pData))
+    TRACE("msg=%ld, data={cb=%ld, hwnd=%p}\n", msg, data->cbSize, data->hWnd);
+
+    /* These members are message dependent */
+    switch(msg)
     {
-        WARN("%p, %d\n", hTrayWnd, pData->cbSize);
+    case ABM_NEW:
+        TRACE("callback: %x\n", data->uCallbackMessage);
+        break;
+
+    case ABM_GETAUTOHIDEBAR:
+        TRACE("edge: %d\n", data->uEdge);
+        break;
+
+    case ABM_QUERYPOS:
+    case ABM_SETPOS:
+        TRACE("edge: %d, rc: %s\n", data->uEdge, wine_dbgstr_rect(&data->rc));
+        break;
+
+    case ABM_GETTASKBARPOS:
+        TRACE("rc: %s\n", wine_dbgstr_rect(&data->rc));
+        break;
+
+    case ABM_SETAUTOHIDEBAR:
+        TRACE("edge: %d, lParam: %Ix\n", data->uEdge, data->lParam);
+        break;
+
+    default:
+        FIXME("unknown msg: %ld\n", msg);
+        break;
+    }
+
+    if (data->cbSize < sizeof(APPBARDATA))
+    {
+        WARN("data at %p is too small\n", data);
         return FALSE;
     }
 
-    APPBAR_COMMAND cmd;
-    cmd.abd.cbSize = sizeof(cmd.abd);
-    cmd.abd.hWnd32 = HandleToUlong(pData->hWnd); // Truncated on x64, as on Windows!
-    cmd.abd.uCallbackMessage = pData->uCallbackMessage;
-    cmd.abd.uEdge = pData->uEdge;
-    cmd.abd.rc = pData->rc;
-    cmd.abd.lParam64 = pData->lParam;
-    cmd.dwMessage = dwMessage;
-    cmd.hOutput = (APPBAR_OUTPUT)NULL;
-    cmd.dwProcessId = GetCurrentProcessId();
+    command.abd.hWnd = HandleToLong( data->hWnd );
+    command.abd.uCallbackMessage = data->uCallbackMessage;
+    command.abd.uEdge = data->uEdge;
+    command.abd.rc = data->rc;
+    command.abd.lParam = data->lParam;
 
-    /* Make output data if necessary */
-    switch (dwMessage)
+    return_map = CreateFileMappingW(INVALID_HANDLE_VALUE, 0, PAGE_READWRITE, 0, sizeof(struct appbar_response), NULL);
+    if (return_map == NULL)
     {
-        case ABM_QUERYPOS:
-        case ABM_SETPOS:
-        case ABM_GETTASKBARPOS:
-            cmd.hOutput = (APPBAR_OUTPUT)AppBar_CopyIn(&cmd.abd, sizeof(cmd.abd), cmd.dwProcessId);
-            if (!cmd.hOutput)
-            {
-                ERR("AppBar_CopyIn: %d\n", dwMessage);
-                return FALSE;
-            }
-            break;
-        default:
-            break;
+        ERR("couldn't create file mapping\n");
+        return 0;
+    }
+    command.return_map = HandleToUlong( return_map );
+
+    command.return_process = GetCurrentProcessId();
+
+    appbarmsg_window = FindWindowW(L"WineAppBar", NULL);
+    if (appbarmsg_window == NULL)
+    {
+        ERR("couldn't find appbar window\n");
+        CloseHandle(return_map);
+        return 0;
     }
 
-    /* Send WM_COPYDATA message */
-    COPYDATASTRUCT copyData = { TABDMC_APPBAR, sizeof(cmd), &cmd };
-    UINT_PTR ret = SendMessageW(hTrayWnd, WM_COPYDATA, (WPARAM)pData->hWnd, (LPARAM)&copyData);
+    cds.dwData = msg;
+    cds.cbData = sizeof(command);
+    cds.lpData = &command;
 
-    /* Copy back output data */
-    if (cmd.hOutput)
+    SendMessageTimeoutW(appbarmsg_window, WM_COPYDATA, (WPARAM)data->hWnd, (LPARAM)&cds, SMTO_BLOCK, INFINITE, &msg_result);
+
+    return_view = MapViewOfFile(return_map, FILE_MAP_READ, 0, 0, sizeof(struct appbar_response));
+    if (return_view == NULL)
     {
-        if (!AppBar_CopyOut((HANDLE)cmd.hOutput, &cmd.abd, sizeof(cmd.abd), cmd.dwProcessId))
-        {
-            ERR("AppBar_CopyOut: %d\n", dwMessage);
-            return FALSE;
-        }
-        pData->hWnd = UlongToHandle(cmd.abd.hWnd32);
-        pData->uCallbackMessage = cmd.abd.uCallbackMessage;
-        pData->uEdge = cmd.abd.uEdge;
-        pData->rc = cmd.abd.rc;
-        pData->lParam = (LPARAM)cmd.abd.lParam64;
+        ERR("MapViewOfFile failed\n");
+        CloseHandle(return_map);
+        return 0;
     }
+
+    response = return_view;
+
+    ret = response->result;
+    if (ret)
+    {
+        data->hWnd = UlongToHandle( response->abd.hWnd );
+        data->uCallbackMessage = response->abd.uCallbackMessage;
+        data->uEdge = response->abd.uEdge;
+        data->rc = response->abd.rc;
+        data->lParam = response->abd.lParam;
+    }
+    UnmapViewOfFile(return_view);
+
+    CloseHandle(return_map);
 
     return ret;
 }
