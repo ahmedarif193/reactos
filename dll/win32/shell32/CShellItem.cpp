@@ -336,6 +336,93 @@ HRESULT WINAPI SHCreateShellItem(PCIDLIST_ABSOLUTE pidlParent,
     return hr;
 }
 
+HRESULT WINAPI SHCreateItemFromIDList(PCIDLIST_ABSOLUTE pidl, REFIID riid, void **ppv)
+{
+    CComPtr<IShellItem> item;
+    HRESULT hr;
+
+    if (!pidl)
+        return E_INVALIDARG;
+
+    *ppv = NULL;
+    hr = SHCreateShellItem(NULL, NULL, pidl, &item);
+    if (SUCCEEDED(hr))
+        hr = item->QueryInterface(riid, ppv);
+    return hr;
+}
+
+HRESULT WINAPI SHCreateItemFromParsingName(PCWSTR pszPath, IBindCtx *pbc,
+    REFIID riid, void **ppv)
+{
+    LPITEMIDLIST pidl;
+    HRESULT hr;
+
+    *ppv = NULL;
+    hr = SHParseDisplayName(pszPath, pbc, &pidl, 0, NULL);
+    if (SUCCEEDED(hr))
+    {
+        hr = SHCreateItemFromIDList(pidl, riid, ppv);
+        ILFree(pidl);
+    }
+    return hr;
+}
+
+HRESULT WINAPI SHCreateItemFromRelativeName(IShellItem *parent, PCWSTR name, IBindCtx *pbc,
+    REFIID riid, void **ppv)
+{
+    CComPtr<IShellFolder> desktop, folder;
+    LPITEMIDLIST pidlFolder = NULL, pidl = NULL;
+    HRESULT hr;
+
+    TRACE("(%p, %s, %p, %s, %p)\n", parent, debugstr_w(name), pbc,
+          debugstr_guid(&riid), ppv);
+
+    if (!ppv)
+        return E_INVALIDARG;
+    *ppv = NULL;
+    if (!name)
+        return E_INVALIDARG;
+
+    hr = SHGetIDListFromObject(parent, &pidlFolder);
+    if (hr != S_OK)
+        return hr;
+
+    hr = SHGetDesktopFolder(&desktop);
+    if (hr != S_OK)
+        goto cleanup;
+
+    if (!_ILIsDesktop(pidlFolder))
+    {
+        hr = desktop->BindToObject(pidlFolder, NULL, IID_PPV_ARG(IShellFolder, &folder));
+        if (hr != S_OK)
+            goto cleanup;
+    }
+
+    hr = (folder ? folder : desktop)->ParseDisplayName(NULL, pbc, const_cast<LPWSTR>(name),
+                                                       NULL, &pidl, NULL);
+    if (hr == S_OK)
+        hr = SHCreateItemFromIDList(pidl, riid, ppv);
+
+cleanup:
+    ILFree(pidlFolder);
+    ILFree(pidl);
+    return hr;
+}
+
+HRESULT WINAPI SHGetItemFromObject(IUnknown *punk, REFIID riid, void **ppv)
+{
+    LPITEMIDLIST pidl;
+    HRESULT hr;
+
+    hr = SHGetIDListFromObject(punk, &pidl);
+    if (SUCCEEDED(hr))
+    {
+        hr = SHCreateItemFromIDList(pidl, riid, ppv);
+        ILFree(pidl);
+    }
+    return hr;
+}
+
 class CShellItemArray :
     public CComCoClass<CShellItemArray, &CLSID_NULL>,
     public CComObjectRootEx<CComMultiThreadModelNoCS>,
