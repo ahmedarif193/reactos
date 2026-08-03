@@ -407,7 +407,9 @@ BOOL WINAPI RegisterUserApiHook(HINSTANCE hInstance, USERAPIHOOKPROC CallbackFun
 BOOL WINAPI RegisterUserApiHook(PUSERAPIHOOKINFO puah);
 #endif
 
+#ifndef __WINESRC__
 BOOL WINAPI UnregisterUserApiHook(VOID);
+#endif
 
 /* dwType for NtUserQueryInputContext */
 typedef enum _QUERY_INPUT_CONTEXT

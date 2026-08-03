@@ -332,7 +332,7 @@ ThemePreWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, ULONG_PTR 
             PWND_DATA pwndData = ThemeGetWndData(hWnd);
 
             if (GetAncestor(hWnd, GA_PARENT) == GetDesktopWindow())
-                UXTHEME_LoadTheme(TRUE);
+                UXTHEME_ReloadTheme(TRUE);
 
             if (pwndData == NULL)
                 return 0;
@@ -415,7 +415,8 @@ HRESULT GetDiaogTextureBrush(HTHEME theme, HWND hwnd, HDC hdc, HBRUSH* result, B
         HRESULT hr;
 
         GetClientRect(hwnd, &dummy);
-        hr = UXTHEME_LoadImage(theme, 0, TABP_BODY, 0, &dummy, FALSE, &hbmp, &bmpRect, &hasImageAlpha);
+        hr = UXTHEME_LoadImage(theme, TABP_BODY, 0, &dummy, FALSE, &hbmp, &bmpRect,
+                               &hasImageAlpha, NULL, NULL);
         if (FAILED(hr))
             return hr;
 
@@ -609,7 +610,7 @@ ThemeInitApiHook(UAPIHK State, PUSERAPIHOOK puah)
 {
     if (!puah || State != uahLoadInit)
     {
-        UXTHEME_LoadTheme(FALSE);
+        UXTHEME_ReloadTheme(FALSE);
         ThemeCleanupWndContext(NULL, 0);
         g_bThemeHooksActive = FALSE;
         return TRUE;
@@ -682,7 +683,7 @@ ThemeInitApiHook(UAPIHK State, PUSERAPIHOOK puah)
     UAH_HOOK_MESSAGE(puah->DlgProcArray, WM_CTLCOLORSTATIC);
     UAH_HOOK_MESSAGE(puah->DlgProcArray, WM_PRINTCLIENT);
 
-    UXTHEME_LoadTheme(TRUE);
+    UXTHEME_ReloadTheme(TRUE);
 
     return TRUE;
 }
@@ -734,9 +735,14 @@ ThemeHooksInstall()
 BOOL WINAPI
 ThemeHooksRemove()
 {
-    BOOL ret;
+    typedef BOOL (WINAPI *PUNREGISTER_UAH)(VOID);
+    PUNREGISTER_UAH unregister_hook;
+    BOOL ret = FALSE;
 
-    ret = UnregisterUserApiHook();
+    unregister_hook = (PUNREGISTER_UAH)GetProcAddress(GetModuleHandleW(L"user32.dll"),
+                                                      "UnregisterUserApiHook");
+    if (unregister_hook)
+        ret = unregister_hook();
 
     UXTHEME_broadcast_theme_changed (NULL, FALSE);
 

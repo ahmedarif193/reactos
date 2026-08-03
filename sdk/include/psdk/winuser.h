@@ -271,6 +271,7 @@ extern "C" {
 #define BS_OWNERDRAW	0xb
 #define BS_TYPEMASK	0xFL
 #define BS_PUSHBUTTON	0
+#define BS_PUSHBOX	0xa
 #define BS_PUSHLIKE	4096
 #define BS_RADIOBUTTON 4
 #define BS_RIGHT	512
@@ -6172,6 +6173,53 @@ typedef MONITORINFOEXA MONITORINFOEX, *LPMONITORINFOEX;
 #endif /* _WINGDI_ && !NOGDI */
 #endif /* UNICODE */
 #endif /* RC_INVOKED */
+
+#ifdef __WINESRC__
+
+/* Uxtheme hook functions and struct. */
+enum SCROLL_HITTEST
+{
+    SCROLL_NOWHERE,
+    SCROLL_TOP_ARROW,
+    SCROLL_TOP_RECT,
+    SCROLL_THUMB,
+    SCROLL_BOTTOM_RECT,
+    SCROLL_BOTTOM_ARROW
+};
+
+struct SCROLL_TRACKING_INFO
+{
+    HWND win;
+    INT bar;
+    INT thumb_pos;
+    INT thumb_val;
+    BOOL vertical;
+    enum SCROLL_HITTEST hit_test;
+};
+
+enum NONCLIENT_BUTTON_TYPE
+{
+    MENU_CLOSE_BUTTON,
+    MENU_MIN_BUTTON,
+    MENU_MAX_BUTTON,
+    MENU_RESTORE_BUTTON,
+    MENU_HELP_BUTTON,
+};
+
+struct user_api_hook
+{
+    LRESULT (WINAPI *pDefDlgProc)(HWND, UINT, WPARAM, LPARAM, BOOL);
+    void (WINAPI *pNonClientButtonDraw)(HWND, HDC, enum NONCLIENT_BUTTON_TYPE, RECT, BOOL, BOOL);
+    void (WINAPI *pScrollBarDraw)(HWND, HDC, INT, enum SCROLL_HITTEST,
+                                  const struct SCROLL_TRACKING_INFO *, BOOL, BOOL, RECT *, UINT,
+                                  INT, INT, INT, BOOL);
+    LRESULT (WINAPI *pScrollBarWndProc)(HWND, UINT, WPARAM, LPARAM, BOOL);
+};
+
+WINUSERAPI BOOL WINAPI RegisterUserApiHook(const struct user_api_hook *new_hook,
+                                            struct user_api_hook *old_hook);
+WINUSERAPI void WINAPI UnregisterUserApiHook(void);
+#endif /* __WINESRC__ */
 
 #ifdef _WINE
 #include "reactos/undocuser.h"

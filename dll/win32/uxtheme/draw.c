@@ -2,6 +2,7 @@
  * Win32 5.1 Theme drawing
  *
  * Copyright (C) 2003 Kevin Koltzau
+ * Copyright 2021 Zhiyi Zhang for CodeWeavers
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -18,9 +19,27 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include "uxthemep.h"
+#define COBJMACROS
 
 #include <stdlib.h>
+#include <stdarg.h>
+
+#include "windef.h"
+#include "winbase.h"
+#include "winuser.h"
+#include "wingdi.h"
+#include "commctrl.h"
+#include "commoncontrols.h"
+#include "vfwmsgs.h"
+#include "uxtheme.h"
+#include "vssym32.h"
+
+#include "msstyles.h"
+#include "uxthemedll.h"
+
+#include "wine/debug.h"
+
+WINE_DEFAULT_DEBUG_CHANNEL(uxtheme);
 
 /***********************************************************************
  * Defines and global variables
@@ -33,22 +52,34 @@ extern ATOM atDialogThemeEnabled;
 /***********************************************************************
  *      EnableThemeDialogTexture                            (UXTHEME.@)
  */
-HRESULT WINAPI EnableThemeDialogTexture(HWND hwnd, DWORD dwFlags)
+HRESULT WINAPI EnableThemeDialogTexture(HWND hwnd, DWORD new_flag)
 {
-    static const WCHAR szTab[] = { 'T','a','b',0 };
+    DWORD old_flag = 0;
     BOOL res;
 
-    TRACE("(%p,0x%08x\n", hwnd, dwFlags);
-    res = SetPropW (hwnd, (LPCWSTR)MAKEINTATOM(atDialogThemeEnabled), 
-                    UlongToHandle(dwFlags|0x80000000));
-        /* 0x80000000 serves as a "flags set" flag */
-    if (!res)
-          return HRESULT_FROM_WIN32(GetLastError());
-    if (dwFlags & ETDT_USETABTEXTURE)
-        return SetWindowTheme (hwnd, NULL, szTab);
-    else
+    TRACE("(%p,%#lx\n", hwnd, new_flag);
+
+    new_flag &= ETDT_VALIDBITS;
+
+    if (new_flag == 0)
         return S_OK;
-}
+
+    if (new_flag & ETDT_DISABLE)
+    {
+        new_flag = ETDT_DISABLE;
+        old_flag = 0;
+    }
+
+    if (new_flag & ~ETDT_DISABLE)
+    {
+        old_flag = HandleToUlong(GetPropW(hwnd, (LPCWSTR)MAKEINTATOM(atDialogThemeEnabled)));
+        old_flag &= ~ETDT_DISABLE;
+    }
+
+    new_flag = new_flag | old_flag;
+    res = SetPropW(hwnd, (LPCWSTR)MAKEINTATOM(atDialogThemeEnabled), UlongToHandle(new_flag));
+    return res ? S_OK : HRESULT_FROM_WIN32(GetLastError());
+ }
 
 /***********************************************************************
  *      IsThemeDialogTextureEnabled                         (UXTHEME.@)
@@ -56,14 +87,11 @@ HRESULT WINAPI EnableThemeDialogTexture(HWND hwnd, DWORD dwFlags)
 BOOL WINAPI IsThemeDialogTextureEnabled(HWND hwnd)
 {
     DWORD dwDialogTextureFlags;
+
     TRACE("(%p)\n", hwnd);
 
     dwDialogTextureFlags = HandleToUlong( GetPropW( hwnd, (LPCWSTR)MAKEINTATOM(atDialogThemeEnabled) ));
-    if (dwDialogTextureFlags == 0) 
-        /* Means EnableThemeDialogTexture wasn't called for this dialog */
-        return FALSE;
-
-    return (dwDialogTextureFlags & ETDT_ENABLE) && !(dwDialogTextureFlags & ETDT_DISABLE);
+    return dwDialogTextureFlags && !(dwDialogTextureFlags & ETDT_DISABLE);
 }
 
 /***********************************************************************
@@ -76,19 +104,11 @@ HRESULT WINAPI DrawThemeParentBackground(HWND hwnd, HDC hdc, RECT *prc)
     HWND hParent;
     HRGN clip = NULL;
     int hasClip = -1;
-    
+
     TRACE("(%p,%p,%p)\n", hwnd, hdc, prc);
-
-    if (!IsWindow(hwnd) || !hdc)
-        return E_HANDLE;
-
-    if (prc && IsBadReadPtr (prc, sizeof(RECT)))
-        return E_POINTER;
-
     hParent = GetParent(hwnd);
     if(!hParent)
         return S_OK;
-
     if(prc) {
         rt = *prc;
         MapWindowPoints(hwnd, hParent, (LPPOINT)&rt, 2);
@@ -139,52 +159,88 @@ HRESULT WINAPI DrawThemeBackground(HTHEME hTheme, HDC hdc, int iPartId,
     return DrawThemeBackgroundEx(hTheme, hdc, iPartId, iStateId, pRect, &opts);
 }
 
+/* Map integer 1..7 to TMT_MINDPI1..TMT_MINDPI7 */
+static int mindpi_index_to_property(int index)
+{
+    return index <= 5 ? TMT_MINDPI1 + index - 1 : TMT_MINDPI6 + index - 6;
+}
+
+/* Map integer 1..7 to TMT_MINSIZE1..TMT_MINSIZE7 */
+static int minsize_index_to_property(int index)
+{
+    return index <= 5 ? TMT_MINSIZE1 + index - 1 : TMT_MINSIZE6 + index - 6;
+}
+
+/* Map integer 1..7 to TMT_IMAGEFILE1..TMT_IMAGEFILE7 */
+static int imagefile_index_to_property(int index)
+{
+    return index <= 5 ? TMT_IMAGEFILE1 + index - 1 : TMT_IMAGEFILE6 + index - 6;
+}
+
 /***********************************************************************
  *      UXTHEME_SelectImage
  *
  * Select the image to use
  */
-static PTHEME_PROPERTY UXTHEME_SelectImage(HTHEME hTheme, HDC hdc, int iPartId, int iStateId, const RECT *pRect, BOOL glyph)
+static PTHEME_PROPERTY UXTHEME_SelectImage(HTHEME hTheme, int iPartId, int iStateId,
+                                           const RECT *pRect, BOOL glyph, int *imageDpi)
 {
-    PTHEME_CLASS pClass;
-    PTHEME_PROPERTY tp;
-    int imageselecttype = IST_NONE;
+    int imageselecttype = IST_NONE, glyphtype = GT_NONE;
+    PTHEME_PROPERTY tp = NULL;
     int i;
-    int image;
 
-    if(glyph)
-        image = TMT_GLYPHIMAGEFILE;
-    else
-        image = TMT_IMAGEFILE;
+    if (imageDpi)
+        *imageDpi = 96;
 
-    pClass = ValidateHandle(hTheme);
-    if((tp=MSSTYLES_FindProperty(pClass, iPartId, iStateId, TMT_FILENAME, image)))
-        return tp;
+    /* Try TMT_IMAGEFILE first when drawing part background and the part contains glyph images.
+     * Otherwise, search TMT_IMAGEFILE1~7 and then TMT_IMAGEFILE or TMT_GLYPHIMAGEFILE */
+    if (!glyph)
+    {
+        GetThemeEnumValue(hTheme, iPartId, iStateId, TMT_GLYPHTYPE, &glyphtype);
+        if (glyphtype == GT_IMAGEGLYPH &&
+            (tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_FILENAME, TMT_IMAGEFILE)))
+                return tp;
+    }
+
     GetThemeEnumValue(hTheme, iPartId, iStateId, TMT_IMAGESELECTTYPE, &imageselecttype);
 
     if(imageselecttype == IST_DPI) {
         int reqdpi = 0;
-        int screendpi = GetDeviceCaps(hdc, LOGPIXELSX);
-        for(i=4; i>=0; i--) {
+        int dpi = MSSTYLES_GetThemeDPI(hTheme);
+        for (i = 7; i >= 1; i--)
+        {
             reqdpi = 0;
-            if(SUCCEEDED(GetThemeInt(hTheme, iPartId, iStateId, i + TMT_MINDPI1, &reqdpi))) {
-                if(reqdpi != 0 && screendpi >= reqdpi) {
-                    TRACE("Using %d DPI, image %d\n", reqdpi, i + TMT_IMAGEFILE1);
-                    return MSSTYLES_FindProperty(pClass, iPartId, iStateId, TMT_FILENAME, i + TMT_IMAGEFILE1);
+            if (SUCCEEDED(GetThemeInt(hTheme, iPartId, iStateId, mindpi_index_to_property(i),
+                                      &reqdpi)))
+            {
+                if (reqdpi != 0 && dpi >= reqdpi)
+                {
+                    TRACE("Using %d DPI, image %d\n", reqdpi, imagefile_index_to_property(i));
+
+                    if (imageDpi)
+                        *imageDpi = reqdpi;
+
+                    return MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_FILENAME,
+                                                 imagefile_index_to_property(i));
                 }
             }
         }
         /* If an image couldn't be selected, choose the first one */
-        return MSSTYLES_FindProperty(pClass, iPartId, iStateId, TMT_FILENAME, TMT_IMAGEFILE1);
+        tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_FILENAME, TMT_IMAGEFILE1);
     }
     else if(imageselecttype == IST_SIZE) {
         POINT size = {pRect->right-pRect->left, pRect->bottom-pRect->top};
         POINT reqsize;
-        for(i=4; i>=0; i--) {
-            PTHEME_PROPERTY fileProp = 
-                MSSTYLES_FindProperty(pClass, iPartId, iStateId, TMT_FILENAME, i + TMT_IMAGEFILE1);
+        for (i = 7; i >= 1; i--)
+        {
+            PTHEME_PROPERTY fileProp;
+
+            fileProp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_FILENAME,
+                                             imagefile_index_to_property(i));
             if (!fileProp) continue;
-            if(FAILED(GetThemePosition(hTheme, iPartId, iStateId, i + TMT_MINSIZE1, &reqsize))) {
+            if (FAILED(GetThemePosition(hTheme, iPartId, iStateId, minsize_index_to_property(i),
+                                        &reqsize)))
+            {
                 /* fall back to size of Nth image */
                 WCHAR szPath[MAX_PATH];
                 int imagelayout = IL_HORIZONTAL;
@@ -193,9 +249,8 @@ static PTHEME_PROPERTY UXTHEME_SelectImage(HTHEME hTheme, HDC hdc, int iPartId, 
                 HBITMAP hBmp;
                 BOOL hasAlpha;
 
-                lstrcpynW(szPath, fileProp->lpValue, 
-                    min(fileProp->dwValueLen+1, sizeof(szPath)/sizeof(szPath[0])));
-                hBmp = MSSTYLES_LoadBitmap(pClass, szPath, &hasAlpha);
+                lstrcpynW(szPath, fileProp->lpValue, min(fileProp->dwValueLen+1, ARRAY_SIZE(szPath)));
+                hBmp = MSSTYLES_LoadBitmap(hTheme, szPath, &hasAlpha, NULL);
                 if(!hBmp) continue;
 
                 GetThemeEnumValue(hTheme, iPartId, iStateId, TMT_IMAGELAYOUT, &imagelayout);
@@ -212,14 +267,19 @@ static PTHEME_PROPERTY UXTHEME_SelectImage(HTHEME hTheme, HDC hdc, int iPartId, 
                 }
             }
             if(reqsize.x <= size.x && reqsize.y <= size.y) {
-                TRACE("Using image size %dx%d, image %d\n", reqsize.x, reqsize.y, i + TMT_IMAGEFILE1);
+                TRACE("Using image size %ldx%ld, image %d\n", reqsize.x, reqsize.y,
+                      imagefile_index_to_property(i));
                 return fileProp;
             }
         }
         /* If an image couldn't be selected, choose the smallest one */
-        return MSSTYLES_FindProperty(pClass, iPartId, iStateId, TMT_FILENAME, TMT_IMAGEFILE1);
+        tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_FILENAME, TMT_IMAGEFILE1);
     }
-    return NULL;
+
+    if (!tp)
+        tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_FILENAME,
+                                   glyph ? TMT_GLYPHIMAGEFILE : TMT_IMAGEFILE);
+    return tp;
 }
 
 /***********************************************************************
@@ -227,8 +287,13 @@ static PTHEME_PROPERTY UXTHEME_SelectImage(HTHEME hTheme, HDC hdc, int iPartId, 
  *
  * Load image for part/state
  */
-HRESULT UXTHEME_LoadImage(HTHEME hTheme, HDC hdc, int iPartId, int iStateId, const RECT *pRect, BOOL glyph,
-                          HBITMAP *hBmp, RECT *bmpRect, BOOL* hasImageAlpha)
+#ifdef __REACTOS__
+HRESULT UXTHEME_LoadImage(HTHEME hTheme, int iPartId, int iStateId, const RECT *pRect,
+#else
+static HRESULT UXTHEME_LoadImage(HTHEME hTheme, int iPartId, int iStateId, const RECT *pRect,
+#endif
+                                 BOOL glyph, HBITMAP *hBmp, RECT *bmpRect, BOOL *hasImageAlpha,
+                                 BOOL *hasDefaultTransparentColour, int *imageDpi)
 {
     int imagelayout = IL_HORIZONTAL;
     int imagecount = 1;
@@ -236,19 +301,14 @@ HRESULT UXTHEME_LoadImage(HTHEME hTheme, HDC hdc, int iPartId, int iStateId, con
     BITMAP bmp;
     WCHAR szPath[MAX_PATH];
     PTHEME_PROPERTY tp;
-    PTHEME_CLASS pClass;
 
-    pClass = ValidateHandle(hTheme);
-    if (!pClass)
-            return E_HANDLE;
-
-    tp = UXTHEME_SelectImage(hTheme, hdc, iPartId, iStateId, pRect, glyph);
+    tp = UXTHEME_SelectImage(hTheme, iPartId, iStateId, pRect, glyph, imageDpi);
     if(!tp) {
         FIXME("Couldn't determine image for part/state %d/%d, invalid theme?\n", iPartId, iStateId);
         return E_PROP_ID_UNSUPPORTED;
     }
-    lstrcpynW(szPath, tp->lpValue, min(tp->dwValueLen+1, sizeof(szPath)/sizeof(szPath[0])));
-    *hBmp = MSSTYLES_LoadBitmap(pClass, szPath, hasImageAlpha);
+    lstrcpynW(szPath, tp->lpValue, min(tp->dwValueLen+1, ARRAY_SIZE(szPath)));
+    *hBmp = MSSTYLES_LoadBitmap(hTheme, szPath, hasImageAlpha, hasDefaultTransparentColour);
     if(!*hBmp) {
         TRACE("Failed to load bitmap %s\n", debugstr_w(szPath));
         return HRESULT_FROM_WIN32(GetLastError());
@@ -279,17 +339,174 @@ HRESULT UXTHEME_LoadImage(HTHEME hTheme, HDC hdc, int iPartId, int iStateId, con
     return S_OK;
 }
 
+/***********************************************************************
+ *      UXTHEME_StretchBlt
+ *
+ * Pseudo TransparentBlt/StretchBlt
+ */
+static inline BOOL UXTHEME_StretchBlt(HDC hdcDst, int nXOriginDst, int nYOriginDst, int nWidthDst, int nHeightDst,
+                                      HDC hdcSrc, int nXOriginSrc, int nYOriginSrc, int nWidthSrc, int nHeightSrc,
+                                      INT transparent, COLORREF transcolor)
+{
+    static const BLENDFUNCTION blendFunc = 
+    {
+      AC_SRC_OVER, /* BlendOp */
+      0,           /* BlendFlag */
+      255,         /* SourceConstantAlpha */
+      AC_SRC_ALPHA /* AlphaFormat */
+    };
+
+    BOOL ret = TRUE;
+    int old_stretch_mode;
+    POINT old_brush_org;
+
+    old_stretch_mode = SetStretchBltMode(hdcDst, HALFTONE);
+    SetBrushOrgEx(hdcDst, nXOriginDst, nYOriginDst, &old_brush_org);
+
+    if (transparent == ALPHABLEND_BINARY) {
+        /* Ensure we don't pass any negative values to TransparentBlt */
+        ret = TransparentBlt(hdcDst, nXOriginDst, nYOriginDst, abs(nWidthDst), abs(nHeightDst),
+                              hdcSrc, nXOriginSrc, nYOriginSrc, abs(nWidthSrc), abs(nHeightSrc),
+                              transcolor);
+    } else if ((transparent == ALPHABLEND_NONE) ||
+        !AlphaBlend(hdcDst, nXOriginDst, nYOriginDst, nWidthDst, nHeightDst,
+                    hdcSrc, nXOriginSrc, nYOriginSrc, nWidthSrc, nHeightSrc,
+                    blendFunc))
+    {
+        ret = StretchBlt(hdcDst, nXOriginDst, nYOriginDst, nWidthDst, nHeightDst,
+                          hdcSrc, nXOriginSrc, nYOriginSrc, nWidthSrc, nHeightSrc,
+                          SRCCOPY);
+    }
+
+    SetBrushOrgEx(hdcDst, old_brush_org.x, old_brush_org.y, NULL);
+    SetStretchBltMode(hdcDst, old_stretch_mode);
+
+    return ret;
+}
+
+/***********************************************************************
+ *      UXTHEME_Blt
+ *
+ * Simplify sending same width/height for both source and dest
+ */
+static inline BOOL UXTHEME_Blt(HDC hdcDest, int nXOriginDest, int nYOriginDest, int nWidthDest, int nHeightDest,
+                               HDC hdcSrc, int nXOriginSrc, int nYOriginSrc,
+                               INT transparent, COLORREF transcolor)
+{
+    return UXTHEME_StretchBlt(hdcDest, nXOriginDest, nYOriginDest, nWidthDest, nHeightDest,
+                              hdcSrc, nXOriginSrc, nYOriginSrc, nWidthDest, nHeightDest,
+                              transparent, transcolor);
+}
+
+/***********************************************************************
+ *      UXTHEME_SizedBlt
+ *
+ * Stretches or tiles, depending on sizingtype.
+ */
+static inline BOOL UXTHEME_SizedBlt (HDC hdcDst, int nXOriginDst, int nYOriginDst, 
+                                     int nWidthDst, int nHeightDst,
+                                     HDC hdcSrc, int nXOriginSrc, int nYOriginSrc, 
+                                     int nWidthSrc, int nHeightSrc,
+                                     int sizingtype, 
+                                     INT transparent, COLORREF transcolor)
+{
+    if (sizingtype == ST_TILE)
+    {
+        HDC hdcTemp;
+        BOOL result = FALSE;
+
+        if (!nWidthSrc || !nHeightSrc) return TRUE;
+
+        /* For destination width/height less than or equal to source
+           width/height, do not bother with memory bitmap optimization */
+        if (nWidthSrc >= nWidthDst && nHeightSrc >= nHeightDst)
+        {
+            int bltWidth = min (nWidthDst, nWidthSrc);
+            int bltHeight = min (nHeightDst, nHeightSrc);
+
+            return UXTHEME_Blt (hdcDst, nXOriginDst, nYOriginDst, bltWidth, bltHeight,
+                                hdcSrc, nXOriginSrc, nYOriginSrc,
+                                transparent, transcolor);
+        }
+
+        /* Create a DC with a bitmap consisting of a tiling of the source
+           bitmap, with standard GDI functions. This is faster than an
+           iteration with UXTHEME_Blt(). */
+        hdcTemp = CreateCompatibleDC(hdcSrc);
+        if (hdcTemp != 0)
+        {
+            HBITMAP bitmapTemp;
+            HBITMAP bitmapOrig;
+            int nWidthTemp, nHeightTemp;
+            int xOfs, xRemaining;
+            int yOfs, yRemaining;
+            int growSize;
+
+            /* Calculate temp dimensions of integer multiples of source dimensions */
+            nWidthTemp = ((nWidthDst + nWidthSrc - 1) / nWidthSrc) * nWidthSrc;
+            nHeightTemp = ((nHeightDst + nHeightSrc - 1) / nHeightSrc) * nHeightSrc;
+            bitmapTemp = CreateCompatibleBitmap(hdcSrc, nWidthTemp, nHeightTemp);
+            bitmapOrig = SelectObject(hdcTemp, bitmapTemp);
+
+            /* Initial copy of bitmap */
+            BitBlt(hdcTemp, 0, 0, nWidthSrc, nHeightSrc, hdcSrc, nXOriginSrc, nYOriginSrc, SRCCOPY);
+
+            /* Extend bitmap in the X direction. Growth of width is exponential */
+            xOfs = nWidthSrc;
+            xRemaining = nWidthTemp - nWidthSrc;
+            growSize = nWidthSrc;
+            while (xRemaining > 0)
+            {
+                growSize = min(growSize, xRemaining);
+                BitBlt(hdcTemp, xOfs, 0, growSize, nHeightSrc, hdcTemp, 0, 0, SRCCOPY);
+                xOfs += growSize;
+                xRemaining -= growSize;
+                growSize *= 2;
+            }
+
+            /* Extend bitmap in the Y direction. Growth of height is exponential */
+            yOfs = nHeightSrc;
+            yRemaining = nHeightTemp - nHeightSrc;
+            growSize = nHeightSrc;
+            while (yRemaining > 0)
+            {
+                growSize = min(growSize, yRemaining);
+                BitBlt(hdcTemp, 0, yOfs, nWidthTemp, growSize, hdcTemp, 0, 0, SRCCOPY);
+                yOfs += growSize;
+                yRemaining -= growSize;
+                growSize *= 2;
+            }
+
+            /* Use temporary hdc for source */
+            result = UXTHEME_Blt (hdcDst, nXOriginDst, nYOriginDst, nWidthDst, nHeightDst,
+                          hdcTemp, 0, 0,
+                          transparent, transcolor);
+
+            SelectObject(hdcTemp, bitmapOrig);
+            DeleteObject(bitmapTemp);
+        }
+        DeleteDC(hdcTemp);
+        return result;
+    }
+    else
+    {
+        return UXTHEME_StretchBlt (hdcDst, nXOriginDst, nYOriginDst, nWidthDst, nHeightDst,
+                                   hdcSrc, nXOriginSrc, nYOriginSrc, nWidthSrc, nHeightSrc,
+                                   transparent, transcolor);
+    }
+}
+
 /* Get transparency parameters passed to UXTHEME_StretchBlt() - the parameters 
  * depend on whether the image has full alpha  or whether it is 
  * color-transparent or just opaque. */
 static inline void get_transparency (HTHEME hTheme, int iPartId, int iStateId, 
-                                     BOOL hasImageAlpha, INT* transparent,
+                                     BOOL hasImageAlpha, BOOL hasDefaultTransparentColour, INT* transparent,
                                      COLORREF* transparentcolor, BOOL glyph)
 {
     if (hasImageAlpha)
     {
         *transparent = ALPHABLEND_FULL;
-        *transparentcolor = RGB (255, 0, 255);
+        *transparentcolor = DEFAULT_TRANSPARENT_COLOR;
     }
     else
     {
@@ -301,13 +518,47 @@ static inline void get_transparency (HTHEME hTheme, int iPartId, int iStateId,
             if(FAILED(GetThemeColor(hTheme, iPartId, iStateId, 
                 glyph ? TMT_GLYPHTRANSPARENTCOLOR : TMT_TRANSPARENTCOLOR, 
                 transparentcolor))) {
-                /* If image is transparent, but no color was specified, use magenta */
-                *transparentcolor = RGB(255, 0, 255);
+                *transparentcolor = DEFAULT_TRANSPARENT_COLOR;
             }
+            if (!hasDefaultTransparentColour && *transparentcolor == DEFAULT_TRANSPARENT_COLOR)
+                *transparent = ALPHABLEND_NONE;
         }
         else
             *transparent = ALPHABLEND_NONE;
     }
+}
+
+/* Reset alpha values in hdc to 0xFF if the background is opaque */
+static void reset_dc_alpha_values(HTHEME htheme, HDC hdc, int part_id, int state_id,
+                                  const RECT *rect)
+{
+    static const RGBQUAD bitmap_bits = {0x0, 0x0, 0x0, 0xFF};
+    BITMAPINFO bitmap_info = {{0}};
+    RECT image_rect;
+    BOOL has_alpha;
+    HBITMAP hbmp;
+    int bg_type;
+
+    if (GetDeviceCaps(hdc, BITSPIXEL) != 32)
+        return;
+
+    if (FAILED(GetThemeEnumValue(htheme, part_id, state_id, TMT_BGTYPE, &bg_type))
+        || bg_type != BT_IMAGEFILE)
+        return;
+
+    if (FAILED(UXTHEME_LoadImage(htheme, part_id, state_id, rect, FALSE, &hbmp, &image_rect,
+                                 &has_alpha, NULL, NULL)) || has_alpha)
+        return;
+
+    bitmap_info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bitmap_info.bmiHeader.biWidth = 1;
+    bitmap_info.bmiHeader.biHeight = 1;
+    bitmap_info.bmiHeader.biPlanes = 1;
+    bitmap_info.bmiHeader.biBitCount = 32;
+    bitmap_info.bmiHeader.biCompression = BI_RGB;
+    StretchDIBits(hdc, rect->left, rect->top, abs(rect->right - rect->left),
+                  abs(rect->bottom - rect->top), 0, 0, 1, 1, &bitmap_bits, &bitmap_info,
+                  DIB_RGB_COLORS, SRCPAINT);
 }
 
 /***********************************************************************
@@ -321,6 +572,8 @@ static HRESULT UXTHEME_DrawImageGlyph(HTHEME hTheme, HDC hdc, int iPartId,
 {
     HRESULT hr;
     HBITMAP bmpSrc = NULL;
+    HDC hdcSrc = NULL;
+    HGDIOBJ oldSrc = NULL;
     RECT rcSrc;
     INT transparent = 0;
     COLORREF transparentcolor;
@@ -328,59 +581,54 @@ static HRESULT UXTHEME_DrawImageGlyph(HTHEME hTheme, HDC hdc, int iPartId,
     int halign = HA_CENTER;
     POINT dstSize;
     POINT srcSize;
-    BOOL hasAlpha;
-    RECT rcDst;
-    GDI_DRAW_STREAM DrawStream;
+    POINT topleft;
+    BOOL hasAlpha, hasDefaultTransparentColour;
 
-    hr = UXTHEME_LoadImage(hTheme, hdc, iPartId, iStateId, pRect, TRUE, 
-        &bmpSrc, &rcSrc, &hasAlpha);
+    hr = UXTHEME_LoadImage(hTheme, iPartId, iStateId, pRect, TRUE, &bmpSrc, &rcSrc, &hasAlpha,
+                           &hasDefaultTransparentColour, NULL);
     if(FAILED(hr)) return hr;
+    hdcSrc = CreateCompatibleDC(hdc);
+    if(!hdcSrc) {
+        hr = HRESULT_FROM_WIN32(GetLastError());
+        return hr;
+    }
+    oldSrc = SelectObject(hdcSrc, bmpSrc);
 
     dstSize.x = pRect->right-pRect->left;
     dstSize.y = pRect->bottom-pRect->top;
     srcSize.x = rcSrc.right-rcSrc.left;
     srcSize.y = rcSrc.bottom-rcSrc.top;
 
-    get_transparency (hTheme, iPartId, iStateId, hasAlpha, &transparent,
-        &transparentcolor, TRUE);
+    get_transparency (hTheme, iPartId, iStateId, hasAlpha, hasDefaultTransparentColour, &transparent,
+                      &transparentcolor, TRUE);
     GetThemeEnumValue(hTheme, iPartId, iStateId, TMT_VALIGN, &valign);
     GetThemeEnumValue(hTheme, iPartId, iStateId, TMT_HALIGN, &halign);
 
-    rcDst = *pRect;
-    if(halign == HA_CENTER)      rcDst.left += (dstSize.x/2)-(srcSize.x/2);
-    else if(halign == HA_RIGHT)  rcDst.left += dstSize.x-srcSize.x;
-    if(valign == VA_CENTER)      rcDst.top += (dstSize.y/2)-(srcSize.y/2);
-    else if(valign == VA_BOTTOM) rcDst.top += dstSize.y-srcSize.y;
+    topleft.x = pRect->left;
+    topleft.y = pRect->top;
+    if(halign == HA_CENTER)      topleft.x += (dstSize.x/2)-(srcSize.x/2);
+    else if(halign == HA_RIGHT)  topleft.x += dstSize.x-srcSize.x;
+    if(valign == VA_CENTER)      topleft.y += (dstSize.y/2)-(srcSize.y/2);
+    else if(valign == VA_BOTTOM) topleft.y += dstSize.y-srcSize.y;
 
-    rcDst.right = rcDst.left + srcSize.x;
-    rcDst.bottom = rcDst.top + srcSize.y;
-    
-    DrawStream.signature = 0x44727753;
-    DrawStream.reserved = 0;
-    DrawStream.unknown1 = 1;
-    DrawStream.unknown2 = 9;
-    DrawStream.hDC = hdc;
-    DrawStream.hImage = bmpSrc;
-    DrawStream.crTransparent = transparentcolor;
-    DrawStream.rcSrc = rcSrc;
-    DrawStream.rcDest = rcDst;
-    DrawStream.leftSizingMargin = 0;
-    DrawStream.rightSizingMargin = 0;
-    DrawStream.topSizingMargin = 0;
-    DrawStream.bottomSizingMargin = 0;
-    DrawStream.drawOption = DS_TRUESIZE;
+    if(!UXTHEME_Blt(hdc, topleft.x, topleft.y, srcSize.x, srcSize.y,
+                    hdcSrc, rcSrc.left, rcSrc.top,
+                    transparent, transparentcolor)) {
+        hr = HRESULT_FROM_WIN32(GetLastError());
+    }
 
-    if (transparent == ALPHABLEND_FULL)
-        DrawStream.drawOption |= DS_TRANSPARENTALPHA;
-    else if (transparent == ALPHABLEND_BINARY)
-        DrawStream.drawOption |= DS_TRANSPARENTCLR;
+    SelectObject(hdcSrc, oldSrc);
+    DeleteDC(hdcSrc);
 
-    GdiDrawStream(hdc, sizeof(DrawStream), &DrawStream);
-    return HRESULT_FROM_WIN32(GetLastError());
+    /* Don't transfer alpha values from the glyph when drawing opaque background */
+    if (SUCCEEDED(hr) && hasAlpha)
+        reset_dc_alpha_values(hTheme, hdc, iPartId, iStateId, pRect);
+
+    return hr;
 }
 
 /***********************************************************************
- *      UXTHEME_DrawImageGlyph
+ *      UXTHEME_DrawGlyph
  *
  * Draw glyph on top of background, if appropriate
  */
@@ -407,85 +655,74 @@ static HRESULT UXTHEME_DrawGlyph(HTHEME hTheme, HDC hdc, int iPartId,
  *
  * Used by GetThemePartSize and UXTHEME_DrawImageBackground
  */
-static HRESULT get_image_part_size (HTHEME hTheme, HDC hdc, int iPartId,
-                                    int iStateId, RECT *prc, THEMESIZE eSize,
-                                    POINT *psz)
+static HRESULT get_image_part_size(HTHEME hTheme, int iPartId, int iStateId, RECT *prc,
+                                   THEMESIZE eSize, POINT *psz)
 {
+    int imageDpi, dstDpi;
     HRESULT hr = S_OK;
     HBITMAP bmpSrc;
     RECT rcSrc;
     BOOL hasAlpha;
 
-    hr = UXTHEME_LoadImage(hTheme, hdc, iPartId, iStateId, prc, FALSE, 
-        &bmpSrc, &rcSrc, &hasAlpha);
+    hr = UXTHEME_LoadImage(hTheme, iPartId, iStateId, prc, FALSE, &bmpSrc, &rcSrc, &hasAlpha,
+                           NULL, &imageDpi);
     if (FAILED(hr)) return hr;
 
     switch (eSize)
     {
         case TS_DRAW:
+        {
+            int sizingType = ST_STRETCH, scalingType = TSST_NONE, stretchMark = 0;
+            POINT srcSize;
+
+            srcSize.x = rcSrc.right - rcSrc.left;
+            srcSize.y = rcSrc.bottom - rcSrc.top;
+
+            GetThemeEnumValue(hTheme, iPartId, iStateId, TMT_SIZINGTYPE, &sizingType);
+            if (sizingType == ST_TRUESIZE)
+            {
+                GetThemeEnumValue(hTheme, iPartId, iStateId, TMT_TRUESIZESCALINGTYPE, &scalingType);
+                GetThemeInt(hTheme, iPartId, iStateId, TMT_TRUESIZESTRETCHMARK, &stretchMark);
+                if (scalingType == TSST_DPI)
+                {
+                    /* Scale to DPI only if the destination DPI exceeds the source DPI by
+                     * stretchMark percent */
+                    dstDpi = MSSTYLES_GetThemeDPI(hTheme);
+                    if (dstDpi != imageDpi && MulDiv(100, dstDpi, imageDpi) >= stretchMark + 100)
+                    {
+                        srcSize.x = MulDiv(srcSize.x, dstDpi, imageDpi);
+                        srcSize.y = MulDiv(srcSize.y, dstDpi, imageDpi);
+                    }
+                }
+            }
+            *psz = srcSize;
+
             if (prc != NULL)
             {
-                RECT rcDst;
                 POINT dstSize;
-                POINT srcSize;
-                int sizingtype = ST_STRETCH;
                 BOOL uniformsizing = FALSE;
 
-                rcDst = *prc;
+                dstSize.x = prc->right - prc->left;
+                dstSize.y = prc->bottom - prc->top;
 
-                dstSize.x = rcDst.right-rcDst.left;
-                dstSize.y = rcDst.bottom-rcDst.top;
-                srcSize.x = rcSrc.right-rcSrc.left;
-                srcSize.y = rcSrc.bottom-rcSrc.top;
-            
                 GetThemeBool(hTheme, iPartId, iStateId, TMT_UNIFORMSIZING, &uniformsizing);
                 if(uniformsizing) {
                     /* Scale height and width equally */
                     if (dstSize.x*srcSize.y < dstSize.y*srcSize.x)
-                    {
                         dstSize.y = MulDiv (srcSize.y, dstSize.x, srcSize.x);
-                        rcDst.bottom = rcDst.top + dstSize.y;
-                    }
                     else
-                    {
                         dstSize.x = MulDiv (srcSize.x, dstSize.y, srcSize.y);
-                        rcDst.right = rcDst.left + dstSize.x;
-                    }
                 }
-            
-                GetThemeEnumValue(hTheme, iPartId, iStateId, TMT_SIZINGTYPE, &sizingtype);
-                if(sizingtype == ST_TRUESIZE) {
-                    int truesizestretchmark = 100;
-            
-                    if(dstSize.x < 0 || dstSize.y < 0) {
-                        BOOL mirrorimage = TRUE;
-                        GetThemeBool(hTheme, iPartId, iStateId, TMT_MIRRORIMAGE, &mirrorimage);
-                        if(mirrorimage) {
-                            if(dstSize.x < 0) {
-                                rcDst.left += dstSize.x;
-                                rcDst.right += dstSize.x;
-                            }
-                            if(dstSize.y < 0) {
-                                rcDst.top += dstSize.y;
-                                rcDst.bottom += dstSize.y;
-                            }
-                        }
-                    }
-                    /* Whatever TrueSizeStretchMark does - it does not seem to
-                     * be what's outlined below. It appears as if native 
-                     * uxtheme always stretches if dest is smaller than source
-                     * (ie as if TrueSizeStretchMark==100 with the code below) */
-#if 0
-                    /* Only stretch when target exceeds source by truesizestretchmark percent */
-                    GetThemeInt(hTheme, iPartId, iStateId, TMT_TRUESIZESTRETCHMARK, &truesizestretchmark);
-#endif
-                    if(dstSize.x < 0 || dstSize.y < 0 ||
-                      (MulDiv(srcSize.x, 100, dstSize.x) > truesizestretchmark &&
-                      MulDiv(srcSize.y, 100, dstSize.y) > truesizestretchmark)) {
-                        memcpy (psz, &dstSize, sizeof (SIZE));
-                    }
-                    else {
-                        memcpy (psz, &srcSize, sizeof (SIZE));
+
+                if (sizingType == ST_TRUESIZE)
+                {
+                    if ((dstSize.x < 0 || dstSize.y < 0)
+                        || (dstSize.x < srcSize.x && dstSize.y < srcSize.y)
+                        || (scalingType == TSST_SIZE
+                            && MulDiv(100, dstSize.x, srcSize.x) >= stretchMark + 100
+                            && MulDiv(100, dstSize.y, srcSize.y) >= stretchMark + 100))
+                    {
+                        *psz = dstSize;
                     }
                 }
                 else
@@ -493,9 +730,10 @@ static HRESULT get_image_part_size (HTHEME hTheme, HDC hdc, int iPartId,
                     psz->x = abs(dstSize.x);
                     psz->y = abs(dstSize.y);
                 }
-                break;
             }
-            /* else fall through */
+
+            break;
+        }
         case TS_MIN:
             /* FIXME: couldn't figure how native uxtheme computes min size */
         case TS_TRUE:
@@ -515,38 +753,46 @@ static HRESULT UXTHEME_DrawImageBackground(HTHEME hTheme, HDC hdc, int iPartId,
                                     int iStateId, RECT *pRect,
                                     const DTBGOPTS *pOptions)
 {
+    int destCenterWidth, srcCenterWidth, destCenterHeight, srcCenterHeight;
     HRESULT hr = S_OK;
     HBITMAP bmpSrc;
+    HGDIOBJ oldSrc;
+    HDC hdcSrc;
     RECT rcSrc;
     RECT rcDst;
     POINT dstSize;
+    POINT srcSize;
     POINT drawSize;
     int sizingtype = ST_STRETCH;
     INT transparent;
     COLORREF transparentcolor = 0;
-    BOOL hasAlpha;
-    MARGINS sm;
-    GDI_DRAW_STREAM DrawStream;
+    BOOL hasAlpha, hasDefaultTransparentColour;
 
-    hr = UXTHEME_LoadImage(hTheme, hdc, iPartId, iStateId, pRect, FALSE, &bmpSrc, &rcSrc, &hasAlpha);
-    if(FAILED(hr)) 
+    hr = UXTHEME_LoadImage(hTheme, iPartId, iStateId, pRect, FALSE, &bmpSrc, &rcSrc, &hasAlpha,
+                           &hasDefaultTransparentColour, NULL);
+    if(FAILED(hr)) return hr;
+    hdcSrc = CreateCompatibleDC(hdc);
+    if(!hdcSrc) {
+        hr = HRESULT_FROM_WIN32(GetLastError());
         return hr;
-    get_transparency (hTheme, iPartId, iStateId, hasAlpha, &transparent, &transparentcolor, FALSE);
+    }
+    oldSrc = SelectObject(hdcSrc, bmpSrc);
 
     rcDst = *pRect;
+    
+    get_transparency (hTheme, iPartId, iStateId, hasAlpha, hasDefaultTransparentColour, &transparent,
+        &transparentcolor, FALSE);
+
     dstSize.x = rcDst.right-rcDst.left;
     dstSize.y = rcDst.bottom-rcDst.top;
+    srcSize.x = rcSrc.right-rcSrc.left;
+    srcSize.y = rcSrc.bottom-rcSrc.top;
 
-    GetThemeMargins(hTheme, hdc, iPartId, iStateId, TMT_SIZINGMARGINS, NULL, &sm);
     GetThemeEnumValue(hTheme, iPartId, iStateId, TMT_SIZINGTYPE, &sizingtype);
-
-    /*FIXME: Is this ever used? */
-    /*GetThemeBool(hTheme, iPartId, iStateId, TMT_BORDERONLY, &borderonly);*/
-
     if(sizingtype == ST_TRUESIZE) {
         int valign = VA_CENTER, halign = HA_CENTER;
 
-        get_image_part_size (hTheme, hdc, iPartId, iStateId, pRect, TS_DRAW, &drawSize);
+        get_image_part_size(hTheme, iPartId, iStateId, pRect, TS_DRAW, &drawSize);
         GetThemeEnumValue(hTheme, iPartId, iStateId, TMT_VALIGN, &valign);
         GetThemeEnumValue(hTheme, iPartId, iStateId, TMT_HALIGN, &halign);
 
@@ -560,36 +806,138 @@ static HRESULT UXTHEME_DrawImageBackground(HTHEME hTheme, HDC hdc, int iPartId,
             rcDst.top = rcDst.bottom - drawSize.y;
         rcDst.right = rcDst.left + drawSize.x;
         rcDst.bottom = rcDst.top + drawSize.y;
-        *pRect = rcDst;
+        if(!UXTHEME_StretchBlt(hdc, rcDst.left, rcDst.top, drawSize.x, drawSize.y,
+                                hdcSrc, rcSrc.left, rcSrc.top, srcSize.x, srcSize.y,
+                                transparent, transparentcolor))
+            hr = HRESULT_FROM_WIN32(GetLastError());
     }
+    else {
+        HDC hdcDst = NULL;
+        MARGINS sm;
+        POINT org;
 
-    DrawStream.signature = 0x44727753;
-    DrawStream.reserved = 0;
-    DrawStream.unknown1 = 1;
-    DrawStream.unknown2 = 9;
-    DrawStream.hDC = hdc;
-    DrawStream.hImage = bmpSrc;
-    DrawStream.crTransparent = transparentcolor;
-    DrawStream.rcSrc = rcSrc;
-    DrawStream.rcDest = rcDst;
-    DrawStream.leftSizingMargin = sm.cxLeftWidth;
-    DrawStream.rightSizingMargin = sm.cxRightWidth;
-    DrawStream.topSizingMargin = sm.cyTopHeight;
-    DrawStream.bottomSizingMargin = sm.cyBottomHeight;
-    DrawStream.drawOption = 0;
+        dstSize.x = abs(dstSize.x);
+        dstSize.y = abs(dstSize.y);
 
-    if (transparent == ALPHABLEND_FULL)
-        DrawStream.drawOption |= DS_TRANSPARENTALPHA;
-    else if (transparent == ALPHABLEND_BINARY)
-        DrawStream.drawOption |= DS_TRANSPARENTCLR;
+        GetThemeMargins(hTheme, hdc, iPartId, iStateId, TMT_SIZINGMARGINS, NULL, &sm);
 
-    if (sizingtype == ST_TILE)
-        DrawStream.drawOption |= DS_TILE;
-    else if (sizingtype == ST_TRUESIZE)
-        DrawStream.drawOption |= DS_TRUESIZE;
+        /* Resize sizing margins if destination is smaller */
+        if (sm.cyTopHeight + sm.cyBottomHeight > dstSize.y || sm.cxLeftWidth + sm.cxRightWidth > dstSize.x) {
+            if (sm.cyTopHeight + sm.cyBottomHeight > dstSize.y) {
+                sm.cyTopHeight = MulDiv(sm.cyTopHeight, dstSize.y, srcSize.y);
+                sm.cyBottomHeight = dstSize.y - sm.cyTopHeight;
+            }
 
-    GdiDrawStream(hdc, sizeof(DrawStream), &DrawStream);  
-    return HRESULT_FROM_WIN32(GetLastError());
+            if (sm.cxLeftWidth + sm.cxRightWidth > dstSize.x) {
+                sm.cxLeftWidth = MulDiv(sm.cxLeftWidth, dstSize.x, srcSize.x);
+                sm.cxRightWidth = dstSize.x - sm.cxLeftWidth;
+            }
+        }
+
+        hdcDst = hdc;
+        OffsetViewportOrgEx(hdcDst, rcDst.left, rcDst.top, &org);
+
+        /* Upper left corner */
+        if(!UXTHEME_Blt(hdcDst, 0, 0, sm.cxLeftWidth, sm.cyTopHeight,
+                        hdcSrc, rcSrc.left, rcSrc.top, 
+                        transparent, transparentcolor)) {
+            hr = HRESULT_FROM_WIN32(GetLastError());
+            goto draw_error; 
+        }
+        /* Upper right corner */
+        if(!UXTHEME_Blt (hdcDst, dstSize.x-sm.cxRightWidth, 0, 
+                         sm.cxRightWidth, sm.cyTopHeight,
+                         hdcSrc, rcSrc.right-sm.cxRightWidth, rcSrc.top, 
+                         transparent, transparentcolor)) {
+            hr = HRESULT_FROM_WIN32(GetLastError());
+            goto draw_error; 
+        }
+        /* Lower left corner */
+        if(!UXTHEME_Blt (hdcDst, 0, dstSize.y-sm.cyBottomHeight, 
+                         sm.cxLeftWidth, sm.cyBottomHeight,
+                         hdcSrc, rcSrc.left, rcSrc.bottom-sm.cyBottomHeight, 
+                         transparent, transparentcolor)) {
+            hr = HRESULT_FROM_WIN32(GetLastError());
+            goto draw_error; 
+        }
+        /* Lower right corner */
+        if(!UXTHEME_Blt (hdcDst, dstSize.x-sm.cxRightWidth, dstSize.y-sm.cyBottomHeight, 
+                         sm.cxRightWidth, sm.cyBottomHeight,
+                         hdcSrc, rcSrc.right-sm.cxRightWidth, rcSrc.bottom-sm.cyBottomHeight, 
+                         transparent, transparentcolor)) {
+            hr = HRESULT_FROM_WIN32(GetLastError());
+            goto draw_error; 
+        }
+
+        destCenterWidth  = dstSize.x - (sm.cxLeftWidth + sm.cxRightWidth);
+        srcCenterWidth   = srcSize.x - (sm.cxLeftWidth + sm.cxRightWidth);
+        destCenterHeight = dstSize.y - (sm.cyTopHeight + sm.cyBottomHeight);
+        srcCenterHeight  = srcSize.y - (sm.cyTopHeight + sm.cyBottomHeight);
+
+        if(destCenterWidth > 0) {
+            /* Center top */
+            if(!UXTHEME_SizedBlt (hdcDst, sm.cxLeftWidth, 0,
+                                  destCenterWidth, sm.cyTopHeight,
+                                  hdcSrc, rcSrc.left+sm.cxLeftWidth, rcSrc.top,
+                                  srcCenterWidth, sm.cyTopHeight,
+                                  sizingtype, transparent, transparentcolor)) {
+                hr = HRESULT_FROM_WIN32(GetLastError());
+                goto draw_error;
+            }
+            /* Center bottom */
+            if(!UXTHEME_SizedBlt (hdcDst, sm.cxLeftWidth, dstSize.y-sm.cyBottomHeight,
+                                  destCenterWidth, sm.cyBottomHeight,
+                                  hdcSrc, rcSrc.left+sm.cxLeftWidth, rcSrc.bottom-sm.cyBottomHeight,
+                                  srcCenterWidth, sm.cyBottomHeight,
+                                  sizingtype, transparent, transparentcolor)) {
+                hr = HRESULT_FROM_WIN32(GetLastError());
+                goto draw_error;
+            }
+        }
+        if(destCenterHeight > 0) {
+            /* Left center */
+            if(!UXTHEME_SizedBlt (hdcDst, 0, sm.cyTopHeight,
+                                  sm.cxLeftWidth, destCenterHeight,
+                                  hdcSrc, rcSrc.left, rcSrc.top+sm.cyTopHeight,
+                                  sm.cxLeftWidth, srcCenterHeight,
+                                  sizingtype,
+                                  transparent, transparentcolor)) {
+                hr = HRESULT_FROM_WIN32(GetLastError());
+                goto draw_error;
+            }
+            /* Right center */
+            if(!UXTHEME_SizedBlt (hdcDst, dstSize.x-sm.cxRightWidth, sm.cyTopHeight,
+                                  sm.cxRightWidth, destCenterHeight,
+                                  hdcSrc, rcSrc.right-sm.cxRightWidth, rcSrc.top+sm.cyTopHeight,
+                                  sm.cxRightWidth, srcCenterHeight,
+                                  sizingtype, transparent, transparentcolor)) {
+                hr = HRESULT_FROM_WIN32(GetLastError());
+                goto draw_error;
+            }
+        }
+        if(destCenterHeight > 0 && destCenterWidth > 0) {
+            BOOL borderonly = FALSE;
+            GetThemeBool(hTheme, iPartId, iStateId, TMT_BORDERONLY, &borderonly);
+            if(!borderonly) {
+                /* Center */
+                if(!UXTHEME_SizedBlt (hdcDst, sm.cxLeftWidth, sm.cyTopHeight,
+                                      destCenterWidth, destCenterHeight,
+                                      hdcSrc, rcSrc.left+sm.cxLeftWidth, rcSrc.top+sm.cyTopHeight,
+                                      srcCenterWidth, srcCenterHeight,
+                                      sizingtype, transparent, transparentcolor)) {
+                    hr = HRESULT_FROM_WIN32(GetLastError());
+                    goto draw_error; 
+                }
+            }
+        }
+
+draw_error:
+        SetViewportOrgEx (hdcDst, org.x, org.y, NULL);
+    }
+    SelectObject(hdcSrc, oldSrc);
+    DeleteDC(hdcSrc);
+    *pRect = rcDst;
+    return hr;
 }
 
 /***********************************************************************
@@ -651,7 +999,7 @@ static HRESULT UXTHEME_DrawBackgroundFill(HTHEME hTheme, HDC hdc, int iPartId,
     HRESULT hr = S_OK;
     int filltype = FT_SOLID;
 
-    TRACE("(%d,%d,%d)\n", iPartId, iStateId, pOptions->dwFlags);
+    TRACE("(%d,%d,%ld)\n", iPartId, iStateId, pOptions->dwFlags);
 
     if(pOptions->dwFlags & DTBG_OMITCONTENT)
         return S_OK;
@@ -749,7 +1097,7 @@ HRESULT WINAPI DrawThemeBackgroundEx(HTHEME hTheme, HDC hdc, int iPartId,
     int bgtype = BT_BORDERFILL;
     RECT rt;
 
-    TRACE("(%p,%p,%d,%d,%d,%d)\n", hTheme, hdc, iPartId, iStateId,pRect->left,pRect->top);
+    TRACE("(%p,%p,%d,%d,%ld,%ld)\n", hTheme, hdc, iPartId, iStateId,pRect->left,pRect->top);
     if(!hTheme)
         return E_HANDLE;
 
@@ -779,22 +1127,8 @@ HRESULT WINAPI DrawThemeBackgroundEx(HTHEME hTheme, HDC hdc, int iPartId,
         /* This should never happen, and hence I don't know what to return */
         hr = E_FAIL;
     }
-#if 0
     if(SUCCEEDED(hr))
-#endif
-    {
-        RECT rcGlyph = *pRect;
-        MARGINS margin;
-        hr = GetThemeMargins(hTheme, hdc, iPartId, iStateId, TMT_CONTENTMARGINS, NULL, &margin);
-        if(SUCCEEDED(hr))
-        {
-            rcGlyph.left += margin.cxLeftWidth;
-            rcGlyph.right -= margin.cxRightWidth;
-            rcGlyph.top += margin.cyTopHeight;
-            rcGlyph.bottom -= margin.cyBottomHeight;
-        }
-        hr = UXTHEME_DrawGlyph(hTheme, hdc, iPartId, iStateId, &rcGlyph, opts);
-    }
+        hr = UXTHEME_DrawGlyph(hTheme, hdc, iPartId, iStateId, &rt, opts);
     if(opts->dwFlags & DTBG_CLIPRECT) {
         if(hasClip == 0)
             SelectClipRgn(hdc, NULL);
@@ -1165,7 +1499,7 @@ static HRESULT draw_diag_edge (HDC hdc, HTHEME theme, int part, int state,
     }
 
     /* Adjust rectangle if asked */
-    if(uFlags & BF_ADJUST)
+    if(contentsRect && uFlags & BF_ADJUST)
     {
         *contentsRect = *rc;
         if(uFlags & BF_LEFT)   contentsRect->left   += add;
@@ -1317,7 +1651,7 @@ static HRESULT draw_rect_edge (HDC hdc, HTHEME theme, int part, int state,
             DeleteObject (br);
         }
 
-        if(uFlags & BF_ADJUST)
+        if(contentsRect && uFlags & BF_ADJUST)
             *contentsRect = InnerRect;
     }
 
@@ -1343,7 +1677,9 @@ HRESULT WINAPI DrawThemeEdge(HTHEME hTheme, HDC hdc, int iPartId,
                              int iStateId, const RECT *pDestRect, UINT uEdge,
                              UINT uFlags, RECT *pContentRect)
 {
-    TRACE("%d %d 0x%08x 0x%08x\n", iPartId, iStateId, uEdge, uFlags);
+    TRACE("%p %p %d %d %s 0x%08x 0x%08x %s\n", hTheme, hdc, iPartId, iStateId,
+          wine_dbgstr_rect(pDestRect), uEdge, uFlags, wine_dbgstr_rect(pContentRect));
+
     if(!hTheme)
         return E_HANDLE;
      
@@ -1362,31 +1698,86 @@ HRESULT WINAPI DrawThemeEdge(HTHEME hTheme, HDC hdc, int iPartId,
 HRESULT WINAPI DrawThemeIcon(HTHEME hTheme, HDC hdc, int iPartId, int iStateId,
                              const RECT *pRect, HIMAGELIST himl, int iImageIndex)
 {
-    FIXME("%d %d: stub\n", iPartId, iStateId);
-    if(!hTheme)
+    INT effect = ICE_NONE, saturation = 0, alpha = 128;
+    IImageList *image_list = (IImageList *)himl;
+    IMAGELISTDRAWPARAMS params = {0};
+    COLORREF color = 0;
+
+    TRACE("%p %p %d %d %s %p %d\n", hTheme, hdc, iPartId, iStateId, wine_dbgstr_rect(pRect), himl,
+          iImageIndex);
+
+    if (!hTheme)
         return E_HANDLE;
-    return E_NOTIMPL;
+
+    GetThemeEnumValue(hTheme, iPartId, iStateId, TMT_ICONEFFECT, &effect);
+    switch (effect)
+    {
+    case ICE_NONE:
+        params.fState = ILS_NORMAL;
+        break;
+    case ICE_GLOW:
+        GetThemeColor(hTheme, iPartId, iStateId, TMT_GLOWCOLOR, &color);
+        params.fState = ILS_GLOW;
+        params.crEffect = color;
+        break;
+    case ICE_SHADOW:
+        GetThemeColor(hTheme, iPartId, iStateId, TMT_SHADOWCOLOR, &color);
+        params.fState = ILS_SHADOW;
+        params.crEffect = color;
+        break;
+    case ICE_PULSE:
+        GetThemeInt(hTheme, iPartId, iStateId, TMT_SATURATION, &saturation);
+        params.fState = ILS_SATURATE;
+        params.Frame = saturation;
+        break;
+    case ICE_ALPHA:
+        GetThemeInt(hTheme, iPartId, iStateId, TMT_ALPHALEVEL, &alpha);
+        params.fState = ILS_ALPHA;
+        params.Frame = alpha;
+        break;
+    }
+
+    params.cbSize = sizeof(params);
+    params.himl = himl;
+    params.i = iImageIndex;
+    params.hdcDst = hdc;
+    params.x = pRect->left;
+    params.y = pRect->top;
+    params.cx = pRect->right - pRect->left;
+    params.cy = pRect->bottom - pRect->top;
+    params.rgbBk = CLR_NONE;
+    params.rgbFg = CLR_NONE;
+    params.fStyle = ILD_TRANSPARENT;
+    return IImageList_Draw(image_list, &params);
 }
 
-typedef int (WINAPI * DRAWSHADOWTEXT)(HDC hdc, LPCWSTR pszText, UINT cch, RECT *prc, DWORD dwFlags,
-                          COLORREF crText, COLORREF crShadow, int ixOffset, int iyOffset);
+/***********************************************************************
+ *      DrawThemeText                                       (UXTHEME.@)
+ */
+HRESULT WINAPI DrawThemeText(HTHEME hTheme, HDC hdc, int iPartId, int iStateId,
+                             LPCWSTR pszText, int iCharCount, DWORD flags,
+                             DWORD flags2, const RECT *pRect)
+{
+    DTTOPTS opts = { 0 };
+    RECT rt;
+
+    TRACE("%d %d\n", iPartId, iStateId);
+
+    rt = *pRect;
+
+    opts.dwSize = sizeof(opts);
+    if (flags2 & DTT_GRAYED) {
+        opts.dwFlags = DTT_TEXTCOLOR;
+        opts.crText = GetSysColor(COLOR_GRAYTEXT);
+    }
+    return DrawThemeTextEx(hTheme, hdc, iPartId, iStateId, pszText, iCharCount, flags, &rt, &opts);
+}
 
 /***********************************************************************
  *      DrawThemeTextEx                                     (UXTHEME.@)
  */
-HRESULT
-WINAPI
-DrawThemeTextEx(
-    _In_ HTHEME hTheme,
-    _In_ HDC hdc,
-    _In_ int iPartId,
-    _In_ int iStateId,
-    _In_ LPCWSTR pszText,
-    _In_ int iCharCount,
-    _In_ DWORD dwTextFlags,
-    _Inout_ LPRECT pRect,
-    _In_ const DTTOPTS *options
-)
+HRESULT WINAPI DrawThemeTextEx(HTHEME hTheme, HDC hdc, int iPartId, int iStateId,
+    LPCWSTR pszText, int iCharCount, DWORD flags, RECT *rect, const DTTOPTS *options)
 {
     HRESULT hr;
     HFONT hFont = NULL;
@@ -1394,127 +1785,50 @@ DrawThemeTextEx(
     LOGFONTW logfont;
     COLORREF textColor;
     COLORREF oldTextColor;
-    COLORREF shadowColor;
-    POINT ptShadowOffset;
     int oldBkMode;
-    RECT rt;
-    int iShadowType;
-    DWORD optFlags;
+    int fontProp = TMT_FONT;
+
+    TRACE("%p %p %d %d %s:%d 0x%08lx %p %p\n", hTheme, hdc, iPartId, iStateId,
+        debugstr_wn(pszText, iCharCount), iCharCount, flags, rect, options);
 
     if(!hTheme)
         return E_HANDLE;
-    if (!options)
-        return E_NOTIMPL;
 
-    optFlags = options->dwFlags;
-
-    hr = GetThemeFont(hTheme, hdc, iPartId, iStateId, TMT_FONT, &logfont);
-    if(SUCCEEDED(hr)) 
-    {
-        hFont = CreateFontIndirectW(&logfont);
-        if(!hFont)
-        {
-            ERR("Failed to create font\n");
-        }
+    if(options) {
+        if(options->dwFlags & ~(DTT_TEXTCOLOR | DTT_FONTPROP))
+            FIXME("unsupported flags 0x%08lx\n", options->dwFlags);
+        if(options->dwFlags & DTT_FONTPROP)
+            fontProp = options->iFontPropId;
+        if(options->dwFlags & DTT_TEXTCOLOR)
+            textColor = options->crText;
     }
 
-    CopyRect(&rt, pRect);
-    if(hFont)
-        oldFont = SelectObject(hdc, hFont);
-
-    oldBkMode = SetBkMode(hdc, TRANSPARENT);
-
-    if (optFlags & DTT_TEXTCOLOR)
-    {
-        textColor = options->crText;
-    }
-    else
-    {
-        int textColorProp = TMT_TEXTCOLOR;
-        if (optFlags & DTT_COLORPROP)
-            textColorProp = options->iColorPropId;
-
-        if (FAILED(GetThemeColor(hTheme, iPartId, iStateId, textColorProp, &textColor)))
+    if(!options || !(options->dwFlags & DTT_TEXTCOLOR)) {
+        if(FAILED(GetThemeColor(hTheme, iPartId, iStateId, TMT_TEXTCOLOR, &textColor)))
             textColor = GetTextColor(hdc);
     }
 
-    hr = GetThemeEnumValue(hTheme, iPartId, iStateId, TMT_TEXTSHADOWTYPE, &iShadowType);
-    if (SUCCEEDED(hr))
-    {
-        hr = GetThemeColor(hTheme, iPartId, iStateId, TMT_TEXTSHADOWCOLOR, &shadowColor);
-        if (FAILED(hr))
-        {
-            ERR("GetThemeColor failed\n");
-        }
-
-        hr = GetThemePosition(hTheme, iPartId, iStateId, TMT_TEXTSHADOWOFFSET, &ptShadowOffset);
-        if (FAILED(hr))
-        {
-            ERR("GetThemePosition failed\n");
-        }
-
-        if (iShadowType == TST_SINGLE)
-        {
-            oldTextColor = SetTextColor(hdc, shadowColor);
-            OffsetRect(&rt, ptShadowOffset.x, ptShadowOffset.y);
-            DrawTextW(hdc, pszText, iCharCount, &rt, dwTextFlags);
-            OffsetRect(&rt, -ptShadowOffset.x, -ptShadowOffset.y);
-            SetTextColor(hdc, oldTextColor);
-        }
-        else if (iShadowType == TST_CONTINUOUS)
-        {
-            HANDLE hcomctl32 = GetModuleHandleW(L"comctl32.dll");
-            DRAWSHADOWTEXT pDrawShadowText;
-            if (!hcomctl32)
-            {
-                hcomctl32 = LoadLibraryW(L"comctl32.dll");
-                if (!hcomctl32)
-                    ERR("Failed to load comctl32\n");
-            }
-
-            pDrawShadowText = (DRAWSHADOWTEXT)GetProcAddress(hcomctl32, "DrawShadowText");
-            if (pDrawShadowText)
-            {
-                pDrawShadowText(hdc, pszText, iCharCount, &rt, dwTextFlags, textColor, shadowColor, ptShadowOffset.x, ptShadowOffset.y);
-                goto cleanup;
-            }
-        }
+    hr = GetThemeFont(hTheme, hdc, iPartId, iStateId, fontProp, &logfont);
+    if(SUCCEEDED(hr)) {
+        hFont = CreateFontIndirectW(&logfont);
+        if(!hFont)
+            TRACE("Failed to create font\n");
     }
 
+    if(hFont)
+        oldFont = SelectObject(hdc, hFont);
+
     oldTextColor = SetTextColor(hdc, textColor);
-    DrawTextW(hdc, pszText, iCharCount, &rt, dwTextFlags);
-    SetTextColor(hdc, oldTextColor);
-cleanup:
+    oldBkMode = SetBkMode(hdc, TRANSPARENT);
+    DrawTextW(hdc, pszText, iCharCount, rect, flags);
     SetBkMode(hdc, oldBkMode);
+    SetTextColor(hdc, oldTextColor);
 
     if(hFont) {
         SelectObject(hdc, oldFont);
         DeleteObject(hFont);
     }
     return S_OK;
-}
-
-/***********************************************************************
- *      DrawThemeText                                       (UXTHEME.@)
- */
-HRESULT WINAPI DrawThemeText(HTHEME hTheme, HDC hdc, int iPartId, int iStateId,
-                             LPCWSTR pszText, int iCharCount, DWORD dwTextFlags,
-                             DWORD dwTextFlags2, const RECT *pRect)
-{
-    DTTOPTS opts = { 0 };
-    RECT rt = *pRect;
-
-    TRACE("(%p %p %d %d %s:%d 0x%08lx 0x%08lx %p)\n", hTheme, hdc, iPartId, iStateId,
-        debugstr_wn(pszText, iCharCount), iCharCount, dwTextFlags, dwTextFlags2, pRect);
-
-    if (dwTextFlags2 & DTT_GRAYED)
-    {
-        opts.dwFlags = DTT_TEXTCOLOR;
-        opts.crText = GetSysColor(COLOR_GRAYTEXT);
-    }
-    opts.dwSize = sizeof(opts);
-
-    return DrawThemeTextEx(hTheme, hdc, iPartId, iStateId, pszText, iCharCount, dwTextFlags, &rt, &opts);
 }
 
 /***********************************************************************
@@ -1614,147 +1928,116 @@ HRESULT WINAPI GetThemeBackgroundExtent(HTHEME hTheme, HDC hdc, int iPartId,
     return S_OK;
 }
 
-
-static HBITMAP UXTHEME_DrawThemePartToDib(HTHEME hTheme, HDC hdc, int iPartId, int iStateId, LPCRECT pRect)
+static inline void flush_rgn_data( HRGN rgn, RGNDATA *data )
 {
-    HDC hdcMem;
-    BITMAPINFO bmi;
-    HBITMAP hbmp, hbmpOld;
-    HBRUSH hbrBack;
+    HRGN tmp = ExtCreateRegion( NULL, data->rdh.dwSize + data->rdh.nRgnSize, data );
 
-    hdcMem = CreateCompatibleDC(0);
-
-    memset(&bmi, 0, sizeof(bmi));
-    bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
-    bmi.bmiHeader.biWidth = pRect->right;
-    bmi.bmiHeader.biHeight = -pRect->bottom;
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    hbmp = CreateDIBSection(hdcMem, &bmi, DIB_RGB_COLORS , NULL, 0, 0);
-
-    hbmpOld = (HBITMAP)SelectObject(hdcMem, hbmp);
-    
-    /* FIXME: use an internal function that doesn't do transparent blt */
-    hbrBack = CreateSolidBrush(RGB(255,0,255));
-
-    FillRect(hdcMem, pRect, hbrBack);
-
-    DrawThemeBackground(hTheme, hdcMem, iPartId, iStateId, pRect, NULL);
-
-    DeleteObject(hbrBack);
-    SelectObject(hdcMem, hbmpOld);
-    DeleteObject(hdcMem);
-
-    return hbmp;
+    CombineRgn( rgn, rgn, tmp, RGN_OR );
+    DeleteObject( tmp );
+    data->rdh.nCount = 0;
 }
 
-#define PT_IN_RECT(lprc,x,y) ( x >= lprc->left && x < lprc->right && \
-                               y >= lprc->top  && y < lprc->bottom)
-
-static HRGN UXTHEME_RegionFromDibBits(RGBQUAD* pBuffer, RGBQUAD* pclrTransparent, LPCRECT pRect)
+static inline void add_row( HRGN rgn, RGNDATA *data, int x, int y, int len )
 {
-    int x, y, xstart;
-    int cMaxRgnRects, cRgnDataSize, cRgnRects;
-    RECT* prcCurrent;
-    PRGNDATA prgnData;
-    ULONG clrTransparent, *pclrCurrent;
-    HRGN hrgnRet;
+    RECT *rect = (RECT *)data->Buffer + data->rdh.nCount;
 
-    pclrCurrent = (PULONG)pBuffer;
-    clrTransparent = *(PULONG)pclrTransparent;
+    if (len <= 0) return;
+    rect->left   = x;
+    rect->top    = y;
+    rect->right  = x + len;
+    rect->bottom = y + 1;
+    data->rdh.nCount++;
+    if (data->rdh.nCount * sizeof(RECT) > data->rdh.nRgnSize - sizeof(RECT))
+        flush_rgn_data( rgn, data );
+}
 
-    /* Create a region and pre-allocate memory enough for 3 spaces in one row*/
-    cRgnRects = 0;
-    cMaxRgnRects = 4* (pRect->bottom-pRect->top);
-    cRgnDataSize = sizeof(RGNDATA) + cMaxRgnRects * sizeof(RECT);
+static HRESULT create_image_bg_region(HTHEME theme, int part, int state, const RECT *rect, HRGN *rgn)
+{
+    RECT r;
+    HDC dc;
+    HBITMAP bmp;
+    HRGN hrgn;
+    BOOL istrans;
+    COLORREF transcolour;
+    HBRUSH transbrush;
+    unsigned int x, y, start;
+    BITMAPINFO bitmapinfo;
+    DWORD *bits;
+    char buffer[4096];
+    RGNDATA *data = (RGNDATA *)buffer;
 
-    /* Allocate the region data */
-    prgnData = (PRGNDATA)HeapAlloc(GetProcessHeap(), 0, cRgnDataSize);
-
-    prcCurrent = (PRECT)prgnData->Buffer;
-    
-    /* Calculate the region rects */
-    y=0;
-    /* Scan each line of the bitmap */
-    while(y<pRect->bottom)
-    {
-        x=0;
-        /* Scan each pixel */
-        while (x<pRect->right)
-        {
-            /* Check if the pixel is not transparent and it is in the requested rect */
-            if(*pclrCurrent != clrTransparent && PT_IN_RECT(pRect,x,y))
-            {
-                xstart = x;
-                /* Find the end of the opaque row of pixels */
-                while (x<pRect->right)
-                {
-                    if(*pclrCurrent == clrTransparent || !PT_IN_RECT(pRect,x,y))
-                        break;
-                    x++;
-                    pclrCurrent++;
-                }
-
-                /* Add the scaned line to the region */
-                SetRect(prcCurrent, xstart, y,x,y+1);
-                prcCurrent++;
-                cRgnRects++;
-
-                /* Increase the size of the buffer if it is full */
-                if(cRgnRects == cMaxRgnRects)
-                {
-                    cMaxRgnRects *=2;
-                    cRgnDataSize = sizeof(RGNDATA) + cMaxRgnRects * sizeof(RECT);
-                    prgnData = (PRGNDATA)HeapReAlloc(GetProcessHeap(), 
-                                                     0, 
-                                                     prgnData, 
-                                                     cRgnDataSize);
-                    prcCurrent = (RECT*)prgnData->Buffer + cRgnRects;
-                }
-            }
-            else
-            {
-                x++;
-                pclrCurrent++;
-            }
-        }
-        y++;
+    if (FAILED(GetThemeBool(theme, part, state, TMT_TRANSPARENT, &istrans)) || !istrans) {
+        *rgn = CreateRectRgn(rect->left, rect->top, rect->right, rect->bottom);
+        return S_OK;
     }
 
-    /* Fill the region data header */
-    prgnData->rdh.dwSize = sizeof(prgnData->rdh);
-    prgnData->rdh.iType = RDH_RECTANGLES;
-    prgnData->rdh.nCount = cRgnRects;
-    prgnData->rdh.nRgnSize = cRgnDataSize;
-    prgnData->rdh.rcBound = *pRect;
+    r = *rect;
+    OffsetRect(&r, -r.left, -r.top);
 
-    /* Create the region*/
-    hrgnRet = ExtCreateRegion (NULL, cRgnDataSize, prgnData);
+    if (FAILED(GetThemeColor(theme, part, state, TMT_TRANSPARENTCOLOR, &transcolour)))
+        transcolour = DEFAULT_TRANSPARENT_COLOR;
 
-    /* Free the region data*/
-    HeapFree(GetProcessHeap(),0,prgnData);
+    dc = CreateCompatibleDC(NULL);
+    if (!dc) {
+        WARN("CreateCompatibleDC failed\n");
+        return E_FAIL;
+    }
 
-    /* return the region*/
-    return hrgnRet;
-}
+    bitmapinfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bitmapinfo.bmiHeader.biWidth = rect->right - rect->left;
+    bitmapinfo.bmiHeader.biHeight = -(rect->bottom - rect->top);
+    bitmapinfo.bmiHeader.biPlanes = 1;
+    bitmapinfo.bmiHeader.biBitCount = 32;
+    bitmapinfo.bmiHeader.biCompression = BI_RGB;
+    bitmapinfo.bmiHeader.biSizeImage = bitmapinfo.bmiHeader.biWidth * bitmapinfo.bmiHeader.biHeight * 4;
+    bitmapinfo.bmiHeader.biXPelsPerMeter = 0;
+    bitmapinfo.bmiHeader.biYPelsPerMeter = 0;
+    bitmapinfo.bmiHeader.biClrUsed = 0;
+    bitmapinfo.bmiHeader.biClrImportant = 0;
 
-HRESULT UXTHEME_GetImageBackBackgroundRegion(HTHEME hTheme, HDC hdc, int iPartId, int iStateId, LPCRECT pRect, HRGN *pRegion)
-{
-    HBITMAP hbmp;
-    DIBSECTION dib;
-    RGBQUAD clrTransparent = {0xFF,0x0, 0xFF,0x0};
+    bmp = CreateDIBSection(dc, &bitmapinfo, DIB_RGB_COLORS, (void**)&bits, NULL, 0);
+    if (!bmp) {
+        WARN("CreateDIBSection failed\n");
+        DeleteDC(dc);
+        return E_FAIL;
+    }
 
-    /* Draw the theme part to a dib */
-    hbmp = UXTHEME_DrawThemePartToDib(hTheme, hdc, iPartId, iStateId, pRect);
+    SelectObject(dc, bmp);
 
-    /* Retrieve the info of the dib section */
-    GetObjectW(hbmp, sizeof (DIBSECTION), &dib);
+    transbrush = CreateSolidBrush(transcolour);
+    FillRect(dc, &r, transbrush);
+    DeleteObject(transbrush);
 
-    /* Convert the bits of the dib section to a region */
-    *pRegion = UXTHEME_RegionFromDibBits((RGBQUAD*)dib.dsBm.bmBits, &clrTransparent, pRect);
+    if (FAILED(DrawThemeBackground(theme, dc, part, state, &r, NULL))) {
+        WARN("DrawThemeBackground failed\n");
+        DeleteObject(bmp);
+        DeleteDC(dc);
+        return E_FAIL;
+    }
 
-    /* Free the temp bitmap */
-    DeleteObject(hbmp);
+    data->rdh.dwSize = sizeof(data->rdh);
+    data->rdh.iType  = RDH_RECTANGLES;
+    data->rdh.nCount = 0;
+    data->rdh.nRgnSize = sizeof(buffer) - sizeof(data->rdh);
+
+    hrgn = CreateRectRgn(0, 0, 0, 0);
+
+    for (y = 0; y < r.bottom; y++, bits += r.right) {
+        x = 0;
+        while (x < r.right) {
+            while (x < r.right && (bits[x] & 0xffffff) == transcolour) x++;
+            start = x;
+            while (x < r.right && !((bits[x] & 0xffffff) == transcolour)) x++;
+            add_row( hrgn, data, rect->left + start, rect->top + y, x - start );
+        }
+    }
+
+    if (data->rdh.nCount > 0) flush_rgn_data(hrgn, data);
+
+    *rgn = hrgn;
+
+    DeleteObject(bmp);
+    DeleteDC(dc);
 
     return S_OK;
 }
@@ -1780,19 +2063,45 @@ HRESULT WINAPI GetThemeBackgroundRegion(HTHEME hTheme, HDC hdc, int iPartId,
 
     GetThemeEnumValue(hTheme, iPartId, iStateId, TMT_BGTYPE, &bgtype);
     if(bgtype == BT_IMAGEFILE) {
-        hr = UXTHEME_GetImageBackBackgroundRegion(hTheme, hdc, iPartId, iStateId, pRect, pRegion);
+        hr = create_image_bg_region(hTheme, iPartId, iStateId, pRect, pRegion);
     }
     else if(bgtype == BT_BORDERFILL) {
         *pRegion = CreateRectRgn(pRect->left, pRect->top, pRect->right, pRect->bottom);
         if(!*pRegion)
             hr = HRESULT_FROM_WIN32(GetLastError());
     }
+    else if (bgtype == BT_NONE)
+    {
+        hr = E_UNEXPECTED;
+    }
     else {
-        FIXME("Unknown background type\n");
+        FIXME("Unknown background type %d\n", bgtype);
         /* This should never happen, and hence I don't know what to return */
         hr = E_FAIL;
     }
     return hr;
+}
+
+/***********************************************************************
+ *      GetThemeBitmap                                      (UXTHEME.@)
+ */
+HRESULT WINAPI GetThemeBitmap(HTHEME hTheme, int iPartId, int iStateId,
+                              int iPropId, ULONG dwFlags, HBITMAP *phBitmap)
+{
+    FIXME("(%p,%d,%d,%d,0x%08lx,%p) stub\n", hTheme, iPartId, iStateId, iPropId, dwFlags, phBitmap);
+
+    return E_NOTIMPL;
+}
+
+/***********************************************************************
+ *      GetThemeStream                                      (UXTHEME.@)
+ */
+HRESULT WINAPI GetThemeStream(HTHEME hTheme, int iPartId, int iStateId, int iPropId,
+                              void **ppvStream, DWORD *pcbStream, HINSTANCE hInst)
+{
+    FIXME("(%p,%d,%d,%d,%p,%p,%p) stub\n", hTheme, iPartId, iStateId, iPropId, ppvStream, pcbStream, hInst);
+
+    return E_NOTIMPL;
 }
 
 /* compute part size for "borderfill" backgrounds */
@@ -1833,7 +2142,7 @@ HRESULT WINAPI GetThemePartSize(HTHEME hTheme, HDC hdc, int iPartId,
     if (bgtype == BT_NONE)
         /* do nothing */;
     else if(bgtype == BT_IMAGEFILE)
-        hr = get_image_part_size (hTheme, hdc, iPartId, iStateId, prc, eSize, &size);
+        hr = get_image_part_size(hTheme, iPartId, iStateId, prc, eSize, &size);
     else if(bgtype == BT_BORDERFILL)
         hr = get_border_background_size (hTheme, iPartId, iStateId, eSize, &size);
     else {
@@ -1861,7 +2170,7 @@ HRESULT WINAPI GetThemeTextExtent(HTHEME hTheme, HDC hdc, int iPartId,
     LOGFONTW logfont;
     RECT rt = {0,0,0xFFFF,0xFFFF};
     
-    TRACE("%d %d: stub\n", iPartId, iStateId);
+    TRACE("%d %d\n", iPartId, iStateId);
     if(!hTheme)
         return E_HANDLE;
 
@@ -1942,16 +2251,13 @@ BOOL WINAPI IsThemeBackgroundPartiallyTransparent(HTHEME hTheme, int iPartId,
 
     GetThemeEnumValue(hTheme, iPartId, iStateId, TMT_BGTYPE, &bgtype);
 
-#ifdef __REACTOS__
-    if (bgtype == BT_NONE) return TRUE;
-#endif
     if (bgtype != BT_IMAGEFILE) return FALSE;
 
-    if(FAILED (UXTHEME_LoadImage (hTheme, 0, iPartId, iStateId, &rect, FALSE, 
-                                  &bmpSrc, &rcSrc, &hasAlpha))) 
+    if (FAILED(UXTHEME_LoadImage(hTheme, iPartId, iStateId, &rect, FALSE, &bmpSrc, &rcSrc,
+                                 &hasAlpha, NULL, NULL)))
         return FALSE;
 
-    get_transparency (hTheme, iPartId, iStateId, hasAlpha, &transparent,
+    get_transparency (hTheme, iPartId, iStateId, hasAlpha, TRUE, &transparent,
         &transparentcolor, FALSE);
     return (transparent != ALPHABLEND_NONE);
 }

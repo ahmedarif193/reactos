@@ -8,10 +8,10 @@
 9  stdcall -noname EnumThemeColors(wstr wstr long ptr)
 10 stdcall -noname EnumThemeSizes(wstr wstr long ptr)
 11 stdcall -noname ParseThemeIniFile(wstr wstr ptr ptr)
-13 stdcall -noname DrawNCPreview(ptr long ptr wstr wstr wstr ptr ptr)
+13 stub -noname DrawNCPreview
 14 stub -noname RegisterDefaultTheme
 15 stub -noname DumpLoadedThemeToTextFile
-16 stdcall -noname OpenThemeDataFromFile(ptr ptr wstr long)
+16 stub -noname OpenThemeDataFromFile
 17 stub -noname OpenThemeFileFromData
 18 stub -noname GetThemeSysSize96
 19 stub -noname GetThemeSysFont96
@@ -32,18 +32,17 @@
 34 stdcall -noname ThemeHooksInstall()
 35 stdcall -noname ThemeHooksRemove()
 36 stub -noname RefreshThemeForTS
-43 stdcall -noname ClassicGetSystemMetrics(long)
-44 stdcall -noname ClassicSystemParametersInfoA(long long ptr long)
-45 stdcall -noname ClassicSystemParametersInfoW(long long ptr long)
-46 stdcall -noname ClassicAdjustWindowRectEx(ptr long long long)
+43 stub -noname ClassicGetSystemMetrics
+44 stub -noname ClassicSystemParametersInfoA
+45 stub -noname ClassicSystemParametersInfoW
+46 stub -noname ClassicAdjustWindowRectEx
 47 stdcall DrawThemeBackgroundEx(ptr ptr long long ptr ptr)
-48 stdcall -noname GetThemeParseErrorInfo(ptr)
+48 stub -noname GetThemeParseErrorInfo
 49 stub @
 60 stub -noname CreateThemeDataFromObjects
 61 stdcall OpenThemeDataEx(ptr wstr long)
 62 stub -noname ServerClearStockObjects
 63 stub -noname MarkSelection
-65 stdcall -noname SetSystemVisualStyle(wstr wstr wstr long)
 95 stdcall GetImmersiveColorFromColorSetEx(long long long long)
 96 stdcall -noname GetImmersiveColorTypeFromName(wstr)
 98 stdcall GetImmersiveUserColorSetPreference(long long)
@@ -125,4 +124,3 @@
 @ stdcall SetThemeAppProperties(long)
 @ stdcall SetWindowTheme(ptr wstr wstr)
 @ stdcall SetWindowThemeAttribute(ptr long ptr long)
-@ stdcall ThemeInitApiHook(long ptr)

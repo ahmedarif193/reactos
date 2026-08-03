@@ -18,7 +18,21 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include "uxthemep.h"
+#include <stdarg.h>
+
+#include "windef.h"
+#include "winbase.h"
+#include "winuser.h"
+#include "wingdi.h"
+#include "vfwmsgs.h"
+#include "uxtheme.h"
+#include "vssym32.h"
+
+#include "msstyles.h"
+
+#include "wine/debug.h"
+
+WINE_DEFAULT_DEBUG_CHANNEL(uxtheme);
 
 /***********************************************************************
  *      GetThemeBool                                        (UXTHEME.@)
@@ -27,14 +41,12 @@ HRESULT WINAPI GetThemeBool(HTHEME hTheme, int iPartId, int iStateId,
                             int iPropId, BOOL *pfVal)
 {
     PTHEME_PROPERTY tp;
-    PTHEME_CLASS pClass = ValidateHandle(hTheme);
 
     TRACE("(%d, %d, %d)\n", iPartId, iStateId, iPropId);
-
-    if(!pClass)
+    if(!hTheme)
         return E_HANDLE;
 
-    if(!(tp = MSSTYLES_FindProperty(pClass, iPartId, iStateId, TMT_BOOL, iPropId)))
+    if(!(tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_BOOL, iPropId)))
         return E_PROP_ID_UNSUPPORTED;
     return MSSTYLES_GetPropertyBool(tp, pfVal);
 }
@@ -46,13 +58,12 @@ HRESULT WINAPI GetThemeColor(HTHEME hTheme, int iPartId, int iStateId,
                              int iPropId, COLORREF *pColor)
 {
     PTHEME_PROPERTY tp;
-    PTHEME_CLASS pClass = ValidateHandle(hTheme);
 
     TRACE("(%d, %d, %d)\n", iPartId, iStateId, iPropId);
-    if(!pClass)
+    if(!hTheme)
         return E_HANDLE;
 
-    if(!(tp = MSSTYLES_FindProperty(pClass, iPartId, iStateId, TMT_COLOR, iPropId)))
+    if(!(tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_COLOR, iPropId)))
         return E_PROP_ID_UNSUPPORTED;
     return MSSTYLES_GetPropertyColor(tp, pColor);
 }
@@ -66,16 +77,15 @@ HRESULT WINAPI GetThemeEnumValue(HTHEME hTheme, int iPartId, int iStateId,
     HRESULT hr;
     WCHAR val[60];
     PTHEME_PROPERTY tp;
-    PTHEME_CLASS pClass = ValidateHandle(hTheme);
 
     TRACE("(%d, %d, %d)\n", iPartId, iStateId, iPropId);
-    if(!pClass)
+    if(!hTheme)
         return E_HANDLE;
 
-    if(!(tp = MSSTYLES_FindProperty(pClass, iPartId, iStateId, TMT_ENUM, iPropId)))
+    if(!(tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_ENUM, iPropId)))
         return E_PROP_ID_UNSUPPORTED;
 
-    hr = MSSTYLES_GetPropertyString(tp, val, sizeof(val)/sizeof(val[0]));
+    hr = MSSTYLES_GetPropertyString(tp, val, ARRAY_SIZE(val));
     if(FAILED(hr))
         return hr;
     if(!MSSTYLES_LookupEnum(val, iPropId, piVal))
@@ -91,13 +101,12 @@ HRESULT WINAPI GetThemeFilename(HTHEME hTheme, int iPartId, int iStateId,
                                 int cchMaxBuffChars)
 {
     PTHEME_PROPERTY tp;
-    PTHEME_CLASS pClass = ValidateHandle(hTheme);
 
     TRACE("(%d, %d, %d)\n", iPartId, iStateId, iPropId);
-    if(!pClass)
+    if(!hTheme)
         return E_HANDLE;
 
-    if(!(tp = MSSTYLES_FindProperty(pClass, iPartId, iStateId, TMT_FILENAME, iPropId)))
+    if(!(tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_FILENAME, iPropId)))
         return E_PROP_ID_UNSUPPORTED;
     return MSSTYLES_GetPropertyString(tp, pszThemeFilename, cchMaxBuffChars);
 }
@@ -109,13 +118,12 @@ HRESULT WINAPI GetThemeFont(HTHEME hTheme, HDC hdc, int iPartId,
                             int iStateId, int iPropId, LOGFONTW *pFont)
 {
     PTHEME_PROPERTY tp;
-    PTHEME_CLASS pClass = ValidateHandle(hTheme);
 
     TRACE("(%d, %d, %d)\n", iPartId, iStateId, iPropId);
-    if(!pClass)
+    if(!hTheme)
         return E_HANDLE;
 
-    if(!(tp = MSSTYLES_FindProperty(pClass, iPartId, iStateId, TMT_FONT, iPropId)))
+    if(!(tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_FONT, iPropId)))
         return E_PROP_ID_UNSUPPORTED;
     return MSSTYLES_GetPropertyFont(tp, hdc, pFont);
 }
@@ -127,13 +135,12 @@ HRESULT WINAPI GetThemeInt(HTHEME hTheme, int iPartId, int iStateId,
                            int iPropId, int *piVal)
 {
     PTHEME_PROPERTY tp;
-    PTHEME_CLASS pClass = ValidateHandle(hTheme);
 
     TRACE("(%d, %d, %d)\n", iPartId, iStateId, iPropId);
-    if(!pClass)
+    if(!hTheme)
         return E_HANDLE;
 
-    if(!(tp = MSSTYLES_FindProperty(pClass, iPartId, iStateId, TMT_INT, iPropId)))
+    if(!(tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_INT, iPropId)))
         return E_PROP_ID_UNSUPPORTED;
     return MSSTYLES_GetPropertyInt(tp, piVal);
 }
@@ -145,13 +152,12 @@ HRESULT WINAPI GetThemeIntList(HTHEME hTheme, int iPartId, int iStateId,
                                int iPropId, INTLIST *pIntList)
 {
     PTHEME_PROPERTY tp;
-    PTHEME_CLASS pClass = ValidateHandle(hTheme);
 
     TRACE("(%d, %d, %d)\n", iPartId, iStateId, iPropId);
-    if(!pClass)
+    if(!hTheme)
         return E_HANDLE;
 
-    if(!(tp = MSSTYLES_FindProperty(pClass, iPartId, iStateId, TMT_INTLIST, iPropId)))
+    if(!(tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_INTLIST, iPropId)))
         return E_PROP_ID_UNSUPPORTED;
     return MSSTYLES_GetPropertyIntList(tp, pIntList);
 }
@@ -163,13 +169,12 @@ HRESULT WINAPI GetThemePosition(HTHEME hTheme, int iPartId, int iStateId,
                                 int iPropId, POINT *pPoint)
 {
     PTHEME_PROPERTY tp;
-    PTHEME_CLASS pClass = ValidateHandle(hTheme);
 
     TRACE("(%d, %d, %d)\n", iPartId, iStateId, iPropId);
-    if(!pClass)
+    if(!hTheme)
         return E_HANDLE;
 
-    if(!(tp = MSSTYLES_FindProperty(pClass, iPartId, iStateId, TMT_POSITION, iPropId)))
+    if(!(tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_POSITION, iPropId)))
         return E_PROP_ID_UNSUPPORTED;
     return MSSTYLES_GetPropertyPosition(tp, pPoint);
 }
@@ -181,13 +186,12 @@ HRESULT WINAPI GetThemeRect(HTHEME hTheme, int iPartId, int iStateId,
                             int iPropId, RECT *pRect)
 {
     PTHEME_PROPERTY tp;
-    PTHEME_CLASS pClass = ValidateHandle(hTheme);
 
     TRACE("(%d, %d, %d)\n", iPartId, iStateId, iPropId);
-    if(!pClass)
+    if(!hTheme)
         return E_HANDLE;
 
-    if(!(tp = MSSTYLES_FindProperty(pClass, iPartId, iStateId, TMT_RECT, iPropId)))
+    if(!(tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_RECT, iPropId)))
         return E_PROP_ID_UNSUPPORTED;
     return MSSTYLES_GetPropertyRect(tp, pRect);
 }
@@ -199,13 +203,12 @@ HRESULT WINAPI GetThemeString(HTHEME hTheme, int iPartId, int iStateId,
                               int iPropId, LPWSTR pszBuff, int cchMaxBuffChars)
 {
     PTHEME_PROPERTY tp;
-    PTHEME_CLASS pClass = ValidateHandle(hTheme);
 
     TRACE("(%d, %d, %d)\n", iPartId, iStateId, iPropId);
-    if(!pClass)
+    if(!hTheme)
         return E_HANDLE;
 
-    if(!(tp = MSSTYLES_FindProperty(pClass, iPartId, iStateId, TMT_STRING, iPropId)))
+    if(!(tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_STRING, iPropId)))
         return E_PROP_ID_UNSUPPORTED;
     return MSSTYLES_GetPropertyString(tp, pszBuff, cchMaxBuffChars);
 }
@@ -218,14 +221,13 @@ HRESULT WINAPI GetThemeMargins(HTHEME hTheme, HDC hdc, int iPartId,
                                MARGINS *pMargins)
 {
     PTHEME_PROPERTY tp;
-    PTHEME_CLASS pClass = ValidateHandle(hTheme);
 
     TRACE("(%d, %d, %d)\n", iPartId, iStateId, iPropId);
     memset (pMargins, 0, sizeof (MARGINS));
-    if(!pClass)
+    if(!hTheme)
         return E_HANDLE;
 
-    if(!(tp = MSSTYLES_FindProperty(pClass, iPartId, iStateId, TMT_MARGINS, iPropId)))
+    if(!(tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_MARGINS, iPropId)))
         return E_PROP_ID_UNSUPPORTED;
     return MSSTYLES_GetPropertyMargins(tp, prc, pMargins);
 }
@@ -239,15 +241,13 @@ HRESULT WINAPI GetThemeMetric(HTHEME hTheme, HDC hdc, int iPartId,
     PTHEME_PROPERTY tp;
     WCHAR val[60];
     HRESULT hr;
-    PTHEME_CLASS pClass = ValidateHandle(hTheme);
 
     TRACE("(%d, %d, %d)\n", iPartId, iStateId, iPropId);
-    if(!pClass)
+    if(!hTheme)
         return E_HANDLE;
 
-    if(!(tp = MSSTYLES_FindProperty(pClass, iPartId, iStateId, 0, iPropId)))
+    if(!(tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, 0, iPropId)))
         return E_PROP_ID_UNSUPPORTED;
-
     switch(tp->iPrimitiveType) {
         case TMT_POSITION: /* Only the X coord is retrieved */
         case TMT_MARGINS: /* Only the cxLeftWidth member is retrieved */
@@ -260,7 +260,7 @@ HRESULT WINAPI GetThemeMetric(HTHEME hTheme, HDC hdc, int iPartId,
         case TMT_COLOR:
             return MSSTYLES_GetPropertyColor(tp, (COLORREF*)piVal);
         case TMT_ENUM:
-            hr = MSSTYLES_GetPropertyString(tp, val, sizeof(val)/sizeof(val[0]));
+            hr = MSSTYLES_GetPropertyString(tp, val, ARRAY_SIZE(val));
             if(FAILED(hr))
                 return hr;
             if(!MSSTYLES_LookupEnum(val, iPropId, piVal))
@@ -281,13 +281,12 @@ HRESULT WINAPI GetThemePropertyOrigin(HTHEME hTheme, int iPartId, int iStateId,
                                       int iPropId, PROPERTYORIGIN *pOrigin)
 {
     PTHEME_PROPERTY tp;
-    PTHEME_CLASS pClass = ValidateHandle(hTheme);
 
     TRACE("(%d, %d, %d)\n", iPartId, iStateId, iPropId);
-    if(!pClass)
+    if(!hTheme)
         return E_HANDLE;
 
-    if(!(tp = MSSTYLES_FindProperty(pClass, iPartId, iStateId, 0, iPropId))) {
+    if(!(tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, 0, iPropId))) {
         *pOrigin = PO_NOTFOUND;
         return S_OK;
     }

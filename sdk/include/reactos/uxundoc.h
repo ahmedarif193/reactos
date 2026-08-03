@@ -63,12 +63,15 @@ typedef BOOL (CALLBACK* PARSETHEMEINIFILEPROC)(DWORD dwType, LPWSTR pszParam1,
 
 /* Structure filled in by EnumThemeColors() and EnumeThemeSizes() with the
  * various strings for a theme color or size. */
+#ifndef _THEMENAMES_DEFINED
+#define _THEMENAMES_DEFINED
 typedef struct tagTHEMENAMES
 {
     WCHAR szName[MAX_PATH+1];
     WCHAR szDisplayName[MAX_PATH+1];
     WCHAR szTooltip[MAX_PATH+1];
 } THEMENAMES, *PTHEMENAMES;
+#endif
 
 /* Declarations for undocumented functions for use internally */
 DWORD WINAPI QueryThemeServices(void);

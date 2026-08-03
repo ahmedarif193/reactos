@@ -18,15 +18,22 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include "uxthemep.h"
+#include <stdarg.h>
+#ifdef __REACTOS__
+#include <stdlib.h>
+#endif
+
+#include "windef.h"
+#include "winbase.h"
+#include "winnls.h"
+
+#include "wine/debug.h"
+
+WINE_DEFAULT_DEBUG_CHANNEL(uxtheme);
 
 /***********************************************************************
  * Defines and global variables
  */
-
-static const WCHAR szTextFileResource[] = {
-    'T','E','X','T','F','I','L','E','\0'
-};
 
 typedef struct _UXINI_FILE {
     LPCWSTR lpIni;
@@ -57,7 +64,7 @@ PUXINI_FILE UXINI_LoadINI(HMODULE hTheme, LPCWSTR lpName) {
 
     TRACE("Loading resource INI %s\n", debugstr_w(lpName));
 
-    if((hrsc = FindResourceW(hTheme, lpName, szTextFileResource))) {
+    if((hrsc = FindResourceW(hTheme, lpName, L"TEXTFILE"))) {
         if(!(lpThemesIni = LoadResource(hTheme, hrsc))) {
             TRACE("%s resource not found\n", debugstr_w(lpName));
             return NULL;
@@ -65,7 +72,7 @@ PUXINI_FILE UXINI_LoadINI(HMODULE hTheme, LPCWSTR lpName) {
     }
 
     dwIniSize = SizeofResource(hTheme, hrsc) / sizeof(WCHAR);
-    uf = HeapAlloc(GetProcessHeap(), 0, sizeof(UXINI_FILE));
+    uf = malloc(sizeof(*uf));
     uf->lpIni = lpThemesIni;
     uf->lpCurLoc = lpThemesIni;
     uf->lpEnd = lpThemesIni + dwIniSize;
@@ -82,7 +89,7 @@ PUXINI_FILE UXINI_LoadINI(HMODULE hTheme, LPCWSTR lpName) {
  */
 void UXINI_CloseINI(PUXINI_FILE uf)
 {
-    HeapFree(GetProcessHeap(), 0, uf);
+    free(uf);
 }
 
 /**********************************************************************
