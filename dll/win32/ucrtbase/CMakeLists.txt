@@ -41,8 +41,10 @@ target_link_libraries(ucrtbase
     wine
 )
 
-# Implicitly link to vcstartup
-target_link_libraries(libucrtbase INTERFACE vcstartup)
+# Implicitly link executable consumers to vcstartup. DLLs provide their own
+# entry points and must not receive the executable startup objects.
+target_link_libraries(libucrtbase INTERFACE
+    $<$<STREQUAL:$<TARGET_PROPERTY:TYPE>,EXECUTABLE>:vcstartup>)
 
 if(MSVC)
     target_link_libraries(ucrtbase runtmchk)
