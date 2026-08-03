@@ -7,6 +7,7 @@ function(add_d3dx9_target __version)
     list(APPEND SOURCE
         ../d3dx9_36/animation.c
         ../d3dx9_36/core.c
+        ../d3dx9_36/d3dx_helpers.c
         ../d3dx9_36/effect.c
         ../d3dx9_36/font.c
         ../d3dx9_36/line.c
@@ -20,14 +21,11 @@ function(add_d3dx9_target __version)
         ../d3dx9_36/sprite.c
         ../d3dx9_36/surface.c
         ../d3dx9_36/texture.c
-        ../d3dx9_36/txc_compress_dxtn.c
-        ../d3dx9_36/txc_fetch_dxtn.c
         ../d3dx9_36/util.c
         ../d3dx9_36/volume.c
         ../d3dx9_36/xfile.c)
 
     list(APPEND PCH_SKIP_SOURCE
-        ../d3dx9_36/guid.c
         ${CMAKE_CURRENT_BINARY_DIR}/${module}_stubs.c)
 
     add_library(${module} MODULE
@@ -36,11 +34,11 @@ function(add_d3dx9_target __version)
         version.rc
         ${CMAKE_CURRENT_BINARY_DIR}/${module}.def)
 
-    add_definitions(-D__ROS_LONG64__)
     set_module_type(${module} win32dll)
     add_dependencies(${module} d3d_idl_headers)
-    target_link_libraries(${module} dxguid wine oldnames libd3dcompiler_43_legacy)
-    add_importlibs(${module} d3dcompiler_43 d3dxof usp10 user32 ole32 gdi32 msvcrt kernel32 ntdll)
+    target_include_directories(${module} BEFORE PRIVATE ${REACTOS_SOURCE_DIR}/sdk/include/wine)
+    target_link_libraries(${module} crtheap dxguid uuid wine oldnames)
+    add_importlibs(${module} d3dcompiler_47 d3dxof d3dwine usp10 user32 ole32 gdi32 msvcrt kernel32 ntdll)
     add_delay_importlibs(${module} windowscodecs)
     add_pch(${module} ../d3dx9_36/precomp.h "${PCH_SKIP_SOURCE}")
     add_cd_file(TARGET ${module} DESTINATION reactos/system32 FOR all)

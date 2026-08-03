@@ -377,6 +377,15 @@ typedef unsigned char FCHAR;
 typedef unsigned short FSHORT;
 typedef unsigned long FLONG;
 
+/* Handle LP64 and LLP64 differences in numeric constants with an 'l' suffix. */
+#ifndef __MSABI_LONG
+#if !defined(__LP64__) && !defined(WINE_NO_LONG_TYPES) && !defined(WINE_UNIX_LIB)
+#define __MSABI_LONG(x) x ## l
+#else
+#define __MSABI_LONG(x) x
+#endif
+#endif
+
 typedef unsigned char BOOLEAN, *PBOOLEAN;
 $if(_NTDEF_)
 typedef ULONG LOGICAL, *PLOGICAL;
