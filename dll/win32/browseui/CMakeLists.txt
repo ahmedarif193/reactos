@@ -10,7 +10,6 @@ list(APPEND SOURCE
     ACLCustomMRU.h
     aclhistory.cpp
     aclistisf.cpp
-    aclmulti.cpp
     addressband.cpp
     addresseditbox.cpp
     bandproxy.cpp
@@ -33,12 +32,28 @@ list(APPEND SOURCE
     shellbrowser.cpp
     toolsband.cpp
     travellog.cpp
-    CProgressDialog.cpp
     CUserAssist.cpp
     CUserAssist.h)
 
 list(APPEND PCH_SKIP_SOURCE
-    dllinstall.c)
+    aclmulti.c
+    aclsource.c
+    browseui_main.c
+    compcatcachedaemon.c
+    dllinstall.c
+    progressdlg.c)
+
+set_source_files_properties(browseui_main.c PROPERTIES COMPILE_DEFINITIONS
+    "DllMain=WineBrowseUI_DllMain;DllCanUnloadNow=WineBrowseUI_DllCanUnloadNow;DllGetClassObject=WineBrowseUI_DllGetClassObject;DllInstall=WineBrowseUI_DllInstall;ACLShellSource_Constructor=ReactOS_ACLShellSource_Constructor")
+set_source_files_properties(aclsource.c PROPERTIES COMPILE_DEFINITIONS
+    "ACLShellSource_Constructor=Wine_ACLShellSource_Constructor")
+set_property(SOURCE
+    aclmulti.c
+    aclsource.c
+    browseui_main.c
+    compcatcachedaemon.c
+    progressdlg.c
+    APPEND PROPERTY COMPILE_DEFINITIONS __WINESRC__)
 
 add_library(browseui MODULE
     ${SOURCE}
@@ -47,7 +62,8 @@ add_library(browseui MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/browseui.def)
 
 set_module_type(browseui win32dll UNICODE)
-target_link_libraries(browseui shellbars shellfind uuid wine cpprt atl_classes)
+add_idl_reg_scripts(browseui registry browseui_classes.idl)
+target_link_libraries(browseui shellbars shellfind uuid wine wine_dll_register cpprt atl_classes)
 add_importlibs(browseui uxtheme shdocvw shlwapi shell32 comctl32 gdi32 ole32 oleaut32 user32 advapi32 mpr msvcrt kernel32 ntdll)
 add_pch(browseui precomp.h "${PCH_SKIP_SOURCE}")
 add_cd_file(TARGET browseui DESTINATION reactos/system32 FOR all)
