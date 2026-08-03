@@ -1858,6 +1858,29 @@ IsWow64Process(IN HANDLE hProcess,
 /*
  * @implemented
  */
+BOOL
+WINAPI
+IsWow64Process2(IN HANDLE hProcess,
+                OUT PUSHORT ProcessMachine,
+                OUT OPTIONAL PUSHORT NativeMachine)
+{
+    NTSTATUS Status;
+
+    Status = RtlWow64GetProcessMachines(hProcess,
+                                        ProcessMachine,
+                                        NativeMachine);
+    if (!NT_SUCCESS(Status))
+    {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+/*
+ * @implemented
+ */
 LPSTR
 WINAPI
 GetCommandLineA(VOID)
