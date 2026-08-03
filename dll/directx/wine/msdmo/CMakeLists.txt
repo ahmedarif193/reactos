@@ -6,7 +6,7 @@ list(APPEND SOURCE
     dmort.c)
 
 list(APPEND PCH_SKIP_SOURCE
-    stubs.c)
+    ${CMAKE_CURRENT_BINARY_DIR}/msdmo_stubs.c)
 
 add_library(msdmo MODULE
     ${SOURCE}
