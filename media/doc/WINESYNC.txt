@@ -146,7 +146,7 @@ dll/win32/msvfw32             # Synced to Wine-11.14
 dll/win32/msvidc32            # Synced to Wine-11.14
 dll/win32/msxml               # Synced to Wine-11.14
 dll/win32/msxml2              # Synced to Wine-11.14
-dll/win32/msxml3              # Synced to Wine-10.0
+dll/win32/msxml3              # Synced to Wine-11.14
 dll/win32/msxml4              # Synced to Wine-10.0
 dll/win32/msxml6              # Synced to Wine-10.0
 dll/win32/nddeapi             # Synced to Wine-11.14

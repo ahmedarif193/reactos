@@ -2,6 +2,12 @@
 #ifndef _MSXML3_PCH_
 #define _MSXML3_PCH_
 
+#ifdef __REACTOS__
+#include <wine/config.h>
+#include <math.h>
+#include <wine/port.h>
+#endif
+
 #include <config.h>
 
 #ifdef HAVE_LIBXML2
