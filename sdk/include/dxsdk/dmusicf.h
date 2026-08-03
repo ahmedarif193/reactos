@@ -21,14 +21,12 @@
 #ifndef __WINE_DMUSIC_FILEFORMATS_H
 #define __WINE_DMUSIC_FILEFORMATS_H
 
-#ifndef __WINESRC__
 #include <windows.h>
-#endif /* __WINESRC__ */
 
 #define COM_NO_WINDOWS_H
 #include <objbase.h>
 #include <mmsystem.h>
-#include <pshpack8.h>
+#pragma pack(push,8)
 
 #ifdef __cplusplus
 extern "C" {
@@ -322,11 +320,6 @@ extern "C" {
 /*****************************************************************************
  * Enumerations
  */
-/* typedef definitions */
-typedef enum enumDMUS_VARIATIONT_TYPES DMUS_VARIATIONT_TYPES;
-typedef enum enumDMUS_EMBELLISHT_TYPES DMUS_EMBELLISHT_TYPES;
-typedef enum enumDMUS_PATTERNT_TYPES   DMUS_PATTERNT_TYPES;
-
 /* actual enumerations */
 enum enumDMUS_VARIATIONT_TYPES {
 	DMUS_VARIATIONT_SEQUENTIAL   = 0x0,
@@ -354,6 +347,10 @@ enum enumDMUS_PATTERNT_TYPES {
 	DMUS_PATTERNT_NO_REPEAT    = 0x4,
 	DMUS_PATTERNT_RANDOM_ROW   = 0x5
 };
+
+typedef enum enumDMUS_VARIATIONT_TYPES DMUS_VARIATIONT_TYPES;
+typedef enum enumDMUS_EMBELLISHT_TYPES DMUS_EMBELLISHT_TYPES;
+typedef enum enumDMUS_PATTERNT_TYPES   DMUS_PATTERNT_TYPES;
 
 
 /*****************************************************************************
@@ -506,6 +503,7 @@ struct _DMUS_IO_PATTERN {
 	BYTE            bGrooveTop;
 	WORD            wEmbellishment;
 	WORD            wNbrMeasures;
+        /* DX8 */
 	BYTE            bDestGrooveBottom;
 	BYTE            bDestGrooveTop;
 	DWORD           dwFlags;
@@ -519,6 +517,7 @@ struct _DMUS_IO_STYLEPART {
 	BYTE            bPlayModeFlags;
 	BYTE            bInvertUpper;
 	BYTE            bInvertLower;
+	/* DX8 */
 	BYTE            bPad[3];
 	DWORD           dwFlags;
 };
@@ -530,8 +529,9 @@ struct _DMUS_IO_PARTREF {
 	BYTE  bSubChordLevel;
 	BYTE  bPriority;
 	BYTE  bRandomVariation;
+	/* DX8 */
 	WORD  wPad;
-	DWORD dwPChannel;
+	DWORD dwPChannel;       /* Replaces wLogicalPartID */
 };
 
 
@@ -603,6 +603,7 @@ struct _DMUS_IO_CHORD {
 	MUSIC_TIME mtTime;
 	WORD       wMeasure;
 	BYTE       bBeat;
+        /* DX8 */
 	BYTE       bFlags;
 };
 
@@ -622,6 +623,7 @@ struct _DMUS_IO_COMMAND {
 	BYTE       bCommand;
 	BYTE       bGrooveLevel;
 	BYTE       bGrooveRange;
+        /* DX8 */
 	BYTE       bRepeatMode;
 };
 
@@ -676,6 +678,7 @@ struct _DMUS_IO_INSTRUMENT {
 	BYTE  bVolume;
 	short nTranspose;
 	DWORD dwChannelPriority;
+        /* DX8 */
 	short nPitchBendRange;
 };
 
@@ -710,6 +713,7 @@ struct _DMUS_IO_WAVE_ITEM_HEADER  {
 	DWORD          dwLoopStart;
 	DWORD          dwLoopEnd;
 	DWORD          dwFlags;
+        /* DX9 */
 	WORD           wVolumeRange;
 	WORD           wPitchRange;
 };
@@ -906,6 +910,6 @@ struct _DSOUND_IO_DXDMO_DATA {
 }
 #endif
 
-#include <poppack.h>
+#pragma pack(pop)
 
 #endif /* __WINE_DMUSIC_FILEFORMATS_H */
