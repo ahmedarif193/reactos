@@ -1626,6 +1626,19 @@ SetupDiGetDeviceInterfaceDetailW(
   _Out_opt_ _Out_range_(>=, sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W)) PDWORD RequiredSize,
   _Out_opt_ PSP_DEVINFO_DATA DeviceInfoData);
 
+WINSETUPAPI
+BOOL
+WINAPI
+SetupDiGetDeviceInterfacePropertyW(
+  _In_ HDEVINFO DeviceInfoSet,
+  _In_ PSP_DEVICE_INTERFACE_DATA DeviceInterfaceData,
+  _In_ CONST DEVPROPKEY *PropertyKey,
+  _Out_ DEVPROPTYPE *PropertyType,
+  _Out_writes_bytes_to_opt_(PropertyBufferSize, *RequiredSize) PBYTE PropertyBuffer,
+  _In_ DWORD PropertyBufferSize,
+  _Out_opt_ PDWORD RequiredSize,
+  _In_ DWORD Flags);
+
 _Success_(return != FALSE)
 _When_(*PropertyType == DEVPROP_TYPE_STRING, _At_((PWSTR) PropertyBuffer, _Out_writes_bytes_to_opt_(PropertyBufferSize, *RequiredSize)))
 _When_(*PropertyType == DEVPROP_TYPE_STRING_INDIRECT, _At_((PWSTR) PropertyBuffer, _Out_writes_bytes_to_opt_(PropertyBufferSize, *RequiredSize)))
@@ -2710,4 +2723,3 @@ WINSETUPAPI PSTR WINAPI UnicodeToMultiByte(PCWSTR lpUnicodeStr, UINT uCodePage);
 
 #include <poppack.h>
 #endif /* _SETUPAPI_H_ */
-
