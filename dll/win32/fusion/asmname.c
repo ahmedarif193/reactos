@@ -23,9 +23,6 @@
 
 #define COBJMACROS
 #define INITGUID
-#ifdef __REACTOS__
-#define WIN32_NO_STATUS
-#endif
 
 #include "windef.h"
 #include "winbase.h"
@@ -62,14 +59,6 @@ typedef struct {
     LONG ref;
 } IAssemblyNameImpl;
 
-static const WCHAR separator[] = {',',' ',0};
-static const WCHAR version[] = {'V','e','r','s','i','o','n',0};
-static const WCHAR culture[] = {'C','u','l','t','u','r','e',0};
-static const WCHAR pubkey[] =
-    {'P','u','b','l','i','c','K','e','y','T','o','k','e','n',0};
-static const WCHAR procarch[] = {'p','r','o','c','e','s','s','o','r',
-    'A','r','c','h','i','t','e','c','t','u','r','e',0};
-
 #define CHARS_PER_PUBKEY 16
 
 static inline IAssemblyNameImpl *impl_from_IAssemblyName(IAssemblyName *iface)
@@ -103,7 +92,7 @@ static ULONG WINAPI IAssemblyNameImpl_AddRef(IAssemblyName *iface)
     IAssemblyNameImpl *This = impl_from_IAssemblyName(iface);
     ULONG refCount = InterlockedIncrement(&This->ref);
 
-    TRACE("(%p)->(ref before = %u)\n", This, refCount - 1);
+    TRACE("(%p)->(ref before = %lu)\n", This, refCount - 1);
 
     return refCount;
 }
@@ -113,16 +102,16 @@ static ULONG WINAPI IAssemblyNameImpl_Release(IAssemblyName *iface)
     IAssemblyNameImpl *This = impl_from_IAssemblyName(iface);
     ULONG refCount = InterlockedDecrement(&This->ref);
 
-    TRACE("(%p)->(ref before = %u)\n", This, refCount + 1);
+    TRACE("(%p)->(ref before = %lu)\n", This, refCount + 1);
 
     if (!refCount)
     {
-        heap_free(This->path);
-        heap_free(This->displayname);
-        heap_free(This->name);
-        heap_free(This->culture);
-        heap_free(This->procarch);
-        heap_free(This);
+        free(This->path);
+        free(This->displayname);
+        free(This->name);
+        free(This->culture);
+        free(This->procarch);
+        free(This);
     }
 
     return refCount;
@@ -133,7 +122,7 @@ static HRESULT WINAPI IAssemblyNameImpl_SetProperty(IAssemblyName *iface,
                                                     LPVOID pvProperty,
                                                     DWORD cbProperty)
 {
-    FIXME("(%p, %d, %p, %d) stub!\n", iface, PropertyId, pvProperty, cbProperty);
+    FIXME("(%p, %ld, %p, %ld) stub!\n", iface, PropertyId, pvProperty, cbProperty);
     return E_NOTIMPL;
 }
 
@@ -145,7 +134,7 @@ static HRESULT WINAPI IAssemblyNameImpl_GetProperty(IAssemblyName *iface,
     IAssemblyNameImpl *name = impl_from_IAssemblyName(iface);
     DWORD size;
 
-    TRACE("(%p, %d, %p, %p)\n", iface, PropertyId, pvProperty, pcbProperty);
+    TRACE("(%p, %ld, %p, %p)\n", iface, PropertyId, pvProperty, pcbProperty);
 
     size = *pcbProperty;
     switch (PropertyId)
@@ -266,12 +255,11 @@ static HRESULT WINAPI IAssemblyNameImpl_GetDisplayName(IAssemblyName *iface,
                                                        LPDWORD pccDisplayName,
                                                        DWORD dwDisplayFlags)
 {
-    static const WCHAR equals[] = {'=',0};
     IAssemblyNameImpl *name = impl_from_IAssemblyName(iface);
     WCHAR verstr[30], *cultureval = NULL;
     DWORD size;
 
-    TRACE("(%p, %p, %p, %d)\n", iface, szDisplayName,
+    TRACE("(%p, %p, %p, %ld)\n", iface, szDisplayName,
           pccDisplayName, dwDisplayFlags);
 
     if (dwDisplayFlags == 0)
@@ -301,37 +289,33 @@ static HRESULT WINAPI IAssemblyNameImpl_GetDisplayName(IAssemblyName *iface,
 
     if ((dwDisplayFlags & ASM_DISPLAYF_VERSION) && (name->versize > 0))
     {
-        static const WCHAR spec[] = {'%','d',0};
-        static const WCHAR period[] = {'.',0};
         DWORD i;
 
-        wsprintfW(verstr, spec, name->version[0]);
+        wsprintfW(verstr, L"%d", name->version[0]);
 
         for (i = 1; i < name->versize; i++)
         {
             WCHAR value[6];
-            wsprintfW(value, spec, name->version[i]);
+            wsprintfW(value, L"%d", name->version[i]);
 
-            lstrcatW(verstr, period);
+            lstrcatW(verstr, L".");
             lstrcatW(verstr, value);
         }
 
-        size += lstrlenW(separator) + lstrlenW(version) + lstrlenW(equals) + lstrlenW(verstr);
+        size += lstrlenW(L", Version=") + lstrlenW(verstr);
     }
 
     if ((dwDisplayFlags & ASM_DISPLAYF_CULTURE) && (name->culture))
     {
-        static const WCHAR neutral[] = {'n','e','u','t','r','a','l', 0};
-
-        cultureval = (lstrlenW(name->culture) == 2) ? name->culture : (LPWSTR) neutral;
-        size += lstrlenW(separator) + lstrlenW(culture) + lstrlenW(equals) + lstrlenW(cultureval);
+        cultureval = (lstrlenW(name->culture) == 2) ? name->culture : (WCHAR *)L"neutral";
+        size += lstrlenW(L", Culture=") + lstrlenW(cultureval);
     }
 
     if ((dwDisplayFlags & ASM_DISPLAYF_PUBLIC_KEY_TOKEN) && (name->haspubkey))
-        size += lstrlenW(separator) + lstrlenW(pubkey) + lstrlenW(equals) + CHARS_PER_PUBKEY;
+        size += lstrlenW(L", PublicKeyToken=") + CHARS_PER_PUBKEY;
 
     if ((dwDisplayFlags & ASM_DISPLAYF_PROCESSORARCHITECTURE) && (name->procarch))
-        size += lstrlenW(separator) + lstrlenW(procarch) + lstrlenW(equals) + lstrlenW(name->procarch);
+        size += lstrlenW(L", processorArchitecture=") + lstrlenW(name->procarch);
 
     if (size > *pccDisplayName)
     {
@@ -344,46 +328,32 @@ static HRESULT WINAPI IAssemblyNameImpl_GetDisplayName(IAssemblyName *iface,
 
     if ((dwDisplayFlags & ASM_DISPLAYF_VERSION) && (name->versize > 0))
     {
-        lstrcatW(szDisplayName, separator);
-
-        lstrcatW(szDisplayName, version);
-        lstrcatW(szDisplayName, equals);
+        lstrcatW(szDisplayName, L", Version=");
         lstrcatW(szDisplayName, verstr);
     }
 
     if ((dwDisplayFlags & ASM_DISPLAYF_CULTURE) && (name->culture))
     {
-        lstrcatW(szDisplayName, separator);
-
-        lstrcatW(szDisplayName, culture);
-        lstrcatW(szDisplayName, equals);
+        lstrcatW(szDisplayName, L", Culture=");
         lstrcatW(szDisplayName, cultureval);
     }
 
     if ((dwDisplayFlags & ASM_DISPLAYF_PUBLIC_KEY_TOKEN) && (name->haspubkey))
     {
         WCHAR pkt[CHARS_PER_PUBKEY + 1];
-        static const WCHAR spec[] = {'%','0','2','x','%','0','2','x','%','0','2','x',
-            '%','0','2','x','%','0','2','x','%','0','2','x','%','0','2','x','%','0','2','x',0};
 
-        lstrcatW(szDisplayName, separator);
+        lstrcatW(szDisplayName, L", PublicKeyToken=");
 
-        lstrcatW(szDisplayName, pubkey);
-        lstrcatW(szDisplayName, equals);
-
-        wsprintfW(pkt, spec, name->pubkey[0], name->pubkey[1], name->pubkey[2],
-            name->pubkey[3], name->pubkey[4], name->pubkey[5], name->pubkey[6],
-            name->pubkey[7]);
+        wsprintfW(pkt, L"%02x%02x%02x%02x%02x%02x%02x%02x",
+            name->pubkey[0], name->pubkey[1], name->pubkey[2], name->pubkey[3],
+            name->pubkey[4], name->pubkey[5], name->pubkey[6], name->pubkey[7]);
 
         lstrcatW(szDisplayName, pkt);
     }
 
     if ((dwDisplayFlags & ASM_DISPLAYF_PROCESSORARCHITECTURE) && (name->procarch))
     {
-        lstrcatW(szDisplayName, separator);
-
-        lstrcatW(szDisplayName, procarch);
-        lstrcatW(szDisplayName, equals);
+        lstrcatW(szDisplayName, L", processorArchitecture=");
         lstrcatW(szDisplayName, name->procarch);
     }
 
@@ -401,7 +371,7 @@ static HRESULT WINAPI IAssemblyNameImpl_Reserved(IAssemblyName *iface,
                                                  DWORD cbReserved,
                                                  LPVOID *ppReserved)
 {
-    TRACE("(%p, %s, %p, %p, %s, %s, %p, %d, %p)\n", iface,
+    TRACE("(%p, %s, %p, %p, %s, %s, %p, %ld, %p)\n", iface,
           debugstr_guid(refIID), pUnkReserved1, pUnkReserved2,
           debugstr_w(szReserved), wine_dbgstr_longlong(llReserved),
           pvReserved, cbReserved, ppReserved);
@@ -462,7 +432,7 @@ static HRESULT WINAPI IAssemblyNameImpl_IsEqual(IAssemblyName *iface,
     IAssemblyNameImpl *name1 = impl_from_IAssemblyName(iface);
     IAssemblyNameImpl *name2 = impl_from_IAssemblyName(pName);
 
-    TRACE("(%p, %p, 0x%08x)\n", iface, pName, flags);
+    TRACE("(%p, %p, 0x%08lx)\n", iface, pName, flags);
 
     if (!pName) return S_FALSE;
     if (flags & ~ASM_CMPF_IL_ALL) FIXME("unsupported flags\n");
@@ -524,7 +494,7 @@ HRESULT IAssemblyName_SetPath(IAssemblyName *iface, LPCWSTR path)
 {
     IAssemblyNameImpl *name = unsafe_impl_from_IAssemblyName(iface);
 
-    name->path = strdupW(path);
+    name->path = wcsdup(path);
     if (!name->path)
         return E_OUTOFMEMORY;
 
@@ -579,12 +549,10 @@ static HRESULT parse_version(IAssemblyNameImpl *name, LPWSTR version)
 
 static HRESULT parse_culture(IAssemblyNameImpl *name, LPCWSTR culture)
 {
-    static const WCHAR empty[] = {0};
-
     if (lstrlenW(culture) == 2)
-        name->culture = strdupW(culture);
+        name->culture = wcsdup(culture);
     else
-        name->culture = strdupW(empty);
+        name->culture = wcsdup(L"");
 
     return S_OK;
 }
@@ -611,9 +579,8 @@ static HRESULT parse_pubkey(IAssemblyNameImpl *name, LPCWSTR pubkey)
 {
     int i;
     BYTE val;
-    static const WCHAR nullstr[] = {'n','u','l','l',0};
 
-    if(lstrcmpiW(pubkey, nullstr) == 0)
+    if(lstrcmpiW(pubkey, L"null") == 0)
         return FUSION_E_PRIVATE_ASM_DISALLOWED;
 
     if (lstrlenW(pubkey) < CHARS_PER_PUBKEY)
@@ -636,18 +603,13 @@ static HRESULT parse_pubkey(IAssemblyNameImpl *name, LPCWSTR pubkey)
 
 static HRESULT parse_procarch(IAssemblyNameImpl *name, LPCWSTR procarch)
 {
-    static const WCHAR msilW[] = {'m','s','i','l',0};
-    static const WCHAR x86W[] = {'x','8','6',0};
-    static const WCHAR ia64W[] = {'i','a','6','4',0};
-    static const WCHAR amd64W[] = {'a','m','d','6','4',0};
-
-    if (!lstrcmpiW(procarch, msilW))
+    if (!lstrcmpiW(procarch, L"msil"))
         name->pekind = peMSIL;
-    else if (!lstrcmpiW(procarch, x86W))
+    else if (!lstrcmpiW(procarch, L"x86"))
         name->pekind = peI386;
-    else if (!lstrcmpiW(procarch, ia64W))
+    else if (!lstrcmpiW(procarch, L"ia64"))
         name->pekind = peIA64;
-    else if (!lstrcmpiW(procarch, amd64W))
+    else if (!lstrcmpiW(procarch, L"amd64"))
         name->pekind = peAMD64;
     else
     {
@@ -665,7 +627,7 @@ static WCHAR *parse_value( const WCHAR *str, unsigned int len )
     BOOL quoted = FALSE;
     unsigned int i = 0;
 
-    if (!(ret = heap_alloc( (len + 1) * sizeof(WCHAR) ))) return NULL;
+    if (!(ret = malloc( (len + 1) * sizeof(WCHAR) ))) return NULL;
     if (*p == '\"')
     {
         quoted = TRUE;
@@ -674,7 +636,7 @@ static WCHAR *parse_value( const WCHAR *str, unsigned int len )
     while (*p && *p != '\"') ret[i++] = *p++;
     if ((quoted && *p != '\"') || (!quoted && *p == '\"'))
     {
-        heap_free( ret );
+        free( ret );
         return NULL;
     }
     ret[i] = 0;
@@ -690,11 +652,11 @@ static HRESULT parse_display_name(IAssemblyNameImpl *name, LPCWSTR szAssemblyNam
     if (!szAssemblyName)
         return S_OK;
 
-    name->displayname = strdupW(szAssemblyName);
+    name->displayname = wcsdup(szAssemblyName);
     if (!name->displayname)
         return E_OUTOFMEMORY;
 
-    str = strdupW(szAssemblyName);
+    str = wcsdup(szAssemblyName);
     save = str;
     if (!str)
     {
@@ -712,7 +674,7 @@ static HRESULT parse_display_name(IAssemblyNameImpl *name, LPCWSTR szAssemblyNam
         goto done;
     }
 
-    name->name = strdupW(str);
+    name->name = wcsdup(str);
     if (!name->name)
     {
         hr = E_OUTOFMEMORY;
@@ -758,20 +720,20 @@ static HRESULT parse_display_name(IAssemblyNameImpl *name, LPCWSTR szAssemblyNam
         }
         while (*str == ' ') str++;
 
-        if (!lstrcmpiW(str, version))
+        if (!lstrcmpiW(str, L"Version"))
             hr = parse_version( name, value );
-        else if (!lstrcmpiW(str, culture))
+        else if (!lstrcmpiW(str, L"Culture"))
             hr = parse_culture( name, value );
-        else if (!lstrcmpiW(str, pubkey))
+        else if (!lstrcmpiW(str, L"PublicKeyToken"))
             hr = parse_pubkey( name, value );
-        else if (!lstrcmpiW(str, procarch))
+        else if (!lstrcmpiW(str, L"processorArchitecture"))
         {
             name->procarch = value;
             value = NULL;
 
             hr = parse_procarch( name, name->procarch );
         }
-        heap_free( value );
+        free( value );
 
         if (FAILED(hr))
             goto done;
@@ -780,13 +742,13 @@ static HRESULT parse_display_name(IAssemblyNameImpl *name, LPCWSTR szAssemblyNam
     }
 
 done:
-    heap_free(save);
+    free(save);
     if (FAILED(hr))
     {
-        heap_free(name->displayname);
-        heap_free(name->name);
-        heap_free(name->culture);
-        heap_free(name->procarch);
+        free(name->displayname);
+        free(name->name);
+        free(name->culture);
+        free(name->procarch);
     }
     return hr;
 }
@@ -801,7 +763,7 @@ HRESULT WINAPI CreateAssemblyNameObject(IAssemblyName **ppAssemblyNameObj,
     IAssemblyNameImpl *name;
     HRESULT hr;
 
-    TRACE("(%p, %s, %08x, %p)\n", ppAssemblyNameObj,
+    TRACE("(%p, %s, %08lx, %p)\n", ppAssemblyNameObj,
           debugstr_w(szAssemblyName), dwFlags, pvReserved);
 
     if (!ppAssemblyNameObj)
@@ -811,7 +773,7 @@ HRESULT WINAPI CreateAssemblyNameObject(IAssemblyName **ppAssemblyNameObj,
         (!szAssemblyName || !*szAssemblyName))
         return E_INVALIDARG;
 
-    if (!(name = heap_alloc_zero(sizeof(*name)))) return E_OUTOFMEMORY;
+    if (!(name = calloc(1, sizeof(*name)))) return E_OUTOFMEMORY;
 
     name->IAssemblyName_iface.lpVtbl = &AssemblyNameVtbl;
     name->ref = 1;
@@ -819,7 +781,7 @@ HRESULT WINAPI CreateAssemblyNameObject(IAssemblyName **ppAssemblyNameObj,
     hr = parse_display_name(name, szAssemblyName);
     if (FAILED(hr))
     {
-        heap_free(name);
+        free(name);
         return hr;
     }
 
