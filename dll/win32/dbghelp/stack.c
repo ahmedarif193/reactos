@@ -55,11 +55,12 @@ static DWORD64 WINAPI addr_to_linear(HANDLE hProcess, HANDLE hThread, ADDRESS64*
         FIXME("Unsupported (yet) mode (%x)\n", addr->Mode);
         return 0;
     }
-    FIXME("Failed to linearize address %04x:%s (mode %x)\n",
-          addr->Segment, wine_dbgstr_longlong(addr->Offset), addr->Mode);
+    FIXME("Failed to linearize address %04x:%I64x (mode %x)\n",
+          addr->Segment, addr->Offset, addr->Mode);
     return 0;
 }
 
+#ifndef _WIN64
 static BOOL CALLBACK read_mem(HANDLE hProcess, DWORD addr, void* buffer,
                               DWORD size, LPDWORD nread)
 {
@@ -68,6 +69,7 @@ static BOOL CALLBACK read_mem(HANDLE hProcess, DWORD addr, void* buffer,
     if (nread) *nread = r;
     return TRUE;
 }
+#endif
 
 static BOOL CALLBACK read_mem64(HANDLE hProcess, DWORD64 addr, void* buffer,
                                 DWORD size, LPDWORD nread)
@@ -78,12 +80,14 @@ static BOOL CALLBACK read_mem64(HANDLE hProcess, DWORD64 addr, void* buffer,
     return TRUE;
 }
 
+#ifndef _WIN64
 static inline void addr_32to64(const ADDRESS* addr32, ADDRESS64* addr64)
 {
     addr64->Offset = (ULONG64)addr32->Offset;
     addr64->Segment = addr32->Segment;
     addr64->Mode = addr32->Mode;
 }
+#endif
 
 static inline void addr_64to32(const ADDRESS64* addr64, ADDRESS* addr32)
 {
@@ -132,6 +136,7 @@ DWORD64 sw_module_base(struct cpu_stack_walk* csw, DWORD64 addr)
         return csw->u.s64.f_modl_bas(csw->hProcess, addr);
 }
 
+#ifndef _WIN64
 /***********************************************************************
  *		StackWalk (DBGHELP.@)
  */
@@ -147,7 +152,7 @@ BOOL WINAPI StackWalk(DWORD MachineType, HANDLE hProcess, HANDLE hThread,
     BOOL                        ret;
     struct cpu*                 cpu;
 
-    TRACE("(%d, %p, %p, %p, %p, %p, %p, %p, %p)\n",
+    TRACE("(%ld, %p, %p, %p, %p, %p, %p, %p, %p)\n",
           MachineType, hProcess, hThread, frame32, ctx,
           f_read_mem, FunctionTableAccessRoutine,
           GetModuleBaseRoutine, f_xlat_adr);
@@ -202,6 +207,7 @@ BOOL WINAPI StackWalk(DWORD MachineType, HANDLE hProcess, HANDLE hThread,
 
     return ret;
 }
+#endif
 
 
 /***********************************************************************
@@ -217,7 +223,7 @@ BOOL WINAPI StackWalk64(DWORD MachineType, HANDLE hProcess, HANDLE hThread,
     struct cpu_stack_walk       csw;
     struct cpu*                 cpu;
 
-    TRACE("(%d, %p, %p, %p, %p, %p, %p, %p, %p)\n",
+    TRACE("(%ld, %p, %p, %p, %p, %p, %p, %p, %p)\n",
           MachineType, hProcess, hThread, frame, ctx,
           f_read_mem, FunctionTableAccessRoutine,
           GetModuleBaseRoutine, f_xlat_adr);
@@ -245,6 +251,102 @@ BOOL WINAPI StackWalk64(DWORD MachineType, HANDLE hProcess, HANDLE hThread,
     return TRUE;
 }
 
+/* all the fields of STACKFRAME64 are present in STACKFRAME_EX at same offset
+ * So casting down a STACKFRAME_EX into a STACKFRAME64 is valid!
+ */
+C_ASSERT(sizeof(STACKFRAME64) == FIELD_OFFSET(STACKFRAME_EX, StackFrameSize));
+C_ASSERT(FIELD_OFFSET(STACKFRAME64, AddrPC) == FIELD_OFFSET(STACKFRAME_EX, AddrPC));
+C_ASSERT(FIELD_OFFSET(STACKFRAME64, AddrReturn) == FIELD_OFFSET(STACKFRAME_EX, AddrReturn));
+C_ASSERT(FIELD_OFFSET(STACKFRAME64, AddrFrame) == FIELD_OFFSET(STACKFRAME_EX, AddrFrame));
+C_ASSERT(FIELD_OFFSET(STACKFRAME64, AddrStack) == FIELD_OFFSET(STACKFRAME_EX, AddrStack));
+C_ASSERT(FIELD_OFFSET(STACKFRAME64, AddrBStore) == FIELD_OFFSET(STACKFRAME_EX, AddrBStore));
+C_ASSERT(FIELD_OFFSET(STACKFRAME64, FuncTableEntry) == FIELD_OFFSET(STACKFRAME_EX, FuncTableEntry));
+C_ASSERT(FIELD_OFFSET(STACKFRAME64, Params) == FIELD_OFFSET(STACKFRAME_EX, Params));
+C_ASSERT(FIELD_OFFSET(STACKFRAME64, Far) == FIELD_OFFSET(STACKFRAME_EX, Far));
+C_ASSERT(FIELD_OFFSET(STACKFRAME64, Virtual) == FIELD_OFFSET(STACKFRAME_EX, Virtual));
+C_ASSERT(FIELD_OFFSET(STACKFRAME64, Reserved) == FIELD_OFFSET(STACKFRAME_EX, Reserved));
+C_ASSERT(FIELD_OFFSET(STACKFRAME64, KdHelp) == FIELD_OFFSET(STACKFRAME_EX, KdHelp));
+
+/***********************************************************************
+ *		StackWalkEx (DBGHELP.@)
+ */
+BOOL WINAPI StackWalkEx(DWORD MachineType, HANDLE hProcess, HANDLE hThread,
+                        LPSTACKFRAME_EX frame, PVOID ctx,
+                        PREAD_PROCESS_MEMORY_ROUTINE64 f_read_mem,
+                        PFUNCTION_TABLE_ACCESS_ROUTINE64 FunctionTableAccessRoutine,
+                        PGET_MODULE_BASE_ROUTINE64 GetModuleBaseRoutine,
+                        PTRANSLATE_ADDRESS_ROUTINE64 f_xlat_adr,
+                        DWORD flags)
+{
+    struct cpu_stack_walk       csw;
+    struct cpu*                 cpu;
+    DWORD64                     addr;
+
+    TRACE("(%ld, %p, %p, %p, %p, %p, %p, %p, %p, 0x%lx)\n",
+          MachineType, hProcess, hThread, frame, ctx,
+          f_read_mem, FunctionTableAccessRoutine,
+          GetModuleBaseRoutine, f_xlat_adr, flags);
+
+    if (!(cpu = cpu_find(MachineType)))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (frame->StackFrameSize != sizeof(*frame))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (flags != 0)
+    {
+        FIXME("Unsupported yet flags 0x%lx\n", flags);
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    csw.hProcess = hProcess;
+    csw.hThread = hThread;
+    csw.is32 = FALSE;
+    csw.cpu = cpu;
+    /* sigh... MS isn't even consistent in the func prototypes */
+    csw.u.s64.f_read_mem = (f_read_mem) ? f_read_mem : read_mem64;
+    csw.u.s64.f_xlat_adr = (f_xlat_adr) ? f_xlat_adr : addr_to_linear;
+    csw.u.s64.f_tabl_acs = (FunctionTableAccessRoutine) ? FunctionTableAccessRoutine : SymFunctionTableAccess64;
+    csw.u.s64.f_modl_bas = (GetModuleBaseRoutine) ? GetModuleBaseRoutine : SymGetModuleBase64;
+
+    addr = sw_xlat_addr(&csw, &frame->AddrPC);
+
+    if (IFC_MODE(frame->InlineFrameContext) == IFC_MODE_INLINE)
+    {
+        DWORD depth = SymAddrIncludeInlineTrace(hProcess, addr);
+        if (IFC_DEPTH(frame->InlineFrameContext) + 1 < depth) /* move to next inlined function? */
+        {
+            TRACE("found inline ctx: depth=%lu current=%lu++\n",
+                  depth, frame->InlineFrameContext);
+            frame->InlineFrameContext++; /* just increase index, FIXME detect overflow */
+        }
+        else
+        {
+            frame->InlineFrameContext = IFC_MODE_REGULAR; /* move to next top level function */
+        }
+    }
+    else
+    {
+        if (!cpu->stack_walk(&csw, (STACKFRAME64*)frame, ctx)) return FALSE;
+        if (frame->InlineFrameContext != INLINE_FRAME_CONTEXT_IGNORE)
+        {
+            addr = sw_xlat_addr(&csw, &frame->AddrPC);
+            frame->InlineFrameContext = SymAddrIncludeInlineTrace(hProcess, addr) == 0 ? IFC_MODE_REGULAR : IFC_MODE_INLINE;
+            TRACE("setting IFC mode to %lx\n", frame->InlineFrameContext);
+        }
+    }
+
+    /* we don't handle KdHelp */
+
+    return TRUE;
+}
+
+#ifndef _WIN64
 /******************************************************************
  *		SymRegisterFunctionEntryCallback (DBGHELP.@)
  *
@@ -257,6 +359,7 @@ BOOL WINAPI SymRegisterFunctionEntryCallback(HANDLE hProc,
     SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
     return FALSE;
 }
+#endif
 
 /******************************************************************
  *		SymRegisterFunctionEntryCallback64 (DBGHELP.@)
@@ -267,7 +370,7 @@ BOOL WINAPI SymRegisterFunctionEntryCallback64(HANDLE hProc,
                                                PSYMBOL_FUNCENTRY_CALLBACK64 cb,
                                                ULONG64 user)
 {
-    FIXME("(%p %p %s): stub!\n", hProc, cb, wine_dbgstr_longlong(user));
+    FIXME("(%p %p %I64x): stub!\n", hProc, cb, user);
     SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
     return FALSE;
 }
