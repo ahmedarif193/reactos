@@ -64,7 +64,7 @@ static ULONG STDMETHODCALLTYPE Site_AddRef(IOleClientSite *iface)
     WebBrowserContainer *This = impl_from_IOleClientSite(iface);
     LONG ref = InterlockedIncrement(&This->ref);
 
-    TRACE("(%p) ref=%d\n", This, ref);
+    TRACE("(%p) ref=%ld\n", This, ref);
 
     return ref;
 }
@@ -74,14 +74,16 @@ static ULONG STDMETHODCALLTYPE Site_Release(IOleClientSite *iface)
     WebBrowserContainer *This = impl_from_IOleClientSite(iface);
     LONG ref = InterlockedDecrement(&This->ref);
 
-    TRACE("(%p) ref=%d\n", This, ref);
+    TRACE("(%p) ref=%ld\n", This, ref);
 
     if(!ref) {
         if(This->ole_obj)
             IOleObject_Release(This->ole_obj);
         if(This->web_browser)
             IWebBrowser2_Release(This->web_browser);
-        heap_free(This);
+        if(This->WebBrowser_events_sink)
+            IDispatch_Release(&This->WebBrowser_events_sink->WebBrowserEvents2Impl_iface);
+        free(This);
     }
 
     return ref;
@@ -164,7 +166,7 @@ static HRESULT STDMETHODCALLTYPE UI_ShowContextMenu(IDocHostUIHandler *iface, DW
     DWORD cmdid, menu_id = 0;
     HMENU menu, submenu;
 
-    TRACE("(%p)->(%d %s)\n", This, dwID, wine_dbgstr_point(ppt));
+    TRACE("(%p)->(%ld %s)\n", This, dwID, wine_dbgstr_point(ppt));
 
     menu = LoadMenuW(hhctrl_hinstance, MAKEINTRESOURCEW(MENU_WEBBROWSER));
     if (!menu)
@@ -674,7 +676,7 @@ BOOL InitWebBrowser(HHInfo *info, HWND hwndParent)
     HRESULT hr;
     RECT rc;
 
-    container = heap_alloc_zero(sizeof(*container));
+    container = calloc(1, sizeof(*container));
     if (!container)
         return FALSE;
 
