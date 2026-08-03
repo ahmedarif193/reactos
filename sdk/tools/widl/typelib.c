@@ -28,13 +28,8 @@
 #include <ctype.h>
 
 #include "widl.h"
-#ifdef __REACTOS__
-#include <typedefs.h>
-#include <pecoff.h>
-#else
 #include "windef.h"
 #include "winbase.h"
-#endif
 #include "utils.h"
 #include "wpp_private.h"
 #include "parser.h"
@@ -44,9 +39,6 @@
 #include "typelib_struct.h"
 #include "typetree.h"
 
-#ifdef __REACTOS__
-static typelib_t *typelib;
-#endif
 
 /* List of oleauto types that should be recognized by name.
  * (most of) these seem to be intrinsic types in mktyplib.
@@ -247,21 +239,6 @@ unsigned short get_type_vt(type_t *t)
   return 0;
 }
 
-#ifdef __REACTOS__
-void start_typelib(typelib_t *typelib_type)
-{
-    if (!do_typelib) return;
-    typelib = typelib_type;
-}
-
-void end_typelib(void)
-{
-    if (!typelib) return;
-
-    create_msft_typelib(typelib);
-}
-#endif
-
 static void msft_read_guid(void *data, MSFT_SegDir *segdir, int offset, struct uuid *guid)
 {
     memcpy( guid, (char *)data + segdir->pGuidTab.offset + offset, sizeof(*guid) );
@@ -319,9 +296,6 @@ static unsigned int rva_to_va( const IMAGE_NT_HEADERS32 *nt, unsigned int rva )
         if (sec->VirtualAddress <= rva && sec->VirtualAddress + sec->Misc.VirtualSize > rva)
             return sec->PointerToRawData + (rva - sec->VirtualAddress);
     error( "no PE section found for addr %x\n", rva );
-#ifdef __REACTOS__
-    return 0;
-#endif
 }
 
 static void read_pe_importlib(importlib_t *importlib, void *data, unsigned int size)
@@ -405,11 +379,7 @@ static void read_importlib(importlib_t *importlib)
     free( data );
 }
 
-#ifdef __REACTOS__
-void add_importlib(const char *name)
-#else
 void add_importlib(const char *name, typelib_t *typelib)
-#endif
 {
     importlib_t *importlib;
 
