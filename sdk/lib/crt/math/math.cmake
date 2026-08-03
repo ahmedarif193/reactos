@@ -297,6 +297,8 @@ list(APPEND CRT_MATH_SOURCE
     math/adjust.c
     math/cabs.c
     math/fdivbug.c
+    math/fma.c
+    math/fmaf.c
     math/frexp.c
     math/huge_val.c
     math/ieee754/j0_y0.c
@@ -308,6 +310,7 @@ list(APPEND CRT_MATH_SOURCE
     math/ldiv.c
     math/logf.c
     math/powf.c
+    math/truncf.c
 )
 
 list(APPEND CRT_MATH_ASM_SOURCE
