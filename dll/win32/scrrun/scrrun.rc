@@ -18,6 +18,8 @@
 
 /* @makedep: scrrun.rgs */
 1 WINE_REGISTRY scrrun.rgs
+
+#ifdef __REACTOS__
 2 WINE_REGISTRY "scrrun_tlb.rgs"
 
 1 TYPELIB "scrrun.tlb"
@@ -30,3 +32,4 @@
 #define WINE_PRODUCTVERSION_STR "5.8.7600.16385"
 
 #include "wine/wine_common_ver.rc"
+#endif
