@@ -103,11 +103,31 @@ def run_test(testcase, cmd, all_files):
         testcase.run(cmd, tmpdirname, all_files)
         testcase.verify()
 
+def test_duplicate_stubs(cmd):
+    with tempfile.TemporaryDirectory() as tmpdirname:
+        spec = os.path.join(tmpdirname, 'duplicate.spec')
+        stubs = os.path.join(tmpdirname, 'duplicate_stubs.c')
+        with open(spec, 'w') as content:
+            content.write('1 stub DuplicateStub@8\n2 stub DuplicateStub\n3 stub @\n4 stub @\n')
+        proc = subprocess.run([cmd, '-n=testdll.dll', '-a=i386', '-s=' + stubs, spec])
+        if proc.returncode:
+            print('Failed duplicate stub return code', proc.returncode)
+            return
+        with open(stubs, 'r') as content:
+            definitions = [line for line in content if line.startswith('int __stdcall DuplicateStub(')]
+        if len(definitions) != 1:
+            print('Expected one DuplicateStub definition, got:', len(definitions))
+        with open(stubs, 'r') as content:
+            anonymous = [line for line in content if line.startswith('int ordinal')]
+        if len(anonymous) != 2:
+            print('Expected two anonymous ordinal definitions, got:', len(anonymous))
+
 def main(args):
     cmd = args[0] if args else 'spec2def'
     all_files = os.listdir(DATA_DIR)
     for testcase in TEST_CASES:
         run_test(testcase, cmd, all_files)
+    test_duplicate_stubs(cmd)
 
 if __name__ == '__main__':
     main(sys.argv[1:])

@@ -8,7 +8,6 @@ list(APPEND SOURCE
     mapi32_main.c
     prop.c
     sendmail.c
-    stubs.c
     util.c)
 
 list(APPEND PCH_SKIP_SOURCE
@@ -23,6 +22,6 @@ add_library(mapi32 MODULE
 
 set_module_type(mapi32 win32dll)
 target_link_libraries(mapi32 uuid wine)
-add_importlibs(mapi32 shlwapi user32 advapi32 msvcrt kernel32 ntdll)
+add_importlibs(mapi32 shlwapi shell32 user32 advapi32 msvcrt kernel32 ntdll)
 add_pch(mapi32 precomp.h "${PCH_SKIP_SOURCE}")
 add_cd_file(TARGET mapi32 DESTINATION reactos/system32 FOR all)
