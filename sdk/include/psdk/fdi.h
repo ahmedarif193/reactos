@@ -19,11 +19,15 @@
 #ifndef __WINE_FDI_H
 #define __WINE_FDI_H
 
+#include <basetsd.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif /* defined(__cplusplus) */
 
-#include <pshpack4.h>
+#ifndef _WIN64
+#pragma pack(push,4)
+#endif
 
 #ifndef INCLUDED_TYPES_FCI_FDI
 #define INCLUDED_TYPES_FCI_FDI 1
@@ -48,7 +52,7 @@ typedef struct {
 /**********************************************************************/
 
 #define CB_MAX_CHUNK         32768U
-#define CB_MAX_DISK          0x7fffffffL
+#define CB_MAX_DISK          __MSABI_LONG(0x7fffffff)
 #define CB_MAX_FILENAME      256
 #define CB_MAX_CABINET_NAME  256
 #define CB_MAX_CAB_PATH      256
@@ -199,8 +203,8 @@ typedef struct {
 
 /**********************************************************************/
 
-typedef void * (__cdecl *PFNALLOC)(ULONG cb);
-#define FNALLOC(fn) void * __cdecl fn(ULONG cb)
+typedef void * (__WINE_ALLOC_SIZE(1) __cdecl *PFNALLOC)(ULONG cb);
+#define FNALLOC(fn) void * __WINE_ALLOC_SIZE(1) __cdecl fn(ULONG cb)
 
 typedef void (__cdecl *PFNFREE)(void *pv);
 #define FNFREE(fn) void __cdecl fn(void *pv)
@@ -257,14 +261,18 @@ typedef INT_PTR (__cdecl *PFNFDINOTIFY)(FDINOTIFICATIONTYPE fdint,
 #define FNFDINOTIFY(fn) INT_PTR __cdecl fn(FDINOTIFICATIONTYPE fdint, \
 					   PFDINOTIFICATION pfdin)
 
-#include <pshpack1.h>
+#ifndef _WIN64
+#pragma pack(push,1)
+#endif
 
 typedef struct {
     char ach[2];  /* Set to { '*', '\0' } */
     LONG cbFile;  /* Required spill file size */
 } FDISPILLFILE, *PFDISPILLFILE;
 
-#include <poppack.h>
+#ifndef _WIN64
+#pragma pack(pop)
+#endif
 
 #define cpuUNKNOWN (-1)  /* FDI does detection */
 #define cpu80286   (0)   /* '286 opcodes only */
@@ -282,7 +290,9 @@ BOOL __cdecl FDITruncateCabinet(HFDI, char *, USHORT);
 
 /**********************************************************************/
 
-#include <poppack.h>
+#ifndef _WIN64
+#pragma pack(pop)
+#endif
 
 #ifdef __cplusplus
 } /* extern "C" */
