@@ -3,6 +3,7 @@ add_definitions(-DUSE_WINE_TODOS)
 
 list(APPEND SOURCE
     domdoc.c
+    saxreader.c
     schema.c)
 
 list(APPEND PCH_SKIP_SOURCE
