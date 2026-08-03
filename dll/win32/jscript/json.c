@@ -16,11 +16,6 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifdef __REACTOS__
-#include <wine/config.h>
-#include <wine/port.h>
-#endif
-
 #include <math.h>
 #include <assert.h>
 
@@ -712,7 +707,7 @@ static HRESULT stringify_array(stringify_ctx_t *ctx, jsdisp_t *obj)
             }
         }
 
-        _itow(i, name, ARRAY_SIZE(name));
+        _itow_s(i, name, ARRAY_SIZE(name), 10);
         hres = stringify(ctx, obj, name);
         if(FAILED(hres))
             return hres;

@@ -16,11 +16,6 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifdef __REACTOS__
-#include <wine/config.h>
-#include <wine/port.h>
-#endif
-
 #include <math.h>
 #include <locale.h>
 #include <assert.h>
@@ -352,9 +347,7 @@ HRESULT localize_number(script_ctx_t *ctx, DOUBLE val, BOOL new_format, jsstr_t 
     WCHAR buf[316], decimal[8], thousands[8], *numstr;
     NUMBERFMTW *format = NULL, format_buf;
     LCID lcid = ctx->lcid;
-#ifndef __REACTOS__
     _locale_t locale;
-#endif
     unsigned convlen;
     jsstr_t *str;
     int len;
@@ -368,14 +361,10 @@ HRESULT localize_number(script_ctx_t *ctx, DOUBLE val, BOOL new_format, jsstr_t 
        fraction even if they are zero (likely default numDigits) and always returns them,
        while mshtml's jscript uses 3 digits and trims trailing zeros (on same locale).
        This is even for very small numbers, such as 0.0000999, which will simply be 0. */
-#ifdef __REACTOS__ /* FIXME: Inspect */
-    len = swprintf(buf, ARRAY_SIZE(buf), L"%.3f", val);
-#else
     if(!(locale = _create_locale(LC_ALL, "C")))
         return E_OUTOFMEMORY;
     len = _swprintf_l(buf, ARRAY_SIZE(buf), L"%.3f", locale, val);
     _free_locale(locale);
-#endif
 
     if(new_format) {
         WCHAR grouping[10];

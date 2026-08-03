@@ -16,17 +16,12 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifdef __REACTOS__
-#include <wine/config.h>
-#include <wine/port.h>
-#endif
 
 #include <math.h>
 #include <assert.h>
 
 #include "jscript.h"
 #include "engine.h"
-#include "parser.h"
 
 #include "wine/debug.h"
 
@@ -298,13 +293,8 @@ HRESULT variant_to_jsval(script_ctx_t *ctx, VARIANT *var, jsval_t *r)
                 hres = IWineJSDispatchHost_GetJSDispatch(disp_host, &jsdisp_iface);
                 IWineJSDispatchHost_Release(disp_host);
                 if(SUCCEEDED(hres)) {
-                    jsdisp_t *jsdisp = to_jsdisp((IDispatch *)jsdisp_iface);
-                    if(jsdisp->ctx == ctx) {
-                        *r = jsval_obj(jsdisp);
-                        return S_OK;
-                    }else {
-                        jsdisp_release(jsdisp);
-                    }
+                    *r = jsval_obj(as_jsdisp((IDispatch *)jsdisp_iface));
+                    return S_OK;
                 }
             }
         }
@@ -515,6 +505,20 @@ HRESULT to_boolean(jsval_t val, BOOL *ret)
     return E_FAIL;
 }
 
+static int hex_to_int(WCHAR c)
+{
+    if('0' <= c && c <= '9')
+        return c-'0';
+
+    if('a' <= c && c <= 'f')
+        return c-'a'+10;
+
+    if('A' <= c && c <= 'F')
+        return c-'A'+10;
+
+    return -1;
+}
+
 /* ECMA-262 3rd Edition    9.3.1 */
 static HRESULT str_to_number(jsstr_t *str, double *ret)
 {
@@ -672,7 +676,7 @@ HRESULT to_integer(script_ctx_t *ctx, jsval_t v, double *ret)
     return S_OK;
 }
 
-static INT32 double_to_int32(double number)
+INT32 double_to_int32(double number)
 {
     INT32 exp, result;
     union {
@@ -755,11 +759,7 @@ HRESULT double_to_string(double n, jsstr_t **str)
         *str = jsstr_alloc(n<0 ? L"-Infinity" : L"Infinity");
     }else if(is_int32(n)) {
         WCHAR buf[12];
-#ifdef __REACTOS__ /* FIXME: Inspect */
-        swprintf(buf, ARRAY_SIZE(buf), L"%d", (int)n);
-#else
         _ltow_s(n, buf, ARRAY_SIZE(buf), 10);
-#endif
         *str = jsstr_alloc(buf);
     }else {
         VARIANT strv, v;
