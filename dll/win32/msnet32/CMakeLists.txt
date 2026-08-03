@@ -1,6 +1,9 @@
 
 spec2def(msnet32.dll msnet32.spec)
-add_library(msnet32 MODULE msnet_main.c ${CMAKE_CURRENT_BINARY_DIR}/msnet32.def)
+add_library(msnet32 MODULE
+    msnet_main.c
+    ${CMAKE_CURRENT_BINARY_DIR}/msnet32_stubs.c
+    ${CMAKE_CURRENT_BINARY_DIR}/msnet32.def)
 set_module_type(msnet32 win32dll)
 target_link_libraries(msnet32 wine)
 add_importlibs(msnet32 msvcrt kernel32 ntdll)
