@@ -15,7 +15,7 @@ add_library(qedit MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/qedit.def)
 
 add_idl_reg_scripts(qedit registry qedit_classes.idl)
-target_compile_definitions(qedit PRIVATE USE_NEW_WINE_REGISTER_RESOURCES __WINESRC__)
+target_compile_definitions(qedit PRIVATE __WINESRC__)
 set_module_type(qedit win32dll)
 target_link_libraries(qedit strmbase strmiids uuid wine wine_dll_canunload)
 add_importlibs(qedit advapi32 oleaut32 ole32 user32 msvcrt kernel32 ntdll)

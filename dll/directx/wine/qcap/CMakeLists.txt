@@ -20,7 +20,7 @@ add_library(qcap MODULE ${SOURCE}
            version.rc)
 
 add_idl_reg_scripts(qcap registry qcap_classes.idl)
-target_compile_definitions(qcap PRIVATE USE_NEW_WINE_REGISTER_RESOURCES __WINESRC__)
+target_compile_definitions(qcap PRIVATE __WINESRC__)
 set_module_type(qcap win32dll)
 target_link_libraries(qcap strmbase strmiids uuid wine wine_dll_canunload)
 add_importlibs(qcap ole32 oleaut32 user32 winmm msvcrt kernel32 ntdll)
