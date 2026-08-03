@@ -146,6 +146,7 @@ typedef struct _UNICODE_STRING
     USHORT MaximumLength;
     PWSTR Buffer;
 } UNICODE_STRING, *PUNICODE_STRING;
+#define __UNICODE_STRING_DEFINED__
 
 typedef struct _STRING
 {

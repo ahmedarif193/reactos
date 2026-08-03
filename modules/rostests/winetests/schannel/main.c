@@ -45,7 +45,9 @@
     ValidateTargetInfo)
 #define SECPKG_FUNCTION_TABLE_SIZE_6 FIELD_OFFSET(SECPKG_FUNCTION_TABLE, \
     PostLogonUser)
-#define SECPKG_FUNCTION_TABLE_SIZE_7 sizeof(SECPKG_FUNCTION_TABLE)
+#define SECPKG_FUNCTION_TABLE_SIZE_7 FIELD_OFFSET(SECPKG_FUNCTION_TABLE, \
+    GetRemoteCredGuardLogonBuffer)
+#define SECPKG_FUNCTION_TABLE_SIZE_8 sizeof(SECPKG_FUNCTION_TABLE)
 
 #define LSA_BASE_CAPS ( \
     SECPKG_FLAG_INTEGRITY         | \
@@ -75,27 +77,21 @@ static void testInitialize(void)
 
     /* SpLsaModeInitialize does not care about the LSA version. */
     status = pSpLsaModeInitialize(0, &Version, &pTables2, &cTables);
-    ok(status == STATUS_SUCCESS, "status: 0x%x\n", status);
-    ok(cTables == 2 ||
-       broken(cTables == 1), /* Win2k */
-       "cTables: %d\n", cTables);
+    ok(status == STATUS_SUCCESS, "status: 0x%lx\n", status);
+    ok(cTables == 2, "cTables: %ld\n", cTables);
     ok(pTables2 != NULL,"pTables: %p\n", pTables2);
 
     /* We can call it as many times we want. */
     status = pSpLsaModeInitialize(0x10000, &Version, &pTables, &cTables);
-    ok(status == STATUS_SUCCESS, "status: 0x%x\n", status);
-    ok(cTables == 2 ||
-       broken(cTables == 1), /* Win2k */
-       "cTables: %d\n", cTables);
+    ok(status == STATUS_SUCCESS, "status: 0x%lx\n", status);
+    ok(cTables == 2, "cTables: %ld\n", cTables);
     ok(pTables != NULL, "pTables: %p\n", pTables);
     /* It will always return the same pointer. */
     ok(pTables == pTables2, "pTables: %p, pTables2: %p\n", pTables, pTables2);
 
     status = pSpLsaModeInitialize(0x23456, &Version, &pTables, &cTables);
-    ok(status == STATUS_SUCCESS, "status: 0x%x\n", status);
-    ok(cTables == 2 ||
-       broken(cTables == 1), /* Win2k */
-       "cTables: %d\n", cTables);
+    ok(status == STATUS_SUCCESS, "status: 0x%lx\n", status);
+    ok(cTables == 2, "cTables: %ld\n", cTables);
     ok(pTables != NULL, "pTables: %p\n", pTables);
     ok(pTables == pTables2, "pTables: %p, pTables2: %p\n", pTables, pTables2);
 
@@ -104,32 +100,31 @@ static void testInitialize(void)
     cUserTables = 0xdead;
     pUserTables = NULL;
     status = pSpUserModeInitialize(0, &Version, &pUserTables, &cUserTables);
-    ok(status == STATUS_INVALID_PARAMETER, "status: 0x%x\n", status);
-    ok(Version == 0xdead, "Version: 0x%x\n", Version);
-    ok(cUserTables == 0xdead, "cTables: %d\n", cUserTables);
+    ok(status == STATUS_INVALID_PARAMETER, "status: 0x%lx\n", status);
+    ok(Version == 0xdead, "Version: 0x%lx\n", Version);
+    ok(cUserTables == 0xdead, "cTables: %ld\n", cUserTables);
     ok(pUserTables == NULL, "pUserTables: %p\n", pUserTables);
 
     status = pSpUserModeInitialize(0x20000, &Version, &pUserTables,
                                    &cUserTables);
-    ok(status == STATUS_INVALID_PARAMETER, "status: 0x%x\n", status);
-    ok(Version == 0xdead, "Version: 0x%x\n", Version);
-    ok(cUserTables == 0xdead, "cTables: %d\n", cUserTables);
+    ok(status == STATUS_INVALID_PARAMETER, "status: 0x%lx\n", status);
+    ok(Version == 0xdead, "Version: 0x%lx\n", Version);
+    ok(cUserTables == 0xdead, "cTables: %ld\n", cUserTables);
     ok(pUserTables == NULL, "pUserTables: %p\n", pUserTables);
 
     /* Good version to SpUserModeInitialize */
     status = pSpUserModeInitialize(SECPKG_INTERFACE_VERSION, &Version,
                                    &pUserTables, &cUserTables);
-    ok(status == STATUS_SUCCESS, "status: 0x%x\n", status);
-    ok(Version == SECPKG_INTERFACE_VERSION, "Version: 0x%x\n", Version);
-    ok(cUserTables == 2 ||
-       broken(cUserTables == 4), /* Win2k */
-       "cUserTables: %d\n", cUserTables);
+    ok(status == STATUS_SUCCESS, "status: 0x%lx\n", status);
+    ok(Version == SECPKG_INTERFACE_VERSION || Version == SECPKG_INTERFACE_VERSION_2 /* win11 */,
+       "Version: 0x%lx\n", Version);
+    ok(cUserTables == 2, "cUserTables: %ld\n", cUserTables);
     ok(pUserTables != NULL, "pUserTables: %p\n", pUserTables);
 
     /* Initializing user again */
     status = pSpUserModeInitialize(SECPKG_INTERFACE_VERSION, &Version,
                                    &pUserTables2, &cTables);
-    ok(status == STATUS_SUCCESS, "status: 0x%x\n", status);
+    ok(status == STATUS_SUCCESS, "status: 0x%lx\n", status);
     ok(pUserTables == pUserTables2, "pUserTables: %p, pUserTables2: %p\n",
        pUserTables, pUserTables2);
 }
@@ -139,7 +134,7 @@ static void testInitialize(void)
 static PSECPKG_FUNCTION_TABLE getNextSecPkgTable(PSECPKG_FUNCTION_TABLE pTable,
                                                  ULONG Version)
 {
-    size_t size;
+    int detectedVersion = 0, size;
     PSECPKG_FUNCTION_TABLE pNextTable;
 
     if (Version == SECPKG_INTERFACE_VERSION)
@@ -156,21 +151,49 @@ static PSECPKG_FUNCTION_TABLE getNextSecPkgTable(PSECPKG_FUNCTION_TABLE pTable,
         size = SECPKG_FUNCTION_TABLE_SIZE_6;
     else if (Version == SECPKG_INTERFACE_VERSION_7)
         size = SECPKG_FUNCTION_TABLE_SIZE_7;
+    else if (Version == SECPKG_INTERFACE_VERSION_8)
+        size = SECPKG_FUNCTION_TABLE_SIZE_8;
     else {
-        ok(FALSE, "Unknown package version 0x%x\n", Version);
+        ok(FALSE, "Unknown package version 0x%lx\n", Version);
         return NULL;
     }
 
     pNextTable = (PSECPKG_FUNCTION_TABLE)((PBYTE)pTable + size);
-    /* Win7 function tables appear to be SECPKG_INTERFACE_VERSION_6 format,
-       but unfortunately SpLsaModeInitialize returns SECPKG_INTERFACE_VERSION_3.
-       We detect that by comparing the "Initialize" pointer from the old table
-       to the "FreeCredentialsHandle" pointer of the new table. These functions
-       have different numbers of arguments, so they can't possibly point to the
-       same implementation */
-    if (broken((void *) pTable->Initialize == (void *) pNextTable->FreeCredentialsHandle &&
-               pNextTable->FreeCredentialsHandle != NULL))
+
+    /* For any version of Windows beyond Vista SpLsaModeInitialize returns
+       SECPKG_INTERFACE_VERSION_3, so try detecting the actual version here
+       by iterating until we find the Intitalize function */
+    if (broken((void *) pTable->Initialize != (void *) pNextTable->Initialize &&
+               pTable->Initialize != NULL))
     {
+        for (size = 1; size <= SECPKG_FUNCTION_TABLE_SIZE_8; size++)
+        {
+            pNextTable = (PSECPKG_FUNCTION_TABLE)((PBYTE)pTable + size);
+            if ((void *) pTable->Initialize == (void *) pNextTable->Initialize)
+            {
+                if (size == SECPKG_FUNCTION_TABLE_SIZE_1)
+                    detectedVersion = 1;
+                else if (size == SECPKG_FUNCTION_TABLE_SIZE_2)
+                    detectedVersion = 2;
+                else if (size == SECPKG_FUNCTION_TABLE_SIZE_3)
+                    detectedVersion = 3;
+                else if (size == SECPKG_FUNCTION_TABLE_SIZE_4)
+                    detectedVersion = 4;
+                else if (size == SECPKG_FUNCTION_TABLE_SIZE_5)
+                    detectedVersion = 5;
+                else if (size == SECPKG_FUNCTION_TABLE_SIZE_6)
+                    detectedVersion = 6;
+                else if (size == SECPKG_FUNCTION_TABLE_SIZE_7)
+                    detectedVersion = 7;
+                else if (size == SECPKG_FUNCTION_TABLE_SIZE_8)
+                    detectedVersion = 8;
+                else
+                    trace("Unknown package version with size %u\n", size);
+                if (detectedVersion > 0)
+                    trace("Detected SECPKG_INTERFACE_VERSION_%d\n", detectedVersion);
+                return pNextTable;
+            }
+        }
         win_skip("Invalid function pointers for next package\n");
         return NULL;
     }
@@ -187,21 +210,21 @@ static void testGetInfo(void)
 
     /* Get the dispatch table */
     status = pSpLsaModeInitialize(0, &Version, &pTables, &cTables);
-    ok(status == STATUS_SUCCESS, "status: 0x%x\n", status);
+    ok(status == STATUS_SUCCESS, "status: 0x%lx\n", status);
 
     /* Passing NULL into ->GetInfo causes a crash. */
 
     /* First package: Unified */
     status = pTables->GetInfo(&PackageInfo);
-    ok(status == STATUS_SUCCESS, "status: 0x%x\n", status);
+    ok(status == STATUS_SUCCESS, "status: 0x%lx\n", status);
     ok(PackageInfo.fCapabilities == LSA_BASE_CAPS ||
        PackageInfo.fCapabilities == (LSA_BASE_CAPS|SECPKG_FLAG_APPCONTAINER_PASSTHROUGH),
-       "fCapabilities: 0x%x\n", PackageInfo.fCapabilities);
+       "fCapabilities: 0x%lx\n", PackageInfo.fCapabilities);
     ok(PackageInfo.wVersion == 1, "wVersion: %d\n", PackageInfo.wVersion);
     ok(PackageInfo.wRPCID == 14, "wRPCID: %d\n", PackageInfo.wRPCID);
     ok(PackageInfo.cbMaxToken == 0x4000 ||
        PackageInfo.cbMaxToken == 0x6000, /* Vista */
-       "cbMaxToken: 0x%x\n",
+       "cbMaxToken: 0x%lx\n",
        PackageInfo.cbMaxToken);
 
     /* Second package */
@@ -219,20 +242,18 @@ static void testGetInfo(void)
         return;
     }
     status = pTables->GetInfo(&PackageInfo);
-    ok(SUCCEEDED(status) ||
-       status == SEC_E_UNSUPPORTED_FUNCTION, /* win2k3 */
-       "status: 0x%x\n", status);
+    ok(SUCCEEDED(status), "status: 0x%lx\n", status);
 
     if (SUCCEEDED(status))
     {
         ok(PackageInfo.fCapabilities == LSA_BASE_CAPS ||
            PackageInfo.fCapabilities == (LSA_BASE_CAPS|SECPKG_FLAG_APPCONTAINER_PASSTHROUGH),
-           "fCapabilities: 0x%x\n", PackageInfo.fCapabilities);
+           "fCapabilities: 0x%lx\n", PackageInfo.fCapabilities);
         ok(PackageInfo.wVersion == 1, "wVersion: %d\n", PackageInfo.wVersion);
         ok(PackageInfo.wRPCID == 14, "wRPCID: %d\n", PackageInfo.wRPCID);
         ok(PackageInfo.cbMaxToken == 0x4000 ||
            PackageInfo.cbMaxToken == 0x6000, /* Win7 */
-           "cbMaxToken: 0x%x\n",
+           "cbMaxToken: 0x%lx\n",
            PackageInfo.cbMaxToken);
     }
 }

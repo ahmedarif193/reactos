@@ -21,7 +21,6 @@
 #include <stdarg.h>
 
 #include "ntstatus.h"
-#define WIN32_NO_STATUS
 #include "windef.h"
 #include "winbase.h"
 #include "sspi.h"
@@ -116,6 +115,8 @@ static SECPKG_FUNCTION_TABLE secPkgFunctionTable[2] =
     NULL, /* UpdateCredentials */
     NULL, /* ValidateTargetInfo */
     NULL, /* PostLogonUser */
+    NULL, /* GetRemoteCredGuardLogonBuffer */
+    NULL, /* GetRemoteCredGuardSupplementalCreds */
   }, {
     NULL, /* InitializePackage */
     NULL, /* LsaLogonUser */
@@ -153,6 +154,8 @@ static SECPKG_FUNCTION_TABLE secPkgFunctionTable[2] =
     NULL, /* UpdateCredentials */
     NULL, /* ValidateTargetInfo */
     NULL, /* PostLogonUser */
+    NULL, /* GetRemoteCredGuardLogonBuffer */
+    NULL, /* GetRemoteCredGuardSupplementalCreds */
   }
 };
 
@@ -162,9 +165,9 @@ static SECPKG_FUNCTION_TABLE secPkgFunctionTable[2] =
 NTSTATUS WINAPI SpLsaModeInitialize(ULONG LsaVersion, PULONG PackageVersion,
                                     PSECPKG_FUNCTION_TABLE *ppTables, PULONG pcTables)
 {
-    TRACE("(%u, %p, %p, %p)\n", LsaVersion, PackageVersion, ppTables, pcTables);
+    TRACE("(%lu, %p, %p, %p)\n", LsaVersion, PackageVersion, ppTables, pcTables);
 
-    *PackageVersion = SECPKG_INTERFACE_VERSION_7;
+    *PackageVersion = SECPKG_INTERFACE_VERSION_8;
     *pcTables = 2;
     *ppTables = secPkgFunctionTable;
 
